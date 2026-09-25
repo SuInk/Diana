@@ -588,6 +588,7 @@ func (c *MCPClient) CallTool(ctx context.Context, name string, arguments map[str
 		return "", err
 	}
 	mark := state.stderr.written()
+	media := c.mediaCollector(time.Now())
 	result, err := state.session.CallTool(callCtx, &mcpsdk.CallToolParams{Name: name, Arguments: arguments})
 	if err != nil {
 		// 传输层断开（进程退出、连接被关）时作废会话，下一次调用重连。服务端返回的
@@ -599,8 +600,29 @@ func (c *MCPClient) CallTool(ctx context.Context, name string, arguments map[str
 	}
 	// 工具结果直接进模型上下文。服务把请求头或环境变量回显出来（调试输出、报错里
 	// 带上配置）时，令牌原文会跟着进去，这里换成掩码。
-	output, err := formatSDKMCPToolResult(result)
+	output, err := formatSDKMCPToolResult(result, media)
 	return c.redactor.text(output), c.redactor.error(err)
+}
+
+// mediaCollector 给这次调用准备媒体暂存。只有本机起的 stdio 服务才认本机路径，
+// 进程工作目录和 openMCPSession 里设的一致。
+func (c *MCPClient) mediaCollector(callStart time.Time) *mcpMediaCollector {
+	collector := &mcpMediaCollector{
+		server:    c.name,
+		protected: agentProtectedFiles(Config{WorkDir: c.workDir}),
+		callStart: callStart,
+	}
+	if resolveLocalMCPCommand(c.config.Command) != "" {
+		if cwd := strings.TrimSpace(c.config.CWD); cwd != "" {
+			if !filepath.IsAbs(cwd) {
+				cwd = filepath.Join(c.workDir, cwd)
+			}
+			collector.localDir = filepath.Clean(cwd)
+		} else if wd, err := os.Getwd(); err == nil {
+			collector.localDir = wd
+		}
+	}
+	return collector
 }
 
 func mcpTransportClosed(err error) bool {
@@ -625,8 +647,8 @@ func (c *MCPClient) Close() error {
 	return err
 }
 
-// mcpInlineBinaryLimit 之内的二进制内容也不内联：工具输出进的是模型上下文，base64 只会
-// 占满字数预算，模型读不出图片或音频。这里只留类型和大小，让模型知道服务返回了什么。
+// describeMCPBinaryContent 是暂存不了时的兜底说明：二进制内容一律不内联，工具输出进的
+// 是模型上下文，base64 只会占满字数预算。能暂存的走 mcpMediaCollector.binary，带 media_id。
 func describeMCPBinaryContent(kind, mimeType string, size int) string {
 	mimeType = strings.TrimSpace(mimeType)
 	if mimeType == "" {
@@ -635,7 +657,8 @@ func describeMCPBinaryContent(kind, mimeType string, size int) string {
 	return fmt.Sprintf("[MCP 返回了%s（%s，%d 字节），二进制内容未放入文本结果]", kind, mimeType, size)
 }
 
-func formatSDKMCPToolResult(result *mcpsdk.CallToolResult) (string, error) {
+// media 为 nil 时只描述、不暂存。
+func formatSDKMCPToolResult(result *mcpsdk.CallToolResult, media *mcpMediaCollector) (string, error) {
 	if result == nil {
 		return "", errors.New("empty MCP tool result")
 	}
@@ -644,18 +667,27 @@ func formatSDKMCPToolResult(result *mcpsdk.CallToolResult) (string, error) {
 		switch typed := content.(type) {
 		case *mcpsdk.TextContent:
 			parts = append(parts, typed.Text)
+			parts = append(parts, media.textPaths(typed.Text)...)
 			continue
 		case *mcpsdk.ImageContent:
-			parts = append(parts, describeMCPBinaryContent("图片", typed.MIMEType, len(typed.Data)))
+			parts = append(parts, media.binary("图片", typed.MIMEType, "", typed.Data))
 			continue
 		case *mcpsdk.AudioContent:
-			parts = append(parts, describeMCPBinaryContent("音频", typed.MIMEType, len(typed.Data)))
+			parts = append(parts, media.binary("音频", typed.MIMEType, "", typed.Data))
 			continue
 		case *mcpsdk.EmbeddedResource:
 			if typed.Resource != nil && len(typed.Resource.Blob) > 0 {
-				parts = append(parts, describeMCPBinaryContent("资源 "+typed.Resource.URI, typed.Resource.MIMEType, len(typed.Resource.Blob)))
+				parts = append(parts, media.binary("资源 "+typed.Resource.URI, typed.Resource.MIMEType, mcpResourceName(typed.Resource.URI), typed.Resource.Blob))
 				continue
 			}
+		case *mcpsdk.ResourceLink:
+			if body, err := content.MarshalJSON(); err == nil {
+				parts = append(parts, string(body))
+			}
+			if line := media.resourceLink(typed); line != "" {
+				parts = append(parts, line)
+			}
+			continue
 		}
 		body, err := content.MarshalJSON()
 		if err == nil {

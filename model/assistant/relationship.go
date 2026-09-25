@@ -108,7 +108,9 @@ func (p RelationshipPolicy) allowedAgentToolNames() map[string]bool {
 		dianaMemoryToolName:        true,
 		dianaHistoryImagesToolName: true,
 		dianaRemoteImageToolName:   true,
-		"telegram_images":          true,
+		// 只发 MCP 这一轮交出来的媒体，不碰本机文件；能调哪些 MCP 另有成员放行名单管。
+		dianaMCPMediaToolName: true,
+		"telegram_images":     true,
 		// 子调用不碰本地文件、命令和浏览器，只是把调用方给的素材压成一句结论，
 		// 所以和读历史同级，不需要 owner 权限。
 		dianaSubtaskToolName:     true,
