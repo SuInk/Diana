@@ -74,7 +74,11 @@ func (t *dianaLocalAttachmentTool) Run(ctx context.Context, input map[string]any
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
-	path := configToolString(input, "path")
+	// 先按 read_file 同一套规则整理路径：扩展名校验和附件文件名都要用整理后的形式。
+	path, err := agent.NormalizeWorkspacePath(AgentWorkspaceDir(), configToolString(input, "path"))
+	if err != nil {
+		return "", err
+	}
 	mode := configToolString(input, "mode")
 	if !t.view && mode != "image" && mode != "file" {
 		return "", fmt.Errorf("mode must be image or file")
