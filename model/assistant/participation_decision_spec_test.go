@@ -169,3 +169,31 @@ func TestProactiveReplyRouteCarriesTheDecisionSpec(t *testing.T) {
 		}
 	}
 }
+
+// TestParticipationDecisionSpecTreatsUncertainDirectedAsNo 判断模型给「在跟机器人说话」
+// 0.6 这种拿不准的概率时，两种契约都要落到否：这道题的语义是「是否」，拿不准算否。
+func TestParticipationDecisionSpecTreatsUncertainDirectedAsNo(t *testing.T) {
+	raw, err := participationDecisionSpec(nil).RenderDecisionAnswers(map[string]llm.DecisionAnswer{
+		"relevance": {Kind: llm.DecisionNoul, Noul: 0.6},
+		"chat_in":   {Kind: llm.DecisionScore, Score: 2, Confidence: 0.8},
+	})
+	if err != nil {
+		t.Fatalf("render failed: %v", err)
+	}
+	ratings, err := parseParticipationRatings(raw)
+	if err != nil {
+		t.Fatalf("the rendered ratings did not parse: %v (%s)", err, raw)
+	}
+	if ratings.Relevance.Directed == nil || *ratings.Relevance.Directed {
+		t.Fatalf("0.6 must not count as directed, got %s", raw)
+	}
+	if !strings.Contains(ratings.Relevance.Reason, "0.60") {
+		t.Fatalf("the reason should keep the raw probability for replay, got %q", ratings.Relevance.Reason)
+	}
+	legacy := proactiveReplyDecisionSpec(nil, nil)
+	for _, q := range legacy.Questions {
+		if q.Key == "directed_at_bot" && q.Threshold != participationDirectedThreshold {
+			t.Fatalf("legacy directed_at_bot threshold = %v, want %v", q.Threshold, participationDirectedThreshold)
+		}
+	}
+}

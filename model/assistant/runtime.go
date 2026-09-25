@@ -513,10 +513,14 @@ type Runtime struct {
 	// 重启后重新给足宽限次数，方向上偏「多答一句」而不是「误闭嘴」。
 	privateClosingMu        sync.Mutex
 	privateClosingBySession map[string]*privateClosingState
-	proactiveBatchMu        sync.Mutex
-	proactiveBatches        map[string]*proactiveReplyBatch
-	proactiveBatchWindow    time.Duration
-	proactiveBatchMaxWait   time.Duration
+	// groupStopBySession 记录每个群最近一次被叫停到什么时候，见 group_stop.go。
+	// 只在内存里：重启后窗口作废，方向上同样偏「多答一句」。
+	groupStopMu           sync.Mutex
+	groupStopBySession    map[string]groupStopState
+	proactiveBatchMu      sync.Mutex
+	proactiveBatches      map[string]*proactiveReplyBatch
+	proactiveBatchWindow  time.Duration
+	proactiveBatchMaxWait time.Duration
 	// 连续失败时的错误提示节流状态，见 error_notice_burst.go。
 	errorNoticeMu          sync.Mutex
 	errorNoticeBursts      map[string]*errorNoticeBurst
@@ -706,6 +710,7 @@ func NewRuntime(cfg BotConfig, channel Channel, plugins *PluginManager, llmStore
 		replyRefusalByUser:      map[string]replyRefusalState{},
 		botReplyLoopByKey:       map[string]botReplyLoopState{},
 		privateClosingBySession: map[string]*privateClosingState{},
+		groupStopBySession:      map[string]groupStopState{},
 		proactiveBatches:        map[string]*proactiveReplyBatch{},
 		activeDirectReplies:     map[string]*activeDirectReply{},
 		proactiveBatchWindow:    defaultProactiveReplyBatchWindow,
@@ -2053,7 +2058,8 @@ func (r *Runtime) replyAndRecord(ctx context.Context, event MessageEvent, text s
 			return "ignored_response_suppression", nil
 		}
 		if errors.Is(err, errStopRequested) {
-			// 对方明确要求别再回：这条不发，暂停（非主人）已同时生效。
+			// 对方明确要求别再回：这条不发。私聊里暂停（非主人）已同时生效，群里则是
+			// 叫停窗口（见 group_stop.go）拦下了一条在路上的接话回复。
 			setEventRecordOutcome(&record, "ignored_stop_requested")
 			record.Reason = err.Error()
 			record.Error = ""
@@ -2656,6 +2662,12 @@ func (r *Runtime) routeProactiveReplyBatch(ctx context.Context, candidates []pro
 	chatIn := cfg.chatInSettings()
 	if participationClosed(cfg) {
 		event.routingReason = "回应提问与闲聊均已关闭，不主动接话"
+		return event, text, nil, false
+	}
+	// 群里刚有人叫停：不跑模型，直接沉默。靠提示词让评分自己记住「刚被要求闭嘴」
+	// 只能撑到那句话滑出上下文窗口为止。
+	if stop, ok := r.activeGroupStop(event, time.Now()); ok {
+		event.routingReason = groupStopRoutingReason(stop, time.Now())
 		return event, text, nil, false
 	}
 	payload := r.proactiveReplyPayloadWithContext(ctx, event, readableEventText(event, text))
@@ -4528,6 +4540,10 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		prepared = r.prepareReplyAudit(ctx, event, cleanText, reply, cfg, proactiveTriggered)
 	}
 	prepared.newContentConfirmed = dedupKept
+	// 叫停可能是这条还在生成时到的：发送前再看一眼窗口，在路上的接话回复不发。
+	if err := r.groupStopDropsReply(event, proactiveTriggered, time.Now()); err != nil {
+		return "", err
+	}
 	auditIntent, err := r.applyReplyAudit(ctx, event, cfg, prepared)
 	if err != nil {
 		return "", err

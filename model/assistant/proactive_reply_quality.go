@@ -267,7 +267,8 @@ stop_requested —— 对方明确要求你不要再回。
 - 只是说要走、要睡、要去忙,没有要求你停止回复的,填 false——那是
   conversation_closing 管的范围。
 - 开玩笑地嫌你话多、吐槽你复读,但没有真的要求停下的,填 false。拿不准一律 false:
-  这一项判成 true 会让机器人当场收声并暂停响应这个账号一段时间。`
+  这一项判成 true 会让机器人在私聊里当场收声并暂停响应这个账号一段时间,在群里则
+  暂停接话一段时间,只回 @、引用和点名。`
 
 // proactiveReplyQualityContract 是审核结果的字段表和每个字段的取值含义。
 // parseProactiveReplyQualityDecision 按这些字段名解析，运行时按其中的阈值和类别
@@ -472,7 +473,7 @@ func (r *Runtime) runReplyAudit(ctx context.Context, event MessageEvent, input, 
 	if need.Loop && need.Density != nil {
 		fields["exchange_density"] = need.Density
 	}
-	if need.Closing {
+	if need.Closing || need.GroupStop {
 		fields["closing_check"] = true
 	}
 	payload, err := json.Marshal(fields)
@@ -551,6 +552,10 @@ type replyAuditNeed struct {
 	// ClosingSuppress 和 LoopSuppress 同理：主人说「别回了」照样当场收声，
 	// 但不给主人开半小时的暂停。
 	ClosingSuppress bool
+	// GroupStop 是群里的叫停判断：被 @、引用、点名的群消息，在机器人刚说过话时
+	// 顺带判一下是不是在叫停。判出来只记本群的静默窗口，这条回复照发。它只搭其它
+	// 几项的车，自己不触发审核。
+	GroupStop bool
 	// MarkedBot 表示这个账号被管理员在某个群里标记成了机器人。它只作为空转
 	// 判断的佐证进入审核载荷。
 	MarkedBot bool
@@ -580,6 +585,7 @@ func (r *Runtime) replyAuditNeed(event MessageEvent, input string, cfg BotConfig
 		need.Closing = true
 		need.ClosingSuppress = nonOwner
 	}
+	need.GroupStop = r.groupStopAuditDue(event, cfg, input, time.Now())
 	if !boolValue(cfg.BotReplyLoopDetectionEnabled, true) {
 		return need
 	}
@@ -631,6 +637,8 @@ func (r *Runtime) prepareReplyAudit(ctx context.Context, event MessageEvent, inp
 	}
 	need := r.replyAuditNeed(event, input, cfg, proactive)
 	prepared.need = need
+	// 群叫停只搭车，不单独发起一次审核：账号安全默认开着，群回复几乎都会跑这一次；
+	// 管理员把审核全关了，就不为这一项额外花钱。
 	if !need.Quality && !need.AccountSafety && !need.Loop && !need.Closing {
 		prepared.skip = true
 		return prepared
@@ -668,6 +676,9 @@ func (r *Runtime) applyReplyAudit(ctx context.Context, event MessageEvent, cfg B
 		if closingErr := r.applyPrivateClosingVerdict(ctx, event, decision, cfg, need.ClosingSuppress); closingErr != nil {
 			return intent, closingErr
 		}
+	}
+	if need.GroupStop {
+		r.applyGroupStopVerdict(ctx, event, decision, time.Now())
 	}
 	if need.Loop {
 		if need.Density == nil {
