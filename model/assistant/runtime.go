@@ -3731,6 +3731,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 				newDianaChatHistoryTool(r, event).withRecallSink(recallSink),
 				newDianaHistoryImagesTool(r, event),
 				newDianaRemoteImageTool(r, event),
+				newDianaMCPMediaTool(r, event),
 				&dianaTelegramImagesTool{runtime: r, event: event},
 				&dianaLocalAttachmentTool{runtime: r, event: event, view: true},
 				&dianaLocalAttachmentTool{runtime: r, event: event},

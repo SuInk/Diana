@@ -95,7 +95,7 @@ func TestReviewRepro06_MCPImageContentIsNotInlinedAsBase64(t *testing.T) {
 	output, err := formatSDKMCPToolResult(&mcpsdk.CallToolResult{Content: []mcpsdk.Content{
 		&mcpsdk.TextContent{Text: "截图如下"},
 		&mcpsdk.ImageContent{Data: data, MIMEType: "image/png"},
-	}})
+	}}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
