@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -171,7 +170,7 @@ func loadCLIConfig(args []string) (appConfig, string, error) {
 }
 
 func healthAddress(config appConfig) string {
-	return "http://" + net.JoinHostPort(displayHost(config.Server.Host), stringOr(config.Server.Port, "18080")) + "/api/health"
+	return webuiAddress(config) + "/api/health"
 }
 
 func fetchHealth(parent context.Context, address string) (healthResponse, error) {

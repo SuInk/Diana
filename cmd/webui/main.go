@@ -256,6 +256,22 @@ func main() {
 	}
 	port := stringOr(appCfg.Server.Port, "18080")
 	host := strings.TrimSpace(appCfg.Server.Host)
+	dbPath, err := storage.ResolveDatabasePath(strings.TrimSpace(appCfg.Storage.DBPath))
+	if err != nil {
+		log.Fatal(err)
+	}
+	var instance *instanceLock
+	if dbPath != "" {
+		instance, err = acquireInstanceLock(dbPath, webuiAddress(appCfg))
+		if err != nil {
+			log.Fatal(err)
+		}
+		defer instance.Release()
+	}
+	listener, err := listenWebUI(appCfg)
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	// 所有后台 goroutine 共用这个根 context，收到 Ctrl+C 或 SIGTERM 时统一退出。
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -270,10 +286,6 @@ func main() {
 	// 迁移之前先备份数据库。备份不成功不启动：宁可停在旧库上，也不在没有备份的
 	// 情况下迁移。
 	if dockerDeployment() || version.BuildType(buildVersion) == version.BuildTypeSource {
-		dbPath, err := storage.ResolveDatabasePath(strings.TrimSpace(appCfg.Storage.DBPath))
-		if err != nil {
-			log.Fatal(err)
-		}
 		backup, err := updater.BackupDatabaseOnVersionChange(dbPath, appCfg.Update.WorkDir, runtimeVersion, time.Now())
 		if err != nil {
 			log.Fatalf("back up database before migrating to %s: %v (database left untouched; free disk space or fix permissions and restart)", runtimeVersion, err)
@@ -721,11 +733,6 @@ func main() {
 	router.POST("/onebot/v11/http", gin.WrapH(oneBotHTTPServer))
 	router.NoRoute(spaHandler(http.Dir(frontendDistDir(appCfg.Server.FrontendDist))))
 
-	addr := net.JoinHostPort(host, port)
-	listener, err := net.Listen("tcp", addr)
-	if err != nil {
-		log.Fatal(err)
-	}
 	log.Printf("webui listening on http://%s:%s", displayHost(host), port)
 	server := &http.Server{
 		Handler:           router,
@@ -747,6 +754,7 @@ func main() {
 	}
 	if restartRequested.Load() {
 		log.Printf("webui restarting")
+		instance.Release()
 		if err := relaunchSelf(closeLog); err != nil {
 			log.Fatalf("webui restart failed: %v", err)
 		}
@@ -771,6 +779,27 @@ func newSystemUpdater(cfg updateConfig) (*updater.GitUpdater, error) {
 		}
 	}
 	return updater.NewGitUpdaterWithOptions(root, options)
+}
+
+// listenWebUI 在打开数据库之前先占住端口。
+//
+// 监听原先放在初始化最后：服务已在后台运行时再敲一次 `diana`，第二个进程会先
+// 打开同一个 SQLite、起存储维护，最后才撞上 address already in use 退出，
+// 报错也看不出是「已经在跑了」。先占端口，占不到就问一下 health 接口是不是 Diana。
+func listenWebUI(config appConfig) (net.Listener, error) {
+	addr := net.JoinHostPort(strings.TrimSpace(config.Server.Host), stringOr(config.Server.Port, "18080"))
+	listener, err := net.Listen("tcp", addr)
+	if err == nil {
+		return listener, nil
+	}
+	if health, healthErr := fetchHealth(context.Background(), healthAddress(config)); healthErr == nil {
+		return nil, fmt.Errorf("Diana %s is already running at %s; use `diana status`, `diana restart` or `diana logs` to manage it", health.Version, webuiAddress(config))
+	}
+	return nil, err
+}
+
+func webuiAddress(config appConfig) string {
+	return "http://" + net.JoinHostPort(displayHost(config.Server.Host), stringOr(config.Server.Port, "18080"))
 }
 
 func displayHost(host string) string {
