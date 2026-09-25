@@ -581,6 +581,13 @@ func formatNotebookLine(entry NotebookEntry) string {
 	if example := strings.TrimSpace(entry.Example); example != "" {
 		builder.WriteString("　例：" + example)
 	}
+	// 事件和待办是「某时发生 / 某时记下」的：笔记本默认跨群跨私聊共享，不标日期，
+	// 一条「今天早上吃了布洛芬」的事件会在几天后、别的会话里被读成当下。
+	if kind == NotebookKindEvent || kind == NotebookKindTodo {
+		if written := firstNonZeroTime(entry.CreatedAt, entry.UpdatedAt); !written.IsZero() {
+			builder.WriteString("（记于 " + written.In(time.Local).Format("2006-01-02") + "）")
+		}
+	}
 	return builder.String()
 }
 

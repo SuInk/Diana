@@ -72,7 +72,7 @@ const memoryGateRulesPrompt = `你是 Diana 的长期记忆门控器。消息原
 7. kind 只能是 fact、preference、episode、instruction。instruction 只表示跨会话长期有效的交互规则，不表示本次任务要求。episode 只用于重要的一次性经历，默认 retention_days=90；稳定事实和偏好可以为 0 表示不过期。
 8. visibility=session 表示只在当前私聊或群可见；visibility=user 只适用于当前发言者明确陈述、非敏感且跨会话确有帮助的稳定事实/偏好。医疗、心理、财务、身份凭证、住址、联系方式、隐私关系等 sensitive=true，且必须 visibility=session。
 9. importance 和 confidence 均为 0 到 1。只有 importance>=0.45 的内容才输出；明确要求“记住”的重要内容可提高 importance，但仍要按真实语义组织，不照抄命令。
-10. content 必须写成自包含、无歧义的第三人称事实，保留实体；evidence 是不超过 60 字的最小证据片段。最多输出 5 条。
+10. content 必须写成自包含、无歧义的第三人称事实，保留实体；evidence 是不超过 60 字的最小证据片段。最多输出 5 条。content 里不得出现今天、昨天、早上、刚才、这周这类相对时间：按该条消息的 time 换算成具体日期（需要时带时段）再写，例如「2026-09-23 上午吃了布洛芬」。吃药、生病、喝酒、出行这类只在当时成立的状态只能写成带日期的 episode，不能写成 fact。from_bot=true 的是机器人自己说的话，只能用来理解上下文，不能当成任何人的自述。
 11. 上下文里给的是 current 还是 current_batch 取决于这一轮攒了几条。给 current_batch 时要把整批按时间顺序当成同一个人连续说的话一起理解：跨条的指代、补充和改口都要接上，同一件事不要拆成多条记忆；每条候选必须用 source_index 标明出自 current_batch 的第几条（从 0 开始），最能支撑这条记忆的那一条。整批合计最多输出 5 条。`
 
 const memoryGateOutputContract = `
@@ -94,7 +94,7 @@ const memorySummarySystemPrompt = memorySummaryRulesPrompt + memorySummaryOutput
 const memorySummaryRulesPrompt = `你是 Diana 的会话记忆整合器。请把一批较早的原始聊天事件整理为按时间和主题组织的长期会话摘要，原始事件会继续保留。
 
 要求：
-1. 理解整段对话后按主题聚合，保留人物、时间、事件、决定、未解决问题和事实变化；删除寒暄、重复和无后续价值的噪声。
+1. 理解整段对话后按主题聚合，保留人物、时间、事件、决定、未解决问题和事实变化；删除寒暄、重复和无后续价值的噪声。每行事件前面是它的时间，原文里的今天、昨天、早上、刚才等相对说法必须按那个时间换算成具体日期再写，摘要和 thread 里都不留相对时间。标着「机器人自己」的行是机器人说的话，不能记成用户的自述。
 2. 不得按关键词机械摘抄，不得把提问误当事实，不得补充原文没有的信息。
 3. existing_summaries 是同会话已有摘要。相同日期和主题必须复用原 key，并生成包含旧摘要与新事件的完整更新版；不同主题建立新 key。
 4. 若提供 rollup，必须额外输出且只输出一条 key 精确等于 rollup.target_key 的层级摘要，把 source_summaries 合并为自包含的时间线；保留人物、关键事实、决定、变化和未解决事项，不得遗漏相互矛盾的信息。不要为 source_summaries 输出逐条副本。
@@ -132,6 +132,9 @@ type memoryGateEvent struct {
 	Quoted    string `json:"quoted,omitempty"`
 	GroupID   string `json:"group_id,omitempty"`
 	MessageID string `json:"message_id,omitempty"`
+	// FromBot 标出机器人自己发的话。私聊里出站消息的 user_id 记的是对方，不标的话
+	// 门控会把「你早上吃了布洛芬」这种机器人的话当成用户自述。
+	FromBot bool `json:"from_bot,omitempty"`
 }
 
 type memoryGateMemory struct {
@@ -934,11 +937,14 @@ func memoryEventText(event MessageEvent) string {
 	return strings.Join(strings.Fields(text), " ")
 }
 
+// memoryEventTime 用本机时区：门控和摘要要按它把「今天、早上」换算成日期，它得和
+// 运行时钟、历史行时间是同一个时区。以前给的是 UTC，北京时间早上七点半的消息在
+// 摘要里成了前一天 23:30，日期就差了一天。存储层按 Unix 秒落库，不受影响。
 func memoryEventTime(event MessageEvent) time.Time {
 	if event.Time > 0 {
-		return time.Unix(event.Time, 0).UTC()
+		return time.Unix(event.Time, 0).Local()
 	}
-	return time.Now().UTC()
+	return time.Now()
 }
 
 func memoryGateEventFromMessage(event MessageEvent, text string) memoryGateEvent {
@@ -946,6 +952,7 @@ func memoryGateEventFromMessage(event MessageEvent, text string) memoryGateEvent
 		Time:      memoryEventTime(event).Format(time.RFC3339),
 		UserID:    strings.TrimSpace(event.UserID),
 		Sender:    strings.TrimSpace(event.SenderNameOrID()),
+		FromBot:   event.Outbound,
 		Text:      truncateRunesFromStart(strings.TrimSpace(text), 500),
 		GroupID:   strings.TrimSpace(event.GroupID),
 		MessageID: strings.TrimSpace(event.MessageID),

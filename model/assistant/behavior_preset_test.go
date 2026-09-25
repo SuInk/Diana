@@ -227,7 +227,7 @@ func TestReplyStyleAppliesPerGroup(t *testing.T) {
 	base := BotConfig{ResponseMode: ResponseModeStandard, ReplyStyle: ReplyStyleAssistant}.WithDefaults()
 	runtime := NewRuntime(base, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	runtime.SetGroupConfigStore(&stubGroupConfigStore{configs: map[string]GroupConfig{
-		"casual": {GroupID: "casual", ReplyStyle: ReplyStyleHuman, ForwardReplyThreshold: 900},
+		"casual": {GroupID: "casual", ReplyStyle: ReplyStyleHuman, ForwardReplyThreshold: intPointer(900)},
 	}})
 	casual := runtime.effectiveConfigForEvent(MessageEvent{Kind: EventKindGroup, GroupID: "casual"})
 	if casual.ReplyStyle != "" || !strings.Contains(casual.SystemPrompt, ReplyStyleHuman.stylePrompt()) {

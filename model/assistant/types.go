@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -642,10 +643,13 @@ type BotConfig struct {
 	SocialReplyEnabled         *bool           `json:"social_reply_enabled,omitempty"`
 	ReplyMaxBubbles            int             `json:"reply_max_bubbles,omitempty"`
 	ForwardReplyChunkThreshold int             `json:"forward_reply_chunk_threshold,omitempty"`
-	DirectReplyChunkSize       int             `json:"direct_reply_chunk_size,omitempty"`
-	ForwardReplyThreshold      int             `json:"forward_reply_threshold,omitempty"`
-	RecallReplyMode            RecallReplyMode `json:"recall_reply_mode,omitempty"`
-	RefusalStrategy            RefusalStrategy `json:"refusal_strategy,omitempty"`
+	// ForwardReplyEnabled 是合并转发卡片的总开关；关掉时两个阈值都不生效。
+	// 两个阈值只描述「超过多少触发」，留空（0）是不按这一项触发，不再兼任开关。
+	ForwardReplyEnabled   *bool           `json:"forward_reply_enabled,omitempty"`
+	DirectReplyChunkSize  int             `json:"direct_reply_chunk_size,omitempty"`
+	ForwardReplyThreshold int             `json:"forward_reply_threshold,omitempty"`
+	RecallReplyMode       RecallReplyMode `json:"recall_reply_mode,omitempty"`
+	RefusalStrategy       RefusalStrategy `json:"refusal_strategy,omitempty"`
 	// LLMStreamingEnabled 默认开启原生流式调用，分别接收正文、思考与工具。
 	// 工具参数完整后再执行；不支持流式或请求失败时可退回普通调用。
 	// 显式 false 保留用户选择，未配置时使用默认值。
@@ -842,6 +846,8 @@ type ReplyRule struct {
 }
 
 type GroupConfig struct {
+	// InheritanceMigrated 标记这份群配置已经清掉旧版抄进来的机器人值快照，只做一次。
+	InheritanceMigrated     bool  `json:"inheritance_migrated,omitempty"`
 	ReplyPreserveLineBreaks *bool `json:"reply_preserve_line_breaks,omitempty"`
 	// ReplyLineSplitEnabled 的 nil 同样保留，发送时跟随所属机器人。
 	ReplyLineSplitEnabled *bool `json:"reply_line_split_enabled,omitempty"`
@@ -863,10 +869,13 @@ type GroupConfig struct {
 	ResponseMode ResponseMode `json:"response_mode,omitempty"`
 	ReplyStyle   ReplyStyle   `json:"reply_style,omitempty"`
 	// 旧版分群的表达覆盖，只在读旧配置时出现，WithDefaults 并进 SystemPrompt 后清空。
-	ActionDescriptionEnabled  *bool       `json:"action_description_enabled,omitempty"`
-	SelfReference             string      `json:"self_reference,omitempty"`
-	SentenceEnders            string      `json:"sentence_enders,omitempty"`
-	WelcomeEnabled            bool        `json:"welcome_enabled,omitempty"`
+	ActionDescriptionEnabled *bool  `json:"action_description_enabled,omitempty"`
+	SelfReference            string `json:"self_reference,omitempty"`
+	SentenceEnders           string `json:"sentence_enders,omitempty"`
+	// 下面这批「留空跟随机器人」的字段：零值、空串、nil 都表示没单独设置，运行时用
+	// 所属机器人的当前值。以前新建和归一化时会把机器人当时的值抄进来并落库，之后
+	// 机器人页再怎么改都进不了这个群（见 clearInheritedSnapshots）。
+	WelcomeEnabled            *bool       `json:"welcome_enabled,omitempty"`
 	WelcomeMessage            string      `json:"welcome_message,omitempty"`
 	WelcomeMode               WelcomeMode `json:"welcome_mode,omitempty"`
 	WelcomeTemplates          []string    `json:"welcome_templates,omitempty"`
@@ -886,11 +895,15 @@ type GroupConfig struct {
 	// 分条和合并转发的四个阈值加一个开关。群和群的说话节奏不一样：一个技术群
 	// 里长回复整条读更省事，一个闲聊群里同样长度得拆开发才不像播报。
 	// 自然分条的 nil 必须保留，发送时才跟随所属机器人的当前值。
-	NaturalReplySplitEnabled     *bool                     `json:"natural_reply_split_enabled,omitempty"`
-	ReplyMaxBubbles              int                       `json:"reply_max_bubbles,omitempty"`
-	DirectReplyChunkSize         int                       `json:"direct_reply_chunk_size,omitempty"`
-	ForwardReplyThreshold        int                       `json:"forward_reply_threshold,omitempty"`
-	ForwardReplyChunkThreshold   int                       `json:"forward_reply_chunk_threshold,omitempty"`
+	NaturalReplySplitEnabled *bool `json:"natural_reply_split_enabled,omitempty"`
+	ReplyMaxBubbles          int   `json:"reply_max_bubbles,omitempty"`
+	DirectReplyChunkSize     int   `json:"direct_reply_chunk_size,omitempty"`
+	// 合并转发：ForwardReplyEnabled nil 跟随机器人，false 本群关闭，true 本群单独设置。
+	// 两个阈值 nil 同样跟随机器人。以前阈值是 int，群配置一存下来就把当时的值
+	// （旧群多半是 0）定死，机器人页后来改成 140 也进不了这个群。
+	ForwardReplyEnabled          *bool                     `json:"forward_reply_enabled,omitempty"`
+	ForwardReplyThreshold        *int                      `json:"forward_reply_threshold,omitempty"`
+	ForwardReplyChunkThreshold   *int                      `json:"forward_reply_chunk_threshold,omitempty"`
 	ProactiveReplyChance         float64                   `json:"proactive_reply_chance,omitempty"`
 	ProactiveReplyThreshold      float64                   `json:"proactive_reply_threshold,omitempty"`
 	ChatInEnabled                *bool                     `json:"chat_in_enabled,omitempty"`
@@ -1086,6 +1099,7 @@ type ConfigPayload struct {
 	SocialReplyEnabled          *bool           `json:"social_reply_enabled,omitempty"`
 	ReplyMaxBubbles             int             `json:"reply_max_bubbles,omitempty"`
 	ForwardReplyChunkThreshold  int             `json:"forward_reply_chunk_threshold,omitempty"`
+	ForwardReplyEnabled         *bool           `json:"forward_reply_enabled,omitempty"`
 	DirectReplyChunkSize        int             `json:"direct_reply_chunk_size,omitempty"`
 	ForwardReplyThreshold       int             `json:"forward_reply_threshold,omitempty"`
 	RecallReplyMode             RecallReplyMode `json:"recall_reply_mode,omitempty"`
@@ -1145,42 +1159,116 @@ type ConfigPayload struct {
 // DefaultGroupConfig 返回指定群的默认行为配置，只包含群作用域字段。
 func DefaultGroupConfig(groupID string, base BotConfig) GroupConfig {
 	base = base.WithDefaults()
+	// 只放群自己的状态。触发词、欢迎、上下文预算、撤回回复这些「留空跟随机器人」的
+	// 字段一律不抄：抄进来就是一份快照，存盘后机器人页改了也进不了这个群。
 	return GroupConfig{
 		GroupID: strings.TrimSpace(groupID),
 		// 新建的群配置跟着机器人的新群默认走：白名单模式下新群默认不工作，
 		// 建一条配置出来不该把它悄悄打开。
-		Enabled:                      base.GroupAdmission.NewGroupEnabled(),
-		EnabledSet:                   true,
-		GroupTriggers:                append([]string(nil), base.GroupTriggers...),
-		GroupTriggerMode:             base.GroupTriggerMode,
-		WelcomeEnabled:               base.WelcomeEnabled,
-		WelcomeMessage:               base.WelcomeMessage,
-		WelcomeMode:                  base.WelcomeMode,
-		WelcomeTemplates:             append([]string(nil), base.WelcomeTemplates...),
-		WelcomeLLMCooldownSeconds:    base.WelcomeLLMCooldownSeconds,
-		MaxContextTokens:             base.MaxContextTokens,
-		RecentHistoryTokenBudget:     base.RecentHistoryTokenBudget,
-		RecentContextLimit:           base.RecentContextLimit,
-		MaxReplyChars:                base.MaxReplyChars,
-		ReplyMaxBubbles:              base.ReplyMaxBubbles,
-		DirectReplyChunkSize:         base.DirectReplyChunkSize,
-		ForwardReplyThreshold:        base.ForwardReplyThreshold,
-		ForwardReplyChunkThreshold:   base.ForwardReplyChunkThreshold,
-		ProactiveReplyChance:         base.ProactiveReplyChance,
-		ProactiveReplyThreshold:      base.ProactiveReplyThreshold,
-		ChatInEnabled:                base.ChatInEnabled,
-		ChatInLevel:                  base.ChatInLevel,
-		ChatInThreshold:              base.ChatInThreshold,
-		ChatInChance:                 base.ChatInChance,
-		ChatInCooldownSeconds:        base.ChatInCooldownSeconds,
-		NaturalInterjectionEnabled:   copyBoolPointer(base.NaturalInterjectionEnabled),
-		SocialReplyEnabled:           copyBoolPointer(base.SocialReplyEnabled),
-		MinimumReplyMemberLevel:      0,
-		RecallReplyAutoDeleteEnabled: copyBoolPointer(base.RecallReplyAutoDeleteEnabled),
-		RecallReplyTTLSeconds:        base.RecallReplyTTLSeconds,
-		PluginOverrides:              map[string]bool{},
-		PluginSettingOverrides:       PluginSettingOverrides{},
+		Enabled:                 base.GroupAdmission.NewGroupEnabled(),
+		EnabledSet:              true,
+		InheritanceMigrated:     true,
+		MinimumReplyMemberLevel: 0,
+		PluginOverrides:         map[string]bool{},
+		PluginSettingOverrides:  PluginSettingOverrides{},
 	}
+}
+
+// clearInheritedSnapshots 清掉旧版抄进群配置的机器人值。
+//
+// 旧版新建群配置、每次保存归一化时都把机器人当时的值写进群里，于是「留空跟随机器人」
+// 的字段全成了定死的快照。分不出哪些是用户单独填的，只能按值判断：和所属机器人现在
+// 的值相同的清成跟随，清完这一刻行为完全不变。不同的保留——它可能是过期快照，也可能
+// 是真的单独设置（比如机器人开着、本群特意关掉），没法替用户猜，界面上显示成本群单独
+// 设置，想跟随时清空即可。不拿系统默认值比：开关类的「关」往往就是默认值，会把本群
+// 特意关掉的设置误清。
+//
+// 入群欢迎开关旧版是 bool，false 不落盘：读回来的 nil 按旧行为当成关闭再比较，
+// 免得机器人开着欢迎时，一批本来不欢迎的群升级后突然开始欢迎。
+func (cfg GroupConfig) clearInheritedSnapshots(base BotConfig) GroupConfig {
+	bot := base.WithDefaults()
+	sameStrings := func(value []string, pick func(BotConfig) []string) bool {
+		return len(value) > 0 && slices.Equal(value, cleanStrings(pick(bot)))
+	}
+	sameBool := func(value *bool, pick func(BotConfig) bool) bool {
+		return value != nil && *value == pick(bot)
+	}
+	clearInt := func(value *int, pick func(BotConfig) int) {
+		if *value > 0 && *value == pick(bot) {
+			*value = 0
+		}
+	}
+	clearInt64 := func(value *int64, pick func(BotConfig) int64) {
+		if *value > 0 && *value == pick(bot) {
+			*value = 0
+		}
+	}
+	clearFloat := func(value *float64, pick func(BotConfig) float64) {
+		if *value > 0 && *value == pick(bot) {
+			*value = 0
+		}
+	}
+	if sameStrings(cfg.GroupTriggers, func(c BotConfig) []string { return c.GroupTriggers }) {
+		cfg.GroupTriggers = nil
+	}
+	if cfg.GroupTriggerMode != "" && cfg.GroupTriggerMode == bot.GroupTriggerMode {
+		cfg.GroupTriggerMode = ""
+	}
+	if cfg.WelcomeEnabled == nil {
+		cfg.WelcomeEnabled = boolPointer(false)
+	}
+	if sameBool(cfg.WelcomeEnabled, func(c BotConfig) bool { return c.WelcomeEnabled }) {
+		cfg.WelcomeEnabled = nil
+	}
+	if cfg.WelcomeMessage != "" && cfg.WelcomeMessage == strings.TrimSpace(bot.WelcomeMessage) {
+		cfg.WelcomeMessage = ""
+	}
+	if cfg.WelcomeMode != "" && cfg.WelcomeMode == bot.WelcomeMode {
+		cfg.WelcomeMode = ""
+	}
+	if sameStrings(cfg.WelcomeTemplates, func(c BotConfig) []string { return c.WelcomeTemplates }) {
+		cfg.WelcomeTemplates = nil
+	}
+	clearInt(&cfg.WelcomeLLMCooldownSeconds, func(c BotConfig) int { return c.WelcomeLLMCooldownSeconds })
+	clearInt64(&cfg.MaxContextTokens, func(c BotConfig) int64 { return c.MaxContextTokens })
+	clearInt64(&cfg.RecentHistoryTokenBudget, func(c BotConfig) int64 { return c.RecentHistoryTokenBudget })
+	clearInt(&cfg.RecentContextLimit, func(c BotConfig) int { return c.RecentContextLimit })
+	clearInt(&cfg.MaxReplyChars, func(c BotConfig) int { return c.MaxReplyChars })
+	clearInt(&cfg.ReplyMaxBubbles, func(c BotConfig) int { return c.ReplyMaxBubbles })
+	clearInt(&cfg.DirectReplyChunkSize, func(c BotConfig) int { return c.DirectReplyChunkSize })
+	clearInt(&cfg.RecallReplyTTLSeconds, func(c BotConfig) int { return c.RecallReplyTTLSeconds })
+	clearInt(&cfg.ChatInCooldownSeconds, func(c BotConfig) int { return c.ChatInCooldownSeconds })
+	clearFloat(&cfg.ProactiveReplyChance, func(c BotConfig) float64 { return c.ProactiveReplyChance })
+	clearFloat(&cfg.ProactiveReplyThreshold, func(c BotConfig) float64 { return c.ProactiveReplyThreshold })
+	clearFloat(&cfg.ChatInThreshold, func(c BotConfig) float64 { return c.ChatInThreshold })
+	clearFloat(&cfg.ChatInChance, func(c BotConfig) float64 { return c.ChatInChance })
+	if sameBool(cfg.ChatInEnabled, func(c BotConfig) bool { return boolValue(c.ChatInEnabled, true) }) {
+		cfg.ChatInEnabled = nil
+	}
+	if cfg.ChatInLevel != "" && cfg.ChatInLevel == bot.ChatInLevel.Normalized() {
+		cfg.ChatInLevel = ""
+	}
+	if sameBool(cfg.NaturalInterjectionEnabled, func(c BotConfig) bool { return boolValue(c.NaturalInterjectionEnabled, false) }) {
+		cfg.NaturalInterjectionEnabled = nil
+	}
+	if sameBool(cfg.SocialReplyEnabled, func(c BotConfig) bool { return boolValue(c.SocialReplyEnabled, false) }) {
+		cfg.SocialReplyEnabled = nil
+	}
+	if sameBool(cfg.RecallReplyAutoDeleteEnabled, func(c BotConfig) bool { return boolValue(c.RecallReplyAutoDeleteEnabled, false) }) {
+		cfg.RecallReplyAutoDeleteEnabled = nil
+	}
+	cfg.InheritanceMigrated = true
+	return cfg
+}
+
+// positiveOptionalCount 复制一个可选计数；nil 和不大于 0 的值都当作没填，跟随上级。
+// 关掉走 ForwardReplyEnabled，这里不让 0 兼任「关闭」。
+func positiveOptionalCount(value *int) *int {
+	if value == nil || *value <= 0 {
+		return nil
+	}
+	count := *value
+	return &count
 }
 
 // WithDefaults 补齐群配置的空值，避免旧数据或局部提交破坏运行时默认行为。
@@ -1219,89 +1307,42 @@ func (cfg GroupConfig) WithDefaults(groupID string, base BotConfig) GroupConfig 
 		cfg.Enabled = true
 		cfg.EnabledSet = true
 	}
-	if len(cfg.GroupTriggers) == 0 {
-		cfg.GroupTriggers = append([]string(nil), defaults.GroupTriggers...)
-	}
-	// 空值表示这个群没有单独表态，读取时按全局配置解析，不在这里写死档位。
-	if strings.TrimSpace(cfg.WelcomeMessage) == "" {
-		cfg.WelcomeMessage = defaults.WelcomeMessage
-	}
-	if strings.TrimSpace(string(cfg.WelcomeMode)) == "" {
-		cfg.WelcomeMode = defaults.WelcomeMode
-	} else {
+	// 下面只做清洗和钳制，不再从机器人补值：空着就是跟随机器人，运行时再取。
+	cfg.GroupTriggers = cleanStrings(cfg.GroupTriggers)
+	cfg.WelcomeMessage = strings.TrimSpace(cfg.WelcomeMessage)
+	if strings.TrimSpace(string(cfg.WelcomeMode)) != "" {
 		cfg.WelcomeMode = normalizeWelcomeMode(cfg.WelcomeMode)
 	}
 	cfg.WelcomeTemplates = cleanStrings(cfg.WelcomeTemplates)
-	if len(cfg.WelcomeTemplates) == 0 {
-		cfg.WelcomeTemplates = append([]string(nil), defaults.WelcomeTemplates...)
-	}
-	if cfg.WelcomeLLMCooldownSeconds <= 0 {
-		cfg.WelcomeLLMCooldownSeconds = defaults.WelcomeLLMCooldownSeconds
-	}
-	if cfg.MaxContextTokens <= 0 {
-		cfg.MaxContextTokens = defaults.MaxContextTokens
-	}
-	if cfg.RecentHistoryTokenBudget <= 0 {
-		cfg.RecentHistoryTokenBudget = defaults.RecentHistoryTokenBudget
-	}
-	if cfg.RecentContextLimit <= 0 {
-		cfg.RecentContextLimit = defaults.RecentContextLimit
-	}
-	if cfg.MaxReplyChars <= 0 {
-		cfg.MaxReplyChars = defaults.MaxReplyChars
-	}
-	if cfg.ReplyMaxBubbles <= 0 {
-		cfg.ReplyMaxBubbles = defaults.ReplyMaxBubbles
-	}
-	if cfg.DirectReplyChunkSize <= 0 {
-		cfg.DirectReplyChunkSize = defaults.DirectReplyChunkSize
-	}
-	cfg.ForwardReplyThreshold = max(0, cfg.ForwardReplyThreshold)
-	cfg.ForwardReplyChunkThreshold = max(0, cfg.ForwardReplyChunkThreshold)
-	if cfg.ProactiveReplyChance <= 0 {
-		cfg.ProactiveReplyChance = defaults.ProactiveReplyChance
-	}
-	if cfg.ProactiveReplyChance > 1 {
-		cfg.ProactiveReplyChance = 1
-	}
-	if cfg.ProactiveReplyThreshold <= 0 {
-		cfg.ProactiveReplyThreshold = defaults.ProactiveReplyThreshold
-	}
-	if cfg.ProactiveReplyThreshold > 1 {
-		cfg.ProactiveReplyThreshold = 1
-	}
-	if cfg.ChatInEnabled == nil {
-		cfg.ChatInEnabled = defaults.ChatInEnabled
-	}
-	if cfg.SocialReplyEnabled == nil {
-		cfg.SocialReplyEnabled = copyBoolPointer(defaults.SocialReplyEnabled)
-	}
-	if !cfg.ChatInLevel.Valid() {
-		cfg.ChatInLevel = defaults.ChatInLevel
-	} else {
-		cfg.ChatInLevel = cfg.ChatInLevel.Normalized()
-	}
+	cfg.WelcomeEnabled = copyBoolPointer(cfg.WelcomeEnabled)
+	cfg.WelcomeLLMCooldownSeconds = max(0, cfg.WelcomeLLMCooldownSeconds)
+	cfg.MaxContextTokens = max(0, cfg.MaxContextTokens)
+	cfg.RecentHistoryTokenBudget = max(0, cfg.RecentHistoryTokenBudget)
+	cfg.RecentContextLimit = max(0, cfg.RecentContextLimit)
+	cfg.MaxReplyChars = max(0, cfg.MaxReplyChars)
+	cfg.ReplyMaxBubbles = max(0, cfg.ReplyMaxBubbles)
+	cfg.DirectReplyChunkSize = max(0, cfg.DirectReplyChunkSize)
+	cfg.ForwardReplyThreshold = positiveOptionalCount(cfg.ForwardReplyThreshold)
+	cfg.ForwardReplyChunkThreshold = positiveOptionalCount(cfg.ForwardReplyChunkThreshold)
+	cfg.ForwardReplyEnabled = copyBoolPointer(cfg.ForwardReplyEnabled)
+	cfg.ProactiveReplyChance = max(0, min(1, cfg.ProactiveReplyChance))
+	cfg.ProactiveReplyThreshold = max(0, min(1, cfg.ProactiveReplyThreshold))
+	cfg.ChatInEnabled = copyBoolPointer(cfg.ChatInEnabled)
+	cfg.SocialReplyEnabled = copyBoolPointer(cfg.SocialReplyEnabled)
+	cfg.ChatInLevel = cfg.ChatInLevel.Normalized()
 	cfg.ChatInThreshold = clampChatInRatio(cfg.ChatInThreshold)
 	cfg.ChatInChance = clampChatInRatio(cfg.ChatInChance)
 	if cfg.ChatInCooldownSeconds < 0 {
 		cfg.ChatInCooldownSeconds = 0
 	}
-	if cfg.NaturalInterjectionEnabled == nil {
-		cfg.NaturalInterjectionEnabled = copyBoolPointer(defaults.NaturalInterjectionEnabled)
-	}
+	cfg.NaturalInterjectionEnabled = copyBoolPointer(cfg.NaturalInterjectionEnabled)
 	if cfg.MinimumReplyMemberLevel < 0 {
 		cfg.MinimumReplyMemberLevel = 0
 	} else if cfg.MinimumReplyMemberLevel > maximumReplyMemberLevel {
 		cfg.MinimumReplyMemberLevel = maximumReplyMemberLevel
 	}
-	if cfg.RecallReplyAutoDeleteEnabled == nil {
-		cfg.RecallReplyAutoDeleteEnabled = copyBoolPointer(defaults.RecallReplyAutoDeleteEnabled)
-	}
-	if cfg.RecallReplyTTLSeconds <= 0 {
-		cfg.RecallReplyTTLSeconds = defaults.RecallReplyTTLSeconds
-	} else if cfg.RecallReplyTTLSeconds > maximumRecallReplyTTLSeconds {
-		cfg.RecallReplyTTLSeconds = maximumRecallReplyTTLSeconds
-	}
+	cfg.RecallReplyAutoDeleteEnabled = copyBoolPointer(cfg.RecallReplyAutoDeleteEnabled)
+	cfg.RecallReplyTTLSeconds = max(0, min(maximumRecallReplyTTLSeconds, cfg.RecallReplyTTLSeconds))
 	if cfg.PluginOverrides == nil {
 		cfg.PluginOverrides = map[string]bool{}
 	}
@@ -1312,7 +1353,11 @@ func (cfg GroupConfig) WithDefaults(groupID string, base BotConfig) GroupConfig 
 		normalized := cfg.ReplyGate.WithDefaults()
 		cfg.ReplyGate = &normalized
 	}
-	cfg.GroupTriggers = cleanStrings(cfg.GroupTriggers)
+	// 旧数据里抄进来的机器人值快照只清一次。必须拿到这个群自己那台机器人才动手：
+	// 拿别的机器人比，会把真正的单独设置当成快照清掉。
+	if !cfg.InheritanceMigrated && (cfg.BotProfileID == "" || cfg.BotProfileID == base.ID) {
+		cfg = cfg.clearInheritedSnapshots(base)
+	}
 	if cfg.UpdatedAt.IsZero() {
 		cfg.UpdatedAt = time.Now()
 	}
@@ -1651,6 +1696,7 @@ func DefaultBotConfig() BotConfig {
 		MaxReplyChars:                3500,
 		ReplyMaxBubbles:              replyMaxChatBubbles,
 		ForwardReplyChunkThreshold:   0,
+		ForwardReplyEnabled:          boolPointer(true),
 		DirectReplyChunkSize:         chatReplyChunkSize,
 		ForwardReplyThreshold:        defaultForwardReplyThreshold,
 		RecallReplyMode:              RecallReplyModeOriginalForward,
@@ -1844,6 +1890,11 @@ func (cfg BotConfig) WithDefaults() BotConfig {
 	// DefaultBotConfig 给，群级覆盖同样只做钳零。
 	cfg.ForwardReplyChunkThreshold = max(0, cfg.ForwardReplyChunkThreshold)
 	cfg.ForwardReplyThreshold = max(0, cfg.ForwardReplyThreshold)
+	// 旧配置没有总开关：两个阈值都是 0 的本来就不会出卡片，记成关闭；填过阈值的
+	// 记成开启。这样升级后行为不变，开关显示的也是实际状态。
+	if cfg.ForwardReplyEnabled == nil {
+		cfg.ForwardReplyEnabled = boolPointer(cfg.ForwardReplyThreshold > 0 || cfg.ForwardReplyChunkThreshold > 0)
+	}
 	cfg.RecallReplyMode = normalizeRecallReplyMode(cfg.RecallReplyMode)
 	cfg.RefusalStrategy = normalizeRefusalStrategy(cfg.RefusalStrategy)
 	if cfg.LLMStreamingEnabled == nil {
@@ -2233,6 +2284,7 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		SocialReplyEnabled:                copyBoolPointer(cfg.SocialReplyEnabled),
 		ReplyMaxBubbles:                   cfg.ReplyMaxBubbles,
 		ForwardReplyChunkThreshold:        cfg.ForwardReplyChunkThreshold,
+		ForwardReplyEnabled:               copyBoolPointer(cfg.ForwardReplyEnabled),
 		DirectReplyChunkSize:              cfg.DirectReplyChunkSize,
 		ForwardReplyThreshold:             cfg.ForwardReplyThreshold,
 		RecallReplyMode:                   cfg.RecallReplyMode,
@@ -2438,6 +2490,7 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		SocialReplyEnabled:              copyBoolPointer(payload.SocialReplyEnabled),
 		ReplyMaxBubbles:                 payload.ReplyMaxBubbles,
 		ForwardReplyChunkThreshold:      payload.ForwardReplyChunkThreshold,
+		ForwardReplyEnabled:             copyBoolPointer(payload.ForwardReplyEnabled),
 		DirectReplyChunkSize:            payload.DirectReplyChunkSize,
 		ForwardReplyThreshold:           payload.ForwardReplyThreshold,
 		RecallReplyMode:                 payload.RecallReplyMode,

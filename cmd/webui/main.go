@@ -344,6 +344,11 @@ func main() {
 	if err := webui.MigrateGroupScopeSwitches(botProfileStore, botGroupConfigStore); err != nil {
 		log.Fatal(err)
 	}
+	// 旧版群配置把机器人的触发词、欢迎、上下文预算等抄成了快照；同样要赶在有人改
+	// 机器人配置之前迁完，否则按「和机器人现值相同」判断的快照就对不上了。
+	if err := webui.MigrateGroupInheritance(botProfileStore, botGroupConfigStore); err != nil {
+		log.Fatal(err)
+	}
 	reminderStore, err := webui.NewPersistentReminderStore(ctx, sqliteStore)
 	if err != nil {
 		log.Fatal(err)

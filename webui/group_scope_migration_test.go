@@ -136,3 +136,28 @@ func TestMigrateKeepsProfilesApart(t *testing.T) {
 		t.Fatalf("B 在这个群的开关被 A 的白名单动了：enabled=%v configured=%v", enabled, ok)
 	}
 }
+
+// 启动迁移要把快照清成跟随并落盘：之后机器人页改了值，群里跟着变。
+func TestMigrateGroupInheritancePersistsBeforeBotChanges(t *testing.T) {
+	bot := assistant.BotConfig{ID: "bot", Name: "Diana", GroupTriggers: []string{"Diana"}, MaxReplyChars: 800}.WithDefaults()
+	profiles, groups := migrationStores(t, bot)
+	// 按旧数据的样子直接塞进存储：没有迁移标记，触发词和回复上限都是机器人当时的值。
+	groups.data = assistant.GroupConfigSet{Groups: []assistant.GroupConfig{{
+		BotProfileID: "bot", GroupID: "1", Enabled: true, EnabledSet: true,
+		GroupTriggers: []string{"Diana"}, MaxReplyChars: 800, RecentContextLimit: 12,
+	}}}
+	if err := MigrateGroupInheritance(profiles, groups); err != nil {
+		t.Fatal(err)
+	}
+	stored := groups.Groups().Groups[0]
+	if !stored.InheritanceMigrated || len(stored.GroupTriggers) != 0 || stored.MaxReplyChars != 0 {
+		t.Fatalf("snapshot not cleared on disk: %+v", stored)
+	}
+	if stored.RecentContextLimit != 12 {
+		t.Fatalf("real override lost: %d", stored.RecentContextLimit)
+	}
+	// 再跑一次什么也不动。
+	if err := MigrateGroupInheritance(profiles, groups); err != nil {
+		t.Fatal(err)
+	}
+}

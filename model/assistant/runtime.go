@@ -1444,6 +1444,14 @@ func (r *Runtime) rememberBotAccount(profileID, selfID string) {
 	})
 }
 
+// overrideIfSet 只在群里填了值（非零值）时覆盖机器人的值；零值表示跟随机器人。
+func overrideIfSet[T comparable](target *T, value T) {
+	var zero T
+	if value != zero {
+		*target = value
+	}
+}
+
 func (r *Runtime) effectiveConfigForEvent(event MessageEvent) BotConfig {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -1462,7 +1470,10 @@ func (r *Runtime) effectiveConfigForEventLocked(event MessageEvent) BotConfig {
 	groupCfg = groupCfg.WithDefaults(event.GroupID, cfg)
 	cfg.MarkedBotIDs = cleanStrings(append(cfg.MarkedBotIDs, groupCfg.MarkedBotIDs...))
 	groupResponseModeOverridden := groupCfg.ResponseMode != ""
-	cfg.GroupTriggers = append([]string(nil), groupCfg.GroupTriggers...)
+	// 群配置里空着的项都跟随机器人，只有群里真的填了才覆盖（见 GroupConfig 字段说明）。
+	if len(groupCfg.GroupTriggers) > 0 {
+		cfg.GroupTriggers = append([]string(nil), groupCfg.GroupTriggers...)
+	}
 	if strings.TrimSpace(string(groupCfg.GroupTriggerMode)) != "" {
 		cfg.GroupTriggerMode = groupCfg.GroupTriggerMode
 	}
@@ -1482,18 +1493,19 @@ func (r *Runtime) effectiveConfigForEventLocked(event MessageEvent) BotConfig {
 	if strings.TrimSpace(groupCfg.SentenceEnders) != "" {
 		cfg.SentenceEnders = strings.TrimSpace(groupCfg.SentenceEnders)
 	}
-	cfg.WelcomeEnabled = groupCfg.WelcomeEnabled
-	cfg.WelcomeMessage = groupCfg.WelcomeMessage
-	cfg.WelcomeMode = groupCfg.WelcomeMode
-	cfg.WelcomeTemplates = append([]string(nil), groupCfg.WelcomeTemplates...)
-	cfg.WelcomeLLMCooldownSeconds = groupCfg.WelcomeLLMCooldownSeconds
-	cfg.MaxContextTokens = groupCfg.MaxContextTokens
-	// 群级的历史预算此前只存不用：GroupConfig 里有这个字段、WithDefaults 也从
-	// 机器人配置继承了默认值，却没有一行把它拷回生效配置，于是群组页那个输入框
-	// 填了不生效。
-	cfg.RecentHistoryTokenBudget = groupCfg.RecentHistoryTokenBudget
-	cfg.RecentContextLimit = groupCfg.RecentContextLimit
-	cfg.MaxReplyChars = groupCfg.MaxReplyChars
+	if groupCfg.WelcomeEnabled != nil {
+		cfg.WelcomeEnabled = *groupCfg.WelcomeEnabled
+	}
+	overrideIfSet(&cfg.WelcomeMessage, groupCfg.WelcomeMessage)
+	overrideIfSet(&cfg.WelcomeMode, groupCfg.WelcomeMode)
+	if len(groupCfg.WelcomeTemplates) > 0 {
+		cfg.WelcomeTemplates = append([]string(nil), groupCfg.WelcomeTemplates...)
+	}
+	overrideIfSet(&cfg.WelcomeLLMCooldownSeconds, groupCfg.WelcomeLLMCooldownSeconds)
+	overrideIfSet(&cfg.MaxContextTokens, groupCfg.MaxContextTokens)
+	overrideIfSet(&cfg.RecentHistoryTokenBudget, groupCfg.RecentHistoryTokenBudget)
+	overrideIfSet(&cfg.RecentContextLimit, groupCfg.RecentContextLimit)
+	overrideIfSet(&cfg.MaxReplyChars, groupCfg.MaxReplyChars)
 	if groupCfg.NaturalReplySplitEnabled != nil {
 		cfg.NaturalReplySplitEnabled = copyBoolPointer(groupCfg.NaturalReplySplitEnabled)
 	}
@@ -1506,32 +1518,47 @@ func (r *Runtime) effectiveConfigForEventLocked(event MessageEvent) BotConfig {
 	if groupCfg.TypingDelayEnabled != nil {
 		cfg.TypingDelayEnabled = copyBoolPointer(groupCfg.TypingDelayEnabled)
 	}
-	cfg.ReplyMaxBubbles = groupCfg.ReplyMaxBubbles
+	overrideIfSet(&cfg.ReplyMaxBubbles, groupCfg.ReplyMaxBubbles)
 	if groupCfg.ReplyMergeConfidencePercent > 0 {
 		cfg.ReplyMergeConfidencePercent = groupCfg.ReplyMergeConfidencePercent
 	}
-	cfg.DirectReplyChunkSize = groupCfg.DirectReplyChunkSize
-	cfg.ForwardReplyThreshold = groupCfg.ForwardReplyThreshold
-	cfg.ForwardReplyChunkThreshold = groupCfg.ForwardReplyChunkThreshold
-	cfg.ProactiveReplyChance = groupCfg.ProactiveReplyChance
-	cfg.ProactiveReplyThreshold = groupCfg.ProactiveReplyThreshold
-	cfg.ChatInEnabled = groupCfg.ChatInEnabled
-	cfg.ChatInLevel = groupCfg.ChatInLevel
+	overrideIfSet(&cfg.DirectReplyChunkSize, groupCfg.DirectReplyChunkSize)
+	if groupCfg.ForwardReplyThreshold != nil {
+		cfg.ForwardReplyThreshold = *groupCfg.ForwardReplyThreshold
+	}
+	if groupCfg.ForwardReplyChunkThreshold != nil {
+		cfg.ForwardReplyChunkThreshold = *groupCfg.ForwardReplyChunkThreshold
+	}
+	if groupCfg.ForwardReplyEnabled != nil {
+		cfg.ForwardReplyEnabled = copyBoolPointer(groupCfg.ForwardReplyEnabled)
+	}
+	overrideIfSet(&cfg.ProactiveReplyChance, groupCfg.ProactiveReplyChance)
+	overrideIfSet(&cfg.ProactiveReplyThreshold, groupCfg.ProactiveReplyThreshold)
+	if groupCfg.ChatInEnabled != nil {
+		cfg.ChatInEnabled = copyBoolPointer(groupCfg.ChatInEnabled)
+	}
+	overrideIfSet(&cfg.ChatInLevel, groupCfg.ChatInLevel)
 	if groupCfg.Participation != nil {
 		cfg.Participation = copyParticipation(groupCfg.Participation)
 	} else if groupResponseModeOverridden {
 		cfg.Participation = nil
 	}
-	cfg.ChatInThreshold = groupCfg.ChatInThreshold
-	cfg.ChatInChance = groupCfg.ChatInChance
-	cfg.ChatInCooldownSeconds = groupCfg.ChatInCooldownSeconds
-	cfg.NaturalInterjectionEnabled = copyBoolPointer(groupCfg.NaturalInterjectionEnabled)
-	cfg.SocialReplyEnabled = copyBoolPointer(groupCfg.SocialReplyEnabled)
+	overrideIfSet(&cfg.ChatInThreshold, groupCfg.ChatInThreshold)
+	overrideIfSet(&cfg.ChatInChance, groupCfg.ChatInChance)
+	overrideIfSet(&cfg.ChatInCooldownSeconds, groupCfg.ChatInCooldownSeconds)
+	if groupCfg.NaturalInterjectionEnabled != nil {
+		cfg.NaturalInterjectionEnabled = copyBoolPointer(groupCfg.NaturalInterjectionEnabled)
+	}
+	if groupCfg.SocialReplyEnabled != nil {
+		cfg.SocialReplyEnabled = copyBoolPointer(groupCfg.SocialReplyEnabled)
+	}
 	if groupResponseModeOverridden {
 		cfg.ResponseMode.apply(&cfg)
 	}
-	cfg.RecallReplyAutoDeleteEnabled = copyBoolPointer(groupCfg.RecallReplyAutoDeleteEnabled)
-	cfg.RecallReplyTTLSeconds = groupCfg.RecallReplyTTLSeconds
+	if groupCfg.RecallReplyAutoDeleteEnabled != nil {
+		cfg.RecallReplyAutoDeleteEnabled = copyBoolPointer(groupCfg.RecallReplyAutoDeleteEnabled)
+	}
+	overrideIfSet(&cfg.RecallReplyTTLSeconds, groupCfg.RecallReplyTTLSeconds)
 	if groupCfg.ReplyAccountSafetyAuditEnabled != nil {
 		// 群级开关是完整覆盖：主动和直接回复都服从它，覆盖机器人级的总开关。
 		cfg.groupReplyAccountSafetyAuditOverride = copyBoolPointer(groupCfg.ReplyAccountSafetyAuditEnabled)
@@ -6439,6 +6466,11 @@ func compactContextEvent(event MessageEvent) string {
 	if quoted := quotedPromptText(event.Quoted); quoted != "" {
 		text += " " + quoted
 	}
+	if event.Outbound {
+		// 私聊出站消息的 UserID 记的是对方（见 outgoingHistoryEvent），照常渲染就成了
+		// 「用户说了机器人的话」，摘要会把机器人的劝告记成用户自述。
+		return formatPromptIdentity(event.SenderName, "") + "（机器人自己）: " + strings.Join(strings.Fields(text), " ")
+	}
 	sender := promptSenderIdentity(event)
 	if label := subscriptionPushLabel(event); label != "" {
 		sender += "（" + label + "）"
@@ -6879,7 +6911,7 @@ func (r *Runtime) sendDecorated(ctx context.Context, event MessageEvent, reply s
 	releaseBatch := r.lockReplyBatch(event)
 	defer releaseBatch()
 
-	if IsOneBotPlatform(platform) && !chatSplitLimitsForEvent(cfg, event).SingleMessage && shouldUseForwardReply(reply, chunks, cfg.ForwardReplyThreshold, cfg.ForwardReplyChunkThreshold) {
+	if IsOneBotPlatform(platform) && !chatSplitLimitsForEvent(cfg, event).SingleMessage && shouldUseForwardReplyFor(cfg, reply, chunks) {
 		messageID, err := r.sendForwardReplyWithResult(ctx, event, reply, cfg)
 		if err == nil {
 			if messageID == "" {
@@ -7245,6 +7277,14 @@ const forwardReplyChunkCountThreshold = 5
 //	长度  正文字数超过配置的正数阈值
 //
 // 未设置或非正数表示无上限，不触发对应条件。
+// shouldUseForwardReplyFor 先看合并转发总开关，再按两个阈值判断。
+func shouldUseForwardReplyFor(cfg BotConfig, reply string, chunks []string) bool {
+	if !boolValue(cfg.ForwardReplyEnabled, true) {
+		return false
+	}
+	return shouldUseForwardReply(reply, chunks, cfg.ForwardReplyThreshold, cfg.ForwardReplyChunkThreshold)
+}
+
 func shouldUseForwardReply(reply string, chunks []string, threshold int, chunkThreshold int) bool {
 	if chunkThreshold > 0 && len(chunks) > chunkThreshold {
 		return true

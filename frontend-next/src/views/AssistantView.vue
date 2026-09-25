@@ -843,15 +843,23 @@
                 <input id="bot-typing-speed" v-model.number="form.typing_delay_per_char_ms" class="input" type="number" min="1" max="1000" step="1" inputmode="numeric" placeholder="留空按 100" :disabled="!form.typing_delay_enabled" />
                 <span class="hint">每个字等多久。100 约等于一秒十个字；越大越慢。</span>
               </div>
-              <div v-if="isOneBotPlatform" class="field">
-                <label for="bot-forward-len">合并转发字数</label>
-                <input id="bot-forward-len" v-model.number="form.forward_reply_threshold" class="input" type="number" min="0" step="1" inputmode="numeric" placeholder="无上限" />
-                <span class="hint">允许多条发送时，整轮正文超过此值触发卡片；新建机器人默认 140 字，0 或留空关闭此条件。仅 OneBot 支持。</span>
+              <div v-if="isOneBotPlatform" class="field wide">
+                <label class="switch">
+                  <input v-model="form.forward_reply_enabled" type="checkbox" @change="onForwardReplyToggle" />
+                  <span class="track" aria-hidden="true"></span>
+                  <span class="switch-label">长回复改用合并转发卡片</span>
+                </label>
+                <span class="hint">允许多条发送时，按下面的字数或块数把整轮回复收进一张卡片。关闭后一律不发卡片。仅 OneBot 支持。</span>
               </div>
-              <div v-if="isOneBotPlatform" class="field">
+              <div v-if="isOneBotPlatform && form.forward_reply_enabled" class="field">
+                <label for="bot-forward-len">合并转发字数</label>
+                <input id="bot-forward-len" v-model.number="form.forward_reply_threshold" class="input" type="number" min="1" step="1" inputmode="numeric" placeholder="留空不按字数触发" />
+                <span class="hint">整轮正文超过此值触发卡片；新建机器人默认 140 字。</span>
+              </div>
+              <div v-if="isOneBotPlatform && form.forward_reply_enabled" class="field">
                 <label for="bot-forward-chunks">合并转发块数</label>
-                <input id="bot-forward-chunks" v-model.number="form.forward_reply_chunk_threshold" class="input" type="number" min="0" step="1" inputmode="numeric" placeholder="无上限" />
-                <span class="hint">实际消息数超过此值触发卡片，填 4 表示至少 5 条；0 或留空关闭此条件。不按正文行数计数。</span>
+                <input id="bot-forward-chunks" v-model.number="form.forward_reply_chunk_threshold" class="input" type="number" min="1" step="1" inputmode="numeric" placeholder="留空不按块数触发" />
+                <span class="hint">实际消息数超过此值触发卡片，填 4 表示至少 5 条。不按正文行数计数。</span>
               </div>
               <div class="field">
                 <label for="bot-reply-reference-mode">群聊引用原消息</label>
@@ -2268,6 +2276,16 @@ function togglePlatform(category: string): void {
   selectedPlatforms.value = only ? [] : [category];
 }
 
+// 打开合并转发时两个阈值都空着，就先填上新建机器人的默认 140 字，免得开了等于没开。
+function onForwardReplyToggle(): void {
+  const current = form.value;
+  if (!current?.forward_reply_enabled) {
+    return;
+  }
+  if (!(Number(current.forward_reply_threshold) > 0) && !(Number(current.forward_reply_chunk_threshold) > 0)) {
+    current.forward_reply_threshold = 140;
+  }
+}
 const isOneBotPlatform = computed(() => {
   const id = form.value?.platform ?? "";
   const def = platforms.value.find((item) => item.id === id);
@@ -3617,6 +3635,8 @@ function setForm(config: BotProfileConfig): void {
     reply_preserve_line_breaks: config.reply_preserve_line_breaks ?? true,
     reply_line_split_enabled: config.reply_line_split_enabled ?? false,
     typing_delay_enabled: config.typing_delay_enabled ?? false,
+    // 旧后端不回这个字段：按阈值推出实际状态，和后端的迁移规则一致。
+    forward_reply_enabled: config.forward_reply_enabled ?? ((config.forward_reply_threshold ?? 0) > 0 || (config.forward_reply_chunk_threshold ?? 0) > 0),
     social_reply_enabled: config.social_reply_enabled ?? false,
     notebook_shared_scope_enabled: config.notebook_shared_scope_enabled ?? true,
     telegram_suppress_bot_messages: config.telegram_suppress_bot_messages ?? true,
@@ -3808,6 +3828,15 @@ async function save(): Promise<void> {
         return;
       }
     }
+  }
+  if (
+    isOneBotPlatform.value &&
+    current.forward_reply_enabled &&
+    !(Number(current.forward_reply_threshold) > 0) &&
+    !(Number(current.forward_reply_chunk_threshold) > 0)
+  ) {
+    toastError("合并转发卡片已开启，请至少填写字数或块数中的一项");
+    return;
   }
   busy.value = true;
   try {
