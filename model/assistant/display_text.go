@@ -15,6 +15,10 @@ import (
 // 记录本身也就一两百字，被引用的原文只是用来认出是哪一条。
 const maxDisplayQuotePreviewRunes = 30
 
+// maxDisplayQuoteBlockRunes 是事件页引用块里原话的长度上限。引用块单独占一行，
+// 放得下比行内标记多得多的字，界面再按两行截断。
+const maxDisplayQuoteBlockRunes = 120
+
 // DisplayEventText 把一条消息渲染成控制台上给人看的一行。
 //
 // 和 PlainText 的区别只在两处标记：at 段没带昵称时向 resolve 要一个，引用段渲染成
@@ -42,31 +46,52 @@ func DisplaySegmentsText(segments []MessageSegment, quoted *QuotedMessage, resol
 	return strings.Join(strings.Fields(text), " ")
 }
 
+// DisplayQuote 是事件页引用块要显示的东西：回的是谁的哪句话。
+type DisplayQuote struct {
+	MessageID  string `json:"message_id,omitempty"`
+	UserID     string `json:"user_id,omitempty"`
+	SenderName string `json:"sender_name,omitempty"`
+	Text       string `json:"text,omitempty"`
+}
+
+// DisplaySegmentsBody 和 DisplaySegmentsText 一样渲染正文，但引用段不塞进正文，
+// 单独返回给调用方画成引用块。
+//
+// 夹在正文里的「[回复 某人：原话] 正文」读起来是一整句：原话截到 30 字，括号又和
+// 正文粘在一起，分不清哪半句是对方说的。拆出来之后原话能多给一些，正文也干净。
+// 消息里有引用段就一定返回非空 quote：原消息没存下来时只有消息号，界面照样要说出
+// 「这是一条回复」。
+func DisplaySegmentsBody(segments []MessageSegment, quoted *QuotedMessage, resolve AtMentionNameResolver) (string, *DisplayQuote) {
+	var quote *DisplayQuote
+	text := strings.TrimSpace(plainTextWithOptions(segments, plainTextOptions{
+		resolveName: resolve,
+		renderReply: func(messageID string) string {
+			if quote == nil {
+				sender, preview, matched := quotedDisplayParts(quoted, messageID, resolve, maxDisplayQuoteBlockRunes)
+				quote = &DisplayQuote{MessageID: strings.TrimSpace(messageID)}
+				if matched {
+					quote.UserID = strings.TrimSpace(quoted.UserID)
+					quote.SenderName, quote.Text = sender, preview
+					if quote.MessageID == "" {
+						quote.MessageID = strings.TrimSpace(quoted.MessageID)
+					}
+				}
+			}
+			return " "
+		},
+		renderForward: forwardDisplayLabel,
+	}))
+	return strings.Join(strings.Fields(text), " "), quote
+}
+
 // quotedDisplayLabel 渲染引用标记。被引用的原消息在事件上时写清回的是谁的哪句话；
 // 只有一个消息 ID 时就只写「[回复]」——那串号码对翻记录的人没有任何意义，写出来
 // 反而挤掉正文。
 func quotedDisplayLabel(quoted *QuotedMessage, messageID string, resolve AtMentionNameResolver) string {
-	if quoted == nil || (quoted.MessageID != "" && messageID != "" && quoted.MessageID != messageID) {
+	sender, preview, matched := quotedDisplayParts(quoted, messageID, resolve, maxDisplayQuotePreviewRunes)
+	if !matched {
 		return "[回复] "
 	}
-	sender := strings.TrimSpace(quoted.SenderName)
-	if sender == "" && strings.TrimSpace(quoted.UserID) != "" && resolve != nil {
-		sender = strings.TrimSpace(resolve(strings.TrimSpace(quoted.UserID)))
-	}
-	if sender == "" {
-		sender = strings.TrimSpace(quoted.UserID)
-	}
-	preview := strings.TrimSpace(plainTextWithOptions(quoted.Segments, plainTextOptions{
-		resolveName: resolve,
-		// 被引用的消息如果自己也是条回复，只写「[回复]」，不再往下展开一层。
-		renderReply:   func(string) string { return "[回复] " },
-		renderForward: forwardDisplayLabel,
-	}))
-	if preview == "" {
-		preview = strings.TrimSpace(quoted.RawMessage)
-	}
-	preview = strings.Join(strings.Fields(preview), " ")
-	preview = truncateDisplayQuotePreview(preview)
 	// 结尾补一个空格，免得标记和正文粘成一句；整条文本最后会做空白归一化，
 	// 只有标记没有正文时这个空格会被去掉。
 	switch {
@@ -80,12 +105,38 @@ func quotedDisplayLabel(quoted *QuotedMessage, messageID string, resolve AtMenti
 	return "[回复] "
 }
 
-func truncateDisplayQuotePreview(text string) string {
+// quotedDisplayParts 取出被引用消息的发送者和原话摘要。matched 为 false 表示事件上
+// 没带这条被引用的原消息，只剩一个消息号。
+func quotedDisplayParts(quoted *QuotedMessage, messageID string, resolve AtMentionNameResolver, maxRunes int) (sender, preview string, matched bool) {
+	if quoted == nil || (quoted.MessageID != "" && messageID != "" && quoted.MessageID != messageID) {
+		return "", "", false
+	}
+	sender = strings.TrimSpace(quoted.SenderName)
+	if sender == "" && strings.TrimSpace(quoted.UserID) != "" && resolve != nil {
+		sender = strings.TrimSpace(resolve(strings.TrimSpace(quoted.UserID)))
+	}
+	if sender == "" {
+		sender = strings.TrimSpace(quoted.UserID)
+	}
+	preview = strings.TrimSpace(plainTextWithOptions(quoted.Segments, plainTextOptions{
+		resolveName: resolve,
+		// 被引用的消息如果自己也是条回复，只写「[回复]」，不再往下展开一层。
+		renderReply:   func(string) string { return "[回复] " },
+		renderForward: forwardDisplayLabel,
+	}))
+	if preview == "" {
+		preview = strings.TrimSpace(quoted.RawMessage)
+	}
+	preview = truncateDisplayRunes(strings.Join(strings.Fields(preview), " "), maxRunes)
+	return sender, preview, true
+}
+
+func truncateDisplayRunes(text string, maxRunes int) string {
 	runes := []rune(text)
-	if len(runes) <= maxDisplayQuotePreviewRunes {
+	if len(runes) <= maxRunes {
 		return text
 	}
-	return string(runes[:maxDisplayQuotePreviewRunes]) + "…"
+	return string(runes[:maxRunes]) + "…"
 }
 
 const (

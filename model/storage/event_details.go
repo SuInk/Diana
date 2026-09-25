@@ -88,6 +88,12 @@ type InboundEventDetail struct {
 	// Delivery 是这一轮实际发出去的内容概览。Reply 只是文本，说不出还发了转发
 	// 卡片、几张图或一个视频。
 	Delivery assistant.OutboundDelivery `json:"delivery,omitempty"`
+	// Recalls 是这一轮发出去的消息后来被撤回的记录，控制台据此把撤回通知那一行
+	// 合进原回复。
+	Recalls []InboundEventRecall `json:"recalls,omitempty"`
+	// Quote 是这条消息引用的原消息。它不再以「[回复 某人：原话]」夹在 Text 里，
+	// 控制台单独画成正文上方的引用块。
+	Quote *assistant.DisplayQuote `json:"quote,omitempty"`
 }
 
 // InboundEventImage intentionally contains display metadata only. The WebUI
@@ -465,9 +471,11 @@ LIMIT ? OFFSET ?
 		if item.quoted != nil {
 			applyMentionNames(item.quoted.Segments, mentionNames)
 		}
-		// 昵称已经写回 segment，所以这里不再传解析器；引用标记则要靠 quoted 才能
-		// 写成「回复 某人：原话」，否则控制台上只有一串消息 ID。
-		if displayText := assistant.DisplaySegmentsText(item.segments, item.quoted, quotedSenderNameResolver(item.quoted, mentionNames)); displayText != "" || len(page.Events[item.index].Images) > 0 {
+		// 昵称已经写回 segment，所以这里不再传解析器；引用块则要靠 quoted 才说得
+		// 出回的是谁的哪句话，否则控制台上只有一串消息 ID。
+		displayText, quote := assistant.DisplaySegmentsBody(item.segments, item.quoted, quotedSenderNameResolver(item.quoted, mentionNames))
+		page.Events[item.index].Quote = quote
+		if displayText != "" || quote != nil || len(page.Events[item.index].Images) > 0 {
 			// A CQ-only image message has no textual body. Clearing the raw CQ
 			// code lets the WebUI render the structured image instead.
 			page.Events[item.index].Text = displayText
@@ -483,6 +491,9 @@ LIMIT ? OFFSET ?
 	}
 	for index := range page.Events {
 		page.Events[index].Subtasks = subtasks[page.Events[index].ID]
+	}
+	if err := s.attachInboundEventRecalls(ctx, page.Events); err != nil {
+		return InboundEventDetailPage{}, err
 	}
 	if !query.Lightweight {
 		if err := s.attachInboundEventMemories(ctx, page.Events); err != nil {

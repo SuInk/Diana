@@ -1013,7 +1013,7 @@ VALUES (?, 'group:20002', 'group', ?, '20002', '30002', ?, ?, ?, 0, 'done', 1, ?
 }
 
 // 事件列表的正文要把 at 和引用都渲染成人能读的样子：@ 补昵称由 applyMentionNames
-// 负责，引用标记则要靠事件里带的被引用消息写成「回复 某人：原话」。
+// 负责；引用不再夹在正文里，单独下发成 Quote，写清回的是谁的哪句话。
 func TestListInboundEventDetailsRendersMentionsAndReplies(t *testing.T) {
 	ctx := context.Background()
 	store, err := NewSQLiteStore(filepath.Join(t.TempDir(), "event-markers.db"))
@@ -1073,12 +1073,16 @@ VALUES ('markers', 'group:20001', 'group', '20001', '10003', 'message-1', ?, ?, 
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "[回复 阿花：下周要去上海出差] @小明（90001） 你也去吗"
+	want := "@小明（90001） 你也去吗"
 	if len(page.Events) != 1 {
 		t.Fatalf("events = %#v", page.Events)
 	}
 	if page.Events[0].Text != want {
 		t.Fatalf("text = %q, want %q", page.Events[0].Text, want)
+	}
+	wantQuote := assistant.DisplayQuote{MessageID: "message-0", UserID: "10002", SenderName: "阿花", Text: "下周要去上海出差"}
+	if quote := page.Events[0].Quote; quote == nil || *quote != wantQuote {
+		t.Fatalf("quote = %#v, want %#v", quote, wantQuote)
 	}
 }
 
