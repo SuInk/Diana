@@ -82,7 +82,7 @@ function runeCount(text: string): number {
         </section>
       </template>
       <template v-else-if="preview">
-        <p class="prompt-preview-note">绑只做判断的模型时，它收到的是下面这几道题，外加上面的对话摊平成的纯文本；它不读系统消息里的评分说明和输出格式。</p>
+        <p class="prompt-preview-note">绑只做判断的模型（如 Jev）时，它按题作答：每道题收到下面的说明、判据或分档，后面再附上「对话模型」里那整条系统消息；用户消息摊平成纯文本作为对话内容。改上面的提示词，两种模型一起变。</p>
         <section v-for="question in preview.decision" :key="question.label" class="prompt-preview-block">
           <h4>{{ question.label }}</h4>
           <pre>{{ question.instructions }}</pre>

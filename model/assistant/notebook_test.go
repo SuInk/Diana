@@ -265,7 +265,7 @@ func TestProactiveRouterReceivesMatchedNotebookContext(t *testing.T) {
 		}
 	}
 	prompt := request.Messages[0].Content
-	for _, want := range []string{"notebook_context", "不能再称它为未解释缩写", "zgm=在干嘛"} {
+	for _, want := range []string{"notebook_context", "别当成看不懂的缩写", "zgm=在干嘛"} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("router prompt missing %q: %s", want, prompt)
 		}

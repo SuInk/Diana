@@ -23,7 +23,8 @@ type ParticipationPromptPreview struct {
 	User   string `json:"user"`
 	// Retry 是评分解析失败、重问一次时插在最前面的那条系统消息。
 	Retry string `json:"retry"`
-	// Decision 是绑了只做判断的模型时它收到的题目：同一套判据按题目摆，不读上面两条。
+	// Decision 是绑了只做判断的模型时它收到的题目：同一套判据按题目摆。它另外还收到
+	// System 整条（附在每道题的说明后面）和摊平成纯文本的 User。
 	Decision []ParticipationDecisionPreview `json:"decision"`
 }
 
