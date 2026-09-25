@@ -55,11 +55,12 @@
                   下载扩展
                 </a>
               </div>
-              <!-- 内置浏览器的启停和接管属于这一行，别飘在列表外面。默认归机器人用，不设「我来操作」：
-                   在画面上点一下、敲一下键或在地址栏跳转就自动转为你接管，这时才出现「交还给机器人」。 -->
-              <div v-if="key === 'box' && sourceState?.box.enabled && botID" class="browser-toggle-actions">
-                <button class="btn small" type="button" :disabled="busy || status.running" @click="start">启动</button>
-                <button class="btn small ghost" type="button" :disabled="busy || !status.running" @click="stop">停止</button>
+              <!-- 勾上就是开着，没有启动、停止、「我来操作」这些按钮：进程在机器人要用或你打开这一页时
+                   自动拉起，取消勾选才停；在画面上动手就自动转为你接管，这时才出现「交还给机器人」。 -->
+              <div
+                v-if="key === 'box' && sourceState?.box.enabled && botID && ((status.running && status.takeover) || status.last_error)"
+                class="browser-toggle-actions"
+              >
                 <template v-if="status.running && status.takeover">
                   <button class="btn small warn" type="button" :disabled="busy" @click="handBack">交还给机器人</button>
                   <span class="browser-toggle-note">你在画面上动过手，机器人暂时用不了这个浏览器</span>
@@ -227,7 +228,6 @@ import {
   saveBrowserBoxSettings,
   setBrowserBoxTakeover,
   startBrowserBox,
-  stopBrowserBox,
   type BrowserBoxSettings,
   type BrowserBoxStatus,
   listBrowserActivity,
@@ -374,6 +374,8 @@ async function patchSource(patch: Parameters<typeof saveBrowserSource>[0]): Prom
   savingSource.value = true;
   try {
     sourceState.value = await saveBrowserSource(patch);
+    // 刚勾上就该马上起，不等上一次失败的冷却。
+    if (patch.box_enabled) lastAutoStart = 0;
     await refresh();
   } catch (err) {
     toastError(err instanceof Error ? err.message : "保存浏览器设置失败");
@@ -407,6 +409,7 @@ async function refresh(): Promise<void> {
     Object.assign(settings, next.settings);
     if (next.running && !socket && botID) connectLive();
     if (!next.running && socket) disconnectLive();
+    if (!next.running) void autoStart();
   } catch (err) {
     toastError(err instanceof Error ? err.message : "读取内置浏览器状态失败");
   }
@@ -428,27 +431,22 @@ async function saveSettings(): Promise<void> {
   }
 }
 
-async function start(): Promise<void> {
+// 勾上就该开着：选中机器人打开这一页时，没在跑就拉起来，好让你看到画面、在里面登录。
+// 起不来时隔一分钟再试，别每次轮询都重启一遍、刷一堆失败记录。
+let lastAutoStart = 0;
+const autoStartRetryMS = 60_000;
+
+async function autoStart(): Promise<void> {
+  if (busy.value || !botID || !sourceState.value?.box.enabled || status.running) return;
+  if (Date.now() - lastAutoStart < autoStartRetryMS) return;
+  lastAutoStart = Date.now();
   busy.value = true;
   try {
     const result = await startBrowserBox(botID);
     Object.assign(status, result.status);
     connectLive();
   } catch (err) {
-    toastError(err instanceof Error ? err.message : "启动失败");
-  } finally {
-    busy.value = false;
-  }
-}
-
-async function stop(): Promise<void> {
-  busy.value = true;
-  try {
-    const result = await stopBrowserBox(botID);
-    Object.assign(status, result.status);
-    disconnectLive();
-  } catch (err) {
-    toastError(err instanceof Error ? err.message : "停止失败");
+    toastError(err instanceof Error ? err.message : "内置浏览器没能启动");
   } finally {
     busy.value = false;
   }
@@ -611,8 +609,8 @@ function navigate(): void {
 }
 
 onMounted(() => {
-  void refresh();
-  void loadSource();
+  // 先读来源再读状态：要知道勾没勾上，才能决定要不要自动拉起。
+  void loadSource().then(refresh);
   void loadActivity();
   // 扩展连上、断开或被接管都会改变「这一轮用哪个」，跟着状态一起刷。
   statusTimer = window.setInterval(() => {

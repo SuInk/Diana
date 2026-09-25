@@ -108,7 +108,7 @@ func (h *BrowserBoxHandler) start(c *gin.Context) {
 		logAndWriteError(c, h.logs, http.StatusInternalServerError, "browser_box_start", err, bot.ID(), nil)
 		return
 	}
-	recordRequestOperation(c, h.logs, "browser_box_start", "你启动了内置浏览器", bot.ID(), browserBoxLogMetadata(bot, nil))
+	recordRequestOperation(c, h.logs, "browser_box_start", "你打开浏览器页，内置浏览器随之启动", bot.ID(), browserBoxLogMetadata(bot, nil))
 	c.JSON(http.StatusOK, gin.H{"status": bot.Status()})
 }
 
