@@ -126,7 +126,7 @@ func TestRemoteImageViewAvatarReportsQLogoUpdateTime(t *testing.T) {
 	})
 	r := NewRuntime(BotConfig{Platform: PlatformOneBotV11, BotAccount: "10001"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	r.now = func() time.Time { return now }
-	event := MessageEvent{Platform: PlatformOneBotV11, Kind: EventKindGroup, GroupID: "1049765710", UserID: "22222", SelfID: "10001"}
+	event := MessageEvent{Platform: PlatformOneBotV11, Kind: EventKindGroup, GroupID: "30001", UserID: "22222", SelfID: "10001"}
 
 	result := runViewAvatar(t, r, event, avatarSourceBot)
 	if len(*requested) != 1 || !strings.Contains((*requested)[0], "qlogo.cn") || !strings.Contains((*requested)[0], "nk=10001") {
@@ -153,7 +153,7 @@ func TestRemoteImageViewAvatarNoticesBotAvatarChangedSinceLastView(t *testing.T)
 	stubAvatarFetch(t, func() stubAvatarResponse { return stubAvatarResponse{body: current} })
 	r := NewRuntime(BotConfig{Platform: PlatformOneBotV11, BotAccount: "10001"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	r.now = func() time.Time { return now }
-	event := MessageEvent{Platform: PlatformOneBotV11, Kind: EventKindGroup, GroupID: "1049765710", UserID: "22222", SelfID: "10001"}
+	event := MessageEvent{Platform: PlatformOneBotV11, Kind: EventKindGroup, GroupID: "30001", UserID: "22222", SelfID: "10001"}
 
 	first := runViewAvatar(t, r, event, avatarSourceBot)
 	if _, ok := first["same_as_last_view"]; ok {
