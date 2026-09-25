@@ -13,6 +13,7 @@ func (r *Runtime) sendRSSWatchTargets(ctx context.Context, item Reminder, messag
 		completed[key] = true
 	}
 	var failures []error
+	ctx = withSubscriptionPush(ctx, subscriptionPushRSSWatch)
 	for _, target := range repositoryWatchDeliveryTargets(item) {
 		key := messageEventDeliveryKey(target)
 		if completed[key] {

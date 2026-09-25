@@ -109,6 +109,8 @@ type repositoryIssueResult struct {
 	RequestedNumbers []int                         `json:"requested_numbers,omitempty"`
 	Failures         []repositoryIssueBatchFailure `json:"failures,omitempty"`
 	CommentURL       string                        `json:"comment_url,omitempty"`
+	// ReplyHint 只在写入真正落到 GitHub 时出现，见 repositoryIssueLandedReplyHint。
+	ReplyHint string `json:"reply_hint,omitempty"`
 	// IssueBody 和 Comments 只在 get 返回：update 是整段覆盖，模型不先看一眼原文
 	// 就没法安全地改；以前没有任何操作能把正文和评论读回来。
 	IssueBody          string                       `json:"issue_body,omitempty"`
@@ -814,6 +816,11 @@ func repositoryIssueASCIIIdentifier(value string) bool {
 // 真的失败时才需要，挂在结果上只付一次，写进描述则是每个请求都付。
 const repositoryIssueFailureRelayHint = "把上面这条 message 原样转达给用户，说清差在哪、下一步能做什么，不要含糊成一句「我没有权限」。"
 
+// repositoryIssueLandedReplyHint 跟着每一次落地的写入回去。模型在历史里见过订阅推送的
+// 「GitHub 动态：…」卡片，刚建完 Issue 就照着格式在回复里自己拼一张，二十几秒后真正的
+// 推送再来一张。说清楚卡片由订阅负责，它只需要用自己的话交代结果。
+const repositoryIssueLandedReplyHint = "用自己的话简短说明结果并附上链接即可，不要照着「GitHub 动态：…」这类订阅推送卡片的格式自己拼一张；订阅了这个仓库的会话，卡片由系统自动推送。"
+
 func (r repositoryIssueResult) fail(code, message string) repositoryIssueResult {
 	r.OK = false
 	r.Outcome = "failed"
@@ -831,6 +838,9 @@ func (t *dianaGitHubTool) finish(ctx context.Context, result repositoryIssueResu
 	// 打断丢弃，用户至少能看到「已经建好了」和链接。草稿只存在本地，不算。
 	if result.OK && result.Outcome != "" && result.Outcome != "draft_pending" && result.Operation != "list_drafts" && !repositoryIssueReadOnlyOperation(result.Operation) {
 		markExternalSideEffect(ctx)
+		if result.Operation != "cancel_draft" {
+			result.ReplyHint = repositoryIssueLandedReplyHint
+		}
 	}
 	body, err := marshalRepositoryResult(result)
 	if err != nil {
