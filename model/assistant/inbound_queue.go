@@ -783,6 +783,34 @@ func EventIsMergeableMediaOnly(event MessageEvent) bool {
 	return hasMedia
 }
 
+// inboundTurnMediaKey 标记从相邻媒体消息借过来的段。借只为这一轮：回复时图和
+// 问题要一起看。进历史前要还回去（见 withoutInboundTurnMedia），否则同一张图、
+// 同一个文件在历史里出现两次，查历史找文件时排在前面的是这条文字消息，模型就
+// 会引用它——它在平台上只是一句话，拿它的 ID 引用或取文件都对不上原来那条。
+const inboundTurnMediaKey = "inbound_turn_media"
+
+// withoutInboundTurnMedia 去掉借来的媒体段。这条消息问的是哪条媒体消息，
+// SemanticSourceMessageIDs 里还留着。
+func withoutInboundTurnMedia(event MessageEvent) MessageEvent {
+	var segments []MessageSegment
+	for index, segment := range event.Segments {
+		if segment.Data[inboundTurnMediaKey] != "true" {
+			if segments != nil {
+				segments = append(segments, segment)
+			}
+			continue
+		}
+		if segments == nil {
+			// 第一次碰到才复制：绝大多数消息没有借来的段，不该为它们分配。
+			segments = append(make([]MessageSegment, 0, len(event.Segments)), event.Segments[:index]...)
+		}
+	}
+	if segments != nil {
+		event.Segments = segments
+	}
+	return event
+}
+
 func attachInboundTurnMedia(event MessageEvent, sources []MessageEvent) MessageEvent {
 	sourceIDs := eventSemanticSourceMessageIDs(event)
 	seen := make(map[string]bool)
@@ -804,6 +832,7 @@ func attachInboundTurnMedia(event MessageEvent, sources []MessageEvent) MessageE
 			if sourceID != "" {
 				segment.Data["source_message_id"] = sourceID
 			}
+			segment.Data[inboundTurnMediaKey] = "true"
 			key := segmentMediaTurnKey(segment)
 			if seen[key] {
 				continue

@@ -94,7 +94,12 @@ func (t *dianaHistoryImagesTool) Run(ctx context.Context, input map[string]any) 
 	parts := make([]llm.ContentPart, 0)
 	attempted := 0
 
+	followed := make(map[string]bool, len(selectors))
 	for _, selector := range selectors {
+		followed[selector.MessageID] = true
+	}
+	for position := 0; position < len(selectors); position++ {
+		selector := selectors[position]
 		source, found, persistState := t.findSourceEvent(ctx, selector.MessageID)
 		if !found {
 			result.Requested++
@@ -116,6 +121,14 @@ func (t *dianaHistoryImagesTool) Run(ctx context.Context, input map[string]any) 
 		result.Text = append(result.Text, historicalNonImageMediaDescriptions(textSegments)...)
 		images := historicalToolImageRefs(source)
 		if len(images) == 0 && len(historicalNonImageMediaDescriptions(textSegments)) == 0 {
+			// 「发张图，接着问这是什么」那句文字本身不带图，图在它问的那条媒体消息里。
+			// 模型拿这句话的 ID 来取图时，顺着找过去，而不是报没有图。
+			if sources := unfollowedSemanticSources(source, followed); len(sources) > 0 {
+				for _, sourceID := range sources {
+					selectors = append(selectors, historyImageSelector{MessageID: sourceID})
+				}
+				continue
+			}
 			result.Requested++
 			result.Failed++
 			result.Media = append(result.Media, dianaHistoryImageStatus{
@@ -234,6 +247,21 @@ func (t *dianaHistoryImagesTool) Run(ctx context.Context, input map[string]any) 
 	}
 	t.setResultParts(parts)
 	return string(body), nil
+}
+
+// unfollowedSemanticSources 取出这条消息指向、还没读过的来源消息，并记成已读，
+// 免得两条消息互相指着绕圈。
+func unfollowedSemanticSources(event MessageEvent, followed map[string]bool) []string {
+	var sources []string
+	for _, sourceID := range eventSemanticSourceMessageIDs(event) {
+		sourceID = strings.TrimSpace(sourceID)
+		if sourceID == "" || followed[sourceID] {
+			continue
+		}
+		followed[sourceID] = true
+		sources = append(sources, sourceID)
+	}
+	return sources
 }
 
 func (t *dianaHistoryImagesTool) findSourceEvent(ctx context.Context, messageID string) (MessageEvent, bool, bool) {

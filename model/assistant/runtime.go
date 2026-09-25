@@ -7589,6 +7589,7 @@ func (r *Runtime) persistMessageEvent(event MessageEvent) {
 
 func withoutReplyRuntimeState(event MessageEvent) MessageEvent {
 	event = voiceTranscriptOnlyHistory(event)
+	event = withoutInboundTurnMedia(event)
 	event.proactiveReply = false
 	event.imageResolutionRun = false
 	event.imageLoadErr = nil
