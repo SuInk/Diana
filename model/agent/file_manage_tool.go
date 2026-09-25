@@ -398,8 +398,9 @@ func WorkspaceMissingFileError(root, rel string) error {
 			}
 		}
 	}
+	// 包上 fs.ErrNotExist：调用方靠 errors.Is 区分「找不到」和别的读取失败。
 	if len(candidates) > 0 {
-		return fmt.Errorf("工作目录里没有 %s；同名的有 %s", rel, strings.Join(candidates, "、"))
+		return fmt.Errorf("工作目录里没有 %s（%w）；同名的有 %s", rel, fs.ErrNotExist, strings.Join(candidates, "、"))
 	}
-	return fmt.Errorf("工作目录里没有 %s", rel)
+	return fmt.Errorf("工作目录里没有 %s（%w）；不确定文件名或位置就用 find_files 按文件名查", rel, fs.ErrNotExist)
 }
