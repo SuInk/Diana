@@ -5,6 +5,7 @@ package browserbox
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"strings"
@@ -16,6 +17,10 @@ import (
 // 不需要虚拟显示器，也不需要 VNC，无头模式照样有画面。输入反过来走
 // Input.dispatch*，也就是说用户在 WebUI 里点的每一下，落到页面上和真人点
 // 是同一条路径——不是模拟脚本，是浏览器自己的输入管线。
+//
+// 帧率跟着看的人走：浏览器每出一帧都要等回执才出下一帧，这里把回执推迟到帧真正
+// 发给前端的那一刻（见 Ack）。以前收到就回执，浏览器按 60 帧往外推，远程连接的
+// 带宽跟不上，帧就在缓冲里排队，画面落后好几秒，点一下要等几秒才看到反应。
 const (
 	// liveFrameQuality 是 JPEG 质量。60 在文字清晰和带宽之间取平衡。
 	liveFrameQuality = 60
@@ -35,18 +40,22 @@ var ErrLivePageUnresponsive = errors.New("这个标签页 10 秒内没有响应�
 // 重新连上就有画面。
 var ErrLivePageCrashed = errors.New("这个标签页崩溃了（渲染进程退出，常见于页面太重、内存或 /dev/shm 不够），已换回空白页，画面马上重新连上")
 
-// Frame 是一帧画面。
+// Frame 是一帧画面。JPEG 本身不进 JSON：前端收的是二进制帧，见 webui 的实时画面。
 type Frame struct {
-	// Data 是 base64 编码的 JPEG，直接可以塞进 img 的 src。
-	Data string `json:"data"`
+	JPEG []byte `json:"-"`
 	// Width/Height 是这一帧的像素尺寸，前端按它换算点击坐标。
 	Width  int `json:"width"`
 	Height int `json:"height"`
 	// PageX/PageY/Scale 来自 CDP 的帧元数据，页面滚动或缩放时坐标要用它换算。
-	PageX  float64 `json:"page_x"`
-	PageY  float64 `json:"page_y"`
-	Scale  float64 `json:"scale"`
-	TabURL string  `json:"tab_url,omitempty"`
+	PageX float64 `json:"page_x"`
+	PageY float64 `json:"page_y"`
+	Scale float64 `json:"scale"`
+	// Timestamp 是浏览器画出这一帧的时刻（Unix 秒），前端和测试拿它算画面滞后多少。
+	Timestamp float64 `json:"timestamp,omitempty"`
+	TabURL    string  `json:"tab_url,omitempty"`
+
+	// ackID 是浏览器给这一帧的回执编号，Ack 用。
+	ackID int
 }
 
 // MouseEvent 是一次鼠标输入。字段名对齐 CDP，前端传过来什么就是什么。
@@ -84,8 +93,9 @@ var (
 // Live 是一条实时画面会话：一个标签页的画面出去，用户的输入进来。
 type Live struct {
 	session *Session
-	frames  chan Frame
-	tabURL  string
+	// frames 只放最新的一帧：取走之前又来了新的，旧的直接作废。
+	frames chan Frame
+	tabURL string
 
 	mu     sync.Mutex
 	closed bool
@@ -99,7 +109,7 @@ func StartLive(ctx context.Context, websocketURL, tabURL string, width, height i
 	if err != nil {
 		return nil, err
 	}
-	live := &Live{session: session, frames: make(chan Frame, 4), tabURL: tabURL}
+	live := &Live{session: session, frames: make(chan Frame, 1), tabURL: tabURL}
 	startCtx, cancel := context.WithTimeout(ctx, liveStartTimeout)
 	defer cancel()
 	// Inspector 域由浏览器进程处理，页面卡着也回；对已经崩掉的标签页，它一开就先推一条
@@ -136,8 +146,16 @@ func liveStartError(parent, start context.Context, err error) error {
 	return err
 }
 
-// Frames 返回画面流。
+// Frames 返回画面流，里面永远只有最新的一帧。取走的每一帧都要 Ack，否则浏览器
+// 不再出下一帧。
 func (l *Live) Frames() <-chan Frame { return l.frames }
+
+// Ack 告诉浏览器这一帧已经发出去了，可以出下一帧。
+func (l *Live) Ack(frame Frame) {
+	ackCtx, cancel := context.WithTimeout(context.Background(), liveAckTimeout)
+	_ = l.session.Call(ackCtx, "Page.screencastFrameAck", map[string]any{"sessionId": frame.ackID}, nil)
+	cancel()
+}
 
 // Err 是画面流为什么断了：标签页崩溃时是 ErrLivePageCrashed，正常结束时为 nil。
 // 在 Frames 关闭之后读。
@@ -174,34 +192,41 @@ func (l *Live) pump() {
 				DeviceHeight    float64 `json:"deviceHeight"`
 				ScrollOffsetX   float64 `json:"scrollOffsetX"`
 				ScrollOffsetY   float64 `json:"scrollOffsetY"`
+				Timestamp       float64 `json:"timestamp"`
 			} `json:"metadata"`
 		}
 		if err := json.Unmarshal(event.Params, &payload); err != nil {
 			continue
 		}
-		// 不回执浏览器就不发下一帧，所以先回执再投递。
-		ackCtx, cancel := context.WithTimeout(context.Background(), liveAckTimeout)
-		_ = l.session.Call(ackCtx, "Page.screencastFrameAck", map[string]any{"sessionId": payload.SessionID}, nil)
-		cancel()
-		frame := Frame{
-			Data:   payload.Data,
-			Width:  int(payload.Metadata.DeviceWidth),
-			Height: int(payload.Metadata.DeviceHeight),
-			PageX:  payload.Metadata.ScrollOffsetX,
-			PageY:  payload.Metadata.ScrollOffsetY,
-			Scale:  payload.Metadata.PageScaleFactor,
-			TabURL: l.tabURL,
+		jpegBytes, err := base64.StdEncoding.DecodeString(payload.Data)
+		if err != nil {
+			l.Ack(Frame{ackID: payload.SessionID})
+			continue
 		}
+		frame := Frame{
+			JPEG:      jpegBytes,
+			ackID:     payload.SessionID,
+			Width:     int(payload.Metadata.DeviceWidth),
+			Height:    int(payload.Metadata.DeviceHeight),
+			PageX:     payload.Metadata.ScrollOffsetX,
+			PageY:     payload.Metadata.ScrollOffsetY,
+			Scale:     payload.Metadata.PageScaleFactor,
+			Timestamp: payload.Metadata.Timestamp,
+			TabURL:    l.tabURL,
+		}
+		// 还没被取走的那一帧已经过时了：换成这一帧，并替它回执，浏览器才会接着出帧。
 		select {
 		case l.frames <- frame:
 		default:
 			select {
-			case <-l.frames:
+			case stale := <-l.frames:
+				l.Ack(stale)
 			default:
 			}
 			select {
 			case l.frames <- frame:
 			default:
+				l.Ack(frame)
 			}
 		}
 	}

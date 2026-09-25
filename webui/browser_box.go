@@ -5,6 +5,8 @@ package webui
 
 import (
 	"context"
+	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -224,7 +226,7 @@ func (h *BrowserBoxHandler) closeTab(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
-// liveMessage 是前端发过来的指令。画面反过来是 {"type":"frame"}。
+// liveMessage 是前端发过来的指令。画面反过来走二进制帧，见 writeLiveFrame。
 type liveMessage struct {
 	Type  string                 `json:"type"`
 	Mouse *browserbox.MouseEvent `json:"mouse,omitempty"`
@@ -236,6 +238,14 @@ type liveMessage struct {
 const (
 	liveWriteTimeout = 10 * time.Second
 	liveReadLimit    = 1 << 20
+	// liveFramesInFlight 是发出去、前端还没画完的帧最多几帧。前端每画完一帧回一条
+	// ack 才发下一帧，和 VNC 让客户端画完再要下一帧是一个道理：以前有帧就发，远程
+	// 连接带宽跟不上时帧在缓冲里越排越长，画面落后好几秒。留两帧是为了传一帧的同时
+	// 前端在画上一帧，链路不空转。
+	liveFramesInFlight = 2
+	// livePingInterval 是画面静止时的保活间隔。页面不动就没有帧，中间的代理把空闲
+	// 连接掐掉，画面就一闪一闪地重连。
+	livePingInterval = 25 * time.Second
 )
 
 // live 把一个标签页的画面推给前端，并把前端的鼠标键盘事件送回浏览器。
@@ -283,6 +293,7 @@ func (h *BrowserBoxHandler) live(c *gin.Context) {
 	defer live.Close()
 
 	done := make(chan struct{})
+	acks := make(chan struct{}, liveFramesInFlight)
 	go func() {
 		defer recoverGoroutinePanic("browser_box.live")
 		defer close(done)
@@ -291,24 +302,67 @@ func (h *BrowserBoxHandler) live(c *gin.Context) {
 			if err := conn.ReadJSON(&message); err != nil {
 				return
 			}
+			if message.Type == "ack" {
+				select {
+				case acks <- struct{}{}:
+				default:
+				}
+				continue
+			}
 			h.handleLiveMessage(c, bot, live, message)
 		}
 	}()
 
-	_ = conn.WriteJSON(gin.H{"type": "ready", "tab": target})
+	// 接管状态变了当场推给前端：闲置自动交还之后，前端要立刻停止把按键当成接管。
+	changes, unwatch := h.manager.Watch()
+	defer unwatch()
+	takeover := bot.Takeover()
+	ping := time.NewTicker(livePingInterval)
+	defer ping.Stop()
+
+	writeJSON := func(value any) error {
+		_ = conn.SetWriteDeadline(time.Now().Add(liveWriteTimeout))
+		return conn.WriteJSON(value)
+	}
+	if writeJSON(gin.H{"type": "ready", "tab": target, "takeover": takeover}) != nil {
+		return
+	}
+	credits := liveFramesInFlight
 	for {
+		// 前端手上已经压着 liveFramesInFlight 帧没画完时不取帧：浏览器拿不到回执就
+		// 不出下一帧，等前端缓过来，取到的是那时最新的一帧，而不是排了几秒的旧帧。
+		frames := live.Frames()
+		if credits == 0 {
+			frames = nil
+		}
 		select {
-		case frame, ok := <-live.Frames():
+		case frame, ok := <-frames:
 			if !ok {
 				// 标签页崩了之类的原因要告诉前端，不然它只会一直显示最后一帧或「正在连接」。
 				if err := live.Err(); err != nil {
-					_ = conn.SetWriteDeadline(time.Now().Add(liveWriteTimeout))
-					_ = conn.WriteJSON(gin.H{"type": "error", "message": err.Error()})
+					_ = writeJSON(gin.H{"type": "error", "message": err.Error()})
 				}
 				return
 			}
-			_ = conn.SetWriteDeadline(time.Now().Add(liveWriteTimeout))
-			if err := conn.WriteJSON(gin.H{"type": "frame", "frame": frame}); err != nil {
+			// 先回执：传这一帧的同时浏览器就在画下一帧。
+			live.Ack(frame)
+			if err := writeLiveFrame(conn, frame); err != nil {
+				return
+			}
+			credits--
+		case <-acks:
+			if credits < liveFramesInFlight {
+				credits++
+			}
+		case <-changes:
+			if now := bot.Takeover(); now != takeover {
+				takeover = now
+				if writeJSON(gin.H{"type": "takeover", "active": now}) != nil {
+					return
+				}
+			}
+		case <-ping.C:
+			if conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(liveWriteTimeout)) != nil {
 				return
 			}
 		case <-done:
@@ -319,11 +373,26 @@ func (h *BrowserBoxHandler) live(c *gin.Context) {
 	}
 }
 
+// writeLiveFrame 把一帧画面作为二进制消息发出去：4 字节大端的元数据长度，元数据
+// JSON，然后是 JPEG 原样的字节。以前 JPEG 转成 base64 塞进 JSON，体积大三分之一，
+// 前端还要整段解析 JSON、再把几百 KB 的 data URL 交给 img 解码。
+func writeLiveFrame(conn *websocket.Conn, frame browserbox.Frame) error {
+	meta, err := json.Marshal(frame)
+	if err != nil {
+		return err
+	}
+	message := make([]byte, 4, 4+len(meta)+len(frame.JPEG))
+	binary.BigEndian.PutUint32(message, uint32(len(meta)))
+	message = append(message, meta...)
+	message = append(message, frame.JPEG...)
+	_ = conn.SetWriteDeadline(time.Now().Add(liveWriteTimeout))
+	return conn.WriteMessage(websocket.BinaryMessage, message)
+}
+
 // handleLiveMessage 把前端的一条指令翻成 CDP 调用。
 //
-// 用户在这块画面上有意动手等于人工接管，所以第一次有意输入就把接管打开：不这样的话
-// 用户正在填表，模型同时在点别的地方，两边抢同一个页面。只是鼠标路过、滚轮蹭到不算，
-// 见 claimLiveInput。
+// 用户在画面上点一下等于人工接管：不这样的话用户正在填表，模型同时在点别的地方，
+// 两边抢同一个页面。只是鼠标路过、滚轮蹭到、敲了键盘都不算，见 claimLiveInput。
 func (h *BrowserBoxHandler) handleLiveMessage(c *gin.Context, bot *browserbox.Bot, live *browserbox.Live, message liveMessage) {
 	if !h.claimLiveInput(c, bot, message) {
 		return
@@ -349,11 +418,13 @@ func (h *BrowserBoxHandler) handleLiveMessage(c *gin.Context, bot *browserbox.Bo
 
 // claimLiveInput 按输入种类决定要不要接管、这条输入还送不送给页面。
 //
-// 以前任何鼠标消息都算动手，WebUI 开着、鼠标从画面上划过去就把浏览器抢了，而接管
-// 又没有期限，模型之后的每次调用都被拒。现在只有按下鼠标、敲键盘、输入文字、在
-// 地址栏打开网页这几种有意操作才接管；移动、滚轮、松开鼠标、松开按键只在已经接管
-// 时才送给页面，否则直接丢掉——机器人正在用这个页面时，悬停和滚动同样会搅乱它。
+// 只有在画面上按下鼠标、在地址栏打开网页这两种才接管；其余输入只在已经接管时才
+// 送给页面，否则直接丢掉——机器人正在用这个页面时，悬停、滚动、按键同样会搅乱它。
 // 判断放在后端，不指望每个前端都自觉不发。
+//
+// 键盘不接管：画面点过一次之后焦点一直留在上面，闲置交还以后再按 Cmd+Tab 切窗口、
+// Cmd+C 复制、Tab 挪焦点，按下的那一下修饰键都会送到这里。以前按下任何键都算动手，
+// 于是交还没多久又被这些顺手的按键抢了回去。
 func (h *BrowserBoxHandler) claimLiveInput(c *gin.Context, bot *browserbox.Bot, message liveMessage) bool {
 	switch message.Type {
 	case "mouse":
@@ -372,21 +443,14 @@ func (h *BrowserBoxHandler) claimLiveInput(c *gin.Context, bot *browserbox.Bot, 
 			bot.TouchTakeover()
 		}
 		return true
-	case "key":
-		if message.Key == nil {
+	case "key", "text":
+		if message.Type == "key" && message.Key == nil {
 			return false
 		}
-		if message.Key.Type == "keyUp" {
-			if !bot.Takeover() {
-				return false
-			}
-			bot.TouchTakeover()
-			return true
+		if !bot.Takeover() {
+			return false
 		}
-		h.takeOverFromLive(c, bot)
-		return true
-	case "text":
-		h.takeOverFromLive(c, bot)
+		bot.TouchTakeover()
 		return true
 	case "navigate":
 		target := strings.TrimSpace(message.URL)

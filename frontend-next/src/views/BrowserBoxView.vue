@@ -56,7 +56,7 @@
                 </a>
               </div>
               <!-- 勾上就是开着，没有启动、停止、「我来操作」这些按钮：进程在机器人要用或你打开这一页时
-                   自动拉起，取消勾选才停；在画面上点击或打字就自动转为你接管，这时才出现「交还给机器人」，
+                   自动拉起，取消勾选才停；在画面上点一下就自动转为你接管，这时才出现「交还给机器人」，
                    闲置一段时间也会自动交还。 -->
               <div
                 v-if="key === 'box' && sourceState?.box.enabled && botID && ((status.running && status.takeover) || status.last_error)"
@@ -91,34 +91,35 @@
             class="input"
             style="flex: 1; min-width: 220px"
             placeholder="https://example.com"
-            @keydown.enter.prevent="navigate"
+            @keydown.enter="onAddressEnter"
           />
           <button class="btn small" type="button" @click="navigate">打开</button>
         </div>
 
         <div class="browser-stage" @contextmenu.prevent>
-          <img
-            v-if="frame"
+          <!-- canvas 一直在：帧是异步解码后画上去的，没有画面时只是藏起来。 -->
+          <canvas
+            v-show="hasFrame"
             ref="screen"
             class="browser-screen"
-            :src="`data:image/jpeg;base64,${frame.data}`"
-            alt="内置浏览器画面"
+            aria-label="内置浏览器画面"
             tabindex="0"
-            @mousedown.prevent="onMouse($event, 'mousePressed')"
-            @mouseup.prevent="onMouse($event, 'mouseReleased')"
+            @mousedown="onMouse($event, 'mousePressed')"
+            @mouseup="onMouse($event, 'mouseReleased')"
             @mousemove="onMouseMove"
-            @wheel.prevent="onWheel"
-            @keydown.prevent="onKey($event, 'keyDown')"
-            @keyup.prevent="onKey($event, 'keyUp')"
+            @wheel="onWheel"
+            @keydown="onKey($event, 'keyDown')"
+            @keyup="onKey($event, 'keyUp')"
           />
-          <div v-else-if="liveNotice" class="browser-live-notice">
+          <span v-if="hasFrame && reconnecting" class="browser-live-badge">正在重新连接……</span>
+          <div v-if="!hasFrame && liveNotice" class="browser-live-notice">
             <p style="margin: 0; font-size: 13px">{{ liveNotice }}</p>
             <button class="btn small ghost" type="button" @click="reconnectLive">重新连接</button>
           </div>
-          <p v-else class="muted" style="margin: 0; font-size: 13px">正在连接画面……</p>
+          <p v-else-if="!hasFrame" class="muted" style="margin: 0; font-size: 13px">正在连接画面……</p>
         </div>
         <p class="muted" style="margin: 0; font-size: 12.5px">
-          点一下画面就转为你接管，之后才能打字、滚动；鼠标只是划过不算。{{ takeoverIdleMinutes }} 分钟不操作会自动交还给机器人。密码这类东西你自己输，机器人看不到你敲了什么——它只能看到页面最终长什么样。
+          点一下画面就转为你接管，之后才能打字、滚动；鼠标划过、滚轮、按键都不算。{{ takeoverIdleMinutes }} 分钟不操作会自动交还给机器人。密码这类东西你自己输，机器人看不到你敲了什么——它只能看到页面最终长什么样。
         </p>
       </div>
     </div>
@@ -207,7 +208,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, reactive, ref } from "vue";
+import { computed, onActivated, onBeforeUnmount, onDeactivated, onMounted, reactive, ref } from "vue";
 import { botScope } from "../bot-scope";
 import { formatTime } from "../format";
 import { navigate as navigateToView } from "../router";
@@ -236,11 +237,11 @@ import {
 } from "../api";
 import { toastError, toastSuccess } from "../toast";
 
-interface LiveFrame {
-  data: string;
+/** 一帧画面的元数据。width/height 是页面的 CSS 尺寸，点击坐标按它换算。 */
+interface LiveFrameMeta {
   width: number;
   height: number;
-  scale: number;
+  timestamp?: number;
 }
 
 type SourceKey = Exclude<BrowserSource, "off">;
@@ -342,8 +343,11 @@ const status = reactive<BrowserBoxStatus>({
   available: false
 });
 const settings = reactive<BrowserBoxSettings>({ enabled: false });
-const frame = ref<LiveFrame | null>(null);
-const screen = ref<HTMLImageElement | null>(null);
+const hasFrame = ref(false);
+// 断线重连期间留着最后一帧，只在角上提示，不再整块换成「正在连接」。
+const reconnecting = ref(false);
+let frameMeta: LiveFrameMeta | null = null;
+const screen = ref<HTMLCanvasElement | null>(null);
 const addressInput = ref("");
 const currentTitle = ref("");
 const saving = ref(false);
@@ -353,6 +357,15 @@ const takeoverIdleMinutes = 5;
 
 let socket: WebSocket | null = null;
 let statusTimer: number | undefined;
+// 这一页在不在前台。页面被 KeepAlive 缓存着，切到别的页也不卸载；以前画面照样一直推，
+// 浏览器照样每秒编几十帧 JPEG，白白拖慢机器人自己在用的那个浏览器。
+let pageActive = false;
+// 想不想连着画面：断线后要不要自动重连。
+let wantLive = false;
+let reconnectTimer: number | undefined;
+// 断线重连从半秒起步，连续失败翻倍，最多 5 秒一次。
+const liveReconnectMinMS = 500;
+let reconnectDelayMS = liveReconnectMinMS;
 // 画面连不上或断掉的原因。只在还没有画面时顶替「正在连接画面……」；重连时不清空，
 // 标签页一直卡着的话，用户看到的是原因而不是一闪一闪的「正在连接」。
 const liveNotice = ref("");
@@ -410,8 +423,8 @@ async function refresh(): Promise<void> {
     const next = await getBrowserBoxStatus(botID || undefined);
     Object.assign(status, next);
     Object.assign(settings, next.settings);
-    if (next.running && !socket && botID) connectLive();
-    if (!next.running && socket) disconnectLive();
+    if (next.running && !socket && botID && pageActive && !document.hidden) connectLive();
+    if (!next.running && (socket || hasFrame.value)) disconnectLive();
     if (!next.running) void autoStart();
   } catch (err) {
     toastError(err instanceof Error ? err.message : "读取内置浏览器状态失败");
@@ -424,7 +437,7 @@ async function saveSettings(): Promise<void> {
     const result = await saveBrowserBoxSettings({ ...settings }, botID || undefined);
     Object.assign(status, result.status);
     Object.assign(settings, result.settings);
-    if (status.running && botID) connectLive();
+    if (status.running && botID && pageActive) connectLive();
     else disconnectLive();
   } catch (err) {
     toastError(err instanceof Error ? err.message : "保存失败");
@@ -447,7 +460,7 @@ async function autoStart(): Promise<void> {
   try {
     const result = await startBrowserBox(botID);
     Object.assign(status, result.status);
-    connectLive();
+    if (pageActive) connectLive();
   } catch (err) {
     toastError(err instanceof Error ? err.message : "内置浏览器没能启动");
   } finally {
@@ -468,33 +481,44 @@ async function handBack(): Promise<void> {
 }
 
 function connectLive(): void {
+  wantLive = true;
+  clearReconnectTimer();
   closeLiveSocket();
   const ws = new WebSocket(browserBoxLiveURL(botID));
+  ws.binaryType = "arraybuffer";
   socket = ws;
+  ws.onopen = () => {
+    reconnectDelayMS = liveReconnectMinMS;
+  };
   ws.onmessage = (event) => {
+    if (event.data instanceof ArrayBuffer) {
+      onFrame(ws, event.data);
+      return;
+    }
     const message = JSON.parse(event.data) as {
       type: string;
-      frame?: LiveFrame;
       tab?: { url?: string; title?: string };
+      takeover?: boolean;
+      active?: boolean;
       message?: string;
     };
-    if (message.type === "frame" && message.frame) {
-      clearFirstFrameTimer();
-      liveNotice.value = "";
-      frame.value = message.frame;
-    } else if (message.type === "ready" && message.tab) {
-      addressInput.value = message.tab.url ?? "";
-      currentTitle.value = message.tab.title ?? "";
+    if (message.type === "ready") {
+      addressInput.value = message.tab?.url ?? "";
+      currentTitle.value = message.tab?.title ?? "";
+      status.takeover = Boolean(message.takeover);
       clearFirstFrameTimer();
       firstFrameTimer = window.setTimeout(() => {
-        if (socket === ws && !frame.value) {
+        if (socket === ws && !hasFrame.value) {
           liveNotice.value = "画面 10 秒还没出来：这个页面可能卡住了（脚本卡死或渲染进程崩溃）。可以点「刷新」、在地址栏换个网址，或者重新连接。";
         }
       }, firstFrameTimeoutMS);
+    } else if (message.type === "takeover") {
+      // 闲置自动交还、别的窗口点了交还，都从这里当场知道，不用等下一次轮询。
+      status.takeover = Boolean(message.active);
     } else if (message.type === "error") {
       // 标签页卡死或崩溃时后端会说明原因再断开；换掉之前的画面，别让人对着最后一帧干等。
       clearFirstFrameTimer();
-      frame.value = null;
+      hasFrame.value = false;
       liveNotice.value = message.message || "画面连接出错了";
     }
   };
@@ -502,9 +526,66 @@ function connectLive(): void {
     if (socket !== ws) return;
     socket = null;
     clearFirstFrameTimer();
-    // 状态轮询会在几秒内自动重连；还没有画面时先把断开说清楚。
-    if (!frame.value && !liveNotice.value) liveNotice.value = "画面连接断开了，几秒后自动重连。";
+    if (!wantLive) return;
+    // 断了就自己重连，不等 5 秒一次的状态轮询；中间的代理掐掉长连接时，画面停在
+    // 最后一帧，角上提示一下就好。
+    reconnecting.value = hasFrame.value;
+    if (!hasFrame.value && !liveNotice.value) liveNotice.value = "画面连接断开了，正在重连……";
+    reconnectTimer = window.setTimeout(() => {
+      reconnectTimer = undefined;
+      if (wantLive && pageActive && status.running) connectLive();
+    }, reconnectDelayMS);
+    reconnectDelayMS = Math.min(reconnectDelayMS * 2, 5000);
   };
+}
+
+// 帧是异步解码的，两帧可能倒着解完；序号保证旧帧不会盖掉新帧。
+let frameSeq = 0;
+let paintedSeq = 0;
+const frameTextDecoder = new TextDecoder();
+
+/**
+ * 解一帧二进制画面：4 字节大端的元数据长度、元数据 JSON、JPEG。画完才回 ack，
+ * 后端收到 ack 才发下一帧——网慢的时候画面帧率跟着降，但永远是最新的一帧，
+ * 不会在缓冲里排几秒。
+ */
+function onFrame(ws: WebSocket, buffer: ArrayBuffer): void {
+  const metaLength = new DataView(buffer).getUint32(0);
+  const meta = JSON.parse(frameTextDecoder.decode(new Uint8Array(buffer, 4, metaLength))) as LiveFrameMeta;
+  const seq = ++frameSeq;
+  createImageBitmap(new Blob([new Uint8Array(buffer, 4 + metaLength)], { type: "image/jpeg" }))
+    .then((bitmap) => {
+      if (socket === ws && seq > paintedSeq) {
+        paintedSeq = seq;
+        paintFrame(bitmap, meta);
+      }
+      bitmap.close();
+    })
+    .catch(() => undefined)
+    .finally(() => {
+      if (ws.readyState === WebSocket.OPEN) ws.send('{"type":"ack"}');
+    });
+}
+
+function paintFrame(bitmap: ImageBitmap, meta: LiveFrameMeta): void {
+  const canvas = screen.value;
+  const context = canvas?.getContext("2d");
+  if (!canvas || !context) return;
+  if (canvas.width !== bitmap.width || canvas.height !== bitmap.height) {
+    canvas.width = bitmap.width;
+    canvas.height = bitmap.height;
+  }
+  context.drawImage(bitmap, 0, 0);
+  frameMeta = meta;
+  if (!hasFrame.value) hasFrame.value = true;
+  if (reconnecting.value) reconnecting.value = false;
+  if (liveNotice.value) liveNotice.value = "";
+  clearFirstFrameTimer();
+}
+
+function clearReconnectTimer(): void {
+  if (reconnectTimer !== undefined) window.clearTimeout(reconnectTimer);
+  reconnectTimer = undefined;
 }
 
 function closeLiveSocket(): void {
@@ -513,16 +594,26 @@ function closeLiveSocket(): void {
   socket.onclose = null;
   socket.close();
   socket = null;
-  frame.value = null;
+}
+
+/** 断开画面但留着最后一帧：切回来时先看到旧画面，新帧到了再换。 */
+function pauseLive(): void {
+  wantLive = false;
+  clearReconnectTimer();
+  closeLiveSocket();
+  reconnecting.value = false;
 }
 
 function disconnectLive(): void {
-  closeLiveSocket();
+  pauseLive();
+  hasFrame.value = false;
+  frameMeta = null;
   liveNotice.value = "";
 }
 
 function reconnectLive(): void {
   liveNotice.value = "";
+  reconnectDelayMS = liveReconnectMinMS;
   connectLive();
 }
 
@@ -533,10 +624,10 @@ function send(payload: Record<string, unknown>): void {
 /** 把画面上的坐标换算成页面坐标：画面被 CSS 缩放过，点的位置得按比例还原。 */
 function pagePoint(event: MouseEvent): { x: number; y: number } {
   const element = screen.value;
-  if (!element || !frame.value) return { x: 0, y: 0 };
+  if (!element || !frameMeta) return { x: 0, y: 0 };
   const rect = element.getBoundingClientRect();
-  const scaleX = frame.value.width / rect.width;
-  const scaleY = frame.value.height / rect.height;
+  const scaleX = frameMeta.width / rect.width;
+  const scaleY = frameMeta.height / rect.height;
   return { x: (event.clientX - rect.left) * scaleX, y: (event.clientY - rect.top) * scaleY };
 }
 
@@ -547,8 +638,11 @@ function modifiers(event: MouseEvent | KeyboardEvent): number {
 const mouseButtons = ["left", "middle", "right"];
 
 function onMouse(event: MouseEvent, type: "mousePressed" | "mouseReleased"): void {
+  event.preventDefault();
+  if (type === "mousePressed") screen.value?.focus();
+  // 松开要跟着按下走：没接管时单独一下（从画面外拖进来松手）后端也会丢掉，这里干脆不发。
+  else if (!status.takeover) return;
   const point = pagePoint(event);
-  screen.value?.focus();
   send({
     type: "mouse",
     mouse: {
@@ -561,39 +655,66 @@ function onMouse(event: MouseEvent, type: "mousePressed" | "mouseReleased"): voi
       modifiers: modifiers(event)
     }
   });
-  // 只有按下才算动手；松开要跟着按下走，单独一下（从画面外拖进来松手）后端会丢掉。
+  // 在画面上按下是唯一会转为接管的动作。
   if (type === "mousePressed") status.takeover = true;
 }
 
-let lastMove = 0;
+// 移动和滚轮按屏幕刷新合并，一帧最多发一条：不合并的话一次拖动能发出几百条，
+// 后端逐条等浏览器处理完，画面反而更卡。
+let pendingMove: MouseEvent | null = null;
+let moveFrame = 0;
 function onMouseMove(event: MouseEvent): void {
-  // 没接管时鼠标只是路过：以前每次移动都发，WebUI 开着、鼠标划过画面就把浏览器从
-  // 机器人手里抢走了。后端同样会丢掉，这里不发是为了省掉一路的消息。
-  if (!status.takeover) return;
-  // 移动事件按 20ms 节流：不节流的话一次拖动能发出几百条，画面反而更卡。
-  const now = Date.now();
-  if (now - lastMove < 20) return;
-  lastMove = now;
-  if (!frame.value) return;
-  const point = pagePoint(event);
-  send({ type: "mouse", mouse: { type: "mouseMoved", x: point.x, y: point.y, buttons: event.buttons, modifiers: modifiers(event) } });
+  // 没接管时鼠标只是路过，不发：后端同样会丢掉，这里省掉一路的消息。
+  if (!status.takeover || !frameMeta) return;
+  pendingMove = event;
+  if (moveFrame) return;
+  moveFrame = window.requestAnimationFrame(() => {
+    moveFrame = 0;
+    const latest = pendingMove;
+    pendingMove = null;
+    if (!latest) return;
+    const point = pagePoint(latest);
+    send({ type: "mouse", mouse: { type: "mouseMoved", x: point.x, y: point.y, buttons: latest.buttons, modifiers: modifiers(latest) } });
+  });
 }
 
-// 滚轮不算接管：滚页面时顺手蹭到画面很常见，不该因此把浏览器抢过来。先点一下画面接管，才能滚动。
+let wheelDeltaX = 0;
+let wheelDeltaY = 0;
+let wheelEvent: WheelEvent | null = null;
+let wheelFrame = 0;
+// 没接管时滚轮归 WebUI：鼠标停在画面上照样能上下滚这一页，不会把浏览器抢过来。
 function onWheel(event: WheelEvent): void {
   if (!status.takeover) return;
-  const point = pagePoint(event);
-  send({
-    type: "mouse",
-    mouse: { type: "mouseWheel", x: point.x, y: point.y, delta_x: -event.deltaX, delta_y: -event.deltaY, modifiers: modifiers(event) }
+  event.preventDefault();
+  wheelDeltaX += event.deltaX;
+  wheelDeltaY += event.deltaY;
+  wheelEvent = event;
+  if (wheelFrame) return;
+  wheelFrame = window.requestAnimationFrame(() => {
+    wheelFrame = 0;
+    const latest = wheelEvent;
+    const deltaX = wheelDeltaX;
+    const deltaY = wheelDeltaY;
+    wheelDeltaX = 0;
+    wheelDeltaY = 0;
+    wheelEvent = null;
+    if (!latest) return;
+    const point = pagePoint(latest);
+    send({
+      type: "mouse",
+      mouse: { type: "mouseWheel", x: point.x, y: point.y, delta_x: -deltaX, delta_y: -deltaY, modifiers: modifiers(latest) }
+    });
   });
 }
 
 function onKey(event: KeyboardEvent, type: "keyDown" | "keyUp"): void {
+  // 没接管时按键不碰也不拦：焦点留在画面上时 Cmd+Tab、Cmd+C、Tab 照常归 WebUI，
+  // 也不会因此把浏览器抢过来。
+  if (!status.takeover) return;
+  event.preventDefault();
   // 可打印字符走 insertText：中文输入法上屏的是整段文字，不是一串按键。
   if (type === "keyDown" && event.key.length === 1 && !event.ctrlKey && !event.metaKey) {
     send({ type: "text", text: event.key });
-    status.takeover = true;
     return;
   }
   send({
@@ -606,7 +727,13 @@ function onKey(event: KeyboardEvent, type: "keyDown" | "keyUp"): void {
       modifiers: modifiers(event)
     }
   });
-  if (type === "keyDown") status.takeover = true;
+}
+
+// 输入法选字按的回车不算提交：以前带中文的网址会因此连开两次。
+function onAddressEnter(event: KeyboardEvent): void {
+  if (event.isComposing || event.keyCode === 229) return;
+  event.preventDefault();
+  navigate();
 }
 
 function navigate(): void {
@@ -616,7 +743,14 @@ function navigate(): void {
   status.takeover = true;
 }
 
-onMounted(() => {
+function onVisibilityChange(): void {
+  if (!pageActive) return;
+  if (document.hidden) pauseLive();
+  else void refresh();
+}
+
+function startPage(): void {
+  pageActive = true;
   // 先读来源再读状态：要知道勾没勾上，才能决定要不要自动拉起。
   void loadSource().then(refresh);
   void loadActivity();
@@ -626,11 +760,32 @@ onMounted(() => {
     void loadSource();
     void loadActivity();
   }, 5000);
+}
+
+function stopPage(): void {
+  pageActive = false;
+  if (statusTimer) window.clearInterval(statusTimer);
+  statusTimer = undefined;
+  pauseLive();
+}
+
+onMounted(() => {
+  document.addEventListener("visibilitychange", onVisibilityChange);
+  startPage();
 });
 
+// 页面被 KeepAlive 缓存着：切走时停掉画面和轮询，切回来再接上。
+onActivated(() => {
+  if (!pageActive) startPage();
+});
+
+onDeactivated(stopPage);
+
 onBeforeUnmount(() => {
-  if (statusTimer) window.clearInterval(statusTimer);
-  disconnectLive();
+  document.removeEventListener("visibilitychange", onVisibilityChange);
+  stopPage();
+  if (moveFrame) window.cancelAnimationFrame(moveFrame);
+  if (wheelFrame) window.cancelAnimationFrame(wheelFrame);
 });
 </script>
 
@@ -771,6 +926,7 @@ onBeforeUnmount(() => {
 }
 
 .browser-stage {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -797,6 +953,18 @@ onBeforeUnmount(() => {
   display: block;
   cursor: default;
   outline: none;
+}
+
+.browser-live-badge {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.55);
+  pointer-events: none;
 }
 
 .row.gap {
