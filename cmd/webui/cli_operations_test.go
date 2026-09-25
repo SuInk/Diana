@@ -81,3 +81,44 @@ func TestDoctorResolvesPathsLikeServerInDocker(t *testing.T) {
 		}
 	}
 }
+
+func TestListenWebUIReportsRunningInstance(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		_, _ = writer.Write([]byte(`{"status":"ok","version":"v1.2.3"}`))
+	}))
+	defer server.Close()
+	host, port, _ := strings.Cut(strings.TrimPrefix(server.URL, "http://"), ":")
+	_, err := listenWebUI(appConfig{Server: serverConfig{Host: host, Port: port}})
+	if err == nil || !strings.Contains(err.Error(), "Diana v1.2.3 is already running") {
+		t.Fatalf("expected already-running error, got %v", err)
+	}
+}
+
+func TestListenWebUIKeepsBindErrorForForeignListener(t *testing.T) {
+	server := httptest.NewServer(http.NotFoundHandler())
+	defer server.Close()
+	host, port, _ := strings.Cut(strings.TrimPrefix(server.URL, "http://"), ":")
+	_, err := listenWebUI(appConfig{Server: serverConfig{Host: host, Port: port}})
+	if err == nil || strings.Contains(err.Error(), "already running") {
+		t.Fatalf("expected raw bind error, got %v", err)
+	}
+}
+
+func TestInstanceLockRejectsSecondInstanceOnSameData(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "data", "diana.db")
+	first, err := acquireInstanceLock(dbPath, "http://127.0.0.1:18080")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = acquireInstanceLock(dbPath, "http://127.0.0.1:18081")
+	want := fmt.Sprintf("already running at http://127.0.0.1:18080 (pid %d)", os.Getpid())
+	if err == nil || !strings.Contains(err.Error(), want) {
+		t.Fatalf("expected %q, got %v", want, err)
+	}
+	first.Release()
+	second, err := acquireInstanceLock(dbPath, "http://127.0.0.1:18081")
+	if err != nil {
+		t.Fatalf("lock should be free after release: %v", err)
+	}
+	second.Release()
+}
