@@ -404,6 +404,7 @@ func TestExtensionAdminPresetVerifiesTokenBeforeSaving(t *testing.T) {
 	tuned := servers["gitea"]
 	tuned.StartupTimeoutSec, tuned.ToolTimeoutSec = 45, 90
 	tuned.DisabledTools = []string{"delete_repo"}
+	tuned.ExposeCallerIdentity = true
 	servers["gitea"] = tuned
 	if err := saveMCPServers(path, servers); err != nil {
 		t.Fatal(err)
@@ -420,7 +421,7 @@ func TestExtensionAdminPresetVerifiesTokenBeforeSaving(t *testing.T) {
 		t.Fatal(err)
 	}
 	kept := servers["gitea"]
-	if kept.StartupTimeoutSec != 45 || kept.ToolTimeoutSec != 90 || len(kept.DisabledTools) != 1 {
+	if kept.StartupTimeoutSec != 45 || kept.ToolTimeoutSec != 90 || len(kept.DisabledTools) != 1 || !kept.ExposeCallerIdentity {
 		t.Fatalf("预设表单改地址时把它管不到的设置清掉了：%#v", kept)
 	}
 	if kept.enabled() {

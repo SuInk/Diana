@@ -3,6 +3,8 @@ package assistant
 import (
 	"strconv"
 	"strings"
+
+	"github.com/SuInk/diana/model/agent"
 )
 
 // TelegramOwnerUsername accepts a handle with or without @. Numeric account
@@ -38,6 +40,24 @@ func (cfg BotConfig) OwnerIDForEvent(event MessageEvent) string {
 func (cfg BotConfig) IsOwnerEvent(event MessageEvent) bool {
 	owner := cfg.OwnerIDForEvent(event)
 	return owner != "" && owner == strings.TrimSpace(event.UserID)
+}
+
+// callerIdentityForEvent 是交给 MCP 和本地命令的真实调用者。它不经过模型，隐私代理
+// 开着也照样是真实 ID：代理只挡模型，不挡主人自己配的扩展。
+func callerIdentityForEvent(cfg BotConfig, event MessageEvent) agent.CallerIdentity {
+	identity := agent.CallerIdentity{
+		Platform:  NormalizePlatformID(firstNonEmpty(event.Platform, cfg.Platform)),
+		BotID:     strings.TrimSpace(firstNonEmpty(event.SelfID, cfg.BotAccount)),
+		UserID:    strings.TrimSpace(event.UserID),
+		MessageID: strings.TrimSpace(event.MessageID),
+		ChatType:  string(EventKindPrivate),
+		IsOwner:   cfg.IsOwnerEvent(event),
+	}
+	if event.Kind == EventKindGroup {
+		identity.ChatType = string(EventKindGroup)
+		identity.GroupID = strings.TrimSpace(event.GroupID)
+	}
+	return identity
 }
 
 func relationshipPolicyForEvent(cfg BotConfig, profile UserMemoryProfile, event MessageEvent) RelationshipPolicy {

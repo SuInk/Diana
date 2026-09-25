@@ -229,6 +229,10 @@ func (m *ExtensionManager) installMCP(ctx context.Context, name string, server m
 	if err := rejectUnmatchedMasks(server, previous); err != nil {
 		return ExtensionState{}, err
 	}
+	// 身份透传只能主人在界面上开。这里是模型调的安装工具：它交来的值一律不认，
+	// 覆盖同一个去处时沿用原来的设置；换了地址或命令就关掉，身份不能跟着去新地方。
+	server.ExposeCallerIdentity = exists && previous.ExposeCallerIdentity &&
+		server.URL == previous.URL && server.Command == previous.Command
 
 	var runtime *mcpServerRuntime
 	if server.enabled() {
@@ -444,6 +448,8 @@ func mcpServerConfigFromInput(input map[string]any) (mcpServerConfig, error) {
 		ToolTimeoutSec:    intFromInput(input, "tool_timeout_sec", 0),
 		EnabledTools:      stringSliceFromInput(input, "enabled_tools"),
 		DisabledTools:     stringSliceFromInput(input, "disabled_tools"),
+		// 安装工具的参数表里没有它，installMCP 也不认模型交来的值；只有界面会提交。
+		ExposeCallerIdentity: boolFromInput(input, "expose_caller_identity", false),
 	}
 	server = normalizeMCPServerConfig(server)
 	return server, validateMCPConfigValues(server)

@@ -56,6 +56,10 @@ type mcpServerConfig struct {
 	// 只记出身，不复制字段值：值仍然只有配置本身这一份，手改过也不会和表单对不上。
 	Preset          string `json:"preset,omitempty" toml:"preset,omitempty"`
 	PresetTransport string `json:"preset_transport,omitempty" toml:"preset_transport,omitempty"`
+	// ExposeCallerIdentity 打开后，每次 tools/call 都在 _meta["diana/caller"] 里带上
+	// 触发这次调用的真实账号、群号和消息 ID。默认关：远程服务会因此多拿到一份发言人
+	// 账号，这是新增的外发，只给确实要按账号办事的服务开。
+	ExposeCallerIdentity bool `json:"expose_caller_identity,omitempty" toml:"expose_caller_identity,omitempty"`
 }
 
 func (cfg mcpServerConfig) enabled() bool {
@@ -589,7 +593,13 @@ func (c *MCPClient) CallTool(ctx context.Context, name string, arguments map[str
 	}
 	mark := state.stderr.written()
 	media := c.mediaCollector(time.Now())
-	result, err := state.session.CallTool(callCtx, &mcpsdk.CallToolParams{Name: name, Arguments: arguments})
+	params := &mcpsdk.CallToolParams{Name: name, Arguments: arguments}
+	if c.config.ExposeCallerIdentity {
+		if identity, ok := CallerIdentityFromContext(ctx); ok {
+			params.Meta = identity.mcpMeta()
+		}
+	}
+	result, err := state.session.CallTool(callCtx, params)
 	if err != nil {
 		// 传输层断开（进程退出、连接被关）时作废会话，下一次调用重连。服务端返回的
 		// JSON-RPC 错误不属于这一类，会话照常复用。
