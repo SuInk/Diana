@@ -16,7 +16,7 @@ for (const view of ["AssistantView", "GroupsView"]) {
     const prefix = view === "AssistantView" ? "bot" : "group";
     const condition = view === "AssistantView" ? "isOneBotPlatform" : "supportsGroupLevel";
     for (const suffix of ["len", "chunks"]) {
-      assert.match(source, new RegExp(`<div v-if="${condition}" class="field">\\s*<label for="${prefix}-forward-${suffix}">`));
+      assert.match(source, new RegExp(`<div v-if="${condition} && [^"]+" class="field">\\s*<label for="${prefix}-forward-${suffix}">`));
     }
   });
   test(`${view} labels the reply limit per message`, async () => {
@@ -24,17 +24,25 @@ for (const view of ["AssistantView", "GroupsView"]) {
     assert.match(source, /单条回复上限（字符）/);
     assert.doesNotMatch(source, /单次回复上限（字符）/);
   });
-  test(`${view} removes legacy limits and saves empty forward thresholds per scope`, async () => {
+  test(`${view} removes legacy limits and turns forward cards off explicitly`, async () => {
     const source = await readFile(new URL(`./views/${view}.vue`, import.meta.url), "utf8");
     assert.doesNotMatch(source, /最多分几条|分段发送长度/);
+    // 关闭合并转发要有显式开关，不能再让人往字数里填 0。
+    assert.doesNotMatch(source, /0 或留空关闭|填 0 本群关闭/);
     for (const field of ["forward_reply_threshold", "forward_reply_chunk_threshold"]) {
-      if (view === "AssistantView") {
+      assert.match(source, new RegExp(`v-model.number="[^\"]+\\.${field}"[^>]+min="1"`));
+    }
+    if (view === "AssistantView") {
+      assert.match(source, /v-model="form.forward_reply_enabled"/);
+      for (const field of ["forward_reply_threshold", "forward_reply_chunk_threshold"]) {
         assert.ok(source.includes(`${field}: Number(current.${field}) || 0`));
-        assert.match(source, new RegExp(`v-model.number="[^\"]+\\.${field}"[^>]+placeholder="无上限"`));
-      } else {
-        // 群里留空要跟随机器人，不能存成 0 把机器人的阈值挡在群外。
-        assert.ok(source.includes(`${field}: optionalForwardThreshold(current.${field})`));
-        assert.match(source, new RegExp(`v-model.number="[^\"]+\\.${field}"[^>]+:placeholder="forwardThresholdPlaceholder\\('${field}'`));
+      }
+    } else {
+      // 群里三选一；留空的阈值跟随机器人，不能存成 0 把机器人的阈值挡在群外。
+      assert.match(source, /id="group-forward-mode"/);
+      assert.match(source, /label: "本群关闭"/);
+      for (const field of ["forward_reply_threshold", "forward_reply_chunk_threshold"]) {
+        assert.ok(source.includes(`optionalForwardThreshold(current.${field})`));
       }
     }
   });

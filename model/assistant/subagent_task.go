@@ -537,7 +537,7 @@ func (r *Runtime) sendSubagentFollowup(ctx context.Context, event MessageEvent, 
 	cfg := r.effectiveConfigForEvent(event)
 	reply = normalizeReply(reply, cfg.MaxReplyChars, markdownToPlainForConfig(cfg))
 	chunks := splitChatReply(reply, chatSplitLimitsFrom(cfg))
-	if shouldUseForwardReply(reply, chunks, cfg.ForwardReplyThreshold, cfg.ForwardReplyChunkThreshold) {
+	if shouldUseForwardReplyFor(cfg, reply, chunks) {
 		return r.sendForwardReply(ctx, event, reply, cfg)
 	}
 	for _, chunk := range chunks {

@@ -1517,6 +1517,9 @@ func (r *Runtime) effectiveConfigForEventLocked(event MessageEvent) BotConfig {
 	if groupCfg.ForwardReplyChunkThreshold != nil {
 		cfg.ForwardReplyChunkThreshold = *groupCfg.ForwardReplyChunkThreshold
 	}
+	if groupCfg.ForwardReplyEnabled != nil {
+		cfg.ForwardReplyEnabled = copyBoolPointer(groupCfg.ForwardReplyEnabled)
+	}
 	cfg.ProactiveReplyChance = groupCfg.ProactiveReplyChance
 	cfg.ProactiveReplyThreshold = groupCfg.ProactiveReplyThreshold
 	cfg.ChatInEnabled = groupCfg.ChatInEnabled
@@ -6823,7 +6826,7 @@ func (r *Runtime) sendDecorated(ctx context.Context, event MessageEvent, reply s
 	releaseBatch := r.lockReplyBatch(event)
 	defer releaseBatch()
 
-	if IsOneBotPlatform(platform) && !chatSplitLimitsForEvent(cfg, event).SingleMessage && shouldUseForwardReply(reply, chunks, cfg.ForwardReplyThreshold, cfg.ForwardReplyChunkThreshold) {
+	if IsOneBotPlatform(platform) && !chatSplitLimitsForEvent(cfg, event).SingleMessage && shouldUseForwardReplyFor(cfg, reply, chunks) {
 		messageID, err := r.sendForwardReplyWithResult(ctx, event, reply, cfg)
 		if err == nil {
 			if messageID == "" {
@@ -7188,6 +7191,14 @@ const forwardReplyChunkCountThreshold = 5
 //	长度  正文字数超过配置的正数阈值
 //
 // 未设置或非正数表示无上限，不触发对应条件。
+// shouldUseForwardReplyFor 先看合并转发总开关，再按两个阈值判断。
+func shouldUseForwardReplyFor(cfg BotConfig, reply string, chunks []string) bool {
+	if !boolValue(cfg.ForwardReplyEnabled, true) {
+		return false
+	}
+	return shouldUseForwardReply(reply, chunks, cfg.ForwardReplyThreshold, cfg.ForwardReplyChunkThreshold)
+}
+
 func shouldUseForwardReply(reply string, chunks []string, threshold int, chunkThreshold int) bool {
 	if chunkThreshold > 0 && len(chunks) > chunkThreshold {
 		return true

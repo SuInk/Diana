@@ -110,6 +110,7 @@ type dianaBotConfigSnapshot struct {
 	MaxInputChars                int                       `json:"max_input_chars"`
 	MaxReplyChars                int                       `json:"max_reply_chars"`
 	DirectReplyChunkSize         int                       `json:"direct_reply_chunk_size"`
+	ForwardReplyEnabled          bool                      `json:"forward_reply_enabled"`
 	ForwardReplyThreshold        int                       `json:"forward_reply_threshold"`
 	RecallReplyMode              RecallReplyMode           `json:"recall_reply_mode"`
 	RecallReplyAutoDeleteEnabled bool                      `json:"recall_reply_auto_delete_enabled"`
@@ -371,6 +372,7 @@ func dianaBotConfigFromConfig(cfg BotConfig) dianaBotConfigSnapshot {
 		MaxInputChars:                   cfg.MaxInputChars,
 		MaxReplyChars:                   cfg.MaxReplyChars,
 		DirectReplyChunkSize:            cfg.DirectReplyChunkSize,
+		ForwardReplyEnabled:             boolValue(cfg.ForwardReplyEnabled, true),
 		ForwardReplyThreshold:           cfg.ForwardReplyThreshold,
 		RecallReplyMode:                 cfg.RecallReplyMode,
 		RecallReplyAutoDeleteEnabled:    boolValue(cfg.RecallReplyAutoDeleteEnabled, false),

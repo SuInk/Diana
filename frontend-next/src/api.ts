@@ -334,9 +334,11 @@ export interface BotProfileConfig extends SendRetrySettings {
   reply_max_bubbles?: number;
   /** @deprecated 仅兼容历史配置，不再限制聊天长度。 */
   direct_reply_chunk_size?: number;
-  /** 正文超过多少字改用合并转发卡片；未设置或 0 表示无上限。 */
+  /** 合并转发卡片总开关；关闭时两个阈值都不生效。 */
+  forward_reply_enabled?: boolean;
+  /** 正文超过多少字改用合并转发卡片；未设置或 0 表示不按字数触发。 */
   forward_reply_threshold?: number;
-  /** 切出超过多少块改用合并转发卡片；未设置或 0 表示无上限。 */
+  /** 切出超过多少块改用合并转发卡片；未设置或 0 表示不按块数触发。 */
   forward_reply_chunk_threshold?: number;
   recall_reply_auto_delete_enabled?: boolean;
   recall_reply_auto_delete_delay_seconds?: number;
@@ -566,9 +568,11 @@ export interface BotGroupConfig extends SendRetrySettings {
   reply_max_bubbles?: number;
   /** @deprecated 仅兼容历史配置，不再限制聊天长度。 */
   direct_reply_chunk_size?: number;
-  /** 本群正文超过多少字改用合并转发卡片；未设置跟随机器人，0 表示本群关闭。 */
+  /** 本群合并转发：不设跟随机器人，false 本群关闭，true 本群单独设置。 */
+  forward_reply_enabled?: boolean;
+  /** 本群单独设置时正文超过多少字改用合并转发卡片；不设跟随机器人。 */
   forward_reply_threshold?: number;
-  /** 本群切出超过多少块改用合并转发卡片；未设置跟随机器人，0 表示本群关闭。 */
+  /** 本群单独设置时切出超过多少块改用合并转发卡片；不设跟随机器人。 */
   forward_reply_chunk_threshold?: number;
   proactive_reply_chance?: number;
   proactive_reply_threshold?: number;

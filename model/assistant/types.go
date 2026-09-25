@@ -643,10 +643,13 @@ type BotConfig struct {
 	SocialReplyEnabled         *bool           `json:"social_reply_enabled,omitempty"`
 	ReplyMaxBubbles            int             `json:"reply_max_bubbles,omitempty"`
 	ForwardReplyChunkThreshold int             `json:"forward_reply_chunk_threshold,omitempty"`
-	DirectReplyChunkSize       int             `json:"direct_reply_chunk_size,omitempty"`
-	ForwardReplyThreshold      int             `json:"forward_reply_threshold,omitempty"`
-	RecallReplyMode            RecallReplyMode `json:"recall_reply_mode,omitempty"`
-	RefusalStrategy            RefusalStrategy `json:"refusal_strategy,omitempty"`
+	// ForwardReplyEnabled 是合并转发卡片的总开关；关掉时两个阈值都不生效。
+	// 两个阈值只描述「超过多少触发」，留空（0）是不按这一项触发，不再兼任开关。
+	ForwardReplyEnabled   *bool           `json:"forward_reply_enabled,omitempty"`
+	DirectReplyChunkSize  int             `json:"direct_reply_chunk_size,omitempty"`
+	ForwardReplyThreshold int             `json:"forward_reply_threshold,omitempty"`
+	RecallReplyMode       RecallReplyMode `json:"recall_reply_mode,omitempty"`
+	RefusalStrategy       RefusalStrategy `json:"refusal_strategy,omitempty"`
 	// DaypartToneEnabled 让语气跟着一天的时间走（深夜话少、清早迷糊、晚上松弛）。
 	// 默认关闭：按时钟改变语气是用户能感知的行为变化，不该在升级后突然发生。
 	DaypartToneEnabled *bool `json:"daypart_tone_enabled,omitempty"`
@@ -896,9 +899,10 @@ type GroupConfig struct {
 	NaturalReplySplitEnabled *bool `json:"natural_reply_split_enabled,omitempty"`
 	ReplyMaxBubbles          int   `json:"reply_max_bubbles,omitempty"`
 	DirectReplyChunkSize     int   `json:"direct_reply_chunk_size,omitempty"`
-	// 两个合并转发阈值同理：nil 跟随机器人，显式 0 才是本群关掉这条触发。以前
-	// 这里是 int，群配置一存下来就把当时的值（旧群多半是 0）定死，机器人页后来
-	// 改成 140 也进不了这个群。
+	// 合并转发：ForwardReplyEnabled nil 跟随机器人，false 本群关闭，true 本群单独设置。
+	// 两个阈值 nil 同样跟随机器人。以前阈值是 int，群配置一存下来就把当时的值
+	// （旧群多半是 0）定死，机器人页后来改成 140 也进不了这个群。
+	ForwardReplyEnabled          *bool                     `json:"forward_reply_enabled,omitempty"`
 	ForwardReplyThreshold        *int                      `json:"forward_reply_threshold,omitempty"`
 	ForwardReplyChunkThreshold   *int                      `json:"forward_reply_chunk_threshold,omitempty"`
 	ProactiveReplyChance         float64                   `json:"proactive_reply_chance,omitempty"`
@@ -1106,6 +1110,7 @@ type ConfigPayload struct {
 	SocialReplyEnabled          *bool           `json:"social_reply_enabled,omitempty"`
 	ReplyMaxBubbles             int             `json:"reply_max_bubbles,omitempty"`
 	ForwardReplyChunkThreshold  int             `json:"forward_reply_chunk_threshold,omitempty"`
+	ForwardReplyEnabled         *bool           `json:"forward_reply_enabled,omitempty"`
 	DirectReplyChunkSize        int             `json:"direct_reply_chunk_size,omitempty"`
 	ForwardReplyThreshold       int             `json:"forward_reply_threshold,omitempty"`
 	RecallReplyMode             RecallReplyMode `json:"recall_reply_mode,omitempty"`
@@ -1206,13 +1211,14 @@ func DefaultGroupConfig(groupID string, base BotConfig) GroupConfig {
 	}
 }
 
-// clampedOptionalCount 复制一个可选计数并把负数钳到 0；nil 保持 nil，表示跟随上级。
-func clampedOptionalCount(value *int) *int {
-	if value == nil {
+// positiveOptionalCount 复制一个可选计数；nil 和不大于 0 的值都当作没填，跟随上级。
+// 关掉走 ForwardReplyEnabled，这里不让 0 兼任「关闭」。
+func positiveOptionalCount(value *int) *int {
+	if value == nil || *value <= 0 {
 		return nil
 	}
-	clamped := max(0, *value)
-	return &clamped
+	count := *value
+	return &count
 }
 
 // WithDefaults 补齐群配置的空值，避免旧数据或局部提交破坏运行时默认行为。
@@ -1282,8 +1288,9 @@ func (cfg GroupConfig) WithDefaults(groupID string, base BotConfig) GroupConfig 
 	if cfg.DirectReplyChunkSize <= 0 {
 		cfg.DirectReplyChunkSize = defaults.DirectReplyChunkSize
 	}
-	cfg.ForwardReplyThreshold = clampedOptionalCount(cfg.ForwardReplyThreshold)
-	cfg.ForwardReplyChunkThreshold = clampedOptionalCount(cfg.ForwardReplyChunkThreshold)
+	cfg.ForwardReplyThreshold = positiveOptionalCount(cfg.ForwardReplyThreshold)
+	cfg.ForwardReplyChunkThreshold = positiveOptionalCount(cfg.ForwardReplyChunkThreshold)
+	cfg.ForwardReplyEnabled = copyBoolPointer(cfg.ForwardReplyEnabled)
 	if cfg.ProactiveReplyChance <= 0 {
 		cfg.ProactiveReplyChance = defaults.ProactiveReplyChance
 	}
@@ -1679,6 +1686,7 @@ func DefaultBotConfig() BotConfig {
 		MaxReplyChars:                3500,
 		ReplyMaxBubbles:              replyMaxChatBubbles,
 		ForwardReplyChunkThreshold:   0,
+		ForwardReplyEnabled:          boolPointer(true),
 		DirectReplyChunkSize:         chatReplyChunkSize,
 		ForwardReplyThreshold:        defaultForwardReplyThreshold,
 		RecallReplyMode:              RecallReplyModeOriginalForward,
@@ -1891,6 +1899,11 @@ func (cfg BotConfig) WithDefaults() BotConfig {
 	// DefaultBotConfig 给，群级覆盖同样只做钳零。
 	cfg.ForwardReplyChunkThreshold = max(0, cfg.ForwardReplyChunkThreshold)
 	cfg.ForwardReplyThreshold = max(0, cfg.ForwardReplyThreshold)
+	// 旧配置没有总开关：两个阈值都是 0 的本来就不会出卡片，记成关闭；填过阈值的
+	// 记成开启。这样升级后行为不变，开关显示的也是实际状态。
+	if cfg.ForwardReplyEnabled == nil {
+		cfg.ForwardReplyEnabled = boolPointer(cfg.ForwardReplyThreshold > 0 || cfg.ForwardReplyChunkThreshold > 0)
+	}
 	cfg.RecallReplyMode = normalizeRecallReplyMode(cfg.RecallReplyMode)
 	cfg.RefusalStrategy = normalizeRefusalStrategy(cfg.RefusalStrategy)
 	if cfg.DaypartToneEnabled == nil {
@@ -2294,6 +2307,7 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		SocialReplyEnabled:                copyBoolPointer(cfg.SocialReplyEnabled),
 		ReplyMaxBubbles:                   cfg.ReplyMaxBubbles,
 		ForwardReplyChunkThreshold:        cfg.ForwardReplyChunkThreshold,
+		ForwardReplyEnabled:               copyBoolPointer(cfg.ForwardReplyEnabled),
 		DirectReplyChunkSize:              cfg.DirectReplyChunkSize,
 		ForwardReplyThreshold:             cfg.ForwardReplyThreshold,
 		RecallReplyMode:                   cfg.RecallReplyMode,
@@ -2509,6 +2523,7 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		SocialReplyEnabled:              copyBoolPointer(payload.SocialReplyEnabled),
 		ReplyMaxBubbles:                 payload.ReplyMaxBubbles,
 		ForwardReplyChunkThreshold:      payload.ForwardReplyChunkThreshold,
+		ForwardReplyEnabled:             copyBoolPointer(payload.ForwardReplyEnabled),
 		DirectReplyChunkSize:            payload.DirectReplyChunkSize,
 		ForwardReplyThreshold:           payload.ForwardReplyThreshold,
 		RecallReplyMode:                 payload.RecallReplyMode,
