@@ -93,13 +93,29 @@ type updateConfig struct {
 // 容器里挂载路径各不相同，总得有个办法告诉进程去哪找 config.yaml。
 const configPathEnv = "DIANA_CONFIG"
 
+// logPathEnv 在 config.yaml 没写 storage.log_path 时提供日志文件位置。
+// Docker 镜像用它把日志写进挂出来的 /app/data/logs，否则日志只在容器标准输出里，
+// 重建容器就没了。
+const logPathEnv = "DIANA_LOG_PATH"
+
+func (cfg *appConfig) applyEnvironmentDefaults() {
+	if strings.TrimSpace(cfg.Storage.LogPath) == "" {
+		cfg.Storage.LogPath = strings.TrimSpace(os.Getenv(logPathEnv))
+	}
+}
+
 // defaultConfigFileName 是不指定路径时按约定查找的文件名。
 const defaultConfigFileName = "config.yaml"
 
-// resolveConfigPath 按 --config、DIANA_CONFIG、工作目录、可执行文件目录的顺序
-// 找配置文件。命令入口经常是 /usr/local/bin 或 ~/.local/bin 下的符号链接，
-// 所以还要检查链接指向的真实安装目录。返回空字符串表示哪里都没有，此时全部
-// 走内置默认值。
+// dataDirConfigPath 是默认数据目录（数据库默认在 data/diana.db）里的配置文件。
+// Docker 部署只挂 /app/data 一个目录，配置文件放进去就能被找到。
+var dataDirConfigPath = filepath.Join("data", defaultConfigFileName)
+
+// resolveConfigPath 按 --config、DIANA_CONFIG、工作目录、可执行文件目录、
+// 默认数据目录的顺序找配置文件。命令入口经常是 /usr/local/bin 或 ~/.local/bin
+// 下的符号链接，所以还要检查链接指向的真实安装目录。数据目录排在最后，旧部署
+// 放在工作目录或程序旁的 config.yaml 仍然优先。返回空字符串表示哪里都没有，
+// 此时全部走内置默认值。
 func resolveConfigPath(args []string) string {
 	if explicit := configPathFromArgs(args); explicit != "" {
 		return explicit
@@ -114,6 +130,9 @@ func resolveConfigPath(args []string) string {
 		if path := configPathNearExecutable(executable); path != "" {
 			return path
 		}
+	}
+	if info, err := os.Stat(dataDirConfigPath); err == nil && info.Mode().IsRegular() {
+		return dataDirConfigPath
 	}
 	return ""
 }
@@ -157,6 +176,7 @@ func loadAppConfig(path string) (appConfig, error) {
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			cfg.path = ""
+			cfg.applyEnvironmentDefaults()
 			return cfg, nil
 		}
 		return cfg, fmt.Errorf("read config %s: %w", path, err)
@@ -178,6 +198,7 @@ func loadAppConfig(path string) (appConfig, error) {
 		return cfg, fmt.Errorf("storage download_cache_max_mb must be between 0 and 1048576")
 	}
 	cfg.path = path
+	cfg.applyEnvironmentDefaults()
 	return cfg, nil
 }
 

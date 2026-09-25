@@ -45,6 +45,11 @@ func protectRuntimeSecrets(appCfg appConfig, dbPath, dataDir string) {
 	if cookies, err := filepath.Abs("ytb_cookies.txt"); err == nil {
 		files = append(files, cookies)
 	}
+	if dbPath != "" {
+		if cookies, err := filepath.Abs(filepath.Join(filepath.Dir(dbPath), "ytb_cookies.txt")); err == nil {
+			files = append(files, cookies)
+		}
+	}
 	agent.ProtectRuntimeFiles(files...)
 
 	var dirs []string

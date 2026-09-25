@@ -94,6 +94,9 @@ type ReleasePackageOptions struct {
 	UpdatesDir string
 	Shutdown   func()
 	Disable    bool
+	// Container 表示运行在 Docker 镜像里。镜像的目录布局和完整包一样，但 /app
+	// 对运行用户只读、重建容器也会丢掉替换结果，升级只能靠拉新镜像。
+	Container bool
 	// Mirror 在直连 GitHub 慢或不通时给下载地址套一层加速前缀；nil 表示始终直连。
 	Mirror MirrorResolver
 
@@ -302,6 +305,8 @@ func NewReleasePackageUpdater(options ReleasePackageOptions) (*ReleasePackageUpd
 	switch {
 	case options.Disable:
 		u.unsupportedWhy = "deployment explicitly disabled package replacement"
+	case options.Container:
+		u.unsupportedWhy = "Docker images are updated by pulling a new image"
 	case goos != "darwin" && goos != "linux" && goos != "windows":
 		u.unsupportedWhy = "unsupported operating system " + goos
 	case filepath.Base(absExecutable) != u.binaryName:
@@ -538,7 +543,7 @@ func (u *ReleasePackageUpdater) Download(ctx context.Context, release ReleasePac
 	if err := resignMacOSPath(helperPath); err != nil {
 		log.Printf("updater: sign update helper: %v", err)
 	}
-	backupName := time.Now().UTC().Format("20060102T150405Z") + "-" + safePathComponent(u.currentVersion)
+	backupName := time.Now().UTC().Format(releaseBackupTimeLayout) + "-" + safePathComponent(u.currentVersion)
 	plan := releaseApplyPlan{
 		Schema:           1,
 		ParentPID:        os.Getpid(),
