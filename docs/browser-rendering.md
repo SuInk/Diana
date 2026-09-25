@@ -16,7 +16,7 @@
 
 ## Docker
 
-官方运行镜像预装 Chromium、fontconfig 和 Noto CJK 字体，并以 UID 10001 运行 Diana：入口以 root 启动，把挂进来的 `data/`、`logs/` 交给 UID 10001（Linux 上 Docker 自动创建的宿主机目录归 root，不修正就写不进数据库和日志），再降权启动主程序；用 `--user` 指定用户时跳过这一步，权限由部署方负责。仓库的 `docker-compose.yml` 默认拉取预构建镜像，已配置专用 seccomp 规则。首次在部署目录执行一键脚本，自动下载 Compose 文件与 `scripts/docker/chromium-seccomp.json` 并启动（需已安装并启动 Docker，含 Compose v2）：
+官方运行镜像预装 Chromium、fontconfig 和 Noto CJK 字体，并以 UID 10001 运行 Diana：入口以 root 启动，把挂进来的 `data/` 交给 UID 10001（Linux 上 Docker 自动创建的宿主机目录归 root，不修正就写不进数据库和日志），再降权启动主程序；用 `--user` 指定用户时跳过这一步，权限由部署方负责。仓库的 `docker-compose.yml` 默认拉取预构建镜像，已配置专用 seccomp 规则。首次在部署目录执行一键脚本，自动下载 Compose 文件与 `scripts/docker/chromium-seccomp.json` 并启动（需已安装并启动 Docker，含 Compose v2）：
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/docker.sh | sh
@@ -34,7 +34,7 @@ docker compose pull && docker compose up -d
 docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
 ```
 
-已有 `docker run --name diana` 部署迁移到 Compose 时，先确认 Compose 使用原来的 `data/`、`logs/` 和可选配置文件路径，再停止并删除旧容器（保留宿主机数据目录），以免同名容器冲突。
+已有 `docker run --name diana` 部署迁移到 Compose 时，先确认 Compose 使用原来的 `data/` 和可选配置文件路径（新部署只挂 `data/`，配置文件放在 `data/config.yaml`），再停止并删除旧容器（保留宿主机数据目录），以免同名容器冲突。
 
 seccomp 配置必须保存在宿主机，Docker 在创建容器时读取它；它不是挂载给应用的配置文件。旧版尚未包含预装浏览器，需要升级到包含浏览器的镜像。
 

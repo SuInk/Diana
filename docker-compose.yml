@@ -11,18 +11,13 @@ services:
     ports:
       - "18080:18080"
     volumes:
-      # data 目录放 SQLite（配置、管理员凭据、插件状态）、入站图片缓存、
-      # 插件与技能、MCP 配置、浏览器与编码 CLI 登录态和升级备份，
-      # 不挂出来的话容器重建就全丢了。
+      # 要持久化的东西全在这一个目录里，不挂出来的话容器重建就全丢了：
+      #   diana.db          SQLite（配置、管理员凭据、插件状态）
+      #   logs/diana.log    运行日志（按 20 MiB 轮转，保留 5 份）
+      #   config.yaml       可选。复制 config.example.yaml 改好放进来；没有也能起，
+      #                     打开 WebUI 走安装向导即可。基础设施段每次启动生效，
+      #                     bot/llm 段只在数据库为空时播种一次，之后以 WebUI 为准。
+      #   其余              媒体缓存、插件与技能、MCP 配置、浏览器与编码 CLI 登录态、
+      #                     ytb_cookies.txt、升级备份
+      # 目录不存在时由 Docker 以 root 创建，容器启动时会自动交给运行用户（UID 10001）。
       - ./data:/app/data
-      # 运行日志 logs/diana.log（按 20 MiB 轮转，保留 5 份）。
-      # 两个目录不存在时由 Docker 以 root 创建，容器启动时会自动交给运行用户。
-      - ./logs:/app/logs
-      # 配置文件。复制 config.example.yaml 改好再挂进来；不挂也能起，
-      # 打开 WebUI 走安装向导即可。
-      # - ./config.yaml:/app/config.yaml:ro
-    environment:
-      # 唯一需要的环境变量：告诉进程去哪找配置文件。其余配置一律写在
-      # config.yaml 里——基础设施段每次启动生效，bot/llm 段只在数据库为空时
-      # 播种一次，之后以 WebUI 里的配置为准。
-      DIANA_CONFIG: "/app/config.yaml"

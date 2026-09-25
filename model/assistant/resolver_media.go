@@ -319,16 +319,30 @@ func resolverCookieHeaderASCII(value string) bool {
 	return true
 }
 
+// defaultYTDLPCookiesPaths 是约定的 yt-dlp cookies 位置：工作目录优先，其次是
+// 数据目录（APP_DB_PATH 所在目录）。Docker 只挂数据目录，文件放那里才能跨容器保留，
+// yt-dlp 回写 cookie 时也有权限。
+func defaultYTDLPCookiesPaths() []string {
+	var paths []string
+	if path, err := filepath.Abs("ytb_cookies.txt"); err == nil {
+		paths = append(paths, path)
+	}
+	if dbPath := strings.TrimSpace(os.Getenv("APP_DB_PATH")); dbPath != "" {
+		if path, err := filepath.Abs(filepath.Join(filepath.Dir(dbPath), "ytb_cookies.txt")); err == nil && (len(paths) == 0 || path != paths[0]) {
+			paths = append(paths, path)
+		}
+	}
+	return paths
+}
+
 func defaultYTDLPCookiesPath() string {
-	path, err := filepath.Abs("ytb_cookies.txt")
-	if err != nil {
-		return ""
+	for _, path := range defaultYTDLPCookiesPaths() {
+		info, err := os.Stat(path)
+		if err == nil && !info.IsDir() && info.Size() > 0 {
+			return path
+		}
 	}
-	info, err := os.Stat(path)
-	if err != nil || info.IsDir() || info.Size() == 0 {
-		return ""
-	}
-	return path
+	return ""
 }
 
 func downloadDouyinVideoFile(ctx context.Context, raw string) string {

@@ -2,7 +2,7 @@
 # Copyright (c) 2025-now SuInk.
 # Licensed under the Limited Redistribution License in the repository root.
 
-# 容器入口：以 root 起步，只做一件事——把挂进来的数据和日志目录交给运行用户，
+# 容器入口：以 root 起步，只做一件事——把挂进来的数据目录交给运行用户，
 # 然后降权到 diana 再启动主程序。
 #
 # Linux 上 bind mount 的宿主机目录不存在时由 Docker 以 root:root 0755 创建，
@@ -14,7 +14,7 @@
 set -eu
 
 if [ "$(id -u)" = 0 ]; then
-  for dir in /app/data /app/data/home /app/logs; do
+  for dir in /app/data /app/data/home; do
     mkdir -p "$dir" 2>/dev/null || true
     if [ "$(stat -c %u:%g "$dir")" != "10001:10001" ]; then
       # NFS root_squash 等场景 root 也改不了属主：照常启动，由主程序报出

@@ -238,9 +238,9 @@ func TestLoadAppConfigTreatsMissingFileAsDefaults(t *testing.T) {
 // TestLoadAppConfigLogPathFromEnvironment Docker 镜像靠 DIANA_LOG_PATH 把日志
 // 写进挂出来的目录；config.yaml 里写了 log_path 时以配置为准。
 func TestLoadAppConfigLogPathFromEnvironment(t *testing.T) {
-	t.Setenv(logPathEnv, "/app/logs/diana.log")
+	t.Setenv(logPathEnv, "/app/data/logs/diana.log")
 	cfg, err := loadAppConfig(filepath.Join(t.TempDir(), "absent.yaml"))
-	if err != nil || cfg.Storage.LogPath != "/app/logs/diana.log" {
+	if err != nil || cfg.Storage.LogPath != "/app/data/logs/diana.log" {
 		t.Fatalf("missing config: log path = %q, err = %v", cfg.Storage.LogPath, err)
 	}
 	path := filepath.Join(t.TempDir(), "config.yaml")
@@ -255,7 +255,7 @@ func TestLoadAppConfigLogPathFromEnvironment(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg, err = loadAppConfig(path)
-	if err != nil || cfg.Storage.LogPath != "/app/logs/diana.log" {
+	if err != nil || cfg.Storage.LogPath != "/app/data/logs/diana.log" {
 		t.Fatalf("unset in config: log path = %q, err = %v", cfg.Storage.LogPath, err)
 	}
 }
@@ -302,6 +302,31 @@ func TestResolveConfigPathPrefersExplicitFlag(t *testing.T) {
 	}
 	if got := resolveConfigPath(nil); got != "/from/env.yaml" {
 		t.Fatalf("path = %q", got)
+	}
+}
+
+// TestResolveConfigPathFallsBackToDataDir Docker 只挂 /app/data：配置文件放在
+// data/config.yaml 也要能找到，但工作目录里的 config.yaml（旧部署的挂载位置）优先。
+func TestResolveConfigPathFallsBackToDataDir(t *testing.T) {
+	t.Setenv(configPathEnv, "")
+	t.Chdir(t.TempDir())
+	if got := resolveConfigPath(nil); got != "" {
+		t.Fatalf("empty directory: path = %q", got)
+	}
+	if err := os.MkdirAll("data", 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dataDirConfigPath, []byte("server: {}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := resolveConfigPath(nil); got != dataDirConfigPath {
+		t.Fatalf("data dir: path = %q, want %q", got, dataDirConfigPath)
+	}
+	if err := os.WriteFile(defaultConfigFileName, []byte("server: {}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := resolveConfigPath(nil); got != defaultConfigFileName {
+		t.Fatalf("working directory: path = %q, want %q", got, defaultConfigFileName)
 	}
 }
 
