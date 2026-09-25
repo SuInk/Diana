@@ -68,16 +68,20 @@ func TestDoctorResolvesPathsLikeServerInDocker(t *testing.T) {
 	// The frontend is absent in the fixture, so doctor reports a failure; only
 	// the path checks matter here.
 	_ = runDoctorCommand([]string{"--config", filepath.Join("data", "config.yaml")}, &output)
-	want, err := filepath.EvalSymlinks(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, line := range []string{
-		"[ok]   database directory writable: " + filepath.Join(want, "data"),
-		"[ok]   log directory writable: " + filepath.Join(want, "data", "logs"),
+	// Compare by file identity: on macOS the temp dir sits behind the
+	// /var -> /private/var symlink, so the printed path and root may differ
+	// as strings while naming the same directory.
+	for _, check := range []struct{ prefix, want string }{
+		{"[ok]   database directory writable: ", filepath.Join(root, "data")},
+		{"[ok]   log directory writable: ", filepath.Join(root, "data", "logs")},
 	} {
-		if !strings.Contains(output.String(), line) {
-			t.Errorf("doctor output is missing %q:\n%s", line, output.String())
+		got, ok := doctorLinePath(output.String(), check.prefix)
+		if !ok {
+			t.Errorf("doctor output is missing %q:\n%s", check.prefix, output.String())
+			continue
+		}
+		if !filepath.IsAbs(got) || !sameDirectory(t, got, check.want) {
+			t.Errorf("doctor checked %q, want %q:\n%s", got, check.want, output.String())
 		}
 	}
 }
@@ -121,4 +125,26 @@ func TestInstanceLockRejectsSecondInstanceOnSameData(t *testing.T) {
 		t.Fatalf("lock should be free after release: %v", err)
 	}
 	second.Release()
+}
+
+func doctorLinePath(output, prefix string) (string, bool) {
+	for _, line := range strings.Split(output, "\n") {
+		if path, ok := strings.CutPrefix(line, prefix); ok {
+			return path, true
+		}
+	}
+	return "", false
+}
+
+func sameDirectory(t *testing.T, a, b string) bool {
+	t.Helper()
+	infoA, err := os.Stat(a)
+	if err != nil {
+		return false
+	}
+	infoB, err := os.Stat(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return os.SameFile(infoA, infoB)
 }
