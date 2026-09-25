@@ -334,13 +334,9 @@ func (p *registryFailoverLLMProvider) Generate(ctx context.Context, req llm.Gene
 	return nil, lastErr
 }
 
-// Stream preserves the registry streaming path while applying ordered
-// provider failover to failures that happen before a stream is established.
-// Errors emitted after the channel starts are handled by streamingLLMProvider:
-// it discards the buffered failed stream and retries through Generate, which
-// keeps partial output from leaking or being duplicated.
 // skipRejectedCandidate 把当前候选往后挪一位，返回是否还有别的候选可切。它服务于
-// 流式路径：流在当前候选上正常打开，正文却是拦截，这时 current 正指着那个候选。
+// 流式路径：流在当前候选上正常打开，正文却是拦截或读流时才报错，这时 current
+// 正指着那个候选。
 func (p *registryFailoverLLMProvider) skipRejectedCandidate(cause error) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -363,6 +359,16 @@ func (p *registryFailoverLLMProvider) skipRejectedCandidate(cause error) bool {
 	return true
 }
 
+func (p *registryFailoverLLMProvider) candidateCount() int {
+	return len(p.candidates)
+}
+
+// Stream preserves the registry streaming path while applying ordered
+// provider failover to failures that happen before a stream is established.
+// Errors emitted after the channel starts are handled by streamingLLMProvider:
+// it discards the buffered failed stream, then either streams again from the
+// next candidate (via skipRejectedCandidate) or retries through Generate, which
+// keeps partial output from leaking or being duplicated.
 func (p *registryFailoverLLMProvider) Stream(ctx context.Context, req llm.GenerateRequest) (<-chan llm.ChatEvent, error) {
 	ctx = withLLMEventReporter(ctx, p.report)
 	p.mu.Lock()
