@@ -80,9 +80,6 @@ func (r *Runtime) memoryContextWithProfile(ctx context.Context, event MessageEve
 			Reason:         reason,
 		}
 	}
-	if !boolValue(cfg.LongTermMemoryEnabled, true) {
-		return coreOnly(contextLayerReasonFits)
-	}
 	r.mu.RLock()
 	store := r.structuredMemory
 	r.mu.RUnlock()
@@ -819,10 +816,6 @@ func (r *Runtime) sessionThreadNote(ctx context.Context, event MessageEvent) str
 }
 
 func (r *Runtime) sessionThreadNoteDetailed(ctx context.Context, event MessageEvent) (string, *StructuredMemoryItem) {
-	cfg := r.effectiveConfigForEvent(event)
-	if !boolValue(cfg.LongTermMemoryEnabled, true) {
-		return "", nil
-	}
 	r.mu.RLock()
 	store := r.structuredMemory
 	r.mu.RUnlock()

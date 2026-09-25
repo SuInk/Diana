@@ -58,7 +58,6 @@ func newDisabledGroupSkipHarness(t *testing.T, base BotConfig, groupEnabled bool
 	base.OwnerID = "owner"
 	base.CrossGroupMemoryEnabled = boolPointer(true)
 	base.ExpressionLearningEnabled = boolPointer(true)
-	base.LongTermMemoryEnabled = boolPointer(true)
 
 	provider := &countingRouterProvider{}
 	runtime := NewRuntime(base, nilChannel{}, NewPluginManager(), nil, nil, nil,

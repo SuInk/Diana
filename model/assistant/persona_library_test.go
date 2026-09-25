@@ -10,10 +10,10 @@ import (
 	"time"
 )
 
-func TestPersonaExpressionBundlePreservesDaypartAndExistingEntries(t *testing.T) {
-	original := Persona{ID: "diana", Name: "Diana", SystemPrompt: "已写好的 Diana 自定义提示词", ReplyStyle: ReplyStyleHuman, DaypartToneEnabled: boolPointer(true)}
+func TestPersonaSaveKeepsExistingEntriesAndFoldsLegacyFields(t *testing.T) {
+	original := Persona{ID: "diana", Name: "Diana", SystemPrompt: "已写好的 Diana 自定义提示词"}
 	set := PersonaSet{Personas: []Persona{original}}
-	next, saved, err := set.Save(Persona{Name: "Diana（副本）", SystemPrompt: original.SystemPrompt, ReplyStyle: ReplyStyleCatgirl, ActionDescriptionEnabled: boolPointer(true), DaypartToneEnabled: boolPointer(false)}, time.Now())
+	next, saved, err := set.Save(Persona{Name: "Diana（副本）", SystemPrompt: original.SystemPrompt, SelfReference: "本喵", ActionDescriptionEnabled: boolPointer(true)}, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -26,47 +26,45 @@ func TestPersonaExpressionBundlePreservesDaypartAndExistingEntries(t *testing.T)
 		t.Fatal(err)
 	}
 	old, ok := restored.Find("diana")
-	if !ok || old.SystemPrompt != original.Normalized().SystemPrompt || old.ReplyStyle != "" || !boolValue(old.DaypartToneEnabled, false) {
+	if !ok || old.SystemPrompt != original.SystemPrompt {
 		t.Fatal("existing persona changed")
 	}
 	copy, ok := restored.Find(saved.ID)
-	if !ok || copy.DaypartToneEnabled == nil || *copy.DaypartToneEnabled || !boolValue(copy.ActionDescriptionEnabled, false) {
-		t.Fatal("expression settings lost")
+	if !ok || !strings.Contains(copy.SystemPrompt, "自称偏好是「本喵」") || !strings.Contains(copy.SystemPrompt, legacyActionDescriptionPrompt) {
+		t.Fatalf("legacy expression settings were not folded into SOUL.md: %q", copy.SystemPrompt)
 	}
-	legacy := original
-	legacy.DaypartToneEnabled = nil
-	if legacy.sameContent(original) {
-		t.Fatal("import deduplicates different daypart behavior")
-	}
-	cloned := original.Normalized()
-	*cloned.DaypartToneEnabled = false
-	if !*original.DaypartToneEnabled {
-		t.Fatal("normalization aliases source setting")
+	if copy.SelfReference != "" || copy.ActionDescriptionEnabled != nil {
+		t.Fatalf("legacy fields were not cleared: %#v", copy)
 	}
 }
 
-func TestPersonaSelectionPersistsCustomWithoutRewriting(t *testing.T) {
-	custom := &Persona{ID: "custom", Name: "自定义", SystemPrompt: "已写好的自定义正文\n第二行", DaypartToneEnabled: boolPointer(true)}
-	cfg := BotConfig{PersonaID: "preset", SystemPrompt: "预设正文", CustomPersona: custom}.WithDefaults()
-	data, err := json.Marshal(PayloadFromConfig(cfg))
-	if err != nil {
-		t.Fatal(err)
+func TestPersonaSaveRejectsBuiltinAndNamesFromTitle(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	var set PersonaSet
+	if _, _, err := set.Save(Persona{ID: "builtin:jiaran", Name: "嘉然", SystemPrompt: "改一下"}, now); err == nil {
+		t.Fatal("builtin persona was overwritten")
 	}
-	var payload ConfigPayload
-	if err = json.Unmarshal(data, &payload); err != nil {
-		t.Fatal(err)
+	_, saved, err := set.Save(Persona{SystemPrompt: "# 小满\n\n她说话很慢。"}, now)
+	if err != nil || saved.Name != "小满" {
+		t.Fatalf("title was not used as the name: %#v err=%v", saved, err)
 	}
-	restored := ConfigFromPayload(payload, BotConfig{}).WithDefaults()
-	if restored.PersonaID != "preset" || restored.CustomPersona.SystemPrompt != custom.SystemPrompt || restored.SystemPrompt != "预设正文" {
-		t.Fatal("persona selection or custom snapshot lost")
+}
+
+func TestBuiltinPersonasAreSoulDocuments(t *testing.T) {
+	personas := BuiltinPersonas()
+	if len(personas) == 0 || personas[0].ID != "builtin:default" || personas[0].SystemPrompt != defaultSystemPrompt {
+		t.Fatalf("default builtin must come first and match the fallback: %#v", personas[0].ID)
 	}
-	*restored.CustomPersona.DaypartToneEnabled = false
-	if !*custom.DaypartToneEnabled {
-		t.Fatal("custom snapshot aliases source")
-	}
-	legacy := BotConfig{SystemPrompt: "历史自定义提示词"}.WithDefaults()
-	if legacy.PersonaID != "" || legacy.SystemPrompt != "历史自定义提示词" {
-		t.Fatal("legacy config reclassified or rewritten")
+	for _, persona := range personas {
+		if !persona.Builtin || persona.Name == "" || !strings.HasPrefix(persona.SystemPrompt, "# "+persona.Name) {
+			t.Fatalf("builtin %s is not a titled SOUL.md", persona.ID)
+		}
+		if runes := len([]rune(persona.SystemPrompt)); runes > personaPromptMaxRunes {
+			t.Fatalf("builtin %s is %d runes, over the %d limit", persona.ID, runes, personaPromptMaxRunes)
+		}
+		if !IsBuiltinPersonaID(persona.ID) {
+			t.Fatalf("%s is not recognised as builtin", persona.ID)
+		}
 	}
 }
 
@@ -75,8 +73,8 @@ func TestLegacyRoleplayPersonaMigratesToAssistantWithActions(t *testing.T) {
 	if persona.ReplyStyle != "" {
 		t.Fatalf("旧人设迁移后的表达风格 = %q", persona.ReplyStyle)
 	}
-	if !boolValue(persona.ActionDescriptionEnabled, false) {
-		t.Fatal("旧人设没有迁移为动作描写开关")
+	if !strings.Contains(persona.SystemPrompt, legacyActionDescriptionPrompt) {
+		t.Fatal("旧人设没有把动作描写并进 SOUL.md")
 	}
 }
 
@@ -105,43 +103,6 @@ func TestPersonaSetSaveAddsAndUpdates(t *testing.T) {
 	}
 	if !strings.HasPrefix(updated.SystemPrompt, "你是一只猫\n\n") || !updated.UpdatedAt.After(saved.UpdatedAt) {
 		t.Fatalf("updated = %#v", updated)
-	}
-}
-
-// persona_version 只在内容变了时加一：原样再存一次不涨，品格和提示词改了也算改。
-func TestPersonaVersionBumpsOnlyOnContentChange(t *testing.T) {
-	now := time.Unix(1_700_000_000, 0)
-	set, saved, err := PersonaSet{}.Save(Persona{Name: "猫娘", SystemPrompt: "你是一只猫"}, now)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if saved.Version != 1 {
-		t.Fatalf("new persona version = %d, want 1", saved.Version)
-	}
-	set, same, err := set.Save(saved, now.Add(time.Minute))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if same.Version != 1 {
-		t.Fatalf("identical save bumped version to %d", same.Version)
-	}
-	edited := same
-	edited.Prompts = PromptOverrides{promptWakeOnlySpec.Key: "叫我就接着说"}
-	set, edited, err = set.Save(edited, now.Add(2*time.Minute))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if edited.Version != 2 {
-		t.Fatalf("prompt change version = %d, want 2", edited.Version)
-	}
-	withSoul := edited
-	withSoul.Soul = testSoul()
-	_, withSoul, err = set.Save(withSoul, now.Add(3*time.Minute))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if withSoul.Version != 3 {
-		t.Fatalf("soul change version = %d, want 3", withSoul.Version)
 	}
 }
 

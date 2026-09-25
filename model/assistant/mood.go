@@ -101,7 +101,7 @@ func (r *Runtime) moodScore(profileID string, now time.Time) float64 {
 
 // moodToneForConfig 返回本轮要注入的心情语气，平静时返回空串。
 //
-// 注入点和时段语气同一批：两者都是「怎么说」，离生成越近越管用；心情几小时才
+// 注入点紧挨着语气锚点：它是「怎么说」，离生成越近越管用；心情几小时才
 // 变一档，不会打散前缀缓存。
 func (r *Runtime) moodToneForConfig(cfg BotConfig, profileID string) string {
 	if !boolValue(cfg.MoodEnabled, false) {

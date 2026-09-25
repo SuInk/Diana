@@ -31,7 +31,7 @@ func participationDecisionSpec(overrides PromptOverrides) *llm.DecisionSpec {
 			Key:          "chat_in",
 			Kind:         llm.DecisionScore,
 			Label:        "闲聊适合度",
-			Instructions: "没人找机器人时，机器人插一句是否自然。\n" + overrides.text(promptParticipationChatInNoteSpec) + "\n" + overrides.text(promptParticipationSharedNoteSpec),
+			Instructions: "没人找机器人时，机器人插一句是否自然。\n" + participationWillingnessPrompt(overrides) + "\n" + overrides.text(promptParticipationChatInNoteSpec) + "\n" + overrides.text(promptParticipationSharedNoteSpec),
 			Levels:       participationChatInLevels,
 			LevelValues:  participationChatInLevelValues,
 			Min:          0,

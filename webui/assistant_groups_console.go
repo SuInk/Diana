@@ -749,7 +749,6 @@ func (h *BotHandler) saveConsoleGroup(c *gin.Context) {
 		h.writeError(c, http.StatusBadRequest, "groups_save", err, groupID, map[string]any{"group_id": groupID})
 		return
 	}
-	cfg = h.resolveGroupPersonaLink(c.Request.Context(), cfg)
 	// 群配置跟随它自己那台机器人：拿运行时当前配置当 base，会把另一台的人设和
 	// 默认值写进这个群。
 	base := h.botConfigForProfile(profileID)

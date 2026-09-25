@@ -9,7 +9,7 @@
         <span class="track" aria-hidden="true"></span>
         <span class="switch-label">为本群单独设置回复规则</span>
       </label>
-      <p class="muted" style="margin-top: 4px">关闭时完全跟随全局。打开后等级和时段由本群说了算，但三个用户名单始终是全局加本群的并集——不会因为在这里配了东西就把全局屏蔽名单丢掉。</p>
+      <p class="hint" style="margin: 4px 0 0">关闭时完全跟随全局。打开后等级和时段由本群说了算，但三个用户名单始终是全局加本群的并集——不会因为在这里配了东西就把全局屏蔽名单丢掉。</p>
     </div>
 
     <div v-if="!allowInherit || custom" class="form-grid">
@@ -22,7 +22,7 @@
           :value="gate.min_group_level ?? 0"
           @input="patch({ min_group_level: numberOf($event) })"
         />
-        <p class="muted" style="margin-top: 4px">0 表示不限。指群内活跃度等级（Lv.1~6），不是账号等级。</p>
+        <p class="hint" style="margin: 4px 0 0">0 表示不限。指群内活跃度等级（Lv.1~6），不是账号等级。</p>
       </div>
 
       <div v-if="showGroupLevel" class="field">
@@ -33,7 +33,7 @@
           :options="unknownPolicyOptions"
           @update:model-value="patch({ level_unknown_policy: $event as 'allow' | 'deny' })"
         />
-        <p class="muted" style="margin-top: 4px">
+        <p class="hint" style="margin: 4px 0 0">
           部分 OneBot 实现不提供群等级。选「拦截」会让这些实现下的群整体静音，除非确认你的实现能返回等级。
         </p>
       </div>
@@ -102,7 +102,7 @@
             :value="gate.quiet_reply ?? ''"
             @input="patch({ quiet_reply: valueOf($event) })"
           />
-          <p class="muted" style="margin-top: 4px">同一会话每小时最多提示一次，避免刷屏。</p>
+          <p class="hint" style="margin: 4px 0 0">同一会话每小时最多提示一次，避免刷屏。</p>
         </div>
       </template>
 
@@ -116,7 +116,7 @@
           <span class="track" aria-hidden="true"></span>
           <span class="switch-label">{{ supportsGroupLevel ? "主人不受时段与等级限制" : "主人不受时段限制" }}</span>
         </label>
-        <p class="muted" style="margin-top: 4px">建议保持开启，否则配置写错时你自己也会被挡在门外。</p>
+        <p class="hint" style="margin: 4px 0 0">建议保持开启，否则配置写错时你自己也会被挡在门外。</p>
       </div>
 
       <div class="field wide">
@@ -127,7 +127,7 @@
           :options="userAdmissionOptions"
           @update:model-value="patch({ user_admission: $event as 'blacklist' | 'whitelist' })"
         />
-        <p class="muted" style="margin-top: 4px">
+        <p class="hint" style="margin: 4px 0 0">
           白名单是「只回名单里的人」，和下面的豁免不是一回事——豁免只是绕过{{ supportsGroupLevel ? "等级和时段" : "时段" }}门槛，人仍然要先过准入。
           主人不受白名单限制。
         </p>
@@ -142,7 +142,7 @@
           :resolve-names="resolveAccountNames"
           @update:model-value="patch({ allowed_users: $event })"
         />
-        <p class="muted" style="margin-top: 4px">
+        <p class="hint" style="margin: 4px 0 0">
           只回这些账号，名单外一律不回，连静默提示也不发。留空等于谁都不回。
         </p>
       </div>
@@ -156,7 +156,7 @@
           :resolve-names="resolveAccountNames"
           @update:model-value="patch({ exempt_users: $event })"
         />
-        <p class="muted" style="margin-top: 4px">{{ supportsGroupLevel ? "无视等级与时段门槛。" : "无视时段门槛。" }}</p>
+        <p class="hint" style="margin: 4px 0 0">{{ supportsGroupLevel ? "无视等级与时段门槛。" : "无视时段门槛。" }}</p>
       </div>
 
       <div class="field">
@@ -168,7 +168,7 @@
           :resolve-names="resolveAccountNames"
           @update:model-value="patch({ blocked_users: $event })"
         />
-        <p class="muted" style="margin-top: 4px">{{ allowInherit ? "在全局屏蔽名单之外，本群额外不回复这些账号。" : "群聊和私聊都不回复。" }}</p>
+        <p class="hint" style="margin: 4px 0 0">{{ allowInherit ? "在全局屏蔽名单之外，本群额外不回复这些账号。" : "群聊和私聊都不回复。" }}</p>
       </div>
     </div>
   </div>

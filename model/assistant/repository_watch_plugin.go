@@ -317,7 +317,7 @@ func (p *RepositoryWatchPlugin) Manifest() PluginManifest {
 	return PluginManifest{
 		ID:            repositoryWatchPluginID,
 		Name:          "仓库订阅",
-		Version:       "0.2.8",
+		Version:       "0.2.9",
 		Description:   "在 WebUI 监控公开或私有 GitHub 仓库的 Commit、PR、Issue、Release 与 Star；检测到动态后生成事实摘要并通知指定群聊或私聊对象。",
 		Official:      true,
 		BuiltIn:       true,
@@ -386,6 +386,17 @@ func (p *RepositoryWatchPlugin) Manifest() PluginManifest {
 				Max:         settingRange(300),
 				Step:        1,
 				Unit:        "秒",
+			},
+			{
+				Key:         recurringFailureAlertSettingKey,
+				Label:       "连续失败几次才报",
+				Description: "订阅连着失败到这个次数才在聊天里说一声，一轮故障只报一次，恢复后再说一声好了。抖一下就报警只会让人不再看这类消息。报不报看下面的「发送错误通知」和机器人配置里的「出错时在聊天里提示」，任一关着都不报。",
+				Type:        PluginSettingTypeNumber,
+				Default:     defaultRecurringFailureAlertThreshold,
+				Min:         settingRange(1),
+				Max:         settingRange(maxRecurringFailureAlertThreshold),
+				Step:        1,
+				Unit:        "次",
 			},
 			{
 				Key:         repositoryWatchSettingLimit,

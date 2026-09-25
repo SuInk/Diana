@@ -41,7 +41,7 @@ func TestCrossPlatformMemoryRequiresMutualOptIn(t *testing.T) {
 	if got := r.crossPlatformMemoryPrefixes(event, target); !reflect.DeepEqual(got, []string{"tg:group:"}) {
 		t.Fatalf("eligible namespaces=%v", got)
 	}
-	for _, test := range []string{"target-off", "source-off", "source-disabled", "source-memory-off", "target-memory-off", "private", "unisolated"} {
+	for _, test := range []string{"target-off", "source-off", "source-disabled", "private", "unisolated"} {
 		t.Run(test, func(t *testing.T) {
 			cfg, sourceCfg, next := target, source, event
 			switch test {
@@ -51,10 +51,6 @@ func TestCrossPlatformMemoryRequiresMutualOptIn(t *testing.T) {
 				sourceCfg.CrossPlatformMemoryEnabled = boolPointer(false)
 			case "source-disabled":
 				sourceCfg.Enabled = false
-			case "source-memory-off":
-				sourceCfg.LongTermMemoryEnabled = boolPointer(false)
-			case "target-memory-off":
-				cfg.LongTermMemoryEnabled = boolPointer(false)
 			case "private":
 				next.Kind = EventKindPrivate
 			case "unisolated":

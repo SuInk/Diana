@@ -136,8 +136,6 @@ export interface MessageRelayPair {
 /** 群退避与入站重跑参数见 SendRetrySettings；机器人级 0 或留空按默认值。 */
 export interface BotProfileConfig extends SendRetrySettings {
   connection_profile_id?: string;
-  persona_id?: string;
-  custom_persona?: Persona;
   marked_bot_ids?: string[];
   participation?: import("./participation").ParticipationPreferences;
   id?: string;
@@ -211,7 +209,6 @@ export interface BotProfileConfig extends SendRetrySettings {
   /** 拒答话术；不设等同 smart（由模型按语境判断说不说原因）。 */
   refusal_strategy?: RefusalStrategy;
   /** 语气跟随一天的时间变化（深夜话少、清早迷糊、晚上松弛）；不设等同关闭。 */
-  daypart_tone_enabled?: boolean;
   /** 流式调用模型，用于统计首 token 时间；回复仍是攒齐了再发。不设等同关闭。 */
   llm_streaming_enabled?: boolean;
   disabled_groups?: string[];
@@ -229,23 +226,9 @@ export interface BotProfileConfig extends SendRetrySettings {
   welcome_templates?: string[];
   /** LLM 欢迎词每群冷却秒数；不设用默认值 300。 */
   welcome_llm_cooldown_seconds?: number;
+  /** 这台机器人的 SOUL.md：她是谁、在乎什么、怎么说话。整份原样放在系统提示词最前面。 */
   system_prompt?: string;
-  /** 品格层：身份、价值、硬边界。排在系统提示词最前面，分群覆盖动不了它。 */
-  soul?: PersonaSoul;
-  /**
-   * 人设正文和界面控件谁说了算。
-   *
-   * fill（默认）＝填空题：正文只写角色，自称、句尾语气词、动作描写、答多长这些由
-   * 控件和运行时负责，正文里的段头不生效。own＝接管：正文用段头声明哪几段自己写，
-   * 运行时对那几段让位，界面上对应的控件停用。不填按 fill 处理。
-   */
-  persona_mode?: "fill" | "own";
   response_mode?: "quiet" | "assistant" | "standard" | "active" | "super_active" | "custom";
-  action_description_enabled?: boolean;
-  /** 机器人怎么称呼自己；留空跟随人设。 */
-  self_reference?: string;
-  /** 句尾语气词候选，逗号分隔。填多个由模型按当下语气挑，留空跟随人设。 */
-  sentence_enders?: string;
   /** 记录完整模型上下文、工具参数和调用结果；默认关闭。 */
   debug_mode_enabled?: boolean;
   /** 回复行为个性化：on 每条都带、off 从不带、auto 交给模型自己判断；缺省等价于 on。 */
@@ -269,7 +252,6 @@ export interface BotProfileConfig extends SendRetrySettings {
   error_reply_prefix?: string;
   send_retry_attempts?: number;
   /** 周期订阅（RSS、定时查询、仓库订阅）连续失败几次才报一次警。留空按 5 次，0 表示出错不通知。 */
-  recurring_failure_alert_threshold?: number;
   send_chunk_interval_ms?: number;
   private_closing_grace?: number;
   inbound_group_concurrency?: number;
@@ -350,7 +332,6 @@ export interface BotProfileConfig extends SendRetrySettings {
   /** 断线或重启后，每个会话最多补处理最近多少条消息；默认 3，最大 100。 */
   history_backfill_message_limit?: number;
   /** 持久化提取稳定事实、偏好和会话摘要；缺省等价于开启。 */
-  long_term_memory_enabled?: boolean;
   /** 允许在同一机器人下检索其他群的非敏感记忆和聊天历史；缺省关闭。 */
   cross_group_memory_enabled?: boolean;
   cross_platform_memory_enabled?: boolean;
@@ -526,17 +507,10 @@ export interface BotGroupConfig extends SendRetrySettings {
   group_triggers?: string[];
   /** 本群触发称呼的匹配松紧；空串或不设表示沿用全局配置。 */
   group_trigger_mode?: AliasTriggerMode | "";
-  /** 绑定的人设库条目；绑定时人设各项由人设库同步，库里改了自动更新。 */
-  persona_id?: string;
-  /** 群专属人设；留空沿用全局系统提示词。 */
+  /** 本群的 SOUL.md，整份替换机器人的；留空沿用机器人的。 */
   system_prompt?: string;
   /** 兼容旧版回复模式；新界面统一映射为回复欲望。 */
   response_mode?: "" | "quiet" | "assistant" | "standard" | "active" | "super_active" | "custom";
-  /** 本群是否穿插括号动作；不设表示跟随机器人。 */
-  action_description_enabled?: boolean;
-  /** 留空时跟随机器人全局设置。 */
-  self_reference?: string;
-  sentence_enders?: string;
   welcome_enabled?: boolean;
   welcome_message?: string;
   /** 欢迎词模式：fixed 固定文本 / template 模板池随机 / llm 按人设实时生成；不设等同 fixed。 */
@@ -1343,87 +1317,23 @@ export function testLLM(message: string, config?: LLMConfig): Promise<GenerateRe
   });
 }
 
-/** SillyTavern V2 角色卡的文本字段，和后端 assistant.CharacterCardData 一一对应。 */
-export interface CharacterCardData {
-  name: string;
-  description?: string;
-  personality?: string;
-  scenario?: string;
-  first_mes?: string;
-  mes_example?: string;
-  system_prompt?: string;
-}
-
-/** V2 角色卡封套：spec + data。生成接口按这个形状发回，导出的文件也是它。 */
-export interface CharacterCardV2 {
-  spec: string;
-  spec_version: string;
-  data: CharacterCardData;
-}
-
 export interface PersonaGenerateResponse {
+  /** 生成的 SOUL.md 全文。 */
   persona: string;
-  /** 生成正文用的那张卡；人设框里的正文是它拼出来的，导出和下次改写都要用它。 */
-  card?: CharacterCardV2;
   model?: string;
   provider?: string;
 }
 
-/**
- * 用当前已配置的模型写一张角色卡，并把拼装后的人设正文一起返回；带上 current 时
- * 是改写而不是重写。改写时把上一次那张卡（card）一起带上：正文是卡拼出来的结果，
- * 段头和展开过的宏反推不回字段，没有卡模型只能照正文重写一张。
- */
+/** 用当前已配置的模型写一份 SOUL.md；带上 current 时是改写而不是重写。 */
 export function generatePersona(
   description: string,
   name?: string,
   current?: string,
-  options?: { response_mode?: string; profile_id?: string; group?: string; model?: string; card?: CharacterCardV2 | null }
+  options?: { response_mode?: string; profile_id?: string; group?: string; model?: string }
 ): Promise<PersonaGenerateResponse> {
-  const { card, ...rest } = options ?? {};
   return requestJSON<PersonaGenerateResponse>("/api/llm/persona", {
     method: "POST",
-    body: JSON.stringify({ description, name, current, ...rest, ...(card ? { card } : {}) })
-  });
-}
-
-/** 人设检查报出的一条。 */
-export interface PersonaLintFinding {
-  /** sentence-enders | self-reference | action-description | formatting | venue */
-  code: string;
-  /** 正文里被命中的原话，后端保证能在提交的正文里逐字找到。 */
-  match: string;
-  message: string;
-}
-
-export interface PersonaReviewResponse {
-  findings: PersonaLintFinding[];
-  model?: string;
-  provider?: string;
-}
-
-/**
- * 让模型读一遍人设正文，挑出「和界面开关抢同一件事」的地方。
- *
- * 这是人设正文唯一的检查：判断的是意思不是字面，代价是一次模型往返。所以它由用户
- * 点按钮触发，signal 用来让「跳过」当场掐断请求。
- */
-export function reviewPersona(
-  text: string,
-  options?: {
-    self_reference?: string;
-    sentence_enders?: string;
-    action_description_enabled?: boolean;
-    profile_id?: string;
-    group?: string;
-    model?: string;
-  },
-  signal?: AbortSignal
-): Promise<PersonaReviewResponse> {
-  return requestJSON<PersonaReviewResponse>("/api/llm/persona/lint", {
-    method: "POST",
-    body: JSON.stringify({ text, ...(options ?? {}) }),
-    signal
+    body: JSON.stringify({ description, name, current, ...(options ?? {}) })
   });
 }
 
@@ -1514,6 +1424,32 @@ export interface PromptCatalog {
 
 export function getPromptCatalog(): Promise<PromptCatalog> {
   return requestJSON<PromptCatalog>("/api/assistant/prompts");
+}
+
+/** 把编辑器里当前的覆盖表导出成一份完整的内置提示词 YAML（每一段都列出来）。 */
+export async function exportPromptFile(overrides?: Record<string, string>): Promise<string> {
+  const response = await requestJSON<{ yaml: string }>("/api/assistant/prompts/export", {
+    method: "POST",
+    body: JSON.stringify({ overrides: overrides ?? {} })
+  });
+  return response.yaml;
+}
+
+export interface PromptFileImport {
+  /** 只含和默认值不同的段落。 */
+  overrides?: Record<string, string>;
+  changed: number;
+  /** 文件里有、这一版登记表里没有的键：拼错了，或者是旧版本删掉的提示词。 */
+  unknown?: string[];
+  diana_version?: string;
+}
+
+/** 读回一份内置提示词 YAML。只解析不保存，结果填回编辑器，保存配置时才生效。 */
+export function importPromptFile(source: string): Promise<PromptFileImport> {
+  return requestJSON<PromptFileImport>("/api/assistant/prompts/import", {
+    method: "POST",
+    body: JSON.stringify({ source })
+  });
 }
 
 export function saveBotProfileConfig(config: BotProfileConfig): Promise<BotProfileConfig> {
@@ -2886,39 +2822,12 @@ export function fetchAssistantUserNames(userIDs: string[], profile = ""): Promis
   return requestJSON<AssistantUserNamesResponse>(`/api/assistant/user-names?${params.toString()}`);
 }
 
-/** 人设的品格层：身份、价值、硬边界。只有人能改，前端只原样搬运，不逐字段编辑。 */
-export interface PersonaSoul {
-  identity?: string;
-  priority?: { order?: string[]; note?: string };
-  values?: { value: string; why?: string }[];
-  honesty?: string[];
-  self_nature?: string;
-  relationships?: { owner?: string; admins?: string; members?: string };
-  correctable?: string;
-  restraint?: string;
-  hard_limits?: { limit: string; why?: string }[];
-  on_criticism?: string;
-  on_mistake?: string;
-  open_questions?: string[];
-}
-
+/** 人设库里的一份人设，正文就是一份 SOUL.md。builtin 的是编译在程序里的内置人设，只读。 */
 export interface Persona {
-  soul?: PersonaSoul;
   id: string;
   name: string;
   system_prompt?: string;
-  /** 跟着正文走：带段头的接管正文套到填空题档上会和运行时重复。 */
-  persona_mode?: "fill" | "own";
-  action_description_enabled?: boolean;
-  daypart_tone_enabled?: boolean;
-  self_reference?: string;
-  sentence_enders?: string;
-  /** 这套人设改过的内置提示词（只存改过的），套用时整份替换机器人的 prompt_overrides。 */
-  prompts?: Record<string, string>;
-  /** 接话评分的补充判据，套用时填进机器人的 proactive_reply_extra_criteria。 */
-  extra_criteria?: string;
-  /** 账号安全规则，套用时填进机器人的 reply_account_safety_audit_prompt。 */
-  account_safety_rules?: string;
+  builtin?: boolean;
   updated_at?: string;
 }
 
@@ -2931,13 +2840,9 @@ export function listPersonas(): Promise<PersonaListResponse> {
   return requestJSON<PersonaListResponse>("/api/assistant/personas");
 }
 
-/** 人设保存结果。改已有的一套时，绑定它的机器人和群会同步更新，这里报同步了几个。 */
 export interface PersonaSaveResponse {
   persona: Persona;
   personas: Persona[];
-  bots_synced?: number;
-  groups_synced?: number;
-  warning?: string;
 }
 
 /** 带 id 是改，不带是新增。返回落库后的那一份和整库。 */
@@ -3001,30 +2906,12 @@ export function purgeSelfNotes(profile: string): Promise<SelfNoteListResult> {
   return requestJSON<SelfNoteListResult>(`/api/assistant/self-notes/purge${selfNoteQuery(profile)}`, { method: "POST" });
 }
 
-/** YAML 只能在后端解析：这里原样把文件内容发过去。JSON 文件走上面那条。 */
-export function importPersonaSource(source: string): Promise<PersonaImportResult> {
+/** 导入一份 SOUL.md：名字取第一行一级标题，没有标题用文件名。 */
+export function importPersonaSource(source: string, filename: string): Promise<PersonaImportResult> {
   return requestJSON<PersonaImportResult>("/api/assistant/personas/import", {
     method: "POST",
-    body: JSON.stringify({ source })
+    body: JSON.stringify({ source, filename })
   });
-}
-
-/** 人设渲染成 YAML：一套写在顶层，多套放进 personas。prompts 总是列出全部内置提示词。 */
-export async function renderPersonaYAML(personas: Persona[]): Promise<string> {
-  const response = await requestJSON<{ yaml: string }>("/api/assistant/personas/yaml", {
-    method: "POST",
-    body: JSON.stringify({ personas })
-  });
-  return response.yaml;
-}
-
-/** 只解析不入库：YAML 编辑器「应用」用。prompts 缺段或有不认识的键时后端直接报错。 */
-export async function parsePersonaSource(source: string): Promise<Persona[]> {
-  const response = await requestJSON<{ personas: Persona[] }>("/api/assistant/personas/parse", {
-    method: "POST",
-    body: JSON.stringify({ source })
-  });
-  return response.personas ?? [];
 }
 
 export function deletePersona(id: string): Promise<{ personas: Persona[] }> {

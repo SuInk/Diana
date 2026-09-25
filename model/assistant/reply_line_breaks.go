@@ -30,7 +30,7 @@ func configuredReplyLineBreakMode(cfg BotConfig) replyLineBreakMode {
 var promptReplyLineBreakChoiceSpec = styleSpec("line_break_choice", "本轮段落排版", "每轮都注入：用户本轮要求保留换行或连成一段时，用哪个前缀标记。"+replyMarkerUsage, replyLineBreakChoiceRule)
 
 const (
-	promptLineBreaksPreserve = "当前保留消息内部的段落换行，换行不增加发送条数；本轮明确排版要求优先。"
+	promptLineBreaksPreserve = "当前保留消息内部的段落换行，换行不增加发送条数；聊天里一条消息一般就一行，换行只留给列表、步骤和代码。本轮明确排版要求优先。"
 	promptLineBreaksCompact  = "当前收拢普通说明中的多余换行，结论、理由和必要补充写在同一段；列表、代码、表格和引用原文保留结构，本轮明确排版要求优先。"
 )
 

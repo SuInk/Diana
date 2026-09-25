@@ -16,7 +16,7 @@ import (
 // 自述的只读与清理接口。
 //
 // 写入只有机器人自己能做（对话里的 self_note 工具）：这一层的意义就是它自己记下
-// 的观察，人代笔写进去的应该进品格或人设正文。所以这里只有列出、删一条和清空——
+// 的观察，人代笔写进去的应该进 SOUL.md。所以这里只有列出、删一条和清空——
 // 主人要能看见它给自己写了什么，也要能把不对的抹掉。
 func (h *BotHandler) registerSelfNoteRoutes(router gin.IRouter, base string) {
 	router.GET(base+"/self-notes", h.listSelfNotes)

@@ -47,7 +47,7 @@ func TestLivePromptCacheTailCost(t *testing.T) {
 	}
 	stable, _ := r.stableGroupHistory(context.Background(), e, cfg, history, true, nil)
 
-	// 尾部块的尺寸照实际来：表达学习压缩后的固定文案约 195 字，时段语气约 100 字，
+	// 尾部块的尺寸照实际来：表达学习压缩后的固定文案约 195 字，
 	// 心情约 60 字。取 200 字代表「加一个这种块」。
 	block := func(turn int, varying bool) string {
 		seed := "fixed"

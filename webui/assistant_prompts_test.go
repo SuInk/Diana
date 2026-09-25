@@ -4,9 +4,11 @@
 package webui
 
 import (
+	"bytes"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -44,4 +46,34 @@ func TestPromptCatalogServesRegistry(t *testing.T) {
 		}
 	}
 	t.Fatal("wake-only prompt missing from catalog")
+}
+
+// 导出再导入：界面上的覆盖表原样回来，登记表里没有的键报出来而不是整份拒收。
+func TestPromptFileExportImport(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	handler := &BotHandler{}
+	router.POST("/export", handler.exportPromptFile)
+	router.POST("/import", handler.importPromptFile)
+	key := assistant.PromptSpecs()[0].Key
+	body, _ := json.Marshal(map[string]any{"overrides": map[string]string{key: "改过的正文"}})
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/export", bytes.NewReader(body)))
+	var exported struct {
+		YAML string `json:"yaml"`
+	}
+	if recorder.Code != http.StatusOK || json.Unmarshal(recorder.Body.Bytes(), &exported) != nil || !strings.Contains(exported.YAML, "改过的正文") {
+		t.Fatalf("export status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	source := exported.YAML + "  not.a.real.key: 多出来的\n"
+	body, _ = json.Marshal(map[string]string{"source": source})
+	recorder = httptest.NewRecorder()
+	router.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/import", bytes.NewReader(body)))
+	var imported assistant.PromptFileImport
+	if recorder.Code != http.StatusOK || json.Unmarshal(recorder.Body.Bytes(), &imported) != nil {
+		t.Fatalf("import status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if imported.Changed != 1 || imported.Overrides[key] != "改过的正文" || len(imported.Unknown) != 1 {
+		t.Fatalf("imported = %#v", imported)
+	}
 }

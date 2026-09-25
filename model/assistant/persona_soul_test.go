@@ -5,6 +5,7 @@ package assistant
 
 import (
 	"context"
+	"os"
 	"strings"
 	"testing"
 )
@@ -85,31 +86,34 @@ func TestSoulNormalizeTrimsAndCaps(t *testing.T) {
 	}
 }
 
-// 品格排在人设正文之前，而且进的是稳定头部、不是随发言者变化的尾部。
-func TestSoulRendersAheadOfPersonaInStableHead(t *testing.T) {
-	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
-	runtime.SetProfiles(ProfileSet{Profiles: []BotConfig{{
-		ID: "bot-a", Platform: PlatformOneBotV11, BotAccount: "42",
-		SystemPrompt: "说话简短。", Soul: testSoul(),
-	}}})
-	event := MessageEvent{Kind: EventKindGroup, GroupID: "g1", UserID: "1", ProfileID: "bot-a"}
-
-	head, tail := runtime.systemPromptPartsWithRelationshipAndAgentTools(event, nil, false, RelationshipPolicy{}, false, nil)
-	soulIndex := strings.Index(head, "【你的品格】")
-	personaIndex := strings.Index(head, "说话简短。")
-	if soulIndex != 0 {
-		t.Fatalf("soul is not at the very front: %d", soulIndex)
+// 旧版的品格层并进 SOUL.md：排在正文前面，进稳定头部，旧字段清空。
+func TestLegacySoulFoldsIntoSoulMarkdown(t *testing.T) {
+	cfg := BotConfig{ID: "bot-a", Platform: PlatformOneBotV11, BotAccount: "42", SystemPrompt: "说话简短。", Soul: testSoul()}.WithDefaults()
+	if cfg.Soul != nil {
+		t.Fatal("legacy soul field was not cleared")
 	}
-	if personaIndex < soulIndex {
-		t.Fatalf("persona rendered before soul: soul=%d persona=%d", soulIndex, personaIndex)
+	if !strings.HasPrefix(cfg.SystemPrompt, testSoul().Render()) || !strings.Contains(cfg.SystemPrompt, "说话简短。") {
+		t.Fatalf("soul was not folded ahead of the persona: %q", cfg.SystemPrompt)
+	}
+	// 再读一次不能重复并入。
+	if again := cfg.WithDefaults(); again.SystemPrompt != cfg.SystemPrompt {
+		t.Fatalf("fold is not idempotent:\n%s\n---\n%s", cfg.SystemPrompt, again.SystemPrompt)
+	}
+
+	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	runtime.SetProfiles(ProfileSet{Profiles: []BotConfig{cfg}})
+	event := MessageEvent{Kind: EventKindGroup, GroupID: "g1", UserID: "1", ProfileID: "bot-a"}
+	head, tail := runtime.systemPromptPartsWithRelationshipAndAgentTools(event, nil, false, RelationshipPolicy{}, false, nil)
+	if !strings.HasPrefix(head, cfg.SystemPrompt) {
+		t.Fatal("SOUL.md is not at the very front of the stable head")
 	}
 	if strings.Contains(tail, "【你的品格】") {
 		t.Fatalf("soul leaked into the per-speaker tail: %s", tail)
 	}
 }
 
-// 分群覆盖改不了品格：群配置里根本没有这个字段，只能换掉说话方式。
-func TestGroupOverrideCannotChangeSoul(t *testing.T) {
+// 群的 SOUL.md 覆盖整份替换机器人的，只在这个群里生效。
+func TestGroupSoulOverrideReplacesWholeDocument(t *testing.T) {
 	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	runtime.SetProfiles(ProfileSet{Profiles: []BotConfig{{
 		ID: "bot-a", Platform: PlatformOneBotV11, BotAccount: "42",
@@ -118,78 +122,49 @@ func TestGroupOverrideCannotChangeSoul(t *testing.T) {
 	runtime.SetGroupConfigStore(&stubGroupConfigStore{configs: map[string]GroupConfig{
 		"g1": {GroupID: "g1", BotProfileID: "bot-a", SystemPrompt: "在这个群里说话正经一点。"},
 	}})
-	event := MessageEvent{Kind: EventKindGroup, GroupID: "g1", UserID: "1", ProfileID: "bot-a"}
-
-	cfg := runtime.effectiveConfigForEvent(event)
+	cfg := runtime.effectiveConfigForEvent(MessageEvent{Kind: EventKindGroup, GroupID: "g1", UserID: "1", ProfileID: "bot-a"})
 	if cfg.SystemPrompt != "在这个群里说话正经一点。" {
 		t.Fatalf("group override did not apply: %q", cfg.SystemPrompt)
 	}
-	if cfg.Soul.Render() != testSoul().Render() {
-		t.Fatal("group override changed the soul")
+	other := runtime.effectiveConfigForEvent(MessageEvent{Kind: EventKindGroup, GroupID: "g2", UserID: "1", ProfileID: "bot-a"})
+	if !strings.Contains(other.SystemPrompt, "说话简短。") {
+		t.Fatalf("other groups lost the bot SOUL.md: %q", other.SystemPrompt)
 	}
 }
 
-// 导入：品格层原样读回，voice 块摊平成老字段。
-func TestParsePersonaDocumentKeepsSoulAndFlattensVoice(t *testing.T) {
-	out, err := RenderPersonaYAML([]Persona{{Name: "Diana", Soul: testSoul()}})
+// 现在的格式：一份 SOUL.md，名字取一级标题，没有标题就用文件名。
+func TestParsePersonaMarkdown(t *testing.T) {
+	raw, err := os.ReadFile("souls/jiaran.md")
 	if err != nil {
 		t.Fatal(err)
 	}
-	const voice = "voice:\n  style: 先给结论再补理由。\n  self_reference: 我\n  examples:\n    - user: 服务起不来\n      reply: 端口被占了，先查谁占着。\n"
-	anchor := "\npersona_version: 1\n"
-	if !strings.Contains(string(out), anchor) {
-		t.Fatalf("persona_version missing:\n%s", string(out)[:400])
-	}
-	raw := strings.Replace(string(out), anchor, anchor+voice, 1)
-	document, err := ParsePersonaDocument([]byte(raw))
+	document, err := ParsePersonaMarkdown(raw, "ignored")
 	if err != nil {
 		t.Fatal(err)
-	}
-	if len(document.Personas) != 1 {
-		t.Fatalf("personas = %d", len(document.Personas))
 	}
 	persona := document.Personas[0]
-	if persona.Soul == nil || persona.Soul.Render() != testSoul().Render() {
-		t.Fatalf("soul lost: %#v", persona.Soul)
+	if persona.Name != "嘉然" || !strings.HasPrefix(persona.SystemPrompt, "# 嘉然") {
+		t.Fatalf("persona = %#v", persona)
 	}
-	// voice 摊平进人设正文，运行时只认老字段。
-	if persona.Voice != nil {
-		t.Fatal("voice should be flattened away")
+	untitled, err := ParsePersonaMarkdown([]byte("她说话很短。"), "短句")
+	if err != nil || untitled.Personas[0].Name != "短句" {
+		t.Fatalf("untitled = %#v err=%v", untitled, err)
 	}
-	if !strings.Contains(persona.SystemPrompt, "先给结论再补理由") {
-		t.Fatalf("voice style lost: %q", persona.SystemPrompt)
-	}
-	if !strings.Contains(persona.SystemPrompt, "端口被占了") {
-		t.Fatalf("voice examples lost: %q", persona.SystemPrompt)
-	}
-	if persona.SelfReference != "我" {
-		t.Fatalf("self reference = %q", persona.SelfReference)
-	}
-	if _, err := ParsePersonaDocument([]byte("   ")); err == nil {
-		t.Fatal("empty document should fail")
+	if _, err := ParsePersonaMarkdown([]byte("  \n "), "空"); err == nil {
+		t.Fatal("empty markdown should fail")
 	}
 }
 
-// 品格要能在「配置 ↔ 接口负载」之间原样往返。WebUI 保存走的就是这条路：中间漏掉
-// 一个字段，界面上填得好好的，保存后就没了，而且不会报错。
+// SOUL.md 在「配置 ↔ 接口负载」之间原样往返，旧品格并进去之后也一样。
 func TestSoulSurvivesPayloadRoundTrip(t *testing.T) {
-	cfg := BotConfig{ID: "bot-a", Platform: PlatformOneBotV11, BotAccount: "42", Soul: testSoul()}
-	payload := PayloadFromConfig(cfg)
-	if payload.Soul == nil {
-		t.Fatal("payload lost the soul")
-	}
-	restored := ConfigFromPayload(payload, cfg)
-	if restored.Soul.Render() != testSoul().Render() {
-		t.Fatalf("round trip changed the soul:\n%s", restored.Soul.Render())
-	}
-	// 深拷贝：改动还原出来的那份，不能反过来动到原配置。
-	restored.Soul.Values[0].Value = "改过了"
-	if cfg.Soul.Values[0].Value == "改过了" {
-		t.Fatal("round trip shares the values slice with the source config")
+	cfg := BotConfig{ID: "bot-a", Platform: PlatformOneBotV11, BotAccount: "42", Soul: testSoul()}.WithDefaults()
+	restored := ConfigFromPayload(PayloadFromConfig(cfg), cfg).WithDefaults()
+	if restored.SystemPrompt != cfg.SystemPrompt {
+		t.Fatalf("round trip changed SOUL.md:\n%s\n---\n%s", cfg.SystemPrompt, restored.SystemPrompt)
 	}
 }
 
-// 品格进「上下文占比」快照，人能在那里看到它每轮实际注入的原文和 token 数。
+// SOUL.md 进「上下文占比」快照，规则那块不重复算它。
 func TestSoulAppearsInResidentContext(t *testing.T) {
 	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	runtime.SetProfiles(ProfileSet{Profiles: []BotConfig{{
@@ -197,13 +172,12 @@ func TestSoulAppearsInResidentContext(t *testing.T) {
 		SystemPrompt: "说话简短。", Soul: testSoul(),
 	}}})
 	snapshot := runtime.ResidentContextForGroup(context.Background(), "bot-a", "123456")
-	soul := residentBlock(snapshot, ResidentBlockSoul)
-	if !strings.Contains(soul.Content, "【你的品格】") || soul.Tokens <= 0 {
-		t.Fatalf("soul block = %#v", soul)
+	persona := residentBlock(snapshot, ResidentBlockPersona)
+	if !strings.Contains(persona.Content, "【你的品格】") || !strings.Contains(persona.Content, "说话简短。") || persona.Tokens <= 0 {
+		t.Fatalf("SOUL.md block = %#v", persona)
 	}
-	// 规则那块是 head 去掉品格和人设之后剩下的：同一段文字不能被算两遍。
 	rules := residentBlock(snapshot, ResidentBlockPromptRules)
 	if strings.Contains(rules.Content, "【你的品格】") || strings.Contains(rules.Content, "说话简短。") {
-		t.Fatalf("rules block double-counts persona or soul: %q", rules.Content[:120])
+		t.Fatalf("rules block double-counts SOUL.md: %q", rules.Content[:120])
 	}
 }

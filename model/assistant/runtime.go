@@ -3785,13 +3785,11 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			if r.selfNoteEnabled(event) {
 				extraTools = append(extraTools, newDianaSelfNoteTool(r, event, relationship))
 			}
-			if boolValue(cfg.LongTermMemoryEnabled, true) {
-				r.mu.RLock()
-				memoryAvailable := r.structuredMemory != nil
-				r.mu.RUnlock()
-				if memoryAvailable {
-					extraTools = append(extraTools, &dianaMemoryTool{runtime: r, event: event})
-				}
+			r.mu.RLock()
+			memoryAvailable := r.structuredMemory != nil
+			r.mu.RUnlock()
+			if memoryAvailable {
+				extraTools = append(extraTools, &dianaMemoryTool{runtime: r, event: event})
 			}
 			if r.oneBotRequestStore() != nil && IsOneBotPlatform(r.currentPlatform(event)) && r.platformInterfaceEnabled(event) {
 				extraTools = append(extraTools, newDianaOneBotRequestsTool(r, event))
@@ -7562,7 +7560,7 @@ func (r *Runtime) remember(event MessageEvent) {
 	}
 	r.mu.Unlock()
 	r.persistMessageEvent(event)
-	if len(compressed) > 0 && boolValue(cfg.LongTermMemoryEnabled, true) {
+	if len(compressed) > 0 {
 		r.enqueueContextSummary(session, compressed)
 	}
 }

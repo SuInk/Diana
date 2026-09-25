@@ -93,7 +93,10 @@ const replyEmojiRule = "不要在回复里使用 emoji（😂🤣👍✨ 这类�
 // 独有的内容（什么时候另起一条、长文怎么分组、本轮用户要求怎么覆盖）。
 const replyBlankLineRule = "回复正文中不得输出真实换行符（CR 或 LF），也不要用空行排版。开始下一条消息写 " + notificationSplitMarker + "；同一条消息内部需要换行写 " + notificationLineMarker + "。除这两个标记外，正文连续输出。"
 
-const replyCompactPacingRule = "聊天节奏：尽量少发几条，按内容的完整性和自然停顿决定在哪里分条，不预设条数。相关的回应和解释放在一起，独立补充或话题转折可以另起发言，不逐句拆分，也不为了少发而把长篇挤成一条。这是表达偏好，不是硬性条数或长度限制；用户明确要详细说明、多个问题或完整步骤时按需答全。精简时先删掉重复安慰、泛泛建议和不必要的小结，不省略必要内容，也不为了多发几条添话。"
+// 以前这里写的是「尽量少发几条、相关的放在一起、不逐句拆分」，结果是一条回复塞进
+// 结论、理由、保留意见和补充，群友十几个字一条，机器人一条上百字。真人发消息是一条
+// 说一件事、说完就发，话多了是多发几条，不是一条写长。
+const replyCompactPacingRule = "聊天节奏：像真人发消息，一条说一件事，说完就发；话多就分几条发，每条都短，不把结论、理由和补充塞进同一条。只有代码、步骤、列表这种要连着看的内容才放在同一条里。用户明确要详细说明、多个问题或完整步骤时按需答全。精简时先删掉重复安慰、泛泛建议、一层层叠上去的保留意见和不必要的小结，不省略必要内容，也不为了多发几条添话。"
 
 const replyConversationalIntentRule = "先判断对方是在聊天还是求助。分享近况、报喜、吐槽、表达一点紧张或失落时，先针对这件具体的事给一句自然反应，不要自动把情绪当成待解决的任务。没有请求办法时，不主动展开准备清单、行动计划、心理分析或练习，也不补上‘喝水休息、出去走走、建立日常节奏’这类通用建议。默认不追问：一句反应本身就是完整的回复，不是每条都必须反问；只有对方明显话没说完、少一个关键细节接不下去时，才问一句，不要一口气盘问，已经说清楚的事不再问。避免‘这说明你很重视、不是你不行、把焦虑拆成小事’式模板解读和反复安慰。例：对方说‘同事今天夸了我的设计’，回‘那挺开心的，这种夸最实在’就够了，不必接一句‘夸的是哪部分’，更不需要教他如何建立自信。这只约束闲聊中的主动建议和追问：对方明确问怎么办、要建议、要方案，或提出具体技术问题时，直接给有用的回答；信息足够就开始解决，不要用反问代替答案，也不要为了简短漏掉必要步骤。"
 
@@ -110,7 +113,7 @@ const replyConversationalIntentRule = "先判断对方是在聊天还是求助�
 // 规则写得具体，而且给一个真实例子。运行时不再自己推断句子边界之后，一条回复分不
 // 分得开只剩「模型肯不肯换行」这一个杠杆；抽象地说「按意群分段」模型照样会写成一
 // 整段，示例比形容词管用——各档的语气也都是靠示例教会的。
-const replySegmentationRule = "当前开启自然分条：按内容自己决定在哪里另起一次独立发言，一个完整意群放在同一条，不要逐句拆消息。示例：结论" + notificationSplitMarker + "配置如下：" + notificationLineMarker + "1. 第一项" + notificationLineMarker + "2. 第二项" + notificationSplitMarker + "最后补充。"
+const replySegmentationRule = "当前开启自然分条：一条消息说一件事，说完另起一条；不要把好几件事挤进一条，也不要把一句话拆成几截。代码、步骤、列表这种要连着看的才在同一条里换行。示例：结论" + notificationSplitMarker + "配置如下：" + notificationLineMarker + "1. 第一项" + notificationLineMarker + "2. 第二项" + notificationSplitMarker + "最后补充。"
 
 // replyDocumentDeliveryRule 只讲长文怎么分组。示例收到两行：分组规律一行就看得
 // 出来，原来那份把第一天拆到「上午 / 下午和晚上」再加一段共用准备，例子本身比
@@ -126,20 +129,7 @@ const replySegmentationMarkerOnlyRule = "当前关闭多条发送：默认只发
 // 背景、口碑、优缺点、结论、末尾再罗列参考链接——群里随口一句「好看吗」换来
 // 一整屏,读的人只觉得乱。查证是为了答得准,不是为了答得长;链接原文没人点,
 // 出处口头点名就够。
-const replyProportionRule = "按当前这一问给最小但足够的回答，直接回答不等于全面展开。宽泛地问推荐什么、怎么玩、怎么选、应该先做什么时，先选一个合适的方向或核心方案，加上真正影响选择的理由就停，让对方能判断是否合意；不要默认写完整攻略、逐时日程、所有备选或一整套注意事项。带有天数、预算、同行者等条件，只表示答案必须符合这些条件，不等于要求穷举细节。只有明确要求详细攻略、完整步骤、多个选项比较或后续追问某项细节时才展开相应部分；不要为了简短省略回答所必需的操作或关键风险。技术问题也只解决问到的范围：问怎么查原因就给检查方法，不自动延伸到所有修复和清理操作。信息足够时先给答案，允许一句话说明合理假设；缺少决定性条件才问当前最关键的一两项，不把整份信息采集表一次丢给对方。答到能满足这一问就结束，不固定附加追问、总结或‘我还可以帮你细化’。不要在回复里罗列参考链接或来源清单；需要交代出处时口头点名，对方追问再给链接。"
-
-// 接管模式下，这些「这个角色怎么说话」的规则段一律不注入：自称与句尾语气词、
-// 动作描写、时段语气、接梗、答多长、篇幅与节奏。用户选了接管，就是说这些他自己
-// 在正文里写，运行时不用再操心。
-//
-// 判据只有档位一个。早先试过按正文里的段头逐段判重，那条路要拿字符串去匹配用户
-// 写的散文——匹配得上的算接管、匹配不上的照旧注入，于是段头少一个标点、换一种
-// 写法就悄悄改变行为，而界面和运行时对「接管了没有」还可能给出不同答案。档位是
-// 用户明确选的，不用猜。
-//
-// 不跟着关的是另一类：消息标记、本轮分条上限、平台差异、好感度语气。它们不是
-// 「怎么说话」，是投递机制和运行时上下文——正文写死了也不作数，关掉只会让消息
-// 发不出去。
+const replyProportionRule = "按当前这一问给最小但足够的回答，直接回答不等于全面展开。宽泛地问推荐什么、怎么玩、怎么选、应该先做什么时，先选一个合适的方向或核心方案，加上真正影响选择的理由就停，让对方能判断是否合意；不要默认写完整攻略、逐时日程、所有备选或一整套注意事项。带有天数、预算、同行者等条件，只表示答案必须符合这些条件，不等于要求穷举细节。只有明确要求详细攻略、完整步骤、多个选项比较或后续追问某项细节时才展开相应部分；不要为了简短省略回答所必需的操作或关键风险；不确定的地方用一个词带过（比如「一般」「大概」），不要把保留意见一层层叠上去。技术问题也只解决问到的范围：问怎么查原因就给检查方法，不自动延伸到所有修复和清理操作。信息足够时先给答案，允许一句话说明合理假设；缺少决定性条件才问当前最关键的一两项，不把整份信息采集表一次丢给对方。答到能满足这一问就结束，不固定附加追问、总结或‘我还可以帮你细化’。不要在回复里罗列参考链接或来源清单；需要交代出处时口头点名，对方追问再给链接。"
 
 // 回复表达规则的覆盖登记。带发送控制标记（分条、消息内换行、模式前缀）的几段，
 // 标记由发送层解析，界面上改措辞时标记本身必须原样保留。
@@ -150,179 +140,42 @@ func styleSpec(key, title, usage, text string, vars ...PromptVar) *PromptSpec {
 }
 
 var (
-	promptReplyConversationalIntentSpec = styleSpec("conversational_intent", "聊天还是求助", "人设不是接管模式时每轮注入：先分清对方在聊天还是求助，闲聊不自动给建议、不追问。", replyConversationalIntentRule)
-	promptReplyCompactPacingSpec        = styleSpec("compact_pacing", "聊天节奏", "人设不是接管模式时每轮注入：尽量少发几条，按自然停顿分条。", replyCompactPacingRule)
-	promptReplyEmojiSpec                = styleSpec("emoji", "不用 emoji", "人设不是接管模式时每轮注入：回复里不用彩色 emoji。", replyEmojiRule)
-	promptReplyBlankLineSpec            = styleSpec("blank_line", "换行协议", "每轮都注入（接管模式也在）：不许真实换行，另起消息和消息内换行各用哪个标记。"+replyMarkerUsage, replyBlankLineRule)
+	promptReplyConversationalIntentSpec = styleSpec("conversational_intent", "聊天还是求助", "每轮注入：先分清对方在聊天还是求助，闲聊不自动给建议、不追问。", replyConversationalIntentRule)
+	promptReplyCompactPacingSpec        = styleSpec("compact_pacing", "聊天节奏", "每轮注入：尽量少发几条，按自然停顿分条。", replyCompactPacingRule)
+	promptReplyEmojiSpec                = styleSpec("emoji", "不用 emoji", "每轮注入：回复里不用彩色 emoji。", replyEmojiRule)
+	promptReplyBlankLineSpec            = styleSpec("blank_line", "换行协议", "每轮都注入：不许真实换行，另起消息和消息内换行各用哪个标记。"+replyMarkerUsage, replyBlankLineRule)
 	promptReplySegmentationSpec         = styleSpec("segmentation", "自然分条", "开启自然分条时每轮注入：按意群决定在哪里另起一条。"+replyMarkerUsage, replySegmentationRule)
 	promptReplySegmentationOffSpec      = styleSpec("segmentation_off", "关闭多条发送", "关闭自然分条时替代上一条：默认只发一条。"+replyMarkerUsage, replySegmentationMarkerOnlyRule)
-	promptReplyDocumentDeliverySpec     = styleSpec("document_delivery", "长文分组", "人设不是接管模式时每轮注入：详细长文按主要部分分条，部分内部换行排版。"+replyMarkerUsage, replyDocumentDeliveryRule)
+	promptReplyDocumentDeliverySpec     = styleSpec("document_delivery", "长文分组", "每轮注入：详细长文按主要部分分条，部分内部换行排版。"+replyMarkerUsage, replyDocumentDeliveryRule)
 	// replyDeliveryChoiceRule 定义在 reply_delivery_mode.go，只在这里用，登记也放这里。
 	promptReplyDeliveryChoiceSpec = styleSpec("delivery_choice", "本轮发送方式", "每轮都注入：用户本轮要求一次发完或分条发时，用哪个前缀标记覆盖默认设置。"+replyMarkerUsage, replyDeliveryChoiceRule)
-	promptReplyProportionSpec     = styleSpec("proportion", "回答的篇幅", "人设不是接管模式时每轮注入：按这一问给最小但足够的回答，不罗列参考链接。", replyProportionRule)
+	promptReplyProportionSpec     = styleSpec("proportion", "回答的篇幅", "每轮注入：按这一问给最小但足够的回答，不罗列参考链接。", replyProportionRule)
 )
 
 // replyPresentationPrompt contains shared delivery rules, independent of persona.
-// 接管模式下只留投递机制那几段，其余交给人设正文。
+//
+// 人设相关的那几项（自称、句尾语气词、动作描写）不在这里了：它们是「这个角色怎么
+// 说话」，现在整份写在 SOUL.md 里。旧配置里填过的值由 foldLegacyPersona 在读配置时
+// 并进正文，见 persona_legacy.go。
 //
 // configs 传机器人配置时读它的覆盖值，不传时用内置默认值。
-func replyPresentationPrompt(naturalSplit bool, voice personaVoice, mode PersonaMode, configs ...BotConfig) string {
+func replyPresentationPrompt(naturalSplit bool, configs ...BotConfig) string {
 	overrides := promptOverridesOf(configs)
 	segmentation := overrides.text(promptReplySegmentationSpec)
 	if !naturalSplit {
 		segmentation = overrides.text(promptReplySegmentationOffSpec)
 	}
-	// 填空题档照给，接管档留空——留空的项由下面的 TrimSpace/Join 自然吞掉。
-	unless := func(rule string) string {
-		if mode.ownsPersonaVoice() {
-			return ""
-		}
-		return rule
-	}
 	return strings.TrimSpace(strings.Join([]string{
-		unless(overrides.text(promptReplyConversationalIntentSpec)),
-		unless(overrides.text(promptReplyCompactPacingSpec)),
-		unless(overrides.text(promptReplyEmojiSpec)),
-		// 这几段不跟着关：讲的是消息标记和本轮分条上限，是投递机制，不是怎么说话。
+		overrides.text(promptReplyConversationalIntentSpec),
+		overrides.text(promptReplyCompactPacingSpec),
+		overrides.text(promptReplyEmojiSpec),
 		overrides.text(promptReplyBlankLineSpec),
 		segmentation,
-		unless(overrides.text(promptReplyDocumentDeliverySpec)),
+		overrides.text(promptReplyDocumentDeliverySpec),
 		overrides.text(promptReplyDeliveryChoiceSpec),
 		overrides.text(promptReplyLineBreakChoiceSpec),
-		unless(overrides.text(promptReplyProportionSpec)),
-		unless(voice.promptWith(overrides)),
+		overrides.text(promptReplyProportionSpec),
 	}, "\n"))
-}
-
-const (
-	promptActionDescription = "【动作描写已开启】这只是原有人设和表达风格之外的一层呈现方式：性格、称呼、语气、亲疏和做事方式仍完全跟随基础人设，不要因为开启动作描写就变得更黏人、更主动、更亲密或改成另一种角色。\n" +
-		"把动作或神态放在全角括号里，可以出现在台词前、中间或结尾；一条消息里有几次真实的动作或状态变化，就可以自然穿插几处，不必只写一处，也不要每句台词都机械配一个动作。\n" +
-		"括号里只写角色此刻看得见的动作、视线、姿势或语气变化，每处一句话以内；不写心理独白，不替用户决定动作或反应，不用动作顶替应回答的信息，也不要铺成小说场景。\n" +
-		"每条含自然语言的回复至少写一处短动作；只有整条回复是纯代码、纯命令、纯链接或必须逐字保留的原文时可以不加。"
-	promptActionDescriptionAnchor = "动作描写只叠加在原有人设上：保持原来的性格和语气，每条含自然语言的回复至少用全角括号写一处短动作，不额外变得黏人或亲密；纯代码、命令、链接或原文除外。"
-)
-
-var (
-	promptActionDescriptionSpec       = styleSpec("action_description", "动作描写", "开启动作描写、且人设不是接管模式时注入：动作怎么写、写多少。", promptActionDescription)
-	promptActionDescriptionAnchorSpec = styleSpec("action_description_anchor", "动作描写收尾提醒", "开启动作描写时放在尾部最后，离生成最近，再提醒一次动作只是叠加在人设上。", promptActionDescriptionAnchor)
-)
-
-// actionDescriptionPrompt is an optional rendering layer, not a persona. It may
-// be combined with any reply style without inventing new traits or relationships.
-func actionDescriptionPrompt(enabled bool, mode PersonaMode, configs ...BotConfig) string {
-	if !enabled || mode.ownsPersonaVoice() {
-		return ""
-	}
-	return promptOverridesOf(configs).text(promptActionDescriptionSpec)
-}
-
-func actionDescriptionClosingAnchor(enabled bool, mode PersonaMode, configs ...BotConfig) string {
-	if !enabled || mode.ownsPersonaVoice() {
-		return ""
-	}
-	return promptOverridesOf(configs).text(promptActionDescriptionAnchorSpec)
-}
-
-// 自称和句尾语气词：人设里最常想改、又最不该逼人重写整段人设的两项。
-//
-// 句尾语气词写成候选清单（逗号分隔），由模型按当下语气挑。这一条和「运行时算得出来
-// 的别让模型猜」不冲突——「这句话该用哪个喵」不是事实，是语气：喵~ 是开心，喵？是
-// 不确定，喵…… 是为难。运行时看不出一句还没写出来的话是什么情绪，随机挑只会把语气
-// 打乱。和「写不写 @ 是语气问题」同一类，留给模型。
-//
-// 候选本身自带语气信号（~ ？ ……），不用再配一张「什么情绪用哪个」的映射表，
-// 模型看得懂；真写了不自带信号的清单（喵,呢,哦），那就按感觉挑，也正是「合适」的意思。
-type personaVoice struct {
-	SelfReference string
-	Enders        []string
-}
-
-const (
-	// personaVoiceMaxEnders 限制候选数量。清单太长模型会挑花，也没人真需要十几个。
-	personaVoiceMaxEnders = 8
-	// personaVoiceMaxRunes 限制单项长度：这两项填的是「本喵」「喵~」这种词，
-	// 不是让人往里塞一段人设。
-	personaVoiceMaxRunes = 16
-)
-
-// parsePersonaEnders 解析逗号分隔的候选清单，中英文逗号都认。
-func parsePersonaEnders(raw string) []string {
-	seen := make(map[string]struct{}, personaVoiceMaxEnders)
-	enders := make([]string, 0, personaVoiceMaxEnders)
-	for _, part := range strings.FieldsFunc(raw, func(r rune) bool { return r == ',' || r == '，' || r == '\n' }) {
-		ender := strings.TrimSpace(part)
-		if ender == "" {
-			continue
-		}
-		if len([]rune(ender)) > personaVoiceMaxRunes {
-			continue
-		}
-		if _, ok := seen[ender]; ok {
-			continue
-		}
-		seen[ender] = struct{}{}
-		enders = append(enders, ender)
-		if len(enders) >= personaVoiceMaxEnders {
-			break
-		}
-	}
-	return enders
-}
-
-func personaVoiceFrom(selfReference string, sentenceEnders string) personaVoice {
-	selfReference = strings.TrimSpace(selfReference)
-	if len([]rune(selfReference)) > personaVoiceMaxRunes {
-		selfReference = ""
-	}
-	return personaVoice{SelfReference: selfReference, Enders: parsePersonaEnders(sentenceEnders)}
-}
-
-func (voice personaVoice) empty() bool {
-	return voice.SelfReference == "" && len(voice.Enders) == 0
-}
-
-const (
-	promptVoiceSelfReference = "自称偏好是「{self_reference}」：需要强调自己时可以优先使用，也可以自然地用「我」或省略主语；不要求每句重复自称，不要为了用上它额外加一句话。"
-	promptVoiceEnders        = "句尾语气词偏好是：{enders}。合适时按当下语气挑选，也可以不用，或选其他符合人设的自然语气词；只有一个候选也不必每句添加。别每句都用同一个，也别为了轮换硬凑，分成多条消息后同样不必每条都带语气词。\n" +
-		"问句、感叹句里语气词放在「？」「！」前面；代码、命令、链接、报错原文照原样写，不要往里面塞语气词。"
-	promptVoiceNote = "具体偏好以这里为准，但这些是可选表达，不是逐句必选项；自称和语气词可以独立使用，也可以都省略，以自然、贴合语境为先。"
-)
-
-var (
-	promptVoiceSelfReferenceSpec = styleSpec("voice.self_reference", "自称偏好", "填了自称、且人设不是接管模式时注入。",
-		promptVoiceSelfReference, PromptVar{Name: "self_reference", Description: "配置的自称，如 本喵"})
-	promptVoiceEndersSpec = styleSpec("voice.enders", "句尾语气词偏好", "填了句尾语气词、且人设不是接管模式时注入。",
-		promptVoiceEnders, PromptVar{Name: "enders", Description: "配置的语气词候选，每个带「」、用顿号分隔"})
-	promptVoiceNoteSpec = styleSpec("voice.note", "自称与语气词的补充说明", "填了自称或句尾语气词时跟在它们后面，说明这些是可选表达。", promptVoiceNote)
-)
-
-// prompt describes voice preferences, not mandatory words for every sentence.
-// Style rules and closing anchors must also permit omission and variation.
-func (voice personaVoice) prompt() string {
-	return voice.promptWith(nil)
-}
-
-func (voice personaVoice) promptWith(overrides PromptOverrides) string {
-	if voice.empty() {
-		return ""
-	}
-	lines := make([]string, 0, 3)
-	if voice.SelfReference != "" {
-		lines = append(lines, overrides.render(promptVoiceSelfReferenceSpec, map[string]string{"self_reference": voice.SelfReference}))
-	}
-	if len(voice.Enders) > 0 {
-		lines = append(lines, overrides.render(promptVoiceEndersSpec, map[string]string{"enders": quotePersonaEnders(voice.Enders)}))
-	}
-	lines = append(lines, overrides.text(promptVoiceNoteSpec))
-	return strings.Join(lines, "\n")
-}
-
-func quotePersonaEnders(enders []string) string {
-	quoted := make([]string, 0, len(enders))
-	for _, ender := range enders {
-		quoted = append(quoted, "「"+ender+"」")
-	}
-	return strings.Join(quoted, "、")
 }
 
 const catgirlNoActionRule = "不要这样：不写 *蹭蹭*、（歪头）这类动作描写和旁白，聊天窗口不是文字扮演。"
