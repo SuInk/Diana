@@ -259,6 +259,8 @@ func DescribeEventOutcome(outcome string) (decision string, reason string, handl
 		return "error", "回复生成失败；该会话正处于连续失败中，这条并入稍后的一条汇总说明，不单独发错误提示", false
 	case "error_silent":
 		return "error", "回复生成失败；当前机器人已关闭错误提示，错误仅记录到事件与日志", false
+	case "error_silent_empty_output":
+		return "error", "上游模型这次没有返回任何有效内容；这类失败不发进聊天，只记录到事件与日志", false
 	case "ignored_unavailable_group":
 		return "not_replied", "群聊当前不可用、未加入允许范围或机器人已不在该群", false
 	case "ignored_bot_muted":
@@ -2125,6 +2127,14 @@ func (r *Runtime) replyAndRecord(ctx context.Context, event MessageEvent, text s
 			setEventRecordOutcome(&record, "processing_error")
 			r.record(record)
 			return "", ctx.Err()
+		}
+		// 上游空回是模型服务自己的抖动，重试和切换配置档已经在调用链里做过。
+		// 这时发一句「没返回有效内容，稍后再试」对群友没有任何可操作的信息，
+		// 用人设改写后还像机器人在自说自话，所以不管错误提示开关怎么设都不出声。
+		if isEmptyModelOutputError(err) {
+			setEventRecordOutcome(&record, "error_silent_empty_output")
+			r.record(record)
+			return "error_silent_empty_output", nil
 		}
 		// 错误提示开关控制所有面向聊天的诊断消息。关闭后仍保留完整事件、
 		// LastError 和应用日志，但不把 LLM、Agent、工具或协议错误发进群聊/私聊。
