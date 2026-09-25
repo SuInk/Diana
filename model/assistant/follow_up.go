@@ -172,14 +172,17 @@ func (r *Runtime) followUpCommentWithReference(ctx context.Context, kind followU
 	botID := firstNonEmpty(cfg.BotAccount, source.SelfID)
 	for _, historyEvent := range history {
 		content := strings.TrimSpace(historyPlainText(historyEvent))
+		push := isSubscriptionPushEvent(historyEvent)
 		if isPokeHistoryEvent(historyEvent) {
 			content = pokeHistoryPromptText(historyEvent, botID, historyEvent.SelfID)
+		} else if push {
+			content = subscriptionPushHistoryPromptText(historyEvent)
 		}
 		if content == "" {
 			continue
 		}
 		role := llm.RoleUser
-		if strings.TrimSpace(historyEvent.botReply) != "" || assistantHistoryEvent(historyEvent, botID) {
+		if !push && (strings.TrimSpace(historyEvent.botReply) != "" || assistantHistoryEvent(historyEvent, botID)) {
 			role = llm.RoleAssistant
 		}
 		messages = append(messages, llm.Message{Role: role, Content: content, Priority: llm.MessagePriorityHistory})

@@ -40,5 +40,5 @@ func (r *Runtime) PushExternalMessage(ctx context.Context, target ExternalMessag
 	if event.GroupID == "" && event.UserID == "" {
 		return fmt.Errorf("diana: either group_id or user_id is required")
 	}
-	return r.sendNotification(ctx, event, text)
+	return r.sendNotification(withSubscriptionPush(ctx, subscriptionPushExternal), event, text)
 }

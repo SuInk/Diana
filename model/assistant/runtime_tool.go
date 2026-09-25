@@ -1157,9 +1157,10 @@ func (r *Runtime) sendRepositoryWatch(ctx context.Context, item Reminder, messag
 // 更新推送引用当初宣布它的那条消息,首次出现则记下本次消息 ID 供以后引用。
 // change 为 nil(补投、失败通知)时只发不引不记。
 func (r *Runtime) sendRepositoryWatchChange(ctx context.Context, item Reminder, message string, change *repositoryWatchChange) error {
-	if !item.NotificationEnabled && item.NotificationTargetsJSON == "" && item.GroupID == "" && item.UserID == "" {
+	if !repositoryWatchHasDeliveryTarget(item) {
 		return nil
 	}
+	ctx = withSubscriptionPush(ctx, subscriptionPushRepositoryWatch)
 	anchors := decodeRepositoryWatchAnchors(item.WatchAnchorsJSON)
 	added := map[string]string{}
 	var firstErr error
@@ -1193,6 +1194,14 @@ func (r *Runtime) sendRepositoryWatchChange(ctx context.Context, item Reminder, 
 		r.storeRepositoryWatchAnchors(item.ID, encodeRepositoryWatchAnchors(appendRepositoryWatchAnchors(anchors, added)))
 	}
 	return firstErr
+}
+
+// repositoryWatchHasDeliveryTarget 判断订阅有没有地方可投。WebUI 允许建一条关掉
+// 通知、不填群也不填人的订阅（只在后台记动态）；这种订阅交给
+// repositoryWatchDeliveryTargets 会回落到 reminderSourceEvent，得到一个 UserID
+// 为空的私聊目标，拿去发只会失败。卡片、跟评、失败告警都先过这一道。
+func repositoryWatchHasDeliveryTarget(item Reminder) bool {
+	return item.NotificationEnabled || item.NotificationTargetsJSON != "" || item.GroupID != "" || item.UserID != ""
 }
 
 // storeRepositoryWatchAnchors 把锚点写回订阅本体。写不进去只影响以后的引用,
@@ -1233,7 +1242,10 @@ func (r *Runtime) renderRepositoryWatchMessage(change repositoryWatchChange, set
 // 那就得按各自会话的历史来判断，一稿群发既对不上也算不上接话。
 // 跟评失败一律静默跳过，但会写进运行日志。
 func (r *Runtime) maybeSendRepositoryWatchFollowUp(ctx context.Context, item Reminder, notification, reference string) {
-	if strings.TrimSpace(notification) == "" {
+	// 没有投递对象的订阅，卡片那边已经跳过了，跟评这边也得跳过：否则
+	// repositoryWatchDeliveryTargets 回落出一个 UserID 为空的私聊目标，白跑一次
+	// 模型之后再报 invalid user id。
+	if strings.TrimSpace(notification) == "" || !repositoryWatchHasDeliveryTarget(item) {
 		return
 	}
 	source := reminderSourceEvent(item)

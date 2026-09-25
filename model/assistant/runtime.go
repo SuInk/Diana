@@ -6381,6 +6381,9 @@ func compactContextEvent(event MessageEvent) string {
 		text += " " + quoted
 	}
 	sender := promptSenderIdentity(event)
+	if label := subscriptionPushLabel(event); label != "" {
+		sender += "（" + label + "）"
+	}
 	return sender + ": " + strings.Join(strings.Fields(text), " ") + summaryIdentityPrompt(event)
 }
 
@@ -7009,6 +7012,7 @@ func (r *Runtime) rememberOutgoingWithMessageID(ctx context.Context, source Mess
 	if messageID = strings.TrimSpace(messageID); messageID != "" {
 		event.MessageID = messageID
 	}
+	event.PushKind = subscriptionPushKindFromContext(ctx)
 	r.mu.RLock()
 	resolver, _ := r.localMedia.(LocalMediaPathResolver)
 	r.mu.RUnlock()
@@ -7508,6 +7512,11 @@ func (r *Runtime) remember(event MessageEvent) {
 	if event.MessageID != "" {
 		for i := range history {
 			if history[i].MessageID == event.MessageID {
+				// 平台回显自己发出的消息时不知道它是订阅推送，别让回显把标记冲掉。
+				// 只认回显（本地记的出站都带 Outbound）：本地重记的一条自己说了算。
+				if event.PushKind == "" && !event.Outbound {
+					event.PushKind = history[i].PushKind
+				}
 				history = append(history[:i], history[i+1:]...)
 				break
 			}
