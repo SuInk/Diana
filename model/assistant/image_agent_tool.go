@@ -32,7 +32,7 @@ const (
 
 // errImageEditSourceNotFound 在受理时返回给模型，模型据此让用户补图，
 // 不会先答应「在画了」。
-var errImageEditSourceNotFound = errors.New("没有找到可编辑的图片：当前消息、引用链、最近聊天记录和上一次改图任务里都没有图。这次没有开始画，不要对用户说「在画了」；请让用户重新发送图片，或直接引用那张图片再说要怎么改")
+var errImageEditSourceNotFound = errors.New("没有找到可编辑的图片：当前消息、引用链和上一次改图任务里都没有图。这次没有开始画，不要对用户说「在画了」；要改的图在聊天记录或「稍早发的图」里的话，把它的 message_id 填进 source_message_ids 重新调用，否则请让用户重新发送图片，或直接引用那张图片再说要怎么改")
 
 // imageEditSourceMissingInstruction 是意图路由判定要改图、却找不到原图时给正文
 // 生成的提示。
@@ -65,13 +65,28 @@ type dianaImageToolResult struct {
 	// <前缀>.<按格式定的扩展名>，多张时是 <前缀>-2.… 依次往后。只在主人开了文件写入时有。
 	WorkspacePathPrefix string `json:"workspace_path_prefix,omitempty"`
 	WorkspaceNote       string `json:"workspace_note,omitempty"`
+	// SourcesUsed 是这次真正交给图片模型的原图来历。模型回复里说用了谁的头像、
+	// 哪条消息的图，要以它为准。
+	SourcesUsed []imageEditSourceUsed `json:"sources_used,omitempty"`
+	SourcesNote string                `json:"sources_note,omitempty"`
 }
+
+// imageSourcesUsedNote 跟着 sources_used 一起给模型：光给一张来历表，模型未必会拿它
+// 去对自己的说法。
+const imageSourcesUsedNote = "sources_used 就是这次真正交给图片模型的原图；回复里提到用了谁的头像、哪条消息的图，只能照这里说。和用户要的不一致就直接说明并重新调用。候选图不止一张、用户又没说清是哪张时，先问清楚，或在回复里说明用的是哪张。"
 
 type dianaImageToolRequest struct {
 	Operation       string
 	Prompt          string
 	Caption         string
 	IdentitySources []string
+	// DefaultIdentitySources 是模型没点名时的兜底头像（被 @ 的成员），属于隐式来源，
+	// 排在当前消息和引用消息的图之后。
+	DefaultIdentitySources []string
+	// AllowRecentSenderImages 见 imageEditSourcePlan。
+	AllowRecentSenderImages bool
+	// SourcesUsed 与 Sources 一起在受理时解析出来。
+	SourcesUsed []imageEditSourceUsed
 	// SourceLabels 与 IdentitySources 一一对应的人类可读标注（昵称等）。
 	// 逐张发送时作为对应图片的说明文字,让大家知道每张是谁的。
 	SourceLabels []string
@@ -112,12 +127,12 @@ func (t *dianaImageTool) Description() string {
 		operations = append(operations, `"generate"（根据完整文字 prompt 生成新图片）`)
 	}
 	if t.relationship.AllowImageEditing {
-		operations = append(operations, `"edit"（编辑当前、引用或近期图片/成员头像）`)
+		operations = append(operations, `"edit"（编辑当前、引用或指定消息里的图片/成员头像）`)
 	}
 	if len(operations) == 0 {
 		operations = append(operations, "无")
 	}
-	return `异步生成或编辑图片。工具受理后由运行时替你告诉用户「开始处理」，图片在后台完成后自动发送。调用后直接继续输出 final 文字回复即可，不要等待图片，不要再次调用本工具，也不要重复说一遍「正在处理」。当前允许操作：` + strings.Join(operations, "、") + `。要对多张参考图逐张各出一张，用 source_mode="each"。如果用户要求先搜索、核验网页或读取外部资料再出图，必须先完成搜索或浏览器调用，prompt 里只能写已确认的事实，不能虚构没查到的内容。`
+	return `异步生成或编辑图片。工具受理后由运行时替你告诉用户「开始处理」，图片在后台完成后自动发送。调用后直接继续输出 final 文字回复即可，不要等待图片，不要再次调用本工具，也不要重复说一遍「正在处理」。当前允许操作：` + strings.Join(operations, "、") + `。要对多张参考图逐张各出一张，用 source_mode="each"。如果用户要求先搜索、核验网页或读取外部资料再出图，必须先完成搜索或浏览器调用，prompt 里只能写已确认的事实，不能虚构没查到的内容。结果里的 sources_used 是这次实际用到的原图，回复里说用了什么只能照它说。`
 }
 
 // imageAnnouncementSubjectMaxRunes 是开场白里能带上的画面描述长度上限。
@@ -179,7 +194,7 @@ func (t *dianaImageTool) InputSchema() map[string]any {
 		operations = append(operations, "edit")
 	}
 	properties := map[string]any{
-		"operation": toolEnumParam("generate 生成新图片；edit 编辑当前、引用或近期出现过的图片与成员头像。省略时按 generate 处理。", operations...),
+		"operation": toolEnumParam("generate 凭文字生成新图片，不读任何原图；edit 以图片或头像为底修改。填了 identity_sources 或 source_message_ids 就是 edit；省略时有原图来源按 edit 处理，否则按 generate。", operations...),
 		"prompt":    toolStringParam("交给图片模型的完整、自包含的最终提示词。不要写成对话口吻，也不要依赖上下文里的指代。"),
 		"caption":   toolStringParam("图片完成后随图发送的一句短文字，可选。"),
 	}
@@ -187,7 +202,7 @@ func (t *dianaImageTool) InputSchema() map[string]any {
 	// 头像地址，并核对这个人在当前会话里确实存在。
 	if t.relationship.AllowImageEditing {
 		properties["identity_sources"] = toolStringArrayParam(
-			`operation="edit" 且要编辑的是某人或本群的头像时，在这里点名头像来源；当前消息或引用消息本身带图时不要填。` +
+			`用户说到某个人的头像（包括「把 XX 的头像改成……」「照着 XX 头像画」）时，在这里点名头像来源；当前消息或引用消息带着别的图（例如一张表情）也照样要填，点名的来源优先，不会被当前消息里的图顶掉。` +
 				`可选值："` + avatarSourceSender + `"（本条消息的发送者）、"` + avatarSourceBot + `"（机器人自己）、"` +
 				avatarSourceGroup + `"（本群的群头像）、"` + avatarSourceGroupPrefix + `<group_id>"（私聊里用户明确给出群号时的群头像）、"` +
 				avatarSourceMemberPrefix + `<user_id>"（指定成员，user_id 使用当前平台的账号标识或其脱敏别名）。` +
@@ -196,9 +211,9 @@ func (t *dianaImageTool) InputSchema() map[string]any {
 	}
 	if t.relationship.AllowImageEditing {
 		properties["source_message_ids"] = toolStringArrayParam(
-			`operation="edit" 时要改的图在哪几条消息里：填聊天记录或媒体索引里的 message_id，可以多条，每条消息里的所有图片都会作为原图。` +
-				`用户说「这张」「刚才那几张」「重试」「继续改」而原图不在当前消息或引用消息里时，先认出是哪几条消息再填；` +
-				`重试或继续改上一张时填最初那张原图（或上一次生成结果）所在的消息。当前消息或引用消息本身带图时不用填。最多 ` +
+			`要改的图在哪几条消息里：填聊天记录、媒体索引或「稍早发的图」里的 message_id，可以多条，每条消息里的所有图片都会作为原图。` +
+				`用户指的是某条具体消息里的图（「这张」「刚才那几张」「他刚发的图」「重试」「继续改」）时就填；同一个人稍早发的候选图不会自动当原图，要用就在这里点名。` +
+				`重试或继续改上一张时填最初那张原图（或上一次生成结果）所在的消息。填了它和 identity_sources 就只用这些来源；两个都不填才按当前消息、引用消息里的图去找。最多 ` +
 				strconv.Itoa(maxImageEditSourceMessages) + ` 条。`)
 		properties["source_labels"] = toolStringArrayParam(
 			`与 identity_sources 一一对应的说明文字，可选，逐张发送时原样作为对应图片附带的说明发出（例如「Winter 的头像」），让大家知道每张是谁的。` +
@@ -260,8 +275,18 @@ func (t *dianaImageTool) prepareRequest(input map[string]any) (dianaImageToolReq
 	if len([]rune(prompt)) > 12000 {
 		return dianaImageToolRequest{}, fmt.Errorf("prompt 过长，请压缩到 12000 字以内")
 	}
+	identitySources := configToolStringSlice(input, "identity_sources")
+	sourceMessageIDs := configToolStringSlice(input, "source_message_ids")
+	explicitSources := len(identitySources) > 0 || len(sourceMessageIDs) > 0
 	if operation == "" {
+		// 点名了原图来源、或者用户就是拿着图在说（当前消息或引用消息带图），却没填
+		// operation：以前一律按 generate，来源被整个忽略，出来一张纯文生图，模型还
+		// 以为用的是那张头像。有来源就是改图。
+		implicitSources := len(availableImageURLs(t.event.Segments)) > 0 ||
+			(t.event.Quoted != nil && len(availableImageURLs(t.event.Quoted.Segments)) > 0)
 		switch {
+		case (explicitSources || implicitSources) && t.relationship.AllowImageEditing:
+			operation = "edit"
 		case t.relationship.AllowImageGeneration:
 			operation = "generate"
 		case t.relationship.AllowImageEditing:
@@ -272,6 +297,10 @@ func (t *dianaImageTool) prepareRequest(input map[string]any) (dianaImageToolReq
 	}
 	switch operation {
 	case "generate":
+		if explicitSources {
+			// 生成不读任何原图。静默忽略的话，模型会以为头像已经用上了。
+			return dianaImageToolRequest{}, fmt.Errorf("operation=\"generate\" 只凭文字生成新图，会忽略 identity_sources 和 source_message_ids。要以头像或某条消息里的图为底，请改用 operation=\"edit\" 重新调用；确实只想凭文字生成，就去掉这两个参数")
+		}
 	case "edit":
 	default:
 		return dianaImageToolRequest{}, fmt.Errorf("operation 必须是 generate 或 edit")
@@ -290,16 +319,12 @@ func (t *dianaImageTool) prepareRequest(input map[string]any) (dianaImageToolReq
 			caption = "图片生成完成。"
 		}
 	}
-	identitySources := configToolStringSlice(input, "identity_sources")
-	var sourceMessageIDs []string
-	if operation == "edit" {
-		sourceMessageIDs = configToolStringSlice(input, "source_message_ids")
-		if len(sourceMessageIDs) > maxImageEditSourceMessages {
-			return dianaImageToolRequest{}, fmt.Errorf("source_message_ids 最多 %d 条", maxImageEditSourceMessages)
-		}
+	if len(sourceMessageIDs) > maxImageEditSourceMessages {
+		return dianaImageToolRequest{}, fmt.Errorf("source_message_ids 最多 %d 条", maxImageEditSourceMessages)
 	}
-	if operation == "edit" && len(identitySources) == 0 && len(sourceMessageIDs) == 0 {
-		identitySources = defaultAvatarIdentitySources(t.event, t.runtime.effectiveConfigForEvent(t.event).BotAccount)
+	var defaultIdentitySources []string
+	if operation == "edit" && !explicitSources {
+		defaultIdentitySources = defaultAvatarIdentitySources(t.event, t.runtime.effectiveConfigForEvent(t.event).BotAccount)
 	}
 	sourceMode := strings.ToLower(strings.TrimSpace(configToolString(input, "source_mode")))
 	if sourceMode != dianaImageSourceModeEach {
@@ -312,25 +337,34 @@ func (t *dianaImageTool) prepareRequest(input map[string]any) (dianaImageToolReq
 	}
 	return dianaImageToolRequest{
 		Operation: operation, Prompt: prompt, Caption: caption,
-		IdentitySources: identitySources, SourceLabels: sourceLabels, SourceMode: sourceMode,
+		IdentitySources: identitySources, DefaultIdentitySources: defaultIdentitySources,
+		SourceLabels: sourceLabels, SourceMode: sourceMode,
 		SourceMessageIDs: sourceMessageIDs,
 	}, nil
+}
+
+func (t *dianaImageTool) sourcePlan(request dianaImageToolRequest) imageEditSourcePlan {
+	return imageEditSourcePlan{
+		IdentitySources:         request.IdentitySources,
+		SourceMessageIDs:        request.SourceMessageIDs,
+		DefaultIdentitySources:  request.DefaultIdentitySources,
+		AllowRecentSenderImages: request.AllowRecentSenderImages,
+	}
 }
 
 func (t *dianaImageTool) enqueue(ctx context.Context, request dianaImageToolRequest) (dianaImageToolResult, error) {
 	name := "图片生成"
 	if request.Operation == "edit" {
 		name = "图片编辑"
-		if len(request.Sources) == 0 && len(request.SourceMessageIDs) > 0 {
-			sources, err := t.runtime.imageEditSourcesFromMessages(ctx, t.event, request.SourceMessageIDs)
+		if len(request.Sources) == 0 {
+			// 显式来源（source_message_ids、identity_sources）优先，「按某人头像的样子改
+			// 这张图」时点名的头像跟在原图后面一起交给图片模型。都没点名才按当前消息、
+			// 引用消息去找，见 image_edit_source_plan.go。
+			sources, used, err := t.runtime.resolveImageEditSources(ctx, t.event, t.sourcePlan(request))
 			if err != nil {
 				return dianaImageToolResult{}, err
 			}
-			// 「按某人头像的样子改这张图」：点名的头像跟在原图后面一起交给图片模型。
-			request.Sources = appendImageEditSourceImages(sources, t.runtime.avatarIdentityImageURLs(ctx, t.event, request.IdentitySources)...)
-		}
-		if len(request.Sources) == 0 {
-			request.Sources = t.runtime.imageEditSourceImages(ctx, t.event, request.IdentitySources)
+			request.Sources, request.SourcesUsed = sources, used
 		}
 		if len(request.Sources) == 0 {
 			return dianaImageToolResult{}, errImageEditSourceNotFound
@@ -376,6 +410,10 @@ func (t *dianaImageTool) enqueue(ctx context.Context, request dianaImageToolRequ
 		return dianaImageToolResult{}, fmt.Errorf("图片任务无法启动")
 	}
 	result := dianaImageToolResult{OK: true, Queued: true, Action: request.Operation, Caption: request.Caption}
+	if len(request.SourcesUsed) > 0 {
+		result.SourcesUsed = request.SourcesUsed
+		result.SourcesNote = imageSourcesUsedNote
+	}
 	if len(reservation.reserved) > 0 {
 		result.TaskID = reservation.reserved[0].id
 		if request.WorkspaceStem != "" {
@@ -458,7 +496,7 @@ func (t *dianaImageTool) execute(ctx context.Context, request dianaImageToolRequ
 	case "edit":
 		sources := append([]string(nil), request.Sources...)
 		if len(sources) == 0 {
-			sources = t.runtime.imageEditSourceImages(ctx, t.event, request.IdentitySources)
+			sources, _, _ = t.runtime.resolveImageEditSources(ctx, t.event, t.sourcePlan(request))
 		}
 		if len(sources) == 0 {
 			return dianaImageTaskOutput{}, errImageEditSourceNotFound
@@ -662,6 +700,9 @@ func (r *Runtime) enqueueImageReplyTask(ctx context.Context, event MessageEvent,
 	if err != nil {
 		return dianaImageToolResult{}, err
 	}
+	// 意图路由这条路没有模型点名原图，「先发图、隔几秒说改成黑白」只能靠同一个人
+	// 刚发的那批图兜底。
+	request.AllowRecentSenderImages = true
 	return tool.enqueue(ctx, request)
 }
 

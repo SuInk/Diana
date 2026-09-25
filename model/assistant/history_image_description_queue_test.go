@@ -263,25 +263,3 @@ func TestAwaitHistoryImageDescriptionsJumpsTheQueue(t *testing.T) {
 	runtime.incActive(-1)
 	waitForCondition(t, 3*time.Second, func() bool { return describedCount(store, backlogHashes) == len(backlogHashes) })
 }
-
-func TestRecentSenderImageEvents(t *testing.T) {
-	now := time.Now().Unix()
-	image := []MessageSegment{{Type: "image", Data: map[string]string{"cached_file": "/tmp/a.png"}}}
-	history := []MessageEvent{
-		{MessageID: "too-old", UserID: "alice", Time: now - 600, Segments: image},
-		{MessageID: "alice-image-1", UserID: "alice", Time: now - 120, Segments: image},
-		{MessageID: "bob-image", UserID: "bob", Time: now - 60, Segments: image},
-		{MessageID: "alice-text", UserID: "alice", Time: now - 50, Segments: []MessageSegment{{Type: "text", Data: map[string]string{"text": "看这个"}}}},
-		{MessageID: "same-turn", UserID: "alice", Time: now - 5, Segments: image},
-		{MessageID: "alice-image-2", UserID: "alice", Time: now - 30, Segments: image},
-	}
-	event := MessageEvent{MessageID: "question", UserID: "alice", Time: now}
-	got := recentSenderImageEvents(history, event, map[string]bool{"same-turn": true})
-	if len(got) != 2 || got[0].MessageID != "alice-image-2" || got[1].MessageID != "alice-image-1" {
-		ids := make([]string, 0, len(got))
-		for _, item := range got {
-			ids = append(ids, item.MessageID)
-		}
-		t.Fatalf("dependencies = %v", ids)
-	}
-}

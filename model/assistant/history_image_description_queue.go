@@ -28,6 +28,9 @@ import (
 //   - 前台真正依赖的图（用户在问的那张）走加急：插到队首、不等空闲、不会被打断，
 //     前台用 awaitHistoryImageDescriptions 有限时地等它做完。不加急的话前台一等，
 //     后台就因为「前台忙」永远不开工，两边互相等死。
+//   - 加急任务最多 historyImageDescriptionUrgentConcurrency 张同时做：用户一口气发了
+//     三四张图再问，一张张排着做，后面那张要等前面全部做完，前台等的预算大半耗在
+//     排队上。普通任务仍是单线、只在没有加急任务在跑时开工，规则不变。
 //   - 失败 historyImageDescriptionMaxFailures 次后自动路径不再重试；模型或用户真的
 //     读这张图时（explicit/加急）还会再试。
 
@@ -46,6 +49,8 @@ const (
 	recentSenderImageWindow = 3 * time.Minute
 	// recentSenderImageMessages 最多回看这个人最近几条带图消息。
 	recentSenderImageMessages = 2
+	// historyImageDescriptionUrgentConcurrency 是加急识图同时进行的上限。
+	historyImageDescriptionUrgentConcurrency = 3
 )
 
 type historyImageDescJob struct {
@@ -58,6 +63,10 @@ type historyImageDescJob struct {
 	done       chan struct{}
 	cancel     context.CancelFunc
 	preempted  bool
+	// running 表示任务已经取出在做；countedUrgent 表示它占着加急并发名额
+	//（取出时是加急）。普通任务跑到一半被升成加急时不改名额，只是不再被打断。
+	running       bool
+	countedUrgent bool
 }
 
 type historyImageDescFailure struct {
@@ -172,7 +181,7 @@ func (r *Runtime) pushHistoryImageDescriptionJob(job *historyImageDescJob) chan 
 		if job.urgent && !existing.urgent {
 			existing.urgent = true
 			existing.explicit = true
-			if existing != r.historyImageDescRunning {
+			if !existing.running {
 				r.removeQueuedHistoryImageDescriptionJobLocked(existing)
 				r.insertHistoryImageDescriptionJobLocked(existing)
 			}
@@ -312,12 +321,21 @@ func (r *Runtime) historyImageDescriptionWorker() {
 		if job == nil {
 			return
 		}
+		if job.countedUrgent {
+			// 加急任务各起一个 goroutine，worker 接着去取下一个，凑满并发上限。
+			go func() {
+				defer recoverGoroutinePanic("recallImageContext.historyImageDescriptionUrgentJob")
+				r.runHistoryImageDescriptionJob(job)
+			}()
+			continue
+		}
 		r.runHistoryImageDescriptionJob(job)
 	}
 }
 
-// nextHistoryImageDescriptionJob 取下一个可以开工的任务。加急任务随时开工；
-// 普通任务要等前台和其他 worker 都空下来。队列空了 worker 退出，下次入队再起。
+// nextHistoryImageDescriptionJob 取下一个可以开工的任务。加急任务不等空闲，名额满了
+// 就等其中一个做完；普通任务要等前台、加急任务和其他普通任务都空下来。队列空了
+// worker 退出，下次入队再起。
 func (r *Runtime) nextHistoryImageDescriptionJob() *historyImageDescJob {
 	base := r.historyImageDescriptionBaseContext()
 	ticker := time.NewTicker(historyImageDescriptionIdlePoll)
@@ -334,9 +352,18 @@ func (r *Runtime) nextHistoryImageDescriptionJob() *historyImageDescJob {
 			return nil
 		}
 		head := r.historyImageDescQueue[0]
-		if head.urgent || (r.historyImageDescFront == 0 && r.activeCount() == 0) {
+		if head.urgent && r.historyImageDescUrgentRunning < historyImageDescriptionUrgentConcurrency {
+			r.historyImageDescQueue = r.historyImageDescQueue[1:]
+			r.historyImageDescUrgentRunning++
+			head.running, head.countedUrgent = true, true
+			r.historyImageDescMu.Unlock()
+			return head
+		}
+		if !head.urgent && r.historyImageDescRunning == nil && r.historyImageDescUrgentRunning == 0 &&
+			r.historyImageDescFront == 0 && r.activeCount() == 0 {
 			r.historyImageDescQueue = r.historyImageDescQueue[1:]
 			r.historyImageDescRunning = head
+			head.running = true
 			r.historyImageDescMu.Unlock()
 			return head
 		}
@@ -365,8 +392,15 @@ func (r *Runtime) runHistoryImageDescriptionJob(job *historyImageDescJob) {
 	cancel()
 
 	r.historyImageDescMu.Lock()
-	r.historyImageDescRunning = nil
+	if job.countedUrgent {
+		r.historyImageDescUrgentRunning--
+	} else if r.historyImageDescRunning == job {
+		r.historyImageDescRunning = nil
+	}
+	job.running, job.countedUrgent = false, false
 	job.cancel = nil
+	// 名额空出来了：叫醒 worker 去取排着的下一个。
+	defer r.wakeHistoryImageDescriptionWorker()
 	if job.preempted && base.Err() == nil {
 		// 被新消息打断：放回同类任务的最前面，下次从头开始，不算失败。
 		job.preempted = false
@@ -479,39 +513,4 @@ func (r *Runtime) endHistoryImageDescriptionForeground() {
 	}
 	r.historyImageDescMu.Unlock()
 	r.wakeHistoryImageDescriptionWorker()
-}
-
-// recentSenderImageEvents 找出当前发言者在不久前单独发的带图消息：先发图、
-// 隔一会儿再发文字问「这是啥」时，这句话的意思取决于那张图的描述。
-// 同一轮合并进来的消息原图会直接附上，不在这里等。
-func recentSenderImageEvents(history []MessageEvent, event MessageEvent, skip map[string]bool) []MessageEvent {
-	userID := strings.TrimSpace(event.UserID)
-	if userID == "" {
-		return nil
-	}
-	var out []MessageEvent
-	for index := len(history) - 1; index >= 0 && len(out) < recentSenderImageMessages; index-- {
-		item := history[index]
-		messageID := strings.TrimSpace(item.MessageID)
-		if messageID == "" || messageID == event.MessageID || skip[messageID] {
-			continue
-		}
-		if strings.TrimSpace(item.botReply) != "" || strings.TrimSpace(item.UserID) != userID {
-			continue
-		}
-		if event.Time > 0 && item.Time > 0 && time.Duration(event.Time-item.Time)*time.Second > recentSenderImageWindow {
-			break
-		}
-		if historicalMediaCount(item) > 0 && hasImageSegment(append(append([]MessageSegment(nil), item.Segments...), quotedSegments(item)...)) {
-			out = append(out, item)
-		}
-	}
-	return out
-}
-
-func quotedSegments(event MessageEvent) []MessageSegment {
-	if event.Quoted == nil {
-		return nil
-	}
-	return event.Quoted.Segments
 }

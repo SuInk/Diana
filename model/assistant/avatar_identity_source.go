@@ -36,57 +36,114 @@ const (
 // 而工具参数每轮都要渲染，放在那里等于每轮都拉一次名单。member_avatar 只在模型确实
 // 选了成员头像时才去核对，绝大多数轮次一次接口都不会打。
 func (r *Runtime) avatarIdentityImageURLs(ctx context.Context, event MessageEvent, selected []string) []string {
+	resolved, _ := r.avatarIdentitySources(ctx, event, selected)
+	var out []string
+	for _, source := range resolved {
+		out = appendImageEditSourceImages(out, source.URL)
+	}
+	return out
+}
+
+// resolvedImageEditSource 是一张解析出来的原图和它的来历。来历要一路带到工具结果
+// 里：模型只有看到「这次真正用的是谁的头像、哪条消息的图」，才不会嘴上说用了 A、
+// 实际交给图片模型的是 B。
+type resolvedImageEditSource struct {
+	URL  string
+	Used imageEditSourceUsed
+}
+
+// avatarIdentitySources 和 avatarIdentityImageURLs 同一套解析规则，另外交出每张头像
+// 的来历，以及没能解析的来源（成员核对不过、群号不在当前会话里）。
+func (r *Runtime) avatarIdentitySources(ctx context.Context, event MessageEvent, selected []string) ([]resolvedImageEditSource, []string) {
 	if len(selected) == 0 || (event.Kind != EventKindGroup && event.Kind != EventKindPrivate) {
-		return nil
+		return nil, selected
 	}
 	botID := r.avatarBotID(event)
 	var (
-		out         []string
+		out         []resolvedImageEditSource
+		failed      []string
+		seen        = map[string]bool{}
 		memberCheck func(string) bool
 	)
+	add := func(url string, used imageEditSourceUsed) bool {
+		url = strings.TrimSpace(url)
+		if url == "" {
+			return false
+		}
+		if !seen[url] {
+			seen[url] = true
+			out = append(out, resolvedImageEditSource{URL: url, Used: used})
+		}
+		return true
+	}
 	for _, raw := range selected {
+		if len(out) >= maxAvatarImageSources {
+			break
+		}
 		id := strings.TrimSpace(raw)
+		ok := false
 		switch {
 		case id == avatarSourceGroup:
 			if event.Kind == EventKindGroup && strings.TrimSpace(event.GroupID) != "" {
-				out = appendImageEditSourceImages(out, r.avatarSourceURL(ctx, event, event.GroupID, true))
+				ok = add(r.avatarSourceURL(ctx, event, event.GroupID, true), imageEditSourceUsed{Kind: avatarSourceGroup, GroupID: strings.TrimSpace(event.GroupID)})
 			}
 		case strings.HasPrefix(id, avatarSourceGroupPrefix):
 			groupID := strings.TrimSpace(strings.TrimPrefix(id, avatarSourceGroupPrefix))
 			if groupID == "" {
-				continue
+				break
 			}
-			if event.Kind == EventKindGroup && groupID == strings.TrimSpace(event.GroupID) {
-				out = appendImageEditSourceImages(out, r.avatarSourceURL(ctx, event, groupID, true))
-			} else if event.Kind == EventKindPrivate && r.privateGroupAvatarAllowed(ctx, event, groupID) {
-				out = appendImageEditSourceImages(out, r.avatarSourceURL(ctx, event, groupID, true))
+			if (event.Kind == EventKindGroup && groupID == strings.TrimSpace(event.GroupID)) ||
+				(event.Kind == EventKindPrivate && r.privateGroupAvatarAllowed(ctx, event, groupID)) {
+				ok = add(r.avatarSourceURL(ctx, event, groupID, true), imageEditSourceUsed{Kind: avatarSourceGroup, GroupID: groupID})
 			}
 		case id == avatarSourceBot:
 			if botID != "" {
-				out = appendImageEditSourceImages(out, r.avatarSourceURL(ctx, event, botID, false))
+				ok = add(r.avatarSourceURL(ctx, event, botID, false), imageEditSourceUsed{Kind: avatarSourceBot, UserID: botID})
 			}
 		case id == avatarSourceSender:
 			if userID := strings.TrimSpace(event.UserID); userID != "" {
-				out = appendImageEditSourceImages(out, r.avatarSourceURL(ctx, event, userID, false))
+				ok = add(r.avatarSourceURL(ctx, event, userID, false), imageEditSourceUsed{Kind: avatarSourceSender, UserID: userID, User: strings.TrimSpace(event.SenderName)})
 			}
 		case strings.HasPrefix(id, avatarSourceMemberPrefix):
 			userID := strings.TrimSpace(strings.TrimPrefix(id, avatarSourceMemberPrefix))
 			if userID == "" {
-				continue
+				break
 			}
 			if memberCheck == nil {
 				memberCheck = r.reachableAvatarUserIDs(ctx, event)
 			}
 			if !memberCheck(userID) {
-				continue
+				break
 			}
-			out = appendImageEditSourceImages(out, r.avatarSourceURL(ctx, event, userID, false))
+			ok = add(r.avatarSourceURL(ctx, event, userID, false), imageEditSourceUsed{Kind: "member_avatar", UserID: userID, User: r.knownDisplayName(event, userID)})
 		}
-		if len(out) >= maxAvatarImageSources {
-			break
+		if !ok && id != "" {
+			failed = append(failed, id)
 		}
 	}
-	return out
+	return out, failed
+}
+
+// knownDisplayName 从当前会话的历史里找这个人的昵称，找不到就留空，不去打接口。
+func (r *Runtime) knownDisplayName(event MessageEvent, userID string) string {
+	userID = strings.TrimSpace(userID)
+	if userID == "" {
+		return ""
+	}
+	if userID == strings.TrimSpace(event.UserID) && strings.TrimSpace(event.SenderName) != "" {
+		return strings.TrimSpace(event.SenderName)
+	}
+	history := r.contextHistory(event)
+	for index := len(history) - 1; index >= 0; index-- {
+		item := history[index]
+		if strings.TrimSpace(item.UserID) == userID && strings.TrimSpace(item.SenderName) != "" {
+			return strings.TrimSpace(item.SenderName)
+		}
+		if item.Quoted != nil && strings.TrimSpace(item.Quoted.UserID) == userID && strings.TrimSpace(item.Quoted.SenderName) != "" {
+			return strings.TrimSpace(item.Quoted.SenderName)
+		}
+	}
+	return ""
 }
 
 // avatarBotID 是 bot_avatar 指向的账号：配置里写了机器人账号就用它，否则用事件上报的自身 ID。
