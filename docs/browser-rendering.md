@@ -16,7 +16,7 @@
 
 ## Docker
 
-官方运行镜像预装 Chromium、fontconfig 和 Noto CJK 字体，并以 UID 10001 运行 Diana：入口以 root 启动，把挂进来的 `data/` 交给 UID 10001（Linux 上 Docker 自动创建的宿主机目录归 root，不修正就写不进数据库和日志），再降权启动主程序；用 `--user` 指定用户时跳过这一步，权限由部署方负责。仓库的 `docker-compose.yml` 默认拉取预构建镜像，已配置专用 seccomp 规则。首次在部署目录执行一键脚本，自动下载 Compose 文件与 `scripts/docker/chromium-seccomp.json` 并启动（需已安装并启动 Docker，含 Compose v2）：
+官方运行镜像预装 Chromium、fontconfig 和 Noto CJK 字体，并以 UID 10001 运行 Diana：入口以 root 启动，把挂进来的 `data/` 交给 UID 10001（Linux 上 Docker 自动创建的宿主机目录归 root，不修正就写不进数据库和日志），再降权启动主程序；用 `--user` 指定用户时跳过这一步，权限由部署方负责。因此镜像本身的默认用户是 root：`docker exec` 默认以 root 进入，在容器里手动执行 `diana` 命令请加 `-u diana`，否则可能在 `data/` 里留下主程序写不了的文件；Kubernetes 等要求 `runAsNonRoot` 的环境需显式设置 `runAsUser: 10001`，并自行保证数据卷对该 UID 可写（例如 `fsGroup: 10001`）。仓库的 `docker-compose.yml` 默认拉取预构建镜像，已配置专用 seccomp 规则。首次在部署目录执行一键脚本，自动下载 Compose 文件与 `scripts/docker/chromium-seccomp.json` 并启动（需已安装并启动 Docker，含 Compose v2）：
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/docker.sh | sh

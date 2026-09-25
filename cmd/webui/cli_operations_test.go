@@ -47,3 +47,37 @@ func TestLoadCLIConfigRejectsMissingExplicitFile(t *testing.T) {
 		t.Fatal("missing explicit config was accepted")
 	}
 }
+
+// TestDoctorResolvesPathsLikeServerInDocker 容器里主程序按工作目录解析配置里的
+// 相对路径；配置文件放在 data/config.yaml 时 doctor 也得检查同一个位置，而不是
+// data/data。
+func TestDoctorResolvesPathsLikeServerInDocker(t *testing.T) {
+	t.Setenv("DIANA_DEPLOYMENT", "docker")
+	root := t.TempDir()
+	t.Chdir(root)
+	for _, dir := range []string{"data", filepath.Join("data", "logs")} {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	body := "server:\n  port: \"1\"\nstorage:\n  db_path: data/diana.db\n  log_path: data/logs/diana.log\n"
+	if err := os.WriteFile(filepath.Join("data", "config.yaml"), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var output strings.Builder
+	// The frontend is absent in the fixture, so doctor reports a failure; only
+	// the path checks matter here.
+	_ = runDoctorCommand([]string{"--config", filepath.Join("data", "config.yaml")}, &output)
+	want, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, line := range []string{
+		"[ok]   database directory writable: " + filepath.Join(want, "data"),
+		"[ok]   log directory writable: " + filepath.Join(want, "data", "logs"),
+	} {
+		if !strings.Contains(output.String(), line) {
+			t.Errorf("doctor output is missing %q:\n%s", line, output.String())
+		}
+	}
+}
