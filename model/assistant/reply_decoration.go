@@ -71,7 +71,7 @@ func (r *Runtime) autoReferenceBackloggedReply(event MessageEvent) bool {
 			found = strings.TrimSpace(item.MessageID) == strings.TrimSpace(event.MessageID)
 			continue
 		}
-		if !item.Outbound && strings.TrimSpace(item.MessageID) != "" {
+		if !item.Outbound && !isPokeHistoryEvent(item) && strings.TrimSpace(item.MessageID) != "" {
 			newer++
 			if newer >= autoReplyReferenceBacklogMessages {
 				return true
@@ -83,7 +83,7 @@ func (r *Runtime) autoReferenceBackloggedReply(event MessageEvent) bool {
 	if !found {
 		newer = 0
 		for _, item := range history {
-			if item.Outbound || strings.TrimSpace(item.MessageID) == "" {
+			if item.Outbound || isPokeHistoryEvent(item) || strings.TrimSpace(item.MessageID) == "" {
 				continue
 			}
 			if event.Time > 0 && item.Time >= event.Time && item.MessageID != event.MessageID {
@@ -108,7 +108,7 @@ func pendingEarlierMessage(history []MessageEvent, event MessageEvent) (MessageE
 		if strings.TrimSpace(item.MessageID) == currentID && currentID != "" {
 			continue
 		}
-		if item.crossGroupContext {
+		if item.crossGroupContext || isPokeHistoryEvent(item) {
 			continue
 		}
 		// 紧挨着的上一条不是同一个人的入站消息,就没有「连发未回」这回事。
@@ -150,7 +150,7 @@ func botJustAnsweredSender(history []MessageEvent, event MessageEvent) bool {
 	index := len(history) - 1
 	for ; index >= 0; index-- {
 		item := history[index]
-		if item.crossGroupContext {
+		if item.crossGroupContext || isPokeHistoryEvent(item) {
 			continue
 		}
 		if currentID != "" && strings.TrimSpace(item.MessageID) == currentID {
@@ -171,7 +171,7 @@ func botJustAnsweredSender(history []MessageEvent, event MessageEvent) bool {
 	// 机器人上一句在回谁,看它前面紧挨着的那条入站消息是谁发的。
 	for index--; index >= 0; index-- {
 		item := history[index]
-		if item.crossGroupContext || item.Outbound {
+		if item.crossGroupContext || item.Outbound || isPokeHistoryEvent(item) {
 			continue
 		}
 		return strings.TrimSpace(item.UserID) == senderID
@@ -245,7 +245,7 @@ func otherSpeakersBefore(history []MessageEvent, event MessageEvent) int {
 	scanned := 0
 	for index := len(history) - 1; index >= 0 && scanned < mentionCrowdLookback; index-- {
 		item := history[index]
-		if item.crossGroupContext {
+		if item.crossGroupContext || isPokeHistoryEvent(item) {
 			continue
 		}
 		if currentID != "" && strings.TrimSpace(item.MessageID) == currentID {

@@ -3054,6 +3054,9 @@ func proactiveReplyBotMessageAddressesUser(message MessageEvent, history []Messa
 	if message.Quoted != nil && strings.TrimSpace(message.Quoted.UserID) == userID {
 		return true
 	}
+	if pokeLeadsToBotMessage(message, history, userID) {
+		return true
+	}
 	repliedMessageIDs := make([]string, 0, 1)
 	for _, segment := range message.Segments {
 		switch segment.Type {
@@ -7077,6 +7080,11 @@ func (r *Runtime) outgoingHistoryEvent(source MessageEvent, msg OutgoingMessage)
 }
 
 func assistantHistoryEvent(event MessageEvent, botID string) bool {
+	// 机器人戳人是动作不是发言：算成 assistant 的话，模型会照着历史把「[戳一戳]」当文字发，
+	// 收尾、空转检测也会把它当成一次回复。
+	if isPokeHistoryEvent(event) {
+		return false
+	}
 	return event.Outbound || strings.TrimSpace(botID) != "" && event.UserID == strings.TrimSpace(botID)
 }
 

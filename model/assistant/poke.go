@@ -40,6 +40,9 @@ func (r *Runtime) sendPoke(ctx context.Context, event MessageEvent, target, scen
 	target = strings.TrimSpace(target)
 	action, err := r.sendPokeUnlogged(ctx, event, target)
 	r.recordPokeSent(ctx, event, target, scene, action, err)
+	if err == nil {
+		r.rememberSentPoke(event, target)
+	}
 	return action, err
 }
 
