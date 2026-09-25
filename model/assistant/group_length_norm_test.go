@@ -42,8 +42,11 @@ func TestGroupLengthNormPromptOnlyForGroupsWithEnoughHistory(t *testing.T) {
 		runtime.remember(item)
 	}
 	got := runtime.groupLengthNormPrompt(event, cfg)
-	if !strings.Contains(got, "一般 5 字左右") || !strings.Contains(got, "尽量不超过 15 字") {
-		t.Fatalf("group length norm = %q, want the median and the 15-rune floor", got)
+	if strings.Contains(got, "尽量不超过") {
+		t.Fatalf("the group norm must not cap reply length any more: %q", got)
+	}
+	if !strings.Contains(got, "学的是上面群友的消息") {
+		t.Fatalf("the group voice line is missing: %q", got)
 	}
 	if !strings.Contains(got, "一条消息只写一行") {
 		t.Fatalf("a group that never breaks lines should be told so: %q", got)

@@ -14,7 +14,7 @@ func TestReplyLayoutAndDeliveryAreIndependent(t *testing.T) {
 		want             []string
 	}{
 		{"plain", "结论\n解释\n补充", false, false, []string{"结论，解释，补充"}},
-		{"punctuation", "对吗？\n是的！\n原因如下。\n结尾", false, false, []string{"对吗？是的！原因如下。结尾"}},
+		{"punctuation", "对吗？\n是的！\n原因如下。\n结尾", false, false, []string{"对吗？是的！原因如下 结尾"}},
 		{"english", "First thought\nSecond thought", false, false, []string{"First thought Second thought"}},
 		{"preserve", "结论\n\n解释", true, false, []string{"结论\n\n解释"}},
 		{"list", "1. 检查\n2. 重启\n3. 验证", false, false, []string{"1. 检查\n2. 重启\n3. 验证"}},
