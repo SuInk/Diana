@@ -136,7 +136,7 @@
         <div v-if="visibleEvents.length > 0" class="event-detail-list">
           <template v-for="(event, index) in visibleEvents" :key="event.id">
             <div v-if="showDateSeparator(index)" class="event-date-separator">{{ formatDate(event.at) }}</div>
-            <article class="event-detail-row">
+            <article :id="eventAnchorID(event)" class="event-detail-row" :class="{ flash: flashedEventID === event.id }">
             <div class="event-detail-time">
               <strong>{{ formatClock(event.at) }}</strong>
             </div>
@@ -175,8 +175,26 @@
                 <span v-if="event.original_time" class="muted">原消息发送于 {{ formatClock(event.original_time) }}</span>
               </div>
 
+              <!-- 引用原先以「[回复 某人：原话] 正文」夹在正文里，原话截到 30 字，还和正文
+                   粘成一句。单独成块后原话能多给一些；被引用的那条就在列表里时点一下跳过去。 -->
+              <component
+                :is="quoteTarget(event) ? 'button' : 'div'"
+                v-if="event.quote"
+                class="event-quote"
+                :class="{ linked: quoteTarget(event) }"
+                :type="quoteTarget(event) ? 'button' : undefined"
+                :title="quoteTarget(event) ? '跳到被引用的消息' : undefined"
+                @click="jumpToQuote(event)"
+              >
+                <Reply :size="13" class="event-quote-icon" aria-hidden="true" />
+                <span class="event-quote-body">
+                  <strong>{{ quoteSender(event) }}</strong>
+                  <span class="event-quote-text">{{ event.quote.text ? displayMessageText(event.quote.text) : "原消息未保存" }}</span>
+                </span>
+              </component>
+
               <p v-if="displayMessageText(event.text)" class="event-detail-message">{{ displayMessageText(event.text) }}</p>
-              <p v-else-if="!event.images?.length" class="event-detail-message">[无文本内容]</p>
+              <p v-else-if="!event.images?.length && !event.quote" class="event-detail-message">[无文本内容]</p>
 
               <div v-if="event.images?.length" class="event-image-grid" aria-label="消息图片">
                 <template v-for="image in event.images" :key="image.index">
@@ -566,6 +584,7 @@ import {
   MessageCircleReply,
   PieChart,
   RefreshCw,
+  Reply,
   Search,
   Sigma,
   Send,
@@ -893,12 +912,63 @@ function recallRoleLabel(role?: string): string {
   return labels[key] ?? key;
 }
 
+function eventAnchorID(event: AssistantEventDetail): string {
+  return `event-${event.id}`;
+}
+
+function outboundIDs(event: AssistantEventDetail): string[] {
+  return (event.outbound_message_id ?? "").split(",").map((id) => id.trim()).filter(Boolean);
+}
+
+// 被引用的消息如果就在已加载的列表里，找出它那一行：可能是群友的入站消息，也可能
+// 是机器人自己发出去的某句回复（挂在触发它的那条事件上）。
+const quoteTargets = computed(() => {
+  const byMessage = new Map<string, AssistantEventDetail>();
+  for (const event of visibleEvents.value) {
+    if (event.message_id && !isNoticeEvent(event)) byMessage.set(recallKey(event.group_id, event.message_id), event);
+    for (const id of outboundIDs(event)) byMessage.set(recallKey(event.group_id, `out:${id}`), event);
+  }
+  return byMessage;
+});
+
+function quoteTarget(event: AssistantEventDetail): AssistantEventDetail | undefined {
+  const id = event.quote?.message_id;
+  if (!id) return undefined;
+  const target = quoteTargets.value.get(recallKey(event.group_id, id)) ?? quoteTargets.value.get(recallKey(event.group_id, `out:${id}`));
+  return target && target.id !== event.id ? target : undefined;
+}
+
+function quoteRepliesToBot(event: AssistantEventDetail): boolean {
+  const id = event.quote?.message_id;
+  return Boolean(id && quoteTarget(event) && outboundIDs(quoteTarget(event)!).includes(id));
+}
+
+function quoteSender(event: AssistantEventDetail): string {
+  const quote = event.quote;
+  if (!quote) return "";
+  if (quoteRepliesToBot(event)) return "回复机器人";
+  const name = quote.sender_name?.trim() || quote.user_id?.trim();
+  return name ? `回复 ${name}` : "回复一条消息";
+}
+
+const flashedEventID = ref("");
+let flashTimer: ReturnType<typeof setTimeout> | undefined;
+
+function jumpToQuote(event: AssistantEventDetail): void {
+  const target = quoteTarget(event);
+  if (!target) return;
+  document.getElementById(eventAnchorID(target))?.scrollIntoView({ behavior: "smooth", block: "center" });
+  flashedEventID.value = target.id;
+  clearTimeout(flashTimer);
+  flashTimer = setTimeout(() => { flashedEventID.value = ""; }, 1600);
+}
+
 function recallKey(groupID?: string, messageID?: string): string {
   return `${groupID ?? ""}\u0000${messageID ?? ""}`;
 }
 
 function replyRecallText(event: AssistantEventDetail, recall: AssistantEventRecall): string {
-  const outbound = (event.outbound_message_id ?? "").split(",").map((id) => id.trim()).filter(Boolean);
+  const outbound = outboundIDs(event);
   const position = outbound.length > 1 && outbound.includes(recall.message_id)
     ? `（共 ${outbound.length} 条消息中的第 ${outbound.indexOf(recall.message_id) + 1} 条）`
     : "";
@@ -1335,7 +1405,8 @@ function deliveryParts(delivery?: AssistantEventDelivery): string[] {
 }
 
 function replyResultText(event: AssistantEventDetail): string {
-  if (event.reply?.trim()) return displayMessageText(event.reply);
+  // 回复本来就是回这条消息的，开头那个引用标记只是重复。
+  if (event.reply?.trim()) return displayMessageText(event.reply).replace(/^\[回复\]\s*/, "");
   if (event.error?.trim()) return `机器人已发送错误说明：${displayMessageText(event.error)}`;
   // 以前这里一律写「未保存回复正文」。发媒体不发文字是正常情况，说成没保存是误导。
   const parts = deliveryParts(event.delivery);
@@ -1540,6 +1611,7 @@ onBeforeUnmount(() => {
   loadGeneration++;
   eventsAbort?.abort();
   document.removeEventListener("keydown", onImageKeydown);
+  clearTimeout(flashTimer);
 });
 </script>
 
@@ -2143,6 +2215,70 @@ onBeforeUnmount(() => {
   margin-top: 12px;
   color: var(--text);
   line-height: 1.65;
+}
+
+.event-quote {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  width: 100%;
+  margin-top: 12px;
+  padding: 8px 12px;
+  border: 0;
+  border-left: 3px solid var(--border-strong);
+  border-radius: 0 var(--radius-md) var(--radius-md) 0;
+  background: var(--surface-2);
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.55;
+  text-align: left;
+}
+
+.event-quote.linked {
+  cursor: pointer;
+}
+
+.event-quote.linked:hover {
+  border-left-color: var(--accent);
+}
+
+.event-quote-icon {
+  flex: none;
+  margin-top: 4px;
+  color: var(--muted);
+}
+
+.event-quote-body {
+  min-width: 0;
+}
+
+.event-quote-body strong {
+  display: block;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.event-quote-text {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow-wrap: anywhere;
+}
+
+.event-quote + .event-detail-message {
+  margin-top: 8px;
+}
+
+.event-detail-row.flash {
+  animation: event-flash 1.6s ease-out;
+}
+
+@keyframes event-flash {
+  from { background: color-mix(in srgb, var(--accent) 14%, transparent); }
+  to { background: transparent; }
 }
 
 .event-recall-summary {

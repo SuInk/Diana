@@ -2363,6 +2363,16 @@ export interface AssistantEventDetail extends BotEvent {
   delivery?: AssistantEventDelivery;
   /** 这一轮发出去的消息后来被撤回的记录；撤回通知那一行据此合进原回复。 */
   recalls?: AssistantEventRecall[];
+  /** 这条消息引用的原消息；正文里不再夹「[回复 某人：原话]」，单独画成引用块。 */
+  quote?: AssistantEventQuote;
+}
+
+export interface AssistantEventQuote {
+  message_id?: string;
+  user_id?: string;
+  sender_name?: string;
+  /** 原话摘要；原消息没存下来时为空，只剩消息号。 */
+  text?: string;
 }
 
 export interface AssistantEventRecall {
