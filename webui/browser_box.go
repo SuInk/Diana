@@ -406,11 +406,8 @@ func writeLiveFrame(conn *websocket.Conn, frame browserbox.Frame) error {
 }
 
 // handleLiveMessage 把前端的一条指令翻成 CDP 调用。
-//
-// 用户在画面上点一下等于人工接管：不这样的话用户正在填表，模型同时在点别的地方，
-// 两边抢同一个页面。只是鼠标路过、滚轮蹭到、敲了键盘都不算，见 claimLiveInput。
 func (h *BrowserBoxHandler) handleLiveMessage(c *gin.Context, bot *browserbox.Bot, live *browserbox.Live, message liveMessage) {
-	if !h.claimLiveInput(c, bot, message) {
+	if !h.claimLiveInput(bot, message) {
 		return
 	}
 	ctx := c.Request.Context()
@@ -432,40 +429,34 @@ func (h *BrowserBoxHandler) handleLiveMessage(c *gin.Context, bot *browserbox.Bo
 	}
 }
 
-// claimLiveInput 按输入种类决定要不要接管、这条输入还送不送给页面。
+// claimLiveInput 决定这条输入送不送给页面：只有你显式接管了才送，否则一律丢掉。
 //
-// 只有在画面上按下鼠标、在地址栏打开网页这两种才接管；其余输入只在已经接管时才
-// 送给页面，否则直接丢掉——机器人正在用这个页面时，悬停、滚动、按键同样会搅乱它。
+// 画面默认只能看。以前是点一下画面就算接管、后来又改成按下鼠标才算，边界怎么划都有
+// 误伤：点画面想让窗口获得焦点、切窗口时按下的修饰键，都会把浏览器从机器人手里抢
+// 走。成熟的做法（OpenAI Operator、Cloudflare Browser Run 的 handoff、BetterWright）
+// 都是默认只看，接管和交还各点一个按钮；这里照做，接管走 /api/browser-box/takeover。
 // 判断放在后端，不指望每个前端都自觉不发。
-//
-// 键盘不接管：画面点过一次之后焦点一直留在上面，闲置交还以后再按 Cmd+Tab 切窗口、
-// Cmd+C 复制、Tab 挪焦点，按下的那一下修饰键都会送到这里。以前按下任何键都算动手，
-// 于是交还没多久又被这些顺手的按键抢了回去。
-func (h *BrowserBoxHandler) claimLiveInput(c *gin.Context, bot *browserbox.Bot, message liveMessage) bool {
+func (h *BrowserBoxHandler) claimLiveInput(bot *browserbox.Bot, message liveMessage) bool {
+	if !bot.Takeover() {
+		return false
+	}
 	switch message.Type {
 	case "mouse":
 		if message.Mouse == nil {
 			return false
 		}
-		if message.Mouse.Type == "mousePressed" {
-			h.takeOverFromLive(c, bot)
-			return true
-		}
-		if !bot.Takeover() {
-			return false
-		}
-		// 接管期间滚动页面也算人还在；单纯的移动不算，鼠标搁在画面上抖一抖不该让接管永不过期。
+		// 单纯的移动不算人还在：鼠标搁在画面上抖一抖，不该让接管永不过期。
 		if message.Mouse.Type != "mouseMoved" {
 			bot.TouchTakeover()
 		}
 		return true
-	case "key", "text":
-		if message.Type == "key" && message.Key == nil {
+	case "key":
+		if message.Key == nil {
 			return false
 		}
-		if !bot.Takeover() {
-			return false
-		}
+		bot.TouchTakeover()
+		return true
+	case "text", "reload", "back":
 		bot.TouchTakeover()
 		return true
 	case "navigate":
@@ -473,24 +464,10 @@ func (h *BrowserBoxHandler) claimLiveInput(c *gin.Context, bot *browserbox.Bot, 
 		if target == "" || !h.manager.Settings().HostAllowed(target) {
 			return false
 		}
-		h.takeOverFromLive(c, bot)
-		return true
-	case "reload", "back":
 		bot.TouchTakeover()
 		return true
 	}
 	return false
-}
-
-// takeOverFromLive 在用户第一次在画面上有意动手时打开接管，并只在这一下记一条：
-// 打字每秒十几次，逐条记会把操作记录淹掉。已经接管时只刷新闲置时间。
-func (h *BrowserBoxHandler) takeOverFromLive(c *gin.Context, bot *browserbox.Bot) {
-	if bot.Takeover() {
-		bot.TouchTakeover()
-		return
-	}
-	bot.SetTakeover(true)
-	recordRequestOperation(c, h.logs, "browser_box_takeover", "你在画面上动手，内置浏览器已自动转为你接管", bot.ID(), browserBoxLogMetadata(bot, map[string]any{"active": true, "auto": true}))
 }
 
 // browserBoxLogMetadata 给内置浏览器的操作记录带上机器人 ID，浏览器页按它筛。

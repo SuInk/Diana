@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 type memoryStore struct {
@@ -77,6 +78,9 @@ func TestTakeoverHidesCDPURLFromAgent(t *testing.T) {
 	if url, err := manager.Bot("bot-a").Endpoint(ctx); err != nil || url != "http://127.0.0.1:12345" {
 		t.Fatalf("正常状态下应给出自己的地址，实际 %q %v", url, err)
 	}
+	// 有人开着画面才算真的在接管。
+	detach := manager.Bot("bot-a").AttachViewer()
+	defer detach()
 	manager.Bot("bot-a").SetTakeover(true)
 	if _, err := manager.Bot("bot-a").Endpoint(ctx); err == nil || !strings.Contains(err.Error(), "接管") {
 		t.Fatalf("接管时要给模型一句能看懂的理由，实际 %v", err)
@@ -288,5 +292,32 @@ func TestShortTempDirLeavesRoomForSingletonSocket(t *testing.T) {
 	}
 	if info, err := os.Stat(dir); err != nil || info.Mode().Perm() != 0o700 {
 		t.Fatalf("临时目录权限应当是 0700：%v %v", info, err)
+	}
+}
+
+// 接管挂着但人已经离开画面：机器人一来要用就当场交还，不用等离开的宽限。
+func TestEndpointReleasesTakeoverNobodyWatches(t *testing.T) {
+	manager := New(context.Background(), &memoryStore{}, t.TempDir())
+	manager.mu.Lock()
+	manager.settings.Enabled = true
+	manager.takeoverLeave = time.Hour
+	manager.instanceLocked("bot-a").cdpURL = "http://127.0.0.1:12345"
+	manager.mu.Unlock()
+	var reasons []string
+	manager.OnAutoRelease(func(_, reason string, _ time.Duration) { reasons = append(reasons, reason) })
+	bot := manager.Bot("bot-a")
+
+	detach := bot.AttachViewer()
+	bot.SetTakeover(true)
+	detach()
+	url, err := bot.Endpoint(context.Background())
+	if err != nil || url != "http://127.0.0.1:12345" {
+		t.Fatalf("没人在看画面时机器人应当直接拿到浏览器，实际 %q %v", url, err)
+	}
+	if bot.Takeover() {
+		t.Fatal("机器人拿走之后接管应当关掉")
+	}
+	if len(reasons) != 1 || reasons[0] != AutoReleaseLeft {
+		t.Fatalf("应当记一次离开画面的交还，实际 %v", reasons)
 	}
 }

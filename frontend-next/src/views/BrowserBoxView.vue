@@ -148,20 +148,22 @@
           </span>
         </div>
         <div class="browser-toolbar">
-          <button class="browser-tool" type="button" title="后退" aria-label="后退" @click="send({ type: 'back' })">
+          <button class="browser-tool" type="button" title="后退" aria-label="后退" :disabled="!status.takeover" @click="send({ type: 'back' })">
             <ArrowLeft :size="16" aria-hidden="true" />
           </button>
-          <button class="browser-tool" type="button" title="刷新" aria-label="刷新" @click="send({ type: 'reload' })">
+          <button class="browser-tool" type="button" title="刷新" aria-label="刷新" :disabled="!status.takeover" @click="send({ type: 'reload' })">
             <RotateCw :size="15" aria-hidden="true" />
           </button>
-          <label class="browser-address">
+          <label class="browser-address" :class="{ readonly: !status.takeover }">
             <Lock v-if="addressSecure" :size="13" class="browser-address-icon" aria-hidden="true" />
             <Search v-else :size="13" class="browser-address-icon" aria-hidden="true" />
             <input
               ref="addressField"
               v-model="addressInput"
               aria-label="网址"
-              placeholder="输入网址，回车打开"
+              :placeholder="status.takeover ? '输入网址，回车打开' : ''"
+              :readonly="!status.takeover"
+              :title="status.takeover ? '' : '接管之后才能换网址'"
               spellcheck="false"
               autocomplete="off"
               @focus="($event.target as HTMLInputElement).select()"
@@ -208,13 +210,14 @@
           <template v-if="status.takeover">
             <strong>你在操作</strong>
             <span class="browser-status-hint">
-              机器人暂时用不了，也看不到你敲了什么；离开这个画面或 {{ takeoverIdleMinutes }} 分钟不操作就交还给它
+              机器人先停下，也看不到你敲了什么；离开这个画面或 {{ takeoverIdleMinutes }} 分钟不操作就交还给它
             </span>
-            <button class="btn small browser-handback" type="button" :disabled="busy" @click="handBack">交还给机器人</button>
+            <button class="btn small" type="button" :disabled="busy" @click="handBack">交还给机器人</button>
           </template>
           <template v-else>
             <strong>机器人在用</strong>
-            <span class="browser-status-hint">点一下画面就转为你接管，之后才能打字、滚动</span>
+            <span class="browser-status-hint">你只能看；要自己登录、点按钮，先接管</span>
+            <button class="btn small primary" :class="{ 'browser-nudge': nudging }" type="button" :disabled="busy" @click="takeOver">接管</button>
           </template>
           <span class="browser-status-live" :class="{ warn: !liveHealthy }">{{ liveLabel }}</span>
         </div>
@@ -697,6 +700,33 @@ async function autoStart(): Promise<void> {
   }
 }
 
+// 画面默认只能看，接管要点按钮（和 OpenAI Operator、Cloudflare Browser Run 的 handoff 一样）：
+// 以前点一下画面就算接管，点画面想让窗口获得焦点也会把浏览器从机器人手里抢走。
+async function takeOver(): Promise<void> {
+  busy.value = true;
+  try {
+    const result = await setBrowserBoxTakeover(botID, true);
+    status.takeover = result.active;
+    screen.value?.focus();
+  } catch (err) {
+    toastError(err instanceof Error ? err.message : "接管失败");
+  } finally {
+    busy.value = false;
+  }
+}
+
+// 没接管时点画面：让「接管」按钮闪一下，告诉人该点哪里。
+const nudging = ref(false);
+let nudgeTimer: number | undefined;
+function nudgeTakeover(): void {
+  nudging.value = false;
+  if (nudgeTimer !== undefined) window.clearTimeout(nudgeTimer);
+  requestAnimationFrame(() => {
+    nudging.value = true;
+    nudgeTimer = window.setTimeout(() => (nudging.value = false), 900);
+  });
+}
+
 async function handBack(): Promise<void> {
   busy.value = true;
   try {
@@ -870,9 +900,11 @@ const mouseButtons = ["left", "middle", "right"];
 
 function onMouse(event: MouseEvent, type: "mousePressed" | "mouseReleased"): void {
   event.preventDefault();
+  if (!status.takeover) {
+    if (type === "mousePressed") nudgeTakeover();
+    return;
+  }
   if (type === "mousePressed") screen.value?.focus();
-  // 松开要跟着按下走：没接管时单独一下（从画面外拖进来松手）后端也会丢掉，这里干脆不发。
-  else if (!status.takeover) return;
   const point = pagePoint(event);
   send({
     type: "mouse",
@@ -886,8 +918,6 @@ function onMouse(event: MouseEvent, type: "mousePressed" | "mouseReleased"): voi
       modifiers: modifiers(event)
     }
   });
-  // 在画面上按下是唯一会转为接管的动作。
-  if (type === "mousePressed") status.takeover = true;
 }
 
 // 移动和滚轮按屏幕刷新合并，一帧最多发一条：不合并的话一次拖动能发出几百条，
@@ -962,7 +992,7 @@ function onKey(event: KeyboardEvent, type: "keyDown" | "keyUp"): void {
 
 // 输入法选字按的回车不算提交：以前带中文的网址会因此连开两次。
 function onAddressEnter(event: KeyboardEvent): void {
-  if (event.isComposing || event.keyCode === 229) return;
+  if (event.isComposing || event.keyCode === 229 || !status.takeover) return;
   event.preventDefault();
   navigate();
   // 打开之后把焦点还给页面，地址栏才会跟着跳转后的真实地址变。
@@ -973,7 +1003,6 @@ function navigate(): void {
   const target = addressInput.value.trim();
   if (!target) return;
   send({ type: "navigate", url: /^https?:\/\//i.test(target) ? target : `https://${target}` });
-  status.takeover = true;
 }
 
 function onVisibilityChange(): void {
@@ -1282,9 +1311,14 @@ onBeforeUnmount(() => {
   cursor: pointer;
 }
 
-.browser-tool:hover {
+.browser-tool:hover:not(:disabled) {
   background: var(--surface-2);
   color: var(--text);
+}
+
+.browser-tool:disabled {
+  opacity: 0.4;
+  cursor: default;
 }
 
 .browser-address {
@@ -1302,7 +1336,15 @@ onBeforeUnmount(() => {
   cursor: text;
 }
 
-.browser-address:focus-within {
+.browser-address.readonly {
+  cursor: default;
+}
+
+.browser-address.readonly input {
+  color: var(--text-secondary);
+}
+
+.browser-address:not(.readonly):focus-within {
   border-color: var(--accent);
   background: var(--surface);
 }
@@ -1379,12 +1421,8 @@ onBeforeUnmount(() => {
   width: 100%;
   max-width: 100%;
   display: block;
-  cursor: pointer;
-  outline: none;
-}
-
-.browser-window.is-takeover .browser-screen {
   cursor: default;
+  outline: none;
 }
 
 .browser-statusbar {
@@ -1414,6 +1452,23 @@ onBeforeUnmount(() => {
 
 .browser-status-hint {
   color: var(--muted);
+}
+
+.browser-nudge {
+  animation: browser-nudge 0.9s ease;
+}
+
+@keyframes browser-nudge {
+  0%,
+  100% {
+    transform: none;
+    box-shadow: none;
+  }
+  20%,
+  60% {
+    transform: scale(1.08);
+    box-shadow: 0 0 0 4px var(--accent-soft);
+  }
 }
 
 .browser-status-live {

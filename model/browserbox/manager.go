@@ -601,12 +601,18 @@ func (b *Bot) Endpoint(ctx context.Context) (string, error) {
 		cdpURL = inst.cdpURL
 	}
 	b.m.mu.RUnlock()
-	switch {
-	case !enabled:
+	if !enabled {
 		return "", nil
-	case takeover:
-		return "", errors.New("用户正在人工接管内置浏览器，本轮不要操作它；等用户交还控制权再试")
-	case cdpURL != "":
+	}
+	// 接管挂着但已经没人在看画面（人刚离开、还在 TakeoverLeaveGrace 里），机器人要用就
+	// 当场交还，不让它干等那几秒。有人在看才算真的在接管。
+	if takeover {
+		if !b.m.releaseLeftTakeover(b.id) {
+			return "", errors.New("用户正在人工接管内置浏览器，本轮不要操作它；等用户交还控制权再试")
+		}
+		cdpURL = b.CDPURL()
+	}
+	if cdpURL != "" {
 		return cdpURL, nil
 	}
 	if err := b.m.start(context.WithoutCancel(ctx), b.id); err != nil {

@@ -128,6 +128,9 @@ func TestBrowserBoxTakeoverToggle(t *testing.T) {
 	if manager.Bot("bot-b").Status().Takeover {
 		t.Fatal("接管只该作用于那一台机器人")
 	}
+	// 有人开着画面才算真的在接管；人走了机器人要用就直接收回，见 browserbox 的测试。
+	detach := manager.Bot("bot-a").AttachViewer()
+	defer detach()
 	if _, err := manager.Bot("bot-a").Endpoint(context.Background()); err == nil {
 		t.Fatal("接管时模型不该拿到地址")
 	}
@@ -171,72 +174,48 @@ func newLiveInputFixture(t *testing.T) (*BrowserBoxHandler, *browserbox.Bot, *gi
 	return handler, manager.Bot("bot-a"), c, logs
 }
 
-// WebUI 开着、鼠标从画面上划过、滚轮蹭到、焦点留在画面上时按了键，都不该把浏览器
-// 从机器人手里抢走，也不该把这些事件送进机器人正在用的页面。
-func TestLiveHoverAndWheelDoNotTakeOver(t *testing.T) {
-	handler, bot, c, logs := newLiveInputFixture(t)
-	passive := []liveMessage{
-		{Type: "mouse", Mouse: &browserbox.MouseEvent{Type: "mouseMoved", X: 10, Y: 10}},
-		{Type: "mouse", Mouse: &browserbox.MouseEvent{Type: "mouseWheel", X: 10, Y: 10, DeltaY: -120}},
-		{Type: "mouse", Mouse: &browserbox.MouseEvent{Type: "mouseReleased", X: 10, Y: 10, Button: "left"}},
-		{Type: "key", Key: &browserbox.KeyEvent{Type: "keyUp", Key: "a"}},
-		// 闲置交还之后焦点还在画面上，Cmd+Tab 切窗口先按下的就是 Meta。
-		{Type: "key", Key: &browserbox.KeyEvent{Type: "rawKeyDown", Key: "Meta", Modifiers: 4}},
-		{Type: "key", Key: &browserbox.KeyEvent{Type: "keyDown", Key: "Enter"}},
-		{Type: "text", Text: "你好"},
-	}
-	for _, message := range passive {
-		if handler.claimLiveInput(c, bot, message) {
+// 画面默认只能看：没显式接管时，点击、按键、打字、地址栏、后退刷新一律不送给页面，
+// 也不会顺手把浏览器从机器人手里抢走。
+func TestLiveInputIgnoredUntilExplicitTakeover(t *testing.T) {
+	handler, bot, _, logs := newLiveInputFixture(t)
+	for _, message := range liveInputSamples() {
+		if handler.claimLiveInput(bot, message) {
 			t.Fatalf("没接管时 %+v 不该送给页面", message)
 		}
 	}
 	if bot.Takeover() {
-		t.Fatal("悬停、滚轮、按键不该打开接管")
+		t.Fatal("在画面上动手不该自己打开接管，接管要点按钮")
 	}
 	if len(logs.entries) != 0 {
 		t.Fatalf("没接管就不该记接管：%+v", logs.entries)
 	}
 }
 
-// 在画面上按下鼠标、在地址栏打开网页是有意操作，第一下就转为人工接管，只记一条。
-func TestLiveDeliberateInputTakesOver(t *testing.T) {
-	deliberate := []liveMessage{
-		{Type: "mouse", Mouse: &browserbox.MouseEvent{Type: "mousePressed", X: 10, Y: 10, Button: "left", ClickCount: 1}},
-		{Type: "navigate", URL: "https://example.com"},
-	}
-	for _, message := range deliberate {
-		handler, bot, c, logs := newLiveInputFixture(t)
-		if !handler.claimLiveInput(c, bot, message) {
-			t.Fatalf("%s 应送给页面", message.Type)
+// 点了「接管」之后，这些输入才送给页面：点击、拖动、滚动、打字、换网址都靠它们。
+func TestLiveInputForwardedDuringTakeover(t *testing.T) {
+	handler, bot, _, _ := newLiveInputFixture(t)
+	bot.SetTakeover(true)
+	defer bot.SetTakeover(false)
+	for _, message := range liveInputSamples() {
+		if !handler.claimLiveInput(bot, message) {
+			t.Fatalf("接管期间 %+v 应送给页面", message)
 		}
-		if !bot.Takeover() {
-			t.Fatalf("%s 应打开接管", message.Type)
-		}
-		handler.claimLiveInput(c, bot, message)
-		if len(logs.entries) != 1 || logs.entries[0].Action != "browser_box_takeover" {
-			t.Fatalf("%s 接管应只记一条，实际 %+v", message.Type, logs.entries)
-		}
-		bot.SetTakeover(false)
 	}
 }
 
-// 接管之后，移动、滚轮、松开、键盘这些才送给页面：拖动、滚动、打字都靠它们。
-func TestLivePassiveInputForwardedDuringTakeover(t *testing.T) {
-	handler, bot, c, _ := newLiveInputFixture(t)
-	defer bot.SetTakeover(false)
-	handler.claimLiveInput(c, bot, liveMessage{Type: "mouse", Mouse: &browserbox.MouseEvent{Type: "mousePressed", Button: "left"}})
-	for _, kind := range []string{"mouseMoved", "mouseWheel", "mouseReleased"} {
-		if !handler.claimLiveInput(c, bot, liveMessage{Type: "mouse", Mouse: &browserbox.MouseEvent{Type: kind}}) {
-			t.Fatalf("接管期间 %s 应送给页面", kind)
-		}
-	}
-	for _, message := range []liveMessage{
+func liveInputSamples() []liveMessage {
+	return []liveMessage{
+		{Type: "mouse", Mouse: &browserbox.MouseEvent{Type: "mousePressed", X: 10, Y: 10, Button: "left", ClickCount: 1}},
+		{Type: "mouse", Mouse: &browserbox.MouseEvent{Type: "mouseMoved", X: 10, Y: 10}},
+		{Type: "mouse", Mouse: &browserbox.MouseEvent{Type: "mouseWheel", X: 10, Y: 10, DeltaY: -120}},
+		{Type: "mouse", Mouse: &browserbox.MouseEvent{Type: "mouseReleased", X: 10, Y: 10, Button: "left"}},
+		// 焦点留在画面上时 Cmd+Tab 切窗口，先按下的就是 Meta。
+		{Type: "key", Key: &browserbox.KeyEvent{Type: "rawKeyDown", Key: "Meta", Modifiers: 4}},
 		{Type: "key", Key: &browserbox.KeyEvent{Type: "keyDown", Key: "Enter"}},
 		{Type: "key", Key: &browserbox.KeyEvent{Type: "keyUp", Key: "Enter"}},
 		{Type: "text", Text: "你好"},
-	} {
-		if !handler.claimLiveInput(c, bot, message) {
-			t.Fatalf("接管期间 %+v 应送给页面", message)
-		}
+		{Type: "navigate", URL: "https://example.com"},
+		{Type: "reload"},
+		{Type: "back"},
 	}
 }
