@@ -55,6 +55,10 @@ type DecisionQuestion struct {
 	Min         float64
 	Max         float64
 	Decimals    int
+	// FloorVerdict 表示最低档是一个定性结论（例如「对方叫停」），不是刻度的起点。
+	// 加权档位低于 0.5 时直接给最低档的整值：此时最低档的概率一定过半，而插值会让
+	// 散在别档的一点概率把它抬成 0.01，调用方拿「== 最低值」认结论就认不出来。
+	FloorVerdict bool
 
 	Path string
 	// ConfidencePath 收结论的置信度：noul 取「站在结论这边」的概率，其余取 confidence。
@@ -207,6 +211,9 @@ func (q DecisionQuestion) scoreValue(score float64) float64 {
 	span := float64(len(q.Levels) - 1)
 	if span <= 0 {
 		return round(min, q.decimals())
+	}
+	if q.FloorVerdict && score < 0.5 {
+		score = 0
 	}
 	if len(q.LevelValues) == len(q.Levels) {
 		return round(interpolateLevels(q.LevelValues, score), q.decimals())
