@@ -28,7 +28,7 @@ func newDianaRemoteImageTool(r *Runtime, event MessageEvent) *dianaRemoteImageTo
 func (t *dianaRemoteImageTool) Name() string { return dianaRemoteImageToolName }
 
 func (t *dianaRemoteImageTool) Description() string {
-	return "读取或发送网上现有图片和头像，不生成图片。先用 action=view 和图片直链加载真实画面，附件会交给下一轮模型；网页文字、文件名不能证明图片内容。要看头像（包括机器人自己的头像）用 action=view_avatar 和 avatar_source，由运行时按平台取图，Telegram 等没有公开头像链接的平台也能看，不要编头像链接。查看确认符合用户要求后，用 action=send 和返回的 image_id 发送单图；用 action=send_album 和 image_ids 将已查看的图片作为 Telegram 相册发送。不要只输出链接冒充发图。不能读取本机文件。"
+	return "读取或发送网上现有图片和头像，不生成图片。先用 action=view 和图片直链加载真实画面，附件会交给下一轮模型；网页文字、文件名不能证明图片内容。要看头像（包括机器人自己的头像）用 action=view_avatar 和 avatar_source，由运行时按平台取图，Telegram 等没有公开头像链接的平台也能看，不要编头像链接；有人说你头像换了时先 view_avatar 看 bot_avatar 再答，结果里的 updated_at/updated_hint 是平台记录的头像更新时间，change_note 是和你上次看到的比对，比你的印象可靠。查看确认符合用户要求后，用 action=send 和返回的 image_id 发送单图；用 action=send_album 和 image_ids 将已查看的图片作为 Telegram 相册发送。不要只输出链接冒充发图。不能读取本机文件。"
 }
 
 func (t *dianaRemoteImageTool) InputSchema() map[string]any {
@@ -73,14 +73,22 @@ func (t *dianaRemoteImageTool) Run(ctx context.Context, input map[string]any) (s
 		if len(urls) == 0 {
 			return "", fmt.Errorf("取不到这个头像：来源无效、成员不在当前会话，或对方没有可见头像，不能据此描述画面")
 		}
-		ready, complete := loadLLMImageURLs(ctx, urls[:1])
-		if !complete || len(ready) == 0 {
+		now := t.runtime.clock()
+		ready, meta, err := loadAvatarImage(ctx, urls[0], now)
+		if err != nil {
 			return "", fmt.Errorf("头像读取或解码失败，不能据此描述画面")
 		}
 		id := fmt.Sprintf("remote_image_%d", len(t.images)+1)
-		t.images[id] = ready[0]
-		t.parts = []llm.ContentPart{{Type: llm.ContentPartImageURL, ImageURL: ready[0], Detail: "high"}}
-		result, _ := json.Marshal(map[string]any{"image_id": id, "status": "loaded", "avatar_source": source, "message": "头像真实画面已附加；需要发出去时用 action=send 和这个 image_id。"})
+		t.images[id] = ready
+		t.parts = []llm.ContentPart{{Type: llm.ContentPartImageURL, ImageURL: ready, Detail: "high"}}
+		// 只有一张图时，模型分不出「一直是这样」和「刚换成这样」，只好顺着自己之前的说法讲。
+		// 平台记录的更新时间和上次看到的指纹一并交给它。
+		fields := t.runtime.avatarFreshnessFields(t.event, source, meta, now)
+		fields["image_id"] = id
+		fields["status"] = "loaded"
+		fields["avatar_source"] = source
+		fields["message"] = "头像真实画面已附加；需要发出去时用 action=send 和这个 image_id。"
+		result, _ := json.Marshal(fields)
 		return string(result), nil
 	case "send", "send_album":
 		album := configToolString(input, "action") == "send_album"

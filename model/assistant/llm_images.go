@@ -189,6 +189,14 @@ func downloadImageBytes(ctx context.Context, imageURL string) ([]byte, string, e
 }
 
 func downloadImageBytesWithLimit(ctx context.Context, imageURL string, maxBytes int64) ([]byte, string, error) {
+	body, contentType, _, err := downloadImageBytesWithHeader(ctx, imageURL, maxBytes)
+	return body, contentType, err
+}
+
+// downloadImageBytesWithHeader 和 downloadImageBytesWithLimit 一样，另外交回响应头。
+// 只有看头像时用得上：Last-Modified 是判断「头像什么时候换的」唯一的现成证据，
+// 其他调用方用不着，不必跟着改签名。
+func downloadImageBytesWithHeader(ctx context.Context, imageURL string, maxBytes int64) ([]byte, string, http.Header, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -200,36 +208,36 @@ func downloadImageBytesWithLimit(ctx context.Context, imageURL string, maxBytes 
 
 	req, err := http.NewRequestWithContext(callCtx, http.MethodGet, imageURL, nil)
 	if err != nil {
-		return nil, "", err
+		return nil, "", nil, err
 	}
 	req.Header.Set("Accept", "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8")
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126 Safari/537.36")
 
 	resp, err := netguard.NewPublicHTTPClient(8 * time.Second).Do(req)
 	if err != nil {
-		return nil, "", err
+		return nil, "", nil, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		return nil, "", fmt.Errorf("image download failed: status=%d", resp.StatusCode)
+		return nil, "", nil, fmt.Errorf("image download failed: status=%d", resp.StatusCode)
 	}
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBytes+1))
 	if err != nil {
-		return nil, "", err
+		return nil, "", nil, err
 	}
 	if len(body) == 0 {
-		return nil, "", fmt.Errorf("image download returned empty body")
+		return nil, "", nil, fmt.Errorf("image download returned empty body")
 	}
 	if int64(len(body)) > maxBytes {
-		return nil, "", fmt.Errorf("%w (limit %d MiB)", errLLMImageSourceTooLarge, maxBytes>>20)
+		return nil, "", nil, fmt.Errorf("%w (limit %d MiB)", errLLMImageSourceTooLarge, maxBytes>>20)
 	}
 
 	contentType := imageContentType(resp.Header.Get("Content-Type"), body)
 	if !strings.HasPrefix(contentType, "image/") {
-		return nil, "", fmt.Errorf("downloaded content is not an image: %s", contentType)
+		return nil, "", nil, fmt.Errorf("downloaded content is not an image: %s", contentType)
 	}
-	return body, contentType, nil
+	return body, contentType, resp.Header, nil
 }
 
 func localImageAsDataURL(path string) (string, error) {
