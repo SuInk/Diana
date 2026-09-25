@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/SuInk/diana/model/browserbox"
+	"github.com/SuInk/diana/model/storage"
 
 	"github.com/gin-gonic/gin"
 )
@@ -143,5 +144,91 @@ func TestSameOriginWebSocketRejectsCrossSite(t *testing.T) {
 	request.Header.Set("Origin", "http://diana.local")
 	if !sameOriginWebSocket(request) {
 		t.Fatal("同源应放行")
+	}
+}
+
+type recordingAppLog struct {
+	mu      sync.Mutex
+	entries []storage.AppLogEntry
+}
+
+func (r *recordingAppLog) AppendLog(_ context.Context, entry storage.AppLogEntry) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.entries = append(r.entries, entry)
+	return nil
+}
+
+func newLiveInputFixture(t *testing.T) (*BrowserBoxHandler, *browserbox.Bot, *gin.Context, *recordingAppLog) {
+	t.Helper()
+	gin.SetMode(gin.TestMode)
+	manager := browserbox.New(context.Background(), &memoryBrowserBoxStore{}, t.TempDir())
+	handler := NewBrowserBoxHandler(manager)
+	logs := &recordingAppLog{}
+	handler.SetLogStore(logs)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodGet, "/api/browser-box/live?bot=bot-a", nil)
+	return handler, manager.Bot("bot-a"), c, logs
+}
+
+// WebUI 开着、鼠标从画面上划过或滚轮蹭到，都不该把浏览器从机器人手里抢走，
+// 也不该把这些事件送进机器人正在用的页面。
+func TestLiveHoverAndWheelDoNotTakeOver(t *testing.T) {
+	handler, bot, c, logs := newLiveInputFixture(t)
+	passive := []liveMessage{
+		{Type: "mouse", Mouse: &browserbox.MouseEvent{Type: "mouseMoved", X: 10, Y: 10}},
+		{Type: "mouse", Mouse: &browserbox.MouseEvent{Type: "mouseWheel", X: 10, Y: 10, DeltaY: -120}},
+		{Type: "mouse", Mouse: &browserbox.MouseEvent{Type: "mouseReleased", X: 10, Y: 10, Button: "left"}},
+		{Type: "key", Key: &browserbox.KeyEvent{Type: "keyUp", Key: "a"}},
+	}
+	for _, message := range passive {
+		if handler.claimLiveInput(c, bot, message) {
+			t.Fatalf("没接管时 %+v 不该送给页面", message)
+		}
+	}
+	if bot.Takeover() {
+		t.Fatal("悬停、滚轮不该打开接管")
+	}
+	if len(logs.entries) != 0 {
+		t.Fatalf("没接管就不该记接管：%+v", logs.entries)
+	}
+}
+
+// 按下鼠标、敲键盘、输入文字、在地址栏打开网页是有意操作，第一下就转为人工接管，只记一条。
+func TestLiveDeliberateInputTakesOver(t *testing.T) {
+	deliberate := []liveMessage{
+		{Type: "mouse", Mouse: &browserbox.MouseEvent{Type: "mousePressed", X: 10, Y: 10, Button: "left", ClickCount: 1}},
+		{Type: "key", Key: &browserbox.KeyEvent{Type: "keyDown", Key: "Enter"}},
+		{Type: "text", Text: "你好"},
+		{Type: "navigate", URL: "https://example.com"},
+	}
+	for _, message := range deliberate {
+		handler, bot, c, logs := newLiveInputFixture(t)
+		if !handler.claimLiveInput(c, bot, message) {
+			t.Fatalf("%s 应送给页面", message.Type)
+		}
+		if !bot.Takeover() {
+			t.Fatalf("%s 应打开接管", message.Type)
+		}
+		handler.claimLiveInput(c, bot, message)
+		if len(logs.entries) != 1 || logs.entries[0].Action != "browser_box_takeover" {
+			t.Fatalf("%s 接管应只记一条，实际 %+v", message.Type, logs.entries)
+		}
+		bot.SetTakeover(false)
+	}
+}
+
+// 接管之后，移动、滚轮、松开这些才送给页面：拖动、滚动页面都靠它们。
+func TestLivePassiveInputForwardedDuringTakeover(t *testing.T) {
+	handler, bot, c, _ := newLiveInputFixture(t)
+	defer bot.SetTakeover(false)
+	handler.claimLiveInput(c, bot, liveMessage{Type: "mouse", Mouse: &browserbox.MouseEvent{Type: "mousePressed", Button: "left"}})
+	for _, kind := range []string{"mouseMoved", "mouseWheel", "mouseReleased"} {
+		if !handler.claimLiveInput(c, bot, liveMessage{Type: "mouse", Mouse: &browserbox.MouseEvent{Type: kind}}) {
+			t.Fatalf("接管期间 %s 应送给页面", kind)
+		}
+	}
+	if !handler.claimLiveInput(c, bot, liveMessage{Type: "key", Key: &browserbox.KeyEvent{Type: "keyUp", Key: "a"}}) {
+		t.Fatal("接管期间 keyUp 应送给页面")
 	}
 }
