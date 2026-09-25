@@ -325,3 +325,37 @@ func TestImageSourceIsInCapabilityKnowledge(t *testing.T) {
 	}
 	t.Fatal("能力清单里没有图片溯源，机器人不知道自己能干这件事")
 }
+
+// 出图工具只按插件开关挂，但非主人的工具表还要过 allowedAgentToolNames 这道白名单。
+// 以前这三个漏在白名单外，插件为本群开着、主人用得好好的，群成员的工具表里却没有，
+// 而上面那些测试全用主人身份跑，看不出来。这里换成群成员走一遍 replyTo。
+func TestImageToolsReachGroupMembers(t *testing.T) {
+	provider := &agentSequenceLLMProvider{responses: []string{
+		`{"action":"none","prompt":"","tools":[],"context_message_ids":[],"keep_older_summary":false}`,
+		`{"action":"final","content":"好"}`,
+	}}
+	plugins := NewDefaultPluginManager()
+	if _, err := plugins.UpdateSettings(imageSourcePluginID, map[string]any{
+		imageSourceSettingSauceNAOEnabled: false,
+		imageSourceSettingTraceMoeEnabled: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	runtime := NewRuntime(BotConfig{OwnerID: "owner", AgentEnabled: true, ReplySafetyMasterEnabled: boolPointer(false)}, nilChannel{}, plugins, nil, nil, nil, func() (LLMProvider, error) {
+		return provider, nil
+	})
+	if _, err := runtime.replyTo(context.Background(), MessageEvent{
+		Kind: EventKindGroup, GroupID: "group-1", UserID: "member", MessageID: "message-1",
+	}, "这图哪来的"); err != nil {
+		t.Fatal(err)
+	}
+	if len(provider.requests) == 0 {
+		t.Fatal("provider was not called")
+	}
+	prompt := provider.requests[len(provider.requests)-1].Messages[0].Content
+	for _, name := range []string{dianaRenderToolName, dianaGroupRelationsToolName, dianaImageSourceToolName} {
+		if !strings.Contains(prompt, "\n- "+name+":") {
+			t.Errorf("群成员的工具表里没有 %s", name)
+		}
+	}
+}

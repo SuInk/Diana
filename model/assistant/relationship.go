@@ -126,6 +126,13 @@ func (p RelationshipPolicy) allowedAgentToolNames() map[string]bool {
 		dianaRenderMediaToolName: true,
 		// 查图是不是 AI 生成的只读图片元数据，不碰本地文件和命令；群里人人都会问。
 		dianaAIImageDetectToolName: true,
+		// 下面三个出图工具要不要给群里用，都由按群生效的插件开关决定，不必再按
+		// 身份挡一次：render 要「网页渲染」开着才画得出来，和 render_media 共用同一套
+		// 净化与沙盒；关系图插件停用时不挂，且只读本群数据；以图搜图会把图片传给
+		// 第三方图库，这正是它的插件开关要管的事。
+		dianaRenderToolName:         true,
+		dianaGroupRelationsToolName: true,
+		dianaImageSourceToolName:    true,
 		// 核实账号身份。只读运行时判定、不改任何状态，而它要挡的恰恰是非主人的
 		// 身份声称——只给主人用就等于没用。
 		dianaIdentityCheckToolName: true,
