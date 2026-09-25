@@ -211,6 +211,8 @@ export interface BotProfileConfig extends SendRetrySettings {
   /** 语气跟随一天的时间变化（深夜话少、清早迷糊、晚上松弛）；不设等同关闭。 */
   /** 流式调用模型，用于统计首 token 时间；回复仍是攒齐了再发。不设等同关闭。 */
   llm_streaming_enabled?: boolean;
+  /** 会话标识隐私代理：发给模型前把账号、群号和消息 ID 换成别名；不设等同开启。 */
+  llm_identity_masking_enabled?: boolean;
   disabled_groups?: string[];
   /** 新加入的群默认工不工作；逐群开关在群管理里，一个群一份。 */
   group_admission?: GroupAdmission;
@@ -1925,6 +1927,38 @@ export interface StorageUsage {
 
 export function getStorageUsage(): Promise<StorageUsage> {
   return requestJSON<StorageUsage>("/api/system/storage");
+}
+
+/** 工作区里的一项。kind 为 link 表示目标已经不在了的符号链接，打不开。 */
+export interface WorkspaceEntry {
+  name: string;
+  path: string;
+  kind: "dir" | "file" | "link";
+  size: number;
+  modified: string;
+  symlink?: boolean;
+  /** 运行时自己的凭据配置（明文令牌），能看，页面上打个标记 */
+  protected?: boolean;
+}
+
+export interface WorkspaceListing {
+  root: string;
+  /** 相对工作区根目录，根目录是空串 */
+  path: string;
+  /** 工作区还没建出来（Agent 第一次写文件时才创建） */
+  exists: boolean;
+  entries: WorkspaceEntry[];
+  truncated?: boolean;
+}
+
+export function listWorkspace(path: string): Promise<WorkspaceListing> {
+  return requestJSON<WorkspaceListing>(`/api/system/workspace?${new URLSearchParams({ path }).toString()}`);
+}
+
+export function workspaceFileURL(path: string, download = false): string {
+  const params = new URLSearchParams({ path });
+  if (download) params.set("download", "1");
+  return `/api/system/workspace/file?${params.toString()}`;
 }
 
 export interface HistoryMediaPolicy { retention_days: number; max_mb: number; }

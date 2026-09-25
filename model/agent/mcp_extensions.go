@@ -151,6 +151,13 @@ func (m *ExtensionManager) loadMCP(ctx context.Context) error {
 	m.mu.Lock()
 	m.mcpConfigs = cloneMCPConfigs(servers)
 	m.mu.Unlock()
+	if err := migrateLegacyMCPDisable(m.cfg.WorkDir, servers); err != nil {
+		return fmt.Errorf("migrate MCP bot overrides: %w", err)
+	}
+	optIns, err := mcpBotOptIns(m.cfg.WorkDir)
+	if err != nil {
+		return fmt.Errorf("load MCP bot overrides: %w", err)
+	}
 	usedNames := m.usedToolNames(nil)
 	started := make([]*mcpServerRuntime, 0, len(servers))
 	for _, name := range sortedMCPServerNames(servers) {
@@ -166,7 +173,8 @@ func (m *ExtensionManager) loadMCP(ctx context.Context) error {
 			}
 			continue
 		}
-		if !server.enabled() {
+		// 全局关着但有机器人单独打开，照样要起：每台机器人用不用由请求视图过滤。
+		if !server.enabled() && !optIns["mcp:"+name] {
 			continue
 		}
 		runtime, startErr := startMCPServerRuntime(ctx, name, server, m.cfg, usedNames)
@@ -221,6 +229,10 @@ func (m *ExtensionManager) installMCP(ctx context.Context, name string, server m
 	if err := rejectUnmatchedMasks(server, previous); err != nil {
 		return ExtensionState{}, err
 	}
+	// 身份透传只能主人在界面上开。这里是模型调的安装工具：它交来的值一律不认，
+	// 覆盖同一个去处时沿用原来的设置；换了地址或命令就关掉，身份不能跟着去新地方。
+	server.ExposeCallerIdentity = exists && previous.ExposeCallerIdentity &&
+		server.URL == previous.URL && server.Command == previous.Command
 
 	var runtime *mcpServerRuntime
 	if server.enabled() {
@@ -269,6 +281,13 @@ func (m *ExtensionManager) setMCPEnabled(ctx context.Context, name string, enabl
 	}
 	servers[name] = server
 	if err := saveMCPServers(path, servers); err != nil {
+		if runtime != nil {
+			_ = runtime.Close()
+		}
+		return ExtensionState{}, err
+	}
+	// 全局开关覆盖各台机器人：拨一下，所有机器人都回到跟随全局。
+	if err := clearBotEnabledOverrides(m.cfg.WorkDir, "mcp:"+name); err != nil {
 		if runtime != nil {
 			_ = runtime.Close()
 		}
@@ -429,6 +448,8 @@ func mcpServerConfigFromInput(input map[string]any) (mcpServerConfig, error) {
 		ToolTimeoutSec:    intFromInput(input, "tool_timeout_sec", 0),
 		EnabledTools:      stringSliceFromInput(input, "enabled_tools"),
 		DisabledTools:     stringSliceFromInput(input, "disabled_tools"),
+		// 安装工具的参数表里没有它，installMCP 也不认模型交来的值；只有界面会提交。
+		ExposeCallerIdentity: boolFromInput(input, "expose_caller_identity", false),
 	}
 	server = normalizeMCPServerConfig(server)
 	return server, validateMCPConfigValues(server)

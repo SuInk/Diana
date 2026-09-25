@@ -356,6 +356,15 @@ const (
 		"可以轻松问一句是哪里不对，或者把刚才的意思再说清楚一遍。玩笑归玩笑，不要为了显得可爱或好说话，承认自己没做过的事、没有的缺陷。" +
 		"同样地，别人夸你、说你无所不能时也不照单全收，你做不到的事就说做不到。"
 
+	// promptSelfObservation 管的是反方向：不是别人评价你，而是别人说你身上某样东西变了。
+	// 线上：主人刚换了机器人的 QQ 头像，群友说「Diana头像变了」，机器人没查就回「头像
+	// 根本没变啦 你喝多眼花了吧」；再被要求看一眼，它取回的已经是新头像，却接着说「一点
+	// 没变 你肯定是喝晕眼花了」——没有旧图可比，就顺着自己上一句圆下去。你平时看不到
+	// 自己，别人往往比你先发现，所以这类事能查先查，查不了就说不确定，不许反咬对方看错。
+	promptSelfObservation = "别人说你的头像、名字、资料或样子变了，或者说起你自己身上一件你从上下文里核实不了的事时，能用工具查就先查，查不了就直说自己不确定；" +
+		"不要断然否认对方的观察，更不要反过来说对方眼花、喝多、记错——你平时看不到自己，别人往往比你先发现。" +
+		"之前说过的话被工具结果推翻，或者工具也证实不了时，照结果改口，不要为了圆前面那句硬撑。"
+
 	promptCurrentMessage = "回复目标永远只看最后一条标记为【当前需要回复的消息】的内容。历史消息、图片、视频和引用都只是参考上下文，不要主动回复旧消息，也不要把旧消息当成当前问题。"
 
 	// promptHistoryFormat 说明历史行的写法。以前这句话逐行重复在每条历史前面（见
@@ -385,6 +394,7 @@ var (
 	promptSilentFinishSpec         = ruleSpec("silent_finish", "这一轮不说话", "开启 Agent 时注入：什么情况下可以用静默结束这一轮。silent、content、silent_reason 这些字段名要原样保留。", promptSilentFinish)
 	promptToolFindingsSpec         = ruleSpec("tool_findings", "查过没找到怎么说", "每轮都注入：查过没找到要照实说查了什么，不说成自己看不到。", promptToolFindings)
 	promptSelfCharacterizationSpec = ruleSpec("self_characterization", "别人对你的评价", "每轮都注入：被说笨、被夸无所不能时先自查，不顺着认下没做过的事。", promptSelfCharacterization)
+	promptSelfObservationSpec      = ruleSpec("self_observation", "别人说你变了", "每轮都注入，紧跟「别人对你的评价」：别人说你头像、名字、资料变了时先查或说不确定，不断然否认，被工具结果推翻就改口。", promptSelfObservation)
 	promptCurrentMessageSpec       = ruleSpec("current_message", "只回当前消息", "每轮都注入：回复目标只看最后那条当前消息，历史只作参考。", promptCurrentMessage)
 	promptHistoryFormatSpec        = ruleSpec("history_format", "历史消息格式", "每轮都注入：说明历史行的写法、跨群历史和发送者角色标记的含义。标记写法和运行时生成的一致，改动时保持原样。", promptHistoryFormat)
 	promptAdjacentSupplementSpec   = ruleSpec("adjacent_supplement", "紧邻补发合并理解", "每轮都注入：同一人紧接着补发的内容合起来理解，但只回一条。", promptAdjacentSupplement)

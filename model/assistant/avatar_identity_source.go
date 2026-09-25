@@ -39,11 +39,7 @@ func (r *Runtime) avatarIdentityImageURLs(ctx context.Context, event MessageEven
 	if len(selected) == 0 || (event.Kind != EventKindGroup && event.Kind != EventKindPrivate) {
 		return nil
 	}
-	cfg := r.effectiveConfigForEvent(event)
-	botID := strings.TrimSpace(cfg.BotAccount)
-	if botID == "" {
-		botID = strings.TrimSpace(event.SelfID)
-	}
+	botID := r.avatarBotID(event)
 	var (
 		out         []string
 		memberCheck func(string) bool
@@ -91,6 +87,14 @@ func (r *Runtime) avatarIdentityImageURLs(ctx context.Context, event MessageEven
 		}
 	}
 	return out
+}
+
+// avatarBotID 是 bot_avatar 指向的账号：配置里写了机器人账号就用它，否则用事件上报的自身 ID。
+func (r *Runtime) avatarBotID(event MessageEvent) string {
+	if botID := strings.TrimSpace(r.effectiveConfigForEvent(event).BotAccount); botID != "" {
+		return botID
+	}
+	return strings.TrimSpace(event.SelfID)
 }
 
 func (r *Runtime) privateGroupAvatarAllowed(ctx context.Context, event MessageEvent, groupID string) bool {

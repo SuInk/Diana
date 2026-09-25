@@ -15,6 +15,7 @@ export type ViewID =
   | "notebook"
   | "plugins"
   | "browser"
+  | "workspace"
   | "logs"
   | "favorability"
   | "settings";
@@ -45,17 +46,18 @@ export interface NavItem {
   covers?: ViewID[];
 }
 
-// 顺序按「装机器人时的实际操作顺序」排：先看总览，再配模型和机器人，然后才是
-// 插件、群、人这些日常项，事件（含日志）属于出问题时才翻的记录页，放后面。
+// 顺序按「装机器人时的实际操作顺序」排：先看总览，再配模型、机器人、扩展和各个群，
+// 然后才是记忆、任务这些日常项，事件（含日志）属于出问题时才翻的记录页，放后面。
 export const navItems: NavItem[] = [
   { id: "dashboard", label: "总览", hint: "运行状态与实时事件" },
   { id: "provider", label: "提供商", hint: "提供商接入、凭据与模型分组", group: "setup" },
   { id: "bot", label: "机器人", hint: "OneBot v11 接入与行为", group: "setup" },
   { id: "plugins", label: "扩展", hint: "插件、Skills 与 MCP", group: "setup" },
-  { id: "groups", label: "群管理", hint: "群管理员自助配置", group: "operate" },
+  { id: "groups", label: "群管理", hint: "群管理员自助配置", group: "setup" },
   { id: "users", label: "记忆", hint: "机器人记住的人和事", group: "operate", covers: ["notebook"] },
   { id: "tasks", label: "任务", hint: "提醒、周期查询与仓库订阅", group: "operate" },
   { id: "browser", label: "浏览器", hint: "Diana 内置浏览器：看画面、自己上手", group: "operate" },
+  { id: "workspace", label: "文件", hint: "Agent 工作区里的文件：预览与下载", group: "operate" },
   { id: "events", label: "记录", hint: "消息处理、回复决策、运行日志与好感与画像", group: "operate", covers: ["logs", "favorability"] },
   { id: "settings", label: "设置", hint: "主题与系统更新" }
 ];
@@ -85,7 +87,7 @@ export function navSections(): { group?: NavGroup; items: NavItem[] }[] {
   return sections;
 }
 
-const validViews = new Set<ViewID>(["dashboard", "events", "tasks", "setup", "provider", "bot", "groups", "users", "notebook", "plugins", "browser", "logs", "favorability", "settings"]);
+const validViews = new Set<ViewID>(["dashboard", "events", "tasks", "setup", "provider", "bot", "groups", "users", "notebook", "plugins", "browser", "workspace", "logs", "favorability", "settings"]);
 
 // 首页：地址栏里是根路径，也是所有认不出来的地址的落点。
 const homeView: ViewID = "dashboard";

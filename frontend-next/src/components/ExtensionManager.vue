@@ -2,7 +2,7 @@
   <section class="extension-manager">
     <!-- 工具条和插件页共用 .plugins-view-header 那几条：控件同高、不换行。 -->
     <header class="view-header plugins-view-header">
-      <div class="view-title"><h2>{{ kind === 'skill' ? 'Skills' : 'MCP' }}</h2><p>配置全局共享 · {{ botScope ? '启用状态与权限仅影响当前机器人' : '选择机器人后调整启用状态' }}</p></div>
+      <div class="view-title"><h2>{{ kind === 'skill' ? 'Skills' : 'MCP' }}</h2><p>配置全局共享 · {{ botScope ? '启用状态与权限仅影响当前机器人' : kind === 'mcp' ? '这里的开关是所有机器人的默认，选择机器人后可单独调整' : '选择机器人后调整启用状态' }}</p></div>
       <div class="view-actions">
         <div class="plugin-search">
           <Search :size="14" aria-hidden="true" />
@@ -26,12 +26,12 @@
     <p v-if="loading">正在读取扩展…</p>
     <!-- 版式跟插件页走：同一套卡片，扫一眼就知道这三处（插件 / Skills / MCP）是一类东西。 -->
     <div v-else class="extension-list" :class="layout === 'rows' ? 'plugin-rows' : 'plugin-tiles'">
-      <article v-for="item in visibleItems" :key="item.id" class="plugin-card" :class="{off: botScope && !item.enabled}">
+      <article v-for="item in visibleItems" :key="item.id" class="plugin-card" :class="{off: (botScope || kind==='mcp') && !item.enabled}">
         <div class="plugin-card-head">
           <h2 class="plugin-card-name" :title="item.name">{{ item.name }}</h2>
-          <!-- 卡片上只管「这台机器人用不用它」。给谁用、限定哪些人都在设置里，
-               和这条服务自己的配置放在一起看才说得清。 -->
-          <label v-if="botScope" class="switch" :title="item.available===false ? '全局停用，先在设置里打开「服务可用」' : item.enabled ? '点击停用' : '点击启用'">
+          <!-- 卡片上始终只有一个开关，管什么跟着顶部选的范围走：选了机器人是「这台用不用」，
+               全部机器人时（只有 MCP）是全局默认。给谁用、限定哪些人都在设置里。 -->
+          <label v-if="botScope || kind==='mcp'" class="switch" :title="item.available===false ? '全局停用，先在设置里打开「服务可用」' : !botScope ? (item.enabled ? '所有机器人默认启用，点击统一停用' : '所有机器人默认停用，点击统一启用') : item.enabled ? '点击停用' : '点击启用'">
             <input type="checkbox" :checked="item.enabled" :disabled="busy === item.id || item.available===false" @change="toggleEnabled(item)" />
             <span class="track" aria-hidden="true"></span>
           </label>
@@ -117,9 +117,8 @@
             <span v-if="field.hint" class="hint">{{ field.hint }}</span>
           </label>
           <p v-if="(Object.keys(editPresetMasks).length || Object.values(editPresetValues).some(v => v.includes('****'))) && !readonly && !revealed" class="hint">令牌只显示掩码，<button type="button" class="link-button" :disabled="revealing" @click="revealSecrets">显示明文</button>。</p>
-          <label class="switch"><input v-model="form.enabled" type="checkbox" :disabled="readonly" /><span class="track"></span>服务可用</label>
           <p v-if="verifyNote" role="status">{{ verifyNote }}</p>
-          <p class="hint">超时、工具名单这些改不到的，切<button type="button" class="link-button" @click="editAdvanced=true">高级配置</button>。</p>
+          <p class="hint">超时、工具名单、调用者身份这些改不到的，切<button type="button" class="link-button" @click="editAdvanced=true">高级配置</button>。</p>
         </template>
         <template v-else>
           <p v-if="editPreset" class="hint">这条是从「{{ editPreset.title }}」预设装的，<button type="button" class="link-button" @click="editAdvanced=false">回到预设表单</button>改地址和令牌更省事。</p>
@@ -129,9 +128,10 @@
           <label class="field">{{ transport==='http' ? '请求头 JSON' : '环境变量 JSON' }}<textarea v-model="secrets" class="input code-input" rows="4" spellcheck="false" placeholder='{"Authorization":"Bearer …"}'></textarea></label>
           <p class="hint">已保存的值只显示掩码：<strong>掩码原样留着或值留空 = 保持原值</strong>，<strong>删掉整行 = 删掉这一项</strong>。新加一行就是新增。<template v-if="storedSecrets && !readonly && !revealed">要看原文点<button type="button" class="link-button" :disabled="revealing" @click="revealSecrets">显示明文</button>。</template></p>
           <div class="extension-grid"><label class="field">连接超时（秒）<input v-model.number="form.startup_timeout_sec" class="input" type="number" min="1" max="300" /><span class="hint">最长 300，首次启动要现拉依赖的服务往大了填。</span></label><label class="field">工具超时（秒）<input v-model.number="form.tool_timeout_sec" class="input" type="number" min="1" max="900" /><span class="hint">最长 900，构建、抓取这类慢工具才需要调高。</span></label></div>
+          <label class="switch"><input v-model="form.expose_caller_identity" type="checkbox" /><span class="track"></span>把调用者身份告诉这个服务</label>
+          <p class="hint">开启后每次调用都在 <code>_meta["diana/caller"]</code> 里带上真实的平台、账号、群号、消息 ID 和是否主人，不受「对模型隐藏账号 ID」影响。远程服务会因此拿到发言人账号，只给要按账号办事的服务开。</p>
           <label class="field">允许的工具（每行一个，留空全部）<textarea v-model="form.enabled_tools" class="input code-input" rows="2"></textarea></label>
           <label class="field">禁用的工具（每行一个）<textarea v-model="form.disabled_tools" class="input code-input" rows="2"></textarea></label>
-          <label class="switch"><input v-model="form.enabled" type="checkbox" /><span class="track"></span>服务可用</label>
           <p class="hint">测试连接会访问服务；stdio 会启动配置的本地进程。</p>
           <p v-if="tested" role="status">连接成功，发现 {{ discovered.length }} 个工具</p><ul v-if="discovered.length"><li v-for="name in discovered" :key="name" class="tool-name">{{ name }}</li></ul>
         </template>
@@ -179,7 +179,7 @@ const layout=extensionLayout,setLayout=setExtensionLayout;
 const matches=(text:string)=>{const q=query.value.trim().toLowerCase();return !q||text.toLowerCase().includes(q)};
 const items=ref<ManagedExtension[]>([]),loading=ref(false),loadError=ref(''),busy=ref(''),editing=ref(false),existing=ref(false),readonly=ref(false),saving=ref(false),error=ref('');
 const fromURL=ref(false),transport=ref<'http'|'stdio'>('http'),tested=ref(false),discovered=ref<string[]>([]),headers=ref('{}'),env=ref('{}');
-const blank=()=>({name:'',content:'',source_url:'',url:'',command:'',args:'',cwd:'',enabled:true,startup_timeout_sec:20,tool_timeout_sec:60,enabled_tools:'',disabled_tools:''});
+const blank=()=>({name:'',content:'',source_url:'',url:'',command:'',args:'',cwd:'',enabled:true,startup_timeout_sec:20,tool_timeout_sec:60,enabled_tools:'',disabled_tools:'',expose_caller_identity:false});
 const form=ref(blank());
 const secrets=computed({get:()=>transport.value==='http'?headers.value:env.value,set:v=>{if(transport.value==='http')headers.value=v;else env.value=v}});
 // 从预设装出来的那条，编辑时还给它那张表；editAdvanced 是切回通用表单的后门。
@@ -211,7 +211,7 @@ async function closeEditor(){if(!editing.value||saving.value)return;if(!readonly
 async function importFile(event:Event){const file=(event.target as HTMLInputElement).files?.[0];if(!file)return;if(file.size>2*1024*1024){error.value='文件不能超过 2 MB';return}form.value.content=await file.text();fromURL.value=false}
 const lines=(s:string)=>s.split('\n').map(x=>x.trim()).filter(Boolean);
 function stringMap(raw:string){const result=JSON.parse(raw||'{}');if(!result||Array.isArray(result)||typeof result!=='object'||Object.values(result).some(v=>typeof v!=='string'))throw new Error('凭据必须是字符串键值 JSON 对象');return result}
-function payload(operation:string){return {operation,kind:props.kind,name:form.value.name,replace:existing.value,content:fromURL.value?'':form.value.content,source_url:fromURL.value?form.value.source_url:'',config:{enabled:form.value.enabled,url:transport.value==='http'?form.value.url:'',command:transport.value==='stdio'?form.value.command:'',args:transport.value==='stdio'?lines(form.value.args):[],cwd:transport.value==='stdio'?form.value.cwd:'',headers:transport.value==='http'?stringMap(headers.value):{},env:transport.value==='stdio'?stringMap(env.value):{},startup_timeout_sec:form.value.startup_timeout_sec,tool_timeout_sec:form.value.tool_timeout_sec,enabled_tools:lines(form.value.enabled_tools),disabled_tools:lines(form.value.disabled_tools)}}}
+function payload(operation:string){return {operation,kind:props.kind,name:form.value.name,replace:existing.value,content:fromURL.value?'':form.value.content,source_url:fromURL.value?form.value.source_url:'',config:{enabled:form.value.enabled,url:transport.value==='http'?form.value.url:'',command:transport.value==='stdio'?form.value.command:'',args:transport.value==='stdio'?lines(form.value.args):[],cwd:transport.value==='stdio'?form.value.cwd:'',headers:transport.value==='http'?stringMap(headers.value):{},env:transport.value==='stdio'?stringMap(env.value):{},startup_timeout_sec:form.value.startup_timeout_sec,tool_timeout_sec:form.value.tool_timeout_sec,enabled_tools:lines(form.value.enabled_tools),disabled_tools:lines(form.value.disabled_tools),expose_caller_identity:!!form.value.expose_caller_identity}}}
 // 「恢复默认」= 把这张表清回新建 MCP 的样子。只动表单，保存了才落盘——改废了
 // 想重来的时候，比一个个字段往回删省事。
 async function resetForm(){
@@ -273,8 +273,11 @@ type ExtensionState=typeof extensionStates[number]['value'];
 const openTiers=extensionStates.filter(state=>state.value!=='off');
 const tierLabel=(item:ManagedExtension)=>extensionStates.find(state=>state.value===currentState(item))?.label||'';
 // 开关只管启用与否：成员档和名单原样留着，关掉再打开还是原来那一档。
-async function toggleEnabled(item:ManagedExtension){const profile=botScope.value;if(!profile)return;busy.value=item.id;
- try{const result=await manageExtension<{warning?:string}>({operation:'enabled',kind:props.kind,name:item.name,profile_id:profile,enabled:!item.enabled});if(result?.warning)toastError(result.warning);await load()}
+async function toggleEnabled(item:ManagedExtension){const profile=botScope.value;if(!profile&&props.kind!=='mcp')return;
+ // 全局这一下会把每台机器人单独的开关都清掉，统一跟随，所以先问一句。
+ if(!profile&&!await askConfirm({title:`所有机器人${item.enabled?'停用':'启用'} ${item.name}？`,message:`每台机器人单独设过的开关都会被覆盖，统一${item.enabled?'停用':'启用'}。之后在某台机器人上单独${item.enabled?'打开':'关掉'}，那台照样按它自己的来。`,confirmLabel:item.enabled?'全部停用':'全部启用'}))return;
+ busy.value=item.id;
+ try{const result=await manageExtension<{warning?:string}>({operation:'enabled',kind:props.kind,name:item.name,profile_id:profile||undefined,enabled:!item.enabled});if(result?.warning)toastError(result.warning);await load()}
  catch(e){toastError(String(e instanceof Error?e.message:e));await load()}finally{busy.value=''}}
 const currentState=(item:ManagedExtension):ExtensionState=>!item.enabled?'off':!item.members_enabled?'owner':item.member_audience?.min_role==='admin'?'admins':'members';
 const isOpenTier=(item:ManagedExtension)=>{const state=currentState(item);return state==='members'||state==='admins'};

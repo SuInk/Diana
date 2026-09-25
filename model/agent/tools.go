@@ -958,7 +958,7 @@ func (t *ListFilesTool) Run(_ context.Context, input map[string]any) (string, er
 	}
 	entries, err := os.ReadDir(path)
 	if err != nil {
-		return "", err
+		return "", workspaceNotFound(rel, err)
 	}
 	limit := t.limit
 	if limit <= 0 {
@@ -1075,7 +1075,7 @@ func (t *RunCommandTool) Run(ctx context.Context, input map[string]any) (string,
 		return "", err
 	}
 	cmd.Dir = cwd
-	cmd.Env = t.commandEnvironment()
+	cmd.Env = environmentWithCaller(ctx, t.commandEnvironment())
 	commandOutput, err := os.CreateTemp("", "diana-agent-command-*")
 	if err != nil {
 		return "", err
@@ -1260,7 +1260,7 @@ func (t *ReadFileTool) Run(_ context.Context, input map[string]any) (string, err
 	}
 	info, err := os.Stat(path)
 	if err != nil {
-		return "", err
+		return "", workspaceNotFound(rel, err)
 	}
 	if info.IsDir() {
 		return "", fmt.Errorf("%s is a directory", rel)
@@ -1320,22 +1320,21 @@ func splitFileLines(content string) []string {
 	return lines
 }
 
-// safePath 将相对路径限制在 Agent 工作目录内。
+// safePath 将相对路径限制在 Agent 工作目录内。写法上的宽容（绝对路径、workspace/ 前缀等）
+// 统一交给 NormalizeWorkspacePath，这里只负责最终落点的越界校验。
 func safePath(root, rel string) (string, error) {
 	if strings.TrimSpace(root) == "" {
 		return "", errors.New("agent workdir is empty")
-	}
-	if strings.TrimSpace(rel) == "" {
-		rel = "."
 	}
 	cleanRoot, err := filepath.Abs(root)
 	if err != nil {
 		return "", err
 	}
-	if filepath.IsAbs(rel) {
-		return "", errors.New("absolute paths are not allowed")
+	normalized, err := NormalizeWorkspacePath(cleanRoot, rel)
+	if err != nil {
+		return "", err
 	}
-	candidate, err := filepath.Abs(filepath.Join(cleanRoot, filepath.Clean(rel)))
+	candidate, err := filepath.Abs(filepath.Join(cleanRoot, normalized))
 	if err != nil {
 		return "", err
 	}
@@ -1344,8 +1343,8 @@ func safePath(root, rel string) (string, error) {
 		return "", err
 	}
 	if relation == ".." || strings.HasPrefix(relation, ".."+string(filepath.Separator)) {
-		// filepath.Clean 后再 Rel 校验，阻止 ../ 逃出 Agent 工作目录。
-		return "", errors.New("path escapes agent workdir")
+		// NormalizeWorkspacePath 已经挡过一次，这里 Rel 再校验一遍兜底，阻止 ../ 逃出 Agent 工作目录。
+		return "", fmt.Errorf("%w（%s 跑出了工作目录）", ErrWorkspacePath, strings.TrimSpace(rel))
 	}
 	resolvedRoot, err := filepath.EvalSymlinks(cleanRoot)
 	if err != nil {
@@ -1360,7 +1359,7 @@ func safePath(root, rel string) (string, error) {
 		return "", err
 	}
 	if relation == ".." || strings.HasPrefix(relation, ".."+string(filepath.Separator)) {
-		return "", errors.New("path resolves outside agent workdir")
+		return "", fmt.Errorf("%s 经软链接指向了工作目录外面，不能读写；请改用工作目录里的真实文件", strings.TrimSpace(rel))
 	}
 	return candidate, nil
 }

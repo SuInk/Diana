@@ -663,6 +663,7 @@ func main() {
 	mediaCacheHandler.Register(router)
 	historyMediaHandler.Register(router)
 	webui.NewStorageUsageHandler(sqliteStore.Path()).Register(router)
+	webui.NewAgentWorkspaceHandler(assistant.AgentWorkspaceDir).Register(router)
 	mediaBaseURLHandler.Register(router)
 	botHandler.Register(router)
 	ownerLoginHandler := webui.NewOwnerLoginHandler(authManager, botRuntime)

@@ -28,7 +28,7 @@ func (r *Runtime) AdministerExtensions(ctx context.Context, req agent.ExtensionA
 		return nil, err
 	}
 	result, err := agent.AdministerExtensions(ctx, admin, req)
-	if err == nil && agent.ExtensionOperationChangesDefinition(req.Operation) {
+	if err == nil && agent.ExtensionRequestChangesDefinition(req) {
 		r.closeAgentRegistryCache()
 	}
 	return result, err

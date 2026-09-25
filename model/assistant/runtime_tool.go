@@ -191,6 +191,10 @@ func (r *Runtime) generateReplyWithAgentTools(ctx context.Context, cfg BotConfig
 			if err != nil {
 				return "", err
 			}
+			// 全局关着的 MCP 可能因为别的机器人单独打开而在跑，这台机器人没开就不能用。
+			// 读不到覆盖时退回只按全局开关过滤，不因为配置读失败把工具放出去。
+			overrides, _ := agent.LoadExtensionOverrides(AgentWorkspaceDir(), cfg.ID)
+			registry.ApplyExtensionOverrides(overrides)
 		}
 		for _, tool := range extraTools {
 			registry.Register(tool)

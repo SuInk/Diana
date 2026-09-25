@@ -695,6 +695,47 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
     return json(demoMediaCachePolicy);
   }
 
+  // 演示站的工作区：几份 Agent 写下的笔记、一个编码代理克隆的仓库，外加一份凭据配置
+  // 和一个目标已经不在了的链接，两种标记页面上都看得到。
+  if (path === "/api/system/workspace" || path === "/api/system/workspace/file") {
+    const at = (hours: number) => new Date(Date.now() - hours * 3600_000).toISOString();
+    const tree: Record<string, { name: string; kind: "dir" | "file" | "link"; size?: number; hours: number; protected?: boolean; symlink?: boolean; text?: string }[]> = {
+      "": [
+        { name: "characters", kind: "dir", hours: 30 },
+        { name: "coding", kind: "dir", hours: 52 },
+        { name: ".mcp.json", kind: "file", size: 58, hours: 200, protected: true, text: '{\n  "mcpServers": { "search": { "token": "demo-token" } }\n}\n' },
+        { name: "latest-log", kind: "link", hours: 3, symlink: true },
+        { name: "todo.md", kind: "file", size: 96, hours: 2, text: "# 待办\n\n- 周五提醒群里交周报\n- 查一下番剧更新时间\n" }
+      ],
+      characters: [{ name: "diana.md", kind: "file", size: 58, hours: 30, text: "# Diana\n\n活泼、爱吐槽，说话不超过三句。\n" }],
+      coding: [{ name: "managed-default", kind: "dir", hours: 52 }],
+      "coding/managed-default": [{ name: "README.md", kind: "file", size: 41, hours: 52, text: "# demo repo\n\n编码代理克隆下来的仓库。\n" }]
+    };
+    const rel = (url.searchParams.get("path") ?? "").replace(/^\/+|\/+$/g, "");
+    if (path === "/api/system/workspace/file") {
+      const dir = rel.includes("/") ? rel.slice(0, rel.lastIndexOf("/")) : "";
+      const item = tree[dir]?.find((entry) => entry.name === rel.slice(rel.lastIndexOf("/") + 1));
+      if (!item?.text) return json({ error: "找不到这个路径" }, 404);
+      return new Response(item.text, { headers: { "Content-Type": "text/plain; charset=utf-8" } });
+    }
+    const items = tree[rel];
+    if (!items) return json({ error: "找不到这个路径" }, 404);
+    return json({
+      root: "/app/data/workspace",
+      path: rel,
+      exists: true,
+      entries: items.map((item) => ({
+        name: item.name,
+        path: rel ? `${rel}/${item.name}` : item.name,
+        kind: item.kind,
+        size: item.size ?? 0,
+        modified: at(item.hours),
+        symlink: item.symlink,
+        protected: item.protected
+      }))
+    });
+  }
+
   // 演示模式给一块 512 GiB 的盘和一份典型占用，图片/视频最大——真实部署里
   // 吃掉数据目录的基本就是历史媒体原件。
   if (path === "/api/system/storage") {
