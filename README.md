@@ -122,7 +122,7 @@ docker compose pull && docker compose up -d
 <details>
 <summary>Docker 细节 / 手动下载 / 源码构建</summary>
 
-**Docker：** 镜像预装 Chromium 与 Noto CJK 中文字体，网页渲染和中文截图无需在容器内临时安装浏览器。启动时加载上方的 seccomp 配置，为 Chromium 沙箱开放所需的命名空间调用；无需 `--privileged`、`SYS_ADMIN` 或关闭浏览器沙箱。已有容器需按新启动参数重建。详见[浏览器依赖与容器配置](docs/browser-rendering.md)。镜像随每个版本发布（`ghcr.io/suink/diana:latest` 及版本号 tag）。OneBot 客户端连 `ws://<宿主机>:18080/onebot/v11/ws`。想预置配置（无人值守部署），把改好的 `config.yaml` 以只读方式挂到 `/app/config.yaml`；先创建该文件，再取消 Compose 中配置文件挂载行的注释。从克隆的仓库本地构建时执行 `docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build`。升级拉新镜像重建容器即可，数据都在挂出来的 `data/` 里。
+**Docker：** 镜像预装 Chromium 与 Noto CJK 中文字体，网页渲染和中文截图无需在容器内临时安装浏览器。启动时加载上方的 seccomp 配置，为 Chromium 沙箱开放所需的命名空间调用；无需 `--privileged`、`SYS_ADMIN` 或关闭浏览器沙箱。已有容器需按新启动参数重建。详见[浏览器依赖与容器配置](docs/browser-rendering.md)。镜像随每个版本发布（`ghcr.io/suink/diana:latest` 及版本号 tag）。OneBot 客户端连 `ws://<宿主机>:18080/onebot/v11/ws`。想预置配置（无人值守部署），把改好的 `config.yaml` 放到 `data/config.yaml`。从克隆的仓库本地构建时执行 `docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build`。升级拉新镜像重建容器即可，控制台只提示新版本、不在容器里替换程序。只需挂载 `data/` 一个目录，需要持久化的都在里面：数据库、运行日志（`data/logs/diana.log`）、可选的 `config.yaml`、插件、技能、MCP 配置、浏览器和编码 CLI 登录态、`ytb_cookies.txt` 及升级备份；容器启动时自动把它交给容器内的运行用户（UID 10001）。换了镜像版本后第一次启动，会在迁移数据库之前把它备份到 `data/.diana-updates/backups/`（3 天内最多 3 份）。旧部署挂在 `/app/config.yaml` 的配置仍然优先生效；想改放 `data/config.yaml`，要同时删掉旧 Compose 里的 `DIANA_CONFIG` 一行。旧配置里的 `log_path: logs/diana.log` 改成 `data/logs/diana.log`（或删掉这行）后，旧的 `logs/` 挂载就可以去掉。容器内进程以 UID 10001 运行，但 `docker exec` 默认是 root，在容器里手动执行 `diana` 命令请加 `-u diana`。
 
 **slim 轻量镜像（基础版）：** 同一仓库同时发布 `-slim` 变体（如 `ghcr.io/suink/diana:latest-slim`、`ghcr.io/suink/diana:v0.8.131-slim`）：不预装 Chromium、Noto CJK 字体、ffmpeg、yt-dlp 与 tesseract，体积约为完整版的四分之一（拉取 156 MB / 落盘 662 MB，完整版 619 MB / 2.14 GB），适合不需要网页渲染、媒体下载和 OCR 的部署。安装脚本会问你要哪一种，选择写进部署目录的 `.env`（`DIANA_IMAGE=`），以后 `docker compose pull` 自动跟着走；已部署的想切换，在终端里重跑安装脚本，或直接改 `.env` 里那一行再 `docker compose pull && docker compose up -d`（没有这个文件就新建，Compose 会自动读取）。内置浏览器这一档在 slim 上会明确报「找不到浏览器」并给出安装命令，不会悄悄失效。之后想用网页渲染，在宿主机执行 `docker exec -u root <容器名> sh -c 'apt-get update && apt-get install -y chromium fonts-noto-cjk'` 即可（WebUI 依赖管理里点一键安装会因进程非 root 失败，报错会直接附上这条命令）。注意容器重建后需重新安装，数据在挂出的 `data/` 里不受影响。
 
@@ -223,7 +223,7 @@ diana doctor    # 体检：配置、目录、前端资源、服务健康
 
 会话上下文固定按机器人配置档隔离，同平台的不同机器人也不会因群号或用户 ID 相同而共用上下文。旧配置中的 `isolate_platform_contexts` 字段不再生效，原设置接口已移除。此前共享的历史保留在原位置，不会自动分配给各机器人；消息互通及单独启用的跨平台公共记忆不受影响。
 
-媒体缓存支持内容去重与可配置清理，文件和数据库日志按保留策略维护；升级健康检查成功后清理临时备份。配置优先级、历史文件保留、备份与回滚边界见[缓存与磁盘维护](./docs/storage-maintenance.md)。
+媒体缓存支持内容去重与可配置清理，文件和数据库日志按保留策略维护；升级前的数据库备份保留最近 3 天、最多 3 份。配置优先级、历史文件保留、备份与回滚边界见[缓存与磁盘维护](./docs/storage-maintenance.md)。
 
 完整字段和注释见 [`config.example.yaml`](./config.example.yaml)。
 

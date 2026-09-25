@@ -61,18 +61,30 @@ RUN /usr/local/bin/fetch-yt-dlp.sh "${TARGETOS}" "${TARGETARCH}" /out
 # （docker run --init）时也以 subreaper 身份照常回收。
 FROM node:24-bookworm-slim AS runtime-base
 WORKDIR /app
-# data/logs 预建并交给运行用户，容器不挂卷也能直接跑（SQLite 与日志有处可写）。
+# data 预建并交给运行用户，容器不挂卷也能直接跑。所有要持久化的东西（数据库、
+# 日志、可选的 config.yaml、插件、登录态、升级备份）都在 /app/data 下，只挂这一个目录。
 # git 供 WebUI 安装的编码 CLI（Codex 等）运行；运行用户的 home 放在数据目录下，
 # 挂卷后 CLI 的设备登录态能跨容器重建保留。
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates fontconfig git bubblewrap tini \
     && rm -rf /var/lib/apt/lists/* \
     && useradd -M -d /app/data/home -u 10001 diana \
-    && mkdir -p /app/data/home /app/logs \
-    && chown -R diana:diana /app/data /app/logs
+    && mkdir -p /app/data/home \
+    && chown -R diana:diana /app/data
 # gitea-mcp 放在主程序旁边，MCP 预设按这个位置拉起它；许可证随二进制一起带上。
 COPY --from=gitea-mcp /out/gitea-mcp /app/gitea-mcp
 COPY --from=gitea-mcp /out/gitea-mcp.LICENSE /app/gitea-mcp.LICENSE
+# 入口以 root 起步，把挂进来的 data 交给 diana 后再降权启动主程序。
+# 不能直接 USER diana：Linux 上 bind mount 自动建出来的宿主机目录归 root，
+# diana 写不进去，SQLite 和日志都起不来。
+COPY --chmod=0755 scripts/docker/entrypoint.sh /usr/local/bin/diana-entrypoint
+# DIANA_DEPLOYMENT 让控制台按 Docker 部署处理更新：只提示新版本，不在容器里下载和
+# 替换程序（/app 只读，重建容器也会丢），升级靠拉新镜像。日志写进数据目录，
+# DIANA_LOG_PATH 只在 config.yaml 没写 storage.log_path 时生效。配置文件不写死
+# 路径：放在 /app/data/config.yaml 即可（可选，没有就走安装向导）；旧部署挂在
+# /app/config.yaml 的仍然优先。
+ENV DIANA_DEPLOYMENT=docker \
+    DIANA_LOG_PATH=/app/data/logs/diana.log
 
 # 完整版运行时：预装 Chromium（网页读取/截图）、Noto CJK 字体、ffmpeg、
 # yt-dlp 与 tesseract 及中英语言包（图片文字识别插件的本地离线后端）。
@@ -98,17 +110,12 @@ COPY --from=backend /out/diana-webui /app/diana-webui
 COPY --from=frontend-next /src/frontend-next/dist /app/frontend-next/dist
 # 浏览器控制扩展的源码。容器用户没有仓库检出，WebUI 的「下载扩展」就是从这里打包。
 COPY packaging/browser-control-extension /app/browser-control-extension
-ENV DIANA_CONFIG=/app/config.yaml
 EXPOSE 18080
-USER diana
-ENTRYPOINT ["/usr/bin/tini", "-s", "--", "/app/diana-webui"]
+ENTRYPOINT ["/usr/bin/tini", "-s", "--", "/usr/local/bin/diana-entrypoint", "/app/diana-webui"]
 
 FROM runtime-full AS runtime
 COPY --from=backend /out/diana-webui /app/diana-webui
 COPY --from=frontend-next /src/frontend-next/dist /app/frontend-next/dist
 COPY packaging/browser-control-extension /app/browser-control-extension
-# 应用配置走 config.yaml；镜像内只放一份内置默认配置，挂载同名文件即可覆盖。
-ENV DIANA_CONFIG=/app/config.yaml
 EXPOSE 18080
-USER diana
-ENTRYPOINT ["/usr/bin/tini", "-s", "--", "/app/diana-webui"]
+ENTRYPOINT ["/usr/bin/tini", "-s", "--", "/usr/local/bin/diana-entrypoint", "/app/diana-webui"]

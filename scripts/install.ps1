@@ -192,8 +192,23 @@ try {
     $timestamp = (Get-Date).ToUniversalTime().ToString("yyyyMMddTHHmmssZ")
     $backupsRoot = Join-Path $installDir ".installer\backups"
     if (Test-Path -LiteralPath $backupsRoot) {
-        Get-ChildItem -LiteralPath $backupsRoot -Directory -Force | ForEach-Object {
-            Remove-Item -LiteralPath $_.FullName -Recurse -Force -ErrorAction Stop
+        # Keep backups (including the database copy) from the last 3 days, at
+        # most 3 counting this attempt's. Names are UTC timestamps, so they
+        # compare as strings; anything else has expired.
+        $backupCutoff = (Get-Date).ToUniversalTime().AddDays(-3).ToString("yyyyMMddTHHmmssZ")
+        $keptBackups = @()
+        foreach ($oldBackup in @(Get-ChildItem -LiteralPath $backupsRoot -Directory -Force | Sort-Object Name)) {
+            $stamp = if ($oldBackup.Name.Length -ge 16) { $oldBackup.Name.Substring(0, 16) } else { "" }
+            if ($stamp -match '^\d{8}T\d{6}Z$' -and [string]::CompareOrdinal($stamp, $backupCutoff) -ge 0) {
+                $keptBackups += $oldBackup
+            } else {
+                Remove-Item -LiteralPath $oldBackup.FullName -Recurse -Force -ErrorAction Stop
+            }
+        }
+        if ($keptBackups.Count -gt 2) {
+            foreach ($oldBackup in @($keptBackups | Select-Object -First ($keptBackups.Count - 2))) {
+                Remove-Item -LiteralPath $oldBackup.FullName -Recurse -Force -ErrorAction Stop
+            }
         }
     }
     $backupDir = Join-Path $installDir ".installer\backups\$timestamp"
@@ -325,9 +340,10 @@ try {
             throw "Health check failed. The previous runtime was restored when available. See $backupDir."
         }
         Write-Host "==> Diana is healthy at http://${healthHost}:$port"
+        # The database backup is kept (3 days, at most 3); only the replaced
+        # program files are dropped.
         try {
-            Remove-Item -LiteralPath $backupDir -Recurse -Force -ErrorAction Stop
-            $backupDir = $null
+            Remove-Item -LiteralPath $runtimeBackup -Recurse -Force -ErrorAction Stop
         } catch {
             Write-Warning "Diana is healthy, but backup cleanup failed: $_"
         }
@@ -349,11 +365,8 @@ try {
 
     Write-Host "Installed: $installDir"
     if (Test-Path $commandShim) { Write-Host "Command:   diana" }
-    if ($backupDir) {
-        Write-Host "Backup:    $backupDir"
-    } else {
-        Write-Host "Backup:    removed after successful health check"
-    }
+    Write-Host "Backup:    $backupDir"
+    Write-Host "           Update backups are kept for 3 days, at most 3."
     if ($generatedPassword) {
         Write-Host "Username:  $username"
         Write-Host "Password:  $generatedPassword"

@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -40,9 +39,7 @@ func runLogsCommand(args []string, output io.Writer) error {
 	if logPath == "" {
 		return fmt.Errorf("storage.log_path is empty; this Diana instance only writes logs to standard output")
 	}
-	if !filepath.IsAbs(logPath) {
-		logPath = filepath.Join(filepath.Dir(configPath), logPath)
-	}
+	logPath = resolveConfigRelative(configPath, logPath)
 	return printLogTail(logPath, options.lines, options.follow, output)
 }
 

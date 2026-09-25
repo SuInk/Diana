@@ -3,7 +3,10 @@
 
 package assistant
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func atSegment(qq string, name string) MessageSegment {
 	data := map[string]string{"qq": qq}
@@ -309,5 +312,36 @@ func TestPlainTextSkipsUnreadableCard(t *testing.T) {
 	}
 	if got := DisplayEventText(event, nil); got != "" {
 		t.Fatalf("display text = %q, want empty", got)
+	}
+}
+
+// 引用块的原话比行内标记长得多；原消息没存下来时也要交出一个只带消息号的 quote，
+// 界面才说得出「这是一条回复」。
+func TestDisplaySegmentsBodySplitsQuoteFromText(t *testing.T) {
+	long := strings.Repeat("长", 150)
+	segments := []MessageSegment{
+		{Type: "reply", Data: map[string]string{"id": "m-0"}},
+		{Type: "text", Data: map[string]string{"text": "你也去吗"}},
+	}
+	text, quote := DisplaySegmentsBody(segments, &QuotedMessage{
+		MessageID: "m-0", UserID: "10002", SenderName: "阿花",
+		Segments: []MessageSegment{{Type: "text", Data: map[string]string{"text": long}}},
+	}, nil)
+	if text != "你也去吗" {
+		t.Fatalf("text = %q", text)
+	}
+	if quote == nil || quote.MessageID != "m-0" || quote.SenderName != "阿花" || quote.UserID != "10002" ||
+		quote.Text != strings.Repeat("长", maxDisplayQuoteBlockRunes)+"…" {
+		t.Fatalf("quote = %#v", quote)
+	}
+
+	text, quote = DisplaySegmentsBody(segments, nil, nil)
+	if text != "你也去吗" || quote == nil || *quote != (DisplayQuote{MessageID: "m-0"}) {
+		t.Fatalf("unsaved quote: text=%q quote=%#v", text, quote)
+	}
+
+	text, quote = DisplaySegmentsBody(segments[1:], nil, nil)
+	if text != "你也去吗" || quote != nil {
+		t.Fatalf("no quote: text=%q quote=%#v", text, quote)
 	}
 }

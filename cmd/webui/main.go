@@ -266,6 +266,23 @@ func main() {
 		log.Fatal(err)
 	}
 
+	// Docker 拉新镜像、源码重新构建时没有更新器替换前的那次备份，版本一变就在
+	// 迁移之前先备份数据库。备份不成功不启动：宁可停在旧库上，也不在没有备份的
+	// 情况下迁移。
+	if dockerDeployment() || version.BuildType(buildVersion) == version.BuildTypeSource {
+		dbPath, err := storage.ResolveDatabasePath(strings.TrimSpace(appCfg.Storage.DBPath))
+		if err != nil {
+			log.Fatal(err)
+		}
+		backup, err := updater.BackupDatabaseOnVersionChange(dbPath, appCfg.Update.WorkDir, runtimeVersion, time.Now())
+		if err != nil {
+			log.Fatalf("back up database before migrating to %s: %v (database left untouched; free disk space or fix permissions and restart)", runtimeVersion, err)
+		}
+		if backup != "" {
+			log.Printf("version changed to %s; database backed up to %s before migration", runtimeVersion, backup)
+		}
+	}
+
 	// SQLite 同时保存模型、助手、插件、提醒和操作日志配置。
 	sqliteStore, err := storage.NewSQLiteStore(strings.TrimSpace(appCfg.Storage.DBPath))
 	if err != nil {
@@ -391,6 +408,7 @@ func main() {
 		Shutdown:       cancel,
 		UpdatesDir:     appCfg.Update.WorkDir,
 		Disable:        !boolOr(appCfg.Update.ReleaseEnabled, true),
+		Container:      dockerDeployment(),
 	})
 	if err != nil {
 		log.Fatal(err)
@@ -783,6 +801,11 @@ func limitRequestBody(maxBytes int64) gin.HandlerFunc {
 		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxBytes)
 		c.Next()
 	}
+}
+
+// dockerDeployment 报告是否运行在官方 Docker 镜像里（镜像设置 DIANA_DEPLOYMENT=docker）。
+func dockerDeployment() bool {
+	return strings.TrimSpace(os.Getenv("DIANA_DEPLOYMENT")) == "docker"
 }
 
 // setupLogging 配置控制台和文件日志输出。

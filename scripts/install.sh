@@ -284,10 +284,32 @@ if [ "$install_scope" = "system" ] && [ "$install_dir" != "$legacy_install_dir" 
   retire_legacy_service
 fi
 timestamp=$(date -u '+%Y%m%dT%H%M%SZ')
-# Keep only this attempt's backup; abort before copying if cleanup fails.
+# Keep backups (including the database copy) from the last 3 days, at most 3
+# counting this attempt's; abort before copying if cleanup fails. Names are
+# UTC timestamps, so the digits compare as numbers; anything else has expired.
+backup_cutoff=$(($(date -u '+%s') - 3 * 24 * 60 * 60))
+backup_cutoff=$(date -u -r "$backup_cutoff" '+%Y%m%d%H%M%S' 2>/dev/null ||
+  date -u -d "@$backup_cutoff" '+%Y%m%d%H%M%S' 2>/dev/null || printf '0')
+kept_backups=0
 for old_backup in "$install_dir/.installer/backups/"*; do
   [ -d "$old_backup" ] || continue
+  backup_name=${old_backup##*/}
+  case "$backup_name" in
+    [0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]T[0-9][0-9][0-9][0-9][0-9][0-9]Z*)
+      backup_stamp=$(printf '%s' "$backup_name" | cut -c1-8,10-15)
+      if [ "$backup_stamp" -ge "$backup_cutoff" ]; then
+        kept_backups=$((kept_backups + 1))
+        continue
+      fi
+      ;;
+  esac
   rm -rf -- "$old_backup"
+done
+for old_backup in "$install_dir/.installer/backups/"*; do
+  [ "$kept_backups" -gt 2 ] || break
+  [ -d "$old_backup" ] || continue
+  rm -rf -- "$old_backup"
+  kept_backups=$((kept_backups - 1))
 done
 backup_dir="$install_dir/.installer/backups/$timestamp"
 mkdir -p "$backup_dir/runtime" "$backup_dir/data"
@@ -883,10 +905,10 @@ if [ "$start_after_install" = "true" ]; then
     fail "health check failed; the previous runtime was restored when available. See $install_dir/logs"
   fi
   info "Diana is healthy at http://$health_host:$port"
-  if rm -rf -- "$backup_dir"; then
-    backup_dir=""
-  else
-    printf 'Warning: Diana is healthy, but backup cleanup failed: %s\n' "$backup_dir" >&2
+  # The database backup is kept (3 days, at most 3); only the replaced
+  # program files are dropped.
+  if ! rm -rf -- "$backup_dir/runtime"; then
+    printf 'Warning: Diana is healthy, but backup cleanup failed: %s\n' "$backup_dir/runtime" >&2
   fi
   printf 'Service: %s\n' "$service_kind"
   if [ "$service_control_granted" = true ]; then
@@ -925,11 +947,8 @@ if [ -n "$command_dir" ]; then
     printf 'PATH:      %s\n' "$command_path_hint"
   fi
 fi
-if [ -n "$backup_dir" ]; then
-  printf 'Backup:    %s\n' "$backup_dir"
-else
-  printf 'Backup:    removed after successful health check\n'
-fi
+printf 'Backup:    %s\n' "$backup_dir"
+printf '           Update backups are kept for 3 days, at most 3.\n'
 if [ -n "$generated_password" ]; then
   printf 'Username:  %s\n' "$username"
   printf 'Password:  %s\n' "$generated_password"

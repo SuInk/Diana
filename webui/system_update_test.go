@@ -838,6 +838,10 @@ func TestReleaseCacheHonorsRateLimitResetAndReturnsStaleData(t *testing.T) {
 }
 
 func TestReleaseCacheUsesTokenAndETag(t *testing.T) {
+	// 环境变量里的令牌优先于保存的令牌；CI 或开发机上设了 GITHUB_TOKEN 时
+	// 请求带的就不是这里配的 test-token。
+	t.Setenv("DIANA_GITHUB_TOKEN", "")
+	t.Setenv("GITHUB_TOKEN", "")
 	now := time.Date(2026, 9, 2, 12, 0, 0, 0, time.UTC)
 	var calls atomic.Int32
 	github := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

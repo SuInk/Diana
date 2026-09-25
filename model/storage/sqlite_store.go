@@ -89,19 +89,34 @@ func (s *SQLiteStore) memoryEventDelay() time.Duration {
 	return *s.memoryEventJobDelay
 }
 
+// ResolveDatabasePath 返回 NewSQLiteStore 会打开的数据库文件绝对路径，供打开
+// 数据库之前就要知道位置的启动步骤使用（例如迁移前备份）。内存库和 file: URI
+// 没有对应的普通文件，返回空字符串。
+func ResolveDatabasePath(path string) (string, error) {
+	if path == "" {
+		path = defaultDatabasePath
+	}
+	if path == ":memory:" || strings.HasPrefix(path, "file:") {
+		return "", nil
+	}
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return "", fmt.Errorf("resolve sqlite path: %w", err)
+	}
+	return absPath, nil
+}
+
 // NewSQLiteStore 打开 SQLite 数据库并执行迁移。
 func NewSQLiteStore(path string) (*SQLiteStore, error) {
 	if path == "" {
 		path = defaultDatabasePath
 	}
-	resolvedPath := ""
-	if path != ":memory:" && !strings.HasPrefix(path, "file:") {
-		absPath, err := filepath.Abs(path)
-		if err != nil {
-			return nil, fmt.Errorf("resolve sqlite path: %w", err)
-		}
-		path = absPath
-		resolvedPath = path
+	resolvedPath, err := ResolveDatabasePath(path)
+	if err != nil {
+		return nil, err
+	}
+	if resolvedPath != "" {
+		path = resolvedPath
 	}
 	// 数据库目录可能不存在，先创建目录再打开 SQLite 文件。
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {

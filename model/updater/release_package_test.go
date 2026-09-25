@@ -304,8 +304,13 @@ func TestApplyReleasePlanBacksUpAndSwitchesHealthyPackage(t *testing.T) {
 	assertUpdaterTestContent(t, plan.ExecutablePath, "new-binary")
 	assertUpdaterTestContent(t, filepath.Join(plan.FrontendPath, "index.html"), "new-frontend")
 	entries, err := os.ReadDir(backupsRoot)
-	if err != nil || len(entries) != 0 {
+	if err != nil || len(entries) != 1 || entries[0].Name() != filepath.Base(plan.BackupRoot) {
 		t.Fatalf("after success: backups=%d err=%v", len(entries), err)
+	}
+	databaseBackup := filepath.Join(plan.BackupRoot, "database", filepath.Base(plan.DatabasePath))
+	assertUpdaterTestContent(t, databaseBackup, "old-database")
+	if _, err := os.Stat(filepath.Join(plan.BackupRoot, "package")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("replaced program files were kept after success: %v", err)
 	}
 	if !process.released || process.stopped {
 		t.Fatalf("process = %#v", process)
@@ -314,8 +319,8 @@ func TestApplyReleasePlanBacksUpAndSwitchesHealthyPackage(t *testing.T) {
 	if !ok || state.Status != "healthy" || state.TargetVersion != "v0.5.0" {
 		t.Fatalf("release state = %#v, ok = %v", state, ok)
 	}
-	if state.BackupRoot != "" || state.DatabaseBackup != "" || state.CleanupError != "" {
-		t.Fatalf("healthy state references removed backup: %#v", state)
+	if state.BackupRoot != plan.BackupRoot || state.DatabaseBackup != databaseBackup || state.CleanupError != "" {
+		t.Fatalf("healthy state does not reference the kept backup: %#v", state)
 	}
 }
 
@@ -742,5 +747,38 @@ func TestValidateReleaseApplyPlanRejectsUnsafeSupervisor(t *testing.T) {
 	accepted.Supervisor = serviceSupervisor{Kind: supervisorLaunchd, Label: "com.suink.diana", Domain: "gui/501"}
 	if err := validateReleaseApplyPlan(accepted); err != nil {
 		t.Fatalf("validateReleaseApplyPlan() rejected a normal launchd job: %v", err)
+	}
+}
+
+func TestReleasePackageUpdaterUnsupportedInContainer(t *testing.T) {
+	// The image has the same layout as a complete package, so only the
+	// explicit container flag keeps the updater from replacing /app in place.
+	binaryName := expectedReleaseBinaryName(runtime.GOOS, runtime.GOARCH)
+	installRoot := t.TempDir()
+	executable := filepath.Join(installRoot, binaryName)
+	frontend := filepath.Join(installRoot, "frontend-next", "dist")
+	database := filepath.Join(installRoot, "data", "diana.db")
+	writeUpdaterTestFile(t, executable, "binary", 0o700)
+	writeUpdaterTestFile(t, filepath.Join(frontend, "index.html"), "frontend", 0o600)
+	writeUpdaterTestFile(t, database, "db", 0o600)
+	options := ReleasePackageOptions{
+		CurrentVersion: "v0.4.0",
+		Executable:     executable,
+		FrontendDir:    frontend,
+		DatabasePath:   database,
+		HealthURL:      "http://127.0.0.1:18080/api/health",
+	}
+	for _, container := range []bool{false, true} {
+		options.Container = container
+		u, err := NewReleasePackageUpdater(options)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if u.Supported() == container {
+			t.Fatalf("container=%v: supported=%v reason=%q", container, u.Supported(), u.UnsupportedReason())
+		}
+		if container && !strings.Contains(u.UnsupportedReason(), "pulling a new image") {
+			t.Fatalf("container reason = %q", u.UnsupportedReason())
+		}
 	}
 }

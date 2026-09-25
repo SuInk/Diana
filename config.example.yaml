@@ -29,10 +29,11 @@ server:
   frontend_dist: ""
 
 storage:
-  # 留空则放在默认数据目录。
+  # 相对路径按进程工作目录解析（不是按本文件所在目录）。留空则放在默认数据目录。
   db_path: data/diana.db
-  # 留空表示只写标准输出。文件每 20 MiB 轮转，保留 5 份备份。
-  log_path: logs/diana.log
+  # 留空表示只写标准输出（Docker 镜像默认写 data/logs/diana.log）。
+  # 文件每 20 MiB 轮转，保留 5 份备份。放在 data 下，Docker 只挂 data 一个目录也能保留。
+  log_path: data/logs/diana.log
   # 数据库日志在启动后及每 24 小时分批清理。0 使用默认值，-1 永久保留。
   # 用量统计日志不删除；聊天记录、长期记忆、配置和历史媒体不受影响。
   debug_log_retention_days: 7

@@ -164,7 +164,6 @@ docker run -d --name diana --restart unless-stopped \
   --security-opt seccomp="$PWD/chromium-seccomp.json" \
   -p 18080:18080 \
   -v "$PWD/data:/app/data" \
-  -v "$PWD/logs:/app/logs" \
   ghcr.io/suink/diana:latest</pre>
       </div>
     </div>
