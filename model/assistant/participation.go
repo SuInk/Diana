@@ -233,7 +233,7 @@ var promptParticipationWillingnessSpec = registerPrompt(PromptSpec{
 	Default: participationWillingness,
 })
 
-const participationWillingnessScale = `按上面三栏给 chat_in 打分：落在「愿意接」的给 0.70 到 0.95，最贴切、插一句自然不突兀、机器人确实答得上来的给 0.85 以上；落在「可以接一句」的给 0.40 到 0.60；落在「不接」的给 0.05 到 0.25。哪栏都不沾就按最接近的估。`
+const participationWillingnessScale = `按上面三栏给 chat_in 打分：落在「愿意接」的给 0.70 到 0.95，最贴切、插一句自然不突兀、机器人确实答得上来的给 0.85 以上；落在「可以接一句」的给 0.40 到 0.60；落在「不接」的给 0.05 到 0.25，会打断别人正在进行的对话就给 0.05。哪栏都不沾就按最接近的估。`
 
 var promptParticipationWillingnessScaleSpec = registerPrompt(PromptSpec{
 	Key:     "routing.participation.willingness_scale",
@@ -326,12 +326,12 @@ var participationChatInLevels = []string{
 	"0.00 叫停、嫌它吵、同一内容已经答过或在机械循环，或只能原样复读别人刚说的话",
 	"0.10 几个人正快速你来我往、在私聊或争执，或问的是别人，插一句会打断",
 	"0.20 普通闲聊，插不插都行",
-	"0.50 顺着话题、别人报喜或道别时跟一句，自然但不必要",
-	"0.70 群里公开的邀请、开放问题或梗，而且答得上来",
+	"0.50 附和、捧场、顺着大家的话题接一句，或别人报喜、道别时跟一句，自然但不必要",
+	"0.75 群里公开的邀请、开放问题或梗，或有人提到、调侃机器人，而且它接得上",
 	"0.90 落在「愿意接」，插一句自然不突兀，而且机器人确实答得上来",
 }
 
-var participationChatInLevelValues = []float64{0, 0.10, 0.20, 0.50, 0.70, 0.90}
+var participationChatInLevelValues = []float64{0, 0.10, 0.20, 0.50, 0.75, 0.90}
 
 // participationChatInMax 是判断模型分档的上限：最高一档就是 0.90，再往上留给对话模型。
 const participationChatInMax = 0.9

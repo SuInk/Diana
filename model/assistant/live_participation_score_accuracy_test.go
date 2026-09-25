@@ -12,6 +12,8 @@ package assistant
 //
 // 默认跳过，需要 DIANA_LIVE_LLM=1 与 DIANA_TEST_LLM_* 真实模型配置（见 liveLLMClient）。
 //
+//	DIANA_SCORE_EVAL_TARGET     jev：走判断模型（DIANA_TEST_JEV_*，见 liveJevClient）；
+//	                            gemini：DIANA_TEST_LLM_* 按 Gemini 协议连；留空走 OpenAI 兼容
 //	DIANA_SCORE_EVAL_OVERRIDES  提示词覆盖 JSON（key → 正文），试新写法时不用改源码
 //	DIANA_SCORE_EVAL_OUT        逐条结果 JSON 输出路径，可选
 
@@ -25,12 +27,32 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/SuInk/diana/model/llm"
 )
 
 func TestLiveParticipationScoreAccuracy(t *testing.T) {
-	client := liveLLMClient(t)
+	var client llm.LLMClient
+	switch os.Getenv("DIANA_SCORE_EVAL_TARGET") {
+	case "jev":
+		client = liveJevClient(t)
+	case "gemini":
+		liveLLMClient(t) // 只借它的跳过条件
+		var err error
+		client, err = llm.NewClient(llm.ProviderConfig{
+			Provider: llm.ProviderGemini,
+			APIKey:   strings.TrimSpace(os.Getenv("DIANA_TEST_LLM_API_KEY")),
+			BaseURL:  strings.TrimSpace(os.Getenv("DIANA_TEST_LLM_BASE_URL")),
+			Model:    strings.TrimSpace(os.Getenv("DIANA_TEST_LLM_MODEL")),
+			Timeout:  90 * time.Second,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	default:
+		client = liveLLMClient(t)
+	}
 	cfg := DefaultBotConfig()
 	cfg.Name = "嘉然"
 	cfg.BotAccount = "10000"
@@ -147,7 +169,8 @@ func TestLiveParticipationScoreAccuracy(t *testing.T) {
 				defer wg.Done()
 				sem <- struct{}{}
 				defer func() { <-sem }()
-				resp, err := client.Generate(context.Background(), llm.GenerateRequest{Messages: []llm.Message{{Role: llm.RoleSystem, Content: system}, {Role: llm.RoleUser, Content: user}}})
+				// 和线上一样带着题目表：对话模型照提示词写 JSON，判断模型按题作答。
+				resp, err := client.Generate(context.Background(), llm.GenerateRequest{Messages: []llm.Message{{Role: llm.RoleSystem, Content: system}, {Role: llm.RoleUser, Content: user}}, Decision: participationDecisionSpec(cfg.PromptOverrides)})
 				mu.Lock()
 				defer mu.Unlock()
 				if err != nil {
