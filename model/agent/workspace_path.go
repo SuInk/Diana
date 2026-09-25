@@ -123,7 +123,7 @@ func workspaceEntryExists(root, rel string) bool {
 	return err == nil
 }
 
-// looksLikeDrivePath 认出 C:/Users/... 这种 Windows 盘符路径。在 Unix 上它不算绝对路径，
+// looksLikeDrivePath 认出 C:/data/... 这种 Windows 盘符路径。在 Unix 上它不算绝对路径，
 // 不拦的话会被当成工作目录下一个叫 C: 的子目录，报一个莫名其妙的「找不到」。
 func looksLikeDrivePath(slash string) bool {
 	if len(slash) < 3 || slash[1] != ':' || slash[2] != '/' {

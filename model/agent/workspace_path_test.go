@@ -72,7 +72,7 @@ func TestNormalizeWorkspacePath(t *testing.T) {
 		{"/workspace 前缀后逃逸", "/workspace/../etc/passwd"},
 		{"workspace/ 前缀后逃逸", "workspace/../../secret"},
 		{"兄弟目录绝对路径", filepath.Join(filepath.Dir(root), "other", "x.jpg")},
-		{"Windows 盘符路径", `C:\Users\miku\x.jpg`},
+		{"Windows 盘符路径", `C:\data\x.jpg`},
 	}
 	for _, tc := range rejects {
 		t.Run("拒绝/"+tc.name, func(t *testing.T) {
