@@ -172,6 +172,9 @@ func (r *Runtime) followUpCommentWithReference(ctx context.Context, kind followU
 	botID := firstNonEmpty(cfg.BotAccount, source.SelfID)
 	for _, historyEvent := range history {
 		content := strings.TrimSpace(historyPlainText(historyEvent))
+		if isPokeHistoryEvent(historyEvent) {
+			content = pokeHistoryPromptText(historyEvent, botID, historyEvent.SelfID)
+		}
 		if content == "" {
 			continue
 		}

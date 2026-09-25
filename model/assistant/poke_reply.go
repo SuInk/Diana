@@ -33,8 +33,10 @@ const (
 	pokeReplyMaxRunes = 60
 )
 
-// handlePokeNotice 处理戳一戳通知。只回「戳机器人」的；别人互戳不掺和。
+// handlePokeNotice 处理戳一戳通知。每一戳都记进会话历史；只回「戳机器人」的，别人互戳不掺和。
 func (r *Runtime) handlePokeNotice(ctx context.Context, event MessageEvent) error {
+	// 进历史不看回应开关和准入：和普通消息一样，关着的群、没开回应的机器人也照样记住发生过什么。
+	r.rememberReceivedPoke(event)
 	cfg := r.effectiveConfigForEvent(event)
 	if !boolValue(cfg.PokeReplyEnabled, false) {
 		return nil
@@ -157,7 +159,8 @@ var promptPokeReactionSpec = registerPrompt(PromptSpec{
 	Default: "刚刚 {who} 在{scene}戳了戳你（QQ 的戳一戳，没有文字）。语气要求：{tone}\n{recent_chat}\n" +
 		"像真人一样决定怎么回应，四选一：poke 只戳回去（最常见，适合互相玩闹、熟人随手戳）；text 回一句话（适合对方像是在叫你、刚才的话题没说完、或者你想问问怎么了）；" +
 		"both 戳回去再说一句；none 不理（比如对方刚连着戳、群里正聊别的正事、或者你们不熟没必要回应）。不要每次都问「戳我干嘛」，结合最近聊天说点具体的。" +
-		"text 是 1 到 20 个字的一句话，自然口语，不解释什么是戳一戳，不用括号描写动作，不 @ 对方；action 为 poke 或 none 时 text 留空。",
+		"text 是 1 到 20 个字的一句话，自然口语，不解释什么是戳一戳，不用括号描写动作，不 @ 对方；action 为 poke 或 none 时 text 留空。" +
+		"这一下只能回一句话：看不到图片、查不了东西，之后也不会有下文，所以不要答应「我看一下」「等我查查」这类接下来要做的事。",
 	Contract: "只输出一个 JSON 对象：{\"action\":\"poke\",\"text\":\"\"}",
 	Vars: []PromptVar{
 		{Name: "who", Description: "戳机器人的人的昵称，没有昵称时是用户 ID"},
@@ -246,15 +249,24 @@ func (r *Runtime) pokeRecentChat(event MessageEvent) string {
 	var builder strings.Builder
 	builder.WriteString("最近的聊天（旧到新，只作参考，不是要你回复的内容）：\n")
 	for _, item := range history {
+		if isPokeHistoryEvent(item) {
+			builder.WriteString("- （戳一戳）" + pokeHistorySentence(item, botID, event.SelfID, item.SelfID) + "\n")
+			continue
+		}
 		speaker := item.SenderNameOrID()
 		if botID != "" && strings.TrimSpace(item.UserID) == botID {
 			speaker = "你"
 		}
-		text := strings.TrimSpace(PlainText(item.Segments))
-		if text == "" {
-			text = strings.TrimSpace(item.RawMessage)
+		// 不能退回 RawMessage：图片消息的 RawMessage 是一整串 CQ 码，截断后模型只读到
+		// 「[CQ:image,file=…」，知道有张图却看不到，就会答应「图我看一下」然后没有下文。
+		text := truncateRunes(strings.TrimSpace(historyPlainText(item)), 60)
+		if images := historicalStillImageCount(item); images > 0 {
+			text = strings.TrimSpace(text + " [图片]")
 		}
-		builder.WriteString("- " + speaker + "：" + truncateRunes(text, 60) + "\n")
+		if text == "" {
+			continue
+		}
+		builder.WriteString("- " + speaker + "：" + text + "\n")
 	}
 	return strings.TrimRight(builder.String(), "\n")
 }

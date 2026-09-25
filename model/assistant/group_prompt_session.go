@@ -312,6 +312,10 @@ func (r *Runtime) renderPromptHistoryEvent(ctx context.Context, current, item Me
 	if strings.TrimSpace(item.botReply) != "" {
 		return []llm.Message{{Role: llm.RoleAssistant, Content: item.botReply}}
 	}
+	if isPokeHistoryEvent(item) {
+		text := pokeHistoryPromptText(item, cfg.BotAccount, current.SelfID, item.SelfID)
+		return []llm.Message{{Role: llm.RoleUser, Content: text, Priority: llm.MessagePriorityHistory}}
+	}
 	var result []llm.Message
 	if !item.crossGroupContext && assistantHistoryEvent(item, firstNonEmpty(strings.TrimSpace(cfg.BotAccount), strings.TrimSpace(current.SelfID))) {
 		if text := strings.TrimSpace(historyPlainText(item)); text != "" {

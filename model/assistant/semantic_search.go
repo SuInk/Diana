@@ -82,7 +82,8 @@ func (r *Runtime) messageVectorStore() MessageHistoryVectorStore {
 // enqueueSemanticIndex 把一条已落库的消息投给后台向量化。非阻塞:队列满了
 // 直接丢弃,绝不让消息处理路径等 embedding。
 func (r *Runtime) enqueueSemanticIndex(event MessageEvent) {
-	if strings.TrimSpace(event.MessageID) == "" || event.Kind == EventKindNotice {
+	// 戳一戳没有可检索的内容，正文只是一句固定的「戳了戳某某」。
+	if strings.TrimSpace(event.MessageID) == "" || event.Kind == EventKindNotice || isPokeHistoryEvent(event) {
 		return
 	}
 	if !r.semanticSearchActive(r.effectiveConfigForEvent(event)) || r.messageVectorStore() == nil {
