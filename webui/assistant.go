@@ -309,6 +309,7 @@ func (h *BotHandler) registerRoutes(router gin.IRouter, base string) {
 	router.GET(base+"/prompts", h.promptCatalog)
 	router.POST(base+"/prompts/export", h.exportPromptFile)
 	router.POST(base+"/prompts/import", h.importPromptFile)
+	router.POST(base+"/prompts/participation-preview", h.previewParticipationPrompt)
 	router.POST(base+"/config/new", h.createProfile)
 	router.GET(base+"/platforms", h.platforms)
 	router.POST(base+"/config", h.saveConfig)

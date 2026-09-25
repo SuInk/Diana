@@ -2701,7 +2701,7 @@ func (r *Runtime) routeProactiveReplyBatch(ctx context.Context, candidates []pro
 	messages := []llm.Message{
 		{
 			Role:    llm.RoleSystem,
-			Content: proactiveReplyRouterPromptForChatIn(cfg.prompt(promptLegacyRouterSpec), cfg.ProactiveReplyExtraCriteria, chatIn, boolValue(cfg.SocialReplyEnabled, false), cfg),
+			Content: proactiveReplyRouteSystemPrompt(cfg, chatIn),
 		},
 		routeUserMessage,
 	}

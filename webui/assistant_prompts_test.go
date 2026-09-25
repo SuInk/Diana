@@ -77,3 +77,29 @@ func TestPromptFileExportImport(t *testing.T) {
 		t.Fatalf("imported = %#v", imported)
 	}
 }
+
+// 预览拿的是请求里那份还没保存的配置：覆盖、补充判据和闲聊档位都要反映在发出去的内容里。
+func TestParticipationPromptPreviewUsesUnsavedConfig(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.POST("/preview", (&BotHandler{}).previewParticipationPrompt)
+	body, _ := json.Marshal(map[string]any{
+		"name":                           "Diana",
+		"proactive_reply_extra_criteria": "群里叫「鸽子」是催更",
+		"prompt_overrides":               map[string]string{"routing.participation.relevance_true": "有人叫它小D"},
+	})
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/preview", bytes.NewReader(body)))
+	var preview assistant.ParticipationPromptPreview
+	if recorder.Code != http.StatusOK || json.Unmarshal(recorder.Body.Bytes(), &preview) != nil {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	for _, want := range []string{"有人叫它小D", "群里叫「鸽子」是催更"} {
+		if !strings.Contains(preview.System, want) {
+			t.Fatalf("system prompt is missing %q:\n%s", want, preview.System)
+		}
+	}
+	if !strings.Contains(preview.User, `"current_text"`) || len(preview.Decision) != 2 {
+		t.Fatalf("preview = %+v", preview)
+	}
+}

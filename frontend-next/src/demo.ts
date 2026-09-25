@@ -971,6 +971,7 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
   if (path === "/api/assistant/platforms") return json({ platforms });
   if (path === "/api/assistant/prompts") return json(demoPromptCatalog);
   if (path === "/api/assistant/prompts/export" && method === "POST") return json({ yaml: demoRenderPromptFile((body.overrides as Record<string, string>) ?? {}) });
+  if (path === "/api/assistant/prompts/participation-preview" && method === "POST") return json(demoParticipationPreview(body));
   if (path === "/api/assistant/prompts/import" && method === "POST") {
     const result = demoParsePromptFile(String(body.source ?? ""));
     return "error" in result ? json(result, 400) : json(result);
@@ -1626,6 +1627,69 @@ const demoPromptCatalog = demoPromptCatalogData as PromptCatalog;
 // 写法模拟。只认自己导出的那种形状（每段一个字面块），够演示导出、改、导回的流程。
 function demoPromptDefaults(): Map<string, string> {
   return new Map(demoPromptCatalog.prompts.flatMap((spec): [string, string][] => [[spec.key, spec.default], ...(spec.format_key ? [[spec.format_key, (spec.contract ?? "").trim()] as [string, string]] : [])]));
+}
+
+// 接话评分预览：按后端 participationScorePromptWith / appendRouterCriteria /
+// participationDecisionSpec 的拼法在前端模拟，上下文用和后端同一段示例群聊。
+function demoParticipationPreview(body: Record<string, unknown>) {
+  const overrides = (body.prompt_overrides as Record<string, string> | undefined) ?? {};
+  const specs = new Map(demoPromptCatalog.prompts.map((spec) => [spec.key, spec]));
+  const text = (key: string) => overrides[key]?.trim() || specs.get(key)?.default || "";
+  const contract = (key: string) => {
+    const spec = specs.get(key);
+    const custom = spec?.format_key ? overrides[spec.format_key]?.trim() : "";
+    return custom ? "\n" + custom : spec?.contract ?? "";
+  };
+  const participation = (body.participation as { relevance_level?: string; chat_level?: string } | undefined) ?? {};
+  const header = text("routing.participation.header")
+    .split("{relevance}").join(participation.relevance_level === "off" ? "关" : "开")
+    .split("{chat_level}").join(participation.chat_level ?? "low");
+  const willingness = "【什么情况下愿意接话】\n" + text("routing.participation.willingness") + "\n" + text("routing.participation.willingness_scale");
+  let system = [
+    header,
+    text("routing.participation.intro"),
+    text("routing.participation.relevance_intro"),
+    "true：" + text("routing.participation.relevance_true"),
+    "false：" + text("routing.participation.relevance_false"),
+    text("routing.participation.relevance_note"),
+    text("routing.participation.chat_in_intro"),
+    willingness,
+    text("routing.participation.chat_in_note"),
+    text("routing.participation.shared_note"),
+    text("routing.participation.format")
+  ].join("\n");
+  const criteria = String(body.proactive_reply_extra_criteria ?? "").trim();
+  if (criteria) system = system.trimEnd() + "\n\n" + text("routing.criteria.heading") + "\n" + criteria + "\n" + text("routing.criteria.guard");
+  const none = { reply_target: "none", mentions: [], mentions_self: false, mentions_other: false };
+  const botName = String(body.name ?? "").trim() || "机器人";
+  const lastBot = { addressing: none, sender: botName, text: "上次说的那个展好像延期了", is_bot: true, age_seconds: 60 };
+  const payload = {
+    addressing: none,
+    current_text: "有人知道改到哪天了吗",
+    current_sender: "小林",
+    current_images: 0,
+    bot_account: String(body.bot_account ?? "").trim() || "10000",
+    bot_aliases: (body.group_triggers as string[] | undefined)?.length ? body.group_triggers : undefined,
+    quoted_is_bot: false,
+    context_gap_seconds: 25,
+    last_bot_message: lastBot,
+    last_bot_addressed_current_sender: false,
+    messages_after_last_bot: 1,
+    recent_image_count: 0,
+    recent_messages: [{ addressing: none, sender: "阿杰", text: "啊？那我票白买了", age_seconds: 25 }, lastBot, { addressing: none, sender: "小林", text: "周末有人去看展吗", age_seconds: 95 }],
+    candidates: [{ addressing: none, message_id: "preview", sender: "小林", age_seconds: 0, is_current: true }],
+    available_reply_tools: ["web_search：始终注册的实时联网搜索；Provider 不可用时会返回明确配置或上游错误"]
+  };
+  const shared = text("routing.participation.shared_note");
+  return {
+    system,
+    user: (text("routing.route_instruction.participation") + contract("routing.route_instruction.participation") + JSON.stringify(payload)).trim(),
+    retry: text("routing.participation.retry"),
+    decision: [
+      { label: "在跟机器人说话", instructions: "当前消息是不是明确在跟机器人说话。\n" + text("routing.participation.relevance_note") + "\n" + shared, true_criteria: text("routing.participation.relevance_true"), false_criteria: text("routing.participation.relevance_false") },
+      { label: "闲聊适合度", instructions: "没人找机器人时，机器人插一句是否自然。\n" + willingness + "\n" + text("routing.participation.chat_in_note") + "\n" + shared, levels: text("routing.participation.chat_in_levels").split("\n").map((line) => line.trim()).filter(Boolean) }
+    ]
+  };
 }
 
 function demoRenderPromptFile(overrides: Record<string, string>): string {

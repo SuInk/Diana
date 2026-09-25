@@ -5985,6 +5985,9 @@ a.nav-action {
   .bot-editor .editor-tab { flex: 1 1 0; min-width: 0; padding: 8px 4px; }
 }
 
+/* 接话卡片里的「接话评分提示词」：标签、说明、编辑框、预览竖排。 */
+.participation-prompt { display: grid; gap: 8px; }
+
 /* 内置提示词整份 YAML 编辑：等宽、够高，报错贴在框下面。 */
 .prompt-yaml-text { font-family: var(--font-mono); font-size: 12.5px; line-height: 1.55; min-height: 420px; white-space: pre; overflow-x: auto; }
 .prompt-yaml-error { margin: 0; color: var(--err); font-size: 13px; white-space: pre-wrap; }

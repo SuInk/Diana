@@ -770,17 +770,13 @@
             </div>
             <div class="card-body form-grid">
               <div class="field wide">
-                <ParticipationControls :key="form.id" :model-value="form.participation" :criteria="form.proactive_reply_extra_criteria" criteria-optional @update:model-value="setParticipation" @update:criteria="value => { if (form) form.proactive_reply_extra_criteria = value; }">
-                  <template #relevance-criteria>
-                    <PromptSectionsEditor name="回应提问判据" title-prefix="接话评分 · " :keys="relevanceCriteriaKeys" :model-value="form.prompt_overrides" @update:model-value="value => { if (form) form.prompt_overrides = value; }" />
-                  </template>
-                  <template #chat-criteria>
-                    <PromptSectionsEditor name="主动闲聊判据" title-prefix="接话评分 · " :keys="chatCriteriaKeys" :model-value="form.prompt_overrides" @update:model-value="value => { if (form) form.prompt_overrides = value; }" />
-                  </template>
-                  <template #scoring-criteria>
-                    <PromptSectionsEditor name="评分通用" title-prefix="接话评分 · " :keys="scoringCriteriaKeys" :model-value="form.prompt_overrides" @update:model-value="value => { if (form) form.prompt_overrides = value; }" />
-                  </template>
-                </ParticipationControls>
+                <ParticipationControls :key="form.id" :model-value="form.participation" :criteria="form.proactive_reply_extra_criteria" criteria-optional @update:model-value="setParticipation" @update:criteria="value => { if (form) form.proactive_reply_extra_criteria = value; }" />
+              </div>
+              <div class="field wide participation-prompt">
+                <label>接话评分提示词</label>
+                <span class="hint">按拼进去的顺序排：系统消息各段、用户消息开头、解析失败时的重问，最后是只给判断模型的分档。改完在下面预览发给模型的原样内容。</span>
+                <PromptSectionsEditor name="接话评分提示词" title-prefix="接话评分 · " :keys="participationPromptKeys" :model-value="form.prompt_overrides" @update:model-value="value => { if (form) form.prompt_overrides = value; }" />
+                <ParticipationPromptPreview :config="form" />
               </div>
               <div class="field wide">
                 <label>手动标记的机器人（本机所有群）</label>
@@ -2005,6 +2001,7 @@ import BotMarkerList from "../components/BotMarkerList.vue";
 import AgentResidencyPanel from "../components/AgentResidencyPanel.vue";
 import PromptOverridesEditor from "../components/PromptOverridesEditor.vue";
 import PromptSectionsEditor from "../components/PromptSectionsEditor.vue";
+import ParticipationPromptPreview from "../components/ParticipationPromptPreview.vue";
 import { participationFromConfig, type ParticipationPreferences } from "../participation";
 import SoulEditor from "../components/SoulEditor.vue";
 import EmptyState from "../components/EmptyState.vue";
@@ -2028,12 +2025,28 @@ const personaBusy = ref(false);
 // 保留生成前的那一版，生成结果不合适可以一键退回，不用自己 Ctrl+Z。
 const soulEditor = ref<InstanceType<typeof SoulEditor> | null>(null);
 const promptOverridesOpen = ref(false);
-// 接话评分用到的每一段内置提示词都在「接话」卡片里就地改，跟着各自的开关放，顺序和
-// 拼进提示词的顺序一致；和「内置提示词」页读写的是同一份覆盖。评分模型和判断模型
-// 共用这些段落，旧版意图路由的提示词不在这里（启用参与度后不再发送）。
-const relevanceCriteriaKeys = ["routing.participation.relevance_intro", "routing.participation.relevance_true", "routing.participation.relevance_false", "routing.participation.relevance_note"];
-const chatCriteriaKeys = ["routing.participation.chat_in_intro", "routing.participation.willingness", "routing.participation.willingness_scale", "routing.participation.chat_in_note"];
-const scoringCriteriaKeys = ["routing.route_instruction.participation", "routing.participation.header", "routing.participation.intro", "routing.participation.shared_note", "routing.participation.format", "routing.criteria.heading", "routing.criteria.guard", "routing.participation.retry"];
+// 接话评分用到的每一段内置提示词合在「接话」卡片的一个框里，顺序和拼进去的顺序一致，
+// 和预览逐段对得上；和「内置提示词」页读写的是同一份覆盖。旧版意图路由的提示词不在
+// 这里（启用参与度后不再发送）。
+const participationPromptKeys = [
+  "routing.participation.header",
+  "routing.participation.intro",
+  "routing.participation.relevance_intro",
+  "routing.participation.relevance_true",
+  "routing.participation.relevance_false",
+  "routing.participation.relevance_note",
+  "routing.participation.chat_in_intro",
+  "routing.participation.willingness",
+  "routing.participation.willingness_scale",
+  "routing.participation.chat_in_note",
+  "routing.participation.shared_note",
+  "routing.participation.format",
+  "routing.criteria.heading",
+  "routing.criteria.guard",
+  "routing.route_instruction.participation",
+  "routing.participation.retry",
+  "routing.participation.chat_in_levels"
+];
 const promptOverrideCount = computed(() => Object.keys(form.value?.prompt_overrides ?? {}).length);
 
 // 内置提示词 YAML：导出的是编辑器里眼前这一份（可能还没保存），导入只填回编辑器，

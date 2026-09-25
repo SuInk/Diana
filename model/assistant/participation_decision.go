@@ -16,6 +16,7 @@ import (
 // 同一份提示词覆盖，改了哪段两种模型都跟着变。
 
 func participationDecisionSpec(overrides PromptOverrides) *llm.DecisionSpec {
+	chatInLevels, chatInLevelValues := participationChatInLevelsFor(overrides)
 	return &llm.DecisionSpec{Questions: []llm.DecisionQuestion{
 		{
 			Key:           "relevance",
@@ -32,10 +33,10 @@ func participationDecisionSpec(overrides PromptOverrides) *llm.DecisionSpec {
 			Kind:         llm.DecisionScore,
 			Label:        "闲聊适合度",
 			Instructions: "没人找机器人时，机器人插一句是否自然。\n" + participationWillingnessPrompt(overrides) + "\n" + overrides.text(promptParticipationChatInNoteSpec) + "\n" + overrides.text(promptParticipationSharedNoteSpec),
-			Levels:       participationChatInLevels,
-			LevelValues:  participationChatInLevelValues,
+			Levels:       chatInLevels,
+			LevelValues:  chatInLevelValues,
 			Min:          0,
-			Max:          0.9,
+			Max:          participationChatInMax,
 			Path:         "chat_in.score",
 			ReasonPath:   "chat_in.reason",
 		},

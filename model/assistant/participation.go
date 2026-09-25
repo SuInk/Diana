@@ -2,6 +2,8 @@ package assistant
 
 import (
 	"encoding/json"
+	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -229,7 +231,7 @@ var promptParticipationWillingnessSpec = registerPrompt(PromptSpec{
 	Default: participationWillingness,
 })
 
-const participationWillingnessScale = `按上面写的情形给 chat_in 打分：落在「愿意接」的给 0.70 到 0.95，越贴切越高；落在「可以接一句」的给 0.40 到 0.60；落在「不接」的给 0.10 到 0.30，原样复读不超过 0.10。哪条都不沾就按最接近的一条估，0.62、0.38 这类中间值同样正常。`
+const participationWillingnessScale = `按上面写的情形给 chat_in 打分：落在「愿意接」的给 0.70 到 0.95，越贴切越高，要到 0.85 以上还得插一句自然不突兀、机器人确实答得上来；落在「可以接一句」的给 0.40 到 0.60；落在「不接」的给 0.10 到 0.30，原样复读不超过 0.10。哪条都不沾就按最接近的一条估，0.62、0.38 这类中间值同样正常。`
 
 var promptParticipationWillingnessScaleSpec = registerPrompt(PromptSpec{
 	Key:     "routing.participation.willingness_scale",
@@ -315,19 +317,60 @@ var promptParticipationRelevanceNoteSpec = registerPrompt(PromptSpec{
 	Default: participationRelevanceNote,
 })
 
-// participationChatInLevels 是闲聊分的锚点，从低到高。第一档只给判断模型用：它
-// 回答的是「落在哪一档」，没有这一档就没法表达 0.00，而提示词里 0.00 的情形写在
-// 别处，所以拼提示词时从第二档起。
+// participationChatInLevels 是判断模型闲聊分档的默认值，从低到高。判断模型回答的是
+// 「落在哪一档」，所以要有 0.00 这一档才能表达叫停；对话模型不读分档，它按「愿意程度
+// 换成闲聊分」直接给分。
 var participationChatInLevels = []string{
 	"0.00 用户明确要求停止、同一内容已经回答、正在机械循环，或原样复读别人刚说过的话",
 	"0.10 两人私聊、争执或已有人在答",
 	"0.30 普通闲聊，插话可有可无",
 	"0.50 顺着话题接一句自然但不必要",
 	"0.70 有开放邀请或明显的梗",
-	"0.90 群里明确抛出邀请「有人知道吗」「求推荐」，或机器人刚被调侃、不接反而奇怪",
+	"0.90 落在「愿意接」，插一句自然不突兀，而且机器人确实答得上来",
 }
 
 var participationChatInLevelValues = []float64{0, 0.10, 0.30, 0.50, 0.70, 0.90}
+
+// participationChatInMax 是判断模型分档的上限：最高一档就是 0.90，再往上留给对话模型。
+const participationChatInMax = 0.9
+
+// 分档也登记成一段可改的提示词：一行一档，行首是分数。判断模型答的是「落在哪一档」，
+// 分数要从行首解析出来，写坏了就整段退回默认，不把一张不自洽的题目发到上游。
+var promptParticipationChatInLevelsSpec = registerPrompt(PromptSpec{
+	Key:     "routing.participation.chat_in_levels",
+	Group:   PromptGroupRouting,
+	Title:   "接话评分 · 判断模型的闲聊分档",
+	Usage:   "只给只做判断的模型用：一行一档，行首写分数（0 到 0.90，从低到高），后面写落在这档的情形。对话模型不读这段，它按「愿意程度换成闲聊分」给分。少于 2 档、多于 10 档、分数不递增或超出范围时整段按默认分档。",
+	Default: strings.Join(participationChatInLevels, "\n"),
+})
+
+var participationChatInLevelLine = regexp.MustCompile(`^(\d+(?:\.\d+)?)\s+\S`)
+
+// participationChatInLevelsFor 从覆盖里解析判断模型的分档，解析不了就用默认分档。
+func participationChatInLevelsFor(overrides PromptOverrides) ([]string, []float64) {
+	var levels []string
+	var values []float64
+	for _, raw := range strings.Split(overrides.text(promptParticipationChatInLevelsSpec), "\n") {
+		line := strings.TrimSpace(raw)
+		if line == "" {
+			continue
+		}
+		match := participationChatInLevelLine.FindStringSubmatch(line)
+		if match == nil {
+			return participationChatInLevels, participationChatInLevelValues
+		}
+		value, err := strconv.ParseFloat(match[1], 64)
+		if err != nil || value < 0 || value > participationChatInMax || len(values) > 0 && value <= values[len(values)-1] {
+			return participationChatInLevels, participationChatInLevelValues
+		}
+		levels = append(levels, line)
+		values = append(values, value)
+	}
+	if len(levels) < 2 || len(levels) > 10 {
+		return participationChatInLevels, participationChatInLevelValues
+	}
+	return levels, values
+}
 
 const participationChatInNote = `附和、捧场、表达共鸣、顺口接一句本身就是正常闲聊，照上面写的情形给分，不因为没带新信息就压低。要压低的只有两种：原样复读别人刚说过的话，不超过 0.10；对一个无法核实的说法补充听起来内行、其实没有依据的理由（例如凭印象推测某个产品为什么变成这样），不超过 0.30——那是在编。需要搜索或调用工具不等于没东西可讲。
 「没有依据就压低」只管对事实、原因、产品、人物和事件的断言。群里在玩梗、在演正进行的角色扮演、或在拿机器人打趣时没有这种断言，照梗与调侃那一栏给；只能原样复读就不超过 0.10。玩笑里顺带抛出的事实说法仍按依据算。

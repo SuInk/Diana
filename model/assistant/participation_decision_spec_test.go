@@ -169,3 +169,30 @@ func TestProactiveReplyRouteCarriesTheDecisionSpec(t *testing.T) {
 		}
 	}
 }
+
+func TestParticipationChatInLevelsAreEditable(t *testing.T) {
+	levels, values := participationChatInLevelsFor(nil)
+	if strings.Join(levels, "\n") != promptParticipationChatInLevelsSpec.Default || len(values) != len(participationChatInLevelValues) {
+		t.Fatalf("default levels drifted from the registered prompt: %v %v", levels, values)
+	}
+	custom := PromptOverrides{promptParticipationChatInLevelsSpec.Key: "0.00 叫停\n\n0.40 普通闲聊\n0.90 有人聊猫"}
+	spec := participationDecisionSpec(custom)
+	if err := spec.Validate(); err != nil {
+		t.Fatalf("spec is invalid: %v", err)
+	}
+	chatIn := spec.Questions[1]
+	if len(chatIn.Levels) != 3 || chatIn.Levels[2] != "0.90 有人聊猫" || chatIn.LevelValues[1] != 0.4 {
+		t.Fatalf("custom levels were not used: %v %v", chatIn.Levels, chatIn.LevelValues)
+	}
+	for name, text := range map[string]string{
+		"没写分数":  "叫停\n0.90 有人聊猫",
+		"分数倒着排": "0.50 普通\n0.10 私聊",
+		"超出上限":  "0.00 叫停\n0.95 有人聊猫",
+		"只有一档":  "0.90 有人聊猫",
+	} {
+		levels, _ := participationChatInLevelsFor(PromptOverrides{promptParticipationChatInLevelsSpec.Key: text})
+		if len(levels) != len(participationChatInLevels) {
+			t.Fatalf("%s: expected the default levels, got %v", name, levels)
+		}
+	}
+}

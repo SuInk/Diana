@@ -57,3 +57,19 @@ func (h *BotHandler) importPromptFile(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, result)
 }
+
+// previewParticipationPrompt 按编辑器里眼前这份配置（可能还没保存）拼出接话评分发给
+// 模型的内容。和导出一样从请求里拿配置，改一个字就能看到发出去的那段变成什么样。
+func (h *BotHandler) previewParticipationPrompt(c *gin.Context) {
+	var payload assistant.ConfigPayload
+	if err := c.ShouldBindJSON(&payload); err != nil {
+		h.writeError(c, http.StatusBadRequest, "prompts_preview", err, "", nil)
+		return
+	}
+	preview, err := assistant.PreviewParticipationPrompt(assistant.ConfigFromPayload(payload, assistant.DefaultBotConfig()))
+	if err != nil {
+		h.writeError(c, http.StatusInternalServerError, "prompts_preview", err, "", nil)
+		return
+	}
+	c.JSON(http.StatusOK, preview)
+}
