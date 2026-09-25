@@ -6389,6 +6389,11 @@ func compactContextEvent(event MessageEvent) string {
 	if quoted := quotedPromptText(event.Quoted); quoted != "" {
 		text += " " + quoted
 	}
+	if event.Outbound {
+		// 私聊出站消息的 UserID 记的是对方（见 outgoingHistoryEvent），照常渲染就成了
+		// 「用户说了机器人的话」，摘要会把机器人的劝告记成用户自述。
+		return formatPromptIdentity(event.SenderName, "") + "（机器人自己）: " + strings.Join(strings.Fields(text), " ")
+	}
 	sender := promptSenderIdentity(event)
 	return sender + ": " + strings.Join(strings.Fields(text), " ") + summaryIdentityPrompt(event)
 }

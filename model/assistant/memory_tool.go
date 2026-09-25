@@ -34,6 +34,8 @@ func (t *dianaMemoryTool) InputSchema() map[string]any {
 type memoryToolItem struct {
 	ID              string    `json:"id"`
 	Topic           string    `json:"topic"`
+	Subject         string    `json:"subject,omitempty"`
+	Recorded        string    `json:"recorded"`
 	Entity          string    `json:"entity,omitempty"`
 	Snippet         string    `json:"snippet,omitempty"`
 	Content         string    `json:"content,omitempty"`
@@ -105,7 +107,7 @@ func (t *dianaMemoryTool) Run(ctx context.Context, input map[string]any) (string
 		Items    []memoryToolItem `json:"items"`
 		Limited  bool             `json:"limited"`
 		Guidance string           `json:"guidance"`
-	}{Items: []memoryToolItem{}, Guidance: "检索范围遵循当前记忆开关；空结果可能是不存在、已失效、被新版替代或不可访问。旧记忆不代表当前事实，必要时核对；证据是提取时的片段，不是完整原始聊天。"}
+	}{Items: []memoryToolItem{}, Guidance: "检索范围遵循当前记忆开关；空结果可能是不存在、已失效、被新版替代或不可访问。旧记忆不代表当前事实，必要时核对；recorded 是记下的日期，内容里的时间说法相对那一天；证据是提取时的片段，不是完整原始聊天。"}
 	for _, item := range items {
 		origin := "当前会话"
 		if item.SourceSession != query.Session {
@@ -116,7 +118,8 @@ func (t *dianaMemoryTool) Run(ctx context.Context, input map[string]any) (string
 				}
 			}
 		}
-		entry := memoryToolItem{ID: item.ID, Topic: item.Topic, Entity: item.Entity, Origin: origin, Version: item.Version, UpdatedAt: item.UpdatedAt, Reason: item.RetrievalReason}
+		// 谁的、什么时候记下的：不给这两样，模型只能把「早上吃了布洛芬」安到当前发言者头上、当成今天。
+		entry := memoryToolItem{ID: item.ID, Topic: item.Topic, Subject: firstNonEmpty(strings.TrimSpace(item.SubjectName), strings.TrimSpace(item.SubjectUserID)), Recorded: memoryRecordedLabel(item.SourceEventTime, item.CreatedAt, time.Now()), Entity: item.Entity, Origin: origin, Version: item.Version, UpdatedAt: item.UpdatedAt, Reason: item.RetrievalReason}
 		if op == "read" {
 			entry.Content, entry.Evidence = item.Content, item.Evidence
 			if item.SourceSession == query.Session {
