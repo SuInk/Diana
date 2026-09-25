@@ -333,7 +333,10 @@ type Runtime struct {
 	// imageEditSources 记住每个会话最近一次改图用的原图，「重试」「继续」时靠它
 	// 找回原图。自带锁，不受 mu 保护。
 	imageEditSources imageEditSourceMemory
-	profileConfigs   map[string]BotConfig
+	// botAvatars 记每台机器人上一次看到的自己头像指纹，见 avatar_freshness.go。
+	// 自带锁，不受 mu 保护。
+	botAvatars     botAvatarMemory
+	profileConfigs map[string]BotConfig
 	// profileAliases 把种子机器人以前每次重启换过的旧档案 ID 对到它现在的固定 ID，
 	// 只用来认领按旧 ID 记下的编码任务。见 SetProfileAliases。
 	profileAliases map[string]string
