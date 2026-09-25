@@ -1,0 +1,125 @@
+<script setup lang="ts">
+import { computed, ref, useId, watch } from "vue";
+import { RefreshCw, RotateCcw, Save } from "@lucide/vue";
+import { getGroupStyle, relearnGroupStyle, saveGroupStyle, type GroupStyleResponse } from "../api";
+import { toastError, toastSuccess } from "../toast";
+
+// 本群说话风格：模型读群聊写的一段「这个群怎么说话」，回复时带上。这段不是群配置，
+// 是运行时学到的东西，所以自己加载、自己保存，不跟着群配置的「保存」走。
+const props = defineProps<{ profileId: string; groupId: string }>();
+const id = useId();
+
+const data = ref<GroupStyleResponse | null>(null);
+const draft = ref("");
+const loading = ref(false);
+const saving = ref(false);
+const learning = ref(false);
+const loadError = ref("");
+
+async function load(): Promise<void> {
+  if (!props.groupId) return;
+  loading.value = true;
+  loadError.value = "";
+  try {
+    apply(await getGroupStyle(props.groupId, props.profileId));
+  } catch (error) {
+    loadError.value = error instanceof Error ? error.message : "读取失败";
+  } finally {
+    loading.value = false;
+  }
+}
+
+function apply(response: GroupStyleResponse): void {
+  data.value = response;
+  draft.value = response.style?.text ?? "";
+}
+
+watch(() => [props.profileId, props.groupId], load, { immediate: true });
+
+const style = computed(() => data.value?.style);
+const maxRunes = computed(() => data.value?.max_runes ?? 400);
+const length = computed(() => Array.from(draft.value).length);
+const dirty = computed(() => draft.value.trim() !== (style.value?.text ?? "").trim());
+
+const status = computed(() => {
+  const current = style.value;
+  if (!current) return "还没学到";
+  const day = new Date(current.updated_at);
+  const when = Number.isNaN(day.getTime()) ? "" : ` · ${day.getMonth() + 1} 月 ${day.getDate()} 日`;
+  if (current.manual) return `手动写的${when}`;
+  return `自动学到${when}${current.sample_count ? ` · 读了 ${current.sample_count} 条` : ""}`;
+});
+
+async function save(text: string, message: string): Promise<void> {
+  saving.value = true;
+  try {
+    apply(await saveGroupStyle(props.groupId, props.profileId, text));
+    toastSuccess(message);
+  } catch (error) {
+    toastError(error instanceof Error ? error.message : "保存失败");
+  } finally {
+    saving.value = false;
+  }
+}
+
+async function relearn(): Promise<void> {
+  learning.value = true;
+  try {
+    apply(await relearnGroupStyle(props.groupId, props.profileId));
+    toastSuccess("重新学好了");
+  } catch (error) {
+    toastError(error instanceof Error ? error.message : "学习失败");
+  } finally {
+    learning.value = false;
+  }
+}
+</script>
+
+<template>
+  <div class="group-style">
+    <div class="group-style-head">
+      <label :for="id">本群说话风格</label>
+      <span class="badge" :class="{ accent: style && !style.manual, warn: style?.manual }">{{ loading ? "读取中…" : status }}</span>
+    </div>
+    <p v-if="loadError" class="hint">读取失败：{{ loadError }}</p>
+    <template v-else>
+      <textarea
+        :id="id"
+        v-model="draft"
+        class="textarea group-style-text"
+        rows="5"
+        :maxlength="maxRunes"
+        placeholder="还没学到。群里聊够几十条之后，大约一天学一次；也可以点「重新学习」，或者自己写一段。"
+      ></textarea>
+      <div class="group-style-actions">
+        <span class="hint">{{ length }} / {{ maxRunes }}</span>
+        <button class="btn small" type="button" :disabled="!dirty || saving || learning" @click="save(draft, draft.trim() ? '已保存，自动学习不再覆盖它' : '已交回自动学习')">
+          <Save :size="14" aria-hidden="true" />
+          保存
+        </button>
+        <button v-if="style?.manual" class="btn small ghost" type="button" :disabled="saving || learning" @click="save('', '已交回自动学习')">
+          <RotateCcw :size="14" aria-hidden="true" />
+          交回自动
+        </button>
+        <button class="btn small" type="button" :disabled="saving || learning" @click="relearn">
+          <RefreshCw :size="14" aria-hidden="true" :class="{ spinning: learning }" />
+          {{ learning ? "学习中…" : "重新学习" }}
+        </button>
+      </div>
+      <span class="hint">
+        风格学习打开时，每个群大约一天学一次：读最近的群友消息，写一段这个群怎么说话，回复时带上。手动改过的不会被自动覆盖，点「重新学习」会覆盖。
+        <template v-if="data && !data.learning_enabled"><strong>这台机器人没开「风格学习」，这段现在不会带进回复。</strong></template>
+      </span>
+    </template>
+  </div>
+</template>
+
+<style scoped>
+.group-style { display: grid; gap: 8px; }
+.group-style-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.group-style-text { min-height: 120px; }
+.group-style-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
+.group-style-actions .hint { margin-right: auto; }
+.spinning { animation: group-style-spin 1s linear infinite; }
+@keyframes group-style-spin { to { transform: rotate(360deg); } }
+</style>

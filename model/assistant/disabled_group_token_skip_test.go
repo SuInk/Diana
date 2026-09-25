@@ -40,15 +40,15 @@ func (p *countingRouterProvider) callCount() int {
 }
 
 type disabledGroupSkipHarness struct {
-	runtime    *Runtime
-	history    *crossGroupSearchCounter
-	memory     *testStructuredMemoryStore
-	expression *stubExpressionStore
-	provider   *countingRouterProvider
+	runtime  *Runtime
+	history  *crossGroupSearchCounter
+	memory   *testStructuredMemoryStore
+	style    *stubGroupStyleStore
+	provider *countingRouterProvider
 }
 
 // newDisabledGroupSkipHarness wires a runtime with a searchable history store, a
-// long-term memory queue, an expression store, and a call-counting model so a
+// long-term memory queue, a group style store, and a call-counting model so a
 // test can watch which paths a group message actually exercises. base 决定这台
 // 机器人是否准入 g1（关掉的群、或不在准入名单里的群，都应当在花 token 之前止步）。
 func newDisabledGroupSkipHarness(t *testing.T, base BotConfig, groupEnabled bool) disabledGroupSkipHarness {
@@ -67,8 +67,8 @@ func newDisabledGroupSkipHarness(t *testing.T, base BotConfig, groupEnabled bool
 	runtime.SetMessageHistoryStore(history)
 	memory := &testStructuredMemoryStore{}
 	runtime.SetStructuredMemoryStore(memory)
-	expression := &stubExpressionStore{}
-	runtime.SetExpressionStyleStore(expression)
+	style := &stubGroupStyleStore{}
+	runtime.SetGroupStyleStore(style)
 
 	store := &testWritableGroupConfigStore{}
 	if _, err := store.SaveGroupConfig(GroupConfig{
@@ -78,10 +78,10 @@ func newDisabledGroupSkipHarness(t *testing.T, base BotConfig, groupEnabled bool
 	}
 	runtime.SetGroupConfigStore(store)
 
-	return disabledGroupSkipHarness{runtime: runtime, history: history, memory: memory, expression: expression, provider: provider}
+	return disabledGroupSkipHarness{runtime: runtime, history: history, memory: memory, style: style, provider: provider}
 }
 
-// disabledGroupPhraseEvent 用一句短口癖：既能被表达学习收下，又是一条正常群消息。
+// disabledGroupPhraseEvent 用一句短口癖：一条正常群消息。
 func disabledGroupPhraseEvent() MessageEvent {
 	text := "这个转发功能后来修好了吗"
 	return MessageEvent{
@@ -104,20 +104,31 @@ func disabledGroupSignalEvent() MessageEvent {
 	}
 }
 
-func waitForExpressionBump(t *testing.T, store *stubExpressionStore) {
-	t.Helper()
-	deadline := time.Now().Add(time.Second)
-	for time.Now().Before(deadline) {
-		if len(store.bumpSnapshot()) > 0 {
-			return
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
-	t.Fatal("group message never reached expression learning")
+// stubGroupStyleStore 只数被读了几次：关掉的群连「要不要学」都不该去查。
+type stubGroupStyleStore struct {
+	mu    sync.Mutex
+	reads int
 }
 
-// TestDisabledGroupKeepsBookkeepingSkipsModelCalls 群被关掉时，消息照常进历史、
-// 表达学习和长期记忆，但跨群语义检索、Telegram 接话判定和主动回复路由一次都不发。
+func (s *stubGroupStyleStore) GroupStyle(context.Context, string, string) (GroupStyle, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.reads++
+	return GroupStyle{}, false, nil
+}
+
+func (s *stubGroupStyleStore) SaveGroupStyle(context.Context, GroupStyle) error { return nil }
+
+func (s *stubGroupStyleStore) DeleteGroupStyle(context.Context, string, string) error { return nil }
+
+func (s *stubGroupStyleStore) readCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.reads
+}
+
+// TestDisabledGroupKeepsBookkeepingSkipsModelCalls 群被关掉时，消息照常进历史和
+// 长期记忆，但跨群语义检索、Telegram 接话判定、主动回复路由和风格学习一次都不发。
 func TestDisabledGroupKeepsBookkeepingSkipsModelCalls(t *testing.T) {
 	h := newDisabledGroupSkipHarness(t, BotConfig{}, false)
 	event := disabledGroupPhraseEvent()
@@ -141,8 +152,11 @@ func TestDisabledGroupKeepsBookkeepingSkipsModelCalls(t *testing.T) {
 	if got := len(h.memory.enqueued); got == 0 {
 		t.Fatal("disabled group message was not enqueued into long-term memory")
 	}
-	// 仍然喂给表达学习。
-	waitForExpressionBump(t, h.expression)
+	// 风格学习要花一次后台模型调用，关掉的群不学，连存储都不查。
+	time.Sleep(50 * time.Millisecond)
+	if got := h.style.readCount(); got != 0 {
+		t.Fatalf("disabled group checked group style %d times, want 0", got)
+	}
 }
 
 // TestEnabledGroupRunsCrossGroupSearchAndRouter 反向对照：同一条消息，群开着时

@@ -3625,3 +3625,45 @@ export function browserBoxLiveURL(botID: string, tabID?: string): string {
   const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
   return `${protocol}//${window.location.host}${browserBoxPath("live", botID, tabID ? { tab: tabID } : undefined)}`;
 }
+
+// ---- 风格学习 -------------------------------------------------------------
+
+/** 一个群的风格笔记：模型读群聊写的「这个群怎么说话」，主人也能手动改。 */
+export interface GroupStyle {
+  profile_id: string;
+  group_id: string;
+  text: string;
+  /** 主人手动改过：自动学习不再覆盖，直到点「重新学习」。 */
+  manual: boolean;
+  /** 最近一次自动学习读了多少条群友消息。 */
+  sample_count?: number;
+  updated_at: string;
+}
+
+export interface GroupStyleResponse {
+  style?: GroupStyle;
+  /** 这台机器人开没开风格学习：没开时笔记写了也不会带进回复。 */
+  learning_enabled: boolean;
+  max_runes: number;
+}
+
+function groupStylePath(groupID: string, profileID: string, suffix = ""): string {
+  const params = new URLSearchParams();
+  if (profileID) params.set("bot_profile_id", profileID);
+  const query = params.toString();
+  return `/api/assistant/groups/${encodeURIComponent(groupID)}/style${suffix}${query ? `?${query}` : ""}`;
+}
+
+export function getGroupStyle(groupID: string, profileID: string): Promise<GroupStyleResponse> {
+  return requestJSON<GroupStyleResponse>(groupStylePath(groupID, profileID));
+}
+
+/** 保存手动写的风格笔记；传空串表示交回自动学习。 */
+export function saveGroupStyle(groupID: string, profileID: string, text: string): Promise<GroupStyleResponse> {
+  return requestJSON<GroupStyleResponse>(groupStylePath(groupID, profileID), { method: "PUT", body: JSON.stringify({ text }) });
+}
+
+/** 立刻重新学一次，手动写的也会被覆盖。要等后台模型读完群聊，可能要十几秒。 */
+export function relearnGroupStyle(groupID: string, profileID: string): Promise<GroupStyleResponse> {
+  return requestJSON<GroupStyleResponse>(groupStylePath(groupID, profileID, "/relearn"), { method: "POST" });
+}
