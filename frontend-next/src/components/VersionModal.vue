@@ -61,18 +61,16 @@
         <div class="release-progress-track"><span :style="{ width: `${downloadPercent}%` }"></span></div>
       </div>
       <pre v-if="operationError" class="operation-error mono">{{ operationError }}</pre>
+      <!-- 两个下拉并排一行；各选项的含义放进下拉里的 hint，平时不占版面。 -->
       <div class="mirror-bar">
         <div class="mirror-field">
           <label for="version-channel">更新通道</label>
-          <AppSelect id="version-channel" :model-value="policy.channel || 'release'"
+          <AppSelect id="version-channel" class="mirror-select" :model-value="policy.channel || 'release'"
             :options="channelOptions" :disabled="savingPolicy || checking || operationRunning"
             @update:model-value="setChannel" />
         </div>
-        <p class="mirror-hint">Release：仅正式版；Beta：测试版、候选版和正式版。切换通道不会自动降级，已下载的其他通道版本需重新检查。</p>
-      </div>
-      <!-- 国内直连 GitHub 常常卡在几十 KB/s，这里挑一条快的下载线路。 -->
-      <div v-if="releaseSelfUpdate && !sourceBuild" class="mirror-bar">
-        <div class="mirror-field">
+        <!-- 国内直连 GitHub 常常卡在几十 KB/s，这里挑一条快的下载线路。 -->
+        <div v-if="releaseSelfUpdate && !sourceBuild" class="mirror-field">
           <label for="version-download-mirror">下载加速</label>
           <AppSelect
             id="version-download-mirror"
@@ -83,7 +81,6 @@
             @update:model-value="setMirrorMode"
           />
         </div>
-        <p class="mirror-hint">自动模式下载前会自己挑一条快的镜像，直连够快就走直连。加速只用于下载安装包，校验清单始终直连，安装前都要对上 SHA-256。</p>
       </div>
 
       <!-- 开关在左，操作按钮靠右，窄屏自动换行。 -->
@@ -538,9 +535,9 @@ const mirrorMode = computed({
 });
 
 const channelOptions = [
-  { value: "release", label: "Release · 正式版" },
-  { value: "beta", label: "Beta · 测试版" },
-  { value: "canary", label: "Canary · 每次合并构建" }
+  { value: "release", label: "Release · 正式版", hint: "只收正式版" },
+  { value: "beta", label: "Beta · 测试版", hint: "测试版、候选版和正式版" },
+  { value: "canary", label: "Canary · 每次合并构建", hint: "每次合并 main 自动构建，未经人工验证" }
 ];
 // 下拉框是受控的：没确认前不改 policy，取消后自然停在原来的通道上。
 async function setChannel(value: string): Promise<void> {
@@ -555,7 +552,7 @@ async function setChannel(value: string): Promise<void> {
 
 const mirrorOptions = [
   { value: "direct", label: "直连 GitHub" },
-  { value: "auto", label: "自动选择镜像加速" }
+  { value: "auto", label: "自动选择镜像加速", hint: "直连够快就走直连；校验清单始终直连，安装前核对 SHA-256" }
 ];
 
 function setMirrorMode(value: string): void {
@@ -991,33 +988,28 @@ a.version-hero-integrity:hover {
   flex: 0 0 auto;
 }
 
+/* 两栏等宽铺满整行，右缘和下面的按钮对齐；窄到放不下两栏时自动变一栏。 */
 .mirror-bar {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 8px 12px;
-  margin-top: 10px;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 10px 24px;
 }
 
 .mirror-field {
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
   gap: 8px;
   font-size: 13px;
   color: var(--text-muted);
 }
 
-.mirror-select {
-  width: 260px;
-  max-width: 100%;
+.mirror-field > label {
+  white-space: nowrap;
 }
 
-.mirror-hint {
-  flex-basis: 100%;
-  margin: 0;
-  font-size: 12px;
-  color: var(--text-muted);
+.mirror-select {
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 .policy-toggle {
