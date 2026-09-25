@@ -41,6 +41,7 @@ type ManageFilesTool struct {
 	root         string
 	protected    protectedFiles
 	writeEnabled bool
+	keep         keepScope
 	now          func() time.Time
 }
 
@@ -53,7 +54,9 @@ func (t *ManageFilesTool) Description() string {
 	}
 	return `整理 Agent 工作目录内的文件：move 挪动或改名，copy 复制文件，delete 删除（挪进回收站 ` + WorkspaceTrashDir +
 		`/<时间戳>/，不是真删），mkdir 建目录，stat 查看大小、按内容判断的真实类型、图片宽高、修改时间、是否目录。` +
-		`目标已存在时默认拒绝，确认要覆盖才传 overwrite=true。只动工作目录内的相对路径，运行时配置和回收站内部都不能碰。`
+		`目标已存在时默认拒绝，确认要覆盖才传 overwrite=true。只动工作目录内的相对路径，运行时配置和回收站内部都不能碰。` +
+		`主人要把东西长期留着（存下来、留着、别过期、放持久目录）时 move 或 copy 到 ` + WorkspaceKeepDir + `/，会自动归到本机器人的长期保存区，并用 description 写一句这是什么；` +
+		`长期区不会自动清理、每台机器人上限 ` + formatKeepBytes(KeepQuotaBytes) + `，别的机器人的长期区只能读。`
 }
 
 func (t *ManageFilesTool) actions() []string {
@@ -71,6 +74,7 @@ func (t *ManageFilesTool) InputSchema() map[string]any {
 	if t.writeEnabled {
 		properties["to"] = toolStringParam("move/copy 的目标相对路径；指向已有目录时放进这个目录，文件名不变")
 		properties["overwrite"] = toolBoolParam("目标文件已存在时是否覆盖，默认 false")
+		properties["description"] = toolStringParam("move/copy 进长期保存区 " + WorkspaceKeepDir + "/ 时写一句这是什么（例如「群活动海报 9 月版」），会记进长期区索引，以后靠它认出这个文件")
 	}
 	return toolObjectSchema([]string{"action", "path"}, properties)
 }
@@ -104,7 +108,7 @@ func (t *ManageFilesTool) Run(ctx context.Context, input map[string]any) (string
 		if to == "" {
 			return "", fmt.Errorf("%s 需要 to", action)
 		}
-		return t.transfer(action, rel, to, boolFromInput(input, "overwrite", false))
+		return t.transfer(action, rel, to, boolFromInput(input, "overwrite", false), stringFromInput(input, "description"))
 	}
 }
 
@@ -160,6 +164,16 @@ func (t *ManageFilesTool) stat(rel string) (string, error) {
 		"is_dir":   info.IsDir(),
 		"modified": info.ModTime().Format(time.RFC3339),
 	}
+	if botDir, inKeep := keepLocation(clean); inKeep && botDir != "" {
+		result["area"] = "长期保存区，不会自动清理"
+		if entries, err := loadKeepIndexDir(t.root, botDir); err == nil {
+			for _, entry := range entries {
+				if entry.Path == clean && entry.Description != "" {
+					result["description"] = entry.Description
+				}
+			}
+		}
+	}
 	if info.IsDir() {
 		entries, err := os.ReadDir(target)
 		if err == nil {
@@ -197,6 +211,9 @@ func (t *ManageFilesTool) mkdir(rel string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	if clean, err = t.keep.normalizeDest(clean); err != nil {
+		return "", err
+	}
 	if clean == "." {
 		return "", errors.New("工作目录本身已经存在")
 	}
@@ -227,21 +244,40 @@ func (t *ManageFilesTool) delete(rel string) (string, error) {
 	if err := t.guardTree(target, clean); err != nil {
 		return "", err
 	}
-	root, err := t.openRoot()
-	if err != nil {
+	if err := t.keep.checkOwned(clean); err != nil {
 		return "", err
-	}
-	defer root.Close()
-	local := filepath.FromSlash(clean)
-	info, err := root.Lstat(local)
-	if err != nil {
-		return "", missingFileError(t.root, clean, err)
 	}
 	now := time.Now
 	if t.now != nil {
 		now = t.now
 	}
-	stamp := now().Format(trashTimestampLayout)
+	trashRel, isDir, err := moveToTrash(t.root, clean, now())
+	if err != nil {
+		return "", err
+	}
+	return marshalToolResult(map[string]any{
+		"action":     "delete",
+		"path":       clean,
+		"is_dir":     isDir,
+		"trash_path": trashRel,
+		"message":    "已移到回收站，不是永久删除；误删了可以从 trash_path 恢复。",
+	})
+}
+
+// moveToTrash 把工作目录内已经校验过的相对路径 clean 挪进 .trash/<时间戳>/，保留原来的
+// 相对路径；落在长期区里的，索引里的条目一并去掉。
+func moveToTrash(workRoot, clean string, now time.Time) (string, bool, error) {
+	root, err := os.OpenRoot(workRoot)
+	if err != nil {
+		return "", false, err
+	}
+	defer root.Close()
+	local := filepath.FromSlash(clean)
+	info, err := root.Lstat(local)
+	if err != nil {
+		return "", false, missingFileError(workRoot, clean, err)
+	}
+	stamp := now.Format(trashTimestampLayout)
 	var trashRel string
 	for attempt := 1; ; attempt++ {
 		dir := stamp
@@ -253,31 +289,56 @@ func (t *ManageFilesTool) delete(rel string) (string, error) {
 			break
 		}
 		if attempt >= 1000 {
-			return "", errors.New("回收站里同一时刻的同名条目太多，稍后再试")
+			return "", false, errors.New("回收站里同一时刻的同名条目太多，稍后再试")
 		}
 	}
 	if err := root.MkdirAll(filepath.Dir(filepath.FromSlash(trashRel)), 0o755); err != nil {
-		return "", err
+		return "", false, err
 	}
 	if err := root.Rename(local, filepath.FromSlash(trashRel)); err != nil {
-		return "", err
+		return "", false, err
 	}
-	return marshalToolResult(map[string]any{
-		"action":     "delete",
-		"path":       clean,
-		"is_dir":     info.IsDir(),
-		"trash_path": trashRel,
-		"message":    "已移到回收站，不是永久删除；误删了可以从 trash_path 恢复。",
-	})
+	_, _ = removeKeepEntries(workRoot, clean)
+	return trashRel, info.IsDir(), nil
 }
 
-func (t *ManageFilesTool) transfer(action, rel, to string, overwrite bool) (string, error) {
+// TrashWorkspacePath 是 WebUI 删除工作目录文件的入口：和 manage_files delete 一样挪进
+// 回收站，一样不碰运行时配置和凭据、不许整个目录连带凭据一起挪走。WebUI 是管理员
+// 在操作，不受「只能动本机器人长期区」的限制。
+func TrashWorkspacePath(cfg Config, rel string, now time.Time) (string, error) {
+	tool := &ManageFilesTool{protected: agentProtectedFiles(cfg)}
+	root, err := filepath.Abs(cfg.WorkDir)
+	if err != nil {
+		return "", err
+	}
+	tool.root = root
+	target, clean, err := tool.resolve(rel)
+	if err != nil {
+		return "", err
+	}
+	if clean == DianaStateDirName || strings.HasPrefix(clean, DianaStateDirName+"/") {
+		return "", errProtectedFile(clean)
+	}
+	if err := tool.guardTree(target, clean); err != nil {
+		return "", err
+	}
+	if clean == WorkspaceKeepDir {
+		return "", fmt.Errorf("%s 是长期保存区的根目录，不能整个删除", clean)
+	}
+	trashRel, _, err := moveToTrash(root, clean, now)
+	return trashRel, err
+}
+
+func (t *ManageFilesTool) transfer(action, rel, to string, overwrite bool, description string) (string, error) {
 	source, sourceClean, err := t.resolve(rel)
 	if err != nil {
 		return "", err
 	}
 	if action == "move" {
 		if err := t.guardTree(source, sourceClean); err != nil {
+			return "", err
+		}
+		if err := t.keep.checkOwned(sourceClean); err != nil {
 			return "", err
 		}
 	}
@@ -298,6 +359,13 @@ func (t *ManageFilesTool) transfer(action, rel, to string, overwrite bool) (stri
 	if err != nil {
 		return "", err
 	}
+	// keep/a.png 这种写法落到本机器人的长期区 keep/<机器人>/a.png。
+	if destClean, err = t.keep.normalizeDest(destClean); err != nil {
+		return "", err
+	}
+	if _, destClean, err = t.resolve(destClean); err != nil {
+		return "", err
+	}
 	// 目标是已有目录：放进去，名字不变。
 	if info, err := root.Stat(filepath.FromSlash(destClean)); err == nil && info.IsDir() {
 		destClean = path.Join(destClean, path.Base(sourceClean))
@@ -313,6 +381,7 @@ func (t *ManageFilesTool) transfer(action, rel, to string, overwrite bool) (stri
 	}
 	destLocal := filepath.FromSlash(destClean)
 	overwrote := false
+	var replacing int64
 	if info, err := root.Lstat(destLocal); err == nil {
 		if !overwrite {
 			return "", fmt.Errorf("%s 已存在；确认要覆盖就传 overwrite=true，否则换个目标名", destClean)
@@ -321,17 +390,46 @@ func (t *ManageFilesTool) transfer(action, rel, to string, overwrite bool) (stri
 			return "", fmt.Errorf("%s 是已有目录，不能被覆盖", destClean)
 		}
 		overwrote = true
+		replacing = info.Size()
+	}
+	size, _ := pathSize(source)
+	sourceKeep, sourceInKeep := keepLocation(sourceClean)
+	destKeep, destInKeep := keepLocation(destClean)
+	if destInKeep {
+		// 在自己的长期区里挪来挪去不多占地方；从外面放进来（或复制一份）才算配额。
+		lock := keepAreaLock(t.root, destKeep)
+		lock.Lock()
+		defer lock.Unlock()
+		if action == "copy" || !sourceInKeep || sourceKeep != destKeep {
+			if err := checkKeepQuota(t.root, destKeep, size, replacing); err != nil {
+				return "", err
+			}
+		}
 	}
 	if parent := filepath.Dir(destLocal); parent != "." {
 		if err := root.MkdirAll(parent, 0o755); err != nil {
 			return "", err
 		}
 	}
+	now := time.Now
+	if t.now != nil {
+		now = t.now
+	}
+	meta := t.keep.meta(now(), description)
+	result := map[string]any{"action": action, "from": sourceClean, "to": destClean, "overwrote": overwrote}
 	if action == "move" {
 		if err := root.Rename(sourceLocal, destLocal); err != nil {
 			return "", err
 		}
-		return marshalToolResult(map[string]any{"action": "move", "from": sourceClean, "to": destClean, "overwrote": overwrote})
+		if sourceInKeep || destInKeep {
+			if err := moveKeepEntries(t.root, sourceClean, destClean, meta, size, sourceInfo.IsDir(), t.sniffMIME(destClean, sourceInfo)); err != nil {
+				result["index_warning"] = "文件已挪好，但长期保存区索引没更新：" + err.Error()
+			}
+		}
+		if destInKeep {
+			result["area"] = "长期保存区，不会自动清理"
+		}
+		return marshalToolResult(result)
 	}
 	if sourceInfo.Size() > manageFilesCopyMaxBytes {
 		return "", fmt.Errorf("%s 有 %d MB，超过复制上限 %d MB", sourceClean, sourceInfo.Size()>>20, manageFilesCopyMaxBytes>>20)
@@ -340,7 +438,43 @@ func (t *ManageFilesTool) transfer(action, rel, to string, overwrite bool) (stri
 	if err != nil {
 		return "", err
 	}
-	return marshalToolResult(map[string]any{"action": "copy", "from": sourceClean, "to": destClean, "bytes": written, "overwrote": overwrote})
+	result["bytes"] = written
+	if destInKeep {
+		entry := KeepEntry{Path: destClean, Description: description, SavedBy: meta.SavedBy, SavedAt: meta.Now, Size: written, MIME: t.sniffMIME(destClean, sourceInfo)}
+		// 从长期区复制出来的副本沿用原件的说明和来源。
+		if sourceInKeep && sourceKeep != "" {
+			if entries, err := loadKeepIndexDir(t.root, sourceKeep); err == nil {
+				for _, existing := range entries {
+					if existing.Path == sourceClean {
+						entry.SourceMessageID, entry.SourceURL = existing.SourceMessageID, existing.SourceURL
+						if entry.Description == "" {
+							entry.Description = existing.Description
+						}
+					}
+				}
+			}
+		}
+		if err := upsertKeepEntry(t.root, entry); err != nil {
+			result["index_warning"] = "文件已复制，但长期保存区索引没更新：" + err.Error()
+		}
+		result["area"] = "长期保存区，不会自动清理"
+	}
+	return marshalToolResult(result)
+}
+
+// sniffMIME 读挪好的文件开头认类型，给长期区索引用；目录没有类型。
+func (t *ManageFilesTool) sniffMIME(clean string, info os.FileInfo) string {
+	if info.IsDir() {
+		return ""
+	}
+	file, err := os.Open(filepath.Join(t.root, filepath.FromSlash(clean)))
+	if err != nil {
+		return ""
+	}
+	defer file.Close()
+	head := make([]byte, 512)
+	n, _ := io.ReadFull(file, head)
+	return SniffMediaType(head[:n])
 }
 
 func copyWithinRoot(root *os.Root, sourceLocal, destLocal string, overwrite bool) (int64, error) {

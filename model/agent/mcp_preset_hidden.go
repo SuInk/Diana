@@ -6,7 +6,6 @@ package agent
 import (
 	"encoding/json"
 	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 )
@@ -14,11 +13,11 @@ import (
 // 内置预设默认就在 MCP 列表里占一行（「有这个服务，只是还没配」）。用不上的那几条
 // 可以从列表里删掉——删的是这一行，不是服务本身：名单存在这里，随时能放回来。
 func hiddenPresetPath(root string) string {
-	return filepath.Join(root, ".mcp-presets-hidden.json")
+	return mcpPresetsHiddenState.path(root)
 }
 
 func loadHiddenPresets(root string) (map[string]bool, error) {
-	data, err := os.ReadFile(hiddenPresetPath(root))
+	data, err := mcpPresetsHiddenState.read(root)
 	if os.IsNotExist(err) {
 		return map[string]bool{}, nil
 	}
@@ -60,5 +59,5 @@ func saveHiddenPreset(root, id string, hidden bool) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(hiddenPresetPath(root), data, 0o600)
+	return mcpPresetsHiddenState.save(root, data)
 }

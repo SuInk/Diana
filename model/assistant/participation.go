@@ -342,7 +342,7 @@ var promptParticipationChatInLevelsSpec = registerPrompt(PromptSpec{
 	Key:     "routing.participation.chat_in_levels",
 	Group:   PromptGroupRouting,
 	Title:   "接话评分 · 判断模型的闲聊分档",
-	Usage:   "只给只做判断的模型用：一行一档，行首写分数（0 到 0.90，从低到高），后面写落在这档的情形。对话模型不读这段，它按「愿意程度换成闲聊分」给分。少于 2 档、多于 10 档、分数不递增或超出范围时整段按默认分档。",
+	Usage:   "只给只做判断的模型用：一行一档，行首写分数（0 到 0.90，从低到高），后面写落在这档的情形。第一档必须是 0.00，那是叫停的一档，程序靠它认出叫停。对话模型不读这段，它按「愿意程度换成闲聊分」给分。少于 2 档、多于 10 档、第一档不是 0.00、分数不递增或超出范围时整段按默认分档。",
 	Default: strings.Join(participationChatInLevels, "\n"),
 })
 
@@ -368,7 +368,9 @@ func participationChatInLevelsFor(overrides PromptOverrides) ([]string, []float6
 		levels = append(levels, line)
 		values = append(values, value)
 	}
-	if len(levels) < 2 || len(levels) > 10 {
+	// 第一档必须是 0.00：叫停靠「没在跟机器人说话、闲聊记 0」认出来，判断模型的最低档
+	// 会吸附到它（FloorVerdict），不是 0 就认不出叫停了。
+	if len(levels) < 2 || len(levels) > 10 || values[0] != 0 {
 		return participationChatInLevels, participationChatInLevelValues
 	}
 	return levels, values

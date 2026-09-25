@@ -1042,6 +1042,12 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 	if agentEnabled && relationship.Owner && hasTool(dianaOneBotRequestsToolName) {
 		tail.WriteString("\n" + cfg.prompt(promptToolOneBotRequestsSpec))
 	}
+	// 长期保存区清单随机器人、随存了什么而变，进尾部；长期区没变时逐字不变。
+	if agentEnabled && relationship.Owner && hasAnyTool(dianaSaveToWorkspaceToolName, agent.ManageFilesToolName, "read_file") {
+		if prompt := keepIndexPrompt(cfg, firstNonEmpty(event.ProfileID, cfg.ID)); prompt != "" {
+			tail.WriteString("\n" + prompt)
+		}
+	}
 	if agentEnabled && hasTool(dianaHistoryImagesToolName) {
 		builder.WriteString("\n" + cfg.prompt(promptToolHistoryImagesSpec))
 	}

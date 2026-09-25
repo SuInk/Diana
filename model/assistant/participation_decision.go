@@ -35,6 +35,9 @@ func participationDecisionSpec(overrides PromptOverrides) *llm.DecisionSpec {
 			Instructions: "没人找机器人时，机器人插一句是否自然。\n" + participationWillingnessPrompt(overrides) + "\n" + overrides.text(promptParticipationChatInNoteSpec) + "\n" + overrides.text(promptParticipationSharedNoteSpec),
 			Levels:       chatInLevels,
 			LevelValues:  chatInLevelValues,
+			// 最低档是「叫停或机械循环」，ratingsAllow 认的是整 0；不吸附的话 Jev 稳定回
+			// 0.01，always 档会在别人叫停后继续接话。分档可改，但解析时要求第一档就是 0.00。
+			FloorVerdict: true,
 			Min:          0,
 			Max:          participationChatInMax,
 			Path:         "chat_in.score",

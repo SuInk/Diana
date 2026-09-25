@@ -1,7 +1,7 @@
 // Copyright (c) 2025-now SuInk.
 // Licensed under the Limited Redistribution License in the repository root.
 
-import type { StorageUsage } from "./api";
+import type { StorageUsage, StorageUsageCategory } from "./api";
 
 export interface StorageSegment {
   key: string;
@@ -63,6 +63,16 @@ export function storageCategorySegments(usage: StorageUsage | null): StorageSegm
     bytes: category.bytes,
     color: categoryColors[category.key] ?? categoryColors.other!
   }));
+}
+
+/**
+ * 按目录的拆分：回答「是哪块在涨」，和上面按文件类型的拆分互补——同样是图片，
+ * 在 workspace/downloads 里会被自动清理，在 history-media 里归保留策略管。
+ * 旧后端没有这个字段，空目录（0 字节也没有文件）不占一行。
+ */
+export function storageDirectories(usage: StorageUsage | null): StorageUsageCategory[] {
+  if (!usage || !Array.isArray(usage.directories)) return [];
+  return usage.directories.filter((directory) => directory.bytes > 0 || directory.files > 0);
 }
 
 /** 条形图的宽度只能是纯百分比：占比标签里的 `<0.1%` 拿来当 CSS 宽度是无效值。 */

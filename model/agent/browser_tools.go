@@ -486,7 +486,7 @@ func (t *BrowserScreenshotTool) setParts(parts []llm.ContentPart) {
 
 func (t *BrowserScreenshotTool) InputSchema() map[string]any {
 	return toolObjectSchema(nil, map[string]any{
-		"path": toolStringParam("工作目录内的相对保存路径，省略时使用默认文件名"),
+		"path": toolStringParam("工作目录内的相对保存路径，省略时存到 " + WorkspaceBrowserDir + "/（7 天后清理）；要交给用户的成品放 " + WorkspaceOutputsDir + "/，不要写在工作目录根下；主人要长期留着的截完再用 manage_files 挪进 " + WorkspaceKeepDir + "/"),
 	})
 }
 
