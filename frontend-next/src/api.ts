@@ -211,6 +211,8 @@ export interface BotProfileConfig extends SendRetrySettings {
   /** 语气跟随一天的时间变化（深夜话少、清早迷糊、晚上松弛）；不设等同关闭。 */
   /** 流式调用模型，用于统计首 token 时间；回复仍是攒齐了再发。不设等同关闭。 */
   llm_streaming_enabled?: boolean;
+  /** 会话标识隐私代理：发给模型前把账号、群号和消息 ID 换成别名；不设等同开启。 */
+  llm_identity_masking_enabled?: boolean;
   disabled_groups?: string[];
   /** 新加入的群默认工不工作；逐群开关在群管理里，一个群一份。 */
   group_admission?: GroupAdmission;

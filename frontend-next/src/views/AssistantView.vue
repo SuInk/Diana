@@ -1147,6 +1147,29 @@
             </div>
           </section>
 
+          <!-- 账号隐私：发给模型的账号、群号和消息 ID 要不要换成别名。 -->
+          <section class="card">
+            <div class="card-header">
+              <div>
+                <h2>账号隐私</h2>
+              </div>
+              <span class="badge" :class="form.llm_identity_masking_enabled ? 'accent' : ''">{{ form.llm_identity_masking_enabled ? "已启用" : "已关闭" }}</span>
+            </div>
+            <div class="card-body form-grid">
+              <div class="field wide">
+                <label class="switch">
+                  <input v-model="form.llm_identity_masking_enabled" type="checkbox" />
+                  <span class="track" aria-hidden="true"></span>
+                  <span class="switch-label">对模型隐藏账号 ID（默认开启）</span>
+                </label>
+                <span class="hint">
+                  开启时，账号、群号和消息 ID 在发给模型前换成 im_user_xxx 这类别名，模型调用工具或发消息时再自动换回真实 ID。
+                  关闭后模型直接看到真实 ID，适合需要让模型按原始账号查人、对账的场景。
+                </span>
+              </div>
+            </div>
+          </section>
+
           <!-- 出错与重试：发送失败怎么重试、出错时要不要在聊天里说一声。 -->
           <section class="card">
             <div class="card-header">
@@ -3681,6 +3704,7 @@ function setForm(config: BotProfileConfig): void {
     auto_image_description: config.auto_image_description ?? true,
     auto_video_preprocess: config.auto_video_preprocess ?? true,
     llm_streaming_enabled: config.llm_streaming_enabled ?? true,
+    llm_identity_masking_enabled: config.llm_identity_masking_enabled ?? true,
     group_trigger_mode: config.group_trigger_mode ?? "smart",
     refusal_strategy: config.refusal_strategy ?? "smart",
     prompt_inject_time: config.prompt_inject_time ?? true,
