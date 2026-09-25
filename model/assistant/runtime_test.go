@@ -2404,9 +2404,11 @@ func TestRuntimeCarriesCrossMessageImagesIntoFollowup(t *testing.T) {
 		})
 	}
 
+	// 隔了三分钟以上才问：图已经不算「刚发、还悬着」的候选依赖图（那种会随这一轮
+	// 附上原图，见 sender_dependency_images.go），这里测的是历史图按需取。
 	reply, err := runtime.replyTo(context.Background(), MessageEvent{
 		Kind:       EventKindPrivate,
-		Time:       110,
+		Time:       400,
 		UserID:     "10001",
 		MessageID:  "q-multi-image",
 		RawMessage: "读我连发的三张图",
@@ -2496,7 +2498,7 @@ func TestRecentImageBatchAllowsInterleavedReplies(t *testing.T) {
 		"data:image/png;base64,Yg==",
 		"data:image/png;base64,Yw==",
 	}
-	if got := recentHistoryImageBatch(history, "question"); strings.Join(got, ",") != strings.Join(want, ",") {
+	if got := recentHistoryImageBatch(history, MessageEvent{MessageID: "question", UserID: "10001"}); strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("image batch = %#v, want %#v", got, want)
 	}
 }
@@ -2509,7 +2511,7 @@ func TestRecentImageBatchStopsAtOldImageBurst(t *testing.T) {
 		{Kind: EventKindPrivate, Time: 405, UserID: "10001", MessageID: "question", Segments: []MessageSegment{{Type: "text", Data: map[string]string{"text": "看这两张"}}}},
 	}
 	want := []string{"data:image/png;base64,bmV3MQ==", "data:image/png;base64,bmV3Mg=="}
-	if got := recentHistoryImageBatch(history, "question"); strings.Join(got, ",") != strings.Join(want, ",") {
+	if got := recentHistoryImageBatch(history, MessageEvent{MessageID: "question", UserID: "10001"}); strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("image batch = %#v, want %#v", got, want)
 	}
 }

@@ -25,7 +25,6 @@ const (
 	PurposeProactiveReplyRouter  = "proactive_reply_router"
 	PurposeProactiveReplyQuality = "proactive_reply_quality"
 	PurposeSemanticReference     = "semantic_reference"
-	PurposeInboundMediaReference = "inbound_media_reference"
 	PurposeContextSummary        = "context_summary_compaction"
 	PurposeMemoryExtract         = "memory_extract"
 	PurposeMemorySummary         = "memory_summary"
@@ -79,7 +78,6 @@ var llmPurposeGroup = map[string]string{
 	// 发进聊天，而且往往是对话模型刚出错的时候——再绕回对话模型最不稳，所以也
 	// 留在这里，人设由 withUserFacingPersona 补上。
 	PurposeSemanticReference:       llm.GroupReplyAssist,
-	PurposeInboundMediaReference:   llm.GroupReplyAssist,
 	PurposeSemanticTextRef:         llm.GroupReplyAssist,
 	PurposeDirectReplyTopic:        llm.GroupReplyAssist,
 	PurposeReplySemanticDedup:      llm.GroupReplyAssist,

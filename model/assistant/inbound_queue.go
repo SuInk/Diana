@@ -54,9 +54,6 @@ const (
 	// 断线前的水位线把漏掉的消息都补进历史，热闹的群一天能攒几千条；这里兜住上限，
 	// 更早的不再补。上下文窗口本来也用不了这么多，多出来的只会变成摘要任务。
 	historyBackfillScanLimit = 200
-	// InboundMediaMergeWindow gives adjacent media and an explicit textual
-	// follow-up enough time to become one durable turn before either can reply.
-	InboundMediaMergeWindow = 15 * time.Second
 )
 
 const (
@@ -64,7 +61,6 @@ const (
 	InboundPriorityResolver  = 60
 	InboundPriorityReply     = 80
 	InboundPriorityTriggered = 100
-	InboundPriorityMediaTurn = 110
 )
 
 const (
@@ -77,6 +73,11 @@ const (
 	// inboundOutcomeSendRejected 标记上游明确拒收、重试也不可能成功的事件。
 	// 它和上面那条的区别是「已经知道没救了」：不必再跑满五次。
 	inboundOutcomeSendRejected = "dropped_send_rejected"
+	// inboundOutcomeSupersededReplyTurn 标记已经并进另一轮回复（追发合并）、自己
+	// 不再单独发送的消息。
+	inboundOutcomeSupersededReplyTurn = "superseded_reply_turn"
+	// inboundOutcomeLegacySupersededMediaTurn 是旧版相邻媒体合并留下的终态，只读不写。
+	inboundOutcomeLegacySupersededMediaTurn = "superseded_media_turn"
 )
 
 // InboundReplayWindow is the maximum recovery window. Each reconnect normally
@@ -170,13 +171,10 @@ type InboundEventStore interface {
 	ListHistorySessions(ctx context.Context) ([]HistorySession, error)
 }
 
-// InboundMediaTurnStore atomically assigns adjacent media to a textual turn
-// and exposes the supersession marker to the final outbound send guard.
-type InboundMediaTurnStore interface {
-	// PeekInboundMediaForTurn 只看不动：认领是不可逆的，得先判完「这句话到底
-	// 在指谁」再决定要不要认领。
-	PeekInboundMediaForTurn(ctx context.Context, currentID, session string, event MessageEvent, window time.Duration) ([]MessageEvent, error)
-	ClaimInboundMediaForTurn(ctx context.Context, currentID, session string, event MessageEvent, window time.Duration) ([]MessageEvent, error)
+// InboundSupersessionStore 把「这条消息已经并进别的回复轮」的标记交给最后那道
+// 发送闸门。标记由追发合并写入（RecordInboundEventReplyMerge）：被并进去的那条
+// 自己的任务如果还是走到了发送，就在这里拦下，别把同一个问题答两遍。
+type InboundSupersessionStore interface {
 	InboundEventSuperseded(ctx context.Context, event MessageEvent) (string, bool, error)
 }
 
@@ -184,7 +182,7 @@ var errInboundTurnSuperseded = errors.New("diana: inbound turn superseded by cor
 
 func (r *Runtime) inboundTurnSuperseded(ctx context.Context, event MessageEvent) (string, bool) {
 	r.mu.RLock()
-	store, _ := r.inboundStore.(InboundMediaTurnStore)
+	store, _ := r.inboundStore.(InboundSupersessionStore)
 	r.mu.RUnlock()
 	if store == nil {
 		return "", false
@@ -639,7 +637,7 @@ func nextInboundPollDelay(current time.Duration) time.Duration {
 
 func (r *Runtime) processInboundQueueItem(ctx context.Context, item InboundQueueItem) (string, error) {
 	// 断线回补里没排上回复名额的消息在这里就收住，只补进上下文历史。它们不能走下面的
-	// 语音转写、媒体合并、图片处理、插件观察、消息中继和回复：回补设条数上限防的就是
+	// 语音转写、图片处理、插件观察、消息中继和回复：回补设条数上限防的就是
 	// 一批积压消息同时开出一堆媒体任务，这些消息要是也走完整流程，上限等于没设。
 	// 放在过期检查之前：过期管的是「别回复太旧的消息」，不是「别记住它」。
 	if item.Event.BackfillHistoryOnly {
@@ -662,38 +660,11 @@ func (r *Runtime) processInboundQueueItem(ctx context.Context, item InboundQueue
 	ctx = withContextBudgetCap(ctx, r.effectiveConfigForEvent(item.Event).MaxContextTokens)
 	// 出站幂等账本按入站事件 ID 记账：失败重跑时已经送达的分片和媒体会被跳过。
 	ctx = withOutboundTurn(ctx, item.ID)
+	// 同一个人先发图、隔几秒再发字，两条各走各的：以前这里会把图并进那句话（先问
+	// 一次模型「这句话指的是不是那张图」，再把图那条的任务注销），判错了收不回来，
+	// 而且图被当成这句话自带的，改图时连模型点名的头像都盖过去了。现在图那条是一条
+	// 普通消息；回复时这个人刚发过的图以「候选依赖图」单独附上，见 sender_dependency_images.go。
 	event := item.Event
-	r.mu.RLock()
-	mediaTurnStore, _ := r.inboundStore.(InboundMediaTurnStore)
-	r.mu.RUnlock()
-	if mediaTurnStore != nil && !EventHasDirectMediaReference(event) {
-		// 先看有哪些相邻媒体，别急着认领——认领会把媒体自己的任务当场注销，
-		// 判错了收不回来。
-		peekCtx, cancelPeek := context.WithTimeout(ctx, 3*time.Second)
-		candidates, err := mediaTurnStore.PeekInboundMediaForTurn(peekCtx, item.ID, item.Session, event, InboundMediaMergeWindow)
-		cancelPeek()
-		if err != nil {
-			return "", fmt.Errorf("peek inbound media turn: %w", err)
-		}
-		if len(candidates) > 0 {
-			outcome := r.shouldMergeAdjacentMedia(ctx, event, inboundEventPlainText(event), candidates)
-			if outcome.Merge {
-				claimCtx, cancelClaim := context.WithTimeout(ctx, 3*time.Second)
-				sources, claimErr := mediaTurnStore.ClaimInboundMediaForTurn(claimCtx, item.ID, item.Session, event, InboundMediaMergeWindow)
-				cancelClaim()
-				if claimErr != nil {
-					return "", fmt.Errorf("claim inbound media turn: %w", claimErr)
-				}
-				if len(sources) > 0 {
-					event = attachInboundTurnMedia(event, sources)
-					r.recordInboundMediaTurn(ctx, item.ID, event, sources)
-					r.recordInboundMediaReference(ctx, item.ID, event, sources, outcome)
-				}
-			} else {
-				r.recordInboundMediaReference(ctx, item.ID, event, candidates, outcome)
-			}
-		}
-	}
 	// Transcription happens in the durable worker, never on the OneBot ingest
 	// goroutine. Only explicitly transient failures requeue this same event.
 	event = r.prepareIncomingVoice(ctx, event)
@@ -745,15 +716,7 @@ func hasVoiceTranscriptSegment(segments []MessageSegment) bool {
 	return false
 }
 
-// EventHasDirectMediaReference covers media carried by this message or by an
-// explicit quote. These events do not need the merge-window delay.
-func EventHasDirectMediaReference(event MessageEvent) bool {
-	return eventHasDirectReferenceContent(event) || quotedMessageHasReferenceContent(event.Quoted)
-}
-
-// EventIsMergeableMediaOnly reports media messages that have no independent
-// textual intent and therefore benefit from the short turn-assembly hold.
-// inboundEventPlainText 取这条事件的纯文本，用来判断它在指谁。
+// inboundEventPlainText 取这条事件的纯文本。
 func inboundEventPlainText(event MessageEvent) string {
 	var builder strings.Builder
 	for _, segment := range event.Segments {
@@ -768,23 +731,9 @@ func inboundEventPlainText(event MessageEvent) string {
 	return strings.TrimSpace(event.RawMessage)
 }
 
-func EventIsMergeableMediaOnly(event MessageEvent) bool {
-	hasMedia := false
-	for _, segment := range event.Segments {
-		switch segment.Type {
-		case "image", "video", "file", "record":
-			hasMedia = true
-		case "text":
-			if strings.TrimSpace(segment.Data["text"]) != "" {
-				return false
-			}
-		}
-	}
-	return hasMedia
-}
-
-// inboundTurnMediaKey 标记从相邻媒体消息借过来的段。借只为这一轮：回复时图和
-// 问题要一起看。进历史前要还回去（见 withoutInboundTurnMedia），否则同一张图、
+// inboundTurnMediaKey 标记从并进这一轮的其他消息（追发合并、积压合并）借过来的
+// 媒体段。借只为这一轮：回复时图和问题要一起看。进历史前要还回去（见
+// withoutInboundTurnMedia），否则同一张图、
 // 同一个文件在历史里出现两次，查历史找文件时排在前面的是这条文字消息，模型就
 // 会引用它——它在平台上只是一句话，拿它的 ID 引用或取文件都对不上原来那条。
 const inboundTurnMediaKey = "inbound_turn_media"
@@ -855,33 +804,7 @@ func segmentMediaTurnKey(segment MessageSegment) string {
 	)
 }
 
-func (r *Runtime) recordInboundMediaTurn(ctx context.Context, turnID string, event MessageEvent, sources []MessageEvent) {
-	writer := r.appLogWriter()
-	if writer == nil {
-		return
-	}
-	mediaIDs := make([]string, 0, len(sources))
-	for _, source := range sources {
-		mediaIDs = appendUniqueStrings(mediaIDs, strings.TrimSpace(source.MessageID))
-	}
-	_ = writer.AppendLog(ctx, applog.Entry{
-		Kind:    applog.KindOperation,
-		Level:   applog.LevelInfo,
-		Action:  "inbound_media_turn_assembled",
-		Message: "已合并相邻媒体与后续问题",
-		Actor:   oneBotEventActor(event),
-		Target:  strings.TrimSpace(event.MessageID),
-		Metadata: map[string]any{
-			"turn_id":              turnID,
-			"trigger_message_id":   event.MessageID,
-			"media_message_ids":    mediaIDs,
-			"association_method":   "nearest_unconsumed_same_sender",
-			"superseded_media_job": true,
-		},
-	})
-}
-
-func (r *Runtime) recordInboundMediaSupersededBeforeSend(ctx context.Context, event MessageEvent, turnID string) {
+func (r *Runtime) recordInboundTurnSupersededBeforeSend(ctx context.Context, event MessageEvent, turnID string) {
 	writer := r.appLogWriter()
 	if writer == nil {
 		return
@@ -889,13 +812,13 @@ func (r *Runtime) recordInboundMediaSupersededBeforeSend(ctx context.Context, ev
 	_ = writer.AppendLog(ctx, applog.Entry{
 		Kind:    applog.KindOperation,
 		Level:   applog.LevelInfo,
-		Action:  "inbound_media_turn_superseded",
-		Message: "媒体任务已由关联问题接管，取消独立发送",
+		Action:  "inbound_turn_superseded",
+		Message: "这条消息已并入另一轮回复，取消独立发送",
 		Actor:   oneBotEventActor(event),
 		Target:  strings.TrimSpace(event.MessageID),
 		Metadata: map[string]any{
 			"turn_id":               turnID,
-			"media_message_id":      event.MessageID,
+			"message_id":            event.MessageID,
 			"superseded_state":      "before_send",
 			"outbound_acknowledged": false,
 		},

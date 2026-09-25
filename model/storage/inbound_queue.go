@@ -118,7 +118,9 @@ WHERE id = ? AND status = ?
 	}
 
 	nowNanos := now.UnixNano()
-	availableAt := inboundInitialAvailableAt(event, now)
+	// 只带图、没有文字的消息以前要先压 15 秒，等同一个人紧跟的那句话来把它并走。
+	// 合并已经去掉，所有消息进来就能处理。
+	availableAt := now
 	result, err := tx.ExecContext(ctx, `
 INSERT OR IGNORE INTO inbound_events (
   id, session, kind, profile_id, group_id, user_id, message_id, event_time, payload,

@@ -1121,15 +1121,6 @@
       "format_key": "routing.direct_reply_topic.format"
     },
     {
-      "key": "routing.media_reference",
-      "group": "routing",
-      "title": "紧挨媒体的那句话指的是谁",
-      "usage": "同一个人刚发了图片、表情或文件，紧接着又说了一句话时，判断这句话问的是那条媒体，还是媒体之前别人发的消息。",
-      "default": "你在判断一句话指的是不是紧挨着它的那条媒体消息。\n\n场景：同一个人先发了媒体（图片／表情／视频／语音／文件），几秒后又发了一句话。\n这句话有两种可能：\nA. 在问／评论他自己刚发的那条媒体\nB. 那条媒体只是他对更早消息的一个反应（比如甩个表情），这句话问的是更早的那条消息\n\n判断依据：\n1. media 是候选媒体，is_sticker 表示它看起来是表情/贴纸——表情更常是反应，不是话题本身。\n2. competing_messages 是媒体之前、由别人发出的消息，按由近到远排列。它们是 B 的候选对象。\n3. 结合这句话的措辞：泛指的短句（“这是什么”“什么意思”“看不懂”）两种都可能，要靠上下文定；\n   如果更早那条消息本身就令人费解、值得追问（例如一串密钥、一段报错、一个陌生链接），\n   而媒体只是一张表情，那多半是 B。\n4. 用户在问自己刚发的照片、截图、文件时是 A；没人会问自己刚甩的表情是什么。\n5. 拿不准就给低置信度，不要硬选。",
-      "contract": "\n\n只输出 JSON：{\"refers_to_media\": true/false, \"confidence\": 0~1, \"reason\": \"简短判据\"}",
-      "format_key": "routing.media_reference.format"
-    },
-    {
       "key": "routing.participation.retry",
       "group": "routing",
       "title": "接话评分 · 解析失败后的提醒",

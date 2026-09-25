@@ -982,20 +982,7 @@ func TestAttachInboundTurnMediaPreservesSourcesAndRealSegments(t *testing.T) {
 	}
 }
 
-func TestInboundMediaTurnClassificationUsesSegments(t *testing.T) {
-	for _, segmentType := range []string{"image", "video", "file", "record"} {
-		event := MessageEvent{Segments: []MessageSegment{{Type: segmentType, Data: map[string]string{"file": "media.bin"}}}}
-		if !EventIsMergeableMediaOnly(event) {
-			t.Fatalf("%s-only event was not mergeable", segmentType)
-		}
-		event.Segments = append(event.Segments, MessageSegment{Type: "text", Data: map[string]string{"text": "独立说明"}})
-		if EventIsMergeableMediaOnly(event) {
-			t.Fatalf("%s event with text was treated as media-only", segmentType)
-		}
-	}
-}
-
-func TestInboundMediaSupersessionBlocksFinalSend(t *testing.T) {
+func TestInboundTurnSupersessionBlocksFinalSend(t *testing.T) {
 	store := newMemoryInboundEventStore()
 	store.superseded["media-1"] = "turn-1"
 	channel := &recordingChannel{}
@@ -1027,30 +1014,12 @@ type memoryInboundEventStore struct {
 	order      []string
 	sessions   []HistorySession
 	audits     []EventRecord
-	media      []MessageEvent
 	superseded map[string]string
 	steps      map[string]string
 }
 
 func newMemoryInboundEventStore() *memoryInboundEventStore {
 	return &memoryInboundEventStore{records: map[string]*memoryInboundRecord{}, superseded: map[string]string{}, steps: map[string]string{}}
-}
-
-func (s *memoryInboundEventStore) PeekInboundMediaForTurn(_ context.Context, _, _ string, _ MessageEvent, _ time.Duration) ([]MessageEvent, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return append([]MessageEvent(nil), s.media...), nil
-}
-
-func (s *memoryInboundEventStore) ClaimInboundMediaForTurn(_ context.Context, currentID, _ string, _ MessageEvent, _ time.Duration) ([]MessageEvent, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	claimed := append([]MessageEvent(nil), s.media...)
-	for _, source := range claimed {
-		s.superseded[source.MessageID] = currentID
-	}
-	s.media = nil
-	return claimed, nil
 }
 
 func (s *memoryInboundEventStore) InboundEventSuperseded(_ context.Context, event MessageEvent) (string, bool, error) {

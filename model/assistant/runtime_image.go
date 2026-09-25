@@ -193,47 +193,27 @@ func (r *Runtime) localImageEditSourceImages(event MessageEvent) []string {
 		return out
 	}
 	history := r.contextHistory(event)
-	out = appendImageEditSourceImages(out, recentHistoryImageBatch(history, event.MessageID)...)
+	out = appendImageEditSourceImages(out, recentHistoryImageBatch(history, event)...)
 	return out
 }
 
-// imageEditSourceImages 按优先级挑出可编辑的图片：当前消息与引用消息里的图、指代
-// 解析选中的图、模型点名的头像来源，最后才退回最近历史图。identitySources 由模型
-// 在调用 image 时给出，运行时不再从用户措辞里推断要用谁的头像。
+// imageEditSourceImages 是意图路由那条路的原图解析：没有模型点名，identitySources
+// 只是被 @ 成员这类兜底头像，按隐式顺序找，允许拿同一个人刚发的图兜底。
+// 规则见 image_edit_source_plan.go。
 func (r *Runtime) imageEditSourceImages(ctx context.Context, event MessageEvent, identitySources []string) []string {
-	var out []string
-	out = appendImageEditSourceImages(out, availableImageURLs(event.Segments)...)
-	if event.Quoted != nil {
-		out = appendImageEditSourceImages(out, availableImageURLs(event.Quoted.Segments)...)
-		if len(out) == 0 {
-			out = appendImageEditSourceImages(out, r.quotedChainImageURLs(ctx, event)...)
-		}
-	}
-	out = appendImageEditSourceImages(out, r.semanticReferenceImageURLs(ctx, event)...)
-	if len(out) > 0 {
-		return out
-	}
-	// 引用的是机器人自己的失败通知或「在画了」：用户是在接着上一次改图说话，
-	// 上一次的原图比头像和最近聊天记录都更贴近他指的那张。
-	if r.quotedBotTextWithoutImage(event) {
-		if remembered := r.imageEditSources.recall(sessionKey(event), time.Now()); len(remembered) > 0 {
-			return remembered
-		}
-	}
-	out = appendImageEditSourceImages(out, r.avatarIdentityImageURLs(ctx, event, identitySources)...)
-	if len(out) > 0 {
-		return out
-	}
-	history := r.contextHistory(event)
-	out = appendImageEditSourceImages(out, r.preparedRecentHistoryImageBatch(ctx, history, event.MessageID)...)
-	if len(out) > 0 {
-		return out
-	}
-	return r.imageEditSources.recall(sessionKey(event), time.Now())
+	urls, _ := r.resolveImplicitImageEditSources(ctx, event, imageEditSourcePlan{
+		DefaultIdentitySources:  identitySources,
+		AllowRecentSenderImages: true,
+	})
+	return urls
 }
 
-func recentHistoryImageBatch(history []MessageEvent, currentMessageID string) []string {
-	selected := recentHistoryImageIndexes(history, currentMessageID)
+// recentHistoryImageBatch 取当前发言者刚连发的那批图。
+//
+// 以前不看是谁发的：两分钟内谁的图都算，群里别人刚甩的表情也会被当成「刚才那张」
+// 拿去改。改图只该改这个人自己刚发的图，别人的图要他引用或由模型点名。
+func recentHistoryImageBatch(history []MessageEvent, event MessageEvent) []string {
+	selected := recentHistoryImageIndexes(history, event.MessageID, event.UserID)
 	var out []string
 	for index, item := range history {
 		if !selected[index] {
@@ -248,9 +228,14 @@ func recentHistoryImageBatch(history []MessageEvent, currentMessageID string) []
 	return out
 }
 
-func (r *Runtime) preparedRecentHistoryImageBatch(ctx context.Context, history []MessageEvent, currentMessageID string) []string {
-	selected := recentHistoryImageIndexes(history, currentMessageID)
-	var out []string
+type recentSenderImageBatchItem struct {
+	MessageEvent
+	images []string
+}
+
+func (r *Runtime) preparedRecentSenderImageBatch(ctx context.Context, history []MessageEvent, event MessageEvent) []recentSenderImageBatchItem {
+	selected := recentHistoryImageIndexes(history, event.MessageID, event.UserID)
+	var out []recentSenderImageBatchItem
 	for index, item := range history {
 		if !selected[index] {
 			continue
@@ -264,23 +249,31 @@ func (r *Runtime) preparedRecentHistoryImageBatch(ctx context.Context, history [
 		if item.Quoted != nil {
 			images = appendUniqueStrings(images, availableImageURLs(item.Quoted.Segments)...)
 		}
-		out = appendImageEditSourceImages(out, images...)
+		if len(images) > 0 {
+			out = append(out, recentSenderImageBatchItem{MessageEvent: item, images: images})
+		}
 	}
 	return out
 }
 
-func recentHistoryImageIndexes(history []MessageEvent, currentMessageID string) map[int]bool {
+// recentHistoryImageIndexes 选出 senderID 最近连发的一批带图消息。别人的消息不算图，
+// 只当作间隔。
+func recentHistoryImageIndexes(history []MessageEvent, currentMessageID, senderID string) map[int]bool {
 	selected := map[int]bool{}
 	started := false
 	leadMessages := 0
 	separatorMessages := 0
 	newestImageTime := int64(0)
+	senderID = strings.TrimSpace(senderID)
 	for index := len(history) - 1; index >= 0; index-- {
 		item := history[index]
 		if strings.TrimSpace(currentMessageID) != "" && item.MessageID == currentMessageID {
 			continue
 		}
 		imageCount := historicalStillImageCount(item)
+		if strings.TrimSpace(item.botReply) != "" || item.Outbound || strings.TrimSpace(item.UserID) != senderID {
+			imageCount = 0
+		}
 		if imageCount == 0 {
 			if started {
 				separatorMessages++

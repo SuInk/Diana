@@ -303,6 +303,12 @@ func DescribeEventOutcome(outcome string) (decision string, reason string, handl
 		return "not_replied", "本群的模型额度在当前窗口内已用完，到点自动恢复；期间消息照常进历史和长期记忆", false
 	case "superseded_proactive":
 		return "not_replied", "等待主动回复期间出现了更高优先级消息，本次候选已取消", false
+	case inboundOutcomeSupersededReplyTurn:
+		return "not_replied", "这条消息已并入同一个人正在等待的那轮回复，不再单独发送", false
+	case inboundOutcomeLegacySupersededMediaTurn:
+		// 旧版会把「先发图、紧接着发字」的图并进后一句话一起回答，图那条就落这个
+		// 终态。现在不再产生，库里的旧记录仍要能读出人话。
+		return "not_replied", "（旧版行为）这条媒体消息已并入同一发送者随后的提问一起回答", false
 	case "dropped_outbound_delivery":
 		return "error", "回复已经生成，但发送连接不可用或消息投递失败", false
 	case inboundOutcomeSendRejected:
@@ -541,11 +547,13 @@ type Runtime struct {
 	historyImageDescQueue   []*historyImageDescJob
 	historyImageDescJobs    map[string]*historyImageDescJob
 	historyImageDescRunning *historyImageDescJob
-	historyImageDescWorker  bool
-	historyImageDescWake    chan struct{}
-	historyImageDescReady   map[string]struct{}
-	historyImageDescFailed  map[string]historyImageDescFailure
-	historyImageDescFront   int
+	// historyImageDescUrgentRunning 是正在做的加急识图任务数。
+	historyImageDescUrgentRunning int
+	historyImageDescWorker        bool
+	historyImageDescWake          chan struct{}
+	historyImageDescReady         map[string]struct{}
+	historyImageDescFailed        map[string]historyImageDescFailure
+	historyImageDescFront         int
 	// 测试用来缩短识图超时和失败退避；零值取 historyImageDescriptionTimeout/RetryBackoff。
 	historyImageDescTimeout time.Duration
 	historyImageDescBackoff time.Duration
@@ -2116,9 +2124,9 @@ func (r *Runtime) replyAndRecord(ctx context.Context, event MessageEvent, text s
 			return "superseded_proactive", err
 		}
 		if errors.Is(err, errInboundTurnSuperseded) {
-			setEventRecordOutcome(&record, "superseded_media_turn")
+			setEventRecordOutcome(&record, inboundOutcomeSupersededReplyTurn)
 			r.record(record)
-			return "superseded_media_turn", nil
+			return inboundOutcomeSupersededReplyTurn, nil
 		}
 		record.Error = err.Error()
 		r.setError(err.Error())
@@ -2565,9 +2573,8 @@ func eventRoutingText(event MessageEvent) string {
 // 接话开关都关了，而它又没有 @、引用、点名机器人，也不是插件指令或链接解析。
 //
 // 这种消息走完整条路最后也只落到「回应提问与闲聊均已关闭，不主动接话」，但在那之前
-// 会先跑一次相邻媒体指代判断（inbound_media_reference）和一次跨群上下文检索——两者的
-// 输出只给回复用，于是白花一次模型调用和一次检索。提前认出来，就只跳过这两步；识图、
-// 记忆、表达学习这些「关掉发言但还要记住」的环节不受影响。
+// 会先跑一次跨群上下文检索——它的输出只给回复用，于是白花一次检索。提前认出来，就只
+// 跳过这一步；识图、记忆、表达学习这些「关掉发言但还要记住」的环节不受影响。
 //
 // 「是不是冲着机器人」沿用 shouldHandle 的判据，不另起一套。被标记为机器人的账号
 // 要先经模型判一次才知道是不是在叫本机（见 requiresTelegramBotMentionJudgment），
@@ -4085,6 +4092,8 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	// 再统一放到后面——语义上它们就是「理解当前消息所需的背景」，离当前消息更近
 	// 反而更合适。预算裁剪按 Priority 走，不看位置，各层的让位顺序不受影响。
 	messages := []llm.Message{{Role: llm.RoleSystem, Content: systemHead, Priority: llm.MessagePrioritySystem}}
+	var dependency *senderDependencyContext
+	dependencyIndex := -1
 	volatile := pluginContextMessages(ctx, pluginResponses)
 	semanticReferenceContext := r.semanticReferenceContextBlock(ctx, event)
 	if semanticReferenceContext.Block != "" {
@@ -4250,14 +4259,10 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 				turnMessageIDs[messageID] = true
 			}
 		}
-		if directAgentDecision {
-			// 先发图、隔一会儿再单独问「这是啥」：历史里那张图只有文字摘要，摘要没出来
-			// 模型就只能看到「尚无缓存描述」。拼历史之前加急等一下。
-			if dependencies := recentSenderImageEvents(replyHistory, event, turnMessageIDs); len(dependencies) > 0 {
-				waitCtx, cancel := context.WithTimeout(ctx, replyImageDescriptionWait)
-				r.awaitHistoryImageDescriptions(waitCtx, dependencies...)
-				cancel()
-			}
+		// 先发图、隔一会儿再单独问「这是啥」：这个人刚发、还没人接的图作为候选单独
+		// 附上（agent 和非 agent 都一样），见 sender_dependency_images.go。
+		if images := senderDependencyImages(replyHistory, event, turnMessageIDs, firstNonEmpty(strings.TrimSpace(cfg.BotAccount), strings.TrimSpace(event.SelfID))); len(images) > 0 {
+			dependency = &senderDependencyContext{images: images, toolHint: directAgentDecision, pixels: r.chatModelReceivesImages(event)}
 		}
 		stableHistory, crossGroupTail := r.stableGroupHistory(ctx, event, cfg, replyHistory, directAgentDecision, turnMessageIDs)
 		messages = append(messages, stableCheckpoint...)
@@ -4300,6 +4305,11 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			}
 			messages = append(messages, turnMessage)
 		}
+		// 候选依赖图每轮都不一样，放在缓存断点之后、紧挨着同轮补充。
+		if dependencyMessage := r.senderDependencyMessage(ctx, event, dependency); !runtimeLLMMessageEmpty(dependencyMessage) {
+			dependencyIndex = len(messages)
+			messages = append(messages, dependencyMessage)
+		}
 	}
 	// 插件事实占据权威地位时没有历史那一段，攒下的块直接跟在 system 头部后面。
 	messages = append(messages, volatile...)
@@ -4336,7 +4346,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	// 下面 updatedReplyRequestText 只把补充消息的「文字」并进当前问题，图片段一直
 	// 留在各自的事件里没人取。于是「先发一张图、再补一张图问哪个好」这种一轮两图
 	// 的场景，模型只收到根消息那一张，而正文里明明写着两张——它既答不准，也说不清
-	// 该处理哪一张。媒体合并用入站那条同款规则去重，来源消息号照样标在段上。
+	// 该处理哪一张。媒体按 segmentMediaTurnKey 去重，来源消息号照样标在段上。
 	messageEvent := attachInboundTurnMedia(event, directReplySupplementEvents(append(r.directReplySupplements(ctx), backlogReplyTurnFromContext(ctx)...)))
 	currentText := currentPromptTextWithSemanticContext(event, cleanText, semanticContext, promptAnnotation{
 		BotID:        firstNonEmpty(strings.TrimSpace(event.SelfID), strings.TrimSpace(cfg.BotAccount)),
@@ -4428,6 +4438,16 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		ctx = withTextDeltaObserver(ctx, draft)
 	}
 	reply, err = r.generateReply(ctx, replyCfg, event, relationship, messages, agentRegistry)
+	if err == nil && dependencyIndex >= 0 && dependency.pixels && VisionDescriptionRefused(reply) && !hasExternalSideEffect(ctx) {
+		// 附了原图，模型却回「没收到图片」：这条视觉链路送不进图（模型不支持、网关把
+		// 图段丢了）。别把这句发出去，换成识图描述重来一次。
+		log.Printf("diana reply refused attached dependency images, retrying with descriptions: message_id=%s", event.MessageID)
+		dependency.pixels = false
+		if fallback := r.senderDependencyMessage(ctx, event, dependency); !runtimeLLMMessageEmpty(fallback) {
+			messages[dependencyIndex] = fallback
+			reply, err = r.generateReply(ctx, replyCfg, event, relationship, messages, agentRegistry)
+		}
+	}
 	var silentFinish *modelSilentFinishError
 	if errors.As(err, &silentFinish) {
 		if refused := modelSilenceRefusedReason(ctx, pluginResponses, imageAnnouncements); refused != "" {
@@ -7477,7 +7497,7 @@ func (r *Runtime) sendForwardNodesWithResult(ctx context.Context, event MessageE
 	}
 	// 已经写到外部系统的这一轮不能丢：丢了用户就看不到「已经做完了」。
 	if turnID, superseded := r.inboundTurnSuperseded(ctx, event); superseded && !hasExternalSideEffect(ctx) {
-		r.recordInboundMediaSupersededBeforeSend(ctx, event, turnID)
+		r.recordInboundTurnSupersededBeforeSend(ctx, event, turnID)
 		return nil, errInboundTurnSuperseded
 	}
 	params := map[string]any{"messages": nodes}
