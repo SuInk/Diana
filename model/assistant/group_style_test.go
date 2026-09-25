@@ -133,3 +133,53 @@ func TestManualGroupStyleSurvivesObserveButNotRelearn(t *testing.T) {
 		t.Fatal("empty text must hand the group back to auto learning")
 	}
 }
+
+// 本群单独关掉：不带进回复、不自动学，笔记留着；重新学习后仍然关着；打开接着用。
+// 关掉以后交回自动，笔记清空但开关还是关的。
+func TestGroupStyleDisabledPerGroup(t *testing.T) {
+	provider := &sequenceLLMProvider{replies: []string{"学到的风格", "重新学到的风格"}}
+	runtime, styles, event := groupStyleTestRuntime(t, groupStyleMinMessages, provider)
+	ctx := context.Background()
+	if _, err := runtime.learnGroupStyle(ctx, event); err != nil {
+		t.Fatal(err)
+	}
+	cfg := runtime.effectiveConfigForEvent(event)
+	if _, _, err := runtime.SetGroupStyleEnabledForProfile(ctx, "bot", "g1", false); err != nil {
+		t.Fatal(err)
+	}
+	if got := runtime.groupStylePrompt(event, cfg); got != "" {
+		t.Fatalf("disabled group still injects style: %q", got)
+	}
+	if saved, _, _ := styles.GroupStyle(ctx, "bot", "g1"); saved.Text != "学到的风格" || !saved.Disabled {
+		t.Fatalf("disabling must keep the note: %#v", saved)
+	}
+
+	// 过期了也不自动学。
+	stale, _, _ := styles.GroupStyle(ctx, "bot", "g1")
+	stale.UpdatedAt = time.Now().Add(-2 * groupStyleRefreshAfter)
+	_ = styles.SaveGroupStyle(ctx, stale)
+	message := event
+	message.MessageID, message.UserID = "new", "10001"
+	message.Segments = []MessageSegment{{Type: "text", Data: map[string]string{"text": "来了"}}}
+	runtime.observeGroupStyle(message)
+	time.Sleep(50 * time.Millisecond)
+	if len(provider.requests) != 1 {
+		t.Fatalf("disabled group was auto-learned: %d model calls", len(provider.requests))
+	}
+
+	relearned, err := runtime.RelearnGroupStyle(ctx, "bot", "g1")
+	if err != nil || !relearned.Disabled || relearned.Text != "重新学到的风格" {
+		t.Fatalf("relearn on a disabled group = %#v err=%v", relearned, err)
+	}
+
+	if _, found, err := runtime.SaveGroupStyleForProfile(ctx, "bot", "g1", ""); err != nil || !found {
+		t.Fatalf("hand back while disabled: found=%v err=%v", found, err)
+	}
+	if saved, _, _ := styles.GroupStyle(ctx, "bot", "g1"); saved.Text != "" || !saved.Disabled {
+		t.Fatalf("hand back must keep the switch off: %#v", saved)
+	}
+
+	if _, found, err := runtime.SetGroupStyleEnabledForProfile(ctx, "bot", "g1", true); err != nil || found {
+		t.Fatalf("enabling an empty note should leave nothing: found=%v err=%v", found, err)
+	}
+}

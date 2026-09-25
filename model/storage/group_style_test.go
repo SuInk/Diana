@@ -31,11 +31,11 @@ func TestGroupStyleRoundTrip(t *testing.T) {
 	if err != nil || !found || got.Text != want.Text || !got.Manual || got.SampleCount != 120 || !got.UpdatedAt.Equal(at) {
 		t.Fatalf("got %#v found=%v err=%v", got, found, err)
 	}
-	want.Text, want.Manual = "改过了", false
+	want.Text, want.Manual, want.Disabled = "改过了", false, true
 	if err := store.SaveGroupStyle(ctx, want); err != nil {
 		t.Fatal(err)
 	}
-	if got, _, _ := store.GroupStyle(ctx, "bot", "g1"); got.Text != "改过了" || got.Manual {
+	if got, _, _ := store.GroupStyle(ctx, "bot", "g1"); got.Text != "改过了" || got.Manual || !got.Disabled {
 		t.Fatalf("overwrite lost: %#v", got)
 	}
 	if _, found, _ := store.GroupStyle(ctx, "other-bot", "g1"); found {

@@ -49,6 +49,11 @@ func (r *groupStyleStubRuntime) RelearnGroupStyle(_ context.Context, profileID, 
 	return assistant.GroupStyle{ProfileID: profileID, GroupID: groupID, Text: "重新学到的"}, nil
 }
 
+func (r *groupStyleStubRuntime) SetGroupStyleEnabledForProfile(_ context.Context, profileID, groupID string, enabled bool) (assistant.GroupStyle, bool, error) {
+	r.style.Disabled = !enabled
+	return r.style, true, nil
+}
+
 func newGroupStyleRouter(runtime BotRuntime) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	handler := &BotHandler{runtime: runtime}
@@ -93,6 +98,17 @@ func TestGroupStyleRoutes(t *testing.T) {
 	router.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/assistant/groups/g1/style/relearn", nil))
 	if got := decodeGroupStyle(t, rec); rec.Code != http.StatusOK || got.Style == nil || got.Style.Text != "重新学到的" {
 		t.Fatalf("relearn: %d %#v", rec.Code, got)
+	}
+
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, "/api/assistant/groups/g1/style/enabled", strings.NewReader(`{"enabled":false}`)))
+	if got := decodeGroupStyle(t, rec); rec.Code != http.StatusOK || got.Style == nil || !got.Style.Disabled {
+		t.Fatalf("disable: %d %#v", rec.Code, got)
+	}
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, "/api/assistant/groups/g1/style/enabled", strings.NewReader(`{}`)))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("toggle without enabled status = %d", rec.Code)
 	}
 
 	runtime.relearnErr = assistant.ErrGroupStyleNotEnoughMessages

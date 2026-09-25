@@ -23,7 +23,8 @@ import (
 // 什么时候说、大家怎么互相调侃」，这得让模型读了才写得出来。
 //
 // 一个群大约一天学一次，走后台模型，不在回复的关键路径上。学到的一段存下来，群
-// 管理页上能看、能改；手动改过的不再被自动覆盖，直到主人点「重新学习」。
+// 管理页上能看、能改；手动改过的不再被自动覆盖，直到主人点「重新学习」。某个群不想
+// 要这段，可以在那里单独关掉：不学、不带进回复，写好的笔记留着，打开就接着用。
 
 const (
 	// groupStyleRefreshAfter 是自动重学的间隔：梗和腔调一天变不了多少。
@@ -49,6 +50,8 @@ type GroupStyle struct {
 	Text      string `json:"text"`
 	// Manual 表示主人手动改过：自动学习不再覆盖它。
 	Manual bool `json:"manual"`
+	// Disabled 表示这个群单独关掉了风格：不自动学，也不带进回复。笔记本身留着。
+	Disabled bool `json:"disabled"`
 	// SampleCount 是最近一次自动学习读了多少条群友消息。
 	SampleCount int       `json:"sample_count,omitempty"`
 	UpdatedAt   time.Time `json:"updated_at"`
@@ -140,7 +143,7 @@ func (r *Runtime) observeGroupStyle(event MessageEvent) {
 			log.Printf("diana group style load failed: %v", err)
 			return
 		}
-		if found && (style.Manual || now.Sub(style.UpdatedAt) < groupStyleRefreshAfter) {
+		if found && (style.Disabled || style.Manual || now.Sub(style.UpdatedAt) < groupStyleRefreshAfter) {
 			return
 		}
 		if _, err := r.learnGroupStyle(ctx, event); err != nil && !errors.Is(err, ErrGroupStyleNotEnoughMessages) {
@@ -197,6 +200,10 @@ func (r *Runtime) learnGroupStyle(ctx context.Context, event MessageEvent) (Grou
 		return GroupStyle{}, errors.New("模型没有写出风格笔记")
 	}
 	style := GroupStyle{ProfileID: event.ProfileID, GroupID: event.GroupID, Text: text, SampleCount: len(lines), UpdatedAt: time.Now()}
+	// 关掉的群也能手动点「重新学习」，学完仍然是关着的。
+	if previous, found, err := store.GroupStyle(ctx, event.ProfileID, event.GroupID); err == nil && found {
+		style.Disabled = previous.Disabled
+	}
 	if err := store.SaveGroupStyle(ctx, style); err != nil {
 		return GroupStyle{}, err
 	}
@@ -316,7 +323,7 @@ func (r *Runtime) groupStylePrompt(event MessageEvent, cfg BotConfig) string {
 		return ""
 	}
 	style, found := r.cachedGroupStyle(event)
-	if !found || strings.TrimSpace(style.Text) == "" {
+	if !found || style.Disabled || strings.TrimSpace(style.Text) == "" {
 		return ""
 	}
 	return cfg.promptf(promptGroupStyleSpec, map[string]string{"style": strings.TrimSpace(style.Text)})
@@ -331,22 +338,50 @@ func (r *Runtime) GroupStyleForProfile(ctx context.Context, profileID, groupID s
 	return store.GroupStyle(ctx, profileID, groupID)
 }
 
-// SaveGroupStyleForProfile 保存主人手动改的风格笔记。正文为空表示不要手动这份了：删掉，
-// 交回自动学习。
+// SaveGroupStyleForProfile 保存主人手动改的风格笔记。正文为空表示不要手动这份了：交回
+// 自动学习。本群关没关风格不受影响。
 func (r *Runtime) SaveGroupStyleForProfile(ctx context.Context, profileID, groupID, text string) (GroupStyle, bool, error) {
 	store := r.groupStyleStore()
 	if store == nil {
 		return GroupStyle{}, false, errors.New("风格学习的存储没有配置")
 	}
+	previous, _, err := store.GroupStyle(ctx, profileID, groupID)
+	if err != nil {
+		return GroupStyle{}, false, err
+	}
 	text = cleanGroupStyleText(text)
-	if text == "" {
-		if err := store.DeleteGroupStyle(ctx, profileID, groupID); err != nil {
+	style := GroupStyle{ProfileID: profileID, GroupID: groupID, Text: text, Manual: text != "", Disabled: previous.Disabled, UpdatedAt: time.Now()}
+	return r.storeGroupStyle(ctx, store, style)
+}
+
+// SetGroupStyleEnabledForProfile 单独打开或关掉一个群的风格。关掉时不学、不带进回复，
+// 写好的笔记留着；打开后接着用，也不重置自动学习的计时。
+func (r *Runtime) SetGroupStyleEnabledForProfile(ctx context.Context, profileID, groupID string, enabled bool) (GroupStyle, bool, error) {
+	store := r.groupStyleStore()
+	if store == nil {
+		return GroupStyle{}, false, errors.New("风格学习的存储没有配置")
+	}
+	style, found, err := store.GroupStyle(ctx, profileID, groupID)
+	if err != nil {
+		return GroupStyle{}, false, err
+	}
+	if !found {
+		style = GroupStyle{UpdatedAt: time.Now()}
+	}
+	style.ProfileID, style.GroupID, style.Disabled = profileID, groupID, !enabled
+	return r.storeGroupStyle(ctx, store, style)
+}
+
+// storeGroupStyle 写回一个群的风格记录。没有正文也没关掉的记录没有存在的意义：删掉，
+// 这个群回到「还没学到」，等自动学习。
+func (r *Runtime) storeGroupStyle(ctx context.Context, store GroupStyleStore, style GroupStyle) (GroupStyle, bool, error) {
+	if style.Text == "" && !style.Disabled {
+		if err := store.DeleteGroupStyle(ctx, style.ProfileID, style.GroupID); err != nil {
 			return GroupStyle{}, false, err
 		}
-		r.rememberGroupStyle(GroupStyle{ProfileID: profileID, GroupID: groupID}, false)
+		r.rememberGroupStyle(GroupStyle{ProfileID: style.ProfileID, GroupID: style.GroupID}, false)
 		return GroupStyle{}, false, nil
 	}
-	style := GroupStyle{ProfileID: profileID, GroupID: groupID, Text: text, Manual: true, UpdatedAt: time.Now()}
 	if err := store.SaveGroupStyle(ctx, style); err != nil {
 		return GroupStyle{}, false, err
 	}

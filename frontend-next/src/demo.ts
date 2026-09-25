@@ -1207,20 +1207,29 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
     plugins = [...plugins]; demoStatus.plugins = plugins; return json(demoPluginForProfile(plugin, profile));
   }
 
-  const styleMatch = path.match(/^\/api\/assistant\/groups\/([^/]+)\/style(\/relearn)?$/);
+  const styleMatch = path.match(/^\/api\/assistant\/groups\/([^/]+)\/style(\/relearn|\/enabled)?$/);
   if (styleMatch) {
     // 风格学习：演示站按群号记在内存里，「重新学习」给一段固定的样例笔记。
     const key = decodeURIComponent(styleMatch[1]);
     const reply = () => json({ style: demoGroupStyles.get(key), learning_enabled: true, max_runes: 400 });
-    if (styleMatch[2] && method === "POST") {
+    const current = demoGroupStyles.get(key);
+    const store = (next: import("./api").GroupStyle) => {
+      if (next.text || next.disabled) demoGroupStyles.set(key, next);
+      else demoGroupStyles.delete(key);
+    };
+    const base = { profile_id: "", group_id: key, disabled: current?.disabled, updated_at: new Date().toISOString() };
+    if (styleMatch[2] === "/relearn" && method === "POST") {
       await new Promise((resolve) => setTimeout(resolve, 800));
-      demoGroupStyles.set(key, { profile_id: "", group_id: decodeURIComponent(styleMatch[1]), text: demoLearnedStyle, manual: false, sample_count: 286, updated_at: new Date().toISOString() });
+      store({ ...base, text: demoLearnedStyle, manual: false, sample_count: 286 });
+      return reply();
+    }
+    if (styleMatch[2] === "/enabled" && method === "PUT") {
+      store({ ...(current ?? { ...base, text: "", manual: false }), disabled: !body.enabled });
       return reply();
     }
     if (method === "PUT") {
       const text = String(body.text ?? "").trim();
-      if (text) demoGroupStyles.set(key, { profile_id: "", group_id: decodeURIComponent(styleMatch[1]), text, manual: true, updated_at: new Date().toISOString() });
-      else demoGroupStyles.delete(key);
+      store({ ...base, text, manual: Boolean(text) });
       return reply();
     }
     return reply();

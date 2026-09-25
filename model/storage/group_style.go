@@ -15,7 +15,7 @@ import (
 )
 
 // 风格笔记：每个机器人、每个群一行「这个群怎么说话」。manual 标记主人手动改过，
-// 自动学习不再覆盖它。
+// 自动学习不再覆盖它；disabled 标记这个群单独关掉了风格，这时 text 可以是空的。
 //
 // 旧的表达学习按整句计数，存在 group_expressions 表里。那些计数都是从聊天里算出来的，
 // 新版不再读，这里顺手把表删掉，免得留一张没人维护的表。
@@ -25,6 +25,7 @@ CREATE TABLE IF NOT EXISTS group_styles (
   group_id TEXT NOT NULL,
   text TEXT NOT NULL,
   manual INTEGER NOT NULL DEFAULT 0,
+  disabled INTEGER NOT NULL DEFAULT 0,
   sample_count INTEGER NOT NULL DEFAULT 0,
   updated_at INTEGER NOT NULL,
   PRIMARY KEY (profile_id, group_id)
@@ -46,10 +47,10 @@ func (s *SQLiteStore) GroupStyle(ctx context.Context, profileID, groupID string)
 		return assistant.GroupStyle{}, false, nil
 	}
 	style := assistant.GroupStyle{ProfileID: strings.TrimSpace(profileID), GroupID: strings.TrimSpace(groupID)}
-	var manual int
+	var manual, disabled int
 	var updated int64
-	err := s.db.QueryRowContext(ctx, `SELECT text, manual, sample_count, updated_at FROM group_styles WHERE profile_id = ? AND group_id = ?`,
-		style.ProfileID, style.GroupID).Scan(&style.Text, &manual, &style.SampleCount, &updated)
+	err := s.db.QueryRowContext(ctx, `SELECT text, manual, disabled, sample_count, updated_at FROM group_styles WHERE profile_id = ? AND group_id = ?`,
+		style.ProfileID, style.GroupID).Scan(&style.Text, &manual, &disabled, &style.SampleCount, &updated)
 	if errors.Is(err, sql.ErrNoRows) {
 		return assistant.GroupStyle{}, false, nil
 	}
@@ -57,6 +58,7 @@ func (s *SQLiteStore) GroupStyle(ctx context.Context, profileID, groupID string)
 		return assistant.GroupStyle{}, false, err
 	}
 	style.Manual = manual != 0
+	style.Disabled = disabled != 0
 	style.UpdatedAt = time.Unix(updated, 0)
 	return style, true, nil
 }
@@ -66,23 +68,27 @@ func (s *SQLiteStore) SaveGroupStyle(ctx context.Context, style assistant.GroupS
 	if s == nil || s.db == nil {
 		return nil
 	}
-	manual := 0
+	manual, disabled := 0, 0
 	if style.Manual {
 		manual = 1
+	}
+	if style.Disabled {
+		disabled = 1
 	}
 	updated := style.UpdatedAt
 	if updated.IsZero() {
 		updated = time.Now()
 	}
 	_, err := s.db.ExecContext(ctx, `
-INSERT INTO group_styles (profile_id, group_id, text, manual, sample_count, updated_at)
-VALUES (?, ?, ?, ?, ?, ?)
+INSERT INTO group_styles (profile_id, group_id, text, manual, disabled, sample_count, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(profile_id, group_id) DO UPDATE SET
   text = excluded.text,
   manual = excluded.manual,
+  disabled = excluded.disabled,
   sample_count = excluded.sample_count,
   updated_at = excluded.updated_at
-`, strings.TrimSpace(style.ProfileID), strings.TrimSpace(style.GroupID), style.Text, manual, style.SampleCount, updated.Unix())
+`, strings.TrimSpace(style.ProfileID), strings.TrimSpace(style.GroupID), style.Text, manual, disabled, style.SampleCount, updated.Unix())
 	return err
 }
 
