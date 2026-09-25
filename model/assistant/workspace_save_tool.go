@@ -54,7 +54,8 @@ func (t *dianaSaveToWorkspaceTool) Name() string { return dianaSaveToWorkspaceTo
 func (t *dianaSaveToWorkspaceTool) Description() string {
 	return "把图片、视频、语音、PDF、压缩包这类二进制文件原样存进 Agent 工作目录。source=chat 按 message_id 取当前会话里某条消息的媒体（包括你自己发出去的生成图），" +
 		"source=url 下载公网文件，source=mcp 按 media_id 存 MCP 工具返回的媒体。按内容认类型并纠正扩展名，返回实际保存的 path、大小、类型和图片宽高；" +
-		"没指定 path 时聊天媒体和网址存到 " + agent.WorkspaceDownloadsDir + "/，机器人自己产出的存到 " + agent.WorkspaceOutputsDir + "/，同名不覆盖、自动加序号。" +
+		"没指定 path 时聊天媒体和网址存到 " + agent.WorkspaceDownloadsDir + "/（7 天后清理），机器人自己产出的存到 " + agent.WorkspaceOutputsDir + "/（30 天后清理），同名不覆盖、自动加序号。" +
+		"主人说存下来、留着、别过期、放持久目录时传 keep=true，存进本机器人的长期保存区 " + agent.WorkspaceKeepDir + "/（不自动清理，每台机器人上限 2 GB，超了会拒绝），并用 description 写一句这是什么；没这么说就用默认目录。" +
 		"文本文件用 write_file；存好后要发给用户用 send_attachment，要整理用 manage_files。仅主人可用。"
 }
 
@@ -65,8 +66,10 @@ func (t *dianaSaveToWorkspaceTool) InputSchema() map[string]any {
 		"media_index": toolIntParam("source=chat 时取消息里第几个媒体（图片、视频、语音、文件按出现顺序统一编号，从 1 开始）；消息里只有一个媒体时可省略。", 1, 64),
 		"url":         toolStringParam("source=url 必填：公网 HTTP(S) 文件直链。"),
 		"media_id":    toolStringParam("source=mcp 必填：MCP 结果里的 media_id（mcpm_ 开头）。"),
-		"path":        toolStringParam("可选：工作目录内的相对保存路径。以 / 结尾表示目录，文件名自动取；给了文件名时扩展名仍按内容纠正。"),
+		"path":        toolStringParam("可选：工作目录内的相对保存路径。以 / 结尾表示目录，文件名自动取；给了文件名时扩展名仍按内容纠正。keep=true 时是长期区内的相对路径。"),
 		"overwrite":   toolBoolParam("可选：目标文件已存在时覆盖，默认 false（自动改名加序号）。"),
+		"keep":        toolBoolParam("可选：存进长期保存区 " + agent.WorkspaceKeepDir + "/，不会被自动清理。主人要求存下来、留着、别过期、放持久目录时传 true。"),
+		"description": toolStringParam("keep=true 时写一句这是什么（例如「群活动海报 9 月版」），记进长期区索引，以后靠它认出这个文件。"),
 	})
 }
 
@@ -90,6 +93,7 @@ type saveToWorkspaceResult struct {
 	Width              int    `json:"width,omitempty"`
 	Height             int    `json:"height,omitempty"`
 	ExtensionCorrected string `json:"extension_corrected,omitempty"`
+	Area               string `json:"area,omitempty"`
 	Message            string `json:"message"`
 }
 
@@ -122,7 +126,22 @@ func (t *dianaSaveToWorkspaceTool) Run(ctx context.Context, input map[string]any
 	if t.now != nil {
 		now = t.now
 	}
-	result, err := t.runtime.saveWorkspacePayload(t.event, payload, configToolString(input, "path"), toolInputBool(input, "overwrite"), now())
+	var keep *agent.KeepMeta
+	if toolInputBool(input, "keep") || workspacePathInKeep(configToolString(input, "path")) {
+		keep = &agent.KeepMeta{
+			BotID:       firstNonEmpty(t.event.ProfileID, t.runtime.effectiveConfigForEvent(t.event).ID),
+			Description: configToolString(input, "description"),
+			SavedBy:     t.event.UserID,
+			Now:         now(),
+		}
+		switch source {
+		case saveSourceChat:
+			keep.SourceMessageID = strings.TrimSpace(configToolString(input, "message_id"))
+		case saveSourceURL:
+			keep.SourceURL = normalizedHTTPURL(configToolString(input, "url"))
+		}
+	}
+	result, err := t.runtime.saveWorkspacePayloadWith(t.event, payload, configToolString(input, "path"), toolInputBool(input, "overwrite"), now(), keep)
 	if err != nil {
 		return "", err
 	}
@@ -137,6 +156,18 @@ func (t *dianaSaveToWorkspaceTool) Run(ctx context.Context, input map[string]any
 // saveWorkspacePayload 给一份字节定下保存路径并落盘：按内容认类型、纠正扩展名，
 // 没给路径时按来源选默认目录。生图落盘也走这里。
 func (r *Runtime) saveWorkspacePayload(event MessageEvent, payload workspaceMediaPayload, target string, overwrite bool, now time.Time) (saveToWorkspaceResult, error) {
+	return r.saveWorkspacePayloadWith(event, payload, target, overwrite, now, nil)
+}
+
+// workspacePathInKeep 报告模型给的保存路径是不是写在长期区里。
+func workspacePathInKeep(target string) bool {
+	target = strings.TrimPrefix(strings.TrimSpace(strings.ReplaceAll(target, "\\", "/")), "./")
+	return target == agent.WorkspaceKeepDir || target == agent.WorkspaceKeepDir+"/" || strings.HasPrefix(target, agent.WorkspaceKeepDir+"/")
+}
+
+// saveWorkspacePayloadWith 和 saveWorkspacePayload 一样，keep 非空时存进这台机器人的
+// 长期保存区：path 是长期区内的相对路径，留空就放在长期区根下。
+func (r *Runtime) saveWorkspacePayloadWith(event MessageEvent, payload workspaceMediaPayload, target string, overwrite bool, now time.Time, keep *agent.KeepMeta) (saveToWorkspaceResult, error) {
 	if len(payload.data) == 0 {
 		return saveToWorkspaceResult{}, fmt.Errorf("取到的内容是空的，没有可保存的东西")
 	}
@@ -145,6 +176,16 @@ func (r *Runtime) saveWorkspacePayload(event MessageEvent, payload workspaceMedi
 	}
 	mediaType := agent.SniffMediaType(payload.data)
 	target = strings.TrimSpace(strings.ReplaceAll(target, "\\", "/"))
+	if keep != nil {
+		area := agent.KeepAreaPath(keep.BotID)
+		if area == "" {
+			return saveToWorkspaceResult{}, fmt.Errorf("这台机器人没有 ID，用不了长期保存区；改存到 %s/", agent.WorkspaceDownloadsDir)
+		}
+		// 模型可能写 keep/a.png、keep/<机器人>/a.png 或者只写 a.png，统一落到本机器人的长期区。
+		if !workspacePathInKeep(target) {
+			target = area + "/" + strings.TrimPrefix(target, "/")
+		}
+	}
 	dir, name := "", ""
 	switch {
 	case target == "":
@@ -167,7 +208,7 @@ func (r *Runtime) saveWorkspacePayload(event MessageEvent, payload workspaceMedi
 	if dir != "" && dir != "." {
 		rel = dir + "/" + name
 	}
-	saved, err := agent.WriteWorkspaceBytes(r.agentWorkspaceConfig(event), rel, payload.data, agent.WorkspaceWriteOptions{Overwrite: overwrite})
+	saved, err := agent.WriteWorkspaceBytes(r.agentWorkspaceConfig(event), rel, payload.data, agent.WorkspaceWriteOptions{Overwrite: overwrite, Keep: keep})
 	if err != nil {
 		return saveToWorkspaceResult{}, err
 	}
@@ -180,6 +221,9 @@ func (r *Runtime) saveWorkspacePayload(event MessageEvent, payload workspaceMedi
 	}
 	if requested != "" && requested != name {
 		result.ExtensionCorrected = requested + " → " + name
+	}
+	if keep != nil {
+		result.Area = "长期保存区，不会自动清理；删除用 manage_files delete（进回收站）"
 	}
 	if strings.HasPrefix(mediaType, "image/") {
 		if width, height, ok := agent.ImageDimensions(payload.data); ok {

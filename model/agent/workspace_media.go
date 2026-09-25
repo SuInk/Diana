@@ -17,6 +17,7 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"time"
 
 	_ "golang.org/x/image/bmp"
 	_ "golang.org/x/image/webp"
@@ -256,6 +257,9 @@ func looksBinaryContent(head []byte) bool {
 type WorkspaceWriteOptions struct {
 	// Overwrite 为 true 时覆盖同名文件；否则在文件名后面加 -2、-3……另起一个名字。
 	Overwrite bool
+	// Keep 是写进长期保存区 keep/ 时要记进索引的信息。rel 落在 keep/ 下而它为空时
+	// 拒绝写入：长期区的东西不会被自动清理，必须知道是哪台机器人、存的是什么。
+	Keep *KeepMeta
 }
 
 // WriteWorkspaceBytes 把一份字节写进工作目录内的 rel，返回实际写入的相对路径。
@@ -278,6 +282,31 @@ func WriteWorkspaceBytes(cfg Config, rel string, data []byte, opts WorkspaceWrit
 		return "", err
 	}
 	protected := agentProtectedFiles(cfg)
+	keepDir := ""
+	if _, inKeep := keepLocation(rel); inKeep {
+		if opts.Keep == nil || KeepBotDir(opts.Keep.BotID) == "" {
+			return "", fmt.Errorf("%s 在长期保存区 %s/ 里，要用 save_to_workspace 的 keep=true 存进去", rel, WorkspaceKeepDir)
+		}
+		scope := keepScope{botDir: KeepBotDir(opts.Keep.BotID)}
+		normalized, err := scope.normalizeDest(path.Clean(rel))
+		if err != nil {
+			return "", err
+		}
+		rel, keepDir = normalized, scope.botDir
+		// 配额检查和写入之间不能插进另一次保存，否则两次各自都没超、合起来超了。
+		lock := keepAreaLock(root, keepDir)
+		lock.Lock()
+		defer lock.Unlock()
+		var replacing int64
+		if opts.Overwrite {
+			if info, err := os.Lstat(filepath.Join(root, filepath.FromSlash(rel))); err == nil && info.Mode().IsRegular() {
+				replacing = info.Size()
+			}
+		}
+		if err := checkKeepQuota(root, keepDir, int64(len(data)), replacing); err != nil {
+			return "", err
+		}
+	}
 	dir := path.Dir(rel)
 	base := path.Base(rel)
 	ext := path.Ext(base)
@@ -331,6 +360,19 @@ func WriteWorkspaceBytes(cfg Config, rel string, data []byte, opts WorkspaceWrit
 		if err := file.Close(); err != nil {
 			_ = handle.Remove(local)
 			return "", err
+		}
+		if keepDir != "" {
+			now := opts.Keep.Now
+			if now.IsZero() {
+				now = time.Now()
+			}
+			// 索引是给模型和界面认文件用的，写失败不该让一份已经落盘的文件报「没存上」；
+			// 界面按磁盘上的真实文件列，缺说明的照样看得到。
+			_ = upsertKeepEntry(root, KeepEntry{
+				Path: candidate, Description: opts.Keep.Description, SourceMessageID: opts.Keep.SourceMessageID,
+				SourceURL: opts.Keep.SourceURL, SavedBy: opts.Keep.SavedBy, SavedAt: now,
+				Size: int64(len(data)), MIME: SniffMediaType(data),
+			})
 		}
 		return candidate, nil
 	}

@@ -36,9 +36,12 @@ type StorageUsageResponse struct {
 	DianaBytes       uint64                 `json:"diana_bytes"`
 	DianaFiles       int                    `json:"diana_files"`
 	Categories       []StorageUsageCategory `json:"categories"`
-	ScannedAt        *time.Time             `json:"scanned_at,omitempty"`
-	Scanning         bool                   `json:"scanning"`
-	DiskUnavailable  string                 `json:"disk_unavailable,omitempty"`
+	// Directories 按数据目录的顶层目录拆，工作目录再按分区拆一层：光看文件类型分不清
+	// 几个 G 的图片是历史媒体原件、下载缓存还是工作目录里攒下的。
+	Directories     []StorageUsageCategory `json:"directories"`
+	ScannedAt       *time.Time             `json:"scanned_at,omitempty"`
+	Scanning        bool                   `json:"scanning"`
+	DiskUnavailable string                 `json:"disk_unavailable,omitempty"`
 }
 
 type StorageUsageHandler struct {
@@ -62,7 +65,7 @@ func collectStorageUsage(dir string, now time.Time) StorageUsageResponse {
 	if now.IsZero() {
 		now = time.Now()
 	}
-	response := StorageUsageResponse{CollectedAt: now, Path: dir, Categories: []StorageUsageCategory{}}
+	response := StorageUsageResponse{CollectedAt: now, Path: dir, Categories: []StorageUsageCategory{}, Directories: []StorageUsageCategory{}}
 	if total, used, free, err := hostinfo.StorageUsage(dir); err == nil {
 		response.DiskTotalBytes = total
 		response.DiskUsedBytes = used
@@ -98,6 +101,17 @@ func collectStorageUsage(dir string, now time.Time) StorageUsageResponse {
 	// 两次刷新之间扇区来回跳。
 	sort.SliceStable(response.Categories, func(i, j int) bool {
 		return response.Categories[i].Bytes > response.Categories[j].Bytes
+	})
+	for key, bytes := range breakdown.dirBytes {
+		response.Directories = append(response.Directories, StorageUsageCategory{
+			Key: key, Label: storageDirectoryLabel(key), Bytes: bytes, Files: breakdown.dirFiles[key],
+		})
+	}
+	sort.Slice(response.Directories, func(i, j int) bool {
+		if response.Directories[i].Bytes != response.Directories[j].Bytes {
+			return response.Directories[i].Bytes > response.Directories[j].Bytes
+		}
+		return response.Directories[i].Key < response.Directories[j].Key
 	})
 	return response
 }
@@ -144,6 +158,8 @@ type storageBreakdown struct {
 	files      int
 	bytesByKey map[string]uint64
 	filesByKey map[string]int
+	dirBytes   map[string]uint64
+	dirFiles   map[string]int
 	measuredAt time.Time
 	scanning   bool
 }
@@ -180,6 +196,8 @@ func dataDirectoryBreakdown(dir string) storageBreakdown {
 			entry.files = measured.files
 			entry.bytesByKey = measured.bytesByKey
 			entry.filesByKey = measured.filesByKey
+			entry.dirBytes = measured.dirBytes
+			entry.dirFiles = measured.dirFiles
 			entry.measuredAt = time.Now()
 			entry.scanning = false
 			storageBreakdownCache.Unlock()
@@ -190,6 +208,8 @@ func dataDirectoryBreakdown(dir string) storageBreakdown {
 		files:      entry.files,
 		bytesByKey: map[string]uint64{},
 		filesByKey: map[string]int{},
+		dirBytes:   map[string]uint64{},
+		dirFiles:   map[string]int{},
 		measuredAt: entry.measuredAt,
 		scanning:   entry.scanning,
 	}
@@ -199,11 +219,17 @@ func dataDirectoryBreakdown(dir string) storageBreakdown {
 	for key, files := range entry.filesByKey {
 		snapshot.filesByKey[key] = files
 	}
+	for key, bytes := range entry.dirBytes {
+		snapshot.dirBytes[key] = bytes
+	}
+	for key, files := range entry.dirFiles {
+		snapshot.dirFiles[key] = files
+	}
 	return snapshot
 }
 
 func walkDirectoryBreakdown(dir string) storageBreakdown {
-	result := storageBreakdown{bytesByKey: map[string]uint64{}, filesByKey: map[string]int{}}
+	result := storageBreakdown{bytesByKey: map[string]uint64{}, filesByKey: map[string]int{}, dirBytes: map[string]uint64{}, dirFiles: map[string]int{}}
 	_ = filepath.WalkDir(dir, func(path string, entry os.DirEntry, err error) error {
 		// 权限不足或文件正好被删掉都不该让整次统计失败，跳过继续走。
 		if err != nil || entry.IsDir() {
@@ -219,7 +245,79 @@ func walkDirectoryBreakdown(dir string) storageBreakdown {
 		result.files++
 		result.bytesByKey[key] += size
 		result.filesByKey[key]++
+		if rel, err := filepath.Rel(dir, path); err == nil {
+			dirKey := storageDirectoryKey(filepath.ToSlash(rel), key)
+			result.dirBytes[dirKey] += size
+			result.dirFiles[dirKey]++
+		}
 		return nil
 	})
 	return result
+}
+
+// storageWorkspaceAreas 是工作目录下单独列出来的分区，其余的归到 workspace/other。
+var storageWorkspaceAreas = map[string]string{
+	"keep":           "工作目录 · 长期保存",
+	"downloads":      "工作目录 · 下载",
+	"outputs":        "工作目录 · 产出",
+	"tmp":            "工作目录 · 临时文件",
+	".trash":         "工作目录 · 回收站",
+	".agent-browser": "工作目录 · 浏览器截图",
+	"coding":         "工作目录 · 编码工作区",
+	"coding-runtime": "工作目录 · 编码代理运行时",
+	"skills":         "工作目录 · Skills",
+	".agents":        "工作目录 · Skills",
+	".diana":         "工作目录 · 运行时状态",
+}
+
+var storageDirectoryLabels = map[string]string{
+	"workspace/other": "工作目录 · 其他",
+	"history-media":   "历史媒体原件",
+	"download-cache":  "下载缓存",
+	"media":           "媒体文件",
+	"manual-backups":  "手动备份",
+	"browser-box":     "内置浏览器",
+	"browser":         "浏览器数据",
+	"plugin-sources":  "插件源码",
+	".diana-updates":  "更新包",
+	"database":        "数据库",
+	"files":           "数据目录根下的其他文件",
+}
+
+// storageDirectoryKey 把数据目录内的相对路径归到一个目录键：顶层目录名，工作目录
+// 再细分到分区；顶层散落的文件按是不是数据库分两类。
+func storageDirectoryKey(rel, category string) string {
+	top, rest, nested := strings.Cut(rel, "/")
+	if !nested {
+		if category == "database" {
+			return "database"
+		}
+		return "files"
+	}
+	if top != "workspace" {
+		return top
+	}
+	area, _, nested := strings.Cut(rest, "/")
+	if !nested {
+		return "workspace/other"
+	}
+	if _, ok := storageWorkspaceAreas[area]; ok {
+		if area == ".agents" {
+			area = "skills"
+		}
+		return "workspace/" + area
+	}
+	return "workspace/other"
+}
+
+func storageDirectoryLabel(key string) string {
+	if area, ok := strings.CutPrefix(key, "workspace/"); ok {
+		if label, ok := storageWorkspaceAreas[area]; ok {
+			return label
+		}
+	}
+	if label, ok := storageDirectoryLabels[key]; ok {
+		return label
+	}
+	return key
 }

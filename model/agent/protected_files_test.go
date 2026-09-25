@@ -24,6 +24,12 @@ func TestFileToolsRefuseRuntimeCredentialFiles(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(workDir, ".extension-overrides.json"), []byte(`{"bot-a":{"mcp:gitea":true}}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.MkdirAll(DianaStateDir(workDir), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(DianaStateDir(workDir), "extension-audience.json"), []byte(`{"bot-a":{}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(filepath.Join(workDir, "notes.txt"), []byte("ordinary file"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -41,7 +47,7 @@ func TestFileToolsRefuseRuntimeCredentialFiles(t *testing.T) {
 		return tool.Run(ctx, input)
 	}
 
-	for _, target := range []string{".mcp.json", ".extension-overrides.json"} {
+	for _, target := range []string{".mcp.json", ".extension-overrides.json", ".diana/extension-audience.json", ".diana/keep-index/bot-a.json"} {
 		out, err := run("read_file", map[string]any{"path": target})
 		if err == nil {
 			t.Fatalf("read_file 读出了 %s: %s", target, out)
@@ -70,7 +76,7 @@ func TestFileToolsRefuseRuntimeCredentialFiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(listed, ".mcp.json") {
+	if strings.Contains(listed, ".mcp.json") || strings.Contains(listed, DianaStateDirName) {
 		t.Fatalf("list_files 列出了凭据文件: %s", listed)
 	}
 	// 普通文件不受影响，别把工作目录整个锁死。
@@ -126,7 +132,7 @@ func TestGlobalExtensionPathsMovesMCPConfigOutOfWorkspace(t *testing.T) {
 	}
 	// 老装机的 .extension-paths.json 把位置钉在工作目录里。
 	pinned := `{"skill_roots":[],"mcp_config_path":` + strconvQuote(legacy) + `}`
-	if err := os.WriteFile(filepath.Join(workDir, extensionPathsFileName), []byte(pinned), 0o600); err != nil {
+	if err := os.WriteFile(extensionPathsState.legacyPath(workDir), []byte(pinned), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -151,6 +157,13 @@ func TestGlobalExtensionPathsMovesMCPConfigOutOfWorkspace(t *testing.T) {
 	}
 	if again.MCPConfigPath != cfg.MCPConfigPath {
 		t.Fatalf("位置没钉住: %s vs %s", again.MCPConfigPath, cfg.MCPConfigPath)
+	}
+	// 重写位置时顺手搬进 .diana/，根下那份老文件不再留着。
+	if _, err := os.Stat(extensionPathsState.legacyPath(workDir)); !os.IsNotExist(err) {
+		t.Fatalf("根下的 .extension-paths.json 还在: %v", err)
+	}
+	if _, err := os.Stat(extensionPathsState.path(workDir)); err != nil {
+		t.Fatalf(".diana/extension-paths.json 没写出来: %v", err)
 	}
 }
 

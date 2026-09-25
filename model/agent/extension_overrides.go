@@ -3,7 +3,6 @@ package agent
 import (
 	"encoding/json"
 	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 )
@@ -122,7 +121,7 @@ func SaveResidencyList(root, profile string, ids []string) error {
 	if err != nil {
 		return err
 	}
-	return saveExtensionFile(extensionOverridePath(root), data)
+	return extensionOverridesState.save(root, data)
 }
 
 // RecommendedResidencyIDs 把内置推荐名单（工具名）换算成名单里的 ID。第一次就地
@@ -189,10 +188,10 @@ func MemberAllowedExtensionIDs(values map[string]bool) []string {
 }
 
 func extensionOverridePath(root string) string {
-	return filepath.Join(root, ".extension-overrides.json")
+	return extensionOverridesState.path(root)
 }
 func loadExtensionOverrides(root string) (map[string]map[string]bool, error) {
-	data, err := os.ReadFile(extensionOverridePath(root))
+	data, err := extensionOverridesState.read(root)
 	if os.IsNotExist(err) {
 		return map[string]map[string]bool{}, nil
 	}
@@ -237,7 +236,7 @@ func clearExtensionOverride(root, profile, id string) error {
 	if err != nil {
 		return err
 	}
-	return saveExtensionFile(extensionOverridePath(root), data)
+	return extensionOverridesState.save(root, data)
 }
 
 func saveExtensionOverride(root, profile, id string, enabled bool) error {
@@ -256,7 +255,7 @@ func saveExtensionOverride(root, profile, id string, enabled bool) error {
 	if err != nil {
 		return err
 	}
-	return saveExtensionFile(extensionOverridePath(root), data)
+	return extensionOverridesState.save(root, data)
 }
 
 // Filter only this request view. Other robots retain their shared MCP sessions.
@@ -394,7 +393,7 @@ func migrateLegacyMCPDisable(root string, servers map[string]mcpServerConfig) er
 	if err != nil {
 		return err
 	}
-	return saveExtensionFile(extensionOverridePath(root), data)
+	return extensionOverridesState.save(root, data)
 }
 
 // mcpBotOptIns 列出至少有一台机器人单独打开的 MCP 服务 ID。全局关着的服务靠它决定
@@ -442,5 +441,5 @@ func clearBotEnabledOverrides(root, id string) error {
 	if err != nil {
 		return err
 	}
-	return saveExtensionFile(extensionOverridePath(root), data)
+	return extensionOverridesState.save(root, data)
 }

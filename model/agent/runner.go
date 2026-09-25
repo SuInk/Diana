@@ -1155,6 +1155,11 @@ func (r *Runner) systemPrompt() string {
 	if hasAnyTool("write_file", "save_to_workspace", ManageFilesToolName, "send_attachment") {
 		rules = append(rules, "- 说文件「存好了」「发过去了」之前，本轮必须有工具调用真的返回了它：存文件要有 write_file、save_to_workspace 或 manage_files 返回的路径，发文件要有 send_attachment 这类发送工具返回的成功结果，回复里报的路径以工具返回的为准。图片、音视频、PDF、压缩包这类二进制文件用 save_to_workspace 存，不要用 write_file 写一份文字描述冒充；没有能做到的工具就如实说做不到。")
 	}
+	// 工作目录以前没有分区，模型把文件都丢在根下；主人要「放持久目录」时也没有地方
+	// 可去。约定写进规则，清理任务按同一套目录名清。
+	if hasAnyTool("write_file", "save_to_workspace") {
+		rules = append(rules, "- 工作目录分区存放，不要把文件直接写在根下："+WorkspaceTmpDir+"/ 放草稿和中间文件（1 天后清理），"+WorkspaceDownloadsDir+"/ 放下载和从聊天里存下的文件（7 天），"+WorkspaceOutputsDir+"/ 放你产出给用户的东西（30 天），"+WorkspaceKeepDir+"/ 是本机器人的长期保存区（不清理）。主人说存下来、留着、别过期、放持久目录时才放进 "+WorkspaceKeepDir+"/（save_to_workspace 传 keep=true，或 manage_files 挪进去），并写一句 description 说明是什么；其他情况用会自动清理的目录。")
+	}
 	rules = append(rules, "- 已经足够回答时必须调用 agent_finalize 结束本轮。")
 	sections := []string{
 		"你是 Diana 的内置 Agent。需要执行外部操作时调用工具，观察结果后再给出最终答复。",
