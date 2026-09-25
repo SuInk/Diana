@@ -225,7 +225,7 @@ func (c *mcpMediaCollector) resourceLink(link *mcpsdk.ResourceLink) string {
 
 // textPaths 在文本结果里找本机文件路径（很多服务把图存到磁盘、只回一句「已保存到
 // /tmp/x.png」），读进来暂存。只认这次调用期间新生成的媒体文件：否则群成员让一个
-// 会回显输入的 MCP 念出「/Users/xx/Pictures/私照.jpg」，就能把磁盘上早就有的文件要走。
+// 会回显输入的 MCP 念出「~/Pictures/私照.jpg」，就能把磁盘上早就有的文件要走。
 func (c *mcpMediaCollector) textPaths(text string) []string {
 	if c == nil || c.localDir == "" {
 		return nil
