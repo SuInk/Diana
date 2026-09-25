@@ -295,17 +295,7 @@ var promptParticipationRelevanceTrueSpec = registerPrompt(PromptSpec{
 	Default: participationRelevanceTrue,
 })
 
-const participationRelevanceFalse = `群友彼此聊天；只是提到机器人会的话题，没有在叫它；群友之间在讨论机器人本身——它的机制、表现、配置、刚才那句答得对不对——没有点名或直接向它提问的，同样算群友彼此聊天，哪怕话题正是它上一条发言；问某个具体群友本人才知道的事（去不去、做没做、怎么想、在哪、什么时候），或指定了机器人以外的人来回答——「@某人 Iwasawa 理论是什么」这种谁都能答的知识问题不算指定别人，按有没有在叫机器人判断。拿不准就填 false，交给闲聊判断。`
-
-// participationDirectedThreshold 是判断模型判「在跟机器人说话」为是的最低概率。
-//
-// 这道题的语义是「是否」，拿不准算否——文本模型那边写在判据里（「拿不准就填 false」），
-// 判断模型只会给概率，「拿不准」就是 0.5 上下，得由这个数把它切到否那边。数字来自
-// 三天线上日志里 1625 次判断：判是的 132 次里，0.5 到 0.69 占 92 次，抽出来一半以上
-// 不是在叫它（@ 别人的、群友讨论它的、对另一台机器人说的）；0.7 到 0.79 的 19 次
-// 几乎全对，0.8 以上的 21 次全对；判否的最高只到 0.49。0.7 落在两堆之间的空档上，
-// 同一类消息不会这次过、下次不过。
-const participationDirectedThreshold = 0.7
+const participationRelevanceFalse = `群友彼此聊天；只是提到机器人会的话题，没有在叫它；问某个具体群友本人才知道的事（去不去、做没做、怎么想、在哪、什么时候），或指定了机器人以外的人来回答——「@某人 Iwasawa 理论是什么」这种谁都能答的知识问题不算指定别人，按有没有在叫机器人判断。拿不准就填 false，交给闲聊判断。`
 
 var promptParticipationRelevanceFalseSpec = registerPrompt(PromptSpec{
 	Key:     "routing.participation.relevance_false",

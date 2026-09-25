@@ -24,7 +24,6 @@ func participationDecisionSpec(overrides PromptOverrides) *llm.DecisionSpec {
 			Instructions:  "当前消息是不是明确在跟机器人说话。\n" + overrides.text(promptParticipationRelevanceNoteSpec) + "\n" + overrides.text(promptParticipationSharedNoteSpec),
 			TrueCriteria:  overrides.text(promptParticipationRelevanceTrueSpec),
 			FalseCriteria: overrides.text(promptParticipationRelevanceFalseSpec),
-			Threshold:     participationDirectedThreshold,
 			Path:          "relevance.directed",
 			ReasonPath:    "relevance.reason",
 		},
@@ -79,9 +78,8 @@ func proactiveReplyDecisionSpec(candidates []proactiveReplyCandidate, overrides 
 			Label:        "在跟机器人说话",
 			Instructions: "当前消息是不是明确在跟机器人说话。",
 			TrueCriteria: overrides.text(promptParticipationRelevanceTrueSpec),
-			// 旧契约里这一项和评分契约的 relevance 问的是同一件事，判据、覆盖和阈值都共用一份。
+			// 旧契约里这一项和评分契约的 relevance 问的是同一件事，判据和覆盖也共用一份。
 			FalseCriteria: overrides.text(promptParticipationRelevanceFalseSpec),
-			Threshold:     participationDirectedThreshold,
 			Path:          "directed_at_bot",
 		},
 		{

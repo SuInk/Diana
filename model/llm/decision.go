@@ -44,11 +44,6 @@ type DecisionQuestion struct {
 	// noul
 	TrueCriteria  string
 	FalseCriteria string
-	// Threshold 是 noul 判「是」的最低概率，零值按 0.5。判断模型对拿不准的题给的
-	// 就是 0.5 上下——线上「在跟机器人说话」判是的里七成落在 0.5 到 0.69——按 0.5
-	// 切，拿不准的一半会被当成确定的是。调用方把这道题的语义定成「拿不准算否」时，
-	// 把刀挪到两堆概率之间的空档上。
-	Threshold float64
 	// choice
 	Options []DecisionOption
 	// EmptyOption 指定一个表示「没有」的选项，选中它时写进输出的是空字符串。
@@ -97,9 +92,6 @@ func (s DecisionSpec) Validate() error {
 		seen[key] = true
 		switch q.Kind {
 		case DecisionNoul:
-			if q.Threshold < 0 || q.Threshold >= 1 {
-				return fmt.Errorf("llm: decision question %q threshold %v must stay within [0, 1)", key, q.Threshold)
-			}
 		case DecisionChoice:
 			if len(q.Options) < 2 || len(q.Options) > 255 {
 				return fmt.Errorf("llm: decision question %q needs 2 to 255 options", key)
@@ -116,13 +108,6 @@ func (s DecisionSpec) Validate() error {
 		}
 	}
 	return nil
-}
-
-func (q DecisionQuestion) noulThreshold() float64 {
-	if q.Threshold > 0 {
-		return q.Threshold
-	}
-	return 0.5
 }
 
 // RenderDecisionAnswers 把答案按 Path 摆回调用方期待的 JSON 对象。
@@ -157,7 +142,7 @@ func (s DecisionSpec) applyAnswer(root map[string]any, q DecisionQuestion, answe
 	var reason string
 	switch q.Kind {
 	case DecisionNoul:
-		value := answer.Noul >= q.noulThreshold()
+		value := answer.Noul >= 0.5
 		confidence = answer.Noul
 		if !value {
 			confidence = 1 - answer.Noul

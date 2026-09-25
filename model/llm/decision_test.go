@@ -5,7 +5,6 @@ package llm
 
 import (
 	"encoding/json"
-	"strings"
 	"testing"
 )
 
@@ -143,43 +142,5 @@ func TestDecisionSpecValidate(t *testing.T) {
 		if err := spec.Validate(); err == nil {
 			t.Fatalf("%s: expected validation to fail", name)
 		}
-	}
-}
-
-// TestRenderDecisionAnswersNoulHonoursThreshold 阈值抬到 0.7 后，0.6 这种「拿不准」
-// 要落到否那边；零值仍按 0.5 切，别的题目不受影响。
-func TestRenderDecisionAnswersNoulHonoursThreshold(t *testing.T) {
-	spec := DecisionSpec{Questions: []DecisionQuestion{
-		{Key: "strict", Kind: DecisionNoul, Path: "strict", Threshold: 0.7, ReasonPath: "strict_reason"},
-		{Key: "plain", Kind: DecisionNoul, Path: "plain"},
-	}}
-	if err := spec.Validate(); err != nil {
-		t.Fatalf("spec is invalid: %v", err)
-	}
-	raw, err := spec.RenderDecisionAnswers(map[string]DecisionAnswer{
-		"strict": {Kind: DecisionNoul, Noul: 0.6},
-		"plain":  {Kind: DecisionNoul, Noul: 0.6},
-	})
-	if err != nil {
-		t.Fatalf("render failed: %v", err)
-	}
-	var decoded struct {
-		Strict       bool   `json:"strict"`
-		StrictReason string `json:"strict_reason"`
-		Plain        bool   `json:"plain"`
-	}
-	if err := json.Unmarshal([]byte(raw), &decoded); err != nil {
-		t.Fatalf("rendered output is not valid JSON: %v (%s)", err, raw)
-	}
-	if decoded.Strict || !decoded.Plain {
-		t.Fatalf("expected strict=false and plain=true at 0.6, got %s", raw)
-	}
-	// 理由里仍记原始概率，复盘时看得出这一条是差一点还是差很多。
-	if !strings.Contains(decoded.StrictReason, "0.60") {
-		t.Fatalf("reason should keep the raw probability, got %q", decoded.StrictReason)
-	}
-	bad := DecisionSpec{Questions: []DecisionQuestion{{Key: "a", Kind: DecisionNoul, Path: "a", Threshold: 1}}}
-	if err := bad.Validate(); err == nil {
-		t.Fatal("a threshold of 1 can never be reached and must be rejected")
 	}
 }
