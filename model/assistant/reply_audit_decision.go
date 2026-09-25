@@ -122,24 +122,28 @@ func replyAuditDecisionSpec(need replyAuditNeed) *llm.DecisionSpec {
 				Path:          "reply_loop_automated_ai",
 			},
 			llm.DecisionQuestion{
-				Key:           "reply_loop_self_repeat",
-				Kind:          llm.DecisionNoul,
-				Label:         "机器人自己是不是在复读",
-				Instructions:  "看候选回复和机器人近期几条回复是不是在重复同一个意思。",
-				TrueCriteria:  "候选回复与近期自己发过的内容实质重复",
-				FalseCriteria: "有新的信息、新的回应或话题推进",
-				Path:          "reply_loop_self_repeat",
+				Key:            "reply_loop_self_repeat",
+				Kind:           llm.DecisionNoul,
+				Label:          "机器人自己是不是在复读",
+				Instructions:   "看候选回复和机器人近期几条回复是不是在重复同一个意思。判的是意思不是字，但要明显在原地打转才算，拿不准一律判否。",
+				TrueCriteria:   "候选和前面某几条是同一个意思、同一个动作，只换了措辞，每条都没有推进：反复道别、反复催睡、反复答应同一件事、反复说同一个结论",
+				FalseCriteria:  "给出了前面没有的信息、步骤、原因、数字或新的提议，哪怕用词高度重合；连续回答同一个问题、补充细节；对方追问或坚持同一个请求时回应这次追问；同类的话只说过一两次",
+				Path:           "reply_loop_self_repeat",
+				ConfidencePath: "reply_loop_self_repeat_confidence",
+				ReasonPath:     "reply_loop_reason",
 			},
 		)
 		if need.Density != nil {
 			questions = append(questions, llm.DecisionQuestion{
-				Key:           "reply_loop_purposeless",
-				Kind:          llm.DecisionNoul,
-				Label:         "这串来回有没有明确目的",
-				Instructions:  "判断这串密集来回是不是漫无目的。",
-				TrueCriteria:  "漫无目的地接戏、斗嘴、复读",
-				FalseCriteria: "下棋、解题、一起做事这类有明确目的的来回",
-				Path:          "reply_loop_purposeless",
+				Key:            "reply_loop_purposeless",
+				Kind:           llm.DecisionNoul,
+				Label:          "这串来回有没有明确目的",
+				Instructions:   "判断这串密集来回是不是漫无目的。",
+				TrueCriteria:   "漫无目的地接戏、斗嘴、复读",
+				FalseCriteria:  "下棋、解题、一起做事这类有明确目的的来回",
+				Path:           "reply_loop_purposeless",
+				ConfidencePath: "reply_loop_purposeless_confidence",
+				ReasonPath:     "reply_loop_reason",
 			})
 		}
 	}

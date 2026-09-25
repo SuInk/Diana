@@ -50,7 +50,12 @@ type proactiveReplyQualityDecision struct {
 	// ReplyLoopSelfRepeat 只看机器人自己最近几条回复：这一条是不是把它们又说了一遍。
 	ReplyLoopSelfRepeat bool
 	ReplyLoopConfidence float64
-	ReplyLoopReason     string
+	// 判断模型逐题作答，每题各有各的置信度；reply_loop_confidence 只是「没空转」那
+	// 一题的。复读和没目的若借它的数，一个 0.94 的「没空转」就会给一个五五开的
+	// 「在复读」撑腰，把直接回复整条丢掉。对话模型只写一个总置信度，这两项缺省沿用它。
+	ReplyLoopSelfRepeatConfidence  float64
+	ReplyLoopPurposelessConfidence float64
+	ReplyLoopReason                string
 	// ConversationClosing / StopRequested 是私聊收尾判断，同样搭这一次调用的车。
 	// 判据要的正好是「原消息 + 候选回复」这一对：只看对方说了什么，分不清机器人
 	// 这句是在正经答话还是又道了一次别。
@@ -71,16 +76,30 @@ func (decision proactiveReplyQualityDecision) stopCounts() bool {
 	return decision.StopRequested && decision.ClosingConfidence >= privateClosingAuditConfidence
 }
 
-// loopDecision 把审核结论里的空转部分转成计数器认识的形状。
+// loopDecision 把审核结论里的空转部分转成计数器认识的形状。计数器只认一个总
+// 置信度，所以每一项先按自己的置信度过门槛，没过的当没判；留下来的都过了门槛，
+// 总置信度取其中最低的那个。
 func (decision proactiveReplyQualityDecision) loopDecision() botReplyLoopAIDecision {
-	return botReplyLoopAIDecision{
+	loop := botReplyLoopAIDecision{
 		AutomatedAIReply: decision.ReplyLoopAutomatedAI,
-		MeaninglessLoop:  decision.ReplyLoopMeaningless,
-		PurposelessLoop:  decision.ReplyLoopPurposeless,
-		SelfRepeat:       decision.ReplyLoopSelfRepeat,
 		Confidence:       decision.ReplyLoopConfidence,
 		Reason:           decision.ReplyLoopReason,
 	}
+	confident := false
+	keep := func(flag bool, confidence float64) bool {
+		if !flag || confidence < botReplyLoopAIConfidenceThreshold || confidence > 1 {
+			return false
+		}
+		if !confident || confidence < loop.Confidence {
+			loop.Confidence = confidence
+		}
+		confident = true
+		return true
+	}
+	loop.MeaninglessLoop = keep(decision.ReplyLoopMeaningless, decision.ReplyLoopConfidence)
+	loop.PurposelessLoop = keep(decision.ReplyLoopPurposeless, decision.ReplyLoopPurposelessConfidence)
+	loop.SelfRepeat = keep(decision.ReplyLoopSelfRepeat, decision.ReplyLoopSelfRepeatConfidence)
+	return loop
 }
 
 type proactiveReplyQualityRejectedError struct {
@@ -826,7 +845,10 @@ func parseProactiveReplyQualityDecision(raw string) (proactiveReplyQualityDecisi
 		ReplyLoopPurposeless *bool    `json:"reply_loop_purposeless"`
 		ReplyLoopSelfRepeat  *bool    `json:"reply_loop_self_repeat"`
 		ReplyLoopConfidence  *float64 `json:"reply_loop_confidence"`
-		ReplyLoopReason      *string  `json:"reply_loop_reason"`
+		// 只有判断模型会写这两项，对话模型缺省时沿用 reply_loop_confidence。
+		ReplyLoopSelfRepeatConfidence  *float64 `json:"reply_loop_self_repeat_confidence"`
+		ReplyLoopPurposelessConfidence *float64 `json:"reply_loop_purposeless_confidence"`
+		ReplyLoopReason                *string  `json:"reply_loop_reason"`
 		// 收尾四项同样按缺省当「没有收尾」：提示词漂移或换模型时宁可多答一句，
 		// 也不要因为少了个字段就在私聊里集体闭嘴。
 		ConversationClosing *bool    `json:"conversation_closing"`
@@ -873,6 +895,8 @@ func parseProactiveReplyQualityDecision(raw string) (proactiveReplyQualityDecisi
 	if payload.ReplyLoopConfidence != nil && *payload.ReplyLoopConfidence >= 0 && *payload.ReplyLoopConfidence <= 1 {
 		decision.ReplyLoopConfidence = *payload.ReplyLoopConfidence
 	}
+	decision.ReplyLoopSelfRepeatConfidence = unitIntervalOr(payload.ReplyLoopSelfRepeatConfidence, decision.ReplyLoopConfidence)
+	decision.ReplyLoopPurposelessConfidence = unitIntervalOr(payload.ReplyLoopPurposelessConfidence, decision.ReplyLoopConfidence)
 	if payload.ReplyLoopReason != nil {
 		decision.ReplyLoopReason = strings.TrimSpace(*payload.ReplyLoopReason)
 	}
@@ -885,4 +909,12 @@ func parseProactiveReplyQualityDecision(raw string) (proactiveReplyQualityDecisi
 		decision.ClosingReason = strings.TrimSpace(*payload.ClosingReason)
 	}
 	return decision, true
+}
+
+// unitIntervalOr 取一个 0 到 1 之间的置信度，缺省或越界时用 fallback。
+func unitIntervalOr(value *float64, fallback float64) float64 {
+	if value == nil || *value < 0 || *value > 1 {
+		return fallback
+	}
+	return *value
 }
