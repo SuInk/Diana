@@ -850,9 +850,6 @@ func parseMemoryCandidates(raw string) ([]MemoryCandidate, error) {
 }
 
 func memoryEventEligible(cfg BotConfig, event MessageEvent, text string) bool {
-	if !boolValue(cfg.LongTermMemoryEnabled, true) {
-		return false
-	}
 	if event.Kind != EventKindGroup && event.Kind != EventKindPrivate {
 		return false
 	}

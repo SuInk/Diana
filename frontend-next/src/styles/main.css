@@ -5734,3 +5734,256 @@ a.nav-action {
     padding: 0 14px;
   }
 }
+
+/* SOUL.md 编辑器：左边人设库，右边正文。正文是这一页的主角，拿走大部分宽度；
+   窄屏下人设库叠到正文上面。 */
+.soul-editor > .card-header,
+.self-notes-card > .card-header {
+  justify-content: space-between;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.soul-editor > .card-header > div:first-child,
+.self-notes-card > .card-header > div:first-child { flex: 1 1 260px; min-width: 0; }
+
+.soul-editor { container-type: inline-size; }
+
+.soul-editor-body {
+  display: grid;
+  grid-template-columns: minmax(180px, 220px) minmax(0, 1fr);
+  gap: 18px;
+  align-items: start;
+}
+
+.soul-library {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  position: sticky;
+  top: calc(var(--topbar-height) + 12px);
+}
+
+.soul-library-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+.soul-library-head .cluster { gap: 2px; }
+
+.soul-library-title {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.soul-library-group {
+  margin-top: 6px;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+.soul-library-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.soul-library-item {
+  display: flex;
+  align-items: center;
+  border-radius: var(--radius-sm);
+  border: 1px solid transparent;
+}
+.soul-library-item:hover { background: var(--surface-2); }
+.soul-library-item.is-active {
+  background: var(--accent-soft);
+  border-color: color-mix(in srgb, var(--accent) 35%, transparent);
+}
+
+.soul-library-apply {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  padding: 6px 8px;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.soul-library-apply:disabled { cursor: not-allowed; opacity: 0.6; }
+
+.soul-library-name {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  font-weight: 600;
+}
+.soul-library-item.is-active .soul-library-name { color: var(--accent-strong); }
+
+.soul-library-apply small { font-size: 11px; }
+
+.soul-library-actions {
+  display: flex;
+  padding-right: 4px;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+.soul-library-item:hover .soul-library-actions,
+.soul-library-item:focus-within .soul-library-actions { opacity: 1; }
+
+.soul-library .icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+}
+.soul-library .icon-btn:hover { background: var(--surface); color: var(--text); }
+.soul-library .icon-btn.danger:hover { color: var(--err); }
+.soul-library .icon-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.soul-saver {
+  display: flex;
+  gap: 6px;
+}
+.soul-saver .input { flex: 1 1 auto; min-width: 0; padding: 5px 9px; font-size: 12.5px; }
+
+.soul-document {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.soul-document-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.soul-document-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+
+.soul-document-count {
+  flex: none;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+.soul-document-count.warn-text,
+.hint.warn-text { color: var(--warn); }
+.soul-document-count.err-text,
+.hint.err-text { color: var(--err); }
+
+.soul-textarea {
+  min-height: 520px;
+  height: 62vh;
+  padding: 14px 16px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 1.7;
+  tab-size: 2;
+}
+
+.soul-guide {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-raised);
+}
+.soul-guide > summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  font-size: 12.5px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  list-style: none;
+}
+.soul-guide > summary::-webkit-details-marker { display: none; }
+.soul-guide-body {
+  padding: 0 14px 12px;
+  font-size: 12.5px;
+  line-height: 1.7;
+  color: var(--text-secondary);
+}
+.soul-guide-body p { margin: 0 0 6px; }
+.soul-guide-body ul { margin: 0; padding-left: 18px; }
+
+/* 卡片窄的时候（右边还有运行状态栏、或者手机上）人设库收到正文上面，排成一行标签：
+   正文才是要读要改的东西，不能被挤成一行二十个字。按卡片宽度而不是窗口宽度判断，
+   因为同样的窗口宽度下，卡片宽窄取决于旁边有没有侧栏。 */
+@container (max-width: 760px) {
+  .soul-editor-body { grid-template-columns: minmax(0, 1fr); gap: 12px; }
+  .soul-library { position: static; }
+  .soul-library-group { display: none; }
+  .soul-library-list {
+    flex-direction: row;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .soul-library-list + .soul-library-list { margin-top: -2px; }
+  .soul-library-item {
+    border-color: var(--border);
+    background: var(--surface);
+  }
+  .soul-library-apply { padding: 4px 4px 4px 10px; }
+  .soul-library-apply small { display: none; }
+  .soul-library-actions { opacity: 1; padding-right: 2px; }
+  .soul-library .icon-btn { width: 22px; height: 22px; }
+  .soul-library .hint { margin: 0; }
+  .soul-textarea { height: auto; min-height: 460px; }
+}
+
+/* 群的 SOUL.md 覆盖：和机器人级同一个编辑框，只是矮一些——多数群不覆盖。 */
+.group-soul-textarea {
+  height: auto;
+  min-height: 220px;
+}
+
+/* 机器人配置页的卡片标题栏：标题（和副标题）占左边，最后一个徽标或按钮组贴右边。
+   以前有的卡片把标题和副标题包在一个 div 里、有的没包，徽标一会儿贴着标题一会儿
+   靠右，同一页里两种样子。 */
+.bot-editor .card-header { justify-content: space-between; align-items: flex-start; flex-wrap: wrap; }
+.bot-editor .card-header > div:first-child { flex: 1 1 240px; min-width: 0; }
+.bot-editor .card-header > :last-child:not(:first-child):not(.card-sub) { margin-left: auto; }
+.bot-editor .card-header .card-sub { display: block; margin-top: 2px; }
+/* 收起的卡片只剩标题栏，底下也要留白，否则副标题贴着卡片边。 */
+.bot-editor .card > .card-header:last-child { padding-bottom: 16px; }
+
+/* 六个页签在手机上一行放得下，不用横向滑才找到「高级」。 */
+@media (max-width: 480px) {
+  .bot-editor .editor-tab { flex: 1 1 0; min-width: 0; padding: 8px 4px; }
+}
+
+/* 接话卡片里的「什么情况下愿意接话」：标签、说明、正文框竖排。 */
+.criteria-editor { display: grid; gap: 8px; }
+
+/* 内置提示词整份 YAML 编辑：等宽、够高，报错贴在框下面。 */
+.prompt-yaml-text { font-family: var(--font-mono); font-size: 12.5px; line-height: 1.55; min-height: 420px; white-space: pre; overflow-x: auto; }
+.prompt-yaml-error { margin: 0; color: var(--err); font-size: 13px; white-space: pre-wrap; }

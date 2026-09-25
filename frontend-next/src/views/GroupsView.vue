@@ -148,8 +148,7 @@
               <Users :size="12" aria-hidden="true" />
               {{ group.member_count }}<template v-if="group.max_member_count"> / {{ group.max_member_count }}</template>
             </span>
-            <span v-if="group.configured && group.persona_id" class="badge accent">人设：{{ personaNameOf(group.persona_id) }}</span>
-            <span v-else-if="group.configured && group.system_prompt" class="badge">专属人设</span>
+            <span v-if="group.configured && group.system_prompt" class="badge">专属 SOUL.md</span>
             <span v-if="group.configured && group.participation" class="badge accent">{{ participationSummary(group.participation) }}</span>
             <span v-if="group.configured && overrideCount(group) > 0" class="badge">插件覆盖 {{ overrideCount(group) }}</span>
             <span v-if="group.configured && group.welcome_enabled" class="badge">入群欢迎</span>
@@ -258,7 +257,7 @@
           <span class="hint">智能档下，群里谈论机器人而不是叫它的消息不会强制回复。</span>
         </div>
         <div class="field wide">
-          <label for="group-persona-source">本群人设</label>
+          <label for="group-persona-source">本群 SOUL.md</label>
           <AppSelect
             id="group-persona-source"
             :model-value="personaSource"
@@ -269,26 +268,14 @@
             v-if="personaSource !== ''"
             id="group-prompt"
             v-model="editing.system_prompt"
-            class="textarea"
-            rows="3"
+            class="textarea soul-textarea group-soul-textarea"
+            spellcheck="false"
             :placeholder="personaPlaceholder"
-            @input="detachEditedPersona"
           ></textarea>
-          <span v-if="editing.persona_id" class="hint">
-            内容来自人设库「{{ linkedPersonaName }}」，连同表达风格、自称和句尾语气词一起生效，人设库里修改后本群自动更新。在这里改了就变成本群自定义。
-          </span>
-          <template v-else-if="personaSource === 'custom'">
-            <span class="hint">只用这里的文字，改机器人人设或人设库都不影响本群。</span>
-            <div v-if="editedGroupLibraryPersona" class="cluster">
-              <button class="btn small" type="button" :disabled="personaWriteBackBusy" @click="writeBackGroupPersona">
-                更新人设库「{{ editedGroupLibraryPersona.name }}」
-              </button>
-              <span class="hint">写回后本群重新绑定它，绑定这一套的机器人和群一起更新。</span>
-            </div>
-          </template>
-          <span v-else class="hint">本群一直跟着{{ inheritedPersonaOwner }}走，改机器人人设时本群也跟着变。</span>
-          <details v-if="inheritedPersona && !editing.persona_id" class="inherited-persona">
-            <summary>{{ inheritedPersonaOwner }}当前的人设</summary>
+          <span v-if="personaSource === 'custom'" class="hint">整份替换{{ inheritedPersonaOwner }}的 SOUL.md，只在本群生效；改机器人的人设不影响本群。</span>
+          <span v-else class="hint">本群一直跟着{{ inheritedPersonaOwner }}走，改机器人的 SOUL.md 时本群也跟着变。</span>
+          <details v-if="inheritedPersona" class="inherited-persona">
+            <summary>{{ inheritedPersonaOwner }}当前的 SOUL.md</summary>
             <p>{{ inheritedPersona }}</p>
           </details>
         </div>
@@ -299,16 +286,6 @@
         <div class="field wide">
           <label>本群补充标记的机器人</label>
           <BotMarkerList :key="`${editing.bot_profile_id}:${editing.group_id}`" v-model="editing.marked_bot_ids" :inherited-ids="markedBotDefaults[editing.bot_profile_id || botScope || '']" />
-        </div>
-        <div class="field">
-          <label for="group-action-description">动作描写</label>
-          <AppSelect
-            id="group-action-description"
-            :model-value="editing.action_description_enabled === undefined ? '' : editing.action_description_enabled ? 'on' : 'off'"
-            :options="groupActionDescriptionOptions"
-            @update:model-value="(value) => { if (editing) { detachEditedPersona(); editing.action_description_enabled = value === '' ? undefined : value === 'on'; } }"
-          />
-          <span v-if="editing.persona_id" class="hint">跟着人设库「{{ linkedPersonaName }}」走，改了就变成本群自定义。</span>
         </div>
         <div class="field wide">
           <label class="switch">
@@ -633,7 +610,6 @@ import {
   fetchAssistantUserNames,
   listManagedExtensions,
   listPersonas,
-  savePersona,
   type ManagedExtension,
   type Persona,
   type PluginState,
@@ -660,13 +636,6 @@ const groupTriggerModeOptions: AppSelectOption[] = [
   { value: "smart", label: "智能" },
   { value: "strict", label: "严格" },
   { value: "loose", label: "宽松" }
-];
-
-
-const groupActionDescriptionOptions: AppSelectOption[] = [
-  { value: "", label: "跟随全局" },
-  { value: "on", label: "开启" },
-  { value: "off", label: "关闭" }
 ];
 
 const groupWelcomeModeOptions: AppSelectOption[] = [
@@ -876,110 +845,29 @@ const inheritedPersonaOwner = computed(() => {
   const name = inheritedPersonaProfile.value?.name?.trim();
   return name ? `「${name}」` : "所属机器人";
 });
-// 人设库：群人设可以绑定其中一套，库里改了由后端同步写进群配置。
+// 人设库只是套用来源：选一份就把它的正文填进本群的 SOUL.md，之后怎么改都和库无关。
 const personaLibrary = ref<Persona[]>([]);
-function personaNameOf(id?: string): string {
-  return personaLibrary.value.find((persona) => persona.id === id)?.name ?? "已删除的人设";
-}
-const linkedPersonaName = computed(() => personaNameOf(editing.value?.persona_id));
-// 来源三选一：留空跟随机器人、本群自定义、绑定人设库里的一套。
-const personaSource = computed(() => {
-  const current = editing.value;
-  if (!current) return "";
-  if (current.persona_id) return current.persona_id;
-  return current.system_prompt?.trim() ? "custom" : "";
-});
-const personaSourceOptions = computed<AppSelectOption[]>(() => {
-  const options: AppSelectOption[] = [
-    { value: "", label: `跟随${inheritedPersonaOwner.value}` },
-    { value: "custom", label: "本群自定义" },
-    ...personaLibrary.value.map((persona) => ({ value: persona.id, label: `人设库：${persona.name}` }))
-  ];
-  const linked = editing.value?.persona_id;
-  if (linked && !personaLibrary.value.some((persona) => persona.id === linked)) {
-    options.push({ value: linked, label: "人设库：已删除的人设（保存后改为本群自定义）" });
-  }
-  return options;
-});
-// 在绑定状态下手改了人设：解除绑定变成本群自定义，记下是从哪一套改出来的，
-// 好提供「写回人设库」。和机器人页的规则一样。
-const editedFromGroupPersonaID = ref("");
-const personaWriteBackBusy = ref(false);
-const editedGroupLibraryPersona = computed(() =>
-  editedFromGroupPersonaID.value && !editing.value?.persona_id
-    ? personaLibrary.value.find((persona) => persona.id === editedFromGroupPersonaID.value)
-    : undefined
-);
-function detachEditedPersona(): void {
-  const current = editing.value;
-  if (!current?.persona_id) return;
-  editedFromGroupPersonaID.value = current.persona_id;
-  current.persona_id = undefined;
-}
-async function writeBackGroupPersona(): Promise<void> {
-  const current = editing.value;
-  const target = editedGroupLibraryPersona.value;
-  if (!current || !target) return;
-  const ok = await askConfirm({
-    title: `更新人设「${target.name}」`,
-    message: "把本群现在的人设内容写回人设库的这一套。所有绑定它的机器人和群都会改成这份内容，并立即生效。",
-    confirmLabel: "更新"
-  });
-  if (!ok) return;
-  personaWriteBackBusy.value = true;
-  try {
-    const response = await savePersona({
-      ...target,
-      system_prompt: current.system_prompt ?? "",
-      self_reference: current.self_reference ?? "",
-      sentence_enders: current.sentence_enders ?? "",
-      action_description_enabled: current.action_description_enabled ?? false
-    });
-    personaLibrary.value = response.personas ?? personaLibrary.value;
-    if (editing.value === current) current.persona_id = response.persona.id;
-    editedFromGroupPersonaID.value = "";
-    const synced = [
-      response.bots_synced ? `${response.bots_synced} 台机器人` : "",
-      response.groups_synced ? `${response.groups_synced} 个群` : ""
-    ].filter(Boolean).join("、");
-    toastSuccess(synced ? `已更新「${target.name}」，同步到 ${synced}` : `已更新「${target.name}」`);
-    if (response.warning) toastError(response.warning);
-  } catch (error) {
-    toastError(error instanceof Error ? error.message : "人设更新失败");
-  } finally {
-    personaWriteBackBusy.value = false;
-  }
-}
-function clearLinkedPersonaFields(config: BotGroupConfig): void {
-  config.persona_id = undefined;
-  config.system_prompt = "";
-  config.self_reference = "";
-  config.sentence_enders = "";
-  config.action_description_enabled = undefined;
-}
+// 本群要么跟着机器人（正文留空），要么有自己的一份。
+const personaSource = computed(() => (editing.value?.system_prompt?.trim() ? "custom" : ""));
+const personaSourceOptions = computed<AppSelectOption[]>(() => [
+  { value: "", label: `跟随${inheritedPersonaOwner.value}` },
+  { value: "custom", label: "本群自己写一份" },
+  ...personaLibrary.value.map((persona) => ({ value: `library:${persona.id}`, label: `从人设库套用：${persona.name}` }))
+]);
 function setPersonaSource(value: string): void {
   const current = editing.value;
   if (!current || value === personaSource.value) return;
   if (value === "") {
-    // 跟随机器人：本群不留任何人设覆盖。绑定带进来的自称、语气词也一并清掉。
-    if (current.persona_id) clearLinkedPersonaFields(current);
-    else current.system_prompt = "";
+    current.system_prompt = "";
     return;
   }
   if (value === "custom") {
-    // 解除绑定、保留现有文字，从这里开始手改。
-    current.persona_id = undefined;
+    // 从机器人那份开始改，比从空白开始写省事。
     if (!current.system_prompt?.trim()) current.system_prompt = inheritedPersona.value;
     return;
   }
-  const persona = personaLibrary.value.find((item) => item.id === value);
-  if (!persona) return;
-  // 先在表单里预览；保存时后端按绑定用人设库里的内容为准。
-  current.persona_id = persona.id;
-  current.system_prompt = persona.system_prompt ?? "";
-  current.self_reference = persona.self_reference ?? "";
-  current.sentence_enders = persona.sentence_enders ?? "";
-  current.action_description_enabled = persona.action_description_enabled ?? false;
+  const persona = personaLibrary.value.find((item) => `library:${item.id}` === value);
+  if (persona) current.system_prompt = persona.system_prompt ?? "";
 }
 const personaPlaceholder = computed(() =>
   inheritedPersona.value
@@ -1173,7 +1061,6 @@ function openEditor(group: BotGroupConfig, groupName = ""): void {
   config.plugin_setting_overrides ??= {};
   config.response_mode ??= "";
   withUnsetSendRetryCleared(config);
-  editedFromGroupPersonaID.value = "";
   const delay = Number(config.recall_reply_auto_delete_delay_seconds);
   config.recall_reply_auto_delete_delay_seconds = Number.isInteger(delay) && delay > 0 ? delay : defaultRecallReplyAutoDeleteDelay.value;
   editing.value = config;

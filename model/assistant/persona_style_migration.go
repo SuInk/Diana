@@ -308,7 +308,13 @@ func paragraphAt(prompt string, offset int) string {
 	return paragraph
 }
 
-const promptPersonaClosingAnchor = "最后：保持人设中设定的身份和口吻，能力、安全和回答范围的规则仍然有效。"
+// promptPersonaClosingAnchor 是尾部的语气锚点，离生成最近。
+//
+// 第二句是冲着「自己学自己」去的：聊天记录里自己以前的回复以 assistant 身份原样
+// 回放，模型模仿它们的力度远大于模仿开头那份 SOUL.md。人设换过一次，旧口吻就会
+// 借着历史一轮轮延续下去——换掉猫娘人设两周后，一台机器人仍有六成回复带「喵」。
+// 这一句明说历史里的旧口吻不算数，把判断拉回开头那份人设。
+const promptPersonaClosingAnchor = "最后：保持最开头那份人设（SOUL.md）里的身份和口吻，能力、安全和回答范围的规则仍然有效。聊天记录里你自己以前的回复可能是旧的口吻，照人设说话，不照着以前的回复学。"
 
 var promptPersonaClosingAnchorSpec = registerPrompt(PromptSpec{
 	Key:     "reply.style.closing_anchor",

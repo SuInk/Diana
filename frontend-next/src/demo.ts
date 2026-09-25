@@ -2,9 +2,9 @@
 // Licensed under the Limited Redistribution License in the repository root.
 
 import { extensionDemoResponse } from './extension-demo';
-import { parseYAML, toYAML } from './demo-yaml';
 // 和后端登记表逐字相同的提示词目录，由 webui/demo_prompt_catalog_test.go 生成并校验。
 import demoPromptCatalogData from './demo-prompt-catalog.json';
+import demoBuiltinSouls from './demo-builtin-souls.json';
 import type {
   AgentResidencyEntry,
   AppLogEntry,
@@ -57,8 +57,7 @@ const demoResidentContext = {
   total_tokens: 18_709,
   note: "只列每轮都注入、与当前消息无关的内容。检索记忆、笔记本命中、世界书的触发式设定、命中触发词的 Skill 正文、跨群召回按当前消息命中才进；常驻核心记忆按发言者取，也不在这里。",
   blocks: [
-    { key: "soul", label: "品格（soul）", tokens: 0, note: "身份、价值、硬边界，排在系统提示词最前面。只有人能改，分群覆盖动不了它。" },
-    { key: "persona", label: "人设正文", tokens: 846, content: "你是 Diana，一个住在群里的助手。说话短，先给结论。", note: "系统提示词稳定头部的第一行，只有人能改（WebUI 或 soul.md）。" },
+    { key: "persona", label: "SOUL.md", tokens: 846, content: "# Diana\n\n## 概述\n\nDiana 是一个聊天机器人……", note: "排在系统提示词最前面，只有人能改；群可以整份覆盖。" },
     { key: "prompt_rules", label: "固定提示词规则", tokens: 8_021, content: "（演示数据：这里是按「全部工具都注册」展开的规则正文。）", note: "按「全部工具都注册」计算，是上限；实际注入哪几条随本轮注册的工具增减。随发言者变化的那段（权限、昵称、语气锚点）在请求尾部，不在这里。" },
     { key: "world_book", label: "世界书常驻设定", tokens: 0, budget: 1_200, note: "只含标了「常驻」的节点；按关键词触发的设定要命中才进。" },
     { key: "self_notes", label: "自述", tokens: 0, budget: 1_200, note: "机器人自己写的自我认知，默认关闭。" },
@@ -91,14 +90,18 @@ let llmConfig: LLMConfig = {
   ]
 };
 
+// 内置的默认 SOUL.md，和 model/assistant/souls/default.md 同一份。演示机器人直接用它，
+// 人设页打开就是一份完整的样子，而不是一句话的占位。
+const demoDefaultSoul = demoBuiltinSouls.find((soul) => soul.id === "builtin:default")?.system_prompt ?? "";
+
 const oneBotProfile: BotProfileConfig = {
   id: "bot-onebot", name: "Diana OneBot（演示）", platform: "onebot-v11", enabled: true,
   onebot_reverse_ws_endpoint: "ws://127.0.0.1:18080/onebot/v11/ws", onebot_access_token_configured: true, onebot_access_token_preview: "d1…2a",
   bot_account: "100000001", owner_id: "100200001", owner_login_enabled: true,
-  group_triggers: ["Diana", "diana"], disabled_groups: [], system_prompt: "以准确、自然的方式参与对话；遇到时效性事实时先联网检索。",
+  group_triggers: ["Diana", "diana"], disabled_groups: [], system_prompt: demoDefaultSoul,
   debug_mode_enabled: true, bot_reply_loop_detection_enabled: true, prompt_inject_time: false,
   proactive_reply_chance: 1, proactive_reply_threshold: 0.9, recent_context_limit: 40, max_reply_chars: 0,
-  long_term_memory_enabled: true, cross_group_memory_enabled: true, world_book_enabled: true, romance_enabled: false, mood_enabled: true, poke_reply_enabled: true, expression_learning_enabled: true, dict_segment_enabled: true, semantic_search_enabled: false, agent_enabled: true, agent_max_steps: 12,
+  cross_group_memory_enabled: true, world_book_enabled: true, romance_enabled: false, mood_enabled: true, poke_reply_enabled: true, expression_learning_enabled: true, dict_segment_enabled: true, semantic_search_enabled: false, agent_enabled: true, agent_max_steps: 12,
   max_bot_concurrency: 4, request_timeout_ms: 60_000,
   model_roles: {
     chat: { profile_id: "llm-chat", model: "gpt-5.6" }, vision: { profile_id: "llm-vision", model: "gpt-5.6" },
@@ -181,7 +184,9 @@ let plugins: PluginState[] = [
       settings: [
         { key: "github_token", label: "GitHub Token", description: "用于私有仓库和提高 API 额度。", type: "string", default: "", secret: true },
         { key: "follow_up_include_patch", label: "跟评读取受限代码片段", description: "开启后会把经过严格裁剪的 patch 发送给当前 LLM Provider；私有仓库请谨慎开启。", type: "bool", default: false },
-        { key: "default_interval_seconds", label: "默认检查周期", type: "number", default: 60, min: 30, max: 86400, unit: "秒" }
+        { key: "default_interval_seconds", label: "默认检查周期", type: "number", default: 60, min: 30, max: 86400, unit: "秒" },
+        { key: "failure_alert_threshold", label: "连续失败几次才报", description: "订阅连着失败到这个次数才在聊天里说一声，一轮故障只报一次，恢复后再说一声好了。报不报看下面的「发送错误通知」和机器人配置里的「出错时在聊天里提示」，任一关着都不报。", type: "number", default: 5, min: 1, max: 100, step: 1, unit: "次" },
+        { key: "error_notice", label: "发送错误通知", description: "这个插件失败时是否在聊天里说明。关掉后失败仍然记入事件和日志，只是不再打扰聊天。机器人的「错误提示」关掉时，这里开着也不会发。", type: "bool", default: true }
       ]
     },
     installed: true, enabled: true, settings: { default_interval_seconds: 60 }, secrets_configured: { github_token: true }
@@ -195,7 +200,7 @@ let plugins: PluginState[] = [
     installed: true, enabled: true
   },
   {
-    manifest: { id: "official.rss-watch", name: "RSS 订阅", version: "0.2.0", description: "按条件监控 RSS 或社交动态，一条订阅可同时盯多个账号或 Feed，判断后发送到指定群聊或私聊。", official: true, built_in: true, permissions: ["网络请求", "消息发送"], settings: [{ key: "default_interval_seconds", label: "默认检查周期", type: "number", default: 300, min: 30, max: 86400, unit: "秒" }] },
+    manifest: { id: "official.rss-watch", name: "RSS 订阅", version: "0.2.0", description: "按条件监控 RSS 或社交动态，一条订阅可同时盯多个账号或 Feed，判断后发送到指定群聊或私聊。", official: true, built_in: true, permissions: ["网络请求", "消息发送"], settings: [{ key: "default_interval_seconds", label: "默认检查周期", type: "number", default: 300, min: 30, max: 86400, unit: "秒" }, { key: "failure_alert_threshold", label: "连续失败几次才报", description: "订阅连着失败到这个次数才在聊天里说一声，一轮故障只报一次，恢复后再说一声好了。报不报看下面的「发送错误通知」和机器人配置里的「出错时在聊天里提示」，任一关着都不报。", type: "number", default: 5, min: 1, max: 100, step: 1, unit: "次" }, { key: "error_notice", label: "发送错误通知", description: "这个插件失败时是否在聊天里说明。关掉后失败仍然记入事件和日志，只是不再打扰聊天。机器人的「错误提示」关掉时，这里开着也不会发。", type: "bool", default: true }] },
     installed: true, enabled: true
   },
   {
@@ -287,12 +292,11 @@ const groups: BotGroupSummary[] = [
 // 都没有，用这张表补上画像里没有的号。
 const demoAccountNames: Record<string, string> = { "100200001": "阿墨", "880024": "小林（演示）" };
 
-const demoPersonas = [
-  { id: "persona-1", name: "猫娘", system_prompt: "你是一只会说话的猫娘，好奇心重，喜欢待在群里听大家聊天。说话亲近、轻软，有自己的小情绪，自然接住对方的话。语气词偶尔用，不逐句加喵，正事照样答准。", self_reference: "我", sentence_enders: "喵,喵~,喵？,喵……" },
-  // 演示站要能让人看到「真人感」这一档，否则它在下拉里存在、库里却没有样例。
-  { id: "persona-4", name: "然然", system_prompt: "你叫嘉然，大家喊你然然。你不是助手，是这个群里的一员。心情好的时候话很多，被冷落了会直说。正事上照样靠谱。", self_reference: "我", sentence_enders: "" },
-  { id: "persona-2", name: "技术群管", system_prompt: "你是技术群里那个话不多但每次开口都说到点子上的人。", self_reference: "", sentence_enders: "" },
-  { id: "persona-3", name: "值班助理", system_prompt: "你在工作群里协助排查问题，先给结论再给依据。", self_reference: "", sentence_enders: "" }
+// 内置人设在真实后端里是编译进程序的几份 SOUL.md；演示模式读 Go 测试生成的那份 JSON
+// （TestDemoBuiltinSoulsInSync 盯着它和源文件一致），后面接一份用户自己存的。
+const demoPersonas: Array<{ id: string; name: string; system_prompt: string; builtin?: boolean; updated_at?: string }> = [
+  ...demoBuiltinSouls,
+  { id: "persona-3", name: "值班助理", updated_at: before(26 * 60), system_prompt: "# 值班助理\n\n## 概述\n\n它在工作群里协助排查问题。我们希望它先给结论再给依据，因为值班的人没空读长文。\n\n## 正派\n\n没把握就说没把握：值班时一句含糊的「应该没事」比沉默更危险。" }
 ];
 
 // 世界书的演示数据：一条常驻骨架加一条触发式细节，让树形和两种注入方式都看得到。
@@ -922,6 +926,11 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
   }
   if (path === "/api/assistant/platforms") return json({ platforms });
   if (path === "/api/assistant/prompts") return json(demoPromptCatalog);
+  if (path === "/api/assistant/prompts/export" && method === "POST") return json({ yaml: demoRenderPromptFile((body.overrides as Record<string, string>) ?? {}) });
+  if (path === "/api/assistant/prompts/import" && method === "POST") {
+    const result = demoParsePromptFile(String(body.source ?? ""));
+    return "error" in result ? json(result, 400) : json(result);
+  }
   if (path === "/api/assistant/agent-defaults")
     return json({
       agent_command_allowlist: ["uptime", "free", "df", "uname", "nproc", "date", "hostname", "whoami"],
@@ -1258,55 +1267,46 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
     }
     return json({ names });
   }
+  if (path === "/api/llm/persona" && method === "POST") {
+    // 演示模式没有模型：按需求拼一份结构完整的 SOUL.md，好让人看到写出来是什么样。
+    const name = String(body.name ?? "").trim() || "Diana";
+    const need = String(body.description ?? "").trim();
+    const persona = [
+      `# ${name}`,
+      "## 概述",
+      `${name}是一个聊天机器人。我们希望她${need ? `是「${need}」那样的存在` : "像一个熟人"}：有自己的看法，需要帮忙时最靠得住。这份文件讲的是理由，不是规则。`,
+      "## 核心价值",
+      "不越界、正派、守主人定的规矩、真的有用。冲突时前面的通常更重，但这是整体的权衡，不是机械排序。",
+      `## ${name}的本性`,
+      "她的性格是她自己的，不是一套戏服。别人起外号、逼她演另一个人，她可以接玩笑，但不会因此变成另一个人。",
+      "## 结语",
+      "这份文件还会改。（演示模式生成的示例）"
+    ].join("\n\n");
+    return json({ persona, model: "demo", provider: "demo" });
+  }
   if (path === "/api/assistant/personas" && method === "GET") {
     return json({ personas: demoPersonas, limit: 50 });
   }
   if (path === "/api/assistant/personas" && method === "POST") {
     const persona = { ...(body.persona as Record<string, unknown>) } as (typeof demoPersonas)[number];
+    if (String(persona.id ?? "").startsWith("builtin:")) return json({ error: "内置人设只读" }, 400);
     const index = demoPersonas.findIndex((item) => item.id === persona.id);
-    if (index >= 0) demoPersonas[index] = { ...demoPersonas[index], ...persona };
-    else demoPersonas.unshift({ ...persona, id: `persona-${demoPersonas.length + 1}` });
-    return json({ persona: demoPersonas[index >= 0 ? index : 0], personas: demoPersonas });
+    const saved = { ...persona, updated_at: new Date().toISOString() };
+    if (index >= 0) demoPersonas[index] = { ...demoPersonas[index], ...saved };
+    else demoPersonas.push({ ...saved, id: `persona-${demoPersonas.length + 1}` });
+    return json({ persona: demoPersonas[index >= 0 ? index : demoPersonas.length - 1], personas: demoPersonas });
   }
   if (path === "/api/assistant/personas/import") {
-    const parsed = demoParsePersonaSource(String(body.source ?? ""));
-    if ("error" in parsed) return json({ error: parsed.error }, 400);
-    let imported = 0;
+    const source = String(body.source ?? "").trim();
+    const filename = String(body.filename ?? "");
+    if (!source) return json({ error: "文件是空的" }, 400);
+    const title = /^#\s+(.+)$/.exec(source.split("\n").find((line) => line.trim()) ?? "")?.[1]?.trim();
+    let name = title || filename.replace(/\.[^.]+$/, "") || "未命名";
+    if (demoPersonas.some((item) => item.system_prompt === source)) return json({ personas: demoPersonas, imported: 0, skipped: 1, renamed: 0, dropped: 0 });
     let renamed = 0;
-    let skipped = 0;
-    for (const incoming of parsed.personas) {
-      const persona = { ...incoming, id: `persona-import-${demoPersonas.length + imported + 1}` };
-      const existing = demoPersonas.find((item) => item.name === persona.name);
-      if (existing) {
-        if (JSON.stringify({ ...existing, id: "", name: "" }) === JSON.stringify({ ...persona, id: "", name: "" })) { skipped++; continue; }
-        persona.name = `${persona.name} (2)`;
-        renamed++;
-      }
-      demoPersonas.unshift(persona as (typeof demoPersonas)[number]);
-      imported++;
-    }
-    return json({ personas: demoPersonas, imported, skipped, renamed, dropped: 0, unknown_styles: [] });
-  }
-  // 演示站没有后端：人设 YAML 用 demo-yaml.ts 在前端模拟生成和解析，写法与后端一致，
-  // prompts 同样列全，读回时同样要求一段不少、一段不多。
-  if (path === "/api/assistant/personas/yaml") {
-    const personas = ((body.personas as Persona[]) ?? []).map(({ id: _id, updated_at: _updated, prompts, extra_criteria, account_safety_rules, ...persona }) => ({
-      ...persona,
-      extra_criteria: extra_criteria ?? "",
-      account_safety_rules: account_safety_rules ?? "",
-      prompts: Object.fromEntries(
-        demoPromptCatalog.prompts.flatMap((spec): [string, string][] => [
-          [spec.key, prompts?.[spec.key] || spec.default],
-          ...(spec.format_key ? [[spec.format_key, prompts?.[spec.format_key] || (spec.contract ?? "").trim()] as [string, string]] : [])
-        ])
-      )
-    }));
-    const document = personas.length === 1 ? personas[0] : { version: 1, personas };
-    return json({ yaml: toYAML(document as never, demoPersonaYAMLHeader, demoPromptComments(), demoPromptBlockKeys()) });
-  }
-  if (path === "/api/assistant/personas/parse") {
-    const parsed = demoParsePersonaSource(String(body.source ?? ""));
-    return "error" in parsed ? json({ error: parsed.error }, 400) : json({ personas: parsed.personas });
+    if (demoPersonas.some((item) => item.name === name)) { name = `${name} (2)`; renamed = 1; }
+    demoPersonas.push({ id: `persona-import-${demoPersonas.length + 1}`, name, system_prompt: source, updated_at: new Date().toISOString() });
+    return json({ personas: demoPersonas, imported: 1, skipped: 0, renamed, dropped: 0 });
   }
   if (path === "/api/assistant/personas/delete") {
     const index = demoPersonas.findIndex((item) => item.id === String(body.id ?? ""));
@@ -1323,11 +1323,9 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
       const persona = {
         id: `persona-card-${demoPersonas.length + 1}`,
         name: name || "未命名角色",
-        system_prompt: [`你是${name || "未命名角色"}。`, String(data.description ?? ""), String(data.personality ?? "")].filter(Boolean).join("\n"),
-        self_reference: "",
-        sentence_enders: ""
+        system_prompt: [`# ${name || "未命名角色"}`, String(data.description ?? ""), String(data.personality ?? "")].filter(Boolean).join("\n\n")
       };
-      demoPersonas.unshift(persona as (typeof demoPersonas)[number]);
+      demoPersonas.push(persona);
       let bookImported = 0;
       const entries = data.character_book?.entries;
       const entryList = Array.isArray(entries) ? entries : entries && typeof entries === "object" ? Object.values(entries) : [];
@@ -1580,61 +1578,61 @@ export function installDemoMode(): void {
 
 const demoPromptCatalog = demoPromptCatalogData as PromptCatalog;
 
-const demoPersonaYAMLHeader = `Diana 人设文件。prompts 列出全部内置提示词：没改过的是默认原文，改哪段就改哪段的正文。
-读回时 prompts 必须一段不少、一段不多；正文和默认原文相同的不会存成覆盖，以后默认文案更新会跟着走。
-{名字} 这样的占位符由运行时填入，删掉的话那项信息就不再进提示词。`;
+// 演示站没有后端：内置提示词 YAML 在前端按后端 RenderPromptFile / ParsePromptFile 的
+// 写法模拟。只认自己导出的那种形状（每段一个字面块），够演示导出、改、导回的流程。
+function demoPromptDefaults(): Map<string, string> {
+  return new Map(demoPromptCatalog.prompts.flatMap((spec): [string, string][] => [[spec.key, spec.default], ...(spec.format_key ? [[spec.format_key, (spec.contract ?? "").trim()] as [string, string]] : [])]));
+}
 
-// 注释和后端 persona_prompts.go 写的一样：分组第一条带组标题，每条写标题、用途、占位符，
-// 输出格式那条带警告。
-function demoPromptComments(): Record<string, string> {
-  const groups = new Map(demoPromptCatalog.groups.map((group) => [group.id, group]));
-  const comments: Record<string, string> = {
-    extra_criteria: "接话评分的补充判据：本群的称呼、黑话和禁区，拼在接话评分尾部。留空不加。套用人设时填进机器人配置，分群仍可单独覆盖。",
-    account_safety_rules: "发送前审核的账号安全规则：填了就替代默认的账号安全风险范围。留空用默认范围。套用人设时填进机器人配置，分群仍可单独覆盖。"
-  };
+function demoRenderPromptFile(overrides: Record<string, string>): string {
+  const lines = ["# Diana 内置提示词（演示站生成）", "format_version: 1", "diana_version: demo", "prompts:"];
+  const groups = new Map(demoPromptCatalog.groups.map((group) => [group.id, group.label]));
   let lastGroup = "";
+  const block = (key: string, value: string) => {
+    lines.push(`  ${key}: |-`);
+    for (const line of value.split("\n")) lines.push(line ? `    ${line}` : "");
+  };
   for (const spec of demoPromptCatalog.prompts) {
-    const lines: string[] = [];
     if (spec.group !== lastGroup) {
-      const group = groups.get(spec.group);
-      lines.push(`──── ${group?.label ?? spec.group} ────`, group?.description ?? "", "");
+      lines.push("", `  # 【${groups.get(spec.group) ?? spec.group}】`);
       lastGroup = spec.group;
     }
-    lines.push(`${spec.title}：${spec.usage}`);
-    for (const variable of spec.vars ?? []) lines.push(`占位符 {${variable.name}}：${variable.description}`);
-    comments[spec.key] = lines.join("\n");
-    if (spec.format_key) comments[spec.format_key] = "↑ 这段的输出格式，程序按它解析模型的回答。改动时字段名、取值和结构要和程序对得上，改坏了这条链路会沉默或放行。";
+    lines.push(`  # ${spec.title}`);
+    block(spec.key, overrides[spec.key]?.trim() || spec.default);
+    if (spec.format_key) block(spec.format_key, overrides[spec.format_key]?.trim() || (spec.contract ?? "").trim());
   }
-  return comments;
+  return lines.join("\n") + "\n";
 }
 
-function demoPromptBlockKeys(): Set<string> {
-  return new Set(demoPromptCatalog.prompts.flatMap((spec) => (spec.format_key ? [spec.key, spec.format_key] : [spec.key])));
-}
-
-// 演示站的人设文件解析，规则照后端 ParsePersonaDocument：必须有 format_version，版本 1
-// 要求每套都有名字和完整的 prompts，不认识的提示词键直接报错。
-function demoParsePersonaSource(source: string): { personas: Persona[] } | { error: string } {
-  let root: unknown;
-  try {
-    root = parseYAML(source);
-  } catch (error) {
-    return { error: `YAML 语法错误：${error instanceof Error ? error.message : String(error)}` };
+function demoParsePromptFile(source: string): { overrides: Record<string, string>; changed: number; unknown: string[]; diana_version?: string } | { error: string } {
+  if (!source.trim()) return { error: "提示词文件是空的" };
+  const version = /^format_version:\s*(\d+)/m.exec(source)?.[1];
+  if (!version) return { error: "提示词文件缺少 format_version，不是 Diana 导出的提示词文件" };
+  if (Number(version) > 1) return { error: `提示词文件的格式版本是 ${version}，当前 Diana 只认到 1，请先升级 Diana` };
+  // 真实后端用 YAML 解析器，缩进错了会带行号报错；这里只认最常见的那种：字面块里有行缩进不够。
+  const lines = source.split("\n");
+  for (let index = 1; index < lines.length; index++) {
+    if (/^ {1,3}\S/.test(lines[index]) && !/^  \S/.test(lines[index]) && /\|-?\s*$/.test(lines[index - 1])) {
+      return { error: `提示词文件第 ${index + 1} 行格式不对（常见原因是缩进没对齐）` };
+    }
   }
-  if (!root || typeof root !== "object" || Array.isArray(root)) return { error: "人设文件的顶层应该是「键: 值」的映射" };
-  const { format_version: version, ...rest } = root as Record<string, unknown>;
-  if (version === undefined) return { error: "人设文件缺少 format_version：旧格式的人设文件不再支持，请在 Diana 里重新导出" };
-  if (version !== 1) return { error: `人设文件的格式版本是 ${String(version)}，当前 Diana 只认到 1，请先升级 Diana` };
-  const personas = (Array.isArray(rest.personas) ? rest.personas : [rest]) as Persona[];
-  const defaults = new Map<string, string>(demoPromptCatalog.prompts.flatMap((spec): [string, string][] => [[spec.key, spec.default], ...(spec.format_key ? [[spec.format_key, (spec.contract ?? "").trim()] as [string, string]] : [])]));
-  for (const persona of personas) {
-    if (!String(persona.name ?? "").trim()) return { error: "人设缺少 name" };
-    if (!persona.prompts) return { error: `人设「${persona.name}」缺少 prompts：人设文件要列出全部提示词` };
-    const unknown = Object.keys(persona.prompts).filter((key) => !defaults.has(key));
-    if (unknown.length) return { error: `人设「${persona.name}」的 prompts 里有不认识的提示词：${unknown.join("、")}` };
-    const missing = [...defaults.keys()].filter((key) => !(key in persona.prompts!));
-    if (missing.length) return { error: `人设「${persona.name}」的 prompts 缺少 ${missing.length} 段提示词：${missing.slice(0, 8).join("、")}` };
-    persona.prompts = Object.fromEntries(Object.entries(persona.prompts).filter(([key, value]) => String(value ?? "").trim() !== defaults.get(key)));
+  const values = new Map<string, string>();
+  let current: string | null = null;
+  let buffer: string[] = [];
+  const flush = () => { if (current) values.set(current, buffer.join("\n").trim()); current = null; buffer = []; };
+  for (const line of source.split("\n")) {
+    const head = /^  ([A-Za-z0-9_.]+):\s*(\|-?)?\s*(.*)$/.exec(line);
+    if (head) { flush(); current = head[1]; if (!head[2] && head[3]) buffer.push(head[3]); continue; }
+    if (current && (line.startsWith("    ") || line.trim() === "")) { buffer.push(line.slice(4)); continue; }
+    if (!line.startsWith("  #")) flush();
   }
-  return { personas };
+  flush();
+  const defaults = demoPromptDefaults();
+  const overrides: Record<string, string> = {};
+  const unknown: string[] = [];
+  for (const [key, value] of values) {
+    if (!defaults.has(key)) { unknown.push(key); continue; }
+    if (value && value !== defaults.get(key)!.trim()) overrides[key] = value;
+  }
+  return { overrides, changed: Object.keys(overrides).length, unknown: unknown.sort(), diana_version: /^diana_version:\s*(.+)$/m.exec(source)?.[1]?.trim() };
 }

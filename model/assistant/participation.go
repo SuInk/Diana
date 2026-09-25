@@ -204,13 +204,44 @@ var promptParticipationChatInIntroSpec = registerPrompt(PromptSpec{
 	Default: "chat_in：给 0 到 1 的 score（两位小数）。没人找机器人时，插一句是否自然。",
 })
 
-var promptParticipationAnchorsSpec = registerPrompt(PromptSpec{
-	Key:     "routing.participation.anchors",
+// 「什么情况下愿意接话」是主人直接写的大白话，分愿意接、可以接一句、不接三栏；
+// 换成分数的那句另外登记，主人改情形时不用碰分数。以前这里是一行带分数的锚点
+// （0.10 两人私聊……0.90 明确邀请），管理员要改接话口味得先读懂分数刻度。
+const participationWillingness = `愿意接：
+- 群里明确抛出邀请，比如「有人知道吗」「求推荐」
+- 有开放的问题，或者有明显的梗能接
+- 我刚被调侃、被提到，不接反而奇怪
+可以接一句：
+- 顺着正在聊的话题，接一句自然但不必要
+- 附和、捧场、表达共鸣
+不接：
+- 两个人在私聊、在争执，或者已经有人在回答
+- 普通闲聊，插不插都行
+- 只是回「好的」「草」「666」，话题在收尾
+- 只有一张没人问的图
+- 只能原样复读别人刚说的话`
+
+var promptParticipationWillingnessSpec = registerPrompt(PromptSpec{
+	Key:     "routing.participation.willingness",
 	Group:   PromptGroupRouting,
-	Title:   "接话评分 · 闲聊分锚点",
-	Usage:   "闲聊分的刻度参考：多少分对应什么情形。只影响会生成文本的评分模型；绑定判断模型时，它按程序里固定的六档作答。档位阈值由程序判断，这里改的是模型怎么打分。",
-	Default: participationChatInAnchors,
+	Title:   "接话评分 · 什么情况下愿意接话",
+	Usage:   "没人找机器人时，哪些情形愿意插话、哪些可以接一句、哪些不接。按「愿意接 / 可以接一句 / 不接」三栏写，下一段按这三栏换成闲聊分；闲聊档位决定到哪一栏才开口。评分模型和判断模型共用这段。",
+	Default: participationWillingness,
 })
+
+const participationWillingnessScale = `按上面写的情形给 chat_in 打分：落在「愿意接」的给 0.70 到 0.95，越贴切越高；落在「可以接一句」的给 0.40 到 0.60；落在「不接」的给 0.10 到 0.30，原样复读不超过 0.10。哪条都不沾就按最接近的一条估，0.62、0.38 这类中间值同样正常。`
+
+var promptParticipationWillingnessScaleSpec = registerPrompt(PromptSpec{
+	Key:     "routing.participation.willingness_scale",
+	Group:   PromptGroupRouting,
+	Title:   "接话评分 · 愿意程度换成闲聊分",
+	Usage:   "把「什么情况下愿意接话」的三栏换成 0 到 1 的闲聊分。闲聊档位的门槛（如偶尔接话 ≥0.70）按这个分数判断，改这里等于改每一栏对应哪些档位会开口。",
+	Default: participationWillingnessScale,
+})
+
+func participationWillingnessPrompt(overrides PromptOverrides) string {
+	return "【什么情况下愿意接话】\n" + overrides.text(promptParticipationWillingnessSpec) + "\n" + overrides.text(promptParticipationWillingnessScaleSpec)
+}
 
 // participationScorePrompt 只让模型评两项。
 //
@@ -232,7 +263,7 @@ true：` + overrides.text(promptParticipationRelevanceTrueSpec) + `
 false：` + overrides.text(promptParticipationRelevanceFalseSpec) + `
 ` + overrides.text(promptParticipationRelevanceNoteSpec) + `
 ` + overrides.text(promptParticipationChatInIntroSpec) + `
-` + overrides.text(promptParticipationAnchorsSpec) + `
+` + participationWillingnessPrompt(overrides) + `
 ` + overrides.text(promptParticipationChatInNoteSpec) + `
 ` + overrides.text(promptParticipationSharedNoteSpec) + `
 ` + overrides.text(promptParticipationFormatSpec)
@@ -298,17 +329,15 @@ var participationChatInLevels = []string{
 
 var participationChatInLevelValues = []float64{0, 0.10, 0.30, 0.50, 0.70, 0.90}
 
-var participationChatInAnchors = strings.Join(participationChatInLevels[1:], "；") + "。"
-
-const participationChatInNote = `附和、捧场、表达共鸣、顺口接一句本身就是正常闲聊，照上面的锚点给分，不因为没带新信息就压低。要压低的只有两种：原样复读别人刚说过的话，不超过 0.10；对一个无法核实的说法补充听起来内行、其实没有依据的理由（例如凭印象推测某个产品为什么变成这样），不超过 0.30——那是在编。需要搜索或调用工具不等于没东西可讲。
-「没有依据就压低」只管对事实、原因、产品、人物和事件的断言。群里在玩梗、在演正进行的角色扮演、或在拿机器人打趣时没有这种断言，照梗与调侃的锚点给；只能原样复读就不超过 0.10。玩笑里顺带抛出的事实说法仍按依据算。
-锚点是连续刻度的参考点不是选项，0.62、0.38 这类中间值同样正常。顶端够得着，符合 0.90 那条描述就给 0.85 至 0.95，别一律压回 0.70。多数普通群聊 chat_in 在 0.30 到 0.50，明显值得插话的才上 0.70。`
+const participationChatInNote = `附和、捧场、表达共鸣、顺口接一句本身就是正常闲聊，照上面写的情形给分，不因为没带新信息就压低。要压低的只有两种：原样复读别人刚说过的话，不超过 0.10；对一个无法核实的说法补充听起来内行、其实没有依据的理由（例如凭印象推测某个产品为什么变成这样），不超过 0.30——那是在编。需要搜索或调用工具不等于没东西可讲。
+「没有依据就压低」只管对事实、原因、产品、人物和事件的断言。群里在玩梗、在演正进行的角色扮演、或在拿机器人打趣时没有这种断言，照梗与调侃那一栏给；只能原样复读就不超过 0.10。玩笑里顺带抛出的事实说法仍按依据算。
+顶端够得着，最贴切「愿意接」的情形就给 0.85 至 0.95，别一律压回 0.70。多数普通群聊 chat_in 在 0.30 到 0.50，明显值得插话的才上 0.70。`
 
 var promptParticipationChatInNoteSpec = registerPrompt(PromptSpec{
 	Key:     "routing.participation.chat_in_note",
 	Group:   PromptGroupRouting,
 	Title:   "接话评分 · 闲聊打分口径",
-	Usage:   "没人找机器人时「插一句是否自然」怎么打分：什么该压低、刻度怎么用。分数锚点和档位阈值由程序固定，这段只调口径。评分模型和判断模型共用这段。",
+	Usage:   "没人找机器人时「插一句是否自然」怎么打分：什么该压低、刻度怎么用。哪些情形愿意接写在「什么情况下愿意接话」，档位阈值由程序固定，这段只调口径。评分模型和判断模型共用这段。",
 	Default: participationChatInNote,
 })
 

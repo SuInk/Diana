@@ -22,7 +22,6 @@ import (
 // 发言者取（见 memory_context.go 里 coreCurrentMemory 的判定）、笔记本和世界书的
 // 触发式设定要命中关键词。它们不是「常驻」，摆进来只会让人以为每轮都在付这笔钱。
 const (
-	ResidentBlockSoul        = "soul"
 	ResidentBlockPersona     = "persona"
 	ResidentBlockPromptRules = "prompt_rules"
 	ResidentBlockWorldBook   = "world_book"
@@ -79,18 +78,13 @@ func (r *Runtime) ResidentContextForGroup(ctx context.Context, profileID, groupI
 	// head 里除人设之外的部分就是那几千字固定规则。registry 传 nil 表示「按全部
 	// 工具都注册」算，所以这里是上限：实际注入哪几条随当轮注册的工具增减。
 	head, _ := r.systemPromptPartsWithRelationshipAndAgentTools(event, nil, false, RelationshipPolicy{}, cfg.AgentEnabled, nil)
-	// 规则那块是 head 去掉品格和人设之后剩下的部分：同一段文字不能在两块里各算
+	// 规则那块是 head 去掉 SOUL.md 之后剩下的部分：同一段文字不能在两块里各算
 	// 一次，否则合计会把它算两遍。
-	rules := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(head), cfg.Soul.Render()))
-	rules = strings.TrimSpace(strings.TrimPrefix(rules, persona))
+	rules := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(head), persona))
 
 	snapshot.appendBlock(ResidentContextBlock{
-		Key: ResidentBlockSoul, Label: "品格（soul）", Content: cfg.Soul.Render(),
-		Note: "身份、价值、硬边界，排在系统提示词最前面。只有人能改，分群覆盖动不了它。",
-	})
-	snapshot.appendBlock(ResidentContextBlock{
-		Key: ResidentBlockPersona, Label: "人设正文", Content: persona,
-		Note: "系统提示词稳定头部的第一行，只有人能改（WebUI 或 soul.md）。",
+		Key: ResidentBlockPersona, Label: "SOUL.md", Content: persona,
+		Note: "排在系统提示词最前面，只有人能改；群可以整份覆盖。",
 	})
 	snapshot.appendBlock(ResidentContextBlock{
 		Key: ResidentBlockPromptRules, Label: "固定提示词规则", Content: rules,

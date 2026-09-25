@@ -9,7 +9,7 @@ var promptChineseSlangSpec = registerPrompt(PromptSpec{
 	Key:     "reply.chinese_slang",
 	Group:   PromptGroupReplyBase,
 	Title:   "中文梗与修辞",
-	Usage:   "「中文梗提示」开关打开、且人设不是接管模式时，紧跟在人设后面。",
+	Usage:   "「中文梗提示」开关打开时，紧跟在人设后面。",
 	Default: defaultPromptChineseSlang,
 })
 

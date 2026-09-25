@@ -88,7 +88,7 @@ func (p *RSSWatchPlugin) Manifest() PluginManifest {
 	return PluginManifest{
 		ID:            rssWatchPluginID,
 		Name:          "RSS 订阅",
-		Version:       "0.2.3",
+		Version:       "0.2.4",
 		Description:   "订阅 RSS/Atom 或指定 X (Twitter) 用户，一条订阅可以同时盯多个账号或 Feed 并共用一套规则；发现新内容后由 LLM 判断是否需要通知，并生成实际回复。",
 		Official:      true,
 		BuiltIn:       true,
@@ -105,6 +105,17 @@ func (p *RSSWatchPlugin) Manifest() PluginManifest {
 				Max:         settingRange(300),
 				Step:        1,
 				Unit:        "秒",
+			},
+			{
+				Key:         recurringFailureAlertSettingKey,
+				Label:       "连续失败几次才报",
+				Description: "订阅连着失败到这个次数才在聊天里说一声，一轮故障只报一次，恢复后再说一声好了。抖一下就报警只会让人不再看这类消息。报不报看下面的「发送错误通知」和机器人配置里的「出错时在聊天里提示」，任一关着都不报。",
+				Type:        PluginSettingTypeNumber,
+				Default:     defaultRecurringFailureAlertThreshold,
+				Min:         settingRange(1),
+				Max:         settingRange(maxRecurringFailureAlertThreshold),
+				Step:        1,
+				Unit:        "次",
 			},
 			{
 				Key:         rssWatchSettingItemLimit,

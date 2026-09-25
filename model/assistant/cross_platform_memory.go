@@ -9,7 +9,7 @@ import (
 )
 
 func (r *Runtime) crossPlatformMemoryPrefixes(event MessageEvent, cfg BotConfig) []string {
-	if event.Kind != EventKindGroup || !boolValue(cfg.LongTermMemoryEnabled, true) || !boolValue(cfg.CrossPlatformMemoryEnabled, false) {
+	if event.Kind != EventKindGroup || !boolValue(cfg.CrossPlatformMemoryEnabled, false) {
 		return nil
 	}
 	// Without isolated namespaces there is no reliable provenance for old
@@ -24,7 +24,7 @@ func (r *Runtime) crossPlatformMemoryPrefixes(event MessageEvent, cfg BotConfig)
 	for sourceID, source := range r.profileConfigs {
 		if sourceID == "" || sourceID == id || !source.Enabled ||
 			NormalizePlatformID(source.Platform) == NormalizePlatformID(event.Platform) ||
-			!boolValue(source.LongTermMemoryEnabled, true) || !boolValue(source.CrossPlatformMemoryEnabled, false) {
+			!boolValue(source.CrossPlatformMemoryEnabled, false) {
 			continue
 		}
 		prefixes = append(prefixes, sourceID+":group:")

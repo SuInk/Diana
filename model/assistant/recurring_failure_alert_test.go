@@ -133,7 +133,7 @@ func TestRecurringFailureAlertThresholdZeroSilencesAlerts(t *testing.T) {
 		CreatedAt:       now.Add(-time.Hour),
 	}}}
 	channel := &recordingChannel{}
-	runtime := NewRuntime(BotConfig{OwnerID: "10001", RecurringFailureAlertThreshold: intPointer(0)}, channel, NewPluginManager(), nil, store, nil, nil)
+	runtime := NewRuntime(BotConfig{OwnerID: "10001", ErrorNotifyEnabled: boolPointer(false)}, channel, NewPluginManager(), nil, store, nil, nil)
 
 	for attempt := 1; attempt <= defaultRecurringFailureAlertThreshold+2; attempt++ {
 		store.items[0].TriggerAt = time.Now().Add(-time.Second)
@@ -167,25 +167,39 @@ func TestRepositoryWatchFailureAlertThresholdIsConfigurable(t *testing.T) {
 	}
 }
 
-// 配置读取：没配过用默认值，负数和 0 一样当关闭，超出上限钳回去。
-func TestRecurringFailureAlertThresholdReadsConfig(t *testing.T) {
-	item := Reminder{ID: "rss", Kind: ReminderKindRSSWatch, IntervalSeconds: 900, UserID: "10001"}
-	for _, tc := range []struct {
-		name       string
-		configured *int
-		want       int
-	}{
-		{name: "unset", configured: nil, want: defaultRecurringFailureAlertThreshold},
-		{name: "off", configured: intPointer(0), want: 0},
-		{name: "negative", configured: intPointer(-5), want: 0},
-		{name: "custom", configured: intPointer(7), want: 7},
-		{name: "clamped", configured: intPointer(maxRecurringFailureAlertThreshold + 100), want: maxRecurringFailureAlertThreshold},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			runtime := NewRuntime(BotConfig{OwnerID: "10001", RecurringFailureAlertThreshold: tc.configured}, &recordingChannel{}, NewPluginManager(), nil, &stubReminderStore{}, nil, nil)
-			if got := runtime.recurringFailureAlertThreshold(item); got != tc.want {
-				t.Fatalf("threshold = %d, want %d", got, tc.want)
-			}
-		})
+// 阈值读取：报不报跟着「出错时在聊天里提示」和插件的「发送错误通知」，几次才报读 RSS / 仓库订阅插件自己的设置，
+// 定时查询没有插件用默认值。
+func TestRecurringFailureAlertThresholdReadsPluginSettings(t *testing.T) {
+	rss := Reminder{ID: "rss", Kind: ReminderKindRSSWatch, IntervalSeconds: 900, UserID: "10001", FeedURL: "https://example.com/feed.xml"}
+	repo := Reminder{ID: "repo", Kind: ReminderKindRepositoryWatch, IntervalSeconds: 900, UserID: "10001", Repository: "SuInk/diana"}
+	plugins := NewPluginManager(NewRSSWatchPlugin(nil), NewRepositoryWatchPlugin(nil))
+	runtime := NewRuntime(BotConfig{OwnerID: "10001"}, &recordingChannel{}, plugins, nil, &stubReminderStore{}, nil, nil)
+	if got := runtime.recurringFailureAlertThreshold(rss); got != defaultRecurringFailureAlertThreshold {
+		t.Fatalf("unset threshold = %d, want default %d", got, defaultRecurringFailureAlertThreshold)
+	}
+	if _, err := plugins.UpdateSettings(rssWatchPluginID, map[string]any{recurringFailureAlertSettingKey: 2}); err != nil {
+		t.Fatal(err)
+	}
+	if got := runtime.recurringFailureAlertThreshold(rss); got != 2 {
+		t.Fatalf("rss threshold = %d, want 2 from the plugin setting", got)
+	}
+	if got := runtime.recurringFailureAlertThreshold(repo); got != defaultRecurringFailureAlertThreshold {
+		t.Fatalf("repository threshold = %d, the rss setting must not leak into it", got)
+	}
+	quiet := NewRuntime(BotConfig{OwnerID: "10001", ErrorNotifyEnabled: boolPointer(false)}, &recordingChannel{}, plugins, nil, &stubReminderStore{}, nil, nil)
+	if got := quiet.recurringFailureAlertThreshold(rss); got != 0 {
+		t.Fatalf("threshold with error notifications off = %d, want 0", got)
+	}
+	if _, err := plugins.UpdateSettings(rssWatchPluginID, map[string]any{recurringFailureAlertSettingKey: 2, pluginErrorNoticeSetting: false}); err != nil {
+		t.Fatal(err)
+	}
+	if got := runtime.recurringFailureAlertThreshold(rss); got != 0 {
+		t.Fatalf("threshold with the rss plugin's error notice off = %d, want 0", got)
+	}
+	if got := runtime.recurringFailureAlertThreshold(repo); got != defaultRecurringFailureAlertThreshold {
+		t.Fatalf("repository threshold = %d, the rss switch must not silence it", got)
+	}
+	if recurringFailureShouldAlert(Reminder{ID: "once", Kind: ReminderKindMessage}, 0) {
+		t.Fatal("a one-off reminder must stay quiet when error notifications are off")
 	}
 }

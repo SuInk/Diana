@@ -15,8 +15,9 @@ func TestEveryStylePrefersCompactChatWithoutHardLimit(t *testing.T) {
 					t.Errorf("style=%q natural=%v still forces one message: %s", style, natural, obsolete)
 				}
 			}
-			if !strings.Contains(prompt, "尽量少发几条") || !strings.Contains(prompt, "不预设条数") {
-				t.Fatal("missing flexible pacing preference")
+			// 节奏照真人发消息来：一条说一件事、话多就多发几条，不是一条写长。
+			if !strings.Contains(prompt, "一条说一件事") || !strings.Contains(prompt, "话多就分几条发") || strings.Contains(prompt, "尽量少发几条") {
+				t.Fatal("pacing must prefer short one-thing messages over packing everything into one")
 			}
 			if !strings.Contains(prompt, replyCompactPacingRule) {
 				t.Errorf("style=%q natural=%v missing pacing", style, natural)
@@ -29,7 +30,7 @@ func TestEveryStylePrefersCompactChatWithoutHardLimit(t *testing.T) {
 					t.Errorf("style=%q still encourages excessive splitting: %s", style, obsolete)
 				}
 			}
-			if !strings.Contains(prompt, "不是硬性条数或长度限制") || !strings.Contains(prompt, notificationLineMarker) {
+			if !strings.Contains(prompt, "按需答全") || !strings.Contains(prompt, notificationLineMarker) {
 				t.Fatal("pacing must preserve complete answers and structured formatting")
 			}
 			if strings.Contains(prompt, replySegmentationRule) != natural {
