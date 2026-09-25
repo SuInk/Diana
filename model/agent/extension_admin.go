@@ -72,6 +72,9 @@ func extensionAdminManager(cfg Config) (*ExtensionManager, error) {
 		return nil, err
 	}
 	m.mcpConfigs = servers
+	if err := migrateLegacyMCPDisable(cfg.WorkDir, servers); err != nil {
+		return nil, err
+	}
 	return m, nil
 }
 
@@ -96,10 +99,16 @@ func AdministerExtensions(ctx context.Context, cfg Config, req ExtensionAdminReq
 		}
 		for i := range states {
 			available := states[i].Enabled
-			states[i].Available = &available
-			if enabled, ok := overrides[states[i].ID]; ok {
+			if states[i].Kind == ExtensionKindMCP {
+				// MCP 的全局开关只是默认，机器人可以单独打开，没有「全局停用、这里打不开」。
+				available = true
+				if enabled, ok := overrides[states[i].ID]; ok {
+					states[i].Enabled = enabled
+				}
+			} else if enabled, ok := overrides[states[i].ID]; ok {
 				states[i].Enabled = states[i].Enabled && enabled
 			}
+			states[i].Available = &available
 			if req.ProfileID != "" {
 				states[i].Resident = ResidentOverride(overrides, states[i].ID)
 			}
@@ -143,6 +152,9 @@ func AdministerExtensions(ctx context.Context, cfg Config, req ExtensionAdminReq
 		return map[string]any{"items": items}, nil
 
 	case "enabled":
+		if req.ProfileID == "" && ExtensionKind(req.Kind) == ExtensionKindMCP {
+			return nil, setMCPBotDefault(m.cfg, req.Name, req.Enabled)
+		}
 		if req.ProfileID == "" {
 			return nil, fmt.Errorf("请选择机器人后调整启用状态")
 		}
@@ -478,4 +490,30 @@ func AdministerExtensions(ctx context.Context, cfg Config, req ExtensionAdminReq
 		return nil, err
 	}
 	return result, nil
+}
+
+// setMCPBotDefault 改 MCP 的全局开关，并清掉各台机器人的单独设置，让它们统一跟随。
+// 和 setMCPEnabled 是同一件事，只是这里在管理页上：只写配置，不起也不停进程，进程
+// 由调用方重建底座时按新配置决定。
+func setMCPBotDefault(cfg Config, name string, enabled bool) error {
+	name = strings.TrimSpace(name)
+	path := resolveMCPConfigPath(cfg)
+	lock := extensionPathLock(path)
+	lock.Lock()
+	defer lock.Unlock()
+	servers, err := loadMCPServers(path)
+	if err != nil {
+		return err
+	}
+	server, ok := servers[name]
+	if !ok {
+		return fmt.Errorf("扩展不存在")
+	}
+	value := enabled
+	server.Enabled = &value
+	servers[name] = server
+	if err := saveMCPServers(path, servers); err != nil {
+		return err
+	}
+	return clearBotEnabledOverrides(cfg.WorkDir, "mcp:"+name)
 }
