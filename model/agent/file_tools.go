@@ -167,7 +167,7 @@ func (t *EditFileTool) Run(_ context.Context, input map[string]any) (string, err
 	}
 	info, err := os.Stat(target)
 	if err != nil {
-		return "", err
+		return "", workspaceNotFound(rel, err)
 	}
 	if info.IsDir() {
 		return "", fmt.Errorf("%s is a directory", rel)
@@ -308,7 +308,7 @@ func (t *GrepTool) Run(ctx context.Context, input map[string]any) (string, error
 	if err != nil {
 		return "", fmt.Errorf("pattern 不是有效的正则: %w", err)
 	}
-	base, err := safePath(t.root, stringFromInput(input, "path"))
+	base, err := safeSearchBase(t.root, stringFromInput(input, "path"))
 	if err != nil {
 		return "", err
 	}
@@ -424,7 +424,7 @@ func (t *FindFilesTool) Run(ctx context.Context, input map[string]any) (string, 
 	if pattern == "" {
 		return "", errors.New("pattern is required")
 	}
-	base, err := safePath(t.root, stringFromInput(input, "path"))
+	base, err := safeSearchBase(t.root, stringFromInput(input, "path"))
 	if err != nil {
 		return "", err
 	}
@@ -463,6 +463,22 @@ func (t *FindFilesTool) Run(ctx context.Context, input map[string]any) (string, 
 }
 
 // ---- 共用 ------------------------------------------------------------------
+
+// safeSearchBase 解析 grep / find_files 的起点目录。起点不存在时 WalkDir 会静默返回空结果，
+// 模型读到「没有匹配」会以为文件真不存在，所以这里先把「目录写错了」单独报出来。
+func safeSearchBase(root, rel string) (string, error) {
+	base, err := safePath(root, rel)
+	if err != nil {
+		return "", err
+	}
+	if _, err := os.Stat(base); err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return "", fmt.Errorf("工作目录里没有 %s 这个目录（%w）；省略 path 就从工作目录根开始查", strings.TrimSpace(rel), fs.ErrNotExist)
+		}
+		return "", err
+	}
+	return base, nil
+}
 
 // walkAgentFiles 遍历工作目录下的普通文件，回调拿到绝对路径和相对路径。
 //
