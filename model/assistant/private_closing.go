@@ -183,7 +183,7 @@ func (r *Runtime) privateFollowUpAuditDue(event MessageEvent, now time.Time) boo
 	if r == nil || event.Kind != EventKindPrivate {
 		return false
 	}
-	last, ok := r.lastPrivateBotReplyAt(event)
+	last, ok := r.lastBotReplyAt(event)
 	if !ok {
 		return false
 	}
@@ -191,9 +191,9 @@ func (r *Runtime) privateFollowUpAuditDue(event MessageEvent, now time.Time) boo
 	return gap >= 0 && gap <= privateClosingAuditWindow
 }
 
-// lastPrivateBotReplyAt 找这个会话里机器人最后一次说话的时间。历史里既有
+// lastBotReplyAt 找这个会话里机器人最后一次说话的时间。历史里既有
 // botReply 这类运行时标记，也有从对端回读到的自己发的消息，两种都算。
-func (r *Runtime) lastPrivateBotReplyAt(event MessageEvent) (time.Time, bool) {
+func (r *Runtime) lastBotReplyAt(event MessageEvent) (time.Time, bool) {
 	cfg := r.effectiveConfigForEvent(event)
 	botID := firstNonEmpty(strings.TrimSpace(cfg.BotAccount), strings.TrimSpace(event.SelfID))
 	history, _ := r.sessionContextHistory(event)
