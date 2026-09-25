@@ -3952,6 +3952,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			agentRegistry = agent.NewToolRegistry(pluginTools...)
 			agentRegistry.Retain(r.allowedAgentToolNamesForEvent(event, relationship))
 		}
+		attachCapabilityRegistry(pluginTools, agentRegistry)
 	}
 	if agentRegistry != nil {
 		defer agentRegistry.Close()
