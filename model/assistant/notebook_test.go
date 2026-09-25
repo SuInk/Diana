@@ -259,13 +259,13 @@ func TestProactiveRouterReceivesMatchedNotebookContext(t *testing.T) {
 		t.Fatalf("router request = %#v", request.Messages)
 	}
 	payload := request.Messages[1].Content
-	for _, want := range []string{`"notebook_context"`, "zgm", "在干嘛"} {
+	for _, want := range []string{"群内术语", "zgm", "在干嘛"} {
 		if !strings.Contains(payload, want) {
 			t.Fatalf("router payload missing %q: %s", want, payload)
 		}
 	}
 	prompt := request.Messages[0].Content
-	for _, want := range []string{"notebook_context", "不能再称它为未解释缩写", "zgm=在干嘛"} {
+	for _, want := range []string{"群内术语", "不能再称它为未解释缩写", "zgm=在干嘛"} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("router prompt missing %q: %s", want, prompt)
 		}
