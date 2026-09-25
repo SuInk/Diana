@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -294,7 +295,7 @@ func buildOutgoingSegments(msg OutgoingMessage) []map[string]any {
 		})
 	}
 	if len(msg.Segments) > 0 {
-		for _, segment := range msg.Segments {
+		for _, segment := range sendableOneBotSegments(msg.Segments) {
 			segmentType := strings.TrimSpace(segment.Type)
 			if segmentType == "" || segmentType == "notice" {
 				continue
@@ -311,7 +312,7 @@ func buildOutgoingSegments(msg OutgoingMessage) []map[string]any {
 		segments = appendOutgoingImageSegments(segments, msg.ImageURLs)
 	}
 	if msg.Text != "" {
-		for _, segment := range TextToOneBotSegments(msg.Text) {
+		for _, segment := range sendableOneBotSegments(TextToOneBotSegments(msg.Text)) {
 			segments = append(segments, map[string]any{
 				"type": segment.Type,
 				"data": segment.Data,
@@ -337,6 +338,62 @@ func buildOutgoingSegments(msg OutgoingMessage) []map[string]any {
 		}
 	}
 	return segments
+}
+
+// sendableOneBotSegments 丢掉接入端一定会拒收的段，其余原样保留。
+//
+// at 的 qq、reply 的 id 在 NapCat 那边是数字字段，混进一个非数字值，整条消息都会被
+// 拒（numeric message segment field must contain only an integer），同一条回复里的
+// 正文也跟着没了。提及标记在 normalizeOutgoingMentions 里已经按 mentionIDAcceptable
+// 筛过，模型直接手写的 CQ 码却不经过那一步：9/20 那条 [CQ:at,qq=im_current_user_…]
+// 别名少写了一位，restoreText 认不出，原样进了 at 段，整条回复被拒。
+//
+// 处理和提及标记一致：整段丢掉，不降级成纯文本。别名当正文发出去既点不动，又把内部
+// 标识露给群友；少一个 @ 句子照样完整。只在出站用，入站解析仍由 CQToSegments 原样保留。
+func sendableOneBotSegments(segments []MessageSegment) []MessageSegment {
+	out := make([]MessageSegment, 0, len(segments))
+	trimSpacer := false
+	for _, segment := range segments {
+		if trimSpacer && segment.Type == "text" {
+			trimSpacer = false
+			// 提及后面那个空格是给 @ 和正文分隔用的，@ 没了它就成了多余的缩进。
+			text := segment.Data["text"]
+			if strings.HasPrefix(text, " ") {
+				if text == " " {
+					continue
+				}
+				data := cloneSegmentData(segment.Data)
+				data["text"] = text[1:]
+				segment = MessageSegment{Type: segment.Type, Data: data}
+			}
+		}
+		trimSpacer = false
+		if oneBotSegmentSendable(segment) {
+			out = append(out, segment)
+			continue
+		}
+		log.Printf("diana dropped unsendable onebot segment: type=%s data=%v", segment.Type, segment.Data)
+		trimSpacer = segment.Type == "at"
+	}
+	return out
+}
+
+// oneBotSegmentSendable 检查段里的数字字段是不是真是数字。
+func oneBotSegmentSendable(segment MessageSegment) bool {
+	switch segment.Type {
+	case "at":
+		qq := segment.Data["qq"]
+		return qq == "all" || numericChatID(qq)
+	case "reply":
+		return validOutgoingReplyMessageID(segment.Data["id"])
+	case "poke":
+		for _, key := range []string{"qq", "id"} {
+			if value, ok := segment.Data[key]; ok && !numericChatID(value) {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func buildForwardOutgoingSegments(msg OutgoingMessage) []map[string]any {

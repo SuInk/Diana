@@ -8,10 +8,12 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"io"
 	"iter"
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 
 	"google.golang.org/genai"
 )
@@ -50,7 +52,7 @@ func newGeminiClient(cfg ProviderConfig, httpClient *http.Client) (*geminiClient
 	client, err := genai.NewClient(context.Background(), &genai.ClientConfig{
 		APIKey:      apiKey,
 		Backend:     genai.BackendGeminiAPI,
-		HTTPClient:  httpClient,
+		HTTPClient:  withGeminiStreamReadErrors(httpClient),
 		HTTPOptions: httpOptions,
 	})
 	if err != nil {
@@ -239,10 +241,10 @@ func (c *geminiClient) Stream(ctx context.Context, req GenerateRequest) (streamE
 func (c *geminiClient) streamContent(ctx context.Context, model string, contents []*genai.Content, config *genai.GenerateContentConfig, implicitLimit bool) iter.Seq2[*genai.GenerateContentResponse, error] {
 	return func(yield func(*genai.GenerateContentResponse, error) bool) {
 		first := true
-		for response, err := range c.client.Models.GenerateContentStream(ctx, model, contents, config) {
+		for response, err := range c.streamContentOnce(ctx, model, contents, config) {
 			if first && err != nil && implicitLimit && isGeminiOutputLimitRejection(err) {
 				config.MaxOutputTokens = 0
-				for response, err := range c.client.Models.GenerateContentStream(ctx, model, contents, config) {
+				for response, err := range c.streamContentOnce(ctx, model, contents, config) {
 					if !yield(response, err) {
 						return
 					}
@@ -255,6 +257,115 @@ func (c *geminiClient) streamContent(ctx context.Context, model string, contents
 			}
 		}
 	}
+}
+
+// streamContentOnce 发一次流式请求，把读流时断掉的原因交回调用方。
+//
+// genai 读流遇到读错误（连接断开、请求被取消）不会交给调用方：它在迭代器末尾用标准库
+// log 打一行「Error <err>」，然后当作流正常结束。线上日志里那些没头没尾的
+// 「Error context canceled」就是这么来的——看不出是哪次请求，而调用方主动放弃的请求
+// 本来也不该记成错误；调用方这边只看到「stream ended before completion」，不知道为什么。
+// withGeminiStreamReadErrors 在传输层把读错误记下、对 SDK 报 io.EOF，SDK 就不再打那
+// 行日志；这里读完再带上模型名交回去。取消仍然是 errors.Is(err, context.Canceled)，
+// 上层照处理取消的老路走，不会被当成上游故障。
+func (c *geminiClient) streamContentOnce(ctx context.Context, model string, contents []*genai.Content, config *genai.GenerateContentConfig) iter.Seq2[*genai.GenerateContentResponse, error] {
+	return func(yield func(*genai.GenerateContentResponse, error) bool) {
+		recorder := &geminiStreamReadRecorder{}
+		streamCtx := context.WithValue(ctx, geminiStreamReadRecorderKey{}, recorder)
+		for response, err := range c.client.Models.GenerateContentStream(streamCtx, model, contents, config) {
+			if err != nil {
+				// 读断在一行中间时，SDK 会拿半行去解析、报「invalid stream chunk」；
+				// 真正的原因是读错误，换成它。
+				if readErr := recorder.err(); readErr != nil {
+					err = geminiStreamReadFailure(model, readErr)
+				}
+				yield(nil, err)
+				return
+			}
+			if !yield(response, nil) {
+				return
+			}
+		}
+		if readErr := recorder.err(); readErr != nil {
+			yield(nil, geminiStreamReadFailure(model, readErr))
+		}
+	}
+}
+
+func geminiStreamReadFailure(model string, err error) error {
+	return fmt.Errorf("llm: gemini stream read failed (model=%s): %w", model, err)
+}
+
+// geminiStreamReadRecorderKey 把一次流式请求的 recorder 挂在请求 ctx 上，传输层按它
+// 认出哪些响应体要接管：没挂的（非流式调用、改图下载）原样放行。
+type geminiStreamReadRecorderKey struct{}
+
+// geminiStreamReadRecorder 记下流式响应体第一次读失败的原因。
+type geminiStreamReadRecorder struct {
+	mu    sync.Mutex
+	first error
+}
+
+func (r *geminiStreamReadRecorder) record(err error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.first == nil {
+		r.first = err
+	}
+}
+
+func (r *geminiStreamReadRecorder) err() error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.first
+}
+
+// withGeminiStreamReadErrors 给 genai 用的 HTTP 客户端套一层传输，见 streamContentOnce。
+// 传进来的客户端（凭据注入等）原样保留在底下，只是多包一层；nil 时和 genai 的缺省一样
+// 用标准传输。
+func withGeminiStreamReadErrors(client *http.Client) *http.Client {
+	wrapped := &http.Client{}
+	if client != nil {
+		*wrapped = *client
+	}
+	base := wrapped.Transport
+	if base == nil {
+		base = http.DefaultTransport
+	}
+	wrapped.Transport = geminiStreamTransport{base: base}
+	return wrapped
+}
+
+type geminiStreamTransport struct {
+	base http.RoundTripper
+}
+
+func (t geminiStreamTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	resp, err := t.base.RoundTrip(req)
+	if err != nil || resp == nil || resp.Body == nil {
+		return resp, err
+	}
+	recorder, _ := req.Context().Value(geminiStreamReadRecorderKey{}).(*geminiStreamReadRecorder)
+	// 非 2xx 的响应体是 SDK 拿去拼 APIError 的，读错了就让它照常报出来。
+	if recorder == nil || resp.StatusCode < 200 || resp.StatusCode > 299 {
+		return resp, nil
+	}
+	resp.Body = &geminiStreamBody{ReadCloser: resp.Body, recorder: recorder}
+	return resp, nil
+}
+
+type geminiStreamBody struct {
+	io.ReadCloser
+	recorder *geminiStreamReadRecorder
+}
+
+func (b *geminiStreamBody) Read(p []byte) (int, error) {
+	n, err := b.ReadCloser.Read(p)
+	if err != nil && !errors.Is(err, io.EOF) {
+		b.recorder.record(err)
+		return n, io.EOF
+	}
+	return n, err
 }
 
 // setGeminiOutputTokenLimit 写入输出上限，返回这个值是不是代填的。
