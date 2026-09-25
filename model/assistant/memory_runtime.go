@@ -814,9 +814,9 @@ func (r *Runtime) runLLMMemoryProvider(ctx context.Context, run llmProviderRunFu
 	r.mu.RUnlock()
 	if cfgFactory != nil && store != nil {
 		set := store.Profiles().WithDefaults()
-		// 记忆是自动文本任务：专用 memory 分组优先，其次使用机器人已经绑定的
-		// intent（未绑定 intent 时 roleBoundProfiles 会回退 chat）。不能直接取
-		// Current，否则激活生图配置时会拿图片模型发送文本 Responses 请求。
+		// 记忆是自动文本任务：专用 memory 分组优先，其次使用机器人给「后台生成」
+		// 绑的模型（没绑时 roleBoundProfiles 会回退 chat）。不能直接取 Current，
+		// 否则激活生图配置时会拿图片模型发送文本 Responses 请求。
 		groups := append([]string(nil), memoryProfileGroups...)
 		seen := map[string]bool{}
 		for _, group := range groups {
@@ -830,7 +830,10 @@ func (r *Runtime) runLLMMemoryProvider(ctx context.Context, run llmProviderRunFu
 				return r.runLLMProviderProfileAttempts(ctx, profiles, cfgFactory, true, run)
 			}
 		}
-		profiles, roleErr := r.roleBoundProfiles(llmUsagePurposeFromContext(ctx), set, llm.GroupIntent)
+		// 这里以前按 intent 取。本次调用的分组排在用途归属前面，于是只要 intent
+		// 绑了模型，后台生成那一档对记忆就从来不起作用——落到的还多半是只做判断、
+		// 写不出记忆的模型。
+		profiles, roleErr := r.roleBoundProfiles(llmUsagePurposeFromContext(ctx), set, llm.GroupBackground)
 		if roleErr != nil {
 			return "", roleErr
 		}

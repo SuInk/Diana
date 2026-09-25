@@ -8104,7 +8104,9 @@ func (r *Runtime) judgeRSSWatch(ctx context.Context, item Reminder, change rssWa
 	}
 	taskCtx = withLLMUsagePurpose(withLLMUsageContext(taskCtx, source), PurposeRSSWatchJudge)
 	return r.reuseRSSJudgment(taskCtx, source, messages, func(judgeCtx context.Context) (rssJudgeDecision, error) {
-		raw, err := r.runLLMProviderForGroup(judgeCtx, llm.GroupChat, func(client LLMProvider) (string, error) {
+		// 按对话分组取的话，对话那一档一定有绑定，会盖过用途归属，后台生成指的
+		// 模型就用不上。
+		raw, err := r.runLLMProviderForGroup(judgeCtx, llm.GroupBackground, func(client LLMProvider) (string, error) {
 			resp, err := client.Generate(judgeCtx, llm.GenerateRequest{Messages: messages})
 			if err != nil {
 				return "", err

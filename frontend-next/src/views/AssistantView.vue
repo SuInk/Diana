@@ -564,6 +564,7 @@
                   <div
                     class="model-route-group"
                     :class="routeDragClasses(role.key, 0)"
+                    :data-route-slot="`${role.key}:0`"
                     @dragover="(event) => onRouteDragOver(role.key, 0, event)"
                     @drop="(event) => onRouteDrop(role.key, 0, event)"
                   >
@@ -576,6 +577,7 @@
                       title="拖动调整顺序，或按 ↑ ↓ 键；排在最上面的是主路由"
                       :aria-label="`${role.label}：主路由，按上下方向键调整顺序`"
                       @dragstart="(event) => onRouteDragStart(role.key, 0, event)"
+                      @pointerdown="(event) => onRouteHandlePointerDown(role.key, 0, event)"
                       @dragend="onRouteDragEnd"
                       @keydown="(event) => onRouteHandleKeydown(role.key, 0, event)"
                     >
@@ -592,7 +594,7 @@
                     <AppSelect
                       :model-value="roleSelectionValue(role.key)"
                       :options="channelOptionsFor(role.key)"
-                      :placeholder="isPurposeRole(role.key) ? '不指定，跟随对话' : '请选择提供商 / 分组'"
+                      :placeholder="isPurposeRole(role.key) ? `不指定，跟随${purposeRoleFallbackLabel(role.key)}` : '请选择提供商 / 分组'"
                       @update:model-value="(value) => setRoleChannel(role.key, value)"
                     />
                     <AppSelect
@@ -618,6 +620,7 @@
                     :key="`${role.key}-fallback-${index}`"
                     class="model-route-group"
                     :class="routeDragClasses(role.key, index + 1)"
+                    :data-route-slot="`${role.key}:${index + 1}`"
                     @dragover="(event) => onRouteDragOver(role.key, index + 1, event)"
                     @drop="(event) => onRouteDrop(role.key, index + 1, event)"
                   >
@@ -629,6 +632,7 @@
                       title="拖动调整顺序，或按 ↑ ↓ 键；排在最上面的是主路由"
                       :aria-label="`${role.label}：后备 ${index + 1}，按上下方向键调整顺序`"
                       @dragstart="(event) => onRouteDragStart(role.key, index + 1, event)"
+                      @pointerdown="(event) => onRouteHandlePointerDown(role.key, index + 1, event)"
                       @dragend="onRouteDragEnd"
                       @keydown="(event) => onRouteHandleKeydown(role.key, index + 1, event)"
                     >
@@ -2912,10 +2916,10 @@ function onMessageRelaysSaved(config: BotProfileConfig): void {
 }
 
 // —— 模型分配 ——
-// 细分用途：不配就跟着「意图识别」那一档走。摊出来是因为这些调用的性质差得很远——
-// 主动接话判定和发送前审核都能改成判断题（可以绑 TypeSafe Jev 这类只做判断的模型），
-// 而记忆抽取、上下文压缩要的是文本输出，绑上去只会每次先失败一次再降级。
-const purposeRoleKeys = ["background"] as const;
+// 细分用途：要写文字的旁路调用，从「意图识别」里拆出来——那一档能绑只做判断的模型，
+// 这些绑上去只会每次先失败一次再降级。再按时机分两档：回复辅助在回复发出前同步跑，
+// 要快；后台生成在回复之外异步跑，慢一点没关系。
+const purposeRoleKeys = ["reply_assist", "background"] as const;
 
 type RoleKey = "chat" | "vision" | "intent" | "image" | "media_parse" | (typeof purposeRoleKeys)[number];
 type RoleRoute = { profile_id?: string; group?: string; model: string; provider_id?: string; model_id?: string; follow_chat?: boolean };
@@ -2946,28 +2950,38 @@ const modelRoleRows: ModelRoleRow[] = [
     label: "意图识别",
     description:
       "判定当前这一轮该不该说话、说出去的这句能不能发：主动接话判定、接话质量和发送前审核。问的都是是非、单选和打分，" +
-      "发请求时带着判断题表，所以这一档可以绑 TypeSafe Jev 这类只做判断的模型——更快更便宜。写字的活在「后台生成」那一档。"
-  },
-  {
-    key: "image",
-    label: "图片生成",
-    description: "生成和编辑图片。选「跟随对话」时，对话模型本身必须支持出图。"
+      "发请求时带着判断题表，所以这一档可以绑 TypeSafe Jev 这类只做判断的模型——更快更便宜。写字的活在「回复辅助」和「后台生成」两档。"
   }
 ];
-// 后台生成是从「意图识别」里拆出来的一档。留空时后端按用途归属找不到绑定，回落到对话。
+// 生图和其余几档不是一类活——那些都在读和写文字，它只出图——排在最后，不夹在
+// 文字用途中间。
+const imageRoleRow: ModelRoleRow = {
+  key: "image",
+  label: "图片生成",
+  description: "生成和编辑图片。选「跟随对话」时，对话模型本身必须支持出图。"
+};
+// 回复辅助留空时沿用后台生成（它就是从那一档拆出来的），后台生成留空时跟随对话。
 const purposeRoleRows: ModelRoleRow[] = [
+  {
+    key: "reply_assist",
+    label: "回复辅助",
+    sublabel: "指代 · 摘要 · 提示",
+    description:
+      "语义指代、话题合并、语义去重、上下文摘要、转发内容安全、戳一戳回应，以及出错、被拦、收声时发给用户的那句提示改写。" +
+      "它们都在这一轮回复发出之前同步执行，模型慢，回复就跟着慢——选一个响应快、能写文字的模型，不需要判断题表。不指定时沿用后台生成。"
+  },
   {
     key: "background",
     label: "后台生成",
     sublabel: "好感度 · 记忆",
     description:
-      "好感度评估、长期记忆抽取与归纳、上下文摘要、语义指代、转发内容安全，以及各种提示改写。" +
-      "它们都要写出成段文字，判断模型答不了；也不在回复的关键路径上，慢一点没关系。不指定时跟随对话。"
+      "好感度评估、长期记忆抽取与归纳、RSS 订阅判定、入群欢迎语和纪念日问候。它们都要写出成段文字，判断模型答不了；" +
+      "都在回复之外异步执行，慢一点没关系，适合指一个便宜的模型。不指定时跟随对话。"
   }
 ];
 
-// 细分用途只剩后台生成一档，直接和其他用途一起铺开，不再折叠。
-const visibleModelRoleRows = [...modelRoleRows, ...purposeRoleRows];
+// 细分用途只有这两档，直接和其他用途一起铺开，不再折叠。
+const visibleModelRoleRows = [...modelRoleRows, ...purposeRoleRows, imageRoleRow];
 
 function isPurposeRole(role: RoleKey): boolean {
   return purposeRoleKeys.includes(role as (typeof purposeRoleKeys)[number]);
@@ -2978,10 +2992,15 @@ function isOptionalRole(role: RoleKey): boolean {
   return role === "media_parse" || isPurposeRole(role);
 }
 
+// 细分用途留空时跟着谁：回复辅助先找后台生成，后台生成直接跟随对话。
+function purposeRoleFallbackLabel(role: RoleKey): string {
+  return role === "reply_assist" ? "后台生成" : "对话";
+}
+
 function roleModelPlaceholder(role: RoleKey): string {
   if (!roleForm.value[role]) {
     if (role === "media_parse") return "跟随视觉理解模型";
-    if (isPurposeRole(role)) return "跟随对话模型";
+    if (isPurposeRole(role)) return `跟随${purposeRoleFallbackLabel(role)}模型`;
   }
   return roleForm.value[role]?.follow_chat ? "跟随对话模型" : "请选择模型（必填）";
 }
@@ -3015,7 +3034,7 @@ function roleSnapshot(roles: Record<string, RoleAssignment | undefined> | undefi
 // 保存出去的配置就会莫名其妙换个样子，配置对比和导出全是噪音。认不出的键按
 // 原样排在后面，别把以后新增的用途悄悄丢掉。
 function orderedRoleKeys(roles: Partial<Record<string, unknown>>): string[] {
-  const known = modelRoleRows.map((row) => row.key).filter((key) => key in roles);
+  const known = visibleModelRoleRows.map((row) => row.key).filter((key) => key in roles);
   return [...known, ...Object.keys(roles).filter((key) => !known.includes(key as RoleKey))];
 }
 
@@ -3414,7 +3433,8 @@ function removeRoleFallback(role: RoleKey, index: number): void {
 
 // 主路由和后备路由是同一张有序列表：下标 0 是主路由，i 是后备 i。
 // 拖动或方向键调整顺序，排到最上面的那条成为主路由。跟随对话时没有自己的路由可排。
-const routeDrag = ref<{ role: RoleKey; from: number; over: number | null } | null>(null);
+// touch 标记这次拖动是手指发起的，由指针事件驱动，不走原生拖放。
+const routeDrag = ref<{ role: RoleKey; from: number; over: number | null; touch?: boolean } | null>(null);
 
 function routeReorderable(role: RoleKey): boolean {
   const assignment = roleForm.value[role];
@@ -3443,6 +3463,12 @@ function routeDragClasses(role: RoleKey, index: number): Record<string, boolean>
 }
 
 function onRouteDragStart(role: RoleKey, index: number, event: DragEvent): void {
+  // 手指拖动已经在走指针事件；有的浏览器长按后还会补一个原生 dragstart，拦掉，
+  // 否则两套拖动抢同一次手势。
+  if (routeDrag.value?.touch) {
+    event.preventDefault();
+    return;
+  }
   routeDrag.value = { role, from: index, over: null };
   if (event.dataTransfer) {
     event.dataTransfer.effectAllowed = "move";
@@ -3467,7 +3493,46 @@ function onRouteDrop(role: RoleKey, index: number, event: DragEvent): void {
 }
 
 function onRouteDragEnd(): void {
-  routeDrag.value = null;
+  if (!routeDrag.value?.touch) routeDrag.value = null;
+}
+
+// 原生拖放只认鼠标：手机上按住手柄滑动，浏览器当成滚动页面，dragstart 根本不来，
+// 于是排序拖不动。触摸和触控笔改走指针事件：捕获指针，每次移动看手指下面是
+// 哪一行，松手时按鼠标拖放同样的规则落位。手柄上的 touch-action: none 让这次
+// 滑动不被浏览器拿去滚页面。
+function onRouteHandlePointerDown(role: RoleKey, index: number, event: PointerEvent): void {
+  if (event.pointerType === "mouse" || !event.isPrimary) return;
+  const handle = event.currentTarget as HTMLElement;
+  handle.setPointerCapture(event.pointerId);
+  routeDrag.value = { role, from: index, over: null, touch: true };
+  const onMove = (move: PointerEvent) => {
+    const drag = routeDrag.value;
+    if (drag?.touch) drag.over = routeSlotAt(role, move.clientX, move.clientY);
+  };
+  const finish = (commit: boolean) => {
+    handle.removeEventListener("pointermove", onMove);
+    handle.removeEventListener("pointerup", onUp);
+    handle.removeEventListener("pointercancel", onCancel);
+    handle.removeEventListener("lostpointercapture", onCancel);
+    const drag = routeDrag.value;
+    routeDrag.value = null;
+    if (commit && drag?.touch && drag.over !== null) moveRoleRoute(role, drag.from, drag.over);
+  };
+  const onUp = () => finish(true);
+  const onCancel = () => finish(false);
+  handle.addEventListener("pointermove", onMove);
+  handle.addEventListener("pointerup", onUp);
+  handle.addEventListener("pointercancel", onCancel);
+  // 捕获被系统收走（来电、切后台）时没有 pointerup，不收尾的话拖动状态会一直挂着。
+  handle.addEventListener("lostpointercapture", onCancel);
+}
+
+// routeSlotAt 返回坐标下面是这一档的第几条路由；拖到别的用途或空白处返回 null，
+// 松手就不动。
+function routeSlotAt(role: RoleKey, x: number, y: number): number | null {
+  const slot = document.elementFromPoint(x, y)?.closest<HTMLElement>("[data-route-slot]")?.dataset.routeSlot;
+  const [slotRole, slotIndex] = slot?.split(":") ?? [];
+  return slotRole === role ? Number(slotIndex) : null;
 }
 
 async function onRouteHandleKeydown(role: RoleKey, index: number, event: KeyboardEvent): Promise<void> {
@@ -3714,7 +3779,7 @@ async function save(): Promise<void> {
     toastError(sendRetryError);
     return;
   }
-  for (const row of [...modelRoleRows, ...purposeRoleRows]) {
+  for (const row of visibleModelRoleRows) {
     const role = roleForm.value[row.key];
     // 细分用途和媒体解析都可以留空：留空表示跟随它所属的那一档。
     if (!role && (row.key === "media_parse" || purposeRoleKeys.includes(row.key as (typeof purposeRoleKeys)[number]))) continue;

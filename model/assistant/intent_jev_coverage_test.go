@@ -59,16 +59,27 @@ func TestParticipationDecisionRoundTrips(t *testing.T) {
 	}
 }
 
-// 后台生成那一档要写成段文字，绝不能被误挂上判断题表——挂了只会让判断模型
-// 答一堆是非题，正文却是空的。
-func TestBackgroundPurposesHaveNoDecisionSpec(t *testing.T) {
-	writers := []string{
-		PurposeRSSWatchJudge, PurposeMemoryExtract, PurposeMemorySummary,
-		PurposeRelationshipEvaluate, PurposeContextSummary, PurposeDirectReplyTopic,
+// 写成段文字的用途绝不能被误挂上判断题表——挂了只会让判断模型答一堆是非题，
+// 正文却是空的。异步的归后台生成，回复前同步跑的归回复辅助。
+func TestTextPurposesStayOffIntent(t *testing.T) {
+	writers := map[string]string{
+		PurposeRSSWatchJudge:        llm.GroupBackground,
+		PurposeMemoryExtract:        llm.GroupBackground,
+		PurposeMemorySummary:        llm.GroupBackground,
+		PurposeRelationshipEvaluate: llm.GroupBackground,
+		PurposeContextSummary:       llm.GroupReplyAssist,
+		PurposeDirectReplyTopic:     llm.GroupReplyAssist,
+		PurposeReplySemanticDedup:   llm.GroupReplyAssist,
+		PurposeSemanticTextRef:      llm.GroupReplyAssist,
+		PurposeErrorNotice:          llm.GroupReplyAssist,
+		PurposeReplySuppression:     llm.GroupReplyAssist,
+		PurposePokeReply:            llm.GroupReplyAssist,
+		PurposeWelcomeGenerator:     llm.GroupBackground,
+		PurposeRomanceGreeting:      llm.GroupBackground,
 	}
-	for _, purpose := range writers {
-		if got := ModelBindingGroupOf(purpose); got != llm.GroupBackground {
-			t.Fatalf("%s 应归后台生成，实际 %q", purpose, got)
+	for purpose, want := range writers {
+		if got := ModelBindingGroupOf(purpose); got != want {
+			t.Fatalf("%s 应归 %s，实际 %q", purpose, want, got)
 		}
 	}
 }
