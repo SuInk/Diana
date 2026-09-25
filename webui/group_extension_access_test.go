@@ -21,10 +21,10 @@ func TestGroupAdminCanOnlyTightenExtensionAccess(t *testing.T) {
 	}
 	// 机器人给的档位：probe 开到群管，open 开到全体成员。
 	overrides := `{"bot-a":{"members:mcp:probe":true,"members:mcp:open":true}}`
-	if err := os.WriteFile(filepath.Join(workDir, ".extension-overrides.json"), []byte(overrides), 0o600); err != nil {
+	if err := os.WriteFile(workspaceStateTestPath(t, workDir, "extension-overrides.json"), []byte(overrides), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(workDir, ".extension-audience.json"), []byte(`{"bot-a":{"mcp:probe":{"min_role":"admin"}}}`), 0o600); err != nil {
+	if err := os.WriteFile(workspaceStateTestPath(t, workDir, "extension-audience.json"), []byte(`{"bot-a":{"mcp:probe":{"min_role":"admin"}}}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	handler := &BotHandler{}

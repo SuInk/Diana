@@ -420,7 +420,7 @@ func TestMemberMCPPermissionIsOptInPerRobot(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	overrides := filepath.Join(workDir, ".extension-overrides.json")
+	overrides := workspaceStateTestPath(t, workDir, "extension-overrides.json")
 	if err := os.WriteFile(overrides, []byte(`{"bot-a":{"members:mcp:probe":true}}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -440,7 +440,7 @@ func TestMemberMCPPermissionIsOptInPerRobot(t *testing.T) {
 	if err := os.WriteFile(overrides, []byte(`{"bot-a":{"members:mcp:probe":true}}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(workDir, ".extension-audience.json"), []byte(`{"bot-a":{"mcp:probe":{"users":["member"],"groups":["g1"]}}}`), 0o600); err != nil {
+	if err := os.WriteFile(workspaceStateTestPath(t, workDir, "extension-audience.json"), []byte(`{"bot-a":{"mcp:probe":{"users":["member"],"groups":["g1"]}}}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	listed, err := runtime.newAgentRegistry(context.Background(), cfg.WithDefaults(), event, member)
@@ -474,7 +474,7 @@ func TestMemberMCPPermissionIsOptInPerRobot(t *testing.T) {
 		t.Fatal("名单外的群也拿到了工具")
 	}
 	// 群管门槛：事件自带身份时直接判定，普通成员拿不到。
-	if err := os.WriteFile(filepath.Join(workDir, ".extension-audience.json"), []byte(`{"bot-a":{"mcp:probe":{"min_role":"admin"}}}`), 0o600); err != nil {
+	if err := os.WriteFile(workspaceStateTestPath(t, workDir, "extension-audience.json"), []byte(`{"bot-a":{"mcp:probe":{"min_role":"admin"}}}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	plain, err := runtime.newAgentRegistry(context.Background(), cfg.WithDefaults(), event, member)
@@ -497,7 +497,7 @@ func TestMemberMCPPermissionIsOptInPerRobot(t *testing.T) {
 	if _, ok := asAdmin.Get("mcp__probe__ping"); !ok {
 		t.Fatal("群管理员没拿到设了群管门槛的工具")
 	}
-	if err := os.WriteFile(filepath.Join(workDir, ".extension-audience.json"), []byte(`{}`), 0o600); err != nil {
+	if err := os.WriteFile(workspaceStateTestPath(t, workDir, "extension-audience.json"), []byte(`{}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -536,7 +536,7 @@ func TestMemberSkillPermissionOpensOnlyTheChosenSkill(t *testing.T) {
 	if err := os.MkdirAll(workDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	overrides := filepath.Join(workDir, ".extension-overrides.json")
+	overrides := workspaceStateTestPath(t, workDir, "extension-overrides.json")
 	if err := os.WriteFile(overrides, []byte(`{"bot-a":{"members:skill:open-guide":true}}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -600,7 +600,7 @@ func TestGroupExtensionAccessOverridesBotTier(t *testing.T) {
 		t.Fatal(err)
 	}
 	// 机器人那一档：仅主人。
-	if err := os.WriteFile(filepath.Join(workDir, ".extension-overrides.json"), []byte(`{}`), 0o600); err != nil {
+	if err := os.WriteFile(workspaceStateTestPath(t, workDir, "extension-overrides.json"), []byte(`{}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	cfg := DefaultBotConfig()
@@ -698,7 +698,7 @@ func TestGroupExtensionAccessOverridesBotTier(t *testing.T) {
 
 	// 机器人那个开关只是默认：默认关着的扩展，某个群可以单独打开。否则想让一个群
 	// 用它，只能先全局打开再把别的群一个个关回去。
-	if err := os.WriteFile(filepath.Join(workDir, ".extension-overrides.json"), []byte(`{"bot-a":{"mcp:probe":false}}`), 0o600); err != nil {
+	if err := os.WriteFile(workspaceStateTestPath(t, workDir, "extension-overrides.json"), []byte(`{"bot-a":{"mcp:probe":false}}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	groupAccess(GroupExtensionAccess{})
@@ -731,7 +731,7 @@ func TestGroupExtensionTierOverridesBotLevelDisable(t *testing.T) {
 		t.Fatal(err)
 	}
 	// 机器人级：这条 MCP 停用。
-	if err := os.WriteFile(filepath.Join(workDir, ".extension-overrides.json"), []byte(`{"bot-a":{"mcp:probe":false}}`), 0o600); err != nil {
+	if err := os.WriteFile(workspaceStateTestPath(t, workDir, "extension-overrides.json"), []byte(`{"bot-a":{"mcp:probe":false}}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	cfg := DefaultBotConfig()

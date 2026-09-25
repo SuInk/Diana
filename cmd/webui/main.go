@@ -30,6 +30,7 @@ import (
 	_ "time/tzdata"
 
 	"github.com/SuInk/diana/internal/dlog"
+	"github.com/SuInk/diana/model/agent"
 	"github.com/SuInk/diana/model/assistant"
 	"github.com/SuInk/diana/model/browserbox"
 	"github.com/SuInk/diana/model/browserctl"
@@ -324,7 +325,18 @@ func main() {
 		log.Fatal(err)
 	}
 	historyMediaHandler.SetLogStore(sqliteStore)
-	stopStorageMaintenance := startStorageMaintenance(ctx, sqliteStore, appCfg.Storage)
+	// 老版本的扩展开关、对象名单、扩展位置放在工作目录根下，启动时搬进 .diana/。
+	if err := agent.MigrateWorkspaceState(assistant.AgentWorkspaceDir()); err != nil {
+		log.Printf("工作目录运行时配置迁移到 .diana/ 失败，暂时沿用旧位置：%v", err)
+	}
+	// 存储维护比机器人运行时先起来；运行时建好之后才判断得了哪些编码工作区还有人用。
+	var maintenanceRuntime atomic.Pointer[assistant.Runtime]
+	stopStorageMaintenance := startStorageMaintenance(ctx, sqliteStore, appCfg.Storage, func() func(string) bool {
+		if runtime := maintenanceRuntime.Load(); runtime != nil {
+			return runtime.CodingWorkspaceReferenced()
+		}
+		return nil
+	})
 	defer stopStorageMaintenance()
 
 	store, err := webui.NewPersistentLLMProfileStore(ctx, sqliteStore, llmSeed)
@@ -476,6 +488,7 @@ func main() {
 		return newLLMClient(store.Current())
 	})
 	botRuntime.SetProfiles(botSet)
+	maintenanceRuntime.Store(botRuntime)
 	// 种子机器人修复前每次重启都换档案 ID，按旧 ID 记下的编码任务靠这张表认回来。
 	botRuntime.SetProfileAliases(botProfileStore.LegacyProfileAliases())
 	botRuntime.SetLLMProviderConfigFactory(func(cfg llm.ProviderConfig) (assistant.LLMProvider, error) {
@@ -664,6 +677,9 @@ func main() {
 	historyMediaHandler.Register(router)
 	webui.NewStorageUsageHandler(sqliteStore.Path()).Register(router)
 	webui.NewAgentWorkspaceHandler(assistant.AgentWorkspaceDir).Register(router)
+	workspaceFilesHandler := webui.NewWorkspaceFilesHandler(botRuntime)
+	workspaceFilesHandler.SetLogStore(sqliteStore)
+	workspaceFilesHandler.Register(router)
 	mediaBaseURLHandler.Register(router)
 	botHandler.Register(router)
 	ownerLoginHandler := webui.NewOwnerLoginHandler(authManager, botRuntime)

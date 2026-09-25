@@ -281,6 +281,36 @@
                 <EmptyState v-if="categorySegments.length === 0 && !storage.scanning" title="数据目录还是空的" hint="机器人收到媒体后这里会出现分类占用" />
               </div>
 
+              <!-- 按类型看不出是哪块在涨：同样是图片，工作目录的下载会自动清，历史媒体
+                   归保留策略管。按目录再拆一遍，旧后端没有这份数据时整块不显示。 -->
+              <div v-if="directoryRows.length > 0" class="storage-breakdown">
+                <div class="storage-breakdown-head">
+                  <h3>按目录</h3>
+                  <span class="muted">占比以数据目录为分母</span>
+                </div>
+                <table class="table storage-dir-table">
+                  <thead>
+                    <tr>
+                      <th scope="col">目录</th>
+                      <th scope="col" class="storage-dir-num">大小</th>
+                      <th scope="col" class="storage-dir-num">占比</th>
+                      <th scope="col" class="storage-dir-num">文件数</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="directory in directoryRows" :key="directory.key">
+                      <td>
+                        {{ directory.label }}
+                        <code class="mono muted storage-dir-key">{{ directory.key }}</code>
+                      </td>
+                      <td class="storage-dir-num">{{ formatBytes(directory.bytes) }}</td>
+                      <td class="storage-dir-num muted">{{ storageShareLabel(directory.bytes, storage.diana_bytes) }}</td>
+                      <td class="storage-dir-num muted">{{ formatNumber(directory.files) }}</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+
               <p v-if="storage.disk_unavailable" class="hint">
                 读不到磁盘容量（{{ storage.disk_unavailable }}），上面那圈只按数据目录的分类画。
               </p>
@@ -288,11 +318,16 @@
                 数据目录 <code class="mono">{{ storage.path }}</code>。
                 <template v-if="storage.scanning">正在重新统计，稍后自动刷新。</template>
                 <template v-else-if="storage.scanned_at">统计于 {{ formatTime(storage.scanned_at) }}。</template>
-                占得多的话：图片、视频、音频这些历史原件由「媒体与文件」的保留策略清理，下载缓存由「下载缓存」清理。
+                占得多的话：图片、视频、音频这些历史原件由「媒体与文件」的保留策略清理，下载缓存由「下载缓存」清理，Agent 工作目录里的文件在「工作目录」里逐个下载或删除。
               </p>
             </template>
           </div>
         </section>
+      </div>
+
+      <div v-show="activePage === 'workspace'" class="settings-section-body">
+        <!-- 第一次点进来才挂载：列工作目录要遍历磁盘，和存储卡片一样不在打开设置页时就跑。 -->
+        <WorkspaceFilesPanel v-if="workspaceOpened" />
       </div>
 
       <div v-show="activePage === 'cache'" class="settings-section-body">
@@ -560,7 +595,8 @@ import LoadingSkeleton from "../components/LoadingSkeleton.vue";
 import SkeletonBlock from "../components/SkeletonBlock.vue";
 import PluginSettingField from "../components/PluginSettingField.vue";
 import StorageDonut from "../components/StorageDonut.vue";
-import { Activity, Download, Eye, EyeOff, HardDriveDownload, Images, KeyRound, LogOut, MonitorSmartphone, Palette, PieChart, Plug, RefreshCw, RotateCw, Save, ShieldCheck } from "@lucide/vue";
+import WorkspaceFilesPanel from "../components/WorkspaceFilesPanel.vue";
+import { Activity, Download, Eye, EyeOff, FolderOpen, HardDriveDownload, Images, KeyRound, LogOut, MonitorSmartphone, Palette, PieChart, Plug, RefreshCw, RotateCw, Save, ShieldCheck } from "@lucide/vue";
 import {
   changeCredentials,
   getAuthStatus,
@@ -605,7 +641,7 @@ import {
 import { askConfirm } from "../confirm";
 import { accentOptions, theme } from "../theme";
 import { formatBytes, formatNumber, formatTime, formatUptime } from "../format";
-import { storageCategorySegments, storageDiskSegments, storageDiskTotal, storageShareLabel, storageWidth } from "../storage-usage";
+import { storageCategorySegments, storageDirectories, storageDiskSegments, storageDiskTotal, storageShareLabel, storageWidth } from "../storage-usage";
 import { toastError, toastSuccess } from "../toast";
 
 // 侧栏菜单按「改的是谁的」分组：账号与安全决定谁能进来，系统是这台服务本身，
@@ -615,6 +651,7 @@ const settingsPages = [
   { key: "sessions", label: "登录会话", hint: "机器人发来异常登录提醒时，在这里把对应设备踢下线。", icon: MonitorSmartphone },
   { key: "openapi", label: "对外 API", hint: "让 CI、监控这类外部系统通过 HTTP 接口给机器人推送消息。", icon: Plug },
   { key: "storage", label: "存储空间", hint: "这台机器的磁盘还剩多少，以及 Diana 的数据目录被哪类文件占掉了。", icon: PieChart },
+  { key: "workspace", label: "工作目录", hint: "Agent 工作目录里的文件：长期保存区、下载、产出、临时文件和回收站，可以下载或删除。", icon: FolderOpen },
   { key: "cache", label: "下载缓存", hint: "控制下载的媒体缓存按闲置天数或容量清理。", icon: HardDriveDownload },
   { key: "media", label: "媒体与文件", hint: "历史媒体原件的保留策略，以及发送文件时接入端回源拉取媒体的地址。", icon: Images },
   { key: "update", label: "系统更新", hint: "检查、下载并安装新版本，以及原地重启服务。", icon: Download },
@@ -627,7 +664,7 @@ const settingsGroups = (
   [
     { label: "个性化", keys: ["theme"] },
     { label: "账号与安全", keys: ["security", "sessions", "openapi"] },
-    { label: "系统", keys: ["storage", "cache", "media", "update", "status"] }
+    { label: "系统", keys: ["storage", "workspace", "cache", "media", "update", "status"] }
   ] as const
 ).map((group) => ({
   label: group.label,
@@ -647,6 +684,8 @@ let storageRetryTimer: number | undefined;
 const diskSegments = computed(() => storageDiskSegments(storage.value));
 const categorySegments = computed(() => storageCategorySegments(storage.value));
 const diskTotal = computed(() => storageDiskTotal(storage.value));
+const directoryRows = computed(() => storageDirectories(storage.value));
+const workspaceOpened = ref(false);
 const diskCenterValue = computed(() => {
   const usage = storage.value;
   if (!usage) return "—";
@@ -682,6 +721,7 @@ watch(
   activePage,
   (page) => {
     if (page === "storage" && !storage.value) void loadStorageUsage();
+    if (page === "workspace") workspaceOpened.value = true;
   },
   { immediate: true }
 );
@@ -1300,6 +1340,30 @@ onBeforeUnmount(() => {
 
 .storage-legend-size {
   font-variant-numeric: tabular-nums;
+}
+
+.storage-dir-table .storage-dir-num {
+  text-align: right;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.storage-dir-key {
+  margin-left: 6px;
+  font-size: 11.5px;
+}
+
+/* 手机上四列已经很挤，目录键名只是给排查用的，让位给数字。 */
+@media (max-width: 640px) {
+  .storage-dir-key {
+    display: none;
+  }
+
+  .storage-dir-table th,
+  .storage-dir-table td {
+    padding-left: 6px;
+    padding-right: 6px;
+  }
 }
 
 .storage-legend-percent {

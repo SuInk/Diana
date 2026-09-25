@@ -423,6 +423,27 @@
       "default": "不得用 run_command、sleep、后台进程或口头承诺代替持久化的提醒工具。"
     },
     {
+      "key": "reply.tool.workspace_keep_index",
+      "group": "reply_tools",
+      "title": "长期保存区清单",
+      "usage": "当前发言者是主人、文件工具可用、且这台机器人的长期保存区 keep/ 里有文件时放在尾部：列出最近保存的文件和说明，主人问起存过的东西时先看这里。",
+      "default": "这台机器人的长期保存区是 {keep_dir}/（不会自动清理，删除用 manage_files delete 进回收站），现有 {count} 个文件，最近保存的：\n{entries}\n主人问起以前存过的东西时先对照这份清单，用 read_file、view_image 或 send_attachment 按路径取用；清单里没有的再用 list_files {keep_dir}/ 查。",
+      "vars": [
+        {
+          "name": "keep_dir",
+          "description": "这台机器人长期区的相对路径，形如 keep/\u003c机器人\u003e"
+        },
+        {
+          "name": "count",
+          "description": "长期区里登记过、文件仍在的条目数"
+        },
+        {
+          "name": "entries",
+          "description": "最近保存的至多 20 条，每行「路径  说明」，超出时末尾注明还有几条"
+        }
+      ]
+    },
+    {
       "key": "reply.identity_privacy",
       "group": "reply_rules",
       "title": "会话标识隐私代理",
