@@ -91,11 +91,11 @@ func (r *Runtime) resolveSemanticTextReference(ctx context.Context, event Messag
 	if r == nil || text == "" || utf8.RuneCountInString(text) > semanticTextReferenceMaxRunes || len(history) == 0 {
 		return nil
 	}
-	// Do not silently spend the main reply model on this optional pre-pass.
-	// Production bots with an intent role use their cheap router; minimal test
-	// and legacy configurations without role bindings keep the old path.
+	// 可有可无的预处理，不花主回复模型的钱：回复辅助（或它的上一档后台生成）
+	// 指了别的模型才跑。这里以前查的是 intent 有没有绑定，调用却不走 intent——
+	// 于是 intent 一绑就放行，实际落到的正是对话模型。
 	cfg := r.effectiveConfigForEvent(event)
-	if _, ok := modelRoleFor(cfg.ModelRoles, PurposeSemanticReference, llm.GroupIntent); !ok {
+	if !hasDedicatedModelRole(cfg.ModelRoles, PurposeSemanticTextRef, llm.GroupReplyAssist) {
 		return nil
 	}
 	if event.Kind == EventKindGroup && !event.ToMe && event.Quoted == nil {

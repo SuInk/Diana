@@ -45,11 +45,16 @@ const (
 	PurposeErrorNotice             = "error_notice"
 	// 下面几个以前只是调用点里的字面量，没进这张表：界面上指不了，也没法单独绑，
 	// 实际跟着「本次调用的分组」跑。它们问的都要写出成段文字（RSS 那个还要写出
-	// 发给用户的通知正文），归后台生成。
+	// 发给用户的通知正文），归后台生成或回复辅助。
 	PurposeRSSWatchJudge      = "rss_watch_judge"
 	PurposeDirectReplyTopic   = "direct_reply_topic"
 	PurposeReplySemanticDedup = "reply_semantic_dedup"
 	PurposeSemanticTextRef    = "semantic_text_reference"
+	// 下面三个也是写给用户看的话，以前不在表里：旁路调用查不到归属就按意图识别
+	// 取模型，意图识别绑了只做判断的模型时，它们每次都先失败一次再降级。
+	PurposePokeReply        = "poke_reply"
+	PurposeWelcomeGenerator = "welcome_generator"
+	PurposeRomanceGreeting  = "romance_greeting"
 )
 
 // llmPurposeGroup 把用途归到分组。这张表以前是隐式的——某个用途走哪个分组，取决于
@@ -67,38 +72,54 @@ var llmPurposeGroup = map[string]string{
 	PurposeProactiveReplyQuality: llm.GroupIntent,
 	PurposeReplySendAudit:        llm.GroupIntent,
 
-	// 下面这些也是判定，但眼下还没有各自的判断题表，先留在后台那一档：归进意图
-	// 识别只会让它们在绑判断模型时每次先失败一次再降级。题表补上再挪过来。
-	PurposeReplyIntentRouter: llm.GroupBackground,
-	PurposeReplyRuleRouter:   llm.GroupBackground,
-	PurposeBotReplyLoop:      llm.GroupBackground,
+	// 回复辅助：这一轮回复发出之前同步跑的旁路调用，模型慢，回复就跟着慢。
+	// 语义指代、话题合并、语义去重和上下文摘要要写出文字；提示改写的结果直接
+	// 发进聊天，而且往往是对话模型刚出错的时候——再绕回对话模型最不稳，所以也
+	// 留在这里，人设由 withUserFacingPersona 补上。
+	PurposeSemanticReference:       llm.GroupReplyAssist,
+	PurposeInboundMediaReference:   llm.GroupReplyAssist,
+	PurposeSemanticTextRef:         llm.GroupReplyAssist,
+	PurposeDirectReplyTopic:        llm.GroupReplyAssist,
+	PurposeReplySemanticDedup:      llm.GroupReplyAssist,
+	PurposeContextSummary:          llm.GroupReplyAssist,
+	PurposeForwardContentSafety:    llm.GroupReplyAssist,
+	PurposeReplyAccountSafety:      llm.GroupReplyAssist,
+	PurposeReplySuppression:        llm.GroupReplyAssist,
+	PurposeUpstreamRejectionNotice: llm.GroupReplyAssist,
+	PurposeAccountSafetyNotice:     llm.GroupReplyAssist,
+	PurposeErrorNotice:             llm.GroupReplyAssist,
+	// 戳一戳的回应就是一次回复，对方戳完在等。
+	PurposePokeReply: llm.GroupReplyAssist,
 
-	// 后台生成：好感度、长期记忆、摘要、指代消解这些都要写出成段文字，判断模型
-	// 答不了。它们也不在回复的关键路径上，慢一点没关系。
-	PurposeRelationshipEvaluate:  llm.GroupBackground,
-	PurposeMemoryExtract:         llm.GroupBackground,
-	PurposeMemorySummary:         llm.GroupBackground,
-	PurposeContextSummary:        llm.GroupBackground,
-	PurposeSemanticReference:     llm.GroupBackground,
-	PurposeInboundMediaReference: llm.GroupBackground,
-	PurposeForwardContentSafety:  llm.GroupBackground,
-	PurposeReplyAccountSafety:    llm.GroupBackground,
-	PurposeReplySuppression:      llm.GroupBackground,
+	// 下面这些也是判定，但眼下还没有各自的判断题表，先留在回复辅助：归进意图
+	// 识别只会让它们在绑判断模型时每次先失败一次再降级。题表补上再挪过去。
+	PurposeReplyIntentRouter: llm.GroupReplyAssist,
+	PurposeReplyRuleRouter:   llm.GroupReplyAssist,
+	PurposeBotReplyLoop:      llm.GroupReplyAssist,
 
-	// 改写只是把一句固定文案换个说法，跟着后台那一档就够。
-	PurposeUpstreamRejectionNotice: llm.GroupBackground,
-	PurposeAccountSafetyNotice:     llm.GroupBackground,
-	PurposeErrorNotice:             llm.GroupBackground,
-	PurposeRSSWatchJudge:           llm.GroupBackground,
-	PurposeDirectReplyTopic:        llm.GroupBackground,
-	PurposeReplySemanticDedup:      llm.GroupBackground,
-	PurposeSemanticTextRef:         llm.GroupBackground,
+	// 后台生成：好感度、长期记忆、RSS 判定和主动问候都要写出成段文字，判断模型答不了；
+	// 它们也都在回复之外异步跑，可以指一个便宜的慢模型。
+	PurposeRelationshipEvaluate: llm.GroupBackground,
+	PurposeMemoryExtract:        llm.GroupBackground,
+	PurposeMemorySummary:        llm.GroupBackground,
+	PurposeRSSWatchJudge:        llm.GroupBackground,
+	// 入群欢迎和纪念日问候是机器人自己起的头，没人在等，慢一点没关系。
+	PurposeWelcomeGenerator: llm.GroupBackground,
+	PurposeRomanceGreeting:  llm.GroupBackground,
 }
 
-// modelBindingGroups 是必须绑定的分组。// modelBindingGroups 是必须绑定的分组。它们就是「用途的归属地」，缺一个就有一批
-// 用途没有模型可用。
+// modelBindingGroups 是所有分组。它们就是「用途的归属地」，缺一个就有一批用途没有
+// 模型可用。
 var modelBindingGroups = []string{
-	llm.GroupChat, llm.GroupVision, llm.GroupIntent, llm.GroupBackground, llm.GroupImage, llm.GroupEmbedding,
+	llm.GroupChat, llm.GroupVision, llm.GroupIntent, llm.GroupReplyAssist, llm.GroupBackground, llm.GroupImage, llm.GroupEmbedding,
+}
+
+// modelBindingGroupParent 是分组没绑定时先去找的上一档，找不到才落到 chat。
+//
+// 回复辅助是从后台生成里拆出来的：拆之前给后台生成指过模型的，升级后这些用途
+// 还该用那个模型，不能悄悄换成对话模型。
+var modelBindingGroupParent = map[string]string{
+	llm.GroupReplyAssist: llm.GroupBackground,
 }
 
 // modelRoleKeyForGroup 返回分组在 model_roles 里用的键。默认分组的键历史上是
@@ -145,7 +166,8 @@ func isModelBindingKey(key string) bool {
 	return false
 }
 
-// modelRoleFor 按「用途 → 本次调用的分组 → 用途归属的分组 → chat」的顺序找绑定。
+// modelRoleFor 按「用途 → 本次调用的分组 → 用途归属的分组 → 上一档分组 → chat」
+// 的顺序找绑定。
 //
 // 用途排在最前：单独给某个用途指了模型，就该盖过一切。
 //
@@ -180,15 +202,38 @@ func modelRoleFor(roles map[string]ModelRole, purpose string, group string) (Mod
 	if role, ok := roles[groupKey]; ok {
 		return resolveIfFollowChat(roles, role)
 	}
-	if purpose != "" {
-		if owner := ModelBindingGroupOf(purpose); owner != "" {
-			if role, ok := roles[owner]; ok {
-				return resolveIfFollowChat(roles, role)
-			}
-		}
+	if role, ok := inheritedGroupRole(roles, purpose, groupKey); ok {
+		return resolveIfFollowChat(roles, role)
 	}
 	role, ok := roles["chat"]
 	return role, ok
+}
+
+// inheritedGroupRole 顺着「用途归属的分组 → 它的上一档」和「本次调用的分组 → 它的
+// 上一档」找绑定。都没绑时返回 false，由调用方落到 chat。
+func inheritedGroupRole(roles map[string]ModelRole, purpose, groupKey string) (ModelRole, bool) {
+	for _, key := range []string{ModelBindingGroupOf(purpose), groupKey} {
+		for ; key != ""; key = modelBindingGroupParent[key] {
+			if role, ok := roles[key]; ok {
+				return role, true
+			}
+		}
+	}
+	return ModelRole{}, false
+}
+
+// hasDedicatedModelRole 说明这个用途有没有落到对话以外的模型上。可选的预处理靠它
+// 决定跑不跑：只能用对话模型时宁可不跑，别让一道可有可无的工序花主回复的钱。
+func hasDedicatedModelRole(roles map[string]ModelRole, purpose, group string) bool {
+	groupKey := modelRoleKeyForGroup(group)
+	if groupKey == "chat" || roles[groupKey].FollowChat {
+		return false
+	}
+	role, ok := roles[strings.TrimSpace(purpose)]
+	if !ok {
+		role, ok = inheritedGroupRole(roles, purpose, groupKey)
+	}
+	return ok && !role.FollowChat && modelRoleConfigured(role)
 }
 
 // resolveIfFollowChat 把「跟随对话」翻成实际的对话绑定，其余原样返回。

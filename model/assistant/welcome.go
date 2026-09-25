@@ -94,7 +94,7 @@ var promptWelcomeGeneratorSpec = registerPrompt(PromptSpec{
 // 只是少了口吻依据。输出做基本清洗：去掉首尾引号和空白，超长截断，非法输出
 // 由调用方回落。
 func (r *Runtime) generateWelcomeWithLLM(ctx context.Context, cfg BotConfig, event MessageEvent) (string, error) {
-	ctx = withLLMUsagePurpose(ctx, "welcome_generator")
+	ctx = withLLMUsagePurpose(ctx, PurposeWelcomeGenerator)
 	systemPrompt := strings.TrimSpace(cfg.prompt(promptWelcomeGeneratorSpec))
 	if persona := strings.TrimSpace(cfg.SystemPrompt); persona != "" {
 		systemPrompt += "\n\n机器人当前人设：\n" + persona

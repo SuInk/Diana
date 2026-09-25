@@ -23,7 +23,7 @@ test("saving requires an explicit provider and model for each role", async () =>
       const roles = Object.fromEntries(keys.map(key => [key, { profile_id: "p", model: "m" }]));
       roles[key] = invalid;
       const busy = { value: false };
-      const context = vm.createContext({ connectionConflict: { value: undefined }, form: { value: { onebot_reverse_ws_endpoint: "ws://localhost" } }, roleForm: { value: roles }, modelRoleRows: keys.map(key => ({ key, label: key })), purposeRoleRows: [], purposeRoleKeys: [], editorTab: { value: "access" }, validWebSocketURL: () => true, roleModelIsSelectable: () => true, sendRetryValidationError: () => "", toastError: message => errors.push(message), busy });
+      const context = vm.createContext({ connectionConflict: { value: undefined }, form: { value: { onebot_reverse_ws_endpoint: "ws://localhost" } }, roleForm: { value: roles }, modelRoleRows: keys.map(key => ({ key, label: key })), purposeRoleRows: [], purposeRoleKeys: [], visibleModelRoleRows: keys.map(key => ({ key, label: key })), editorTab: { value: "access" }, validWebSocketURL: () => true, roleModelIsSelectable: () => true, sendRetryValidationError: () => "", toastError: message => errors.push(message), busy });
       await loadFunction("save", context)();
       assert.equal(busy.value, false);
       assert.equal(errors.length, 1);
@@ -125,6 +125,7 @@ test("purpose-level roles may be left unset", async () => {
     modelRoleRows: keys.map(key => ({ key, label: key })),
     purposeRoleRows: [{ key: "reply_account_safety", label: "发送前审核" }, { key: "memory_extract", label: "记忆抽取" }],
     purposeRoleKeys: ["reply_account_safety", "memory_extract"],
+    visibleModelRoleRows: [...keys.map(key => ({ key, label: key })), { key: "reply_account_safety", label: "发送前审核" }, { key: "memory_extract", label: "记忆抽取" }],
     editorTab: { value: "access" },
     validWebSocketURL: () => true,
     roleModelIsSelectable: () => true,
@@ -153,6 +154,7 @@ test("a configured purpose role still needs a model", async () => {
     modelRoleRows: keys.map(key => ({ key, label: key })),
     purposeRoleRows: [{ key: "reply_account_safety", label: "发送前审核" }],
     purposeRoleKeys: ["reply_account_safety"],
+    visibleModelRoleRows: [...keys.map(key => ({ key, label: key })), { key: "reply_account_safety", label: "发送前审核" }],
     editorTab: { value: "access" },
     validWebSocketURL: () => true,
     roleModelIsSelectable: () => true,

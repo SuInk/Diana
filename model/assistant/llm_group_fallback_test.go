@@ -10,35 +10,54 @@ import (
 	"github.com/SuInk/diana/model/llm"
 )
 
-func TestMemoryUsesIntentRoleInsteadOfActiveImageProfile(t *testing.T) {
+// 记忆走后台生成那一档；没指定时跟随对话，不能落到意图识别上那种只做判断、
+// 写不出记忆的模型，也不能落到激活中的生图配置。
+func TestMemoryUsesBackgroundRoleInsteadOfIntent(t *testing.T) {
 	store := &stubLLMProfileStore{set: llm.ProfileSet{
 		Profiles: []llm.Profile{
 			{ID: "chat-p", Group: llm.GroupChat, Config: llm.ProviderConfig{Provider: llm.ProviderOpenAICompatible, Model: "chat-model"}},
 			{ID: "intent-p", Group: llm.GroupIntent, Config: llm.ProviderConfig{Provider: llm.ProviderOpenAICompatible, Model: "intent-model"}},
+			{ID: "bg-p", Group: llm.GroupChat, Config: llm.ProviderConfig{Provider: llm.ProviderOpenAICompatible, Model: "background-model"}},
 			{ID: "image-p", Group: llm.GroupImage, Config: llm.ProviderConfig{Provider: llm.ProviderOpenAICompatible, Model: "gpt-image-2"}},
 		},
 	}}
-	runtime := NewRuntime(BotConfig{ModelRoles: map[string]ModelRole{
-		"chat":   {ProfileID: "chat-p", Model: "chat-model"},
-		"intent": {ProfileID: "intent-p", Model: "intent-model"},
-	}}, nilChannel{}, NewPluginManager(), store, nil, nil, nil)
-	selected := ""
-	runtime.SetLLMProviderConfigFactory(func(cfg llm.ProviderConfig) (LLMProvider, error) {
-		selected = cfg.Model
-		return &capturingLLMProvider{reply: `{}`}, nil
-	})
-	_, err := runtime.runLLMMemoryProvider(context.Background(), func(client LLMProvider) (string, error) {
-		resp, err := client.Generate(context.Background(), llm.GenerateRequest{Messages: []llm.Message{{Role: llm.RoleUser, Content: "extract"}}})
-		if err != nil {
-			return "", err
-		}
-		return resp.Text, nil
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if selected != "intent-model" {
-		t.Fatalf("memory selected %q, want intent-model", selected)
+	for _, tc := range []struct {
+		name  string
+		roles map[string]ModelRole
+		want  string
+	}{
+		{"后台生成已指定", map[string]ModelRole{
+			"chat":       {ProfileID: "chat-p", Model: "chat-model"},
+			"intent":     {ProfileID: "intent-p", Model: "intent-model"},
+			"background": {ProfileID: "bg-p", Model: "background-model"},
+		}, "background-model"},
+		{"后台生成未指定", map[string]ModelRole{
+			"chat":   {ProfileID: "chat-p", Model: "chat-model"},
+			"intent": {ProfileID: "intent-p", Model: "intent-model"},
+		}, "chat-model"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			runtime := NewRuntime(BotConfig{ModelRoles: tc.roles}, nilChannel{}, NewPluginManager(), store, nil, nil, nil)
+			selected := ""
+			runtime.SetLLMProviderConfigFactory(func(cfg llm.ProviderConfig) (LLMProvider, error) {
+				selected = cfg.Model
+				return &capturingLLMProvider{reply: `{}`}, nil
+			})
+			ctx := withLLMUsagePurpose(context.Background(), PurposeMemoryExtract)
+			_, err := runtime.runLLMMemoryProvider(ctx, func(client LLMProvider) (string, error) {
+				resp, err := client.Generate(ctx, llm.GenerateRequest{Messages: []llm.Message{{Role: llm.RoleUser, Content: "extract"}}})
+				if err != nil {
+					return "", err
+				}
+				return resp.Text, nil
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if selected != tc.want {
+				t.Fatalf("memory selected %q, want %q", selected, tc.want)
+			}
+		})
 	}
 }
 

@@ -143,8 +143,28 @@ func (s *semanticTextReferenceSearchStore) SearchMessageEvents(_ context.Context
 
 func semanticReferenceTestConfig() BotConfig {
 	return BotConfig{ModelRoles: map[string]ModelRole{
-		"intent": {ProfileID: "router", Model: "router-model"},
+		"reply_assist": {ProfileID: "router", Model: "router-model"},
 	}}
+}
+
+// 语义指代是可有可无的预处理：只绑了意图识别、回复辅助和后台生成都没指定时，
+// 调用会落到对话模型上，这时宁可不跑。
+func TestSemanticTextReferenceSkipsWhenOnlyChatWouldServe(t *testing.T) {
+	provider := &capturingLLMProvider{reply: `{"action":"resolve","confidence":0.99,"resolved":"x","source_message_ids":["topic"]}`}
+	runtime := NewRuntime(BotConfig{ModelRoles: map[string]ModelRole{
+		"chat":   {ProfileID: "chat", Model: "chat-model"},
+		"intent": {ProfileID: "router", Model: "router-model"},
+	}}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) { return provider, nil })
+	history := []MessageEvent{textReferenceEvent(100, "user-a", "topic", "Tibo 说会给 Codex 做一次 banked reset")}
+	event := textReferenceEvent(120, "user-b", "current", "今天或者明天会重置吗？")
+	event.ToMe = true
+
+	if reference := runtime.resolveSemanticTextReference(context.Background(), event, event.RawMessage, history); reference != nil {
+		t.Fatalf("只有对话模型可用时不该跑语义指代：%#v", reference)
+	}
+	if provider.calls != 0 {
+		t.Fatalf("不该发出模型请求：%d", provider.calls)
+	}
 }
 
 func TestRecentTextReferenceExplicitQuoteWins(t *testing.T) {

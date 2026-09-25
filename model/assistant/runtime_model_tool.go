@@ -48,6 +48,10 @@ func runtimeModelGroupLabel(group string) string {
 		return "视觉理解"
 	case llm.GroupIntent:
 		return "意图识别"
+	case llm.GroupReplyAssist:
+		return "回复辅助"
+	case llm.GroupBackground:
+		return "后台生成"
 	case llm.GroupImage:
 		return "图片生成"
 	case llm.GroupChat:
