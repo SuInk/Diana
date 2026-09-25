@@ -123,6 +123,20 @@ func TestRenderDecisionAnswersNoulConfidenceFollowsTheVerdict(t *testing.T) {
 	}
 }
 
+func TestDecisionScoreFloorVerdictSnapsToLowestLevel(t *testing.T) {
+	q := DecisionQuestion{Kind: DecisionScore, Levels: []string{"a", "b", "c"}, LevelValues: []float64{0, 0.10, 0.30}}
+	// 不吸附时，最低档加权 0.05 会被插值成 0.01。
+	if got := q.scoreValue(0.05); got != 0.01 {
+		t.Fatalf("plain interpolation = %v, want 0.01", got)
+	}
+	q.FloorVerdict = true
+	for score, want := range map[float64]float64{0.05: 0, 0.49: 0, 0.5: 0.05, 1: 0.10, 1.5: 0.20} {
+		if got := q.scoreValue(score); got != want {
+			t.Fatalf("scoreValue(%v) = %v, want %v", score, got, want)
+		}
+	}
+}
+
 func TestRenderDecisionAnswersRejectsMissingAnswer(t *testing.T) {
 	spec := DecisionSpec{Questions: []DecisionQuestion{{Key: "a", Kind: DecisionNoul, Path: "a"}}}
 	if _, err := spec.RenderDecisionAnswers(map[string]DecisionAnswer{}); err == nil {

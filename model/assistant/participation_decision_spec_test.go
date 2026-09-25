@@ -36,6 +36,29 @@ func TestParticipationDecisionSpecRendersParsableRatings(t *testing.T) {
 	}
 }
 
+// Jev 对叫停消息稳定把绝大部分概率压在最低档，但总有一点散到别档，加权档位落在
+// 0.05 左右；插值成 0.01 的话 ratingsAllow 认不出叫停，always 档照样接话。
+func TestParticipationDecisionStopSnapsToZero(t *testing.T) {
+	raw, err := participationDecisionSpec(nil).RenderDecisionAnswers(map[string]llm.DecisionAnswer{
+		"relevance": {Kind: llm.DecisionNoul, Noul: 0.12},
+		"chat_in":   {Kind: llm.DecisionScore, Score: 0.05, Confidence: 0.95},
+	})
+	if err != nil {
+		t.Fatalf("render failed: %v", err)
+	}
+	ratings, err := parseParticipationRatings(raw)
+	if err != nil {
+		t.Fatalf("the rendered ratings did not parse: %v (%s)", err, raw)
+	}
+	if *ratings.ChatIn.Score != 0 {
+		t.Fatalf("expected the stop level to render as 0, got %s", raw)
+	}
+	p := ParticipationPreferences{RelevanceLevel: "on", ChatLevel: "always"}
+	if allowed, _ := p.ratingsAllow(ratings, true); allowed {
+		t.Fatalf("always still chimed in after a stop: %s", raw)
+	}
+}
+
 func TestParticipationWillingnessReachesBothModels(t *testing.T) {
 	if len(participationChatInLevels) != len(participationChatInLevelValues) {
 		t.Fatalf("levels and their values drifted apart: %d vs %d", len(participationChatInLevels), len(participationChatInLevelValues))
