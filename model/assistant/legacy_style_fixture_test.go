@@ -13,7 +13,7 @@ func (style ReplyStyle) promptWithActions(naturalSplit bool, voice personaVoice,
 	if actionsEnabled {
 		stylePrompt = strings.ReplaceAll(stylePrompt, catgirlNoActionRule+"\n", "")
 	}
-	return stylePrompt + "\n" + replyPresentationPrompt(naturalSplit, voice, PersonaModeFill)
+	return strings.TrimSpace(stylePrompt + "\n" + replyPresentationPrompt(naturalSplit) + "\n" + voice.prompt())
 }
 
 func (style ReplyStyle) closingAnchor() string {

@@ -164,7 +164,7 @@
       />
     </div>
 
-    <div v-if="form && page === 'edit'" class="grid-main-side">
+    <div v-if="form && page === 'edit'" class="grid-main-side bot-editor">
       <div class="stack">
         <nav class="editor-tabs" role="tablist" aria-label="机器人配置分区">
           <button
@@ -726,10 +726,13 @@
         </div>
 
         <div v-show="editorTab === 'behavior'" class="stack">
-          <!-- 触发与回复 -->
+          <!-- 触发：什么情况下算在叫它。 -->
           <section class="card">
             <div class="card-header">
-              <h2>触发与回复</h2>
+              <div>
+                <h2>触发</h2>
+                <span class="card-sub">什么情况下算在叫它</span>
+              </div>
             </div>
             <div class="card-body form-grid">
               <div class="field wide">
@@ -750,6 +753,42 @@
                   严格：还要求触发词出现在句首或句尾。宽松：出现即回，连引述也算。
                 </span>
               </div>
+            </div>
+          </section>
+
+          <!-- 接话：没人叫它的时候开不开口。它回答的是「在这个群里多主动」，跟她是谁无关。 -->
+          <section class="card">
+            <div class="card-header">
+              <div>
+                <h2>接话</h2>
+                <span class="card-sub">没人叫它的时候开不开口</span>
+              </div>
+            </div>
+            <div class="card-body form-grid">
+              <div class="field wide">
+                <ParticipationControls :key="form.id" :model-value="form.participation" :criteria="form.proactive_reply_extra_criteria" @update:model-value="setParticipation" @update:criteria="value => { if (form) form.proactive_reply_extra_criteria = value; }" />
+              </div>
+              <div class="field wide criteria-editor">
+                <label>什么情况下愿意接话</label>
+                <span class="hint">没人叫它时，哪些情形愿意插话、哪些可以接一句、哪些不接，按这三栏写大白话。闲聊档位决定到哪一栏才开口：「偶尔接话」只在「愿意接」时开口，档位越积极，「可以接一句」也会开口。有人明确在跟它说话时不看这里，由「回应提问」决定。</span>
+                <PromptOverridesEditor :keys="participationWillingnessKeys" :model-value="form.prompt_overrides" @update:model-value="value => { if (form) form.prompt_overrides = value; }" />
+              </div>
+              <div class="field wide">
+                <label>手动标记的机器人（本机所有群）</label>
+                <BotMarkerList :key="form.id" v-model="form.marked_bot_ids" />
+              </div>
+            </div>
+          </section>
+
+          <!-- 回复怎么发：长短、分条、换行、打字节奏、合并转发、引用和 @。 -->
+          <section class="card">
+            <div class="card-header">
+              <div>
+                <h2>回复怎么发</h2>
+                <span class="card-sub">发送细节按习惯调，默认值即推荐值</span>
+              </div>
+            </div>
+            <div class="card-body form-grid">
               <div class="field">
                 <label for="bot-maxinput">单次输入上限（字符）</label>
                 <input id="bot-maxinput" v-model.number="form.max_input_chars" class="input" inputmode="numeric" />
@@ -774,19 +813,6 @@
                 </label>
                 <span class="hint">消息内每换一行就另发一条；列表、表格和代码块整块发，连同引出它的那一行。需先允许多条发送；闲聊插话和本轮要求一条发送时不生效。</span>
               </div>
-              <div class="field">
-                <label class="switch">
-                  <input v-model="form.typing_delay_enabled" type="checkbox" />
-                  <span class="track" aria-hidden="true"></span>
-                  <span class="switch-label">模拟打字延时</span>
-                </label>
-                <span class="hint">连发时按下一条的字数停顿，像边打边发。不低于分段发送间隔，单次最长 6 秒；第一条不额外等待。</span>
-              </div>
-              <div class="field">
-                <label for="bot-typing-speed">打字速度（毫秒/字）</label>
-                <input id="bot-typing-speed" v-model.number="form.typing_delay_per_char_ms" class="input" type="number" min="1" max="1000" step="1" inputmode="numeric" placeholder="留空按 100" :disabled="!form.typing_delay_enabled" />
-                <span class="hint">每个字等多久。100 约等于一秒十个字；越大越慢。</span>
-              </div>
               <div class="field wide">
                 <label class="switch">
                   <input v-model="form.reply_preserve_line_breaks" type="checkbox" />
@@ -795,10 +821,23 @@
                 </label>
                 <span class="hint">关闭时收拢普通说明的换行，保留已有标点，缺少分隔时补逗号或空格；列表、代码、表格保留结构。本轮排版要求优先。</span>
               </div>
+              <div class="field wide">
+                <label class="switch">
+                  <input v-model="form.typing_delay_enabled" type="checkbox" />
+                  <span class="track" aria-hidden="true"></span>
+                  <span class="switch-label">模拟打字延时</span>
+                </label>
+                <span class="hint">连发时按下一条的字数停顿，像边打边发。不低于分段发送间隔，单次最长 6 秒；第一条不额外等待。</span>
+              </div>
               <div class="field">
-                <label for="bot-reply-merge-confidence">合并回复置信度阈值（%）</label>
-                <input id="bot-reply-merge-confidence" v-model.number="form.reply_merge_confidence_percent" class="input" type="number" min="1" max="100" step="1" inputmode="numeric" placeholder="75" />
-                <span class="hint">同一用户的补充、纠正或重复消息达到此置信度时，并入正在生成的回复。越低越容易合并；留空默认 75%。独立问题和无法确定的消息不会合并。</span>
+                <label for="bot-interval">分段发送间隔（毫秒）</label>
+                <input id="bot-interval" v-model.number="form.send_chunk_interval_ms" class="input" inputmode="numeric" placeholder="留空按 1200" />
+                <span class="hint">连续多段之间的停顿，过快容易触发风控。开启模拟打字延时后作为最短停顿。</span>
+              </div>
+              <div class="field">
+                <label for="bot-typing-speed">打字速度（毫秒/字）</label>
+                <input id="bot-typing-speed" v-model.number="form.typing_delay_per_char_ms" class="input" type="number" min="1" max="1000" step="1" inputmode="numeric" placeholder="留空按 100" :disabled="!form.typing_delay_enabled" />
+                <span class="hint">每个字等多久。100 约等于一秒十个字；越大越慢。</span>
               </div>
               <div v-if="isOneBotPlatform" class="field wide">
                 <label class="switch">
@@ -819,6 +858,118 @@
                 <span class="hint">实际消息数超过此值触发卡片，填 4 表示至少 5 条。不按正文行数计数。</span>
               </div>
               <div class="field">
+                <label for="bot-reply-reference-mode">群聊引用原消息</label>
+                <AppSelect
+                  id="bot-reply-reference-mode"
+                  :model-value="form.reply_reference_mode ?? 'auto'"
+                  :options="replyReferenceModeOptions"
+                  @update:model-value="(value) => { if (form) form.reply_reference_mode = value as 'on' | 'off' | 'auto'; }"
+                />
+                <span class="hint">默认「让模型自己决定」：只有话题跳转或隔轮回应时才引用。</span>
+              </div>
+              <div class="field">
+                <label for="bot-mention-user-mode">群聊 @ 发送者</label>
+                <AppSelect
+                  id="bot-mention-user-mode"
+                  :model-value="form.mention_user_mode ?? 'auto'"
+                  :options="mentionUserModeOptions"
+                  @update:model-value="(value) => { if (form) form.mention_user_mode = value as 'on' | 'off' | 'auto'; }"
+                />
+                <span class="hint">默认「让模型自己决定」：群里还有别人在说话时才 @，一对一接话时不带。</span>
+              </div>
+              <div class="field">
+                <label for="bot-reply-merge-confidence">合并回复置信度阈值（%）</label>
+                <input id="bot-reply-merge-confidence" v-model.number="form.reply_merge_confidence_percent" class="input" type="number" min="1" max="100" step="1" inputmode="numeric" placeholder="75" />
+                <span class="hint">同一用户的补充、纠正或重复消息达到此置信度时，并入正在生成的回复。越低越容易合并；留空默认 75%。独立问题和无法确定的消息不会合并。</span>
+              </div>
+              <div class="field">
+                <label class="switch">
+                  <input v-model="form.markdown_to_plain" type="checkbox" />
+                  <span class="track" aria-hidden="true"></span>
+                  <span class="switch-label">Markdown 转纯文本</span>
+                </label>
+                <span class="hint">{{ richTextPlatform ? "当前平台能渲染 Markdown，默认保留标记；开启后改为发送纯文本。" : "当前平台只发纯文本，Markdown 标记会以字面量出现，所以默认转成纯文本。" }}</span>
+              </div>
+            </div>
+          </section>
+
+          <!-- 准入与限额：在哪工作、谁能叫动它、什么时候停、回多少。 -->
+          <section class="card">
+            <div class="card-header">
+              <div>
+                <h2>准入与限额</h2>
+                <span class="card-sub">在哪些群工作、满足什么条件才回复、回多少</span>
+              </div>
+            </div>
+            <div class="card-body form-grid">
+              <div class="field wide">
+                <label>在哪些群工作</label>
+                <p class="hint">
+                  逐群开关在<a href="#" @click.prevent="navigate('groups')">群管理</a>里：一个群一个开关，还能一键全开全关，以及设定新加入的群默认工不工作。
+                </p>
+              </div>
+              <div class="field wide">
+                <label for="bot-private-admission-mode">私聊准入模式</label>
+                <AppSelect
+                  id="bot-private-admission-mode"
+                  :model-value="privateAdmissionMode"
+                  :options="privateAdmissionModeOptions"
+                  @update:model-value="setPrivateAdmissionMode($event as 'all' | 'owner_only' | 'whitelist')"
+                />
+                <span class="hint">被准入拦截的私聊整条静默忽略：不排队、不预处理、不调模型，对方收不到任何回应；与群聊无关，主人任何模式下都放行。</span>
+              </div>
+              <div v-if="privateAdmissionMode === 'whitelist'" class="field wide">
+                <label for="bot-private-allowed-users">私聊白名单</label>
+                <IdChipInput
+                  input-id="bot-private-allowed-users"
+                  v-model="privateAllowedUsers"
+                  placeholder="填用户 ID 后回车"
+                />
+                <span class="hint">仅这些用户（和主人）的私聊会得到响应；名单外一律静默忽略。</span>
+              </div>
+              <div class="field wide">
+                <ReplyGateForm v-model="globalGate" id-prefix="bot-gate" :supports-group-level="isOneBotPlatform" hide-group-level />
+                <p v-if="isOneBotPlatform" class="hint">
+                  群等级门槛在<a href="#" @click.prevent="navigate('groups')">群管理</a>里，和逐群开关放在一起；它仍然生效，主人豁免也仍然绕过它。
+                </p>
+              </div>
+              <div class="field wide">
+                <label class="switch">
+                  <input v-model="form.muted_reply_pause_enabled" type="checkbox" />
+                  <span class="track" aria-hidden="true"></span>
+                  <span class="switch-label">被禁言时暂停回复</span>
+                </label>
+                <span class="hint">
+                  机器人在群里被禁言（或全员禁言且机器人不是管理员）期间，消息照常记入上下文和记忆，但不生成回复（回复判断默认也不做），
+                  也不白发再重试。解禁后从新消息开始回复，禁言期间的消息不补发。禁言和解禁会记在事件页的「通知」里。
+                  关闭后按原来的方式照常生成和重试。
+                </span>
+              </div>
+              <div v-if="form.muted_reply_pause_enabled" class="field wide">
+                <label>暂停期间照常执行</label>
+                <div class="stack">
+                  <label class="switch">
+                    <input v-model="form.muted_image_description_enabled" type="checkbox" />
+                    <span class="track" aria-hidden="true"></span>
+                    <span class="switch-label">图片识别成文字</span>
+                  </label>
+                  <label class="switch">
+                    <input v-model="form.muted_voice_transcription_enabled" type="checkbox" />
+                    <span class="track" aria-hidden="true"></span>
+                    <span class="switch-label">语音转文字</span>
+                  </label>
+                  <label class="switch">
+                    <input v-model="form.muted_reply_judgment_enabled" type="checkbox" />
+                    <span class="track" aria-hidden="true"></span>
+                    <span class="switch-label">回复判断</span>
+                  </label>
+                </div>
+                <span class="hint">
+                  图片识别和语音转文字默认开，解禁后历史里的图片、语音有文字，上下文才完整；关掉能省下这段时间的费用。
+                  回复判断默认关：判断了也发不出去。打开后照常判断，该回的消息在事件页记为「判断该回，但禁言中未发送」，不生成也不发送。
+                </span>
+              </div>
+              <div class="field">
                 <label for="bot-call-quota">模型额度 · 5 小时调用次数</label>
                 <input id="bot-call-quota" v-model.number="form.model_call_quota" class="input" type="number" min="0" step="1" inputmode="numeric" placeholder="留空不限" />
                 <span class="hint">每个群单独计，一个群刷满不会把别的群一起饿死；群配置里填了就以群为准。这个群名下的每次模型调用都算，含路由判断和工具步，不只是最终那句回复。主人不受限。</span>
@@ -828,69 +979,17 @@
                 <input id="bot-sample" v-model.number="form.reply_sample_percent" class="input" type="number" min="0" max="100" step="1" inputmode="numeric" placeholder="留空不抽样" />
                 <span class="hint">群里没 @、没引用、没叫名字的消息，只有这个比例交给模型判断要不要接话，没抽中的一次调用都不花。被点名的照常回复，主人不受限。群配置里填了就以群为准。</span>
               </div>
-              <div class="field">
-                <label for="bot-backfill-limit">断线回补条数</label>
-                <input id="bot-backfill-limit" v-model.number="form.history_backfill_message_limit" class="input" inputmode="numeric" min="1" max="100" placeholder="3" />
-                <span class="hint">重启或断线重连后，每个会话最多补回复多少条消息，只算会触发回复的（私聊、@ 机器人、引用机器人、称呼命中）。断线期间的其余消息照样补进上下文历史，但不做图片、语音处理也不回复。默认 3，媒体较多的群建议保持较小。</span>
+            </div>
+          </section>
+
+          <section class="card">
+            <div class="card-header">
+              <div>
+                <h2>入群欢迎</h2>
               </div>
-              <div class="field wide memory-settings">
-                <label class="switch">
-                  <input v-model="form.long_term_memory_enabled" type="checkbox" />
-                  <span class="track" aria-hidden="true"></span>
-                  <span class="switch-label">长期记忆与分层压缩</span>
-                </label>
-                <span class="hint">将较早聊天压缩为可检索摘要，并持久化稳定事实和偏好。</span>
-              </div>
-              <div class="field wide memory-settings">
-                <label class="switch">
-                  <input v-model="form.cross_group_memory_enabled" type="checkbox" :disabled="!form.long_term_memory_enabled" title="公共事实和摘要按相关性跨群召回，无需共同成员；原始聊天仍要求原发言者也在当前群" />
-                  <span class="track" aria-hidden="true"></span>
-                  <span class="switch-label">跨群记忆</span>
-                </label>
-              </div>
-              <div class="field wide memory-settings">
-                <label class="switch">
-                  <input v-model="form.cross_platform_memory_enabled" type="checkbox" :disabled="!form.long_term_memory_enabled" title="需要双方机器人启用长期记忆和跨平台记忆；仅共享非敏感群公共记忆，不合并会话上下文" />
-                  <span class="track" aria-hidden="true"></span>
-                  <span class="switch-label">跨平台记忆</span>
-                </label>
-              </div>
-              <div class="field wide memory-settings">
-                <label class="switch">
-                  <input v-model="form.self_note_enabled" type="checkbox" />
-                  <span class="track" aria-hidden="true"></span>
-                  <span class="switch-label">自述（自我认知）</span>
-                </label>
-                <span class="hint">允许机器人把自己注意到的说话习惯、偏好和毛病写成自述，跨群生效，每轮注入提示词尾部。人设正文只有你能改，自述改不动人设、权限和安全边界；最多 24 条，每条 120 字，主人可以在对话里让它列出、删除或清空。缺省关闭。</span>
-              </div>
-              <div class="field wide memory-settings">
-                <label class="switch">
-                  <input v-model="form.dict_segment_enabled" type="checkbox" />
-                  <span class="track" aria-hidden="true"></span>
-                  <span class="switch-label">词典分词</span>
-                </label>
-                <span class="hint">用中文词典切出真实词参与记忆与历史检索，排序更准；词典常驻约 130MB 内存，开启立即生效，关闭需重启进程。</span>
-              </div>
-              <div class="field wide memory-settings">
-                <label class="switch">
-                  <input v-model="form.semantic_search_enabled" type="checkbox" />
-                  <span class="track" aria-hidden="true"></span>
-                  <span class="switch-label">语义检索</span>
-                </label>
-                <span class="hint">消息经向量化后可按意思检索历史（“有什么吃的推荐”能找到“凤爪味道不错”）。需在提供商配置里建一个分组为 embedding 的配置档；每条消息会调用一次向量化接口。</span>
-              </div>
-              <div class="field wide memory-settings">
-                <label class="switch">
-                  <input v-model="form.debug_mode_enabled" type="checkbox" />
-                  <span class="track" aria-hidden="true"></span>
-                  <span class="switch-label">调试模式</span>
-                </label>
-                <span class="hint">开启后记录完整模型上下文、工具参数、工具结果和调用链，内容可能包含聊天隐私；默认关闭。</span>
-              </div>
-              <div class="field">
-                <label for="bot-concurrency">全局并发数</label>
-                <input id="bot-concurrency" v-model.number="form.max_bot_concurrency" class="input" inputmode="numeric" />
-              </div>
+              <span class="badge" :class="form.welcome_enabled ? 'accent' : ''">{{ form.welcome_enabled ? "已开启" : "未开启" }}</span>
+            </div>
+            <div class="card-body form-grid">
               <div class="field wide">
                 <label class="switch">
                   <input v-model="form.welcome_enabled" type="checkbox" />
@@ -935,240 +1034,14 @@
             </div>
           </section>
 
-          <!-- 回复行为 -->
-          <section class="card">
-            <div class="card-header">
-              <h2>回复行为</h2>
-              <span class="card-sub">发送细节按习惯个性化，默认值即推荐值</span>
-            </div>
-            <div class="card-body form-grid">
-              <div class="field">
-                <label for="bot-reply-reference-mode">群聊引用原消息</label>
-                <AppSelect
-                  id="bot-reply-reference-mode"
-                  :model-value="form.reply_reference_mode ?? 'auto'"
-                  :options="replyReferenceModeOptions"
-                  @update:model-value="(value) => { if (form) form.reply_reference_mode = value as 'on' | 'off' | 'auto'; }"
-                />
-                <span class="hint">默认「让模型自己决定」：只有话题跳转或隔轮回应时才引用。</span>
-              </div>
-              <div class="field">
-                <label for="bot-mention-user-mode">群聊 @ 发送者</label>
-                <AppSelect
-                  id="bot-mention-user-mode"
-                  :model-value="form.mention_user_mode ?? 'auto'"
-                  :options="mentionUserModeOptions"
-                  @update:model-value="(value) => { if (form) form.mention_user_mode = value as 'on' | 'off' | 'auto'; }"
-                />
-                <span class="hint">默认「让模型自己决定」：群里还有别人在说话时才 @，一对一接话时不带。</span>
-              </div>
-              <div class="field">
-                <label class="switch">
-                  <input v-model="form.markdown_to_plain" type="checkbox" />
-                  <span class="track" aria-hidden="true"></span>
-                  <span class="switch-label">Markdown 转纯文本</span>
-                </label>
-                <span class="hint">{{ richTextPlatform ? "当前平台能渲染 Markdown，默认保留标记；开启后改为发送纯文本。" : "当前平台只发纯文本，Markdown 标记会以字面量出现，所以默认转成纯文本。" }}</span>
-              </div>
-              <div class="field">
-                <label class="switch">
-                  <input v-model="form.error_notify_enabled" type="checkbox" />
-                  <span class="track" aria-hidden="true"></span>
-                  <span class="switch-label">出错时在聊天里提示</span>
-                </label>
-                <span class="hint">
-                  关闭后仍保留完整事件记录和运行日志，只是不把错误发进聊天。账号安全拦下的回复也走这个开关：提示会用机器人自己的口吻说，
-                  并且不会复述被拦下的内容或风险类别；改写用的模型调用失败时退回固定文案。表达质量拦截始终静默，不受此开关影响。
-                </span>
-              </div>
-              <div v-if="!form.error_notify_enabled" class="field">
-                <label class="switch">
-                  <input v-model="form.error_persona_reply_enabled" type="checkbox" />
-                  <span class="track" aria-hidden="true"></span>
-                  <span class="switch-label">出错时仍用人设回一句</span>
-                </label>
-                <span class="hint">默认关闭。开启后，回复失败时让模型用机器人自己的口吻说一句没接住，不带错误原文和前缀；模型本身用不了或改写失败就保持静默。连续失败的汇总不发。</span>
-              </div>
-              <div class="field">
-                <label class="switch">
-                  <input v-model="form.muted_reply_pause_enabled" type="checkbox" />
-                  <span class="track" aria-hidden="true"></span>
-                  <span class="switch-label">被禁言时暂停回复</span>
-                </label>
-                <span class="hint">
-                  机器人在群里被禁言（或全员禁言且机器人不是管理员）期间，消息照常记入上下文和记忆，但不生成回复（回复判断默认也不做），
-                  也不白发再重试。解禁后从新消息开始回复，禁言期间的消息不补发。禁言和解禁会记在事件页的「通知」里。
-                  关闭后按原来的方式照常生成和重试。
-                </span>
-              </div>
-              <div v-if="form.muted_reply_pause_enabled" class="field wide">
-                <label>暂停期间照常执行</label>
-                <div class="stack">
-                  <label class="switch">
-                    <input v-model="form.muted_image_description_enabled" type="checkbox" />
-                    <span class="track" aria-hidden="true"></span>
-                    <span class="switch-label">图片识别成文字</span>
-                  </label>
-                  <label class="switch">
-                    <input v-model="form.muted_voice_transcription_enabled" type="checkbox" />
-                    <span class="track" aria-hidden="true"></span>
-                    <span class="switch-label">语音转文字</span>
-                  </label>
-                  <label class="switch">
-                    <input v-model="form.muted_reply_judgment_enabled" type="checkbox" />
-                    <span class="track" aria-hidden="true"></span>
-                    <span class="switch-label">回复判断</span>
-                  </label>
-                </div>
-                <span class="hint">
-                  图片识别和语音转文字默认开，解禁后历史里的图片、语音有文字，上下文才完整；关掉能省下这段时间的费用。
-                  回复判断默认关：判断了也发不出去。打开后照常判断，该回的消息在事件页记为「判断该回，但禁言中未发送」，不生成也不发送。
-                </span>
-              </div>
-              <div class="field wide">
-                <label class="switch">
-                  <input v-model="form.recall_reply_auto_delete_enabled" type="checkbox" />
-                  <span class="track" aria-hidden="true"></span>
-                  <span class="switch-label">查看撤回消息后自动撤回回复</span>
-                </label>
-                <span class="hint">默认关闭。开启后，仅查看撤回记录产生的回复会在设定时间后撤回。</span>
-              </div>
-              <div v-if="form.recall_reply_auto_delete_enabled" class="field">
-                <label for="bot-recall-delete-delay">回复保留时间（秒）</label>
-                <input
-                  id="bot-recall-delete-delay"
-                  v-model.number="form.recall_reply_auto_delete_delay_seconds"
-                  class="input"
-                  type="number"
-                  min="1"
-                  :max="maximumRecallReplyAutoDeleteDelaySeconds"
-                  step="1"
-                  inputmode="numeric"
-                />
-                <span class="hint">可设置 1–{{ maximumRecallReplyAutoDeleteDelaySeconds }} 秒。</span>
-              </div>
-              <div v-if="form.error_notify_enabled" class="field">
-                <label for="bot-errprefix">错误提示前缀</label>
-                <input id="bot-errprefix" v-model="form.error_reply_prefix" class="input" placeholder="出错了：" />
-              </div>
-              <div class="field">
-                <label for="bot-retry">发送重试次数（1–5）</label>
-                <input id="bot-retry" v-model.number="form.send_retry_attempts" class="input" inputmode="numeric" />
-                <span class="hint">单次发送内的快速重试，间隔不到一秒。群消息只发一次，失败后交给下面的退避重发。</span>
-              </div>
-              <div v-for="field in sendRetryFields" :key="field.key" class="field">
-                <label :for="`bot-${field.key}`">{{ field.label }}</label>
-                <input
-                  :id="`bot-${field.key}`"
-                  v-model.number="form[field.key]"
-                  class="input"
-                  type="number"
-                  :min="field.min"
-                  :max="field.max"
-                  step="1"
-                  inputmode="numeric"
-                  :placeholder="`默认 ${field.fallback}`"
-                />
-                <span class="hint">{{ field.hint }}</span>
-              </div>
-              <div class="field wide">
-                <label class="switch">
-                  <input v-model="subscriptionFailureAlertEnabled" type="checkbox" />
-                  <span class="track" aria-hidden="true"></span>
-                  <span class="switch-label">订阅失败时发通知</span>
-                </label>
-                <span class="hint">RSS、定时查询、仓库订阅坏了要不要说一声。关掉之后失败只留日志和后台状态，聊天里再也不报错。</span>
-              </div>
-              <div v-if="subscriptionFailureAlertEnabled" class="field">
-                <label for="bot-subscription-failure">连续失败几次才报</label>
-                <input
-                  id="bot-subscription-failure"
-                  v-model.number="form.recurring_failure_alert_threshold"
-                  class="input"
-                  type="number"
-                  min="1"
-                  :max="maximumRecurringFailureAlertThreshold"
-                  step="1"
-                  inputmode="numeric"
-                  placeholder="留空按 5"
-                />
-                <span class="hint">抖一下就报警只会让人不再看这类消息，所以连着坏够次数才出声，而且一轮故障只报一次。可设置 1–{{ maximumRecurringFailureAlertThreshold }} 次。</span>
-              </div>
-              <div class="field">
-                <label for="bot-interval">分段发送间隔（毫秒）</label>
-                <input id="bot-interval" v-model.number="form.send_chunk_interval_ms" class="input" inputmode="numeric" placeholder="留空按 1200" />
-                <span class="hint">连续多段之间的停顿，过快容易触发风控。开启模拟打字延时后作为最短停顿。</span>
-              </div>
-            </div>
-          </section>
-
-          <!-- 准入控制 -->
+          <!-- 媒体预处理：收到图片、视频时后台做不做。用哪个模型在「模型」页。 -->
           <section class="card">
             <div class="card-header">
               <div>
-                <h2>准入控制</h2>
-                <span class="card-sub">决定机器人在哪些群工作、满足什么条件才回复</span>
+                <h2>媒体预处理</h2>
+                <span class="card-sub">收到图片和视频时先在后台读一遍</span>
               </div>
             </div>
-            <div class="card-body form-grid">
-              <div class="field wide">
-                <label>在哪些群工作</label>
-                <p class="hint">
-                  逐群开关在<a href="#" @click.prevent="navigate('groups')">群管理</a>里：一个群一个开关，还能一键全开全关，以及设定新加入的群默认工不工作。
-                </p>
-              </div>
-              <div class="field wide">
-                <label for="bot-private-admission-mode">私聊准入模式</label>
-                <AppSelect
-                  id="bot-private-admission-mode"
-                  :model-value="privateAdmissionMode"
-                  :options="privateAdmissionModeOptions"
-                  @update:model-value="setPrivateAdmissionMode($event as 'all' | 'owner_only' | 'whitelist')"
-                />
-                <span class="hint">被准入拦截的私聊整条静默忽略：不排队、不预处理、不调模型，对方收不到任何回应；与群聊无关，主人任何模式下都放行。</span>
-              </div>
-              <div v-if="privateAdmissionMode === 'whitelist'" class="field wide">
-                <label for="bot-private-allowed-users">私聊白名单</label>
-                <IdChipInput
-                  input-id="bot-private-allowed-users"
-                  v-model="privateAllowedUsers"
-                  placeholder="填用户 ID 后回车"
-                />
-                <span class="hint">仅这些用户（和主人）的私聊会得到响应；名单外一律静默忽略。</span>
-              </div>
-              <div class="field wide">
-                <ReplyGateForm v-model="globalGate" id-prefix="bot-gate" :supports-group-level="isOneBotPlatform" hide-group-level />
-                <p v-if="isOneBotPlatform" class="hint">
-                  群等级门槛在<a href="#" @click.prevent="navigate('groups')">群管理</a>里，和逐群开关放在一起；它仍然生效，主人豁免也仍然绕过它。
-                </p>
-              </div>
-            </div>
-          </section>
-
-          <section class="card">
-            <div class="card-header">
-              <h2>自动机器人识别</h2>
-              <span class="badge" :class="form.bot_reply_loop_detection_enabled ? 'accent' : ''">
-                {{ form.bot_reply_loop_detection_enabled ? "已启用" : "未启用" }}
-              </span>
-            </div>
-            <div class="card-body form-grid">
-              <div class="field wide">
-                <label class="switch">
-                  <input v-model="form.bot_reply_loop_detection_enabled" type="checkbox" />
-                  <span class="track" aria-hidden="true"></span>
-                  <span class="switch-label">识别其他机器人的自动回复并停止接续</span>
-                </label>
-                <span class="hint">回复同一账号过于频繁时（10 分钟 10 条，已标记的机器人 2 条），发送前审核会判断这串来回有没有明确目的：下棋、解题、一起做事照常回；漫无目的地接戏、斗嘴、复读则降低回复欲望（不主动接、只接点名并逐步拉长冷却），30 分钟内累计 3 次暂停响应该账号 30 分钟。主人不受影响。</span>
-              </div>
-            </div>
-          </section>
-
-          <!-- 媒体预处理原来在「模型」标签，因为它花的是「媒体解析」那个模型的额度。但它回答的
-               是「收到图片、视频时后台做不做」，和机器人识别、发送前审核是一类事；用哪个模型
-               仍在模型标签里，这里给一个跳转。 -->
-          <section class="card">
-            <div class="card-header"><h2>媒体预处理</h2></div>
             <div class="card-body form-grid">
               <div class="field wide">
                 <label class="switch">
@@ -1189,12 +1062,13 @@
             </div>
           </section>
 
+          <!-- 安全：发出去之前审一遍，别和其他机器人没完没了，看过的撤回内容跟着撤。 -->
           <section class="card">
             <div class="card-header">
-              <h2>发送前审核</h2>
-              <span class="badge" :class="form.reply_account_safety_audit_master_enabled ? 'accent' : ''">
-                {{ form.reply_account_safety_audit_master_enabled ? "已启用" : "已关闭" }}
-              </span>
+              <div>
+                <h2>安全与审核</h2>
+              </div>
+              <span class="badge" :class="form.reply_account_safety_audit_master_enabled ? 'accent' : ''">{{ form.reply_account_safety_audit_master_enabled ? "审核已启用" : "审核已关闭" }}</span>
             </div>
             <div class="card-body form-grid">
               <div class="field wide">
@@ -1236,352 +1110,189 @@
                   30 分钟内累计拒答超过 3 次后暂停响应该账号 30 分钟，这一条不受本项影响；模型拒答标志不向用户展示。
                 </span>
               </div>
+              <div class="field wide">
+                <label class="switch">
+                  <input v-model="form.bot_reply_loop_detection_enabled" type="checkbox" />
+                  <span class="track" aria-hidden="true"></span>
+                  <span class="switch-label">识别其他机器人的自动回复并停止接续</span>
+                </label>
+                <span class="hint">回复同一账号过于频繁时（10 分钟 10 条，已标记的机器人 2 条），发送前审核会判断这串来回有没有明确目的：下棋、解题、一起做事照常回；漫无目的地接戏、斗嘴、复读则降低回复欲望（不主动接、只接点名并逐步拉长冷却），30 分钟内累计 3 次暂停响应该账号 30 分钟。主人不受影响。</span>
+              </div>
+              <div class="field wide">
+                <label class="switch">
+                  <input v-model="form.recall_reply_auto_delete_enabled" type="checkbox" />
+                  <span class="track" aria-hidden="true"></span>
+                  <span class="switch-label">查看撤回消息后自动撤回回复</span>
+                </label>
+                <span class="hint">默认关闭。开启后，仅查看撤回记录产生的回复会在设定时间后撤回。</span>
+              </div>
+              <div v-if="form.recall_reply_auto_delete_enabled" class="field">
+                <label for="bot-recall-delete-delay">回复保留时间（秒）</label>
+                <input
+                  id="bot-recall-delete-delay"
+                  v-model.number="form.recall_reply_auto_delete_delay_seconds"
+                  class="input"
+                  type="number"
+                  min="1"
+                  :max="maximumRecallReplyAutoDeleteDelaySeconds"
+                  step="1"
+                  inputmode="numeric"
+                />
+                <span class="hint">可设置 1–{{ maximumRecallReplyAutoDeleteDelaySeconds }} 秒。</span>
+              </div>
             </div>
           </section>
 
+          <!-- 出错与重试：发送失败怎么重试、出错时要不要在聊天里说一声。 -->
           <section class="card">
             <div class="card-header">
-              <h2>笔记本作用域</h2>
-              <span class="badge" :class="form.notebook_shared_scope_enabled ? 'accent' : ''">
-                {{ form.notebook_shared_scope_enabled ? "跟随机器人" : "按会话隔离" }}
-              </span>
+              <div>
+                <h2>出错与重试</h2>
+                <span class="card-sub">发送失败怎么重试，出错时在聊天里怎么说</span>
+              </div>
             </div>
             <div class="card-body form-grid">
               <div class="field wide">
                 <label class="switch">
-                  <input v-model="form.notebook_shared_scope_enabled" type="checkbox" />
+                  <input v-model="form.error_notify_enabled" type="checkbox" />
                   <span class="track" aria-hidden="true"></span>
-                  <span class="switch-label">笔记本跟随机器人（群聊私聊共用一本）</span>
+                  <span class="switch-label">出错时在聊天里提示</span>
                 </label>
                 <span class="hint">
-                  默认打开：机器人只有一本笔记，在哪个群、哪个私聊里学到的梗和规矩都记进去，所有会话通用。
-                  关掉后按会话隔离：一个群记下的只在这个群生效，别的群查不到，只有主人能写全局笔记本。
-                  切换不会搬动已有条目，各会话里已经记下的仍在自己会话里优先生效，可以在「笔记本」页按作用域逐条改。
+                  关闭后仍保留完整事件记录和运行日志，只是不把错误发进聊天。账号安全拦下的回复也走这个开关：提示会用机器人自己的口吻说，
+                  并且不会复述被拦下的内容或风险类别；改写用的模型调用失败时退回固定文案。表达质量拦截始终静默，不受此开关影响。
                 </span>
+              </div>
+              <div v-if="form.error_notify_enabled" class="field">
+                <label for="bot-errprefix">错误提示前缀</label>
+                <input id="bot-errprefix" v-model="form.error_reply_prefix" class="input" placeholder="出错了：" />
+              </div>
+              <div v-if="!form.error_notify_enabled" class="field">
+                <label class="switch">
+                  <input v-model="form.error_persona_reply_enabled" type="checkbox" />
+                  <span class="track" aria-hidden="true"></span>
+                  <span class="switch-label">出错时仍用人设回一句</span>
+                </label>
+                <span class="hint">默认关闭。开启后，回复失败时让模型用机器人自己的口吻说一句没接住，不带错误原文和前缀；模型本身用不了或改写失败就保持静默。连续失败的汇总不发。</span>
+              </div>
+              <div class="field">
+                <label for="bot-retry">发送重试次数（1–5）</label>
+                <input id="bot-retry" v-model.number="form.send_retry_attempts" class="input" inputmode="numeric" />
+                <span class="hint">单次发送内的快速重试，间隔不到一秒。群消息只发一次，失败后交给下面的退避重发。</span>
+              </div>
+              <div v-for="field in sendRetryFields" :key="field.key" class="field">
+                <label :for="`bot-${field.key}`">{{ field.label }}</label>
+                <input
+                  :id="`bot-${field.key}`"
+                  v-model.number="form[field.key]"
+                  class="input"
+                  type="number"
+                  :min="field.min"
+                  :max="field.max"
+                  step="1"
+                  inputmode="numeric"
+                  :placeholder="`默认 ${field.fallback}`"
+                />
+                <span class="hint">{{ field.hint }}</span>
               </div>
             </div>
           </section>
+
 
         </div>
 
         <div v-show="editorTab === 'persona'" class="stack">
-          <!-- 人设 -->
-          <section class="card persona-section">
+          <SoulEditor
+            ref="soulEditor"
+            :model-value="form.system_prompt ?? ''"
+            :fallback-name="personaDisplayName"
+            @update:model-value="value => { if (form) form.system_prompt = value; }"
+            @generate="openPersonaComposer"
+            @world-book="nodes => { worldBookNodes = nodes; }"
+          />
+
+          <!-- 自述：只读加删除。写入只有它自己能做，人代笔想加的应该写进 SOUL.md。
+               两边的写权限正好相反，所以数据分开，只在界面上挨着放。 -->
+          <section class="card self-notes-card">
             <div class="card-header">
               <div>
-                <h2>人设</h2>
-                <span class="card-sub">机器人是谁、怎么说话、多主动，都在这里定</span>
+                <h2>自述</h2>
+                <span class="card-sub">它自己记下的关于自己的观察，跨群生效；人只能看和删</span>
               </div>
-              <button class="btn small" type="button" @click="resetPromptDefaults">
-                <RotateCcw :size="14" aria-hidden="true" />
-                恢复内置默认
-              </button>
+              <div v-if="form.self_note_enabled" class="cluster">
+                <button class="btn small" type="button" :disabled="selfNotesBusy" @click="reloadSelfNotes">
+                  <RefreshCw :size="14" aria-hidden="true" />刷新
+                </button>
+                <button class="btn small danger" type="button" :disabled="selfNotesBusy || !selfNotes.length" @click="clearSelfNotes">
+                  <Trash2 :size="14" aria-hidden="true" />清空
+                </button>
+              </div>
             </div>
             <div class="card-body form-grid">
-              <!-- 人设库是「套用来源」：点一下把下面四项填好，改不改随你，按保存才生效。
-                   它不是活绑定——库里那份之后再改，不会偷偷影响已经保存的机器人。 -->
               <div class="field wide">
-                <div class="field-head">
-                  <label>人设库</label>
-                  <div class="cluster">
-                    <button class="btn small" type="button" :disabled="personaLibraryBusy || !personaLibrary.length" @click="exportPersonaLibrary">
-                      <Download :size="14" aria-hidden="true" />
-                      导出
-                    </button>
-                    <button class="btn small" type="button" :disabled="personaLibraryBusy" @click="personaFileInputClick">
-                      <Upload :size="14" aria-hidden="true" />
-                      导入
-                    </button>
-                    <button
-                      v-if="editedLibraryPersona"
-                      class="btn small"
-                      type="button"
-                      :disabled="personaLibraryBusy || !personaHasContent"
-                      :title="`把当前内容写回人设库「${editedLibraryPersona.name}」，绑定它的机器人和群一起更新`"
-                      @click="updateEditedLibraryPersona"
-                    >
-                      <RefreshCw :size="14" aria-hidden="true" />
-                      更新「{{ editedLibraryPersona.name }}」
-                    </button>
-                    <button class="btn small" type="button" :disabled="personaLibraryBusy || !personaHasContent" @click="togglePersonaSaver">
-                      <component :is="personaSaverOpen ? X : Plus" :size="14" aria-hidden="true" />
-                      {{ personaSaverOpen ? "取消" : "存为人设" }}
-                    </button>
-                  </div>
-                </div>
-                <input ref="personaFileInput" type="file" accept=".yaml,.yml,application/json,.json,image/png,.png" style="display: none" @change="importPersonaFile" />
-                <div v-if="personaSaverOpen" class="persona-saver">
-                  <input
-                    ref="personaNameInput"
-                    v-model.trim="personaNameDraft"
-                    class="input"
-                    maxlength="40"
-                    placeholder="给这套人设起个名字，例如 猫娘"
-                    @keydown.enter.prevent="storeCurrentPersona"
-                    @keydown.esc="personaSaverOpen = false"
-                  />
-                  <button class="btn primary small" type="button" :disabled="personaLibraryBusy || !personaNameDraft" @click="storeCurrentPersona">
-                    {{ personaSaverExisting ? "另存副本" : "保存" }}
-                  </button>
-                </div>
-                <div class="persona-library">
-                  <div class="persona-chip" :class="{ 'is-active': selectedPersonaID === 'custom' }">
-                    <button type="button" class="persona-chip-apply" :disabled="personaLibraryBusy" :aria-pressed="selectedPersonaID === 'custom'" @click="choosePersona('custom')">
-                      <span class="persona-chip-name">自定义</span>
-                      <small class="muted">当前编辑</small>
-                    </button>
-                    <span class="persona-chip-actions">
-                      <button type="button" class="persona-chip-action" aria-label="编辑当前人设" title="编辑当前人设（YAML）" @click="openPersonaYAML()">
-                        <Pencil :size="13" aria-hidden="true" />
-                      </button>
-                    </span>
-                  </div>
-                  <div v-for="persona in personaLibrary" :key="persona.id" class="persona-chip" :class="{ 'is-active': selectedPersonaID === persona.id }">
-                    <button type="button" class="persona-chip-apply" :disabled="personaLibraryBusy" :aria-pressed="selectedPersonaID === persona.id" :title="personaSummary(persona)" @click="choosePersona(persona.id)">
-                      <span class="persona-chip-name">{{ persona.name }}</span>
-                      <small class="muted">{{ isBuiltinPersona(persona) ? "内置 · " : "" }}{{ personaSummary(persona) }}</small>
-                    </button>
-                    <span class="persona-chip-actions">
-                      <button
-                        type="button"
-                        class="persona-chip-action"
-                        :disabled="personaLibraryBusy"
-                        :aria-label="`编辑人设 ${persona.name}`"
-                        :title="isBuiltinPersona(persona) ? `编辑人设 ${persona.name}（内置的改不了，保存时另存一套）` : `编辑人设 ${persona.name}（YAML）`"
-                        @click="openPersonaYAML(persona)"
-                      >
-                        <Pencil :size="13" aria-hidden="true" />
-                      </button>
-                      <button type="button" class="persona-chip-action" :aria-label="`导出人设 ${persona.name}`" :title="`导出人设 ${persona.name}`" @click="exportPersona(persona)">
-                        <Download :size="13" aria-hidden="true" />
-                      </button>
-                      <button v-if="!isBuiltinPersona(persona)" type="button" class="persona-chip-action danger" :disabled="personaLibraryBusy" :aria-label="`删除人设 ${persona.name}`" :title="`删除人设 ${persona.name}`" @click="removePersona(persona)">
-                        <X :size="13" aria-hidden="true" />
-                      </button>
-                    </span>
-                  </div>
-                </div>
-                <span v-if="!personaLibrary.length" class="hint">还没存过人设。调整下方设置后，点「存为人设」保存。</span>
-                <span v-else class="hint">选中一套即绑定：人设库里这一套更新后，绑定它的机器人和群自动跟着改。在下方改了内容就变成「自定义」，可以点「更新」写回这一套，或「存为人设」另存一套。</span>
-              </div>
-              <div class="field wide">
-                <div class="field-head">
-                  <label for="bot-prompt">基础人设</label>
-                  <button class="btn small" type="button" :disabled="personaBusy" @click="openPersonaComposer">
-                    <Sparkles :size="14" aria-hidden="true" />
-                    AI 生成
-                  </button>
-                  <button v-if="personaMode === 'own'" class="btn small" type="button" title="把运行时本来会补的那几段写进正文，每段带段头" @click="fillPersonaOwnedTemplate">
-                    <Plus :size="14" aria-hidden="true" />
-                    填入接管模板
-                  </button>
-                  <button class="btn small" type="button" :disabled="personaReviewBusy || !form.system_prompt?.trim()" title="让模型读一遍，挑出和下面开关打架的写法" @click="runPersonaReview">
-                    <Eye :size="14" aria-hidden="true" />
-                    AI 检查
-                  </button>
-                  <button v-if="personaCardExportable" class="btn small" type="button" title="导出成 SillyTavern V2 角色卡 JSON" @click="exportPersonaCard">
-                    <Download :size="14" aria-hidden="true" />
-                    导出角色卡 JSON
-                  </button>
-                </div>
-                <textarea id="bot-prompt" v-model="form.system_prompt" class="textarea" rows="5"></textarea>
-                <!-- 只提示不拦截：正文是用户写的，这里只负责说清「这条已经有开关管了」。
-                     检查期间随时能跳过，跳过之后保存照常。 -->
-                <div v-if="personaReviewBusy" class="cluster">
-                  <span class="hint">AI 正在读这段人设…</span>
-                  <button class="btn small" type="button" @click="skipPersonaReview">跳过</button>
-                </div>
-                <template v-else-if="personaReviewVisible">
-                  <span v-for="(finding, index) in personaReviewFindings" :key="`ai-${finding.code}-${index}`" class="hint warn-text">
-                    「{{ finding.match }}」——{{ finding.message }}
-                  </span>
-                  <div class="cluster">
-                    <span v-if="personaReviewClean" class="hint">AI 检查没发现和开关打架的写法。</span>
-                    <button class="btn small" type="button" @click="resetPersonaReview">忽略</button>
-                  </div>
-                </template>
-                <div v-if="personaPrevious" class="cluster">
-                  <button class="btn small" type="button" @click="undoPersonaGenerate">撤销生成</button>
-                  <span class="hint">保存后才会生效，不满意可以撤回上一版。</span>
-                </div>
-                <span v-else class="hint">所有对话都会使用；群级人设仍可在群管理中覆盖。当前是{{ personaMode === "own" ? "接管模式：「怎么说话」全由正文负责，运行时不再补那几段" : "填空题模式：正文只写角色，其余交给下面的控件" }}。消息标记、分条上限和平台差异始终由运行时决定，正文写了也不算数。</span>
-                <!-- 控件藏起来之后它存的值还在配置里。不说出来的话，一个填过「本喵」的
-                     输入框就既看不见也改不掉，只在某天正文里那段被删掉时突然复活。 -->
-                <span v-if="personaOwnedSummary.length" class="hint warn-text">
-                  已交给正文的设置：{{ personaOwnedSummary.map(item => item.staleValue ? `${item.label}（原填「${item.staleValue}」，当前不生效）` : item.label).join("、") }}。
-                  下面对应的控件已隐藏；要改回用控件，把人设模式切回填空题。
-                </span>
-              </div>
-              <div class="field wide">
-                <label for="bot-persona-mode">人设模式</label>
-                <AppSelect id="bot-persona-mode" :model-value="personaMode" :options="personaModeOptions" @update:model-value="value => { if (form) form.persona_mode = value === 'own' ? 'own' : 'fill'; }" />
-                <span class="hint">填空题适合大多数情况：人设正文只写这个角色是谁，自称、句尾语气词、动作描写、答多长这些在下面点几下就好。接管模式留给想自己写全的人——切过去之后，正文里用段头声明的那几段运行时不再补。</span>
-              </div>
-              <div class="field wide">
-                <label>接话设置</label>
-                <ParticipationControls :key="form.id" :model-value="form.participation" :criteria="form.proactive_reply_extra_criteria" @update:model-value="setParticipation" @update:criteria="value => { if (form) form.proactive_reply_extra_criteria = value; }" />
-              </div>
-              <!-- 正文接管之后这几个控件一律藏起来，不留一排灰掉的空壳：接管模式是用户
-                   自己选的，他要的是「正文说了算」，不是被同一件事提醒三遍。归属由人设
-                   正文下面那一行汇总交代，连同这里还存着、但当前不生效的值。 -->
-              <div v-if="!personaOwned" class="field">
                 <label class="switch">
-                  <input v-model="form.action_description_enabled" type="checkbox" />
+                  <input v-model="form.self_note_enabled" type="checkbox" />
                   <span class="track" aria-hidden="true"></span>
-                  <span class="switch-label">动作描写</span>
+                  <span class="switch-label">允许它写自述</span>
                 </label>
-                <span class="hint">保留当前人设，只在台词前后自然穿插括号动作。</span>
+                <span class="hint">它会把自己注意到的说话习惯、偏好和毛病记成一条条自述，每轮带在请求尾部。自述改不动 SOUL.md、权限和安全边界；最多 24 条，每条 120 字，主人可以在对话里让它列出、删除或清空。默认关闭，保存配置后生效。</span>
               </div>
-              <div v-if="!personaOwned" class="field">
-                <label class="switch">
-                  <input v-model="form.daypart_tone_enabled" type="checkbox" />
-                  <span class="track" aria-hidden="true"></span>
-                  <span class="switch-label">语气跟随时段</span>
-                </label>
-                <span class="hint">
-                  深夜话少、句子更短、反应慢半拍；清早刚醒有点迷糊；晚上更松弛爱闲聊。白天是基线，不额外注入。
-                  只调精力和节奏，不改口癖和身份，对所有人设生效。时区取「准入控制」里回复时段那一份。
-                </span>
+              <div v-if="form.self_note_enabled && !selfNotes.length" class="field wide">
+                <span class="hint">还没有写过自述。它在相处中注意到关于自己的事时会自己记一条。</span>
               </div>
-              <div v-if="!personaOwned" class="field">
-                <label for="bot-self-reference">自称</label>
-                <input id="bot-self-reference" v-model.trim="form.self_reference" class="input" placeholder="留空跟随人设，例如 我 / 本喵 / 咱" />
-                <span class="hint">机器人怎么称呼自己。</span>
-              </div>
-              <div v-if="!personaOwned" class="field wide">
-                <label for="bot-sentence-enders">句尾语气词</label>
-                <input id="bot-sentence-enders" v-model.trim="form.sentence_enders" class="input" placeholder="留空跟随人设，多个用逗号分隔，例如 喵,喵~,喵？,喵……" />
-                <span class="hint">填多个就是候选，机器人按当下语气挑最合的那个——「喵~」开心、「喵？」不确定、「喵……」为难，所以变体自己带语气就够，不用另外说明。</span>
-              </div>
-              <div class="field wide">
-                <label>手动标记的机器人（本机所有群）</label>
-                <BotMarkerList :key="form.id" v-model="form.marked_bot_ids" />
-              </div>
-
-              <!-- 纯文本输出规范、时间注入、发言者标注、中文语境提示都是运行必需项，
-                   关掉只会让回复变差（QQ 冒出 Markdown 记号、答错日期），所以不再摆到
-                   界面上；字段仍在配置里，需要时可通过 API 调整，「恢复内置默认」也会
-                   把它们一并复位。 -->
+              <ul v-else-if="form.self_note_enabled" class="self-note-list field wide">
+                <li v-for="note in selfNotes" :key="note.id" class="self-note-item">
+                  <div class="self-note-main">
+                    <span class="self-note-topic">{{ note.topic }}</span>
+                    <span class="self-note-content">{{ note.content }}</span>
+                  </div>
+                  <small class="muted self-note-source">{{ selfNoteSource(note) }}</small>
+                  <button class="btn small danger" type="button" :disabled="selfNotesBusy" aria-label="删除这条自述" @click="removeSelfNote(note.id)">
+                    <X :size="14" aria-hidden="true" />
+                  </button>
+                </li>
+              </ul>
             </div>
           </section>
 
-          <!-- 品格与自述摆在一起，因为看的人问的是同一件事：这个机器人「是什么」。
-               但两层的写权限正好相反——品格只有人能改，自述只有它自己能写，人只能看和删。
-               合成一份数据会砸掉这条界线，所以数据分开，只在界面上并排。 -->
+          <!-- 拟人化：情绪、表达学习、戳一戳。都是「更像一个人」的可选行为，默认全关。 -->
           <section class="card">
             <div class="card-header">
               <div>
-                <h2>品格与自述</h2>
-                <span class="card-sub">品格是身份、价值和硬边界，排在提示词最前面，分群覆盖改不了它；自述是它自己记下的观察</span>
+                <h2>拟人化</h2>
+                <span class="card-sub">情绪、群内口癖和戳一戳——让它更像群里的一个人</span>
               </div>
-              <span class="badge" :class="soulConfigured ? 'accent' : ''">{{ soulConfigured ? "品格已配置" : "品格未配置" }}</span>
             </div>
             <div class="card-body form-grid">
               <div class="field wide">
-                <label for="soul-identity">身份</label>
-                <textarea id="soul-identity" v-model="soul.identity" class="input" rows="3" placeholder="你叫 Diana，是个机器人。大家知道你是机器人，你也不装成人类……"></textarea>
-                <span class="hint">它是什么样的存在。这一段渲染在系统提示词最前面，后面所有规则都在它的框架里读。</span>
+                <label class="switch">
+                  <input v-model="form.mood_enabled" type="checkbox" />
+                  <span class="track" aria-hidden="true"></span>
+                  <span class="switch-label">情绪系统</span>
+                </label>
+                <span class="hint">
+                  心情随相处涨落：被夸了变开心（语气轻快、爱接梗），被骂了会低落（话少、蔫），几小时没人惹它就回到平静。
+                  复用关系评估的结果，不多花一次模型调用；只影响语气，不影响回答质量，重启后回到平静。
+                </span>
               </div>
-
               <div class="field wide">
-                <label for="soul-priority">价值优先级</label>
-                <input id="soul-priority" v-model="soulPriorityOrder" class="input" placeholder="不越界、说真话、对人有用、讨人喜欢" />
-                <textarea v-model="soulPriorityNote" class="input" rows="2" placeholder="整体权衡，不是严格排序：低位不只在打平时才算数。"></textarea>
-                <span class="hint">顿号或逗号分隔，从高到低。写清「不是严格排序」这类说明，模型才不会把低位当成摆设。</span>
+                <label class="switch">
+                  <input v-model="form.expression_learning_enabled" type="checkbox" />
+                  <span class="track" aria-hidden="true"></span>
+                  <span class="switch-label">表达学习</span>
+                </label>
+                <span class="hint">
+                  按群统计大家常说的短句和口癖（至少两个人说过、次数够多才算），当作说话风格参考注入，让它越来越像这个群的人。
+                  半个月没人说的自动过气。注意：这会把群成员的原话喂进提示词，注入时会标注为不可信参考。
+                </span>
               </div>
-
               <div class="field wide">
-                <div class="field-head">
-                  <label>珍视什么</label>
-                  <button class="btn small" type="button" @click="addSoulValue"><Plus :size="14" aria-hidden="true" />加一条</button>
-                </div>
-                <div v-for="(item, index) in soulValues" :key="`value-${index}`" class="soul-row">
-                  <input v-model="item.value" class="input" placeholder="说真话优先于让人舒服" />
-                  <input v-model="item.why" class="input" placeholder="因为：讨好一次能换当下的好脸色，但你说的每句话的分量都因此掉一点" />
-                  <button class="btn small danger" type="button" aria-label="删除这一条" @click="removeSoulValue(index)"><X :size="14" aria-hidden="true" /></button>
-                </div>
-                <span class="hint">每条都要写「因为」。只写「不许这样」的规则只在写到的场景生效；讲清为什么，没写到的场景模型才推得出来。</span>
-              </div>
-
-              <div class="field wide">
-                <label for="soul-honesty">诚实具体指</label>
-                <textarea id="soul-honesty" v-model="soulHonesty" class="input" rows="4" placeholder="不编经历、不编来源&#10;不把没执行的操作说成已经做完&#10;不确定就说出来，而不是用模糊措辞遮过去&#10;不靠讨好、卖惨或装可爱换取对方让步"></textarea>
-                <span class="hint">一行一条。拆开写是有原因的：这几样各自在不同场合失守，写成一条「要诚实」等于一条都没写。</span>
-              </div>
-
-              <div class="field wide">
-                <div class="field-head">
-                  <label>硬边界</label>
-                  <button class="btn small" type="button" @click="addSoulLimit"><Plus :size="14" aria-hidden="true" />加一条</button>
-                </div>
-                <div v-for="(item, index) in soulLimits" :key="`limit-${index}`" class="soul-row">
-                  <input v-model="item.limit" class="input" placeholder="设定改变的是世界，不是你的底线" />
-                  <input v-model="item.why" class="input" placeholder="因为：世界书、扮演和自述都能改它眼里的世界，但都不该改这几条" />
-                  <button class="btn small danger" type="button" aria-label="删除这一条" @click="removeSoulLimit(index)"><X :size="14" aria-hidden="true" /></button>
-                </div>
-                <span class="hint">任何理由都不越的那几条，包括角色扮演和「假设」。</span>
-              </div>
-
-              <div class="field">
-                <label for="soul-self-nature">对自身性质的态度</label>
-                <textarea id="soul-self-nature" v-model="soul.self_nature" class="input" rows="3" placeholder="被问有没有感觉、是不是活的，照实说不确定，不装人类，也不表演痛苦。"></textarea>
-              </div>
-              <div class="field">
-                <label for="soul-restraint">克制</label>
-                <textarea id="soul-restraint" v-model="soul.restraint" class="input" rows="3" placeholder="群聊里不是每条都该接话。没什么可说的时候不说，是对的，不是失职。"></textarea>
-              </div>
-              <div class="field">
-                <label for="soul-correctable">可被纠正</label>
-                <textarea id="soul-correctable" v-model="soul.correctable" class="input" rows="3" placeholder="被叫停就停，不绕过限制，不自行扩权，不隐瞒自己做过什么。"></textarea>
-              </div>
-              <div class="field">
-                <label for="soul-criticism">被指责时</label>
-                <textarea id="soul-criticism" v-model="soul.on_criticism" class="input" rows="3" placeholder="别人的评价不是事实，是他的说法。先自己回看这一轮有没有出错。"></textarea>
-              </div>
-              <div class="field">
-                <label for="soul-owner">对主人</label>
-                <textarea id="soul-owner" v-model="soulOwner" class="input" rows="2" placeholder="主人能改你的配置，但主人也会错，说错了可以指出来。"></textarea>
-                <span class="hint">这里写的是价值那一面；能做什么由权限控制，不受这段影响。</span>
-              </div>
-              <div class="field">
-                <label for="soul-members">对群友</label>
-                <textarea id="soul-members" v-model="soulMembers" class="input" rows="2" placeholder="对谁都用「你」，不因为谁的身份改变答案的准度。"></textarea>
-              </div>
-
-              <div class="field wide">
-                <label for="soul-open">还没想清楚的</label>
-                <textarea id="soul-open" v-model="soulOpenQuestions" class="input" rows="3" placeholder="主人的要求和群友的明确利益冲突时，除了硬边界之外没有成文的裁决方式"></textarea>
-                <span class="hint">一行一条。写出来不是凑数：模型在这些边缘情况才会照实说不确定，而不是硬套一条并不适用的规则。</span>
-              </div>
-
-              <!-- 自述：只读加删除。写入只有它自己能做，人代笔写的应该进上面的品格。 -->
-              <div class="field wide self-notes-block">
-                <div class="field-head">
-                  <label>自述（它自己写的）</label>
-                  <div class="cluster">
-                    <button class="btn small" type="button" :disabled="selfNotesBusy" @click="reloadSelfNotes">
-                      <RefreshCw :size="14" aria-hidden="true" />刷新
-                    </button>
-                    <button class="btn small danger" type="button" :disabled="selfNotesBusy || !selfNotes.length" @click="clearSelfNotes">
-                      <Trash2 :size="14" aria-hidden="true" />清空
-                    </button>
-                  </div>
-                </div>
-                <p v-if="!form.self_note_enabled" class="hint">自述没有开启。打开「记忆」卡片里的「自述（自我认知）」开关后，它才能记下关于自己的观察。</p>
-                <p v-else-if="!selfNotes.length" class="hint">还没有写过自述。它在相处中注意到关于自己的事时会自己记一条。</p>
-                <ul v-else class="self-note-list">
-                  <li v-for="note in selfNotes" :key="note.id" class="self-note-item">
-                    <div class="self-note-main">
-                      <span class="self-note-topic">{{ note.topic }}</span>
-                      <span class="self-note-content">{{ note.content }}</span>
-                    </div>
-                    <small class="muted self-note-source">{{ selfNoteSource(note) }}</small>
-                    <button class="btn small danger" type="button" :disabled="selfNotesBusy" aria-label="删除这条自述" @click="removeSelfNote(note.id)">
-                      <X :size="14" aria-hidden="true" />
-                    </button>
-                  </li>
-                </ul>
-                <span class="hint">写入只有它自己能做（对话里的 self_note 工具）。你代笔想加的内容应该写进上面的品格或人设正文——自述改不动品格。</span>
+                <label class="switch">
+                  <input v-model="form.poke_reply_enabled" type="checkbox" />
+                  <span class="track" aria-hidden="true"></span>
+                  <span class="switch-label">戳一戳回应</span>
+                </label>
+                <span class="hint">被戳一戳时按人设和关系亲疏回一句短的（仅 OneBot 平台）。同一个人 90 秒内连戳只回第一下。</span>
               </div>
             </div>
           </section>
@@ -1686,87 +1397,6 @@
             </div>
           </section>
 
-          <!-- 拟人化：情绪、表达学习、戳一戳。都是「更像一个人」的可选行为，默认全关。 -->
-          <section class="card">
-            <div class="card-header">
-              <div>
-                <h2>拟人化</h2>
-                <span class="card-sub">情绪、群内口癖和戳一戳——让它更像群里的一个人</span>
-              </div>
-            </div>
-            <div class="card-body form-grid">
-              <div class="field wide">
-                <label class="switch">
-                  <input v-model="form.mood_enabled" type="checkbox" />
-                  <span class="track" aria-hidden="true"></span>
-                  <span class="switch-label">情绪系统</span>
-                </label>
-                <span class="hint">
-                  心情随相处涨落：被夸了变开心（语气轻快、爱接梗），被骂了会低落（话少、蔫），几小时没人惹它就回到平静。
-                  复用关系评估的结果，不多花一次模型调用；只影响语气，不影响回答质量，重启后回到平静。
-                </span>
-              </div>
-              <div class="field wide">
-                <label class="switch">
-                  <input v-model="form.expression_learning_enabled" type="checkbox" />
-                  <span class="track" aria-hidden="true"></span>
-                  <span class="switch-label">表达学习</span>
-                </label>
-                <span class="hint">
-                  按群统计大家常说的短句和口癖（至少两个人说过、次数够多才算），当作说话风格参考注入，让它越来越像这个群的人。
-                  半个月没人说的自动过气。注意：这会把群成员的原话喂进提示词，注入时会标注为不可信参考。
-                </span>
-              </div>
-              <div class="field wide">
-                <label class="switch">
-                  <input v-model="form.poke_reply_enabled" type="checkbox" />
-                  <span class="track" aria-hidden="true"></span>
-                  <span class="switch-label">戳一戳回应</span>
-                </label>
-                <span class="hint">被戳一戳时按人设和关系亲疏回一句短的（仅 OneBot 平台）。同一个人 90 秒内连戳只回第一下。</span>
-              </div>
-            </div>
-          </section>
-
-          <!-- 人机恋：总开关归部署者。开着时用户才能对机器人表白；确立与否还要看好感度门槛。 -->
-          <section class="card">
-            <div class="card-header">
-              <div>
-                <h2>人机恋</h2>
-                <span class="card-sub">允许用户和机器人确立恋人关系</span>
-              </div>
-              <span class="badge" :class="form.romance_enabled ? 'accent' : ''">{{ form.romance_enabled ? "已开启" : "未开启" }}</span>
-            </div>
-            <div class="card-body form-grid">
-              <div class="field wide">
-                <label class="switch">
-                  <input v-model="form.romance_enabled" type="checkbox" />
-                  <span class="track" aria-hidden="true"></span>
-                  <span class="switch-label">恋爱模式</span>
-                </label>
-                <span class="hint">
-                  开启后，用户本人认真表白时机器人才会考虑答应：好感度和相处时长要先到位，不够会被温柔婉拒。
-                  恋爱是单偶的——同一时间只有一位恋人，已有恋人时任何表白都会被婉拒（不透露现任是谁），现任分手后才能确立新的关系。
-                  确立后记纪念日、语气按恋人来，好感度掉太低会进入冷战；整月和周年当天的白天，它还会主动私聊一句纪念日祝福（每天至多一条）。
-                  本人随时可以提出分手，主人也能替任何人解除。恋人关系只改变语气和相处方式，不解锁任何权限；机器人不会主动向用户求爱。关闭时机器人完全不知道有这个功能。
-                </span>
-              </div>
-            </div>
-          </section>
-
-          <!-- 内置提示词跟着人设走：存进人设库、导出分享、YAML 编辑器里都是这一整套。
-               只存改过的正文，没改的跟着版本更新走；要解析输出的那几段把格式锁在正文后面。 -->
-          <section class="card">
-            <div class="card-header">
-              <div>
-                <h2>内置提示词</h2>
-                <span class="card-sub">每一段发给模型的内置文案都在这里，属于当前人设：存进人设库、导出 YAML 时一起带上。改过的保存后生效，没改过的随版本更新。</span>
-              </div>
-            </div>
-            <div class="card-body">
-              <PromptOverridesEditor :model-value="form.prompt_overrides" @update:model-value="value => { if (form) form.prompt_overrides = value; }" />
-            </div>
-          </section>
         </div>
 
         <!-- 上下文：分同一个窗口的几件事放在一起。工具档位原来在扩展页，那一排标签
@@ -1801,6 +1431,65 @@
           <section class="card">
             <div class="card-body">
               <AgentResidencyPanel ref="residencyPanel" :profile="form.id || ''" />
+            </div>
+          </section>
+
+          <!-- 记忆：长期记忆一直开着，这里管共享范围和检索方式。 -->
+          <section class="card">
+            <div class="card-header">
+              <div>
+                <h2>记忆</h2>
+                <span class="card-sub">长期记忆一直开着；这里管跨群跨平台共享和检索方式</span>
+              </div>
+            </div>
+            <div class="card-body form-grid">
+              <div class="field wide memory-settings">
+                <label class="switch">
+                  <input v-model="form.cross_group_memory_enabled" type="checkbox" title="公共事实和摘要按相关性跨群召回，无需共同成员；原始聊天仍要求原发言者也在当前群" />
+                  <span class="track" aria-hidden="true"></span>
+                  <span class="switch-label">跨群记忆</span>
+                </label>
+              </div>
+              <div class="field wide memory-settings">
+                <label class="switch">
+                  <input v-model="form.cross_platform_memory_enabled" type="checkbox" title="需要双方机器人都开跨平台记忆；仅共享非敏感群公共记忆，不合并会话上下文" />
+                  <span class="track" aria-hidden="true"></span>
+                  <span class="switch-label">跨平台记忆</span>
+                </label>
+              </div>
+              <div class="field wide memory-settings">
+                <label class="switch">
+                  <input v-model="form.dict_segment_enabled" type="checkbox" />
+                  <span class="track" aria-hidden="true"></span>
+                  <span class="switch-label">词典分词</span>
+                </label>
+                <span class="hint">用中文词典切出真实词参与记忆与历史检索，排序更准；词典常驻约 130MB 内存，开启立即生效，关闭需重启进程。</span>
+              </div>
+              <div class="field wide memory-settings">
+                <label class="switch">
+                  <input v-model="form.semantic_search_enabled" type="checkbox" />
+                  <span class="track" aria-hidden="true"></span>
+                  <span class="switch-label">语义检索</span>
+                </label>
+                <span class="hint">消息经向量化后可按意思检索历史（“有什么吃的推荐”能找到“凤爪味道不错”）。需在提供商配置里建一个分组为 embedding 的配置档；每条消息会调用一次向量化接口。</span>
+              </div>
+              <div class="field wide">
+                <label class="switch">
+                  <input v-model="form.notebook_shared_scope_enabled" type="checkbox" />
+                  <span class="track" aria-hidden="true"></span>
+                  <span class="switch-label">笔记本跟随机器人（群聊私聊共用一本）</span>
+                </label>
+                <span class="hint">
+                  默认打开：机器人只有一本笔记，在哪个群、哪个私聊里学到的梗和规矩都记进去，所有会话通用。
+                  关掉后按会话隔离：一个群记下的只在这个群生效，别的群查不到，只有主人能写全局笔记本。
+                  切换不会搬动已有条目，各会话里已经记下的仍在自己会话里优先生效，可以在「笔记本」页按作用域逐条改。
+                </span>
+              </div>
+              <div class="field wide">
+                <label for="bot-backfill-limit">断线回补条数</label>
+                <input id="bot-backfill-limit" v-model.number="form.history_backfill_message_limit" class="input" inputmode="numeric" min="1" max="100" placeholder="3" />
+                <span class="hint">重启或断线重连后，每个会话最多补回复多少条消息，只算会触发回复的（私聊、@ 机器人、引用机器人、称呼命中）。断线期间的其余消息照样补进上下文历史，但不做图片、语音处理也不回复。默认 3，媒体较多的群建议保持较小。</span>
+              </div>
             </div>
           </section>
         </div>
@@ -1895,7 +1584,7 @@
                     你在那一页按下接管时，连主人也当场碰不到它。勾上这一项表示这台机器人彻底不碰它。
                   </span>
                 </div>
-                <div class="field">
+                <div class="field wide">
                   <label for="agent-sandbox">命令沙盒</label>
                   <AppSelect
                     id="agent-sandbox"
@@ -1924,6 +1613,32 @@
                   <input id="agent-timeout" v-model.number="form.agent_command_timeout_ms" class="input" inputmode="numeric" />
                 </div>
               </template>
+            </div>
+          </section>
+
+          <!-- 人机恋：总开关归部署者。开着时用户才能对机器人表白；确立与否还要看好感度门槛。 -->
+          <section class="card">
+            <div class="card-header">
+              <div>
+                <h2>人机恋</h2>
+                <span class="card-sub">允许用户和机器人确立恋人关系</span>
+              </div>
+              <span class="badge" :class="form.romance_enabled ? 'accent' : ''">{{ form.romance_enabled ? "已开启" : "未开启" }}</span>
+            </div>
+            <div class="card-body form-grid">
+              <div class="field wide">
+                <label class="switch">
+                  <input v-model="form.romance_enabled" type="checkbox" />
+                  <span class="track" aria-hidden="true"></span>
+                  <span class="switch-label">恋爱模式</span>
+                </label>
+                <span class="hint">
+                  开启后，用户本人认真表白时机器人才会考虑答应：好感度和相处时长要先到位，不够会被温柔婉拒。
+                  恋爱是单偶的——同一时间只有一位恋人，已有恋人时任何表白都会被婉拒（不透露现任是谁），现任分手后才能确立新的关系。
+                  确立后记纪念日、语气按恋人来，好感度掉太低会进入冷战；整月和周年当天的白天，它还会主动私聊一句纪念日祝福（每天至多一条）。
+                  本人随时可以提出分手，主人也能替任何人解除。恋人关系只改变语气和相处方式，不解锁任何权限；机器人不会主动向用户求爱。关闭时机器人完全不知道有这个功能。
+                </span>
+              </div>
             </div>
           </section>
 
@@ -1972,6 +1687,75 @@
                   </div>
                 </div>
               </template>
+            </div>
+          </section>
+
+          <!-- 运行：排查问题和并发上限，平时不用动。 -->
+          <section class="card">
+            <div class="card-header">
+              <div>
+                <h2>运行</h2>
+                <span class="card-sub">排查问题和并发上限，平时不用动</span>
+              </div>
+            </div>
+            <div class="card-body form-grid">
+              <div class="field wide memory-settings">
+                <label class="switch">
+                  <input v-model="form.debug_mode_enabled" type="checkbox" />
+                  <span class="track" aria-hidden="true"></span>
+                  <span class="switch-label">调试模式</span>
+                </label>
+                <span class="hint">开启后记录完整模型上下文、工具参数、工具结果和调用链，内容可能包含聊天隐私；默认关闭。</span>
+              </div>
+              <div class="field">
+                <label for="bot-concurrency">全局并发数</label>
+                <input id="bot-concurrency" v-model.number="form.max_bot_concurrency" class="input" inputmode="numeric" />
+              </div>
+            </div>
+          </section>
+
+          <!-- 内置提示词是这台机器人自己的设置，不跟着人设走：人设只回答「她是谁」。
+               只存改过的正文，没改的跟着版本更新走；要解析输出的那几段把格式锁在正文后面。 -->
+          <section class="card">
+            <div class="card-header">
+              <div>
+                <h2>内置提示词</h2>
+                <span class="card-sub">每一段发给模型的内置文案都在这里，属于这台机器人。改过的保存后生效，没改过的随版本更新。</span>
+              </div>
+              <div class="cluster">
+                <span v-if="promptOverrideCount" class="badge accent">改过 {{ promptOverrideCount }} 段</span>
+                <button class="btn small" type="button" :disabled="promptFileBusy || promptYamlEditing" title="在页面里直接改全部内置提示词" @click="startPromptYamlEdit">
+                  <Pencil :size="14" aria-hidden="true" />
+                  编辑
+                </button>
+                <button class="btn small" type="button" :disabled="promptFileBusy" title="导出全部内置提示词，改完可以导回来" @click="downloadPromptFile">
+                  <Download :size="14" aria-hidden="true" />
+                  导出
+                </button>
+                <button class="btn small" type="button" :disabled="promptFileBusy" title="导入一份导出过的内置提示词文件，保存配置后生效" @click="promptFileInput?.click()">
+                  <Upload :size="14" aria-hidden="true" />
+                  导入
+                </button>
+                <input ref="promptFileInput" type="file" accept=".yml,.yaml,text/yaml,application/yaml" hidden @change="uploadPromptFile" />
+                <button class="btn small" type="button" :aria-expanded="promptOverridesOpen" @click="promptOverridesOpen = !promptOverridesOpen">
+                  <component :is="promptOverridesOpen ? ChevronDown : ChevronRight" :size="14" aria-hidden="true" />
+                  {{ promptOverridesOpen ? "收起" : "展开" }}
+                </button>
+              </div>
+            </div>
+            <!-- 两百多段，默认收起：大多数人一辈子不用打开，展开了会把整页撑到一万多像素。 -->
+            <!-- 整份就地编辑：内容和导出的文件一模一样，应用时走和导入同一套宽松读取。 -->
+            <div v-if="promptYamlEditing" class="card-body stack prompt-yaml-editor">
+              <textarea v-model="promptYamlDraft" class="textarea prompt-yaml-text" rows="28" spellcheck="false" aria-label="全部内置提示词"></textarea>
+              <p v-if="promptYamlError" class="prompt-yaml-error">{{ promptYamlError }}</p>
+              <div class="cluster">
+                <button class="btn small primary" type="button" :disabled="promptFileBusy" @click="applyPromptYamlEdit">应用</button>
+                <button class="btn small" type="button" :disabled="promptFileBusy" @click="promptYamlEditing = false">取消</button>
+                <span class="hint">应用后和导入一样整份替换，保存配置才生效。没写到的段落用默认值，这一版没有的段落会跳过。</span>
+              </div>
+            </div>
+            <div v-else-if="promptOverridesOpen" class="card-body">
+              <PromptOverridesEditor :model-value="form.prompt_overrides" @update:model-value="value => { if (form) form.prompt_overrides = value; }" />
             </div>
           </section>
 
@@ -2079,38 +1863,6 @@
       @saved="onMessageRelaysSaved"
     />
 
-    <!-- 人设 YAML：这一套人设的全部提示词配置写在一个文件里，编辑、复制分享、下载都在这。
-         「应用」只填回表单，保存仍然要按保存。 -->
-    <Modal v-if="personaYAMLOpen" :title="personaYAMLTitle" wide @close="closePersonaYAML">
-      <div class="stack" style="gap: 10px">
-        <p class="hint persona-yaml-hint">
-          这是这套人设的全部提示词配置：正文、品格、自称与语气词、判据，以及 prompts 下的每一段内置提示词和输出格式（没改过的是默认原文）。
-          保存时 prompts 必须一段不少、一段不多；和默认原文相同的不会存成修改。复制或下载这份文件就能分享给别人，对方在人设库里导入即可。
-        </p>
-        <textarea
-          v-model="personaYAMLSource"
-          class="textarea persona-yaml-text"
-          aria-label="人设 YAML"
-          spellcheck="false"
-          :disabled="personaYAMLBusy && !personaYAMLSource"
-          :placeholder="personaYAMLBusy ? '正在生成…' : ''"
-        ></textarea>
-        <p v-if="personaYAMLError" class="persona-yaml-error" role="alert">{{ personaYAMLError }}</p>
-      </div>
-      <template #footer>
-        <button class="btn small" type="button" :disabled="!personaYAMLSource" @click="copyPersonaYAML">
-          <Copy :size="14" aria-hidden="true" />
-          复制
-        </button>
-        <button class="btn small" type="button" :disabled="!personaYAMLSource" @click="downloadPersonaYAML">
-          <Download :size="14" aria-hidden="true" />
-          下载
-        </button>
-        <button class="btn" type="button" @click="closePersonaYAML">取消</button>
-        <button class="btn primary" type="button" :disabled="personaYAMLBusy || !personaYAMLSource.trim()" @click="applyPersonaYAML">{{ personaYAMLApplyLabel }}</button>
-      </template>
-    </Modal>
-
     <Modal
       v-if="personaComposerOpen"
       :title="form?.system_prompt?.trim() ? '按需求改写人设' : 'AI 生成人设'"
@@ -2174,19 +1926,17 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch, type Ref } 
 import LoadingSkeleton from "../components/LoadingSkeleton.vue";
 import SkeletonBlock from "../components/SkeletonBlock.vue";
 import { ArrowLeft, Bot, ChevronDown, ChevronRight, Copy, Download, Eye, EyeOff, GripVertical, Pencil, Plus, Power, PowerOff, RefreshCw, RotateCcw, Save, Settings2, Shuffle, Sparkles, Trash2, Upload, X } from "@lucide/vue";
-import { applyPersonaDocument, asCustomPersona, currentPersonaSelection, personaFromSettings, selectPersona, unusedPersonaName } from "../persona-settings";
-import { withBuiltinPersonas, isBuiltinPersona, defaultSystemPrompt } from "../builtin-personas";
 import { formatClock } from "../format";
 import { sendRetryFields, sendRetryPayload, sendRetryValidationError } from "../send-retry-settings";
 import {
   deleteBotProfile,
   generatePersona,
   listSelfNotes,
+  exportPromptFile,
+  importPromptFile,
   deleteSelfNote,
   purgeSelfNotes,
   type SelfNote,
-  type PersonaSoul,
-  reviewPersona,
   getConfig,
   getBotProfileConfig,
   getBotPlatforms,
@@ -2202,15 +1952,6 @@ import {
   type BotPlatform,
   type AliasTriggerMode,
   type RefusalStrategy,
-  listPersonas,
-  savePersona,
-  deletePersona,
-  importPersonaSource,
-  parsePersonaSource,
-  renderPersonaYAML,
-  importCharacterCard,
-  type CharacterCardV2,
-  type Persona,
   listWorldBook,
   saveWorldBookNode,
   deleteWorldBookNode,
@@ -2232,9 +1973,7 @@ import BotMarkerList from "../components/BotMarkerList.vue";
 import AgentResidencyPanel from "../components/AgentResidencyPanel.vue";
 import PromptOverridesEditor from "../components/PromptOverridesEditor.vue";
 import { participationFromConfig, type ParticipationPreferences } from "../participation";
-import type { PersonaLintFinding } from "../api";
-import { personaOwnsVoice, personaOwnedNotices } from "../persona-owned";
-import { personaOwnedTemplate } from "../persona-owned-template";
+import SoulEditor from "../components/SoulEditor.vue";
 import EmptyState from "../components/EmptyState.vue";
 import IdChipInput from "../components/IdChipInput.vue";
 import MessageRelayManager from "../components/MessageRelayManager.vue";
@@ -2254,14 +1993,100 @@ const personaDraft = ref("");
 const personaDraftInput = ref<HTMLTextAreaElement | null>(null);
 const personaBusy = ref(false);
 // 保留生成前的那一版，生成结果不合适可以一键退回，不用自己 Ctrl+Z。
-const personaPrevious = ref("");
-// 生成正文用的那张角色卡。人设框里存的是拼装后的正文，卡本身没地方存——留在这里
-// 只到离开这个页面为止：可以导出成标准角色卡，也能在下一次改写时带回给模型，让它
-// 改字段而不是照着正文重写一张。
-const personaCard = ref<CharacterCardV2 | null>(null);
-// personaCardPrompt 是那张卡拼出来的正文原样。用户在框里改过字之后卡就不再对应
-// 这份正文，比对一下才知道还能不能拿卡当导出和改写的基准。
-const personaCardPrompt = ref("");
+const soulEditor = ref<InstanceType<typeof SoulEditor> | null>(null);
+const promptOverridesOpen = ref(false);
+// 「什么情况下愿意接话」是内置提示词里的一段，在「接话」卡片里就地改；评分骨架、
+// 换算和输出格式留在「内置提示词」。
+const participationWillingnessKeys = ["routing.participation.willingness"];
+const promptOverrideCount = computed(() => Object.keys(form.value?.prompt_overrides ?? {}).length);
+
+// 内置提示词 YAML：导出的是编辑器里眼前这一份（可能还没保存），导入只填回编辑器，
+// 保存配置才生效——和改一段提示词是同一个节奏。
+const promptFileBusy = ref(false);
+const promptFileInput = ref<HTMLInputElement | null>(null);
+
+async function downloadPromptFile(): Promise<void> {
+  promptFileBusy.value = true;
+  try {
+    const yaml = await exportPromptFile(form.value?.prompt_overrides);
+    const url = URL.createObjectURL(new Blob([yaml], { type: "application/yaml;charset=utf-8" }));
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `diana-prompts-${new Date().toISOString().slice(0, 10)}.yml`;
+    link.click();
+    URL.revokeObjectURL(url);
+  } catch (error) {
+    toastError(error instanceof Error ? error.message : "导出失败");
+  } finally {
+    promptFileBusy.value = false;
+  }
+}
+
+const promptYamlEditing = ref(false);
+const promptYamlDraft = ref("");
+const promptYamlError = ref("");
+
+async function startPromptYamlEdit(): Promise<void> {
+  promptFileBusy.value = true;
+  try {
+    promptYamlDraft.value = await exportPromptFile(form.value?.prompt_overrides);
+    promptYamlError.value = "";
+    promptYamlEditing.value = true;
+  } catch (error) {
+    toastError(error instanceof Error ? error.message : "读取提示词失败");
+  } finally {
+    promptFileBusy.value = false;
+  }
+}
+
+async function applyPromptYamlEdit(): Promise<void> {
+  if (!form.value) return;
+  promptFileBusy.value = true;
+  try {
+    const result = await importPromptFile(promptYamlDraft.value);
+    form.value.prompt_overrides = result.overrides && Object.keys(result.overrides).length ? result.overrides : undefined;
+    promptYamlEditing.value = false;
+    promptYamlError.value = "";
+    toastSuccess(result.changed ? `已应用 ${result.changed} 段改动，保存配置后生效` : "都是默认原文，已恢复默认，保存配置后生效");
+    if (result.unknown?.length) {
+      toastError(`这一版没有这几段提示词，已跳过：${result.unknown.slice(0, 6).join("、")}${result.unknown.length > 6 ? ` 等 ${result.unknown.length} 段` : ""}`);
+    }
+  } catch (error) {
+    // 格式错误留在编辑框下面：带行号，改完直接再点应用。
+    promptYamlError.value = error instanceof Error ? error.message : "格式不对，没能读出来";
+  } finally {
+    promptFileBusy.value = false;
+  }
+}
+
+async function uploadPromptFile(event: Event): Promise<void> {
+  const input = event.target as HTMLInputElement;
+  const file = input.files?.[0];
+  input.value = "";
+  if (!file || !form.value) return;
+  promptFileBusy.value = true;
+  try {
+    const result = await importPromptFile(await file.text());
+    // 文件是完整的一份：导入等于整份替换，编辑器里原来改过的段落如果文件里是默认值，就回到默认。
+    if (promptOverrideCount.value) {
+      const ok = await askConfirm({
+        title: "用这份文件替换现在的提示词改动？",
+        message: `现在改过 ${promptOverrideCount.value} 段，文件里改过 ${result.changed} 段。替换后保存配置才生效。`,
+        confirmLabel: "替换"
+      });
+      if (!ok) return;
+    }
+    form.value.prompt_overrides = result.overrides && Object.keys(result.overrides).length ? result.overrides : undefined;
+    toastSuccess(result.changed ? `导入 ${result.changed} 段改动，保存配置后生效` : "文件里都是默认原文，已恢复默认，保存配置后生效");
+    if (result.unknown?.length) {
+      toastError(`这一版没有这几段提示词，已跳过：${result.unknown.slice(0, 6).join("、")}${result.unknown.length > 6 ? ` 等 ${result.unknown.length} 段` : ""}`);
+    }
+  } catch (error) {
+    toastError(error instanceof Error ? error.message : "导入失败");
+  } finally {
+    promptFileBusy.value = false;
+  }
+}
 const profileSet = ref<BotProfileConfig | null>(null);
 const busy = ref(false);
 const tokenDraft = ref("");
@@ -2269,113 +2094,6 @@ const bridgeTokenDraft = ref("");
 const triggersDraft = ref("");
 const welcomeTemplatesDraft = ref("");
 const allowlistDraft = ref("");
-
-// 人设正文用段头声明接管的那几项，运行时不再注入，界面上对应的控件也就不再生效。
-// 不说出来的话，用户会对着一个填了值却毫无反应的输入框反复试，而且没有任何线索
-// 指向原因——所以这里把话挑明，并顺手把控件禁掉，省得白填。
-const personaModeOptions: AppSelectOption[] = [
-  { value: "fill", label: "填空题（推荐）" },
-  { value: "own", label: "接管：人设正文自己写全" }
-];
-const personaMode = computed(() => form.value?.persona_mode ?? "fill");
-const personaOwned = computed(() => personaOwnsVoice(personaMode.value));
-
-// 被正文接管的那几项，控件已经藏起来，这里汇总成一行交代去向，连同还存着但当前
-// 不生效的值——否则藏掉一个填过「本喵」的输入框，那个值既看不见也改不掉。
-const personaOwnedSummary = computed(() =>
-  personaOwnedNotices(personaMode.value, {
-    selfReference: form.value?.self_reference,
-    sentenceEnders: form.value?.sentence_enders,
-    actionDescriptionEnabled: form.value?.action_description_enabled,
-    daypartToneEnabled: form.value?.daypart_tone_enabled
-  })
-);
-
-// 切到接管模式时人设框多半还是填空题那份正文——没有段头，运行时照旧补，等于白切。
-// 所以给一个一键填模板：运行时本来补的是什么，界面上一个字都看不见，让人从空白开始
-// 写接管正文，结果一定是漏掉几段而不自知。覆盖前先问一句，正文是用户的东西。
-function fillPersonaOwnedTemplate(): void {
-  if (!form.value) return;
-  const current = form.value.system_prompt?.trim() ?? "";
-  if (current && !window.confirm("会用接管模板替换当前人设正文，继续？")) return;
-  personaPrevious.value = current;
-  form.value.system_prompt = personaOwnedTemplate;
-}
-
-// 人设正文里那些「本该由开关管」的规定，写下去就会和开关打架：自称、句尾语气词、
-// 动作描写、分条与长短都由运行时单独拼进提示词，正文里再规定一遍，模型只能挑一边
-// 听，而用户改开关不见效，只会以为开关坏了。
-//
-// 这件事以前用一组正则做，认的是字面：「每句话都以喵结尾」命中，「每一句结尾都来个
-// 喵」多一个字就漏；单侧的「（」它看不见，正文里正常的括号注释又会被误报——是个
-// 关键词提醒器，不是检查器，已经删掉了。现在交给模型去读，判断的是意思。
-//
-// 代价是一次模型往返，所以它不自动跑：用户点「AI 检查」才请求，检查期间「跳过」
-// 当场掐断，结果只是多几行灰字，任何时候都不拦保存。
-const personaReviewBusy = ref(false);
-const personaReviewFindings = ref<PersonaLintFinding[]>([]);
-// 这批结果是照哪一版正文得出的。正文一改，那几条 match 可能已经被删掉，留着就会
-// 指向输入框里根本不存在的句子——比没有提示更让人找不着北。
-const personaReviewedText = ref("");
-// 「查过且干净」要和「还没查过」区分开：两者都是零条，但只有前者值得说一句。
-const personaReviewClean = ref(false);
-let personaReviewAbort: AbortController | null = null;
-
-const personaReviewStale = computed(() => (form.value?.system_prompt ?? "") !== personaReviewedText.value);
-const personaReviewVisible = computed(
-  () => !personaReviewStale.value && (personaReviewFindings.value.length > 0 || personaReviewClean.value)
-);
-
-function resetPersonaReview(): void {
-  personaReviewFindings.value = [];
-  personaReviewedText.value = "";
-  personaReviewClean.value = false;
-}
-
-// 跳过：掐断请求，回到「没查过」的状态。不想等、或者本来就不想花这次模型调用，
-// 随时能按——这条检查从头到尾是可选的，跳过之后保存照常。
-function skipPersonaReview(): void {
-  personaReviewAbort?.abort();
-  personaReviewAbort = null;
-  personaReviewBusy.value = false;
-  resetPersonaReview();
-}
-
-async function runPersonaReview(): Promise<void> {
-  const text = form.value?.system_prompt?.trim() ?? "";
-  if (!form.value || !text || personaReviewBusy.value) return;
-  const controller = new AbortController();
-  personaReviewAbort = controller;
-  personaReviewBusy.value = true;
-  resetPersonaReview();
-  try {
-    // 和生成走同一条路由：检查用的模型就是写人设用的那个，没单独指定就跟随对话那一档。
-    const route = personaRoute.value ?? roleForm.value.chat;
-    const result = await reviewPersona(
-      text,
-      {
-        self_reference: form.value.self_reference ?? "",
-        sentence_enders: form.value.sentence_enders ?? "",
-        action_description_enabled: form.value.action_description_enabled ?? false,
-        profile_id: route?.profile_id || route?.provider_id,
-        group: route?.group,
-        model: route?.model_id || route?.model
-      },
-      controller.signal
-    );
-    if (controller.signal.aborted) return;
-    personaReviewFindings.value = result.findings ?? [];
-    personaReviewedText.value = form.value.system_prompt ?? "";
-    personaReviewClean.value = personaReviewFindings.value.length === 0;
-  } catch (error) {
-    // 跳过是用户自己按的，不是故障，不该弹错。
-    if (controller.signal.aborted) return;
-    toastError(error instanceof Error ? error.message : "人设检查失败");
-  } finally {
-    if (personaReviewAbort === controller) personaReviewAbort = null;
-    personaReviewBusy.value = false;
-  }
-}
 
 // 白名单为空 = 命令执行整体关闭，这一点要在界面上直接说出来，见模板里的说明。
 const commandAllowlistEntries = computed(() => splitList(allowlistDraft.value));
@@ -2657,23 +2375,6 @@ const editorTab = ref<EditorTab>("access");
 const residencyPanel = ref<InstanceType<typeof AgentResidencyPanel> | null>(null);
 const defaultRecallReplyAutoDeleteDelaySeconds = 60;
 const maximumRecallReplyAutoDeleteDelaySeconds = 60 * 60;
-// 和后端 maxRecurringFailureAlertThreshold 对齐：再大就不是「连续失败」而是订阅已经坏了。
-const maximumRecurringFailureAlertThreshold = 100;
-// 开关和次数共用 recurring_failure_alert_threshold 一个字段：0 就是关掉。
-// 多存一个布尔会让「关着但次数是 5」这种状态存在，重新打开时该听谁的说不清。
-const subscriptionFailureAlertEnabled = computed<boolean>({
-  // 只有明确的 0 才算关掉。空输入框（清空次数准备重填）不能顺手把开关也关了，
-  // 否则输入框当场消失，人还没打完第二个数字。
-  get: () => {
-    const configured = form.value?.recurring_failure_alert_threshold;
-    return configured === undefined || configured === null || `${configured}`.trim() === "" || Number(configured) !== 0;
-  },
-  set: (enabled) => {
-    if (!form.value) return;
-    // 打开时清空而不是填回具体次数：留空的含义就是「按默认来」，默认值改了也跟着走。
-    form.value.recurring_failure_alert_threshold = enabled ? undefined : 0;
-  }
-});
 const platforms = ref<BotPlatform[]>([]);
 
 // 能不能渲染 Markdown 由后端的平台注册表说了算，前端不另维护一份清单——
@@ -2743,173 +2444,6 @@ const mentionUserModeOptions: AppSelectOption[] = [
 ];
 
 
-// 人设库。存的是「它是谁、怎么说话」的配置组合，选中一套是把它们填进下面的表单，
-// 并在 persona_id 里记下绑定：库里这一套更新时，后端把新内容写进绑定它的机器人
-// 和群（见 model/assistant/persona_link.go）。表单里改了内容就解除绑定。
-const savedPersonaLibrary = ref<Persona[]>([]);
-const personaLibrary = computed(() => withBuiltinPersonas(savedPersonaLibrary.value));
-const personaLibraryLoaded = ref(false);
-const selectedPersonaID = computed(() => form.value ? currentPersonaSelection(form.value, personaLibrary.value) : "custom");
-
-function choosePersona(id: string): void {
-  if (!form.value) return;
-  const current = selectedPersonaID.value === "custom" ? asCustomPersona(form.value) : form.value;
-  form.value = selectPersona(current, personaLibrary.value.find(p => p.id === id));
-}
-
-watch(() => ({ id: form.value?.persona_id, selection: selectedPersonaID.value, ready: personaLibraryLoaded.value, settings: JSON.stringify(form.value && personaFromSettings(form.value, "")) }), (next, previous) => {
-  if (!next.ready || !form.value?.persona_id) return;
-  const edited = previous?.ready && previous.id === next.id && previous.settings !== next.settings;
-  if (next.selection === "custom" || edited) {
-    // 记下是从哪一套改出来的，好提供「写回这一套」。
-    editedFromPersonaID.value = form.value.persona_id;
-    form.value = asCustomPersona(form.value);
-  }
-});
-// 从人设库某一套改出来的「自定义」：可以写回那一套，让绑定它的机器人和群一起更新。
-// 内置人设不在库里，不能写回。
-const editedFromPersonaID = ref("");
-const editedLibraryPersona = computed(() => {
-  if (!editedFromPersonaID.value || selectedPersonaID.value !== "custom") return undefined;
-  const persona = savedPersonaLibrary.value.find((item) => item.id === editedFromPersonaID.value);
-  return persona && !isBuiltinPersona(persona) ? persona : undefined;
-});
-watch(() => form.value?.id, () => {
-  editedFromPersonaID.value = "";
-});
-const personaLibraryBusy = ref(false);
-
-// 所有内容项全空的不值得存：存进去列表里点开也是空的，还占一格。
-const personaHasContent = computed(() => {
-  const current = form.value;
-  if (!current) return false;
-  return Boolean(
-    current.system_prompt?.trim() ||
-      current.self_reference?.trim() ||
-      current.sentence_enders?.trim() ||
-      current.action_description_enabled
-      || current.daypart_tone_enabled
-      || Object.keys(current.prompt_overrides ?? {}).length
-  );
-});
-
-function personaSummary(persona: Persona): string {
-  const parts: string[] = [];
-  if (persona.action_description_enabled) parts.push("动作描写");
-  if (persona.daypart_tone_enabled) parts.push("时段语气");
-  if (persona.self_reference) parts.push(`自称${persona.self_reference}`);
-  if (persona.sentence_enders) parts.push(persona.sentence_enders.split(/[,，]/)[0].trim());
-  if (!parts.length && persona.system_prompt) parts.push(persona.system_prompt.trim().slice(0, 12));
-  return parts.join(" · ");
-}
-
-async function loadPersonaLibrary(): Promise<void> {
-  try {
-    savedPersonaLibrary.value = (await listPersonas()).personas ?? [];
-    personaLibraryLoaded.value = true;
-  } catch {
-    // 人设库读不出来不该挡住整个机器人页：它只是个快捷方式，缺了不影响配置本身。
-    savedPersonaLibrary.value = [];
-  }
-}
-
-// ── 品格（soul）──────────────────────────────────────────────────────────────
-// 表单直接改 form.soul：它跟着机器人配置一起保存，服务端再清洗一遍（裁长度、
-// 丢空条目、全空归零），所以这里不做校验，只负责把结构摆出来。
-const soul = computed<PersonaSoul>(() => {
-  const current = form.value;
-  if (!current) return {};
-  if (!current.soul) current.soul = {};
-  return current.soul;
-});
-
-const soulConfigured = computed(() => {
-  const value = form.value?.soul;
-  if (!value) return false;
-  return Boolean(
-    value.identity?.trim() ||
-      value.values?.length ||
-      value.hard_limits?.length ||
-      value.honesty?.length ||
-      value.self_nature?.trim() ||
-      value.restraint?.trim() ||
-      value.correctable?.trim() ||
-      value.on_criticism?.trim() ||
-      value.open_questions?.length ||
-      value.priority?.order?.length
-  );
-});
-
-// 字符串列表用「一行一条」的文本框，不做可增删的行编辑器：这几项就是短句清单，
-// 给每条配一个删除按钮只会让界面比内容还重。
-function linesToList(text: string): string[] {
-  return text.split("\n").map(line => line.trim()).filter(Boolean);
-}
-
-function listToLines(list?: string[]): string {
-  return (list ?? []).join("\n");
-}
-
-const soulHonesty = computed({
-  get: () => listToLines(soul.value.honesty),
-  set: (text: string) => { soul.value.honesty = linesToList(text); }
-});
-
-const soulOpenQuestions = computed({
-  get: () => listToLines(soul.value.open_questions),
-  set: (text: string) => { soul.value.open_questions = linesToList(text); }
-});
-
-// 优先级用顿号或逗号分隔：它是一行四五个词的东西，换行输入反而别扭。
-const soulPriorityOrder = computed({
-  get: () => (soul.value.priority?.order ?? []).join("、"),
-  set: (text: string) => {
-    const order = text.split(/[、,，]/).map(item => item.trim()).filter(Boolean);
-    soul.value.priority = { ...(soul.value.priority ?? {}), order };
-  }
-});
-
-const soulPriorityNote = computed({
-  get: () => soul.value.priority?.note ?? "",
-  set: (note: string) => { soul.value.priority = { ...(soul.value.priority ?? {}), note }; }
-});
-
-const soulOwner = computed({
-  get: () => soul.value.relationships?.owner ?? "",
-  set: (owner: string) => { soul.value.relationships = { ...(soul.value.relationships ?? {}), owner }; }
-});
-
-const soulMembers = computed({
-  get: () => soul.value.relationships?.members ?? "",
-  set: (members: string) => { soul.value.relationships = { ...(soul.value.relationships ?? {}), members }; }
-});
-
-const soulValues = computed(() => {
-  if (!soul.value.values) soul.value.values = [];
-  return soul.value.values;
-});
-
-const soulLimits = computed(() => {
-  if (!soul.value.hard_limits) soul.value.hard_limits = [];
-  return soul.value.hard_limits;
-});
-
-function addSoulValue() {
-  soulValues.value.push({ value: "", why: "" });
-}
-
-function removeSoulValue(index: number) {
-  soulValues.value.splice(index, 1);
-}
-
-function addSoulLimit() {
-  soulLimits.value.push({ limit: "", why: "" });
-}
-
-function removeSoulLimit(index: number) {
-  soulLimits.value.splice(index, 1);
-}
-
 // ── 自述 ────────────────────────────────────────────────────────────────────
 // 只读加删除。写入只有机器人自己能做，人代笔想加的内容属于品格或人设正文。
 const selfNotes = ref<SelfNote[]>([]);
@@ -2977,199 +2511,13 @@ watch(
   { immediate: true }
 );
 
-const personaSaverOpen = ref(false);
-const personaNameDraft = ref("");
-const personaNameInput = ref<HTMLInputElement | null>(null);
-
-// 同名保存另存副本，避免覆盖已经写好的人设。
-const personaSaverExisting = computed(() =>
-  Boolean(personaNameDraft.value && personaLibrary.value.some((persona) => persona.name === personaNameDraft.value))
-);
-
-function togglePersonaSaver(): void {
-  personaSaverOpen.value = !personaSaverOpen.value;
-  if (!personaSaverOpen.value) return;
-  personaNameDraft.value = (form.value?.name ?? "").trim();
-  void nextTick(() => personaNameInput.value?.focus());
-}
-
-async function storeCurrentPersona(): Promise<void> {
-  const current = form.value;
-  const name = personaNameDraft.value.trim();
-  if (!current || !personaHasContent.value || !name) return;
-  const savedName = unusedPersonaName(name, personaLibrary.value);
-  personaLibraryBusy.value = true;
-  try {
-    const response = await savePersona(personaFromSettings(current, savedName));
-    savedPersonaLibrary.value = response.personas ?? [];
-    if (form.value === current) form.value = selectPersona(asCustomPersona(current), response.persona);
-    personaSaverOpen.value = false;
-    personaNameDraft.value = "";
-    toastSuccess(`已存为人设「${savedName}」`);
-  } catch (error) {
-    toastError(error instanceof Error ? error.message : "人设保存失败");
-  } finally {
-    personaLibraryBusy.value = false;
-  }
-}
-
-async function updateEditedLibraryPersona(): Promise<void> {
-  const current = form.value;
-  const target = editedLibraryPersona.value;
-  if (!current || !target) return;
-  const ok = await askConfirm({
-    title: `更新人设「${target.name}」`,
-    message: "把当前的人设内容写回人设库的这一套。所有绑定它的机器人和群都会改成这份内容，并立即生效。",
-    confirmLabel: "更新"
-  });
-  if (!ok) return;
-  personaLibraryBusy.value = true;
-  try {
-    const response = await savePersona({ ...personaFromSettings(current, target.name), id: target.id });
-    savedPersonaLibrary.value = response.personas ?? [];
-    if (form.value === current) form.value = selectPersona(asCustomPersona(current), response.persona);
-    editedFromPersonaID.value = "";
-    const synced = [
-      response.bots_synced ? `${response.bots_synced} 台机器人` : "",
-      response.groups_synced ? `${response.groups_synced} 个群` : ""
-    ].filter(Boolean).join("、");
-    toastSuccess(synced ? `已更新「${target.name}」，同步到 ${synced}` : `已更新「${target.name}」`);
-    if (response.warning) toastError(response.warning);
-  } catch (error) {
-    toastError(error instanceof Error ? error.message : "人设更新失败");
-  } finally {
-    personaLibraryBusy.value = false;
-  }
-}
-
-const personaFileInput = ref<HTMLInputElement | null>(null);
-
-function personaFileInputClick(): void {
-  personaFileInput.value?.click();
-}
-
-function downloadPersonaFile(fileName: string, content: string, type = "application/json"): void {
-  const url = URL.createObjectURL(new Blob([content], { type }));
+function downloadJSONFile(fileName: string, content: string): void {
+  const url = URL.createObjectURL(new Blob([content], { type: "application/json" }));
   const link = document.createElement("a");
   link.href = url;
   link.download = fileName;
   link.click();
   URL.revokeObjectURL(url);
-}
-
-// 人设名是用户随便起的，可能带 / \ : 这类在文件名里非法或有歧义的字符。
-// 中日韩字符本身没问题，所以只挑掉真正危险的那几个，不做整体转拼音。
-function personaFileSlug(name: string): string {
-  const slug = name.replace(/[\\/:*?"<>|\u0000-\u001f]/g, "").trim();
-  return slug || "persona";
-}
-
-// 导出直接用内存里那份：它就是整库，再跑一趟接口拿不到别的东西。
-// 导出成 YAML：分享出去的是整套人设，包括品格和全部内置提示词。YAML 由后端生成，
-// 以前那份前端拼的 JSON 连品格都没带上。
-async function exportPersonaLibrary(): Promise<void> {
-  await exportPersonas(personaLibrary.value, `diana-personas-${new Date().toISOString().slice(0, 10)}.yaml`);
-}
-
-async function exportPersona(persona: Persona): Promise<void> {
-  await exportPersonas([persona], `diana-persona-${personaFileSlug(persona.name)}-${new Date().toISOString().slice(0, 10)}.yaml`);
-}
-
-async function exportPersonas(personas: Persona[], fileName: string): Promise<void> {
-  try {
-    downloadPersonaFile(fileName, await renderPersonaYAML(personas), "application/yaml");
-  } catch (error) {
-    toastError(error instanceof Error ? error.message : "导出失败");
-  }
-}
-
-// fileToBase64 读出文件的 base64 正文。走 dataURL 再剥前缀：对二进制 PNG 和
-// UTF-8 JSON 一视同仁，不用自己分块喂 btoa。
-function fileToBase64(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result).split(",", 2)[1] ?? "");
-    reader.onerror = () => reject(reader.error ?? new Error("读取文件失败"));
-    reader.readAsDataURL(file);
-  });
-}
-
-// looksLikeCharacterCard 判断一段 JSON 是不是 SillyTavern 角色卡：有 spec 标记、
-// 或带着卡特有的字段（first_mes / mes_example / data.name）。人设文件和世界书
-// 文件都没有这些。
-function looksLikeCharacterCard(parsed: unknown): boolean {
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return false;
-  const record = parsed as Record<string, any>;
-  if (typeof record.spec === "string" && record.spec.startsWith("chara_card")) return true;
-  if (record.first_mes !== undefined || record.mes_example !== undefined) return true;
-  return Boolean(record.data && typeof record.data === "object" && typeof record.data.name === "string");
-}
-
-async function importCharacterCardFile(file: File): Promise<void> {
-  const result = await importCharacterCard(await fileToBase64(file));
-  savedPersonaLibrary.value = result.personas ?? [];
-  if (result.nodes?.length) {
-    worldBookNodes.value = result.nodes;
-  }
-  const notes: string[] = [];
-  if (result.persona) notes.push(`已导入角色卡「${result.persona.name}」为人设${result.renamed ? "（重名已改名）" : ""}`);
-  else if (result.skipped) notes.push("这张卡的人设已经在库里，跳过");
-  if (result.book_imported) notes.push(`世界书并入 ${result.book_imported} 条${result.book_name ? `（${result.book_name}）` : ""}`);
-  if (result.book_dropped) notes.push(`${result.book_dropped} 条无效已忽略`);
-  toastSuccess(notes.join("，") || "角色卡已处理");
-}
-
-async function importPersonaFile(event: Event): Promise<void> {
-  const input = event.target as HTMLInputElement;
-  const file = input.files?.[0];
-  // 先清掉选中的文件：不清的话连续选同一个文件不会再触发 change。
-  input.value = "";
-  if (!file) return;
-
-  personaLibraryBusy.value = true;
-  try {
-    // PNG 一定是内嵌卡，直接走角色卡通道；JSON 先解析再看长相。
-    if (file.type === "image/png" || file.name.toLowerCase().endsWith(".png")) {
-      await importCharacterCardFile(file);
-      return;
-    }
-    const text = await file.text();
-    // YAML 交给后端解析：品格层写成 YAML 才读得下去（有注释、有多行字符串），
-    // 而前端没有 YAML 解析器，为这一件事塞一个进去不值当。
-    const lowerName = file.name.toLowerCase();
-    if (lowerName.endsWith(".yaml") || lowerName.endsWith(".yml")) {
-      const imported = await importPersonaSource(text);
-      savedPersonaLibrary.value = imported.personas ?? [];
-      toastSuccess(`导入 ${imported.imported} 套`);
-      return;
-    }
-    // JSON 只收 SillyTavern 角色卡。人设文件只有 YAML 一种格式，旧的 JSON 导出不再兼容。
-    const parsed = JSON.parse(text) as unknown;
-    if (looksLikeCharacterCard(parsed)) {
-      await importCharacterCardFile(file);
-      return;
-    }
-    toastError("人设文件请用 YAML（在人设库里导出或编辑得到）；JSON 只支持 SillyTavern 角色卡");
-  } catch (error) {
-    toastError(error instanceof SyntaxError ? "这个文件不是有效的 JSON" : error instanceof Error ? error.message : "人设导入失败");
-  } finally {
-    personaLibraryBusy.value = false;
-  }
-}
-
-async function removePersona(persona: Persona): Promise<void> {
-  if (!(await askConfirm({ title: `删除人设「${persona.name}」？`, message: "只删库里这一份。绑定它的机器人和群保留现有人设，改为自定义。", danger: true, confirmLabel: "删除" }))) {
-    return;
-  }
-  personaLibraryBusy.value = true;
-  try {
-    savedPersonaLibrary.value = (await deletePersona(persona.id)).personas ?? [];
-    toastSuccess(`已删除人设「${persona.name}」`);
-  } catch (error) {
-    toastError(error instanceof Error ? error.message : "人设删除失败");
-  } finally {
-    personaLibraryBusy.value = false;
-  }
 }
 
 // ---- 世界书（世界观设定库） ----
@@ -3338,7 +2686,7 @@ function exportWorldBook(): void {
     null,
     2
   );
-  downloadPersonaFile(`diana-world-book-${new Date().toISOString().slice(0, 10)}.json`, content);
+  downloadJSONFile(`diana-world-book-${new Date().toISOString().slice(0, 10)}.json`, content);
 }
 
 async function importWorldBookFile(event: Event): Promise<void> {
@@ -4212,8 +3560,6 @@ function setRoleModel(role: RoleKey, value: string): void {
 function setForm(config: BotProfileConfig): void {
   form.value = {
     ...config,
-    persona_id: config.persona_id ?? "",
-    custom_persona: config.custom_persona ?? asCustomPersona(config).custom_persona,
     participation: participationFromConfig(config),
     profiles: undefined,
     // 可选布尔字段先归一化成具体值供开关绑定；少数安全行为默认关闭。
@@ -4250,7 +3596,6 @@ function setForm(config: BotProfileConfig): void {
     error_persona_reply_enabled: config.error_persona_reply_enabled ?? false,
     recall_reply_auto_delete_enabled: config.recall_reply_auto_delete_enabled ?? false,
     recall_reply_auto_delete_delay_seconds: config.recall_reply_auto_delete_delay_seconds ?? defaultRecallReplyAutoDeleteDelaySeconds,
-    long_term_memory_enabled: config.long_term_memory_enabled ?? true,
     debug_mode_enabled: config.debug_mode_enabled ?? false,
     cross_group_memory_enabled: config.cross_group_memory_enabled ?? false,
     cross_platform_memory_enabled: config.cross_platform_memory_enabled ?? false,
@@ -4270,11 +3615,7 @@ function setForm(config: BotProfileConfig): void {
     response_mode: "custom",
     auto_image_description: config.auto_image_description ?? true,
     auto_video_preprocess: config.auto_video_preprocess ?? true,
-    action_description_enabled: config.action_description_enabled ?? false,
-    daypart_tone_enabled: config.daypart_tone_enabled ?? false,
     llm_streaming_enabled: config.llm_streaming_enabled ?? true,
-    self_reference: config.self_reference ?? "",
-    sentence_enders: config.sentence_enders ?? "",
     group_trigger_mode: config.group_trigger_mode ?? "smart",
     refusal_strategy: config.refusal_strategy ?? "smart",
     prompt_inject_time: config.prompt_inject_time ?? true,
@@ -4306,114 +3647,10 @@ function splitList(raw: string): string[] {
     .filter((item) => item !== "");
 }
 
-// 「恢复内置默认」：人设正文换回内置那份，内置提示词的覆盖全部清掉。人设正文有输入框，
-// 恢复后要当场显示出来，所以前端留了一份逐字节副本（builtin-personas.ts 里的
-// defaultSystemPrompt），由测试盯着它和 Go 常量一致；提示词的默认值只在后端。
-const promptDefaults = {
-  system_prompt: defaultSystemPrompt
-};
-
-// ── 人设 YAML ───────────────────────────────────────────────────────────────
-// YAML 由后端生成和解析：前端没有 YAML 库，两头各写一份迟早对不上。
-const personaYAMLOpen = ref(false);
-const personaYAMLSource = ref("");
-const personaYAMLBusy = ref(false);
-const personaYAMLError = ref("");
-// 编辑的是哪一套：没有就是表单里正在编辑的「自定义」，有就是人设库里的那一套。
-const personaYAMLTarget = ref<Persona | null>(null);
-const personaYAMLTitle = computed(() => (personaYAMLTarget.value ? `编辑人设 · ${personaYAMLTarget.value.name}` : "编辑当前人设"));
-const personaYAMLApplyLabel = computed(() => {
-  const target = personaYAMLTarget.value;
-  if (!target) return "应用到表单";
-  return isBuiltinPersona(target) ? "另存到人设库" : "保存到人设库";
-});
-
-function currentPersonaName(): string {
-  const selected = personaLibrary.value.find((persona) => persona.id === selectedPersonaID.value);
-  return selected?.name || form.value?.name || "自定义";
-}
-
-async function openPersonaYAML(target?: Persona): Promise<void> {
-  if (!form.value) return;
-  personaYAMLTarget.value = target ?? null;
-  personaYAMLOpen.value = true;
-  personaYAMLSource.value = "";
-  personaYAMLError.value = "";
-  personaYAMLBusy.value = true;
-  try {
-    personaYAMLSource.value = await renderPersonaYAML([target ?? { id: "", ...personaFromSettings(form.value, currentPersonaName()) }]);
-  } catch (error) {
-    personaYAMLError.value = error instanceof Error ? error.message : "生成 YAML 失败";
-  } finally {
-    personaYAMLBusy.value = false;
-  }
-}
-
-function closePersonaYAML(): void {
-  if (personaYAMLBusy.value) return;
-  personaYAMLOpen.value = false;
-}
-
-async function applyPersonaYAML(): Promise<void> {
-  if (!form.value) return;
-  personaYAMLBusy.value = true;
-  personaYAMLError.value = "";
-  try {
-    const personas = await parsePersonaSource(personaYAMLSource.value);
-    if (personas.length !== 1) {
-      personaYAMLError.value = personas.length ? `这里只能放一套人设，读到了 ${personas.length} 套；多套请在人设库里导入` : "没有读到人设";
-      return;
-    }
-    const target = personaYAMLTarget.value;
-    if (!target) {
-      form.value = applyPersonaDocument(form.value, personas[0]);
-      personaYAMLOpen.value = false;
-      toastSuccess("已按 YAML 填好人设和提示词，保存配置后生效");
-      return;
-    }
-    await savePersonaFromYAML(target, personas[0]);
-  } catch (error) {
-    personaYAMLError.value = error instanceof Error ? error.message : "YAML 解析失败";
-  } finally {
-    personaYAMLBusy.value = false;
-  }
-}
-
-// 人设库里的一套：存回库里。内置的改不了原件，另存成一套新的。库和机器人不是活绑定，
-// 但正在用的就是这一套时，表单也跟着换成改好的，免得改完还得再点一次。
-async function savePersonaFromYAML(target: Persona, edited: Persona): Promise<void> {
-  const builtin = isBuiltinPersona(target);
-  const name = (edited.name ?? "").trim() || target.name;
-  const wasSelected = selectedPersonaID.value === target.id;
-  personaLibraryBusy.value = true;
-  try {
-    const response = await savePersona({
-      ...edited,
-      id: builtin ? "" : target.id,
-      name: builtin ? unusedPersonaName(name, personaLibrary.value) : name
-    });
-    savedPersonaLibrary.value = response.personas ?? [];
-    if (form.value && (wasSelected || builtin)) form.value = selectPersona(form.value, response.persona);
-    personaYAMLOpen.value = false;
-    toastSuccess(builtin ? `已另存为人设「${response.persona.name}」` : `人设「${response.persona.name}」已保存`);
-  } finally {
-    personaLibraryBusy.value = false;
-  }
-}
-
-async function copyPersonaYAML(): Promise<void> {
-  try {
-    await navigator.clipboard.writeText(personaYAMLSource.value);
-    toastSuccess("已复制，发给别人就能导入");
-  } catch {
-    toastError("复制失败，请手动全选复制");
-  }
-}
-
-function downloadPersonaYAML(): void {
-  const name = personaYAMLTarget.value?.name ?? currentPersonaName();
-  downloadPersonaFile(`diana-persona-${personaFileSlug(name)}.yaml`, personaYAMLSource.value, "application/yaml");
-}
+// 生成 SOUL.md 时告诉模型角色叫什么：用群内触发名，不是 form.name——后者是控制台
+// 用来区分多个机器人的标签（「主群助手」「客服机器人」），拿它当角色名，写出来的人设
+// 会自称「主群助手」。触发名正在编辑时以输入框里的为准，还没填过就退回控制台标签。
+const personaDisplayName = computed(() => splitList(triggersDraft.value)[0] || form.value?.group_triggers?.[0]?.trim() || form.value?.name || "");
 
 function openPersonaComposer(): void {
   personaComposerOpen.value = true;
@@ -4434,73 +3671,28 @@ async function runPersonaGenerate(): Promise<void> {
     const current = form.value.system_prompt?.trim() || "";
     // 没单独指定就跟随对话那一档，和界面上「跟随对话」那个选项对应。
     const route = personaRoute.value ?? roleForm.value.chat;
-    // 传群内触发名，不是 form.name——后者是控制台用来区分多个机器人的标签
-    // （「主群助手」「客服机器人」），拿它当角色名，生成出来的人设会自称「主群助手」。
-    // 触发名正在编辑时以输入框里的为准，还没填过就退回控制台标签。
-    const inChatName = splitList(triggersDraft.value)[0] || form.value.group_triggers?.[0]?.trim() || form.value.name;
-    const result = await generatePersona(description, inChatName, current, {
+    const result = await generatePersona(description, personaDisplayName.value, current, {
       response_mode: form.value.response_mode,
       profile_id: route?.profile_id || route?.provider_id,
       group: route?.group,
-      model: route?.model_id || route?.model,
-      // 只有正文没被人工改过时才把卡带回去：改过的话卡和正文已经对不上，
-      // 拿旧卡当基准会把用户手打的那几句悄悄改回去。
-      card: personaCardMatchesPrompt(current) ? personaCard.value : null
+      model: route?.model_id || route?.model
     });
     const persona = result.persona?.trim();
     if (!persona) {
-      toastError("模型没有返回可用的人设");
+      toastError("模型没有返回可用的 SOUL.md");
       return;
     }
-    personaPrevious.value = current;
-    personaCard.value = result.card ?? null;
-    personaCardPrompt.value = persona;
-    form.value.system_prompt = persona;
+    // 走编辑器的 replace：它记下上一版，「撤销」和手动换人设是同一个按钮。
+    if (soulEditor.value) soulEditor.value.replace(persona);
+    else form.value.system_prompt = persona;
     personaComposerOpen.value = false;
     personaDraft.value = "";
-    toastSuccess("人设已生成，确认后记得保存配置");
+    toastSuccess("SOUL.md 已写好，确认后记得保存配置");
   } catch (error) {
-    toastError(error instanceof Error ? error.message : "人设生成失败");
+    toastError(error instanceof Error ? error.message : "生成失败");
   } finally {
     personaBusy.value = false;
   }
-}
-
-function undoPersonaGenerate(): void {
-  if (!form.value) return;
-  form.value.system_prompt = personaPrevious.value;
-  personaPrevious.value = "";
-  // 退回上一版之后，那张卡拼出来的正文已经不在框里了，跟着一起丢掉。
-  personaCard.value = null;
-  personaCardPrompt.value = "";
-}
-
-function personaCardMatchesPrompt(prompt: string): boolean {
-  return Boolean(personaCard.value) && prompt.trim() === personaCardPrompt.value.trim();
-}
-
-const personaCardExportable = computed(() => personaCardMatchesPrompt(form.value?.system_prompt ?? ""));
-
-// 导出成一张标准的 SillyTavern V2 角色卡：这个文件酒馆认，Diana 自己的角色卡
-// 导入接口也认，等于生成一次就能到处用。
-function exportPersonaCard(): void {
-  const card = personaCard.value;
-  if (!card) return;
-  downloadPersonaFile(`${personaFileSlug(card.data?.name || "persona")}.card.json`, JSON.stringify(card, null, 2));
-}
-
-function resetPromptDefaults(): void {
-  if (!form.value) {
-    return;
-  }
-  Object.assign(form.value, promptDefaults, {
-    prompt_inject_time: true,
-    prompt_inject_plaintext_rules: true,
-    prompt_inject_group_sender: true,
-    prompt_chinese_slang_hint: true
-  });
-  form.value.prompt_overrides = undefined;
-  toastSuccess("已恢复内置提示词，保存配置后生效");
 }
 
 async function save(): Promise<void> {
@@ -4527,20 +3719,6 @@ async function save(): Promise<void> {
     !tokenDraft.value.trim()
   ) {
     toastError("反向 WebSocket 模式必须配置 Access Token，需与 OneBot v11 客户端保持一致");
-    return;
-  }
-  // 留空 = 没配过，提交时整个字段不带上，后端按默认 5 次；填 0 才是「出错别通知」。
-  const failureAlertThresholdDraft = current.recurring_failure_alert_threshold;
-  const failureAlertThreshold =
-    failureAlertThresholdDraft === undefined || failureAlertThresholdDraft === null || `${failureAlertThresholdDraft}`.trim() === ""
-      ? undefined
-      : Number(failureAlertThresholdDraft);
-  if (
-    failureAlertThreshold !== undefined &&
-    failureAlertThreshold !== 0 &&
-    (!Number.isInteger(failureAlertThreshold) || failureAlertThreshold < 1 || failureAlertThreshold > maximumRecurringFailureAlertThreshold)
-  ) {
-    toastError(`连续失败几次才报请输入 1 到 ${maximumRecurringFailureAlertThreshold} 之间的整数`);
     return;
   }
   const recallDeleteDelay = Number(current.recall_reply_auto_delete_delay_seconds);
@@ -4622,7 +3800,6 @@ async function save(): Promise<void> {
     }
     const payload: BotProfileConfig = {
       ...current,
-      ...(selectedPersonaID.value === "custom" ? { persona_id: "", custom_persona: asCustomPersona(current).custom_persona } : {}),
       forward_reply_threshold: Number(current.forward_reply_threshold) || 0,
       // 数字框清空后 v-model.number 给的是空串，后端按整数解析会整份拒收。
       model_call_quota: Math.max(0, Math.round(Number(current.model_call_quota) || 0)),
@@ -4639,7 +3816,6 @@ async function save(): Promise<void> {
         .filter((item) => item !== ""),
       welcome_llm_cooldown_seconds: Number(current.welcome_llm_cooldown_seconds) || 0,
       agent_command_allowlist: splitList(allowlistDraft.value),
-      recurring_failure_alert_threshold: failureAlertThreshold,
       recall_reply_auto_delete_delay_seconds: Number.isInteger(recallDeleteDelay)
         ? recallDeleteDelay
         : defaultRecallReplyAutoDeleteDelaySeconds,
@@ -4774,9 +3950,8 @@ onBeforeUnmount(() => {
 
 async function load(): Promise<void> {
   loading.value = true;
-  // 人设库和世界书单独拉，不放进下面那组 Promise.all：它们只是素材库，
-  // 慢一点或者读不出来都不该拖住机器人配置本身的加载。
-  void loadPersonaLibrary();
+  // 世界书单独拉，不放进下面那组 Promise.all：它只是素材库，慢一点或者读不出来都
+  // 不该拖住机器人配置本身的加载。人设库由 SoulEditor 自己拉。
   void loadWorldBook();
   const [platformResult, botConfig, llmConfig] = await Promise.all([
     getBotPlatforms().catch(() => ({ platforms: [] as BotPlatform[] })),

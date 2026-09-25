@@ -102,8 +102,8 @@ func TestSelfNoteContextHonorsStoreAndConfigGate(t *testing.T) {
 	if !strings.HasPrefix(block, selfNoteContextPrefix) {
 		t.Fatalf("missing marker: %q", block)
 	}
-	// 自述不能凌驾于品格之上：品格只有人能改，这句话要出现在注入的标注里。
-	if !strings.Contains(block, "以那两段为准") || !strings.Contains(block, "品格") {
+	// 自述不能凌驾于 SOUL.md 之上：人设只有人能改，这句话要出现在注入的标注里。
+	if !strings.Contains(block, "以人设为准") || !strings.Contains(block, "SOUL.md") {
 		t.Fatalf("missing soul precedence: %q", block)
 	}
 	if usage.Layer != "self_notes" || usage.SelectedItems != 1 || usage.Reason != contextLayerReasonFits {

@@ -18,8 +18,14 @@ var (
 		promptReplyBudgetTelegram, PromptVar{Name: "limit", Description: "Telegram 单条消息的 UTF-16 码元上限"})
 )
 
+// replyBudgetPromptMaxLimit 以上的单条上限不念给模型听。生产上常见的 35000 是防失控
+// 的硬上限，超了由 normalizeReply 截断；把它写进紧挨当前消息的那段 system，模型读到
+// 的是「每条有三万五千字的额度、多条总和不限」，前面再怎么要求简短都被这句压过去。
+// 上限紧到真会改变写法时（比如限制在几百字内）才需要提前告诉它。
+const replyBudgetPromptMaxLimit = 2000
+
 func replyGenerationBudgetPrompt(limit int, configs ...BotConfig) string {
-	if limit <= 0 {
+	if limit <= 0 || limit > replyBudgetPromptMaxLimit {
 		return ""
 	}
 	return promptOverridesOf(configs).render(promptReplyBudgetSpec, map[string]string{"limit": strconv.Itoa(limit)})

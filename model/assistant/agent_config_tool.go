@@ -87,7 +87,6 @@ type dianaBotConfigSnapshot struct {
 	SendDropCooldownMinutes         int                  `json:"send_drop_cooldown_minutes"`
 	InboundRetryMaxAttempts         int                  `json:"inbound_retry_max_attempts"`
 	SendChunkIntervalMS             int                  `json:"send_chunk_interval_ms"`
-	RecurringFailureAlertThreshold  int                  `json:"recurring_failure_alert_threshold"`
 	PrivateClosingGrace             int                  `json:"private_closing_grace"`
 	InboundGroupConcurrency         int                  `json:"inbound_group_concurrency"`
 	InboundPrivateConcurrency       int                  `json:"inbound_private_concurrency"`
@@ -119,7 +118,6 @@ type dianaBotConfigSnapshot struct {
 	LLMIdentityMaskingEnabled    bool                      `json:"llm_identity_masking_enabled"`
 	RecentContextLimit           int                       `json:"recent_context_limit"`
 	ContextSummaryThreshold      int                       `json:"context_summary_threshold"`
-	LongTermMemoryEnabled        bool                      `json:"long_term_memory_enabled"`
 	CrossGroupMemoryEnabled      bool                      `json:"cross_group_memory_enabled"`
 	CrossPlatformMemoryEnabled   bool                      `json:"cross_platform_memory_enabled"`
 	WorldBookEnabled             bool                      `json:"world_book_enabled"`
@@ -350,7 +348,6 @@ func dianaBotConfigFromConfig(cfg BotConfig) dianaBotConfigSnapshot {
 		SendDropCooldownMinutes:         cfg.SendDropCooldownMinutes,
 		InboundRetryMaxAttempts:         cfg.InboundRetryMaxAttempts,
 		SendChunkIntervalMS:             cfg.SendChunkIntervalMS,
-		RecurringFailureAlertThreshold:  intValue(cfg.RecurringFailureAlertThreshold, defaultRecurringFailureAlertThreshold),
 		PrivateClosingGrace:             cfg.PrivateClosingGrace,
 		InboundGroupConcurrency:         cfg.InboundGroupConcurrency,
 		InboundPrivateConcurrency:       cfg.InboundPrivateConcurrency,
@@ -381,7 +378,6 @@ func dianaBotConfigFromConfig(cfg BotConfig) dianaBotConfigSnapshot {
 		LLMIdentityMaskingEnabled:       llmIdentityMaskingEnabled(cfg),
 		RecentContextLimit:              cfg.RecentContextLimit,
 		ContextSummaryThreshold:         cfg.ContextSummaryThreshold,
-		LongTermMemoryEnabled:           boolValue(cfg.LongTermMemoryEnabled, true),
 		CrossGroupMemoryEnabled:         boolValue(cfg.CrossGroupMemoryEnabled, false),
 		CrossPlatformMemoryEnabled:      boolValue(cfg.CrossPlatformMemoryEnabled, false),
 		WorldBookEnabled:                boolValue(cfg.WorldBookEnabled, true),

@@ -696,8 +696,8 @@ func TestDefaultBotConfigKeepsFortyMessagesAndCompressesAtOneHundred(t *testing.
 	if cfg.RecentHistoryTokenBudget != DefaultRecentHistoryTokenBudget {
 		t.Fatalf("history token budget default = %d", cfg.RecentHistoryTokenBudget)
 	}
-	if !boolValue(cfg.LongTermMemoryEnabled, false) || boolValue(cfg.CrossGroupMemoryEnabled, true) {
-		t.Fatalf("memory defaults = long_term %v cross_group %v", cfg.LongTermMemoryEnabled, cfg.CrossGroupMemoryEnabled)
+	if boolValue(cfg.CrossGroupMemoryEnabled, true) {
+		t.Fatalf("cross group memory default = %v, want off", cfg.CrossGroupMemoryEnabled)
 	}
 	if cfg.ProactiveReplyChance != 1 {
 		t.Fatalf("proactive reply chance = %v, want 1", cfg.ProactiveReplyChance)

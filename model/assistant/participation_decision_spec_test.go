@@ -36,17 +36,22 @@ func TestParticipationDecisionSpecRendersParsableRatings(t *testing.T) {
 	}
 }
 
-func TestParticipationChatInAnchorsStayInSyncWithTheLevels(t *testing.T) {
+func TestParticipationWillingnessReachesBothModels(t *testing.T) {
 	if len(participationChatInLevels) != len(participationChatInLevelValues) {
 		t.Fatalf("levels and their values drifted apart: %d vs %d", len(participationChatInLevels), len(participationChatInLevelValues))
 	}
-	for _, level := range participationChatInLevels[1:] {
-		if !strings.Contains(participationChatInAnchors, level) {
-			t.Fatalf("anchor line lost %q", level)
+	// 主人写的「什么情况下愿意接话」和换算那句，评分模型和判断模型都得读到，
+	// 否则换了绑定的模型，同一个群的接话口味就变了。
+	custom := PromptOverrides{promptParticipationWillingnessSpec.Key: "愿意接：\n- 有人聊猫\n不接：\n- 其他一切"}
+	for name, text := range map[string]string{
+		"评分提示词": participationScorePromptWith(custom),
+		"判断模型":  participationDecisionSpec(custom).Questions[1].Instructions,
+	} {
+		for _, want := range []string{"有人聊猫", participationWillingnessScale} {
+			if !strings.Contains(text, want) {
+				t.Fatalf("%s 缺少 %q", name, want)
+			}
 		}
-	}
-	if !strings.Contains(participationScorePrompt, participationChatInAnchors) {
-		t.Fatal("the score prompt no longer carries the anchors")
 	}
 	if !strings.Contains(participationScorePrompt, participationRelevanceTrue) {
 		t.Fatal("the score prompt no longer carries the relevance criteria")

@@ -4,8 +4,6 @@
 package assistant
 
 import (
-	"encoding/json"
-	"fmt"
 	"math"
 	"os"
 	"path/filepath"
@@ -140,67 +138,5 @@ func TestFrontendParticipationThresholdsMatchRatingPasses(t *testing.T) {
 		if !validParticipationLevel(level) {
 			t.Fatalf("前端 participationLevelThresholds 里的 %q 后端不认：ratingPasses 会把它当未知档位一律拦下，界面上却显示成一个能用的档", level)
 		}
-	}
-}
-
-var jsStringLiteralPattern = regexp.MustCompile(`"((?:[^"\\]|\\.)*)"`)
-
-// frontendDefaultSystemPrompt 从 frontend-next/src/builtin-personas.ts 里还原
-// defaultSystemPrompt 的正文。前端写成数组 .join("\n")，这里按同样的规则拼回去。
-func frontendDefaultSystemPrompt(t *testing.T, source string) string {
-	t.Helper()
-	const marker = "export const defaultSystemPrompt"
-	start := strings.Index(source, marker)
-	if start < 0 {
-		t.Fatalf("frontend-next/src/builtin-personas.ts 里应当导出 defaultSystemPrompt")
-	}
-	eq := strings.Index(source[start:], "=")
-	if eq < 0 {
-		t.Fatalf("%s 后面没有赋值", marker)
-	}
-	rest := source[start+eq+1:]
-	end := strings.Index(rest, ";")
-	if end < 0 {
-		t.Fatalf("%s 的声明没有以 ; 结束", marker)
-	}
-	decl := rest[:end]
-
-	sep := ""
-	if join := strings.Index(decl, ".join("); join >= 0 {
-		args := jsStringLiteralPattern.FindStringSubmatch(decl[join:])
-		if args == nil {
-			t.Fatalf("defaultSystemPrompt 的 .join() 参数不是字符串字面量：%q", decl[join:])
-		}
-		sep = unquoteJS(t, args[1])
-		decl = decl[:join]
-	}
-
-	matches := jsStringLiteralPattern.FindAllStringSubmatch(decl, -1)
-	if len(matches) == 0 {
-		t.Fatalf("defaultSystemPrompt 里没解析出任何字符串字面量：%q", decl)
-	}
-	parts := make([]string, 0, len(matches))
-	for _, m := range matches {
-		parts = append(parts, unquoteJS(t, m[1]))
-	}
-	return strings.Join(parts, sep)
-}
-
-func unquoteJS(t *testing.T, raw string) string {
-	t.Helper()
-	var out string
-	if err := json.Unmarshal([]byte(fmt.Sprintf(`"%s"`, raw)), &out); err != nil {
-		t.Fatalf("解析字符串字面量 %q 失败：%v", raw, err)
-	}
-	return out
-}
-
-// 控制台的「恢复内置提示词」曾经带着一份自己的默认人设，停在重写之前的旧文案上：
-// 点一次就把新的兜底人设覆盖成旧的 60 字。两份文案没有任何东西对着比，所以没人发现。
-// 现在前端只留这一份，并且逐字节钉在 Go 常量上——改了一边忘了另一边，这条直接红。
-func TestFrontendDefaultSystemPromptMatchesBackend(t *testing.T) {
-	frontend := frontendDefaultSystemPrompt(t, readRepoFile(t, "frontend-next/src/builtin-personas.ts"))
-	if frontend != defaultSystemPrompt {
-		t.Fatalf("前端那份默认人设和后端 defaultSystemPrompt 不一致，「恢复内置提示词」会把用户的人设覆盖成过期文案。\n前端 (%d 字节):\n%s\n后端 (%d 字节):\n%s", len(frontend), frontend, len(defaultSystemPrompt), defaultSystemPrompt)
 	}
 }

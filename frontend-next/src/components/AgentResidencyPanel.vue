@@ -7,8 +7,13 @@
        三四项，按需的还得点进弹窗才看得到。 -->
   <section class="rz">
     <header class="rz-head">
-      <h3>每轮带上的工具和 Skill</h3>
-      <span class="rz-sub">勾上的每轮都带完整定义（Skill 带正文）；没勾的只在目录里占一行，模型用到时自己加载。</span>
+      <div>
+        <h3>每轮带上的工具和 Skill</h3>
+        <span class="rz-sub">勾上的每轮都带完整定义（Skill 带正文）；没勾的只在目录里占一行，模型用到时自己加载。</span>
+      </div>
+      <button v-if="profileID && items.length" class="btn small" type="button" :aria-expanded="panelOpen" @click="panelOpen = !panelOpen">
+        {{ panelOpen ? "收起" : "展开名单" }}
+      </button>
     </header>
     <p v-if="loadError" role="alert" class="error-text">{{ loadError }}</p>
     <p v-if="loading" class="hint">正在读取…</p>
@@ -36,6 +41,9 @@
           </p>
         </div>
 
+        <!-- 名单默认收起：开销条就是这张卡要回答的问题（每轮付多少），名单是要改的时候
+             才翻的。改了没保存时自动展开，免得改动藏在收起的名单里。 -->
+        <template v-if="panelOpen || dirty">
         <div class="rz-toolbar">
           <input v-model="query" class="input rz-search" type="search" placeholder="搜索名称、说明或工具名" aria-label="搜索工具和 Skill" />
           <div class="segmented" role="group" aria-label="筛选">
@@ -99,6 +107,7 @@
         </section>
 
         <p v-if="!sections.length && !visibleSkills.length" class="hint">没有匹配的项。</p>
+        </template>
         <p class="hint rz-foot">开销按实际发给模型的工具定义估算，不含系统提示词和历史消息；数字取自这台机器人最近一轮回复。</p>
       </template>
     </template>
@@ -122,10 +131,12 @@ const savedList = ref(false);
 const query = ref('');
 const filter = ref<'all' | 'on' | 'off'>('all');
 const filters = [{value: 'all', label: '全部'}, {value: 'on', label: '常驻'}, {value: 'off', label: '按需'}] as const;
-// 默认全部展开：插件和 MCP 旗下的工具、每个工具的完整说明都直接摆出来，要看的人
-// 不必一行行点。单独点过的行记在 opened 里，「全部展开 / 收起」会把它们清掉。
+// 名单整体默认收起（panelOpen），展开后每一行也默认收起：一行一个名字加一句说明，
+// 一屏能看全；要看插件旗下的工具或完整说明再点那一行，或者「全部展开」。单独点过的
+// 行记在 opened 里，「全部展开 / 收起」会把它们清掉。
+const panelOpen = ref(false);
 const opened = reactive<Record<string, boolean>>({});
-const allOpen = ref(true);
+const allOpen = ref(false);
 const isOpen = (row: AgentResidencyEntry) => opened[row.id] ?? allOpen.value;
 function toggleAll() {
   allOpen.value = !allOpen.value;
@@ -379,7 +390,7 @@ onMounted(load);
 <style scoped>
 .rz{display:flex;flex-direction:column;gap:12px}
 .rz .hint{color:var(--muted);font-size:12px;margin:0}
-.rz-head h3{margin:0;font-size:15px}.rz-sub{display:block;margin-top:4px;color:var(--muted);font-size:12.5px}
+.rz-head{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;flex-wrap:wrap}.rz-head>div{flex:1 1 240px;min-width:0}.rz-head h3{margin:0;font-size:15px}.rz-sub{display:block;margin-top:4px;color:var(--muted);font-size:12.5px}
 .rz-meter{display:flex;flex-direction:column;gap:8px;padding:12px 14px;border:1px solid var(--border);border-radius:var(--radius-sm)}
 .rz-bar{display:flex;height:8px;border-radius:999px;overflow:hidden;background:var(--surface-2,rgba(127,127,127,.15))}
 .rz-bar-on{background:var(--accent)}.rz-bar-off{background:color-mix(in srgb,var(--accent) 35%,transparent)}

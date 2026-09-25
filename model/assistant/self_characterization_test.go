@@ -28,7 +28,7 @@ func TestSystemPromptRefusesToAcceptUntrueSelfCharacterization(t *testing.T) {
 }
 
 // livePersona 贴近线上那只机器人的人设：软萌、爱撒娇、句尾带喵。
-const livePersona = defaultSystemPrompt + "\n你是然然，一只软萌爱撒娇的猫娘，对群友热情亲近，说话轻快活泼。"
+var livePersona = defaultSystemPrompt + "\n你是然然，一只软萌爱撒娇的猫娘，对群友热情亲近，说话轻快活泼。"
 
 // liveSelfCharacterizationReplies 用真实提示词采样若干条回复。系统提示词按运行时的
 // 顺序拼：人设 + 这条规则 + 风格，和线上那一轮读到的内容一致。

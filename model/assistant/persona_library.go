@@ -4,7 +4,6 @@
 package assistant
 
 import (
-	"encoding/json"
 	"errors"
 	"sort"
 	"strconv"
@@ -14,23 +13,19 @@ import (
 	"github.com/google/uuid"
 )
 
-// 人设库：把「它是谁、怎么说话」存成具名的几套，随时换。
+// 人设库：几份具名的 SOUL.md，随时换。内置的几份编译在二进制里（builtin_souls.go），
+// 列表接口把它们排在最前面；这里存的只有用户自己的。
 //
-// 这里存的是四项：基础人设正文、表达风格、自称、句尾语气词。它们合起来才是一个
-// 角色——只存正文的话，换回猫娘还得自己记得把风格也调回去。
+// 回复模式、接话判据、提示词覆盖都不在人设里：那是「这台机器人在这个群里怎么运行」，
+// 跟她是谁无关。同一份人设放在办公群和水群，该有不同的搭话频率。
 //
-// 回复模式（搭话频率）不在里面：那是「这台机器人在这个群里多主动」，跟它是谁无关。
-// 同一套人设放在办公群和水群，该有不同的搭话频率。
+// 关键的一条：**运行时只看配置里存的值，不去库里取。** 选一份就把正文填进配置，
+// 之后跑的就是配置里的值。反过来做（配置只存一个 persona_id，运行时再去库里取）
+// 会得到「界面上写着 A、实际发出来是 B」这种既看不见又在生效的状态。
 //
-// 关键的一条：**运行时只看配置里存的值，不去库里取。** 选一套就把这些字段填进
-// 配置，之后跑的就是配置里的值。反过来做（配置只存一个 persona_id，运行时再去库里
-// 取）看着更"省事"，但会得到「界面上的人设框里写着 A、实际发出来是 B」这种既看
-// 不见又在生效的状态——clearChatInFineTuning 和表达风格预设那两处都为同一件事
-// 留过教训。
-//
-// 机器人和群可以绑定库里的一套（persona_id）：库保存的那一刻把新内容写进每个绑定
+// 机器人和群可以绑定库里的一份（persona_id）：库保存的那一刻把新正文写进每个绑定
 // 它的配置，所以「库里改了自动更新」和「配置里存的就是在跑的」两条同时成立。
-// 在界面上改了人设内容就解除绑定。见 persona_link.go。
+// 在界面上改了正文就解除绑定。见 persona_link.go。
 
 // PersonaLibraryMaxEntries 限制存多少套。这是给人翻的列表，不是数据表。
 const PersonaLibraryMaxEntries = 50
@@ -40,39 +35,24 @@ const (
 	personaPromptMaxRunes = 4000
 )
 
-// Persona 是一套具名人设。
+// Persona 是一套具名人设，正文就是一份 SOUL.md。
 type Persona struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
-	// Version 是这套人设自己的版本号，写在分享出去的文件里，用来分辨谁手里的更新。
-	// 存进人设库时内容有变化就加一；文件里写了更大的号（作者自己定的、或导入的
-	// 新版）以文件为准。
-	Version      int    `json:"persona_version,omitempty"`
+	ID           string `json:"id"`
+	Name         string `json:"name"`
 	SystemPrompt string `json:"system_prompt,omitempty"`
-	// Soul 是品格层：身份、价值、硬边界。正文说「怎么说话」，它说「是什么、
-	// 珍视什么、为什么」。分群覆盖动不了它，见 persona_soul.go。
-	Soul *PersonaSoul `json:"soul,omitempty"`
-	// Voice 只在导入时出现：YAML 里把表达层写成一个块，清洗时摊平进下面那几个
-	// 字段。摊平而不是新开一层，是为了让老人设和新写法在运行时完全一样。
-	Voice *PersonaVoice `json:"voice,omitempty"`
-	// PersonaMode 跟着正文走：一份接管模式的正文（带段头）只在接管档下成立，
-	// 套到填空题档上，段头不生效而运行时照旧注入，同一件事说两遍。
-	PersonaMode              PersonaMode `json:"persona_mode,omitempty"`
-	ReplyStyle               ReplyStyle  `json:"reply_style,omitempty"`
-	ActionDescriptionEnabled *bool       `json:"action_description_enabled,omitempty"`
-	DaypartToneEnabled       *bool       `json:"daypart_tone_enabled,omitempty"`
-	SelfReference            string      `json:"self_reference,omitempty"`
-	SentenceEnders           string      `json:"sentence_enders,omitempty"`
-	// Prompts 是这套人设改过的内置提示词，和 BotConfig.PromptOverrides 同一个形状：
-	// 只存改过的，套用时整份替换机器人的覆盖表。提示词跟着人设走，分享一份人设文件
-	// 就是分享它的全部提示词配置，见 persona_prompts.go。
-	Prompts PromptOverrides `json:"prompts,omitempty"`
-	// ExtraCriteria 和 AccountSafetyRules 是判据：接话评分的补充判据、发送前审核的
-	// 账号安全规则。它们在机器人配置里各有字段（分群仍可覆盖），跟着人设走是为了
-	// 让一份人设文件就是全部提示词配置，套用时填进机器人的那两个字段。
-	ExtraCriteria      string    `json:"extra_criteria,omitempty"`
-	AccountSafetyRules string    `json:"account_safety_rules,omitempty"`
-	UpdatedAt          time.Time `json:"updated_at,omitempty"`
+	// Builtin 只出现在列表接口的返回里：内置人设只读，存不进库。
+	Builtin   bool      `json:"builtin,omitempty"`
+	UpdatedAt time.Time `json:"updated_at,omitempty"`
+
+	// 下面几项是 SOUL.md 之前的人设字段，只在读旧库、旧角色卡时出现：Normalized
+	// 把它们并进正文后清空，见 persona_legacy.go。旧库里的提示词覆盖、判据、档位、
+	// 版本号不在这里——它们不属于「她是谁」，读到直接丢掉。
+	Soul                     *PersonaSoul  `json:"soul,omitempty"`
+	Voice                    *PersonaVoice `json:"voice,omitempty"`
+	ReplyStyle               ReplyStyle    `json:"reply_style,omitempty"`
+	ActionDescriptionEnabled *bool         `json:"action_description_enabled,omitempty"`
+	SelfReference            string        `json:"self_reference,omitempty"`
+	SentenceEnders           string        `json:"sentence_enders,omitempty"`
 }
 
 // PersonaSet 是整个人设库。
@@ -80,21 +60,7 @@ type PersonaSet struct {
 	Personas []Persona `json:"personas"`
 }
 
-func copyCustomPersona(persona *Persona) *Persona {
-	if persona == nil {
-		return nil
-	}
-	copy := *persona
-	copy.ActionDescriptionEnabled = copyBoolPointer(persona.ActionDescriptionEnabled)
-	copy.DaypartToneEnabled = copyBoolPointer(persona.DaypartToneEnabled)
-	copy.SystemPrompt = migratePersonaStyle(copy.SystemPrompt, &copy.ReplyStyle, &copy.ActionDescriptionEnabled)
-	copy.Soul = persona.Soul.Clone()
-	copy.Prompts = copyPromptOverrides(persona.Prompts)
-	return &copy
-}
-
-// PersonaVoice 是导入格式里的表达层。它不进运行时：Normalized 会把它摊平到
-// SystemPrompt / SelfReference / SentenceEnders 上。
+// PersonaVoice 是旧版人设文件里的表达层，Normalized 会把它摊平进正文。
 type PersonaVoice struct {
 	Style                    string            `json:"style,omitempty"`
 	SelfReference            string            `json:"self_reference,omitempty"`
@@ -103,15 +69,13 @@ type PersonaVoice struct {
 	Examples                 []PersonaExchange `json:"examples,omitempty"`
 }
 
-// PersonaExchange 是一组示例对话。示例比形容词管用：「说话简短」不如给一句
-// 真的简短的回答。
+// PersonaExchange 是一组示例对话。
 type PersonaExchange struct {
 	User  string `json:"user"`
 	Reply string `json:"reply"`
 }
 
-// flattenVoice 把 voice 块摊平到老字段上。已经填了的老字段优先，不被覆盖：
-// 同一份文件里两种写法都有时，显式写在外层的那个是作者后改的。
+// flattenVoice 把 voice 块摊平到老字段上。已经填了的老字段优先，不被覆盖。
 func (persona Persona) flattenVoice() Persona {
 	voice := persona.Voice
 	persona.Voice = nil
@@ -133,7 +97,7 @@ func (persona Persona) flattenVoice() Persona {
 	return persona
 }
 
-// renderPersonaVoice 把表达层拼成人设正文：风格描述在前，示例对话跟在后面。
+// renderPersonaVoice 把表达层拼成正文：风格描述在前，示例对话跟在后面。
 func renderPersonaVoice(voice *PersonaVoice) string {
 	var builder strings.Builder
 	builder.WriteString(strings.TrimSpace(voice.Style))
@@ -154,44 +118,32 @@ func renderPersonaVoice(voice *PersonaVoice) string {
 	return strings.TrimSpace(builder.String())
 }
 
-// Normalized 清洗单套人设：补 ID、摊平 voice、迁移旧风格、裁长度。
+// Normalized 清洗单套人设：补 ID、把旧字段并进正文、裁长度，名字缺了用一级标题。
 func (persona Persona) Normalized() Persona {
 	persona = persona.flattenVoice()
-	persona.Soul = persona.Soul.Normalized()
-	persona.ActionDescriptionEnabled = copyBoolPointer(persona.ActionDescriptionEnabled)
-	persona.DaypartToneEnabled = copyBoolPointer(persona.DaypartToneEnabled)
 	persona.ID = strings.TrimSpace(persona.ID)
 	if persona.ID == "" {
 		persona.ID = uuid.NewString()
 	}
+	prompt := mergePersonaStyleWithinLimit(persona.SystemPrompt, &persona.ReplyStyle, &persona.ActionDescriptionEnabled)
+	prompt = foldLegacyPersona(prompt, persona.Soul.Normalized(), persona.SelfReference, persona.SentenceEnders, persona.ActionDescriptionEnabled)
+	persona.SystemPrompt = strings.TrimSpace(truncateRunesPlain(prompt, personaPromptMaxRunes))
 	persona.Name = truncateRunesPlain(strings.TrimSpace(persona.Name), personaNameMaxRunes)
-	persona.SystemPrompt = mergePersonaStyleWithinLimit(persona.SystemPrompt, &persona.ReplyStyle, &persona.ActionDescriptionEnabled)
-	persona.SelfReference = strings.TrimSpace(persona.SelfReference)
-	persona.SentenceEnders = strings.TrimSpace(persona.SentenceEnders)
-	if persona.PersonaMode != PersonaModeOwn {
-		persona.PersonaMode = ""
+	if persona.Name == "" {
+		persona.Name = truncateRunesPlain(SoulTitle(persona.SystemPrompt), personaNameMaxRunes)
 	}
-	persona.Prompts = normalizePromptOverrides(persona.Prompts)
-	if persona.Version < 0 {
-		persona.Version = 0
-	}
-	persona.ExtraCriteria = truncateRunesPlain(strings.TrimSpace(persona.ExtraCriteria), ProactiveReplyExtraCriteriaMaxRunes)
-	persona.AccountSafetyRules = truncateRunesPlain(strings.TrimSpace(persona.AccountSafetyRules), AccountSafetyRulesMaxRunes)
+	persona.Builtin = false
+	persona.Soul = nil
+	persona.ReplyStyle = ""
+	persona.ActionDescriptionEnabled = nil
+	persona.SelfReference = ""
+	persona.SentenceEnders = ""
 	return persona
 }
 
 // Empty 报告这套人设是不是什么都没填。名字不算内容——只有名字的空壳留着没意义。
 func (persona Persona) Empty() bool {
-	return persona.Soul.Empty() &&
-		strings.TrimSpace(persona.SystemPrompt) == "" &&
-		strings.TrimSpace(string(persona.ReplyStyle)) == "" &&
-		persona.ActionDescriptionEnabled == nil &&
-		persona.DaypartToneEnabled == nil &&
-		strings.TrimSpace(persona.SelfReference) == "" &&
-		strings.TrimSpace(persona.SentenceEnders) == "" &&
-		len(persona.Prompts) == 0 &&
-		strings.TrimSpace(persona.ExtraCriteria) == "" &&
-		strings.TrimSpace(persona.AccountSafetyRules) == ""
+	return strings.TrimSpace(persona.SystemPrompt) == ""
 }
 
 // AccountSafetyRulesMaxRunes 是账号安全规则的长度上限，群配置的保存校验用的同一个数。
@@ -222,6 +174,9 @@ func (set PersonaSet) WithDefaults() PersonaSet {
 
 // Save 新增或更新一套人设，返回落库后的那一份。
 func (set PersonaSet) Save(persona Persona, now time.Time) (PersonaSet, Persona, error) {
+	if IsBuiltinPersonaID(persona.ID) {
+		return set, Persona{}, errPersonaBuiltin
+	}
 	persona = persona.Normalized()
 	if persona.Name == "" {
 		return set, Persona{}, errPersonaNameRequired
@@ -232,16 +187,10 @@ func (set PersonaSet) Save(persona Persona, now time.Time) (PersonaSet, Persona,
 	persona.UpdatedAt = now
 	for index := range set.Personas {
 		if set.Personas[index].ID == persona.ID {
-			existing := set.Personas[index]
-			persona.Version = max(persona.Version, existing.Version)
-			if !existing.sameContent(persona) {
-				persona.Version = max(persona.Version, existing.Version+1)
-			}
 			set.Personas[index] = persona
 			return set.WithDefaults(), persona, nil
 		}
 	}
-	persona.Version = max(persona.Version, 1)
 	if len(set.Personas) >= PersonaLibraryMaxEntries {
 		return set, Persona{}, errPersonaLibraryFull
 	}
@@ -323,6 +272,7 @@ var (
 	errPersonaNameRequired = errors.New("assistant: persona name is required")
 	errPersonaEmpty        = errors.New("assistant: persona has no content")
 	errPersonaLibraryFull  = errors.New("assistant: persona library is full")
+	errPersonaBuiltin      = errors.New("assistant: builtin personas are read-only")
 )
 
 // PersonaImportResult 报告一次导入的去向。三个数加起来等于文件里有效条目的数量,
@@ -340,23 +290,10 @@ type PersonaImportResult struct {
 	UnknownStyles []string `json:"unknown_styles,omitempty"`
 }
 
-// sameContent 比四项正文,不比 ID 和时间:判断「这套是不是已经有了」跟它什么时候
-// 存的、在别人机器上是什么 ID 无关。
-// sameContent 比较两套人设的全部内容：正文、品格、开关、提示词、判据。名字、ID、
-// 版本号和时间不算内容。以前只比正文和几个开关，品格和提示词改了也被当成没改，
-// 导入时会把新版当重复跳过，版本号也不会涨。
+// sameContent 只比正文，不比名字、ID 和时间：判断「这份是不是已经有了」跟它什么时候
+// 存的、在别人机器上叫什么无关。
 func (persona Persona) sameContent(other Persona) bool {
-	return persona.contentFingerprint() == other.contentFingerprint()
-}
-
-func (persona Persona) contentFingerprint() string {
-	persona = persona.Normalized()
-	persona.ID, persona.Name, persona.Version, persona.UpdatedAt = "", "", 0, time.Time{}
-	encoded, err := json.Marshal(persona)
-	if err != nil {
-		return ""
-	}
-	return string(encoded)
+	return strings.TrimSpace(persona.Normalized().SystemPrompt) == strings.TrimSpace(other.Normalized().SystemPrompt)
 }
 
 // Import 把外部来的几套人设并进库里。
@@ -398,7 +335,6 @@ func (set PersonaSet) Import(incoming []Persona, now time.Time) (PersonaSet, Per
 			continue
 		}
 		persona.UpdatedAt = now
-		persona.Version = max(persona.Version, 1)
 		set.Personas = append(set.Personas, persona)
 		result.Imported = append(result.Imported, persona)
 	}

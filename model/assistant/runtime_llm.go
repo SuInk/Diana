@@ -837,9 +837,7 @@ func (r *Runtime) systemPromptWithRelationshipAndAgent(event MessageEvent, plugi
 // 用来认出「调用方已经自带时钟」的标记，由代码拼在前面，不进可覆盖的正文。
 const (
 	promptRuntimeClock            = "{datetime}（时区 {zone}，UTC{utc_offset}）。这是机器人所在机器提供的可信实时时间；用户询问当前日期或几点时直接据此回答，不要猜测训练数据日期，也不要声称无法访问实时时钟。"
-	promptUnknownTimezoneNight    = "没有记录当前发言者所在时区：你这边是深夜，不代表他那边也是。别断言他那边几点，也别因为「这么晚了」催他睡或说他熬夜；除非他自己说了当地时间或所在地，作息话题就不要主动提。"
-	promptUnknownTimezoneMorning  = "没有记录当前发言者所在时区：你这边是清早，不代表他那边也是。别默认他刚起床，「早上好」这类按时段的问候先不要说，除非他自己提了。"
-	promptSpeakerTimezone         = "当前发言者所在时区：{timezone}（{zone}，UTC{utc_offset}，{offset}）；他那边现在是 {local_time}。跟他说时间点时按他的当地时间说并标明是他那边的时间，必要时再补一句你这边的时间；换算由你来做，不要让对方自己换。作息相关的话（该睡了、早安、还在熬夜）同样按他那边的时间判断，不要拿你这边的时段往他身上套。你自己的「现在」仍以上面的运行时钟为准。{recorded_note}对方说出自己那边的当地时间、或说自己在别的地方，和这条记录对不上时，以他当下说的为准，不要拿旧记录纠正他。"
+	promptSpeakerTimezone         = "当前发言者所在时区：{timezone}（{zone}，UTC{utc_offset}，{offset}）；他那边现在是 {local_time}。跟他说时间点时按他的当地时间说并标明是他那边的时间，必要时再补一句你这边的时间；换算由你来做，不要让对方自己换。你自己的「现在」仍以上面的运行时钟为准。{recorded_note}对方说出自己那边的当地时间、或说自己在别的地方，和这条记录对不上时，以他当下说的为准，不要拿旧记录纠正他。"
 	promptSpeakerTimezoneRecorded = "这条时区记于 {recorded_date}（{age}前），不是实时位置。"
 	promptSpeakerTimezoneStale    = "记录较旧，约具体时间前先自然地确认一句他现在在哪个时区。"
 )
@@ -854,9 +852,7 @@ var (
 		PromptVar{Name: "datetime", Description: "机器人所在机器的当前时间，如 2026-09-23 14:05:00"},
 		PromptVar{Name: "zone", Description: "时区缩写，如 CST"},
 		PromptVar{Name: "utc_offset", Description: "相对 UTC 的偏移，如 +08:00"})
-	promptUnknownTimezoneNightSpec   = tailSpec("timezone_unknown.late_night", "发言者时区未知（深夜）", "没记过发言者时区、而机器人这边是深夜时注入，挡掉按本机时钟催人睡觉。", promptUnknownTimezoneNight)
-	promptUnknownTimezoneMorningSpec = tailSpec("timezone_unknown.morning", "发言者时区未知（清早）", "没记过发言者时区、而机器人这边是清早时注入，挡掉按本机时钟说早上好。", promptUnknownTimezoneMorning)
-	promptSpeakerTimezoneSpec        = tailSpec("speaker_timezone", "发言者的时区", "画像里记过发言者时区时注入，给出他那边的当地时间，要求按他的时间说话。",
+	promptSpeakerTimezoneSpec = tailSpec("speaker_timezone", "发言者的时区", "画像里记过发言者时区时注入，给出他那边的当地时间，要求按他的时间说话。",
 		promptSpeakerTimezone,
 		PromptVar{Name: "timezone", Description: "时区名，如 America/New_York"},
 		PromptVar{Name: "zone", Description: "时区缩写，如 EDT"},
@@ -892,33 +888,8 @@ func (r *Runtime) runtimeClockPrompt(event MessageEvent) string {
 	}))
 	if speaker := r.speakerTimezonePrompt(event, now); speaker != "" {
 		appendPromptSection(&builder, speaker)
-	} else if note := unknownSpeakerTimezoneNote(cfg, now); note != "" {
-		appendPromptSection(&builder, note)
 	}
 	return strings.TrimSpace(builder.String())
-}
-
-// unknownSpeakerTimezoneNote 在没记过发言者时区、而机器人这边正处于深夜或清早时，
-// 挡掉「你该睡了」「早上好」这类按本机时钟推断对方作息的话。
-//
-// 上面那条运行时钟提示只说了机器人自己几点，模型会顺手把它当成所有人的当地时间。
-// 群里有人在海外、有人跨时区出差时，这个默认假设直接错半天，催睡和时段问候都落空。
-// 时区记下来时由 speakerTimezonePrompt 给出换算，这里只管没有依据的那一半。
-//
-// 只在深夜和清早注入：白天和晚上不会引出作息主张，补一句只是白占 token。时区跟着
-// dayPartToneForConfig 那一份走（回复门槛的时区），一台机器人不该有两个「几点了」。
-func unknownSpeakerTimezoneNote(cfg BotConfig, now time.Time) string {
-	location := time.Local
-	if cfg.ReplyGate != nil {
-		location = cfg.ReplyGate.Location()
-	}
-	switch dayPartAt(now.In(location)) {
-	case dayPartLateNight:
-		return cfg.prompt(promptUnknownTimezoneNightSpec)
-	case dayPartMorning:
-		return cfg.prompt(promptUnknownTimezoneMorningSpec)
-	}
-	return ""
 }
 
 // speakerTimezonePrompt 在画像里记过对方时区时，给出他那边的当地时间和时差。
@@ -1025,22 +996,15 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 		}
 		return false
 	}
-	// 品格层排在人设正文之前，也就是整条系统提示词的最前面：它解释的是「为什么
-	// 会这样做」，后面所有规则都在它的框架里读。它只依赖机器人配置（分群覆盖里
-	// 没有这个字段），所以逐字节稳定，不影响前缀缓存。
-	if soul := cfg.Soul.Render(); soul != "" {
-		builder.WriteString(soul)
-		builder.WriteString("\n")
-	}
+	// SOUL.md 排在整条系统提示词的最前面，不加任何包装：她是谁、在乎什么、为什么，
+	// 后面所有规则都在它的框架里读。
 	builder.WriteString(cfg.SystemPrompt)
-	actionsEnabled := boolValue(cfg.ActionDescriptionEnabled, false)
-	appendPromptSection(&builder, replyPresentationPrompt(!chatSplitLimitsForEvent(cfg, event).SingleMessage, personaVoiceFrom(cfg.SelfReference, cfg.SentenceEnders), cfg.PersonaMode, cfg))
+	appendPromptSection(&builder, replyPresentationPrompt(!chatSplitLimitsForEvent(cfg, event).SingleMessage, cfg))
 	appendPromptSection(&builder, replyLineBreakPrompt(cfg))
 	appendPromptSection(&builder, replyLineSplitPrompt(chatSplitLimitsForEvent(cfg, event)))
-	appendPromptSection(&builder, actionDescriptionPrompt(actionsEnabled, cfg.PersonaMode, cfg))
 	// 实时时钟不再拼进人设提示词：它每秒都不同，会让这段最长的 system 提示词永远
 	// 无法命中供应商的前缀缓存。改由 runtimeClockPrompt 作为尾部独立 system 消息注入。
-	if boolValue(cfg.PromptChineseSlangHint, true) && !cfg.PersonaMode.ownsPersonaVoice() {
+	if boolValue(cfg.PromptChineseSlangHint, true) {
 		appendPromptSection(&builder, cfg.prompt(promptChineseSlangSpec))
 	}
 	if event.Kind == EventKindGroup {
@@ -1237,15 +1201,13 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 			appendPromptSection(&tail, cfg.promptf(promptMatchedAliasSpec, map[string]string{"aliases": matched}))
 		}
 	}
-	// 时段语气紧挨着锚点注入，理由和锚点一样：这两条都是「怎么说」，离生成越近
-	// 越管用。关掉时返回空串，appendPromptSection 会跳过。
-	appendPromptSection(&tail, dayPartToneForConfig(cfg, r.clock()))
-	// 心情语气和时段语气同一批：都描述「此刻怎么说」。
+	// 本群消息长度和心情语气紧挨着锚点注入，理由和锚点一样：都是「此刻怎么说」，
+	// 离生成越近越管用。
+	appendPromptSection(&tail, r.groupLengthNormPrompt(event, cfg))
 	appendPromptSection(&tail, r.moodToneForConfig(cfg, event.ProfileID))
 	// 语气锚点必须留在最后：前面的工具规则、权限说明和拒答流程都是公文体，离生成
 	// 最近的一段最容易被模仿，这里重新把语域拉回配置的表达风格。
 	appendPromptSection(&tail, personaClosingAnchor(cfg))
-	appendPromptSection(&tail, actionDescriptionClosingAnchor(actionsEnabled, cfg.PersonaMode, cfg))
 	return builder.String(), strings.TrimSpace(tail.String())
 }
 

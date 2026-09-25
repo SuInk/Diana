@@ -5,6 +5,7 @@ package assistant
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"sync"
@@ -286,12 +287,14 @@ func TestContextCompressionEnqueuesStructuredSummary(t *testing.T) {
 	}
 }
 
-func TestLongTermMemoryCanBeDisabled(t *testing.T) {
-	disabled := false
+// 长期记忆不再能关：旧配置里存着的 long_term_memory_enabled=false 读进来也照样记。
+func TestLongTermMemoryIgnoresLegacyOffSwitch(t *testing.T) {
+	var cfg BotConfig
+	if err := json.Unmarshal([]byte(`{"recent_context_limit":2,"context_summary_threshold":3,"long_term_memory_enabled":false}`), &cfg); err != nil {
+		t.Fatal(err)
+	}
 	memory := &testStructuredMemoryStore{}
-	runtime := NewRuntime(BotConfig{
-		RecentContextLimit: 2, ContextSummaryThreshold: 3, LongTermMemoryEnabled: &disabled,
-	}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	runtime := NewRuntime(cfg, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	runtime.SetStructuredMemoryStore(memory)
 	for index := 0; index < 4; index++ {
 		event := MessageEvent{
@@ -301,8 +304,8 @@ func TestLongTermMemoryCanBeDisabled(t *testing.T) {
 		runtime.remember(event)
 		runtime.enqueueEventMemory(event, memoryEventText(event))
 	}
-	if len(memory.enqueued) != 0 {
-		t.Fatalf("disabled memory enqueued jobs = %#v", memory.enqueued)
+	if len(memory.enqueued) == 0 {
+		t.Fatal("a stored long_term_memory_enabled=false must no longer stop memory jobs")
 	}
 }
 

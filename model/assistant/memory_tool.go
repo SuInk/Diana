@@ -52,9 +52,6 @@ func (t *dianaMemoryTool) Run(ctx context.Context, input map[string]any) (string
 		return "", fmt.Errorf("memory runtime unavailable")
 	}
 	r := t.runtime
-	if !boolValue(r.effectiveConfigForEvent(t.event).LongTermMemoryEnabled, true) {
-		return "", fmt.Errorf("长期记忆未启用")
-	}
 	r.mu.RLock()
 	store := r.structuredMemory
 	r.mu.RUnlock()

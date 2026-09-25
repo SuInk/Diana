@@ -12,7 +12,7 @@ func TestLegacyStyleBecomesEditablePersonaOnce(t *testing.T) {
 		t.Run(string(style), func(t *testing.T) {
 			original := BotConfig{SystemPrompt: "你叫嘉然，喜欢音乐。", ReplyStyle: style, SelfReference: "咱", SentenceEnders: "呀", ChatInCooldownSeconds: 120}
 			cfg := original.WithDefaults()
-			if cfg.ReplyStyle != "" || !strings.HasPrefix(cfg.SystemPrompt, original.SystemPrompt+"\n\n") || cfg.SelfReference != "咱" || cfg.SentenceEnders != "呀" || cfg.ChatInCooldownSeconds != 120 {
+			if cfg.ReplyStyle != "" || !strings.HasPrefix(cfg.SystemPrompt, original.SystemPrompt+"\n\n") || !strings.Contains(cfg.SystemPrompt, "自称偏好是「咱」") || !strings.Contains(cfg.SystemPrompt, "「呀」") || cfg.ChatInCooldownSeconds != 120 {
 				t.Fatal("migration lost persona or unrelated preferences")
 			}
 			data, err := json.Marshal(PayloadFromConfig(cfg))
@@ -37,10 +37,7 @@ func TestLegacyStyleBecomesEditablePersonaOnce(t *testing.T) {
 }
 
 func TestLegacyStyleMigrationCoversGroupAndCustomSnapshot(t *testing.T) {
-	base := BotConfig{SystemPrompt: "你叫嘉然。", CustomPersona: &Persona{SystemPrompt: "我的原文", ReplyStyle: ReplyStyleGentle}}.WithDefaults()
-	if base.CustomPersona.ReplyStyle != "" || !strings.Contains(base.CustomPersona.SystemPrompt, "我的原文") || !strings.Contains(base.CustomPersona.SystemPrompt, ReplyStyleGentle.stylePrompt()) {
-		t.Fatal("custom snapshot was not migrated")
-	}
+	base := BotConfig{SystemPrompt: "你叫嘉然。"}.WithDefaults()
 	for _, own := range []string{"", "本群的人设"} {
 		group := (GroupConfig{SystemPrompt: own, ReplyStyle: ReplyStyleCatgirl}).WithDefaults("g", base)
 		prefix := own

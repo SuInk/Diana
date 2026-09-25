@@ -240,7 +240,8 @@ func TestChatInTreatsAgreementAsChatButNotFabrication(t *testing.T) {
 	if strings.Contains(chatInReplyPrompt, "不要附和") || !strings.Contains(chatInReplyPrompt, "附和、捧场、顺口接一句都可以") {
 		t.Fatal("插话回复约束和评分口径对不上")
 	}
-	for _, want := range []string{"0.10 两人私聊", "0.90 群里明确抛出邀请"} {
+	// 刻度换成了「什么情况下愿意接话」三栏加一句换算，两头的情形和分数都还得在。
+	for _, want := range []string{"两个人在私聊", "群里明确抛出邀请", "落在「愿意接」的给 0.70 到 0.95", "落在「不接」的给 0.10 到 0.30"} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("闲聊刻度缺失 %q", want)
 		}
@@ -258,8 +259,8 @@ func TestChatInExemptsBanterFromEvidenceTest(t *testing.T) {
 		// 依据标准的适用范围写成断言类型，不是「所有消息」。
 		"「没有依据就压低」只管对事实、原因、产品、人物和事件的断言",
 		"群里在玩梗、在演正进行的角色扮演、或在拿机器人打趣时没有这种断言",
-		// 玩笑照梗和调侃的锚点给分，不被依据标准带着一起塌。
-		"照梗与调侃的锚点给",
+		// 玩笑照梗和调侃那一栏给分，不被依据标准带着一起塌。
+		"照梗与调侃那一栏给",
 		// 原样复读仍然留在低分区。
 		"只能原样复读就不超过 0.10",
 		// 玩笑包装下的事实断言不能借豁免绕开依据标准。

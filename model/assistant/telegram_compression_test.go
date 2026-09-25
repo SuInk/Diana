@@ -80,8 +80,14 @@ func TestTelegramCompressionCanRegroupWholeCodeBlocks(t *testing.T) {
 }
 
 func TestTelegramPromptIncludesPlatformCapacity(t *testing.T) {
+	// 宽松的单条上限只由程序截断，不念给模型；Telegram 自己的 4096 仍然要说。
 	messages := withReplyGenerationBudget([]llm.Message{{Role: llm.RoleUser, Content: "问题"}}, 8000, PlatformTelegram)
-	if !strings.Contains(messages[0].Content, "8000") || !strings.Contains(messages[0].Content, "4096") || !strings.Contains(messages[0].Content, "单条") {
-		t.Fatal("generation prompt lacks the total or platform budget")
+	if strings.Contains(messages[0].Content, "8000") || !strings.Contains(messages[0].Content, "4096") || !strings.Contains(messages[0].Content, "单条") {
+		t.Fatalf("generation prompt = %q, want only the platform capacity", messages[0].Content)
+	}
+	// 紧到会改变写法的上限才提前告诉模型。
+	messages = withReplyGenerationBudget([]llm.Message{{Role: llm.RoleUser, Content: "问题"}}, 1500, PlatformTelegram)
+	if !strings.Contains(messages[0].Content, "1500") || !strings.Contains(messages[0].Content, "4096") {
+		t.Fatalf("generation prompt = %q, want both the tight budget and the platform capacity", messages[0].Content)
 	}
 }

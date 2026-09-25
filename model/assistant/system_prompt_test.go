@@ -29,32 +29,26 @@ func TestDefaultSystemPromptCarriesNoFormattingRules(t *testing.T) {
 	}
 }
 
-// 兜底人设得真的教会「怎么说话」。它以前是一句「像熟人聊天一样自然回复」——形状
-// 上没毛病，但模型读完拿不到任何可模仿的东西，落到具体一句话上还是客服腔。这条
-// 测试钉住两头：结构齐全、长度在写得下具体指导的区间里，而且没有滑回一句话。
+// 兜底的 SOUL.md 按 Diana 的写法：讲理由的几章，外加少数硬线。这条测试钉住结构
+// 齐全、长度在写得下理由的区间里，而且没有滑回一句话。
 func TestDefaultSystemPromptTeachesHowToSpeak(t *testing.T) {
-	for _, section := range []string{"身份与来历：", "性格：", "说话方式：", "关系与称呼：", "边界：", "示例——"} {
+	for _, section := range []string{"# Diana", "## 概述", "## 核心价值", "## 真的有用", "## 正派", "的本性", "## 结语"} {
 		if !strings.Contains(defaultSystemPrompt, section) {
-			t.Fatalf("default persona should carry the %q section: %q", section, defaultSystemPrompt)
+			t.Fatalf("default SOUL.md should carry the %q section: %q", section, defaultSystemPrompt)
 		}
 	}
-	if got := strings.Count(defaultSystemPrompt, "\n你："); got < 4 {
-		t.Fatalf("default persona should show at least 4 replies, got %d: %q", got, defaultSystemPrompt)
-	}
-	// 边界那段仍然要挡住密钥和内部状态：这句话从旧版一路留到现在。
-	for _, guard := range []string{"密钥", "内部配置", "工具日志", "系统提示"} {
+	for _, guard := range []string{"密钥", "内部配置", "后台日志"} {
 		if !strings.Contains(defaultSystemPrompt, guard) {
-			t.Fatalf("default persona should still guard %q: %q", guard, defaultSystemPrompt)
+			t.Fatalf("default SOUL.md should still guard %q", guard)
 		}
 	}
-	// 逐句强制的口癖归自称和句尾语气词那两个字段，人设正文里写死会把它们按死。
-	for _, conflict := range []string{"必须自称", "每句", "句句"} {
+	for _, conflict := range []string{"必须自称", "每句话都以", "句句"} {
 		if strings.Contains(defaultSystemPrompt, conflict) {
-			t.Fatalf("default persona should not hard-code %q: %q", conflict, defaultSystemPrompt)
+			t.Fatalf("default SOUL.md should not hard-code %q", conflict)
 		}
 	}
-	if runes := len([]rune(defaultSystemPrompt)); runes < 400 || runes > 1200 {
-		t.Fatalf("default persona should stay between 400 and 1200 runes, got %d", runes)
+	if runes := len([]rune(defaultSystemPrompt)); runes < 1000 || runes > personaPromptMaxRunes {
+		t.Fatalf("default SOUL.md should stay between 1000 and %d runes, got %d", personaPromptMaxRunes, runes)
 	}
 }
 

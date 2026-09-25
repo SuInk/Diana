@@ -5,8 +5,10 @@ package webui
 
 import (
 	"net/http"
+	"strings"
 
 	"github.com/SuInk/diana/model/assistant"
+	"github.com/SuInk/diana/model/version"
 	"github.com/gin-gonic/gin"
 )
 
@@ -18,4 +20,40 @@ func (h *BotHandler) promptCatalog(c *gin.Context) {
 		"prompts":   assistant.PromptSpecs(),
 		"max_runes": assistant.PromptOverrideMaxRunes,
 	})
+}
+
+// exportPromptFile 把界面上当前的覆盖表（可能还没保存）渲染成一份完整的提示词 YAML。
+// 从请求里拿覆盖表而不是去读已保存的配置：用户在编辑器里改了一半想先导出看看，
+// 导出的应该是他眼前的那一份。
+func (h *BotHandler) exportPromptFile(c *gin.Context) {
+	var payload struct {
+		Overrides assistant.PromptOverrides `json:"overrides"`
+	}
+	if err := c.ShouldBindJSON(&payload); err != nil {
+		h.writeError(c, http.StatusBadRequest, "prompts_export", err, "", nil)
+		return
+	}
+	raw, err := assistant.RenderPromptFile(payload.Overrides, version.Source())
+	if err != nil {
+		h.writeError(c, http.StatusInternalServerError, "prompts_export", err, "", nil)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"yaml": string(raw)})
+}
+
+// importPromptFile 只解析不保存：结果填回编辑器，保存配置时才生效。
+func (h *BotHandler) importPromptFile(c *gin.Context) {
+	var payload struct {
+		Source string `json:"source"`
+	}
+	if err := c.ShouldBindJSON(&payload); err != nil {
+		h.writeError(c, http.StatusBadRequest, "prompts_import", err, "", nil)
+		return
+	}
+	result, err := assistant.ParsePromptFile([]byte(strings.TrimSpace(payload.Source)))
+	if err != nil {
+		h.writeError(c, http.StatusBadRequest, "prompts_import", err, "", nil)
+		return
+	}
+	c.JSON(http.StatusOK, result)
 }

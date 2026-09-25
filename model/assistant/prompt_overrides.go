@@ -48,7 +48,7 @@ var promptGroupOrder = []PromptGroupInfo{
 	{PromptGroupReplyBase, "回复 · 基础文案", "正式回复里紧跟人设的几段：梗与修辞、排版、时间、发言者、只发图或只叫一声时的替代正文。"},
 	{PromptGroupReplyTools, "回复 · 工具用法", "对应工具本轮真的可用时才注入，教模型什么时候调、怎么调。"},
 	{PromptGroupReplyRules, "回复 · 通用规则", "身份、记忆、拒答、历史格式这类每轮都在的规则。"},
-	{PromptGroupReplyStyle, "回复 · 表达与排版", "分条、换行、表情、动作描写和收尾的语气锚点。"},
+	{PromptGroupReplyStyle, "回复 · 表达与排版", "分条、换行、表情和收尾的语气锚点。"},
 	{PromptGroupReplyTail, "回复 · 发言者与时间", "随发言者和时刻变化的尾部段落：身份档位、时区、时段、心情。"},
 	{PromptGroupRouting, "接话与意图判断", "决定这条消息要不要回、回哪一条、指的是哪条的判断模型提示词。"},
 	{PromptGroupAudit, "发送前审核与改写", "候选回复发出去之前的审核、压缩、去重和提示语改写。"},

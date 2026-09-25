@@ -18,22 +18,38 @@ import (
 
 const defaultRecurringFailureAlertThreshold = 5
 
-// recurringFailureAlertThreshold 取这条订阅生效的告警阈值：没配过用默认 5，
-// 配成 0 就是彻底不报。阈值是机器人级配置，群级覆盖里没有它，所以按订阅来源
-// 取到的就是那个机器人的设置。
+// recurringFailureAlertSettingKey 是 RSS 订阅、仓库订阅两个插件里「连续失败几次才报」
+// 那一项的键。
+const recurringFailureAlertSettingKey = "failure_alert_threshold"
+
+// recurringFailureAlertThreshold 取这条订阅生效的告警阈值，0 表示不报。
+//
+// 报不报跟着机器人的「出错时在聊天里提示」和插件自己的「发送错误通知」走：任一关了，
+// 订阅坏了也不在聊天里说——另起一个开关分开管，关掉一个另一个还在响，用户只会以为关不掉。
+// 连续失败几次才报是订阅自己的事，在各自插件的设置里改，可以按群覆盖；定时查询
+// 没有插件，用默认值。
 func (r *Runtime) recurringFailureAlertThreshold(item Reminder) int {
-	cfg := r.effectiveConfigForEvent(reminderSourceEvent(item))
-	if cfg.RecurringFailureAlertThreshold == nil {
-		return defaultRecurringFailureAlertThreshold
+	event := reminderSourceEvent(item)
+	pluginID := reminderDiagnosticPluginID(item)
+	// 和发送出口用同一道判断：机器人的「错误提示」和插件的「发送错误通知」任一关着，
+	// 就不计数也不告警，免得记下「报过警」却什么也没发，恢复时凭空冒出一句「好了」。
+	if !r.diagnosticAllowed(event, pluginID) {
+		return 0
 	}
-	if value := *cfg.RecurringFailureAlertThreshold; value > 0 {
-		return value
+	threshold := defaultRecurringFailureAlertThreshold
+	if pluginID != "" && r.plugins != nil {
+		_, settings, _ := r.pluginWithSettingsForEvent(pluginID, event)
+		threshold = settings.Int(recurringFailureAlertSettingKey, defaultRecurringFailureAlertThreshold)
 	}
-	return 0
+	return min(max(threshold, 1), maxRecurringFailureAlertThreshold)
 }
 
 // recurringFailureShouldAlert 判断这次失败要不要打扰订阅者。
 func recurringFailureShouldAlert(item Reminder, threshold int) bool {
+	if threshold <= 0 {
+		// 机器人关了「出错时在聊天里提示」：一次性提醒失败也不说。
+		return false
+	}
 	if reminderIsRepositoryWatch(item) {
 		return repositoryWatchFailureShouldAlert(item, threshold)
 	}
