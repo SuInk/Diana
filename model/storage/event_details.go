@@ -88,6 +88,9 @@ type InboundEventDetail struct {
 	// Delivery 是这一轮实际发出去的内容概览。Reply 只是文本，说不出还发了转发
 	// 卡片、几张图或一个视频。
 	Delivery assistant.OutboundDelivery `json:"delivery,omitempty"`
+	// Recalls 是这一轮发出去的消息后来被撤回的记录，控制台据此把撤回通知那一行
+	// 合进原回复。
+	Recalls []InboundEventRecall `json:"recalls,omitempty"`
 }
 
 // InboundEventImage intentionally contains display metadata only. The WebUI
@@ -483,6 +486,9 @@ LIMIT ? OFFSET ?
 	}
 	for index := range page.Events {
 		page.Events[index].Subtasks = subtasks[page.Events[index].ID]
+	}
+	if err := s.attachInboundEventRecalls(ctx, page.Events); err != nil {
+		return InboundEventDetailPage{}, err
 	}
 	if !query.Lightweight {
 		if err := s.attachInboundEventMemories(ctx, page.Events); err != nil {

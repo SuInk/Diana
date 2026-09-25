@@ -133,8 +133,8 @@
           <span v-else class="muted event-result-count">{{ resultCountText }}</span>
         </div>
 
-        <div v-if="events.length > 0" class="event-detail-list">
-          <template v-for="(event, index) in events" :key="event.id">
+        <div v-if="visibleEvents.length > 0" class="event-detail-list">
+          <template v-for="(event, index) in visibleEvents" :key="event.id">
             <div v-if="showDateSeparator(index)" class="event-date-separator">{{ formatDate(event.at) }}</div>
             <article class="event-detail-row">
             <div class="event-detail-time">
@@ -146,6 +146,7 @@
                 <span v-if="event.platform" class="badge">{{ platformLabel(event.platform) }}</span>
                 <span class="badge">{{ eventKindLabel(event.kind) }}</span>
                 <span class="badge" :class="decisionClass(event)">{{ decisionLabel(event) }}</span>
+                <span v-if="event.recalls?.length" class="badge warn">已撤回</span>
                 <span class="event-sender" :title="senderTitle(event)">
                   <img
                     v-if="event.sender_avatar_url && !failedAvatars[event.id]"
@@ -251,6 +252,11 @@
                     </button>
                   </template>
                 </div>
+              </div>
+              <div v-for="recall in event.recalls ?? []" :key="recall.message_id" class="event-recall-summary">
+                <strong>回复已撤回</strong>
+                <p>{{ replyRecallText(event, recall) }}</p>
+                <span class="muted">撤回于 {{ formatClock(recall.at) }}</span>
               </div>
               <div v-if="event.subtasks?.length" class="event-subtasks">
                 <strong>触发的后台任务</strong>
@@ -574,6 +580,7 @@ import {
   type AppLogEntry,
   type AssistantEventDetail,
   type AssistantEventMemory,
+  type AssistantEventRecall,
   type AssistantEventDelivery,
   type AssistantEventSubtask,
   type AssistantEventRange,
@@ -623,6 +630,17 @@ watch(botScope, () => {
   if (currentView.value === "events") void load(true);
 });
 const events = ref<AssistantEventDetail[]>([]);
+// 撤回机器人回复的通知原先单独占一行，只写得出「某某撤回了 Diana 的消息」，撤的
+// 是哪句得自己按时间去对。后端已经把撤回挂到原回复上，这里把那一行藏掉；原回复
+// 还没翻到时照常显示，信息不会丢。
+const visibleEvents = computed(() => {
+  const merged = new Set<string>();
+  for (const event of events.value) {
+    for (const recall of event.recalls ?? []) merged.add(recallKey(event.group_id, recall.message_id));
+  }
+  if (merged.size === 0) return events.value;
+  return events.value.filter((event) => !(isRecallEvent(event) && merged.has(recallKey(event.group_id, event.message_id))));
+});
 const response = ref<AssistantEventsResponse | null>(null);
 const summaryResponse = ref<AssistantEventsResponse | null>(null);
 const summaryLoading = ref(false);
@@ -875,6 +893,22 @@ function recallRoleLabel(role?: string): string {
   return labels[key] ?? key;
 }
 
+function recallKey(groupID?: string, messageID?: string): string {
+  return `${groupID ?? ""}\u0000${messageID ?? ""}`;
+}
+
+function replyRecallText(event: AssistantEventDetail, recall: AssistantEventRecall): string {
+  const outbound = (event.outbound_message_id ?? "").split(",").map((id) => id.trim()).filter(Boolean);
+  const position = outbound.length > 1 && outbound.includes(recall.message_id)
+    ? `（共 ${outbound.length} 条消息中的第 ${outbound.indexOf(recall.message_id) + 1} 条）`
+    : "";
+  if (recall.operator_role === "history_backfill") return `断线回补确认这条回复已撤回${position}，平台历史接口未提供实际操作者`;
+  if (recall.self_recall) return `机器人自己撤回了这条回复${position}`;
+  const identity = [recall.operator_name?.trim(), recall.operator_id].filter(Boolean).join(" · ") || "未知操作者";
+  const role = recallRoleLabel(recall.operator_role);
+  return `${identity}${role ? `（${role}）` : ""} 撤回了这条回复${position}`;
+}
+
 function recallActorText(event: AssistantEventDetail): string {
   if (event.operator_role === "history_backfill") return "断线回补确认消息已撤回，平台历史接口未提供实际操作者";
   const selfRecall = event.operator_id && event.operator_id === event.user_id;
@@ -1050,7 +1084,7 @@ function groupShortName(event: AssistantEventDetail): string {
 // 同一天的日期没必要每行重复，只在换天的地方插一条分隔。
 function showDateSeparator(index: number): boolean {
   if (index === 0) return true;
-  return dateKey(events.value[index].at) !== dateKey(events.value[index - 1].at);
+  return dateKey(visibleEvents.value[index].at) !== dateKey(visibleEvents.value[index - 1].at);
 }
 
 function dateKey(iso: string): string {

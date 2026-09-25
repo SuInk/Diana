@@ -2361,6 +2361,19 @@ export interface AssistantEventDetail extends BotEvent {
   subtasks?: AssistantEventSubtask[];
   /** 这一轮实际发出去的内容概览。reply 只是文本，说不出还发了卡片和媒体。 */
   delivery?: AssistantEventDelivery;
+  /** 这一轮发出去的消息后来被撤回的记录；撤回通知那一行据此合进原回复。 */
+  recalls?: AssistantEventRecall[];
+}
+
+export interface AssistantEventRecall {
+  /** 被撤回的出站消息号，对应 outbound_message_id 里的一项。 */
+  message_id: string;
+  at: string;
+  operator_id?: string;
+  operator_name?: string;
+  operator_role?: string;
+  /** 机器人自己撤回的，不是被别人撤。 */
+  self_recall?: boolean;
 }
 
 export interface AssistantEventModelUsage {
