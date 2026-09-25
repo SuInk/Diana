@@ -82,8 +82,7 @@ func TestChromeArgsMoveSharedMemoryOffDevShm(t *testing.T) {
 }
 
 func TestVisibleChromeModeOmitsHeadlessFlag(t *testing.T) {
-	visible := false
-	args := sandboxedChromeArgs("/tmp/profile", "/tmp/cache", "/tmp/crash", SandboxedBrowserConfig{Headless: &visible})
+	args := sandboxedChromeArgs("/tmp/profile", "/tmp/cache", "/tmp/crash", SandboxedBrowserConfig{Window: BrowserWindowVisible})
 	joined := strings.Join(args, " ")
 	if strings.Contains(joined, "--headless") {
 		t.Fatalf("visible browser args still contain headless flag: %s", joined)
@@ -601,5 +600,21 @@ func TestStaticPageDoesNotWaitOutTheObservationWindow(t *testing.T) {
 	}
 	if nothingLeftToWaitFor(settledProbe, quiet, true, false) {
 		t.Fatal("网络没静就早退了")
+	}
+}
+
+// 读网页的有头模式不开启动窗口（macOS 上一开窗口就抢前台），页面另在后台开；
+// 本地渲染用的默认配置仍是无头。
+func TestHiddenWindowArgsSkipStartupWindow(t *testing.T) {
+	hidden := strings.Join(sandboxedChromeArgsForWindow("/tmp/p", "/tmp/c", "/tmp/x", BrowserWindowHidden), " ")
+	if strings.Contains(hidden, "--headless") || !strings.Contains(hidden, "--no-startup-window") {
+		t.Fatalf("有头隐藏模式参数不对：%s", hidden)
+	}
+	headless := strings.Join(sandboxedChromeArgs("/tmp/p", "/tmp/c", "/tmp/x", SandboxedBrowserConfig{}), " ")
+	if !strings.Contains(headless, "--headless=new") || strings.Contains(headless, "--no-startup-window") {
+		t.Fatalf("默认应当还是无头：%s", headless)
+	}
+	if window, env := resolveBrowserWindow(BrowserWindowHeadless); window != BrowserWindowHeadless || env != nil {
+		t.Fatalf("无头不该去找屏幕：%q %v", window, env)
 	}
 }

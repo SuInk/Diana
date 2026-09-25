@@ -210,7 +210,7 @@ let plugins: PluginState[] = [
       official: true, built_in: true, permissions: ["网页渲染", "隔离浏览器"],
       settings: [{
         key: "window_mode", label: "Chrome 窗口模式", type: "select", default: "auto",
-        options: [{ value: "auto", label: "自动（推荐）" }, { value: "headless", label: "始终无头" }, { value: "visible", label: "显示隔离窗口" }]
+        options: [{ value: "auto", label: "自动（推荐）" }, { value: "headless", label: "始终无头" }, { value: "visible", label: "显示窗口（排查用）" }]
       }]
     },
     installed: true, enabled: true

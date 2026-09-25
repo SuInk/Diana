@@ -42,7 +42,7 @@
                 </template>
               </div>
               <p class="browser-toggle-desc">
-                每次开一个全新的无头 Chrome，用完就扔。群里发的链接自动读出来、模型查网页（browser_render）、HTML 转成图片都靠它。
+                每次开一个全新的 Chrome，用完就扔。群里发的链接自动读出来、模型查网页（browser_render）都靠它，默认有头、不容易被网站拦；HTML 转图片这类本地渲染用无头。
               </p>
               <div v-if="renderPlugin" class="browser-toggle-meta">
                 <button type="button" :class="{ warn: dependencyProblem('render') }" @click="dependenciesTarget = 'render'">
@@ -396,11 +396,11 @@ const renderPlugin = ref<PluginState | null>(null);
 const renderDependencies = ref<ResolverDependency[]>([]);
 const savingRender = ref(false);
 const renderWindowSpec = computed(() => renderPlugin.value?.manifest.settings?.find((spec) => spec.key === renderWindowModeKey));
-// 选项来自插件清单，补一句各自什么时候用：「显示隔离窗口」只在排查渲染问题时有用。
+// 选项来自插件清单，补一句各自什么时候用：「显示窗口」只在排查渲染问题时有用。
 const renderWindowHints: Record<string, string> = {
-  auto: "后台运行，看不见窗口",
-  headless: "后台运行，看不见窗口",
-  visible: "在跑 Diana 的机器上弹出临时窗口，排查用"
+  auto: "有头但看不见，不容易被网站拦；没条件时退回无头",
+  headless: "最省资源，但容易被网站认出来拦掉",
+  visible: "在跑 Diana 的机器上弹出窗口，排查用"
 };
 const renderWindowOptions = computed<AppSelectOption[]>(() =>
   (renderWindowSpec.value?.options ?? []).map((option) => ({ ...option, hint: renderWindowHints[option.value] }))

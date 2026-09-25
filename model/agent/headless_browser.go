@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/SuInk/diana/internal/xvfb"
 	"net/url"
 	"os"
 	"os/exec"
@@ -78,11 +79,27 @@ func (f PageRendererFunc) Render(ctx context.Context, rawURL string) (RenderedPa
 	return f(ctx, rawURL)
 }
 
+// BrowserWindow 决定一次性浏览器开不开窗口。
+type BrowserWindow string
+
+const (
+	// BrowserWindowHeadless 是默认：无头。HTML 出图、截图这些只渲染本地内容的场景
+	// 不会被任何网站风控，无头省资源也最稳。
+	BrowserWindowHeadless BrowserWindow = ""
+	// BrowserWindowHidden 是有头但看不见：窗口开在屏幕外面（Linux 容器里开在 Xvfb
+	// 虚拟屏上），也不抢前台。读网页、搜索用它——无头模式在渲染、GPU、屏幕尺寸这些
+	// 细节上会被网站认出来，搜索引擎和不少站点因此拦截或返回空结果。
+	BrowserWindowHidden BrowserWindow = "hidden"
+	// BrowserWindowVisible 是有头而且看得见，排查渲染问题用。
+	BrowserWindowVisible BrowserWindow = "visible"
+)
+
 type SandboxedBrowserConfig struct {
 	Executable string
-	// Headless 默认开启。显式设为 false 时仍使用一次性隔离 Profile，只是把
-	// Chrome 窗口显示出来，方便桌面机器调试和应对无头检测。
-	Headless          *bool
+	// Window 决定开不开窗口，默认无头。有头需要一块屏幕，这台机器凑不出来（Linux
+	// 上既没有图形会话也没装 Xvfb，比如 slim 镜像）时退回无头。每次仍是一次性的
+	// 隔离 Profile。
+	Window            BrowserWindow
 	Timeout           time.Duration
 	MaxHTMLBytes      int
 	MaxTextChars      int
@@ -162,8 +179,20 @@ func (b *SandboxedHeadlessBrowser) renderBrowser(queueCtx, ctx context.Context, 
 	return b.renderObservable(ctx, executable, dirs.root, dirs.profile, dirs.cache, dirs.crash, rawURL)
 }
 
-func (c SandboxedBrowserConfig) headless() bool {
-	return c.Headless == nil || *c.Headless
+// renderDisplay 是一次性有头浏览器共用的那块屏：有图形会话就用现成的，Linux 容器里
+// 按需拉一块 Xvfb，之后一直留着给后面的渲染用。
+var renderDisplay = &xvfb.Shared{Width: 1920, Height: 1080}
+
+// resolveWindow 决定这一次到底怎么开，以及要补给浏览器进程的环境变量。
+var resolveBrowserWindow = func(window BrowserWindow) (BrowserWindow, []string) {
+	if window == BrowserWindowHeadless {
+		return BrowserWindowHeadless, nil
+	}
+	env, ok := renderDisplay.Env()
+	if !ok {
+		return BrowserWindowHeadless, nil
+	}
+	return window, env
 }
 
 func sandboxedBrowserConfigWithDefaults(cfg SandboxedBrowserConfig) SandboxedBrowserConfig {
@@ -507,11 +536,21 @@ func sandboxedChromeBaseArgsForMode(profileDir, cacheDir, crashDir string, headl
 }
 
 func sandboxedChromeArgs(profileDir, cacheDir, crashDir string, cfg SandboxedBrowserConfig) []string {
-	return append(sandboxedChromeBaseArgsForMode(profileDir, cacheDir, crashDir, cfg.headless()),
+	return sandboxedChromeArgsForWindow(profileDir, cacheDir, crashDir, cfg.Window)
+}
+
+func sandboxedChromeArgsForWindow(profileDir, cacheDir, crashDir string, window BrowserWindow) []string {
+	args := append(sandboxedChromeBaseArgsForMode(profileDir, cacheDir, crashDir, window == BrowserWindowHeadless),
 		"--remote-debugging-address=127.0.0.1",
 		"--remote-debugging-port=0",
 		"--window-size=1280,960",
 	)
+	if window != BrowserWindowHeadless {
+		// 有头时不开启动窗口：macOS 上 Chrome 一开窗口就抢到前台，每读一个链接就把
+		// 人正在用的窗口抢走一次。页面由 openBackgroundPage 在后台另开。
+		args = append(args, "--no-startup-window")
+	}
+	return args
 }
 
 func sandboxedBrowserEnvironment(current []string, root string) []string {

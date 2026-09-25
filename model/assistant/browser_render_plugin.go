@@ -37,8 +37,8 @@ func (p *SandboxedBrowserRenderPlugin) Manifest() PluginManifest {
 	return PluginManifest{
 		ID:          sandboxedBrowserPluginID,
 		Name:        "网页渲染",
-		Version:     "0.3.2",
-		Description: "使用 Chromium / Google Chrome，在一次性隔离配置中执行 JavaScript。缺少浏览器时可在依赖管理中安装；支持无头或显示调试窗口。",
+		Version:     "0.3.3",
+		Description: "使用 Chromium / Google Chrome，在一次性隔离配置中执行 JavaScript。默认有头运行但窗口看不见，不容易被网站当成机器人拦掉；缺少浏览器时可在依赖管理中安装。",
 		Official:    true,
 		BuiltIn:     true,
 		Permissions: []string{"message:read", "network:http", "browser:render", "sandbox:ephemeral"},
@@ -47,11 +47,11 @@ func (p *SandboxedBrowserRenderPlugin) Manifest() PluginManifest {
 			Label:       "Chrome 窗口模式",
 			Type:        PluginSettingTypeSelect,
 			Default:     "auto",
-			Description: "自动和无头都在后台运行；可见窗口会打开独立临时 Chrome 窗口，不会读取日常浏览器的登录态。",
+			Description: "自动：有头运行，窗口开在屏幕外、容器里开在虚拟屏上，看不见也不抢前台，凑不出屏幕时退回无头。始终无头最省资源，但容易被网站认出来拦掉。显示窗口用来排查。都是一次性的临时配置，不读日常浏览器的登录态。",
 			Options: []PluginSettingOption{
 				{Value: "auto", Label: "自动（推荐）"},
 				{Value: "headless", Label: "始终无头"},
-				{Value: "visible", Label: "显示隔离窗口"},
+				{Value: "visible", Label: "显示窗口（排查用）"},
 			},
 		}},
 	}
@@ -61,8 +61,21 @@ func (p *SandboxedBrowserRenderPlugin) rendererFor(settings SettingValues) agent
 	if p.renderer != nil {
 		return p.renderer
 	}
-	headless := strings.ToLower(strings.TrimSpace(settings.String(browserRenderWindowModeSetting, "auto"))) != "visible"
-	return agent.NewSandboxedHeadlessBrowser(agent.SandboxedBrowserConfig{Headless: &headless})
+	return agent.NewSandboxedHeadlessBrowser(agent.SandboxedBrowserConfig{Window: browserRenderWindow(settings)})
+}
+
+// browserRenderWindow 把设置换成窗口模式。读网页默认有头：无头会被搜索引擎和不少站点
+// 认出来拦掉；有头的窗口开在屏幕外、容器里开在虚拟屏上，看不见也不抢前台，凑不出
+// 屏幕时自动退回无头。
+func browserRenderWindow(settings SettingValues) agent.BrowserWindow {
+	switch strings.ToLower(strings.TrimSpace(settings.String(browserRenderWindowModeSetting, "auto"))) {
+	case "headless":
+		return agent.BrowserWindowHeadless
+	case "visible":
+		return agent.BrowserWindowVisible
+	default:
+		return agent.BrowserWindowHidden
+	}
 }
 
 func (p *SandboxedBrowserRenderPlugin) Handle(ctx context.Context, req PluginRequest) (*PluginResponse, error) {

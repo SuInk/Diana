@@ -209,10 +209,10 @@ func TestStartVirtualDisplay(t *testing.T) {
 		t.Fatalf("虚拟显示起不来：%v", err)
 	}
 	defer display.Stop()
-	if !strings.HasPrefix(display.display, ":") || len(display.display) < 2 {
-		t.Fatalf("显示号不像话：%q", display.display)
+	if !strings.HasPrefix(display.Name(), ":") || len(display.Name()) < 2 {
+		t.Fatalf("显示号不像话：%q", display.Name())
 	}
-	if env := display.Env(); len(env) != 1 || env[0] != "DISPLAY="+display.display {
+	if env := display.Env(); len(env) != 1 || env[0] != "DISPLAY="+display.Name() {
 		t.Fatalf("没把 DISPLAY 传给浏览器：%v", env)
 	}
 }
