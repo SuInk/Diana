@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+
+	"github.com/SuInk/diana/model/llm"
 )
 
 func TestPublicChatErrorMessageHidesRelayURL(t *testing.T) {
@@ -168,6 +170,47 @@ func TestReplyAndRecordKeepsErrorSilentWhenErrorNotificationsDisabled(t *testing
 	}
 	if !strings.Contains(runtime.Status().LastError, "empty_finalize") {
 		t.Fatalf("diagnostic error was not retained: %q", runtime.Status().LastError)
+	}
+}
+
+func TestReplyAndRecordStaysSilentOnEmptyModelOutput(t *testing.T) {
+	enabled := true
+	tests := []struct {
+		name string
+		err  error
+	}{
+		{"untyped", errors.New("llm: openai-compatible responses output is empty (status=completed)")},
+		{"typed", fmt.Errorf("profile main: %w", llm.ErrCompletionEmpty)},
+		{"truncated", fmt.Errorf("profile main: %w", llm.ErrCompletionTruncatedNoText)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			channel := &recordingChannel{}
+			// 错误提示和人设改写都开着，空回也不该出声。
+			runtime := NewRuntime(BotConfig{ErrorNotifyEnabled: &enabled, ErrorPersonaReplyEnabled: &enabled}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+				return failingLLMProvider{err: tt.err}, nil
+			})
+			event := MessageEvent{Kind: EventKindGroup, GroupID: "group", UserID: "user", MessageID: "empty-output-" + tt.name}
+			outcome, err := runtime.replyAndRecord(context.Background(), event, "测试", "replied")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if outcome != "error_silent_empty_output" || len(channel.sent) != 0 {
+				t.Fatalf("outcome=%q sent=%#v", outcome, channel.sent)
+			}
+			if runtime.Status().LastError == "" {
+				t.Fatal("diagnostic error was not retained")
+			}
+		})
+	}
+}
+
+func TestIsEmptyModelOutputErrorLeavesImageFailuresVisible(t *testing.T) {
+	if isEmptyModelOutputError(errors.New("llm: image output is empty")) {
+		t.Fatal("empty image generation result must still be reported to the requester")
+	}
+	if isEmptyModelOutputError(fmt.Errorf("profile main: %w", llm.ErrCompletionHasNoText)) {
+		t.Fatal("terminal no-text outcome is not an empty upstream reply")
 	}
 }
 

@@ -92,6 +92,19 @@ func publicChatErrorMessage(err error) string {
 	return sanitizePublicErrorDetail(raw)
 }
 
+// isEmptyModelOutputError 认出「上游模型这次什么都没返回」。生图接口的空结果
+// 不算：那是用户点名要的图没出来，得告诉对方。
+func isEmptyModelOutputError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, llm.ErrCompletionEmpty) || errors.Is(err, llm.ErrCompletionTruncatedNoText) {
+		return true
+	}
+	lower := strings.ToLower(err.Error())
+	return strings.Contains(lower, "output is empty") && !strings.Contains(lower, "image output is empty")
+}
+
 // publicTaskErrorMessage 给后台任务（RSS、仓库订阅、周期任务、后台子任务）的失败提示用。
 // publicChatErrorMessage 默认错误来自聊天回复那一次模型调用，所以把任何超时都说成
 // 「上游模型服务请求超时」；后台任务的超时却多半出在抓 Feed、查 GitHub 或任务自己的
