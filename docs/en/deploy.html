@@ -77,7 +77,7 @@ cd diana-webui-darwin-arm64
 
       <section class="section searchable" id="docker">
         <div class="section-heading"><p class="eyebrow">Docker</p><h2>Container deployment</h2></div>
-        <div class="callout"><strong>Persistence</strong><p>You must mount <code>/app/data</code> and <code>/app/logs</code>, or rebuilding the container loses the SQLite database and your credentials.</p></div>
+        <div class="callout"><strong>Persistence</strong><p>You must mount <code>/app/data</code> and <code>/app/logs</code>, or rebuilding the container loses the SQLite database and your credentials. <code>data/</code> also holds plugins, skills, MCP configuration, browser and coding-CLI logins and update backups; the runtime log goes to <code>logs/diana.log</code>. On start the container hands both directories to its runtime user (UID 10001), so host directories Docker created as root still work.</p></div>
         <p>The published image means you do not have to clone the repository:</p>
         <pre><code>curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/docker.sh | sh</code></pre>
         <p>For updates, run in the same deployment directory:</p>

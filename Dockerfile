@@ -73,6 +73,15 @@ RUN apt-get update \
 # gitea-mcp 放在主程序旁边，MCP 预设按这个位置拉起它；许可证随二进制一起带上。
 COPY --from=gitea-mcp /out/gitea-mcp /app/gitea-mcp
 COPY --from=gitea-mcp /out/gitea-mcp.LICENSE /app/gitea-mcp.LICENSE
+# 入口以 root 起步，把挂进来的 data/logs 交给 diana 后再降权启动主程序。
+# 不能直接 USER diana：Linux 上 bind mount 自动建出来的宿主机目录归 root，
+# diana 写不进去，SQLite 和日志都起不来。
+COPY --chmod=0755 scripts/docker/entrypoint.sh /usr/local/bin/diana-entrypoint
+# DIANA_DEPLOYMENT 让控制台按 Docker 部署处理更新：只提示新版本，不在容器里下载和
+# 替换程序（/app 只读，重建容器也会丢），升级靠拉新镜像。DIANA_LOG_PATH 在
+# config.yaml 没写 storage.log_path 时把日志写进挂出来的 /app/logs。
+ENV DIANA_DEPLOYMENT=docker \
+    DIANA_LOG_PATH=/app/logs/diana.log
 
 # 完整版运行时：预装 Chromium（网页读取/截图）、Noto CJK 字体、ffmpeg、
 # yt-dlp 与 tesseract 及中英语言包（图片文字识别插件的本地离线后端）。
@@ -100,8 +109,7 @@ COPY --from=frontend-next /src/frontend-next/dist /app/frontend-next/dist
 COPY packaging/browser-control-extension /app/browser-control-extension
 ENV DIANA_CONFIG=/app/config.yaml
 EXPOSE 18080
-USER diana
-ENTRYPOINT ["/usr/bin/tini", "-s", "--", "/app/diana-webui"]
+ENTRYPOINT ["/usr/bin/tini", "-s", "--", "/usr/local/bin/diana-entrypoint", "/app/diana-webui"]
 
 FROM runtime-full AS runtime
 COPY --from=backend /out/diana-webui /app/diana-webui
@@ -110,5 +118,4 @@ COPY packaging/browser-control-extension /app/browser-control-extension
 # 应用配置走 config.yaml；镜像内只放一份内置默认配置，挂载同名文件即可覆盖。
 ENV DIANA_CONFIG=/app/config.yaml
 EXPOSE 18080
-USER diana
-ENTRYPOINT ["/usr/bin/tini", "-s", "--", "/app/diana-webui"]
+ENTRYPOINT ["/usr/bin/tini", "-s", "--", "/usr/local/bin/diana-entrypoint", "/app/diana-webui"]

@@ -93,6 +93,17 @@ type updateConfig struct {
 // 容器里挂载路径各不相同，总得有个办法告诉进程去哪找 config.yaml。
 const configPathEnv = "DIANA_CONFIG"
 
+// logPathEnv 在 config.yaml 没写 storage.log_path 时提供日志文件位置。
+// Docker 镜像用它把日志写进挂出来的 /app/logs，否则日志只在容器标准输出里，
+// 重建容器就没了。
+const logPathEnv = "DIANA_LOG_PATH"
+
+func (cfg *appConfig) applyEnvironmentDefaults() {
+	if strings.TrimSpace(cfg.Storage.LogPath) == "" {
+		cfg.Storage.LogPath = strings.TrimSpace(os.Getenv(logPathEnv))
+	}
+}
+
 // defaultConfigFileName 是不指定路径时按约定查找的文件名。
 const defaultConfigFileName = "config.yaml"
 
@@ -157,6 +168,7 @@ func loadAppConfig(path string) (appConfig, error) {
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			cfg.path = ""
+			cfg.applyEnvironmentDefaults()
 			return cfg, nil
 		}
 		return cfg, fmt.Errorf("read config %s: %w", path, err)
@@ -178,6 +190,7 @@ func loadAppConfig(path string) (appConfig, error) {
 		return cfg, fmt.Errorf("storage download_cache_max_mb must be between 0 and 1048576")
 	}
 	cfg.path = path
+	cfg.applyEnvironmentDefaults()
 	return cfg, nil
 }
 

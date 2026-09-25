@@ -749,3 +749,36 @@ func TestValidateReleaseApplyPlanRejectsUnsafeSupervisor(t *testing.T) {
 		t.Fatalf("validateReleaseApplyPlan() rejected a normal launchd job: %v", err)
 	}
 }
+
+func TestReleasePackageUpdaterUnsupportedInContainer(t *testing.T) {
+	// The image has the same layout as a complete package, so only the
+	// explicit container flag keeps the updater from replacing /app in place.
+	binaryName := expectedReleaseBinaryName(runtime.GOOS, runtime.GOARCH)
+	installRoot := t.TempDir()
+	executable := filepath.Join(installRoot, binaryName)
+	frontend := filepath.Join(installRoot, "frontend-next", "dist")
+	database := filepath.Join(installRoot, "data", "diana.db")
+	writeUpdaterTestFile(t, executable, "binary", 0o700)
+	writeUpdaterTestFile(t, filepath.Join(frontend, "index.html"), "frontend", 0o600)
+	writeUpdaterTestFile(t, database, "db", 0o600)
+	options := ReleasePackageOptions{
+		CurrentVersion: "v0.4.0",
+		Executable:     executable,
+		FrontendDir:    frontend,
+		DatabasePath:   database,
+		HealthURL:      "http://127.0.0.1:18080/api/health",
+	}
+	for _, container := range []bool{false, true} {
+		options.Container = container
+		u, err := NewReleasePackageUpdater(options)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if u.Supported() == container {
+			t.Fatalf("container=%v: supported=%v reason=%q", container, u.Supported(), u.UnsupportedReason())
+		}
+		if container && !strings.Contains(u.UnsupportedReason(), "pulling a new image") {
+			t.Fatalf("container reason = %q", u.UnsupportedReason())
+		}
+	}
+}

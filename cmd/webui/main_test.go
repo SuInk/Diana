@@ -235,6 +235,31 @@ func TestLoadAppConfigTreatsMissingFileAsDefaults(t *testing.T) {
 	}
 }
 
+// TestLoadAppConfigLogPathFromEnvironment Docker 镜像靠 DIANA_LOG_PATH 把日志
+// 写进挂出来的目录；config.yaml 里写了 log_path 时以配置为准。
+func TestLoadAppConfigLogPathFromEnvironment(t *testing.T) {
+	t.Setenv(logPathEnv, "/app/logs/diana.log")
+	cfg, err := loadAppConfig(filepath.Join(t.TempDir(), "absent.yaml"))
+	if err != nil || cfg.Storage.LogPath != "/app/logs/diana.log" {
+		t.Fatalf("missing config: log path = %q, err = %v", cfg.Storage.LogPath, err)
+	}
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte("storage:\n  log_path: /srv/diana.log\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err = loadAppConfig(path)
+	if err != nil || cfg.Storage.LogPath != "/srv/diana.log" {
+		t.Fatalf("configured: log path = %q, err = %v", cfg.Storage.LogPath, err)
+	}
+	if err := os.WriteFile(path, []byte("server:\n  port: \"18080\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err = loadAppConfig(path)
+	if err != nil || cfg.Storage.LogPath != "/app/logs/diana.log" {
+		t.Fatalf("unset in config: log path = %q, err = %v", cfg.Storage.LogPath, err)
+	}
+}
+
 // TestLoadAppConfigRejectsBrokenYAML 配置写错必须直接报错退出，不能静默用默认值
 // 顶上去——那样等于把一份没生效的配置留在机器上继续误导人。
 func TestLoadAppConfigRejectsBrokenYAML(t *testing.T) {

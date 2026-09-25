@@ -386,6 +386,7 @@ func main() {
 		Shutdown:       cancel,
 		UpdatesDir:     appCfg.Update.WorkDir,
 		Disable:        !boolOr(appCfg.Update.ReleaseEnabled, true),
+		Container:      strings.TrimSpace(os.Getenv("DIANA_DEPLOYMENT")) == "docker",
 	})
 	if err != nil {
 		log.Fatal(err)
