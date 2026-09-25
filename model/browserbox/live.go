@@ -52,7 +52,6 @@ type Frame struct {
 	Scale float64 `json:"scale"`
 	// Timestamp 是浏览器画出这一帧的时刻（Unix 秒），前端和测试拿它算画面滞后多少。
 	Timestamp float64 `json:"timestamp,omitempty"`
-	TabURL    string  `json:"tab_url,omitempty"`
 
 	// ackID 是浏览器给这一帧的回执编号，Ack 用。
 	ackID int
@@ -90,17 +89,35 @@ var (
 	}
 )
 
+// PageInfo 是画面里这个标签页眼下的地址、标题和是否在加载。前端的地址栏和标题跟着
+// 它走：以前只在连上画面那一刻读一次，机器人或用户点进别的页面之后，地址栏和标题
+// 还停在最早那一页。
+type PageInfo struct {
+	URL     string `json:"url"`
+	Title   string `json:"title"`
+	Loading bool   `json:"loading"`
+}
+
+// liveTitleTimeout 是读页面标题最多等多久。页面主线程卡住时 Runtime.evaluate 不回，
+// 读标题在单独的 goroutine 里，不会拖住出帧，只是标题不更新。
+const liveTitleTimeout = 3 * time.Second
+
 // Live 是一条实时画面会话：一个标签页的画面出去，用户的输入进来。
 type Live struct {
 	session *Session
 	// frames 只放最新的一帧：取走之前又来了新的，旧的直接作废。
 	frames chan Frame
-	tabURL string
+	// pages 同样只放最新的一份页面信息。
+	pages chan PageInfo
 
 	mu     sync.Mutex
 	closed bool
 	// err 是画面流为什么断了；正常关闭时为 nil。
 	err error
+	// page 是当前的页面信息，mainFrame 是主框架的 ID：子框架（广告、嵌入页）的
+	// 跳转和加载不算这一页的。
+	page      PageInfo
+	mainFrame string
 }
 
 // StartLive 连上标签页并开始推帧。
@@ -109,7 +126,7 @@ func StartLive(ctx context.Context, websocketURL, tabURL string, width, height i
 	if err != nil {
 		return nil, err
 	}
-	live := &Live{session: session, frames: make(chan Frame, 1), tabURL: tabURL}
+	live := &Live{session: session, frames: make(chan Frame, 1), pages: make(chan PageInfo, 1), page: PageInfo{URL: tabURL}}
 	startCtx, cancel := context.WithTimeout(ctx, liveStartTimeout)
 	defer cancel()
 	// Inspector 域由浏览器进程处理，页面卡着也回；对已经崩掉的标签页，它一开就先推一条
@@ -118,6 +135,20 @@ func StartLive(ctx context.Context, websocketURL, tabURL string, width, height i
 	if err := session.Call(startCtx, "Page.enable", nil, nil); err != nil {
 		session.Close()
 		return nil, liveStartError(ctx, startCtx, err)
+	}
+	var tree struct {
+		FrameTree struct {
+			Frame struct {
+				ID  string `json:"id"`
+				URL string `json:"url"`
+			} `json:"frame"`
+		} `json:"frameTree"`
+	}
+	if session.Call(startCtx, "Page.getFrameTree", nil, &tree) == nil {
+		live.mainFrame = tree.FrameTree.Frame.ID
+		if tree.FrameTree.Frame.URL != "" {
+			live.page.URL = tree.FrameTree.Frame.URL
+		}
 	}
 	// 先把焦点给页面，否则无头模式下键盘事件会被丢掉。
 	_ = session.Call(startCtx, "Emulation.setFocusEmulationEnabled", map[string]any{"enabled": true}, nil)
@@ -135,7 +166,109 @@ func StartLive(ctx context.Context, websocketURL, tabURL string, width, height i
 		defer recoverGoroutinePanic("screencast")
 		live.pump()
 	}()
+	live.refreshTitle()
 	return live, nil
+}
+
+// Pages 返回页面信息的更新，里面永远只有最新的一份。
+func (l *Live) Pages() <-chan PageInfo { return l.pages }
+
+// Page 返回当前的页面信息。
+func (l *Live) Page() PageInfo {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.page
+}
+
+// updatePage 改一下页面信息，有变化就投递出去。
+func (l *Live) updatePage(change func(page *PageInfo)) {
+	l.mu.Lock()
+	before := l.page
+	change(&l.page)
+	after := l.page
+	l.mu.Unlock()
+	if after == before {
+		return
+	}
+	select {
+	case l.pages <- after:
+	default:
+		select {
+		case <-l.pages:
+		default:
+		}
+		select {
+		case l.pages <- after:
+		default:
+		}
+	}
+}
+
+// refreshTitle 在后台读一次页面标题。
+func (l *Live) refreshTitle() {
+	go func() {
+		defer recoverGoroutinePanic("liveTitle")
+		ctx, cancel := context.WithTimeout(context.Background(), liveTitleTimeout)
+		defer cancel()
+		var result struct {
+			Result struct {
+				Value string `json:"value"`
+			} `json:"result"`
+		}
+		if l.session.Call(ctx, "Runtime.evaluate", map[string]any{"expression": "document.title", "returnByValue": true}, &result) != nil {
+			return
+		}
+		l.updatePage(func(page *PageInfo) { page.Title = result.Result.Value })
+	}()
+}
+
+// handlePageEvent 跟着主框架的跳转和加载更新页面信息。
+func (l *Live) handlePageEvent(event Event) {
+	var payload struct {
+		FrameID string `json:"frameId"`
+		URL     string `json:"url"`
+		Frame   struct {
+			ID       string `json:"id"`
+			ParentID string `json:"parentId"`
+			URL      string `json:"url"`
+		} `json:"frame"`
+	}
+	if json.Unmarshal(event.Params, &payload) != nil {
+		return
+	}
+	isMain := func(id string) bool {
+		l.mu.Lock()
+		defer l.mu.Unlock()
+		return id != "" && id == l.mainFrame
+	}
+	switch event.Method {
+	case "Page.frameNavigated":
+		if payload.Frame.ParentID != "" {
+			return
+		}
+		l.mu.Lock()
+		l.mainFrame = payload.Frame.ID
+		l.mu.Unlock()
+		// 标题要等页面加载完才有，这里先清空，免得新地址配着上一页的标题。
+		l.updatePage(func(page *PageInfo) {
+			page.URL = payload.Frame.URL
+			page.Title = ""
+		})
+	case "Page.navigatedWithinDocument":
+		if isMain(payload.FrameID) {
+			l.updatePage(func(page *PageInfo) { page.URL = payload.URL })
+			l.refreshTitle()
+		}
+	case "Page.frameStartedLoading":
+		if isMain(payload.FrameID) {
+			l.updatePage(func(page *PageInfo) { page.Loading = true })
+		}
+	case "Page.frameStoppedLoading":
+		if isMain(payload.FrameID) {
+			l.updatePage(func(page *PageInfo) { page.Loading = false })
+			l.refreshTitle()
+		}
+	}
 }
 
 // liveStartError 把「连画面时标签页没回话」换成能看懂的原因；调用方自己取消的保持原样。
@@ -180,6 +313,7 @@ func (l *Live) pump() {
 			return
 		}
 		if event.Method != "Page.screencastFrame" {
+			l.handlePageEvent(event)
 			continue
 		}
 		var payload struct {
@@ -212,7 +346,6 @@ func (l *Live) pump() {
 			PageY:     payload.Metadata.ScrollOffsetY,
 			Scale:     payload.Metadata.PageScaleFactor,
 			Timestamp: payload.Metadata.Timestamp,
-			TabURL:    l.tabURL,
 		}
 		// 还没被取走的那一帧已经过时了：换成这一帧，并替它回执，浏览器才会接着出帧。
 		select {
@@ -290,7 +423,6 @@ func (l *Live) Text(ctx context.Context, text string) error {
 
 // Navigate 在这个标签页里跳转。站点是否允许由调用方先判断。
 func (l *Live) Navigate(ctx context.Context, pageURL string) error {
-	l.tabURL = pageURL
 	return l.session.Call(ctx, "Page.navigate", map[string]any{"url": pageURL}, nil)
 }
 

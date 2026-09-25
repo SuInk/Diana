@@ -35,6 +35,7 @@ func newIdleTestManager(t *testing.T) (*Manager, *fakeClock) {
 	clock := &fakeClock{now: time.Date(2026, 9, 25, 10, 0, 0, 0, time.UTC)}
 	manager.mu.Lock()
 	manager.now = clock.Now
+	manager.takeoverLeave = time.Hour
 	manager.mu.Unlock()
 	t.Cleanup(func() { manager.Bot("bot-a").SetTakeover(false) })
 	return manager, clock
@@ -44,7 +45,7 @@ func newIdleTestManager(t *testing.T) (*Manager, *fakeClock) {
 func TestTakeoverIdleReleases(t *testing.T) {
 	manager, clock := newIdleTestManager(t)
 	var released []string
-	manager.OnIdleRelease(func(botID string, idle time.Duration) {
+	manager.OnAutoRelease(func(botID, _ string, idle time.Duration) {
 		if idle != TakeoverIdleTimeout {
 			t.Errorf("回调带的期限不对：%s", idle)
 		}
@@ -103,7 +104,7 @@ func TestTakeoverIdleTimerFires(t *testing.T) {
 	manager.takeoverIdle = 20 * time.Millisecond
 	manager.mu.Unlock()
 	done := make(chan string, 1)
-	manager.OnIdleRelease(func(botID string, _ time.Duration) { done <- botID })
+	manager.OnAutoRelease(func(botID, _ string, _ time.Duration) { done <- botID })
 	manager.Bot("bot-a").SetTakeover(true)
 	select {
 	case id := <-done:
@@ -122,12 +123,86 @@ func TestManualReleaseCancelsIdleTimer(t *testing.T) {
 	manager.takeoverIdle = 20 * time.Millisecond
 	manager.mu.Unlock()
 	fired := make(chan struct{}, 1)
-	manager.OnIdleRelease(func(string, time.Duration) { fired <- struct{}{} })
+	manager.OnAutoRelease(func(string, string, time.Duration) { fired <- struct{}{} })
 	manager.Bot("bot-a").SetTakeover(true)
 	manager.Bot("bot-a").SetTakeover(false)
 	select {
 	case <-fired:
 		t.Fatal("手动交还后不该再自动交还")
 	case <-time.After(100 * time.Millisecond):
+	}
+}
+
+// 接管中的人离开画面（最后一条画面连接断开）满宽限还没回来，就交还给机器人，记下原因。
+func TestTakeoverReleasedAfterViewerLeaves(t *testing.T) {
+	manager := New(context.Background(), &memoryStore{}, t.TempDir())
+	manager.takeoverLeave = 30 * time.Millisecond
+	type release struct {
+		bot, reason string
+	}
+	released := make(chan release, 1)
+	manager.OnAutoRelease(func(botID, reason string, _ time.Duration) { released <- release{botID, reason} })
+	bot := manager.Bot("bot-a")
+	t.Cleanup(func() { bot.SetTakeover(false) })
+
+	detach := bot.AttachViewer()
+	bot.SetTakeover(true)
+	time.Sleep(80 * time.Millisecond)
+	if !bot.Takeover() {
+		t.Fatal("还有人在看画面，不该交还")
+	}
+	detach()
+	detach() // 重复调用只算一次离开
+	select {
+	case got := <-released:
+		if got.bot != "bot-a" || got.reason != AutoReleaseLeft {
+			t.Fatalf("交还回调参数不对：%+v", got)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("人离开画面之后没有自动交还")
+	}
+	if bot.Takeover() {
+		t.Fatal("交还之后接管应当关掉")
+	}
+}
+
+// 画面断开后很快又连回来（断线重连、代理掐掉长连接）不算离开，接管保留。
+func TestViewerReturningWithinGraceKeepsTakeover(t *testing.T) {
+	manager := New(context.Background(), &memoryStore{}, t.TempDir())
+	manager.takeoverLeave = 60 * time.Millisecond
+	manager.OnAutoRelease(func(string, string, time.Duration) { t.Error("回来了就不该交还") })
+	bot := manager.Bot("bot-a")
+	t.Cleanup(func() {
+		manager.OnAutoRelease(nil)
+		bot.SetTakeover(false)
+	})
+
+	first := bot.AttachViewer()
+	bot.SetTakeover(true)
+	first()
+	time.Sleep(20 * time.Millisecond)
+	second := bot.AttachViewer()
+	defer second()
+	time.Sleep(120 * time.Millisecond)
+	if !bot.Takeover() {
+		t.Fatal("宽限内连回来了，接管应当保留")
+	}
+}
+
+// 两个窗口都开着画面，关掉一个不算离开。
+func TestTakeoverKeptWhileAnotherViewerStays(t *testing.T) {
+	manager := New(context.Background(), &memoryStore{}, t.TempDir())
+	manager.takeoverLeave = 30 * time.Millisecond
+	bot := manager.Bot("bot-a")
+	t.Cleanup(func() { bot.SetTakeover(false) })
+
+	a := bot.AttachViewer()
+	b := bot.AttachViewer()
+	defer b()
+	bot.SetTakeover(true)
+	a()
+	time.Sleep(80 * time.Millisecond)
+	if !bot.Takeover() {
+		t.Fatal("另一个窗口还在看，不该交还")
 	}
 }

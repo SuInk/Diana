@@ -103,18 +103,10 @@
                 </a>
               </div>
               <!-- 勾上就是开着，没有启动、停止、「我来操作」这些按钮：进程在机器人要用或你打开这一页时
-                   自动拉起，取消勾选才停；在画面上点一下就自动转为你接管，这时才出现「交还给机器人」，
-                   闲置一段时间也会自动交还。 -->
-              <div
-                v-if="key === 'box' && sourceState?.box.enabled && botID && ((status.running && status.takeover) || status.last_error)"
-                class="browser-toggle-actions"
-              >
-                <template v-if="status.running && status.takeover">
-                  <button class="btn small warn" type="button" :disabled="busy" @click="handBack">交还给机器人</button>
-                  <span class="browser-toggle-note">你在画面上动过手，机器人暂时用不了这个浏览器；{{ takeoverIdleMinutes }} 分钟不操作会自动交还</span>
-                </template>
-                <span v-if="status.last_error" class="browser-toggle-error">最近一次错误：{{ status.last_error }}</span>
-              </div>
+                   自动拉起，取消勾选才停。接管和「交还给机器人」在画面底部的状态栏里。 -->
+              <p v-if="key === 'box' && sourceState?.box.enabled && botID && status.last_error" class="browser-toggle-error">
+                最近一次错误：{{ status.last_error }}
+              </p>
             </div>
           </div>
           <!-- 外接 CDP 没有勾选框：配了地址就算有，内置浏览器没在用的时候 browser_* 改接它。 -->
@@ -145,26 +137,51 @@
         </p>
       </div>
     </div>
-    <div v-if="sourceState?.box.enabled && botID && status.running" class="card">
-      <div class="card-header">
-        <h2>画面</h2>
-        <span class="card-sub">{{ currentTitle || "空白页" }}</span>
-      </div>
-      <div class="card-body stack">
-        <div class="row gap">
-          <button class="btn small ghost" type="button" @click="send({ type: 'back' })">后退</button>
-          <button class="btn small ghost" type="button" @click="send({ type: 'reload' })">刷新</button>
-          <input
-            v-model="addressInput"
-            class="input"
-            style="flex: 1; min-width: 220px"
-            placeholder="https://example.com"
-            @keydown.enter="onAddressEnter"
-          />
-          <button class="btn small" type="button" @click="navigate">打开</button>
+    <!-- 画面做成一个浏览器窗口：标签、工具栏、画面、状态栏拼成一整块。谁在控制这个浏览器
+         是这里最要紧的信息，放在状态栏里一直看得见，交还也在那里点。 -->
+    <div v-if="sourceState?.box.enabled && botID && status.running" class="card browser-live-card">
+      <div ref="liveWindow" class="browser-window" :class="{ 'is-takeover': status.takeover, 'is-fullscreen': fullscreen }">
+        <div class="browser-tabbar">
+          <span class="browser-tab" :title="currentTitle || addressInput">
+            <Globe :size="13" aria-hidden="true" />
+            <span class="browser-tab-title">{{ currentTitle || pageHost || "新标签页" }}</span>
+          </span>
         </div>
+        <div class="browser-toolbar">
+          <button class="browser-tool" type="button" title="后退" aria-label="后退" @click="send({ type: 'back' })">
+            <ArrowLeft :size="16" aria-hidden="true" />
+          </button>
+          <button class="browser-tool" type="button" title="刷新" aria-label="刷新" @click="send({ type: 'reload' })">
+            <RotateCw :size="15" aria-hidden="true" />
+          </button>
+          <label class="browser-address">
+            <Lock v-if="addressSecure" :size="13" class="browser-address-icon" aria-hidden="true" />
+            <Search v-else :size="13" class="browser-address-icon" aria-hidden="true" />
+            <input
+              ref="addressField"
+              v-model="addressInput"
+              aria-label="网址"
+              placeholder="输入网址，回车打开"
+              spellcheck="false"
+              autocomplete="off"
+              @focus="($event.target as HTMLInputElement).select()"
+              @keydown.enter="onAddressEnter"
+            />
+          </label>
+          <button
+            class="browser-tool"
+            type="button"
+            :title="fullscreen ? '退出全屏' : '全屏'"
+            :aria-label="fullscreen ? '退出全屏' : '全屏'"
+            @click="toggleFullscreen"
+          >
+            <Minimize2 v-if="fullscreen" :size="15" aria-hidden="true" />
+            <Maximize2 v-else :size="15" aria-hidden="true" />
+          </button>
+        </div>
+        <div class="browser-progress" :class="{ active: pageLoading }" aria-hidden="true"></div>
 
-        <div class="browser-stage" @contextmenu.prevent>
+        <div class="browser-stage" :class="{ empty: !hasFrame }" @contextmenu.prevent>
           <!-- canvas 一直在：帧是异步解码后画上去的，没有画面时只是藏起来。 -->
           <canvas
             v-show="hasFrame"
@@ -179,16 +196,28 @@
             @keydown="onKey($event, 'keyDown')"
             @keyup="onKey($event, 'keyUp')"
           />
-          <span v-if="hasFrame && reconnecting" class="browser-live-badge">正在重新连接……</span>
           <div v-if="!hasFrame && liveNotice" class="browser-live-notice">
             <p style="margin: 0; font-size: 13px">{{ liveNotice }}</p>
             <button class="btn small ghost" type="button" @click="reconnectLive">重新连接</button>
           </div>
           <p v-else-if="!hasFrame" class="muted" style="margin: 0; font-size: 13px">正在连接画面……</p>
         </div>
-        <p class="muted" style="margin: 0; font-size: 12.5px">
-          点一下画面就转为你接管，之后才能打字、滚动；鼠标划过、滚轮、按键都不算。{{ takeoverIdleMinutes }} 分钟不操作会自动交还给机器人。密码这类东西你自己输，机器人看不到你敲了什么——它只能看到页面最终长什么样。
-        </p>
+
+        <div class="browser-statusbar" role="status">
+          <span class="browser-status-dot" aria-hidden="true"></span>
+          <template v-if="status.takeover">
+            <strong>你在操作</strong>
+            <span class="browser-status-hint">
+              机器人暂时用不了，也看不到你敲了什么；离开这个画面或 {{ takeoverIdleMinutes }} 分钟不操作就交还给它
+            </span>
+            <button class="btn small browser-handback" type="button" :disabled="busy" @click="handBack">交还给机器人</button>
+          </template>
+          <template v-else>
+            <strong>机器人在用</strong>
+            <span class="browser-status-hint">点一下画面就转为你接管，之后才能打字、滚动</span>
+          </template>
+          <span class="browser-status-live" :class="{ warn: !liveHealthy }">{{ liveLabel }}</span>
+        </div>
       </div>
     </div>
 
@@ -285,7 +314,7 @@ import { botScope } from "../bot-scope";
 import { formatTime } from "../format";
 import { pluginForBot } from "../plugin-settings";
 import { navigate as navigateToView } from "../router";
-import { ArrowUp, ChevronDown } from "@lucide/vue";
+import { ArrowLeft, ArrowUp, ChevronDown, Globe, Lock, Maximize2, Minimize2, RotateCw, Search } from "@lucide/vue";
 import AgentBrowserPanel from "../components/AgentBrowserPanel.vue";
 import Modal from "../components/Modal.vue";
 import PluginDependencyList from "../components/PluginDependencyList.vue";
@@ -504,7 +533,48 @@ const reconnecting = ref(false);
 let frameMeta: LiveFrameMeta | null = null;
 const screen = ref<HTMLCanvasElement | null>(null);
 const addressInput = ref("");
+const addressField = ref<HTMLInputElement | null>(null);
 const currentTitle = ref("");
+const pageLoading = ref(false);
+const liveWindow = ref<HTMLElement | null>(null);
+const fullscreen = ref(false);
+const addressSecure = computed(() => /^https:\/\//i.test(addressInput.value.trim()));
+const pageHost = computed(() => {
+  try {
+    return new URL(addressInput.value.trim()).host;
+  } catch {
+    return "";
+  }
+});
+const liveHealthy = computed(() => hasFrame.value && !reconnecting.value);
+const liveLabel = computed(() => (reconnecting.value ? "重新连接中…" : hasFrame.value ? "实时" : "连接中…"));
+
+interface LivePage {
+  url?: string;
+  title?: string;
+  loading?: boolean;
+}
+
+// 地址栏正在输入时不拿页面地址盖掉，打到一半被冲掉最让人恼火。
+function applyPage(page: LivePage | undefined): void {
+  if (!page) return;
+  if (document.activeElement !== addressField.value) addressInput.value = page.url ?? "";
+  currentTitle.value = page.title ?? "";
+  pageLoading.value = Boolean(page.loading);
+}
+
+async function toggleFullscreen(): Promise<void> {
+  try {
+    if (document.fullscreenElement) await document.exitFullscreen();
+    else await liveWindow.value?.requestFullscreen();
+  } catch {
+    // 浏览器不让全屏（比如嵌在不允许全屏的 iframe 里）就算了。
+  }
+}
+
+function onFullscreenChange(): void {
+  fullscreen.value = document.fullscreenElement !== null && document.fullscreenElement === liveWindow.value;
+}
 const saving = ref(false);
 const busy = ref(false);
 // 和后端 browserbox.TakeoverIdleTimeout 一致，只用来在页面上说清楚。
@@ -576,7 +646,11 @@ function moveSource(index: number, delta: -1 | 1): void {
 async function refresh(): Promise<void> {
   try {
     const next = await getBrowserBoxStatus(botID || undefined);
+    // 连着画面时接管状态以画面连接的推送为准：轮询请求要是在交还之前发出、交还之后才
+    // 回来，会把刚推过来的「已交还」又改回「你在操作」。
+    const pushedTakeover = socket?.readyState === WebSocket.OPEN ? status.takeover : null;
     Object.assign(status, next);
+    if (pushedTakeover !== null) status.takeover = pushedTakeover;
     Object.assign(settings, next.settings);
     if (next.running && !socket && botID && pageActive && !document.hidden) connectLive();
     if (!next.running && (socket || hasFrame.value)) disconnectLive();
@@ -653,13 +727,13 @@ function connectLive(): void {
     const message = JSON.parse(event.data) as {
       type: string;
       tab?: { url?: string; title?: string };
+      page?: LivePage;
       takeover?: boolean;
       active?: boolean;
       message?: string;
     };
     if (message.type === "ready") {
-      addressInput.value = message.tab?.url ?? "";
-      currentTitle.value = message.tab?.title ?? "";
+      applyPage(message.page ?? message.tab);
       status.takeover = Boolean(message.takeover);
       clearFirstFrameTimer();
       firstFrameTimer = window.setTimeout(() => {
@@ -667,6 +741,8 @@ function connectLive(): void {
           liveNotice.value = "画面 10 秒还没出来：这个页面可能卡住了（脚本卡死或渲染进程崩溃）。可以点「刷新」、在地址栏换个网址，或者重新连接。";
         }
       }, firstFrameTimeoutMS);
+    } else if (message.type === "page") {
+      applyPage(message.page);
     } else if (message.type === "takeover") {
       // 闲置自动交还、别的窗口点了交还，都从这里当场知道，不用等下一次轮询。
       status.takeover = Boolean(message.active);
@@ -889,6 +965,8 @@ function onAddressEnter(event: KeyboardEvent): void {
   if (event.isComposing || event.keyCode === 229) return;
   event.preventDefault();
   navigate();
+  // 打开之后把焦点还给页面，地址栏才会跟着跳转后的真实地址变。
+  addressField.value?.blur();
 }
 
 function navigate(): void {
@@ -928,6 +1006,7 @@ function stopPage(): void {
 
 onMounted(() => {
   document.addEventListener("visibilitychange", onVisibilityChange);
+  document.addEventListener("fullscreenchange", onFullscreenChange);
   startPage();
 });
 
@@ -940,6 +1019,7 @@ onDeactivated(stopPage);
 
 onBeforeUnmount(() => {
   document.removeEventListener("visibilitychange", onVisibilityChange);
+  document.removeEventListener("fullscreenchange", onFullscreenChange);
   stopPage();
   if (moveFrame) window.cancelAnimationFrame(moveFrame);
   if (wheelFrame) window.cancelAnimationFrame(wheelFrame);
@@ -1102,20 +1182,8 @@ onBeforeUnmount(() => {
   cursor: default;
 }
 
-.browser-toggle-actions {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-  margin-top: 6px;
-}
-
-.browser-toggle-note {
-  color: var(--muted);
-  font-size: 12.5px;
-}
-
 .browser-toggle-error {
+  margin: 2px 0 0;
   font-size: 12.5px;
   color: var(--warn);
 }
@@ -1132,16 +1200,169 @@ onBeforeUnmount(() => {
   transform: rotate(180deg);
 }
 
+/* 画面卡片本身不留内边距，窗口贴着卡片边：标签、工具栏、画面、状态栏是一整块。 */
+.browser-live-card {
+  overflow: hidden;
+}
+
+.browser-window {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border-radius: inherit;
+}
+
+/* 你在操作时整块描一圈主题色：一眼能看出这会儿浏览器在谁手里。描边叠在最上面一层，
+   不然会被标签栏和画面的底色盖住。 */
+.browser-window::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  border: 2px solid transparent;
+  border-radius: inherit;
+  pointer-events: none;
+  transition: border-color 0.15s ease;
+}
+
+.browser-window.is-takeover::after {
+  border-color: var(--accent);
+}
+
+.browser-tabbar {
+  display: flex;
+  align-items: flex-end;
+  padding: 8px 12px 0;
+  background: var(--surface-2);
+}
+
+.browser-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: min(320px, 100%);
+  padding: 7px 14px;
+  border-radius: 10px 10px 0 0;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 12.5px;
+}
+
+.browser-tab > svg {
+  flex: 0 0 auto;
+  color: var(--muted);
+}
+
+.browser-tab-title {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.browser-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 10px;
+}
+
+.browser-tool {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.browser-tool:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.browser-address {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+  height: 34px;
+  margin: 0 4px;
+  padding: 0 14px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: var(--surface-2);
+  cursor: text;
+}
+
+.browser-address:focus-within {
+  border-color: var(--accent);
+  background: var(--surface);
+}
+
+.browser-address-icon {
+  flex: 0 0 auto;
+  color: var(--muted);
+}
+
+.browser-address input {
+  flex: 1;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+}
+
+/* 加载进度：页面在加载时一条细线来回走，停了就消失。 */
+.browser-progress {
+  position: relative;
+  height: 2px;
+  overflow: hidden;
+}
+
+.browser-progress.active::after {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 35%;
+  background: var(--accent);
+  animation: browser-progress 1.1s ease-in-out infinite;
+}
+
+@keyframes browser-progress {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(300%);
+  }
+}
+
 .browser-stage {
   position: relative;
   display: flex;
   align-items: center;
   justify-content: center;
-  min-height: 240px;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  background: var(--surface-2, rgba(0, 0, 0, 0.15));
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-2);
   overflow: hidden;
+}
+
+/* 只有还没画面时撑出一块地方放提示；有画面就按画面本身的比例，手机上不留上下空带。 */
+.browser-stage.empty {
+  min-height: 240px;
 }
 
 .browser-live-notice {
@@ -1158,26 +1379,70 @@ onBeforeUnmount(() => {
   width: 100%;
   max-width: 100%;
   display: block;
-  cursor: default;
+  cursor: pointer;
   outline: none;
 }
 
-.browser-live-badge {
-  position: absolute;
-  top: 8px;
-  right: 8px;
-  padding: 2px 8px;
-  border-radius: 999px;
-  font-size: 12px;
-  color: #fff;
-  background: rgba(0, 0, 0, 0.55);
-  pointer-events: none;
+.browser-window.is-takeover .browser-screen {
+  cursor: default;
 }
 
-.row.gap {
+.browser-statusbar {
   display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
   align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  min-height: 44px;
+  padding: 6px 14px;
+  font-size: 12.5px;
 }
+
+.browser-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--ok);
+}
+
+.browser-window.is-takeover .browser-status-dot {
+  background: var(--accent);
+}
+
+.browser-statusbar strong {
+  font-weight: 600;
+}
+
+.browser-status-hint {
+  color: var(--muted);
+}
+
+.browser-status-live {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.browser-status-live.warn {
+  color: var(--warn);
+}
+
+/* 全屏时画面按比例塞满剩下的高度。 */
+.browser-window.is-fullscreen {
+  height: 100vh;
+  border-radius: 0;
+}
+
+.browser-window.is-fullscreen .browser-stage {
+  flex: 1;
+  min-height: 0;
+  border-bottom: 0;
+}
+
+.browser-window.is-fullscreen .browser-screen {
+  width: auto;
+  height: auto;
+  max-width: 100%;
+  max-height: 100%;
+}
+
 </style>

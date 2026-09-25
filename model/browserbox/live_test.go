@@ -182,3 +182,68 @@ func TestLiveKeepsOnlyLatestFrameAndAcksStale(t *testing.T) {
 		t.Fatalf("取走之后应回执最新一帧，得到 %d", got)
 	}
 }
+
+// 地址栏和标题跟着主框架走：子框架（广告、嵌入页）的跳转不算，加载完读一次标题。
+func TestLiveTracksMainFramePage(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		title := "旧标题"
+		for {
+			var msg struct {
+				ID     int    `json:"id"`
+				Method string `json:"method"`
+			}
+			if err := conn.ReadJSON(&msg); err != nil {
+				return
+			}
+			result := map[string]any{}
+			switch msg.Method {
+			case "Page.getFrameTree":
+				result = map[string]any{"frameTree": map[string]any{"frame": map[string]any{"id": "main", "url": "https://a.example/"}}}
+			case "Runtime.evaluate":
+				result = map[string]any{"result": map[string]any{"type": "string", "value": title}}
+			}
+			if err := conn.WriteJSON(map[string]any{"id": msg.ID, "result": result}); err != nil {
+				return
+			}
+			if msg.Method == "Page.startScreencast" {
+				title = "新页面"
+				for _, event := range []map[string]any{
+					{"method": "Page.frameNavigated", "params": map[string]any{"frame": map[string]any{"id": "ad", "parentId": "main", "url": "https://ads.example/"}}},
+					{"method": "Page.frameStartedLoading", "params": map[string]any{"frameId": "main"}},
+					{"method": "Page.frameNavigated", "params": map[string]any{"frame": map[string]any{"id": "main", "url": "https://b.example/"}}},
+					{"method": "Page.frameStoppedLoading", "params": map[string]any{"frameId": "main"}},
+				} {
+					_ = conn.WriteJSON(event)
+				}
+			}
+		}
+	}))
+	t.Cleanup(server.Close)
+	live, err := StartLive(context.Background(), "ws"+strings.TrimPrefix(server.URL, "http"), "", 1280, 800)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer live.Close()
+
+	want := PageInfo{URL: "https://b.example/", Title: "新页面"}
+	deadline := time.After(3 * time.Second)
+	for {
+		select {
+		case page := <-live.Pages():
+			if page.URL == "https://ads.example/" {
+				t.Fatalf("子框架的跳转不该改地址栏：%+v", page)
+			}
+			if page == want {
+				return
+			}
+		case <-deadline:
+			t.Fatalf("页面信息没有跟到新页面，最后是 %+v", live.Page())
+		}
+	}
+}

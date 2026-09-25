@@ -43,12 +43,15 @@ func NewBrowserBoxHandler(manager *browserbox.Manager) *BrowserBoxHandler {
 			CheckOrigin: sameOriginWebSocket,
 		},
 	}
-	// 闲置交还和手动交还记成同一种操作，浏览器页的操作记录里能看出是自动交还的。
-	manager.OnIdleRelease(func(botID string, idle time.Duration) {
+	// 自动交还和手动交还记成同一种操作，浏览器页的操作记录里能看出是自动交还的、为什么交还。
+	manager.OnAutoRelease(func(botID, reason string, after time.Duration) {
 		bot := manager.Bot(botID)
-		message := fmt.Sprintf("你接管后 %d 分钟没有操作，内置浏览器已自动交还给机器人", int(idle/time.Minute))
+		message := fmt.Sprintf("你接管后 %d 分钟没有操作，内置浏览器已自动交还给机器人", int(after/time.Minute))
+		if reason == browserbox.AutoReleaseLeft {
+			message = "你离开了画面，内置浏览器已自动交还给机器人"
+		}
 		recordOperation(context.Background(), h.logs, "browser_box_takeover", message, bot.ID(),
-			browserBoxLogMetadata(bot, map[string]any{"active": false, "auto": true, "idle_seconds": int(idle / time.Second)}))
+			browserBoxLogMetadata(bot, map[string]any{"active": false, "auto": true, "reason": reason, "after_seconds": int(after / time.Second)}))
 	})
 	return h
 }
@@ -282,6 +285,10 @@ func (h *BrowserBoxHandler) live(c *gin.Context) {
 	}
 	defer func() { _ = conn.Close() }()
 	conn.SetReadLimit(liveReadLimit)
+	// 画面连着就算有人在看；连接断了（切页、关标签、网页进后台）而且还在接管，过一会儿
+	// 没人回来就自动交还，见 browserbox.TakeoverLeaveGrace。
+	detach := bot.AttachViewer()
+	defer detach()
 
 	settings := h.manager.Settings()
 	live, err := browserbox.StartLive(c.Request.Context(), target.WebSocketDebuggerURL, target.URL,
@@ -324,7 +331,11 @@ func (h *BrowserBoxHandler) live(c *gin.Context) {
 		_ = conn.SetWriteDeadline(time.Now().Add(liveWriteTimeout))
 		return conn.WriteJSON(value)
 	}
-	if writeJSON(gin.H{"type": "ready", "tab": target, "takeover": takeover}) != nil {
+	page := live.Page()
+	if page.Title == "" {
+		page.Title = target.Title
+	}
+	if writeJSON(gin.H{"type": "ready", "tab": target, "page": page, "takeover": takeover}) != nil {
 		return
 	}
 	credits := liveFramesInFlight
@@ -353,6 +364,11 @@ func (h *BrowserBoxHandler) live(c *gin.Context) {
 		case <-acks:
 			if credits < liveFramesInFlight {
 				credits++
+			}
+		case page := <-live.Pages():
+			// 地址栏、标题和加载进度跟着页面走：机器人点进别的页面，这边也跟着变。
+			if writeJSON(gin.H{"type": "page", "page": page}) != nil {
+				return
 			}
 		case <-changes:
 			if now := bot.Takeover(); now != takeover {
