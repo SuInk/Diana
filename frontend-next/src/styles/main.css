@@ -5739,8 +5739,9 @@ a.nav-action {
   }
 }
 
-/* SOUL.md 编辑器：左边人设库，右边正文。正文是这一页的主角，拿走大部分宽度；
-   窄屏下人设库叠到正文上面。 */
+/* SOUL.md 编辑器：人设库排成一行标签放在正文上面，正文占满整张卡片。宽屏也不分
+   左右两栏：左边一列人设名字占掉两百多像素，正文反而被挤窄，而人设库只是套用来源，
+   不值得常驻一整列。 */
 .soul-editor > .card-header,
 .self-notes-card > .card-header {
   justify-content: space-between;
@@ -5750,8 +5751,6 @@ a.nav-action {
 }
 .soul-editor > .card-header > div:first-child,
 .self-notes-card > .card-header > div:first-child { flex: 1 1 260px; min-width: 0; }
-
-.soul-editor { container-type: inline-size; }
 
 .soul-editor-body {
   display: grid;
@@ -5939,30 +5938,26 @@ a.nav-action {
 .soul-guide-body p { margin: 0 0 6px; }
 .soul-guide-body ul { margin: 0; padding-left: 18px; }
 
-/* 卡片窄的时候（右边还有运行状态栏、或者手机上）人设库收到正文上面，排成一行标签：
-   正文才是要读要改的东西，不能被挤成一行二十个字。按卡片宽度而不是窗口宽度判断，
-   因为同样的窗口宽度下，卡片宽窄取决于旁边有没有侧栏。 */
-@container (max-width: 760px) {
-  .soul-editor-body { grid-template-columns: minmax(0, 1fr); gap: 12px; }
-  .soul-library { position: static; }
-  .soul-library-group { display: none; }
-  .soul-library-list {
-    flex-direction: row;
-    flex-wrap: wrap;
-    gap: 6px;
-  }
-  .soul-library-list + .soul-library-list { margin-top: -2px; }
-  .soul-library-item {
-    border-color: var(--border);
-    background: var(--surface);
-  }
-  .soul-library-apply { padding: 4px 4px 4px 10px; }
-  .soul-library-apply small { display: none; }
-  .soul-library-actions { opacity: 1; padding-right: 2px; }
-  .soul-library .icon-btn { width: 22px; height: 22px; }
-  .soul-library .hint { margin: 0; }
-  .soul-textarea { height: auto; min-height: 460px; }
+/* 人设库排成一行标签（覆盖上面列表式的基础样式）。 */
+.soul-editor-body { grid-template-columns: minmax(0, 1fr); gap: 12px; }
+.soul-library { position: static; }
+.soul-library-group { display: none; }
+.soul-library-list {
+  flex-direction: row;
+  flex-wrap: wrap;
+  gap: 6px;
 }
+.soul-library-list + .soul-library-list { margin-top: -2px; }
+.soul-library-item {
+  border-color: var(--border);
+  background: var(--surface);
+}
+.soul-library-apply { padding: 4px 4px 4px 10px; }
+.soul-library-apply small { display: none; }
+.soul-library-actions { opacity: 1; padding-right: 2px; }
+.soul-library .icon-btn { width: 22px; height: 22px; }
+.soul-library .hint { margin: 0; }
+.soul-textarea { height: auto; min-height: 460px; }
 
 /* 群的 SOUL.md 覆盖：和机器人级同一个编辑框，只是矮一些——多数群不覆盖。 */
 .group-soul-textarea {

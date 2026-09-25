@@ -47,8 +47,9 @@ type WriteFileTool struct {
 func (t *WriteFileTool) Name() string { return "write_file" }
 
 func (t *WriteFileTool) Description() string {
-	return `在 Agent 工作目录内写入文件，父目录会自动创建。` +
-		`整体覆盖：已存在的文件会被完全替换，要改其中一段请用 edit_file，别把整个文件重写一遍。`
+	return `在 Agent 工作目录内写入文本文件，父目录会自动创建。` +
+		`整体覆盖：已存在的文件会被完全替换，要改其中一段请用 edit_file，别把整个文件重写一遍。` +
+		`只能写文本：图片、音视频、PDF、压缩包这类二进制文件写不出来，要存这些用 save_to_workspace。`
 }
 
 func (t *WriteFileTool) InputSchema() map[string]any {
@@ -62,6 +63,11 @@ func (t *WriteFileTool) Run(_ context.Context, input map[string]any) (string, er
 	rel := stringFromInput(input, "path")
 	if rel == "" {
 		return "", errors.New("path is required")
+	}
+	// content 只能是字符串，写进 .png 的永远是一段文本：文件建出来了、工具也说成功了，
+	// 可谁都打不开。线上就出过「把图存进工作目录」被存成一份文字描述的事。
+	if IsBinaryFileExtension(rel) {
+		return "", fmt.Errorf("write_file 只能写文本，%s 是二进制格式（图片、音视频、PDF、压缩包之类），写进去只会是一份打不开的文件；要把聊天里的图片或文件、网址上的文件、MCP 产物存进工作目录，请用 save_to_workspace", rel)
 	}
 	content, ok := input["content"]
 	if !ok {
@@ -167,7 +173,7 @@ func (t *EditFileTool) Run(_ context.Context, input map[string]any) (string, err
 	}
 	info, err := os.Stat(target)
 	if err != nil {
-		return "", err
+		return "", workspaceNotFound(rel, err)
 	}
 	if info.IsDir() {
 		return "", fmt.Errorf("%s is a directory", rel)
@@ -308,7 +314,7 @@ func (t *GrepTool) Run(ctx context.Context, input map[string]any) (string, error
 	if err != nil {
 		return "", fmt.Errorf("pattern 不是有效的正则: %w", err)
 	}
-	base, err := safePath(t.root, stringFromInput(input, "path"))
+	base, err := safeSearchBase(t.root, stringFromInput(input, "path"))
 	if err != nil {
 		return "", err
 	}
@@ -424,7 +430,7 @@ func (t *FindFilesTool) Run(ctx context.Context, input map[string]any) (string, 
 	if pattern == "" {
 		return "", errors.New("pattern is required")
 	}
-	base, err := safePath(t.root, stringFromInput(input, "path"))
+	base, err := safeSearchBase(t.root, stringFromInput(input, "path"))
 	if err != nil {
 		return "", err
 	}
@@ -463,6 +469,22 @@ func (t *FindFilesTool) Run(ctx context.Context, input map[string]any) (string, 
 }
 
 // ---- 共用 ------------------------------------------------------------------
+
+// safeSearchBase 解析 grep / find_files 的起点目录。起点不存在时 WalkDir 会静默返回空结果，
+// 模型读到「没有匹配」会以为文件真不存在，所以这里先把「目录写错了」单独报出来。
+func safeSearchBase(root, rel string) (string, error) {
+	base, err := safePath(root, rel)
+	if err != nil {
+		return "", err
+	}
+	if _, err := os.Stat(base); err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return "", fmt.Errorf("工作目录里没有 %s 这个目录（%w）；省略 path 就从工作目录根开始查", strings.TrimSpace(rel), fs.ErrNotExist)
+		}
+		return "", err
+	}
+	return base, nil
+}
 
 // walkAgentFiles 遍历工作目录下的普通文件，回调拿到绝对路径和相对路径。
 //

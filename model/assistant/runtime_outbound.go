@@ -158,7 +158,7 @@ func (r *Runtime) sendOutgoingWithResult(ctx context.Context, event MessageEvent
 	}
 	// 已经写到外部系统的这一轮不能丢：丢了用户就看不到「已经做完了」。
 	if turnID, superseded := r.inboundTurnSuperseded(ctx, event); superseded && !hasExternalSideEffect(ctx) {
-		r.recordInboundMediaSupersededBeforeSend(ctx, event, turnID)
+		r.recordInboundTurnSupersededBeforeSend(ctx, event, turnID)
 		return nil, errInboundTurnSuperseded
 	}
 	if run, ok := proactiveReplyRunFromContext(ctx); ok && run.allowSuperseding {

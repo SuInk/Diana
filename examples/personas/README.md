@@ -2,6 +2,6 @@
 
 人设就是一份 SOUL.md，写法见 [docs/soul-md.md](../../docs/soul-md.md)。
 
-内置的六份在 [`model/assistant/souls/`](../../model/assistant/souls/)，是最好的范本：默认、嘉然、猫娘、助手、女友、男友。在 WebUI「机器人 → 人设」里点一下就能套用，也能导出成 `.md` 再改。
+内置的六份在 [`model/assistant/souls/`](../../model/assistant/souls/)，是最好的范本：Diana、真人感、猫娘、助手、女友、男友。在 WebUI「机器人 → 人设」里点一下就能套用，也能导出成 `.md` 再改。
 
 导入：在人设库里点「导入」，选一份 `.md`。名字取第一行一级标题，没有标题用文件名。同名但正文不同的改名为「名字 (2)」，同名且正文一样的跳过。

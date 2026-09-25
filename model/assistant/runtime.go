@@ -303,6 +303,12 @@ func DescribeEventOutcome(outcome string) (decision string, reason string, handl
 		return "not_replied", "本群的模型额度在当前窗口内已用完，到点自动恢复；期间消息照常进历史和长期记忆", false
 	case "superseded_proactive":
 		return "not_replied", "等待主动回复期间出现了更高优先级消息，本次候选已取消", false
+	case inboundOutcomeSupersededReplyTurn:
+		return "not_replied", "这条消息已并入同一个人正在等待的那轮回复，不再单独发送", false
+	case inboundOutcomeLegacySupersededMediaTurn:
+		// 旧版会把「先发图、紧接着发字」的图并进后一句话一起回答，图那条就落这个
+		// 终态。现在不再产生，库里的旧记录仍要能读出人话。
+		return "not_replied", "（旧版行为）这条媒体消息已并入同一发送者随后的提问一起回答", false
 	case "dropped_outbound_delivery":
 		return "error", "回复已经生成，但发送连接不可用或消息投递失败", false
 	case inboundOutcomeSendRejected:
@@ -333,7 +339,10 @@ type Runtime struct {
 	// imageEditSources 记住每个会话最近一次改图用的原图，「重试」「继续」时靠它
 	// 找回原图。自带锁，不受 mu 保护。
 	imageEditSources imageEditSourceMemory
-	profileConfigs   map[string]BotConfig
+	// botAvatars 记每台机器人上一次看到的自己头像指纹，见 avatar_freshness.go。
+	// 自带锁，不受 mu 保护。
+	botAvatars     botAvatarMemory
+	profileConfigs map[string]BotConfig
 	// profileAliases 把种子机器人以前每次重启换过的旧档案 ID 对到它现在的固定 ID，
 	// 只用来认领按旧 ID 记下的编码任务。见 SetProfileAliases。
 	profileAliases map[string]string
@@ -367,7 +376,7 @@ type Runtime struct {
 	notebook         NotebookStore
 	worldBook        WorldBookStore
 	selfNotes        SelfNoteStore
-	expressionStyles ExpressionStyleStore
+	groupStyles      groupStyleState
 	moodMu           sync.Mutex
 	moods            map[string]*moodState
 	pokeMu           sync.Mutex
@@ -513,10 +522,14 @@ type Runtime struct {
 	// 重启后重新给足宽限次数，方向上偏「多答一句」而不是「误闭嘴」。
 	privateClosingMu        sync.Mutex
 	privateClosingBySession map[string]*privateClosingState
-	proactiveBatchMu        sync.Mutex
-	proactiveBatches        map[string]*proactiveReplyBatch
-	proactiveBatchWindow    time.Duration
-	proactiveBatchMaxWait   time.Duration
+	// groupStopBySession 记录每个群最近一次被叫停到什么时候，见 group_stop.go。
+	// 只在内存里：重启后窗口作废，方向上同样偏「多答一句」。
+	groupStopMu           sync.Mutex
+	groupStopBySession    map[string]groupStopState
+	proactiveBatchMu      sync.Mutex
+	proactiveBatches      map[string]*proactiveReplyBatch
+	proactiveBatchWindow  time.Duration
+	proactiveBatchMaxWait time.Duration
 	// 连续失败时的错误提示节流状态，见 error_notice_burst.go。
 	errorNoticeMu          sync.Mutex
 	errorNoticeBursts      map[string]*errorNoticeBurst
@@ -538,11 +551,13 @@ type Runtime struct {
 	historyImageDescQueue   []*historyImageDescJob
 	historyImageDescJobs    map[string]*historyImageDescJob
 	historyImageDescRunning *historyImageDescJob
-	historyImageDescWorker  bool
-	historyImageDescWake    chan struct{}
-	historyImageDescReady   map[string]struct{}
-	historyImageDescFailed  map[string]historyImageDescFailure
-	historyImageDescFront   int
+	// historyImageDescUrgentRunning 是正在做的加急识图任务数。
+	historyImageDescUrgentRunning int
+	historyImageDescWorker        bool
+	historyImageDescWake          chan struct{}
+	historyImageDescReady         map[string]struct{}
+	historyImageDescFailed        map[string]historyImageDescFailure
+	historyImageDescFront         int
 	// 测试用来缩短识图超时和失败退避；零值取 historyImageDescriptionTimeout/RetryBackoff。
 	historyImageDescTimeout time.Duration
 	historyImageDescBackoff time.Duration
@@ -706,6 +721,7 @@ func NewRuntime(cfg BotConfig, channel Channel, plugins *PluginManager, llmStore
 		replyRefusalByUser:      map[string]replyRefusalState{},
 		botReplyLoopByKey:       map[string]botReplyLoopState{},
 		privateClosingBySession: map[string]*privateClosingState{},
+		groupStopBySession:      map[string]groupStopState{},
 		proactiveBatches:        map[string]*proactiveReplyBatch{},
 		activeDirectReplies:     map[string]*activeDirectReply{},
 		proactiveBatchWindow:    defaultProactiveReplyBatchWindow,
@@ -1738,10 +1754,9 @@ func (r *Runtime) routeMessageEvent(ctx context.Context, event MessageEvent) (Me
 	restriction, blocked := r.activeReplySuppression(event, now)
 	r.remember(event)
 	// 表达学习看的是全部群消息，不只被回复的那些：群的口癖长在日常闲聊里。
-	r.observeGroupExpression(event, text)
 	// 群被这台机器人关掉、或不在准入名单（黑/白名单）里时，它永远不会在这个群里回复——
 	// 连被 @、被引用也不回，这一直是 admits 的判法，这里只是把判断提到花钱之前。消息照常
-	// 进历史（上面的 remember 已经落库并排了语义索引）、表达学习（上一行）和长期记忆，好让
+	// 进历史（上面的 remember 已经落库并排了语义索引）和长期记忆，好让
 	// 群重新打开后上下文接得上；但所有要花模型 token 的环节全部跳过：contextHistory 里那次
 	// 跨群语义检索、Telegram 接话判定、主动回复路由、历史识图，以及回复生成本身。主人的
 	// 响应限制命令是本地控制指令、不花 token，放它照旧落到 shouldHandle 那条老路，不拦。
@@ -1760,6 +1775,8 @@ func (r *Runtime) routeMessageEvent(ctx context.Context, event MessageEvent) (Me
 		// 这里刻意不走 finishWithoutReply：那条会补历史识图，而识图正是要省掉的模型调用之一。
 		return event, text, false, outcome
 	}
+	// 风格学习要花一次后台模型调用，放在关群判断之后：不回复的群用不着学怎么说话。
+	r.observeGroupStyle(event)
 	// 机器人在本群被禁言：和上面一样只记上下文，跳过所有花 token 的环节。解禁后
 	// 从新消息开始回复，这期间的消息不补发。放在额度检查之前：它只查本地状态。
 	if reason, muted := r.botMutedForReply(event); muted {
@@ -2053,7 +2070,8 @@ func (r *Runtime) replyAndRecord(ctx context.Context, event MessageEvent, text s
 			return "ignored_response_suppression", nil
 		}
 		if errors.Is(err, errStopRequested) {
-			// 对方明确要求别再回：这条不发，暂停（非主人）已同时生效。
+			// 对方明确要求别再回：这条不发。私聊里暂停（非主人）已同时生效，群里则是
+			// 叫停窗口（见 group_stop.go）拦下了一条在路上的接话回复。
 			setEventRecordOutcome(&record, "ignored_stop_requested")
 			record.Reason = err.Error()
 			record.Error = ""
@@ -2112,9 +2130,9 @@ func (r *Runtime) replyAndRecord(ctx context.Context, event MessageEvent, text s
 			return "superseded_proactive", err
 		}
 		if errors.Is(err, errInboundTurnSuperseded) {
-			setEventRecordOutcome(&record, "superseded_media_turn")
+			setEventRecordOutcome(&record, inboundOutcomeSupersededReplyTurn)
 			r.record(record)
-			return "superseded_media_turn", nil
+			return inboundOutcomeSupersededReplyTurn, nil
 		}
 		record.Error = err.Error()
 		r.setError(err.Error())
@@ -2561,9 +2579,8 @@ func eventRoutingText(event MessageEvent) string {
 // 接话开关都关了，而它又没有 @、引用、点名机器人，也不是插件指令或链接解析。
 //
 // 这种消息走完整条路最后也只落到「回应提问与闲聊均已关闭，不主动接话」，但在那之前
-// 会先跑一次相邻媒体指代判断（inbound_media_reference）和一次跨群上下文检索——两者的
-// 输出只给回复用，于是白花一次模型调用和一次检索。提前认出来，就只跳过这两步；识图、
-// 记忆、表达学习这些「关掉发言但还要记住」的环节不受影响。
+// 会先跑一次跨群上下文检索——它的输出只给回复用，于是白花一次检索。提前认出来，就只
+// 跳过这一步；识图、记忆、表达学习这些「关掉发言但还要记住」的环节不受影响。
 //
 // 「是不是冲着机器人」沿用 shouldHandle 的判据，不另起一套。被标记为机器人的账号
 // 要先经模型判一次才知道是不是在叫本机（见 requiresTelegramBotMentionJudgment），
@@ -2658,6 +2675,12 @@ func (r *Runtime) routeProactiveReplyBatch(ctx context.Context, candidates []pro
 		event.routingReason = "回应提问与闲聊均已关闭，不主动接话"
 		return event, text, nil, false
 	}
+	// 群里刚有人叫停：不跑模型，直接沉默。靠提示词让评分自己记住「刚被要求闭嘴」
+	// 只能撑到那句话滑出上下文窗口为止。
+	if stop, ok := r.activeGroupStop(event, time.Now()); ok {
+		event.routingReason = groupStopRoutingReason(stop, time.Now())
+		return event, text, nil, false
+	}
 	payload := r.proactiveReplyPayloadWithContext(ctx, event, readableEventText(event, text))
 	for index, candidate := range candidates {
 		item := proactiveReplyCandidatePayload{
@@ -2691,13 +2714,16 @@ func (r *Runtime) routeProactiveReplyBatch(ctx context.Context, candidates []pro
 	// 同一套判据也按题目摆一份：绑的是只做判断的模型时，它照这张表作答，答案回填
 	// 成下面解析的那个 JSON；绑对话模型时这张表用不上。
 	decisionSpec := proactiveReplyDecisionSpec(candidates, cfg.PromptOverrides)
+	routeContext := string(payloadJSON)
 	if chatIn.Participation != nil {
 		routeInstruction = cfg.prompt(promptParticipationRouteInstructionSpec)
 		decisionSpec = participationDecisionSpec(cfg.PromptOverrides)
+		// 评分这一路喂按时间排的对话而不是整份 JSON，理由见 router_transcript.go。
+		routeContext = proactiveReplyTranscript(payload)
 	}
 	// 原图照带：只给文字描述，判断「这张图在不在问机器人」时信息不够。但这里只是一道
 	// 是非题，用 low 档，正式回复那一路仍是 high。
-	routeUserMessage, _ := llmMessageFromEventWithImageDetail(routeCtx, event, routeInstruction+string(payloadJSON), nil, "low")
+	routeUserMessage, _ := llmMessageFromEventWithImageDetail(routeCtx, event, routeInstruction+routeContext, nil, "low")
 	messages := []llm.Message{
 		{
 			Role:    llm.RoleSystem,
@@ -3026,6 +3052,9 @@ type proactiveReplyHistoryItem struct {
 	// UserID 只给程序侧数「窗口里有几个人在说话」用，不进路由提示词：模型按 sender
 	// 称呼理解对话，多一个数字账号只会让它把 ID 当成正文的一部分复述出去。
 	UserID string `json:"-"`
+	// MessageID 同样只给程序侧用：接话评分的对话稿按它认出同一批里哪些消息已经在历史里，
+	// 没在的补到当前消息前面（见 proactiveReplyTranscript）。
+	MessageID string `json:"-"`
 }
 
 // botAliasesForEvent 把平台用户名一起交给路由模型：群消息里写的是
@@ -3101,6 +3130,7 @@ func (r *Runtime) proactiveReplyPayload(event MessageEvent, text string) proacti
 			IsBot:      payload.BotAccount != "" && item.UserID == payload.BotAccount,
 			AgeSeconds: ageSeconds,
 			UserID:     strings.TrimSpace(item.UserID),
+			MessageID:  strings.TrimSpace(item.MessageID),
 		}
 		if historyItem.IsBot && payload.LastBotMessage == nil {
 			lastBotMessage := historyItem
@@ -3671,6 +3701,8 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	// 图片任务可能由前置视觉意图路由直接预约，也可能在后面的 Agent 工具循环里
 	// 预约。整轮一开始就挂上 sink，才能保证两条路径都等主回复发送成功后再启动。
 	ctx, imageAnnouncements := withImageAnnouncementSink(ctx)
+	// 中途发言（say 工具）的账本：收尾时要知道这一轮已经说过什么，见 interim_message_tool.go。
+	ctx = withInterimMessages(ctx)
 	defer imageAnnouncements.cancelPending()
 
 	chatTriggered := r.shouldHandleChat(event, text) || directQuotedReply
@@ -3851,6 +3883,11 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			if IsOneBotPlatform(r.currentPlatform(event)) {
 				extraTools = append(extraTools, newDianaPokeTool(r, event))
 			}
+			// 存二进制文件和 write_file 同一档：都是往磁盘上写，跟着「允许写入文件」走。
+			// 它不在 allowedAgentToolNames 里，群成员拿不到。
+			if cfg.AgentFileWriteEnabled {
+				extraTools = append(extraTools, newDianaSaveToWorkspaceTool(r, event))
+			}
 			// 跨会话发送只在「确实存在另一条会话可发」时才有意义。群里人人可用，
 			// 但只能发给当前说话的人；主人在哪都能用，因为只有他能指定别人和群。
 			// 私聊里给普通成员挂上它，模型看得到就会去调，然后只能被拒绝，白费一轮。
@@ -3884,6 +3921,8 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			if _, settings, enabled := r.pluginWithSettingsForEvent(groupRelationsPluginID, event); enabled {
 				extraTools = append(extraTools, newDianaGroupRelationsTool(r, event, settings))
 			}
+			// 中途说一句：先说「我去查」再真的去查，长任务分段报进度。说完这一轮不结束。
+			extraTools = append(extraTools, newDianaInterimMessageTool(r, event))
 			if _, settings, enabled := r.pluginWithSettingsForEvent(stickerPluginID, event); enabled {
 				extraTools = append(extraTools, newDianaStickerTool(r, event, settings))
 			}
@@ -4072,6 +4111,8 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	// 再统一放到后面——语义上它们就是「理解当前消息所需的背景」，离当前消息更近
 	// 反而更合适。预算裁剪按 Priority 走，不看位置，各层的让位顺序不受影响。
 	messages := []llm.Message{{Role: llm.RoleSystem, Content: systemHead, Priority: llm.MessagePrioritySystem}}
+	var dependency *senderDependencyContext
+	dependencyIndex := -1
 	volatile := pluginContextMessages(ctx, pluginResponses)
 	semanticReferenceContext := r.semanticReferenceContextBlock(ctx, event)
 	if semanticReferenceContext.Block != "" {
@@ -4131,15 +4172,6 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			volatile = append(volatile, llm.Message{
 				Role:       llm.RoleUser,
 				Content:    selfNoteContext,
-				Priority:   llm.MessagePriorityMemory,
-				AtomicText: true,
-			})
-		}
-		// 群常用表达是风格参考，和记忆同级注入；没攒够门槛时它是空串，零开销。
-		if expressionContext := contextPreload.expressionContext; expressionContext != "" {
-			volatile = append(volatile, llm.Message{
-				Role:       llm.RoleUser,
-				Content:    expressionContext,
 				Priority:   llm.MessagePriorityMemory,
 				AtomicText: true,
 			})
@@ -4246,14 +4278,10 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 				turnMessageIDs[messageID] = true
 			}
 		}
-		if directAgentDecision {
-			// 先发图、隔一会儿再单独问「这是啥」：历史里那张图只有文字摘要，摘要没出来
-			// 模型就只能看到「尚无缓存描述」。拼历史之前加急等一下。
-			if dependencies := recentSenderImageEvents(replyHistory, event, turnMessageIDs); len(dependencies) > 0 {
-				waitCtx, cancel := context.WithTimeout(ctx, replyImageDescriptionWait)
-				r.awaitHistoryImageDescriptions(waitCtx, dependencies...)
-				cancel()
-			}
+		// 先发图、隔一会儿再单独问「这是啥」：这个人刚发、还没人接的图作为候选单独
+		// 附上（agent 和非 agent 都一样），见 sender_dependency_images.go。
+		if images := senderDependencyImages(replyHistory, event, turnMessageIDs, firstNonEmpty(strings.TrimSpace(cfg.BotAccount), strings.TrimSpace(event.SelfID))); len(images) > 0 {
+			dependency = &senderDependencyContext{images: images, toolHint: directAgentDecision, pixels: r.chatModelReceivesImages(event)}
 		}
 		stableHistory, crossGroupTail := r.stableGroupHistory(ctx, event, cfg, replyHistory, directAgentDecision, turnMessageIDs)
 		messages = append(messages, stableCheckpoint...)
@@ -4296,6 +4324,11 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			}
 			messages = append(messages, turnMessage)
 		}
+		// 候选依赖图每轮都不一样，放在缓存断点之后、紧挨着同轮补充。
+		if dependencyMessage := r.senderDependencyMessage(ctx, event, dependency); !runtimeLLMMessageEmpty(dependencyMessage) {
+			dependencyIndex = len(messages)
+			messages = append(messages, dependencyMessage)
+		}
 	}
 	// 插件事实占据权威地位时没有历史那一段，攒下的块直接跟在 system 头部后面。
 	messages = append(messages, volatile...)
@@ -4332,7 +4365,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	// 下面 updatedReplyRequestText 只把补充消息的「文字」并进当前问题，图片段一直
 	// 留在各自的事件里没人取。于是「先发一张图、再补一张图问哪个好」这种一轮两图
 	// 的场景，模型只收到根消息那一张，而正文里明明写着两张——它既答不准，也说不清
-	// 该处理哪一张。媒体合并用入站那条同款规则去重，来源消息号照样标在段上。
+	// 该处理哪一张。媒体按 segmentMediaTurnKey 去重，来源消息号照样标在段上。
 	messageEvent := attachInboundTurnMedia(event, directReplySupplementEvents(append(r.directReplySupplements(ctx), backlogReplyTurnFromContext(ctx)...)))
 	currentText := currentPromptTextWithSemanticContext(event, cleanText, semanticContext, promptAnnotation{
 		BotID:        firstNonEmpty(strings.TrimSpace(event.SelfID), strings.TrimSpace(cfg.BotAccount)),
@@ -4424,6 +4457,16 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		ctx = withTextDeltaObserver(ctx, draft)
 	}
 	reply, err = r.generateReply(ctx, replyCfg, event, relationship, messages, agentRegistry)
+	if err == nil && dependencyIndex >= 0 && dependency.pixels && VisionDescriptionRefused(reply) && !hasExternalSideEffect(ctx) {
+		// 附了原图，模型却回「没收到图片」：这条视觉链路送不进图（模型不支持、网关把
+		// 图段丢了）。别把这句发出去，换成识图描述重来一次。
+		log.Printf("diana reply refused attached dependency images, retrying with descriptions: message_id=%s", event.MessageID)
+		dependency.pixels = false
+		if fallback := r.senderDependencyMessage(ctx, event, dependency); !runtimeLLMMessageEmpty(fallback) {
+			messages[dependencyIndex] = fallback
+			reply, err = r.generateReply(ctx, replyCfg, event, relationship, messages, agentRegistry)
+		}
+	}
 	var silentFinish *modelSilentFinishError
 	if errors.As(err, &silentFinish) {
 		if refused := modelSilenceRefusedReason(ctx, pluginResponses, imageAnnouncements); refused != "" {
@@ -4484,9 +4527,17 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		} else if pending := imageAnnouncements.drain(); pending != "" {
 			// 用户这条消息只是要图，模型没有别的可说——开场白就是这一轮的回复。
 			reply = pending
+		} else if len(interimMessagesSent(ctx)) > 0 {
+			// 该说的已经在中途说过了（say 工具），收尾没有新内容是正常的，
+			// 不要再补一句「没有生成有效回复」。
+			return "", newModelSilentFinishError("中途已经说过了")
 		} else {
 			reply = "我这边没有生成有效回复。"
 		}
+	}
+	if repeatsInterimMessage(ctx, reply) {
+		// 收尾把中途那句原样又写了一遍：对方已经看到了，不再发第二次。
+		return "", newModelSilentFinishError("收尾和中途说过的话重复")
 	}
 	var semanticGate *semanticReplyGate
 	var speculativeAudit chan preparedReplyAudit
@@ -4528,6 +4579,10 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		prepared = r.prepareReplyAudit(ctx, event, cleanText, reply, cfg, proactiveTriggered)
 	}
 	prepared.newContentConfirmed = dedupKept
+	// 叫停可能是这条还在生成时到的：发送前再看一眼窗口，在路上的接话回复不发。
+	if err := r.groupStopDropsReply(event, proactiveTriggered, time.Now()); err != nil {
+		return "", err
+	}
 	auditIntent, err := r.applyReplyAudit(ctx, event, cfg, prepared)
 	if err != nil {
 		return "", err
@@ -4806,8 +4861,12 @@ func (p *runtimeAgentLLMProvider) Generate(ctx context.Context, req llm.Generate
 // 它自己的描述里，目录行压到 120 字就没了，挪出去等于这个工具不会再被用；它只在 OneBot
 // 会话里注册。
 //
+// say（中途说一句）常驻：它的用处就是在动手前先开口，按需加载就得先多走一步
+// tools_load，「先说一句」反而慢了半拍；描述很短，每轮多带的开销可以忽略。
+//
 // 改这份名单会改请求里的 tools 数组，等于把所有会话的前缀缓存清一次，别为一两个百分点反复调。
 var replyAgentCoreTools = []string{
+	dianaInterimMessageToolName,
 	agent.WebSearchToolName,
 	dianaHistoryImagesToolName,
 	dianaGitHubToolName,
@@ -7461,7 +7520,7 @@ func (r *Runtime) sendForwardNodesWithResult(ctx context.Context, event MessageE
 	}
 	// 已经写到外部系统的这一轮不能丢：丢了用户就看不到「已经做完了」。
 	if turnID, superseded := r.inboundTurnSuperseded(ctx, event); superseded && !hasExternalSideEffect(ctx) {
-		r.recordInboundMediaSupersededBeforeSend(ctx, event, turnID)
+		r.recordInboundTurnSupersededBeforeSend(ctx, event, turnID)
 		return nil, errInboundTurnSuperseded
 	}
 	params := map[string]any{"messages": nodes}
@@ -8313,8 +8372,7 @@ func normalizeReply(reply string, maxRunes int, markdownPlain ...bool) string {
 	if maxRunes > 0 && len([]rune(reply)) > maxRunes {
 		reply = truncateReplyAtBoundary(reply, maxRunes)
 	}
-	// 收尾的句号在这里就去掉，不留到切分之后：这样返回值、聊天历史、事件详情和群里
-	// 实际收到的是同一份文本。只有分条切出来的中间那几条才需要在切分后再处理一次。
+	// 句号留到切好每条消息之后再去（见 splitChatReply）：长度兜底要按句号断句。
 	return reply
 }
 
@@ -8609,7 +8667,14 @@ func splitReply(reply string, chunkSize int) []string {
 // 排版换行只认 [diana-line]；真实 CR/LF 一律折叠成软空格。
 //
 // 聊天配置不再限制条数或单条长度；是否收进合并转发由独立阈值决定。
+// splitChatReply 把回复切成实际要发的几条，每条去掉句号（见 chat_periods.go）。
 func splitChatReply(reply string, limits chatSplitLimits) []string {
+	return stripBubblePeriods(splitChatReplyKeepingPeriods(reply, limits))
+}
+
+// splitChatReplyKeepingPeriods 切条但保留句号：长度规划（replyLengthPlan）还要在句号
+// 处把超长的那条再细分，句号去早了它就找不到断句点。
+func splitChatReplyKeepingPeriods(reply string, limits chatSplitLimits) []string {
 	reply, mode, lines := consumeReplyFormatting(reply)
 	limits = replyDeliveryLimits(limits, mode)
 	if lines != "" {
@@ -8718,19 +8783,6 @@ func boundaryPositions(runes []rune, match func(rune) bool) []int {
 	return out
 }
 
-// trimChatTrailingPeriod 去掉聊天消息末尾那个句号。
-//
-// 提示词里早就有 replyTrailingPunctuationRule 说「结尾不要用句号收尾」，理由是
-// 一条「知道了。」读起来是公事公办的冷淡。但那和分条一样，是押在模型愿不愿意照做
-// 上的；按句子分条之后还更显眼——一段话拆成几条，就有几个句号排在那儿。
-//
-// 只动整条消息最后那一个，而且只动句号：
-//   - 问号和感叹号承载语气，删了意思就变了
-//   - 省略号是话没说完，不是句读
-//   - 英文句点在缩写、域名、版本号里到处都是，v1.0 和 example.com. 分不清，不碰
-//   - 收在引号、括号里的句号属于被引用的内容，不是这条消息自己的句读
-//   - 删完变成空的就不删
-//
 // hasUnclosedQuote 判断末尾的标点是不是落在没闭合的引号或括号里。
 func hasUnclosedQuote(runes []rune) bool {
 	depth := 0

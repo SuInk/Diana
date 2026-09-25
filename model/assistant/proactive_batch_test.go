@@ -6,7 +6,6 @@ package assistant
 import (
 	"context"
 	"errors"
-	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -50,20 +49,17 @@ func TestProactiveReplyBatchRoutesOnceAndSelectsTarget(t *testing.T) {
 		t.Fatalf("router calls = %d, want 1", len(provider.requests))
 	}
 	requestText := provider.requests[0].Messages[len(provider.requests[0].Messages)-1].Content
-	for _, want := range []string{`"message_id":"message-1"`, `"message_id":"message-2"`} {
+	// 评分喂的是对话稿：两条候选按发送者和正文各占一行，不带账号。
+	for _, want := range []string{"Alice：这个报错应该怎么处理", "【当前消息】[刚刚] Bob：我先去吃饭了"} {
 		if !strings.Contains(requestText, want) {
-			t.Fatalf("batch payload missing %s: %s", want, requestText)
+			t.Fatalf("batch transcript missing %s: %s", want, requestText)
 		}
-	}
-	aliases := regexp.MustCompile(`"user_id":"(im_user_[a-f0-9]+)"`).FindAllStringSubmatch(requestText, -1)
-	if len(aliases) != 2 || aliases[0][1] == aliases[1][1] {
-		t.Fatalf("expected distinct masked candidate identities: %s", requestText)
 	}
 	if strings.Contains(requestText, "user-1") || strings.Contains(requestText, "user-2") {
 		t.Fatalf("batch payload leaked candidate identities: %s", requestText)
 	}
 	routePrompt := provider.requests[0].Messages[0].Content
-	for _, want := range []string{"只评估 current_text", "其余消息只作上下文", "不另选回复目标", "同一内容已经回答"} {
+	for _, want := range []string{"只评估标了【当前消息】的那一条", "前面的对话供理解上下文", "不选择其他消息作为回复目标", "同一内容已经回答"} {
 		if !strings.Contains(routePrompt, want) {
 			t.Fatalf("batch route prompt missing %q: %s", want, routePrompt)
 		}
@@ -194,7 +190,7 @@ func TestProactiveReplyTurnCombinesThreeMessagesIntoOneReply(t *testing.T) {
 	if err != nil {
 		t.Fatalf("replyTo() error = %v", err)
 	}
-	if reply != "1+1=2，5+6=11，4+8=12。" {
+	if reply != "1+1=2，5+6=11，4+8=12" {
 		t.Fatalf("reply = %q", reply)
 	}
 	if len(channel.sent) != 1 || channel.sent[0].Text != reply {
@@ -308,13 +304,13 @@ func TestProactiveReplyBatchReroutesOnceBeforeSending(t *testing.T) {
 	if len(sent) != 1 {
 		t.Fatalf("sent = %#v, want exactly one merged reply", sent)
 	}
-	if sent[0].ReplyMessageID != second.MessageID || sent[0].Text != "对，后一张是要乐奈，前一条和图片应当合在一起看。" {
+	if sent[0].ReplyMessageID != second.MessageID || sent[0].Text != "对，后一张是要乐奈，前一条和图片应当合在一起看" {
 		t.Fatalf("merged reply = %#v, want reply to the later message", sent[0])
 	}
 	if provider.routeCalls != 2 || provider.replyCalls != 2 {
 		t.Fatalf("route calls=%d reply calls=%d, want one bounded reroute", provider.routeCalls, provider.replyCalls)
 	}
-	if !strings.Contains(provider.lastRoutePayload, `"message_id":"message-1"`) || !strings.Contains(provider.lastRoutePayload, `"message_id":"message-2"`) {
+	if !strings.Contains(provider.lastRoutePayload, first.RawMessage) || !strings.Contains(provider.lastRoutePayload, "【当前消息】") {
 		t.Fatalf("reroute did not receive both candidates: %s", provider.lastRoutePayload)
 	}
 	var superseded bool
@@ -455,7 +451,7 @@ func TestProactiveReplyBatchAppliesRelationshipDeltaWithoutDoubleCounting(t *tes
 	if profile.Favorability != 1 || profile.MessageCount != 1 {
 		t.Fatalf("profile = %#v, want favorability 1 and existing message count 1", profile)
 	}
-	if len(channel.sent) != 1 || channel.sent[0].Text != "可以先检查错误日志里的第一条异常。" {
+	if len(channel.sent) != 1 || channel.sent[0].Text != "可以先检查错误日志里的第一条异常" {
 		t.Fatalf("sent = %#v", channel.sent)
 	}
 	if len(provider.requests) != 5 {

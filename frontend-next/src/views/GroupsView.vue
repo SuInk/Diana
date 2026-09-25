@@ -279,6 +279,9 @@
             <p>{{ inheritedPersona }}</p>
           </details>
         </div>
+        <div v-if="editing.group_id" class="field wide">
+          <GroupStylePanel :profile-id="editing.bot_profile_id || botScope || ''" :group-id="editing.group_id" />
+        </div>
         <div class="field wide">
           <label>接话设置</label>
           <ParticipationControls :key="`${editing.bot_profile_id}:${editing.group_id}`" :model-value="editing.participation" :level="groupReplyDesireValue(editing)" :inherited-value="participationDefaults[editing.bot_profile_id || botScope || '']" :criteria="editing.proactive_reply_extra_criteria" inheritable @update:model-value="setGroupParticipation" @update:criteria="value => { if (editing) editing.proactive_reply_extra_criteria = value; }" />
@@ -697,6 +700,7 @@ const groupWelcomeModeOptions: AppSelectOption[] = [
   { value: "llm", label: "按人设实时生成" }
 ];
 import { toastError, toastSuccess } from "../toast";
+import GroupStylePanel from "../components/GroupStylePanel.vue";
 
 const groups = ref<BotGroupSummary[]>([]);
 const pendingDelete = ref<BotGroupSummary | null>(null);

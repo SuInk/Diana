@@ -26,7 +26,7 @@ func (r *Runtime) replyPartLimitIssue(cfg BotConfig, event MessageEvent, part st
 
 func (r *Runtime) replyLengthPlan(cfg BotConfig, event MessageEvent, body string) []string {
 	limits := chatSplitLimitsForEvent(cfg, event)
-	parts := splitChatReply(body, limits)
+	parts := splitChatReplyKeepingPeriods(body, limits)
 	if limits.SingleMessage || limits.MarkerOnly {
 		return parts
 	}

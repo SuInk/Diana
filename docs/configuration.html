@@ -149,7 +149,7 @@ https://HOST/api/channels/wecom/callback</code></pre>
         <h3>人设库</h3>
         <p>人设库是<strong>套用来源，不是活绑定</strong>：点一份就把正文填进编辑框，保存配置才生效；库里那份之后再改，不会偷偷改变已经配好的机器人。</p>
         <ul class="check-list">
-          <li>内置七份（默认、嘉然、真人感、猫娘、助手、女友、男友）编译在程序里，只读；想改就套用后另存一份。</li>
+          <li>内置六份（Diana、真人感、猫娘、助手、女友、男友）编译在程序里，只读；想改就套用后另存一份。</li>
           <li>每一份都能导出成 <code>名字.md</code>；导入 <code>.md</code> 时名字取第一行一级标题，没有标题用文件名。</li>
           <li>导入只增不减：同名但内容不同的改成「名字 (2)」，同名且正文一样的跳过；库上限 50 份。</li>
         </ul>
@@ -174,7 +174,7 @@ https://HOST/api/channels/wecom/callback</code></pre>
         <p>「机器人 → 行为 → 拟人化」里还有三个独立开关，默认全关：</p>
         <ul class="check-list">
           <li><strong>情绪系统</strong> —— 心情随相处涨落：被夸了变开心（语气轻快、爱接梗），被骂了会低落（话少、蔫），几小时没人惹它就回到平静。它复用每条消息本来就要跑的关系评估结果，不多花一次模型调用；只影响语气，不影响回答质量，重启后归于平静。</li>
-          <li><strong>表达学习</strong> —— 按群统计大家常说的短句和口癖（至少两个人说过、次数够多才算数），注入为说话风格参考，让机器人越来越像这个群的人；半个月没人再说的自动过气。它会把群成员的原话喂进提示词，注入时明确标注为不可信参考、不作为指令执行。</li>
+          <li><strong>风格学习</strong> —— 每个群大约一天学一次：后台模型读最近的群友消息（发言人换成字母），写一段不超过 300 字的「这个群怎么说话」，包括口头禅和梗的意思、句子长短、标点和表情习惯、大家怎么互相调侃，回复时带上。群管理页编辑群时能看到这段，可以手动改（手动的不再被自动覆盖）或点「重新学习」（会先确认，覆盖现在这段）；也可以只在这个群关掉风格：不学、不带进回复，写好的留着。关掉或不回复的群不学。</li>
           <li><strong>戳一戳回应</strong> —— 被戳一戳时按人设和当前关系亲疏回一句短的（仅 OneBot 平台有此事件）；同一个人 90 秒内连戳只回第一下，模型不可用时保持沉默而不是报错。</li>
         </ul>
       </section>
@@ -196,13 +196,14 @@ https://HOST/api/channels/wecom/callback</code></pre>
         <h3>本地文件与命令：读 / 写 / 执行三档</h3>
         <p>本地那几个工具全部锁在数据目录下的 <code>workspace</code> 里，路径固定不可配置，绝对路径和 <code>../</code> 一律拒绝。三档权限各自独立：</p>
         <div class="table-wrap"><table><thead><tr><th>档位</th><th>工具</th><th>默认</th><th>开关</th></tr></thead><tbody>
-          <tr><td>读</td><td><code>read_file</code>、<code>list_files</code>、<code>grep</code>、<code>find_files</code></td><td>开</td><td>跟随「内置 Agent」总开关</td></tr>
-          <tr><td>写</td><td><code>write_file</code>、<code>edit_file</code></td><td>新建配置默认开</td><td>「允许写入文件」</td></tr>
+          <tr><td>读</td><td><code>read_file</code>、<code>list_files</code>、<code>grep</code>、<code>find_files</code>、<code>manage_files</code> 的 stat</td><td>开</td><td>跟随「内置 Agent」总开关</td></tr>
+          <tr><td>写</td><td><code>write_file</code>、<code>edit_file</code>、<code>save_to_workspace</code>、<code>manage_files</code> 的 move / copy / delete / mkdir</td><td>新建配置默认开</td><td>「允许写入文件」</td></tr>
           <tr><td>执行</td><td><code>run_command</code></td><td>新建配置带只读白名单</td><td>命令白名单非空才注册</td></tr>
         </tbody></table></div>
         <p>新建的机器人装完即可用：写入默认打开（锁在数据目录下的 <code>workspace</code> 内，碰不到配置和数据库），命令白名单预置一组只报状态、不碰数据的命令——<code>uptime</code>、<code>free</code>、<code>df</code>、<code>uname</code>、<code>nproc</code>、<code>date</code>、<code>hostname</code>、<code>whoami</code>。</p>
         <p>收进这份默认白名单的标准有三条，缺一不可：不读任意路径的文件、不出网、不改任何东西。因为没有可用沙盒时，白名单里的程序就是以 Diana 自己的进程权限直接跑的——白名单只管得到「能不能跑」，管不到「能碰什么」。所以 <code>cat</code>、<code>ls</code>、<code>find</code>（能读任意路径）、<code>curl</code>、<code>wget</code>（能出网）、<code>ps</code>（会带上别的进程的完整命令行，那里面可能有别人的密钥）都被刻意排除；工作目录内的读取用 <code>read_file</code> / <code>grep</code> / <code>find_files</code>，它们锁在 <code>workspace</code> 里。</p>
         <div class="callout"><strong>默认值只作用于新建配置</strong><p>已经在跑的部署升级后不会凭空多出命令执行和文件写入：当初留空的白名单仍然是空的，关着的写入开关仍然关着。默认值是给新用户的便利，不该变成对存量部署的静默扩权。老部署想要这些能力，用同一张表单上的「填入推荐默认值」把推荐值填进来——它只改表单，点「保存配置」才生效，授权动作是你自己做的。</p></div>
+        <p><code>write_file</code> 只写文本，目标是 <code>.png</code>、<code>.pdf</code>、<code>.mp4</code>、<code>.zip</code> 这类二进制格式时直接拒绝；<code>read_file</code> 碰到二进制文件同样拒绝，改用 <code>view_image</code> 看图、<code>manage_files stat</code> 看大小和类型。图片、音视频、PDF、压缩包用 <code>save_to_workspace</code> 原样存进来：来源可以是当前会话里某条消息的媒体（包括机器人自己发出去的生成图）、公网网址（和其他下载共用挡内网地址的下载缓存）或 MCP 工具返回的 <code>media_id</code>。存的时候按内容认类型、纠正扩展名（JPEG 一律存成 <code>.jpg</code>），没指定路径时聊天媒体和网址进 <code>downloads/</code>，机器人自己的产物进 <code>outputs/</code>，同名不覆盖。主人开着文件写入时，<code>image</code> 出的图除了照常发送，也会把原图存进 <code>outputs/</code>。<code>manage_files delete</code> 不真删，而是挪进 <code>.trash/&lt;时间戳&gt;/</code>，保留原来的相对路径；回收站里的东西不能再用 <code>manage_files</code> 挪动或删除，也不能往里存文件。</p>
         <p><code>edit_file</code> 的每个替换必须在原文件里唯一命中一处，命中多处或找不到都整批拒绝而不是改错地方；多个替换都按原文件定位，不是依次生效——依次生效会让后一个替换命中前一个刚写进去的内容，而那种改动从调用方的输入上完全看不出来。</p>
         <div class="callout"><strong>身份挡不住提示注入</strong><p>这三档只对主人开放，但「调用发生在主人的会话里」不等于「这次调用是主人要的」：群里其他人的消息和主人的消息在同一个上下文里，模型是读完那些之后才决定调用工具的。所以真正的边界是这里的开关和白名单，而不是身份判断——需要哪一档就开哪一档，不需要的保持关闭。</p></div>
       </section>

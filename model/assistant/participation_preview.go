@@ -3,10 +3,7 @@
 
 package assistant
 
-import (
-	"encoding/json"
-	"strings"
-)
+import "strings"
 
 // proactiveReplyRouteSystemPrompt 是接话判断那一步的系统提示词。运行时和界面预览走
 // 同一个函数，预览看到的就是实际发出去的那一份。
@@ -39,14 +36,11 @@ type ParticipationDecisionPreview struct {
 // PreviewParticipationPrompt 按配置拼出接话评分发给模型的内容。配置可以是还没保存的那一份。
 func PreviewParticipationPrompt(cfg BotConfig) (ParticipationPromptPreview, error) {
 	chatIn := cfg.chatInSettings()
-	payload, err := json.Marshal(participationPreviewPayload(cfg))
-	if err != nil {
-		return ParticipationPromptPreview{}, err
-	}
 	preview := ParticipationPromptPreview{
 		System: proactiveReplyRouteSystemPrompt(cfg, chatIn),
-		User:   strings.TrimSpace(cfg.prompt(promptParticipationRouteInstructionSpec) + string(payload)),
-		Retry:  cfg.prompt(promptParticipationRetrySpec),
+		// 和 routeProactiveReplyBatch 一样：评分这一路喂按时间排的对话稿。
+		User:  strings.TrimSpace(cfg.prompt(promptParticipationRouteInstructionSpec) + proactiveReplyTranscript(participationPreviewPayload(cfg))),
+		Retry: cfg.prompt(promptParticipationRetrySpec),
 	}
 	for _, question := range participationDecisionSpec(cfg.PromptOverrides).Questions {
 		preview.Decision = append(preview.Decision, ParticipationDecisionPreview{

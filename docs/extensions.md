@@ -30,7 +30,7 @@ MCP 配置里存的是访问令牌原文，所以它默认放在 **Agent 工作�
 
 老版本默认把它写在工作目录里。启动时会自动搬到新位置并更新 `.extension-paths.json` 里钉住的路径；目标位置已经有文件时不动它，避免覆盖掉一份真配置。
 
-黑名单仍然留着，兜两种情况：路径被显式指回工作目录里，以及扩展开关 `.extension-overrides.json`、对象名单 `.extension-audience.json`、位置记录 `.extension-paths.json`——这几个按设计就住在工作目录里。它们对 `read_file`、`grep`、`find_files`、`write_file`、`edit_file` 一律关闭，`list_files` 里也不出现（返回 `protected_hidden` 计数说明有东西被挡）。指向这些文件的软链接同样挡住。要查看或修改走 WebUI 扩展页。
+黑名单仍然留着，兜两种情况：路径被显式指回工作目录里，以及扩展开关 `.extension-overrides.json`、对象名单 `.extension-audience.json`、位置记录 `.extension-paths.json`——这几个按设计就住在工作目录里。它们对 `read_file`、`grep`、`find_files`、`write_file`、`edit_file`、`manage_files`、`save_to_workspace` 一律关闭，`list_files` 里也不出现（返回 `protected_hidden` 计数说明有东西被挡）。指向这些文件的软链接同样挡住。要查看或修改走 WebUI 扩展页。
 
 `run_command` 走另一条路：白名单只管得到「能跑哪个程序」，管不到「这个程序能碰什么」，所以凭据文件由命令沙箱单独挡住——macOS 的 `sandbox-exec` 策略在 `allow file-read*` 之后逐条 `deny file-read*`（后写的规则覆盖先写的；目录按 `subpath` 整片挡），Linux 的 bubblewrap 用 `--ro-bind /dev/null` 把文件盖成空文件、用空的 `--tmpfs` 盖住目录。白名单里配了 `cat`、`grep`、`head` 也读不出令牌，读到的是拒绝或空内容。
 

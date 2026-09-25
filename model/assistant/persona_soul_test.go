@@ -8,6 +8,8 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/SuInk/diana/model/agent"
 )
 
 func testSoul() *PersonaSoul {
@@ -134,7 +136,7 @@ func TestGroupSoulOverrideReplacesWholeDocument(t *testing.T) {
 
 // 现在的格式：一份 SOUL.md，名字取一级标题，没有标题就用文件名。
 func TestParsePersonaMarkdown(t *testing.T) {
-	raw, err := os.ReadFile("souls/jiaran.md")
+	raw, err := os.ReadFile("souls/human.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -143,7 +145,7 @@ func TestParsePersonaMarkdown(t *testing.T) {
 		t.Fatal(err)
 	}
 	persona := document.Personas[0]
-	if persona.Name != "嘉然" || !strings.HasPrefix(persona.SystemPrompt, "# 嘉然") {
+	if persona.Name != "真人感" || !strings.HasPrefix(persona.SystemPrompt, "# 真人感") {
 		t.Fatalf("persona = %#v", persona)
 	}
 	untitled, err := ParsePersonaMarkdown([]byte("她说话很短。"), "短句")
@@ -179,5 +181,22 @@ func TestSoulAppearsInResidentContext(t *testing.T) {
 	rules := residentBlock(snapshot, ResidentBlockPromptRules)
 	if strings.Contains(rules.Content, "【你的品格】") || strings.Contains(rules.Content, "说话简短。") {
 		t.Fatalf("rules block double-counts SOUL.md: %q", rules.Content[:120])
+	}
+}
+
+// 默认形象照自己的头像：能看头像时紧跟人设注入，没开 Agent 时不注入（说了也没工具可用）。
+func TestSelfAvatarPromptFollowsSoulWhenAvatarToolExists(t *testing.T) {
+	cfg := BotConfig{BotAccount: "42", Platform: PlatformOneBotV11, AgentEnabled: true}.WithDefaults()
+	runtime := NewRuntime(cfg, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	event := MessageEvent{Kind: EventKindGroup, Platform: PlatformOneBotV11, SelfID: "42", GroupID: "g1", UserID: "u1"}
+	registry := agent.NewToolRegistry(newDianaRemoteImageTool(runtime, event))
+	head, _ := runtime.systemPromptPartsWithRelationshipAndAgentTools(event, nil, false, RelationshipPolicy{}, true, registry)
+	soulEnd := strings.Index(head, cfg.SystemPrompt) + len(cfg.SystemPrompt)
+	if !strings.Contains(head[soulEnd:], "你的形象默认就是你自己的头像") || !strings.Contains(head, avatarSourceBot) {
+		t.Fatalf("self avatar prompt missing after the SOUL: %q", head[soulEnd:min(len(head), soulEnd+200)])
+	}
+	head, _ = runtime.systemPromptPartsWithRelationshipAndAgentTools(event, nil, false, RelationshipPolicy{}, false, nil)
+	if strings.Contains(head, "你的形象默认就是你自己的头像") {
+		t.Fatal("without the agent there is no tool to look at the avatar; the line must not be injected")
 	}
 }

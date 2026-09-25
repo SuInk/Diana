@@ -999,6 +999,10 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 	// SOUL.md 排在整条系统提示词的最前面，不加任何包装：她是谁、在乎什么、为什么，
 	// 后面所有规则都在它的框架里读。
 	builder.WriteString(cfg.SystemPrompt)
+	// 长相默认照自己的头像（见 self_avatar.go）；看不了头像时说了也没用，不加。
+	if agentEnabled && registry != nil && hasTool(dianaRemoteImageToolName) {
+		appendPromptSection(&builder, cfg.prompt(promptSelfAvatarSpec))
+	}
 	appendPromptSection(&builder, replyPresentationPrompt(!chatSplitLimitsForEvent(cfg, event).SingleMessage, cfg))
 	appendPromptSection(&builder, replyLineBreakPrompt(cfg))
 	appendPromptSection(&builder, replyLineSplitPrompt(chatSplitLimitsForEvent(cfg, event)))
@@ -1158,6 +1162,7 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 	}
 	builder.WriteString("\n" + cfg.prompt(promptToolFindingsSpec))
 	builder.WriteString("\n" + cfg.prompt(promptSelfCharacterizationSpec))
+	builder.WriteString("\n" + cfg.prompt(promptSelfObservationSpec))
 	builder.WriteString("\n" + cfg.prompt(promptCurrentMessageSpec))
 	builder.WriteString("\n" + cfg.prompt(promptHistoryFormatSpec))
 	builder.WriteString("\n" + cfg.prompt(promptAdjacentSupplementSpec))
@@ -1206,6 +1211,7 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 	}
 	// 本群消息长度和心情语气紧挨着锚点注入，理由和锚点一样：都是「此刻怎么说」，
 	// 离生成越近越管用。
+	appendPromptSection(&tail, r.groupStylePrompt(event, cfg))
 	appendPromptSection(&tail, r.groupLengthNormPrompt(event, cfg))
 	appendPromptSection(&tail, r.moodToneForConfig(cfg, event.ProfileID))
 	// 语气锚点必须留在最后：前面的工具规则、权限说明和拒答流程都是公文体，离生成

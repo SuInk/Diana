@@ -7,7 +7,6 @@ import (
 	"context"
 	"encoding/base64"
 	"strings"
-	"sync/atomic"
 	"testing"
 
 	"github.com/SuInk/diana/model/llm"
@@ -25,64 +24,6 @@ func replyClosedConfig() BotConfig {
 func atBotEvent(event MessageEvent, botID string) MessageEvent {
 	event.Segments = append([]MessageSegment{{Type: "at", Data: map[string]string{"qq": botID}}}, event.Segments...)
 	return event
-}
-
-// 两个接话开关都关、这句话又没在叫机器人：它注定不回，相邻媒体指代判断的模型
-// 调用是白花的。线上抓到的就是这条：gemini 636 token 判完指代，最后照样被丢掉。
-func TestMediaReferenceSkipsLLMWhenReplyClosedAndUndirected(t *testing.T) {
-	var llmCalls atomic.Int32
-	runtime := NewRuntime(replyClosedConfig(), nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
-		llmCalls.Add(1)
-		return &capturingLLMProvider{reply: `{"refers_to_media":false,"confidence":0.9}`}, nil
-	})
-	owner := textEvent("owner-1", "99999", "这是我们的 API Key：sk-xxxx", 990)
-	sticker := stickerEvent("sticker-1", "10001", 1000)
-	question := textEvent("q-1", "10001", "这是什么", 1006)
-	runtime.remember(owner)
-	runtime.remember(sticker)
-
-	outcome := runtime.shouldMergeAdjacentMedia(context.Background(), question, "这是什么", []MessageEvent{sticker})
-	if outcome.Merge || outcome.Method != "reply_closed" {
-		t.Fatalf("outcome = %#v, want reply_closed without merge", outcome)
-	}
-	if got := llmCalls.Load(); got != 0 {
-		t.Fatalf("注定不回的消息不该问指代模型，llm calls = %d", got)
-	}
-
-	// 文本明说在讲图时照旧直接并：这一档本来就不花钱，和开关无关。
-	if outcome := runtime.shouldMergeAdjacentMedia(context.Background(), question, "这张图什么意思", []MessageEvent{sticker}); !outcome.Merge || outcome.Method != "explicit_media_reference" {
-		t.Fatalf("explicit outcome = %#v", outcome)
-	}
-
-	// @ 了机器人的消息和以前完全一样：有竞争指代对象就问模型。
-	directed := atBotEvent(question, "90001")
-	outcome = runtime.shouldMergeAdjacentMedia(context.Background(), directed, "这是什么", []MessageEvent{sticker})
-	if outcome.Method != "llm_declined" {
-		t.Fatalf("directed outcome = %#v, want llm_declined", outcome)
-	}
-	if got := llmCalls.Load(); got != 1 {
-		t.Fatalf("@ 机器人的消息应照常问一次指代模型，llm calls = %d", got)
-	}
-}
-
-// 开关没全关时不受影响：不点名的消息仍可能被接话，指代判断照做。
-func TestMediaReferenceStillJudgesWhenChatInOpen(t *testing.T) {
-	var llmCalls atomic.Int32
-	cfg := replyClosedConfig()
-	cfg.Participation = &ParticipationPreferences{RelevanceLevel: "off", ChatLevel: "low"}
-	runtime := NewRuntime(cfg, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
-		llmCalls.Add(1)
-		return &capturingLLMProvider{reply: `{"refers_to_media":false,"confidence":0.9}`}, nil
-	})
-	owner := textEvent("owner-1", "99999", "这是我们的 API Key：sk-xxxx", 990)
-	sticker := stickerEvent("sticker-1", "10001", 1000)
-	runtime.remember(owner)
-	runtime.remember(sticker)
-
-	outcome := runtime.shouldMergeAdjacentMedia(context.Background(), textEvent("q-1", "10001", "这是什么", 1006), "这是什么", []MessageEvent{sticker})
-	if outcome.Method != "llm_declined" || llmCalls.Load() != 1 {
-		t.Fatalf("outcome = %#v calls = %d, want one llm judgment", outcome, llmCalls.Load())
-	}
 }
 
 // 同样的消息也不该跑跨群检索：它的结果只给回复用。@ 了机器人的照旧检索。
@@ -132,7 +73,7 @@ func TestReplyClosedKeepsUnresolvedQuoteOnOldPath(t *testing.T) {
 	}
 }
 
-// 路由请求里当前消息只出现一次：current_text 已经带了正文，候选里那条只留标识。
+// 路由请求里当前消息只出现一次，标着【当前消息】。
 func TestProactiveRouterPayloadCarriesCurrentTextOnce(t *testing.T) {
 	provider := &sequenceLLMProvider{replies: []string{
 		`{"relevance":{"directed":false,"reason":"群友之间"},"chat_in":{"score":0.1,"reason":"没什么可接"}}`,
@@ -153,7 +94,7 @@ func TestProactiveRouterPayloadCarriesCurrentTextOnce(t *testing.T) {
 	if got := strings.Count(payload, text); got != 1 {
 		t.Fatalf("当前消息在路由请求里出现了 %d 次，want 1：%s", got, payload)
 	}
-	for _, want := range []string{`"current_text":"` + text + `"`, `"message_id":"message-1"`, `"is_current":true`} {
+	for _, want := range []string{"【当前消息】[刚刚] Alice：" + text} {
 		if !strings.Contains(payload, want) {
 			t.Fatalf("payload missing %s: %s", want, payload)
 		}
@@ -176,7 +117,7 @@ func TestProactiveRouterPayloadKeepsEarlierCandidateText(t *testing.T) {
 	if strings.Count(payload, "前面那句先说的话") != 1 || strings.Count(payload, "后面这句才是当前") != 1 {
 		t.Fatalf("each candidate text should appear exactly once: %s", payload)
 	}
-	if strings.Count(payload, `"is_current":true`) != 1 {
+	if strings.Count(payload, "【当前消息】") != 1 || !strings.Contains(payload, "【当前消息】[刚刚] user-2：后面这句才是当前") {
 		t.Fatalf("only the latest candidate is current: %s", payload)
 	}
 }

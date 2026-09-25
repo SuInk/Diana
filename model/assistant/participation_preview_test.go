@@ -29,7 +29,7 @@ func TestParticipationPreviewCarriesUnsavedOverrides(t *testing.T) {
 			t.Fatalf("system prompt is missing %q", want)
 		}
 	}
-	if !strings.HasPrefix(preview.User, "先读上下文再评分。") || !strings.Contains(preview.User, `"current_text":"有人知道改到哪天了吗"`) {
+	if !strings.HasPrefix(preview.User, "先读上下文再评分。") || !strings.Contains(preview.User, "【当前消息】[刚刚] 小林：有人知道改到哪天了吗") {
 		t.Fatalf("user message is not instruction + payload: %s", preview.User)
 	}
 	if preview.Retry != cfg.prompt(promptParticipationRetrySpec) {

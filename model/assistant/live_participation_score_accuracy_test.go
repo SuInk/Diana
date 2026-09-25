@@ -161,8 +161,8 @@ func TestLiveParticipationScoreAccuracy(t *testing.T) {
 	var mu sync.Mutex
 	for i, c := range cases {
 		results[i] = result{Name: c.name, Dir: c.dir, Lo: c.lo, Hi: c.hi}
-		payload, _ := json.Marshal(c.p)
-		user := cfg.prompt(promptParticipationRouteInstructionSpec) + string(payload)
+		// 和线上一样喂按时间排的对话稿（proactiveReplyTranscript）。
+		user := cfg.prompt(promptParticipationRouteInstructionSpec) + proactiveReplyTranscript(c.p)
 		for s := 0; s < samples; s++ {
 			wg.Add(1)
 			go func(i int) {

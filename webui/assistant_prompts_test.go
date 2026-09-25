@@ -99,7 +99,7 @@ func TestParticipationPromptPreviewUsesUnsavedConfig(t *testing.T) {
 			t.Fatalf("system prompt is missing %q:\n%s", want, preview.System)
 		}
 	}
-	if !strings.Contains(preview.User, `"current_text"`) || len(preview.Decision) != 2 {
+	if !strings.Contains(preview.User, "【当前消息】") || len(preview.Decision) != 2 {
 		t.Fatalf("preview = %+v", preview)
 	}
 }

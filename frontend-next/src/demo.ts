@@ -290,6 +290,9 @@ const groups: BotGroupSummary[] = [
 
 // 机器人见过的人从画像里取名，没见过的走 OneBot get_stranger_info；演示模式两条路
 // 都没有，用这张表补上画像里没有的号。
+const demoLearnedStyle = "这个群说话很碎，一条消息大多十来个字，想到哪说到哪，连着发好几条很常见，基本不打句号。口头禅是「绷不住了」「哥几个」「这么强」，震惊时发「啊？」，捧场用「确实」「可以」。爱用 QQ 表情「吃瓜」「坐牢」代替表态。调侃很直接，互相叫外号、阴阳两句都不算事，但不会真骂人。聊代码和部署时会突然正经，贴报错、给链接，说完又回到玩梗。";
+const demoGroupStyles = new Map<string, import("./api").GroupStyle>([["100200301", { profile_id: "bot-onebot", group_id: "100200301", text: demoLearnedStyle, manual: false, sample_count: 286, updated_at: new Date(Date.now() - 5 * 3600_000).toISOString() }]]);
+
 const demoAccountNames: Record<string, string> = { "100200001": "阿墨", "880024": "小林（演示）" };
 
 // 内置人设在真实后端里是编译进程序的几份 SOUL.md；演示模式读 Go 测试生成的那份 JSON
@@ -1205,6 +1208,33 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
     plugins = [...plugins]; demoStatus.plugins = plugins; return json(demoPluginForProfile(plugin, profile));
   }
 
+  const styleMatch = path.match(/^\/api\/assistant\/groups\/([^/]+)\/style(\/relearn|\/enabled)?$/);
+  if (styleMatch) {
+    // 风格学习：演示站按群号记在内存里，「重新学习」给一段固定的样例笔记。
+    const key = decodeURIComponent(styleMatch[1]);
+    const reply = () => json({ style: demoGroupStyles.get(key), learning_enabled: true, max_runes: 400 });
+    const current = demoGroupStyles.get(key);
+    const store = (next: import("./api").GroupStyle) => {
+      if (next.text || next.disabled) demoGroupStyles.set(key, next);
+      else demoGroupStyles.delete(key);
+    };
+    const base = { profile_id: "", group_id: key, disabled: current?.disabled, updated_at: new Date().toISOString() };
+    if (styleMatch[2] === "/relearn" && method === "POST") {
+      await new Promise((resolve) => setTimeout(resolve, 800));
+      store({ ...base, text: demoLearnedStyle, manual: false, sample_count: 286 });
+      return reply();
+    }
+    if (styleMatch[2] === "/enabled" && method === "PUT") {
+      store({ ...(current ?? { ...base, text: "", manual: false }), disabled: !body.enabled });
+      return reply();
+    }
+    if (method === "PUT") {
+      const text = String(body.text ?? "").trim();
+      store({ ...base, text, manual: Boolean(text) });
+      return reply();
+    }
+    return reply();
+  }
   if (path === "/api/assistant/groups" && method === "GET") return json({ groups, plugins, live_available: true, quota_window_seconds: 5 * 3600 });
   if (path === "/api/assistant/groups" && method === "POST") {
     const config = body.config as BotGroupSummary;
@@ -1660,30 +1690,21 @@ function demoParticipationPreview(body: Record<string, unknown>) {
   ].join("\n");
   const criteria = String(body.proactive_reply_extra_criteria ?? "").trim();
   if (criteria) system = system.trimEnd() + "\n\n" + text("routing.criteria.heading") + "\n" + criteria + "\n" + text("routing.criteria.guard");
-  const none = { reply_target: "none", mentions: [], mentions_self: false, mentions_other: false };
-  const botName = String(body.name ?? "").trim() || "机器人";
-  const lastBot = { addressing: none, sender: botName, text: "上次说的那个展好像延期了", is_bot: true, age_seconds: 60 };
-  const payload = {
-    addressing: none,
-    current_text: "有人知道改到哪天了吗",
-    current_sender: "小林",
-    current_images: 0,
-    bot_account: String(body.bot_account ?? "").trim() || "10000",
-    bot_aliases: (body.group_triggers as string[] | undefined)?.length ? body.group_triggers : undefined,
-    quoted_is_bot: false,
-    context_gap_seconds: 25,
-    last_bot_message: lastBot,
-    last_bot_addressed_current_sender: false,
-    messages_after_last_bot: 1,
-    recent_image_count: 0,
-    recent_messages: [{ addressing: none, sender: "阿杰", text: "啊？那我票白买了", age_seconds: 25 }, lastBot, { addressing: none, sender: "小林", text: "周末有人去看展吗", age_seconds: 95 }],
-    candidates: [{ addressing: none, message_id: "preview", sender: "小林", age_seconds: 0, is_current: true }],
-    available_reply_tools: ["web_search：始终注册的实时联网搜索；Provider 不可用时会返回明确配置或上游错误"]
-  };
+  // 和后端 proactiveReplyTranscript 一样：按时间从早到晚的对话稿，行首是离现在多久。
+  const aliases = ((body.group_triggers as string[] | undefined) ?? []).map((alias) => alias.trim()).filter(Boolean);
+  const botName = aliases[0] ?? "机器人";
+  const transcript = [
+    ...(aliases.length ? ["机器人的称呼：" + aliases.join("、")] : []),
+    "对话按时间从早到晚：",
+    "[1分钟前] 小林：周末有人去看展吗",
+    `[1分钟前] ${botName}（机器人）：上次说的那个展好像延期了`,
+    "[25秒前] 阿杰：啊？那我票白买了",
+    "【当前消息】[刚刚] 小林：有人知道改到哪天了吗"
+  ].join("\n");
   const shared = text("routing.participation.shared_note");
   return {
     system,
-    user: (text("routing.route_instruction.participation") + contract("routing.route_instruction.participation") + JSON.stringify(payload)).trim(),
+    user: (text("routing.route_instruction.participation") + contract("routing.route_instruction.participation") + transcript).trim(),
     retry: text("routing.participation.retry"),
     decision: [
       { label: "在跟机器人说话", instructions: "当前消息是不是明确在跟机器人说话。\n" + text("routing.participation.relevance_note") + "\n" + shared, true_criteria: text("routing.participation.relevance_true"), false_criteria: text("routing.participation.relevance_false") },

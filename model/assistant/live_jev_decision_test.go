@@ -5,7 +5,6 @@ package assistant
 
 import (
 	"context"
-	"encoding/json"
 	"os"
 	"strings"
 	"testing"
@@ -60,21 +59,19 @@ func TestLiveJevParticipationRatings(t *testing.T) {
 	spec := participationDecisionSpec(nil)
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			// 路由上下文里本来就带着机器人自己的身份，缺了它「叫没叫它」这道题无从判起。
-			payload, err := json.Marshal(map[string]any{
-				"bot":             map[string]any{"name": "Diana", "aliases": []string{"diana", "小 D"}},
-				"current_text":    tc.current,
-				"recent_messages": tc.recent,
-			})
-			if err != nil {
-				t.Fatal(err)
+			// 和线上一样喂对话稿；机器人的称呼要在，缺了它「叫没叫它」这道题无从判起。
+			payload := proactiveReplyPayload{CurrentText: tc.current, CurrentSender: "Carol", BotAliases: []string{"Diana", "diana", "小 D"}}
+			for i := len(tc.recent) - 1; i >= 0; i-- {
+				sender, text, _ := strings.Cut(tc.recent[i], "：")
+				isBot := strings.HasSuffix(sender, "（机器人）")
+				payload.RecentMessages = append(payload.RecentMessages, proactiveReplyHistoryItem{Sender: strings.TrimSuffix(sender, "（机器人）"), Text: text, IsBot: isBot})
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
 			resp, err := client.Generate(ctx, llm.GenerateRequest{
 				Messages: []llm.Message{
 					{Role: llm.RoleSystem, Content: prefs.prompt()},
-					{Role: llm.RoleUser, Content: "Intent Recognition：请判断当前消息是不是在跟机器人说话（directed 与 reason），并给出闲聊适合度（score 与 reason）。上下文：\n" + string(payload)},
+					{Role: llm.RoleUser, Content: "Intent Recognition：请判断当前消息是不是在跟机器人说话（directed 与 reason），并给出闲聊适合度（score 与 reason）。上下文：\n" + proactiveReplyTranscript(payload)},
 				},
 				Decision: spec,
 			})

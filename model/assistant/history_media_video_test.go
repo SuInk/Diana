@@ -937,7 +937,7 @@ func TestRecentHistoryImageIndexesIgnoreVideoFrames(t *testing.T) {
 		},
 		{Kind: EventKindPrivate, Time: 101, UserID: "user-1", MessageID: "question", Segments: []MessageSegment{{Type: "text", Data: map[string]string{"text": "刚才的视频是什么"}}}},
 	}
-	if selected := recentHistoryImageIndexes(history, "question"); len(selected) != 0 {
+	if selected := recentHistoryImageIndexes(history, "question", "user-1"); len(selected) != 0 {
 		t.Fatalf("video frames selected as historical still images: %#v", selected)
 	}
 }
@@ -1013,7 +1013,7 @@ func TestRuntimeCachesIncomingVideoThenRoutesFollowupToItsFrames(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if reply != "视频里是测试画面。" || len(channel.sent) != 1 {
+	if reply != "视频里是测试画面" || len(channel.sent) != 1 {
 		t.Fatalf("reply=%q sent=%#v", reply, channel.sent)
 	}
 	// 断言「关键帧被附给了生成回复的那次调用」，而不是「一共发生了几次 LLM 调用」。

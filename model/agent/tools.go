@@ -4,6 +4,7 @@
 package agent
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -144,6 +145,9 @@ func NewDefaultToolRegistry(cfg Config) (*ToolRegistry, error) {
 		registry.Register(&WriteFileTool{root: root, maxBytes: cfg.FileWriteMaxBytes, protected: protected})
 		registry.Register(&EditFileTool{root: root, maxBytes: cfg.FileWriteMaxBytes, protected: protected})
 	}
+	// stat 只读，跟读工具同级；挪动、复制、删除、建目录跟 write_file 一样要「允许写入
+	// 文件」打开，工具按开关收窄自己的动作列表。
+	registry.Register(&ManageFilesTool{root: root, protected: protected, writeEnabled: cfg.FileWriteEnabled})
 	if len(cfg.CommandAllowlist) > 0 {
 		registry.Register(&RunCommandTool{
 			root:           root,
@@ -958,7 +962,7 @@ func (t *ListFilesTool) Run(_ context.Context, input map[string]any) (string, er
 	}
 	entries, err := os.ReadDir(path)
 	if err != nil {
-		return "", err
+		return "", workspaceNotFound(rel, err)
 	}
 	limit := t.limit
 	if limit <= 0 {
@@ -1226,7 +1230,8 @@ func (t *ReadFileTool) Name() string {
 // Description 返回读文件工具说明。
 func (t *ReadFileTool) Description() string {
 	return `按行读取 Agent 工作目录内的文本文件。默认从第 1 行起读 ` + fmt.Sprint(defaultReadFileLines) +
-		` 行；文件更长时结果里会写明总行数和下一段的 offset，用 offset 继续读，不要指望一次拿到整个文件。`
+		` 行；文件更长时结果里会写明总行数和下一段的 offset，用 offset 继续读，不要指望一次拿到整个文件。` +
+		`二进制文件（图片、音视频、压缩包）会被拒绝：图片用 view_image 看，其他用 manage_files stat 看大小和类型。`
 }
 
 func (t *ReadFileTool) InputSchema() map[string]any {
@@ -1260,7 +1265,7 @@ func (t *ReadFileTool) Run(_ context.Context, input map[string]any) (string, err
 	}
 	info, err := os.Stat(path)
 	if err != nil {
-		return "", err
+		return "", workspaceNotFound(rel, err)
 	}
 	if info.IsDir() {
 		return "", fmt.Errorf("%s is a directory", rel)
@@ -1270,11 +1275,26 @@ func (t *ReadFileTool) Run(_ context.Context, input map[string]any) (string, err
 		// 用户输入只能缩小读取范围，不能突破工具注册时的最大字节限制。
 		maxBytes = t.maxBytes
 	}
-	data, err := os.ReadFile(path)
+	if info.Size() > readFileScanMaxBytes {
+		return "", fmt.Errorf("%s 有 %d MB，超过按行读取的 %d MB 上限；要找其中的内容请用 grep，要看大小和类型用 manage_files stat", rel, info.Size()>>20, readFileScanMaxBytes>>20)
+	}
+	file, err := os.Open(path)
 	if err != nil {
 		return "", err
 	}
-	lines := splitFileLines(string(data))
+	defer file.Close()
+	// 先看开头认类型：图片、压缩包按行读出来只是一屏乱码，还会被当成文本塞进上下文。
+	head := make([]byte, 8<<10)
+	headLen, err := io.ReadFull(file, head)
+	if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
+		return "", err
+	}
+	if looksBinaryContent(head[:headLen]) {
+		return "", fmt.Errorf("%s 是二进制文件（%s），read_file 只读文本；图片用 view_image 看画面，其他文件用 manage_files stat 看大小和类型", rel, SniffMediaType(head[:headLen]))
+	}
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		return "", err
+	}
 
 	offset := intFromInput(input, "offset", 1)
 	if offset < 1 {
@@ -1284,11 +1304,17 @@ func (t *ReadFileTool) Run(_ context.Context, input map[string]any) (string, err
 	if limit <= 0 || limit > maxReadFileLines {
 		limit = defaultReadFileLines
 	}
-	if offset > len(lines) {
-		return fmt.Sprintf("%s 共 %d 行，offset=%d 已经越过文件末尾。", rel, len(lines), offset), nil
+	// 边读边数行，只留下要的那一段：以前整个文件读进内存再切，几十 MB 的日志也照读不误。
+	total, selected, err := scanFileLines(file, offset, offset-1+limit)
+	if err != nil {
+		return "", err
 	}
-	end := min(offset-1+limit, len(lines))
-	body := strings.Join(lines[offset-1:end], "\n")
+	if offset > total {
+		return fmt.Sprintf("%s 共 %d 行，offset=%d 已经越过文件末尾。", rel, total, offset), nil
+	}
+	end := offset - 1 + len(selected)
+	lines := total
+	body := strings.Join(selected, "\n")
 	// 字节上限仍然生效，但它现在是兜底而不是主要手段：一行特别长的文件不该把预算吃光。
 	byteTruncated := false
 	if len(body) > maxBytes {
@@ -1297,9 +1323,9 @@ func (t *ReadFileTool) Run(_ context.Context, input map[string]any) (string, err
 	}
 
 	var out strings.Builder
-	fmt.Fprintf(&out, "%s 第 %d-%d 行（共 %d 行）\n", rel, offset, end, len(lines))
-	if end < len(lines) {
-		fmt.Fprintf(&out, "还有 %d 行未读，用 offset=%d 继续。\n", len(lines)-end, end+1)
+	fmt.Fprintf(&out, "%s 第 %d-%d 行（共 %d 行）\n", rel, offset, end, lines)
+	if end < lines {
+		fmt.Fprintf(&out, "还有 %d 行未读，用 offset=%d 继续。\n", lines-end, end+1)
 	}
 	if byteTruncated {
 		out.WriteString("这一段超过字节上限，已在中途截断。\n")
@@ -1309,33 +1335,47 @@ func (t *ReadFileTool) Run(_ context.Context, input map[string]any) (string, err
 	return out.String(), nil
 }
 
-// splitFileLines 按行切分，并去掉结尾空行带来的那一条空记录，
-// 免得「共 N 行」比编辑器里看到的多一行。
-func splitFileLines(content string) []string {
-	content = strings.ReplaceAll(content, "\r\n", "\n")
-	lines := strings.Split(content, "\n")
-	if len(lines) > 0 && lines[len(lines)-1] == "" {
-		lines = lines[:len(lines)-1]
+// scanFileLines 逐行读完整个文件，返回总行数和第 from 到 to 行（从 1 开始、含两端）。
+// CRLF 当一个换行；结尾的换行不多算一行，免得「共 N 行」比编辑器里看到的多一行。
+func scanFileLines(reader io.Reader, from, to int) (int, []string, error) {
+	buffered := bufio.NewReaderSize(reader, 64<<10)
+	total := 0
+	var selected []string
+	for {
+		line, err := buffered.ReadString('\n')
+		if line != "" {
+			total++
+			if total >= from && total <= to {
+				if strings.HasSuffix(line, "\n") {
+					line = strings.TrimSuffix(strings.TrimSuffix(line, "\n"), "\r")
+				}
+				selected = append(selected, line)
+			}
+		}
+		if errors.Is(err, io.EOF) {
+			return total, selected, nil
+		}
+		if err != nil {
+			return 0, nil, err
+		}
 	}
-	return lines
 }
 
-// safePath 将相对路径限制在 Agent 工作目录内。
+// safePath 将相对路径限制在 Agent 工作目录内。写法上的宽容（绝对路径、workspace/ 前缀等）
+// 统一交给 NormalizeWorkspacePath，这里只负责最终落点的越界校验。
 func safePath(root, rel string) (string, error) {
 	if strings.TrimSpace(root) == "" {
 		return "", errors.New("agent workdir is empty")
-	}
-	if strings.TrimSpace(rel) == "" {
-		rel = "."
 	}
 	cleanRoot, err := filepath.Abs(root)
 	if err != nil {
 		return "", err
 	}
-	if filepath.IsAbs(rel) {
-		return "", errors.New("absolute paths are not allowed")
+	normalized, err := NormalizeWorkspacePath(cleanRoot, rel)
+	if err != nil {
+		return "", err
 	}
-	candidate, err := filepath.Abs(filepath.Join(cleanRoot, filepath.Clean(rel)))
+	candidate, err := filepath.Abs(filepath.Join(cleanRoot, normalized))
 	if err != nil {
 		return "", err
 	}
@@ -1344,8 +1384,8 @@ func safePath(root, rel string) (string, error) {
 		return "", err
 	}
 	if relation == ".." || strings.HasPrefix(relation, ".."+string(filepath.Separator)) {
-		// filepath.Clean 后再 Rel 校验，阻止 ../ 逃出 Agent 工作目录。
-		return "", errors.New("path escapes agent workdir")
+		// NormalizeWorkspacePath 已经挡过一次，这里 Rel 再校验一遍兜底，阻止 ../ 逃出 Agent 工作目录。
+		return "", fmt.Errorf("%w（%s 跑出了工作目录）", ErrWorkspacePath, strings.TrimSpace(rel))
 	}
 	resolvedRoot, err := filepath.EvalSymlinks(cleanRoot)
 	if err != nil {
@@ -1360,7 +1400,7 @@ func safePath(root, rel string) (string, error) {
 		return "", err
 	}
 	if relation == ".." || strings.HasPrefix(relation, ".."+string(filepath.Separator)) {
-		return "", errors.New("path resolves outside agent workdir")
+		return "", fmt.Errorf("%s 经软链接指向了工作目录外面，不能读写；请改用工作目录里的真实文件", strings.TrimSpace(rel))
 	}
 	return candidate, nil
 }
@@ -1604,6 +1644,17 @@ func WorkspaceFileProtected(cfg Config, rel string) bool {
 	return agentProtectedFiles(cfg).blocked(path)
 }
 
+// RuntimeSecretPath 报告一个绝对路径是不是运行时登记过的凭据（数据库、config.yaml、
+// MCP 配置、编码代理登录态……）。给按平台适配器给出的本机路径读文件的入口用：聊天
+// 媒体的本地缓存路径来自消息记录，不能让它指到凭据上再被存进工作目录。
+func RuntimeSecretPath(cfg Config, abs string) bool {
+	abs = strings.TrimSpace(abs)
+	if abs == "" || !filepath.IsAbs(abs) {
+		return false
+	}
+	return agentProtectedFiles(cfg).blocked(filepath.Clean(abs))
+}
+
 // blocked 判断这个路径是不是运行时凭据配置，或者落在整个挡掉的目录里（含目录本身）。
 // path 必须是已经过 safePath 的绝对路径。
 func (p protectedFiles) blocked(path string) bool {
@@ -1615,6 +1666,34 @@ func (p protectedFiles) blocked(path string) bool {
 	}
 	resolved, err := evalSymlinksAllowMissing(path)
 	return err == nil && p.matches(resolved)
+}
+
+// containsWithin 判断 dir 目录下面（含 dir 本身）有没有凭据文件或凭据目录。整个目录
+// 挪走或删掉时要先问这个：名单按路径匹配，目录本身不在名单里，里面的东西却在。
+func (p protectedFiles) containsWithin(dir string) bool {
+	forms := []string{dir}
+	if resolved, err := evalSymlinksAllowMissing(dir); err == nil && resolved != dir {
+		forms = append(forms, resolved)
+	}
+	inside := func(candidate string) bool {
+		for _, form := range forms {
+			if candidate == form || strings.HasPrefix(candidate, form+string(filepath.Separator)) {
+				return true
+			}
+		}
+		return false
+	}
+	for file := range p.files {
+		if inside(file) {
+			return true
+		}
+	}
+	for _, protectedDir := range p.dirs {
+		if inside(protectedDir) {
+			return true
+		}
+	}
+	return p.blocked(dir)
 }
 
 func (p protectedFiles) matches(path string) bool {

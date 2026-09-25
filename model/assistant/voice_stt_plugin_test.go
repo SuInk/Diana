@@ -199,8 +199,8 @@ func TestVoiceSTTDisabledAndPrivateControls(t *testing.T) {
 
 func TestVoiceSegmentsParticipateInMediaTurnAssembly(t *testing.T) {
 	voice := MessageEvent{Segments: []MessageSegment{{Type: "record", Data: map[string]string{"file": "voice.amr"}}}}
-	if !EventIsMergeableMediaOnly(voice) || !eventHasDirectReferenceContent(voice) {
-		t.Fatal("record segment is not treated as mergeable reference media")
+	if !eventHasDirectReferenceContent(voice) {
+		t.Fatal("record segment is not treated as reference media")
 	}
 	question := MessageEvent{Segments: []MessageSegment{{Type: "text", Data: map[string]string{"text": "这段语音说了什么"}}}}
 	merged := attachInboundTurnMedia(question, []MessageEvent{voice})
