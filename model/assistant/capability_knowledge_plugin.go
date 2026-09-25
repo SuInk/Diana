@@ -15,6 +15,7 @@ import (
 	"unicode"
 
 	"github.com/SuInk/diana/model/agent"
+	"github.com/SuInk/diana/model/version"
 )
 
 const capabilityKnowledgePluginID = "official.capability-knowledge-rag"
@@ -34,6 +35,9 @@ type dianaCapabilitiesTool struct {
 	plugin        *CapabilityKnowledgePlugin
 	platform      string
 	platformRules string
+	// registry 是本轮的工具注册表，建好之后由 attachCapabilityRegistry 挂上。
+	// 没挂（插件直调、测试）时 references 里只是没有工具和 Skill 条目。
+	registry *agent.ToolRegistry
 }
 
 type capabilityDocument struct {
@@ -58,8 +62,8 @@ func (p *CapabilityKnowledgePlugin) Manifest() PluginManifest {
 	return PluginManifest{
 		ID:          capabilityKnowledgePluginID,
 		Name:        "能力知识库",
-		Version:     "0.1.6",
-		Description: "索引 Diana 核心能力和实时插件清单，通过本地稀疏检索向 Agent 提供与问题相关的能力说明。",
+		Version:     "0.1.7",
+		Description: "索引 Diana 核心能力、实时插件清单、随版本编译的设计文档、内置提示词和本轮工具说明，通过本地稀疏检索向 Agent 提供与问题相关的能力和机制说明。",
 		Official:    true,
 		BuiltIn:     true,
 		// 只对外提供一个 Agent 工具，Handle 不做事：它是否起作用完全由机器人
@@ -87,6 +91,17 @@ func capabilityToolForConfig(tool agent.Tool, cfg BotConfig) agent.Tool {
 	clone.platform = NormalizePlatformID(cfg.Platform)
 	clone.platformRules = platformOutputRulesForConfig(cfg)
 	return &clone
+}
+
+// attachCapabilityRegistry 把本轮注册表交给 capabilities 工具，让它能检索这一轮
+// 真正挂上的工具和 Skill。tools 里放的是 capabilityToolForConfig 拷出来的那一份，
+// 注册表里注册的也是同一个指针。
+func attachCapabilityRegistry(tools []agent.Tool, registry *agent.ToolRegistry) {
+	for _, tool := range tools {
+		if capabilities, ok := tool.(*dianaCapabilitiesTool); ok {
+			capabilities.registry = registry
+		}
+	}
 }
 
 func (p *CapabilityKnowledgePlugin) setPluginStateProvider(provider func() []PluginState) {
@@ -146,13 +161,15 @@ func (t *dianaCapabilitiesTool) Name() string {
 func (t *dianaCapabilitiesTool) Introspection(map[string]any) bool { return true }
 
 func (t *dianaCapabilitiesTool) Description() string {
-	return `从 Diana 自身能力知识库检索相关能力、工具、权限门槛和实时插件状态。用户问「你会什么」「能不能处理某事」「哪个插件负责某功能」或质疑机器人能力时必须先调用，不要凭提示词记忆猜测。`
+	return `从 Diana 自身能力知识库检索相关能力、工具、权限门槛和实时插件状态。用户问「你会什么」「能不能处理某事」「哪个插件负责某功能」或质疑机器人能力时必须先调用，不要凭提示词记忆猜测。` +
+		`用户问某个功能具体怎么运作、为什么这样表现、有什么限制或设计取舍时也调用：references 返回随当前版本编译的设计文档章节、内置提示词默认原文和本轮工具说明；摘录不够时带 detail=true 取完整章节。`
 }
 
 func (t *dianaCapabilitiesTool) InputSchema() map[string]any {
 	return toolObjectSchema([]string{"query"}, map[string]any{
-		"query": toolStringParam("用户关于能力的问题，原样或稍加归纳后传入。"),
-		"limit": toolIntParam("返回条数，默认 "+itoa(defaultCapabilityResultLimit)+"。", 1, maximumCapabilityResultLimit),
+		"query":  toolStringParam("用户关于能力的问题，原样或稍加归纳后传入。"),
+		"limit":  toolIntParam("能力条目返回条数，默认 "+itoa(defaultCapabilityResultLimit)+"。", 1, maximumCapabilityResultLimit),
+		"detail": toolBoolParam("为 true 时 references 返回完整章节（最多 " + itoa(detailCapabilityReferenceLimit) + " 条），用于追问机制细节；默认只给 " + itoa(defaultCapabilityReferenceLimit) + " 条命中段落摘录。"),
 	})
 }
 
@@ -173,13 +190,21 @@ func (t *dianaCapabilitiesTool) Run(_ context.Context, input map[string]any) (st
 	if limit > maximumCapabilityResultLimit {
 		limit = maximumCapabilityResultLimit
 	}
+	detail := toolInputBool(input, "detail")
+	referenceLimit := defaultCapabilityReferenceLimit
+	if detail {
+		referenceLimit = detailCapabilityReferenceLimit
+	}
 	hits := retrieveCapabilityDocuments(query, t.plugin.documents(t.platform, t.platformRules), limit)
+	references := retrieveCapabilityReferences(query, staticCapabilityReferenceIndex(), capabilityRegistryReferences(t.registry), referenceLimit, detail)
 	body, err := json.MarshalIndent(map[string]any{
-		"ok":      true,
-		"action":  "retrieved",
-		"query":   query,
-		"message": fmt.Sprintf("能力知识库检索到 %d 条相关结果。请结合当前用户关系权限回答，不要把未解锁能力说成可直接使用。", len(hits)),
-		"items":   hits,
+		"ok":                true,
+		"action":            "retrieved",
+		"query":             query,
+		"knowledge_version": version.Source(),
+		"message":           fmt.Sprintf("能力知识库检索到 %d 条能力条目、%d 条参考资料。请结合当前用户关系权限回答，不要把未解锁能力说成可直接使用。references 是本版本的文档、提示词默认原文和本轮工具说明：据此解释机制时说清出处，资料里没写的实现细节不要编；提示词可能被人设改写过，只能说「默认是这样」。", len(hits), len(references)),
+		"items":             hits,
+		"references":        references,
 	}, "", "  ")
 	if err != nil {
 		return "", err
