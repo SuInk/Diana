@@ -2,7 +2,8 @@
 <!--
   工作区是 Agent 读写文件、跑命令的目录，位置跟着数据库走（数据目录下的 workspace）。
   它藏在 Application Support 或 Docker 数据卷里，想看机器人写了什么、截了什么图，
-  以前只能 SSH 上去翻。这一页只读：能进目录、预览图片和文本、下载，不能改。
+  以前只能 SSH 上去翻。这一页只读：能进目录，常用的图片、音视频、PDF 和文本直接
+  预览，其余下载，不能改。凭据配置和指到工作区外面的链接一样能看——只有管理员进得来。
 -->
 <template>
   <section class="stack">
@@ -69,6 +70,7 @@
                     <component :is="entryIcon(entry)" :size="15" aria-hidden="true" class="workspace-entry-icon" />
                     <span class="workspace-entry-name">{{ entry.name }}</span>
                     <span v-if="entry.protected" class="badge warn">凭据</span>
+                    <span v-if="entry.kind === 'link'" class="badge err">失效</span>
                     <span v-else-if="entry.symlink" class="badge">链接</span>
                   </button>
                 </td>
@@ -87,7 +89,11 @@
         <p class="muted workspace-preview-meta">
           {{ formatBytes(preview.entry.size) }} · {{ formatTime(preview.entry.modified) }}
         </p>
+        <p v-if="preview.entry.protected" class="workspace-warning">这是运行时的凭据配置，里面是明文令牌，别截图外传。</p>
         <img v-if="preview.kind === 'image'" :src="workspaceFileURL(preview.entry.path)" :alt="preview.entry.name" />
+        <video v-else-if="preview.kind === 'video'" :src="workspaceFileURL(preview.entry.path)" controls preload="metadata" />
+        <audio v-else-if="preview.kind === 'audio'" :src="workspaceFileURL(preview.entry.path)" controls preload="metadata" />
+        <iframe v-else-if="preview.kind === 'pdf'" :src="workspaceFileURL(preview.entry.path)" :title="preview.entry.name" />
         <template v-else-if="preview.kind === 'text'">
           <p v-if="preview.loading" class="muted">读取中…</p>
           <pre v-else class="workspace-preview-text">{{ preview.text }}</pre>
@@ -108,7 +114,22 @@
 <script setup lang="ts">
 import { computed, onActivated, onMounted, ref } from "vue";
 import type { Component } from "vue";
-import { ChevronRight, Copy, Download, File, FileImage, FileText, Folder, FolderOpen, Link2Off, Lock, RefreshCw } from "@lucide/vue";
+import {
+  ChevronRight,
+  Copy,
+  Download,
+  File,
+  FileAudio,
+  FileImage,
+  FileText,
+  FileType,
+  FileVideo,
+  Folder,
+  FolderOpen,
+  Link2Off,
+  Lock,
+  RefreshCw
+} from "@lucide/vue";
 import EmptyState from "../components/EmptyState.vue";
 import Modal from "../components/Modal.vue";
 import { listWorkspace, workspaceFileURL, type WorkspaceEntry, type WorkspaceListing } from "../api";
@@ -117,15 +138,20 @@ import { toastError, toastSuccess } from "../toast";
 
 // 文本预览只取开头一段：日志、克隆下来的大文件整份塞进 <pre> 会把页面卡住。
 const TEXT_PREVIEW_LIMIT = 256 * 1024;
-const IMAGE_EXTENSIONS = new Set(["png", "jpg", "jpeg", "gif", "webp", "bmp"]);
-const TEXT_EXTENSIONS = new Set([
-  "txt", "md", "json", "jsonl", "yaml", "yml", "toml", "ini", "csv", "tsv", "log",
-  "go", "py", "js", "mjs", "ts", "vue", "sh", "html", "htm", "css", "xml", "svg", "sql"
-]);
+// 和后端 workspaceMediaTypes 同一份名单：这些直接用对应的标签打开。其余的一律先当
+// 文本读一段，后端按内容判断不是文本时再改成只给下载，所以文本扩展名不用列全。
+const MEDIA_EXTENSIONS: Partial<Record<string, "image" | "video" | "audio" | "pdf">> = {
+  png: "image", jpg: "image", jpeg: "image", gif: "image", webp: "image", bmp: "image", avif: "image", ico: "image", svg: "image",
+  mp4: "video", m4v: "video", webm: "video", mov: "video",
+  mp3: "audio", wav: "audio", ogg: "audio", oga: "audio", opus: "audio", m4a: "audio", aac: "audio", flac: "audio",
+  pdf: "pdf"
+};
+
+type PreviewKind = "image" | "video" | "audio" | "pdf" | "text" | "other";
 
 interface Preview {
   entry: WorkspaceEntry;
-  kind: "image" | "text" | "other";
+  kind: PreviewKind;
   loading: boolean;
   text: string;
   clipped: boolean;
@@ -162,22 +188,20 @@ function extension(name: string): string {
 }
 
 function openable(entry: WorkspaceEntry): boolean {
-  return entry.kind !== "link" && !entry.protected;
+  return entry.kind !== "link";
 }
 
 function entryIcon(entry: WorkspaceEntry): Component {
   if (entry.protected) return Lock;
   if (entry.kind === "link") return Link2Off;
   if (entry.kind === "dir") return Folder;
-  const ext = extension(entry.name);
-  if (IMAGE_EXTENSIONS.has(ext)) return FileImage;
-  if (TEXT_EXTENSIONS.has(ext)) return FileText;
-  return File;
+  const icons: Record<string, Component> = { image: FileImage, video: FileVideo, audio: FileAudio, pdf: FileType };
+  return icons[MEDIA_EXTENSIONS[extension(entry.name)] ?? ""] ?? (extension(entry.name) ? FileText : File);
 }
 
 function entryTitle(entry: WorkspaceEntry): string {
-  if (entry.protected) return "运行时的凭据配置，不在 WebUI 里显示";
-  if (entry.kind === "link") return "这个链接指到了工作区外面，或者目标已经不在了";
+  if (entry.protected) return "运行时的凭据配置，里面是明文令牌";
+  if (entry.kind === "link") return "链接的目标已经不在了";
   return entry.path;
 }
 
@@ -187,8 +211,7 @@ function activate(entry: WorkspaceEntry): void {
     void open(entry.path);
     return;
   }
-  const ext = extension(entry.name);
-  const kind = IMAGE_EXTENSIONS.has(ext) ? "image" : TEXT_EXTENSIONS.has(ext) || ext === "" ? "text" : "other";
+  const kind: PreviewKind = MEDIA_EXTENSIONS[extension(entry.name)] ?? "text";
   preview.value = { entry, kind, loading: kind === "text", text: "", clipped: false };
   if (kind === "text") void loadText(entry);
 }
@@ -205,7 +228,7 @@ async function loadText(entry: WorkspaceEntry): Promise<void> {
     }
     const contentType = response.headers.get("Content-Type") ?? "";
     if (preview.value !== current || !current) return;
-    // 没有扩展名的文件可能是二进制：后端按内容判断，不是文本就改成只给下载。
+    // 后端按内容判断：不是文本（压缩包、Office 文档之类）就改成只给下载。
     if (!contentType.startsWith("text/")) {
       current.kind = "other";
       return;
@@ -364,6 +387,32 @@ onActivated(() => {
 .workspace-preview-meta {
   margin: 0;
   font-size: 12.5px;
+}
+
+.workspace-warning {
+  margin: 0;
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--warn-soft);
+  color: var(--warn);
+  font-size: 13px;
+}
+
+.workspace-preview video,
+.workspace-preview audio {
+  display: block;
+  width: 100%;
+  max-height: 70vh;
+  border-radius: var(--radius-sm);
+}
+
+.workspace-preview iframe {
+  display: block;
+  width: 100%;
+  height: 70vh;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
 }
 
 .workspace-preview img {

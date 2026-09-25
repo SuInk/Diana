@@ -696,14 +696,14 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
   }
 
   // 演示站的工作区：几份 Agent 写下的笔记、一个编码代理克隆的仓库，外加一份凭据配置
-  // 和一个指到外面的链接，页面上两种打不开的情况都看得到。
+  // 和一个目标已经不在了的链接，两种标记页面上都看得到。
   if (path === "/api/system/workspace" || path === "/api/system/workspace/file") {
     const at = (hours: number) => new Date(Date.now() - hours * 3600_000).toISOString();
     const tree: Record<string, { name: string; kind: "dir" | "file" | "link"; size?: number; hours: number; protected?: boolean; symlink?: boolean; text?: string }[]> = {
       "": [
         { name: "characters", kind: "dir", hours: 30 },
         { name: "coding", kind: "dir", hours: 52 },
-        { name: ".mcp.json", kind: "file", size: 412, hours: 200, protected: true },
+        { name: ".mcp.json", kind: "file", size: 58, hours: 200, protected: true, text: '{\n  "mcpServers": { "search": { "token": "demo-token" } }\n}\n' },
         { name: "latest-log", kind: "link", hours: 3, symlink: true },
         { name: "todo.md", kind: "file", size: 96, hours: 2, text: "# 待办\n\n- 周五提醒群里交周报\n- 查一下番剧更新时间\n" }
       ],

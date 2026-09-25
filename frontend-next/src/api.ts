@@ -1929,7 +1929,7 @@ export function getStorageUsage(): Promise<StorageUsage> {
   return requestJSON<StorageUsage>("/api/system/storage");
 }
 
-/** 工作区里的一项。kind 为 link 表示指到工作区外面或已失效的符号链接，打不开。 */
+/** 工作区里的一项。kind 为 link 表示目标已经不在了的符号链接，打不开。 */
 export interface WorkspaceEntry {
   name: string;
   path: string;
@@ -1937,7 +1937,7 @@ export interface WorkspaceEntry {
   size: number;
   modified: string;
   symlink?: boolean;
-  /** 运行时自己的凭据配置：列出来但不给看内容 */
+  /** 运行时自己的凭据配置（明文令牌），能看，页面上打个标记 */
   protected?: boolean;
 }
 

@@ -25,9 +25,10 @@ import (
 // 图，以前只能 SSH 上去翻。这里给一个只读的浏览入口：能列目录、能预览、能下载，
 // 不能改——改文件是 Agent 的事，WebUI 这边多一条写入路径就多一处要防的地方。
 //
-// 所有访问都经 os.Root：符号链接指到工作区外面时打不开，「..」也走不出去。运行时
-// 自己的凭据配置（.mcp.json、扩展覆盖、编码代理登录目录）和文件工具同一份名单，
-// 列目录时照常出现但内容不给。
+// 请求里的路径按字面限定在工作区之内（不认「..」和绝对路径），符号链接照常跟过去，
+// 指到外面也能看：能登录 WebUI 的只有管理员，Agent 链出去的东西本来就在他自己的
+// 机器上，拦下来只会让人又回去 SSH。运行时的凭据配置（.mcp.json、扩展覆盖、编码代理
+// 登录目录）同理照常给看，只在列表里打个标记，提醒这里面是明文令牌。
 type AgentWorkspaceHandler struct {
 	root func() string
 }
@@ -48,7 +49,7 @@ func (h *AgentWorkspaceHandler) Register(router gin.IRouter) {
 type AgentWorkspaceEntry struct {
 	Name     string    `json:"name"`
 	Path     string    `json:"path"`
-	Kind     string    `json:"kind"` // dir、file；指到工作区外面或已失效的链接是 link
+	Kind     string    `json:"kind"` // dir、file；目标已经不在了的链接是 link
 	Size     int64     `json:"size"`
 	Modified time.Time `json:"modified"`
 	// Symlink 表示这一项本身是符号链接，Kind 是它指向的东西。
@@ -83,32 +84,23 @@ func (h *AgentWorkspaceHandler) list(c *gin.Context) {
 
 func listAgentWorkspace(root, rel string) (AgentWorkspaceListing, error) {
 	listing := AgentWorkspaceListing{Root: root, Path: rel, Entries: []AgentWorkspaceEntry{}}
-	dir, err := os.OpenRoot(root)
-	if err != nil {
+	if _, err := os.Stat(root); err != nil {
 		if errors.Is(err, fs.ErrNotExist) && rel == "." {
 			listing.Path = ""
 			return listing, nil
 		}
 		return listing, err
 	}
-	defer dir.Close()
 	listing.Exists = true
-	info, err := dir.Stat(rel)
+	full := filepath.Join(root, rel)
+	info, err := os.Stat(full)
 	if err != nil {
 		return listing, err
 	}
 	if !info.IsDir() {
 		return listing, errWorkspaceNotDir
 	}
-	if agent.WorkspaceFileProtected(agent.Config{WorkDir: root}, rel) {
-		return listing, errWorkspaceProtected
-	}
-	handle, err := dir.Open(rel)
-	if err != nil {
-		return listing, err
-	}
-	names, err := handle.ReadDir(-1)
-	_ = handle.Close()
+	names, err := os.ReadDir(full)
 	if err != nil {
 		return listing, err
 	}
@@ -122,8 +114,7 @@ func listAgentWorkspace(root, rel string) (AgentWorkspaceListing, error) {
 		}
 		if info.Mode()&fs.ModeSymlink != 0 {
 			entry.Symlink = true
-			// 经 os.Root 解析：指到工作区外面的链接在这里就会失败，页面上不给点开。
-			if target, err := dir.Stat(filepath.FromSlash(child)); err == nil {
+			if target, err := os.Stat(filepath.Join(full, item.Name())); err == nil {
 				info = target
 			} else {
 				entry.Kind = "link"
@@ -162,14 +153,25 @@ func listAgentWorkspace(root, rel string) (AgentWorkspaceListing, error) {
 	return listing, nil
 }
 
-// inlineWorkspaceImageTypes 是可以直接在页面里显示的图片。SVG 不在里面：它能带
-// 脚本，而这个接口和控制台同源。
-var inlineWorkspaceImageTypes = map[string]bool{
-	"image/png":  true,
-	"image/jpeg": true,
-	"image/gif":  true,
-	"image/webp": true,
-	"image/bmp":  true,
+// workspaceMediaTypes 是能在页面里直接打开的图片、音视频和 PDF，按扩展名认。SVG 也在
+// 里面：页面用 <img> 显示它，脚本不会跑；有人直接打开这个地址时，下面的 sandbox CSP
+// 同样不让它在控制台的源里执行。
+var workspaceMediaTypes = map[string]string{
+	".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif",
+	".webp": "image/webp", ".bmp": "image/bmp", ".avif": "image/avif", ".ico": "image/x-icon",
+	".svg": "image/svg+xml",
+	".mp4": "video/mp4", ".m4v": "video/mp4", ".webm": "video/webm", ".mov": "video/quicktime",
+	".mp3": "audio/mpeg", ".wav": "audio/wav", ".ogg": "audio/ogg", ".oga": "audio/ogg", ".opus": "audio/ogg",
+	".m4a": "audio/mp4", ".aac": "audio/aac", ".flac": "audio/flac",
+	".pdf": "application/pdf",
+}
+
+// workspaceSniffedMediaTypes 是没有扩展名（或扩展名不对）时，按内容认出来也可以直接
+// 打开的类型。SVG 不在这里：内容嗅探不会给出 image/svg+xml。
+var workspaceSniffedMediaTypes = map[string]bool{
+	"image/png": true, "image/jpeg": true, "image/gif": true, "image/webp": true, "image/bmp": true,
+	"video/mp4": true, "video/webm": true, "audio/mpeg": true, "audio/wave": true, "audio/ogg": true,
+	"application/pdf": true,
 }
 
 func (h *AgentWorkspaceHandler) file(c *gin.Context) {
@@ -180,17 +182,7 @@ func (h *AgentWorkspaceHandler) file(c *gin.Context) {
 		writeError(c, http.StatusBadRequest, errors.New("路径必须是工作区里的文件"))
 		return
 	}
-	if agent.WorkspaceFileProtected(agent.Config{WorkDir: root}, rel) {
-		writeWorkspaceError(c, errWorkspaceProtected)
-		return
-	}
-	dir, err := os.OpenRoot(root)
-	if err != nil {
-		writeWorkspaceError(c, err)
-		return
-	}
-	defer dir.Close()
-	file, err := dir.Open(rel)
+	file, err := os.Open(filepath.Join(root, rel))
 	if err != nil {
 		writeWorkspaceError(c, err)
 		return
@@ -218,18 +210,25 @@ func (h *AgentWorkspaceHandler) file(c *gin.Context) {
 	}
 	c.Header("Content-Type", contentType)
 	c.Header("Content-Disposition", mime.FormatMediaType(disposition, map[string]string{"filename": info.Name()}))
-	// 文件是 Agent 写的，内容不可信：禁止嗅探，也不让它在控制台的源里跑脚本。
+	// 文件是 Agent 写的，内容不可信：禁止嗅探，也不让它在控制台的源里跑脚本。PDF 例外：
+	// 带 sandbox 的响应浏览器不肯用内置阅读器打开，而阅读器里的脚本本来就和页面隔离。
 	c.Header("X-Content-Type-Options", "nosniff")
-	c.Header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; sandbox")
+	if contentType != "application/pdf" {
+		c.Header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; sandbox")
+	}
 	http.ServeContent(c.Writer, c.Request, info.Name(), info.ModTime(), file)
 }
 
-// workspaceContentType 决定文件以什么类型、能不能在页面里直接打开。只放行位图和
-// 纯文本；HTML、SVG 之类一律按纯文本给源码，其余按二进制下载。
+// workspaceContentType 决定文件以什么类型、能不能在页面里直接打开：先按扩展名认
+// 常用的媒体格式，再按内容嗅探；是文本的一律按纯文本给（HTML 也只给源码，不渲染），
+// 其余按二进制下载。
 func workspaceContentType(name string, head []byte) (string, bool) {
+	if media, ok := workspaceMediaTypes[strings.ToLower(filepath.Ext(name))]; ok {
+		return media, true
+	}
 	detected := http.DetectContentType(head)
 	base := strings.TrimSpace(strings.SplitN(detected, ";", 2)[0])
-	if inlineWorkspaceImageTypes[base] {
+	if workspaceSniffedMediaTypes[base] {
 		return base, true
 	}
 	if strings.HasPrefix(base, "text/") || workspaceTextExtension(name) {
@@ -242,19 +241,18 @@ func workspaceContentType(name string, head []byte) (string, bool) {
 // 花括号的 JSON 会被当成 text/plain，但带 BOM 或较短的 YAML、脚本有时落到二进制。
 func workspaceTextExtension(name string) bool {
 	switch strings.ToLower(filepath.Ext(name)) {
-	case ".txt", ".md", ".json", ".jsonl", ".yaml", ".yml", ".toml", ".ini", ".csv", ".tsv", ".log",
-		".go", ".py", ".js", ".mjs", ".ts", ".vue", ".sh", ".html", ".htm", ".css", ".xml", ".svg", ".sql":
+	case ".txt", ".md", ".markdown", ".json", ".jsonl", ".yaml", ".yml", ".toml", ".ini", ".conf", ".cfg", ".env",
+		".csv", ".tsv", ".log", ".srt", ".vtt", ".lrc", ".html", ".htm", ".css", ".xml", ".sql",
+		".go", ".py", ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".vue", ".sh", ".bash", ".zsh", ".ps1",
+		".c", ".h", ".cpp", ".java", ".kt", ".rs", ".rb", ".php", ".swift", ".lua":
 		return true
 	}
 	return false
 }
 
-var (
-	errWorkspaceNotDir    = errors.New("不是目录")
-	errWorkspaceProtected = errors.New("这是运行时的凭据配置，不在 WebUI 里显示")
-)
+var errWorkspaceNotDir = errors.New("不是目录")
 
-// workspaceRelPath 把请求里的路径收成 os.Root 认的相对路径；空串是工作区根目录。
+// workspaceRelPath 把请求里的路径收成工作区内的相对路径；空串是工作区根目录。
 func workspaceRelPath(raw string) (string, bool) {
 	raw = strings.Trim(strings.TrimSpace(raw), "/")
 	if raw == "" {
@@ -271,16 +269,9 @@ func writeWorkspaceError(c *gin.Context, err error) {
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
 		writeError(c, http.StatusNotFound, errors.New("找不到这个路径"))
-	case errors.Is(err, errWorkspaceProtected):
-		writeError(c, http.StatusForbidden, err)
 	case errors.Is(err, errWorkspaceNotDir):
 		writeError(c, http.StatusBadRequest, err)
 	default:
-		// os.Root 拒绝越界时报的是「path escapes from parent」，对用户就是走不出去。
-		if strings.Contains(err.Error(), "escapes") {
-			writeError(c, http.StatusBadRequest, errors.New("这个链接指到了工作区外面"))
-			return
-		}
 		writeError(c, http.StatusInternalServerError, err)
 	}
 }
