@@ -16,32 +16,32 @@ func TestProactiveReplyTranscriptReadsOldestFirst(t *testing.T) {
 	payload := proactiveReplyPayload{
 		Addressing:                    messageAddressing{ReplyTarget: "none"},
 		CurrentText:                   "这么贵",
-		CurrentSender:                 "轩诺",
+		CurrentSender:                 "Alice",
 		BotAliases:                    []string{"嘉然", "Diana"},
 		LastBotAddressedCurrentSender: true,
 		// 从新到旧，和 proactiveReplyPayload 攒的顺序一致。
 		RecentMessages: []proactiveReplyHistoryItem{
 			{Sender: "Diana", IsBot: true, Text: "大概两三百块", AgeSeconds: age(5),
-				Addressing: messageAddressing{ReplyTarget: "none", Mentions: []MessageMention{{UserID: "934542274", Username: "轩诺", Target: "other"}}}},
-			{Sender: "轩诺", Text: "SHU 测试仪多少钱", AgeSeconds: age(40),
+				Addressing: messageAddressing{ReplyTarget: "none", Mentions: []MessageMention{{UserID: "10002", Username: "Alice", Target: "other"}}}},
+			{Sender: "Alice", Text: "测距仪多少钱", AgeSeconds: age(40),
 				Addressing: messageAddressing{ReplyTarget: "none", Mentions: []MessageMention{{Target: "self"}}}},
-			{Sender: "鲁汀", Text: "晚上吃啥", Images: 1, AgeSeconds: age(90),
-				Addressing: messageAddressing{ReplyTarget: "other", ReplySender: "轩诺"}},
+			{Sender: "Bob", Text: "晚上吃啥", Images: 1, AgeSeconds: age(90),
+				Addressing: messageAddressing{ReplyTarget: "other", ReplySender: "Alice"}},
 		},
-		NotebookContext: "SHU=辣度单位",
+		NotebookContext: "测距仪=激光测距仪",
 	}
 	got := proactiveReplyTranscript(payload)
 	want := []string{
 		"机器人的称呼：嘉然、Diana",
 		"对话按时间从早到晚：",
-		"鲁汀（回复轩诺）：晚上吃啥 [图片×1]",
-		"轩诺（@嘉然）：SHU 测试仪多少钱",
-		"嘉然（机器人）（@轩诺）：大概两三百块",
-		"【当前消息】轩诺：这么贵",
+		"Bob（回复Alice）：晚上吃啥 [图片×1]",
+		"Alice（@嘉然）：测距仪多少钱",
+		"嘉然（机器人）（@Alice）：大概两三百块",
+		"【当前消息】Alice：这么贵",
 		"（嘉然最近一条发言是冲着当前发送者说的）",
 		"",
 		"群内术语：",
-		"SHU=辣度单位",
+		"测距仪=激光测距仪",
 	}
 	if got != strings.Join(want, "\n") {
 		t.Fatalf("transcript mismatch:\n%s", got)
@@ -52,13 +52,13 @@ func TestProactiveReplyTranscriptMarksQuotedBot(t *testing.T) {
 	payload := proactiveReplyPayload{
 		Addressing:    messageAddressing{ReplyTarget: "self"},
 		CurrentText:   "真的吗",
-		CurrentSender: "星ほしの",
+		CurrentSender: "Carol",
 		QuotedText:    "白洲梓是《蔚蓝档案》里的角色",
 		QuotedSender:  "Diana",
 		QuotedIsBot:   true,
 	}
 	got := proactiveReplyTranscript(payload)
-	if !strings.HasSuffix(got, "【当前消息】星ほしの（回复机器人）：真的吗（引用 机器人：白洲梓是《蔚蓝档案》里的角色）") {
+	if !strings.HasSuffix(got, "【当前消息】Carol（回复机器人）：真的吗（引用 机器人：白洲梓是《蔚蓝档案》里的角色）") {
 		t.Fatalf("quoted bot message not rendered as the bot:\n%s", got)
 	}
 	if strings.Contains(got, "机器人的称呼") {
