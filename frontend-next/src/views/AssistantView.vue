@@ -772,13 +772,13 @@
               <div class="field wide">
                 <ParticipationControls :key="form.id" :model-value="form.participation" :criteria="form.proactive_reply_extra_criteria" criteria-optional @update:model-value="setParticipation" @update:criteria="value => { if (form) form.proactive_reply_extra_criteria = value; }">
                   <template #relevance-criteria>
-                    <PromptOverridesEditor title-prefix="接话评分 · " :keys="relevanceCriteriaKeys" :model-value="form.prompt_overrides" @update:model-value="value => { if (form) form.prompt_overrides = value; }" />
+                    <PromptSectionsEditor name="回应提问判据" title-prefix="接话评分 · " :keys="relevanceCriteriaKeys" :model-value="form.prompt_overrides" @update:model-value="value => { if (form) form.prompt_overrides = value; }" />
                   </template>
                   <template #chat-criteria>
-                    <PromptOverridesEditor title-prefix="接话评分 · " :keys="chatCriteriaKeys" :model-value="form.prompt_overrides" @update:model-value="value => { if (form) form.prompt_overrides = value; }" />
+                    <PromptSectionsEditor name="主动闲聊判据" title-prefix="接话评分 · " :keys="chatCriteriaKeys" :model-value="form.prompt_overrides" @update:model-value="value => { if (form) form.prompt_overrides = value; }" />
                   </template>
                   <template #scoring-criteria>
-                    <PromptOverridesEditor title-prefix="接话评分 · " :keys="scoringCriteriaKeys" :model-value="form.prompt_overrides" @update:model-value="value => { if (form) form.prompt_overrides = value; }" />
+                    <PromptSectionsEditor name="评分通用" title-prefix="接话评分 · " :keys="scoringCriteriaKeys" :model-value="form.prompt_overrides" @update:model-value="value => { if (form) form.prompt_overrides = value; }" />
                   </template>
                 </ParticipationControls>
               </div>
@@ -2004,6 +2004,7 @@ import ParticipationControls from "../components/ParticipationControls.vue";
 import BotMarkerList from "../components/BotMarkerList.vue";
 import AgentResidencyPanel from "../components/AgentResidencyPanel.vue";
 import PromptOverridesEditor from "../components/PromptOverridesEditor.vue";
+import PromptSectionsEditor from "../components/PromptSectionsEditor.vue";
 import { participationFromConfig, type ParticipationPreferences } from "../participation";
 import SoulEditor from "../components/SoulEditor.vue";
 import EmptyState from "../components/EmptyState.vue";

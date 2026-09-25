@@ -1,16 +1,13 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, useId } from "vue";
-import { ChevronDown, ChevronRight, Download, RotateCcw, Upload } from "@lucide/vue";
+import { ChevronDown, ChevronRight, RotateCcw } from "@lucide/vue";
 import { getPromptCatalog, type PromptCatalog, type PromptSpec } from "../api";
 import { customizedPromptCount, isPromptCustomized, isPromptFormatCustomized, missingPromptVars, promptFormatValue, promptOverrideValue, withoutPromptCustomization, withPromptFormat, withPromptOverride } from "../prompt-overrides";
 
 // 覆盖表只存改过的正文：输入框里显示的是「当前生效的正文」，和默认值一样就从表里删掉，
 // 不把默认值抄进配置——那样以后内置文案更新了，这台机器人还停在旧版上。
-// keys 给定时是精简模式：只按这个顺序列这几段，不分组、不带搜索，用来把某一类
-// 提示词（比如接话判据）嵌到它所属的设置卡片里就地改。每段收起时只占一行，
-// 导入导出和恢复默认在展开后的那一行里。
-// titlePrefix：精简模式下各段标题里重复的分类前缀（如「接话评分 · 」），列表里省掉。
-const props = defineProps<{ modelValue?: Record<string, string>; keys?: string[]; titlePrefix?: string }>();
+// 接话卡片里那几段另有合在一个框里的编辑（PromptSectionsEditor），读写的是同一份覆盖。
+const props = defineProps<{ modelValue?: Record<string, string> }>();
 const emit = defineEmits<{ "update:modelValue": [value: Record<string, string> | undefined] }>();
 const id = useId();
 
@@ -18,9 +15,6 @@ const catalog = ref<PromptCatalog | null>(null);
 const loadError = ref("");
 const query = ref("");
 const onlyCustomized = ref(false);
-const fileInput = ref<HTMLInputElement | null>(null);
-const importTarget = ref<PromptSpec | null>(null);
-const importError = ref("");
 const expanded = ref<Set<string>>(new Set());
 
 onMounted(async () => {
@@ -32,17 +26,11 @@ onMounted(async () => {
 });
 
 const overrides = computed(() => props.modelValue ?? {});
-const scopedPrompts = computed(() => {
-  const prompts = catalog.value?.prompts ?? [];
-  if (!props.keys) return prompts;
-  return props.keys.map((key) => prompts.find((spec) => spec.key === key)).filter((spec): spec is PromptSpec => Boolean(spec));
-});
-const customizedCount = computed(() => customizedPromptCount(scopedPrompts.value, overrides.value));
+const customizedCount = computed(() => customizedPromptCount(catalog.value?.prompts ?? [], overrides.value));
 
 const sections = computed(() => {
   const data = catalog.value;
   if (!data) return [];
-  if (props.keys) return [{ group: null, prompts: scopedPrompts.value }];
   const needle = query.value.trim().toLowerCase();
   return data.groups
     .map((group) => ({
@@ -74,65 +62,6 @@ const allExpanded = computed(() => {
   return keys.length > 0 && keys.every((key) => expanded.value.has(key));
 });
 
-// 收起时的摘要：按「xxx：」分栏数下面的条目，比截一段正文更看得出写了什么。
-// 不分栏的段落没有摘要，标题就够了。
-function summaryOf(spec: PromptSpec): string {
-  const parts: string[] = [];
-  let heading = "";
-  let count = 0;
-  const flush = () => {
-    if (heading) parts.push(`${heading} ${count} 条`);
-  };
-  for (const raw of promptOverrideValue(spec, overrides.value).split("\n")) {
-    const line = raw.trim();
-    if (!line) continue;
-    const match = line.match(/^([^-：:]{1,12})[：:]$/);
-    if (match) {
-      flush();
-      heading = match[1];
-      count = 0;
-    } else if (heading) {
-      count++;
-    }
-  }
-  flush();
-  return parts.join(" · ");
-}
-
-function exportPrompt(spec: PromptSpec): void {
-  const url = URL.createObjectURL(new Blob([promptOverrideValue(spec, overrides.value) + "\n"], { type: "text/plain;charset=utf-8" }));
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = `${displayTitle(spec)}.txt`;
-  link.click();
-  URL.revokeObjectURL(url);
-}
-
-function pickImport(spec: PromptSpec): void {
-  importTarget.value = spec;
-  fileInput.value?.click();
-}
-
-async function importPrompt(event: Event): Promise<void> {
-  const input = event.target as HTMLInputElement;
-  const file = input.files?.[0];
-  input.value = "";
-  const spec = importTarget.value;
-  if (!file || !spec) return;
-  const text = (await file.text()).replace(/\r\n/g, "\n").trim();
-  const limit = catalog.value?.max_runes ?? 0;
-  if (!text) {
-    importError.value = `${displayTitle(spec)}：文件是空的`;
-    return;
-  }
-  if (limit && runeCount(text) > limit) {
-    importError.value = `${displayTitle(spec)}：文件有 ${runeCount(text)} 字，超过上限 ${limit} 字`;
-    return;
-  }
-  importError.value = "";
-  update(spec, text);
-}
-
 function toggle(key: string): void {
   const next = new Set(expanded.value);
   if (next.has(key)) next.delete(key);
@@ -156,10 +85,6 @@ function resetAll(): void {
   emit("update:modelValue", undefined);
 }
 
-function displayTitle(spec: PromptSpec): string {
-  const prefix = props.titlePrefix;
-  return prefix && spec.title.startsWith(prefix) ? spec.title.slice(prefix.length) : spec.title;
-}
 
 // 模板里直接写 `{${name}}` 会被 Vue 当成插值结束符，拼好再给模板。
 function placeholder(name: string): string {
@@ -172,10 +97,8 @@ function runeCount(text: string): number {
 </script>
 
 <template>
-  <div class="prompt-overrides" :class="{ embedded: keys }">
-    <input v-if="keys" ref="fileInput" type="file" accept=".txt,.md,text/plain,text/markdown" hidden @change="importPrompt" />
-    <p v-if="importError" class="prompt-warning">{{ importError }}</p>
-    <div v-if="!keys" class="prompt-toolbar">
+  <div class="prompt-overrides">
+    <div class="prompt-toolbar">
       <input v-model="query" class="input" type="search" placeholder="搜索标题、用途或正文" aria-label="搜索提示词" />
       <label class="prompt-filter">
         <input v-model="onlyCustomized" type="checkbox" />
@@ -195,28 +118,27 @@ function runeCount(text: string): number {
     <p v-else-if="!catalog" class="prompt-empty">正在加载内置提示词…</p>
     <p v-else-if="!sections.length" class="prompt-empty">{{ onlyCustomized ? "还没有改过任何提示词。" : "没有匹配的提示词。" }}</p>
 
-    <section v-for="section in sections" :key="section.group?.id ?? 'scoped'" class="prompt-group">
-      <header v-if="section.group" class="prompt-group-head">
+    <section v-for="section in sections" :key="section.group.id" class="prompt-group">
+      <header class="prompt-group-head">
         <h3>{{ section.group.label }}</h3>
         <p>{{ section.group.description }}</p>
       </header>
       <article v-for="spec in section.prompts" :key="spec.key" class="prompt-item" :class="{ open: expanded.has(spec.key) }">
-        <button class="prompt-summary" type="button" :title="keys ? spec.usage : undefined" :aria-expanded="expanded.has(spec.key)" :aria-controls="`${id}-${spec.key}`" @click="toggle(spec.key)">
+        <button class="prompt-summary" type="button" :aria-expanded="expanded.has(spec.key)" :aria-controls="`${id}-${spec.key}`" @click="toggle(spec.key)">
           <ChevronRight :size="16" class="prompt-chevron" aria-hidden="true" />
-          <span class="prompt-title">{{ displayTitle(spec) }}</span>
-          <span v-if="keys && !expanded.has(spec.key) && summaryOf(spec)" class="prompt-digest">{{ summaryOf(spec) }}</span>
+          <span class="prompt-title">{{ spec.title }}</span>
           <span v-if="isCustomized(spec)" class="badge accent">已修改</span>
           <span v-if="isPromptFormatCustomized(spec, overrides)" class="badge warn" title="输出格式改过，程序可能解析不了模型的回答">格式已改</span>
           <span v-else-if="spec.contract" class="badge" title="这段带输出格式，程序按它解析模型的回答">含输出格式</span>
         </button>
-        <p v-if="!keys" class="prompt-usage">{{ spec.usage }}</p>
+        <p class="prompt-usage">{{ spec.usage }}</p>
         <div v-if="expanded.has(spec.key)" :id="`${id}-${spec.key}`" class="prompt-body">
           <textarea
             class="textarea prompt-text"
             :aria-label="spec.title"
             :value="promptOverrideValue(spec, overrides)"
             :maxlength="catalog?.max_runes"
-            :rows="keys ? 10 : 8"
+            rows="8"
             spellcheck="false"
             @input="update(spec, ($event.target as HTMLTextAreaElement).value)"
           ></textarea>
@@ -226,17 +148,7 @@ function runeCount(text: string): number {
               占位符：
               <code v-for="variable in spec.vars" :key="variable.name" :title="variable.description">{{ placeholder(variable.name) }}</code>
             </span>
-            <template v-if="keys">
-              <button class="btn small ghost" type="button" @click="exportPrompt(spec)">
-                <Download :size="14" aria-hidden="true" />
-                导出
-              </button>
-              <button class="btn small ghost" type="button" @click="pickImport(spec)">
-                <Upload :size="14" aria-hidden="true" />
-                导入
-              </button>
-            </template>
-            <button v-if="isCustomized(spec)" class="btn small ghost prompt-reset" type="button" @click="reset(spec)">
+            <button v-if="isCustomized(spec)" class="btn small ghost" type="button" @click="reset(spec)">
               <RotateCcw :size="14" aria-hidden="true" />
               恢复默认
             </button>
@@ -273,8 +185,6 @@ function runeCount(text: string): number {
 .prompt-group-head h3 { margin: 0; font-size: 14px; font-weight: 600; color: var(--text); }
 .prompt-group-head p { margin: 2px 0 0; color: var(--muted); font-size: 12px; line-height: 1.6; }
 .prompt-item { padding: 10px 0; border-bottom: 1px solid var(--border); min-width: 0; }
-/* 嵌在设置卡片里时下面紧跟分区线，最后一段再画一条就成了双线。 */
-.embedded .prompt-item:last-child { border-bottom: 0; }
 .prompt-summary { display: flex; align-items: center; gap: 8px; width: 100%; padding: 0; border: 0; background: none; color: var(--text); font: inherit; text-align: left; cursor: pointer; }
 .prompt-summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; border-radius: 4px; }
 .prompt-chevron { flex: none; color: var(--muted); transition: transform 0.15s ease; }
@@ -286,8 +196,7 @@ function runeCount(text: string): number {
 .prompt-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; color: var(--muted); font-size: 12px; }
 .prompt-vars { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px; }
 .prompt-vars code { padding: 1px 5px; border-radius: 4px; background: var(--surface-2); color: var(--text); font-size: 12px; cursor: help; }
-.prompt-meta .prompt-reset { margin-left: auto; }
-.prompt-digest { color: var(--muted); font-size: 12px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.prompt-meta .btn { margin-left: auto; }
 .prompt-warning { margin: 0; color: var(--warn); font-size: 12px; line-height: 1.6; }
 .prompt-contract { display: grid; gap: 4px; min-width: 0; }
 .prompt-contract-label { color: var(--muted); font-size: 12px; }
