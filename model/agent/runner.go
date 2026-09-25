@@ -1145,6 +1145,11 @@ func (r *Runner) systemPrompt() string {
 	if hasAnyTool("list_files", "read_file", "run_command") {
 		rules = append(rules, "- 本地工具只允许访问配置的 Agent 工作目录内文件。")
 	}
+	if hasTool("say") {
+		// 中途说一句（assistant 的 say 工具）：把「说」和「结束」分开。上面那条禁止未执行
+		// 承诺的规则管的是最终答复；say 发的是「正在做」，说完必须接着做。
+		rules = append(rules, "- 要先查、先做几步才能回答时，可以先调用 say 说一句正在做什么（比如「我去查一下」），然后接着调用工具真的去做；长任务每完成一个阶段可以再用 say 报一句进度。say 说了「去做」就必须继续调用工具，不能说完就调用 agent_finalize 收工。say 不是分条发答案用的；它发出去的话对方已经看到，agent_finalize 里不要重复，全都说完了就 silent=true。")
+	}
 	rules = append(rules, "- 已经足够回答时必须调用 agent_finalize 结束本轮。")
 	sections := []string{
 		"你是 Diana 的内置 Agent。需要执行外部操作时调用工具，观察结果后再给出最终答复。",

@@ -41,7 +41,7 @@ func TestPersonaSaveKeepsExistingEntriesAndFoldsLegacyFields(t *testing.T) {
 func TestPersonaSaveRejectsBuiltinAndNamesFromTitle(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0)
 	var set PersonaSet
-	if _, _, err := set.Save(Persona{ID: "builtin:jiaran", Name: "嘉然", SystemPrompt: "改一下"}, now); err == nil {
+	if _, _, err := set.Save(Persona{ID: "builtin:human", Name: "真人感", SystemPrompt: "改一下"}, now); err == nil {
 		t.Fatal("builtin persona was overwritten")
 	}
 	_, saved, err := set.Save(Persona{SystemPrompt: "# 小满\n\n她说话很慢。"}, now)

@@ -25,33 +25,29 @@ import (
 // 中位带偏，不如不说。
 const groupLengthNormMinSamples = 15
 
-// groupLengthNormMinLimit 是每条上限的下限：群友都在刷「6」「草」时，照着写「不超过
-// 5 字」连一句完整的话都放不下。
-const groupLengthNormMinLimit = 15
-
 // groupLengthNormEnabled 只给离线重放做对照用（见 live_soul_replay_test.go）。
 var groupLengthNormEnabled = true
 
 // groupNoNewlineMaxPercent：群友消息里带换行的比例不超过这个值，才说「这个群不换行」。
 const groupNoNewlineMaxPercent = 10
 
+// 腔调同理：历史里本来就有几十条群友原话，但模型更爱模仿自己以前的回复（它们以
+// assistant 身份回放，离它最近）。明说学的是群友，不是自己。
+const promptGroupVoice = "说话的腔调也学群里的人：他们怎么用词、怎么接梗、怎么打标点、爱用哪些口头禅和表情，你就怎么说；学的是上面群友的消息，不是你自己以前的回复。你是谁、怎么称呼自己仍按最开头的人设。"
+
+var promptGroupVoiceSpec = tailSpec("group_length_norm.voice", "学群友的腔调", "群聊里最近有足够多的群友消息时注入，紧挨语气锚点：让回复的用词、接梗和标点照着群友学，而不是照着机器人自己以前的回复。", promptGroupVoice)
+
 const promptGroupNoNewline = "大家的消息几乎不换行（只有 {percent}% 带换行），你也一条消息只写一行，要换行的地方就拆成下一条发。"
 
-var promptGroupNoNewlineSpec = tailSpec("group_length_norm.no_newline", "本群消息不换行", "群友消息里带换行的不超过一成时，接在「本群消息长度」后面：让回复一条只写一行。",
+var promptGroupNoNewlineSpec = tailSpec("group_length_norm.no_newline", "本群消息不换行", "群友消息里带换行的不超过一成时，接在「学群友的腔调」后面：让回复一条只写一行。",
 	promptGroupNoNewline,
 	PromptVar{Name: "percent", Description: "最近群友消息里带换行的百分比"})
 
-// 上限直接取群友的中位数，而不是九成分位：写多少模型都会超出一截。群里另一个
-// 机器人的人设写「不超过 15 字」，实际中位落在 32 字，和群友差不多；写得宽了，
-// 超出去的那一截就又是一大段。
-const promptGroupLengthNorm = "这个群里大家一条消息一般 {median} 字左右。你每条也尽量不超过 {limit} 字：一句话长了就断开，另起一条接着说，不要塞在同一条里；接一句就停，不先复述问题，不分段讲原理，不在最后总结。代码、命令、报错原文和对方明确要的完整步骤不受这个限制。"
-
-var promptGroupLengthNormSpec = tailSpec("group_length_norm", "本群消息长度", "群聊里最近有足够多的群友消息时注入，紧挨语气锚点：告诉模型这个群的人一条消息一般多长，让回复照着对齐。",
-	promptGroupLengthNorm,
-	PromptVar{Name: "median", Description: "最近群友消息长度的中位数（字）"},
-	PromptVar{Name: "limit", Description: "每条消息的建议上限（字）：群友中位数，至少 15"})
-
-// groupLengthNormPrompt 从最近的群聊里算群友消息的长度，不够样本时返回空串。
+// groupLengthNormPrompt 按最近的群聊给出「学群友怎么说话」那一段，不够样本时返回空串。
+//
+// 以前这里还有一句「你每条也尽量不超过 {群友中位} 字」。长度确实压下来了，口吻却跟着
+// 变冲：字数一卡死，模型先删的是缓和语气的词和客气话，剩下「有话快说」这种硬邦邦
+// 的短句。篇幅交给人设和上面那句「学群友」，不再给具体字数。
 func (r *Runtime) groupLengthNormPrompt(event MessageEvent, cfg BotConfig) string {
 	if !groupLengthNormEnabled || event.Kind != EventKindGroup {
 		return ""
@@ -63,10 +59,7 @@ func (r *Runtime) groupLengthNormPrompt(event MessageEvent, cfg BotConfig) strin
 	if !ok {
 		return ""
 	}
-	text := cfg.promptf(promptGroupLengthNormSpec, map[string]string{
-		"median": strconv.Itoa(norm.median),
-		"limit":  strconv.Itoa(max(norm.median, groupLengthNormMinLimit)),
-	})
+	text := cfg.prompt(promptGroupVoiceSpec)
 	if norm.newlinePercent <= groupNoNewlineMaxPercent {
 		text += cfg.promptf(promptGroupNoNewlineSpec, map[string]string{"percent": strconv.Itoa(norm.newlinePercent)})
 	}

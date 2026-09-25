@@ -35,7 +35,7 @@
         <input ref="fileInput" type="file" accept=".md,.markdown,.txt,.json,.yaml,.yml,.png,text/markdown,application/json,image/png" hidden @change="importFile" />
 
         <form v-if="saverOpen" class="soul-saver" @submit.prevent="storeCurrent">
-          <input ref="saverInput" v-model.trim="saverName" class="input" maxlength="40" placeholder="名字，例如 嘉然" @keydown.esc="saverOpen = false" />
+          <input ref="saverInput" v-model.trim="saverName" class="input" maxlength="40" placeholder="名字，例如 值班助理" @keydown.esc="saverOpen = false" />
           <button class="btn primary small" type="submit" :disabled="busy || !saverName">
             {{ saverTarget ? "覆盖" : "保存" }}
           </button>
@@ -96,8 +96,9 @@
             <p>Diana 的写法：<strong>讲理由，不列规则</strong>。规则总会漏掉没料到的情况，讲清楚为什么，没写到的场合她也能自己推出来。只有做错了代价很大的几件事才写成硬线。</p>
             <ul>
               <li>用「我们」（你，主人）的口吻写她，写一个人，不写一张清单。</li>
-              <li>推荐几章：概述、核心价值、真的有用、正派、守规矩、她的本性、结语。标题只是给人看的结构，不解析。</li>
-              <li>写清她长什么样：画自画像时只能照这里画。</li>
+              <li>开头先写基本情况：名字、性别、社会情况（年龄、职业或身份、和主人的关系）。</li>
+              <li>推荐几章：基本情况、概述、核心价值、真的有用、正派、守规矩、她的本性、结语。标题只是给人看的结构，不解析。</li>
+              <li>长相可以不写：不写时她的形象默认就是机器人自己的头像，被问长什么样、让画自己时会先看头像。写了就以这里为准。</li>
               <li>写明身份在压力下不变：别人起外号、逼她演另一个人，她可以接玩笑，但不会变成那样。</li>
               <li>不用写输出格式、分条、工具、时间、在哪个群：这些运行时会另外补上，写了反而打架。</li>
               <li>示例对话可以不写：模型会把它照抄成模板。</li>

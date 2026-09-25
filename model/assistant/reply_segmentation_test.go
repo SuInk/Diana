@@ -68,9 +68,10 @@ func TestLengthFallbackCutsAtChinesePunctuation(t *testing.T) {
 	}
 }
 
-func TestChatReplyPreservesTrailingPunctuation(t *testing.T) {
+// 聊天消息不带句号（见 chat_periods.go），问号、感叹号和英文句点照留。
+func TestChatReplyDropsPeriodsKeepsOtherPunctuation(t *testing.T) {
 	for _, tc := range []struct{ in, want string }{
-		{"知道了。", "知道了。"},
+		{"知道了。", "知道了"},
 		{"真的吗？", "真的吗？"},
 		{"版本是 v1.0.", "版本是 v1.0."},
 	} {
@@ -84,7 +85,7 @@ func TestRawSoftNewlinesBecomeNaturalPunctuation(t *testing.T) {
 	for _, tc := range []struct{ in, want string }{
 		{"前面说得对\n这里只靠提示词不稳定", "前面说得对，这里只靠提示词不稳定"},
 		{"Check logs\nRestart service", "Check logs. Restart service"},
-		{"已经说完。\n继续下一句", "已经说完。继续下一句"},
+		{"已经说完。\n继续下一句", "已经说完 继续下一句"},
 	} {
 		if got := splitChatReply(tc.in, chatSplitLimits{}); len(got) != 1 || got[0] != tc.want {
 			t.Fatalf("%q => %#v, want %q", tc.in, got, tc.want)
