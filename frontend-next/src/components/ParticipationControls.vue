@@ -3,7 +3,10 @@ import { computed, useId } from "vue";
 import AppSelect from "./AppSelect.vue";
 import { defaultParticipationCooldownSeconds, participationLevelLabel, participationPreset, participationPresetName, proactiveCriteriaMaxLength, type ParticipationPreferences } from "../participation";
 
-const props = defineProps<{ modelValue?: ParticipationPreferences; level?: string; inheritable?: boolean; inheritedValue?: ParticipationPreferences; criteria?: string }>();
+// criteriaOptional：机器人页已经能直接改内置判据，补充判据只在留有旧值时露出来，
+// 让人看得见、清得掉——藏起来的旧值照样拼进评分提示词。
+// relevance-criteria / chat-criteria 两个插槽跟在对应开关下面，放各自的判据编辑。
+const props = defineProps<{ modelValue?: ParticipationPreferences; level?: string; inheritable?: boolean; inheritedValue?: ParticipationPreferences; criteria?: string; criteriaOptional?: boolean }>();
 const emit = defineEmits<{ "update:modelValue": [value: ParticipationPreferences | undefined]; "update:criteria": [value: string] }>();
 const id = useId();
 const value = computed(() => props.modelValue ?? (props.level ? participationPreset(props.level) : props.inheritedValue ?? participationPreset("low")));
@@ -99,6 +102,9 @@ function updateCriteria(event: Event) {
             <span class="track" aria-hidden="true"></span>
             <span class="switch-label">{{ relevanceEnabled ? "开启" : "关闭" }}</span>
           </label>
+          <div v-if="$slots['relevance-criteria']" class="setting-criteria">
+            <slot name="relevance-criteria" />
+          </div>
         </section>
         <section v-for="setting in settings" :key="setting.key" class="participation-setting">
           <div class="setting-copy">
@@ -111,11 +117,15 @@ function updateCriteria(event: Event) {
             <input :id="id + '-cooldown'" class="input" type="number" inputmode="numeric" min="0" max="3600" step="1" aria-label="主动闲聊冷却秒数" :aria-describedby="id + '-cooldown-help'" :value="cooldownSeconds" @input="updateCooldown" @blur="restoreCooldown" />
             <span :id="id + '-cooldown-help'" class="hint">主动闲聊的最短间隔，默认 30 秒；填 0 不限制。</span>
           </div>
+          <div v-if="setting.key === 'chat_level' && $slots['chat-criteria']" class="setting-criteria">
+            <slot name="chat-criteria" />
+          </div>
         </section>
-        <section class="participation-setting criteria-setting">
+        <section v-if="!criteriaOptional || criteria?.trim()" class="participation-setting criteria-setting">
           <div class="setting-copy">
             <label :for="id + '-criteria'">补充判据</label>
-            <p class="setting-help">本群特有的称呼、黑话和禁区，帮它判断这句话该不该接。留空只用内置判据。</p>
+            <p v-if="criteriaOptional" class="setting-help">旧版留下的补充判据，仍会拼进评分提示词。内置判据现在可以在上面直接改，这里清空后不再显示。</p>
+            <p v-else class="setting-help">本群特有的称呼、黑话和禁区，帮它判断这句话该不该接。留空只用内置判据。</p>
           </div>
           <textarea :id="id + '-criteria'" class="textarea" rows="3" :maxlength="proactiveCriteriaMaxLength" :value="criteria ?? ''" placeholder="例：群里叫「鸽子」是催更，不是骂人。不要接和考试答案有关的话题。" @input="updateCriteria"></textarea>
         </section>
@@ -153,6 +163,7 @@ function updateCriteria(event: Event) {
 .relevance-switch { justify-self: start; }
 .setting-help { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
 .cooldown-setting { margin-top: 8px; }
+.setting-criteria { grid-column: 1 / -1; min-width: 0; }
 /* 判据是整段文字，挤在 260px 那一列里只剩十来个字的可视宽度。 */
 .criteria-setting { grid-template-columns: minmax(0, 1fr); }
 .criteria-setting > .textarea { width: 100%; min-width: 0; resize: vertical; }

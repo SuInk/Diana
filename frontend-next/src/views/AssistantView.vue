@@ -770,12 +770,14 @@
             </div>
             <div class="card-body form-grid">
               <div class="field wide">
-                <ParticipationControls :key="form.id" :model-value="form.participation" :criteria="form.proactive_reply_extra_criteria" @update:model-value="setParticipation" @update:criteria="value => { if (form) form.proactive_reply_extra_criteria = value; }" />
-              </div>
-              <div class="field wide criteria-editor">
-                <label>内置判据</label>
-                <span class="hint">前两段决定「回应提问」认不认这句话是在跟它说；第三段决定「主动闲聊」遇到什么愿意插话，档位决定到哪一栏才开口。</span>
-                <PromptOverridesEditor :keys="participationCriteriaKeys" :model-value="form.prompt_overrides" @update:model-value="value => { if (form) form.prompt_overrides = value; }" />
+                <ParticipationControls :key="form.id" :model-value="form.participation" :criteria="form.proactive_reply_extra_criteria" criteria-optional @update:model-value="setParticipation" @update:criteria="value => { if (form) form.proactive_reply_extra_criteria = value; }">
+                  <template #relevance-criteria>
+                    <PromptOverridesEditor :keys="relevanceCriteriaKeys" :model-value="form.prompt_overrides" @update:model-value="value => { if (form) form.prompt_overrides = value; }" />
+                  </template>
+                  <template #chat-criteria>
+                    <PromptOverridesEditor :keys="chatCriteriaKeys" :model-value="form.prompt_overrides" @update:model-value="value => { if (form) form.prompt_overrides = value; }" />
+                  </template>
+                </ParticipationControls>
               </div>
               <div class="field wide">
                 <label>手动标记的机器人（本机所有群）</label>
@@ -2022,9 +2024,10 @@ const personaBusy = ref(false);
 // 保留生成前的那一版，生成结果不合适可以一键退回，不用自己 Ctrl+Z。
 const soulEditor = ref<InstanceType<typeof SoulEditor> | null>(null);
 const promptOverridesOpen = ref(false);
-// 接话判据是内置提示词里的几段，在「接话」卡片里就地改：前两段管「回应提问」，
-// 最后一段管「主动闲聊」。评分骨架、换算和输出格式留在「内置提示词」。
-const participationCriteriaKeys = ["routing.participation.relevance_true", "routing.participation.relevance_false", "routing.participation.willingness"];
+// 接话判据是内置提示词里的几段，在「接话」卡片里跟着各自的开关就地改。评分骨架、
+// 换算和输出格式留在「内置提示词」。
+const relevanceCriteriaKeys = ["routing.participation.relevance_true", "routing.participation.relevance_false"];
+const chatCriteriaKeys = ["routing.participation.willingness"];
 const promptOverrideCount = computed(() => Object.keys(form.value?.prompt_overrides ?? {}).length);
 
 // 内置提示词 YAML：导出的是编辑器里眼前这一份（可能还没保存），导入只填回编辑器，

@@ -171,7 +171,7 @@ function runeCount(text: string): number {
 </script>
 
 <template>
-  <div class="prompt-overrides">
+  <div class="prompt-overrides" :class="{ embedded: keys }">
     <input v-if="keys" ref="fileInput" type="file" accept=".txt,.md,text/plain,text/markdown" hidden @change="importPrompt" />
     <p v-if="importError" class="prompt-warning">{{ importError }}</p>
     <div v-if="!keys" class="prompt-toolbar">
@@ -272,6 +272,8 @@ function runeCount(text: string): number {
 .prompt-group-head h3 { margin: 0; font-size: 14px; font-weight: 600; color: var(--text); }
 .prompt-group-head p { margin: 2px 0 0; color: var(--muted); font-size: 12px; line-height: 1.6; }
 .prompt-item { padding: 10px 0; border-bottom: 1px solid var(--border); min-width: 0; }
+/* 嵌在设置卡片里时下面紧跟分区线，最后一段再画一条就成了双线。 */
+.embedded .prompt-item:last-child { border-bottom: 0; }
 .prompt-summary { display: flex; align-items: center; gap: 8px; width: 100%; padding: 0; border: 0; background: none; color: var(--text); font: inherit; text-align: left; cursor: pointer; }
 .prompt-summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; border-radius: 4px; }
 .prompt-chevron { flex: none; color: var(--muted); transition: transform 0.15s ease; }
