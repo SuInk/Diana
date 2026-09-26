@@ -13,19 +13,51 @@ import (
 )
 
 // renderWelcome 按生效配置的欢迎词模式生成入群欢迎文本（关闭 #575）。
-// 固定文本替换 {user_id}；模板池随机抽一条；LLM 模式按人设实时生成，受每群冷却
+// 固定文本和模板支持 {user_id}{nickname}{group}{group_id}；模板池随机抽一条；LLM 模式按人设实时生成，受每群冷却
 // 约束，冷却中、调用失败或输出不可用都回落到模板池/固定文本，保证新人总能收到
 // 一条欢迎。
 func (r *Runtime) renderWelcome(ctx context.Context, cfg BotConfig, event MessageEvent) string {
 	fixed := strings.ReplaceAll(cfg.WelcomeMessage, "{user_id}", event.UserID)
+	var text string
 	switch normalizeWelcomeMode(cfg.WelcomeMode) {
 	case WelcomeModeTemplate:
-		return r.renderTemplateWelcome(cfg, event, fixed)
+		text = r.renderTemplateWelcome(cfg, event, fixed)
 	case WelcomeModeLLM:
-		return r.renderLLMWelcome(ctx, cfg, event, fixed)
+		text = r.renderLLMWelcome(ctx, cfg, event, fixed)
 	default:
-		return fixed
+		text = fixed
 	}
+	return r.expandWelcomePlaceholders(ctx, event, text)
+}
+
+// expandWelcomePlaceholders 替换 {nickname}{group}{group_id}。昵称和群名只在模板
+// 真用到时才去平台查：OneBot 的入群通知不带这两样，每次入群都多查两次不划算。
+// 查不到就回落成账号 ID / 群号，不把花括号原样发出去。
+func (r *Runtime) expandWelcomePlaceholders(ctx context.Context, event MessageEvent, text string) string {
+	if !strings.Contains(text, "{") {
+		return text
+	}
+	lookupCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if strings.Contains(text, "{nickname}") {
+		nickname := strings.TrimSpace(event.SenderName)
+		if nickname == "" {
+			if member, err := r.getGroupMemberInfoForEvent(lookupCtx, event, event.GroupID, event.UserID); err == nil {
+				nickname = firstNonEmpty(strings.TrimSpace(member.Card), strings.TrimSpace(member.Nickname))
+			}
+		}
+		text = strings.ReplaceAll(text, "{nickname}", firstNonEmpty(nickname, event.UserID))
+	}
+	if strings.Contains(text, "{group}") {
+		group := strings.TrimSpace(event.GroupName)
+		if group == "" {
+			if info, err := r.getGroupInfoForEvent(lookupCtx, event, event.GroupID); err == nil {
+				group = strings.TrimSpace(info.GroupName)
+			}
+		}
+		text = strings.ReplaceAll(text, "{group}", firstNonEmpty(group, event.GroupID))
+	}
+	return strings.NewReplacer("{group_id}", event.GroupID, "{user_id}", event.UserID).Replace(text)
 }
 
 // renderTemplateWelcome 从口吻模板池随机抽一条，池为空时回落固定文本。

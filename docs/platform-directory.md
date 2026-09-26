@@ -14,6 +14,22 @@
 名单结果包含 `member_list_complete`、`member_source`、`member_count_known`、`warnings`；分页到达上限、名单范围不含机器人或数量无法对齐时不声明完整。
 私聊请求私有群头像必须明确给出群标识并验证请求者在群内。头像只从平台提供的 HTTP(S) 地址读取，拒绝本地文件路径；向图片处理传递图片字节，不传带凭据的 API URL。
 
+## 群管与规则防御
+
+群管写操作只对机器人主人开放，并且要求机器人本身是该群管理员或群主；非主人（包括群管理员）调用一律拒绝。能力矩阵以 `model/assistant/platform_governance_tool.go` 的 `platformWriteOperationSupport` 为准，测试会逐平台核对。
+
+| 操作 | OneBot v11（NapCat / LLOneBot） | Telegram | 其他平台 |
+| --- | --- | --- | --- |
+| 禁言 / 解禁 / 踢人 | `set_group_ban` / `set_group_kick` | `restrictChatMember` / `banChatMember` | 不支持 |
+| 群公告：发、查、删 | `_send_group_notice` / `_get_group_notice` / `_del_group_notice` | 不支持（没有群公告） | 不支持 |
+| 精华：设、取消 | `set_essence_msg` / `delete_essence_msg` | 映射为置顶 `pinChatMessage` / `unpinChatMessage` | 不支持 |
+| 群名片 | `set_group_card` | 不支持（没有群名片） | 不支持 |
+| 专属头衔 | `set_group_special_title`（仅群主） | `setChatAdministratorCustomTitle`（仅机器人提拔的管理员） | 不支持 |
+| 全员禁言开关 | `set_group_whole_ban` | `setChatPermissions` | 不支持 |
+| 撤回成员消息（单条或某人最近 N 条） | `delete_msg` | `deleteMessage`（48 小时内） | 不支持 |
+
+规则防御在群配置的「规则防御」里逐群开启，默认全部关闭：刷屏检测（时间窗内条数、重复内容）、违规词拦截（子串或 `re:` 正则，命中即撤回）、阶梯处罚（第一次警告，之后按阶梯禁言）和退群/踢人审计（私聊通知主人）。主人、群管理员不受约束；机器人不是管理员时只记日志不处罚；重连回填的旧消息不处罚。违规计数只在内存里，重启后从零算。
+
 ## 接口依据
 
 - 飞书：官方 oapi-sdk-go 的 im/v1 Chat、ChatMembers 和 contact/v3 User；`https://github.com/larksuite/oapi-sdk-go`。

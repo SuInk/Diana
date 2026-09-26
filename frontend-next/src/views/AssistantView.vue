@@ -1031,7 +1031,7 @@
                   v-model="welcomeTemplatesDraft"
                   class="textarea"
                   rows="3"
-                  placeholder="每行一条候选，发送时随机抽一条；{user_id} 会替换成新成员 ID。LLM 模式冷却或失败时也从这里回落。"
+                  placeholder="每行一条候选，发送时随机抽一条；可用 {nickname} 昵称、{user_id} 账号、{group} 群名、{group_id} 群号。LLM 模式冷却或失败时也从这里回落。"
                 ></textarea>
               </div>
               <div v-if="form.welcome_enabled && (form.welcome_mode ?? 'fixed') === 'llm'" class="field">

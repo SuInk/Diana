@@ -301,9 +301,18 @@
         "operations": [
           "mute",
           "unmute",
-          "kick"
+          "kick",
+          "announce",
+          "announce_delete",
+          "essence_set",
+          "essence_unset",
+          "set_card",
+          "set_title",
+          "mute_all",
+          "unmute_all",
+          "recall_messages"
         ],
-        "reason": "禁言、解禁、踢人等群管操作；查群资料、撤回自己的消息照常"
+        "reason": "禁言、踢人、群公告、精华、名片头衔、全员禁言、撤回成员消息等群管操作；查群资料、撤回自己的消息照常"
       },
       {
         "category": "self_modify",
