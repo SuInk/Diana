@@ -166,6 +166,50 @@ func (t *dianaTasksTool) Run(ctx context.Context, input map[string]any) (string,
 	return string(body), nil
 }
 
+// taskCanonicalOperation 给提醒和订阅按操作拦截用，和工具自己的换算一致：add 算
+// create、edit 算 update、remove 算 delete，defaultOp 是工具对空 operation 的缺省。
+//
+// 建或改的任务投递到的不是当前会话时，名字加上 _elsewhere：那是一条定时往别人私聊
+// 发消息的通道，周期查询还会在那边跑一轮 Agent。判断规则：
+//   - create：私聊里 target_user_id 指向别人算别处；群里建的任务投递回当前群，
+//     target_user_id 只决定@谁、算谁的额度，不算别处；
+//   - update：只要 target_user_id 指向别人就算别处——改的是别人名下的任务，它可能
+//     建在那个人的私聊里，改掉内容就等于改了发给他的话。
+func taskCanonicalOperation(event MessageEvent, input map[string]any, defaultOp string) string {
+	operation := strings.ToLower(strings.TrimSpace(configToolString(input, "operation")))
+	if operation == "" {
+		operation = defaultOp
+	}
+	switch operation {
+	case "add":
+		operation = "create"
+	case "edit":
+		operation = "update"
+	case "remove":
+		operation = "delete"
+	}
+	if (operation == "create" || operation == "update") && taskTargetsElsewhere(event, input, operation == "update") {
+		return operation + "_elsewhere"
+	}
+	return operation
+}
+
+func taskTargetsElsewhere(event MessageEvent, input map[string]any, anyConversation bool) bool {
+	raw := strings.TrimSpace(configToolString(input, "target_user_id"))
+	if raw == "" {
+		return false
+	}
+	target := normalizeRelationshipUserID(raw)
+	// 认不出的账号工具自己会拒绝；这里按别处算，宁可多拦。
+	if target == "" {
+		return true
+	}
+	if target == normalizeRelationshipUserID(event.UserID) {
+		return false
+	}
+	return anyConversation || strings.TrimSpace(event.GroupID) == ""
+}
+
 func taskTargetUserID(ctx context.Context, runtime *Runtime, event MessageEvent, input map[string]any) (string, error) {
 	raw := strings.TrimSpace(configToolString(input, "target_user_id"))
 	if raw == "" {

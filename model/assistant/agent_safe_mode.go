@@ -4,6 +4,7 @@
 package assistant
 
 import (
+	"fmt"
 	"log"
 	"sort"
 	"strings"
@@ -72,6 +73,17 @@ func migrateAgentMode(cfg BotConfig) BotConfig {
 	return cfg
 }
 
+// ValidateAgentMode 检查外部传进来的模式值：只认 standard、safe 和空（空表示沿用或按
+// 旧开关换算）。接口和 config.yaml 写错时直接报错，而不是悄悄按安全模式处理——配错了
+// 应该让人知道，不该在界面上看着像「保存成功」。
+func ValidateAgentMode(mode string) error {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case "", AgentModeStandard, AgentModeSafe:
+		return nil
+	}
+	return fmt.Errorf("agent_mode 只能是 standard（标准模式）或 safe（安全模式），收到 %q", strings.TrimSpace(mode))
+}
+
 // AgentModeForLegacyConfig 是旧配置的换算规则：写了模式就用写的，没写时 agent_enabled
 // 开着算标准模式、关着或没写算安全模式。migrateAgentMode 和 config.yaml 播种共用它。
 func AgentModeForLegacyConfig(mode string, agentEnabled bool) string {
@@ -132,7 +144,7 @@ const (
 var AgentSafeModeCategories = []AgentSafeModeCategory{
 	{ID: safeModeCategoryHostExec, Label: "本机代码执行", Impact: "本机命令（run_command）和编码代理停用，浏览器里也不能执行脚本"},
 	{ID: safeModeCategoryThirdParty, Label: "安装和运行第三方代码", Impact: "不能安装、卸载或启用 Skill 和 MCP；已启用的 MCP 工具不可用（Skill 说明文档仍可读取）"},
-	{ID: safeModeCategoryActAsOwner, Label: "以主人身份对外操作", Impact: "内置浏览器和浏览器控制扩展（带主人登录态）不能再操作；GitHub 写操作、跨会话/跨群发送（含盯别的群的事件触发任务）停用"},
+	{ID: safeModeCategoryActAsOwner, Label: "以主人身份对外操作", Impact: "内置浏览器和浏览器控制扩展（带主人登录态）不能再操作；GitHub 写操作、跨会话/跨群发送停用；不能再建往别的会话发的事件触发、提醒和订阅，已有的这类任务暂停投递"},
 	{ID: safeModeCategoryFileWrite, Label: "改动本地文件", Impact: "不能再写入、编辑、保存或整理工作区文件（列目录、读取、检索、发送附件照常）"},
 	{ID: safeModeCategorySelfModify, Label: "改机器人设置和群管", Impact: "不能改机器人配置、回复屏蔽名单、机器人标记、模型设置和扩展权限，不能禁言、踢人或处理好友和加群请求"},
 }
@@ -141,8 +153,17 @@ var AgentSafeModeCategories = []AgentSafeModeCategory{
 // 界面按它生成说明，要审计「安全模式到底关了什么」只看这里。
 //
 // 没列进来的照常可用：聊天记录和历史媒体、远程图片、联网搜索和网页读取（一次性沙盒
-// 浏览器 browser_render）、记忆、提醒和订阅、画图改图、渲染，以及工作区的只读工具
-// （list_files、read_file、find_files、grep、manage_files 的 stat、view_image、send_attachment）。
+// 浏览器 browser_render）、记忆、当前会话里的提醒和订阅、画图改图、渲染，以及工作区的
+// 只读工具（list_files、read_file、find_files、grep、manage_files 的 stat、view_image、
+// send_attachment）。
+//
+// 有意保留、不算漏网的写操作：relationship 的 set / adjust / portrait_* / romance_*（好感度、
+// 画像和恋人关系）、self_note 的写入、notebook、thread_state。它们和记忆同一类，只改
+// 机器人自己记下的东西，不碰本机、不对外发消息、不改权限；其中改别人好感度和清空自述
+// 本来就只给主人，被带偏的代价是一段记错的记忆，主人在控制台能看到并改回。
+//
+// 除了调用时拦，安全模式还在到点时停发已有的「往别的会话发」的任务（盯别的群的事件触发、
+// 替别人建的提醒和订阅），见 safeModeHoldsTask。
 var AgentSafeModeRules = []AgentSafeModeRule{
 	// 本机代码执行：命令、编码代理和页面脚本都是在本机（或主人的浏览器里）跑任意代码。
 	{Category: safeModeCategoryHostExec, Tool: "run_command", Reason: "在本机执行命令"},
@@ -156,6 +177,9 @@ var AgentSafeModeRules = []AgentSafeModeRule{
 	{Category: safeModeCategoryThirdParty, Tool: "mcp_uninstall", Reason: "MCP 服务管理，和安装同一档"},
 	{Category: safeModeCategoryThirdParty, Tool: "mcp_set_enabled", Reason: "启用 MCP 服务等于让第三方程序开始跑"},
 	{Category: safeModeCategoryThirdParty, Tool: agentSafeModeMCPTools, Reason: "MCP 服务是第三方程序，以机器人的权限运行，已启用的也不给用"},
+	// mcp_media 取的是 MCP 工具交出来的媒体。那份暂存是各机器人共用的，安全模式的机器人
+	// 自己跑不了 MCP，能取到的只会是别的（标准模式）机器人的 MCP 产物。
+	{Category: safeModeCategoryThirdParty, Tool: dianaMCPMediaToolName, Reason: "取 MCP 工具的产物；安全模式不跑 MCP，共用暂存里只会是别的机器人的东西"},
 
 	// 以主人身份对外操作：常驻浏览器和浏览器控制扩展都带着主人的登录态，连只读的
 	// 截图、取文本读到的也是主人账号里的东西，所以整组关掉，只留一次性沙盒渲染。
@@ -187,6 +211,15 @@ var AgentSafeModeRules = []AgentSafeModeRule{
 	{Category: safeModeCategoryActAsOwner, Tool: dianaEventTriggerToolName, Field: "operation",
 		Operations: []string{eventTriggerOpCreateElsewhere},
 		Reason:     "创建盯别的群或任何地方的事件触发任务；只盯当前会话的照常"},
+	// 提醒和订阅：主人在私聊里用 target_user_id 替别人建的，到点发到那个人的私聊，周期
+	// 查询还会在那边跑 Agent；改别人名下的任务同理。只在当前会话里提醒、订阅的照常。
+	// 换算见 taskCanonicalOperation。
+	{Category: safeModeCategoryActAsOwner, Tool: "reminder", Field: "operation",
+		Operations: []string{"create_elsewhere", "update_elsewhere"},
+		Reason:     "替别人建或改提醒，投递到当前会话以外；当前会话里的提醒照常"},
+	{Category: safeModeCategoryActAsOwner, Tool: dianaSubscriptionToolName, Field: "operation",
+		Operations: []string{"create_elsewhere", "update_elsewhere"},
+		Reason:     "替别人建或改周期查询、RSS 订阅，投递到当前会话以外；当前会话里的订阅照常"},
 
 	// 改动本地文件：写入锁在 workspace 里，但注入能借它留下文件、改掉别的任务的产物。
 	// 长期保存区 keep/ 的写入（save_to_workspace keep=true、write_file/edit_file/manage_files
@@ -341,4 +374,92 @@ func skillExtensionIDs(skills []agent.SkillMetadata) []string {
 	}
 	sort.Strings(ids)
 	return ids
+}
+
+// reminderDeliversElsewhere 报告这条任务到点时是不是往「建它的那条会话」以外的地方发：
+//   - 事件触发任务盯的是别的群或任何地方（where=group / anywhere）；
+//   - 提醒和订阅投递到私聊，而投递对象不是在对话里建它的人（主人替别人建的）。
+//
+// 旧记录没有 RequestedBy，分不出是本人建的还是主人替他建的，按本人算，不停发——宁可
+// 漏停几条旧任务，也不能把用户自己建的提醒全部掐掉。WebUI 里配的投递目标是管理员
+// 在控制台定的，不经过对话，不在这里管。
+func reminderDeliversElsewhere(item Reminder) bool {
+	if reminderIsEventTrigger(item) {
+		spec, ok := decodeEventTrigger(item.EventTriggerJSON)
+		return !ok || spec.WatchAnywhere || strings.TrimSpace(spec.WatchGroupID) != ""
+	}
+	if strings.TrimSpace(item.GroupID) != "" {
+		return false
+	}
+	requester := normalizeRelationshipUserID(item.RequestedBy)
+	return requester != "" && requester != normalizeRelationshipUserID(item.UserID)
+}
+
+// safeModeHoldsTask 报告这条任务现在该不该停发：所属机器人在安全模式，且任务往别的会话
+// 发。停发只是这一次不投、任务原样保留，切回标准模式后照常投递。每条任务只记一次日志。
+//
+// 这是调用时拦截之外的第二道：标准模式下建好的这类任务，切到安全模式后不该继续往外发。
+func (r *Runtime) safeModeHoldsTask(item Reminder) bool {
+	if r == nil {
+		return false
+	}
+	return r.safeModeTaskFilter()(item)
+}
+
+// safeModeTaskFilter 先把各机器人的模式取出来，返回的判断函数不再碰 r.mu：调用方可能
+// 正拿着 reminderMu（见 claimEventTriggers），在里面再去拿 r.mu 会和别处的加锁顺序
+// 打架。找机器人的规则和 profileConfig 一致。
+func (r *Runtime) safeModeTaskFilter() func(Reminder) bool {
+	r.mu.RLock()
+	modes := make(map[string]bool, len(r.profileConfigs))
+	for id, cfg := range r.profileConfigs {
+		modes[strings.TrimSpace(id)] = cfg.agentSafeMode()
+	}
+	r.mu.RUnlock()
+	safeFor := func(profileID string) bool {
+		if safe, ok := modes[strings.TrimSpace(profileID)]; ok {
+			return safe
+		}
+		if len(modes) == 1 {
+			for _, safe := range modes {
+				return safe
+			}
+		}
+		return DefaultBotConfig().agentSafeMode()
+	}
+	return func(item Reminder) bool {
+		if !reminderDeliversElsewhere(item) {
+			return false
+		}
+		if !safeFor(item.ProfileID) {
+			r.safeModeHeldLogged.Delete(item.ID)
+			return false
+		}
+		if _, logged := r.safeModeHeldLogged.LoadOrStore(item.ID, true); !logged {
+			log.Printf("diana agent: 机器人 %q 处于安全模式，任务 %s 往当前会话以外投递，暂停发送（任务保留，切回标准模式后恢复）", item.ProfileID, item.ID)
+		}
+		return true
+	}
+}
+
+// SafeModeHeldTaskCount 数这台机器人名下「切到安全模式就会停发」的任务，界面切换前
+// 的确认框里报这个数。
+func (r *Runtime) SafeModeHeldTaskCount(profileID string) int {
+	profileID = strings.TrimSpace(profileID)
+	if r == nil || r.reminders == nil || profileID == "" {
+		return 0
+	}
+	r.reminderMu.Lock()
+	items := r.reminders.Reminders()
+	r.reminderMu.Unlock()
+	count := 0
+	for _, item := range items {
+		if strings.TrimSpace(item.ProfileID) != profileID || !item.CancelledAt.IsZero() {
+			continue
+		}
+		if reminderDeliversElsewhere(item) {
+			count++
+		}
+	}
+	return count
 }

@@ -55,13 +55,18 @@
         "category": "third_party",
         "tool": "mcp__*",
         "reason": "MCP 服务是第三方程序，以机器人的权限运行，已启用的也不给用"
+      },
+      {
+        "category": "third_party",
+        "tool": "mcp_media",
+        "reason": "取 MCP 工具的产物；安全模式不跑 MCP，共用暂存里只会是别的机器人的东西"
       }
     ]
   },
   {
     "id": "act_as_owner",
     "label": "以主人身份对外操作",
-    "impact": "内置浏览器和浏览器控制扩展（带主人登录态）不能再操作；GitHub 写操作、跨会话/跨群发送（含盯别的群的事件触发任务）停用",
+    "impact": "内置浏览器和浏览器控制扩展（带主人登录态）不能再操作；GitHub 写操作、跨会话/跨群发送停用；不能再建往别的会话发的事件触发、提醒和订阅，已有的这类任务暂停投递",
     "rules": [
       {
         "category": "act_as_owner",
@@ -176,6 +181,26 @@
           "create_elsewhere"
         ],
         "reason": "创建盯别的群或任何地方的事件触发任务；只盯当前会话的照常"
+      },
+      {
+        "category": "act_as_owner",
+        "tool": "reminder",
+        "field": "operation",
+        "operations": [
+          "create_elsewhere",
+          "update_elsewhere"
+        ],
+        "reason": "替别人建或改提醒，投递到当前会话以外；当前会话里的提醒照常"
+      },
+      {
+        "category": "act_as_owner",
+        "tool": "subscription",
+        "field": "operation",
+        "operations": [
+          "create_elsewhere",
+          "update_elsewhere"
+        ],
+        "reason": "替别人建或改周期查询、RSS 订阅，投递到当前会话以外；当前会话里的订阅照常"
       }
     ]
   },

@@ -395,12 +395,15 @@ type Runtime struct {
 	friendRosters  map[string]oneBotFriendRoster
 	// welcomeLLMLast 记每个（机器人 × 群）上一次 LLM 欢迎词的生成时间，
 	// 进出群刷屏时不会每条都烧一次 Token。自带锁，不受 mu 保护。
-	welcomeMu             sync.Mutex
-	welcomeLLMLast        map[string]time.Time
-	buildInfo             BuildInfo
-	releaseStatus         ReleaseStatusProvider
-	reminders             ReminderStore
-	codingJobsOnce        sync.Once
+	welcomeMu      sync.Mutex
+	welcomeLLMLast map[string]time.Time
+	buildInfo      BuildInfo
+	releaseStatus  ReleaseStatusProvider
+	reminders      ReminderStore
+	codingJobsOnce sync.Once
+	// safeModeHeldLogged 记着哪些任务已经因为安全模式停发过、日志写过一次，免得每轮
+	// 调度都刷一条。键是任务 ID。
+	safeModeHeldLogged    sync.Map
 	codingJobRegistry     *codingJobRegistry
 	groupConfigs          GroupConfigStore
 	configSaver           ConfigSaver

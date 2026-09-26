@@ -476,6 +476,11 @@ func (h *BotHandler) saveProfile(c *gin.Context, create bool) {
 		return
 	}
 
+	// 模式写错直接拒绝：悄悄按安全模式存下来，界面上看着像保存成功，其实不是想要的那档。
+	if err := assistant.ValidateAgentMode(payload.AgentMode); err != nil {
+		h.writeError(c, http.StatusBadRequest, "config_save", err, "", nil)
+		return
+	}
 	set := h.profiles.Profiles()
 	existing := existingBotProfileConfig(set, payload)
 	if create {
@@ -525,9 +530,9 @@ func (h *BotHandler) saveProfile(c *gin.Context, create bool) {
 	}
 	recordRequestOperation(c, h.logs, "config_save", "OneBot v11 机器人配置已保存", current.ID, botLogMetadata(current))
 	if create {
-		h.recordAgentModeChange(c, assistant.BotConfig{}, current)
+		h.recordAgentModeChange(c, "新建", assistant.BotConfig{}, current)
 	} else {
-		h.recordAgentModeChange(c, existing, current)
+		h.recordAgentModeChange(c, "", existing, current)
 	}
 	c.JSON(http.StatusOK, assistant.PayloadFromProfileSet(next, savedID))
 }
@@ -570,6 +575,7 @@ func (h *BotHandler) cloneProfile(c *gin.Context) {
 			return
 		}
 		recordRequestOperation(c, h.logs, "profile_clone", "OneBot v11 机器人配置已复制", sourceID, botLogMetadata(profile))
+		h.recordAgentModeChange(c, "复制出的", assistant.BotConfig{}, current)
 		c.JSON(http.StatusOK, assistant.PayloadFromProfileSet(next, clonedID))
 		return
 	}

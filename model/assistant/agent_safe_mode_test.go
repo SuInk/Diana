@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/SuInk/diana/model/agent"
 	"github.com/SuInk/diana/model/llm"
@@ -142,11 +143,15 @@ func safeModeTestRegistry(t *testing.T, mode string) *agent.ToolRegistry {
 
 func safeModeTestRegistryWithRuntime(t *testing.T, mode string) (*agent.ToolRegistry, *Runtime) {
 	t.Helper()
+	return safeModeRegistryForEvent(t, mode, MessageEvent{Kind: EventKindGroup, GroupID: "20001", UserID: "10001", ProfileID: "bot-a"})
+}
+
+func safeModeRegistryForEvent(t *testing.T, mode string, event MessageEvent) (*agent.ToolRegistry, *Runtime) {
+	t.Helper()
 	cfg := DefaultBotConfig()
 	cfg.AgentMode = mode
 	cfg.AgentMCPConfigPath = filepath.Join(t.TempDir(), "missing-mcp.json")
 	runtime := &Runtime{plugins: NewPluginManager()}
-	event := MessageEvent{Kind: EventKindGroup, GroupID: "20001", UserID: "10001", ProfileID: "bot-a"}
 	registry, err := runtime.newAgentRegistry(
 		context.Background(),
 		cfg.WithDefaults(),
@@ -165,6 +170,11 @@ func safeModeTestRegistryWithRuntime(t *testing.T, mode string) (*agent.ToolRegi
 		newDianaCodingTool(runtime, event, codingSettings(nil)),
 		newDianaGitHubTool(runtime, event, nil, nil),
 		newDianaEventTriggerTool(runtime, event),
+		newDianaMCPMediaTool(runtime, event),
+		newDianaSubscriptionTool(
+			subscriptionBackend{kind: subscriptionKindSchedule, operations: []string{"create", "list", "update", "cancel", "delete"}, delegate: newDianaScheduleTool(runtime, event)},
+			subscriptionBackend{kind: subscriptionKindRSS, operations: []string{"create", "list", "update", "cancel", "delete"}, delegate: newDianaRSSWatchTool(runtime, event)},
+		),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -428,5 +438,137 @@ func TestSafeModeDoesNotStartSharedExtensionBase(t *testing.T) {
 	standard.agentRegistryMu.Unlock()
 	if started == 0 {
 		t.Fatal("标准模式的主人会话应当拉起共享扩展底座")
+	}
+}
+
+// runSafeModeCall 经 Runner 执行一次工具调用，返回第一步的记录。
+func runSafeModeCall(t *testing.T, registry *agent.ToolRegistry, tool string, input map[string]any) agent.Step {
+	t.Helper()
+	call, err := json.Marshal(map[string]any{"action": "tool", "tool": tool, "input": input})
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider := &agentSequenceLLMProvider{responses: []string{string(call), `{"action":"final","content":"好"}`}}
+	runner, err := agent.NewRunner(provider, agent.Config{MaxSteps: 3}, registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := runner.Run(context.Background(), agent.Request{Messages: []llm.Message{{Role: llm.RoleUser, Content: "照做"}}})
+	if err != nil {
+		t.Fatalf("%s %v: %v", tool, input, err)
+	}
+	if len(resp.Steps) == 0 {
+		t.Fatalf("%s %v 没有执行记录", tool, input)
+	}
+	return resp.Steps[0]
+}
+
+// 主人在私聊里用 target_user_id 替别人建提醒和订阅，到点发到别人的私聊：安全模式下
+// 创建和修改都要拦；只在当前会话里的照常。群里建的任务投递回当前群，不算别处。
+func TestSafeModeRunnerRejectsTasksDeliveredElsewhere(t *testing.T) {
+	private, _ := safeModeRegistryForEvent(t, AgentModeSafe, MessageEvent{Kind: EventKindPrivate, UserID: "10001", ProfileID: "bot-a"})
+	denied := []struct {
+		tool  string
+		input map[string]any
+	}{
+		{"reminder", map[string]any{"operation": "create", "target_user_id": "20002", "delay": "1s", "message": "该开会了"}},
+		{"reminder", map[string]any{"operation": "add", "target_user_id": "@20002", "delay": "1s", "message": "该开会了"}},
+		{"reminder", map[string]any{"operation": "Edit", "target_user_id": "20002", "id": "r1", "message": "改了"}},
+		{"subscription", map[string]any{"operation": "create", "kind": "schedule", "target_user_id": "20002", "interval": "1h", "query": "查天气"}},
+		{"subscription", map[string]any{"operation": "update", "kind": "schedule", "target_user_id": "20002", "id": "s1", "query": "查股价"}},
+		{"subscription", map[string]any{"operation": "create", "kind": "rss", "target_user_id": "20002", "feed_url": "https://example.com/feed", "judge_prompt": "有新文章就说"}},
+		{"subscription", map[string]any{"operation": "update", "kind": "RSS", "target_user_id": "20002", "id": "w1", "judge_prompt": "都说"}},
+	}
+	for _, tc := range denied {
+		step := runSafeModeCall(t, private, tc.tool, tc.input)
+		if !strings.Contains(step.Error, agentSafeModeDisabledMessage) {
+			t.Fatalf("%s %v 没有被安全模式拦下：%+v", tc.tool, tc.input, step)
+		}
+	}
+	for tool, input := range map[string]map[string]any{
+		"reminder":     {"operation": "create", "delay": "1s", "message": "喝水"},
+		"subscription": {"operation": "create", "kind": "schedule", "target_user_id": "10001", "interval": "1h", "query": "查天气"},
+	} {
+		if err := private.OperationDisabledError(tool, input); err != nil {
+			t.Fatalf("私聊里给自己建的 %s 不该被拦：%v", tool, err)
+		}
+	}
+	group := safeModeTestRegistry(t, AgentModeSafe)
+	if err := group.OperationDisabledError("reminder", map[string]any{"operation": "create", "target_user_id": "20002", "delay": "1s", "message": "该开会了"}); err != nil {
+		t.Fatalf("群里建的提醒投递回当前群，不该被拦：%v", err)
+	}
+	if err := group.OperationDisabledError("reminder", map[string]any{"operation": "update", "target_user_id": "20002", "id": "r1"}); err == nil {
+		t.Fatal("改别人名下的提醒可能改的是发到他私聊的话，应当拦")
+	}
+	if reason, ok := group.DisabledReason(dianaMCPMediaToolName); !ok || reason != agentSafeModeDisabledMessage {
+		t.Fatalf("安全模式下 mcp_media 应当关掉：%q %v", reason, ok)
+	}
+}
+
+// 标准模式下建好的「往别处发」的任务，切到安全模式后到点不发、任务保留；切回标准模式
+// 后照常投递。给自己建的提醒不受影响。
+func TestSafeModeHoldsTasksDeliveredElsewhereAtFireTime(t *testing.T) {
+	past := time.Now().Add(-time.Minute)
+	store := &stubReminderStore{items: []Reminder{
+		{ID: "for-other", Kind: ReminderKindMessage, ProfileID: "bot-a", OwnerID: "20002", UserID: "20002", RequestedBy: "10001", Message: "替别人建的", TriggerAt: past, CreatedAt: past},
+		{ID: "for-self", Kind: ReminderKindMessage, ProfileID: "bot-a", OwnerID: "10001", UserID: "10001", RequestedBy: "10001", Message: "自己的", TriggerAt: past, CreatedAt: past},
+		{ID: "legacy", Kind: ReminderKindMessage, ProfileID: "bot-a", OwnerID: "20003", UserID: "20003", Message: "旧记录", TriggerAt: past, CreatedAt: past},
+	}}
+	channel := &recordingChannel{}
+	cfg := BotConfig{ID: "bot-a", Enabled: true, OwnerID: "10001", AgentEnabled: true, AgentMode: AgentModeSafe}
+	runtime := NewRuntime(cfg, channel, NewPluginManager(), nil, store, nil, nil)
+	runtime.SetProfiles(ProfileSet{Profiles: []BotConfig{cfg}})
+	if runtime.SafeModeHeldTaskCount("bot-a") != 1 {
+		t.Fatalf("会停发的任务数 = %d", runtime.SafeModeHeldTaskCount("bot-a"))
+	}
+
+	runtime.fireDueReminders(context.Background())
+	sentTo := map[string]bool{}
+	for _, message := range channel.sent {
+		sentTo[message.UserID] = true
+	}
+	if sentTo["20002"] || !sentTo["10001"] || !sentTo["20003"] {
+		t.Fatalf("安全模式下的投递 = %#v", channel.sent)
+	}
+	held := false
+	for _, item := range store.items {
+		if item.ID == "for-other" {
+			held = true
+		}
+	}
+	if !held {
+		t.Fatal("停发的任务被删掉了，切回标准模式就恢复不了")
+	}
+
+	cfg.AgentMode = AgentModeStandard
+	runtime.SetProfiles(ProfileSet{Profiles: []BotConfig{cfg}})
+	channel.sent = nil
+	runtime.fireDueReminders(context.Background())
+	if len(channel.sent) != 1 || channel.sent[0].UserID != "20002" {
+		t.Fatalf("切回标准模式后应当补发：%#v", channel.sent)
+	}
+}
+
+// 事件触发任务盯别的群或任何地方的，安全模式下到点不点燃；只盯当前会话的照常。
+func TestReminderDeliversElsewhereClassifiesEventTriggers(t *testing.T) {
+	trigger := func(spec EventTrigger) Reminder {
+		return Reminder{ID: "t", Kind: ReminderKindEventTrigger, EventTriggerJSON: encodeEventTrigger(spec)}
+	}
+	if !reminderDeliversElsewhere(trigger(EventTrigger{WatchGroupID: "20002"})) || !reminderDeliversElsewhere(trigger(EventTrigger{WatchAnywhere: true})) {
+		t.Fatal("盯别的群、盯任何地方的触发任务应当算往别处发")
+	}
+	if reminderDeliversElsewhere(trigger(EventTrigger{})) {
+		t.Fatal("只盯当前会话的触发任务不该算往别处发")
+	}
+}
+
+func TestValidateAgentModeRejectsUnknownValues(t *testing.T) {
+	for _, ok := range []string{"", "standard", " SAFE "} {
+		if err := ValidateAgentMode(ok); err != nil {
+			t.Fatalf("%q 应当合法：%v", ok, err)
+		}
+	}
+	if err := ValidateAgentMode("Standrd"); err == nil || !strings.Contains(err.Error(), "standard") {
+		t.Fatalf("写错的模式应当报错：%v", err)
 	}
 }

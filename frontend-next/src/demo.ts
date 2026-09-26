@@ -1160,7 +1160,7 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
       agent_command_timeout_ms: 10000,
       agent_safe_mode: demoAgentSafeMode
     });
-  if (path === "/api/assistant/agent-mode/impact") return json({ running_coding_jobs: 1 });
+  if (path === "/api/assistant/agent-mode/impact") return json({ running_coding_jobs: 1, held_tasks: 2 });
   if (path === "/api/assistant/config/defaults" && method === "GET") return json({
     platform: url.searchParams.get("platform") || "onebot-v11", enabled: true, owner_login_enabled: true,
     onebot_transport: "reverse_ws", onebot_reverse_ws_endpoint: "ws://127.0.0.1:18080/onebot/v11/ws",

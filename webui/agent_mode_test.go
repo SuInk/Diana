@@ -110,6 +110,39 @@ func TestSavingAgentModeChangeWritesAuditLog(t *testing.T) {
 	if !found {
 		t.Fatalf("新建机器人没有记模式日志: %#v", operations)
 	}
+
+	// 写错的模式值直接 400，不悄悄存成安全模式。
+	payload := assistant.PayloadFromConfig(current)
+	payload.AgentMode = "Standrd"
+	raw, err = json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/assistant/config", bytes.NewReader(raw)))
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "agent_mode") {
+		t.Fatalf("写错的模式 status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	// 复制出的机器人沿用源机器人的模式，也记一条。
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/assistant/config/clone", bytes.NewReader([]byte(`{"id":"`+current.ID+`"}`))))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("clone status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	operations, err = logStore.ListLogs(ctx, storage.AppLogFilter{Kind: storage.LogKindOperation, Limit: 30})
+	if err != nil {
+		t.Fatal(err)
+	}
+	found = false
+	for _, entry := range operations {
+		if entry.Action == "agent_mode_change" && strings.Contains(entry.Message, "复制出的机器人") && entry.Metadata["agent_mode_to"] == assistant.AgentModeSafe {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("复制机器人没有记模式日志: %#v", operations)
+	}
 }
 
 // 界面的安全模式说明来自后端规则表，推荐默认值接口要把整张表带出去；影响查询接口

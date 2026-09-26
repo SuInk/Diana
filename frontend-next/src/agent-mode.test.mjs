@@ -28,7 +28,7 @@ test("only switching into safe mode asks for confirmation", () => {
 });
 
 test("confirm dialog lists every category impact and the live situation", () => {
-  const request = safeModeSwitchConfirm(catalog, { runningCodingJobs: 2, enabledMCPServers: 3 });
+  const request = safeModeSwitchConfirm(catalog, { runningCodingJobs: 2, enabledMCPServers: 3, heldTasks: 4 });
   assert.equal(request.confirmLabel, "确认切换到安全模式");
   assert.equal(request.danger, true);
   for (const category of catalog) {
@@ -36,6 +36,8 @@ test("confirm dialog lists every category impact and the live situation", () => 
   }
   assert.match(request.message, /2 个编码任务正在运行：不会被中断/);
   assert.match(request.message, /3 个 MCP 服务/);
+  assert.match(request.message, /4 个往当前会话以外发消息的任务.*暂停投递/);
+  assert.match(request.message, /到点不发，任务保留/);
   assert.match(request.message, /包括主人本人/);
 });
 

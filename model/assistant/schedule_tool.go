@@ -89,6 +89,7 @@ func (t *dianaScheduleTool) Run(_ context.Context, input map[string]any) (string
 	}
 	targetEvent := t.event
 	targetEvent.UserID = targetID
+	targetEvent.taskRequester = t.event.UserID
 	operation := strings.ToLower(strings.TrimSpace(configToolString(input, "operation")))
 	switch operation {
 	case "create", "add":
@@ -282,6 +283,7 @@ func (r *Runtime) addScheduledQueries(event MessageEvent, requests []scheduleCre
 			OwnerID:          event.UserID,
 			GroupID:          event.GroupID,
 			UserID:           event.UserID,
+			RequestedBy:      firstNonEmpty(event.taskRequester, event.UserID),
 			Message:          query,
 			TriggerAt:        now.Add(request.Interval),
 			IntervalSeconds:  int64(request.Interval / time.Second),
@@ -450,4 +452,10 @@ func marshalDianaScheduleResult(result dianaScheduleResult) (string, error) {
 		return "", err
 	}
 	return string(body), nil
+}
+
+// CanonicalOperation 是 Run 实际执行的操作；投递目标不是当前会话时带 _elsewhere，
+// 见 taskCanonicalOperation。
+func (t *dianaScheduleTool) CanonicalOperation(input map[string]any) string {
+	return taskCanonicalOperation(t.event, input, "")
 }

@@ -29,6 +29,8 @@ export interface AgentSafeModeCategory {
 export interface AgentModeImpact {
   runningCodingJobs: number | null;
   enabledMCPServers: number | null;
+  /** 往当前会话以外投递的已有任务（盯别的群的事件触发、替别人建的提醒和订阅）。 */
+  heldTasks?: number | null;
 }
 
 export interface AgentModeConfirmRequest {
@@ -91,6 +93,9 @@ export function safeModeLiveImpactLines(impact: AgentModeImpact | null): string[
   if (impact.runningCodingJobs !== null && impact.runningCodingJobs > 0) {
     lines.push(`有 ${impact.runningCodingJobs} 个编码任务正在运行：不会被中断，但之后不能再派新任务。`);
   }
+  if (impact.heldTasks !== undefined && impact.heldTasks !== null && impact.heldTasks > 0) {
+    lines.push(`有 ${impact.heldTasks} 个往当前会话以外发消息的任务（盯别的群的事件触发、替别人建的提醒和订阅）会暂停投递：任务保留，切回标准模式后恢复。`);
+  }
   if (impact.enabledMCPServers !== null && impact.enabledMCPServers > 0) {
     lines.push(`这台机器人已启用的 ${impact.enabledMCPServers} 个 MCP 服务的工具将不可用。`);
   }
@@ -104,7 +109,7 @@ export function safeModeSwitchConfirm(categories: AgentSafeModeCategory[], impac
   ];
   const live = safeModeLiveImpactLines(impact);
   if (live.length > 0) sections.push("当前情况：\n" + live.map((line) => `· ${line}`).join("\n"));
-  sections.push("查资料、记忆、提醒订阅、画图和读取工作区文件照常。确认后还要点「保存配置」才生效，随时可以切回标准模式。");
+  sections.push("已有的、往当前会话以外发消息的定时任务在安全模式下到点不发，任务保留。当前会话里的查资料、记忆、提醒订阅、画图和读取工作区文件照常。确认后还要点「保存配置」才生效，随时可以切回标准模式。");
   return {
     title: "切换到安全模式？",
     message: sections.join("\n\n"),

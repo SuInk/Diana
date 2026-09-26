@@ -239,6 +239,9 @@ func (c appConfig) botSeedConfig(defaultEndpoint string) (assistant.BotConfig, b
 	// 规则：只靠 config.yaml 跑的部署每次启动都重新播种，写着 agent_enabled: true 的
 	// 升级后仍是标准模式，没写或写 false 的是安全模式。这里显式写进 payload：
 	// ConfigFromPayload 对没写模式的新配置一律给安全模式。
+	if err := assistant.ValidateAgentMode(payload.AgentMode); err != nil {
+		return assistant.BotConfig{}, false, fmt.Errorf("parse bot section: %w", err)
+	}
 	payload.AgentMode = assistant.AgentModeForLegacyConfig(payload.AgentMode, payload.AgentEnabled)
 	return assistant.ConfigFromPayload(payload, base).WithDefaults(), true, nil
 }

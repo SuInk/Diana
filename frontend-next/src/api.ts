@@ -3526,7 +3526,7 @@ export function getAgentDefaults(): Promise<AgentRecommendedDefaults> {
 }
 
 /** 切到安全模式前的现场情况：这台机器人还在跑的编码任务数。只读。 */
-export function getAgentModeImpact(profile: string): Promise<{ running_coding_jobs: number }> {
+export function getAgentModeImpact(profile: string): Promise<{ running_coding_jobs: number; held_tasks?: number }> {
   return requestJSON(`/api/assistant/agent-mode/impact?profile=${encodeURIComponent(profile)}`);
 }
 

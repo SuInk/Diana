@@ -2231,6 +2231,7 @@ async function loadAgentModeImpact(profileID: string): Promise<AgentModeImpact |
   const [jobs, extensions] = await Promise.allSettled([getAgentModeImpact(profileID), listManagedExtensions(profileID)]);
   return {
     runningCodingJobs: jobs.status === "fulfilled" ? jobs.value.running_coding_jobs : null,
+    heldTasks: jobs.status === "fulfilled" ? (jobs.value.held_tasks ?? null) : null,
     enabledMCPServers: extensions.status === "fulfilled" ? extensions.value.items.filter((item) => item.kind === "mcp" && item.enabled).length : null
   };
 }

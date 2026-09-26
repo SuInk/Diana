@@ -897,6 +897,14 @@ func (r *Runtime) rescheduleInterruptedReminder(id string, startedAt time.Time) 
 
 func (r *Runtime) executeClaimedReminder(ctx context.Context, item Reminder) {
 	defer r.releaseClaimedReminder(item.ID)
+	// 安全模式停发往别的会话投递的任务：周期任务跳过这一轮排到下个周期，一次性提醒
+	// 原样留着，切回标准模式后下一轮调度照常投递。
+	if r.safeModeHoldsTask(item) {
+		if reminderIsRecurring(item) {
+			r.rescheduleInterruptedReminder(item.ID, time.Now())
+		}
+		return
+	}
 	// 启动时第一轮调度跑在聊天客户端连上之前（反向 WebSocket 尤其如此）。这里发出的
 	// 消息碰上「连接没就绪」就等连接回来再发，见 deliverNotice。
 	ctx = withScheduledDelivery(ctx)

@@ -92,6 +92,7 @@ func (t *dianaReminderTool) Run(ctx context.Context, input map[string]any) (stri
 	}
 	targetEvent := t.event
 	targetEvent.UserID = targetID
+	targetEvent.taskRequester = t.event.UserID
 	operation := strings.ToLower(strings.TrimSpace(configToolString(input, "operation")))
 	switch operation {
 	case "create", "add":
@@ -367,6 +368,7 @@ func (r *Runtime) addOneTimeReminders(event MessageEvent, requests []reminderCre
 			OwnerID:          event.UserID,
 			GroupID:          event.GroupID,
 			UserID:           event.UserID,
+			RequestedBy:      firstNonEmpty(event.taskRequester, event.UserID),
 			Message:          message,
 			TriggerAt:        triggerAt,
 			CreatedAt:        now,
@@ -543,4 +545,10 @@ func marshalDianaReminderResult(result dianaReminderResult) (string, error) {
 		return "", err
 	}
 	return string(body), nil
+}
+
+// CanonicalOperation 是 Run 实际执行的操作；投递目标不是当前会话时带 _elsewhere，
+// 见 taskCanonicalOperation。
+func (t *dianaReminderTool) CanonicalOperation(input map[string]any) string {
+	return taskCanonicalOperation(t.event, input, "")
 }

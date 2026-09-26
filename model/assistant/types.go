@@ -222,6 +222,9 @@ type MessageEvent struct {
 	avatarMatchContext     string
 	imageResolutionRun     bool
 	imageLoadErr           error
+	// taskRequester 是替别人建提醒、订阅时真正发起的人，只在建任务那一步用，
+	// 落进 Reminder.RequestedBy。
+	taskRequester          string
 	imageContextNotice     string
 	voiceSTTErr            error
 	voiceSTTTransient      bool
@@ -303,29 +306,33 @@ const (
 )
 
 type Reminder struct {
-	ID                      string       `json:"id"`
-	Kind                    ReminderKind `json:"kind,omitempty"`
-	Platform                string       `json:"platform,omitempty"`
-	ProfileID               string       `json:"profile_id,omitempty"`
-	ContextNamespace        string       `json:"context_namespace,omitempty"`
-	OwnerID                 string       `json:"owner_id"`
-	GroupID                 string       `json:"group_id,omitempty"`
-	UserID                  string       `json:"user_id,omitempty"`
-	NotificationEnabled     bool         `json:"notification_enabled,omitempty"`
-	NotificationTargetsJSON string       `json:"notification_targets,omitempty"`
-	Message                 string       `json:"message"`
-	TriggerAt               time.Time    `json:"trigger_at"`
-	IntervalSeconds         int64        `json:"interval_seconds,omitempty"`
-	LastRunAt               time.Time    `json:"last_run_at,omitempty"`
-	CancelledAt             time.Time    `json:"cancelled_at,omitempty"`
-	LastError               string       `json:"last_error,omitempty"`
-	ConsecutiveFailures     int          `json:"consecutive_failures,omitempty"`
-	LastFailureStage        string       `json:"last_failure_stage,omitempty"`
-	LastErrorFingerprint    string       `json:"last_error_fingerprint,omitempty"`
-	FailureAlertedAt        time.Time    `json:"failure_alerted_at,omitempty"`
-	RecoveryNoticePending   bool         `json:"recovery_notice_pending,omitempty"`
-	PendingDelivery         string       `json:"pending_delivery,omitempty"`
-	PendingDeliveredTargets []string     `json:"pending_delivered_targets,omitempty"`
+	ID               string       `json:"id"`
+	Kind             ReminderKind `json:"kind,omitempty"`
+	Platform         string       `json:"platform,omitempty"`
+	ProfileID        string       `json:"profile_id,omitempty"`
+	ContextNamespace string       `json:"context_namespace,omitempty"`
+	OwnerID          string       `json:"owner_id"`
+	GroupID          string       `json:"group_id,omitempty"`
+	UserID           string       `json:"user_id,omitempty"`
+	// RequestedBy 是在对话里让机器人建这条任务的人。主人在私聊里用 target_user_id 替
+	// 别人建的提醒和订阅，投递给的是别人（UserID），发起的是主人；安全模式据此在到点时
+	// 停发「往别的会话发」的任务。空值是这个字段之前的旧记录，按 UserID 本人算。
+	RequestedBy             string    `json:"requested_by,omitempty"`
+	NotificationEnabled     bool      `json:"notification_enabled,omitempty"`
+	NotificationTargetsJSON string    `json:"notification_targets,omitempty"`
+	Message                 string    `json:"message"`
+	TriggerAt               time.Time `json:"trigger_at"`
+	IntervalSeconds         int64     `json:"interval_seconds,omitempty"`
+	LastRunAt               time.Time `json:"last_run_at,omitempty"`
+	CancelledAt             time.Time `json:"cancelled_at,omitempty"`
+	LastError               string    `json:"last_error,omitempty"`
+	ConsecutiveFailures     int       `json:"consecutive_failures,omitempty"`
+	LastFailureStage        string    `json:"last_failure_stage,omitempty"`
+	LastErrorFingerprint    string    `json:"last_error_fingerprint,omitempty"`
+	FailureAlertedAt        time.Time `json:"failure_alerted_at,omitempty"`
+	RecoveryNoticePending   bool      `json:"recovery_notice_pending,omitempty"`
+	PendingDelivery         string    `json:"pending_delivery,omitempty"`
+	PendingDeliveredTargets []string  `json:"pending_delivered_targets,omitempty"`
 	// PendingDeliveryReference 是仓库通知补投成功后生成跟评所需的私有参考资料。
 	// 它不发送到会话，只避免投递失败后丢失仓库简介、正文和 diff。
 	PendingDeliveryReference string    `json:"pending_delivery_reference,omitempty"`

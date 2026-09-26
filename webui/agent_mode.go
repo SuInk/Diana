@@ -17,6 +17,19 @@ type codingJobCountRuntime interface {
 	RunningCodingJobCount(profileID string) int
 }
 
+// safeModeHeldTaskRuntime 让界面说出「切到安全模式会停发几个往别处发的任务」。
+type safeModeHeldTaskRuntime interface {
+	SafeModeHeldTaskCount(profileID string) int
+}
+
+func (h *BotHandler) safeModeHeldTasks(profileID string) int {
+	runtime, ok := h.runtime.(safeModeHeldTaskRuntime)
+	if !ok {
+		return 0
+	}
+	return runtime.SafeModeHeldTaskCount(profileID)
+}
+
 func (h *BotHandler) runningCodingJobs(profileID string) int {
 	runtime, ok := h.runtime.(codingJobCountRuntime)
 	if !ok {
@@ -28,8 +41,11 @@ func (h *BotHandler) runningCodingJobs(profileID string) int {
 // agentModeImpact 返回切到安全模式时会受影响、又能便宜查到的现场情况。只读。
 // 已启用的 MCP 服务数界面直接从扩展列表数，这里只补界面自己查不到的那一项。
 func (h *BotHandler) agentModeImpact(c *gin.Context) {
+	profileID := botProfileScope(c)
 	c.JSON(http.StatusOK, gin.H{
-		"running_coding_jobs": h.runningCodingJobs(botProfileScope(c)),
+		"running_coding_jobs": h.runningCodingJobs(profileID),
+		// 往当前会话以外投递的已有任务，安全模式下到点停发、任务保留。
+		"held_tasks": h.safeModeHeldTasks(profileID),
 	})
 }
 
@@ -49,8 +65,8 @@ func agentModeLabel(mode string) string {
 // 它的变更要能单独查到，不能淹在一条笼统的「配置已保存」里。
 //
 // 切到安全模式时正在跑的编码任务不会被打断，这里把数量一并记下，事后查得到。
-// 新建机器人时 before 传零值，记下它建成了哪个模式。
-func (h *BotHandler) recordAgentModeChange(c *gin.Context, before, after assistant.BotConfig) {
+// 新建、复制机器人时 before 传零值，origin 写「新建」「复制出的」，记下它建成了哪个模式。
+func (h *BotHandler) recordAgentModeChange(c *gin.Context, origin string, before, after assistant.BotConfig) {
 	from := assistant.NormalizeAgentMode(before.AgentMode)
 	to := assistant.NormalizeAgentMode(after.AgentMode)
 	if from == to {
@@ -61,10 +77,14 @@ func (h *BotHandler) recordAgentModeChange(c *gin.Context, before, after assista
 	metadata["agent_mode_to"] = to
 	message := "机器人 Agent 模式已从" + agentModeLabel(from) + "切换为" + agentModeLabel(to)
 	if from == "" {
-		// 新建机器人也记一条：新建默认安全模式，建成标准模式的要查得到是谁。
-		message = "新建机器人，Agent 模式为" + agentModeLabel(to)
+		// 新建、复制出来的机器人也记一条：新建默认安全模式，建成标准模式的要查得到是谁。
+		message = origin + "机器人，Agent 模式为" + agentModeLabel(to)
 	}
 	if to == assistant.AgentModeSafe {
+		if held := h.safeModeHeldTasks(after.ID); held > 0 {
+			metadata["held_tasks"] = held
+			message += "；有 " + strconv.Itoa(held) + " 个往当前会话以外投递的任务暂停发送"
+		}
 		if running := h.runningCodingJobs(after.ID); running > 0 {
 			metadata["running_coding_jobs"] = running
 			message += "；有 " + strconv.Itoa(running) + " 个编码任务仍在运行，不会被中断，之后不能再派新任务"

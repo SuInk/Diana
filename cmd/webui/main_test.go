@@ -454,4 +454,16 @@ func TestBotSeedConfigMapsLegacyAgentSwitchToMode(t *testing.T) {
 			t.Fatalf("%q → mode=%q enabled=%v, want %q", body, bot.AgentMode, bot.AgentEnabled, want)
 		}
 	}
+	// 写错的模式值启动时就报错，不悄悄按安全模式跑。
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte("bot:\n  agent_mode: Standrd\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := loadAppConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := cfg.botSeedConfig(defaultOneBotEndpoint("18080")); err == nil || !strings.Contains(err.Error(), "agent_mode") {
+		t.Fatalf("写错的 agent_mode 应当报错：%v", err)
+	}
 }
