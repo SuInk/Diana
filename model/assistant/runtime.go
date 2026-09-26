@@ -7649,6 +7649,7 @@ func (r *Runtime) sendForwardNodesWithResult(ctx context.Context, event MessageE
 		return nil, err
 	}
 	outboundTurnFromContext(ctx).recordSentForward(len(nodes))
+	// 和逐条发送一样：确认送达（含结果不明后确认到的）才算回出去。
 	r.noteSenderTurnDelivered(ctx, event)
 	return result, nil
 }
