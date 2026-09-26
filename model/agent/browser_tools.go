@@ -43,6 +43,13 @@ type BuiltinBrowserURLPolicy interface {
 	AllowsURL(rawURL string) bool
 }
 
+// BuiltinBrowserUserTabs 是内置浏览器可选实现的标签归属：主人在 WebUI 画面里自己开的
+// 标签归主人，机器人的工具不挑、不列、不切、不关——主人在里面填表、登录，机器人一跳转
+// 就全没了。
+type BuiltinBrowserUserTabs interface {
+	UserTab(targetID string) bool
+}
+
 type browserToolBase struct {
 	root     string
 	cdpURL   string
@@ -129,6 +136,12 @@ func (b browserToolBase) checkURL(pageURL string) error {
 		return fmt.Errorf("%s 在内置浏览器的禁止名单里，不能打开", pageURL)
 	}
 	return nil
+}
+
+// userTab 判断这个标签是不是主人自己开的。外接 CDP 没有这个概念，一律不是。
+func (b browserToolBase) userTab(targetID string) bool {
+	owner, ok := b.builtin.(BuiltinBrowserUserTabs)
+	return ok && owner.UserTab(targetID)
 }
 
 func (b browserToolBase) endpoint(ctx context.Context) (string, error) {
@@ -599,7 +612,7 @@ func (b browserToolBase) pickTarget(ctx context.Context, baseURL string, newTab 
 	// 模型切过或打开过的那个标签页优先；它被关掉了才退回下面的自动挑选。
 	if active := b.session.active(); active != "" {
 		for _, target := range targets {
-			if target.ID == active && target.Type == "page" && target.WebSocketDebuggerURL != "" {
+			if target.ID == active && target.Type == "page" && target.WebSocketDebuggerURL != "" && !b.userTab(target.ID) {
 				return target, nil
 			}
 		}
@@ -614,7 +627,7 @@ func (b browserToolBase) pickTarget(ctx context.Context, baseURL string, newTab 
 		if target.Type != "page" || target.WebSocketDebuggerURL == "" {
 			continue
 		}
-		if registry.heldByOther(target.ID, b.session) {
+		if registry.heldByOther(target.ID, b.session) || b.userTab(target.ID) {
 			continue
 		}
 		if isBlankBrowserTarget(target.URL) {

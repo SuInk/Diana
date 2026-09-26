@@ -250,3 +250,22 @@ func TestBrowserRenderFailureTextSeparatesBusyFromTimeout(t *testing.T) {
 		t.Fatalf("页面超时：%q", got)
 	}
 }
+
+// 读网页默认有头但看不见；只有明确选了才无头或弹窗口。
+func TestBrowserRenderWindowDefaultsToHiddenHeadful(t *testing.T) {
+	cases := map[string]agent.BrowserWindow{
+		"":         agent.BrowserWindowHidden,
+		"auto":     agent.BrowserWindowHidden,
+		"headless": agent.BrowserWindowHeadless,
+		"visible":  agent.BrowserWindowVisible,
+	}
+	for value, want := range cases {
+		settings := SettingValues{}
+		if value != "" {
+			settings = SettingValues{browserRenderWindowModeSetting: value}
+		}
+		if got := browserRenderWindow(settings); got != want {
+			t.Fatalf("窗口设置 %q 应当是 %q，得到 %q", value, want, got)
+		}
+	}
+}

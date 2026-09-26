@@ -3589,6 +3589,8 @@ export interface BrowserBoxTab {
   id: string;
   title?: string;
   url?: string;
+  /** 主人在画面里自己开的标签：机器人不碰，不用接管就能操作，离开画面一段时间会自动关掉。 */
+  user?: boolean;
 }
 
 /** 机器人用的浏览器：Diana 内置、用户自己的 Chrome（扩展）；off 表示这一轮一个都用不上。 */

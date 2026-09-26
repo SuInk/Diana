@@ -1,21 +1,72 @@
 <!-- Copyright (c) 2025-now SuInk. Licensed under the Limited Redistribution License. -->
 <!--
-  浏览器这一页只回答一个问题：机器人用哪个浏览器。
+  机器人用到的浏览器全在这一页，按用途分两组：
 
-  Diana 内置和用户自己的 Chrome（扩展）做的是同一件事——带登录态、只有主人能驱动、
-  能点能输入——区别只在用谁的。一行一个勾选框，打勾就是启用，可以都勾上；都勾上
-  时可以调优先级，排在上面的先用，它用不了时自动换另一个（见 model/browsersource）。一次性无头
-  渲染不在这里：它不带登录态，读公开网页、出图都靠它，一直可用，依赖和参数在插件页
-  的「网页渲染」里。以前三者并排成「三档」，用户得先弄懂三者区别才能开始用。
+  - 读网页、出图：网页渲染。每次开一个全新的无头 Chrome，用完就扔，不带登录态，谁的
+    消息都能用。它本身是插件页里的「网页渲染」插件，这里放同一个开关，免得用户以为
+    浏览器只有下面那几个。
+  - 登录、点按钮：Diana 内置和用户自己的 Chrome（扩展）做的是同一件事——带登录态、只有
+    主人能驱动——区别只在用谁的。一行一个勾选框，可以都勾上并排优先级，排在上面的先用，
+    它用不了时自动换另一个（见 model/browsersource）。外接 CDP 不参与排序：它是 browser_*
+    那组工具在内置浏览器没在用时改接的地址，所以只显示状态，设置在「更多设置」里。
+
+  四种都复用这台机器上的 Chrome/Chromium，区别在用哪份登录态、谁能驱动。
 -->
 <template>
   <section class="stack">
     <div class="card">
       <div class="card-header">
         <h2>浏览器</h2>
-        <span class="card-sub">机器人要登录、点按钮时用的浏览器，只有主人能让它用</span>
+        <span class="card-sub">机器人用到的浏览器都在这里，全都复用这台机器上的 Chrome，区别在用哪份登录态</span>
       </div>
       <div class="card-body stack">
+        <div class="browser-group-title">
+          <h3>读网页、出图</h3>
+          <span>不带登录态，谁的消息都能用</span>
+        </div>
+        <div class="browser-toggle-list">
+          <div class="browser-toggle-row">
+            <input
+              id="browser-source-render"
+              type="checkbox"
+              :checked="renderPlugin?.enabled"
+              :disabled="savingRender || !renderPlugin"
+              @change="toggleRender(($event.target as HTMLInputElement).checked)"
+            />
+            <div class="browser-toggle-copy">
+              <div class="browser-toggle-title">
+                <label for="browser-source-render">网页渲染</label>
+                <template v-if="renderPlugin?.enabled">
+                  <span v-if="dependencyProblem('render')" class="badge warn">没找到 Chrome</span>
+                  <span v-else class="badge ok">一直在用</span>
+                </template>
+              </div>
+              <p class="browser-toggle-desc">
+                每次开一个全新的 Chrome，用完就扔。群里发的链接自动读出来、模型查网页（browser_render）都靠它，默认有头、不容易被网站拦；HTML 转图片这类本地渲染用无头。
+              </p>
+              <div v-if="renderPlugin" class="browser-toggle-meta">
+                <button type="button" :class="{ warn: dependencyProblem('render') }" @click="dependenciesTarget = 'render'">
+                  运行依赖 {{ renderDependencies.filter((dep) => dep.available).length }}/{{ renderDependencies.length }}
+                </button>
+                <span class="browser-inline-select">
+                  <label for="browser-render-window">窗口</label>
+                  <AppSelect
+                    id="browser-render-window"
+                    :model-value="renderWindowMode"
+                    :options="renderWindowOptions"
+                    :disabled="savingRender"
+                    @update:model-value="setRenderWindowMode"
+                  />
+                </span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="browser-group-title">
+          <h3>登录、点按钮</h3>
+          <span>带登录态，只有主人能让机器人用；都勾上时排在上面的先用</span>
+        </div>
         <!-- 一行一项，打勾就是启用（和「上下文」页的勾选列表同一种写法），按优先级从上往下排；
              两个都启用时才出现「优先用」，排在上面的先用，它用不了时自动换下一个。 -->
         <div class="browser-toggle-list">
@@ -56,17 +107,30 @@
                 </a>
               </div>
               <!-- 勾上就是开着，没有启动、停止、「我来操作」这些按钮：进程在机器人要用或你打开这一页时
-                   自动拉起，取消勾选才停；在画面上点击或打字就自动转为你接管，这时才出现「交还给机器人」，
-                   闲置一段时间也会自动交还。 -->
-              <div
-                v-if="key === 'box' && sourceState?.box.enabled && botID && ((status.running && status.takeover) || status.last_error)"
-                class="browser-toggle-actions"
-              >
-                <template v-if="status.running && status.takeover">
-                  <button class="btn small warn" type="button" :disabled="busy" @click="handBack">交还给机器人</button>
-                  <span class="browser-toggle-note">你在画面上动过手，机器人暂时用不了这个浏览器；{{ takeoverIdleMinutes }} 分钟不操作会自动交还</span>
+                   自动拉起，取消勾选才停。接管和「交还给机器人」在画面底部的状态栏里。 -->
+              <p v-if="key === 'box' && sourceState?.box.enabled && botID && status.last_error" class="browser-toggle-error">
+                最近一次错误：{{ status.last_error }}
+              </p>
+            </div>
+          </div>
+          <!-- 外接 CDP 没有勾选框：配了地址就算有，内置浏览器没在用的时候 browser_* 改接它。 -->
+          <div class="browser-toggle-row">
+            <span class="browser-toggle-spacer" aria-hidden="true"></span>
+            <div class="browser-toggle-copy">
+              <div class="browser-toggle-title">
+                <span class="browser-toggle-label">外接浏览器（CDP）</span>
+                <template v-if="botID">
+                  <span v-if="!externalCDPConfigured" class="badge">没配置</span>
+                  <span v-else-if="sourceState?.active === 'box'" class="badge">内置在用，暂不用它</span>
+                  <span v-else class="badge ok">正在用</span>
                 </template>
-                <span v-if="status.last_error" class="browser-toggle-error">最近一次错误：{{ status.last_error }}</span>
+              </div>
+              <p class="browser-toggle-desc">
+                接一个你自己带 --remote-debugging-port 起的浏览器，用它的登录态。只在这台机器人的内置浏览器没在用时顶上。
+              </p>
+              <div class="browser-toggle-meta">
+                <span v-if="externalCDPConfigured" class="mono">{{ agentBrowser?.cdp_url }}</span>
+                <button type="button" @click="openExternalCDPSettings">{{ externalCDPConfigured ? "修改地址" : "配置地址" }}</button>
               </div>
             </div>
           </div>
@@ -77,66 +141,149 @@
         </p>
       </div>
     </div>
-    <div v-if="sourceState?.box.enabled && botID && status.running" class="card">
-      <div class="card-header">
-        <h2>画面</h2>
-        <span class="card-sub">{{ currentTitle || "空白页" }}</span>
-      </div>
-      <div class="card-body stack">
-        <div class="row gap">
-          <button class="btn small ghost" type="button" @click="send({ type: 'back' })">后退</button>
-          <button class="btn small ghost" type="button" @click="send({ type: 'reload' })">刷新</button>
-          <input
-            v-model="addressInput"
-            class="input"
-            style="flex: 1; min-width: 220px"
-            placeholder="https://example.com"
-            @keydown.enter.prevent="navigate"
-          />
-          <button class="btn small" type="button" @click="navigate">打开</button>
+    <!-- 画面做成一个浏览器窗口：标签、工具栏、画面、状态栏拼成一整块。谁在控制这个浏览器
+         是这里最要紧的信息，放在状态栏里一直看得见，交还也在那里点。 -->
+    <div v-if="sourceState?.box.enabled && botID && status.running" class="card browser-live-card">
+      <div ref="liveWindow" class="browser-window" :class="{ 'is-takeover': interactive, 'is-fullscreen': fullscreen }">
+        <!-- 标签栏：点哪个画面就切到哪个，只是换着看、不动机器人，不用接管；新建和关闭会改动
+             机器人的浏览器，接管之后才能点。 -->
+        <div class="browser-tabbar" role="tablist" aria-label="标签页">
+          <div
+            v-for="tab in displayTabs"
+            :key="tab.id"
+            class="browser-tab"
+            :class="{ active: tab.id === currentTabID }"
+            role="tab"
+            :aria-selected="tab.id === currentTabID"
+            :title="tabLabel(tab)"
+            tabindex="0"
+            @click="switchTab(tab.id)"
+            @keydown.enter="switchTab(tab.id)"
+          >
+            <UserRound v-if="tab.user" :size="13" aria-hidden="true" class="browser-tab-mine" />
+            <Globe v-else :size="13" aria-hidden="true" />
+            <span class="browser-tab-title">{{ tabLabel(tab) }}</span>
+            <button
+              v-if="tab.user || status.takeover"
+              class="browser-tab-close"
+              type="button"
+              aria-label="关闭标签"
+              title="关闭标签"
+              @click.stop="closeTab(tab.id)"
+            >
+              <X :size="12" aria-hidden="true" />
+            </button>
+          </div>
+          <button
+            class="browser-tab-new"
+            type="button"
+            aria-label="新建标签"
+            title="新建标签：归你，机器人不碰，不用接管就能操作"
+            :disabled="busy"
+            @click="newTab"
+          >
+            <Plus :size="15" aria-hidden="true" />
+          </button>
         </div>
+        <div class="browser-toolbar">
+          <button class="browser-tool" type="button" title="后退" aria-label="后退" :disabled="!interactive" @click="send({ type: 'back' })">
+            <ArrowLeft :size="16" aria-hidden="true" />
+          </button>
+          <button class="browser-tool" type="button" title="刷新" aria-label="刷新" :disabled="!interactive" @click="send({ type: 'reload' })">
+            <RotateCw :size="15" aria-hidden="true" />
+          </button>
+          <label class="browser-address" :class="{ readonly: !interactive }">
+            <Lock v-if="addressSecure" :size="13" class="browser-address-icon" aria-hidden="true" />
+            <Search v-else :size="13" class="browser-address-icon" aria-hidden="true" />
+            <input
+              ref="addressField"
+              v-model="addressInput"
+              aria-label="网址"
+              :placeholder="interactive ? '输入网址，回车打开' : ''"
+              :readonly="!interactive"
+              :title="interactive ? '' : '接管之后才能换网址'"
+              spellcheck="false"
+              autocomplete="off"
+              @focus="($event.target as HTMLInputElement).select()"
+              @keydown.enter="onAddressEnter"
+            />
+          </label>
+          <button
+            class="browser-tool"
+            type="button"
+            :title="fullscreen ? '退出全屏' : '全屏'"
+            :aria-label="fullscreen ? '退出全屏' : '全屏'"
+            @click="toggleFullscreen"
+          >
+            <Minimize2 v-if="fullscreen" :size="15" aria-hidden="true" />
+            <Maximize2 v-else :size="15" aria-hidden="true" />
+          </button>
+        </div>
+        <div class="browser-progress" :class="{ active: pageLoading }" aria-hidden="true"></div>
 
-        <div class="browser-stage" @contextmenu.prevent>
-          <img
-            v-if="frame"
+        <div class="browser-stage" :class="{ empty: !hasFrame }" @contextmenu.prevent>
+          <!-- canvas 一直在：帧是异步解码后画上去的，没有画面时只是藏起来。 -->
+          <canvas
+            v-show="hasFrame"
             ref="screen"
             class="browser-screen"
-            :src="`data:image/jpeg;base64,${frame.data}`"
-            alt="内置浏览器画面"
+            aria-label="内置浏览器画面"
             tabindex="0"
-            @mousedown.prevent="onMouse($event, 'mousePressed')"
-            @mouseup.prevent="onMouse($event, 'mouseReleased')"
+            @mousedown="onMouse($event, 'mousePressed')"
+            @mouseup="onMouse($event, 'mouseReleased')"
             @mousemove="onMouseMove"
-            @wheel.prevent="onWheel"
-            @keydown.prevent="onKey($event, 'keyDown')"
-            @keyup.prevent="onKey($event, 'keyUp')"
+            @wheel="onWheel"
+            @keydown="onKey($event, 'keyDown')"
+            @keyup="onKey($event, 'keyUp')"
           />
-          <div v-else-if="liveNotice" class="browser-live-notice">
+          <div v-if="!hasFrame && liveNotice" class="browser-live-notice">
             <p style="margin: 0; font-size: 13px">{{ liveNotice }}</p>
             <button class="btn small ghost" type="button" @click="reconnectLive">重新连接</button>
           </div>
-          <p v-else class="muted" style="margin: 0; font-size: 13px">正在连接画面……</p>
+          <p v-else-if="!hasFrame" class="muted" style="margin: 0; font-size: 13px">正在连接画面……</p>
         </div>
-        <p class="muted" style="margin: 0; font-size: 12.5px">
-          点一下画面就转为你接管，之后才能打字、滚动；鼠标只是划过不算。{{ takeoverIdleMinutes }} 分钟不操作会自动交还给机器人。密码这类东西你自己输，机器人看不到你敲了什么——它只能看到页面最终长什么样。
-        </p>
+
+        <div class="browser-statusbar" role="status">
+          <span class="browser-status-dot" aria-hidden="true"></span>
+          <template v-if="currentTabOwned && !status.takeover">
+            <strong>你的标签</strong>
+            <span class="browser-status-hint">
+              机器人不碰这个标签，直接操作就行；离开画面 {{ userTabLeaveMinutes }} 分钟会自动关掉
+            </span>
+          </template>
+          <template v-else-if="status.takeover">
+            <strong>你在操作</strong>
+            <span class="browser-status-hint">
+              机器人先停下，也看不到你敲了什么；离开这个画面或 {{ takeoverIdleMinutes }} 分钟不操作就交还给它
+            </span>
+            <button class="btn small" type="button" :disabled="busy" @click="handBack">交还给机器人</button>
+          </template>
+          <template v-else>
+            <strong>机器人在用</strong>
+            <span class="browser-status-hint">你只能看；要自己登录、点按钮，先接管</span>
+            <button class="btn small primary" :class="{ 'browser-nudge': nudging }" type="button" :disabled="busy" @click="takeOver">接管</button>
+          </template>
+          <span class="browser-status-live" :class="{ warn: !liveHealthy }">{{ liveLabel }}</span>
+        </div>
       </div>
     </div>
 
     <Modal
       v-if="dependenciesTarget && sourceState"
-      :title="`${sourceMeta[dependenciesTarget].label} · 运行依赖`"
+      :title="`${dependenciesTarget === 'render' ? '网页渲染' : sourceMeta[dependenciesTarget].label} · 运行依赖`"
       @close="dependenciesTarget = null"
     >
       <p class="plugin-dependencies-hint">
         {{
-          dependenciesTarget === "box"
-            ? "内置浏览器要一个 Chrome/Chromium，中文页面截图要中文字体；显示器只影响能不能开真窗口，没有也能无头跑。"
-            : "扩展装在你自己的 Chrome 里、反向连到这里。勾上「我自己的 Chrome」后，点「下载扩展」拿到扩展源码包。"
+          dependenciesTarget === "render"
+            ? "网页渲染复用这台机器上的 Chrome/Chromium，缺了可以装；中文字体可一键下载，出图时缺的多语言字体会自动补齐。"
+            : dependenciesTarget === "box"
+              ? "内置浏览器要一个 Chrome/Chromium，中文页面截图要中文字体；显示器只影响能不能开真窗口，没有也能无头跑。"
+              : "扩展装在你自己的 Chrome 里、反向连到这里。勾上「我自己的 Chrome」后，点「下载扩展」拿到扩展源码包。"
         }}
       </p>
       <PluginDependencyList
-        :dependencies="sourceState[dependenciesTarget].dependencies"
+        :dependencies="dependenciesTarget === 'render' ? renderDependencies : sourceState[dependenciesTarget].dependencies"
         :loading="detecting"
         :busy="busyDependency"
         @install="installDependency"
@@ -201,18 +348,22 @@
         </div>
       </div>
       <BrowserControlPanel v-if="sourceState?.extension.enabled || preferred === 'extension'" />
-      <AgentBrowserPanel />
+      <div ref="externalCDPPanel">
+        <AgentBrowserPanel @saved="loadExternalCDP" />
+      </div>
     </template>
   </section>
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, reactive, ref } from "vue";
+import { computed, nextTick, onActivated, onBeforeUnmount, onDeactivated, onMounted, reactive, ref } from "vue";
 import { botScope } from "../bot-scope";
 import { formatTime } from "../format";
+import { pluginForBot } from "../plugin-settings";
 import { navigate as navigateToView } from "../router";
-import { ArrowUp, ChevronDown } from "@lucide/vue";
+import { ArrowLeft, ArrowUp, ChevronDown, Globe, Lock, Maximize2, Minimize2, Plus, RotateCw, Search, UserRound, X } from "@lucide/vue";
 import AgentBrowserPanel from "../components/AgentBrowserPanel.vue";
+import AppSelect, { type AppSelectOption } from "../components/AppSelect.vue";
 import Modal from "../components/Modal.vue";
 import PluginDependencyList from "../components/PluginDependencyList.vue";
 import BrowserControlPanel from "../components/BrowserControlPanel.vue";
@@ -232,15 +383,26 @@ import {
   type BrowserBoxSettings,
   type BrowserBoxStatus,
   listBrowserActivity,
-  type AppLogEntry
+  type AppLogEntry,
+  listBrowserBoxTabs,
+  openBrowserBoxTab,
+  closeBrowserBoxTab,
+  type BrowserBoxTab,
+  getAgentBrowser,
+  type AgentBrowserSettings,
+  listPlugins,
+  setPluginEnabled,
+  updatePluginSettings,
+  type PluginState
 } from "../api";
 import { toastError, toastSuccess } from "../toast";
+import { askConfirm } from "../confirm";
 
-interface LiveFrame {
-  data: string;
+/** 一帧画面的元数据。width/height 是页面的 CSS 尺寸，点击坐标按它换算。 */
+interface LiveFrameMeta {
   width: number;
   height: number;
-  scale: number;
+  timestamp?: number;
 }
 
 type SourceKey = Exclude<BrowserSource, "off">;
@@ -250,7 +412,7 @@ const sourceMeta: Record<SourceKey, { label: string; short: string; title: strin
     label: "Diana 内置",
     short: "内置浏览器",
     title: "Diana 内置浏览器",
-    hint: "Diana 自己的浏览器，每台机器人一份登录态，你能看画面、随时接管。"
+    hint: "用这台机器上的 Chrome 单独开一个，不碰你日常浏览器的登录态；每台机器人一份，你能看画面、随时接管。"
   },
   extension: {
     label: "我自己的 Chrome",
@@ -262,13 +424,96 @@ const sourceMeta: Record<SourceKey, { label: string; short: string; title: strin
 // null 表示还没读到：读到之前不显示任何一边的配置。
 const sourceState = ref<BrowserSourceState | null>(null);
 const savingSource = ref(false);
-const dependenciesTarget = ref<SourceKey | null>(null);
+const dependenciesTarget = ref<SourceKey | "render" | null>(null);
 const detecting = ref(false);
 const busyDependency = ref("");
 
 // 显示器是可选的：没有它照样能无头跑，不算「缺依赖」。
-function dependencyProblem(key: SourceKey): boolean {
-  return (sourceState.value?.[key].dependencies ?? []).some((dep) => !dep.available && dep.name !== "display");
+function dependencyProblem(key: SourceKey | "render"): boolean {
+  const dependencies = key === "render" ? renderDependencies.value : (sourceState.value?.[key].dependencies ?? []);
+  return dependencies.some((dep) => !dep.available && dep.name !== "display");
+}
+
+// 网页渲染就是插件页的「网页渲染」插件，这里读写的是同一份开关和设置。
+const renderPluginID = "official.sandboxed-browser-renderer";
+const renderWindowModeKey = "window_mode";
+const renderPlugin = ref<PluginState | null>(null);
+const renderDependencies = ref<ResolverDependency[]>([]);
+const savingRender = ref(false);
+const renderWindowSpec = computed(() => renderPlugin.value?.manifest.settings?.find((spec) => spec.key === renderWindowModeKey));
+// 选项来自插件清单，补一句各自什么时候用：「显示窗口」只在排查渲染问题时有用。
+const renderWindowHints: Record<string, string> = {
+  auto: "有头但看不见，不容易被网站拦；没条件时退回无头",
+  headless: "最省资源，但容易被网站认出来拦掉",
+  visible: "在跑 Diana 的机器上弹出窗口，排查用"
+};
+const renderWindowOptions = computed<AppSelectOption[]>(() =>
+  (renderWindowSpec.value?.options ?? []).map((option) => ({ ...option, hint: renderWindowHints[option.value] }))
+);
+const renderWindowMode = computed(() => String(renderPlugin.value?.settings?.[renderWindowModeKey] ?? renderWindowSpec.value?.default ?? "auto"));
+
+async function loadRender(refreshDependencies = false): Promise<void> {
+  try {
+    const [plugins, dependencies] = await Promise.all([listPlugins(), listPluginDependencies(refreshDependencies)]);
+    const state = plugins.find((plugin) => plugin.manifest.id === renderPluginID);
+    renderPlugin.value = state ? pluginForBot(state, botID) : null;
+    renderDependencies.value = dependencies.plugins[renderPluginID] ?? [];
+  } catch {
+    // 读不到只是这一行不显示状态，不打断这一页。
+  }
+}
+
+async function toggleRender(enabled: boolean): Promise<void> {
+  savingRender.value = true;
+  try {
+    renderPlugin.value = pluginForBot(await setPluginEnabled(renderPluginID, enabled, botID), botID);
+  } catch (err) {
+    toastError(err instanceof Error ? err.message : "切换网页渲染失败");
+    await loadRender();
+  } finally {
+    savingRender.value = false;
+  }
+}
+
+async function setRenderWindowMode(mode: string): Promise<void> {
+  if (!renderPlugin.value) return;
+  savingRender.value = true;
+  try {
+    const settings = { ...(renderPlugin.value.settings ?? {}), [renderWindowModeKey]: mode };
+    renderPlugin.value = pluginForBot(await updatePluginSettings(renderPluginID, settings), botID);
+  } catch (err) {
+    toastError(err instanceof Error ? err.message : "保存网页渲染设置失败");
+    await loadRender();
+  } finally {
+    savingRender.value = false;
+  }
+}
+
+// 外接 CDP 地址按机器人存；默认值 127.0.0.1:9222 等于没配（和后端 defaultAgentBrowserCDPURL 一致）。
+const defaultExternalCDPURL = "http://127.0.0.1:9222";
+const agentBrowser = ref<AgentBrowserSettings | null>(null);
+const externalCDPPanel = ref<HTMLElement | null>(null);
+const externalCDPConfigured = computed(() => {
+  const url = agentBrowser.value?.cdp_url?.trim() ?? "";
+  return url !== "" && url !== defaultExternalCDPURL;
+});
+
+async function loadExternalCDP(): Promise<void> {
+  if (!botID) {
+    agentBrowser.value = null;
+    return;
+  }
+  try {
+    agentBrowser.value = await getAgentBrowser(botID);
+  } catch {
+    agentBrowser.value = null;
+  }
+}
+
+async function openExternalCDPSettings(): Promise<void> {
+  advancedOpen.value = true;
+  await nextTick();
+  externalCDPPanel.value?.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
 // 选中的那个：排在第一位、而且开着。都关着就是 null，页面显示「浏览器关着」。
@@ -285,7 +530,8 @@ const preferred = computed<SourceKey | null>(() => {
 async function redetect(): Promise<void> {
   detecting.value = true;
   try {
-    await listPluginDependencies(true);
+    // 先刷新探测缓存（网页渲染那一行顺带拿到新结果），来源状态里的依赖读的是同一份缓存。
+    await loadRender(true);
     await loadSource();
   } catch (err) {
     toastError(err instanceof Error ? err.message : "检测失败");
@@ -342,10 +588,170 @@ const status = reactive<BrowserBoxStatus>({
   available: false
 });
 const settings = reactive<BrowserBoxSettings>({ enabled: false });
-const frame = ref<LiveFrame | null>(null);
-const screen = ref<HTMLImageElement | null>(null);
+const hasFrame = ref(false);
+// 断线重连期间留着最后一帧，只在角上提示，不再整块换成「正在连接」。
+const reconnecting = ref(false);
+let frameMeta: LiveFrameMeta | null = null;
+const screen = ref<HTMLCanvasElement | null>(null);
 const addressInput = ref("");
+const addressField = ref<HTMLInputElement | null>(null);
 const currentTitle = ref("");
+const pageLoading = ref(false);
+const liveWindow = ref<HTMLElement | null>(null);
+const fullscreen = ref(false);
+const addressSecure = computed(() => /^https:\/\//i.test(addressInput.value.trim()));
+const pageHost = computed(() => {
+  try {
+    return new URL(addressInput.value.trim()).host;
+  } catch {
+    return "";
+  }
+});
+const liveHealthy = computed(() => hasFrame.value && !reconnecting.value);
+const liveLabel = computed(() => (reconnecting.value ? "重新连接中…" : hasFrame.value ? "实时" : "连接中…"));
+
+// 标签页。currentTabID 是画面正连着的那个，空串表示交给后端挑（第一个）。
+const tabs = ref<BrowserBoxTab[]>([]);
+const currentTabID = ref("");
+let tabsLoaded = false;
+let tabTimer: number | undefined;
+// 机器人新开了标签时画面跟过去：它在那边干活，你停在旧标签上什么都看不到。跟得太慢
+// 就看不到它刚打开的那一页，所以标签单独 2 秒一查（/json/list 很轻）。
+const tabPollMS = 2000;
+
+// 画面正在看的标签是不是你自己开的：是的话不用接管就能操作。
+const currentTabOwned = computed(() => tabs.value.some((tab) => tab.id === currentTabID.value && tab.user));
+// 能不能在画面上操作：接管了，或者看的是自己的标签。
+const interactive = computed(() => status.takeover || currentTabOwned.value);
+// 和后端 browserbox.UserTabLeaveTimeout 一致，只用来在页面上说清楚。
+const userTabLeaveMinutes = 5;
+
+const displayTabs = computed<BrowserBoxTab[]>(() =>
+  tabs.value.length ? tabs.value : [{ id: currentTabID.value, title: currentTitle.value, url: addressInput.value }]
+);
+
+function tabHost(url?: string): string {
+  try {
+    const parsed = new URL(url ?? "");
+    return parsed.protocol.startsWith("http") ? parsed.host : "";
+  } catch {
+    return "";
+  }
+}
+
+// 空白页的标题就是 about:blank 这串地址，显示成「新标签页」，和真浏览器一样。
+function readableTitle(title?: string): string {
+  const trimmed = title?.trim() ?? "";
+  return trimmed === "about:blank" || trimmed.startsWith("chrome://") ? "" : trimmed;
+}
+
+function tabLabel(tab: BrowserBoxTab): string {
+  if (tab.id === currentTabID.value) return readableTitle(currentTitle.value) || pageHost.value || "新标签页";
+  return readableTitle(tab.title) || tabHost(tab.url) || "新标签页";
+}
+
+// 合并新列表时保留已有标签的顺序、新的排在后面：Chrome 按最近激活排序，直接用它的顺序
+// 标签会在栏里来回跳。
+function mergeTabs(next: BrowserBoxTab[]): BrowserBoxTab[] {
+  const byID = new Map(next.map((tab) => [tab.id, tab]));
+  const kept = tabs.value.filter((tab) => byID.has(tab.id)).map((tab) => byID.get(tab.id) as BrowserBoxTab);
+  const known = new Set(kept.map((tab) => tab.id));
+  return [...kept, ...next.filter((tab) => !known.has(tab.id))];
+}
+
+async function loadTabs(): Promise<void> {
+  if (!botID || !status.running) return;
+  let next: BrowserBoxTab[];
+  try {
+    next = (await listBrowserBoxTabs(botID)).tabs;
+  } catch {
+    return;
+  }
+  const previous = new Set(tabs.value.map((tab) => tab.id));
+  tabs.value = mergeTabs(next);
+  const added = next.filter((tab) => !previous.has(tab.id));
+  const wasLoaded = tabsLoaded;
+  tabsLoaded = true;
+  if (!next.length) return;
+  if (currentTabID.value && !next.some((tab) => tab.id === currentTabID.value)) {
+    // 正在看的标签被关掉了（机器人关的，或者崩了）：换到剩下的第一个。
+    switchTab(tabs.value[0].id);
+  } else if (wasLoaded && added.length && !interactive.value) {
+    // 你正在自己的标签里或接管着操作时不跳走，免得打到一半被切到机器人那边。
+    switchTab(added[added.length - 1].id);
+  }
+}
+
+function switchTab(id: string): void {
+  if (!id || id === currentTabID.value) return;
+  currentTabID.value = id;
+  const tab = tabs.value.find((item) => item.id === id);
+  currentTitle.value = tab?.title ?? "";
+  if (document.activeElement !== addressField.value) addressInput.value = tab?.url ?? "";
+  if (pageActive) connectLive();
+}
+
+async function newTab(): Promise<void> {
+  busy.value = true;
+  try {
+    const { tab } = await openBrowserBoxTab(botID, "about:blank");
+    tabs.value = [...tabs.value, tab];
+    switchTab(tab.id);
+    await nextTick();
+    addressField.value?.focus();
+  } catch (err) {
+    toastError(err instanceof Error ? err.message : "开新标签失败");
+  } finally {
+    busy.value = false;
+  }
+}
+
+async function closeTab(id: string): Promise<void> {
+  if (!status.takeover && !tabs.value.some((tab) => tab.id === id && tab.user)) return;
+  try {
+    await closeBrowserBoxTab(botID, id);
+    tabs.value = tabs.value.filter((tab) => tab.id !== id);
+    if (id === currentTabID.value) {
+      currentTabID.value = "";
+      if (tabs.value.length) switchTab(tabs.value[0].id);
+      else if (pageActive) connectLive();
+    }
+  } catch (err) {
+    toastError(err instanceof Error ? err.message : "关标签失败");
+  }
+}
+
+interface LivePage {
+  url?: string;
+  title?: string;
+  loading?: boolean;
+}
+
+// 地址栏正在输入时不拿页面地址盖掉，打到一半被冲掉最让人恼火。
+function applyPage(page: LivePage | undefined): void {
+  if (!page) return;
+  if (document.activeElement !== addressField.value) addressInput.value = page.url ?? "";
+  currentTitle.value = page.title ?? "";
+  pageLoading.value = Boolean(page.loading);
+  const tab = tabs.value.find((item) => item.id === currentTabID.value);
+  if (tab) {
+    tab.title = page.title ?? tab.title;
+    tab.url = page.url ?? tab.url;
+  }
+}
+
+async function toggleFullscreen(): Promise<void> {
+  try {
+    if (document.fullscreenElement) await document.exitFullscreen();
+    else await liveWindow.value?.requestFullscreen();
+  } catch {
+    // 浏览器不让全屏（比如嵌在不允许全屏的 iframe 里）就算了。
+  }
+}
+
+function onFullscreenChange(): void {
+  fullscreen.value = document.fullscreenElement !== null && document.fullscreenElement === liveWindow.value;
+}
 const saving = ref(false);
 const busy = ref(false);
 // 和后端 browserbox.TakeoverIdleTimeout 一致，只用来在页面上说清楚。
@@ -353,6 +759,15 @@ const takeoverIdleMinutes = 5;
 
 let socket: WebSocket | null = null;
 let statusTimer: number | undefined;
+// 这一页在不在前台。页面被 KeepAlive 缓存着，切到别的页也不卸载；以前画面照样一直推，
+// 浏览器照样每秒编几十帧 JPEG，白白拖慢机器人自己在用的那个浏览器。
+let pageActive = false;
+// 想不想连着画面：断线后要不要自动重连。
+let wantLive = false;
+let reconnectTimer: number | undefined;
+// 断线重连从半秒起步，连续失败翻倍，最多 5 秒一次。
+const liveReconnectMinMS = 500;
+let reconnectDelayMS = liveReconnectMinMS;
 // 画面连不上或断掉的原因。只在还没有画面时顶替「正在连接画面……」；重连时不清空，
 // 标签页一直卡着的话，用户看到的是原因而不是一闪一闪的「正在连接」。
 const liveNotice = ref("");
@@ -408,10 +823,14 @@ function moveSource(index: number, delta: -1 | 1): void {
 async function refresh(): Promise<void> {
   try {
     const next = await getBrowserBoxStatus(botID || undefined);
+    // 连着画面时接管状态以画面连接的推送为准：轮询请求要是在交还之前发出、交还之后才
+    // 回来，会把刚推过来的「已交还」又改回「你在操作」。
+    const pushedTakeover = socket?.readyState === WebSocket.OPEN ? status.takeover : null;
     Object.assign(status, next);
+    if (pushedTakeover !== null) status.takeover = pushedTakeover;
     Object.assign(settings, next.settings);
-    if (next.running && !socket && botID) connectLive();
-    if (!next.running && socket) disconnectLive();
+    if (next.running && !socket && botID && pageActive && !document.hidden) connectLive();
+    if (!next.running && (socket || hasFrame.value)) disconnectLive();
     if (!next.running) void autoStart();
   } catch (err) {
     toastError(err instanceof Error ? err.message : "读取内置浏览器状态失败");
@@ -424,7 +843,7 @@ async function saveSettings(): Promise<void> {
     const result = await saveBrowserBoxSettings({ ...settings }, botID || undefined);
     Object.assign(status, result.status);
     Object.assign(settings, result.settings);
-    if (status.running && botID) connectLive();
+    if (status.running && botID && pageActive) connectLive();
     else disconnectLive();
   } catch (err) {
     toastError(err instanceof Error ? err.message : "保存失败");
@@ -447,12 +866,46 @@ async function autoStart(): Promise<void> {
   try {
     const result = await startBrowserBox(botID);
     Object.assign(status, result.status);
-    connectLive();
+    if (pageActive) connectLive();
   } catch (err) {
     toastError(err instanceof Error ? err.message : "内置浏览器没能启动");
   } finally {
     busy.value = false;
   }
+}
+
+// 画面默认只能看，接管要点按钮（和 OpenAI Operator、Cloudflare Browser Run 的 handoff 一样）：
+// 以前点一下画面就算接管，点画面想让窗口获得焦点也会把浏览器从机器人手里抢走。
+async function takeOver(): Promise<void> {
+  // 接管会让机器人停下手里的事，点错一下代价不小，先确认。只想自己逛逛的，指去开自己的标签。
+  const ok = await askConfirm({
+    title: "接管机器人的浏览器？",
+    message: `接管后机器人先停下，不再操作这个浏览器，由你来登录、点按钮；它也看不到你敲了什么。离开这个画面或 ${takeoverIdleMinutes} 分钟不操作会自动交还。只想自己逛逛的话，点标签栏右边的「+」开一个你自己的标签，不用接管。`,
+    confirmLabel: "接管"
+  });
+  if (!ok) return;
+  busy.value = true;
+  try {
+    const result = await setBrowserBoxTakeover(botID, true);
+    status.takeover = result.active;
+    screen.value?.focus();
+  } catch (err) {
+    toastError(err instanceof Error ? err.message : "接管失败");
+  } finally {
+    busy.value = false;
+  }
+}
+
+// 没接管时点画面：让「接管」按钮闪一下，告诉人该点哪里。
+const nudging = ref(false);
+let nudgeTimer: number | undefined;
+function nudgeTakeover(): void {
+  nudging.value = false;
+  if (nudgeTimer !== undefined) window.clearTimeout(nudgeTimer);
+  requestAnimationFrame(() => {
+    nudging.value = true;
+    nudgeTimer = window.setTimeout(() => (nudging.value = false), 900);
+  });
 }
 
 async function handBack(): Promise<void> {
@@ -468,33 +921,48 @@ async function handBack(): Promise<void> {
 }
 
 function connectLive(): void {
+  wantLive = true;
+  clearReconnectTimer();
   closeLiveSocket();
-  const ws = new WebSocket(browserBoxLiveURL(botID));
+  const ws = new WebSocket(browserBoxLiveURL(botID, currentTabID.value || undefined));
+  ws.binaryType = "arraybuffer";
   socket = ws;
+  ws.onopen = () => {
+    reconnectDelayMS = liveReconnectMinMS;
+  };
   ws.onmessage = (event) => {
+    if (event.data instanceof ArrayBuffer) {
+      onFrame(ws, event.data);
+      return;
+    }
     const message = JSON.parse(event.data) as {
       type: string;
-      frame?: LiveFrame;
-      tab?: { url?: string; title?: string };
+      tab?: { id?: string; url?: string; title?: string };
+      page?: LivePage;
+      takeover?: boolean;
+      active?: boolean;
       message?: string;
     };
-    if (message.type === "frame" && message.frame) {
-      clearFirstFrameTimer();
-      liveNotice.value = "";
-      frame.value = message.frame;
-    } else if (message.type === "ready" && message.tab) {
-      addressInput.value = message.tab.url ?? "";
-      currentTitle.value = message.tab.title ?? "";
+    if (message.type === "ready") {
+      if (message.tab?.id) currentTabID.value = message.tab.id;
+      applyPage(message.page ?? message.tab);
+      void loadTabs();
+      status.takeover = Boolean(message.takeover);
       clearFirstFrameTimer();
       firstFrameTimer = window.setTimeout(() => {
-        if (socket === ws && !frame.value) {
+        if (socket === ws && !hasFrame.value) {
           liveNotice.value = "画面 10 秒还没出来：这个页面可能卡住了（脚本卡死或渲染进程崩溃）。可以点「刷新」、在地址栏换个网址，或者重新连接。";
         }
       }, firstFrameTimeoutMS);
+    } else if (message.type === "page") {
+      applyPage(message.page);
+    } else if (message.type === "takeover") {
+      // 闲置自动交还、别的窗口点了交还，都从这里当场知道，不用等下一次轮询。
+      status.takeover = Boolean(message.active);
     } else if (message.type === "error") {
       // 标签页卡死或崩溃时后端会说明原因再断开；换掉之前的画面，别让人对着最后一帧干等。
       clearFirstFrameTimer();
-      frame.value = null;
+      hasFrame.value = false;
       liveNotice.value = message.message || "画面连接出错了";
     }
   };
@@ -502,9 +970,66 @@ function connectLive(): void {
     if (socket !== ws) return;
     socket = null;
     clearFirstFrameTimer();
-    // 状态轮询会在几秒内自动重连；还没有画面时先把断开说清楚。
-    if (!frame.value && !liveNotice.value) liveNotice.value = "画面连接断开了，几秒后自动重连。";
+    if (!wantLive) return;
+    // 断了就自己重连，不等 5 秒一次的状态轮询；中间的代理掐掉长连接时，画面停在
+    // 最后一帧，角上提示一下就好。
+    reconnecting.value = hasFrame.value;
+    if (!hasFrame.value && !liveNotice.value) liveNotice.value = "画面连接断开了，正在重连……";
+    reconnectTimer = window.setTimeout(() => {
+      reconnectTimer = undefined;
+      if (wantLive && pageActive && status.running) connectLive();
+    }, reconnectDelayMS);
+    reconnectDelayMS = Math.min(reconnectDelayMS * 2, 5000);
   };
+}
+
+// 帧是异步解码的，两帧可能倒着解完；序号保证旧帧不会盖掉新帧。
+let frameSeq = 0;
+let paintedSeq = 0;
+const frameTextDecoder = new TextDecoder();
+
+/**
+ * 解一帧二进制画面：4 字节大端的元数据长度、元数据 JSON、JPEG。画完才回 ack，
+ * 后端收到 ack 才发下一帧——网慢的时候画面帧率跟着降，但永远是最新的一帧，
+ * 不会在缓冲里排几秒。
+ */
+function onFrame(ws: WebSocket, buffer: ArrayBuffer): void {
+  const metaLength = new DataView(buffer).getUint32(0);
+  const meta = JSON.parse(frameTextDecoder.decode(new Uint8Array(buffer, 4, metaLength))) as LiveFrameMeta;
+  const seq = ++frameSeq;
+  createImageBitmap(new Blob([new Uint8Array(buffer, 4 + metaLength)], { type: "image/jpeg" }))
+    .then((bitmap) => {
+      if (socket === ws && seq > paintedSeq) {
+        paintedSeq = seq;
+        paintFrame(bitmap, meta);
+      }
+      bitmap.close();
+    })
+    .catch(() => undefined)
+    .finally(() => {
+      if (ws.readyState === WebSocket.OPEN) ws.send('{"type":"ack"}');
+    });
+}
+
+function paintFrame(bitmap: ImageBitmap, meta: LiveFrameMeta): void {
+  const canvas = screen.value;
+  const context = canvas?.getContext("2d");
+  if (!canvas || !context) return;
+  if (canvas.width !== bitmap.width || canvas.height !== bitmap.height) {
+    canvas.width = bitmap.width;
+    canvas.height = bitmap.height;
+  }
+  context.drawImage(bitmap, 0, 0);
+  frameMeta = meta;
+  if (!hasFrame.value) hasFrame.value = true;
+  if (reconnecting.value) reconnecting.value = false;
+  if (liveNotice.value) liveNotice.value = "";
+  clearFirstFrameTimer();
+}
+
+function clearReconnectTimer(): void {
+  if (reconnectTimer !== undefined) window.clearTimeout(reconnectTimer);
+  reconnectTimer = undefined;
 }
 
 function closeLiveSocket(): void {
@@ -513,16 +1038,26 @@ function closeLiveSocket(): void {
   socket.onclose = null;
   socket.close();
   socket = null;
-  frame.value = null;
+}
+
+/** 断开画面但留着最后一帧：切回来时先看到旧画面，新帧到了再换。 */
+function pauseLive(): void {
+  wantLive = false;
+  clearReconnectTimer();
+  closeLiveSocket();
+  reconnecting.value = false;
 }
 
 function disconnectLive(): void {
-  closeLiveSocket();
+  pauseLive();
+  hasFrame.value = false;
+  frameMeta = null;
   liveNotice.value = "";
 }
 
 function reconnectLive(): void {
   liveNotice.value = "";
+  reconnectDelayMS = liveReconnectMinMS;
   connectLive();
 }
 
@@ -533,10 +1068,10 @@ function send(payload: Record<string, unknown>): void {
 /** 把画面上的坐标换算成页面坐标：画面被 CSS 缩放过，点的位置得按比例还原。 */
 function pagePoint(event: MouseEvent): { x: number; y: number } {
   const element = screen.value;
-  if (!element || !frame.value) return { x: 0, y: 0 };
+  if (!element || !frameMeta) return { x: 0, y: 0 };
   const rect = element.getBoundingClientRect();
-  const scaleX = frame.value.width / rect.width;
-  const scaleY = frame.value.height / rect.height;
+  const scaleX = frameMeta.width / rect.width;
+  const scaleY = frameMeta.height / rect.height;
   return { x: (event.clientX - rect.left) * scaleX, y: (event.clientY - rect.top) * scaleY };
 }
 
@@ -547,8 +1082,13 @@ function modifiers(event: MouseEvent | KeyboardEvent): number {
 const mouseButtons = ["left", "middle", "right"];
 
 function onMouse(event: MouseEvent, type: "mousePressed" | "mouseReleased"): void {
+  event.preventDefault();
+  if (!interactive.value) {
+    if (type === "mousePressed") nudgeTakeover();
+    return;
+  }
+  if (type === "mousePressed") screen.value?.focus();
   const point = pagePoint(event);
-  screen.value?.focus();
   send({
     type: "mouse",
     mouse: {
@@ -561,39 +1101,64 @@ function onMouse(event: MouseEvent, type: "mousePressed" | "mouseReleased"): voi
       modifiers: modifiers(event)
     }
   });
-  // 只有按下才算动手；松开要跟着按下走，单独一下（从画面外拖进来松手）后端会丢掉。
-  if (type === "mousePressed") status.takeover = true;
 }
 
-let lastMove = 0;
+// 移动和滚轮按屏幕刷新合并，一帧最多发一条：不合并的话一次拖动能发出几百条，
+// 后端逐条等浏览器处理完，画面反而更卡。
+let pendingMove: MouseEvent | null = null;
+let moveFrame = 0;
 function onMouseMove(event: MouseEvent): void {
-  // 没接管时鼠标只是路过：以前每次移动都发，WebUI 开着、鼠标划过画面就把浏览器从
-  // 机器人手里抢走了。后端同样会丢掉，这里不发是为了省掉一路的消息。
-  if (!status.takeover) return;
-  // 移动事件按 20ms 节流：不节流的话一次拖动能发出几百条，画面反而更卡。
-  const now = Date.now();
-  if (now - lastMove < 20) return;
-  lastMove = now;
-  if (!frame.value) return;
-  const point = pagePoint(event);
-  send({ type: "mouse", mouse: { type: "mouseMoved", x: point.x, y: point.y, buttons: event.buttons, modifiers: modifiers(event) } });
+  // 没接管时鼠标只是路过，不发：后端同样会丢掉，这里省掉一路的消息。
+  if (!interactive.value || !frameMeta) return;
+  pendingMove = event;
+  if (moveFrame) return;
+  moveFrame = window.requestAnimationFrame(() => {
+    moveFrame = 0;
+    const latest = pendingMove;
+    pendingMove = null;
+    if (!latest) return;
+    const point = pagePoint(latest);
+    send({ type: "mouse", mouse: { type: "mouseMoved", x: point.x, y: point.y, buttons: latest.buttons, modifiers: modifiers(latest) } });
+  });
 }
 
-// 滚轮不算接管：滚页面时顺手蹭到画面很常见，不该因此把浏览器抢过来。先点一下画面接管，才能滚动。
+let wheelDeltaX = 0;
+let wheelDeltaY = 0;
+let wheelEvent: WheelEvent | null = null;
+let wheelFrame = 0;
+// 没接管时滚轮归 WebUI：鼠标停在画面上照样能上下滚这一页，不会把浏览器抢过来。
 function onWheel(event: WheelEvent): void {
-  if (!status.takeover) return;
-  const point = pagePoint(event);
-  send({
-    type: "mouse",
-    mouse: { type: "mouseWheel", x: point.x, y: point.y, delta_x: -event.deltaX, delta_y: -event.deltaY, modifiers: modifiers(event) }
+  if (!interactive.value) return;
+  event.preventDefault();
+  wheelDeltaX += event.deltaX;
+  wheelDeltaY += event.deltaY;
+  wheelEvent = event;
+  if (wheelFrame) return;
+  wheelFrame = window.requestAnimationFrame(() => {
+    wheelFrame = 0;
+    const latest = wheelEvent;
+    const deltaX = wheelDeltaX;
+    const deltaY = wheelDeltaY;
+    wheelDeltaX = 0;
+    wheelDeltaY = 0;
+    wheelEvent = null;
+    if (!latest) return;
+    const point = pagePoint(latest);
+    send({
+      type: "mouse",
+      mouse: { type: "mouseWheel", x: point.x, y: point.y, delta_x: -deltaX, delta_y: -deltaY, modifiers: modifiers(latest) }
+    });
   });
 }
 
 function onKey(event: KeyboardEvent, type: "keyDown" | "keyUp"): void {
+  // 没接管时按键不碰也不拦：焦点留在画面上时 Cmd+Tab、Cmd+C、Tab 照常归 WebUI，
+  // 也不会因此把浏览器抢过来。
+  if (!interactive.value) return;
+  event.preventDefault();
   // 可打印字符走 insertText：中文输入法上屏的是整段文字，不是一串按键。
   if (type === "keyDown" && event.key.length === 1 && !event.ctrlKey && !event.metaKey) {
     send({ type: "text", text: event.key });
-    status.takeover = true;
     return;
   }
   send({
@@ -606,31 +1171,75 @@ function onKey(event: KeyboardEvent, type: "keyDown" | "keyUp"): void {
       modifiers: modifiers(event)
     }
   });
-  if (type === "keyDown") status.takeover = true;
+}
+
+// 输入法选字按的回车不算提交：以前带中文的网址会因此连开两次。
+function onAddressEnter(event: KeyboardEvent): void {
+  if (event.isComposing || event.keyCode === 229 || !interactive.value) return;
+  event.preventDefault();
+  navigate();
+  // 打开之后把焦点还给页面，地址栏才会跟着跳转后的真实地址变。
+  addressField.value?.blur();
 }
 
 function navigate(): void {
   const target = addressInput.value.trim();
   if (!target) return;
   send({ type: "navigate", url: /^https?:\/\//i.test(target) ? target : `https://${target}` });
-  status.takeover = true;
 }
 
-onMounted(() => {
+function onVisibilityChange(): void {
+  if (!pageActive) return;
+  if (document.hidden) pauseLive();
+  else void refresh();
+}
+
+function startPage(): void {
+  pageActive = true;
+  tabTimer = window.setInterval(() => {
+    if (!document.hidden) void loadTabs();
+  }, tabPollMS);
   // 先读来源再读状态：要知道勾没勾上，才能决定要不要自动拉起。
   void loadSource().then(refresh);
   void loadActivity();
+  void loadRender();
+  void loadExternalCDP();
   // 扩展连上、断开或被接管都会改变「这一轮用哪个」，跟着状态一起刷。
   statusTimer = window.setInterval(() => {
     void refresh();
     void loadSource();
     void loadActivity();
   }, 5000);
+}
+
+function stopPage(): void {
+  pageActive = false;
+  if (tabTimer) window.clearInterval(tabTimer);
+  tabTimer = undefined;
+  if (statusTimer) window.clearInterval(statusTimer);
+  statusTimer = undefined;
+  pauseLive();
+}
+
+onMounted(() => {
+  document.addEventListener("visibilitychange", onVisibilityChange);
+  document.addEventListener("fullscreenchange", onFullscreenChange);
+  startPage();
 });
 
+// 页面被 KeepAlive 缓存着：切走时停掉画面和轮询，切回来再接上。
+onActivated(() => {
+  if (!pageActive) startPage();
+});
+
+onDeactivated(stopPage);
+
 onBeforeUnmount(() => {
-  if (statusTimer) window.clearInterval(statusTimer);
-  disconnectLive();
+  document.removeEventListener("visibilitychange", onVisibilityChange);
+  document.removeEventListener("fullscreenchange", onFullscreenChange);
+  stopPage();
+  if (moveFrame) window.cancelAnimationFrame(moveFrame);
+  if (wheelFrame) window.cancelAnimationFrame(wheelFrame);
 });
 </script>
 
@@ -646,6 +1255,55 @@ onBeforeUnmount(() => {
 .browser-toggle-list {
   display: flex;
   flex-direction: column;
+}
+
+/* 两组之间靠小标题分开：读网页、出图 / 登录、点按钮。 */
+.browser-group-title {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border);
+}
+
+.browser-group-title:not(:first-child) {
+  margin-top: 10px;
+}
+
+.browser-group-title h3 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.browser-group-title span {
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+/* 没有勾选框的行（外接 CDP）用它占住勾选框那一列，标题照样对齐。 */
+.browser-toggle-spacer {
+  width: 16px;
+}
+
+.browser-toggle-label {
+  font-weight: 600;
+}
+
+.browser-inline-select {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+/* 这一行都是小字链接，下拉跟着缩小，样式仍是全站统一的 AppSelect。 */
+.browser-inline-select :deep(.app-select-trigger) {
+  padding: 3px 10px;
+  font-size: 12.5px;
+  color: var(--text);
 }
 
 /* 一行一项：勾选框在行首，和标题第一行对齐；右边是标题、说明、小链接。 */
@@ -740,20 +1398,8 @@ onBeforeUnmount(() => {
   cursor: default;
 }
 
-.browser-toggle-actions {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-  margin-top: 6px;
-}
-
-.browser-toggle-note {
-  color: var(--muted);
-  font-size: 12.5px;
-}
-
 .browser-toggle-error {
+  margin: 2px 0 0;
   font-size: 12.5px;
   color: var(--warn);
 }
@@ -770,15 +1416,238 @@ onBeforeUnmount(() => {
   transform: rotate(180deg);
 }
 
+/* 画面卡片本身不留内边距，窗口贴着卡片边：标签、工具栏、画面、状态栏是一整块。 */
+.browser-live-card {
+  overflow: hidden;
+}
+
+.browser-window {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border-radius: inherit;
+}
+
+/* 你在操作时整块描一圈主题色：一眼能看出这会儿浏览器在谁手里。描边叠在最上面一层，
+   不然会被标签栏和画面的底色盖住。 */
+.browser-window::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  border: 2px solid transparent;
+  border-radius: inherit;
+  pointer-events: none;
+  transition: border-color 0.15s ease;
+}
+
+.browser-window.is-takeover::after {
+  border-color: var(--accent);
+}
+
+.browser-tabbar {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  padding: 8px 12px 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+  background: var(--surface-2);
+}
+
+.browser-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 1 220px;
+  min-width: 72px;
+  padding: 7px 8px 7px 14px;
+  border-radius: 10px 10px 0 0;
+  color: var(--text-secondary);
+  font-size: 12.5px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.browser-tab:hover {
+  background: color-mix(in srgb, var(--surface) 55%, transparent);
+}
+
+.browser-tab.active {
+  background: var(--surface);
+  color: var(--text);
+}
+
+.browser-tab > svg {
+  flex: 0 0 auto;
+  color: var(--muted);
+}
+
+.browser-tab > svg.browser-tab-mine {
+  color: var(--accent);
+}
+
+.browser-tab-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.browser-tab-close,
+.browser-tab-new {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.browser-tab-close {
+  width: 18px;
+  height: 18px;
+}
+
+.browser-tab-new {
+  width: 28px;
+  height: 28px;
+  margin: 0 0 3px 4px;
+}
+
+.browser-tab-close:hover,
+.browser-tab-new:hover:not(:disabled) {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.browser-tab-new:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.browser-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 10px;
+}
+
+.browser-tool {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.browser-tool:hover:not(:disabled) {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.browser-tool:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.browser-address {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+  height: 34px;
+  margin: 0 4px;
+  padding: 0 14px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: var(--surface-2);
+  cursor: text;
+}
+
+.browser-address.readonly {
+  cursor: default;
+}
+
+.browser-address.readonly input {
+  color: var(--text-secondary);
+}
+
+.browser-address:not(.readonly):focus-within {
+  border-color: var(--accent);
+  background: var(--surface);
+}
+
+.browser-address-icon {
+  flex: 0 0 auto;
+  color: var(--muted);
+}
+
+.browser-address input {
+  flex: 1;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+}
+
+/* 加载进度：页面在加载时一条细线来回走，停了就消失。 */
+.browser-progress {
+  position: relative;
+  height: 2px;
+  overflow: hidden;
+}
+
+.browser-progress.active::after {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 35%;
+  background: var(--accent);
+  animation: browser-progress 1.1s ease-in-out infinite;
+}
+
+@keyframes browser-progress {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(300%);
+  }
+}
+
 .browser-stage {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: center;
-  min-height: 240px;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  background: var(--surface-2, rgba(0, 0, 0, 0.15));
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-2);
   overflow: hidden;
+}
+
+/* 只有还没画面时撑出一块地方放提示；有画面就按画面本身的比例，手机上不留上下空带。 */
+.browser-stage.empty {
+  min-height: 240px;
 }
 
 .browser-live-notice {
@@ -799,10 +1668,79 @@ onBeforeUnmount(() => {
   outline: none;
 }
 
-.row.gap {
+.browser-statusbar {
   display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
   align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  min-height: 44px;
+  padding: 6px 14px;
+  font-size: 12.5px;
 }
+
+.browser-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--ok);
+}
+
+.browser-window.is-takeover .browser-status-dot {
+  background: var(--accent);
+}
+
+.browser-statusbar strong {
+  font-weight: 600;
+}
+
+.browser-status-hint {
+  color: var(--muted);
+}
+
+.browser-nudge {
+  animation: browser-nudge 0.9s ease;
+}
+
+@keyframes browser-nudge {
+  0%,
+  100% {
+    transform: none;
+    box-shadow: none;
+  }
+  20%,
+  60% {
+    transform: scale(1.08);
+    box-shadow: 0 0 0 4px var(--accent-soft);
+  }
+}
+
+.browser-status-live {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.browser-status-live.warn {
+  color: var(--warn);
+}
+
+/* 全屏时画面按比例塞满剩下的高度。 */
+.browser-window.is-fullscreen {
+  height: 100vh;
+  border-radius: 0;
+}
+
+.browser-window.is-fullscreen .browser-stage {
+  flex: 1;
+  min-height: 0;
+  border-bottom: 0;
+}
+
+.browser-window.is-fullscreen .browser-screen {
+  width: auto;
+  height: auto;
+  max-width: 100%;
+  max-height: 100%;
+}
+
 </style>

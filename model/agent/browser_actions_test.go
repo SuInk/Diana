@@ -562,3 +562,49 @@ func TestBrowserOpenHonoursBuiltinDeniedHosts(t *testing.T) {
 		}
 	}
 }
+
+// userTabsBrowser 是一个认得「主人自己开的标签」的内置浏览器。
+type userTabsBrowser struct {
+	endpoint string
+	user     string
+}
+
+func (b userTabsBrowser) Endpoint(context.Context) (string, error) { return b.endpoint, nil }
+func (b userTabsBrowser) UserTab(targetID string) bool             { return targetID == b.user }
+
+// 主人在画面里自己开的标签，机器人自动挑标签时跳过、列表里看不到、也切不过去。
+func TestBrowserToolsLeaveUserTabsAlone(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/json/list" {
+			http.NotFound(w, r)
+			return
+		}
+		_ = json.NewEncoder(w).Encode([]map[string]string{
+			{"id": "mine", "type": "page", "url": "https://login.example/", "title": "主人在登录", "webSocketDebuggerUrl": "ws://127.0.0.1/devtools/page/mine"},
+			{"id": "bot", "type": "page", "url": "https://news.example/", "title": "机器人的页", "webSocketDebuggerUrl": "ws://127.0.0.1/devtools/page/bot"},
+		})
+	}))
+	t.Cleanup(server.Close)
+	base := browserToolBase{
+		builtin: userTabsBrowser{endpoint: server.URL, user: "mine"},
+		timeout: 5 * time.Second,
+		session: &browserSession{key: "chat"},
+		tabs:    newBrowserTabRegistry(),
+	}
+	target, err := base.pickTarget(context.Background(), server.URL, false)
+	if err != nil || target.ID != "bot" {
+		t.Fatalf("应当挑机器人的标签，实际 %q %v", target.ID, err)
+	}
+	base.session.setActive("mine")
+	if target, _ := base.pickTarget(context.Background(), server.URL, false); target.ID == "mine" {
+		t.Fatal("就算之前切过，主人的标签也不该再被挑中")
+	}
+	tool := &BrowserTabsTool{base: base}
+	listed, err := tool.Run(context.Background(), map[string]any{"action": "list"})
+	if err != nil || strings.Contains(listed, "mine") || !strings.Contains(listed, "bot") {
+		t.Fatalf("列表里不该有主人的标签：%s %v", listed, err)
+	}
+	if _, err := tool.Run(context.Background(), map[string]any{"action": "switch", "tab_id": "mine"}); err == nil || !strings.Contains(err.Error(), "主人") {
+		t.Fatalf("切到主人的标签应当被拒，实际 %v", err)
+	}
+}
