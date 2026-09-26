@@ -92,7 +92,7 @@ func TestPersonaGenerateStripsFenceAndPreamble(t *testing.T) {
 
 func TestPersonaGenerateRejectsEmptyOutput(t *testing.T) {
 	rec := postPersona(personaRouterWithClient(&echoPersonaClient{reply: "  "}), `{"description":"一个爱撒娇的虚拟主播"}`)
-	if rec.Code != http.StatusBadGateway {
+	if rec.Code != statusUpstreamFailed {
 		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
 	}
 }

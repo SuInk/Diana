@@ -252,9 +252,9 @@ func (h *BotHandler) removeRepoPluginSources(id string) {
 }
 
 // writeRepoPluginError 按第三方插件错误类型映射 HTTP 状态码：
-// 链接与格式问题归 400（用户可修正），上游拉取失败归 502。
+// 链接与格式问题归 400（用户可修正），上游拉取失败归 statusUpstreamFailed。
 func (h *BotHandler) writeRepoPluginError(c *gin.Context, action string, err error, target string) {
-	status := http.StatusBadGateway
+	status := statusUpstreamFailed
 	switch {
 	case errors.Is(err, assistant.ErrRepoPluginURL),
 		errors.Is(err, assistant.ErrRepoPluginManifest),

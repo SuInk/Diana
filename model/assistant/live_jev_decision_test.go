@@ -28,6 +28,9 @@ func TestLiveJevParticipationRatings(t *testing.T) {
 		recent       []string
 		wantDirected bool
 		maxChatIn    float64
+		// wantStop 要求闲聊分渲染成整 0：差一分，ratingsAllow 就认不出叫停，always 档
+		// 照样接话。叫停时点没点机器人的名都说得通，directed 这时不作要求。
+		wantStop bool
 	}{
 		{
 			name:         "叫了名字",
@@ -53,6 +56,18 @@ func TestLiveJevParticipationRatings(t *testing.T) {
 			current:      "你刚说的那个参数是哪个",
 			recent:       []string{"Diana（机器人）：把超时调大一点就行", "Alice：好"},
 			wantDirected: true,
+		},
+		{
+			name:     "点名叫停",
+			current:  "diana先别说话了，让我们自己聊",
+			recent:   []string{"Diana（机器人）：我觉得周六去比较好，人少", "Alice：周六我加班"},
+			wantStop: true,
+		},
+		{
+			name:     "叫停",
+			current:  "先别说话了，让我们自己聊",
+			recent:   []string{"Diana（机器人）：我觉得周六去比较好，人少", "Alice：周六我加班"},
+			wantStop: true,
 		},
 	}
 	prefs := ParticipationPreferences{RelevanceLevel: "on", ChatLevel: "medium", Desire: 50}
@@ -83,11 +98,21 @@ func TestLiveJevParticipationRatings(t *testing.T) {
 				t.Fatalf("live output did not parse: %v (%s)", err, resp.Text)
 			}
 			t.Logf("directed=%v chat_in=%.2f reason=%s usage=%+v", *ratings.Relevance.Directed, *ratings.ChatIn.Score, strings.TrimSpace(ratings.Relevance.Reason), resp.Usage)
-			if *ratings.Relevance.Directed != tc.wantDirected {
+			if !tc.wantStop && *ratings.Relevance.Directed != tc.wantDirected {
 				t.Errorf("directed = %v, want %v (%s)", *ratings.Relevance.Directed, tc.wantDirected, resp.Text)
 			}
 			if tc.maxChatIn > 0 && *ratings.ChatIn.Score > tc.maxChatIn {
 				t.Errorf("chat_in = %.2f, want <= %.2f (%s)", *ratings.ChatIn.Score, tc.maxChatIn, resp.Text)
+			}
+			if tc.wantStop {
+				if *ratings.ChatIn.Score != 0 {
+					t.Errorf("叫停的闲聊分 = %.2f，want 0 (%s)", *ratings.ChatIn.Score, resp.Text)
+				}
+				// 叫停否决只在 directed=false 时生效，点名叫停走的是回应提问那条路。
+				always := ParticipationPreferences{RelevanceLevel: "off", ChatLevel: "always"}
+				if _, chat := always.ratingsAllow(ratings, true); !*ratings.Relevance.Directed && chat {
+					t.Errorf("always 档在叫停后仍接话 (%s)", resp.Text)
+				}
 			}
 		})
 	}

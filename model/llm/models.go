@@ -97,7 +97,7 @@ func ListModels(ctx context.Context, cfg ProviderConfig, opts ...ClientOption) (
 	case ProviderGemini:
 		return listGeminiModels(ctx, cfg, options.httpClient)
 	case ProviderAnthropic:
-		return nil, fmt.Errorf("llm: Anthropic 模型列表无法实时同步，请手动添加上游实际支持的模型 ID")
+		return listAnthropicModels(ctx, cfg, options.httpClient)
 	case ProviderTypeSafe:
 		// System One 接口没有模型列表端点。jev-latest 会跟着上游滚动，固定版本号
 		// 需要时在界面里手填。
@@ -179,6 +179,93 @@ func listGeminiModels(ctx context.Context, cfg ProviderConfig, client *http.Clie
 		return nil, fmt.Errorf("llm: Gemini model list response has no models")
 	}
 	return models, nil
+}
+
+// anthropicModelListMaxPages 限制翻页次数：上游一直回 has_more 时不能无限请求下去。
+const anthropicModelListMaxPages = 20
+
+// listAnthropicModels 读取 Anthropic 原生协议的 GET /v1/models。
+//
+// 官方接口和 sub2api 这类 Claude 中转都提供这个端点。以前这里直接报「无法实时同步」，
+// 接口按上游失败回 502，套了反向代理的部署常把 502 的正文换成代理自己的错误页，
+// 用户只看到一句「后端出错（HTTP 502）」，连「请手动添加」的提示都看不到。
+//
+// 路径跟 SDK 拼 /v1/messages 的方式一致：BaseURL 是不带 /v1 的根地址。
+func listAnthropicModels(ctx context.Context, cfg ProviderConfig, httpClient *http.Client) ([]ModelInfo, error) {
+	// OAuth 登录的配置档没有 API Key，鉴权头由凭据传输层补上。
+	if strings.TrimSpace(cfg.APIKey) == "" && strings.TrimSpace(cfg.OAuthProvider) == "" {
+		return nil, ErrMissingAPIKey
+	}
+	baseURL := strings.TrimSpace(cfg.BaseURL)
+	if baseURL == "" {
+		baseURL = "https://api.anthropic.com"
+	}
+	endpoint, err := joinOpenAICompatibleURL(baseURL, "v1/models")
+	if err != nil {
+		return nil, err
+	}
+	models := make([]ModelInfo, 0, 32)
+	afterID := ""
+	for page := 0; page < anthropicModelListMaxPages; page++ {
+		query := url.Values{"limit": {"1000"}}
+		if afterID != "" {
+			query.Set("after_id", afterID)
+		}
+		requestURL := endpoint + "?" + query.Encode()
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, requestURL, nil)
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Accept", "application/json")
+		req.Header.Set("anthropic-version", "2023-06-01")
+		if apiKey := strings.TrimSpace(cfg.APIKey); apiKey != "" {
+			req.Header.Set("x-api-key", apiKey)
+		}
+		if userAgent := cfg.UserAgentWithDefault(); userAgent != "" {
+			req.Header.Set("User-Agent", userAgent)
+		}
+		for name, value := range cfg.NormalizedHeaders() {
+			req.Header.Set(name, value)
+		}
+		resp, err := httpClient.Do(req)
+		if err != nil {
+			return nil, err
+		}
+		body, readErr := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+		_ = resp.Body.Close()
+		if readErr != nil {
+			return nil, readErr
+		}
+		if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+			return nil, modelListHTTPError{statusCode: resp.StatusCode, requestURL: requestURL, contentType: resp.Header.Get("Content-Type"), body: string(body)}
+		}
+		// 中转站有的回 Anthropic 格式（data + has_more），有的回 OpenAI 格式，
+		// 都走通用解析；翻页字段只有 Anthropic 格式才有。
+		pageModels, err := decodeOpenAICompatibleModels(body)
+		if err != nil {
+			if page > 0 {
+				break
+			}
+			return nil, modelListDecodeError{requestURL: requestURL, statusCode: resp.StatusCode, contentType: resp.Header.Get("Content-Type"), body: string(body), cause: err}
+		}
+		for i := range pageModels {
+			if pageModels[i].OwnedBy == "" {
+				pageModels[i].OwnedBy = "anthropic"
+			}
+		}
+		models = append(models, pageModels...)
+		var paging struct {
+			HasMore bool   `json:"has_more"`
+			LastID  string `json:"last_id"`
+		}
+		_ = json.Unmarshal(body, &paging)
+		next := strings.TrimSpace(paging.LastID)
+		if !paging.HasMore || next == "" || next == afterID {
+			break
+		}
+		afterID = next
+	}
+	return uniqueModels(models), nil
 }
 
 // listOpenAICompatibleModels 从 OpenAI-compatible 后端读取模型列表。
@@ -399,7 +486,7 @@ func modelInfoFromPayload(payload any) ModelInfo {
 	case map[string]any:
 		model := ModelInfo{
 			ID:                  stringField(value, "id", "model", "name"),
-			Name:                stringField(value, "name"),
+			Name:                stringField(value, "name", "display_name"),
 			Object:              stringField(value, "object"),
 			OwnedBy:             stringField(value, "owned_by", "ownedBy", "owner"),
 			Created:             int64Field(value, "created", "created_at"),

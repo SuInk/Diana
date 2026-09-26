@@ -5,6 +5,7 @@ import vm from "node:vm";
 import ts from "typescript";
 import { effectScope, nextTick } from "vue";
 import { configurationKindForMutation, notifyConfigurationChanged, useConfigurationRefresh } from "./configuration-sync.ts";
+import { describeServerFailure } from "./gateway-error.ts";
 
 const flush = async () => { await nextTick(); await new Promise(resolve => setImmediate(resolve)); };
 
@@ -15,6 +16,7 @@ function apiHarness(fetch) {
   const context = vm.createContext({ exports: {}, fetch, console, AbortController, window: { dispatchEvent() {} }, require: name => {
     if (name === "./scope-transition") return { trackScopeRequest: () => () => {} };
     if (name === "./configuration-sync") return { configurationKindForMutation, notifyConfigurationChanged: kind => changes.push(kind) };
+    if (name === "./gateway-error") return { describeServerFailure };
     throw new Error(`unexpected import ${name}`);
   }});
   vm.runInContext(compiled, context);
