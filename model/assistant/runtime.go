@@ -547,6 +547,7 @@ type Runtime struct {
 	unavailableGroups       map[string]unavailableGroupSend
 	outboundDeliveryMu      sync.Mutex
 	outboundDeliveries      map[string]*groupOutboundDelivery
+	outboundEchoes          outboundEchoTracker
 	historyImageDescMu      sync.Mutex
 	historyImageDescQueue   []*historyImageDescJob
 	historyImageDescJobs    map[string]*historyImageDescJob
@@ -1389,10 +1390,12 @@ func (r *Runtime) SendGroupMessage(ctx context.Context, groupID string, text str
 	if blockedErr := r.blockedGroupSendError(event); blockedErr != nil {
 		return nil, blockedErr
 	}
+	segments := buildOutgoingSegments(OutgoingMessage{Text: text})
+	ctx = withOutboundConfirmFingerprint(ctx, outboundFingerprintFromSegments(segments))
 	return r.executeOutboundCall(ctx, event, "send_group_msg", func(callCtx context.Context) (map[string]any, error) {
 		return r.callOneBotAPIForEvent(callCtx, event, "send_group_msg", map[string]any{
 			"group_id": parsedGroupID,
-			"message":  buildOutgoingSegments(OutgoingMessage{Text: text}),
+			"message":  segments,
 		})
 	})
 }
@@ -7146,7 +7149,9 @@ func (r *Runtime) sendChannelPayloadWithRetry(ctx context.Context, msg OutgoingM
 		if lastErr == nil {
 			return result, nil
 		}
-		if isOutboundPayloadRejection(lastErr) {
+		// 结果不明的不能在这里原地重发，交给 confirmOutboundOutcome 先确认；消息本身
+		// 无效的重发也没用。
+		if isOutboundPayloadRejection(lastErr) || errors.Is(lastErr, ErrOutboundOutcomeUnknown) || isPermanentOutboundRejection(lastErr) {
 			return nil, lastErr
 		}
 		if ctx.Err() != nil {
@@ -7399,7 +7404,8 @@ func (r *Runtime) sendRealForwardMessages(ctx context.Context, event MessageEven
 		if errors.As(err, &safetyErr) {
 			return "", err
 		}
-		if errors.Is(err, errGroupSendUnavailable) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		if errors.Is(err, errGroupSendUnavailable) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) ||
+			errors.Is(err, errOutboundOutcomeUnconfirmed) {
 			// 超时的请求可能已经投递，不能再用暂存方式发第二遍。
 			return "", err
 		}
@@ -7546,7 +7552,9 @@ func (r *Runtime) sendForwardNodesWithResult(ctx context.Context, event MessageE
 		}
 		params["user_id"] = userID
 	}
-	result, err := r.executeOutboundCall(ctx, event, action, func(callCtx context.Context) (map[string]any, error) {
+	// 合并转发的回推只有一个 forward 段，按它认。
+	sendCtx := withOutboundConfirmFingerprint(ctx, outboundFingerprintForForward())
+	result, err := r.executeOutboundCall(sendCtx, event, action, func(callCtx context.Context) (map[string]any, error) {
 		return r.callOneBotAPIForEvent(callCtx, event, action, params)
 	})
 	if err != nil {

@@ -47,6 +47,7 @@ func (r *Runtime) HandleEvent(ctx context.Context, event MessageEvent) error {
 		return nil
 	}
 	if !isRecallNotice(event) && r.isSelfMessage(event) {
+		r.observeOutboundEcho(event)
 		r.observeSelfMessage(ctx, event)
 		return nil
 	}

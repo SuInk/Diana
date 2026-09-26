@@ -7,7 +7,6 @@ import (
 	"context"
 	"crypto/subtle"
 	"encoding/json"
-	"errors"
 	"log"
 	"net"
 	"net/http"
@@ -246,8 +245,9 @@ func (s *OneBotReverseServer) SendChatAction(ctx context.Context, msg OutgoingMe
 	return sendOneBotInputStatus(ctx, msg, action, s.CallAPI)
 }
 
-// oneBotReverseCallTimeout 是没有期限的调用等待响应的上限。
-var oneBotReverseCallTimeout = 30 * time.Second
+// oneBotReverseCallTimeout 是没有期限的纯文本调用等待响应的上限；带媒体的调用
+// 用 oneBotMediaActionTimeout。
+var oneBotReverseCallTimeout = oneBotTextActionTimeout
 
 // CallAPI 通过反向连接发送 OneBot action 并等待响应。
 func (s *OneBotReverseServer) CallAPI(ctx context.Context, action string, params map[string]any) (map[string]any, error) {
@@ -256,7 +256,7 @@ func (s *OneBotReverseServer) CallAPI(ctx context.Context, action string, params
 	// 调用方自己给了期限（上传大文件会给得更长）就照它的来。
 	if _, ok := ctx.Deadline(); !ok {
 		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, oneBotReverseCallTimeout)
+		ctx, cancel = context.WithTimeout(ctx, oneBotCallTimeout(action, params, oneBotReverseCallTimeout))
 		defer cancel()
 	}
 	s.connMu.RLock()
@@ -277,6 +277,9 @@ func (s *OneBotReverseServer) CallAPI(ctx context.Context, action string, params
 		"params": params,
 		"echo":   echo,
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	s.writeMu.Lock()
 	_ = conn.SetWriteDeadline(time.Now().Add(oneBotWriteTimeout))
 	err := conn.WriteJSON(req)
@@ -284,13 +287,8 @@ func (s *OneBotReverseServer) CallAPI(ctx context.Context, action string, params
 	if err != nil {
 		return nil, err
 	}
-
-	select {
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	case result := <-resultCh:
-		return result.data, result.err
-	}
+	// 写出去之后才超时或断线，结果不明，见 oneBotAwaitResponse。
+	return oneBotAwaitResponse(ctx, action, resultCh)
 }
 
 // ConnectionOrigin 返回当前反向连接握手时客户端使用的服务地址，例如
@@ -492,7 +490,7 @@ func (s *OneBotReverseServer) resolveCall(envelope oneBotEnvelope) {
 	if !ok {
 		return
 	}
-	result := callResult{err: errors.New(oneBotErrorMessage(envelope))}
+	result := callResult{err: &oneBotActionError{retCode: envelope.RetCode, message: oneBotErrorMessage(envelope)}}
 	if envelopeStatusOK(envelope) {
 		result = callResult{data: oneBotDataMap(envelope.Data)}
 	}

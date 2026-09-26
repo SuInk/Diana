@@ -469,7 +469,7 @@ func buildForwardNodes(chunks []string, senderName string, senderUIN string) []m
 
 // CallAPI 发送 OneBot action 并等待 echo 响应。
 func (c *OneBotChannel) CallAPI(ctx context.Context, action string, params map[string]any) (map[string]any, error) {
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, oneBotCallTimeout(action, params, oneBotTextActionTimeout))
 	defer cancel()
 	c.connMu.RLock()
 	conn := c.conn
@@ -489,20 +489,19 @@ func (c *OneBotChannel) CallAPI(ctx context.Context, action string, params map[s
 		"params": params,
 		"echo":   echo,
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	c.writeMu.Lock()
 	_ = conn.SetWriteDeadline(time.Now().Add(oneBotWriteTimeout))
 	err := conn.WriteJSON(req)
 	c.writeMu.Unlock()
 	if err != nil {
+		// 没写出去就是确定失败，可以放心重试。
 		return nil, err
 	}
-
-	select {
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	case result := <-resultCh:
-		return result.data, result.err
-	}
+	// 写出去之后再超时，接入端可能已经执行了：交给调用方去确认，不能直接重发。
+	return oneBotAwaitResponse(ctx, action, resultCh)
 }
 
 // Status 返回 OneBot channel 当前连接状态。
@@ -595,7 +594,7 @@ func (c *OneBotChannel) resolveCall(envelope oneBotEnvelope) {
 		if message == "" {
 			message = fmt.Sprintf("onebot api failed: status=%s retcode=%d", envelopeStatusText(envelope.Status), envelope.RetCode)
 		}
-		result = callResult{err: errors.New(message)}
+		result = callResult{err: &oneBotActionError{retCode: envelope.RetCode, message: message}}
 	}
 	select {
 	case resultCh <- result:
@@ -739,6 +738,8 @@ func messageEventFromEnvelope(envelope oneBotEnvelope) MessageEvent {
 	if event.SenderName == "" {
 		event.SenderName = envelope.Sender.Nickname
 	}
+	// 私聊里机器人自己消息的回推，对方在 target_id 里；确认发送结果时靠它对上会话。
+	event.TargetID = stringifyID(envelope.TargetID)
 	event.ToMe = hasAt(segments, selfID)
 	return event
 }

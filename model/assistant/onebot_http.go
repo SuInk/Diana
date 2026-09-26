@@ -14,8 +14,10 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptrace"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -119,9 +121,19 @@ func (c *OneBotHTTPChannel) CallAPI(ctx context.Context, action string, params m
 	if cfg.AccessToken != "" {
 		req.Header.Set("Authorization", "Bearer "+cfg.AccessToken)
 	}
+	// 请求体已经写完才出错（等响应超时、连接被掐），接入端可能已经执行了这个
+	// action，和 WebSocket 那边一样标成结果不明，交给调用方确认。
+	var wroteRequest atomic.Bool
+	req = req.WithContext(httptrace.WithClientTrace(req.Context(), &httptrace.ClientTrace{
+		WroteRequest: func(info httptrace.WroteRequestInfo) { wroteRequest.Store(info.Err == nil) },
+	}))
 	resp, err := c.client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("diana: OneBot HTTP request failed: %w", err)
+		err = fmt.Errorf("diana: OneBot HTTP request failed: %w", err)
+		if wroteRequest.Load() {
+			return nil, &outboundOutcomeUnknownError{action: action, cause: err}
+		}
+		return nil, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
@@ -142,7 +154,7 @@ func (c *OneBotHTTPChannel) CallAPI(ctx context.Context, action string, params m
 		return nil, errors.New("diana: OneBot HTTP response is missing status")
 	}
 	if envelopeStatusText(envelope.Status) == "failed" || !envelopeStatusOK(envelope) {
-		return nil, errors.New(oneBotErrorMessage(envelope))
+		return nil, &oneBotActionError{retCode: envelope.RetCode, message: oneBotErrorMessage(envelope)}
 	}
 	return oneBotDataMap(envelope.Data), nil
 }
