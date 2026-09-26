@@ -148,6 +148,19 @@ func (s *neteaseSource) headers(cfg musicConfig) map[string]string {
 	return headers
 }
 
+// songURLHeaders 是官方取地址接口专用的请求头。
+//
+// 只带 MUSIC_U 时，接口按网页端处理，给的是带 authSecret 的地址，服务端去下载
+// 一律 403——连本来能走外链的免费歌也放不了。带上 os=pc 就按桌面客户端给普通
+// CDN 地址，会员歌能下到整首。游客不带 Cookie 时两种地址都能下，保持原样。
+func (s *neteaseSource) songURLHeaders(cfg musicConfig) map[string]string {
+	headers := s.headers(cfg)
+	if cookie, ok := headers["Cookie"]; ok {
+		headers["Cookie"] = "os=pc; appver=2.9.7; " + cookie
+	}
+	return headers
+}
+
 // ResolveSongID 补上短链那一步：163cn.tv 得跟一次跳转才知道是哪首歌。
 func (s *neteaseSource) ResolveSongID(ctx context.Context, f *musicFetcher, cfg musicConfig, ref musicReference) string {
 	if ref.SongID != "" {
@@ -319,7 +332,7 @@ func (s *neteaseSource) PlayableURL(ctx context.Context, f *musicFetcher, cfg mu
 	}
 	var payload neteaseSongURLResponse
 	escaped := url.QueryEscape(songID)
-	if f.fetchJSON(ctx, cfg, fmt.Sprintf(s.songURLAPI, escaped, escaped, bitrate), true, s.headers(cfg), &payload) {
+	if f.fetchJSON(ctx, cfg, fmt.Sprintf(s.songURLAPI, escaped, escaped, bitrate), true, s.songURLHeaders(cfg), &payload) {
 		if candidate := payload.fullTrackURL(); candidate != "" {
 			return candidate
 		}

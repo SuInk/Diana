@@ -128,7 +128,14 @@ func musicTestServer(t *testing.T, durationMS int64, audio []byte) *httptest.Ser
 			// 官方取地址接口：游客拿会员歌是 -110 且没有地址，这时轮到外链兜底；
 			// 带会员 MUSIC_U 给整首，带非会员 MUSIC_U 给 30 秒试听。
 			w.Header().Set("Content-Type", "application/json")
-			switch r.Header.Get("Cookie") {
+			// 只带 MUSIC_U（不带 os=pc）时真实接口给的是带 authSecret、服务端下载 403
+			// 的网页端地址，这里按拿不到处理，逼实现必须带 os=pc。
+			cookie := r.Header.Get("Cookie")
+			if cookie != "" && !strings.Contains(cookie, "os=pc") {
+				fmt.Fprint(w, `{"code":200,"data":[{"id":1974443814,"code":-110,"url":null,"freeTrialInfo":null}]}`)
+				return
+			}
+			switch strings.TrimSpace(cookie[strings.LastIndex(cookie, ";")+1:]) {
 			case "MUSIC_U=vip":
 				fmt.Fprintf(w, `{"code":200,"data":[{"id":1974443814,"code":200,"url":%q,"freeTrialInfo":null}]}`, "http://"+r.Host+"/audio/1974443814.mp3")
 			case "MUSIC_U=basic":
