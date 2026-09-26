@@ -32,6 +32,11 @@ const (
 	GroupVision      = "vision"
 	// GroupEmbedding 分组的配置档用于语义检索的向量化(/embeddings 接口)。
 	GroupEmbedding = "embedding"
+	// 下面三个是音视频插槽：它们调的不是对话接口，而是 /audio/speech、
+	// /audio/transcriptions、/videos 这类各自独立的接口，见 speech.go 和 video.go。
+	GroupTTS   = "tts"
+	GroupSTT   = "stt"
+	GroupVideo = "video"
 )
 
 type Profile struct {

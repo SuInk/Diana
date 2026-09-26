@@ -19,11 +19,11 @@ type modelCatalogEntry struct {
 func (t *dianaRuntimeModelTool) modelCatalog(key string) (string, error) {
 	keys := []string{key}
 	if key == "all" {
-		keys = append(ModelBindingKeys(), "stt", "tts")
+		keys = ModelBindingKeys()
 	}
 	entries := make([]modelCatalogEntry, 0, len(keys))
 	for _, purpose := range keys {
-		if !isModelBindingKey(purpose) && purpose != "stt" && purpose != "tts" {
+		if !isModelBindingKey(purpose) {
 			return "", fmt.Errorf("未知模型用途 %q", purpose)
 		}
 		entry := t.configuredModelPurpose(purpose)
@@ -42,6 +42,21 @@ func (t *dianaRuntimeModelTool) configuredModelPurpose(key string) modelCatalogE
 	if key == "image" {
 		entry.Models = t.provider.configuredImageModelIdentities()
 		return entry
+	}
+	if key == mediaSlotTTS || key == mediaSlotSTT || key == mediaSlotVideo {
+		// 插槽配了就报插槽；语音没配插槽时还可能走插件自带的 GPT-SoVITS / Whisper。
+		if routes := r.mediaSlotRoutes(t.provider.ctx, key); len(routes) > 0 {
+			for _, route := range routes {
+				identity := configuredProfileIdentity(route.Config, route.Name, key)
+				identity.ModelID = route.Model
+				entry.Models = append(entry.Models, identity)
+			}
+			return entry
+		}
+		if key == mediaSlotVideo {
+			entry.Note = "未配置视频生成模型"
+			return entry
+		}
 	}
 	if key == "stt" || key == "tts" {
 		id := voiceSTTPluginID

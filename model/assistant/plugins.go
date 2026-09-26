@@ -1247,6 +1247,25 @@ func (m *PluginManager) SetLocalMediaSharer(sharer LocalMediaSharer) {
 	}
 }
 
+// SetSpeechSynthesizer 把模型分配里的语音合成插槽交给需要它的插件。
+func (m *PluginManager) SetSpeechSynthesizer(synth speechSynthesizer) {
+	if m == nil {
+		return
+	}
+	type speechAware interface{ SetSpeechSynthesizer(speechSynthesizer) }
+	m.mu.RLock()
+	plugins := make([]speechAware, 0, 1)
+	for _, plugin := range m.catalog {
+		if aware, ok := plugin.(speechAware); ok {
+			plugins = append(plugins, aware)
+		}
+	}
+	m.mu.RUnlock()
+	for _, plugin := range plugins {
+		plugin.SetSpeechSynthesizer(synth)
+	}
+}
+
 func (m *PluginManager) ObserveEvent(ctx context.Context, event MessageEvent) MessageEvent {
 	return m.ObserveEventWithOverrides(ctx, event, m.ProfileOverrides(event.ProfileID))
 }

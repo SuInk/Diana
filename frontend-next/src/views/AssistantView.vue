@@ -656,6 +656,26 @@
                     </button>
                   </div>
                 </div>
+                <div v-if="isMediaRole(role.key) && roleForm[role.key]" class="model-role-params">
+                  <label v-for="field in mediaParamFields[role.key]" :key="field.key" class="field">
+                    <span>{{ field.label }}</span>
+                    <AppSelect
+                      v-if="field.options"
+                      :model-value="mediaParamValue(role.key, field.key)"
+                      :options="field.options"
+                      :placeholder="field.placeholder"
+                      @update:model-value="(value) => setMediaParam(role.key, field.key, value)"
+                    />
+                    <input
+                      v-else
+                      class="input"
+                      :value="mediaParamValue(role.key, field.key)"
+                      :placeholder="field.placeholder"
+                      @change="(event) => setMediaParam(role.key, field.key, (event.target as HTMLInputElement).value)"
+                    />
+                  </label>
+                  <button type="button" class="btn ghost small" @click="clearRole(role.key)">停用这个插槽</button>
+                </div>
                 <p class="model-role-desc muted">{{ role.description }}</p>
               </div>
               <p class="muted model-role-note">
@@ -3077,9 +3097,14 @@ function onMessageRelaysSaved(config: BotProfileConfig): void {
 // 要快；后台生成在回复之外异步跑，慢一点没关系。
 const purposeRoleKeys = ["reply_assist", "background"] as const;
 
-type RoleKey = "chat" | "vision" | "intent" | "image" | "media_parse" | (typeof purposeRoleKeys)[number];
+// 音视频插槽：不配就没有这项能力，不跟随对话——对话模型接不了这些接口。
+const mediaRoleKeys = ["tts", "stt", "video"] as const;
+type MediaRoleKey = (typeof mediaRoleKeys)[number];
+
+type RoleKey = "chat" | "vision" | "intent" | "image" | "media_parse" | (typeof purposeRoleKeys)[number] | MediaRoleKey;
 type RoleRoute = { profile_id?: string; group?: string; model: string; provider_id?: string; model_id?: string; follow_chat?: boolean };
-type RoleAssignment = RoleRoute & { fallbacks?: RoleRoute[] };
+// params 只在音视频插槽的主路由上有，后备沿用同一份。
+type RoleAssignment = RoleRoute & { fallbacks?: RoleRoute[]; params?: Record<string, string> };
 type ModelRoleRow = { key: RoleKey; label: string; sublabel?: string; description: string };
 const modelRoleRows: ModelRoleRow[] = [
   {
@@ -3136,8 +3161,84 @@ const purposeRoleRows: ModelRoleRow[] = [
   }
 ];
 
-// 细分用途只有这两档，直接和其他用途一起铺开，不再折叠。
-const visibleModelRoleRows = [...modelRoleRows, ...purposeRoleRows, imageRoleRow];
+const mediaRoleRows: ModelRoleRow[] = [
+  {
+    key: "tts",
+    label: "语音合成",
+    sublabel: "可选 · TTS",
+    description:
+      "把文字合成为语音消息。走 OpenAI 兼容的 /audio/speech（OpenAI、CosyVoice、ChatTTS 等自建服务的兼容层），地址是 elevenlabs.io 时自动改用 ElevenLabs 接口。" +
+      "要让机器人用上，还得在插件「语音合成」里把服务预设选成「模型分配 · 语音合成插槽」。"
+  },
+  {
+    key: "stt",
+    label: "语音识别",
+    sublabel: "可选 · STT",
+    description:
+      "把收到的语音转写成文字给上下文用。走 OpenAI 兼容的 /audio/transcriptions（Whisper、FunASR 等），ElevenLabs 地址自动改用它的 speech-to-text。" +
+      "转写开关在插件「语音识别」里：识别后端选「模型分配 · 语音识别插槽」才会使用这里。"
+  },
+  {
+    key: "video",
+    label: "视频生成",
+    sublabel: "可选",
+    description:
+      "文生视频、图生视频，按 OpenAI Sora 的 /videos 任务接口提交并轮询。配好后有生图权限的人（群成员也一样）可以让机器人生成视频，任务在后台跑完再发出来，每个任务计入群的模型调用额度；不配则不提供这项能力。"
+  }
+];
+
+type MediaParamField = { key: string; label: string; placeholder: string; options?: AppSelectOption[] };
+const speechAPIOptions: AppSelectOption[] = [
+  { value: "", label: "按地址自动" },
+  { value: "openai", label: "OpenAI 兼容" },
+  { value: "elevenlabs", label: "ElevenLabs" }
+];
+const mediaParamFields: Record<MediaRoleKey, MediaParamField[]> = {
+  tts: [
+    { key: "api", label: "接口", placeholder: "按地址自动", options: speechAPIOptions },
+    { key: "voice", label: "音色", placeholder: "alloy / 说话人 / voice_id" },
+    { key: "format", label: "格式", placeholder: "mp3", options: ["", "mp3", "wav", "opus", "aac", "flac", "pcm"].map((value) => ({ value, label: value || "默认（mp3）" })) },
+    { key: "speed", label: "语速", placeholder: "1.0" },
+    { key: "instructions", label: "语气说明", placeholder: "可选" },
+    { key: "timeout_seconds", label: "超时（秒）", placeholder: "60" }
+  ],
+  stt: [
+    { key: "api", label: "接口", placeholder: "按地址自动", options: speechAPIOptions },
+    { key: "language", label: "语言", placeholder: "留空自动识别，如 zh" },
+    { key: "prompt", label: "提示词", placeholder: "可选，专有名词" },
+    { key: "timeout_seconds", label: "超时（秒）", placeholder: "120" }
+  ],
+  video: [
+    { key: "size", label: "分辨率", placeholder: "1280x720" },
+    { key: "seconds", label: "默认时长（秒）", placeholder: "由服务决定" },
+    { key: "timeout_seconds", label: "任务总时限（秒）", placeholder: "600" },
+    { key: "poll_interval_seconds", label: "轮询间隔（秒）", placeholder: "5" }
+  ]
+};
+
+function isMediaRole(role: RoleKey): role is MediaRoleKey {
+  return mediaRoleKeys.includes(role as MediaRoleKey);
+}
+
+function mediaParamValue(role: RoleKey, key: string): string {
+  return roleForm.value[role]?.params?.[key] ?? "";
+}
+
+function setMediaParam(role: RoleKey, key: string, value: string): void {
+  const assignment = roleForm.value[role];
+  if (!assignment) return;
+  const params = { ...(assignment.params ?? {}) };
+  if (value.trim()) params[key] = value.trim();
+  else delete params[key];
+  assignment.params = Object.keys(params).length > 0 ? params : undefined;
+}
+
+function clearRole(role: RoleKey): void {
+  delete roleForm.value[role];
+}
+
+// 细分用途只有这两档，直接和其他用途一起铺开，不再折叠。音视频插槽排在最后。
+const visibleModelRoleRows = [...modelRoleRows, ...purposeRoleRows, imageRoleRow, ...mediaRoleRows];
 
 function isPurposeRole(role: RoleKey): boolean {
   return purposeRoleKeys.includes(role as (typeof purposeRoleKeys)[number]);
@@ -3145,7 +3246,7 @@ function isPurposeRole(role: RoleKey): boolean {
 
 // 媒体解析和细分用途可以不配，不配时模型一栏锁定，占位文字说明它跟着谁走。
 function isOptionalRole(role: RoleKey): boolean {
-  return role === "media_parse" || isPurposeRole(role);
+  return role === "media_parse" || isPurposeRole(role) || isMediaRole(role);
 }
 
 // 细分用途留空时跟着谁：回复辅助先找后台生成，后台生成直接跟随对话。
@@ -3157,6 +3258,7 @@ function roleModelPlaceholder(role: RoleKey): string {
   if (!roleForm.value[role]) {
     if (role === "media_parse") return "跟随视觉理解模型";
     if (isPurposeRole(role)) return `跟随${purposeRoleFallbackLabel(role)}模型`;
+    if (isMediaRole(role)) return "未配置，不启用";
   }
   return roleForm.value[role]?.follow_chat ? "跟随对话模型" : "请选择模型（必填）";
 }
@@ -3174,12 +3276,13 @@ const incomingModelRoles = ref<BotProfileConfig["model_roles"]>();
 // roleSnapshot 按固定字段顺序拍平，保证服务端回来的那份和页面草稿能直接比。
 function roleSnapshot(roles: Record<string, RoleAssignment | undefined> | undefined): string {
   const route = (item: RoleRoute): unknown[] => [item.profile_id ?? "", item.group ?? "", item.model ?? "", item.provider_id ?? "", item.model_id ?? "", item.follow_chat === true];
+  const params = (item: RoleAssignment): unknown[] => Object.entries(item.params ?? {}).sort(([a], [b]) => a.localeCompare(b));
   return JSON.stringify(
     Object.keys(roles ?? {})
       .sort()
       .map((key) => {
         const role = roles?.[key];
-        return role ? [key, route(role), (role.fallbacks ?? []).map(route)] : [key];
+        return role ? [key, route(role), (role.fallbacks ?? []).map(route), params(role)] : [key];
       })
   );
 }
@@ -3206,7 +3309,8 @@ function setRoleForm(source: BotProfileConfig["model_roles"]): void {
       provider_id: role.provider_id,
       model_id: role.model_id,
       follow_chat: role.follow_chat,
-      fallbacks: role.fallbacks?.map((fallback) => ({ ...fallback }))
+      fallbacks: role.fallbacks?.map((fallback) => ({ ...fallback })),
+      params: role.params ? { ...role.params } : undefined
     };
   }
   roleForm.value = roles;
@@ -3334,6 +3438,11 @@ function modelCompatibility(model: LLMModelInfo, role: RoleKey): ModelCompatibil
   if (role === "image") {
     return !outputKnown ? "unknown" : output.has("image") ? "compatible" : "incompatible";
   }
+  // 模型目录很少给音视频模型标模态：标了对上就排前面，对不上也不藏，
+  // 自建 TTS/STT 服务的模型名五花八门，藏了就没法选。
+  if (role === "tts") return output.has("audio") ? "compatible" : "unknown";
+  if (role === "stt") return input.has("audio") ? "compatible" : "unknown";
+  if (role === "video") return output.has("video") ? "compatible" : "unknown";
   if (role === "chat" || role === "intent") {
     return !outputKnown ? "unknown" : output.has("text") ? "compatible" : "incompatible";
   }
@@ -3394,8 +3503,8 @@ function channelGroups(): { name: string; count: number }[] {
 function channelOptionsFor(role: RoleKey): AppSelectOption[] {
   const base: AppSelectOption[] = [];
   if (role === "media_parse") base.push({ value: FOLLOW_VISION, label: "跟随视觉理解", hint: "不单独绑定媒体解析模型" });
-  // 对话是被跟随的那一档，不能跟随自己。
-  if (role !== "chat") {
+  // 对话是被跟随的那一档，不能跟随自己；音视频插槽没有可跟随的对话模型。
+  if (role !== "chat" && !isMediaRole(role)) {
     base.push({
       value: FOLLOW_CHAT,
       label: "跟随对话",
@@ -3565,10 +3674,11 @@ function setRoleChannel(role: RoleKey, value: string): void {
   const current = roleForm.value[role];
   const model = current?.follow_chat ? "" : (current?.model ?? "");
   const fallbacks = current?.follow_chat ? undefined : current?.fallbacks;
+  const params = current?.params;
   if (value.startsWith(GROUP_PREFIX)) {
-    roleForm.value[role] = { group: value.slice(GROUP_PREFIX.length), model, fallbacks };
+    roleForm.value[role] = { group: value.slice(GROUP_PREFIX.length), model, fallbacks, params };
   } else {
-    roleForm.value[role] = { profile_id: value, model, fallbacks };
+    roleForm.value[role] = { profile_id: value, model, fallbacks, params };
   }
   const options = modelOptionsFor(role).filter((option) => option.value !== "");
   if (!roleModelIsSelectable(role, model)) {
@@ -3747,7 +3857,7 @@ function setRoleModel(role: RoleKey, value: string): void {
   if (value.includes(MODEL_PAIR_SEP)) {
     // 跨 Provider 选择：一次确定 Provider 和模型。
     const [profileID, model] = value.split(MODEL_PAIR_SEP);
-    roleForm.value[role] = { profile_id: profileID, model, fallbacks: roleForm.value[role]?.fallbacks };
+    roleForm.value[role] = { profile_id: profileID, model, fallbacks: roleForm.value[role]?.fallbacks, params: roleForm.value[role]?.params };
     return;
   }
   if (!value) {
@@ -3942,7 +4052,7 @@ async function save(): Promise<void> {
   for (const row of visibleModelRoleRows) {
     const role = roleForm.value[row.key];
     // 细分用途和媒体解析都可以留空：留空表示跟随它所属的那一档。
-    if (!role && (row.key === "media_parse" || purposeRoleKeys.includes(row.key as (typeof purposeRoleKeys)[number]))) continue;
+    if (!role && (row.key === "media_parse" || purposeRoleKeys.includes(row.key as (typeof purposeRoleKeys)[number]) || isMediaRole(row.key))) continue;
     // 跟随对话的那几档没有自己的提供商和模型，跳过校验；对话本身没有这个选项。
     if (row.key !== "chat" && role?.follow_chat) continue;
     if (!role || (!role.profile_id && !role.group && !(role.provider_id && role.model_id))) {
@@ -3994,7 +4104,8 @@ async function save(): Promise<void> {
         model: role.model.trim(),
         provider_id: role.provider_id,
         model_id: role.model_id,
-        fallbacks: role.fallbacks?.map((fallback) => ({ ...fallback, model: fallback.model.trim() }))
+        fallbacks: role.fallbacks?.map((fallback) => ({ ...fallback, model: fallback.model.trim() })),
+        params: role.params
       };
       }
     }

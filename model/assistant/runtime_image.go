@@ -120,6 +120,7 @@ func (r *Runtime) replyRuleVoiceCQ(ctx context.Context, event MessageEvent, rule
 	}
 	if plugin == nil {
 		plugin = NewVoiceTTSPlugin(nil)
+		plugin.SetSpeechSynthesizer(r.slotSpeechSynthesizer)
 	}
 	plugin.SetLocalMediaSharer(localMedia)
 	tool := &dianaTTSTool{plugin: plugin, settings: settings}
