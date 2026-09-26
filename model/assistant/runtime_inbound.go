@@ -46,6 +46,15 @@ func (r *Runtime) HandleEvent(ctx context.Context, event MessageEvent) error {
 	if r.observeBotMuteNotice(ctx, event) {
 		return nil
 	}
+	if event.selfSent {
+		// message_sent：接入端推回来的机器人自己发出的消息。只用来确认送达和记
+		// self_echo_at，不回复、不再记一遍聊天记录——Diana 自己发的消息发送路径
+		// 已经按真实 message_id 记过了（rememberOutgoingWithMessageID），这里再走
+		// observeSelfMessage 会让插件把同一条看两遍。
+		r.observeOutboundEcho(event)
+		r.recordInboundSelfEcho(event)
+		return nil
+	}
 	if !isRecallNotice(event) && r.isSelfMessage(event) {
 		r.observeOutboundEcho(event)
 		r.observeSelfMessage(ctx, event)

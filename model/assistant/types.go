@@ -193,6 +193,9 @@ type MessageEvent struct {
 	// 跑完后不生成、不发送，内容是禁言说明。mutedSkipImages 表示这期间不识图。
 	mutedJudgeOnly  string
 	mutedSkipImages bool
+	// selfSent 表示这是接入端用 post_type=message_sent 推回来的机器人自己发出的
+	// 消息（NapCat、SnowLuma 都这么推），见 HandleEvent。
+	selfSent bool
 	// tempSessionGroupID 只在「给非好友发私聊」时有值：QQ 的临时会话要靠共同群
 	// 才发得出去。它是一次投递的路由提示，不是会话身份的一部分——写成导出字段
 	// 就会跟着事件落库，让这条私聊在历史里看起来像发生在那个群里。

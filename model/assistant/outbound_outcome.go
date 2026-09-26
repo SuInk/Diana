@@ -53,6 +53,58 @@ func (e *outboundOutcomeUnknownError) Unwrap() []error {
 	return []error{ErrOutboundOutcomeUnknown, e.cause}
 }
 
+// oneBotPostTypeMessageSent 是 NapCat、SnowLuma 推送机器人自己发出的消息用的
+// post_type。以前三条连接都只收 message/notice/request，这一类整个被丢掉：
+// 生产上两天 876 条回复，一条回推都没记到。
+const oneBotPostTypeMessageSent = "message_sent"
+
+// oneBotDispatchedPostType 是需要交给运行时处理的事件类型。
+func oneBotDispatchedPostType(postType string) bool {
+	switch postType {
+	case "message", oneBotPostTypeMessageSent, "notice", "request":
+		return true
+	}
+	return false
+}
+
+// errOneBotDisconnectedAwaitingResponse 是正向连接在请求写出后断开、等回执的
+// 调用被统一唤醒时的错误。请求已经到了接入端，照样算结果不明。
+var errOneBotDisconnectedAwaitingResponse = errors.New("diana: onebot websocket disconnected")
+
+// oneBotBridgeSendTimeoutMarkers 是接入端自己等 QQ 发送结果超时回的报错。它是
+// 一个明确的失败回执，但接入端只是没等到 QQ 的确认，消息常常随后照样出现在群里。
+// 这类按结果不明处理，先确认再说。「发送消息失败」后面带着 result= 的是 QQ 给的
+// 拒收码（120 之类，可能是禁言或风控），仍然是确定失败。
+var oneBotBridgeSendTimeoutMarkers = []string{
+	"timeout: ntevent",
+	"发送消息超时",
+	"sendmsg timeout",
+}
+
+// classifyOneBotSendFailure 把接入端回来的失败再分一次：断线、接入端自己超时的
+// 失败都可能已经发出去了，改标成结果不明。
+func classifyOneBotSendFailure(action string, err error) error {
+	if err == nil || errors.Is(err, ErrOutboundOutcomeUnknown) {
+		return err
+	}
+	if errors.Is(err, errOneBotDisconnectedAwaitingResponse) {
+		return &outboundOutcomeUnknownError{action: action, cause: err}
+	}
+	if !strings.HasPrefix(action, "send_") {
+		return err
+	}
+	message := strings.ToLower(err.Error())
+	for _, marker := range oneBotBridgeSendTimeoutMarkers {
+		if strings.Contains(message, marker) {
+			return &outboundOutcomeUnknownError{action: action, cause: err}
+		}
+	}
+	if strings.Contains(message, "发送消息失败") && !strings.Contains(message, "result=") {
+		return &outboundOutcomeUnknownError{action: action, cause: err}
+	}
+	return err
+}
+
 // oneBotActionError 是接入端明确回的失败。文本和以前的 errors.New 一样，多带
 // 一个 retcode 供分类用。
 type oneBotActionError struct {
@@ -65,6 +117,18 @@ func (e *oneBotActionError) Error() string { return e.message }
 // oneBotInvalidParamsRetCode 是 OneBot v11 标准里的「请求参数错误」：NapCat 在参数
 // 校验不过时回它，这条请求原样再发多少遍都一样。
 const oneBotInvalidParamsRetCode = 1400
+
+const oneBotHTTPBadRequestRetCode = 400
+
+func oneBotInvalidParamsText(message string) bool {
+	message = strings.ToLower(message)
+	for _, marker := range []string{"param", "参数", "invalid", "validat"} {
+		if strings.Contains(message, marker) {
+			return true
+		}
+	}
+	return false
+}
 
 // errOutboundPermanentRejection 标记「这条消息本身就发不出去」的失败。
 var errOutboundPermanentRejection = errors.New("diana: outbound message is invalid and will not be retried")
@@ -96,8 +160,15 @@ func isPermanentOutboundRejection(err error) bool {
 		return true
 	}
 	var actionErr *oneBotActionError
-	if errors.As(err, &actionErr) && actionErr.retCode == oneBotInvalidParamsRetCode {
-		return true
+	if errors.As(err, &actionErr) {
+		if actionErr.retCode == oneBotInvalidParamsRetCode {
+			return true
+		}
+		// NapCat 的 HTTP 服务端参数校验不过回 400。400 也可能是别的请求错误，
+		// 所以还要看报错里说的是不是参数问题。
+		if actionErr.retCode == oneBotHTTPBadRequestRetCode && oneBotInvalidParamsText(actionErr.message) {
+			return true
+		}
 	}
 	message := strings.ToLower(err.Error())
 	for _, marker := range permanentOutboundRejectionMarkers {
@@ -126,7 +197,7 @@ func oneBotAwaitResponse(ctx context.Context, action string, resultCh <-chan cal
 	case <-ctx.Done():
 		return nil, &outboundOutcomeUnknownError{action: action, cause: ctx.Err()}
 	case result := <-resultCh:
-		return result.data, result.err
+		return result.data, classifyOneBotSendFailure(action, result.err)
 	}
 }
 
@@ -319,8 +390,8 @@ func newObservedOutboundMessage(event MessageEvent, at time.Time) observedOutbou
 	return observedOutboundMessage{event: event, shape: newOutboundShape(text.String(), media), images: images, at: at}
 }
 
-func (m observedOutboundMessage) matches(target MessageEvent, fingerprint outboundConfirmFingerprint) bool {
-	if strings.TrimSpace(m.event.MessageID) == "" || !sameOutboundTarget(m.event, target) {
+func (m observedOutboundMessage) matches(target MessageEvent, fingerprint outboundConfirmFingerprint, since time.Time) bool {
+	if strings.TrimSpace(m.event.MessageID) == "" || !sameOutboundTarget(m.event, target, since) {
 		return false
 	}
 	for _, piece := range fingerprint.pieces {
@@ -331,41 +402,59 @@ func (m observedOutboundMessage) matches(target MessageEvent, fingerprint outbou
 	return false
 }
 
-func sameOutboundTarget(observed, target MessageEvent) bool {
+func sameOutboundTarget(observed, target MessageEvent, since time.Time) bool {
 	if a, b := strings.TrimSpace(observed.ProfileID), strings.TrimSpace(target.ProfileID); a != "" && b != "" && a != b {
+		return false
+	}
+	if a, b := strings.TrimSpace(observed.SelfID), strings.TrimSpace(target.SelfID); a != "" && b != "" && a != b {
 		return false
 	}
 	switch target.Kind {
 	case EventKindGroup:
 		return observed.Kind == EventKindGroup && strings.TrimSpace(observed.GroupID) == strings.TrimSpace(target.GroupID)
 	case EventKindPrivate:
-		// 私聊回推的 user_id 是机器人自己，对方在 target_id 里；没给 target_id 的
-		// 实现只能靠正文和时间窗认。
-		peer := strings.TrimSpace(observed.TargetID)
-		return observed.Kind == EventKindPrivate && (peer == "" || peer == strings.TrimSpace(target.UserID))
+		if observed.Kind != EventKindPrivate {
+			return false
+		}
+		// 私聊回推的 user_id 是机器人自己，对方在 target_id 里。
+		if peer := strings.TrimSpace(observed.TargetID); peer != "" {
+			return peer == strings.TrimSpace(target.UserID)
+		}
+		// 没给 target_id 的实现分不出发给了谁，光凭正文不认：还得是同一个机器人
+		// 账号、而且就在这次请求在途的那段时间里发出的。
+		if strings.TrimSpace(observed.SelfID) == "" || strings.TrimSpace(target.SelfID) == "" || observed.Time <= 0 {
+			return false
+		}
+		sent := time.Unix(observed.Time, 0)
+		return !sent.Before(since.Add(-outboundConfirmClockSkew)) &&
+			!sent.After(since.Add(oneBotMediaActionTimeout+outboundConfirmClockSkew))
 	}
 	return false
 }
 
+// outboundClaimKey 标识一条已经认领的消息：同一个 message_id 在不同机器人账号、
+// 不同会话里可能各有一条，所以带上账号和会话。
 func outboundClaimKey(event MessageEvent, messageID string) string {
 	messageID = strings.TrimSpace(messageID)
 	if messageID == "" {
 		return ""
 	}
+	account := firstNonEmpty(strings.TrimSpace(event.ProfileID), strings.TrimSpace(event.SelfID))
+	conversation := strings.TrimSpace(event.UserID)
 	if event.Kind == EventKindGroup {
-		return "group\x00" + strings.TrimSpace(event.GroupID) + "\x00" + messageID
+		conversation = strings.TrimSpace(event.GroupID)
 	}
-	return string(event.Kind) + "\x00" + messageID
+	return strings.Join([]string{account, string(event.Kind), conversation, messageID}, "\x00")
 }
 
 const (
-	defaultOutboundEchoWait        = 2 * time.Minute
-	defaultOutboundHistoryTimeout  = 15 * time.Second
-	outboundConfirmHistoryCount    = 20
-	outboundEchoRetention          = 5 * time.Minute
-	outboundEchoMaxEntries         = 256
-	outboundClaimRetention         = 15 * time.Minute
-	outboundHistoryClockSkewWindow = 5 * time.Second
+	defaultOutboundEchoWait       = 2 * time.Minute
+	defaultOutboundHistoryTimeout = 15 * time.Second
+	outboundConfirmHistoryCount   = 50
+	outboundEchoRetention         = 5 * time.Minute
+	outboundEchoMaxEntries        = 256
+	outboundClaimRetention        = 15 * time.Minute
+	outboundConfirmClockSkew      = 30 * time.Second
 )
 
 // outboundEchoTracker 记着最近几分钟机器人自己消息的回推，以及哪些 message_id
@@ -419,6 +508,26 @@ func (t *outboundEchoTracker) observe(event MessageEvent) {
 	}
 }
 
+// observed 找已经收到的、发往同一会话的某条消息的回推。
+func (t *outboundEchoTracker) observed(target MessageEvent, messageID string) (MessageEvent, bool) {
+	messageID = strings.TrimSpace(messageID)
+	if messageID == "" {
+		return MessageEvent{}, false
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for _, echo := range t.echoes {
+		if strings.TrimSpace(echo.event.MessageID) != messageID {
+			continue
+		}
+		if target.Kind == EventKindGroup && strings.TrimSpace(echo.event.GroupID) != strings.TrimSpace(target.GroupID) {
+			continue
+		}
+		return echo.event, true
+	}
+	return MessageEvent{}, false
+}
+
 // claim 把一个 message_id 认领给一次已经确定送达的发送，之后的确认不会再拿它
 // 当作别的消息的证据。
 func (t *outboundEchoTracker) claim(event MessageEvent, messageID string) {
@@ -458,10 +567,10 @@ func (t *outboundEchoTracker) pruneLocked(now time.Time) {
 
 // pickLocked 在候选里挑一条没认领过的：同样正文有好几条时优先图片 MD5 对得上
 // 的，其次最早的。挑中就顺手认领。
-func (t *outboundEchoTracker) pickLocked(target MessageEvent, fingerprint outboundConfirmFingerprint, imageMD5 []string, candidates []observedOutboundMessage) (string, bool) {
+func (t *outboundEchoTracker) pickLocked(target MessageEvent, fingerprint outboundConfirmFingerprint, imageMD5 []string, since time.Time, candidates []observedOutboundMessage) (string, bool) {
 	best := -1
 	for index, candidate := range candidates {
-		if !candidate.matches(target, fingerprint) || t.claimedLocked(target, candidate.event.MessageID) {
+		if !candidate.matches(target, fingerprint, since) || t.claimedLocked(target, candidate.event.MessageID) {
 			continue
 		}
 		if best < 0 {
@@ -495,7 +604,7 @@ func (t *outboundEchoTracker) waitForEcho(ctx context.Context, target MessageEve
 				candidates = append(candidates, echo)
 			}
 		}
-		messageID, found := t.pickLocked(target, fingerprint, imageMD5, candidates)
+		messageID, found := t.pickLocked(target, fingerprint, imageMD5, since, candidates)
 		if found {
 			t.mu.Unlock()
 			return messageID, true, nil
@@ -536,7 +645,7 @@ var errOutboundOutcomeUnconfirmed = errors.New("diana: outbound outcome could no
 // confirmOutboundOutcome 包住一次发送：结果不明时先确认、不直接重发。
 //
 //  1. 等最多两分钟机器人自己这条消息的回推；
-//  2. 没等到就翻最近 20 条历史找这条；
+//  2. 没等到就翻最近 50 条历史找这条；
 //  3. 两边都说没有才重发一次。这次重发如果又是结果不明，同样先确认（两次发送
 //     任何一次的回推都算数），还是没有就放下这条，不再进指数退避。
 //
@@ -562,6 +671,11 @@ func (r *Runtime) confirmOutboundOutcome(ctx context.Context, event MessageEvent
 			return result, err
 		}
 		r.logOutboundOutcome(event, action, applog.LevelInfo, "outbound_outcome_unknown", "发送结果不明（超时），等待回执确认", err.Error(), nil)
+		// 确认加上可能的一次重发最坏要好几分钟，入站租约只有 10 分钟、生成回复已经
+		// 用掉一截。租约到期会被另一个 worker 领走重新生成再发一遍，正是这里要防的
+		// 重复，所以按这一轮确认和重发的上限把租约往后推。
+		echoWait, historyTimeout := r.outboundEchoes.timings()
+		extendInboundLease(ctx, echoWait+historyTimeout+oneBotMediaActionTimeout+time.Minute)
 		messageID, source, confirmErr := r.confirmOutboundDelivered(ctx, event, fingerprint, since)
 		if messageID != "" {
 			r.logOutboundOutcome(event, action, applog.LevelInfo, "outbound_outcome_confirmed", "已确认送达（"+source+"）", "", map[string]any{"outbound_message_id": messageID, "confirmed_by": source})
@@ -639,8 +753,8 @@ func (r *Runtime) findOutboundInHistory(ctx context.Context, event MessageEvent,
 	if err != nil {
 		return "", err
 	}
-	// 历史里的时间是接入端的秒级时间，放宽几秒免得时钟差把刚发的那条挡在外面。
-	earliest := since.Add(-outboundHistoryClockSkewWindow).Unix()
+	// 历史里的时间是接入端的秒级时间，放宽 30 秒免得两边时钟差把刚发的那条挡在外面。
+	earliest := since.Add(-outboundConfirmClockSkew).Unix()
 	candidates := make([]observedOutboundMessage, 0, outboundConfirmHistoryCount)
 	for _, item := range oneBotHistoryItems(data) {
 		observed, ok := r.historyEventFromData(session, item)
@@ -650,12 +764,16 @@ func (r *Runtime) findOutboundInHistory(ctx context.Context, event MessageEvent,
 		if observed.Time > 0 && observed.Time < earliest {
 			continue
 		}
+		if session.Kind == EventKindPrivate && strings.TrimSpace(observed.TargetID) == "" {
+			// 好友历史本身就只有和这个人的对话。
+			observed.TargetID = session.ID
+		}
 		candidates = append(candidates, newObservedOutboundMessage(observed, time.Unix(observed.Time, 0)))
 	}
 	t := &r.outboundEchoes
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	messageID, _ := t.pickLocked(event, fingerprint, imageMD5, candidates)
+	messageID, _ := t.pickLocked(event, fingerprint, imageMD5, since, candidates)
 	return messageID, nil
 }
 

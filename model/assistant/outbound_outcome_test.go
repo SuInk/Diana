@@ -6,7 +6,9 @@ package assistant
 import (
 	"bytes"
 	"context"
+	"crypto/hmac"
 	"crypto/md5"
+	"crypto/sha1"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -179,28 +181,64 @@ func writeOutcomeTestImage(t *testing.T, content string) (string, string) {
 	return path, strings.ToUpper(hex.EncodeToString(sum[:]))
 }
 
-// napCatGroupEcho 是 NapCat 回推机器人自己群消息的原样结构：引用段在前，图片的
-// file 是内容 MD5 加扩展名，url 是 QQ 的媒体地址。
-func napCatGroupEcho(t *testing.T, messageID int, text, imageMD5 string) MessageEvent {
-	t.Helper()
-	payload := fmt.Sprintf(`{
-		"self_id": %[1]s, "user_id": %[1]s, "time": %[2]d, "message_id": %[3]d, "message_seq": %[3]d, "real_id": %[3]d,
-		"message_type": "group", "sub_type": "normal", "post_type": "message", "group_id": %[4]s, "font": 14,
-		"sender": {"user_id": %[1]s, "nickname": "Diana", "card": "", "role": "member"},
-		"raw_message": "[CQ:reply,id=12345]%[5]s[CQ:image,file=%[6]s.png]",
-		"message_format": "array",
-		"message": [
-			{"type": "reply", "data": {"id": "12345"}},
-			{"type": "text", "data": {"text": %[7]q}},
-			{"type": "image", "data": {"summary": "", "file": "%[6]s.png", "sub_type": 0,
-				"url": "https://multimedia.nt.qq.com.cn/download?appid=1407&fileid=outcome", "file_size": "18"}}
-		]
-	}`, outcomeTestSelfID, time.Now().Unix(), messageID, outcomeTestGroupID, text, imageMD5, text)
-	var envelope oneBotEnvelope
-	if err := json.Unmarshal([]byte(payload), &envelope); err != nil {
-		t.Fatal(err)
+// napCatMessageSentFrame 是 NapCat / SnowLuma 推回机器人自己发出的消息的原样帧：
+// post_type 是 message_sent，user_id 等于 self_id；私聊的对方在 target_id 里。
+// 群里带引用的生成图，回推是 reply 段 + 文本 + 图片段，图片的 file 是内容 MD5
+// 加扩展名，url 是 QQ 的媒体地址。imageMD5 为空时只有文本段。
+func napCatMessageSentFrame(messageID int, messageType, peerID, text, imageMD5 string) []byte {
+	segments := []any{
+		map[string]any{"type": "reply", "data": map[string]any{"id": "12345"}},
+		map[string]any{"type": "text", "data": map[string]any{"text": text}},
 	}
-	return messageEventFromEnvelope(envelope)
+	raw := "[CQ:reply,id=12345]" + text
+	if imageMD5 != "" {
+		segments = append(segments, map[string]any{"type": "image", "data": map[string]any{
+			"summary": "", "file": imageMD5 + ".png", "sub_type": 0,
+			"url":       "https://multimedia.nt.qq.com.cn/download?appid=1407&fileid=outcome",
+			"file_size": "18",
+		}})
+		raw += "[CQ:image,file=" + imageMD5 + ".png]"
+	}
+	frame := map[string]any{
+		"self_id": 10000, "user_id": 10000, "time": time.Now().Unix(),
+		"message_id": messageID, "message_seq": messageID, "real_id": messageID,
+		"message_type": messageType, "sub_type": "normal", "post_type": "message_sent", "font": 14,
+		"sender":         map[string]any{"user_id": 10000, "nickname": "Diana", "card": "", "role": "member"},
+		"raw_message":    raw,
+		"message_format": "array",
+		"message":        segments,
+	}
+	if messageType == "group" {
+		frame["group_id"] = mustAtoi(peerID)
+	} else {
+		frame["sub_type"] = "friend"
+		frame["target_id"] = mustAtoi(peerID)
+	}
+	encoded, _ := json.Marshal(frame)
+	return encoded
+}
+
+func mustAtoi(value string) int {
+	parsed, _ := strconv.Atoi(value)
+	return parsed
+}
+
+// newEchoFeed 是一条反向 WebSocket 连接的收帧入口，事件交给 runtime.HandleEvent，
+// 和线上接入端推帧走同一条路。
+func newEchoFeed(runtime *Runtime) *OneBotReverseServer {
+	server := NewOneBotReverseServer(OneBotConfig{Endpoint: "ws://127.0.0.1:18080/onebot/v11/ws"})
+	server.mu.Lock()
+	server.handler = runtime.HandleEvent
+	server.ctx = context.Background()
+	server.mu.Unlock()
+	return server
+}
+
+func feedFrame(t *testing.T, server *OneBotReverseServer, frame []byte) {
+	t.Helper()
+	if err := server.handleFrame(frame); err != nil {
+		t.Errorf("handleFrame() error = %v", err)
+	}
 }
 
 func selfHistoryItem(messageID int, when time.Time, text string) map[string]any {
@@ -223,13 +261,17 @@ func TestAmbiguousSendConfirmedByEchoIsNotResent(t *testing.T) {
 	imagePath, imageMD5 := writeOutcomeTestImage(t, "generated image one")
 	channel := &ambiguousOutboundChannel{outcomes: []error{ambiguousSendError("send_group_msg")}}
 	runtime := newAmbiguousOutcomeRuntime(t, channel)
-	// 回推在超时之前就进来了：先一条同样正文、别的图的（另一次发送），再是真正那条。
+	runtime.outboundEchoes.echoWait = 5 * time.Second
+	feed := newEchoFeed(runtime)
+	// 回推在超时之前就推过来了：先一条同样正文、别的图的（另一次发送），再是真正那条。
 	channel.onSend = func(attempt int) {
 		if attempt != 1 {
 			return
 		}
-		runtime.observeOutboundEcho(napCatGroupEcho(t, 54320, "图片生成完成。", strings.Repeat("A", 32)))
-		runtime.observeOutboundEcho(napCatGroupEcho(t, 54321, "图片生成完成。", imageMD5))
+		feedFrame(t, feed, napCatMessageSentFrame(54320, "group", outcomeTestGroupID, "图片生成完成。", strings.Repeat("A", 32)))
+		feedFrame(t, feed, napCatMessageSentFrame(54321, "group", outcomeTestGroupID, "图片生成完成。", imageMD5))
+		// 收帧是异步交给 HandleEvent 的；等两条都记下，再让发送超时返回。
+		waitForObservedEchoes(runtime, 2)
 	}
 
 	ctx := withOutboundDeliveryPolicy(context.Background(), recoveringOutboundDeliveryPolicy())
@@ -258,23 +300,22 @@ func TestAmbiguousSendConfirmedByEchoIsNotResent(t *testing.T) {
 	}
 }
 
-// 回推晚于开始等待才到，也要被叫醒认领；走的是完整的入站路径。
-func TestAmbiguousSendWaitsForLateEchoThroughHandleEvent(t *testing.T) {
+// 回推晚于开始等待才到，也要被叫醒认领；这里走正向 WebSocket 的收帧入口。
+func TestAmbiguousSendWaitsForLateEchoThroughForwardFrame(t *testing.T) {
 	channel := &ambiguousOutboundChannel{outcomes: []error{ambiguousSendError("send_group_msg")}}
 	runtime := newAmbiguousOutcomeRuntime(t, channel)
 	runtime.outboundEchoes.echoWait = 5 * time.Second
+	forward := NewOneBotChannel(OneBotConfig{Endpoint: "ws://127.0.0.1:3001"})
 	channel.onSend = func(attempt int) {
 		if attempt != 1 {
 			return
 		}
 		go func() {
-			time.Sleep(3 * time.Millisecond)
-			echo := MessageEvent{
-				Kind: EventKindGroup, GroupID: outcomeTestGroupID, UserID: outcomeTestSelfID, SelfID: outcomeTestSelfID,
-				MessageID: "54330", Time: time.Now().Unix(),
-				Segments: []MessageSegment{{Type: "text", Data: map[string]string{"text": "好的，马上 就来"}}},
+			waitUntilEchoAwaited(runtime)
+			frame := napCatMessageSentFrame(54330, "group", outcomeTestGroupID, "好的，马上 就来", "")
+			if err := forward.handleFrame(context.Background(), runtime.HandleEvent, frame); err != nil {
+				t.Errorf("handleFrame() error = %v", err)
 			}
-			_ = runtime.HandleEvent(context.Background(), echo)
 		}()
 	}
 
@@ -418,6 +459,18 @@ func (c *deliveringSlowChannel) platformCount() int {
 	return len(c.platform)
 }
 
+func waitForObservedEchoes(runtime *Runtime, count int) {
+	for {
+		runtime.outboundEchoes.mu.Lock()
+		observed := len(runtime.outboundEchoes.echoes)
+		runtime.outboundEchoes.mu.Unlock()
+		if observed >= count {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
 // waitUntilEchoAwaited 等到确认流程已经开始等回推，用来模拟「回推晚到」。
 func waitUntilEchoAwaited(runtime *Runtime) {
 	for {
@@ -452,16 +505,13 @@ func TestRepeatedAmbiguousTimeoutsThatAllDeliverProduceOneMessage(t *testing.T) 
 			runtime.outboundEchoes.now = func() time.Time { return base.Add(time.Duration(offset.Load())) }
 			if tc.echoes {
 				runtime.outboundEchoes.echoWait = 5 * time.Second
+				feed := newEchoFeed(runtime)
 				channel.onDeliver = func(messageID int, msg OutgoingMessage) {
 					go func() {
 						// 回推在确认开始等待之后才到，按接入端时间已经过去 45 秒。
 						waitUntilEchoAwaited(runtime)
 						offset.Store(int64(45 * time.Second))
-						runtime.observeOutboundEcho(MessageEvent{
-							Kind: EventKindGroup, GroupID: outcomeTestGroupID, UserID: outcomeTestSelfID, SelfID: outcomeTestSelfID,
-							MessageID: strconv.Itoa(messageID),
-							Segments:  []MessageSegment{{Type: "text", Data: map[string]string{"text": msg.Text}}},
-						})
+						feedFrame(t, feed, napCatMessageSentFrame(messageID, "group", outcomeTestGroupID, msg.Text, ""))
 					}()
 				}
 			}
@@ -646,19 +696,19 @@ func TestOutboundFingerprintAcceptsSplitStandaloneMedia(t *testing.T) {
 		Kind: EventKindGroup, GroupID: outcomeTestGroupID, MessageID: "54350",
 		Segments: []MessageSegment{{Type: "video", Data: map[string]string{"file": "abc.mp4"}}},
 	}, time.Now())
-	if !videoOnly.matches(target, fingerprint) {
+	if !videoOnly.matches(target, fingerprint, time.Now()) {
 		t.Fatal("split video piece did not match")
 	}
 	otherGroup := videoOnly
 	otherGroup.event.GroupID = "20006"
-	if otherGroup.matches(target, fingerprint) {
+	if otherGroup.matches(target, fingerprint, time.Now()) {
 		t.Fatal("echo from another group matched")
 	}
 	unrelated := newObservedOutboundMessage(MessageEvent{
 		Kind: EventKindGroup, GroupID: outcomeTestGroupID, MessageID: "54351",
 		Segments: []MessageSegment{{Type: "text", Data: map[string]string{"text": "视频"}}},
 	}, time.Now())
-	if unrelated.matches(target, fingerprint) {
+	if unrelated.matches(target, fingerprint, time.Now()) {
 		t.Fatal("partial text matched")
 	}
 }
@@ -744,5 +794,230 @@ func TestPermanentRejectionPrivateIsNotRetriedInline(t *testing.T) {
 	}
 	if got := channel.sentCount(); got != 1 {
 		t.Fatalf("send attempts = %d, want 1", got)
+	}
+}
+
+// message_sent 帧三条连接都要收下来，但它是机器人自己发的：只记回推，不回复、
+// 不再记一遍聊天记录。
+func TestMessageSentFrameIsObservedButNotHandledAsInbound(t *testing.T) {
+	channel := &ambiguousOutboundChannel{}
+	runtime := newAmbiguousOutcomeRuntime(t, channel)
+
+	// 反向 WebSocket。
+	feedFrame(t, newEchoFeed(runtime), napCatMessageSentFrame(54500, "group", outcomeTestGroupID, "帮助", ""))
+	waitForObservedEchoes(runtime, 1)
+
+	// 正向 WebSocket。
+	forward := NewOneBotChannel(OneBotConfig{Endpoint: "ws://127.0.0.1:3001"})
+	if err := forward.handleFrame(context.Background(), runtime.HandleEvent, napCatMessageSentFrame(54501, "group", outcomeTestGroupID, "帮助", "")); err != nil {
+		t.Fatal(err)
+	}
+	waitForObservedEchoes(runtime, 2)
+
+	// HTTP 上报。私聊的对方在 target_id 里。
+	httpChannel := NewOneBotHTTPChannel(OneBotConfig{Endpoint: "http://127.0.0.1:3000", HTTPSecret: "event-secret"})
+	httpChannel.mu.Lock()
+	httpChannel.handler = runtime.HandleEvent
+	httpChannel.ctx = context.Background()
+	httpChannel.mu.Unlock()
+	body := napCatMessageSentFrame(54502, "private", outcomeTestUserID, "帮助", "")
+	mac := hmac.New(sha1.New, []byte("event-secret"))
+	_, _ = mac.Write(body)
+	req := httptest.NewRequest(http.MethodPost, "/onebot/v11/http", bytes.NewReader(body))
+	req.Header.Set("X-Signature", "sha1="+hex.EncodeToString(mac.Sum(nil)))
+	recorder := httptest.NewRecorder()
+	httpChannel.ServeHTTP(recorder, req)
+	if recorder.Code != http.StatusNoContent {
+		t.Fatalf("HTTP event status = %d", recorder.Code)
+	}
+	waitForObservedEchoes(runtime, 3)
+
+	var private MessageEvent
+	runtime.outboundEchoes.mu.Lock()
+	for _, echo := range runtime.outboundEchoes.echoes {
+		if echo.event.MessageID == "54502" {
+			private = echo.event
+		}
+	}
+	runtime.outboundEchoes.mu.Unlock()
+	if private.Kind != EventKindPrivate || private.TargetID != outcomeTestUserID {
+		t.Fatalf("private echo = %+v", private)
+	}
+	// 「帮助」是个会触发回复的词；自己发的不能被当成有人来问。
+	if got := channel.sentCount(); got != 0 {
+		t.Fatalf("self-sent frames triggered %d replies", got)
+	}
+	runtime.mu.RLock()
+	historyRows := len(runtime.history[sessionKey(groupOutcomeEvent())]) + len(runtime.history[sessionKey(private)])
+	runtime.mu.RUnlock()
+	if historyRows != 0 {
+		t.Fatalf("self-sent frames were remembered again: %d rows", historyRows)
+	}
+}
+
+// 私聊结果不明，message_sent 回推带着 target_id，按它对上会话。
+func TestAmbiguousPrivateSendConfirmedByMessageSentEcho(t *testing.T) {
+	channel := &ambiguousOutboundChannel{outcomes: []error{ambiguousSendError("send_private_msg")}}
+	runtime := newAmbiguousOutcomeRuntime(t, channel)
+	runtime.outboundEchoes.echoWait = 5 * time.Second
+	feed := newEchoFeed(runtime)
+	channel.onSend = func(attempt int) {
+		if attempt != 1 {
+			return
+		}
+		// 发给另一个人的同样一句不算。
+		feedFrame(t, feed, napCatMessageSentFrame(54510, "private", "10002", "私聊回复", ""))
+		feedFrame(t, feed, napCatMessageSentFrame(54511, "private", outcomeTestUserID, "私聊回复", ""))
+		waitForObservedEchoes(runtime, 2)
+	}
+	event := MessageEvent{Kind: EventKindPrivate, UserID: outcomeTestUserID, SelfID: outcomeTestSelfID, MessageID: "12348"}
+
+	result, err := runtime.sendOutgoingWithResult(context.Background(), event, OutgoingMessage{Text: "私聊回复"})
+	if err != nil {
+		t.Fatalf("sendOutgoingWithResult() error = %v", err)
+	}
+	if got := channel.sentCount(); got != 1 || apiMessageID(result) != "54511" {
+		t.Fatalf("attempts=%d id=%q", got, apiMessageID(result))
+	}
+}
+
+// 没有 target_id 的私聊回推分不出发给了谁：只凭正文不认，还得同一个机器人账号、
+// 就在请求在途的那段时间里发的。
+func TestPrivateEchoWithoutTargetNeedsSameAccountAndTime(t *testing.T) {
+	since := time.Now()
+	fingerprint := outboundFingerprintFromSegments(buildOutgoingSegments(OutgoingMessage{Text: "私聊回复"}))
+	target := MessageEvent{Kind: EventKindPrivate, UserID: outcomeTestUserID, SelfID: outcomeTestSelfID}
+	echo := func(selfID string, sent time.Time) observedOutboundMessage {
+		return newObservedOutboundMessage(MessageEvent{
+			Kind: EventKindPrivate, SelfID: selfID, UserID: selfID, MessageID: "54520", Time: sent.Unix(),
+			Segments: []MessageSegment{{Type: "text", Data: map[string]string{"text": "私聊回复"}}},
+		}, sent)
+	}
+	if !echo(outcomeTestSelfID, since.Add(40*time.Second)).matches(target, fingerprint, since) {
+		t.Fatal("same account within the in-flight window did not match")
+	}
+	if echo("10009", since.Add(40*time.Second)).matches(target, fingerprint, since) {
+		t.Fatal("another bot account matched")
+	}
+	if echo(outcomeTestSelfID, since.Add(-10*time.Minute)).matches(target, fingerprint, since) {
+		t.Fatal("an old message matched on text alone")
+	}
+	unknownSelf := target
+	unknownSelf.SelfID = ""
+	if echo(outcomeTestSelfID, since).matches(unknownSelf, fingerprint, since) {
+		t.Fatal("matched without knowing which account sent the request")
+	}
+}
+
+// 接入端自己等 QQ 超时、正向连接断线，都可能已经发出去了：按结果不明处理。
+// 带 result= 的是 QQ 给的拒收码，仍是确定失败。
+func TestBridgeSideTimeoutsAndDisconnectsAreAmbiguous(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		action    string
+		err       error
+		ambiguous bool
+	}{
+		{"napcat ntevent timeout", "send_group_msg", &oneBotActionError{retCode: 200, message: "Timeout: NTEvent serviceAndMethod:NodeIKernelMsgService/sendMsg ListenerName:NodeIKernelMsgListener/onMsgInfoListUpdate EventRet: {}"}, true},
+		{"napcat bare send failure", "send_group_msg", &oneBotActionError{retCode: 200, message: "发送消息失败"}, true},
+		{"qq rejection code", "send_group_msg", &oneBotActionError{retCode: 200, message: "发送消息失败 result=120 errMsg="}, false},
+		{"timeout on a query", "get_group_msg_history", &oneBotActionError{retCode: 200, message: "Timeout: NTEvent getMsgHistory"}, false},
+		{"disconnect after write", "get_status", errOneBotDisconnectedAwaitingResponse, true},
+	} {
+		resultCh := make(chan callResult, 1)
+		resultCh <- callResult{err: tc.err}
+		_, err := oneBotAwaitResponse(context.Background(), tc.action, resultCh)
+		if got := errors.Is(err, ErrOutboundOutcomeUnknown); got != tc.ambiguous {
+			t.Errorf("%s: ambiguous = %v, want %v (err=%v)", tc.name, got, tc.ambiguous, err)
+		}
+		if isPermanentOutboundRejection(err) {
+			t.Errorf("%s: classified as permanent", tc.name)
+		}
+	}
+}
+
+// NapCat 的 HTTP 服务端参数校验不过回 HTTP 400；正文说是参数问题的算永久失败。
+func TestHTTPBadRequestWithInvalidParamsIsPermanent(t *testing.T) {
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		switch r.URL.Path {
+		case "/send_group_msg":
+			_, _ = w.Write([]byte(`{"status":"failed","retcode":400,"message":"参数错误: group_id 必须是数字"}`))
+		default:
+			_, _ = w.Write([]byte(`{"status":"failed","retcode":400,"message":"bot busy"}`))
+		}
+	}))
+	defer api.Close()
+	channel := NewOneBotHTTPChannel(OneBotConfig{Endpoint: api.URL})
+
+	_, err := channel.CallAPI(context.Background(), "send_group_msg", map[string]any{"group_id": "x"})
+	if !isPermanentOutboundRejection(err) {
+		t.Fatalf("invalid params error = %v, want permanent", err)
+	}
+	_, err = channel.CallAPI(context.Background(), "send_private_msg", map[string]any{"user_id": 1})
+	if err == nil || isPermanentOutboundRejection(err) {
+		t.Fatalf("other 400 error = %v, want retryable", err)
+	}
+}
+
+// 确认加一次重发最坏要好几分钟，入站租约会按这个上限往后推，免得被别的 worker
+// 领走重新生成一遍。
+func TestAmbiguousConfirmationExtendsInboundLease(t *testing.T) {
+	channel := &ambiguousOutboundChannel{
+		outcomes: []error{ambiguousSendError("send_group_msg")},
+		history:  []map[string]any{selfHistoryItem(54530, time.Now(), "续租")},
+	}
+	runtime := newAmbiguousOutcomeRuntime(t, channel)
+	var extendedTo []time.Time
+	ctx := context.WithValue(context.Background(), inboundLeaseExtensionContextKey{}, func(until time.Time) error {
+		extendedTo = append(extendedTo, until)
+		return nil
+	})
+
+	if _, err := runtime.sendOutgoingWithResult(ctx, groupOutcomeEvent(), OutgoingMessage{Text: "续租"}); err != nil {
+		t.Fatalf("sendOutgoingWithResult() error = %v", err)
+	}
+	if len(extendedTo) != 1 || time.Until(extendedTo[0]) < oneBotMediaActionTimeout {
+		t.Fatalf("lease extensions = %v", extendedTo)
+	}
+}
+
+type selfEchoAuditStore struct {
+	*memoryInboundEventStore
+	mu     sync.Mutex
+	echoes []string
+}
+
+func (s *selfEchoAuditStore) RecordInboundEventDelivery(context.Context, MessageEvent, OutboundDeliveryStage, string, string) error {
+	return nil
+}
+
+func (s *selfEchoAuditStore) RecordInboundEventSelfEcho(_ context.Context, outboundMessageID string, _ time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.echoes = append(s.echoes, outboundMessageID)
+	return nil
+}
+
+// 回推比发送回执先到时，那一刻还没有 outbound_message_id 可关联；回执记下后补一次，
+// self_echo_at 才不会一直空着。
+func TestSelfEchoBeforeAckIsLinkedAfterAck(t *testing.T) {
+	channel := &ambiguousOutboundChannel{}
+	runtime := newAmbiguousOutcomeRuntime(t, channel)
+	store := &selfEchoAuditStore{memoryInboundEventStore: newMemoryInboundEventStore()}
+	runtime.SetInboundEventStore(store)
+	feed := newEchoFeed(runtime)
+	channel.onSend = func(int) {
+		feedFrame(t, feed, napCatMessageSentFrame(60001, "group", outcomeTestGroupID, "先到的回推", ""))
+		waitForObservedEchoes(runtime, 1)
+	}
+
+	if _, err := runtime.sendOutgoingWithResult(context.Background(), groupOutcomeEvent(), OutgoingMessage{Text: "先到的回推"}); err != nil {
+		t.Fatal(err)
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if len(store.echoes) != 2 || store.echoes[1] != "60001" {
+		t.Fatalf("self echo links = %v, want one on arrival and one after the ack", store.echoes)
 	}
 }

@@ -159,6 +159,39 @@ type HistorySession struct {
 	LastEventTime int64
 }
 
+// InboundLeaseExtender 是可选能力：处理中途确定还要等一阵（比如发送结果不明、
+// 在等回推确认）时把租约往后推，免得租约到期被另一个 worker 领走重新生成一遍。
+type InboundLeaseExtender interface {
+	ExtendInboundLease(ctx context.Context, id string, leaseOwner string, leaseUntil time.Time) error
+}
+
+type inboundLeaseExtensionContextKey struct{}
+
+// withInboundLeaseExtension 让这条入站事件的处理链路能延长自己的租约。
+func withInboundLeaseExtension(ctx context.Context, store InboundEventStore, id, leaseOwner string) context.Context {
+	extender, ok := store.(InboundLeaseExtender)
+	if !ok || strings.TrimSpace(id) == "" {
+		return ctx
+	}
+	extend := func(until time.Time) error {
+		extendCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		return extender.ExtendInboundLease(extendCtx, id, leaseOwner, until)
+	}
+	return context.WithValue(ctx, inboundLeaseExtensionContextKey{}, extend)
+}
+
+// extendInboundLease 把当前入站事件的租约延到至少 now+d；不在入站处理链路里时什么也不做。
+func extendInboundLease(ctx context.Context, d time.Duration) {
+	extend, ok := ctx.Value(inboundLeaseExtensionContextKey{}).(func(time.Time) error)
+	if !ok {
+		return
+	}
+	if err := extend(time.Now().Add(d)); err != nil {
+		log.Printf("diana inbound lease extension failed: %v", err)
+	}
+}
+
 // InboundEventStore persists inbound messages before routing or reply generation.
 type InboundEventStore interface {
 	EnqueueInboundEvent(ctx context.Context, session string, event MessageEvent, priority ...int) (id string, inserted bool, err error)
@@ -578,7 +611,7 @@ func (r *Runtime) runInboundWorker(ctx context.Context, leaseOwner string, store
 			// 自己领到了活，说明队列里可能还有：叫醒一个同伴一起干。没有这一下，
 			// 退避期间的突发消息会被一个 worker 串行地慢慢消化。
 			r.wakeInboundWorkers()
-			outcome, processErr := r.processInboundQueueItem(ctx, item)
+			outcome, processErr := r.processInboundQueueItem(withInboundLeaseExtension(ctx, store, item.ID, leaseOwner), item)
 			commitCtx, commitCancel := context.WithTimeout(context.Background(), 5*time.Second)
 			switch {
 			case processErr == nil:

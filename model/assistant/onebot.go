@@ -6,7 +6,6 @@ package assistant
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -183,7 +182,7 @@ func (c *OneBotChannel) Connect(ctx context.Context, handler EventHandler) error
 		c.pending.Range(func(key, value any) bool {
 			if result, ok := c.pending.LoadAndDelete(key); ok {
 				select {
-				case result.(chan callResult) <- callResult{err: errors.New("diana: onebot websocket disconnected")}:
+				case result.(chan callResult) <- callResult{err: errOneBotDisconnectedAwaitingResponse}:
 				default:
 				}
 			}
@@ -548,7 +547,7 @@ func (c *OneBotChannel) handleFrame(ctx context.Context, handler EventHandler, d
 		}
 		return nil
 	}
-	if envelope.PostType != "message" && envelope.PostType != "notice" && envelope.PostType != "request" {
+	if !oneBotDispatchedPostType(envelope.PostType) {
 		// 其它未知事件当前不进入机器人处理链路。
 		return nil
 	}
@@ -740,6 +739,9 @@ func messageEventFromEnvelope(envelope oneBotEnvelope) MessageEvent {
 	}
 	// 私聊里机器人自己消息的回推，对方在 target_id 里；确认发送结果时靠它对上会话。
 	event.TargetID = stringifyID(envelope.TargetID)
+	// message_sent 是接入端推回来的机器人自己发出的消息，只用来确认送达，
+	// 不能当成有人发来的消息去回复。
+	event.selfSent = envelope.PostType == oneBotPostTypeMessageSent
 	event.ToMe = hasAt(segments, selfID)
 	return event
 }

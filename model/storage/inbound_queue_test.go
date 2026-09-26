@@ -688,3 +688,46 @@ func TestGroupSeqGapCountsMissingMessagesExcludingBotReplies(t *testing.T) {
 		t.Fatalf("gap outside window = %#v err=%v", unknown, err)
 	}
 }
+
+// 发送结果不明、在等回推确认时会延长租约：只有持有者能延，且只往后推不缩短。
+func TestExtendInboundLeaseOnlyByHolderAndNeverShortens(t *testing.T) {
+	ctx := context.Background()
+	store := openInboundTestStore(t, filepath.Join(t.TempDir(), "inbound.db"))
+	defer func() { _ = store.Close() }()
+	id, _, err := store.EnqueueInboundEvent(ctx, "group:100", inboundTestEvent("message-lease", "hello", 20))
+	if err != nil {
+		t.Fatal(err)
+	}
+	original := time.Now().Add(time.Minute)
+	if _, ok, err := store.ClaimNextInboundEvent(ctx, "worker-1", original); err != nil || !ok {
+		t.Fatalf("claim ok=%v err=%v", ok, err)
+	}
+	leaseUntil := func() int64 {
+		var value int64
+		if err := store.db.QueryRowContext(ctx, `SELECT lease_until FROM inbound_events WHERE id = ?`, id).Scan(&value); err != nil {
+			t.Fatal(err)
+		}
+		return value
+	}
+
+	if err := store.ExtendInboundLease(ctx, id, "worker-2", time.Now().Add(time.Hour)); err == nil {
+		t.Fatal("another worker extended the lease")
+	}
+	extended := time.Now().Add(5 * time.Minute)
+	if err := store.ExtendInboundLease(ctx, id, "worker-1", extended); err != nil {
+		t.Fatal(err)
+	}
+	if got := leaseUntil(); got != extended.UTC().UnixNano() {
+		t.Fatalf("lease_until = %d, want %d", got, extended.UTC().UnixNano())
+	}
+	if err := store.ExtendInboundLease(ctx, id, "worker-1", original); err != nil {
+		t.Fatal(err)
+	}
+	if got := leaseUntil(); got != extended.UTC().UnixNano() {
+		t.Fatal("extension shortened the lease")
+	}
+	// 延长期间别的 worker 领不到它。
+	if _, ok, err := store.ClaimNextInboundEvent(ctx, "worker-2", time.Now().Add(time.Minute)); err != nil || ok {
+		t.Fatalf("extended lease was reclaimed ok=%v err=%v", ok, err)
+	}
+}

@@ -204,6 +204,11 @@ func (r *Runtime) sendOutgoingWithResult(ctx context.Context, event MessageEvent
 	messageID := apiMessageID(result)
 	if r.outboundResultAcknowledged(event, result) {
 		r.recordInboundDelivery(event, OutboundDeliveryAcknowledged, messageID, "")
+		// 回推常常比发送回执先到，那时还没有 outbound_message_id 可关联，self_echo_at
+		// 就一直空着；回执记下之后补关联一次。
+		if echo, ok := r.outboundEchoes.observed(event, messageID); ok {
+			r.recordInboundSelfEcho(echo)
+		}
 	}
 	r.recordOutboundStep(ctx, stepKey, messageID)
 	if !telegramMessageNeedsSteps(msg) {
