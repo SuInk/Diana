@@ -30,6 +30,18 @@ func TestLiveStickerSelectionReplay(t *testing.T) {
 		t.Skip("set DIANA_STICKER_REPLAY_DIR and DIANA_STICKER_SELECT_LIBRARY to replay sticker selection")
 	}
 	library := loadStickerLibraryRows(t, libraryPath)
+	// 库存里的路径在生产机上，本机不存在；候选阶段会按失效文件滤掉。换成本地占位文件，
+	// 输出里仍然给原路径，方便事后去生产机取图。
+	stubDir := t.TempDir()
+	remotePaths := map[string]string{}
+	for index := range library {
+		remotePaths[library[index].Hash] = library[index].Path
+		stub := stubDir + "/" + library[index].Hash
+		if err := os.WriteFile(stub, []byte(library[index].Hash), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		library[index].Path = stub
+	}
 	samples := loadStickerReplaySamples(t, dir, envInt("DIANA_STICKER_REPLAY_TAIL", 60))
 	samples = filterStickerReplaySamples(t, samples)
 	metas := loadStickerSampleMeta(t, dir)
@@ -62,7 +74,7 @@ func TestLiveStickerSelectionReplay(t *testing.T) {
 			if err == nil || !(strings.Contains(err.Error(), " 503 ") || strings.Contains(err.Error(), " 429 ")) {
 				break
 			}
-			time.Sleep(time.Duration(5*(attempt+1)) * time.Second)
+			time.Sleep(stickerReplayBackoff(err, attempt))
 		}
 		return response, err
 	}
@@ -116,7 +128,7 @@ func TestLiveStickerSelectionReplay(t *testing.T) {
 		_ = json.Unmarshal([]byte(result), &parsed)
 		for _, item := range parsed.Candidates {
 			candidate, _ := tool.searchedCandidate(item.ID)
-			out.Candidates = append(out.Candidates, candidateView{Name: item.Name, Tags: item.Tags, Description: item.Description, Matched: item.Matched, Hash: candidate.Hash, Path: candidate.Path})
+			out.Candidates = append(out.Candidates, candidateView{Name: item.Name, Tags: item.Tags, Description: item.Description, Matched: item.Matched, Hash: candidate.Hash, Path: remotePaths[candidate.Hash]})
 		}
 
 		searchCall.Arguments = input
@@ -137,7 +149,7 @@ func TestLiveStickerSelectionReplay(t *testing.T) {
 			}
 			id, _ := call.Arguments["sticker_id"].(string)
 			if candidate, ok := tool.searchedCandidate(id); ok {
-				out.Chosen = &candidateView{Name: candidate.Summary, Tags: candidate.Tags, Description: candidate.Description, Hash: candidate.Hash, Path: candidate.Path}
+				out.Chosen = &candidateView{Name: candidate.Summary, Tags: candidate.Tags, Description: candidate.Description, Hash: candidate.Hash, Path: remotePaths[candidate.Hash]}
 			}
 		}
 		return out

@@ -11,6 +11,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -97,7 +98,7 @@ func TestLiveStickerTriggerReplay(t *testing.T) {
 					if err == nil || !(strings.Contains(err.Error(), " 503 ") || strings.Contains(err.Error(), " 429 ")) {
 						break
 					}
-					time.Sleep(time.Duration(5*(attempt+1)) * time.Second)
+					time.Sleep(stickerReplayBackoff(err, attempt))
 				}
 				out := result{ID: item.sample.id, Variant: item.variant, Run: item.run, Label: labels[item.sample.id]}
 				if err != nil {
@@ -239,6 +240,15 @@ func loadStickerReplaySamples(t *testing.T, dir string, tail int) []stickerRepla
 	}
 	sort.Slice(samples, func(i, j int) bool { return samples[i].id < samples[j].id })
 	return samples
+}
+
+// stickerReplayBackoff 按网关提示的「Wait Ns」等；没有提示时逐次加长。
+func stickerReplayBackoff(err error, attempt int) time.Duration {
+	if match := regexp.MustCompile(`Wait (\d+)s`).FindStringSubmatch(err.Error()); match != nil {
+		seconds, _ := strconv.Atoi(match[1])
+		return time.Duration(min(seconds, 300)+2) * time.Second
+	}
+	return time.Duration(5*(attempt+1)) * time.Second
 }
 
 // filterStickerReplaySamples 按 DIANA_STICKER_REPLAY_IDS（空白分隔的样本 id）只留指定样本。
