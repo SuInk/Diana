@@ -827,6 +827,13 @@ type BotConfig struct {
 	WeixinBotID    string `json:"weixin_bot_id,omitempty"`
 	WeixinBaseURL  string `json:"weixin_base_url,omitempty"`
 	WeixinUserID   string `json:"weixin_user_id,omitempty"`
+
+	// IMessage* 是 BlueBubbles Server 的连接配置。WebhookToken 是回调地址里 ?token= 的值，
+	// 与服务器密码分开，首次保存时自动生成。
+	IMessageServerURL    string `json:"imessage_server_url,omitempty"`
+	IMessagePassword     string `json:"imessage_password,omitempty"`
+	IMessageWebhookToken string `json:"imessage_webhook_token,omitempty"`
+	IMessagePollSeconds  int    `json:"imessage_poll_seconds,omitempty"`
 }
 
 type ModelRole struct {
@@ -1265,6 +1272,14 @@ type ConfigPayload struct {
 	WeixinUserID             string `json:"weixin_user_id,omitempty"`
 	WeixinBotToken           string `json:"weixin_bot_token,omitempty"`
 	WeixinBotTokenConfigured bool   `json:"weixin_bot_token_configured,omitempty"`
+
+	// iMessage 的服务器密码和 webhook token 只回 configured 标志，显式索取时才回明文。
+	IMessageServerURL              string `json:"imessage_server_url,omitempty"`
+	IMessagePassword               string `json:"imessage_password,omitempty"`
+	IMessagePasswordConfigured     bool   `json:"imessage_password_configured,omitempty"`
+	IMessageWebhookToken           string `json:"imessage_webhook_token,omitempty"`
+	IMessageWebhookTokenConfigured bool   `json:"imessage_webhook_token_configured,omitempty"`
+	IMessagePollSeconds            int    `json:"imessage_poll_seconds,omitempty"`
 }
 
 // DefaultGroupConfig 返回指定群的默认行为配置，只包含群作用域字段。
@@ -1633,6 +1648,9 @@ var (
 	ErrMissingWeComCallbackKeys   = errors.New("assistant: wecom token and encoding aes key are required to receive messages")
 	ErrInvalidFeishuAPIBase       = errors.New("assistant: feishu api base url must be http(s)")
 	ErrInvalidWeixinBaseURL       = errors.New("assistant: weixin base url must be an https weixin.qq.com address")
+	ErrMissingIMessageCredentials = errors.New("assistant: bluebubbles server url and password are required")
+	ErrInvalidIMessageServerURL   = errors.New("assistant: bluebubbles server url must be http(s)")
+	ErrInvalidIMessagePoll        = errors.New("assistant: imessage poll interval must be 0 or between 5 and 3600 seconds")
 )
 
 // NewProfileSet 基于单个机器人配置创建配置集。
@@ -2249,6 +2267,17 @@ func (cfg BotConfig) Validate() error {
 			return ErrInvalidWeixinBaseURL
 		}
 		return nil
+	case PlatformIMessage:
+		if poll := cfg.IMessagePollSeconds; poll != 0 && (poll < imessageMinPollSeconds || poll > 3600) {
+			return ErrInvalidIMessagePoll
+		}
+		if base := strings.TrimSpace(cfg.IMessageServerURL); base != "" && !isHTTPURL(base) {
+			return ErrInvalidIMessageServerURL
+		}
+		if cfg.Enabled && (strings.TrimSpace(cfg.IMessageServerURL) == "" || strings.TrimSpace(cfg.IMessagePassword) == "") {
+			return ErrMissingIMessageCredentials
+		}
+		return nil
 	}
 
 	if cfg.OneBotTransport == OneBotTransportHTTP {
@@ -2477,6 +2506,11 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		WeixinBotID:              cfg.WeixinBotID,
 		WeixinUserID:             cfg.WeixinUserID,
 		WeixinBotTokenConfigured: cfg.WeixinBotToken != "",
+
+		IMessageServerURL:              cfg.IMessageServerURL,
+		IMessagePasswordConfigured:     cfg.IMessagePassword != "",
+		IMessageWebhookTokenConfigured: cfg.IMessageWebhookToken != "",
+		IMessagePollSeconds:            cfg.IMessagePollSeconds,
 	}
 }
 
@@ -2500,6 +2534,8 @@ func PayloadFromConfigWithSecrets(cfg BotConfig) ConfigPayload {
 	payload.WeComToken = cfg.WeComToken
 	payload.WeComEncodingAESKey = cfg.WeComEncodingAESKey
 	payload.WeixinBotToken = cfg.WeixinBotToken
+	payload.IMessagePassword = cfg.IMessagePassword
+	payload.IMessageWebhookToken = cfg.IMessageWebhookToken
 	return payload
 }
 
@@ -2734,6 +2770,16 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 	cfg.WeixinBotID = existing.WeixinBotID
 	cfg.WeixinBaseURL = existing.WeixinBaseURL
 	cfg.WeixinUserID = existing.WeixinUserID
+	cfg.IMessageServerURL = strings.TrimSpace(payload.IMessageServerURL)
+	cfg.IMessagePassword = payload.IMessagePassword
+	cfg.IMessageWebhookToken = payload.IMessageWebhookToken
+	cfg.IMessagePollSeconds = payload.IMessagePollSeconds
+	if cfg.IMessagePassword == "" {
+		cfg.IMessagePassword = existing.IMessagePassword
+	}
+	if cfg.IMessageWebhookToken == "" {
+		cfg.IMessageWebhookToken = existing.IMessageWebhookToken
+	}
 	// 界面保存出来的配置一律是迁移过的：Agent 恒开，模式二选一。
 	return migrateAgentMode(cfg)
 }

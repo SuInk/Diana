@@ -120,6 +120,7 @@ func withBuiltinPlatformSupport(manifest PluginManifest) PluginManifest {
 			PlatformFeishu:     "发送歌曲来源链接。",
 			PlatformWeCom:      "发送歌曲来源链接。",
 			PlatformWeixin:     "发送歌曲来源链接。",
+			PlatformIMessage:   "发送歌曲来源链接。",
 		}
 	case messageHistoryPluginID:
 		manifest.PlatformNotes = map[string]string{

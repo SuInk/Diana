@@ -16,6 +16,7 @@ const (
 	PlatformFeishu     = "feishu"
 	PlatformWeCom      = "wecom"
 	PlatformWeixin     = "weixin"
+	PlatformIMessage   = "imessage"
 
 	ProtocolOneBotV11     = "onebot-v11"
 	ProtocolTelegramBot   = "telegram-bot-api"
@@ -24,6 +25,7 @@ const (
 	ProtocolFeishuWebhook = "feishu-event-callback"
 	ProtocolWeComWebhook  = "wecom-event-callback"
 	ProtocolWeixinILink   = "weixin-ilink-longpoll"
+	ProtocolBlueBubbles   = "bluebubbles"
 
 	// PlatformCategory* 用于在 WebUI 里按聊天平台分组。
 	PlatformCategoryOneBotV11  = "onebot_v11"
@@ -33,6 +35,7 @@ const (
 	PlatformCategoryFeishu     = "feishu"
 	PlatformCategoryWeCom      = "wecom"
 	PlatformCategoryWeixin     = "weixin"
+	PlatformCategoryIMessage   = "imessage"
 )
 
 // PlatformInbound 说明消息是怎么进来的。这决定了部署形态：只有 InboundCallback
@@ -80,6 +83,7 @@ var supportedPlatforms = []PlatformDefinition{
 	{ID: PlatformFeishu, Name: "飞书", Protocol: ProtocolFeishuWebhook, Category: PlatformCategoryFeishu, CategoryLabel: "飞书", Description: "事件订阅回调，需要一个公网可达的回调地址", Inbound: InboundCallback, CallbackPath: FeishuCallbackPath, RichText: true},
 	{ID: PlatformWeCom, Name: "企业微信", Protocol: ProtocolWeComWebhook, Category: PlatformCategoryWeCom, CategoryLabel: "企业微信", Description: "应用回调，需要一个公网可达的回调地址", Inbound: InboundCallback, CallbackPath: WeComCallbackPath, RichText: true},
 	{ID: PlatformWeixin, Name: "微信", Protocol: ProtocolWeixinILink, Category: PlatformCategoryWeixin, CategoryLabel: "微信", Description: "腾讯 iLink Bot 扫码登录，长轮询收发私聊，不需要公网地址", Inbound: InboundOutbound},
+	{ID: PlatformIMessage, Name: "iMessage", Protocol: ProtocolBlueBubbles, Category: PlatformCategoryIMessage, CategoryLabel: "iMessage", Description: "通过 Mac 上的 BlueBubbles Server 收发，webhook 回调需要 Mac 能访问到本机", Inbound: InboundCallback, CallbackPath: IMessageCallbackPath},
 }
 
 // IsOneBotPlatform 判断平台是否走 OneBot v11 适配器。
@@ -136,6 +140,8 @@ func NormalizePlatformID(value string) string {
 		return PlatformWeCom
 	case "weixin", "wechat", "ilink", "微信":
 		return PlatformWeixin
+	case "imessage", "i-message", "bluebubbles", "apple-messages":
+		return PlatformIMessage
 	default:
 		return strings.ToLower(strings.TrimSpace(value))
 	}
@@ -219,6 +225,14 @@ func NewChannelForConfig(cfg BotConfig) Channel {
 			BotToken:  cfg.WeixinBotToken,
 			BotID:     cfg.WeixinBotID,
 			BaseURL:   cfg.WeixinBaseURL,
+		})
+	case PlatformIMessage:
+		return NewIMessageChannel(IMessageConfig{
+			ProfileID:    cfg.ID,
+			ServerURL:    cfg.IMessageServerURL,
+			Password:     cfg.IMessagePassword,
+			WebhookToken: cfg.IMessageWebhookToken,
+			PollSeconds:  cfg.IMessagePollSeconds,
 		})
 	}
 	return nil

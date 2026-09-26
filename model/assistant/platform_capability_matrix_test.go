@@ -63,6 +63,11 @@ var expectedPlatformCapabilities = map[string]platformCapabilities{
 		// 提醒、主人通知这类主动消息发给没说过话的人会直接返回 ErrWeixinNoContext。
 		ResultChannel: false, RichText: false, InboundQuote: true,
 	},
+	PlatformIMessage: {
+		// message/text 返回的 data.guid 与入站 threadOriginatorGuid 同属消息 guid 空间。
+		// Messages 不渲染 Markdown。群管（踢人、禁言）iMessage 本身就没有，不挂群工具。
+		ResultChannel: true, RichText: false, InboundQuote: true,
+	},
 }
 
 // 新增平台却忘了在能力表里表态时，这里先红。
@@ -137,6 +142,8 @@ func newCapabilityProbeChannel(t *testing.T, platform string) Channel {
 		return NewChannelForConfig(BotConfig{Platform: platform, WeComCorpID: "c", WeComAgentID: "1", WeComSecret: "s"})
 	case PlatformWeixin:
 		return NewChannelForConfig(BotConfig{Platform: platform, WeixinBotToken: "t", WeixinBotID: "b"})
+	case PlatformIMessage:
+		return NewChannelForConfig(BotConfig{Platform: platform, IMessageServerURL: "http://mac.local:1234", IMessagePassword: "p"})
 	}
 	t.Errorf("平台 %q 没有对应的探测构造，能力矩阵覆盖不到它", platform)
 	return nil

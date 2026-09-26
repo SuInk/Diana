@@ -17,6 +17,7 @@ func TestSupportedPlatformsCoverAllAdapters(t *testing.T) {
 		PlatformFeishu:     false,
 		PlatformWeCom:      false,
 		PlatformWeixin:     false,
+		PlatformIMessage:   false,
 	}
 	for _, platform := range SupportedPlatforms() {
 		if _, ok := want[platform.ID]; !ok {
@@ -57,6 +58,8 @@ func TestNormalizePlatformIDAcceptsCommonSpellings(t *testing.T) {
 		"wechat":   PlatformWeixin,
 		"微信":       PlatformWeixin,
 	}
+	cases["BlueBubbles"] = PlatformIMessage
+	cases["iMessage"] = PlatformIMessage
 	for input, want := range cases {
 		if got := NormalizePlatformID(input); got != want {
 			t.Fatalf("NormalizePlatformID(%q) = %q, want %q", input, got, want)
@@ -67,7 +70,7 @@ func TestNormalizePlatformIDAcceptsCommonSpellings(t *testing.T) {
 // 只有飞书和企业微信需要公网回调；把出站平台误判成回调平台会让 WebUI 要求
 // 用户去配一个根本用不上的地址。
 func TestPlatformNeedsCallbackOnlyForWebhookPlatforms(t *testing.T) {
-	for _, id := range []string{PlatformFeishu, PlatformWeCom} {
+	for _, id := range []string{PlatformFeishu, PlatformWeCom, PlatformIMessage} {
 		if !PlatformNeedsCallback(id) {
 			t.Fatalf("%q should require a public callback address", id)
 		}
@@ -90,6 +93,7 @@ func TestNewChannelForConfigBuildsEachPlatform(t *testing.T) {
 		{PlatformFeishu, BotConfig{FeishuAppID: "a", FeishuAppSecret: "s"}},
 		{PlatformWeCom, BotConfig{WeComCorpID: "c", WeComAgentID: "1", WeComSecret: "s"}},
 		{PlatformWeixin, BotConfig{}},
+		{PlatformIMessage, BotConfig{IMessageServerURL: "http://mac.local:1234", IMessagePassword: "p"}},
 	}
 	for _, testCase := range cases {
 		cfg := testCase.cfg
@@ -129,6 +133,17 @@ func TestValidateRequiresPerPlatformCredentials(t *testing.T) {
 			BotConfig{Platform: PlatformFeishu, Enabled: true, FeishuAppID: "a", FeishuAppSecret: "s", FeishuAPIBaseURL: "ftp://x"},
 			ErrInvalidFeishuAPIBase,
 		},
+		{"imessage without password", BotConfig{Platform: PlatformIMessage, Enabled: true, IMessageServerURL: "http://mac.local:1234"}, ErrMissingIMessageCredentials},
+		{
+			"imessage with a bad server url",
+			BotConfig{Platform: PlatformIMessage, Enabled: true, IMessageServerURL: "mac.local:1234", IMessagePassword: "p"},
+			ErrInvalidIMessageServerURL,
+		},
+		{
+			"imessage polling too often",
+			BotConfig{Platform: PlatformIMessage, Enabled: true, IMessageServerURL: "http://mac.local:1234", IMessagePassword: "p", IMessagePollSeconds: 1},
+			ErrInvalidIMessagePoll,
+		},
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -150,6 +165,7 @@ func TestValidateDoesNotDemandTelegramTokenFromOtherPlatforms(t *testing.T) {
 			Platform: PlatformWeCom, Enabled: true, WeComCorpID: "c", WeComAgentID: "1000002",
 			WeComSecret: "s", WeComToken: "tok", WeComEncodingAESKey: "k",
 		},
+		{Platform: PlatformIMessage, Enabled: true, IMessageServerURL: "https://mac.example:1234", IMessagePassword: "p", IMessagePollSeconds: 30},
 	}
 	for _, cfg := range valid {
 		if err := cfg.WithDefaults().Validate(); err != nil {
@@ -160,7 +176,7 @@ func TestValidateDoesNotDemandTelegramTokenFromOtherPlatforms(t *testing.T) {
 
 // 停用的机器人允许留着不完整的凭据，否则用户没法先建档再慢慢填。
 func TestValidateSkipsCredentialsWhenDisabled(t *testing.T) {
-	for _, platform := range []string{PlatformQQOfficial, PlatformDingTalk, PlatformFeishu, PlatformWeCom} {
+	for _, platform := range []string{PlatformQQOfficial, PlatformDingTalk, PlatformFeishu, PlatformWeCom, PlatformIMessage} {
 		cfg := BotConfig{Platform: platform, Enabled: false}.WithDefaults()
 		if err := cfg.Validate(); err != nil {
 			t.Fatalf("disabled %q profile failed validation: %v", platform, err)
@@ -179,6 +195,8 @@ func TestPayloadFromConfigMasksNewPlatformSecrets(t *testing.T) {
 		WeComSecret:             "wecom-secret",
 		WeComToken:              "wecom-token",
 		WeComEncodingAESKey:     "wecom-aes",
+		IMessagePassword:        "bb-password",
+		IMessageWebhookToken:    "bb-webhook",
 	}
 	payload := PayloadFromConfig(cfg)
 
@@ -191,13 +209,15 @@ func TestPayloadFromConfigMasksNewPlatformSecrets(t *testing.T) {
 		"wecom secret":       payload.WeComSecret,
 		"wecom token":        payload.WeComToken,
 		"wecom encoding key": payload.WeComEncodingAESKey,
+		"imessage password":  payload.IMessagePassword,
+		"imessage webhook":   payload.IMessageWebhookToken,
 	}
 	for name, value := range secrets {
 		if value != "" {
 			t.Fatalf("%s leaked into the plain payload: %q", name, value)
 		}
 	}
-	if !payload.WeComSecretConfigured || !payload.FeishuEncryptKeyConfigured || !payload.QQAppSecretConfigured {
+	if !payload.WeComSecretConfigured || !payload.FeishuEncryptKeyConfigured || !payload.QQAppSecretConfigured || !payload.IMessagePasswordConfigured {
 		t.Fatal("configured flags should still tell the UI a secret is stored")
 	}
 	// 回调路径是公开信息，前端要靠它告诉用户该往对方后台填什么。
@@ -224,6 +244,8 @@ func TestConfigFromPayloadPreservesBlankSecrets(t *testing.T) {
 		WeComSecret:             "wecom-secret",
 		WeComToken:              "wecom-token",
 		WeComEncodingAESKey:     "wecom-aes",
+		IMessagePassword:        "bb-password",
+		IMessageWebhookToken:    "bb-webhook",
 	}
 	// 只改一个无关字段，所有密钥字段留空。
 	payload := ConfigPayload{Platform: PlatformFeishu, Name: "改个名字"}
@@ -236,7 +258,9 @@ func TestConfigFromPayloadPreservesBlankSecrets(t *testing.T) {
 		merged.FeishuEncryptKey != "feishu-key" ||
 		merged.WeComSecret != "wecom-secret" ||
 		merged.WeComToken != "wecom-token" ||
-		merged.WeComEncodingAESKey != "wecom-aes" {
+		merged.WeComEncodingAESKey != "wecom-aes" ||
+		merged.IMessagePassword != "bb-password" ||
+		merged.IMessageWebhookToken != "bb-webhook" {
 		t.Fatalf("blank secret fields wiped stored credentials: %+v", merged)
 	}
 

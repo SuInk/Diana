@@ -208,6 +208,8 @@ func relayPlatformLabel(platform string) string {
 		return "企业微信"
 	case PlatformWeixin:
 		return "微信"
+	case PlatformIMessage:
+		return "iMessage"
 	}
 	return strings.TrimSpace(platform)
 }

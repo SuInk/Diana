@@ -564,7 +564,8 @@ const platforms: BotPlatform[] = [
   { id: "dingtalk", name: "钉钉", protocol: "dingtalk-stream-ws", category: "dingtalk", category_label: "钉钉", description: "Stream 模式出站长连接，不需要公网地址", inbound: "outbound", rich_text: true },
   { id: "feishu", name: "飞书", protocol: "feishu-event-callback", category: "feishu", category_label: "飞书", description: "事件订阅回调，需要一个公网可达的回调地址", inbound: "callback", callback_path: "/api/channels/feishu/callback", rich_text: true },
   { id: "wecom", name: "企业微信", protocol: "wecom-event-callback", category: "wecom", category_label: "企业微信", description: "应用回调，需要一个公网可达的回调地址", inbound: "callback", callback_path: "/api/channels/wecom/callback", rich_text: true },
-  { id: "weixin", name: "微信", protocol: "weixin-ilink-longpoll", category: "weixin", category_label: "微信", description: "腾讯 iLink Bot 扫码登录，长轮询收发私聊，不需要公网地址", inbound: "outbound" }
+  { id: "weixin", name: "微信", protocol: "weixin-ilink-longpoll", category: "weixin", category_label: "微信", description: "腾讯 iLink Bot 扫码登录，长轮询收发私聊，不需要公网地址", inbound: "outbound" },
+  { id: "imessage", name: "iMessage", protocol: "bluebubbles", category: "imessage", category_label: "iMessage", description: "通过 Mac 上的 BlueBubbles Server 收发，webhook 回调需要 Mac 能访问到本机", inbound: "callback", callback_path: "/api/channels/imessage/callback" }
 ];
 
 type DemoIssueDraft = {
