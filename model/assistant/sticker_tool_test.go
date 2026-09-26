@@ -12,6 +12,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/SuInk/diana/model/agent"
 )
 
 type stickerHistoryStore struct {
@@ -732,5 +734,33 @@ func TestStickerSendLimiterReleasesAndExpires(t *testing.T) {
 	}
 	if full, _ := limiter.full("s", now.Add(stickerSendRateWindow), 1); full {
 		t.Fatal("expired send still counted")
+	}
+}
+
+// 表情包工具是按需加载的，目录每行只留 120 字：什么时候该发必须写在最前面，被截掉就等于没写。
+func TestStickerCatalogLineKeepsWhenToUse(t *testing.T) {
+	registry := agent.NewToolRegistry()
+	registry.Register(newDianaStickerTool(nil, MessageEvent{}, nil))
+	line := registry.SystemPromptCatalog()
+	for _, want := range []string{"接梗", "安慰", "被要表情包时必用"} {
+		if !strings.Contains(line, want) {
+			t.Fatalf("catalog line lost %q: %s", want, line)
+		}
+	}
+}
+
+// 表情包的发送时机进稳定头部，而且只在工具真挂上时才出现。
+func TestStickerPromptRuleFollowsToolRegistration(t *testing.T) {
+	runtime := NewRuntime(BotConfig{}, &recordingChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	event := MessageEvent{Kind: EventKindGroup, GroupID: "g1", UserID: "1"}
+	registry := agent.NewToolRegistry()
+	registry.Register(newDianaStickerTool(runtime, event, nil))
+	head, tail := runtime.systemPromptPartsWithRelationshipAndAgentTools(event, nil, false, RelationshipPolicy{}, true, registry)
+	if !strings.Contains(head, promptToolSticker) || strings.Contains(tail, promptToolSticker) {
+		t.Fatalf("sticker rule placement: head=%v tail=%v", strings.Contains(head, promptToolSticker), strings.Contains(tail, promptToolSticker))
+	}
+	bare, _ := runtime.systemPromptPartsWithRelationshipAndAgentTools(event, nil, false, RelationshipPolicy{}, true, agent.NewToolRegistry())
+	if strings.Contains(bare, promptToolSticker) {
+		t.Fatal("sticker rule injected without the tool")
 	}
 }

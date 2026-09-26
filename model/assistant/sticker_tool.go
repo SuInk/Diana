@@ -104,11 +104,12 @@ func newDianaStickerTool(runtime *Runtime, event MessageEvent, settings SettingV
 
 func (t *dianaStickerTool) Name() string { return dianaStickerToolName }
 
+// Description 的开头要自己说清什么时候用：按需工具目录每行只留前 120 字。
 func (t *dianaStickerTool) Description() string {
-	return `从 Diana 持久表情资产库中检索并发送一张表情包。用户明确要“发表情包”、希望用表情回应，或当前语境适合只用表情包回应时使用。` +
-		`先用 operation=search 检索：query 写 2 到 6 个空格分隔的短关键词，覆盖情绪、动作、场景和同义说法，例如“安慰 抱抱 摸头 心疼”，不要写整句。` +
-		`再结合候选的名称、标签与简介挑最贴合当前语境的一张，用 operation=send 原样传回 sticker_id；matched=false 的候选只是随机补位，都不合适就不发。` +
-		`发送由工具完成，成功后不要声称还要上传，也不要把候选的内部 id 告诉用户。不得把普通历史图片当表情包发送。`
+	return `发一张表情包。闲聊里接梗、调侃、吐槽、无语、安慰、撒娇、庆祝、道谢这类带情绪的接话，适合时单发或配一句短话；被要表情包时必用。` +
+		`用法：先 operation=search，query 写 2 到 6 个空格分隔的短关键词，覆盖情绪、动作、场景和同义说法，例如“安慰 抱抱 摸头 心疼”，不要写整句；` +
+		`再结合候选的名称、标签与简介挑最贴合当前语境的一张，用 operation=send 原样传回 sticker_id。matched=false 的候选只是随机补位，都不合适就不发。` +
+		`发送由工具完成，成功后不要声称还要上传，也不要把候选的内部 id 告诉用户。不得把普通历史图片当表情包发送。返回 limited 表示到了发送上限，这轮改用文字。`
 }
 
 func (t *dianaStickerTool) InputSchema() map[string]any {
