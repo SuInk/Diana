@@ -31,7 +31,7 @@ func newDianaCodingTool(runtime *Runtime, event MessageEvent, settings SettingVa
 func (t *dianaCodingTool) Name() string { return dianaCodingToolName }
 
 func (t *dianaCodingTool) Description() string {
-	return `把一件编码工作交给外部编码 CLI（Claude Code / Codex）在持久工作区里长时间执行。submit 派活后立刻返回任务号，进程在后台独立运行，跑完 Diana 会主动汇报；期间用 status 查进度、tail 看最近动作、cancel 终止、followup 在原会话上追加指令；approvals 查看或清空主人说过「以后都同意」的操作类别。适合「改代码、修 Bug、加测试、跑构建」这类要几分钟到几小时的活。可用 agents 查看多个代理配置，submit 用 agent 选择配置；不填使用默认代理。只有机器人主人能用。`
+	return `把一件编码工作交给外部编码 CLI（Claude Code / Codex）在持久工作区里长时间执行。submit 派活后进程在后台独立运行，工具先等几秒：这期间就结束的直接返回结果，否则返回任务号，跑完 Diana 会主动汇报；期间用 status 查进度、tail 看最近动作、cancel 终止、followup 在原会话上追加指令；approvals 查看或清空主人说过「以后都同意」的操作类别。适合「改代码、修 Bug、加测试、跑构建」这类要几分钟到几小时的活。可用 agents 查看多个代理配置，submit 用 agent 选择配置；不填使用默认代理。只有机器人主人能用。`
 }
 
 func (t *dianaCodingTool) InputSchema() map[string]any {
@@ -174,18 +174,54 @@ func (t *dianaCodingTool) submit(ctx context.Context, cfg codingAgentConfig, inp
 	if runes := []rune(instruction); len(runes) > maxCodingInstructionRunes {
 		return "", fmt.Errorf("指令超过 %d 字，请把长材料写进工作区文件里让 CLI 自己读", maxCodingInstructionRunes)
 	}
-	job, err := t.runtime.launchCodingJob(ctx, t.event, cfg, workspace, instruction, resumeSession)
+	job, handedOff, err := t.runtime.startCodingJob(ctx, t.event, cfg, workspace, instruction, resumeSession, true)
 	if err != nil {
 		return "", err
 	}
 	operation := "submit"
-	message := fmt.Sprintf("任务已在后台启动，跑完我会主动汇报。期间可以用 status %s 查进度。", job.ID)
 	if resumeSession != "" {
 		operation = "followup"
+	}
+	if finished, ok := t.awaitQuickFinish(ctx, job.ID, handedOff); ok {
+		view := codingJobView(finished, nil)
+		message := "任务已经跑完，这就是最终结果，不会再单独汇报，直接照实告诉用户。"
+		if finished.Status != codingJobStatusSucceeded {
+			message = "任务刚启动就结束了，没有成功，不会再单独汇报。直接把 error 照实告诉用户，不要说还在后台运行。"
+		}
+		return codingToolJSON(dianaCodingResult{OK: true, Operation: operation, Job: &view, Message: message})
+	}
+	message := fmt.Sprintf("任务已在后台启动，跑完我会主动汇报。期间可以用 status %s 查进度。", job.ID)
+	if resumeSession != "" {
 		message = fmt.Sprintf("已在原会话上追加指令，任务号 %s。", job.ID)
 	}
 	view := codingJobView(job, nil)
 	return codingToolJSON(dianaCodingResult{OK: true, Operation: operation, Job: &view, Message: message})
+}
+
+// awaitQuickFinish 等任务头几秒：这期间结束的结果由这一轮的回复带出去，免得单独
+// 推的汇报抢在「已启动」之前到。拿到结果却没法交给这一轮（请求被取消、记录写不
+// 进去）就退回正常汇报，结果不会丢。
+func (t *dianaCodingTool) awaitQuickFinish(ctx context.Context, jobID string, handedOff <-chan struct{}) (CodingJob, bool) {
+	registry := t.runtime.codingJobs()
+	timer := time.NewTimer(registry.timing().handOff)
+	defer timer.Stop()
+	select {
+	case <-handedOff:
+	case <-timer.C:
+	case <-ctx.Done():
+	}
+	if !registry.releaseReportHold(jobID) {
+		return CodingJob{}, false
+	}
+	if ctx.Err() == nil {
+		if job, ok := t.runtime.claimHandedOffReport(jobID); ok {
+			return job, true
+		}
+	}
+	if job, err := loadCodingJob(jobID); err == nil {
+		t.runtime.reportCodingJob(t.runtime.subagentRootContext(), job)
+	}
+	return CodingJob{}, false
 }
 
 // followUp 在一个已经结束的任务的会话上继续。运行中的任务不接受追加：非交互模式的
