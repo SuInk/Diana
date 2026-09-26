@@ -573,18 +573,19 @@ type BotConfig struct {
 	ReplyStyle   ReplyStyle   `json:"reply_style,omitempty"`
 	// 下面几项是 SOUL.md 之前的人设字段，只在读旧配置时出现：WithDefaults 把它们
 	// 并进 SystemPrompt 后清空，见 persona_legacy.go。
-	Soul                     *PersonaSoul         `json:"soul,omitempty"`
-	PersonaMode              PersonaMode          `json:"persona_mode,omitempty"`
-	ActionDescriptionEnabled *bool                `json:"action_description_enabled,omitempty"`
-	SelfReference            string               `json:"self_reference,omitempty"`
-	SentenceEnders           string               `json:"sentence_enders,omitempty"`
-	DebugModeEnabled         bool                 `json:"debug_mode_enabled,omitempty"`
-	ReplyReferenceMode       ReplyDecorationMode  `json:"reply_reference_mode,omitempty"`
-	ModelDisclosure          ModelDisclosure      `json:"model_disclosure,omitempty"`
-	RepositoryDisclosure     RepositoryDisclosure `json:"repository_disclosure,omitempty"`
-	MentionUserMode          ReplyDecorationMode  `json:"mention_user_mode,omitempty"`
-	MarkdownToPlain          *bool                `json:"markdown_to_plain,omitempty"`
-	ErrorNotifyEnabled       *bool                `json:"error_notify_enabled,omitempty"`
+	Soul                     *PersonaSoul `json:"soul,omitempty"`
+	PersonaMode              PersonaMode  `json:"persona_mode,omitempty"`
+	ActionDescriptionEnabled *bool        `json:"action_description_enabled,omitempty"`
+	SelfReference            string       `json:"self_reference,omitempty"`
+	SentenceEnders           string       `json:"sentence_enders,omitempty"`
+	// DebugModeEnabled 为 nil 表示没设置过，按开启处理，见 debugModeEnabled。
+	DebugModeEnabled     *bool                `json:"debug_mode_enabled,omitempty"`
+	ReplyReferenceMode   ReplyDecorationMode  `json:"reply_reference_mode,omitempty"`
+	ModelDisclosure      ModelDisclosure      `json:"model_disclosure,omitempty"`
+	RepositoryDisclosure RepositoryDisclosure `json:"repository_disclosure,omitempty"`
+	MentionUserMode      ReplyDecorationMode  `json:"mention_user_mode,omitempty"`
+	MarkdownToPlain      *bool                `json:"markdown_to_plain,omitempty"`
+	ErrorNotifyEnabled   *bool                `json:"error_notify_enabled,omitempty"`
 	// ErrorPersonaReplyEnabled 只在错误提示关闭时起作用：回复失败后仍让模型按人设
 	// 回一句，不把错误原文发进聊天。默认关：已关掉错误提示的机器人升级后保持静默。
 	ErrorPersonaReplyEnabled *bool  `json:"error_persona_reply_enabled,omitempty"`
@@ -1058,7 +1059,7 @@ type ConfigPayload struct {
 	SystemPrompt                   string               `json:"system_prompt,omitempty"`
 	ResponseMode                   ResponseMode         `json:"response_mode,omitempty"`
 	ReplyStyle                     ReplyStyle           `json:"reply_style,omitempty"`
-	DebugModeEnabled               bool                 `json:"debug_mode_enabled,omitempty"`
+	DebugModeEnabled               *bool                `json:"debug_mode_enabled,omitempty"`
 	ReplyReferenceMode             ReplyDecorationMode  `json:"reply_reference_mode,omitempty"`
 	ModelDisclosure                ModelDisclosure      `json:"model_disclosure,omitempty"`
 	RepositoryDisclosure           RepositoryDisclosure `json:"repository_disclosure,omitempty"`
@@ -2250,7 +2251,7 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		SystemPrompt:                      cfg.SystemPrompt,
 		ResponseMode:                      cfg.ResponseMode,
 		ReplyStyle:                        cfg.ReplyStyle,
-		DebugModeEnabled:                  cfg.DebugModeEnabled,
+		DebugModeEnabled:                  copyBoolPointer(cfg.DebugModeEnabled),
 		ReplyReferenceMode:                cfg.ReplyReferenceMode,
 		ModelDisclosure:                   cfg.ModelDisclosure,
 		RepositoryDisclosure:              cfg.RepositoryDisclosure,
@@ -2457,7 +2458,7 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		SystemPrompt:                    payload.SystemPrompt,
 		ResponseMode:                    payload.ResponseMode,
 		ReplyStyle:                      payload.ReplyStyle,
-		DebugModeEnabled:                payload.DebugModeEnabled,
+		DebugModeEnabled:                copyBoolPointer(payload.DebugModeEnabled),
 		ReplyReferenceMode:              payload.ReplyReferenceMode,
 		ModelDisclosure:                 payload.ModelDisclosure,
 		RepositoryDisclosure:            payload.RepositoryDisclosure,
@@ -2642,6 +2643,12 @@ func cleanStrings(values []string) []string {
 		out = append(out, value)
 	}
 	return out
+}
+
+// debugModeEnabled 默认开启：排查问题时最常见的死胡同就是「那条消息没有调试记录」，
+// 事后已经补不回来。轨迹存在库外的文件里、按天过期，开着的代价只是磁盘。
+func debugModeEnabled(cfg BotConfig) bool {
+	return cfg.DebugModeEnabled == nil || *cfg.DebugModeEnabled
 }
 
 func boolPointer(value bool) *bool {

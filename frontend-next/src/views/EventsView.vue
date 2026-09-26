@@ -382,7 +382,7 @@
                   </section>
                   <div v-if="traceLoading[event.id]" class="debug-trace-empty muted">正在读取调试记录</div>
                   <div v-else-if="(traceSteps[event.id]?.length ?? 0) === 0" class="debug-trace-empty muted">
-                    这条事件没有调试记录。调试模式默认关闭，开启后仅记录新事件。
+                    {{ traceEmptyReason[event.id] || "这条事件没有调试记录。" }}
                   </div>
                   <ol v-else class="debug-trace-list">
                     <li v-for="(step, index) in traceSteps[event.id]" :key="step.id" class="debug-trace-step">
@@ -703,6 +703,7 @@ const traceOpen = ref<Record<string, boolean>>({});
 const traceLoading = ref<Record<string, boolean>>({});
 const traceLoaded = ref<Record<string, boolean>>({});
 const traceSteps = ref<Record<string, AppLogEntry[]>>({});
+const traceEmptyReason = ref<Record<string, string>>({});
 const failedImages = ref<Record<string, boolean>>({});
 const activeImage = ref<{ url: string; alt: string } | null>(null);
 const pendingLiveEvents = ref(false);
@@ -1493,6 +1494,7 @@ async function toggleTrace(event: AssistantEventDetail): Promise<void> {
     event.memories = result.memories ?? [];
     event.temporary_memories = result.temporary_memories ?? [];
     traceSteps.value = { ...traceSteps.value, [event.id]: result.steps ?? [] };
+    traceEmptyReason.value = { ...traceEmptyReason.value, [event.id]: result.empty_reason ?? "" };
     traceLoaded.value = { ...traceLoaded.value, [event.id]: true };
   } catch (error) {
     traceOpen.value = { ...traceOpen.value, [event.id]: false };

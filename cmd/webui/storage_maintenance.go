@@ -82,6 +82,25 @@ func startStorageMaintenance(parent context.Context, store *storage.SQLiteStore,
 			} else if count > 0 {
 				log.Printf("storage maintenance: deleted %d expired logs; freed database pages can be reused", count)
 			}
+			if days, err := store.PruneDebugTraceFiles(logRetentionCutoff(now, cfg.DebugLogRetentionDays, 7)); err != nil {
+				log.Printf("storage maintenance: prune debug trace files: %v", err)
+			} else if days > 0 {
+				log.Printf("storage maintenance: deleted %d days of expired debug trace files", days)
+			}
+			compressCtx, stopCompress := context.WithTimeout(ctx, 10*time.Minute)
+			if count, err := store.CompressDebugTraceFiles(compressCtx, now); err != nil && ctx.Err() == nil {
+				log.Printf("storage maintenance: compress debug trace files: %v", err)
+			} else if count > 0 {
+				log.Printf("storage maintenance: compressed %d debug trace files from earlier days", count)
+			}
+			stopCompress()
+			jobsCtx, stopJobs := context.WithTimeout(ctx, 2*time.Minute)
+			if count, err := store.PruneCompletedMemoryJobs(jobsCtx, now.AddDate(0, 0, -completedMemoryJobRetentionDays)); err != nil && ctx.Err() == nil {
+				log.Printf("storage maintenance: prune completed memory jobs: %v", err)
+			} else if count > 0 {
+				log.Printf("storage maintenance: deleted %d completed memory jobs", count)
+			}
+			stopJobs()
 			select {
 			case <-ctx.Done():
 				return
@@ -91,6 +110,10 @@ func startStorageMaintenance(parent context.Context, store *storage.SQLiteStore,
 	}()
 	return func() { cancel(); <-done }
 }
+
+// completedMemoryJobRetentionDays 是已完成记忆任务留作入队去重的天数，理由见
+// PruneCompletedMemoryJobs。
+const completedMemoryJobRetentionDays = 7
 
 func logRetentionCutoff(now time.Time, days, fallback int) time.Time {
 	if days < 0 {

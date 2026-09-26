@@ -280,6 +280,7 @@ var storageDirectoryLabels = map[string]string{
 	"browser":         "浏览器数据",
 	"plugin-sources":  "插件源码",
 	".diana-updates":  "更新包",
+	"debug-traces":    "调试轨迹",
 	"database":        "数据库",
 	"files":           "数据目录根下的其他文件",
 }

@@ -46,7 +46,7 @@ func TestCrossGroupSemanticRecallAndFallback(t *testing.T) {
 	r := newSemanticRuntime(t, true, store, &embeds)
 	mutateTestProfile(r, func(c *BotConfig) { c.CrossGroupMemoryEnabled = boolPointer(true) })
 	r.channel = &crossGroupMembershipChannel{allowed: map[string]bool{"current|author": true}}
-	mutateTestProfile(r, func(c *BotConfig) { c.DebugModeEnabled = true })
+	mutateTestProfile(r, func(c *BotConfig) { c.DebugModeEnabled = boolPointer(true) })
 	logs := &captureAppLogs{}
 	r.SetAppLogWriter(logs)
 	current := crossGroupTestEvent(180*86400, "current", "requester", "query", "什么时候上线")

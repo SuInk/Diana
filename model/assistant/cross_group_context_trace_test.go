@@ -14,7 +14,7 @@ func crossGroupTraceRuntime(t *testing.T, debug bool) (*Runtime, *captureAppLogs
 	store := &crossGroupSearchCounter{memoryMessageHistoryStore: newMemoryMessageHistoryStore()}
 	runtime := NewRuntime(BotConfig{
 		CrossGroupMemoryEnabled: boolPointer(true),
-		DebugModeEnabled:        debug,
+		DebugModeEnabled:        boolPointer(debug),
 	}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	runtime.SetMessageHistoryStore(store)
 	runtime.SetAppLogWriter(logs)

@@ -48,6 +48,9 @@ func (s *SQLiteStore) AppendLog(ctx context.Context, entry AppLogEntry) error {
 		return nil
 	}
 	entry = normalizeLogEntry(entry)
+	if root := s.debugTraceDir(); root != "" && storesDebugTraceInFile(entry) {
+		return s.writeDebugTraceFile(root, entry)
+	}
 	var metadata string
 	if len(entry.Metadata) > 0 {
 		// Metadata 保持 map 形态方便各子系统扩展，落库时统一编码成 JSON，避免频繁改表结构。

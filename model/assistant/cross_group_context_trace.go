@@ -47,7 +47,7 @@ type crossGroupContextTrace struct {
 
 // crossGroupTraceEnabled 报告当前事件要不要记录漏斗。
 func (r *Runtime) crossGroupTraceEnabled(event MessageEvent) bool {
-	return r != nil && r.appLogWriter() != nil && r.effectiveConfigForEvent(event).DebugModeEnabled
+	return r != nil && r.appLogWriter() != nil && debugModeEnabled(r.effectiveConfigForEvent(event))
 }
 
 // recordCrossGroupContextTrace 把漏斗写进调试日志。

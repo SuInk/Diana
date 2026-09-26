@@ -23,10 +23,18 @@ type debugTraceState struct {
 }
 
 func (r *Runtime) withDebugTraceContext(ctx context.Context, event MessageEvent) context.Context {
-	if ctx == nil || strings.TrimSpace(event.MessageID) == "" || !r.effectiveConfigForEvent(event).DebugModeEnabled {
+	if ctx == nil || strings.TrimSpace(event.MessageID) == "" || !debugModeEnabled(r.effectiveConfigForEvent(event)) {
 		return ctx
 	}
-	return context.WithValue(ctx, debugTraceContextKey{}, &debugTraceState{event: event})
+	state := &debugTraceState{event: event}
+	// 开头先记一笔「收到了」：之后这条消息要是一次模型都没调，事件页能据此说清
+	// 是「调试开着但没走到模型」，而不是笼统地让人去检查调试模式开没开。
+	r.writeDebugTrace(state, 0, "收到消息", map[string]any{
+		"phase":      debugTracePhaseEventReceived,
+		"text":       inboundEventPlainText(event),
+		"event_time": event.Time,
+	})
+	return context.WithValue(ctx, debugTraceContextKey{}, state)
 }
 
 func debugTraceFromContext(ctx context.Context) *debugTraceState {
@@ -101,12 +109,23 @@ func (p *debugTraceLLMProvider) Generate(ctx context.Context, req llm.GenerateRe
 	return response, err
 }
 
+// debugTracePhaseEventReceived 是每条消息轨迹的第 0 步，事件页读取时据此判断处理
+// 那条消息时调试模式是否开着，见 storage.DebugTraceEmptyReason。
+const debugTracePhaseEventReceived = "event_received"
+
 func (r *Runtime) recordDebugTrace(state *debugTraceState, message string, metadata map[string]any) {
+	if state == nil {
+		return
+	}
+	r.writeDebugTrace(state, state.sequence.Add(1), message, metadata)
+}
+
+func (r *Runtime) writeDebugTrace(state *debugTraceState, sequence int64, message string, metadata map[string]any) {
 	writer := r.appLogWriter()
 	if state == nil || writer == nil {
 		return
 	}
-	metadata["sequence"] = state.sequence.Add(1)
+	metadata["sequence"] = sequence
 	metadata["platform"] = state.event.Platform
 	metadata["profile_id"] = state.event.ProfileID
 	metadata["kind"] = state.event.Kind

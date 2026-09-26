@@ -256,6 +256,37 @@ WHERE id = ? AND status = 'processing' AND lease_owner = ?
 	return err
 }
 
+// PruneCompletedMemoryJobs 删掉 before 之前完成的记忆任务。任务 ID 由事件内容算出，
+// 完成的行在入队时起去重作用；同一条消息被重投只会发生在处理后不久，留几天足够，
+// 再往后这些行（摘要任务还带着整段对话）只是在占库。
+func (s *SQLiteStore) PruneCompletedMemoryJobs(ctx context.Context, before time.Time) (int64, error) {
+	defer s.observeStorage(ctx, "PruneCompletedMemoryJobs", "write")()
+	if s == nil || s.db == nil || before.IsZero() {
+		return 0, nil
+	}
+	var deleted int64
+	for {
+		result, err := s.db.ExecContext(ctx, `DELETE FROM memory_jobs WHERE id IN (
+SELECT id FROM memory_jobs WHERE status = 'done' AND completed_at < ? LIMIT 500)`, before.UTC().UnixNano())
+		if err != nil {
+			return deleted, fmt.Errorf("prune memory jobs: %w", err)
+		}
+		n, err := result.RowsAffected()
+		deleted += n
+		if err != nil || n < 500 {
+			return deleted, err
+		}
+		// 和 PruneLogs 一样，批与批之间让出唯一的写连接。
+		timer := time.NewTimer(10 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return deleted, ctx.Err()
+		case <-timer.C:
+		}
+	}
+}
+
 func (s *SQLiteStore) RetryMemoryJob(ctx context.Context, id string, leaseOwner string, availableAt time.Time, lastError string) error {
 	defer s.observeStorage(ctx, "RetryMemoryJob", "write")()
 	if s == nil || s.db == nil {

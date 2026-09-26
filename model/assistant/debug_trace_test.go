@@ -25,11 +25,11 @@ func TestDebugTraceRecordsModelContextOnlyWhenEnabled(t *testing.T) {
 		want    int
 	}{
 		{name: "disabled", enabled: false, want: 0},
-		{name: "enabled", enabled: true, want: 1},
+		{name: "enabled", enabled: true, want: 2},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			logs := &captureAppLogs{}
-			runtime := NewRuntime(BotConfig{DebugModeEnabled: test.enabled}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+			runtime := NewRuntime(BotConfig{DebugModeEnabled: boolPointer(test.enabled)}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 			runtime.SetAppLogWriter(logs)
 			ctx := runtime.withDebugTraceContext(context.Background(), event)
 			run := runtime.withDebugTraceRun(ctx, func(provider LLMProvider) (string, error) {
@@ -49,7 +49,10 @@ func TestDebugTraceRecordsModelContextOnlyWhenEnabled(t *testing.T) {
 			if !test.enabled {
 				return
 			}
-			entry := entries[0]
+			if received := entries[0]; received.Metadata["phase"] != debugTracePhaseEventReceived || received.Metadata["sequence"] != int64(0) {
+				t.Fatalf("first entry should mark the event as received: %#v", received)
+			}
+			entry := entries[1]
 			if entry.Kind != applog.KindDebug || entry.Action != "debug_trace" || entry.Target != event.MessageID {
 				t.Fatalf("entry = %#v", entry)
 			}
