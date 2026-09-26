@@ -3,7 +3,9 @@ import { computed, useId } from "vue";
 import AppSelect from "./AppSelect.vue";
 import { defaultParticipationCooldownSeconds, participationLevelLabel, participationPreset, participationPresetName, proactiveCriteriaMaxLength, type ParticipationPreferences } from "../participation";
 
-const props = defineProps<{ modelValue?: ParticipationPreferences; level?: string; inheritable?: boolean; inheritedValue?: ParticipationPreferences; criteria?: string }>();
+// criteriaOptional：机器人页已经能直接改内置判据，补充判据只在留有旧值时露出来，
+// 让人看得见、清得掉——藏起来的旧值照样拼进评分提示词。
+const props = defineProps<{ modelValue?: ParticipationPreferences; level?: string; inheritable?: boolean; inheritedValue?: ParticipationPreferences; criteria?: string; criteriaOptional?: boolean }>();
 const emit = defineEmits<{ "update:modelValue": [value: ParticipationPreferences | undefined]; "update:criteria": [value: string] }>();
 const id = useId();
 const value = computed(() => props.modelValue ?? (props.level ? participationPreset(props.level) : props.inheritedValue ?? participationPreset("low")));
@@ -29,7 +31,6 @@ const settings = [
       { value: "low", label: "偶尔接话", hint: "比较适合参与时才接一句。" },
       { value: "medium", label: "适度参与", hint: "有合适的话就自然加入。" },
       { value: "high", label: "积极参与", hint: "更容易参与分享和闲聊。" },
-      { value: "extreme", label: "频繁参与", hint: "较弱的接话机会也可能开口。" },
       { value: "always", label: "完全不限制", hint: "不设闲聊评分门槛，仍受冷却和发言占比限制，不是每条必回。" },
     ]),
   },
@@ -47,8 +48,10 @@ const relevanceEnabled = computed(() => {
 function setRelevanceEnabled(enabled: boolean) {
   emit("update:modelValue", { ...value.value, relevance_level: enabled ? "on" : "off" });
 }
+// 「频繁参与」已去掉，后端把旧配置里的 extreme 按「积极参与」执行，这里也照这样显示。
 function displayedLevel(key: RatingKey) {
-  return ratingLevel(key);
+  const level = ratingLevel(key);
+  return level === "extreme" ? "high" : level;
 }
 function setRatingLevel(key: RatingKey, level: string) {
   emit("update:modelValue", { ...value.value, [key]: level });
@@ -112,16 +115,17 @@ function updateCriteria(event: Event) {
             <span :id="id + '-cooldown-help'" class="hint">主动闲聊的最短间隔，默认 30 秒；填 0 不限制。</span>
           </div>
         </section>
-        <section class="participation-setting criteria-setting">
+        <section v-if="!criteriaOptional || criteria?.trim()" class="participation-setting criteria-setting">
           <div class="setting-copy">
             <label :for="id + '-criteria'">补充判据</label>
-            <p class="setting-help">本群特有的称呼、黑话和禁区，帮它判断这句话该不该接。留空只用内置判据。</p>
+            <p v-if="criteriaOptional" class="setting-help">旧版留下的补充判据，仍会拼进评分提示词。内置判据现在可以在下面的「接话评分提示词」里直接改，这里清空后不再显示。</p>
+            <p v-else class="setting-help">本群特有的称呼、黑话和禁区，帮它判断这句话该不该接。留空只用内置判据。</p>
           </div>
           <textarea :id="id + '-criteria'" class="textarea" rows="3" :maxlength="proactiveCriteriaMaxLength" :value="criteria ?? ''" placeholder="例：群里叫「鸽子」是催更，不是骂人。不要接和考试答案有关的话题。" @input="updateCriteria"></textarea>
         </section>
       </div>
       <p class="hint participation-gate-hint">
-        闲聊档位括号里是后端的评分门槛：档位越积极，要求的分数越低（“很少插话”最严 ≥0.90，“频繁参与”最松 ≥0.10）。
+        闲聊档位括号里是后端的评分门槛：档位越积极，要求的分数越低（“很少插话”最严 ≥0.90，“积极参与”最松 ≥0.30）。
         “回应提问”和“主动闲聊”是两条独立通道，任意一条达标就会开口。
       </p>
       <details class="participation-explanation">

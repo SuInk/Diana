@@ -241,7 +241,7 @@ func TestChatInTreatsAgreementAsChatButNotFabrication(t *testing.T) {
 		t.Fatal("插话回复约束和评分口径对不上")
 	}
 	// 刻度换成了「什么情况下愿意接话」三栏加一句换算，两头的情形和分数都还得在。
-	for _, want := range []string{"两个人在私聊", "群里明确抛出邀请", "落在「愿意接」的给 0.70 到 0.95", "落在「不接」的给 0.10 到 0.30"} {
+	for _, want := range []string{"两个人在私聊", "群里公开抛出邀请", "落在「愿意接」的给 0.70 到 0.95", "落在「不接」的给 0.05 到 0.25"} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("闲聊刻度缺失 %q", want)
 		}
@@ -258,7 +258,7 @@ func TestChatInExemptsBanterFromEvidenceTest(t *testing.T) {
 	for _, want := range []string{
 		// 依据标准的适用范围写成断言类型，不是「所有消息」。
 		"「没有依据就压低」只管对事实、原因、产品、人物和事件的断言",
-		"群里在玩梗、在演正进行的角色扮演、或在拿机器人打趣时没有这种断言",
+		"群里在公开玩梗、在演正进行的角色扮演、或在拿机器人打趣时没有这种断言",
 		// 玩笑照梗和调侃那一栏给分，不被依据标准带着一起塌。
 		"照梗与调侃那一栏给",
 		// 原样复读仍然留在低分区。
@@ -276,17 +276,24 @@ func TestChatInExemptsBanterFromEvidenceTest(t *testing.T) {
 	}
 }
 
-func TestParticipationSevenLevelBoundaries(t *testing.T) {
-	for level, threshold := range map[string]float64{"minimal": 0.90, "low": 0.70, "medium": 0.50, "high": 0.30, "extreme": 0.10} {
+func TestParticipationLevelBoundaries(t *testing.T) {
+	for level, threshold := range map[string]float64{"minimal": 0.90, "low": 0.70, "medium": 0.50, "high": 0.30} {
 		if !ratingPasses(threshold, level) || ratingPasses(threshold-0.01, level) {
 			t.Fatalf("boundary %s %.2f", level, threshold)
 		}
-		// 闲聊仍是七档；回应提问只剩开关，旧档位名一律读作打开（门槛 0.50）。
+		// 回应提问只剩开关，旧档位名一律读作打开。
 		p := ParticipationPreferences{RelevanceLevel: level, ChatLevel: level}
 		r, c := p.ratingLevels()
 		if r != "on" || c != level {
 			t.Fatalf("lost %s: relevance=%s chat=%s", level, r, c)
 		}
+	}
+	// 「频繁参与」已去掉：旧配置里存的 extreme 读作「积极参与」，0.10~0.29 不再放行。
+	if _, c := (ParticipationPreferences{RelevanceLevel: "on", ChatLevel: "extreme"}).ratingLevels(); c != "high" {
+		t.Fatalf("extreme 读成了 %s，应当按 high 执行", c)
+	}
+	if allowed, _ := (ParticipationPreferences{RelevanceLevel: "on", ChatLevel: "extreme"}).ratingsAllow(testRatings(false, 0.2), true); allowed {
+		t.Fatal("旧的 extreme 配置不该再放行 0.20 的闲聊分")
 	}
 	for value, want := range map[string]string{"on": "on", "off": "off"} {
 		if r, _ := (ParticipationPreferences{RelevanceLevel: value, ChatLevel: "low"}).ratingLevels(); r != want {
@@ -489,5 +496,34 @@ func TestProactiveReplyOtherSpeakers(t *testing.T) {
 				t.Fatalf("other speakers = %d，want %d", got, tc.want)
 			}
 		})
+	}
+}
+
+// 线上被叫闭嘴、被说「没问你」之前，几乎都是这几种：几个人正快速你来我往时插进去、
+// 抢答@了别人的问题、把「讨论机器人」当成「对机器人说」。自然度要先于话题有没有意思，
+// 「可有可无」的分数也不能落在高档位的门槛（0.30）上。实际效果看
+// TestLiveParticipationScoreAccuracy。
+func TestChatInPutsNaturalnessFirst(t *testing.T) {
+	prompt := ParticipationPreferences{Desire: 50}.prompt()
+	for _, want := range []string{
+		"会不会觉得被打断、嫌它多嘴？会的话最高 0.10",
+		"两三个人正快速你来我往",
+		"@了别人或点名问别人的，哪怕我也答得上来",
+		"我答不上来（要本地、个人或实时信息）",
+		"在讨论机器人（它的功能、配置、它刚才说的话）而不是对它说",
+		"「你」「你这里」默认指正在对话的那个人",
+		"叫它停、嫌它吵或多嘴",
+		"「可有可无」就是不接",
+		"跟一句恭喜、晚安或一起笑",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("接话评分缺少 %q", want)
+		}
+	}
+	levels, values := participationChatInLevelsFor(nil)
+	for index, value := range values {
+		if strings.Contains(levels[index], "插不插都行") && value >= 0.3 {
+			t.Fatalf("「可有可无」一档是 %.2f，高档位会照样放行", value)
+		}
 	}
 }

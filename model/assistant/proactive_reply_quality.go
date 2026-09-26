@@ -745,6 +745,7 @@ func replyAuditHasStillImageSegment(segments []MessageSegment) bool {
 func (r *Runtime) applyReplyLoopVerdict(ctx context.Context, event MessageEvent, candidate botReplyLoopCandidate, decision proactiveReplyQualityDecision, suppress bool) error {
 	now := time.Now()
 	loop := decision.loopDecision()
+	loop.selfRepeatCounts = loop.AutomatedAIReply || r.accountMarkedAsBot(event)
 	hitCount, loopReason, detected := r.registerBotReplyLoopDecision(event, candidate, loop, now)
 	r.recordBotReplyLoopClassification(ctx, event, candidate, loop, hitCount, decision.ReplyLoopReason, nil, suppress)
 	if !detected || !suppress {

@@ -770,12 +770,22 @@
             </div>
             <div class="card-body form-grid">
               <div class="field wide">
-                <ParticipationControls :key="form.id" :model-value="form.participation" :criteria="form.proactive_reply_extra_criteria" @update:model-value="setParticipation" @update:criteria="value => { if (form) form.proactive_reply_extra_criteria = value; }" />
+                <ParticipationControls :key="form.id" :model-value="form.participation" :criteria="form.proactive_reply_extra_criteria" criteria-optional @update:model-value="setParticipation" @update:criteria="value => { if (form) form.proactive_reply_extra_criteria = value; }" />
               </div>
-              <div class="field wide criteria-editor">
-                <label>什么情况下愿意接话</label>
-                <span class="hint">没人叫它时，哪些情形愿意插话、哪些可以接一句、哪些不接，按这三栏写大白话。闲聊档位决定到哪一栏才开口：「偶尔接话」只在「愿意接」时开口，档位越积极，「可以接一句」也会开口。有人明确在跟它说话时不看这里，由「回应提问」决定。</span>
-                <PromptOverridesEditor :keys="participationWillingnessKeys" :model-value="form.prompt_overrides" @update:model-value="value => { if (form) form.prompt_overrides = value; }" />
+              <div class="field wide participation-prompt">
+                <label>接话评分提示词</label>
+                <span class="hint">两个框前后接起来就是整份评分提示词，按拼进去的顺序排。改完在下面预览发给模型的原样内容。</span>
+                <div class="participation-prompt-part">
+                  <span class="participation-prompt-title">回应提问</span>
+                  <span class="hint">开场两段，加上怎么判断是不是在跟它说话。</span>
+                  <PromptSectionsEditor name="回应提问提示词" title-prefix="接话评分 · " :keys="relevancePromptKeys" :model-value="form.prompt_overrides" @update:model-value="value => { if (form) form.prompt_overrides = value; }" />
+                </div>
+                <div class="participation-prompt-part">
+                  <span class="participation-prompt-title">主动闲聊</span>
+                  <span class="hint">闲聊分怎么给，以及收尾：通用规则、输出格式、补充判据段头收尾、用户消息开头、解析失败时的重问和判断模型的分档。</span>
+                  <PromptSectionsEditor name="主动闲聊提示词" title-prefix="接话评分 · " :keys="chatPromptKeys" :model-value="form.prompt_overrides" @update:model-value="value => { if (form) form.prompt_overrides = value; }" />
+                </div>
+                <ParticipationPromptPreview :config="form" />
               </div>
               <div class="field wide">
                 <label>手动标记的机器人（本机所有群）</label>
@@ -1110,9 +1120,16 @@
                 <span class="hint">
                   机器人决定不正面回答时说什么。说明为什么不能答，本身可能就是那句会出事的话——
                   一句「这个话题涉及敏感政治，我不方便讲」把触发点原样复述了一遍，风险比闭嘴还大。
-                  除「说明原因」外的档位都不会点名或影射触发拒答的具体内容。
-                  30 分钟内累计拒答超过 3 次后暂停响应该账号 30 分钟，这一条不受本项影响；模型拒答标志不向用户展示。
+                  除「说明原因」外的档位都不会点名或影射触发拒答的具体内容。模型拒答标志不向用户展示。
                 </span>
+              </div>
+              <div class="field wide">
+                <label class="switch">
+                  <input v-model="form.reply_refusal_suppression_enabled" type="checkbox" />
+                  <span class="track" aria-hidden="true"></span>
+                  <span class="switch-label">反复拒答后暂停响应该账号</span>
+                </label>
+                <span class="hint">30 分钟内对同一账号拒答满 4 次，暂停响应它 10 到 30 分钟。关掉后拒答照常，只是不再因此暂停。主人不受影响。</span>
               </div>
               <div class="field wide">
                 <label class="switch">
@@ -1120,7 +1137,7 @@
                   <span class="track" aria-hidden="true"></span>
                   <span class="switch-label">识别其他机器人的自动回复并停止接续</span>
                 </label>
-                <span class="hint">回复同一账号过于频繁时（10 分钟 10 条，已标记的机器人 2 条），发送前审核会判断这串来回有没有明确目的：下棋、解题、一起做事照常回；漫无目的地接戏、斗嘴、复读则降低回复欲望（不主动接、只接点名并逐步拉长冷却），30 分钟内累计 3 次暂停响应该账号 30 分钟。主人不受影响。</span>
+                <span class="hint">回复同一账号过于频繁时（10 分钟 10 条，已标记的机器人 2 条），发送前审核会判断这串来回有没有明确目的：下棋、解题、一起做事照常回；漫无目的地接戏、斗嘴、复读则降低回复欲望（不主动接、只接点名并逐步拉长冷却），30 分钟内累计 3 次暂停响应该账号 10 到 30 分钟。机器人自己把同一个意思说了好几遍时只丢那一条回复，对方是机器人才累计。主人不受影响。</span>
               </div>
               <div class="field wide">
                 <label class="switch">
@@ -2000,6 +2017,8 @@ import ParticipationControls from "../components/ParticipationControls.vue";
 import BotMarkerList from "../components/BotMarkerList.vue";
 import AgentResidencyPanel from "../components/AgentResidencyPanel.vue";
 import PromptOverridesEditor from "../components/PromptOverridesEditor.vue";
+import PromptSectionsEditor from "../components/PromptSectionsEditor.vue";
+import ParticipationPromptPreview from "../components/ParticipationPromptPreview.vue";
 import { participationFromConfig, type ParticipationPreferences } from "../participation";
 import SoulEditor from "../components/SoulEditor.vue";
 import EmptyState from "../components/EmptyState.vue";
@@ -2023,9 +2042,30 @@ const personaBusy = ref(false);
 // 保留生成前的那一版，生成结果不合适可以一键退回，不用自己 Ctrl+Z。
 const soulEditor = ref<InstanceType<typeof SoulEditor> | null>(null);
 const promptOverridesOpen = ref(false);
-// 「什么情况下愿意接话」是内置提示词里的一段，在「接话」卡片里就地改；评分骨架、
-// 换算和输出格式留在「内置提示词」。
-const participationWillingnessKeys = ["routing.participation.willingness"];
+// 接话评分用到的每一段内置提示词分两个框放在「接话」卡片里，两个框前后接起来就是拼进去
+// 的顺序，和预览逐段对得上；和「内置提示词」页读写的是同一份覆盖。旧版意图路由的提示词
+// 不在这里（启用参与度后不再发送）。
+const relevancePromptKeys = [
+  "routing.participation.header",
+  "routing.participation.intro",
+  "routing.participation.relevance_intro",
+  "routing.participation.relevance_true",
+  "routing.participation.relevance_false",
+  "routing.participation.relevance_note"
+];
+const chatPromptKeys = [
+  "routing.participation.chat_in_intro",
+  "routing.participation.willingness",
+  "routing.participation.willingness_scale",
+  "routing.participation.chat_in_note",
+  "routing.participation.shared_note",
+  "routing.participation.format",
+  "routing.criteria.heading",
+  "routing.criteria.guard",
+  "routing.route_instruction.participation",
+  "routing.participation.retry",
+  "routing.participation.chat_in_levels"
+];
 const promptOverrideCount = computed(() => Object.keys(form.value?.prompt_overrides ?? {}).length);
 
 // 内置提示词 YAML：导出的是编辑器里眼前这一份（可能还没保存），导入只填回编辑器，
@@ -3654,6 +3694,7 @@ function setForm(config: BotProfileConfig): void {
     // 可选布尔字段先归一化成具体值供开关绑定；少数安全行为默认关闭。
     owner_llm_config_enabled: config.owner_llm_config_enabled ?? true,
     bot_reply_loop_detection_enabled: config.bot_reply_loop_detection_enabled ?? true,
+    reply_refusal_suppression_enabled: config.reply_refusal_suppression_enabled ?? true,
     reply_account_safety_audit_master_enabled: config.reply_account_safety_audit_master_enabled ?? true,
     natural_reply_split_enabled: config.natural_reply_split_enabled ?? true,
     reply_preserve_line_breaks: config.reply_preserve_line_breaks ?? true,

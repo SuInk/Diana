@@ -121,12 +121,19 @@ type botReplyLoopAIDecision struct {
 	SelfRepeat bool    `json:"self_repeat"`
 	Confidence float64 `json:"confidence"`
 	Reason     string  `json:"reason"`
+	// selfRepeatCounts 决定「在复读自己」算不算一次空转、要不要累计到暂停对方。
+	// 只有对方是机器人（被管理员标记，或这次判为自动应答）时才算：互道晚安七遍的
+	// 那种循环，暂停的是另一台机器人。对方是真人时，复读是机器人自己的毛病，只丢
+	// 这一条回复（selfRepeatDropsReply），不该连坐对方——线上被记过的真人里，大多
+	// 是正常追问时机器人答得有点重复。
+	selfRepeatCounts bool
 }
 
-// counts 决定这次结论算不算一次空转。只有「没内容」「没目的」或「在复读自己」才算：
-// 对方是不是 AI 只记录不计数——两台 AI 正经下棋、做题，不该因为对面是 AI 就被停掉。
+// counts 决定这次结论算不算一次空转。只有「没内容」「没目的」或（对方是机器人时）
+// 「在复读自己」才算：对方是不是 AI 只记录不计数——两台 AI 正经下棋、做题，不该因为
+// 对面是 AI 就被停掉。
 func (decision botReplyLoopAIDecision) counts() bool {
-	if !decision.MeaninglessLoop && !decision.PurposelessLoop && !decision.SelfRepeat {
+	if !decision.MeaninglessLoop && !decision.PurposelessLoop && !(decision.SelfRepeat && decision.selfRepeatCounts) {
 		return false
 	}
 	return decision.confident()
@@ -697,6 +704,9 @@ func (r *Runtime) applyReplyControlAfterSend(ctx context.Context, event MessageE
 		return
 	}
 	if _, blocked := r.activeReplySuppression(event, now); blocked {
+		return
+	}
+	if !boolValue(r.effectiveConfigForEvent(event).ReplyRefusalSuppressionEnabled, true) {
 		return
 	}
 	_, reason, thresholdReached := r.registerReplyRefusal(event, now)

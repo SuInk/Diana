@@ -614,7 +614,10 @@ type BotConfig struct {
 	InboundGroupConcurrency      int   `json:"inbound_group_concurrency,omitempty"`
 	InboundPrivateConcurrency    int   `json:"inbound_private_concurrency,omitempty"`
 	BotReplyLoopDetectionEnabled *bool `json:"bot_reply_loop_detection_enabled,omitempty"`
-	ReplySafetyMasterEnabled     *bool `json:"reply_account_safety_audit_master_enabled,omitempty"`
+	// ReplyRefusalSuppressionEnabled 控制「30 分钟内对同一账号拒答满 4 次就暂停响应它」。
+	// 默认开；关掉后拒答照常，只是不再因此暂停。
+	ReplyRefusalSuppressionEnabled *bool `json:"reply_refusal_suppression_enabled,omitempty"`
+	ReplySafetyMasterEnabled       *bool `json:"reply_account_safety_audit_master_enabled,omitempty"`
 	// ReplyAccountSafetyAuditPrompt 是账号安全判断的自定义规则。留空使用内置范围；
 	// 非空时作为管理员规则替代默认风险范围，但不改变审核输出协议。
 	ReplyAccountSafetyAuditPrompt        string `json:"reply_account_safety_audit_prompt,omitempty"`
@@ -1070,20 +1073,21 @@ type ConfigPayload struct {
 	ErrorReplyPrefix               string               `json:"error_reply_prefix,omitempty"`
 	SendRetryAttempts              int                  `json:"send_retry_attempts,omitempty"`
 	sendRetrySettings
-	SendChunkIntervalMS           int                  `json:"send_chunk_interval_ms,omitempty"`
-	PrivateClosingGrace           int                  `json:"private_closing_grace,omitempty"`
-	InboundGroupConcurrency       int                  `json:"inbound_group_concurrency,omitempty"`
-	InboundPrivateConcurrency     int                  `json:"inbound_private_concurrency,omitempty"`
-	PromptInjectTime              *bool                `json:"prompt_inject_time,omitempty"`
-	PromptInjectPlaintextRules    *bool                `json:"prompt_inject_plaintext_rules,omitempty"`
-	PromptInjectGroupSender       *bool                `json:"prompt_inject_group_sender,omitempty"`
-	PromptChineseSlangHint        *bool                `json:"prompt_chinese_slang_hint,omitempty"`
-	AutoImageDescription          *bool                `json:"auto_image_description,omitempty"`
-	AutoVideoPreprocess           *bool                `json:"auto_video_preprocess,omitempty"`
-	ModelRoles                    map[string]ModelRole `json:"model_roles,omitempty"`
-	BotReplyLoopDetectionEnabled  *bool                `json:"bot_reply_loop_detection_enabled,omitempty"`
-	ReplySafetyMasterEnabled      *bool                `json:"reply_account_safety_audit_master_enabled,omitempty"`
-	ReplyAccountSafetyAuditPrompt string               `json:"reply_account_safety_audit_prompt,omitempty"`
+	SendChunkIntervalMS            int                  `json:"send_chunk_interval_ms,omitempty"`
+	PrivateClosingGrace            int                  `json:"private_closing_grace,omitempty"`
+	InboundGroupConcurrency        int                  `json:"inbound_group_concurrency,omitempty"`
+	InboundPrivateConcurrency      int                  `json:"inbound_private_concurrency,omitempty"`
+	PromptInjectTime               *bool                `json:"prompt_inject_time,omitempty"`
+	PromptInjectPlaintextRules     *bool                `json:"prompt_inject_plaintext_rules,omitempty"`
+	PromptInjectGroupSender        *bool                `json:"prompt_inject_group_sender,omitempty"`
+	PromptChineseSlangHint         *bool                `json:"prompt_chinese_slang_hint,omitempty"`
+	AutoImageDescription           *bool                `json:"auto_image_description,omitempty"`
+	AutoVideoPreprocess            *bool                `json:"auto_video_preprocess,omitempty"`
+	ModelRoles                     map[string]ModelRole `json:"model_roles,omitempty"`
+	BotReplyLoopDetectionEnabled   *bool                `json:"bot_reply_loop_detection_enabled,omitempty"`
+	ReplyRefusalSuppressionEnabled *bool                `json:"reply_refusal_suppression_enabled,omitempty"`
+	ReplySafetyMasterEnabled       *bool                `json:"reply_account_safety_audit_master_enabled,omitempty"`
+	ReplyAccountSafetyAuditPrompt  string               `json:"reply_account_safety_audit_prompt,omitempty"`
 	// NotebookSharedScopeEnabled 让笔记本跟随机器人：群聊私聊共用一本，新条目写进
 	// 这台机器人的全局作用域，所有会话都能查到。默认打开——笔记本记的是这台机器人
 	// 学到的梗和规矩，不是某个群的私产；关掉才按会话隔离。
@@ -1685,33 +1689,34 @@ func DefaultBotConfig() BotConfig {
 		// 连发间隔和每条长度取的是聊天体量：几百字一坨、300ms 连发怎么看都不像
 		// 真人。这两个数原先是群友风格在 apply 里钳出来的，风格不再改配置之后
 		// 搬到这里当默认值——想要长一点的气泡、快一点的连发就在 WebUI 里改。
-		SendChunkIntervalMS:          chatSendChunkIntervalMS,
-		PrivateClosingGrace:          defaultPrivateClosingGrace,
-		InboundGroupConcurrency:      defaultInboundGroupConcurrency,
-		InboundPrivateConcurrency:    defaultInboundPrivateConcurrency,
-		ChatInEnabled:                boolPointer(true),
-		ChatInLevel:                  defaultChatInLevel,
-		NaturalInterjectionEnabled:   boolPointer(false),
-		MaxInputChars:                2000,
-		ReplyMergeConfidencePercent:  defaultReplyMergeConfidencePercent,
-		MaxReplyChars:                3500,
-		ReplyMaxBubbles:              replyMaxChatBubbles,
-		ForwardReplyChunkThreshold:   0,
-		ForwardReplyEnabled:          boolPointer(true),
-		DirectReplyChunkSize:         chatReplyChunkSize,
-		ForwardReplyThreshold:        defaultForwardReplyThreshold,
-		RecallReplyMode:              RecallReplyModeOriginalForward,
-		RefusalStrategy:              RefusalStrategySmart,
-		LLMStreamingEnabled:          boolPointer(true),
-		RecallReplyAutoDeleteEnabled: boolPointer(false),
-		RecallReplyTTLSeconds:        defaultRecallReplyTTLSeconds,
-		LLMIdentityMaskingEnabled:    boolPointer(true),
-		BotReplyLoopDetectionEnabled: boolPointer(true),
-		ReplySafetyMasterEnabled:     boolPointer(true),
-		TelegramSuppressBotMessages:  boolPointer(true),
-		QQTypingEnabled:              boolPointer(true),
-		NotebookSharedScopeEnabled:   boolPointer(true),
-		RecentHistoryTokenBudget:     DefaultRecentHistoryTokenBudget,
+		SendChunkIntervalMS:            chatSendChunkIntervalMS,
+		PrivateClosingGrace:            defaultPrivateClosingGrace,
+		InboundGroupConcurrency:        defaultInboundGroupConcurrency,
+		InboundPrivateConcurrency:      defaultInboundPrivateConcurrency,
+		ChatInEnabled:                  boolPointer(true),
+		ChatInLevel:                    defaultChatInLevel,
+		NaturalInterjectionEnabled:     boolPointer(false),
+		MaxInputChars:                  2000,
+		ReplyMergeConfidencePercent:    defaultReplyMergeConfidencePercent,
+		MaxReplyChars:                  3500,
+		ReplyMaxBubbles:                replyMaxChatBubbles,
+		ForwardReplyChunkThreshold:     0,
+		ForwardReplyEnabled:            boolPointer(true),
+		DirectReplyChunkSize:           chatReplyChunkSize,
+		ForwardReplyThreshold:          defaultForwardReplyThreshold,
+		RecallReplyMode:                RecallReplyModeOriginalForward,
+		RefusalStrategy:                RefusalStrategySmart,
+		LLMStreamingEnabled:            boolPointer(true),
+		RecallReplyAutoDeleteEnabled:   boolPointer(false),
+		RecallReplyTTLSeconds:          defaultRecallReplyTTLSeconds,
+		LLMIdentityMaskingEnabled:      boolPointer(true),
+		BotReplyLoopDetectionEnabled:   boolPointer(true),
+		ReplyRefusalSuppressionEnabled: boolPointer(true),
+		ReplySafetyMasterEnabled:       boolPointer(true),
+		TelegramSuppressBotMessages:    boolPointer(true),
+		QQTypingEnabled:                boolPointer(true),
+		NotebookSharedScopeEnabled:     boolPointer(true),
+		RecentHistoryTokenBudget:       DefaultRecentHistoryTokenBudget,
 		// 40 而不是 20：这个上限只管路由、指代消解和记忆门控这些旁路的回看深度，
 		// 不进正式提示词。20 条在稍热闹一点的群里就不够被指代的消息留在窗口里，
 		// 而这些调用的单条开销很小，放宽的代价远小于解不出指代的代价。
@@ -1920,6 +1925,9 @@ func (cfg BotConfig) WithDefaults() BotConfig {
 	}
 	if cfg.BotReplyLoopDetectionEnabled == nil {
 		cfg.BotReplyLoopDetectionEnabled = boolPointer(true)
+	}
+	if cfg.ReplyRefusalSuppressionEnabled == nil {
+		cfg.ReplyRefusalSuppressionEnabled = boolPointer(true)
 	}
 	if cfg.TelegramSuppressBotMessages == nil {
 		cfg.TelegramSuppressBotMessages = boolPointer(true)
@@ -2269,6 +2277,7 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		AutoVideoPreprocess:               copyBoolPointer(cfg.AutoVideoPreprocess),
 		ModelRoles:                        normalizeModelRoles(cfg.ModelRoles),
 		BotReplyLoopDetectionEnabled:      copyBoolPointer(cfg.BotReplyLoopDetectionEnabled),
+		ReplyRefusalSuppressionEnabled:    copyBoolPointer(cfg.ReplyRefusalSuppressionEnabled),
 		ReplySafetyMasterEnabled:          copyBoolPointer(cfg.ReplySafetyMasterEnabled),
 		ReplyAccountSafetyAuditPrompt:     strings.TrimSpace(cfg.ReplyAccountSafetyAuditPrompt),
 		NotebookSharedScopeEnabled:        copyBoolPointer(cfg.NotebookSharedScopeEnabled),
@@ -2475,6 +2484,7 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		AutoVideoPreprocess:             copyBoolPointer(firstNonNilBoolPointer(payload.AutoVideoPreprocess, existing.AutoVideoPreprocess)),
 		ModelRoles:                      normalizeModelRoles(payload.ModelRoles),
 		BotReplyLoopDetectionEnabled:    copyBoolPointer(payload.BotReplyLoopDetectionEnabled),
+		ReplyRefusalSuppressionEnabled:  copyBoolPointer(payload.ReplyRefusalSuppressionEnabled),
 		ReplySafetyMasterEnabled:        copyBoolPointer(payload.ReplySafetyMasterEnabled),
 		ReplyAccountSafetyAuditPrompt:   strings.TrimSpace(payload.ReplyAccountSafetyAuditPrompt),
 		NotebookSharedScopeEnabled:      copyBoolPointer(payload.NotebookSharedScopeEnabled),

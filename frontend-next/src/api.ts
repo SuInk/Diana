@@ -273,6 +273,8 @@ export interface BotProfileConfig extends SendRetrySettings {
   }>;
   /** 用模型识别其他机器人的自动回复并阻断机器人互聊；缺省等价于开启。 */
   bot_reply_loop_detection_enabled?: boolean;
+  /** 30 分钟内对同一账号拒答满 4 次就暂停响应它；默认开。 */
+  reply_refusal_suppression_enabled?: boolean;
   /** 机器人级账号安全审核总开关；开启后主动和直接回复都审核，关闭后都不审核。 */
   reply_account_safety_audit_master_enabled?: boolean;
   /** 自定义账号风险范围；留空使用内置规则。 */
@@ -1433,6 +1435,24 @@ export interface PromptCatalog {
 
 export function getPromptCatalog(): Promise<PromptCatalog> {
   return requestJSON<PromptCatalog>("/api/assistant/prompts");
+}
+
+/** 接话评分发给模型的内容：对话模型收系统提示词和用户消息，只做判断的模型收题目。 */
+export interface ParticipationPromptPreview {
+  system: string;
+  /** 开头的任务说明按配置拼，后面的上下文是一段示例群聊。 */
+  user: string;
+  /** 评分解析失败、重问一次时插在最前面的系统消息。 */
+  retry: string;
+  decision: { label: string; instructions: string; true_criteria?: string; false_criteria?: string; levels?: string[] }[];
+}
+
+/** 按编辑器里眼前这份配置（可能还没保存）拼出接话评分发给模型的内容。 */
+export function previewParticipationPrompt(config: BotProfileConfig): Promise<ParticipationPromptPreview> {
+  return requestJSON<ParticipationPromptPreview>("/api/assistant/prompts/participation-preview", {
+    method: "POST",
+    body: JSON.stringify(config)
+  });
 }
 
 /** 把编辑器里当前的覆盖表导出成一份完整的内置提示词 YAML（每一段都列出来）。 */

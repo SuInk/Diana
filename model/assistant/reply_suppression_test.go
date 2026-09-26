@@ -1034,3 +1034,27 @@ func (p *generationTimeSuppressionProvider) Generate(_ context.Context, req llm.
 	p.runtime.activateReplySuppression(p.event, "threshold reached during generation", time.Now())
 	return &llm.GenerateResponse{Provider: llm.ProviderOpenAICompatible, Model: "test", Text: "这条回复不应发送"}, nil
 }
+
+// 「反复拒答后暂停」可以单独关掉：关了以后拒答照常，只是满 4 次也不暂停对方。
+func TestReplyRefusalSuppressionCanBeTurnedOff(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		enabled    *bool
+		wantPaused bool
+	}{
+		{"default_on", nil, true},
+		{"turned_off", boolPointer(false), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			runtime := NewRuntime(BotConfig{OwnerID: "owner", BotAccount: "42", ReplyRefusalSuppressionEnabled: tc.enabled}, &recordingChannel{}, NewPluginManager(), nil, nil, nil, nil)
+			var event MessageEvent
+			for index := 0; index < replyRefusalThreshold; index++ {
+				event = refusalTestEvent(EventKindPrivate, "", "user", fmt.Sprintf("toggle-%s-%d", tc.name, index))
+				runtime.applyReplyControlAfterSend(context.Background(), event, "这条消息我拒绝回答。", replyControlIntent{RefuseCurrent: true})
+			}
+			if _, paused := runtime.activeReplySuppression(event, time.Now()); paused != tc.wantPaused {
+				t.Fatalf("暂停 = %v，want %v", paused, tc.wantPaused)
+			}
+		})
+	}
+}

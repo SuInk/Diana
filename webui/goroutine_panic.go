@@ -5,4 +5,5 @@ package webui
 
 import "github.com/SuInk/diana/internal/safego"
 
-func recoverGoroutinePanic(component string) { safego.Recover("webui." + component) }
+// recover() 必须由这个被 defer 的函数直接调用，挪进 safego 里就接不住 panic。
+func recoverGoroutinePanic(component string) { safego.Report("webui."+component, recover()) }

@@ -180,6 +180,11 @@ func (p ParticipationPreferences) ratingLevels() (string, string) {
 			c = "low"
 		}
 	}
+	// 「频繁参与」（≥0.10）已经去掉：评分口径里「不接」一栏就落在 0.05~0.25，这一档等于把
+	// 判为不该插嘴的消息放行一半。旧配置和旧工具调用里存的 extreme 一律按「积极参与」算。
+	if c == "extreme" {
+		c = "high"
+	}
 	return r, c
 }
 func ratingPasses(score float64, level string) bool {
@@ -189,7 +194,7 @@ func ratingPasses(score float64, level string) bool {
 	if level == "always" {
 		return true
 	}
-	threshold, valid := map[string]float64{"minimal": 0.90, "low": 0.70, "medium": 0.50, "high": 0.30, "extreme": 0.10}[level]
+	threshold, valid := map[string]float64{"minimal": 0.90, "low": 0.70, "medium": 0.50, "high": 0.30}[level]
 	if !valid {
 		return false
 	}

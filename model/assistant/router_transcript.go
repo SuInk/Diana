@@ -20,6 +20,9 @@ import (
 //
 // 这里只改接话评分这一路喂给模型的正文；payload 本身照旧算，发言占比、冷却这些程序
 // 判断仍然读它。旧契约（should_reply）那一路不动。
+//
+// 每行开头标着离现在多久。「几个人正快速你来我往时别插嘴」是闲聊分的头一条判据，
+// 没有时间，一分钟里的五条来回和一下午的五条闲聊在对话稿里长得一样。
 
 // proactiveReplyTranscript 把评分上下文排成从早到晚的对话，当前消息放最后并单独标出。
 func proactiveReplyTranscript(payload proactiveReplyPayload) string {
@@ -42,7 +45,7 @@ func proactiveReplyTranscript(payload proactiveReplyPayload) string {
 		if item.MessageID != "" {
 			seen[item.MessageID] = true
 		}
-		lines = append(lines, transcriptLine(item.Sender, item.IsBot, item.Addressing, item.Text, item.Images, botName))
+		lines = append(lines, transcriptAge(item.AgeSeconds)+transcriptLine(item.Sender, item.IsBot, item.Addressing, item.Text, item.Images, botName))
 	}
 	// 同一批攒进来的其它消息通常到达时就进了历史；没进的补在当前消息前面，它们各自
 	// 回复了谁、@ 了谁不能丢。最后一条候选就是当前消息，不在这里重复。
@@ -51,7 +54,7 @@ func proactiveReplyTranscript(payload proactiveReplyPayload) string {
 		if candidate.IsCurrent || (candidate.MessageID != "" && seen[candidate.MessageID]) {
 			continue
 		}
-		lines = append(lines, transcriptLine(candidate.Sender, false, candidate.Addressing, candidate.Text, candidate.Images, botName))
+		lines = append(lines, transcriptAge(candidate.AgeSeconds)+transcriptLine(candidate.Sender, false, candidate.Addressing, candidate.Text, candidate.Images, botName))
 	}
 	current := transcriptLine(payload.CurrentSender, false, payload.Addressing, payload.CurrentText, payload.CurrentImages, botName)
 	if quoted := strings.TrimSpace(payload.QuotedText); quoted != "" {
@@ -61,7 +64,7 @@ func proactiveReplyTranscript(payload proactiveReplyPayload) string {
 		}
 		current += fmt.Sprintf("（引用 %s：%s）", firstNonEmpty(who, "某人"), truncateRunes(strings.Join(strings.Fields(quoted), " "), 80))
 	}
-	lines = append(lines, "【当前消息】"+current)
+	lines = append(lines, "【当前消息】[刚刚] "+current)
 	if payload.LastBotAddressedCurrentSender {
 		lines = append(lines, "（"+botName+"最近一条发言是冲着当前发送者说的）")
 	}
@@ -69,6 +72,23 @@ func proactiveReplyTranscript(payload proactiveReplyPayload) string {
 		lines = append(lines, "", "群内术语：", notebook)
 	}
 	return strings.Join(lines, "\n")
+}
+
+// transcriptAge 把离现在的秒数写成行首的「[25秒前] 」，没有时间就不写。
+func transcriptAge(seconds *int64) string {
+	if seconds == nil || *seconds < 0 {
+		return ""
+	}
+	switch s := *seconds; {
+	case s < 5:
+		return "[刚刚] "
+	case s < 60:
+		return fmt.Sprintf("[%d秒前] ", s)
+	case s < 3600:
+		return fmt.Sprintf("[%d分钟前] ", s/60)
+	default:
+		return fmt.Sprintf("[%d小时前] ", s/3600)
+	}
 }
 
 // transcriptLine 渲染一行：「发送者（回复谁，@谁）：正文」。机器人自己的发言标成

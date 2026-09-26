@@ -50,7 +50,7 @@ func TestProactiveReplyBatchRoutesOnceAndSelectsTarget(t *testing.T) {
 	}
 	requestText := provider.requests[0].Messages[len(provider.requests[0].Messages)-1].Content
 	// 评分喂的是对话稿：两条候选按发送者和正文各占一行，不带账号。
-	for _, want := range []string{"Alice：这个报错应该怎么处理", "【当前消息】Bob：我先去吃饭了"} {
+	for _, want := range []string{"Alice：这个报错应该怎么处理", "【当前消息】[刚刚] Bob：我先去吃饭了"} {
 		if !strings.Contains(requestText, want) {
 			t.Fatalf("batch transcript missing %s: %s", want, requestText)
 		}
