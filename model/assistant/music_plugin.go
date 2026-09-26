@@ -114,6 +114,8 @@ func (p *MusicPlugin) TestConnections(ctx context.Context, settings SettingValue
 			status.Message = "搜索与播放地址获取正常"
 		case status.SearchOK && loginInvalid:
 			status.Message = "搜索正常，但登录态无效，取不到播放地址"
+		case status.SearchOK && status.Login != nil && status.Login.MembershipExpired:
+			status.Message = "搜索正常、登录有效，但会员已过期；测试曲是会员歌曲，拿不到播放地址"
 		case status.SearchOK && status.Login != nil && status.Login.State == CredentialValid:
 			status.Message = "搜索正常、登录有效，但测试曲没取到播放地址，可能是这家的版权限制"
 		case status.SearchOK:

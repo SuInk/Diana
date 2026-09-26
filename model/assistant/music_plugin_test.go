@@ -1097,10 +1097,10 @@ func TestMusicLoginCheckReadsAccountInterfaces(t *testing.T) {
 	}
 	// 登录有效但会员过期要说出来：不然用户只看到「填了 Cookie 还是放不了」。
 	if got := musicLoginCheck(t, plugin, "qq", "uin=o12345; qqmusic_key=good"); got.State != CredentialValid || got.Account != "企鹅" ||
-		got.Message != "已登录，但会员已于 2020-05-02 到期，会员歌曲拿不到播放地址" {
+		got.Message != "已登录，但会员已于 2020-05-02 到期，会员歌曲拿不到播放地址" || !got.MembershipExpired {
 		t.Fatalf("qq valid = %#v", got)
 	}
-	if got := musicLoginCheck(t, plugin, "qq", "uin=12345; qqmusic_key=vip"); got.State != CredentialValid || got.Message != "已登录，会员有效期至 2099-05-02" {
+	if got := musicLoginCheck(t, plugin, "qq", "uin=12345; qqmusic_key=vip"); got.State != CredentialValid || got.Message != "已登录，会员有效期至 2099-05-02" || got.MembershipExpired {
 		t.Fatalf("qq vip = %#v", got)
 	}
 	if got := musicLoginCheck(t, plugin, "qq", "uin=12345; qqmusic_key=stale"); got.State != CredentialInvalid {
