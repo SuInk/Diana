@@ -77,6 +77,18 @@ type ReminderStore interface {
 	SaveReminders([]Reminder) error
 }
 
+// wakingReminderStore 在每次保存成功后叫醒提醒调度循环，见 runReminderLoop。
+type wakingReminderStore struct {
+	ReminderStore
+	wake func()
+}
+
+func (s wakingReminderStore) SaveReminders(items []Reminder) error {
+	err := s.ReminderStore.SaveReminders(items)
+	s.wake()
+	return err
+}
+
 type GroupConfigStore interface {
 	ConfigForGroup(botProfileID, groupID string) (GroupConfig, bool)
 }
@@ -400,7 +412,10 @@ type Runtime struct {
 	buildInfo      BuildInfo
 	releaseStatus  ReleaseStatusProvider
 	reminders      ReminderStore
-	codingJobsOnce sync.Once
+	// reminderWake 叫醒提醒调度循环重算下一次唤醒时间，见 runReminderLoop。
+	reminderWake     chan struct{}
+	reminderWakeOnce sync.Once
+	codingJobsOnce   sync.Once
 	// safeModeHeldLogged 记着哪些任务已经因为安全模式停发过、日志写过一次，免得每轮
 	// 调度都刷一条。键是任务 ID。
 	safeModeHeldLogged    sync.Map
@@ -725,7 +740,6 @@ func NewRuntime(cfg BotConfig, channel Channel, plugins *PluginManager, llmStore
 		channel:                 channel,
 		plugins:                 plugins,
 		llmStore:                llmStore,
-		reminders:               reminders,
 		configSaver:             configSaver,
 		llmFactory:              llmFactory,
 		updatedAt:               time.Now(),
@@ -771,6 +785,11 @@ func NewRuntime(cfg BotConfig, channel Channel, plugins *PluginManager, llmStore
 		subagentRecent:          map[string]SubagentTaskStatus{},
 		subagentSem:             make(chan struct{}, defaultSubagentTaskConcurrency),
 		subagentLLMSem:          make(chan struct{}, subagentLLMConcurrency(cfg.MaxBotConcurrency)),
+	}
+	if reminders != nil {
+		// 每次保存都叫醒调度循环：新建、改时间、取消、跑完改下一次，都可能让最早的
+		// 到期时间变了。放在存储这一层，不用在几十个 SaveReminders 调用处各记一笔。
+		runtime.reminders = wakingReminderStore{ReminderStore: reminders, wake: runtime.wakeReminderLoop}
 	}
 	runtime.members = newMemberCacheForEvent(runtime.callOneBotAPIForEvent)
 	runtime.reconcileBridges()

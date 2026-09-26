@@ -529,8 +529,9 @@ func (r *Runtime) updateOneTimeReminder(ownerID string, id string, input map[str
 			item.TriggerAt = triggerAt
 		}
 		if rawDelay != "" || rawAt != "" {
-			// 改了时间就是新约的时间，之前被停发时记下的原定时间不再算数。
+			// 改了时间就是新约的时间，之前被停发或重试时记下的原定时间不再算数。
 			item.SafeModeHeldTriggerAt = time.Time{}
+			item.OriginalTriggerAt = time.Time{}
 		}
 		if message != "" {
 			item.Message = message

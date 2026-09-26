@@ -482,10 +482,14 @@ func (r *Runtime) finishEventTrigger(id string, fired EventTrigger, runErr error
 
 // expireEventTriggers 把到期的任务收掉。从没触发过的，告诉创建者一声：他设这个
 // 是在等一件事，等不到也该知道。
-func (r *Runtime) expireEventTriggers(ctx context.Context, now time.Time) {
+//
+// 返回还没到期的事件触发任务里最早的过期时间，调度循环据此决定什么时候醒；没有则
+// 为零值。
+func (r *Runtime) expireEventTriggers(ctx context.Context, now time.Time) time.Time {
 	if r.reminders == nil {
-		return
+		return time.Time{}
 	}
+	var next time.Time
 	r.reminderMu.Lock()
 	items := r.reminders.Reminders()
 	var notices []Reminder
@@ -496,7 +500,13 @@ func (r *Runtime) expireEventTriggers(ctx context.Context, now time.Time) {
 			continue
 		}
 		spec, ok := decodeEventTrigger(item.EventTriggerJSON)
-		if !ok || spec.Expired || spec.ExpiresAt.IsZero() || now.Before(spec.ExpiresAt) {
+		if !ok || spec.Expired || spec.ExpiresAt.IsZero() {
+			continue
+		}
+		if now.Before(spec.ExpiresAt) {
+			if next.IsZero() || spec.ExpiresAt.Before(next) {
+				next = spec.ExpiresAt
+			}
 			continue
 		}
 		spec.Expired = true
@@ -514,7 +524,7 @@ func (r *Runtime) expireEventTriggers(ctx context.Context, now time.Time) {
 	r.reminderMu.Unlock()
 	if saveErr != nil {
 		r.setError(fmt.Sprintf("保存到期的事件触发任务失败: %v", saveErr))
-		return
+		return next
 	}
 	for _, item := range notices {
 		text := fmt.Sprintf("你设的触发任务 %s 到期了，一次都没触发，已自动收掉：%s", item.ID, truncateRunes(item.Message, eventTriggerContextRunes))
@@ -522,4 +532,5 @@ func (r *Runtime) expireEventTriggers(ctx context.Context, now time.Time) {
 			log.Printf("diana event trigger %s expiry notice failed: %v", item.ID, err)
 		}
 	}
+	return next
 }

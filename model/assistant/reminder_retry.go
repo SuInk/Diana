@@ -85,6 +85,9 @@ func (r *Runtime) rescheduleOneTimeReminder(id string, cause error) (Reminder, e
 		found = true
 		item.LastError = cause.Error()
 		item.ConsecutiveFailures++
+		if item.OriginalTriggerAt.IsZero() {
+			item.OriginalTriggerAt = item.TriggerAt
+		}
 		item.TriggerAt = time.Now().Add(durableReminderRetryDelay(*item, cause, item.ConsecutiveFailures))
 		updated = *item
 		break
@@ -193,4 +196,26 @@ func (r *Runtime) recordReminderRetryAttempt(item Reminder, cause error, noticeE
 			"error_fingerprint":    item.LastErrorFingerprint,
 		},
 	})
+}
+
+// missedReminderGrace 是一次性提醒晚到多久算「错过」：超过它就不再当成准点提醒发，
+// 改成注明原定时间的「错过的提醒」。12 小时足够盖住短暂的断线和几轮发送重试，又能
+// 挡住「今早的闹钟到晚上才响」和停机几天后成批补发。
+const missedReminderGrace = 12 * time.Hour
+
+// missedReminderLateness 返回一次性提醒的原定时间和到 now 为止晚了多久。
+func missedReminderLateness(item Reminder, now time.Time) (time.Time, time.Duration) {
+	due := item.OriginalTriggerAt
+	if due.IsZero() {
+		due = item.TriggerAt
+	}
+	return due, now.Sub(due)
+}
+
+// formatReminderLateness 把迟到时长写成「约 13 小时」「约 3 天」。
+func formatReminderLateness(late time.Duration) string {
+	if late < 48*time.Hour {
+		return fmt.Sprintf("约 %d 小时", int(late.Hours()))
+	}
+	return fmt.Sprintf("约 %d 天", int(late.Hours()/24))
 }

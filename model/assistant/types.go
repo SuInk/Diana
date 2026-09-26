@@ -328,7 +328,11 @@ type Reminder struct {
 	// SafeModeHeldTriggerAt 非零表示这条一次性提醒到点时被安全模式停发过，值是它当时的
 	// 原定时间。切回标准模式补发时按它注明原定时间、判断要不要过期作废；投递失败重试
 	// 改了 TriggerAt 也不影响它。只有真的被停发过的提醒才有这个标记。
-	SafeModeHeldTriggerAt   time.Time `json:"safe_mode_held_trigger_at,omitempty"`
+	SafeModeHeldTriggerAt time.Time `json:"safe_mode_held_trigger_at,omitempty"`
+	// OriginalTriggerAt 是一次性提醒第一次因为失败重试被挪走触发时间之前的原定时间：
+	// 重试会改 TriggerAt，判断「晚了多久」要看原定的那个。零值表示没被挪过，原定时间
+	// 就是 TriggerAt。用户改了提醒时间就清掉。
+	OriginalTriggerAt       time.Time `json:"original_trigger_at,omitempty"`
 	NotificationEnabled     bool      `json:"notification_enabled,omitempty"`
 	NotificationTargetsJSON string    `json:"notification_targets,omitempty"`
 	Message                 string    `json:"message"`

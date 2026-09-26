@@ -792,8 +792,9 @@ func TestSameAccountID(t *testing.T) {
 	}
 }
 
-// 标准模式下从没被停发过的提醒，停机一天多之后照常补发，不加标注也不作废：只有真被
-// 安全模式停发过的才按原定时间注明、过期作废。
+// 标准模式下从没被停发过的提醒，停机一天多之后照常补发、不作废：只有真被安全模式
+// 停发过的才过期作废。晚到超过 missedReminderGrace 的会注明是错过的提醒，但不是
+// 安全模式的那种标注。
 func TestStandardModeLateReminderIsNotDropped(t *testing.T) {
 	store := &stubReminderStore{items: []Reminder{
 		{ID: "after-downtime", Kind: ReminderKindMessage, ProfileID: "bot-a", OwnerID: "20002", UserID: "20002", RequestedBy: "10001", Message: "开会", TriggerAt: time.Now().Add(-30 * time.Hour)},
@@ -803,8 +804,8 @@ func TestStandardModeLateReminderIsNotDropped(t *testing.T) {
 	runtime := NewRuntime(cfg, channel, NewPluginManager(), nil, store, nil, nil)
 	runtime.SetProfiles(ProfileSet{Profiles: []BotConfig{cfg}})
 	runtime.fireDueReminders(context.Background())
-	if len(channel.sent) != 1 || strings.Contains(channel.sent[0].Text, "原定") {
-		t.Fatalf("标准模式下迟到的提醒应当照常投递、不加标注：%#v", channel.sent)
+	if len(channel.sent) != 1 || strings.Contains(channel.sent[0].Text, "安全模式") || !strings.Contains(channel.sent[0].Text, "错过的提醒") {
+		t.Fatalf("标准模式下迟到的提醒应当照常投递，注明错过而不是安全模式停发：%#v", channel.sent)
 	}
 	if !store.items[0].CancelledAt.IsZero() {
 		t.Fatal("标准模式下迟到的提醒不该被作废")

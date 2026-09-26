@@ -779,35 +779,93 @@ func (r *Runtime) renderScheduledQueries(ownerID string) string {
 	return strings.Join(lines, "\n")
 }
 
-// runReminderLoop 启动提醒轮询循环。
+// reminderLoopMaxIdle 是调度循环最长睡多久。下一次唤醒本来按最早的到期时间算，
+// 任务一改就被叫醒；这个上限兜的是算不进去的变化——机器人重新启用、安全模式切回、
+// 系统时间被往前调——最坏晚这么久，不会丢任务。
+const reminderLoopMaxIdle = 30 * time.Second
+
+// reminderLoopBusyBackoff 防空转：算出来的下一次已经到期、这一轮却一条也没认领时，
+// 说明有条件没对齐，歇一下再看，别把 CPU 吃满。正常情况下走不到。
+const reminderLoopBusyBackoff = time.Second
+
+// runReminderLoop 启动提醒调度循环。
+//
+// 不按固定间隔轮询：每一轮认领完到期的任务，算出剩下任务里最早的到期时间，用定时器
+// 睡到那一刻；睡着的时候任务被增删改（SaveReminders）或有任务跑完释放，都会通过
+// reminderWake 提前叫醒重算。做法和 robfig/cron、APScheduler 一样，空闲时不做
+// 任何事，到点误差是毫秒级而不是最多一秒。
 func (r *Runtime) runReminderLoop(ctx context.Context) {
 	if r.reminders == nil {
 		return
 	}
-	// 简单轮询足够支撑本地提醒；避免引入额外调度器状态。
-	ticker := time.NewTicker(1 * time.Second)
-	defer ticker.Stop()
+	timer := time.NewTimer(0)
+	defer timer.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-ticker.C:
-			r.dispatchDueReminders(ctx)
+		case <-timer.C:
+		case <-r.reminderWakeChannel():
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
 		}
+		claimed, next := r.dispatchDueReminders(ctx)
+		timer.Reset(reminderLoopDelay(claimed, next, time.Now()))
 	}
 }
 
-// dispatchDueReminders claims due items and lets each one run independently so
-// a slow LLM query cannot stall later reminders or polling ticks.
-func (r *Runtime) dispatchDueReminders(ctx context.Context) {
-	r.expireEventTriggers(ctx, time.Now())
-	for _, item := range r.claimDueReminders(time.Now()) {
+// reminderLoopDelay 算这一轮之后睡多久：睡到 next，最长 reminderLoopMaxIdle；
+// next 已经过了而这一轮什么也没认领，按 reminderLoopBusyBackoff 退避。
+func reminderLoopDelay(claimed int, next, now time.Time) time.Duration {
+	if next.IsZero() {
+		return reminderLoopMaxIdle
+	}
+	delay := next.Sub(now)
+	if delay <= 0 {
+		if claimed == 0 {
+			return reminderLoopBusyBackoff
+		}
+		return 0
+	}
+	return min(delay, reminderLoopMaxIdle)
+}
+
+// reminderWakeChannel 是调度循环的唤醒信号，容量为 1：连着改好几次任务只需要醒一次。
+func (r *Runtime) reminderWakeChannel() chan struct{} {
+	r.reminderWakeOnce.Do(func() {
+		r.reminderWake = make(chan struct{}, 1)
+	})
+	return r.reminderWake
+}
+
+// wakeReminderLoop 叫醒调度循环重算下一次唤醒时间，不阻塞。
+func (r *Runtime) wakeReminderLoop() {
+	select {
+	case r.reminderWakeChannel() <- struct{}{}:
+	default:
+	}
+}
+
+// dispatchDueReminders 认领到期任务并各自开 goroutine 执行，慢的 LLM 查询不会拖住
+// 后面的任务；返回这一轮认领了几条，以及剩下任务里最早的到期时间（没有则为零值）。
+func (r *Runtime) dispatchDueReminders(ctx context.Context) (int, time.Time) {
+	nextExpiry := r.expireEventTriggers(ctx, time.Now())
+	due, next := r.claimDueRemindersWithNext(time.Now())
+	for _, item := range due {
 		item := item
 		go func() {
 			defer recoverGoroutinePanic("runtime.executeClaimedReminder")
 			r.executeClaimedReminder(ctx, item)
 		}()
 	}
+	if !nextExpiry.IsZero() && (next.IsZero() || nextExpiry.Before(next)) {
+		next = nextExpiry
+	}
+	return len(due), next
 }
 
 // fireDueReminders runs claimed items synchronously for direct callers and tests.
@@ -818,9 +876,18 @@ func (r *Runtime) fireDueReminders(ctx context.Context) {
 }
 
 func (r *Runtime) claimDueReminders(now time.Time) []Reminder {
+	due, _ := r.claimDueRemindersWithNext(now)
+	return due
+}
+
+// claimDueRemindersWithNext 认领到期任务，同时算出没到期的任务里最早的到期时间。
+// 两件事在同一遍扫描、用同一套过滤条件里做：停用的机器人、安全模式停发、正在跑的
+// 任务既不认领也不算进下一次唤醒，否则它们「已到期却认领不了」会让调度循环空转。
+func (r *Runtime) claimDueRemindersWithNext(now time.Time) ([]Reminder, time.Time) {
 	if r.reminders == nil {
-		return nil
+		return nil, time.Time{}
 	}
+	var next time.Time
 	// 先取停用名单再上 reminderMu：两把锁不嵌套，就不会和别处的加锁顺序冲突。
 	disabledProfiles := r.disabledProfileSet()
 	safeModeHolds := r.safeModeTaskFilter()
@@ -851,6 +918,9 @@ func (r *Runtime) claimDueReminders(now time.Time) []Reminder {
 			continue
 		}
 		if item.TriggerAt.After(now) {
+			if _, running := r.activeReminders[item.ID]; !running && (next.IsZero() || item.TriggerAt.Before(next)) {
+				next = item.TriggerAt
+			}
 			continue
 		}
 		// 安全模式停发往别的会话投递的任务：不认领，LastRunAt、触发时间和失败状态原样
@@ -874,7 +944,7 @@ func (r *Runtime) claimDueReminders(now time.Time) []Reminder {
 			r.setError(fmt.Sprintf("记录安全模式停发的提醒失败: %v", err))
 		}
 	}
-	return due
+	return due, next
 }
 
 // reminderRunInterrupted 判断这次失败是不是我们自己把它掐了——机器人停用或进程退出
@@ -1003,8 +1073,8 @@ func (r *Runtime) executeClaimedReminder(ctx context.Context, item Reminder) {
 	notice := "提醒你：" + item.Message
 	// 在安全模式期间被停发过的提醒，切回标准模式才发出去：注明原定时间；原定时间过去
 	// 超过 safeModeHeldReminderMaxDelay 的不再补发，直接取消——一条隔天才到的「该开会
-	// 了」只会让人困惑。只管真被停发过的（有 SafeModeHeldTriggerAt），停机、重试造成的
-	// 迟到照旧投递，不加标注也不作废。
+	// 了」只会让人困惑。只管真被停发过的（有 SafeModeHeldTriggerAt）；停机、重试造成的
+	// 迟到照旧投递、不作废，晚得太久的由下面注明是错过的提醒。
 	if held := item.SafeModeHeldTriggerAt; !held.IsZero() {
 		if time.Since(held) > safeModeHeldReminderMaxDelay {
 			if _, err := r.cancelOneTimeReminder(item.OwnerID, item.ID); err != nil {
@@ -1015,8 +1085,19 @@ func (r *Runtime) executeClaimedReminder(ctx context.Context, item Reminder) {
 		}
 		notice += "（原定 " + held.Local().Format("01-02 15:04") + "，安全模式期间暂停，推迟送达）"
 	}
+	// 停机、连接断开或连续发送失败让提醒晚到太久时，照原样说「提醒你：开会」只会让人
+	// 以为现在该开会。改成明说这是一条错过的提醒、原定什么时候，并且不再戳人——它已经
+	// 不是「到点了」。安全模式停发的上面已经注明过，不重复处理。
+	missed := false
+	if item.SafeModeHeldTriggerAt.IsZero() {
+		if due, late := missedReminderLateness(item, time.Now()); late > missedReminderGrace {
+			missed = true
+			notice = fmt.Sprintf("错过的提醒（原定 %s，当时没能按时送达，晚了%s）：%s",
+				due.Local().Format("01-02 15:04"), formatReminderLateness(late), item.Message)
+		}
+	}
 	// 提醒到点先戳一下设提醒的人，像人叫人一样；戳不出去不影响提醒本身。
-	if source := reminderSourceEvent(item); strings.TrimSpace(item.UserID) != "" && IsOneBotPlatform(r.currentPlatform(source)) {
+	if source := reminderSourceEvent(item); !missed && strings.TrimSpace(item.UserID) != "" && IsOneBotPlatform(r.currentPlatform(source)) {
 		_, _ = r.sendPoke(ctx, source, item.UserID, pokeSceneReminder)
 	}
 	err := r.sendSubscriberNotice(ctx, reminderSourceEvent(item), notice)
@@ -1890,6 +1971,8 @@ func (r *Runtime) releaseClaimedReminder(id string) {
 	r.reminderMu.Lock()
 	delete(r.activeReminders, id)
 	r.reminderMu.Unlock()
+	// 跑完的任务可能仍是到期状态（连接没就绪、原样留着等下一轮），叫醒循环重新认领。
+	r.wakeReminderLoop()
 }
 
 // nextRecurringTrigger 算周期任务跑完之后的下一次时间。带时间网格原点的任务落回
