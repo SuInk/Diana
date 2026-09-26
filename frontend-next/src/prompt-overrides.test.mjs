@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { customizedPromptCount, missingPromptVars, promptOverrideValue, withPromptOverride, withoutPromptOverrides } from "./prompt-overrides.ts";
+import { composePromptSections, customizedPromptCount, missingPromptVars, parsePromptSections, promptOverrideValue, promptSectionsMatch, withPromptOverride, withPromptSections, withoutPromptOverrides } from "./prompt-overrides.ts";
 
 const spec = { key: "reply.group_sender", group: "reply_base", title: "群聊发言者", usage: "", default: "正在和你说话的是「{sender}」。", vars: [{ name: "sender", description: "" }] };
 
@@ -39,4 +39,33 @@ test("output formats are editable and reset together with the body", async () =>
   assert.ok(isPromptCustomized(parsed, changed) && isPromptFormatCustomized(parsed, changed));
   assert.equal(withPromptFormat(changed, parsed, "只输出 JSON。\n"), undefined);
   assert.equal(withoutPromptCustomization({ "routing.x": "改", "routing.x.format": "改" }, parsed), undefined);
+});
+
+const sectionSpecs = [
+  { key: "a", group: "g", title: "接话评分 · 算作", usage: "", default: "默认甲" },
+  { key: "b", group: "g", title: "接话评分 · 不算", usage: "", default: "默认乙\n第二行" }
+];
+const sections = sectionSpecs.map((spec) => ({ spec, title: spec.title.replace("接话评分 · ", "") }));
+
+test("sections compose into one box and split back per key", () => {
+  const text = composePromptSections(sections, { a: "改过的甲" });
+  assert.equal(text, "【算作】\n改过的甲\n\n【不算】\n默认乙\n第二行");
+  const parsed = parsePromptSections(text, sections);
+  assert.deepEqual(parsed, { ok: true, values: { a: "改过的甲", b: "默认乙\n第二行" } });
+  assert.deepEqual(withPromptSections(undefined, sections, parsed.values), { a: "改过的甲" });
+  assert.equal(promptSectionsMatch(parsed.values, sections, { a: "改过的甲" }), true);
+  assert.equal(promptSectionsMatch(parsed.values, sections, undefined), false);
+});
+
+test("section order is free but headings must all be there exactly once", () => {
+  assert.deepEqual(parsePromptSections("【不算】\n乙\n【算作】\n甲", sections), { ok: true, values: { a: "甲", b: "乙" } });
+  assert.equal(parsePromptSections("【算作】\n甲", sections).ok, false);
+  assert.equal(parsePromptSections("【算作】\n甲\n【算作】\n再来\n【不算】\n乙", sections).ok, false);
+  assert.equal(parsePromptSections("开头\n【算作】\n甲\n【不算】\n乙", sections).ok, false);
+  assert.equal(parsePromptSections("【算作】\n\n【不算】\n乙", sections).ok, false);
+  assert.equal(parsePromptSections("【算作】\n甲甲甲\n【不算】\n乙", sections, 2).ok, false);
+});
+
+test("unknown bracket lines stay inside the section body", () => {
+  assert.deepEqual(parsePromptSections("【算作】\n【别的】\n甲\n【不算】\n乙", sections), { ok: true, values: { a: "【别的】\n甲", b: "乙" } });
 });

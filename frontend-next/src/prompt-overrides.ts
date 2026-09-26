@@ -74,3 +74,69 @@ export function withoutPromptOverrides(overrides: Overrides | undefined, keys: r
   for (const key of keys) delete next[key];
   return Object.keys(next).length > 0 ? next : undefined;
 }
+
+/** 合在一个框里编辑的一段：小标题加它对应的提示词。 */
+export interface PromptSection {
+  spec: PromptSpec;
+  title: string;
+}
+
+export type ParsedPromptSections = { ok: true; values: Record<string, string> } | { ok: false; error: string };
+
+function sectionHeading(title: string): string {
+  return `【${title}】`;
+}
+
+/**
+ * 几段提示词拼成一个框：每段前面一行【小标题】。存的时候仍按段拆开——后端会把它们
+ * 塞进评分提示词的不同位置、判断模型的不同字段，合成一段存就分不回去了。
+ */
+export function composePromptSections(sections: readonly PromptSection[], overrides: Overrides | undefined): string {
+  return sections.map((section) => `${sectionHeading(section.title)}\n${promptOverrideValue(section.spec, overrides).trim()}`).join("\n\n");
+}
+
+/**
+ * 按【小标题】把框里的文字拆回各段。小标题必须一行一个、每段恰好一次，顺序不限；
+ * 缺了、重了、开头多出正文或某段空着都不拆，免得把一段内容写进别的键里。
+ */
+export function parsePromptSections(text: string, sections: readonly PromptSection[], maxRunes = 0): ParsedPromptSections {
+  const byHeading = new Map(sections.map((section) => [sectionHeading(section.title), section]));
+  const bodies = new Map<PromptSection, string[]>();
+  let current: PromptSection | null = null;
+  for (const line of text.replace(/\r\n/g, "\n").split("\n")) {
+    const section = byHeading.get(line.trim());
+    if (section) {
+      if (bodies.has(section)) return { ok: false, error: `小标题${sectionHeading(section.title)}出现了两次` };
+      current = section;
+      bodies.set(section, []);
+      continue;
+    }
+    if (current) bodies.get(current)!.push(line);
+    else if (line.trim()) return { ok: false, error: `第一个小标题前面不能有正文，每段要从${sectionHeading(sections[0]?.title ?? "")}这样的小标题开始` };
+  }
+  const values: Record<string, string> = {};
+  for (const section of sections) {
+    const lines = bodies.get(section);
+    if (!lines) return { ok: false, error: `少了小标题${sectionHeading(section.title)}，小标题要单独占一行、原样保留` };
+    const body = lines.join("\n").trim();
+    if (!body) return { ok: false, error: `${sectionHeading(section.title)}是空的；想用默认内容请点「恢复默认」` };
+    if (maxRunes && Array.from(body).length > maxRunes) return { ok: false, error: `${sectionHeading(section.title)}有 ${Array.from(body).length} 字，超过单段上限 ${maxRunes} 字` };
+    values[section.spec.key] = body;
+  }
+  return { ok: true, values };
+}
+
+/** 把拆好的各段写回覆盖表，和默认一样的段照旧不存。 */
+export function withPromptSections(overrides: Overrides | undefined, sections: readonly PromptSection[], values: Record<string, string>): Overrides | undefined {
+  let next = overrides;
+  for (const section of sections) {
+    const value = values[section.spec.key];
+    if (value !== undefined) next = withPromptOverride(next, section.spec, value);
+  }
+  return next;
+}
+
+/** 框里的文字拆出来和当前覆盖表一致：用来区分「自己刚输入的」和「别处改了覆盖表」。 */
+export function promptSectionsMatch(values: Record<string, string>, sections: readonly PromptSection[], overrides: Overrides | undefined): boolean {
+  return sections.every((section) => (values[section.spec.key] ?? "").trim() === promptOverrideValue(section.spec, overrides).trim());
+}

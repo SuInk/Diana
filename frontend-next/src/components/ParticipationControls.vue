@@ -3,7 +3,9 @@ import { computed, useId } from "vue";
 import AppSelect from "./AppSelect.vue";
 import { defaultParticipationCooldownSeconds, participationLevelLabel, participationPreset, participationPresetName, proactiveCriteriaMaxLength, type ParticipationPreferences } from "../participation";
 
-const props = defineProps<{ modelValue?: ParticipationPreferences; level?: string; inheritable?: boolean; inheritedValue?: ParticipationPreferences; criteria?: string }>();
+// criteriaOptional：机器人页已经能直接改内置判据，补充判据只在留有旧值时露出来，
+// 让人看得见、清得掉——藏起来的旧值照样拼进评分提示词。
+const props = defineProps<{ modelValue?: ParticipationPreferences; level?: string; inheritable?: boolean; inheritedValue?: ParticipationPreferences; criteria?: string; criteriaOptional?: boolean }>();
 const emit = defineEmits<{ "update:modelValue": [value: ParticipationPreferences | undefined]; "update:criteria": [value: string] }>();
 const id = useId();
 const value = computed(() => props.modelValue ?? (props.level ? participationPreset(props.level) : props.inheritedValue ?? participationPreset("low")));
@@ -112,10 +114,11 @@ function updateCriteria(event: Event) {
             <span :id="id + '-cooldown-help'" class="hint">主动闲聊的最短间隔，默认 30 秒；填 0 不限制。</span>
           </div>
         </section>
-        <section class="participation-setting criteria-setting">
+        <section v-if="!criteriaOptional || criteria?.trim()" class="participation-setting criteria-setting">
           <div class="setting-copy">
             <label :for="id + '-criteria'">补充判据</label>
-            <p class="setting-help">本群特有的称呼、黑话和禁区，帮它判断这句话该不该接。留空只用内置判据。</p>
+            <p v-if="criteriaOptional" class="setting-help">旧版留下的补充判据，仍会拼进评分提示词。内置判据现在可以在下面的「接话评分提示词」里直接改，这里清空后不再显示。</p>
+            <p v-else class="setting-help">本群特有的称呼、黑话和禁区，帮它判断这句话该不该接。留空只用内置判据。</p>
           </div>
           <textarea :id="id + '-criteria'" class="textarea" rows="3" :maxlength="proactiveCriteriaMaxLength" :value="criteria ?? ''" placeholder="例：群里叫「鸽子」是催更，不是骂人。不要接和考试答案有关的话题。" @input="updateCriteria"></textarea>
         </section>

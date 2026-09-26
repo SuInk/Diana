@@ -2629,7 +2629,7 @@ var promptLegacyRouteInstructionSpec = registerPrompt(PromptSpec{
 var promptParticipationRouteInstructionSpec = registerPrompt(PromptSpec{
 	Key:      "routing.route_instruction.participation",
 	Group:    PromptGroupRouting,
-	Title:    "接话评分 · 任务说明",
+	Title:    "接话评分 · 消息开头的任务说明",
 	Usage:    "启用「参与度」评分时，放在发给评分模型的那条消息开头。正文里点了 directed、score、reason 几个字段名，改动时保持不变。",
 	Default:  participationRouteInstruction,
 	Contract: participationRouteInstructionContract,
@@ -2727,7 +2727,7 @@ func (r *Runtime) routeProactiveReplyBatch(ctx context.Context, candidates []pro
 	messages := []llm.Message{
 		{
 			Role:    llm.RoleSystem,
-			Content: proactiveReplyRouterPromptForChatIn(cfg.prompt(promptLegacyRouterSpec), cfg.ProactiveReplyExtraCriteria, chatIn, boolValue(cfg.SocialReplyEnabled, false), cfg),
+			Content: proactiveReplyRouteSystemPrompt(cfg, chatIn),
 		},
 		routeUserMessage,
 	}
