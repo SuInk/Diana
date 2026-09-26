@@ -311,6 +311,8 @@ func DescribeEventOutcome(outcome string) (decision string, reason string, handl
 		return "not_replied", "（旧版行为）这条媒体消息已并入同一发送者随后的提问一起回答", false
 	case "dropped_outbound_delivery":
 		return "error", "回复已经生成，但发送连接不可用或消息投递失败", false
+	case inboundOutcomeDroppedOutboundUnconfirmed:
+		return "error", "回复已经发出但没等到回执，回推和历史也确认不了是否送达；为避免重复刷屏，没有重发也没有重新生成", false
 	case inboundOutcomeSendRejected:
 		return "error", "上游明确拒收这条回复（例如对方已不是好友），重试不可能成功，队列已直接停止，没有重新生成回复", false
 	case inboundOutcomeRetriesExhausted:
@@ -547,6 +549,7 @@ type Runtime struct {
 	unavailableGroups       map[string]unavailableGroupSend
 	outboundDeliveryMu      sync.Mutex
 	outboundDeliveries      map[string]*groupOutboundDelivery
+	outboundEchoes          outboundEchoTracker
 	historyImageDescMu      sync.Mutex
 	historyImageDescQueue   []*historyImageDescJob
 	historyImageDescJobs    map[string]*historyImageDescJob
@@ -1389,10 +1392,12 @@ func (r *Runtime) SendGroupMessage(ctx context.Context, groupID string, text str
 	if blockedErr := r.blockedGroupSendError(event); blockedErr != nil {
 		return nil, blockedErr
 	}
+	segments := buildOutgoingSegments(OutgoingMessage{Text: text})
+	ctx = withOutboundConfirmFingerprint(ctx, outboundFingerprintFromSegments(segments))
 	return r.executeOutboundCall(ctx, event, "send_group_msg", func(callCtx context.Context) (map[string]any, error) {
 		return r.callOneBotAPIForEvent(callCtx, event, "send_group_msg", map[string]any{
 			"group_id": parsedGroupID,
-			"message":  buildOutgoingSegments(OutgoingMessage{Text: text}),
+			"message":  segments,
 		})
 	})
 }
@@ -2138,6 +2143,12 @@ func (r *Runtime) replyAndRecord(ctx context.Context, event MessageEvent, text s
 		r.setError(err.Error())
 		if errors.Is(err, errOutboundSend) {
 			switch {
+			case errors.Is(err, errOutboundOutcomeUnconfirmed):
+				// 请求已经写给接入端、确认不了有没有发出去。无论通道现在在不在线都
+				// 不能交回队列：重新生成再发一遍正是这次要防的重复。
+				setEventRecordOutcome(&record, inboundOutcomeDroppedOutboundUnconfirmed)
+				r.record(record)
+				return inboundOutcomeDroppedOutboundUnconfirmed, nil
 			case errors.Is(err, errOutboundChannelOffline):
 				// 通道离线导致的发送失败交回队列，恢复后重新生成并发送。
 				setEventRecordOutcome(&record, "processing_error")
@@ -2229,6 +2240,11 @@ func (r *Runtime) replyAndRecord(ctx context.Context, event MessageEvent, text s
 				setEventRecordOutcome(&record, "ignored_bot_muted")
 				r.record(record)
 				return "ignored_bot_muted", nil
+			}
+			if errors.Is(sendErr, errOutboundOutcomeUnconfirmed) {
+				setEventRecordOutcome(&record, inboundOutcomeDroppedOutboundUnconfirmed)
+				r.record(record)
+				return inboundOutcomeDroppedOutboundUnconfirmed, nil
 			}
 			if errors.Is(sendErr, errOutboundDeliveryDropped) {
 				setEventRecordOutcome(&record, "dropped_outbound_delivery")
@@ -7146,7 +7162,9 @@ func (r *Runtime) sendChannelPayloadWithRetry(ctx context.Context, msg OutgoingM
 		if lastErr == nil {
 			return result, nil
 		}
-		if isOutboundPayloadRejection(lastErr) {
+		// 结果不明的不能在这里原地重发，交给 confirmOutboundOutcome 先确认；消息本身
+		// 无效的重发也没用。
+		if isOutboundPayloadRejection(lastErr) || errors.Is(lastErr, ErrOutboundOutcomeUnknown) || isPermanentOutboundRejection(lastErr) {
 			return nil, lastErr
 		}
 		if ctx.Err() != nil {
@@ -7399,7 +7417,8 @@ func (r *Runtime) sendRealForwardMessages(ctx context.Context, event MessageEven
 		if errors.As(err, &safetyErr) {
 			return "", err
 		}
-		if errors.Is(err, errGroupSendUnavailable) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		if errors.Is(err, errGroupSendUnavailable) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) ||
+			errors.Is(err, errOutboundOutcomeUnconfirmed) {
 			// 超时的请求可能已经投递，不能再用暂存方式发第二遍。
 			return "", err
 		}
@@ -7546,7 +7565,9 @@ func (r *Runtime) sendForwardNodesWithResult(ctx context.Context, event MessageE
 		}
 		params["user_id"] = userID
 	}
-	result, err := r.executeOutboundCall(ctx, event, action, func(callCtx context.Context) (map[string]any, error) {
+	// 合并转发的回推只有一个 forward 段，按它认。
+	sendCtx := withOutboundConfirmFingerprint(ctx, outboundFingerprintForForward())
+	result, err := r.executeOutboundCall(sendCtx, event, action, func(callCtx context.Context) (map[string]any, error) {
 		return r.callOneBotAPIForEvent(callCtx, event, action, params)
 	})
 	if err != nil {

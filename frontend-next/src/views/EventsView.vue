@@ -1420,14 +1420,14 @@ function deliveryLabel(stage?: string): string {
     generated: "回复已生成",
     send_attempted: "已发起发送，等待确认",
     acknowledged: "OneBot 已确认接收",
-    echo_persisted: "自回显已落库",
+    echo_persisted: "已收到回推",
     failed: "发送失败"
   };
   return labels[stage ?? ""] ?? `发送阶段：${stage}`;
 }
 
 function deliveryDetail(event: AssistantEventDetail): string {
-  if (event.delivery_stage === "echo_persisted") return "已收到机器人自身消息回显并完成持久化";
+  if (event.delivery_stage === "echo_persisted") return "接入端已把机器人发出的这条消息推回来，确认已送达";
   if (event.delivery_stage === "acknowledged") return event.outbound_message_id ? `已收到 ACK，消息 ID ${event.outbound_message_id}` : "已收到 OneBot API ACK";
   if (event.delivery_stage === "send_attempted") return "请求已经写入发送链路，但尚无可核验 ACK";
   if (event.delivery_stage === "generated") return "模型或插件已生成回复，尚未发起发送";

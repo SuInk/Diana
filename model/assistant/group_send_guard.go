@@ -65,6 +65,11 @@ type outboundSendError struct {
 	DeliveryDropped  bool
 	ChannelOffline   bool
 	BotMuted         bool
+	// OutcomeUnconfirmed 表示请求写出去后没回执，回推和历史也都查不到结论。
+	// 这种不退避重发，见 confirmOutboundOutcome。
+	OutcomeUnconfirmed bool
+	// PermanentRejection 表示消息本身无效（段校验不过、参数错误），重试不可能成功。
+	PermanentRejection bool
 }
 
 func (e *outboundSendError) Error() string {
@@ -91,7 +96,9 @@ func (e *outboundSendError) Is(target error) bool {
 	return (e.GroupUnavailable && target == errGroupSendUnavailable) ||
 		(e.DeliveryDropped && target == errOutboundDeliveryDropped) ||
 		(e.ChannelOffline && target == errOutboundChannelOffline) ||
-		(e.BotMuted && target == errBotMuted)
+		(e.BotMuted && target == errBotMuted) ||
+		(e.OutcomeUnconfirmed && target == errOutboundOutcomeUnconfirmed) ||
+		(e.PermanentRejection && target == errOutboundPermanentRejection)
 }
 
 func defaultOutboundDeliveryPolicy() outboundDeliveryPolicy {
@@ -199,8 +206,14 @@ func (r *Runtime) executeOutboundCall(
 	// Retry bridge media-validation failures briefly before trying a different
 	// representation. This is separate from the group's network backoff window.
 	originalCall := call
-	call = func(callCtx context.Context) (map[string]any, error) {
+	payloadCall := func(callCtx context.Context) (map[string]any, error) {
 		return retryOutboundPayloadRejection(callCtx, originalCall)
+	}
+	// 请求写出去后没等到回执的，先确认有没有送达，不在这里直接重发。
+	call = func(callCtx context.Context) (map[string]any, error) {
+		// 每次真正发之前确认入站租约够撑过这次发送；不够才往后推。
+		extendInboundLease(callCtx, oneBotMediaActionTimeout+time.Minute)
+		return r.confirmOutboundOutcome(callCtx, event, action, payloadCall)
 	}
 	if _, _, err := r.outboundChannelForEvent(event); err != nil {
 		return nil, err
@@ -216,6 +229,9 @@ func (r *Runtime) executeOutboundCall(
 		result, err := call(ctx)
 		if err == nil {
 			r.clearBotMute(event)
+		}
+		if isPermanentOutboundRejection(err) && !errors.Is(err, errOutboundSend) {
+			return nil, r.permanentOutboundSendError(event, action, err)
 		}
 		return result, r.wrapOutboundSendError(ctx, event, err)
 	}
@@ -263,6 +279,8 @@ func (r *Runtime) executeOutboundCall(
 			return nil, droppedOutboundSendError(groupID, gate.lastError)
 		}
 		if wait := time.Until(gate.nextAttempt); wait > 0 {
+			// 退避最长十几分钟，租约到期会被别的 worker 领走重新生成一遍。
+			extendInboundLease(ctx, wait+oneBotMediaActionTimeout+time.Minute)
 			if err := waitForOutboundRetry(ctx, wait); err != nil {
 				if r.runtimeContextStopped() {
 					return nil, err
@@ -290,6 +308,16 @@ func (r *Runtime) executeOutboundCall(
 			// another representation or later messages instead of locking it out.
 			gate.reset()
 			return nil, &outboundSendError{GroupID: groupID, Cause: err}
+		}
+		if isPermanentOutboundRejection(err) && !errors.Is(err, errOutboundSend) {
+			// 消息本身无效，退避多少次都一样：直接放下，群里后面的消息照常发。
+			gate.reset()
+			return nil, r.permanentOutboundSendError(event, action, err)
+		}
+		if errors.Is(err, errOutboundOutcomeUnconfirmed) {
+			// 查不清有没有发出去：重发可能刷屏，这一条就此放下，群里后面的消息照常发。
+			gate.reset()
+			return nil, err
 		}
 		if ctx.Err() != nil && gate.failures == 0 {
 			return nil, ctx.Err()
@@ -379,6 +407,9 @@ func isPermanentSendRejection(err error) bool {
 	if !errors.Is(err, errOutboundSend) {
 		return false
 	}
+	if errors.Is(err, errOutboundPermanentRejection) {
+		return true
+	}
 	message := strings.ToLower(err.Error())
 	for _, marker := range permanentSendRejectionMarkers {
 		if strings.Contains(message, strings.ToLower(marker)) {
@@ -466,13 +497,7 @@ func droppedOutboundSendError(groupID, cause string) error {
 func (r *Runtime) enterOutboundDropCooldown(event MessageEvent, action string, gate *groupOutboundDelivery, policy outboundDeliveryPolicy, now time.Time) {
 	gate.nextAttempt = time.Time{}
 	gate.dropUntil = now.Add(policy.DropCooldown)
-	writer := r.appLogWriter()
-	if writer == nil {
-		return
-	}
-	logCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	_ = writer.AppendLog(logCtx, applog.Entry{
+	r.appendOutboundAppLog(applog.Entry{
 		Kind:    applog.KindError,
 		Level:   applog.LevelError,
 		Action:  "outbound_delivery_dropped",
@@ -492,13 +517,7 @@ func (r *Runtime) enterOutboundDropCooldown(event MessageEvent, action string, g
 }
 
 func (r *Runtime) recordOutboundDeliveryBackoff(event MessageEvent, action string, failures int, delay time.Duration, cause error) {
-	writer := r.appLogWriter()
-	if writer == nil {
-		return
-	}
-	logCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	_ = writer.AppendLog(logCtx, applog.Entry{
+	r.appendOutboundAppLog(applog.Entry{
 		Kind:    applog.KindOperation,
 		Level:   applog.LevelInfo,
 		Action:  "outbound_delivery_backoff",
@@ -517,13 +536,7 @@ func (r *Runtime) recordOutboundDeliveryBackoff(event MessageEvent, action strin
 }
 
 func (r *Runtime) recordOutboundDeliveryRecovered(event MessageEvent, action string, failures int) {
-	writer := r.appLogWriter()
-	if writer == nil {
-		return
-	}
-	logCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	_ = writer.AppendLog(logCtx, applog.Entry{
+	r.appendOutboundAppLog(applog.Entry{
 		Kind:    applog.KindOperation,
 		Level:   applog.LevelInfo,
 		Action:  "outbound_delivery_recovered",

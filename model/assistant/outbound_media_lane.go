@@ -16,7 +16,9 @@ func outboundMessageContext(ctx context.Context, msg OutgoingMessage) context.Co
 			media = true
 		}
 	}
-	return context.WithValue(ctx, outboundMediaContextKey{}, media)
+	ctx = context.WithValue(ctx, outboundMediaContextKey{}, media)
+	// 发送超时后要靠它在回推和历史里认出这条消息，见 confirmOutboundOutcome。
+	return withOutboundConfirmFingerprint(ctx, outboundFingerprintFromSegments(buildOutgoingSegments(msg)))
 }
 
 func lockOutboundDelivery(ctx context.Context, lock *sync.Mutex) error {

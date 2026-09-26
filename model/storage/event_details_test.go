@@ -510,7 +510,8 @@ func TestInboundDeliveryAuditTracksAckAndSelfEcho(t *testing.T) {
 	if err := store.RecordInboundEventDelivery(ctx, event, assistant.OutboundDeliveryAcknowledged, "outbound-43", ""); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.RecordInboundEventSelfEcho(ctx, "outbound-43", time.Now()); err != nil {
+	echo := assistant.MessageEvent{Kind: assistant.EventKindGroup, GroupID: "group-1", MessageID: "outbound-43"}
+	if err := store.RecordInboundEventSelfEcho(ctx, echo, time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	page, err := store.ListInboundEventDetails(ctx, InboundEventQuery{Since: time.Now().Add(-time.Hour), Limit: 10, Offset: 0})

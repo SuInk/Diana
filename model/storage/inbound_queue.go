@@ -414,6 +414,25 @@ WHERE id = ? AND status = ? AND lease_owner = ?
 	return requireInboundLeaseUpdate(result, "retry", id)
 }
 
+// ExtendInboundLease pushes a held lease out to at least leaseUntil. It never
+// shortens a lease and only succeeds for the worker that still holds it.
+func (s *SQLiteStore) ExtendInboundLease(ctx context.Context, id string, leaseOwner string, leaseUntil time.Time) error {
+	defer s.observeStorage(ctx, "ExtendInboundLease", "write")()
+	if s == nil || s.db == nil {
+		return errors.New("extend inbound lease: sqlite store is not configured")
+	}
+	now := time.Now().UTC().UnixNano()
+	result, err := s.db.ExecContext(ctx, `
+UPDATE inbound_events
+SET lease_until = MAX(COALESCE(lease_until, 0), ?), updated_at = ?
+WHERE id = ? AND status = ? AND lease_owner = ?`,
+		leaseUntil.UTC().UnixNano(), now, strings.TrimSpace(id), inboundStatusProcessing, strings.TrimSpace(leaseOwner))
+	if err != nil {
+		return fmt.Errorf("extend inbound event %q: %w", id, err)
+	}
+	return requireInboundLeaseUpdate(result, "extend", id)
+}
+
 // ReleaseInboundLeases immediately returns every lease held by one worker to
 // the pending queue, for example during a graceful shutdown.
 func (s *SQLiteStore) ReleaseInboundLeases(ctx context.Context, leaseOwner string) error {

@@ -14,8 +14,10 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptrace"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -30,7 +32,8 @@ type OneBotHTTPChannel struct {
 func NewOneBotHTTPChannel(cfg OneBotConfig) *OneBotHTTPChannel {
 	return &OneBotHTTPChannel{
 		OneBotReverseServer: NewOneBotReverseServer(cfg),
-		client:              &http.Client{Timeout: 60 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }},
+		// 不在 client 上设统一超时：每次调用按 action 在 ctx 上给期限（见 CallAPI）。
+		client: &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }},
 	}
 }
 
@@ -111,6 +114,13 @@ func (c *OneBotHTTPChannel) CallAPI(ctx context.Context, action string, params m
 	if err != nil {
 		return nil, err
 	}
+	// 和 WebSocket 一样按 action 选期限：带媒体 90 秒，其余 30 秒；调用方自己给了
+	// 期限就照它的来。以前 client 上固定 60 秒，媒体不够、纯文本又太长。
+	if _, ok := ctx.Deadline(); !ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, oneBotCallTimeout(action, params, oneBotTextActionTimeout))
+		defer cancel()
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, base.String(), bytes.NewReader(body))
 	if err != nil {
 		return nil, err
@@ -119,30 +129,53 @@ func (c *OneBotHTTPChannel) CallAPI(ctx context.Context, action string, params m
 	if cfg.AccessToken != "" {
 		req.Header.Set("Authorization", "Bearer "+cfg.AccessToken)
 	}
+	// 请求体已经写完才出错（等响应超时、连接被掐），接入端可能已经执行了这个
+	// action，和 WebSocket 那边一样标成结果不明，交给调用方确认。
+	var wroteRequest atomic.Bool
+	req = req.WithContext(httptrace.WithClientTrace(req.Context(), &httptrace.ClientTrace{
+		WroteRequest: func(info httptrace.WroteRequestInfo) { wroteRequest.Store(info.Err == nil) },
+	}))
 	resp, err := c.client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("diana: OneBot HTTP request failed: %w", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("diana: OneBot HTTP API returned status %d", resp.StatusCode)
-	}
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxOneBotWebSocketFrameBytes+1))
-	if err != nil {
+		err = fmt.Errorf("diana: OneBot HTTP request failed: %w", err)
+		if wroteRequest.Load() {
+			return nil, &outboundOutcomeUnknownError{action: action, cause: err}
+		}
 		return nil, err
 	}
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxOneBotWebSocketFrameBytes+1))
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		// NapCat 的 HTTP 服务端参数校验不过回 400，正文里说明是哪个参数不对；
+		// 带上正文和状态码，让 isPermanentOutboundRejection 能认出来。
+		detail := ""
+		var failed oneBotEnvelope
+		if err == nil && json.Unmarshal(raw, &failed) == nil {
+			detail = oneBotErrorMessage(failed)
+		}
+		if resp.StatusCode == http.StatusBadRequest && detail != "" {
+			return nil, &oneBotActionError{retCode: oneBotHTTPBadRequestRetCode, message: fmt.Sprintf("diana: OneBot HTTP API returned status 400: %s", detail)}
+		}
+		return nil, fmt.Errorf("diana: OneBot HTTP API returned status %d", resp.StatusCode)
+	}
+	// 到这里已经收到 2xx：接入端接下并处理了这个 action。正文读不全、解析不了，
+	// 只是不知道结果，不是没发出去。
+	if err != nil {
+		return nil, &outboundOutcomeUnknownError{action: action, cause: fmt.Errorf("diana: read OneBot HTTP response: %w", err)}
+	}
 	if len(raw) > maxOneBotWebSocketFrameBytes {
-		return nil, errors.New("diana: OneBot HTTP response too large")
+		return nil, &outboundOutcomeUnknownError{action: action, cause: errors.New("diana: OneBot HTTP response too large")}
 	}
 	var envelope oneBotEnvelope
 	if err := json.Unmarshal(raw, &envelope); err != nil {
-		return nil, fmt.Errorf("diana: invalid OneBot HTTP response: %w", err)
+		return nil, &outboundOutcomeUnknownError{action: action, cause: fmt.Errorf("diana: invalid OneBot HTTP response: %w", err)}
 	}
 	if envelope.Status == nil {
 		return nil, errors.New("diana: OneBot HTTP response is missing status")
 	}
 	if envelopeStatusText(envelope.Status) == "failed" || !envelopeStatusOK(envelope) {
-		return nil, errors.New(oneBotErrorMessage(envelope))
+		failure := &oneBotActionError{retCode: envelope.RetCode, message: oneBotErrorMessage(envelope)}
+		return nil, classifyOneBotSendFailure(action, failure)
 	}
 	return oneBotDataMap(envelope.Data), nil
 }
@@ -208,7 +241,7 @@ func (c *OneBotHTTPChannel) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if envelope.PostType == "meta_event" {
 		c.updateAccountStatus(envelope.Status)
-	} else if envelope.PostType == "message" || envelope.PostType == "notice" || envelope.PostType == "request" {
+	} else if oneBotDispatchedPostType(envelope.PostType) {
 		event := messageEventFromEnvelope(envelope)
 		if event.Kind != "" {
 			go func() {
