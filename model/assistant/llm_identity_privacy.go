@@ -43,11 +43,17 @@ var llmIdentityPrivacyPrompt = llmIdentityPrivacyIntro + llmIdentityPrivacyContr
 
 // 拆成两段：前半段是说明，可以改措辞；后半段教模型原样复制别名，代理靠它把别名换回
 // 真实标识，锁定为 Contract。
+//
+// 「用户问号码就写别名」放在 Contract 里：只说「不要猜测真实数字」时，模型会把别名
+// 当成拿不到的东西，用户问群号就回「获取不到群号」，调群工具也不敢填。改过前半段的
+// 人设同样需要这句，所以不能放在可改的说明里。
 var (
 	llmIdentityPrivacyIntro = "【会话标识隐私代理】消息中的真实用户 ID、群 ID 和消息 ID 已由本地代理替换为不透明别名。相同别名始终表示同一对象；" +
-		identityAliasRoleList() + " 前缀保留角色语义。理解对话时按角色和昵称判断，不要猜测真实数字。"
+		identityAliasRoleList() + " 前缀保留角色语义。理解对话时按角色和昵称判断，不要自己猜测或编造真实数字。"
 	llmIdentityPrivacyContract = "调用工具或在回复中需要引用标识时，必须原样复制别名——包括 [diana-reply:" + identityAlias("message") + "xxx]、" +
-		"[diana-at:" + identityAlias("user") + "xxx] 这类标记；本地代理会在执行工具或发送消息前自动恢复真实标识。"
+		"[diana-at:" + identityAlias("user") + "xxx] 这类标记；本地代理会在执行工具或发送消息前自动恢复真实标识。" +
+		"别名就代表真实号码：用户问群号、QQ 号时，直接在回复里写出对应别名，发出去就是真实号码，不要说获取不到；" +
+		"工具需要当前群或某个人时，照抄 " + identityAlias("group") + "、" + identityAlias("user") + " 这类别名填进参数。"
 )
 
 var promptIdentityPrivacySpec = registerPrompt(PromptSpec{
