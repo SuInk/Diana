@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/SuInk/diana/model/assistant"
@@ -49,24 +50,43 @@ ORDER BY created_at ASC, id ASC
 		return "", nil, false, fmt.Errorf("list inbound event debug trace: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
+	sameEvent := func(entry AppLogEntry) bool {
+		return debugMetadataString(entry.Metadata, "kind") == kind &&
+			debugMetadataString(entry.Metadata, "group_id") == groupID &&
+			debugMetadataString(entry.Metadata, "user_id") == userID &&
+			debugMetadataString(entry.Metadata, "platform") == strings.TrimSpace(source.Platform) &&
+			debugMetadataString(entry.Metadata, "profile_id") == strings.TrimSpace(source.ProfileID)
+	}
 	entries := make([]AppLogEntry, 0, 16)
 	for rows.Next() {
 		entry, scanErr := scanLogEntry(rows)
 		if scanErr != nil {
 			return "", nil, false, scanErr
 		}
-		if debugMetadataString(entry.Metadata, "kind") != kind ||
-			debugMetadataString(entry.Metadata, "group_id") != groupID ||
-			debugMetadataString(entry.Metadata, "user_id") != userID ||
-			debugMetadataString(entry.Metadata, "platform") != strings.TrimSpace(source.Platform) ||
-			debugMetadataString(entry.Metadata, "profile_id") != strings.TrimSpace(source.ProfileID) {
-			continue
+		if sameEvent(entry) {
+			entries = append(entries, entry)
 		}
-		entries = append(entries, entry)
 	}
 	if err := rows.Err(); err != nil {
 		return "", nil, false, err
 	}
+	// 模型请求轨迹存在库旁边的文件里（见 debug_trace_files.go），跨群检索记录和
+	// 升级前的旧轨迹还在 app_logs，两边合起来按时间排。
+	fileEntries, err := s.readDebugTraceFiles(messageID)
+	if err != nil {
+		return "", nil, false, err
+	}
+	for _, entry := range fileEntries {
+		if sameEvent(entry) {
+			entries = append(entries, entry)
+		}
+	}
+	sort.SliceStable(entries, func(i, j int) bool {
+		if !entries[i].CreatedAt.Equal(entries[j].CreatedAt) {
+			return entries[i].CreatedAt.Before(entries[j].CreatedAt)
+		}
+		return entries[i].ID < entries[j].ID
+	})
 	return messageID, entries, true, nil
 }
 
