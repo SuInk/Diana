@@ -57,7 +57,7 @@ export const navItems: NavItem[] = [
   { id: "users", label: "记忆", hint: "机器人记住的人和事", group: "operate", covers: ["notebook"] },
   { id: "tasks", label: "任务", hint: "提醒、周期查询与仓库订阅", group: "operate" },
   { id: "browser", label: "浏览器", hint: "Diana 内置浏览器：看画面、自己上手", group: "operate" },
-  { id: "workspace", label: "文件", hint: "Agent 工作区里的文件：预览与下载", group: "operate" },
+  { id: "workspace", label: "文件", hint: "Agent 工作区里的文件：按分区浏览、预览、下载与删除", group: "operate" },
   { id: "events", label: "记录", hint: "消息处理、回复决策、运行日志与好感与画像", group: "operate", covers: ["logs", "favorability"] },
   { id: "settings", label: "设置", hint: "主题与系统更新" }
 ];

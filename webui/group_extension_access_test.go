@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/SuInk/diana/model/agent"
 	"github.com/SuInk/diana/model/assistant"
 )
 
@@ -95,4 +96,14 @@ func TestNormalizeGroupExtensionAccessDropsFollowAndRejectsUnknown(t *testing.T)
 	if _, err := normalizeGroupExtensionAccess(map[string]assistant.GroupExtensionAccess{"mcp:probe": {Tier: "everyone"}}); err == nil {
 		t.Fatal("接受了不支持的档位")
 	}
+}
+
+// workspaceStateTestPath 返回工作目录里 .diana/ 下的一份运行时状态文件路径，目录先建好。
+func workspaceStateTestPath(t *testing.T, workDir, name string) string {
+	t.Helper()
+	dir := agent.DianaStateDir(workDir)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return filepath.Join(dir, name)
 }

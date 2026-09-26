@@ -1952,7 +1952,10 @@ export function getStorageUsage(): Promise<StorageUsage> {
   return requestJSON<StorageUsage>("/api/system/storage");
 }
 
-/** 工作区里的一项。kind 为 link 表示目标已经不在了的符号链接，打不开。 */
+/**
+ * 工作区里的一项。kind 为 link 表示目标已经不在了的符号链接，打不开；external 表示链接
+ * 指到了工作区外面，照样能进能看，只是标出来。
+ */
 export interface WorkspaceEntry {
   name: string;
   path: string;
@@ -1960,8 +1963,22 @@ export interface WorkspaceEntry {
   size: number;
   modified: string;
   symlink?: boolean;
-  /** 运行时自己的凭据配置（明文令牌），能看，页面上打个标记 */
+  external?: boolean;
+  /** 运行时自己的配置或凭据（明文令牌、扩展开关、长期区索引），能看能删，页面上打个标记 */
   protected?: boolean;
+  /** 长期保存区的条目：存进来时写的说明、谁存的、什么时候 */
+  description?: string;
+  saved_by?: string;
+  saved_at?: string;
+}
+
+/** 目录所在的分区和清理规则，例如「下载 · 7 天后自动清理」。 */
+export interface WorkspaceAreaHint {
+  key: string;
+  label: string;
+  retention: string;
+  bot_id?: string;
+  bot_name?: string;
 }
 
 export interface WorkspaceListing {
@@ -1972,36 +1989,41 @@ export interface WorkspaceListing {
   exists: boolean;
   entries: WorkspaceEntry[];
   truncated?: boolean;
+  /** 分区目录还没建出来（Agent 第一次往这里写文件时才创建），当空目录显示 */
+  missing?: boolean;
+  /** 当前目录经符号链接到了工作区外面：能看能下载，不能删 */
+  external?: boolean;
+  /** 根目录、编码仓库这类不按分区管的目录没有 */
+  area?: WorkspaceAreaHint;
 }
 
 export function listWorkspace(path: string): Promise<WorkspaceListing> {
   return requestJSON<WorkspaceListing>(`/api/system/workspace?${new URLSearchParams({ path }).toString()}`);
 }
 
+/** 预览和下载共用一个地址，download 为真时后端一律按附件给。 */
 export function workspaceFileURL(path: string, download = false): string {
   const params = new URLSearchParams({ path });
   if (download) params.set("download", "1");
   return `/api/system/workspace/file?${params.toString()}`;
 }
 
-/** Agent 工作目录里的一个文件；长期保存区的条目带着存进来时写的说明。 */
+/** 概览里只报告不处理的条目：根下散落的文件、闲置的编码工作区。 */
 export interface WorkspaceFileEntry {
-  /** 相对工作目录根的路径，下载和删除都用它 */
+  /** 相对工作目录根的路径 */
   path: string;
   name: string;
   size: number;
   modified: string;
   is_dir?: boolean;
-  description?: string;
-  saved_by?: string;
-  saved_at?: string;
-  mime?: string;
 }
 
+/** 文件页顶部的一张分区卡片。 */
 export interface WorkspaceArea {
   /** keep | downloads | outputs | tmp | browser | trash | other */
   key: string;
   label: string;
+  /** 点卡片时跳到的目录；「其他目录」是 "."，即根目录 */
   path: string;
   /** 只有 keep 区按机器人分，其它区是整个工作目录共用的 */
   bot_id?: string;
@@ -2011,12 +2033,9 @@ export interface WorkspaceArea {
   bytes: number;
   files: number;
   quota_bytes?: number;
-  entries: WorkspaceFileEntry[];
-  /** 文件太多时只列最近的一批，bytes / files 仍是全量 */
-  truncated?: boolean;
 }
 
-export interface WorkspaceFilesResponse {
+export interface WorkspaceOverview {
   root: string;
   collected_at: string;
   areas: WorkspaceArea[];
@@ -2026,8 +2045,8 @@ export interface WorkspaceFilesResponse {
   orphan_coding: WorkspaceFileEntry[];
 }
 
-export function getWorkspaceFiles(): Promise<WorkspaceFilesResponse> {
-  return requestJSON<WorkspaceFilesResponse>("/api/workspace/files");
+export function getWorkspaceOverview(): Promise<WorkspaceOverview> {
+  return requestJSON<WorkspaceOverview>("/api/workspace/files");
 }
 
 /** 删除是挪进回收站，返回它在回收站里的位置。 */

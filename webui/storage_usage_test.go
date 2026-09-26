@@ -100,3 +100,31 @@ func writeStorageSample(t *testing.T, path string, size int) {
 		t.Fatalf("write %s: %v", path, err)
 	}
 }
+
+func TestStorageDirectoryKeys(t *testing.T) {
+	for rel, want := range map[string]string{
+		"diana.db":                         "database",
+		"config.yaml":                      "files",
+		"history-media/g1/a.jpg":           "history-media",
+		"workspace/keep/bot-a/a.png":       "workspace/keep",
+		"workspace/.trash/2026/x":          "workspace/.trash",
+		"workspace/.agents/skills/x.md":    "workspace/skills",
+		"workspace/random/x":               "workspace/other",
+		"workspace/loose.txt":              "workspace/other",
+		"workspace/.diana/keep-index/a.js": "workspace/.diana",
+	} {
+		category := storageCategoryKey(rel)
+		if got := storageDirectoryKey(rel, category); got != want {
+			t.Fatalf("storageDirectoryKey(%q) = %q, want %q", rel, got, want)
+		}
+	}
+	measured := walkDirectoryBreakdown(func() string {
+		dir := t.TempDir()
+		writeStorageSample(t, filepath.Join(dir, "workspace", "downloads", "a.png"), 5)
+		writeStorageSample(t, filepath.Join(dir, "history-media", "b.jpg"), 3)
+		return dir
+	}())
+	if measured.dirBytes["workspace/downloads"] != 5 || measured.dirBytes["history-media"] != 3 {
+		t.Fatalf("按目录统计 = %+v", measured.dirBytes)
+	}
+}

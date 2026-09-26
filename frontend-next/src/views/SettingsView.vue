@@ -318,16 +318,11 @@
                 数据目录 <code class="mono">{{ storage.path }}</code>。
                 <template v-if="storage.scanning">正在重新统计，稍后自动刷新。</template>
                 <template v-else-if="storage.scanned_at">统计于 {{ formatTime(storage.scanned_at) }}。</template>
-                占得多的话：图片、视频、音频这些历史原件由「媒体与文件」的保留策略清理，下载缓存由「下载缓存」清理，Agent 工作目录里的文件在「工作目录」里逐个下载或删除。
+                占得多的话：图片、视频、音频这些历史原件由「媒体与文件」的保留策略清理，下载缓存由「下载缓存」清理，Agent 工作目录里的文件在侧栏「文件」页里按分区浏览、下载或删除。
               </p>
             </template>
           </div>
         </section>
-      </div>
-
-      <div v-show="activePage === 'workspace'" class="settings-section-body">
-        <!-- 第一次点进来才挂载：列工作目录要遍历磁盘，和存储卡片一样不在打开设置页时就跑。 -->
-        <WorkspaceFilesPanel v-if="workspaceOpened" />
       </div>
 
       <div v-show="activePage === 'cache'" class="settings-section-body">
@@ -595,8 +590,7 @@ import LoadingSkeleton from "../components/LoadingSkeleton.vue";
 import SkeletonBlock from "../components/SkeletonBlock.vue";
 import PluginSettingField from "../components/PluginSettingField.vue";
 import StorageDonut from "../components/StorageDonut.vue";
-import WorkspaceFilesPanel from "../components/WorkspaceFilesPanel.vue";
-import { Activity, Download, Eye, EyeOff, FolderOpen, HardDriveDownload, Images, KeyRound, LogOut, MonitorSmartphone, Palette, PieChart, Plug, RefreshCw, RotateCw, Save, ShieldCheck } from "@lucide/vue";
+import { Activity, Download, Eye, EyeOff, HardDriveDownload, Images, KeyRound, LogOut, MonitorSmartphone, Palette, PieChart, Plug, RefreshCw, RotateCw, Save, ShieldCheck } from "@lucide/vue";
 import {
   changeCredentials,
   getAuthStatus,
@@ -651,7 +645,6 @@ const settingsPages = [
   { key: "sessions", label: "登录会话", hint: "机器人发来异常登录提醒时，在这里把对应设备踢下线。", icon: MonitorSmartphone },
   { key: "openapi", label: "对外 API", hint: "让 CI、监控这类外部系统通过 HTTP 接口给机器人推送消息。", icon: Plug },
   { key: "storage", label: "存储空间", hint: "这台机器的磁盘还剩多少，以及 Diana 的数据目录被哪类文件占掉了。", icon: PieChart },
-  { key: "workspace", label: "工作目录", hint: "Agent 工作目录里的文件：长期保存区、下载、产出、临时文件和回收站，可以下载或删除。", icon: FolderOpen },
   { key: "cache", label: "下载缓存", hint: "控制下载的媒体缓存按闲置天数或容量清理。", icon: HardDriveDownload },
   { key: "media", label: "媒体与文件", hint: "历史媒体原件的保留策略，以及发送文件时接入端回源拉取媒体的地址。", icon: Images },
   { key: "update", label: "系统更新", hint: "检查、下载并安装新版本，以及原地重启服务。", icon: Download },
@@ -664,7 +657,7 @@ const settingsGroups = (
   [
     { label: "个性化", keys: ["theme"] },
     { label: "账号与安全", keys: ["security", "sessions", "openapi"] },
-    { label: "系统", keys: ["storage", "workspace", "cache", "media", "update", "status"] }
+    { label: "系统", keys: ["storage", "cache", "media", "update", "status"] }
   ] as const
 ).map((group) => ({
   label: group.label,
@@ -685,7 +678,6 @@ const diskSegments = computed(() => storageDiskSegments(storage.value));
 const categorySegments = computed(() => storageCategorySegments(storage.value));
 const diskTotal = computed(() => storageDiskTotal(storage.value));
 const directoryRows = computed(() => storageDirectories(storage.value));
-const workspaceOpened = ref(false);
 const diskCenterValue = computed(() => {
   const usage = storage.value;
   if (!usage) return "—";
@@ -721,7 +713,6 @@ watch(
   activePage,
   (page) => {
     if (page === "storage" && !storage.value) void loadStorageUsage();
-    if (page === "workspace") workspaceOpened.value = true;
   },
   { immediate: true }
 );

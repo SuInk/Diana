@@ -124,63 +124,84 @@ func TestEmptyWorkspaceTrash(t *testing.T) {
 	}
 }
 
-// 工作目录页的列表按分区分组，长期区带上索引里的说明，运行时配置和 .diana/ 不出现。
-func TestListWorkspaceGroupsAreasAndHidesState(t *testing.T) {
+// 文件页的概览按分区合计，运行时配置和 .diana/ 不计在内。
+func TestSummarizeWorkspaceGroupsAreasAndHidesState(t *testing.T) {
 	root := t.TempDir()
 	now := time.Now()
 	writeAgedFile(t, root, "downloads/a.png", now)
 	writeAgedFile(t, root, "notes/x.md", now)
 	writeAgedFile(t, root, "loose.txt", now)
 	writeAgedFile(t, root, ".diana/extension-overrides.json", now)
+	writeAgedFile(t, root, ".mcp.json", now)
 	if _, err := WriteWorkspaceBytes(Config{WorkDir: root}, "keep/p.txt", []byte("hello"), WorkspaceWriteOptions{Keep: &KeepMeta{BotID: "bot-a", Description: "说明"}}); err != nil {
 		t.Fatal(err)
 	}
-	listing, err := ListWorkspace(root, WorkspaceCleanupOptions{Now: now}, 0)
+	overview, err := SummarizeWorkspace(root, WorkspaceCleanupOptions{Now: now})
 	if err != nil {
 		t.Fatal(err)
 	}
 	areas := map[string]WorkspaceArea{}
-	for _, area := range listing.Areas {
+	for _, area := range overview.Areas {
 		areas[area.Key+":"+area.BotID] = area
-		for _, entry := range area.Entries {
-			if filepath.Base(filepath.Dir(entry.Path)) == DianaStateDirName {
-				t.Fatalf("列出了运行时状态: %s", entry.Path)
-			}
-		}
 	}
 	keep := areas["keep:bot-a"]
-	if len(keep.Entries) != 1 || keep.Entries[0].Description != "说明" || keep.QuotaBytes != KeepQuotaBytes {
+	if keep.Files != 1 || keep.Bytes != 5 || keep.Path != "keep/bot-a" || keep.QuotaBytes != KeepQuotaBytes {
 		t.Fatalf("keep = %+v", keep)
 	}
 	if downloads := areas["downloads:"]; downloads.Files != 1 || downloads.Retention != "7 天后自动清理" {
 		t.Fatalf("downloads = %+v", downloads)
 	}
-	if other := areas["other:"]; other.Files != 1 || other.Entries[0].Path != "notes/x.md" {
+	if trash := areas["trash:"]; trash.Path != WorkspaceTrashDir || trash.Retention != "删除 7 天后永久清理" {
+		t.Fatalf("trash = %+v", trash)
+	}
+	// 「其他」只算 notes/x.md：.diana/ 和 .mcp.json 都不该被计进去。
+	if other := areas["other:"]; other.Files != 1 || other.Path != "." {
 		t.Fatalf("other = %+v", other)
 	}
-	if len(listing.Loose) != 1 || listing.Loose[0].Path != "loose.txt" {
-		t.Fatalf("loose = %+v", listing.Loose)
+	if len(overview.Loose) != 1 || overview.Loose[0].Path != "loose.txt" {
+		t.Fatalf("loose = %+v", overview.Loose)
 	}
 }
 
-func TestOpenWorkspaceFileRefusesUnsafePaths(t *testing.T) {
-	root := t.TempDir()
-	writeAgedFile(t, root, "downloads/a.txt", time.Now())
-	writeAgedFile(t, root, ".diana/extension-overrides.json", time.Now())
-	writeAgedFile(t, root, ".mcp.json", time.Now())
-	cfg := Config{WorkDir: root}
-	file, _, clean, err := OpenWorkspaceFile(cfg, "downloads/a.txt")
-	if err != nil || clean != "downloads/a.txt" {
-		t.Fatalf("普通文件打不开: %v", err)
+func TestWorkspaceAreaOf(t *testing.T) {
+	for rel, want := range map[string]string{
+		"":                       "",
+		".":                      "",
+		"keep":                   "keep:",
+		"keep/bot-a/notes":       "keep:bot-a",
+		"downloads":              "downloads:",
+		"outputs/a/b.png":        "outputs:",
+		".agent-browser/x.png":   "browser:",
+		".trash/20260901-000000": "trash:",
+		"notes/x.md":             "other:",
+		"coding/repo":            "",
+		".diana":                 "",
+	} {
+		got := ""
+		if hint := WorkspaceAreaOf(rel); hint != nil {
+			got = hint.Key + ":" + hint.BotID
+			if hint.Retention == "" || hint.Label == "" {
+				t.Fatalf("%q 缺少说明: %+v", rel, hint)
+			}
+		}
+		if got != want {
+			t.Fatalf("WorkspaceAreaOf(%q) = %q, want %q", rel, got, want)
+		}
 	}
-	file.Close()
-	outside := t.TempDir()
-	writeAgedFile(t, outside, "secret.txt", time.Now())
-	_ = os.Symlink(filepath.Join(outside, "secret.txt"), filepath.Join(root, "link.txt"))
-	for _, rel := range []string{"../etc/passwd", "/etc/passwd", ".diana/extension-overrides.json", ".mcp.json", "link.txt", "downloads", "."} {
-		if file, _, _, err := OpenWorkspaceFile(cfg, rel); err == nil {
-			file.Close()
-			t.Fatalf("%s 被打开了", rel)
+}
+
+func TestKeepEntriesIn(t *testing.T) {
+	root := t.TempDir()
+	if _, err := WriteWorkspaceBytes(Config{WorkDir: root}, "keep/poster.png", []byte("png"), WorkspaceWriteOptions{Keep: &KeepMeta{BotID: "bot-a", Description: "活动海报", SavedBy: "主人"}}); err != nil {
+		t.Fatal(err)
+	}
+	entries := KeepEntriesIn(root, "keep/bot-a")
+	if got := entries["keep/bot-a/poster.png"]; got.Description != "活动海报" || got.SavedBy != "主人" {
+		t.Fatalf("entries = %+v", entries)
+	}
+	for _, rel := range []string{"keep", "downloads", "keep/bot-b"} {
+		if got := KeepEntriesIn(root, rel); got != nil {
+			t.Fatalf("%s 不该有索引: %+v", rel, got)
 		}
 	}
 }

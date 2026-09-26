@@ -60,17 +60,13 @@ type WorkspaceCleanupOptions struct {
 	CodingReferenced func(name string) bool
 }
 
-// WorkspaceFileInfo 是清理报告和工作目录列表里的一个条目。
+// WorkspaceFileInfo 是清理报告和工作目录概览（散落文件、闲置编码工作区）里的一个条目。
 type WorkspaceFileInfo struct {
-	Path        string    `json:"path"`
-	Name        string    `json:"name"`
-	Size        int64     `json:"size"`
-	Modified    time.Time `json:"modified"`
-	IsDir       bool      `json:"is_dir,omitempty"`
-	Description string    `json:"description,omitempty"`
-	SavedBy     string    `json:"saved_by,omitempty"`
-	SavedAt     time.Time `json:"saved_at,omitzero"`
-	MIME        string    `json:"mime,omitempty"`
+	Path     string    `json:"path"`
+	Name     string    `json:"name"`
+	Size     int64     `json:"size"`
+	Modified time.Time `json:"modified"`
+	IsDir    bool      `json:"is_dir,omitempty"`
 }
 
 // WorkspaceCleanupAreaResult 是一个分区这次删掉了多少。

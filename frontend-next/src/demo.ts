@@ -682,77 +682,183 @@ let demoMediaCachePolicy = { retention_days: 7, max_mb: 0 };
 
 let demoMediaBaseURL = { base_url: "", source: "auto" };
 
-// 演示工作目录：一台机器人的长期保存区带两份有说明的文件，外加下载、产出、
-// 回收站和一个散落在根下的文件。删除和清空回收站会真的改这份数据，点完能看到变化。
-type DemoWorkspaceEntry = { path: string; name: string; size: number; modified: string; description?: string; saved_by?: string; saved_at?: string; mime?: string };
-type DemoWorkspaceArea = { key: string; label: string; path: string; bot_id?: string; bot_name?: string; retention: string; quota_bytes?: number; entries: DemoWorkspaceEntry[] };
-const demoWorkspaceAreas: DemoWorkspaceArea[] = [
-  {
-    key: "keep", label: "长期保存", path: "keep/bot-onebot", bot_id: "bot-onebot", bot_name: "Diana OneBot（演示）",
-    retention: "不自动清理，占满配额后 Agent 无法再存", quota_bytes: 512 * 1024 * 1024,
-    entries: [
-      { path: "keep/bot-onebot/周报模板.docx", name: "周报模板.docx", size: 48_213, modified: before(4320), description: "群里约定的周报格式，写周报时照这个填", saved_by: "青禾", saved_at: before(4320), mime: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" },
-      { path: "keep/bot-onebot/发布清单/v0.9.md", name: "v0.9.md", size: 6_140, modified: before(1440), description: "v0.9 发布前要核对的检查项", saved_by: "主人", saved_at: before(1440), mime: "text/markdown" }
-    ]
-  },
-  {
-    key: "downloads", label: "下载", path: "downloads", retention: "7 天后自动清理",
-    entries: [
-      { path: "downloads/雨夜电车参考图.png", name: "雨夜电车参考图.png", size: 2_842_117, modified: before(35), mime: "image/png" },
-      { path: "downloads/release-notes.pdf", name: "release-notes.pdf", size: 812_004, modified: before(900), mime: "application/pdf" }
-    ]
-  },
-  {
-    key: "outputs", label: "产出", path: "outputs", retention: "30 天后自动清理",
-    entries: [{ path: "outputs/今日发布变更摘要.md", name: "今日发布变更摘要.md", size: 3_512, modified: before(2), mime: "text/markdown" }]
-  },
-  { key: "tmp", label: "临时文件", path: "tmp", retention: "1 天后自动清理", entries: [] },
-  {
-    key: "browser", label: "浏览器截图", path: "browser", retention: "3 天后自动清理",
-    entries: [{ path: "browser/screenshot-20260926-101204.png", name: "screenshot-20260926-101204.png", size: 402_331, modified: before(80), mime: "image/png" }]
-  },
-  {
-    key: "trash", label: "回收站", path: ".trash", retention: "删除 7 天后永久清理",
-    entries: [{ path: ".trash/downloads/旧版安装包.zip", name: "旧版安装包.zip", size: 18_874_368, modified: before(2880), mime: "application/zip" }]
-  }
-];
-let demoWorkspaceLoose: DemoWorkspaceEntry[] = [
-  { path: "scratch.txt", name: "scratch.txt", size: 1_024, modified: before(10080), mime: "text/plain" }
+// 演示工作区：一台机器人的长期保存区带两份有说明的文件，外加下载、产出、截图、
+// 回收站、一个散落在根下的文件、一个闲置的编码仓库和两种打不开的链接。只有这一份
+// 平铺的节点表，概览、目录浏览、删除和清空回收站都从它算，点完删除两边一起变。
+type DemoWorkspaceNode = {
+  path: string;
+  kind: "dir" | "file" | "link";
+  size?: number;
+  modified: string;
+  text?: string;
+  description?: string;
+  saved_by?: string;
+  external?: boolean;
+  symlink?: boolean;
+  protected?: boolean;
+};
+const demoWorkspaceRoot = "/app/data/workspace";
+let demoWorkspaceNodes: DemoWorkspaceNode[] = [
+  { path: "keep", kind: "dir", modified: before(4320) },
+  { path: "keep/bot-onebot", kind: "dir", modified: before(1440) },
+  { path: "keep/bot-onebot/周报模板.md", kind: "file", size: 1_213, modified: before(4320), description: "群里约定的周报格式，写周报时照这个填", saved_by: "青禾", text: "# 周报\n\n## 本周完成\n\n## 下周计划\n\n## 需要协调\n" },
+  { path: "keep/bot-onebot/发布清单", kind: "dir", modified: before(1440) },
+  { path: "keep/bot-onebot/发布清单/v0.9.md", kind: "file", size: 6_140, modified: before(1440), description: "v0.9 发布前要核对的检查项", saved_by: "主人", text: "# v0.9 发布清单\n\n- [ ] CI 全绿\n- [ ] 更新说明写好\n- [ ] 镜像打好标签\n" },
+  { path: "downloads", kind: "dir", modified: before(35) },
+  { path: "downloads/雨夜电车参考图.png", kind: "file", size: 2_842_117, modified: before(35) },
+  { path: "downloads/release-notes.txt", kind: "file", size: 812, modified: before(900), text: "Diana release notes (demo)\n" },
+  { path: "outputs", kind: "dir", modified: before(2) },
+  { path: "outputs/今日发布变更摘要.md", kind: "file", size: 3_512, modified: before(2), text: "# 今日发布变更摘要\n\n- 文件页合并了分区概览和目录浏览\n" },
+  { path: "tmp", kind: "dir", modified: before(60) },
+  { path: ".agent-browser", kind: "dir", modified: before(80) },
+  { path: ".agent-browser/screenshot-20260926-101204.png", kind: "file", size: 402_331, modified: before(80) },
+  { path: ".trash", kind: "dir", modified: before(2880) },
+  { path: ".trash/20260924-093000", kind: "dir", modified: before(2880) },
+  { path: ".trash/20260924-093000/旧版安装包.zip", kind: "file", size: 18_874_368, modified: before(2880) },
+  { path: "characters", kind: "dir", modified: before(1800) },
+  { path: "characters/diana.md", kind: "file", size: 58, modified: before(1800), text: "# Diana\n\n活泼、爱吐槽，说话不超过三句。\n" },
+  { path: "coding", kind: "dir", modified: before(3120) },
+  { path: "coding/old-prototype", kind: "dir", modified: before(60 * 24 * 45) },
+  { path: "coding/old-prototype/README.md", kind: "file", size: 41, modified: before(60 * 24 * 45), text: "# demo repo\n\n编码代理克隆下来的仓库。\n" },
+  { path: "scratch.txt", kind: "file", size: 1_024, modified: before(10080), text: "临时记一下：周五前把参考图发给画师。\n" },
+  { path: "latest-log", kind: "link", modified: before(180), symlink: true },
+  { path: "host-logs", kind: "dir", modified: before(600), symlink: true, external: true },
+  { path: "host-logs/diana.log", kind: "file", size: 96, modified: before(600), text: "2026/09/26 10:00:00 diana webui listening on :8080\n" },
+  { path: ".mcp.json", kind: "file", size: 58, modified: before(12000), protected: true, text: '{\n  "mcpServers": { "search": { "token": "demo-token" } }\n}\n' },
+  { path: ".diana", kind: "dir", modified: before(1440), protected: true },
+  { path: ".diana/extension-overrides.json", kind: "file", size: 42, modified: before(1440), protected: true, text: '{\n  "bot-onebot": { "weather": false }\n}\n' },
+  { path: ".diana/keep-index", kind: "dir", modified: before(1440), protected: true },
+  { path: ".diana/keep-index/bot-onebot.json", kind: "file", size: 312, modified: before(1440), protected: true, text: '{\n  "entries": [\n    { "path": "keep/bot-onebot/周报模板.md", "description": "群里约定的周报格式" }\n  ]\n}\n' }
 ];
 
-function demoWorkspaceFiles() {
+function demoWorkspaceParent(path: string): string {
+  const slash = path.lastIndexOf("/");
+  return slash < 0 ? "" : path.slice(0, slash);
+}
+
+function demoWorkspaceUnder(path: string, dir: string): boolean {
+  return path === dir || path.startsWith(`${dir}/`);
+}
+
+const demoWorkspaceAgedAreas = [
+  { key: "downloads", label: "下载", path: "downloads", retention: "7 天后自动清理" },
+  { key: "outputs", label: "产出", path: "outputs", retention: "30 天后自动清理" },
+  { key: "tmp", label: "临时文件", path: "tmp", retention: "1 天后自动清理" },
+  { key: "browser", label: "浏览器截图", path: ".agent-browser", retention: "7 天后自动清理" },
+  { key: "trash", label: "回收站", path: ".trash", retention: "删除 7 天后永久清理" }
+];
+const demoWorkspaceReserved = new Set(["keep", "downloads", "outputs", "tmp", ".agent-browser", ".trash", ".diana", ".agents", "skills", "coding", "coding-runtime"]);
+const demoBotNames: Record<string, string> = { "bot-onebot": "Diana OneBot（演示）" };
+
+function demoWorkspaceAreaHint(rel: string) {
+  if (!rel) return undefined;
+  const [top, second] = rel.split("/");
+  if (top === "keep") return { key: "keep", label: "长期保存", retention: "不自动清理", bot_id: second, bot_name: second ? demoBotNames[second] : undefined };
+  const aged = demoWorkspaceAgedAreas.find((area) => area.path === top);
+  if (aged) return { key: aged.key, label: aged.label, retention: aged.retention };
+  return demoWorkspaceReserved.has(top) ? undefined : { key: "other", label: "其他目录", retention: "不自动清理" };
+}
+
+function demoWorkspaceSum(match: (path: string) => boolean) {
+  const files = demoWorkspaceNodes.filter((node) => node.kind === "file" && match(node.path));
+  return { bytes: files.reduce((sum, node) => sum + (node.size ?? 0), 0), files: files.length };
+}
+
+function demoWorkspaceOverview() {
+  const keepAreas = demoWorkspaceNodes
+    .filter((node) => node.kind === "dir" && demoWorkspaceParent(node.path) === "keep")
+    .map((node) => {
+      const botID = node.path.slice("keep/".length);
+      return {
+        key: "keep", label: "长期保存", path: node.path, bot_id: botID, bot_name: demoBotNames[botID],
+        retention: "不自动清理", quota_bytes: 2 * 1024 * 1024 * 1024,
+        ...demoWorkspaceSum((path) => demoWorkspaceUnder(path, node.path))
+      };
+    });
+  const aged = demoWorkspaceAgedAreas.map((area) => ({ ...area, ...demoWorkspaceSum((path) => demoWorkspaceUnder(path, area.path)) }));
+  const other = {
+    key: "other", label: "其他目录", path: ".", retention: "不自动清理",
+    ...demoWorkspaceSum((path) => path.includes("/") && !demoWorkspaceReserved.has(path.split("/")[0]) && !path.startsWith("host-logs/"))
+  };
+  const toEntry = (node: DemoWorkspaceNode) => ({ path: node.path, name: node.path.split("/").pop()!, size: node.size ?? 0, modified: node.modified });
+  const idle = demoWorkspaceNodes.find((node) => node.path === "coding/old-prototype");
   return {
-    root: "/app/data/workspace",
+    root: demoWorkspaceRoot,
     collected_at: new Date().toISOString(),
-    areas: demoWorkspaceAreas.map((area) => ({
-      ...area,
-      bytes: area.entries.reduce((sum, entry) => sum + entry.size, 0),
-      files: area.entries.length,
-      entries: [...area.entries].sort((a, b) => b.modified.localeCompare(a.modified))
-    })),
-    loose: demoWorkspaceLoose,
-    orphan_coding: [{ path: "coding/old-prototype", name: "old-prototype", size: 73_400_320, modified: before(60 * 24 * 45), is_dir: true }]
+    areas: [...keepAreas, ...aged, other],
+    loose: demoWorkspaceNodes.filter((node) => node.kind === "file" && !node.path.includes("/") && !node.protected).map(toEntry),
+    orphan_coding: idle ? [{ ...toEntry(idle), size: 73_400_320, is_dir: true }] : []
   };
 }
 
-/** 和后端一样：删除是挪进回收站，路径前面加上 .trash/。 */
-function demoWorkspaceDelete(path: string): { trash_path: string } | null {
-  const trash = demoWorkspaceAreas.find((area) => area.key === "trash")!;
-  let found: DemoWorkspaceEntry | undefined;
-  for (const area of demoWorkspaceAreas) {
-    if (area.key === "trash") continue;
-    const index = area.entries.findIndex((entry) => entry.path === path);
-    if (index >= 0) [found] = area.entries.splice(index, 1);
+function demoWorkspaceListing(rel: string): Response {
+  const isAreaDir = rel === "keep" || demoWorkspaceAgedAreas.some((area) => area.path === rel);
+  if (rel && !demoWorkspaceNodes.some((node) => node.path === rel && node.kind === "dir")) {
+    // 和后端一样：分区目录还没建出来时当空目录，其余找不到的才报错。
+    if (isAreaDir) return json({ root: demoWorkspaceRoot, path: rel, exists: true, entries: [], missing: true, area: demoWorkspaceAreaHint(rel) });
+    return json({ error: "找不到这个路径" }, 404);
   }
-  const looseIndex = demoWorkspaceLoose.findIndex((entry) => entry.path === path);
-  if (looseIndex >= 0) {
-    found = demoWorkspaceLoose[looseIndex];
-    demoWorkspaceLoose = demoWorkspaceLoose.filter((_, index) => index !== looseIndex);
+  // host-logs 是指到工作区外面的链接：进去之后能看，不能删。
+  const external = demoWorkspaceUnder(rel, "host-logs") || undefined;
+  const entries = demoWorkspaceNodes
+    .filter((node) => demoWorkspaceParent(node.path) === rel)
+    .map((node) => ({
+      name: node.path.split("/").pop()!,
+      path: node.path,
+      kind: node.kind,
+      size: node.kind === "file" ? node.size ?? 0 : 0,
+      modified: node.modified,
+      symlink: node.symlink,
+      external: node.external,
+      protected: node.protected,
+      description: node.description,
+      saved_by: node.saved_by,
+      saved_at: node.description ? node.modified : undefined
+    }))
+    .sort((a, b) => ((a.kind === "dir") !== (b.kind === "dir") ? (a.kind === "dir" ? -1 : 1) : a.name.toLowerCase().localeCompare(b.name.toLowerCase())));
+  return json({ root: demoWorkspaceRoot, path: rel, exists: true, entries, external, area: demoWorkspaceAreaHint(rel) });
+}
+
+/** 和后端一样：删除是整个挪进回收站下以时间命名的目录。 */
+function demoWorkspaceDelete(path: string): { trash_path: string } | { error: string } | null {
+  if (path.startsWith("host-logs/")) return { error: `${path} 经符号链接到了工作目录外面：外面的东西这里只能看和下载，不能删除` };
+  if (!path || path.startsWith(".trash") || path === "keep") return null;
+  const target = demoWorkspaceNodes.find((node) => node.path === path);
+  if (!target) return null;
+  const stamp = new Date().toISOString().replace(/[-:]/g, "").replace("T", "-").slice(0, 15);
+  const bucket = `.trash/${stamp}`;
+  // 删链接挪走的是链接本身：演示里外部链接下面的文件代表链接指向的东西，直接不再显示。
+  demoWorkspaceNodes = target.symlink
+    ? demoWorkspaceNodes
+        .filter((node) => node.path === path || !demoWorkspaceUnder(node.path, path))
+        .map((node) => (node.path === path ? { ...node, path: `${bucket}/${node.path}`, kind: "link" as const, external: undefined } : node))
+    : demoWorkspaceNodes.map((node) =>
+        demoWorkspaceUnder(node.path, path) ? { ...node, path: `${bucket}/${node.path}`, description: undefined, saved_by: undefined, protected: undefined } : node
+      );
+  // 把挪进去的路径上缺的目录补齐，目录浏览才点得进去。
+  const trashPath = `${bucket}/${path}`;
+  const parts = trashPath.split("/");
+  for (let index = 2; index < parts.length; index += 1) {
+    const dir = parts.slice(0, index).join("/");
+    if (!demoWorkspaceNodes.some((node) => node.path === dir)) demoWorkspaceNodes.push({ path: dir, kind: "dir", modified: new Date().toISOString() });
   }
-  if (!found) return null;
-  const trashPath = `.trash/${found.path}`;
-  trash.entries.unshift({ ...found, path: trashPath, modified: new Date().toISOString(), description: undefined });
   return { trash_path: trashPath };
+}
+
+function demoWorkspaceFile(rel: string, download: boolean): Response {
+  const node = demoWorkspaceNodes.find((item) => item.path === rel && item.kind === "file");
+  if (!node) return json({ error: "找不到这个路径" }, 404);
+  const name = rel.split("/").pop()!;
+  const disposition = `${download ? "attachment" : "inline"}; filename*=UTF-8''${encodeURIComponent(name)}`;
+  if (node.text !== undefined) {
+    return new Response(node.text, { headers: { "Content-Type": "text/plain; charset=utf-8", "Content-Disposition": disposition } });
+  }
+  // 演示站没有真的图片，给一张占位图，预览窗口不至于是一个破图标。
+  if (/\.(png|jpe?g|webp|gif)$/i.test(name)) {
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="640" height="360"><rect width="640" height="360" fill="#e7dfe4"/><text x="320" y="188" font-family="sans-serif" font-size="22" text-anchor="middle" fill="#6b5f68">演示图片：${name.replace(/[<&>]/g, "")}</text></svg>`;
+    return new Response(svg, { headers: { "Content-Type": "image/svg+xml", "Content-Disposition": disposition } });
+  }
+  return new Response(new Uint8Array(node.size ?? 0), { headers: { "Content-Type": "application/octet-stream", "Content-Disposition": disposition } });
 }
 
 async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
@@ -771,45 +877,11 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
     return json(demoMediaCachePolicy);
   }
 
-  // 演示站的工作区：几份 Agent 写下的笔记、一个编码代理克隆的仓库，外加一份凭据配置
-  // 和一个目标已经不在了的链接，两种标记页面上都看得到。
-  if (path === "/api/system/workspace" || path === "/api/system/workspace/file") {
-    const at = (hours: number) => new Date(Date.now() - hours * 3600_000).toISOString();
-    const tree: Record<string, { name: string; kind: "dir" | "file" | "link"; size?: number; hours: number; protected?: boolean; symlink?: boolean; text?: string }[]> = {
-      "": [
-        { name: "characters", kind: "dir", hours: 30 },
-        { name: "coding", kind: "dir", hours: 52 },
-        { name: ".mcp.json", kind: "file", size: 58, hours: 200, protected: true, text: '{\n  "mcpServers": { "search": { "token": "demo-token" } }\n}\n' },
-        { name: "latest-log", kind: "link", hours: 3, symlink: true },
-        { name: "todo.md", kind: "file", size: 96, hours: 2, text: "# 待办\n\n- 周五提醒群里交周报\n- 查一下番剧更新时间\n" }
-      ],
-      characters: [{ name: "diana.md", kind: "file", size: 58, hours: 30, text: "# Diana\n\n活泼、爱吐槽，说话不超过三句。\n" }],
-      coding: [{ name: "managed-default", kind: "dir", hours: 52 }],
-      "coding/managed-default": [{ name: "README.md", kind: "file", size: 41, hours: 52, text: "# demo repo\n\n编码代理克隆下来的仓库。\n" }]
-    };
-    const rel = (url.searchParams.get("path") ?? "").replace(/^\/+|\/+$/g, "");
-    if (path === "/api/system/workspace/file") {
-      const dir = rel.includes("/") ? rel.slice(0, rel.lastIndexOf("/")) : "";
-      const item = tree[dir]?.find((entry) => entry.name === rel.slice(rel.lastIndexOf("/") + 1));
-      if (!item?.text) return json({ error: "找不到这个路径" }, 404);
-      return new Response(item.text, { headers: { "Content-Type": "text/plain; charset=utf-8" } });
-    }
-    const items = tree[rel];
-    if (!items) return json({ error: "找不到这个路径" }, 404);
-    return json({
-      root: "/app/data/workspace",
-      path: rel,
-      exists: true,
-      entries: items.map((item) => ({
-        name: item.name,
-        path: rel ? `${rel}/${item.name}` : item.name,
-        kind: item.kind,
-        size: item.size ?? 0,
-        modified: at(item.hours),
-        symlink: item.symlink,
-        protected: item.protected
-      }))
-    });
+  if (path === "/api/system/workspace") {
+    return demoWorkspaceListing((url.searchParams.get("path") ?? "").replace(/^\/+|\/+$/g, ""));
+  }
+  if (path === "/api/system/workspace/file") {
+    return demoWorkspaceFile((url.searchParams.get("path") ?? "").replace(/^\/+|\/+$/g, ""), url.searchParams.get("download") === "1");
   }
 
   // 演示模式给一块 512 GiB 的盘和一份典型占用，图片/视频最大——真实部署里
@@ -850,16 +922,16 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
     });
   }
 
-  if (path === "/api/workspace/files") return json(demoWorkspaceFiles());
+  if (path === "/api/workspace/files") return json(demoWorkspaceOverview());
   if (path === "/api/workspace/delete" && method === "POST") {
-    const result = demoWorkspaceDelete(String(body.path ?? ""));
-    return result ? json(result) : json({ error: "文件不存在或已被删除" }, 404);
+    const result = demoWorkspaceDelete(String(body.path ?? "").replace(/^\/+|\/+$/g, ""));
+    if (result && "error" in result) return json(result, 400);
+    return result ? json(result) : json({ error: "文件不存在，或者这个位置不能删除" }, 400);
   }
   if (path === "/api/workspace/trash/empty" && method === "POST") {
-    const trash = demoWorkspaceAreas.find((area) => area.key === "trash")!;
-    const deleted = { deleted_files: trash.entries.length, deleted_bytes: trash.entries.reduce((sum, entry) => sum + entry.size, 0) };
-    trash.entries = [];
-    return json(deleted);
+    const deleted = demoWorkspaceSum((item) => item.startsWith(".trash/"));
+    demoWorkspaceNodes = demoWorkspaceNodes.filter((node) => !node.path.startsWith(".trash/"));
+    return json({ deleted_files: deleted.files, deleted_bytes: deleted.bytes });
   }
 
   if (path === "/api/system/media-base-url") {

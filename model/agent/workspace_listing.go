@@ -4,34 +4,35 @@
 package agent
 
 import (
-	"errors"
-	"fmt"
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 )
 
-// WorkspaceArea 是 WebUI 工作目录页上的一个分区。
+// WorkspaceArea 是 WebUI 文件页顶部的一张分区卡片：这一块占了多少、有几个文件、
+// 多久会被清掉。具体文件由目录浏览逐层列，这里只给合计，免得一次把几百个文件名全
+// 塞进响应里。
 type WorkspaceArea struct {
 	// Key 是 keep、downloads、outputs、tmp、browser、trash、other 之一。
 	Key   string `json:"key"`
 	Label string `json:"label"`
-	Path  string `json:"path"`
+	// Path 是分区在工作目录里的相对路径，点卡片时目录浏览跳到这里；「其他目录」是根目录 "."。
+	Path string `json:"path"`
 	// BotID 是长期区所属机器人在 keep/ 下的目录名，BotName 由 WebUI 按配置补上。
-	BotID      string              `json:"bot_id,omitempty"`
-	BotName    string              `json:"bot_name,omitempty"`
-	Retention  string              `json:"retention"`
-	Bytes      int64               `json:"bytes"`
-	Files      int                 `json:"files"`
-	QuotaBytes int64               `json:"quota_bytes,omitempty"`
-	Entries    []WorkspaceFileInfo `json:"entries"`
-	Truncated  bool                `json:"truncated,omitempty"`
+	BotID      string `json:"bot_id,omitempty"`
+	BotName    string `json:"bot_name,omitempty"`
+	Retention  string `json:"retention"`
+	Bytes      int64  `json:"bytes"`
+	Files      int    `json:"files"`
+	QuotaBytes int64  `json:"quota_bytes,omitempty"`
 }
 
-// WorkspaceListing 是整个工作目录按分区的列表。运行时配置、凭据和 .diana/ 不出现在里面。
-type WorkspaceListing struct {
+// WorkspaceOverview 是整个工作目录按分区的合计。运行时配置、凭据和 .diana/ 不计在里面。
+type WorkspaceOverview struct {
 	Root         string              `json:"root"`
 	CollectedAt  time.Time           `json:"collected_at"`
 	Areas        []WorkspaceArea     `json:"areas"`
@@ -39,30 +40,104 @@ type WorkspaceListing struct {
 	OrphanCoding []WorkspaceFileInfo `json:"orphan_coding"`
 }
 
-// DefaultWorkspaceListLimit 是每个分区最多列出的文件数，按修改时间取最新的。
-const DefaultWorkspaceListLimit = 300
+// WorkspaceAreaHint 说明工作目录里某个路径归哪个分区、按什么规则清理。WebUI 在目录
+// 浏览时拿它提示「这里的东西 7 天后会被清掉」。
+type WorkspaceAreaHint struct {
+	Key       string `json:"key"`
+	Label     string `json:"label"`
+	Retention string `json:"retention"`
+	// BotID 只在长期区的某台机器人目录里才有，是 keep/ 下的目录名。
+	BotID   string `json:"bot_id,omitempty"`
+	BotName string `json:"bot_name,omitempty"`
+}
 
-// ListWorkspace 按分区列出工作目录里的文件。
-func ListWorkspace(root string, opts WorkspaceCleanupOptions, limit int) (WorkspaceListing, error) {
+// workspaceAgedAreaSpec 是按天数清理的几个分区。概览卡片和目录浏览的分区提示用同一份，
+// 标签和保留天数只在这里写一次。
+type workspaceAgedAreaSpec struct {
+	key, label, dir string
+	maxAge          func(WorkspaceCleanupPolicy) time.Duration
+}
+
+var workspaceAgedAreaSpecs = []workspaceAgedAreaSpec{
+	{"downloads", "下载", WorkspaceDownloadsDir, func(p WorkspaceCleanupPolicy) time.Duration { return p.DownloadsMaxAge }},
+	{"outputs", "产出", WorkspaceOutputsDir, func(p WorkspaceCleanupPolicy) time.Duration { return p.OutputsMaxAge }},
+	{"tmp", "临时文件", WorkspaceTmpDir, func(p WorkspaceCleanupPolicy) time.Duration { return p.TmpMaxAge }},
+	{"browser", "浏览器截图", WorkspaceBrowserDir, func(p WorkspaceCleanupPolicy) time.Duration { return p.BrowserMaxAge }},
+	{"trash", "回收站", WorkspaceTrashDir, func(p WorkspaceCleanupPolicy) time.Duration { return p.TrashMaxAge }},
+}
+
+const (
+	workspaceKeepLabel      = "长期保存"
+	workspaceKeepRetention  = "不自动清理"
+	workspaceOtherLabel     = "其他目录"
+	workspaceOtherRetention = "不自动清理"
+)
+
+func (s workspaceAgedAreaSpec) retention(policy WorkspaceCleanupPolicy) string {
+	age := s.maxAge(policy)
+	if s.key == "trash" {
+		return "删除 " + retentionDays(age) + " 天后永久清理"
+	}
+	return retentionLabel(age)
+}
+
+// WorkspaceAreaOf 返回相对路径 rel 所在的分区；工作目录根和编码仓库、Skills 这类
+// 有固定用途又不按分区管的目录返回 nil。
+func WorkspaceAreaOf(rel string) *WorkspaceAreaHint {
+	rel = path.Clean(filepath.ToSlash(strings.TrimSpace(rel)))
+	if rel == "." || rel == "" || strings.HasPrefix(rel, "../") || rel == ".." {
+		return nil
+	}
+	if botDir, inKeep := keepLocation(rel); inKeep {
+		return &WorkspaceAreaHint{Key: "keep", Label: workspaceKeepLabel, Retention: workspaceKeepRetention, BotID: botDir}
+	}
+	top, _, _ := strings.Cut(rel, "/")
+	policy := DefaultWorkspaceCleanupPolicy
+	for _, spec := range workspaceAgedAreaSpecs {
+		if top == spec.dir {
+			return &WorkspaceAreaHint{Key: spec.key, Label: spec.label, Retention: spec.retention(policy)}
+		}
+	}
+	if workspaceReservedTopLevel[top] {
+		return nil
+	}
+	return &WorkspaceAreaHint{Key: "other", Label: workspaceOtherLabel, Retention: workspaceOtherRetention}
+}
+
+// IsWorkspaceAreaDir 报告 rel 是不是某个分区的根目录（keep、downloads、outputs、tmp、
+// .agent-browser、.trash）。概览里这些分区总是有卡片，目录还没建出来时点进去也该是
+// 「还没有文件」，而不是找不到。
+func IsWorkspaceAreaDir(rel string) bool {
+	rel = path.Clean(filepath.ToSlash(strings.TrimSpace(rel)))
+	if rel == WorkspaceKeepDir {
+		return true
+	}
+	for _, spec := range workspaceAgedAreaSpecs {
+		if rel == spec.dir {
+			return true
+		}
+	}
+	return false
+}
+
+// SummarizeWorkspace 按分区合计工作目录里的文件，给 WebUI 文件页顶部的概览卡片用。
+func SummarizeWorkspace(root string, opts WorkspaceCleanupOptions) (WorkspaceOverview, error) {
 	now := opts.Now
 	if now.IsZero() {
 		now = time.Now()
 	}
-	if limit <= 0 {
-		limit = DefaultWorkspaceListLimit
-	}
 	abs, err := filepath.Abs(root)
 	if err != nil {
-		return WorkspaceListing{}, err
+		return WorkspaceOverview{}, err
 	}
-	listing := WorkspaceListing{Root: abs, CollectedAt: now, Areas: []WorkspaceArea{}, Loose: []WorkspaceFileInfo{}, OrphanCoding: []WorkspaceFileInfo{}}
+	overview := WorkspaceOverview{Root: abs, CollectedAt: now, Areas: []WorkspaceArea{}, Loose: []WorkspaceFileInfo{}, OrphanCoding: []WorkspaceFileInfo{}}
 	if info, err := os.Stat(abs); err != nil || !info.IsDir() {
-		return listing, nil
+		return overview, nil
 	}
 	policy := opts.Policy.withDefaults()
 	protected := agentProtectedFiles(Config{WorkDir: abs})
 
-	other := WorkspaceArea{Key: "other", Label: "其他目录", Path: ".", Retention: "不自动清理"}
+	other := WorkspaceArea{Key: "other", Label: workspaceOtherLabel, Path: ".", Retention: workspaceOtherRetention}
 	if entries, err := os.ReadDir(filepath.Join(abs, WorkspaceKeepDir)); err == nil {
 		for _, entry := range entries {
 			if !entry.IsDir() {
@@ -70,70 +145,40 @@ func ListWorkspace(root string, opts WorkspaceCleanupOptions, limit int) (Worksp
 				if info, err := entry.Info(); err == nil && info.Mode().IsRegular() {
 					other.Bytes += info.Size()
 					other.Files++
-					other.Entries = append(other.Entries, WorkspaceFileInfo{Path: WorkspaceKeepDir + "/" + entry.Name(), Name: entry.Name(), Size: info.Size(), Modified: info.ModTime()})
 				}
 				continue
 			}
-			botDir := entry.Name()
 			area := WorkspaceArea{
-				Key: "keep", Label: "长期保存", Path: WorkspaceKeepDir + "/" + botDir, BotID: botDir,
-				Retention: "不自动清理", QuotaBytes: KeepQuotaBytes,
+				Key: "keep", Label: workspaceKeepLabel, Path: WorkspaceKeepDir + "/" + entry.Name(), BotID: entry.Name(),
+				Retention: workspaceKeepRetention, QuotaBytes: KeepQuotaBytes,
 			}
-			collectWorkspaceArea(abs, &area, protected, limit)
-			if index, err := loadKeepIndexDir(abs, botDir); err == nil {
-				byPath := make(map[string]KeepEntry, len(index))
-				for _, item := range index {
-					byPath[item.Path] = item
-				}
-				for i := range area.Entries {
-					if item, ok := byPath[area.Entries[i].Path]; ok {
-						area.Entries[i].Description = item.Description
-						area.Entries[i].SavedBy = item.SavedBy
-						area.Entries[i].SavedAt = item.SavedAt
-						area.Entries[i].MIME = item.MIME
-					}
-				}
-			}
-			listing.Areas = append(listing.Areas, area)
+			sumWorkspaceTree(abs, area.Path, &area, protected)
+			overview.Areas = append(overview.Areas, area)
 		}
 	}
-	for _, spec := range []struct {
-		key, label, dir string
-		maxAge          time.Duration
-	}{
-		{"downloads", "下载", WorkspaceDownloadsDir, policy.DownloadsMaxAge},
-		{"outputs", "产出", WorkspaceOutputsDir, policy.OutputsMaxAge},
-		{"tmp", "临时文件", WorkspaceTmpDir, policy.TmpMaxAge},
-		{"browser", "浏览器截图", WorkspaceBrowserDir, policy.BrowserMaxAge},
-		{"trash", "回收站", WorkspaceTrashDir, policy.TrashMaxAge},
-	} {
-		area := WorkspaceArea{Key: spec.key, Label: spec.label, Path: spec.dir, Retention: retentionLabel(spec.maxAge)}
-		if spec.key == "trash" {
-			area.Retention = "删除 " + retentionDays(spec.maxAge) + " 天后永久清理"
-		}
-		collectWorkspaceArea(abs, &area, protected, limit)
-		listing.Areas = append(listing.Areas, area)
+	for _, spec := range workspaceAgedAreaSpecs {
+		area := WorkspaceArea{Key: spec.key, Label: spec.label, Path: spec.dir, Retention: spec.retention(policy)}
+		sumWorkspaceTree(abs, area.Path, &area, protected)
+		overview.Areas = append(overview.Areas, area)
 	}
 	if entries, err := os.ReadDir(abs); err == nil {
 		for _, entry := range entries {
 			if !entry.IsDir() || workspaceReservedTopLevel[entry.Name()] || protected.blocked(filepath.Join(abs, entry.Name())) {
 				continue
 			}
-			collectWorkspaceTree(abs, entry.Name(), &other, protected)
+			sumWorkspaceTree(abs, entry.Name(), &other, protected)
 		}
 	}
-	finishWorkspaceArea(&other, limit)
-	listing.Areas = append(listing.Areas, other)
-	listing.Loose = looseWorkspaceFiles(abs, protected)
-	if listing.Loose == nil {
-		listing.Loose = []WorkspaceFileInfo{}
+	overview.Areas = append(overview.Areas, other)
+	if loose := looseWorkspaceFiles(abs, protected); loose != nil {
+		overview.Loose = loose
 	}
 	if opts.CodingReferenced != nil {
 		if idle := idleCodingWorkspaces(abs, now.Add(-policy.CodingIdleAge), opts.CodingReferenced); idle != nil {
-			listing.OrphanCoding = idle
+			overview.OrphanCoding = idle
 		}
 	}
-	return listing, nil
+	return overview, nil
 }
 
 func retentionDays(age time.Duration) string {
@@ -144,14 +189,9 @@ func retentionLabel(age time.Duration) string {
 	return retentionDays(age) + " 天后自动清理"
 }
 
-func collectWorkspaceArea(root string, area *WorkspaceArea, protected protectedFiles, limit int) {
-	collectWorkspaceTree(root, area.Path, area, protected)
-	finishWorkspaceArea(area, limit)
-}
-
-// collectWorkspaceTree 把 rel 下的普通文件记进分区。软链接和凭据不列：前者可能指到
+// sumWorkspaceTree 把 rel 下的普通文件计进分区。软链接和凭据不算：前者可能指到
 // 工作目录外面，后者本来就不该在界面上出现。
-func collectWorkspaceTree(root, rel string, area *WorkspaceArea, protected protectedFiles) {
+func sumWorkspaceTree(root, rel string, area *WorkspaceArea, protected protectedFiles) {
 	base := filepath.Join(root, filepath.FromSlash(rel))
 	if info, err := os.Lstat(base); err != nil || !info.IsDir() {
 		return
@@ -173,66 +213,27 @@ func collectWorkspaceTree(root, rel string, area *WorkspaceArea, protected prote
 		if err != nil {
 			return nil
 		}
-		relPath, err := filepath.Rel(root, current)
-		if err != nil {
-			return nil
-		}
 		area.Bytes += info.Size()
 		area.Files++
-		area.Entries = append(area.Entries, WorkspaceFileInfo{
-			Path: filepath.ToSlash(relPath), Name: entry.Name(), Size: info.Size(), Modified: info.ModTime(),
-		})
 		return nil
 	})
 }
 
-func finishWorkspaceArea(area *WorkspaceArea, limit int) {
-	sortWorkspaceFiles(area.Entries)
-	if len(area.Entries) > limit {
-		area.Entries = area.Entries[:limit]
-		area.Truncated = true
+// KeepEntriesIn 返回长期区某个目录（keep/<机器人>/ 及其子目录）下各条目在索引里的
+// 记录，按相对路径索引。rel 不在某台机器人的长期区里时返回 nil。索引读不出来（还没有、
+// 或者坏了）也返回 nil：说明只是锦上添花，不该挡住目录浏览。
+func KeepEntriesIn(root, rel string) map[string]KeepEntry {
+	botDir, inKeep := keepLocation(rel)
+	if !inKeep || botDir == "" {
+		return nil
 	}
-	if area.Entries == nil {
-		area.Entries = []WorkspaceFileInfo{}
+	entries, err := loadKeepIndexDir(root, botDir)
+	if err != nil || len(entries) == 0 {
+		return nil
 	}
-}
-
-// OpenWorkspaceFile 打开工作目录内的一个普通文件给 WebUI 下载。和文件工具同一套边界：
-// 不许走出工作目录（软链接也不行），运行时配置、凭据和 .diana/ 一律不给。打开经
-// os.OpenRoot，校验和打开之间换掉软链接也出不了工作目录。
-func OpenWorkspaceFile(cfg Config, rel string) (*os.File, os.FileInfo, string, error) {
-	root, err := filepath.Abs(cfg.WorkDir)
-	if err != nil {
-		return nil, nil, "", err
+	out := make(map[string]KeepEntry, len(entries))
+	for _, entry := range entries {
+		out[entry.Path] = entry
 	}
-	target, err := safePath(root, rel)
-	if err != nil {
-		return nil, nil, "", err
-	}
-	clean := relPathForOutput(root, target)
-	if clean == "." {
-		return nil, nil, "", errors.New("需要一个具体的文件路径")
-	}
-	if agentProtectedFiles(Config{WorkDir: root, MCPConfigPath: cfg.MCPConfigPath}).blocked(target) {
-		return nil, nil, "", errProtectedFile(clean)
-	}
-	handle, err := os.OpenRoot(root)
-	if err != nil {
-		return nil, nil, "", err
-	}
-	defer handle.Close()
-	file, err := handle.Open(filepath.FromSlash(clean))
-	if err != nil {
-		return nil, nil, "", missingFileError(root, clean, err)
-	}
-	info, err := file.Stat()
-	if err != nil {
-		file.Close()
-		return nil, nil, "", err
-	}
-	if !info.Mode().IsRegular() {
-		file.Close()
-		return nil, nil, "", fmt.Errorf("%s 不是普通文件", clean)
-	}
-	return file, info, clean, nil
+	return out
 }
