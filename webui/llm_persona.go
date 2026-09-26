@@ -118,13 +118,13 @@ func (h *LLMConfigHandler) personaGenerate(c *gin.Context) {
 		},
 	})
 	if err != nil {
-		h.writeError(c, http.StatusBadGateway, "llm_persona", err, cfg.Model, llmLogMetadata(cfg, ""))
+		h.writeError(c, statusUpstreamFailed, "llm_persona", err, cfg.Model, llmLogMetadata(cfg, ""))
 		return
 	}
 	recordLLMUsage(c, h.logs, resp.Provider, firstNonEmpty(resp.Model, cfg.Model), resp.Usage, "webui_persona_generate", time.Since(started))
 	persona := normalizeGeneratedSoul(resp.Text)
 	if persona == "" {
-		h.writeError(c, http.StatusBadGateway, "llm_persona", errPersonaUnusable, cfg.Model, llmLogMetadata(cfg, ""))
+		h.writeError(c, statusUpstreamFailed, "llm_persona", errPersonaUnusable, cfg.Model, llmLogMetadata(cfg, ""))
 		return
 	}
 	recordRequestOperation(c, h.logs, "llm_persona", "生成 SOUL.md 成功", resp.Model, llmLogMetadata(cfg, ""))

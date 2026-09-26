@@ -597,7 +597,7 @@ func TestLLMConfigHandlerModelsTimesOutSlowProvider(t *testing.T) {
 	rec := httptest.NewRecorder()
 	started := time.Now()
 	router.ServeHTTP(rec, req)
-	if rec.Code != http.StatusBadGateway {
+	if rec.Code != statusUpstreamFailed {
 		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
 	}
 	if elapsed := time.Since(started); elapsed > time.Second {
@@ -626,7 +626,7 @@ func TestLLMConfigHandlerNewDraftDoesNotReuseActiveAPIKey(t *testing.T) {
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusBadGateway {
+	if rec.Code != statusUpstreamFailed {
 		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
 	}
 }

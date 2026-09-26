@@ -1035,7 +1035,7 @@ func (h *BotHandler) installPluginDependency(c *gin.Context) {
 		case errors.Is(err, assistant.ErrResolverInstallerUnavailable):
 			status = http.StatusNotImplemented
 		case errors.Is(err, context.DeadlineExceeded):
-			status = http.StatusGatewayTimeout
+			status = statusUpstreamFailed
 		}
 		h.writeError(c, status, "plugin_dependency_install", err, name, map[string]any{"dependency": name})
 		return

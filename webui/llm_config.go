@@ -223,7 +223,7 @@ func (h *LLMConfigHandler) providerModels(c *gin.Context) {
 	defer cancel()
 	models, err := registry.ListModels(listCtx, payload.ProviderID)
 	if err != nil {
-		h.writeError(c, 502, "llm_providers_models", err, payload.ProviderID, nil)
+		h.writeError(c, statusUpstreamFailed, "llm_providers_models", err, payload.ProviderID, nil)
 		return
 	}
 	c.JSON(http.StatusOK, llmModelsPayload{Models: models})
@@ -264,7 +264,7 @@ func (h *LLMConfigHandler) providerTest(c *gin.Context) {
 			}
 		}
 		log.Printf("llm provider test failed: provider=%q model=%q err=%v", payload.ProviderID, payload.ModelID, publicErr)
-		h.writeError(c, 502, "llm_providers_test", publicErr, payload.ProviderID, metadata)
+		h.writeError(c, statusUpstreamFailed, "llm_providers_test", publicErr, payload.ProviderID, metadata)
 		return
 	}
 	c.JSON(http.StatusOK, response)
@@ -340,7 +340,7 @@ func (h *LLMConfigHandler) saveConfig(c *gin.Context) {
 			models, err := h.listModels(listCtx, cfg)
 			cancel()
 			if err != nil {
-				h.writeError(c, 502, "llm_config_save_models", err, llmLogTarget(payload), llmLogMetadata(cfg, payload.ID))
+				h.writeError(c, statusUpstreamFailed, "llm_config_save_models", err, llmLogTarget(payload), llmLogMetadata(cfg, payload.ID))
 				return
 			}
 			cfg.Models = models
@@ -526,7 +526,7 @@ func (h *LLMConfigHandler) models(c *gin.Context) {
 	defer cancel()
 	models, err := h.listModels(listCtx, cfg)
 	if err != nil {
-		h.writeError(c, 502, "llm_models_list", err, cfg.Model, llmLogMetadata(cfg, ""))
+		h.writeError(c, statusUpstreamFailed, "llm_models_list", err, cfg.Model, llmLogMetadata(cfg, ""))
 		return
 	}
 	recordRequestOperation(c, h.logs, "llm_models_list", "LLM 模型列表已读取", cfg.Model, map[string]any{
@@ -606,7 +606,7 @@ func (h *LLMConfigHandler) test(c *gin.Context) {
 			N:      1,
 		})
 		if err != nil {
-			h.writeError(c, 502, "llm_test_image", err, cfg.ImageModelWithDefault(), llmLogMetadata(cfg, ""))
+			h.writeError(c, statusUpstreamFailed, "llm_test_image", err, cfg.ImageModelWithDefault(), llmLogMetadata(cfg, ""))
 			return
 		}
 		recordLLMUsage(c, h.logs, cfg.Provider, firstNonEmpty(resp.Model, cfg.ImageModelWithDefault()), resp.Usage, "webui_image_test", time.Since(started))
@@ -626,7 +626,7 @@ func (h *LLMConfigHandler) test(c *gin.Context) {
 		resp, err = client.Generate(c.Request.Context(), decisionProbeRequest(cfg, payload.Message))
 	}
 	if err != nil {
-		h.writeError(c, 502, "llm_test", err, cfg.Model, llmLogMetadata(cfg, ""))
+		h.writeError(c, statusUpstreamFailed, "llm_test", err, cfg.Model, llmLogMetadata(cfg, ""))
 		return
 	}
 	recordLLMUsage(c, h.logs, resp.Provider, firstNonEmpty(resp.Model, cfg.Model), resp.Usage, "webui_llm_test", time.Since(started))

@@ -165,7 +165,7 @@ func (h *BrowserBoxHandler) listTabs(c *gin.Context) {
 	}
 	tabs, err := browserbox.ListTabs(c.Request.Context(), base)
 	if err != nil {
-		writeError(c, http.StatusBadGateway, err)
+		writeError(c, statusUpstreamFailed, err)
 		return
 	}
 	c.Header("Cache-Control", "no-store")
@@ -198,7 +198,7 @@ func (h *BrowserBoxHandler) openTab(c *gin.Context) {
 	}
 	tab, err := browserbox.OpenTab(c.Request.Context(), base, target)
 	if err != nil {
-		logAndWriteError(c, h.logs, http.StatusBadGateway, "browser_box_tab_open", err, target, nil)
+		logAndWriteError(c, h.logs, statusUpstreamFailed, "browser_box_tab_open", err, target, nil)
 		return
 	}
 	// 从控制台让内置浏览器打开地址是一次真实的外部访问，要留审计。
@@ -217,7 +217,7 @@ func (h *BrowserBoxHandler) closeTab(c *gin.Context) {
 		return
 	}
 	if err := browserbox.CloseTab(c.Request.Context(), base, c.Param("id")); err != nil {
-		logAndWriteError(c, h.logs, http.StatusBadGateway, "browser_box_tab_close", err, c.Param("id"), nil)
+		logAndWriteError(c, h.logs, statusUpstreamFailed, "browser_box_tab_close", err, c.Param("id"), nil)
 		return
 	}
 	recordRequestOperation(c, h.logs, "browser_box_tab_close", "内置浏览器已关闭标签页", c.Param("id"), nil)
@@ -252,7 +252,7 @@ func (h *BrowserBoxHandler) live(c *gin.Context) {
 	tabID := strings.TrimSpace(c.Query("tab"))
 	tabs, err := browserbox.ListTabs(c.Request.Context(), base)
 	if err != nil {
-		writeError(c, http.StatusBadGateway, err)
+		writeError(c, statusUpstreamFailed, err)
 		return
 	}
 	target, ok := pickBrowserBoxTab(tabs, tabID)
@@ -260,7 +260,7 @@ func (h *BrowserBoxHandler) live(c *gin.Context) {
 		// 一个标签页都没有时开一个空白页，用户至少有个地方输地址。
 		opened, err := browserbox.OpenTab(c.Request.Context(), base, "about:blank")
 		if err != nil {
-			writeError(c, http.StatusBadGateway, err)
+			writeError(c, statusUpstreamFailed, err)
 			return
 		}
 		target = opened

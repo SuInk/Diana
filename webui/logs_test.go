@@ -174,7 +174,7 @@ func TestProviderTestReturnsAndLogsRedactedUpstreamError(t *testing.T) {
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusBadGateway {
+	if rec.Code != statusUpstreamFailed {
 		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
 	}
 	if !strings.Contains(rec.Body.String(), "提供商测试失败") || !strings.Contains(rec.Body.String(), "temporary upstream failure") {
@@ -267,6 +267,19 @@ func TestAppLogActorUserID(t *testing.T) {
 	for actor, want := range cases {
 		if got := appLogActorUserID(actor); got != want {
 			t.Fatalf("appLogActorUserID(%q) = %q, want %q", actor, got, want)
+		}
+	}
+}
+
+// 反向代理（Cloudflare、开了 proxy_intercept_errors 的 nginx）会把源站 502/504 的正文
+// 换成自己的错误页，后端写的上游原因就到不了浏览器。WebUI 接口的上游失败必须避开这两个码。
+func TestUpstreamFailureStatusSurvivesReverseProxies(t *testing.T) {
+	if statusUpstreamFailed >= 500 {
+		t.Fatalf("statusUpstreamFailed = %d, reverse proxies commonly replace 5xx bodies", statusUpstreamFailed)
+	}
+	for _, code := range []string{"timeout", "unauthorized", "network_error"} {
+		if got := repositoryIssueCreateFailureStatus(code); got >= 500 {
+			t.Fatalf("repositoryIssueCreateFailureStatus(%q) = %d", code, got)
 		}
 	}
 }

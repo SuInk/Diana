@@ -125,10 +125,8 @@ func (h *BotHandler) relearnGroupStyle(c *gin.Context) {
 	defer cancel()
 	style, err := runtime.RelearnGroupStyle(ctx, profileID, groupID)
 	if err != nil {
-		status := http.StatusBadGateway
-		if errors.Is(err, context.DeadlineExceeded) {
-			status = http.StatusGatewayTimeout
-		} else if errors.Is(err, assistant.ErrGroupStyleNotEnoughMessages) || errors.Is(err, assistant.ErrGroupStyleBusy) {
+		status := statusUpstreamFailed
+		if errors.Is(err, assistant.ErrGroupStyleNotEnoughMessages) || errors.Is(err, assistant.ErrGroupStyleBusy) {
 			status = http.StatusConflict
 		}
 		c.JSON(status, gin.H{"error": err.Error()})

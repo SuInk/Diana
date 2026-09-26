@@ -211,6 +211,16 @@ func recordError(ctx context.Context, logger AppLogWriter, action string, err er
 	})
 }
 
+// statusUpstreamFailed 是 WebUI 接口「后端正常，但它依赖的上游失败了」时的状态码。
+//
+// 以前这类错误回 502/504。这两个码在反向代理眼里就是「网关自己的错」：Cloudflare
+// 会把源站的 502/504 换成自己的错误页，nginx 开了 proxy_intercept_errors 也会套
+// error_page。后端写好的原因（上游地址、状态码、响应片段）就这样被整段丢掉，用户
+// 只看到「后端出错（HTTP 502）」。424 表示「依赖的请求失败」，代理不会改写它的正文。
+//
+// 对外的 Open API 仍回 502：外部客户端按网关错误重试，是公开契约的一部分。
+const statusUpstreamFailed = http.StatusFailedDependency
+
 // logAndWriteError 记录接口错误并返回 HTTP 错误响应。
 func logAndWriteError(c *gin.Context, logger AppLogWriter, status int, action string, err error, target string, metadata map[string]any) {
 	if err != nil {
