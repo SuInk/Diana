@@ -4,6 +4,7 @@ import {
   storageCategorySegments,
   storageDiskSegments,
   storageDiskTotal,
+  storageDirectories,
   storageShareLabel,
   storageWidth
 } from "./storage-usage.ts";
@@ -64,4 +65,21 @@ test("条宽永远是能用的 CSS 百分比", () => {
   assert.equal(storageWidth(0, 1000), "0%");
   assert.equal(storageWidth(10, 0), "0%");
   assert.equal(storageWidth(2000, 1000), "100%");
+});
+
+test("按目录拆分：旧后端没有字段时为空，空目录不占行，顺序沿用后端的体积倒序", () => {
+  assert.deepEqual(storageDirectories(null), []);
+  assert.deepEqual(storageDirectories(usage), []);
+  const withDirectories = {
+    ...usage,
+    directories: [
+      { key: "history-media", label: "历史媒体", bytes: 150, files: 2 },
+      { key: "workspace/downloads", label: "工作目录 · 下载", bytes: 50, files: 1 },
+      { key: "workspace/.trash", label: "工作目录 · 回收站", bytes: 0, files: 0 }
+    ]
+  };
+  assert.deepEqual(
+    storageDirectories(withDirectories).map((directory) => directory.key),
+    ["history-media", "workspace/downloads"]
+  );
 });

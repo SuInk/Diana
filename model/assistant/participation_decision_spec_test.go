@@ -36,6 +36,29 @@ func TestParticipationDecisionSpecRendersParsableRatings(t *testing.T) {
 	}
 }
 
+// Jev 对叫停消息稳定把绝大部分概率压在最低档，但总有一点散到别档，加权档位落在
+// 0.05 左右；插值成 0.01 的话 ratingsAllow 认不出叫停，always 档照样接话。
+func TestParticipationDecisionStopSnapsToZero(t *testing.T) {
+	raw, err := participationDecisionSpec(nil).RenderDecisionAnswers(map[string]llm.DecisionAnswer{
+		"relevance": {Kind: llm.DecisionNoul, Noul: 0.12},
+		"chat_in":   {Kind: llm.DecisionScore, Score: 0.05, Confidence: 0.95},
+	})
+	if err != nil {
+		t.Fatalf("render failed: %v", err)
+	}
+	ratings, err := parseParticipationRatings(raw)
+	if err != nil {
+		t.Fatalf("the rendered ratings did not parse: %v (%s)", err, raw)
+	}
+	if *ratings.ChatIn.Score != 0 {
+		t.Fatalf("expected the stop level to render as 0, got %s", raw)
+	}
+	p := ParticipationPreferences{RelevanceLevel: "on", ChatLevel: "always"}
+	if allowed, _ := p.ratingsAllow(ratings, true); allowed {
+		t.Fatalf("always still chimed in after a stop: %s", raw)
+	}
+}
+
 func TestParticipationWillingnessReachesBothModels(t *testing.T) {
 	if len(participationChatInLevels) != len(participationChatInLevelValues) {
 		t.Fatalf("levels and their values drifted apart: %d vs %d", len(participationChatInLevels), len(participationChatInLevelValues))
@@ -166,6 +189,34 @@ func TestProactiveReplyRouteCarriesTheDecisionSpec(t *testing.T) {
 	for _, want := range []string{"relevance", "chat_in"} {
 		if !keys[want] {
 			t.Fatalf("decision spec is missing %q: %v", want, keys)
+		}
+	}
+}
+
+func TestParticipationChatInLevelsAreEditable(t *testing.T) {
+	levels, values := participationChatInLevelsFor(nil)
+	if strings.Join(levels, "\n") != promptParticipationChatInLevelsSpec.Default || len(values) != len(participationChatInLevelValues) {
+		t.Fatalf("default levels drifted from the registered prompt: %v %v", levels, values)
+	}
+	custom := PromptOverrides{promptParticipationChatInLevelsSpec.Key: "0.00 叫停\n\n0.40 普通闲聊\n0.90 有人聊猫"}
+	spec := participationDecisionSpec(custom)
+	if err := spec.Validate(); err != nil {
+		t.Fatalf("spec is invalid: %v", err)
+	}
+	chatIn := spec.Questions[1]
+	if len(chatIn.Levels) != 3 || chatIn.Levels[2] != "0.90 有人聊猫" || chatIn.LevelValues[1] != 0.4 {
+		t.Fatalf("custom levels were not used: %v %v", chatIn.Levels, chatIn.LevelValues)
+	}
+	for name, text := range map[string]string{
+		"没写分数":  "叫停\n0.90 有人聊猫",
+		"分数倒着排": "0.50 普通\n0.10 私聊",
+		"超出上限":  "0.00 叫停\n0.95 有人聊猫",
+		"只有一档":  "0.90 有人聊猫",
+		"没有叫停档": "0.10 私聊\n0.90 有人聊猫",
+	} {
+		levels, _ := participationChatInLevelsFor(PromptOverrides{promptParticipationChatInLevelsSpec.Key: text})
+		if len(levels) != len(participationChatInLevels) {
+			t.Fatalf("%s: expected the default levels, got %v", name, levels)
 		}
 	}
 }

@@ -15,6 +15,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 	"unicode/utf8"
 )
 
@@ -42,6 +43,7 @@ type WriteFileTool struct {
 	root      string
 	maxBytes  int
 	protected protectedFiles
+	keep      keepScope
 }
 
 func (t *WriteFileTool) Name() string { return "write_file" }
@@ -49,12 +51,14 @@ func (t *WriteFileTool) Name() string { return "write_file" }
 func (t *WriteFileTool) Description() string {
 	return `在 Agent 工作目录内写入文本文件，父目录会自动创建。` +
 		`整体覆盖：已存在的文件会被完全替换，要改其中一段请用 edit_file，别把整个文件重写一遍。` +
-		`只能写文本：图片、音视频、PDF、压缩包这类二进制文件写不出来，要存这些用 save_to_workspace。`
+		`只能写文本：图片、音视频、PDF、压缩包这类二进制文件写不出来，要存这些用 save_to_workspace。` +
+		`不要写在工作目录根下：草稿和中间文件放 ` + WorkspaceTmpDir + `/（1 天后清理），给用户的成品放 ` + WorkspaceOutputsDir +
+		`/（30 天后清理），主人要长期留着的放 ` + WorkspaceKeepDir + `/（不清理，自动归到本机器人名下）。`
 }
 
 func (t *WriteFileTool) InputSchema() map[string]any {
 	return toolObjectSchema([]string{"path", "content"}, map[string]any{
-		"path":    toolStringParam("工作目录内的相对文件路径"),
+		"path":    toolStringParam("工作目录内的相对文件路径，放进 " + WorkspaceTmpDir + "/、" + WorkspaceOutputsDir + "/ 或 " + WorkspaceKeepDir + "/ 这些分区，不要直接写在根下"),
 		"content": toolStringParam("要写入的完整内容"),
 	})
 }
@@ -87,6 +91,29 @@ func (t *WriteFileTool) Run(_ context.Context, input map[string]any) (string, er
 	if t.protected.blocked(target) {
 		return "", errProtectedFile(rel)
 	}
+	keepDir, inKeep := "", false
+	if clean := relPathForOutput(t.root, target); clean != "." {
+		if _, inKeep = keepLocation(clean); inKeep {
+			normalized, err := t.keep.normalizeDest(clean)
+			if err != nil {
+				return "", err
+			}
+			if target, err = safePath(t.root, normalized); err != nil {
+				return "", err
+			}
+			keepDir = t.keep.botDir
+			lock := keepAreaLock(t.root, keepDir)
+			lock.Lock()
+			defer lock.Unlock()
+			var replacing int64
+			if info, err := os.Lstat(target); err == nil && info.Mode().IsRegular() {
+				replacing = info.Size()
+			}
+			if err := checkKeepQuota(t.root, keepDir, int64(len(text)), replacing); err != nil {
+				return "", err
+			}
+		}
+	}
 	existed := true
 	if info, statErr := os.Stat(target); statErr != nil {
 		if !os.IsNotExist(statErr) {
@@ -101,6 +128,9 @@ func (t *WriteFileTool) Run(_ context.Context, input map[string]any) (string, er
 	}
 	if err := os.WriteFile(target, []byte(text), 0o644); err != nil {
 		return "", err
+	}
+	if inKeep {
+		_ = upsertKeepEntry(t.root, KeepEntry{Path: relPathForOutput(t.root, target), SavedBy: t.keep.actor, SavedAt: time.Now(), Size: int64(len(text)), MIME: SniffMediaType([]byte(text))})
 	}
 	return marshalToolResult(map[string]any{
 		"path":      relPathForOutput(t.root, target),
@@ -124,6 +154,7 @@ type EditFileTool struct {
 	root      string
 	maxBytes  int
 	protected protectedFiles
+	keep      keepScope
 }
 
 func (t *EditFileTool) Name() string { return "edit_file" }
@@ -170,6 +201,10 @@ func (t *EditFileTool) Run(_ context.Context, input map[string]any) (string, err
 	}
 	if t.protected.blocked(target) {
 		return "", errProtectedFile(rel)
+	}
+	clean := relPathForOutput(t.root, target)
+	if err := t.keep.checkOwned(clean); err != nil {
+		return "", err
 	}
 	info, err := os.Stat(target)
 	if err != nil {
@@ -220,8 +255,20 @@ func (t *EditFileTool) Run(_ context.Context, input map[string]any) (string, err
 	}
 	// 原封写回去：BOM 和行尾风格都在未被替换的那部分里原样留着，不需要特意处理，
 	// 但也因此不要在这里做任何「顺手规范化」。
+	keepDir, inKeep := keepLocation(clean)
+	if inKeep {
+		lock := keepAreaLock(t.root, keepDir)
+		lock.Lock()
+		defer lock.Unlock()
+		if err := checkKeepQuota(t.root, keepDir, int64(len(updated)), int64(len(original))); err != nil {
+			return "", err
+		}
+	}
 	if err := os.WriteFile(target, []byte(updated), info.Mode().Perm()); err != nil {
 		return "", err
+	}
+	if inKeep {
+		_ = upsertKeepEntry(t.root, KeepEntry{Path: clean, Size: int64(len(updated))})
 	}
 	return marshalToolResult(map[string]any{
 		"path":               relPathForOutput(t.root, target),

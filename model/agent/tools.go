@@ -142,12 +142,12 @@ func NewDefaultToolRegistry(cfg Config) (*ToolRegistry, error) {
 	registry.Register(&FindFilesTool{root: root, protected: protected})
 	// 写入是单独一档：读错文件浪费一次调用，写错文件改的是磁盘。
 	if cfg.FileWriteEnabled {
-		registry.Register(&WriteFileTool{root: root, maxBytes: cfg.FileWriteMaxBytes, protected: protected})
-		registry.Register(&EditFileTool{root: root, maxBytes: cfg.FileWriteMaxBytes, protected: protected})
+		registry.Register(&WriteFileTool{root: root, maxBytes: cfg.FileWriteMaxBytes, protected: protected, keep: newKeepScope(cfg)})
+		registry.Register(&EditFileTool{root: root, maxBytes: cfg.FileWriteMaxBytes, protected: protected, keep: newKeepScope(cfg)})
 	}
 	// stat 只读，跟读工具同级；挪动、复制、删除、建目录跟 write_file 一样要「允许写入
 	// 文件」打开，工具按开关收窄自己的动作列表。
-	registry.Register(&ManageFilesTool{root: root, protected: protected, writeEnabled: cfg.FileWriteEnabled})
+	registry.Register(&ManageFilesTool{root: root, protected: protected, writeEnabled: cfg.FileWriteEnabled, keep: newKeepScope(cfg)})
 	if len(cfg.CommandAllowlist) > 0 {
 		registry.Register(&RunCommandTool{
 			root:           root,
@@ -1170,7 +1170,15 @@ func (t *RunCommandTool) commandFor(ctx context.Context, command string, args []
 		}
 		return procgroup.CommandContext(ctx, command, args...), "", nil
 	}
-	return t.sandbox.wrap(ctx, t.root, t.sandboxNetwork, t.protected.existingPaths(), command, args), t.sandbox.kind, nil
+	return t.sandbox.wrap(ctx, t.root, t.sandboxNetwork, t.sandboxSecrets(), command, args), t.sandbox.kind, nil
+}
+
+// sandboxSecrets 是交给沙盒挡住的凭据路径。.diana/ 要先建出来：沙盒只收存在的路径，
+// 目录还没有时命令可以抢先建一个同名目录往里塞东西，等运行时第一次写开关文件时
+// 读到的就是命令写的内容。
+func (t *RunCommandTool) sandboxSecrets() []string {
+	_ = os.MkdirAll(DianaStateDir(t.root), 0o700)
+	return t.protected.existingPaths()
 }
 
 // commandEnvironment 是命令继承的环境：Diana 自己的进程环境，去掉凭据。
@@ -1555,13 +1563,17 @@ func agentProtectedFiles(cfg Config) protectedFiles {
 		// 配置改指到工作目录外面时，目录里可能还躺着一份旧的默认配置，里面的令牌
 		// 一样是真的。
 		filepath.Join(cfg.WorkDir, defaultMCPConfigFileName),
-		extensionOverridePath(cfg.WorkDir),
-		extensionAudiencePath(cfg.WorkDir),
-		filepath.Join(cfg.WorkDir, extensionPathsFileName),
 	} {
 		protected.add(path, false)
 	}
 	if strings.TrimSpace(cfg.WorkDir) != "" {
+		// 扩展开关、对象名单、扩展位置、长期保存区索引都在 .diana/ 里，按目录整个挡：
+		// 命令沙盒只对目录同时挡读和写，单个文件只挡得住读。
+		protected.add(DianaStateDir(cfg.WorkDir), true)
+		// 老版本放在根下的那几份，启动迁移之前（或迁移失败时）照样挡。
+		for _, file := range legacyWorkspaceStateFiles {
+			protected.add(file.legacyPath(cfg.WorkDir), false)
+		}
 		for _, name := range codingRuntimeCredentialDirs {
 			protected.add(filepath.Join(cfg.WorkDir, CodingRuntimeDirName, name), true)
 		}

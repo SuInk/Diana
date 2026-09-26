@@ -318,8 +318,9 @@ func TestProviderConfigWithDefaultsNormalizesModels(t *testing.T) {
 }
 
 func TestAnthropicModelListingDoesNotReturnBuiltInPresets(t *testing.T) {
+	// 没有凭据时要报错，不能拿内置模型名冒充同步结果。
 	models, err := ListModels(context.Background(), ProviderConfig{Provider: ProviderAnthropic})
-	if err == nil || len(models) != 0 || !strings.Contains(err.Error(), "手动添加") {
+	if !errors.Is(err, ErrMissingAPIKey) || len(models) != 0 {
 		t.Fatalf("models = %#v, error = %v", models, err)
 	}
 }

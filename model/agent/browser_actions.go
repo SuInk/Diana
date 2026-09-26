@@ -435,6 +435,9 @@ func (t *BrowserTabsTool) Run(ctx context.Context, input map[string]any) (out st
 	if found == nil {
 		return "", fmt.Errorf("没有 ID 为 %s 的标签页，先用 action=list 查一下", tabID)
 	}
+	if t.base.userTab(tabID) {
+		return "", errors.New("这个标签是主人自己在画面里开的，不能切过去也不能关；要用就 action=new 开一个新标签")
+	}
 	if action == "close" {
 		if err := browserTargetCommand(callCtx, baseURL, "close", tabID); err != nil {
 			return "", err
@@ -466,7 +469,8 @@ func (t *BrowserTabsTool) list(ctx context.Context) (string, error) {
 	active := t.base.session.active()
 	tabs := make([]map[string]any, 0, len(targets))
 	for _, target := range targets {
-		if target.Type != "page" {
+		// 主人自己开的标签不列出来：列出来模型就会想切过去。
+		if target.Type != "page" || t.base.userTab(target.ID) {
 			continue
 		}
 		tabs = append(tabs, map[string]any{

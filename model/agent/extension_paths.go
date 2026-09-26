@@ -7,23 +7,20 @@ import (
 	"strings"
 )
 
-// extensionPathsFileName 记着 skill 目录和 MCP 配置的位置，和其余运行时配置一起
-// 对工具关闭，见 agentProtectedFiles。
-const extensionPathsFileName = ".extension-paths.json"
-
 // Persist the initial extension locations once so choosing another robot cannot
 // silently switch to another skill tree or MCP configuration file.
 func GlobalExtensionPaths(cfg Config) (Config, error) {
 	cfg = cfg.WithDefaults()
-	path := filepath.Join(cfg.WorkDir, extensionPathsFileName)
-	lock := extensionPathLock(path)
+	// 扩展位置记在 .diana/extension-paths.json，和其余运行时配置一起对工具关闭，
+	// 见 agentProtectedFiles。
+	lock := extensionPathLock(extensionPathsState.path(cfg.WorkDir))
 	lock.Lock()
 	defer lock.Unlock()
 	var locations struct {
 		SkillRoots    []string `json:"skill_roots"`
 		MCPConfigPath string   `json:"mcp_config_path"`
 	}
-	data, err := os.ReadFile(path)
+	data, err := extensionPathsState.read(cfg.WorkDir)
 	if os.IsNotExist(err) {
 		locations.SkillRoots = cfg.SkillRoots
 		locations.MCPConfigPath = cfg.MCPConfigPath
@@ -31,7 +28,7 @@ func GlobalExtensionPaths(cfg Config) (Config, error) {
 		if err != nil {
 			return cfg, err
 		}
-		err = saveExtensionFile(path, data)
+		err = extensionPathsState.save(cfg.WorkDir, data)
 	} else if err == nil {
 		err = json.Unmarshal(data, &locations)
 	}
@@ -48,7 +45,7 @@ func GlobalExtensionPaths(cfg Config) (Config, error) {
 		if err != nil {
 			return cfg, err
 		}
-		if err := saveExtensionFile(path, data); err != nil {
+		if err := extensionPathsState.save(cfg.WorkDir, data); err != nil {
 			return cfg, err
 		}
 	}

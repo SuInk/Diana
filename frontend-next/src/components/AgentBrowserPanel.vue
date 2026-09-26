@@ -46,6 +46,8 @@ import { botScope } from '../bot-scope';
 import { getAgentBrowser, saveAgentBrowser, testAgentBrowser } from '../api';
 import { toastError, toastSuccess } from '../toast';
 
+// 保存后通知浏览器页，顶上「外接浏览器（CDP）」那一行的状态跟着变。
+const emit = defineEmits<{ saved: [] }>();
 const cdpURL = ref(''), timeoutMS = ref(15000), tools = ref<string[]>([]);
 const loading = ref(false), loadError = ref(''), busy = ref(false);
 const testResult = ref<{connected: boolean; browser?: string; error?: string} | null>(null);
@@ -76,6 +78,7 @@ async function save() {
     cdpURL.value = result.cdp_url || '';
     timeoutMS.value = result.timeout_ms || timeoutMS.value;
     toastSuccess('已保存，后续会话生效');
+    emit('saved');
   } catch (e) {
     toastError(String(e instanceof Error ? e.message : e));
   } finally {

@@ -210,7 +210,7 @@ let plugins: PluginState[] = [
       official: true, built_in: true, permissions: ["网页渲染", "隔离浏览器"],
       settings: [{
         key: "window_mode", label: "Chrome 窗口模式", type: "select", default: "auto",
-        options: [{ value: "auto", label: "自动（推荐）" }, { value: "headless", label: "始终无头" }, { value: "visible", label: "显示隔离窗口" }]
+        options: [{ value: "auto", label: "自动（推荐）" }, { value: "headless", label: "始终无头" }, { value: "visible", label: "显示窗口（排查用）" }]
       }]
     },
     installed: true, enabled: true
@@ -682,6 +682,79 @@ let demoMediaCachePolicy = { retention_days: 7, max_mb: 0 };
 
 let demoMediaBaseURL = { base_url: "", source: "auto" };
 
+// 演示工作目录：一台机器人的长期保存区带两份有说明的文件，外加下载、产出、
+// 回收站和一个散落在根下的文件。删除和清空回收站会真的改这份数据，点完能看到变化。
+type DemoWorkspaceEntry = { path: string; name: string; size: number; modified: string; description?: string; saved_by?: string; saved_at?: string; mime?: string };
+type DemoWorkspaceArea = { key: string; label: string; path: string; bot_id?: string; bot_name?: string; retention: string; quota_bytes?: number; entries: DemoWorkspaceEntry[] };
+const demoWorkspaceAreas: DemoWorkspaceArea[] = [
+  {
+    key: "keep", label: "长期保存", path: "keep/bot-onebot", bot_id: "bot-onebot", bot_name: "Diana OneBot（演示）",
+    retention: "不自动清理，占满配额后 Agent 无法再存", quota_bytes: 512 * 1024 * 1024,
+    entries: [
+      { path: "keep/bot-onebot/周报模板.docx", name: "周报模板.docx", size: 48_213, modified: before(4320), description: "群里约定的周报格式，写周报时照这个填", saved_by: "青禾", saved_at: before(4320), mime: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" },
+      { path: "keep/bot-onebot/发布清单/v0.9.md", name: "v0.9.md", size: 6_140, modified: before(1440), description: "v0.9 发布前要核对的检查项", saved_by: "主人", saved_at: before(1440), mime: "text/markdown" }
+    ]
+  },
+  {
+    key: "downloads", label: "下载", path: "downloads", retention: "7 天后自动清理",
+    entries: [
+      { path: "downloads/雨夜电车参考图.png", name: "雨夜电车参考图.png", size: 2_842_117, modified: before(35), mime: "image/png" },
+      { path: "downloads/release-notes.pdf", name: "release-notes.pdf", size: 812_004, modified: before(900), mime: "application/pdf" }
+    ]
+  },
+  {
+    key: "outputs", label: "产出", path: "outputs", retention: "30 天后自动清理",
+    entries: [{ path: "outputs/今日发布变更摘要.md", name: "今日发布变更摘要.md", size: 3_512, modified: before(2), mime: "text/markdown" }]
+  },
+  { key: "tmp", label: "临时文件", path: "tmp", retention: "1 天后自动清理", entries: [] },
+  {
+    key: "browser", label: "浏览器截图", path: "browser", retention: "3 天后自动清理",
+    entries: [{ path: "browser/screenshot-20260926-101204.png", name: "screenshot-20260926-101204.png", size: 402_331, modified: before(80), mime: "image/png" }]
+  },
+  {
+    key: "trash", label: "回收站", path: ".trash", retention: "删除 7 天后永久清理",
+    entries: [{ path: ".trash/downloads/旧版安装包.zip", name: "旧版安装包.zip", size: 18_874_368, modified: before(2880), mime: "application/zip" }]
+  }
+];
+let demoWorkspaceLoose: DemoWorkspaceEntry[] = [
+  { path: "scratch.txt", name: "scratch.txt", size: 1_024, modified: before(10080), mime: "text/plain" }
+];
+
+function demoWorkspaceFiles() {
+  return {
+    root: "/app/data/workspace",
+    collected_at: new Date().toISOString(),
+    areas: demoWorkspaceAreas.map((area) => ({
+      ...area,
+      bytes: area.entries.reduce((sum, entry) => sum + entry.size, 0),
+      files: area.entries.length,
+      entries: [...area.entries].sort((a, b) => b.modified.localeCompare(a.modified))
+    })),
+    loose: demoWorkspaceLoose,
+    orphan_coding: [{ path: "coding/old-prototype", name: "old-prototype", size: 73_400_320, modified: before(60 * 24 * 45), is_dir: true }]
+  };
+}
+
+/** 和后端一样：删除是挪进回收站，路径前面加上 .trash/。 */
+function demoWorkspaceDelete(path: string): { trash_path: string } | null {
+  const trash = demoWorkspaceAreas.find((area) => area.key === "trash")!;
+  let found: DemoWorkspaceEntry | undefined;
+  for (const area of demoWorkspaceAreas) {
+    if (area.key === "trash") continue;
+    const index = area.entries.findIndex((entry) => entry.path === path);
+    if (index >= 0) [found] = area.entries.splice(index, 1);
+  }
+  const looseIndex = demoWorkspaceLoose.findIndex((entry) => entry.path === path);
+  if (looseIndex >= 0) {
+    found = demoWorkspaceLoose[looseIndex];
+    demoWorkspaceLoose = demoWorkspaceLoose.filter((_, index) => index !== looseIndex);
+  }
+  if (!found) return null;
+  const trashPath = `.trash/${found.path}`;
+  trash.entries.unshift({ ...found, path: trashPath, modified: new Date().toISOString(), description: undefined });
+  return { trash_path: trashPath };
+}
+
 async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
   const raw = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
   const url = new URL(raw, window.location.origin);
@@ -759,9 +832,34 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
         { key: "document", label: "文档与压缩包", bytes: 83886080, files: 164 },
         { key: "other", label: "其它文件", bytes: 16777216, files: 24 }
       ],
+      directories: [
+        { key: "history-media", label: "历史媒体原件", bytes: 7516192768, files: 44102 },
+        { key: "media", label: "下载缓存", bytes: 1073741824, files: 3380 },
+        { key: "database", label: "数据库", bytes: 704643072, files: 3 },
+        { key: "workspace/coding", label: "工作目录 · 编码工作区", bytes: 188743680, files: 612 },
+        { key: "manual-backups", label: "手动备份", bytes: 104857600, files: 4 },
+        { key: "browser-box", label: "浏览器盒子", bytes: 41943040, files: 96 },
+        { key: "workspace/.trash", label: "工作目录 · 回收站", bytes: 18874368, files: 1 },
+        { key: "workspace/downloads", label: "工作目录 · 下载", bytes: 3654121, files: 2 },
+        { key: "workspace/keep", label: "工作目录 · 长期保存", bytes: 54353, files: 2 },
+        { key: "workspace/outputs", label: "工作目录 · 产出", bytes: 3512, files: 1 },
+        { key: "other", label: "其它", bytes: 13574, files: 13 }
+      ],
       scanned_at: new Date().toISOString(),
       scanning: false
     });
+  }
+
+  if (path === "/api/workspace/files") return json(demoWorkspaceFiles());
+  if (path === "/api/workspace/delete" && method === "POST") {
+    const result = demoWorkspaceDelete(String(body.path ?? ""));
+    return result ? json(result) : json({ error: "文件不存在或已被删除" }, 404);
+  }
+  if (path === "/api/workspace/trash/empty" && method === "POST") {
+    const trash = demoWorkspaceAreas.find((area) => area.key === "trash")!;
+    const deleted = { deleted_files: trash.entries.length, deleted_bytes: trash.entries.reduce((sum, entry) => sum + entry.size, 0) };
+    trash.entries = [];
+    return json(deleted);
   }
 
   if (path === "/api/system/media-base-url") {
@@ -974,6 +1072,7 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
   if (path === "/api/assistant/platforms") return json({ platforms });
   if (path === "/api/assistant/prompts") return json(demoPromptCatalog);
   if (path === "/api/assistant/prompts/export" && method === "POST") return json({ yaml: demoRenderPromptFile((body.overrides as Record<string, string>) ?? {}) });
+  if (path === "/api/assistant/prompts/participation-preview" && method === "POST") return json(demoParticipationPreview(body));
   if (path === "/api/assistant/prompts/import" && method === "POST") {
     const result = demoParsePromptFile(String(body.source ?? ""));
     return "error" in result ? json(result, 400) : json(result);
@@ -1656,6 +1755,60 @@ const demoPromptCatalog = demoPromptCatalogData as PromptCatalog;
 // 写法模拟。只认自己导出的那种形状（每段一个字面块），够演示导出、改、导回的流程。
 function demoPromptDefaults(): Map<string, string> {
   return new Map(demoPromptCatalog.prompts.flatMap((spec): [string, string][] => [[spec.key, spec.default], ...(spec.format_key ? [[spec.format_key, (spec.contract ?? "").trim()] as [string, string]] : [])]));
+}
+
+// 接话评分预览：按后端 participationScorePromptWith / appendRouterCriteria /
+// participationDecisionSpec 的拼法在前端模拟，上下文用和后端同一段示例群聊。
+function demoParticipationPreview(body: Record<string, unknown>) {
+  const overrides = (body.prompt_overrides as Record<string, string> | undefined) ?? {};
+  const specs = new Map(demoPromptCatalog.prompts.map((spec) => [spec.key, spec]));
+  const text = (key: string) => overrides[key]?.trim() || specs.get(key)?.default || "";
+  const contract = (key: string) => {
+    const spec = specs.get(key);
+    const custom = spec?.format_key ? overrides[spec.format_key]?.trim() : "";
+    return custom ? "\n" + custom : spec?.contract ?? "";
+  };
+  const participation = (body.participation as { relevance_level?: string; chat_level?: string } | undefined) ?? {};
+  const header = text("routing.participation.header")
+    .split("{relevance}").join(participation.relevance_level === "off" ? "关" : "开")
+    .split("{chat_level}").join(participation.chat_level ?? "low");
+  const willingness = "【什么情况下愿意接话】\n" + text("routing.participation.willingness") + "\n" + text("routing.participation.willingness_scale");
+  let system = [
+    header,
+    text("routing.participation.intro"),
+    text("routing.participation.relevance_intro"),
+    "true：" + text("routing.participation.relevance_true"),
+    "false：" + text("routing.participation.relevance_false"),
+    text("routing.participation.relevance_note"),
+    text("routing.participation.chat_in_intro"),
+    willingness,
+    text("routing.participation.chat_in_note"),
+    text("routing.participation.shared_note"),
+    text("routing.participation.format")
+  ].join("\n");
+  const criteria = String(body.proactive_reply_extra_criteria ?? "").trim();
+  if (criteria) system = system.trimEnd() + "\n\n" + text("routing.criteria.heading") + "\n" + criteria + "\n" + text("routing.criteria.guard");
+  // 和后端 proactiveReplyTranscript 一样：按时间从早到晚的对话稿，行首是离现在多久。
+  const aliases = ((body.group_triggers as string[] | undefined) ?? []).map((alias) => alias.trim()).filter(Boolean);
+  const botName = aliases[0] ?? "机器人";
+  const transcript = [
+    ...(aliases.length ? ["机器人的称呼：" + aliases.join("、")] : []),
+    "对话按时间从早到晚：",
+    "[1分钟前] 小林：周末有人去看展吗",
+    `[1分钟前] ${botName}（机器人）：上次说的那个展好像延期了`,
+    "[25秒前] 阿杰：啊？那我票白买了",
+    "【当前消息】[刚刚] 小林：有人知道改到哪天了吗"
+  ].join("\n");
+  const shared = text("routing.participation.shared_note");
+  return {
+    system,
+    user: (text("routing.route_instruction.participation") + contract("routing.route_instruction.participation") + transcript).trim(),
+    retry: text("routing.participation.retry"),
+    decision: [
+      { label: "在跟机器人说话", instructions: "当前消息是不是明确在跟机器人说话。\n" + text("routing.participation.relevance_note") + "\n" + shared, true_criteria: text("routing.participation.relevance_true"), false_criteria: text("routing.participation.relevance_false") },
+      { label: "闲聊适合度", instructions: "没人找机器人时，机器人插一句是否自然。\n" + willingness + "\n" + text("routing.participation.chat_in_note") + "\n" + shared, levels: text("routing.participation.chat_in_levels").split("\n").map((line) => line.trim()).filter(Boolean) }
+    ]
+  };
 }
 
 function demoRenderPromptFile(overrides: Record<string, string>): string {

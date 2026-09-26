@@ -304,7 +304,7 @@ func (h *SystemUpdateHandler) runReleaseCheck(requestCtx context.Context) (syste
 	}
 	latest, err := h.latestChannelRelease(requestCtx, remoteURL)
 	if err != nil {
-		return systemUpdateCheckResponse{}, &releaseCheckFailure{status: http.StatusBadGateway, err: err}
+		return systemUpdateCheckResponse{}, &releaseCheckFailure{status: statusUpstreamFailed, err: err}
 	}
 	current := strings.TrimSpace(h.buildVersion)
 	mode := "release"
@@ -1040,11 +1040,11 @@ func (h *SystemUpdateHandler) changelogList(c *gin.Context) {
 	} else {
 		var rateLimitErr *githubRateLimitError
 		if errors.As(err, &rateLimitErr) {
-			writeError(c, http.StatusBadGateway, rateLimitErr)
+			writeError(c, statusUpstreamFailed, rateLimitErr)
 			return
 		}
 		if resetAt, limited := h.activeGitHubRateLimit(h.currentTime()); limited {
-			writeError(c, http.StatusBadGateway, &githubRateLimitError{StatusCode: http.StatusForbidden, ResetAt: resetAt})
+			writeError(c, statusUpstreamFailed, &githubRateLimitError{StatusCode: http.StatusForbidden, ResetAt: resetAt})
 			return
 		}
 		// 没有正式 Release（或列表拉取失败）时退回提交记录，前端会标注来源。
@@ -1053,7 +1053,7 @@ func (h *SystemUpdateHandler) changelogList(c *gin.Context) {
 			if errors.As(commitErr, &rateLimitErr) {
 				h.rememberGitHubRateLimit(c.Request.Context(), rateLimitErr.ResetAt)
 			}
-			writeError(c, http.StatusBadGateway, commitErr)
+			writeError(c, statusUpstreamFailed, commitErr)
 			return
 		}
 		payload["kind"] = "commits"

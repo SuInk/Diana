@@ -3,6 +3,7 @@
 
 import { trackScopeRequest } from "./scope-transition";
 import { configurationKindForMutation, notifyConfigurationChanged } from "./configuration-sync";
+import { describeServerFailure } from "./gateway-error";
 import type { SendRetrySettings } from "./send-retry-settings";
 
 export type Provider = "openai_compatible" | "gemini" | "anthropic" | "typesafe";
@@ -982,7 +983,7 @@ export function isBackendUnreachable(err: unknown): boolean {
 
 function apiErrorForStatus(status: number, message: string, responseBody = ""): ApiError {
   if (status >= 500) {
-    return new ApiError(message || `后端出错（HTTP ${status}）`, "server", status, responseBody);
+    return new ApiError(message || describeServerFailure(status, responseBody), "server", status, responseBody);
   }
   if (status === 401 || status === 403) {
     return new ApiError(message || `HTTP ${status}`, "auth", status, responseBody);
@@ -1434,6 +1435,24 @@ export interface PromptCatalog {
 
 export function getPromptCatalog(): Promise<PromptCatalog> {
   return requestJSON<PromptCatalog>("/api/assistant/prompts");
+}
+
+/** 接话评分发给模型的内容：对话模型收系统提示词和用户消息，只做判断的模型收题目。 */
+export interface ParticipationPromptPreview {
+  system: string;
+  /** 开头的任务说明按配置拼，后面的上下文是一段示例群聊。 */
+  user: string;
+  /** 评分解析失败、重问一次时插在最前面的系统消息。 */
+  retry: string;
+  decision: { label: string; instructions: string; true_criteria?: string; false_criteria?: string; levels?: string[] }[];
+}
+
+/** 按编辑器里眼前这份配置（可能还没保存）拼出接话评分发给模型的内容。 */
+export function previewParticipationPrompt(config: BotProfileConfig): Promise<ParticipationPromptPreview> {
+  return requestJSON<ParticipationPromptPreview>("/api/assistant/prompts/participation-preview", {
+    method: "POST",
+    body: JSON.stringify(config)
+  });
 }
 
 /** 把编辑器里当前的覆盖表导出成一份完整的内置提示词 YAML（每一段都列出来）。 */
@@ -1920,6 +1939,8 @@ export interface StorageUsage {
   diana_bytes: number;
   diana_files: number;
   categories: StorageUsageCategory[];
+  /** 按目录的拆分（workspace/keep、history-media 之类），已按体积倒序；旧后端没有这个字段 */
+  directories?: StorageUsageCategory[];
   /** 后台遍历完成的时间；从没跑完过时缺省 */
   scanned_at?: string;
   /** 正在后台遍历数据目录，拆分结果还是上一次的（或为空） */
@@ -1961,6 +1982,64 @@ export function workspaceFileURL(path: string, download = false): string {
   const params = new URLSearchParams({ path });
   if (download) params.set("download", "1");
   return `/api/system/workspace/file?${params.toString()}`;
+}
+
+/** Agent 工作目录里的一个文件；长期保存区的条目带着存进来时写的说明。 */
+export interface WorkspaceFileEntry {
+  /** 相对工作目录根的路径，下载和删除都用它 */
+  path: string;
+  name: string;
+  size: number;
+  modified: string;
+  is_dir?: boolean;
+  description?: string;
+  saved_by?: string;
+  saved_at?: string;
+  mime?: string;
+}
+
+export interface WorkspaceArea {
+  /** keep | downloads | outputs | tmp | browser | trash | other */
+  key: string;
+  label: string;
+  path: string;
+  /** 只有 keep 区按机器人分，其它区是整个工作目录共用的 */
+  bot_id?: string;
+  bot_name?: string;
+  /** 清理规则的说明，例如「7 天后自动清理」 */
+  retention: string;
+  bytes: number;
+  files: number;
+  quota_bytes?: number;
+  entries: WorkspaceFileEntry[];
+  /** 文件太多时只列最近的一批，bytes / files 仍是全量 */
+  truncated?: boolean;
+}
+
+export interface WorkspaceFilesResponse {
+  root: string;
+  collected_at: string;
+  areas: WorkspaceArea[];
+  /** 工作目录根下的散落文件，不会被自动清理 */
+  loose: WorkspaceFileEntry[];
+  /** 长期未动、也没有机器人配置引用的编码工作区，只提示不删 */
+  orphan_coding: WorkspaceFileEntry[];
+}
+
+export function getWorkspaceFiles(): Promise<WorkspaceFilesResponse> {
+  return requestJSON<WorkspaceFilesResponse>("/api/workspace/files");
+}
+
+/** 删除是挪进回收站，返回它在回收站里的位置。 */
+export function deleteWorkspaceFile(path: string): Promise<{ trash_path: string }> {
+  return requestJSON<{ trash_path: string }>("/api/workspace/delete", {
+    method: "POST",
+    body: JSON.stringify({ path })
+  });
+}
+
+export function emptyWorkspaceTrash(): Promise<{ deleted_files: number; deleted_bytes: number }> {
+  return requestJSON<{ deleted_files: number; deleted_bytes: number }>("/api/workspace/trash/empty", { method: "POST" });
 }
 
 export interface HistoryMediaPolicy { retention_days: number; max_mb: number; }
@@ -3530,6 +3609,8 @@ export interface BrowserBoxTab {
   id: string;
   title?: string;
   url?: string;
+  /** 主人在画面里自己开的标签：机器人不碰，不用接管就能操作，离开画面一段时间会自动关掉。 */
+  user?: boolean;
 }
 
 /** 机器人用的浏览器：Diana 内置、用户自己的 Chrome（扩展）；off 表示这一轮一个都用不上。 */
