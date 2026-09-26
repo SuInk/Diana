@@ -188,7 +188,7 @@ func TestChangelogRateLimitCooldownBlocksCommitFallback(t *testing.T) {
 	for range 2 {
 		rec := httptest.NewRecorder()
 		router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/system/update/changelog", nil))
-		if rec.Code != http.StatusBadGateway {
+		if rec.Code != statusUpstreamFailed {
 			t.Fatalf("changelog = %d: %s", rec.Code, rec.Body.String())
 		}
 	}

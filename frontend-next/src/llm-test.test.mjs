@@ -22,7 +22,7 @@ test("model test explains a body-less gateway failure", () => {
   const message = describeLLMTestError(new Error("后端出错（HTTP 502）"), "Gemini", "third-model");
   assert.match(message, /Gemini · third-model/);
   assert.match(message, /网关没有返回模型错误正文/);
-  assert.match(message, /llm\.test/);
+  assert.match(message, /llm_test/);
 });
 
 test("model test displays the exact 502 response body", () => {
@@ -61,4 +61,14 @@ test("网关 HTML 错误页只留一句出处，不整段贴出来", () => {
 test("非 HTML 的纯文本正文仍然原样展示", () => {
   const error = Object.assign(new Error("后端出错（HTTP 502）"), { responseBody: "upstream reset the connection" });
   assert.match(describeLLMTestError(error, "Gemini", "x"), /响应正文：\nupstream reset the connection/);
+});
+
+test("api.ts 补过去向说明的 5xx 不会和测试框的说明叠两遍", () => {
+  const error = Object.assign(new Error("后端出错（HTTP 502）：后端的错误说明被反向代理或网关换成了它自己的错误页（x），原始原因请到「运行记录」查看。"), {
+    status: 502,
+    responseBody: "<html><title>x</title></html>"
+  });
+  const message = describeLLMTestError(error, "Gemini", "m");
+  assert.equal((message.match(/运行记录/g) ?? []).length, 1, message);
+  assert.match(message, /后端出错（HTTP 502）。这段响应来自反向代理或网关（x）/);
 });

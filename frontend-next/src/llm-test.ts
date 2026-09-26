@@ -2,6 +2,7 @@
 // Licensed under the Limited Redistribution License in the repository root.
 
 import type { LLMConfig } from "./api";
+import { gatewayErrorPage, serverErrorBase } from "./gateway-error.ts";
 
 export function testModelIDs(profile: LLMConfig): string[] {
   const seen = new Set<string>();
@@ -25,7 +26,7 @@ export function randomTestModel(profile: LLMConfig, random = Math.random): strin
 }
 
 export function describeLLMTestError(error: unknown, provider: string, model: string): string {
-  const reason = error instanceof Error ? error.message.trim() : "未知错误";
+  const reason = shortServerReason(error) ?? (error instanceof Error ? error.message.trim() : "未知错误");
   const responseBody = error && typeof error === "object" && "responseBody" in error
     ? String(error.responseBody ?? "").trim()
     : "";
@@ -39,14 +40,24 @@ export function describeLLMTestError(error: unknown, provider: string, model: st
     if (gatewayErrorPage(responseBody)) {
       // 代理返回的 HTML 错误页不是模型的错误，整段贴出来只会把真正的原因淹掉。
       // 只留一句出处，剩下的让用户去运行记录里看服务端原始错误。
-      return `${prefix}：${reason || "HTTP 请求失败"}。这段响应来自反向代理或网关（${gatewayErrorPage(responseBody)}），不是模型返回的内容——上游可能没应答，或者后端在请求期间退出；请到“运行记录”搜索 llm_test 查看服务端原始错误。`;
+      return `${prefix}：${reason || "HTTP 请求失败"}。这段响应来自反向代理或网关（${gatewayErrorPage(responseBody)}），不是模型返回的内容——后端写的原因被它换掉了；请到“运行记录”搜索 llm_test 查看服务端原始错误。`;
     }
     return `${prefix}：${reason || "HTTP 请求失败"}\n\n响应正文：\n${formatResponseBody(responseBody)}`;
   }
   if (/^后端出错（HTTP 5\d\d）$/.test(reason)) {
-    return `${prefix}：${reason}。网关没有返回模型错误正文，可能是后端在请求期间退出或代理中断；请到“运行记录”搜索 llm.test 查看服务端原始错误。`;
+    return `${prefix}：${reason}。网关没有返回模型错误正文，可能是后端在请求期间退出或代理中断；请到“运行记录”搜索 llm_test 查看服务端原始错误。`;
   }
   return `${prefix}：${reason || "上游没有返回错误详情"}`;
+}
+
+// shortServerReason 把 api.ts 给 5xx 补的去向说明剥掉，只留「后端出错（HTTP n）」：
+// 测试框在下面按正文类型写自己的说明，两段叠在一起会重复。
+function shortServerReason(error: unknown): string | undefined {
+  if (!(error instanceof Error) || !("status" in error)) return undefined;
+  const status = Number((error as { status?: unknown }).status);
+  if (!Number.isFinite(status) || status < 500) return undefined;
+  const base = serverErrorBase(status);
+  return error.message.startsWith(base) ? base : undefined;
 }
 
 function responseBodyMessage(body: string): string {
@@ -80,15 +91,4 @@ function formatResponseBody(body: string): string {
   const runes = [...formatted];
   if (runes.length <= maxTestErrorBodyRunes) return formatted;
   return `${runes.slice(0, maxTestErrorBodyRunes).join("")}\n…（响应正文过长，已截断）`;
-}
-
-// gatewayErrorPage 判断这段正文是不是代理/网关的 HTML 错误页，是就返回一句出处描述。
-//
-// Cloudflare 这类网关在源站 5xx 时会把正文整个换成自己的错误页。那几千字 HTML
-// 和模型没有任何关系，却会把对话框撑满，真正有用的 reason 反而被推到看不见的地方。
-function gatewayErrorPage(body: string): string {
-  const head = body.slice(0, 2_000).toLowerCase();
-  if (!head.startsWith("<!doctype html") && !head.startsWith("<html") && !head.includes("<html")) return "";
-  const title = /<title[^>]*>([^<]{1,120})<\/title>/i.exec(body.slice(0, 4_000));
-  return title ? title[1].trim() : "HTML 错误页";
 }

@@ -38,7 +38,7 @@ func TestLLMConfigSaveModelListTimesOutSlowProvider(t *testing.T) {
 	rec := httptest.NewRecorder()
 	started := time.Now()
 	router.ServeHTTP(rec, req)
-	if rec.Code != http.StatusBadGateway {
+	if rec.Code != statusUpstreamFailed {
 		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
 	}
 	if elapsed := time.Since(started); elapsed > 2*time.Second {
@@ -77,7 +77,7 @@ func TestLLMProviderModelsTimesOutHungEndpoint(t *testing.T) {
 	rec := httptest.NewRecorder()
 	started := time.Now()
 	router.ServeHTTP(rec, req)
-	if rec.Code != http.StatusBadGateway {
+	if rec.Code != statusUpstreamFailed {
 		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
 	}
 	if elapsed := time.Since(started); elapsed > 3*time.Second {

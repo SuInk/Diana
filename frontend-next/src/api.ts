@@ -3,6 +3,7 @@
 
 import { trackScopeRequest } from "./scope-transition";
 import { configurationKindForMutation, notifyConfigurationChanged } from "./configuration-sync";
+import { describeServerFailure } from "./gateway-error";
 import type { SendRetrySettings } from "./send-retry-settings";
 
 export type Provider = "openai_compatible" | "gemini" | "anthropic" | "typesafe";
@@ -980,7 +981,7 @@ export function isBackendUnreachable(err: unknown): boolean {
 
 function apiErrorForStatus(status: number, message: string, responseBody = ""): ApiError {
   if (status >= 500) {
-    return new ApiError(message || `后端出错（HTTP ${status}）`, "server", status, responseBody);
+    return new ApiError(message || describeServerFailure(status, responseBody), "server", status, responseBody);
   }
   if (status === 401 || status === 403) {
     return new ApiError(message || `HTTP ${status}`, "auth", status, responseBody);
