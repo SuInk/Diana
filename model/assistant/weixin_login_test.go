@@ -78,7 +78,8 @@ func TestWeixinLoginHappyPathWithVerifyCode(t *testing.T) {
 		`{"status":"wait"}`,
 		`{"status":"scaned"}`,
 		`{"status":"need_verifycode"}`,
-		`{"status":"confirmed","bot_token":"new-token","ilink_bot_id":"bot@im.bot","baseurl":"https://ilinkai.weixin.qq.com","ilink_user_id":"me@im.wechat"}`,
+		// baseurl 放在最后：URL 后面紧跟 `:` 再出现 `@` 会被公开仓库审计当成带账号密码的地址。
+		`{"status":"confirmed","bot_token":"new-token","ilink_bot_id":"bot@im.bot","ilink_user_id":"me@im.wechat","baseurl":"https://ilinkai.weixin.qq.com"}`,
 	)
 	m := newTestWeixinLogin(fake)
 	ctx := context.Background()
