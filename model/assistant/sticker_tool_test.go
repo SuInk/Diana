@@ -9,7 +9,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 )
 
 type stickerHistoryStore struct {
@@ -20,6 +22,33 @@ type stickerAssetTestStore struct {
 	stickerHistoryStore
 	assets []StickerAsset
 	query  StickerHistoryQuery
+	mu     sync.Mutex
+	sent   []string
+	tagged map[string][]string
+}
+
+func (s *stickerAssetTestStore) RecordStickerSent(_ context.Context, session, hash string, _ int64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.sent = append(s.sent, session+"/"+hash)
+	return nil
+}
+
+func (s *stickerAssetTestStore) SaveStickerTags(_ context.Context, record StickerTagRecord) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.tagged == nil {
+		s.tagged = map[string][]string{}
+	}
+	s.tagged[record.ContentSHA256] = record.Tags
+	return nil
+}
+
+func (s *stickerAssetTestStore) taggedSnapshot(hash string) ([]string, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	tags, ok := s.tagged[hash]
+	return tags, ok
 }
 
 func (s *stickerAssetTestStore) ListStickerAssets(_ context.Context, query StickerHistoryQuery) ([]StickerAsset, error) {
@@ -57,10 +86,10 @@ func (s *stickerHistoryStore) ListRecentStickerEvents(_ context.Context, query S
 
 func TestDefaultPluginManagerIncludesStickerSender(t *testing.T) {
 	state, ok := NewDefaultPluginManager().Get(stickerPluginID)
-	if !ok || !state.Enabled || !state.Manifest.BuiltIn || state.Manifest.Version != "0.2.1" {
+	if !ok || !state.Enabled || !state.Manifest.BuiltIn || state.Manifest.Version != "0.2.2" {
 		t.Fatalf("sticker plugin state=%#v ok=%v", state, ok)
 	}
-	if len(state.Manifest.Settings) != 5 {
+	if len(state.Manifest.Settings) != 6 {
 		t.Fatalf("settings=%#v", state.Manifest.Settings)
 	}
 }
@@ -149,7 +178,7 @@ func TestStickerToolKeepsCandidatesForSemanticSelectionWithoutLiteralMatch(t *te
 	if err := json.Unmarshal([]byte(output), &result); err != nil {
 		t.Fatal(err)
 	}
-	if len(result.Candidates) != 2 || !strings.Contains(result.Message, "按当前语义") {
+	if len(result.Candidates) != 2 || result.Candidates[0].Matched || !strings.Contains(result.Message, "随机候选") {
 		t.Fatalf("semantic candidates=%#v", result)
 	}
 
@@ -167,7 +196,7 @@ func TestRankStickerCandidatesPrefersSemanticMatchOverRecency(t *testing.T) {
 		{ID: "recent", Summary: "动画表情", EventTime: 20},
 		{ID: "semantic", Summary: "抱抱", EventTime: 10, SemanticScore: 80},
 	}
-	rankStickerCandidates(candidates, "她今天很难过，安慰一下")
+	rankStickerCandidates(candidates, "她今天很难过，安慰一下", 100)
 	if candidates[0].ID != "semantic" || candidates[0].Score != 80 {
 		t.Fatalf("semantic ranking=%#v", candidates)
 	}
@@ -420,5 +449,186 @@ func TestStickerToolCanExcludeGenericAnimatedCandidates(t *testing.T) {
 	var result stickerToolResult
 	if err := json.Unmarshal([]byte(output), &result); err != nil || len(result.Candidates) != 0 {
 		t.Fatalf("result=%#v err=%v", result, err)
+	}
+}
+
+// 关键词检索：多个词任一命中就算，名称和标签命中比简介命中分高；一个都不沾的不算命中。
+func TestRankStickerCandidatesMatchesAnyKeywordAndPrefersTags(t *testing.T) {
+	candidates := []stickerCandidate{
+		{ID: "recent", Summary: "动画表情", Description: "一只猫坐着", EventTime: 30},
+		{ID: "tagged", Summary: "动画表情", Tags: []string{"安慰", "抱抱"}, EventTime: 10},
+		{ID: "described", Summary: "动画表情", Description: "小熊伸手摸头", EventTime: 20},
+	}
+	rankStickerCandidates(candidates, "安慰 摸头 心疼", 100)
+	if candidates[0].ID != "tagged" || candidates[1].ID != "described" || candidates[2].Score != 0 {
+		t.Fatalf("ranking = %#v", candidates)
+	}
+	if candidates[0].Score <= candidates[1].Score || candidates[1].Score <= 0 {
+		t.Fatalf("scores = %v %v", candidates[0].Score, candidates[1].Score)
+	}
+}
+
+// 机器人刚在本会话发过的，同样命中也排到后面；过了窗口就恢复。
+func TestRankStickerCandidatesPushesRecentlySentDown(t *testing.T) {
+	now := int64(100000)
+	fresh := func() []stickerCandidate {
+		return []stickerCandidate{
+			{ID: "just-sent", Summary: "无语", EventTime: 20, LastSentAt: now - 60},
+			{ID: "other", Summary: "无语", EventTime: 10},
+		}
+	}
+	candidates := fresh()
+	rankStickerCandidates(candidates, "无语", now)
+	if candidates[0].ID != "other" || candidates[1].Score <= 0 {
+		t.Fatalf("recent ranking = %#v", candidates)
+	}
+	candidates = fresh()
+	rankStickerCandidates(candidates, "无语", now+int64(stickerRecentSendWindow/time.Second)+60)
+	if candidates[0].ID != "just-sent" {
+		t.Fatalf("after window ranking = %#v", candidates)
+	}
+}
+
+// 命中的排在前面；不够时用没命中的随机补位，刚发过的最后才补。
+func TestSelectStickerCandidatesFillsRandomlyAndSkipsRecentlySent(t *testing.T) {
+	now := int64(100000)
+	candidates := []stickerCandidate{
+		{ID: "hit", Score: 10},
+		{ID: "recent", LastSentAt: now - 60},
+		{ID: "a"}, {ID: "b"}, {ID: "c"},
+	}
+	first := func(int) int { return 0 }
+	picked, matched := selectStickerCandidates(candidates, 3, now, first)
+	if matched != 1 || len(picked) != 3 || picked[0].ID != "hit" || picked[1].ID != "a" || picked[2].ID != "b" {
+		t.Fatalf("picked = %#v matched=%d", picked, matched)
+	}
+	picked, _ = selectStickerCandidates(candidates, 5, now, first)
+	if len(picked) != 5 || picked[4].ID != "recent" {
+		t.Fatalf("picked = %#v", picked)
+	}
+}
+
+// 命中太多时在前几名里加权抽，不是永远同一批；分数最高的仍然排在返回列表前面。
+func TestSelectStickerCandidatesSamplesAmongTopMatches(t *testing.T) {
+	var candidates []stickerCandidate
+	for index := 0; index < 10; index++ {
+		candidates = append(candidates, stickerCandidate{ID: string(rune('a' + index)), Score: float64(100 - index)})
+	}
+	last := func(n int) int { return n - 1 }
+	picked, matched := selectStickerCandidates(candidates, 2, 0, last)
+	if matched != 2 || len(picked) != 2 {
+		t.Fatalf("picked = %#v", picked)
+	}
+	for _, candidate := range picked {
+		if candidate.Score < 97 {
+			t.Fatalf("picked outside top pool: %#v", picked)
+		}
+	}
+	if picked[0].Score < picked[1].Score {
+		t.Fatalf("picked not ordered: %#v", picked)
+	}
+}
+
+func TestParseStickerAnnotation(t *testing.T) {
+	gist, tags := parseStickerAnnotation("猫猫翻白眼，表示对离谱发言很无语。 标签：无语、翻白眼、离谱，猫猫。")
+	if gist != "猫猫翻白眼，表示对离谱发言很无语。" || strings.Join(tags, "|") != "无语|翻白眼|离谱|猫猫" {
+		t.Fatalf("gist=%q tags=%q", gist, tags)
+	}
+	gist, tags = parseStickerAnnotation("只有简介没有标签")
+	if gist != "只有简介没有标签" || tags != nil {
+		t.Fatalf("gist=%q tags=%q", gist, tags)
+	}
+}
+
+// 资产库带出的标签交给 Agent；发送后记下这次发送；已有通用描述但没标注过的，后台补标签。
+func TestStickerToolUsesAssetTagsRecordsSendAndTagsInBackground(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name string, body []byte) (string, string) {
+		path := filepath.Join(dir, name)
+		if err := os.WriteFile(path, body, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return path, imageBytesSHA256(body)
+	}
+	taggedPath, taggedHash := write("tagged.gif", []byte("tagged"))
+	plainPath, plainHash := writeRecallImageFixture(t)
+	event := MessageEvent{Kind: EventKindGroup, GroupID: "g", UserID: "u", MessageID: "request"}
+	store := &stickerAssetTestStore{stickerHistoryStore: stickerHistoryStore{events: map[string][]MessageEvent{}}, assets: []StickerAsset{
+		{Session: sessionKey(event), Kind: EventKindGroup, GroupID: "g", MessageID: "m1", EventTime: 1,
+			Summary: "动画表情", Path: taggedPath, ContentSHA256: taggedHash, Tagged: true, Gist: "摸摸头安慰", Tags: []string{"安慰", "摸头"}},
+		{Session: sessionKey(event), Kind: EventKindGroup, GroupID: "g", MessageID: "m2", EventTime: 2,
+			Summary: "动画表情", Path: plainPath, ContentSHA256: plainHash, Description: "一张系统面板截图"},
+	}}
+	provider := &recallImageVisionProvider{}
+	runtime := NewRuntime(BotConfig{}, &recordingChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+		return provider, nil
+	})
+	runtime.SetMessageHistoryStore(store)
+	tool := newDianaStickerTool(runtime, event, SettingValues{stickerSettingSearchResults: 8})
+
+	output, err := tool.Run(context.Background(), map[string]any{"operation": "search", "query": "安慰 心疼"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var search stickerToolResult
+	if err := json.Unmarshal([]byte(output), &search); err != nil {
+		t.Fatal(err)
+	}
+	if len(search.Candidates) != 2 || !search.Candidates[0].Matched || search.Candidates[0].Description != "摸摸头安慰" ||
+		strings.Join(search.Candidates[0].Tags, "|") != "安慰|摸头" || search.Candidates[1].Matched {
+		t.Fatalf("search = %s", output)
+	}
+	if _, err := tool.Run(context.Background(), map[string]any{"operation": "send", "sticker_id": search.Candidates[0].ID}); err != nil {
+		t.Fatal(err)
+	}
+	store.mu.Lock()
+	sent := append([]string(nil), store.sent...)
+	store.mu.Unlock()
+	if len(sent) != 1 || sent[0] != sessionKey(event)+"/"+taggedHash {
+		t.Fatalf("sent = %#v", sent)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if _, ok := store.taggedSnapshot(plainHash); ok {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("untagged candidate was not tagged in background")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if _, ok := store.taggedSnapshot(taggedHash); ok {
+		t.Fatal("already tagged candidate was tagged again")
+	}
+}
+
+type stickerPruneTestStore struct {
+	stickerHistoryStore
+	mu       sync.Mutex
+	sessions []string
+	capacity int
+}
+
+func (s *stickerPruneTestStore) PruneStickerAssets(_ context.Context, session string, capacity int) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.sessions = append(s.sessions, session)
+	s.capacity = capacity
+	return 0, nil
+}
+
+// 收到带表情包的消息落库后按插件上限修剪这个会话的表情包库；纯文字消息不触发。
+func TestPersistMessageEventPrunesStickerLibrary(t *testing.T) {
+	store := &stickerPruneTestStore{stickerHistoryStore: stickerHistoryStore{events: map[string][]MessageEvent{}}}
+	runtime := NewRuntime(BotConfig{}, &recordingChannel{}, NewDefaultPluginManager(), nil, nil, nil, nil)
+	runtime.SetMessageHistoryStore(store)
+	text := MessageEvent{Kind: EventKindGroup, GroupID: "g", MessageID: "t", Segments: []MessageSegment{{Type: "text", Data: map[string]string{"text": "hi"}}}}
+	runtime.persistMessageEvent(text)
+	sticker := MessageEvent{Kind: EventKindGroup, GroupID: "g", MessageID: "s", Segments: []MessageSegment{{Type: "image", Data: map[string]string{"summary": "[无语]"}}}}
+	runtime.persistMessageEvent(sticker)
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if len(store.sessions) != 1 || store.sessions[0] != sessionKey(sticker) || store.capacity != 1000 {
+		t.Fatalf("prune calls = %#v capacity=%d", store.sessions, store.capacity)
 	}
 }

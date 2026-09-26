@@ -13,6 +13,7 @@ const (
 	stickerSettingIncludeGeneric = "include_generic_animated"
 	stickerSettingCrossGroup     = "cross_group"
 	stickerSettingCrossPrivate   = "cross_private"
+	stickerSettingLibraryLimit   = "library_capacity"
 )
 
 // StickerPlugin exposes a conversation-local sticker library backed by durable message history.
@@ -24,8 +25,8 @@ func (p *StickerPlugin) Manifest() PluginManifest {
 	return PluginManifest{
 		ID:          stickerPluginID,
 		Name:        "表情包发送",
-		Version:     "0.2.1",
-		Description: "启用内置 Agent 后，从持久表情资产库中检索候选；当前会话和明确开启的共享范围各有独立配额。Agent 按当前语义查看候选名称与聊天用途简介，再选择一张发送。支持识图时会为缺少简介的候选按需补充简介。",
+		Version:     "0.2.2",
+		Description: "启用内置 Agent 后，从持久表情资产库中按关键词检索候选；当前会话和明确开启的共享范围各有独立配额。Agent 查看候选的名称、标签与简介后选择一张发送，刚发过的会往后排。支持识图时会为缺少简介或标签的候选按需补充。",
 		Official:    true,
 		BuiltIn:     true,
 		Permissions: []string{"message:read", "message:send"},
@@ -47,6 +48,15 @@ func (p *StickerPlugin) Manifest() PluginManifest {
 				Default:     8,
 				Min:         settingRange(3),
 				Max:         settingRange(20),
+			},
+			{
+				Key:         stickerSettingLibraryLimit,
+				Label:       "每个会话表情包上限",
+				Description: "每个群聊或私聊最多收录多少张不同的表情包。超出后淘汰最久没人发、机器人也最久没用过的；只移出表情包库，聊天记录里的图片不受影响。",
+				Type:        PluginSettingTypeNumber,
+				Default:     1000,
+				Min:         settingRange(50),
+				Max:         settingRange(10000),
 			},
 			{
 				Key:         stickerSettingCrossGroup,
