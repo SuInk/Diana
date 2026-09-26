@@ -20,6 +20,7 @@ import (
 
 	"github.com/SuInk/diana/internal/procgroup"
 	"github.com/SuInk/diana/model/agent"
+	"github.com/SuInk/diana/model/llm"
 )
 
 const (
@@ -29,6 +30,9 @@ const (
 	voiceTTSPresetLocal  = "local"
 	voiceTTSPresetDocker = "docker"
 	voiceTTSPresetCustom = "custom"
+	// voiceTTSPresetModelSlot 不直连 GPT-SoVITS，改走模型分配里的「语音合成」插槽：
+	// OpenAI 兼容的 /audio/speech（CosyVoice、ChatTTS 等自建服务的兼容层）或 ElevenLabs。
+	voiceTTSPresetModelSlot = "model_slot"
 
 	voiceTTSSettingPreset       = "preset"
 	voiceTTSSettingEndpoint     = "endpoint"
@@ -50,12 +54,17 @@ const (
 
 type voiceCommandRunner func(context.Context, string, ...string) ([]byte, error)
 
+// speechSynthesizer 由运行时注入，背后是模型分配里的语音合成插槽。插件自己不知道
+// 当前是哪台机器人，插槽按 ctx 上挂的消息事件解析。
+type speechSynthesizer func(ctx context.Context, text string) (*llm.SpeechResponse, error)
+
 type VoiceTTSPlugin struct {
 	client        *http.Client
 	commandRunner voiceCommandRunner
 
 	mu     sync.RWMutex
 	sharer LocalMediaSharer
+	speech speechSynthesizer
 }
 
 type dianaTTSTool struct {
@@ -77,6 +86,7 @@ type voiceTTSConfig struct {
 	FFmpegPath   string
 	SilkEncoder  string
 	SilkBitrate  int
+	UseModelSlot bool
 }
 
 type voiceTTSResult struct {
@@ -103,8 +113,8 @@ func (p *VoiceTTSPlugin) Manifest() PluginManifest {
 	return PluginManifest{
 		ID:          voiceTTSPluginID,
 		Name:        voiceName + "语音合成",
-		Version:     "0.3.1",
-		Description: "通过可配置的 GPT-SoVITS 服务把回复合成为" + voiceName + "音色；由模型通过 Agent 工具按需调用。",
+		Version:     "0.3.2",
+		Description: "通过可配置的 GPT-SoVITS 服务，或模型分配里的语音合成插槽（OpenAI 兼容 /audio/speech、ElevenLabs），把回复合成为" + voiceName + "音色；由模型通过 Agent 工具按需调用。",
 		Official:    true,
 		BuiltIn:     true,
 		Permissions: []string{"agent:tool", "network:http", "file:write", "process:execute", "message:read", "message:send"},
@@ -118,8 +128,9 @@ func (p *VoiceTTSPlugin) Manifest() PluginManifest {
 					{Value: voiceTTSPresetLocal, Label: "本机 GPT-SoVITS"},
 					{Value: voiceTTSPresetDocker, Label: "Docker · gpt-sovits"},
 					{Value: voiceTTSPresetCustom, Label: "自定义 GPT-SoVITS"},
+					{Value: voiceTTSPresetModelSlot, Label: "模型分配 · 语音合成插槽"},
 				},
-				Description: "预设决定默认 API 地址；下方填写地址可覆盖预设。",
+				Description: "预设决定默认 API 地址；下方填写地址可覆盖预设。选「模型分配」时改用机器人模型分配里的语音合成插槽，下方 GPT-SoVITS 的地址和参考音频都不再使用。",
 			},
 			{
 				Key:         voiceTTSSettingEndpoint,
@@ -184,6 +195,19 @@ func (p *VoiceTTSPlugin) SetLocalMediaSharer(sharer LocalMediaSharer) {
 	p.mu.Lock()
 	p.sharer = sharer
 	p.mu.Unlock()
+}
+
+// SetSpeechSynthesizer 接上模型分配里的语音合成插槽。
+func (p *VoiceTTSPlugin) SetSpeechSynthesizer(synth speechSynthesizer) {
+	p.mu.Lock()
+	p.speech = synth
+	p.mu.Unlock()
+}
+
+func (p *VoiceTTSPlugin) speechSynthesizer() speechSynthesizer {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.speech
 }
 
 func (p *VoiceTTSPlugin) share(path string) (string, bool) {
@@ -257,6 +281,9 @@ func (t *dianaTTSTool) TerminalResult(output string) (string, bool) {
 }
 
 func (p *VoiceTTSPlugin) synthesize(ctx context.Context, cfg voiceTTSConfig, text string) (string, error) {
+	if cfg.UseModelSlot {
+		return p.synthesizeWithModelSlot(ctx, cfg, text)
+	}
 	endpoint, err := url.Parse(cfg.Endpoint)
 	if err != nil || endpoint.Host == "" || (endpoint.Scheme != "http" && endpoint.Scheme != "https") {
 		return "", fmt.Errorf("语音合成 API 地址无效")
@@ -312,10 +339,34 @@ func (p *VoiceTTSPlugin) synthesize(ctx context.Context, cfg voiceTTSConfig, tex
 	if !looksLikeWAV(audio) {
 		return "", fmt.Errorf("语音合成服务未返回有效 WAV 音频")
 	}
+	return p.storeVoiceAudio(ctx, cfg, audio, "wav")
+}
+
+func (p *VoiceTTSPlugin) synthesizeWithModelSlot(ctx context.Context, cfg voiceTTSConfig, text string) (string, error) {
+	synth := p.speechSynthesizer()
+	if synth == nil {
+		return "", fmt.Errorf("语音合成插槽不可用：运行时没有接上模型分配")
+	}
+	requestCtx, cancel := context.WithTimeout(ctx, cfg.Timeout)
+	defer cancel()
+	resp, err := synth(requestCtx, text)
+	if err != nil {
+		return "", err
+	}
+	format := strings.Trim(strings.ToLower(resp.Format), ".")
+	if format == "" || strings.ContainsAny(format, `/\`) {
+		format = "audio"
+	}
+	return p.storeVoiceAudio(ctx, cfg, resp.Audio, format)
+}
+
+// storeVoiceAudio 把合成好的音频落进缓存目录；配了 Silk 编码器时再转成 QQ 语音
+// 原生的 Silk。ffmpeg 先解码成 PCM，所以插槽给出的 mp3、opus 也能走这条路。
+func (p *VoiceTTSPlugin) storeVoiceAudio(ctx context.Context, cfg voiceTTSConfig, audio []byte, extension string) (string, error) {
 	if err := os.MkdirAll(cfg.OutputDir, 0o700); err != nil {
 		return "", fmt.Errorf("创建语音缓存目录失败: %w", err)
 	}
-	file, err := os.CreateTemp(cfg.OutputDir, "diana-tts-*.wav")
+	file, err := os.CreateTemp(cfg.OutputDir, "diana-tts-*."+extension)
 	if err != nil {
 		return "", fmt.Errorf("创建语音缓存文件失败: %w", err)
 	}
@@ -462,8 +513,12 @@ func voiceTTSConfigFromEnv() voiceTTSConfig {
 func voiceTTSConfigFromSettings(settings SettingValues) (voiceTTSConfig, error) {
 	cfg := voiceTTSConfigFromEnv()
 	endpoint := strings.TrimSpace(settings.String(voiceTTSSettingEndpoint, ""))
-	if endpoint == "" {
-		switch settings.String(voiceTTSSettingPreset, voiceTTSPresetLocal) {
+	preset := settings.String(voiceTTSSettingPreset, voiceTTSPresetLocal)
+	if preset == voiceTTSPresetModelSlot {
+		cfg.UseModelSlot = true
+		endpoint = ""
+	} else if endpoint == "" {
+		switch preset {
 		case voiceTTSPresetDocker:
 			endpoint = "http://gpt-sovits:9880/tts"
 		case voiceTTSPresetCustom:

@@ -591,12 +591,16 @@ func remoteImageEditInput(ctx context.Context, httpClient *http.Client, value st
 }
 
 func imageEditPartHeader(filename, mediaType string) textproto.MIMEHeader {
+	return imageEditPartHeaderForField("image", filename, mediaType)
+}
+
+func imageEditPartHeaderForField(field, filename, mediaType string) textproto.MIMEHeader {
 	header := make(textproto.MIMEHeader)
 	filename = strings.ReplaceAll(filename, `"`, "")
 	if strings.TrimSpace(filename) == "" {
 		filename = "image.png"
 	}
-	header.Set("Content-Disposition", fmt.Sprintf(`form-data; name="image"; filename="%s"`, filename))
+	header.Set("Content-Disposition", fmt.Sprintf(`form-data; name="%s"; filename="%s"`, field, filename))
 	header.Set("Content-Type", mediaType)
 	return header
 }
