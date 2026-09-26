@@ -70,6 +70,20 @@ const content = {
         ],
       },
       {
+        title: "链路",
+        file: "pipeline",
+        sections: [
+          ["overview", "五段总览", "消息 链路 流程图 结果代码"],
+          ["trigger", "回复触发", "入站队列 优先级 重试 私聊准入 直接触发 @ 引用 称呼 断线补拉 缺口 恢复 门禁 禁言 配额"],
+          ["proactive", "主动接话", "接话评分 闲聊 档位 冷却 Jev 发言占比 合并 打断 叫停"],
+          ["reply", "回复流程", "上下文 提示词 缓存 插件 格式 压缩 分条 引用 合并转发 幂等 重试"],
+          ["agent", "Agent 运行", "工具 步数 收尾 say subtask 沙箱 超时"],
+          ["browser", "浏览器机制", "内置浏览器 扩展 CDP 接管 主人 browser_render 截图 标签页"],
+          ["review", "发送前审核", "沉默 语义去重 拒答 暂停 账号安全 质量 空转 审核模型"],
+          ["outcomes", "结果代码", "ignored 排查 不回复 原因"],
+        ],
+      },
+      {
         title: "运维",
         file: "operations",
         sections: [
@@ -142,6 +156,20 @@ const content = {
           ["memory", "Memory and recall", "long-term cross-group history compaction summary"],
           ["media", "Images and files", "vision OCR original video cache"],
           ["storage", "Storage", "SQLite database media logs"],
+        ],
+      },
+      {
+        title: "Pipeline",
+        file: "pipeline",
+        sections: [
+          ["overview", "Five stages", "message pipeline flowchart outcome codes"],
+          ["trigger", "Reply triggers", "inbound queue priority retry private admission mention quote alias backfill gap recovery gates mute quota"],
+          ["proactive", "Unprompted replies", "rating chat level cooldown Jev bot share merge interrupt stop"],
+          ["reply", "Reply flow", "context prompt cache plugins format compression chunks quote forward idempotency retry"],
+          ["agent", "Agent run", "tools steps finalize say subtask sandbox timeout"],
+          ["browser", "Browsers", "built-in browser extension CDP takeover owner browser_render screenshot tabs"],
+          ["review", "Pre-send review", "silence semantic dedup refusal pause account safety quality loop audit"],
+          ["outcomes", "Outcome codes", "ignored troubleshooting no reply reason"],
         ],
       },
       {

@@ -12,7 +12,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
-    <link rel="stylesheet" href="./styles.css?v=20260847" />
+    <link rel="stylesheet" href="./styles.css?v=20260926" />
     <script src="./theme.js?v=20260847"></script>
   </head>
   <body data-page="implementation">
@@ -44,15 +44,17 @@
       <section class="section searchable" id="message-flow">
         <div class="section-heading"><p class="eyebrow">调用链</p><h2>一条消息如何决定回复或忽略</h2></div>
         <ol class="timeline">
-          <li><strong>接收与归一化</strong><p>平台 adapter 将文本、@、引用、图片、文件和发送者转换为统一 <code>MessageEvent</code>。</p></li>
-          <li><strong>补全与缓存</strong><p>解析引用、转发和媒体引用，将短效平台图片写入本地历史媒体缓存。</p></li>
-          <li><strong>确定性门禁</strong><p>检查机器人/群启用、回复时间、屏蔽用户、群等级和机器人互聊抑制。</p></li>
-          <li><strong>触发判断</strong><p>私聊直接处理；群聊检查显式 @、引用、触发词和插件命令。显式 @ 的优先级高于引用。</p></li>
-          <li><strong>主动回复语义路由</strong><p>未直接触发的普通群聊由意图模型即时判断，最多等待 60 秒，避免永久排队。</p></li>
-          <li><strong>上下文组装</strong><p>组合系统提示、关系、长期记忆、近期历史、图片和工具证据，并按 token 预算裁剪。</p></li>
-          <li><strong>模型与工具循环</strong><p>选择对话或视觉角色；Agent 执行受限工具并记录每一步。</p></li>
-          <li><strong>发送与审计</strong><p>回复回到来源通道，持久化是否回复的详细原因、发送结果、耗时与 token。</p></li>
+          <li><strong>接收与入队</strong><p>平台 adapter 将文本、@、引用、图片、文件和发送者转换为统一 <code>MessageEvent</code>，先写进 SQLite 入站队列再处理；进程崩溃或重启后消息仍在库里，处理失败按退避重试。</p></li>
+          <li><strong>断线补拉</strong><p>重连后向平台拉取断线期间的历史并按 seq 检查缺口；每个会话只有最新几条本来就会直接触发的消息进入回复流程，其余只补进历史。</p></li>
+          <li><strong>确定性门禁</strong><p>检查群是否可用、机器人/群启用、禁言、模型配额、群等级、响应抑制和机器人互聊抑制，每一步都记下拦截原因。</p></li>
+          <li><strong>触发判断</strong><p>私聊直接处理；群聊检查显式 @、引用、称呼、链接和插件命令。同一人在生成期间追加的补充或纠正会合并进正在生成的回复。</p></li>
+          <li><strong>主动接话评分</strong><p>未直接触发的群消息由接话模型判断「是不是在跟机器人说话」和 0–1 的闲聊分，再按闲聊档位、冷却和机器人发言占比放行；出错、超时（60 秒）或解析失败一律沉默。</p></li>
+          <li><strong>上下文组装</strong><p>稳定的系统提示与历史在前、缓存断点之后才是记忆、工具证据等每轮变化的内容，并按 token 预算裁剪。</p></li>
+          <li><strong>模型与 Agent 循环</strong><p>Agent 每步只执行一个工具，受步数、单工具超时和收尾预留时间约束；超限时强制收尾，校验换行、证据和链接后才返回。</p></li>
+          <li><strong>发送前审核</strong><p>模型沉默、语义去重、一次审核模型调用（私聊收尾、群里叫停、空转、账号安全、主动回复质量），以及发送时的打断、幂等和暂停检查。</p></li>
+          <li><strong>发送与记录</strong><p>分条回到来源通道，只有第一条带引用和 @；群发送按文字/媒体两条通道退避。结果代码、原因、投递阶段、耗时与 token 全部持久化。</p></li>
         </ol>
+        <p>每一步的流程图、判断条件和结果代码见<a href="./pipeline">链路</a>一页。</p>
       </section>
 
       <section class="section searchable" id="memory">
@@ -88,10 +90,10 @@
         </tbody></table></div>
       </section>
 
-      <nav class="page-nav" aria-label="文档分页"><a href="./configuration"><small>上一页</small><strong>← 配置</strong></a><a href="./operations"><small>下一页</small><strong>运维 →</strong></a></nav>
+      <nav class="page-nav" aria-label="文档分页"><a href="./configuration"><small>上一页</small><strong>← 配置</strong></a><a href="./pipeline"><small>下一页</small><strong>链路 →</strong></a></nav>
       <div data-docs-footer></div>
     </main></div>
     <script src="./icons.js?v=20260847"></script>
-    <script src="./app.js?v=20260847" defer></script>
+    <script src="./app.js?v=20260926" defer></script>
   </body>
 </html>

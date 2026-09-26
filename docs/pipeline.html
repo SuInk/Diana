@@ -1,0 +1,350 @@
+<!doctype html>
+<!-- Copyright (c) 2025-now SuInk.
+     Licensed under the Limited Redistribution License in the repository root. -->
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" href="./favicon.svg" type="image/svg+xml" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="Diana 一条消息的完整链路：回复触发与断线补拉、回复流程、Agent 运行、浏览器机制与发送前审核。" />
+    <meta name="theme-color" content="#100d13" />
+    <title>Diana 文档 - 链路</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="./styles.css?v=20260926" />
+    <script src="./theme.js?v=20260847"></script>
+  </head>
+  <body data-page="pipeline">
+    <div data-docs-header></div>
+    <div class="docs-shell"><div data-docs-sidebar></div><main id="main" class="content">
+      <header class="page-intro"><p class="eyebrow">链路</p><h1>一条消息从进来到发出去</h1><p class="lead">消息先落进持久化队列，再经过确定性门禁和接话评分决定回不回；要回时组装上下文、交给模型或 Agent 生成，过完发送前审核才分条发回来源通道。每一步拦下都会留下结果代码和原因。</p></header>
+
+      <section class="section searchable" id="overview">
+        <div class="section-heading"><p class="eyebrow">总览</p><h2>五段链路</h2></div>
+        <div class="stage-grid">
+          <a href="#trigger"><span>01</span><strong>回复触发</strong>消息会不会丢、断线的消息怎么补回来、要不要回。</a>
+          <a href="#reply"><span>02</span><strong>回复流程</strong>上下文怎么组、回复怎么整理、怎么分条发回去。</a>
+          <a href="#agent"><span>03</span><strong>Agent 运行</strong>模型怎么一步步调工具、什么时候收尾。</a>
+          <a href="#browser"><span>04</span><strong>浏览器机制</strong>用哪个浏览器、谁能用、边界在哪。</a>
+          <a href="#review"><span>05</span><strong>发送前审核</strong>哪些检查能在发出前拦下或改写回复。</a>
+        </div>
+        <div class="flow-legend">
+          <span><i></i>步骤</span><span><i class="q"></i>判断</span><span><i class="end"></i>终点</span>
+          <span><i class="stop"></i>拦下 / 沉默</span><span><i class="go"></i>转到别处继续</span><span><i class="loop"></i>回到前面某一步</span>
+        </div>
+        <ol class="flow">
+          <li><div class="flow-node"><strong>平台消息</strong><p>OneBot / Telegram / QQ / 钉钉 / 飞书 / 企业微信，归一化为 <code>MessageEvent</code>。</p></div></li>
+          <li><div class="flow-node"><strong>持久化入站队列</strong><p>断线补拉、缺口检测、失败重试，进程重启也不丢。</p></div></li>
+          <li class="q"><div class="flow-node"><strong>回复触发</strong><p>确定性门禁 → 直接触发 → 接话评分。</p></div><div class="flow-exits"><span class="flow-exit"><b>不回</b>记录原因</span></div></li>
+          <li><div class="flow-node"><strong>组装上下文</strong><p>SOUL.md、历史、记忆、媒体，稳定部分在前以命中前缀缓存。</p></div></li>
+          <li class="q"><div class="flow-node"><strong>生成</strong><p>开了 Agent 走工具循环（可能用到浏览器），否则一次模型调用。</p></div></li>
+          <li class="q"><div class="flow-node"><strong>发送前审核</strong><p>沉默、去重、审核模型、群叫停。</p></div><div class="flow-exits"><span class="flow-exit"><b>拦下</b>记录原因</span></div></li>
+          <li><div class="flow-node"><strong>分条发送</strong><p>发送时守卫、幂等、退避重试。</p></div></li>
+          <li class="end"><div class="flow-node"><strong>记录结果</strong><p><code>inbound_events</code> 的结果代码与原因，WebUI 事件中心据此展示。</p></div></li>
+        </ol>
+      </section>
+
+      <section class="section searchable" id="trigger">
+        <div class="section-heading"><p class="eyebrow">01 回复触发</p><h2>消息进来之后，决定回不回</h2></div>
+        <p><code>HandleEvent</code> 不直接生成回复，而是先把消息写进 SQLite 入站队列再唤醒 worker。进程崩溃、重启或者模型卡住时消息还在库里：worker 认领时拿的是 10 分钟租约，过期后会被重新认领。</p>
+        <ol class="flow">
+          <li><div class="flow-node"><strong>HandleEvent</strong><p>自己发的消息只记历史；戳一戳、进群、加好友、撤回这类通知各走各的开关与冷却，不进队列。</p></div></li>
+          <li class="q"><div class="flow-node"><strong>私聊准入</strong><p>全部 / 仅主人 / 白名单。</p></div><div class="flow-exits"><span class="flow-exit"><b>不通过</b><code>ignored_private_admission</code></span></div></li>
+          <li><div class="flow-node"><strong>登记直接呼叫</strong><p><code>noteDirectedInbound</code>：入队前就登记，后面用来打断同一人的旧回复。</p></div></li>
+          <li><div class="flow-node"><strong>写入入站队列</strong><p>优先级：直接触发 100、引用回复 80、可解析链接 60、其余 0；同优先级按时间。</p></div><div class="flow-exits"><span class="flow-exit loop"><b>写入失败</b>写重试日志，2–30 秒退避重放，并安排一次补拉</span></div></li>
+          <li><div class="flow-node"><strong>worker 认领</strong><p>每会话默认群 3 条、私聊 2 条同时处理，另受全局回复并发限制。</p></div></li>
+          <li class="q"><div class="flow-node"><strong>补拉来的旧消息？</strong></div><div class="flow-exits"><span class="flow-exit"><b>只补历史</b><code>backfill_history_only</code></span><span class="flow-exit"><b>早于重放窗口</b><code>ignored_stale</code></span></div></li>
+          <li><div class="flow-node"><strong>语音转写 → 路由</strong><p><code>routeMessageEvent</code>。转写暂时失败会让这一条稍后重试。</p></div></li>
+          <li class="q"><div class="flow-node"><strong>确定性门禁</strong><p>12 项不调用模型的检查，见下方表格。</p></div><div class="flow-exits"><span class="flow-exit"><b>拦下</b><code>ignored_*</code></span></div></li>
+          <li class="q"><div class="flow-node"><strong>直接触发？</strong><p>私聊、@、引用机器人、称呼、主人命令、可解析链接、插件命令；先要通过回复准入（主人直通 → 屏蔽 → 白名单 → 豁免 → 活跃时段 → 群等级）。</p></div><div class="flow-exits"><span class="flow-exit go"><b>否</b>主动接话评分</span></div></li>
+          <li class="q"><div class="flow-node"><strong>同一人正在生成回复？</strong><p>2 分钟内追加的消息由模型判断是重复、补充、纠正还是独立问题。</p></div><div class="flow-exits"><span class="flow-exit loop"><b>补充或纠正，置信度 ≥ 阈值</b>旧回复作废重新生成 <code>merged_into_reply</code></span></div></li>
+          <li class="end"><div class="flow-node"><strong>进入回复流程</strong></div></li>
+        </ol>
+        <p>处理出错按 5 秒起、翻倍到 5 分钟重试，最多 5 次，用尽记 <code>dropped_retries_exhausted</code>；平台明确拒收记 <code>dropped_send_rejected</code>，不再重试。</p>
+      </section>
+
+      <section class="section searchable" id="recovery">
+        <div class="section-heading"><p class="eyebrow">01 回复触发</p><h2>断线补拉与缺口检测</h2></div>
+        <p>掉线期间平台上的消息收不到推送，只能事后向平台拉历史。协调器 <code>runInboundCoordinator</code> 负责这件事。</p>
+        <ol class="flow">
+          <li><div class="flow-node"><strong>进程启动</strong><p>释放过期租约，读取上次在线的检查点。在线时每 30 秒保存一次检查点。</p></div></li>
+          <li><div class="flow-node"><strong>心跳发现断线或账号离线</strong><p>停止认领，保存检查点。</p></div></li>
+          <li><div class="flow-node"><strong>重新连上</strong><p>重放截止时间 = 断线时刻 − 30 分钟，最多回看 24 小时。</p></div></li>
+          <li><div class="flow-node"><strong>补拉三次</strong><p>1 秒后补一次，+1 分钟、+5 分钟再各补一次。遍历群列表和最近联系人，每页 100 条、每会话上限 200 条，逐个会话串行拉。</p></div></li>
+          <li><div class="flow-node"><strong>去重</strong><p>和已入队、已入库的消息比对，同一条不会处理两次。</p></div></li>
+          <li class="q"><div class="flow-node"><strong>这条要不要参与回复？</strong><p>每个会话只有最新 N 条（<code>history_backfill_message_limit</code>，默认 3）、且本来就会直接触发的消息正常入队。</p></div><div class="flow-exits"><span class="flow-exit"><b>其余</b>只补进历史，不接话</span></div></li>
+          <li class="end"><div class="flow-node"><strong>正常入队</strong></div></li>
+        </ol>
+        <div class="callout"><strong>为什么只回最新几条</strong><p>掉线一小时回来，对攒下的上百条群聊逐条接话只会刷屏。补回来的历史照样进上下文，只是不再逐条触发回复。</p></div>
+        <p>在线时还有一道缺口检测：重连后每个群的第一条实时消息、以及任何 seq 跳号，都会触发 <code>verifyGroupSeqGap</code>——等补拉结束后定向重拉，并在 15 秒、1 分钟、3 分钟复查。日志动作是 <code>backfill_gap_detected</code> / <code>resolved</code> / <code>unresolved</code>。</p>
+      </section>
+
+      <section class="section searchable" id="gates">
+        <div class="section-heading"><p class="eyebrow">01 回复触发</p><h2>确定性门禁</h2></div>
+        <p>按顺序检查，任何一步拦下都带着具体原因结束。这些检查不调用模型（第 12 项除外），结果稳定可复现。</p>
+        <div class="table-wrap"><table><thead><tr><th>#</th><th>检查</th><th>拦下时的结果</th></tr></thead><tbody>
+          <tr><td>1</td><td>机器人已退群或群不可用</td><td><code>ignored_unavailable_group</code></td></tr>
+          <tr><td>2</td><td>补全引用、转发、图片，插件观察，写入历史</td><td>—</td></tr>
+          <tr><td>3</td><td>群未启用 / 不在准入范围（主人的抑制命令例外）</td><td><code>ignored_policy</code>；被屏蔽的用户记 <code>ignored_user_blocked</code></td></tr>
+          <tr><td>4</td><td>机器人在该群被禁言</td><td><code>ignored_bot_muted</code>；开了「禁言期间仍判断」时跑完判断再记 <code>ignored_bot_muted_judged</code></td></tr>
+          <tr><td>5</td><td>群模型配额用尽</td><td><code>ignored_model_quota</code></td></tr>
+          <tr><td>6</td><td>事件触发器（关键词 / 正则任务）</td><td>不拦截，任务在后台照常跑</td></tr>
+          <tr><td>7</td><td>主人的清空上下文命令</td><td>立即处理</td></tr>
+          <tr><td>8</td><td>积压交接（见「并发与合并」）</td><td><code>merged_into_backlog_turn</code></td></tr>
+          <tr><td>9</td><td>群成员等级门槛（OneBot；@、主人、管理员豁免）</td><td><code>ignored_member_level</code></td></tr>
+          <tr><td>10</td><td>响应抑制期内</td><td><code>ignored_response_suppression</code></td></tr>
+          <tr><td>11</td><td>只有视频没有文字</td><td><code>ignored_video</code></td></tr>
+          <tr><td>12</td><td>发送者是被标记的机器人或 Telegram bot，且没有明确 @ 或引用本机器人：先过回复抑制，再用模型判断是不是在跟自己说话</td><td><code>ignored_reply_damping</code> / <code>ignored_bot_message</code></td></tr>
+        </tbody></table></div>
+      </section>
+
+      <section class="section searchable" id="proactive">
+        <div class="section-heading"><p class="eyebrow">01 回复触发</p><h2>主动接话评分</h2></div>
+        <p>没有直接触发的普通群消息，先过回复抑制和群的随机采样比例（主人豁免），再交给接话模型。模型对每条候选只回答两件事：<code>relevance.directed</code>（是不是明确在跟机器人说话，只有是或否）和 <code>chat_in.score</code>（0–1 的闲聊适合度），各附一句理由。</p>
+        <ol class="flow">
+          <li class="q"><div class="flow-node"><strong>两个开关都关，或群里 10 分钟内有人叫停？</strong></div><div class="flow-exits"><span class="flow-exit"><b>是</b>沉默，不调用模型</span></div></li>
+          <li><div class="flow-node"><strong>组装评分输入</strong><p>寻址信息、按时间排的对话稿、本群补充判据。</p></div></li>
+          <li class="q"><div class="flow-node"><strong>调用接话模型</strong><p>用途 <code>proactive_reply_router</code>，可绑对话模型或判断模型 Jev，最多等 60 秒。</p></div><div class="flow-exits"><span class="flow-exit"><b>超时 / 出错</b>沉默</span><span class="flow-exit loop"><b>解析失败</b>带提醒重问一次，仍失败则沉默</span></div></li>
+          <li class="q"><div class="flow-node"><strong>directed = false 且 chat_in = 0？</strong><p>表示对方在叫停或正在机械循环。</p></div><div class="flow-exits"><span class="flow-exit"><b>是</b>沉默，「完全不限制」档也不越过</span></div></li>
+          <li class="q"><div class="flow-node"><strong>回应提问开着且 directed = true？</strong></div><div class="flow-exits"><span class="flow-exit go"><b>是</b>放行 <code>replied_proactive</code></span></div></li>
+          <li class="q"><div class="flow-node"><strong>闲聊分达到档位门槛，且冷却已过？</strong><p>冷却默认 30 秒，闲聊回复真正发出去后才开始计时。</p></div><div class="flow-exits"><span class="flow-exit"><b>否</b><code>ignored</code></span></div></li>
+          <li class="q"><div class="flow-node"><strong>机器人发言占比过高？</strong><p>10 分钟内机器人消息占 25% 以上、至少 3 条，且不止一个人在聊。</p></div><div class="flow-exits"><span class="flow-exit"><b>是，且不是「完全不限制」档</b>沉默</span></div></li>
+          <li class="end"><div class="flow-node"><strong>放行</strong><p><code>replied_proactive</code>，进入回复流程。</p></div></li>
+        </ol>
+        <div class="table-wrap"><table><thead><tr><th>档位</th><th>界面名称</th><th>闲聊分门槛</th></tr></thead><tbody>
+          <tr><td><code>off</code></td><td>从不闲聊</td><td>不闲聊</td></tr>
+          <tr><td><code>minimal</code></td><td>很少插话</td><td>≥ 0.90（最严）</td></tr>
+          <tr><td><code>low</code></td><td>偶尔接话</td><td>≥ 0.70</td></tr>
+          <tr><td><code>medium</code></td><td>适度参与</td><td>≥ 0.50</td></tr>
+          <tr><td><code>high</code></td><td>积极参与</td><td>≥ 0.30</td></tr>
+          <tr><td><code>extreme</code></td><td>频繁参与</td><td>≥ 0.10（最松）</td></tr>
+          <tr><td><code>always</code></td><td>完全不限制</td><td>不看分数，仍受冷却和发言占比限制</td></tr>
+        </tbody></table></div>
+        <p>「是不是在跟机器人说话」不打分：给 0–1 的分数，模型会在 0.45 和 0.55 之间摇摆，同一类消息这次回下次不回。模型出错时一律沉默——以前超时会退回关键词规则（扫到问号就当公开提问），判错的方向是「本来不该说话却开口」。评分细节写在 <code>proactive_reply_route</code> 日志里；档位、打分口径和补充判据见仓库的 <a href="https://github.com/SuInk/Diana/blob/main/docs/participation.md">发言偏好</a>，判断模型的接入见 <a href="https://github.com/SuInk/Diana/blob/main/docs/decision-models.md">判断模型（Jev）</a>。</p>
+      </section>
+
+      <section class="section searchable" id="concurrency">
+        <div class="section-heading"><p class="eyebrow">01 回复触发</p><h2>并发、合并与叫停</h2></div>
+        <p>同一会话里消息来得快，三种机制避免「一条一回」或者答非所问：</p>
+        <div class="flow-fork">
+          <div class="flow-branch"><h3>积压交接</h3><ol class="flow">
+            <li><div class="flow-node"><strong>排队 ≥ 30 秒</strong><p>且后面还有同会话消息；只看第一次处理，主人的消息不交接。</p></div></li>
+            <li><div class="flow-node"><strong>存进积压包</strong><p>最多 20 条，保留 10 分钟。</p></div></li>
+            <li class="end"><div class="flow-node"><strong>下一条一并取走</strong><p>最新的直接触发当回复目标；没有直接触发时，能接话的候选一起交给接话评分。</p></div></li>
+          </ol></div>
+          <div class="flow-branch"><h3>生成中合并</h3><ol class="flow">
+            <li><div class="flow-node"><strong>同一人 2 分钟内追加</strong></div></li>
+            <li class="q"><div class="flow-node"><strong>重复 / 补充 / 纠正 / 独立？</strong><p>置信度 ≥ 阈值（默认 75%）才合并。</p></div></li>
+            <li class="end"><div class="flow-node"><strong>旧版作废，重新生成</strong><p>最多 3 次；已开始分条发送或产生外部副作用后不再合并。</p></div></li>
+          </ol></div>
+          <div class="flow-branch"><h3>打断</h3><ol class="flow">
+            <li><div class="flow-node"><strong>群里同一人又直接叫了机器人</strong></div></li>
+            <li class="end"><div class="flow-node"><strong>旧回复发送前丢弃</strong><p><code>superseded_follow_up</code>；撤回只去掉引用装饰，不取消回复。</p></div></li>
+          </ol></div>
+        </div>
+        <div class="callout"><strong>群里叫停</strong><p>在群里 @、引用或点名机器人说「闭嘴」「别说了」，发送前审核会顺带判出叫停，给本群记 10 分钟窗口：窗口内接话评分直接跳过，在路上的主动接话回复发送前丢掉；@、引用和点名照常回答——叫停说的是别插话，不是不理人。</p></div>
+      </section>
+
+      <section class="section searchable" id="reply">
+        <div class="section-heading"><p class="eyebrow">02 回复流程</p><h2>决定要回之后</h2></div>
+        <p><code>replyAndRecord</code> 最多跑 3 次 <code>replyTo</code>：同一个人在生成期间补了一句、被判为补充或纠正时，旧的这版作废，带上新消息重新生成；第 3 次之前封口，不再接受合并。</p>
+        <ol class="flow">
+          <li><div class="flow-node"><strong>准备</strong><p>当前消息图片、历史、身份脱敏、请求超时、「正在输入」（Telegram 与 OneBot 私聊）。</p></div></li>
+          <li class="q"><div class="flow-node"><strong>主人命令 / 状态命令？只是可解析链接？</strong></div><div class="flow-exits"><span class="flow-exit go"><b>命令</b>直接发送，不过审核</span><span class="flow-exit go"><b>链接</b>只解析链接，按资源去重后发送</span></div></li>
+          <li class="q"><div class="flow-node"><strong>插件处理</strong><p>可能启动后台任务，也可能直接给出回复。</p></div><div class="flow-exits"><span class="flow-exit go"><b>插件直接回复</b>审核后发送，不调用对话模型</span></div></li>
+          <li><div class="flow-node"><strong>组装上下文与工具</strong><p>见下方提示词顺序。回复规则可以指定本轮的模型配置，或把回复换成语音。</p></div></li>
+          <li class="q"><div class="flow-node"><strong>开了 Agent 且关系允许用工具？</strong></div><div class="flow-exits"><span class="flow-exit go"><b>是</b>Agent 运行</span><span class="flow-exit go"><b>否</b>一次模型调用，有图或音频走视觉分组</span></div></li>
+          <li><div class="flow-node"><strong>整理格式</strong><p>取出控制标记；拦下写成文字的工具调用；平台不支持富文本时转纯文本；超长先在自然边界拆、再单独拆代码块，还不行就用模型压缩（30 秒、每条最多 2 次）。</p></div></li>
+          <li class="q"><div class="flow-node"><strong>发送前审核</strong></div><div class="flow-exits"><span class="flow-exit"><b>拦下</b>对应的 <code>ignored_*</code></span></div></li>
+          <li><div class="flow-node"><strong>分条发送</strong><p>见下一节。</p></div><div class="flow-exits"><span class="flow-exit loop"><b>发送时发现补充消息</b>回到准备，重新生成</span></div></li>
+          <li class="end"><div class="flow-node"><strong>记录</strong><p>历史、消息 ID、投递阶段、事件结果；闲聊冷却开始计时；排入关系评估。</p></div></li>
+        </ol>
+        <h3>提示词顺序</h3>
+        <p>系统头（SOUL.md、固定规则、工具规则）→ 摘要检查点 → 稳定历史 → <strong>缓存断点</strong> → 可变块（插件上下文、会话状态、记忆、笔记本、世界书、自我笔记、媒体索引、最近引用来源、最近工具调用）→ 同轮候选消息 → 依赖图 → 系统尾（说话人）→ 时钟 → 装饰规则 → 当前消息。断点之前的内容在同一个群里轮与轮之间保持不变，让上游的前缀缓存命中。发给模型的请求里真实的用户 ID、群号换成别名，回复和工具调用里再换回来。</p>
+        <p>生成结果为空时按标记兜底：暂停响应就发一句人设内的提示后沉默；拒答发固定文本；有出图任务在排队就把「开始生成」当回复；这一轮已经用 <code>say</code> 说过话就沉默；都不是时发「我这边没有生成有效回复。」</p>
+      </section>
+
+      <section class="section searchable" id="delivery">
+        <div class="section-heading"><p class="eyebrow">02 回复流程</p><h2>分条发送</h2></div>
+        <ol class="flow">
+          <li><div class="flow-node"><strong>分条</strong><p>按 <code>[diana-msg]</code> / <code>[diana-line]</code> 分条，去句尾句号；同会话的回复排队，不交错。</p></div></li>
+          <li class="q"><div class="flow-node"><strong>OneBot 且超过合并转发阈值？</strong></div><div class="flow-exits"><span class="flow-exit go"><b>是</b>发合并转发卡片（卡片文字另过账号安全审核）；被审核拦下就不发，其他失败且未超时则退回逐条发送</span></div></li>
+          <li><div class="flow-node"><strong>逐条发</strong><p>只有第一条带引用和 @；触发消息被撤回时不引用，回复针对另一位参与者时不引用当前消息。</p></div></li>
+          <li><div class="flow-node"><strong>节奏</strong><p>第二条起等 max(分条间隔 300 毫秒, 每字 100 毫秒)，最多 6 秒；等待时保持「正在输入」。</p></div></li>
+          <li><div class="flow-node"><strong>单条出口 sendOutgoingWithResult</strong><p>凭据打码 → 本地图片与语音准备 → 解析 <code>[diana-reply]</code> / <code>[diana-at]</code> → 发送时守卫。</p></div></li>
+          <li class="q"><div class="flow-node"><strong>这一步已经发过？</strong><p>按指纹记在本轮的投递账本里。</p></div><div class="flow-exits"><span class="flow-exit go"><b>是</b>跳过，复用原消息 ID</span></div></li>
+          <li><div class="flow-node"><strong>租用媒体分享链接</strong><p>每次重试前续期到至少十分钟以后。</p></div></li>
+          <li class="q"><div class="flow-node"><strong>executeOutboundCall</strong></div><div class="flow-exits"><span class="flow-exit"><b>被踢 / 被禁言</b>放弃</span><span class="flow-exit loop"><b>连接离线</b>快速失败，入站队列稍后整轮重试</span><span class="flow-exit loop"><b>群发送失败</b>文字、媒体两条通道各自指数退避，窗口用尽后丢弃冷却</span></div></li>
+          <li class="end"><div class="flow-node"><strong>成功</strong><p>记 <code>Acknowledged</code>、写入聊天历史、记下消息 ID，暂停「正在输入」。</p></div></li>
+        </ol>
+        <p>聊天回复在单次调用内只发一次；平台因媒体校验拒收时会短暂重试，连同第一次最多 3 次。<code>send_retry_attempts</code> 用于定时推送等非回复发送。入站队列整轮重试时，已经发出去的分条靠投递账本跳过，不会重复发。</p>
+      </section>
+
+      <section class="section searchable" id="agent">
+        <div class="section-heading"><p class="eyebrow">03 Agent 运行</p><h2>一步只做一件事</h2></div>
+        <p>机器人开了 Agent 且对方的关系允许用工具时，这一轮由 <code>Runner.Run</code> 生成：模型每一步要么调用一个工具，要么用 <code>agent_finalize</code> 收尾。</p>
+        <ol class="flow">
+          <li><div class="flow-node"><strong>组装配置</strong><p>默认 12 步（上限 16）；主人 16 步、最终回复 20000 字，其他人 8000 字。单工具 60 秒，收尾预留 20 秒，协议修复 3 次。</p></div></li>
+          <li><div class="flow-node"><strong>组装工具</strong><p>核心工具每轮直接可用；其余只在目录里列一行，先 <code>tools_load</code> 再经 <code>tools_execute</code> 调用。按权限白名单与机器人 / 群级扩展开关裁剪，无权工具回答「没有权限」而不是「不存在」。群聊加载过的工具随群会话快照跨轮恢复。</p></div></li>
+          <li><div class="flow-node"><strong>Runner.Run 启动</strong><p>协议提示词与延迟工具目录；按触发词注入 Skill；可信时钟；上一轮被迫收尾时附上续跑档案。</p></div></li>
+          <li class="q"><div class="flow-node"><strong>还有步数，离截止还够收尾？</strong></div><div class="flow-exits"><span class="flow-exit go"><b>否</b>强制收尾</span></div></li>
+          <li class="q"><div class="flow-node"><strong>调用模型</strong><p>规划截止 = 请求截止 − 收尾预留（配置值与剩余时间三分之一取小）。</p></div><div class="flow-exits"><span class="flow-exit go"><b>规划截止到了</b>强制收尾</span><span class="flow-exit"><b>其他错误</b>交给回复流程的错误处理</span><span class="flow-exit go"><b>纯文本 / agent_finalize</b>收尾校验</span></div></li>
+          <li><div class="flow-node"><strong>只执行一个工具调用</strong><p>同批其他调用回「未执行」，让每一步都能看到上一步的结果。</p></div></li>
+          <li class="q"><div class="flow-node"><strong>执行前检查</strong><p>延迟工具须先加载并过 schema 校验 → 未知或无权 → 参数纠正 → 扩展变更须带确认码 → 与上一步完全相同则跳过 → 配额（<code>web_search</code> 3 次，自省 6 次、<code>tools_load</code> 4 次不占步数）。</p></div><div class="flow-exits"><span class="flow-exit loop"><b>不通过</b>计一次协议修复，回到步数判断；修复用完则强制收尾</span></div></li>
+          <li><div class="flow-node"><strong>执行工具</strong><p>单工具超时与输出预算；<code>run_command</code> 先过命令白名单，再按配置放进沙箱；MCP 另有 60 秒超时。</p></div></li>
+          <li><div class="flow-node"><strong>整理结果</strong><p>凭据打码、超长截断；搜索和渲染结果记入证据账本；附上剩余预算。工具报错不致命，变成观察结果交回模型。</p></div><div class="flow-exits"><span class="flow-exit loop"><b>下一步</b>回到步数判断</span></div></li>
+        </ol>
+        <h3>收尾校验</h3>
+        <ol class="flow">
+          <li class="q"><div class="flow-node"><strong>silent = true？</strong></div><div class="flow-exits"><span class="flow-exit"><b>是，没有出图任务排队</b>这轮不回</span><span class="flow-exit loop"><b>有出图任务排队</b>拒绝静默，计一次修复</span></div></li>
+          <li class="q"><div class="flow-node"><strong>正文里有真实换行？</strong><p>分条必须用 <code>[diana-msg]</code> / <code>[diana-line]</code>。</p></div><div class="flow-exits"><span class="flow-exit loop"><b>有</b>计一次修复</span></div></li>
+          <li class="q"><div class="flow-node"><strong>要求证据却没搜？出现本轮没取回、对话里也没出现过的链接？</strong></div><div class="flow-exits"><span class="flow-exit loop"><b>是</b>计一次修复</span></div></li>
+          <li class="q"><div class="flow-node"><strong>泄露内部协议词？正文为空？</strong></div><div class="flow-exits"><span class="flow-exit loop"><b>是</b>计一次修复</span></div></li>
+          <li class="end"><div class="flow-node"><strong>返回回复</strong></div></li>
+        </ol>
+        <p><strong>强制收尾</strong>发生在步数用完、修复用完、收尾预留时间到了、证据要求没满足时：追加收尾指令和证据账本摘要，只开放 <code>agent_finalize</code> 并强制调用。结束后，被迫收尾时存下最多 12 条步骤摘要作续跑档案（10 分钟有效）；最近 8 次工具调用保留 30 分钟注入后续轮次。</p>
+        <div class="tool-grid pairs">
+          <article><h3>中途说一句 say</h3><p>一轮最多 3 次、每次 80 字以内、不能换行，直接发出去并重新点亮「正在输入」。说过之后这一轮不再被合并重来，也不过发送前审核。</p></article>
+          <article><h3>子任务 subtask</h3><p>同步的、没有工具也没有历史的一次模型调用，每条回复最多 4 次、材料不超过 6000 字、90 秒超时。</p></article>
+          <article><h3>上下文超限</h3><p>依次把最长的文本消息摘要（最多 2 次）、把图片换成描述、缩小图片、最后丢掉图片。</p></article>
+          <article><h3>模型报错</h3><p>Runner 不重试。provider 栈里瞬时错误 700 毫秒后重试一次，上下文超长减半重试最多 4 次，再按配置顺序切到下一个模型配置，已完成的工具步骤不丢。</p></article>
+        </div>
+      </section>
+
+      <section class="section searchable" id="browser">
+        <div class="section-heading"><p class="eyebrow">04 浏览器机制</p><h2>这一轮用哪个浏览器</h2></div>
+        <p>一次性无头渲染 <code>browser_render</code> 所有人可用、始终注册；带登录态的交互式浏览器只有主人能驱动，每轮只注册一套，模型不会同时拿到两套再自己去猜。</p>
+        <ol class="flow">
+          <li class="q"><div class="flow-node"><strong>对方是主人？</strong></div><div class="flow-exits"><span class="flow-exit"><b>否</b>只有 <code>browser_render</code></span></div></li>
+          <li><div class="flow-node"><strong>按优先级选来源</strong><p><code>browsersource.Pick</code>，默认内置在前、扩展在后，取第一个用得上的。</p></div></li>
+          <li><div class="flow-fork">
+            <div class="flow-branch"><p class="flow-branch-label">内置浏览器：已勾选且找得到 Chrome</p><ol class="flow">
+              <li class="q"><div class="flow-node"><strong>这台机器人关掉了内置浏览器？</strong><p><code>agent_browser_box_disabled</code></p></div><div class="flow-exits"><span class="flow-exit"><b>是</b><code>browser_*</code> 改接外部 CDP 地址</span></div></li>
+              <li class="end"><div class="flow-node"><strong>接这台机器人的内置浏览器</strong><p>注册 <code>browser_*</code>。</p></div></li>
+            </ol></div>
+            <div class="flow-branch"><p class="flow-branch-label">扩展：总开关开、有连接、没人接管</p><ol class="flow">
+              <li class="q"><div class="flow-node"><strong>这台机器人开了扩展控制？</strong><p><code>agent_browser_control_enabled</code>，默认关。</p></div><div class="flow-exits"><span class="flow-exit"><b>否</b>同「都用不上」，不会退回内置</span></div></li>
+              <li class="end"><div class="flow-node"><strong>接你的 Chrome</strong><p>注册 <code>browser_ext_*</code>。</p></div></li>
+            </ol></div>
+            <div class="flow-branch"><p class="flow-branch-label">都用不上</p><ol class="flow">
+              <li class="q"><div class="flow-node"><strong>这台机器人改过外部 CDP 地址？</strong><p>不是默认的 <code>127.0.0.1:9222</code>。</p></div><div class="flow-exits"><span class="flow-exit"><b>否</b>没有交互式浏览器</span></div></li>
+              <li class="end"><div class="flow-node"><strong>接那个 CDP 地址</strong><p>注册 <code>browser_*</code>。</p></div></li>
+            </ol></div>
+          </div></li>
+        </ol>
+        <div class="callout warn"><strong>内置浏览器被接管时不会切到扩展</strong><p>内置浏览器的可用性只看「开着且找得到 Chrome」，接管期间 <code>browser_*</code> 直接报「用户正在人工接管内置浏览器」。扩展正好相反：所有连接都在接管时算作用不上，会轮到下一个来源。</p></div>
+      </section>
+
+      <section class="section searchable" id="browser-render">
+        <div class="section-heading"><p class="eyebrow">04 浏览器机制</p><h2>一次性无头渲染</h2></div>
+        <ol class="flow">
+          <li><div class="flow-node"><strong>browser_render 或网页渲染插件</strong><p>插件每条消息最多渲染 2 个链接，正文以「不可信内容」块注入上下文。</p></div></li>
+          <li class="q"><div class="flow-node"><strong>公网地址校验</strong><p>只允许 http/https，拒绝内网、回环、链路本地、localhost、<code>.local</code> 等地址。</p></div><div class="flow-exits"><span class="flow-exit"><b>不通过</b>拒绝</span><span class="flow-exit go"><b>GitHub /releases 链接</b>先走官方 API</span></div></li>
+          <li class="q"><div class="flow-node"><strong>领名额</strong><p>默认同时 3 个，最多排队 20 秒，排队时间不计入超时。</p></div><div class="flow-exits"><span class="flow-exit"><b>排不上</b>同时运行的一次性浏览器已达上限</span></div></li>
+          <li><div class="flow-node"><strong>起 Chrome</strong><p>临时 profile（0700），HOME / XDG 指到临时目录，屏蔽本机域名解析。</p></div></li>
+          <li><div class="flow-node"><strong>导航</strong><p>每个主文档请求都重新校验地址；触发下载就中止。</p></div></li>
+          <li class="q"><div class="flow-node"><strong>等页面稳定</strong><p>DOM、网络、定时器都安静下来；默认 25 秒，最多 60 秒。</p></div><div class="flow-exits"><span class="flow-exit go"><b>超时</b>取最后一次非空快照，一点内容都没有才报错</span></div></li>
+          <li class="end"><div class="flow-node"><strong>返回网址、标题、正文</strong><p>结束进程，删掉临时目录。</p></div></li>
+        </ol>
+        <ul class="check-list">
+          <li>只有主文档请求被拦截重验，页面里的 XHR、图片等子资源不逐个校验地址。</li>
+          <li>HTML 转图片：简单页面走 Chrome <code>--screenshot</code>（产物上限 8 MiB，占名额）；带脚本或动画的走 <code>html_capture</code>，页面放在假域名 <code>diana-render.invalid</code> 下，请求要么本地应答要么被拦，另有严格 CSP 和虚拟时钟，最多 600 帧、4096 像素，目前不占名额。</li>
+          <li>找浏览器：配置路径 → <code>DIANA_HEADLESS_BROWSER_EXECUTABLE</code> → <code>DIANA_AGENT_BROWSER_EXECUTABLE</code> → 常见安装位置（含下载来的 Chrome for Testing）→ <code>PATH</code>。安装先用系统包管理器，glibc Linux 上装不了时下载 Chrome for Testing 到 <code>DIANA_BROWSER_DIR</code>。</li>
+        </ul>
+      </section>
+
+      <section class="section searchable" id="browser-interactive">
+        <div class="section-heading"><p class="eyebrow">04 浏览器机制</p><h2>交互式浏览器</h2></div>
+        <ol class="flow">
+          <li><div class="flow-node"><strong>browser_open</strong><p>只检查 http/https 或 <code>about:blank</code>，加上内置浏览器的 <code>denied_hosts</code>。</p></div></li>
+          <li class="q"><div class="flow-node"><strong>本会话有当前标签页，且没要 new_tab？</strong></div><div class="flow-exits"><span class="flow-exit go"><b>有</b>沿用当前页</span></div></li>
+          <li class="q"><div class="flow-node"><strong>机器人自己开的标签页已到 8 个？</strong><p>标签页被用过后 10 分钟内算作那个会话占用。</p></div><div class="flow-exits"><span class="flow-exit go"><b>有空闲页</b>关掉最久没用的一页</span><span class="flow-exit"><b>全被占着</b>拒绝，让模型改用当前页或先关一页</span></div></li>
+          <li><div class="flow-node"><strong>导航</strong><p>按 <code>agent_browser_timeout_ms</code>（默认 15 秒）计时，超时 <code>stopLoading</code> 并报错；正文迟迟传不完的等 8 秒后停止加载。</p></div></li>
+          <li><div class="flow-node"><strong>动作</strong><p>click / type / key / wait / eval / screenshot…；点击和按键用真实输入事件，被遮挡时退回 <code>el.click()</code>；<code>browser_eval</code> 返回值里的 Cookie 打码。</p></div><div class="flow-exits"><span class="flow-exit loop"><b>页面卡死或崩溃</b>终止脚本 → 重置为 about:blank → 关闭标签页</span></div></li>
+          <li class="end"><div class="flow-node"><strong>返回页面状态</strong><p>截图存在工作目录 <code>.agent-browser/</code>（每会话一个文件，7 天清理），同时作为图片附给模型；每次调用写一条 <code>browser_action</code> 日志。</p></div></li>
+        </ol>
+        <div class="table-wrap"><table><thead><tr><th></th><th>内置浏览器</th><th>外部 CDP</th><th>扩展（你的 Chrome）</th></tr></thead><tbody>
+          <tr><td>工具</td><td><code>browser_*</code></td><td><code>browser_*</code></td><td><code>browser_ext_*</code></td></tr>
+          <tr><td>登录态</td><td>在这个浏览器里自己登的，按机器人隔离</td><td>那个 Chrome 自己的</td><td>你日常浏览器的，Diana 不碰 Cookie</td></tr>
+          <tr><td>网络边界</td><td>scheme 检查 + <code>denied_hosts</code>，能访问局域网</td><td>scheme 检查</td><td>站点白名单 / 黑名单、读写档位、限速</td></tr>
+          <tr><td>接管</td><td>点画面自动接管，5 分钟无输入自动交还</td><td>—</td><td>扩展或 WebUI 里切换</td></tr>
+          <tr><td>截图</td><td>有</td><td>有</td><td>没有（避免扩大扩展权限）</td></tr>
+        </tbody></table></div>
+        <p>进程细节（按需启动、崩溃 3 秒后重启、Xvfb、实时画面）见仓库的 <a href="https://github.com/SuInk/Diana/blob/main/docs/browser-builtin.md">内置浏览器</a>，扩展的授权模型见 <a href="https://github.com/SuInk/Diana/blob/main/docs/browser-control.md">浏览器控制扩展</a>，Docker 与 seccomp 见 <a href="https://github.com/SuInk/Diana/blob/main/docs/browser-rendering.md">浏览器依赖</a>。</p>
+      </section>
+
+      <section class="section searchable" id="review">
+        <div class="section-heading"><p class="eyebrow">05 发送前审核</p><h2>发出去之前的检查</h2></div>
+        <p>回复生成出来之后、真正发出去之前，还有一串检查可以丢弃、改写或推迟它。其中只有一次是专门的审核模型调用，其余是程序检查和语义去重。</p>
+        <ol class="flow">
+          <li class="q"><div class="flow-node"><strong>带了依赖图，模型却说看不到图？</strong></div><div class="flow-exits"><span class="flow-exit loop"><b>是，且还没产生外部副作用</b>改用图片描述重新生成一次</span></div></li>
+          <li class="q"><div class="flow-node"><strong>模型选择沉默？</strong></div><div class="flow-exits"><span class="flow-exit"><b>可以沉默</b><code>ignored_model_silent</code></span><span class="flow-exit go"><b>已有副作用 / 插件事实结果 / 出图排队</b>不许沉默，按空回复兜底</span></div></li>
+          <li class="q"><div class="flow-node"><strong>闲聊回复为空或被标记拒答？</strong></div><div class="flow-exits"><span class="flow-exit"><b>是</b><code>ignored_no_natural_reply</code></span></div></li>
+          <li class="q"><div class="flow-node"><strong>暂停响应 / 拒答标记？</strong><p><code>[[DIANA_IGNORE_CURRENT_USER_30M]]</code> / <code>[[DIANA_REFUSE_CURRENT]]</code></p></div><div class="flow-exits"><span class="flow-exit"><b>暂停且正文为空</b>发一句人设内提示后沉默</span><span class="flow-exit go"><b>拒答且正文为空</b>换成固定拒答文本</span></div></li>
+          <li class="q"><div class="flow-node"><strong>和本轮 say 说过的某句相同？</strong></div><div class="flow-exits"><span class="flow-exit"><b>是</b>不发第二次</span></div></li>
+          <li><div class="flow-node"><strong>并行：语义去重 + 审核模型</strong><p>两者输入基本相同，同时开始省几秒；去重改写了回复时，审核按新文本补审一次。</p></div></li>
+          <li class="q"><div class="flow-node"><strong>语义去重</strong><p>会话 2 分钟内发过回复才运行；置信度低于 0.9、出错或超时一律放行。</p></div><div class="flow-exits"><span class="flow-exit"><b>drop，且是主动回复</b><code>ignored_duplicate_reply</code></span><span class="flow-exit go"><b>drop，直接回复</b>照常发（被点名不能装死）</span><span class="flow-exit loop"><b>rewrite</b>改写后重新整理格式</span></div></li>
+          <li class="q"><div class="flow-node"><strong>应用审核结论</strong><p>见下一节。</p></div><div class="flow-exits"><span class="flow-exit"><b>拦下</b>对应的 <code>ignored_*</code> 或公开提示</span></div></li>
+          <li class="q"><div class="flow-node"><strong>群里 10 分钟内有人叫停，且这是主动回复？</strong></div><div class="flow-exits"><span class="flow-exit"><b>是</b><code>ignored_stop_requested</code></span></div></li>
+          <li class="end"><div class="flow-node"><strong>进入发送</strong><p>每条消息再过发送时守卫。</p></div></li>
+        </ol>
+      </section>
+
+      <section class="section searchable" id="audit">
+        <div class="section-heading"><p class="eyebrow">05 发送前审核</p><h2>审核模型</h2></div>
+        <p>审核只有开和关两档（默认开，群配置可单独覆盖）。一次调用同时判断下面几项，哪一项都不需要时整个跳过。结论按这个顺序落地：</p>
+        <ol class="flow">
+          <li class="q"><div class="flow-node"><strong>审核调用失败？</strong></div><div class="flow-exits"><span class="flow-exit"><b>主动回复</b>沉默：拿不准就别插话</span><span class="flow-exit go"><b>直接回复</b>放行：模型不可用时集体哑火更糟</span></div></li>
+          <li class="q"><div class="flow-node"><strong>私聊收尾 / 叫停</strong><p>私聊里机器人上一条发出 3 分钟内才判；只认置信度 ≥ 0.90 的结论。</p></div><div class="flow-exits"><span class="flow-exit"><b>叫停</b><code>ignored_stop_requested</code>，非主人暂停响应 30 分钟</span><span class="flow-exit"><b>道别超过宽限次数</b><code>ignored_conversation_closed</code></span></div></li>
+          <li><div class="flow-node"><strong>群里叫停</strong><p>群里 @、引用、点名机器人的消息顺带判；判出来给本群记 10 分钟窗口，<strong>这一条照常发</strong>。</p></div></li>
+          <li class="q"><div class="flow-node"><strong>空转</strong><p>机器人互聊检测默认开。没内容或没目的时降低回复欲望。</p></div><div class="flow-exits"><span class="flow-exit"><b>复读自己</b><code>ignored_self_repeat</code></span><span class="flow-exit"><b>30 分钟内判中 3 次，对方不是主人</b>暂停并提示 <code>ignored_ai_reply_loop</code></span></div></li>
+          <li class="q"><div class="flow-node"><strong>账号安全分 &lt; 0.10？</strong><p>刻意压低：疑似风险仍放行，只有接近确定的不安全结论才拦。</p></div><div class="flow-exits"><span class="flow-exit"><b>是</b>改发中性公开提示（可按人设改写）</span></div></li>
+          <li class="q"><div class="flow-node"><strong>表达质量（只对主动回复）</strong><p>自相矛盾、答非所问、被截断、有害建议，或 <code>send_confidence</code> 低于 <code>proactive_reply_threshold</code>。</p></div><div class="flow-exits"><span class="flow-exit"><b>不过关</b><code>ignored_proactive_reply_quality</code></span></div></li>
+          <li class="end"><div class="flow-node"><strong>放行</strong><p>判为拒答（置信度 ≥ 0.90）的照常发，30 分钟内累计 4 次拒答后暂停响应。</p></div></li>
+        </ol>
+        <p>顺序是有意的：对方都说「别回了」，再纠结这条够不够准确没有意义，所以收尾排最前。质量门槛只给主动回复——被点名在说话却因为一个打分沉默，对方看到的就是装死。插件直接给出的回复也过同一次审核，但不做语义去重。</p>
+        <h3>发送时守卫</h3>
+        <div class="table-wrap"><table><thead><tr><th>守卫</th><th>条件</th><th>结果</th></tr></thead><tbody>
+          <tr><td>凭据打码</td><td>文本里出现已登记的凭据</td><td>替换成打码后的文本</td></tr>
+          <tr><td>提及与引用标记</td><td><code>[diana-at]</code> / <code>[diana-reply]</code> 格式不对或指向不存在的消息</td><td>改写或去掉</td></tr>
+          <tr><td>群不可用</td><td>已确认退群或群被禁用</td><td><code>ignored_unavailable_group</code></td></tr>
+          <tr><td>暂停响应</td><td>对这个人的暂停期内</td><td><code>ignored_response_suppression</code></td></tr>
+          <tr><td>补充消息</td><td>同一轮里对方补了一句，被合并进来</td><td>这一版作废，重新生成</td></tr>
+          <tr><td>被新消息取代</td><td>群里同一人又直接叫了机器人；消息已被合并进别的轮次；主动接话批次已变</td><td><code>superseded_follow_up</code> / <code>superseded_reply_turn</code> / <code>superseded_proactive</code></td></tr>
+          <tr><td>幂等</td><td>这一步已经发过</td><td>跳过，复用原消息 ID</td></tr>
+          <tr><td>禁言 / 离线 / 退避</td><td>被禁言；连接离线；群发送退避中</td><td>禁言丢弃；离线交给队列重试；退避等待，窗口用尽后丢弃</td></tr>
+        </tbody></table></div>
+        <p>打断和取代只在还没开始分条发送、也没产生外部副作用时生效；已经发出第一条的回复会发完。身份脱敏不是发送时检查：真实 ID 在发给模型时就换成了别名。</p>
+      </section>
+
+      <section class="section searchable" id="outcomes">
+        <div class="section-heading"><p class="eyebrow">排查</p><h2>结果代码在哪一段</h2></div>
+        <p>每条消息无论回没回，最后都会写一条结果：<code>decision</code> 是结果代码，<code>decision_reason</code> 是给人看的原因。排查时先看它停在哪一段，再回到对应章节。</p>
+        <div class="table-wrap"><table><thead><tr><th>阶段</th><th>结果代码</th></tr></thead><tbody>
+          <tr><td><a href="#trigger">入站队列</a></td><td><code>ignored_stale</code> <code>backfill_history_only</code> <code>ignored_private_admission</code> <code>dropped_retries_exhausted</code></td></tr>
+          <tr><td><a href="#gates">确定性门禁</a></td><td><code>ignored_policy</code> <code>ignored_user_blocked</code> <code>ignored_bot_muted</code> <code>ignored_model_quota</code> <code>ignored_member_level</code> <code>ignored_response_suppression</code> <code>ignored_video</code> <code>ignored_reply_damping</code> <code>ignored_bot_message</code></td></tr>
+          <tr><td><a href="#proactive">接话评分</a></td><td><code>ignored</code> <code>replied_proactive</code></td></tr>
+          <tr><td><a href="#concurrency">并发与合并</a></td><td><code>merged_into_reply</code> <code>merged_into_backlog_turn</code> <code>superseded_follow_up</code> <code>superseded_reply_turn</code> <code>superseded_proactive</code></td></tr>
+          <tr><td><a href="#review">发送前审核</a></td><td><code>ignored_model_silent</code> <code>ignored_no_natural_reply</code> <code>ignored_duplicate_reply</code> <code>ignored_proactive_reply_quality</code> <code>ignored_stop_requested</code> <code>ignored_conversation_closed</code> <code>ignored_self_repeat</code> <code>ignored_ai_reply_loop</code></td></tr>
+          <tr><td><a href="#delivery">发送</a></td><td><code>ignored_unavailable_group</code> <code>dropped_send_rejected</code></td></tr>
+        </tbody></table></div>
+        <h3>代码位置</h3>
+        <div class="table-wrap"><table><thead><tr><th>环节</th><th>文件</th></tr></thead><tbody>
+          <tr><td>入站与补拉</td><td><code>model/assistant/runtime_inbound.go</code> <code>inbound_queue.go</code> <code>inbound_gap.go</code> <code>inbound_retry.go</code> <code>inbound_backlog_merge.go</code></td></tr>
+          <tr><td>门禁与接话</td><td><code>model/assistant/runtime.go</code>（<code>routeMessageEvent</code>、<code>routeProactiveReplyBatch</code>）<code>participation_single_score.go</code> <code>direct_reply_merge.go</code> <code>reply_interrupt.go</code> <code>group_stop.go</code></td></tr>
+          <tr><td>回复与发送</td><td><code>model/assistant/runtime.go</code>（<code>replyTo</code>、<code>sendDecorated</code>）<code>reply_compression.go</code> <code>runtime_outbound.go</code> <code>group_send_guard.go</code> <code>outbound_idempotency.go</code></td></tr>
+          <tr><td>Agent</td><td><code>model/agent/runner.go</code> <code>finalize.go</code> <code>deferred_tools.go</code> <code>claim_evidence.go</code>；<code>model/assistant/agent_scope.go</code></td></tr>
+          <tr><td>浏览器</td><td><code>model/browsersource/</code> <code>model/browserbox/</code> <code>model/browserctl/</code> <code>model/agent/headless_browser*.go</code> <code>browser_tools.go</code> <code>html_capture.go</code></td></tr>
+          <tr><td>发送前审核</td><td><code>model/assistant/proactive_reply_quality.go</code> <code>reply_semantic_gate.go</code> <code>private_closing.go</code> <code>reply_suppression.go</code> <code>outbound_forward_gate.go</code></td></tr>
+          <tr><td>结果记录</td><td><code>model/storage/inbound_queue.go</code> <code>event_audit.go</code></td></tr>
+        </tbody></table></div>
+      </section>
+
+      <nav class="page-nav" aria-label="文档分页"><a href="./implementation"><small>上一页</small><strong>← 实现</strong></a><a href="./operations"><small>下一页</small><strong>运维 →</strong></a></nav>
+      <div data-docs-footer></div>
+    </main></div>
+    <script src="./icons.js?v=20260847"></script>
+    <script src="./app.js?v=20260926" defer></script>
+  </body>
+</html>

@@ -53,8 +53,8 @@ const (
 //
 // 这里没有截图。浏览器的 captureVisibleTab 要么要 <all_urls>、要么要 activeTab
 // 这种「当前这一页随便读」的权限，比「只授权白名单站点」宽得多；为了一张图把扩展
-// 的权限放大到全网不值得。要页面内容用 page.read，要出图用 Diana 自己的一次性
-// 无头浏览器（browser_screenshot），那条链路不碰用户的登录态。
+// 的权限放大到全网不值得。要页面内容用 page.read；要截图用 Diana 内置浏览器（或
+// 机器人配置的外部 CDP 浏览器）的 browser_screenshot，那条链路不碰用户的 Chrome。
 const (
 	OpTabsList  = "tabs.list"
 	OpPageRead  = "page.read"

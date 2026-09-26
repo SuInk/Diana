@@ -14,7 +14,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
-    <link rel="stylesheet" href="../styles.css?v=20260847" />
+    <link rel="stylesheet" href="../styles.css?v=20260926" />
     <script src="../theme.js?v=20260847"></script>
   </head>
   <body data-page="implementation">
@@ -46,15 +46,17 @@
       <section class="section searchable" id="message-flow">
         <div class="section-heading"><p class="eyebrow">Pipeline</p><h2>How one message decides between replying and staying quiet</h2></div>
         <ol class="timeline">
-          <li><strong>Receive and normalise</strong><p>The platform adapter turns text, mentions, quotes, images, files and sender details into a single <code>MessageEvent</code>.</p></li>
-          <li><strong>Enrich and cache</strong><p>Quotes, forwards and media references are resolved, and short-lived platform images are written into the local history media cache.</p></li>
-          <li><strong>Deterministic gates</strong><p>Checks whether the bot and group are enabled, the reply window, muted users, member level and bot-to-bot suppression.</p></li>
-          <li><strong>Trigger detection</strong><p>Direct messages are handled directly; groups look for explicit mentions, quotes, trigger words and plugin commands. An explicit mention outranks a quote.</p></li>
-          <li><strong>Semantic routing for unprompted replies</strong><p>Ordinary group messages that were not directly triggered are judged immediately by the intent model, waiting at most 60 seconds so nothing queues forever.</p></li>
-          <li><strong>Assemble context</strong><p>Combines the system prompt, relationships, long-term memory, recent history, images and tool evidence, trimmed to the token budget.</p></li>
-          <li><strong>Model and tool loop</strong><p>Selects the chat or vision role; the agent runs the permitted tools and records every step.</p></li>
-          <li><strong>Send and audit</strong><p>The reply goes back to the source channel, and the detailed reason, send result, latency and tokens are all persisted.</p></li>
+          <li><strong>Receive and enqueue</strong><p>The platform adapter turns text, mentions, quotes, images, files and sender details into a single <code>MessageEvent</code>, which is written to a SQLite inbound queue before processing, so a crash or restart does not lose it; failures are retried with backoff.</p></li>
+          <li><strong>Backfill after reconnect</strong><p>After a reconnect Diana pulls the history it missed and checks group seq numbers for gaps. Only the newest few messages per session that would have triggered a reply directly enter the reply path; the rest only fill in history.</p></li>
+          <li><strong>Deterministic gates</strong><p>Checks group availability, whether the bot and group are enabled, mutes, model quota, member level, reply suppression and bot-to-bot suppression, recording the reason at every step.</p></li>
+          <li><strong>Trigger detection</strong><p>Direct messages are handled directly; groups look for explicit mentions, quotes, aliases, links and plugin commands. A follow-up or correction the same person sends while a reply is generating is merged into it.</p></li>
+          <li><strong>Unprompted reply rating</strong><p>Group messages that were not directly triggered are rated by the router model — "is this addressed to the bot?" plus a 0–1 chat score — then passed by chat level, cooldown and the bot's share of recent messages. Errors, timeouts (60 seconds) and unparsable output all mean silence.</p></li>
+          <li><strong>Assemble context</strong><p>The stable system prompt and history come first; memory, tool evidence and other per-turn content sit after the cache breakpoint, all trimmed to the token budget.</p></li>
+          <li><strong>Model and agent loop</strong><p>The agent runs one tool per step within step, per-tool timeout and finalization-reserve limits; when a limit is hit it is forced to finalize, and the reply is checked for line breaks, evidence and links before it returns.</p></li>
+          <li><strong>Pre-send review</strong><p>Model silence, semantic dedup, one audit model call (private closing, group stop, loops, account safety, unprompted reply quality), and send-time checks for interrupts, idempotency and pauses.</p></li>
+          <li><strong>Send and record</strong><p>Replies go back to the source channel in chunks, with only the first quoting and mentioning; group sends back off on separate text and media lanes. Outcome codes, reasons, delivery stages, latency and tokens are all persisted.</p></li>
         </ol>
+        <p>Flowcharts, conditions and outcome codes for every step are on the <a href="./pipeline">Pipeline</a> page.</p>
       </section>
 
       <section class="section searchable" id="memory">
@@ -90,10 +92,10 @@
         </tbody></table></div>
       </section>
 
-      <nav class="page-nav" aria-label="Pagination"><a href="./configuration"><small>Previous</small><strong>← Configure</strong></a><a href="./operations"><small>Next</small><strong>Operate →</strong></a></nav>
+      <nav class="page-nav" aria-label="Pagination"><a href="./configuration"><small>Previous</small><strong>← Configure</strong></a><a href="./pipeline"><small>Next</small><strong>Pipeline →</strong></a></nav>
       <div data-docs-footer></div>
     </main></div>
     <script src="../icons.js?v=20260847"></script>
-    <script src="../app.js?v=20260847" defer></script>
+    <script src="../app.js?v=20260926" defer></script>
   </body>
 </html>

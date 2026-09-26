@@ -7,5 +7,5 @@ package docs
 
 import "embed"
 
-//go:embed *.md configuration.html implementation.html operations.html
+//go:embed *.md configuration.html implementation.html pipeline.html operations.html
 var FS embed.FS
