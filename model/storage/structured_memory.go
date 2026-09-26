@@ -256,6 +256,43 @@ WHERE id = ? AND status = 'processing' AND lease_owner = ?
 	return err
 }
 
+// PruneMemoryJobs 删掉早于 completedBefore 完成的记忆任务，分批删免得长时间占写锁。
+//
+// 事件任务的 payload 是整条消息的 JSON，摘要任务是整批消息的 JSON，做完之后没有任何
+// 地方再读它们，却和消息表一样只涨不落，量上能和消息表本身相当。完成的任务只剩一个
+// 用处：同一条消息在短时间内重复入队时靠主键去重。那种重放只发生在重试和断线回补的
+// 几分钟里，保留几天足够覆盖。未完成的任务一条都不动。
+func (s *SQLiteStore) PruneMemoryJobs(ctx context.Context, completedBefore time.Time) (int64, error) {
+	if s == nil || s.db == nil || completedBefore.IsZero() {
+		return 0, nil
+	}
+	cutoff := completedBefore.UTC().UnixNano()
+	var deleted int64
+	for {
+		result, err := s.db.ExecContext(ctx, `DELETE FROM memory_jobs WHERE id IN (
+SELECT id FROM memory_jobs WHERE status = 'done' AND completed_at < ? LIMIT 500)`, cutoff)
+		if err != nil {
+			return deleted, fmt.Errorf("prune memory jobs: %w", err)
+		}
+		count, err := result.RowsAffected()
+		if err != nil {
+			return deleted, err
+		}
+		deleted += count
+		if count < 500 {
+			return deleted, nil
+		}
+		// 批次之间把写连接让给业务写入。
+		timer := time.NewTimer(10 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return deleted, ctx.Err()
+		case <-timer.C:
+		}
+	}
+}
+
 func (s *SQLiteStore) RetryMemoryJob(ctx context.Context, id string, leaseOwner string, availableAt time.Time, lastError string) error {
 	defer s.observeStorage(ctx, "RetryMemoryJob", "write")()
 	if s == nil || s.db == nil {

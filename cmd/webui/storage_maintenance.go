@@ -72,6 +72,15 @@ func startStorageMaintenance(parent context.Context, store *storage.SQLiteStore,
 				log.Printf("storage maintenance: deleted %d expired relationship evaluations", count)
 			}
 			stopEval()
+			// 做完的长期记忆提取任务只留几天用来给重放去重，payload 是整条消息的副本，
+			// 不清会跟消息表一起只涨不落。
+			jobCtx, stopJobs := context.WithTimeout(ctx, 2*time.Minute)
+			if count, err := store.PruneMemoryJobs(jobCtx, now.Add(-memoryJobRetention)); err != nil && ctx.Err() == nil {
+				log.Printf("storage maintenance: prune memory jobs: %v", err)
+			} else if count > 0 {
+				log.Printf("storage maintenance: deleted %d completed memory jobs", count)
+			}
+			stopJobs()
 			runCtx, stop := context.WithTimeout(ctx, 2*time.Minute)
 			count, err := store.PruneLogs(runCtx,
 				logRetentionCutoff(now, cfg.DebugLogRetentionDays, 7),
@@ -91,6 +100,10 @@ func startStorageMaintenance(parent context.Context, store *storage.SQLiteStore,
 	}()
 	return func() { cancel(); <-done }
 }
+
+// memoryJobRetention 是做完的记忆任务保留多久。重试和断线回补的重放都在几分钟内，
+// 七天绰绰有余。
+const memoryJobRetention = 7 * 24 * time.Hour
 
 func logRetentionCutoff(now time.Time, days, fallback int) time.Time {
 	if days < 0 {

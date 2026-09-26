@@ -290,7 +290,9 @@ CREATE TABLE IF NOT EXISTS repository_issue_drafts (
 CREATE INDEX IF NOT EXISTS idx_message_events_session_time ON message_events(session, event_time DESC, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_message_events_kind_group_time ON message_events(kind, group_id, event_time DESC, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_message_events_message_id ON message_events(message_id, kind);
-CREATE INDEX IF NOT EXISTS idx_message_events_text ON message_events(text);
+-- 正文索引没有任何查询用得上：历史检索走 FTS5，回退路径是 LOWER(...) LIKE '%词%'，
+-- 两条都不走 B 树。它只是把每条消息的正文在库里再存一遍，还要跟着每次写入维护。
+DROP INDEX IF EXISTS idx_message_events_text;
 CREATE INDEX IF NOT EXISTS idx_message_events_user_time ON message_events(user_id, event_time DESC);
 CREATE INDEX IF NOT EXISTS idx_image_descriptions_source_message ON image_descriptions(source_session, source_message_id);
 CREATE INDEX IF NOT EXISTS idx_voice_transcripts_audio ON voice_transcripts(audio_sha256, created_at DESC);
@@ -321,6 +323,10 @@ CREATE INDEX IF NOT EXISTS idx_inbound_events_session_time ON inbound_events(ses
 CREATE INDEX IF NOT EXISTS idx_inbound_events_group_time ON inbound_events(group_id, event_time DESC);
 CREATE INDEX IF NOT EXISTS idx_inbound_events_time ON inbound_events(event_time DESC, created_at DESC, id DESC);
 CREATE INDEX IF NOT EXISTS idx_inbound_events_outbound_message ON inbound_events(outbound_message_id) WHERE outbound_message_id IS NOT NULL;
+-- 发送前查「这轮有没有被追发并走」、追发合并时打标记，都按 message_id + kind 找事件，
+-- 而且都跑在唯一那条写连接上。没有这个索引就是整表扫（连 payload 一起读），库大了
+-- 以后一次就能吃掉 2 秒超时，期间别的写入全在排队。
+CREATE INDEX IF NOT EXISTS idx_inbound_events_message_id ON inbound_events(message_id, kind);
 -- 总览页按时间窗统计回复量和耗时是按完成时间筛的，没有这个索引就得全表扫。
 -- 只索引已完成的行：处理中的行 completed_at 是 NULL，从来不参与这类查询。
 CREATE INDEX IF NOT EXISTS idx_inbound_events_completed_at ON inbound_events(completed_at) WHERE completed_at IS NOT NULL;
