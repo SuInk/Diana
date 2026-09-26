@@ -1546,6 +1546,16 @@ export function requestBotBackfill(hours?: number): Promise<{ requested: boolean
   });
 }
 
+/** 把一条处理失败的消息放回队列重跑；上次已送达的分片不会重发。 */
+export function retryAssistantEvent(eventID: string): Promise<{ requeued: number }> {
+  return requestJSON<{ requeued: number }>(`/api/assistant/events/${encodeURIComponent(eventID)}/retry`, { method: "POST" });
+}
+
+/** 把最近 24 小时处理失败的消息放回队列重跑，每个会话最多「回补 / 重试条数」条。profile 为空时不按机器人过滤。 */
+export function retryFailedAssistantEvents(profile = ""): Promise<{ requeued: number }> {
+  return requestJSON<{ requeued: number }>(`/api/assistant/events/retry-failed?profile=${encodeURIComponent(profile)}`, { method: "POST" });
+}
+
 export function getBotFeatures(): Promise<BotFeatureFlags> {
   return requestJSON<BotFeatureFlags>("/api/assistant/features");
 }

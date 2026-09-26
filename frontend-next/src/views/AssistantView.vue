@@ -1530,9 +1530,9 @@
                 </span>
               </div>
               <div class="field wide">
-                <label for="bot-backfill-limit">断线回补条数</label>
+                <label for="bot-backfill-limit">回补 / 重试条数</label>
                 <input id="bot-backfill-limit" v-model.number="form.history_backfill_message_limit" class="input" inputmode="numeric" min="1" max="100" placeholder="3" />
-                <span class="hint">重启或断线重连后，每个会话最多补回复多少条消息，只算会触发回复的（私聊、@ 机器人、引用机器人、称呼命中）。断线期间的其余消息照样补进上下文历史，但不做图片、语音处理也不回复。默认 3，媒体较多的群建议保持较小。</span>
+                <span class="hint">重启或断线重连后，每个会话最多补回复多少条消息，只算会触发回复的（私聊、@ 机器人、引用机器人、称呼命中）。断线期间的其余消息照样补进上下文历史，但不做图片、语音处理也不回复。运行记录里「重试失败」也按这个数，每个会话只重跑最近几条失败消息。默认 3，媒体较多的群建议保持较小。</span>
               </div>
             </div>
           </section>

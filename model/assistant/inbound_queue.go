@@ -923,7 +923,7 @@ func (r *Runtime) inboundPriority(event MessageEvent) int {
 }
 
 func (r *Runtime) inboundEventIsStale(event MessageEvent, now time.Time) bool {
-	if event.Time <= 0 || now.IsZero() {
+	if event.Time <= 0 || now.IsZero() || event.ManualRetry {
 		return false
 	}
 	if event.RetryRecovered {
@@ -1074,6 +1074,59 @@ func (r *Runtime) RequestHistoryBackfill(window time.Duration) error {
 	default:
 		return errors.New("diana: a manual backfill request is already pending")
 	}
+}
+
+// FailedInboundRequeuer 是可选能力：把处理失败的入站事件放回队列重跑。
+type FailedInboundRequeuer interface {
+	RequeueFailedInboundEvent(ctx context.Context, id string) error
+	RequeueFailedInboundEvents(ctx context.Context, since time.Time, profileID string, perSession int) (int, error)
+}
+
+func (r *Runtime) failedInboundRequeuer() (FailedInboundRequeuer, error) {
+	r.mu.RLock()
+	store := r.inboundStore
+	running := r.running
+	r.mu.RUnlock()
+	requeuer, ok := store.(FailedInboundRequeuer)
+	if store == nil || !ok {
+		return nil, errors.New("diana: durable inbound store is not configured")
+	}
+	if !running {
+		return nil, errors.New("diana: runtime is not running")
+	}
+	return requeuer, nil
+}
+
+// RetryFailedEvent 重跑一条处理失败的入站消息。出站账本按事件 ID 记账，
+// 上次已经送达的分片不会再发一遍。
+func (r *Runtime) RetryFailedEvent(ctx context.Context, id string) error {
+	requeuer, err := r.failedInboundRequeuer()
+	if err != nil {
+		return err
+	}
+	if err := requeuer.RequeueFailedInboundEvent(ctx, id); err != nil {
+		return err
+	}
+	r.wakeInboundWorkers()
+	return nil
+}
+
+// RetryFailedEvents 重跑最近一个回放窗口内处理失败的入站消息，返回放回队列的条数。
+// 每个会话的条数上限跟断线回补共用 HistoryBackfillMessageLimit：两者防的是同一件事，
+// 一批积压消息同时开出一堆回复。
+func (r *Runtime) RetryFailedEvents(ctx context.Context, profileID string) (int, error) {
+	requeuer, err := r.failedInboundRequeuer()
+	if err != nil {
+		return 0, err
+	}
+	count, err := requeuer.RequeueFailedInboundEvents(ctx, time.Now().Add(-InboundReplayWindow), profileID, r.profileConfig(profileID).HistoryBackfillMessageLimit)
+	if err != nil {
+		return 0, err
+	}
+	if count > 0 {
+		r.wakeInboundWorkers()
+	}
+	return count, nil
 }
 
 // channelAccountDown reports a heartbeat-confirmed unhealthy bot account: the
