@@ -335,3 +335,116 @@ func TestRuntimeDueScheduledQueryRunsAgentAndReschedules(t *testing.T) {
 		t.Fatalf("scheduled query missing from request: %#v", provider.requests[0].Messages)
 	}
 }
+
+// 「每周日 22:00 提醒我睡觉」：at 定首次时间，interval 定周期，建出来的是一条周期
+// 订阅，而不是只响一次的提醒。
+func TestDianaScheduleToolCreatesWeeklyReminderAtFixedTime(t *testing.T) {
+	store := &stubReminderStore{}
+	runtime := NewRuntime(BotConfig{OwnerID: "10001"}, nilChannel{}, NewPluginManager(), nil, store, nil, nil)
+	tool := newDianaScheduleTool(runtime, MessageEvent{Kind: EventKindPrivate, UserID: "10001"})
+	zone := time.FixedZone("CST", 8*3600)
+	first := time.Now().In(zone).Add(3 * time.Hour).Truncate(time.Minute)
+
+	if _, err := tool.Run(context.Background(), map[string]any{
+		"operation": "create",
+		"interval":  "168h",
+		"at":        first.Format(time.RFC3339),
+		"query":     "提醒用户该睡觉了",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(store.items) != 1 {
+		t.Fatalf("items = %#v", store.items)
+	}
+	item := store.items[0]
+	if !reminderIsScheduledQuery(item) || !item.TriggerAt.Equal(first) || !item.ScheduleAnchorAt.Equal(first) {
+		t.Fatalf("item = %#v, want first run and anchor at %s", item, first)
+	}
+}
+
+func TestDianaScheduleToolRollsPastFirstTimeToNextSlot(t *testing.T) {
+	store := &stubReminderStore{}
+	runtime := NewRuntime(BotConfig{OwnerID: "10001"}, nilChannel{}, NewPluginManager(), nil, store, nil, nil)
+	tool := newDianaScheduleTool(runtime, MessageEvent{Kind: EventKindPrivate, UserID: "10001"})
+	past := time.Now().Add(-time.Hour).Truncate(time.Minute)
+
+	if _, err := tool.Run(context.Background(), map[string]any{
+		"operation": "create",
+		"interval":  "24h",
+		"at":        past.Format(time.RFC3339),
+		"query":     "提醒用户喝水",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	item := store.items[0]
+	if want := past.Add(24 * time.Hour); !item.TriggerAt.Equal(want) {
+		t.Fatalf("trigger = %s, want %s", item.TriggerAt, want)
+	}
+}
+
+func TestDianaScheduleToolRejectsMalformedFirstTime(t *testing.T) {
+	store := &stubReminderStore{}
+	runtime := NewRuntime(BotConfig{OwnerID: "10001"}, nilChannel{}, NewPluginManager(), nil, store, nil, nil)
+	tool := newDianaScheduleTool(runtime, MessageEvent{Kind: EventKindPrivate, UserID: "10001"})
+	if _, err := tool.Run(context.Background(), map[string]any{
+		"operation": "create", "interval": "168h", "at": "周日 22:00", "query": "提醒用户睡觉",
+	}); err == nil || len(store.items) != 0 {
+		t.Fatalf("err=%v items=%#v", err, store.items)
+	}
+}
+
+// 跑完之后落回网格：开跑晚了几秒、失败重试晚了几分钟，下一次仍在原来的时间点。
+func TestFinishScheduledQueryKeepsAnchoredTimeSlot(t *testing.T) {
+	anchor := time.Now().Add(-5 * time.Minute).Truncate(time.Minute)
+	store := &stubReminderStore{items: []Reminder{{
+		ID:               "weekly",
+		Kind:             ReminderKindQuery,
+		OwnerID:          "10001",
+		UserID:           "10001",
+		Message:          "提醒用户该睡觉了",
+		TriggerAt:        time.Now().Add(-time.Second),
+		IntervalSeconds:  int64((168 * time.Hour) / time.Second),
+		ScheduleAnchorAt: anchor,
+	}}}
+	runtime := NewRuntime(BotConfig{OwnerID: "10001"}, nilChannel{}, NewPluginManager(), nil, store, nil, nil)
+
+	updated, err := runtime.finishScheduledQuery("weekly", time.Now(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := anchor.Add(168 * time.Hour); !updated.TriggerAt.Equal(want) {
+		t.Fatalf("next = %s, want %s", updated.TriggerAt, want)
+	}
+}
+
+func TestUpdateScheduledQueryMovesAnchorOnlyWhenTimeChanges(t *testing.T) {
+	anchor := time.Now().Add(2 * time.Hour).Truncate(time.Minute)
+	store := &stubReminderStore{items: []Reminder{{
+		ID:               "daily",
+		Kind:             ReminderKindQuery,
+		OwnerID:          "10001",
+		UserID:           "10001",
+		Message:          "提醒用户喝水",
+		TriggerAt:        anchor,
+		IntervalSeconds:  int64((24 * time.Hour) / time.Second),
+		ScheduleAnchorAt: anchor,
+	}}}
+	runtime := NewRuntime(BotConfig{OwnerID: "10001"}, nilChannel{}, NewPluginManager(), nil, store, nil, nil)
+
+	item, err := runtime.updateScheduledQuery("10001", "daily", map[string]any{"query": "提醒用户多喝水"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !item.TriggerAt.Equal(anchor) || !item.ScheduleAnchorAt.Equal(anchor) {
+		t.Fatalf("query-only update moved the slot: %#v", item)
+	}
+
+	moved := anchor.Add(time.Hour)
+	item, err = runtime.updateScheduledQuery("10001", "daily", map[string]any{"at": moved.Format(time.RFC3339)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !item.TriggerAt.Equal(moved) || !item.ScheduleAnchorAt.Equal(moved) {
+		t.Fatalf("at update = %#v, want %s", item, moved)
+	}
+}

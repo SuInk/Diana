@@ -93,7 +93,8 @@ func (t *dianaSubscriptionTool) Description() string {
 		`管理持久化订阅：` + strings.Join(labels, "；") + `。` +
 		`先用 kind 选订阅种类，再用 operation 选动作；每个字段的说明里写了它属于哪个 kind，不属于当前 kind 的字段不要填。` +
 		`operation=list 不填 kind 就一次列出全部种类，每条带 kind 字段——用户问「我有哪些订阅」时这样调，不要逐个 kind 试。` +
-		`cancel 只停止并保留记录，delete 才彻底删除。只执行一次的提醒不在本工具，改用 reminder。`
+		`cancel 只停止并保留记录，delete 才彻底删除。只执行一次的提醒不在本工具，改用 reminder；` +
+		`「每天八点」「每周日 22:00」这类重复的提醒属于 kind=schedule，用 at 定首次时间、interval 定间隔。`
 }
 
 func (t *dianaSubscriptionTool) InputSchema() map[string]any {
@@ -128,11 +129,13 @@ func (t *dianaSubscriptionTool) InputSchema() map[string]any {
 // 合并之后模型同时看得见三套字段，不标清楚归属就会串。
 func subscriptionKindFields() map[string]any {
 	return map[string]any{
-		"query": toolStringParam("kind=schedule 专用：每次触发时要执行的查询要求，写成一句完整的自然语言指令。"),
+		"query": toolStringParam("kind=schedule 专用：每次触发时要执行的查询要求，写成一句完整的自然语言指令；周期提醒就写到点要提醒什么。"),
+		"at":    toolStringParam("kind=schedule 专用：" + scheduleAtDescription),
 		"items": toolItemsParam("kind=schedule 专用：一次创建多个订阅，只在 create 时有效，最多 "+itoa(maximumTasksPerToolCall)+" 项。",
 			maximumTasksPerToolCall, []string{"interval", "query"}, map[string]any{
 				"interval": toolStringParam("重复间隔，Go 时长写法。"),
 				"query":    toolStringParam("每次触发时要执行的查询要求。"),
+				"at":       toolStringParam("首次触发时间，RFC3339；有固定时间点时必须传。"),
 			}),
 		"target_user_id":  toolStringParam("kind=schedule 专用：代其他用户管理时的目标账号，仅机器人主人可用；创建仍占目标用户的额度。"),
 		"twitter_handle":  toolStringParam("kind=rss 专用：要关注的单个 X (Twitter) 用户名，不带 @。盯多个人用 twitter_handles。"),

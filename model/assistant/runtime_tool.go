@@ -899,7 +899,7 @@ func (r *Runtime) rescheduleInterruptedReminder(id string, startedAt time.Time) 
 		}
 		found = true
 		items[index].LastRunAt = startedAt
-		items[index].TriggerAt = nextScheduledTrigger(startedAt, time.Duration(items[index].IntervalSeconds)*time.Second, time.Now())
+		items[index].TriggerAt = nextRecurringTrigger(items[index], startedAt, time.Now())
 		break
 	}
 	var saveErr error
@@ -1840,7 +1840,7 @@ func (r *Runtime) finishRecurringReminder(id string, startedAt time.Time, runErr
 			items[index].PendingDelivery = ""
 			items[index].PendingDeliveryReference = ""
 			items[index].PendingSince = time.Time{}
-			items[index].TriggerAt = nextScheduledTrigger(startedAt, time.Duration(items[index].IntervalSeconds)*time.Second, time.Now())
+			items[index].TriggerAt = nextRecurringTrigger(items[index], startedAt, time.Now())
 		}
 		updated = items[index]
 		break
@@ -1894,6 +1894,25 @@ func (r *Runtime) releaseClaimedReminder(id string) {
 	r.reminderMu.Unlock()
 }
 
+// nextRecurringTrigger 算周期任务跑完之后的下一次时间。带时间网格原点的任务落回
+// 网格上的下一个格子：开跑晚了一两秒、失败后隔几分钟重试成功，都不会把「每周日
+// 22:00」挪成 22:05。没有原点的旧记录仍按实际开跑时间往后排。
+func nextRecurringTrigger(item Reminder, startedAt time.Time, now time.Time) time.Time {
+	interval := time.Duration(item.IntervalSeconds) * time.Second
+	if !item.ScheduleAnchorAt.IsZero() && interval > 0 {
+		return scheduleSlotAfter(item.ScheduleAnchorAt, interval, now)
+	}
+	return nextScheduledTrigger(startedAt, interval, now)
+}
+
+// scheduleSlotAfter 返回网格 anchor + k*interval（k >= 0）上第一个晚于 now 的格子。
+func scheduleSlotAfter(anchor time.Time, interval time.Duration, now time.Time) time.Time {
+	if anchor.After(now) || interval <= 0 {
+		return anchor
+	}
+	return nextScheduledTrigger(anchor, interval, now)
+}
+
 func nextScheduledTrigger(previous time.Time, interval time.Duration, now time.Time) time.Time {
 	if interval <= 0 {
 		return now
@@ -1914,7 +1933,7 @@ var promptScheduledQuerySystemSpec = registerPrompt(PromptSpec{
 	Group:   PromptGroupTasks,
 	Title:   "定时查询 · 执行要求",
 	Usage:   "周期查询类定时任务到点执行时，接在机器人完整系统提示词之后，要求模型真的调工具去查、并用人设语气交结果。",
-	Default: "本次是后台定时订阅执行。必须实际调用适合的工具完成查询，优先获取最新信息；不要创建、修改或删除其他定时任务。最终只返回本次查询结果，并保持当前人设和自然聊天语气，不要写成生硬的系统通告。",
+	Default: "本次是后台定时订阅执行。需要查资料的，必须实际调用适合的工具完成查询，优先获取最新信息；只是到点提醒用户做某件事的，直接把提醒说出来，不必调用工具；不要创建、修改或删除其他定时任务。最终只返回本次查询结果，并保持当前人设和自然聊天语气，不要写成生硬的系统通告。",
 })
 
 var promptScheduledQueryRequestSpec = registerPrompt(PromptSpec{

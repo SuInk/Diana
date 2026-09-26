@@ -334,6 +334,10 @@ type Reminder struct {
 	Message                 string    `json:"message"`
 	TriggerAt               time.Time `json:"trigger_at"`
 	IntervalSeconds         int64     `json:"interval_seconds,omitempty"`
+	// ScheduleAnchorAt 是周期任务的时间网格原点：每次成功后下一次落在 anchor + k*interval
+	// 上，不跟着实际开跑时间或失败重试漂。「每周日 22:00」靠它一直停在 22:00。
+	// 零值是这个字段之前的旧记录，仍按实际开跑时间往后排。
+	ScheduleAnchorAt        time.Time `json:"schedule_anchor_at,omitempty"`
 	LastRunAt               time.Time `json:"last_run_at,omitempty"`
 	CancelledAt             time.Time `json:"cancelled_at,omitempty"`
 	LastError               string    `json:"last_error,omitempty"`

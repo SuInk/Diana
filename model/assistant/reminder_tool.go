@@ -56,7 +56,7 @@ func (t *dianaReminderTool) Name() string {
 }
 
 func (t *dianaReminderTool) Description() string {
-	return `创建和管理持久化一次性提醒。用户要求在某个时间点或某段时间之后提醒时必须使用此工具；周期性查询、RSS/推特关注、GitHub 仓库更新这类会重复触发的订阅改用 subscription，用 kind 选种类。禁止用 run_command、sleep 或后台进程代替。初识及以上可用。`
+	return `创建和管理持久化一次性提醒。用户要求在某个时间点或某段时间之后提醒一次时必须使用此工具；每天、每周这类重复提醒，以及周期性查询、RSS/推特关注、GitHub 仓库更新这类会重复触发的订阅改用 subscription，用 kind 选种类。禁止用 run_command、sleep 或后台进程代替。初识及以上可用。`
 }
 
 // InputSchema 声明参数契约。相对时间使用 delay，绝对时间使用 at，避免模型把
