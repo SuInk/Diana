@@ -437,6 +437,7 @@
         </div>
       </div>
       <StickerLibrary v-if="settingsTarget.manifest.id === stickerPluginID" :profile="botScope" />
+      <VRChatStatusPanel v-if="settingsTarget.manifest.id === vrchatPluginID" />
       <RSSWatchManager
         v-if="settingsTarget.manifest.id === rssWatchPluginID"
         :default-profile-id="botScope"
@@ -723,6 +724,7 @@ import RepositoryIssueDraftList from "../components/RepositoryIssueDraftList.vue
 import RepositoryCredentialEditor from "../components/RepositoryCredentialEditor.vue";
 import RepositoryWatchManager from "../components/RepositoryWatchManager.vue";
 import StickerLibrary from "../components/StickerLibrary.vue";
+import VRChatStatusPanel from "../components/VRChatStatusPanel.vue";
 import RSSWatchManager from "../components/RSSWatchManager.vue";
 import PluginDependencyList from "../components/PluginDependencyList.vue";
 import { navigate, viewQuery } from "../router";
@@ -743,6 +745,7 @@ const repositoryPublishPluginID = "official.repository-publish";
 const rssWatchPluginID = "official.rss-watch";
 const musicPluginID = "official.music";
 const stickerPluginID = "official.sticker-sender";
+const vrchatPluginID = "official.vrchat-osc";
 // 依赖按插件 ID 分组：链接解析要 yt-dlp/ffmpeg，网页渲染要一个
 // Chrome/Chromium，以后再有别的插件也不必再往模板里加一个 id 判断。
 const dependencyGroups = ref<Record<string, ResolverDependency[]>>({});
