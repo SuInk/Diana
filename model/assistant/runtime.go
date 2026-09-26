@@ -554,16 +554,20 @@ type Runtime struct {
 	errorNoticeFreshWindow time.Duration
 	replyBatchMu           sync.Mutex
 	// replyTurns 记「同一个人刚问过」，让紧接着的第二条被当成追问接住而不是重答一遍。
-	replyTurnMu             sync.Mutex
-	replyTurns              map[string]replyTurnRecord
-	replyBatches            map[string]*replyBatchGate
-	unavailableGroupMu      sync.RWMutex
-	botMuteMu               sync.RWMutex
-	botMutes                map[string]botMuteState
-	unavailableGroups       map[string]unavailableGroupSend
-	outboundDeliveryMu      sync.Mutex
-	outboundDeliveries      map[string]*groupOutboundDelivery
-	outboundEchoes          outboundEchoTracker
+	replyTurnMu        sync.Mutex
+	replyTurns         map[string]replyTurnRecord
+	replyBatches       map[string]*replyBatchGate
+	unavailableGroupMu sync.RWMutex
+	botMuteMu          sync.RWMutex
+	botMutes           map[string]botMuteState
+	unavailableGroups  map[string]unavailableGroupSend
+	outboundDeliveryMu sync.Mutex
+	outboundDeliveries map[string]*groupOutboundDelivery
+	outboundEchoes     outboundEchoTracker
+	// stickerTagging 是正在后台补标签的表情包哈希，同一张图只跑一份。
+	stickerTagging sync.Map
+	// stickerSends 记每个会话最近一小时发表情包的时间，用于发送频率上限；重启后清零。
+	stickerSends            stickerSendLimiter
 	historyImageDescMu      sync.Mutex
 	historyImageDescQueue   []*historyImageDescJob
 	historyImageDescJobs    map[string]*historyImageDescJob
@@ -7871,6 +7875,7 @@ func (r *Runtime) persistMessageEvent(event MessageEvent) {
 		log.Printf("diana message history persist failed: %v", err)
 		return
 	}
+	r.pruneStickerLibrary(ctx, store, event)
 	// 语义检索开着的话,落库后把消息投给后台向量化。非阻塞,失败只丢这一条。
 	r.enqueueSemanticIndex(event)
 }

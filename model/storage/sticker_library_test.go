@@ -90,3 +90,114 @@ func TestListStickerLibrary(t *testing.T) {
 		t.Fatal("invalid hash must not match")
 	}
 }
+
+// 资产查询带出简介、标签和本会话的发送记录；超上限时按「最后一次用到」淘汰，
+// 机器人发过也算用到；按标签能在控制台搜到。
+func TestStickerAssetsCarryTagsUsageAndPrune(t *testing.T) {
+	ctx := context.Background()
+	store, err := NewSQLiteStore(filepath.Join(t.TempDir(), "sticker-assets.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+
+	oldest, middle, newest := strings.Repeat("1", 64), strings.Repeat("2", 64), strings.Repeat("3", 64)
+	for _, item := range []struct {
+		hash string
+		at   int64
+	}{{oldest, 100}, {middle, 200}, {newest, 300}} {
+		if err := store.indexStickerAssets(ctx, "group:g1", stickerLibraryEvent("bot", "g1", "m"+item.hash[:1], item.at, item.hash, "[动画表情]", "/cache/"+item.hash[:1]+".gif")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := store.SaveImageDescription(ctx, assistant.ImageDescriptionRecord{ContentSHA256: middle, Description: "通用描述", Source: "vision"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SaveStickerTags(ctx, assistant.StickerTagRecord{ContentSHA256: newest, Gist: "摸头安慰", Tags: []string{"安慰", "摸头"}}); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		if err := store.RecordStickerSent(ctx, "group:g1", oldest, 1000); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// 别的会话发过不算本会话的发送记录。
+	if err := store.RecordStickerSent(ctx, "group:g2", middle, 2000); err != nil {
+		t.Fatal(err)
+	}
+
+	assets, err := store.ListStickerAssets(ctx, assistant.StickerHistoryQuery{Session: "group:g1", Limit: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	byHash := map[string]assistant.StickerAsset{}
+	for _, asset := range assets {
+		byHash[asset.ContentSHA256] = asset
+	}
+	if got := byHash[newest]; !got.Tagged || got.Gist != "摸头安慰" || strings.Join(got.Tags, "|") != "安慰|摸头" {
+		t.Fatalf("tagged asset = %#v", got)
+	}
+	if got := byHash[middle]; got.Tagged || got.Description != "通用描述" || got.LastSentAt != 0 {
+		t.Fatalf("described asset = %#v", got)
+	}
+	if got := byHash[oldest]; got.SentCount != 2 || got.LastSentAt != 1000 {
+		t.Fatalf("sent asset = %#v", got)
+	}
+
+	removed, err := store.PruneStickerAssets(ctx, "group:g1", 2)
+	if err != nil || removed != 1 {
+		t.Fatalf("removed=%d err=%v", removed, err)
+	}
+	assets, err = store.ListStickerAssets(ctx, assistant.StickerHistoryQuery{Session: "group:g1", Limit: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(assets) != 2 || assets[0].ContentSHA256 == middle || assets[1].ContentSHA256 == middle {
+		t.Fatalf("after prune = %#v", assets)
+	}
+	if removed, err := store.PruneStickerAssets(ctx, "group:g1", 2); err != nil || removed != 0 {
+		t.Fatalf("second prune removed=%d err=%v", removed, err)
+	}
+
+	page, err := store.ListStickerLibrary(ctx, StickerLibraryQuery{Search: "摸头"})
+	if err != nil || page.Total != 1 || page.Items[0].Hash != newest || page.Items[0].Description != "摸头安慰" {
+		t.Fatalf("library search = %#v err=%v", page, err)
+	}
+}
+
+// 引入命名空间之前落库的表情包用的是旧键（group:…），它们属于同一个群：
+// 检索时要当成本会话的库存，按上限淘汰时两种键合在一起算。
+func TestStickerAssetsIncludeLegacySessionKey(t *testing.T) {
+	ctx := context.Background()
+	store, err := NewSQLiteStore(filepath.Join(t.TempDir(), "sticker-legacy.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+
+	legacy, current, other := strings.Repeat("4", 64), strings.Repeat("5", 64), strings.Repeat("6", 64)
+	if err := store.indexStickerAssets(ctx, "group:g1", stickerLibraryEvent("", "g1", "old", 100, legacy, "[旧的]", "/cache/old.gif")); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.indexStickerAssets(ctx, "ns:group:g1", stickerLibraryEvent("bot", "g1", "new", 200, current, "[新的]", "/cache/new.gif")); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.indexStickerAssets(ctx, "group:g2", stickerLibraryEvent("", "g2", "x", 300, other, "[别的群]", "/cache/x.gif")); err != nil {
+		t.Fatal(err)
+	}
+	assets, err := store.ListStickerAssets(ctx, assistant.StickerHistoryQuery{Session: "ns:group:g1", ContextNamespace: "ns", Limit: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(assets) != 2 || assets[0].ContentSHA256 != current || assets[1].ContentSHA256 != legacy || assets[1].Session != "ns:group:g1" {
+		t.Fatalf("assets = %#v", assets)
+	}
+	removed, err := store.PruneStickerAssets(ctx, "ns:group:g1", 1)
+	if err != nil || removed != 1 {
+		t.Fatalf("removed=%d err=%v", removed, err)
+	}
+	assets, err = store.ListStickerAssets(ctx, assistant.StickerHistoryQuery{Session: "ns:group:g1", ContextNamespace: "ns", Limit: 100})
+	if err != nil || len(assets) != 1 || assets[0].ContentSHA256 != current {
+		t.Fatalf("after prune = %#v err=%v", assets, err)
+	}
+}

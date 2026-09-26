@@ -1128,6 +1128,10 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 	if agentEnabled && hasTool(dianaSelfNoteToolName) {
 		builder.WriteString("\n" + cfg.prompt(promptToolSelfNoteSpec))
 	}
+	// 表情包的规则进 head：插件开关按群生效，同一个群里对所有人逐字相同。
+	if agentEnabled && hasTool(dianaStickerToolName) {
+		builder.WriteString("\n" + cfg.prompt(promptToolStickerSpec))
+	}
 	if agentEnabled && hasTool("capabilities") {
 		builder.WriteString("\n" + cfg.prompt(promptToolCapabilitiesSpec))
 	}

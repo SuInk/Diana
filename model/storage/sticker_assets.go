@@ -6,6 +6,7 @@ package storage
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -41,6 +42,22 @@ CREATE INDEX IF NOT EXISTS idx_sticker_assets_namespace_kind_time
   ON sticker_assets(context_namespace, kind, event_time DESC);
 CREATE INDEX IF NOT EXISTS idx_sticker_assets_profile_kind_time
   ON sticker_assets(profile_id, kind, event_time DESC);
+-- 表情包专用的检索标签。和 image_descriptions 分开：那份描述是给聊天上下文看的客观描述，
+-- 这份是按「借这张图想说什么」写的，行存在即表示已经标注过（标签可以为空）。
+CREATE TABLE IF NOT EXISTS sticker_tags (
+  content_sha256 TEXT PRIMARY KEY,
+  gist TEXT NOT NULL,
+  tags TEXT NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+-- 机器人在某个会话里发过哪张表情包：用来避免连发同一张，也算作这张图「还在用」。
+CREATE TABLE IF NOT EXISTS sticker_usage (
+  session TEXT NOT NULL,
+  content_sha256 TEXT NOT NULL,
+  sent_count INTEGER NOT NULL,
+  last_sent_at INTEGER NOT NULL,
+  PRIMARY KEY (session, content_sha256)
+);
 `); err != nil {
 		return fmt.Errorf("create sticker asset index: %w", err)
 	}
@@ -182,7 +199,11 @@ func (s *SQLiteStore) ListStickerAssets(ctx context.Context, query assistant.Sti
 		return nil, nil
 	}
 	limit := normalizeMessageHistoryLimit(query.Limit)
-	current, err := s.queryStickerAssets(ctx, "session = ?", []any{query.Session}, limit)
+	sessions := stickerSessionKeys(query.Session)
+	current, err := s.queryStickerAssets(ctx, query.Session, "a.session IN ("+sqlPlaceholders(len(sessions))+")", stringArgs(sessions), limit)
+	for index := range current {
+		current[index].Session = query.Session
+	}
 	if err != nil || (!query.ShareGroups && !query.SharePrivate) {
 		return current, err
 	}
@@ -191,43 +212,51 @@ func (s *SQLiteStore) ListStickerAssets(ctx context.Context, query assistant.Sti
 	args := make([]any, 0, 4)
 	switch {
 	case query.ContextNamespace != "":
-		boundary = "context_namespace = ?"
+		boundary = "a.context_namespace = ?"
 		args = append(args, query.ContextNamespace)
 	case query.ProfileID != "":
-		boundary = "profile_id = ?"
+		boundary = "a.profile_id = ?"
 		args = append(args, query.ProfileID)
 	default:
 		return current, nil
 	}
-	args = append(args, query.Session)
+	args = append(args, stringArgs(sessions)...)
 	scopes := make([]string, 0, 2)
 	if query.ShareGroups {
-		scopes = append(scopes, "kind = ?")
+		scopes = append(scopes, "a.kind = ?")
 		args = append(args, string(assistant.EventKindGroup))
 	}
 	if query.SharePrivate {
-		scopes = append(scopes, "kind = ?")
+		scopes = append(scopes, "a.kind = ?")
 		args = append(args, string(assistant.EventKindPrivate))
 	}
-	where := boundary + " AND session != ? AND (" + strings.Join(scopes, " OR ") + ")"
-	shared, err := s.queryStickerAssets(ctx, where, args, limit)
+	where := boundary + " AND a.session NOT IN (" + sqlPlaceholders(len(sessions)) + ") AND (" + strings.Join(scopes, " OR ") + ")"
+	shared, err := s.queryStickerAssets(ctx, query.Session, where, args, limit)
 	if err != nil {
 		return nil, err
 	}
 	return append(current, shared...), nil
 }
 
-func (s *SQLiteStore) queryStickerAssets(ctx context.Context, where string, args []any, limit int) ([]assistant.StickerAsset, error) {
+// queryStickerAssets 顺带取出简介、标签和机器人在 currentSession 里的发送记录，
+// 候选排序和防重复都靠这几列，不必再逐张回查。
+func (s *SQLiteStore) queryStickerAssets(ctx context.Context, currentSession, where string, args []any, limit int) ([]assistant.StickerAsset, error) {
+	args = append([]any{currentSession}, args...)
 	args = append(args, limit)
 	// 表情库浏览和检索都是只读的，走读池。
 	rows, err := s.eventReader().QueryContext(ctx, `
-SELECT session, COALESCE(profile_id, ''), COALESCE(context_namespace, ''), kind,
-       COALESCE(group_id, ''), COALESCE(user_id, ''), COALESCE(message_id, ''),
-       event_time, segment_index, COALESCE(summary, ''), cached_file,
-       COALESCE(cached_mime, ''), content_sha256
-FROM sticker_assets
+SELECT a.session, COALESCE(a.profile_id, ''), COALESCE(a.context_namespace, ''), a.kind,
+       COALESCE(a.group_id, ''), COALESCE(a.user_id, ''), COALESCE(a.message_id, ''),
+       a.event_time, a.segment_index, COALESCE(a.summary, ''), a.cached_file,
+       COALESCE(a.cached_mime, ''), a.content_sha256,
+       COALESCE(d.description, ''), t.content_sha256 IS NOT NULL, COALESCE(t.gist, ''), COALESCE(t.tags, ''),
+       COALESCE(u.sent_count, 0), COALESCE(u.last_sent_at, 0)
+FROM sticker_assets AS a
+LEFT JOIN image_descriptions AS d ON d.content_sha256 = a.content_sha256
+LEFT JOIN sticker_tags AS t ON t.content_sha256 = a.content_sha256
+LEFT JOIN sticker_usage AS u ON u.session = ? AND u.content_sha256 = a.content_sha256
 WHERE `+where+`
-ORDER BY event_time DESC, updated_at DESC
+ORDER BY a.event_time DESC, a.updated_at DESC
 LIMIT ?`, args...)
 	if err != nil {
 		return nil, err
@@ -236,16 +265,140 @@ LIMIT ?`, args...)
 	assets := make([]assistant.StickerAsset, 0, limit)
 	for rows.Next() {
 		var asset assistant.StickerAsset
-		var kind string
+		var kind, tags string
 		if err := rows.Scan(&asset.Session, &asset.ProfileID, &asset.ContextNamespace, &kind,
 			&asset.GroupID, &asset.UserID, &asset.MessageID, &asset.EventTime,
-			&asset.SegmentIndex, &asset.Summary, &asset.Path, &asset.MIME, &asset.ContentSHA256); err != nil {
+			&asset.SegmentIndex, &asset.Summary, &asset.Path, &asset.MIME, &asset.ContentSHA256,
+			&asset.Description, &asset.Tagged, &asset.Gist, &tags, &asset.SentCount, &asset.LastSentAt); err != nil {
 			return nil, err
 		}
 		asset.Kind = assistant.EventKind(kind)
+		asset.Tags = decodeStickerTags(tags)
 		assets = append(assets, asset)
 	}
 	return assets, rows.Err()
+}
+
+// stickerSessionKeys 返回一个会话在表情包库里的全部键：当前带命名空间的键，加上引入
+// 命名空间之前落库的旧键（只有 group:… / private:…）。旧键下的表情包属于同一个会话，
+// 不带上它们，老群攒下的大半库存永远进不了候选。
+func stickerSessionKeys(session string) []string {
+	keys := []string{session}
+	for _, marker := range []string{":group:", ":private:"} {
+		if index := strings.LastIndex(session, marker); index > 0 {
+			keys = append(keys, session[index+1:])
+			break
+		}
+	}
+	return keys
+}
+
+func sqlPlaceholders(count int) string {
+	return strings.TrimSuffix(strings.Repeat("?,", count), ",")
+}
+
+func stringArgs(values []string) []any {
+	args := make([]any, len(values))
+	for index, value := range values {
+		args[index] = value
+	}
+	return args
+}
+
+func decodeStickerTags(raw string) []string {
+	var tags []string
+	if strings.TrimSpace(raw) == "" || json.Unmarshal([]byte(raw), &tags) != nil {
+		return nil
+	}
+	return tags
+}
+
+// SaveStickerTags 记下一张表情包的检索标签；标签为空也落一行，表示标注过了，不再重复调识图。
+func (s *SQLiteStore) SaveStickerTags(ctx context.Context, record assistant.StickerTagRecord) error {
+	if s == nil || s.db == nil {
+		return nil
+	}
+	hash := strings.ToLower(strings.TrimSpace(record.ContentSHA256))
+	if !validStickerAssetHash(hash) {
+		return nil
+	}
+	tags := record.Tags
+	if tags == nil {
+		tags = []string{}
+	}
+	encoded, err := json.Marshal(tags)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.ExecContext(ctx, `
+INSERT INTO sticker_tags (content_sha256, gist, tags, updated_at) VALUES (?, ?, ?, ?)
+ON CONFLICT(content_sha256) DO UPDATE SET gist=excluded.gist, tags=excluded.tags, updated_at=excluded.updated_at
+`, hash, strings.TrimSpace(record.Gist), string(encoded), time.Now().Unix())
+	return err
+}
+
+// RecordStickerSent 记一次机器人在 session 里发出这张表情包。
+func (s *SQLiteStore) RecordStickerSent(ctx context.Context, session, contentSHA256 string, sentAt int64) error {
+	if s == nil || s.db == nil {
+		return nil
+	}
+	session = strings.TrimSpace(session)
+	hash := strings.ToLower(strings.TrimSpace(contentSHA256))
+	if session == "" || !validStickerAssetHash(hash) {
+		return nil
+	}
+	if sentAt <= 0 {
+		sentAt = time.Now().Unix()
+	}
+	_, err := s.db.ExecContext(ctx, `
+INSERT INTO sticker_usage (session, content_sha256, sent_count, last_sent_at) VALUES (?, ?, 1, ?)
+ON CONFLICT(session, content_sha256) DO UPDATE SET
+  sent_count=sticker_usage.sent_count + 1,
+  last_sent_at=MAX(sticker_usage.last_sent_at, excluded.last_sent_at)
+`, session, hash, sentAt)
+	return err
+}
+
+// PruneStickerAssets 把一个会话的表情包库压到 capacity 张以内。按「最后一次用到」淘汰：
+// 有人发过或机器人发过都算用到，最久没用的先走。只删索引，图片文件归聊天记录管。
+func (s *SQLiteStore) PruneStickerAssets(ctx context.Context, session string, capacity int) (int, error) {
+	if s == nil || s.db == nil || capacity <= 0 {
+		return 0, nil
+	}
+	session = strings.TrimSpace(session)
+	if session == "" {
+		return 0, nil
+	}
+	// 每条带表情包的消息都会来问一次，没超上限时只读计数，不占写连接。
+	sessions := stickerSessionKeys(session)
+	in := "(" + sqlPlaceholders(len(sessions)) + ")"
+	var total int
+	if err := s.eventReader().QueryRowContext(ctx, `SELECT COUNT(DISTINCT content_sha256) FROM sticker_assets WHERE session IN `+in, stringArgs(sessions)...).Scan(&total); err != nil {
+		return 0, fmt.Errorf("count sticker assets: %w", err)
+	}
+	if total <= capacity {
+		return 0, nil
+	}
+	// 新旧两种会话键下的同一张图按一张算，取最近一次用到的时间排序。
+	args := append(stringArgs(sessions), session)
+	args = append(args, stringArgs(sessions)...)
+	args = append(args, capacity)
+	result, err := s.db.ExecContext(ctx, `
+DELETE FROM sticker_assets
+WHERE session IN `+in+` AND content_sha256 IN (
+  SELECT a.content_sha256
+  FROM sticker_assets AS a
+  LEFT JOIN sticker_usage AS u ON u.session = ? AND u.content_sha256 = a.content_sha256
+  WHERE a.session IN `+in+`
+  GROUP BY a.content_sha256
+  ORDER BY MAX(MAX(a.event_time), COALESCE(MAX(u.last_sent_at), 0)) DESC, a.content_sha256
+  LIMIT -1 OFFSET ?
+)`, args...)
+	if err != nil {
+		return 0, fmt.Errorf("prune sticker assets: %w", err)
+	}
+	removed, _ := result.RowsAffected()
+	return int(removed), nil
 }
 
 // StickerLibraryQuery 是控制台浏览表情包池的筛选条件。ProfileID 为空时列出全部机器人的。
@@ -262,6 +415,7 @@ type StickerLibraryItem struct {
 	Hash        string    `json:"hash"`
 	Summary     string    `json:"summary"`
 	Description string    `json:"description,omitempty"`
+	Tags        []string  `json:"tags,omitempty"`
 	MIME        string    `json:"mime,omitempty"`
 	Kind        string    `json:"kind"`
 	GroupID     string    `json:"group_id,omitempty"`
@@ -295,27 +449,30 @@ func (s *SQLiteStore) ListStickerLibrary(ctx context.Context, query StickerLibra
 	}
 	if search := strings.TrimSpace(query.Search); search != "" {
 		pattern := "%" + escapeSQLiteLike(search) + "%"
-		conditions = append(conditions, `(a.summary LIKE ? ESCAPE '\' OR COALESCE(d.description, '') LIKE ? ESCAPE '\')`)
-		args = append(args, pattern, pattern)
+		conditions = append(conditions, `(a.summary LIKE ? ESCAPE '\' OR COALESCE(d.description, '') LIKE ? ESCAPE '\'
+  OR COALESCE(t.gist, '') LIKE ? ESCAPE '\' OR COALESCE(t.tags, '') LIKE ? ESCAPE '\')`)
+		args = append(args, pattern, pattern, pattern, pattern)
 	}
 	where := strings.Join(conditions, " AND ")
 	// 先按哈希挑出最近的那一行，再分页；count 和列表用同一个子查询，数字才对得上。
 	base := `
 WITH ranked AS (
-  SELECT a.content_sha256, COALESCE(a.summary, '') AS summary, COALESCE(d.description, '') AS description,
+  SELECT a.content_sha256, COALESCE(a.summary, '') AS summary,
+         COALESCE(NULLIF(t.gist, ''), d.description, '') AS description, COALESCE(t.tags, '') AS tags,
          COALESCE(a.cached_mime, '') AS mime, a.kind, COALESCE(a.group_id, '') AS group_id,
          COALESCE(a.user_id, '') AS user_id, COALESCE(a.profile_id, '') AS profile_id, a.event_time,
          COUNT(*) OVER (PARTITION BY a.content_sha256) AS sessions,
          ROW_NUMBER() OVER (PARTITION BY a.content_sha256 ORDER BY a.event_time DESC, a.updated_at DESC) AS rank
   FROM sticker_assets AS a
   LEFT JOIN image_descriptions AS d ON d.content_sha256 = a.content_sha256
+  LEFT JOIN sticker_tags AS t ON t.content_sha256 = a.content_sha256
   WHERE ` + where + `
 )`
 	if err := s.eventReader().QueryRowContext(ctx, base+`SELECT COUNT(*) FROM ranked WHERE rank = 1`, args...).Scan(&page.Total); err != nil {
 		return page, fmt.Errorf("count sticker library: %w", err)
 	}
 	rows, err := s.eventReader().QueryContext(ctx, base+`
-SELECT content_sha256, summary, description, mime, kind, group_id, user_id, profile_id, sessions, event_time
+SELECT content_sha256, summary, description, tags, mime, kind, group_id, user_id, profile_id, sessions, event_time
 FROM ranked WHERE rank = 1
 ORDER BY event_time DESC, content_sha256
 LIMIT ? OFFSET ?`, append(args, limit, offset)...)
@@ -326,10 +483,12 @@ LIMIT ? OFFSET ?`, append(args, limit, offset)...)
 	for rows.Next() {
 		var item StickerLibraryItem
 		var eventTime int64
-		if err := rows.Scan(&item.Hash, &item.Summary, &item.Description, &item.MIME, &item.Kind,
+		var tags string
+		if err := rows.Scan(&item.Hash, &item.Summary, &item.Description, &tags, &item.MIME, &item.Kind,
 			&item.GroupID, &item.UserID, &item.ProfileID, &item.Sessions, &eventTime); err != nil {
 			return page, fmt.Errorf("scan sticker library: %w", err)
 		}
+		item.Tags = decodeStickerTags(tags)
 		item.LastSeen = time.Unix(eventTime, 0)
 		page.Items = append(page.Items, item)
 	}
