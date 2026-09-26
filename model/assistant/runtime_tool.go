@@ -181,13 +181,25 @@ func (r *Runtime) generateReplyWithAgentTools(ctx context.Context, cfg BotConfig
 			BrowserControl:             r.browserControlFor(cfg),
 			BuiltinBrowser:             r.browserBoxFor(cfg),
 		}
+		agentCfg = restrictAgentConfigForMode(cfg, agentCfg)
 		registry := agent.NewToolRegistry()
 		if cfg.AgentEnabled {
-			base, err := r.sharedAgentRegistry(ctx, agentCfg)
-			if err != nil {
+			// 安全模式只借已经起来的底座，不为自己拉起 MCP 进程，见 newAgentRegistry。
+			var base *agent.ToolRegistry
+			var err error
+			if cfg.agentSafeMode() {
+				base = r.cachedAgentRegistry(agentCfg)
+			} else if base, err = r.sharedAgentRegistry(ctx, agentCfg); err != nil {
 				return "", err
 			}
-			registry, err = base.NewView(agentCfg)
+			if base != nil {
+				registry, err = base.NewView(agentCfg)
+			} else {
+				registry, err = agent.NewDefaultToolRegistry(agentCfg)
+				if err == nil {
+					registry.RegisterScopedSkills(agentCfg.BuiltinSkills, safeModeLocalSkills(agentCfg), agentCfg.ReservedSkillNames)
+				}
+			}
 			if err != nil {
 				return "", err
 			}
@@ -198,6 +210,11 @@ func (r *Runtime) generateReplyWithAgentTools(ctx context.Context, cfg BotConfig
 		}
 		for _, tool := range extraTools {
 			registry.Register(tool)
+		}
+		// 旧的非 Agent 路径（AgentEnabled=false，待移除）只有调用方给的插件工具，没有
+		// 安全模式要摘的东西。
+		if cfg.AgentEnabled {
+			applyAgentSafeMode(cfg, registry)
 		}
 		agentClient := newRuntimeAgentLLMProvider(r, ctx)
 		// 这条路径不知道发言者是谁，只有完全公开时才给。
@@ -808,6 +825,7 @@ func (r *Runtime) claimDueReminders(now time.Time) []Reminder {
 	}
 	// 先取停用名单再上 reminderMu：两把锁不嵌套，就不会和别处的加锁顺序冲突。
 	disabledProfiles := r.disabledProfileSet()
+	safeModeHolds := r.safeModeTaskFilter()
 	r.reminderMu.Lock()
 	defer r.reminderMu.Unlock()
 	items := r.reminders.Reminders()
@@ -815,7 +833,8 @@ func (r *Runtime) claimDueReminders(now time.Time) []Reminder {
 		r.activeReminders = map[string]struct{}{}
 	}
 	due := make([]Reminder, 0, len(items))
-	for _, item := range items {
+	heldMarked := false
+	for index, item := range items {
 		if !item.CancelledAt.IsZero() {
 			continue
 		}
@@ -836,11 +855,26 @@ func (r *Runtime) claimDueReminders(now time.Time) []Reminder {
 		if item.TriggerAt.After(now) {
 			continue
 		}
+		// 安全模式停发往别的会话投递的任务：不认领，LastRunAt、触发时间和失败状态原样
+		// 留着，切回标准模式后下一轮调度照常接上。一次性提醒第一次被停发时记下原定时间，
+		// 补发时据此注明、过期作废，见 executeClaimedReminder。
+		if safeModeHolds(item) {
+			if !reminderIsRecurring(item) && item.SafeModeHeldTriggerAt.IsZero() {
+				items[index].SafeModeHeldTriggerAt = item.TriggerAt
+				heldMarked = true
+			}
+			continue
+		}
 		if _, running := r.activeReminders[item.ID]; running {
 			continue
 		}
 		r.activeReminders[item.ID] = struct{}{}
 		due = append(due, item)
+	}
+	if heldMarked {
+		if err := r.reminders.SaveReminders(items); err != nil {
+			r.setError(fmt.Sprintf("记录安全模式停发的提醒失败: %v", err))
+		}
 	}
 	return due
 }
@@ -880,6 +914,10 @@ func (r *Runtime) rescheduleInterruptedReminder(id string, startedAt time.Time) 
 
 func (r *Runtime) executeClaimedReminder(ctx context.Context, item Reminder) {
 	defer r.releaseClaimedReminder(item.ID)
+	// 认领之后到执行之间模式可能刚切过去：再判一次，停发的任务什么都不写。
+	if r.safeModeHoldsTask(item) {
+		return
+	}
 	// 启动时第一轮调度跑在聊天客户端连上之前（反向 WebSocket 尤其如此）。这里发出的
 	// 消息碰上「连接没就绪」就等连接回来再发，见 deliverNotice。
 	ctx = withScheduledDelivery(ctx)
@@ -964,11 +1002,26 @@ func (r *Runtime) executeClaimedReminder(ctx context.Context, item Reminder) {
 		return
 	}
 
+	notice := "提醒你：" + item.Message
+	// 在安全模式期间被停发过的提醒，切回标准模式才发出去：注明原定时间；原定时间过去
+	// 超过 safeModeHeldReminderMaxDelay 的不再补发，直接取消——一条隔天才到的「该开会
+	// 了」只会让人困惑。只管真被停发过的（有 SafeModeHeldTriggerAt），停机、重试造成的
+	// 迟到照旧投递，不加标注也不作废。
+	if held := item.SafeModeHeldTriggerAt; !held.IsZero() {
+		if time.Since(held) > safeModeHeldReminderMaxDelay {
+			if _, err := r.cancelOneTimeReminder(item.OwnerID, item.ID); err != nil {
+				r.setError(err.Error())
+			}
+			log.Printf("diana reminder: 提醒 %s 原定 %s，安全模式期间停发，过期超过 %s，不再补发，已取消", item.ID, held.Format(time.RFC3339), safeModeHeldReminderMaxDelay)
+			return
+		}
+		notice += "（原定 " + held.Local().Format("01-02 15:04") + "，安全模式期间暂停，推迟送达）"
+	}
 	// 提醒到点先戳一下设提醒的人，像人叫人一样；戳不出去不影响提醒本身。
 	if source := reminderSourceEvent(item); strings.TrimSpace(item.UserID) != "" && IsOneBotPlatform(r.currentPlatform(source)) {
 		_, _ = r.sendPoke(ctx, source, item.UserID, pokeSceneReminder)
 	}
-	err := r.sendSubscriberNotice(ctx, reminderSourceEvent(item), "提醒你："+item.Message)
+	err := r.sendSubscriberNotice(ctx, reminderSourceEvent(item), notice)
 	if reminderRunInterrupted(ctx, err) {
 		// 进程正在退出：这条提醒还没送到，保持原样等下次启动后再投。
 		return

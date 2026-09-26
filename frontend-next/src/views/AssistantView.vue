@@ -1540,27 +1540,31 @@
 
         <div v-show="editorTab === 'advanced'" class="stack">
           <!-- Agent -->
+          <!-- 以前这里是「启用 Agent」开关，现在换成模式：Agent 两种模式下都开着，
+               安全模式只关高风险能力。说明文字照后端规则表生成，不在这里另写一份。 -->
           <section class="card">
             <div class="card-header">
               <h2>内置 Agent</h2>
-              <span class="badge" :class="form.agent_enabled ? 'accent' : ''">{{ form.agent_enabled ? "已启用" : "未启用" }}</span>
+              <span class="badge" :class="agentMode === 'standard' ? 'accent' : ''">{{ agentModeLabel(agentMode) }}</span>
             </div>
             <div class="card-body form-grid">
               <div class="field wide">
-                <label class="switch">
-                  <input v-model="form.agent_enabled" type="checkbox" />
-                  <span class="track" aria-hidden="true"></span>
-                  <span class="switch-label">启用工具循环（文件读写 / 命令 / 浏览器）</span>
-                </label>
-                <span class="hint">
-                  本地工具全部锁在数据目录下的 workspace 里，路径固定不可配置。读取和检索随这个开关一起生效，写入和命令执行各自还要单独打开。
-                </span>
+                <label for="agent-mode">Agent 模式</label>
+                <AppSelect id="agent-mode" v-model="agentModeSelection" :options="agentModeOptions" />
+                <span class="hint">两种模式下 Agent 都开着。标准模式给全部能力；安全模式防的是网页、转发的聊天记录、群消息里夹带的指令把主人的会话带偏，所以对主人本人也生效，会关掉：</span>
+                <ul class="hint agent-mode-impacts">
+                  <li v-for="line in agentSafeModeImpacts" :key="line">{{ line }}</li>
+                </ul>
+                <span class="hint">查资料、记忆、提醒订阅、画图和读取工作区文件两种模式都照常。新建的机器人默认安全模式。</span>
               </div>
-              <template v-if="form.agent_enabled">
-                <div class="field">
-                  <label for="agent-steps">最大工具步数（≤8）</label>
-                  <input id="agent-steps" v-model.number="form.agent_max_steps" class="input" inputmode="numeric" />
-                </div>
+              <div class="field">
+                <label for="agent-steps">最大工具步数（1–16，默认 12；只管群成员，主人对话固定 16）</label>
+                <input id="agent-steps" v-model.number="form.agent_max_steps" class="input" type="number" inputmode="numeric" min="1" max="16" />
+              </div>
+              <div v-if="agentMode !== 'standard'" class="field wide">
+                <span class="hint">命令白名单、文件写入、浏览器和命令沙盒这些设置在安全模式下不起作用，切回标准模式后按原来的值生效。</span>
+              </div>
+              <template v-if="agentMode === 'standard'">
                 <!-- 白名单为空时 run_command 根本不注册。这不是「什么都不许跑」，
                      是模型手里没有这个工具——以前界面上没有任何地方这么说，于是
                      「让机器人执行指令」表现为它只用嘴回你，看不出是没开。 -->
@@ -2006,6 +2010,8 @@ import {
   type WorldBookNode,
   type WorldBookImportResult,
   getAgentDefaults,
+  getAgentModeImpact,
+  listManagedExtensions,
   saveProfileEnabled,
   saveAllProfilesEnabled,
   startBot,
@@ -2029,6 +2035,17 @@ import ReplyGateForm from "../components/ReplyGateForm.vue";
 import SecretField from "../components/SecretField.vue";
 import { pushStatusSnapshot, stream } from "../stream";
 import { askConfirm } from "../confirm";
+import {
+  agentModeLabel,
+  agentModeOptions,
+  needsSafeModeConfirm,
+  normalizeAgentMode,
+  safeModeImpactLines,
+  safeModeSwitchConfirm,
+  type AgentMode,
+  type AgentModeImpact,
+  type AgentSafeModeCategory
+} from "../agent-mode";
 import { toastError, toastSuccess } from "../toast";
 import { channelAccountUnhealthy, channelOperational, channelStatusHint, channelStatusLabel } from "../channel-status";
 
@@ -2188,6 +2205,63 @@ async function applyAgentDefaults(): Promise<void> {
     applyingAgentDefaults.value = false;
   }
 }
+
+// Agent 模式。切进安全模式要二次确认：确认框按后端规则表列出会停掉的能力，再补上
+// 能便宜查到的现场情况（还在跑的编码任务、已启用的 MCP 服务）。确认之前表单不变，
+// 确认之后也只改表单，照常点「保存配置」才生效。
+const agentSafeModeCatalog = ref<AgentSafeModeCategory[]>([]);
+const agentMode = computed<AgentMode>(() => normalizeAgentMode(form.value?.agent_mode, form.value?.agent_enabled));
+const agentSafeModeImpacts = computed(() => safeModeImpactLines(agentSafeModeCatalog.value));
+let agentSafeModeCatalogRequest: Promise<void> | null = null;
+function loadAgentSafeModeCatalog(): Promise<void> {
+  if (!agentSafeModeCatalogRequest) {
+    agentSafeModeCatalogRequest = getAgentDefaults()
+      .then((defaults) => {
+        agentSafeModeCatalog.value = defaults.agent_safe_mode ?? [];
+      })
+      .catch(() => {
+        // 拿不到时说明文字退回兜底版本，下次再试。
+        agentSafeModeCatalogRequest = null;
+      });
+  }
+  return agentSafeModeCatalogRequest;
+}
+async function loadAgentModeImpact(profileID: string): Promise<AgentModeImpact | null> {
+  if (!profileID) return null;
+  const [jobs, extensions] = await Promise.allSettled([getAgentModeImpact(profileID), listManagedExtensions(profileID)]);
+  return {
+    runningCodingJobs: jobs.status === "fulfilled" ? jobs.value.running_coding_jobs : null,
+    heldTasks: jobs.status === "fulfilled" ? (jobs.value.held_tasks ?? null) : null,
+    enabledMCPServers: extensions.status === "fulfilled" ? extensions.value.items.filter((item) => item.kind === "mcp" && item.enabled).length : null
+  };
+}
+const switchingAgentMode = ref(false);
+async function requestAgentModeChange(next: AgentMode): Promise<void> {
+  const current = form.value;
+  if (!current || switchingAgentMode.value) return;
+  const from = agentMode.value;
+  if (from === next) return;
+  if (needsSafeModeConfirm(from, next)) {
+    switchingAgentMode.value = true;
+    try {
+      const [, impact] = await Promise.all([loadAgentSafeModeCatalog(), loadAgentModeImpact(current.id ?? "")]);
+      const confirmed = await askConfirm(safeModeSwitchConfirm(agentSafeModeCatalog.value, impact));
+      // 确认框开着的时候换了机器人或重新加载了表单，这次选择作废。
+      if (!confirmed || form.value !== current) return;
+    } finally {
+      switchingAgentMode.value = false;
+    }
+  }
+  current.agent_mode = next;
+  current.agent_enabled = true;
+  toastSuccess(`已切换到${agentModeLabel(next)}，点「保存配置」后生效`);
+}
+const agentModeSelection = computed<string>({
+  get: () => agentMode.value,
+  set: (value) => {
+    void requestAgentModeChange(normalizeAgentMode(value));
+  }
+});
 
 const commandSandboxMode = computed<string>({
   get: () => form.value?.agent_command_sandbox || "auto",
@@ -4107,6 +4181,7 @@ async function load(): Promise<void> {
 
 onMounted(() => {
   trackHeaderHeight();
+  void loadAgentSafeModeCatalog();
   void load().then(openRequestedTab);
 });
 

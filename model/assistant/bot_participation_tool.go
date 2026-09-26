@@ -55,7 +55,7 @@ func (t *dianaBotParticipationTool) Run(ctx context.Context, input map[string]an
 	if scope != "group" && scope != "bot" {
 		return "", fmt.Errorf("scope 必须为 group 或 bot")
 	}
-	op := strings.TrimSpace(configToolString(input, "operation"))
+	op := t.CanonicalOperation(input)
 	if op != "get" && op != "update" {
 		return "", fmt.Errorf("operation 必须为 get 或 update")
 	}
@@ -248,4 +248,9 @@ func (r *Runtime) saveBotParticipation(expected BotConfig, prefs ParticipationPr
 	r.profileConfigs[saved.ID] = saved
 	r.updatedAt = time.Now()
 	return nil
+}
+
+// CanonicalOperation 是 Run 实际执行的操作，按操作拦截时用同一套换算。
+func (*dianaBotParticipationTool) CanonicalOperation(input map[string]any) string {
+	return strings.TrimSpace(configToolString(input, "operation"))
 }

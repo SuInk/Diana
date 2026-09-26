@@ -785,7 +785,7 @@ func (t *dianaImageTool) persistsToWorkspace() bool {
 		return false
 	}
 	cfg := t.runtime.effectiveConfigForEvent(t.event)
-	return cfg.AgentEnabled && cfg.AgentFileWriteEnabled
+	return cfg.AgentEnabled && cfg.agentFileWriteAllowed()
 }
 
 // dianaImageWorkspaceStem 给一次出图任务定文件名前缀：时间方便人认，任务键的一段

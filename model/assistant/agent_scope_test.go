@@ -44,7 +44,7 @@ func TestOwnerAgentExtensionCatalogIncludesDefaultPlugins(t *testing.T) {
 	plugins := NewDefaultPluginManager()
 	runtime := &Runtime{plugins: plugins}
 	workDir := t.TempDir()
-	cfg := DefaultBotConfig()
+	cfg := standardModeBotConfig()
 	cfg.AgentMCPConfigPath = filepath.Join(workDir, "missing-mcp.json")
 	registry, err := runtime.newAgentRegistry(
 		context.Background(),
@@ -81,7 +81,7 @@ func TestOwnerAgentExtensionCatalogIncludesDefaultPlugins(t *testing.T) {
 
 func TestAgentRegistryExposesLLMConfigOnlyToOwner(t *testing.T) {
 	workDir := t.TempDir()
-	cfg := DefaultBotConfig()
+	cfg := standardModeBotConfig()
 	cfg.AgentSkillRoots = []string{filepath.Join(workDir, "skills")}
 	cfg.AgentMCPConfigPath = filepath.Join(workDir, "missing-mcp.json")
 	runtime := NewRuntime(BotConfig{OwnerID: "owner"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
@@ -122,7 +122,7 @@ func TestAgentRegistryExposesLLMConfigOnlyToOwner(t *testing.T) {
 
 func TestOwnerAgentRegistryReusesSharedExtensionsAcrossRequests(t *testing.T) {
 	workDir := t.TempDir()
-	cfg := DefaultBotConfig()
+	cfg := standardModeBotConfig()
 	cfg.AgentSkillRoots = []string{filepath.Join(workDir, "skills")}
 	cfg.AgentMCPConfigPath = filepath.Join(workDir, "missing-mcp.json")
 	runtime := NewRuntime(BotConfig{OwnerID: "owner"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
@@ -335,7 +335,7 @@ func TestSharedExtensionRegistryKeepsLocalToolsPerBot(t *testing.T) {
 	defer runtime.closeAgentRegistryCache()
 	event := MessageEvent{Kind: EventKindPrivate, UserID: "owner"}
 	policy := RelationshipPolicy{Owner: true}
-	withCommands, without := DefaultBotConfig(), DefaultBotConfig()
+	withCommands, without := standardModeBotConfig(), standardModeBotConfig()
 	withCommands.AgentCommandAllowlist = []string{"echo"}
 	without.AgentCommandAllowlist = []string{}
 
@@ -379,7 +379,7 @@ func TestMemberMCPPermissionIsOptInPerRobot(t *testing.T) {
 	if err := os.MkdirAll(workDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	cfg := DefaultBotConfig()
+	cfg := standardModeBotConfig()
 	cfg.AgentSkillRoots = []string{filepath.Join(dbDir, "skills")}
 	cfg.AgentMCPConfigPath = filepath.Join(dbDir, "missing-mcp.json")
 	runtime := NewRuntime(BotConfig{OwnerID: "owner"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
@@ -541,7 +541,7 @@ func TestMemberSkillPermissionOpensOnlyTheChosenSkill(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	cfg := DefaultBotConfig()
+	cfg := standardModeBotConfig()
 	cfg.AgentSkillRoots = []string{skillRoot}
 	cfg.AgentMCPConfigPath = filepath.Join(dbDir, "missing-mcp.json")
 	runtime := NewRuntime(BotConfig{OwnerID: "owner"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
@@ -603,7 +603,7 @@ func TestGroupExtensionAccessOverridesBotTier(t *testing.T) {
 	if err := os.WriteFile(workspaceStateTestPath(t, workDir, "extension-overrides.json"), []byte(`{}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	cfg := DefaultBotConfig()
+	cfg := standardModeBotConfig()
 	cfg.ID = "bot-a"
 	cfg.OwnerID = "owner"
 	cfg.AgentSkillRoots = []string{filepath.Join(dbDir, "skills")}
@@ -734,7 +734,7 @@ func TestGroupExtensionTierOverridesBotLevelDisable(t *testing.T) {
 	if err := os.WriteFile(workspaceStateTestPath(t, workDir, "extension-overrides.json"), []byte(`{"bot-a":{"mcp:probe":false}}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	cfg := DefaultBotConfig()
+	cfg := standardModeBotConfig()
 	cfg.ID = "bot-a"
 	cfg.OwnerID = "owner"
 	cfg.AgentSkillRoots = []string{filepath.Join(dbDir, "skills")}

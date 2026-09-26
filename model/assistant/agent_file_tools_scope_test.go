@@ -13,7 +13,7 @@ import (
 func TestAgentRegistryConfigCarriesTheFileWriteSwitch(t *testing.T) {
 	runtime := &Runtime{}
 	for _, enabled := range []bool{false, true} {
-		cfg := BotConfig{AgentFileWriteEnabled: enabled}.WithDefaults()
+		cfg := BotConfig{AgentMode: AgentModeStandard, AgentFileWriteEnabled: enabled}.WithDefaults()
 		if got := runtime.agentRegistryConfig(cfg, MessageEvent{}, false).FileWriteEnabled; got != enabled {
 			t.Fatalf("AgentFileWriteEnabled=%v reached agent config as %v", enabled, got)
 		}
@@ -53,7 +53,7 @@ func TestLocalFileToolsAreOwnerOnly(t *testing.T) {
 func TestOwnerRegistryHonoursTheFileWriteSwitch(t *testing.T) {
 	runtime := &Runtime{}
 	for _, enabled := range []bool{false, true} {
-		cfg := BotConfig{AgentFileWriteEnabled: enabled}.WithDefaults()
+		cfg := BotConfig{AgentMode: AgentModeStandard, AgentFileWriteEnabled: enabled}.WithDefaults()
 		registry, err := agent.NewDefaultToolRegistry(runtime.agentRegistryConfig(cfg, MessageEvent{}, false))
 		if err != nil {
 			t.Fatal(err)

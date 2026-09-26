@@ -429,3 +429,10 @@ func marshalRepositoryWatchToolResult(result dianaRepositoryWatchResult) (string
 	}
 	return string(body), nil
 }
+
+// CanonicalOperation 是 Run 实际执行的操作：没写按 list 算，add/edit/pause/remove/check
+// 各算 create/update/cancel/delete/run。改或立即执行一条投递到当前会话以外（别的群、
+// WebUI 配的投递目标）的订阅时带 _elsewhere，见 taskCanonicalOperation。
+func (t *dianaRepositoryWatchTool) CanonicalOperation(input map[string]any) string {
+	return t.runtime.taskCanonicalOperation(t.event, input, "list")
+}

@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+
+	"github.com/SuInk/diana/model/agent"
 )
 
 // 订阅工具：把 schedule、rss、github_watch 三个工具合成一个。
@@ -281,4 +283,28 @@ func subscriptionGitHubDelegate(tool *dianaRepositoryWatchTool) interface {
 		return nil
 	}
 	return tool
+}
+
+// CanonicalOperation 是这次调用实际会执行的操作：没写 operation 按 list 算，具体换算
+// 交给对应 kind 的工具（提醒和订阅的 _elsewhere 由它们判断），和 Run 转发时一致。
+func (t *dianaSubscriptionTool) CanonicalOperation(input map[string]any) string {
+	operation := strings.ToLower(strings.TrimSpace(configToolString(input, "operation")))
+	if operation == "" {
+		operation = "list"
+	}
+	kind := strings.ToLower(strings.TrimSpace(configToolString(input, "kind")))
+	backend, ok := t.backend(kind)
+	if !ok {
+		return operation
+	}
+	canonical, ok := backend.delegate.(agent.CanonicalOperationTool)
+	if !ok {
+		return operation
+	}
+	forwarded := make(map[string]any, len(input))
+	for key, value := range input {
+		forwarded[key] = value
+	}
+	forwarded["operation"] = operation
+	return canonical.CanonicalOperation(forwarded)
 }

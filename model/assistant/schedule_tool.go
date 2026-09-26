@@ -83,12 +83,18 @@ func (t *dianaScheduleTool) Run(_ context.Context, input map[string]any) (string
 	if t == nil || t.runtime == nil {
 		return "", fmt.Errorf("diana schedule: runtime is not configured")
 	}
+	// 按 id 改、取消、删除之前先认归属：别的机器人名下的任务一律按找不到处理，
+	// 不管什么模式。见 taskOfOtherBot。
+	if id := strings.TrimSpace(configToolString(input, "id")); id != "" && t.runtime.taskOfOtherBot(id, t.event) {
+		return "", fmt.Errorf("没有找到任务 %s", id)
+	}
 	targetID, err := taskTargetUserID(context.Background(), t.runtime, t.event, input)
 	if err != nil {
 		return "", err
 	}
 	targetEvent := t.event
 	targetEvent.UserID = targetID
+	targetEvent.taskRequester = t.event.UserID
 	operation := strings.ToLower(strings.TrimSpace(configToolString(input, "operation")))
 	switch operation {
 	case "create", "add":
@@ -121,6 +127,10 @@ func (t *dianaScheduleTool) Run(_ context.Context, input map[string]any) (string
 		items := t.runtime.scheduledQueries(targetID)
 		result := make([]dianaSchedule, 0, len(items))
 		for _, item := range items {
+			// 查别人的只看这台机器人名下的，理由同提醒列表。
+			if !sameAccountID(targetID, t.event.UserID) && !t.runtime.sameBotAsEvent(item.ProfileID, t.event) {
+				continue
+			}
 			result = append(result, *scheduleForTool(item))
 		}
 		return marshalDianaScheduleResult(dianaScheduleResult{
@@ -282,6 +292,7 @@ func (r *Runtime) addScheduledQueries(event MessageEvent, requests []scheduleCre
 			OwnerID:          event.UserID,
 			GroupID:          event.GroupID,
 			UserID:           event.UserID,
+			RequestedBy:      firstNonEmpty(event.taskRequester, event.UserID),
 			Message:          query,
 			TriggerAt:        now.Add(request.Interval),
 			IntervalSeconds:  int64(request.Interval / time.Second),
@@ -450,4 +461,10 @@ func marshalDianaScheduleResult(result dianaScheduleResult) (string, error) {
 		return "", err
 	}
 	return string(body), nil
+}
+
+// CanonicalOperation 是 Run 实际执行的操作；投递目标不是当前会话时带 _elsewhere，
+// 见 taskCanonicalOperation。
+func (t *dianaScheduleTool) CanonicalOperation(input map[string]any) string {
+	return t.runtime.taskCanonicalOperation(t.event, input, "")
 }

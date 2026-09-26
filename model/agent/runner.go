@@ -544,7 +544,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 			// 而换哪个名字都一样没权限。
 			repair := fmt.Sprintf("工具 %q 不存在。可用工具：\n%s", action.Tool, r.registry.Descriptions())
 			if r.registry.PolicyDenied(action.Tool) {
-				repair = deniedToolError(action.Tool).Error()
+				repair = r.registry.denialError(action.Tool).Error()
 			}
 			messages = append(messages, llm.Message{
 				Role:    llm.RoleUser,
@@ -556,7 +556,9 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 			action.Input = coerceToolInputArrays(typed.InputSchema(), action.Input)
 		}
 		explicitRequestKind := explicitUserRequestKind(tool, action.Input)
-		if explicitRequestKind != "" && !ExtensionMutationAuthorized(currentUserRequestText(req), explicitRequestKind, action.Tool, action.Input) {
+		// 被配置关掉的操作不必先要确认码：用户照着打了码也做不成，下面执行前直接拒绝。
+		operationDisabled := r.registry.OperationDisabledError(action.Tool, action.Input)
+		if operationDisabled == nil && explicitRequestKind != "" && !ExtensionMutationAuthorized(currentUserRequestText(req), explicitRequestKind, action.Tool, action.Input) {
 			protocolRepairs++
 			code := extensionMutationConfirmationCode(explicitRequestKind, action.Tool, action.Input)
 			guardErr := "操作被拒绝：当前用户消息里没有确认码 " + code
@@ -657,7 +659,17 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 		outputLimit := r.toolOutputLimit(tool)
 		toolCtx, toolCancel := contextWithToolBudget(WithToolOutputBudget(ctx, outputLimit), time.Duration(r.cfg.ToolTimeoutMS)*time.Millisecond, time.Duration(r.cfg.FinalizationReserveMS)*time.Millisecond)
 		toolStartedAt := time.Now()
-		output, err := tool.Run(toolCtx, action.Input)
+		var output string
+		// 被配置关掉的操作（比如安全模式下的写操作）不执行，拒绝理由按工具报错交回
+		// 模型：它照常占一步、照常进运行记录，模型看到的是一次明确失败而不是沉默。
+		// 执行前按最终入参再判一次：上面判的是整理之前的入参。
+		err = operationDisabled
+		if err == nil {
+			err = r.registry.OperationDisabledError(action.Tool, action.Input)
+		}
+		if err == nil {
+			output, err = tool.Run(toolCtx, action.Input)
+		}
 		toolCancel()
 		toolDuration := time.Since(toolStartedAt)
 		record := Step{Index: len(steps) + 1, Tool: action.Tool, Input: action.Input, DurationMS: toolDuration.Milliseconds()}
@@ -1190,6 +1202,11 @@ func (r *Runner) systemPrompt() string {
 		loadedContracts = loader.loadedContracts()
 	} else {
 		sections = append(sections, "可用工具（完整说明和参数以请求中的工具定义为准）：\n"+r.registry.SystemPromptCatalog())
+	}
+	// 关掉的工具不在上面的目录里，单独列一段：模型不知道它们存在的话，用户点名要用时
+	// 只会以为自己拼错了名字。这段只随机器人配置变，不影响前缀缓存。
+	if disabled := r.registry.DisabledSummary(); disabled != "" {
+		sections = append(sections, disabled)
 	}
 	if extensionsPrompt != "" {
 		sections = append(sections, extensionsPrompt)

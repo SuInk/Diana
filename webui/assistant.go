@@ -319,6 +319,7 @@ func (h *BotHandler) registerRoutes(router gin.IRouter, base string) {
 	router.POST(base+"/config/profile-enabled", h.setProfileEnabled)
 	router.POST(base+"/config/profiles-enabled", h.setAllProfilesEnabled)
 	router.GET(base+"/agent-defaults", h.agentDefaults)
+	router.GET(base+"/agent-mode/impact", h.agentModeImpact)
 	router.GET(base+"/features", h.featuresStatus)
 	router.GET(base+"/status", h.status)
 	router.GET(base+"/auto-info", h.autoInfo)
@@ -453,6 +454,8 @@ func (h *BotHandler) agentDefaults(c *gin.Context) {
 		"agent_command_sandbox":    defaults.AgentCommandSandbox,
 		"agent_max_steps":          defaults.AgentMaxSteps,
 		"agent_command_timeout_ms": defaults.AgentCommandTimeoutMS,
+		// 安全模式关掉什么由后端那张规则表说了算，界面的说明和确认框照它生成。
+		"agent_safe_mode": assistant.AgentSafeModeCatalog(),
 	})
 }
 
@@ -473,6 +476,11 @@ func (h *BotHandler) saveProfile(c *gin.Context, create bool) {
 		return
 	}
 
+	// 模式写错直接拒绝：悄悄按安全模式存下来，界面上看着像保存成功，其实不是想要的那档。
+	if err := assistant.ValidateAgentMode(payload.AgentMode); err != nil {
+		h.writeError(c, http.StatusBadRequest, "config_save", err, "", nil)
+		return
+	}
 	set := h.profiles.Profiles()
 	existing := existingBotProfileConfig(set, payload)
 	if create {
@@ -521,6 +529,11 @@ func (h *BotHandler) saveProfile(c *gin.Context, create bool) {
 		return
 	}
 	recordRequestOperation(c, h.logs, "config_save", "OneBot v11 机器人配置已保存", current.ID, botLogMetadata(current))
+	if create {
+		h.recordAgentModeChange(c, "新建", assistant.BotConfig{}, current)
+	} else {
+		h.recordAgentModeChange(c, "", existing, current)
+	}
 	c.JSON(http.StatusOK, assistant.PayloadFromProfileSet(next, savedID))
 }
 
@@ -562,6 +575,7 @@ func (h *BotHandler) cloneProfile(c *gin.Context) {
 			return
 		}
 		recordRequestOperation(c, h.logs, "profile_clone", "OneBot v11 机器人配置已复制", sourceID, botLogMetadata(profile))
+		h.recordAgentModeChange(c, "复制出的", assistant.BotConfig{}, current)
 		c.JSON(http.StatusOK, assistant.PayloadFromProfileSet(next, clonedID))
 		return
 	}

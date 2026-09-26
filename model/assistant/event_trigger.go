@@ -284,6 +284,7 @@ func (r *Runtime) dispatchEventTriggers(ctx context.Context, event MessageEvent,
 // 两条消息并发进来也只会有一条点燃同一个一次性任务。
 func (r *Runtime) claimEventTriggers(event MessageEvent, text string, eventSessionSendable bool, now time.Time) []Reminder {
 	disabledProfiles := r.disabledProfileSet()
+	safeModeHolds := r.safeModeTaskFilter()
 	r.reminderMu.Lock()
 	defer r.reminderMu.Unlock()
 	items := r.reminders.Reminders()
@@ -298,6 +299,10 @@ func (r *Runtime) claimEventTriggers(event MessageEvent, text string, eventSessi
 			continue
 		}
 		if spec.DeliverTo != eventTriggerDeliverOrigin && !eventSessionSendable {
+			continue
+		}
+		// 安全模式下盯别的群的触发任务不点燃，也不记次数：任务原样保留。
+		if safeModeHolds(*item) {
 			continue
 		}
 		spec.FireCount++

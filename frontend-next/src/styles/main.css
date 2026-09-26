@@ -1263,6 +1263,13 @@ code {
   color: var(--muted);
 }
 
+/* 安全模式关掉的能力清单：和 .hint 同字号，只是排成列表。 */
+.field ul.agent-mode-impacts {
+  margin: 2px 0;
+  padding-left: 18px;
+  line-height: 1.6;
+}
+
 .input,
 .select,
 .textarea {

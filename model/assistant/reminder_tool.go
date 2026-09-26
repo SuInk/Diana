@@ -86,12 +86,18 @@ func (t *dianaReminderTool) Run(ctx context.Context, input map[string]any) (stri
 	if t == nil || t.runtime == nil {
 		return "", fmt.Errorf("diana reminder: runtime is not configured")
 	}
+	// 按 id 改、取消、删除之前先认归属：别的机器人名下的任务一律按找不到处理，
+	// 不管什么模式。见 taskOfOtherBot。
+	if id := strings.TrimSpace(configToolString(input, "id")); id != "" && t.runtime.taskOfOtherBot(id, t.event) {
+		return "", fmt.Errorf("没有找到任务 %s", id)
+	}
 	targetID, err := taskTargetUserID(ctx, t.runtime, t.event, input)
 	if err != nil {
 		return "", err
 	}
 	targetEvent := t.event
 	targetEvent.UserID = targetID
+	targetEvent.taskRequester = t.event.UserID
 	operation := strings.ToLower(strings.TrimSpace(configToolString(input, "operation")))
 	switch operation {
 	case "create", "add":
@@ -128,6 +134,11 @@ func (t *dianaReminderTool) Run(ctx context.Context, input map[string]any) (stri
 		items := t.runtime.oneTimeReminders(targetID)
 		result := make([]dianaReminder, 0, len(items))
 		for _, item := range items {
+			// 查别人的只看这台机器人名下的：主人权限按机器人给，另一台机器人的提醒内容
+			// 不归这位主人看。查自己的不按机器人过滤，和额度的统计口径一致。
+			if !sameAccountID(targetID, t.event.UserID) && !t.runtime.sameBotAsEvent(item.ProfileID, t.event) {
+				continue
+			}
 			result = append(result, *reminderForTool(item))
 		}
 		return marshalDianaReminderResult(dianaReminderResult{
@@ -367,6 +378,7 @@ func (r *Runtime) addOneTimeReminders(event MessageEvent, requests []reminderCre
 			OwnerID:          event.UserID,
 			GroupID:          event.GroupID,
 			UserID:           event.UserID,
+			RequestedBy:      firstNonEmpty(event.taskRequester, event.UserID),
 			Message:          message,
 			TriggerAt:        triggerAt,
 			CreatedAt:        now,
@@ -497,6 +509,10 @@ func (r *Runtime) updateOneTimeReminder(ownerID string, id string, input map[str
 		if rawAt != "" {
 			item.TriggerAt = triggerAt
 		}
+		if rawDelay != "" || rawAt != "" {
+			// 改了时间就是新约的时间，之前被停发时记下的原定时间不再算数。
+			item.SafeModeHeldTriggerAt = time.Time{}
+		}
 		if message != "" {
 			item.Message = message
 		}
@@ -543,4 +559,10 @@ func marshalDianaReminderResult(result dianaReminderResult) (string, error) {
 		return "", err
 	}
 	return string(body), nil
+}
+
+// CanonicalOperation 是 Run 实际执行的操作；投递目标不是当前会话时带 _elsewhere，
+// 见 taskCanonicalOperation。
+func (t *dianaReminderTool) CanonicalOperation(input map[string]any) string {
+	return t.runtime.taskCanonicalOperation(t.event, input, "")
 }

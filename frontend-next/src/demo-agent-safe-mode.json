@@ -1,0 +1,320 @@
+[
+  {
+    "id": "host_exec",
+    "label": "本机代码执行",
+    "impact": "本机命令（run_command）和编码代理停用，浏览器里也不能执行脚本",
+    "rules": [
+      {
+        "category": "host_exec",
+        "tool": "run_command",
+        "reason": "在本机执行命令"
+      },
+      {
+        "category": "host_exec",
+        "tool": "coding",
+        "reason": "编码代理在仓库里不受白名单约束地跑命令、改代码"
+      },
+      {
+        "category": "host_exec",
+        "tool": "browser_eval",
+        "reason": "在带登录态的页面里执行任意 JavaScript"
+      }
+    ]
+  },
+  {
+    "id": "third_party",
+    "label": "安装和运行第三方代码",
+    "impact": "不能安装、卸载或启用 Skill 和 MCP；已启用的 MCP 工具不可用（Skill 说明文档仍可读取）",
+    "rules": [
+      {
+        "category": "third_party",
+        "tool": "install_skill",
+        "reason": "从外部来源安装 Skill"
+      },
+      {
+        "category": "third_party",
+        "tool": "uninstall_skill",
+        "reason": "卸载 Skill 属于扩展管理，和安装同一档"
+      },
+      {
+        "category": "third_party",
+        "tool": "mcp_install",
+        "reason": "安装 MCP 服务就是在本机装一个第三方程序"
+      },
+      {
+        "category": "third_party",
+        "tool": "mcp_uninstall",
+        "reason": "MCP 服务管理，和安装同一档"
+      },
+      {
+        "category": "third_party",
+        "tool": "mcp_set_enabled",
+        "reason": "启用 MCP 服务等于让第三方程序开始跑"
+      },
+      {
+        "category": "third_party",
+        "tool": "mcp__*",
+        "reason": "MCP 服务是第三方程序，以机器人的权限运行，已启用的也不给用"
+      },
+      {
+        "category": "third_party",
+        "tool": "mcp_media",
+        "reason": "取 MCP 工具的产物；安全模式不跑 MCP，共用暂存里只会是别的机器人的东西"
+      }
+    ]
+  },
+  {
+    "id": "act_as_owner",
+    "label": "以主人身份对外操作",
+    "impact": "内置浏览器和浏览器控制扩展（带主人登录态）不能再操作；GitHub 写操作、跨会话/跨群发送停用；不能再建往别的会话发的事件触发、提醒和订阅，已有的这类任务暂停投递",
+    "rules": [
+      {
+        "category": "act_as_owner",
+        "tool": "browser_open",
+        "reason": "操作带主人登录态的浏览器"
+      },
+      {
+        "category": "act_as_owner",
+        "tool": "browser_text",
+        "reason": "读取带主人登录态的浏览器页面"
+      },
+      {
+        "category": "act_as_owner",
+        "tool": "browser_click",
+        "reason": "操作带主人登录态的浏览器"
+      },
+      {
+        "category": "act_as_owner",
+        "tool": "browser_type",
+        "reason": "操作带主人登录态的浏览器"
+      },
+      {
+        "category": "act_as_owner",
+        "tool": "browser_screenshot",
+        "reason": "读取带主人登录态的浏览器页面"
+      },
+      {
+        "category": "act_as_owner",
+        "tool": "browser_tabs",
+        "reason": "操作带主人登录态的浏览器"
+      },
+      {
+        "category": "act_as_owner",
+        "tool": "browser_scroll",
+        "reason": "操作带主人登录态的浏览器"
+      },
+      {
+        "category": "act_as_owner",
+        "tool": "browser_press_key",
+        "reason": "操作带主人登录态的浏览器"
+      },
+      {
+        "category": "act_as_owner",
+        "tool": "browser_navigate",
+        "reason": "操作带主人登录态的浏览器"
+      },
+      {
+        "category": "act_as_owner",
+        "tool": "browser_select",
+        "reason": "操作带主人登录态的浏览器"
+      },
+      {
+        "category": "act_as_owner",
+        "tool": "browser_wait",
+        "reason": "操作带主人登录态的浏览器"
+      },
+      {
+        "category": "act_as_owner",
+        "tool": "browser_handoff",
+        "reason": "请主人在带登录态的内置浏览器里接手后继续操作"
+      },
+      {
+        "category": "act_as_owner",
+        "tool": "browser_ext_tabs",
+        "reason": "操作主人自己的浏览器（浏览器控制扩展）"
+      },
+      {
+        "category": "act_as_owner",
+        "tool": "browser_ext_read",
+        "reason": "读取主人自己的浏览器页面（浏览器控制扩展）"
+      },
+      {
+        "category": "act_as_owner",
+        "tool": "browser_ext_open",
+        "reason": "操作主人自己的浏览器（浏览器控制扩展）"
+      },
+      {
+        "category": "act_as_owner",
+        "tool": "browser_ext_click",
+        "reason": "操作主人自己的浏览器（浏览器控制扩展）"
+      },
+      {
+        "category": "act_as_owner",
+        "tool": "browser_ext_type",
+        "reason": "操作主人自己的浏览器（浏览器控制扩展）"
+      },
+      {
+        "category": "act_as_owner",
+        "tool": "github",
+        "field": "operation",
+        "operations": [
+          "create",
+          "update",
+          "comment",
+          "review",
+          "close",
+          "reopen",
+          "approve"
+        ],
+        "reason": "以主人配置的 GitHub 身份写入仓库；读仓库、搜 Issue 照常"
+      },
+      {
+        "category": "act_as_owner",
+        "tool": "cross_session_message",
+        "reason": "往当前会话以外的私聊或群发消息"
+      },
+      {
+        "category": "act_as_owner",
+        "tool": "event_trigger",
+        "field": "operation",
+        "operations": [
+          "create_elsewhere"
+        ],
+        "reason": "创建盯别的群或任何地方的事件触发任务；只盯当前会话的照常"
+      },
+      {
+        "category": "act_as_owner",
+        "tool": "reminder",
+        "field": "operation",
+        "operations": [
+          "create_elsewhere",
+          "update_elsewhere"
+        ],
+        "reason": "建或改投递到当前会话以外的提醒；当前会话里的提醒照常"
+      },
+      {
+        "category": "act_as_owner",
+        "tool": "subscription",
+        "field": "operation",
+        "operations": [
+          "create_elsewhere",
+          "update_elsewhere",
+          "run_elsewhere"
+        ],
+        "reason": "建、改或立即执行投递到当前会话以外的订阅；当前会话里的订阅照常"
+      }
+    ]
+  },
+  {
+    "id": "file_write",
+    "label": "改动本地文件",
+    "impact": "不能再写入、编辑、保存或整理工作区文件（列目录、读取、检索、发送附件照常）",
+    "rules": [
+      {
+        "category": "file_write",
+        "tool": "write_file",
+        "reason": "写入工作区文件"
+      },
+      {
+        "category": "file_write",
+        "tool": "edit_file",
+        "reason": "修改工作区文件"
+      },
+      {
+        "category": "file_write",
+        "tool": "save_to_workspace",
+        "reason": "把文件存进工作区"
+      },
+      {
+        "category": "file_write",
+        "tool": "manage_files",
+        "field": "action",
+        "operations": [
+          "move",
+          "copy",
+          "delete",
+          "mkdir"
+        ],
+        "reason": "挪动、复制、删除文件或建目录；stat 照常"
+      }
+    ]
+  },
+  {
+    "id": "self_modify",
+    "label": "改机器人设置和群管",
+    "impact": "不能改机器人配置、回复屏蔽名单、机器人标记、模型设置和扩展权限，不能禁言、踢人或处理好友和加群请求",
+    "rules": [
+      {
+        "category": "self_modify",
+        "tool": "bot_config",
+        "field": "operation",
+        "operations": [
+          "update"
+        ],
+        "reason": "修改机器人的接话和闲聊设置；读取照常"
+      },
+      {
+        "category": "self_modify",
+        "tool": "reply_block",
+        "field": "operation",
+        "operations": [
+          "block",
+          "unblock"
+        ],
+        "reason": "修改回复屏蔽名单；查看照常"
+      },
+      {
+        "category": "self_modify",
+        "tool": "bot_markers",
+        "field": "operation",
+        "operations": [
+          "mark",
+          "unmark"
+        ],
+        "reason": "修改机器人标记名单；查看照常"
+      },
+      {
+        "category": "self_modify",
+        "tool": "llm_config",
+        "field": "operation",
+        "operations": [
+          "update"
+        ],
+        "reason": "切换这台机器人用的模型；查看照常"
+      },
+      {
+        "category": "self_modify",
+        "tool": "extension_access",
+        "field": "action",
+        "operations": [
+          "bot_tier",
+          "group_tier",
+          "allow",
+          "deny"
+        ],
+        "reason": "修改扩展对群成员的开放档位和名单；查看照常"
+      },
+      {
+        "category": "self_modify",
+        "tool": "platform",
+        "field": "operation",
+        "operations": [
+          "mute",
+          "unmute",
+          "kick"
+        ],
+        "reason": "禁言、解禁、踢人等群管操作；查群资料、撤回自己的消息照常"
+      },
+      {
+        "category": "self_modify",
+        "tool": "onebot_requests",
+        "field": "operation",
+        "operations": [
+          "approve",
+          "reject"
+        ],
+        "reason": "同意或拒绝好友、加群请求；查看照常"
+      }
+    ]
+  }
+]

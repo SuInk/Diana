@@ -31,6 +31,8 @@ type RSSWatchCreateInput struct {
 	FeedURLs, TwitterHandles                                        []string
 	Interval                                                        time.Duration
 	Platform, ProfileID, ContextNamespace, OwnerID, GroupID, UserID string
+	// RequestedBy 是在对话里发起的人，替别人建订阅时和 UserID 不同，见 Reminder.RequestedBy。
+	RequestedBy string
 }
 
 type RSSWatchUpdateInput struct {
@@ -114,6 +116,11 @@ func (t *dianaRSSWatchTool) Run(ctx context.Context, input map[string]any) (stri
 	if t == nil || t.runtime == nil {
 		return "", fmt.Errorf("diana rss: runtime is not configured")
 	}
+	// 按 id 改、取消、删除之前先认归属：别的机器人名下的任务一律按找不到处理，
+	// 不管什么模式。见 taskOfOtherBot。
+	if id := strings.TrimSpace(configToolString(input, "id")); id != "" && t.runtime.taskOfOtherBot(id, t.event) {
+		return "", fmt.Errorf("没有找到任务 %s", id)
+	}
 	policy := t.runtime.relationshipPolicy(ctx, t.event)
 	targetID, err := taskTargetUserID(ctx, t.runtime, t.event, input)
 	if err != nil {
@@ -137,7 +144,7 @@ func (t *dianaRSSWatchTool) Run(ctx context.Context, input map[string]any) (stri
 			FeedURLs: configToolStringSlice(input, "feed_urls"), TwitterHandles: configToolStringSlice(input, "twitter_handles"),
 			JudgePrompt: configToolString(input, "judge_prompt"), Interval: interval,
 			Platform: t.event.Platform, ProfileID: t.event.ProfileID, ContextNamespace: t.event.ContextNamespace,
-			OwnerID: targetID, GroupID: t.event.GroupID, UserID: targetID,
+			OwnerID: targetID, GroupID: t.event.GroupID, UserID: targetID, RequestedBy: t.event.UserID,
 		})
 		if err != nil {
 			return "", err
@@ -306,6 +313,7 @@ func (r *Runtime) CreateRSSWatch(ctx context.Context, input RSSWatchCreateInput)
 		sources[index].Name = feedName
 		sources[index].LastItemID, sources[index].LastPublishedAt = baseline.ItemID, baseline.PublishedAt
 	}
+	event.taskRequester = strings.TrimSpace(input.RequestedBy)
 	return r.addRSSWatch(event, firstNonEmpty(strings.TrimSpace(input.OwnerID), event.UserID), judge, interval, sources, input.NotificationTargets...)
 }
 
@@ -407,7 +415,8 @@ func (r *Runtime) addRSSWatch(event MessageEvent, owner, judge string, interval 
 		NotificationTargetsJSON: encodeReminderDeliveryTargets(normalizeReminderDeliveryTargets(targets)),
 		ID:                      uuid.NewString()[:8], Kind: ReminderKindRSSWatch, Platform: event.Platform, ProfileID: event.ProfileID,
 		ContextNamespace: event.ContextNamespace, OwnerID: owner, GroupID: event.GroupID, UserID: event.UserID,
-		Message: rssWatchMessage(sources), FeedJudgePrompt: judge,
+		RequestedBy: firstNonEmpty(event.taskRequester, event.UserID),
+		Message:     rssWatchMessage(sources), FeedJudgePrompt: judge,
 		TriggerAt: now.Add(interval), IntervalSeconds: int64(interval / time.Second), CreatedAt: now,
 	}
 	applyRSSWatchSources(&item, sources)
@@ -738,4 +747,10 @@ func restoreMaskedFeedURLs(rawURLs []string, current []ReminderFeedSource) ([]st
 		out = append(out, restored)
 	}
 	return out, nil
+}
+
+// CanonicalOperation 是 Run 实际执行的操作：没写 operation 按 create 算；投递目标不是
+// 当前会话时带 _elsewhere，见 taskCanonicalOperation。
+func (t *dianaRSSWatchTool) CanonicalOperation(input map[string]any) string {
+	return t.runtime.taskCanonicalOperation(t.event, input, "create")
 }

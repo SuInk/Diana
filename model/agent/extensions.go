@@ -70,6 +70,8 @@ type ExtensionState struct {
 	// 的全部凭据信息，原文只在运行时本地拼请求时用。
 	Credentials []ExtensionCredential `json:"credentials,omitempty"`
 	Error       string                `json:"error,omitempty"`
+	// DisabledReason 非空表示这项被机器人配置整体关掉了（例如安全模式），装着但用不了。
+	DisabledReason string `json:"disabled_reason,omitempty"`
 }
 
 type ExtensionCatalog interface {
@@ -300,7 +302,9 @@ func NewExtensionsListTool(catalog ExtensionCatalog, managementEnabled bool) *Ex
 	return &ExtensionsListTool{catalog: catalog, managementEnabled: managementEnabled}
 }
 
-func (t *ExtensionsListTool) Name() string { return "list_capabilities" }
+const extensionsListToolName = "list_capabilities"
+
+func (t *ExtensionsListTool) Name() string { return extensionsListToolName }
 
 // 只读能力目录，本地一次遍历，不改任何东西。
 func (t *ExtensionsListTool) Introspection(map[string]any) bool { return true }

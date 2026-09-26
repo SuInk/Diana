@@ -111,7 +111,9 @@ func NewPersistentBotProfileStore(ctx context.Context, store *storage.SQLiteStor
 		data.Profiles[0].ID = seed.ID
 	}
 	return &PersistentBotProfileStore{
-		data:          data.WithDefaults(),
+		// 旧的「启用 Agent」开关在这里换算成 Agent 模式：库里存的是旧格式也照样读，
+		// 下次保存时就写成新格式。换算规则见 assistant.ProfileSet.WithAgentModeMigrated。
+		data:          data.WithAgentModeMigrated().WithDefaults(),
 		store:         store,
 		ctx:           ctx,
 		legacyAliases: legacyProfileAliases(seed),

@@ -21,8 +21,8 @@ func (stubBrowserControl) Dispatch(context.Context, browserctl.Command) (browser
 
 func TestBrowserControlGateRequiresBothSwitches(t *testing.T) {
 	runtime := &Runtime{}
-	enabled := BotConfig{AgentBrowserControlEnabled: true}
-	disabled := BotConfig{}
+	enabled := BotConfig{AgentMode: AgentModeStandard, AgentBrowserControlEnabled: true}
+	disabled := BotConfig{AgentMode: AgentModeStandard}
 
 	// 没注入控制面：哪台机器人开了都拿不到。
 	if runtime.browserControlFor(enabled) != nil {
@@ -70,7 +70,7 @@ func TestAgentRegistryConfigCarriesBridgeOnlyWhenEnabled(t *testing.T) {
 	if off.BrowserControl != nil {
 		t.Fatal("机器人没开这一档时，注册表配置里不该带控制面")
 	}
-	on := runtime.agentRegistryConfig(BotConfig{AgentBrowserControlEnabled: true}.WithDefaults(), MessageEvent{}, false)
+	on := runtime.agentRegistryConfig(BotConfig{AgentMode: AgentModeStandard, AgentBrowserControlEnabled: true}.WithDefaults(), MessageEvent{}, false)
 	if on.BrowserControl == nil {
 		t.Fatal("机器人开了这一档时，注册表配置里应带上控制面")
 	}

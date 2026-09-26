@@ -144,7 +144,11 @@ type dianaBotConfigSnapshot struct {
 }
 
 type dianaAgentConfigSnapshot struct {
-	Enabled          bool     `json:"enabled"`
+	Enabled bool `json:"enabled"`
+	// Mode 是 standard 或 safe；safe 时 SafeModeDisabled 列出被关掉的工具和操作，
+	// 模型回答「你现在能不能跑命令」时照这里说，不凭印象。
+	Mode             string   `json:"mode,omitempty"`
+	SafeModeDisabled []string `json:"safe_mode_disabled,omitempty"`
 	WorkDir          string   `json:"work_dir,omitempty"`
 	MaxSteps         int      `json:"max_steps"`
 	SkillRoots       []string `json:"skill_roots,omitempty"`
@@ -403,6 +407,8 @@ func dianaBotConfigFromConfig(cfg BotConfig) dianaBotConfigSnapshot {
 		RequestTimeoutMS:                cfg.RequestTimeout.Milliseconds(),
 		Agent: dianaAgentConfigSnapshot{
 			Enabled:          cfg.AgentEnabled,
+			Mode:             cfg.effectiveAgentMode(),
+			SafeModeDisabled: agentSafeModeDisabledList(cfg),
 			WorkDir:          AgentWorkspaceDir(),
 			MaxSteps:         cfg.AgentMaxSteps,
 			SkillRoots:       append([]string(nil), cfg.AgentSkillRoots...),

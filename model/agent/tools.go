@@ -118,9 +118,11 @@ type ToolRegistry struct {
 	restricted         map[string]bool
 	denied             map[string]bool
 	extensionOverrides map[string]bool
-	activeViews        int
-	closeRequested     bool
-	closed             bool
+	// disabled 记着被配置整体关掉的工具和操作，见 tool_disable.go。
+	disabled       toolDisableState
+	activeViews    int
+	closeRequested bool
+	closed         bool
 }
 
 // NewDefaultToolRegistry 创建 Agent 默认工具注册表。
@@ -345,14 +347,26 @@ func (r *ToolRegistry) Extensions() []ExtensionState {
 	r.mu.RLock()
 	catalog := r.extensions
 	parent := r.parent
+	mcpReason := r.disabled.mcpReason
 	r.mu.RUnlock()
+	var states []ExtensionState
 	if catalog != nil {
-		return catalog.Extensions()
+		states = catalog.Extensions()
+	} else if parent != nil {
+		states = parent.Extensions()
 	}
-	if parent != nil {
-		return parent.Extensions()
+	if mcpReason != "" {
+		// 目录里照样列出已装的 MCP 服务，只是标成停用并写明原因：从目录里消失的话，
+		// 主人问「我装的 MCP 呢」时模型答不上来。
+		for i := range states {
+			if states[i].Kind == ExtensionKindMCP {
+				states[i].Enabled = false
+				states[i].Tools = nil
+				states[i].DisabledReason = mcpReason
+			}
+		}
 	}
-	return nil
+	return states
 }
 
 // NewToolRegistry 创建工具注册表并登记初始工具。
@@ -385,6 +399,10 @@ func (r *ToolRegistry) Register(tool Tool) {
 		return
 	}
 	name := tool.Name()
+	// 关掉的名字不接受重新注册：否则后面任何一处晚一步的 Register 都能把它放回来。
+	if r.disabledLocked(name) {
+		return
+	}
 	if _, exists := r.tools[name]; !exists {
 		r.order = append(r.order, name)
 		// 描述按名称排序，模型看到的工具列表稳定，测试输出也稳定。

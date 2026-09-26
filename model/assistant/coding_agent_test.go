@@ -592,7 +592,7 @@ func TestCodingAgentToolStaysOwnerOnly(t *testing.T) {
 func TestCodingToolIsDroppedFromNonOwnerRegistry(t *testing.T) {
 	useTempCodingWorkspace(t)
 	rt := &Runtime{plugins: NewPluginManager(NewCodingAgentPlugin())}
-	cfg := DefaultBotConfig()
+	cfg := standardModeBotConfig()
 	cfg.AgentMCPConfigPath = filepath.Join(t.TempDir(), "missing-mcp.json")
 	event := MessageEvent{Kind: EventKindGroup, GroupID: "g1", UserID: "someone"}
 	tool := newDianaCodingTool(rt, event, codingSettings(nil))

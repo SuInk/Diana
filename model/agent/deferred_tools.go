@@ -210,7 +210,7 @@ func (l *deferredToolLoader) unavailableToolError(name string) error {
 		return fmt.Errorf("工具名不能为空；请从目录里选一个名称")
 	}
 	if l.registry.PolicyDenied(name) {
-		return deniedToolError(name)
+		return l.registry.denialError(name)
 	}
 	return fmt.Errorf("工具 %q 不存在或已禁用；请重新选择 tools_load 名称", name)
 }
@@ -220,7 +220,7 @@ func (l *deferredToolLoader) unavailableToolError(name string) error {
 // 「请先 tools_load」，模型照做，再撞一次「不存在」，白烧两步。
 func (l *deferredToolLoader) missingToolError(name string) error {
 	if l.registry.PolicyDenied(name) {
-		return deniedToolError(name)
+		return l.registry.denialError(name)
 	}
 	return fmt.Errorf("工具 %q 不存在。工具名要和目录里的一字不差，不加 diana. 之类的前缀；常驻工具直接调用，目录里的延迟工具先 tools_load 再 tools_execute", name)
 }
@@ -267,7 +267,7 @@ func (l *deferredToolLoader) dispatch(action llmAction) (llmAction, error) {
 		tool, ok := l.registry.Get(name)
 		if !ok {
 			if l.registry.PolicyDenied(name) {
-				return action, deniedToolError(name)
+				return action, l.registry.denialError(name)
 			}
 			return action, fmt.Errorf("工具 %q 已移除或禁用，请重新 tools_load", name)
 		}

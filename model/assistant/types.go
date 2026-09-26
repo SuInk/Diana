@@ -222,6 +222,9 @@ type MessageEvent struct {
 	avatarMatchContext     string
 	imageResolutionRun     bool
 	imageLoadErr           error
+	// taskRequester 是替别人建提醒、订阅时真正发起的人，只在建任务那一步用，
+	// 落进 Reminder.RequestedBy。
+	taskRequester          string
 	imageContextNotice     string
 	voiceSTTErr            error
 	voiceSTTTransient      bool
@@ -303,29 +306,37 @@ const (
 )
 
 type Reminder struct {
-	ID                      string       `json:"id"`
-	Kind                    ReminderKind `json:"kind,omitempty"`
-	Platform                string       `json:"platform,omitempty"`
-	ProfileID               string       `json:"profile_id,omitempty"`
-	ContextNamespace        string       `json:"context_namespace,omitempty"`
-	OwnerID                 string       `json:"owner_id"`
-	GroupID                 string       `json:"group_id,omitempty"`
-	UserID                  string       `json:"user_id,omitempty"`
-	NotificationEnabled     bool         `json:"notification_enabled,omitempty"`
-	NotificationTargetsJSON string       `json:"notification_targets,omitempty"`
-	Message                 string       `json:"message"`
-	TriggerAt               time.Time    `json:"trigger_at"`
-	IntervalSeconds         int64        `json:"interval_seconds,omitempty"`
-	LastRunAt               time.Time    `json:"last_run_at,omitempty"`
-	CancelledAt             time.Time    `json:"cancelled_at,omitempty"`
-	LastError               string       `json:"last_error,omitempty"`
-	ConsecutiveFailures     int          `json:"consecutive_failures,omitempty"`
-	LastFailureStage        string       `json:"last_failure_stage,omitempty"`
-	LastErrorFingerprint    string       `json:"last_error_fingerprint,omitempty"`
-	FailureAlertedAt        time.Time    `json:"failure_alerted_at,omitempty"`
-	RecoveryNoticePending   bool         `json:"recovery_notice_pending,omitempty"`
-	PendingDelivery         string       `json:"pending_delivery,omitempty"`
-	PendingDeliveredTargets []string     `json:"pending_delivered_targets,omitempty"`
+	ID               string       `json:"id"`
+	Kind             ReminderKind `json:"kind,omitempty"`
+	Platform         string       `json:"platform,omitempty"`
+	ProfileID        string       `json:"profile_id,omitempty"`
+	ContextNamespace string       `json:"context_namespace,omitempty"`
+	OwnerID          string       `json:"owner_id"`
+	GroupID          string       `json:"group_id,omitempty"`
+	UserID           string       `json:"user_id,omitempty"`
+	// RequestedBy 是在对话里让机器人建这条任务的人。主人在私聊里用 target_user_id 替
+	// 别人建的提醒和订阅，投递给的是别人（UserID），发起的是主人；安全模式据此在到点时
+	// 停发「往别的会话发」的任务。空值是这个字段之前的旧记录，按 UserID 本人算。
+	RequestedBy string `json:"requested_by,omitempty"`
+	// SafeModeHeldTriggerAt 非零表示这条一次性提醒到点时被安全模式停发过，值是它当时的
+	// 原定时间。切回标准模式补发时按它注明原定时间、判断要不要过期作废；投递失败重试
+	// 改了 TriggerAt 也不影响它。只有真的被停发过的提醒才有这个标记。
+	SafeModeHeldTriggerAt   time.Time `json:"safe_mode_held_trigger_at,omitempty"`
+	NotificationEnabled     bool      `json:"notification_enabled,omitempty"`
+	NotificationTargetsJSON string    `json:"notification_targets,omitempty"`
+	Message                 string    `json:"message"`
+	TriggerAt               time.Time `json:"trigger_at"`
+	IntervalSeconds         int64     `json:"interval_seconds,omitempty"`
+	LastRunAt               time.Time `json:"last_run_at,omitempty"`
+	CancelledAt             time.Time `json:"cancelled_at,omitempty"`
+	LastError               string    `json:"last_error,omitempty"`
+	ConsecutiveFailures     int       `json:"consecutive_failures,omitempty"`
+	LastFailureStage        string    `json:"last_failure_stage,omitempty"`
+	LastErrorFingerprint    string    `json:"last_error_fingerprint,omitempty"`
+	FailureAlertedAt        time.Time `json:"failure_alerted_at,omitempty"`
+	RecoveryNoticePending   bool      `json:"recovery_notice_pending,omitempty"`
+	PendingDelivery         string    `json:"pending_delivery,omitempty"`
+	PendingDeliveredTargets []string  `json:"pending_delivered_targets,omitempty"`
 	// PendingDeliveryReference 是仓库通知补投成功后生成跟评所需的私有参考资料。
 	// 它不发送到会话，只避免投递失败后丢失仓库简介、正文和 diff。
 	PendingDeliveryReference string    `json:"pending_delivery_reference,omitempty"`
@@ -731,12 +742,18 @@ type BotConfig struct {
 	ReplyRules                 []ReplyRule               `json:"reply_rules,omitempty"`
 	MaxBotConcurrency          int                       `json:"max_bot_concurrency,omitempty"`
 	RequestTimeout             time.Duration             `json:"request_timeout,omitempty"`
-	AgentEnabled               bool                      `json:"agent_enabled,omitempty"`
-	AgentMaxSteps              int                       `json:"agent_max_steps,omitempty"`
-	AgentSkillRoots            []string                  `json:"agent_skill_roots,omitempty"`
-	AgentMCPConfigPath         string                    `json:"agent_mcp_config_path,omitempty"`
-	AgentCommandAllowlist      []string                  `json:"agent_command_allowlist,omitempty"`
-	AgentCommandTimeoutMS      int                       `json:"agent_command_timeout_ms,omitempty"`
+	// AgentEnabled 是旧的「启用 Agent」开关，现在只在迁移时读：加载配置时按它换算出
+	// AgentMode，之后恒为 true（见 migrateAgentMode）。AgentEnabled=false 的旧非 Agent
+	// 路径还留在代码里，界面上已经走不到，待后续移除。
+	AgentEnabled bool `json:"agent_enabled,omitempty"`
+	// AgentMode 是 standard（标准，全部能力）或 safe（安全，关掉 AgentSafeModeRules
+	// 里的高风险能力，主人也一样）。新建机器人默认 safe。
+	AgentMode             string   `json:"agent_mode,omitempty"`
+	AgentMaxSteps         int      `json:"agent_max_steps,omitempty"`
+	AgentSkillRoots       []string `json:"agent_skill_roots,omitempty"`
+	AgentMCPConfigPath    string   `json:"agent_mcp_config_path,omitempty"`
+	AgentCommandAllowlist []string `json:"agent_command_allowlist,omitempty"`
+	AgentCommandTimeoutMS int      `json:"agent_command_timeout_ms,omitempty"`
 	// AgentCommandSandbox 见 agent.CommandSandbox* 常量：auto 有沙盒就用、
 	// require 没有就拒绝执行、off 完全不套。留空按 auto。
 	AgentCommandSandbox string `json:"agent_command_sandbox,omitempty"`
@@ -1151,6 +1168,7 @@ type ConfigPayload struct {
 	MaxBotConcurrency               int                       `json:"max_bot_concurrency,omitempty"`
 	RequestTimeoutMS                int64                     `json:"request_timeout_ms,omitempty"`
 	AgentEnabled                    bool                      `json:"agent_enabled,omitempty"`
+	AgentMode                       string                    `json:"agent_mode,omitempty"`
 	AgentMaxSteps                   int                       `json:"agent_max_steps,omitempty"`
 	AgentSkillRoots                 []string                  `json:"agent_skill_roots,omitempty"`
 	AgentMCPConfigPath              string                    `json:"agent_mcp_config_path,omitempty"`
@@ -1743,8 +1761,11 @@ func DefaultBotConfig() BotConfig {
 		MaxBotConcurrency:           8,
 		RequestTimeout:              180 * time.Second,
 		AgentEnabled:                true,
-		AgentMaxSteps:               agent.DefaultMaxSteps,
-		AgentSkillRoots:             []string{},
+		// 新建的机器人默认安全模式：高风险能力要主人明确切到标准模式才给。
+		// 存量机器人不受影响，它们的模式由 migrateAgentMode 按旧开关换算。
+		AgentMode:       AgentModeSafe,
+		AgentMaxSteps:   agent.DefaultMaxSteps,
+		AgentSkillRoots: []string{},
 		// 新建配置直接带上一组只读诊断命令，装完就能用。
 		//
 		// 只影响新建：WithDefaults 对白名单只做清洗、不回填，对写入开关根本不碰，
@@ -2006,6 +2027,8 @@ func (cfg BotConfig) WithDefaults() BotConfig {
 	if cfg.RequestTimeout <= 0 {
 		cfg.RequestTimeout = defaults.RequestTimeout
 	}
+	// 空值留空：那表示还没迁移过，由加载路径按旧开关换算，这里不替它做决定。
+	cfg.AgentMode = NormalizeAgentMode(cfg.AgentMode)
 	if cfg.AgentMaxSteps <= 0 {
 		cfg.AgentMaxSteps = defaults.AgentMaxSteps
 	}
@@ -2335,6 +2358,7 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		MaxBotConcurrency:                 cfg.MaxBotConcurrency,
 		RequestTimeoutMS:                  cfg.RequestTimeout.Milliseconds(),
 		AgentEnabled:                      cfg.AgentEnabled,
+		AgentMode:                         cfg.AgentMode,
 		AgentMaxSteps:                     cfg.AgentMaxSteps,
 		AgentSkillRoots:                   append([]string(nil), cfg.AgentSkillRoots...),
 		AgentMCPConfigPath:                cfg.AgentMCPConfigPath,
@@ -2542,6 +2566,7 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		MaxBotConcurrency:               payload.MaxBotConcurrency,
 		RequestTimeout:                  time.Duration(payload.RequestTimeoutMS) * time.Millisecond,
 		AgentEnabled:                    payload.AgentEnabled,
+		AgentMode:                       agentModeFromPayload(payload, existing),
 		AgentMaxSteps:                   payload.AgentMaxSteps,
 		AgentSkillRoots:                 append([]string(nil), payload.AgentSkillRoots...),
 		AgentMCPConfigPath:              payload.AgentMCPConfigPath,
@@ -2595,7 +2620,24 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 	if cfg.WeComEncodingAESKey == "" {
 		cfg.WeComEncodingAESKey = existing.WeComEncodingAESKey
 	}
-	return cfg
+	// 界面保存出来的配置一律是迁移过的：Agent 恒开，模式二选一。
+	return migrateAgentMode(cfg)
+}
+
+// agentModeFromPayload 决定保存时用哪个模式。请求里写了就用请求的；没写时，编辑已有
+// 机器人沿用它现在的模式（旧版前端只会带回 agent_enabled=true，不能因此把安全模式
+// 悄悄升成标准模式）；新建的机器人一律安全模式，旧版前端新建时带的 agent_enabled=true
+// 不算数。config.yaml 播种要按旧开关换算，由调用方先把模式写进 payload。
+func agentModeFromPayload(payload ConfigPayload, existing BotConfig) string {
+	if mode := NormalizeAgentMode(payload.AgentMode); mode != "" {
+		return mode
+	}
+	if strings.TrimSpace(existing.ID) != "" {
+		if mode := NormalizeAgentMode(existing.AgentMode); mode != "" {
+			return mode
+		}
+	}
+	return AgentModeSafe
 }
 
 func normalizeReplyRules(rules []ReplyRule) []ReplyRule {

@@ -79,11 +79,16 @@ func (t *ManageFilesTool) InputSchema() map[string]any {
 	return toolObjectSchema([]string{"action", "path"}, properties)
 }
 
+// CanonicalOperation 是 Run 实际按哪个动作执行，按操作拦截时用同一套换算。
+func (t *ManageFilesTool) CanonicalOperation(input map[string]any) string {
+	return strings.ToLower(stringFromInput(input, "action"))
+}
+
 func (t *ManageFilesTool) Run(ctx context.Context, input map[string]any) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
-	action := strings.ToLower(stringFromInput(input, "action"))
+	action := t.CanonicalOperation(input)
 	rel := stringFromInput(input, "path")
 	if rel == "" {
 		return "", errors.New("path is required")

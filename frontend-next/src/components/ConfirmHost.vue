@@ -29,5 +29,7 @@ import { confirmState, settleConfirm } from "../confirm";
   color: var(--text-secondary);
   font-size: 13.5px;
   line-height: 1.6;
+  /* 较长的警告（比如切到安全模式）按段落和条目换行，单行消息不受影响。 */
+  white-space: pre-line;
 }
 </style>

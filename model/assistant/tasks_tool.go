@@ -28,15 +28,18 @@ type dianaTasksResult struct {
 }
 
 type dianaTask struct {
-	ID        string    `json:"id"`
-	Kind      string    `json:"kind"`
-	OwnerID   string    `json:"owner_id"`
-	GroupID   string    `json:"group_id,omitempty"`
-	UserID    string    `json:"user_id,omitempty"`
-	Message   string    `json:"message"`
-	Status    string    `json:"status"`
-	TriggerAt time.Time `json:"trigger_at"`
-	Interval  string    `json:"interval,omitempty"`
+	ID      string `json:"id"`
+	Kind    string `json:"kind"`
+	OwnerID string `json:"owner_id"`
+	GroupID string `json:"group_id,omitempty"`
+	UserID  string `json:"user_id,omitempty"`
+	Message string `json:"message"`
+	Status  string `json:"status"`
+	// HeldBySafeMode 表示机器人在安全模式，这条任务往当前会话以外投递，到点暂停发送；
+	// 任务保留，切回标准模式后恢复。
+	HeldBySafeMode bool      `json:"held_by_safe_mode,omitempty"`
+	TriggerAt      time.Time `json:"trigger_at"`
+	Interval       string    `json:"interval,omitempty"`
 	// Trigger 是事件触发任务的条件摘要，其他种类为空。
 	Trigger               string    `json:"trigger,omitempty"`
 	LastRunAt             time.Time `json:"last_run_at,omitempty"`
@@ -134,6 +137,8 @@ func (t *dianaTasksTool) Run(ctx context.Context, input map[string]any) (string,
 	// 同一个 Runtime 里另一台机器人的用户和订阅不归这位主人管。查自己的不按机器人
 	// 过滤，和额度的统计口径保持一致。
 	crossUser := scope == "all" || (targetID != "" && targetID != t.event.UserID)
+	holds := t.runtime.safeModeHoldChecker()
+	now := time.Now()
 	items := make([]dianaTask, 0, len(stored))
 	for _, item := range stored {
 		if crossUser && !t.runtime.sameProfileAsEvent(item.ProfileID, t.event) {
@@ -145,7 +150,9 @@ func (t *dianaTasksTool) Run(ctx context.Context, input map[string]any) (string,
 		if targetID != "" && item.OwnerID != targetID {
 			continue
 		}
-		items = append(items, taskForTool(item))
+		task := taskForTool(item)
+		task.HeldBySafeMode = reminderStillPending(item, now) && holds(item)
+		items = append(items, task)
 	}
 	sort.SliceStable(items, func(i, j int) bool {
 		if !items[i].CreatedAt.Equal(items[j].CreatedAt) {
@@ -164,6 +171,127 @@ func (t *dianaTasksTool) Run(ctx context.Context, input map[string]any) (string,
 		return "", err
 	}
 	return string(body), nil
+}
+
+// taskCanonicalOperation 给提醒和订阅按操作拦截用，和工具自己的换算一致：add 算
+// create、edit 算 update、remove 算 delete、check 算 run，defaultOp 是工具对空
+// operation 的缺省。
+//
+// 建、改、立即执行的任务投递到的不是当前会话时，名字加上 _elsewhere：那是一条定时往
+// 别人私聊或别的群发消息的通道，周期查询还会在那边跑一轮 Agent。判断规则：
+//   - create：私聊里 target_user_id 指向别人算别处；群里建的任务投递回当前群，
+//     target_user_id 只决定@谁、算谁的额度，不算别处；
+//   - update / run：target_user_id 指向别人，或者按 id 找到的那条已有任务投递到当前会话
+//     以外（别的群、别人的私聊、WebUI 配的投递目标、别的机器人），都算别处——改的是
+//     发往那边的话，立即执行就是现在往那边发。
+//
+// cancel / delete 不分别处：它们只会让任务少发，不会往外发新东西；按 id 碰到别的
+// 机器人的任务由各工具的归属检查挡住（见 taskOfOtherBot）。
+func (r *Runtime) taskCanonicalOperation(event MessageEvent, input map[string]any, defaultOp string) string {
+	operation := strings.ToLower(strings.TrimSpace(configToolString(input, "operation")))
+	if operation == "" {
+		operation = defaultOp
+	}
+	switch operation {
+	case "add":
+		operation = "create"
+	case "edit":
+		operation = "update"
+	case "remove":
+		operation = "delete"
+	case "check":
+		operation = "run"
+	case "pause":
+		operation = "cancel"
+	}
+	switch operation {
+	case "create":
+		if taskTargetsElsewhere(event, input, false) {
+			return operation + "_elsewhere"
+		}
+	case "update", "run":
+		if taskTargetsElsewhere(event, input, true) {
+			return operation + "_elsewhere"
+		}
+		if item, ok := r.taskByID(configToolString(input, "id")); ok && r.taskDeliversOutsideConversation(item, event) {
+			return operation + "_elsewhere"
+		}
+	}
+	return operation
+}
+
+func taskTargetsElsewhere(event MessageEvent, input map[string]any, anyConversation bool) bool {
+	raw := stripAccountIDMarkup(configToolString(input, "target_user_id"))
+	if raw == "" {
+		return false
+	}
+	// 按账号原文比，非数字账号（飞书 ou_xxx 等）也比得出来，见 sameAccountID。
+	if sameAccountID(raw, event.UserID) {
+		return false
+	}
+	return anyConversation || strings.TrimSpace(event.GroupID) == ""
+}
+
+// taskByID 按 id 取任务记录，不做任何归属判断。
+func (r *Runtime) taskByID(id string) (Reminder, bool) {
+	id = strings.TrimSpace(id)
+	if r == nil || r.reminders == nil || id == "" {
+		return Reminder{}, false
+	}
+	r.reminderMu.Lock()
+	items := r.reminders.Reminders()
+	r.reminderMu.Unlock()
+	for _, item := range items {
+		if item.ID == id {
+			return item, true
+		}
+	}
+	return Reminder{}, false
+}
+
+// sameBotAsEvent 判断记录是不是这条消息所属机器人的。ID 相同直接算；否则按
+// sameProfileAsEvent 认旧号和单机器人时的空 ID。
+//
+// 没有机器人 ID 的是多机器人之前的旧记录，分不出归谁，按这台机器人的算：不然多机器人
+// 部署里这些旧任务在对话里谁都改不了、删不掉。
+func (r *Runtime) sameBotAsEvent(profileID string, event MessageEvent) bool {
+	profileID = strings.TrimSpace(profileID)
+	if profileID == "" || profileID == strings.TrimSpace(event.ProfileID) {
+		return true
+	}
+	return r.sameProfileAsEvent(profileID, event)
+}
+
+// taskOfOtherBot 报告这个 id 是不是别的机器人名下的任务。改、取消、删除、立即执行都
+// 先过这一关，不管什么模式：几台机器人共用一个 Runtime 时，任务按归属人匹配会让 A 的
+// 主人按 id 改到 B 的任务（两台机器人主人是同一个号时尤其如此）。
+func (r *Runtime) taskOfOtherBot(id string, event MessageEvent) bool {
+	item, ok := r.taskByID(id)
+	return ok && !r.sameBotAsEvent(item.ProfileID, event)
+}
+
+// taskDeliversOutsideConversation 报告一条已有任务是不是投递到当前会话以外：别的机器人、
+// 别的群、别人的私聊，或者 WebUI 配的投递目标里有一个不是当前会话。
+func (r *Runtime) taskDeliversOutsideConversation(item Reminder, event MessageEvent) bool {
+	if !r.sameBotAsEvent(item.ProfileID, event) {
+		return true
+	}
+	for _, target := range decodeReminderDeliveryTargets(item.NotificationTargetsJSON) {
+		if profile := strings.TrimSpace(target.ProfileID); profile != "" && !r.sameBotAsEvent(profile, event) {
+			return true
+		}
+		if !deliveryTargetIsConversation(target.GroupID, target.UserID, event) {
+			return true
+		}
+	}
+	return !deliveryTargetIsConversation(item.GroupID, item.UserID, event)
+}
+
+func deliveryTargetIsConversation(groupID, userID string, event MessageEvent) bool {
+	if group := strings.TrimSpace(groupID); group != "" {
+		return group == strings.TrimSpace(event.GroupID)
+	}
+	return strings.TrimSpace(event.GroupID) == "" && sameAccountID(userID, event.UserID)
 }
 
 func taskTargetUserID(ctx context.Context, runtime *Runtime, event MessageEvent, input map[string]any) (string, error) {

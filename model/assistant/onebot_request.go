@@ -241,7 +241,7 @@ func (t *dianaOneBotRequestsTool) Run(ctx context.Context, input map[string]any)
 		return "", fmt.Errorf("只有机器人主人可以处理好友或群请求")
 	}
 	profileID := strings.TrimSpace(t.event.ProfileID)
-	operation := strings.ToLower(strings.TrimSpace(configToolString(input, "operation")))
+	operation := t.CanonicalOperation(input)
 	store := t.runtime.oneBotRequestStore()
 	if operation == "list" {
 		items, err := store.ListOneBotRequests(ctx, profileID, OneBotRequestPending, oneBotRequestListLimit)
@@ -347,4 +347,9 @@ func marshalOneBotRequestToolResult(operation string, items []OneBotRequestRecor
 	}
 	encoded, err := json.Marshal(result)
 	return string(encoded), err
+}
+
+// CanonicalOperation 是 Run 实际执行的操作，按操作拦截时用同一套换算。
+func (*dianaOneBotRequestsTool) CanonicalOperation(input map[string]any) string {
+	return strings.ToLower(strings.TrimSpace(configToolString(input, "operation")))
 }
