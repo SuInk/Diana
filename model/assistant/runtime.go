@@ -774,6 +774,7 @@ func NewRuntime(cfg BotConfig, channel Channel, plugins *PluginManager, llmStore
 	}
 	runtime.members = newMemberCacheForEvent(runtime.callOneBotAPIForEvent)
 	runtime.reconcileBridges()
+	plugins.SetSpeechSynthesizer(runtime.slotSpeechSynthesizer)
 	return runtime
 }
 
@@ -3966,6 +3967,11 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			if IsOneBotPlatform(r.currentPlatform(event)) {
 				extraTools = append(extraTools, newDianaPokeTool(r, event))
 			}
+			// 视频生成只在模型分配里配了插槽时才挂：没配时模型看得到也只能失败。
+			// 它不在 allowedAgentToolNames 里，一段视频的费用抵得上几十张图，默认只给主人。
+			if r.mediaSlotConfigured(ctx, mediaSlotVideo) {
+				extraTools = append(extraTools, newDianaVideoTool(r, event))
+			}
 			// 存二进制文件和 write_file 同一档：都是往磁盘上写，跟着「允许写入文件」走。
 			// 它不在 allowedAgentToolNames 里，群成员拿不到。
 			if cfg.agentFileWriteAllowed() {
@@ -5615,7 +5621,7 @@ func registrySelectionForGroup(registry *llm.ProviderRegistry, set llm.ProfileSe
 // 用的还该是它绑的那个模型。
 func singlePurposeProfileGroup(group string) bool {
 	switch llm.NormalizeProfileGroup(group) {
-	case llm.GroupImage, llm.GroupEmbedding:
+	case llm.GroupImage, llm.GroupEmbedding, llm.GroupTTS, llm.GroupSTT, llm.GroupVideo:
 		return true
 	}
 	return false

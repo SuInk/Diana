@@ -798,6 +798,10 @@ type ModelRole struct {
 	ProviderID string      `json:"provider_id,omitempty"`
 	ModelID    string      `json:"model_id,omitempty"`
 	Fallbacks  []ModelRole `json:"fallbacks,omitempty"`
+	// Params 只给音视频插槽用：音色、格式、语速、视频尺寸这些不是模型的属性，
+	// 换一个 TTS 模型照样要指定音色。对话类用途用不上，保存时原样丢掉也无妨。
+	// 后备路由不单独带，沿用主路由这一份。
+	Params map[string]string `json:"params,omitempty"`
 }
 
 func normalizeModelRoles(roles map[string]ModelRole) map[string]ModelRole {
@@ -831,6 +835,7 @@ func normalizeModelRole(role ModelRole) ModelRole {
 	role.Model = strings.TrimSpace(role.Model)
 	role.ProviderID = strings.TrimSpace(role.ProviderID)
 	role.ModelID = strings.TrimSpace(role.ModelID)
+	role.Params = normalizeModelRoleParams(role.Params)
 	if role.ProviderID != "" || role.ModelID != "" {
 		role.ProfileID = ""
 		role.Group = ""
@@ -845,6 +850,7 @@ func normalizeModelRole(role ModelRole) ModelRole {
 	for _, fallback := range role.Fallbacks {
 		fallback.FollowChat = false
 		fallback.Fallbacks = nil
+		fallback.Params = nil
 		fallback = normalizeModelRole(fallback)
 		if modelRoleConfigured(fallback) {
 			fallbacks = append(fallbacks, fallback)
@@ -852,6 +858,20 @@ func normalizeModelRole(role ModelRole) ModelRole {
 	}
 	role.Fallbacks = fallbacks
 	return role
+}
+
+func normalizeModelRoleParams(params map[string]string) map[string]string {
+	out := make(map[string]string, len(params))
+	for key, value := range params {
+		key = strings.ToLower(strings.TrimSpace(key))
+		if value = strings.TrimSpace(value); key != "" && value != "" {
+			out[key] = value
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 func modelRoleConfigured(role ModelRole) bool {

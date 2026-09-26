@@ -22,7 +22,7 @@ func TestRuntimeModelCatalogAllPurposes(t *testing.T) {
 	if err := json.Unmarshal([]byte(body), &result); err != nil {
 		t.Fatal(err)
 	}
-	if len(result.Entries) != len(ModelBindingKeys())+2 {
+	if len(result.Entries) != len(ModelBindingKeys()) {
 		t.Fatalf("missing purposes: %s", body)
 	}
 	byPurpose := map[string]modelCatalogEntry{}

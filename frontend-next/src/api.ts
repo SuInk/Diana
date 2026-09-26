@@ -260,7 +260,7 @@ export interface BotProfileConfig extends SendRetrySettings {
   private_closing_grace?: number;
   inbound_group_concurrency?: number;
   inbound_private_concurrency?: number;
-  /** 按用途分配模型：chat/vision/intent/image → 渠道（或渠道分组）+模型。 */
+  /** 按用途分配模型：chat/vision/intent/image/tts/stt/video → 渠道（或渠道分组）+模型。 */
   auto_image_description?: boolean;
   auto_video_preprocess?: boolean;
   model_roles?: Record<string, {
@@ -271,6 +271,8 @@ export interface BotProfileConfig extends SendRetrySettings {
     provider_id?: string;
     model_id?: string;
     fallbacks?: Array<{ profile_id?: string; group?: string; model: string; provider_id?: string; model_id?: string }>;
+    /** 音视频插槽（tts/stt/video）的参数：音色、格式、语速、语言、分辨率等。 */
+    params?: Record<string, string>;
   }>;
   /** 用模型识别其他机器人的自动回复并阻断机器人互聊；缺省等价于开启。 */
   bot_reply_loop_detection_enabled?: boolean;

@@ -33,11 +33,14 @@ const (
 	voiceSTTBackendDisabled = "disabled"
 	voiceSTTBackendLocal    = "local"
 	voiceSTTBackendOpenAI   = "openai_compatible"
-	voiceSTTTranscriptKey   = "transcript"
-	voiceSTTAudioHashKey    = "audio_sha256"
-	voiceSTTBlobHashKey     = "cached_blob_sha256"
-	voiceSourceMaxParts     = 2
-	voiceSourceMaxDuration  = 60 * time.Second
+	// voiceSTTBackendModelSlot 走模型分配里的「语音识别」插槽，供应商、模型和语言
+	// 都在那边配；这里的地址、Key、模型三项不再使用。
+	voiceSTTBackendModelSlot = "model_slot"
+	voiceSTTTranscriptKey    = "transcript"
+	voiceSTTAudioHashKey     = "audio_sha256"
+	voiceSTTBlobHashKey      = "cached_blob_sha256"
+	voiceSourceMaxParts      = 2
+	voiceSourceMaxDuration   = 60 * time.Second
 )
 
 type VoiceTranscriptRecord struct {
@@ -74,12 +77,12 @@ func NewVoiceSTTPlugin(client *http.Client) *VoiceSTTPlugin {
 
 func (p *VoiceSTTPlugin) Manifest() PluginManifest {
 	return PluginManifest{
-		ID: voiceSTTPluginID, Name: "语音识别", Version: "0.1.0",
-		Description: "将收到的 语音转写为内部对话文本；支持本地 Whisper 和 OpenAI 兼容音频转写接口。",
+		ID: voiceSTTPluginID, Name: "语音识别", Version: "0.1.1",
+		Description: "将收到的语音转写为内部对话文本；支持本地 Whisper、OpenAI 兼容音频转写接口，以及模型分配里的语音识别插槽。",
 		Official:    true, BuiltIn: true,
 		Permissions: []string{"message:read", "network:http", "filesystem:temp", "process:media"},
 		Settings: []PluginSettingSpec{
-			{Key: "backend", Label: "识别后端", Type: PluginSettingTypeSelect, Default: voiceSTTBackendDisabled, Options: []PluginSettingOption{{Value: voiceSTTBackendDisabled, Label: "关闭"}, {Value: voiceSTTBackendLocal, Label: "本地 Whisper"}, {Value: voiceSTTBackendOpenAI, Label: "OpenAI 兼容接口"}}},
+			{Key: "backend", Label: "识别后端", Type: PluginSettingTypeSelect, Default: voiceSTTBackendDisabled, Options: []PluginSettingOption{{Value: voiceSTTBackendDisabled, Label: "关闭"}, {Value: voiceSTTBackendLocal, Label: "本地 Whisper"}, {Value: voiceSTTBackendOpenAI, Label: "OpenAI 兼容接口"}, {Value: voiceSTTBackendModelSlot, Label: "模型分配 · 语音识别插槽"}}, Description: "选「模型分配」时用机器人模型分配里的语音识别插槽，下方地址、Key 和模型不再使用；插槽没配时不转写。"},
 			{Key: "endpoint", Label: "转写 API 地址", Type: PluginSettingTypeString, Default: "https://api.openai.com/v1/audio/transcriptions"},
 			{Key: "api_key", Label: "API Key", Type: PluginSettingTypeString, Default: "", Secret: true},
 			{Key: "model", Label: "模型", Type: PluginSettingTypeString, Default: "whisper-1"},
@@ -130,6 +133,15 @@ func (r *Runtime) prepareIncomingVoice(ctx context.Context, event MessageEvent) 
 	cfg := voiceSTTConfigFromSettings(settings)
 	if cfg.Backend == voiceSTTBackendDisabled || (event.Kind == EventKindPrivate && !cfg.PrivateEnabled) {
 		return event
+	}
+	if cfg.Backend == voiceSTTBackendModelSlot {
+		ctx = withModelConfigEvent(ctx, event)
+		routes := r.mediaSlotRoutes(ctx, mediaSlotSTT)
+		if len(routes) == 0 {
+			return event
+		}
+		// 模型名进缓存键：换了识别模型，旧转写不该继续命中。
+		cfg.Model = routes[0].Model
 	}
 	for i := range event.Segments {
 		segment := &event.Segments[i]
@@ -236,6 +248,8 @@ func (p *VoiceSTTPlugin) transcribeSegment(ctx context.Context, r *Runtime, even
 		transcript, err = localVoiceTranscription(callCtx, wav, cfg, workDir)
 	case voiceSTTBackendOpenAI:
 		transcript, err = p.openAITranscription(callCtx, wav, cfg)
+	case voiceSTTBackendModelSlot:
+		transcript, err = r.slotVoiceTranscription(callCtx, wav, cfg)
 	default:
 		return "", audioHash, duration, false, "disabled", errors.New("STT backend disabled")
 	}
@@ -548,6 +562,23 @@ func (p *VoiceSTTPlugin) openAITranscription(ctx context.Context, wav string, cf
 	return strings.TrimSpace(string(data)), nil
 }
 
+func (r *Runtime) slotVoiceTranscription(ctx context.Context, wav string, cfg voiceSTTConfig) (string, error) {
+	audio, err := os.ReadFile(wav)
+	if err != nil {
+		return "", err
+	}
+	language := cfg.Language
+	if strings.EqualFold(language, "auto") {
+		// 插件这边没指定语言时让插槽上的语言参数生效。
+		language = ""
+	}
+	resp, err := r.transcribeAudio(ctx, audio, "audio.wav", language)
+	if err != nil {
+		return "", err
+	}
+	return resp.Text, nil
+}
+
 type voiceSTTProviderError struct{ StatusCode int }
 
 func (e voiceSTTProviderError) Error() string {
@@ -565,6 +596,9 @@ func voiceSTTContextCode(err error) string {
 
 func voiceSTTErrorIsTransient(code string, err error) bool {
 	if code == "timeout" || code == "cache_save_failed" || code == "cache_cleanup_failed" || errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	if llm.IsRetryableMediaError(err) {
 		return true
 	}
 	var providerErr voiceSTTProviderError

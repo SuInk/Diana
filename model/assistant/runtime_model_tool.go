@@ -54,6 +54,12 @@ func runtimeModelGroupLabel(group string) string {
 		return "后台生成"
 	case llm.GroupImage:
 		return "图片生成"
+	case llm.GroupTTS:
+		return "语音合成"
+	case llm.GroupSTT:
+		return "语音识别"
+	case llm.GroupVideo:
+		return "视频生成"
 	case llm.GroupChat:
 		return "对话"
 	default:
@@ -70,7 +76,7 @@ func newDianaRuntimeModelTool(provider *runtimeAgentLLMProvider, events ...Messa
 }
 
 func (*dianaRuntimeModelTool) InputSchema() map[string]any {
-	keys := append([]string{"current", "all", "history", "stt", "tts"}, ModelBindingKeys()...)
+	keys := append([]string{"current", "all", "history"}, ModelBindingKeys()...)
 	return toolObjectSchema(nil, map[string]any{
 		"group":      toolEnumParam("current 查询本轮实际模型；all 查询所有用途的配置；history 查询本会话已发送图片的实际模型；其他值查询指定用途配置。", keys...),
 		"message_id": toolStringParam("history 可指定图片消息 ID；省略时优先使用当前引用消息，否则查询本会话最近一次图片发送记录。"),
@@ -82,7 +88,7 @@ func (*dianaRuntimeModelTool) Name() string { return dianaRuntimeModelToolName }
 func (*dianaRuntimeModelTool) Description() string {
 	return "读取 Diana 实际使用的模型 ID、供应商、接口协议和用途分组，仅当用户询问模型时调用，不得根据历史回复猜测。" +
 		"model_id 才是模型，config_name 只是这套配置在控制台里的名字。" +
-		"group=current 返回本轮对话/识图实际模型；all 返回所有用途的配置，也可单独查 chat、vision、intent、image、embedding、stt、tts 或细分用途。" +
+		"group=current 返回本轮对话/识图实际模型；all 返回所有用途的配置，也可单独查 chat、vision、intent、image、embedding、stt、tts、video 或细分用途。" +
 		"当前配置含后备候选，不代表过去实际调用。" +
 		"问刚才或引用的图片实际用了什么模型时必须用 group=history，可带 message_id；未指定时优先查引用消息，否则查本会话最近一次记录。" +
 		"没有历史记录就明确说无法确认，不能拿聊天模型或当前生图配置替代。语音服务未公开具体权重时如实说明，不猜模型名。"
