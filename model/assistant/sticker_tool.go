@@ -61,17 +61,19 @@ type StickerHistoryStore interface {
 }
 
 type stickerCandidate struct {
-	ID            string
-	Summary       string
-	Description   string
-	Tags          []string
-	Tagged        bool
-	FromAssets    bool
-	Path          string
-	Hash          string
-	MessageID     string
-	EventTime     int64
-	LastSentAt    int64
+	ID          string
+	Summary     string
+	Description string
+	Tags        []string
+	Tagged      bool
+	FromAssets  bool
+	Path        string
+	Hash        string
+	MessageID   string
+	EventTime   int64
+	LastSentAt  int64
+	// RecentlySent 是这张或和它算同一张的图刚在本会话发过，见 rankStickerCandidates。
+	RecentlySent  bool
 	Score         float64
 	SemanticScore int
 	SourceEvent   MessageEvent
@@ -551,6 +553,7 @@ func rankStickerCandidates(candidates []stickerCandidate, query string, now int6
 	for index, term := range terms {
 		idf[index] = math.Log(1 + float64(len(candidates))/float64(1+documentFrequency(term.text)))
 	}
+	markRecentlySentStickers(candidates, now)
 	wholeQuery := strings.ToLower(strings.TrimSpace(query))
 	for index := range candidates {
 		score := float64(candidates[index].SemanticScore)
@@ -565,7 +568,7 @@ func rankStickerCandidates(candidates []stickerCandidate, query string, now int6
 		if wholeQuery != "" && strings.ToLower(candidates[index].Summary) == wholeQuery {
 			score += 50
 		}
-		if stickerSentRecently(candidates[index], now) {
+		if candidates[index].RecentlySent {
 			score *= stickerRecentSendFactor
 		}
 		candidates[index].Score = score
@@ -576,6 +579,32 @@ func rankStickerCandidates(candidates []stickerCandidate, query string, now int6
 		}
 		return candidates[i].EventTime > candidates[j].EventTime
 	})
+}
+
+// markRecentlySentStickers 标出刚发过的，以及和刚发过的算同一张（转存副本、同模板换字）的候选。
+func markRecentlySentStickers(candidates []stickerCandidate, now int64) {
+	var sent []stickerSignature
+	for index := range candidates {
+		candidates[index].RecentlySent = stickerSentRecently(candidates[index], now)
+		if candidates[index].RecentlySent {
+			sent = append(sent, newStickerSignature(candidates[index]))
+		}
+	}
+	if len(sent) == 0 {
+		return
+	}
+	for index := range candidates {
+		if candidates[index].RecentlySent {
+			continue
+		}
+		signature := newStickerSignature(candidates[index])
+		for _, other := range sent {
+			if signature.duplicates(other) {
+				candidates[index].RecentlySent = true
+				break
+			}
+		}
+	}
 }
 
 func stickerSentRecently(candidate stickerCandidate, now int64) bool {
@@ -594,7 +623,7 @@ func selectStickerCandidates(candidates []stickerCandidate, limit int, now int64
 		switch {
 		case candidate.Score > 0:
 			matched = append(matched, candidate)
-		case stickerSentRecently(candidate, now):
+		case candidate.RecentlySent || stickerSentRecently(candidate, now):
 			recent = append(recent, candidate)
 		default:
 			fresh = append(fresh, candidate)
@@ -605,13 +634,27 @@ func selectStickerCandidates(candidates []stickerCandidate, limit int, now int64
 		pool = pool[:limit*stickerMatchedPoolFactor]
 	}
 	picked := make([]stickerCandidate, 0, limit)
+	var signatures []stickerSignature
+	// take 收下一张候选；和已经收下的算同一张时跳过，免得几个名额被同一张图的副本占满。
+	take := func(candidate stickerCandidate) {
+		signature := newStickerSignature(candidate)
+		for _, other := range signatures {
+			if signature.duplicates(other) {
+				return
+			}
+		}
+		signatures = append(signatures, signature)
+		picked = append(picked, candidate)
+	}
+	pool = append([]stickerCandidate(nil), pool...)
 	if len(pool) <= limit {
-		picked = append(picked, pool...)
+		for _, candidate := range pool {
+			take(candidate)
+		}
 	} else {
-		pool = append([]stickerCandidate(nil), pool...)
-		for len(picked) < limit {
+		for len(picked) < limit && len(pool) > 0 {
 			index := weightedStickerIndex(pool, randomIndex)
-			picked = append(picked, pool[index])
+			take(pool[index])
 			pool = append(pool[:index], pool[index+1:]...)
 		}
 		sort.SliceStable(picked, func(i, j int) bool { return picked[i].Score > picked[j].Score })
@@ -621,7 +664,7 @@ func selectStickerCandidates(candidates []stickerCandidate, limit int, now int64
 		rest = append([]stickerCandidate(nil), rest...)
 		for len(picked) < limit && len(rest) > 0 {
 			index := randomIndex(len(rest))
-			picked = append(picked, rest[index])
+			take(rest[index])
 			rest = append(rest[:index], rest[index+1:]...)
 		}
 	}
