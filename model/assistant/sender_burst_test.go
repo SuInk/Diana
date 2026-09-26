@@ -177,7 +177,7 @@ func TestSenderBurstDoesNotCancelTurnAlreadySending(t *testing.T) {
 	first := directedGroupMessage("20041", "10001", "讲个长故事")
 	second := directedGroupMessage("20042", "10001", "要带结局")
 	arriveTogether(runtime, first, second)
-	runtime.enterSenderTurnReply(first)
+	runtime.enterSenderTurnReply(first, true)
 	ctx, finish := runtime.beginDirectReply(withReplyTriggerGate(context.Background()), first)
 	defer finish()
 	if err := runtime.interruptedReplyError(ctx, first); err != nil {
@@ -204,48 +204,51 @@ func (s mergeRecordingInboundStore) RecordInboundEventReplyMerge(_ context.Conte
 }
 
 // 先发图、再问「这是什么」：文字那一轮把图当候选依赖图一起答了，图自己那一轮
-// 哪怕已经在生成，也在发送前让位；superseded_by 同时落库。
+// 哪怕已经在生成，也让位；文字那一轮回出去之后 superseded_by 才落库。
 func TestDependencyImageTurnIsSupersededByTextTurn(t *testing.T) {
 	provider := &scriptedReplyProvider{description: "一只橘猫"}
 	runtime, question := dependencyTestRuntime(t, provider, false, nil)
 	store := mergeRecordingInboundStore{newMemoryInboundEventStore()}
 	runtime.SetInboundEventStore(store)
-	var photo MessageEvent
-	for _, item := range runtime.contextHistory(question) {
-		if item.MessageID == "photo-1" {
-			photo = item
-		}
-	}
-	if photo.MessageID == "" {
-		t.Fatal("photo is not in history")
-	}
+	photo := historyEventByID(t, runtime, question, "photo-1")
 	runtime.noteSenderTurnArrival(photo)
-	runtime.enterSenderTurnReply(photo)
+	runtime.enterSenderTurnReply(photo, true)
 	runtime.noteSenderTurnArrival(question)
 
 	if outcome, err := runtime.replyAndRecord(withOutboundTurn(context.Background(), "turn-q"), question, question.RawMessage, "replied"); err != nil || outcome != "replied" {
 		t.Fatalf("question outcome=%q err=%v", outcome, err)
 	}
-	if by, ok := runtime.senderTurnSupersededBy(photo); !ok || by != "q-1" {
-		t.Fatalf("image turn should be superseded by the text turn, got %q %v", by, ok)
-	}
 	if turn, superseded, _ := store.InboundEventSuperseded(context.Background(), photo); !superseded || turn != "turn-q" {
 		t.Fatalf("superseded_by was not persisted for the image message: %q %v", turn, superseded)
 	}
-	ctx, finish := runtime.beginDirectReply(withReplyTriggerGate(context.Background()), photo)
-	defer finish()
-	if err := runtime.interruptedReplyError(ctx, photo); !errors.Is(err, errReplyTriggerSuperseded) {
-		t.Fatalf("image turn must stop before sending, got %v", err)
+	// 图那一轮这时才走到回复入口：取代已经落定，它收住。
+	if outcome, err := runtime.replyAndRecord(context.Background(), photo, "", "replied"); err != nil || outcome != "superseded_follow_up" {
+		t.Fatalf("image turn outcome=%q err=%v", outcome, err)
 	}
+	if sent := nonEmptySends(runtime); sent != 1 {
+		t.Fatalf("image then text should produce exactly one reply, got %d", sent)
+	}
+}
+
+func historyEventByID(t *testing.T, runtime *Runtime, event MessageEvent, messageID string) MessageEvent {
+	t.Helper()
+	for _, item := range runtime.contextHistory(event) {
+		if item.MessageID == messageID {
+			return item
+		}
+	}
+	t.Fatalf("%s is not in history", messageID)
+	return MessageEvent{}
+}
+
+func nonEmptySends(runtime *Runtime) int {
 	sent := 0
 	for _, msg := range runtime.channel.(*recordingChannel).sentSnapshot() {
 		if strings.TrimSpace(msg.Text) != "" {
 			sent++
 		}
 	}
-	if sent != 1 {
-		t.Fatalf("image then text should produce exactly one reply, got %d", sent)
-	}
+	return sent
 }
 
 // 纯图的原请求不能是空串：有缓存的识图描述就给描述，没有就写明是一张图。
@@ -318,13 +321,27 @@ func TestRepositoryWatchFollowUpSkipsBotsOwnNewIssue(t *testing.T) {
 		t.Fatal("an old bot issue updated by someone else should still get a follow-up")
 	}
 	// 刚评论过的（正文没有标记）靠内存登记认出来。
-	commented := repositoryWatchChange{Repository: "SuInk/Diana", Issues: []repositoryWatchIssue{{Number: 700, Status: "updated", CreatedAt: now.Add(-24 * time.Hour), UpdatedAt: now}}}
+	commented := repositoryWatchChange{Repository: "SuInk/Diana", Issues: []repositoryWatchIssue{{Number: 700, Status: "updated", CreatedAt: now.Add(-24 * time.Hour), UpdatedAt: now.Add(-time.Second)}}}
 	if runtime.repositoryWatchChangeOnlyOwnRecentWrites("SuInk/Diana", commented, now) {
 		t.Fatal("unrelated update should not be treated as the bot's own")
 	}
 	runtime.noteOwnRepositoryWriteResult(repositoryIssueResult{OK: true, Operation: "comment", Repository: "SuInk/Diana", RequestedNumber: 700})
 	if !runtime.repositoryWatchChangeOnlyOwnRecentWrites("suink/diana", commented, now) {
 		t.Fatal("an issue the bot just commented on should skip the follow-up")
+	}
+	// 机器人评论之后别人又评论了：最后一次动静不是机器人的，照常跟评。
+	later := commented
+	later.Issues = []repositoryWatchIssue{commented.Issues[0]}
+	later.Issues[0].UpdatedAt = now.Add(3 * time.Minute)
+	if runtime.repositoryWatchChangeOnlyOwnRecentWrites("SuInk/Diana", later, now.Add(4*time.Minute)) {
+		t.Fatal("someone else's comment after the bot's write must still get a follow-up")
+	}
+	// 机器人刚建的 Issue 建完又被别人动过，同样照常跟评。
+	touched := own
+	touched.Issues = []repositoryWatchIssue{own.Issues[0]}
+	touched.Issues[0].UpdatedAt = now
+	if runtime.repositoryWatchChangeOnlyOwnRecentWrites("SuInk/Diana", touched, now) {
+		t.Fatal("a bot-created issue touched by someone else should still get a follow-up")
 	}
 	// 混着别人的动态就照常跟评。
 	mixed := own
@@ -364,21 +381,5 @@ func TestProactiveReplySkippedAfterRecentTriggeredDelivery(t *testing.T) {
 	otherGroup.GroupID = "654321"
 	if err := runtime.interruptedReplyError(gated, otherGroup); err != nil {
 		t.Fatalf("chat-in in another group is unaffected: %v", err)
-	}
-}
-
-// 路由阶段就放掉：连主动回复的评分模型都不必调。
-func TestProactiveRoutingSkippedAfterRecentTriggeredDelivery(t *testing.T) {
-	provider := &capturingLLMProvider{reply: `{}`}
-	runtime := NewRuntime(BotConfig{BotAccount: "42"}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) { return provider, nil })
-	event := textEvent("20081", "10001", "明天的会我可能晚点到", time.Now().Unix())
-	runtime.noteTriggeredDelivery(event)
-
-	prepared, _, handled, _ := runtime.prepareMessageEvent(context.Background(), event)
-	if handled {
-		t.Fatal("undirected message right after a reminder should not be handled")
-	}
-	if prepared.routingReason != triggeredDeliverySkipReason {
-		t.Fatalf("routing reason = %q", prepared.routingReason)
 	}
 }

@@ -14,8 +14,9 @@ import (
 // 又对他同一条消息接了一句，两条说的是同一件事。
 //
 // 这里不比较两条的意思，只记「刚才有提醒或触发任务找过这个会话里的这个人」：
-// 窗口内对同一个人的主动接话直接放掉。被 @、被引用、被叫名字的直接回复不受影响——
-// 人家明确在叫机器人，就该回。
+// 窗口内对同一个人的随口接话直接放掉。被 @、被引用、被叫名字的直接回复不受影响，
+// 接话评分判定「他就是在跟机器人说话」（relevance.directed）的也照常回——
+// 人家在跟机器人说话，就该回。
 const triggeredDeliveryWindow = 60 * time.Second
 
 var errProactiveReplyCoveredByTrigger = errors.New("diana: proactive reply covered by a recent reminder or event trigger")
@@ -66,7 +67,7 @@ func (r *Runtime) recentTriggeredDeliveryFor(event MessageEvent) bool {
 // triggeredDeliveryCoversProactiveReply 是发送前的那一道：路由时触发任务可能还没
 // 认领，等主动接话生成完，它已经找过这个人了。
 func (r *Runtime) triggeredDeliveryCoversProactiveReply(event MessageEvent) error {
-	if !event.proactiveReply && !event.chatInReply {
+	if !proactiveReplyCoveredByTrigger(event) {
 		return nil
 	}
 	if r.recentTriggeredDeliveryFor(event) {
@@ -76,3 +77,9 @@ func (r *Runtime) triggeredDeliveryCoversProactiveReply(event MessageEvent) erro
 }
 
 const triggeredDeliverySkipReason = "提醒或事件触发任务刚找过这个人，主动接话不再重复"
+
+// proactiveReplyCoveredByTrigger 圈出能被提醒盖掉的那种回复：没人叫机器人、评分也没
+// 判定是在跟机器人说话的主动接话。
+func proactiveReplyCoveredByTrigger(event MessageEvent) bool {
+	return (event.proactiveReply || event.chatInReply) && !event.routingDirected
+}

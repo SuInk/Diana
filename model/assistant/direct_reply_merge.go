@@ -201,14 +201,15 @@ func (r *Runtime) mergeIntoActiveDirectReply(ctx context.Context, event MessageE
 	}
 	r.replyInterruptMu.Unlock()
 	var relation string
-	if senderImageThenShortText(root, rootArrived, event, eventArrived, text) {
+	if r.imageFollowUpBySameSender(root, rootArrived, event, eventArrived, text) {
 		relation = "supplement"
 		r.recordDirectReplyTopicRule(ctx, root, event, relation)
 	} else {
 		relation = r.classifyDirectReplyTopic(ctx, root, supplements, event, text)
 	}
-	r.noteSenderTurnMergeChecked(event, root.MessageID)
-	if relation != "repeat" && relation != "supplement" && relation != "correction" {
+	mergeable := relation == "repeat" || relation == "supplement" || relation == "correction"
+	r.noteSenderTurnMergeChecked(event, root.MessageID, mergeable)
+	if !mergeable {
 		return "", false
 	}
 	// Classification does not hold the send lock. A finished, replaced or changed

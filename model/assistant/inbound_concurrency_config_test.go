@@ -137,8 +137,9 @@ func TestPrivateBurstFoldsIntoActiveDirectReply(t *testing.T) {
 }
 
 // TestPrivateBurstUnderConcurrency 在真实队列上跑一遍连发三句，只验证并发档位本身。
-// 这里的模型不会把连发判成重复或补充；串行时每句单独回复，并发时还没开始生成的
-// 那句可能被后到的取代。合并和取代由上面那个测试和 sender_burst_test.go 覆盖。
+// 这里的模型不会把连发判成重复或补充，所以每句仍然单独回复；合并由上面那个测试覆盖。
+// 三句的消息时间各隔两分钟，超出连发取代的窗口（sender_burst.go），取代由
+// sender_burst_test.go 覆盖——否则还没开始生成的那句会等后一句的结果，并发数就测不准了。
 func TestPrivateBurstUnderConcurrency(t *testing.T) {
 	t.Run("serial", func(t *testing.T) {
 		replies, maxActive, sent := runPrivateBurst(t, 1)
@@ -152,10 +153,8 @@ func TestPrivateBurstUnderConcurrency(t *testing.T) {
 	t.Run("parallel", func(t *testing.T) {
 		replies, maxActive, sent := runPrivateBurst(t, 2)
 		// 并发时后到的那句会先问一次「是不是同一件事」，模型调用数可能多一次。
-		// 后到的那句要是赶在前一句开始生成之前进了回复入口，会直接取代前一句
-		// （sender_burst.go），于是发送数是 2 或 3，取决于两路谁先走完路由。
-		if replies < 2 || len(sent) < 2 || len(sent) > 3 {
-			t.Fatalf("parallel burst produced %d replies / %d sends, want 2-3 sends when follow-ups are not classified as repeats%s", replies, len(sent), describeSentMessages(sent))
+		if replies < 3 || len(sent) != 3 {
+			t.Fatalf("parallel burst produced %d replies / %d sends, want 3 / 3 when follow-ups are not classified as repeats%s", replies, len(sent), describeSentMessages(sent))
 		}
 		if maxActive < 2 {
 			t.Fatalf("max concurrent generations = %d, want at least 2 under private concurrency 2", maxActive)
@@ -185,9 +184,10 @@ func runPrivateBurst(t *testing.T, privateConcurrency int) (replies, maxActive i
 	runtime.SetInboundEventStore(store)
 
 	ids := make([]string, 0, 3)
-	for _, messageID := range []string{"p-1", "p-2", "p-3"} {
+	base := time.Now().Add(-4 * time.Minute).Unix()
+	for index, messageID := range []string{"p-1", "p-2", "p-3"} {
 		event := MessageEvent{
-			Kind: EventKindPrivate, Time: time.Now().Unix(), SelfID: "42", UserID: "30004",
+			Kind: EventKindPrivate, Time: base + int64(index)*int64((2*time.Minute)/time.Second), SelfID: "42", UserID: "30004",
 			MessageID: messageID, RawMessage: "连发一句",
 			Segments: []MessageSegment{{Type: "text", Data: map[string]string{"text": "连发一句"}}},
 		}

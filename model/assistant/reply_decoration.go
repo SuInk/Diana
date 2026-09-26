@@ -4,6 +4,7 @@
 package assistant
 
 import (
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -123,9 +124,24 @@ func pendingEarlierMessages(history []MessageEvent, event MessageEvent, limit in
 	currentID := strings.TrimSpace(event.MessageID)
 	var picked []MessageEvent
 	anchorTime := event.Time
-	for index := len(history) - 1; index >= 0 && len(picked) < limit; index-- {
+	// 从当前消息在历史里的位置往前看。几条消息并发处理时，历史末尾可能是比当前这条
+	// 更晚到的消息，它不是「之前连发没回的」。
+	start := len(history) - 1
+	if currentID != "" {
+		for index := len(history) - 1; index >= 0; index-- {
+			if strings.TrimSpace(history[index].MessageID) == currentID {
+				start = index - 1
+				break
+			}
+		}
+	}
+	for index := start; index >= 0 && len(picked) < limit; index-- {
 		item := history[index]
 		if strings.TrimSpace(item.MessageID) == currentID && currentID != "" {
+			continue
+		}
+		// 回复用的历史未必含当前这条；比它晚到的消息同样不算。
+		if event.Time > 0 && item.Time > event.Time {
 			continue
 		}
 		if item.crossGroupContext || isPokeHistoryEvent(item) {
@@ -250,9 +266,29 @@ func replyDecorationPrompt(cfg BotConfig, event MessageEvent, history []MessageE
 	return strings.TrimSpace(builder.String())
 }
 
+// withBurstAbsorbed 把这一轮取代掉的消息并进点名名单：历史是重新取过的，未必和
+// 取代时看到的一模一样，被取代的每一条都必须点到。按时间从旧到新排。
+func withBurstAbsorbed(pending, absorbed []MessageEvent) []MessageEvent {
+	if len(absorbed) == 0 {
+		return pending
+	}
+	seen := make(map[string]bool, len(pending)+len(absorbed))
+	merged := make([]MessageEvent, 0, len(pending)+len(absorbed))
+	for _, item := range append(append([]MessageEvent(nil), absorbed...), pending...) {
+		id := strings.TrimSpace(item.MessageID)
+		if id != "" && seen[id] {
+			continue
+		}
+		seen[id] = true
+		merged = append(merged, item)
+	}
+	sort.SliceStable(merged, func(i, j int) bool { return merged[i].Time < merged[j].Time })
+	return merged
+}
+
 // pendingEarlierMessagesPrompt 点出同一个人连发、还没回的那几条，让这一轮一起接住。
 func pendingEarlierMessagesPrompt(cfg BotConfig, event MessageEvent, history []MessageEvent) string {
-	earlier := pendingEarlierMessages(history, event, pendingEarlierMessagesLimit)
+	earlier := withBurstAbsorbed(pendingEarlierMessages(history, event, pendingEarlierMessagesLimit), event.burstAbsorbed)
 	if len(earlier) == 0 {
 		return ""
 	}

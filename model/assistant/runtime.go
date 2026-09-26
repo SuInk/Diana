@@ -1950,10 +1950,6 @@ func (r *Runtime) routeMessageEvent(ctx context.Context, event MessageEvent) (Me
 				considerProactive, proactiveSkipReason = false, reason
 			}
 		}
-		// 提醒或事件触发任务刚找过这个人，主动接话再来一句多半是同一件事。
-		if considerProactive && r.recentTriggeredDeliveryFor(event) {
-			considerProactive, proactiveSkipReason = false, triggeredDeliverySkipReason
-		}
 	}
 	proactiveCandidates := append([]proactiveReplyCandidate(nil), event.backlogProactive...)
 	if considerProactive {
@@ -1972,6 +1968,12 @@ func (r *Runtime) routeMessageEvent(ctx context.Context, event MessageEvent) (Me
 				allowed = false
 				routed.routingReason = "主动回复路由挑中的积压消息发送者正处于响应限制中"
 			}
+		}
+		// 提醒或事件触发任务刚找过这个人，随口一句的主动接话多半是把同一件事再说一遍。
+		// 评分判定他就是在跟机器人说话的照常回，见 triggered_delivery.go。
+		if allowed && proactiveReplyCoveredByTrigger(routed) && r.recentTriggeredDeliveryFor(routed) {
+			allowed = false
+			routed.routingReason = triggeredDeliverySkipReason
 		}
 		if allowed {
 			event, text, handled = routed, routedText, true
@@ -2046,13 +2048,22 @@ func (r *Runtime) replyAndRecord(ctx context.Context, event MessageEvent, text s
 			successOutcome = "replied_direct_followup"
 		}
 	}
-	defer r.enqueueHistoryImageDescriptions(event)
 	// 同一个人连发：前一条还没开口就由这一条一并回答，见 sender_burst.go。
+	// 取代先是暂定的：这一轮真的回出去了才算数，没回出去就把前一条放回去自己答。
 	event, burstOutcome, burstDone := r.claimSenderBurst(ctx, event, text, successOutcome)
-	defer r.finishSenderTurn(event)
 	if burstDone {
+		r.enqueueHistoryImageDescriptions(event)
+		r.finishSenderTurn(event)
 		return burstOutcome, nil
 	}
+	outcome, err := r.replyAndRecordTurn(ctx, event, text, successOutcome)
+	r.settleSenderBurst(ctx, event, err == nil && strings.HasPrefix(outcome, "replied"))
+	r.finishSenderTurn(event)
+	return outcome, err
+}
+
+func (r *Runtime) replyAndRecordTurn(ctx context.Context, event MessageEvent, text string, successOutcome string) (string, error) {
+	defer r.enqueueHistoryImageDescriptions(event)
 	start := time.Now()
 	record := r.decisionEventRecord(event, text, successOutcome)
 	record.At = start
@@ -4344,7 +4355,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		if images := senderDependencyImages(replyHistory, event, turnMessageIDs, firstNonEmpty(strings.TrimSpace(cfg.BotAccount), strings.TrimSpace(event.SelfID))); len(images) > 0 {
 			dependency = &senderDependencyContext{images: images, toolHint: directAgentDecision, pixels: r.chatModelReceivesImages(event)}
 			// 这一轮已经带着那几张图在答了，纯图那条自己的回复就不必再发。
-			r.supersedeDependencyImageTurns(ctx, event, images)
+			r.supersedeDependencyImageTurns(event, images)
 		}
 		stableHistory, crossGroupTail := r.stableGroupHistory(ctx, event, cfg, replyHistory, directAgentDecision, turnMessageIDs)
 		messages = append(messages, stableCheckpoint...)

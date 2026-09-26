@@ -209,7 +209,7 @@ func (r *Runtime) interruptedReplyError(ctx context.Context, event MessageEvent)
 	// 依赖图一起答了）。只拦对话回复：链接解析、插件指令没有人会替它们补发。
 	// 没被取代就在同一把锁里记成「开始发送」，之后不再被连发取代：半截话比多回一条更糟。
 	_, inDirectRun := ctx.Value(directReplyRunContextKey{}).(directReplyRunContext)
-	if !r.passSenderTurnSendGate(event, inDirectRun) {
+	if !r.passSenderTurnSendGate(ctx, event, inDirectRun) {
 		return errReplyTriggerSuperseded
 	}
 	return nil

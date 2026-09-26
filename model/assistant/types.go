@@ -215,7 +215,10 @@ type MessageEvent struct {
 	// routingDirected 记下接话评分里的 relevance.directed：这条消息在语义上是冲着
 	// 机器人来的，哪怕正文里没有 @、引用和名字。空转判断靠它才看得见相关度分支放
 	// 行的那些回复，见 botReplyLoopCandidate。
-	routingDirected        bool
+	routingDirected bool
+	// burstAbsorbed 是这一轮取代掉的、同一个人更早连发的消息（见 sender_burst.go）。
+	// 提示词按它点名承接，保证被取代的每一条都真的被提到。
+	burstAbsorbed          []MessageEvent
 	replyDeliveryMode      replyDeliveryMode
 	replyLineBreakMode     replyLineBreakMode
 	replyAuditImageContext string
