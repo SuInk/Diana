@@ -989,6 +989,16 @@
                 <span class="hint">每个群单独计，一个群刷满不会把别的群一起饿死；群配置里填了就以群为准。这个群名下的每次模型调用都算，含路由判断和工具步，不只是最终那句回复。主人不受限。</span>
               </div>
               <div class="field">
+                <label for="bot-image-group-limit">生图次数 · 每群每天</label>
+                <input id="bot-image-group-limit" v-model.number="form.image_generation_daily_group_limit" class="input" type="number" min="0" step="1" inputmode="numeric" placeholder="留空不限" />
+                <span class="hint">每个群每天最多成功生成几次图片，改图也算一次，逐张改几张算几次；失败、被拒不算。群配置里填了就以群为准。</span>
+              </div>
+              <div class="field">
+                <label for="bot-image-user-limit">生图次数 · 每人每天</label>
+                <input id="bot-image-user-limit" v-model.number="form.image_generation_daily_user_limit" class="input" type="number" min="0" step="1" inputmode="numeric" placeholder="留空不限" />
+                <span class="hint">每个人每天最多成功生成几次，跨群和私聊合计。「每天」按机器人所在时区的自然日算，零点重新计数。用完后机器人会如实告诉对方今天的次数已用完。主人不受限，也不占别人的次数。</span>
+              </div>
+              <div class="field">
                 <label for="bot-sample">回复抽样率（%）</label>
                 <input id="bot-sample" v-model.number="form.reply_sample_percent" class="input" type="number" min="0" max="100" step="1" inputmode="numeric" placeholder="留空不抽样" />
                 <span class="hint">群里没 @、没引用、没叫名字的消息，只有这个比例交给模型判断要不要接话，没抽中的一次调用都不花。被点名的照常回复，主人不受限。群配置里填了就以群为准。</span>
@@ -1977,6 +1987,7 @@ import SkeletonBlock from "../components/SkeletonBlock.vue";
 import { ArrowLeft, Bot, ChevronDown, ChevronRight, Copy, Download, Eye, EyeOff, GripVertical, Pencil, Plus, Power, PowerOff, RefreshCw, RotateCcw, Save, Settings2, Shuffle, Sparkles, Trash2, Upload, X } from "@lucide/vue";
 import { formatClock } from "../format";
 import { sendRetryFields, sendRetryPayload, sendRetryValidationError } from "../send-retry-settings";
+import { botImageGenerationLimitsPayload } from "../media-generation-quota";
 import {
   deleteBotProfile,
   generatePersona,
@@ -4008,6 +4019,7 @@ async function save(): Promise<void> {
       forward_reply_threshold: Number(current.forward_reply_threshold) || 0,
       // 数字框清空后 v-model.number 给的是空串，后端按整数解析会整份拒收。
       model_call_quota: Math.max(0, Math.round(Number(current.model_call_quota) || 0)),
+      ...botImageGenerationLimitsPayload(current),
       reply_sample_percent: Math.min(100, Math.max(0, Math.round(Number(current.reply_sample_percent) || 0))),
       forward_reply_chunk_threshold: Number(current.forward_reply_chunk_threshold) || 0,
       reply_merge_confidence_percent: Number(current.reply_merge_confidence_percent) || 0,

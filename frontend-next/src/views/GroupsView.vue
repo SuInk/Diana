@@ -339,6 +339,20 @@
           <span class="hint">这个群名下的每次模型调用都算，含路由判断和工具步。留空跟随机器人那一档。</span>
         </div>
         <div class="field">
+          <label for="group-image-limit">生图次数 · 本群每天</label>
+          <input
+            id="group-image-limit"
+            v-model.number="editing.image_generation_daily_group_limit"
+            class="input"
+            type="number"
+            min="0"
+            step="1"
+            inputmode="numeric"
+            :placeholder="inheritedPlaceholder(inheritedBot?.image_generation_daily_group_limit, ' 次')"
+          />
+          <span class="hint">本群每天最多成功生成几次图片，改图也算，失败不算，主人不受限。每人每天的上限在机器人设置里，跨群合计。</span>
+        </div>
+        <div class="field">
           <label for="group-sample">回复抽样率（%）</label>
           <input id="group-sample" v-model.number="editing.reply_sample_percent" class="input" type="number" min="0" max="100" step="1" inputmode="numeric" placeholder="留空跟随机器人" />
           <span class="hint">没 @、没引用、没叫名字的消息，只有这个比例交给模型判断要不要接话，没抽中的一次调用都不花。被点名的照常回复。</span>
@@ -648,6 +662,7 @@ import { participationFromConfig, participationLevelLabel, participationPresetNa
 import Modal from "../components/Modal.vue";
 import ReplyGateForm from "../components/ReplyGateForm.vue";
 import { sendRetryFields, sendRetryPayload, sendRetryValidationError, withUnsetSendRetryCleared, type SendRetryField, type SendRetrySettings } from "../send-retry-settings";
+import { groupImageGenerationLimitsPayload } from "../media-generation-quota";
 
 // 群里留空的项跟随所属机器人（后端不再把机器人的值抄进群配置），占位符和「跟随机器人」
 // 选项里写出机器人现在的值，免得用户以为留空就是没有。
@@ -1416,6 +1431,7 @@ async function saveEditing(): Promise<void> {
       forward_reply_threshold: forwardModeOf(current) === "custom" ? optionalForwardThreshold(current.forward_reply_threshold) : undefined,
       // 数字框清空后 v-model.number 给的是空串，后端按整数解析会整份拒收。
       model_call_quota: Math.max(0, Math.round(Number(current.model_call_quota) || 0)),
+      ...groupImageGenerationLimitsPayload(current),
       reply_sample_percent: Math.min(100, Math.max(0, Math.round(Number(current.reply_sample_percent) || 0))),
       forward_reply_chunk_threshold: forwardModeOf(current) === "custom" ? optionalForwardThreshold(current.forward_reply_chunk_threshold) : undefined,
       forward_reply_enabled: forwardModeOf(current) === "custom" ? true : current.forward_reply_enabled,
