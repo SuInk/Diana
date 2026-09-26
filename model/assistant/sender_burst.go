@@ -776,9 +776,52 @@ func directReplyOutcome(event MessageEvent, successOutcome string) bool {
 // burstChatMessage 判断这条消息是不是一轮对话回复：shouldHandle 对链接解析、插件
 // 指令和主人命令（含编码任务确认码）同样返回 "replied"，得把它们单独剔出去——
 // 它们必须在自己那一轮生效，回复又是固定内容，接不住别人的问题。
+//
+// 链接解析和插件指令按几种写法都认一遍：原文、cleanInput 之后的文本（和回复入口派发
+// 插件时一样），以及去掉 @机器人、开头触发词之后的文本——「@机器人 #命令」「diana #命令」
+// 这类带前缀的指令只认原文会漏掉，漏掉就会被当成普通聊天接走。宁可多排除几条（它们
+// 只是各回各的），也不能把一条指令吞掉。
 func (r *Runtime) burstChatMessage(event MessageEvent, text string) bool {
 	text = firstNonEmpty(strings.TrimSpace(text), directedInboundText(event))
-	return !r.shouldHandleResolver(event, text) && !r.shouldHandlePlugin(event, text) && !r.wouldHandleOwnerCommand(event, text)
+	for _, candidate := range r.burstCommandTexts(event, text) {
+		if r.shouldHandleResolver(event, candidate) || r.shouldHandlePlugin(event, candidate) {
+			return false
+		}
+	}
+	return !r.wouldHandleOwnerCommand(event, text)
+}
+
+// burstCommandTexts 是判断「是不是指令」时要看的几种写法，去重。
+func (r *Runtime) burstCommandTexts(event MessageEvent, text string) []string {
+	cfg := r.effectiveConfigForEvent(event)
+	botID := firstNonEmpty(strings.TrimSpace(event.SelfID), strings.TrimSpace(cfg.BotAccount))
+	stripped := botMentionStrippedText(event, text, botID)
+	candidates := []string{text, r.cleanInput(event, text), stripped, stripLeadingTriggerWord(stripped, cfg.GroupTriggers)}
+	seen := make(map[string]bool, len(candidates))
+	out := make([]string, 0, len(candidates))
+	for _, candidate := range candidates {
+		candidate = strings.TrimSpace(candidate)
+		if candidate == "" || seen[candidate] {
+			continue
+		}
+		seen[candidate] = true
+		out = append(out, candidate)
+	}
+	return out
+}
+
+// stripLeadingTriggerWord 去掉开头的称呼（「diana #命令」里的 diana）和紧跟的标点空白。
+func stripLeadingTriggerWord(text string, triggers []string) string {
+	trimmed := strings.TrimSpace(text)
+	for _, trigger := range triggers {
+		trigger = strings.TrimSpace(trigger)
+		if trigger == "" || len(trimmed) < len(trigger) || !strings.EqualFold(trimmed[:len(trigger)], trigger) {
+			continue
+		}
+		rest := trimmed[len(trigger):]
+		return strings.TrimLeft(rest, " \t,，:：、")
+	}
+	return trimmed
 }
 
 // burstMessageDirected 判断这条消息是不是明确在叫机器人（@、引用、叫名字、私聊）。

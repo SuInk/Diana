@@ -2084,6 +2084,9 @@ func (r *Runtime) replyAndRecordTurn(ctx context.Context, event MessageEvent, te
 	record := r.decisionEventRecord(event, text, successOutcome)
 	record.At = start
 	replyCtx := withReplyTurnStart(withExternalSideEffectLedger(withReplyTriggerGate(withReplySuppressionSendGuard(ctx))), start)
+	// 工具一写外部系统就同步给连发交接：这一轮哪怕随后出错、什么都没发，也不能再算
+	// 交出去——否则被放回队列重跑时，工具会再调一遍（见 sender_burst.go）。
+	onExternalSideEffect(replyCtx, func() { r.markSenderTurnSideEffect(event) })
 	if successOutcome == "replied" || successOutcome == "replied_direct_followup" || event.proactiveReply || event.chatInReply {
 		var finish func()
 		replyCtx, finish = r.beginDirectReply(replyCtx, event)
@@ -7972,90 +7975,6 @@ func sessionKey(event MessageEvent) string {
 }
 
 // handleOwnerCommand 处理 owner 的强格式管理命令。
-// handleOwnerCommand 边认边执行主人命令。命令清单和 owner_command_match.go 里的纯判断
-// 一一对应，改这里要同步改那边。
-func (r *Runtime) handleOwnerCommand(event MessageEvent, text string) (string, bool) {
-	// 按事件所属的机器人认主人：多机器人时每台的主人只管自己那台。
-	cfg := r.effectiveConfigForEvent(event)
-	if !cfg.IsOwnerEvent(event) {
-		return "", false
-	}
-
-	// 这些是强格式管理命令；自然语言切模型由机器人内建配置命令处理。
-	command := strings.TrimSpace(text)
-	if reply, handled := r.handleReplySuppressionOwnerCommand(event, command); handled {
-		return reply, true
-	}
-	// 编码任务的确认码。放在这里是因为它本来就只对主人有意义，而且必须在进入
-	// 模型那一轮之前就被认出来——等着放行的 CLI 进程正停在那儿。
-	if reply, handled := r.handleCodingApprovalReply(event, command); handled {
-		return reply, true
-	}
-	switch {
-	// 「lllm 当前」和「lllm 切换」跟着「激活配置」一起去掉了：没有激活项之后，
-	// 「当前用哪个」由本次调用的用途和分组顺序决定，不再是一个能被切换的全局状态。
-	case command == "lllm 列表":
-		return r.renderLLMProfiles(), true
-	case command == "群 列表":
-		return r.renderDisabledGroups(event), true
-	case strings.HasPrefix(command, "群 禁用 "):
-		groupID := strings.TrimSpace(strings.TrimPrefix(command, "群 禁用 "))
-		return r.setGroupDisabled(event, groupID, true), true
-	case strings.HasPrefix(command, "群 启用 "):
-		groupID := strings.TrimSpace(strings.TrimPrefix(command, "群 启用 "))
-		return r.setGroupDisabled(event, groupID, false), true
-	case command == "提醒 列表":
-		return r.renderReminders(event), true
-	case strings.HasPrefix(command, "提醒 取消 "):
-		id := strings.TrimSpace(strings.TrimPrefix(command, "提醒 取消 "))
-		_, err := r.cancelOneTimeReminder(event.UserID, id)
-		if err != nil {
-			if _, triggerErr := r.cancelEventTrigger(event.UserID, id); triggerErr == nil {
-				return "触发任务已取消并释放额度，记录仍保留。", true
-			}
-			return "取消提醒失败：" + err.Error(), true
-		}
-		return "提醒已取消并释放额度，记录仍保留。", true
-	case strings.HasPrefix(command, "提醒 删除 "):
-		id := strings.TrimSpace(strings.TrimPrefix(command, "提醒 删除 "))
-		return r.deleteReminder(event, id), true
-	case strings.HasPrefix(command, "提醒 添加 "):
-		args := strings.TrimSpace(strings.TrimPrefix(command, "提醒 添加 "))
-		return r.addReminder(event, args), true
-	case command == "订阅 列表":
-		return r.renderScheduledQueries(event.UserID), true
-	case strings.HasPrefix(command, "订阅 取消 "):
-		id := strings.TrimSpace(strings.TrimPrefix(command, "订阅 取消 "))
-		_, err := r.cancelScheduledQuery(event.UserID, id)
-		if err != nil {
-			return "取消定时订阅失败：" + err.Error(), true
-		}
-		return "定时订阅已取消并释放额度，记录仍保留。", true
-	case strings.HasPrefix(command, "订阅 删除 "):
-		id := strings.TrimSpace(strings.TrimPrefix(command, "订阅 删除 "))
-		removed, err := r.deleteScheduledQuery(event.UserID, id)
-		if err != nil {
-			return "删除定时订阅失败：" + err.Error(), true
-		}
-		if !removed {
-			return "没有找到对应的定时订阅。", true
-		}
-		return "定时订阅已删除。", true
-	case strings.HasPrefix(command, "订阅 添加 "):
-		args := strings.TrimSpace(strings.TrimPrefix(command, "订阅 添加 "))
-		return r.addScheduledQueryCommand(event, args), true
-	case command == "清空上下文" || command == "清除上下文":
-		if err := r.clearSessionHistory(event); err != nil {
-			log.Printf("diana context reset failed: %v", err)
-			return "清空上下文失败，请稍后重试或检查服务日志。", true
-		}
-		return "已清空当前会话上下文；聊天记录、长期记忆和人设仍保留。", true
-	case command == "帮助" || command == "菜单":
-		return "可用命令：lllm 列表、lllm 当前、lllm 切换 <名称>、群 列表、群 禁用 <群号>、群 启用 <群号>、响应限制 列表、响应限制 解除 <账号>、提醒 添加 <时长> <内容>、提醒 列表、提醒 取消 <ID>、提醒 删除 <ID>、订阅 添加 <周期> <查询内容>、订阅 列表、订阅 取消 <ID>、订阅 删除 <ID>、清空上下文。也可以直接说：1 分钟后提醒我睡觉，或者每 1 分钟查询某件事并通知我。", true
-	default:
-		return "", false
-	}
-}
 
 // renderDisabledGroups 渲染这台机器人的禁用群列表。
 func (r *Runtime) renderDisabledGroups(event MessageEvent) string {
