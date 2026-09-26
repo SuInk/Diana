@@ -353,6 +353,20 @@
             </div>
           </template>
 
+          <template v-else-if="botForm.platform === 'weixin'">
+            <WeixinLoginPanel
+              v-if="savedBot?.platform === 'weixin' && savedBot.id"
+              :profile-id="savedBot.id"
+              :bot-id="savedBot.weixin_bot_id"
+              :user-id="savedBot.weixin_user_id"
+              :logged-in="!!savedBot.weixin_bot_token_configured"
+              @updated="onWeixinLoginUpdated"
+            />
+            <div v-else class="field wide">
+              <span class="hint">微信不用填凭据：先点下方按钮保存并启动，这里会出现登录二维码，用要当作机器人的微信号扫码即可。</span>
+            </div>
+          </template>
+
           <!-- 飞书和企业微信只能靠平台回调收消息，地址要填到对方后台。 -->
           <div v-if="callbackURL" class="field wide">
             <label for="wizard-callback-url">回调地址</label>
@@ -463,6 +477,7 @@ import { navigate } from "../router";
 import { toastError, toastSuccess } from "../toast";
 import AccountNameHint from "../components/AccountNameHint.vue";
 import AppSelect from "../components/AppSelect.vue";
+import WeixinLoginPanel from "../components/WeixinLoginPanel.vue";
 import {
   defaultPresetForProvider,
   detectLLMService,
@@ -936,6 +951,9 @@ function platformPayload(): Partial<BotProfileConfig> {
         wecom_token: form.wecom_token.trim() || undefined,
         wecom_encoding_aes_key: form.wecom_encoding_aes_key.trim() || undefined
       };
+    case "weixin":
+      // 微信凭据只能扫码写入，保存时没有要提交的接入字段。
+      return {};
     default:
       return {
         onebot_transport: form.onebot_transport,
@@ -946,6 +964,11 @@ function platformPayload(): Partial<BotProfileConfig> {
         onebot_access_token: form.onebot_access_token.trim() || undefined
       };
   }
+}
+
+function onWeixinLoginUpdated(config: BotProfileConfig): void {
+  savedBot.value = config;
+  if (!botForm.value.owner_id.trim() && config.owner_id) botForm.value.owner_id = config.owner_id;
 }
 
 /** 保存成功后清掉明文密钥草稿：再次保存时留空即表示沿用后端已存的那份。 */
