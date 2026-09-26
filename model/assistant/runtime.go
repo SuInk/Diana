@@ -1778,6 +1778,9 @@ func (r *Runtime) routeMessageEvent(ctx context.Context, event MessageEvent) (Me
 	// 已经挪到回复之后（见 enqueueBotReplyLoopCheck），不再占用户感知的延迟。
 	restriction, blocked := r.activeReplySuppression(event, now)
 	r.remember(event)
+	// 语音转写、图片和文件解析、转发展开都在上面做完了：从这一刻起它才能被同一个人
+	// 后到的消息接走（见 sender_burst.go）。
+	r.noteSenderTurnReady(event)
 	// 表达学习看的是全部群消息，不只被回复的那些：群的口癖长在日常闲聊里。
 	// 群被这台机器人关掉、或不在准入名单（黑/白名单）里时，它永远不会在这个群里回复——
 	// 连被 @、被引用也不回，这一直是 admits 的判法，这里只是把判断提到花钱之前。消息照常
@@ -7969,6 +7972,8 @@ func sessionKey(event MessageEvent) string {
 }
 
 // handleOwnerCommand 处理 owner 的强格式管理命令。
+// handleOwnerCommand 边认边执行主人命令。命令清单和 owner_command_match.go 里的纯判断
+// 一一对应，改这里要同步改那边。
 func (r *Runtime) handleOwnerCommand(event MessageEvent, text string) (string, bool) {
 	// 按事件所属的机器人认主人：多机器人时每台的主人只管自己那台。
 	cfg := r.effectiveConfigForEvent(event)

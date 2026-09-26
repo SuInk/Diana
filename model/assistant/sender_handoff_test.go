@@ -194,9 +194,9 @@ func TestSenderBurstOnlyAbsorbsOlderMessages(t *testing.T) {
 	later := photo
 	later.MessageID, later.Time = "photo-late", photo.Time+30
 	runtime.noteSenderTurnArrival(text)
-	runtime.remember(text)
+	arriveReady(runtime, text)
 	runtime.noteSenderTurnArrival(later)
-	runtime.remember(later)
+	arriveReady(runtime, later)
 	runtime.enterSenderTurnReply(later, true)
 
 	if outcome, err := runtime.replyAndRecord(context.Background(), text, text.RawMessage, "replied"); err != nil || outcome != "replied" {
@@ -249,6 +249,7 @@ func TestCarryOverSkipsMessagesAlreadyHandedOff(t *testing.T) {
 type handoffInboundStore struct {
 	*memoryInboundEventStore
 	states map[string]string
+	byID   int
 }
 
 func newHandoffInboundStore() *handoffInboundStore {
@@ -286,44 +287,56 @@ func (s *handoffInboundStore) priorityOf(id string) int {
 	return 0
 }
 
-func (s *handoffInboundStore) MarkInboundHandoff(_ context.Context, event MessageEvent, absorberID string) error {
+// messageIDLocked 按主键或消息 ID 定位；记下按主键找到的次数，验证热路径走的是主键。
+func (s *handoffInboundStore) messageIDLocked(ref InboundHandoffRef) string {
+	if record := s.records[ref.ID]; ref.ID != "" && record != nil {
+		s.byID++
+		return record.item.Event.MessageID
+	}
+	return ref.Event.MessageID
+}
+
+func (s *handoffInboundStore) MarkInboundHandoff(_ context.Context, ref InboundHandoffRef, absorberID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.superseded[event.MessageID] == "" {
-		s.superseded[event.MessageID], s.states[event.MessageID] = absorberID, "pending"
+	messageID := s.messageIDLocked(ref)
+	if s.superseded[messageID] == "" {
+		s.superseded[messageID], s.states[messageID] = absorberID, "pending"
 	}
 	return nil
 }
 
-func (s *handoffInboundStore) FinalizeInboundHandoff(_ context.Context, event MessageEvent, absorberID string) error {
+func (s *handoffInboundStore) FinalizeInboundHandoff(_ context.Context, ref InboundHandoffRef, absorberID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.superseded[event.MessageID] == absorberID && s.states[event.MessageID] == "pending" {
-		s.states[event.MessageID] = "final"
-		if record := s.recordByMessageLocked(event.MessageID); record != nil && record.state == "done" && record.outcome == inboundOutcomeHandedOffPending {
+	messageID := s.messageIDLocked(ref)
+	if s.superseded[messageID] == absorberID && s.states[messageID] == "pending" {
+		s.states[messageID] = "final"
+		if record := s.recordByMessageLocked(messageID); record != nil && record.state == "done" && record.outcome == inboundOutcomeHandedOffPending {
 			record.outcome = "superseded_follow_up"
 		}
 	}
 	return nil
 }
 
-func (s *handoffInboundStore) ReleaseInboundHandoff(_ context.Context, event MessageEvent, absorberID string) (bool, error) {
+func (s *handoffInboundStore) ReleaseInboundHandoff(_ context.Context, ref InboundHandoffRef, absorberID string) (bool, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.superseded[event.MessageID] != absorberID || s.states[event.MessageID] != "pending" {
-		return false, nil
+	messageID := s.messageIDLocked(ref)
+	if s.superseded[messageID] != absorberID || s.states[messageID] != "pending" {
+		return false, false, nil
 	}
-	delete(s.superseded, event.MessageID)
-	delete(s.states, event.MessageID)
-	record := s.recordByMessageLocked(event.MessageID)
+	delete(s.superseded, messageID)
+	delete(s.states, messageID)
+	record := s.recordByMessageLocked(messageID)
 	if record == nil || record.state != "done" || record.outcome != inboundOutcomeHandedOffPending {
-		return false, nil
+		return true, false, nil
 	}
 	record.state, record.outcome = "pending", ""
 	if record.item.Priority < InboundPriorityTriggered {
 		record.item.Priority = InboundPriorityTriggered
 	}
-	return true, nil
+	return true, true, nil
 }
 
 func (s *handoffInboundStore) CompleteInboundHandoff(_ context.Context, id, leaseOwner, absorberID string, final bool) error {
@@ -333,12 +346,13 @@ func (s *handoffInboundStore) CompleteInboundHandoff(_ context.Context, id, leas
 	if record == nil || record.state != "processing" || record.leaseOwner != leaseOwner {
 		return nil
 	}
+	messageID := record.item.Event.MessageID
 	record.state, record.leaseOwner, record.outcome = "done", "", inboundOutcomeHandedOffPending
 	state := "pending"
-	if final {
+	// 落定抢在收尾前面时不改回待定。
+	if final || (s.states[messageID] == "final" && s.superseded[messageID] == absorberID) {
 		record.outcome, state = "superseded_follow_up", "final"
 	}
-	messageID := record.item.Event.MessageID
 	if absorberID != "" {
 		s.superseded[messageID] = absorberID
 	}
@@ -355,7 +369,7 @@ func (s *handoffInboundStore) ListPendingInboundHandoffs(_ context.Context, _ in
 			continue
 		}
 		if record := s.recordByMessageLocked(messageID); record != nil {
-			pending = append(pending, InboundHandoff{Event: record.item.Event, AbsorberID: s.superseded[messageID]})
+			pending = append(pending, InboundHandoff{InboundHandoffRef: InboundHandoffRef{ID: record.item.ID, Event: record.item.Event}, AbsorberID: s.superseded[messageID]})
 		}
 	}
 	return pending, nil

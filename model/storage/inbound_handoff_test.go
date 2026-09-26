@@ -46,7 +46,7 @@ func TestInboundHandoffReleaseRequeuesHandedOffEvent(t *testing.T) {
 	if _, ok, err := store.ClaimNextInboundEvent(ctx, "worker", time.Now().Add(time.Minute), assistant.InboundConcurrency{Group: 3, Private: 2}); err != nil || !ok {
 		t.Fatalf("claim ok=%v err=%v", ok, err)
 	}
-	if err := store.MarkInboundHandoff(ctx, event, "absorber-1"); err != nil {
+	if err := store.MarkInboundHandoff(ctx, assistant.InboundHandoffRef{ID: id, Event: event}, "absorber-1"); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.CompleteInboundHandoff(ctx, id, "worker", "absorber-1", false); err != nil {
@@ -61,12 +61,12 @@ func TestInboundHandoffReleaseRequeuesHandedOffEvent(t *testing.T) {
 		t.Fatalf("pending handoffs=%#v err=%v", pending, err)
 	}
 	// 别的接手轮次撤销不了这条交接。
-	if requeued, err := store.ReleaseInboundHandoff(ctx, event, "someone-else"); err != nil || requeued {
-		t.Fatalf("foreign release requeued=%v err=%v", requeued, err)
+	if matched, requeued, err := store.ReleaseInboundHandoff(ctx, assistant.InboundHandoffRef{ID: id}, "someone-else"); err != nil || matched || requeued {
+		t.Fatalf("foreign release matched=%v requeued=%v err=%v", matched, requeued, err)
 	}
-	requeued, err := store.ReleaseInboundHandoff(ctx, event, "absorber-1")
-	if err != nil || !requeued {
-		t.Fatalf("release requeued=%v err=%v", requeued, err)
+	matched, requeued, err := store.ReleaseInboundHandoff(ctx, assistant.InboundHandoffRef{ID: id}, "absorber-1")
+	if err != nil || !matched || !requeued {
+		t.Fatalf("release matched=%v requeued=%v err=%v", matched, requeued, err)
 	}
 	status, outcome, by, state, priority := handoffRow(t, store, id)
 	if status != inboundStatusPending || outcome != "" || by != "" || state != "" || priority < assistant.InboundPriorityTriggered {
@@ -96,7 +96,7 @@ func TestInboundHandoffFinalize(t *testing.T) {
 	if err := store.CompleteInboundHandoff(ctx, id, "worker", "absorber-2", false); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.FinalizeInboundHandoff(ctx, event, "absorber-2"); err != nil {
+	if err := store.FinalizeInboundHandoff(ctx, assistant.InboundHandoffRef{ID: id}, "absorber-2"); err != nil {
 		t.Fatal(err)
 	}
 	status, outcome, by, state, _ := handoffRow(t, store, id)
@@ -106,7 +106,7 @@ func TestInboundHandoffFinalize(t *testing.T) {
 	if pending, _ := store.ListPendingInboundHandoffs(ctx, 10); len(pending) != 0 {
 		t.Fatalf("finalized handoff still listed: %#v", pending)
 	}
-	if requeued, _ := store.ReleaseInboundHandoff(ctx, event, "absorber-2"); requeued {
+	if _, requeued, _ := store.ReleaseInboundHandoff(ctx, assistant.InboundHandoffRef{ID: id}, "absorber-2"); requeued {
 		t.Fatal("a finalized handoff must never be requeued")
 	}
 }
@@ -123,14 +123,42 @@ func TestInboundHandoffReleaseWhileProcessingOnlyClears(t *testing.T) {
 	if _, ok, err := store.ClaimNextInboundEvent(ctx, "worker", time.Now().Add(time.Minute), assistant.InboundConcurrency{Group: 3, Private: 2}); err != nil || !ok {
 		t.Fatalf("claim ok=%v err=%v", ok, err)
 	}
-	if err := store.MarkInboundHandoff(ctx, event, "absorber-3"); err != nil {
+	if err := store.MarkInboundHandoff(ctx, assistant.InboundHandoffRef{Event: event}, "absorber-3"); err != nil {
 		t.Fatal(err)
 	}
-	if requeued, err := store.ReleaseInboundHandoff(ctx, event, "absorber-3"); err != nil || requeued {
-		t.Fatalf("release while processing requeued=%v err=%v", requeued, err)
+	if matched, requeued, err := store.ReleaseInboundHandoff(ctx, assistant.InboundHandoffRef{Event: event}, "absorber-3"); err != nil || !matched || requeued {
+		t.Fatalf("release while processing matched=%v requeued=%v err=%v", matched, requeued, err)
 	}
 	status, _, by, state, _ := handoffRow(t, store, id)
 	if status != inboundStatusProcessing || by != "" || state != "" {
 		t.Fatalf("status=%s by=%s state=%s", status, by, state)
+	}
+}
+
+// 接手那一轮的落定抢在交出去那一轮收尾之前：收尾不能把 final 改回 pending。
+func TestInboundHandoffCompleteKeepsFinal(t *testing.T) {
+	store := handoffTestStore(t)
+	ctx := context.Background()
+	event := assistant.MessageEvent{Kind: assistant.EventKindGroup, GroupID: "12345", UserID: "10004", MessageID: "20004", Time: time.Now().Unix(), RawMessage: "问问"}
+	id, _, err := store.EnqueueInboundEvent(ctx, "group:12345", event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := store.ClaimNextInboundEvent(ctx, "worker", time.Now().Add(time.Minute), assistant.InboundConcurrency{Group: 3, Private: 2}); err != nil || !ok {
+		t.Fatalf("claim ok=%v err=%v", ok, err)
+	}
+	ref := assistant.InboundHandoffRef{ID: id}
+	if err := store.MarkInboundHandoff(ctx, ref, "absorber-4"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.FinalizeInboundHandoff(ctx, ref, "absorber-4"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CompleteInboundHandoff(ctx, id, "worker", "absorber-4", false); err != nil {
+		t.Fatal(err)
+	}
+	status, outcome, by, state, _ := handoffRow(t, store, id)
+	if status != inboundStatusDone || outcome != "superseded_follow_up" || by != "absorber-4" || state != "final" {
+		t.Fatalf("status=%s outcome=%s by=%s state=%s", status, outcome, by, state)
 	}
 }

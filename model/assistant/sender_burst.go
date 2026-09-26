@@ -71,8 +71,12 @@ type senderTurn struct {
 	// chatReply 表示它进回复入口时是一轮对话回复（不是链接解析、插件指令）。
 	chatReply bool
 	// inboundID 是它在入站队列里的事件 ID；有它、且队列支持交接持久化时，撤销交接
-	// 靠重新排队，否则在进程内重新派发。
+	// 靠重新排队，否则在进程内重新派发。交接落库也按它（主键）定位。
 	inboundID string
+	// ready 表示预处理（语音转写、图片和文件解析、转发展开）已经做完、进了会话历史。
+	ready bool
+	// sideEffect 表示这一轮已经在外部系统留下痕迹，它的发送绕过闸门，不能再被接走。
+	sideEffect bool
 
 	// 被接走的一方。supersededBy 是接手那条的消息 ID，absorberID 是接手那一轮的
 	// 入站事件 ID；final 为假时交接还是待定的。
@@ -217,8 +221,32 @@ func (r *Runtime) enterSenderTurnReply(event MessageEvent, chatReply bool) {
 	turn.event = event
 }
 
-// markSenderTurnSending 在回复过了发送闸门时调用：从这一刻起它不会再被接走。
-func (r *Runtime) markSenderTurnSending(event MessageEvent) {
+// noteSenderTurnReady 在消息预处理完、进了会话历史之后调用：从这一刻起它才能被接走。
+func (r *Runtime) noteSenderTurnReady(event MessageEvent) {
+	key := directReplyMergeKey(event)
+	if key == "" || strings.TrimSpace(event.MessageID) == "" {
+		return
+	}
+	r.replyInterruptMu.Lock()
+	defer r.replyInterruptMu.Unlock()
+	r.ensureSenderTurnLocked(key, event, time.Now()).ready = true
+}
+
+// preprocessedForCarryOver 看历史里这条消息本身是不是已经能读：语音得有转写。
+// 这是 ready 之外的一道兜底，防的是转写失败或禁言期间跳过转写的语音。
+func preprocessedForCarryOver(event MessageEvent) bool {
+	for _, segment := range event.Segments {
+		if segment.Type == "record" && strings.TrimSpace(segment.Data[voiceSTTTranscriptKey]) == "" {
+			return false
+		}
+	}
+	return true
+}
+
+// markSenderTurnSideEffect 在这一轮已经写到外部系统、之后的发送绕过闸门时调用。
+// 它的回复一定会发出去，所以不能再算作交出去了：还没落定的交接就地撤销（接手那一轮
+// 结算时看到它已经不归自己，不落定也不重排；落库的待定标记由巡检清掉）。
+func (r *Runtime) markSenderTurnSideEffect(event MessageEvent) {
 	key := directReplyMergeKey(event)
 	messageID := strings.TrimSpace(event.MessageID)
 	if key == "" || messageID == "" {
@@ -226,8 +254,13 @@ func (r *Runtime) markSenderTurnSending(event MessageEvent) {
 	}
 	r.replyInterruptMu.Lock()
 	defer r.replyInterruptMu.Unlock()
-	if turn := r.senderTurnLocked(key, messageID); turn != nil && turn.supersededBy == "" {
-		turn.stage = senderTurnSending
+	turn := r.senderTurnLocked(key, messageID)
+	if turn == nil {
+		return
+	}
+	turn.sideEffect, turn.stage = true, senderTurnSending
+	if turn.pendingHandoff() {
+		turn.supersededBy, turn.absorberID, turn.viaDependency = "", "", false
 	}
 }
 
@@ -316,6 +349,15 @@ func (r *Runtime) handOffSenderTurn(event MessageEvent, text, successOutcome str
 	if turn == nil {
 		return "", false, false
 	}
+	// 一轮跑完时已经发出过模型回复、或者在外部系统留下了痕迹：它不是交出去的，
+	// 不能记成 handed_off_pending——否则接手那一轮没回出去时它会被重新排队，
+	// 出站幂等账本已经清掉，工具和回复会再来一遍。还没落定的交接就地撤销。
+	if stopped && (turn.delivered || turn.sideEffect) {
+		if turn.pendingHandoff() {
+			turn.supersededBy, turn.absorberID, turn.viaDependency = "", "", false
+		}
+		return "", false, false
+	}
 	switch {
 	case turn.supersededBy != "" && turn.final:
 		turn.handedOff = true
@@ -390,14 +432,14 @@ func (r *Runtime) absorbLocked(current, turn *senderTurn, viaDependency bool) {
 }
 
 // markHandoffs 把刚接过来的交接写进入站队列。
-func (r *Runtime) markHandoffs(ctx context.Context, absorberID string, events []MessageEvent) {
+func (r *Runtime) markHandoffs(ctx context.Context, absorberID string, refs []InboundHandoffRef) {
 	store := r.inboundHandoffStore()
 	if store == nil {
 		return
 	}
-	for _, event := range events {
+	for _, ref := range refs {
 		markCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
-		if err := store.MarkInboundHandoff(markCtx, event, absorberID); err != nil {
+		if err := store.MarkInboundHandoff(markCtx, ref, absorberID); err != nil {
 			log.Printf("diana record inbound handoff failed: %v", err)
 		}
 		cancel()
@@ -425,7 +467,8 @@ func (r *Runtime) claimCarryOver(ctx context.Context, event MessageEvent, histor
 		}
 	}
 	turnID := senderTurnID(ctx, event)
-	var carry, newly []MessageEvent
+	var carry []MessageEvent
+	var newly []InboundHandoffRef
 	r.replyInterruptMu.Lock()
 	current := r.ensureSenderTurnLocked(key, event, time.Now())
 	if current.turnID == "" {
@@ -444,20 +487,23 @@ func (r *Runtime) claimCarryOver(ctx context.Context, event MessageEvent, histor
 		case turn.supersededBy != "", turn.stage != senderTurnRouting:
 			// 已经交给别的轮次，或者它自己那一轮正在回答：不点名，免得答两遍。
 		case !eligible[earlierID] || !burstEarlier(turn, item, current, event):
+		case !turn.ready || !preprocessedForCarryOver(item):
+			// 还没预处理完（语音在转写、图和文件在解析、转发还没展开）：这时点名只能
+			// 点到「[语音]」这样的占位，接过来等于把真正的内容吞了。留给它自己那一轮。
 		default:
 			if gap := senderBurstGap(turn, item, current, event); gap < 0 || gap > senderBurstWindow {
 				continue
 			}
 			r.absorbLocked(current, turn, false)
 			carry = append(carry, item)
-			newly = append(newly, turn.event)
+			newly = append(newly, InboundHandoffRef{ID: turn.inboundID, Event: turn.event})
 		}
 	}
 	r.replyInterruptMu.Unlock()
 	if len(newly) > 0 {
 		ids := make([]string, 0, len(newly))
 		for _, item := range newly {
-			ids = append(ids, strings.TrimSpace(item.MessageID))
+			ids = append(ids, strings.TrimSpace(item.Event.MessageID))
 		}
 		log.Printf("diana sender burst: message %s takes over earlier %s from the same sender", messageID, strings.Join(ids, ","))
 		r.markHandoffs(ctx, current.turnID, newly)
@@ -503,7 +549,7 @@ func (r *Runtime) supersedeDependencyImageTurns(ctx context.Context, event Messa
 		return
 	}
 	turnID := senderTurnID(ctx, event)
-	var newly []MessageEvent
+	var newly []InboundHandoffRef
 	r.replyInterruptMu.Lock()
 	current := r.ensureSenderTurnLocked(key, event, time.Now())
 	if current.turnID == "" {
@@ -518,6 +564,11 @@ func (r *Runtime) supersedeDependencyImageTurns(ctx context.Context, event Messa
 		if turn == nil || turn == current || turn.stage >= senderTurnSending || turn.supersededBy != "" || turn.handedOff {
 			continue
 		}
+		// 已经在外部系统留下痕迹的一轮（它的发送绕过闸门）不接；自己已经接了别人的也不接，
+		// 否则接手链 A←B←C 里 C 没回出去时，A 会被放回来再答一遍。
+		if turn.sideEffect || len(turn.absorbed) > 0 {
+			continue
+		}
 		if turn.stage == senderTurnReplying && !turn.chatReply {
 			continue
 		}
@@ -525,11 +576,11 @@ func (r *Runtime) supersedeDependencyImageTurns(ctx context.Context, event Messa
 			continue
 		}
 		r.absorbLocked(current, turn, true)
-		newly = append(newly, turn.event)
+		newly = append(newly, InboundHandoffRef{ID: turn.inboundID, Event: turn.event})
 	}
 	r.replyInterruptMu.Unlock()
 	for _, source := range newly {
-		log.Printf("diana sender burst: image message %s taken over by %s", strings.TrimSpace(source.MessageID), currentID)
+		log.Printf("diana sender burst: image message %s taken over by %s", strings.TrimSpace(source.Event.MessageID), currentID)
 	}
 	r.markHandoffs(ctx, current.turnID, newly)
 }
@@ -580,7 +631,7 @@ func (r *Runtime) settleSenderBurst(ctx context.Context, event MessageEvent) {
 	for _, item := range finalized {
 		if store != nil {
 			finalCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
-			if err := store.FinalizeInboundHandoff(finalCtx, item.event, item.absorberID); err != nil {
+			if err := store.FinalizeInboundHandoff(finalCtx, InboundHandoffRef{ID: item.inboundID, Event: item.event}, item.absorberID); err != nil {
 				log.Printf("diana finalize inbound handoff failed: %v", err)
 			}
 			cancel()
@@ -595,7 +646,7 @@ func (r *Runtime) settleSenderBurst(ctx context.Context, event MessageEvent) {
 		log.Printf("diana sender burst: message %s did not answer %s; handing it back", messageID, strings.TrimSpace(item.event.MessageID))
 		if store != nil {
 			releaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
-			again, err := store.ReleaseInboundHandoff(releaseCtx, item.event, item.absorberID)
+			_, again, err := store.ReleaseInboundHandoff(releaseCtx, InboundHandoffRef{ID: item.inboundID, Event: item.event}, item.absorberID)
 			cancel()
 			if err != nil {
 				log.Printf("diana release inbound handoff failed: %v", err)
@@ -722,11 +773,12 @@ func directReplyOutcome(event MessageEvent, successOutcome string) bool {
 	return successOutcome == "replied" || successOutcome == "replied_direct_followup" || event.proactiveReply || event.chatInReply
 }
 
-// burstChatMessage 判断这条消息是不是一轮对话回复：shouldHandle 对链接解析和插件
-// 指令同样返回 "replied"，得把它们单独剔出去。
+// burstChatMessage 判断这条消息是不是一轮对话回复：shouldHandle 对链接解析、插件
+// 指令和主人命令（含编码任务确认码）同样返回 "replied"，得把它们单独剔出去——
+// 它们必须在自己那一轮生效，回复又是固定内容，接不住别人的问题。
 func (r *Runtime) burstChatMessage(event MessageEvent, text string) bool {
 	text = firstNonEmpty(strings.TrimSpace(text), directedInboundText(event))
-	return !r.shouldHandleResolver(event, text) && !r.shouldHandlePlugin(event, text)
+	return !r.shouldHandleResolver(event, text) && !r.shouldHandlePlugin(event, text) && !r.wouldHandleOwnerCommand(event, text)
 }
 
 // burstMessageDirected 判断这条消息是不是明确在叫机器人（@、引用、叫名字、私聊）。

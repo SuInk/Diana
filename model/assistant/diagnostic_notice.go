@@ -40,7 +40,8 @@ func (r *Runtime) sendDiagnosticNotice(ctx context.Context, event MessageEvent, 
 	if !r.diagnosticAllowed(event, pluginID) {
 		return nil
 	}
-	return r.sendSubscriberNotice(ctx, event, text)
+	// 诊断不是模型对哪条消息的回答，不能让连发交接据此落定（见 sender_burst.go）。
+	return r.sendSubscriberNotice(withoutCarryOverDelivery(ctx), event, text)
 }
 
 // sendDiagnosticNoticeWithEvidence 是需要送达确认的诊断出口：仓库订阅要按配置的多个
@@ -58,7 +59,7 @@ func (r *Runtime) sendDiagnosticFollowup(ctx context.Context, event MessageEvent
 	if !r.diagnosticAllowed(event, pluginID) {
 		return nil
 	}
-	return r.sendSubagentFollowup(ctx, event, text)
+	return r.sendSubagentFollowup(withoutCarryOverDelivery(ctx), event, text)
 }
 
 // pluginErrorNoticeAllowed 读这个插件的「发送错误通知」开关。插件没标 ReportsErrors、

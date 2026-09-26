@@ -23,6 +23,8 @@ var _ assistant.InboundHandoffStore = (*SQLiteStore)(nil)
 const (
 	inboundHandoffPending = "pending"
 	inboundHandoffFinal   = "final"
+	// assistantOutcomeHandedOffPending 和 assistant 包里的 inboundOutcomeHandedOffPending 同值。
+	assistantOutcomeHandedOffPending = "handed_off_pending"
 )
 
 // addInboundEventHandoffColumns 给事件表补上交接状态列。
@@ -46,28 +48,36 @@ func (s *SQLiteStore) addInboundEventHandoffColumns() error {
 	return err
 }
 
-// inboundEventRowByMessage 按会话、发送者和消息 ID 定位最新那行，和追发合并同一口径。
-const inboundEventRowByMessage = `(
+// inboundHandoffRow 给出定位那一行的 WHERE 条件。有队列事件 ID 就走主键；没有才按
+// 会话、发送者和消息 ID 找最新那行——那条查询没有索引，唯一的写连接上一次要扫几十毫秒。
+func inboundHandoffRow(ref assistant.InboundHandoffRef) (string, []any) {
+	if id := strings.TrimSpace(ref.ID); id != "" {
+		return `id = ?`, []any{id}
+	}
+	event := ref.Event
+	return `id = (
   SELECT id FROM inbound_events
   WHERE message_id = ? AND kind = ?
     AND COALESCE(group_id, '') = ? AND COALESCE(user_id, '') = ?
   ORDER BY created_at DESC, id DESC LIMIT 1
-)`
-
-func inboundEventRowArgs(event assistant.MessageEvent) []any {
-	return []any{strings.TrimSpace(event.MessageID), strings.TrimSpace(string(event.Kind)), strings.TrimSpace(event.GroupID), strings.TrimSpace(event.UserID)}
+)`, []any{strings.TrimSpace(event.MessageID), strings.TrimSpace(string(event.Kind)), strings.TrimSpace(event.GroupID), strings.TrimSpace(event.UserID)}
 }
 
-func (s *SQLiteStore) MarkInboundHandoff(ctx context.Context, event assistant.MessageEvent, absorberID string) error {
+func inboundHandoffRefUsable(ref assistant.InboundHandoffRef) bool {
+	return strings.TrimSpace(ref.ID) != "" || strings.TrimSpace(ref.Event.MessageID) != ""
+}
+
+func (s *SQLiteStore) MarkInboundHandoff(ctx context.Context, ref assistant.InboundHandoffRef, absorberID string) error {
 	defer s.observeStorage(ctx, "MarkInboundHandoff", "write")()
-	if s == nil || s.db == nil || strings.TrimSpace(event.MessageID) == "" || strings.TrimSpace(absorberID) == "" {
+	if s == nil || s.db == nil || !inboundHandoffRefUsable(ref) || strings.TrimSpace(absorberID) == "" {
 		return nil
 	}
 	now := time.Now().UTC().UnixNano()
-	args := append([]any{strings.TrimSpace(absorberID), inboundHandoffPending, now, now}, inboundEventRowArgs(event)...)
+	where, whereArgs := inboundHandoffRow(ref)
+	args := append([]any{strings.TrimSpace(absorberID), inboundHandoffPending, now, now}, whereArgs...)
 	_, err := s.db.ExecContext(ctx, `
 UPDATE inbound_events SET superseded_by = ?, handoff_state = ?, handoff_at = ?, updated_at = ?
-WHERE id = `+inboundEventRowByMessage+`
+WHERE `+where+`
   AND COALESCE(superseded_by, '') = ''
 `, args...)
 	if err != nil {
@@ -76,20 +86,21 @@ WHERE id = `+inboundEventRowByMessage+`
 	return nil
 }
 
-func (s *SQLiteStore) FinalizeInboundHandoff(ctx context.Context, event assistant.MessageEvent, absorberID string) error {
+func (s *SQLiteStore) FinalizeInboundHandoff(ctx context.Context, ref assistant.InboundHandoffRef, absorberID string) error {
 	defer s.observeStorage(ctx, "FinalizeInboundHandoff", "write")()
-	if s == nil || s.db == nil || strings.TrimSpace(event.MessageID) == "" || strings.TrimSpace(absorberID) == "" {
+	if s == nil || s.db == nil || !inboundHandoffRefUsable(ref) || strings.TrimSpace(absorberID) == "" {
 		return nil
 	}
 	now := time.Now().UTC().UnixNano()
-	args := append([]any{inboundHandoffFinal, inboundStatusDone, assistantOutcomeHandedOffPending, now}, inboundEventRowArgs(event)...)
+	where, whereArgs := inboundHandoffRow(ref)
+	args := append([]any{inboundHandoffFinal, inboundStatusDone, assistantOutcomeHandedOffPending, now}, whereArgs...)
 	args = append(args, strings.TrimSpace(absorberID), inboundHandoffPending)
 	_, err := s.db.ExecContext(ctx, `
 UPDATE inbound_events
 SET handoff_state = ?,
     outcome = CASE WHEN status = ? AND outcome = ? THEN 'superseded_follow_up' ELSE outcome END,
     updated_at = ?
-WHERE id = `+inboundEventRowByMessage+`
+WHERE `+where+`
   AND superseded_by = ? AND handoff_state = ?
 `, args...)
 	if err != nil {
@@ -100,15 +111,16 @@ WHERE id = `+inboundEventRowByMessage+`
 
 // ReleaseInboundHandoff 撤销交接。那一行要是已经以 handed_off_pending 收尾，就回到队列：
 // 立即可领、优先级提到直接触发那一档。还在处理中的只清交接列，它自己会接着回答。
-func (s *SQLiteStore) ReleaseInboundHandoff(ctx context.Context, event assistant.MessageEvent, absorberID string) (bool, error) {
+func (s *SQLiteStore) ReleaseInboundHandoff(ctx context.Context, ref assistant.InboundHandoffRef, absorberID string) (bool, bool, error) {
 	defer s.observeStorage(ctx, "ReleaseInboundHandoff", "write")()
-	if s == nil || s.db == nil || strings.TrimSpace(event.MessageID) == "" || strings.TrimSpace(absorberID) == "" {
-		return false, nil
+	if s == nil || s.db == nil || !inboundHandoffRefUsable(ref) || strings.TrimSpace(absorberID) == "" {
+		return false, false, nil
 	}
 	now := time.Now().UTC().UnixNano()
 	handedOff := `(status = '` + inboundStatusDone + `' AND outcome = '` + assistantOutcomeHandedOffPending + `')`
+	where, whereArgs := inboundHandoffRow(ref)
 	args := []any{inboundStatusPending, assistant.InboundPriorityTriggered, assistant.InboundPriorityTriggered, now, now}
-	args = append(args, inboundEventRowArgs(event)...)
+	args = append(args, whereArgs...)
 	args = append(args, strings.TrimSpace(absorberID), inboundHandoffPending)
 	var requeued int
 	err := s.db.QueryRowContext(ctx, `
@@ -120,20 +132,21 @@ SET superseded_by = NULL, handoff_state = NULL, handoff_at = NULL,
     outcome = CASE WHEN `+handedOff+` THEN NULL ELSE outcome END,
     completed_at = CASE WHEN `+handedOff+` THEN NULL ELSE completed_at END,
     updated_at = ?
-WHERE id = `+inboundEventRowByMessage+`
+WHERE `+where+`
   AND superseded_by = ? AND handoff_state = ?
 RETURNING CASE WHEN status = '`+inboundStatusPending+`' AND completed_at IS NULL AND outcome IS NULL THEN 1 ELSE 0 END
 `, args...).Scan(&requeued)
 	if err != nil {
 		if err == sql.ErrNoRows {
-			return false, nil
+			return false, false, nil
 		}
-		return false, fmt.Errorf("release inbound handoff: %w", err)
+		return false, false, fmt.Errorf("release inbound handoff: %w", err)
 	}
-	return requeued == 1, nil
+	return true, requeued == 1, nil
 }
 
-// CompleteInboundHandoff 是交出去那一轮的收尾：落终态并写上交接状态。
+// CompleteInboundHandoff 是交出去那一轮的收尾：落终态并写上交接状态。接手那一轮的
+// 落定要是抢在它前面，已经是 final 的不会被改回 pending，结果照写 superseded_follow_up。
 func (s *SQLiteStore) CompleteInboundHandoff(ctx context.Context, id string, leaseOwner string, absorberID string, final bool) error {
 	defer s.observeStorage(ctx, "CompleteInboundHandoff", "write")()
 	if s == nil || s.db == nil {
@@ -147,16 +160,20 @@ func (s *SQLiteStore) CompleteInboundHandoff(ctx context.Context, id string, lea
 	if final {
 		outcome, state = "superseded_follow_up", inboundHandoffFinal
 	}
+	alreadyFinal := `(handoff_state = '` + inboundHandoffFinal + `' AND superseded_by = ?)`
 	now := time.Now().UTC().UnixNano()
 	result, err := s.db.ExecContext(ctx, `
 UPDATE inbound_events
-SET status = ?, outcome = ?, last_error = NULL,
+SET status = ?,
+    outcome = CASE WHEN `+alreadyFinal+` THEN 'superseded_follow_up' ELSE ? END,
+    last_error = NULL,
+    handoff_state = CASE WHEN `+alreadyFinal+` THEN '`+inboundHandoffFinal+`' ELSE ? END,
     superseded_by = CASE WHEN ? != '' THEN ? ELSE superseded_by END,
-    handoff_state = ?, handoff_at = COALESCE(handoff_at, ?),
+    handoff_at = COALESCE(handoff_at, ?),
     lease_owner = NULL, lease_until = NULL,
     completed_at = ?, updated_at = ?
 WHERE id = ? AND status = ? AND lease_owner = ?
-`, inboundStatusDone, outcome, absorberID, absorberID, state, now, now, now, id, inboundStatusProcessing, leaseOwner)
+`, inboundStatusDone, absorberID, outcome, absorberID, state, absorberID, absorberID, now, now, now, id, inboundStatusProcessing, leaseOwner)
 	if err != nil {
 		return fmt.Errorf("complete inbound handoff %q: %w", id, err)
 	}
@@ -172,7 +189,7 @@ func (s *SQLiteStore) ListPendingInboundHandoffs(ctx context.Context, limit int)
 		limit = 100
 	}
 	rows, err := s.db.QueryContext(ctx, `
-SELECT payload, COALESCE(superseded_by, ''), COALESCE(handoff_at, 0)
+SELECT id, payload, COALESCE(superseded_by, ''), COALESCE(handoff_at, 0)
 FROM inbound_events
 WHERE handoff_state = ?
 ORDER BY handoff_at ASC
@@ -184,16 +201,16 @@ LIMIT ?
 	defer rows.Close()
 	var handoffs []assistant.InboundHandoff
 	for rows.Next() {
-		var payload, absorberID string
+		var id, payload, absorberID string
 		var markedAt int64
-		if err := rows.Scan(&payload, &absorberID, &markedAt); err != nil {
+		if err := rows.Scan(&id, &payload, &absorberID, &markedAt); err != nil {
 			return nil, fmt.Errorf("scan pending inbound handoff: %w", err)
 		}
 		var event assistant.MessageEvent
 		if err := json.Unmarshal([]byte(payload), &event); err != nil {
 			continue
 		}
-		handoff := assistant.InboundHandoff{Event: event, AbsorberID: absorberID}
+		handoff := assistant.InboundHandoff{InboundHandoffRef: assistant.InboundHandoffRef{ID: id, Event: event}, AbsorberID: absorberID}
 		if markedAt > 0 {
 			handoff.MarkedAt = time.Unix(0, markedAt)
 		}
@@ -201,6 +218,3 @@ LIMIT ?
 	}
 	return handoffs, rows.Err()
 }
-
-// assistantOutcomeHandedOffPending 和 assistant 包里的 inboundOutcomeHandedOffPending 同值。
-const assistantOutcomeHandedOffPending = "handed_off_pending"

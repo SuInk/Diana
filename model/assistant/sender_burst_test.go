@@ -60,12 +60,18 @@ func burstTestRuntime(provider LLMProvider) (*Runtime, *recordingChannel) {
 	return runtime, channel
 }
 
-// arriveTogether 模拟几条消息先后到达：都已入站登记、进了会话历史，但都还卡在路由里。
+// arriveTogether 模拟几条消息先后到达：都已入站登记、预处理完进了会话历史，但都还卡在路由里。
 func arriveTogether(runtime *Runtime, events ...MessageEvent) {
 	for _, event := range events {
 		runtime.noteSenderTurnArrival(event)
-		runtime.remember(event)
+		arriveReady(runtime, event)
 	}
+}
+
+// arriveReady 模拟 routeMessageEvent 里「预处理完、记进历史」那一步。
+func arriveReady(runtime *Runtime, event MessageEvent) {
+	runtime.remember(event)
+	runtime.noteSenderTurnReady(event)
 }
 
 // 线上的形状：第一条还在路由（接话评分、机器人接话判定要几秒），第二条已经要回复了。

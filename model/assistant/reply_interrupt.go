@@ -193,7 +193,7 @@ func (r *Runtime) interruptedReplyError(ctx context.Context, event MessageEvent)
 	// 「创建成功却提示失败」。
 	if hasExternalSideEffect(ctx) {
 		r.sealDirectReply(ctx)
-		r.markSenderTurnSending(event)
+		r.markSenderTurnSideEffect(event)
 		return nil
 	}
 	if r.directReplyHasNewSupplements(ctx) {

@@ -50,10 +50,10 @@ func TestSenderBurstKeepsEarlierMessageSeparatedByOtherSpeaker(t *testing.T) {
 	second := directedGroupMessage("20103", "10001", "顺便问下明天开会吗")
 	first.Time, second.Time = 1_800_000_000, 1_800_000_003
 	runtime.noteSenderTurnArrival(first)
-	runtime.remember(first)
+	arriveReady(runtime, first)
 	runtime.remember(other)
 	runtime.noteSenderTurnArrival(second)
-	runtime.remember(second)
+	arriveReady(runtime, second)
 
 	if outcome, err := runtime.replyAndRecord(context.Background(), second, "顺便问下明天开会吗", "replied"); err != nil || outcome != "replied" {
 		t.Fatalf("second outcome=%q err=%v", outcome, err)
@@ -241,8 +241,8 @@ func TestSenderBurstOrdersByMessageTime(t *testing.T) {
 	// 后一条先登记（比如前一条是回补进来的），历史仍按时间排。
 	runtime.noteSenderTurnArrival(second)
 	runtime.noteSenderTurnArrival(first)
-	runtime.remember(first)
-	runtime.remember(second)
+	arriveReady(runtime, first)
+	arriveReady(runtime, second)
 
 	if outcome, err := runtime.replyAndRecord(context.Background(), second, "在哪集合", "replied"); err != nil || outcome != "replied" {
 		t.Fatalf("second outcome=%q err=%v", outcome, err)

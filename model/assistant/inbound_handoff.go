@@ -25,25 +25,32 @@ const (
 	inboundHandoffSweepLimit  = 100
 )
 
-// InboundHandoff 是一条待定的交接：Event 交给了 AbsorberID 那一轮。
+// InboundHandoffRef 定位一条入站事件：有队列事件 ID 就按主键找，没有才按会话、
+// 发送者和消息 ID 找最新那行（那条查询没有索引，热路径上尽量别走）。
+type InboundHandoffRef struct {
+	ID    string
+	Event MessageEvent
+}
+
+// InboundHandoff 是一条待定的交接：那条事件交给了 AbsorberID 那一轮。
 type InboundHandoff struct {
-	Event      MessageEvent
+	InboundHandoffRef
 	AbsorberID string
 	MarkedAt   time.Time
 }
 
-// InboundHandoffStore 持久化连发交接。事件按会话、发送者和消息 ID 定位（取最新那行），
-// AbsorberID 是接手那一轮的入站事件 ID。
+// InboundHandoffStore 持久化连发交接。AbsorberID 是接手那一轮的入站事件 ID。
 type InboundHandoffStore interface {
 	// MarkInboundHandoff 把事件标成交给 absorberID 那一轮、待定。已经被标过的不改。
-	MarkInboundHandoff(ctx context.Context, event MessageEvent, absorberID string) error
+	MarkInboundHandoff(ctx context.Context, ref InboundHandoffRef, absorberID string) error
 	// FinalizeInboundHandoff 在接手那一轮真的回出去之后落定交接。
-	FinalizeInboundHandoff(ctx context.Context, event MessageEvent, absorberID string) error
+	FinalizeInboundHandoff(ctx context.Context, ref InboundHandoffRef, absorberID string) error
 	// ReleaseInboundHandoff 撤销交接；那一轮已经以 handed_off_pending 收尾的，
-	// 重新排进队列（提高优先级）。返回是否重新排队了。
-	ReleaseInboundHandoff(ctx context.Context, event MessageEvent, absorberID string) (bool, error)
+	// 重新排进队列（提高优先级）。matched 表示确实撤销了一条待定交接，requeued 表示
+	// 重新排队了。
+	ReleaseInboundHandoff(ctx context.Context, ref InboundHandoffRef, absorberID string) (matched bool, requeued bool, err error)
 	// CompleteInboundHandoff 是交出去那一轮的收尾：落终态，并写上交接状态（absorberID、
-	// 待定或已落定）。撤销若赶在它之前、又没重排成功，由巡检兜底放回。
+	// 待定或已落定）。已经落定的不会被改回待定。撤销若赶在它之前、又没重排成功，由巡检兜底放回。
 	CompleteInboundHandoff(ctx context.Context, id string, leaseOwner string, absorberID string, final bool) error
 	// ListPendingInboundHandoffs 列出待定的交接。
 	ListPendingInboundHandoffs(ctx context.Context, limit int) ([]InboundHandoff, error)
@@ -75,13 +82,15 @@ func (r *Runtime) sweepInboundHandoffs(ctx context.Context) {
 			continue
 		}
 		releaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
-		again, err := store.ReleaseInboundHandoff(releaseCtx, handoff.Event, handoff.AbsorberID)
+		matched, again, err := store.ReleaseInboundHandoff(releaseCtx, handoff.InboundHandoffRef, handoff.AbsorberID)
 		cancel()
 		if err != nil {
 			log.Printf("diana inbound handoff release failed: %v", err)
 			continue
 		}
-		log.Printf("diana inbound handoff: message %s released from absorber %s (absorber no longer running)", strings.TrimSpace(handoff.Event.MessageID), handoff.AbsorberID)
+		if matched {
+			log.Printf("diana inbound handoff: message %s released from absorber %s (absorber no longer running)", strings.TrimSpace(handoff.Event.MessageID), handoff.AbsorberID)
+		}
 		requeued = requeued || again
 	}
 	if requeued {
