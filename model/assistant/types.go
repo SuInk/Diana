@@ -687,6 +687,14 @@ type BotConfig struct {
 	//
 	// 按群算而不是按机器人算：一个群刷起来不该把别的群一起饿死。
 	ModelCallQuota int64 `json:"model_call_quota,omitempty"`
+	// ImageGenerationDailyGroupLimit 是每个群每天能成功生图（含改图）的次数，群配置
+	// 里填了以群为准；ImageGenerationDailyUserLimit 是每个人每天的次数，跨群和私聊
+	// 合计。0 表示不限。「每天」按机器人时钟的自然日算，主人不受限。
+	//
+	// 和 ModelCallQuota 分开设：生图一次的价钱抵得上几十次对话调用，按调用次数
+	// 管不住它。
+	ImageGenerationDailyGroupLimit int64 `json:"image_generation_daily_group_limit,omitempty"`
+	ImageGenerationDailyUserLimit  int64 `json:"image_generation_daily_user_limit,omitempty"`
 	// ReplySamplePercent 是这台机器人的每群回复抽样率默认值（1–100）：没 @、没引用
 	// 机器人、没叫名字的群消息，只有这个比例会交给模型判断要不要接话。0 表示不抽样。
 	ReplySamplePercent int `json:"reply_sample_percent,omitempty"`
@@ -918,6 +926,9 @@ type GroupConfig struct {
 	// 口径和用量统计一致：这个群名下所有模型调用都算，包括判定、路由和工具步，
 	// 不只是最终那句回复。主人不受限——额度用完还能让主人改配置，不然就锁死了。
 	ModelCallQuota int64 `json:"model_call_quota,omitempty"`
+	// ImageGenerationDailyGroupLimit 是这个群每天能成功生图的次数，留空跟随机器人。
+	// 每人每天的上限只在机器人上设：它跨群合计，放进某个群里就管不住人换群接着画。
+	ImageGenerationDailyGroupLimit int64 `json:"image_generation_daily_group_limit,omitempty"`
 	// ReplySamplePercent 是这个群的回复抽样率（1–100），留空跟随机器人。
 	ReplySamplePercent       int   `json:"reply_sample_percent,omitempty"`
 	MaxContextTokens         int64 `json:"max_context_tokens,omitempty"`

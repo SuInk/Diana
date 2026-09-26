@@ -1676,6 +1676,19 @@
       "default": "运行时已经把「开始处理」发给用户了，不要再说一遍。"
     },
     {
+      "key": "media.image_quota_exceeded",
+      "group": "media",
+      "title": "生图次数已用完",
+      "usage": "本群或这个人今天的生图次数用完时，告诉正式回复如实转告、别换别的途径出图。",
+      "default": "【本轮图片任务】{notice}。这次没有开始画，之后也不会补发。照实把这句话告诉用户，不要说「在画了」「马上发出来」，不要再调用 image，也不要改用搜图、HTML 渲染、浏览器、插件或其他任何途径变相出图。",
+      "vars": [
+        {
+          "name": "notice",
+          "description": "给用户的说明，如「今天本群的生图次数已用完（10/10），明天再来」"
+        }
+      ]
+    },
+    {
       "key": "media.image_failure.not_delivered",
       "group": "media",
       "title": "识图失败：送不进模型",

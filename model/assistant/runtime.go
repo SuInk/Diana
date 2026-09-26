@@ -508,6 +508,8 @@ type Runtime struct {
 	liveSeqProbedAt map[string]time.Time
 	// groupQuota 缓存按群额度的用量读数，避免每条消息都去扫一遍用量日志。
 	groupQuota groupModelQuotaCache
+	// mediaQuota 管生图这类按天限次的预占，见 media_generation_quota.go。
+	mediaQuota mediaGenerationQuota
 	// replySampleRoll 给回复抽样掷一次 [0,100) 的点数；为 nil 时用 math/rand，测试里替换。
 	replySampleRoll     func() int
 	seqGapActive        atomic.Int32
@@ -4138,10 +4140,15 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 					return reply, nil
 				}
 				queued, err := r.enqueueImageReplyTask(ctx, event, relationship, "generate", intent.Prompt, "")
-				if err != nil {
+				var quotaErr *mediaGenerationQuotaError
+				switch {
+				case errors.As(err, &quotaErr):
+					asyncImageTaskNotice = imageQuotaExceededInstruction(quotaErr, cfg)
+				case err != nil:
 					return "", err
+				default:
+					asyncImageTaskNotice = asyncImageReplyInstruction(queued, cfg)
 				}
-				asyncImageTaskNotice = asyncImageReplyInstruction(queued, cfg)
 			case visualIntentEditImage:
 				if strings.TrimSpace(intent.Prompt) == "" {
 					reply := "想怎么改？发图时顺便说清楚要改哪里就行。"
@@ -4151,7 +4158,10 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 					return reply, nil
 				}
 				queued, err := r.enqueueImageReplyTask(ctx, event, relationship, "edit", intent.Prompt, "")
+				var quotaErr *mediaGenerationQuotaError
 				switch {
+				case errors.As(err, &quotaErr):
+					asyncImageTaskNotice = imageQuotaExceededInstruction(quotaErr, cfg)
 				case errors.Is(err, errImageEditSourceNotFound):
 					// 找不到原图就别受理：让这一轮回复直接请用户补图，而不是先说
 					// 「在画了」再补一条失败通知。
