@@ -5,9 +5,12 @@ package storage
 
 import (
 	"bytes"
+	"compress/gzip"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -23,7 +26,8 @@ import (
 //
 //	debug-traces/<UTC 日期>/<group-群号 | private-QQ号>/<message_id>/<序号>-<步骤>.json
 //
-// 每一步一个缩进排好的 JSON，不压缩；过期就删整天的目录。
+// 每一步一个缩进排好的 JSON。当天的保持明文，之后每日维护压成 .json.gz（见
+// CompressDebugTraceFiles）；过期就删整天的目录。
 const (
 	debugTraceDirName = "debug-traces"
 	debugTraceAction  = "debug_trace"
@@ -172,10 +176,11 @@ func (s *SQLiteStore) readDebugTraceFiles(groupID, userID, messageID string) ([]
 		}
 		sort.Slice(files, func(i, j int) bool { return files[i].Name() < files[j].Name() })
 		for _, file := range files {
-			if file.IsDir() || !strings.HasSuffix(file.Name(), ".json") {
+			name := file.Name()
+			if file.IsDir() || !(strings.HasSuffix(name, ".json") || strings.HasSuffix(name, ".json.gz")) {
 				continue
 			}
-			data, err := os.ReadFile(filepath.Join(dir, file.Name()))
+			data, err := readDebugTraceStep(filepath.Join(dir, name))
 			if err != nil {
 				return nil, fmt.Errorf("read debug trace: %w", err)
 			}
@@ -187,6 +192,97 @@ func (s *SQLiteStore) readDebugTraceFiles(groupID, userID, messageID string) ([]
 		}
 	}
 	return entries, nil
+}
+
+func readDebugTraceStep(path string) ([]byte, error) {
+	data, err := os.ReadFile(path)
+	if err != nil || !strings.HasSuffix(path, ".gz") {
+		return data, err
+	}
+	reader, err := gzip.NewReader(bytes.NewReader(data))
+	if err != nil {
+		// 压缩到一半被打断的残片，当作坏文件跳过，原文件还在。
+		return nil, nil
+	}
+	defer func() { _ = reader.Close() }()
+	data, err = io.ReadAll(reader)
+	if err != nil {
+		return nil, nil
+	}
+	return data, nil
+}
+
+// CompressDebugTraceFiles 把今天（UTC）以前的轨迹文件压成 .json.gz，返回压缩的文件数。
+// 做法和 logrotate 的 delaycompress 一样：排查最常看的是当天，当天保持明文直接打开；
+// 过了当天就只剩偶尔翻查，压缩后约为原来的三分之一，用 gzcat / zless 照样能读。
+func (s *SQLiteStore) CompressDebugTraceFiles(ctx context.Context, now time.Time) (int, error) {
+	root := s.debugTraceDir()
+	if root == "" {
+		return 0, nil
+	}
+	days, err := os.ReadDir(root)
+	if errors.Is(err, os.ErrNotExist) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	today := now.UTC().Format(debugTraceDayForm)
+	compressed := 0
+	for _, day := range days {
+		if !day.IsDir() || day.Name() >= today {
+			continue
+		}
+		if _, err := time.Parse(debugTraceDayForm, day.Name()); err != nil {
+			continue
+		}
+		err := filepath.WalkDir(filepath.Join(root, day.Name()), func(path string, entry os.DirEntry, walkErr error) error {
+			if walkErr != nil {
+				return walkErr
+			}
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return ctxErr
+			}
+			if entry.IsDir() || !strings.HasSuffix(path, ".json") {
+				return nil
+			}
+			if err := gzipDebugTraceStep(path); err != nil {
+				return err
+			}
+			compressed++
+			return nil
+		})
+		if err != nil {
+			return compressed, err
+		}
+	}
+	return compressed, nil
+}
+
+// gzipDebugTraceStep 先写临时文件再改名，最后删原文件：中途被打断时要么原文件
+// 还在，要么压缩件已经完整，不会两个都读不出来。
+func gzipDebugTraceStep(path string) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	var body bytes.Buffer
+	writer := gzip.NewWriter(&body)
+	if _, err := writer.Write(data); err != nil {
+		return err
+	}
+	if err := writer.Close(); err != nil {
+		return err
+	}
+	tmp := path + ".gz.tmp"
+	if err := os.WriteFile(tmp, body.Bytes(), 0o600); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, path+".gz"); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	return os.Remove(path)
 }
 
 // PruneDebugTraceFiles 删掉整天都早于 before 的调试轨迹目录，返回删掉的天数。

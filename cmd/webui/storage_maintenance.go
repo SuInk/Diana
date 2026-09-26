@@ -87,6 +87,13 @@ func startStorageMaintenance(parent context.Context, store *storage.SQLiteStore,
 			} else if days > 0 {
 				log.Printf("storage maintenance: deleted %d days of expired debug trace files", days)
 			}
+			compressCtx, stopCompress := context.WithTimeout(ctx, 10*time.Minute)
+			if count, err := store.CompressDebugTraceFiles(compressCtx, now); err != nil && ctx.Err() == nil {
+				log.Printf("storage maintenance: compress debug trace files: %v", err)
+			} else if count > 0 {
+				log.Printf("storage maintenance: compressed %d debug trace files from earlier days", count)
+			}
+			stopCompress()
 			jobsCtx, stopJobs := context.WithTimeout(ctx, 2*time.Minute)
 			if count, err := store.PruneCompletedMemoryJobs(jobsCtx, now.AddDate(0, 0, -completedMemoryJobRetentionDays)); err != nil && ctx.Err() == nil {
 				log.Printf("storage maintenance: prune completed memory jobs: %v", err)

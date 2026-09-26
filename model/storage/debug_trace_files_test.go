@@ -251,3 +251,55 @@ func TestDebugTraceEmptyReasonNamesTheActualCause(t *testing.T) {
 		}
 	}
 }
+
+// 当天的轨迹保持明文，之前的压成 .json.gz，事件页照样读得出来。
+func TestCompressDebugTraceFilesKeepsTodayPlainAndOlderReadable(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	store, err := NewSQLiteStore(filepath.Join(dir, "diana.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+	now := time.Now().UTC()
+	write := func(messageID string, at time.Time) string {
+		t.Helper()
+		event := assistant.MessageEvent{Kind: assistant.EventKindGroup, GroupID: "g", UserID: "u", MessageID: messageID, Time: at.Unix()}
+		id, _, err := store.EnqueueInboundEvent(ctx, "group:g", event)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := store.AppendLog(ctx, applog.Entry{Kind: applog.KindDebug, Action: "debug_trace", Target: messageID, Message: "模型请求完成", CreatedAt: at,
+			Metadata: map[string]any{"phase": "model_request", "purpose": "reply", "sequence": int64(1), "kind": "group", "group_id": "g", "user_id": "u"}}); err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+	oldID := write("old", now.AddDate(0, 0, -2))
+	todayID := write("today", now)
+
+	count, err := store.CompressDebugTraceFiles(ctx, now)
+	if err != nil || count != 1 {
+		t.Fatalf("compressed=%d err=%v", count, err)
+	}
+	oldDir := filepath.Join(dir, debugTraceDirName, now.AddDate(0, 0, -2).Format(debugTraceDayForm), "group-g", "old")
+	if _, err := os.Stat(filepath.Join(oldDir, "001-reply.json.gz")); err != nil {
+		t.Fatalf("older trace not compressed: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(oldDir, "001-reply.json")); !os.IsNotExist(err) {
+		t.Fatalf("plain copy should be removed after compression: %v", err)
+	}
+	todayFile := filepath.Join(dir, debugTraceDirName, now.Format(debugTraceDayForm), "group-g", "today", "001-reply.json")
+	if _, err := os.Stat(todayFile); err != nil {
+		t.Fatalf("today's trace should stay plain: %v", err)
+	}
+	for _, id := range []string{oldID, todayID} {
+		trace, found, err := store.InboundEventDebugTraceDetail(ctx, id)
+		if err != nil || !found || len(trace.Steps) != 1 || trace.Steps[0].Message != "模型请求完成" {
+			t.Fatalf("%s: trace=%#v found=%v err=%v", id, trace, found, err)
+		}
+	}
+	if count, err := store.CompressDebugTraceFiles(ctx, now); err != nil || count != 0 {
+		t.Fatalf("second run compressed=%d err=%v", count, err)
+	}
+}
