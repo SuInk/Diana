@@ -92,11 +92,11 @@ func TestMusicLooksPlayableRejectsFallbackPages(t *testing.T) {
 	}
 }
 
-// musicTestServer 冒充三家曲库的接口：网易云的详情/搜索/外链，QQ 的搜索/vkey，
-// 酷狗的搜索/播放，外加音频本体。三家的字段名和时长单位各不相同，这正是要测的。
+// musicTestServer 冒充两家曲库的接口：网易云的详情/搜索/外链，QQ 的 musicu 网关，
+// 外加音频本体。两家的字段名和时长单位各不相同，这正是要测的。
 //
-// 约定：QQ 音乐这边永远搜得到但给不出 purl，模拟「会员专享，无登录态放不了」——
-// 换源那条路要靠它才测得出来。
+// 约定：QQ 音乐这边永远搜得到，但只有带会员 Cookie（uin=12345; qqmusic_key=vip）
+// 才给 purl，模拟「会员专享，无登录态放不了」——换源那条路要靠它才测得出来。
 func musicTestServer(t *testing.T, durationMS int64, audio []byte) *httptest.Server {
 	t.Helper()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -170,25 +170,13 @@ func musicTestServer(t *testing.T, durationMS int64, audio []byte) *httptest.Ser
 				fmt.Fprintf(w, `{"code":0,"req_0":{"code":0,"data":{"track_info":%s}}}`, track)
 			default:
 				// 无登录态时会员曲目的 purl 是空串——不是报错，是「这家放不了」。
-				fmt.Fprint(w, `{"req_0":{"data":{"sip":["`+"http://"+r.Host+`/qq/stream/"],"midurlinfo":[{"purl":""}]}}}`)
+				purl := ""
+				if request.Comm.UIN == "12345" && strings.Contains(r.Header.Get("Cookie"), "qqmusic_key=vip") {
+					purl = "C400003RMaRI1iFoYd.m4a"
+				}
+				fmt.Fprintf(w, `{"req_0":{"data":{"sip":["http://%s/qq/stream/"],"midurlinfo":[{"purl":%q}]}}}`, r.Host, purl)
 			}
-		case "/kugou/search":
-			w.Header().Set("Content-Type", "application/json")
-			if !strings.Contains(r.URL.Query().Get("keyword"), "雾里") {
-				fmt.Fprint(w, `{"status":1,"data":{"info":[]}}`)
-				return
-			}
-			// 酷狗搜索的 duration 是秒，播放接口的 timelength 是毫秒。
-			fmt.Fprintf(w, `{"status":1,"data":{"info":[{"hash":"5f9c1d2e3a4b5c6d7e8f90a1b2c3d4e5","songname":"雾里","singername":"姚六一","album_name":"雾里","album_id":"7788","duration":%d}]}}`, durationMS/1000)
-		case "/kugou/play":
-			// 官方 getSongInfo 的 timeLength 是秒。
-			w.Header().Set("Content-Type", "application/json")
-			fmt.Fprintf(w, `{"status":1,"url":%q,"songName":"雾里","singerName":"姚六一","timeLength":%d}`,
-				"http://"+r.Host+"/audio/kugou.mp3", durationMS/1000)
-		case "/audio/kugou.mp3":
-			w.Header().Set("Content-Type", "audio/mpeg")
-			_, _ = w.Write(audio)
-		case "/audio/1974443814.mp3":
+		case "/audio/1974443814.mp3", "/qq/stream/C400003RMaRI1iFoYd.m4a":
 			w.Header().Set("Content-Type", "audio/mpeg")
 			_, _ = w.Write(audio)
 		default:
@@ -213,10 +201,6 @@ func newMusicTestPlugin(server *httptest.Server) *MusicPlugin {
 		&qqSource{
 			musicuAPI: server.URL + "/qq/musicu?data=%s",
 			streamCDN: server.URL + "/qq/stream/",
-		},
-		&kugouSource{
-			searchAPI: server.URL + "/kugou/search?keyword=%s",
-			playAPI:   server.URL + "/kugou/play?hash=%s",
 		},
 	}
 	return plugin
@@ -705,8 +689,8 @@ func TestMusicPicksTheFirstSourceThatCanActuallyPlay(t *testing.T) {
 	plugin.SetLocalMediaSharer(sharer)
 
 	settings := musicRequestSettings(server)
-	// 只留 QQ 和酷狗：QQ 搜得到但给不出 purl，酷狗能放。
-	settings[musicSettingSources] = []string{"qq", "kugou"}
+	// QQ 排头：它搜得到但给不出 purl，网易云能放。
+	settings[musicSettingPreferred] = "qq"
 	tool := musicRequestTool(t, plugin, settings)
 
 	output, err := tool.Run(context.Background(), map[string]any{"query": "雾里"})
@@ -716,12 +700,12 @@ func TestMusicPicksTheFirstSourceThatCanActuallyPlay(t *testing.T) {
 	if len(sharer.paths) == 1 {
 		t.Cleanup(func() { cleanupLocalMediaFile(sharer.paths[0]) })
 	}
-	if !strings.Contains(output, `"source":"kugou"`) {
+	if !strings.Contains(output, `"source":"netease"`) {
 		t.Fatalf("Run() = %q, want the playable source to win over the searchable one", output)
 	}
 }
 
-// 勾掉的曲库一次都不该问：用户关掉酷狗多半是有理由的（怕它的音质、怕它的接口），
+// 勾掉的曲库一次都不该问：用户关掉网易云多半是有理由的（怕它的音质、怕它的接口），
 // 「反正只是兜底」不是绕过设置的借口。
 func TestMusicSkipsSourcesThatWereTurnedOff(t *testing.T) {
 	server := musicTestServer(t, 213000, []byte("audio"))
@@ -733,20 +717,22 @@ func TestMusicSkipsSourcesThatWereTurnedOff(t *testing.T) {
 	tool := musicRequestTool(t, plugin, settings)
 
 	if output, err := tool.Run(context.Background(), map[string]any{"query": "雾里"}); err == nil {
-		t.Fatalf("Run() = %q, want a miss because kugou was turned off", output)
+		t.Fatalf("Run() = %q, want a miss because netease was turned off", output)
 	}
 }
 
 // 优先曲库把那一家排到最前面，其余顺序不变。
 func TestMusicPreferredSourceGoesFirst(t *testing.T) {
 	plugin := NewMusicPlugin(nil)
-	cfg := musicConfigFromSettings(SettingValues{musicSettingPreferred: "kugou"})
+	cfg := musicConfigFromSettings(SettingValues{musicSettingPreferred: "qq"})
 	ordered := plugin.orderedSources(cfg)
-	if len(ordered) != 3 || ordered[0].Key() != "kugou" {
-		t.Fatalf("orderedSources() = %v", musicSourceKeysOf(ordered))
+	if got := musicSourceKeysOf(ordered); !slices.Equal(got, []string{"qq", "netease"}) {
+		t.Fatalf("orderedSources() = %v", got)
 	}
-	if ordered[1].Key() != "netease" || ordered[2].Key() != "qq" {
-		t.Fatalf("preferred source disturbed the rest of the order: %v", musicSourceKeysOf(ordered))
+	// 存量设置里优先的是已下线的曲库时，按登记顺序走，不报错也不丢曲库。
+	retired := plugin.orderedSources(musicConfigFromSettings(SettingValues{musicSettingPreferred: "kugou"}))
+	if got := musicSourceKeysOf(retired); !slices.Equal(got, musicSourceKeys()) {
+		t.Fatalf("orderedSources() with a retired preference = %v", got)
 	}
 
 	// 没设优先曲库时就是登记顺序。
@@ -776,6 +762,7 @@ func TestMusicLinkFallsBackToAnotherSourceForTheSameSong(t *testing.T) {
 
 	req := musicTestRequest(server, PlatformOneBotV11)
 	delete(req.Settings, musicSourceAPIBaseSetting("netease"))
+	req.Settings[musicSourceCookieSetting("qq")] = "uin=12345; qqmusic_key=vip"
 
 	resp, err := plugin.Handle(context.Background(), req)
 	if err != nil {
@@ -788,12 +775,12 @@ func TestMusicLinkFallsBackToAnotherSourceForTheSameSong(t *testing.T) {
 		t.Cleanup(func() { cleanupLocalMediaFile(sharer.paths[0]) })
 	}
 	// 来源标签要说实话：模型得知道这条语音不是从分享的那家放的。
-	if !strings.Contains(resp.Context, "酷狗音乐") {
+	if !strings.Contains(resp.Context, "QQ 音乐") {
 		t.Fatalf("context did not name the source it actually played from: %q", resp.Context)
 	}
 }
 
-// 三家的分享链接都得认，而且各自只认自己家的。
+// 每家的分享链接都得认，而且各自只认自己家的。
 func TestMusicSourcesRecognizeTheirOwnShareLinks(t *testing.T) {
 	cases := []struct {
 		source musicSource
@@ -803,8 +790,6 @@ func TestMusicSourcesRecognizeTheirOwnShareLinks(t *testing.T) {
 		{newNeteaseSource(), "https://music.163.com/song?id=1974443814", "1974443814"},
 		{newQQSource(), "https://y.qq.com/n/ryqq/songDetail/003RMaRI1iFoYd", "003RMaRI1iFoYd"},
 		{newQQSource(), "https://y.qq.com/n/yqq/song/003RMaRI1iFoYd.html", "003RMaRI1iFoYd"},
-		{newKugouSource(), "https://www.kugou.com/song/#hash=5F9C1D2E3A4B5C6D7E8F90A1B2C3D4E5&album_id=7788",
-			"5f9c1d2e3a4b5c6d7e8f90a1b2c3d4e5:7788"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.source.Key()+"/"+tc.songID, func(t *testing.T) {
@@ -822,41 +807,6 @@ func TestMusicSourcesRecognizeTheirOwnShareLinks(t *testing.T) {
 				}
 			}
 		})
-	}
-}
-
-// 酷狗的 ID 是「hash:album_id」两截。拆错了播放接口就少一个参数，
-// 返回的是试听片段而不是整首歌。
-func TestKugouSongIDCarriesBothHalves(t *testing.T) {
-	hash, albumID := kugouSplitSongID("5F9C1D2E3A4B5C6D7E8F90A1B2C3D4E5:7788")
-	if hash != "5f9c1d2e3a4b5c6d7e8f90a1b2c3d4e5" || albumID != "7788" {
-		t.Fatalf("kugouSplitSongID() = %q, %q", hash, albumID)
-	}
-	// 分享链接里没带 album_id 时留空，不能把冒号一起当成 hash。
-	hash, albumID = kugouSplitSongID("5f9c1d2e3a4b5c6d7e8f90a1b2c3d4e5:")
-	if hash != "5f9c1d2e3a4b5c6d7e8f90a1b2c3d4e5" || albumID != "" {
-		t.Fatalf("kugouSplitSongID() without an album = %q, %q", hash, albumID)
-	}
-	if got := kugouSongIDFromURL("https://www.kugou.com/song/#hash=nothex&album_id=1"); got != "" {
-		t.Fatalf("kugouSongIDFromURL() accepted a non-hash: %q", got)
-	}
-}
-
-// 酷狗当前的 songsearch 接口把结果放在 data.lists，字段名也从旧接口的
-// snake_case 换成了 PascalCase。线上切换接口后必须两套都能读，自建 API
-// 仍可能继续返回旧结构。
-func TestKugouCurrentSearchResponse(t *testing.T) {
-	var payload kugouSearchResponse
-	if err := json.Unmarshal([]byte(`{"status":1,"data":{"lists":[{"FileHash":"14CA89AF03747467CFC5BEF8A94DB5DB","SongName":"群青","SingerName":"YOASOBI","AlbumName":"群青","AlbumID":"38936024","Duration":248}]}}`), &payload); err != nil {
-		t.Fatal(err)
-	}
-	entries := payload.entries()
-	if len(entries) != 1 {
-		t.Fatalf("entries = %#v", entries)
-	}
-	entry := entries[0]
-	if entry.Hash != "14CA89AF03747467CFC5BEF8A94DB5DB" || entry.SongName != "群青" || entry.SingerName != "YOASOBI" || entry.AlbumID != "38936024" || entry.Duration != 248 {
-		t.Fatalf("entry = %#v", entry)
 	}
 }
 
@@ -894,26 +844,6 @@ func TestQQSongDetailUsesDetailInterface(t *testing.T) {
 	}
 	if _, ok := source.SongDetail(context.Background(), plugin.fetcher, cfg, "000000000000"); ok {
 		t.Fatal("SongDetail() accepted a song the interface does not know")
-	}
-}
-
-// 酷狗付费歌：getSongInfo 照样给歌名歌手，只是 url 为空。链接解析要认得出
-// 这首歌（好拿歌名去别家找），但不能当成可播放。
-func TestKugouPaidSongKeepsDetailButIsNotPlayable(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprint(w, `{"status":0,"url":"","songName":"晴天","singerName":"周杰伦","timeLength":0,"error":"需要付费"}`)
-	}))
-	t.Cleanup(server.Close)
-	source := &kugouSource{playAPI: server.URL + "?hash=%s"}
-	fetcher := &musicFetcher{client: server.Client()}
-	cfg := musicConfigFromSettings(SettingValues{})
-	id := "5f9c1d2e3a4b5c6d7e8f90a1b2c3d4e5:7788"
-	if found, ok := source.SongDetail(context.Background(), fetcher, cfg, id); !ok || found.Title() != "晴天 - 周杰伦" {
-		t.Fatalf("SongDetail() = %#v, %v", found, ok)
-	}
-	if got := source.PlayableURL(context.Background(), fetcher, cfg, id); got != "" {
-		t.Fatalf("PlayableURL() = %q, want empty for a paid song", got)
 	}
 }
 
@@ -961,16 +891,6 @@ func TestQQVkeyRequestUsesCookieIdentity(t *testing.T) {
 	}
 	if len(decoded.Req0.Param.Filename) != 1 || !strings.HasPrefix(decoded.Req0.Param.Filename[0], "M500") {
 		t.Fatalf("request filename = %#v", decoded.Req0.Param.Filename)
-	}
-}
-
-func TestKugouCredentialsUseAuthorizationHeader(t *testing.T) {
-	cookie := "token=token-value;userid=42;dfid=device-value"
-	headers := newKugouSource().headers(musicConfig{SourceOptions: map[string]musicSourceOptions{
-		"kugou": {Cookie: cookie},
-	}})
-	if headers["Cookie"] != cookie || headers["Authorization"] != cookie {
-		t.Fatalf("headers = %#v", headers)
 	}
 }
 
@@ -1023,13 +943,13 @@ func TestMusicConnectionTestReportsSearchAndPlayback(t *testing.T) {
 	settings[musicSettingSources] = []string{"netease"}
 
 	results := plugin.TestConnections(context.Background(), settings)
-	if len(results) != 3 {
-		t.Fatalf("TestConnections() returned %d sources, want 3", len(results))
+	if len(results) != 2 {
+		t.Fatalf("TestConnections() returned %d sources, want 2", len(results))
 	}
 	if !results[0].SearchOK || !results[0].Playable {
 		t.Fatalf("netease connection result = %#v", results[0])
 	}
-	if results[1].Message != "当前未启用" || results[2].Message != "当前未启用" {
+	if results[1].Message != "当前未启用" {
 		t.Fatalf("disabled source results = %#v", results[1:])
 	}
 }
@@ -1116,12 +1036,6 @@ func TestMusicLoginCheckReadsAccountInterfaces(t *testing.T) {
 	if got := musicLoginCheck(t, plugin, "qq", "qqmusic_key=good"); got.State != CredentialInvalid || !strings.Contains(got.Message, "uin") {
 		t.Fatalf("qq without uin = %#v", got)
 	}
-	if got := musicLoginCheck(t, plugin, "kugou", "token=t; userid=1; dfid=d"); got.State != CredentialUnverified {
-		t.Fatalf("kugou complete = %#v", got)
-	}
-	if got := musicLoginCheck(t, plugin, "kugou", "dfid=d"); got.State != CredentialInvalid || !strings.Contains(got.Message, "token、userid") {
-		t.Fatalf("kugou missing fields = %#v", got)
-	}
 }
 
 func TestMusicConnectionTestPutsInvalidLoginInMessage(t *testing.T) {
@@ -1145,5 +1059,32 @@ func TestMusicConnectionTestPutsInvalidLoginInMessage(t *testing.T) {
 	}
 	if results[1].Login != nil {
 		t.Fatalf("disabled qq should not be probed: %#v", results[1])
+	}
+}
+
+// 酷狗下线后，存量设置里还带着它。加载时只剔除 kugou：原来只勾了 QQ 和酷狗的，
+// 留下 QQ，不能整项丢掉退回「全开」；优先曲库和酷狗凭据直接作废。
+func TestMusicSettingsDropRetiredKugou(t *testing.T) {
+	specs := NewMusicPlugin(nil).Manifest().Settings
+	restored := sanitizePluginSettings(specs, map[string]any{
+		musicSettingSources:            []any{"qq", "kugou"},
+		musicSettingPreferred:          "kugou",
+		"kugou_cookie":                 "token=t; userid=1",
+		"kugou_api_base":               "http://127.0.0.1:3000",
+		musicSourceCookieSetting("qq"): "uin=1; qqmusic_key=k",
+	})
+	if got, ok := restored[musicSettingSources].([]string); !ok || !slices.Equal(got, []string{"qq"}) {
+		t.Fatalf("enabled sources = %#v", restored[musicSettingSources])
+	}
+	for _, key := range []string{musicSettingPreferred, "kugou_cookie", "kugou_api_base"} {
+		if _, ok := restored[key]; ok {
+			t.Fatalf("retired setting %s survived: %#v", key, restored)
+		}
+	}
+	if restored[musicSourceCookieSetting("qq")] != "uin=1; qqmusic_key=k" {
+		t.Fatalf("unrelated setting lost: %#v", restored)
+	}
+	if got := musicEnabledSourcesFromSettings(SettingValues(restored)); !slices.Equal(got, []string{"qq"}) {
+		t.Fatalf("musicEnabledSourcesFromSettings() = %v", got)
 	}
 }

@@ -155,6 +155,9 @@ func sanitizePluginSettings(specs []PluginSettingSpec, values map[string]any) ma
 			continue
 		}
 		value, err := normalizeSettingValue(spec, raw)
+		if err != nil && spec.Type == PluginSettingTypeMultiSelect {
+			value, err = normalizeSettingValue(spec, knownMultiSelectOptions(spec, raw))
+		}
 		if err != nil {
 			continue
 		}
@@ -164,6 +167,29 @@ func sanitizePluginSettings(specs []PluginSettingSpec, values map[string]any) ma
 		return nil
 	}
 	return out
+}
+
+// knownMultiSelectOptions 从存量的多选值里只留下现在还认识的选项。
+//
+// 插件下线一个选项（比如音乐插件去掉酷狗）后，存量值里还带着它。整项丢弃会让
+// 用户的其余勾选一起消失、退回默认值——原来只勾了 QQ 和酷狗，结果变成全开。
+// 解析不了的原始值原样返回，交给调用方按非法丢弃。
+func knownMultiSelectOptions(spec PluginSettingSpec, raw any) any {
+	items, err := stringSliceValue(raw)
+	if err != nil {
+		return raw
+	}
+	allowed := make(map[string]bool, len(spec.Options))
+	for _, option := range spec.Options {
+		allowed[option.Value] = true
+	}
+	kept := make([]string, 0, len(items))
+	for _, item := range items {
+		if allowed[item] {
+			kept = append(kept, item)
+		}
+	}
+	return kept
 }
 
 // normalizeGroupPluginSettings validates one plugin's group-level overrides.

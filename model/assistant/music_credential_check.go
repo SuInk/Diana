@@ -120,23 +120,3 @@ func (s *qqSource) vipSummary(ctx context.Context, f *musicFetcher, cfg musicCon
 	}
 	return "，但会员已于 " + end.Format(time.DateOnly) + " 到期，会员歌曲拿不到播放地址", true
 }
-
-// 酷狗的账号接口要签名，官方没有能直接问的地方，只能查字段齐不齐。
-func (s *kugouSource) CheckLogin(_ context.Context, _ *musicFetcher, cfg musicConfig) CredentialCheck {
-	values := musicCookieValues(cfg.sourceOptions(s.Key()).Cookie)
-	result := CredentialCheck{Key: musicSourceCookieSetting(s.Key()), Label: "酷狗 Cookie", Configured: true}
-	missing := make([]string, 0, 2)
-	for _, key := range []string{"token", "userid"} {
-		if strings.TrimSpace(values[key]) == "" {
-			missing = append(missing, key)
-		}
-	}
-	if len(missing) > 0 {
-		result.State = CredentialInvalid
-		result.Message = "Cookie 里缺少 " + strings.Join(missing, "、") + "，酷狗认不出登录账号。"
-		return result
-	}
-	result.State = CredentialUnverified
-	result.Message = "token、userid 都在；酷狗没有公开的账号接口可问，是否仍有效以能否取到会员歌曲播放地址为准。"
-	return result
-}

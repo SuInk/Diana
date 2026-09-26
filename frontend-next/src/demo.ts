@@ -141,17 +141,15 @@ let plugins: PluginState[] = [
       ] }, installed: true, enabled: true },
   {
     manifest: {
-      id: "official.music", name: "音乐增强", version: "0.2.1", description: "群里分享的音乐链接直接下成一条语音发出来；开启点歌后，模型也能按用户要求搜歌并发送。网易云、QQ 音乐、酷狗并列，一家放不出来自动换下一家。仅 OneBot v11 支持语音。", official: true, built_in: true, permissions: ["模型工具", "网络请求", "文件写入", "消息发送"],
+      id: "official.music", name: "音乐增强", version: "0.2.1", description: "群里分享的音乐链接直接下成一条语音发出来；开启点歌后，模型也能按用户要求搜歌并发送。网易云、QQ 音乐并列，一家放不出来自动换下一家。仅 OneBot v11 支持语音。", official: true, built_in: true, permissions: ["模型工具", "网络请求", "文件写入", "消息发送"],
       settings: [
         { key: "request_song_enabled", label: "允许点歌", type: "bool", default: true, description: "开启后模型可以按用户要求搜歌并直接发出语音。关掉只保留链接解析。" },
-        { key: "enabled_sources", label: "启用曲库", type: "multi_select", default: ["netease", "qq", "kugou"], options: [{ value: "netease", label: "网易云音乐" }, { value: "qq", label: "QQ 音乐" }, { value: "kugou", label: "酷狗音乐" }], description: "一首歌在这家是会员专享、在那家能试听是常事。勾多几家，一家放不出来就自动换下一家。" },
-        { key: "preferred_source", label: "点歌优先曲库", type: "select", default: "", options: [{ value: "", label: "按启用顺序" }, { value: "netease", label: "网易云音乐" }, { value: "qq", label: "QQ 音乐" }, { value: "kugou", label: "酷狗音乐" }], description: "点歌时先问哪家。分享链接始终用链接自己的平台，不受这里影响。" },
+        { key: "enabled_sources", label: "启用曲库", type: "multi_select", default: ["netease", "qq"], options: [{ value: "netease", label: "网易云音乐" }, { value: "qq", label: "QQ 音乐" }], description: "一首歌在这家是会员专享、在那家能试听是常事。勾多几家，一家放不出来就自动换下一家。" },
+        { key: "preferred_source", label: "点歌优先曲库", type: "select", default: "", options: [{ value: "", label: "按启用顺序" }, { value: "netease", label: "网易云音乐" }, { value: "qq", label: "QQ 音乐" }], description: "点歌时先问哪家。分享链接始终用链接自己的平台，不受这里影响。" },
         { key: "netease_api_base", label: "网易云自建 API 地址", type: "string", default: "", description: "自建 NeteaseCloudMusicApi 的地址，例如 http://127.0.0.1:3000。留空走官方接口，只能拿到可试听的歌曲。" },
         { key: "netease_cookie", label: "网易云 MUSIC_U Cookie", type: "string", default: "", secret: true, description: "登录 Cookie 里的 MUSIC_U，用于会员音质和受限曲目。" },
         { key: "qq_api_base", label: "QQ 音乐自建 API 地址", type: "string", default: "", description: "自建 QQMusicApi 的地址。留空走官方接口，无登录态时多数曲目取不到播放地址。" },
         { key: "qq_cookie", label: "QQ 音乐 Cookie", type: "string", default: "", secret: true, description: "完整的 Cookie 串，用于会员和独家曲目。" },
-        { key: "kugou_api_base", label: "酷狗自建 API 地址", type: "string", default: "", description: "自建 KuGouMusicApi 的地址。留空走官方接口。" },
-        { key: "kugou_cookie", label: "酷狗 Cookie", type: "string", default: "", secret: true, description: "完整 Cookie（建议包含 token、userid、dfid）。会员曲目需配合自建 KuGouMusicApi；留空只能尝试公开试听。" },
         { key: "bitrate", label: "音质", type: "select", default: "320000", options: [{ value: "128000", label: "标准 128k" }, { value: "192000", label: "较高 192k" }, { value: "320000", label: "极高 320k" }], description: "只对网易云的自建 API 生效；其余情况由平台自己决定码率。" },
         { key: "max_duration_seconds", label: "最长时长", type: "number", default: 600, min: 30, max: 1800, step: 30, unit: "秒" },
         { key: "max_file_mb", label: "最大文件", type: "number", default: 20, min: 1, max: 100, step: 1, unit: "MB" },
@@ -1345,8 +1343,7 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
           source: "qq", label: "QQ 音乐", search_ok: true, playable: false, api_configured: false, cookie_configured: true,
           login: { key: "qq_cookie", label: "QQ 音乐 Cookie", configured: true, state: "invalid", message: "QQ 音乐说这份 Cookie 没有登录或已过期，需要重新复制；Cookie 里应当有 qqmusic_key 或 qm_keyst。" },
           message: "搜索正常，但登录态无效，取不到播放地址"
-        },
-        { source: "kugou", label: "酷狗音乐", search_ok: true, playable: true, api_configured: false, cookie_configured: false, message: "搜索与播放地址获取正常" }
+        }
       ]
     });
   }
