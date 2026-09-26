@@ -237,6 +237,7 @@ PRs are very welcome! Bug fixes, docs, and features are all fair game; for large
 | [Deployment](https://suink.github.io/Diana/deploy.html) | All install methods, server deployment, first login |
 | [Configuration](https://suink.github.io/Diana/configuration.html) | Channels, model assignment, group policies, built-in abilities, security boundaries |
 | [Implementation](https://suink.github.io/Diana/implementation.html) | Architecture, message decision pipeline, memory layers |
+| [Message pipeline](docs/message-pipeline.md) | Reply triggers and backfill, reply flow, agent runs, browsers, pre-send review, with flowcharts (Chinese) |
 | [Operations](https://suink.github.io/Diana/operations.html) | Updates and rollback, log backup, troubleshooting |
 | [Live Demo](https://suink.github.io/Diana/demo/) | The real console with simulated data — click around |
 
