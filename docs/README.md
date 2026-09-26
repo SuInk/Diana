@@ -8,9 +8,10 @@ Pages:
 - `deploy.html`: one-click installer, Release, Docker, and source deployment
 - `configuration.html`: channels, models, groups, and Agent tools
 - `implementation.html`: architecture, message flow, memory, media, and storage
+- `pipeline.html`: message pipeline flowcharts — reply triggers, reply flow, agent runs, browsers, pre-send review
 - `operations.html`: updates, backup, troubleshooting, and development
 - `demo/`: the real `frontend-next` WebUI built in demo mode with local mock API data
-- `en/`: the English site — same five pages, sharing the stylesheets and scripts above
+- `en/`: the English site — same six pages, sharing the stylesheets and scripts above
 - `landing.css` / `landing.js`: shared by both landing pages
 - `styles.css` / `app.js` / `theme.js`: shared by all documentation pages, in both languages
 

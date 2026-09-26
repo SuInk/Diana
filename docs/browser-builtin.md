@@ -26,7 +26,7 @@ Diana 自己的浏览器：**每台机器人各一个** Chrome/Chromium 进程�
 
 `browser_open` 这组工具在内置浏览器用不上时，也可以接机器人配置里的外部 CDP 地址
 （`agent_browser_cdp_url`）：那是你自己开着远程调试端口的 Chrome，profile 和登录态
-Diana 不管，同样只有主人能驱动。三者怎么选、每轮注册哪套工具，见[浏览器机制总览](browser.md)。
+Diana 不管，同样只有主人能驱动。三者怎么选、每轮注册哪套工具，见文档站[链路 · 浏览器机制](https://suink.github.io/Diana/pipeline#browser)。
 
 **新装时自动打开。** 内置浏览器从没保存过配置、也没在用扩展时，Diana 启动会探测本机：
 找得到 Chrome/Chromium 就把来源设成「Diana 内置」并启动；有显示器，或者能自己拉起 Xvfb

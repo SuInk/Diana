@@ -1,0 +1,351 @@
+<!doctype html>
+<!-- Copyright (c) 2025-now SuInk.
+     Licensed under the Limited Redistribution License in the repository root. -->
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" href="../favicon.svg" type="image/svg+xml" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="The full path of one message through Diana: reply triggers and backfill, the reply flow, agent runs, browsers and pre-send review." />
+    <meta name="theme-color" content="#100d13" />
+    <title>Diana docs — Pipeline</title>
+    <link rel="alternate" hreflang="zh" href="../pipeline" />
+    <link rel="alternate" hreflang="en" href="./pipeline" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="../styles.css?v=20260926" />
+    <script src="../theme.js?v=20260847"></script>
+  </head>
+  <body data-page="pipeline">
+    <div data-docs-header></div>
+    <div class="docs-shell"><div data-docs-sidebar></div><main id="main" class="content">
+      <header class="page-intro"><p class="eyebrow">Pipeline</p><h1>One message, from arrival to delivery</h1><p class="lead">A message first lands in a durable queue, then deterministic gates and a reply rating decide whether to answer. If it does, Diana assembles context, generates with the model or the agent, and only after pre-send review sends the reply back to its source channel in chunks. Every stop leaves an outcome code and a reason.</p></header>
+
+      <section class="section searchable" id="overview">
+        <div class="section-heading"><p class="eyebrow">Overview</p><h2>Five stages</h2></div>
+        <div class="stage-grid">
+          <a href="#trigger"><span>01</span><strong>Reply triggers</strong>Can a message get lost, how missed messages come back, whether to answer.</a>
+          <a href="#reply"><span>02</span><strong>Reply flow</strong>How context is built, how the reply is shaped and sent back in chunks.</a>
+          <a href="#agent"><span>03</span><strong>Agent run</strong>How the model calls tools step by step and when it finishes.</a>
+          <a href="#browser"><span>04</span><strong>Browsers</strong>Which browser runs, who may use it, where the boundaries are.</a>
+          <a href="#review"><span>05</span><strong>Pre-send review</strong>Which checks can stop or rewrite a reply before it goes out.</a>
+        </div>
+        <div class="flow-legend">
+          <span><i></i>Step</span><span><i class="q"></i>Decision</span><span><i class="end"></i>End</span>
+          <span><i class="stop"></i>Stopped / silent</span><span><i class="go"></i>Continues elsewhere</span><span><i class="loop"></i>Goes back to an earlier step</span>
+        </div>
+        <ol class="flow">
+          <li><div class="flow-node"><strong>Platform message</strong><p>OneBot / Telegram / QQ / DingTalk / Feishu / WeCom, normalised into a <code>MessageEvent</code>.</p></div></li>
+          <li><div class="flow-node"><strong>Durable inbound queue</strong><p>Backfill after disconnects, gap detection and retries; survives a restart.</p></div></li>
+          <li class="q"><div class="flow-node"><strong>Reply trigger</strong><p>Deterministic gates → direct triggers → reply rating.</p></div><div class="flow-exits"><span class="flow-exit"><b>No reply</b>reason recorded</span></div></li>
+          <li><div class="flow-node"><strong>Assemble context</strong><p>SOUL.md, history, memory, media; the stable part first so the prefix cache hits.</p></div></li>
+          <li class="q"><div class="flow-node"><strong>Generate</strong><p>With the agent on, a tool loop (possibly using a browser); otherwise a single model call.</p></div></li>
+          <li class="q"><div class="flow-node"><strong>Pre-send review</strong><p>Silence, dedup, the audit model, group stop.</p></div><div class="flow-exits"><span class="flow-exit"><b>Stopped</b>reason recorded</span></div></li>
+          <li><div class="flow-node"><strong>Send in chunks</strong><p>Send-time guards, idempotency, backoff and retries.</p></div></li>
+          <li class="end"><div class="flow-node"><strong>Record the outcome</strong><p>Outcome code and reason in <code>inbound_events</code>, shown in the WebUI event center.</p></div></li>
+        </ol>
+      </section>
+
+      <section class="section searchable" id="trigger">
+        <div class="section-heading"><p class="eyebrow">01 Reply triggers</p><h2>Deciding whether to answer</h2></div>
+        <p><code>HandleEvent</code> does not generate a reply directly. It writes the message into a SQLite inbound queue and wakes a worker, so a crash, a restart or a stuck model does not lose it: a worker claims an item with a 10-minute lease, and an expired lease is claimed again.</p>
+        <ol class="flow">
+          <li><div class="flow-node"><strong>HandleEvent</strong><p>The bot's own messages only go into history; pokes, joins, friend adds and recalls follow their own switches and cooldowns and never enter the queue.</p></div></li>
+          <li class="q"><div class="flow-node"><strong>Private-chat admission</strong><p>Everyone / owner only / allowlist.</p></div><div class="flow-exits"><span class="flow-exit"><b>Denied</b><code>ignored_private_admission</code></span></div></li>
+          <li><div class="flow-node"><strong>Register the direct call</strong><p><code>noteDirectedInbound</code> runs before enqueueing and is later used to interrupt the same person's older reply.</p></div></li>
+          <li><div class="flow-node"><strong>Write to the inbound queue</strong><p>Priority: direct trigger 100, quote reply 80, resolvable link 60, everything else 0; ties by time.</p></div><div class="flow-exits"><span class="flow-exit loop"><b>Write fails</b>retry journal replayed with 2–30 s backoff, plus a backfill</span></div></li>
+          <li><div class="flow-node"><strong>Worker claims it</strong><p>By default 3 items per group and 2 per private chat in flight, under the global reply concurrency limit.</p></div></li>
+          <li class="q"><div class="flow-node"><strong>A backfilled message?</strong></div><div class="flow-exits"><span class="flow-exit"><b>History only</b><code>backfill_history_only</code></span><span class="flow-exit"><b>Older than the replay window</b><code>ignored_stale</code></span></div></li>
+          <li><div class="flow-node"><strong>Speech-to-text → route</strong><p><code>routeMessageEvent</code>. A transient transcription failure retries the item later.</p></div></li>
+          <li class="q"><div class="flow-node"><strong>Deterministic gates</strong><p>12 checks that do not call a model; see the table below.</p></div><div class="flow-exits"><span class="flow-exit"><b>Stopped</b><code>ignored_*</code></span></div></li>
+          <li class="q"><div class="flow-node"><strong>Directly triggered?</strong><p>Private chat, a mention, a quote of the bot, an alias, an owner command, a resolvable link or a plugin command — after passing the reply gate (owner bypass → blocked → allowlist → exempt → active hours → member level).</p></div><div class="flow-exits"><span class="flow-exit go"><b>No</b>unprompted reply rating</span></div></li>
+          <li class="q"><div class="flow-node"><strong>Is a reply to the same person generating?</strong><p>A message added within 2 minutes is classified by a model as a repeat, a supplement, a correction or an independent question.</p></div><div class="flow-exits"><span class="flow-exit loop"><b>Supplement or correction above the threshold</b>the old reply is regenerated <code>merged_into_reply</code></span></div></li>
+          <li class="end"><div class="flow-node"><strong>Into the reply flow</strong></div></li>
+        </ol>
+        <p>Processing errors retry from 5 seconds, doubling up to 5 minutes, at most 5 times; after that the item is recorded as <code>dropped_retries_exhausted</code>. A definitive platform rejection is recorded as <code>dropped_send_rejected</code> and not retried.</p>
+      </section>
+
+      <section class="section searchable" id="recovery">
+        <div class="section-heading"><p class="eyebrow">01 Reply triggers</p><h2>Backfill and gap detection</h2></div>
+        <p>Messages sent while the bot was offline never arrive as pushes; they can only be pulled from the platform afterwards. <code>runInboundCoordinator</code> does that.</p>
+        <ol class="flow">
+          <li><div class="flow-node"><strong>Process start</strong><p>Releases expired leases and reads the last online checkpoint. While online the checkpoint is saved every 30 seconds.</p></div></li>
+          <li><div class="flow-node"><strong>Heartbeat sees a disconnect or offline account</strong><p>Stops claiming and saves the checkpoint.</p></div></li>
+          <li><div class="flow-node"><strong>Reconnected</strong><p>Replay cutoff = disconnect time − 30 minutes, looking back at most 24 hours.</p></div></li>
+          <li><div class="flow-node"><strong>Three backfills</strong><p>After 1 second, then again at +1 and +5 minutes. Walks the group list and recent contacts, 100 per page and at most 200 per session, one session at a time.</p></div></li>
+          <li><div class="flow-node"><strong>Deduplicate</strong><p>Compared with queued and stored messages, so nothing is processed twice.</p></div></li>
+          <li class="q"><div class="flow-node"><strong>Should this one take part in replies?</strong><p>Only the newest N per session (<code>history_backfill_message_limit</code>, default 3) that would have triggered a reply directly are queued normally.</p></div><div class="flow-exits"><span class="flow-exit"><b>The rest</b>fill in history only, no replies</span></div></li>
+          <li class="end"><div class="flow-node"><strong>Queued normally</strong></div></li>
+        </ol>
+        <div class="callout"><strong>Why only the newest few</strong><p>Coming back after an hour offline and answering a hundred stored group messages one by one would flood the chat. The recovered history still goes into context; it just does not trigger replies.</p></div>
+        <p>While online there is also gap detection: the first live message per group after a reconnect, and any jump in seq numbers, triggers <code>verifyGroupSeqGap</code> — a targeted refetch once backfill finishes, rechecked at 15 seconds, 1 minute and 3 minutes. It logs <code>backfill_gap_detected</code> / <code>resolved</code> / <code>unresolved</code>.</p>
+      </section>
+
+      <section class="section searchable" id="gates">
+        <div class="section-heading"><p class="eyebrow">01 Reply triggers</p><h2>Deterministic gates</h2></div>
+        <p>Checked in order; any stop ends with a specific reason. None of these calls a model (except check 12), so results are stable and reproducible.</p>
+        <div class="table-wrap"><table><thead><tr><th>#</th><th>Check</th><th>Outcome when stopped</th></tr></thead><tbody>
+          <tr><td>1</td><td>The bot left the group or the group is unavailable</td><td><code>ignored_unavailable_group</code></td></tr>
+          <tr><td>2</td><td>Resolve quotes, forwards and images; plugin observers; store history</td><td>—</td></tr>
+          <tr><td>3</td><td>Group not enabled or not admitted (owner suppression commands excepted)</td><td><code>ignored_policy</code>; blocked users record <code>ignored_user_blocked</code></td></tr>
+          <tr><td>4</td><td>The bot is muted in the group</td><td><code>ignored_bot_muted</code>; with "judge while muted" on, the judgement runs and records <code>ignored_bot_muted_judged</code></td></tr>
+          <tr><td>5</td><td>Group model quota exhausted</td><td><code>ignored_model_quota</code></td></tr>
+          <tr><td>6</td><td>Event triggers (keyword / regex tasks)</td><td>Not a stop; tasks run in the background</td></tr>
+          <tr><td>7</td><td>The owner's clear-context command</td><td>Handled immediately</td></tr>
+          <tr><td>8</td><td>Backlog hand-over (see "Concurrency")</td><td><code>merged_into_backlog_turn</code></td></tr>
+          <tr><td>9</td><td>Member level threshold (OneBot; mentions, owner and admins exempt)</td><td><code>ignored_member_level</code></td></tr>
+          <tr><td>10</td><td>Reply suppression is active</td><td><code>ignored_response_suppression</code></td></tr>
+          <tr><td>11</td><td>Video only, no text</td><td><code>ignored_video</code></td></tr>
+          <tr><td>12</td><td>The sender is a marked bot or a Telegram bot and did not mention or quote this bot: reply damping first, then a model decides whether it is talking to us</td><td><code>ignored_reply_damping</code> / <code>ignored_bot_message</code></td></tr>
+        </tbody></table></div>
+      </section>
+
+      <section class="section searchable" id="proactive">
+        <div class="section-heading"><p class="eyebrow">01 Reply triggers</p><h2>Rating unprompted replies</h2></div>
+        <p>Ordinary group messages that were not directly triggered first pass reply damping and the group's random sampling rate (owner exempt), then go to the router model. For each candidate it answers two things with a short reason each: <code>relevance.directed</code> (is this clearly addressed to the bot — yes or no) and <code>chat_in.score</code> (0–1, how natural it would be to chime in).</p>
+        <ol class="flow">
+          <li class="q"><div class="flow-node"><strong>Both switches off, or someone told the bot to stop in the last 10 minutes?</strong></div><div class="flow-exits"><span class="flow-exit"><b>Yes</b>silent, no model call</span></div></li>
+          <li><div class="flow-node"><strong>Build the rating input</strong><p>Addressing info, a time-ordered transcript and the group's extra criteria.</p></div></li>
+          <li class="q"><div class="flow-node"><strong>Call the router model</strong><p>Purpose <code>proactive_reply_router</code>, bound to a chat model or the Jev decision model; waits at most 60 seconds.</p></div><div class="flow-exits"><span class="flow-exit"><b>Timeout / error</b>silent</span><span class="flow-exit loop"><b>Unparsable</b>ask once more with a reminder, then silent</span></div></li>
+          <li class="q"><div class="flow-node"><strong>directed = false and chat_in = 0?</strong><p>Means someone is asking it to stop, or a mechanical loop.</p></div><div class="flow-exits"><span class="flow-exit"><b>Yes</b>silent, even at "no limit"</span></div></li>
+          <li class="q"><div class="flow-node"><strong>Answer-questions switch on and directed = true?</strong></div><div class="flow-exits"><span class="flow-exit go"><b>Yes</b>pass <code>replied_proactive</code></span></div></li>
+          <li class="q"><div class="flow-node"><strong>Chat score meets the level, and the cooldown has passed?</strong><p>Cooldown defaults to 30 seconds and starts only after a chat reply is actually sent.</p></div><div class="flow-exits"><span class="flow-exit"><b>No</b><code>ignored</code></span></div></li>
+          <li class="q"><div class="flow-node"><strong>Is the bot talking too much?</strong><p>Over 25% of messages in 10 minutes, at least 3, with more than one other person talking.</p></div><div class="flow-exits"><span class="flow-exit"><b>Yes, below "no limit"</b>silent</span></div></li>
+          <li class="end"><div class="flow-node"><strong>Pass</strong><p><code>replied_proactive</code>, into the reply flow.</p></div></li>
+        </ol>
+        <div class="table-wrap"><table><thead><tr><th>Level</th><th>Chat score needed</th></tr></thead><tbody>
+          <tr><td><code>off</code></td><td>Never chimes in</td></tr>
+          <tr><td><code>minimal</code></td><td>≥ 0.90 (strictest)</td></tr>
+          <tr><td><code>low</code></td><td>≥ 0.70</td></tr>
+          <tr><td><code>medium</code></td><td>≥ 0.50</td></tr>
+          <tr><td><code>high</code></td><td>≥ 0.30</td></tr>
+          <tr><td><code>extreme</code></td><td>≥ 0.10 (loosest)</td></tr>
+          <tr><td><code>always</code></td><td>Ignores the score; cooldown and bot share still apply</td></tr>
+        </tbody></table></div>
+        <p>"Is this addressed to the bot" is not scored: a 0–1 score makes the model waver between 0.45 and 0.55, and the same kind of message gets an answer one time and not the next. Any model failure means silence — timeouts used to fall back to a keyword rule (a question mark meant "public question"), which erred towards speaking when it should not. Rating details are logged as <code>proactive_reply_route</code>.</p>
+      </section>
+
+      <section class="section searchable" id="concurrency">
+        <div class="section-heading"><p class="eyebrow">01 Reply triggers</p><h2>Concurrency, merging and stop</h2></div>
+        <p>When one session gets messages quickly, three mechanisms avoid answering each one separately or answering the wrong thing:</p>
+        <div class="flow-fork">
+          <div class="flow-branch"><h3>Backlog hand-over</h3><ol class="flow">
+            <li><div class="flow-node"><strong>Queued ≥ 30 seconds</strong><p>With newer messages behind it in the session; first attempt only, never the owner's.</p></div></li>
+            <li><div class="flow-node"><strong>Held in a backlog</strong><p>At most 20 messages, kept 10 minutes.</p></div></li>
+            <li class="end"><div class="flow-node"><strong>Taken by the next message</strong><p>The newest direct trigger becomes the reply target; without one, eligible candidates go to the rating together.</p></div></li>
+          </ol></div>
+          <div class="flow-branch"><h3>Merge while generating</h3><ol class="flow">
+            <li><div class="flow-node"><strong>Same person adds a message within 2 minutes</strong></div></li>
+            <li class="q"><div class="flow-node"><strong>Repeat / supplement / correction / independent?</strong><p>Merged only at or above the confidence threshold (default 75%).</p></div></li>
+            <li class="end"><div class="flow-node"><strong>Old draft discarded, regenerated</strong><p>Up to 3 times; no merging after chunks started sending or a side effect happened.</p></div></li>
+          </ol></div>
+          <div class="flow-branch"><h3>Interrupt</h3><ol class="flow">
+            <li><div class="flow-node"><strong>The same person addresses the bot again in a group</strong></div></li>
+            <li class="end"><div class="flow-node"><strong>The old reply is dropped before sending</strong><p><code>superseded_follow_up</code>; a recall only removes the quote, it never cancels a reply.</p></div></li>
+          </ol></div>
+        </div>
+        <div class="callout"><strong>Group stop</strong><p>Mentioning, quoting or naming the bot in a group with "shut up" or "stop" is caught by the pre-send review, which opens a 10-minute window for that group: the rating is skipped and in-flight unprompted replies are dropped. Mentions, quotes and names are still answered — "stop" means "stop butting in", not "ignore me".</p></div>
+      </section>
+
+      <section class="section searchable" id="reply">
+        <div class="section-heading"><p class="eyebrow">02 Reply flow</p><h2>After deciding to answer</h2></div>
+        <p><code>replyAndRecord</code> runs <code>replyTo</code> up to 3 times: when the same person adds a supplement or correction during generation, the old draft is discarded and regenerated with it; before the third attempt the turn is sealed against further merges.</p>
+        <ol class="flow">
+          <li><div class="flow-node"><strong>Prepare</strong><p>Current images, history, identity aliasing, request timeout, the typing indicator (Telegram and OneBot private chats).</p></div></li>
+          <li class="q"><div class="flow-node"><strong>Owner or status command? Only a resolvable link?</strong></div><div class="flow-exits"><span class="flow-exit go"><b>Command</b>sent directly, no review</span><span class="flow-exit go"><b>Link</b>resolved only, deduplicated by resource</span></div></li>
+          <li class="q"><div class="flow-node"><strong>Plugins</strong><p>May start background tasks or answer directly.</p></div><div class="flow-exits"><span class="flow-exit go"><b>Direct plugin reply</b>reviewed and sent without the chat model</span></div></li>
+          <li><div class="flow-node"><strong>Assemble context and tools</strong><p>Prompt order below. Reply rules can pin this turn's model profile or turn the reply into voice.</p></div></li>
+          <li class="q"><div class="flow-node"><strong>Agent on and allowed tools for this relationship?</strong></div><div class="flow-exits"><span class="flow-exit go"><b>Yes</b>agent run</span><span class="flow-exit go"><b>No</b>one model call; images or audio use the vision group</span></div></li>
+          <li><div class="flow-node"><strong>Shape the reply</strong><p>Take out control markers; stop tool calls written as prose; convert to plain text where the platform has no rich text; split long replies at natural boundaries, then split code blocks, then compress with a model (30 seconds, at most 2 calls per reply).</p></div></li>
+          <li class="q"><div class="flow-node"><strong>Pre-send review</strong></div><div class="flow-exits"><span class="flow-exit"><b>Stopped</b>the matching <code>ignored_*</code></span></div></li>
+          <li><div class="flow-node"><strong>Send in chunks</strong><p>Next section.</p></div><div class="flow-exits"><span class="flow-exit loop"><b>A supplement arrived</b>back to Prepare, regenerate</span></div></li>
+          <li class="end"><div class="flow-node"><strong>Record</strong><p>History, message IDs, delivery stages, outcome; chat cooldown starts; relationship evaluation is queued.</p></div></li>
+        </ol>
+        <h3>Prompt order</h3>
+        <p>System head (SOUL.md, fixed rules, tool rules) → summary checkpoint → stable history → <strong>cache breakpoint</strong> → per-turn blocks (plugin context, session state, memory, notebook, world book, self-notes, media index, recent sources, recent tool calls) → same-turn candidates → dependency images → system tail (speaker) → clock → decoration rules → current message. Everything before the breakpoint stays the same between turns in a group, so upstream prefix caches hit. Real user IDs and group numbers are replaced by aliases in model requests and restored in replies and tool calls.</p>
+        <p>When generation comes back empty, markers decide the fallback: a pause sends one in-character line and goes quiet; a refusal sends fixed text; a queued image job turns "started generating" into the reply; if <code>say</code> already spoke this turn it stays silent; otherwise "I didn't produce a usable reply."</p>
+      </section>
+
+      <section class="section searchable" id="delivery">
+        <div class="section-heading"><p class="eyebrow">02 Reply flow</p><h2>Sending in chunks</h2></div>
+        <ol class="flow">
+          <li><div class="flow-node"><strong>Split</strong><p>On <code>[diana-msg]</code> / <code>[diana-line]</code>, trailing full stops removed; replies in the same session queue instead of interleaving.</p></div></li>
+          <li class="q"><div class="flow-node"><strong>OneBot and over the forward threshold?</strong></div><div class="flow-exits"><span class="flow-exit go"><b>Yes</b>send a merged-forward card (its text gets its own account-safety check); on failure before the timeout, fall back to chunks</span></div></li>
+          <li><div class="flow-node"><strong>Chunk by chunk</strong><p>Only the first chunk quotes and mentions; no quote if the trigger was recalled or the reply targets another participant.</p></div></li>
+          <li><div class="flow-node"><strong>Pacing</strong><p>From the second chunk: max(300 ms interval, 100 ms per character), capped at 6 seconds, with the typing indicator kept on.</p></div></li>
+          <li><div class="flow-node"><strong>Single exit: sendOutgoingWithResult</strong><p>Mask secrets → prepare local images and audio → resolve <code>[diana-reply]</code> / <code>[diana-at]</code> → send-time guards.</p></div></li>
+          <li class="q"><div class="flow-node"><strong>Already sent this step?</strong><p>Fingerprints are kept in the turn's delivery ledger.</p></div><div class="flow-exits"><span class="flow-exit go"><b>Yes</b>skip, reuse the message ID</span></div></li>
+          <li><div class="flow-node"><strong>Lease the media share link</strong><p>Renewed to at least ten minutes ahead before every retry.</p></div></li>
+          <li class="q"><div class="flow-node"><strong>executeOutboundCall</strong></div><div class="flow-exits"><span class="flow-exit"><b>Kicked / muted</b>give up</span><span class="flow-exit loop"><b>Connection offline</b>fail fast; the queue retries the whole turn later</span><span class="flow-exit loop"><b>Group send fails</b>separate text and media lanes back off exponentially, then a drop cooldown</span></div></li>
+          <li class="end"><div class="flow-node"><strong>Success</strong><p>Record <code>Acknowledged</code>, write chat history, keep the message ID, pause the typing indicator.</p></div></li>
+        </ol>
+        <p>A chat reply is attempted once per call; platform media-validation rejections retry briefly, at most 3 attempts in all. <code>send_retry_attempts</code> is for non-reply sends such as scheduled pushes. When the queue retries a whole turn, chunks already delivered are skipped via the ledger and never sent twice.</p>
+      </section>
+
+      <section class="section searchable" id="agent">
+        <div class="section-heading"><p class="eyebrow">03 Agent run</p><h2>One thing per step</h2></div>
+        <p>With the agent on and tools allowed for this relationship, <code>Runner.Run</code> produces the turn: every step the model either calls one tool or finishes with <code>agent_finalize</code>.</p>
+        <ol class="flow">
+          <li><div class="flow-node"><strong>Configure</strong><p>12 steps by default (max 16); the owner gets 16 steps and 20,000 characters of final reply, everyone else 8,000. 60 seconds per tool, 20 seconds reserved for finishing, 3 protocol repairs.</p></div></li>
+          <li><div class="flow-node"><strong>Assemble tools</strong><p>Core tools are always callable; the rest appear as one catalog line and need <code>tools_load</code>, then <code>tools_execute</code>. Trimmed by the permission allowlist and bot / group extension switches; a tool without permission answers "no permission" instead of "does not exist". In groups, loaded tools are restored from the group session snapshot on later turns.</p></div></li>
+          <li><div class="flow-node"><strong>Runner.Run starts</strong><p>Protocol prompt and deferred-tool catalog; Skills injected by trigger words; a trusted clock; the carry-over archive if the last turn was forced to finish.</p></div></li>
+          <li class="q"><div class="flow-node"><strong>Steps left, and enough time to finish?</strong></div><div class="flow-exits"><span class="flow-exit go"><b>No</b>forced finish</span></div></li>
+          <li class="q"><div class="flow-node"><strong>Call the model</strong><p>Planning deadline = request deadline − finish reserve (the configured value or a third of the remaining time, whichever is smaller).</p></div><div class="flow-exits"><span class="flow-exit go"><b>Planning deadline hit</b>forced finish</span><span class="flow-exit"><b>Other error</b>handled by the reply flow</span><span class="flow-exit go"><b>Plain text / agent_finalize</b>finish checks</span></div></li>
+          <li><div class="flow-node"><strong>Run exactly one tool call</strong><p>Other calls in the batch get "not executed", so every step sees the previous result.</p></div></li>
+          <li class="q"><div class="flow-node"><strong>Pre-execution checks</strong><p>Deferred tools must be loaded and pass schema checks → unknown or denied → input coercion → extension changes need a confirmation code → identical to the previous call is skipped → quotas (<code>web_search</code> 3; introspection 6 and <code>tools_load</code> 4 without using steps).</p></div><div class="flow-exits"><span class="flow-exit loop"><b>Fails</b>one protocol repair, back to the step check; forced finish when repairs run out</span></div></li>
+          <li><div class="flow-node"><strong>Run the tool</strong><p>Per-tool timeout and output budget; <code>run_command</code> passes the command allowlist and runs in a sandbox as configured; MCP has its own 60-second timeout.</p></div></li>
+          <li><div class="flow-node"><strong>Shape the result</strong><p>Secrets masked, long output truncated; search and render results go into the evidence ledger; remaining budget attached. Tool errors are not fatal — they become observations for the model.</p></div><div class="flow-exits"><span class="flow-exit loop"><b>Next step</b>back to the step check</span></div></li>
+        </ol>
+        <h3>Finish checks</h3>
+        <ol class="flow">
+          <li class="q"><div class="flow-node"><strong>silent = true?</strong></div><div class="flow-exits"><span class="flow-exit"><b>Yes, no image job queued</b>no reply this turn</span><span class="flow-exit loop"><b>Image job queued</b>silence refused, one repair</span></div></li>
+          <li class="q"><div class="flow-node"><strong>Real line breaks in the text?</strong><p>Chunks must use <code>[diana-msg]</code> / <code>[diana-line]</code>.</p></div><div class="flow-exits"><span class="flow-exit loop"><b>Yes</b>one repair</span></div></li>
+          <li class="q"><div class="flow-node"><strong>Evidence required but no search? A link never fetched this run nor seen in the conversation?</strong></div><div class="flow-exits"><span class="flow-exit loop"><b>Yes</b>one repair</span></div></li>
+          <li class="q"><div class="flow-node"><strong>Internal protocol words leaked? Empty text?</strong></div><div class="flow-exits"><span class="flow-exit loop"><b>Yes</b>one repair</span></div></li>
+          <li class="end"><div class="flow-node"><strong>Return the reply</strong></div></li>
+        </ol>
+        <p>A <strong>forced finish</strong> happens when steps or repairs run out, the finish reserve is reached, or evidence was required and not gathered: a finish instruction and the evidence digest are appended, and only <code>agent_finalize</code> is offered, forced. Afterwards a forced finish keeps up to 12 step summaries as a carry-over archive (valid 10 minutes); the last 8 tool calls are kept for 30 minutes and injected into later turns.</p>
+        <div class="tool-grid pairs">
+          <article><h3>Interim say</h3><p>At most 3 per turn, 80 characters each, no line breaks; sent immediately and the typing indicator comes back. After it, the turn is no longer merged and regenerated, and it skips pre-send review.</p></article>
+          <article><h3>subtask</h3><p>A synchronous model call with no tools and no history: at most 4 per reply, 6,000 characters of material, 90-second timeout.</p></article>
+          <article><h3>Context over budget</h3><p>Summarise the longest text messages (at most 2 calls), replace images with descriptions, downsize images, and finally drop them.</p></article>
+          <article><h3>Model errors</h3><p>The runner does not retry. The provider stack retries a transient error once after 700 ms, halves an oversized context up to 4 times, then fails over to the next profile in order, keeping completed tool steps.</p></article>
+        </div>
+      </section>
+
+      <section class="section searchable" id="browser">
+        <div class="section-heading"><p class="eyebrow">04 Browsers</p><h2>Which browser this turn uses</h2></div>
+        <p>The disposable headless renderer <code>browser_render</code> is registered for everyone, always. An interactive browser with login state is owner-only, and only one set is registered per turn, so the model never gets two and guesses.</p>
+        <ol class="flow">
+          <li class="q"><div class="flow-node"><strong>Is the sender the owner?</strong></div><div class="flow-exits"><span class="flow-exit"><b>No</b>only <code>browser_render</code></span></div></li>
+          <li><div class="flow-node"><strong>Pick a source by priority</strong><p><code>browsersource.Pick</code>: built-in first, extension second by default; the first usable one wins.</p></div></li>
+          <li><div class="flow-fork">
+            <div class="flow-branch"><p class="flow-branch-label">Built-in: enabled and Chrome found</p><ol class="flow">
+              <li class="q"><div class="flow-node"><strong>Built-in browser turned off for this bot?</strong><p><code>agent_browser_box_disabled</code></p></div><div class="flow-exits"><span class="flow-exit"><b>Yes</b><code>browser_*</code> point at the external CDP address instead</span></div></li>
+              <li class="end"><div class="flow-node"><strong>This bot's built-in browser</strong><p>Registers <code>browser_*</code>.</p></div></li>
+            </ol></div>
+            <div class="flow-branch"><p class="flow-branch-label">Extension: enabled, connected, not taken over</p><ol class="flow">
+              <li class="q"><div class="flow-node"><strong>Extension control on for this bot?</strong><p><code>agent_browser_control_enabled</code>, off by default.</p></div><div class="flow-exits"><span class="flow-exit"><b>No</b>same as "none usable" — no fallback to built-in</span></div></li>
+              <li class="end"><div class="flow-node"><strong>Your own Chrome</strong><p>Registers <code>browser_ext_*</code>.</p></div></li>
+            </ol></div>
+            <div class="flow-branch"><p class="flow-branch-label">None usable</p><ol class="flow">
+              <li class="q"><div class="flow-node"><strong>Custom external CDP address on this bot?</strong><p>Anything other than the default <code>127.0.0.1:9222</code>.</p></div><div class="flow-exits"><span class="flow-exit"><b>No</b>no interactive browser</span></div></li>
+              <li class="end"><div class="flow-node"><strong>That CDP address</strong><p>Registers <code>browser_*</code>.</p></div></li>
+            </ol></div>
+          </div></li>
+        </ol>
+        <div class="callout warn"><strong>A taken-over built-in browser does not switch to the extension</strong><p>The built-in browser counts as usable whenever it is enabled and Chrome is found; during a takeover <code>browser_*</code> calls fail with "the user is controlling the built-in browser". The extension is the opposite: when every connection is taken over it counts as unusable and the next source is tried.</p></div>
+      </section>
+
+      <section class="section searchable" id="browser-render">
+        <div class="section-heading"><p class="eyebrow">04 Browsers</p><h2>Disposable headless rendering</h2></div>
+        <ol class="flow">
+          <li><div class="flow-node"><strong>browser_render or the web-render plugin</strong><p>The plugin renders at most 2 links per message and injects the text as an untrusted block.</p></div></li>
+          <li class="q"><div class="flow-node"><strong>Public address check</strong><p>http/https only; private, loopback, link-local, localhost and <code>.local</code> addresses are refused.</p></div><div class="flow-exits"><span class="flow-exit"><b>Fails</b>refused</span><span class="flow-exit go"><b>GitHub /releases link</b>the official API first</span></div></li>
+          <li class="q"><div class="flow-node"><strong>Take a slot</strong><p>3 at once by default, queueing at most 20 seconds; queue time does not count against the timeout.</p></div><div class="flow-exits"><span class="flow-exit"><b>No slot</b>too many disposable browsers running</span></div></li>
+          <li><div class="flow-node"><strong>Start Chrome</strong><p>A temporary 0700 profile, HOME / XDG redirected into it, local host names blocked in resolution.</p></div></li>
+          <li><div class="flow-node"><strong>Navigate</strong><p>Every main-document request is re-validated; a download aborts the render.</p></div></li>
+          <li class="q"><div class="flow-node"><strong>Wait until the page settles</strong><p>DOM, network and timers quiet; 25 seconds by default, 60 at most.</p></div><div class="flow-exits"><span class="flow-exit go"><b>Timeout</b>use the last non-empty snapshot; error only if there is nothing</span></div></li>
+          <li class="end"><div class="flow-node"><strong>Return URL, title, text</strong><p>The process ends and the temporary directory is deleted.</p></div></li>
+        </ol>
+        <ul class="check-list">
+          <li>Only main-document requests are intercepted and re-checked; sub-resources such as XHR and images are not validated one by one.</li>
+          <li>HTML to image: simple pages use Chrome <code>--screenshot</code> (8 MiB output cap, takes a slot); scripted or animated pages use <code>html_capture</code> on a fake <code>diana-render.invalid</code> origin where every request is answered locally or blocked, with a strict CSP and a virtual clock, at most 600 frames and 4096 px — it does not take a slot today.</li>
+          <li>Finding Chrome: configured path → <code>DIANA_HEADLESS_BROWSER_EXECUTABLE</code> → <code>DIANA_AGENT_BROWSER_EXECUTABLE</code> → common install locations (including a downloaded Chrome for Testing) → <code>PATH</code>. Installation tries the system package manager first; on glibc Linux it falls back to downloading Chrome for Testing into <code>DIANA_BROWSER_DIR</code>.</li>
+        </ul>
+      </section>
+
+      <section class="section searchable" id="browser-interactive">
+        <div class="section-heading"><p class="eyebrow">04 Browsers</p><h2>Interactive browsers</h2></div>
+        <ol class="flow">
+          <li><div class="flow-node"><strong>browser_open</strong><p>Only checks for http/https or <code>about:blank</code>, plus the built-in browser's <code>denied_hosts</code>.</p></div></li>
+          <li class="q"><div class="flow-node"><strong>This conversation has a current tab and no new_tab?</strong></div><div class="flow-exits"><span class="flow-exit go"><b>Yes</b>reuse it</span></div></li>
+          <li class="q"><div class="flow-node"><strong>Already 8 tabs opened by the bot?</strong><p>A tab counts as held by a conversation for 10 minutes after use.</p></div><div class="flow-exits"><span class="flow-exit go"><b>Some are free</b>close the least recently used</span><span class="flow-exit"><b>All held</b>refused; use the current tab or close one</span></div></li>
+          <li><div class="flow-node"><strong>Navigate</strong><p>Timed by <code>agent_browser_timeout_ms</code> (15 seconds by default): on timeout <code>stopLoading</code> and an error; a body that never finishes is stopped after 8 seconds.</p></div></li>
+          <li><div class="flow-node"><strong>Actions</strong><p>click / type / key / wait / eval / screenshot…; clicks and keys are real input events, falling back to <code>el.click()</code> when covered; cookie values in <code>browser_eval</code> results are masked.</p></div><div class="flow-exits"><span class="flow-exit loop"><b>Page hung or crashed</b>terminate the script → reset to about:blank → close the tab</span></div></li>
+          <li class="end"><div class="flow-node"><strong>Return the page state</strong><p>Screenshots go to <code>.agent-browser/</code> in the workspace (one file per conversation, cleaned after 7 days) and are attached as images; every call writes a <code>browser_action</code> log.</p></div></li>
+        </ol>
+        <div class="table-wrap"><table><thead><tr><th></th><th>Built-in</th><th>External CDP</th><th>Extension (your Chrome)</th></tr></thead><tbody>
+          <tr><td>Tools</td><td><code>browser_*</code></td><td><code>browser_*</code></td><td><code>browser_ext_*</code></td></tr>
+          <tr><td>Login state</td><td>What you logged in there, per bot</td><td>That Chrome's own</td><td>Your everyday browser's; Diana never touches cookies</td></tr>
+          <tr><td>Network boundary</td><td>Scheme check + <code>denied_hosts</code>; LAN reachable</td><td>Scheme check</td><td>Site allow / deny lists, read-write level, rate limit</td></tr>
+          <tr><td>Takeover</td><td>Clicking the live view takes over; returned after 5 idle minutes</td><td>—</td><td>Toggled in the extension or WebUI</td></tr>
+          <tr><td>Screenshots</td><td>Yes</td><td>Yes</td><td>No (it would widen extension permissions)</td></tr>
+        </tbody></table></div>
+      </section>
+
+      <section class="section searchable" id="review">
+        <div class="section-heading"><p class="eyebrow">05 Pre-send review</p><h2>Checks before anything goes out</h2></div>
+        <p>After a reply is generated and before it is sent, a series of checks can drop, rewrite or delay it. Only one of them is a dedicated audit model call; the rest are program checks and semantic dedup.</p>
+        <ol class="flow">
+          <li class="q"><div class="flow-node"><strong>Dependency images attached, but the model says it cannot see them?</strong></div><div class="flow-exits"><span class="flow-exit loop"><b>Yes, no side effect yet</b>regenerate once from image descriptions</span></div></li>
+          <li class="q"><div class="flow-node"><strong>The model chose silence?</strong></div><div class="flow-exits"><span class="flow-exit"><b>Allowed</b><code>ignored_model_silent</code></span><span class="flow-exit go"><b>Side effect / factual plugin result / image queued</b>silence refused, empty-reply fallback</span></div></li>
+          <li class="q"><div class="flow-node"><strong>Chat reply empty or marked as a refusal?</strong></div><div class="flow-exits"><span class="flow-exit"><b>Yes</b><code>ignored_no_natural_reply</code></span></div></li>
+          <li class="q"><div class="flow-node"><strong>Pause or refusal marker?</strong><p><code>[[DIANA_IGNORE_CURRENT_USER_30M]]</code> / <code>[[DIANA_REFUSE_CURRENT]]</code></p></div><div class="flow-exits"><span class="flow-exit"><b>Pause, empty body</b>one in-character line, then silence</span><span class="flow-exit go"><b>Refusal, empty body</b>fixed refusal text</span></div></li>
+          <li class="q"><div class="flow-node"><strong>Same as a line already said with say?</strong></div><div class="flow-exits"><span class="flow-exit"><b>Yes</b>not sent twice</span></div></li>
+          <li><div class="flow-node"><strong>In parallel: semantic dedup + audit model</strong><p>Their inputs are nearly the same, so starting both saves seconds; if dedup rewrites the reply, the audit runs again on the new text.</p></div></li>
+          <li class="q"><div class="flow-node"><strong>Semantic dedup</strong><p>Runs only if the session replied within 2 minutes; confidence below 0.9, errors and timeouts all pass.</p></div><div class="flow-exits"><span class="flow-exit"><b>drop, unprompted reply</b><code>ignored_duplicate_reply</code></span><span class="flow-exit go"><b>drop, direct reply</b>sent anyway (being addressed means you answer)</span><span class="flow-exit loop"><b>rewrite</b>reshaped and formatted again</span></div></li>
+          <li class="q"><div class="flow-node"><strong>Apply the audit verdict</strong><p>Next section.</p></div><div class="flow-exits"><span class="flow-exit"><b>Stopped</b>the matching <code>ignored_*</code> or a public notice</span></div></li>
+          <li class="q"><div class="flow-node"><strong>Group stop in the last 10 minutes, and this is unprompted?</strong></div><div class="flow-exits"><span class="flow-exit"><b>Yes</b><code>ignored_stop_requested</code></span></div></li>
+          <li class="end"><div class="flow-node"><strong>Into sending</strong><p>Every message then passes the send-time guards.</p></div></li>
+        </ol>
+      </section>
+
+      <section class="section searchable" id="audit">
+        <div class="section-heading"><p class="eyebrow">05 Pre-send review</p><h2>The audit model</h2></div>
+        <p>The audit is simply on or off (on by default, overridable per group). One call judges all of the following; if none applies it is skipped entirely. Verdicts apply in this order:</p>
+        <ol class="flow">
+          <li class="q"><div class="flow-node"><strong>Audit call failed?</strong></div><div class="flow-exits"><span class="flow-exit"><b>Unprompted reply</b>silent: when unsure, don't butt in</span><span class="flow-exit go"><b>Direct reply</b>sent: a bot that goes mute whenever a model is down is worse</span></div></li>
+          <li class="q"><div class="flow-node"><strong>Private closing / stop</strong><p>Judged only within 3 minutes of the bot's last private message; only verdicts at 0.90 confidence or higher count.</p></div><div class="flow-exits"><span class="flow-exit"><b>Stop</b><code>ignored_stop_requested</code>; non-owners paused 30 minutes</span><span class="flow-exit"><b>Goodbyes past the grace count</b><code>ignored_conversation_closed</code></span></div></li>
+          <li><div class="flow-node"><strong>Group stop</strong><p>Judged on group messages that mention, quote or name the bot; opens a 10-minute window, and <strong>this reply is still sent</strong>.</p></div></li>
+          <li class="q"><div class="flow-node"><strong>Loops</strong><p>Bot-to-bot loop detection is on by default. No content or no purpose lowers the reply appetite.</p></div><div class="flow-exits"><span class="flow-exit"><b>Repeating itself</b><code>ignored_self_repeat</code></span><span class="flow-exit"><b>3 hits in 30 minutes, not the owner</b>pause with a notice <code>ignored_ai_reply_loop</code></span></div></li>
+          <li class="q"><div class="flow-node"><strong>Account safety score &lt; 0.10?</strong><p>Deliberately low: suspected risk still passes; only a near-certain unsafe verdict stops it.</p></div><div class="flow-exits"><span class="flow-exit"><b>Yes</b>a neutral public notice instead (can be rewritten in persona)</span></div></li>
+          <li class="q"><div class="flow-node"><strong>Quality (unprompted replies only)</strong><p>Contradiction, off topic, truncated, harmful advice, or <code>send_confidence</code> below <code>proactive_reply_threshold</code>.</p></div><div class="flow-exits"><span class="flow-exit"><b>Fails</b><code>ignored_proactive_reply_quality</code></span></div></li>
+          <li class="end"><div class="flow-node"><strong>Pass</strong><p>A refusal (confidence ≥ 0.90) is still sent; 4 refusals within 30 minutes start a pause.</p></div></li>
+        </ol>
+        <p>The order is deliberate: once someone says "stop replying", whether this reply is accurate no longer matters, so closing comes first. The quality gate only applies to unprompted replies — going silent on someone who addressed you because of a score looks like ignoring them. Direct plugin replies go through the same audit but not semantic dedup.</p>
+        <h3>Send-time guards</h3>
+        <div class="table-wrap"><table><thead><tr><th>Guard</th><th>Condition</th><th>Result</th></tr></thead><tbody>
+          <tr><td>Secret masking</td><td>A registered credential appears in the text</td><td>Replaced with a masked value</td></tr>
+          <tr><td>Mention and quote markers</td><td><code>[diana-at]</code> / <code>[diana-reply]</code> malformed or pointing at a missing message</td><td>Rewritten or removed</td></tr>
+          <tr><td>Group unavailable</td><td>Confirmed left or disabled</td><td><code>ignored_unavailable_group</code></td></tr>
+          <tr><td>Paused</td><td>Within a pause for this person</td><td><code>ignored_response_suppression</code></td></tr>
+          <tr><td>Supplement</td><td>The person added a message that was merged into this turn</td><td>This draft is discarded and regenerated</td></tr>
+          <tr><td>Superseded</td><td>Same person addressed the bot again in a group; merged into another turn; unprompted batch changed</td><td><code>superseded_follow_up</code> / <code>superseded_reply_turn</code> / <code>superseded_proactive</code></td></tr>
+          <tr><td>Idempotency</td><td>This step was already sent</td><td>Skipped, message ID reused</td></tr>
+          <tr><td>Mute / offline / backoff</td><td>Muted; connection offline; group backoff</td><td>Muted drops; offline retries via the queue; backoff waits, then drops</td></tr>
+        </tbody></table></div>
+        <p>Interrupts and supersession only apply before the first chunk is sent and before any external side effect; a reply that has started sending finishes. Identity aliasing is not a send-time check: real IDs are replaced before the request reaches the model.</p>
+      </section>
+
+      <section class="section searchable" id="outcomes">
+        <div class="section-heading"><p class="eyebrow">Troubleshooting</p><h2>Which stage an outcome code comes from</h2></div>
+        <p>Every message, answered or not, ends with a record: <code>decision</code> is the outcome code and <code>decision_reason</code> the human-readable reason. When troubleshooting, find which stage it stopped at, then go back to that section.</p>
+        <div class="table-wrap"><table><thead><tr><th>Stage</th><th>Outcome codes</th></tr></thead><tbody>
+          <tr><td><a href="#trigger">Inbound queue</a></td><td><code>ignored_stale</code> <code>backfill_history_only</code> <code>ignored_private_admission</code> <code>dropped_retries_exhausted</code></td></tr>
+          <tr><td><a href="#gates">Deterministic gates</a></td><td><code>ignored_policy</code> <code>ignored_user_blocked</code> <code>ignored_bot_muted</code> <code>ignored_model_quota</code> <code>ignored_member_level</code> <code>ignored_response_suppression</code> <code>ignored_video</code> <code>ignored_reply_damping</code> <code>ignored_bot_message</code></td></tr>
+          <tr><td><a href="#proactive">Reply rating</a></td><td><code>ignored</code> <code>replied_proactive</code></td></tr>
+          <tr><td><a href="#concurrency">Concurrency</a></td><td><code>merged_into_reply</code> <code>merged_into_backlog_turn</code> <code>superseded_follow_up</code> <code>superseded_reply_turn</code> <code>superseded_proactive</code></td></tr>
+          <tr><td><a href="#review">Pre-send review</a></td><td><code>ignored_model_silent</code> <code>ignored_no_natural_reply</code> <code>ignored_duplicate_reply</code> <code>ignored_proactive_reply_quality</code> <code>ignored_stop_requested</code> <code>ignored_conversation_closed</code> <code>ignored_self_repeat</code> <code>ignored_ai_reply_loop</code></td></tr>
+          <tr><td><a href="#delivery">Sending</a></td><td><code>ignored_unavailable_group</code> <code>dropped_send_rejected</code></td></tr>
+        </tbody></table></div>
+        <h3>Where the code lives</h3>
+        <div class="table-wrap"><table><thead><tr><th>Area</th><th>Files</th></tr></thead><tbody>
+          <tr><td>Inbound and backfill</td><td><code>model/assistant/runtime_inbound.go</code> <code>inbound_queue.go</code> <code>inbound_gap.go</code> <code>inbound_retry.go</code> <code>inbound_backlog_merge.go</code></td></tr>
+          <tr><td>Gates and rating</td><td><code>model/assistant/runtime.go</code> (<code>routeMessageEvent</code>, <code>routeProactiveReplyBatch</code>) <code>participation_single_score.go</code> <code>direct_reply_merge.go</code> <code>reply_interrupt.go</code> <code>group_stop.go</code></td></tr>
+          <tr><td>Reply and sending</td><td><code>model/assistant/runtime.go</code> (<code>replyTo</code>, <code>sendDecorated</code>) <code>reply_compression.go</code> <code>runtime_outbound.go</code> <code>group_send_guard.go</code> <code>outbound_idempotency.go</code></td></tr>
+          <tr><td>Agent</td><td><code>model/agent/runner.go</code> <code>finalize.go</code> <code>deferred_tools.go</code> <code>claim_evidence.go</code>; <code>model/assistant/agent_scope.go</code></td></tr>
+          <tr><td>Browsers</td><td><code>model/browsersource/</code> <code>model/browserbox/</code> <code>model/browserctl/</code> <code>model/agent/headless_browser*.go</code> <code>browser_tools.go</code> <code>html_capture.go</code></td></tr>
+          <tr><td>Pre-send review</td><td><code>model/assistant/proactive_reply_quality.go</code> <code>reply_semantic_gate.go</code> <code>private_closing.go</code> <code>reply_suppression.go</code> <code>outbound_forward_gate.go</code></td></tr>
+          <tr><td>Outcome records</td><td><code>model/storage/inbound_queue.go</code> <code>event_audit.go</code></td></tr>
+        </tbody></table></div>
+      </section>
+
+      <nav class="page-nav" aria-label="Pagination"><a href="./implementation"><small>Previous</small><strong>← Internals</strong></a><a href="./operations"><small>Next</small><strong>Operate →</strong></a></nav>
+      <div data-docs-footer></div>
+    </main></div>
+    <script src="../icons.js?v=20260847"></script>
+    <script src="../app.js?v=20260926" defer></script>
+  </body>
+</html>

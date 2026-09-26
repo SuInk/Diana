@@ -402,6 +402,145 @@ tbody tr:last-child td { border-bottom: none; }
 }
 .flow-strip b { color: var(--text-faint); font-weight: 400; }
 
+/* ---------- 流程图 ----------
+   链路页的流程图不用 Mermaid：它画出来是一张定死尺寸的 SVG，颜色不跟主题、窄屏只能
+   横向滚。这里用普通列表排：左边一条轨道串起每一步，判断用菱形标记，每一步的出口
+   （拦下、跳过、回到前面某步）排在右侧，窄屏时落到这一步下面。分叉用 .flow-fork
+   并排几列，每列里再放一条 .flow。 */
+
+.flow { list-style: none; margin: 0 0 22px; padding: 0; }
+.flow > li {
+  position: relative;
+  display: grid;
+  grid-template-columns: 26px minmax(0, 1fr) minmax(0, 0.92fr);
+  column-gap: 14px; row-gap: 8px;
+  padding-bottom: 14px;
+  margin: 0;
+}
+/* 轨道：从本步的标记一直画到下一步；最后一步没有下一步。 */
+.flow > li::before {
+  content: ""; position: absolute;
+  left: 12px; top: 20px; bottom: -4px;
+  width: 2px; background: var(--line-strong);
+}
+.flow > li:last-child::before { display: none; }
+/* 标记：普通步骤是空心圆，判断是菱形，终点是实心圆。 */
+.flow > li::after {
+  content: ""; position: absolute;
+  left: 7px; top: 14px;
+  width: 12px; height: 12px; border-radius: 50%;
+  background: var(--bg); border: 2px solid var(--accent);
+  box-sizing: border-box;
+}
+.flow > li.q::after { border-radius: 2px; transform: rotate(45deg); border-color: var(--warn); }
+.flow > li.end::after { background: var(--accent); }
+
+.flow-node {
+  grid-column: 2;
+  padding: 10px 14px;
+  background: var(--bg-card);
+  border: 1px solid var(--line); border-radius: var(--radius);
+}
+.flow-node strong { display: block; color: var(--text); font-size: 14px; line-height: 1.55; overflow-wrap: anywhere; }
+.content .flow-node p, .flow-node p { margin: 3px 0 0; font-size: 13px; line-height: 1.65; color: var(--text-dim); }
+.flow > li.q .flow-node { border-style: dashed; border-color: var(--line-strong); }
+.flow > li.end .flow-node { border-color: var(--accent); background: var(--accent-soft); }
+
+.flow-exits {
+  grid-column: 3;
+  display: flex; flex-direction: column; gap: 6px;
+  align-self: start;
+}
+.flow-exit {
+  position: relative;
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px;
+  padding: 6px 10px;
+  border: 1px solid var(--line); border-left: 3px solid var(--text-faint);
+  border-radius: 8px;
+  background: var(--bg-inset);
+  font-size: 12.5px; line-height: 1.6; color: var(--text-dim);
+  overflow-wrap: anywhere;
+}
+/* 宽屏时出口在步骤右边，用一小段虚线把它们连起来；窄屏和分支里出口落在步骤下面，不画。 */
+.flow > li > .flow-exits .flow-exit::before {
+  content: ""; position: absolute;
+  left: -18px; top: 14px; width: 15px;
+  border-top: 1px dashed var(--line-strong);
+}
+.flow-exit b { font-weight: 500; color: var(--text-faint); }
+.flow-exit b::after { content: " →"; }
+.flow-exit code { font-size: 11.5px; padding: 0 4px; }
+/* 往下走、放行一类的出口用主色；回到前面某一步的用警示色。 */
+.flow-exit.go { border-left-color: var(--accent); background: var(--accent-soft); }
+.flow-exit.loop { border-left-color: var(--warn); background: var(--warn-soft); }
+
+/* 分叉：几列并排，列头写分支条件；列里是一条完整的 .flow。 */
+.flow-fork {
+  display: grid; gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(min(230px, 100%), 1fr));
+  margin: 0 0 22px;
+}
+.flow > li > .flow-fork { grid-column: 2 / -1; margin: 2px 0 4px; }
+.flow-branch {
+  padding: 12px 12px 4px;
+  border: 1px solid var(--line); border-radius: var(--radius);
+  background: var(--bg-soft);
+}
+.content .flow-branch > p.flow-branch-label {
+  margin: 0 0 10px;
+  font-size: 12.5px; font-weight: 700; color: var(--accent);
+  letter-spacing: 0.02em;
+}
+.flow-branch > h3 { margin: 0 0 10px; font-size: 14.5px; }
+/* 分支里空间窄，出口一律放到步骤下面。 */
+.flow-branch .flow > li { grid-template-columns: 26px minmax(0, 1fr); padding-bottom: 12px; }
+.flow-branch .flow-exits { grid-column: 2; }
+.flow-branch .flow > li > .flow-exits .flow-exit::before { display: none; }
+.flow-branch .flow > li { column-gap: 10px; }
+.flow-branch .flow { margin-bottom: 8px; }
+
+/* 图例 */
+.flow-legend {
+  display: flex; flex-wrap: wrap; gap: 6px 16px;
+  margin: -4px 0 16px;
+  font-size: 12.5px; color: var(--text-faint);
+}
+.flow-legend span { display: inline-flex; align-items: center; gap: 6px; }
+.flow-legend i {
+  display: inline-block; width: 10px; height: 10px;
+  border: 2px solid var(--accent); border-radius: 50%;
+}
+.flow-legend i.q { border-color: var(--warn); border-radius: 2px; transform: rotate(45deg); }
+.flow-legend i.end { background: var(--accent); }
+.flow-legend i.stop { width: 14px; height: 10px; border: 1px solid var(--line); border-left: 3px solid var(--text-faint); border-radius: 3px; background: var(--bg-inset); }
+.flow-legend i.go { width: 14px; height: 10px; border: 1px solid var(--line); border-left: 3px solid var(--accent); border-radius: 3px; background: var(--accent-soft); }
+.flow-legend i.loop { width: 14px; height: 10px; border: 1px solid var(--line); border-left: 3px solid var(--warn); border-radius: 3px; background: var(--warn-soft); }
+
+/* 四张卡片按 2×2 排，别排成 3+1。 */
+.tool-grid.pairs { grid-template-columns: repeat(auto-fit, minmax(min(300px, 100%), 1fr)); }
+
+/* 链路页顶部的五段导览卡片。 */
+.stage-grid {
+  display: grid; gap: 12px; margin-bottom: 22px;
+  grid-template-columns: repeat(auto-fit, minmax(148px, 1fr));
+}
+.stage-grid a {
+  display: block; padding: 15px 16px;
+  background: var(--bg-card);
+  border: 1px solid var(--line); border-radius: var(--radius);
+  color: var(--text-dim); font-size: 13px; line-height: 1.65;
+}
+.stage-grid a:hover { border-color: var(--accent); text-decoration: none; }
+.stage-grid span { display: block; font-family: var(--mono); font-size: 12px; font-weight: 600; color: var(--accent); }
+.stage-grid strong { display: block; margin: 4px 0 4px; color: var(--text); font-size: 15px; }
+
+@media (max-width: 760px) {
+  .flow > li { grid-template-columns: 26px minmax(0, 1fr); }
+  .flow-exits { grid-column: 2; }
+  .flow > li > .flow-fork { grid-column: 2; }
+  .flow > li > .flow-exits .flow-exit::before { display: none; }
+}
+
 /* ---------- FAQ ---------- */
 
 .faq > * {

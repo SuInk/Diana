@@ -12,7 +12,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
-    <link rel="stylesheet" href="./styles.css?v=20260847" />
+    <link rel="stylesheet" href="./styles.css?v=20260926" />
     <script src="./theme.js?v=20260847"></script>
   </head>
   <body data-page="implementation">
@@ -54,7 +54,7 @@
           <li><strong>发送前审核</strong><p>模型沉默、语义去重、一次审核模型调用（私聊收尾、群里叫停、空转、账号安全、主动回复质量），以及发送时的打断、幂等和暂停检查。</p></li>
           <li><strong>发送与记录</strong><p>分条回到来源通道，只有第一条带引用和 @；群发送按文字/媒体两条通道退避。结果代码、原因、投递阶段、耗时与 token 全部持久化。</p></li>
         </ol>
-        <p>每一段的流程图和结果代码见仓库文档：<a href="https://github.com/SuInk/Diana/blob/main/docs/message-pipeline.md">消息链路总览</a>、<a href="https://github.com/SuInk/Diana/blob/main/docs/reply-trigger.md">消息进入与回复触发</a>、<a href="https://github.com/SuInk/Diana/blob/main/docs/reply-flow.md">回复流程</a>、<a href="https://github.com/SuInk/Diana/blob/main/docs/agent-run.md">Agent 运行</a>、<a href="https://github.com/SuInk/Diana/blob/main/docs/browser.md">浏览器机制</a>、<a href="https://github.com/SuInk/Diana/blob/main/docs/pre-send-review.md">发送前审核</a>。</p>
+        <p>每一步的流程图、判断条件和结果代码见<a href="./pipeline">链路</a>一页。</p>
       </section>
 
       <section class="section searchable" id="memory">
@@ -90,10 +90,10 @@
         </tbody></table></div>
       </section>
 
-      <nav class="page-nav" aria-label="文档分页"><a href="./configuration"><small>上一页</small><strong>← 配置</strong></a><a href="./operations"><small>下一页</small><strong>运维 →</strong></a></nav>
+      <nav class="page-nav" aria-label="文档分页"><a href="./configuration"><small>上一页</small><strong>← 配置</strong></a><a href="./pipeline"><small>下一页</small><strong>链路 →</strong></a></nav>
       <div data-docs-footer></div>
     </main></div>
     <script src="./icons.js?v=20260847"></script>
-    <script src="./app.js?v=20260847" defer></script>
+    <script src="./app.js?v=20260926" defer></script>
   </body>
 </html>

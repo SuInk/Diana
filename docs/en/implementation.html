@@ -14,7 +14,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
-    <link rel="stylesheet" href="../styles.css?v=20260847" />
+    <link rel="stylesheet" href="../styles.css?v=20260926" />
     <script src="../theme.js?v=20260847"></script>
   </head>
   <body data-page="implementation">
@@ -56,7 +56,7 @@
           <li><strong>Pre-send review</strong><p>Model silence, semantic dedup, one audit model call (private closing, group stop, loops, account safety, unprompted reply quality), and send-time checks for interrupts, idempotency and pauses.</p></li>
           <li><strong>Send and record</strong><p>Replies go back to the source channel in chunks, with only the first quoting and mentioning; group sends back off on separate text and media lanes. Outcome codes, reasons, delivery stages, latency and tokens are all persisted.</p></li>
         </ol>
-        <p>Flowcharts and outcome codes for each stage are in the repository docs (Chinese): <a href="https://github.com/SuInk/Diana/blob/main/docs/message-pipeline.md">pipeline overview</a>, <a href="https://github.com/SuInk/Diana/blob/main/docs/reply-trigger.md">inbound and reply triggers</a>, <a href="https://github.com/SuInk/Diana/blob/main/docs/reply-flow.md">reply flow</a>, <a href="https://github.com/SuInk/Diana/blob/main/docs/agent-run.md">agent run</a>, <a href="https://github.com/SuInk/Diana/blob/main/docs/browser.md">browsers</a>, <a href="https://github.com/SuInk/Diana/blob/main/docs/pre-send-review.md">pre-send review</a>.</p>
+        <p>Flowcharts, conditions and outcome codes for every step are on the <a href="./pipeline">Pipeline</a> page.</p>
       </section>
 
       <section class="section searchable" id="memory">
@@ -92,10 +92,10 @@
         </tbody></table></div>
       </section>
 
-      <nav class="page-nav" aria-label="Pagination"><a href="./configuration"><small>Previous</small><strong>← Configure</strong></a><a href="./operations"><small>Next</small><strong>Operate →</strong></a></nav>
+      <nav class="page-nav" aria-label="Pagination"><a href="./configuration"><small>Previous</small><strong>← Configure</strong></a><a href="./pipeline"><small>Next</small><strong>Pipeline →</strong></a></nav>
       <div data-docs-footer></div>
     </main></div>
     <script src="../icons.js?v=20260847"></script>
-    <script src="../app.js?v=20260847" defer></script>
+    <script src="../app.js?v=20260926" defer></script>
   </body>
 </html>

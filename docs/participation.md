@@ -1,6 +1,6 @@
 # 发言偏好
 
-机器人设置的「接话设置」和群管理里有三项，决定没被直接叫到时机器人开不开口。完整的判断流程和流程图见[消息进入与回复触发](reply-trigger.md#主动接话)。
+机器人设置的「接话设置」和群管理里有三项，决定没被直接叫到时机器人开不开口。完整的判断流程和流程图见文档站[链路 · 主动接话](https://suink.github.io/Diana/pipeline#proactive)。
 
 - **回应提问**（开关，`participation.relevance_level` 为 `on` / `off`）：对方明确在跟机器人说话时回应。关掉之后只靠主动闲聊开口。@、引用和称呼这类直接触发不受它影响。
 - **主动闲聊**（七档，`participation.chat_level`）：没人叫它时多愿意插话。
@@ -42,7 +42,7 @@
 
 ## 旧配置
 
-没有 `relevance_level` / `chat_level` 的旧配置按原来的主动程度折算：关闭 → 回应提问和闲聊都关；低 / 中 / 高分别对应闲聊档 `low` / `medium` / `high`；极高对应 `always`。旧的五维数值、`relevance_threshold` / `substance_threshold`（0–100）只在上游还按旧 `should_reply` JSON 格式回答时才生效，新格式的评分不再读它们。`proactive_reply_threshold` 仅保留为[发送前审核](pre-send-review.md)里主动回复的发送置信度门槛，不是接话门槛。
+没有 `relevance_level` / `chat_level` 的旧配置按原来的主动程度折算：关闭 → 回应提问和闲聊都关；低 / 中 / 高分别对应闲聊档 `low` / `medium` / `high`；极高对应 `always`。旧的五维数值、`relevance_threshold` / `substance_threshold`（0–100）只在上游还按旧 `should_reply` JSON 格式回答时才生效，新格式的评分不再读它们。`proactive_reply_threshold` 仅保留为[发送前审核](https://suink.github.io/Diana/pipeline#audit)里主动回复的发送置信度门槛，不是接话门槛。
 
 群级发言偏好为空时整组跟随机器人。发言档位不影响消息分条、合并转发、账号安全审核、语义去重以及 RSS 订阅通知。`proactive_reply_route` 日志记录两项评分与理由、生效档位、是否放行、是否重问过、冷却和原始输出。分数是模型对语义的判断，程序校验范围与门槛，不能保证模型本身评分准确。
 
