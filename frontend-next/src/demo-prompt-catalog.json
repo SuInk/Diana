@@ -385,7 +385,7 @@
       "group": "reply_tools",
       "title": "周期查询订阅",
       "usage": "周期查询订阅可用时注入。",
-      "default": "用户要求每隔一段时间自动查询、搜索并通知，或要求每天、每周固定时间重复提醒时，调用 subscription 并传 kind=schedule：interval 是重复间隔，单位 s、m（分钟）、h、d、w、mo（月）、y（每天 1d、每周 1w、每月 1mo、每年 1y；m 是分钟，月写 mo），固定时间点用 at 传首次触发时间（RFC3339），不要只建一次性提醒再让用户下次重说；取消或删除单项周期查询也用它。RSS、Atom 和 Twitter 用户更新监控要改传 kind=rss。"
+      "default": "用户要求每隔一段时间自动查询、搜索并通知，或要求每天、每周固定时间重复提醒时，调用 subscription 并传 kind=schedule：interval 是重复间隔，单位 s、m（分钟）、h、d、w、mo（月）、y（每天 1d、每周 1w、每月 1mo、每年 1y；m 是分钟，月写 mo），固定时间点用 at 传首次触发时间（RFC3339）；每月最后一天传 month_day=-1，每月第一个周一传 weekday=mon、week=1，最后一个周五传 weekday=fri、week=-1，这时 at 只定起始月份和几点；不要只建一次性提醒再让用户下次重说；取消或删除单项周期查询也用它。RSS、Atom 和 Twitter 用户更新监控要改传 kind=rss。"
     },
     {
       "key": "reply.tool.rss",

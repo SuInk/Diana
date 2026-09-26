@@ -157,7 +157,7 @@
                 </span>
                 <span v-if="task.kind !== 'reminder' && task.kind !== 'event_trigger' && task.interval_seconds">
                   <Repeat2 :size="13" aria-hidden="true" />
-                  每 {{ formatInterval(task.interval_seconds, task.interval_months) }}
+                  {{ task.schedule_rule || `每 ${formatInterval(task.interval_seconds, task.interval_months)}` }}
                 </span>
                 <span v-if="nextRunLabel(task)">
                   <CalendarClock :size="13" aria-hidden="true" />

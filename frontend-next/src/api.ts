@@ -3335,6 +3335,8 @@ export interface AssistantTask {
   interval_seconds?: number;
   // 按日历月重复的周期订阅（每月、每年）才有；这时 interval_seconds 只是折算值。
   interval_months?: number;
+  // 按月订阅的日期规则说明，例如「每月最后一天」「每月第 1 个周一」。
+  schedule_rule?: string;
   last_run_at?: string;
   cancelled_at?: string;
   last_error?: string;

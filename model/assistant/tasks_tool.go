@@ -333,6 +333,9 @@ func taskForTool(item Reminder) dianaTask {
 		}
 		status = scheduleStatus(item)
 		interval = reminderScheduleInterval(item).String()
+		if label := scheduleRuleLabel(item); label != "" {
+			interval += "（" + label + "）"
+		}
 	}
 	return dianaTask{
 		ID:                    item.ID,

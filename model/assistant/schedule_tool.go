@@ -34,9 +34,11 @@ type dianaScheduleResult struct {
 }
 
 type dianaSchedule struct {
-	ID                  string    `json:"id"`
-	Query               string    `json:"query"`
-	Interval            string    `json:"interval"`
+	ID       string `json:"id"`
+	Query    string `json:"query"`
+	Interval string `json:"interval"`
+	// Rule 是按月重复时的日期规则说明，例如「每月最后一天」「每月第 1 个周一」。
+	Rule                string    `json:"rule,omitempty"`
 	NextRunAt           time.Time `json:"next_run_at"`
 	LastRunAt           time.Time `json:"last_run_at,omitempty"`
 	Status              string    `json:"status"`
@@ -65,16 +67,22 @@ func (t *dianaScheduleTool) Description() string {
 // 避免文案和校验代码各写一份数字然后漂移。
 func (t *dianaScheduleTool) InputSchema() map[string]any {
 	item := map[string]any{
-		"interval": toolStringParam(scheduleIntervalDescription),
-		"query":    toolStringParam(scheduleQueryDescription),
-		"at":       toolStringParam(scheduleAtDescription),
+		"interval":  toolStringParam(scheduleIntervalDescription),
+		"query":     toolStringParam(scheduleQueryDescription),
+		"at":        toolStringParam(scheduleAtDescription),
+		"month_day": toolIntParam(scheduleMonthDayDescription, -31, 31),
+		"weekday":   toolEnumParam(scheduleWeekdayDescription, scheduleWeekdayOrder...),
+		"week":      toolIntParam(scheduleWeekDescription, -5, 5),
 	}
 	return toolObjectSchema([]string{"operation"}, map[string]any{
 		"operation": toolEnumParam("要执行的操作。cancel 只停止并保留记录，delete 才彻底删除。",
 			"create", "list", "update", "cancel", "delete"),
-		"interval": item["interval"],
-		"query":    item["query"],
-		"at":       item["at"],
+		"interval":  item["interval"],
+		"query":     item["query"],
+		"at":        item["at"],
+		"month_day": item["month_day"],
+		"weekday":   item["weekday"],
+		"week":      item["week"],
 		"items": toolItemsParam("一次创建多个订阅；只在 create 时有效，最多 "+itoa(maximumTasksPerToolCall)+" 项。剩余额度不足时按顺序创建到额度上限。",
 			maximumTasksPerToolCall, []string{"interval", "query"}, item),
 		"id":             toolStringParam("要操作的订阅 ID；update、cancel、delete 必填，可先用 list 查到。"),
@@ -210,6 +218,8 @@ type scheduleCreateRequest struct {
 	Query    string
 	// FirstAt 是用户指定的首次触发时间，零值表示从现在起过一个 Interval。
 	FirstAt time.Time
+	// Rule 是按月重复时的日期规则，零值表示沿用起点那天的日子。
+	Rule scheduleDayRule
 }
 
 func parseScheduleCreateRequests(input map[string]any) ([]scheduleCreateRequest, error) {
@@ -237,7 +247,14 @@ func parseScheduleCreateRequests(input map[string]any) ([]scheduleCreateRequest,
 		if err != nil {
 			return nil, fmt.Errorf("第 %d 个周期任务: %w", index+1, err)
 		}
-		requests = append(requests, scheduleCreateRequest{Interval: interval, Query: query, FirstAt: firstAt})
+		rule, _, err := parseScheduleDayRule(item)
+		if err != nil {
+			return nil, fmt.Errorf("第 %d 个周期任务: %w", index+1, err)
+		}
+		if _, err := firstScheduleTrigger(firstAt, interval, rule, time.Now()); err != nil {
+			return nil, fmt.Errorf("第 %d 个周期任务: %w", index+1, err)
+		}
+		requests = append(requests, scheduleCreateRequest{Interval: interval, Query: query, FirstAt: firstAt, Rule: rule})
 	}
 	return requests, nil
 }
@@ -318,11 +335,27 @@ func parseScheduleFirstAt(raw string) (time.Time, error) {
 // firstScheduleTrigger 算新订阅第一次什么时候跑，也就是它的时间网格原点。没给 at
 // 就是现在起过一个 interval；给了就对齐到 at，已经过去的顺延到网格上的下一个格子，
 // 所以周日 23 点说「每周日 22 点」，第一次是下周日 22 点，而不是立刻补跑一次。
-func firstScheduleTrigger(firstAt time.Time, interval calendarDuration, now time.Time) time.Time {
-	if firstAt.IsZero() {
-		return interval.AddTo(now)
+//
+// 带日期规则时，at 只提供起始月份和时刻：第一次是 at 当月起、按规则落到的第一个
+// 不早于 at 且晚于现在的日子，后续都以它为原点。
+func firstScheduleTrigger(firstAt time.Time, interval calendarDuration, rule scheduleDayRule, now time.Time) (time.Time, error) {
+	if !rule.IsZero() {
+		if interval.Months == 0 {
+			return time.Time{}, fmt.Errorf("month_day、weekday 只能用于按月或按年重复（interval 写 mo 或 y）")
+		}
+		if firstAt.IsZero() {
+			return time.Time{}, fmt.Errorf("使用 month_day 或 weekday 时必须传 at，指定起始月份和几点触发")
+		}
+		slot := ruleSlotAfter(firstAt, interval.Months, rule, now, firstAt)
+		if slot.IsZero() {
+			return time.Time{}, fmt.Errorf("按这个规则在很长时间内都找不到符合的日子，请换一个规则")
+		}
+		return slot, nil
 	}
-	return scheduleIntervalSlotAfter(firstAt, interval, now)
+	if firstAt.IsZero() {
+		return interval.AddTo(now), nil
+	}
+	return scheduleIntervalSlotAfter(firstAt, interval, now), nil
 }
 
 func (r *Runtime) addScheduledQuery(event MessageEvent, interval calendarDuration, query string) (Reminder, error) {
@@ -371,7 +404,10 @@ func (r *Runtime) addScheduledQueries(event MessageEvent, requests []scheduleCre
 		if query == "" || len([]rune(query)) > maximumScheduleQueryRunes {
 			return nil, fmt.Errorf("第 %d 个周期任务 query 无效", index+1)
 		}
-		triggerAt := firstScheduleTrigger(request.FirstAt, request.Interval, now)
+		triggerAt, err := firstScheduleTrigger(request.FirstAt, request.Interval, request.Rule, now)
+		if err != nil {
+			return nil, fmt.Errorf("第 %d 个周期任务: %w", index+1, err)
+		}
 		reminder := Reminder{
 			ID:               uuid.NewString()[:8],
 			Kind:             ReminderKindQuery,
@@ -388,6 +424,7 @@ func (r *Runtime) addScheduledQueries(event MessageEvent, requests []scheduleCre
 			CreatedAt:        now,
 		}
 		setReminderScheduleInterval(&reminder, request.Interval)
+		setReminderDayRule(&reminder, request.Rule)
 		created = append(created, reminder)
 	}
 	if err := r.reminders.SaveReminders(append(items, created...)); err != nil {
@@ -473,8 +510,12 @@ func (r *Runtime) updateScheduledQuery(ownerID string, id string, input map[stri
 	if err != nil {
 		return Reminder{}, err
 	}
-	if rawInterval == "" && query == "" && firstAt.IsZero() {
-		return Reminder{}, fmt.Errorf("修改定时订阅时至少提供 interval、at 或 query")
+	rule, rulePresent, err := parseScheduleDayRule(input)
+	if err != nil {
+		return Reminder{}, err
+	}
+	if rawInterval == "" && query == "" && firstAt.IsZero() && !rulePresent {
+		return Reminder{}, fmt.Errorf("修改定时订阅时至少提供 interval、at、month_day/weekday 或 query")
 	}
 	var interval calendarDuration
 	if rawInterval != "" {
@@ -490,7 +531,9 @@ func (r *Runtime) updateScheduledQuery(ownerID string, id string, input map[stri
 	defer r.reminderMu.Unlock()
 	items := r.reminders.Reminders()
 	for index := range items {
-		item := &items[index]
+		// 在副本上改，校验失败直接返回时存储里的记录原样不动。
+		updated := items[index]
+		item := &updated
 		if !reminderIsScheduledQuery(*item) || item.OwnerID != ownerID || item.ID != id {
 			continue
 		}
@@ -510,16 +553,30 @@ func (r *Runtime) updateScheduledQuery(ownerID string, id string, input map[stri
 			item.ConsecutiveFailures = 0
 		}
 		switch {
-		case !firstAt.IsZero() || rawInterval != "":
-			// 改了时间或间隔就重新定网格原点；只改间隔没给 at 时从现在起算，和新建一致。
-			item.TriggerAt = firstScheduleTrigger(firstAt, current, now)
-			item.ScheduleAnchorAt = item.TriggerAt
+		case !firstAt.IsZero() || rawInterval != "" || rulePresent:
+			// 改了时间、间隔或日期规则就重新定网格原点；只改间隔没给 at 时从现在起算，
+			// 和新建一致。没给新规则就沿用原规则，规则需要的 at 没给时用原来的原点。
+			if !rulePresent {
+				rule = ruleFromReminder(*item)
+			}
+			start := firstAt
+			if start.IsZero() && !rule.IsZero() {
+				start = item.ScheduleAnchorAt
+			}
+			next, err := firstScheduleTrigger(start, current, rule, now)
+			if err != nil {
+				return Reminder{}, err
+			}
+			item.TriggerAt = next
+			item.ScheduleAnchorAt = next
+			setReminderDayRule(item, rule)
 		case !item.ScheduleAnchorAt.IsZero():
 			// 只改查询内容：时间点不动，落回原来网格上的下一格。
-			item.TriggerAt = scheduleIntervalSlotAfter(item.ScheduleAnchorAt, current, now)
+			item.TriggerAt = nextRecurringTrigger(*item, now, now)
 		default:
 			item.TriggerAt = current.AddTo(now)
 		}
+		items[index] = updated
 		if err := r.reminders.SaveReminders(items); err != nil {
 			return Reminder{}, fmt.Errorf("修改定时订阅失败: %w", err)
 		}
@@ -537,6 +594,7 @@ func scheduleForTool(item Reminder) *dianaSchedule {
 		ID:                  item.ID,
 		Query:               item.Message,
 		Interval:            reminderScheduleInterval(item).String(),
+		Rule:                scheduleRuleLabel(item),
 		NextRunAt:           item.TriggerAt,
 		LastRunAt:           item.LastRunAt,
 		Status:              scheduleStatus(item),

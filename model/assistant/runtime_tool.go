@@ -675,14 +675,13 @@ func (r *Runtime) renderReminders(event MessageEvent) string {
 			state = "已使用"
 		}
 		if reminderIsRecurring(item) {
-			interval := reminderScheduleInterval(item)
 			if item.CancelledAt.IsZero() {
 				state = "运行中"
 				if item.ConsecutiveFailures > 0 {
 					state = "重试中"
 				}
 			}
-			lines = append(lines, fmt.Sprintf("- %s | %s | 每 %s | 下次 %s | %s", item.ID, state, interval, item.TriggerAt.Format("2006-01-02 15:04:05"), item.Message))
+			lines = append(lines, fmt.Sprintf("- %s | %s | %s | 下次 %s | %s", item.ID, state, scheduleEveryLabel(item), item.TriggerAt.Format("2006-01-02 15:04:05"), item.Message))
 			continue
 		}
 		if item.ConsecutiveFailures > 0 && item.LastRunAt.IsZero() && item.CancelledAt.IsZero() {
@@ -768,7 +767,6 @@ func (r *Runtime) renderScheduledQueries(ownerID string) string {
 	})
 	lines := []string{"周期查询订阅："}
 	for _, item := range items {
-		interval := reminderScheduleInterval(item)
 		status := "运行中"
 		if !item.CancelledAt.IsZero() {
 			status = "已取消"
@@ -776,7 +774,7 @@ func (r *Runtime) renderScheduledQueries(ownerID string) string {
 		if item.LastError != "" {
 			status += fmt.Sprintf("，连续失败 %d 次", item.ConsecutiveFailures)
 		}
-		lines = append(lines, fmt.Sprintf("- %s | %s | 每 %s | 下次 %s | %s", item.ID, status, interval, item.TriggerAt.Format("2006-01-02 15:04:05"), item.Message))
+		lines = append(lines, fmt.Sprintf("- %s | %s | %s | 下次 %s | %s", item.ID, status, scheduleEveryLabel(item), item.TriggerAt.Format("2006-01-02 15:04:05"), item.Message))
 	}
 	return strings.Join(lines, "\n")
 }
@@ -1903,6 +1901,13 @@ func nextRecurringTrigger(item Reminder, startedAt time.Time, now time.Time) tim
 		anchor := item.ScheduleAnchorAt
 		if anchor.IsZero() {
 			anchor = startedAt
+		}
+		if rule := ruleFromReminder(item); !rule.IsZero() {
+			// 规则在创建时校验过一定能找到日子；万一找不到也不能返回零值——零值的
+			// TriggerAt 永远算到期，会每秒跑一次。退回按起点日子排。
+			if slot := ruleSlotAfter(anchor, interval.Months, rule, now, time.Time{}); !slot.IsZero() {
+				return slot
+			}
 		}
 		return calendarSlotAfter(anchor, interval.Months, now)
 	}
