@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -466,6 +467,15 @@ func buildForwardNodes(chunks []string, senderName string, senderUIN string) []m
 	return nodes
 }
 
+var oneBotEchoSeq atomic.Uint64
+
+// newOneBotEcho 给一次 action 调用生成 echo。只用时间戳会撞：macOS 的时钟只到
+// 微秒，连接一就绪几条排队的投递同时发出，两条拿到同一个 echo，pending 里后一个
+// 盖掉前一个，前一个再也收不到回执，只能干等到超时、被当成结果不明。
+func newOneBotEcho() string {
+	return strconv.FormatInt(time.Now().UnixNano(), 36) + "-" + strconv.FormatUint(oneBotEchoSeq.Add(1), 36)
+}
+
 // CallAPI 发送 OneBot action 并等待 echo 响应。
 func (c *OneBotChannel) CallAPI(ctx context.Context, action string, params map[string]any) (map[string]any, error) {
 	ctx, cancel := context.WithTimeout(ctx, oneBotCallTimeout(action, params, oneBotTextActionTimeout))
@@ -477,7 +487,7 @@ func (c *OneBotChannel) CallAPI(ctx context.Context, action string, params map[s
 		return nil, newChannelNotConnectedError("diana: onebot websocket is not connected")
 	}
 
-	echo := strconv.FormatInt(time.Now().UnixNano(), 36)
+	echo := newOneBotEcho()
 	resultCh := make(chan callResult, 1)
 	// OneBot API 调用通过 echo 关联异步返回；pending map 等待 read loop 解析响应。
 	c.pending.Store(echo, resultCh)

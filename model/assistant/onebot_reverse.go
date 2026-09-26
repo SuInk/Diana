@@ -266,7 +266,7 @@ func (s *OneBotReverseServer) CallAPI(ctx context.Context, action string, params
 		return nil, newChannelNotConnectedError("diana: onebot reverse websocket is not connected")
 	}
 
-	echo := time.Now().Format("20060102150405.000000000")
+	echo := newOneBotEcho()
 	resultCh := make(chan callResult, 1)
 	// 与正向模式一样，所有 API 调用通过 echo 等待读循环返回结果。
 	s.pending.Store(echo, resultCh)

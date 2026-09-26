@@ -64,3 +64,29 @@ func TestOneBotResolveCallDoesNotBlockOnAbandonedResponse(t *testing.T) {
 		})
 	}
 }
+
+// TestNewOneBotEchoUniqueUnderConcurrency 几条投递同一微秒发出时 echo 也不能撞，
+// 否则 pending 里前一个调用的回执通道被盖掉，只能等到超时。
+func TestNewOneBotEchoUniqueUnderConcurrency(t *testing.T) {
+	const workers, perWorker = 8, 2000
+	results := make(chan string, workers*perWorker)
+	var wg sync.WaitGroup
+	for range workers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for range perWorker {
+				results <- newOneBotEcho()
+			}
+		}()
+	}
+	wg.Wait()
+	close(results)
+	seen := make(map[string]struct{}, workers*perWorker)
+	for echo := range results {
+		if _, dup := seen[echo]; dup {
+			t.Fatalf("echo 重复：%s", echo)
+		}
+		seen[echo] = struct{}{}
+	}
+}
