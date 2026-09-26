@@ -561,6 +561,8 @@ type codingJobRegistry struct {
 	reportMu sync.Mutex
 	// reportRetries 是每个任务正在等连接、等退避的那个汇报协程。
 	reportRetries map[string]*codingReportRetry
+	// reportHolds 是 submit 刚派出去、还在等头几秒结果的任务，见 codingReportHold。
+	reportHolds map[string]*codingReportHold
 	// reportTiming 只给测试调快节奏，零值走默认。
 	reportTiming codingReportTiming
 }
@@ -573,6 +575,7 @@ func (r *Runtime) codingJobs() *codingJobRegistry {
 			approvals: map[string]*codingApprovalWait{},
 
 			reportRetries: map[string]*codingReportRetry{},
+			reportHolds:   map[string]*codingReportHold{},
 		}
 	})
 	return r.codingJobRegistry
@@ -622,20 +625,35 @@ func (r *Runtime) launchCodingJob(
 	instruction string,
 	resumeSession string,
 ) (CodingJob, error) {
+	job, _, err := r.startCodingJob(ctx, event, cfg, workspace, instruction, resumeSession, false)
+	return job, err
+}
+
+// startCodingJob 是 launchCodingJob 的本体。holdReport 为真时返回的通道在任务结束、
+// 结果交到调用方手里时关闭，调用方用完要 releaseReportHold。
+func (r *Runtime) startCodingJob(
+	ctx context.Context,
+	event MessageEvent,
+	cfg codingAgentConfig,
+	workspace codingWorkspace,
+	instruction string,
+	resumeSession string,
+	holdReport bool,
+) (CodingJob, <-chan struct{}, error) {
 	// 归属在派活时就钉死：事件没带档案 ID 时补成解析出的那台，重启后按它认领。
 	// 认不出是哪台机器人收到的消息就不派——派出去之后没人能接回和汇报。
 	owner, ok := r.codingJobOwner(event.ProfileID)
 	if !ok {
-		return CodingJob{}, fmt.Errorf("认不出这条消息属于哪台机器人，编码任务派出去后没法汇报")
+		return CodingJob{}, nil, fmt.Errorf("认不出这条消息属于哪台机器人，编码任务派出去后没法汇报")
 	}
 	if err := prepareCodingRuntime(cfg); err != nil {
-		return CodingJob{}, err
+		return CodingJob{}, nil, err
 	}
 	if err := ensureCodingWorkspace(ctx, workspace); err != nil {
-		return CodingJob{}, err
+		return CodingJob{}, nil, err
 	}
 	if err := os.MkdirAll(codingJobRecordDir(), 0o700); err != nil {
-		return CodingJob{}, err
+		return CodingJob{}, nil, err
 	}
 	job := CodingJob{
 		ID:               "code-" + strings.ReplaceAll(uuid.NewString()[:8], "-", ""),
@@ -656,14 +674,14 @@ func (r *Runtime) launchCodingJob(
 
 	registry := r.codingJobs()
 	if err := registry.claim(workspace.Name, job.ID, cfg.Concurrency); err != nil {
-		return CodingJob{}, err
+		return CodingJob{}, nil, err
 	}
 
 	alwaysAllowPath, _ := r.codingAlwaysAllowPathFor(owner)
 	settingsPath, err := prepareCodingApproval(cfg, job.ID, alwaysAllowPath)
 	if err != nil {
 		registry.release(workspace.Name, job.ID)
-		return CodingJob{}, err
+		return CodingJob{}, nil, err
 	}
 	job.ApprovalMode = cfg.ApprovalMode
 	job.ApprovalTimeoutSeconds = int(cfg.ApprovalTimeout / time.Second)
@@ -671,7 +689,7 @@ func (r *Runtime) launchCodingJob(
 	logFile, err := os.OpenFile(job.LogPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
 	if err != nil {
 		registry.release(workspace.Name, job.ID)
-		return CodingJob{}, err
+		return CodingJob{}, nil, err
 	}
 	args := buildCodingArgs(cfg.Template, map[string]string{
 		"instruction": instruction,
@@ -689,7 +707,7 @@ func (r *Runtime) launchCodingJob(
 	if err := cmd.Start(); err != nil {
 		logFile.Close()
 		registry.release(workspace.Name, job.ID)
-		return CodingJob{}, fmt.Errorf("启动 %s 失败：%w", cfg.Command, err)
+		return CodingJob{}, nil, fmt.Errorf("启动 %s 失败：%w", cfg.Command, err)
 	}
 	logFile.Close()
 	job.PID = cmd.Process.Pid
@@ -697,16 +715,20 @@ func (r *Runtime) launchCodingJob(
 		// 记录写不下去就别让任务跑成孤儿进程：没有记录就没有汇报，也没法取消。
 		killCodingProcess(job.PID)
 		registry.release(workspace.Name, job.ID)
-		return CodingJob{}, fmt.Errorf("保存任务记录失败：%w", err)
+		return CodingJob{}, nil, fmt.Errorf("保存任务记录失败：%w", err)
 	}
 	r.recordCodingJobLog(ctx, job, applog.KindOperation, applog.LevelInfo, "编码任务已启动", instruction)
 	registry.beginWatch(job.ID)
+	var handedOff <-chan struct{}
+	if holdReport {
+		handedOff = registry.holdReport(job.ID)
+	}
 	go func() {
 		defer recoverGoroutinePanic("coding.watchJob")
 		r.watchCodingJob(job, cmd, cfg.ApprovalTimeout)
 	}()
 	r.pruneCodingJobs()
-	return job, nil
+	return job, handedOff, nil
 }
 
 func codingJobEnv(cfg codingAgentConfig) []string {

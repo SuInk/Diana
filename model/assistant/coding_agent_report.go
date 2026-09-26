@@ -19,12 +19,17 @@ const (
 	// （被禁言、接口报错）时的退避。汇报攒的是一小时的活，不设上限次数，进程在就接着试。
 	codingReportRetryInitialDelay = 5 * time.Second
 	codingReportRetryMaxDelay     = 5 * time.Minute
+	// codingSubmitHandOffWindow 是 submit 等任务结束的那几秒。认证失败、账号被封、
+	// 命令不存在这类错几秒内就出结果，这时候汇报会比派活那一轮的回复先到，聊天里
+	// 就成了「失败了」排在「已经在后台跑了」前面。窗口内结束的交给那一轮自己说。
+	codingSubmitHandOffWindow = 8 * time.Second
 )
 
 type codingReportTiming struct {
 	poll         time.Duration
 	initialDelay time.Duration
 	maxDelay     time.Duration
+	handOff      time.Duration
 }
 
 func (t codingReportTiming) withDefaults() codingReportTiming {
@@ -37,7 +42,67 @@ func (t codingReportTiming) withDefaults() codingReportTiming {
 	if t.maxDelay < t.initialDelay {
 		t.maxDelay = max(codingReportRetryMaxDelay, t.initialDelay)
 	}
+	if t.handOff <= 0 {
+		t.handOff = codingSubmitHandOffWindow
+	}
 	return t
+}
+
+// codingReportHold 是派活那一轮还在等的任务。等的期间结束了，结果交给那一轮的
+// 工具返回值，不再单独推汇报。
+type codingReportHold struct {
+	done   chan struct{}
+	handed bool
+}
+
+// holdReport 在守望协程起来之前登记，否则任务秒结束时汇报会抢在登记前发出去。
+func (g *codingJobRegistry) holdReport(jobID string) <-chan struct{} {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	hold := &codingReportHold{done: make(chan struct{})}
+	g.reportHolds[jobID] = hold
+	return hold.done
+}
+
+// handOffReport 由收尾调用：有人在等就把结果交给它，返回真表示这条汇报不用发了。
+func (g *codingJobRegistry) handOffReport(jobID string) bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	hold, ok := g.reportHolds[jobID]
+	if !ok || hold.handed {
+		return ok
+	}
+	hold.handed = true
+	close(hold.done)
+	return true
+}
+
+// releaseReportHold 撤掉登记，返回等待期间结果是否已经交过来。撤掉之后再结束的
+// 任务照常汇报。
+func (g *codingJobRegistry) releaseReportHold(jobID string) bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	hold, ok := g.reportHolds[jobID]
+	delete(g.reportHolds, jobID)
+	return ok && hold.handed
+}
+
+// claimHandedOffReport 把交到派活那一轮手里的结果记成已汇报，返回落盘后的记录。
+// 和 attemptCodingReport 共用 reportMu：同一个结果只能有一处说出去。
+func (r *Runtime) claimHandedOffReport(jobID string) (CodingJob, bool) {
+	registry := r.codingJobs()
+	registry.reportMu.Lock()
+	defer registry.reportMu.Unlock()
+	job, err := loadCodingJob(jobID)
+	if err != nil || job.Reported || !job.finished() {
+		return job, false
+	}
+	job.Reported = true
+	if err := saveCodingJob(job); err != nil {
+		r.setError(err.Error())
+		return job, false
+	}
+	return job, true
 }
 
 // codingReportRetry 是一个汇报协程的登记。记下它跟着哪一轮运行的 ctx：那一轮停了
@@ -81,7 +146,10 @@ func (g *codingJobRegistry) timing() codingReportTiming {
 // 这条汇报就搁到下一次重启。现在目标机器人的连接没就绪就不去撞，交给汇报协程等连上
 // 再发；连着却发失败的按退避重试，直到发出去或者这一轮运行结束。
 func (r *Runtime) reportCodingJob(ctx context.Context, job CodingJob) {
-	if job.Reported || !job.finished() || !codingJobHasRecipient(job) {
+	if job.Reported || !job.finished() {
+		return
+	}
+	if r.codingJobs().handOffReport(job.ID) || !codingJobHasRecipient(job) {
 		return
 	}
 	if r.codingReportConnectionReady(job) && !r.attemptCodingReport(ctx, job) {
