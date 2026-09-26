@@ -490,7 +490,7 @@ const llmConfigured = ref(false);
 const tokenConfigured = ref(false);
 const llmTestResult = ref("");
 const llmTestMessage = ref("hi");
-const selectedService = ref("openai");
+const selectedService = ref("deepseek");
 const savedLLM = ref<LLMConfig | null>(null);
 const savedBot = ref<BotProfileConfig | null>(null);
 const modelOptions = ref<LLMModelInfo[]>([]);
@@ -507,7 +507,7 @@ const manualModelDraft = ref("");
 const llmForm = ref<{ provider: Provider; api_style: "responses" | "chat_completions" | ""; base_url: string; api_key: string }>({
   provider: "openai_compatible",
   api_style: "responses",
-  base_url: "https://api.openai.com/v1",
+  base_url: "https://api.deepseek.com",
   api_key: ""
 });
 

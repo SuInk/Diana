@@ -497,7 +497,7 @@ const editingKeyPreview = ref("");
 const editingProfile = ref<LLMConfig | null>(null);
 const showKey = ref(false);
 const form = ref<LLMFormState>({ ...emptyForm });
-const selectedService = ref("openai");
+const selectedService = ref("deepseek");
 const modelOptions = ref<LLMModelInfo[]>([]);
 const manualModelDraft = ref("");
 // 请求头按「名字 + 值」逐行编辑，和正上方的模型列表用同一套范式。configured 记住
@@ -648,8 +648,8 @@ function startCreate(): void {
   editingProfile.value = null;
   form.value = { ...emptyForm };
   credentialMode.value = "api_key";
-  selectedService.value = "openai";
-  applyServicePreset("openai");
+  selectedService.value = "deepseek";
+  applyServicePreset("deepseek");
   modelOptions.value = [];
   resetHeaderRows(undefined);
   invalidField.value = "";
