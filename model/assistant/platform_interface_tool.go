@@ -141,7 +141,7 @@ func (t *dianaPlatformTool) Run(ctx context.Context, input map[string]any) (stri
 	if owner {
 		access = "owner_full"
 	}
-	operation := strings.ToLower(strings.TrimSpace(configToolString(input, "operation")))
+	operation := t.CanonicalOperation(input)
 	if operation == "" {
 		return "", fmt.Errorf("operation 不能为空")
 	}
@@ -565,4 +565,9 @@ func (r *Runtime) recordPlatformInterfaceOperation(event MessageEvent, operation
 			"message_id":  event.MessageID,
 		},
 	})
+}
+
+// CanonicalOperation 是 Run 实际执行的操作，按操作拦截时用同一套换算。
+func (*dianaPlatformTool) CanonicalOperation(input map[string]any) string {
+	return strings.ToLower(strings.TrimSpace(configToolString(input, "operation")))
 }

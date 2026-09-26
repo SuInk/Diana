@@ -128,7 +128,19 @@ func (r *ToolRegistry) DisabledReason(name string) (string, bool) {
 	return "", false
 }
 
+// CanonicalOperationTool 由按操作分档的工具实现：给出这次调用实际会执行的操作名，
+// 已经套用工具自己的别名表和缺省值。
+//
+// 只比对入参原文拦不住：github 把 create_issue、new 都当 create，llm_config 没写
+// operation 就按 update 执行。拦截必须和工具执行时用同一套换算，所以换算留在工具里，
+// 这里只问结果。同一个动词风险不同时（比如盯当前会话还是盯别的群），工具可以返回
+// 更细的名字，规则按那个名字写。
+type CanonicalOperationTool interface {
+	CanonicalOperation(input map[string]any) string
+}
+
 // OperationDisabledError 在这次调用选中了被关掉的操作时返回拒绝原因，否则返回 nil。
+// 工具实现了 CanonicalOperationTool 就按它换算后的操作名比；没实现的才退回比入参原文。
 func (r *ToolRegistry) OperationDisabledError(name string, input map[string]any) error {
 	if r == nil {
 		return nil
@@ -140,6 +152,11 @@ func (r *ToolRegistry) OperationDisabledError(name string, input map[string]any)
 		return nil
 	}
 	value, _ := input[rule.field].(string)
+	if tool, found := r.Get(name); found {
+		if canonical, ok := tool.(CanonicalOperationTool); ok {
+			value = canonical.CanonicalOperation(input)
+		}
+	}
 	value = strings.ToLower(strings.TrimSpace(value))
 	if !rule.values[value] {
 		return nil

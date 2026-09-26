@@ -427,3 +427,31 @@ func TestSPAHandlerServesIndexForFrontendRoutes(t *testing.T) {
 		t.Fatalf("api 404 = %d %q", rec.Code, rec.Body.String())
 	}
 }
+
+// config.yaml 的机器人段和数据库里的旧配置同一条迁移规则：写着 agent_enabled: true
+// 的只靠 config.yaml 跑的部署，升级后仍是标准模式；没写的是安全模式；写了
+// agent_mode 就按写的来。
+func TestBotSeedConfigMapsLegacyAgentSwitchToMode(t *testing.T) {
+	for body, want := range map[string]string{
+		"bot:\n  agent_enabled: true\n":                          assistant.AgentModeStandard,
+		"bot:\n  owner_id: \"10001\"\n":                          assistant.AgentModeSafe,
+		"bot:\n  agent_enabled: true\n  agent_mode: safe\n":      assistant.AgentModeSafe,
+		"bot:\n  agent_enabled: false\n  agent_mode: standard\n": assistant.AgentModeStandard,
+	} {
+		path := filepath.Join(t.TempDir(), "config.yaml")
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		cfg, err := loadAppConfig(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		bot, _, err := cfg.botSeedConfig(defaultOneBotEndpoint("18080"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if bot.AgentMode != want || !bot.AgentEnabled {
+			t.Fatalf("%q → mode=%q enabled=%v, want %q", body, bot.AgentMode, bot.AgentEnabled, want)
+		}
+	}
+}

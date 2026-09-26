@@ -3909,7 +3909,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			}
 			// 存二进制文件和 write_file 同一档：都是往磁盘上写，跟着「允许写入文件」走。
 			// 它不在 allowedAgentToolNames 里，群成员拿不到。
-			if cfg.AgentFileWriteEnabled {
+			if cfg.agentFileWriteAllowed() {
 				extraTools = append(extraTools, newDianaSaveToWorkspaceTool(r, event))
 			}
 			// 跨会话发送只在「确实存在另一条会话可发」时才有意义。群里人人可用，

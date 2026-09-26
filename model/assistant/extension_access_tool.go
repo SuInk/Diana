@@ -67,10 +67,7 @@ func (t *dianaExtensionAccessTool) Run(ctx context.Context, input map[string]any
 	if !base.IsOwnerEvent(t.event) {
 		return "", fmt.Errorf("只有机器人主人可以改扩展的开放范围")
 	}
-	action := strings.TrimSpace(configToolString(input, "action"))
-	if action == "" {
-		action = "list"
-	}
+	action := t.CanonicalOperation(input)
 	id := strings.TrimSpace(configToolString(input, "id"))
 	if action != "list" && id == "" {
 		return "", fmt.Errorf("请给出扩展 ID，形如 mcp:notes，可先用 action=list 查")
@@ -401,4 +398,13 @@ func toolJSON(payload map[string]any) (string, error) {
 		return "", err
 	}
 	return string(body), nil
+}
+
+// CanonicalOperation 是 Run 实际执行的动作：没写 action 按 list 算。
+func (*dianaExtensionAccessTool) CanonicalOperation(input map[string]any) string {
+	action := strings.TrimSpace(configToolString(input, "action"))
+	if action == "" {
+		return "list"
+	}
+	return action
 }

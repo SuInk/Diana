@@ -47,7 +47,7 @@ func (t *dianaBotMarkersTool) Run(ctx context.Context, input map[string]any) (st
 	if scope == "group" && (t.event.Kind != EventKindGroup || t.event.GroupID == "") {
 		return "", fmt.Errorf("群级标记只能在目标群内操作")
 	}
-	op := configToolString(input, "operation")
+	op := t.CanonicalOperation(input)
 	if op != "list" && op != "mark" && op != "unmark" {
 		return "", fmt.Errorf("operation 必须为 mark、unmark 或 list")
 	}
@@ -134,4 +134,9 @@ func (r *Runtime) updateMarkedBotID(profileID, actorID, userID string, marked bo
 		return nil, err
 	}
 	return ids, nil
+}
+
+// CanonicalOperation 是 Run 实际执行的操作，按操作拦截时用同一套换算。
+func (*dianaBotMarkersTool) CanonicalOperation(input map[string]any) string {
+	return configToolString(input, "operation")
 }

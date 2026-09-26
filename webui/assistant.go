@@ -524,7 +524,9 @@ func (h *BotHandler) saveProfile(c *gin.Context, create bool) {
 		return
 	}
 	recordRequestOperation(c, h.logs, "config_save", "OneBot v11 机器人配置已保存", current.ID, botLogMetadata(current))
-	if !create {
+	if create {
+		h.recordAgentModeChange(c, assistant.BotConfig{}, current)
+	} else {
 		h.recordAgentModeChange(c, existing, current)
 	}
 	c.JSON(http.StatusOK, assistant.PayloadFromProfileSet(next, savedID))

@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/SuInk/diana/model/agent"
+	"github.com/SuInk/diana/model/llm"
 )
 
 // standardModeBotConfig 是新建配置切到标准模式后的样子。测标准模式下工具怎么挂的
@@ -69,6 +70,19 @@ func TestStoredProfilesMigrateAgentEnabledToMode(t *testing.T) {
 	}
 }
 
+// 模式为空按安全模式算：只有明确写着 standard 才给全部能力。
+func TestEmptyAgentModeFailsClosed(t *testing.T) {
+	if !(BotConfig{AgentEnabled: true}).agentSafeMode() {
+		t.Fatal("没写模式的配置被当成了标准模式")
+	}
+	if (BotConfig{AgentMode: AgentModeStandard}).agentSafeMode() {
+		t.Fatal("明确的标准模式被当成了安全模式")
+	}
+	if AgentModeForLegacyConfig("", true) != AgentModeStandard || AgentModeForLegacyConfig("", false) != AgentModeSafe || AgentModeForLegacyConfig("safe", true) != AgentModeSafe {
+		t.Fatal("旧开关换算规则变了")
+	}
+}
+
 func TestNewBotDefaultsToSafeMode(t *testing.T) {
 	cfg := DefaultBotConfig()
 	if cfg.AgentMode != AgentModeSafe || !cfg.AgentEnabled {
@@ -80,8 +94,9 @@ func TestNewBotDefaultsToSafeMode(t *testing.T) {
 }
 
 // 界面保存：请求写了模式就用请求的；编辑已有机器人时没带模式（旧前端只会回传
-// agent_enabled=true）要沿用现有模式，不能把安全模式悄悄升成标准模式；新建和
-// config.yaml 播种没带模式时按 agent_enabled 换算。
+// agent_enabled=true）要沿用现有模式，不能把安全模式悄悄升成标准模式；新建时没带
+// 模式一律安全模式，旧前端新建带的 agent_enabled=true 不算数。config.yaml 播种按旧
+// 开关换算，由播种方先写进 payload，见 AgentModeForLegacyConfig。
 func TestConfigFromPayloadResolvesAgentMode(t *testing.T) {
 	existingSafe := DefaultBotConfig()
 	existingSafe.ID = "bot-a"
@@ -95,7 +110,8 @@ func TestConfigFromPayloadResolvesAgentMode(t *testing.T) {
 		{name: "显式标准", payload: ConfigPayload{ID: "bot-a", AgentMode: AgentModeStandard}, existing: existingSafe, want: AgentModeStandard},
 		{name: "显式安全", payload: ConfigPayload{ID: "bot-a", AgentMode: AgentModeSafe, AgentEnabled: true}, existing: standardWithID("bot-a"), want: AgentModeSafe},
 		{name: "旧前端编辑不升级", payload: ConfigPayload{ID: "bot-a", AgentEnabled: true}, existing: existingSafe, want: AgentModeSafe},
-		{name: "新建旧开关开着", payload: ConfigPayload{AgentEnabled: true}, existing: DefaultBotConfig(), want: AgentModeStandard},
+		{name: "旧前端新建仍是安全", payload: ConfigPayload{AgentEnabled: true}, existing: DefaultBotConfig(), want: AgentModeSafe},
+		{name: "播种按旧开关换算", payload: ConfigPayload{AgentEnabled: true, AgentMode: AgentModeForLegacyConfig("", true)}, existing: DefaultBotConfig(), want: AgentModeStandard},
 		{name: "新建旧开关关着", payload: ConfigPayload{}, existing: DefaultBotConfig(), want: AgentModeSafe},
 	}
 	for _, tt := range tests {
@@ -120,6 +136,12 @@ func standardWithID(id string) BotConfig {
 // safeModeTestRegistry 按主人身份建一份注册表，并挂上安全模式要管的那些运行时工具。
 func safeModeTestRegistry(t *testing.T, mode string) *agent.ToolRegistry {
 	t.Helper()
+	registry, _ := safeModeTestRegistryWithRuntime(t, mode)
+	return registry
+}
+
+func safeModeTestRegistryWithRuntime(t *testing.T, mode string) (*agent.ToolRegistry, *Runtime) {
+	t.Helper()
 	cfg := DefaultBotConfig()
 	cfg.AgentMode = mode
 	cfg.AgentMCPConfigPath = filepath.Join(t.TempDir(), "missing-mcp.json")
@@ -142,12 +164,16 @@ func safeModeTestRegistry(t *testing.T, mode string) *agent.ToolRegistry {
 		newDianaLLMConfigTool(runtime, event),
 		newDianaCodingTool(runtime, event, codingSettings(nil)),
 		newDianaGitHubTool(runtime, event, nil, nil),
+		newDianaEventTriggerTool(runtime, event),
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = registry.Close() })
-	return registry
+	t.Cleanup(func() {
+		_ = registry.Close()
+		runtime.closeAgentRegistryCache()
+	})
+	return registry, runtime
 }
 
 // 安全模式对主人同样生效：规则表里每一项都被关掉，调用时拿到的是那句中文说明；
@@ -274,5 +300,133 @@ func TestAgentSafeModeCatalogCoversEveryRule(t *testing.T) {
 	}
 	if total != len(AgentSafeModeRules) {
 		t.Fatalf("目录里 %d 条规则，规则表 %d 条", total, len(AgentSafeModeRules))
+	}
+}
+
+// 按操作拦截的规则必须和工具执行时用同一套换算，否则别名和缺省值就是旁路。这里要求
+// 每个带操作规则的工具都实现 CanonicalOperation：新加规则忘了实现会在这里失败。
+func TestEveryOperationRuleToolReportsCanonicalOperation(t *testing.T) {
+	registry := safeModeTestRegistry(t, AgentModeSafe)
+	for _, rule := range AgentSafeModeRules {
+		if len(rule.Operations) == 0 {
+			continue
+		}
+		tool, ok := registry.Get(rule.Tool)
+		if !ok {
+			t.Fatalf("测试注册表里没有 %s，覆盖不到它的规则", rule.Tool)
+		}
+		if _, ok := tool.(agent.CanonicalOperationTool); !ok {
+			t.Fatalf("%s 有按操作的安全模式规则，却没实现 CanonicalOperation", rule.Tool)
+		}
+	}
+}
+
+// 端到端：真实工具挂在安全模式的注册表里，模型按各种别名、大小写和缺省参数调用，
+// 经 Runner 执行后都必须拿到安全模式的拒绝，而不是被工具按别名执行掉。用例按工具
+// 自己的别名表写，不是照抄规则表。
+func TestSafeModeRunnerRejectsOperationAliases(t *testing.T) {
+	registry := safeModeTestRegistry(t, AgentModeSafe)
+	denied := []struct {
+		tool  string
+		input map[string]any
+	}{
+		{"github", map[string]any{"operation": "create_issue", "repository": "octo/demo"}},
+		{"github", map[string]any{"operation": "new", "repository": "octo/demo"}},
+		{"github", map[string]any{"operation": "CREATE", "repository": "octo/demo"}},
+		{"github", map[string]any{"operation": "edit", "repository": "octo/demo", "number": 1}},
+		{"github", map[string]any{"operation": "update_issue", "repository": "octo/demo", "number": 1}},
+		{"github", map[string]any{"operation": "comment_issue", "repository": "octo/demo", "number": 1}},
+		{"github", map[string]any{"operation": "reply", "repository": "octo/demo", "number": 1}},
+		{"github", map[string]any{"operation": "review_pull", "repository": "octo/demo", "number": 1}},
+		{"github", map[string]any{"operation": "pull_review", "repository": "octo/demo", "number": 1}},
+		{"github", map[string]any{"operation": "closed", "repository": "octo/demo", "number": 1}},
+		{"github", map[string]any{"operation": "set_state", "state": "closed", "repository": "octo/demo", "number": 1}},
+		{"github", map[string]any{"operation": "set_state", "state": "open", "repository": "octo/demo", "number": 1}},
+		{"github", map[string]any{"operation": "reopen", "repository": "octo/demo", "number": 1}},
+		{"github", map[string]any{"operation": "approve_draft", "code": "00000"}},
+		{"llm_config", map[string]any{"model": "other-model"}},
+		{"llm_config", map[string]any{"operation": " Update ", "model": "other-model"}},
+		{"bot_config", map[string]any{"operation": "update", "chat_level": "always"}},
+		{"reply_block", map[string]any{"operation": "block", "user_id": "10002"}},
+		{"reply_block", map[string]any{"operation": "unblock", "user_id": "10002"}},
+		{"bot_markers", map[string]any{"operation": "mark", "scope": "bot", "user_id": "10002"}},
+		{"bot_markers", map[string]any{"operation": "unmark", "scope": "group", "user_id": "10002"}},
+		{"extension_access", map[string]any{"action": "bot_tier", "id": "mcp:notes", "tier": "members"}},
+		{"extension_access", map[string]any{"action": "allow", "id": "mcp:notes", "user_id": "10002"}},
+		{"platform", map[string]any{"operation": "KICK", "user_id": "10002"}},
+		{"platform", map[string]any{"operation": "mute", "user_id": "10002", "duration": 60}},
+		{"platform", map[string]any{"operation": "unmute", "user_id": "10002"}},
+		{"onebot_requests", map[string]any{"operation": "approve", "id": "1"}},
+		{"onebot_requests", map[string]any{"operation": "Reject", "id": "1"}},
+		{agent.ManageFilesToolName, map[string]any{"action": "DELETE", "path": "a.txt"}},
+		{agent.ManageFilesToolName, map[string]any{"action": "move", "path": "a.txt", "to": "b.txt"}},
+		{agent.ManageFilesToolName, map[string]any{"action": "mkdir", "path": "keep/x"}},
+		{"event_trigger", map[string]any{"operation": "create", "where": "group", "group_id": "20002", "message": "hi"}},
+		{"event_trigger", map[string]any{"operation": "add", "where": "anywhere", "message": "hi"}},
+		{"event_trigger", map[string]any{"operation": "create", "where": " GROUP ", "group_id": "20001", "message": "hi"}},
+	}
+	for _, tc := range denied {
+		call, err := json.Marshal(map[string]any{"action": "tool", "tool": tc.tool, "input": tc.input})
+		if err != nil {
+			t.Fatal(err)
+		}
+		provider := &agentSequenceLLMProvider{responses: []string{string(call), `{"action":"final","content":"做不了"}`}}
+		runner, err := agent.NewRunner(provider, agent.Config{MaxSteps: 3}, registry)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp, err := runner.Run(context.Background(), agent.Request{Messages: []llm.Message{{Role: llm.RoleUser, Content: "照做"}}})
+		if err != nil {
+			t.Fatalf("%s %v: %v", tc.tool, tc.input, err)
+		}
+		if len(resp.Steps) == 0 || !strings.Contains(resp.Steps[0].Error, agentSafeModeDisabledMessage) {
+			t.Fatalf("%s %v 没有被安全模式拦下：%+v", tc.tool, tc.input, resp.Steps)
+		}
+	}
+
+	allowed := []struct {
+		tool  string
+		input map[string]any
+	}{
+		{"github", map[string]any{"operation": "get"}},
+		{"github", map[string]any{"operation": "view"}},
+		{"github", map[string]any{"operation": "cancel_draft"}},
+		{"llm_config", map[string]any{"operation": "list"}},
+		{"bot_config", map[string]any{"operation": "get"}},
+		{"reply_block", map[string]any{"operation": "list"}},
+		{"extension_access", map[string]any{}},
+		{"platform", map[string]any{"operation": "recall"}},
+		{"onebot_requests", map[string]any{"operation": "list"}},
+		{agent.ManageFilesToolName, map[string]any{"action": "stat", "path": "a.txt"}},
+		{"event_trigger", map[string]any{"operation": "add", "message": "hi"}},
+		{"event_trigger", map[string]any{"operation": "create", "where": "here", "message": "hi"}},
+		{"event_trigger", map[string]any{"operation": "remove", "id": "1"}},
+	}
+	for _, tc := range allowed {
+		if err := registry.OperationDisabledError(tc.tool, tc.input); err != nil {
+			t.Fatalf("%s %v 不该被拦：%v", tc.tool, tc.input, err)
+		}
+	}
+}
+
+// 全是安全模式时不拉起共享扩展底座：底座一建就会启动配置里的全部 MCP 服务。Skill 说明
+// 仍然读得到（直接读 Skill 目录），标准模式照旧拉起底座。
+func TestSafeModeDoesNotStartSharedExtensionBase(t *testing.T) {
+	registry, runtime := safeModeTestRegistryWithRuntime(t, AgentModeSafe)
+	runtime.agentRegistryMu.Lock()
+	started := len(runtime.agentRegistryCache)
+	runtime.agentRegistryMu.Unlock()
+	if started != 0 {
+		t.Fatalf("安全模式拉起了 %d 个共享扩展底座", started)
+	}
+	if _, ok := registry.Get("read_skill"); !ok {
+		t.Fatal("安全模式下 read_skill 不见了")
+	}
+	_, standard := safeModeTestRegistryWithRuntime(t, AgentModeStandard)
+	standard.agentRegistryMu.Lock()
+	started = len(standard.agentRegistryCache)
+	standard.agentRegistryMu.Unlock()
+	if started == 0 {
+		t.Fatal("标准模式的主人会话应当拉起共享扩展底座")
 	}
 }

@@ -87,13 +87,38 @@ func (t *dianaEventTriggerTool) InputSchema() map[string]any {
 	})
 }
 
+// 创建分两档：只盯当前会话（where 省略或 here）是 create；盯别的群或任何地方是
+// create_elsewhere。后者等于一条随时往别的会话发话、甚至在别处跑 Agent 的通道，
+// 安全模式按这个名字只关它，见 AgentSafeModeRules。
+const (
+	eventTriggerOpCreate          = "create"
+	eventTriggerOpCreateElsewhere = "create_elsewhere"
+)
+
+// CanonicalOperation 是 Run 实际执行的操作：add 算 create，remove 算 delete，
+// 创建再按 where 分成 create 和 create_elsewhere。按操作拦截时用同一套换算。
+func (t *dianaEventTriggerTool) CanonicalOperation(input map[string]any) string {
+	switch operation := strings.ToLower(strings.TrimSpace(configToolString(input, "operation"))); operation {
+	case "create", "add":
+		switch strings.ToLower(strings.TrimSpace(configToolString(input, "where"))) {
+		case "", eventTriggerWhereHere:
+			return eventTriggerOpCreate
+		}
+		return eventTriggerOpCreateElsewhere
+	case "remove":
+		return "delete"
+	default:
+		return operation
+	}
+}
+
 func (t *dianaEventTriggerTool) Run(ctx context.Context, input map[string]any) (string, error) {
 	if t == nil || t.runtime == nil {
 		return "", fmt.Errorf("diana event trigger: runtime is not configured")
 	}
 	ownerID := strings.TrimSpace(t.event.UserID)
-	switch strings.ToLower(strings.TrimSpace(configToolString(input, "operation"))) {
-	case "create", "add":
+	switch t.CanonicalOperation(input) {
+	case eventTriggerOpCreate, eventTriggerOpCreateElsewhere:
 		if eventTriggerRunFromContext(ctx) {
 			return "", fmt.Errorf("触发任务执行期间不能再创建触发任务")
 		}
@@ -133,7 +158,7 @@ func (t *dianaEventTriggerTool) Run(ctx context.Context, input map[string]any) (
 		return marshalDianaEventTriggerResult(dianaEventTriggerResult{
 			OK: true, Action: "cancelled", Message: "事件触发任务已取消并释放额度，记录仍保留。", Trigger: eventTriggerForTool(item),
 		})
-	case "delete", "remove":
+	case "delete":
 		id := strings.TrimSpace(configToolString(input, "id"))
 		if id == "" {
 			return "", fmt.Errorf("删除触发任务时必须提供 id")

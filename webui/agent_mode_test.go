@@ -74,12 +74,41 @@ func TestSavingAgentModeChangeWritesAuditLog(t *testing.T) {
 	if len(changes) != 1 {
 		t.Fatalf("模式变更日志 %d 条，want 1: %#v", len(changes), operations)
 	}
+	// ListLogs 新的在前；下面新建机器人还会再记一条，先把这条留着比对。
 	entry := changes[0]
 	if entry.Actor != "admin" || entry.Target != current.ID || !strings.Contains(entry.Message, "标准模式") || !strings.Contains(entry.Message, "安全模式") {
 		t.Fatalf("模式变更日志 = %#v", entry)
 	}
 	if entry.Metadata["agent_mode_from"] != assistant.AgentModeStandard || entry.Metadata["agent_mode_to"] != assistant.AgentModeSafe {
 		t.Fatalf("模式变更日志元数据 = %#v", entry.Metadata)
+	}
+
+	// 旧版前端新建机器人只带 agent_enabled=true：新建一律安全模式，并同样记一条日志。
+	raw := []byte(`{"name":"legacy-create","platform":"onebot-v11","onebot_reverse_ws_endpoint":"ws://127.0.0.1:18081/onebot/v11/ws","agent_enabled":true}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/assistant/config/new", bytes.NewReader(raw))
+	req.Header.Set("X-Diana-Actor", "admin")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("create status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	profiles := handler.profiles.Profiles().Profiles
+	created := profiles[len(profiles)-1]
+	if created.Name != "legacy-create" || created.AgentMode != assistant.AgentModeSafe {
+		t.Fatalf("旧前端新建的机器人 name=%q mode=%q", created.Name, created.AgentMode)
+	}
+	operations, err = logStore.ListLogs(ctx, storage.AppLogFilter{Kind: storage.LogKindOperation, Limit: 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, entry := range operations {
+		if entry.Action == "agent_mode_change" && entry.Target == created.ID && strings.Contains(entry.Message, "新建机器人") && entry.Metadata["agent_mode_to"] == assistant.AgentModeSafe {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("新建机器人没有记模式日志: %#v", operations)
 	}
 }
 

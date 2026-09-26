@@ -49,6 +49,7 @@ func agentModeLabel(mode string) string {
 // 它的变更要能单独查到，不能淹在一条笼统的「配置已保存」里。
 //
 // 切到安全模式时正在跑的编码任务不会被打断，这里把数量一并记下，事后查得到。
+// 新建机器人时 before 传零值，记下它建成了哪个模式。
 func (h *BotHandler) recordAgentModeChange(c *gin.Context, before, after assistant.BotConfig) {
 	from := assistant.NormalizeAgentMode(before.AgentMode)
 	to := assistant.NormalizeAgentMode(after.AgentMode)
@@ -59,6 +60,10 @@ func (h *BotHandler) recordAgentModeChange(c *gin.Context, before, after assista
 	metadata["agent_mode_from"] = from
 	metadata["agent_mode_to"] = to
 	message := "机器人 Agent 模式已从" + agentModeLabel(from) + "切换为" + agentModeLabel(to)
+	if from == "" {
+		// 新建机器人也记一条：新建默认安全模式，建成标准模式的要查得到是谁。
+		message = "新建机器人，Agent 模式为" + agentModeLabel(to)
+	}
 	if to == assistant.AgentModeSafe {
 		if running := h.runningCodingJobs(after.ID); running > 0 {
 			metadata["running_coding_jobs"] = running

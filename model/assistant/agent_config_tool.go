@@ -407,7 +407,7 @@ func dianaBotConfigFromConfig(cfg BotConfig) dianaBotConfigSnapshot {
 		RequestTimeoutMS:                cfg.RequestTimeout.Milliseconds(),
 		Agent: dianaAgentConfigSnapshot{
 			Enabled:          cfg.AgentEnabled,
-			Mode:             NormalizeAgentMode(cfg.AgentMode),
+			Mode:             cfg.effectiveAgentMode(),
 			SafeModeDisabled: agentSafeModeDisabledList(cfg),
 			WorkDir:          AgentWorkspaceDir(),
 			MaxSteps:         cfg.AgentMaxSteps,

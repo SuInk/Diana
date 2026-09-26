@@ -412,7 +412,7 @@ func (t *dianaGitHubTool) InputSchema() map[string]any {
 }
 
 func (t *dianaGitHubTool) Run(ctx context.Context, input map[string]any) (string, error) {
-	operation := normalizeRepositoryIssueOperation(configToolString(input, "operation"), configToolString(input, "state"))
+	operation := t.CanonicalOperation(input)
 	result := repositoryIssueResult{Operation: operation, Message: "GitHub Issue 操作未执行。"}
 	if operation == "" {
 		return t.finish(ctx, result.fail("invalid_operation", "operation 必须是 repo_search、repo、search、get、pull_files、commit_files、compare_files、read_file、list_files、create、update、comment、review、close、reopen、approve、cancel_draft 或 list_drafts。"))
@@ -3558,4 +3558,10 @@ func (t *dianaGitHubTool) audit(result repositoryIssueResult) {
 		Target:   target,
 		Metadata: metadata,
 	})
+}
+
+// CanonicalOperation 套用 normalizeRepositoryIssueOperation 的别名表（create_issue、
+// edit、reply、set_state+state=closed……），按操作拦截时和 Run 用同一套换算。
+func (t *dianaGitHubTool) CanonicalOperation(input map[string]any) string {
+	return normalizeRepositoryIssueOperation(configToolString(input, "operation"), configToolString(input, "state"))
 }

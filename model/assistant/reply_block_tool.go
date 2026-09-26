@@ -48,7 +48,7 @@ func (t *dianaReplyBlockTool) Run(ctx context.Context, input map[string]any) (st
 	if t == nil || t.runtime == nil {
 		return "", fmt.Errorf("机器人运行时不可用")
 	}
-	op := strings.TrimSpace(configToolString(input, "operation"))
+	op := t.CanonicalOperation(input)
 	if op != "block" && op != "unblock" && op != "list" {
 		return "", fmt.Errorf("operation 必须为 block、unblock 或 list")
 	}
@@ -257,4 +257,9 @@ func (r *Runtime) recordReplyBlockChanged(ctx context.Context, event MessageEven
 			"blocked_users":  blocked,
 		},
 	})
+}
+
+// CanonicalOperation 是 Run 实际执行的操作，按操作拦截时用同一套换算。
+func (*dianaReplyBlockTool) CanonicalOperation(input map[string]any) string {
+	return strings.TrimSpace(configToolString(input, "operation"))
 }

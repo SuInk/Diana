@@ -4,6 +4,8 @@
 package assistant
 
 import (
+	"log"
+	"sort"
 	"strings"
 
 	"github.com/SuInk/diana/model/agent"
@@ -39,10 +41,19 @@ func NormalizeAgentMode(mode string) string {
 	}
 }
 
-// agentSafeMode 报告这台机器人是不是在安全模式下。没迁移过的配置（模式为空）按
-// 标准模式算：那只会是测试或内部直接构造的配置，真实加载路径都会先迁移。
+// agentSafeMode 报告这台机器人是不是在安全模式下。只有明确写着 standard 才算标准模式，
+// 模式为空也按安全模式算（失败时关着）：加载、保存、播种这几条路径都会先把旧的
+// agent_enabled=true 显式迁成 standard，漏迁的配置宁可少给能力，也不能多给。
 func (cfg BotConfig) agentSafeMode() bool {
-	return NormalizeAgentMode(cfg.AgentMode) == AgentModeSafe
+	return NormalizeAgentMode(cfg.AgentMode) != AgentModeStandard
+}
+
+// effectiveAgentMode 是这台机器人实际生效的模式，模式为空时同样报安全模式。
+func (cfg BotConfig) effectiveAgentMode() string {
+	if cfg.agentSafeMode() {
+		return AgentModeSafe
+	}
+	return AgentModeStandard
 }
 
 // migrateAgentMode 把旧的 agent_enabled 开关换算成模式，迁移后 Agent 总是开着。
@@ -54,18 +65,23 @@ func (cfg BotConfig) agentSafeMode() bool {
 //
 // 新建机器人不经过这里，DefaultBotConfig 直接给安全模式。
 func migrateAgentMode(cfg BotConfig) BotConfig {
-	mode := NormalizeAgentMode(cfg.AgentMode)
-	if mode == "" {
-		mode = AgentModeSafe
-		if cfg.AgentEnabled {
-			mode = AgentModeStandard
-		}
-	}
-	cfg.AgentMode = mode
+	cfg.AgentMode = AgentModeForLegacyConfig(cfg.AgentMode, cfg.AgentEnabled)
 	// 旧的非 Agent 路径（AgentEnabled=false）从界面上已经走不到了，待后续移除；这里
 	// 把开关钉成 true，后面所有按 AgentEnabled 分支的地方都走 Agent 路径。
 	cfg.AgentEnabled = true
 	return cfg
+}
+
+// AgentModeForLegacyConfig 是旧配置的换算规则：写了模式就用写的，没写时 agent_enabled
+// 开着算标准模式、关着或没写算安全模式。migrateAgentMode 和 config.yaml 播种共用它。
+func AgentModeForLegacyConfig(mode string, agentEnabled bool) string {
+	if mode = NormalizeAgentMode(mode); mode != "" {
+		return mode
+	}
+	if agentEnabled {
+		return AgentModeStandard
+	}
+	return AgentModeSafe
 }
 
 // WithAgentModeMigrated 对配置集里每台机器人做一次模式迁移，见 migrateAgentMode。
@@ -116,7 +132,7 @@ const (
 var AgentSafeModeCategories = []AgentSafeModeCategory{
 	{ID: safeModeCategoryHostExec, Label: "本机代码执行", Impact: "本机命令（run_command）和编码代理停用，浏览器里也不能执行脚本"},
 	{ID: safeModeCategoryThirdParty, Label: "安装和运行第三方代码", Impact: "不能安装、卸载或启用 Skill 和 MCP；已启用的 MCP 工具不可用（Skill 说明文档仍可读取）"},
-	{ID: safeModeCategoryActAsOwner, Label: "以主人身份对外操作", Impact: "内置浏览器和浏览器控制扩展（带主人登录态）不能再操作；GitHub 写操作、跨会话/跨群发送停用"},
+	{ID: safeModeCategoryActAsOwner, Label: "以主人身份对外操作", Impact: "内置浏览器和浏览器控制扩展（带主人登录态）不能再操作；GitHub 写操作、跨会话/跨群发送（含盯别的群的事件触发任务）停用"},
 	{ID: safeModeCategoryFileWrite, Label: "改动本地文件", Impact: "不能再写入、编辑、保存或整理工作区文件（列目录、读取、检索、发送附件照常）"},
 	{ID: safeModeCategorySelfModify, Label: "改机器人设置和群管", Impact: "不能改机器人配置、回复屏蔽名单、机器人标记、模型设置和扩展权限，不能禁言、踢人或处理好友和加群请求"},
 }
@@ -165,6 +181,12 @@ var AgentSafeModeRules = []AgentSafeModeRule{
 		Operations: []string{"create", "update", "comment", "review", "close", "reopen", "approve"},
 		Reason:     "以主人配置的 GitHub 身份写入仓库；读仓库、搜 Issue 照常"},
 	{Category: safeModeCategoryActAsOwner, Tool: dianaCrossSessionToolName, Reason: "往当前会话以外的私聊或群发消息"},
+	// 事件触发任务：盯别的群或任何地方的（where=group / anywhere）等于一条往别的会话
+	// 发话、在别处跑 Agent 的长期通道，关掉；只盯当前会话、结果也发回当前会话的照常，
+	// 查看、取消、删除照常。取保守的一边：where=group 哪怕填的就是当前群也算别处。
+	{Category: safeModeCategoryActAsOwner, Tool: dianaEventTriggerToolName, Field: "operation",
+		Operations: []string{eventTriggerOpCreateElsewhere},
+		Reason:     "创建盯别的群或任何地方的事件触发任务；只盯当前会话的照常"},
 
 	// 改动本地文件：写入锁在 workspace 里，但注入能借它留下文件、改掉别的任务的产物。
 	// 长期保存区 keep/ 的写入（save_to_workspace keep=true、write_file/edit_file/manage_files
@@ -205,6 +227,13 @@ func restrictAgentConfigForMode(cfg BotConfig, agentCfg agent.Config) agent.Conf
 	agentCfg.BrowserToolsDisabled = true
 	agentCfg.ExtensionManagement = false
 	return agentCfg
+}
+
+// agentFileWriteAllowed 是「这台机器人能不能往工作目录写」的唯一判断：写入开关打开、
+// 且不在安全模式。不经过工具的写入（比如画图成品自动落进 outputs/）也要问它，
+// 只看 AgentFileWriteEnabled 会让安全模式下照样往磁盘写。
+func (cfg BotConfig) agentFileWriteAllowed() bool {
+	return cfg.AgentFileWriteEnabled && !cfg.agentSafeMode()
 }
 
 // applyAgentSafeMode 按 AgentSafeModeRules 把注册表收窄到安全模式。标准模式原样返回。
@@ -287,4 +316,29 @@ func (r *Runtime) RunningCodingJobCount(profileID string) int {
 		}
 	}
 	return count
+}
+
+// safeModeLocalSkills 直接读 Skill 目录，给没有共享底座的安全模式会话用。只读 SKILL.md，
+// 不碰 MCP 配置、不启动任何进程；目录读失败时返回能读到的那部分。
+func safeModeLocalSkills(agentCfg agent.Config) []agent.SkillMetadata {
+	paths, err := agent.GlobalExtensionPaths(agentCfg)
+	if err != nil {
+		log.Printf("diana agent: 安全模式读取 Skill 目录位置失败: %v", err)
+		return nil
+	}
+	skills, err := agent.LoadSkills(paths.SkillRoots)
+	if err != nil {
+		log.Printf("diana agent: 安全模式读取 Skill 目录失败: %v", err)
+	}
+	return skills
+}
+
+// skillExtensionIDs 把 Skill 列表换成扩展 ID（skill:<名字>），算群成员放行范围用。
+func skillExtensionIDs(skills []agent.SkillMetadata) []string {
+	ids := make([]string, 0, len(skills))
+	for _, skill := range skills {
+		ids = append(ids, "skill:"+skill.Name)
+	}
+	sort.Strings(ids)
+	return ids
 }

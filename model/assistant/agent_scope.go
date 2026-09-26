@@ -45,7 +45,11 @@ func (r *Runtime) newAgentRegistry(ctx context.Context, cfg BotConfig, event Mes
 	// 起不起共享底座只看「有没有可能对非主人开」，这一步不碰扩展目录，也就不会
 	// 为一句群闲聊把 MCP 进程拉起来。
 	mayOpen := relationship.Owner || len(agent.MemberAllowedExtensionIDs(overrides)) > 0 || groupOpensExtensions(groupAccess)
-	base, err := r.agentExtensionBase(ctx, agentCfg, mayOpen)
+	// 安全模式不为自己拉起共享底座：底座一建就会把配置里的 MCP 服务全部启动，那是在
+	// 本机跑第三方程序，工具摘不摘都已经发生了。别的标准模式机器人已经拉起来的底座
+	// 照样借用（MCP 工具由 applyAgentSafeMode 摘掉）；全是安全模式时 MCP 进程一个不起。
+	safe := cfg.agentSafeMode()
+	base, err := r.agentExtensionBase(ctx, agentCfg, mayOpen && !safe)
 	if err != nil {
 		return nil, err
 	}
@@ -56,12 +60,25 @@ func (r *Runtime) newAgentRegistry(ctx context.Context, cfg BotConfig, event Mes
 			return nil, err
 		}
 	}
+	// localSkills 只在「安全模式、没有底座」时用：Skill 本来由底座扫描，底座不起就直接
+	// 读 Skill 目录。读 SKILL.md 不启动任何进程，read_skill 照常能用。
+	var localSkills []agent.SkillMetadata
 	if registry == nil {
 		base = nil
 		registry, err = agent.NewDefaultToolRegistry(agentCfg)
 		if err != nil {
 			return nil, err
 		}
+		if safe {
+			localSkills = safeModeLocalSkills(agentCfg)
+			if relationship.Owner {
+				registry.RegisterScopedSkills(agentCfg.BuiltinSkills, localSkills, agentCfg.ReservedSkillNames)
+			}
+		}
+	}
+	skillSource := localSkills
+	if base != nil {
+		skillSource = base.Skills()
 	}
 	if relationship.Owner {
 		registry.Register(newDianaConfigTool(r, event))
@@ -77,10 +94,14 @@ func (r *Runtime) newAgentRegistry(ctx context.Context, cfg BotConfig, event Mes
 	}
 	allowed := r.allowedAgentToolNamesForEvent(event, relationship)
 	memberExtensions := []string{}
-	if allowed != nil && base != nil {
+	if allowed != nil && (base != nil || len(localSkills) > 0) {
+		candidates := extensionIDsOf(base)
+		if base == nil {
+			candidates = skillExtensionIDs(localSkills)
+		}
 		// 非主人能用哪些扩展，按「停用 > 黑名单 > 白名单 > 档位」逐项算出来。
 		var pending []string
-		memberExtensions, pending = resolveMemberExtensions(extensionIDsOf(base), access)
+		memberExtensions, pending = resolveMemberExtensions(candidates, access)
 		if len(pending) > 0 {
 			role := r.senderGroupRole(ctx, event)
 			if role == agent.MemberRoleAdmin || role == "owner" {
@@ -95,7 +116,7 @@ func (r *Runtime) newAgentRegistry(ctx context.Context, cfg BotConfig, event Mes
 	if !relationship.Owner {
 		// 群成员的 skill 面固定成「内置协议 + 放行的那几份」：视图挂在共享底座下
 		// 之后，不显式设置就会把底座上的自定义 Skill 全部继承过来。
-		registry.RegisterScopedSkills(agentCfg.BuiltinSkills, memberSkills(base, memberExtensions), agentCfg.ReservedSkillNames)
+		registry.RegisterScopedSkills(agentCfg.BuiltinSkills, memberSkills(skillSource, memberExtensions), agentCfg.ReservedSkillNames)
 	}
 	registry.Retain(allowed)
 	// 一次性交给注册表：ApplyExtensionOverrides 是整份替换，分两次调用后一次会
@@ -316,8 +337,8 @@ func (r *Runtime) senderGroupRole(ctx context.Context, event MessageEvent) strin
 
 // memberSkills 挑出放给群成员的 skill。正文之外的脚本资源不跟着开放：成员没有
 // run_command 和 read_file，skill 里让跑脚本的段落在成员会话里执行不了。
-func memberSkills(base *agent.ToolRegistry, extensionIDs []string) []agent.SkillMetadata {
-	if base == nil || len(extensionIDs) == 0 {
+func memberSkills(source []agent.SkillMetadata, extensionIDs []string) []agent.SkillMetadata {
+	if len(source) == 0 || len(extensionIDs) == 0 {
 		return nil
 	}
 	allowed := make(map[string]bool, len(extensionIDs))
@@ -325,7 +346,7 @@ func memberSkills(base *agent.ToolRegistry, extensionIDs []string) []agent.Skill
 		allowed[id] = true
 	}
 	skills := []agent.SkillMetadata{}
-	for _, skill := range base.Skills() {
+	for _, skill := range source {
 		if allowed["skill:"+skill.Name] {
 			skills = append(skills, skill)
 		}
@@ -511,7 +532,8 @@ func (r *Runtime) prewarmAgentRegistries(ctx context.Context, configs []BotConfi
 	logCommandExecutionPosture(configs)
 	for _, cfg := range configs {
 		cfg = cfg.WithDefaults()
-		if !cfg.Enabled || !cfg.AgentEnabled || strings.TrimSpace(cfg.OwnerID) == "" {
+		// 安全模式的机器人不预热：预热就是把 MCP 服务提前拉起来，见 newAgentRegistry。
+		if !cfg.Enabled || !cfg.AgentEnabled || cfg.agentSafeMode() || strings.TrimSpace(cfg.OwnerID) == "" {
 			continue
 		}
 		event := MessageEvent{Kind: EventKindPrivate, ProfileID: cfg.ID, UserID: cfg.OwnerID}

@@ -2615,16 +2615,18 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 
 // agentModeFromPayload 决定保存时用哪个模式。请求里写了就用请求的；没写时，编辑已有
 // 机器人沿用它现在的模式（旧版前端只会带回 agent_enabled=true，不能因此把安全模式
-// 悄悄升成标准模式），其余情况（新建、config.yaml 播种）留空，交给 migrateAgentMode
-// 按 agent_enabled 换算。
+// 悄悄升成标准模式）；新建的机器人一律安全模式，旧版前端新建时带的 agent_enabled=true
+// 不算数。config.yaml 播种要按旧开关换算，由调用方先把模式写进 payload。
 func agentModeFromPayload(payload ConfigPayload, existing BotConfig) string {
 	if mode := NormalizeAgentMode(payload.AgentMode); mode != "" {
 		return mode
 	}
 	if strings.TrimSpace(existing.ID) != "" {
-		return NormalizeAgentMode(existing.AgentMode)
+		if mode := NormalizeAgentMode(existing.AgentMode); mode != "" {
+			return mode
+		}
 	}
-	return ""
+	return AgentModeSafe
 }
 
 func normalizeReplyRules(rules []ReplyRule) []ReplyRule {

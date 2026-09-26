@@ -184,11 +184,22 @@ func (r *Runtime) generateReplyWithAgentTools(ctx context.Context, cfg BotConfig
 		agentCfg = restrictAgentConfigForMode(cfg, agentCfg)
 		registry := agent.NewToolRegistry()
 		if cfg.AgentEnabled {
-			base, err := r.sharedAgentRegistry(ctx, agentCfg)
-			if err != nil {
+			// 安全模式只借已经起来的底座，不为自己拉起 MCP 进程，见 newAgentRegistry。
+			var base *agent.ToolRegistry
+			var err error
+			if cfg.agentSafeMode() {
+				base = r.cachedAgentRegistry(agentCfg)
+			} else if base, err = r.sharedAgentRegistry(ctx, agentCfg); err != nil {
 				return "", err
 			}
-			registry, err = base.NewView(agentCfg)
+			if base != nil {
+				registry, err = base.NewView(agentCfg)
+			} else {
+				registry, err = agent.NewDefaultToolRegistry(agentCfg)
+				if err == nil {
+					registry.RegisterScopedSkills(agentCfg.BuiltinSkills, safeModeLocalSkills(agentCfg), agentCfg.ReservedSkillNames)
+				}
+			}
 			if err != nil {
 				return "", err
 			}
@@ -200,7 +211,11 @@ func (r *Runtime) generateReplyWithAgentTools(ctx context.Context, cfg BotConfig
 		for _, tool := range extraTools {
 			registry.Register(tool)
 		}
-		applyAgentSafeMode(cfg, registry)
+		// 旧的非 Agent 路径（AgentEnabled=false，待移除）只有调用方给的插件工具，没有
+		// 安全模式要摘的东西。
+		if cfg.AgentEnabled {
+			applyAgentSafeMode(cfg, registry)
+		}
 		agentClient := newRuntimeAgentLLMProvider(r, ctx)
 		// 这条路径不知道发言者是谁，只有完全公开时才给。
 		if normalizeModelDisclosure(cfg.ModelDisclosure) == ModelDisclosureEveryone {

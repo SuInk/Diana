@@ -237,8 +237,9 @@ func (c appConfig) botSeedConfig(defaultEndpoint string) (assistant.BotConfig, b
 	}
 	// config.yaml 没写 agent_mode 时按旧的 agent_enabled 换算，和数据库里的旧配置同一条
 	// 规则：只靠 config.yaml 跑的部署每次启动都重新播种，写着 agent_enabled: true 的
-	// 升级后仍是标准模式，没写或写 false 的是安全模式。base 没有档案 ID，ConfigFromPayload
-	// 不会沿用它的默认模式。
+	// 升级后仍是标准模式，没写或写 false 的是安全模式。这里显式写进 payload：
+	// ConfigFromPayload 对没写模式的新配置一律给安全模式。
+	payload.AgentMode = assistant.AgentModeForLegacyConfig(payload.AgentMode, payload.AgentEnabled)
 	return assistant.ConfigFromPayload(payload, base).WithDefaults(), true, nil
 }
 

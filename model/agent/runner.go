@@ -556,7 +556,9 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 			action.Input = coerceToolInputArrays(typed.InputSchema(), action.Input)
 		}
 		explicitRequestKind := explicitUserRequestKind(tool, action.Input)
-		if explicitRequestKind != "" && !ExtensionMutationAuthorized(currentUserRequestText(req), explicitRequestKind, action.Tool, action.Input) {
+		// 被配置关掉的操作不必先要确认码：用户照着打了码也做不成，下面执行前直接拒绝。
+		operationDisabled := r.registry.OperationDisabledError(action.Tool, action.Input)
+		if operationDisabled == nil && explicitRequestKind != "" && !ExtensionMutationAuthorized(currentUserRequestText(req), explicitRequestKind, action.Tool, action.Input) {
 			protocolRepairs++
 			code := extensionMutationConfirmationCode(explicitRequestKind, action.Tool, action.Input)
 			guardErr := "操作被拒绝：当前用户消息里没有确认码 " + code
@@ -660,7 +662,11 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 		var output string
 		// 被配置关掉的操作（比如安全模式下的写操作）不执行，拒绝理由按工具报错交回
 		// 模型：它照常占一步、照常进运行记录，模型看到的是一次明确失败而不是沉默。
-		err = r.registry.OperationDisabledError(action.Tool, action.Input)
+		// 执行前按最终入参再判一次：上面判的是整理之前的入参。
+		err = operationDisabled
+		if err == nil {
+			err = r.registry.OperationDisabledError(action.Tool, action.Input)
+		}
 		if err == nil {
 			output, err = tool.Run(toolCtx, action.Input)
 		}

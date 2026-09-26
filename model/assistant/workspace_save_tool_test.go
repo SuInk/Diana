@@ -275,7 +275,7 @@ func TestPersistGeneratedImagesWritesOutputs(t *testing.T) {
 }
 
 func TestImageToolPersistsOnlyForOwnerWithFileWrite(t *testing.T) {
-	cfg := BotConfig{AgentEnabled: true, AgentFileWriteEnabled: true}
+	cfg := BotConfig{AgentEnabled: true, AgentMode: AgentModeStandard, AgentFileWriteEnabled: true}
 	runtime := NewRuntime(cfg, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	owner := &dianaImageTool{runtime: runtime, relationship: RelationshipPolicy{Owner: true}}
 	if !owner.persistsToWorkspace() {
@@ -285,7 +285,12 @@ func TestImageToolPersistsOnlyForOwnerWithFileWrite(t *testing.T) {
 	if member.persistsToWorkspace() {
 		t.Fatal("群成员出的图不该往主人的工作目录里堆")
 	}
-	closed := NewRuntime(BotConfig{AgentEnabled: true}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	// 安全模式下即使写入开关开着也不落盘：成品自动存盘不经过工具，同样要受安全模式约束。
+	safe := NewRuntime(BotConfig{AgentEnabled: true, AgentMode: AgentModeSafe, AgentFileWriteEnabled: true}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	if (&dianaImageTool{runtime: safe, relationship: RelationshipPolicy{Owner: true}}).persistsToWorkspace() {
+		t.Fatal("安全模式下画图成品不该落进工作目录")
+	}
+	closed := NewRuntime(BotConfig{AgentEnabled: true, AgentMode: AgentModeStandard}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	if (&dianaImageTool{runtime: closed, relationship: RelationshipPolicy{Owner: true}}).persistsToWorkspace() {
 		t.Fatal("没开文件写入时不该落盘")
 	}
@@ -394,7 +399,7 @@ func TestDianaImageToolPersistsOwnerResultIntoWorkspace(t *testing.T) {
 		ImageModel: "gpt-image-2",
 	})}
 	channel := &recordingChannel{}
-	runtime := NewRuntime(BotConfig{AgentEnabled: true, AgentFileWriteEnabled: true}, channel, NewPluginManager(), store, nil, nil, nil)
+	runtime := NewRuntime(BotConfig{AgentEnabled: true, AgentMode: AgentModeStandard, AgentFileWriteEnabled: true}, channel, NewPluginManager(), store, nil, nil, nil)
 	runtime.SetMediaStore(mediaStore(t))
 	runtime.SetLocalMediaSharer(&recordingLocalMediaSharer{url: server.URL + "/media"})
 	event := MessageEvent{Kind: EventKindPrivate, UserID: "owner", MessageID: "owner-image"}

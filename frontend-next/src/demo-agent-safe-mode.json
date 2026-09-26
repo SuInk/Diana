@@ -61,7 +61,7 @@
   {
     "id": "act_as_owner",
     "label": "以主人身份对外操作",
-    "impact": "内置浏览器和浏览器控制扩展（带主人登录态）不能再操作；GitHub 写操作、跨会话/跨群发送停用",
+    "impact": "内置浏览器和浏览器控制扩展（带主人登录态）不能再操作；GitHub 写操作、跨会话/跨群发送（含盯别的群的事件触发任务）停用",
     "rules": [
       {
         "category": "act_as_owner",
@@ -167,6 +167,15 @@
         "category": "act_as_owner",
         "tool": "cross_session_message",
         "reason": "往当前会话以外的私聊或群发消息"
+      },
+      {
+        "category": "act_as_owner",
+        "tool": "event_trigger",
+        "field": "operation",
+        "operations": [
+          "create_elsewhere"
+        ],
+        "reason": "创建盯别的群或任何地方的事件触发任务；只盯当前会话的照常"
       }
     ]
   },

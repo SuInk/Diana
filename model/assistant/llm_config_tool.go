@@ -60,10 +60,7 @@ func (t *dianaLLMConfigTool) Run(ctx context.Context, input map[string]any) (str
 	if !boolValue(cfg.OwnerLLMConfigEnabled, true) {
 		return "", fmt.Errorf("当前机器人已关闭聊天模型配置")
 	}
-	operation := strings.ToLower(strings.TrimSpace(configToolString(input, "operation")))
-	if operation == "" {
-		operation = "update"
-	}
+	operation := t.CanonicalOperation(input)
 	if operation == "list" {
 		return t.listProviders(cfg)
 	}
@@ -161,4 +158,13 @@ func structuredLLMProvider(raw string) (llm.Provider, error) {
 	default:
 		return "", fmt.Errorf("不支持的 provider %q", raw)
 	}
+}
+
+// CanonicalOperation 是 Run 实际执行的操作：没写 operation 按 update 算。
+func (t *dianaLLMConfigTool) CanonicalOperation(input map[string]any) string {
+	operation := strings.ToLower(strings.TrimSpace(configToolString(input, "operation")))
+	if operation == "" {
+		return "update"
+	}
+	return operation
 }
