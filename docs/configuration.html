@@ -21,7 +21,7 @@
       <header class="page-intro"><p class="eyebrow">配置</p><h1>通道、模型与群聊策略</h1><p class="lead">先建立稳定的模型连接，再分配模型职责和平台通道，最后按群收敛触发、时间、用户与工具边界。</p></header>
 
       <section class="section searchable" id="channels">
-        <div class="section-heading"><p class="eyebrow">平台接入</p><h2>六个平台可以同时在线</h2></div>
+        <div class="section-heading"><p class="eyebrow">平台接入</p><h2>七个平台可以同时在线</h2></div>
         <p>所有启用的机器人配置会并行运行，回复始终回到来源通道。凭据在「机器人」页按平台填写；密钥字段留空表示沿用已保存的那份，填写才覆盖。</p>
 
         <h3>接入方式决定部署形态</h3>
@@ -33,6 +33,7 @@
           <tr><td>钉钉</td><td>Stream 模式长连接，Diana 主动出站</td><td>否</td></tr>
           <tr><td>飞书</td><td>事件订阅回调，由飞书 POST 过来</td><td><strong>是</strong></td></tr>
           <tr><td>企业微信</td><td>自建应用回调，由企业微信 POST 过来</td><td><strong>是</strong></td></tr>
+          <tr><td>iMessage</td><td>Mac 上的 BlueBubbles Server 推 webhook，可选轮询兜底</td><td>否，Mac 能访问到 Diana 即可</td></tr>
         </tbody></table></div>
 
         <h3>各平台需要的凭据</h3>
@@ -75,6 +76,12 @@
             <div><dt>验签</dt><dd>「接收消息」里的 Token 与 EncodingAESKey</dd></div>
             <div><dt>必填</dt><dd>后两项缺一个就只能发不能收</dd></div>
             <div><dt>格式</dt><dd>AgentId 必须是纯数字</dd></div>
+          </dl></article>
+          <article><h3>iMessage</h3><dl>
+            <div><dt>前提</dt><dd>一台常开、登录 Apple ID 的 Mac 运行 BlueBubbles Server</dd></div>
+            <div><dt>凭据</dt><dd>服务器地址与密码，webhook 密钥可选</dd></div>
+            <div><dt>回调</dt><dd><code>/api/channels/imessage/callback?token=…</code></dd></div>
+            <div><dt>边界</dt><dd>引用回复需 Private API；不支持群管理。详见 <a href="https://github.com/SuInk/Diana/blob/main/docs/imessage.md">iMessage 接入说明</a></dd></div>
           </dl></article>
         </div>
 

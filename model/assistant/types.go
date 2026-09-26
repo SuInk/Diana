@@ -566,6 +566,10 @@ type BotConfig struct {
 	WeComSecret                 string           `json:"wecom_secret,omitempty"`
 	WeComToken                  string           `json:"wecom_token,omitempty"`
 	WeComEncodingAESKey         string           `json:"wecom_encoding_aes_key,omitempty"`
+	IMessageServerURL           string           `json:"imessage_server_url,omitempty"`
+	IMessagePassword            string           `json:"imessage_password,omitempty"`
+	IMessageWebhookToken        string           `json:"imessage_webhook_token,omitempty"`
+	IMessagePollSeconds         int              `json:"imessage_poll_seconds,omitempty"`
 	NoneBotBridgeEnabled        bool             `json:"nonebot_bridge_enabled,omitempty"`
 	NoneBotBridgeEndpoint       string           `json:"nonebot_bridge_endpoint,omitempty"`
 	NoneBotBridgeToken          string           `json:"nonebot_bridge_token,omitempty"`
@@ -1060,6 +1064,12 @@ type ConfigPayload struct {
 	WeComTokenConfigured              bool               `json:"wecom_token_configured,omitempty"`
 	WeComEncodingAESKey               string             `json:"wecom_encoding_aes_key,omitempty"`
 	WeComEncodingAESKeyConfigured     bool               `json:"wecom_encoding_aes_key_configured,omitempty"`
+	IMessageServerURL                 string             `json:"imessage_server_url,omitempty"`
+	IMessagePassword                  string             `json:"imessage_password,omitempty"`
+	IMessagePasswordConfigured        bool               `json:"imessage_password_configured,omitempty"`
+	IMessageWebhookToken              string             `json:"imessage_webhook_token,omitempty"`
+	IMessageWebhookTokenConfigured    bool               `json:"imessage_webhook_token_configured,omitempty"`
+	IMessagePollSeconds               int                `json:"imessage_poll_seconds,omitempty"`
 	// CallbackPath 是回调型平台要填到对方后台的路径，只读，供 WebUI 拼完整地址。
 	CallbackPath                   string               `json:"callback_path,omitempty"`
 	NoneBotBridgeEnabled           bool                 `json:"nonebot_bridge_enabled,omitempty"`
@@ -1551,6 +1561,9 @@ var (
 	ErrInvalidWeComAgentID        = errors.New("assistant: wecom agent id must be numeric")
 	ErrMissingWeComCallbackKeys   = errors.New("assistant: wecom token and encoding aes key are required to receive messages")
 	ErrInvalidFeishuAPIBase       = errors.New("assistant: feishu api base url must be http(s)")
+	ErrMissingIMessageCredentials = errors.New("assistant: bluebubbles server url and password are required")
+	ErrInvalidIMessageServerURL   = errors.New("assistant: bluebubbles server url must be http(s)")
+	ErrInvalidIMessagePoll        = errors.New("assistant: imessage poll interval must be 0 or between 5 and 3600 seconds")
 )
 
 // NewProfileSet 基于单个机器人配置创建配置集。
@@ -2156,6 +2169,17 @@ func (cfg BotConfig) Validate() error {
 			return ErrMissingWeComCallbackKeys
 		}
 		return nil
+	case PlatformIMessage:
+		if poll := cfg.IMessagePollSeconds; poll != 0 && (poll < imessageMinPollSeconds || poll > 3600) {
+			return ErrInvalidIMessagePoll
+		}
+		if base := strings.TrimSpace(cfg.IMessageServerURL); base != "" && !isHTTPURL(base) {
+			return ErrInvalidIMessageServerURL
+		}
+		if cfg.Enabled && (strings.TrimSpace(cfg.IMessageServerURL) == "" || strings.TrimSpace(cfg.IMessagePassword) == "") {
+			return ErrMissingIMessageCredentials
+		}
+		return nil
 	}
 
 	if cfg.OneBotTransport == OneBotTransportHTTP {
@@ -2260,6 +2284,10 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		WeComSecretConfigured:             cfg.WeComSecret != "",
 		WeComTokenConfigured:              cfg.WeComToken != "",
 		WeComEncodingAESKeyConfigured:     cfg.WeComEncodingAESKey != "",
+		IMessageServerURL:                 cfg.IMessageServerURL,
+		IMessagePasswordConfigured:        cfg.IMessagePassword != "",
+		IMessageWebhookTokenConfigured:    cfg.IMessageWebhookToken != "",
+		IMessagePollSeconds:               cfg.IMessagePollSeconds,
 		CallbackPath:                      CallbackPathFor(cfg.Platform),
 		NoneBotBridgeEnabled:              cfg.NoneBotBridgeEnabled,
 		NoneBotBridgeEndpoint:             cfg.NoneBotBridgeEndpoint,
@@ -2400,6 +2428,8 @@ func PayloadFromConfigWithSecrets(cfg BotConfig) ConfigPayload {
 	payload.WeComSecret = cfg.WeComSecret
 	payload.WeComToken = cfg.WeComToken
 	payload.WeComEncodingAESKey = cfg.WeComEncodingAESKey
+	payload.IMessagePassword = cfg.IMessagePassword
+	payload.IMessageWebhookToken = cfg.IMessageWebhookToken
 	return payload
 }
 
@@ -2468,6 +2498,10 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		WeComSecret:                 payload.WeComSecret,
 		WeComToken:                  payload.WeComToken,
 		WeComEncodingAESKey:         payload.WeComEncodingAESKey,
+		IMessageServerURL:           strings.TrimSpace(payload.IMessageServerURL),
+		IMessagePassword:            payload.IMessagePassword,
+		IMessageWebhookToken:        payload.IMessageWebhookToken,
+		IMessagePollSeconds:         payload.IMessagePollSeconds,
 		NoneBotBridgeEnabled:        payload.NoneBotBridgeEnabled,
 		NoneBotBridgeEndpoint:       payload.NoneBotBridgeEndpoint,
 		NoneBotBridgeToken:          payload.NoneBotBridgeToken,
@@ -2626,6 +2660,12 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 	}
 	if cfg.WeComEncodingAESKey == "" {
 		cfg.WeComEncodingAESKey = existing.WeComEncodingAESKey
+	}
+	if cfg.IMessagePassword == "" {
+		cfg.IMessagePassword = existing.IMessagePassword
+	}
+	if cfg.IMessageWebhookToken == "" {
+		cfg.IMessageWebhookToken = existing.IMessageWebhookToken
 	}
 	// 界面保存出来的配置一律是迁移过的：Agent 恒开，模式二选一。
 	return migrateAgentMode(cfg)

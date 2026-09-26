@@ -23,7 +23,7 @@
       <header class="page-intro"><p class="eyebrow">Configure</p><h1>Channels, models and group policy</h1><p class="lead">Establish a working model connection first, then assign model roles and platform channels, and finally narrow triggers, hours, users and tool boundaries per group.</p></header>
 
       <section class="section searchable" id="channels">
-        <div class="section-heading"><p class="eyebrow">Platforms</p><h2>Six platforms can be online at once</h2></div>
+        <div class="section-heading"><p class="eyebrow">Platforms</p><h2>Seven platforms can be online at once</h2></div>
         <p>Every enabled bot profile runs in parallel, and replies always return to the channel they came from. Credentials are entered per platform on the Bots page; leaving a secret field blank keeps the stored value, and filling it in replaces it.</p>
 
         <h3>How messages arrive decides your deployment</h3>
@@ -35,6 +35,7 @@
           <tr><td>DingTalk</td><td>Stream mode connection, outbound from Diana</td><td>No</td></tr>
           <tr><td>Feishu / Lark</td><td>Event subscription callback, pushed to Diana</td><td><strong>Yes</strong></td></tr>
           <tr><td>WeCom</td><td>Custom-app callback, pushed to Diana</td><td><strong>Yes</strong></td></tr>
+          <tr><td>iMessage</td><td>BlueBubbles Server on a Mac pushes webhooks; optional polling fallback</td><td>No, the Mac only needs to reach Diana</td></tr>
         </tbody></table></div>
 
         <h3>Credentials per platform</h3>
@@ -74,6 +75,12 @@
             <div><dt>Verification</dt><dd>Token and EncodingAESKey from "receive messages"</dd></div>
             <div><dt>Required</dt><dd>Without both, it can send but not receive</dd></div>
             <div><dt>Format</dt><dd>AgentId must be numeric</dd></div>
+          </dl></article>
+          <article><h3>iMessage</h3><dl>
+            <div><dt>Prerequisite</dt><dd>An always-on Mac signed in to an Apple ID, running BlueBubbles Server</dd></div>
+            <div><dt>Credentials</dt><dd>Server URL and password; webhook token optional</dd></div>
+            <div><dt>Callback</dt><dd><code>/api/channels/imessage/callback?token=…</code></dd></div>
+            <div><dt>Limits</dt><dd>Quoted replies need the Private API; no group moderation. See the <a href="https://github.com/SuInk/Diana/blob/main/docs/imessage.md">iMessage setup guide</a> (Chinese)</dd></div>
           </dl></article>
         </div>
 

@@ -26,6 +26,7 @@ function draft(overrides) {
     dingtalk_client_id: "", dingtalk_client_secret: "", dingtalk_robot_code: "",
     feishu_app_id: "", feishu_app_secret: "", feishu_verification_token: "", feishu_encrypt_key: "", feishu_api_base_url: "",
     wecom_corp_id: "", wecom_agent_id: "", wecom_secret: "", wecom_token: "", wecom_encoding_aes_key: "",
+    imessage_server_url: "", imessage_password: "", imessage_webhook_token: "",
     ...overrides
   };
 }
@@ -50,9 +51,12 @@ test("each platform asks for its own credentials, not OneBot's", () => {
   assert.match(wizard(draft({ platform: "dingtalk" })).credentialError(), /Client ID/);
   assert.match(wizard(draft({ platform: "feishu" })).credentialError(), /App ID/);
   assert.match(wizard(draft({ platform: "wecom" })).credentialError(), /企业 ID/);
+  assert.match(wizard(draft({ platform: "imessage" })).credentialError(), /BlueBubbles 服务器地址/);
+  assert.match(wizard(draft({ platform: "imessage", imessage_server_url: "http://mac.local:1234" })).credentialError(), /密码/);
   // 填全即可保存，不因为没填 OneBot 的回连地址或 token 被拦下。
   assert.equal(wizard(draft({ platform: "telegram", telegram_bot_token: "123:abc" })).credentialError(), "");
   assert.equal(wizard(draft({ platform: "dingtalk", dingtalk_client_id: "ding", dingtalk_client_secret: "s" })).credentialError(), "");
+  assert.equal(wizard(draft({ platform: "imessage", imessage_server_url: "http://mac.local:1234", imessage_password: "p" })).credentialError(), "");
 });
 
 // 第二次进向导时密钥不回显，留空表示沿用；校验必须认 *_configured，否则配好的

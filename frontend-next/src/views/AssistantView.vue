@@ -493,6 +493,44 @@
                 />
               </template>
 
+              <template v-else-if="currentPlatform === 'imessage'">
+                <div class="field">
+                  <label for="bot-imessage-url">BlueBubbles 服务器地址</label>
+                  <input id="bot-imessage-url" v-model="form.imessage_server_url" class="input mono" placeholder="例如 http://192.168.1.10:1234" autocomplete="off" />
+                  <span class="hint">一台常开、登录了 Apple ID 的 Mac 上运行 BlueBubbles Server，Diana 要能访问到它。</span>
+                </div>
+                <SecretField
+                  id="bot-imessage-password"
+                  v-model="iMessagePasswordDraft"
+                  label="服务器密码"
+                  placeholder="BlueBubbles Server 设置里的密码"
+                  :configured="form.imessage_password_configured"
+                  :revealed="tokenRevealed.imessage_password"
+                  :busy="tokenRevealBusy === 'imessage_password'"
+                  @toggle-reveal="toggleTokenReveal('imessage_password')"
+                />
+                <SecretField
+                  id="bot-imessage-webhook"
+                  v-model="iMessageWebhookDraft"
+                  label="Webhook 密钥（可选）"
+                  placeholder="留空时用服务器密码"
+                  hint="BlueBubbles 的 webhook 不签名，Diana 只认回调地址里 ?token= 带着的这个值。"
+                  :configured="form.imessage_webhook_token_configured"
+                  :revealed="tokenRevealed.imessage_webhook_token"
+                  :busy="tokenRevealBusy === 'imessage_webhook_token'"
+                  @toggle-reveal="toggleTokenReveal('imessage_webhook_token')"
+                />
+                <div class="field">
+                  <label for="bot-imessage-poll">轮询兜底（秒）</label>
+                  <input id="bot-imessage-poll" v-model.number="form.imessage_poll_seconds" class="input" type="number" min="0" max="3600" step="1" inputmode="numeric" placeholder="留空只用 webhook" />
+                  <span class="hint">Mac 访问不到 Diana、webhook 打不进来时，按这个间隔主动拉新消息。留空只用 webhook，填写时最短 5 秒。</span>
+                </div>
+                <div class="field">
+                  <button class="btn" type="button" :disabled="iMessageTesting" @click="probeIMessageServer">测试连接</button>
+                  <span v-if="iMessageTestResult" class="hint" role="status">{{ iMessageTestSummary }}</span>
+                </div>
+              </template>
+
               <!-- 飞书和企业微信只能靠平台回调收消息，地址要填到对方后台。 -->
               <div v-if="callbackURL" class="field">
                 <label for="bot-callback-url">回调地址</label>
@@ -502,7 +540,11 @@
                     <Copy :size="14" aria-hidden="true" />
                   </button>
                 </div>
-                <span class="hint">
+                <span v-if="currentPlatform === 'imessage'" class="hint">
+                  在 BlueBubbles Server 的 API &amp; Webhooks 里添加这个地址，后面加上 ?token=Webhook 密钥（没填就用服务器密码），
+                  事件至少勾选 New Messages。地址要换成那台 Mac 访问得到的 Diana 地址。
+                </span>
+                <span v-else class="hint">
                   填到该平台后台的事件接收配置里。这里按你当前访问控制台的地址拼出，
                   必须换成平台服务器能访问到的公网 HTTPS 地址才收得到消息。
                 </span>
@@ -2015,7 +2057,9 @@ import {
   saveProfileEnabled,
   saveAllProfilesEnabled,
   startBot,
-  stopBot
+  stopBot,
+  testIMessageServer,
+  type IMessageProbeResult
 } from "../api";
 import AccountNameHint from "../components/AccountNameHint.vue";
 import AppSelect, { type AppSelectOption } from "../components/AppSelect.vue";
@@ -2280,6 +2324,31 @@ const feishuEncryptDraft = ref("");
 const weComSecretDraft = ref("");
 const weComTokenDraft = ref("");
 const weComAESDraft = ref("");
+const iMessagePasswordDraft = ref("");
+const iMessageWebhookDraft = ref("");
+const iMessageTesting = ref(false);
+const iMessageTestResult = ref<IMessageProbeResult | null>(null);
+const iMessageTestSummary = computed(() => {
+  const result = iMessageTestResult.value;
+  if (!result) return "";
+  if (!result.connected) return `连不上：${result.error || "未知错误"}`;
+  const account = result.detected_imessage ? `，登录账号 ${result.detected_imessage}` : "";
+  const privateAPI = result.private_api && result.helper_connected ? "Private API 已启用，可以引用回复" : "未启用 Private API，引用回复会退回普通发送";
+  return `已连接 BlueBubbles ${result.server_version || ""}${account}；${privateAPI}。`;
+});
+
+async function probeIMessageServer(): Promise<void> {
+  if (!form.value) return;
+  iMessageTesting.value = true;
+  iMessageTestResult.value = null;
+  try {
+    iMessageTestResult.value = await testIMessageServer(form.value.id ?? "", form.value.imessage_server_url ?? "", iMessagePasswordDraft.value);
+  } catch (error) {
+    iMessageTestResult.value = { connected: false, error: error instanceof Error ? error.message : String(error) };
+  } finally {
+    iMessageTesting.value = false;
+  }
+}
 
 // 每个平台的凭据都走同一套「留空沿用、点开才取明文」的流程，差别只有草稿变量。
 // 后端的字段名有固定规律（<字段> 和 <字段>_configured），所以这里只登记草稿，
@@ -2296,7 +2365,9 @@ const tokenDrafts = {
   feishu_encrypt_key: feishuEncryptDraft,
   wecom_secret: weComSecretDraft,
   wecom_token: weComTokenDraft,
-  wecom_encoding_aes_key: weComAESDraft
+  wecom_encoding_aes_key: weComAESDraft,
+  imessage_password: iMessagePasswordDraft,
+  imessage_webhook_token: iMessageWebhookDraft
 } satisfies Record<string, Ref<string>>;
 
 type TokenField = keyof typeof tokenDrafts;
@@ -4013,6 +4084,7 @@ async function save(): Promise<void> {
       reply_merge_confidence_percent: Number(current.reply_merge_confidence_percent) || 0,
       ...sendRetryPayload(current),
       typing_delay_per_char_ms: Number(current.typing_delay_per_char_ms) || 0,
+      imessage_poll_seconds: Math.max(0, Math.round(Number(current.imessage_poll_seconds) || 0)),
       ...secrets,
       group_triggers: splitList(triggersDraft.value),
       welcome_templates: welcomeTemplatesDraft.value

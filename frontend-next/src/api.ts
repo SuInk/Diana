@@ -195,6 +195,13 @@ export interface BotProfileConfig extends SendRetrySettings {
   wecom_token_configured?: boolean;
   wecom_encoding_aes_key?: string;
   wecom_encoding_aes_key_configured?: boolean;
+  /** iMessage：Mac 上的 BlueBubbles Server，webhook 回调进来。 */
+  imessage_server_url?: string;
+  imessage_password?: string;
+  imessage_password_configured?: boolean;
+  imessage_webhook_token?: string;
+  imessage_webhook_token_configured?: boolean;
+  imessage_poll_seconds?: number;
   /** 回调型平台要填到对方后台的路径，只读。 */
   callback_path?: string;
   nonebot_bridge_enabled?: boolean;
@@ -1599,6 +1606,21 @@ export function getAgentBrowser(profile = ""): Promise<AgentBrowserSettings> {
 export function saveAgentBrowser(profile: string, cdpURL: string, timeoutMS: number): Promise<AgentBrowserSettings> {
   return requestJSON("/api/assistant/agent-browser", {method: "POST", body: JSON.stringify({profile_id: profile, cdp_url: cdpURL, timeout_ms: timeoutMS})});
 }
+export type IMessageProbeResult = {
+  connected: boolean;
+  error?: string;
+  server_version?: string;
+  os_version?: string;
+  private_api?: boolean;
+  helper_connected?: boolean;
+  detected_imessage?: string;
+};
+
+/** 用表单里的地址和密码请求一次 BlueBubbles server/info；密码留空时后端沿用已保存的。 */
+export function testIMessageServer(profile: string, serverURL: string, password: string): Promise<IMessageProbeResult> {
+  return requestJSON("/api/assistant/imessage/test", {method: "POST", body: JSON.stringify({profile_id: profile, server_url: serverURL, password})});
+}
+
 export function testAgentBrowser(profile: string, cdpURL: string): Promise<{connected: boolean; browser?: string; error?: string}> {
   return requestJSON("/api/assistant/agent-browser/test", {method: "POST", body: JSON.stringify({profile_id: profile, cdp_url: cdpURL})});
 }

@@ -1258,7 +1258,8 @@ const pluginPlatformLabels: Record<string, string> = {
   "qq-official": "QQ 官方",
   dingtalk: "钉钉",
   feishu: "飞书",
-  wecom: "企业微信"
+  wecom: "企业微信",
+  imessage: "iMessage"
 };
 
 function pluginPlatformBadges(plugin: PluginState): Array<{ id: string; label: string; note: string }> {
