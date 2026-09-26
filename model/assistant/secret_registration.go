@@ -32,6 +32,7 @@ func registerBotConfigSecrets(cfg BotConfig) {
 		cfg.WeComSecret,
 		cfg.WeComToken,
 		cfg.WeComEncodingAESKey,
+		cfg.WeixinBotToken,
 		cfg.NoneBotBridgeToken,
 	)
 	secretmask.RegisterURL(

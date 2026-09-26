@@ -183,7 +183,7 @@ const blockingProblem = computed(() => draft.find((pair) => pairProblem(pair)) !
 
 function platformLabel(platform?: string): string {
   return (
-    ({ "onebot-v11": "QQ", telegram: "Telegram", "qq-official": "QQ 官方", dingtalk: "钉钉", feishu: "飞书", wecom: "企业微信" } as Record<string, string>)[
+    ({ "onebot-v11": "QQ", telegram: "Telegram", "qq-official": "QQ 官方", dingtalk: "钉钉", feishu: "飞书", wecom: "企业微信", weixin: "微信" } as Record<string, string>)[
       String(platform ?? "")
     ] ?? String(platform ?? "未选择平台")
   );

@@ -122,6 +122,9 @@ type BotHandler struct {
 	userNameCache     map[string]userNameCacheEntry
 	avatarsOnce       sync.Once
 	avatars           *avatarCache
+	weixinLoginOnce   sync.Once
+	weixinLogin       *assistant.WeixinLoginManager
+	weixinSaveMu      sync.Mutex
 }
 
 // avatarStore 懒初始化头像缓存：BotHandler 有好几个构造入口，放在 once 里比
@@ -323,6 +326,7 @@ func (h *BotHandler) registerRoutes(router gin.IRouter, base string) {
 	router.POST(base+"/config/message-relays", h.setMessageRelays)
 	router.POST(base+"/config/profile-enabled", h.setProfileEnabled)
 	router.POST(base+"/config/profiles-enabled", h.setAllProfilesEnabled)
+	h.registerWeixinRoutes(router, base)
 	router.GET(base+"/agent-defaults", h.agentDefaults)
 	router.GET(base+"/agent-mode/impact", h.agentModeImpact)
 	router.GET(base+"/features", h.featuresStatus)
@@ -790,6 +794,9 @@ type botTransportConfig struct {
 	TelegramBotToken    string
 	TelegramAPIBaseURL  string
 	TelegramProxyURL    string
+	// 微信凭据是扫码时整组换掉的，同一台机器人重扫之后必须重建长轮询。
+	WeixinBotToken string
+	WeixinBaseURL  string
 }
 
 func profileSetRequiresReconnect(previous, next assistant.ProfileSet) bool {
@@ -833,6 +840,8 @@ func enabledBotTransports(set assistant.ProfileSet) []botTransportConfig {
 			TelegramBotToken:    profile.TelegramBotToken,
 			TelegramAPIBaseURL:  profile.TelegramAPIBaseURL,
 			TelegramProxyURL:    profile.TelegramProxyURL,
+			WeixinBotToken:      profile.WeixinBotToken,
+			WeixinBaseURL:       profile.WeixinBaseURL,
 		})
 	}
 	return transports

@@ -63,15 +63,18 @@ type WeComChannel struct {
 
 	tokens *platformTokenCache
 	dedupe *eventDeduper
+	// apiBase 固定是企业微信的地址，单测用 httptest 替换。
+	apiBase string
 }
 
 // NewWeComChannel 创建企业微信通道。
 func NewWeComChannel(cfg WeComConfig) *WeComChannel {
 	channel := &WeComChannel{
-		cfg:    cfg,
-		client: &http.Client{Timeout: 60 * time.Second},
-		status: ChannelStatus{Endpoint: weComAPIBase + " (callback " + WeComCallbackPath + ")", UpdatedAt: time.Now()},
-		dedupe: newEventDeduper(10 * time.Minute),
+		cfg:     cfg,
+		client:  &http.Client{Timeout: 60 * time.Second},
+		status:  ChannelStatus{Endpoint: weComAPIBase + " (callback " + WeComCallbackPath + ")", UpdatedAt: time.Now()},
+		dedupe:  newEventDeduper(10 * time.Minute),
+		apiBase: weComAPIBase,
 	}
 	channel.tokens = &platformTokenCache{fetch: channel.fetchAccessToken}
 	return channel
@@ -90,11 +93,12 @@ func (c *WeComChannel) fetchAccessToken(ctx context.Context) (string, time.Durat
 	corpID := strings.TrimSpace(c.cfg.CorpID)
 	secret := strings.TrimSpace(c.cfg.Secret)
 	client := c.client
+	base := c.apiBase
 	c.mu.RUnlock()
 	if corpID == "" || secret == "" {
 		return "", 0, fmt.Errorf("wecom: 企业 ID 和应用 Secret 都必须配置")
 	}
-	endpoint := weComAPIBase + "/cgi-bin/gettoken?corpid=" + url.QueryEscape(corpID) + "&corpsecret=" + url.QueryEscape(secret)
+	endpoint := base + "/cgi-bin/gettoken?corpid=" + url.QueryEscape(corpID) + "&corpsecret=" + url.QueryEscape(secret)
 	raw, err := platformJSONRequest(ctx, client, http.MethodGet, endpoint, nil, nil)
 	if err != nil {
 		return "", 0, fmt.Errorf("wecom: 换取 access token 失败: %w", err)
@@ -245,6 +249,7 @@ func (c *WeComChannel) Send(ctx context.Context, msg OutgoingMessage) error {
 	c.mu.RLock()
 	cfg := c.cfg
 	client := c.client
+	base := c.apiBase
 	c.mu.RUnlock()
 
 	agentID, err := strconv.Atoi(strings.TrimSpace(cfg.AgentID))
@@ -266,14 +271,14 @@ func (c *WeComChannel) Send(ctx context.Context, msg OutgoingMessage) error {
 	if group := strings.TrimSpace(msg.GroupID); group != "" {
 		// 企业微信的应用消息发给群时用 chatid，走的是另一个接口。
 		body["chatid"] = group
-		return c.postSend(ctx, client, weComAPIBase+"/cgi-bin/appchat/send?access_token="+url.QueryEscape(token), body)
+		return c.postSend(ctx, client, base+"/cgi-bin/appchat/send?access_token="+url.QueryEscape(token), body)
 	}
 	user := strings.TrimSpace(msg.UserID)
 	if user == "" {
 		return fmt.Errorf("wecom: 缺少接收人")
 	}
 	body["touser"] = user
-	return c.postSend(ctx, client, weComAPIBase+"/cgi-bin/message/send?access_token="+url.QueryEscape(token), body)
+	return c.postSend(ctx, client, base+"/cgi-bin/message/send?access_token="+url.QueryEscape(token), body)
 }
 
 func (c *WeComChannel) postSend(ctx context.Context, client *http.Client, endpoint string, body map[string]any) error {
@@ -311,7 +316,10 @@ func (c *WeComChannel) CallAPI(ctx context.Context, action string, params map[st
 	if err != nil {
 		return nil, err
 	}
-	endpoint, err := platformRequestURL(weComAPIBase, path, method, params)
+	c.mu.RLock()
+	base := c.apiBase
+	c.mu.RUnlock()
+	endpoint, err := platformRequestURL(base, path, method, params)
 	if err != nil {
 		return nil, err
 	}

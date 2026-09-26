@@ -195,6 +195,11 @@ export interface BotProfileConfig extends SendRetrySettings {
   wecom_token_configured?: boolean;
   wecom_encoding_aes_key?: string;
   wecom_encoding_aes_key_configured?: boolean;
+  /** 微信 iLink：凭据只能扫码写入，这里只读。 */
+  weixin_bot_id?: string;
+  weixin_user_id?: string;
+  weixin_bot_token?: string;
+  weixin_bot_token_configured?: boolean;
   /** 回调型平台要填到对方后台的路径，只读。 */
   callback_path?: string;
   nonebot_bridge_enabled?: boolean;
@@ -1404,6 +1409,36 @@ export function getNewBotProfileDefaults(platform: string): Promise<BotProfileCo
 
 export function createBotProfileConfig(config: BotProfileConfig): Promise<BotProfileConfig> {
   return requestJSON<BotProfileConfig>("/api/assistant/config/new", { method: "POST", body: JSON.stringify(config) });
+}
+
+/** 微信扫码登录的一步结果。status 取值见后端 WeixinLogin* 常量。 */
+export interface WeixinLoginStatus {
+  session_id: string;
+  status: "wait" | "scaned" | "need_verifycode" | "confirmed" | "binded_redirect" | "expired" | "failed";
+  message?: string;
+  /** PNG data URL，只在新生成或刷新二维码时带上。 */
+  qrcode_image?: string;
+  qrcode_url?: string;
+  expires_at?: string;
+  /** 登录成功并落库后带回的最新配置。 */
+  config?: BotProfileConfig;
+}
+
+export function startWeixinLogin(profileID: string): Promise<WeixinLoginStatus> {
+  return requestJSON<WeixinLoginStatus>("/api/assistant/weixin/login", { method: "POST", body: JSON.stringify({ profile_id: profileID }) });
+}
+
+// 后端会代发一轮最长约 25 秒的长轮询，调用方拿到结果后直接发下一轮即可。
+export function pollWeixinLogin(profileID: string, sessionID: string, verifyCode = "", signal?: AbortSignal): Promise<WeixinLoginStatus> {
+  return requestJSON<WeixinLoginStatus>("/api/assistant/weixin/login/poll", {
+    method: "POST",
+    body: JSON.stringify({ profile_id: profileID, session_id: sessionID, verify_code: verifyCode || undefined }),
+    signal
+  });
+}
+
+export function logoutWeixin(profileID: string): Promise<BotProfileConfig> {
+  return requestJSON<BotProfileConfig>("/api/assistant/weixin/logout", { method: "POST", body: JSON.stringify({ profile_id: profileID }) });
 }
 
 export interface PromptGroupInfo {
