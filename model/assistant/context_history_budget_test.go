@@ -232,7 +232,7 @@ func TestRecordPromptContextBudgetEmitsCategoryBreakdown(t *testing.T) {
 		MessageID: "30001",
 		Time:      1700000200,
 	}
-	cfg := BotConfig{DebugModeEnabled: true, BotAccount: "90001"}
+	cfg := BotConfig{DebugModeEnabled: boolPointer(true), BotAccount: "90001"}
 	messages := []llm.Message{
 		{Role: llm.RoleSystem, Content: "人设与规则", Priority: llm.MessagePrioritySystem},
 		{Role: llm.RoleUser, Content: "【较早上下文压缩摘要】" + strings.Repeat("旧事", 50), Priority: llm.MessagePrioritySummary},
@@ -338,7 +338,7 @@ func TestRecordPromptContextBudgetStaysSilentWithoutDebugMode(t *testing.T) {
 	runtime.recordPromptContextBudget(
 		context.Background(),
 		MessageEvent{Kind: EventKindGroup, MessageID: "30002"},
-		BotConfig{},
+		BotConfig{DebugModeEnabled: boolPointer(false)},
 		[]llm.Message{{Role: llm.RoleUser, Content: "在吗", Priority: llm.MessagePriorityCurrent}},
 		nil,
 		semanticReferencePromptContext{},

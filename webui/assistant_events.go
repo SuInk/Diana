@@ -114,6 +114,8 @@ type assistantEventTraceResponse struct {
 	EventID           string                                `json:"event_id"`
 	MessageID         string                                `json:"message_id,omitempty"`
 	Steps             []storage.AppLogEntry                 `json:"steps"`
+	// EmptyReason 在 Steps 为空时说明真实原因，界面原样显示。
+	EmptyReason string `json:"empty_reason,omitempty"`
 }
 
 func (h *BotHandler) eventTrace(c *gin.Context) {
@@ -122,7 +124,7 @@ func (h *BotHandler) eventTrace(c *gin.Context) {
 		return
 	}
 	eventID := strings.TrimSpace(c.Param("id"))
-	messageID, steps, found, err := h.sqlite.InboundEventDebugTrace(c.Request.Context(), eventID)
+	trace, found, err := h.sqlite.InboundEventDebugTraceDetail(c.Request.Context(), eventID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -140,8 +142,9 @@ func (h *BotHandler) eventTrace(c *gin.Context) {
 		Memories:          memories.Memories,
 		TemporaryMemories: memories.TemporaryMemories,
 		EventID:           eventID,
-		MessageID:         messageID,
-		Steps:             steps,
+		MessageID:         trace.MessageID,
+		Steps:             trace.Steps,
+		EmptyReason:       trace.EmptyReason,
 	})
 }
 

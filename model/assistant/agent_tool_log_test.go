@@ -105,7 +105,7 @@ func TestAgentRunObserverKeepsWebSearchOperationLogsPrivate(t *testing.T) {
 
 func TestAgentRunObserverRedactsPlatformDebugPayload(t *testing.T) {
 	logs := &captureAppLogs{}
-	runtime := NewRuntime(BotConfig{DebugModeEnabled: true}, nilChannel{}, NewDefaultPluginManager(), nil, nil, nil, nil)
+	runtime := NewRuntime(BotConfig{DebugModeEnabled: boolPointer(true)}, nilChannel{}, NewDefaultPluginManager(), nil, nil, nil, nil)
 	runtime.SetAppLogWriter(logs)
 	event := MessageEvent{Kind: EventKindPrivate, UserID: "owner", MessageID: "message-1"}
 	ctx := runtime.withDebugTraceContext(context.Background(), event)
@@ -117,7 +117,7 @@ func TestAgentRunObserverRedactsPlatformDebugPayload(t *testing.T) {
 		ToolOutput: `{"ok":true,"data":{"note":"owner-secret"}}`,
 		Error:      "adapter rejected owner-secret for secret-target",
 	})
-	entries := logs.entriesSnapshot()
+	entries := withoutEventReceived(logs.entriesSnapshot())
 	if len(entries) != 2 {
 		t.Fatalf("entries = %#v", entries)
 	}
@@ -139,7 +139,7 @@ func TestAgentRunObserverRedactsPlatformDebugPayload(t *testing.T) {
 
 func TestAgentRunObserverRedactsRepositoryIssueRequestPayload(t *testing.T) {
 	logs := &captureAppLogs{}
-	runtime := NewRuntime(BotConfig{DebugModeEnabled: true}, nilChannel{}, NewDefaultPluginManager(), nil, nil, nil, nil)
+	runtime := NewRuntime(BotConfig{DebugModeEnabled: boolPointer(true)}, nilChannel{}, NewDefaultPluginManager(), nil, nil, nil, nil)
 	runtime.SetAppLogWriter(logs)
 	event := MessageEvent{Kind: EventKindPrivate, UserID: "owner", MessageID: "message-2"}
 	ctx := runtime.withDebugTraceContext(context.Background(), event)
@@ -150,7 +150,7 @@ func TestAgentRunObserverRedactsRepositoryIssueRequestPayload(t *testing.T) {
 		ToolOutput: `{"ok":true,"issue":{"number":12,"title":"private title"}}`,
 		Error:      "GitHub rejected owner-secret",
 	})
-	entries := logs.entriesSnapshot()
+	entries := withoutEventReceived(logs.entriesSnapshot())
 	if len(entries) != 2 {
 		t.Fatalf("entries = %#v", entries)
 	}
@@ -270,7 +270,7 @@ func TestDebugToolCallSanitizersLeaveMissingOutputEmpty(t *testing.T) {
 // 每一步写进了什么。普通操作日志仍只记参数名。
 func TestAgentRunObserverShowsThreadStatePayloadInDebugTrace(t *testing.T) {
 	logs := &captureAppLogs{}
-	runtime := NewRuntime(BotConfig{DebugModeEnabled: true}, nilChannel{}, NewDefaultPluginManager(), nil, nil, nil, nil)
+	runtime := NewRuntime(BotConfig{DebugModeEnabled: boolPointer(true)}, nilChannel{}, NewDefaultPluginManager(), nil, nil, nil, nil)
 	runtime.SetAppLogWriter(logs)
 	event := MessageEvent{Kind: EventKindGroup, GroupID: "g1", UserID: "u1", MessageID: "message-1"}
 	ctx := runtime.withDebugTraceContext(context.Background(), event)
@@ -284,7 +284,7 @@ func TestAgentRunObserverShowsThreadStatePayloadInDebugTrace(t *testing.T) {
 		},
 		ToolOutput: `{"ok":true,"items":[{"version":4,"state":{"secret_word":"耳机","question_count":2}}]}`,
 	})
-	entries := logs.entriesSnapshot()
+	entries := withoutEventReceived(logs.entriesSnapshot())
 	if len(entries) != 2 {
 		t.Fatalf("entries = %#v", entries)
 	}

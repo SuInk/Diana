@@ -1663,7 +1663,7 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
     });
   }
   const traceMatch = path.match(/^\/api\/assistant\/events\/([^/]+)\/trace$/);
-  if (traceMatch) return json({ event_id: decodeURIComponent(traceMatch[1]), steps: decodeURIComponent(traceMatch[1]) === "demo-event-1" ? trace : [] });
+  if (traceMatch) return json(decodeURIComponent(traceMatch[1]) === "demo-event-1" ? { event_id: "demo-event-1", steps: trace } : { event_id: decodeURIComponent(traceMatch[1]), steps: [], empty_reason: "处理这条消息时调试模式是开着的，但它在调用模型之前就结束了：未被点名，也不在接话范围内。" });
 
   if (path === "/api/assistant/tasks") return json({ items: tasks });
   if ((path.endsWith("/repository-watches") || path.endsWith("/rss-watches")) && method === "POST") {

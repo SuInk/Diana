@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/SuInk/diana/model/assistant"
@@ -63,8 +64,9 @@ type SQLiteStore struct {
 	historyVectors bool
 	userMemoryMu   sync.Mutex
 	retryMu        sync.Mutex
-	// debugTraceMu 串行追加调试轨迹文件，见 debug_trace_files.go。
-	debugTraceMu sync.Mutex
+	// debugTracePruned/debugTraceSinceOnce 服务于调试轨迹文件，见 debug_trace_files.go。
+	debugTracePruned    atomic.Int64
+	debugTraceSinceOnce sync.Once
 	// memoryEventJobDelay 覆盖事件记忆任务的攒批窗口，nil 表示沿用默认值。
 	memoryEventJobDelay *time.Duration
 	// walCancel/walDone 控制 WAL 回收巡检，见 wal_maintenance.go。

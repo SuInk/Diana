@@ -3557,7 +3557,7 @@ func TestRuntimeResolverOnlySendsAndRecordsWithoutLLM(t *testing.T) {
 		t.Fatalf("history missing bot resolver reply: %#v", history)
 	}
 	// 合并转发的内容安全检查会调一次模型并记用量；这里只关心主回复没有走模型。
-	entries := withoutUsageEntries(logs.entriesSnapshot())
+	entries := withoutDebugTraceEntries(withoutUsageEntries(logs.entriesSnapshot()))
 	if len(entries) != 1 || entries[0].Action != "resolver_video_download" {
 		t.Fatalf("resolver logs = %#v", entries)
 	}

@@ -2659,6 +2659,8 @@ export interface AssistantEventTraceResponse {
   event_id: string;
   message_id?: string;
   steps: AppLogEntry[];
+  /** steps 为空时后端给出的真实原因，例如「在调用模型之前就结束了：未被点名」。 */
+  empty_reason?: string;
 }
 
 /** 表情包池里的一张表情包；同一张图在多个会话出现只列一次，字段取最近那次。 */

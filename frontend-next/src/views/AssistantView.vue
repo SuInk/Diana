@@ -1750,7 +1750,7 @@
                   <span class="track" aria-hidden="true"></span>
                   <span class="switch-label">调试模式</span>
                 </label>
-                <span class="hint">开启后记录完整模型上下文、工具参数、工具结果和调用链，内容可能包含聊天隐私；默认关闭。</span>
+                <span class="hint">记录完整模型上下文、工具参数、工具结果和调用链，在事件页查看，内容可能包含聊天隐私。默认开启；记录存在数据目录的 debug-traces 下，不占数据库，按调试日志保留天数清理。</span>
               </div>
               <div class="field">
                 <label for="bot-concurrency">全局并发数</label>
@@ -3726,7 +3726,7 @@ function setForm(config: BotProfileConfig): void {
     error_persona_reply_enabled: config.error_persona_reply_enabled ?? false,
     recall_reply_auto_delete_enabled: config.recall_reply_auto_delete_enabled ?? false,
     recall_reply_auto_delete_delay_seconds: config.recall_reply_auto_delete_delay_seconds ?? defaultRecallReplyAutoDeleteDelaySeconds,
-    debug_mode_enabled: config.debug_mode_enabled ?? false,
+    debug_mode_enabled: config.debug_mode_enabled ?? true,
     cross_group_memory_enabled: config.cross_group_memory_enabled ?? false,
     cross_platform_memory_enabled: config.cross_platform_memory_enabled ?? false,
     world_book_enabled: config.world_book_enabled ?? true,

@@ -471,7 +471,7 @@ func estimateHistoryContextEventTokens(event MessageEvent, currentTime int64, as
 }
 
 func (r *Runtime) recordPromptContextBudget(ctx context.Context, event MessageEvent, cfg BotConfig, messages []llm.Message, history []MessageEvent, semantic semanticReferencePromptContext, sources semanticReferenceContext, summaryRecompressed bool, layers []contextLayerUsage) {
-	if !cfg.DebugModeEnabled {
+	if !debugModeEnabled(cfg) {
 		return
 	}
 	writer := r.appLogWriter()

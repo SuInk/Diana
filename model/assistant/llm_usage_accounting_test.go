@@ -49,6 +49,29 @@ func withoutUsageEntries(entries []applog.Entry) []applog.Entry {
 	return out
 }
 
+// withoutDebugTraceEntries 去掉调试轨迹。调试模式默认开着，每条消息开头都有一条
+// 「收到消息」，只关心业务日志的测试用它过滤。
+func withoutDebugTraceEntries(entries []applog.Entry) []applog.Entry {
+	out := make([]applog.Entry, 0, len(entries))
+	for _, entry := range entries {
+		if entry.Action != "debug_trace" {
+			out = append(out, entry)
+		}
+	}
+	return out
+}
+
+// withoutEventReceived 去掉每条消息轨迹开头那条「收到消息」。
+func withoutEventReceived(entries []applog.Entry) []applog.Entry {
+	out := make([]applog.Entry, 0, len(entries))
+	for _, entry := range entries {
+		if entry.Metadata["phase"] != debugTracePhaseEventReceived {
+			out = append(out, entry)
+		}
+	}
+	return out
+}
+
 // 一条消息可能触发路由、子任务、主生成好几次模型调用。记账挂在 provider 装饰链
 // 上而不是逐个调用点手写，就是为了让这些都算进同一条消息的总用量。
 func TestLLMUsageAccountingRecordsEveryCallUnderOneMessage(t *testing.T) {

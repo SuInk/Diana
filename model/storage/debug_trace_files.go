@@ -4,17 +4,13 @@
 package storage
 
 import (
-	"bufio"
 	"bytes"
-	"compress/gzip"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
-
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 )
@@ -22,8 +18,12 @@ import (
 // 调试轨迹每轮都带着完整的模型请求，一条几十到几百 KB，调试模式开着时一周能攒
 // 一两个 GB。它只按事件整段读、按天整批过期，从来不需要 SQL 查询，放在库里只会
 // 撑大库文件（删掉的页会复用，但文件不会缩小），拖慢备份和损坏后的恢复。
-// 所以存成数据库旁边的文件：debug-traces/<UTC 日期>/<message_id 哈希>.jsonl.gz，
-// 每条记录是一个独立的 gzip 成员，追加写不用重写整个文件；过期就删整天的目录。
+//
+// 所以存成数据库旁边的普通文件，排查时直接打开就能看：
+//
+//	debug-traces/<UTC 日期>/<group-群号 | private-QQ号>/<message_id>/<序号>-<步骤>.json
+//
+// 每一步一个缩进排好的 JSON，不压缩；过期就删整天的目录。
 const (
 	debugTraceDirName = "debug-traces"
 	debugTraceAction  = "debug_trace"
@@ -43,47 +43,110 @@ func storesDebugTraceInFile(entry AppLogEntry) bool {
 	return entry.Kind == LogKindDebug && entry.Action == debugTraceAction && strings.TrimSpace(entry.Target) != ""
 }
 
-func debugTraceFileName(target string) string {
-	sum := sha256.Sum256([]byte(strings.TrimSpace(target)))
-	return hex.EncodeToString(sum[:16]) + ".jsonl.gz"
+// debugTraceMessageDir 是某条消息的轨迹在某一天目录下的相对路径。
+func debugTraceMessageDir(groupID, userID, messageID string) string {
+	chat := "other"
+	if groupID = strings.TrimSpace(groupID); groupID != "" {
+		chat = "group-" + groupID
+	} else if userID = strings.TrimSpace(userID); userID != "" {
+		chat = "private-" + userID
+	}
+	return filepath.Join(debugTracePathPart(chat), debugTracePathPart(messageID))
 }
 
-func (s *SQLiteStore) appendDebugTraceFile(root string, entry AppLogEntry) error {
-	line, err := json.Marshal(entry)
-	if err != nil {
+// debugTracePathPart 把 ID 变成安全的单级目录名。QQ 的 ID 都是数字，原样保留；
+// 其他平台的 ID 可能带 / 或 :，替换掉。替换后撞名也没关系，读取时还会按事件
+// 元数据再筛一遍。
+func debugTracePathPart(value string) string {
+	var builder strings.Builder
+	for _, r := range strings.TrimSpace(value) {
+		switch {
+		case r >= '0' && r <= '9', r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r == '-', r == '_', r == '.':
+			builder.WriteRune(r)
+		default:
+			builder.WriteByte('_')
+		}
+		if builder.Len() >= 96 {
+			break
+		}
+	}
+	name := strings.Trim(builder.String(), ".")
+	if name == "" {
+		return "_"
+	}
+	return name
+}
+
+// debugTraceStepName 让文件名本身说明这一步做了什么：模型请求写用途（接话评分、
+// 回复……），Agent 事件写阶段。
+func debugTraceStepName(entry AppLogEntry) string {
+	label := debugMetadataString(entry.Metadata, "phase")
+	if label == "model_request" {
+		if purpose := debugMetadataString(entry.Metadata, "purpose"); purpose != "" {
+			label = purpose
+		}
+	}
+	if label == "" {
+		label = entry.Action
+	}
+	sequence := 0
+	switch value := entry.Metadata["sequence"].(type) {
+	case int64:
+		sequence = int(value)
+	case int:
+		sequence = value
+	case float64:
+		sequence = int(value)
+	}
+	return fmt.Sprintf("%03d-%s", sequence, debugTracePathPart(label))
+}
+
+func (s *SQLiteStore) writeDebugTraceFile(root string, entry AppLogEntry) error {
+	var body bytes.Buffer
+	encoder := json.NewEncoder(&body)
+	// 提示词里的 < > & 原样保留，不转成 <，方便人读。
+	encoder.SetEscapeHTML(false)
+	encoder.SetIndent("", "  ")
+	if err := encoder.Encode(entry); err != nil {
 		return err
 	}
-	var member bytes.Buffer
-	writer := gzip.NewWriter(&member)
-	if _, err := writer.Write(append(line, '\n')); err != nil {
-		return err
-	}
-	if err := writer.Close(); err != nil {
-		return err
-	}
-	dir := filepath.Join(root, entry.CreatedAt.UTC().Format(debugTraceDayForm))
+	dir := filepath.Join(root, entry.CreatedAt.UTC().Format(debugTraceDayForm), debugTraceMessageDir(
+		debugMetadataString(entry.Metadata, "group_id"),
+		debugMetadataString(entry.Metadata, "user_id"),
+		entry.Target,
+	))
 	// 里面是完整的模型上下文，和数据库一样只给本用户读。
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
-	s.debugTraceMu.Lock()
-	defer s.debugTraceMu.Unlock()
-	file, err := os.OpenFile(filepath.Join(dir, debugTraceFileName(entry.Target)), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
-	if err != nil {
-		return err
+	s.markDebugTraceSince(root, entry.CreatedAt)
+	step := debugTraceStepName(entry)
+	// 同一条消息被两个机器人处理时序号会重复，排他创建，撞了就加后缀。
+	for attempt := 1; ; attempt++ {
+		name := step + ".json"
+		if attempt > 1 {
+			name = fmt.Sprintf("%s-%d.json", step, attempt)
+		}
+		file, err := os.OpenFile(filepath.Join(dir, name), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+		if errors.Is(err, os.ErrExist) && attempt < 100 {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if _, err := file.Write(body.Bytes()); err != nil {
+			_ = file.Close()
+			return err
+		}
+		return file.Close()
 	}
-	if _, err := file.Write(member.Bytes()); err != nil {
-		_ = file.Close()
-		return err
-	}
-	return file.Close()
 }
 
 // readDebugTraceFiles 读出某条消息在各天目录下的全部调试记录。一轮处理可能跨过
 // UTC 零点，所以每个还没过期的日期目录都看一眼，目录只有保留天数那么多个。
-func (s *SQLiteStore) readDebugTraceFiles(target string) ([]AppLogEntry, error) {
+func (s *SQLiteStore) readDebugTraceFiles(groupID, userID, messageID string) ([]AppLogEntry, error) {
 	root := s.debugTraceDir()
-	if root == "" || strings.TrimSpace(target) == "" {
+	if root == "" || strings.TrimSpace(messageID) == "" {
 		return nil, nil
 	}
 	days, err := os.ReadDir(root)
@@ -93,58 +156,51 @@ func (s *SQLiteStore) readDebugTraceFiles(target string) ([]AppLogEntry, error) 
 	if err != nil {
 		return nil, fmt.Errorf("list debug trace days: %w", err)
 	}
-	name := debugTraceFileName(target)
+	messageDir := debugTraceMessageDir(groupID, userID, messageID)
 	var entries []AppLogEntry
 	for _, day := range days {
 		if !day.IsDir() {
 			continue
 		}
-		dayEntries, err := readDebugTraceFile(filepath.Join(root, day.Name(), name))
-		if err != nil {
-			return nil, err
+		dir := filepath.Join(root, day.Name(), messageDir)
+		files, err := os.ReadDir(dir)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
 		}
-		entries = append(entries, dayEntries...)
-	}
-	return entries, nil
-}
-
-func readDebugTraceFile(path string) ([]AppLogEntry, error) {
-	file, err := os.Open(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, fmt.Errorf("open debug trace: %w", err)
-	}
-	defer func() { _ = file.Close() }()
-	decompressed, err := gzip.NewReader(file)
-	if err != nil {
-		// 进程在写第一条时被杀，文件里只有半个 gzip 头，当作没有记录。
-		return nil, nil
-	}
-	defer func() { _ = decompressed.Close() }()
-	reader := bufio.NewReader(decompressed)
-	var entries []AppLogEntry
-	for {
-		line, err := reader.ReadBytes('\n')
-		if len(line) > 0 && line[len(line)-1] == '\n' {
+		if err != nil {
+			return nil, fmt.Errorf("list debug trace: %w", err)
+		}
+		sort.Slice(files, func(i, j int) bool { return files[i].Name() < files[j].Name() })
+		for _, file := range files {
+			if file.IsDir() || !strings.HasSuffix(file.Name(), ".json") {
+				continue
+			}
+			data, err := os.ReadFile(filepath.Join(dir, file.Name()))
+			if err != nil {
+				return nil, fmt.Errorf("read debug trace: %w", err)
+			}
 			var entry AppLogEntry
-			if json.Unmarshal(line, &entry) == nil {
+			// 进程在写的时候被杀会留下半个文件，跳过它，其余步骤照常显示。
+			if json.Unmarshal(data, &entry) == nil {
 				entries = append(entries, entry)
 			}
 		}
-		// 除了正常的 EOF，写到一半被打断的尾巴也会让解压报错；前面完整的记录照样返回。
-		if err != nil {
-			return entries, nil
-		}
 	}
+	return entries, nil
 }
 
 // PruneDebugTraceFiles 删掉整天都早于 before 的调试轨迹目录，返回删掉的天数。
 // before 为零值表示不清理。
 func (s *SQLiteStore) PruneDebugTraceFiles(before time.Time) (int, error) {
+	if s == nil || before.IsZero() {
+		return 0, nil
+	}
+	// 整天删，所以真正清掉的是截止时间所在那天零点之前的记录；事件页据此说明
+	// 「这条早于某时，已按保留期清理」。库里的旧调试日志用同一个截止时间清理。
+	day := before.UTC().Truncate(24 * time.Hour)
+	s.debugTracePruned.Store(day.UnixNano())
 	root := s.debugTraceDir()
-	if root == "" || before.IsZero() {
+	if root == "" {
 		return 0, nil
 	}
 	days, err := os.ReadDir(root)
@@ -174,4 +230,44 @@ func (s *SQLiteStore) PruneDebugTraceFiles(before time.Time) (int, error) {
 		deleted++
 	}
 	return deleted, nil
+}
+
+func (s *SQLiteStore) debugTracePrunedBefore() time.Time {
+	if s == nil {
+		return time.Time{}
+	}
+	if value := s.debugTracePruned.Load(); value > 0 {
+		return time.Unix(0, value)
+	}
+	return time.Time{}
+}
+
+// .since 记下这个数据目录第一次按新格式写调试轨迹的时间。在它之前处理的事件
+// 没有「收到消息」这一步，分不清当时是调试模式关着还是没调模型。
+const debugTraceSinceFile = ".since"
+
+func (s *SQLiteStore) markDebugTraceSince(root string, at time.Time) {
+	s.debugTraceSinceOnce.Do(func() {
+		path := filepath.Join(root, debugTraceSinceFile)
+		if _, err := os.Stat(path); err == nil {
+			return
+		}
+		_ = os.WriteFile(path, []byte(at.UTC().Format(time.RFC3339Nano)+"\n"), 0o600)
+	})
+}
+
+func (s *SQLiteStore) debugTraceSince() time.Time {
+	root := s.debugTraceDir()
+	if root == "" {
+		return time.Time{}
+	}
+	data, err := os.ReadFile(filepath.Join(root, debugTraceSinceFile))
+	if err != nil {
+		return time.Time{}
+	}
+	since, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(string(data)))
+	if err != nil {
+		return time.Time{}
+	}
+	return since
 }

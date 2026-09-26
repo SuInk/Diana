@@ -49,7 +49,7 @@ func (s *SQLiteStore) AppendLog(ctx context.Context, entry AppLogEntry) error {
 	}
 	entry = normalizeLogEntry(entry)
 	if root := s.debugTraceDir(); root != "" && storesDebugTraceInFile(entry) {
-		return s.appendDebugTraceFile(root, entry)
+		return s.writeDebugTraceFile(root, entry)
 	}
 	var metadata string
 	if len(entry.Metadata) > 0 {
