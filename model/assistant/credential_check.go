@@ -32,6 +32,9 @@ type CredentialCheck struct {
 	State      string `json:"state"`
 	Account    string `json:"account,omitempty"`
 	Message    string `json:"message"`
+	// MembershipExpired 表示登录有效但会员已过期。只在服务端内部用：音乐连接测试
+	// 靠它把「测试曲放不了」归因到会员，而不是笼统地说版权限制。
+	MembershipExpired bool `json:"-"`
 }
 
 const credentialCheckTimeout = 15 * time.Second

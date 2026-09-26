@@ -22,9 +22,6 @@ func musicPageURL(item song) string {
 		link = "https://music.163.com/song?id=" + url.QueryEscape(item.ID)
 	case "qq":
 		link = "https://y.qq.com/n/ryqq/songDetail/" + url.PathEscape(item.ID)
-	case "kugou":
-		hash, album := kugouSplitSongID(item.ID)
-		link = "https://www.kugou.com/song/#" + url.Values{"hash": {hash}, "album_id": {album}}.Encode()
 	}
 	return link
 }

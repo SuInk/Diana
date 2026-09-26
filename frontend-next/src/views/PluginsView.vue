@@ -845,7 +845,6 @@ const musicTestResults = ref<Record<string, MusicConnectionStatus>>({});
 const musicPlatforms = [
   { key: "netease", label: "网易云音乐", guide: "公开试听可直接使用；会员歌曲建议填写自建 NeteaseCloudMusicApi，并从浏览器登录 Cookie 中复制 MUSIC_U 的值。" },
   { key: "qq", label: "QQ 音乐", guide: "可直接填写浏览器登录后的完整 Cookie；通常应包含 uin 或 qqmusic_uin，以及 qm_keyst 或 qqmusic_key。自建 API 可选。" },
-  { key: "kugou", label: "酷狗音乐", guide: "公开搜索无需配置。会员歌曲需要同时填写自建 KuGouMusicApi 地址和完整 Cookie，Cookie 建议包含 token、userid、dfid。" },
 ] as const;
 const musicCredentialKeys = new Set(musicPlatforms.flatMap((item) => [`${item.key}_api_base`, `${item.key}_cookie`]));
 const musicGeneralSpecs = computed(() => settingsSpecs.value.filter((spec) => !musicCredentialKeys.has(spec.key)));
@@ -859,7 +858,6 @@ function musicPlatformSummary(source: string): string {
   const apiKey = `${source}_api_base`;
   const cookie = !clearSecrets.value.includes(cookieKey) && (secretConfigured(cookieKey) || String(settingsForm.value[cookieKey] ?? "").trim() !== "");
   const api = String(settingsForm.value[apiKey] ?? "").trim() !== "";
-  if (source === "kugou" && cookie && !api) return "已填凭据，但会员能力还缺自建 API";
   if (cookie && api) return "自建服务与登录态均已配置";
   if (cookie) return "已配置登录态";
   if (api) return "已配置自建服务，尚未配置登录态";
@@ -871,7 +869,6 @@ function musicCredentialHint(source: string): string {
   if (!raw) return "";
   if (source === "qq" && !(raw.includes("uin=") || raw.includes("qqmusic_uin="))) return "当前输入中未发现 uin 或 qqmusic_uin，QQ 会员请求可能无法识别账号。";
   if (source === "qq" && !(raw.includes("qm_keyst=") || raw.includes("qqmusic_key="))) return "当前输入中未发现 qm_keyst 或 qqmusic_key，登录态可能不完整。";
-  if (source === "kugou" && !["token=", "userid=", "dfid="].every((key) => raw.includes(key))) return "当前输入中缺少 token、userid 或 dfid，酷狗会员能力可能不可用。";
   return "凭据格式包含所需字段；仍建议点击下方按钮实际测试。";
 }
 

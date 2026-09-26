@@ -22,7 +22,7 @@ import (
 // 曲库来源的公共层。加一家平台只要实现 musicSource 并登记进 defaultMusicSources，
 // 插件那边（music_plugin.go）不用动。
 //
-// 多曲库不是为了凑数：一首歌在网易云是会员专享、在酷狗能试听，这种事天天发生。
+// 多曲库不是为了凑数：一首歌在网易云是会员专享、在 QQ 音乐能试听，这种事天天发生。
 // 所以「搜到」不算数，「搜到而且放得出来」才算——一家放不了就问下一家，这是
 // 多曲库唯一真正的意义。
 
@@ -35,7 +35,7 @@ type musicReference struct {
 }
 
 // song 是一首歌在这里需要知道的全部信息。ID 对本层是不透明的，
-// 各家自己解释（网易云是数字 ID，QQ 是 songmid，酷狗是 hash:album_id）。
+// 各家自己解释（网易云是数字 ID，QQ 是 songmid）。
 type song struct {
 	Source   string
 	ID       string
@@ -79,7 +79,10 @@ type musicSource interface {
 }
 
 func defaultMusicSources() []musicSource {
-	return []musicSource{newNeteaseSource(), newQQSource(), newKugouSource()}
+	// 酷狗在 2026 年 9 月下线：网页播放接口全部失效，手机接口对热门歌只回「需要付费」，
+	// 会员又得另配自建服务，和同属腾讯音乐的 QQ 曲库大面积重合，补位价值抵不上维护。
+	// 存量设置里的 kugou 选项在加载时剔除（见 sanitizePluginSettings）。
+	return []musicSource{newNeteaseSource(), newQQSource()}
 }
 
 // musicSourceOptions 是一家曲库的凭据与自建接口地址。

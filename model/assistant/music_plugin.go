@@ -114,6 +114,8 @@ func (p *MusicPlugin) TestConnections(ctx context.Context, settings SettingValue
 			status.Message = "搜索与播放地址获取正常"
 		case status.SearchOK && loginInvalid:
 			status.Message = "搜索正常，但登录态无效，取不到播放地址"
+		case status.SearchOK && status.Login != nil && status.Login.MembershipExpired:
+			status.Message = "搜索正常、登录有效，但会员已过期；测试曲是会员歌曲，拿不到播放地址"
 		case status.SearchOK && status.Login != nil && status.Login.State == CredentialValid:
 			status.Message = "搜索正常、登录有效，但测试曲没取到播放地址，可能是这家的版权限制"
 		case status.SearchOK:
@@ -164,8 +166,8 @@ func (p *MusicPlugin) Manifest() PluginManifest {
 	return PluginManifest{
 		ID:          musicPluginID,
 		Name:        "音乐增强",
-		Version:     "0.2.4",
-		Description: "支持网易云、QQ 音乐和酷狗点歌及链接解析。OneBot QQ 发送语音，Telegram 上传歌曲并使用原生音乐播放器，其他平台发送歌曲来源链接。",
+		Version:     "0.3.0",
+		Description: "支持网易云和 QQ 音乐点歌及链接解析。OneBot QQ 发送语音，Telegram 上传歌曲并使用原生音乐播放器，其他平台发送歌曲来源链接。",
 		Official:    true,
 		BuiltIn:     true,
 		Permissions: []string{"agent:tool", "network:http", "file:write", "process:execute", "message:read", "message:send"},
@@ -224,21 +226,6 @@ func (p *MusicPlugin) Manifest() PluginManifest {
 				Default:     "",
 				Secret:      true,
 				Description: "完整的 Cookie 串，用于会员和独家曲目。",
-			},
-			{
-				Key:         musicSourceAPIBaseSetting("kugou"),
-				Label:       "酷狗自建 API 地址",
-				Type:        PluginSettingTypeString,
-				Default:     "",
-				Description: "自建 KuGouMusicApi 的地址。留空走官方接口。",
-			},
-			{
-				Key:         musicSourceCookieSetting("kugou"),
-				Label:       "酷狗 Cookie",
-				Type:        PluginSettingTypeString,
-				Default:     "",
-				Secret:      true,
-				Description: "完整 Cookie（建议包含 token、userid、dfid）。会员曲目需配合自建 KuGouMusicApi；留空只能尝试公开试听。",
 			},
 			{
 				Key:     musicSettingBitrate,
@@ -555,7 +542,7 @@ func musicNoticeResponse(item song, reason string) *PluginResponse {
 }
 
 // musicSongContext 是给模型看的来源标签。带上平台名，模型才知道刚才那条语音
-// 是从哪家放的——分享的是网易云链接、实际从酷狗放出来的情况是存在的。
+// 是从哪家放的——分享的是网易云链接、实际从 QQ 音乐放出来的情况是存在的。
 func musicSongContext(p *MusicPlugin, item song, note string) string {
 	var builder strings.Builder
 	builder.WriteString("音乐：")
