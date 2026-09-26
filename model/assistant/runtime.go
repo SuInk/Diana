@@ -367,7 +367,9 @@ type Runtime struct {
 	appLogs       applog.Writer
 	messageStore  MessageHistoryStore
 	// aliasSalt 是脱敏别名的全局盐，进程内只定一次，落库后跨重启不变。
-	aliasSalt        string
+	aliasSalt string
+	// bodyAccounts 记住正文里出现过的账号数字是不是本群成员，免得每轮都去平台问。
+	bodyAccounts     bodyAccountMembership
 	inboundStore     InboundEventStore
 	inboundFailedAt  time.Time
 	userMemory       UserMemoryStore

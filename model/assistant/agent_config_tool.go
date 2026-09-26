@@ -106,41 +106,42 @@ type dianaBotConfigSnapshot struct {
 	ProactiveReplyRouterPromptChars int                  `json:"proactive_reply_router_prompt_chars,omitempty"`
 	ProactiveReplyPromptChars       int                  `json:"proactive_reply_prompt_chars,omitempty"`
 	// CustomizedPrompts 列出在界面上改过的内置提示词键，正文不外露。
-	CustomizedPrompts            []string                  `json:"customized_prompts,omitempty"`
-	MaxInputChars                int                       `json:"max_input_chars"`
-	MaxReplyChars                int                       `json:"max_reply_chars"`
-	DirectReplyChunkSize         int                       `json:"direct_reply_chunk_size"`
-	ForwardReplyEnabled          bool                      `json:"forward_reply_enabled"`
-	ForwardReplyThreshold        int                       `json:"forward_reply_threshold"`
-	RecallReplyMode              RecallReplyMode           `json:"recall_reply_mode"`
-	RecallReplyAutoDeleteEnabled bool                      `json:"recall_reply_auto_delete_enabled"`
-	RecallReplyTTLSeconds        int                       `json:"recall_reply_auto_delete_delay_seconds"`
-	OwnerLLMConfigEnabled        bool                      `json:"owner_llm_config_enabled"`
-	LLMIdentityMaskingEnabled    bool                      `json:"llm_identity_masking_enabled"`
-	RecentContextLimit           int                       `json:"recent_context_limit"`
-	ContextSummaryThreshold      int                       `json:"context_summary_threshold"`
-	CrossGroupMemoryEnabled      bool                      `json:"cross_group_memory_enabled"`
-	CrossPlatformMemoryEnabled   bool                      `json:"cross_platform_memory_enabled"`
-	WorldBookEnabled             bool                      `json:"world_book_enabled"`
-	SelfNoteEnabled              bool                      `json:"self_note_enabled"`
-	RomanceEnabled               bool                      `json:"romance_enabled"`
-	MoodEnabled                  bool                      `json:"mood_enabled"`
-	PokeReplyEnabled             bool                      `json:"poke_reply_enabled"`
-	ExpressionLearningEnabled    bool                      `json:"expression_learning_enabled"`
-	DictSegmentEnabled           bool                      `json:"dict_segment_enabled"`
-	SemanticSearchEnabled        bool                      `json:"semantic_search_enabled"`
-	ProactiveReplyChance         float64                   `json:"proactive_reply_chance"`
-	ProactiveReplyThreshold      float64                   `json:"proactive_reply_threshold"`
-	ChatInEnabled                bool                      `json:"chat_in_enabled"`
-	ChatInLevel                  string                    `json:"chat_in_level"`
-	Participation                *ParticipationPreferences `json:"participation"`
-	ChatInThreshold              float64                   `json:"chat_in_threshold"`
-	ChatInChance                 float64                   `json:"chat_in_chance"`
-	ChatInCooldownSeconds        int                       `json:"chat_in_cooldown_seconds"`
-	ReplyRules                   []ReplyRule               `json:"reply_rules,omitempty"`
-	MaxBotConcurrency            int                       `json:"max_bot_concurrency"`
-	RequestTimeoutMS             int64                     `json:"request_timeout_ms"`
-	Agent                        dianaAgentConfigSnapshot  `json:"agent"`
+	CustomizedPrompts                    []string                  `json:"customized_prompts,omitempty"`
+	MaxInputChars                        int                       `json:"max_input_chars"`
+	MaxReplyChars                        int                       `json:"max_reply_chars"`
+	DirectReplyChunkSize                 int                       `json:"direct_reply_chunk_size"`
+	ForwardReplyEnabled                  bool                      `json:"forward_reply_enabled"`
+	ForwardReplyThreshold                int                       `json:"forward_reply_threshold"`
+	RecallReplyMode                      RecallReplyMode           `json:"recall_reply_mode"`
+	RecallReplyAutoDeleteEnabled         bool                      `json:"recall_reply_auto_delete_enabled"`
+	RecallReplyTTLSeconds                int                       `json:"recall_reply_auto_delete_delay_seconds"`
+	OwnerLLMConfigEnabled                bool                      `json:"owner_llm_config_enabled"`
+	LLMIdentityMaskingEnabled            bool                      `json:"llm_identity_masking_enabled"`
+	LLMIdentityBodyAccountMappingEnabled bool                      `json:"llm_identity_body_account_mapping_enabled"`
+	RecentContextLimit                   int                       `json:"recent_context_limit"`
+	ContextSummaryThreshold              int                       `json:"context_summary_threshold"`
+	CrossGroupMemoryEnabled              bool                      `json:"cross_group_memory_enabled"`
+	CrossPlatformMemoryEnabled           bool                      `json:"cross_platform_memory_enabled"`
+	WorldBookEnabled                     bool                      `json:"world_book_enabled"`
+	SelfNoteEnabled                      bool                      `json:"self_note_enabled"`
+	RomanceEnabled                       bool                      `json:"romance_enabled"`
+	MoodEnabled                          bool                      `json:"mood_enabled"`
+	PokeReplyEnabled                     bool                      `json:"poke_reply_enabled"`
+	ExpressionLearningEnabled            bool                      `json:"expression_learning_enabled"`
+	DictSegmentEnabled                   bool                      `json:"dict_segment_enabled"`
+	SemanticSearchEnabled                bool                      `json:"semantic_search_enabled"`
+	ProactiveReplyChance                 float64                   `json:"proactive_reply_chance"`
+	ProactiveReplyThreshold              float64                   `json:"proactive_reply_threshold"`
+	ChatInEnabled                        bool                      `json:"chat_in_enabled"`
+	ChatInLevel                          string                    `json:"chat_in_level"`
+	Participation                        *ParticipationPreferences `json:"participation"`
+	ChatInThreshold                      float64                   `json:"chat_in_threshold"`
+	ChatInChance                         float64                   `json:"chat_in_chance"`
+	ChatInCooldownSeconds                int                       `json:"chat_in_cooldown_seconds"`
+	ReplyRules                           []ReplyRule               `json:"reply_rules,omitempty"`
+	MaxBotConcurrency                    int                       `json:"max_bot_concurrency"`
+	RequestTimeoutMS                     int64                     `json:"request_timeout_ms"`
+	Agent                                dianaAgentConfigSnapshot  `json:"agent"`
 }
 
 type dianaAgentConfigSnapshot struct {
@@ -306,105 +307,106 @@ func dianaRuntimeFromStatus(status RuntimeStatus, profileID string) dianaRuntime
 func dianaBotConfigFromConfig(cfg BotConfig) dianaBotConfigSnapshot {
 	chatIn := cfg.chatInSettings()
 	return dianaBotConfigSnapshot{
-		ID:                              cfg.ID,
-		Name:                            cfg.Name,
-		Platform:                        cfg.Platform,
-		AvatarURL:                       cfg.AvatarURL,
-		Enabled:                         cfg.Enabled,
-		OneBotTransport:                 cfg.WithDefaults().OneBotTransport,
-		OneBotWSEndpoint:                secretmask.URLs(cfg.OneBotWSEndpoint),
-		OneBotHTTPURL:                   secretmask.URLs(cfg.OneBotHTTPURL),
-		OneBotHTTPSecretConfigured:      strings.TrimSpace(cfg.OneBotHTTPSecret) != "",
-		OneBotReverseWSEndpoint:         secretmask.URLs(cfg.OneBotReverseWSEndpoint),
-		OneBotAccessTokenConfigured:     strings.TrimSpace(cfg.OneBotAccessToken) != "",
-		NoneBotBridgeEnabled:            cfg.NoneBotBridgeEnabled,
-		NoneBotBridgeEndpoint:           secretmask.URLs(cfg.NoneBotBridgeEndpoint),
-		NoneBotBridgeTokenConfigured:    strings.TrimSpace(cfg.NoneBotBridgeToken) != "",
-		BotAccount:                      cfg.BotAccount,
-		OwnerID:                         cfg.OwnerID,
-		OwnerLoginEnabled:               cfg.OwnerLoginEnabled,
-		GroupTriggers:                   append([]string(nil), cfg.GroupTriggers...),
-		GroupTriggerMode:                aliasTriggerMode(cfg),
-		DisabledGroups:                  append([]string(nil), cfg.DisabledGroups...),
-		GroupAdmission:                  cfg.GroupAdmission.WithDefaults(),
-		PrivateAdmission:                cfg.PrivateAdmission.WithDefaults(),
-		ReplyGate:                       cfg.ReplyGate.Clone(),
-		WelcomeEnabled:                  cfg.WelcomeEnabled,
-		WelcomeMessage:                  cfg.WelcomeMessage,
-		WelcomeMode:                     cfg.WelcomeMode,
-		WelcomeTemplates:                append([]string(nil), cfg.WelcomeTemplates...),
-		WelcomeLLMCooldownSeconds:       cfg.WelcomeLLMCooldownSeconds,
-		SystemPromptConfigured:          strings.TrimSpace(cfg.SystemPrompt) != "",
-		SystemPromptChars:               len([]rune(cfg.SystemPrompt)),
-		ReplyReferenceMode:              replyReferenceMode(cfg),
-		MentionUserMode:                 mentionUserMode(cfg),
-		MarkdownToPlain:                 markdownToPlainForConfig(cfg),
-		ErrorNotifyEnabled:              boolValue(cfg.ErrorNotifyEnabled, true),
-		MutedReplyPauseEnabled:          cfg.mutedReplyPauseEnabled(),
-		MutedVoiceTranscriptionEnabled:  cfg.mutedVoiceTranscriptionEnabled(),
-		MutedImageDescriptionEnabled:    cfg.mutedImageDescriptionEnabled(),
-		MutedReplyJudgmentEnabled:       cfg.mutedReplyJudgmentEnabled(),
-		ErrorPersonaReplyEnabled:        boolValue(cfg.ErrorPersonaReplyEnabled, false),
-		ErrorReplyPrefix:                cfg.ErrorReplyPrefix,
-		SendRetryAttempts:               cfg.SendRetryAttempts,
-		SendBackoffInitialSeconds:       cfg.SendBackoffInitialSeconds,
-		SendBackoffMaxSeconds:           cfg.SendBackoffMaxSeconds,
-		SendFailureWindowMinutes:        cfg.SendFailureWindowMinutes,
-		SendDropCooldownMinutes:         cfg.SendDropCooldownMinutes,
-		InboundRetryMaxAttempts:         cfg.InboundRetryMaxAttempts,
-		SendChunkIntervalMS:             cfg.SendChunkIntervalMS,
-		PrivateClosingGrace:             cfg.PrivateClosingGrace,
-		InboundGroupConcurrency:         cfg.InboundGroupConcurrency,
-		InboundPrivateConcurrency:       cfg.InboundPrivateConcurrency,
-		PromptInjectTime:                boolValue(cfg.PromptInjectTime, true),
-		PromptInjectPlaintextRules:      boolValue(cfg.PromptInjectPlaintextRules, true),
-		PromptInjectGroupSender:         boolValue(cfg.PromptInjectGroupSender, true),
-		PromptChineseSlangHint:          boolValue(cfg.PromptChineseSlangHint, true),
-		PromptChineseSlangChars:         len([]rune(cfg.prompt(promptChineseSlangSpec))),
-		PromptPlaintextRulesChars:       len([]rune(cfg.prompt(promptPlaintextRulesSpec))),
-		PromptTimeTemplateConfigured:    cfg.PromptOverrides.isCustomized(promptTimeTemplateSpec),
-		PromptGroupSenderConfigured:     cfg.PromptOverrides.isCustomized(promptGroupSenderSpec),
-		PromptImageOnlyConfigured:       cfg.PromptOverrides.isCustomized(promptImageOnlySpec),
-		PromptWakeOnlyConfigured:        cfg.PromptOverrides.isCustomized(promptWakeOnlySpec),
-		ModelRoles:                      normalizeModelRoles(cfg.ModelRoles),
-		BotReplyLoopDetectionEnabled:    boolValue(cfg.BotReplyLoopDetectionEnabled, true),
-		ReplyRefusalSuppressionEnabled:  boolValue(cfg.ReplyRefusalSuppressionEnabled, true),
-		ProactiveReplyRouterPromptChars: len([]rune(cfg.prompt(promptLegacyRouterSpec))),
-		ProactiveReplyPromptChars:       len([]rune(cfg.prompt(promptProactiveReplySpec))),
-		CustomizedPrompts:               customizedPromptKeys(cfg.PromptOverrides),
-		MaxInputChars:                   cfg.MaxInputChars,
-		MaxReplyChars:                   cfg.MaxReplyChars,
-		DirectReplyChunkSize:            cfg.DirectReplyChunkSize,
-		ForwardReplyEnabled:             boolValue(cfg.ForwardReplyEnabled, true),
-		ForwardReplyThreshold:           cfg.ForwardReplyThreshold,
-		RecallReplyMode:                 cfg.RecallReplyMode,
-		RecallReplyAutoDeleteEnabled:    boolValue(cfg.RecallReplyAutoDeleteEnabled, false),
-		RecallReplyTTLSeconds:           cfg.RecallReplyTTLSeconds,
-		OwnerLLMConfigEnabled:           boolValue(cfg.OwnerLLMConfigEnabled, true),
-		LLMIdentityMaskingEnabled:       llmIdentityMaskingEnabled(cfg),
-		RecentContextLimit:              cfg.RecentContextLimit,
-		ContextSummaryThreshold:         cfg.ContextSummaryThreshold,
-		CrossGroupMemoryEnabled:         boolValue(cfg.CrossGroupMemoryEnabled, false),
-		CrossPlatformMemoryEnabled:      boolValue(cfg.CrossPlatformMemoryEnabled, false),
-		WorldBookEnabled:                boolValue(cfg.WorldBookEnabled, true),
-		SelfNoteEnabled:                 boolValue(cfg.SelfNoteEnabled, false),
-		RomanceEnabled:                  boolValue(cfg.RomanceEnabled, false),
-		MoodEnabled:                     boolValue(cfg.MoodEnabled, false),
-		PokeReplyEnabled:                boolValue(cfg.PokeReplyEnabled, false),
-		ExpressionLearningEnabled:       boolValue(cfg.ExpressionLearningEnabled, false),
-		DictSegmentEnabled:              boolValue(cfg.DictSegmentEnabled, false),
-		SemanticSearchEnabled:           boolValue(cfg.SemanticSearchEnabled, false),
-		ProactiveReplyChance:            cfg.ProactiveReplyChance,
-		ProactiveReplyThreshold:         cfg.ProactiveReplyThreshold,
-		ChatInEnabled:                   chatIn.Enabled,
-		ChatInLevel:                     string(chatIn.Level),
-		Participation:                   chatIn.Participation,
-		ChatInThreshold:                 chatIn.Threshold,
-		ChatInChance:                    chatIn.Chance,
-		ChatInCooldownSeconds:           int(chatIn.Cooldown / time.Second),
-		ReplyRules:                      append([]ReplyRule(nil), cfg.ReplyRules...),
-		MaxBotConcurrency:               cfg.MaxBotConcurrency,
-		RequestTimeoutMS:                cfg.RequestTimeout.Milliseconds(),
+		ID:                                   cfg.ID,
+		Name:                                 cfg.Name,
+		Platform:                             cfg.Platform,
+		AvatarURL:                            cfg.AvatarURL,
+		Enabled:                              cfg.Enabled,
+		OneBotTransport:                      cfg.WithDefaults().OneBotTransport,
+		OneBotWSEndpoint:                     secretmask.URLs(cfg.OneBotWSEndpoint),
+		OneBotHTTPURL:                        secretmask.URLs(cfg.OneBotHTTPURL),
+		OneBotHTTPSecretConfigured:           strings.TrimSpace(cfg.OneBotHTTPSecret) != "",
+		OneBotReverseWSEndpoint:              secretmask.URLs(cfg.OneBotReverseWSEndpoint),
+		OneBotAccessTokenConfigured:          strings.TrimSpace(cfg.OneBotAccessToken) != "",
+		NoneBotBridgeEnabled:                 cfg.NoneBotBridgeEnabled,
+		NoneBotBridgeEndpoint:                secretmask.URLs(cfg.NoneBotBridgeEndpoint),
+		NoneBotBridgeTokenConfigured:         strings.TrimSpace(cfg.NoneBotBridgeToken) != "",
+		BotAccount:                           cfg.BotAccount,
+		OwnerID:                              cfg.OwnerID,
+		OwnerLoginEnabled:                    cfg.OwnerLoginEnabled,
+		GroupTriggers:                        append([]string(nil), cfg.GroupTriggers...),
+		GroupTriggerMode:                     aliasTriggerMode(cfg),
+		DisabledGroups:                       append([]string(nil), cfg.DisabledGroups...),
+		GroupAdmission:                       cfg.GroupAdmission.WithDefaults(),
+		PrivateAdmission:                     cfg.PrivateAdmission.WithDefaults(),
+		ReplyGate:                            cfg.ReplyGate.Clone(),
+		WelcomeEnabled:                       cfg.WelcomeEnabled,
+		WelcomeMessage:                       cfg.WelcomeMessage,
+		WelcomeMode:                          cfg.WelcomeMode,
+		WelcomeTemplates:                     append([]string(nil), cfg.WelcomeTemplates...),
+		WelcomeLLMCooldownSeconds:            cfg.WelcomeLLMCooldownSeconds,
+		SystemPromptConfigured:               strings.TrimSpace(cfg.SystemPrompt) != "",
+		SystemPromptChars:                    len([]rune(cfg.SystemPrompt)),
+		ReplyReferenceMode:                   replyReferenceMode(cfg),
+		MentionUserMode:                      mentionUserMode(cfg),
+		MarkdownToPlain:                      markdownToPlainForConfig(cfg),
+		ErrorNotifyEnabled:                   boolValue(cfg.ErrorNotifyEnabled, true),
+		MutedReplyPauseEnabled:               cfg.mutedReplyPauseEnabled(),
+		MutedVoiceTranscriptionEnabled:       cfg.mutedVoiceTranscriptionEnabled(),
+		MutedImageDescriptionEnabled:         cfg.mutedImageDescriptionEnabled(),
+		MutedReplyJudgmentEnabled:            cfg.mutedReplyJudgmentEnabled(),
+		ErrorPersonaReplyEnabled:             boolValue(cfg.ErrorPersonaReplyEnabled, false),
+		ErrorReplyPrefix:                     cfg.ErrorReplyPrefix,
+		SendRetryAttempts:                    cfg.SendRetryAttempts,
+		SendBackoffInitialSeconds:            cfg.SendBackoffInitialSeconds,
+		SendBackoffMaxSeconds:                cfg.SendBackoffMaxSeconds,
+		SendFailureWindowMinutes:             cfg.SendFailureWindowMinutes,
+		SendDropCooldownMinutes:              cfg.SendDropCooldownMinutes,
+		InboundRetryMaxAttempts:              cfg.InboundRetryMaxAttempts,
+		SendChunkIntervalMS:                  cfg.SendChunkIntervalMS,
+		PrivateClosingGrace:                  cfg.PrivateClosingGrace,
+		InboundGroupConcurrency:              cfg.InboundGroupConcurrency,
+		InboundPrivateConcurrency:            cfg.InboundPrivateConcurrency,
+		PromptInjectTime:                     boolValue(cfg.PromptInjectTime, true),
+		PromptInjectPlaintextRules:           boolValue(cfg.PromptInjectPlaintextRules, true),
+		PromptInjectGroupSender:              boolValue(cfg.PromptInjectGroupSender, true),
+		PromptChineseSlangHint:               boolValue(cfg.PromptChineseSlangHint, true),
+		PromptChineseSlangChars:              len([]rune(cfg.prompt(promptChineseSlangSpec))),
+		PromptPlaintextRulesChars:            len([]rune(cfg.prompt(promptPlaintextRulesSpec))),
+		PromptTimeTemplateConfigured:         cfg.PromptOverrides.isCustomized(promptTimeTemplateSpec),
+		PromptGroupSenderConfigured:          cfg.PromptOverrides.isCustomized(promptGroupSenderSpec),
+		PromptImageOnlyConfigured:            cfg.PromptOverrides.isCustomized(promptImageOnlySpec),
+		PromptWakeOnlyConfigured:             cfg.PromptOverrides.isCustomized(promptWakeOnlySpec),
+		ModelRoles:                           normalizeModelRoles(cfg.ModelRoles),
+		BotReplyLoopDetectionEnabled:         boolValue(cfg.BotReplyLoopDetectionEnabled, true),
+		ReplyRefusalSuppressionEnabled:       boolValue(cfg.ReplyRefusalSuppressionEnabled, true),
+		ProactiveReplyRouterPromptChars:      len([]rune(cfg.prompt(promptLegacyRouterSpec))),
+		ProactiveReplyPromptChars:            len([]rune(cfg.prompt(promptProactiveReplySpec))),
+		CustomizedPrompts:                    customizedPromptKeys(cfg.PromptOverrides),
+		MaxInputChars:                        cfg.MaxInputChars,
+		MaxReplyChars:                        cfg.MaxReplyChars,
+		DirectReplyChunkSize:                 cfg.DirectReplyChunkSize,
+		ForwardReplyEnabled:                  boolValue(cfg.ForwardReplyEnabled, true),
+		ForwardReplyThreshold:                cfg.ForwardReplyThreshold,
+		RecallReplyMode:                      cfg.RecallReplyMode,
+		RecallReplyAutoDeleteEnabled:         boolValue(cfg.RecallReplyAutoDeleteEnabled, false),
+		RecallReplyTTLSeconds:                cfg.RecallReplyTTLSeconds,
+		OwnerLLMConfigEnabled:                boolValue(cfg.OwnerLLMConfigEnabled, true),
+		LLMIdentityMaskingEnabled:            llmIdentityMaskingEnabled(cfg),
+		LLMIdentityBodyAccountMappingEnabled: llmIdentityBodyAccountMappingEnabled(cfg),
+		RecentContextLimit:                   cfg.RecentContextLimit,
+		ContextSummaryThreshold:              cfg.ContextSummaryThreshold,
+		CrossGroupMemoryEnabled:              boolValue(cfg.CrossGroupMemoryEnabled, false),
+		CrossPlatformMemoryEnabled:           boolValue(cfg.CrossPlatformMemoryEnabled, false),
+		WorldBookEnabled:                     boolValue(cfg.WorldBookEnabled, true),
+		SelfNoteEnabled:                      boolValue(cfg.SelfNoteEnabled, false),
+		RomanceEnabled:                       boolValue(cfg.RomanceEnabled, false),
+		MoodEnabled:                          boolValue(cfg.MoodEnabled, false),
+		PokeReplyEnabled:                     boolValue(cfg.PokeReplyEnabled, false),
+		ExpressionLearningEnabled:            boolValue(cfg.ExpressionLearningEnabled, false),
+		DictSegmentEnabled:                   boolValue(cfg.DictSegmentEnabled, false),
+		SemanticSearchEnabled:                boolValue(cfg.SemanticSearchEnabled, false),
+		ProactiveReplyChance:                 cfg.ProactiveReplyChance,
+		ProactiveReplyThreshold:              cfg.ProactiveReplyThreshold,
+		ChatInEnabled:                        chatIn.Enabled,
+		ChatInLevel:                          string(chatIn.Level),
+		Participation:                        chatIn.Participation,
+		ChatInThreshold:                      chatIn.Threshold,
+		ChatInChance:                         chatIn.Chance,
+		ChatInCooldownSeconds:                int(chatIn.Cooldown / time.Second),
+		ReplyRules:                           append([]ReplyRule(nil), cfg.ReplyRules...),
+		MaxBotConcurrency:                    cfg.MaxBotConcurrency,
+		RequestTimeoutMS:                     cfg.RequestTimeout.Milliseconds(),
 		Agent: dianaAgentConfigSnapshot{
 			Enabled:          cfg.AgentEnabled,
 			Mode:             cfg.effectiveAgentMode(),

@@ -215,6 +215,8 @@ export interface BotProfileConfig extends SendRetrySettings {
   llm_streaming_enabled?: boolean;
   /** 会话标识隐私代理：发给模型前把账号、群号和消息 ID 换成别名；不设等同开启。 */
   llm_identity_masking_enabled?: boolean;
+  /** 隐私代理开着时，正文里直接写的本群成员账号也换成别名；不设等同开启。 */
+  llm_identity_body_account_mapping_enabled?: boolean;
   disabled_groups?: string[];
   /** 新加入的群默认工不工作；逐群开关在群管理里，一个群一份。 */
   group_admission?: GroupAdmission;

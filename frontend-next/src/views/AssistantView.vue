@@ -1184,6 +1184,17 @@
                   关闭后模型直接看到真实 ID，适合需要让模型按原始账号查人、对账的场景。
                 </span>
               </div>
+              <div class="field wide">
+                <label class="switch">
+                  <input v-model="form.llm_identity_body_account_mapping_enabled" type="checkbox" :disabled="!form.llm_identity_masking_enabled" />
+                  <span class="track" aria-hidden="true"></span>
+                  <span class="switch-label">正文里的账号也换成别名（默认开启）</span>
+                </label>
+                <span class="hint">
+                  有人在消息里直接写 QQ 号时，先向平台核实是不是本群成员，是就换成同一个别名，模型能认出是谁、也能拿去查；订单号、手机号等其他数字原样保留。
+                  关闭后正文里没在聊天记录中出现过的号码按原样发给模型。只在上面的隐私开关打开时生效。
+                </span>
+              </div>
             </div>
           </section>
 
@@ -3821,6 +3832,7 @@ function setForm(config: BotProfileConfig): void {
     auto_video_preprocess: config.auto_video_preprocess ?? true,
     llm_streaming_enabled: config.llm_streaming_enabled ?? true,
     llm_identity_masking_enabled: config.llm_identity_masking_enabled ?? true,
+    llm_identity_body_account_mapping_enabled: config.llm_identity_body_account_mapping_enabled ?? true,
     group_trigger_mode: config.group_trigger_mode ?? "smart",
     refusal_strategy: config.refusal_strategy ?? "smart",
     prompt_inject_time: config.prompt_inject_time ?? true,
