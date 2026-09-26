@@ -261,6 +261,8 @@ func (r *Runtime) withIdentityPrivacyContext(ctx context.Context, event MessageE
 	for _, item := range history {
 		scope.registerEvent(item)
 	}
+	// 放在结构化登记之后：已经认识的号不必再去平台问。
+	r.registerBodyAccounts(ctx, cfg, scope, event, history)
 	return ctx
 }
 
