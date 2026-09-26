@@ -3968,9 +3968,9 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 				extraTools = append(extraTools, newDianaPokeTool(r, event))
 			}
 			// 视频生成只在模型分配里配了插槽时才挂：没配时模型看得到也只能失败。
-			// 它不在 allowedAgentToolNames 里，一段视频的费用抵得上几十张图，默认只给主人。
-			if r.mediaSlotConfigured(ctx, mediaSlotVideo) {
-				extraTools = append(extraTools, newDianaVideoTool(r, event))
+			// 权限跟着生图走，没有生图权限的人也拿不到视频。
+			if relationship.AllowImageGeneration && r.mediaSlotConfigured(ctx, mediaSlotVideo) {
+				extraTools = append(extraTools, newDianaVideoTool(r, event, relationship))
 			}
 			// 存二进制文件和 write_file 同一档：都是往磁盘上写，跟着「允许写入文件」走。
 			// 它不在 allowedAgentToolNames 里，群成员拿不到。

@@ -254,7 +254,7 @@ func TestVideoToolGeneratesAndDeliversVideo(t *testing.T) {
 	sharer := &recordingLocalMediaSharer{url: "http://127.0.0.1:18080/api/assistant/media/video"}
 	r.SetLocalMediaSharer(sharer)
 	event := MessageEvent{Platform: "onebot", Kind: EventKindGroup, GroupID: "g1", UserID: "u1", MessageID: "m1"}
-	tool := newDianaVideoTool(r, event).(*dianaVideoTool)
+	tool := newDianaVideoTool(r, event, RelationshipPolicyFor(UserMemoryProfile{}, "owner", "u1")).(*dianaVideoTool)
 
 	request, err := tool.prepareRequest(context.Background(), map[string]any{"prompt": "海边日落", "caption": "好了"})
 	if err != nil {
@@ -279,7 +279,7 @@ func TestVideoToolGeneratesAndDeliversVideo(t *testing.T) {
 
 func TestVideoToolRefusesWithoutSlot(t *testing.T) {
 	r := mediaSlotTestRuntime(t, nil, mediaSlotProfile("p1", "http://unused"))
-	_, err := newDianaVideoTool(r, MessageEvent{Kind: EventKindPrivate, UserID: "u"}).Run(context.Background(), map[string]any{"prompt": "cat"})
+	_, err := newDianaVideoTool(r, MessageEvent{Kind: EventKindPrivate, UserID: "u"}, RelationshipPolicyFor(UserMemoryProfile{}, "owner", "u")).Run(context.Background(), map[string]any{"prompt": "cat"})
 	if err == nil || !strings.Contains(err.Error(), "视频生成") {
 		t.Fatalf("err = %v", err)
 	}
@@ -287,11 +287,30 @@ func TestVideoToolRefusesWithoutSlot(t *testing.T) {
 
 func TestVideoToolImageModeNeedsAnImage(t *testing.T) {
 	r := mediaSlotTestRuntime(t, map[string]ModelRole{"video": {ProfileID: "p1", Model: "sora-2"}}, mediaSlotProfile("p1", "http://unused"))
-	tool := newDianaVideoTool(r, MessageEvent{Kind: EventKindPrivate, UserID: "u", MessageID: "m"}).(*dianaVideoTool)
+	tool := newDianaVideoTool(r, MessageEvent{Kind: EventKindPrivate, UserID: "u", MessageID: "m"}, RelationshipPolicyFor(UserMemoryProfile{}, "owner", "u")).(*dianaVideoTool)
 	if _, err := tool.prepareRequest(context.Background(), map[string]any{"prompt": "动起来", "use_image": true}); err != errVideoSourceNotFound {
 		t.Fatalf("err = %v", err)
 	}
 	if _, err := tool.prepareRequest(context.Background(), map[string]any{"prompt": "x", "seconds": 600}); err == nil {
 		t.Fatal("overlong video must be rejected")
+	}
+}
+
+// 视频对群成员开放，和生图同一档。
+func TestVideoToolIsAvailableToGroupMembers(t *testing.T) {
+	member := RelationshipPolicyFor(UserMemoryProfile{}, "owner", "member")
+	if !member.allowedAgentToolNames()[dianaVideoToolName] {
+		t.Fatal("video must be usable by group members")
+	}
+}
+
+// 没有生图权限的人拿不到视频：权限位跟着生图走。
+func TestVideoToolFollowsImageGenerationPermission(t *testing.T) {
+	r := mediaSlotTestRuntime(t, map[string]ModelRole{"video": {ProfileID: "p1", Model: "sora-2"}}, mediaSlotProfile("p1", "http://unused"))
+	policy := RelationshipPolicyFor(UserMemoryProfile{}, "owner", "member")
+	policy.AllowImageGeneration = false
+	_, err := newDianaVideoTool(r, MessageEvent{Kind: EventKindGroup, GroupID: "g", UserID: "member"}, policy).Run(context.Background(), map[string]any{"prompt": "cat"})
+	if err == nil || !strings.Contains(err.Error(), "权限") {
+		t.Fatalf("err = %v", err)
 	}
 }

@@ -3183,7 +3183,7 @@ const mediaRoleRows: ModelRoleRow[] = [
     label: "视频生成",
     sublabel: "可选",
     description:
-      "文生视频、图生视频，按 OpenAI Sora 的 /videos 任务接口提交并轮询。配好后主人可以让机器人生成视频，任务在后台跑完再发出来；不配则不提供这项能力。"
+      "文生视频、图生视频，按 OpenAI Sora 的 /videos 任务接口提交并轮询。配好后有生图权限的人（群成员也一样）可以让机器人生成视频，任务在后台跑完再发出来，每个任务计入群的模型调用额度；不配则不提供这项能力。"
   }
 ];
 
