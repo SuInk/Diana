@@ -64,8 +64,8 @@ func (t *dianaScheduleTool) Description() string {
 // 避免文案和校验代码各写一份数字然后漂移。
 func (t *dianaScheduleTool) InputSchema() map[string]any {
 	item := map[string]any{
-		"interval": toolStringParam("重复间隔，只接受 Go 时长写法：30m、2h、24h（可组合成 1h30m）。不短于 " + minimumScheduleInterval.String() + "，不超过 " + maximumScheduleInterval.String() + "。"),
-		"query":    toolStringParam("每次触发时要执行的查询要求，写成一句完整的自然语言指令；周期提醒就写到点要提醒什么。"),
+		"interval": toolStringParam("重复间隔，只接受 Go 时长写法：30m、2h、24h（可组合成 1h30m）；每天填 24h、每周填 168h。不短于 " + minimumScheduleInterval.String() + "，不超过 " + maximumScheduleInterval.String() + "。"),
+		"query":    toolStringParam(scheduleQueryDescription),
 		"at":       toolStringParam(scheduleAtDescription),
 	}
 	return toolObjectSchema([]string{"operation"}, map[string]any{
@@ -192,6 +192,10 @@ func (t *dianaScheduleTool) Run(_ context.Context, input map[string]any) (string
 		return "", fmt.Errorf("operation 必须是 create、list、update、cancel 或 delete")
 	}
 }
+
+// scheduleQueryDescription 是 query 参数的说明，schedule 和 subscription 两处共用。
+// 周期提醒也走 query，说明里不能只写「查询」，否则模型会觉得「提醒睡觉」不属于这里。
+const scheduleQueryDescription = "每次触发时要做的事，写成一句完整的自然语言指令：要查资料的写查询要求（如「查今天杭州天气，下雨就提醒带伞」），纯提醒写到点要提醒什么（如「提醒用户该睡觉了」）。"
 
 // scheduleAtDescription 是 at 参数的说明，schedule 和 subscription 两处共用。
 const scheduleAtDescription = "首次触发时间，RFC3339（例如 2026-09-27T22:00:00+08:00）。用户说了固定时间点（每天早上八点、每周日 22:00）时必须传，之后每隔 interval 在同一时间点重复；省略表示从现在起过一个 interval 首次触发。已经过去的时间会按 interval 顺延到下一个时间点。"

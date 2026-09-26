@@ -1941,10 +1941,10 @@ var promptScheduledQueryRequestSpec = registerPrompt(PromptSpec{
 	Group:   PromptGroupTasks,
 	Title:   "定时查询 · 本次请求",
 	Usage:   "周期查询到点执行时，代替用户消息发给模型的那段话，带上当前时间和用户当初设定的查询要求。",
-	Default: "执行本次定时订阅。当前时间：{time}。\n查询要求：{query}",
+	Default: "执行本次定时订阅。当前时间：{time}。\n任务内容：{query}",
 	Vars: []PromptVar{
 		{Name: "time", Description: "执行时的本机时间，如 2026-09-23 14:05:00 CST"},
-		{Name: "query", Description: "用户创建定时任务时写的查询要求"},
+		{Name: "query", Description: "用户创建定时任务时写的查询要求或提醒内容"},
 	},
 })
 

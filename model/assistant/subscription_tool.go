@@ -116,8 +116,9 @@ func (t *dianaSubscriptionTool) InputSchema() map[string]any {
 		"operation": toolEnumParam("要执行的操作。cancel 只停止并保留记录，delete 才彻底删除；run 是立刻检查一次，只有 kind=github 支持。",
 			ordered...),
 		"id": toolStringParam("要操作的订阅 ID；update、cancel、delete、run 必填，可先用 list 查到。"),
-		"interval": toolStringParam("检查间隔，只接受 Go 时长写法：30s、15m、1h30m。各 kind 的上下限不同，填错会返回具体数值。" +
-			"kind=schedule 省略会被拒绝，kind=rss 省略按默认间隔处理。"),
+		"interval": toolStringParam("重复间隔，只接受 Go 时长写法，例如 30m、2h、24h、168h、1h30m。" +
+			"kind=schedule 必填：每天填 24h、每周填 168h，固定时间点另用 at 指定；kind=rss 是检查 Feed 的间隔，省略按默认间隔处理。" +
+			"各 kind 的上下限不同，填错会返回具体数值。"),
 	}
 	for key, value := range subscriptionKindFields() {
 		schema[key] = value
@@ -129,12 +130,12 @@ func (t *dianaSubscriptionTool) InputSchema() map[string]any {
 // 合并之后模型同时看得见三套字段，不标清楚归属就会串。
 func subscriptionKindFields() map[string]any {
 	return map[string]any{
-		"query": toolStringParam("kind=schedule 专用：每次触发时要执行的查询要求，写成一句完整的自然语言指令；周期提醒就写到点要提醒什么。"),
+		"query": toolStringParam("kind=schedule 专用：" + scheduleQueryDescription),
 		"at":    toolStringParam("kind=schedule 专用：" + scheduleAtDescription),
 		"items": toolItemsParam("kind=schedule 专用：一次创建多个订阅，只在 create 时有效，最多 "+itoa(maximumTasksPerToolCall)+" 项。",
 			maximumTasksPerToolCall, []string{"interval", "query"}, map[string]any{
-				"interval": toolStringParam("重复间隔，Go 时长写法。"),
-				"query":    toolStringParam("每次触发时要执行的查询要求。"),
+				"interval": toolStringParam("重复间隔，Go 时长写法：每天 24h、每周 168h。"),
+				"query":    toolStringParam("每次触发时要查的内容，或到点要提醒的内容。"),
 				"at":       toolStringParam("首次触发时间，RFC3339；有固定时间点时必须传。"),
 			}),
 		"target_user_id":  toolStringParam("kind=schedule 专用：代其他用户管理时的目标账号，仅机器人主人可用；创建仍占目标用户的额度。"),

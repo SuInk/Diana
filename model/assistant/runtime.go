@@ -4067,7 +4067,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			}
 			if subscription := newDianaSubscriptionTool(
 				subscriptionBackend{
-					kind: subscriptionKindSchedule, label: "按固定间隔重复执行一段查询并通知结果",
+					kind: subscriptionKindSchedule, label: "定时重复任务：每天、每周固定时间的提醒，或按固定间隔重复查询并通知结果",
 					operations: []string{"create", "list", "update", "cancel", "delete"},
 					delegate:   newDianaScheduleTool(r, event),
 				},
