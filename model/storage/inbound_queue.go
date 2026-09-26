@@ -319,7 +319,9 @@ func (s *SQLiteStore) InboundSessionHasNewerPending(ctx context.Context, item as
 		return false, nil
 	}
 	var exists int
-	err := s.db.QueryRowContext(ctx, `
+	// 只读判断，走读池：写连接上排队的入队、领取不该让它跟着等。还在提交中的
+	// 入队这次看不到，等同于它晚到了一点，下一条照常会被合并判断到。
+	err := s.eventReader().QueryRowContext(ctx, `
 SELECT EXISTS (
   SELECT 1 FROM inbound_events
   WHERE session = ? AND status = ? AND id != ?
@@ -440,12 +442,14 @@ WHERE status = ?`
 // PendingInboundCount reports all non-terminal work, including currently
 // leased events.
 func (s *SQLiteStore) PendingInboundCount(ctx context.Context) (int, error) {
-	defer s.observeStorage(ctx, "PendingInboundCount", "write")()
+	defer s.observeStorage(ctx, "PendingInboundCount", "read")()
 	if s == nil || s.db == nil {
 		return 0, errors.New("count pending inbound events: sqlite store is not configured")
 	}
+	// 状态展示用的计数，调用方只给 250ms。放在写连接上时，一有写入排队它就
+	// 超时，生产日志里大量「PendingInboundCount 被取消」都是这么来的。
 	var count int
-	if err := s.db.QueryRowContext(ctx, `
+	if err := s.eventReader().QueryRowContext(ctx, `
 SELECT COUNT(*) FROM inbound_events WHERE status IN (?, ?)
 `, inboundStatusPending, inboundStatusProcessing).Scan(&count); err != nil {
 		return 0, fmt.Errorf("count pending inbound events: %w", err)
@@ -456,7 +460,7 @@ SELECT COUNT(*) FROM inbound_events WHERE status IN (?, ?)
 // GroupHistoryWatermark returns the newest persisted event timestamp for one
 // group, including history that predates the durable queue migration.
 func (s *SQLiteStore) GroupHistoryWatermark(ctx context.Context, groupID string) (int64, bool, error) {
-	defer s.observeStorage(ctx, "GroupHistoryWatermark", "write")()
+	defer s.observeStorage(ctx, "GroupHistoryWatermark", "read")()
 	if s == nil || s.db == nil {
 		return 0, false, errors.New("load group history watermark: sqlite store is not configured")
 	}
@@ -464,8 +468,10 @@ func (s *SQLiteStore) GroupHistoryWatermark(ctx context.Context, groupID string)
 	if groupID == "" {
 		return 0, false, errors.New("load group history watermark: group id is required")
 	}
+	// 回补水位只决定从哪里开始拉历史，读到的若比正在提交的那条早一点，只是多
+	// 拉几条，入库去重会挡掉，所以不必排在写连接后面。
 	var watermark sql.NullInt64
-	if err := s.db.QueryRowContext(ctx, `
+	if err := s.eventReader().QueryRowContext(ctx, `
 SELECT MAX(event_time)
 FROM message_events
 WHERE kind = ? AND group_id = ?
@@ -478,33 +484,40 @@ WHERE kind = ? AND group_id = ?
 	return watermark.Int64, true, nil
 }
 
-// ListHistorySessions returns each known group/private conversation and its
-// latest persisted event time for reconnect backfill.
-func (s *SQLiteStore) ListHistorySessions(ctx context.Context) ([]assistant.HistorySession, error) {
-	defer s.observeStorage(ctx, "ListHistorySessions", "write")()
-	if s == nil || s.db == nil {
-		return nil, errors.New("list history sessions: sqlite store is not configured")
-	}
-	rows, err := s.db.QueryContext(ctx, `
+// historySessionsQuery 的平台、机器人表达式必须和 historySessionsIndex 里的逐字一致。
+// payload 不是合法 JSON 时平台、机器人按空值算（原先整条查询会报错）。
+const historySessionsQuery = `
 SELECT kind, session_id, platform, profile_id, MAX(event_time)
 FROM (
   SELECT kind, group_id AS session_id,
-         COALESCE(json_extract(payload, '$.platform'), '') AS platform,
-         COALESCE(profile_id, json_extract(payload, '$.profile_id'), '') AS profile_id,
+         COALESCE(CASE WHEN json_valid(payload) THEN json_extract(payload, '$.platform') END, '') AS platform,
+         COALESCE(profile_id, CASE WHEN json_valid(payload) THEN json_extract(payload, '$.profile_id') END, '') AS profile_id,
          event_time
   FROM message_events
   WHERE kind = ? AND group_id IS NOT NULL AND group_id != ''
   UNION ALL
   SELECT kind, user_id AS session_id,
-         COALESCE(json_extract(payload, '$.platform'), '') AS platform,
-         COALESCE(profile_id, json_extract(payload, '$.profile_id'), '') AS profile_id,
+         COALESCE(CASE WHEN json_valid(payload) THEN json_extract(payload, '$.platform') END, '') AS platform,
+         COALESCE(profile_id, CASE WHEN json_valid(payload) THEN json_extract(payload, '$.profile_id') END, '') AS profile_id,
          event_time
   FROM message_events
   WHERE kind = ? AND user_id IS NOT NULL AND user_id != ''
 )
 GROUP BY kind, session_id, platform, profile_id
 ORDER BY platform ASC, profile_id ASC, kind ASC, session_id ASC
-`, string(assistant.EventKindGroup), string(assistant.EventKindPrivate))
+`
+
+// ListHistorySessions returns each known group/private conversation and its
+// latest persisted event time for reconnect backfill.
+func (s *SQLiteStore) ListHistorySessions(ctx context.Context) ([]assistant.HistorySession, error) {
+	defer s.observeStorage(ctx, "ListHistorySessions", "read")()
+	if s == nil || s.db == nil {
+		return nil, errors.New("list history sessions: sqlite store is not configured")
+	}
+	// 要扫全部消息历史，大库上接近一秒。原先占着唯一的写连接，重连回补期间
+	// 入队和领取全部排在它后面；改到读池，并由 idx_message_events_history_sessions
+	// 覆盖，不再回表解析 payload。它只是回补的起点快照，读池看到的已提交数据足够。
+	rows, err := s.eventReader().QueryContext(ctx, historySessionsQuery, string(assistant.EventKindGroup), string(assistant.EventKindPrivate))
 	if err != nil {
 		return nil, fmt.Errorf("list history sessions: %w", err)
 	}
@@ -538,8 +551,9 @@ func (s *SQLiteStore) GroupSeqGap(ctx context.Context, query assistant.GroupSeqG
 		return assistant.GroupSeqGap{}, nil
 	}
 	profileID := strings.TrimSpace(query.ProfileID)
+	// 比较的都是这条实时消息之前、早已提交的记录，读池就够，不用排在写入后面。
 	var previousSeq, previousTime int64
-	err := s.db.QueryRowContext(ctx, `
+	err := s.eventReader().QueryRowContext(ctx, `
 SELECT seq, event_time
 FROM (
   SELECT CAST(json_extract(payload, '$.message_seq') AS INTEGER) AS seq, event_time
@@ -559,7 +573,7 @@ LIMIT 1
 	}
 	gap := assistant.GroupSeqGap{Known: true, PreviousSeq: previousSeq, PreviousTime: previousTime}
 	if selfID := strings.TrimSpace(query.SelfID); selfID != "" {
-		if err := s.db.QueryRowContext(ctx, `
+		if err := s.eventReader().QueryRowContext(ctx, `
 SELECT COUNT(*)
 FROM message_events
 WHERE kind = ? AND group_id = ? AND user_id = ? AND event_time >= ? AND event_time <= ?

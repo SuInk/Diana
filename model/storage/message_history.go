@@ -611,43 +611,56 @@ func (s *SQLiteStore) searchMessageEventsFTS(ctx context.Context, where string, 
 		return nil, 0, false, nil
 	}
 	scopedWhere := prefixMessageHistoryColumns(where)
+	offset = max(0, offset)
+
+	// 按时间排序时用不到相关度，省掉逐条命中的 BM25 计算。
+	chronological := order == "oldest" || order == "newest"
+	score := `bm25(` + messageHistoryFTSTable + `)`
+	pageOrder := "h.score ASC, e.event_time DESC, e.created_at DESC, e.id DESC"
+	outerOrder := "p.score ASC, p.event_time DESC, p.created_at DESC, p.id DESC"
+	if chronological {
+		score = `0`
+		pageOrder = historyChronologicalOrder(order, "e.")
+		outerOrder = historyChronologicalOrder(order, "p.")
+	}
 
 	// MATCH 放进 CTE 只求值一次。写成逐行的相关子查询会让每个候选都重跑一遍
 	// 全文检索，实测比原来的 LIKE 还慢一个数量级。
-	hits := `WITH hits AS (SELECT rowid AS rid, bm25(` + messageHistoryFTSTable + `) AS score
+	//
+	// 限制条数不能挪进 FTS 子查询：会话、时间范围要回表才能过滤，先截断再过滤会
+	// 把本该命中的行截掉，结果和总数都会变。能省的是重复计算——原先 COUNT 和取
+	// 页各跑一遍 MATCH、BM25 和回表过滤，高频词在大库上命中十几万行，每遍都要
+	// 上百毫秒。现在总数用窗口函数和当前页一起算；排序只带 rowid 和排序键，截出
+	// 当前页之后再回表取 payload，排序器里不再塞整段 JSON。排序键以 id 收尾，
+	// 页内顺序和原来一次排序完全一致。
+	hits := `WITH hits AS (SELECT rowid AS rid, ` + score + ` AS score
 FROM ` + messageHistoryFTSTable + ` WHERE ` + messageHistoryFTSTable + ` MATCH ?)`
-
-	hitArgs := []any{match}
-	hit := `h.rid IS NOT NULL`
 	from := `FROM message_events AS e JOIN hits AS h ON h.rid = e.rowid`
 
-	countArgs := append(append([]any(nil), hitArgs...), args...)
-	var total int
-	if err := s.eventReader().QueryRowContext(ctx,
-		hits+` SELECT COUNT(*) `+from+` WHERE `+hit+` AND `+scopedWhere, countArgs...).Scan(&total); err != nil {
+	rowArgs := append([]any{match}, args...)
+	rowArgs = append(rowArgs, limit, offset)
+	rows, err := s.eventReader().QueryContext(ctx, hits+`,
+page AS (
+  SELECT e.rowid AS rid, h.score AS score, e.event_time AS event_time, e.created_at AS created_at, e.id AS id,
+         COUNT(*) OVER () AS total
+  `+from+`
+  WHERE `+scopedWhere+`
+  ORDER BY `+pageOrder+`
+  LIMIT ? OFFSET ?
+)
+SELECT m.payload, p.total
+FROM page AS p JOIN message_events AS m ON m.rowid = p.rid
+ORDER BY `+outerOrder, rowArgs...)
+	if err != nil {
 		// 索引出问题时不要让检索整个失败，交回 LIKE 那一路。
 		return nil, 0, false, nil
 	}
-
-	rowArgs := append(append([]any(nil), hitArgs...), args...)
-	rowArgs = append(rowArgs, limit, max(0, offset))
-	ordering := "h.score ASC, e.event_time DESC, e.created_at DESC, e.id DESC"
-	if order == "oldest" || order == "newest" {
-		ordering = historyChronologicalOrder(order, "e.")
-	}
-	rows, err := s.eventReader().QueryContext(ctx, hits+`
-SELECT e.payload `+from+`
-WHERE `+hit+` AND `+scopedWhere+`
-ORDER BY `+ordering+`
-LIMIT ? OFFSET ?`, rowArgs...)
-	if err != nil {
-		return nil, 0, false, nil
-	}
 	defer func() { _ = rows.Close() }()
-	events := make([]assistant.MessageEvent, 0, min(limit, total))
+	events := make([]assistant.MessageEvent, 0, min(limit, 64))
+	total := 0
 	for rows.Next() {
 		var payload string
-		if err := rows.Scan(&payload); err != nil {
+		if err := rows.Scan(&payload, &total); err != nil {
 			return nil, 0, true, err
 		}
 		var event assistant.MessageEvent
@@ -658,6 +671,15 @@ LIMIT ? OFFSET ?`, rowArgs...)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, 0, true, err
+	}
+	if len(events) > 0 || offset == 0 {
+		return events, total, true, nil
+	}
+	// 翻页翻过了末尾：这一页没有行，窗口函数的总数也就带不回来，只好单独数一次。
+	countArgs := append([]any{match}, args...)
+	if err := s.eventReader().QueryRowContext(ctx,
+		hits+` SELECT COUNT(*) `+from+` WHERE `+scopedWhere, countArgs...).Scan(&total); err != nil {
+		return nil, 0, false, nil
 	}
 	return events, total, true, nil
 }

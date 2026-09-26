@@ -20,7 +20,9 @@ func (s *SQLiteStore) LoadIdentityAliasSalt(ctx context.Context) (string, error)
 	if s == nil || s.db == nil {
 		return "", nil
 	}
-	defer s.observeStorage(ctx, "LoadIdentityAliasSalt", "read")()
+	// 读盐之后调用方可能紧接着生成并保存，留在写连接上保持先后顺序；标记成
+	// write，慢日志才会取对连接池的统计。
+	defer s.observeStorage(ctx, "LoadIdentityAliasSalt", "write")()
 	var salt string
 	err := s.db.QueryRowContext(ctx, `SELECT value FROM app_state WHERE key = ?`, identityAliasSaltKey).Scan(&salt)
 	if errors.Is(err, sql.ErrNoRows) {

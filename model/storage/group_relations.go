@@ -65,7 +65,8 @@ func (s *SQLiteStore) GroupRelationGraphFor(ctx context.Context, groupID string,
 		sinceUnix = since.Unix()
 	}
 
-	rows, err := s.db.QueryContext(ctx, `
+	// 要扫一段时间内整群的消息 payload，放在写连接上会把入队堵住，走读池。
+	rows, err := s.eventReader().QueryContext(ctx, `
 SELECT COALESCE(user_id, ''), COALESCE(sender_name, ''), payload
 FROM message_events
 WHERE group_id = ? AND event_time >= ?
@@ -139,6 +140,12 @@ LIMIT ?
 	if err := rows.Err(); err != nil {
 		return assistant.GroupRelationGraph{}, fmt.Errorf("iterate group relations: %w", err)
 	}
+	// 扫到上限时是 break 出来的，结果集还开着、连接还占着。下面补好感度要再查
+	// 一次，必须先把这条连接还回去：否则一次调用同时占两条连接，单连接的库（内存
+	// 库）上第二条查询会一直等到上下文超时。
+	if err := rows.Close(); err != nil {
+		return assistant.GroupRelationGraph{}, fmt.Errorf("close group relations: %w", err)
+	}
 
 	graph.Participants = len(messages)
 	graph.Nodes = s.buildRelationNodes(ctx, messages, names, graph.BotID)
@@ -181,7 +188,7 @@ func (s *SQLiteStore) fillRelationFavorability(ctx context.Context, nodes []assi
 		placeholders = append(placeholders, "?")
 		args = append(args, node.UserID)
 	}
-	rows, err := s.db.QueryContext(ctx, `
+	rows, err := s.eventReader().QueryContext(ctx, `
 SELECT user_id, MAX(favorability), COALESCE(MAX(display_name), '')
 FROM user_profiles
 WHERE user_id IN (`+strings.Join(placeholders, ",")+`)

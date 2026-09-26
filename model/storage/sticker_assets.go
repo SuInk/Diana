@@ -219,7 +219,8 @@ func (s *SQLiteStore) ListStickerAssets(ctx context.Context, query assistant.Sti
 
 func (s *SQLiteStore) queryStickerAssets(ctx context.Context, where string, args []any, limit int) ([]assistant.StickerAsset, error) {
 	args = append(args, limit)
-	rows, err := s.db.QueryContext(ctx, `
+	// 表情库浏览和检索都是只读的，走读池。
+	rows, err := s.eventReader().QueryContext(ctx, `
 SELECT session, COALESCE(profile_id, ''), COALESCE(context_namespace, ''), kind,
        COALESCE(group_id, ''), COALESCE(user_id, ''), COALESCE(message_id, ''),
        event_time, segment_index, COALESCE(summary, ''), cached_file,
@@ -310,10 +311,10 @@ WITH ranked AS (
   LEFT JOIN image_descriptions AS d ON d.content_sha256 = a.content_sha256
   WHERE ` + where + `
 )`
-	if err := s.db.QueryRowContext(ctx, base+`SELECT COUNT(*) FROM ranked WHERE rank = 1`, args...).Scan(&page.Total); err != nil {
+	if err := s.eventReader().QueryRowContext(ctx, base+`SELECT COUNT(*) FROM ranked WHERE rank = 1`, args...).Scan(&page.Total); err != nil {
 		return page, fmt.Errorf("count sticker library: %w", err)
 	}
-	rows, err := s.db.QueryContext(ctx, base+`
+	rows, err := s.eventReader().QueryContext(ctx, base+`
 SELECT content_sha256, summary, description, mime, kind, group_id, user_id, profile_id, sessions, event_time
 FROM ranked WHERE rank = 1
 ORDER BY event_time DESC, content_sha256
@@ -352,7 +353,7 @@ func (s *SQLiteStore) StickerAssetFile(ctx context.Context, hash, profileID stri
 		args = append(args, profile)
 	}
 	var path string
-	err := s.db.QueryRowContext(ctx, query+` ORDER BY event_time DESC LIMIT 1`, args...).Scan(&path)
+	err := s.eventReader().QueryRowContext(ctx, query+` ORDER BY event_time DESC LIMIT 1`, args...).Scan(&path)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", false, nil
 	}

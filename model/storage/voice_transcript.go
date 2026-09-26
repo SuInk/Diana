@@ -105,7 +105,8 @@ func (s *SQLiteStore) DeleteVoiceBlob(ctx context.Context, audioSHA256 string) e
 
 func (s *SQLiteStore) LoadVoiceTranscript(ctx context.Context, cacheKey string) (assistant.VoiceTranscriptRecord, bool, error) {
 	var record assistant.VoiceTranscriptRecord
-	err := s.db.QueryRowContext(ctx, `SELECT cache_key, audio_sha256, backend, model, COALESCE(language,''), transcript, COALESCE(duration_ms,0), created_at FROM voice_transcripts WHERE cache_key = ?`, strings.TrimSpace(cacheKey)).Scan(
+	// 缓存命中查询，走读池。与并发写入撞上最多是再转写一次。
+	err := s.eventReader().QueryRowContext(ctx, `SELECT cache_key, audio_sha256, backend, model, COALESCE(language,''), transcript, COALESCE(duration_ms,0), created_at FROM voice_transcripts WHERE cache_key = ?`, strings.TrimSpace(cacheKey)).Scan(
 		&record.CacheKey, &record.AudioSHA256, &record.Backend, &record.Model, &record.Language, &record.Transcript, &record.DurationMS, &record.CreatedAt,
 	)
 	if errors.Is(err, sql.ErrNoRows) {

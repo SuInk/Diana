@@ -23,7 +23,8 @@ func (s *SQLiteStore) GetImageDescription(ctx context.Context, contentSHA256 str
 		return assistant.ImageDescriptionRecord{}, false, nil
 	}
 	var record assistant.ImageDescriptionRecord
-	err := s.db.QueryRowContext(ctx, `
+	// 缓存命中查询，走读池。与并发写入撞上最多是再算一次，不影响正确性。
+	err := s.eventReader().QueryRowContext(ctx, `
 SELECT content_sha256, description, source_session, source_message_id, source, version, created_at, updated_at
 FROM image_descriptions
 WHERE content_sha256 = ?
