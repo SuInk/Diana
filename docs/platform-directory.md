@@ -16,7 +16,7 @@
 
 ## 群管与规则防御
 
-群管写操作只对机器人主人开放，并且要求机器人本身是该群管理员或群主；非主人（包括群管理员）调用一律拒绝。能力矩阵以 `model/assistant/platform_governance_tool.go` 的 `platformWriteOperationSupport` 为准，测试会逐平台核对。
+群管写操作对机器人主人、本群群主和群管理员开放，并且要求机器人本身是该群管理员或群主。非主人的身份每次都实时向平台查询，不信消息里的自称或事件缓存；只能管理当前所在的群，私聊里不放开。层级约束：非主人不能对主人和机器人自己动手，群管理员不能对群主或其他管理员动手，群主可以对管理员动手；群公告、精华、全员禁言这类不针对个人的操作群管理员都能用。安全模式下这些操作照旧全部关闭。能力矩阵以 `model/assistant/platform_governance_tool.go` 的 `platformWriteOperationSupport` 为准，测试会逐平台核对。
 
 | 操作 | OneBot v11（NapCat / LLOneBot） | Telegram | 其他平台 |
 | --- | --- | --- | --- |

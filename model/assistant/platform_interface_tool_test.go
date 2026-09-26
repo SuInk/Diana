@@ -144,23 +144,121 @@ func TestPlatformToolKickOnTelegramBanUnbanSemantics(t *testing.T) {
 	}
 }
 
-func TestPlatformToolNonOwnerCannotModerate(t *testing.T) {
-	channel := newModerationTestChannel("admin")
-	// 群管理员、群主若不是机器人主人也一律拒绝，上报的 SenderRole 不作数。
-	for _, role := range []string{"admin", "owner"} {
-		event := MessageEvent{Kind: EventKindGroup, UserID: "member", GroupID: "123", SelfID: "10000", Platform: PlatformOneBotV11, SenderRole: role}
-		tool, _, logs := platformToolFor(t, BotConfig{OwnerID: "owner", BotAccount: "10000", Platform: PlatformOneBotV11}, channel, event)
-		_, err := tool.Run(context.Background(), map[string]any{"operation": "kick", "user_id": "555"})
-		if err == nil || !strings.Contains(err.Error(), "只有机器人主人") {
-			t.Fatalf("role %q error = %v", role, err)
+// moderationRoles 是层级用例的群：机器人和 admin1、admin2 是管理员，gowner 是群主。
+func moderationRoles() map[string]string {
+	return map[string]string{"10000": "admin", "admin1": "admin", "admin2": "admin", "gowner": "owner"}
+}
+
+func moderatorToolFor(t *testing.T, actor, senderRole string) (*dianaPlatformTool, *roleTestChannel, *captureAppLogs) {
+	t.Helper()
+	channel := newRoleTestChannel(moderationRoles())
+	event := MessageEvent{Kind: EventKindGroup, UserID: actor, GroupID: "123", SelfID: "10000", Platform: PlatformOneBotV11, SenderRole: senderRole}
+	tool, _, logs := platformToolFor(t, BotConfig{OwnerID: "owner", BotAccount: "10000", Platform: PlatformOneBotV11}, channel, event)
+	return tool, channel, logs
+}
+
+// 群管理员可以用群管操作，身份以平台实时返回为准：事件里没带身份也照样认。
+func TestPlatformToolGroupAdminCanModerate(t *testing.T) {
+	tool, channel, logs := moderatorToolFor(t, "admin1", "")
+	for _, input := range []map[string]any{
+		{"operation": "kick", "user_id": "555"},
+		{"operation": "mute", "user_id": "555", "duration": 60},
+		{"operation": "mute_all"},
+		{"operation": "announce", "content": "群规"},
+		{"operation": "set_card", "user_id": "555", "card": "新人"},
+	} {
+		if _, err := tool.Run(context.Background(), input); err != nil {
+			t.Fatalf("%v error = %v", input["operation"], err)
+		}
+	}
+	calls := channel.callsSnapshot()
+	for _, action := range []string{"set_group_kick", "set_group_ban", "set_group_whole_ban", "_send_group_notice", "set_group_card"} {
+		if len(recordedCallsByAction(calls, action)) != 1 {
+			t.Fatalf("%s calls = %#v", action, calls)
+		}
+	}
+	for _, entry := range logs.entriesSnapshot() {
+		if entry.Metadata["access"] != "group_admin" || entry.Metadata["owner"] != false {
+			t.Fatalf("audit entry = %#v", entry)
+		}
+	}
+}
+
+// 普通成员一律拒绝；事件自称的 admin 不作数，只认平台实时查到的身份。
+func TestPlatformToolMemberCannotModerateEvenIfClaimingAdmin(t *testing.T) {
+	for _, claimed := range []string{"", "admin", "owner"} {
+		tool, channel, logs := moderatorToolFor(t, "555", claimed)
+		_, err := tool.Run(context.Background(), map[string]any{"operation": "kick", "user_id": "666"})
+		if err == nil || !strings.Contains(err.Error(), "主人、群主或群管理员") {
+			t.Fatalf("claimed %q error = %v", claimed, err)
 		}
 		entries := logs.entriesSnapshot()
 		if len(entries) != 1 || entries[0].Kind != applog.KindError || entries[0].Metadata["owner"] != false {
-			t.Fatalf("role %q denial log = %#v", role, entries)
+			t.Fatalf("claimed %q denial log = %#v", claimed, entries)
+		}
+		if got := recordedCallsByAction(channel.callsSnapshot(), "set_group_kick"); len(got) != 0 {
+			t.Fatalf("member reached set_group_kick: %#v", got)
 		}
 	}
-	if len(channel.callsSnapshot()) != 0 {
-		t.Fatalf("non-owner must not reach the platform API: %#v", channel.callsSnapshot())
+}
+
+// 层级：管理员动不了群主、别的管理员、主人和机器人；群主可以动管理员。
+func TestPlatformToolModerationHierarchy(t *testing.T) {
+	admin, adminChannel, _ := moderatorToolFor(t, "admin1", "admin")
+	for _, input := range []map[string]any{
+		{"operation": "kick", "user_id": "admin2"},
+		{"operation": "mute", "user_id": "gowner", "duration": 60},
+		{"operation": "set_card", "user_id": "admin2", "card": "x"},
+	} {
+		if _, err := admin.Run(context.Background(), input); err == nil || !strings.Contains(err.Error(), "群主或其他管理员") {
+			t.Fatalf("admin %v on %v error = %v", input["operation"], input["user_id"], err)
+		}
+	}
+	if _, err := admin.Run(context.Background(), map[string]any{"operation": "kick", "user_id": "owner"}); err == nil || !strings.Contains(err.Error(), "机器人主人") {
+		t.Fatalf("admin kick bot owner error = %v", err)
+	}
+	if _, err := admin.Run(context.Background(), map[string]any{"operation": "set_card", "user_id": "10000", "card": "x"}); err == nil || !strings.Contains(err.Error(), "机器人自己") {
+		t.Fatalf("admin set_card on bot error = %v", err)
+	}
+	calls := adminChannel.callsSnapshot()
+	for _, action := range []string{"set_group_kick", "set_group_ban", "set_group_card"} {
+		if got := recordedCallsByAction(calls, action); len(got) != 0 {
+			t.Fatalf("refused target reached %s: %#v", action, got)
+		}
+	}
+
+	groupOwner, ownerChannel, _ := moderatorToolFor(t, "gowner", "owner")
+	if _, err := groupOwner.Run(context.Background(), map[string]any{"operation": "mute", "user_id": "admin2", "duration": 60}); err != nil {
+		t.Fatalf("group owner mute admin error = %v", err)
+	}
+	if got := recordedCallsByAction(ownerChannel.callsSnapshot(), "set_group_ban"); len(got) != 1 {
+		t.Fatalf("group owner set_group_ban = %#v", got)
+	}
+}
+
+// 群管理员只能管当前这个群；私聊里没有群上下文，不替非主人执行。
+func TestPlatformToolGroupAdminScopedToCurrentGroup(t *testing.T) {
+	admin, channel, _ := moderatorToolFor(t, "admin1", "admin")
+	if _, err := admin.Run(context.Background(), map[string]any{"operation": "mute_all", "group_id": "999"}); err == nil || !strings.Contains(err.Error(), "当前这个群") {
+		t.Fatalf("other group error = %v", err)
+	}
+	private := MessageEvent{Kind: EventKindPrivate, UserID: "admin1", SelfID: "10000", Platform: PlatformOneBotV11}
+	tool, _, _ := platformToolFor(t, BotConfig{OwnerID: "owner", BotAccount: "10000", Platform: PlatformOneBotV11}, channel, private)
+	if _, err := tool.Run(context.Background(), map[string]any{"operation": "mute_all", "group_id": "123"}); err == nil || !strings.Contains(err.Error(), "只能在群里") {
+		t.Fatalf("private error = %v", err)
+	}
+	if got := recordedCallsByAction(channel.callsSnapshot(), "set_group_whole_ban"); len(got) != 0 {
+		t.Fatalf("out-of-scope call reached platform: %#v", got)
+	}
+}
+
+// schema 只对主人和（事件或平台显示的）群主、群管理员列出群管操作。
+func TestPlatformToolSchemaShowsModerationToGroupAdmins(t *testing.T) {
+	for role, want := range map[string]bool{"admin": true, "owner": true, "member": false} {
+		tool, _, _ := moderatorToolFor(t, "someone", role)
+		if got := strings.Contains(fmt.Sprint(tool.InputSchema()), platformOpMuteAll); got != want {
+			t.Fatalf("role %s schema shows moderation = %v", role, got)
+		}
 	}
 }
 

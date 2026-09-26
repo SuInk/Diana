@@ -1034,9 +1034,9 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 	if agentEnabled && hasTool(dianaCrossSessionToolName) {
 		builder.WriteString("\n" + cfg.prompt(promptToolCrossSessionSpec))
 	}
-	// 破坏性动作只对主人出现在工具 schema 里；提示词也只对主人注入，且必须进随发言者
-	// 变化的尾部，不能写进按前缀缓存的稳定头部（否则主人和普通成员的提示词会提前分叉）。
-	if agentEnabled && relationship.Owner && hasTool(dianaPlatformToolName) {
+	// 群管动作只对主人、群主和群管理员出现在工具 schema 里；提示词跟着 schema 走，且必须
+	// 进随发言者变化的尾部，不能写进按前缀缓存的稳定头部（否则不同身份的提示词会提前分叉）。
+	if agentEnabled && hasTool(dianaPlatformToolName) && platformModerationShown(registry, relationship.Owner) {
 		tail.WriteString("\n" + cfg.prompt(promptToolPlatformModerationSpec))
 	}
 	if agentEnabled && relationship.Owner && hasTool(dianaOneBotRequestsToolName) {

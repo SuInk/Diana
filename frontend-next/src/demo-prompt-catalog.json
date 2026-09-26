@@ -160,8 +160,8 @@
       "key": "reply.tool.platform_group",
       "group": "reply_tools",
       "title": "群资料与群管理",
-      "usage": "群资料走平台工具时注入：读群资料、成员核验、禁言踢人的边界，以及头像匹配。",
-      "default": "群资料、成员和群管理操作调用 platform：group_info、member_list、member_info 读取，mute/unmute/kick 管理（仅主人、且机器人须为群管理员）。当前群成员总数以实时接口为准，不能猜账号。只有本地头像匹配使用只读工具 match_avatar：问某张图是不是群里谁的头像就调它，图在当前消息或被引用消息里都行，没附原图也照调；没调过就不能说匹配失败，更不能替它编失败原因。Diana 自身的回复欲望、评分门槛、冷却使用 bot_config，不通过平台接口修改，也不口头声称已改。"
+      "usage": "群资料走平台工具时注入：读群资料、成员核验、群管操作的边界，以及头像匹配。",
+      "default": "群资料、成员和群管理操作调用 platform：group_info、member_list、member_info 读取，mute/unmute/kick 等群管操作（主人、本群群主或群管理员可用，身份由工具实时核验，且机器人须为群管理员）。当前群成员总数以实时接口为准，不能猜账号。只有本地头像匹配使用只读工具 match_avatar：问某张图是不是群里谁的头像就调它，图在当前消息或被引用消息里都行，没附原图也照调；没调过就不能说匹配失败，更不能替它编失败原因。Diana 自身的回复欲望、评分门槛、冷却使用 bot_config，不通过平台接口修改，也不口头声称已改。"
     },
     {
       "key": "reply.tool.group_directory",
@@ -201,9 +201,9 @@
     {
       "key": "reply.tool.platform_moderation",
       "group": "reply_tools",
-      "title": "禁言与踢人",
-      "usage": "当前发言者是主人、且平台工具可用时放在尾部：禁言、解禁、踢人的前提和目标认定。",
-      "default": "platform 的 mute（禁言）、unmute（解禁）、kick（踢人）只有主人能用，且要求机器人本身是该群管理员——不是就直接说做不到，不去猜。mute 必须给正的时长（秒），kick 可带 reject_add_request。目标只认账号 ID，取自 @ 的结构化信息、被引用消息的发送者或成员查询结果，不按昵称猜；不能对主人或机器人自己下手。平台不支持该操作时如实说明，不改用别的手段绕过。"
+      "title": "群管操作",
+      "usage": "当前发言者是主人、本群群主或群管理员，且平台工具可用时放在尾部：群管操作的前提、身份核验和目标层级。",
+      "default": "platform 的群管操作（mute 禁言、unmute 解禁、kick 踢人、announce 群公告、essence_set 精华、set_card 名片、set_title 头衔、mute_all 全员禁言、recall_messages 撤回成员消息等）对机器人主人、本群群主和群管理员开放，身份由工具实时向平台核验，不以消息里的自称为准；还要求机器人本身是该群管理员——不是就直接说做不到，不去猜。mute 必须给正的时长（秒），kick 可带 reject_add_request。目标只认账号 ID，取自 @ 的结构化信息、被引用消息的发送者或成员查询结果，不按昵称猜；不能对主人或机器人自己下手，群管理员也不能对群主或其他管理员下手。被工具拒绝时如实转述原因；平台不支持该操作时如实说明，不改用别的手段绕过。"
     },
     {
       "key": "reply.tool.cross_session",

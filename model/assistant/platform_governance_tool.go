@@ -68,19 +68,21 @@ func (r *Runtime) botGroupRole(ctx context.Context, event MessageEvent, groupID 
 }
 
 // runGovernance 处理 mute/unmute/kick 以外的群管操作。门禁和 runModeration 一致：
-// 主人专属、只在群里、平台支持、机器人是管理员，四关都过了才碰接口。
+// 只在群里、主人或实时核验的群主/管理员、平台支持、目标层级、机器人是管理员，都过了才碰接口。
 func (t *dianaPlatformTool) runGovernance(ctx context.Context, input map[string]any, operation string, owner bool, access string) (string, error) {
 	fail := func(target string, err error) (string, error) {
 		t.runtime.recordPlatformInterfaceOperation(t.event, operation, access, owner, target, err)
 		return "", err
 	}
-	if !owner {
-		return fail("", fmt.Errorf("群管理操作只有机器人主人能用，群管理员或群主也不行"))
-	}
 	if t.event.Kind != EventKindGroup || strings.TrimSpace(t.event.GroupID) == "" {
 		return "", fmt.Errorf("群管理操作只能在群里执行")
 	}
 	groupID := t.resolveGroupID(input)
+	actor, err := t.authorizeModeration(ctx, groupID)
+	if err != nil {
+		return fail("", err)
+	}
+	access = actor.access()
 	platform := t.runtime.currentPlatform(t.event)
 	if !platformSupportsOperation(platform, operation) {
 		return fail("", fmt.Errorf("当前平台暂不支持此操作"))
@@ -88,6 +90,10 @@ func (t *dianaPlatformTool) runGovernance(ctx context.Context, input map[string]
 
 	req, err := t.governanceRequest(input, operation)
 	if err != nil {
+		return fail(req.target, err)
+	}
+	// 名片、头衔、撤回针对具体的人，走层级约束；公告、精华、全员禁言不针对个人。
+	if err := t.checkModerationTarget(ctx, actor, groupID, req.target, false); err != nil {
 		return fail(req.target, err)
 	}
 	role, err := t.runtime.botGroupRole(ctx, t.event, groupID)
@@ -102,13 +108,13 @@ func (t *dianaPlatformTool) runGovernance(ctx context.Context, input map[string]
 	callCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
 	if operation == platformOpRecallMessages {
-		return t.runRecallMessages(callCtx, req, access)
+		return t.runRecallMessages(callCtx, req, access, owner)
 	}
 	data, err := t.dispatchGovernance(callCtx, platform, operation, groupID, req)
 	if err != nil {
 		return fail(req.target, fmt.Errorf("%s 执行失败：%w", operation, err))
 	}
-	t.runtime.recordPlatformInterfaceOperation(t.event, operation, access, true, req.target, nil)
+	t.runtime.recordPlatformInterfaceOperation(t.event, operation, access, owner, req.target, nil)
 	payload := map[string]any{"group_id": groupID, "data": data, "message": governanceSuccessMessage(operation, req)}
 	if req.target != "" {
 		payload["user_id"] = req.target
@@ -331,14 +337,14 @@ func (t *dianaPlatformTool) recallMessagesRequest(input map[string]any) (governa
 
 // runRecallMessages 逐条撤回。单条失败（超时限、已被别人撤掉）不影响其余的，
 // 结果如实报成功和失败各几条，不把部分成功说成全部完成。
-func (t *dianaPlatformTool) runRecallMessages(ctx context.Context, req governanceRequest, access string) (string, error) {
+func (t *dianaPlatformTool) runRecallMessages(ctx context.Context, req governanceRequest, access string, owner bool) (string, error) {
 	recalled, failed := t.runtime.recallGroupMessages(ctx, t.event, req.messageIDs)
 	if len(recalled) == 0 {
 		err := fmt.Errorf("recall_messages 执行失败：%s", strings.Join(failed, "；"))
-		t.runtime.recordPlatformInterfaceOperation(t.event, platformOpRecallMessages, access, true, req.target, err)
+		t.runtime.recordPlatformInterfaceOperation(t.event, platformOpRecallMessages, access, owner, req.target, err)
 		return "", err
 	}
-	t.runtime.recordPlatformInterfaceOperation(t.event, platformOpRecallMessages, access, true, req.target, nil)
+	t.runtime.recordPlatformInterfaceOperation(t.event, platformOpRecallMessages, access, owner, req.target, nil)
 	message := fmt.Sprintf("已撤回 %d 条消息。", len(recalled))
 	if len(failed) > 0 {
 		message = fmt.Sprintf("已撤回 %d 条，另有 %d 条没撤掉（可能超过平台时限或已被撤回）。", len(recalled), len(failed))
