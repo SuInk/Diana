@@ -49,7 +49,8 @@ func (s *SQLiteStore) GroupStyle(ctx context.Context, profileID, groupID string)
 	style := assistant.GroupStyle{ProfileID: strings.TrimSpace(profileID), GroupID: strings.TrimSpace(groupID)}
 	var manual, disabled int
 	var updated int64
-	err := s.db.QueryRowContext(ctx, `SELECT text, manual, disabled, sample_count, updated_at FROM group_styles WHERE profile_id = ? AND group_id = ?`,
+	// 组装提示词时读，走读池；保存是独立提交的，提交后立即可见。
+	err := s.eventReader().QueryRowContext(ctx, `SELECT text, manual, disabled, sample_count, updated_at FROM group_styles WHERE profile_id = ? AND group_id = ?`,
 		style.ProfileID, style.GroupID).Scan(&style.Text, &manual, &disabled, &style.SampleCount, &updated)
 	if errors.Is(err, sql.ErrNoRows) {
 		return assistant.GroupStyle{}, false, nil

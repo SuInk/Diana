@@ -76,6 +76,9 @@ func (s *SQLiteStore) ClaimNextMemoryJob(ctx context.Context, leaseOwner string,
 	if leaseOwner == "" {
 		return assistant.MemoryJob{}, false, fmt.Errorf("memory lease owner is required")
 	}
+	if !s.memoryJobMaybeDue(ctx) {
+		return assistant.MemoryJob{}, false, nil
+	}
 	tx, err := s.beginWriteTx(ctx, "ClaimNextMemoryJob")
 	if err != nil {
 		return assistant.MemoryJob{}, false, err
@@ -136,6 +139,9 @@ func (s *SQLiteStore) ClaimMemoryJobBatch(ctx context.Context, leaseOwner string
 	}
 	if max < 1 {
 		max = 1
+	}
+	if !s.memoryJobMaybeDue(ctx) {
+		return nil, nil
 	}
 	tx, err := s.beginWriteTx(ctx, "ClaimMemoryJobBatch")
 	if err != nil {
@@ -231,6 +237,24 @@ WHERE id = ? AND status = 'pending'
 		return nil, err
 	}
 	return claimed, nil
+}
+
+// memoryJobMaybeDue 在读池上先看一眼有没有到期的任务。
+//
+// 记忆 worker 每 750ms 轮询一次，绝大多数时候队列是空的，但领取原先总是先开写
+// 事务：每一轮都要排队等唯一的写连接，生产日志里 ClaimMemoryJobBatch 的慢记录
+// 全是卡在 begin_transaction，排在它后面的入队和领取也跟着变慢。空队列时这里
+// 直接返回，不碰写连接。
+//
+// 查完到开写事务之间新到期的任务，这一轮看不到，下一轮（或入队唤醒）照常领取；
+// 查的时候有、开事务时被别的 worker 领走了，事务里的查询会发现并返回空。读池
+// 出错时按「可能有」处理，退回原来的写事务路径，预检失败不会导致漏领。
+func (s *SQLiteStore) memoryJobMaybeDue(ctx context.Context) bool {
+	var due bool
+	err := s.eventReader().QueryRowContext(ctx, `
+SELECT EXISTS (SELECT 1 FROM memory_jobs WHERE status = 'pending' AND available_at <= ?)
+`, time.Now().UTC().UnixNano()).Scan(&due)
+	return err != nil || due
 }
 
 func decodeMemoryJob(id, raw string, attempts int) (assistant.MemoryJob, error) {

@@ -18,7 +18,8 @@ import (
 func (s *SQLiteStore) LoadSemanticReferenceCache(ctx context.Context, cacheKey string) (assistant.SemanticReferenceCacheRecord, bool, error) {
 	var record assistant.SemanticReferenceCacheRecord
 	var messageIDs string
-	err := s.db.QueryRowContext(ctx, `SELECT cache_key, message_ids, confidence, expires_at, created_at FROM semantic_reference_cache WHERE cache_key = ?`, strings.TrimSpace(cacheKey)).Scan(&record.CacheKey, &messageIDs, &record.Confidence, &record.ExpiresAt, &record.CreatedAt)
+	// 缓存命中查询，走读池。
+	err := s.eventReader().QueryRowContext(ctx, `SELECT cache_key, message_ids, confidence, expires_at, created_at FROM semantic_reference_cache WHERE cache_key = ?`, strings.TrimSpace(cacheKey)).Scan(&record.CacheKey, &messageIDs, &record.Confidence, &record.ExpiresAt, &record.CreatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return assistant.SemanticReferenceCacheRecord{}, false, nil
 	}

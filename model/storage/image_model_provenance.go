@@ -21,10 +21,11 @@ func (s *SQLiteStore) SaveImageModelRecord(ctx context.Context, scope string, re
 func (s *SQLiteStore) LoadImageModelRecord(ctx context.Context, scope, messageID string) (assistant.ImageModelRecord, bool, error) {
 	var raw string
 	var err error
+	// 只读查询走读池；记录是生图完成时单独提交的，读得到。
 	if messageID == "" {
-		err = s.db.QueryRowContext(ctx, `SELECT payload FROM image_model_records WHERE scope=? ORDER BY created_at DESC LIMIT 1`, scope).Scan(&raw)
+		err = s.eventReader().QueryRowContext(ctx, `SELECT payload FROM image_model_records WHERE scope=? ORDER BY created_at DESC LIMIT 1`, scope).Scan(&raw)
 	} else {
-		err = s.db.QueryRowContext(ctx, `SELECT payload FROM image_model_records WHERE scope=? AND message_id=?`, scope, messageID).Scan(&raw)
+		err = s.eventReader().QueryRowContext(ctx, `SELECT payload FROM image_model_records WHERE scope=? AND message_id=?`, scope, messageID).Scan(&raw)
 	}
 	if errors.Is(err, sql.ErrNoRows) {
 		return assistant.ImageModelRecord{}, false, nil

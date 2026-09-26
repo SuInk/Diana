@@ -155,7 +155,8 @@ func (s *SQLiteStore) ListSelfNotes(ctx context.Context, profileID string, inclu
 	if includeInactive {
 		query = `SELECT ` + selfNoteColumns + ` FROM self_notes WHERE profile_id = ? ORDER BY created_at, id LIMIT ?`
 	}
-	rows, err := s.db.QueryContext(ctx, query, strings.TrimSpace(profileID), limit)
+	// 每轮组装提示词都要读，走读池；WriteSelfNote 提交后读池立刻可见。
+	rows, err := s.eventReader().QueryContext(ctx, query, strings.TrimSpace(profileID), limit)
 	if err != nil {
 		return nil, err
 	}

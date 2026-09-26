@@ -26,7 +26,8 @@ func (s *SQLiteStore) LoadImageRecognition(ctx context.Context, cacheKey string)
 		return assistant.ImageRecognitionRecord{}, false, nil
 	}
 	var record assistant.ImageRecognitionRecord
-	err := s.db.QueryRowContext(ctx, `
+	// 缓存命中查询，走读池。与并发写入撞上最多是再识别一次，不影响正确性。
+	err := s.eventReader().QueryRowContext(ctx, `
 SELECT cache_key, content_sha256, kind, backend, COALESCE(model,''), text, created_at
 FROM image_recognitions
 WHERE cache_key = ?

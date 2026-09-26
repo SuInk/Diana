@@ -65,7 +65,8 @@ func (s *SQLiteStore) GroupRelationGraphFor(ctx context.Context, groupID string,
 		sinceUnix = since.Unix()
 	}
 
-	rows, err := s.db.QueryContext(ctx, `
+	// 要扫一段时间内整群的消息 payload，放在写连接上会把入队堵住，走读池。
+	rows, err := s.eventReader().QueryContext(ctx, `
 SELECT COALESCE(user_id, ''), COALESCE(sender_name, ''), payload
 FROM message_events
 WHERE group_id = ? AND event_time >= ?
@@ -181,7 +182,7 @@ func (s *SQLiteStore) fillRelationFavorability(ctx context.Context, nodes []assi
 		placeholders = append(placeholders, "?")
 		args = append(args, node.UserID)
 	}
-	rows, err := s.db.QueryContext(ctx, `
+	rows, err := s.eventReader().QueryContext(ctx, `
 SELECT user_id, MAX(favorability), COALESCE(MAX(display_name), '')
 FROM user_profiles
 WHERE user_id IN (`+strings.Join(placeholders, ",")+`)
