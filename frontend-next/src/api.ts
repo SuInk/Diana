@@ -226,7 +226,7 @@ export interface BotProfileConfig extends SendRetrySettings {
   welcome_message?: string;
   /** 欢迎词模式：fixed 固定文本 / template 模板池随机 / llm 按人设实时生成；不设等同 fixed。 */
   welcome_mode?: "fixed" | "template" | "llm";
-  /** 口吻模板池，每条一行，可用 {user_id} 占位；template/llm 回落时使用。 */
+  /** 口吻模板池，每条一行，可用 {user_id}{nickname}{group}{group_id} 占位；template/llm 回落时使用。 */
   welcome_templates?: string[];
   /** LLM 欢迎词每群冷却秒数；不设用默认值 300。 */
   welcome_llm_cooldown_seconds?: number;
@@ -508,6 +508,23 @@ export interface ResolverDependencyInstallResponse {
 }
 
 /** 分群的 SendRetrySettings 留空跟随机器人。 */
+/** 群规则防御。所有开关默认关闭，数值留空时后端用默认值。 */
+export interface GroupGovernance {
+  anti_spam_enabled?: boolean;
+  spam_window_seconds?: number;
+  spam_max_messages?: number;
+  spam_max_repeats?: number;
+  spam_recall_enabled?: boolean;
+  keyword_filter_enabled?: boolean;
+  /** 每条一行；re: 开头按正则，其余按不区分大小写的子串。 */
+  keyword_rules?: string[];
+  /** 第 2、3… 次违规的禁言秒数；第一次只警告。 */
+  penalty_ladder_seconds?: number[];
+  strike_reset_minutes?: number;
+  warning_message?: string;
+  member_leave_audit_enabled?: boolean;
+}
+
 export interface BotGroupConfig extends SendRetrySettings {
   marked_bot_ids?: string[];
   participation?: import("./participation").ParticipationPreferences;
@@ -526,7 +543,7 @@ export interface BotGroupConfig extends SendRetrySettings {
   welcome_message?: string;
   /** 欢迎词模式：fixed 固定文本 / template 模板池随机 / llm 按人设实时生成；不设等同 fixed。 */
   welcome_mode?: "" | "fixed" | "template" | "llm";
-  /** 口吻模板池，每条一行，可用 {user_id} 占位；留空跟随机器人。 */
+  /** 口吻模板池，每条一行，可用 {user_id}{nickname}{group}{group_id} 占位；留空跟随机器人。 */
   welcome_templates?: string[];
   /** LLM 欢迎词每群冷却秒数；不设跟随机器人。 */
   welcome_llm_cooldown_seconds?: number;
@@ -597,6 +614,8 @@ export interface BotGroupConfig extends SendRetrySettings {
   plugin_setting_overrides?: Record<string, Record<string, unknown>>;
   /** 本群专属回复时间、屏蔽账号与准入门槛；不设表示跟随全局。 */
   reply_gate?: ReplyGate | null;
+  /** 本群规则防御（刷屏、违规词、退群审计），只有群级；不设等于全部关闭。 */
+  governance?: GroupGovernance | null;
   updated_at?: string;
 }
 
