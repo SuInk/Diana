@@ -493,6 +493,16 @@
                 />
               </template>
 
+              <template v-else-if="currentPlatform === 'weixin'">
+                <WeixinLoginPanel
+                  :profile-id="weixinLoginProfileID"
+                  :bot-id="form.weixin_bot_id"
+                  :user-id="form.weixin_user_id"
+                  :logged-in="!!form.weixin_bot_token_configured"
+                  @updated="onWeixinLoginUpdated"
+                />
+              </template>
+
               <!-- 飞书和企业微信只能靠平台回调收消息，地址要填到对方后台。 -->
               <div v-if="callbackURL" class="field">
                 <label for="bot-callback-url">回调地址</label>
@@ -2033,6 +2043,7 @@ import MessageRelayManager from "../components/MessageRelayManager.vue";
 import Modal from "../components/Modal.vue";
 import ReplyGateForm from "../components/ReplyGateForm.vue";
 import SecretField from "../components/SecretField.vue";
+import WeixinLoginPanel from "../components/WeixinLoginPanel.vue";
 import { pushStatusSnapshot, stream } from "../stream";
 import { askConfirm } from "../confirm";
 import {
@@ -2912,6 +2923,13 @@ const globalGate = computed({
 
 const status = computed(() => stream.status);
 const profiles = computed<BotProfileConfig[]>(() => profileSet.value?.profiles ?? []);
+// 扫码要挂在一台已经按微信平台保存过的机器人上；刚在下拉框里切过来还没保存时，
+// 后端会拒绝，干脆先让面板提示保存。
+const weixinLoginProfileID = computed(() => {
+  const id = form.value?.id;
+  if (creating.value || !id) return undefined;
+  return profiles.value.find((profile) => profile.id === id)?.platform === "weixin" ? id : undefined;
+});
 const copiedFrom = ref<Pick<BotProfileConfig, "id" | "name" | "platform" | "connection_profile_id"> | null>(null);
 const copySourceID = ref("");
 const copySourceOptions = computed<AppSelectOption[]>(() => [
@@ -3843,6 +3861,18 @@ function setForm(config: BotProfileConfig): void {
 function applyConfig(config: BotProfileConfig): void {
   profileSet.value = config;
   setForm(config);
+}
+
+// 扫码结果已经在后端落库。只把微信那几个字段和后端代填的主人 ID 合进表单，
+// 别整份替换——用户可能正改着别的设置还没保存。
+function onWeixinLoginUpdated(config: BotProfileConfig): void {
+  profileSet.value = config;
+  const current = form.value;
+  if (!current) return;
+  current.weixin_bot_id = config.weixin_bot_id;
+  current.weixin_user_id = config.weixin_user_id;
+  current.weixin_bot_token_configured = config.weixin_bot_token_configured;
+  if (!current.owner_id?.trim() && config.owner_id) current.owner_id = config.owner_id;
 }
 
 function splitList(raw: string): string[] {

@@ -532,50 +532,55 @@ type ChannelStatus struct {
 type EventHandler func(context.Context, MessageEvent) error
 
 type BotConfig struct {
-	ConnectionProfileID         string           `json:"connection_profile_id,omitempty"`
-	ReplyMergeConfidencePercent int              `json:"reply_merge_confidence_percent,omitempty"`
-	ID                          string           `json:"id,omitempty"`
-	Name                        string           `json:"name,omitempty"`
-	Platform                    string           `json:"platform,omitempty"`
-	AvatarURL                   string           `json:"avatar_url,omitempty"`
-	Enabled                     bool             `json:"enabled"`
-	OneBotTransport             string           `json:"onebot_transport,omitempty"`
-	OneBotWSEndpoint            string           `json:"onebot_ws_endpoint,omitempty"`
-	OneBotHTTPURL               string           `json:"onebot_http_url,omitempty"`
-	OneBotHTTPSecret            string           `json:"onebot_http_secret,omitempty"`
-	OneBotReverseWSEndpoint     string           `json:"onebot_reverse_ws_endpoint"`
-	OneBotAccessToken           string           `json:"onebot_access_token,omitempty"`
-	TelegramBotToken            string           `json:"telegram_bot_token,omitempty"`
-	TelegramAPIBaseURL          string           `json:"telegram_api_base_url,omitempty"`
-	TelegramProxyURL            string           `json:"telegram_proxy_url,omitempty"`
-	TelegramSuppressBotMessages *bool            `json:"telegram_suppress_bot_messages,omitempty"`
-	QQTypingEnabled             *bool            `json:"qq_typing_enabled,omitempty"`
-	QQAppID                     string           `json:"qq_app_id,omitempty"`
-	QQAppSecret                 string           `json:"qq_app_secret,omitempty"`
-	QQSandbox                   bool             `json:"qq_sandbox,omitempty"`
-	DingTalkClientID            string           `json:"dingtalk_client_id,omitempty"`
-	DingTalkClientSecret        string           `json:"dingtalk_client_secret,omitempty"`
-	DingTalkRobotCode           string           `json:"dingtalk_robot_code,omitempty"`
-	FeishuAppID                 string           `json:"feishu_app_id,omitempty"`
-	FeishuAppSecret             string           `json:"feishu_app_secret,omitempty"`
-	FeishuVerificationToken     string           `json:"feishu_verification_token,omitempty"`
-	FeishuEncryptKey            string           `json:"feishu_encrypt_key,omitempty"`
-	FeishuAPIBaseURL            string           `json:"feishu_api_base_url,omitempty"`
-	WeComCorpID                 string           `json:"wecom_corp_id,omitempty"`
-	WeComAgentID                string           `json:"wecom_agent_id,omitempty"`
-	WeComSecret                 string           `json:"wecom_secret,omitempty"`
-	WeComToken                  string           `json:"wecom_token,omitempty"`
-	WeComEncodingAESKey         string           `json:"wecom_encoding_aes_key,omitempty"`
-	NoneBotBridgeEnabled        bool             `json:"nonebot_bridge_enabled,omitempty"`
-	NoneBotBridgeEndpoint       string           `json:"nonebot_bridge_endpoint,omitempty"`
-	NoneBotBridgeToken          string           `json:"nonebot_bridge_token,omitempty"`
-	BotAccount                  string           `json:"bot_account,omitempty"`
-	OwnerID                     string           `json:"owner_id,omitempty"`
-	OwnerLoginEnabled           bool             `json:"owner_login_enabled,omitempty"`
-	OwnerLLMConfigEnabled       *bool            `json:"owner_llm_config_enabled,omitempty"`
-	GroupTriggers               []string         `json:"group_triggers,omitempty"`
-	GroupTriggerMode            AliasTriggerMode `json:"group_trigger_mode,omitempty"`
-	DisabledGroups              []string         `json:"disabled_groups,omitempty"`
+	ConnectionProfileID         string `json:"connection_profile_id,omitempty"`
+	ReplyMergeConfidencePercent int    `json:"reply_merge_confidence_percent,omitempty"`
+	ID                          string `json:"id,omitempty"`
+	Name                        string `json:"name,omitempty"`
+	Platform                    string `json:"platform,omitempty"`
+	AvatarURL                   string `json:"avatar_url,omitempty"`
+	Enabled                     bool   `json:"enabled"`
+	OneBotTransport             string `json:"onebot_transport,omitempty"`
+	OneBotWSEndpoint            string `json:"onebot_ws_endpoint,omitempty"`
+	OneBotHTTPURL               string `json:"onebot_http_url,omitempty"`
+	OneBotHTTPSecret            string `json:"onebot_http_secret,omitempty"`
+	OneBotReverseWSEndpoint     string `json:"onebot_reverse_ws_endpoint"`
+	OneBotAccessToken           string `json:"onebot_access_token,omitempty"`
+	TelegramBotToken            string `json:"telegram_bot_token,omitempty"`
+	TelegramAPIBaseURL          string `json:"telegram_api_base_url,omitempty"`
+	TelegramProxyURL            string `json:"telegram_proxy_url,omitempty"`
+	TelegramSuppressBotMessages *bool  `json:"telegram_suppress_bot_messages,omitempty"`
+	QQTypingEnabled             *bool  `json:"qq_typing_enabled,omitempty"`
+	QQAppID                     string `json:"qq_app_id,omitempty"`
+	QQAppSecret                 string `json:"qq_app_secret,omitempty"`
+	QQSandbox                   bool   `json:"qq_sandbox,omitempty"`
+	DingTalkClientID            string `json:"dingtalk_client_id,omitempty"`
+	DingTalkClientSecret        string `json:"dingtalk_client_secret,omitempty"`
+	DingTalkRobotCode           string `json:"dingtalk_robot_code,omitempty"`
+	FeishuAppID                 string `json:"feishu_app_id,omitempty"`
+	FeishuAppSecret             string `json:"feishu_app_secret,omitempty"`
+	FeishuVerificationToken     string `json:"feishu_verification_token,omitempty"`
+	FeishuEncryptKey            string `json:"feishu_encrypt_key,omitempty"`
+	FeishuAPIBaseURL            string `json:"feishu_api_base_url,omitempty"`
+	WeComCorpID                 string `json:"wecom_corp_id,omitempty"`
+	WeComAgentID                string `json:"wecom_agent_id,omitempty"`
+	WeComSecret                 string `json:"wecom_secret,omitempty"`
+	WeComToken                  string `json:"wecom_token,omitempty"`
+	WeComEncodingAESKey         string `json:"wecom_encoding_aes_key,omitempty"`
+	// Weixin* 全部由扫码登录写入，界面不能手填：token 只有腾讯服务端发得出来。
+	WeixinBotToken        string           `json:"weixin_bot_token,omitempty"`
+	WeixinBotID           string           `json:"weixin_bot_id,omitempty"`
+	WeixinBaseURL         string           `json:"weixin_base_url,omitempty"`
+	WeixinUserID          string           `json:"weixin_user_id,omitempty"`
+	NoneBotBridgeEnabled  bool             `json:"nonebot_bridge_enabled,omitempty"`
+	NoneBotBridgeEndpoint string           `json:"nonebot_bridge_endpoint,omitempty"`
+	NoneBotBridgeToken    string           `json:"nonebot_bridge_token,omitempty"`
+	BotAccount            string           `json:"bot_account,omitempty"`
+	OwnerID               string           `json:"owner_id,omitempty"`
+	OwnerLoginEnabled     bool             `json:"owner_login_enabled,omitempty"`
+	OwnerLLMConfigEnabled *bool            `json:"owner_llm_config_enabled,omitempty"`
+	GroupTriggers         []string         `json:"group_triggers,omitempty"`
+	GroupTriggerMode      AliasTriggerMode `json:"group_trigger_mode,omitempty"`
+	DisabledGroups        []string         `json:"disabled_groups,omitempty"`
 	// DisabledUsers 已废弃，只为读取旧配置保留：WithDefaults 会把它并进 ReplyGate.BlockedUsers。
 	DisabledUsers             []string         `json:"disabled_users,omitempty"`
 	MarkedBotIDs              []string         `json:"marked_bot_ids,omitempty"`
@@ -1060,6 +1065,11 @@ type ConfigPayload struct {
 	WeComTokenConfigured              bool               `json:"wecom_token_configured,omitempty"`
 	WeComEncodingAESKey               string             `json:"wecom_encoding_aes_key,omitempty"`
 	WeComEncodingAESKeyConfigured     bool               `json:"wecom_encoding_aes_key_configured,omitempty"`
+	// 微信只回显绑定的是哪个号，token 只在显式索取时回传，而且保存时永远不从 payload 读。
+	WeixinBotID              string `json:"weixin_bot_id,omitempty"`
+	WeixinUserID             string `json:"weixin_user_id,omitempty"`
+	WeixinBotToken           string `json:"weixin_bot_token,omitempty"`
+	WeixinBotTokenConfigured bool   `json:"weixin_bot_token_configured,omitempty"`
 	// CallbackPath 是回调型平台要填到对方后台的路径，只读，供 WebUI 拼完整地址。
 	CallbackPath                   string               `json:"callback_path,omitempty"`
 	NoneBotBridgeEnabled           bool                 `json:"nonebot_bridge_enabled,omitempty"`
@@ -1551,6 +1561,7 @@ var (
 	ErrInvalidWeComAgentID        = errors.New("assistant: wecom agent id must be numeric")
 	ErrMissingWeComCallbackKeys   = errors.New("assistant: wecom token and encoding aes key are required to receive messages")
 	ErrInvalidFeishuAPIBase       = errors.New("assistant: feishu api base url must be http(s)")
+	ErrInvalidWeixinBaseURL       = errors.New("assistant: weixin base url must be http(s)")
 )
 
 // NewProfileSet 基于单个机器人配置创建配置集。
@@ -2156,6 +2167,13 @@ func (cfg BotConfig) Validate() error {
 			return ErrMissingWeComCallbackKeys
 		}
 		return nil
+	case PlatformWeixin:
+		// 不要求先有 token：扫码要挂在一台已保存的机器人上，得先能存下来才能扫。
+		// 没登录时通道只挂着并在状态里提示去扫码。
+		if base := strings.TrimSpace(cfg.WeixinBaseURL); base != "" && !isHTTPURL(base) {
+			return ErrInvalidWeixinBaseURL
+		}
+		return nil
 	}
 
 	if cfg.OneBotTransport == OneBotTransportHTTP {
@@ -2260,6 +2278,9 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		WeComSecretConfigured:             cfg.WeComSecret != "",
 		WeComTokenConfigured:              cfg.WeComToken != "",
 		WeComEncodingAESKeyConfigured:     cfg.WeComEncodingAESKey != "",
+		WeixinBotID:                       cfg.WeixinBotID,
+		WeixinUserID:                      cfg.WeixinUserID,
+		WeixinBotTokenConfigured:          cfg.WeixinBotToken != "",
 		CallbackPath:                      CallbackPathFor(cfg.Platform),
 		NoneBotBridgeEnabled:              cfg.NoneBotBridgeEnabled,
 		NoneBotBridgeEndpoint:             cfg.NoneBotBridgeEndpoint,
@@ -2400,6 +2421,7 @@ func PayloadFromConfigWithSecrets(cfg BotConfig) ConfigPayload {
 	payload.WeComSecret = cfg.WeComSecret
 	payload.WeComToken = cfg.WeComToken
 	payload.WeComEncodingAESKey = cfg.WeComEncodingAESKey
+	payload.WeixinBotToken = cfg.WeixinBotToken
 	return payload
 }
 
@@ -2627,6 +2649,12 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 	if cfg.WeComEncodingAESKey == "" {
 		cfg.WeComEncodingAESKey = existing.WeComEncodingAESKey
 	}
+	// 微信凭据只认扫码结果：payload 里就算带了也不采信，免得前端回传的旧值或
+	// 空值把刚扫出来的登录覆盖掉。解绑走单独的接口。
+	cfg.WeixinBotToken = existing.WeixinBotToken
+	cfg.WeixinBotID = existing.WeixinBotID
+	cfg.WeixinBaseURL = existing.WeixinBaseURL
+	cfg.WeixinUserID = existing.WeixinUserID
 	// 界面保存出来的配置一律是迁移过的：Agent 恒开，模式二选一。
 	return migrateAgentMode(cfg)
 }

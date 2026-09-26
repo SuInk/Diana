@@ -16,6 +16,7 @@ func TestSupportedPlatformsCoverAllAdapters(t *testing.T) {
 		PlatformDingTalk:   false,
 		PlatformFeishu:     false,
 		PlatformWeCom:      false,
+		PlatformWeixin:     false,
 	}
 	for _, platform := range SupportedPlatforms() {
 		if _, ok := want[platform.ID]; !ok {
@@ -53,6 +54,8 @@ func TestNormalizePlatformIDAcceptsCommonSpellings(t *testing.T) {
 		"飞书":       PlatformFeishu,
 		"wework":   PlatformWeCom,
 		"企业微信":     PlatformWeCom,
+		"wechat":   PlatformWeixin,
+		"微信":       PlatformWeixin,
 	}
 	for input, want := range cases {
 		if got := NormalizePlatformID(input); got != want {
@@ -69,7 +72,7 @@ func TestPlatformNeedsCallbackOnlyForWebhookPlatforms(t *testing.T) {
 			t.Fatalf("%q should require a public callback address", id)
 		}
 	}
-	for _, id := range []string{PlatformOneBotV11, PlatformTelegram, PlatformQQOfficial, PlatformDingTalk} {
+	for _, id := range []string{PlatformOneBotV11, PlatformTelegram, PlatformQQOfficial, PlatformDingTalk, PlatformWeixin} {
 		if PlatformNeedsCallback(id) {
 			t.Fatalf("%q should not require a public callback address", id)
 		}
@@ -86,6 +89,7 @@ func TestNewChannelForConfigBuildsEachPlatform(t *testing.T) {
 		{PlatformDingTalk, BotConfig{DingTalkClientID: "a", DingTalkClientSecret: "s"}},
 		{PlatformFeishu, BotConfig{FeishuAppID: "a", FeishuAppSecret: "s"}},
 		{PlatformWeCom, BotConfig{WeComCorpID: "c", WeComAgentID: "1", WeComSecret: "s"}},
+		{PlatformWeixin, BotConfig{}},
 	}
 	for _, testCase := range cases {
 		cfg := testCase.cfg

@@ -562,7 +562,8 @@ const platforms: BotPlatform[] = [
   { id: "qq-official", name: "QQ 官方机器人", protocol: "qq-official-gateway-ws", category: "qq_official", category_label: "QQ 官方机器人", description: "QQ 开放平台 WebSocket 网关，出站长连接，不需要公网地址", inbound: "outbound" },
   { id: "dingtalk", name: "钉钉", protocol: "dingtalk-stream-ws", category: "dingtalk", category_label: "钉钉", description: "Stream 模式出站长连接，不需要公网地址", inbound: "outbound", rich_text: true },
   { id: "feishu", name: "飞书", protocol: "feishu-event-callback", category: "feishu", category_label: "飞书", description: "事件订阅回调，需要一个公网可达的回调地址", inbound: "callback", callback_path: "/api/channels/feishu/callback", rich_text: true },
-  { id: "wecom", name: "企业微信", protocol: "wecom-event-callback", category: "wecom", category_label: "企业微信", description: "应用回调，需要一个公网可达的回调地址", inbound: "callback", callback_path: "/api/channels/wecom/callback", rich_text: true }
+  { id: "wecom", name: "企业微信", protocol: "wecom-event-callback", category: "wecom", category_label: "企业微信", description: "应用回调，需要一个公网可达的回调地址", inbound: "callback", callback_path: "/api/channels/wecom/callback", rich_text: true },
+  { id: "weixin", name: "微信", protocol: "weixin-ilink-longpoll", category: "weixin", category_label: "微信", description: "腾讯 iLink Bot 扫码登录，长轮询收发私聊，不需要公网地址", inbound: "outbound" }
 ];
 
 type DemoIssueDraft = {
@@ -1165,6 +1166,28 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
     group_triggers: ["Diana", "diana"], request_timeout_ms: 60000, agent_enabled: true, agent_mode: "standard"
   });
   if (path === "/api/assistant/config" && method === "GET") return json(assistantConfig);
+  // 演示站不连腾讯：给一张占位码，第二轮轮询就当作已在手机上确认。
+  if (path === "/api/assistant/weixin/login" && method === "POST") {
+    const placeholder = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 29 29"><rect width="29" height="29" fill="#fff"/><path d="M1 1h7v7H1zM21 1h7v7h-7zM1 21h7v7H1z" fill="none" stroke="#000" stroke-width="2"/><path d="M11 3h2v2h-2zM15 9h3v3h-3zM11 13h2v4h-2zM19 15h4v2h-4zM13 21h3v3h-3zM23 21h3v5h-3z"/></svg>`;
+    return json({ session_id: "demo-weixin", status: "wait", message: "演示模式：这是一张占位二维码，稍后会自动确认", qrcode_image: `data:image/svg+xml;base64,${btoa(placeholder)}`, qrcode_url: "https://liteapp.weixin.qq.com/q/demo" });
+  }
+  if (path === "/api/assistant/weixin/login/poll" && method === "POST") {
+    await new Promise((resolve) => window.setTimeout(resolve, 1500));
+    const id = String(body.profile_id ?? "");
+    assistantConfig.profiles = (assistantConfig.profiles ?? []).map((profile) => profile.id === id
+      ? { ...profile, weixin_bot_id: "demo-bot@im.bot", weixin_user_id: "demo-owner@im.wechat", weixin_bot_token_configured: true, owner_id: profile.owner_id || "demo-owner@im.wechat" }
+      : profile);
+    const focused = assistantConfig.profiles.find((profile) => profile.id === id);
+    return json({ session_id: "demo-weixin", status: "confirmed", message: "登录成功", config: { ...assistantConfig, ...focused, profiles: assistantConfig.profiles } });
+  }
+  if (path === "/api/assistant/weixin/logout" && method === "POST") {
+    const id = String(body.profile_id ?? "");
+    assistantConfig.profiles = (assistantConfig.profiles ?? []).map((profile) => profile.id === id
+      ? { ...profile, weixin_bot_id: "", weixin_user_id: "", weixin_bot_token_configured: false }
+      : profile);
+    const focused = assistantConfig.profiles.find((profile) => profile.id === id);
+    return json({ ...assistantConfig, ...focused, profiles: assistantConfig.profiles });
+  }
   if (["/api/assistant/config", "/api/assistant/config/new"].includes(path) && method === "POST") {
     const incoming = body as unknown as BotProfileConfig;
     const profiles = [...(assistantConfig.profiles ?? [])];
