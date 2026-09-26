@@ -302,6 +302,7 @@
         <div v-if="effectiveWelcomeEnabled" class="field wide">
           <label for="group-welcome">欢迎语</label>
           <textarea id="group-welcome" v-model="editing.welcome_message" class="textarea" rows="2" :placeholder="inheritedPlaceholder(inheritedBot?.welcome_message)"></textarea>
+          <span class="hint">可用 {nickname} 昵称、{user_id} 账号、{group} 群名、{group_id} 群号。</span>
         </div>
         <div v-if="effectiveWelcomeEnabled" class="field">
           <label for="group-welcome-mode">欢迎词模式</label>
@@ -319,7 +320,7 @@
             v-model="welcomeTemplatesDraft"
             class="textarea"
             rows="3"
-            placeholder="每行一条候选，发送时随机抽一条；{user_id} 会替换成新成员 ID。留空跟随机器人。LLM 模式冷却或失败时也从这里回落。"
+            placeholder="每行一条候选，发送时随机抽一条；可用 {nickname} 昵称、{user_id} 账号、{group} 群名、{group_id} 群号。留空跟随机器人。LLM 模式冷却或失败时也从这里回落。"
           ></textarea>
         </div>
         <div v-if="effectiveWelcomeEnabled && effectiveWelcomeMode === 'llm'" class="field">
@@ -520,6 +521,10 @@
           <span class="hint">{{ field.hint }}</span>
         </div>
         <div class="field wide">
+          <label>规则防御</label>
+          <GroupGovernanceForm v-model="editing.governance" id-prefix="group-governance" />
+        </div>
+        <div class="field wide">
           <label>本群回复时间与屏蔽账号</label>
           <ReplyGateForm v-model="editing.reply_gate" allow-inherit id-prefix="group-gate" :supports-group-level="supportsGroupLevel" />
         </div>
@@ -647,6 +652,7 @@ import BotMarkerList from "../components/BotMarkerList.vue";
 import { participationFromConfig, participationLevelLabel, participationPresetName, type ParticipationPreferences } from "../participation";
 import Modal from "../components/Modal.vue";
 import ReplyGateForm from "../components/ReplyGateForm.vue";
+import GroupGovernanceForm from "../components/GroupGovernanceForm.vue";
 import { sendRetryFields, sendRetryPayload, sendRetryValidationError, withUnsetSendRetryCleared, type SendRetryField, type SendRetrySettings } from "../send-retry-settings";
 
 // 群里留空的项跟随所属机器人（后端不再把机器人的值抄进群配置），占位符和「跟随机器人」

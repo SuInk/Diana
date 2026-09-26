@@ -478,6 +478,17 @@ func (h *BotHandler) sanitizeGroupConfigPayload(cfg assistant.GroupConfig, group
 	if len([]rune(cfg.ProactiveReplyExtraCriteria)) > assistant.ProactiveReplyExtraCriteriaMaxRunes {
 		return assistant.GroupConfig{}, fmt.Errorf("接话补充判据不能超过 %d 字", assistant.ProactiveReplyExtraCriteriaMaxRunes)
 	}
+	// 规则防御同理：不认识这个字段的旧页面保存时不能把它冲掉，关闭靠显式的开关。
+	if cfg.Governance == nil {
+		if existing, ok := h.groupConfigs.ConfigForGroup(cfg.BotProfileID, groupID); ok {
+			cfg.Governance = existing.Governance
+		}
+	}
+	if cfg.Governance != nil {
+		if err := cfg.Governance.Validate(); err != nil {
+			return assistant.GroupConfig{}, err
+		}
+	}
 	access, err := normalizeGroupExtensionAccess(cfg.ExtensionAccess)
 	if err != nil {
 		return assistant.GroupConfig{}, err

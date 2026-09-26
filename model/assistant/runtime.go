@@ -397,6 +397,8 @@ type Runtime struct {
 	// 进出群刷屏时不会每条都烧一次 Token。自带锁，不受 mu 保护。
 	welcomeMu      sync.Mutex
 	welcomeLLMLast map[string]time.Time
+	// governance 是群规则防御的刷屏计数和违规次数，见 group_governance.go。
+	governance     governanceTracker
 	buildInfo      BuildInfo
 	releaseStatus  ReleaseStatusProvider
 	reminders      ReminderStore
@@ -7723,6 +7725,10 @@ func (r *Runtime) handleNotice(ctx context.Context, event MessageEvent) error {
 	// 门槛约束——它不产生新的发言，只是把已经答应过的话送出去。
 	if event.SubType == "friend_add" {
 		r.flushPendingDirectMessages(ctx, event)
+		return nil
+	}
+	if event.SubType == "group_decrease" {
+		r.auditMemberLeave(ctx, event)
 		return nil
 	}
 	cfg := r.effectiveConfigForEvent(event)

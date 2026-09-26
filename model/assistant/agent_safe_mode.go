@@ -260,8 +260,8 @@ var AgentSafeModeRules = []AgentSafeModeRule{
 		Operations: []string{"bot_tier", "group_tier", "allow", "deny"},
 		Reason:     "修改扩展对群成员的开放档位和名单；查看照常"},
 	{Category: safeModeCategorySelfModify, Tool: dianaPlatformToolName, Field: "operation",
-		Operations: []string{platformOpMute, platformOpUnmute, platformOpKick},
-		Reason:     "禁言、解禁、踢人等群管操作；查群资料、撤回自己的消息照常"},
+		Operations: platformModerationOperations,
+		Reason:     "禁言、踢人、群公告、精华、名片头衔、全员禁言、撤回成员消息等群管操作；查群资料、撤回自己的消息照常"},
 	{Category: safeModeCategorySelfModify, Tool: dianaOneBotRequestsToolName, Field: "operation", Operations: []string{"approve", "reject"}, Reason: "同意或拒绝好友、加群请求；查看照常"},
 }
 

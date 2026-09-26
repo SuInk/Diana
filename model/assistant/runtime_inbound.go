@@ -90,6 +90,9 @@ func (r *Runtime) HandleEvent(ctx context.Context, event MessageEvent) error {
 	if r.members != nil {
 		r.members.Observe(event)
 	}
+	if r.enforceGroupGovernance(ctx, event) {
+		return nil
+	}
 	if event.Kind == EventKindPrivate {
 		text := PlainText(event.Segments)
 		if text == "" {
