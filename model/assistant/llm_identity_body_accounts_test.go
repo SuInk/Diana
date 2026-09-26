@@ -59,25 +59,25 @@ func bodyAccountEvent(text string) MessageEvent {
 // 正文里写的是本群成员的号，就和元数据里的号一样换成别名，模型填回别名能还原；
 // 不是成员的数字原样保留。
 func TestBodyAccountOfGroupMemberIsAliasedAndRestored(t *testing.T) {
-	channel := &bodyAccountChannel{members: map[string]OneBotGroupMemberInfo{"765432109": {Role: "member", Card: "小王"}}}
+	channel := &bodyAccountChannel{members: map[string]OneBotGroupMemberInfo{"70007": {Role: "member", Card: "小王"}}}
 	runtime := newBodyAccountRuntime(BotConfig{LLMIdentityMaskingEnabled: boolPointer(true)}, channel)
-	event := bodyAccountEvent("765432109 是谁？顺便看下订单 13800138000 和 88888")
+	event := bodyAccountEvent("70007 是谁？顺便看下订单 13800138000 和 88888")
 
 	ctx := runtime.withIdentityPrivacyContext(context.Background(), event, nil)
 	scope := identityPrivacyScopeFromContext(ctx)
 	protected := scope.protectText(event.RawMessage)
 
-	if strings.Contains(protected, "765432109") {
+	if strings.Contains(protected, "70007") {
 		t.Fatalf("成员账号应换成别名: %q", protected)
 	}
-	alias := scope.register("765432109", "user")
+	alias := scope.register("70007", "user")
 	if !strings.HasPrefix(alias, identityAlias("user")) || !strings.Contains(protected, alias) {
 		t.Fatalf("正文里应出现 user 别名 %q: %q", alias, protected)
 	}
 	if !strings.Contains(protected, "13800138000") || !strings.Contains(protected, "88888") {
 		t.Fatalf("非成员数字不应被当成账号换掉: %q", protected)
 	}
-	if got := scope.restoreText("查一下 " + alias); got != "查一下 765432109" {
+	if got := scope.restoreText("查一下 " + alias); got != "查一下 70007" {
 		t.Fatalf("别名没有还原成真实账号: %q", got)
 	}
 	// 11 位的手机号超出 QQ 号长度，不去平台问。
@@ -88,9 +88,9 @@ func TestBodyAccountOfGroupMemberIsAliasedAndRestored(t *testing.T) {
 
 // 核实结果要跨轮记住：下一轮这条消息进了历史，同一个号还是同一个别名，也不再问平台。
 func TestBodyAccountVerdictIsCachedAcrossTurns(t *testing.T) {
-	channel := &bodyAccountChannel{members: map[string]OneBotGroupMemberInfo{"765432109": {Role: "member"}}}
+	channel := &bodyAccountChannel{members: map[string]OneBotGroupMemberInfo{"70007": {Role: "member"}}}
 	runtime := newBodyAccountRuntime(BotConfig{LLMIdentityMaskingEnabled: boolPointer(true)}, channel)
-	first := bodyAccountEvent("765432109 和 54321 是谁")
+	first := bodyAccountEvent("70007 和 54321 是谁")
 
 	ctx := runtime.withIdentityPrivacyContext(context.Background(), first, nil)
 	firstText := identityPrivacyScopeFromContext(ctx).protectText(first.RawMessage)
@@ -113,9 +113,9 @@ func TestBodyAccountVerdictIsCachedAcrossTurns(t *testing.T) {
 
 // 历史消息里的新号码只看缓存，不去平台问；只有当前消息会触发查询。
 func TestBodyAccountHistoryNeverTriggersLookup(t *testing.T) {
-	channel := &bodyAccountChannel{members: map[string]OneBotGroupMemberInfo{"765432109": {Role: "member"}}}
+	channel := &bodyAccountChannel{members: map[string]OneBotGroupMemberInfo{"70007": {Role: "member"}}}
 	runtime := newBodyAccountRuntime(BotConfig{LLMIdentityMaskingEnabled: boolPointer(true)}, channel)
-	old := bodyAccountEvent("765432109 来了")
+	old := bodyAccountEvent("70007 来了")
 	old.MessageID = "80001"
 
 	runtime.withIdentityPrivacyContext(context.Background(), bodyAccountEvent("你好"), []MessageEvent{old})
@@ -141,15 +141,15 @@ func TestBodyAccountMappingCanBeDisabled(t *testing.T) {
 		"隐私代理关": {LLMIdentityMaskingEnabled: boolPointer(false)},
 	} {
 		t.Run(name, func(t *testing.T) {
-			channel := &bodyAccountChannel{members: map[string]OneBotGroupMemberInfo{"765432109": {Role: "member"}}}
+			channel := &bodyAccountChannel{members: map[string]OneBotGroupMemberInfo{"70007": {Role: "member"}}}
 			runtime := newBodyAccountRuntime(cfg, channel)
-			event := bodyAccountEvent("765432109 是谁")
+			event := bodyAccountEvent("70007 是谁")
 			ctx := runtime.withIdentityPrivacyContext(context.Background(), event, nil)
 			if asked := channel.askedIDs(); len(asked) != 0 {
 				t.Fatalf("关掉后不应查询平台: %v", asked)
 			}
 			if scope := identityPrivacyScopeFromContext(ctx); scope != nil {
-				if got := scope.protectText(event.RawMessage); !strings.Contains(got, "765432109") {
+				if got := scope.protectText(event.RawMessage); !strings.Contains(got, "70007") {
 					t.Fatalf("关掉正文映射后正文号码应原样保留: %q", got)
 				}
 			}
@@ -172,9 +172,9 @@ func TestBodyAccountMappingDefaultsOn(t *testing.T) {
 }
 
 func TestBodyAccountCandidates(t *testing.T) {
-	text := "找 765432109，链接 https://x.com/status/123456789 版本 v1.23456 文件 a_12345.png 编号 012345 群号:987654321"
+	text := "找 70007，链接 https://x.com/status/12345 版本 v1.23456 文件 a_12345.png 编号 012345 群号:90009"
 	got := bodyAccountCandidates(text, 5, 10)
-	want := []string{"765432109", "987654321"}
+	want := []string{"70007", "90009"}
 	if !slices.Equal(got, want) {
 		t.Fatalf("候选 = %v, want %v", got, want)
 	}
@@ -185,9 +185,9 @@ func TestBodyAccountCandidates(t *testing.T) {
 
 // 用户拿号码问「这是谁」，identity_check 开了群身份核验时要带回群名片。
 func TestIdentityCheckReturnsDisplayNameForGroupMember(t *testing.T) {
-	channel := &bodyAccountChannel{members: map[string]OneBotGroupMemberInfo{"765432109": {Role: "admin", Card: "小王", Nickname: "wang"}}}
+	channel := &bodyAccountChannel{members: map[string]OneBotGroupMemberInfo{"70007": {Role: "admin", Card: "小王", Nickname: "wang"}}}
 	runtime := newBodyAccountRuntime(BotConfig{}, channel)
-	got := runIdentityCheck(t, runtime, bodyAccountEvent("765432109 是谁"), map[string]any{"user_id": "765432109", "check_group_role": true})
+	got := runIdentityCheck(t, runtime, bodyAccountEvent("70007 是谁"), map[string]any{"user_id": "70007", "check_group_role": true})
 	if got.DisplayName != "小王" || got.GroupRole != string(GroupRoleAdmin) {
 		t.Fatalf("应返回群名片和群身份: %+v", got)
 	}
