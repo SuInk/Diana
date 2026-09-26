@@ -12,15 +12,34 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/SuInk/diana/model/agent"
+	"github.com/SuInk/diana/model/assistant"
 	"github.com/gin-gonic/gin"
 )
+
+type workspaceTestRuntime struct{}
+
+func (workspaceTestRuntime) ProfileConfigs() []assistant.BotConfig {
+	return []assistant.BotConfig{{ID: "bot-a", Name: "小 A"}}
+}
+
+func (workspaceTestRuntime) CodingWorkspaceReferenced() func(string) bool {
+	return func(string) bool { return false }
+}
+
+func newAgentWorkspaceTestHandler(root string) *AgentWorkspaceHandler {
+	handler := NewAgentWorkspaceHandler(func() string { return root }, workspaceTestRuntime{})
+	handler.now = func() time.Time { return time.Date(2026, 9, 26, 10, 0, 0, 0, time.Local) }
+	return handler
+}
 
 func newAgentWorkspaceTestRouter(t *testing.T, root string) *gin.Engine {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
-	NewAgentWorkspaceHandler(func() string { return root }).Register(router)
+	newAgentWorkspaceTestHandler(root).Register(router)
 	return router
 }
 
@@ -35,6 +54,45 @@ func getWorkspace(t *testing.T, router *gin.Engine, endpoint, rel string, extra 
 	return recorder
 }
 
+func listWorkspaceForTest(t *testing.T, router *gin.Engine, rel string) AgentWorkspaceListing {
+	t.Helper()
+	recorder := getWorkspace(t, router, "/api/system/workspace", rel)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("list %q: status %d: %s", rel, recorder.Code, recorder.Body.String())
+	}
+	var listing AgentWorkspaceListing
+	if err := json.Unmarshal(recorder.Body.Bytes(), &listing); err != nil {
+		t.Fatal(err)
+	}
+	return listing
+}
+
+func serveWorkspace(router http.Handler, method, target, body string) *httptest.ResponseRecorder {
+	response := httptest.NewRecorder()
+	request := httptest.NewRequest(method, target, strings.NewReader(body))
+	if body != "" {
+		request.Header.Set("Content-Type", "application/json")
+	}
+	router.ServeHTTP(response, request)
+	return response
+}
+
+func deleteWorkspacePath(router http.Handler, rel string) *httptest.ResponseRecorder {
+	body, _ := json.Marshal(map[string]string{"path": rel})
+	return serveWorkspace(router, http.MethodPost, "/api/workspace/delete", string(body))
+}
+
+func writeWorkspaceTestFile(t *testing.T, root, rel, content string) {
+	t.Helper()
+	path := filepath.Join(root, filepath.FromSlash(rel))
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestAgentWorkspaceListsDirectoriesFirst(t *testing.T) {
 	root := t.TempDir()
 	writeStorageSample(t, filepath.Join(root, "b.txt"), 3)
@@ -42,15 +100,8 @@ func TestAgentWorkspaceListsDirectoriesFirst(t *testing.T) {
 	writeStorageSample(t, filepath.Join(root, "coding", "repo", "main.go"), 7)
 	router := newAgentWorkspaceTestRouter(t, root)
 
-	recorder := getWorkspace(t, router, "/api/system/workspace", "")
-	if recorder.Code != http.StatusOK {
-		t.Fatalf("status %d: %s", recorder.Code, recorder.Body.String())
-	}
-	var listing AgentWorkspaceListing
-	if err := json.Unmarshal(recorder.Body.Bytes(), &listing); err != nil {
-		t.Fatal(err)
-	}
-	if !listing.Exists || listing.Path != "" || listing.Root != root {
+	listing := listWorkspaceForTest(t, router, "")
+	if !listing.Exists || listing.Path != "" || listing.Root != root || listing.Area != nil {
 		t.Fatalf("unexpected listing header %+v", listing)
 	}
 	var names []string
@@ -64,10 +115,7 @@ func TestAgentWorkspaceListsDirectoriesFirst(t *testing.T) {
 		t.Fatalf("file size missing: %+v", listing.Entries[2])
 	}
 
-	recorder = getWorkspace(t, router, "/api/system/workspace", "coding/repo")
-	if err := json.Unmarshal(recorder.Body.Bytes(), &listing); err != nil {
-		t.Fatal(err)
-	}
+	listing = listWorkspaceForTest(t, router, "coding/repo")
 	if listing.Path != "coding/repo" || len(listing.Entries) != 1 || listing.Entries[0].Path != "coding/repo/main.go" {
 		t.Fatalf("unexpected nested listing %+v", listing)
 	}
@@ -76,16 +124,13 @@ func TestAgentWorkspaceListsDirectoriesFirst(t *testing.T) {
 // 工作区要等 Agent 第一次写文件才会建出来，没建之前页面该说「还是空的」而不是报错。
 func TestAgentWorkspaceMissingRootIsEmpty(t *testing.T) {
 	router := newAgentWorkspaceTestRouter(t, filepath.Join(t.TempDir(), "workspace"))
-	recorder := getWorkspace(t, router, "/api/system/workspace", "")
-	if recorder.Code != http.StatusOK {
-		t.Fatalf("status %d: %s", recorder.Code, recorder.Body.String())
-	}
-	var listing AgentWorkspaceListing
-	if err := json.Unmarshal(recorder.Body.Bytes(), &listing); err != nil {
-		t.Fatal(err)
-	}
+	listing := listWorkspaceForTest(t, router, "")
 	if listing.Exists || len(listing.Entries) != 0 {
 		t.Fatalf("missing workspace should list as empty: %+v", listing)
+	}
+	recorder := serveWorkspace(router, http.MethodGet, "/api/workspace/files", "")
+	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), `"areas":[]`) {
+		t.Fatalf("overview of missing workspace: %d %s", recorder.Code, recorder.Body)
 	}
 }
 
@@ -148,6 +193,85 @@ func TestAgentWorkspaceMarksRuntimeCredentials(t *testing.T) {
 	}
 }
 
+// 管理员什么都能看：.diana/ 下的运行时状态（含长期区索引）照常列出、能打开，打上
+// protected 标记；指到工作区外面的链接标成 external，照样跟过去。
+func TestAgentWorkspaceShowsRuntimeFilesAndExternalLinks(t *testing.T) {
+	parent := t.TempDir()
+	root := filepath.Join(parent, "workspace")
+	writeWorkspaceTestFile(t, root, ".diana/keep-index/bot-a.json", `{"entries":[]}`)
+	writeWorkspaceTestFile(t, root, "coding-runtime/auth/auth.json", `{"token":"secret"}`)
+	writeWorkspaceTestFile(t, root, "notes/a.txt", "note")
+	writeStorageSample(t, filepath.Join(parent, "outside", "report.txt"), 10)
+	for link, target := range map[string]string{
+		"outside-link": filepath.Join(parent, "outside"),
+		"notes-link":   filepath.Join(root, "notes"),
+	} {
+		if err := os.Symlink(target, filepath.Join(root, link)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	router := newAgentWorkspaceTestRouter(t, root)
+
+	entries := map[string]AgentWorkspaceEntry{}
+	for _, entry := range listWorkspaceForTest(t, router, "").Entries {
+		entries[entry.Name] = entry
+	}
+	if got := entries[".diana"]; got.Kind != "dir" || !got.Protected {
+		t.Fatalf(".diana should be listed and marked: %+v", got)
+	}
+	if got := entries["notes"]; got.Protected {
+		t.Fatalf("ordinary directory marked protected: %+v", got)
+	}
+	if got := entries["outside-link"]; got.Kind != "dir" || !got.Symlink || !got.External {
+		t.Fatalf("outside link should be followed and marked external: %+v", got)
+	}
+	if got := entries["notes-link"]; got.Kind != "dir" || !got.Symlink || got.External {
+		t.Fatalf("link inside the workspace is not external: %+v", got)
+	}
+	index := listWorkspaceForTest(t, router, ".diana/keep-index")
+	if len(index.Entries) != 1 || !index.Entries[0].Protected {
+		t.Fatalf("keep index listing = %+v", index.Entries)
+	}
+	for rel, want := range map[string]string{".diana/keep-index/bot-a.json": "entries", "coding-runtime/auth/auth.json": "secret"} {
+		if recorder := getWorkspace(t, router, "/api/system/workspace/file", rel); recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), want) {
+			t.Fatalf("%s should be viewable: %d %s", rel, recorder.Code, recorder.Body)
+		}
+	}
+	if recorder := getWorkspace(t, router, "/api/system/workspace/file", "outside-link/report.txt"); recorder.Code != http.StatusOK || recorder.Body.Len() != 10 {
+		t.Fatalf("file through outside link: %d", recorder.Code)
+	}
+}
+
+// 长期区的条目带上索引里的说明，当前目录带上分区和清理规则。
+func TestAgentWorkspaceListsKeepDescriptionsAndArea(t *testing.T) {
+	root := t.TempDir()
+	if _, err := agent.WriteWorkspaceBytes(agent.Config{WorkDir: root}, "keep/poster.txt", []byte("keep me"), agent.WorkspaceWriteOptions{Keep: &agent.KeepMeta{BotID: "bot-a", Description: "活动海报", SavedBy: "主人"}}); err != nil {
+		t.Fatal(err)
+	}
+	writeWorkspaceTestFile(t, root, "keep/bot-a/plain.txt", "no index")
+	writeWorkspaceTestFile(t, root, "downloads/a.txt", "hello")
+	router := newAgentWorkspaceTestRouter(t, root)
+
+	listing := listWorkspaceForTest(t, router, "keep/bot-a")
+	if listing.Area == nil || listing.Area.Key != "keep" || listing.Area.BotID != "bot-a" || listing.Area.BotName != "小 A" || listing.Area.Retention != "不自动清理" {
+		t.Fatalf("keep area = %+v", listing.Area)
+	}
+	byName := map[string]AgentWorkspaceEntry{}
+	for _, entry := range listing.Entries {
+		byName[entry.Name] = entry
+	}
+	if got := byName["poster.txt"]; got.Description != "活动海报" || got.SavedBy != "主人" || got.SavedAt.IsZero() {
+		t.Fatalf("keep entry = %+v", got)
+	}
+	if got := byName["plain.txt"]; got.Description != "" {
+		t.Fatalf("entry without index should have no description: %+v", got)
+	}
+	listing = listWorkspaceForTest(t, router, "downloads")
+	if listing.Area == nil || listing.Area.Key != "downloads" || listing.Area.Retention != "7 天后自动清理" {
+		t.Fatalf("downloads area = %+v", listing.Area)
+	}
+}
+
 // 文件是 Agent 写的，和控制台同源。常用的图片、音视频和 PDF 直接打开；HTML 只给源码，
 // 所有响应都不让脚本在控制台的源里跑。
 func TestAgentWorkspaceServesUntrustedFilesSafely(t *testing.T) {
@@ -206,5 +330,138 @@ func TestAgentWorkspaceServesUntrustedFilesSafely(t *testing.T) {
 	recorder := getWorkspace(t, router, "/api/system/workspace/file", "shot.png", "download", "1")
 	if got := recorder.Header().Get("Content-Disposition"); !strings.HasPrefix(got, "attachment") {
 		t.Fatalf("download=1 should force attachment, got %q", got)
+	}
+	if recorder := getWorkspace(t, router, "/api/system/workspace/file", ""); recorder.Code != http.StatusBadRequest {
+		t.Fatalf("root is not a file: %d", recorder.Code)
+	}
+}
+
+// 概览按分区合计，长期区对上机器人名字；运行时状态不出现。
+func TestAgentWorkspaceOverview(t *testing.T) {
+	root := t.TempDir()
+	writeWorkspaceTestFile(t, root, "downloads/a.txt", "hello")
+	writeWorkspaceTestFile(t, root, ".diana/extension-overrides.json", `{"secret":true}`)
+	writeWorkspaceTestFile(t, root, "loose.txt", "x")
+	if _, err := agent.WriteWorkspaceBytes(agent.Config{WorkDir: root}, "keep/poster.txt", []byte("keep me"), agent.WorkspaceWriteOptions{Keep: &agent.KeepMeta{BotID: "bot-a", Description: "海报"}}); err != nil {
+		t.Fatal(err)
+	}
+	router := newAgentWorkspaceTestRouter(t, root)
+	response := serveWorkspace(router, http.MethodGet, "/api/workspace/files", "")
+	if response.Code != http.StatusOK {
+		t.Fatalf("overview: %d %s", response.Code, response.Body)
+	}
+	if strings.Contains(response.Body.String(), "extension-overrides") {
+		t.Fatalf("概览里出现了运行时状态: %s", response.Body)
+	}
+	var overview agent.WorkspaceOverview
+	if err := json.Unmarshal(response.Body.Bytes(), &overview); err != nil {
+		t.Fatal(err)
+	}
+	areas := map[string]agent.WorkspaceArea{}
+	for _, area := range overview.Areas {
+		areas[area.Key] = area
+	}
+	if keep := areas["keep"]; keep.BotName != "小 A" || keep.Files != 1 || keep.Bytes != 7 || keep.QuotaBytes != agent.KeepQuotaBytes {
+		t.Fatalf("keep = %+v", keep)
+	}
+	if downloads := areas["downloads"]; downloads.Files != 1 || downloads.Path != "downloads" {
+		t.Fatalf("downloads = %+v", downloads)
+	}
+	if len(overview.Loose) != 1 || overview.Loose[0].Path != "loose.txt" {
+		t.Fatalf("loose = %+v", overview.Loose)
+	}
+}
+
+// 删除挪进回收站，长期区索引跟着清；回收站里的东西不单条删，只能整个清空。
+func TestAgentWorkspaceDeleteMovesToTrashAndEmptyTrash(t *testing.T) {
+	root := t.TempDir()
+	if _, err := agent.WriteWorkspaceBytes(agent.Config{WorkDir: root}, "keep/poster.txt", []byte("keep me"), agent.WorkspaceWriteOptions{Keep: &agent.KeepMeta{BotID: "bot-a", Description: "海报"}}); err != nil {
+		t.Fatal(err)
+	}
+	writeWorkspaceTestFile(t, root, "downloads/batch/a.txt", "a")
+	writeWorkspaceTestFile(t, root, "downloads/batch/b.txt", "b")
+	router := newAgentWorkspaceTestRouter(t, root)
+
+	response := deleteWorkspacePath(router, "keep/bot-a/poster.txt")
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), ".trash/") {
+		t.Fatalf("delete file: %d %s", response.Code, response.Body)
+	}
+	if entries, _ := agent.LoadKeepIndex(root, "bot-a"); len(entries) != 0 {
+		t.Fatalf("删除后长期区索引没清: %+v", entries)
+	}
+	if response := deleteWorkspacePath(router, "downloads/batch"); response.Code != http.StatusOK {
+		t.Fatalf("delete dir: %d %s", response.Code, response.Body)
+	}
+	if _, err := os.Stat(filepath.Join(root, "downloads", "batch")); !os.IsNotExist(err) {
+		t.Fatalf("目录没挪走: %v", err)
+	}
+	// 凭据和 .diana/ 里的文件管理员也能删，照样挪进回收站。
+	writeWorkspaceTestFile(t, root, ".mcp.json", `{"token":"secret"}`)
+	writeWorkspaceTestFile(t, root, ".diana/extension-overrides.json", `{}`)
+	for _, rel := range []string{".mcp.json", ".diana/extension-overrides.json"} {
+		if response := deleteWorkspacePath(router, rel); response.Code != http.StatusOK {
+			t.Fatalf("delete %s: %d %s", rel, response.Code, response.Body)
+		}
+	}
+	// 删链接挪走的是链接本身，指向的东西原样留着。
+	outside := t.TempDir()
+	writeWorkspaceTestFile(t, outside, "keep-me.txt", "outside")
+	if err := os.Symlink(filepath.Join(outside, "keep-me.txt"), filepath.Join(root, "outside-link")); err != nil {
+		t.Fatal(err)
+	}
+	if response := deleteWorkspacePath(router, "outside-link"); response.Code != http.StatusOK {
+		t.Fatalf("delete link: %d %s", response.Code, response.Body)
+	}
+	if _, err := os.Stat(filepath.Join(outside, "keep-me.txt")); err != nil {
+		t.Fatalf("删链接把目标也挪走了: %v", err)
+	}
+	trash := listWorkspaceForTest(t, router, ".trash")
+	if trash.Area == nil || trash.Area.Key != "trash" || len(trash.Entries) == 0 {
+		t.Fatalf("trash listing = %+v", trash)
+	}
+	for _, rel := range []string{trash.Entries[0].Path, "keep", ".", "", "../x", "downloads/missing.txt"} {
+		if response := deleteWorkspacePath(router, rel); response.Code == http.StatusOK {
+			t.Fatalf("delete %q 放行了: %s", rel, response.Body)
+		}
+	}
+	response = serveWorkspace(router, http.MethodPost, "/api/workspace/trash/empty", "")
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"deleted_files":6`) {
+		t.Fatalf("empty trash: %d %s", response.Code, response.Body)
+	}
+	if entries, _ := os.ReadDir(filepath.Join(root, agent.WorkspaceTrashDir)); len(entries) != 0 {
+		t.Fatalf("回收站没清空: %v", entries)
+	}
+}
+
+// 文件页的接口和其他管理接口一样过 WebUI 登录：没登录一律 401，文件原样不动。
+func TestAgentWorkspaceRequiresConsoleAuthentication(t *testing.T) {
+	auth := NewAuthManager(&memoryAuthStore{})
+	if _, err := auth.Bootstrap("admin", "test-password"); err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	writeWorkspaceTestFile(t, root, "downloads/a.txt", "hello")
+	writeWorkspaceTestFile(t, root, ".trash/20260901-000000/b.txt", "bye")
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.Use(auth.Middleware())
+	newAgentWorkspaceTestHandler(root).Register(router)
+	for _, item := range []struct{ method, target, body string }{
+		{http.MethodGet, "/api/system/workspace?path=downloads", ""},
+		{http.MethodGet, "/api/system/workspace/file?path=downloads/a.txt", ""},
+		{http.MethodGet, "/api/system/workspace/file?path=downloads/a.txt&download=1", ""},
+		{http.MethodGet, "/api/workspace/files", ""},
+		{http.MethodPost, "/api/workspace/delete", `{"path":"downloads/a.txt"}`},
+		{http.MethodPost, "/api/workspace/trash/empty", ""},
+	} {
+		response := serveWorkspace(router, item.method, item.target, item.body)
+		if response.Code != http.StatusUnauthorized || strings.Contains(response.Body.String(), "hello") {
+			t.Fatalf("%s %s 未登录也能访问: %d", item.method, item.target, response.Code)
+		}
+	}
+	for _, rel := range []string{"downloads/a.txt", ".trash/20260901-000000/b.txt"} {
+		if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(rel))); err != nil {
+			t.Fatalf("未登录的请求动了文件 %s", rel)
+		}
 	}
 }

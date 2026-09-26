@@ -2,26 +2,89 @@
 <!--
   工作区是 Agent 读写文件、跑命令的目录，位置跟着数据库走（数据目录下的 workspace）。
   它藏在 Application Support 或 Docker 数据卷里，想看机器人写了什么、截了什么图，
-  以前只能 SSH 上去翻。这一页只读：能进目录，常用的图片、音视频、PDF 和文本直接
-  预览，其余下载，不能改。凭据配置和指到工作区外面的链接一样能看——只有管理员进得来。
+  以前只能 SSH 上去翻。
+
+  这一页以前拆成两处：这里只能逐层浏览，设置里的「工作目录」按分区列文件、能删。
+  现在合在一起：上面是分区卡片，一眼看出哪块占得多、多久会被清掉，点卡片跳到对应
+  目录；下面是目录浏览，能预览、下载，删除先进回收站。只有管理员进得来，所以什么都
+  给看：凭据、运行时文件和指到工作区外面的链接照常能打开，只打标记；删凭据和运行时
+  文件要多确认一次。
 -->
 <template>
   <section class="stack">
     <div class="card">
       <div class="card-header">
         <h2>文件</h2>
-        <span class="card-sub">Agent 工作区里的文件：它写的笔记、截的图，编码代理的仓库在 coding 下。这里只能看，不能改</span>
+        <span class="card-sub">Agent 工作区里的文件：各分区的占用和清理规则，点一块进去逐层浏览、预览、下载；删除的先进回收站</span>
       </div>
       <div class="card-body stack">
-        <div v-if="listing" class="workspace-root">
+        <div v-if="rootPath" class="workspace-root">
           <span class="muted">位置</span>
-          <code class="mono workspace-root-path" :title="listing.root">{{ listing.root }}</code>
+          <code class="mono workspace-root-path" :title="rootPath">{{ rootPath }}</code>
           <button class="btn ghost small" type="button" @click="copyRoot">
             <Copy :size="13" aria-hidden="true" />
             复制
           </button>
         </div>
 
+        <p v-if="overviewError" class="workspace-error" role="alert">{{ overviewError }}</p>
+        <LoadingSkeleton v-else-if="!overview" kind="users" :count="2" label="正在统计各分区" />
+        <ul v-else-if="areas.length > 0" class="workspace-areas">
+          <li v-for="area in areas" :key="`${area.key}:${area.bot_id ?? ''}`">
+            <button
+              type="button"
+              class="workspace-area"
+              :class="{ active: areaActive(area) }"
+              :aria-current="areaActive(area) ? 'true' : undefined"
+              @click="openArea(area)"
+            >
+              <span class="workspace-area-title">
+                <strong>{{ area.label }}</strong>
+                <span v-if="area.key === 'keep'" class="workspace-area-bot" :title="area.bot_id">{{ area.bot_name || area.bot_id || "未知机器人" }}</span>
+              </span>
+              <span class="workspace-area-size">{{ formatBytes(area.bytes) }}</span>
+              <span class="workspace-area-meta">{{ formatNumber(area.files) }} 个文件 · {{ area.retention }}</span>
+              <!-- 长期保存区有配额：写满之后 Agent 再存会被拒，提前看得到快满了。 -->
+              <span v-if="quotaPercent(area) !== null" class="workspace-quota">
+                <span
+                  class="workspace-quota-bar"
+                  role="img"
+                  :aria-label="`已用 ${formatBytes(area.bytes)}，配额 ${formatBytes(area.quota_bytes)}`"
+                >
+                  <span :class="{ full: (quotaPercent(area) ?? 0) >= 90 }" :style="{ width: `${quotaPercent(area)}%` }"></span>
+                </span>
+                <span class="workspace-quota-text">配额 {{ formatBytes(area.quota_bytes) }}</span>
+              </span>
+            </button>
+          </li>
+        </ul>
+
+        <!-- 散落文件和闲置的编码工作区只报告：是谁放的、还要不要，程序判断不了。 -->
+        <div v-if="overview && overview.loose.length > 0" class="workspace-notice">
+          <p>
+            <strong>根目录下有 {{ formatNumber(overview.loose.length) }} 个散落文件</strong>，不属于任何分区、不会自动清理。
+            用不上可以删掉，要留着的建议让 Agent 挪进 outputs/ 或 keep/。
+            <button type="button" class="workspace-link" @click="open('')">去根目录看看</button>
+          </p>
+          <p class="workspace-notice-items mono">{{ looseSummary }}</p>
+        </div>
+        <div v-if="overview && overview.orphan_coding.length > 0" class="workspace-notice">
+          <p>
+            <strong>{{ formatNumber(overview.orphan_coding.length) }} 个编码工作区闲置</strong>：长期没动，也没有机器人配置引用。
+            里面可能有没推上去的改动，只提示不自动删除，确认没用了再手动删。
+          </p>
+          <ul class="workspace-notice-list">
+            <li v-for="entry in overview.orphan_coding" :key="entry.path">
+              <button type="button" class="workspace-link mono" @click="open(entry.path)">{{ entry.path }}</button>
+              <span class="muted">{{ formatBytes(entry.size) }} · 最后改动 {{ formatRelative(entry.modified) }}</span>
+            </li>
+          </ul>
+        </div>
+      </div>
+    </div>
+
+    <div ref="browserCard" class="card workspace-browser">
+      <div class="card-body stack">
         <div class="workspace-toolbar">
           <nav class="workspace-crumbs" aria-label="当前位置">
             <button type="button" :disabled="!currentPath" @click="open('')">工作区</button>
@@ -30,13 +93,31 @@
               <button type="button" :disabled="crumb.path === currentPath" @click="open(crumb.path)">{{ crumb.name }}</button>
             </template>
           </nav>
-          <button class="btn ghost small" type="button" :disabled="loading" @click="open(currentPath)">
-            <RefreshCw :size="13" aria-hidden="true" />
-            刷新
-          </button>
+          <div class="workspace-toolbar-actions">
+            <button
+              v-if="inTrash && listing && listing.entries.length > 0"
+              class="btn small danger"
+              type="button"
+              :disabled="busy !== ''"
+              @click="emptyTrash"
+            >
+              <Trash2 :size="13" aria-hidden="true" />
+              {{ busy === TRASH_BUSY ? "清空中…" : "清空回收站" }}
+            </button>
+            <button class="btn ghost small" type="button" :disabled="loading" @click="refresh">
+              <RefreshCw :size="13" aria-hidden="true" />
+              刷新
+            </button>
+          </div>
         </div>
 
-        <p v-if="error" class="workspace-error">{{ error }}</p>
+        <p v-if="listing?.area" class="workspace-area-hint">
+          <strong>{{ areaHintTitle }}</strong>
+          <span>{{ listing.area.retention }}</span>
+          <span v-if="inTrash" class="muted">回收站里的东西不单条删除，到期自动清理或整个清空。</span>
+        </p>
+
+        <p v-if="error" class="workspace-error" role="alert">{{ error }}</p>
         <EmptyState
           v-else-if="listing && !listing.exists"
           title="工作区还没建出来"
@@ -54,6 +135,7 @@
                 <th>名称</th>
                 <th class="workspace-size">大小</th>
                 <th class="workspace-time">修改时间</th>
+                <th class="workspace-actions" aria-label="操作"></th>
               </tr>
             </thead>
             <tbody>
@@ -62,25 +144,53 @@
                   <button
                     type="button"
                     class="workspace-entry"
-                    :class="{ disabled: !openable(entry) }"
-                    :disabled="!openable(entry)"
+                    :class="{ disabled: entry.kind === 'link' }"
+                    :disabled="entry.kind === 'link'"
                     :title="entryTitle(entry)"
                     @click="activate(entry)"
                   >
                     <component :is="entryIcon(entry)" :size="15" aria-hidden="true" class="workspace-entry-icon" />
                     <span class="workspace-entry-name">{{ entry.name }}</span>
-                    <span v-if="entry.protected" class="badge warn">凭据</span>
+                    <span v-if="workspaceProtectedLabel(entry)" class="badge warn">{{ workspaceProtectedLabel(entry) }}</span>
                     <span v-if="entry.kind === 'link'" class="badge err">失效</span>
+                    <span v-else-if="entry.external" class="badge warn">外部链接</span>
                     <span v-else-if="entry.symlink" class="badge">链接</span>
                   </button>
+                  <p v-if="entry.description || entry.saved_by" class="workspace-entry-desc">
+                    <template v-if="entry.description">{{ entry.description }}</template>
+                    <span v-if="entry.saved_by" class="muted">{{ entry.description ? " · " : "" }}{{ entry.saved_by }} 存的</span>
+                  </p>
                 </td>
                 <td class="workspace-size muted">{{ entry.kind === "file" ? formatBytes(entry.size) : "" }}</td>
                 <td class="workspace-time muted" :title="formatTime(entry.modified)">{{ formatRelative(entry.modified) }}</td>
+                <td class="workspace-actions">
+                  <a
+                    v-if="entry.kind === 'file'"
+                    class="btn ghost small icon-only"
+                    :href="workspaceFileURL(entry.path, true)"
+                    download
+                    :title="`下载 ${entry.name}`"
+                    :aria-label="`下载 ${entry.name}`"
+                  >
+                    <Download :size="14" aria-hidden="true" />
+                  </a>
+                  <button
+                    v-if="workspaceCanDelete(entry)"
+                    class="btn ghost small icon-only danger"
+                    type="button"
+                    :disabled="busy !== ''"
+                    :title="`删除 ${entry.name}（移到回收站）`"
+                    :aria-label="`删除 ${entry.name}`"
+                    @click="removeEntry(entry)"
+                  >
+                    <Trash2 :size="14" aria-hidden="true" />
+                  </button>
+                </td>
               </tr>
             </tbody>
           </table>
-          <p v-if="listing.truncated" class="muted workspace-note">目录里的条目太多，只列出前 1000 项。</p>
         </div>
+        <p v-if="listing?.truncated" class="muted workspace-note">目录里的条目太多，只列出前 1000 项。</p>
       </div>
     </div>
 
@@ -88,8 +198,13 @@
       <div class="workspace-preview">
         <p class="muted workspace-preview-meta">
           {{ formatBytes(preview.entry.size) }} · {{ formatTime(preview.entry.modified) }}
+          <template v-if="preview.entry.saved_by"> · {{ preview.entry.saved_by }} 存的</template>
         </p>
-        <p v-if="preview.entry.protected" class="workspace-warning">这是运行时的凭据配置，里面是明文令牌，别截图外传。</p>
+        <p v-if="preview.entry.description" class="workspace-preview-desc">{{ preview.entry.description }}</p>
+        <p v-if="workspaceProtectedLabel(preview.entry)" class="workspace-warning">
+          这是 Diana 的{{ workspaceProtectedLabel(preview.entry) }}，里面可能有明文令牌或运行时开关，别截图外传；要改设置请到扩展页或编码代理设置。
+        </p>
+        <p v-else-if="preview.entry.external" class="workspace-warning">这个文件经链接指到了工作区外面。</p>
         <img v-if="preview.kind === 'image'" :src="workspaceFileURL(preview.entry.path)" :alt="preview.entry.name" />
         <video v-else-if="preview.kind === 'video'" :src="workspaceFileURL(preview.entry.path)" controls preload="metadata" />
         <audio v-else-if="preview.kind === 'audio'" :src="workspaceFileURL(preview.entry.path)" controls preload="metadata" />
@@ -102,6 +217,16 @@
         <p v-else class="muted">这种文件没法在页面里预览，可以下载后查看。</p>
       </div>
       <template #footer>
+        <button
+          v-if="workspaceCanDelete(preview.entry)"
+          class="btn ghost danger"
+          type="button"
+          :disabled="busy !== ''"
+          @click="removeEntry(preview.entry)"
+        >
+          <Trash2 :size="14" aria-hidden="true" />
+          移到回收站
+        </button>
         <a class="btn primary" :href="workspaceFileURL(preview.entry.path, true)" download>
           <Download :size="14" aria-hidden="true" />
           下载
@@ -128,52 +253,114 @@ import {
   FolderOpen,
   Link2Off,
   Lock,
-  RefreshCw
+  RefreshCw,
+  Trash2
 } from "@lucide/vue";
 import EmptyState from "../components/EmptyState.vue";
+import LoadingSkeleton from "../components/LoadingSkeleton.vue";
 import Modal from "../components/Modal.vue";
-import { listWorkspace, workspaceFileURL, type WorkspaceEntry, type WorkspaceListing } from "../api";
-import { formatBytes, formatRelative, formatTime } from "../format";
+import {
+  deleteWorkspaceFile,
+  emptyWorkspaceTrash,
+  getWorkspaceOverview,
+  listWorkspace,
+  workspaceFileURL,
+  type WorkspaceArea,
+  type WorkspaceEntry,
+  type WorkspaceListing,
+  type WorkspaceOverview
+} from "../api";
+import { askConfirm } from "../confirm";
+import { formatBytes, formatNumber, formatRelative, formatTime } from "../format";
 import { toastError, toastSuccess } from "../toast";
+import {
+  sortWorkspaceAreas,
+  workspaceAreaTarget,
+  workspaceCanDelete,
+  workspaceExtension,
+  workspaceInTrash,
+  workspacePreviewKind,
+  workspaceProtectedLabel,
+  workspaceQuotaPercent,
+  type WorkspacePreviewKind
+} from "../workspace-files";
 
 // 文本预览只取开头一段：日志、克隆下来的大文件整份塞进 <pre> 会把页面卡住。
 const TEXT_PREVIEW_LIMIT = 256 * 1024;
-// 和后端 workspaceMediaTypes 同一份名单：这些直接用对应的标签打开。其余的一律先当
-// 文本读一段，后端按内容判断不是文本时再改成只给下载，所以文本扩展名不用列全。
-const MEDIA_EXTENSIONS: Partial<Record<string, "image" | "video" | "audio" | "pdf">> = {
-  png: "image", jpg: "image", jpeg: "image", gif: "image", webp: "image", bmp: "image", avif: "image", ico: "image", svg: "image",
-  mp4: "video", m4v: "video", webm: "video", mov: "video",
-  mp3: "audio", wav: "audio", ogg: "audio", oga: "audio", opus: "audio", m4a: "audio", aac: "audio", flac: "audio",
-  pdf: "pdf"
-};
-
-type PreviewKind = "image" | "video" | "audio" | "pdf" | "text" | "other";
+// 同时只跑一个删除或清空：做完要重读目录，连点两条时第二条可能已经指向回收站里的路径。
+const TRASH_BUSY = "\u0000trash";
 
 interface Preview {
   entry: WorkspaceEntry;
-  kind: PreviewKind;
+  kind: WorkspacePreviewKind | "other";
   loading: boolean;
   text: string;
   clipped: boolean;
 }
 
+const overview = ref<WorkspaceOverview | null>(null);
+const overviewError = ref("");
 const listing = ref<WorkspaceListing | null>(null);
 const currentPath = ref("");
 const loading = ref(false);
 const error = ref("");
 const preview = ref<Preview | null>(null);
+const busy = ref("");
+const browserCard = ref<HTMLElement | null>(null);
 
+const areas = computed(() => sortWorkspaceAreas(overview.value?.areas));
+const rootPath = computed(() => listing.value?.root || overview.value?.root || "");
+const inTrash = computed(() => workspaceInTrash(currentPath.value));
 const crumbs = computed(() => {
   const parts = currentPath.value ? currentPath.value.split("/") : [];
   return parts.map((name, index) => ({ name, path: parts.slice(0, index + 1).join("/") }));
 });
+const areaHintTitle = computed(() => {
+  const area = listing.value?.area;
+  if (!area) return "";
+  if (area.key !== "keep" || !area.bot_id) return area.label;
+  return `${area.label} · ${area.bot_name || area.bot_id}`;
+});
+const looseSummary = computed(() => {
+  const loose = overview.value?.loose ?? [];
+  const names = loose.slice(0, 5).map((entry) => entry.name);
+  return loose.length > names.length ? `${names.join("、")} 等` : names.join("、");
+});
+
+function quotaPercent(area: WorkspaceArea): number | null {
+  return area.key === "keep" ? workspaceQuotaPercent(area.bytes, area.quota_bytes) : null;
+}
+
+// 当前目录落在哪张卡片里就把它标出来。「其他目录」点进去是根目录，根目录什么都有，
+// 标它反而误导，就不标。
+function areaActive(area: WorkspaceArea): boolean {
+  const target = workspaceAreaTarget(area);
+  if (!target) return false;
+  return currentPath.value === target || currentPath.value.startsWith(`${target}/`);
+}
+
+async function loadOverview(): Promise<void> {
+  overviewError.value = "";
+  try {
+    const result = await getWorkspaceOverview();
+    // 旧后端或空目录可能把列表省成 null，模板里直接 .length 会炸。
+    overview.value = {
+      ...result,
+      areas: result.areas ?? [],
+      loose: result.loose ?? [],
+      orphan_coding: result.orphan_coding ?? []
+    };
+  } catch (err) {
+    overviewError.value = err instanceof Error ? err.message : "统计各分区失败";
+  }
+}
 
 async function open(path: string): Promise<void> {
   loading.value = true;
   error.value = "";
   try {
     const result = await listWorkspace(path);
-    listing.value = result;
+    listing.value = { ...result, entries: result.entries ?? [] };
     currentPath.value = result.path;
   } catch (err) {
     error.value = err instanceof Error ? err.message : String(err);
@@ -182,36 +369,40 @@ async function open(path: string): Promise<void> {
   }
 }
 
-function extension(name: string): string {
-  const dot = name.lastIndexOf(".");
-  return dot > 0 ? name.slice(dot + 1).toLowerCase() : "";
+// 点分区卡片时目录浏览在卡片下面，窄屏上往往在屏幕外，跳过去才看得到变化。
+async function openArea(area: WorkspaceArea): Promise<void> {
+  await open(workspaceAreaTarget(area));
+  browserCard.value?.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
-function openable(entry: WorkspaceEntry): boolean {
-  return entry.kind !== "link";
+function refresh(): void {
+  void open(currentPath.value);
+  void loadOverview();
 }
 
 function entryIcon(entry: WorkspaceEntry): Component {
   if (entry.protected) return Lock;
   if (entry.kind === "link") return Link2Off;
   if (entry.kind === "dir") return Folder;
-  const icons: Record<string, Component> = { image: FileImage, video: FileVideo, audio: FileAudio, pdf: FileType };
-  return icons[MEDIA_EXTENSIONS[extension(entry.name)] ?? ""] ?? (extension(entry.name) ? FileText : File);
+  const icons: Partial<Record<WorkspacePreviewKind, Component>> = { image: FileImage, video: FileVideo, audio: FileAudio, pdf: FileType };
+  return icons[workspacePreviewKind(entry.name)] ?? (workspaceExtension(entry.name) ? FileText : File);
 }
 
 function entryTitle(entry: WorkspaceEntry): string {
-  if (entry.protected) return "运行时的凭据配置，里面是明文令牌";
+  const label = workspaceProtectedLabel(entry);
+  if (label) return `${entry.path}：Diana 的${label}，里面可能有明文令牌或运行时开关`;
   if (entry.kind === "link") return "链接的目标已经不在了";
+  if (entry.external) return `${entry.path}：链接指到了工作区外面`;
   return entry.path;
 }
 
 function activate(entry: WorkspaceEntry): void {
-  if (!openable(entry)) return;
+  if (entry.kind === "link") return;
   if (entry.kind === "dir") {
     void open(entry.path);
     return;
   }
-  const kind: PreviewKind = MEDIA_EXTENSIONS[extension(entry.name)] ?? "text";
+  const kind = workspacePreviewKind(entry.name);
   preview.value = { entry, kind, loading: kind === "text", text: "", clipped: false };
   if (kind === "text") void loadText(entry);
 }
@@ -247,26 +438,92 @@ function closePreview(): void {
   preview.value = null;
 }
 
-async function copyRoot(): Promise<void> {
-  if (!listing.value) return;
+async function removeEntry(entry: WorkspaceEntry): Promise<void> {
+  if (busy.value) return;
+  const what = entry.kind === "dir" ? "目录" : "文件";
+  const linkNote = entry.symlink ? "挪走的是链接本身，指向的东西不动。" : "";
+  const ok = await askConfirm({
+    title: `删除${what}`,
+    message: `「${entry.path}」${entry.kind === "dir" && !entry.symlink ? "连同里面的东西" : ""}会挪进工作区的回收站，在回收站被清理之前还能找回。${linkNote}`,
+    confirmLabel: "移到回收站",
+    danger: true
+  });
+  if (!ok) return;
+  // 凭据和运行时文件再确认一次：挪走之后对应的功能会失效，回收站里那份也不再在
+  // Agent 的凭据名单里（名单按原路径认），命令和文件工具可能读得到。
+  const label = workspaceProtectedLabel(entry);
+  if (label) {
+    const sure = await askConfirm({
+      title: `这是 Diana 的${label}`,
+      message: `「${entry.path}」是运行时自己在用的${label}：挪走之后，依赖它的扩展开关、MCP 连接、编码代理登录或长期区索引会失效；挪进回收站的那份不再受 Agent 凭据名单保护。确定仍要删除？`,
+      confirmLabel: "仍然移到回收站",
+      danger: true
+    });
+    if (!sure) return;
+  }
+  busy.value = entry.path;
   try {
-    await navigator.clipboard.writeText(listing.value.root);
+    await deleteWorkspaceFile(entry.path);
+    toastSuccess("已移到回收站");
+    if (preview.value?.entry.path === entry.path) preview.value = null;
+    await Promise.all([open(currentPath.value), loadOverview()]);
+  } catch (err) {
+    toastError(err instanceof Error ? err.message : "删除失败");
+  } finally {
+    busy.value = "";
+  }
+}
+
+async function emptyTrash(): Promise<void> {
+  if (busy.value) return;
+  const trash = overview.value?.areas.find((area) => area.key === "trash");
+  const size = trash ? `里的 ${formatNumber(trash.files)} 个文件（${formatBytes(trash.bytes)}）` : "里的全部文件";
+  const ok = await askConfirm({
+    title: "清空回收站",
+    message: `回收站${size}会被永久删除，无法恢复。`,
+    confirmLabel: "永久删除",
+    danger: true
+  });
+  if (!ok) return;
+  busy.value = TRASH_BUSY;
+  try {
+    const result = await emptyWorkspaceTrash();
+    toastSuccess(`已清空回收站，释放 ${formatBytes(result.deleted_bytes)}`);
+    await Promise.all([open(currentPath.value), loadOverview()]);
+  } catch (err) {
+    toastError(err instanceof Error ? err.message : "清空回收站失败");
+  } finally {
+    busy.value = "";
+  }
+}
+
+async function copyRoot(): Promise<void> {
+  if (!rootPath.value) return;
+  try {
+    await navigator.clipboard.writeText(rootPath.value);
     toastSuccess("已复制工作区路径");
   } catch {
     toastError("复制失败，请手动选中路径");
   }
 }
 
-onMounted(() => void open(""));
-// 切回这一页时 Agent 可能又写了文件，重新列一次当前目录。
+onMounted(() => {
+  void open("");
+  void loadOverview();
+});
+// 切回这一页时 Agent 可能又写了文件，重新列一次当前目录和分区合计。
 let mounted = false;
 onActivated(() => {
-  if (mounted) void open(currentPath.value);
+  if (mounted) refresh();
   mounted = true;
 });
 </script>
 
 <style scoped>
+.workspace-browser {
+  scroll-margin-top: calc(var(--topbar-height) + 12px);
+}
+
 .workspace-root {
   display: flex;
   align-items: center;
@@ -284,11 +541,166 @@ onActivated(() => {
   font-size: 12.5px;
 }
 
+.workspace-areas {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.workspace-area {
+  display: grid;
+  gap: 4px;
+  width: 100%;
+  height: 100%;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-raised);
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.workspace-area:hover {
+  border-color: var(--border-strong);
+  background: var(--surface-2);
+}
+
+.workspace-area.active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.workspace-area-title {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  font-size: 13px;
+}
+
+.workspace-area-title strong {
+  flex: none;
+  white-space: nowrap;
+}
+
+.workspace-area-bot {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-secondary);
+  font-size: 12.5px;
+}
+
+.workspace-area-size {
+  font-size: 18px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.workspace-area-meta {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.workspace-quota {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 2px;
+  font-size: 11.5px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.workspace-quota-bar {
+  flex: 1 1 auto;
+  height: 6px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: var(--surface-2);
+}
+
+.workspace-quota-bar span {
+  display: block;
+  height: 100%;
+  min-width: 2px;
+  background: var(--accent);
+}
+
+.workspace-quota-bar span.full {
+  background: var(--warn);
+}
+
+.workspace-quota-text {
+  white-space: nowrap;
+}
+
+.workspace-notice {
+  display: grid;
+  gap: 6px;
+  padding: 10px 14px;
+  border-radius: var(--radius-sm);
+  background: var(--warn-soft);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.workspace-notice p {
+  margin: 0;
+}
+
+.workspace-notice-items {
+  color: var(--text-secondary);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.workspace-notice-list {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 12.5px;
+}
+
+.workspace-notice-list li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+}
+
+.workspace-link {
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  cursor: pointer;
+  text-decoration: underline;
+  overflow-wrap: anywhere;
+}
+
 .workspace-toolbar {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+  flex-wrap: wrap;
+}
+
+.workspace-toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
 }
 
 .workspace-crumbs {
@@ -321,6 +733,17 @@ onActivated(() => {
   cursor: default;
 }
 
+.workspace-area-hint {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  margin: 0;
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  font-size: 12.5px;
+}
+
 .workspace-error {
   margin: 0;
   color: var(--err);
@@ -331,20 +754,36 @@ onActivated(() => {
   overflow-x: auto;
 }
 
-.workspace-table td {
+/* 行高按带操作按钮的行定：有的行能删、有的不能，高度不齐看着像错位。 */
+.workspace-table tbody td {
+  height: 44px;
   vertical-align: middle;
 }
 
 .workspace-size,
-.workspace-time {
+.workspace-time,
+.workspace-actions {
   white-space: nowrap;
   width: 1%;
 }
 
+.workspace-actions {
+  text-align: right;
+}
+
+.workspace-actions .btn {
+  text-decoration: none;
+}
+
+.workspace-actions .btn + .btn {
+  margin-left: 2px;
+}
+
 .workspace-entry {
   display: inline-flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
+  gap: 2px 8px;
   max-width: 100%;
   padding: 0;
   border: none;
@@ -365,6 +804,11 @@ onActivated(() => {
   cursor: default;
 }
 
+.workspace-entry .badge {
+  flex: none;
+  white-space: nowrap;
+}
+
 .workspace-entry-icon {
   flex-shrink: 0;
   color: var(--muted);
@@ -374,8 +818,15 @@ onActivated(() => {
   overflow-wrap: anywhere;
 }
 
+.workspace-entry-desc {
+  margin: 3px 0 0 23px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
 .workspace-note {
-  margin: 8px 0 0;
+  margin: 0;
   font-size: 12.5px;
 }
 
@@ -384,9 +835,14 @@ onActivated(() => {
   gap: 10px;
 }
 
-.workspace-preview-meta {
+.workspace-preview-meta,
+.workspace-preview-desc {
   margin: 0;
   font-size: 12.5px;
+}
+
+.workspace-preview-desc {
+  color: var(--text-secondary);
 }
 
 .workspace-warning {
@@ -439,6 +895,19 @@ onActivated(() => {
 }
 
 @media (max-width: 640px) {
+  .workspace-areas {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+  }
+
+  .workspace-area {
+    padding: 10px 12px;
+  }
+
+  .workspace-area-size {
+    font-size: 16px;
+  }
+
   .workspace-time {
     display: none;
   }

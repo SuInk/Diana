@@ -1656,6 +1656,20 @@ func WorkspaceFileProtected(cfg Config, rel string) bool {
 	return agentProtectedFiles(cfg).blocked(path)
 }
 
+// WorkspaceProtectedFunc 和 WorkspaceFileProtected 一样判断，但名单只建一次，给要把
+// 一整个目录逐项过一遍的入口用（WebUI 文件页）。rel 必须已经是工作目录内的相对路径；
+// 这里只看是不是凭据，越不越界由调用方自己挡。
+func WorkspaceProtectedFunc(cfg Config) func(rel string) bool {
+	protected := agentProtectedFiles(cfg)
+	root, err := filepath.Abs(cfg.WorkDir)
+	if err != nil || strings.TrimSpace(cfg.WorkDir) == "" {
+		return func(string) bool { return false }
+	}
+	return func(rel string) bool {
+		return protected.blocked(filepath.Join(root, filepath.FromSlash(rel)))
+	}
+}
+
 // RuntimeSecretPath 报告一个绝对路径是不是运行时登记过的凭据（数据库、config.yaml、
 // MCP 配置、编码代理登录态……）。给按平台适配器给出的本机路径读文件的入口用：聊天
 // 媒体的本地缓存路径来自消息记录，不能让它指到凭据上再被存进工作目录。

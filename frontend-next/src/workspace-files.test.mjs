@@ -2,21 +2,15 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   sortWorkspaceAreas,
+  workspaceAreaTarget,
   workspaceCanDelete,
-  workspaceDownloadURL,
-  workspaceEntryLabel,
-  workspaceIsEmpty,
+  workspaceInTrash,
+  workspacePreviewKind,
+  workspaceProtectedLabel,
   workspaceQuotaPercent
 } from "./workspace-files.ts";
 
-const area = (key, extra = {}) => ({ key, label: key, path: key, retention: "", bytes: 0, files: 0, entries: [], ...extra });
-
-test("下载链接把路径整段编码，空格、中文和 & 都不会截断查询串", () => {
-  assert.equal(
-    workspaceDownloadURL("downloads/季度 报告&附件.pdf"),
-    "/api/workspace/download?path=downloads%2F%E5%AD%A3%E5%BA%A6%20%E6%8A%A5%E5%91%8A%26%E9%99%84%E4%BB%B6.pdf"
-  );
-});
+const area = (key, extra = {}) => ({ key, label: key, path: key, retention: "", bytes: 0, files: 0, ...extra });
 
 test("分区排序：长期保存区在前、回收站和其它垫底，不认识的区排最后", () => {
   const sorted = sortWorkspaceAreas([
@@ -35,11 +29,6 @@ test("分区排序：长期保存区在前、回收站和其它垫底，不认�
   assert.deepEqual(sortWorkspaceAreas(undefined), []);
 });
 
-test("回收站里的条目不给单条删除", () => {
-  assert.equal(workspaceCanDelete(area("trash")), false);
-  assert.equal(workspaceCanDelete(area("downloads")), true);
-});
-
 test("配额百分比夹在 0–100，没有配额不画条", () => {
   assert.equal(workspaceQuotaPercent(50, 200), 25);
   assert.equal(workspaceQuotaPercent(500, 200), 100);
@@ -47,17 +36,50 @@ test("配额百分比夹在 0–100，没有配额不画条", () => {
   assert.equal(workspaceQuotaPercent(50, undefined), null);
 });
 
-test("空工作目录：分区都没文件且没有散落和闲置项", () => {
-  const empty = { root: "/w", collected_at: "", areas: [area("keep"), area("tmp")], loose: [], orphan_coding: [] };
-  assert.equal(workspaceIsEmpty(null), true);
-  assert.equal(workspaceIsEmpty(empty), true);
-  assert.equal(workspaceIsEmpty({ ...empty, loose: [{ path: "a.txt", name: "a.txt", size: 1, modified: "" }] }), false);
-  assert.equal(workspaceIsEmpty({ ...empty, areas: [area("tmp", { files: 1 })] }), false);
+test("分区卡片跳到的目录：「其他目录」是根，点开头的目录名原样保留", () => {
+  assert.equal(workspaceAreaTarget({ path: "." }), "");
+  assert.equal(workspaceAreaTarget({ path: ".trash" }), ".trash");
+  assert.equal(workspaceAreaTarget({ path: ".agent-browser/" }), ".agent-browser");
+  assert.equal(workspaceAreaTarget({ path: "keep/bot-a" }), "keep/bot-a");
 });
 
-test("条目显示分区内的相对路径，不在分区目录下的原样显示", () => {
-  const keep = area("keep", { path: "keep/bot-1/" });
-  assert.equal(workspaceEntryLabel(keep, { path: "keep/bot-1/notes/plan.md", name: "plan.md" }), "notes/plan.md");
-  assert.equal(workspaceEntryLabel(keep, { path: "keep/bot-10/plan.md", name: "plan.md" }), "keep/bot-10/plan.md");
-  assert.equal(workspaceEntryLabel(area("other", { path: "" }), { path: "misc/a.txt", name: "a.txt" }), "misc/a.txt");
+test("回收站里不给单条删除", () => {
+  assert.equal(workspaceInTrash(".trash"), true);
+  assert.equal(workspaceInTrash(".trash/20260901-000000/a.txt"), true);
+  assert.equal(workspaceInTrash(".trashy/a.txt"), false);
+  assert.equal(workspaceCanDelete({ path: ".trash/20260901-000000/a.txt", kind: "file" }), false);
+});
+
+test("能删：普通文件、子目录、链接和 .diana/ 里的文件；不能删：分区根、机器人长期区目录", () => {
+  assert.equal(workspaceCanDelete({ path: "downloads/a.png", kind: "file" }), true);
+  assert.equal(workspaceCanDelete({ path: "downloads/batch", kind: "dir" }), true);
+  assert.equal(workspaceCanDelete({ path: "keep/bot-a/poster.png", kind: "file" }), true);
+  assert.equal(workspaceCanDelete({ path: "notes", kind: "dir" }), true);
+  assert.equal(workspaceCanDelete({ path: "broken", kind: "link" }), true);
+  assert.equal(workspaceCanDelete({ path: "outside", kind: "dir", external: true }), true);
+  assert.equal(workspaceCanDelete({ path: ".diana/keep-index/bot-a.json", kind: "file" }), true);
+  assert.equal(workspaceCanDelete({ path: ".mcp.json", kind: "file" }), true);
+  for (const path of ["downloads", "keep", ".trash", "coding", ".agent-browser", ".diana"]) {
+    assert.equal(workspaceCanDelete({ path, kind: "dir" }), false, path);
+  }
+  assert.equal(workspaceCanDelete({ path: "keep/bot-a", kind: "dir" }), false);
+});
+
+test("受保护条目的标记：.diana/ 和老位置的扩展开关是运行时文件，其余是凭据", () => {
+  assert.equal(workspaceProtectedLabel({ path: "notes.md" }), "");
+  assert.equal(workspaceProtectedLabel({ path: ".diana", protected: true }), "运行时文件");
+  assert.equal(workspaceProtectedLabel({ path: ".diana/keep-index/bot-a.json", protected: true }), "运行时文件");
+  assert.equal(workspaceProtectedLabel({ path: ".extension-overrides.json", protected: true }), "运行时文件");
+  assert.equal(workspaceProtectedLabel({ path: ".mcp.json", protected: true }), "凭据");
+  assert.equal(workspaceProtectedLabel({ path: "coding-runtime/auth", protected: true }), "凭据");
+});
+
+test("预览方式按扩展名认，认不出的先当文本", () => {
+  assert.equal(workspacePreviewKind("a.PNG"), "image");
+  assert.equal(workspacePreviewKind("clip.mov"), "video");
+  assert.equal(workspacePreviewKind("song.flac"), "audio");
+  assert.equal(workspacePreviewKind("doc.pdf"), "pdf");
+  assert.equal(workspacePreviewKind("notes.md"), "text");
+  assert.equal(workspacePreviewKind(".env"), "text");
+  assert.equal(workspacePreviewKind("README"), "text");
 });

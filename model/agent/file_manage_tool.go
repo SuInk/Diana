@@ -303,24 +303,21 @@ func moveToTrash(workRoot, clean string, now time.Time) (string, bool, error) {
 }
 
 // TrashWorkspacePath 是 WebUI 删除工作目录文件的入口：和 manage_files delete 一样挪进
-// 回收站，一样不碰运行时配置和凭据、不许整个目录连带凭据一起挪走。WebUI 是管理员
-// 在操作，不受「只能动本机器人长期区」的限制。
+// 回收站、清掉长期区索引。操作的是管理员，凭据名单和「只能动本机器人长期区」都不套：
+// 那份名单防的是模型把令牌打进聊天，管理员要删 .mcp.json 或 .diana/ 里的东西是他的事。
+// 仍然不许动整个工作目录、长期区根目录和回收站里面；路径必须是工作目录内的相对路径，
+// 最后一段是链接时挪走的是链接本身（经 os.Root 改名），中途经链接出了工作目录会被拒。
 func TrashWorkspacePath(cfg Config, rel string, now time.Time) (string, error) {
-	tool := &ManageFilesTool{protected: agentProtectedFiles(cfg)}
 	root, err := filepath.Abs(cfg.WorkDir)
 	if err != nil {
 		return "", err
 	}
-	tool.root = root
-	target, clean, err := tool.resolve(rel)
-	if err != nil {
-		return "", err
+	clean := path.Clean(filepath.ToSlash(strings.TrimSpace(rel)))
+	if clean == "." || clean == "" || !filepath.IsLocal(filepath.FromSlash(clean)) {
+		return "", fmt.Errorf("%w（%s）", ErrWorkspacePath, strings.TrimSpace(rel))
 	}
-	if clean == DianaStateDirName || strings.HasPrefix(clean, DianaStateDirName+"/") {
-		return "", errProtectedFile(clean)
-	}
-	if err := tool.guardTree(target, clean); err != nil {
-		return "", err
+	if isTrashPath(clean) {
+		return "", errTrashPath(clean)
 	}
 	if clean == WorkspaceKeepDir {
 		return "", fmt.Errorf("%s 是长期保存区的根目录，不能整个删除", clean)
