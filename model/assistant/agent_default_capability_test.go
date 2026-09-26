@@ -9,8 +9,8 @@ import (
 	"github.com/SuInk/diana/model/agent"
 )
 
-// 新建配置装完就能用：命令白名单带默认值，写入默认打开；主人切到标准模式就生效
-// （新建默认是安全模式，这两项在安全模式下不挂，见 agent_safe_mode_test.go）。
+// 新建配置装完就能用：命令白名单带默认值，写入默认打开，标准模式下直接生效
+// （这两项在安全模式下不挂，见 agent_safe_mode_test.go）。
 func TestDefaultBotConfigShipsUsableAgentCapabilities(t *testing.T) {
 	cfg := standardModeBotConfig()
 	if len(cfg.AgentCommandAllowlist) == 0 {

@@ -1555,7 +1555,7 @@
                 <ul class="hint agent-mode-impacts">
                   <li v-for="line in agentSafeModeImpacts" :key="line">{{ line }}</li>
                 </ul>
-                <span class="hint">查资料、记忆、提醒订阅、画图和读取工作区文件两种模式都照常。新建的机器人默认安全模式。</span>
+                <span class="hint">查资料、记忆、提醒订阅、画图和读取工作区文件两种模式都照常。新建的机器人默认标准模式，安全模式只在你在这里选择后开启。</span>
               </div>
               <div class="field">
                 <label for="agent-steps">最大工具步数（1–16，默认 12；只管群成员，主人对话固定 16）</label>

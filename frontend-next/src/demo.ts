@@ -1164,7 +1164,7 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
   if (path === "/api/assistant/config/defaults" && method === "GET") return json({
     platform: url.searchParams.get("platform") || "onebot-v11", enabled: true, owner_login_enabled: true,
     onebot_transport: "reverse_ws", onebot_reverse_ws_endpoint: "ws://127.0.0.1:18080/onebot/v11/ws",
-    group_triggers: ["Diana", "diana"], request_timeout_ms: 60000, agent_enabled: true, agent_mode: "safe"
+    group_triggers: ["Diana", "diana"], request_timeout_ms: 60000, agent_enabled: true, agent_mode: "standard"
   });
   if (path === "/api/assistant/config" && method === "GET") return json(assistantConfig);
   if (["/api/assistant/config", "/api/assistant/config/new"].includes(path) && method === "POST") {

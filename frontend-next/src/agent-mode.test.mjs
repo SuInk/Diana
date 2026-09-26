@@ -16,8 +16,9 @@ test("mode normalization mirrors the backend migration", () => {
   assert.equal(normalizeAgentMode("standard"), "standard");
   assert.equal(normalizeAgentMode(" Safe "), "safe");
   assert.equal(normalizeAgentMode("", true), "standard");
+  assert.equal(normalizeAgentMode(undefined), "standard");
   assert.equal(normalizeAgentMode(undefined, false), "safe");
-  assert.equal(normalizeAgentMode("typo", true), "safe");
+  assert.equal(normalizeAgentMode("typo", false), "standard");
   assert.equal(agentModeLabel("safe"), "安全模式");
 });
 

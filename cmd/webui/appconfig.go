@@ -219,6 +219,19 @@ func decodeSection(node yaml.Node, dest any) error {
 	return json.Unmarshal(encoded, dest)
 }
 
+// sectionHasKey 报告 YAML 映射段里有没有写某个键，用来区分「没写」和「写了零值」。
+func sectionHasKey(node yaml.Node, key string) bool {
+	if node.Kind != yaml.MappingNode {
+		return false
+	}
+	for i := 0; i+1 < len(node.Content); i += 2 {
+		if node.Content[i].Value == key {
+			return true
+		}
+	}
+	return false
+}
+
 // botSeedConfig 返回首启播种用的机器人配置。数据库已有配置时这份不会被采用。
 func (c appConfig) botSeedConfig(defaultEndpoint string) (assistant.BotConfig, bool, error) {
 	base := assistant.DefaultBotConfig()
@@ -235,14 +248,18 @@ func (c appConfig) botSeedConfig(defaultEndpoint string) (assistant.BotConfig, b
 	if strings.TrimSpace(payload.OneBotReverseWSEndpoint) == "" {
 		payload.OneBotReverseWSEndpoint = defaultEndpoint
 	}
-	// config.yaml 没写 agent_mode 时按旧的 agent_enabled 换算，和数据库里的旧配置同一条
-	// 规则：只靠 config.yaml 跑的部署每次启动都重新播种，写着 agent_enabled: true 的
-	// 升级后仍是标准模式，没写或写 false 的是安全模式。这里显式写进 payload：
-	// ConfigFromPayload 对没写模式的新配置一律给安全模式。
+	// config.yaml 没写 agent_mode 时：明确写着 agent_enabled: false 的旧配置换算成安全
+	// 模式（离「Agent 关着」最近的一档，和数据库里的旧配置同一条规则）；写着 true 或
+	// 根本没写 agent_enabled 的按默认的标准模式。只靠 config.yaml 跑的部署每次启动都
+	// 重新播种，所以「没写」和「写了 false」要分开看，不能都当关着。
 	if err := assistant.ValidateAgentMode(payload.AgentMode); err != nil {
 		return assistant.BotConfig{}, false, fmt.Errorf("parse bot section: %w", err)
 	}
-	payload.AgentMode = assistant.AgentModeForLegacyConfig(payload.AgentMode, payload.AgentEnabled)
+	agentEnabled := payload.AgentEnabled
+	if !sectionHasKey(c.Bot, "agent_enabled") {
+		agentEnabled = true
+	}
+	payload.AgentMode = assistant.AgentModeForLegacyConfig(payload.AgentMode, agentEnabled)
 	return assistant.ConfigFromPayload(payload, base).WithDefaults(), true, nil
 }
 

@@ -752,7 +752,7 @@ type BotConfig struct {
 	// 路径还留在代码里，界面上已经走不到，待后续移除。
 	AgentEnabled bool `json:"agent_enabled,omitempty"`
 	// AgentMode 是 standard（标准，全部能力）或 safe（安全，关掉 AgentSafeModeRules
-	// 里的高风险能力，主人也一样）。新建机器人默认 safe。
+	// 里的高风险能力，主人也一样）。新建机器人默认 standard，safe 只在主人选择时开启。
 	AgentMode             string   `json:"agent_mode,omitempty"`
 	AgentMaxSteps         int      `json:"agent_max_steps,omitempty"`
 	AgentSkillRoots       []string `json:"agent_skill_roots,omitempty"`
@@ -1766,9 +1766,9 @@ func DefaultBotConfig() BotConfig {
 		MaxBotConcurrency:           8,
 		RequestTimeout:              180 * time.Second,
 		AgentEnabled:                true,
-		// 新建的机器人默认安全模式：高风险能力要主人明确切到标准模式才给。
+		// 新建的机器人默认标准模式，安全模式由主人在设置里明确选择。
 		// 存量机器人不受影响，它们的模式由 migrateAgentMode 按旧开关换算。
-		AgentMode:       AgentModeSafe,
+		AgentMode:       AgentModeStandard,
 		AgentMaxSteps:   agent.DefaultMaxSteps,
 		AgentSkillRoots: []string{},
 		// 新建配置直接带上一组只读诊断命令，装完就能用。
@@ -2631,8 +2631,8 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 
 // agentModeFromPayload 决定保存时用哪个模式。请求里写了就用请求的；没写时，编辑已有
 // 机器人沿用它现在的模式（旧版前端只会带回 agent_enabled=true，不能因此把安全模式
-// 悄悄升成标准模式）；新建的机器人一律安全模式，旧版前端新建时带的 agent_enabled=true
-// 不算数。config.yaml 播种要按旧开关换算，由调用方先把模式写进 payload。
+// 悄悄升成标准模式）；新建的机器人按默认的标准模式，旧版前端新建时只带
+// agent_enabled=true 也一样。config.yaml 播种要按旧开关换算，由调用方先把模式写进 payload。
 func agentModeFromPayload(payload ConfigPayload, existing BotConfig) string {
 	if mode := NormalizeAgentMode(payload.AgentMode); mode != "" {
 		return mode
@@ -2642,7 +2642,7 @@ func agentModeFromPayload(payload ConfigPayload, existing BotConfig) string {
 			return mode
 		}
 	}
-	return AgentModeSafe
+	return AgentModeStandard
 }
 
 func normalizeReplyRules(rules []ReplyRule) []ReplyRule {

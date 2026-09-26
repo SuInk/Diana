@@ -92,7 +92,7 @@ update:
 #     - Diana
 #     - diana
 #   system_prompt: ""
-#   agent_mode: safe # standard 标准模式（全部能力）/ safe 安全模式（关掉命令、MCP、登录态浏览器等高风险能力）；不写时按旧的 agent_enabled 换算，true 为 standard
+#   agent_mode: standard # standard 标准模式（全部能力）/ safe 安全模式（关掉命令、MCP、登录态浏览器等高风险能力）；不写时默认 standard，只有旧配置明确写着 agent_enabled: false 时换算成 safe
 
 # llm:
 #   provider: openai_compatible

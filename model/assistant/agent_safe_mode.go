@@ -8,6 +8,7 @@ import (
 	"log"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/SuInk/diana/model/agent"
@@ -30,27 +31,42 @@ const (
 const agentSafeModeDisabledMessage = "当前是安全模式，这个操作被关掉了；需要的话请主人在机器人设置里切到标准模式"
 
 // NormalizeAgentMode 把配置里的模式值规范成两个取值之一。空串原样返回，表示「还没
-// 迁移过」，由 migrateAgentMode 按旧开关决定；认不出的值一律当安全模式——配置
-// 写错不该变成权限放开。
+// 迁移过」，由 migrateAgentMode 按旧开关决定。认不出的值（库里的配置被手改坏了）按
+// 默认的标准模式处理，并记一次警告；接口和 config.yaml 在进来时就由 ValidateAgentMode
+// 拒掉写错的值，走不到这里。
 func NormalizeAgentMode(mode string) string {
-	switch strings.ToLower(strings.TrimSpace(mode)) {
+	switch value := strings.ToLower(strings.TrimSpace(mode)); value {
 	case "":
 		return ""
 	case AgentModeStandard:
 		return AgentModeStandard
-	default:
+	case AgentModeSafe:
 		return AgentModeSafe
+	default:
+		warnInvalidAgentMode(value)
+		return AgentModeStandard
 	}
 }
 
-// agentSafeMode 报告这台机器人是不是在安全模式下。只有明确写着 standard 才算标准模式，
-// 模式为空也按安全模式算（失败时关着）：加载、保存、播种这几条路径都会先把旧的
-// agent_enabled=true 显式迁成 standard，漏迁的配置宁可少给能力，也不能多给。
-func (cfg BotConfig) agentSafeMode() bool {
-	return NormalizeAgentMode(cfg.AgentMode) != AgentModeStandard
+// invalidAgentModeWarned 记下已经警告过的非法模式值：NormalizeAgentMode 在每条消息的
+// 路径上都会被调到，同一个坏值只警告一次。
+var invalidAgentModeWarned sync.Map
+
+func warnInvalidAgentMode(value string) {
+	if _, loaded := invalidAgentModeWarned.LoadOrStore(value, struct{}{}); loaded {
+		return
+	}
+	log.Printf("[agent] 机器人配置里的 agent_mode=%q 认不出，按默认的标准模式处理；要安全模式请在机器人设置里选择", value)
 }
 
-// effectiveAgentMode 是这台机器人实际生效的模式，模式为空时同样报安全模式。
+// agentSafeMode 报告这台机器人是不是在安全模式下。安全模式是主人明确选的一档：只有
+// 写着 safe 才算，模式为空或认不出都按默认的标准模式。旧配置里关着 Agent 的，
+// 加载时已由 migrateAgentMode 显式写成 safe。
+func (cfg BotConfig) agentSafeMode() bool {
+	return NormalizeAgentMode(cfg.AgentMode) == AgentModeSafe
+}
+
+// effectiveAgentMode 是这台机器人实际生效的模式，模式为空时报标准模式。
 func (cfg BotConfig) effectiveAgentMode() string {
 	if cfg.agentSafeMode() {
 		return AgentModeSafe
@@ -62,10 +78,10 @@ func (cfg BotConfig) effectiveAgentMode() string {
 //
 //   - 已经写了模式的，保持不变；
 //   - 旧配置开着 Agent 的，迁成标准模式，升级前后行为一致；
-//   - 旧配置关着 Agent 的（agent_enabled=false 或没写，存盘时 false 会被省略），迁成
+//   - 旧配置关着 Agent 的（库里存盘时 false 会被省略，所以库里没写也是关着），迁成
 //     安全模式：原先连工具都没有，给回完整能力是静默扩权，安全模式是离原状最近的一档。
 //
-// 新建机器人不经过这里，DefaultBotConfig 直接给安全模式。
+// 新建机器人不经过这里，DefaultBotConfig 直接给标准模式。
 func migrateAgentMode(cfg BotConfig) BotConfig {
 	cfg.AgentMode = AgentModeForLegacyConfig(cfg.AgentMode, cfg.AgentEnabled)
 	// 旧的非 Agent 路径（AgentEnabled=false）从界面上已经走不到了，待后续移除；这里
@@ -75,8 +91,8 @@ func migrateAgentMode(cfg BotConfig) BotConfig {
 }
 
 // ValidateAgentMode 检查外部传进来的模式值：只认 standard、safe 和空（空表示沿用或按
-// 旧开关换算）。接口和 config.yaml 写错时直接报错，而不是悄悄按安全模式处理——配错了
-// 应该让人知道，不该在界面上看着像「保存成功」。
+// 默认）。接口和 config.yaml 写错时直接报错，而不是悄悄换成某一档——配错了应该让人
+// 知道，不该在界面上看着像「保存成功」。
 func ValidateAgentMode(mode string) error {
 	switch strings.ToLower(strings.TrimSpace(mode)) {
 	case "", AgentModeStandard, AgentModeSafe:
@@ -86,7 +102,8 @@ func ValidateAgentMode(mode string) error {
 }
 
 // AgentModeForLegacyConfig 是旧配置的换算规则：写了模式就用写的，没写时 agent_enabled
-// 开着算标准模式、关着或没写算安全模式。migrateAgentMode 和 config.yaml 播种共用它。
+// 开着算标准模式、关着算安全模式。migrateAgentMode 和 config.yaml 播种共用它；
+// config.yaml 里 agent_enabled 根本没写的，播种时直接按标准模式，不走这里。
 func AgentModeForLegacyConfig(mode string, agentEnabled bool) string {
 	if mode = NormalizeAgentMode(mode); mode != "" {
 		return mode

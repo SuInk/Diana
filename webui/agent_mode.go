@@ -77,7 +77,7 @@ func (h *BotHandler) recordAgentModeChange(c *gin.Context, origin string, before
 	metadata["agent_mode_to"] = to
 	message := "机器人 Agent 模式已从" + agentModeLabel(from) + "切换为" + agentModeLabel(to)
 	if from == "" {
-		// 新建、复制出来的机器人也记一条：新建默认安全模式，建成标准模式的要查得到是谁。
+		// 新建、复制出来的机器人也记一条：新建默认标准模式，一开始就选了安全模式的也要查得到。
 		message = origin + "机器人，Agent 模式为" + agentModeLabel(to)
 	}
 	if to == assistant.AgentModeSafe {
