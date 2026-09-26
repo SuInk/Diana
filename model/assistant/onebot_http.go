@@ -158,15 +158,17 @@ func (c *OneBotHTTPChannel) CallAPI(ctx context.Context, action string, params m
 		}
 		return nil, fmt.Errorf("diana: OneBot HTTP API returned status %d", resp.StatusCode)
 	}
+	// 到这里已经收到 2xx：接入端接下并处理了这个 action。正文读不全、解析不了，
+	// 只是不知道结果，不是没发出去。
 	if err != nil {
-		return nil, err
+		return nil, &outboundOutcomeUnknownError{action: action, cause: fmt.Errorf("diana: read OneBot HTTP response: %w", err)}
 	}
 	if len(raw) > maxOneBotWebSocketFrameBytes {
-		return nil, errors.New("diana: OneBot HTTP response too large")
+		return nil, &outboundOutcomeUnknownError{action: action, cause: errors.New("diana: OneBot HTTP response too large")}
 	}
 	var envelope oneBotEnvelope
 	if err := json.Unmarshal(raw, &envelope); err != nil {
-		return nil, fmt.Errorf("diana: invalid OneBot HTTP response: %w", err)
+		return nil, &outboundOutcomeUnknownError{action: action, cause: fmt.Errorf("diana: invalid OneBot HTTP response: %w", err)}
 	}
 	if envelope.Status == nil {
 		return nil, errors.New("diana: OneBot HTTP response is missing status")

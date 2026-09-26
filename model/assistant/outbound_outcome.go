@@ -94,6 +94,18 @@ func classifyOneBotSendFailure(action string, err error) error {
 		return err
 	}
 	message := strings.ToLower(err.Error())
+	// 接入端说清了为什么发不出去（不是好友、被拉黑……），那就是确定没发。
+	for _, marker := range permanentSendRejectionMarkers {
+		if strings.Contains(message, strings.ToLower(marker)) {
+			return err
+		}
+	}
+	// 富媒体上传阶段超时发生在真正发消息之前：图还没传上去，消息一定没发。
+	for _, marker := range oneBotPreSendUploadMarkers {
+		if strings.Contains(message, marker) {
+			return err
+		}
+	}
 	for _, marker := range oneBotBridgeSendTimeoutMarkers {
 		if strings.Contains(message, marker) {
 			return &outboundOutcomeUnknownError{action: action, cause: err}
@@ -103,6 +115,15 @@ func classifyOneBotSendFailure(action string, err error) error {
 		return &outboundOutcomeUnknownError{action: action, cause: err}
 	}
 	return err
+}
+
+// oneBotPreSendUploadMarkers 是 NapCat 在上传图片、视频等富媒体时超时或失败的报错
+// 特征（NTEvent 的服务名是 RichMedia 一类）。这一步在发消息之前。
+var oneBotPreSendUploadMarkers = []string{
+	"richmedia",
+	"uploadrmfile",
+	"upload file",
+	"文件上传",
 }
 
 // oneBotActionError 是接入端明确回的失败。文本和以前的 errors.New 一样，多带
@@ -467,6 +488,24 @@ type outboundEchoTracker struct {
 	echoes         []observedOutboundMessage
 	claimed        map[string]time.Time
 	changed        chan struct{}
+	// sendsSinceEcho 按机器人账号记：上一次收到回推之后又确认发出了几条。
+	// 接入端没开自身消息上报时这个数只涨不落，等两分钟回推纯属浪费。
+	sendsSinceEcho map[string]int
+}
+
+// outboundEchoSilentAfter 是「连续这么多条确认发出的消息都没有回推」就认定这个
+// 账号不上报自身消息，结果不明时直接查历史。
+const outboundEchoSilentAfter = 5
+
+func outboundEchoAccount(event MessageEvent) string {
+	return firstNonEmpty(strings.TrimSpace(event.ProfileID), strings.TrimSpace(event.SelfID))
+}
+
+// echoesSilent 判断这个账号是不是看起来不上报自身消息。
+func (t *outboundEchoTracker) echoesSilent(event MessageEvent) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.sendsSinceEcho[outboundEchoAccount(event)] >= outboundEchoSilentAfter
 }
 
 func (t *outboundEchoTracker) clock() time.Time {
@@ -498,6 +537,7 @@ func (t *outboundEchoTracker) observe(event MessageEvent) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.pruneLocked(now)
+	delete(t.sendsSinceEcho, outboundEchoAccount(event))
 	t.echoes = append(t.echoes, newObservedOutboundMessage(event, now))
 	if len(t.echoes) > outboundEchoMaxEntries {
 		t.echoes = append([]observedOutboundMessage(nil), t.echoes[len(t.echoes)-outboundEchoMaxEntries:]...)
@@ -516,8 +556,13 @@ func (t *outboundEchoTracker) observed(target MessageEvent, messageID string) (M
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	return t.observedLocked(target, messageID)
+}
+
+func (t *outboundEchoTracker) observedLocked(target MessageEvent, messageID string) (MessageEvent, bool) {
+	messageID = strings.TrimSpace(messageID)
 	for _, echo := range t.echoes {
-		if strings.TrimSpace(echo.event.MessageID) != messageID {
+		if messageID == "" || strings.TrimSpace(echo.event.MessageID) != messageID {
 			continue
 		}
 		if target.Kind == EventKindGroup && strings.TrimSpace(echo.event.GroupID) != strings.TrimSpace(target.GroupID) {
@@ -543,6 +588,13 @@ func (t *outboundEchoTracker) claim(event MessageEvent, messageID string) {
 		t.claimed = make(map[string]time.Time)
 	}
 	t.claimed[key] = now
+	if t.sendsSinceEcho == nil {
+		t.sendsSinceEcho = make(map[string]int)
+	}
+	// 回推通常比回执先到，到了就已经清零；这里只在它一直不来时累积。
+	if _, echoed := t.observedLocked(event, messageID); !echoed {
+		t.sendsSinceEcho[outboundEchoAccount(event)]++
+	}
 }
 
 func (t *outboundEchoTracker) claimedLocked(event MessageEvent, messageID string) bool {
@@ -714,6 +766,11 @@ func (r *Runtime) confirmOutboundOutcome(ctx context.Context, event MessageEvent
 func (r *Runtime) confirmOutboundDelivered(ctx context.Context, event MessageEvent, fingerprint outboundConfirmFingerprint, since time.Time) (messageID, source string, err error) {
 	imageMD5 := r.outboundImageMD5(fingerprint.images)
 	echoWait, historyTimeout := r.outboundEchoes.timings()
+	if r.outboundEchoes.echoesSilent(event) {
+		// 这个账号最近一直没有回推（接入端多半没开自身消息上报）：已经到了的
+		// 照样认，但不再干等两分钟，直接查历史。
+		echoWait = 0
+	}
 	messageID, found, err := r.outboundEchoes.waitForEcho(ctx, event, fingerprint, imageMD5, since, echoWait)
 	if err != nil {
 		return "", "", err

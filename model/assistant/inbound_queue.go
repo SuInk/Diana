@@ -73,6 +73,9 @@ const (
 	// inboundOutcomeSendRejected 标记上游明确拒收、重试也不可能成功的事件。
 	// 它和上面那条的区别是「已经知道没救了」：不必再跑满五次。
 	inboundOutcomeSendRejected = "dropped_send_rejected"
+	// inboundOutcomeDroppedOutboundUnconfirmed 标记回复已经写给接入端、却确认不了
+	// 送没送到的事件：不重发、不重新生成，免得同一条回复刷两遍。
+	inboundOutcomeDroppedOutboundUnconfirmed = "dropped_outbound_unconfirmed"
 	// inboundOutcomeSupersededReplyTurn 标记已经并进另一轮回复（追发合并）、自己
 	// 不再单独发送的消息。
 	inboundOutcomeSupersededReplyTurn = "superseded_reply_turn"
@@ -168,15 +171,29 @@ type InboundLeaseExtender interface {
 type inboundLeaseExtensionContextKey struct{}
 
 // withInboundLeaseExtension 让这条入站事件的处理链路能延长自己的租约。
-func withInboundLeaseExtension(ctx context.Context, store InboundEventStore, id, leaseOwner string) context.Context {
+// leaseUntil 是领取时的租约到期时间；够用的时候不写库，只有真要往后推才写。
+func withInboundLeaseExtension(ctx context.Context, store InboundEventStore, id, leaseOwner string, leaseUntil time.Time) context.Context {
 	extender, ok := store.(InboundLeaseExtender)
 	if !ok || strings.TrimSpace(id) == "" {
 		return ctx
 	}
+	var mu sync.Mutex
+	held := leaseUntil
 	extend := func(until time.Time) error {
+		mu.Lock()
+		defer mu.Unlock()
+		if !until.After(held) {
+			return nil
+		}
+		// 多推一分钟，免得每条分片都写一次库。
+		until = until.Add(time.Minute)
 		extendCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
-		return extender.ExtendInboundLease(extendCtx, id, leaseOwner, until)
+		if err := extender.ExtendInboundLease(extendCtx, id, leaseOwner, until); err != nil {
+			return err
+		}
+		held = until
+		return nil
 	}
 	return context.WithValue(ctx, inboundLeaseExtensionContextKey{}, extend)
 }
@@ -257,7 +274,8 @@ const (
 // the model outcome so a generated reply is never confused with a delivered one.
 type InboundEventDeliveryAuditStore interface {
 	RecordInboundEventDelivery(ctx context.Context, event MessageEvent, stage OutboundDeliveryStage, outboundMessageID, detail string) error
-	RecordInboundEventSelfEcho(ctx context.Context, outboundMessageID string, observedAt time.Time) error
+	// RecordInboundEventSelfEcho 按回推的账号、会话和 message_id 精确关联回入站事件。
+	RecordInboundEventSelfEcho(ctx context.Context, echo MessageEvent, observedAt time.Time) error
 }
 
 func (r *Runtime) runInboundCoordinator(ctx context.Context, leaseOwner string, workers int, releaseStaleLeases bool, done chan struct{}) {
@@ -596,7 +614,8 @@ func (r *Runtime) runInboundWorker(ctx context.Context, leaseOwner string, store
 		for r.inboundProcessingReady() {
 			claimCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 			// 每轮重读配置：改并发不该要重启。
-			item, ok, err := store.ClaimNextInboundEvent(claimCtx, leaseOwner, time.Now().Add(inboundLeaseDuration), r.inboundConcurrency())
+			leaseUntil := time.Now().Add(inboundLeaseDuration)
+			item, ok, err := store.ClaimNextInboundEvent(claimCtx, leaseOwner, leaseUntil, r.inboundConcurrency())
 			cancel()
 			if err != nil {
 				if ctx.Err() == nil {
@@ -611,11 +630,16 @@ func (r *Runtime) runInboundWorker(ctx context.Context, leaseOwner string, store
 			// 自己领到了活，说明队列里可能还有：叫醒一个同伴一起干。没有这一下，
 			// 退避期间的突发消息会被一个 worker 串行地慢慢消化。
 			r.wakeInboundWorkers()
-			outcome, processErr := r.processInboundQueueItem(withInboundLeaseExtension(ctx, store, item.ID, leaseOwner), item)
+			outcome, processErr := r.processInboundQueueItem(withInboundLeaseExtension(ctx, store, item.ID, leaseOwner, leaseUntil), item)
 			commitCtx, commitCancel := context.WithTimeout(context.Background(), 5*time.Second)
 			switch {
 			case processErr == nil:
 				err = store.CompleteInboundEvent(commitCtx, item.ID, leaseOwner, outcome)
+				r.clearOutboundSteps(item.ID)
+			case errors.Is(processErr, errOutboundOutcomeUnconfirmed):
+				// 发出去了但确认不了：兜底也不许重新生成再发一遍，直接落终态。
+				log.Printf("diana inbound event %s finished without resend, outbound outcome unconfirmed: %v", item.ID, processErr)
+				err = store.CompleteInboundEvent(commitCtx, item.ID, leaseOwner, inboundOutcomeDroppedOutboundUnconfirmed)
 				r.clearOutboundSteps(item.ID)
 			case ctx.Err() == nil && isPermanentSendRejection(processErr):
 				// 上游已经说清楚这条永远发不出去（对方把机器人删了好友之类）。

@@ -311,6 +311,8 @@ func DescribeEventOutcome(outcome string) (decision string, reason string, handl
 		return "not_replied", "（旧版行为）这条媒体消息已并入同一发送者随后的提问一起回答", false
 	case "dropped_outbound_delivery":
 		return "error", "回复已经生成，但发送连接不可用或消息投递失败", false
+	case inboundOutcomeDroppedOutboundUnconfirmed:
+		return "error", "回复已经发出但没等到回执，回推和历史也确认不了是否送达；为避免重复刷屏，没有重发也没有重新生成", false
 	case inboundOutcomeSendRejected:
 		return "error", "上游明确拒收这条回复（例如对方已不是好友），重试不可能成功，队列已直接停止，没有重新生成回复", false
 	case inboundOutcomeRetriesExhausted:
@@ -2141,6 +2143,12 @@ func (r *Runtime) replyAndRecord(ctx context.Context, event MessageEvent, text s
 		r.setError(err.Error())
 		if errors.Is(err, errOutboundSend) {
 			switch {
+			case errors.Is(err, errOutboundOutcomeUnconfirmed):
+				// 请求已经写给接入端、确认不了有没有发出去。无论通道现在在不在线都
+				// 不能交回队列：重新生成再发一遍正是这次要防的重复。
+				setEventRecordOutcome(&record, inboundOutcomeDroppedOutboundUnconfirmed)
+				r.record(record)
+				return inboundOutcomeDroppedOutboundUnconfirmed, nil
 			case errors.Is(err, errOutboundChannelOffline):
 				// 通道离线导致的发送失败交回队列，恢复后重新生成并发送。
 				setEventRecordOutcome(&record, "processing_error")
@@ -2232,6 +2240,11 @@ func (r *Runtime) replyAndRecord(ctx context.Context, event MessageEvent, text s
 				setEventRecordOutcome(&record, "ignored_bot_muted")
 				r.record(record)
 				return "ignored_bot_muted", nil
+			}
+			if errors.Is(sendErr, errOutboundOutcomeUnconfirmed) {
+				setEventRecordOutcome(&record, inboundOutcomeDroppedOutboundUnconfirmed)
+				r.record(record)
+				return inboundOutcomeDroppedOutboundUnconfirmed, nil
 			}
 			if errors.Is(sendErr, errOutboundDeliveryDropped) {
 				setEventRecordOutcome(&record, "dropped_outbound_delivery")

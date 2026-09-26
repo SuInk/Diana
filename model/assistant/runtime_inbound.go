@@ -208,7 +208,7 @@ func (r *Runtime) recordInboundSelfEcho(event MessageEvent) {
 	}
 	auditCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	if err := store.RecordInboundEventSelfEcho(auditCtx, event.MessageID, observedAt); err != nil {
+	if err := store.RecordInboundEventSelfEcho(auditCtx, event, observedAt); err != nil {
 		log.Printf("diana persist outbound self echo failed: %v", err)
 	}
 }

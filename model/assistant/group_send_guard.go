@@ -211,6 +211,8 @@ func (r *Runtime) executeOutboundCall(
 	}
 	// 请求写出去后没等到回执的，先确认有没有送达，不在这里直接重发。
 	call = func(callCtx context.Context) (map[string]any, error) {
+		// 每次真正发之前确认入站租约够撑过这次发送；不够才往后推。
+		extendInboundLease(callCtx, oneBotMediaActionTimeout+time.Minute)
 		return r.confirmOutboundOutcome(callCtx, event, action, payloadCall)
 	}
 	if _, _, err := r.outboundChannelForEvent(event); err != nil {
@@ -277,6 +279,8 @@ func (r *Runtime) executeOutboundCall(
 			return nil, droppedOutboundSendError(groupID, gate.lastError)
 		}
 		if wait := time.Until(gate.nextAttempt); wait > 0 {
+			// 退避最长十几分钟，租约到期会被别的 worker 领走重新生成一遍。
+			extendInboundLease(ctx, wait+oneBotMediaActionTimeout+time.Minute)
 			if err := waitForOutboundRetry(ctx, wait); err != nil {
 				if r.runtimeContextStopped() {
 					return nil, err

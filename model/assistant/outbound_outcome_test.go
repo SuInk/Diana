@@ -45,6 +45,7 @@ type ambiguousOutboundChannel struct {
 	historyErr   error
 	historyCalls []string
 	nextID       int
+	offline      atomic.Bool
 }
 
 func ambiguousSendError(action string) error {
@@ -103,7 +104,7 @@ func (c *ambiguousOutboundChannel) CallAPI(_ context.Context, action string, _ m
 }
 
 func (c *ambiguousOutboundChannel) Status() ChannelStatus {
-	return ChannelStatus{Connected: true, SelfID: outcomeTestSelfID}
+	return ChannelStatus{Connected: !c.offline.Load(), SelfID: outcomeTestSelfID}
 }
 
 func (c *ambiguousOutboundChannel) Close() error { return nil }
@@ -977,7 +978,8 @@ func TestAmbiguousConfirmationExtendsInboundLease(t *testing.T) {
 	if _, err := runtime.sendOutgoingWithResult(ctx, groupOutcomeEvent(), OutgoingMessage{Text: "续租"}); err != nil {
 		t.Fatalf("sendOutgoingWithResult() error = %v", err)
 	}
-	if len(extendedTo) != 1 || time.Until(extendedTo[0]) < oneBotMediaActionTimeout {
+	// 一次在发送开始时，一次在进入确认时。
+	if len(extendedTo) != 2 || time.Until(extendedTo[1]) < oneBotMediaActionTimeout {
 		t.Fatalf("lease extensions = %v", extendedTo)
 	}
 }
@@ -992,10 +994,10 @@ func (s *selfEchoAuditStore) RecordInboundEventDelivery(context.Context, Message
 	return nil
 }
 
-func (s *selfEchoAuditStore) RecordInboundEventSelfEcho(_ context.Context, outboundMessageID string, _ time.Time) error {
+func (s *selfEchoAuditStore) RecordInboundEventSelfEcho(_ context.Context, echo MessageEvent, _ time.Time) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.echoes = append(s.echoes, outboundMessageID)
+	s.echoes = append(s.echoes, echo.MessageID)
 	return nil
 }
 
@@ -1019,5 +1021,117 @@ func TestSelfEchoBeforeAckIsLinkedAfterAck(t *testing.T) {
 	defer store.mu.Unlock()
 	if len(store.echoes) != 2 || store.echoes[1] != "60001" {
 		t.Fatalf("self echo links = %v, want one on arrival and one after the ack", store.echoes)
+	}
+}
+
+// 结果确认不了时通道恰好也掉线了：以前按「离线」交回队列，恢复后重新生成再发一遍，
+// 正是这次要防的重复。现在无论在不在线都直接落终态。
+func TestUnconfirmedOutcomeIsTerminalEvenWhenChannelGoesOffline(t *testing.T) {
+	channel := &ambiguousOutboundChannel{
+		outcomes:   []error{ambiguousSendError("send_group_msg")},
+		historyErr: errors.New("get_group_msg_history timeout"),
+	}
+	channel.onSend = func(int) { channel.offline.Store(true) }
+	runtime := newAmbiguousOutcomeRuntime(t, channel)
+	event := MessageEvent{Kind: EventKindGroup, GroupID: outcomeTestGroupID, UserID: outcomeTestUserID, MessageID: "12349", Time: time.Now().Unix()}
+
+	outcome, err := runtime.replyAndRecord(context.Background(), event, "帮助", "replied")
+	if err != nil || outcome != inboundOutcomeDroppedOutboundUnconfirmed {
+		t.Fatalf("outcome=%q err=%v, want terminal %q", outcome, err, inboundOutcomeDroppedOutboundUnconfirmed)
+	}
+	if got := channel.sentCount(); got != 1 {
+		t.Fatalf("send attempts = %d, want 1", got)
+	}
+}
+
+// 接入端说清了发不出去的原因（不是好友），或者卡在发消息之前的富媒体上传，
+// 都是确定没发，不去确认。
+func TestExplicitPreSendFailuresAreNotAmbiguous(t *testing.T) {
+	for _, message := range []string{
+		"发送消息失败：请先添加对方为好友",
+		"Timeout: NTEvent serviceAndMethod:NodeIKernelRichMediaService/uploadRMFileWithoutMsg ListenerName: EventRet: {}",
+	} {
+		resultCh := make(chan callResult, 1)
+		resultCh <- callResult{err: &oneBotActionError{retCode: 200, message: message}}
+		if _, err := oneBotAwaitResponse(context.Background(), "send_private_msg", resultCh); errors.Is(err, ErrOutboundOutcomeUnknown) {
+			t.Errorf("%q classified as ambiguous", message)
+		}
+	}
+}
+
+// 这个账号最近连续发了好几条都没有回推（接入端没开自身消息上报），结果不明时
+// 不再干等两分钟，直接查历史。
+func TestSilentEchoAccountSkipsEchoWait(t *testing.T) {
+	channel := &ambiguousOutboundChannel{}
+	runtime := newAmbiguousOutcomeRuntime(t, channel)
+	runtime.outboundEchoes.echoWait = time.Minute
+	for index := 0; index < outboundEchoSilentAfter; index++ {
+		if _, err := runtime.sendOutgoingWithResult(context.Background(), groupOutcomeEvent(), OutgoingMessage{Text: fmt.Sprintf("第 %d 条", index)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	channel.mu.Lock()
+	channel.outcomes = []error{ambiguousSendError("send_group_msg")}
+	channel.history = []map[string]any{selfHistoryItem(54600, time.Now(), "直接查历史")}
+	channel.mu.Unlock()
+
+	started := time.Now()
+	result, err := runtime.sendOutgoingWithResult(context.Background(), groupOutcomeEvent(), OutgoingMessage{Text: "直接查历史"})
+	if err != nil {
+		t.Fatalf("sendOutgoingWithResult() error = %v", err)
+	}
+	if elapsed := time.Since(started); elapsed > 5*time.Second {
+		t.Fatalf("waited %s for an echo that never comes", elapsed)
+	}
+	if apiMessageID(result) != "54600" {
+		t.Fatalf("outbound message id = %q", apiMessageID(result))
+	}
+
+	// 回推一来就恢复等待。
+	runtime.observeOutboundEcho(MessageEvent{Kind: EventKindGroup, GroupID: outcomeTestGroupID, MessageID: "54601"})
+	if runtime.outboundEchoes.echoesSilent(groupOutcomeEvent()) {
+		t.Fatal("echo did not reset the silent counter")
+	}
+}
+
+// HTTP 已经回了 2xx，正文却读不全或解析不了：接入端已经处理了这个 action，只是
+// 不知道结果，不能当成没发。
+func TestHTTPSuccessStatusWithUnreadableBodyIsAmbiguous(t *testing.T) {
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`not json`))
+	}))
+	defer api.Close()
+	channel := NewOneBotHTTPChannel(OneBotConfig{Endpoint: api.URL})
+	if _, err := channel.CallAPI(context.Background(), "send_group_msg", map[string]any{"group_id": 20005}); !errors.Is(err, ErrOutboundOutcomeUnknown) {
+		t.Fatalf("error = %v, want outcome unknown", err)
+	}
+}
+
+type recordingLeaseStore struct {
+	*memoryInboundEventStore
+	mu      sync.Mutex
+	extends []time.Time
+}
+
+func (s *recordingLeaseStore) ExtendInboundLease(_ context.Context, _ string, _ string, until time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.extends = append(s.extends, until)
+	return nil
+}
+
+// 发送开始时续租，但租约还够用就不写库；同一轮里连续几条分片只写一次。
+func TestInboundLeaseExtensionOnlyWritesWhenNeeded(t *testing.T) {
+	store := &recordingLeaseStore{memoryInboundEventStore: newMemoryInboundEventStore()}
+	ctx := withInboundLeaseExtension(context.Background(), store, "event-1", "worker-1", time.Now().Add(10*time.Minute))
+
+	extendInboundLease(ctx, 3*time.Minute)
+	if len(store.extends) != 0 {
+		t.Fatalf("lease still had 10 minutes but was extended: %v", store.extends)
+	}
+	extendInboundLease(ctx, 15*time.Minute)
+	extendInboundLease(ctx, 15*time.Minute+30*time.Second)
+	if len(store.extends) != 1 || time.Until(store.extends[0]) < 15*time.Minute {
+		t.Fatalf("extensions = %v, want exactly one past 15 minutes", store.extends)
 	}
 }
