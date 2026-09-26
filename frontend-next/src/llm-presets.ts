@@ -58,6 +58,16 @@ export interface LLMServicePreset {
 
 export const llmServicePresets: LLMServicePreset[] = [
   // —— OpenAI 兼容接口 ——
+  // 排第一：新建渠道和首次向导默认落在 DeepSeek 上。
+  {
+    id: "deepseek",
+    label: "DeepSeek 官方",
+    provider: "openai_compatible",
+    apiStyle: "responses",
+    baseURL: "https://api.deepseek.com",
+    model: "",
+    hint: "DeepSeek Responses API，不支持时可切回 Chat Completions"
+  },
   {
     id: "openai",
     label: "OpenAI 官方",
@@ -66,15 +76,6 @@ export const llmServicePresets: LLMServicePreset[] = [
     baseURL: "https://api.openai.com/v1",
     model: "",
     hint: "OpenAI Responses API"
-  },
-  {
-    id: "deepseek",
-    label: "DeepSeek 官方",
-    provider: "openai_compatible",
-    apiStyle: "chat_completions",
-    baseURL: "https://api.deepseek.com",
-    model: "",
-    hint: "DeepSeek OpenAI 兼容接口"
   },
   {
     id: "gemini",
@@ -107,7 +108,7 @@ export const llmServicePresets: LLMServicePreset[] = [
     id: "custom",
     label: "自定义兼容接口",
     provider: "openai_compatible",
-    apiStyle: "chat_completions",
+    apiStyle: "responses",
     baseURL: "",
     model: "",
     hint: "代理、中转或自建服务"
