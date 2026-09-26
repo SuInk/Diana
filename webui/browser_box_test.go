@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/SuInk/diana/model/browserbox"
 	"github.com/SuInk/diana/model/storage"
@@ -256,5 +257,43 @@ func TestLiveInputAllowedInUserTab(t *testing.T) {
 	}
 	if bot.Takeover() {
 		t.Fatal("在自己的标签里操作不该变成接管")
+	}
+}
+
+// 主人回答交接：只收「完成」「做不了」；处理过的再点一次说清楚已经处理过了。
+func TestBrowserBoxResolveHandoff(t *testing.T) {
+	router, manager := newBrowserBoxRouter(t)
+	// 打开开关不会当场拉起浏览器，进程按需才起。
+	if _, err := manager.SetSettings(context.Background(), browserbox.Settings{Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
+	outcomes := make(chan string, 1)
+	id, err := manager.Bot("bot-a").RequestHandoff("登录小红书", time.Minute, func(outcome string) { outcomes <- outcome })
+	if err != nil {
+		t.Fatal(err)
+	}
+	post := func(body string) *httptest.ResponseRecorder {
+		request := httptest.NewRequest(http.MethodPost, "/api/browser-box/handoff?bot=bot-a", strings.NewReader(body))
+		request.Header.Set("Content-Type", "application/json")
+		recorder := httptest.NewRecorder()
+		router.ServeHTTP(recorder, request)
+		return recorder
+	}
+	if code := post(`{"id":"` + id + `","outcome":"expired"}`).Code; code != http.StatusBadRequest {
+		t.Fatalf("只收完成和做不了，得到 %d", code)
+	}
+	if code := post(`{"id":"` + id + `","outcome":"done"}`).Code; code != http.StatusOK {
+		t.Fatalf("完成应当成功，得到 %d", code)
+	}
+	select {
+	case outcome := <-outcomes:
+		if outcome != browserbox.HandoffDone {
+			t.Fatalf("结果应当是 done，得到 %s", outcome)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("机器人没收到交接结果")
+	}
+	if code := post(`{"id":"` + id + `","outcome":"done"}`).Code; code != http.StatusConflict {
+		t.Fatalf("处理过的再点应当是 409，得到 %d", code)
 	}
 }

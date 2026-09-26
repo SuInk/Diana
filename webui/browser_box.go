@@ -72,6 +72,7 @@ func (h *BrowserBoxHandler) Register(router gin.IRouter) {
 	router.POST("/api/browser-box/start", h.start)
 	router.POST("/api/browser-box/stop", h.stop)
 	router.POST("/api/browser-box/takeover", h.setTakeover)
+	router.POST("/api/browser-box/handoff", h.resolveHandoff)
 	router.GET("/api/browser-box/tabs", h.listTabs)
 	router.POST("/api/browser-box/tabs", h.openTab)
 	router.DELETE("/api/browser-box/tabs/:id", h.closeTab)
@@ -162,6 +163,39 @@ func (h *BrowserBoxHandler) setTakeover(c *gin.Context) {
 	}
 	recordRequestOperation(c, h.logs, "browser_box_takeover", message, bot.ID(), browserBoxLogMetadata(bot, map[string]any{"active": payload.Active}))
 	c.JSON(http.StatusOK, gin.H{"ok": true, "active": payload.Active})
+}
+
+// resolveHandoff 是主人对「机器人请你帮忙」的回答：做完了，或者做不了。机器人随后在
+// 原来的对话里接着做（见 model/assistant 的 browser_handoff）。
+func (h *BrowserBoxHandler) resolveHandoff(c *gin.Context) {
+	var payload struct {
+		ID      string `json:"id"`
+		Outcome string `json:"outcome"`
+	}
+	if err := c.ShouldBindJSON(&payload); err != nil {
+		writeError(c, http.StatusBadRequest, errors.New("请求格式错误"))
+		return
+	}
+	if payload.Outcome != browserbox.HandoffDone && payload.Outcome != browserbox.HandoffFailed {
+		writeError(c, http.StatusBadRequest, errors.New("只能回答「完成」或「做不了」"))
+		return
+	}
+	bot, ok := h.botFor(c)
+	if !ok {
+		return
+	}
+	pending, found := bot.PendingHandoff()
+	if !found || pending.ID != payload.ID || !bot.ResolveHandoff(payload.ID, payload.Outcome) {
+		writeError(c, http.StatusConflict, errors.New("这一步已经处理过了，或者机器人已经不等了"))
+		return
+	}
+	message := "你做完了机器人请你帮忙的那一步，交还给机器人接着做"
+	if payload.Outcome == browserbox.HandoffFailed {
+		message = "你告诉机器人这一步做不了"
+	}
+	recordRequestOperation(c, h.logs, "browser_box_handoff", message, pending.Reason,
+		browserBoxLogMetadata(bot, map[string]any{"outcome": payload.Outcome, "reason": pending.Reason}))
+	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
 func (h *BrowserBoxHandler) listTabs(c *gin.Context) {
@@ -359,7 +393,13 @@ func (h *BrowserBoxHandler) live(c *gin.Context) {
 	if page.Title == "" {
 		page.Title = target.Title
 	}
-	if writeJSON(gin.H{"type": "ready", "tab": target, "page": page, "takeover": takeover}) != nil {
+	// 机器人请你帮忙的那一步也跟着推：它一请求，开着画面的人当场看到。
+	handoffID := ""
+	var handoff *browserbox.Handoff
+	if pending, ok := bot.PendingHandoff(); ok {
+		handoffID, handoff = pending.ID, &pending
+	}
+	if writeJSON(gin.H{"type": "ready", "tab": target, "page": page, "takeover": takeover, "handoff": handoff}) != nil {
 		return
 	}
 	credits := liveFramesInFlight
@@ -398,6 +438,20 @@ func (h *BrowserBoxHandler) live(c *gin.Context) {
 			if now := bot.Takeover(); now != takeover {
 				takeover = now
 				if writeJSON(gin.H{"type": "takeover", "active": now}) != nil {
+					return
+				}
+			}
+			pending, ok := bot.PendingHandoff()
+			if !ok {
+				pending = browserbox.Handoff{}
+			}
+			if pending.ID != handoffID {
+				handoffID = pending.ID
+				var next *browserbox.Handoff
+				if ok {
+					next = &pending
+				}
+				if writeJSON(gin.H{"type": "handoff", "handoff": next}) != nil {
 					return
 				}
 			}
