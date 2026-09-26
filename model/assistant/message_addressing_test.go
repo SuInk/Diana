@@ -23,7 +23,7 @@ func TestBatchedCandidatesKeepTheirOwnReplyTargets(t *testing.T) {
 	// 接话评分喂的是按时间排的对话稿：同一批里前一条回复了机器人、后一条（当前消息）
 	// 回复了别人，两条的指向都得在稿子里各自保留。
 	text := provider.requests[0].Messages[len(provider.requests[0].Messages)-1].Content
-	if !strings.Contains(text, "owner（回复Diana）：first") || !strings.Contains(text, "【当前消息】owner（回复别人）：second") {
+	if !strings.Contains(text, "owner（回复Diana）：first") || !strings.Contains(text, "【当前消息】[刚刚] owner（回复别人）：second") {
 		t.Fatalf("batch relationships lost:\n%s", text)
 	}
 }

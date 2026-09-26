@@ -1,6 +1,6 @@
 # Chromium / Chrome 浏览器依赖
 
-本页讲 Diana 自己起的一次性无头浏览器。另外两档：想让 Diana 操作你日常浏览器里带登录态的页面，见[浏览器控制扩展](browser-control.md)；想给 Diana 一个它自己的、你能看见也能上手的常驻浏览器，见[内置浏览器](browser-builtin.md)。
+本页讲 Diana 自己起的一次性浏览器（读网页默认有头但看不见，见下文「有头还是无头」）。另外两档：想让 Diana 操作你日常浏览器里带登录态的页面，见[浏览器控制扩展](browser-control.md)；想给 Diana 一个它自己的、你能看见也能上手的常驻浏览器，见[内置浏览器](browser-builtin.md)。
 
 网页渲染统一使用 Chromium / Google Chrome。插件不再下载或回退到 Obscura；此前手动安装的 Obscura 文件不会被自动删除。
 
@@ -43,6 +43,15 @@ seccomp 配置必须保存在宿主机，Docker 在创建容器时读取它；�
 Docker 默认的 `/dev/shm` 只有 64MB，Chrome 渲染重页面时容易写满它导致渲染进程崩溃。Linux 上启动的所有 Chrome 都带 `--disable-dev-shm-usage`，共享内存改走临时目录，因此 Compose 里不需要再设 `shm_size`，`docker run` 也不用加 `--shm-size`。
 
 本地 HTML 截图与外部网页读取走不同启动路径，因此截图成功不代表网页沙箱可用；依赖页现已分别验证两者。所有渲染使用临时浏览器配置，不读取用户日常浏览器登录态。
+
+## 有头还是无头
+
+无头 Chrome 即使改了 UA、去掉了 `navigator.webdriver`，在渲染、GPU、屏幕尺寸这些细节上仍会被网站认出来，搜索引擎和不少站点因此拦截、弹验证码或返回空结果。所以两类场景分开：
+
+- **读网页**（群里发的链接自动读取、模型的 `browser_render`）：插件「窗口」设置默认「自动」，有头运行但看不见。Chrome 以 `--no-startup-window` 启动，页面用 CDP 在后台另开，窗口放在屏幕外，macOS 上也不抢前台；Linux 没有图形会话时在 Xvfb 虚拟屏上开，多次渲染共用同一块按需拉起的虚拟屏。凑不出屏幕时（Linux 既没有 `DISPLAY` 也没装 `xvfb`）自动退回无头，照常可用。「始终无头」最省资源但更容易被拦；「显示窗口（排查用）」会在运行 Diana 的机器上弹出窗口。
+- **本地渲染**（HTML、SVG 出图、截图、字体探测）：只渲染 Diana 自己生成的内容，不会被任何网站风控，一律无头。
+
+Docker：完整版镜像预装 `xvfb`，读网页直接有头；slim 镜像没有 `xvfb`，读网页退回无头，要有头可以 `docker exec -u root <容器名> sh -c 'apt-get update && apt-get install -y xvfb'`。
 
 ## 隔离、并发与超时
 

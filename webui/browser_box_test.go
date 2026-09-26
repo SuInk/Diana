@@ -128,6 +128,9 @@ func TestBrowserBoxTakeoverToggle(t *testing.T) {
 	if manager.Bot("bot-b").Status().Takeover {
 		t.Fatal("接管只该作用于那一台机器人")
 	}
+	// 有人开着画面才算真的在接管；人走了机器人要用就直接收回，见 browserbox 的测试。
+	detach := manager.Bot("bot-a").AttachViewer()
+	defer detach()
 	if _, err := manager.Bot("bot-a").Endpoint(context.Background()); err == nil {
 		t.Fatal("接管时模型不该拿到地址")
 	}
@@ -171,64 +174,87 @@ func newLiveInputFixture(t *testing.T) (*BrowserBoxHandler, *browserbox.Bot, *gi
 	return handler, manager.Bot("bot-a"), c, logs
 }
 
-// WebUI 开着、鼠标从画面上划过或滚轮蹭到，都不该把浏览器从机器人手里抢走，
-// 也不该把这些事件送进机器人正在用的页面。
-func TestLiveHoverAndWheelDoNotTakeOver(t *testing.T) {
-	handler, bot, c, logs := newLiveInputFixture(t)
-	passive := []liveMessage{
-		{Type: "mouse", Mouse: &browserbox.MouseEvent{Type: "mouseMoved", X: 10, Y: 10}},
-		{Type: "mouse", Mouse: &browserbox.MouseEvent{Type: "mouseWheel", X: 10, Y: 10, DeltaY: -120}},
-		{Type: "mouse", Mouse: &browserbox.MouseEvent{Type: "mouseReleased", X: 10, Y: 10, Button: "left"}},
-		{Type: "key", Key: &browserbox.KeyEvent{Type: "keyUp", Key: "a"}},
-	}
-	for _, message := range passive {
-		if handler.claimLiveInput(c, bot, message) {
+// 画面默认只能看：没显式接管时，点击、按键、打字、地址栏、后退刷新一律不送给页面，
+// 也不会顺手把浏览器从机器人手里抢走。
+func TestLiveInputIgnoredUntilExplicitTakeover(t *testing.T) {
+	handler, bot, _, logs := newLiveInputFixture(t)
+	for _, message := range liveInputSamples() {
+		if handler.claimLiveInput(bot, "bot-tab", message) {
 			t.Fatalf("没接管时 %+v 不该送给页面", message)
 		}
 	}
 	if bot.Takeover() {
-		t.Fatal("悬停、滚轮不该打开接管")
+		t.Fatal("在画面上动手不该自己打开接管，接管要点按钮")
 	}
 	if len(logs.entries) != 0 {
 		t.Fatalf("没接管就不该记接管：%+v", logs.entries)
 	}
 }
 
-// 按下鼠标、敲键盘、输入文字、在地址栏打开网页是有意操作，第一下就转为人工接管，只记一条。
-func TestLiveDeliberateInputTakesOver(t *testing.T) {
-	deliberate := []liveMessage{
-		{Type: "mouse", Mouse: &browserbox.MouseEvent{Type: "mousePressed", X: 10, Y: 10, Button: "left", ClickCount: 1}},
-		{Type: "key", Key: &browserbox.KeyEvent{Type: "keyDown", Key: "Enter"}},
-		{Type: "text", Text: "你好"},
-		{Type: "navigate", URL: "https://example.com"},
-	}
-	for _, message := range deliberate {
-		handler, bot, c, logs := newLiveInputFixture(t)
-		if !handler.claimLiveInput(c, bot, message) {
-			t.Fatalf("%s 应送给页面", message.Type)
+// 点了「接管」之后，这些输入才送给页面：点击、拖动、滚动、打字、换网址都靠它们。
+func TestLiveInputForwardedDuringTakeover(t *testing.T) {
+	handler, bot, _, _ := newLiveInputFixture(t)
+	bot.SetTakeover(true)
+	defer bot.SetTakeover(false)
+	for _, message := range liveInputSamples() {
+		if !handler.claimLiveInput(bot, "bot-tab", message) {
+			t.Fatalf("接管期间 %+v 应送给页面", message)
 		}
-		if !bot.Takeover() {
-			t.Fatalf("%s 应打开接管", message.Type)
-		}
-		handler.claimLiveInput(c, bot, message)
-		if len(logs.entries) != 1 || logs.entries[0].Action != "browser_box_takeover" {
-			t.Fatalf("%s 接管应只记一条，实际 %+v", message.Type, logs.entries)
-		}
-		bot.SetTakeover(false)
 	}
 }
 
-// 接管之后，移动、滚轮、松开这些才送给页面：拖动、滚动页面都靠它们。
-func TestLivePassiveInputForwardedDuringTakeover(t *testing.T) {
-	handler, bot, c, _ := newLiveInputFixture(t)
-	defer bot.SetTakeover(false)
-	handler.claimLiveInput(c, bot, liveMessage{Type: "mouse", Mouse: &browserbox.MouseEvent{Type: "mousePressed", Button: "left"}})
-	for _, kind := range []string{"mouseMoved", "mouseWheel", "mouseReleased"} {
-		if !handler.claimLiveInput(c, bot, liveMessage{Type: "mouse", Mouse: &browserbox.MouseEvent{Type: kind}}) {
-			t.Fatalf("接管期间 %s 应送给页面", kind)
+func liveInputSamples() []liveMessage {
+	return []liveMessage{
+		{Type: "mouse", Mouse: &browserbox.MouseEvent{Type: "mousePressed", X: 10, Y: 10, Button: "left", ClickCount: 1}},
+		{Type: "mouse", Mouse: &browserbox.MouseEvent{Type: "mouseMoved", X: 10, Y: 10}},
+		{Type: "mouse", Mouse: &browserbox.MouseEvent{Type: "mouseWheel", X: 10, Y: 10, DeltaY: -120}},
+		{Type: "mouse", Mouse: &browserbox.MouseEvent{Type: "mouseReleased", X: 10, Y: 10, Button: "left"}},
+		// 焦点留在画面上时 Cmd+Tab 切窗口，先按下的就是 Meta。
+		{Type: "key", Key: &browserbox.KeyEvent{Type: "rawKeyDown", Key: "Meta", Modifiers: 4}},
+		{Type: "key", Key: &browserbox.KeyEvent{Type: "keyDown", Key: "Enter"}},
+		{Type: "key", Key: &browserbox.KeyEvent{Type: "keyUp", Key: "Enter"}},
+		{Type: "text", Text: "你好"},
+		{Type: "navigate", URL: "https://example.com"},
+		{Type: "reload"},
+		{Type: "back"},
+	}
+}
+
+// 关掉机器人的标签会搅乱它，要先接管；开新标签归主人，不用接管（这里浏览器没在跑，
+// 过了接管这一关就停在「没有运行」）。
+func TestBrowserBoxTabChangesNeedTakeover(t *testing.T) {
+	router, manager := newBrowserBoxRouter(t)
+	closeBotTab := httptest.NewRequest(http.MethodDelete, "/api/browser-box/tabs/bot-tab?bot=bot-a", nil)
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, closeBotTab)
+	if recorder.Code != http.StatusConflict || !strings.Contains(recorder.Body.String(), "接管") {
+		t.Fatalf("没接管时关机器人的标签应当被挡，得到 %d：%s", recorder.Code, recorder.Body.String())
+	}
+	openTab := httptest.NewRequest(http.MethodPost, "/api/browser-box/tabs?bot=bot-a", strings.NewReader(`{"url":"about:blank"}`))
+	openTab.Header.Set("Content-Type", "application/json")
+	recorder = httptest.NewRecorder()
+	router.ServeHTTP(recorder, openTab)
+	if recorder.Code == http.StatusConflict {
+		t.Fatalf("开新标签不该要求接管：%s", recorder.Body.String())
+	}
+	if manager.Bot("bot-a").Takeover() {
+		t.Fatal("开关标签不该顺手接管")
+	}
+}
+
+// 主人自己开的标签机器人不碰，在里面操作不用接管；别的标签照旧要接管。
+func TestLiveInputAllowedInUserTab(t *testing.T) {
+	handler, bot, _, _ := newLiveInputFixture(t)
+	bot.ClaimUserTab("my-tab")
+	for _, message := range liveInputSamples() {
+		if !handler.claimLiveInput(bot, "my-tab", message) {
+			t.Fatalf("自己开的标签里 %+v 应送给页面", message)
+		}
+		if handler.claimLiveInput(bot, "bot-tab", message) {
+			t.Fatalf("机器人的标签里没接管时 %+v 不该送给页面", message)
 		}
 	}
-	if !handler.claimLiveInput(c, bot, liveMessage{Type: "key", Key: &browserbox.KeyEvent{Type: "keyUp", Key: "a"}}) {
-		t.Fatal("接管期间 keyUp 应送给页面")
+	if bot.Takeover() {
+		t.Fatal("在自己的标签里操作不该变成接管")
 	}
 }

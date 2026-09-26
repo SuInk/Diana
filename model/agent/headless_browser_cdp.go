@@ -20,6 +20,7 @@ import (
 	"github.com/chromedp/cdproto/fetch"
 	"github.com/chromedp/cdproto/network"
 	cdppage "github.com/chromedp/cdproto/page"
+	"github.com/chromedp/cdproto/target"
 	"github.com/chromedp/chromedp"
 )
 
@@ -286,6 +287,8 @@ type sandboxedChromeProcess struct {
 	diagnostics *chromeDiagnosticBuffer
 	cancel      context.CancelFunc
 	done        <-chan error
+	// window 是这一次实际怎么开的：要有头但凑不出屏幕时会退回无头。
+	window BrowserWindow
 }
 
 func (p *sandboxedChromeProcess) stop() {
@@ -300,9 +303,52 @@ func (p *sandboxedChromeProcess) stop() {
 }
 
 func launchSandboxedChrome(ctx context.Context, executable, root, profileDir, cacheDir, crashDir string, cfg SandboxedBrowserConfig) (*sandboxedChromeProcess, error) {
-	args := sandboxedChromeArgs(profileDir, cacheDir, crashDir, cfg)
-	args = append(args, "about:blank")
-	return launchChromeProcess(ctx, executable, root, args)
+	window, env := resolveBrowserWindow(cfg.Window)
+	args := sandboxedChromeArgsForWindow(profileDir, cacheDir, crashDir, window)
+	if window == BrowserWindowHeadless {
+		args = append(args, "about:blank")
+	}
+	process, err := launchChromeProcessWithEnv(ctx, executable, root, args, env)
+	if err != nil {
+		return nil, err
+	}
+	process.window = window
+	return process, nil
+}
+
+// offscreenWindowPosition 把看不见的有头窗口放到所有屏幕外面。
+const offscreenWindowPosition = -32000
+
+// openBackgroundPage 在有头浏览器里开一个页面，不抢前台：chromedp 自己建页面时会把
+// 窗口拉到前面，macOS 上每读一个链接就把人正在用的窗口抢走一次。hidden 时窗口
+// 开在屏幕外面。
+func openBackgroundPage(ctx context.Context, browserWSURL string, window BrowserWindow) (string, error) {
+	client, err := newCDPClient(ctx, browserWSURL, browserStartupTimeout)
+	if err != nil {
+		return "", err
+	}
+	defer client.Close()
+	params := map[string]any{
+		"url":        "about:blank",
+		"newWindow":  true,
+		"background": window == BrowserWindowHidden,
+		"width":      1280,
+		"height":     960,
+	}
+	if window == BrowserWindowHidden {
+		params["left"] = offscreenWindowPosition
+		params["top"] = offscreenWindowPosition
+	}
+	var created struct {
+		TargetID string `json:"targetId"`
+	}
+	if err := client.call(ctx, "Target.createTarget", params, &created); err != nil {
+		return "", err
+	}
+	if created.TargetID == "" {
+		return "", errors.New("有头浏览器没有开出页面")
+	}
+	return created.TargetID, nil
 }
 
 func launchChromeProcess(ctx context.Context, executable, root string, args []string) (*sandboxedChromeProcess, error) {
@@ -408,7 +454,15 @@ func (b *SandboxedHeadlessBrowser) renderObservable(ctx context.Context, executa
 
 	allocatorCtx, cancelAllocator := chromedp.NewRemoteAllocator(ctx, process.wsURL, chromedp.NoModifyURL)
 	defer cancelAllocator()
-	browserCtx, cancelBrowser := chromedp.NewContext(allocatorCtx)
+	var contextOptions []chromedp.ContextOption
+	if process.window != BrowserWindowHeadless {
+		targetID, err := openBackgroundPage(ctx, process.wsURL, process.window)
+		if err != nil {
+			return RenderedPage{}, fmt.Errorf("有头浏览器开页面失败：%w: %s", err, compactBrowserError(process.diagnostics.String()))
+		}
+		contextOptions = append(contextOptions, chromedp.WithTargetID(target.ID(targetID)))
+	}
+	browserCtx, cancelBrowser := chromedp.NewContext(allocatorCtx, contextOptions...)
 	defer cancelBrowser()
 
 	tracker := newBrowserActivityTracker(rawURL, time.Now())

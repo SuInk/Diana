@@ -16,6 +16,7 @@ import (
 // 同一份提示词覆盖，改了哪段两种模型都跟着变。
 
 func participationDecisionSpec(overrides PromptOverrides) *llm.DecisionSpec {
+	chatInLevels, chatInLevelValues := participationChatInLevelsFor(overrides)
 	return &llm.DecisionSpec{Questions: []llm.DecisionQuestion{
 		{
 			Key:           "relevance",
@@ -32,13 +33,13 @@ func participationDecisionSpec(overrides PromptOverrides) *llm.DecisionSpec {
 			Kind:         llm.DecisionScore,
 			Label:        "闲聊适合度",
 			Instructions: "没人找机器人时，机器人插一句是否自然。\n" + participationWillingnessPrompt(overrides) + "\n" + overrides.text(promptParticipationChatInNoteSpec) + "\n" + overrides.text(promptParticipationSharedNoteSpec),
-			Levels:       participationChatInLevels,
-			LevelValues:  participationChatInLevelValues,
+			Levels:       chatInLevels,
+			LevelValues:  chatInLevelValues,
 			// 最低档是「叫停或机械循环」，ratingsAllow 认的是整 0；不吸附的话 Jev 稳定回
-			// 0.01，always 档会在别人叫停后继续接话。
+			// 0.01，always 档会在别人叫停后继续接话。分档可改，但解析时要求第一档就是 0.00。
 			FloorVerdict: true,
 			Min:          0,
-			Max:          0.9,
+			Max:          participationChatInMax,
 			Path:         "chat_in.score",
 			ReasonPath:   "chat_in.reason",
 		},

@@ -1435,6 +1435,24 @@ export function getPromptCatalog(): Promise<PromptCatalog> {
   return requestJSON<PromptCatalog>("/api/assistant/prompts");
 }
 
+/** 接话评分发给模型的内容：对话模型收系统提示词和用户消息，只做判断的模型收题目。 */
+export interface ParticipationPromptPreview {
+  system: string;
+  /** 开头的任务说明按配置拼，后面的上下文是一段示例群聊。 */
+  user: string;
+  /** 评分解析失败、重问一次时插在最前面的系统消息。 */
+  retry: string;
+  decision: { label: string; instructions: string; true_criteria?: string; false_criteria?: string; levels?: string[] }[];
+}
+
+/** 按编辑器里眼前这份配置（可能还没保存）拼出接话评分发给模型的内容。 */
+export function previewParticipationPrompt(config: BotProfileConfig): Promise<ParticipationPromptPreview> {
+  return requestJSON<ParticipationPromptPreview>("/api/assistant/prompts/participation-preview", {
+    method: "POST",
+    body: JSON.stringify(config)
+  });
+}
+
 /** 把编辑器里当前的覆盖表导出成一份完整的内置提示词 YAML（每一段都列出来）。 */
 export async function exportPromptFile(overrides?: Record<string, string>): Promise<string> {
   const response = await requestJSON<{ yaml: string }>("/api/assistant/prompts/export", {
@@ -3589,6 +3607,8 @@ export interface BrowserBoxTab {
   id: string;
   title?: string;
   url?: string;
+  /** 主人在画面里自己开的标签：机器人不碰，不用接管就能操作，离开画面一段时间会自动关掉。 */
+  user?: boolean;
 }
 
 /** 机器人用的浏览器：Diana 内置、用户自己的 Chrome（扩展）；off 表示这一轮一个都用不上。 */

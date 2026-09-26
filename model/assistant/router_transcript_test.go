@@ -10,7 +10,7 @@ import (
 
 // TestProactiveReplyTranscriptReadsOldestFirst 线上漏判最多的形状：机器人刚 @ 某人答完，
 // 那人紧接着追问一句。对话要按时间从早到晚排，当前消息在最后，谁回复谁、@ 了谁写在
-// 名字后面，机器人的发言用它的称呼标出来。
+// 名字后面，机器人的发言用它的称呼标出来。每行开头标着离现在多久，模型才看得出对话节奏。
 func TestProactiveReplyTranscriptReadsOldestFirst(t *testing.T) {
 	age := func(v int64) *int64 { return &v }
 	payload := proactiveReplyPayload{
@@ -34,10 +34,10 @@ func TestProactiveReplyTranscriptReadsOldestFirst(t *testing.T) {
 	want := []string{
 		"机器人的称呼：嘉然、Diana",
 		"对话按时间从早到晚：",
-		"Bob（回复Alice）：晚上吃啥 [图片×1]",
-		"Alice（@嘉然）：测距仪多少钱",
-		"嘉然（机器人）（@Alice）：大概两三百块",
-		"【当前消息】Alice：这么贵",
+		"[1分钟前] Bob（回复Alice）：晚上吃啥 [图片×1]",
+		"[40秒前] Alice（@嘉然）：测距仪多少钱",
+		"[5秒前] 嘉然（机器人）（@Alice）：大概两三百块",
+		"【当前消息】[刚刚] Alice：这么贵",
 		"（嘉然最近一条发言是冲着当前发送者说的）",
 		"",
 		"群内术语：",
@@ -58,7 +58,7 @@ func TestProactiveReplyTranscriptMarksQuotedBot(t *testing.T) {
 		QuotedIsBot:   true,
 	}
 	got := proactiveReplyTranscript(payload)
-	if !strings.HasSuffix(got, "【当前消息】Carol（回复机器人）：真的吗（引用 机器人：白洲梓是《蔚蓝档案》里的角色）") {
+	if !strings.HasSuffix(got, "【当前消息】[刚刚] Carol（回复机器人）：真的吗（引用 机器人：白洲梓是《蔚蓝档案》里的角色）") {
 		t.Fatalf("quoted bot message not rendered as the bot:\n%s", got)
 	}
 	if strings.Contains(got, "机器人的称呼") {
