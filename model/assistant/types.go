@@ -337,12 +337,13 @@ type Reminder struct {
 	// IntervalMonths 非零表示按日历月重复（每月、每年），下一次按月份加，不按秒数；
 	// 这时 IntervalSeconds 只是折算值，给「是不是周期任务」的判断和显示用。
 	IntervalMonths int `json:"interval_months,omitempty"`
-	// ScheduleMonthDay / ScheduleWeekday / ScheduleWeekOrdinal 是按月周期任务的日期
-	// 规则（每月最后一天、每月第一个周一），见 scheduleDayRule。全为零值表示沿用
-	// 起点那天的日子。
-	ScheduleMonthDay    int    `json:"schedule_month_day,omitempty"`
-	ScheduleWeekday     string `json:"schedule_weekday,omitempty"`
-	ScheduleWeekOrdinal int    `json:"schedule_week_ordinal,omitempty"`
+	// ScheduleWeekdays / ScheduleMonthDays / ScheduleWeekday+ScheduleWeekOrdinal 是
+	// 周期任务的日期规则（每周一三五、每月 1 号和 15 号、每月第一个周一），三选一，
+	// 见 scheduleDayRule。全为零值表示按起点排。
+	ScheduleWeekdays    []string `json:"schedule_weekdays,omitempty"`
+	ScheduleMonthDays   []int    `json:"schedule_month_days,omitempty"`
+	ScheduleWeekday     string   `json:"schedule_weekday,omitempty"`
+	ScheduleWeekOrdinal int      `json:"schedule_week_ordinal,omitempty"`
 	// ScheduleAnchorAt 是周期任务的时间网格原点：每次成功后下一次落在 anchor + k*interval
 	// 上，不跟着实际开跑时间或失败重试漂。「每周日 22:00」靠它一直停在 22:00。
 	// 零值是这个字段之前的旧记录，仍按实际开跑时间往后排。

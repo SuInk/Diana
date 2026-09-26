@@ -1897,18 +1897,18 @@ func (r *Runtime) releaseClaimedReminder(id string) {
 // 22:00」挪成 22:05。没有原点的旧记录仍按实际开跑时间往后排。
 func nextRecurringTrigger(item Reminder, startedAt time.Time, now time.Time) time.Time {
 	interval := reminderScheduleInterval(item)
+	anchor := item.ScheduleAnchorAt
+	if anchor.IsZero() {
+		anchor = startedAt
+	}
+	if rule := ruleFromReminder(item); !rule.IsZero() {
+		// 规则在创建时校验过一定能找到日子；万一找不到也不能返回零值——零值的
+		// TriggerAt 永远算到期，会每秒跑一次。退回下面按起点排。
+		if slot := ruleSlotAfter(anchor, interval, rule, now, time.Time{}); !slot.IsZero() {
+			return slot
+		}
+	}
 	if interval.Months > 0 {
-		anchor := item.ScheduleAnchorAt
-		if anchor.IsZero() {
-			anchor = startedAt
-		}
-		if rule := ruleFromReminder(item); !rule.IsZero() {
-			// 规则在创建时校验过一定能找到日子；万一找不到也不能返回零值——零值的
-			// TriggerAt 永远算到期，会每秒跑一次。退回按起点日子排。
-			if slot := ruleSlotAfter(anchor, interval.Months, rule, now, time.Time{}); !slot.IsZero() {
-				return slot
-			}
-		}
 		return calendarSlotAfter(anchor, interval.Months, now)
 	}
 	if !item.ScheduleAnchorAt.IsZero() && interval.Fixed > 0 {

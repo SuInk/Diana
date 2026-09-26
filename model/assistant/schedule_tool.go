@@ -67,22 +67,24 @@ func (t *dianaScheduleTool) Description() string {
 // 避免文案和校验代码各写一份数字然后漂移。
 func (t *dianaScheduleTool) InputSchema() map[string]any {
 	item := map[string]any{
-		"interval":  toolStringParam(scheduleIntervalDescription),
-		"query":     toolStringParam(scheduleQueryDescription),
-		"at":        toolStringParam(scheduleAtDescription),
-		"month_day": toolIntParam(scheduleMonthDayDescription, -31, 31),
-		"weekday":   toolEnumParam(scheduleWeekdayDescription, scheduleWeekdayOrder...),
-		"week":      toolIntParam(scheduleWeekDescription, -5, 5),
+		"interval":   toolStringParam(scheduleIntervalDescription),
+		"query":      toolStringParam(scheduleQueryDescription),
+		"at":         toolStringParam(scheduleAtDescription),
+		"weekdays":   toolEnumArrayParam(scheduleWeekdaysDescription, scheduleWeekdayOrder...),
+		"month_days": toolIntArrayParam(scheduleMonthDaysDescription, -31, 31),
+		"weekday":    toolEnumParam(scheduleWeekdayDescription, scheduleWeekdayOrder...),
+		"week":       toolIntParam(scheduleWeekDescription, -5, 5),
 	}
 	return toolObjectSchema([]string{"operation"}, map[string]any{
 		"operation": toolEnumParam("要执行的操作。cancel 只停止并保留记录，delete 才彻底删除。",
 			"create", "list", "update", "cancel", "delete"),
-		"interval":  item["interval"],
-		"query":     item["query"],
-		"at":        item["at"],
-		"month_day": item["month_day"],
-		"weekday":   item["weekday"],
-		"week":      item["week"],
+		"interval":   item["interval"],
+		"query":      item["query"],
+		"at":         item["at"],
+		"weekdays":   item["weekdays"],
+		"month_days": item["month_days"],
+		"weekday":    item["weekday"],
+		"week":       item["week"],
 		"items": toolItemsParam("一次创建多个订阅；只在 create 时有效，最多 "+itoa(maximumTasksPerToolCall)+" 项。剩余额度不足时按顺序创建到额度上限。",
 			maximumTasksPerToolCall, []string{"interval", "query"}, item),
 		"id":             toolStringParam("要操作的订阅 ID；update、cancel、delete 必填，可先用 list 查到。"),
@@ -340,13 +342,13 @@ func parseScheduleFirstAt(raw string) (time.Time, error) {
 // 不早于 at 且晚于现在的日子，后续都以它为原点。
 func firstScheduleTrigger(firstAt time.Time, interval calendarDuration, rule scheduleDayRule, now time.Time) (time.Time, error) {
 	if !rule.IsZero() {
-		if interval.Months == 0 {
-			return time.Time{}, fmt.Errorf("month_day、weekday 只能用于按月或按年重复（interval 写 mo 或 y）")
+		if err := checkRuleInterval(rule, interval); err != nil {
+			return time.Time{}, err
 		}
 		if firstAt.IsZero() {
-			return time.Time{}, fmt.Errorf("使用 month_day 或 weekday 时必须传 at，指定起始月份和几点触发")
+			return time.Time{}, fmt.Errorf("使用 weekdays、month_days 或 weekday 时必须传 at，指定从哪周/哪月开始和几点触发")
 		}
-		slot := ruleSlotAfter(firstAt, interval.Months, rule, now, firstAt)
+		slot := ruleSlotAfter(firstAt, interval, rule, now, firstAt)
 		if slot.IsZero() {
 			return time.Time{}, fmt.Errorf("按这个规则在很长时间内都找不到符合的日子，请换一个规则")
 		}
@@ -515,7 +517,7 @@ func (r *Runtime) updateScheduledQuery(ownerID string, id string, input map[stri
 		return Reminder{}, err
 	}
 	if rawInterval == "" && query == "" && firstAt.IsZero() && !rulePresent {
-		return Reminder{}, fmt.Errorf("修改定时订阅时至少提供 interval、at、month_day/weekday 或 query")
+		return Reminder{}, fmt.Errorf("修改定时订阅时至少提供 interval、at、日期规则或 query")
 	}
 	var interval calendarDuration
 	if rawInterval != "" {
