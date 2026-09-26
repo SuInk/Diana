@@ -105,8 +105,25 @@ func (r *Runtime) autoReferenceBackloggedReply(event MessageEvent) bool {
 // 只发了一张图、没有文字的那条也算:图文合并去掉以后,「先发图、再说话」是两条
 // 消息,前一条正是这种。表情不算,那多半只是个反应。
 func pendingEarlierMessage(history []MessageEvent, event MessageEvent) (MessageEvent, bool) {
+	earlier := pendingEarlierMessages(history, event, 1)
+	if len(earlier) == 0 {
+		return MessageEvent{}, false
+	}
+	return earlier[0], true
+}
+
+// pendingEarlierMessagesLimit 是一轮最多点名承接几条连发。连发取代可以一环套一环
+// （第二条取代第一条、第三条又取代第二条），最后作答的那一轮要把它们都接住。
+const pendingEarlierMessagesLimit = 3
+
+// pendingEarlierMessages 从当前消息往前，取同一个人连着发、机器人还没回的消息，
+// 最多 limit 条，按时间从旧到新排。遇到别人发言、机器人发言或者一条既没字也没图的
+// 消息就停。
+func pendingEarlierMessages(history []MessageEvent, event MessageEvent, limit int) []MessageEvent {
 	currentID := strings.TrimSpace(event.MessageID)
-	for index := len(history) - 1; index >= 0; index-- {
+	var picked []MessageEvent
+	anchorTime := event.Time
+	for index := len(history) - 1; index >= 0 && len(picked) < limit; index-- {
 		item := history[index]
 		if strings.TrimSpace(item.MessageID) == currentID && currentID != "" {
 			continue
@@ -116,17 +133,23 @@ func pendingEarlierMessage(history []MessageEvent, event MessageEvent) (MessageE
 		}
 		// 紧挨着的上一条不是同一个人的入站消息,就没有「连发未回」这回事。
 		if item.Outbound || strings.TrimSpace(item.UserID) != strings.TrimSpace(event.UserID) {
-			return MessageEvent{}, false
+			break
 		}
-		if event.Time > 0 && item.Time > 0 && event.Time-item.Time > int64(pendingEarlierMessageWindow/time.Second) {
-			return MessageEvent{}, false
+		if anchorTime > 0 && item.Time > 0 && anchorTime-item.Time > int64(pendingEarlierMessageWindow/time.Second) {
+			break
 		}
 		if strings.TrimSpace(historyPlainText(item)) == "" && !pendingEarlierImageOnly(item) {
-			return MessageEvent{}, false
+			break
 		}
-		return item, true
+		picked = append(picked, item)
+		if item.Time > 0 {
+			anchorTime = item.Time
+		}
 	}
-	return MessageEvent{}, false
+	for left, right := 0, len(picked)-1; left < right; left, right = left+1, right-1 {
+		picked[left], picked[right] = picked[right], picked[left]
+	}
+	return picked
 }
 
 // pendingEarlierImageOnly 判断这条没有文字的消息是不是一条正经的图(不是表情)。
@@ -193,28 +216,16 @@ func botJustAnsweredSender(history []MessageEvent, event MessageEvent) bool {
 }
 
 func replyDecorationPrompt(cfg BotConfig, event MessageEvent, history []MessageEvent) string {
+	if event.Kind == EventKindPrivate {
+		// 私聊没有引用和 @ 的概念，但连发同样会被取代（sender_burst.go），
+		// 承接前几条的提示照样要给。
+		return pendingEarlierMessagesPrompt(cfg, event, history)
+	}
 	if event.Kind != EventKindGroup {
 		return ""
 	}
 	var builder strings.Builder
-	if earlier, ok := pendingEarlierMessage(history, event); ok {
-		preview := []rune(strings.TrimSpace(historyPlainText(earlier)))
-		if len(preview) > 40 {
-			preview = append(preview[:40], '…')
-		}
-		if len(preview) == 0 {
-			builder.WriteString("他刚发了一张图(message_id=" + strings.TrimSpace(earlier.MessageID) + "),你还没有回应;当前这条可能就是在说它,也可能不是。")
-		} else {
-			builder.WriteString("发送者刚连发了多条消息,上一条「" + string(preview) + "」你还没有回复。")
-		}
-		currentText := strings.TrimSpace(readableEventText(event, ""))
-		botID := firstNonEmpty(strings.TrimSpace(event.SelfID), strings.TrimSpace(cfg.BotAccount))
-		if bareWakeMention(event, currentText, botID, cfg.GroupTriggers) {
-			builder.WriteString("当前这条只是再次叫你一声,应把它理解为催你回应上一条:直接自然回答上一条的实质内容,不要另外输出“在的”“怎么了”“你喊我有什么事”等唤醒回应,也不要在回答前后重复打招呼。")
-		} else {
-			builder.WriteString("这一轮把它们一起接住:先明确回应那一条,再回应当前这条,别让对方觉得前一条被跳过。")
-		}
-	}
+	builder.WriteString(pendingEarlierMessagesPrompt(cfg, event, history))
 	justAnswered := botJustAnsweredSender(history, event)
 	if justAnswered {
 		appendPromptSection(&builder, "你上一条回的就是这个人,这一轮是同一段对话的下一句:接着上一条往下说,"+
@@ -237,6 +248,47 @@ func replyDecorationPrompt(cfg BotConfig, event MessageEvent, history []MessageE
 		}
 	}
 	return strings.TrimSpace(builder.String())
+}
+
+// pendingEarlierMessagesPrompt 点出同一个人连发、还没回的那几条，让这一轮一起接住。
+func pendingEarlierMessagesPrompt(cfg BotConfig, event MessageEvent, history []MessageEvent) string {
+	earlier := pendingEarlierMessages(history, event, pendingEarlierMessagesLimit)
+	if len(earlier) == 0 {
+		return ""
+	}
+	var builder strings.Builder
+	var quoted []string
+	images := 0
+	for _, item := range earlier {
+		preview := []rune(strings.TrimSpace(historyPlainText(item)))
+		if len(preview) > 40 {
+			preview = append(preview[:40], '…')
+		}
+		if len(preview) == 0 {
+			images++
+			quoted = append(quoted, "一张图(message_id="+strings.TrimSpace(item.MessageID)+")")
+			continue
+		}
+		quoted = append(quoted, "「"+string(preview)+"」")
+	}
+	switch {
+	case len(earlier) == 1 && images == 1:
+		builder.WriteString("他刚发了一张图(message_id=" + strings.TrimSpace(earlier[0].MessageID) + "),你还没有回应;当前这条可能就是在说它,也可能不是。")
+	case len(earlier) == 1:
+		builder.WriteString("发送者刚连发了多条消息,上一条" + quoted[0] + "你还没有回复。")
+	default:
+		builder.WriteString("发送者刚连发了多条消息,前面的" + strings.Join(quoted, "、") + "你都还没有回复。")
+	}
+	currentText := strings.TrimSpace(readableEventText(event, ""))
+	botID := firstNonEmpty(strings.TrimSpace(event.SelfID), strings.TrimSpace(cfg.BotAccount))
+	if bareWakeMention(event, currentText, botID, cfg.GroupTriggers) {
+		builder.WriteString("当前这条只是再次叫你一声,应把它理解为催你回应上一条:直接自然回答上一条的实质内容,不要另外输出“在的”“怎么了”“你喊我有什么事”等唤醒回应,也不要在回答前后重复打招呼。")
+	} else if len(earlier) == 1 {
+		builder.WriteString("这一轮把它们一起接住:先明确回应那一条,再回应当前这条,别让对方觉得前一条被跳过。")
+	} else {
+		builder.WriteString("这一轮只发一份回复,把它们一起接住:前面几条和当前这条合起来理解,别让对方觉得有哪条被跳过。")
+	}
+	return builder.String()
 }
 
 // 「该不该 @」原先整条交给模型判断：提示词说「多人同时说话需要点名时才写 @」,

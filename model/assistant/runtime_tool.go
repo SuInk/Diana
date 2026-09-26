@@ -1022,6 +1022,10 @@ func (r *Runtime) executeClaimedReminder(ctx context.Context, item Reminder) {
 		_, _ = r.sendPoke(ctx, source, item.UserID, pokeSceneReminder)
 	}
 	err := r.sendSubscriberNotice(ctx, reminderSourceEvent(item), notice)
+	if err == nil {
+		// 提醒刚找过这个人：接下来一分钟里他随口一句，主动接话不必再把提醒说一遍。
+		r.noteTriggeredDelivery(reminderSourceEvent(item))
+	}
 	if reminderRunInterrupted(ctx, err) {
 		// 进程正在退出：这条提醒还没送到，保持原样等下次启动后再投。
 		return
@@ -1157,6 +1161,12 @@ func (r *Runtime) runClaimedRepositoryWatch(ctx context.Context, item Reminder) 
 		return startedAt, repositoryWatchStageFailure(repositoryWatchFailureStageDelivery, err)
 	}
 	// 事实卡片已经送到，跟评失败不该让这次轮询算作失败。
+	// 这一轮全是机器人自己刚做的事（刚建的 Issue、刚发的评论）时不跟评：
+	// 群里已经说过「建好了」，卡片也报了，再感想一遍就是第三次确认同一件事。
+	if r.repositoryWatchChangeOnlyOwnRecentWrites(item.Repository, change, time.Now()) {
+		log.Printf("diana repository watch %s: skip follow-up for the bot's own recent writes", strings.TrimSpace(item.Repository))
+		return startedAt, nil
+	}
 	r.maybeSendRepositoryWatchFollowUp(ctx, item, message, reference)
 	return startedAt, nil
 }

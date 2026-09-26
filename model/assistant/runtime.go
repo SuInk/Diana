@@ -422,6 +422,15 @@ type Runtime struct {
 	latestDirectedInbound map[string]directedInboundMark
 	directReplySeq        uint64
 	activeDirectReplies   map[string]*activeDirectReply
+	// senderTurns 按会话+发送者登记已接手、还没收尾的消息，见 sender_burst.go。
+	senderTurns   map[string][]*senderTurn
+	senderTurnSeq uint64
+	// recentTriggeredDeliveries 记下提醒和事件触发任务刚找过谁，见 triggered_delivery.go。
+	triggeredDeliveryMu       sync.Mutex
+	recentTriggeredDeliveries map[string]time.Time
+	// ownRepositoryWrites 记下机器人自己刚在 GitHub 上写过的 Issue / PR，见 repository_own_writes.go。
+	ownRepositoryWriteMu sync.Mutex
+	ownRepositoryWrites  map[string]time.Time
 	// backlogMessages 按会话暂存在队列里积压、交给后面消息合并作答的消息。
 	backlogMu                 sync.Mutex
 	backlogMessages           map[string][]backlogMessage
@@ -1941,6 +1950,10 @@ func (r *Runtime) routeMessageEvent(ctx context.Context, event MessageEvent) (Me
 				considerProactive, proactiveSkipReason = false, reason
 			}
 		}
+		// 提醒或事件触发任务刚找过这个人，主动接话再来一句多半是同一件事。
+		if considerProactive && r.recentTriggeredDeliveryFor(event) {
+			considerProactive, proactiveSkipReason = false, triggeredDeliverySkipReason
+		}
 	}
 	proactiveCandidates := append([]proactiveReplyCandidate(nil), event.backlogProactive...)
 	if considerProactive {
@@ -2034,6 +2047,12 @@ func (r *Runtime) replyAndRecord(ctx context.Context, event MessageEvent, text s
 		}
 	}
 	defer r.enqueueHistoryImageDescriptions(event)
+	// 同一个人连发：前一条还没开口就由这一条一并回答，见 sender_burst.go。
+	event, burstOutcome, burstDone := r.claimSenderBurst(ctx, event, text, successOutcome)
+	defer r.finishSenderTurn(event)
+	if burstDone {
+		return burstOutcome, nil
+	}
 	start := time.Now()
 	record := r.decisionEventRecord(event, text, successOutcome)
 	record.At = start
@@ -2077,6 +2096,13 @@ func (r *Runtime) replyAndRecord(ctx context.Context, event MessageEvent, text s
 			setEventRecordOutcome(&record, "ignored_no_natural_reply")
 			r.record(record)
 			return "ignored_no_natural_reply", nil
+		}
+		if errors.Is(err, errProactiveReplyCoveredByTrigger) {
+			setEventRecordOutcome(&record, "ignored_trigger_covered")
+			record.Reason = triggeredDeliverySkipReason
+			record.Error = ""
+			r.record(record)
+			return "ignored_trigger_covered", nil
 		}
 		if errors.Is(err, errReplySuppressedBeforeSend) {
 			setEventRecordOutcome(&record, "ignored_response_suppression")
@@ -2124,7 +2150,7 @@ func (r *Runtime) replyAndRecord(ctx context.Context, event MessageEvent, text s
 		}
 		if errors.Is(err, errReplyTriggerSuperseded) {
 			setEventRecordOutcome(&record, "superseded_follow_up")
-			record.Reason = "同一用户随后又发来直呼消息，由新消息一并回答"
+			record.Reason = "同一用户随后又发来消息，由新消息一并回答"
 			r.record(record)
 			return "superseded_follow_up", nil
 		}
@@ -4317,6 +4343,8 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		// 附上（agent 和非 agent 都一样），见 sender_dependency_images.go。
 		if images := senderDependencyImages(replyHistory, event, turnMessageIDs, firstNonEmpty(strings.TrimSpace(cfg.BotAccount), strings.TrimSpace(event.SelfID))); len(images) > 0 {
 			dependency = &senderDependencyContext{images: images, toolHint: directAgentDecision, pixels: r.chatModelReceivesImages(event)}
+			// 这一轮已经带着那几张图在答了，纯图那条自己的回复就不必再发。
+			r.supersedeDependencyImageTurns(ctx, event, images)
 		}
 		stableHistory, crossGroupTail := r.stableGroupHistory(ctx, event, cfg, replyHistory, directAgentDecision, turnMessageIDs)
 		messages = append(messages, stableCheckpoint...)

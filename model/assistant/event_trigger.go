@@ -273,6 +273,11 @@ func (r *Runtime) dispatchEventTriggers(ctx context.Context, event MessageEvent,
 	}
 	for _, item := range r.claimEventTriggers(event, text, eventSessionSendable, time.Now()) {
 		item := item
+		// 发回事件会话的任务会 @ 触发者本人。认领时就登记：任务在后台跑模型，送达
+		// 可能比这条消息自己的主动接话还晚，等送达再记就拦不住那句重复的接话了。
+		if spec, ok := decodeEventTrigger(item.EventTriggerJSON); ok && spec.DeliverTo != eventTriggerDeliverOrigin {
+			r.noteTriggeredDelivery(eventTriggerDeliveryEvent(event))
+		}
 		go func() {
 			defer recoverGoroutinePanic("runtime.executeEventTrigger")
 			r.executeEventTrigger(context.WithoutCancel(ctx), item, event, text)

@@ -137,7 +137,8 @@ func TestPrivateBurstFoldsIntoActiveDirectReply(t *testing.T) {
 }
 
 // TestPrivateBurstUnderConcurrency 在真实队列上跑一遍连发三句，只验证并发档位本身。
-// 这里的模型不会把连发判成重复或补充，所以每句仍然单独回复；合并由上面那个测试覆盖。
+// 这里的模型不会把连发判成重复或补充；串行时每句单独回复，并发时还没开始生成的
+// 那句可能被后到的取代。合并和取代由上面那个测试和 sender_burst_test.go 覆盖。
 func TestPrivateBurstUnderConcurrency(t *testing.T) {
 	t.Run("serial", func(t *testing.T) {
 		replies, maxActive, sent := runPrivateBurst(t, 1)
@@ -151,8 +152,10 @@ func TestPrivateBurstUnderConcurrency(t *testing.T) {
 	t.Run("parallel", func(t *testing.T) {
 		replies, maxActive, sent := runPrivateBurst(t, 2)
 		// 并发时后到的那句会先问一次「是不是同一件事」，模型调用数可能多一次。
-		if replies < 3 || len(sent) != 3 {
-			t.Fatalf("parallel burst produced %d replies / %d sends, want 3 / 3 when follow-ups are not classified as repeats%s", replies, len(sent), describeSentMessages(sent))
+		// 后到的那句要是赶在前一句开始生成之前进了回复入口，会直接取代前一句
+		// （sender_burst.go），于是发送数是 2 或 3，取决于两路谁先走完路由。
+		if replies < 2 || len(sent) < 2 || len(sent) > 3 {
+			t.Fatalf("parallel burst produced %d replies / %d sends, want 2-3 sends when follow-ups are not classified as repeats%s", replies, len(sent), describeSentMessages(sent))
 		}
 		if maxActive < 2 {
 			t.Fatalf("max concurrent generations = %d, want at least 2 under private concurrency 2", maxActive)

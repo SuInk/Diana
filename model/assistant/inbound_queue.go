@@ -713,6 +713,9 @@ func (r *Runtime) processInboundQueueItem(ctx context.Context, item InboundQueue
 	if r.inboundEventIsStale(item.Event, time.Now()) {
 		return "ignored_stale", nil
 	}
+	// 断线回补、重启重放的消息没经过入站登记，这里补上；这一轮收尾时注销。
+	r.noteSenderTurnArrival(item.Event)
+	defer r.finishSenderTurn(item.Event)
 	// 积压的消息不在这里直接收掉：插件观察、消息互通、历史和记忆这些不花回复 token 的环节
 	// 还得走。交接判断放到 prepareMessageEvent 里登记积压包之前那一刻，这里只把队列信息带过去。
 	probe := item

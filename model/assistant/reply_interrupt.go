@@ -14,8 +14,9 @@ import (
 // （补充、修正，或撤回后的重发），旧回复在首条消息发出之前放弃，由新消息
 // 那一轮结合上下文一并回答，避免群里连着发出高度重复的回复。
 //
-// 私聊不做这种取代：队列本来就按会话串行，先让已经生成的回复落地，下一轮再从
-// 对话历史里参考它。这样不会为了追发消息丢掉已有结果，又重新生成一遍。
+// 这套按「直呼登记」取代的机制不管私聊，也不管走追发合并（beginDirectReply）的
+// 那些轮次。同一个人连发的取代由 sender_burst.go 负责，群聊私聊都算：私聊队列
+// 早已不是按会话串行，连发两三条同样会被各回一遍。
 //
 // 撤回本身不取消回复：用户只撤回没重发时机器人照常回答（产品决策——撤回的
 // 话往往正是想被看到的那句）。撤回登记只有一个用途：回复一条已撤回的消息时
@@ -192,12 +193,23 @@ func (r *Runtime) interruptedReplyError(ctx context.Context, event MessageEvent)
 	// 「创建成功却提示失败」。
 	if hasExternalSideEffect(ctx) {
 		r.sealDirectReply(ctx)
+		r.markSenderTurnSending(event)
 		return nil
 	}
 	if r.directReplyHasNewSupplements(ctx) {
 		return errDirectReplySupplemented
 	}
 	if r.inboundTriggerSuperseded(ctx, event) {
+		return errReplyTriggerSuperseded
+	}
+	if err := r.triggeredDeliveryCoversProactiveReply(event); err != nil {
+		return err
+	}
+	// 同一个人后到的消息已经接过了这一轮（连发取代，或者文字那一轮把这张图当候选
+	// 依赖图一起答了）。只拦对话回复：链接解析、插件指令没有人会替它们补发。
+	// 没被取代就在同一把锁里记成「开始发送」，之后不再被连发取代：半截话比多回一条更糟。
+	_, inDirectRun := ctx.Value(directReplyRunContextKey{}).(directReplyRunContext)
+	if !r.passSenderTurnSendGate(event, inDirectRun) {
 		return errReplyTriggerSuperseded
 	}
 	return nil
