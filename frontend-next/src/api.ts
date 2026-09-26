@@ -2198,6 +2198,9 @@ export const browserActivityActions = [
   "browser_box_stop",
   "browser_box_takeover",
   "browser_box_navigate",
+  "browser_box_handoff",
+  "browser_box_tab_open",
+  "browser_box_tab_close",
   "browser_source",
   "browser_control_connect",
   "browser_control_disconnect",
@@ -3583,6 +3586,16 @@ export interface BrowserBoxStatus {
   started_at?: string;
   last_error?: string;
   available: boolean;
+  /** 机器人正在等主人处理的那一步（登录、扫码、验证码）。 */
+  handoff?: BrowserBoxHandoff | null;
+}
+
+/** 机器人请主人亲手在内置浏览器里做的一步。 */
+export interface BrowserBoxHandoff {
+  id: string;
+  reason: string;
+  requested_at: string;
+  deadline: string;
 }
 
 export interface BrowserBoxTab {
@@ -3659,6 +3672,14 @@ export function startBrowserBox(botID: string): Promise<{ status: BrowserBoxStat
 
 export function stopBrowserBox(botID: string): Promise<{ status: BrowserBoxStatus }> {
   return requestJSON<{ status: BrowserBoxStatus }>(browserBoxPath("stop", botID), { method: "POST" });
+}
+
+/** 回答机器人的交接请求：做完了（done）或做不了（failed），机器人随后接着做。 */
+export function resolveBrowserBoxHandoff(botID: string, id: string, outcome: "done" | "failed"): Promise<{ ok: boolean }> {
+  return requestJSON<{ ok: boolean }>(browserBoxPath("handoff", botID), {
+    method: "POST",
+    body: JSON.stringify({ id, outcome })
+  });
 }
 
 export function setBrowserBoxTakeover(botID: string, active: boolean): Promise<{ ok: boolean; active: boolean }> {

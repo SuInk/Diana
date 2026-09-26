@@ -84,7 +84,8 @@
                 <span v-if="enabledCount > 1 && sourceState?.[key].enabled" class="browser-toggle-rank" :title="`优先级 ${index + 1}`">
                   第 {{ index + 1 }} 优先
                 </span>
-                <span v-if="sourceState && sourceState.active === key" class="badge ok">正在用</span>
+                <span v-if="key === 'box' && handoff" class="badge warn">等你处理</span>
+                <span v-else-if="sourceState && sourceState.active === key" class="badge ok">正在用</span>
                 <span v-else-if="sourceState?.[key].enabled && sourceState[key].usable" class="badge">备用</span>
                 <span v-else-if="sourceState?.[key].enabled" class="badge warn">{{ key === "box" ? "没找到 Chrome" : "等扩展连接" }}</span>
               </div>
@@ -144,7 +145,7 @@
     <!-- 画面做成一个浏览器窗口：标签、工具栏、画面、状态栏拼成一整块。谁在控制这个浏览器
          是这里最要紧的信息，放在状态栏里一直看得见，交还也在那里点。 -->
     <div v-if="sourceState?.box.enabled && botID && status.running" class="card browser-live-card">
-      <div ref="liveWindow" class="browser-window" :class="{ 'is-takeover': interactive, 'is-fullscreen': fullscreen }">
+      <div ref="liveWindow" class="browser-window" :class="{ 'is-takeover': interactive, 'is-handoff': handoff && !status.takeover, 'is-fullscreen': fullscreen }">
         <!-- 标签栏：点哪个画面就切到哪个，只是换着看、不动机器人，不用接管；新建和关闭会改动
              机器人的浏览器，接管之后才能点。 -->
         <div class="browser-tabbar" role="tablist" aria-label="标签页">
@@ -245,7 +246,19 @@
 
         <div class="browser-statusbar" role="status">
           <span class="browser-status-dot" aria-hidden="true"></span>
-          <template v-if="currentTabOwned && !status.takeover">
+          <template v-if="handoff && !status.takeover">
+            <strong>机器人请你帮忙</strong>
+            <span class="browser-status-hint">{{ handoff.reason }}，{{ handoffDeadline }} 前有效</span>
+            <button class="btn small primary browser-handoff-start" type="button" :disabled="busy" @click="startHandoff">开始处理</button>
+            <button class="btn small ghost" type="button" :disabled="busy" @click="resolveHandoff('failed')">做不了</button>
+          </template>
+          <template v-else-if="handoff && status.takeover">
+            <strong>你在帮机器人</strong>
+            <span class="browser-status-hint">{{ handoff.reason }}；做完点「完成」，机器人接着往下做</span>
+            <button class="btn small primary" type="button" :disabled="busy" @click="resolveHandoff('done')">完成，交还给机器人</button>
+            <button class="btn small ghost" type="button" :disabled="busy" @click="resolveHandoff('failed')">做不了</button>
+          </template>
+          <template v-else-if="currentTabOwned && !status.takeover">
             <strong>你的标签</strong>
             <span class="browser-status-hint">
               机器人不碰这个标签，直接操作就行；离开画面 {{ userTabLeaveMinutes }} 分钟会自动关掉
@@ -385,6 +398,8 @@ import {
   listBrowserActivity,
   type AppLogEntry,
   listBrowserBoxTabs,
+  resolveBrowserBoxHandoff,
+  type BrowserBoxHandoff,
   openBrowserBoxTab,
   closeBrowserBoxTab,
   type BrowserBoxTab,
@@ -566,7 +581,7 @@ function activityWho(log: AppLogEntry): string {
 
 // 只有网址和元素值得显示：启停、接管那几条的 target 是机器人 ID，页面上已经知道了。
 function activityTarget(log: AppLogEntry): string {
-  return log.action === "browser_action" || log.action === "browser_box_navigate" ? (log.target ?? "") : "";
+  return ["browser_action", "browser_box_navigate", "browser_box_handoff"].includes(log.action) ? (log.target ?? "") : "";
 }
 
 // 操作记录跟着状态一起刷：机器人正在用浏览器时，这里应当看得见它刚做了什么。
@@ -823,6 +838,7 @@ function moveSource(index: number, delta: -1 | 1): void {
 async function refresh(): Promise<void> {
   try {
     const next = await getBrowserBoxStatus(botID || undefined);
+    handoff.value = next.handoff ?? null;
     // 连着画面时接管状态以画面连接的推送为准：轮询请求要是在交还之前发出、交还之后才
     // 回来，会把刚推过来的「已交还」又改回「你在操作」。
     const pushedTakeover = socket?.readyState === WebSocket.OPEN ? status.takeover : null;
@@ -896,6 +912,54 @@ async function takeOver(): Promise<void> {
   }
 }
 
+// 机器人请你亲手做的那一步（登录、扫码、验证码）。机器人那一轮已经结束了，你点「完成」
+// 或「做不了」之后，它在原来的对话里接着做。
+const handoff = ref<BrowserBoxHandoff | null>(null);
+const handoffDeadline = computed(() => {
+  const deadline = handoff.value ? new Date(handoff.value.deadline) : null;
+  return deadline && !Number.isNaN(deadline.getTime())
+    ? deadline.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+    : "";
+});
+
+// 机器人主动请你帮忙，意图已经很清楚，不再弹二次确认，直接接管并把焦点放到画面上。
+async function startHandoff(): Promise<void> {
+  busy.value = true;
+  try {
+    const result = await setBrowserBoxTakeover(botID, true);
+    status.takeover = result.active;
+    screen.value?.focus();
+  } catch (err) {
+    toastError(err instanceof Error ? err.message : "接管失败");
+  } finally {
+    busy.value = false;
+  }
+}
+
+async function resolveHandoff(outcome: "done" | "failed"): Promise<void> {
+  const current = handoff.value;
+  if (!current) return;
+  if (outcome === "failed") {
+    const ok = await askConfirm({
+      title: "告诉机器人这一步做不了？",
+      message: `机器人会放弃「${current.reason}」这一步，换个办法或者告诉你现在卡在哪。`,
+      confirmLabel: "做不了"
+    });
+    if (!ok) return;
+  }
+  busy.value = true;
+  try {
+    await resolveBrowserBoxHandoff(botID, current.id, outcome);
+    handoff.value = null;
+    if (outcome === "done") status.takeover = false;
+    toastSuccess(outcome === "done" ? "已交还，机器人接着往下做" : "已告诉机器人这一步做不了");
+  } catch (err) {
+    toastError(err instanceof Error ? err.message : "提交失败");
+  } finally {
+    busy.value = false;
+  }
+}
+
 // 没接管时点画面：让「接管」按钮闪一下，告诉人该点哪里。
 const nudging = ref(false);
 let nudgeTimer: number | undefined;
@@ -940,6 +1004,7 @@ function connectLive(): void {
       tab?: { id?: string; url?: string; title?: string };
       page?: LivePage;
       takeover?: boolean;
+      handoff?: BrowserBoxHandoff | null;
       active?: boolean;
       message?: string;
     };
@@ -948,12 +1013,16 @@ function connectLive(): void {
       applyPage(message.page ?? message.tab);
       void loadTabs();
       status.takeover = Boolean(message.takeover);
+      handoff.value = message.handoff ?? null;
       clearFirstFrameTimer();
       firstFrameTimer = window.setTimeout(() => {
         if (socket === ws && !hasFrame.value) {
           liveNotice.value = "画面 10 秒还没出来：这个页面可能卡住了（脚本卡死或渲染进程崩溃）。可以点「刷新」、在地址栏换个网址，或者重新连接。";
         }
       }, firstFrameTimeoutMS);
+    } else if (message.type === "handoff") {
+      // 机器人一请求，开着画面的人当场看到。
+      handoff.value = message.handoff ?? null;
     } else if (message.type === "page") {
       applyPage(message.page);
     } else if (message.type === "takeover") {
@@ -1444,6 +1513,19 @@ onBeforeUnmount(() => {
 
 .browser-window.is-takeover::after {
   border-color: var(--accent);
+}
+
+/* 机器人在等你处理时整块描警示色，状态栏也跟着染色，页面上一眼能看到。 */
+.browser-window.is-handoff::after {
+  border-color: var(--warn);
+}
+
+.browser-window.is-handoff .browser-statusbar {
+  background: var(--warn-soft);
+}
+
+.browser-window.is-handoff .browser-status-dot {
+  background: var(--warn);
 }
 
 .browser-tabbar {

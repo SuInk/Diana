@@ -35,6 +35,7 @@ var browserActionVerbs = map[string]string{
 	"browser_select":     "选择下拉项",
 	"browser_wait":       "等待页面",
 	"browser_eval":       "执行脚本",
+	"browser_handoff":    "请你接管",
 	"browser_ext_tabs":   "查看标签页",
 	"browser_ext_read":   "读取页面",
 	"browser_ext_open":   "打开网页",
@@ -64,6 +65,10 @@ func browserActionEntry(event MessageEvent, runEvent agent.RunEvent) (applog.Ent
 	target := pageURL
 	if target == "" {
 		target = selector
+	}
+	// 请你接管的那一条，要看的是请你做什么。
+	if runEvent.Tool == dianaBrowserHandoffToolName {
+		target = strings.TrimSpace(inputString(runEvent.ToolInput, "reason"))
 	}
 	metadata := map[string]any{
 		"profile_id":  event.ProfileID,

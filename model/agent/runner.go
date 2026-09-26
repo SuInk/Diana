@@ -1122,6 +1122,10 @@ func (r *Runner) systemPrompt() string {
 		// 不必等他点名「用浏览器」——那条「只在明确要求时才用」把主人也挡在了外面。
 		rules = append(rules, "- 交互式浏览器（browser_open 等）是主人的常驻浏览器，带着主人的登录态。主人的请求需要登录后的页面、要在网页上操作、或 browser_render 读不到时，直接用它完成，不必等主人点名。操作顺序通常是：browser_open 打开 → browser_text 或 browser_screenshot 看清页面 → browser_click / browser_type / browser_press_key / browser_select 操作 → browser_wait 等结果；多个标签页用 browser_tabs 管理，批量提取数据用 browser_eval。截图坐标可以直接交给 browser_click 的 x/y。付款、删除、发帖、改账号设置这类不可逆操作，先说清要做什么，等主人确认再点。")
 	}
+	if hasTool("browser_handoff") {
+		// 密码和验证码不该经过聊天记录，也不该经过模型。
+		rules = append(rules, "- 碰上登录、扫码、短信或邮箱验证码、人机验证这类只能主人亲手做的一步，先在内置浏览器里把那一页打开，再用 browser_handoff 请主人接手，task 里写清楚接下来要做完什么；不要让主人把密码或验证码发到聊天里。")
+	}
 	if hasTool("image") && hasAnyTool(webSearchToolName, "browser_render", "browser_open", "browser_text") {
 		rules = append(rules, "- 用户明确要求先搜索、核验网页或读取外部资料再生成/编辑图片时，必须先完成搜索和必要的网页核验，再把已确认结果整理为完整、自包含 prompt 调用 image。")
 	}

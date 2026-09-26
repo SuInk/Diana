@@ -49,6 +49,8 @@ type Status struct {
 	// Available 表示这台机器上找得到浏览器可执行文件。找不到时 WebUI 要给出
 	// 安装指引，而不是让用户对着一个永远起不来的开关猜。
 	Available bool `json:"available"`
+	// Handoff 是机器人正在等主人处理的那一步（登录、扫码、验证码），见 handoff.go。
+	Handoff *Handoff `json:"handoff,omitempty"`
 }
 
 const (
@@ -132,6 +134,8 @@ type instance struct {
 	// 接管就能在里面操作。进程重启后标签全换了，跟着清空。
 	userTabs     map[string]struct{}
 	userTabTimer *time.Timer
+	// handoff 是机器人请主人亲手做的那一步，同一台机器人同时只有一条。
+	handoff *pendingHandoff
 	// viewers 是正在看这台机器人实时画面的连接数；降到零时 leaveTimer 开始计时。
 	viewers    int
 	leaveTimer *time.Timer
@@ -303,6 +307,10 @@ func (m *Manager) statusFor(botID string) Status {
 			status.Executable = inst.executable
 			status.StartedAt = inst.startedAt
 			status.LastError = inst.lastError
+			if inst.handoff != nil {
+				handoff := inst.handoff.info
+				status.Handoff = &handoff
+			}
 		}
 	}
 	configured := m.settings.Executable
@@ -911,7 +919,10 @@ func (m *Manager) stop(id string) {
 		inst.userTabTimer.Stop()
 		inst.userTabTimer = nil
 	}
+	// 浏览器被停掉了，等着主人在里面做的那一步也做不成了。
+	handoff := cancelHandoffLocked(inst)
 	m.mu.Unlock()
+	handoff.finish(HandoffCancelled)
 	if cmd != nil && cmd.Process != nil {
 		_ = procgroup.Kill(cmd)
 	}
