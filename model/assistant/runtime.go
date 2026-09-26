@@ -425,6 +425,8 @@ type Runtime struct {
 	// senderTurns 按会话+发送者登记已接手、还没收尾的消息，见 sender_burst.go。
 	senderTurns   map[string][]*senderTurn
 	senderTurnSeq uint64
+	// liveAbsorbers 是本进程里正在跑、手上压着连发交接的接手轮次（按入站事件 ID 计数）。
+	liveAbsorbers map[string]int
 	// recentTriggeredDeliveries 记下提醒和事件触发任务刚找过谁，见 triggered_delivery.go。
 	triggeredDeliveryMu       sync.Mutex
 	recentTriggeredDeliveries map[string]time.Time
@@ -2048,17 +2050,28 @@ func (r *Runtime) replyAndRecord(ctx context.Context, event MessageEvent, text s
 			successOutcome = "replied_direct_followup"
 		}
 	}
-	// 同一个人连发：前一条还没开口就由这一条一并回答，见 sender_burst.go。
-	// 取代先是暂定的：这一轮真的回出去了才算数，没回出去就把前一条放回去自己答。
+	// 同一个人连发：已经交给后一条的这一轮立刻收尾，不等；这一轮接过来的前几条在
+	// 它结束时结算——真的回出去了才落定，没回出去就把它们放回去自己回答。
+	// 见 sender_burst.go。
 	event, burstOutcome, burstDone := r.claimSenderBurst(ctx, event, text, successOutcome)
 	if burstDone {
 		r.enqueueHistoryImageDescriptions(event)
 		r.finishSenderTurn(event)
 		return burstOutcome, nil
 	}
+	defer func() {
+		r.settleSenderBurst(ctx, event)
+		r.finishSenderTurn(event)
+	}()
 	outcome, err := r.replyAndRecordTurn(ctx, event, text, successOutcome)
-	r.settleSenderBurst(ctx, event, err == nil && strings.HasPrefix(outcome, "replied"))
-	r.finishSenderTurn(event)
+	// 生成期间被后一条接走（发送闸门拦下，或者还没发就被接走）：按交出去收尾。
+	if handed, ok, redispatch := r.handOffSenderTurn(event, text, successOutcome, true); ok {
+		r.recordHandedOff(event, text, handed)
+		if redispatch {
+			r.redispatchHandedOff(event, text, successOutcome)
+		}
+		return handed, nil
+	}
 	return outcome, err
 }
 
@@ -4355,7 +4368,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		if images := senderDependencyImages(replyHistory, event, turnMessageIDs, firstNonEmpty(strings.TrimSpace(cfg.BotAccount), strings.TrimSpace(event.SelfID))); len(images) > 0 {
 			dependency = &senderDependencyContext{images: images, toolHint: directAgentDecision, pixels: r.chatModelReceivesImages(event)}
 			// 这一轮已经带着那几张图在答了，纯图那条自己的回复就不必再发。
-			r.supersedeDependencyImageTurns(event, images)
+			r.supersedeDependencyImageTurns(ctx, event, images)
 		}
 		stableHistory, crossGroupTail := r.stableGroupHistory(ctx, event, cfg, replyHistory, directAgentDecision, turnMessageIDs)
 		messages = append(messages, stableCheckpoint...)
@@ -4512,6 +4525,9 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			Priority: llm.MessagePrioritySystem,
 		})
 	}
+	// 点名承接哪几条连发由这里决定，同时把还卡在路由里的那几条接过来：提示词里
+	// 点名的和交接过来的是同一批（见 sender_burst.go）。
+	event.carryOver, event.carryOverSet = r.claimCarryOver(ctx, event, replyHistory), true
 	if decorationPrompt := replyDecorationPrompt(cfg, event, replyHistory); decorationPrompt != "" {
 		messages = append(messages, llm.Message{
 			Role:     llm.RoleSystem,
@@ -6970,6 +6986,8 @@ func (r *Runtime) sendWithMessageIDs(ctx context.Context, event MessageEvent, re
 // 处理，只按平台长度兜底。
 func (r *Runtime) sendErrorNoticeWithEvidence(ctx context.Context, event MessageEvent, text string) ([]string, bool, error) {
 	cfg := r.effectiveConfigForEvent(event)
+	// 错误提示不是模型对这条消息的回答，不能让连发交接据此落定（见 sender_burst.go）。
+	ctx = withoutCarryOverDelivery(ctx)
 	// 错误提示是对当前这条消息的回应，引用照旧、不额外 @：真正要点名的是订阅推送。
 	messageIDs, err := r.deliverChunks(ctx, event, splitReply(text, notificationChunkSize), cfg, outboundDecoration{ReplyToCurrent: true})
 	if err != nil {
@@ -7625,6 +7643,7 @@ func (r *Runtime) sendForwardNodesWithResult(ctx context.Context, event MessageE
 		return nil, err
 	}
 	outboundTurnFromContext(ctx).recordSentForward(len(nodes))
+	r.noteSenderTurnDelivered(ctx, event)
 	return result, nil
 }
 

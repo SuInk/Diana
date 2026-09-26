@@ -187,6 +187,11 @@ func (r *Runtime) mergeIntoActiveDirectReply(ctx context.Context, event MessageE
 	if key == "" || strings.TrimSpace(event.MessageID) == "" {
 		return "", false
 	}
+	// 已经交给后一条的消息不再当「补充」并进任何一轮：交接会替它结算，并进去的话
+	// 接手那一轮没回出去时就没人把它放回来了。
+	if _, handedOff := r.senderTurnSupersededBy(event); handedOff {
+		return "", false
+	}
 	r.replyInterruptMu.Lock()
 	active := r.activeDirectReplies[key]
 	if active == nil || !active.accepting || active.root.MessageID == event.MessageID || time.Since(active.startedAt) > directReplyMergeRetention {

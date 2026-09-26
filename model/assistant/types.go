@@ -216,9 +216,11 @@ type MessageEvent struct {
 	// 机器人来的，哪怕正文里没有 @、引用和名字。空转判断靠它才看得见相关度分支放
 	// 行的那些回复，见 botReplyLoopCandidate。
 	routingDirected bool
-	// burstAbsorbed 是这一轮取代掉的、同一个人更早连发的消息（见 sender_burst.go）。
-	// 提示词按它点名承接，保证被取代的每一条都真的被提到。
-	burstAbsorbed          []MessageEvent
+	// carryOver 是这一轮要点名承接的、同一个人更早连发还没回的消息，由回复构建时
+	// 的 claimCarryOver 决定（见 sender_burst.go）；carryOverSet 区分「算过、为空」
+	// 和「没算过」。
+	carryOver              []MessageEvent
+	carryOverSet           bool
 	replyDeliveryMode      replyDeliveryMode
 	replyLineBreakMode     replyLineBreakMode
 	replyAuditImageContext string

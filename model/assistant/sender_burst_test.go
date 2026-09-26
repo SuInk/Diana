@@ -183,32 +183,21 @@ func TestSenderBurstDoesNotCancelTurnAlreadySending(t *testing.T) {
 	if err := runtime.interruptedReplyError(ctx, first); err != nil {
 		t.Fatalf("first part should pass the gate: %v", err)
 	}
-	if absorbed := runtime.supersedeEarlierSenderTurns(second); len(absorbed) != 0 {
-		t.Fatalf("a turn that already started sending was superseded: %#v", absorbed)
+	runtime.claimCarryOver(context.Background(), second, runtime.contextHistory(second))
+	if _, superseded := runtime.senderTurnSupersededBy(first); superseded {
+		t.Fatal("a turn that already started sending was taken over")
 	}
 	if err := runtime.interruptedReplyError(ctx, first); err != nil {
 		t.Fatalf("remaining parts must keep going: %v", err)
 	}
 }
 
-// mergeRecordingInboundStore 在内存队列上补一个追发合并的落库，发送前的持久化检查照读。
-type mergeRecordingInboundStore struct {
-	*memoryInboundEventStore
-}
-
-func (s mergeRecordingInboundStore) RecordInboundEventReplyMerge(_ context.Context, event MessageEvent, rootTurnID string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.superseded[event.MessageID] = rootTurnID
-	return nil
-}
-
 // 先发图、再问「这是什么」：文字那一轮把图当候选依赖图一起答了，图自己那一轮
-// 哪怕已经在生成，也让位；文字那一轮回出去之后 superseded_by 才落库。
+// 哪怕已经在生成，也让位；文字那一轮回出去之后交接才落定。
 func TestDependencyImageTurnIsSupersededByTextTurn(t *testing.T) {
 	provider := &scriptedReplyProvider{description: "一只橘猫"}
 	runtime, question := dependencyTestRuntime(t, provider, false, nil)
-	store := mergeRecordingInboundStore{newMemoryInboundEventStore()}
+	store := newHandoffInboundStore()
 	runtime.SetInboundEventStore(store)
 	photo := historyEventByID(t, runtime, question, "photo-1")
 	runtime.noteSenderTurnArrival(photo)
@@ -220,6 +209,9 @@ func TestDependencyImageTurnIsSupersededByTextTurn(t *testing.T) {
 	}
 	if turn, superseded, _ := store.InboundEventSuperseded(context.Background(), photo); !superseded || turn != "turn-q" {
 		t.Fatalf("superseded_by was not persisted for the image message: %q %v", turn, superseded)
+	}
+	if state := store.handoffStateOf("photo-1"); state != "final" {
+		t.Fatalf("handoff should be final after the text turn replied, got %q", state)
 	}
 	// 图那一轮这时才走到回复入口：取代已经落定，它收住。
 	if outcome, err := runtime.replyAndRecord(context.Background(), photo, "", "replied"); err != nil || outcome != "superseded_follow_up" {
@@ -335,6 +327,13 @@ func TestRepositoryWatchFollowUpSkipsBotsOwnNewIssue(t *testing.T) {
 	later.Issues[0].UpdatedAt = now.Add(3 * time.Minute)
 	if runtime.repositoryWatchChangeOnlyOwnRecentWrites("SuInk/Diana", later, now.Add(4*time.Minute)) {
 		t.Fatal("someone else's comment after the bot's write must still get a follow-up")
+	}
+	// 别人紧跟着（十秒后）评论，也不能被当成机器人自己的那次写入。
+	quick := commented
+	quick.Issues = []repositoryWatchIssue{commented.Issues[0]}
+	quick.Issues[0].UpdatedAt = time.Now().Add(10 * time.Second)
+	if runtime.repositoryWatchChangeOnlyOwnRecentWrites("SuInk/Diana", quick, time.Now().Add(20*time.Second)) {
+		t.Fatal("a comment ten seconds after the bot's write must still get a follow-up")
 	}
 	// 机器人刚建的 Issue 建完又被别人动过，同样照常跟评。
 	touched := own

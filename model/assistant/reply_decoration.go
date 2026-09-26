@@ -4,7 +4,6 @@
 package assistant
 
 import (
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -98,28 +97,16 @@ func (r *Runtime) autoReferenceBackloggedReply(event MessageEvent) bool {
 	return false
 }
 
-// pendingEarlierMessage 找出发送者紧挨着当前消息之前、机器人还没有回复过的
-// 那条消息。追发合并(superseded_follow_up)后,合并回复只有一条,视觉上没有
-// 任何锚点指向前一条——发的人会觉得前一条被跳过了。找到这条消息后提示模型
-// 承接并引用它。中间隔着机器人发言或别人发言就说明不是连发,不算。
-//
-// 只发了一张图、没有文字的那条也算:图文合并去掉以后,「先发图、再说话」是两条
-// 消息,前一条正是这种。表情不算,那多半只是个反应。
-func pendingEarlierMessage(history []MessageEvent, event MessageEvent) (MessageEvent, bool) {
-	earlier := pendingEarlierMessages(history, event, 1)
-	if len(earlier) == 0 {
-		return MessageEvent{}, false
-	}
-	return earlier[0], true
-}
-
-// pendingEarlierMessagesLimit 是一轮最多点名承接几条连发。连发取代可以一环套一环
-// （第二条取代第一条、第三条又取代第二条），最后作答的那一轮要把它们都接住。
+// pendingEarlierMessagesLimit 是一轮最多点名承接几条连发。
 const pendingEarlierMessagesLimit = 3
 
-// pendingEarlierMessages 从当前消息往前，取同一个人连着发、机器人还没回的消息，
-// 最多 limit 条，按时间从旧到新排。遇到别人发言、机器人发言或者一条既没字也没图的
-// 消息就停。
+// pendingEarlierMessages 找出发送者紧挨着当前消息之前、机器人还没回过的那几条，最多
+// limit 条，按时间从旧到新排。追发合并或连发交接之后回复只有一条，视觉上没有任何锚点
+// 指向前面几条，发的人会觉得被跳过了；找到之后提示模型先承接它们。遇到别人发言、
+// 机器人发言或者一条既没字也没图的消息就停，不算连发。
+//
+// 只发了一张图、没有文字的那条也算：图文合并去掉以后，「先发图、再说话」是两条
+// 消息，前一条正是这种。表情不算，那多半只是个反应。
 func pendingEarlierMessages(history []MessageEvent, event MessageEvent, limit int) []MessageEvent {
 	currentID := strings.TrimSpace(event.MessageID)
 	var picked []MessageEvent
@@ -266,29 +253,13 @@ func replyDecorationPrompt(cfg BotConfig, event MessageEvent, history []MessageE
 	return strings.TrimSpace(builder.String())
 }
 
-// withBurstAbsorbed 把这一轮取代掉的消息并进点名名单：历史是重新取过的，未必和
-// 取代时看到的一模一样，被取代的每一条都必须点到。按时间从旧到新排。
-func withBurstAbsorbed(pending, absorbed []MessageEvent) []MessageEvent {
-	if len(absorbed) == 0 {
-		return pending
-	}
-	seen := make(map[string]bool, len(pending)+len(absorbed))
-	merged := make([]MessageEvent, 0, len(pending)+len(absorbed))
-	for _, item := range append(append([]MessageEvent(nil), absorbed...), pending...) {
-		id := strings.TrimSpace(item.MessageID)
-		if id != "" && seen[id] {
-			continue
-		}
-		seen[id] = true
-		merged = append(merged, item)
-	}
-	sort.SliceStable(merged, func(i, j int) bool { return merged[i].Time < merged[j].Time })
-	return merged
-}
-
 // pendingEarlierMessagesPrompt 点出同一个人连发、还没回的那几条，让这一轮一起接住。
 func pendingEarlierMessagesPrompt(cfg BotConfig, event MessageEvent, history []MessageEvent) string {
-	earlier := withBurstAbsorbed(pendingEarlierMessages(history, event, pendingEarlierMessagesLimit), event.burstAbsorbed)
+	// 回复构建时算过的以那一份为准：它去掉了已经交给别的轮次、或者自己正在回答的消息。
+	earlier := event.carryOver
+	if !event.carryOverSet {
+		earlier = pendingEarlierMessages(history, event, pendingEarlierMessagesLimit)
+	}
 	if len(earlier) == 0 {
 		return ""
 	}

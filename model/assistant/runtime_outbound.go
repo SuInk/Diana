@@ -176,6 +176,7 @@ func (r *Runtime) sendOutgoingWithResult(ctx context.Context, event MessageEvent
 	// 同一条入站事件重跑时，已经成功送达的这一步不再发第二遍。
 	stepKey, replayedMessageID, alreadyDelivered := r.claimOutboundStep(ctx, outgoingMessageFingerprint(msg))
 	if alreadyDelivered {
+		r.noteSenderTurnDelivered(ctx, event)
 		return replayedOutboundResult(replayedMessageID), nil
 	}
 	r.recordInboundDelivery(outboundTurnID(ctx), event, OutboundDeliveryGenerated, "", "")
@@ -215,6 +216,7 @@ func (r *Runtime) sendOutgoingWithResult(ctx context.Context, event MessageEvent
 		r.rememberImageModels(event, msg, messageID)
 	}
 	outboundTurnFromContext(ctx).recordSentMessage(msg)
+	r.noteSenderTurnDelivered(ctx, event)
 	if !r.rememberTelegramPhotoResults(ctx, event, msg, result) {
 		r.rememberOutgoingWithMessageID(ctx, event, msg, messageID)
 	}

@@ -26,9 +26,11 @@ import (
 // 动静。一轮里只要混着别人的动态（别人的 Issue、提交、发版、星标），跟评也照常。
 const (
 	ownRepositoryWriteWindow = 10 * time.Minute
-	// ownRepositoryWriteSlack 容忍本机时钟和 GitHub 时间戳之间的偏差：写入请求
-	// 返回之后才登记，GitHub 记下的更新时间本来就不会更晚，留一点余量足够。
-	ownRepositoryWriteSlack = 30 * time.Second
+	// ownRepositoryWriteSlack 是认定「最近一次动静就是这次写入」的容差。GitHub 返回
+	// 了更新时间就按它比，本机时间只是兜底（写入请求返回之后才登记，GitHub 那边的
+	// 时间本来就不会更晚）。容差要紧：别人在机器人写完几十秒内接着评论，也得算作
+	// 新动静。
+	ownRepositoryWriteSlack = 5 * time.Second
 )
 
 func ownRepositoryWriteKey(repository string, number int) string {
@@ -39,9 +41,17 @@ func ownRepositoryWriteKey(repository string, number int) string {
 	return repository + "#" + strconv.Itoa(number)
 }
 
-// noteOwnRepositoryWrite 记下机器人刚写过的 Issue / PR 编号。
+// noteOwnRepositoryWrite 记下机器人刚写过的 Issue / PR 编号，时间用本机时间。
 func (r *Runtime) noteOwnRepositoryWrite(repository string, numbers ...int) {
+	r.noteOwnRepositoryWriteAt(repository, time.Now(), numbers...)
+}
+
+// noteOwnRepositoryWriteAt 按给定的写入时间登记（GitHub 返回了更新时间时用它）。
+func (r *Runtime) noteOwnRepositoryWriteAt(repository string, at time.Time, numbers ...int) {
 	now := time.Now()
+	if at.IsZero() {
+		at = now
+	}
 	r.ownRepositoryWriteMu.Lock()
 	defer r.ownRepositoryWriteMu.Unlock()
 	if r.ownRepositoryWrites == nil {
@@ -54,7 +64,7 @@ func (r *Runtime) noteOwnRepositoryWrite(repository string, numbers ...int) {
 	}
 	for _, number := range numbers {
 		if key := ownRepositoryWriteKey(repository, number); key != "" {
-			r.ownRepositoryWrites[key] = now
+			r.ownRepositoryWrites[key] = at
 		}
 	}
 }
@@ -69,7 +79,7 @@ func (r *Runtime) ownRepositoryWriteIsLatest(repository string, number int, upda
 	r.ownRepositoryWriteMu.Lock()
 	at, ok := r.ownRepositoryWrites[key]
 	r.ownRepositoryWriteMu.Unlock()
-	if !ok || now.Sub(at) > ownRepositoryWriteWindow {
+	if !ok || now.Sub(at) > ownRepositoryWriteWindow+ownRepositoryWriteSlack {
 		return false
 	}
 	return updatedAt.IsZero() || !updatedAt.After(at.Add(ownRepositoryWriteSlack))
@@ -80,12 +90,29 @@ func (r *Runtime) noteOwnRepositoryWriteResult(result repositoryIssueResult) {
 	if r == nil || strings.TrimSpace(result.Repository) == "" {
 		return
 	}
-	numbers := append([]int{result.RequestedNumber}, result.RequestedNumbers...)
-	if result.Issue != nil {
-		numbers = append(numbers, result.Issue.Number)
+	// GitHub 返回了这次写入之后的更新时间，就按它登记，比本机时间准。
+	if result.Issue != nil && result.Issue.Number > 0 && !result.Issue.UpdatedAt.IsZero() {
+		r.noteOwnRepositoryWriteAt(result.Repository, result.Issue.UpdatedAt, result.Issue.Number)
+	} else if result.Issue != nil {
+		r.noteOwnRepositoryWrite(result.Repository, result.Issue.Number)
 	}
+	numbers := append([]int{result.RequestedNumber}, result.RequestedNumbers...)
 	for _, item := range result.Items {
+		if !item.UpdatedAt.IsZero() {
+			r.noteOwnRepositoryWriteAt(result.Repository, item.UpdatedAt, item.Number)
+			continue
+		}
 		numbers = append(numbers, item.Number)
+	}
+	if result.Issue != nil {
+		// 上面已经按 GitHub 时间登记过的编号别再被本机时间覆盖。
+		filtered := numbers[:0]
+		for _, number := range numbers {
+			if number != result.Issue.Number {
+				filtered = append(filtered, number)
+			}
+		}
+		numbers = filtered
 	}
 	r.noteOwnRepositoryWrite(result.Repository, numbers...)
 }

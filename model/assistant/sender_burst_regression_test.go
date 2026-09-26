@@ -5,11 +5,9 @@ package assistant
 
 import (
 	"context"
-	"errors"
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/SuInk/diana/model/llm"
 )
@@ -103,65 +101,6 @@ func (p *gatedBurstProvider) Generate(ctx context.Context, req llm.GenerateReque
 	return p.burstReplyProvider.Generate(ctx, req)
 }
 
-// 取代是暂定的：后一条没回出去（这里是生成出错），前一条被放回去自己回答；
-// 后一条回出去了，前一条才收住。
-func TestSenderBurstSupersedeIsProvisional(t *testing.T) {
-	for _, tc := range []struct {
-		name      string
-		laterErr  error
-		wantFirst string
-		wantSends int
-	}{
-		// 后一条出错时只发了一句错误说明，那不是对前一条的回答：前一条自己回。
-		{name: "later fails", laterErr: errors.New("model down"), wantFirst: "replied", wantSends: 2},
-		{name: "later replies", laterErr: nil, wantFirst: "superseded_follow_up", wantSends: 1},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			provider := &gatedBurstProvider{entered: make(chan struct{}), release: make(chan error, 1)}
-			runtime, channel := burstTestRuntime(provider)
-			first := directedGroupMessage("20111", "10001", "帮我看看这个报错")
-			second := directedGroupMessage("20112", "10001", "就是登录那个")
-			first.Time, second.Time = 1_800_000_000, 1_800_000_003
-			arriveTogether(runtime, first, second)
-
-			secondDone := make(chan string, 1)
-			go func() {
-				outcome, _ := runtime.replyAndRecord(context.Background(), second, "就是登录那个", "replied")
-				secondDone <- outcome
-			}()
-			select {
-			case <-provider.entered:
-			case <-time.After(5 * time.Second):
-				t.Fatal("later turn never started generating")
-			}
-			firstDone := make(chan string, 1)
-			go func() {
-				outcome, _ := runtime.replyAndRecord(context.Background(), first, "帮我看看这个报错", "replied")
-				firstDone <- outcome
-			}()
-			// 前一条在等后一条的结果，不会自己先开口。
-			select {
-			case outcome := <-firstDone:
-				t.Fatalf("earlier turn finished before the later one settled: %q", outcome)
-			case <-time.After(200 * time.Millisecond):
-			}
-			provider.release <- tc.laterErr
-			<-secondDone
-			select {
-			case outcome := <-firstDone:
-				if outcome != tc.wantFirst {
-					t.Fatalf("earlier outcome=%q, want %q", outcome, tc.wantFirst)
-				}
-			case <-time.After(5 * time.Second):
-				t.Fatal("earlier turn never resumed")
-			}
-			if sent := channel.sentSnapshot(); len(sent) != tc.wantSends {
-				t.Fatalf("sends=%d want %d: %#v", len(sent), tc.wantSends, sent)
-			}
-		})
-	}
-}
-
 // 前一条明确叫了机器人，后一条只是随口的主动接话：不能拿接话取代那条直呼。
 func TestSenderBurstChatInNeverSupersedesDirectedMessage(t *testing.T) {
 	provider := &burstReplyProvider{}
@@ -212,9 +151,8 @@ func TestSenderBurstLeavesResolverMessagesAlone(t *testing.T) {
 	asking.GroupID, asking.Time = link.GroupID, 1_800_000_010
 	laterLink := textEvent("20134", "10001", "比如这个 https://www.bilibili.com/video/BV1xx411c7mD", 1_800_000_012)
 	arriveTogether(runtime, asking, laterLink)
-	if _, _, done := runtime.claimSenderBurst(context.Background(), laterLink, laterLink.RawMessage, "replied"); done {
-		t.Fatal("link turn must not stop at the burst gate")
-	}
+	runtime.enterSenderTurnReply(laterLink, false)
+	runtime.claimCarryOver(context.Background(), laterLink, runtime.contextHistory(laterLink))
 	if _, superseded := runtime.senderTurnSupersededBy(asking); superseded {
 		t.Fatal("a link-resolver turn must not supersede an earlier question")
 	}
