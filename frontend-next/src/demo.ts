@@ -792,7 +792,14 @@ function demoWorkspaceOverview() {
 }
 
 function demoWorkspaceListing(rel: string): Response {
-  if (rel && !demoWorkspaceNodes.some((node) => node.path === rel && node.kind === "dir")) return json({ error: "找不到这个路径" }, 404);
+  const isAreaDir = rel === "keep" || demoWorkspaceAgedAreas.some((area) => area.path === rel);
+  if (rel && !demoWorkspaceNodes.some((node) => node.path === rel && node.kind === "dir")) {
+    // 和后端一样：分区目录还没建出来时当空目录，其余找不到的才报错。
+    if (isAreaDir) return json({ root: demoWorkspaceRoot, path: rel, exists: true, entries: [], missing: true, area: demoWorkspaceAreaHint(rel) });
+    return json({ error: "找不到这个路径" }, 404);
+  }
+  // host-logs 是指到工作区外面的链接：进去之后能看，不能删。
+  const external = demoWorkspaceUnder(rel, "host-logs") || undefined;
   const entries = demoWorkspaceNodes
     .filter((node) => demoWorkspaceParent(node.path) === rel)
     .map((node) => ({
@@ -809,11 +816,12 @@ function demoWorkspaceListing(rel: string): Response {
       saved_at: node.description ? node.modified : undefined
     }))
     .sort((a, b) => ((a.kind === "dir") !== (b.kind === "dir") ? (a.kind === "dir" ? -1 : 1) : a.name.toLowerCase().localeCompare(b.name.toLowerCase())));
-  return json({ root: demoWorkspaceRoot, path: rel, exists: true, entries, area: demoWorkspaceAreaHint(rel) });
+  return json({ root: demoWorkspaceRoot, path: rel, exists: true, entries, external, area: demoWorkspaceAreaHint(rel) });
 }
 
 /** 和后端一样：删除是整个挪进回收站下以时间命名的目录。 */
-function demoWorkspaceDelete(path: string): { trash_path: string } | null {
+function demoWorkspaceDelete(path: string): { trash_path: string } | { error: string } | null {
+  if (path.startsWith("host-logs/")) return { error: `${path} 经符号链接到了工作目录外面：外面的东西这里只能看和下载，不能删除` };
   if (!path || path.startsWith(".trash") || path === "keep") return null;
   const target = demoWorkspaceNodes.find((node) => node.path === path);
   if (!target) return null;
@@ -917,6 +925,7 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
   if (path === "/api/workspace/files") return json(demoWorkspaceOverview());
   if (path === "/api/workspace/delete" && method === "POST") {
     const result = demoWorkspaceDelete(String(body.path ?? "").replace(/^\/+|\/+$/g, ""));
+    if (result && "error" in result) return json(result, 400);
     return result ? json(result) : json({ error: "文件不存在，或者这个位置不能删除" }, 400);
   }
   if (path === "/api/workspace/trash/empty" && method === "POST") {

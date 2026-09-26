@@ -1989,6 +1989,10 @@ export interface WorkspaceListing {
   exists: boolean;
   entries: WorkspaceEntry[];
   truncated?: boolean;
+  /** 分区目录还没建出来（Agent 第一次往这里写文件时才创建），当空目录显示 */
+  missing?: boolean;
+  /** 当前目录经符号链接到了工作区外面：能看能下载，不能删 */
+  external?: boolean;
   /** 根目录、编码仓库这类不按分区管的目录没有 */
   area?: WorkspaceAreaHint;
 }

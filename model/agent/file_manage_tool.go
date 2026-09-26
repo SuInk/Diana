@@ -319,11 +319,107 @@ func TrashWorkspacePath(cfg Config, rel string, now time.Time) (string, error) {
 	if isTrashPath(clean) {
 		return "", errTrashPath(clean)
 	}
-	if clean == WorkspaceKeepDir {
-		return "", fmt.Errorf("%s 是长期保存区的根目录，不能整个删除", clean)
+	canonical, err := guardAdminTrashTarget(root, clean)
+	if err != nil {
+		return "", err
 	}
 	trashRel, _, err := moveToTrash(root, clean, now)
-	return trashRel, err
+	if err != nil {
+		return "", adminTrashError(root, clean, err)
+	}
+	// moveToTrash 按请求里的写法清长期区索引；经别名或大小写不同的写法删掉的长期区文件，
+	// 再按真实位置清一次，免得索引里留着指向已删除文件的条目。
+	if canonical != clean {
+		_, _ = removeKeepEntries(root, canonical)
+	}
+	return trashRel, nil
+}
+
+// adminTrashError 把 os.Root 报的英文错误翻成管理员看得懂的话。中途经链接走出工作目录
+// 时 os.Root 只说一句 path escapes from parent，页面上原样弹出来没人看得懂。
+func adminTrashError(workRoot, clean string, err error) error {
+	if errors.Is(err, fs.ErrNotExist) {
+		return missingFileError(workRoot, clean, err)
+	}
+	if strings.Contains(err.Error(), "path escapes from parent") {
+		return fmt.Errorf("%s 经符号链接到了工作目录外面：外面的东西这里只能看和下载，不能删除", clean)
+	}
+	return fmt.Errorf("没能把 %s 挪进回收站：%w", clean, err)
+}
+
+// guardAdminTrashTarget 挡住不能整个删掉的目录：工作目录本身、keep/、keep/<机器人>/、
+// .trash/ 以及回收站里面的东西。只比字面不够：大小写不敏感的文件系统上 Keep 就是 keep，
+// 工作目录里一个 loop -> . 的链接也能让 loop/keep 指到长期区根目录。所以经 os.Root 取
+// 目标和它每一层上级的真实文件，用 os.SameFile 比。要挪的这一项自己是链接时，挪走的是
+// 链接本身，不用比它指向哪里。
+//
+// 返回长期区里的规范路径（keep/<机器人>/...），给清索引用；不在长期区时原样返回 clean。
+func guardAdminTrashTarget(workRoot, clean string) (string, error) {
+	handle, err := os.OpenRoot(workRoot)
+	if err != nil {
+		return "", err
+	}
+	defer handle.Close()
+	info, err := handle.Lstat(filepath.FromSlash(clean))
+	if err != nil {
+		return "", adminTrashError(workRoot, clean, err)
+	}
+	rootInfo, err := handle.Stat(".")
+	if err != nil {
+		return "", err
+	}
+	keepInfo, keepErr := handle.Stat(WorkspaceKeepDir)
+	trashInfo, trashErr := handle.Stat(WorkspaceTrashDir)
+	same := func(a os.FileInfo, b os.FileInfo, bErr error) bool {
+		return a != nil && bErr == nil && os.SameFile(a, b)
+	}
+	if info.Mode()&fs.ModeSymlink == 0 && info.IsDir() {
+		switch {
+		case os.SameFile(info, rootInfo):
+			return "", errors.New("不能对整个工作目录这么做")
+		case same(info, keepInfo, keepErr):
+			return "", fmt.Errorf("%s 是长期保存区的根目录，不能整个删除", clean)
+		case same(info, trashInfo, trashErr):
+			return "", errTrashPath(clean)
+		}
+	}
+	// 逐层往上看：落在回收站里就拒绝；上一层是 keep/ 而自己是目录，就是某台机器人的
+	// 长期区根目录；上面某一层是 keep/<机器人>/，据此算出规范路径。
+	canonical := clean
+	var keepBots map[string]os.FileInfo
+	if keepErr == nil {
+		keepBots = map[string]os.FileInfo{}
+		if dir, err := handle.Open(WorkspaceKeepDir); err == nil {
+			entries, _ := dir.ReadDir(-1)
+			dir.Close()
+			for _, entry := range entries {
+				if bot, err := handle.Stat(path.Join(WorkspaceKeepDir, entry.Name())); err == nil && bot.IsDir() {
+					keepBots[entry.Name()] = bot
+				}
+			}
+		}
+	}
+	for ancestor := path.Dir(clean); ancestor != "."; ancestor = path.Dir(ancestor) {
+		dirInfo, err := handle.Stat(filepath.FromSlash(ancestor))
+		if err != nil {
+			continue
+		}
+		if same(dirInfo, trashInfo, trashErr) {
+			return "", errTrashPath(clean)
+		}
+		if ancestor == path.Dir(clean) && same(dirInfo, keepInfo, keepErr) && info.Mode()&fs.ModeSymlink == 0 && info.IsDir() {
+			return "", fmt.Errorf("%s 是一台机器人的长期保存区根目录，不能整个删除；里面的文件可以单独删", clean)
+		}
+		if canonical == clean {
+			for name, bot := range keepBots {
+				if os.SameFile(dirInfo, bot) {
+					canonical = path.Join(WorkspaceKeepDir, name, strings.TrimPrefix(clean, ancestor+"/"))
+					break
+				}
+			}
+		}
+	}
+	return canonical, nil
 }
 
 func (t *ManageFilesTool) transfer(action, rel, to string, overwrite bool, description string) (string, error) {

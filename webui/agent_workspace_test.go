@@ -433,6 +433,86 @@ func TestAgentWorkspaceDeleteMovesToTrashAndEmptyTrash(t *testing.T) {
 	}
 }
 
+// 不能整个删的目录（keep/、keep/<机器人>/、.trash/）按真实文件认，不按字面：大小写不
+// 敏感的文件系统上 Keep 就是 keep，工作区里 loop -> . 的链接也能绕到长期区根目录。经
+// 别名删掉的长期区文件，索引按真实位置清。
+func TestAgentWorkspaceDeleteGuardsAliasesOfProtectedRoots(t *testing.T) {
+	root := t.TempDir()
+	if _, err := agent.WriteWorkspaceBytes(agent.Config{WorkDir: root}, "keep/poster.txt", []byte("keep me"), agent.WorkspaceWriteOptions{Keep: &agent.KeepMeta{BotID: "bot-a", Description: "海报"}}); err != nil {
+		t.Fatal(err)
+	}
+	writeWorkspaceTestFile(t, root, ".trash/20260901-000000/b.txt", "bye")
+	if err := os.Symlink(".", filepath.Join(root, "loop")); err != nil {
+		t.Fatal(err)
+	}
+	router := newAgentWorkspaceTestRouter(t, root)
+	for _, rel := range []string{"Keep", "KEEP/bot-a", ".Trash", "loop/keep", "loop/keep/bot-a", "loop/.trash", "loop/.trash/20260901-000000", "loop/.trash/20260901-000000/b.txt"} {
+		response := deleteWorkspacePath(router, rel)
+		if response.Code == http.StatusOK {
+			t.Fatalf("delete %s 放行了: %s", rel, response.Body)
+		}
+	}
+	// 大小写不敏感的文件系统上（macOS、Windows 默认），Keep 真的能打开，必须是被规则挡下
+	// 而不是恰好找不到。
+	if _, err := os.Stat(filepath.Join(root, "KEEP")); err == nil {
+		if response := deleteWorkspacePath(router, "Keep"); response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "长期保存区的根目录") {
+			t.Fatalf("case variant: %d %s", response.Code, response.Body)
+		}
+	}
+	for _, rel := range []string{"keep/bot-a/poster.txt", ".trash/20260901-000000/b.txt"} {
+		if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(rel))); err != nil {
+			t.Fatalf("%s 被挪走了: %v", rel, err)
+		}
+	}
+	if response := deleteWorkspacePath(router, "loop/keep/bot-a/poster.txt"); response.Code != http.StatusOK {
+		t.Fatalf("delete via alias: %d %s", response.Code, response.Body)
+	}
+	if entries, _ := agent.LoadKeepIndex(root, "bot-a"); len(entries) != 0 {
+		t.Fatalf("经别名删除后长期区索引没清: %+v", entries)
+	}
+}
+
+// 经外部链接进到工作区外面的目录：列表标 external，删除给一句中文说明，不再弹英文原话。
+func TestAgentWorkspaceExternalDirectoryIsReadOnly(t *testing.T) {
+	parent := t.TempDir()
+	root := filepath.Join(parent, "workspace")
+	writeStorageSample(t, filepath.Join(parent, "outside", "report.txt"), 10)
+	writeWorkspaceTestFile(t, root, "notes/a.txt", "note")
+	if err := os.Symlink(filepath.Join(parent, "outside"), filepath.Join(root, "outside-link")); err != nil {
+		t.Fatal(err)
+	}
+	router := newAgentWorkspaceTestRouter(t, root)
+	if listing := listWorkspaceForTest(t, router, "outside-link"); !listing.External {
+		t.Fatalf("listing through outside link should be external: %+v", listing)
+	}
+	if listing := listWorkspaceForTest(t, router, "notes"); listing.External {
+		t.Fatalf("ordinary directory marked external: %+v", listing)
+	}
+	response := deleteWorkspacePath(router, "outside-link/report.txt")
+	if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "工作目录外面") || strings.Contains(response.Body.String(), "escapes") {
+		t.Fatalf("delete outside file: %d %s", response.Code, response.Body)
+	}
+	if _, err := os.Stat(filepath.Join(parent, "outside", "report.txt")); err != nil {
+		t.Fatalf("工作区外的文件被动了: %v", err)
+	}
+}
+
+// 概览里分区卡片总在，目录还没建出来时点进去是「还没有文件」，不是 404。
+func TestAgentWorkspaceMissingAreaDirectoryIsEmpty(t *testing.T) {
+	root := t.TempDir()
+	writeWorkspaceTestFile(t, root, "notes.md", "# hi")
+	router := newAgentWorkspaceTestRouter(t, root)
+	for _, rel := range []string{"downloads", "keep", ".trash", ".agent-browser"} {
+		listing := listWorkspaceForTest(t, router, rel)
+		if !listing.Missing || len(listing.Entries) != 0 || listing.Area == nil {
+			t.Fatalf("%s: %+v", rel, listing)
+		}
+	}
+	if recorder := getWorkspace(t, router, "/api/system/workspace", "no-such-dir"); recorder.Code != http.StatusNotFound {
+		t.Fatalf("unknown directory should still be 404, got %d", recorder.Code)
+	}
+}
+
 // 文件页的接口和其他管理接口一样过 WebUI 登录：没登录一律 401，文件原样不动。
 func TestAgentWorkspaceRequiresConsoleAuthentication(t *testing.T) {
 	auth := NewAuthManager(&memoryAuthStore{})

@@ -122,6 +122,12 @@ type AgentWorkspaceListing struct {
 	Exists    bool                  `json:"exists"`
 	Entries   []AgentWorkspaceEntry `json:"entries"`
 	Truncated bool                  `json:"truncated,omitempty"`
+	// Missing 表示这是个分区目录、只是还没建出来：概览里总有它的卡片，点进来该是「还没有
+	// 文件」而不是报错。
+	Missing bool `json:"missing,omitempty"`
+	// External 表示当前目录是经符号链接走到了工作区外面：照常能看能下载，但删除经
+	// os.Root 走不出去，页面上不给删除按钮。
+	External bool `json:"external,omitempty"`
 	// Area 是当前目录所在的分区和它的清理规则；根目录和编码仓库这类不按分区管的为空。
 	Area *agent.WorkspaceAreaHint `json:"area,omitempty"`
 }
@@ -158,6 +164,11 @@ func listAgentWorkspace(root, rel string) (AgentWorkspaceListing, error) {
 	listing.Exists = true
 	full := filepath.Join(root, rel)
 	info, err := os.Stat(full)
+	if errors.Is(err, fs.ErrNotExist) && agent.IsWorkspaceAreaDir(rel) {
+		listing.Missing = true
+		listing.Area = agent.WorkspaceAreaOf(filepath.ToSlash(rel))
+		return listing, nil
+	}
 	if err != nil {
 		return listing, err
 	}
@@ -170,6 +181,7 @@ func listAgentWorkspace(root, rel string) (AgentWorkspaceListing, error) {
 	}
 	protected := agent.WorkspaceProtectedFunc(agent.Config{WorkDir: root})
 	resolvedRoot, _ := filepath.EvalSymlinks(root)
+	listing.External = rel != "." && workspaceLinkEscapes(resolvedRoot, full)
 	keep := agent.KeepEntriesIn(root, rel)
 	for _, item := range items {
 		child := path.Join(filepath.ToSlash(rel), item.Name())

@@ -104,6 +104,22 @@ func WorkspaceAreaOf(rel string) *WorkspaceAreaHint {
 	return &WorkspaceAreaHint{Key: "other", Label: workspaceOtherLabel, Retention: workspaceOtherRetention}
 }
 
+// IsWorkspaceAreaDir 报告 rel 是不是某个分区的根目录（keep、downloads、outputs、tmp、
+// .agent-browser、.trash）。概览里这些分区总是有卡片，目录还没建出来时点进去也该是
+// 「还没有文件」，而不是找不到。
+func IsWorkspaceAreaDir(rel string) bool {
+	rel = path.Clean(filepath.ToSlash(strings.TrimSpace(rel)))
+	if rel == WorkspaceKeepDir {
+		return true
+	}
+	for _, spec := range workspaceAgedAreaSpecs {
+		if rel == spec.dir {
+			return true
+		}
+	}
+	return false
+}
+
 // SummarizeWorkspace 按分区合计工作目录里的文件，给 WebUI 文件页顶部的概览卡片用。
 func SummarizeWorkspace(root string, opts WorkspaceCleanupOptions) (WorkspaceOverview, error) {
 	now := opts.Now

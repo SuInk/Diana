@@ -48,11 +48,12 @@ const RESERVED_TOP_LEVEL = new Set(["keep", "downloads", "outputs", "tmp", ".age
 /**
  * 这一项能不能从页面上删（挪进回收站）。回收站里的东西再删就是真删了，只能整个清空。
  * 凭据和运行时文件能删，但要多确认一次（见 workspaceProtectedLabel）；删链接挪走的是
- * 链接本身，指向的东西不动。
+ * 链接本身，指向的东西不动。当前目录经链接到了工作区外面（insideExternal）时一律不删：
+ * 后端删除经 os.Root 走不出工作区，按钮点了也只会报错。
  */
-export function workspaceCanDelete(entry: Pick<WorkspaceEntry, "path" | "kind">): boolean {
+export function workspaceCanDelete(entry: Pick<WorkspaceEntry, "path" | "kind">, insideExternal = false): boolean {
   const path = entry.path.replace(/^\/+|\/+$/g, "");
-  if (!path || workspaceInTrash(path)) return false;
+  if (!path || insideExternal || workspaceInTrash(path)) return false;
   const parts = path.split("/");
   if (parts.length === 1 && RESERVED_TOP_LEVEL.has(path)) return false;
   if (parts.length === 2 && parts[0] === "keep" && entry.kind === "dir") return false;

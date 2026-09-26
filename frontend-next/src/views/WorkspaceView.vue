@@ -117,7 +117,16 @@
           <span v-if="inTrash" class="muted">回收站里的东西不单条删除，到期自动清理或整个清空。</span>
         </p>
 
+        <p v-if="listing?.external" class="workspace-area-hint muted">这里经符号链接到了工作区外面：可以看和下载，不能删除。</p>
+
         <p v-if="error" class="workspace-error" role="alert">{{ error }}</p>
+        <EmptyState
+          v-else-if="listing?.missing"
+          title="这里还没有文件"
+          hint="这个分区的目录还没建出来，Agent 第一次往这里写文件时才会创建。"
+        >
+          <template #icon><FolderOpen :size="20" aria-hidden="true" /></template>
+        </EmptyState>
         <EmptyState
           v-else-if="listing && !listing.exists"
           title="工作区还没建出来"
@@ -175,7 +184,7 @@
                     <Download :size="14" aria-hidden="true" />
                   </a>
                   <button
-                    v-if="workspaceCanDelete(entry)"
+                    v-if="canDelete(entry)"
                     class="btn ghost small icon-only danger"
                     type="button"
                     :disabled="busy !== ''"
@@ -218,7 +227,7 @@
       </div>
       <template #footer>
         <button
-          v-if="workspaceCanDelete(preview.entry)"
+          v-if="canDelete(preview.entry)"
           class="btn ghost danger"
           type="button"
           :disabled="busy !== ''"
@@ -380,6 +389,10 @@ function refresh(): void {
   void loadOverview();
 }
 
+function canDelete(entry: WorkspaceEntry): boolean {
+  return workspaceCanDelete(entry, Boolean(listing.value?.external));
+}
+
 function entryIcon(entry: WorkspaceEntry): Component {
   if (entry.protected) return Lock;
   if (entry.kind === "link") return Link2Off;
@@ -489,7 +502,8 @@ async function emptyTrash(): Promise<void> {
   try {
     const result = await emptyWorkspaceTrash();
     toastSuccess(`已清空回收站，释放 ${formatBytes(result.deleted_bytes)}`);
-    await Promise.all([open(currentPath.value), loadOverview()]);
+    // 在 .trash/<时间>/ 里面点的清空：那层目录已经没了，回到回收站根目录。
+    await Promise.all([open(inTrash.value ? ".trash" : currentPath.value), loadOverview()]);
   } catch (err) {
     toastError(err instanceof Error ? err.message : "清空回收站失败");
   } finally {

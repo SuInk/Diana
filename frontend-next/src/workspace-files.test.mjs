@@ -65,6 +65,11 @@ test("能删：普通文件、子目录、链接和 .diana/ 里的文件；不�
   assert.equal(workspaceCanDelete({ path: "keep/bot-a", kind: "dir" }), false);
 });
 
+test("经外部链接进到工作区外面的目录里，什么都不给删", () => {
+  assert.equal(workspaceCanDelete({ path: "host-logs/diana.log", kind: "file" }, true), false);
+  assert.equal(workspaceCanDelete({ path: "host-logs/diana.log", kind: "file" }, false), true);
+});
+
 test("受保护条目的标记：.diana/ 和老位置的扩展开关是运行时文件，其余是凭据", () => {
   assert.equal(workspaceProtectedLabel({ path: "notes.md" }), "");
   assert.equal(workspaceProtectedLabel({ path: ".diana", protected: true }), "运行时文件");
