@@ -251,6 +251,64 @@ func TestProfileSetRequiresReconnectOnlyForTransportChanges(t *testing.T) {
 	}
 }
 
+// 非 OneBot 平台的凭据同样决定通道怎么连；只改凭据时也得重连，否则旧凭据会一直用到重启。
+func TestProfileSetRequiresReconnectForPlatformCredentials(t *testing.T) {
+	cases := []struct {
+		name      string
+		base      assistant.BotConfig
+		change    func(*assistant.BotConfig)
+		reconnect bool
+	}{
+		{"QQ official app id", qqOfficialProfile(), func(c *assistant.BotConfig) { c.QQAppID = "new-app" }, true},
+		{"QQ official app secret", qqOfficialProfile(), func(c *assistant.BotConfig) { c.QQAppSecret = "new-secret" }, true},
+		{"QQ official sandbox", qqOfficialProfile(), func(c *assistant.BotConfig) { c.QQSandbox = true }, true},
+		{"QQ official prompt", qqOfficialProfile(), func(c *assistant.BotConfig) { c.SystemPrompt = "after" }, false},
+		{"DingTalk client id", dingTalkProfile(), func(c *assistant.BotConfig) { c.DingTalkClientID = "new-client" }, true},
+		{"DingTalk client secret", dingTalkProfile(), func(c *assistant.BotConfig) { c.DingTalkClientSecret = "new-secret" }, true},
+		{"DingTalk robot code", dingTalkProfile(), func(c *assistant.BotConfig) { c.DingTalkRobotCode = "new-robot" }, true},
+		{"DingTalk prompt", dingTalkProfile(), func(c *assistant.BotConfig) { c.SystemPrompt = "after" }, false},
+		{"Feishu app id", feishuProfile(), func(c *assistant.BotConfig) { c.FeishuAppID = "cli_new" }, true},
+		{"Feishu app secret", feishuProfile(), func(c *assistant.BotConfig) { c.FeishuAppSecret = "new-secret" }, true},
+		{"Feishu verification token", feishuProfile(), func(c *assistant.BotConfig) { c.FeishuVerificationToken = "new-token" }, true},
+		{"Feishu encrypt key", feishuProfile(), func(c *assistant.BotConfig) { c.FeishuEncryptKey = "new-key" }, true},
+		{"Feishu API base URL", feishuProfile(), func(c *assistant.BotConfig) { c.FeishuAPIBaseURL = "https://open.larksuite.com" }, true},
+		{"Feishu prompt", feishuProfile(), func(c *assistant.BotConfig) { c.SystemPrompt = "after" }, false},
+		{"WeCom corp id", weComProfile(), func(c *assistant.BotConfig) { c.WeComCorpID = "new-corp" }, true},
+		{"WeCom agent id", weComProfile(), func(c *assistant.BotConfig) { c.WeComAgentID = "1000099" }, true},
+		{"WeCom secret", weComProfile(), func(c *assistant.BotConfig) { c.WeComSecret = "new-secret" }, true},
+		{"WeCom token", weComProfile(), func(c *assistant.BotConfig) { c.WeComToken = "new-token" }, true},
+		{"WeCom AES key", weComProfile(), func(c *assistant.BotConfig) { c.WeComEncodingAESKey = "new-aes-key" }, true},
+		{"WeCom prompt", weComProfile(), func(c *assistant.BotConfig) { c.SystemPrompt = "after" }, false},
+		{"WeCom group triggers", weComProfile(), func(c *assistant.BotConfig) { c.GroupTriggers = []string{"Diana"} }, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			base := assistant.NewProfileSet(tc.base)
+			next := base.WithDefaults()
+			tc.change(&next.Profiles[0])
+			if got := profileSetRequiresReconnect(base, next); got != tc.reconnect {
+				t.Fatalf("reconnect = %v, want %v", got, tc.reconnect)
+			}
+		})
+	}
+}
+
+func qqOfficialProfile() assistant.BotConfig {
+	return assistant.BotConfig{Enabled: true, Platform: assistant.PlatformQQOfficial, QQAppID: "app", QQAppSecret: "secret", SystemPrompt: "before"}
+}
+
+func dingTalkProfile() assistant.BotConfig {
+	return assistant.BotConfig{Enabled: true, Platform: assistant.PlatformDingTalk, DingTalkClientID: "client", DingTalkClientSecret: "secret", DingTalkRobotCode: "robot", SystemPrompt: "before"}
+}
+
+func feishuProfile() assistant.BotConfig {
+	return assistant.BotConfig{Enabled: true, Platform: assistant.PlatformFeishu, FeishuAppID: "cli_app", FeishuAppSecret: "secret", FeishuVerificationToken: "token", FeishuEncryptKey: "key", SystemPrompt: "before"}
+}
+
+func weComProfile() assistant.BotConfig {
+	return assistant.BotConfig{Enabled: true, Platform: assistant.PlatformWeCom, WeComCorpID: "corp", WeComAgentID: "1000002", WeComSecret: "secret", WeComToken: "token", WeComEncodingAESKey: "aes-key", SystemPrompt: "before"}
+}
+
 // TestBotHandlerGroupTestSendsMessage 验证QQ群收发测试会调用当前 channel 发群消息。
 func TestBotHandlerGroupTestSendsMessage(t *testing.T) {
 	channel := &recordingFakeChannel{}
