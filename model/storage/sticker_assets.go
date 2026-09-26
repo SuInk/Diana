@@ -199,7 +199,11 @@ func (s *SQLiteStore) ListStickerAssets(ctx context.Context, query assistant.Sti
 		return nil, nil
 	}
 	limit := normalizeMessageHistoryLimit(query.Limit)
-	current, err := s.queryStickerAssets(ctx, query.Session, "a.session = ?", []any{query.Session}, limit)
+	sessions := stickerSessionKeys(query.Session)
+	current, err := s.queryStickerAssets(ctx, query.Session, "a.session IN ("+sqlPlaceholders(len(sessions))+")", stringArgs(sessions), limit)
+	for index := range current {
+		current[index].Session = query.Session
+	}
 	if err != nil || (!query.ShareGroups && !query.SharePrivate) {
 		return current, err
 	}
@@ -216,7 +220,7 @@ func (s *SQLiteStore) ListStickerAssets(ctx context.Context, query assistant.Sti
 	default:
 		return current, nil
 	}
-	args = append(args, query.Session)
+	args = append(args, stringArgs(sessions)...)
 	scopes := make([]string, 0, 2)
 	if query.ShareGroups {
 		scopes = append(scopes, "a.kind = ?")
@@ -226,7 +230,7 @@ func (s *SQLiteStore) ListStickerAssets(ctx context.Context, query assistant.Sti
 		scopes = append(scopes, "a.kind = ?")
 		args = append(args, string(assistant.EventKindPrivate))
 	}
-	where := boundary + " AND a.session != ? AND (" + strings.Join(scopes, " OR ") + ")"
+	where := boundary + " AND a.session NOT IN (" + sqlPlaceholders(len(sessions)) + ") AND (" + strings.Join(scopes, " OR ") + ")"
 	shared, err := s.queryStickerAssets(ctx, query.Session, where, args, limit)
 	if err != nil {
 		return nil, err
@@ -273,6 +277,32 @@ LIMIT ?`, args...)
 		assets = append(assets, asset)
 	}
 	return assets, rows.Err()
+}
+
+// stickerSessionKeys 返回一个会话在表情包库里的全部键：当前带命名空间的键，加上引入
+// 命名空间之前落库的旧键（只有 group:… / private:…）。旧键下的表情包属于同一个会话，
+// 不带上它们，老群攒下的大半库存永远进不了候选。
+func stickerSessionKeys(session string) []string {
+	keys := []string{session}
+	for _, marker := range []string{":group:", ":private:"} {
+		if index := strings.LastIndex(session, marker); index > 0 {
+			keys = append(keys, session[index+1:])
+			break
+		}
+	}
+	return keys
+}
+
+func sqlPlaceholders(count int) string {
+	return strings.TrimSuffix(strings.Repeat("?,", count), ",")
+}
+
+func stringArgs(values []string) []any {
+	args := make([]any, len(values))
+	for index, value := range values {
+		args[index] = value
+	}
+	return args
 }
 
 func decodeStickerTags(raw string) []string {
@@ -340,23 +370,30 @@ func (s *SQLiteStore) PruneStickerAssets(ctx context.Context, session string, ca
 		return 0, nil
 	}
 	// 每条带表情包的消息都会来问一次，没超上限时只读计数，不占写连接。
+	sessions := stickerSessionKeys(session)
+	in := "(" + sqlPlaceholders(len(sessions)) + ")"
 	var total int
-	if err := s.eventReader().QueryRowContext(ctx, `SELECT COUNT(*) FROM sticker_assets WHERE session = ?`, session).Scan(&total); err != nil {
+	if err := s.eventReader().QueryRowContext(ctx, `SELECT COUNT(DISTINCT content_sha256) FROM sticker_assets WHERE session IN `+in, stringArgs(sessions)...).Scan(&total); err != nil {
 		return 0, fmt.Errorf("count sticker assets: %w", err)
 	}
 	if total <= capacity {
 		return 0, nil
 	}
+	// 新旧两种会话键下的同一张图按一张算，取最近一次用到的时间排序。
+	args := append(stringArgs(sessions), session)
+	args = append(args, stringArgs(sessions)...)
+	args = append(args, capacity)
 	result, err := s.db.ExecContext(ctx, `
 DELETE FROM sticker_assets
-WHERE session = ? AND content_sha256 IN (
+WHERE session IN `+in+` AND content_sha256 IN (
   SELECT a.content_sha256
   FROM sticker_assets AS a
-  LEFT JOIN sticker_usage AS u ON u.session = a.session AND u.content_sha256 = a.content_sha256
-  WHERE a.session = ?
-  ORDER BY MAX(a.event_time, COALESCE(u.last_sent_at, 0)) DESC, a.content_sha256
+  LEFT JOIN sticker_usage AS u ON u.session = ? AND u.content_sha256 = a.content_sha256
+  WHERE a.session IN `+in+`
+  GROUP BY a.content_sha256
+  ORDER BY MAX(MAX(a.event_time), COALESCE(MAX(u.last_sent_at), 0)) DESC, a.content_sha256
   LIMIT -1 OFFSET ?
-)`, session, session, capacity)
+)`, args...)
 	if err != nil {
 		return 0, fmt.Errorf("prune sticker assets: %w", err)
 	}

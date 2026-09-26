@@ -39,23 +39,7 @@ func TestLiveStickerTriggerReplay(t *testing.T) {
 		t.Skip("set DIANA_STICKER_REPLAY_DIR to replay recorded reply requests")
 	}
 	samples := loadStickerReplaySamples(t, dir, envInt("DIANA_STICKER_REPLAY_TAIL", 60))
-	if path := os.Getenv("DIANA_STICKER_REPLAY_IDS"); path != "" {
-		raw, err := os.ReadFile(path)
-		if err != nil {
-			t.Fatal(err)
-		}
-		keep := map[string]bool{}
-		for _, id := range strings.Fields(string(raw)) {
-			keep[id] = true
-		}
-		filtered := samples[:0]
-		for _, sample := range samples {
-			if keep[sample.id] {
-				filtered = append(filtered, sample)
-			}
-		}
-		samples = filtered
-	}
+	samples = filterStickerReplaySamples(t, samples)
 	if len(samples) == 0 {
 		t.Fatal("no replayable reply requests with sticker in the tool catalog")
 	}
@@ -255,6 +239,30 @@ func loadStickerReplaySamples(t *testing.T, dir string, tail int) []stickerRepla
 	}
 	sort.Slice(samples, func(i, j int) bool { return samples[i].id < samples[j].id })
 	return samples
+}
+
+// filterStickerReplaySamples 按 DIANA_STICKER_REPLAY_IDS（空白分隔的样本 id）只留指定样本。
+func filterStickerReplaySamples(t *testing.T, samples []stickerReplaySample) []stickerReplaySample {
+	t.Helper()
+	path := os.Getenv("DIANA_STICKER_REPLAY_IDS")
+	if path == "" {
+		return samples
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keep := map[string]bool{}
+	for _, id := range strings.Fields(string(raw)) {
+		keep[id] = true
+	}
+	filtered := samples[:0]
+	for _, sample := range samples {
+		if keep[sample.id] {
+			filtered = append(filtered, sample)
+		}
+	}
+	return filtered
 }
 
 // trimStickerReplayRequest 保留开头的系统消息和末尾 tail 条，控制回放成本；两个变体截法相同。
