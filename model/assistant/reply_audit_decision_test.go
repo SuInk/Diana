@@ -119,6 +119,8 @@ func TestReplyAuditSelfRepeatUsesItsOwnConfidence(t *testing.T) {
 				t.Fatalf("审核解析器读不回去：%s", rendered)
 			}
 			loop := decision.loopDecision()
+			// 这里只看置信度门槛；复读要不要计数还取决于对方是不是机器人，按机器人算。
+			loop.selfRepeatCounts = true
 			if got := loop.selfRepeatDropsReply(); got != tc.wantDrop {
 				t.Fatalf("selfRepeatDropsReply() = %v，want %v：%s", got, tc.wantDrop, rendered)
 			}

@@ -14,19 +14,23 @@ func selfRepeatVerdict(selfRepeat bool, confidence float64, reason string) strin
 }
 
 // 复读自己单独成立：对方的话像真人、每条都有内容、密度也不异常，另外三项全落空，
-// 只有「机器人自己把同一句晚安换着说了七遍」这一项判得出来。
+// 只有「机器人自己把同一句晚安换着说了七遍」这一项判得出来。但它只在对方是机器人时
+// 计数——对方是真人时复读是机器人自己的毛病，只丢那一条，不累计到暂停对方。
 func TestSelfRepeatCountsOnItsOwn(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
 		decision botReplyLoopAIDecision
 		want     bool
 	}{
-		{"self_repeat_alone", botReplyLoopAIDecision{SelfRepeat: true, Confidence: 0.95}, true},
-		{"self_repeat_low_confidence", botReplyLoopAIDecision{SelfRepeat: true, Confidence: 0.75}, false},
+		{"self_repeat_toward_bot", botReplyLoopAIDecision{SelfRepeat: true, Confidence: 0.95, selfRepeatCounts: true}, true},
+		{"self_repeat_toward_human", botReplyLoopAIDecision{SelfRepeat: true, Confidence: 0.95}, false},
+		{"self_repeat_low_confidence", botReplyLoopAIDecision{SelfRepeat: true, Confidence: 0.75, selfRepeatCounts: true}, false},
 		{"nothing_flagged", botReplyLoopAIDecision{Confidence: 0.99}, false},
 		// 对方是 AI 依旧只记录不计数：两台 AI 正经下棋不该被停。
-		{"automated_ai_alone", botReplyLoopAIDecision{AutomatedAIReply: true, Confidence: 0.99}, false},
-		{"ai_and_self_repeat", botReplyLoopAIDecision{AutomatedAIReply: true, SelfRepeat: true, Confidence: 0.95}, true},
+		{"automated_ai_alone", botReplyLoopAIDecision{AutomatedAIReply: true, Confidence: 0.99, selfRepeatCounts: true}, false},
+		{"ai_and_self_repeat", botReplyLoopAIDecision{AutomatedAIReply: true, SelfRepeat: true, Confidence: 0.95, selfRepeatCounts: true}, true},
+		// 没内容、没目的说的是整串来回，对真人照样计数。
+		{"purposeless_toward_human", botReplyLoopAIDecision{PurposelessLoop: true, Confidence: 0.95}, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := tc.decision.counts(); got != tc.want {
@@ -233,5 +237,42 @@ func TestDeduplicateReplyVerdictReportsConfirmedKeep(t *testing.T) {
 		if err != nil || kept != tc.want {
 			t.Fatalf("%s：kept=%v err=%v，want %v", tc.raw, kept, err, tc.want)
 		}
+	}
+}
+
+// 线上被「复读自己」记过数的，大多是真人在正常追问、机器人答得有点重复。复读是机器人
+// 自己的毛病：对真人只丢那一条，记满三次也不暂停对方；对已标记的机器人照旧累计，
+// 互道晚安停不下来的那种循环仍然拦得住。
+func TestSelfRepeatSuppressesOnlyBots(t *testing.T) {
+	selfRepeat := proactiveReplyQualityDecision{Confidence: 0.9, ReplyLoopSelfRepeat: true, ReplyLoopConfidence: 0.95, ReplyLoopSelfRepeatConfidence: 0.95, ReplyLoopPurposelessConfidence: 0.95}
+	for _, tc := range []struct {
+		name       string
+		marked     []string
+		wantPaused bool
+	}{
+		{"human", nil, false},
+		{"marked_bot", []string{"20002"}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := dampingTestRuntime(BotConfig{MarkedBotIDs: tc.marked}, nil)
+			now := time.Now()
+			var last MessageEvent
+			for i := 0; i < botReplyLoopThreshold; i++ {
+				last = botReplyLoopEvent(r, tc.name, "20002", i, now.Add(time.Duration(i-botReplyLoopThreshold)*time.Minute), 10*time.Second, "晚安")
+				err := r.applyReplyLoopVerdict(context.Background(), last, botReplyLoopCandidate{TriggerKind: "quote"}, selfRepeat, true)
+				if tc.wantPaused && i == botReplyLoopThreshold-1 {
+					if !errors.Is(err, errReplyLoopDetected) {
+						t.Fatalf("第 %d 次复读应当触发暂停，err=%v", i+1, err)
+					}
+					continue
+				}
+				if !errors.Is(err, errReplySelfRepeatDropped) {
+					t.Fatalf("第 %d 次复读应当只丢这一条，err=%v", i+1, err)
+				}
+			}
+			if _, paused := r.activeReplySuppression(last, time.Now()); paused != tc.wantPaused {
+				t.Fatalf("暂停 = %v，want %v", paused, tc.wantPaused)
+			}
+		})
 	}
 }
