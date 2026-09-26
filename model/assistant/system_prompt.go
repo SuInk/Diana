@@ -249,8 +249,8 @@ const (
 	promptOwnerRelationshipTarget = "当前发言者是主人：要求设置或增减别人的好感度时，必须调用 relationship 的 set/adjust 并传对目标用户，不要把目标写成主人自己。"
 	promptOwnerTaskTarget         = "当前发言者是主人：要求查看、创建、修改、取消或删除别人的提醒与订阅时，必须在任务工具里传 target_user_id，不要把目标写成主人自己。"
 
-	promptTaskReminder = "用户要求过一段时间提醒一次时，调用 reminder 并传 delay；用户指定今晚七点、明天下午三点等绝对时间点时传 at（RFC3339），不要把绝对时间换算成 delay；取消或删除单项提醒也用它。"
-	promptTaskSchedule = "用户要求每隔一段时间自动查询、搜索并通知，或要求每天、每周固定时间重复提醒时，调用 subscription 并传 kind=schedule：interval 是重复间隔，单位 s、m（分钟）、h、d、w、mo（月）、y（每天 1d、每周 1w、每月 1mo、每年 1y；m 是分钟，月写 mo），固定时间点用 at 传首次触发时间（RFC3339）；每周一三五传 interval=1w、weekdays=[mon,wed,fri]，工作日传 weekdays=mon~fri；每月 1 号和 15 号传 interval=1mo、month_days=[1,15]，每月最后一天传 month_days=[-1]；每月第一个周一传 weekday=mon、week=1，最后一个周五传 weekday=fri、week=-1；用了这些规则时 at 只定从哪周/哪月开始和几点，一条订阅就能覆盖，不要拆成多条；不要只建一次性提醒再让用户下次重说；取消或删除单项周期查询也用它。RSS、Atom 和 Twitter 用户更新监控要改传 kind=rss。"
+	promptTaskReminder = "用户要求过一段时间提醒一次时，调用 reminder 并传 delay；用户说今天、明天、后天、几号、几点这类时间点时传 date 和 time（例如 date=tomorrow、time=22:00，date=28、time=09:00），由系统按自然日换算，不要自己算日期，也不要换算成 delay；26、27、28 号各提醒一次就用 items 建三条。工具返回里有换算后的具体日期，回复时照它复述。取消或删除单项提醒也用它。"
+	promptTaskSchedule = "用户要求每隔一段时间自动查询、搜索并通知，或要求每天、每周固定时间重复提醒时，调用 subscription 并传 kind=schedule：interval 是重复间隔，单位 s、m（分钟）、h、d、w、mo（月）、y（每天 1d、每周 1w、每月 1mo、每年 1y；m 是分钟，月写 mo），固定时间点传 time（例如每天 8 点 time=08:00），从某天开始就再加 date，也可以直接传 at（RFC3339）；每周一三五传 interval=1w、weekdays=[mon,wed,fri]，工作日传 weekdays=mon~fri；每月 1 号和 15 号传 interval=1mo、month_days=[1,15]，每月最后一天传 month_days=[-1]；每月第一个周一传 weekday=mon、week=1，最后一个周五传 weekday=fri、week=-1；用了这些规则时 at 只定从哪周/哪月开始和几点，一条订阅就能覆盖，不要拆成多条；不要只建一次性提醒再让用户下次重说；取消或删除单项周期查询也用它。RSS、Atom 和 Twitter 用户更新监控要改传 kind=rss。"
 	promptTaskRSS      = "用户要求持续订阅 RSS/Atom、关注指定 Twitter/X 用户，或只在新条目符合条件时通知时，调用 subscription 并传 kind=rss，judge_prompt 里写清通知条件和回复要求。要盯的人或 Feed 有好几个而条件相同时，用 twitter_handles/feed_urls 建一条多来源订阅，不要一人建一条。"
 	// 事件触发和提醒最容易混：「明天提醒他」是时间，「他下次说话时提醒他」是事件。
 	promptTaskEventTrigger = "用户要求在某件事发生时去做某事——某人下次说话或上线时提醒他、有人提到某个词时回应、有人进群时处理——调用 event_trigger，不要口头答应；机器人看不到在线状态，「上线」按他第一次说话算。只提醒一句用 action=message，需要查资料或随机应变用 action=agent；要把消息告诉设置的人而不是当场回复时传 deliver_to=origin。"

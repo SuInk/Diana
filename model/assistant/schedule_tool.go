@@ -72,6 +72,8 @@ func (t *dianaScheduleTool) InputSchema() map[string]any {
 		"at":         toolStringParam(scheduleAtDescription),
 		"weekdays":   toolEnumArrayParam(scheduleWeekdaysDescription, scheduleWeekdayOrder...),
 		"month_days": toolIntArrayParam(scheduleMonthDaysDescription, -31, 31),
+		"date":       toolStringParam("首次触发的日期，可代替 at。" + taskDateDescription),
+		"time":       toolStringParam("每次触发的时刻，可代替 at；每天 8 点只传 time=08:00 即可。" + taskTimeDescription),
 		"weekday":    toolEnumParam(scheduleWeekdayDescription, scheduleWeekdayOrder...),
 		"week":       toolIntParam(scheduleWeekDescription, -5, 5),
 	}
@@ -83,6 +85,8 @@ func (t *dianaScheduleTool) InputSchema() map[string]any {
 		"at":         item["at"],
 		"weekdays":   item["weekdays"],
 		"month_days": item["month_days"],
+		"date":       item["date"],
+		"time":       item["time"],
 		"weekday":    item["weekday"],
 		"week":       item["week"],
 		"items": toolItemsParam("一次创建多个订阅；只在 create 时有效，最多 "+itoa(maximumTasksPerToolCall)+" 项。剩余额度不足时按顺序创建到额度上限。",
@@ -108,6 +112,11 @@ func (t *dianaScheduleTool) Run(_ context.Context, input map[string]any) (string
 	targetEvent := t.event
 	targetEvent.UserID = targetID
 	targetEvent.taskRequester = t.event.UserID
+	// date/time 换算成首次触发的 at；落在过去的由订阅自己顺延到下一个周期，不报错。
+	input, dateNotes, err := applyTaskDateTime(input, t.runtime.taskClockForEvent(t.event), false)
+	if err != nil {
+		return "", err
+	}
 	operation := strings.ToLower(strings.TrimSpace(configToolString(input, "operation")))
 	switch operation {
 	case "create", "add":
@@ -122,6 +131,9 @@ func (t *dianaScheduleTool) Run(_ context.Context, input map[string]any) (string
 		message := fmt.Sprintf("已创建并持久化 %d 个周期查询，将在到期后自动执行并发送到当前会话。", len(items))
 		if len(items) < len(requests) {
 			message = fmt.Sprintf("本次请求 %d 个周期查询，按剩余额度创建了 %d 个。", len(requests), len(items))
+		}
+		if len(dateNotes) > 0 {
+			message += " 首次触发时间" + strings.Join(dateNotes, " ") + " 实际首次时间以 next_run_at 为准（已过去或不符合日期规则时会顺延）。"
 		}
 		result := dianaScheduleResult{
 			OK:      true,
@@ -164,7 +176,7 @@ func (t *dianaScheduleTool) Run(_ context.Context, input map[string]any) (string
 		return marshalDianaScheduleResult(dianaScheduleResult{
 			OK:       true,
 			Action:   "updated",
-			Message:  "定时订阅已更新。",
+			Message:  strings.TrimSpace("定时订阅已更新。 " + strings.Join(dateNotes, " ")),
 			Schedule: scheduleForTool(item),
 		})
 	case "cancel":
