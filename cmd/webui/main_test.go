@@ -428,13 +428,14 @@ func TestSPAHandlerServesIndexForFrontendRoutes(t *testing.T) {
 	}
 }
 
-// config.yaml 的机器人段和数据库里的旧配置同一条迁移规则：写着 agent_enabled: true
-// 的只靠 config.yaml 跑的部署，升级后仍是标准模式；没写的是安全模式；写了
-// agent_mode 就按写的来。
+// config.yaml 的机器人段：写了 agent_mode 就按写的来；没写时明确写着
+// agent_enabled: false 的旧配置换算成安全模式，写着 true 或根本没写的按默认的标准模式。
 func TestBotSeedConfigMapsLegacyAgentSwitchToMode(t *testing.T) {
 	for body, want := range map[string]string{
 		"bot:\n  agent_enabled: true\n":                          assistant.AgentModeStandard,
-		"bot:\n  owner_id: \"10001\"\n":                          assistant.AgentModeSafe,
+		"bot:\n  owner_id: \"10001\"\n":                          assistant.AgentModeStandard,
+		"bot:\n  agent_enabled: false\n":                         assistant.AgentModeSafe,
+		"bot:\n  owner_id: \"10001\"\n  agent_mode: safe\n":      assistant.AgentModeSafe,
 		"bot:\n  agent_enabled: true\n  agent_mode: safe\n":      assistant.AgentModeSafe,
 		"bot:\n  agent_enabled: false\n  agent_mode: standard\n": assistant.AgentModeStandard,
 	} {
@@ -454,7 +455,7 @@ func TestBotSeedConfigMapsLegacyAgentSwitchToMode(t *testing.T) {
 			t.Fatalf("%q → mode=%q enabled=%v, want %q", body, bot.AgentMode, bot.AgentEnabled, want)
 		}
 	}
-	// 写错的模式值启动时就报错，不悄悄按安全模式跑。
+	// 写错的模式值启动时就报错，不悄悄换成某一档。
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	if err := os.WriteFile(path, []byte("bot:\n  agent_mode: Standrd\n"), 0o600); err != nil {
 		t.Fatal(err)

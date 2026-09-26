@@ -361,7 +361,7 @@ export interface BotProfileConfig extends SendRetrySettings {
   request_timeout_ms?: number;
   /** 旧的「启用 Agent」开关，后端迁移后恒为 true，只为兼容保留。 */
   agent_enabled?: boolean;
-  /** standard 标准模式（全部能力）/ safe 安全模式（关掉高风险能力，主人也一样）。新建默认 safe。 */
+  /** standard 标准模式（全部能力）/ safe 安全模式（关掉高风险能力，主人也一样）。新建默认 standard，safe 只在主人选择时开启。 */
   agent_mode?: string;
   agent_max_steps?: number;
   agent_command_allowlist?: string[];

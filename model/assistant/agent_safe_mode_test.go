@@ -15,16 +15,17 @@ import (
 	"github.com/SuInk/diana/model/llm"
 )
 
-// standardModeBotConfig 是新建配置切到标准模式后的样子。测标准模式下工具怎么挂的
-// 用例都从它起步：DefaultBotConfig 现在默认安全模式，高风险工具本来就不挂。
+// standardModeBotConfig 是明确写着标准模式的新建配置。测标准模式下工具怎么挂的用例
+// 都从它起步，不依赖 DefaultBotConfig 的默认模式。
 func standardModeBotConfig() BotConfig {
 	cfg := DefaultBotConfig()
 	cfg.AgentMode = AgentModeStandard
 	return cfg
 }
 
-// 库里的旧配置按 agent_enabled 换算：开着的迁成标准模式（升级前后行为一致），关着或
-// 没写的迁成安全模式；已经写了模式的不动。迁移后 Agent 一律开着。
+// 库里的旧配置按 agent_enabled 换算：开着的迁成标准模式（升级前后行为一致），关着的
+// 迁成安全模式（库里 false 被省掉，没写就是关着）；已经写了模式的不动；写坏的模式值
+// 按默认的标准模式。迁移后 Agent 一律开着。
 func TestStoredProfilesMigrateAgentEnabledToMode(t *testing.T) {
 	// agent_enabled=false 存盘时被 omitempty 省掉，所以「没写」就是旧的「关着」。
 	raw := `{"profiles":[
@@ -44,8 +45,8 @@ func TestStoredProfilesMigrateAgentEnabledToMode(t *testing.T) {
 		"off":           AgentModeSafe,
 		"kept-standard": AgentModeStandard,
 		"kept-safe":     AgentModeSafe,
-		// 写错的模式值按安全模式处理：配置写错不该变成权限放开。
-		"typo": AgentModeSafe,
+		// 库里写坏的模式值按默认的标准模式处理（记一次警告），安全模式只认明确的 safe。
+		"typo": AgentModeStandard,
 	}
 	for _, profile := range set.Profiles {
 		if profile.AgentMode != want[profile.ID] {
@@ -71,36 +72,47 @@ func TestStoredProfilesMigrateAgentEnabledToMode(t *testing.T) {
 	}
 }
 
-// 模式为空按安全模式算：只有明确写着 standard 才给全部能力。
-func TestEmptyAgentModeFailsClosed(t *testing.T) {
-	if !(BotConfig{AgentEnabled: true}).agentSafeMode() {
-		t.Fatal("没写模式的配置被当成了标准模式")
+// 安全模式只在明确写着 safe 时生效：模式为空、认不出都按默认的标准模式。
+func TestAgentSafeModeOnlyWhenExplicitlySafe(t *testing.T) {
+	for _, mode := range []string{"", "  ", AgentModeStandard, "Standrd"} {
+		if (BotConfig{AgentMode: mode}).agentSafeMode() {
+			t.Fatalf("模式 %q 被当成了安全模式", mode)
+		}
+		if got := (BotConfig{AgentMode: mode}).effectiveAgentMode(); got != AgentModeStandard {
+			t.Fatalf("模式 %q 的实际模式 = %q", mode, got)
+		}
 	}
-	if (BotConfig{AgentMode: AgentModeStandard}).agentSafeMode() {
-		t.Fatal("明确的标准模式被当成了安全模式")
+	for _, mode := range []string{AgentModeSafe, " Safe "} {
+		if !(BotConfig{AgentMode: mode}).agentSafeMode() {
+			t.Fatalf("明确的安全模式 %q 被当成了标准模式", mode)
+		}
+	}
+	if NormalizeAgentMode("Standrd") != AgentModeStandard || NormalizeAgentMode("") != "" {
+		t.Fatal("模式规范化规则变了")
 	}
 	if AgentModeForLegacyConfig("", true) != AgentModeStandard || AgentModeForLegacyConfig("", false) != AgentModeSafe || AgentModeForLegacyConfig("safe", true) != AgentModeSafe {
 		t.Fatal("旧开关换算规则变了")
 	}
 }
 
-func TestNewBotDefaultsToSafeMode(t *testing.T) {
+func TestNewBotDefaultsToStandardMode(t *testing.T) {
 	cfg := DefaultBotConfig()
-	if cfg.AgentMode != AgentModeSafe || !cfg.AgentEnabled {
+	if cfg.AgentMode != AgentModeStandard || !cfg.AgentEnabled || cfg.agentSafeMode() {
 		t.Fatalf("新建机器人 mode=%q enabled=%v", cfg.AgentMode, cfg.AgentEnabled)
 	}
-	if got := PayloadFromConfig(cfg).AgentMode; got != AgentModeSafe {
+	if got := PayloadFromConfig(cfg).AgentMode; got != AgentModeStandard {
 		t.Fatalf("新建机器人的草稿 payload 模式 = %q", got)
 	}
 }
 
 // 界面保存：请求写了模式就用请求的；编辑已有机器人时没带模式（旧前端只会回传
 // agent_enabled=true）要沿用现有模式，不能把安全模式悄悄升成标准模式；新建时没带
-// 模式一律安全模式，旧前端新建带的 agent_enabled=true 不算数。config.yaml 播种按旧
-// 开关换算，由播种方先写进 payload，见 AgentModeForLegacyConfig。
+// 模式按默认的标准模式，旧前端新建只带 agent_enabled=true 也一样。config.yaml 播种
+// 按旧开关换算，由播种方先写进 payload，见 AgentModeForLegacyConfig。
 func TestConfigFromPayloadResolvesAgentMode(t *testing.T) {
 	existingSafe := DefaultBotConfig()
 	existingSafe.ID = "bot-a"
+	existingSafe.AgentMode = AgentModeSafe
 
 	tests := []struct {
 		name     string
@@ -111,9 +123,11 @@ func TestConfigFromPayloadResolvesAgentMode(t *testing.T) {
 		{name: "显式标准", payload: ConfigPayload{ID: "bot-a", AgentMode: AgentModeStandard}, existing: existingSafe, want: AgentModeStandard},
 		{name: "显式安全", payload: ConfigPayload{ID: "bot-a", AgentMode: AgentModeSafe, AgentEnabled: true}, existing: standardWithID("bot-a"), want: AgentModeSafe},
 		{name: "旧前端编辑不升级", payload: ConfigPayload{ID: "bot-a", AgentEnabled: true}, existing: existingSafe, want: AgentModeSafe},
-		{name: "旧前端新建仍是安全", payload: ConfigPayload{AgentEnabled: true}, existing: DefaultBotConfig(), want: AgentModeSafe},
-		{name: "播种按旧开关换算", payload: ConfigPayload{AgentEnabled: true, AgentMode: AgentModeForLegacyConfig("", true)}, existing: DefaultBotConfig(), want: AgentModeStandard},
-		{name: "新建旧开关关着", payload: ConfigPayload{}, existing: DefaultBotConfig(), want: AgentModeSafe},
+		{name: "旧前端新建是标准", payload: ConfigPayload{AgentEnabled: true}, existing: DefaultBotConfig(), want: AgentModeStandard},
+		{name: "新建没写模式是标准", payload: ConfigPayload{}, existing: DefaultBotConfig(), want: AgentModeStandard},
+		{name: "新建显式安全", payload: ConfigPayload{AgentMode: AgentModeSafe}, existing: DefaultBotConfig(), want: AgentModeSafe},
+		{name: "播种旧开关开着", payload: ConfigPayload{AgentEnabled: true, AgentMode: AgentModeForLegacyConfig("", true)}, existing: DefaultBotConfig(), want: AgentModeStandard},
+		{name: "播种旧开关关着", payload: ConfigPayload{AgentMode: AgentModeForLegacyConfig("", false)}, existing: DefaultBotConfig(), want: AgentModeSafe},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -266,7 +280,9 @@ func TestStandardModeKeepsFullAgentSurface(t *testing.T) {
 func TestSafeModeAgentConfigDropsRiskyCapabilitiesButKeepsLimits(t *testing.T) {
 	runtime := &Runtime{}
 	runtime.SetBrowserBox(stubBuiltinBrowser{url: "http://127.0.0.1:1234"})
-	safe := DefaultBotConfig().WithDefaults()
+	safe := DefaultBotConfig()
+	safe.AgentMode = AgentModeSafe
+	safe = safe.WithDefaults()
 	if runtime.browserBoxFor(safe) != nil {
 		t.Fatal("安全模式下仍然取到了内置浏览器")
 	}

@@ -83,7 +83,7 @@ func TestSavingAgentModeChangeWritesAuditLog(t *testing.T) {
 		t.Fatalf("模式变更日志元数据 = %#v", entry.Metadata)
 	}
 
-	// 旧版前端新建机器人只带 agent_enabled=true：新建一律安全模式，并同样记一条日志。
+	// 旧版前端新建机器人只带 agent_enabled=true：按默认的标准模式建，并同样记一条日志。
 	raw := []byte(`{"name":"legacy-create","platform":"onebot-v11","onebot_reverse_ws_endpoint":"ws://127.0.0.1:18081/onebot/v11/ws","agent_enabled":true}`)
 	req := httptest.NewRequest(http.MethodPost, "/api/assistant/config/new", bytes.NewReader(raw))
 	req.Header.Set("X-Diana-Actor", "admin")
@@ -94,7 +94,7 @@ func TestSavingAgentModeChangeWritesAuditLog(t *testing.T) {
 	}
 	profiles := handler.profiles.Profiles().Profiles
 	created := profiles[len(profiles)-1]
-	if created.Name != "legacy-create" || created.AgentMode != assistant.AgentModeSafe {
+	if created.Name != "legacy-create" || created.AgentMode != assistant.AgentModeStandard {
 		t.Fatalf("旧前端新建的机器人 name=%q mode=%q", created.Name, created.AgentMode)
 	}
 	operations, err = logStore.ListLogs(ctx, storage.AppLogFilter{Kind: storage.LogKindOperation, Limit: 20})
@@ -103,7 +103,7 @@ func TestSavingAgentModeChangeWritesAuditLog(t *testing.T) {
 	}
 	found := false
 	for _, entry := range operations {
-		if entry.Action == "agent_mode_change" && entry.Target == created.ID && strings.Contains(entry.Message, "新建机器人") && entry.Metadata["agent_mode_to"] == assistant.AgentModeSafe {
+		if entry.Action == "agent_mode_change" && entry.Target == created.ID && strings.Contains(entry.Message, "新建机器人") && entry.Metadata["agent_mode_to"] == assistant.AgentModeStandard {
 			found = true
 		}
 	}
@@ -111,7 +111,7 @@ func TestSavingAgentModeChangeWritesAuditLog(t *testing.T) {
 		t.Fatalf("新建机器人没有记模式日志: %#v", operations)
 	}
 
-	// 写错的模式值直接 400，不悄悄存成安全模式。
+	// 写错的模式值直接 400，不悄悄换成某一档。
 	payload := assistant.PayloadFromConfig(current)
 	payload.AgentMode = "Standrd"
 	raw, err = json.Marshal(payload)
@@ -122,6 +122,16 @@ func TestSavingAgentModeChangeWritesAuditLog(t *testing.T) {
 	router.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/assistant/config", bytes.NewReader(raw)))
 	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "agent_mode") {
 		t.Fatalf("写错的模式 status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	// 新建时写错同样 400，不会按默认的标准模式建出来。
+	before := len(handler.profiles.Profiles().Profiles)
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/assistant/config/new", bytes.NewReader([]byte(`{"name":"typo-create","platform":"onebot-v11","onebot_reverse_ws_endpoint":"ws://127.0.0.1:18082/onebot/v11/ws","agent_mode":"unsafe"}`))))
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "agent_mode") {
+		t.Fatalf("新建写错的模式 status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if after := len(handler.profiles.Profiles().Profiles); after != before {
+		t.Fatalf("写错模式的新建请求仍建出了机器人：%d → %d", before, after)
 	}
 
 	// 复制出的机器人沿用源机器人的模式，也记一条。

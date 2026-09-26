@@ -45,13 +45,16 @@ export const agentModeOptions: { value: AgentMode; label: string }[] = [
   { value: "safe", label: "安全模式（关掉高风险能力）" }
 ];
 
-/** 后端迁移后一定带 agent_mode；万一没有（旧后端），按旧开关换算，规则和后端一致。 */
+/**
+ * 后端迁移后一定带 agent_mode；万一没有（旧后端），按旧开关换算，规则和后端一致：
+ * 明确关着 Agent 的算安全模式，开着或没写的算默认的标准模式。安全模式只在明确写着
+ * safe 时生效，认不出的值同后端一样按标准模式。
+ */
 export function normalizeAgentMode(mode: string | undefined, legacyEnabled?: boolean): AgentMode {
   const value = (mode ?? "").trim().toLowerCase();
-  if (value === "standard") return "standard";
-  if (value === "") return legacyEnabled ? "standard" : "safe";
-  // 认不出的值按安全模式：配置写错不该变成权限放开。
-  return "safe";
+  if (value === "safe") return "safe";
+  if (value === "") return legacyEnabled === false ? "safe" : "standard";
+  return "standard";
 }
 
 export function agentModeLabel(mode: AgentMode): string {
