@@ -124,24 +124,47 @@ func musicTestServer(t *testing.T, durationMS int64, audio []byte) *httptest.Ser
 		case "/official/detail":
 			w.Header().Set("Content-Type", "application/json")
 			fmt.Fprintf(w, `{"code":200,"songs":[{"id":1974443814,"name":"雾里","duration":%d,"artists":[{"name":"姚六一"}],"album":{"name":"雾里"}}]}`, durationMS)
+		case "/official/songurl":
+			// 官方取地址接口：游客拿会员歌是 -110 且没有地址，这时轮到外链兜底；
+			// 带会员 MUSIC_U 给整首，带非会员 MUSIC_U 给 30 秒试听。
+			w.Header().Set("Content-Type", "application/json")
+			switch r.Header.Get("Cookie") {
+			case "MUSIC_U=vip":
+				fmt.Fprintf(w, `{"code":200,"data":[{"id":1974443814,"code":200,"url":%q,"freeTrialInfo":null}]}`, "http://"+r.Host+"/audio/1974443814.mp3")
+			case "MUSIC_U=basic":
+				fmt.Fprintf(w, `{"code":200,"data":[{"id":1974443814,"code":200,"url":%q,"freeTrialInfo":{"start":0,"end":30}}]}`, "http://"+r.Host+"/audio/trial.mp3")
+			default:
+				fmt.Fprint(w, `{"code":200,"data":[{"id":1974443814,"code":-110,"url":null,"freeTrialInfo":null}]}`)
+			}
 		case "/official/outer":
 			// 官方外链是一次 302，可试听的曲目落在 CDN 的 mp3 上。
 			http.Redirect(w, r, "http://"+r.Host+"/audio/1974443814.mp3", http.StatusFound)
 		case "/official/outer-blocked":
 			// 下架或会员专享时官方不报错，只是把人送到 404 页。
 			http.Redirect(w, r, "http://"+r.Host+"/404", http.StatusFound)
-		case "/qq/search":
+		case "/qq/musicu":
 			w.Header().Set("Content-Type", "application/json")
-			if !strings.Contains(r.URL.Query().Get("w"), "雾里") {
-				fmt.Fprint(w, `{"code":0,"data":{"song":{"list":[]}}}`)
-				return
-			}
+			var request qqTestMusicuRequest
+			_ = json.Unmarshal([]byte(r.URL.Query().Get("data")), &request)
 			// QQ 的 interval 是秒，不是毫秒。
-			fmt.Fprintf(w, `{"code":0,"data":{"song":{"list":[{"mid":"003RMaRI1iFoYd","name":"雾里","singer":[{"name":"姚六一"}],"album":{"name":"雾里"},"interval":%d}]}}}`, durationMS/1000)
-		case "/qq/vkey":
-			// 无登录态时会员曲目的 purl 是空串——不是报错，是「这家放不了」。
-			w.Header().Set("Content-Type", "application/json")
-			fmt.Fprint(w, `{"req_0":{"data":{"sip":["`+"http://"+r.Host+`/qq/stream/"],"midurlinfo":[{"purl":""}]}}}`)
+			track := fmt.Sprintf(`{"mid":"003RMaRI1iFoYd","name":"雾里","singer":[{"name":"姚六一"}],"album":{"name":"雾里"},"interval":%d}`, durationMS/1000)
+			switch request.Req0.Method {
+			case "DoSearchForQQMusicLite":
+				if !strings.Contains(request.Req0.Param.Query, "雾里") {
+					fmt.Fprint(w, `{"code":0,"req_0":{"code":0,"data":{"body":{"item_song":[]}}}}`)
+					return
+				}
+				fmt.Fprintf(w, `{"code":0,"req_0":{"code":0,"data":{"body":{"item_song":[%s]}}}}`, track)
+			case "get_song_detail_yqq":
+				if request.Req0.Param.SongMID != "003RMaRI1iFoYd" {
+					fmt.Fprint(w, `{"code":0,"req_0":{"code":404,"data":{}}}`)
+					return
+				}
+				fmt.Fprintf(w, `{"code":0,"req_0":{"code":0,"data":{"track_info":%s}}}`, track)
+			default:
+				// 无登录态时会员曲目的 purl 是空串——不是报错，是「这家放不了」。
+				fmt.Fprint(w, `{"req_0":{"data":{"sip":["`+"http://"+r.Host+`/qq/stream/"],"midurlinfo":[{"purl":""}]}}}`)
+			}
 		case "/kugou/search":
 			w.Header().Set("Content-Type", "application/json")
 			if !strings.Contains(r.URL.Query().Get("keyword"), "雾里") {
@@ -151,9 +174,10 @@ func musicTestServer(t *testing.T, durationMS int64, audio []byte) *httptest.Ser
 			// 酷狗搜索的 duration 是秒，播放接口的 timelength 是毫秒。
 			fmt.Fprintf(w, `{"status":1,"data":{"info":[{"hash":"5f9c1d2e3a4b5c6d7e8f90a1b2c3d4e5","songname":"雾里","singername":"姚六一","album_name":"雾里","album_id":"7788","duration":%d}]}}`, durationMS/1000)
 		case "/kugou/play":
+			// 官方 getSongInfo 的 timeLength 是秒。
 			w.Header().Set("Content-Type", "application/json")
-			fmt.Fprintf(w, `{"status":1,"data":{"play_url":%q,"song_name":"雾里","author_name":"姚六一","album_name":"雾里","timelength":%d}}`,
-				"http://"+r.Host+"/audio/kugou.mp3", durationMS)
+			fmt.Fprintf(w, `{"status":1,"url":%q,"songName":"雾里","singerName":"姚六一","timeLength":%d}`,
+				"http://"+r.Host+"/audio/kugou.mp3", durationMS/1000)
 		case "/audio/kugou.mp3":
 			w.Header().Set("Content-Type", "audio/mpeg")
 			_, _ = w.Write(audio)
@@ -174,18 +198,18 @@ func newMusicTestPlugin(server *httptest.Server) *MusicPlugin {
 	plugin := NewMusicPlugin(server.Client())
 	plugin.sources = []musicSource{
 		&neteaseSource{
-			detailAPI: server.URL + "/official/detail?ids=%s",
-			searchAPI: server.URL + "/official/search?s=%s",
-			outerURL:  server.URL + "/official/outer?id=%s",
+			detailAPI:  server.URL + "/official/detail?ids=%s",
+			searchAPI:  server.URL + "/official/search?s=%s",
+			songURLAPI: server.URL + "/official/songurl?id=%s&ids=%s&br=%d",
+			outerURL:   server.URL + "/official/outer?id=%s",
 		},
 		&qqSource{
-			searchAPI: server.URL + "/qq/search?w=%s",
-			vkeyAPI:   server.URL + "/qq/vkey?data=%s",
+			musicuAPI: server.URL + "/qq/musicu?data=%s",
 			streamCDN: server.URL + "/qq/stream/",
 		},
 		&kugouSource{
 			searchAPI: server.URL + "/kugou/search?keyword=%s",
-			playAPI:   server.URL + "/kugou/play?hash=%s&album_id=%s&mid=%s",
+			playAPI:   server.URL + "/kugou/play?hash=%s",
 		},
 	}
 	return plugin
@@ -829,8 +853,80 @@ func TestKugouCurrentSearchResponse(t *testing.T) {
 	}
 }
 
+// 没填自建接口时，MUSIC_U 要真的用上：会员账号拿整首；非会员拿到的 30 秒试听
+// 不能当整首发，得退到外链（外链也放不了就换下一家）。
+func TestNeteaseOfficialSongURLUsesCookieAndSkipsTrial(t *testing.T) {
+	server := musicTestServer(t, 213000, []byte("audio"))
+	plugin := newMusicTestPlugin(server)
+	source := plugin.sources[0].(*neteaseSource)
+	source.outerURL = server.URL + "/official/outer-blocked?id=%s"
+	playable := func(cookie string) string {
+		cfg := musicConfigFromSettings(SettingValues{musicSourceCookieSetting("netease"): cookie})
+		return source.PlayableURL(context.Background(), plugin.fetcher, cfg, "1974443814")
+	}
+	if got := playable("vip"); !strings.HasSuffix(got, "/audio/1974443814.mp3") {
+		t.Fatalf("vip PlayableURL() = %q", got)
+	}
+	if got := playable("basic"); got != "" {
+		t.Fatalf("trial PlayableURL() = %q, want empty instead of a 30-second clip", got)
+	}
+	if got := playable(""); got != "" {
+		t.Fatalf("guest PlayableURL() = %q, want empty for a VIP song", got)
+	}
+}
+
+// QQ 链接解析走详情接口：新搜索接口拿 songmid 当关键词搜不到东西。
+func TestQQSongDetailUsesDetailInterface(t *testing.T) {
+	server := musicTestServer(t, 213000, []byte("audio"))
+	plugin := newMusicTestPlugin(server)
+	source, _ := plugin.sourceByKey("qq")
+	cfg := musicConfigFromSettings(SettingValues{})
+	found, ok := source.SongDetail(context.Background(), plugin.fetcher, cfg, "003RMaRI1iFoYd")
+	if !ok || found.Name != "雾里" || found.Artists != "姚六一" || found.Duration != 213*time.Second {
+		t.Fatalf("SongDetail() = %#v, %v", found, ok)
+	}
+	if _, ok := source.SongDetail(context.Background(), plugin.fetcher, cfg, "000000000000"); ok {
+		t.Fatal("SongDetail() accepted a song the interface does not know")
+	}
+}
+
+// 酷狗付费歌：getSongInfo 照样给歌名歌手，只是 url 为空。链接解析要认得出
+// 这首歌（好拿歌名去别家找），但不能当成可播放。
+func TestKugouPaidSongKeepsDetailButIsNotPlayable(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"status":0,"url":"","songName":"晴天","singerName":"周杰伦","timeLength":0,"error":"需要付费"}`)
+	}))
+	t.Cleanup(server.Close)
+	source := &kugouSource{playAPI: server.URL + "?hash=%s"}
+	fetcher := &musicFetcher{client: server.Client()}
+	cfg := musicConfigFromSettings(SettingValues{})
+	id := "5f9c1d2e3a4b5c6d7e8f90a1b2c3d4e5:7788"
+	if found, ok := source.SongDetail(context.Background(), fetcher, cfg, id); !ok || found.Title() != "晴天 - 周杰伦" {
+		t.Fatalf("SongDetail() = %#v, %v", found, ok)
+	}
+	if got := source.PlayableURL(context.Background(), fetcher, cfg, id); got != "" {
+		t.Fatalf("PlayableURL() = %q, want empty for a paid song", got)
+	}
+}
+
+// qqTestMusicuRequest 是测试服务器解读 musicu 请求用的结构，只取用到的字段。
+type qqTestMusicuRequest struct {
+	Comm struct {
+		UIN string `json:"uin"`
+	} `json:"comm"`
+	Req0 struct {
+		Module string `json:"module"`
+		Method string `json:"method"`
+		Param  struct {
+			Query   string `json:"query"`
+			SongMID string `json:"song_mid"`
+		} `json:"param"`
+	} `json:"req_0"`
+}
+
 func TestQQVkeyRequestUsesCookieIdentity(t *testing.T) {
-	payload, err := qqVkeyRequest("003RMaRI1iFoYd", "foo=bar; uin=o123456; qm_keyst=secret")
+	payload, err := json.Marshal(qqVkeyRequest("003RMaRI1iFoYd", "foo=bar; uin=o123456; qm_keyst=secret"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -880,7 +976,7 @@ func TestQQPlayableURLJoinsPurlAndReportsEmptyAsUnavailable(t *testing.T) {
 		fmt.Fprintf(w, `{"req_0":{"data":{"sip":["https://cdn.example.invalid/"],"midurlinfo":[{"purl":%q}]}}}`, purl)
 	}))
 	t.Cleanup(server.Close)
-	source := &qqSource{searchAPI: server.URL + "?w=%s", vkeyAPI: server.URL + "?data=%s", streamCDN: "https://fallback.invalid/"}
+	source := &qqSource{musicuAPI: server.URL + "?data=%s", streamCDN: "https://fallback.invalid/"}
 	fetcher := &musicFetcher{client: server.Client()}
 	cfg := musicConfigFromSettings(SettingValues{})
 
@@ -941,7 +1037,7 @@ func musicLoginTestPlugin(t *testing.T, handler http.HandlerFunc) *MusicPlugin {
 		case *neteaseSource:
 			typed.accountAPI = server.URL + "/netease/account"
 		case *qqSource:
-			typed.vkeyAPI = server.URL + "/qq/musicu?data=%s"
+			typed.musicuAPI = server.URL + "/qq/musicu?data=%s"
 		}
 	}
 	return plugin
@@ -972,18 +1068,22 @@ func TestMusicLoginCheckReadsAccountInterfaces(t *testing.T) {
 			}
 			fmt.Fprint(w, `{"code":200,"account":{"id":1,"vipType":11},"profile":{"nickname":"云村村民","vipType":11}}`)
 		case "/qq/musicu":
-			var request struct {
-				Comm struct {
-					UIN string `json:"uin"`
-				} `json:"comm"`
-			}
+			var request qqTestMusicuRequest
 			_ = json.Unmarshal([]byte(r.URL.Query().Get("data")), &request)
+			cookie := r.Header.Get("Cookie")
 			// 账号接口认 comm.uin，和 vkey 一样；只放 Cookie 不带 uin 会被当游客。
-			if request.Comm.UIN == "12345" && strings.Contains(r.Header.Get("Cookie"), "qqmusic_key=good") {
-				fmt.Fprint(w, `{"code":0,"req_0":{"code":0,"data":{"nick":"企鹅"}}}`)
-				return
+			loggedIn := request.Comm.UIN == "12345" && (strings.Contains(cookie, "qqmusic_key=good") || strings.Contains(cookie, "qqmusic_key=vip"))
+			switch {
+			case !loggedIn:
+				fmt.Fprint(w, `{"code":0,"req_0":{"code":1000}}`)
+			case request.Req0.Method == "vip_login_base" && strings.Contains(cookie, "qqmusic_key=vip"):
+				fmt.Fprint(w, `{"code":0,"req_0":{"code":0,"data":{"sstart":"2026-03-31","send":"2099-05-02"}}}`)
+			case request.Req0.Method == "vip_login_base":
+				fmt.Fprint(w, `{"code":0,"req_0":{"code":0,"data":{"sstart":"2020-03-31","send":"2020-05-02"}}}`)
+			default:
+				// 真实接口的昵称在 data.info 下面。
+				fmt.Fprint(w, `{"code":0,"req_0":{"code":0,"data":{"errMsg":"OK","info":{"nick":"企鹅"}}}}`)
 			}
-			fmt.Fprint(w, `{"code":0,"req_0":{"code":1000}}`)
 		default:
 			http.NotFound(w, r)
 		}
@@ -995,8 +1095,13 @@ func TestMusicLoginCheckReadsAccountInterfaces(t *testing.T) {
 	if got := musicLoginCheck(t, plugin, "netease", "MUSIC_U=good"); got.State != CredentialInvalid || !strings.Contains(got.Message, "只填 MUSIC_U 的值") {
 		t.Fatalf("netease pasted name = %#v", got)
 	}
-	if got := musicLoginCheck(t, plugin, "qq", "uin=o12345; qqmusic_key=good"); got.State != CredentialValid || got.Account != "企鹅" {
+	// 登录有效但会员过期要说出来：不然用户只看到「填了 Cookie 还是放不了」。
+	if got := musicLoginCheck(t, plugin, "qq", "uin=o12345; qqmusic_key=good"); got.State != CredentialValid || got.Account != "企鹅" ||
+		got.Message != "已登录，但会员已于 2020-05-02 到期，会员歌曲拿不到播放地址" {
 		t.Fatalf("qq valid = %#v", got)
+	}
+	if got := musicLoginCheck(t, plugin, "qq", "uin=12345; qqmusic_key=vip"); got.State != CredentialValid || got.Message != "已登录，会员有效期至 2099-05-02" {
+		t.Fatalf("qq vip = %#v", got)
 	}
 	if got := musicLoginCheck(t, plugin, "qq", "uin=12345; qqmusic_key=stale"); got.State != CredentialInvalid {
 		t.Fatalf("qq expired = %#v", got)

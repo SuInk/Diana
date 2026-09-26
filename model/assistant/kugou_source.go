@@ -5,8 +5,6 @@ package assistant
 
 import (
 	"context"
-	"crypto/md5"
-	"encoding/hex"
 	"fmt"
 	"net/url"
 	"regexp"
@@ -16,13 +14,17 @@ import (
 
 // 酷狗音乐曲库。公共层见 music_source.go。
 //
-// 酷狗的歌曲标识是音频文件的 hash，播放接口还要一个 album_id 才给全曲地址，
-// 所以这里的 ID 是「hash:album_id」的组合串。ID 对公共层是不透明的，
-// 只有这个文件需要知道它是两截。
+// 酷狗的歌曲标识是音频文件的 hash。ID 是「hash:album_id」的组合串：官方接口
+// 只认 hash，album_id 留给自建 KuGouMusicApi 和老分享链接。ID 对公共层是不透明
+// 的，只有这个文件需要知道它是两截。
+//
+// 网页版 www.kugou.com 的 play/getdata 和 wwwapi 的 play/songinfo 从 2026 年 9 月起
+// 对所有歌曲返回 err_code 30020，现在走手机版的 getSongInfo：免费歌直接给地址，
+// 付费歌 url 为空、error 是「需要付费」，歌名歌手照样给，链接解析不受影响。
 
 const (
 	kugouSearchAPI = "https://songsearch.kugou.com/song_search_v2?platform=WebFilter&page=1&pagesize=5&keyword=%s"
-	kugouPlayAPI   = "https://www.kugou.com/yy/index.php?r=play/getdata&hash=%s&album_id=%s&mid=%s"
+	kugouPlayAPI   = "https://m.kugou.com/app/i/getSongInfo.php?cmd=playInfo&hash=%s"
 	kugouReferer   = "https://www.kugou.com/"
 )
 
@@ -91,8 +93,6 @@ func kugouSplitSongID(songID string) (hash string, albumID string) {
 
 func (s *kugouSource) headers(cfg musicConfig) map[string]string {
 	headers := map[string]string{"Referer": kugouReferer, "Accept": "application/json, text/plain, */*"}
-	// 播放接口认一个设备号 cookie，值本身不校验来源，缺了才会被拒。
-	// 用户填了自己的 Cookie 就用他的，没填就派生一个稳定值。
 	if cookie := cfg.sourceOptions(s.Key()).Cookie; cookie != "" {
 		headers["Cookie"] = cookie
 		// KuGouMusicApi 支持用 Authorization 传 token/userid/dfid，避免把
@@ -100,13 +100,6 @@ func (s *kugouSource) headers(cfg musicConfig) map[string]string {
 		headers["Authorization"] = cookie
 	}
 	return headers
-}
-
-// kugouDeviceID 由歌曲标识派生出一个稳定的 32 位设备号，同一首歌每次一致，
-// 便于对照日志排查。
-func kugouDeviceID(seed string) string {
-	sum := md5.Sum([]byte("diana-kugou:" + seed))
-	return hex.EncodeToString(sum[:])
 }
 
 func (s *kugouSource) ResolveSongID(ctx context.Context, f *musicFetcher, cfg musicConfig, ref musicReference) string {
@@ -167,6 +160,7 @@ func (r kugouSearchResponse) entries() []kugouSearchEntry {
 	return entries
 }
 
+// kugouPlayResponse 是自建 KuGouMusicApi /song/url 的返回，沿用老网页接口的字段。
 type kugouPlayResponse struct {
 	Status int `json:"status"`
 	Data   struct {
@@ -177,6 +171,26 @@ type kugouPlayResponse struct {
 		AlbumName  string `json:"album_name"`
 		TimeLength int64  `json:"timelength"`
 	} `json:"data"`
+}
+
+// kugouSongInfoResponse 是官方手机版 getSongInfo 的返回。timeLength 是秒，
+// 和自建接口的毫秒不同。
+type kugouSongInfoResponse struct {
+	Status     int    `json:"status"`
+	SongName   string `json:"songName"`
+	SingerName string `json:"singerName"`
+	FileName   string `json:"fileName"`
+	TimeLength int64  `json:"timeLength"`
+	URL        string `json:"url"`
+}
+
+// kugouTrack 把两种返回收成一份：歌曲信息和播放地址（可能为空）。
+type kugouTrack struct {
+	Name     string
+	Artist   string
+	Album    string
+	Duration time.Duration
+	PlayURL  string
 }
 
 func (s *kugouSource) Search(ctx context.Context, f *musicFetcher, cfg musicConfig, query string) (song, bool) {
@@ -212,45 +226,52 @@ func (s *kugouSource) Search(ctx context.Context, f *musicFetcher, cfg musicConf
 // SongDetail 和 PlayableURL 打的是同一个接口：酷狗的播放接口一次就把歌名、
 // 歌手、时长和播放地址全给了，没必要为详情单独跑一趟。
 func (s *kugouSource) SongDetail(ctx context.Context, f *musicFetcher, cfg musicConfig, songID string) (song, bool) {
-	payload, ok := s.playData(ctx, f, cfg, songID)
+	track, ok := s.track(ctx, f, cfg, songID)
 	if !ok {
 		return song{}, false
 	}
 	names := []string{}
-	if author := strings.TrimSpace(payload.Data.AuthorName); author != "" {
-		names = append(names, author)
+	if track.Artist != "" {
+		names = append(names, track.Artist)
 	}
-	name := firstNonEmpty(strings.TrimSpace(payload.Data.SongName), strings.TrimSpace(payload.Data.AudioName))
-	return newSong(s.Key(), songID, name, names, payload.Data.AlbumName,
-		time.Duration(payload.Data.TimeLength)*time.Millisecond)
+	return newSong(s.Key(), songID, track.Name, names, track.Album, track.Duration)
 }
 
 func (s *kugouSource) PlayableURL(ctx context.Context, f *musicFetcher, cfg musicConfig, songID string) string {
-	payload, ok := s.playData(ctx, f, cfg, songID)
-	if !ok {
+	track, ok := s.track(ctx, f, cfg, songID)
+	if !ok || track.PlayURL == "" || !musicLinkLooksPlayable(track.PlayURL) {
 		return ""
 	}
-	candidate := strings.TrimSpace(payload.Data.PlayURL)
-	if candidate == "" || !musicLinkLooksPlayable(candidate) {
-		return ""
-	}
-	return candidate
+	return track.PlayURL
 }
 
-func (s *kugouSource) playData(ctx context.Context, f *musicFetcher, cfg musicConfig, songID string) (kugouPlayResponse, bool) {
+func (s *kugouSource) track(ctx context.Context, f *musicFetcher, cfg musicConfig, songID string) (kugouTrack, bool) {
 	hash, albumID := kugouSplitSongID(songID)
 	if hash == "" {
-		return kugouPlayResponse{}, false
+		return kugouTrack{}, false
 	}
-	endpoint := fmt.Sprintf(s.playAPI, hash, url.QueryEscape(albumID), kugouDeviceID(hash))
-	guarded := true
 	if base := cfg.sourceOptions(s.Key()).APIBase; base != "" {
-		endpoint = fmt.Sprintf("%s/song/url?hash=%s&album_id=%s", base, hash, url.QueryEscape(albumID))
-		guarded = false
+		endpoint := fmt.Sprintf("%s/song/url?hash=%s&album_id=%s", base, hash, url.QueryEscape(albumID))
+		var payload kugouPlayResponse
+		if !f.fetchJSON(ctx, cfg, endpoint, false, s.headers(cfg), &payload) {
+			return kugouTrack{}, false
+		}
+		return kugouTrack{
+			Name:     firstNonEmpty(strings.TrimSpace(payload.Data.SongName), strings.TrimSpace(payload.Data.AudioName)),
+			Artist:   strings.TrimSpace(payload.Data.AuthorName),
+			Album:    strings.TrimSpace(payload.Data.AlbumName),
+			Duration: time.Duration(payload.Data.TimeLength) * time.Millisecond,
+			PlayURL:  strings.TrimSpace(payload.Data.PlayURL),
+		}, true
 	}
-	var payload kugouPlayResponse
-	if !f.fetchJSON(ctx, cfg, endpoint, guarded, s.headers(cfg), &payload) {
-		return kugouPlayResponse{}, false
+	var payload kugouSongInfoResponse
+	if !f.fetchJSON(ctx, cfg, fmt.Sprintf(s.playAPI, hash), true, s.headers(cfg), &payload) {
+		return kugouTrack{}, false
 	}
-	return payload, true
+	return kugouTrack{
+		Name:     firstNonEmpty(strings.TrimSpace(payload.SongName), strings.TrimSpace(payload.FileName)),
+		Artist:   strings.TrimSpace(payload.SingerName),
+		Duration: time.Duration(payload.TimeLength) * time.Second,
+		PlayURL:  strings.TrimSpace(payload.URL),
+	}, true
 }

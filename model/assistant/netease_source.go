@@ -18,6 +18,7 @@ import (
 const (
 	neteaseDetailAPI  = "https://music.163.com/api/song/detail/?ids=%%5B%s%%5D"
 	neteaseSearchAPI  = "https://music.163.com/api/search/get/?type=1&offset=0&limit=5&s=%s"
+	neteaseSongURLAPI = "https://music.163.com/api/song/enhance/player/url?id=%s&ids=%%5B%s%%5D&br=%d"
 	neteaseOuterURL   = "https://music.163.com/song/media/outer/url?id=%s.mp3"
 	neteaseAccountAPI = "https://music.163.com/api/nuser/account/get"
 	neteaseReferer    = "https://music.163.com/"
@@ -36,12 +37,13 @@ var (
 type neteaseSource struct {
 	detailAPI  string
 	searchAPI  string
+	songURLAPI string
 	outerURL   string
 	accountAPI string
 }
 
 func newNeteaseSource() *neteaseSource {
-	return &neteaseSource{detailAPI: neteaseDetailAPI, searchAPI: neteaseSearchAPI, outerURL: neteaseOuterURL, accountAPI: neteaseAccountAPI}
+	return &neteaseSource{detailAPI: neteaseDetailAPI, searchAPI: neteaseSearchAPI, songURLAPI: neteaseSongURLAPI, outerURL: neteaseOuterURL, accountAPI: neteaseAccountAPI}
 }
 
 func (s *neteaseSource) Key() string     { return "netease" }
@@ -237,7 +239,24 @@ type neteaseSongURLResponse struct {
 	Code int `json:"code"`
 	Data []struct {
 		URL string `json:"url"`
+		// FreeTrialInfo 非空说明给的是 30 秒试听片段：登录了但不是会员时，
+		// 会员歌会走到这里。把试听当整首发出去，群里听到的是半截歌。
+		FreeTrialInfo json.RawMessage `json:"freeTrialInfo"`
 	} `json:"data"`
+}
+
+// fullTrackURL 取第一条完整曲目的地址，试听片段不算。
+func (r neteaseSongURLResponse) fullTrackURL() string {
+	for _, entry := range r.Data {
+		trial := strings.TrimSpace(string(entry.FreeTrialInfo))
+		if trial != "" && trial != "null" {
+			continue
+		}
+		if candidate := strings.TrimSpace(entry.URL); candidate != "" {
+			return candidate
+		}
+	}
+	return ""
 }
 
 // SongDetail 取歌名、歌手、专辑和时长。
@@ -287,11 +306,22 @@ func (s *neteaseSource) PlayableURL(ctx context.Context, f *musicFetcher, cfg mu
 		endpoint := fmt.Sprintf("%s/song/url?id=%s&br=%d", base, url.QueryEscape(songID), cfg.Bitrate)
 		var payload neteaseSongURLResponse
 		if f.fetchJSON(ctx, cfg, endpoint, false, s.headers(cfg), &payload) {
-			for _, entry := range payload.Data {
-				if candidate := strings.TrimSpace(entry.URL); candidate != "" {
-					return candidate
-				}
+			if candidate := payload.fullTrackURL(); candidate != "" {
+				return candidate
 			}
+		}
+	}
+	// 官方取地址接口认 MUSIC_U：填了会员账号的 Cookie，会员歌就能拿到整首。
+	// 以前没填自建接口时只走外链，而外链不带 Cookie，填了 MUSIC_U 等于白填。
+	bitrate := cfg.Bitrate
+	if bitrate <= 0 {
+		bitrate = 320000
+	}
+	var payload neteaseSongURLResponse
+	escaped := url.QueryEscape(songID)
+	if f.fetchJSON(ctx, cfg, fmt.Sprintf(s.songURLAPI, escaped, escaped, bitrate), true, s.headers(cfg), &payload) {
+		if candidate := payload.fullTrackURL(); candidate != "" {
+			return candidate
 		}
 	}
 	// 官方外链是一次 302。落点不像音频就说明这首歌是会员或独家，别把 404 页

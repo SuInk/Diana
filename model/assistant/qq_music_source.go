@@ -18,10 +18,12 @@ import (
 // 说清楚这家的现实情况：没有登录态时，取播放地址那一步（vkey）多半只给得出
 // 可试听的曲目，会员和独家会返回空地址。填上自建 QQMusicApi 或 Cookie 才稳。
 // 拿不到就返回空串，由上层换下一家曲库——这正是多曲库存在的理由。
+//
+// 搜索、详情、播放地址和账号都走同一个 musicu 网关，只是 req_0 的 module 不同。
+// 老的 c.y.qq.com/soso 搜索接口从 2026 年 9 月起对所有人返回 500，不要再接回去。
 
 const (
-	qqSearchAPI = "https://c.y.qq.com/soso/fcgi-bin/client_search_cp?format=json&platform=yqq.json&new_json=1&p=1&n=5&w=%s"
-	qqVkeyAPI   = "https://u.y.qq.com/cgi-bin/musicu.fcg?format=json&data=%s"
+	qqMusicuAPI = "https://u.y.qq.com/cgi-bin/musicu.fcg?format=json&data=%s"
 	qqStreamCDN = "https://ws.stream.qqmusic.qq.com/"
 	qqReferer   = "https://y.qq.com/"
 )
@@ -34,13 +36,29 @@ var (
 )
 
 type qqSource struct {
-	searchAPI string
-	vkeyAPI   string
+	musicuAPI string
 	streamCDN string
 }
 
 func newQQSource() *qqSource {
-	return &qqSource{searchAPI: qqSearchAPI, vkeyAPI: qqVkeyAPI, streamCDN: qqStreamCDN}
+	return &qqSource{musicuAPI: qqMusicuAPI, streamCDN: qqStreamCDN}
+}
+
+// musicu 发一次 musicu 网关请求，comm 和 req_0 由调用方给。
+func (s *qqSource) musicu(ctx context.Context, f *musicFetcher, cfg musicConfig, request any, target any) bool {
+	body, err := json.Marshal(request)
+	if err != nil {
+		recordMusicFailure(ctx, "组装 QQ 音乐请求失败：%v", err)
+		return false
+	}
+	return f.fetchJSON(ctx, cfg, fmt.Sprintf(s.musicuAPI, url.QueryEscape(string(body))), true, s.headers(cfg), target)
+}
+
+func qqMusicuRequest(comm map[string]any, module, method string, param map[string]any) map[string]any {
+	return map[string]any{
+		"comm":  comm,
+		"req_0": map[string]any{"module": module, "method": method, "param": param},
+	}
 }
 
 func (s *qqSource) Key() string     { return "qq" }
@@ -126,41 +144,29 @@ func qqUINFromCookie(raw string) string {
 	return "0"
 }
 
-func qqVkeyRequest(songID, rawCookie string) ([]byte, error) {
+func qqVkeyRequest(songID, rawCookie string) map[string]any {
 	uin := qqUINFromCookie(rawCookie)
 	if uin == "0" {
 		// 游客请求保留已经验证过的旧接口；新接口在无登录态时更容易直接
 		// 返回空 purl。只有 Cookie 里能取到真实账号时才走会员请求。
-		return json.Marshal(map[string]any{
-			"req_0": map[string]any{
-				"module": "vkey.GetVkeyServer",
-				"method": "CgiGetVkey",
-				"param": map[string]any{
-					"guid": qqGuid(songID), "songmid": []string{songID}, "songtype": []int{0},
-					"uin": "0", "loginflag": 1, "platform": "20",
-				},
-			},
-			"comm": map[string]any{"uin": 0, "format": "json", "ct": 24, "cv": 0},
-		})
+		return qqMusicuRequest(map[string]any{"uin": 0, "format": "json", "ct": 24, "cv": 0},
+			"vkey.GetVkeyServer", "CgiGetVkey", map[string]any{
+				"guid": qqGuid(songID), "songmid": []string{songID}, "songtype": []int{0},
+				"uin": "0", "loginflag": 1, "platform": "20",
+			})
 	}
-	return json.Marshal(map[string]any{
-		"req_0": map[string]any{
-			"module": "music.vkey.GetVkey",
-			"method": "UrlGetVkey",
-			"param": map[string]any{
-				"guid":           qqGuid(songID),
-				"songmid":        []string{songID},
-				"songtype":       []int{0},
-				"filename":       []string{"M500" + songID + songID + ".mp3"},
-				"uin":            uin,
-				"loginflag":      1,
-				"platform":       "23",
-				"h5queryversion": 1,
-				"quality":        "M500",
-			},
-		},
-		"comm": map[string]any{"uin": uin, "format": "json", "ct": 24, "cv": 0},
-	})
+	return qqMusicuRequest(map[string]any{"uin": uin, "format": "json", "ct": 24, "cv": 0},
+		"music.vkey.GetVkey", "UrlGetVkey", map[string]any{
+			"guid":           qqGuid(songID),
+			"songmid":        []string{songID},
+			"songtype":       []int{0},
+			"filename":       []string{"M500" + songID + songID + ".mp3"},
+			"uin":            uin,
+			"loginflag":      1,
+			"platform":       "23",
+			"h5queryversion": 1,
+			"quality":        "M500",
+		})
 }
 
 func (s *qqSource) ResolveSongID(ctx context.Context, f *musicFetcher, cfg musicConfig, ref musicReference) string {
@@ -215,13 +221,16 @@ func (s qqSongPayload) toSong() (song, bool) {
 		names, album, time.Duration(s.Interval)*time.Second)
 }
 
+// qqSearchResponse 是 musicu 网关 DoSearchForQQMusicLite 的返回，歌曲在 body.item_song。
 type qqSearchResponse struct {
-	Code int `json:"code"`
-	Data struct {
-		Song struct {
-			List []qqSongPayload `json:"list"`
-		} `json:"song"`
-	} `json:"data"`
+	Req0 struct {
+		Code int `json:"code"`
+		Data struct {
+			Body struct {
+				ItemSong []qqSongPayload `json:"item_song"`
+			} `json:"body"`
+		} `json:"data"`
+	} `json:"req_0"`
 }
 
 // qqSelfHostedSearchResponse 是 QQMusicApi 这类自建服务的返回，比官方接口浅一层。
@@ -244,10 +253,13 @@ func (s *qqSource) Search(ctx context.Context, f *musicFetcher, cfg musicConfig,
 		}
 	}
 	var payload qqSearchResponse
-	if !f.fetchJSON(ctx, cfg, fmt.Sprintf(s.searchAPI, url.QueryEscape(query)), true, s.headers(cfg), &payload) {
+	request := qqMusicuRequest(map[string]any{"ct": 19, "cv": 1859, "uin": "0"},
+		"music.search.SearchCgiService", "DoSearchForQQMusicLite",
+		map[string]any{"query": query, "num_per_page": 5, "page_num": 1, "search_type": 0})
+	if !s.musicu(ctx, f, cfg, request, &payload) {
 		return song{}, false
 	}
-	for _, entry := range payload.Data.Song.List {
+	for _, entry := range payload.Req0.Data.Body.ItemSong {
 		if found, ok := entry.toSong(); ok {
 			return found, true
 		}
@@ -255,12 +267,25 @@ func (s *qqSource) Search(ctx context.Context, f *musicFetcher, cfg musicConfig,
 	return song{}, false
 }
 
-// SongDetail 直接用搜索接口按 songmid 反查。
-//
-// QQ 音乐的详情接口要签名，而搜索接口拿 songmid 当关键词就能把那首歌搜出来，
-// 省掉一整套签名逻辑。搜出来的第一条不是同一首时宁可判失败，也不发错歌。
+type qqSongDetailResponse struct {
+	Req0 struct {
+		Code int `json:"code"`
+		Data struct {
+			TrackInfo qqSongPayload `json:"track_info"`
+		} `json:"data"`
+	} `json:"req_0"`
+}
+
+// SongDetail 按 songmid 查单曲。以前拿 songmid 当关键词去搜，新搜索接口按
+// songmid 搜不到东西，只能走详情接口；这个接口不要签名。
 func (s *qqSource) SongDetail(ctx context.Context, f *musicFetcher, cfg musicConfig, songID string) (song, bool) {
-	found, ok := s.Search(ctx, f, cfg, songID)
+	var payload qqSongDetailResponse
+	request := qqMusicuRequest(map[string]any{"ct": 24, "cv": 0, "format": "json"},
+		"music.pf_song_detail_svr", "get_song_detail_yqq", map[string]any{"song_mid": songID})
+	if !s.musicu(ctx, f, cfg, request, &payload) || payload.Req0.Code != 0 {
+		return song{}, false
+	}
+	found, ok := payload.Req0.Data.TrackInfo.toSong()
 	if !ok || found.ID != songID {
 		return song{}, false
 	}
@@ -298,13 +323,8 @@ func (s *qqSource) PlayableURL(ctx context.Context, f *musicFetcher, cfg musicCo
 			}
 		}
 	}
-	request, err := qqVkeyRequest(songID, cfg.sourceOptions(s.Key()).Cookie)
-	if err != nil {
-		return ""
-	}
 	var payload qqVkeyResponse
-	endpoint := fmt.Sprintf(s.vkeyAPI, url.QueryEscape(string(request)))
-	if !f.fetchJSON(ctx, cfg, endpoint, true, s.headers(cfg), &payload) {
+	if !s.musicu(ctx, f, cfg, qqVkeyRequest(songID, cfg.sourceOptions(s.Key()).Cookie), &payload) {
 		return ""
 	}
 	for _, info := range payload.Req0.Data.MidURLInfo {
@@ -329,6 +349,9 @@ func (s *qqSource) PlayableURL(ctx context.Context, f *musicFetcher, cfg musicCo
 
 // qqGuid 造一个稳定的设备号。接口要求非空，但不校验来源；用歌曲 ID 派生，
 // 同一首歌每次拿到的是同一个值，便于对照日志排查。
+//
+// 别图省事写成 1234567890 这类常见值：vkey 接口把它判成 invalidq，游客返回
+// 1000、带登录态返回 104009，看上去就像 Cookie 失效，排查时很容易被带偏。
 func qqGuid(seed string) string {
 	var sum uint32 = 2166136261
 	for _, b := range []byte(seed) {
