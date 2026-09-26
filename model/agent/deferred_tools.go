@@ -149,7 +149,7 @@ func (l *deferredToolLoader) InputSchema() map[string]any {
 	}
 }
 
-func (l *deferredToolLoader) Run(_ context.Context, input map[string]any) (string, error) {
+func (l *deferredToolLoader) Run(ctx context.Context, input map[string]any) (string, error) {
 	if err := validateToolInput(l.InputSchema(), input); err != nil {
 		return "", err
 	}
@@ -164,9 +164,20 @@ func (l *deferredToolLoader) Run(_ context.Context, input map[string]any) (strin
 		InputSchema map[string]any `json:"inputSchema"`
 	}
 	contracts := []contract{}
+	skills := []json.RawMessage{}
 	snapshots := map[string]map[string]any{}
 	for _, name := range requested {
 		tool, ok := l.registry.Get(name)
+		if !ok && l.isSkill(name) {
+			// 技能和工具一样是按需加载的能力，只是正文不同。模型拿技能名来 tools_load
+			// 时（线上见过 "bot-protocol"）直接把 SKILL.md 给它，不必再绕去 read_skill。
+			body, err := (&SkillsReadTool{provider: l.registry.Skills}).Run(ctx, map[string]any{"name": name})
+			if err != nil {
+				return "", fmt.Errorf("技能 %q 读取失败：%w", name, err)
+			}
+			skills = append(skills, json.RawMessage(body))
+			continue
+		}
 		if !ok || name == "" {
 			return "", l.unavailableToolError(name)
 		}
@@ -179,7 +190,12 @@ func (l *deferredToolLoader) Run(_ context.Context, input map[string]any) (strin
 			snapshots[name] = schema
 		}
 	}
-	result, err := json.Marshal(map[string]any{"loaded": contracts, "instruction": "使用 tools_execute，把目标工具名放入 name、参数对象放入 input；当前群会话后续运行会保留加载状态。"})
+	payload := map[string]any{"loaded": contracts, "instruction": "使用 tools_execute，把目标工具名放入 name、参数对象放入 input；当前群会话后续运行会保留加载状态。"}
+	if len(skills) > 0 {
+		payload["skills"] = skills
+		payload["skill_instruction"] = "skills 里是技能的完整 SKILL.md，按其中的说明去调用它提到的工具。"
+	}
+	result, err := json.Marshal(payload)
 	if err != nil {
 		return "", fmt.Errorf("无法编码工具契约")
 	}
@@ -212,7 +228,7 @@ func (l *deferredToolLoader) unavailableToolError(name string) error {
 	if l.registry.PolicyDenied(name) {
 		return l.registry.denialError(name)
 	}
-	return fmt.Errorf("工具 %q 不存在或已禁用%s；请重新选择 tools_load 名称", name, toolSuggestionHint(l.registry, name))
+	return fmt.Errorf("工具 %q 不存在或已禁用；请重新选择 tools_load 名称", name)
 }
 
 // missingToolError 是「根本没有这个工具」时的回话，多半是模型自己编了个名字（线上见过
@@ -222,7 +238,23 @@ func (l *deferredToolLoader) missingToolError(name string) error {
 	if l.registry.PolicyDenied(name) {
 		return l.registry.denialError(name)
 	}
-	return fmt.Errorf("工具 %q 不存在%s。工具名要和目录里的一字不差，不加 diana. 之类的前缀；常驻工具直接调用，目录里的延迟工具先 tools_load 再 tools_execute", name, toolSuggestionHint(l.registry, name))
+	if l.isSkill(name) {
+		return fmt.Errorf("%q 是技能，不能直接执行：先 tools_load 它读到 SKILL.md，再按说明调用里面提到的工具", name)
+	}
+	return fmt.Errorf("工具 %q 不存在。工具名要和目录里的一字不差，不加 diana. 之类的前缀；常驻工具直接调用，目录里的延迟工具先 tools_load 再 tools_execute", name)
+}
+
+// isSkill 判断这个名字是不是当前可见的技能。
+func (l *deferredToolLoader) isSkill(name string) bool {
+	if name == "" {
+		return false
+	}
+	for _, skill := range l.registry.Skills() {
+		if skill.Name == name {
+			return true
+		}
+	}
+	return false
 }
 
 func deniedToolError(name string) error {
