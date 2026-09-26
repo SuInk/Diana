@@ -69,6 +69,10 @@ type dianaImageToolResult struct {
 	// 哪条消息的图，要以它为准。
 	SourcesUsed []imageEditSourceUsed `json:"sources_used,omitempty"`
 	SourcesNote string                `json:"sources_note,omitempty"`
+	// QuotaExceeded 表示今天的生图次数用完了，这次没有受理；Notice 是要照实转告
+	// 用户的说明。
+	QuotaExceeded bool   `json:"quota_exceeded,omitempty"`
+	Notice        string `json:"notice,omitempty"`
 }
 
 // imageSourcesUsedNote 跟着 sources_used 一起给模型：光给一张来历表，模型未必会拿它
@@ -102,6 +106,8 @@ type dianaImageToolRequest struct {
 	// WorkspaceStem 是成品在工作目录 outputs/ 里的文件名前缀，受理时定下来，
 	// 这样受理结果里就能告诉模型图会存到哪。为空表示不落盘。
 	WorkspaceStem string
+	// quota 是受理时占下的每日生图次数，任务结束时按实际成功张数结清。
+	quota *mediaGenerationReservation
 }
 
 type dianaImageTaskOutput struct {
@@ -132,7 +138,7 @@ func (t *dianaImageTool) Description() string {
 	if len(operations) == 0 {
 		operations = append(operations, "无")
 	}
-	return `异步生成或编辑图片。工具受理后由运行时替你告诉用户「开始处理」，图片在后台完成后自动发送。调用后直接继续输出 final 文字回复即可，不要等待图片，不要再次调用本工具，也不要重复说一遍「正在处理」。当前允许操作：` + strings.Join(operations, "、") + `。要对多张参考图逐张各出一张，用 source_mode="each"。如果用户要求先搜索、核验网页或读取外部资料再出图，必须先完成搜索或浏览器调用，prompt 里只能写已确认的事实，不能虚构没查到的内容。结果里的 sources_used 是这次实际用到的原图，回复里说用了什么只能照它说。`
+	return `异步生成或编辑图片。工具受理后由运行时替你告诉用户「开始处理」，图片在后台完成后自动发送。调用后直接继续输出 final 文字回复即可，不要等待图片，不要再次调用本工具，也不要重复说一遍「正在处理」。当前允许操作：` + strings.Join(operations, "、") + `。要对多张参考图逐张各出一张，用 source_mode="each"。如果用户要求先搜索、核验网页或读取外部资料再出图，必须先完成搜索或浏览器调用，prompt 里只能写已确认的事实，不能虚构没查到的内容。结果里的 sources_used 是这次实际用到的原图，回复里说用了什么只能照它说。结果里 quota_exceeded 为 true 表示今天的生图次数用完了，照 notice 如实告诉用户，不要换别的途径出图。`
 }
 
 // imageAnnouncementSubjectMaxRunes 是开场白里能带上的画面描述长度上限。
@@ -239,6 +245,19 @@ func (t *dianaImageTool) Run(ctx context.Context, input map[string]any) (string,
 		return "", err
 	}
 	result, err := t.enqueue(ctx, request)
+	var quotaErr *mediaGenerationQuotaError
+	if errors.As(err, &quotaErr) {
+		// 超限是明确的业务结果，不是工具故障：给模型一句能照念的话，别让它当成
+		// 偶发错误去重试，或者换条路子接着画。
+		body, marshalErr := json.Marshal(dianaImageToolResult{
+			Action: request.Operation, QuotaExceeded: true,
+			Notice: imageQuotaExceededInstruction(quotaErr, t.runtime.effectiveConfigForEvent(t.event)),
+		})
+		if marshalErr != nil {
+			return "", marshalErr
+		}
+		return string(body), nil
+	}
 	if err != nil {
 		return "", err
 	}
@@ -375,6 +394,16 @@ func (t *dianaImageTool) enqueue(ctx context.Context, request dianaImageToolRequ
 	// 「五子棋 / 棋盘」，命中就把图片绑到共享棋局状态的版本上，防旧图盖掉新落子。
 	// 那是拿关键词猜语义，而且只认五子棋；要防「图片发出来时局面已经变了」，该由
 	// 模型在拿到图之后自己核对状态再决定发不发，不该由通用工具替某个游戏兜底。
+	// 放在找原图之后：原图都没有的话，该让用户补图，而不是先占掉一次次数。
+	amount := 1
+	if request.Operation == "edit" && request.SourceMode == dianaImageSourceModeEach && len(request.Sources) > 1 {
+		amount = min(len(request.Sources), dianaImageMaxEachSources)
+	}
+	quota, err := t.runtime.reserveMediaGeneration(ctx, t.event, MediaGenerationImage, amount)
+	if err != nil {
+		return dianaImageToolResult{}, err
+	}
+	request.quota = quota
 	taskKey := dianaImageTaskKey(t.event, request)
 	if t.persistsToWorkspace() {
 		request.WorkspaceStem = dianaImageWorkspaceStem(taskKey, time.Now())
@@ -407,6 +436,7 @@ func (t *dianaImageTool) enqueue(ctx context.Context, request dianaImageToolRequ
 	}
 	reservation := t.runtime.reservePluginTasksForTurn(ctx, t.event, []PluginTask{task})
 	if !reservation.handled {
+		quota.release()
 		return dianaImageToolResult{}, fmt.Errorf("图片任务无法启动")
 	}
 	result := dianaImageToolResult{OK: true, Queued: true, Action: request.Operation, Caption: request.Caption}
@@ -423,13 +453,18 @@ func (t *dianaImageTool) enqueue(ctx context.Context, request dianaImageToolRequ
 		if sink := imageAnnouncementSinkFrom(ctx); sink != nil {
 			sink.deferTask(
 				func() { t.runtime.startPluginTaskReservation(reservation) },
-				func() { t.runtime.cancelPluginTaskReservation(reservation) },
+				func() {
+					t.runtime.cancelPluginTaskReservation(reservation)
+					quota.release()
+				},
 			)
 		} else {
 			t.runtime.startPluginTaskReservation(reservation)
 		}
 		return result, nil
 	}
+	// 复用已有任务不另算一次：那张图记在最初受理的那笔上。
+	quota.release()
 	if len(reservation.duplicates) > 0 {
 		result.TaskID = reservation.duplicates[0].ID
 		result.Reused = true
@@ -473,7 +508,20 @@ func (t *dianaImageTool) execute(ctx context.Context, request dianaImageToolRequ
 		failed  int
 		// produced 是这次拿到的全部成品，逐张模式里已经发出去的也在内，落盘用。
 		produced []string
+		// generated 是图片接口成功返回的次数，streamed 是逐张模式里已经发出去的张数。
+		// 任务成功按 generated 结清每日次数；中途失败时只有已经发到用户手里的才算，
+		// 没发出去的图对用户来说就是没画成。
+		generated int
+		streamed  int
+		succeeded bool
 	)
+	defer func() {
+		if succeeded {
+			request.quota.commit(ctx, generated)
+			return
+		}
+		request.quota.commit(ctx, streamed)
+	}()
 	// 成品原图同时存进工作目录，模型之后才能用 send_attachment 再发、用 manage_files
 	// 整理。以前图只进媒体缓存，主人说「存下来」时模型手里没有任何能存的东西。
 	defer func() { t.runtime.persistGeneratedImages(ctx, t.event, request.WorkspaceStem, produced) }()
@@ -486,6 +534,9 @@ func (t *dianaImageTool) execute(ctx context.Context, request dianaImageToolRequ
 		})
 		if err != nil {
 			return dianaImageTaskOutput{}, err
+		}
+		if len(resp.Images) > 0 {
+			generated++
 		}
 		cfg = usedCfg
 		images = resp.Images
@@ -518,7 +569,6 @@ func (t *dianaImageTool) execute(ctx context.Context, request dianaImageToolRequ
 		// 也不再需要「正在编辑第 N/M 张」这种带内部味道的进度播报——
 		// 图片本身就是进度。发不出去再退回攒总。
 		streaming := request.SourceMode == dianaImageSourceModeEach && len(batches) > 1 && services.Send != nil
-		streamed := 0
 		// 标注按「来源→解析出的头像地址」建映射:来源解析是保序但有损的
 		//（解析失败会整个跳过）,按下标硬对会把 A 的头像标成 B。查不到就
 		// 不标,宁缺毋错。
@@ -558,6 +608,9 @@ func (t *dianaImageTool) execute(ctx context.Context, request dianaImageToolRequ
 				failed++
 				continue
 			}
+			if len(resp.Images) > 0 {
+				generated++
+			}
 			cfg = usedCfg
 			sourceCount += len(batch)
 			produced = append(produced, resp.Images...)
@@ -594,6 +647,7 @@ func (t *dianaImageTool) execute(ctx context.Context, request dianaImageToolRequ
 			if failed > 0 || dropped > 0 {
 				note = dianaImageResultCaption("", 0, dropped, failed)
 			}
+			succeeded = true
 			return dianaImageTaskOutput{Delivered: true, Caption: note}, nil
 		}
 		action = "image_edit"
@@ -611,6 +665,7 @@ func (t *dianaImageTool) execute(ctx context.Context, request dianaImageToolRequ
 		cleanupLocalMediaFilesLater(localPaths, dianaImageMediaTTL)
 	}
 	t.runtime.recordImageOperation(ctx, t.event, action, message, prompt, submittedPrompt, cfg.ImageModelWithDefault(), len(images), sourceCount)
+	succeeded = true
 	return dianaImageTaskOutput{
 		Caption:   dianaImageResultCaption(request.Caption, len(sharedImages), dropped, failed),
 		ImageURLs: sharedImages,
@@ -672,6 +727,26 @@ var (
 		Default: promptAsyncImageAnnounced,
 	})
 )
+
+// 次数用完时最容易出的两种岔子：模型照样说「在画了」，或者换个工具（搜图、HTML
+// 渲染、插件）变相交一张图。两样都要明确堵住。
+const promptImageQuotaExceeded = "【本轮图片任务】{notice}。这次没有开始画，之后也不会补发。照实把这句话告诉用户，不要说「在画了」「马上发出来」，不要再调用 image，也不要改用搜图、HTML 渲染、浏览器、插件或其他任何途径变相出图。"
+
+var promptImageQuotaExceededSpec = registerPrompt(PromptSpec{
+	Key:     "media.image_quota_exceeded",
+	Group:   PromptGroupMedia,
+	Title:   "生图次数已用完",
+	Usage:   "本群或这个人今天的生图次数用完时，告诉正式回复如实转告、别换别的途径出图。",
+	Default: promptImageQuotaExceeded,
+	Vars: []PromptVar{
+		{Name: "notice", Description: "给用户的说明，如「今天本群的生图次数已用完（10/10），明天再来」"},
+	},
+})
+
+// imageQuotaExceededInstruction 生成次数用完时的说明，工具结果和意图路由两条路共用。
+func imageQuotaExceededInstruction(err *mediaGenerationQuotaError, configs ...BotConfig) string {
+	return promptOverridesOf(configs).render(promptImageQuotaExceededSpec, map[string]string{"notice": err.Notice()})
+}
 
 // asyncImageReplyInstruction 生成本轮图片任务的说明。configs 传机器人配置时读它的覆盖值。
 func asyncImageReplyInstruction(result dianaImageToolResult, configs ...BotConfig) string {
