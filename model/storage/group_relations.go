@@ -140,6 +140,12 @@ LIMIT ?
 	if err := rows.Err(); err != nil {
 		return assistant.GroupRelationGraph{}, fmt.Errorf("iterate group relations: %w", err)
 	}
+	// 扫到上限时是 break 出来的，结果集还开着、连接还占着。下面补好感度要再查
+	// 一次，必须先把这条连接还回去：否则一次调用同时占两条连接，单连接的库（内存
+	// 库）上第二条查询会一直等到上下文超时。
+	if err := rows.Close(); err != nil {
+		return assistant.GroupRelationGraph{}, fmt.Errorf("close group relations: %w", err)
+	}
 
 	graph.Participants = len(messages)
 	graph.Nodes = s.buildRelationNodes(ctx, messages, names, graph.BotID)

@@ -170,3 +170,49 @@ func TestGroupRelationGraphEmptyGroup(t *testing.T) {
 		t.Fatalf("空群号不该报错：%v", err)
 	}
 }
+
+// 扫到条数上限 break 出来时，结果集要先关掉再查好感度。内存库只有一条连接，
+// 没关的话好感度查询会一直等到上下文超时，好感度也就丢了。
+func TestGroupRelationGraphReleasesScanBeforeFavorability(t *testing.T) {
+	store, err := NewSQLiteStore(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+	if store.readDB != nil {
+		t.Fatal("in-memory store should share its single connection")
+	}
+	now := time.Now().Unix()
+	if _, err := store.db.Exec(`WITH RECURSIVE seq(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM seq WHERE x < ?)
+INSERT INTO message_events (id, session, kind, group_id, user_id, message_id, sender_name, event_time, text, payload, created_at)
+SELECT printf('m%d', x), 'group:g1', 'group', 'g1', '1001', printf('m%d', x), 'Alice', ? - x, '', '{"user_id":"1001"}', '2026-01-01T00:00:00Z' FROM seq`,
+		groupRelationScanLimit+5, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.Exec(`INSERT INTO user_profiles (bot_profile_id, user_id, display_name, favorability, message_count, memories, updated_at)
+VALUES ('', '1001', 'Alice', 37, 1, '[]', '2026-01-01T00:00:00Z')`); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	started := time.Now()
+	graph, err := store.GroupRelationGraphFor(ctx, "g1", time.Time{}, "42")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !graph.Truncated || graph.Messages != groupRelationScanLimit {
+		t.Fatalf("truncated=%v messages=%d", graph.Truncated, graph.Messages)
+	}
+	if elapsed := time.Since(started); elapsed > 3*time.Second || ctx.Err() != nil {
+		t.Fatalf("favorability query waited for the scan's connection: %v", elapsed)
+	}
+	var favorability int
+	for _, node := range graph.Nodes {
+		if node.UserID == "1001" {
+			favorability = node.Favorability
+		}
+	}
+	if favorability != 37 {
+		t.Fatalf("favorability = %d, want 37; nodes=%#v", favorability, graph.Nodes)
+	}
+}

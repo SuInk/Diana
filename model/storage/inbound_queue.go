@@ -485,19 +485,20 @@ WHERE kind = ? AND group_id = ?
 }
 
 // historySessionsQuery 的平台、机器人表达式必须和 historySessionsIndex 里的逐字一致。
+// payload 不是合法 JSON 时平台、机器人按空值算（原先整条查询会报错）。
 const historySessionsQuery = `
 SELECT kind, session_id, platform, profile_id, MAX(event_time)
 FROM (
   SELECT kind, group_id AS session_id,
-         COALESCE(json_extract(payload, '$.platform'), '') AS platform,
-         COALESCE(profile_id, json_extract(payload, '$.profile_id'), '') AS profile_id,
+         COALESCE(CASE WHEN json_valid(payload) THEN json_extract(payload, '$.platform') END, '') AS platform,
+         COALESCE(profile_id, CASE WHEN json_valid(payload) THEN json_extract(payload, '$.profile_id') END, '') AS profile_id,
          event_time
   FROM message_events
   WHERE kind = ? AND group_id IS NOT NULL AND group_id != ''
   UNION ALL
   SELECT kind, user_id AS session_id,
-         COALESCE(json_extract(payload, '$.platform'), '') AS platform,
-         COALESCE(profile_id, json_extract(payload, '$.profile_id'), '') AS profile_id,
+         COALESCE(CASE WHEN json_valid(payload) THEN json_extract(payload, '$.platform') END, '') AS platform,
+         COALESCE(profile_id, CASE WHEN json_valid(payload) THEN json_extract(payload, '$.profile_id') END, '') AS profile_id,
          event_time
   FROM message_events
   WHERE kind = ? AND user_id IS NOT NULL AND user_id != ''

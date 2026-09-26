@@ -220,3 +220,40 @@ func TestListHistorySessionsUsesCoveringIndex(t *testing.T) {
 		t.Fatalf("both branches must use the covering index: %q", plan)
 	}
 }
+
+// 表达式索引在每次写入时求值。payload 不是 JSON 的行以前能写进去，加了索引以后
+// 也必须能写、能更新，回补快照照常列出它（平台、机器人按空值算）。
+func TestHistorySessionsIndexToleratesNonJSONPayload(t *testing.T) {
+	store := openContentionStore(t)
+	var indexed int
+	if err := store.db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = 'idx_message_events_history_sessions'`).Scan(&indexed); err != nil || indexed != 1 {
+		t.Fatalf("history sessions index missing: %d %v", indexed, err)
+	}
+	if _, err := store.db.Exec(`INSERT INTO message_events (id, session, kind, group_id, user_id, message_id, sender_name, event_time, text, payload, created_at)
+VALUES ('broken', 'group:g9', 'group', 'g9', 'u1', 'broken', 'Alice', 100, '', 'not json', '2026-01-01T00:00:00Z')`); err != nil {
+		t.Fatalf("non-JSON payload rejected by the index: %v", err)
+	}
+	if _, err := store.db.Exec(`UPDATE message_events SET payload = '{oops', event_time = 120 WHERE id = 'broken'`); err != nil {
+		t.Fatalf("non-JSON payload update rejected by the index: %v", err)
+	}
+	event := historySearchEvent(150, "g1", "ok", "bob", "hello")
+	event.Platform = "onebot_v11"
+	event.ProfileID = "bot"
+	if err := store.AppendMessageEvent(context.Background(), "onebot-main:group:g1", event); err != nil {
+		t.Fatal(err)
+	}
+	sessions, err := store.ListHistorySessions(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]assistant.HistorySession{}
+	for _, session := range sessions {
+		got[session.ID] = session
+	}
+	if broken := got["g9"]; broken.Platform != "" || broken.ProfileID != "" || broken.LastEventTime != 120 {
+		t.Fatalf("non-JSON row: %+v", broken)
+	}
+	if ok := got["g1"]; ok.Platform != "onebot_v11" || ok.ProfileID != "bot" || ok.LastEventTime != 150 {
+		t.Fatalf("JSON row: %+v", ok)
+	}
+}

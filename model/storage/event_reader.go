@@ -18,15 +18,20 @@ const eventReaderConns = 4
 // 那条查询按平台、机器人、会话分组取最新时间，平台只存在 payload 里。没有这个
 // 索引时每一行都要回表读整段 payload 再解析 JSON，30 万条的合成库上约 0.75 秒；
 // 有了它只扫索引，约 0.27 秒。代价是每次写消息多维护一个索引项。
+//
+// json_extract 必须包在 json_valid 里。索引表达式在每次写入时求值，裸的
+// json_extract 碰上不是 JSON 的 payload 会报「malformed JSON」，让原本能写进去
+// 的消息整条写入失败——索引只是加速，不能反过来收紧 payload 的格式。以后再给
+// payload 建表达式索引也要这样包。
 const historySessionsIndex = `CREATE INDEX IF NOT EXISTS idx_message_events_history_sessions ON message_events(
   kind, group_id, user_id,
-  COALESCE(json_extract(payload, '$.platform'), ''),
-  COALESCE(profile_id, json_extract(payload, '$.profile_id'), ''),
+  COALESCE(CASE WHEN json_valid(payload) THEN json_extract(payload, '$.platform') END, ''),
+  COALESCE(profile_id, CASE WHEN json_valid(payload) THEN json_extract(payload, '$.profile_id') END, ''),
   event_time
 )`
 
-// ensureHistorySessionsIndex 尽力建立回补会话索引。建不成只影响速度：历史里若有
-// 解析不了的 payload，建表达式索引会报错，这时不能让启动失败。
+// ensureHistorySessionsIndex 尽力建立回补会话索引。建不成只影响回补快照的速度，
+// 不能让启动失败。
 func (s *SQLiteStore) ensureHistorySessionsIndex() {
 	if _, err := s.db.Exec(historySessionsIndex); err != nil {
 		log.Printf("storage: create history sessions index skipped: %v", err)
