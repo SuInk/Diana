@@ -169,7 +169,7 @@
         <div class="section-heading"><p class="eyebrow">02 回复流程</p><h2>分条发送</h2></div>
         <ol class="flow">
           <li><div class="flow-node"><strong>分条</strong><p>按 <code>[diana-msg]</code> / <code>[diana-line]</code> 分条，去句尾句号；同会话的回复排队，不交错。</p></div></li>
-          <li class="q"><div class="flow-node"><strong>OneBot 且超过合并转发阈值？</strong></div><div class="flow-exits"><span class="flow-exit go"><b>是</b>发合并转发卡片（卡片文字另过账号安全审核）；失败且未超时则退回逐条发送</span></div></li>
+          <li class="q"><div class="flow-node"><strong>OneBot 且超过合并转发阈值？</strong></div><div class="flow-exits"><span class="flow-exit go"><b>是</b>发合并转发卡片（卡片文字另过账号安全审核）；被审核拦下就不发，其他失败且未超时则退回逐条发送</span></div></li>
           <li><div class="flow-node"><strong>逐条发</strong><p>只有第一条带引用和 @；触发消息被撤回时不引用，回复针对另一位参与者时不引用当前消息。</p></div></li>
           <li><div class="flow-node"><strong>节奏</strong><p>第二条起等 max(分条间隔 300 毫秒, 每字 100 毫秒)，最多 6 秒；等待时保持「正在输入」。</p></div></li>
           <li><div class="flow-node"><strong>单条出口 sendOutgoingWithResult</strong><p>凭据打码 → 本地图片与语音准备 → 解析 <code>[diana-reply]</code> / <code>[diana-at]</code> → 发送时守卫。</p></div></li>

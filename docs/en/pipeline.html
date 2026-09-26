@@ -171,7 +171,7 @@
         <div class="section-heading"><p class="eyebrow">02 Reply flow</p><h2>Sending in chunks</h2></div>
         <ol class="flow">
           <li><div class="flow-node"><strong>Split</strong><p>On <code>[diana-msg]</code> / <code>[diana-line]</code>, trailing full stops removed; replies in the same session queue instead of interleaving.</p></div></li>
-          <li class="q"><div class="flow-node"><strong>OneBot and over the forward threshold?</strong></div><div class="flow-exits"><span class="flow-exit go"><b>Yes</b>send a merged-forward card (its text gets its own account-safety check); on failure before the timeout, fall back to chunks</span></div></li>
+          <li class="q"><div class="flow-node"><strong>OneBot and over the forward threshold?</strong></div><div class="flow-exits"><span class="flow-exit go"><b>Yes</b>send a merged-forward card (its text gets its own account-safety check); if that check stops it nothing is sent, other failures before the timeout fall back to chunks</span></div></li>
           <li><div class="flow-node"><strong>Chunk by chunk</strong><p>Only the first chunk quotes and mentions; no quote if the trigger was recalled or the reply targets another participant.</p></div></li>
           <li><div class="flow-node"><strong>Pacing</strong><p>From the second chunk: max(300 ms interval, 100 ms per character), capped at 6 seconds, with the typing indicator kept on.</p></div></li>
           <li><div class="flow-node"><strong>Single exit: sendOutgoingWithResult</strong><p>Mask secrets → prepare local images and audio → resolve <code>[diana-reply]</code> / <code>[diana-at]</code> → send-time guards.</p></div></li>
