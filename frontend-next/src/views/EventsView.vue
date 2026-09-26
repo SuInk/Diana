@@ -3,12 +3,8 @@
 
 <template>
   <div>
-    <!-- 刷新和回补是整页的动作，不是筛选条件：teleport 到页头那排标签的右边去。 -->
+    <!-- 刷新放最右，跟其他记录页的刷新同一个位置。刷新和回补是整页的动作，不是筛选条件：teleport 到页头那排标签的右边去。 -->
     <Teleport v-if="actionsHost" :to="actionsHost">
-      <button class="btn" type="button" :disabled="loading" @click="load(true)">
-        <RefreshCw :size="15" :class="{ spin: loading }" aria-hidden="true" />
-        刷新
-      </button>
       <!-- 回补原来在机器人配置的页头。但发现「有消息漏了」是在这一页：翻记录时
            看见某段时间一条都没有，手要伸的地方就该在手边，而不是跳去配置页。 -->
       <button
@@ -21,6 +17,21 @@
       >
         <History :size="15" aria-hidden="true" />
         回补消息
+      </button>
+      <button
+        v-if="stream.status?.running && failedCount > 0"
+        class="btn"
+        type="button"
+        :disabled="retryingAll"
+        title="把最近 24 小时处理失败的消息重新处理一遍，每个会话只重跑最近几条（机器人设置里的「回补 / 重试条数」）"
+        @click="retryAllFailed"
+      >
+        <RotateCcw :size="15" aria-hidden="true" />
+        重试失败
+      </button>
+      <button class="btn" type="button" :disabled="loading" @click="load(true)">
+        <RefreshCw :size="15" :class="{ spin: loading }" aria-hidden="true" />
+        刷新
       </button>
     </Teleport>
 
@@ -316,6 +327,18 @@
               </div>
 
               <div v-if="!isNoticeEvent(event)" class="event-debug-trace">
+                <button
+                  v-if="event.decision === 'error' && stream.status?.running"
+                  class="btn event-retry"
+                  type="button"
+                  :disabled="retrying[event.id]"
+                  title="把这条消息重新处理一遍"
+                  @click="retryEvent(event)"
+                >
+                  <LoaderCircle v-if="retrying[event.id]" :size="14" class="spin" aria-hidden="true" />
+                  <RotateCcw v-else :size="14" aria-hidden="true" />
+                  重试
+                </button>
                 <button class="btn event-debug-toggle" type="button" :disabled="traceLoading[event.id]" @click="toggleTrace(event)">
                   <LoaderCircle v-if="traceLoading[event.id]" :size="14" class="spin" aria-hidden="true" />
                   <Bug v-else :size="14" aria-hidden="true" />
@@ -584,6 +607,7 @@ import {
   MessageCircleReply,
   PieChart,
   RefreshCw,
+  RotateCcw,
   Reply,
   Search,
   Sigma,
@@ -596,6 +620,8 @@ import {
   getAssistantEventTrace,
   getAssistantEvents,
   requestBotBackfill,
+  retryAssistantEvent,
+  retryFailedAssistantEvents,
   type AppLogEntry,
   type AssistantEventDetail,
   type AssistantEventMemory,
@@ -1217,6 +1243,42 @@ async function triggerBackfill(): Promise<void> {
     toastError(error instanceof Error ? error.message : "回补触发失败");
   } finally {
     backfilling.value = false;
+  }
+}
+
+// 重试就是把原消息放回队列：卡片先显示成「等待处理」，处理完 SSE 会推新结果，刷新一下就能看到。
+const retrying = ref<Record<string, boolean>>({});
+async function retryEvent(event: AssistantEventDetail): Promise<void> {
+  retrying.value = { ...retrying.value, [event.id]: true };
+  try {
+    await retryAssistantEvent(event.id);
+    toastSuccess("已重新排队处理");
+    await load(false);
+  } catch (error) {
+    toastError(error instanceof Error ? error.message : "重试失败");
+  } finally {
+    retrying.value = { ...retrying.value, [event.id]: false };
+  }
+}
+
+const retryingAll = ref(false);
+const failedCount = computed(() => summary.value.errors);
+async function retryAllFailed(): Promise<void> {
+  const ok = await askConfirm({
+    title: "重试失败的消息",
+    message: "将把最近 24 小时处理失败的消息重新处理一遍：每个会话只取最近几条（默认 3，可在机器人设置的「回补 / 重试条数」调整），可能一次触发多条回复。",
+    confirmLabel: "开始重试"
+  });
+  if (!ok) return;
+  retryingAll.value = true;
+  try {
+    const result = await retryFailedAssistantEvents(botScope.value);
+    toastSuccess(result.requeued > 0 ? `已重新排队 ${result.requeued} 条消息` : "没有可重试的失败消息");
+    await load(false);
+  } catch (error) {
+    toastError(error instanceof Error ? error.message : "重试失败");
+  } finally {
+    retryingAll.value = false;
   }
 }
 
@@ -2109,6 +2171,12 @@ onBeforeUnmount(() => {
 
 .event-debug-trace {
   margin-top: 14px;
+}
+
+.event-retry {
+  min-height: 34px;
+  margin-right: 8px;
+  font-size: 12px;
 }
 
 .event-debug-toggle {

@@ -173,6 +173,9 @@ code {
 .app-sidebar {
   position: fixed;
   inset: 0 auto 0 0;
+  /* 手机浏览器的 100vh 含地址栏，底部那排会被挤出可视区：按动态视口算，导航超出时自己滚。 */
+  height: 100dvh;
+  padding-bottom: max(20px, env(safe-area-inset-bottom));
   width: var(--sidebar-width);
   display: flex;
   flex-direction: column;
@@ -1035,6 +1038,9 @@ code {
   display: flex;
   flex-direction: column;
   gap: 14px;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
 }
 
 .nav-section {

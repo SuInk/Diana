@@ -83,6 +83,11 @@ type historyBackfillRuntime interface {
 	RequestHistoryBackfill(time.Duration) error
 }
 
+type failedEventRetryRuntime interface {
+	RetryFailedEvent(context.Context, string) error
+	RetryFailedEvents(context.Context, string) (int, error)
+}
+
 type rssWatchRuntime interface {
 	CreateRSSWatch(context.Context, assistant.RSSWatchCreateInput) (assistant.Reminder, error)
 	UpdateRSSWatch(context.Context, string, string, assistant.RSSWatchUpdateInput) (assistant.Reminder, error)
@@ -326,6 +331,8 @@ func (h *BotHandler) registerRoutes(router gin.IRouter, base string) {
 	router.GET(base+"/dashboard-stats", h.dashboardStats)
 	router.GET(base+"/events", h.listEvents)
 	router.GET(base+"/events/:id/trace", h.eventTrace)
+	router.POST(base+"/events/:id/retry", h.retryFailedEvent)
+	router.POST(base+"/events/retry-failed", h.retryFailedEvents)
 	router.GET(base+"/events/:id/images/:index", h.eventImage)
 	router.GET(base+"/events/:id/outbound-images/:index", h.eventOutboundImage)
 	router.GET(base+"/stickers", h.listStickers)
@@ -890,6 +897,42 @@ func (h *BotHandler) requestBackfill(c *gin.Context) {
 	}
 	recordRequestOperation(c, h.logs, "backfill", fmt.Sprintf("已触发手动回补，窗口 %s", window), "", h.runtimeLogMetadata())
 	c.JSON(http.StatusOK, gin.H{"requested": true, "window_hours": window.Hours()})
+}
+
+// retryFailedEvent 把一条处理失败的消息放回队列重跑。
+func (h *BotHandler) retryFailedEvent(c *gin.Context) {
+	runtime, ok := h.runtime.(failedEventRetryRuntime)
+	if !ok {
+		h.writeError(c, http.StatusNotImplemented, "retry_event", fmt.Errorf("runtime does not support retrying events"), "", h.runtimeLogMetadata())
+		return
+	}
+	id := strings.TrimSpace(c.Param("id"))
+	if err := runtime.RetryFailedEvent(c.Request.Context(), id); err != nil {
+		status := http.StatusConflict
+		if errors.Is(err, storage.ErrInboundEventNotRetryable) {
+			status = http.StatusNotFound
+		}
+		h.writeError(c, status, "retry_event", err, "", h.runtimeLogMetadata())
+		return
+	}
+	recordRequestOperation(c, h.logs, "retry_event", "已重试消息 "+id, "", h.runtimeLogMetadata())
+	c.JSON(http.StatusOK, gin.H{"requeued": 1})
+}
+
+// retryFailedEvents 把最近 24 小时内所有处理失败的消息放回队列重跑。
+func (h *BotHandler) retryFailedEvents(c *gin.Context) {
+	runtime, ok := h.runtime.(failedEventRetryRuntime)
+	if !ok {
+		h.writeError(c, http.StatusNotImplemented, "retry_failed_events", fmt.Errorf("runtime does not support retrying events"), "", h.runtimeLogMetadata())
+		return
+	}
+	count, err := runtime.RetryFailedEvents(c.Request.Context(), botProfileScope(c))
+	if err != nil {
+		h.writeError(c, http.StatusConflict, "retry_failed_events", err, "", h.runtimeLogMetadata())
+		return
+	}
+	recordRequestOperation(c, h.logs, "retry_failed_events", fmt.Sprintf("已重试 %d 条失败消息", count), "", h.runtimeLogMetadata())
+	c.JSON(http.StatusOK, gin.H{"requeued": count})
 }
 
 // getGroupTest 返回指定群最近收发事件，辅助真实 群联调。

@@ -131,6 +131,8 @@ type MessageEvent struct {
 	// 历史，不跑语音转写、图片处理、插件、中继和回复。它要跟着事件一起落进入站队列，
 	// 所以是导出字段。
 	BackfillHistoryOnly bool `json:"backfill_history_only,omitempty"`
+	// ManualRetry 标记主人在运行记录里手动重试的失败消息：不受「太旧不回复」限制。
+	ManualRetry bool `json:"manual_retry,omitempty"`
 	// SenderUsername is the platform-authenticated sender handle, not a display
 	// name or a handle found in message text, mentions or forwarded content.
 	SenderUsername   string           `json:"sender_username,omitempty"`
