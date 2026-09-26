@@ -33,8 +33,9 @@ var errVideoSourceNotFound = errors.New("没有找到可作为首帧的图片：
 // dianaVideoTool 把视频生成插槽交给模型。视频任务要跑几分钟，所以和生图一样
 // 受理后放进后台任务，完成时由运行时补发。
 type dianaVideoTool struct {
-	runtime *Runtime
-	event   MessageEvent
+	runtime      *Runtime
+	event        MessageEvent
+	relationship RelationshipPolicy
 }
 
 type dianaVideoToolResult struct {
@@ -55,8 +56,8 @@ type dianaVideoRequest struct {
 	Size    string
 }
 
-func newDianaVideoTool(runtime *Runtime, event MessageEvent) agent.Tool {
-	return &dianaVideoTool{runtime: runtime, event: event}
+func newDianaVideoTool(runtime *Runtime, event MessageEvent, relationship RelationshipPolicy) agent.Tool {
+	return &dianaVideoTool{runtime: runtime, event: event, relationship: relationship}
 }
 
 func (t *dianaVideoTool) Name() string { return dianaVideoToolName }
@@ -82,6 +83,9 @@ func (t *dianaVideoTool) Run(ctx context.Context, input map[string]any) (string,
 	}
 	if err := ctx.Err(); err != nil {
 		return "", err
+	}
+	if !t.relationship.Owner && !t.relationship.AllowImageGeneration {
+		return "", fmt.Errorf("当前用户没有生成图片或视频的权限")
 	}
 	if !t.runtime.mediaSlotConfigured(withModelConfigEvent(ctx, t.event), mediaSlotVideo) {
 		return "", fmt.Errorf("视频生成：%w，请主人在模型分配里给「视频生成」选好提供商和模型", errMediaSlotNotConfigured)
