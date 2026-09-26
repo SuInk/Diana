@@ -80,7 +80,13 @@ func (r *Runtime) beginDirectReply(ctx context.Context, event MessageEvent) (con
 	}
 	r.directReplySeq++
 	token := r.directReplySeq
-	active := &activeDirectReply{token: token, turnID: turnID, root: event, startedAt: time.Now(), accepting: true}
+	// 合并窗口从消息到达算起，不从开始生成算起：路由慢的那几秒不该吃掉窗口，
+	// 也不该让窗口往后顺延。
+	startedAt := time.Now()
+	if turn := r.senderTurnLocked(key, strings.TrimSpace(event.MessageID)); turn != nil {
+		startedAt = turn.arrivedAt
+	}
+	active := &activeDirectReply{token: token, turnID: turnID, root: event, startedAt: startedAt, accepting: true}
 	r.activeDirectReplies[key] = active
 	r.replyInterruptMu.Unlock()
 	ctx = context.WithValue(ctx, directReplyRunContextKey{}, directReplyRunContext{key: key, token: token, active: active})
@@ -181,17 +187,34 @@ func (r *Runtime) mergeIntoActiveDirectReply(ctx context.Context, event MessageE
 	if key == "" || strings.TrimSpace(event.MessageID) == "" {
 		return "", false
 	}
+	// 已经交给后一条的消息不再当「补充」并进任何一轮：交接会替它结算，并进去的话
+	// 接手那一轮没回出去时就没人把它放回来了。
+	if _, handedOff := r.senderTurnSupersededBy(event); handedOff {
+		return "", false
+	}
 	r.replyInterruptMu.Lock()
 	active := r.activeDirectReplies[key]
 	if active == nil || !active.accepting || active.root.MessageID == event.MessageID || time.Since(active.startedAt) > directReplyMergeRetention {
 		r.replyInterruptMu.Unlock()
 		return "", false
 	}
-	root, generation := active.root, active.generation
+	root, generation, rootArrived := active.root, active.generation, active.startedAt
 	supplements := append([]proactiveReplyCandidate(nil), active.supplements...)
+	eventArrived := time.Now()
+	if turn := r.senderTurnLocked(key, strings.TrimSpace(event.MessageID)); turn != nil {
+		eventArrived = turn.arrivedAt
+	}
 	r.replyInterruptMu.Unlock()
-	relation := r.classifyDirectReplyTopic(ctx, root, supplements, event, text)
-	if relation != "repeat" && relation != "supplement" && relation != "correction" {
+	var relation string
+	if r.imageFollowUpBySameSender(root, rootArrived, event, eventArrived, text) {
+		relation = "supplement"
+		r.recordDirectReplyTopicRule(ctx, root, event, relation)
+	} else {
+		relation = r.classifyDirectReplyTopic(ctx, root, supplements, event, text)
+	}
+	mergeable := relation == "repeat" || relation == "supplement" || relation == "correction"
+	r.noteSenderTurnMergeChecked(event, root.MessageID, mergeable)
+	if !mergeable {
 		return "", false
 	}
 	// Classification does not hold the send lock. A finished, replaced or changed
@@ -268,8 +291,13 @@ func (r *Runtime) classifyDirectReplyTopic(ctx context.Context, root MessageEven
 	for _, item := range history {
 		background = append(background, readableEventText(item, directedInboundText(item)))
 	}
+	// 纯图的原请求读出来是空串，判断器只会说「原请求为空」然后判另起一题。
+	originalQuestion := readableEventText(root, directedInboundText(root))
+	if strings.TrimSpace(originalQuestion) == "" {
+		originalQuestion = r.imageOnlyRequestLabel(ctx, root)
+	}
 	payloadData := map[string]any{
-		"original_question": readableEventText(root, directedInboundText(root)),
+		"original_question": originalQuestion,
 		"original_context":  background, "accepted_supplements": prior,
 		"new_message":                  readableEventText(event, text),
 		"same_sender":                  root.UserID == event.UserID,
@@ -331,6 +359,27 @@ func (r *Runtime) classifyDirectReplyTopic(ctx context.Context, root MessageEven
 		return decision.Relation
 	}
 	return "uncertain"
+}
+
+// recordDirectReplyTopicRule 把按规则判定的话题关系也记进运行日志，和模型判断
+// 落在同一个 action 下，排查时不会以为这次没判。
+func (r *Runtime) recordDirectReplyTopicRule(ctx context.Context, root, event MessageEvent, relation string) {
+	writer := r.appLogWriter()
+	if writer == nil {
+		return
+	}
+	logCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Second)
+	defer cancel()
+	_ = writer.AppendLog(logCtx, applog.Entry{
+		Kind: applog.KindOperation, Level: applog.LevelInfo,
+		Action: "reply_topic_relation", Message: "连续消息话题关系按规则判定",
+		Actor: oneBotEventActor(event), Target: event.MessageID,
+		Metadata: map[string]any{
+			"root_message_id": root.MessageID, "relation": relation,
+			"merge_allowed": true, "rule": "image_then_short_text",
+			"reason": "前一条是纯图，同一个人随后补了一句短话",
+		},
+	})
 }
 
 func directReplyQuotedContext(quoted *QuotedMessage) map[string]any {

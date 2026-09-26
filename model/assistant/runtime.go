@@ -422,6 +422,17 @@ type Runtime struct {
 	latestDirectedInbound map[string]directedInboundMark
 	directReplySeq        uint64
 	activeDirectReplies   map[string]*activeDirectReply
+	// senderTurns 按会话+发送者登记已接手、还没收尾的消息，见 sender_burst.go。
+	senderTurns   map[string][]*senderTurn
+	senderTurnSeq uint64
+	// liveAbsorbers 是本进程里正在跑、手上压着连发交接的接手轮次（按入站事件 ID 计数）。
+	liveAbsorbers map[string]int
+	// recentTriggeredDeliveries 记下提醒和事件触发任务刚找过谁，见 triggered_delivery.go。
+	triggeredDeliveryMu       sync.Mutex
+	recentTriggeredDeliveries map[string]time.Time
+	// ownRepositoryWrites 记下机器人自己刚在 GitHub 上写过的 Issue / PR，见 repository_own_writes.go。
+	ownRepositoryWriteMu sync.Mutex
+	ownRepositoryWrites  map[string]time.Time
 	// backlogMessages 按会话暂存在队列里积压、交给后面消息合并作答的消息。
 	backlogMu                 sync.Mutex
 	backlogMessages           map[string][]backlogMessage
@@ -1767,6 +1778,9 @@ func (r *Runtime) routeMessageEvent(ctx context.Context, event MessageEvent) (Me
 	// 已经挪到回复之后（见 enqueueBotReplyLoopCheck），不再占用户感知的延迟。
 	restriction, blocked := r.activeReplySuppression(event, now)
 	r.remember(event)
+	// 语音转写、图片和文件解析、转发展开都在上面做完了：从这一刻起它才能被同一个人
+	// 后到的消息接走（见 sender_burst.go）。
+	r.noteSenderTurnReady(event)
 	// 表达学习看的是全部群消息，不只被回复的那些：群的口癖长在日常闲聊里。
 	// 群被这台机器人关掉、或不在准入名单（黑/白名单）里时，它永远不会在这个群里回复——
 	// 连被 @、被引用也不回，这一直是 admits 的判法，这里只是把判断提到花钱之前。消息照常
@@ -1960,6 +1974,12 @@ func (r *Runtime) routeMessageEvent(ctx context.Context, event MessageEvent) (Me
 				routed.routingReason = "主动回复路由挑中的积压消息发送者正处于响应限制中"
 			}
 		}
+		// 提醒或事件触发任务刚找过这个人，随口一句的主动接话多半是把同一件事再说一遍。
+		// 评分判定他就是在跟机器人说话的照常回，见 triggered_delivery.go。
+		if allowed && proactiveReplyCoveredByTrigger(routed) && r.recentTriggeredDeliveryFor(routed) {
+			allowed = false
+			routed.routingReason = triggeredDeliverySkipReason
+		}
 		if allowed {
 			event, text, handled = routed, routedText, true
 			successOutcome = "replied_proactive"
@@ -2033,11 +2053,40 @@ func (r *Runtime) replyAndRecord(ctx context.Context, event MessageEvent, text s
 			successOutcome = "replied_direct_followup"
 		}
 	}
+	// 同一个人连发：已经交给后一条的这一轮立刻收尾，不等；这一轮接过来的前几条在
+	// 它结束时结算——真的回出去了才落定，没回出去就把它们放回去自己回答。
+	// 见 sender_burst.go。
+	event, burstOutcome, burstDone := r.claimSenderBurst(ctx, event, text, successOutcome)
+	if burstDone {
+		r.enqueueHistoryImageDescriptions(event)
+		r.finishSenderTurn(event)
+		return burstOutcome, nil
+	}
+	defer func() {
+		r.settleSenderBurst(ctx, event)
+		r.finishSenderTurn(event)
+	}()
+	outcome, err := r.replyAndRecordTurn(ctx, event, text, successOutcome)
+	// 生成期间被后一条接走（发送闸门拦下，或者还没发就被接走）：按交出去收尾。
+	if handed, ok, redispatch := r.handOffSenderTurn(event, text, successOutcome, true); ok {
+		r.recordHandedOff(event, text, handed)
+		if redispatch {
+			r.redispatchHandedOff(event, text, successOutcome)
+		}
+		return handed, nil
+	}
+	return outcome, err
+}
+
+func (r *Runtime) replyAndRecordTurn(ctx context.Context, event MessageEvent, text string, successOutcome string) (string, error) {
 	defer r.enqueueHistoryImageDescriptions(event)
 	start := time.Now()
 	record := r.decisionEventRecord(event, text, successOutcome)
 	record.At = start
 	replyCtx := withReplyTurnStart(withExternalSideEffectLedger(withReplyTriggerGate(withReplySuppressionSendGuard(ctx))), start)
+	// 工具一写外部系统就同步给连发交接：这一轮哪怕随后出错、什么都没发，也不能再算
+	// 交出去——否则被放回队列重跑时，工具会再调一遍（见 sender_burst.go）。
+	onExternalSideEffect(replyCtx, func() { r.markSenderTurnSideEffect(event) })
 	if successOutcome == "replied" || successOutcome == "replied_direct_followup" || event.proactiveReply || event.chatInReply {
 		var finish func()
 		replyCtx, finish = r.beginDirectReply(replyCtx, event)
@@ -2077,6 +2126,13 @@ func (r *Runtime) replyAndRecord(ctx context.Context, event MessageEvent, text s
 			setEventRecordOutcome(&record, "ignored_no_natural_reply")
 			r.record(record)
 			return "ignored_no_natural_reply", nil
+		}
+		if errors.Is(err, errProactiveReplyCoveredByTrigger) {
+			setEventRecordOutcome(&record, "ignored_trigger_covered")
+			record.Reason = triggeredDeliverySkipReason
+			record.Error = ""
+			r.record(record)
+			return "ignored_trigger_covered", nil
 		}
 		if errors.Is(err, errReplySuppressedBeforeSend) {
 			setEventRecordOutcome(&record, "ignored_response_suppression")
@@ -2124,7 +2180,7 @@ func (r *Runtime) replyAndRecord(ctx context.Context, event MessageEvent, text s
 		}
 		if errors.Is(err, errReplyTriggerSuperseded) {
 			setEventRecordOutcome(&record, "superseded_follow_up")
-			record.Reason = "同一用户随后又发来直呼消息，由新消息一并回答"
+			record.Reason = "同一用户随后又发来消息，由新消息一并回答"
 			r.record(record)
 			return "superseded_follow_up", nil
 		}
@@ -4317,6 +4373,8 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		// 附上（agent 和非 agent 都一样），见 sender_dependency_images.go。
 		if images := senderDependencyImages(replyHistory, event, turnMessageIDs, firstNonEmpty(strings.TrimSpace(cfg.BotAccount), strings.TrimSpace(event.SelfID))); len(images) > 0 {
 			dependency = &senderDependencyContext{images: images, toolHint: directAgentDecision, pixels: r.chatModelReceivesImages(event)}
+			// 这一轮已经带着那几张图在答了，纯图那条自己的回复就不必再发。
+			r.supersedeDependencyImageTurns(ctx, event, images)
 		}
 		stableHistory, crossGroupTail := r.stableGroupHistory(ctx, event, cfg, replyHistory, directAgentDecision, turnMessageIDs)
 		messages = append(messages, stableCheckpoint...)
@@ -4473,6 +4531,9 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			Priority: llm.MessagePrioritySystem,
 		})
 	}
+	// 点名承接哪几条连发由这里决定，同时把还卡在路由里的那几条接过来：提示词里
+	// 点名的和交接过来的是同一批（见 sender_burst.go）。
+	event.carryOver, event.carryOverSet = r.claimCarryOver(ctx, event, replyHistory), true
 	if decorationPrompt := replyDecorationPrompt(cfg, event, replyHistory); decorationPrompt != "" {
 		messages = append(messages, llm.Message{
 			Role:     llm.RoleSystem,
@@ -6931,6 +6992,8 @@ func (r *Runtime) sendWithMessageIDs(ctx context.Context, event MessageEvent, re
 // 处理，只按平台长度兜底。
 func (r *Runtime) sendErrorNoticeWithEvidence(ctx context.Context, event MessageEvent, text string) ([]string, bool, error) {
 	cfg := r.effectiveConfigForEvent(event)
+	// 错误提示不是模型对这条消息的回答，不能让连发交接据此落定（见 sender_burst.go）。
+	ctx = withoutCarryOverDelivery(ctx)
 	// 错误提示是对当前这条消息的回应，引用照旧、不额外 @：真正要点名的是订阅推送。
 	messageIDs, err := r.deliverChunks(ctx, event, splitReply(text, notificationChunkSize), cfg, outboundDecoration{ReplyToCurrent: true})
 	if err != nil {
@@ -7586,6 +7649,8 @@ func (r *Runtime) sendForwardNodesWithResult(ctx context.Context, event MessageE
 		return nil, err
 	}
 	outboundTurnFromContext(ctx).recordSentForward(len(nodes))
+	// 和逐条发送一样：确认送达（含结果不明后确认到的）才算回出去。
+	r.noteSenderTurnDelivered(ctx, event)
 	return result, nil
 }
 
@@ -7911,88 +7976,6 @@ func sessionKey(event MessageEvent) string {
 }
 
 // handleOwnerCommand 处理 owner 的强格式管理命令。
-func (r *Runtime) handleOwnerCommand(event MessageEvent, text string) (string, bool) {
-	// 按事件所属的机器人认主人：多机器人时每台的主人只管自己那台。
-	cfg := r.effectiveConfigForEvent(event)
-	if !cfg.IsOwnerEvent(event) {
-		return "", false
-	}
-
-	// 这些是强格式管理命令；自然语言切模型由机器人内建配置命令处理。
-	command := strings.TrimSpace(text)
-	if reply, handled := r.handleReplySuppressionOwnerCommand(event, command); handled {
-		return reply, true
-	}
-	// 编码任务的确认码。放在这里是因为它本来就只对主人有意义，而且必须在进入
-	// 模型那一轮之前就被认出来——等着放行的 CLI 进程正停在那儿。
-	if reply, handled := r.handleCodingApprovalReply(event, command); handled {
-		return reply, true
-	}
-	switch {
-	// 「lllm 当前」和「lllm 切换」跟着「激活配置」一起去掉了：没有激活项之后，
-	// 「当前用哪个」由本次调用的用途和分组顺序决定，不再是一个能被切换的全局状态。
-	case command == "lllm 列表":
-		return r.renderLLMProfiles(), true
-	case command == "群 列表":
-		return r.renderDisabledGroups(event), true
-	case strings.HasPrefix(command, "群 禁用 "):
-		groupID := strings.TrimSpace(strings.TrimPrefix(command, "群 禁用 "))
-		return r.setGroupDisabled(event, groupID, true), true
-	case strings.HasPrefix(command, "群 启用 "):
-		groupID := strings.TrimSpace(strings.TrimPrefix(command, "群 启用 "))
-		return r.setGroupDisabled(event, groupID, false), true
-	case command == "提醒 列表":
-		return r.renderReminders(event), true
-	case strings.HasPrefix(command, "提醒 取消 "):
-		id := strings.TrimSpace(strings.TrimPrefix(command, "提醒 取消 "))
-		_, err := r.cancelOneTimeReminder(event.UserID, id)
-		if err != nil {
-			if _, triggerErr := r.cancelEventTrigger(event.UserID, id); triggerErr == nil {
-				return "触发任务已取消并释放额度，记录仍保留。", true
-			}
-			return "取消提醒失败：" + err.Error(), true
-		}
-		return "提醒已取消并释放额度，记录仍保留。", true
-	case strings.HasPrefix(command, "提醒 删除 "):
-		id := strings.TrimSpace(strings.TrimPrefix(command, "提醒 删除 "))
-		return r.deleteReminder(event, id), true
-	case strings.HasPrefix(command, "提醒 添加 "):
-		args := strings.TrimSpace(strings.TrimPrefix(command, "提醒 添加 "))
-		return r.addReminder(event, args), true
-	case command == "订阅 列表":
-		return r.renderScheduledQueries(event.UserID), true
-	case strings.HasPrefix(command, "订阅 取消 "):
-		id := strings.TrimSpace(strings.TrimPrefix(command, "订阅 取消 "))
-		_, err := r.cancelScheduledQuery(event.UserID, id)
-		if err != nil {
-			return "取消定时订阅失败：" + err.Error(), true
-		}
-		return "定时订阅已取消并释放额度，记录仍保留。", true
-	case strings.HasPrefix(command, "订阅 删除 "):
-		id := strings.TrimSpace(strings.TrimPrefix(command, "订阅 删除 "))
-		removed, err := r.deleteScheduledQuery(event.UserID, id)
-		if err != nil {
-			return "删除定时订阅失败：" + err.Error(), true
-		}
-		if !removed {
-			return "没有找到对应的定时订阅。", true
-		}
-		return "定时订阅已删除。", true
-	case strings.HasPrefix(command, "订阅 添加 "):
-		args := strings.TrimSpace(strings.TrimPrefix(command, "订阅 添加 "))
-		return r.addScheduledQueryCommand(event, args), true
-	case command == "清空上下文" || command == "清除上下文":
-		if err := r.clearSessionHistory(event); err != nil {
-			log.Printf("diana context reset failed: %v", err)
-			return "清空上下文失败，请稍后重试或检查服务日志。", true
-		}
-		return "已清空当前会话上下文；聊天记录、长期记忆和人设仍保留。", true
-	case command == "帮助" || command == "菜单":
-		return "可用命令：lllm 列表、lllm 当前、lllm 切换 <名称>、群 列表、群 禁用 <群号>、群 启用 <群号>、响应限制 列表、响应限制 解除 <账号>、提醒 添加 <时长> <内容>、提醒 列表、提醒 取消 <ID>、提醒 删除 <ID>、订阅 添加 <周期> <查询内容>、订阅 列表、订阅 取消 <ID>、订阅 删除 <ID>、清空上下文。也可以直接说：1 分钟后提醒我睡觉，或者每 1 分钟查询某件事并通知我。", true
-	default:
-		return "", false
-	}
-}
 
 // renderDisabledGroups 渲染这台机器人的禁用群列表。
 func (r *Runtime) renderDisabledGroups(event MessageEvent) string {

@@ -840,6 +840,10 @@ func (t *dianaGitHubTool) finish(ctx context.Context, result repositoryIssueResu
 		markExternalSideEffect(ctx)
 		if result.Operation != "cancel_draft" {
 			result.ReplyHint = repositoryIssueLandedReplyHint
+			// 仓库订阅下一轮会把这次写入当成新动态报回来，跟评据此跳过，见 repository_own_writes.go。
+			if t != nil && t.runtime != nil {
+				t.runtime.noteOwnRepositoryWriteResult(result)
+			}
 		}
 	}
 	body, err := marshalRepositoryResult(result)

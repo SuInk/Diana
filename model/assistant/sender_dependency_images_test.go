@@ -443,14 +443,14 @@ func TestUrgentHistoryImageDescriptionsRunInParallel(t *testing.T) {
 func TestPendingEarlierMessageAcceptsImageOnly(t *testing.T) {
 	photo := photoEvent("photo", "irony", 1000)
 	question := textEvent("q", "irony", "这是什么", 1010)
-	earlier, ok := pendingEarlierMessage([]MessageEvent{photo, question}, question)
-	if !ok || earlier.MessageID != "photo" {
-		t.Fatalf("image-only earlier message not pending: %#v ok=%v", earlier, ok)
+	earlier := pendingEarlierMessages([]MessageEvent{photo, question}, question, pendingEarlierMessagesLimit)
+	if len(earlier) != 1 || earlier[0].MessageID != "photo" {
+		t.Fatalf("image-only earlier message not pending: %#v", earlier)
 	}
 	if prompt := replyDecorationPrompt(BotConfig{}, question, []MessageEvent{photo, question}); !strings.Contains(prompt, "他刚发了一张图") {
 		t.Fatalf("decoration prompt = %q", prompt)
 	}
-	if _, ok := pendingEarlierMessage([]MessageEvent{stickerEvent("s", "irony", 1000), question}, question); ok {
+	if got := pendingEarlierMessages([]MessageEvent{stickerEvent("s", "irony", 1000), question}, question, pendingEarlierMessagesLimit); len(got) != 0 {
 		t.Fatal("a sticker is a reaction, not a pending message")
 	}
 }

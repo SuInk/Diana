@@ -138,6 +138,8 @@ func TestPrivateBurstFoldsIntoActiveDirectReply(t *testing.T) {
 
 // TestPrivateBurstUnderConcurrency 在真实队列上跑一遍连发三句，只验证并发档位本身。
 // 这里的模型不会把连发判成重复或补充，所以每句仍然单独回复；合并由上面那个测试覆盖。
+// 三句的消息时间各隔两分钟，超出连发取代的窗口（sender_burst.go），取代由
+// sender_burst_test.go 覆盖——否则还没开始生成的那句会等后一句的结果，并发数就测不准了。
 func TestPrivateBurstUnderConcurrency(t *testing.T) {
 	t.Run("serial", func(t *testing.T) {
 		replies, maxActive, sent := runPrivateBurst(t, 1)
@@ -182,9 +184,10 @@ func runPrivateBurst(t *testing.T, privateConcurrency int) (replies, maxActive i
 	runtime.SetInboundEventStore(store)
 
 	ids := make([]string, 0, 3)
-	for _, messageID := range []string{"p-1", "p-2", "p-3"} {
+	base := time.Now().Add(-4 * time.Minute).Unix()
+	for index, messageID := range []string{"p-1", "p-2", "p-3"} {
 		event := MessageEvent{
-			Kind: EventKindPrivate, Time: time.Now().Unix(), SelfID: "42", UserID: "30004",
+			Kind: EventKindPrivate, Time: base + int64(index)*int64((2*time.Minute)/time.Second), SelfID: "42", UserID: "30004",
 			MessageID: messageID, RawMessage: "连发一句",
 			Segments: []MessageSegment{{Type: "text", Data: map[string]string{"text": "连发一句"}}},
 		}

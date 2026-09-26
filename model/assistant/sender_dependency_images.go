@@ -65,6 +65,7 @@ func (image senderDependencyImage) singleImageEvent() MessageEvent {
 
 // senderDependencyImages 选出当前发言者刚发、还没人接的图。规则：
 //   - 当前消息引用了带图的消息：引用就是明确的指向，不再附别的图。
+//   - 只看当前这条之前的消息（历史里在它后面、或者时间比它晚的都不算）。
 //   - 只看同一个人 recentSenderImageWindow 内最近 recentSenderImageMessages 条带图消息，
 //     合计最多 senderDependencyImageMaxImages 张，从新到旧取。
 //   - 中间机器人已经回过这个人、或者别人说了有内容的话，那张图就不再「悬着」，停。
@@ -87,10 +88,24 @@ func senderDependencyImages(history []MessageEvent, event MessageEvent, skip map
 	repeated := repeatedImageKeys(history, windowStart)
 	var picked []senderDependencyImage
 	messages := 0
-	for index := len(history) - 1; index >= 0; index-- {
+	// 只取当前这条之前的图。几条消息并发处理时历史末尾可能是更晚到的图，那不是
+	// 「这句话之前刚发的」；拿它当依赖图还会让早的文字接走晚的图（见 sender_burst.go）。
+	start := len(history) - 1
+	if currentID := strings.TrimSpace(event.MessageID); currentID != "" {
+		for index := len(history) - 1; index >= 0; index-- {
+			if strings.TrimSpace(history[index].MessageID) == currentID {
+				start = index - 1
+				break
+			}
+		}
+	}
+	for index := start; index >= 0; index-- {
 		item := history[index]
 		messageID := strings.TrimSpace(item.MessageID)
 		if messageID != "" && (messageID == strings.TrimSpace(event.MessageID) || skip[messageID]) {
+			continue
+		}
+		if event.Time > 0 && item.Time > event.Time {
 			continue
 		}
 		if item.crossGroupContext || isPokeHistoryEvent(item) {

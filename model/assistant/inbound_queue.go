@@ -401,6 +401,9 @@ func (r *Runtime) runInboundCoordinator(ctx context.Context, leaseOwner string, 
 		}()
 	}
 
+	// 上一个进程留下的待定连发交接没有哪一轮还能替它落定，先放回去（见 inbound_handoff.go）。
+	r.sweepInboundHandoffs(ctx)
+	nextHandoffSweepAt := time.Now().Add(inboundHandoffSweepPeriod)
 	ticker := time.NewTicker(inboundPollInterval)
 	defer ticker.Stop()
 	connected := false
@@ -478,6 +481,10 @@ func (r *Runtime) runInboundCoordinator(ctx context.Context, leaseOwner string, 
 		case <-ticker.C:
 			status := r.channelStatus()
 			now := time.Now()
+			if !now.Before(nextHandoffSweepAt) {
+				nextHandoffSweepAt = now.Add(inboundHandoffSweepPeriod)
+				r.sweepInboundHandoffs(ctx)
+			}
 			if status.DuplicateConnections > observedDuplicateConnections {
 				r.recordOneBotConnectionLifecycle(ctx, status, "duplicate_client_conflict", "已拒绝重复 OneBot 客户端连接", nil)
 				observedDuplicateConnections = status.DuplicateConnections
@@ -638,6 +645,8 @@ func (r *Runtime) runInboundWorker(ctx context.Context, leaseOwner string, store
 			outcome, processErr := r.processInboundQueueItem(withInboundLeaseExtension(ctx, store, item.ID, leaseOwner, leaseUntil), item)
 			commitCtx, commitCancel := context.WithTimeout(context.Background(), 5*time.Second)
 			switch {
+			case processErr == nil && outcome == inboundOutcomeHandedOffPending:
+				err = r.completeHandedOffInbound(commitCtx, store, item, leaseOwner)
 			case processErr == nil:
 				err = store.CompleteInboundEvent(commitCtx, item.ID, leaseOwner, outcome)
 				r.clearOutboundSteps(item.ID)
@@ -713,6 +722,10 @@ func (r *Runtime) processInboundQueueItem(ctx context.Context, item InboundQueue
 	if r.inboundEventIsStale(item.Event, time.Now()) {
 		return "ignored_stale", nil
 	}
+	// 断线回补、重启重放的消息没经过入站登记，这里补上；这一轮收尾时注销。
+	r.noteSenderTurnArrival(item.Event)
+	r.noteSenderTurnInbound(item.Event, item.ID)
+	defer r.finishSenderTurn(item.Event)
 	// 积压的消息不在这里直接收掉：插件观察、消息互通、历史和记忆这些不花回复 token 的环节
 	// 还得走。交接判断放到 prepareMessageEvent 里登记积压包之前那一刻，这里只把队列信息带过去。
 	probe := item

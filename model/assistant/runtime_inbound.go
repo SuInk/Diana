@@ -117,6 +117,8 @@ func (r *Runtime) HandleEvent(ctx context.Context, event MessageEvent) error {
 
 	// 在入队之前登记直呼消息，保证旧消息处理时能看到更新的直呼。
 	r.noteDirectedInbound(event)
+	// 连发登记同理：在路由和任何模型调用之前就登记，后到的那条才看得见前一条。
+	r.noteSenderTurnArrival(event)
 
 	r.mu.RLock()
 	inboundStore := r.inboundStore
@@ -140,6 +142,7 @@ func (r *Runtime) HandleEvent(ctx context.Context, event MessageEvent) error {
 	ctx = withContextBudgetCap(ctx, r.effectiveConfigForEvent(event).MaxContextTokens)
 	prepared, text, handled, outcome := r.prepareMessageEvent(ctx, event)
 	if !handled {
+		r.finishSenderTurn(event)
 		return nil
 	}
 	return r.startReplyWorker(ctx, prepared, text, outcome)

@@ -19,6 +19,20 @@ import (
 
 type externalSideEffectLedger struct {
 	marked atomic.Bool
+	// onMark 在第一次打标记时调用一次。回复入口用它把「写过外部系统」立刻同步给
+	// 连发交接的登记（见 sender_burst.go），不必等到这一轮去发送时才知道。
+	onMark func()
+}
+
+// onExternalSideEffect 给这一轮的账本挂上第一次打标记时的回调。账本是外层传进来
+// 的（已经有回调）就不覆盖。回调要在账本交给任何工具之前挂好。
+func onExternalSideEffect(ctx context.Context, fn func()) {
+	if ctx == nil || fn == nil {
+		return
+	}
+	if ledger, ok := ctx.Value(externalSideEffectContextKey{}).(*externalSideEffectLedger); ok && ledger.onMark == nil {
+		ledger.onMark = fn
+	}
 }
 
 type externalSideEffectContextKey struct{}
@@ -40,7 +54,9 @@ func markExternalSideEffect(ctx context.Context) {
 		return
 	}
 	if ledger, ok := ctx.Value(externalSideEffectContextKey{}).(*externalSideEffectLedger); ok {
-		ledger.marked.Store(true)
+		if !ledger.marked.Swap(true) && ledger.onMark != nil {
+			ledger.onMark()
+		}
 	}
 }
 

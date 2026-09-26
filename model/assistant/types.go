@@ -215,7 +215,12 @@ type MessageEvent struct {
 	// routingDirected 记下接话评分里的 relevance.directed：这条消息在语义上是冲着
 	// 机器人来的，哪怕正文里没有 @、引用和名字。空转判断靠它才看得见相关度分支放
 	// 行的那些回复，见 botReplyLoopCandidate。
-	routingDirected        bool
+	routingDirected bool
+	// carryOver 是这一轮要点名承接的、同一个人更早连发还没回的消息，由回复构建时
+	// 的 claimCarryOver 决定（见 sender_burst.go）；carryOverSet 区分「算过、为空」
+	// 和「没算过」。
+	carryOver              []MessageEvent
+	carryOverSet           bool
 	replyDeliveryMode      replyDeliveryMode
 	replyLineBreakMode     replyLineBreakMode
 	replyAuditImageContext string
