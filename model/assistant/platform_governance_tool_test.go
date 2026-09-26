@@ -111,11 +111,12 @@ func TestPlatformToolGovernanceOnTelegram(t *testing.T) {
 }
 
 func TestPlatformToolGovernanceRefusesNonOwnerAndNonAdminBot(t *testing.T) {
-	channel := newModerationTestChannel("admin")
+	// 普通成员：平台实时查到的是 member，哪怕事件里自称 admin 也不作数。
+	channel := newRoleTestChannel(map[string]string{"10000": "admin"})
 	event := governanceToolEvent(PlatformOneBotV11)
 	event.UserID, event.SenderRole = "member", "admin"
 	tool, _, _ := platformToolFor(t, BotConfig{OwnerID: "owner", BotAccount: "10000", Platform: PlatformOneBotV11}, channel, event)
-	if _, err := tool.Run(context.Background(), map[string]any{"operation": "announce", "content": "x"}); err == nil || !strings.Contains(err.Error(), "只有机器人主人") {
+	if _, err := tool.Run(context.Background(), map[string]any{"operation": "announce", "content": "x"}); err == nil || !strings.Contains(err.Error(), "主人、群主或群管理员") {
 		t.Fatalf("non-owner announce error = %v", err)
 	}
 
@@ -123,7 +124,7 @@ func TestPlatformToolGovernanceRefusesNonOwnerAndNonAdminBot(t *testing.T) {
 	if _, err := plain.Run(context.Background(), map[string]any{"operation": "mute_all"}); err == nil || !strings.Contains(err.Error(), "不是这个群的管理员") {
 		t.Fatalf("bot-not-admin error = %v", err)
 	}
-	if len(channel.callsSnapshot()) != 0 || len(recordedCallsByAction(plainChannel.callsSnapshot(), "set_group_whole_ban")) != 0 {
+	if len(recordedCallsByAction(channel.callsSnapshot(), "_send_group_notice")) != 0 || len(recordedCallsByAction(plainChannel.callsSnapshot(), "set_group_whole_ban")) != 0 {
 		t.Fatal("refused operations must not reach the platform API")
 	}
 }

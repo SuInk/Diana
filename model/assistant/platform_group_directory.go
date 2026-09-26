@@ -90,7 +90,7 @@ const (
 )
 
 var (
-	promptToolPlatformGroupSpec          = toolPromptSpec("platform_group", "群资料与群管理", "群资料走平台工具时注入：读群资料、成员核验、禁言踢人的边界，以及头像匹配。", promptToolPlatformGroup)
+	promptToolPlatformGroupSpec          = toolPromptSpec("platform_group", "群资料与群管理", "群资料走平台工具时注入：读群资料、成员核验、群管操作的边界，以及头像匹配。", promptToolPlatformGroup)
 	promptToolGroupDirectorySpec         = toolPromptSpec("group_directory", "群资料查询", "群资料走 group_directory 的平台（Telegram 以外）注入：成员名单的完整性、身份核验和头像来源。", promptToolGroupDirectory)
 	promptToolGroupDirectoryTelegramSpec = toolPromptSpec("group_directory_telegram", "群资料查询（Telegram）", "Telegram 群里注入：成员列表只有候选，是否在群、是否管理员必须实时核验。", promptToolGroupDirectoryTelegram)
 )

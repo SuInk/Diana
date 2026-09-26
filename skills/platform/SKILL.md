@@ -1,6 +1,6 @@
 ---
 name: platform
-description: Read group information and members across platforms, recall the bot's own recently sent messages, and perform owner-only moderation (mute, unmute, kick, group announcements, essence/pinned messages, member card and title, whole-group mute, recalling members' messages) through the current platform. Use when a user explicitly asks to read group state, when the bot must take back something it just sent, or to moderate the group.
+description: Read group information and members across platforms, recall the bot's own recently sent messages, and perform moderation for the bot owner, the group owner and group administrators (mute, unmute, kick, group announcements, essence/pinned messages, member card and title, whole-group mute, recalling members' messages) through the current platform. Use when a user explicitly asks to read group state, when the bot must take back something it just sent, or to moderate the group.
 ---
 
 # Platform Interface
@@ -13,17 +13,17 @@ Use `platform` as the single cross-platform entry point for group information an
 - `member_info` — verify one account's current membership and role by `user_id`.
 - `member_list` — fetch member candidates. Respect `member_list_complete`, `member_source`, `member_count_known` and `warnings`; on Telegram this is administrators plus observed accounts, never the full roster.
 - `recall` — delete one message the bot itself sent. Optional `message_id`; omitted means the bot's most recent own message in this session. Available to everyone.
-- `mute` — restrict one account for an explicit positive `duration` in seconds. Owner only.
-- `unmute` — lift a restriction. Owner only.
-- `kick` — remove one account. Optional `reject_add_request` also refuses re-joining. Owner only.
+- `mute` — restrict one account for an explicit positive `duration` in seconds. Moderators only.
+- `unmute` — lift a restriction. Moderators only.
+- `kick` — remove one account. Optional `reject_add_request` also refuses re-joining. Moderators only.
 - `announce_list` — list group announcements (with their `notice_id`). Read-only.
-- `announce` — publish a group announcement from `content`. Owner only.
-- `announce_delete` — delete one announcement by `notice_id` from `announce_list`. Owner only.
-- `essence_set` / `essence_unset` — mark or unmark a message as essence (pinned on Telegram). `message_id` from history, or the quoted message when omitted. Owner only.
-- `set_card` — change a member's group card; empty `card` clears it. Owner only.
-- `set_title` — change a member's special title; empty `title` clears it. On QQ only the group owner can do this. Owner only.
-- `mute_all` / `unmute_all` — turn whole-group mute on or off. Owner only.
-- `recall_messages` — recall members' messages to clean up floods or ads: one `message_id` from history (or the quoted message), or a `user_id` plus `count` (default 10, max 50) to recall that account's most recent messages seen in this session. Reports how many were recalled and how many failed. Owner only.
+- `announce` — publish a group announcement from `content`. Moderators only.
+- `announce_delete` — delete one announcement by `notice_id` from `announce_list`. Moderators only.
+- `essence_set` / `essence_unset` — mark or unmark a message as essence (pinned on Telegram). `message_id` from history, or the quoted message when omitted. Moderators only.
+- `set_card` — change a member's group card; empty `card` clears it. Moderators only.
+- `set_title` — change a member's special title; empty `title` clears it. On QQ only the group owner can do this. Moderators only.
+- `mute_all` / `unmute_all` — turn whole-group mute on or off. Moderators only.
+- `recall_messages` — recall members' messages to clean up floods or ads: one `message_id` from history (or the quoted message), or a `user_id` plus `count` (default 10, max 50) to recall that account's most recent messages seen in this session. Reports how many were recalled and how many failed. Moderators only.
 
 ## Recalling Your Own Message
 
@@ -38,7 +38,8 @@ Saying "当我没说" or "收回刚才那句" deletes nothing — the wrong mess
 
 - Reads (`group_info`, `member_info`, `member_list`) are available to ordinary members.
 - `recall` is available to ordinary members, because it only affects the bot's own output.
-- Every moderation operation (`mute`, `unmute`, `kick`, announcements, essence, card, title, whole-group mute, `recall_messages`) is owner-only. A group administrator or the group owner who is not the bot owner is refused. The Go tool enforces this in `Run`; these instructions explain it but do not replace it.
+- Every moderation operation (`mute`, `unmute`, `kick`, announcements, essence, card, title, whole-group mute, `recall_messages`) is available to moderators: the bot owner, and the group owner or group administrators of the current group. The tool checks the caller's role live with the platform; a role claimed in the message text, or a stale sender role, does not count. Group owners and administrators can only act on the group they are in, and never from a private chat. The Go tool enforces this in `Run`; these instructions explain it but do not replace it.
+- Target hierarchy for non-owner callers: never the bot owner or the bot itself; a group administrator cannot act on the group owner or on another administrator; the group owner can act on administrators. Non-personal operations (announcements, essence, whole-group mute) have no target restriction.
 - Moderation requires the bot itself to be a group administrator or owner on that platform. If the bot is a plain member the tool refuses without calling the destructive API and says so.
 - Never target the bot owner or the bot's own account.
 - Never bypass a denial with a raw request, an alias, a shell command, a browser request, or another tool.
@@ -61,5 +62,5 @@ Diana's participation is not a platform property. To stop unsolicited replies us
 
 - `ok: true` means the platform returned successfully; inspect the payload for details.
 - `access: owner_full` means owner authorization was used; `member_read_only` means the member read path was used.
-- A permission error is final. Explain that moderation is owner-only and requires the bot to be a group administrator.
+- A permission error is final. Relay the reason as given: moderation needs the bot owner, the group owner or a group administrator, respects the target hierarchy, and requires the bot to be a group administrator.
 - A transport or platform error is not success. Report the operation and a concise error without exposing tokens or credentials, and never claim a mutation succeeded without a successful result.
