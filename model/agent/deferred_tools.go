@@ -212,7 +212,7 @@ func (l *deferredToolLoader) unavailableToolError(name string) error {
 	if l.registry.PolicyDenied(name) {
 		return l.registry.denialError(name)
 	}
-	return fmt.Errorf("工具 %q 不存在或已禁用；请重新选择 tools_load 名称", name)
+	return fmt.Errorf("工具 %q 不存在或已禁用%s；请重新选择 tools_load 名称", name, toolSuggestionHint(l.registry, name))
 }
 
 // missingToolError 是「根本没有这个工具」时的回话，多半是模型自己编了个名字（线上见过
@@ -222,7 +222,7 @@ func (l *deferredToolLoader) missingToolError(name string) error {
 	if l.registry.PolicyDenied(name) {
 		return l.registry.denialError(name)
 	}
-	return fmt.Errorf("工具 %q 不存在。工具名要和目录里的一字不差，不加 diana. 之类的前缀；常驻工具直接调用，目录里的延迟工具先 tools_load 再 tools_execute", name)
+	return fmt.Errorf("工具 %q 不存在%s。工具名要和目录里的一字不差，不加 diana. 之类的前缀；常驻工具直接调用，目录里的延迟工具先 tools_load 再 tools_execute", name, toolSuggestionHint(l.registry, name))
 }
 
 func deniedToolError(name string) error {

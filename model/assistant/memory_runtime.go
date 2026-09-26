@@ -27,8 +27,13 @@ const (
 	// 要吃下最多 100 条事件加已有摘要、卷叠源和线程便签（约 15–18k token），再
 	// 写出 800–1300 token，慢模型（~20 tok/s）光生成就要 40–65 秒，跟门控共用
 	// 60 秒几乎必然超时。它必须小于租约时长，否则任务还在跑就被别的 worker 领走。
-	memorySummaryTimeout   = 150 * time.Second
-	memoryMaxAttempts      = 8
+	memorySummaryTimeout = 150 * time.Second
+	memoryMaxAttempts    = 8
+	// 上游整体不可用（网关 503、并发 429）时的重试间隔和不计次的期限。线上见过
+	// sub2api 连续 5 小时 503，按原来的指数退避 8 次只撑 47 分钟，这段对话的记忆
+	// 就被整批放弃了。一天之内不计次，再往后照常计数，网关一直不恢复也总会放弃。
+	memoryOutageRetryDelay = 10 * time.Minute
+	memoryOutageRefundAge  = 24 * time.Hour
 	memorySummaryMaxEvents = 100
 	// memorySummaryMinEvents 是重试缩窗的下限：再往下砍，摘要就只剩零星几句，
 	// 不如保留一段能读出来龙去脉的尾巴。
@@ -244,8 +249,7 @@ func (r *Runtime) runMemoryWorker(ctx context.Context, leaseOwner string, store 
 				if err == nil {
 					stateErr = store.CompleteMemoryJob(commitCtx, job.ID, leaseOwner)
 				} else {
-					retryAt := time.Now().Add(memoryRetryDelay(job.Attempts))
-					stateErr = store.RetryMemoryJob(commitCtx, job.ID, leaseOwner, retryAt, err.Error())
+					stateErr = retryMemoryJob(commitCtx, store, job, leaseOwner, err)
 				}
 				commitCancel()
 				if stateErr != nil {
@@ -295,6 +299,16 @@ func memorySummaryEventWindow(events []MessageEvent, attempts int) []MessageEven
 
 func memoryJobAttemptsExhausted(attempts int) bool {
 	return attempts > memoryMaxAttempts
+}
+
+// retryMemoryJob 把失败的任务放回队列。上游整体不可用时走不计次的延后，其余
+// 失败（包括超时）照常计数：摘要的缩窗靠的就是次数，超时不能退还。
+func retryMemoryJob(ctx context.Context, store StructuredMemoryStore, job MemoryJob, leaseOwner string, err error) error {
+	if deferrer, ok := store.(MemoryJobDeferrer); ok && deferrer != nil && isLLMUpstreamOutage(err) {
+		now := time.Now()
+		return deferrer.DeferMemoryJob(ctx, job.ID, leaseOwner, now.Add(memoryOutageRetryDelay), err.Error(), now.Add(-memoryOutageRefundAge))
+	}
+	return store.RetryMemoryJob(ctx, job.ID, leaseOwner, time.Now().Add(memoryRetryDelay(job.Attempts)), err.Error())
 }
 
 func memoryRetryDelay(attempt int) time.Duration {

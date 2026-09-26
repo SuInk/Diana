@@ -315,11 +315,16 @@ func (r *Runtime) waitForRelationshipEvaluations(ctx context.Context) bool {
 	}
 }
 
+// relationshipEvaluationBudget 是后台好感度评估单次调用的上限。它在回复送达后才跑，
+// 不挡聊天，给宽一点只是多占一会儿后台名额；原来的 20 秒在线上有约 5% 被出网代理
+// 偶发的停滞卡满，评估整轮作废。
+const relationshipEvaluationBudget = 60 * time.Second
+
 func relationshipEvaluationTimeout(cfg BotConfig) time.Duration {
-	if cfg.RequestTimeout > 0 && cfg.RequestTimeout < 20*time.Second {
+	if cfg.RequestTimeout > 0 && cfg.RequestTimeout < relationshipEvaluationBudget {
 		return cfg.RequestTimeout
 	}
-	return 20 * time.Second
+	return relationshipEvaluationBudget
 }
 
 func parseRelationshipEvaluationDecision(raw string) (relationshipEvaluationDecision, bool) {
