@@ -6981,6 +6981,12 @@ func (r *Runtime) sendDecorated(ctx context.Context, event MessageEvent, reply s
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
+		// 卡片被账号安全审核拦下时不能退回逐条发送：逐条发的是同一段文字，那条路
+		// 不再审核。卡片审核不跟审核总开关走，总开关关着时这里是它唯一一次审核。
+		var safetyErr *replyAccountSafetyRejectedError
+		if errors.As(err, &safetyErr) {
+			return nil, err
+		}
 		// Some OneBot implementations do not support merged forwards. Continue
 		// through the normal chunk path so long replies are still delivered.
 	}

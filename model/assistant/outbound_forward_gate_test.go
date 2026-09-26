@@ -4,6 +4,7 @@
 package assistant
 
 import (
+	"errors"
 	"strings"
 	"testing"
 )
@@ -124,5 +125,28 @@ func TestSendForwardNodesFailsOpenWhenAuditBreaks(t *testing.T) {
 
 	if err := runtime.auditForwardNodesSafety(t.Context(), event, nodes); err != nil {
 		t.Fatalf("审核读不出结果时该放行：%v", err)
+	}
+}
+
+// 长回复走合并转发卡片，卡片审核拦下后不能退回逐条发送：逐条发的是被拦下的
+// 同一段文字，而那条路不再审核。卡片审核不跟审核总开关走，所以总开关关着时
+// 这条回复在这之前一次审核都没过。
+func TestSendDecoratedDoesNotFallBackToChunksAfterUnsafeCard(t *testing.T) {
+	withFastSendTiming(t)
+	provider := &qualityTestProvider{reply: `{"send_confidence":0.99,"reason":"ok","account_safe":false,"account_risk":"politics"}`}
+	channel := &recordingChannel{}
+	runtime := NewRuntime(BotConfig{BotAccount: "42", ForwardReplyThreshold: 10}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+		return provider, nil
+	})
+	event := MessageEvent{Kind: EventKindGroup, Platform: PlatformOneBotV11, GroupID: "100200301", UserID: "100200711"}
+	reply := "第一段很长的回复内容" + notificationSplitMarker + "第二段很长的回复内容" + notificationSplitMarker + "第三段很长的回复内容"
+
+	_, err := runtime.sendDecorated(t.Context(), event, reply, outboundDecoration{})
+	var safetyErr *replyAccountSafetyRejectedError
+	if !errors.As(err, &safetyErr) {
+		t.Fatalf("卡片被账号安全拦下时要把拦截原样交回，实际：%v", err)
+	}
+	if sent := channel.sentSnapshot(); len(sent) != 0 {
+		t.Fatalf("被拦下的回复不该改成逐条发出去：%#v", sent)
 	}
 }
