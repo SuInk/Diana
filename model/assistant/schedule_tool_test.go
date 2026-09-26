@@ -456,7 +456,7 @@ func TestDianaScheduleToolCreatesMonthlyReminderOnCalendar(t *testing.T) {
 	first := time.Now().Add(2 * time.Hour).Truncate(time.Minute)
 
 	raw, err := tool.Run(context.Background(), map[string]any{
-		"operation": "create", "interval": "1m", "at": first.Format(time.RFC3339), "query": "提醒用户交房租",
+		"operation": "create", "interval": "1mo", "at": first.Format(time.RFC3339), "query": "提醒用户交房租",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -465,7 +465,7 @@ func TestDianaScheduleToolCreatesMonthlyReminderOnCalendar(t *testing.T) {
 	if !reminderIsScheduledQuery(item) || item.IntervalMonths != 1 || item.IntervalSeconds != int64((30*24*time.Hour)/time.Second) {
 		t.Fatalf("item = %#v", item)
 	}
-	if !strings.Contains(raw, `"interval": "1m"`) {
+	if !strings.Contains(raw, `"interval": "1mo"`) {
 		t.Fatalf("tool result should echo interval in new units: %s", raw)
 	}
 	// 假装第一次已经到点跑完：把原点挪到刚过去的时刻，下一次应落在一个日历月之后。
@@ -482,19 +482,21 @@ func TestDianaScheduleToolCreatesMonthlyReminderOnCalendar(t *testing.T) {
 
 func TestDianaScheduleIntervalUnits(t *testing.T) {
 	for raw, want := range map[string]calendarDuration{
-		"1min": {Fixed: time.Minute},
-		"1d":   {Fixed: 24 * time.Hour},
-		"1w":   {Fixed: 7 * 24 * time.Hour},
-		"1m":   {Months: 1},
-		"1y":   {Months: 12},
+		"1min":  {Fixed: time.Minute},
+		"1d":    {Fixed: 24 * time.Hour},
+		"1w":    {Fixed: 7 * 24 * time.Hour},
+		"1m":    {Fixed: time.Minute},
+		"1h30m": {Fixed: 90 * time.Minute},
+		"1mo":   {Months: 1},
+		"1y":    {Months: 12},
 	} {
 		got, err := parseScheduleInterval(raw)
 		if err != nil || got != want {
 			t.Fatalf("%q = %+v, %v", raw, got, err)
 		}
 	}
-	// 1h30m 是 Go 写法，这里 m 是月：混用直接拒绝，而不是悄悄建成 30 个月。
-	for _, raw := range []string{"1h30m", "1m2d", "2y", "13m", "30s"} {
+	// 按月的不能再混固定单位；上限一年，下限一分钟。
+	for _, raw := range []string{"1mo2d", "2y", "13mo", "30s"} {
 		if _, err := parseScheduleInterval(raw); err == nil {
 			t.Fatalf("%q should be rejected", raw)
 		}

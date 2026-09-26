@@ -64,7 +64,7 @@ func (t *dianaReminderTool) Description() string {
 // 按当前时间算出的延时再叠加到回补消息的原始时间上。
 func (t *dianaReminderTool) InputSchema() map[string]any {
 	item := map[string]any{
-		"delay":      toolStringParam("相对当前消息的等待时长，单位 " + durationUnitsHint + "。例如 30s、5min、2h、3d、1w、1m。仅用于‘过一段时间后’；与 at/trigger_at 二选一。最长 1y。"),
+		"delay":      toolStringParam("相对当前消息的等待时长，单位 " + durationUnitsHint + "。例如 30s、5m、2h、3d、1w、1mo。仅用于‘过一段时间后’；与 at/trigger_at 二选一。最长 1y。"),
 		"at":         toolStringParam("绝对触发时间，使用 RFC3339（例如 2026-08-30T19:00:00+08:00）。用户指定‘今晚七点’、‘明天下午三点’等时间点时直接传目标时间，不要换算成 delay。与 delay 二选一。"),
 		"trigger_at": toolStringParam("at 的兼容别名：绝对触发时间，使用 RFC3339。与 delay 二选一。"),
 		"message":    toolStringParam("到点要发出的提醒内容，最多 " + itoa(maximumReminderMessageRunes) + " 个字符。"),

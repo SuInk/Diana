@@ -10,17 +10,17 @@ import (
 	"time"
 )
 
-// 工具参数里的时长统一用这套单位：s 秒、min 分钟、h 小时、d 天、w 周、m 月、y 年，
-// 可以组合（1h30min、1y6m）。
+// 工具参数里的时长统一用这套单位：s 秒、m/min 分钟、h 小时、d 天、w 周、mo 月、
+// y 年，可以组合（1h30m、1y6mo）。
 //
-// 注意 m 是月不是分钟，分钟一律写 min。以前这里直接用 time.ParseDuration，m 是分钟，
-// 没法表达「每月」「每年」；现在 m 让给月，所以所有给模型看的说明、例子、报错都不能
-// 再出现 Go 写法的 30m、1m0s——模型照抄回来就成了 30 个月。输出时长一律用
-// formatDurationUnits，不要再用 time.Duration.String()。
+// 和 Go 的 time.ParseDuration 兼容：Go 能解析的写法（500ms、30m、1h30m0s）这里
+// 意思完全一样，m 仍然是分钟——模型和人都写惯了 5m，不能让它变成 5 个月。Go 没有
+// 天以上的单位，这里在它之上加 d、w，以及按日历算的 mo、y。月用 mo 不用 m，就是
+// 为了不和分钟撞。
 //
 // 月和年按日历算，不折成固定秒数：「每月」要落在每个月的同一天，1 月 31 日的下一格
 // 是 2 月的最后一天，不是 3 月 3 日。
-const durationUnitsHint = "s 秒、min 分钟、h 小时、d 天、w 周、m 月、y 年，可组合如 1h30min；注意 m 是月，分钟写 min"
+const durationUnitsHint = "s 秒、m 或 min 分钟、h 小时、d 天、w 周、mo 月、y 年，可组合如 1h30m，兼容 Go 时长写法；月是 mo 不是 m"
 
 // calendarDuration 是一段时长：Months（年已折成 12 个月）按日历加，Fixed 是固定长度。
 type calendarDuration struct {
@@ -50,7 +50,7 @@ func (d calendarDuration) String() string {
 		builder.WriteString(strconv.Itoa(years) + "y")
 	}
 	if months := d.Months % 12; months > 0 {
-		builder.WriteString(strconv.Itoa(months) + "m")
+		builder.WriteString(strconv.Itoa(months) + "mo")
 	}
 	if d.Fixed > 0 || builder.Len() == 0 {
 		builder.WriteString(formatDurationUnits(d.Fixed))
@@ -59,16 +59,20 @@ func (d calendarDuration) String() string {
 }
 
 var durationUnitAliases = map[string]string{
+	"ns": "ns", "us": "us", "ms": "ms",
 	"s": "s", "sec": "s", "secs": "s", "second": "s", "seconds": "s",
-	"min": "min", "mins": "min", "minute": "min", "minutes": "min",
+	"m": "min", "min": "min", "mins": "min", "minute": "min", "minutes": "min",
 	"h": "h", "hr": "h", "hrs": "h", "hour": "h", "hours": "h",
 	"d": "d", "day": "d", "days": "d",
 	"w": "w", "wk": "w", "wks": "w", "week": "w", "weeks": "w",
-	"m": "m", "mo": "m", "mon": "m", "month": "m", "months": "m",
+	"mo": "mo", "mon": "mo", "month": "mo", "months": "mo",
 	"y": "y", "yr": "y", "yrs": "y", "year": "y", "years": "y",
 }
 
 var fixedDurationUnits = map[string]time.Duration{
+	"ns":  time.Nanosecond,
+	"us":  time.Microsecond,
+	"ms":  time.Millisecond,
 	"s":   time.Second,
 	"min": time.Minute,
 	"h":   time.Hour,
@@ -76,10 +80,12 @@ var fixedDurationUnits = map[string]time.Duration{
 	"w":   7 * 24 * time.Hour,
 }
 
-// parseDurationUnits 解析 s/min/h/d/w/m/y 写法。s 到 w 可以带小数（1.5h），月和年
-// 只收整数：半个月没有日历意义。
+// parseDurationUnits 解析 s/m/h/d/w/mo/y 写法（含 Go 的 ns/us/µs/ms）。固定单位可以
+// 带小数（1.5h），月和年只收整数：半个月没有日历意义。
 func parseDurationUnits(raw string) (calendarDuration, error) {
 	text := strings.ToLower(strings.Join(strings.Fields(raw), ""))
+	// Go 的微秒可以写 µs（U+00B5）或 μs（U+03BC），统一成 us。
+	text = strings.NewReplacer("µ", "u", "μ", "u").Replace(text)
 	if text == "" {
 		return calendarDuration{}, fmt.Errorf("时长不能为空")
 	}
@@ -99,7 +105,7 @@ func parseDurationUnits(raw string) (calendarDuration, error) {
 			return calendarDuration{}, fmt.Errorf("时长 %q 格式不正确，单位只支持 %s", raw, durationUnitsHint)
 		}
 		switch unit {
-		case "m", "y":
+		case "mo", "y":
 			count, err := strconv.Atoi(number)
 			if err != nil || count < 0 {
 				return calendarDuration{}, fmt.Errorf("时长 %q 里的月和年只能是整数", raw)
@@ -135,8 +141,9 @@ func parseFixedDurationUnits(raw string) (time.Duration, error) {
 	return parsed.Approximate(), nil
 }
 
-// formatDurationUnits 用同一套单位输出固定时长，从大到小拆：168h 是 1w，90min 是
-// 1h30min。不输出 m 和 y：固定时长不代表日历月。
+// formatDurationUnits 用同一套单位输出固定时长，从大到小拆：168h 是 1w，90 分钟是
+// 1h30min。分钟写 min 而不是 m，读的人不会把它和月的 mo 看岔；两种写法解析时等价。
+// 不输出 mo 和 y：固定时长不代表日历月。
 func formatDurationUnits(value time.Duration) string {
 	if value <= 0 {
 		return "0s"

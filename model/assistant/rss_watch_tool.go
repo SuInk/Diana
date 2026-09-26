@@ -106,7 +106,7 @@ func (*dianaRSSWatchTool) InputSchema() map[string]any {
 		"twitter_handles": toolStringArrayParam("要关注的多个 X (Twitter) 用户名，共用同一套 judge_prompt。最多 " + itoa(maximumRSSWatchSources) + " 个来源（和 feed_urls 合计）。"),
 		"feed_url":        toolStringParam("要关注的单个 RSS/Atom feed 地址。盯多个 Feed 用 feed_urls。"),
 		"feed_urls":       toolStringArrayParam("要关注的多个 RSS/Atom feed 地址，共用同一套 judge_prompt。"),
-		"interval":        toolStringParam("检查间隔，单位 " + durationUnitsHint + "。例如 15min、1h。不短于 " + formatDurationUnits(minimumRSSWatchInterval) + "，省略按 " + formatDurationUnits(defaultRSSWatchInterval) + " 处理。"),
+		"interval":        toolStringParam("检查间隔，单位 " + durationUnitsHint + "。例如 15m、1h。不短于 " + formatDurationUnits(minimumRSSWatchInterval) + "，省略按 " + formatDurationUnits(defaultRSSWatchInterval) + " 处理。"),
 		"judge_prompt":    toolStringParam("判断条件：写清楚什么样的新条目才值得通知、通知时要说什么。最多 " + itoa(maximumRSSJudgeRunes) + " 个字符。例如「仅当推文明确提到额度重置、恢复或刷新时通知，并用中文说明时间和原文链接」。"),
 		"id":              toolStringParam("要操作的订阅 ID；update、cancel、delete 必填，可先用 list 查到。"),
 	})

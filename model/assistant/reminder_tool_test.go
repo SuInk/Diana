@@ -20,7 +20,7 @@ func TestDianaReminderToolCreatesListsAndDeletesReminder(t *testing.T) {
 
 	createdRaw, err := tool.Run(context.Background(), map[string]any{
 		"operation": "create",
-		"delay":     "1min",
+		"delay":     "1m",
 		"message":   "睡觉",
 	})
 	if err != nil {
@@ -71,7 +71,7 @@ func TestDianaReminderToolCreatesAtMostFivePerCall(t *testing.T) {
 		t.Fatalf("result=%#v stored=%#v", result, store.items)
 	}
 
-	tooMany := append(append([]any(nil), items...), map[string]any{"delay": "6min", "message": "第六个"})
+	tooMany := append(append([]any(nil), items...), map[string]any{"delay": "6m", "message": "第六个"})
 	_, err = tool.Run(context.Background(), map[string]any{"operation": "create", "items": tooMany})
 	if err == nil || !strings.Contains(err.Error(), "一次最多创建 5 个") || len(store.items) != maximumTasksPerToolCall {
 		t.Fatalf("err=%v stored=%#v", err, store.items)
@@ -109,7 +109,7 @@ func TestDianaReminderToolRejectsMixedTargets(t *testing.T) {
 	tool := newDianaReminderTool(runtime, MessageEvent{Kind: EventKindPrivate, UserID: "10001"})
 	_, err := tool.Run(context.Background(), map[string]any{
 		"operation": "create",
-		"delay":     "1min",
+		"delay":     "1m",
 		"at":        time.Now().Add(time.Hour).Format(time.RFC3339),
 		"message":   "冲突",
 	})
@@ -126,7 +126,7 @@ func TestDianaReminderToolWarnsWhenTargetAlreadyPassed(t *testing.T) {
 	})
 	raw, err := tool.Run(context.Background(), map[string]any{
 		"operation": "create",
-		"delay":     "1min",
+		"delay":     "1m",
 		"message":   "已过期目标",
 	})
 	if err != nil {
@@ -157,8 +157,8 @@ func TestDianaReminderBatchUsesRemainingQuota(t *testing.T) {
 	raw, err := tool.Run(context.Background(), map[string]any{
 		"operation": "create",
 		"items": []any{
-			map[string]any{"delay": "1min", "message": "A"},
-			map[string]any{"delay": "2min", "message": "B"},
+			map[string]any{"delay": "1m", "message": "A"},
+			map[string]any{"delay": "2m", "message": "B"},
 		},
 	})
 	if err != nil {
@@ -185,11 +185,11 @@ func TestDianaReminderUsedItemsDoNotConsumeQuota(t *testing.T) {
 	raw, err := newDianaReminderTool(runtime, MessageEvent{UserID: "20002"}).Run(context.Background(), map[string]any{
 		"operation": "create",
 		"items": []any{
-			map[string]any{"delay": "1min", "message": "A"},
-			map[string]any{"delay": "2min", "message": "B"},
-			map[string]any{"delay": "3min", "message": "C"},
-			map[string]any{"delay": "4min", "message": "D"},
-			map[string]any{"delay": "5min", "message": "E"},
+			map[string]any{"delay": "1m", "message": "A"},
+			map[string]any{"delay": "2m", "message": "B"},
+			map[string]any{"delay": "3m", "message": "C"},
+			map[string]any{"delay": "4m", "message": "D"},
+			map[string]any{"delay": "5m", "message": "E"},
 		},
 	})
 	if err != nil {
@@ -208,7 +208,7 @@ func TestDianaReminderCancelReleasesQuotaAndDeleteRemovesRecord(t *testing.T) {
 	store := &stubReminderStore{}
 	runtime := NewRuntime(BotConfig{OwnerID: "owner"}, nilChannel{}, NewPluginManager(), nil, store, nil, nil)
 	tool := newDianaReminderTool(runtime, MessageEvent{UserID: "user"})
-	createdRaw, err := tool.Run(context.Background(), map[string]any{"operation": "create", "delay": "1min", "message": "A"})
+	createdRaw, err := tool.Run(context.Background(), map[string]any{"operation": "create", "delay": "1m", "message": "A"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -228,7 +228,7 @@ func TestDianaReminderCancelReleasesQuotaAndDeleteRemovesRecord(t *testing.T) {
 	if cancelled.Reminder == nil || cancelled.Reminder.Status != "cancelled" || store.items[0].CancelledAt.IsZero() {
 		t.Fatalf("cancelled=%#v stored=%#v", cancelled, store.items)
 	}
-	if _, err := tool.Run(context.Background(), map[string]any{"operation": "create", "delay": "2min", "message": "B"}); err != nil {
+	if _, err := tool.Run(context.Background(), map[string]any{"operation": "create", "delay": "2m", "message": "B"}); err != nil {
 		t.Fatalf("cancelled reminder still consumed quota: %v", err)
 	}
 	if _, err := tool.Run(context.Background(), map[string]any{"operation": "delete", "id": id}); err != nil {
@@ -289,7 +289,7 @@ func TestRuntimeAgentCanCreateNaturalLanguageReminder(t *testing.T) {
 	provider := &sequenceLLMProvider{replies: []string{
 		`{"action":"none","prompt":""}`,
 		`{"action":"tool","tool":"tools_load","input":{"names":["reminder"]}}`,
-		`{"action":"tool","tool":"tools_execute","input":{"name":"reminder","input":{"operation":"create","delay":"1min","message":"睡觉"}}}`,
+		`{"action":"tool","tool":"tools_execute","input":{"name":"reminder","input":{"operation":"create","delay":"1m","message":"睡觉"}}}`,
 		`{"action":"final","content":"好，一分钟后提醒你睡觉。"}`,
 	}}
 	runtime := NewRuntime(BotConfig{
@@ -338,7 +338,7 @@ func TestRuntimeAgentCanCreateNaturalLanguageReminder(t *testing.T) {
 }
 
 func TestScheduleSupportsOneMinutePolling(t *testing.T) {
-	interval, err := parseScheduleInterval("1min")
+	interval, err := parseScheduleInterval("1m")
 	if err != nil || interval.Fixed != time.Minute || interval.Months != 0 {
 		t.Fatalf("interval=%s err=%v", interval, err)
 	}

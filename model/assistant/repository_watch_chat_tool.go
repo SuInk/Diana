@@ -93,7 +93,7 @@ func (*dianaRepositoryWatchTool) InputSchema() map[string]any {
 		"id":         toolStringParam("要操作的订阅 ID；update、cancel、delete、run 必填，可以先用 list 查。"),
 		"repository": toolStringParam("仓库，写成 owner/repo 或 GitHub 链接；create 必填。"),
 		"branch":     toolStringParam("要盯的分支，留空是默认分支。"),
-		"interval":   toolStringParam("检查间隔，单位 " + durationUnitsHint + "。例如 30min、2h、1d。不短于 " + formatDurationUnits(minimumRepositoryWatchInterval) + "。"),
+		"interval":   toolStringParam("检查间隔，单位 " + durationUnitsHint + "。例如 30m、2h、1d。不短于 " + formatDurationUnits(minimumRepositoryWatchInterval) + "。"),
 		"watch": toolEnumArrayParam("要监控的类型，可多选。create 省略按全部处理；update 省略表示不改。",
 			"commits", "pull_requests", "issues", "releases", "stars"),
 		"pull_request_events": toolEnumArrayParam("PR 只收这几种动态；省略表示新订阅默认全选，空数组表示全不选。", repositoryWatchPullEventKinds...),

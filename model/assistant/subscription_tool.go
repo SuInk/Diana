@@ -117,7 +117,7 @@ func (t *dianaSubscriptionTool) InputSchema() map[string]any {
 			ordered...),
 		"id": toolStringParam("要操作的订阅 ID；update、cancel、delete、run 必填，可先用 list 查到。"),
 		"interval": toolStringParam("重复间隔，单位 " + durationUnitsHint + "。" +
-			"kind=schedule 必填：每天 1d、每周 1w、每月 1m、每年 1y，固定时间点另用 at 指定；kind=rss 是检查 Feed 的间隔，例如 15min，省略按默认间隔处理。" +
+			"kind=schedule 必填：每天 1d、每周 1w、每月 1mo、每年 1y，固定时间点另用 at 指定；kind=rss 是检查 Feed 的间隔，例如 15m，省略按默认间隔处理。" +
 			"各 kind 的上下限不同，填错会返回具体数值。"),
 	}
 	for key, value := range subscriptionKindFields() {
@@ -134,7 +134,7 @@ func subscriptionKindFields() map[string]any {
 		"at":    toolStringParam("kind=schedule 专用：" + scheduleAtDescription),
 		"items": toolItemsParam("kind=schedule 专用：一次创建多个订阅，只在 create 时有效，最多 "+itoa(maximumTasksPerToolCall)+" 项。",
 			maximumTasksPerToolCall, []string{"interval", "query"}, map[string]any{
-				"interval": toolStringParam("重复间隔：每天 1d、每周 1w、每月 1m、每年 1y；m 是月，分钟写 min。"),
+				"interval": toolStringParam("重复间隔：每天 1d、每周 1w、每月 1mo、每年 1y；m 是分钟，月写 mo。"),
 				"query":    toolStringParam("每次触发时要查的内容，或到点要提醒的内容。"),
 				"at":       toolStringParam("首次触发时间，RFC3339；有固定时间点时必须传。"),
 			}),

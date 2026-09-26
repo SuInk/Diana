@@ -199,8 +199,8 @@ func (t *dianaScheduleTool) Run(_ context.Context, input map[string]any) (string
 const scheduleQueryDescription = "每次触发时要做的事，写成一句完整的自然语言指令：要查资料的写查询要求（如「查今天杭州天气，下雨就提醒带伞」），纯提醒写到点要提醒什么（如「提醒用户该睡觉了」）。"
 
 // scheduleIntervalDescription 是 interval 参数的说明，schedule 和 subscription 两处共用。
-var scheduleIntervalDescription = "重复间隔，单位 " + durationUnitsHint + "。每小时 1h、每天 1d、每周 1w、每月 1m、每年 1y；" +
-	"按月或按年重复时只写 m/y，不和其他单位混用。不短于 " + formatDurationUnits(minimumScheduleInterval) + "，不超过 1y。"
+var scheduleIntervalDescription = "重复间隔，单位 " + durationUnitsHint + "。每小时 1h、每天 1d、每周 1w、每月 1mo、每年 1y；" +
+	"按月或按年重复时只写 mo/y，不和其他单位混用。不短于 " + formatDurationUnits(minimumScheduleInterval) + "，不超过 1y。"
 
 // scheduleAtDescription 是 at 参数的说明，schedule 和 subscription 两处共用。
 const scheduleAtDescription = "首次触发时间，RFC3339（例如 2026-09-27T22:00:00+08:00）。用户说了固定时间点（每天早上八点、每周日 22:00）时必须传，之后每隔 interval 在同一时间点重复；省略表示从现在起过一个 interval 首次触发。已经过去的时间会按 interval 顺延到下一个时间点。"
@@ -254,11 +254,11 @@ func parseScheduleInterval(raw string) (calendarDuration, error) {
 }
 
 // validateScheduleInterval 校验周期：按月（年）重复的只能是整月，按日历排；其余是
-// 固定长度。两种混在一起（1m2d）没有清楚的日历含义，直接拒绝。
+// 固定长度。两种混在一起（1mo2d）没有清楚的日历含义，直接拒绝。
 func validateScheduleInterval(interval calendarDuration) error {
 	if interval.Months > 0 {
 		if interval.Fixed != 0 {
-			return fmt.Errorf("按月或按年重复时只写 m/y，不要和 s/min/h/d/w 混用；分钟请写 min")
+			return fmt.Errorf("按月或按年重复时只写 mo/y，不要和 s/m/h/d/w 混用")
 		}
 		if interval.Months > maximumScheduleMonths {
 			return fmt.Errorf("周期不能超过 1y")

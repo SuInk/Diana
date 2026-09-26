@@ -54,7 +54,7 @@ func TestIdentityPrivacyRestoresToolCallArguments(t *testing.T) {
 		Name: "reminder",
 		Arguments: map[string]any{
 			"operation":      "create",
-			"delay":          "5min",
+			"delay":          "5m",
 			"target_user_id": alias,
 			// 嵌套结构里的别名同样要还原。
 			"targets": []any{alias, map[string]any{"user_id": alias}},

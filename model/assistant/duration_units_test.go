@@ -22,10 +22,15 @@ func TestParseDurationUnits(t *testing.T) {
 		{"1d", 0, 24 * time.Hour},
 		{"1w", 0, 7 * 24 * time.Hour},
 		{"2w3d", 0, 17 * 24 * time.Hour},
-		{"1m", 1, 0},
-		{"6m", 6, 0},
+		{"1m", 0, time.Minute},
+		{"1h30m", 0, 90 * time.Minute},
+		{"1h30m0s", 0, 90 * time.Minute},
+		{"500ms", 0, 500 * time.Millisecond},
+		{"2µs", 0, 2 * time.Microsecond},
+		{"1mo", 1, 0},
+		{"6mo", 6, 0},
 		{"1y", 12, 0},
-		{"1y6m", 18, 0},
+		{"1y6mo", 18, 0},
 		{" 1 D ", 0, 24 * time.Hour},
 		{"3days", 0, 72 * time.Hour},
 		{"1month", 1, 0},
@@ -39,9 +44,23 @@ func TestParseDurationUnits(t *testing.T) {
 			t.Fatalf("%q = %+v, want months=%d fixed=%s", tc.raw, got, tc.months, tc.fixed)
 		}
 	}
-	for _, raw := range []string{"", "5", "h", "1ms", "1.5m", "-1h", "0s", "1q"} {
+	for _, raw := range []string{"", "5", "h", "1.5mo", "-1h", "0s", "1q"} {
 		if _, err := parseDurationUnits(raw); err == nil {
 			t.Fatalf("%q should be rejected", raw)
+		}
+	}
+}
+
+// Go 能解析的时长，这里解析结果必须一模一样。
+func TestParseDurationUnitsMatchesGo(t *testing.T) {
+	for _, raw := range []string{"30s", "5m", "90m", "1h30m", "1h30m0s", "2h45m10s", "1.5h", "250ms", "3us", "12ns", "168h0m0s"} {
+		want, err := time.ParseDuration(raw)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := parseDurationUnits(raw)
+		if err != nil || got.Months != 0 || got.Fixed != want {
+			t.Fatalf("%q = %+v, %v; go = %s", raw, got, err, want)
 		}
 	}
 }
@@ -65,7 +84,7 @@ func TestFormatDurationUnitsRoundTrips(t *testing.T) {
 			t.Fatalf("parse(%q) = %+v, %v", got, parsed, err)
 		}
 	}
-	if got := (calendarDuration{Months: 18}).String(); got != "1y6m" {
+	if got := (calendarDuration{Months: 18}).String(); got != "1y6mo" {
 		t.Fatalf("18 months = %q", got)
 	}
 }
