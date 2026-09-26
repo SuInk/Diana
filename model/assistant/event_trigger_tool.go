@@ -81,8 +81,8 @@ func (t *dianaEventTriggerTool) InputSchema() map[string]any {
 		"deliver_to": toolEnumParam("结果发到哪：event 是事件发生的会话，并引用、@ 触发者（默认）；origin 是现在这条会话，适合「他上线了告诉我」。",
 			eventTriggerDeliverEvent, eventTriggerDeliverOrigin),
 		"repeat":     toolBoolParam("true 表示每次满足条件都触发；默认 false，触发一次就用掉。"),
-		"cooldown":   toolStringParam("repeat=true 时两次触发的最短间隔，Go 时长写法，默认 " + defaultEventTriggerCooldown.String() + "，范围 " + minimumEventTriggerCooldown.String() + " 到 " + maximumEventTriggerCooldown.String() + "。"),
-		"expires_in": toolStringParam("多久之后自动失效，Go 时长写法，默认 " + defaultEventTriggerLifetime.String() + "，最长 " + maximumEventTriggerLifetime.String() + "。到期一次都没触发会告诉设置的人。"),
+		"cooldown":   toolStringParam("repeat=true 时两次触发的最短间隔，单位 " + durationUnitsHint + "。默认 " + formatDurationUnits(defaultEventTriggerCooldown) + "，范围 " + formatDurationUnits(minimumEventTriggerCooldown) + " 到 " + formatDurationUnits(maximumEventTriggerCooldown) + "。"),
+		"expires_in": toolStringParam("多久之后自动失效，单位 " + durationUnitsHint + "。默认 " + formatDurationUnits(defaultEventTriggerLifetime) + "，最长 " + formatDurationUnits(maximumEventTriggerLifetime) + "。到期一次都没触发会告诉设置的人。"),
 		"id":         toolStringParam("要取消或删除的任务 ID；可先用 list 查到。"),
 	})
 }
@@ -303,18 +303,18 @@ func parseEventTriggerCreate(input map[string]any, event MessageEvent, owner boo
 	if spec.Repeat {
 		cooldown := defaultEventTriggerCooldown
 		if raw := strings.TrimSpace(configToolString(input, "cooldown")); raw != "" {
-			cooldown, err = time.ParseDuration(strings.ToLower(raw))
+			cooldown, err = parseFixedDurationUnits(raw)
 			if err != nil || cooldown < minimumEventTriggerCooldown || cooldown > maximumEventTriggerCooldown {
-				return EventTrigger{}, "", fmt.Errorf("cooldown 须是 %s 到 %s 之间的 Go 时长", minimumEventTriggerCooldown, maximumEventTriggerCooldown)
+				return EventTrigger{}, "", fmt.Errorf("cooldown 须是 %s 到 %s 之间的时长（%s）", formatDurationUnits(minimumEventTriggerCooldown), formatDurationUnits(maximumEventTriggerCooldown), durationUnitsHint)
 			}
 		}
 		spec.CooldownSeconds = int64(cooldown / time.Second)
 	}
 	lifetime := defaultEventTriggerLifetime
 	if raw := strings.TrimSpace(configToolString(input, "expires_in")); raw != "" {
-		lifetime, err = time.ParseDuration(strings.ToLower(raw))
+		lifetime, err = parseFixedDurationUnits(raw)
 		if err != nil || lifetime <= 0 || lifetime > maximumEventTriggerLifetime {
-			return EventTrigger{}, "", fmt.Errorf("expires_in 须是不超过 %s 的正 Go 时长", maximumEventTriggerLifetime)
+			return EventTrigger{}, "", fmt.Errorf("expires_in 须是不超过 %s 的正时长（%s）", formatDurationUnits(maximumEventTriggerLifetime), durationUnitsHint)
 		}
 	}
 	spec.ExpiresAt = now.Add(lifetime)
@@ -475,7 +475,7 @@ func eventTriggerSummary(item Reminder, spec EventTrigger) string {
 	}
 	parts = append(parts, action)
 	if spec.Repeat {
-		parts = append(parts, "每次都触发，冷却 "+eventTriggerCooldown(spec).String())
+		parts = append(parts, "每次都触发，冷却 "+formatDurationUnits(eventTriggerCooldown(spec)))
 	} else {
 		parts = append(parts, "触发一次")
 	}

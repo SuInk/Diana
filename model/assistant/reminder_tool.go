@@ -14,7 +14,8 @@ import (
 )
 
 const (
-	maximumReminderDelay        = 365 * 24 * time.Hour
+	// maximumReminderDelay 是一年：delay 可以写 1y，闰年那一年有 366 天。
+	maximumReminderDelay        = 366 * 24 * time.Hour
 	maximumReminderMessageRunes = 2000
 	maximumTasksPerToolCall     = 5
 )
@@ -63,7 +64,7 @@ func (t *dianaReminderTool) Description() string {
 // 按当前时间算出的延时再叠加到回补消息的原始时间上。
 func (t *dianaReminderTool) InputSchema() map[string]any {
 	item := map[string]any{
-		"delay":      toolStringParam("相对当前消息的等待时长，只接受 Go 时长写法：30s、5m、2h、36h（可组合成 1h30m）。仅用于‘过一段时间后’；与 at/trigger_at 二选一。最长 " + maximumReminderDelay.String() + "。"),
+		"delay":      toolStringParam("相对当前消息的等待时长，单位 " + durationUnitsHint + "。例如 30s、5min、2h、3d、1w、1m。仅用于‘过一段时间后’；与 at/trigger_at 二选一。最长 1y。"),
 		"at":         toolStringParam("绝对触发时间，使用 RFC3339（例如 2026-08-30T19:00:00+08:00）。用户指定‘今晚七点’、‘明天下午三点’等时间点时直接传目标时间，不要换算成 delay。与 delay 二选一。"),
 		"trigger_at": toolStringParam("at 的兼容别名：绝对触发时间，使用 RFC3339。与 delay 二选一。"),
 		"message":    toolStringParam("到点要发出的提醒内容，最多 " + itoa(maximumReminderMessageRunes) + " 个字符。"),
@@ -291,14 +292,20 @@ func toolBatchItems(input map[string]any) ([]map[string]any, bool, error) {
 	return items, true, nil
 }
 
+// parseReminderDelay 把 delay 换算成从现在起的等待时长。月和年按日历从现在往后数：
+// 1 月 31 日说「一个月后」是 2 月的最后一天。
 func parseReminderDelay(raw string) (time.Duration, error) {
-	raw = strings.TrimSpace(strings.ToLower(raw))
-	delay, err := time.ParseDuration(raw)
-	if err != nil || delay <= 0 {
-		return 0, fmt.Errorf("提醒时长格式不正确，请使用 30s、1m、2h 这类格式")
+	parsed, err := parseDurationUnits(raw)
+	if err != nil {
+		return 0, fmt.Errorf("提醒时长格式不正确：%w", err)
+	}
+	now := time.Now()
+	delay := parsed.AddTo(now).Sub(now)
+	if delay <= 0 {
+		return 0, fmt.Errorf("提醒时长必须大于 0")
 	}
 	if delay > maximumReminderDelay {
-		return 0, fmt.Errorf("提醒时长不能超过 %s", maximumReminderDelay)
+		return 0, fmt.Errorf("提醒时长不能超过 1y")
 	}
 	return delay, nil
 }

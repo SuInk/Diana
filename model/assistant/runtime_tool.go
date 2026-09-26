@@ -675,7 +675,7 @@ func (r *Runtime) renderReminders(event MessageEvent) string {
 			state = "已使用"
 		}
 		if reminderIsRecurring(item) {
-			interval := time.Duration(item.IntervalSeconds) * time.Second
+			interval := reminderScheduleInterval(item)
 			if item.CancelledAt.IsZero() {
 				state = "运行中"
 				if item.ConsecutiveFailures > 0 {
@@ -768,7 +768,7 @@ func (r *Runtime) renderScheduledQueries(ownerID string) string {
 	})
 	lines := []string{"周期查询订阅："}
 	for _, item := range items {
-		interval := time.Duration(item.IntervalSeconds) * time.Second
+		interval := reminderScheduleInterval(item)
 		status := "运行中"
 		if !item.CancelledAt.IsZero() {
 			status = "已取消"
@@ -1898,11 +1898,18 @@ func (r *Runtime) releaseClaimedReminder(id string) {
 // 网格上的下一个格子：开跑晚了一两秒、失败后隔几分钟重试成功，都不会把「每周日
 // 22:00」挪成 22:05。没有原点的旧记录仍按实际开跑时间往后排。
 func nextRecurringTrigger(item Reminder, startedAt time.Time, now time.Time) time.Time {
-	interval := time.Duration(item.IntervalSeconds) * time.Second
-	if !item.ScheduleAnchorAt.IsZero() && interval > 0 {
-		return scheduleSlotAfter(item.ScheduleAnchorAt, interval, now)
+	interval := reminderScheduleInterval(item)
+	if interval.Months > 0 {
+		anchor := item.ScheduleAnchorAt
+		if anchor.IsZero() {
+			anchor = startedAt
+		}
+		return calendarSlotAfter(anchor, interval.Months, now)
 	}
-	return nextScheduledTrigger(startedAt, interval, now)
+	if !item.ScheduleAnchorAt.IsZero() && interval.Fixed > 0 {
+		return scheduleSlotAfter(item.ScheduleAnchorAt, interval.Fixed, now)
+	}
+	return nextScheduledTrigger(startedAt, interval.Fixed, now)
 }
 
 // scheduleSlotAfter 返回网格 anchor + k*interval（k >= 0）上第一个晚于 now 的格子。

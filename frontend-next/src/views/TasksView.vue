@@ -157,7 +157,7 @@
                 </span>
                 <span v-if="task.kind !== 'reminder' && task.kind !== 'event_trigger' && task.interval_seconds">
                   <Repeat2 :size="13" aria-hidden="true" />
-                  每 {{ formatInterval(task.interval_seconds) }}
+                  每 {{ formatInterval(task.interval_seconds, task.interval_months) }}
                 </span>
                 <span v-if="nextRunLabel(task)">
                   <CalendarClock :size="13" aria-hidden="true" />
@@ -428,7 +428,9 @@ function nextRunLabel(task: AssistantTask): string {
   return `${task.status === "retrying" ? "下次重试" : "下次执行"} ${formatTime(task.trigger_at)}`;
 }
 
-function formatInterval(seconds: number): string {
+function formatInterval(seconds: number, months?: number): string {
+  if (months && months > 0) return months % 12 === 0 ? `${months / 12} 年` : `${months} 个月`;
+  if (seconds % 604800 === 0) return `${seconds / 604800} 周`;
   if (seconds % 86400 === 0) return `${seconds / 86400} 天`;
   if (seconds % 3600 === 0) return `${seconds / 3600} 小时`;
   if (seconds % 60 === 0) return `${seconds / 60} 分钟`;

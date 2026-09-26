@@ -16,6 +16,7 @@ import (
 const (
 	minimumScheduleInterval   = 1 * time.Minute
 	maximumScheduleInterval   = 365 * 24 * time.Hour
+	maximumScheduleMonths     = 12
 	maximumScheduleQueryRunes = 2000
 )
 
@@ -64,7 +65,7 @@ func (t *dianaScheduleTool) Description() string {
 // 避免文案和校验代码各写一份数字然后漂移。
 func (t *dianaScheduleTool) InputSchema() map[string]any {
 	item := map[string]any{
-		"interval": toolStringParam("重复间隔，只接受 Go 时长写法：30m、2h、24h（可组合成 1h30m）；每天填 24h、每周填 168h。不短于 " + minimumScheduleInterval.String() + "，不超过 " + maximumScheduleInterval.String() + "。"),
+		"interval": toolStringParam(scheduleIntervalDescription),
 		"query":    toolStringParam(scheduleQueryDescription),
 		"at":       toolStringParam(scheduleAtDescription),
 	}
@@ -197,11 +198,15 @@ func (t *dianaScheduleTool) Run(_ context.Context, input map[string]any) (string
 // 周期提醒也走 query，说明里不能只写「查询」，否则模型会觉得「提醒睡觉」不属于这里。
 const scheduleQueryDescription = "每次触发时要做的事，写成一句完整的自然语言指令：要查资料的写查询要求（如「查今天杭州天气，下雨就提醒带伞」），纯提醒写到点要提醒什么（如「提醒用户该睡觉了」）。"
 
+// scheduleIntervalDescription 是 interval 参数的说明，schedule 和 subscription 两处共用。
+var scheduleIntervalDescription = "重复间隔，单位 " + durationUnitsHint + "。每小时 1h、每天 1d、每周 1w、每月 1m、每年 1y；" +
+	"按月或按年重复时只写 m/y，不和其他单位混用。不短于 " + formatDurationUnits(minimumScheduleInterval) + "，不超过 1y。"
+
 // scheduleAtDescription 是 at 参数的说明，schedule 和 subscription 两处共用。
 const scheduleAtDescription = "首次触发时间，RFC3339（例如 2026-09-27T22:00:00+08:00）。用户说了固定时间点（每天早上八点、每周日 22:00）时必须传，之后每隔 interval 在同一时间点重复；省略表示从现在起过一个 interval 首次触发。已经过去的时间会按 interval 顺延到下一个时间点。"
 
 type scheduleCreateRequest struct {
-	Interval time.Duration
+	Interval calendarDuration
 	Query    string
 	// FirstAt 是用户指定的首次触发时间，零值表示从现在起过一个 Interval。
 	FirstAt time.Time
@@ -237,19 +242,61 @@ func parseScheduleCreateRequests(input map[string]any) ([]scheduleCreateRequest,
 	return requests, nil
 }
 
-func parseScheduleInterval(raw string) (time.Duration, error) {
-	raw = strings.TrimSpace(strings.ToLower(raw))
-	interval, err := time.ParseDuration(raw)
+func parseScheduleInterval(raw string) (calendarDuration, error) {
+	interval, err := parseDurationUnits(raw)
 	if err != nil {
-		return 0, fmt.Errorf("周期格式不正确，请使用 1m、2h、24h 这类格式")
+		return calendarDuration{}, fmt.Errorf("周期格式不正确：%w", err)
 	}
-	if interval < minimumScheduleInterval {
-		return 0, fmt.Errorf("周期不能短于 %s", minimumScheduleInterval)
-	}
-	if interval > maximumScheduleInterval {
-		return 0, fmt.Errorf("周期不能超过 %s", maximumScheduleInterval)
+	if err := validateScheduleInterval(interval); err != nil {
+		return calendarDuration{}, err
 	}
 	return interval, nil
+}
+
+// validateScheduleInterval 校验周期：按月（年）重复的只能是整月，按日历排；其余是
+// 固定长度。两种混在一起（1m2d）没有清楚的日历含义，直接拒绝。
+func validateScheduleInterval(interval calendarDuration) error {
+	if interval.Months > 0 {
+		if interval.Fixed != 0 {
+			return fmt.Errorf("按月或按年重复时只写 m/y，不要和 s/min/h/d/w 混用；分钟请写 min")
+		}
+		if interval.Months > maximumScheduleMonths {
+			return fmt.Errorf("周期不能超过 1y")
+		}
+		return nil
+	}
+	if interval.Fixed < minimumScheduleInterval {
+		return fmt.Errorf("周期不能短于 %s", formatDurationUnits(minimumScheduleInterval))
+	}
+	if interval.Fixed > maximumScheduleInterval {
+		return fmt.Errorf("周期不能超过 1y")
+	}
+	return nil
+}
+
+// reminderScheduleInterval 读出一条周期任务的重复间隔：IntervalMonths 非零按日历月，
+// 否则是 IntervalSeconds 的固定长度。
+func reminderScheduleInterval(item Reminder) calendarDuration {
+	if item.IntervalMonths > 0 {
+		return calendarDuration{Months: item.IntervalMonths}
+	}
+	return calendarDuration{Fixed: time.Duration(item.IntervalSeconds) * time.Second}
+}
+
+// setReminderScheduleInterval 把间隔写回记录。按月的也写 IntervalSeconds（折算值）：
+// 「IntervalSeconds > 0 就是周期任务」这条判断散在各处，WebUI 也靠它显示，不能让
+// 按月的订阅在那里变成一次性提醒。
+func setReminderScheduleInterval(item *Reminder, interval calendarDuration) {
+	item.IntervalMonths = interval.Months
+	item.IntervalSeconds = int64(interval.Approximate() / time.Second)
+}
+
+// scheduleIntervalSlotAfter 是 anchor 网格上第一个晚于 now 的格子，按月的走日历。
+func scheduleIntervalSlotAfter(anchor time.Time, interval calendarDuration, now time.Time) time.Time {
+	if interval.Months > 0 {
+		return calendarSlotAfter(anchor, interval.Months, now)
+	}
+	return scheduleSlotAfter(anchor, interval.Fixed, now)
 }
 
 // parseScheduleFirstAt 解析首次触发时间，空串返回零值。
@@ -262,8 +309,8 @@ func parseScheduleFirstAt(raw string) (time.Time, error) {
 	if err != nil {
 		return time.Time{}, err
 	}
-	if at.After(time.Now().Add(maximumScheduleInterval)) {
-		return time.Time{}, fmt.Errorf("首次触发时间不能晚于 %s 之后", maximumScheduleInterval)
+	if limit := time.Now().AddDate(1, 0, 0); at.After(limit) {
+		return time.Time{}, fmt.Errorf("首次触发时间不能晚于一年之后")
 	}
 	return at, nil
 }
@@ -271,14 +318,14 @@ func parseScheduleFirstAt(raw string) (time.Time, error) {
 // firstScheduleTrigger 算新订阅第一次什么时候跑，也就是它的时间网格原点。没给 at
 // 就是现在起过一个 interval；给了就对齐到 at，已经过去的顺延到网格上的下一个格子，
 // 所以周日 23 点说「每周日 22 点」，第一次是下周日 22 点，而不是立刻补跑一次。
-func firstScheduleTrigger(firstAt time.Time, interval time.Duration, now time.Time) time.Time {
+func firstScheduleTrigger(firstAt time.Time, interval calendarDuration, now time.Time) time.Time {
 	if firstAt.IsZero() {
-		return now.Add(interval)
+		return interval.AddTo(now)
 	}
-	return scheduleSlotAfter(firstAt, interval, now)
+	return scheduleIntervalSlotAfter(firstAt, interval, now)
 }
 
-func (r *Runtime) addScheduledQuery(event MessageEvent, interval time.Duration, query string) (Reminder, error) {
+func (r *Runtime) addScheduledQuery(event MessageEvent, interval calendarDuration, query string) (Reminder, error) {
 	items, err := r.addScheduledQueries(event, []scheduleCreateRequest{{Interval: interval, Query: query}})
 	if err != nil {
 		return Reminder{}, err
@@ -318,14 +365,14 @@ func (r *Runtime) addScheduledQueries(event MessageEvent, requests []scheduleCre
 	created := make([]Reminder, 0, len(requests))
 	for index, request := range requests {
 		query := strings.TrimSpace(request.Query)
-		if request.Interval < minimumScheduleInterval || request.Interval > maximumScheduleInterval {
-			return nil, fmt.Errorf("第 %d 个周期任务间隔无效", index+1)
+		if err := validateScheduleInterval(request.Interval); err != nil {
+			return nil, fmt.Errorf("第 %d 个周期任务间隔无效：%w", index+1, err)
 		}
 		if query == "" || len([]rune(query)) > maximumScheduleQueryRunes {
 			return nil, fmt.Errorf("第 %d 个周期任务 query 无效", index+1)
 		}
 		triggerAt := firstScheduleTrigger(request.FirstAt, request.Interval, now)
-		created = append(created, Reminder{
+		reminder := Reminder{
 			ID:               uuid.NewString()[:8],
 			Kind:             ReminderKindQuery,
 			Platform:         event.Platform,
@@ -337,10 +384,11 @@ func (r *Runtime) addScheduledQueries(event MessageEvent, requests []scheduleCre
 			RequestedBy:      firstNonEmpty(event.taskRequester, event.UserID),
 			Message:          query,
 			TriggerAt:        triggerAt,
-			IntervalSeconds:  int64(request.Interval / time.Second),
 			ScheduleAnchorAt: triggerAt,
 			CreatedAt:        now,
-		})
+		}
+		setReminderScheduleInterval(&reminder, request.Interval)
+		created = append(created, reminder)
 	}
 	if err := r.reminders.SaveReminders(append(items, created...)); err != nil {
 		return nil, fmt.Errorf("保存定时订阅失败: %w", err)
@@ -428,7 +476,7 @@ func (r *Runtime) updateScheduledQuery(ownerID string, id string, input map[stri
 	if rawInterval == "" && query == "" && firstAt.IsZero() {
 		return Reminder{}, fmt.Errorf("修改定时订阅时至少提供 interval、at 或 query")
 	}
-	var interval time.Duration
+	var interval calendarDuration
 	if rawInterval != "" {
 		interval, err = parseScheduleInterval(rawInterval)
 		if err != nil {
@@ -451,9 +499,9 @@ func (r *Runtime) updateScheduledQuery(ownerID string, id string, input map[stri
 		}
 		now := time.Now()
 		if rawInterval != "" {
-			item.IntervalSeconds = int64(interval / time.Second)
+			setReminderScheduleInterval(item, interval)
 		}
-		current := time.Duration(item.IntervalSeconds) * time.Second
+		current := reminderScheduleInterval(*item)
 		if query != "" {
 			item.Message = query
 			item.PendingDelivery = ""
@@ -468,9 +516,9 @@ func (r *Runtime) updateScheduledQuery(ownerID string, id string, input map[stri
 			item.ScheduleAnchorAt = item.TriggerAt
 		case !item.ScheduleAnchorAt.IsZero():
 			// 只改查询内容：时间点不动，落回原来网格上的下一格。
-			item.TriggerAt = scheduleSlotAfter(item.ScheduleAnchorAt, current, now)
+			item.TriggerAt = scheduleIntervalSlotAfter(item.ScheduleAnchorAt, current, now)
 		default:
-			item.TriggerAt = now.Add(current)
+			item.TriggerAt = current.AddTo(now)
 		}
 		if err := r.reminders.SaveReminders(items); err != nil {
 			return Reminder{}, fmt.Errorf("修改定时订阅失败: %w", err)
@@ -488,7 +536,7 @@ func scheduleForTool(item Reminder) *dianaSchedule {
 	return &dianaSchedule{
 		ID:                  item.ID,
 		Query:               item.Message,
-		Interval:            (time.Duration(item.IntervalSeconds) * time.Second).String(),
+		Interval:            reminderScheduleInterval(item).String(),
 		NextRunAt:           item.TriggerAt,
 		LastRunAt:           item.LastRunAt,
 		Status:              scheduleStatus(item),

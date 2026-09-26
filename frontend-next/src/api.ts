@@ -3333,6 +3333,8 @@ export interface AssistantTask {
   status: AssistantTaskStatus;
   trigger_at: string;
   interval_seconds?: number;
+  // 按日历月重复的周期订阅（每月、每年）才有；这时 interval_seconds 只是折算值。
+  interval_months?: number;
   last_run_at?: string;
   cancelled_at?: string;
   last_error?: string;

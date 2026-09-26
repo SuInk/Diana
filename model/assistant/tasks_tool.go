@@ -332,7 +332,7 @@ func taskForTool(item Reminder) dianaTask {
 			consumesQuota = item.CancelledAt.IsZero()
 		}
 		status = scheduleStatus(item)
-		interval = (time.Duration(item.IntervalSeconds) * time.Second).String()
+		interval = reminderScheduleInterval(item).String()
 	}
 	return dianaTask{
 		ID:                    item.ID,

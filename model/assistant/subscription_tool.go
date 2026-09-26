@@ -116,8 +116,8 @@ func (t *dianaSubscriptionTool) InputSchema() map[string]any {
 		"operation": toolEnumParam("要执行的操作。cancel 只停止并保留记录，delete 才彻底删除；run 是立刻检查一次，只有 kind=github 支持。",
 			ordered...),
 		"id": toolStringParam("要操作的订阅 ID；update、cancel、delete、run 必填，可先用 list 查到。"),
-		"interval": toolStringParam("重复间隔，只接受 Go 时长写法，例如 30m、2h、24h、168h、1h30m。" +
-			"kind=schedule 必填：每天填 24h、每周填 168h，固定时间点另用 at 指定；kind=rss 是检查 Feed 的间隔，省略按默认间隔处理。" +
+		"interval": toolStringParam("重复间隔，单位 " + durationUnitsHint + "。" +
+			"kind=schedule 必填：每天 1d、每周 1w、每月 1m、每年 1y，固定时间点另用 at 指定；kind=rss 是检查 Feed 的间隔，例如 15min，省略按默认间隔处理。" +
 			"各 kind 的上下限不同，填错会返回具体数值。"),
 	}
 	for key, value := range subscriptionKindFields() {
@@ -134,7 +134,7 @@ func subscriptionKindFields() map[string]any {
 		"at":    toolStringParam("kind=schedule 专用：" + scheduleAtDescription),
 		"items": toolItemsParam("kind=schedule 专用：一次创建多个订阅，只在 create 时有效，最多 "+itoa(maximumTasksPerToolCall)+" 项。",
 			maximumTasksPerToolCall, []string{"interval", "query"}, map[string]any{
-				"interval": toolStringParam("重复间隔，Go 时长写法：每天 24h、每周 168h。"),
+				"interval": toolStringParam("重复间隔：每天 1d、每周 1w、每月 1m、每年 1y；m 是月，分钟写 min。"),
 				"query":    toolStringParam("每次触发时要查的内容，或到点要提醒的内容。"),
 				"at":       toolStringParam("首次触发时间，RFC3339；有固定时间点时必须传。"),
 			}),

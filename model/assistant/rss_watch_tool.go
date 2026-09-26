@@ -106,7 +106,7 @@ func (*dianaRSSWatchTool) InputSchema() map[string]any {
 		"twitter_handles": toolStringArrayParam("要关注的多个 X (Twitter) 用户名，共用同一套 judge_prompt。最多 " + itoa(maximumRSSWatchSources) + " 个来源（和 feed_urls 合计）。"),
 		"feed_url":        toolStringParam("要关注的单个 RSS/Atom feed 地址。盯多个 Feed 用 feed_urls。"),
 		"feed_urls":       toolStringArrayParam("要关注的多个 RSS/Atom feed 地址，共用同一套 judge_prompt。"),
-		"interval":        toolStringParam("检查间隔，只接受 Go 时长写法：15m、1h。不短于 " + minimumRSSWatchInterval.String() + "，省略按 " + defaultRSSWatchInterval.String() + " 处理。"),
+		"interval":        toolStringParam("检查间隔，单位 " + durationUnitsHint + "。例如 15min、1h。不短于 " + formatDurationUnits(minimumRSSWatchInterval) + "，省略按 " + formatDurationUnits(defaultRSSWatchInterval) + " 处理。"),
 		"judge_prompt":    toolStringParam("判断条件：写清楚什么样的新条目才值得通知、通知时要说什么。最多 " + itoa(maximumRSSJudgeRunes) + " 个字符。例如「仅当推文明确提到额度重置、恢复或刷新时通知，并用中文说明时间和原文链接」。"),
 		"id":              toolStringParam("要操作的订阅 ID；update、cancel、delete 必填，可先用 list 查到。"),
 	})
@@ -242,15 +242,15 @@ func parseRSSWatchInterval(raw string) (time.Duration, error) {
 	if strings.TrimSpace(raw) == "" {
 		return defaultRSSWatchInterval, nil
 	}
-	value, err := time.ParseDuration(strings.ToLower(strings.TrimSpace(raw)))
+	value, err := parseFixedDurationUnits(raw)
 	if err != nil {
-		return 0, fmt.Errorf("周期格式不正确，请使用 5m、15m、2h 这类格式")
+		return 0, fmt.Errorf("周期格式不正确：%w", err)
 	}
 	if value < minimumRSSWatchInterval {
-		return 0, fmt.Errorf("RSS 检查周期不能短于 %s", minimumRSSWatchInterval)
+		return 0, fmt.Errorf("RSS 检查周期不能短于 %s", formatDurationUnits(minimumRSSWatchInterval))
 	}
 	if value > maximumScheduleInterval {
-		return 0, fmt.Errorf("RSS 检查周期不能超过 %s", maximumScheduleInterval)
+		return 0, fmt.Errorf("RSS 检查周期不能超过 %s", formatDurationUnits(maximumScheduleInterval))
 	}
 	return value, nil
 }
@@ -288,7 +288,7 @@ func (r *Runtime) CreateRSSWatch(ctx context.Context, input RSSWatchCreateInput)
 		interval = defaultRSSWatchInterval
 	}
 	if interval < minimumRSSWatchInterval || interval > maximumScheduleInterval {
-		return Reminder{}, fmt.Errorf("RSS 检查周期必须在 %s 到 %s 之间", minimumRSSWatchInterval, maximumScheduleInterval)
+		return Reminder{}, fmt.Errorf("RSS 检查周期必须在 %s 到 %s 之间", formatDurationUnits(minimumRSSWatchInterval), formatDurationUnits(maximumScheduleInterval))
 	}
 	judge := strings.TrimSpace(input.JudgePrompt)
 	if judge == "" {
@@ -497,7 +497,7 @@ func (r *Runtime) UpdateRSSWatch(ctx context.Context, owner, id string, input RS
 		interval = input.Interval
 	}
 	if interval < minimumRSSWatchInterval || interval > maximumScheduleInterval {
-		return Reminder{}, fmt.Errorf("RSS 检查周期必须在 %s 到 %s 之间", minimumRSSWatchInterval, maximumScheduleInterval)
+		return Reminder{}, fmt.Errorf("RSS 检查周期必须在 %s 到 %s 之间", formatDurationUnits(minimumRSSWatchInterval), formatDurationUnits(maximumScheduleInterval))
 	}
 	// 只给新加进来的来源建基线：留下来的来源保持自己的游标，否则改一次订阅
 	// 就把所有人的进度抹平，改完那一刻的存量内容会被当成「已读」。
@@ -713,7 +713,7 @@ func rssWatchSourceLabels(item Reminder) []string {
 func rssWatchForTool(item Reminder) *dianaRSSWatch {
 	// 订阅地址里的令牌（?token=、?key=）只给模型掩码；原样交回掩码改订阅时由
 	// restoreMaskedFeedURLs 换回原文。
-	return &dianaRSSWatch{ID: item.ID, OwnerID: item.OwnerID, Sources: rssWatchSourceLabels(item), FeedURL: secretmask.URLs(item.FeedURL), Source: item.FeedSource, TwitterHandle: item.FeedHandle, JudgePrompt: item.FeedJudgePrompt, Interval: (time.Duration(item.IntervalSeconds) * time.Second).String(), NextRunAt: item.TriggerAt, LastRunAt: item.LastRunAt, Status: scheduleStatus(item), LastError: secretmask.Text(item.LastError), PendingDelivery: strings.TrimSpace(item.PendingDelivery) != ""}
+	return &dianaRSSWatch{ID: item.ID, OwnerID: item.OwnerID, Sources: rssWatchSourceLabels(item), FeedURL: secretmask.URLs(item.FeedURL), Source: item.FeedSource, TwitterHandle: item.FeedHandle, JudgePrompt: item.FeedJudgePrompt, Interval: formatDurationUnits(time.Duration(item.IntervalSeconds) * time.Second), NextRunAt: item.TriggerAt, LastRunAt: item.LastRunAt, Status: scheduleStatus(item), LastError: secretmask.Text(item.LastError), PendingDelivery: strings.TrimSpace(item.PendingDelivery) != ""}
 }
 
 func marshalDianaRSSWatchResult(result dianaRSSWatchResult) (string, error) {

@@ -30,7 +30,7 @@ func TestDianaScheduleToolCreatesListsAndDeletesQuery(t *testing.T) {
 	if err := json.Unmarshal([]byte(createdRaw), &created); err != nil {
 		t.Fatal(err)
 	}
-	if !created.OK || created.Schedule == nil || created.Schedule.Interval != "6h0m0s" {
+	if !created.OK || created.Schedule == nil || created.Schedule.Interval != "6h" {
 		t.Fatalf("created = %#v", created)
 	}
 	if len(store.items) != 1 {
@@ -446,5 +446,57 @@ func TestUpdateScheduledQueryMovesAnchorOnlyWhenTimeChanges(t *testing.T) {
 	}
 	if !item.TriggerAt.Equal(moved) || !item.ScheduleAnchorAt.Equal(moved) {
 		t.Fatalf("at update = %#v, want %s", item, moved)
+	}
+}
+
+func TestDianaScheduleToolCreatesMonthlyReminderOnCalendar(t *testing.T) {
+	store := &stubReminderStore{}
+	runtime := NewRuntime(BotConfig{OwnerID: "10001"}, nilChannel{}, NewPluginManager(), nil, store, nil, nil)
+	tool := newDianaScheduleTool(runtime, MessageEvent{Kind: EventKindPrivate, UserID: "10001"})
+	first := time.Now().Add(2 * time.Hour).Truncate(time.Minute)
+
+	raw, err := tool.Run(context.Background(), map[string]any{
+		"operation": "create", "interval": "1m", "at": first.Format(time.RFC3339), "query": "提醒用户交房租",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	item := store.items[0]
+	if !reminderIsScheduledQuery(item) || item.IntervalMonths != 1 || item.IntervalSeconds != int64((30*24*time.Hour)/time.Second) {
+		t.Fatalf("item = %#v", item)
+	}
+	if !strings.Contains(raw, `"interval": "1m"`) {
+		t.Fatalf("tool result should echo interval in new units: %s", raw)
+	}
+	// 假装第一次已经到点跑完：把原点挪到刚过去的时刻，下一次应落在一个日历月之后。
+	past := time.Now().Add(-time.Minute).Truncate(time.Second)
+	store.items[0].ScheduleAnchorAt, store.items[0].TriggerAt = past, past
+	updated, err := runtime.finishScheduledQuery(item.ID, past, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := addMonthsClamped(past, 1); !updated.TriggerAt.Equal(want) {
+		t.Fatalf("next = %s, want %s", updated.TriggerAt, want)
+	}
+}
+
+func TestDianaScheduleIntervalUnits(t *testing.T) {
+	for raw, want := range map[string]calendarDuration{
+		"1min": {Fixed: time.Minute},
+		"1d":   {Fixed: 24 * time.Hour},
+		"1w":   {Fixed: 7 * 24 * time.Hour},
+		"1m":   {Months: 1},
+		"1y":   {Months: 12},
+	} {
+		got, err := parseScheduleInterval(raw)
+		if err != nil || got != want {
+			t.Fatalf("%q = %+v, %v", raw, got, err)
+		}
+	}
+	// 1h30m 是 Go 写法，这里 m 是月：混用直接拒绝，而不是悄悄建成 30 个月。
+	for _, raw := range []string{"1h30m", "1m2d", "2y", "13m", "30s"} {
+		if _, err := parseScheduleInterval(raw); err == nil {
+			t.Fatalf("%q should be rejected", raw)
+		}
 	}
 }

@@ -275,7 +275,7 @@ func (r *Runtime) CreateRepositoryWatch(ctx context.Context, input RepositoryWat
 		interval = defaultRepositoryWatchInterval(settings)
 	}
 	if interval < minimumRepositoryWatchInterval {
-		return Reminder{}, fmt.Errorf("仓库检查周期不能短于 %s", minimumRepositoryWatchInterval)
+		return Reminder{}, fmt.Errorf("仓库检查周期不能短于 %s", formatDurationUnits(minimumRepositoryWatchInterval))
 	}
 	if interval > maximumScheduleInterval {
 		return Reminder{}, fmt.Errorf("仓库检查周期不能超过 %s", maximumScheduleInterval)
@@ -376,12 +376,12 @@ func (r *Runtime) UpdateRepositoryWatch(ctx context.Context, ownerID, id string,
 	}
 	if input.Interval > 0 {
 		if input.Interval < minimumRepositoryWatchInterval {
-			return Reminder{}, fmt.Errorf("仓库检查周期不能短于 %s", minimumRepositoryWatchInterval)
+			return Reminder{}, fmt.Errorf("仓库检查周期不能短于 %s", formatDurationUnits(minimumRepositoryWatchInterval))
 		}
 		if input.Interval > maximumScheduleInterval {
-			return Reminder{}, fmt.Errorf("仓库检查周期不能超过 %s", maximumScheduleInterval)
+			return Reminder{}, fmt.Errorf("仓库检查周期不能超过 %s", formatDurationUnits(maximumScheduleInterval))
 		}
-		values["interval"] = input.Interval.String()
+		values["interval"] = formatDurationUnits(input.Interval)
 	}
 	if input.WatchCommits != nil {
 		values["watch_commits"] = *input.WatchCommits
@@ -458,15 +458,15 @@ func parseRepositoryWatchInterval(raw string, settings SettingValues) (time.Dura
 	if strings.TrimSpace(raw) == "" {
 		return defaultRepositoryWatchInterval(settings), nil
 	}
-	interval, err := time.ParseDuration(strings.TrimSpace(strings.ToLower(raw)))
+	interval, err := parseFixedDurationUnits(raw)
 	if err != nil {
-		return 0, fmt.Errorf("周期格式不正确，请使用 30s、1m、2h 这类格式")
+		return 0, fmt.Errorf("周期格式不正确：%w", err)
 	}
 	if interval < minimumRepositoryWatchInterval {
-		return 0, fmt.Errorf("仓库检查周期不能短于 %s", minimumRepositoryWatchInterval)
+		return 0, fmt.Errorf("仓库检查周期不能短于 %s", formatDurationUnits(minimumRepositoryWatchInterval))
 	}
 	if interval > maximumScheduleInterval {
-		return 0, fmt.Errorf("仓库检查周期不能超过 %s", maximumScheduleInterval)
+		return 0, fmt.Errorf("仓库检查周期不能超过 %s", formatDurationUnits(maximumScheduleInterval))
 	}
 	return interval, nil
 }

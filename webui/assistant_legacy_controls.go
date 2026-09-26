@@ -180,6 +180,7 @@ type botTaskPayload struct {
 	Status                string    `json:"status"`
 	TriggerAt             time.Time `json:"trigger_at"`
 	IntervalSeconds       int64     `json:"interval_seconds,omitempty"`
+	IntervalMonths        int       `json:"interval_months,omitempty"`
 	LastRunAt             time.Time `json:"last_run_at,omitempty"`
 	CancelledAt           time.Time `json:"cancelled_at,omitempty"`
 	LastError             string    `json:"last_error,omitempty"`
@@ -929,7 +930,7 @@ func botTaskPayloadFromReminder(item assistant.Reminder) botTaskPayload {
 	return botTaskPayload{
 		ID: item.ID, Kind: botTaskKind(item), Platform: item.Platform, ProfileID: item.ProfileID,
 		OwnerID: item.OwnerID, GroupID: item.GroupID, UserID: item.UserID, Message: item.Message,
-		Status: botTaskStatus(item), TriggerAt: item.TriggerAt, IntervalSeconds: item.IntervalSeconds,
+		Status: botTaskStatus(item), TriggerAt: item.TriggerAt, IntervalSeconds: item.IntervalSeconds, IntervalMonths: item.IntervalMonths,
 		LastRunAt: item.LastRunAt, CancelledAt: item.CancelledAt, LastError: item.LastError,
 		ConsecutiveFailures: item.ConsecutiveFailures, PendingDelivery: strings.TrimSpace(item.PendingDelivery) != "",
 		PendingSince: item.PendingSince, Repository: item.Repository, RepositoryBranch: item.RepositoryBranch,
