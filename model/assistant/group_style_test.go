@@ -48,6 +48,7 @@ func groupStyleTestRuntime(t *testing.T, messages int, provider *sequenceLLMProv
 	runtime := NewRuntime(cfg, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) { return provider, nil })
 	styles := &memoryGroupStyleStore{}
 	runtime.SetGroupStyleStore(styles)
+	t.Cleanup(runtime.groupStyles.learning.Wait)
 	event := MessageEvent{Kind: EventKindGroup, ProfileID: "bot", GroupID: "g1", SelfID: "42"}
 	for i := 0; i < messages; i++ {
 		item := event
@@ -118,7 +119,7 @@ func TestManualGroupStyleSurvivesObserveButNotRelearn(t *testing.T) {
 	message.MessageID, message.UserID = "new", "10001"
 	message.Segments = []MessageSegment{{Type: "text", Data: map[string]string{"text": "来了"}}}
 	runtime.observeGroupStyle(message)
-	time.Sleep(50 * time.Millisecond)
+	runtime.groupStyles.learning.Wait()
 	if saved, _, _ := styles.GroupStyle(ctx, "bot", "g1"); saved.Text != "主人写的风格" || !saved.Manual {
 		t.Fatalf("manual style was overwritten by auto learning: %#v", saved)
 	}
@@ -162,7 +163,7 @@ func TestGroupStyleDisabledPerGroup(t *testing.T) {
 	message.MessageID, message.UserID = "new", "10001"
 	message.Segments = []MessageSegment{{Type: "text", Data: map[string]string{"text": "来了"}}}
 	runtime.observeGroupStyle(message)
-	time.Sleep(50 * time.Millisecond)
+	runtime.groupStyles.learning.Wait()
 	if len(provider.requests) != 1 {
 		t.Fatalf("disabled group was auto-learned: %d model calls", len(provider.requests))
 	}

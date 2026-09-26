@@ -4932,7 +4932,9 @@ func (s *recordingLocalMediaSharer) pathsSnapshot() []string {
 	return append([]string(nil), s.paths...)
 }
 
+// memoryMessageHistoryStore 要加锁：风格学习在后台协程里读历史，和处理消息时的写入并发。
 type memoryMessageHistoryStore struct {
+	mu     sync.RWMutex
 	events map[string][]MessageEvent
 }
 
@@ -4941,11 +4943,15 @@ func newMemoryMessageHistoryStore() *memoryMessageHistoryStore {
 }
 
 func (s *memoryMessageHistoryStore) AppendMessageEvent(_ context.Context, session string, event MessageEvent) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.events[session] = append(s.events[session], event)
 	return nil
 }
 
 func (s *memoryMessageHistoryStore) ListRecentMessageEvents(_ context.Context, session string, limit int) ([]MessageEvent, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	events := append([]MessageEvent(nil), s.events[session]...)
 	if limit > 0 && len(events) > limit {
 		events = events[len(events)-limit:]

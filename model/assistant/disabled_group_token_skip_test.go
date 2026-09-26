@@ -69,6 +69,8 @@ func newDisabledGroupSkipHarness(t *testing.T, base BotConfig, groupEnabled bool
 	runtime.SetStructuredMemoryStore(memory)
 	style := &stubGroupStyleStore{}
 	runtime.SetGroupStyleStore(style)
+	// 群消息会触发后台风格学习，用例结束前等它收尾，别让它读写到下一个用例的时间里。
+	t.Cleanup(runtime.groupStyles.learning.Wait)
 
 	store := &testWritableGroupConfigStore{}
 	if _, err := store.SaveGroupConfig(GroupConfig{

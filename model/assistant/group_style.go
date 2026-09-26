@@ -83,6 +83,8 @@ type groupStyleState struct {
 	checked map[string]time.Time
 	running map[string]bool
 	cache   map[string]groupStyleCacheEntry
+	// learning 跟踪 observeGroupStyle 起的后台学习协程，测试靠它等学完再断言、不把协程漏到下一个用例。
+	learning sync.WaitGroup
 }
 
 // SetGroupStyleStore 注入风格笔记存储。
@@ -134,7 +136,9 @@ func (r *Runtime) observeGroupStyle(event MessageEvent) {
 	}
 	r.groupStyles.checked[scope] = now
 	r.groupStyles.mu.Unlock()
+	r.groupStyles.learning.Add(1)
 	go func() {
+		defer r.groupStyles.learning.Done()
 		defer recoverGoroutinePanic("group_style.observe")
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 		defer cancel()

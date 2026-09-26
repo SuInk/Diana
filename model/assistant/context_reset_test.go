@@ -18,10 +18,14 @@ func (s *resetHistoryTestStore) ResetContextHistory(_ context.Context, session s
 	if s.resetErr != nil {
 		return s.resetErr
 	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	s.offsets[session] = len(s.events[session])
 	return nil
 }
 func (s *resetHistoryTestStore) ListContextMessageEvents(_ context.Context, session string, limit int) ([]MessageEvent, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	events := s.events[session][s.offsets[session]:]
 	if limit > 0 && len(events) > limit {
 		events = events[len(events)-limit:]
