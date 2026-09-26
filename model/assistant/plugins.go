@@ -355,6 +355,14 @@ type LocalMediaSharerAwarePlugin interface {
 	SetLocalMediaSharer(LocalMediaSharer)
 }
 
+// PluginStateObserver 让持有常驻资源（监听端口、后台连接）的插件跟着开关和
+// 设置启停。插件的开关按机器人分，但这类资源是进程级的：只要有一台机器人开着
+// 就该在跑，settings 是全局设置（按群覆盖不参与）。启动恢复、改开关、改设置
+// 之后都会调用，插件要自己保证重复调用是幂等的。
+type PluginStateObserver interface {
+	PluginStateChanged(enabled bool, settings SettingValues)
+}
+
 // SecretSettingMerger lets a plugin update one entry inside a structured
 // secret without requiring the WebUI to read the other secret values back.
 type SecretSettingMerger interface {
@@ -422,6 +430,7 @@ func NewDefaultPluginManager() *PluginManager {
 		NewRSSWatchPlugin(nil),
 		NewGroupRelationsPlugin(),
 		NewStickerPlugin(),
+		NewVRChatPlugin(),
 		NewFileDeliveryPlugin(),
 		NewCodingAgentPlugin(),
 		NewStatusCommandPlugin(),
@@ -692,6 +701,7 @@ func (m *PluginManager) Snapshot() map[string]PersistedPluginState {
 
 // Restore 从持久化状态恢复插件开关。
 func (m *PluginManager) Restore(states map[string]PersistedPluginState) {
+	defer m.notifyAllStateObservers()
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for id, plugin := range m.catalog {
@@ -836,6 +846,7 @@ func (m *PluginManager) UpdateSettingsWithClears(id string, values map[string]an
 }
 
 func (m *PluginManager) UpdateSettingsForProfile(id, profileID string, values map[string]any, clear []string) (PluginState, error) {
+	defer m.notifyStateObserver(id)
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	plugin, ok := m.catalog[id]
@@ -896,6 +907,7 @@ func (m *PluginManager) SetEnabled(id string, enabled bool) (PluginState, error)
 }
 
 func (m *PluginManager) SetEnabledForProfile(id, profileID string, enabled bool) (PluginState, error) {
+	defer m.notifyStateObserver(id)
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	plugin, ok := m.catalog[id]
@@ -926,6 +938,44 @@ func (m *PluginManager) SetEnabledForProfile(id, profileID string, enabled bool)
 	}
 	m.states[id] = state
 	return state.ForProfile(profileID), nil
+}
+
+// notifyStateObserver 在放锁之后通知插件：插件启停资源可能要等协程退出，
+// 不能占着管理器的锁。
+func (m *PluginManager) notifyStateObserver(id string) {
+	if m == nil {
+		return
+	}
+	m.mu.RLock()
+	plugin, ok := m.catalog[id]
+	state := m.states[id]
+	m.mu.RUnlock()
+	observer, isObserver := plugin.(PluginStateObserver)
+	if !ok || !isObserver {
+		return
+	}
+	enabled := state.Installed && state.Enabled
+	for _, profileEnabled := range state.ProfileEnabled {
+		enabled = enabled || (state.Installed && profileEnabled)
+	}
+	observer.PluginStateChanged(enabled, effectivePluginSettingsForGroup(state.Manifest.Settings, state.Settings, nil))
+}
+
+func (m *PluginManager) notifyAllStateObservers() {
+	if m == nil {
+		return
+	}
+	m.mu.RLock()
+	ids := make([]string, 0, len(m.catalog))
+	for id, plugin := range m.catalog {
+		if _, ok := plugin.(PluginStateObserver); ok {
+			ids = append(ids, id)
+		}
+	}
+	m.mu.RUnlock()
+	for _, id := range ids {
+		m.notifyStateObserver(id)
+	}
 }
 
 // CanAskAgent reports whether an installed, enabled plugin may turn a

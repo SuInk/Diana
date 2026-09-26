@@ -3793,6 +3793,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	// 接住而不是把同一件事重答一遍。登记必须在生成之前：并发的两路要能互相看见。
 	previousTurn, hasPreviousTurn := r.beginReplyTurn(event, time.Now())
 	defer func() { r.finishReplyTurn(event, reply, time.Now()) }()
+	defer func() { r.afterReplyVRChat(event, reply) }()
 	cleanText := r.cleanInput(event, text)
 	if cfg.MaxInputChars > 0 && len([]rune(cleanText)) > cfg.MaxInputChars {
 		cleanText = string([]rune(cleanText)[:cfg.MaxInputChars])
@@ -4015,6 +4016,14 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			}
 			if _, settings, enabled := r.pluginWithSettingsForEvent(stickerPluginID, event); enabled {
 				extraTools = append(extraTools, newDianaStickerTool(r, event, settings))
+			}
+			// VRChat 联动默认关闭；开着时查状态人人可用，操控类工具默认只给主人。
+			if pluginValue, settings, enabled := r.pluginWithSettingsForEvent(vrchatPluginID, event); enabled {
+				if plugin, ok := pluginValue.(*VRChatPlugin); ok {
+					tools, denied := newDianaVRChatTools(plugin, settings, relationship.Owner)
+					extraTools = append(extraTools, tools...)
+					deniedTools = append(deniedTools, denied...)
+				}
 			}
 			// 只有能上传文件的平台才挂：其他平台模型看得到也只能失败。
 			if platform := NormalizePlatformID(event.Platform); platform == PlatformTelegram || IsOneBotPlatform(platform) {

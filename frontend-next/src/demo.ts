@@ -1197,6 +1197,7 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
   if (path === "/api/assistant/backfill") return json({ requested: true, window_hours: 24 });
   if (path === "/api/assistant/group-test") return json({ group_id: String(body.group_id ?? url.searchParams.get("group_id") ?? ""), message: String(body.message ?? "模拟通道测试"), message_id: "demo-group-test", sent: true, send_result: { status: "ok" }, channel: demoStatus.channel, recent_events: demoStatus.recent_events, status: demoStatus });
 
+  if (path === "/api/assistant/plugins/vrchat/status") return json({ enabled: false, listening: false, chatbox_pending: 0 });
   if (path === "/api/assistant/plugins/dependencies")
     return json({
       resolver: dependencies,
