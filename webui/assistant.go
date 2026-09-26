@@ -781,6 +781,7 @@ type botTransportConfig struct {
 	ConnectionProfileID string
 	ID                  string
 	Platform            string
+	Credentials         platformCredentials
 	OneBotTransport     string
 	OneBotWSEndpoint    string
 	OneBotHTTPURL       string
@@ -790,6 +791,48 @@ type botTransportConfig struct {
 	TelegramBotToken    string
 	TelegramAPIBaseURL  string
 	TelegramProxyURL    string
+}
+
+// platformCredentials 是 QQ 官方、钉钉、飞书、企业微信通道建连时读的配置，
+// 与 assistant.NewChannelForConfig 传进各通道的字段一一对应。只做相等比较，不落日志。
+type platformCredentials struct {
+	QQAppID                 string
+	QQAppSecret             string
+	QQSandbox               bool
+	DingTalkClientID        string
+	DingTalkClientSecret    string
+	DingTalkRobotCode       string
+	FeishuAppID             string
+	FeishuAppSecret         string
+	FeishuVerificationToken string
+	FeishuEncryptKey        string
+	FeishuAPIBaseURL        string
+	WeComCorpID             string
+	WeComAgentID            string
+	WeComSecret             string
+	WeComToken              string
+	WeComEncodingAESKey     string
+}
+
+func platformCredentialsOf(profile assistant.BotConfig) platformCredentials {
+	return platformCredentials{
+		QQAppID:                 profile.QQAppID,
+		QQAppSecret:             profile.QQAppSecret,
+		QQSandbox:               profile.QQSandbox,
+		DingTalkClientID:        profile.DingTalkClientID,
+		DingTalkClientSecret:    profile.DingTalkClientSecret,
+		DingTalkRobotCode:       profile.DingTalkRobotCode,
+		FeishuAppID:             profile.FeishuAppID,
+		FeishuAppSecret:         profile.FeishuAppSecret,
+		FeishuVerificationToken: profile.FeishuVerificationToken,
+		FeishuEncryptKey:        profile.FeishuEncryptKey,
+		FeishuAPIBaseURL:        profile.FeishuAPIBaseURL,
+		WeComCorpID:             profile.WeComCorpID,
+		WeComAgentID:            profile.WeComAgentID,
+		WeComSecret:             profile.WeComSecret,
+		WeComToken:              profile.WeComToken,
+		WeComEncodingAESKey:     profile.WeComEncodingAESKey,
+	}
 }
 
 func profileSetRequiresReconnect(previous, next assistant.ProfileSet) bool {
@@ -824,6 +867,7 @@ func enabledBotTransports(set assistant.ProfileSet) []botTransportConfig {
 			ConnectionProfileID: profile.ConnectionProfileID,
 			ID:                  profile.ID,
 			Platform:            profile.Platform,
+			Credentials:         platformCredentialsOf(profile),
 			OneBotTransport:     profile.OneBotTransport,
 			OneBotWSEndpoint:    profile.OneBotWSEndpoint,
 			OneBotHTTPURL:       profile.OneBotHTTPURL,
