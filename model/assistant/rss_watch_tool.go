@@ -116,6 +116,11 @@ func (t *dianaRSSWatchTool) Run(ctx context.Context, input map[string]any) (stri
 	if t == nil || t.runtime == nil {
 		return "", fmt.Errorf("diana rss: runtime is not configured")
 	}
+	// 按 id 改、取消、删除之前先认归属：别的机器人名下的任务一律按找不到处理，
+	// 不管什么模式。见 taskOfOtherBot。
+	if id := strings.TrimSpace(configToolString(input, "id")); id != "" && t.runtime.taskOfOtherBot(id, t.event) {
+		return "", fmt.Errorf("没有找到任务 %s", id)
+	}
 	policy := t.runtime.relationshipPolicy(ctx, t.event)
 	targetID, err := taskTargetUserID(ctx, t.runtime, t.event, input)
 	if err != nil {
@@ -747,5 +752,5 @@ func restoreMaskedFeedURLs(rawURLs []string, current []ReminderFeedSource) ([]st
 // CanonicalOperation 是 Run 实际执行的操作：没写 operation 按 create 算；投递目标不是
 // 当前会话时带 _elsewhere，见 taskCanonicalOperation。
 func (t *dianaRSSWatchTool) CanonicalOperation(input map[string]any) string {
-	return taskCanonicalOperation(t.event, input, "create")
+	return t.runtime.taskCanonicalOperation(t.event, input, "create")
 }

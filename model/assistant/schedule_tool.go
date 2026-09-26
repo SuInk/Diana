@@ -83,6 +83,11 @@ func (t *dianaScheduleTool) Run(_ context.Context, input map[string]any) (string
 	if t == nil || t.runtime == nil {
 		return "", fmt.Errorf("diana schedule: runtime is not configured")
 	}
+	// 按 id 改、取消、删除之前先认归属：别的机器人名下的任务一律按找不到处理，
+	// 不管什么模式。见 taskOfOtherBot。
+	if id := strings.TrimSpace(configToolString(input, "id")); id != "" && t.runtime.taskOfOtherBot(id, t.event) {
+		return "", fmt.Errorf("没有找到任务 %s", id)
+	}
 	targetID, err := taskTargetUserID(context.Background(), t.runtime, t.event, input)
 	if err != nil {
 		return "", err
@@ -457,5 +462,5 @@ func marshalDianaScheduleResult(result dianaScheduleResult) (string, error) {
 // CanonicalOperation 是 Run 实际执行的操作；投递目标不是当前会话时带 _elsewhere，
 // 见 taskCanonicalOperation。
 func (t *dianaScheduleTool) CanonicalOperation(input map[string]any) string {
-	return taskCanonicalOperation(t.event, input, "")
+	return t.runtime.taskCanonicalOperation(t.event, input, "")
 }

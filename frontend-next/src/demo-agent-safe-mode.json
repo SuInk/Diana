@@ -190,7 +190,7 @@
           "create_elsewhere",
           "update_elsewhere"
         ],
-        "reason": "替别人建或改提醒，投递到当前会话以外；当前会话里的提醒照常"
+        "reason": "建或改投递到当前会话以外的提醒；当前会话里的提醒照常"
       },
       {
         "category": "act_as_owner",
@@ -198,9 +198,10 @@
         "field": "operation",
         "operations": [
           "create_elsewhere",
-          "update_elsewhere"
+          "update_elsewhere",
+          "run_elsewhere"
         ],
-        "reason": "替别人建或改周期查询、RSS 订阅，投递到当前会话以外；当前会话里的订阅照常"
+        "reason": "建、改或立即执行投递到当前会话以外的订阅；当前会话里的订阅照常"
       }
     ]
   },

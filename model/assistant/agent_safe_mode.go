@@ -8,6 +8,7 @@ import (
 	"log"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/SuInk/diana/model/agent"
 )
@@ -211,15 +212,17 @@ var AgentSafeModeRules = []AgentSafeModeRule{
 	{Category: safeModeCategoryActAsOwner, Tool: dianaEventTriggerToolName, Field: "operation",
 		Operations: []string{eventTriggerOpCreateElsewhere},
 		Reason:     "创建盯别的群或任何地方的事件触发任务；只盯当前会话的照常"},
-	// 提醒和订阅：主人在私聊里用 target_user_id 替别人建的，到点发到那个人的私聊，周期
-	// 查询还会在那边跑 Agent；改别人名下的任务同理。只在当前会话里提醒、订阅的照常。
-	// 换算见 taskCanonicalOperation。
+	// 提醒和订阅（schedule、rss 含 X/Twitter、github 仓库订阅）：主人在私聊里用
+	// target_user_id 替别人建的，到点发到那个人的私聊，周期查询还会在那边跑 Agent；
+	// 按 id 改或立即执行一条投递到当前会话以外的已有任务（别的群、别人的私聊、WebUI 配
+	// 的投递目标）同理——改掉内容或订阅源，发出去的就是新写的东西。只投递回当前会话的
+	// 照常；取消、删除只会让任务少发，不拦。换算见 taskCanonicalOperation。
 	{Category: safeModeCategoryActAsOwner, Tool: "reminder", Field: "operation",
 		Operations: []string{"create_elsewhere", "update_elsewhere"},
-		Reason:     "替别人建或改提醒，投递到当前会话以外；当前会话里的提醒照常"},
+		Reason:     "建或改投递到当前会话以外的提醒；当前会话里的提醒照常"},
 	{Category: safeModeCategoryActAsOwner, Tool: dianaSubscriptionToolName, Field: "operation",
-		Operations: []string{"create_elsewhere", "update_elsewhere"},
-		Reason:     "替别人建或改周期查询、RSS 订阅，投递到当前会话以外；当前会话里的订阅照常"},
+		Operations: []string{"create_elsewhere", "update_elsewhere", "run_elsewhere"},
+		Reason:     "建、改或立即执行投递到当前会话以外的订阅；当前会话里的订阅照常"},
 
 	// 改动本地文件：写入锁在 workspace 里，但注入能借它留下文件、改掉别的任务的产物。
 	// 长期保存区 keep/ 的写入（save_to_workspace keep=true、write_file/edit_file/manage_files
@@ -406,10 +409,25 @@ func (r *Runtime) safeModeHoldsTask(item Reminder) bool {
 	return r.safeModeTaskFilter()(item)
 }
 
-// safeModeTaskFilter 先把各机器人的模式取出来，返回的判断函数不再碰 r.mu：调用方可能
-// 正拿着 reminderMu（见 claimEventTriggers），在里面再去拿 r.mu 会和别处的加锁顺序
-// 打架。找机器人的规则和 profileConfig 一致。
+// safeModeTaskFilter 是会记日志的版本，调度路径用；列表和计数用 safeModeHoldChecker。
 func (r *Runtime) safeModeTaskFilter() func(Reminder) bool {
+	holds := r.safeModeHoldChecker()
+	return func(item Reminder) bool {
+		if !holds(item) {
+			r.safeModeHeldLogged.Delete(item.ID)
+			return false
+		}
+		if _, logged := r.safeModeHeldLogged.LoadOrStore(item.ID, true); !logged {
+			log.Printf("diana agent: 机器人 %q 处于安全模式，任务 %s 往当前会话以外投递，暂停发送（任务保留，切回标准模式后恢复）", item.ProfileID, item.ID)
+		}
+		return true
+	}
+}
+
+// safeModeHoldChecker 先把各机器人的模式取出来，返回的判断函数不再碰 r.mu：调用方可能
+// 正拿着 reminderMu（见 claimDueReminders、claimEventTriggers），在里面再去拿 r.mu 会和
+// 别处的加锁顺序打架。找机器人的规则和 profileConfig 一致。
+func (r *Runtime) safeModeHoldChecker() func(Reminder) bool {
 	r.mu.RLock()
 	modes := make(map[string]bool, len(r.profileConfigs))
 	for id, cfg := range r.profileConfigs {
@@ -428,18 +446,31 @@ func (r *Runtime) safeModeTaskFilter() func(Reminder) bool {
 		return DefaultBotConfig().agentSafeMode()
 	}
 	return func(item Reminder) bool {
-		if !reminderDeliversElsewhere(item) {
+		return reminderDeliversElsewhere(item) && safeFor(item.ProfileID)
+	}
+}
+
+// safeModeHeldReminderMaxDelay 是往别处投递的一次性提醒最多补发多久以前的：安全模式
+// 期间停发的提醒切回标准模式后才投递，超过这个时长就取消不发。
+const safeModeHeldReminderMaxDelay = 24 * time.Hour
+
+// reminderStillPending 报告任务以后还会不会发：一次性提醒没发过、周期任务没取消、事件
+// 触发任务没取消没过期、一次性的还没点燃过。停发计数只数这些。
+func reminderStillPending(item Reminder, now time.Time) bool {
+	if !item.CancelledAt.IsZero() {
+		return false
+	}
+	if reminderIsEventTrigger(item) {
+		spec, ok := decodeEventTrigger(item.EventTriggerJSON)
+		if !ok || spec.Expired || (!spec.ExpiresAt.IsZero() && !spec.ExpiresAt.After(now)) {
 			return false
 		}
-		if !safeFor(item.ProfileID) {
-			r.safeModeHeldLogged.Delete(item.ID)
-			return false
-		}
-		if _, logged := r.safeModeHeldLogged.LoadOrStore(item.ID, true); !logged {
-			log.Printf("diana agent: 机器人 %q 处于安全模式，任务 %s 往当前会话以外投递，暂停发送（任务保留，切回标准模式后恢复）", item.ProfileID, item.ID)
-		}
+		return spec.Repeat || spec.FireCount == 0
+	}
+	if reminderIsRecurring(item) {
 		return true
 	}
+	return item.LastRunAt.IsZero()
 }
 
 // SafeModeHeldTaskCount 数这台机器人名下「切到安全模式就会停发」的任务，界面切换前
@@ -452,9 +483,10 @@ func (r *Runtime) SafeModeHeldTaskCount(profileID string) int {
 	r.reminderMu.Lock()
 	items := r.reminders.Reminders()
 	r.reminderMu.Unlock()
+	now := time.Now()
 	count := 0
 	for _, item := range items {
-		if strings.TrimSpace(item.ProfileID) != profileID || !item.CancelledAt.IsZero() {
+		if strings.TrimSpace(item.ProfileID) != profileID || !reminderStillPending(item, now) {
 			continue
 		}
 		if reminderDeliversElsewhere(item) {

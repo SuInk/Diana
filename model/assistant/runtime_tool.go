@@ -825,6 +825,7 @@ func (r *Runtime) claimDueReminders(now time.Time) []Reminder {
 	}
 	// 先取停用名单再上 reminderMu：两把锁不嵌套，就不会和别处的加锁顺序冲突。
 	disabledProfiles := r.disabledProfileSet()
+	safeModeHolds := r.safeModeTaskFilter()
 	r.reminderMu.Lock()
 	defer r.reminderMu.Unlock()
 	items := r.reminders.Reminders()
@@ -851,6 +852,11 @@ func (r *Runtime) claimDueReminders(now time.Time) []Reminder {
 			continue
 		}
 		if item.TriggerAt.After(now) {
+			continue
+		}
+		// 安全模式停发往别的会话投递的任务：连认领都不认领，什么都不写，LastRunAt、
+		// 触发时间和失败状态原样留着，切回标准模式后下一轮调度照常接上。
+		if safeModeHolds(item) {
 			continue
 		}
 		if _, running := r.activeReminders[item.ID]; running {
@@ -897,12 +903,8 @@ func (r *Runtime) rescheduleInterruptedReminder(id string, startedAt time.Time) 
 
 func (r *Runtime) executeClaimedReminder(ctx context.Context, item Reminder) {
 	defer r.releaseClaimedReminder(item.ID)
-	// 安全模式停发往别的会话投递的任务：周期任务跳过这一轮排到下个周期，一次性提醒
-	// 原样留着，切回标准模式后下一轮调度照常投递。
+	// 认领之后到执行之间模式可能刚切过去：再判一次，停发的任务什么都不写。
 	if r.safeModeHoldsTask(item) {
-		if reminderIsRecurring(item) {
-			r.rescheduleInterruptedReminder(item.ID, time.Now())
-		}
 		return
 	}
 	// 启动时第一轮调度跑在聊天客户端连上之前（反向 WebSocket 尤其如此）。这里发出的
@@ -989,11 +991,26 @@ func (r *Runtime) executeClaimedReminder(ctx context.Context, item Reminder) {
 		return
 	}
 
+	notice := "提醒你：" + item.Message
+	// 往别处投递的提醒可能在安全模式期间被停发过，切回标准模式才发出去：迟到的注明原定
+	// 时间；迟到超过 safeModeHeldReminderMaxDelay 的不再补发，直接取消——一条隔天才到的
+	// 「该开会了」只会让人困惑。只管这一类，本人在当前会话里的提醒照旧。
+	if reminderDeliversElsewhere(item) {
+		if late := time.Since(item.TriggerAt); late > safeModeHeldReminderMaxDelay {
+			if _, err := r.cancelOneTimeReminder(item.OwnerID, item.ID); err != nil {
+				r.setError(err.Error())
+			}
+			log.Printf("diana reminder: 提醒 %s 原定 %s，迟到超过 %s，不再补发，已取消", item.ID, item.TriggerAt.Format(time.RFC3339), safeModeHeldReminderMaxDelay)
+			return
+		} else if late > time.Minute {
+			notice += "（原定 " + item.TriggerAt.Local().Format("01-02 15:04") + "，推迟送达）"
+		}
+	}
 	// 提醒到点先戳一下设提醒的人，像人叫人一样；戳不出去不影响提醒本身。
 	if source := reminderSourceEvent(item); strings.TrimSpace(item.UserID) != "" && IsOneBotPlatform(r.currentPlatform(source)) {
 		_, _ = r.sendPoke(ctx, source, item.UserID, pokeSceneReminder)
 	}
-	err := r.sendSubscriberNotice(ctx, reminderSourceEvent(item), "提醒你："+item.Message)
+	err := r.sendSubscriberNotice(ctx, reminderSourceEvent(item), notice)
 	if reminderRunInterrupted(ctx, err) {
 		// 进程正在退出：这条提醒还没送到，保持原样等下次启动后再投。
 		return

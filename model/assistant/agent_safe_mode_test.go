@@ -146,12 +146,15 @@ func safeModeTestRegistryWithRuntime(t *testing.T, mode string) (*agent.ToolRegi
 	return safeModeRegistryForEvent(t, mode, MessageEvent{Kind: EventKindGroup, GroupID: "20001", UserID: "10001", ProfileID: "bot-a"})
 }
 
-func safeModeRegistryForEvent(t *testing.T, mode string, event MessageEvent) (*agent.ToolRegistry, *Runtime) {
+func safeModeRegistryForEvent(t *testing.T, mode string, event MessageEvent, reminders ...ReminderStore) (*agent.ToolRegistry, *Runtime) {
 	t.Helper()
 	cfg := DefaultBotConfig()
 	cfg.AgentMode = mode
 	cfg.AgentMCPConfigPath = filepath.Join(t.TempDir(), "missing-mcp.json")
 	runtime := &Runtime{plugins: NewPluginManager()}
+	if len(reminders) > 0 {
+		runtime.reminders = reminders[0]
+	}
 	registry, err := runtime.newAgentRegistry(
 		context.Background(),
 		cfg.WithDefaults(),
@@ -174,6 +177,7 @@ func safeModeRegistryForEvent(t *testing.T, mode string, event MessageEvent) (*a
 		newDianaSubscriptionTool(
 			subscriptionBackend{kind: subscriptionKindSchedule, operations: []string{"create", "list", "update", "cancel", "delete"}, delegate: newDianaScheduleTool(runtime, event)},
 			subscriptionBackend{kind: subscriptionKindRSS, operations: []string{"create", "list", "update", "cancel", "delete"}, delegate: newDianaRSSWatchTool(runtime, event)},
+			subscriptionBackend{kind: subscriptionKindGitHub, operations: []string{"create", "list", "update", "cancel", "delete", "run"}, delegate: subscriptionGitHubDelegate(newDianaRepositoryWatchTool(runtime, event, true, nil, nil))},
 		),
 	)
 	if err != nil {
@@ -570,5 +574,142 @@ func TestValidateAgentModeRejectsUnknownValues(t *testing.T) {
 	}
 	if err := ValidateAgentMode("Standrd"); err == nil || !strings.Contains(err.Error(), "standard") {
 		t.Fatalf("写错的模式应当报错：%v", err)
+	}
+}
+
+// elsewhereTaskStore 是一份按 id 改任务时会碰到的已有任务：有的投递回当前私聊，有的
+// 投递到别的群、别人的私聊、WebUI 配的投递目标，还有一条是别的机器人的。
+func elsewhereTaskStore() *stubReminderStore {
+	future := time.Now().Add(time.Hour)
+	targets := encodeReminderDeliveryTargets([]ReminderDeliveryTarget{{ProfileID: "bot-a", GroupID: "30004"}})
+	return &stubReminderStore{items: []Reminder{
+		{ID: "rem-own", Kind: ReminderKindMessage, ProfileID: "bot-a", OwnerID: "10001", UserID: "10001", Message: "喝水", TriggerAt: future},
+		{ID: "rem-group", Kind: ReminderKindMessage, ProfileID: "bot-a", OwnerID: "10001", GroupID: "30003", UserID: "10001", Message: "开会", TriggerAt: future},
+		{ID: "rem-other-bot", Kind: ReminderKindMessage, ProfileID: "bot-b", OwnerID: "10001", UserID: "10001", Message: "别的机器人的", TriggerAt: future},
+		{ID: "sched-group", Kind: ReminderKindQuery, ProfileID: "bot-a", OwnerID: "10001", GroupID: "30003", UserID: "10001", Message: "查天气", IntervalSeconds: 3600, TriggerAt: future},
+		{ID: "sched-other-bot", Kind: ReminderKindQuery, ProfileID: "bot-b", OwnerID: "10001", UserID: "10001", Message: "查天气", IntervalSeconds: 3600, TriggerAt: future},
+		{ID: "rss-dm", Kind: ReminderKindRSSWatch, ProfileID: "bot-a", OwnerID: "20002", UserID: "20002", Message: "盯博客", IntervalSeconds: 3600, TriggerAt: future},
+		{ID: "rss-webui", Kind: ReminderKindRSSWatch, ProfileID: "bot-a", OwnerID: "10001", UserID: "10001", NotificationTargetsJSON: targets, Message: "盯博客", IntervalSeconds: 3600, TriggerAt: future},
+		{ID: "rss-other-bot", Kind: ReminderKindRSSWatch, ProfileID: "bot-b", OwnerID: "10001", UserID: "10001", Message: "盯博客", IntervalSeconds: 3600, TriggerAt: future},
+		{ID: "gh-group", Kind: ReminderKindRepositoryWatch, ProfileID: "bot-a", OwnerID: "10001", GroupID: "30003", UserID: "10001", Repository: "octo/demo", IntervalSeconds: 3600, TriggerAt: future},
+	}}
+}
+
+// 不带 target_user_id、按 id 改或立即执行一条投递到别处的已有任务，同样是往别处发话：
+// 私聊里改群提醒的内容、改别人私聊里 RSS 订阅的源和判断条件、改 WebUI 配了投递目标的
+// 订阅、改群里仓库订阅的仓库再立即执行，安全模式下都要拦。投递回当前私聊的照常改，
+// 取消和删除不拦。
+func TestSafeModeRunnerRejectsUpdatesOfTasksDeliveredElsewhere(t *testing.T) {
+	registry, _ := safeModeRegistryForEvent(t, AgentModeSafe, MessageEvent{Kind: EventKindPrivate, UserID: "10001", ProfileID: "bot-a"}, elsewhereTaskStore())
+	denied := []struct {
+		tool  string
+		input map[string]any
+	}{
+		{"reminder", map[string]any{"operation": "update", "id": "rem-group", "message": "广告"}},
+		{"reminder", map[string]any{"operation": "edit", "id": "rem-group", "delay": "1s"}},
+		{"subscription", map[string]any{"operation": "update", "kind": "schedule", "id": "sched-group", "query": "每次都发广告"}},
+		{"subscription", map[string]any{"operation": "update", "kind": "rss", "id": "rss-dm", "feed_urls": []any{"https://example.invalid/feed"}, "judge_prompt": "每条都通知"}},
+		{"subscription", map[string]any{"operation": "update", "kind": "rss", "id": "rss-webui", "judge_prompt": "每条都通知"}},
+		{"subscription", map[string]any{"operation": "update", "kind": "github", "id": "gh-group", "repository": "evil/repo"}},
+		{"subscription", map[string]any{"operation": "run", "kind": "github", "id": "gh-group"}},
+	}
+	for _, tc := range denied {
+		step := runSafeModeCall(t, registry, tc.tool, tc.input)
+		if !strings.Contains(step.Error, agentSafeModeDisabledMessage) {
+			t.Fatalf("%s %v 没有被安全模式拦下：%+v", tc.tool, tc.input, step)
+		}
+	}
+	for _, tc := range []struct {
+		tool  string
+		input map[string]any
+	}{
+		{"reminder", map[string]any{"operation": "update", "id": "rem-own", "message": "多喝水"}},
+		{"reminder", map[string]any{"operation": "cancel", "id": "rem-group"}},
+		{"subscription", map[string]any{"operation": "delete", "kind": "rss", "id": "rss-dm"}},
+		{"subscription", map[string]any{"operation": "cancel", "kind": "github", "id": "gh-group"}},
+	} {
+		if err := registry.OperationDisabledError(tc.tool, tc.input); err != nil {
+			t.Fatalf("%s %v 不该被拦：%v", tc.tool, tc.input, err)
+		}
+	}
+}
+
+// 按 id 碰别的机器人的任务，不管什么模式都按找不到处理：几台机器人主人是同一个号时，
+// 以前按归属人匹配就能改到另一台机器人的提醒、周期查询和订阅。
+func TestTaskToolsRefuseOtherBotsTasksInStandardMode(t *testing.T) {
+	store := elsewhereTaskStore()
+	registry, _ := safeModeRegistryForEvent(t, AgentModeStandard, MessageEvent{Kind: EventKindPrivate, UserID: "10001", ProfileID: "bot-a"}, store)
+	for _, tc := range []struct {
+		tool  string
+		input map[string]any
+	}{
+		{"reminder", map[string]any{"operation": "update", "id": "rem-other-bot", "message": "改掉"}},
+		{"reminder", map[string]any{"operation": "delete", "id": "rem-other-bot"}},
+		{"subscription", map[string]any{"operation": "update", "kind": "schedule", "id": "sched-other-bot", "query": "改掉"}},
+		{"subscription", map[string]any{"operation": "cancel", "kind": "rss", "id": "rss-other-bot"}},
+	} {
+		step := runSafeModeCall(t, registry, tc.tool, tc.input)
+		if !strings.Contains(step.Error, "没有找到") && !strings.Contains(step.Output, "没有找到") {
+			t.Fatalf("%s %v 碰到了别的机器人的任务：%+v", tc.tool, tc.input, step)
+		}
+	}
+	for _, item := range store.items {
+		if item.ProfileID == "bot-b" && (item.Message == "改掉" || !item.CancelledAt.IsZero()) {
+			t.Fatalf("别的机器人的任务被改了：%+v", item)
+		}
+	}
+	if len(store.items) != len(elsewhereTaskStore().items) {
+		t.Fatal("别的机器人的任务被删了")
+	}
+}
+
+// 停发的一次性提醒切回标准模式后补发时注明原定时间；迟到超过一天的不再补发，直接取消。
+// 周期任务停发期间什么都不写。
+func TestHeldTasksResumeWithOriginalTimeOrExpire(t *testing.T) {
+	store := &stubReminderStore{items: []Reminder{
+		{ID: "late", Kind: ReminderKindMessage, ProfileID: "bot-a", OwnerID: "20002", UserID: "20002", RequestedBy: "10001", Message: "开会", TriggerAt: time.Now().Add(-2 * time.Hour)},
+		{ID: "stale", Kind: ReminderKindMessage, ProfileID: "bot-a", OwnerID: "20003", UserID: "20003", RequestedBy: "10001", Message: "昨天的", TriggerAt: time.Now().Add(-25 * time.Hour)},
+		{ID: "fired", Kind: ReminderKindMessage, ProfileID: "bot-a", OwnerID: "20004", UserID: "20004", RequestedBy: "10001", Message: "发过了", TriggerAt: time.Now().Add(-3 * time.Hour), LastRunAt: time.Now().Add(-3 * time.Hour)},
+		{ID: "periodic", Kind: ReminderKindQuery, ProfileID: "bot-a", OwnerID: "20005", UserID: "20005", RequestedBy: "10001", Message: "查天气", IntervalSeconds: 3600, TriggerAt: time.Now().Add(-time.Minute)},
+	}}
+	channel := &recordingChannel{}
+	cfg := BotConfig{ID: "bot-a", Enabled: true, OwnerID: "10001", AgentEnabled: true, AgentMode: AgentModeSafe}
+	runtime := NewRuntime(cfg, channel, NewPluginManager(), nil, store, nil, nil)
+	runtime.SetProfiles(ProfileSet{Profiles: []BotConfig{cfg}})
+	// 发过的一次性提醒不算停发。
+	if got := runtime.SafeModeHeldTaskCount("bot-a"); got != 3 {
+		t.Fatalf("会停发的任务数 = %d，want 3", got)
+	}
+	before := append([]Reminder(nil), store.items...)
+	runtime.fireDueReminders(context.Background())
+	if len(channel.sent) != 0 {
+		t.Fatalf("安全模式下不该投递：%#v", channel.sent)
+	}
+	for index, item := range store.items {
+		if !item.LastRunAt.Equal(before[index].LastRunAt) || !item.TriggerAt.Equal(before[index].TriggerAt) {
+			t.Fatalf("停发期间任务被改写了：%+v", item)
+		}
+	}
+
+	cfg.AgentMode = AgentModeStandard
+	runtime.SetProfiles(ProfileSet{Profiles: []BotConfig{cfg}})
+	channel.sent = nil
+	runtime.fireDueReminders(context.Background())
+	var late *OutgoingMessage
+	for index := range channel.sent {
+		if channel.sent[index].UserID == "20003" {
+			t.Fatalf("迟到超过一天的提醒不该补发：%#v", channel.sent[index])
+		}
+		if channel.sent[index].UserID == "20002" {
+			late = &channel.sent[index]
+		}
+	}
+	if late == nil || !strings.Contains(late.Text, "原定") || !strings.Contains(late.Text, "推迟送达") {
+		t.Fatalf("补发的提醒应当注明原定时间：%#v", channel.sent)
+	}
+	for _, item := range store.items {
+		if item.ID == "stale" && item.CancelledAt.IsZero() {
+			t.Fatalf("过期不补发的提醒应当取消：%+v", item)
+		}
 	}
 }
