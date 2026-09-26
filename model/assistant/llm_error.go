@@ -64,6 +64,26 @@ func isContentPolicyRejection(err error) bool {
 		(strings.Contains(text, "reject") || strings.Contains(text, "refus"))
 }
 
+// isLLMUpstreamOutage 认出「网关整体不可用」这类与请求内容无关的失败：502/503、
+// 并发或频率限制的 429。超时、空响应、4xx 参数错误都不算，那些可能跟这次请求本身
+// 有关，重来多少次都一样。
+func isLLMUpstreamOutage(err error) bool {
+	if err == nil {
+		return false
+	}
+	text := strings.ToLower(err.Error())
+	for _, marker := range []string{
+		"502 bad gateway", "503 service unavailable",
+		"429 too many requests", "rate_limit_error", "concurrency limit exceeded",
+		"service temporarily unavailable", "upstream service temporarily unavailable",
+	} {
+		if strings.Contains(text, marker) {
+			return true
+		}
+	}
+	return false
+}
+
 func isModelUnavailableLLMError(err error) bool {
 	if err == nil {
 		return false

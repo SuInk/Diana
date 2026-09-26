@@ -325,6 +325,24 @@ WHERE id = ? AND status = 'processing' AND lease_owner = ?
 	return err
 }
 
+// DeferMemoryJob 和 RetryMemoryJob 一样把任务放回队列，但退还这一次领取计入的
+// 次数：上游整体不可用时失败与任务本身无关，不该耗掉它的重试额度。只退还
+// refundCutoff 之后入队的任务，老任务照常计数，网关一直不恢复也总有放弃的一天。
+func (s *SQLiteStore) DeferMemoryJob(ctx context.Context, id string, leaseOwner string, availableAt time.Time, lastError string, refundCutoff time.Time) error {
+	defer s.observeStorage(ctx, "DeferMemoryJob", "write")()
+	if s == nil || s.db == nil {
+		return nil
+	}
+	_, err := s.db.ExecContext(ctx, `
+UPDATE memory_jobs
+SET status = 'pending', available_at = ?, lease_owner = NULL, lease_until = NULL,
+    last_error = ?, updated_at = ?,
+    attempts = CASE WHEN created_at >= ? AND attempts > 0 THEN attempts - 1 ELSE attempts END
+WHERE id = ? AND status = 'processing' AND lease_owner = ?
+`, availableAt.UTC().UnixNano(), lastError, time.Now().UTC().UnixNano(), refundCutoff.UTC().UnixNano(), strings.TrimSpace(id), strings.TrimSpace(leaseOwner))
+	return err
+}
+
 func (s *SQLiteStore) ReleaseMemoryJobLeases(ctx context.Context, leaseOwner string) error {
 	defer s.observeStorage(ctx, "ReleaseMemoryJobLeases", "write")()
 	if s == nil || s.db == nil {

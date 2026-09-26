@@ -497,3 +497,50 @@ func TestThreadMemoryKeyIsNormalizedOnWriteAndFoundByScope(t *testing.T) {
 		t.Fatalf("便签内容 = %q", items[0].Content)
 	}
 }
+
+// 上游整体不可用时退还这次领取计入的次数；超过退还期限的老任务照常计数，
+// 网关一直不恢复也总会被放弃。
+func TestDeferMemoryJobRefundsAttemptOnlyForRecentJobs(t *testing.T) {
+	ctx := context.Background()
+	store, err := NewSQLiteStore(filepath.Join(t.TempDir(), "memory.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+	store.SetMemoryEventJobDelay(0)
+	id, _, err := store.EnqueueMemoryJob(ctx, batchJob("group:1", "u1", "m1", 100))
+	if err != nil {
+		t.Fatal(err)
+	}
+	attempts := func() int {
+		var n int
+		if err := store.db.QueryRowContext(ctx, `SELECT attempts FROM memory_jobs WHERE id = ?`, id).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	claim := func() {
+		if _, err := store.db.ExecContext(ctx, `UPDATE memory_jobs SET available_at = 0 WHERE id = ?`, id); err != nil {
+			t.Fatal(err)
+		}
+		if _, ok, err := store.ClaimNextMemoryJob(ctx, "w", time.Now().Add(time.Minute)); err != nil || !ok {
+			t.Fatalf("claim ok=%v err=%v", ok, err)
+		}
+	}
+
+	claim()
+	if err := store.DeferMemoryJob(ctx, id, "w", time.Now().Add(time.Hour), "503", time.Now().Add(-24*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if got := attempts(); got != 0 {
+		t.Fatalf("recent job attempts = %d, want 0", got)
+	}
+
+	claim()
+	if err := store.DeferMemoryJob(ctx, id, "w", time.Now().Add(time.Hour), "503", time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if got := attempts(); got != 1 {
+		t.Fatalf("old job attempts = %d, want 1", got)
+	}
+}

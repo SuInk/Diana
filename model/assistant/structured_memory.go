@@ -203,6 +203,12 @@ type MemoryJobBatchClaimer interface {
 	ClaimMemoryJobBatch(ctx context.Context, leaseOwner string, leaseUntil time.Time, max int) ([]MemoryJob, error)
 }
 
+// MemoryJobDeferrer 是可选能力：上游整体不可用时把任务放回队列，但不耗它的重试
+// 次数。存储没实现它时退回 RetryMemoryJob，照常计数。
+type MemoryJobDeferrer interface {
+	DeferMemoryJob(ctx context.Context, id string, leaseOwner string, availableAt time.Time, lastError string, refundCutoff time.Time) error
+}
+
 // StructuredMemoryTouchStore 是可选能力：把「这条记忆刚刚被检索命中」写回去。
 //
 // 单独成接口而不是并进 StructuredMemoryStore，是为了不强迫所有实现都提供触达
