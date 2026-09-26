@@ -267,6 +267,12 @@ func (t *ManageFilesTool) delete(rel string) (string, error) {
 // moveToTrash 把工作目录内已经校验过的相对路径 clean 挪进 .trash/<时间戳>/，保留原来的
 // 相对路径；落在长期区里的，索引里的条目一并去掉。
 func moveToTrash(workRoot, clean string, now time.Time) (string, bool, error) {
+	return moveToTrashAs(workRoot, clean, clean, now)
+}
+
+// moveToTrashAs 和 moveToTrash 一样，但回收站里的位置和要清的长期区索引按 label 算：
+// 经别名或大小写不同的写法删除时，label 是它在工作目录里的规范路径。
+func moveToTrashAs(workRoot, clean, label string, now time.Time) (string, bool, error) {
 	root, err := os.OpenRoot(workRoot)
 	if err != nil {
 		return "", false, err
@@ -284,7 +290,7 @@ func moveToTrash(workRoot, clean string, now time.Time) (string, bool, error) {
 		if attempt > 1 {
 			dir = fmt.Sprintf("%s-%d", stamp, attempt)
 		}
-		trashRel = path.Join(WorkspaceTrashDir, dir, clean)
+		trashRel = path.Join(WorkspaceTrashDir, dir, label)
 		if _, err := root.Lstat(filepath.FromSlash(trashRel)); errors.Is(err, fs.ErrNotExist) {
 			break
 		}
@@ -298,7 +304,7 @@ func moveToTrash(workRoot, clean string, now time.Time) (string, bool, error) {
 	if err := root.Rename(local, filepath.FromSlash(trashRel)); err != nil {
 		return "", false, err
 	}
-	_, _ = removeKeepEntries(workRoot, clean)
+	_, _ = removeKeepEntries(workRoot, label)
 	return trashRel, info.IsDir(), nil
 }
 
@@ -323,14 +329,11 @@ func TrashWorkspacePath(cfg Config, rel string, now time.Time) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	trashRel, _, err := moveToTrash(root, clean, now)
+	// 回收站里的位置和长期区索引都按规范路径算：经别名或大小写不同的写法删掉的长期区
+	// 文件，索引里不会留着指向已删除文件的条目，回收站里也看得出它原本在哪。
+	trashRel, _, err := moveToTrashAs(root, clean, canonical, now)
 	if err != nil {
 		return "", adminTrashError(root, clean, err)
-	}
-	// moveToTrash 按请求里的写法清长期区索引；经别名或大小写不同的写法删掉的长期区文件，
-	// 再按真实位置清一次，免得索引里留着指向已删除文件的条目。
-	if canonical != clean {
-		_, _ = removeKeepEntries(root, canonical)
 	}
 	return trashRel, nil
 }
@@ -353,7 +356,7 @@ func adminTrashError(workRoot, clean string, err error) error {
 // 目标和它每一层上级的真实文件，用 os.SameFile 比。要挪的这一项自己是链接时，挪走的是
 // 链接本身，不用比它指向哪里。
 //
-// 返回长期区里的规范路径（keep/<机器人>/...），给清索引用；不在长期区时原样返回 clean。
+// 返回 clean 在工作目录里的规范路径（见 canonicalWorkspaceRel），给回收站位置和清索引用。
 func guardAdminTrashTarget(workRoot, clean string) (string, error) {
 	handle, err := os.OpenRoot(workRoot)
 	if err != nil {
@@ -384,21 +387,7 @@ func guardAdminTrashTarget(workRoot, clean string) (string, error) {
 		}
 	}
 	// 逐层往上看：落在回收站里就拒绝；上一层是 keep/ 而自己是目录，就是某台机器人的
-	// 长期区根目录；上面某一层是 keep/<机器人>/，据此算出规范路径。
-	canonical := clean
-	var keepBots map[string]os.FileInfo
-	if keepErr == nil {
-		keepBots = map[string]os.FileInfo{}
-		if dir, err := handle.Open(WorkspaceKeepDir); err == nil {
-			entries, _ := dir.ReadDir(-1)
-			dir.Close()
-			for _, entry := range entries {
-				if bot, err := handle.Stat(path.Join(WorkspaceKeepDir, entry.Name())); err == nil && bot.IsDir() {
-					keepBots[entry.Name()] = bot
-				}
-			}
-		}
-	}
+	// 长期区根目录。
 	for ancestor := path.Dir(clean); ancestor != "."; ancestor = path.Dir(ancestor) {
 		dirInfo, err := handle.Stat(filepath.FromSlash(ancestor))
 		if err != nil {
@@ -410,16 +399,80 @@ func guardAdminTrashTarget(workRoot, clean string) (string, error) {
 		if ancestor == path.Dir(clean) && same(dirInfo, keepInfo, keepErr) && info.Mode()&fs.ModeSymlink == 0 && info.IsDir() {
 			return "", fmt.Errorf("%s 是一台机器人的长期保存区根目录，不能整个删除；里面的文件可以单独删", clean)
 		}
-		if canonical == clean {
-			for name, bot := range keepBots {
-				if os.SameFile(dirInfo, bot) {
-					canonical = path.Join(WorkspaceKeepDir, name, strings.TrimPrefix(clean, ancestor+"/"))
-					break
-				}
-			}
+	}
+	return canonicalWorkspaceRel(handle, workRoot, clean), nil
+}
+
+// canonicalWorkspaceRel 返回 clean 在工作目录里的规范写法：上级目录解开符号链接、换成
+// 相对工作目录的真实路径，每一段再按目录里实际的名字写（大小写不敏感的文件系统上
+// KEEP 写回 keep）。最后一段是链接时保留链接自己的名字：挪走的是链接本身。
+// 别名可能指到任意一层（ksub -> keep/<机器人>/sub），只认 keep/<机器人>/ 本身不够。
+// 算不出来（解析失败、落到工作目录外面）时原样返回 clean。
+func canonicalWorkspaceRel(handle *os.Root, workRoot, clean string) string {
+	resolvedRoot, err := filepath.EvalSymlinks(workRoot)
+	if err != nil {
+		return clean
+	}
+	var parts []string
+	if dir := path.Dir(clean); dir != "." {
+		resolved, err := filepath.EvalSymlinks(filepath.Join(workRoot, filepath.FromSlash(dir)))
+		if err != nil {
+			return clean
+		}
+		rel, err := filepath.Rel(resolvedRoot, resolved)
+		if err != nil || !filepath.IsLocal(rel) {
+			return clean
+		}
+		if rel = filepath.ToSlash(rel); rel != "." {
+			parts = strings.Split(rel, "/")
 		}
 	}
-	return canonical, nil
+	parts = append(parts, path.Base(clean))
+	current := "."
+	for i, part := range parts {
+		name := actualWorkspaceEntryName(handle, current, part, i == len(parts)-1)
+		if name == "" {
+			return clean
+		}
+		current = path.Join(current, name)
+	}
+	return current
+}
+
+// actualWorkspaceEntryName 在 dir 里找 name 对应的那一项实际叫什么：字面有就用字面，
+// 否则找忽略大小写相同、而且确实是同一个文件的那一项。last 为 true 时不跟最后一段链接。
+func actualWorkspaceEntryName(handle *os.Root, dir, name string, last bool) string {
+	stat := handle.Stat
+	if last {
+		stat = handle.Lstat
+	}
+	want, err := stat(filepath.FromSlash(path.Join(dir, name)))
+	if err != nil {
+		return ""
+	}
+	file, err := handle.Open(filepath.FromSlash(dir))
+	if err != nil {
+		return ""
+	}
+	names, err := file.Readdirnames(-1)
+	file.Close()
+	if err != nil {
+		return ""
+	}
+	for _, candidate := range names {
+		if candidate == name {
+			return candidate
+		}
+	}
+	for _, candidate := range names {
+		if !strings.EqualFold(candidate, name) {
+			continue
+		}
+		if got, err := stat(filepath.FromSlash(path.Join(dir, candidate))); err == nil && os.SameFile(got, want) {
+			return candidate
+		}
+	}
+	return ""
 }
 
 func (t *ManageFilesTool) transfer(action, rel, to string, overwrite bool, description string) (string, error) {

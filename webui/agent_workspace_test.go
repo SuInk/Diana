@@ -464,11 +464,49 @@ func TestAgentWorkspaceDeleteGuardsAliasesOfProtectedRoots(t *testing.T) {
 			t.Fatalf("%s 被挪走了: %v", rel, err)
 		}
 	}
-	if response := deleteWorkspacePath(router, "loop/keep/bot-a/poster.txt"); response.Code != http.StatusOK {
+	response := deleteWorkspacePath(router, "loop/keep/bot-a/poster.txt")
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "/keep/bot-a/poster.txt") || strings.Contains(response.Body.String(), "loop") {
 		t.Fatalf("delete via alias: %d %s", response.Code, response.Body)
 	}
 	if entries, _ := agent.LoadKeepIndex(root, "bot-a"); len(entries) != 0 {
 		t.Fatalf("经别名删除后长期区索引没清: %+v", entries)
+	}
+}
+
+// 别名指到 keep/<机器人>/ 下面的子目录（ksub -> keep/bot-a/sub），或者写法大小写不同：
+// 索引按真实位置清，回收站里也按真实位置放。
+func TestAgentWorkspaceDeleteViaSubdirAliasCleansKeepIndex(t *testing.T) {
+	root := t.TempDir()
+	cfg := agent.Config{WorkDir: root}
+	for _, rel := range []string{"keep/sub/b.txt", "keep/c.txt"} {
+		if _, err := agent.WriteWorkspaceBytes(cfg, rel, []byte("keep me"), agent.WorkspaceWriteOptions{Keep: &agent.KeepMeta{BotID: "bot-a", Description: rel}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Symlink(filepath.Join("keep", "bot-a", "sub"), filepath.Join(root, "ksub")); err != nil {
+		t.Fatal(err)
+	}
+	router := newAgentWorkspaceTestRouter(t, root)
+	response := deleteWorkspacePath(router, "ksub/b.txt")
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "/keep/bot-a/sub/b.txt") {
+		t.Fatalf("delete via subdir alias: %d %s", response.Code, response.Body)
+	}
+	entries, _ := agent.LoadKeepIndex(root, "bot-a")
+	if len(entries) != 1 || entries[0].Path != "keep/bot-a/c.txt" {
+		t.Fatalf("经子目录别名删除后索引 = %+v", entries)
+	}
+	if _, err := os.Stat(filepath.Join(root, "ksub")); err != nil {
+		t.Fatalf("别名本身不该被挪走: %v", err)
+	}
+	// 大小写不敏感的文件系统上 KEEP/BOT-A/C.TXT 就是 keep/bot-a/c.txt。
+	if _, err := os.Stat(filepath.Join(root, "KEEP")); err == nil {
+		response := deleteWorkspacePath(router, "KEEP/BOT-A/C.TXT")
+		if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "/keep/bot-a/c.txt") {
+			t.Fatalf("delete via case variant: %d %s", response.Code, response.Body)
+		}
+		if entries, _ := agent.LoadKeepIndex(root, "bot-a"); len(entries) != 0 {
+			t.Fatalf("按大小写变体删除后索引没清: %+v", entries)
+		}
 	}
 }
 
