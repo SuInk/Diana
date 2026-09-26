@@ -127,6 +127,10 @@ func (t *dianaScheduleTool) Run(_ context.Context, input map[string]any) (string
 		items := t.runtime.scheduledQueries(targetID)
 		result := make([]dianaSchedule, 0, len(items))
 		for _, item := range items {
+			// 查别人的只看这台机器人名下的，理由同提醒列表。
+			if !sameAccountID(targetID, t.event.UserID) && !t.runtime.sameBotAsEvent(item.ProfileID, t.event) {
+				continue
+			}
 			result = append(result, *scheduleForTool(item))
 		}
 		return marshalDianaScheduleResult(dianaScheduleResult{

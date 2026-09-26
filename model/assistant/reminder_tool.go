@@ -134,6 +134,11 @@ func (t *dianaReminderTool) Run(ctx context.Context, input map[string]any) (stri
 		items := t.runtime.oneTimeReminders(targetID)
 		result := make([]dianaReminder, 0, len(items))
 		for _, item := range items {
+			// 查别人的只看这台机器人名下的：主人权限按机器人给，另一台机器人的提醒内容
+			// 不归这位主人看。查自己的不按机器人过滤，和额度的统计口径一致。
+			if !sameAccountID(targetID, t.event.UserID) && !t.runtime.sameBotAsEvent(item.ProfileID, t.event) {
+				continue
+			}
 			result = append(result, *reminderForTool(item))
 		}
 		return marshalDianaReminderResult(dianaReminderResult{
@@ -503,6 +508,10 @@ func (r *Runtime) updateOneTimeReminder(ownerID string, id string, input map[str
 		}
 		if rawAt != "" {
 			item.TriggerAt = triggerAt
+		}
+		if rawDelay != "" || rawAt != "" {
+			// 改了时间就是新约的时间，之前被停发时记下的原定时间不再算数。
+			item.SafeModeHeldTriggerAt = time.Time{}
 		}
 		if message != "" {
 			item.Message = message

@@ -592,6 +592,7 @@ func elsewhereTaskStore() *stubReminderStore {
 		{ID: "rss-webui", Kind: ReminderKindRSSWatch, ProfileID: "bot-a", OwnerID: "10001", UserID: "10001", NotificationTargetsJSON: targets, Message: "盯博客", IntervalSeconds: 3600, TriggerAt: future},
 		{ID: "rss-other-bot", Kind: ReminderKindRSSWatch, ProfileID: "bot-b", OwnerID: "10001", UserID: "10001", Message: "盯博客", IntervalSeconds: 3600, TriggerAt: future},
 		{ID: "gh-group", Kind: ReminderKindRepositoryWatch, ProfileID: "bot-a", OwnerID: "10001", GroupID: "30003", UserID: "10001", Repository: "octo/demo", IntervalSeconds: 3600, TriggerAt: future},
+		{ID: "trigger-other-bot", Kind: ReminderKindEventTrigger, ProfileID: "bot-b", OwnerID: "10001", UserID: "10001", EventTriggerJSON: encodeEventTrigger(EventTrigger{Event: "message", Action: "message", DeliverTo: "event"})},
 	}}
 }
 
@@ -647,6 +648,8 @@ func TestTaskToolsRefuseOtherBotsTasksInStandardMode(t *testing.T) {
 		{"reminder", map[string]any{"operation": "delete", "id": "rem-other-bot"}},
 		{"subscription", map[string]any{"operation": "update", "kind": "schedule", "id": "sched-other-bot", "query": "改掉"}},
 		{"subscription", map[string]any{"operation": "cancel", "kind": "rss", "id": "rss-other-bot"}},
+		{"event_trigger", map[string]any{"operation": "cancel", "id": "trigger-other-bot"}},
+		{"event_trigger", map[string]any{"operation": "delete", "id": "trigger-other-bot"}},
 	} {
 		step := runSafeModeCall(t, registry, tc.tool, tc.input)
 		if !strings.Contains(step.Error, "没有找到") && !strings.Contains(step.Output, "没有找到") {
@@ -711,5 +714,115 @@ func TestHeldTasksResumeWithOriginalTimeOrExpire(t *testing.T) {
 		if item.ID == "stale" && item.CancelledAt.IsZero() {
 			t.Fatalf("过期不补发的提醒应当取消：%+v", item)
 		}
+	}
+}
+
+// 飞书 ou_xxx、QQ 官方 openid 这类非数字账号：身份比较不能靠只认数字的
+// normalizeRelationshipUserID，否则两个不同的人都成了空串、被当成同一个人，改别人私聊
+// 里的订阅就不算「别处」了。
+func TestSafeModeComparesNonNumericAccountIDs(t *testing.T) {
+	future := time.Now().Add(time.Hour)
+	store := &stubReminderStore{items: []Reminder{
+		{ID: "rss-ou-other", Kind: ReminderKindRSSWatch, ProfileID: "bot-a", OwnerID: "ou_other", UserID: "ou_other", Message: "盯博客", IntervalSeconds: 3600, TriggerAt: future},
+		{ID: "rss-ou-own", Kind: ReminderKindRSSWatch, ProfileID: "bot-a", OwnerID: "ou_owner", UserID: "ou_owner", Message: "盯博客", IntervalSeconds: 3600, TriggerAt: future},
+		{ID: "gh-ou-other", Kind: ReminderKindRepositoryWatch, ProfileID: "bot-a", OwnerID: "ou_other", UserID: "ou_other", Repository: "octo/demo", IntervalSeconds: 3600, TriggerAt: future},
+	}}
+	registry, _ := safeModeRegistryForEvent(t, AgentModeSafe, MessageEvent{Kind: EventKindPrivate, Platform: PlatformFeishu, UserID: "ou_owner", ProfileID: "bot-a"}, store)
+	for _, tc := range []struct {
+		tool  string
+		input map[string]any
+	}{
+		{"subscription", map[string]any{"operation": "update", "kind": "rss", "id": "rss-ou-other", "judge_prompt": "每条都通知"}},
+		{"subscription", map[string]any{"operation": "update", "kind": "github", "id": "gh-ou-other", "repository": "evil/repo"}},
+		{"subscription", map[string]any{"operation": "run", "kind": "github", "id": "gh-ou-other"}},
+		{"reminder", map[string]any{"operation": "create", "target_user_id": "ou_other", "delay": "1s", "message": "该开会了"}},
+	} {
+		step := runSafeModeCall(t, registry, tc.tool, tc.input)
+		if !strings.Contains(step.Error, agentSafeModeDisabledMessage) {
+			t.Fatalf("%s %v 没有被安全模式拦下：%+v", tc.tool, tc.input, step)
+		}
+	}
+	for tool, input := range map[string]map[string]any{
+		"subscription": {"operation": "update", "kind": "rss", "id": "rss-ou-own", "judge_prompt": "每条都通知"},
+		"reminder":     {"operation": "create", "target_user_id": "ou_owner", "delay": "1s", "message": "喝水"},
+	} {
+		if err := registry.OperationDisabledError(tool, input); err != nil {
+			t.Fatalf("%s %v 投递回自己，不该被拦：%v", tool, input, err)
+		}
+	}
+	if !reminderDeliversElsewhere(Reminder{Kind: ReminderKindMessage, UserID: "ou_other", RequestedBy: "ou_owner"}) {
+		t.Fatal("非数字账号替别人建的提醒应当算往别处发")
+	}
+	if reminderDeliversElsewhere(Reminder{Kind: ReminderKindMessage, UserID: "ou_owner", RequestedBy: "ou_owner"}) {
+		t.Fatal("非数字账号给自己建的提醒不该算往别处发")
+	}
+}
+
+func TestSameAccountID(t *testing.T) {
+	for _, tc := range []struct {
+		a, b string
+		want bool
+	}{
+		{"10001", "10001", true},
+		{"@10001", "[CQ:at,qq=10001]", true},
+		{"ou_a", "ou_a", true},
+		{"ou_a", "ou_b", false},
+		{"", "", false},
+		{"ou_a", "", false},
+	} {
+		if got := sameAccountID(tc.a, tc.b); got != tc.want {
+			t.Fatalf("sameAccountID(%q, %q) = %v", tc.a, tc.b, got)
+		}
+	}
+}
+
+// 标准模式下从没被停发过的提醒，停机一天多之后照常补发，不加标注也不作废：只有真被
+// 安全模式停发过的才按原定时间注明、过期作废。
+func TestStandardModeLateReminderIsNotDropped(t *testing.T) {
+	store := &stubReminderStore{items: []Reminder{
+		{ID: "after-downtime", Kind: ReminderKindMessage, ProfileID: "bot-a", OwnerID: "20002", UserID: "20002", RequestedBy: "10001", Message: "开会", TriggerAt: time.Now().Add(-30 * time.Hour)},
+	}}
+	channel := &recordingChannel{}
+	cfg := BotConfig{ID: "bot-a", Enabled: true, OwnerID: "10001", AgentEnabled: true, AgentMode: AgentModeStandard}
+	runtime := NewRuntime(cfg, channel, NewPluginManager(), nil, store, nil, nil)
+	runtime.SetProfiles(ProfileSet{Profiles: []BotConfig{cfg}})
+	runtime.fireDueReminders(context.Background())
+	if len(channel.sent) != 1 || strings.Contains(channel.sent[0].Text, "原定") {
+		t.Fatalf("标准模式下迟到的提醒应当照常投递、不加标注：%#v", channel.sent)
+	}
+	if !store.items[0].CancelledAt.IsZero() {
+		t.Fatal("标准模式下迟到的提醒不该被作废")
+	}
+}
+
+// 查别人的提醒、周期查询只看这台机器人名下的；没有机器人 ID 的旧记录按这台机器人的算。
+func TestTaskListsForOtherUsersStayWithinThisBot(t *testing.T) {
+	future := time.Now().Add(time.Hour)
+	store := &stubReminderStore{items: []Reminder{
+		{ID: "mine-bot", Kind: ReminderKindMessage, ProfileID: "bot-a", OwnerID: "20002", UserID: "20002", Message: "这台的", TriggerAt: future},
+		{ID: "other-bot", Kind: ReminderKindMessage, ProfileID: "bot-b", OwnerID: "20002", UserID: "20002", Message: "别的机器人的", TriggerAt: future},
+		{ID: "legacy", Kind: ReminderKindMessage, OwnerID: "20002", UserID: "20002", Message: "旧记录", TriggerAt: future},
+		{ID: "sched-other-bot", Kind: ReminderKindQuery, ProfileID: "bot-b", OwnerID: "20002", UserID: "20002", Message: "别的机器人的查询", IntervalSeconds: 3600, TriggerAt: future},
+	}}
+	cfg := BotConfig{ID: "bot-a", Enabled: true, OwnerID: "10001", AgentEnabled: true, AgentMode: AgentModeStandard}
+	runtime := NewRuntime(cfg, &recordingChannel{}, NewPluginManager(), nil, store, nil, nil)
+	runtime.SetProfiles(ProfileSet{Profiles: []BotConfig{cfg}})
+	event := MessageEvent{Kind: EventKindPrivate, UserID: "10001", ProfileID: "bot-a"}
+	out, err := newDianaReminderTool(runtime, event).Run(context.Background(), map[string]any{"operation": "list", "target_user_id": "20002"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out, "别的机器人的") || !strings.Contains(out, "这台的") || !strings.Contains(out, "旧记录") {
+		t.Fatalf("提醒列表 = %s", out)
+	}
+	out, err = newDianaScheduleTool(runtime, event).Run(context.Background(), map[string]any{"operation": "list", "target_user_id": "20002"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out, "别的机器人的查询") {
+		t.Fatalf("周期查询列表 = %s", out)
+	}
+	if !runtime.sameBotAsEvent("", event) {
+		t.Fatal("没有机器人 ID 的旧记录应当按这台机器人的算")
 	}
 }

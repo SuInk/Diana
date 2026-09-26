@@ -221,16 +221,12 @@ func (r *Runtime) taskCanonicalOperation(event MessageEvent, input map[string]an
 }
 
 func taskTargetsElsewhere(event MessageEvent, input map[string]any, anyConversation bool) bool {
-	raw := strings.TrimSpace(configToolString(input, "target_user_id"))
+	raw := stripAccountIDMarkup(configToolString(input, "target_user_id"))
 	if raw == "" {
 		return false
 	}
-	target := normalizeRelationshipUserID(raw)
-	// 认不出的账号工具自己会拒绝；这里按别处算，宁可多拦。
-	if target == "" {
-		return true
-	}
-	if target == normalizeRelationshipUserID(event.UserID) {
+	// 按账号原文比，非数字账号（飞书 ou_xxx 等）也比得出来，见 sameAccountID。
+	if sameAccountID(raw, event.UserID) {
 		return false
 	}
 	return anyConversation || strings.TrimSpace(event.GroupID) == ""
@@ -255,8 +251,12 @@ func (r *Runtime) taskByID(id string) (Reminder, bool) {
 
 // sameBotAsEvent 判断记录是不是这条消息所属机器人的。ID 相同直接算；否则按
 // sameProfileAsEvent 认旧号和单机器人时的空 ID。
+//
+// 没有机器人 ID 的是多机器人之前的旧记录，分不出归谁，按这台机器人的算：不然多机器人
+// 部署里这些旧任务在对话里谁都改不了、删不掉。
 func (r *Runtime) sameBotAsEvent(profileID string, event MessageEvent) bool {
-	if strings.TrimSpace(profileID) == strings.TrimSpace(event.ProfileID) {
+	profileID = strings.TrimSpace(profileID)
+	if profileID == "" || profileID == strings.TrimSpace(event.ProfileID) {
 		return true
 	}
 	return r.sameProfileAsEvent(profileID, event)
@@ -291,7 +291,7 @@ func deliveryTargetIsConversation(groupID, userID string, event MessageEvent) bo
 	if group := strings.TrimSpace(groupID); group != "" {
 		return group == strings.TrimSpace(event.GroupID)
 	}
-	return strings.TrimSpace(event.GroupID) == "" && normalizeRelationshipUserID(userID) == normalizeRelationshipUserID(event.UserID)
+	return strings.TrimSpace(event.GroupID) == "" && sameAccountID(userID, event.UserID)
 }
 
 func taskTargetUserID(ctx context.Context, runtime *Runtime, event MessageEvent, input map[string]any) (string, error) {

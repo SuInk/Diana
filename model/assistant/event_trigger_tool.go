@@ -117,6 +117,10 @@ func (t *dianaEventTriggerTool) Run(ctx context.Context, input map[string]any) (
 		return "", fmt.Errorf("diana event trigger: runtime is not configured")
 	}
 	ownerID := strings.TrimSpace(t.event.UserID)
+	// 按 id 取消、删除之前先认归属：别的机器人名下的触发任务按找不到处理，见 taskOfOtherBot。
+	if id := strings.TrimSpace(configToolString(input, "id")); id != "" && t.runtime.taskOfOtherBot(id, t.event) {
+		return "", fmt.Errorf("没有找到事件触发任务 %s", id)
+	}
 	switch t.CanonicalOperation(input) {
 	case eventTriggerOpCreate, eventTriggerOpCreateElsewhere:
 		if eventTriggerRunFromContext(ctx) {

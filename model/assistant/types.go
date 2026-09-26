@@ -317,7 +317,11 @@ type Reminder struct {
 	// RequestedBy 是在对话里让机器人建这条任务的人。主人在私聊里用 target_user_id 替
 	// 别人建的提醒和订阅，投递给的是别人（UserID），发起的是主人；安全模式据此在到点时
 	// 停发「往别的会话发」的任务。空值是这个字段之前的旧记录，按 UserID 本人算。
-	RequestedBy             string    `json:"requested_by,omitempty"`
+	RequestedBy string `json:"requested_by,omitempty"`
+	// SafeModeHeldTriggerAt 非零表示这条一次性提醒到点时被安全模式停发过，值是它当时的
+	// 原定时间。切回标准模式补发时按它注明原定时间、判断要不要过期作废；投递失败重试
+	// 改了 TriggerAt 也不影响它。只有真的被停发过的提醒才有这个标记。
+	SafeModeHeldTriggerAt   time.Time `json:"safe_mode_held_trigger_at,omitempty"`
 	NotificationEnabled     bool      `json:"notification_enabled,omitempty"`
 	NotificationTargetsJSON string    `json:"notification_targets,omitempty"`
 	Message                 string    `json:"message"`

@@ -394,8 +394,8 @@ func reminderDeliversElsewhere(item Reminder) bool {
 	if strings.TrimSpace(item.GroupID) != "" {
 		return false
 	}
-	requester := normalizeRelationshipUserID(item.RequestedBy)
-	return requester != "" && requester != normalizeRelationshipUserID(item.UserID)
+	requester := stripAccountIDMarkup(item.RequestedBy)
+	return requester != "" && !sameAccountID(requester, item.UserID)
 }
 
 // safeModeHoldsTask 报告这条任务现在该不该停发：所属机器人在安全模式，且任务往别的会话

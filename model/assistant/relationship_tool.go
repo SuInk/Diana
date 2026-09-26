@@ -617,15 +617,7 @@ func relationshipChangeReason(operation string, input map[string]any) string {
 }
 
 func normalizeRelationshipUserID(raw string) string {
-	raw = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(raw), "@"))
-	// 参数里带着提及标记照样认。工具返回给模型的是 [diana-at:ID]，它可能原样
-	// 抄回来；群消息原文里则是 CQ 码，同样可能被抄进参数。两种都剥掉。
-	if match := dianaMentionMarkerPattern.FindStringSubmatch(raw); match != nil {
-		raw = match[1]
-	}
-	if strings.HasPrefix(raw, "[CQ:at,qq=") && strings.HasSuffix(raw, "]") {
-		raw = strings.TrimSuffix(strings.TrimPrefix(raw, "[CQ:at,qq="), "]")
-	}
+	raw = stripAccountIDMarkup(raw)
 	if raw == "" {
 		return ""
 	}
@@ -635,6 +627,38 @@ func normalizeRelationshipUserID(raw string) string {
 		}
 	}
 	return raw
+}
+
+// stripAccountIDMarkup 去掉账号 ID 外面的空白、@ 和提及标记，不管 ID 本身长什么样。
+// 参数里带着提及标记照样认。工具返回给模型的是 [diana-at:ID]，它可能原样抄回来；
+// 群消息原文里则是 CQ 码，同样可能被抄进参数。两种都剥掉。
+func stripAccountIDMarkup(raw string) string {
+	raw = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(raw), "@"))
+	if match := dianaMentionMarkerPattern.FindStringSubmatch(raw); match != nil {
+		raw = match[1]
+	}
+	if strings.HasPrefix(raw, "[CQ:at,qq=") && strings.HasSuffix(raw, "]") {
+		raw = strings.TrimSuffix(strings.TrimPrefix(raw, "[CQ:at,qq="), "]")
+	}
+	return strings.TrimSpace(raw)
+}
+
+// sameAccountID 判断两个账号 ID 是不是同一个人。
+//
+// normalizeRelationshipUserID 只认纯数字账号，飞书 ou_xxx、QQ 官方 openid、钉钉和
+// 企业微信的 userid 都会被它变成空串——拿它比身份，两个不同的非数字账号就成了
+// 「"" == ""」。所以先比去掉标记后的原文，两边都是数字账号时再按数字比；空 ID 不和
+// 任何人相同。
+func sameAccountID(a, b string) bool {
+	rawA, rawB := stripAccountIDMarkup(a), stripAccountIDMarkup(b)
+	if rawA == "" || rawB == "" {
+		return false
+	}
+	if rawA == rawB {
+		return true
+	}
+	numericA, numericB := normalizeRelationshipUserID(a), normalizeRelationshipUserID(b)
+	return numericA != "" && numericA == numericB
 }
 
 func relationshipEventDisplayName(event MessageEvent, userID string) string {
