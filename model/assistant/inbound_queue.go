@@ -270,6 +270,11 @@ const (
 	OutboundDeliveryFailed        OutboundDeliveryStage = "failed"
 )
 
+// InboundEventDeliveryByIDStore 是可选能力：知道入站事件 id 时按主键推进投递审计。
+type InboundEventDeliveryByIDStore interface {
+	RecordInboundEventDeliveryByID(ctx context.Context, inboundEventID string, event MessageEvent, stage OutboundDeliveryStage, outboundMessageID, detail string) error
+}
+
 // InboundEventDeliveryAuditStore records transport evidence independently of
 // the model outcome so a generated reply is never confused with a delivered one.
 type InboundEventDeliveryAuditStore interface {
@@ -978,7 +983,7 @@ func (r *Runtime) recordInboundDeliveryExhausted(item InboundQueueItem, processE
 	if processErr != nil {
 		detail += "：" + processErr.Error()
 	}
-	r.recordInboundDelivery(item.Event, OutboundDeliveryFailed, "", detail)
+	r.recordInboundDelivery(item.ID, item.Event, OutboundDeliveryFailed, "", detail)
 }
 
 // recordInboundSendRejected 把「上游明确拒收」写进这条事件的投递审计。
@@ -989,7 +994,7 @@ func (r *Runtime) recordInboundSendRejected(item InboundQueueItem, processErr er
 	if processErr != nil {
 		detail += "：" + processErr.Error()
 	}
-	r.recordInboundDelivery(item.Event, OutboundDeliveryFailed, "", detail)
+	r.recordInboundDelivery(item.ID, item.Event, OutboundDeliveryFailed, "", detail)
 }
 
 func inboundRetryDelay(attempts int) time.Duration {

@@ -178,12 +178,12 @@ func (r *Runtime) sendOutgoingWithResult(ctx context.Context, event MessageEvent
 	if alreadyDelivered {
 		return replayedOutboundResult(replayedMessageID), nil
 	}
-	r.recordInboundDelivery(event, OutboundDeliveryGenerated, "", "")
-	r.recordInboundDelivery(event, OutboundDeliverySendAttempted, "", "")
+	r.recordInboundDelivery(outboundTurnID(ctx), event, OutboundDeliveryGenerated, "", "")
+	r.recordInboundDelivery(outboundTurnID(ctx), event, OutboundDeliverySendAttempted, "", "")
 	ctx = outboundMessageContext(ctx, msg)
 	refreshMedia, releaseMedia, err := r.leaseOutgoingMedia(msg)
 	if err != nil {
-		r.recordInboundDelivery(event, OutboundDeliveryFailed, "", err.Error())
+		r.recordInboundDelivery(outboundTurnID(ctx), event, OutboundDeliveryFailed, "", err.Error())
 		return nil, err
 	}
 	defer releaseMedia()
@@ -198,12 +198,12 @@ func (r *Runtime) sendOutgoingWithResult(ctx context.Context, event MessageEvent
 		return r.sendChannelWithRetry(callCtx, msg, attempts, event)
 	})
 	if err != nil {
-		r.recordInboundDelivery(event, OutboundDeliveryFailed, "", err.Error())
+		r.recordInboundDelivery(outboundTurnID(ctx), event, OutboundDeliveryFailed, "", err.Error())
 		return nil, err
 	}
 	messageID := apiMessageID(result)
 	if r.outboundResultAcknowledged(event, result) {
-		r.recordInboundDelivery(event, OutboundDeliveryAcknowledged, messageID, "")
+		r.recordInboundDelivery(outboundTurnID(ctx), event, OutboundDeliveryAcknowledged, messageID, "")
 		// 回推常常比发送回执先到，那时还没有 outbound_message_id 可关联，self_echo_at
 		// 就一直空着；回执记下之后补关联一次。
 		if echo, ok := r.outboundEchoes.observed(event, messageID); ok {
@@ -243,7 +243,9 @@ func (r *Runtime) outboundResultAcknowledged(event MessageEvent, result map[stri
 	return ok
 }
 
-func (r *Runtime) recordInboundDelivery(event MessageEvent, stage OutboundDeliveryStage, outboundMessageID, detail string) {
+// recordInboundDelivery 推进入站事件的投递审计。inboundEventID 是这一轮对应的
+// 入站事件 id（队列里领到的那一条），知道的话存储层按主键定位，不扫表。
+func (r *Runtime) recordInboundDelivery(inboundEventID string, event MessageEvent, stage OutboundDeliveryStage, outboundMessageID, detail string) {
 	r.mu.RLock()
 	store, _ := r.inboundStore.(InboundEventDeliveryAuditStore)
 	r.mu.RUnlock()
@@ -252,9 +254,23 @@ func (r *Runtime) recordInboundDelivery(event MessageEvent, stage OutboundDelive
 	}
 	auditCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	if err := store.RecordInboundEventDelivery(auditCtx, event, stage, outboundMessageID, detail); err != nil {
+	var err error
+	if byID, ok := store.(InboundEventDeliveryByIDStore); ok && strings.TrimSpace(inboundEventID) != "" {
+		err = byID.RecordInboundEventDeliveryByID(auditCtx, inboundEventID, event, stage, outboundMessageID, detail)
+	} else {
+		err = store.RecordInboundEventDelivery(auditCtx, event, stage, outboundMessageID, detail)
+	}
+	if err != nil {
 		log.Printf("diana persist outbound delivery stage failed: %v", err)
 	}
+}
+
+// outboundTurnID 是这一轮对应的入站事件 id；不在入站队列里处理时为空。
+func outboundTurnID(ctx context.Context) string {
+	if turn := outboundTurnFromContext(ctx); turn != nil {
+		return turn.id
+	}
+	return ""
 }
 
 func repositoryWatchDeliveryTargets(item Reminder) []MessageEvent {

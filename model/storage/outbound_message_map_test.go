@@ -13,6 +13,9 @@ import (
 	"github.com/SuInk/diana/model/assistant"
 )
 
+// 运行时靠这个可选接口走按主键定位的回执路径，少实现一个方法就会悄悄退回扫表。
+var _ assistant.InboundEventDeliveryByIDStore = (*SQLiteStore)(nil)
+
 func openOutboundDeliveryTestStore(t *testing.T) *SQLiteStore {
 	t.Helper()
 	store, err := NewSQLiteStore(filepath.Join(t.TempDir(), "outbound-delivery.db"))
@@ -157,5 +160,105 @@ func TestLateSelfEchoKeepsLaterChunkFailure(t *testing.T) {
 	row := readSelfEchoRow(t, store, id)
 	if !row.echoed || row.deliveryError != "second chunk failed" || row.stage == string(assistant.OutboundDeliveryEchoPersisted) {
 		t.Fatalf("row after late echo = %+v", row)
+	}
+}
+
+func explainQueryPlan(t *testing.T, store *SQLiteStore, query string, args ...any) []string {
+	t.Helper()
+	rows, err := store.db.Query("EXPLAIN QUERY PLAN "+query, args...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var plan []string
+	for rows.Next() {
+		var id, parent, unused int
+		var detail string
+		if err := rows.Scan(&id, &parent, &unused, &detail); err != nil {
+			t.Fatal(err)
+		}
+		plan = append(plan, detail)
+	}
+	return plan
+}
+
+// 发送回执每条分片都要写一次，走单写连接：按入站事件主键定位、映射按 VALUES
+// 写入，两步都不能扫 inbound_events。
+func TestDeliveryReceiptPathUsesPrimaryKeysNotFullScan(t *testing.T) {
+	store := openOutboundDeliveryTestStore(t)
+	setArgs := inboundDeliverySetArgs(assistant.OutboundDeliveryAcknowledged, "54321", "", 1)
+	receiptArgs := append(append(append([]any{}, setArgs...), "event-1"), "in-1", "group", "20005", "10001")
+	for name, plan := range map[string][]string{
+		"receipt update": explainQueryPlan(t, store, inboundDeliveryByIDSQL, receiptArgs...),
+		"map write":      explainQueryPlan(t, store, recordOutboundMessageMapSQL, "bot", "group:20005", "54321", "event-1", 1),
+	} {
+		for _, line := range plan {
+			if strings.HasPrefix(line, "SCAN ") || strings.Contains(line, "TEMP B-TREE") {
+				t.Fatalf("%s is not an indexed lookup:\n%s", name, strings.Join(plan, "\n"))
+			}
+		}
+	}
+}
+
+// 按 id 定位时 id 必须对得上这条消息；对不上（这一轮顺带发给别的会话）就退回
+// 按消息查找，不会把回执记到这一轮的入站事件上。
+func TestDeliveryByIDFallsBackWhenIDDoesNotMatchEvent(t *testing.T) {
+	ctx := context.Background()
+	store := openOutboundDeliveryTestStore(t)
+	turn := assistant.MessageEvent{Kind: assistant.EventKindGroup, GroupID: "20005", UserID: "10001", MessageID: "in-turn", Time: time.Now().Unix()}
+	other := assistant.MessageEvent{Kind: assistant.EventKindGroup, GroupID: "20006", UserID: "10001", MessageID: "in-other", Time: time.Now().Unix()}
+	turnID, _, err := store.EnqueueInboundEvent(ctx, "group:20005", turn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherID, _, err := store.EnqueueInboundEvent(ctx, "group:20006", other)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := store.RecordInboundEventDeliveryByID(ctx, turnID, turn, assistant.OutboundDeliveryAcknowledged, "54700", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RecordInboundEventDeliveryByID(ctx, turnID, other, assistant.OutboundDeliveryAcknowledged, "54701", ""); err != nil {
+		t.Fatal(err)
+	}
+	outbound := func(id string) string {
+		var value string
+		if err := store.db.QueryRow(`SELECT COALESCE(outbound_message_id, '') FROM inbound_events WHERE id = ?`, id).Scan(&value); err != nil {
+			t.Fatal(err)
+		}
+		return value
+	}
+	if got := outbound(turnID); got != "54700" {
+		t.Fatalf("turn outbound ids = %q", got)
+	}
+	if got := outbound(otherID); got != "54701" {
+		t.Fatalf("other outbound ids = %q", got)
+	}
+	var mapped string
+	if err := store.db.QueryRow(`SELECT inbound_event_id FROM outbound_message_map WHERE conversation = 'group:20006' AND message_id = '54701'`).Scan(&mapped); err != nil || mapped != otherID {
+		t.Fatalf("map for fallback row = %q err=%v", mapped, err)
+	}
+}
+
+// 确认不了送达的终态算错误，不算「未回复」。
+func TestUnconfirmedOutboundOutcomeCountsAsError(t *testing.T) {
+	ctx := context.Background()
+	store := openOutboundDeliveryTestStore(t)
+	now := time.Now()
+	if _, err := store.db.Exec(`
+INSERT INTO inbound_events (
+  id, session, kind, group_id, user_id, message_id, event_time, payload, priority,
+  status, attempts, available_at, outcome, created_at, updated_at, completed_at
+) VALUES ('unconfirmed', 'group:g', 'group', 'g', 'u', 'unconfirmed', ?, '{}', 0, 'done', 1, ?, 'dropped_outbound_unconfirmed', ?, ?, ?)
+`, now.Unix(), now.UnixNano(), now.UnixNano(), now.UnixNano(), now.UnixNano()); err != nil {
+		t.Fatal(err)
+	}
+	page, err := store.ListInboundEventDetails(ctx, InboundEventQuery{Since: now.Add(-time.Hour), Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if page.Errors != 1 || page.NotReplied != 0 || page.Replied != 0 {
+		t.Fatalf("counts = replied=%d not=%d errors=%d", page.Replied, page.NotReplied, page.Errors)
 	}
 }

@@ -1065,8 +1065,10 @@ func TestSilentEchoAccountSkipsEchoWait(t *testing.T) {
 	channel := &ambiguousOutboundChannel{}
 	runtime := newAmbiguousOutcomeRuntime(t, channel)
 	runtime.outboundEchoes.echoWait = time.Minute
+	event := groupOutcomeEvent()
+	event.SelfID = outcomeTestSelfID
 	for index := 0; index < outboundEchoSilentAfter; index++ {
-		if _, err := runtime.sendOutgoingWithResult(context.Background(), groupOutcomeEvent(), OutgoingMessage{Text: fmt.Sprintf("第 %d 条", index)}); err != nil {
+		if _, err := runtime.sendOutgoingWithResult(context.Background(), event, OutgoingMessage{Text: fmt.Sprintf("第 %d 条", index)}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -1076,7 +1078,7 @@ func TestSilentEchoAccountSkipsEchoWait(t *testing.T) {
 	channel.mu.Unlock()
 
 	started := time.Now()
-	result, err := runtime.sendOutgoingWithResult(context.Background(), groupOutcomeEvent(), OutgoingMessage{Text: "直接查历史"})
+	result, err := runtime.sendOutgoingWithResult(context.Background(), event, OutgoingMessage{Text: "直接查历史"})
 	if err != nil {
 		t.Fatalf("sendOutgoingWithResult() error = %v", err)
 	}
@@ -1088,9 +1090,22 @@ func TestSilentEchoAccountSkipsEchoWait(t *testing.T) {
 	}
 
 	// 回推一来就恢复等待。
-	runtime.observeOutboundEcho(MessageEvent{Kind: EventKindGroup, GroupID: outcomeTestGroupID, MessageID: "54601"})
-	if runtime.outboundEchoes.echoesSilent(groupOutcomeEvent()) {
+	runtime.observeOutboundEcho(MessageEvent{Kind: EventKindGroup, GroupID: outcomeTestGroupID, SelfID: outcomeTestSelfID, MessageID: "54601"})
+	if runtime.outboundEchoes.echoesSilent(event) {
 		t.Fatal("echo did not reset the silent counter")
+	}
+}
+
+// 认不出账号的发送（提醒之类，没有 profile 也没有 self_id）不累积「没有回推」的
+// 计数，免得一个空账号一直涨下去，把谁都判成不上报。
+func TestAccountlessSendsDoNotMarkEchoesSilent(t *testing.T) {
+	var tracker outboundEchoTracker
+	accountless := groupOutcomeEvent()
+	for index := 0; index < 3*outboundEchoSilentAfter; index++ {
+		tracker.claim(accountless, strconv.Itoa(60000+index))
+	}
+	if tracker.echoesSilent(accountless) || len(tracker.sendsSinceEcho) != 0 {
+		t.Fatalf("account-less sends accumulated: %v", tracker.sendsSinceEcho)
 	}
 }
 

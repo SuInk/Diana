@@ -501,8 +501,12 @@ func outboundEchoAccount(event MessageEvent) string {
 	return firstNonEmpty(strings.TrimSpace(event.ProfileID), strings.TrimSpace(event.SelfID))
 }
 
-// echoesSilent 判断这个账号是不是看起来不上报自身消息。
+// echoesSilent 判断这个账号是不是看起来不上报自身消息。认不出账号的发送
+// （没有 profile 也没有 self_id 的提醒之类）不参与这个判断。
 func (t *outboundEchoTracker) echoesSilent(event MessageEvent) bool {
+	if outboundEchoAccount(event) == "" {
+		return false
+	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return t.sendsSinceEcho[outboundEchoAccount(event)] >= outboundEchoSilentAfter
@@ -592,8 +596,10 @@ func (t *outboundEchoTracker) claim(event MessageEvent, messageID string) {
 		t.sendsSinceEcho = make(map[string]int)
 	}
 	// 回推通常比回执先到，到了就已经清零；这里只在它一直不来时累积。
-	if _, echoed := t.observedLocked(event, messageID); !echoed {
-		t.sendsSinceEcho[outboundEchoAccount(event)]++
+	if account := outboundEchoAccount(event); account != "" {
+		if _, echoed := t.observedLocked(event, messageID); !echoed {
+			t.sendsSinceEcho[account]++
+		}
 	}
 }
 
