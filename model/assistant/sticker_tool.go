@@ -32,6 +32,7 @@ const (
 	// 命中的候选先取「返回数量 × 这个倍数」进池子，再按分数加权抽，排名靠前的更容易被抽中。
 	stickerMatchedPoolFactor = 2
 	stickerBackgroundTagTTL  = 3 * time.Minute
+	stickerSendRateWindow    = time.Hour
 )
 
 type dianaStickerTool struct {
@@ -40,6 +41,8 @@ type dianaStickerTool struct {
 	settings SettingValues
 	searchMu sync.Mutex
 	searched map[string]stickerCandidate
+	// sentThisTurn 是这一轮已经发出（或正在发）的张数；工具实例每轮新建。
+	sentThisTurn int
 }
 
 // StickerHistoryQuery is the storage boundary for the optional cross-conversation library.
@@ -126,6 +129,9 @@ func (t *dianaStickerTool) Run(ctx context.Context, input map[string]any) (strin
 
 	switch operation {
 	case "search":
+		if reason := t.sendLimitReason(time.Now()); reason != "" {
+			return marshalStickerResult(stickerToolResult{OK: true, Action: "limited", Message: reason, Query: query})
+		}
 		candidates, err := t.candidates(ctx, query)
 		if err != nil {
 			return "", err
@@ -175,11 +181,16 @@ func (t *dianaStickerTool) Run(ctx context.Context, input map[string]any) (strin
 		if selected.Hash != "" && !stickerFileMatchesHash(selected.Path, selected.Hash) {
 			return "", fmt.Errorf("表情包缓存内容校验失败")
 		}
+		release, reason := t.reserveSend(time.Now())
+		if reason != "" {
+			return marshalStickerResult(stickerToolResult{Action: "limited", Message: reason, Query: query})
+		}
 		label := "表情包"
 		if name := firstNonEmpty(selected.Summary, truncateRunes(selected.Description, 60)); name != "" {
 			label += "：" + name
 		}
 		if err := t.runtime.sendOutgoing(ctx, t.event, routeOutgoingToEvent(t.event, OutgoingMessage{ImageURLs: []string{selected.Path}, ImageLabels: []string{label}})); err != nil {
+			release()
 			return "", fmt.Errorf("发送表情包失败: %w", err)
 		}
 		t.recordSent(ctx, *selected)
@@ -204,6 +215,108 @@ func (t *dianaStickerTool) searchedCandidate(id string) (stickerCandidate, bool)
 	defer t.searchMu.Unlock()
 	candidate, ok := t.searched[strings.TrimSpace(id)]
 	return candidate, ok
+}
+
+// stickerSendLimiter 是按会话的滑动窗口计数。先占位再发送，发送失败退回占位，
+// 并发的两轮不会一起越过上限。
+type stickerSendLimiter struct {
+	mu   sync.Mutex
+	sent map[string][]time.Time
+}
+
+func (l *stickerSendLimiter) recentLocked(session string, now time.Time) []time.Time {
+	kept := l.sent[session][:0]
+	for _, at := range l.sent[session] {
+		if now.Sub(at) < stickerSendRateWindow {
+			kept = append(kept, at)
+		}
+	}
+	if len(kept) == 0 {
+		delete(l.sent, session)
+		return nil
+	}
+	l.sent[session] = kept
+	return kept
+}
+
+// full 报告会话是否已到上限，到了的话还要等多久才会空出一张。
+func (l *stickerSendLimiter) full(session string, now time.Time, limit int) (bool, time.Duration) {
+	if limit <= 0 {
+		return false, 0
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	recent := l.recentLocked(session, now)
+	if len(recent) < limit {
+		return false, 0
+	}
+	return true, stickerSendRateWindow - now.Sub(recent[len(recent)-limit])
+}
+
+func (l *stickerSendLimiter) reserve(session string, now time.Time, limit int) (func(), bool) {
+	if limit <= 0 {
+		return func() {}, true
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.sent == nil {
+		l.sent = map[string][]time.Time{}
+	}
+	if len(l.recentLocked(session, now)) >= limit {
+		return nil, false
+	}
+	l.sent[session] = append(l.sent[session], now)
+	return func() {
+		l.mu.Lock()
+		defer l.mu.Unlock()
+		times := l.sent[session]
+		for index := len(times) - 1; index >= 0; index-- {
+			if times[index].Equal(now) {
+				l.sent[session] = append(times[:index], times[index+1:]...)
+				return
+			}
+		}
+	}, true
+}
+
+const stickerLimitedHint = "这轮用文字回应，不要向用户提及表情包上限、图库或工具状态。"
+
+// sendLimitReason 在这一轮或这个会话已到发送上限时返回给 Agent 的说明，没到返回空串。
+func (t *dianaStickerTool) sendLimitReason(now time.Time) string {
+	t.searchMu.Lock()
+	sent := t.sentThisTurn
+	t.searchMu.Unlock()
+	if turnLimit := t.settings.Int(stickerSettingTurnLimit, 1); sent >= turnLimit {
+		return fmt.Sprintf("这一轮已经发了 %d 张表情包，到了单轮上限；%s", sent, stickerLimitedHint)
+	}
+	hourly := t.settings.Int(stickerSettingHourlyLimit, 10)
+	if full, wait := t.runtime.stickerSends.full(sessionKey(t.event), now, hourly); full {
+		return fmt.Sprintf("这个会话最近一小时已发 %d 张表情包，到了上限，约 %d 分钟后才能再发；%s", hourly, int(math.Ceil(wait.Minutes())), stickerLimitedHint)
+	}
+	return ""
+}
+
+// reserveSend 为一次发送占住单轮和每小时的名额；到上限时返回说明。发送失败要调用 release 退回。
+func (t *dianaStickerTool) reserveSend(now time.Time) (func(), string) {
+	t.searchMu.Lock()
+	defer t.searchMu.Unlock()
+	turnLimit := t.settings.Int(stickerSettingTurnLimit, 1)
+	if t.sentThisTurn >= turnLimit {
+		return nil, fmt.Sprintf("这一轮已经发了 %d 张表情包，到了单轮上限；%s", t.sentThisTurn, stickerLimitedHint)
+	}
+	hourly := t.settings.Int(stickerSettingHourlyLimit, 10)
+	releaseSlot, ok := t.runtime.stickerSends.reserve(sessionKey(t.event), now, hourly)
+	if !ok {
+		_, wait := t.runtime.stickerSends.full(sessionKey(t.event), now, hourly)
+		return nil, fmt.Sprintf("这个会话最近一小时已发 %d 张表情包，到了上限，约 %d 分钟后才能再发；%s", hourly, int(math.Ceil(wait.Minutes())), stickerLimitedHint)
+	}
+	t.sentThisTurn++
+	return func() {
+		releaseSlot()
+		t.searchMu.Lock()
+		t.sentThisTurn--
+		t.searchMu.Unlock()
+	}, ""
 }
 
 // recordSent 记下这次发送，下次检索时刚发过的往后排。记录失败不影响已经发出去的表情。

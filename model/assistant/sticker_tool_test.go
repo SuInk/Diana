@@ -89,7 +89,7 @@ func TestDefaultPluginManagerIncludesStickerSender(t *testing.T) {
 	if !ok || !state.Enabled || !state.Manifest.BuiltIn || state.Manifest.Version != "0.2.2" {
 		t.Fatalf("sticker plugin state=%#v ok=%v", state, ok)
 	}
-	if len(state.Manifest.Settings) != 6 {
+	if len(state.Manifest.Settings) != 8 {
 		t.Fatalf("settings=%#v", state.Manifest.Settings)
 	}
 }
@@ -630,5 +630,107 @@ func TestPersistMessageEventPrunesStickerLibrary(t *testing.T) {
 	defer store.mu.Unlock()
 	if len(store.sessions) != 1 || store.sessions[0] != sessionKey(sticker) || store.capacity != 1000 {
 		t.Fatalf("prune calls = %#v capacity=%d", store.sessions, store.capacity)
+	}
+}
+
+func stickerLimitTestTool(t *testing.T, runtime *Runtime, event MessageEvent, settings SettingValues) (*dianaStickerTool, func() string) {
+	t.Helper()
+	tool := newDianaStickerTool(runtime, event, settings)
+	sendOne := func() string {
+		output, err := tool.Run(context.Background(), map[string]any{"operation": "search", "query": "无语"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var search stickerToolResult
+		if err := json.Unmarshal([]byte(output), &search); err != nil {
+			t.Fatal(err)
+		}
+		if search.Action == "limited" {
+			return output
+		}
+		if len(search.Candidates) == 0 {
+			t.Fatalf("search = %s", output)
+		}
+		output, err = tool.Run(context.Background(), map[string]any{"operation": "send", "sticker_id": search.Candidates[0].ID})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return output
+	}
+	return tool, sendOne
+}
+
+// 发送频率上限：一轮默认只发一张；同一会话一小时内到了上限，新的一轮连搜索都直接返回，
+// 不再读库、不调识图；别的会话不受影响。
+func TestStickerToolEnforcesTurnAndHourlySendLimits(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "sticker.gif")
+	body := []byte("limit-sticker")
+	if err := os.WriteFile(path, body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	segment := func() []MessageSegment {
+		return []MessageSegment{{Type: "image", Data: map[string]string{"summary": "[无语]", "cached_file": path, imageContentSHA256Key: imageBytesSHA256(body)}}}
+	}
+	event := MessageEvent{Kind: EventKindGroup, GroupID: "g1", UserID: "u", MessageID: "request"}
+	other := MessageEvent{Kind: EventKindGroup, GroupID: "g2", UserID: "u", MessageID: "request"}
+	store := &stickerHistoryStore{events: map[string][]MessageEvent{
+		sessionKey(event): {{Kind: EventKindGroup, GroupID: "g1", MessageID: "s", Time: 1, Segments: segment()}},
+		sessionKey(other): {{Kind: EventKindGroup, GroupID: "g2", MessageID: "s", Time: 1, Segments: segment()}},
+	}}
+	channel := &recordingChannel{}
+	runtime := NewRuntime(BotConfig{}, channel, NewPluginManager(), nil, nil, nil, nil)
+	runtime.SetMessageHistoryStore(store)
+	settings := SettingValues{stickerSettingHourlyLimit: 2}
+
+	_, sendOne := stickerLimitTestTool(t, runtime, event, settings)
+	if output := sendOne(); !strings.Contains(output, `"action":"sent"`) {
+		t.Fatalf("first send = %s", output)
+	}
+	if output := sendOne(); !strings.Contains(output, `"action":"limited"`) || !strings.Contains(output, "单轮上限") {
+		t.Fatalf("second send in same turn = %s", output)
+	}
+	_, nextTurn := stickerLimitTestTool(t, runtime, event, settings)
+	if output := nextTurn(); !strings.Contains(output, `"action":"sent"`) {
+		t.Fatalf("next turn send = %s", output)
+	}
+	_, thirdTurn := stickerLimitTestTool(t, runtime, event, settings)
+	if output := thirdTurn(); !strings.Contains(output, `"action":"limited"`) || !strings.Contains(output, "最近一小时已发 2 张") {
+		t.Fatalf("hourly limit = %s", output)
+	}
+	_, otherTurn := stickerLimitTestTool(t, runtime, other, settings)
+	if output := otherTurn(); !strings.Contains(output, `"action":"sent"`) {
+		t.Fatalf("other conversation = %s", output)
+	}
+	if sent := channel.sentSnapshot(); len(sent) != 3 {
+		t.Fatalf("sent = %d", len(sent))
+	}
+
+	// 填 0 不限每小时张数。
+	_, unlimited := stickerLimitTestTool(t, runtime, event, SettingValues{stickerSettingHourlyLimit: 0})
+	if output := unlimited(); !strings.Contains(output, `"action":"sent"`) {
+		t.Fatalf("unlimited = %s", output)
+	}
+}
+
+// 占了名额但没发出去要退回，过了一小时的旧记录不再占名额。
+func TestStickerSendLimiterReleasesAndExpires(t *testing.T) {
+	var limiter stickerSendLimiter
+	now := time.Unix(100000, 0)
+	release, ok := limiter.reserve("s", now, 1)
+	if !ok {
+		t.Fatal("first reserve refused")
+	}
+	if _, ok := limiter.reserve("s", now, 1); ok {
+		t.Fatal("reserve over limit accepted")
+	}
+	if full, wait := limiter.full("s", now.Add(10*time.Minute), 1); !full || wait != 50*time.Minute {
+		t.Fatalf("full=%v wait=%v", full, wait)
+	}
+	release()
+	if _, ok := limiter.reserve("s", now, 1); !ok {
+		t.Fatal("released slot not reusable")
+	}
+	if full, _ := limiter.full("s", now.Add(stickerSendRateWindow), 1); full {
+		t.Fatal("expired send still counted")
 	}
 }

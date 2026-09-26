@@ -551,7 +551,9 @@ type Runtime struct {
 	outboundDeliveries map[string]*groupOutboundDelivery
 	outboundEchoes     outboundEchoTracker
 	// stickerTagging 是正在后台补标签的表情包哈希，同一张图只跑一份。
-	stickerTagging          sync.Map
+	stickerTagging sync.Map
+	// stickerSends 记每个会话最近一小时发表情包的时间，用于发送频率上限；重启后清零。
+	stickerSends            stickerSendLimiter
 	historyImageDescMu      sync.Mutex
 	historyImageDescQueue   []*historyImageDescJob
 	historyImageDescJobs    map[string]*historyImageDescJob

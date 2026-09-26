@@ -14,6 +14,8 @@ const (
 	stickerSettingCrossGroup     = "cross_group"
 	stickerSettingCrossPrivate   = "cross_private"
 	stickerSettingLibraryLimit   = "library_capacity"
+	stickerSettingTurnLimit      = "turn_limit"
+	stickerSettingHourlyLimit    = "hourly_limit"
 )
 
 // StickerPlugin exposes a conversation-local sticker library backed by durable message history.
@@ -48,6 +50,24 @@ func (p *StickerPlugin) Manifest() PluginManifest {
 				Default:     8,
 				Min:         settingRange(3),
 				Max:         settingRange(20),
+			},
+			{
+				Key:         stickerSettingTurnLimit,
+				Label:       "每轮最多发几张",
+				Description: "机器人一次回复里最多发几张表情包。",
+				Type:        PluginSettingTypeNumber,
+				Default:     1,
+				Min:         settingRange(1),
+				Max:         settingRange(5),
+			},
+			{
+				Key:         stickerSettingHourlyLimit,
+				Label:       "每个会话每小时最多发几张",
+				Description: "同一个群聊或私聊在任意一小时内最多发几张表情包，到了上限这段时间只用文字回应。填 0 不限。",
+				Type:        PluginSettingTypeNumber,
+				Default:     10,
+				Min:         settingRange(0),
+				Max:         settingRange(120),
 			},
 			{
 				Key:         stickerSettingLibraryLimit,
