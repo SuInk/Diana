@@ -247,6 +247,26 @@ type mediaRequestSpec struct {
 	body        []byte
 	contentType string
 	accept      string
+	headers     map[string]string
+	// createsJob 标记会在服务端建付费任务的请求（提交视频）。它只在服务端明确说
+	// 「没受理」的 429、503 上重试：超时、断网、502 时请求可能已经建好了任务，
+	// 只是响应丢了，重发就是再花一份钱。
+	createsJob bool
+	// noRetry、noAttemptTimeout 给下载成品用：文件大、网慢时单次超时会把下到一半的
+	// 视频掐掉再整段重下，交给调用方 ctx 上的任务级截止时间更合适。
+	noRetry          bool
+	noAttemptTimeout bool
+}
+
+// retryable 报告这次失败能不能按 spec 的口径原样重发。
+func (spec mediaRequestSpec) retryable(apiErr *MediaAPIError) bool {
+	if spec.noRetry || !apiErr.Retryable() {
+		return false
+	}
+	if spec.createsJob {
+		return apiErr.StatusCode == http.StatusTooManyRequests || apiErr.StatusCode == http.StatusServiceUnavailable
+	}
+	return true
 }
 
 func (m *mediaHTTP) newRequest(ctx context.Context, spec mediaRequestSpec) (*http.Request, error) {
@@ -263,6 +283,9 @@ func (m *mediaHTTP) newRequest(ctx context.Context, spec mediaRequestSpec) (*htt
 		return nil, err
 	}
 	m.auth(req)
+	for name, value := range spec.headers {
+		req.Header.Set(name, value)
+	}
 	if spec.contentType != "" {
 		req.Header.Set("Content-Type", spec.contentType)
 	}
@@ -297,7 +320,7 @@ func (m *mediaHTTP) do(ctx context.Context, spec mediaRequestSpec, maxBytes int6
 		}
 		lastErr = err
 		var apiErr *MediaAPIError
-		if !errors.As(err, &apiErr) || !apiErr.Retryable() || attempt >= m.policy.MaxRetries {
+		if !errors.As(err, &apiErr) || !spec.retryable(apiErr) || attempt >= m.policy.MaxRetries {
 			return nil, lastErr
 		}
 		if sleepErr := m.sleep(ctx, m.policy.delay(attempt, apiErr.RetryAfter)); sleepErr != nil {
@@ -308,7 +331,7 @@ func (m *mediaHTTP) do(ctx context.Context, spec mediaRequestSpec, maxBytes int6
 
 func (m *mediaHTTP) attempt(ctx context.Context, spec mediaRequestSpec, maxBytes int64) (*mediaResult, error) {
 	attemptCtx, cancel := ctx, context.CancelFunc(func() {})
-	if m.policy.AttemptTimeout > 0 {
+	if m.policy.AttemptTimeout > 0 && !spec.noAttemptTimeout {
 		attemptCtx, cancel = context.WithTimeout(ctx, m.policy.AttemptTimeout)
 	}
 	defer cancel()

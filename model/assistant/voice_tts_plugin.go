@@ -353,11 +353,27 @@ func (p *VoiceTTSPlugin) synthesizeWithModelSlot(ctx context.Context, cfg voiceT
 	if err != nil {
 		return "", err
 	}
-	format := strings.Trim(strings.ToLower(resp.Format), ".")
-	if format == "" || strings.ContainsAny(format, `/\`) {
-		format = "audio"
+	return p.storeVoiceAudio(ctx, cfg, resp.Audio, slotSpeechExtension(resp))
+}
+
+// slotSpeechExtension 给插槽合成的音频定扩展名。先看接口报的类型，再嗅探内容，
+// 最后才用请求的格式：自建兼容层常常无视 response_format 照样回 wav，扩展名和
+// 内容对不上时 QQ 发不出或放不了。都认不出按 mp3，那是插槽的默认格式。
+func slotSpeechExtension(resp *llm.SpeechResponse) string {
+	for _, mediaType := range []string{resp.MediaType, agent.SniffMediaType(resp.Audio)} {
+		if strings.HasPrefix(strings.ToLower(mediaType), "audio/") {
+			if ext := agent.CanonicalMediaExtension(mediaType); ext != "" {
+				return strings.TrimPrefix(ext, ".")
+			}
+		}
 	}
-	return p.storeVoiceAudio(ctx, cfg, resp.Audio, format)
+	switch format := strings.ToLower(strings.TrimSpace(resp.Format)); format {
+	case "mp3", "wav", "ogg", "flac", "aac", "m4a", "amr", "silk":
+		return format
+	case "opus":
+		return "ogg"
+	}
+	return "mp3"
 }
 
 // storeVoiceAudio 把合成好的音频落进缓存目录；配了 Silk 编码器时再转成 QQ 语音

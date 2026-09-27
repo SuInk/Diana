@@ -140,7 +140,8 @@ func (r *Runtime) mediaSlotConfigured(ctx context.Context, slot string) bool {
 var errMediaSlotNotConfigured = errors.New("模型分配里没有配置这个插槽")
 
 // runMediaSlot 按路由顺序调用，失败了换下一条。调用方取消和内容被拒不换：
-// 前者没人在等了，后者换一家多半照样被拒，只会多扣一次钱。
+// 前者没人在等了，后者换一家多半照样被拒，只会多扣一次钱。视频任务一旦可能已经
+// 在服务端建好（llm.VideoJobMayBeBilled），也不换：再提交一遍就是两份钱，只如实报错。
 func runMediaSlot[T any](ctx context.Context, routes []mediaSlotRoute, label string, call func(mediaSlotRoute) (T, error)) (T, mediaSlotRoute, error) {
 	var zero T
 	if len(routes) == 0 {
@@ -159,7 +160,7 @@ func runMediaSlot[T any](ctx context.Context, routes []mediaSlotRoute, label str
 			return zero, route, err
 		}
 		errs = append(errs, fmt.Errorf("%s %s 调用失败：%w", label, route.label(), err))
-		if llm.MediaErrorKindOf(err) == llm.MediaErrorContentPolicy {
+		if llm.MediaErrorKindOf(err) == llm.MediaErrorContentPolicy || llm.VideoJobMayBeBilled(err) {
 			break
 		}
 	}
@@ -203,8 +204,9 @@ func (r *Runtime) slotSpeechSynthesizer(ctx context.Context, text string) (*llm.
 }
 
 // transcribeAudio 用语音识别插槽转写一段音频。language 非空时盖过插槽上的语言。
-func (r *Runtime) transcribeAudio(ctx context.Context, audio []byte, filename, language string) (*llm.TranscriptionResponse, error) {
-	resp, _, err := runMediaSlot(ctx, r.mediaSlotRoutes(ctx, mediaSlotSTT), "语音识别", func(route mediaSlotRoute) (*llm.TranscriptionResponse, error) {
+// 返回实际应答的那条路由：后备顶上时，缓存和记录要记在后备的模型名下。
+func (r *Runtime) transcribeAudio(ctx context.Context, audio []byte, filename, language string) (*llm.TranscriptionResponse, mediaSlotRoute, error) {
+	return runMediaSlot(ctx, r.mediaSlotRoutes(ctx, mediaSlotSTT), "语音识别", func(route mediaSlotRoute) (*llm.TranscriptionResponse, error) {
 		started := time.Now()
 		resp, err := llm.TranscribeAudio(ctx, route.Config, llm.TranscriptionRequest{
 			API:      llm.SpeechAPI(route.param(mediaParamAPI)),
@@ -220,7 +222,6 @@ func (r *Runtime) transcribeAudio(ctx context.Context, audio []byte, filename, l
 		}
 		return resp, err
 	})
-	return resp, err
 }
 
 // defaultVideoSlotTimeout 是插槽没配总时限时，一个视频任务从提交到取回成品的上限。
@@ -254,7 +255,9 @@ func (r *Runtime) generateVideo(ctx context.Context, req llm.VideoGenerateReques
 			Timeout:    route.videoJobTimeout(),
 			OnProgress: onProgress,
 		})
-		if err == nil {
+		// 任务受理之后不管结果如何都记一次：失败、超时的任务照样花了钱，只记成功的
+		// 话群额度就挡不住一个反复失败的高价任务。
+		if err == nil || llm.VideoJobMayBeBilled(err) {
 			r.recordMediaSlotUsage(ctx, route, "video_generate", started)
 		}
 		return result, err

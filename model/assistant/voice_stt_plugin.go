@@ -249,7 +249,14 @@ func (p *VoiceSTTPlugin) transcribeSegment(ctx context.Context, r *Runtime, even
 	case voiceSTTBackendOpenAI:
 		transcript, err = p.openAITranscription(callCtx, wav, cfg)
 	case voiceSTTBackendModelSlot:
-		transcript, err = r.slotVoiceTranscription(callCtx, wav, cfg)
+		var model string
+		transcript, model, err = r.slotVoiceTranscription(callCtx, wav, cfg)
+		if err == nil && model != "" && model != cfg.Model {
+			// 后备路由顶上时，结果记在实际应答的模型名下，别让主模型的缓存键
+			// 命中一份不是它转写的结果。
+			cfg.Model = model
+			cacheKey = voiceSTTCacheKey(audioHash, cfg)
+		}
 	default:
 		return "", audioHash, duration, false, "disabled", errors.New("STT backend disabled")
 	}
@@ -562,21 +569,22 @@ func (p *VoiceSTTPlugin) openAITranscription(ctx context.Context, wav string, cf
 	return strings.TrimSpace(string(data)), nil
 }
 
-func (r *Runtime) slotVoiceTranscription(ctx context.Context, wav string, cfg voiceSTTConfig) (string, error) {
+// slotVoiceTranscription 返回转写文字和实际应答的模型。
+func (r *Runtime) slotVoiceTranscription(ctx context.Context, wav string, cfg voiceSTTConfig) (string, string, error) {
 	audio, err := os.ReadFile(wav)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	language := cfg.Language
 	if strings.EqualFold(language, "auto") {
 		// 插件这边没指定语言时让插槽上的语言参数生效。
 		language = ""
 	}
-	resp, err := r.transcribeAudio(ctx, audio, "audio.wav", language)
+	resp, route, err := r.transcribeAudio(ctx, audio, "audio.wav", language)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
-	return resp.Text, nil
+	return resp.Text, route.Model, nil
 }
 
 type voiceSTTProviderError struct{ StatusCode int }

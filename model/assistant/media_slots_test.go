@@ -6,6 +6,9 @@ package assistant
 import (
 	"context"
 	"encoding/json"
+	"sync"
+
+	"github.com/SuInk/diana/model/applog"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -198,9 +201,9 @@ func TestSTTPluginModelSlotTranscribesThroughSlot(t *testing.T) {
 	if err := os.WriteFile(wav, []byte("wav-bytes"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	text, err := r.slotVoiceTranscription(context.Background(), wav, voiceSTTConfig{Backend: voiceSTTBackendModelSlot, Language: "auto"})
-	if err != nil || text != "今天吃什么" {
-		t.Fatalf("text=%q err=%v", text, err)
+	text, model, err := r.slotVoiceTranscription(context.Background(), wav, voiceSTTConfig{Backend: voiceSTTBackendModelSlot, Language: "auto"})
+	if err != nil || text != "今天吃什么" || model != "whisper-1" {
+		t.Fatalf("text=%q model=%q err=%v", text, model, err)
 	}
 }
 
@@ -312,5 +315,140 @@ func TestVideoToolFollowsImageGenerationPermission(t *testing.T) {
 	_, err := newDianaVideoTool(r, MessageEvent{Kind: EventKindGroup, GroupID: "g", UserID: "member"}, policy).Run(context.Background(), map[string]any{"prompt": "cat"})
 	if err == nil || !strings.Contains(err.Error(), "权限") {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+// 后备路由顶上时要报出后备的模型名，缓存键和记录才不会记到主模型名下。
+func TestSTTSlotReportsTheRouteThatAnswered(t *testing.T) {
+	primary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, `{"error":"model not loaded"}`, http.StatusBadRequest)
+	}))
+	defer primary.Close()
+	backup := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"text":"后备转写"}`))
+	}))
+	defer backup.Close()
+	r := mediaSlotTestRuntime(t, map[string]ModelRole{
+		"stt": {ProfileID: "p1", Model: "whisper-large", Fallbacks: []ModelRole{{ProfileID: "p2", Model: "funasr"}}},
+	}, mediaSlotProfile("p1", primary.URL), mediaSlotProfile("p2", backup.URL))
+	wav := filepath.Join(t.TempDir(), "audio.wav")
+	_ = os.WriteFile(wav, []byte("wav"), 0o600)
+	text, model, err := r.slotVoiceTranscription(context.Background(), wav, voiceSTTConfig{Language: "auto"})
+	if err != nil || text != "后备转写" || model != "funasr" {
+		t.Fatalf("text=%q model=%q err=%v", text, model, err)
+	}
+	primaryKey := voiceSTTCacheKey("hash", voiceSTTConfig{Backend: voiceSTTBackendModelSlot, Model: "whisper-large"})
+	backupKey := voiceSTTCacheKey("hash", voiceSTTConfig{Backend: voiceSTTBackendModelSlot, Model: model})
+	if primaryKey == backupKey {
+		t.Fatal("fallback transcript must not share the primary model's cache key")
+	}
+}
+
+func TestSlotSpeechExtensionPrefersReportedMediaType(t *testing.T) {
+	cases := []struct {
+		resp llm.SpeechResponse
+		want string
+	}{
+		// 请求的是 mp3，服务端实际回了 wav：按报的类型走。
+		{llm.SpeechResponse{MediaType: "audio/wav", Format: "mp3", Audio: []byte("RIFF....WAVE")}, "wav"},
+		{llm.SpeechResponse{MediaType: "audio/mpeg"}, "mp3"},
+		// 类型不是音频时嗅探内容。
+		{llm.SpeechResponse{MediaType: "application/octet-stream", Audio: []byte("fLaC....")}, "flac"},
+		{llm.SpeechResponse{Format: "opus"}, "ogg"},
+		// 什么都认不出就按插槽默认的 mp3，不再落成 .audio。
+		{llm.SpeechResponse{}, "mp3"},
+	}
+	for _, tc := range cases {
+		if got := slotSpeechExtension(&tc.resp); got != tc.want {
+			t.Fatalf("%#v => %q, want %q", tc.resp, got, tc.want)
+		}
+	}
+}
+
+type usageCaptureLog struct {
+	mu      sync.Mutex
+	entries []applog.Entry
+}
+
+func (l *usageCaptureLog) AppendLog(_ context.Context, entry applog.Entry) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.entries = append(l.entries, entry)
+	return nil
+}
+
+func (l *usageCaptureLog) purposes() []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	var out []string
+	for _, entry := range l.entries {
+		if entry.Action == "llm_usage" {
+			out = append(out, entry.Metadata["purpose"].(string))
+		}
+	}
+	return out
+}
+
+// 视频任务受理之后失败，不能换后备再提交一次（双重计费），但要照样计入用量。
+func TestVideoSlotDoesNotResubmitAfterAcceptance(t *testing.T) {
+	primary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			_, _ = w.Write([]byte(`{"id":"v1","status":"queued"}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"id":"v1","status":"failed","error":{"message":"render crashed"}}`))
+	}))
+	defer primary.Close()
+	var backupCalls atomic.Int32
+	backup := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		backupCalls.Add(1)
+		http.Error(w, "should not be called", http.StatusTeapot)
+	}))
+	defer backup.Close()
+	r := mediaSlotTestRuntime(t, map[string]ModelRole{
+		"video": {ProfileID: "p1", Model: "sora-2", Params: map[string]string{"poll_interval_seconds": "0.001"}, Fallbacks: []ModelRole{{ProfileID: "p2", Model: "sora-2"}}},
+	}, mediaSlotProfile("p1", primary.URL), mediaSlotProfile("p2", backup.URL))
+	usage := &usageCaptureLog{}
+	r.SetAppLogWriter(usage)
+
+	_, _, err := r.generateVideo(context.Background(), llm.VideoGenerateRequest{Prompt: "x"}, nil)
+	if err == nil || !llm.VideoJobMayBeBilled(err) || !strings.Contains(err.Error(), "render crashed") {
+		t.Fatalf("err = %v", err)
+	}
+	if backupCalls.Load() != 0 {
+		t.Fatalf("accepted job was resubmitted to the fallback %d times", backupCalls.Load())
+	}
+	if got := usage.purposes(); len(got) != 1 || got[0] != "video_generate" {
+		t.Fatalf("failed accepted job must still count once, got %v", got)
+	}
+}
+
+// 提交阶段就被明确拒掉（没建任务）时照常换后备，被拒的那次不计用量。
+func TestVideoSlotFailsOverWhenSubmitIsRejected(t *testing.T) {
+	primary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, `{"error":"model not found"}`, http.StatusBadRequest)
+	}))
+	defer primary.Close()
+	backup := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost:
+			_, _ = w.Write([]byte(`{"id":"v2","status":"completed"}`))
+		case strings.HasSuffix(r.URL.Path, "/content"):
+			_, _ = w.Write([]byte("mp4"))
+		}
+	}))
+	defer backup.Close()
+	r := mediaSlotTestRuntime(t, map[string]ModelRole{
+		"video": {ProfileID: "p1", Model: "sora-2", Fallbacks: []ModelRole{{ProfileID: "p2", Model: "sora-2"}}},
+	}, mediaSlotProfile("p1", primary.URL), mediaSlotProfile("p2", backup.URL))
+	usage := &usageCaptureLog{}
+	r.SetAppLogWriter(usage)
+
+	result, route, err := r.generateVideo(context.Background(), llm.VideoGenerateRequest{Prompt: "x"}, nil)
+	if err != nil || string(result.Video) != "mp4" || route.Name != "p2" {
+		t.Fatalf("result=%#v route=%#v err=%v", result, route, err)
+	}
+	if got := usage.purposes(); len(got) != 1 {
+		t.Fatalf("usage = %v", got)
 	}
 }

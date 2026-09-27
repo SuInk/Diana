@@ -16,6 +16,9 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/SuInk/diana/model/netguard"
+	"github.com/google/uuid"
 )
 
 // VideoAPI 是视频生成接口的形态。各家视频服务的任务接口差别很大（Runway、Luma、
@@ -112,13 +115,37 @@ func NewVideoGenerator(cfg ProviderConfig, api VideoAPI, requestTimeout time.Dur
 			return nil, err
 		}
 		client.policy.AttemptTimeout = requestTimeout
-		return &openAIVideoGenerator{http: client, plain: plainHTTPClient(opts)}, nil
+		return &openAIVideoGenerator{http: client, plain: plainHTTPClient(opts), public: netguard.NewPublicHTTPClient(0)}, nil
 	default:
 		return nil, fmt.Errorf("llm: unsupported video api %q", api)
 	}
 }
 
-// GenerateVideo 提交任务、轮询到结束并取回成品。
+// VideoAcceptedError 表示失败发生在服务端可能已经建好任务之后：任务受理后轮询
+// 超时、任务失败、取成品失败，或者提交请求本身超时、断连（响应丢了，不知道建没建）。
+// 这时任务多半已经在计费，调用方不能换一家再提交一遍。
+type VideoAcceptedError struct {
+	// JobID 为空表示提交结果不确定。
+	JobID string
+	Err   error
+}
+
+func (e *VideoAcceptedError) Error() string {
+	if e.JobID == "" {
+		return "video job may have been created (submit response lost): " + e.Err.Error()
+	}
+	return "video job " + e.JobID + ": " + e.Err.Error()
+}
+
+func (e *VideoAcceptedError) Unwrap() error { return e.Err }
+
+// VideoJobMayBeBilled 报告错误是不是发生在任务可能已经建好之后。
+func VideoJobMayBeBilled(err error) bool {
+	var accepted *VideoAcceptedError
+	return errors.As(err, &accepted)
+}
+
+// GenerateVideo 提交任务、轮询到结束并取回成品。提交之后的失败都包成 VideoAcceptedError。
 func GenerateVideo(ctx context.Context, generator VideoGenerator, req VideoGenerateRequest, poll VideoPollOptions) (*VideoResult, error) {
 	timeout := poll.Timeout
 	if timeout <= 0 {
@@ -128,16 +155,24 @@ func GenerateVideo(ctx context.Context, generator VideoGenerator, req VideoGener
 	defer cancel()
 	job, err := generator.SubmitVideo(ctx, req)
 	if err != nil {
+		if kind := MediaErrorKindOf(err); kind == MediaErrorTimeout || kind == MediaErrorNetwork {
+			return nil, &VideoAcceptedError{Err: err}
+		}
 		return nil, err
 	}
 	job, err = WaitVideo(ctx, generator, job, poll)
 	if err != nil {
-		return nil, err
+		return nil, &VideoAcceptedError{JobID: job.ID, Err: err}
 	}
-	return generator.VideoContent(ctx, job)
+	result, err := generator.VideoContent(ctx, job)
+	if err != nil {
+		return nil, &VideoAcceptedError{JobID: job.ID, Err: err}
+	}
+	return result, nil
 }
 
-// WaitVideo 轮询到任务结束。任务失败时返回 MediaErrorJobFailed。
+// WaitVideo 轮询到任务结束。任务失败时返回 MediaErrorJobFailed。查状态碰上瞬时故障
+// 不放弃：任务还在服务端跑着，一次网关抖动就丢掉它等于白付了钱，接着查到总时限为止。
 func WaitVideo(ctx context.Context, generator VideoGenerator, job VideoJob, poll VideoPollOptions) (VideoJob, error) {
 	interval := poll.Interval
 	if interval <= 0 {
@@ -165,6 +200,12 @@ func WaitVideo(ctx context.Context, generator VideoGenerator, job VideoJob, poll
 		}
 		next, err := generator.VideoStatus(ctx, job.ID)
 		if err != nil {
+			if IsRetryableMediaError(err) && ctx.Err() == nil {
+				continue
+			}
+			if ctx.Err() != nil && errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				return job, &MediaAPIError{Op: "video", Kind: MediaErrorTimeout, Detail: fmt.Sprintf("job %s still %s", job.ID, job.Status), Err: err}
+			}
 			return job, err
 		}
 		job = next
@@ -181,8 +222,11 @@ func plainHTTPClient(opts []ClientOption) *http.Client {
 
 type openAIVideoGenerator struct {
 	http *mediaHTTP
-	// plain 用来下载网关给出的成品直链：那多半是 CDN 地址，不能带着 API Key 过去。
+	// plain 用来下载和服务地址同源的成品直链（自建网关的文件接口），不带 API Key。
 	plain *http.Client
+	// public 下载其余直链：地址是服务端响应里给的，指向哪里都有可能，走 netguard
+	// 拦掉内网和元数据地址，和其他插件下载外链用同一道防线。
+	public *http.Client
 }
 
 type openAIVideoJob struct {
@@ -236,6 +280,8 @@ func (g *openAIVideoGenerator) SubmitVideo(ctx context.Context, req VideoGenerat
 	result, err := g.http.do(ctx, mediaRequestSpec{
 		op: "video submit", method: http.MethodPost, endpoint: "videos",
 		body: body.Bytes(), contentType: writer.FormDataContentType(), accept: "application/json",
+		// 同一次提交的重试共用一个幂等键，支持它的服务端不会因为重发多建一个任务。
+		headers: map[string]string{"Idempotency-Key": uuid.NewString()}, createsJob: true,
 	}, maxVideoStatusBytes)
 	if err != nil {
 		return VideoJob{}, err
@@ -270,10 +316,11 @@ func (g *openAIVideoGenerator) VideoContent(ctx context.Context, job VideoJob) (
 		err    error
 	)
 	if direct := strings.TrimSpace(job.VideoURL); direct != "" {
-		result, err = downloadVideo(ctx, g.plain, direct)
+		result, err = downloadVideo(ctx, g.downloadClient, direct)
 	} else {
 		result, err = g.http.do(ctx, mediaRequestSpec{
 			op: "video content", method: http.MethodGet, endpoint: "videos/" + url.PathEscape(job.ID) + "/content", accept: "video/*, application/octet-stream",
+			noRetry: true, noAttemptTimeout: true,
 		}, MaxVideoBytes)
 	}
 	if err != nil {
@@ -292,11 +339,20 @@ func (g *openAIVideoGenerator) VideoContent(ctx context.Context, job VideoJob) (
 	return &VideoResult{Job: job, Video: result.body, MediaType: mediaType}, nil
 }
 
-func downloadVideo(ctx context.Context, client *http.Client, target string) (*mediaResult, error) {
+// downloadClient 给成品直链挑客户端：和服务地址同源的用普通客户端，其余走公网客户端。
+func (g *openAIVideoGenerator) downloadClient(target *url.URL) *http.Client {
+	if base, err := url.Parse(g.http.baseURL); err == nil && sameURLOrigin(base, target) {
+		return g.plain
+	}
+	return g.public
+}
+
+func downloadVideo(ctx context.Context, clientFor func(*url.URL) *http.Client, target string) (*mediaResult, error) {
 	parsed, err := url.Parse(target)
 	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
 		return nil, &MediaAPIError{Op: "video content", Kind: MediaErrorBadResponse, Detail: "invalid video url"}
 	}
+	client := clientFor(parsed)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, parsed.String(), nil)
 	if err != nil {
 		return nil, err

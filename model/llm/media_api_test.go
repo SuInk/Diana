@@ -499,3 +499,176 @@ func TestMediaCallsRequireCredentials(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+// 提交视频会在服务端建付费任务：超时、502 这类「可能已经受理」的失败不重发，
+// 只有明确没受理的 429、503 才重发，而且重发带同一个幂等键。
+func TestSubmitVideoRetriesOnlyWhenClearlyNotAccepted(t *testing.T) {
+	noMediaRetryWait(t)
+	for _, tc := range []struct {
+		status    int
+		wantCalls int32
+	}{
+		{http.StatusBadGateway, 1},
+		{http.StatusInternalServerError, 1},
+		{http.StatusTooManyRequests, 2},
+		{http.StatusServiceUnavailable, 2},
+	} {
+		var calls atomic.Int32
+		keys := map[string]bool{}
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			keys[r.Header.Get("Idempotency-Key")] = true
+			if calls.Add(1) == 1 {
+				http.Error(w, "fail", tc.status)
+				return
+			}
+			_, _ = w.Write([]byte(`{"id":"v","status":"queued"}`))
+		}))
+		generator, _ := NewVideoGenerator(mediaTestConfig(server.URL), VideoAPIOpenAI, time.Second)
+		_, _ = generator.SubmitVideo(context.Background(), VideoGenerateRequest{Prompt: "x"})
+		server.Close()
+		if calls.Load() != tc.wantCalls {
+			t.Fatalf("status %d: calls = %d, want %d", tc.status, calls.Load(), tc.wantCalls)
+		}
+		if len(keys) != 1 || keys[""] {
+			t.Fatalf("status %d: retries must share one idempotency key, got %v", tc.status, keys)
+		}
+	}
+}
+
+func TestSubmitVideoTimeoutIsNotRetriedAndMayBeBilled(t *testing.T) {
+	noMediaRetryWait(t)
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		calls.Add(1)
+		select {
+		case <-r.Context().Done():
+		case <-time.After(2 * time.Second):
+		}
+	}))
+	defer server.Close()
+	generator, _ := NewVideoGenerator(mediaTestConfig(server.URL), VideoAPIOpenAI, 100*time.Millisecond)
+	_, err := GenerateVideo(context.Background(), generator, VideoGenerateRequest{Prompt: "x"}, VideoPollOptions{Interval: time.Millisecond})
+	if calls.Load() != 1 {
+		t.Fatalf("a timed-out submit must not be resent, calls = %d", calls.Load())
+	}
+	if !VideoJobMayBeBilled(err) || MediaErrorKindOf(err) != MediaErrorTimeout {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestGenerateVideoMarksOnlyPostAcceptanceFailuresAsBilled(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, `{"error":"bad size"}`, http.StatusBadRequest)
+	}))
+	defer server.Close()
+	generator, _ := NewVideoGenerator(mediaTestConfig(server.URL), VideoAPIOpenAI, 0)
+	_, err := GenerateVideo(context.Background(), generator, VideoGenerateRequest{Prompt: "x"}, VideoPollOptions{Interval: time.Millisecond})
+	if err == nil || VideoJobMayBeBilled(err) {
+		t.Fatalf("a rejected submit created no job: err = %v", err)
+	}
+}
+
+// 查状态碰上瞬时故障接着查，任务还在服务端跑；不可重试的错误才放弃。
+func TestWaitVideoKeepsPollingThroughTransientErrors(t *testing.T) {
+	noMediaRetryWait(t)
+	var polls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost:
+			_, _ = w.Write([]byte(`{"id":"v","status":"queued"}`))
+		case strings.HasSuffix(r.URL.Path, "/content"):
+			_, _ = w.Write([]byte("mp4"))
+		default:
+			// 前 7 次都是 502，超过 do 里的两次快速重试。
+			if polls.Add(1) <= 7 {
+				http.Error(w, "bad gateway", http.StatusBadGateway)
+				return
+			}
+			_, _ = w.Write([]byte(`{"id":"v","status":"completed"}`))
+		}
+	}))
+	defer server.Close()
+	generator, _ := NewVideoGenerator(mediaTestConfig(server.URL), VideoAPIOpenAI, 0)
+	result, err := GenerateVideo(context.Background(), generator, VideoGenerateRequest{Prompt: "x"}, VideoPollOptions{Interval: time.Millisecond})
+	if err != nil || string(result.Video) != "mp4" {
+		t.Fatalf("result=%#v err=%v", result, err)
+	}
+
+	var authPolls atomic.Int32
+	denied := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			_, _ = w.Write([]byte(`{"id":"v","status":"queued"}`))
+			return
+		}
+		authPolls.Add(1)
+		http.Error(w, "revoked", http.StatusUnauthorized)
+	}))
+	defer denied.Close()
+	generator, _ = NewVideoGenerator(mediaTestConfig(denied.URL), VideoAPIOpenAI, 0)
+	_, err = GenerateVideo(context.Background(), generator, VideoGenerateRequest{Prompt: "x"}, VideoPollOptions{Interval: time.Millisecond})
+	if MediaErrorKindOf(err) != MediaErrorAuth || authPolls.Load() != 1 {
+		t.Fatalf("non-retryable status error must stop polling: err=%v polls=%d", err, authPolls.Load())
+	}
+}
+
+// 服务端给的成品直链指向别的主机时走公网客户端，内网地址被拦下。
+func TestVideoDirectURLOffProviderHostBlocksPrivateAddresses(t *testing.T) {
+	var cdnHits atomic.Int32
+	internal := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		cdnHits.Add(1)
+		_, _ = w.Write([]byte("secret"))
+	}))
+	defer internal.Close()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"id":"v","status":"completed","video_url":"` + internal.URL + `/metadata"}`))
+	}))
+	defer server.Close()
+	generator, _ := NewVideoGenerator(mediaTestConfig(server.URL), VideoAPIOpenAI, 0)
+	_, err := GenerateVideo(context.Background(), generator, VideoGenerateRequest{Prompt: "x"}, VideoPollOptions{Interval: time.Millisecond})
+	if err == nil || cdnHits.Load() != 0 {
+		t.Fatalf("private video_url must be refused: err=%v hits=%d", err, cdnHits.Load())
+	}
+}
+
+// 下载成品不套单次请求超时，也不整段重下。
+func TestVideoContentUsesJobDeadlineAndNoRetry(t *testing.T) {
+	noMediaRetryWait(t)
+	var contentCalls atomic.Int32
+	slow := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost:
+			_, _ = w.Write([]byte(`{"id":"v","status":"completed"}`))
+		case strings.HasSuffix(r.URL.Path, "/content"):
+			contentCalls.Add(1)
+			w.Header().Set("Content-Type", "video/mp4")
+			_, _ = w.Write([]byte("part1-"))
+			w.(http.Flusher).Flush()
+			time.Sleep(200 * time.Millisecond)
+			_, _ = w.Write([]byte("part2"))
+		}
+	}))
+	defer slow.Close()
+	// 单次请求上限 50ms，下载要 200ms：受单次超时约束的话必失败。
+	generator, _ := NewVideoGenerator(mediaTestConfig(slow.URL), VideoAPIOpenAI, 50*time.Millisecond)
+	result, err := GenerateVideo(context.Background(), generator, VideoGenerateRequest{Prompt: "x"}, VideoPollOptions{Interval: time.Millisecond})
+	if err != nil || string(result.Video) != "part1-part2" {
+		t.Fatalf("result=%#v err=%v", result, err)
+	}
+
+	broken := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			_, _ = w.Write([]byte(`{"id":"v","status":"completed"}`))
+			return
+		}
+		contentCalls.Add(1)
+		http.Error(w, "bad gateway", http.StatusBadGateway)
+	}))
+	defer broken.Close()
+	contentCalls.Store(0)
+	generator, _ = NewVideoGenerator(mediaTestConfig(broken.URL), VideoAPIOpenAI, 0)
+	_, err = GenerateVideo(context.Background(), generator, VideoGenerateRequest{Prompt: "x"}, VideoPollOptions{Interval: time.Millisecond})
+	if err == nil || contentCalls.Load() != 1 || !VideoJobMayBeBilled(err) {
+		t.Fatalf("content download must not be retried: err=%v calls=%d", err, contentCalls.Load())
+	}
+}
