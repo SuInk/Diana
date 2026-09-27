@@ -413,7 +413,7 @@
         <section class="card">
           <div class="card-header" style="justify-content: space-between">
             <SkeletonBlock v-if="loading && !systemVersion" width="90px" height="21px" />
-            <span v-else class="badge">{{ deploymentMode === "git" ? "源码更新" : systemVersion?.update_supported ? "Release 自更新" : "Docker" }}</span>
+            <span v-else class="badge">{{ deploymentMode === "git" ? "源码更新" : deploymentMode === "docker" ? "Docker 镜像更新" : "Release 自更新" }}</span>
             <button class="btn small ghost" type="button" :disabled="loading" title="刷新更新状态" @click="loadUpdates">
               <RefreshCw :size="14" aria-hidden="true" />
             </button>
@@ -440,7 +440,7 @@
               </span>
             </div>
             <p class="muted" style="font-size: 12.5px; margin: 0">
-              {{ deploymentMode === "git" ? "发现新版本时仅显示黄色提示点，确认后才会同步最新稳定 Release。" : systemVersion?.update_supported ? "Release 更新先下载并校验；重启并安装必须单独确认，默认不会自动执行。" : "控制台仅提示新版本；Docker 镜像需由部署环境手动更新。" }}
+              {{ deploymentMode === "git" ? "发现新版本时仅显示黄色提示点，确认后才会同步最新稳定 Release。" : deploymentMode === "docker" ? updateCheck?.update_unsupported_reason || (systemVersion?.update_supported ? "更新助手可按当前镜像标签拉取并重建 Diana 容器。" : systemVersion?.update_unsupported_reason || "Docker 更新助手尚未启用。") : "Release 更新先下载并校验；重启并安装必须单独确认，默认不会自动执行。" }}
             </p>
 
             <template v-if="deploymentMode === 'git' && updateStatus">
@@ -463,7 +463,7 @@
                 {{ loading ? "检查中…" : "检查更新" }}
               </button>
               <button
-                v-else-if="systemVersion?.update_supported"
+                v-else-if="systemVersion?.update_supported && updateCheck?.update_supported !== false"
                 class="btn primary"
                 type="button"
                 :disabled="operationRunning || upToDate"
@@ -852,7 +852,7 @@ const newPassword = ref("");
 const showCurrentPassword = ref(false);
 const showNewPassword = ref(false);
 const savingPassword = ref(false);
-const deploymentMode = ref<"git" | "release">("release");
+const deploymentMode = ref<"git" | "release" | "docker">("release");
 const sessions = ref<AuthSession[]>([]);
 const sessionsLoading = ref(true);
 const revokingID = ref("");
@@ -870,7 +870,8 @@ const openAPIPluginEnabled = computed(() => openAPIPlugin.value?.enabled === tru
 
 const OPEN_API_PLUGIN_ID = "official.open-api";
 const otherSessionCount = computed(() => sessions.value.filter((item) => !item.current).length);
-const operationRunning = computed(() => updating.value || updateStatus.value?.updating === true);
+const dockerUpdatePending = ref(false);
+const operationRunning = computed(() => updating.value || dockerUpdatePending.value || updateStatus.value?.updating === true);
 // 版本号还没加载出来时留空，不显示占位符。
 const currentVersionLabel = computed(() => systemVersion.value?.version_label || systemVersion.value?.build_version || "");
 const backendVersionLabel = computed(() => currentVersionLabel.value || health.value?.version || "");
@@ -886,13 +887,46 @@ const primaryUpdateLabel = computed(() => {
   if (operationRunning.value) return "处理中…";
   if (downloadReadyForLatest.value) return "重启并安装";
   if (upToDate.value) return "已是最新";
-  return deploymentMode.value === "git" ? "重启并安装" : "下载最新 Release";
+  return deploymentMode.value === "git" ? "重启并安装" : deploymentMode.value === "docker" ? "拉取镜像并重建" : "下载最新 Release";
 });
 const staleDownloadedVersion = computed(() => updateStatus.value?.download_ready === true
   && Boolean(updateStatus.value.downloaded_version)
   && Boolean(latestVersion.value)
   && updateStatus.value?.downloaded_version !== latestVersion.value);
 let updateStatusPollTimer: number | undefined;
+let dockerUpdatePollTimer: number | undefined;
+
+function watchDockerUpdate(target: string): void {
+  if (dockerUpdatePollTimer !== undefined) window.clearInterval(dockerUpdatePollTimer);
+  dockerUpdatePending.value = true;
+  const startedAt = Date.now();
+  dockerUpdatePollTimer = window.setInterval(() => {
+    void getUpdateStatus().then((status) => {
+      if (status.last_update_status !== "failed" || status.last_update_version !== target) return;
+      if (dockerUpdatePollTimer !== undefined) window.clearInterval(dockerUpdatePollTimer);
+      dockerUpdatePollTimer = undefined;
+      dockerUpdatePending.value = false;
+      updateFailed.value = true;
+      updateOutput.value = `Docker 镜像更新失败：${status.last_update_error || "请查看更新助手日志"}`;
+    }).catch(() => undefined);
+    void getSystemVersion(true).then((current) => {
+      if (current.version_label !== target) return;
+      if (dockerUpdatePollTimer !== undefined) window.clearInterval(dockerUpdatePollTimer);
+      dockerUpdatePollTimer = undefined;
+      dockerUpdatePending.value = false;
+      systemVersion.value = current;
+      toastSuccess(`${target} 镜像更新成功，正在重新载入界面…`);
+      window.setTimeout(() => window.location.reload(), 1200);
+    }).catch(() => undefined);
+    if (Date.now() - startedAt > 10 * 60_000) {
+      if (dockerUpdatePollTimer !== undefined) window.clearInterval(dockerUpdatePollTimer);
+      dockerUpdatePollTimer = undefined;
+      dockerUpdatePending.value = false;
+      updateFailed.value = true;
+      updateOutput.value = "等待容器启动超时，请查看 docker compose -f docker-compose.yml -f docker-compose.update.yml logs diana-updater。";
+    }
+  }, 2000);
+}
 
 async function loadAuthStatus(): Promise<void> {
   try {
@@ -1130,13 +1164,13 @@ async function runUpdate(): Promise<void> {
 	if (operationRunning.value) return;
 	const installingRelease = deploymentMode.value === "release" && downloadReadyForLatest.value;
   const confirmed = await askConfirm({
-		title: installingRelease ? "重启并安装已下载版本？" : deploymentMode.value === "release" ? "下载最新稳定版本？" : "重启并安装最新稳定版本？",
+		title: installingRelease ? "重启并安装已下载版本？" : deploymentMode.value === "release" ? "下载最新稳定版本？" : deploymentMode.value === "docker" ? "拉取镜像并重建容器？" : "重启并安装最新稳定版本？",
 		message: deploymentMode.value === "release"
 		  ? installingRelease
 			? "将备份数据库和当前版本，安装后自动重启并执行健康检查；失败时自动恢复。"
 			: "只下载、校验并暂存完整 Release 包，不会安装或重启服务。"
-      : "确认后才会同步到最新稳定 Release。更新完成前请勿关闭服务。",
-		confirmLabel: installingRelease ? "重启并安装" : deploymentMode.value === "release" ? "下载更新" : "重启并安装"
+		  : deploymentMode.value === "docker" ? "更新助手会从当前 Docker 标签拉取镜像并重建 Diana 容器。" : "确认后才会同步到最新稳定 Release。更新完成前请勿关闭服务。",
+		confirmLabel: installingRelease ? "重启并安装" : deploymentMode.value === "release" ? "下载更新" : deploymentMode.value === "docker" ? "拉取并重建" : "重启并安装"
   });
   if (!confirmed) return;
   updating.value = true;
@@ -1155,7 +1189,10 @@ async function runUpdate(): Promise<void> {
 		  : await pullFromGitHub();
     updateStatus.value = result.status;
     updateOutput.value = result.output ?? "";
-		toastSuccess(deploymentMode.value === "release"
+		if (deploymentMode.value === "docker" && result.updated && result.target_commit) {
+			watchDockerUpdate(result.target_commit);
+		}
+		toastSuccess(deploymentMode.value === "docker" ? result.updated ? "已请求更新助手重建容器" : "已是最新，无需更新" : deploymentMode.value === "release"
 		  ? installingRelease
 			? "已开始重启并安装，完成后将执行健康检查"
 			: result.downloaded ? "更新已下载并通过校验，等待重启并安装" : "已是最新，无需更新"
@@ -1248,6 +1285,7 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
 	if (updateStatusPollTimer !== undefined) window.clearInterval(updateStatusPollTimer);
+	if (dockerUpdatePollTimer !== undefined) window.clearInterval(dockerUpdatePollTimer);
 	if (storageRetryTimer !== undefined) window.clearTimeout(storageRetryTimer);
 });
 </script>

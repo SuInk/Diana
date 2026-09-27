@@ -40,6 +40,10 @@
             <ShieldCheck :size="13" aria-hidden="true" />
             Git 对象哈希校验
           </span>
+          <span v-else-if="deploymentMode === 'docker' && checkResult" class="version-hero-integrity ok">
+            <ShieldCheck :size="13" aria-hidden="true" />
+            Docker 镜像摘要校验
+          </span>
           <span
             v-else-if="checkResult?.checksum_available"
             class="version-hero-integrity ok"
@@ -101,6 +105,13 @@
             </span>
           </label>
         </template>
+        <label v-else-if="dockerSelfUpdate" class="policy-toggle" title="发现所选通道的新镜像后，由独立更新助手拉取镜像并重建容器；默认关闭">
+          <span>自动重启并安装</span>
+          <span class="switch">
+            <input v-model="policy.docker_auto_install" type="checkbox" :disabled="savingPolicy" @change="persistPolicy('install')" />
+            <span class="track"></span>
+          </span>
+        </label>
 
         <span class="update-bar-gap"></span>
 
@@ -132,7 +143,7 @@
         </button>
         <button v-if="!releaseSelfUpdate && checkResult?.update_supported && checkResult.update_available" class="btn primary small" type="button" :disabled="operationRunning" @click="confirmUpdate">
           <Download :size="14" aria-hidden="true" />
-          {{ operationRunning ? "重启并安装中…" : "重启并安装" }}
+          {{ operationRunning ? "重启并安装中…" : deploymentMode === "docker" ? "拉取镜像并重建" : "重启并安装" }}
         </button>
         <button class="btn small" type="button" :disabled="checking || operationRunning" @click="check()">
           <LoaderCircle v-if="checking" class="spin" :size="14" aria-hidden="true" />
@@ -153,8 +164,8 @@
       <p v-if="sourceBuild" class="muted" style="font-size: 12.5px; margin: 0">
         当前二进制由源码构建，没有注入正式版本号，因此不会提示更新，也不会自动下载或安装。切换到所选通道版本会下载完整 Release 包并校验 SHA-256，再备份数据库、替换当前二进制并重启。
       </p>
-      <p v-else-if="deploymentMode === 'release' && !releaseSelfUpdate" class="muted" style="font-size: 12.5px; margin: 0">
-        Docker 镜像由 OCI digest 校验并由部署环境安装。
+      <p v-else-if="deploymentMode === 'docker'" class="muted" style="font-size: 12.5px; margin: 0">
+        {{ dockerSelfUpdate ? "Docker 更新助手只处理 Diana 容器；镜像拉取及重建由宿主机执行。" : "启用 Docker 更新助手后，才能从版本面板发起更新。" }}
       </p>
 
       <hr class="divider" style="margin: 0" />
@@ -208,7 +219,7 @@
                       回退
                     </button>
                     <button
-                      v-else-if="deploymentMode === 'release' && !releaseSelfUpdate && !release.prerelease && release.tag !== currentTag"
+                      v-else-if="deploymentMode === 'docker' && !release.prerelease && release.tag !== currentTag"
                       class="btn ghost icon-only small"
                       type="button"
                       :title="`复制固定镜像标签 ${release.tag}`"
@@ -243,9 +254,9 @@
               </template>
             </li>
           </ul>
-          <div v-if="releases.length && deploymentMode === 'release' && !releaseSelfUpdate" class="release-rollback-note">
+          <div v-if="releases.length && deploymentMode === 'docker'" class="release-rollback-note">
             <Container :size="16" aria-hidden="true" />
-            <span>回退时将部署镜像固定为 <code>ghcr.io/suink/diana:&lt;版本&gt;</code>，并暂停 Watchtower 等自动更新器；镜像拉取会校验 OCI digest。WebUI 不能直接重建宿主机容器。</span>
+            <span>回退时在部署目录把镜像固定为 <code>ghcr.io/suink/diana:&lt;版本&gt;</code> 后重建容器。固定标签不会自动前进；更新助手只负责当前滚动标签的升级。</span>
           </div>
         </template>
 
@@ -320,6 +331,7 @@ let installStartedAt = 0;
 
 const deploymentMode = computed(() => version.value?.deployment_mode ?? (version.value?.git_available ? "git" : "release"));
 const releaseSelfUpdate = computed(() => deploymentMode.value === "release" && version.value?.update_supported === true);
+const dockerSelfUpdate = computed(() => deploymentMode.value === "docker" && version.value?.docker_update_configured === true);
 const operationRunning = computed(() => updating.value || installTracking.value || status.value?.updating === true);
 // 不支持自更新时，界面必须明说原因：显示「已是最新」会让人以为自己已经升过了，
 // 直到某天发现版本号停在几个月前。
@@ -543,7 +555,11 @@ const channelOptions = [
 async function setChannel(value: string): Promise<void> {
   const target = value as UpdateChannel;
   if (target === (policy.value.channel || "release")) return;
-  const confirmed = await askConfirm(channelSwitchConfirm(target, policy.value.auto_install));
+  const prompt = channelSwitchConfirm(target, deploymentMode.value === "docker" ? Boolean(policy.value.docker_auto_install) : policy.value.auto_install);
+  if (deploymentMode.value === "docker") {
+    prompt.message += " Docker 部署还需在宿主机把 DIANA_IMAGE 改为对应的滚动标签并重建容器；WebUI 不会修改镜像标签。";
+  }
+  const confirmed = await askConfirm(prompt);
   if (!confirmed) return;
   policy.value.channel = target;
   checkResult.value = null;
@@ -750,12 +766,48 @@ async function pollInstallResult(): Promise<void> {
   }
 }
 
+async function pollDockerUpdateResult(): Promise<void> {
+  try {
+    const nextStatus = await getUpdateStatus();
+    if (nextStatus.last_update_status === "failed" && nextStatus.last_update_version === installTarget) {
+      installTracking.value = false;
+      operationError.value = `Docker 镜像更新失败：${nextStatus.last_update_error || "请查看更新助手日志"}`;
+      toastError(operationError.value);
+      return;
+    }
+    const current = await getSystemVersion(true);
+    if (current.version_label === installTarget) {
+      version.value = current;
+      installTracking.value = false;
+      emit("versionChanged", current);
+      toastSuccess(`${installTarget} 镜像更新成功，正在重新载入界面…`);
+      window.setTimeout(() => window.location.reload(), 1200);
+      return;
+    }
+  } catch {
+    // Recreating the container briefly interrupts requests.
+  }
+  if (Date.now() - installStartedAt > 10 * 60_000) {
+    installTracking.value = false;
+    operationError.value = `等待 ${installTarget} 容器启动超时，请查看 docker compose -f docker-compose.yml -f docker-compose.update.yml logs diana-updater。`;
+    toastError(operationError.value);
+  }
+}
+
 async function update(): Promise<void> {
   updating.value = true;
   try {
     const result = await pullFromGitHub();
     status.value = result.status;
-    const target = checkResult.value?.latest_version || result.target_commit || result.status.head_commit;
+    const target = checkResult.value?.latest_version || result.target_commit || result.status.head_commit || "目标版本";
+    if (deploymentMode.value === "docker" && result.updated) {
+      installTarget = result.target_commit || target;
+      installStartedAt = Date.now();
+      installTracking.value = true;
+      markUpdateInstalling();
+      toastSuccess(`已请求拉取 ${installTarget} 镜像并重建容器`);
+      return;
+    }
     toastSuccess(result.updated
       ? releaseSelfUpdate.value
         ? `已校验并暂存 ${target}，服务将自动重启并执行健康检查`
@@ -774,7 +826,9 @@ async function confirmUpdate(): Promise<void> {
   const target = checkResult.value?.latest_version || "当前通道最新版本";
   const confirmed = await askConfirm({
     title: `重启并安装 ${target}？`,
-    message: releaseSelfUpdate.value
+    message: deploymentMode.value === "docker"
+      ? "更新助手将从当前 Docker 滚动标签拉取镜像并重建 Diana 容器，期间服务会短暂断开。"
+      : releaseSelfUpdate.value
       ? "确认后才会下载并校验完整 Release 包、备份数据库和当前版本，再切换版本并执行健康检查。"
       : "确认后才会同步到当前通道最新 Release。更新完成前请勿关闭服务。",
     confirmLabel: "重启并安装"
@@ -860,7 +914,7 @@ onMounted(() => {
   window.addEventListener("resize", measureNoteOverflow);
   statusPollTimer = window.setInterval(() => {
     if (installTracking.value) {
-      void pollInstallResult();
+      void (deploymentMode.value === "docker" ? pollDockerUpdateResult() : pollInstallResult());
       return;
     }
     if (!operationRunning.value || !releaseSelfUpdate.value) return;

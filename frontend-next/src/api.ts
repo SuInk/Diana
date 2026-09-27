@@ -1977,6 +1977,7 @@ export interface UpdatePolicy {
 	channel?: "release" | "beta" | "canary";
 	auto_download: boolean;
 	auto_install: boolean;
+	docker_auto_install?: boolean;
 	/** 下载加速策略：auto（实测挑线路）、direct（始终直连）或一条具体的镜像地址。 */
 	github_mirror?: string;
 }
@@ -2193,8 +2194,9 @@ export interface SystemVersion {
   build_type?: BuildType;
   version_label: string;
   git_available: boolean;
-  deployment_mode: "git" | "release";
+  deployment_mode: "git" | "release" | "docker";
   update_supported: boolean;
+  docker_update_configured?: boolean;
   update_unsupported_reason?: string;
   head_commit?: string;
   head_subject?: string;
@@ -2305,7 +2307,7 @@ export function getSystemVersion(refresh = false): Promise<SystemVersion> {
 export type BuildType = "release" | "source";
 
 export interface UpdateCheckResponse {
-  deployment_mode: "git" | "release";
+  deployment_mode: "git" | "release" | "docker";
   current_version: string;
   latest_version?: string;
   latest_published_at?: string;
@@ -2316,7 +2318,7 @@ export interface UpdateCheckResponse {
   update_unsupported_reason?: string;
   build_type: BuildType;
   switch_to_release_available: boolean;
-  integrity_mode: "git-object-hash" | "sha256";
+  integrity_mode: "git-object-hash" | "sha256" | "oci-digest";
   checksum_available: boolean;
   checksum_url?: string;
   status?: UpdateStatus;

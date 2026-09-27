@@ -1,0 +1,20 @@
+# Optional Docker self-update helper. Enable with DIANA_DOCKER_SELF_UPDATE=1
+# when running scripts/docker.sh. The Docker socket is available only to this
+# helper, never to the Diana application container.
+services:
+  diana:
+    environment:
+      DIANA_DOCKER_IMAGE: ${DIANA_IMAGE:-ghcr.io/suink/diana:latest}
+      DIANA_DOCKER_UPDATE_TOKEN: ${DIANA_DOCKER_UPDATE_TOKEN:?Set DIANA_DOCKER_UPDATE_TOKEN in .env}
+    labels:
+      com.centurylinklabs.watchtower.enable: "true"
+  diana-updater:
+    image: nickfedor/watchtower:1.22.3
+    restart: unless-stopped
+    command: --label-enable diana
+    environment:
+      WATCHTOWER_HTTP_API_TOKEN: ${DIANA_DOCKER_UPDATE_TOKEN:?Set DIANA_DOCKER_UPDATE_TOKEN in .env}
+      WATCHTOWER_HTTP_API_ENDPOINTS: update,health
+      WATCHTOWER_HTTP_API_PERIODIC_POLLS: "false"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock

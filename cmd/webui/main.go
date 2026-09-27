@@ -438,6 +438,11 @@ func main() {
 		log.Fatal(err)
 	}
 	systemHandler.SetReleasePackageUpdater(releaseUpdater)
+	if dockerDeployment() {
+		systemHandler.SetDockerDeployment(webui.NewDockerUpdateTrigger(
+			os.Getenv("DIANA_DOCKER_IMAGE"), os.Getenv("DIANA_DOCKER_UPDATE_TOKEN"),
+		))
+	}
 	systemHandler.StartAutoUpdate(ctx)
 	runtimePersistor := webui.NewRuntimePersistor(botProfileStore)
 	runtimePersistor.SetAppLogWriter(sqliteStore)

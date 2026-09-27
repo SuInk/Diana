@@ -96,6 +96,13 @@ type SystemUpdateHandler struct {
 	logs                  AppLogWriter
 	buildVersion          string
 	buildType             string
+	dockerDeployment      bool
+	dockerUpdater         *DockerUpdateTrigger
+	dockerUpdateMu        sync.Mutex
+	dockerUpdateRunning   bool
+	dockerUpdateTarget    string
+	dockerUpdateAt        time.Time
+	dockerUpdateError     string
 	httpClient            *http.Client
 	githubAPIBase         string
 	changelog             changelogCache
@@ -121,6 +128,11 @@ type SystemUpdateHandler struct {
 // Source checkouts continue to use the Git updater.
 func (h *SystemUpdateHandler) SetReleasePackageUpdater(releaseUpdater ReleasePackageUpdater) {
 	h.releaseUpdater = releaseUpdater
+}
+
+func (h *SystemUpdateHandler) SetDockerDeployment(updater *DockerUpdateTrigger) {
+	h.dockerDeployment = true
+	h.dockerUpdater = updater
 }
 
 // NewSystemUpdateHandler 创建系统更新接口处理器。
@@ -208,7 +220,14 @@ func (h *SystemUpdateHandler) Register(router gin.IRouter) {
 func (h *SystemUpdateHandler) version(c *gin.Context) {
 	payload := gin.H{"build_version": h.buildVersion, "build_type": h.buildType, "update_supported": false}
 	label := h.buildVersion
-	if h.releaseUpdater != nil && h.releaseUpdater.Supported() {
+	if h.dockerDeployment {
+		payload["git_available"] = false
+		payload["deployment_mode"] = "docker"
+		payload["docker_update_configured"] = h.dockerUpdater != nil
+		support := h.dockerUpdateSupport(h.currentPolicy().Channel, "")
+		payload["update_supported"] = support.Supported
+		payload["update_unsupported_reason"] = support.Reason
+	} else if h.releaseUpdater != nil && h.releaseUpdater.Supported() {
 		payload["git_available"] = false
 		payload["deployment_mode"] = "release"
 		payload["update_supported"] = true
@@ -243,7 +262,16 @@ func (h *SystemUpdateHandler) version(c *gin.Context) {
 func (h *SystemUpdateHandler) status(c *gin.Context) {
 	var status updater.Status
 	var err error
-	if h.releaseUpdater != nil && h.releaseUpdater.Supported() {
+	if h.dockerDeployment {
+		h.dockerUpdateMu.Lock()
+		status = updater.Status{NearestTag: h.buildVersion, ApplySupported: h.dockerUpdater != nil, Updating: h.dockerUpdateRunning}
+		if h.dockerUpdateError != "" {
+			status.LastUpdateStatus = "failed"
+			status.LastUpdateVersion = h.dockerUpdateTarget
+			status.LastUpdateError = h.dockerUpdateError
+		}
+		h.dockerUpdateMu.Unlock()
+	} else if h.releaseUpdater != nil && h.releaseUpdater.Supported() {
 		status, err = h.releaseUpdater.Status(c.Request.Context())
 	} else {
 		status, err = h.updater.Status(c.Request.Context())
@@ -289,7 +317,7 @@ func (h *SystemUpdateHandler) check(c *gin.Context) {
 func (h *SystemUpdateHandler) runReleaseCheck(requestCtx context.Context) (systemUpdateCheckResponse, *releaseCheckFailure) {
 	status, statusErr := h.updater.Status(requestCtx)
 	releaseAvailable := h.releaseUpdater != nil && h.releaseUpdater.Supported()
-	gitAvailable := !releaseAvailable && statusErr == nil && status.RemoteURL != ""
+	gitAvailable := !h.dockerDeployment && !releaseAvailable && statusErr == nil && status.RemoteURL != ""
 	if gitAvailable {
 		var err error
 		status, err = h.updater.Check(requestCtx)
@@ -309,6 +337,10 @@ func (h *SystemUpdateHandler) runReleaseCheck(requestCtx context.Context) (syste
 	current := strings.TrimSpace(h.buildVersion)
 	mode := "release"
 	integrity := "sha256"
+	if h.dockerDeployment {
+		mode = "docker"
+		integrity = "oci-digest"
+	}
 	var gitStatus *updater.Status
 	if gitAvailable {
 		current = status.VersionLabel()
@@ -333,6 +365,9 @@ func (h *SystemUpdateHandler) runReleaseCheck(requestCtx context.Context) (syste
 		return systemUpdateCheckResponse{}, &releaseCheckFailure{status: http.StatusInternalServerError, err: versionErr}
 	}
 	support := h.releaseUpdateSupport(gitAvailable, packageReady, statusErr == nil && status.Root != "")
+	if h.dockerDeployment {
+		support = h.dockerUpdateSupport(h.currentPolicy().Channel, latest.Tag)
+	}
 	// 源码构建不提示更新，避免把用户自己编译的版本当成落后版本自动换掉；
 	// 改为提供一个显式的“切换到正式 Release”入口。
 	switchToRelease := false
@@ -399,7 +434,7 @@ func (h *SystemUpdateHandler) savePolicy(c *gin.Context) {
 	if h.mirror != nil {
 		h.mirror.SetMode(policy.GitHubMirror)
 	}
-	recordRequestOperation(c, h.logs, "system_update_policy", "系统更新策略已保存", "", map[string]any{"auto_download": policy.AutoDownload, "auto_install": policy.AutoInstall, "github_mirror": policy.GitHubMirror, "channel": policy.Channel})
+	recordRequestOperation(c, h.logs, "system_update_policy", "系统更新策略已保存", "", map[string]any{"auto_download": policy.AutoDownload, "auto_install": policy.AutoInstall, "docker_auto_install": policy.DockerAutoInstall, "github_mirror": policy.GitHubMirror, "channel": policy.Channel})
 	c.JSON(http.StatusOK, policy)
 }
 
@@ -515,7 +550,7 @@ func (h *SystemUpdateHandler) installDownloaded(c *gin.Context) {
 		writeError(c, http.StatusBadRequest, errors.New("安装并重启需要明确确认"))
 		return
 	}
-	if h.releaseUpdater == nil || !h.releaseUpdater.Supported() {
+	if h.dockerDeployment || h.releaseUpdater == nil || !h.releaseUpdater.Supported() {
 		writeError(c, http.StatusBadRequest, updater.ErrReleaseUpdateUnsupported)
 		return
 	}
@@ -575,12 +610,25 @@ func (h *SystemUpdateHandler) update(c *gin.Context) {
 	if request.Force {
 		action = "system_update_force"
 	}
-	result, err := h.applyLatestUpdate(c.Request.Context(), request.Force)
+	var err error
+	if h.dockerDeployment {
+		if request.Force {
+			writeError(c, http.StatusBadRequest, errors.New("Docker 镜像更新不支持强制同步"))
+			return
+		}
+		action = "system_update_docker"
+		result, err = h.applyDockerUpdate(c.Request.Context())
+	} else {
+		result, err = h.applyLatestUpdate(c.Request.Context(), request.Force)
+	}
 	if err != nil {
 		h.writeUpdateError(c, action, err)
 		return
 	}
 	message := "系统更新已执行"
+	if h.dockerDeployment && result.Updated {
+		message = "已请求 Docker 更新助手拉取镜像并重建容器"
+	}
 	if request.Force {
 		message = "系统已强制同步到远端"
 	} else if !result.Updated {
@@ -733,13 +781,18 @@ func (h *SystemUpdateHandler) runScheduledUpdate(ctx context.Context) {
 	checkCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	remoteURL := ""
-	if h.releaseUpdater == nil || !h.releaseUpdater.Supported() {
+	if !h.dockerDeployment && (h.releaseUpdater == nil || !h.releaseUpdater.Supported()) {
 		if status, err := h.updater.Status(checkCtx); err == nil {
 			remoteURL = status.RemoteURL
 		}
 	}
-	if _, err := h.latestChannelRelease(checkCtx, remoteURL); err != nil {
+	latest, err := h.latestChannelRelease(checkCtx, remoteURL)
+	if err != nil {
 		h.recordBackgroundUpdate("system_update_background_check", "后台检查更新失败", err, nil)
+		return
+	}
+	if h.dockerDeployment {
+		h.runAutoDockerUpdate(latest.Tag)
 		return
 	}
 	if h.releaseUpdater != nil && h.releaseUpdater.Supported() {

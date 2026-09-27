@@ -62,11 +62,21 @@ curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/docker.sh 
 
 The choice is stored as `DIANA_IMAGE=` in the deployment directory's `.env`, and re-running the installer leaves it alone. To switch later, re-run the installer in a terminal or edit that line.
 
+To enable updates from the WebUI, run this once in the **existing deployment directory**:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/docker.sh | DIANA_DOCKER_SELF_UPDATE=1 sh
+```
+
+This starts a separate updater that can only update the Diana container. The Docker socket is mounted into the updater, never into Diana, and the updater API has no published host port. The WebUI's automatic install switch remains off by default. Mounting the Docker socket grants the updater control of the host Docker daemon, so enable it only in a trusted deployment. Existing containers must be recreated once with this option to gain the updater. Disable any existing Watchtower, Portainer, or other automatic updater for Diana first, so it cannot bypass the WebUI switch.
+
 For subsequent updates, run in the same directory:
 
 ```sh
 docker compose pull && docker compose up -d
 ```
+
+With the updater enabled, include `-f docker-compose.update.yml` in manual Compose commands. The image tag in `.env` must match the WebUI channel: `latest` for Release, `beta` for Beta, or `canary` for Canary (`-slim` for the slim variants). Changing the WebUI channel does not change the host's image reference. Fixed version tags cannot advance automatically. If an update fails, inspect `docker compose -f docker-compose.yml -f docker-compose.update.yml logs diana-updater`.
 
 If an older image fails on Apple Silicon / ARM64 with `no matching manifest for linux/arm64/v8`, temporarily add `platform: linux/amd64` under `services.diana` in `docker-compose.yml` (requires amd64 emulation; performance and browser compatibility may be affected). Remove it once a native ARM64 image is published. Alternatively, use the native installer above. Build configuration changes do not update existing registry images.
 
@@ -122,7 +132,7 @@ That's it. No reply? The event center tells you why; `diana doctor` checks servi
 <details>
 <summary>Docker details / manual download / building from source</summary>
 
-**Docker:** Chromium and Noto CJK fonts are preinstalled. Load the supplied seccomp profile as shown above to allow Chromium to create its browser sandbox; privileged mode, SYS_ADMIN and disabling the browser sandbox are not required. Recreate existing containers with the new option. An image is published with every release (`ghcr.io/suink/diana:latest` plus version tags), alongside a slim variant (`ghcr.io/suink/diana:latest-slim`) without Chromium, CJK fonts, ffmpeg, yt-dlp and tesseract. To switch an existing deployment, change `DIANA_IMAGE=` in the deployment directory's `.env` and run `docker compose pull && docker compose up -d`. OneBot clients connect to `ws://<docker-host>:18080/onebot/v11/ws`. To pre-seed configuration (unattended deployments), put your `config.yaml` at `data/config.yaml`. For source builds from a cloned repository, run `docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build`. To upgrade, pull the new image and recreate the container; the console only announces new versions and never replaces the program inside the container. Only `data/` needs to be mounted; everything that must persist lives there: the database, the runtime log (`data/logs/diana.log`), the optional `config.yaml`, plugins, skills, MCP configuration, browser and coding-CLI logins, `ytb_cookies.txt` and update backups. On start the container hands it to its runtime user (UID 10001). The first start on a new image version backs up the database to `data/.diana-updates/backups/` before migrating it (at most 3 within 3 days). A config file already mounted at `/app/config.yaml` still takes precedence; to move it to `data/config.yaml`, also delete the `DIANA_CONFIG` line from an old Compose file. Once an old config's `log_path: logs/diana.log` is changed to `data/logs/diana.log` (or removed), the old `logs/` mount can be dropped. Diana runs as UID 10001, but `docker exec` defaults to root, so add `-u diana` when running `diana` commands in the container.
+**Docker:** Chromium and Noto CJK fonts are preinstalled. Load the supplied seccomp profile as shown above to allow Chromium to create its browser sandbox; privileged mode, SYS_ADMIN and disabling the browser sandbox are not required. Recreate existing containers with the new option. An image is published with every release (`ghcr.io/suink/diana:latest` plus version tags), alongside a slim variant (`ghcr.io/suink/diana:latest-slim`) without Chromium, CJK fonts, ffmpeg, yt-dlp and tesseract. To switch an existing deployment, change `DIANA_IMAGE=` in the deployment directory's `.env` and run `docker compose pull && docker compose up -d`. OneBot clients connect to `ws://<docker-host>:18080/onebot/v11/ws`. To pre-seed configuration (unattended deployments), put your `config.yaml` at `data/config.yaml`. For source builds from a cloned repository, run `docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build`. Ordinary deployments upgrade by pulling the new image and recreating the container; with the optional Docker updater enabled, the console can request that operation. Only `data/` needs to be mounted; everything that must persist lives there: the database, the runtime log (`data/logs/diana.log`), the optional `config.yaml`, plugins, skills, MCP configuration, browser and coding-CLI logins, `ytb_cookies.txt` and update backups. On start the container hands it to its runtime user (UID 10001). The first start on a new image version backs up the database to `data/.diana-updates/backups/` before migrating it (at most 3 within 3 days). A config file already mounted at `/app/config.yaml` still takes precedence; to move it to `data/config.yaml`, also delete the `DIANA_CONFIG` line from an old Compose file. Once an old config's `log_path: logs/diana.log` is changed to `data/logs/diana.log` (or removed), the old `logs/` mount can be dropped. Diana runs as UID 10001, but `docker exec` defaults to root, so add `-u diana` when running `diana` commands in the container.
 
 **Manual download:** grab the **full package** for your platform (`.tar.gz` / `.zip`, includes the backend, prebuilt WebUI and launch scripts) from [Releases](https://github.com/SuInk/Diana/releases), verify `SHA256SUMS`, extract it, then run `run.sh` / `run.bat`. No separate WebUI deployment or Node.js installation is needed. Releases no longer provide standalone binaries; for custom deployments, extract the executable and frontend assets from the full package.
 
@@ -187,7 +197,7 @@ diana restart   # restart the service
 diana doctor    # check config, directories, frontend assets, service health
 ```
 
-**Upgrading**: re-run the install command, or click upgrade in the console. Both paths back up your data and verify the new version first, and roll back automatically if the health check fails. Docker deployments upgrade by pulling the new image and recreating the container.
+**Upgrading**: for complete Release packages, re-run the install command or click upgrade in the console; both paths back up data, verify the package and roll back if the health check fails. Docker deployments pull and recreate the container, either on the host or through the optional updater. Docker image updates do not automatically roll back after a failed health check; restore a known version tag on the host if needed.
 
 **Uninstalling**: `diana uninstall` removes the service and program but keeps your data (reinstall to pick up where you left off); `diana uninstall --purge` deletes the data too — irreversible, with a second confirmation.
 
