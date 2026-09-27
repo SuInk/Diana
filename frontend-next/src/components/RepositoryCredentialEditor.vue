@@ -81,7 +81,7 @@
           <div class="cluster">
             <strong>默认凭据</strong>
             <span class="badge accent">默认</span>
-            <span class="badge">{{ authLabel(defaultAuth || "token", true) }}</span>
+            <span class="badge">{{ authLabel(effectiveDefaultAuth) }}</span>
             <span v-if="checkOf(defaultKey)" :class="['badge', checkTone(checkOf(defaultKey))]">{{ checkLabel(checkOf(defaultKey)) }}</span>
           </div>
           <div class="task-facts">
@@ -99,7 +99,7 @@
         <div class="repository-watch-manager-main">
           <div class="cluster">
             <strong>{{ item.name || "未命名凭据" }}</strong>
-            <span class="badge">{{ authLabel(item.auth, false) }}</span>
+            <span class="badge">{{ authLabel(item.auth) }}</span>
             <span v-if="checkOf(item.id)" :class="['badge', checkTone(checkOf(item.id))]">{{ checkLabel(checkOf(item.id)) }}</span>
           </div>
           <div class="task-facts">
@@ -177,14 +177,17 @@ const configured = computed(() => new Set(props.configuredIds ?? []));
 const editingKey = ref("");
 const form = ref({ name: "", auth: "token", token: "", clearing: false });
 
-const formAuthOptions = computed(() => {
-  const options = [
-    { value: "token", label: "Token" },
-    { value: "gh", label: "服务器 gh" }
-  ];
-  // 「自动」只对默认凭据有意义：有 Token 用 Token，没有再退回 gh。
-  if (editingKey.value === defaultKey) options.push({ value: "auto", label: "自动" });
-  return options;
+const formAuthOptions = [
+  { value: "token", label: "Token" },
+  { value: "gh", label: "服务器 gh" }
+];
+
+// 界面不再提供「自动」。旧配置里存着 auto 的，按它实际会走的那条显示：有 Token 用
+// Token，没有就是 gh；这样打开再点「完成」也不会改变原来的行为。
+const effectiveDefaultAuth = computed(() => {
+  if (props.defaultAuth === "gh") return "gh";
+  if (props.defaultAuth === "auto") return props.defaultTokenConfigured || props.defaultToken?.trim() ? "token" : "gh";
+  return "token";
 });
 
 const authHint = computed(() => {
@@ -194,8 +197,6 @@ const authHint = computed(() => {
       return isDefault
         ? "Issue、PR 操作使用服务器上 gh 登录的账号；仓库更新检查不走 gh，会匿名读取公开仓库。"
         : "使用服务器上已登录的 GitHub CLI（gh auth login），不需要填 Token。";
-    case "auto":
-      return "填了 Token 就用 Token，没填时 Issue、PR 操作改用服务器 gh；仓库更新检查只用 Token。";
     default:
       return isDefault
         ? "仓库更新检查和 Issue、PR 操作都用这个 Token；不填时公开仓库匿名读取，请求额度较低。"
@@ -221,7 +222,7 @@ function startCreate(): void {
 function startEdit(key: string): void {
   editingKey.value = key;
   if (key === defaultKey) {
-    form.value = { name: "默认凭据", auth: props.defaultAuth || "token", token: props.defaultToken ?? "", clearing: Boolean(props.defaultClearing) };
+    form.value = { name: "默认凭据", auth: effectiveDefaultAuth.value, token: props.defaultToken ?? "", clearing: Boolean(props.defaultClearing) };
     return;
   }
   const item = credentials.value.find((entry) => entry.id === key);
@@ -236,7 +237,7 @@ function commitEditing(): boolean {
   const key = editingKey.value;
   if (!key) return true;
   if (key === defaultKey) {
-    emit("update:default-auth", form.value.auth);
+    if (form.value.auth !== effectiveDefaultAuth.value) emit("update:default-auth", form.value.auth);
     emit("update:default-token", form.value.clearing ? "" : form.value.token);
     if (form.value.clearing !== Boolean(props.defaultClearing)) emit("toggle-clear-default");
     editingKey.value = "";
@@ -277,7 +278,7 @@ function editorDirty(): boolean {
   if (!key) return false;
   if (key === newKey) return Boolean(form.value.name || form.value.token);
   if (key === defaultKey) {
-    return form.value.auth !== (props.defaultAuth || "token") || form.value.token !== (props.defaultToken ?? "") || form.value.clearing !== Boolean(props.defaultClearing);
+    return form.value.auth !== effectiveDefaultAuth.value || form.value.token !== (props.defaultToken ?? "") || form.value.clearing !== Boolean(props.defaultClearing);
   }
   const item = credentials.value.find((entry) => entry.id === key);
   return form.value.name !== (item?.name ?? "") || form.value.auth !== (item?.auth ?? "token") || form.value.token !== (tokenDrafts.value[key] ?? "") || form.value.clearing !== removedIDs.value.has(key);
@@ -320,14 +321,12 @@ function checkMessageClass(check: CredentialCheck | undefined): string {
   return check?.state === "invalid" ? "repository-watch-manager-error" : "credential-check-message";
 }
 
-function authLabel(auth: string, isDefault: boolean): string {
-  if (auth === "gh") return "服务器 gh";
-  if (auth === "auto" && isDefault) return "自动";
-  return "Token";
+function authLabel(auth: string): string {
+  return auth === "gh" ? "服务器 gh" : "Token";
 }
 
 const defaultTokenState = computed(() => {
-  if (props.defaultAuth === "gh") return "不使用 Token";
+  if (effectiveDefaultAuth.value === "gh") return "不使用 Token";
   if (props.defaultClearing) return "保存后清除 Token";
   if (props.defaultToken?.trim()) return "Token 待保存";
   return props.defaultTokenConfigured ? "Token 已配置" : "未填 Token";
