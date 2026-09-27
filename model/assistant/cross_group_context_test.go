@@ -110,6 +110,38 @@ func TestCrossGroupContextRequiresMeaningfulTopicOverlap(t *testing.T) {
 	}
 }
 
+func TestCrossGroupContextIgnoresMentionAccountsInQuery(t *testing.T) {
+	channel := &crossGroupMembershipChannel{allowed: map[string]bool{"current|speaker": true}}
+	mentionBot := func(at int64, groupID, messageID, text string) MessageEvent {
+		event := crossGroupTestEvent(at, groupID, "speaker", messageID, "")
+		event.Segments = []MessageSegment{
+			{Type: "at", Data: map[string]string{"qq": "3129583166"}},
+			{Type: "text", Data: map[string]string{"text": " " + text}},
+		}
+		event.RawMessage = "[CQ:at,qq=3129583166] " + text
+		return event
+	}
+	store := &crossGroupHistoryStore{candidates: []MessageEvent{
+		mentionBot(190, "shared", "approve-mute", "准了"),
+		mentionBot(191, "shared", "other-topic", "禁言他"),
+	}}
+	runtime := NewRuntime(BotConfig{CrossGroupMemoryEnabled: boolPointer(true)}, channel, NewPluginManager(), nil, nil, nil, nil)
+	runtime.SetMessageHistoryStore(store)
+	current := mentionBot(200, "current", "current", "准了")
+	runtime.remember(current)
+	if history := runtime.contextHistory(current); len(history) != 1 {
+		t.Fatalf("bot mention account alone pulled cross-group history: %#v", history)
+	}
+	if text := crossGroupContextQueryText(current); strings.Contains(text, "3129583166") {
+		t.Fatalf("query text kept mention account: %q", text)
+	}
+	onlyMention := current
+	onlyMention.Segments = current.Segments[:1]
+	if text := crossGroupContextQueryText(onlyMention); text != "" {
+		t.Fatalf("mention-only query fell back to raw CQ code: %q", text)
+	}
+}
+
 func crossGroupTestEvent(at int64, groupID, userID, messageID, text string) MessageEvent {
 	return MessageEvent{
 		Platform: PlatformOneBotV11, Kind: EventKindGroup, Time: at, GroupID: groupID,
