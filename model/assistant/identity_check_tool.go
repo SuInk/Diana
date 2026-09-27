@@ -66,12 +66,12 @@ type identityCheckResult struct {
 
 	// 平台群身份：owner（群主）／admin（管理员）／member（普通成员）。
 	// 只有请求核验时才填；查不到就留空并填 GroupRoleError，绝不降级成 member。
-	GroupRole string `json:"group_role,omitempty"`
-	// DisplayName 是平台成员接口给的群名片或昵称。用户拿一串号码问「这是谁」时，
-	// 光回答机器人身份和群身份答不上来。
-	DisplayName       string `json:"display_name,omitempty"`
+	GroupRole         string `json:"group_role,omitempty"`
 	GroupRoleVerified string `json:"group_role_verified_by,omitempty"`
 	GroupRoleError    string `json:"group_role_error,omitempty"`
+	// DisplayName 是平台成员接口给的群名片或昵称。用户拿一串号码问「这是谁」时，
+	// 光回答机器人身份和群身份答不上来。
+	DisplayName string `json:"display_name,omitempty"`
 
 	Explanation string `json:"explanation"`
 }

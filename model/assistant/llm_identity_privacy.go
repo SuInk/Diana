@@ -240,6 +240,16 @@ func withIdentityPrivacyScope(ctx context.Context, scope *identityPrivacyScope) 
 }
 
 func (r *Runtime) withIdentityPrivacyContext(ctx context.Context, event MessageEvent, history []MessageEvent) context.Context {
+	return r.withIdentityPrivacyContextVerifying(ctx, event, history, false)
+}
+
+// withReplyIdentityPrivacyContext 用在已经确定要回复的地方：正文里没见过的账号数字
+// 这时才去平台核实。路由之前那次每条群消息都会经过，不能为它们等平台。
+func (r *Runtime) withReplyIdentityPrivacyContext(ctx context.Context, event MessageEvent, history []MessageEvent) context.Context {
+	return r.withIdentityPrivacyContextVerifying(ctx, event, history, true)
+}
+
+func (r *Runtime) withIdentityPrivacyContextVerifying(ctx context.Context, event MessageEvent, history []MessageEvent, verify bool) context.Context {
 	cfg := r.effectiveConfigForEvent(event)
 	if !llmIdentityMaskingEnabled(cfg) {
 		if ctx == nil {
@@ -262,7 +272,7 @@ func (r *Runtime) withIdentityPrivacyContext(ctx context.Context, event MessageE
 		scope.registerEvent(item)
 	}
 	// 放在结构化登记之后：已经认识的号不必再去平台问。
-	r.registerBodyAccounts(ctx, cfg, scope, event, history)
+	r.registerBodyAccounts(ctx, cfg, scope, event, history, verify)
 	return ctx
 }
 

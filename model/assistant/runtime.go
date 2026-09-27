@@ -379,9 +379,7 @@ type Runtime struct {
 	appLogs       applog.Writer
 	messageStore  MessageHistoryStore
 	// aliasSalt 是脱敏别名的全局盐，进程内只定一次，落库后跨重启不变。
-	aliasSalt string
-	// bodyAccounts 记住正文里出现过的账号数字是不是本群成员，免得每轮都去平台问。
-	bodyAccounts     bodyAccountMembership
+	aliasSalt        string
 	inboundStore     InboundEventStore
 	inboundFailedAt  time.Time
 	userMemory       UserMemoryStore
@@ -466,6 +464,7 @@ type Runtime struct {
 	browserSource             func() string
 	media                     *MediaStore
 	members                   *memberCache
+	bodyAccounts              bodyAccountMembership
 	now                       func() time.Time
 	quietNotices              map[string]time.Time
 	resolverDeliveryMu        sync.Mutex
@@ -3792,7 +3791,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		}
 	}
 	replyHistory := r.promptContextHistory(event, cfg)
-	ctx = r.withIdentityPrivacyContext(ctx, event, replyHistory)
+	ctx = r.withReplyIdentityPrivacyContext(ctx, event, replyHistory)
 	// 每条消息单独限时，防止慢模型/插件占住并发槽太久。
 	ctx, cancel := context.WithTimeout(ctx, cfg.RequestTimeout)
 	defer cancel()
