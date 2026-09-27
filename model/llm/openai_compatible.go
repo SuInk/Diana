@@ -336,12 +336,16 @@ func (c *openAICompatibleClient) GenerateImage(ctx context.Context, req ImageGen
 	if strings.TrimSpace(req.Prompt) == "" {
 		return nil, errors.New("llm: image prompt is required")
 	}
-	body, err := json.Marshal(map[string]any{
+	payload := map[string]any{
 		"model":  req.Model,
 		"prompt": req.Prompt,
 		"size":   req.Size,
 		"n":      req.N,
-	})
+	}
+	if background := openAIImageBackground(req.Model); background != "" {
+		payload["background"] = background
+	}
+	body, err := json.Marshal(payload)
 	if err != nil {
 		return nil, err
 	}
@@ -392,6 +396,11 @@ func (c *openAICompatibleClient) EditImage(ctx context.Context, req ImageEditReq
 	if err := writer.WriteField("n", fmt.Sprintf("%d", req.N)); err != nil {
 		return nil, err
 	}
+	if background := openAIImageBackground(req.Model); background != "" {
+		if err := writer.WriteField("background", background); err != nil {
+			return nil, err
+		}
+	}
 	for index, imageURL := range req.Images {
 		input, err := c.imageEditInput(ctx, imageURL, index)
 		if err != nil {
@@ -429,6 +438,16 @@ func (c *openAICompatibleClient) EditImage(ctx context.Context, req ImageEditReq
 		return nil, err
 	}
 	return &ImageGenerateResponse{Provider: ProviderOpenAICompatible, Model: req.Model, Images: images, Usage: usage}, nil
+}
+
+// openAIImageBackground 给 gpt-image 系列钉死不透明背景。不传时模型自己挑，改图
+// 常出大片半透明像素，QQ 深色模式下透出底色成黑斑；Diana 从不需要透明图。
+// 别的模型（dall-e、中转上的 flux 等）不认这个字段，可能直接报参数错，所以不带。
+func openAIImageBackground(model string) string {
+	if strings.Contains(strings.ToLower(model), "gpt-image") {
+		return "opaque"
+	}
+	return ""
 }
 
 func imageRequestWithDefaults(req ImageGenerateRequest, cfg ProviderConfig) ImageGenerateRequest {
