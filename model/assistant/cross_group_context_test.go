@@ -115,10 +115,10 @@ func TestCrossGroupContextIgnoresMentionAccountsInQuery(t *testing.T) {
 	mentionBot := func(at int64, groupID, messageID, text string) MessageEvent {
 		event := crossGroupTestEvent(at, groupID, "speaker", messageID, "")
 		event.Segments = []MessageSegment{
-			{Type: "at", Data: map[string]string{"qq": "3129583166"}},
+			{Type: "at", Data: map[string]string{"qq": "10001"}},
 			{Type: "text", Data: map[string]string{"text": " " + text}},
 		}
-		event.RawMessage = "[CQ:at,qq=3129583166] " + text
+		event.RawMessage = "[CQ:at,qq=10001] " + text
 		return event
 	}
 	store := &crossGroupHistoryStore{candidates: []MessageEvent{
@@ -132,7 +132,7 @@ func TestCrossGroupContextIgnoresMentionAccountsInQuery(t *testing.T) {
 	if history := runtime.contextHistory(current); len(history) != 1 {
 		t.Fatalf("bot mention account alone pulled cross-group history: %#v", history)
 	}
-	if text := crossGroupContextQueryText(current); strings.Contains(text, "3129583166") {
+	if text := crossGroupContextQueryText(current); strings.Contains(text, "10001") {
 		t.Fatalf("query text kept mention account: %q", text)
 	}
 	onlyMention := current
