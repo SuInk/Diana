@@ -54,6 +54,23 @@ const (
 	// 断线前的水位线把漏掉的消息都补进历史，热闹的群一天能攒几千条；这里兜住上限，
 	// 更早的不再补。上下文窗口本来也用不了这么多，多出来的只会变成摘要任务。
 	historyBackfillScanLimit = 200
+	// 不带锚点的 get_group_msg_history，SnowLuma 会拿它自己最后一次实时收到的 seq 当锚点、
+	// 只往旧的方向翻。断线期间它没收到任何实时消息，锚点停在断线前，怎么翻都翻不到断线
+	// 那段；要等群里再来一条实时消息把锚点顶上去才补得上。所以群回补还要拿库里已有的
+	// 消息当锚点，往新的方向翻（reverse_order=false）。
+	//
+	// historyForwardAnchorLag：QQ 服务器对一段 seq 区间只回最新的 15 条，超过群里最新
+	// seq 的位置用空记录占位；SnowLuma 按 30 个 seq 一段往后拉，扔掉空记录后整段为空就
+	// 当成「没有更新的了」，不会回头取前半段。锚点离群里最新不到 15 时正是这样，一条
+	// 也拿不回来（2026-09-27 线上实测：锚点落后最新 14 能拿到，落后 13 就是空）。锚点
+	// 取已知最大 seq 往回至少这么多，第一段才一定带回真消息。
+	historyForwardAnchorLag = 15
+	// historyForwardAnchorLimit 是每个群取多少条带 seq 的消息备选锚点，要够往回找出
+	// historyForwardAnchorLag 那么远的一条。
+	historyForwardAnchorLimit = 40
+	// historyForwardMaxRounds 限制往新方向翻多少轮。每轮至少往前推进
+	// historyForwardAnchorLag 个 seq，推不动就停。
+	historyForwardMaxRounds = 10
 )
 
 const (
@@ -160,6 +177,21 @@ type HistorySession struct {
 	Platform      string
 	ProfileID     string
 	LastEventTime int64
+	// Anchors 是库里这个群最近几条带 seq 的消息，回补时从它们往新的方向翻，见
+	// fetchGroupHistoryForward。为空就只按老办法从最新一页往回翻。
+	Anchors []HistoryAnchor
+}
+
+// HistoryAnchor 是一条已经入库、带 QQ 群 seq 的消息。
+type HistoryAnchor struct {
+	MessageID string
+	Seq       int64
+}
+
+// InboundHistoryAnchorStore 是可选能力：存储能按群列出最近几条带 seq 的消息时，
+// 群回补才会按锚点往新的方向补。
+type InboundHistoryAnchorStore interface {
+	GroupHistoryAnchors(ctx context.Context, profileID, groupID string, limit int) ([]HistoryAnchor, error)
 }
 
 // InboundLeaseExtender 是可选能力：处理中途确定还要等一阵（比如发送结果不明、
@@ -1395,6 +1427,7 @@ func (r *Runtime) backfillInboundHistorySessions(ctx context.Context, store Inbo
 			defer recoverGoroutinePanic("inbound_queue.go:1062")
 			defer fetchWG.Done()
 			for session := range jobs {
+				session = r.withGroupHistoryAnchors(ctx, store, session)
 				events, fetchErr := r.fetchHistorySerialized(ctx, session)
 				results <- historyFetchResult{session: session, events: events, err: fetchErr}
 			}
@@ -1462,6 +1495,26 @@ func (r *Runtime) fetchHistorySerialized(ctx context.Context, session HistorySes
 		return nil, err
 	}
 	return r.fetchHistorySince(ctx, session)
+}
+
+// withGroupHistoryAnchors 给群会话带上库里最近几条带 seq 的消息当往新方向翻的锚点。
+// 存储不支持或查询出错时原样返回：只是少了往新方向这一段，老的往回翻照常。
+func (r *Runtime) withGroupHistoryAnchors(ctx context.Context, store InboundEventStore, session HistorySession) HistorySession {
+	anchorStore, ok := store.(InboundHistoryAnchorStore)
+	if !ok || session.Kind != EventKindGroup || strings.TrimSpace(session.ID) == "" {
+		return session
+	}
+	queryCtx, cancel := context.WithTimeout(ctx, seqGapStoreTimeout)
+	defer cancel()
+	anchors, err := anchorStore.GroupHistoryAnchors(queryCtx, session.ProfileID, session.ID, historyForwardAnchorLimit)
+	if err != nil {
+		if ctx.Err() == nil {
+			log.Printf("diana inbound history anchors failed: group=%s: %v", session.ID, err)
+		}
+		return session
+	}
+	session.Anchors = anchors
+	return session
 }
 
 func (r *Runtime) callBackfillAPI(ctx context.Context, action string, params map[string]any) (map[string]any, error) {
@@ -1545,6 +1598,10 @@ func (r *Runtime) fetchHistorySince(ctx context.Context, session HistorySession)
 	eventsByID := map[string]MessageEvent{}
 	messageLimit := r.historyBackfillProfile().HistoryBackfillMessageLimit
 	cursor := ""
+	// cursorID 是翻页锚点那条消息的 message_id。NapCat 认 message_seq，SnowLuma 和
+	// Lagrange 只认 message_id、不认识的参数直接丢掉；两个都带上，各取所需。只带
+	// message_seq 时 SnowLuma 的第二页就是第一页原样再来一遍。
+	cursorID := ""
 	seenCursors := map[string]struct{}{}
 	for {
 		// 名额只管进回复流程的条数，不管往回翻多远：按回复名额取页，名额是 3 就一次
@@ -1558,6 +1615,9 @@ func (r *Runtime) fetchHistorySince(ctx context.Context, session HistorySession)
 		}
 		if cursor != "" {
 			params["message_seq"] = cursor
+		}
+		if cursorID != "" {
+			params["message_id"] = oneBotIDParam(cursorID)
 		}
 		callCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 		event := MessageEvent{Kind: session.Kind, ProfileID: session.ProfileID, Platform: session.Platform}
@@ -1624,6 +1684,10 @@ func (r *Runtime) fetchHistorySince(ctx context.Context, session HistorySession)
 		}
 		seenCursors[nextCursor] = struct{}{}
 		cursor = nextCursor
+		cursorID = oldest.MessageID
+	}
+	if session.Kind == EventKindGroup && len(session.Anchors) > 0 {
+		r.fetchGroupHistoryForward(ctx, session, eventsByID)
 	}
 
 	events := make([]MessageEvent, 0, len(eventsByID))
@@ -1640,6 +1704,97 @@ func (r *Runtime) fetchHistorySince(ctx context.Context, session HistorySession)
 		return !r.isSelfMessage(event) && r.shouldHandleChat(event, inboundEventPlainText(event))
 	})
 	return events, nil
+}
+
+// fetchGroupHistoryForward 从库里已有的消息往新的方向翻，补回断线期间实时事件没送到、
+// 接入端锚点又停在断线前的那一段（见 historyForwardAnchorLag）。翻到的消息并进
+// eventsByID，和往回翻的结果一起去重；出错或推不动就停，已经拿到的照样入库。
+//
+// 不认 message_id 的实现（NapCat）会把请求当成不带锚点的最新一页，多半没有新 seq，
+// 一轮就停。
+func (r *Runtime) fetchGroupHistoryForward(ctx context.Context, session HistorySession, eventsByID map[string]MessageEvent) {
+	// anchors 只收别人发的消息：机器人自己发的在接入端未必查得到 seq，拿来当锚点会落空。
+	// maxSeq 则要算上所有带 seq 的消息，它决定锚点至少往回退到哪。
+	anchors := map[int64]string{}
+	maxSeq := int64(0)
+	remember := func(seq int64, messageID string, self bool) {
+		if seq <= 0 {
+			return
+		}
+		maxSeq = max(maxSeq, seq)
+		if messageID = strings.TrimSpace(messageID); messageID != "" && !self {
+			anchors[seq] = messageID
+		}
+	}
+	rememberEvent := func(event MessageEvent) {
+		if seq, ok := parseMessageSeq(event.MessageSeq); ok {
+			remember(seq, event.MessageID, r.isSelfMessage(event))
+		}
+	}
+	for _, anchor := range session.Anchors {
+		remember(anchor.Seq, anchor.MessageID, false)
+	}
+	for _, event := range eventsByID {
+		rememberEvent(event)
+	}
+
+	tried := map[string]struct{}{}
+	added := 0
+	for round := 0; round < historyForwardMaxRounds && added < historyBackfillScanLimit; round++ {
+		anchorSeq := int64(0)
+		for seq, messageID := range anchors {
+			if _, used := tried[messageID]; used {
+				continue
+			}
+			if seq <= maxSeq-historyForwardAnchorLag && seq > anchorSeq {
+				anchorSeq = seq
+			}
+		}
+		if anchorSeq == 0 {
+			return
+		}
+		anchorID := anchors[anchorSeq]
+		tried[anchorID] = struct{}{}
+
+		params := map[string]any{
+			"group_id":        oneBotIDParam(session.ID),
+			"message_id":      oneBotIDParam(anchorID),
+			"count":           historyPageSize,
+			"reverse_order":   false,
+			"disable_get_url": true,
+		}
+		callCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+		data, err := r.callOneBotAPIForEvent(callCtx, MessageEvent{Kind: EventKindGroup, GroupID: session.ID, ProfileID: session.ProfileID, Platform: session.Platform}, "get_group_msg_history", params)
+		cancel()
+		if err != nil {
+			if ctx.Err() == nil {
+				log.Printf("diana inbound forward history failed: group=%s anchor_seq=%d: %v", session.ID, anchorSeq, err)
+			}
+			return
+		}
+		previousMax := maxSeq
+		for _, item := range oneBotHistoryItems(data) {
+			event, ok := r.historyEventFromData(session, item)
+			if !ok {
+				continue
+			}
+			rememberEvent(event)
+			if event.Time > 0 && event.Time < session.LastEventTime {
+				continue
+			}
+			key := firstNonEmpty(event.MessageID, event.MessageSeq)
+			if key == "" {
+				continue
+			}
+			if _, exists := eventsByID[key]; !exists {
+				eventsByID[key] = event
+				added++
+			}
+		}
+		if maxSeq <= previousMax {
+			return
+		}
+	}
 }
 
 // markBackfillReplyEligible 从最新往回挑出最多 limit 条会触发回复的消息留在回复流程
