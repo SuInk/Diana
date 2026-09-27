@@ -6,6 +6,7 @@ package assistant
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net"
 	"slices"
 	"strings"
@@ -153,9 +154,11 @@ func toolNames(tools []agent.Tool) []string {
 
 func TestVRChatToolsRespectControlPermission(t *testing.T) {
 	plugin := NewVRChatPlugin()
-	defaults := effectivePluginSettings(plugin.Manifest().Settings, nil)
+	t.Cleanup(plugin.bridge.Close)
+	defaults := effectivePluginSettings(plugin.Manifest().Settings, map[string]any{vrchatSettingListenEnabled: false})
+	plugin.PluginStateChanged(PluginStateChange{Enabled: true, EnabledProfiles: []string{"bot-a", "bot-b"}, Settings: defaults})
 
-	memberTools, denied := newDianaVRChatTools(plugin, defaults, false)
+	memberTools, denied := newDianaVRChatTools(plugin, defaults, false, "bot-a")
 	if !slices.Equal(toolNames(memberTools), []string{dianaVRChatStatusToolName}) {
 		t.Fatalf("成员默认只能查状态：%v", toolNames(memberTools))
 	}
@@ -163,13 +166,17 @@ func TestVRChatToolsRespectControlPermission(t *testing.T) {
 		t.Fatalf("denied = %v", denied)
 	}
 
-	ownerTools, denied := newDianaVRChatTools(plugin, defaults, true)
+	ownerTools, denied := newDianaVRChatTools(plugin, defaults, true, "bot-a")
 	if len(ownerTools) != 4 || len(denied) != 0 {
 		t.Fatalf("主人应拿到全部工具：%v / %v", toolNames(ownerTools), denied)
 	}
 	opened := SettingValues{vrchatSettingMemberControl: true}
-	if tools, _ := newDianaVRChatTools(plugin, opened, false); len(tools) != 4 {
+	if tools, _ := newDianaVRChatTools(plugin, opened, false, "bot-a"); len(tools) != 4 {
 		t.Fatalf("放开后成员应拿到全部工具：%v", toolNames(tools))
+	}
+	// 只有一个 Avatar：没驱动它的机器人连主人也只能查状态。
+	if tools, denied := newDianaVRChatTools(plugin, defaults, true, "bot-b"); len(tools) != 1 || len(denied) != 3 {
+		t.Fatalf("非驱动机器人不该拿到操控工具：%v", toolNames(tools))
 	}
 	allowed := RelationshipPolicy{}.allowedAgentToolNames()
 	for _, tool := range ownerTools {
@@ -178,7 +185,7 @@ func TestVRChatToolsRespectControlPermission(t *testing.T) {
 		}
 	}
 
-	// 表情枚举来自映射表，模型不会去猜不存在的名字。
+	// 表情枚举来自桥实际加载的映射表，模型不会去猜不存在的名字。
 	for _, tool := range ownerTools {
 		if tool.Name() != dianaVRChatExpressionToolName {
 			continue
@@ -189,6 +196,32 @@ func TestVRChatToolsRespectControlPermission(t *testing.T) {
 				t.Fatalf("schema 缺少 %s：%s", name, schema)
 			}
 		}
+	}
+
+	// 显式指定驱动机器人后以设置为准。
+	explicit := effectivePluginSettings(plugin.Manifest().Settings, map[string]any{vrchatSettingListenEnabled: false, vrchatSettingDriverProfile: "bot-b"})
+	plugin.PluginStateChanged(PluginStateChange{Enabled: true, EnabledProfiles: []string{"bot-a", "bot-b"}, Settings: explicit})
+	if !plugin.drives("bot-b") || plugin.drives("bot-a") {
+		t.Fatalf("driver = %q", plugin.Status().DriverProfile)
+	}
+}
+
+// 进程级的设置只能全局改：按群覆盖到不了那一个桥，只会让工具和桥各说各话。
+func TestVRChatProcessSettingsAreGlobalOnly(t *testing.T) {
+	manager := NewDefaultPluginManager()
+	for _, key := range []string{vrchatSettingHost, vrchatSettingSendPort, vrchatSettingListenEnabled, vrchatSettingListenHost, vrchatSettingListenPort, vrchatSettingChatboxInterval, vrchatSettingExpressions, vrchatSettingInputMaxSeconds, vrchatSettingDriverProfile} {
+		if _, err := manager.ValidateGroupSettingOverrides(PluginSettingOverrides{vrchatPluginID: {key: nil}}); err == nil {
+			t.Fatalf("%s 不该允许按群覆盖", key)
+		}
+	}
+	if _, err := manager.ValidateGroupSettingOverrides(PluginSettingOverrides{vrchatPluginID: {vrchatSettingMirrorReply: true}}); err != nil {
+		t.Fatalf("回复同步可以按群开：%v", err)
+	}
+	// 旧数据里残留的按群覆盖在运行时被忽略。
+	state, _ := manager.Get(vrchatPluginID)
+	settings := effectivePluginSettingsForGroup(state.Manifest.Settings, nil, map[string]any{vrchatSettingExpressions: "笑 = Smile:true"})
+	if settings.String(vrchatSettingExpressions, "") != vrchat.DefaultExpressionMap {
+		t.Fatal("按群的映射表不该生效")
 	}
 }
 
@@ -207,7 +240,12 @@ func runVRChatTool(t *testing.T, tool agent.Tool, input map[string]any) vrchatTo
 
 func TestVRChatToolsDriveBridge(t *testing.T) {
 	received := make(chan osc.Message, 16)
-	vrchatClient, err := osc.Listen("127.0.0.1:0", func(message osc.Message, _ *net.UDPAddr) { received <- message })
+	vrchatClient, err := osc.Listen("127.0.0.1:0", func(message osc.Message, _ *net.UDPAddr) {
+		select {
+		case received <- message:
+		default:
+		}
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -220,11 +258,15 @@ func TestVRChatToolsDriveBridge(t *testing.T) {
 		vrchatSettingListenEnabled:   false,
 		vrchatSettingInputMaxSeconds: 0.5,
 	})
-	tools, _ := newDianaVRChatTools(plugin, settings, true)
-	byName := map[string]agent.Tool{}
-	for _, tool := range tools {
-		byName[tool.Name()] = tool
+	toolsByName := func() map[string]agent.Tool {
+		tools, _ := newDianaVRChatTools(plugin, settings, true, "qq")
+		byName := map[string]agent.Tool{}
+		for _, tool := range tools {
+			byName[tool.Name()] = tool
+		}
+		return byName
 	}
+	byName := toolsByName()
 
 	// 桥没启动时如实告诉模型，而不是报系统错误。
 	if result := runVRChatTool(t, byName[dianaVRChatMoveToolName], map[string]any{"action": "forward"}); result.OK || !strings.Contains(result.Message, "没有在运行") {
@@ -234,7 +276,8 @@ func TestVRChatToolsDriveBridge(t *testing.T) {
 		t.Fatalf("disabled status = %+v", result)
 	}
 
-	plugin.PluginStateChanged(true, settings)
+	plugin.PluginStateChanged(PluginStateChange{Enabled: true, EnabledProfiles: []string{"qq"}, Settings: settings})
+	byName = toolsByName()
 	expect := func(address string) osc.Message {
 		t.Helper()
 		select {
@@ -346,7 +389,12 @@ func TestVRChatToolRegistration(t *testing.T) {
 // 回复后按心情换表情；群回复可同步到聊天框，私聊回复永不同步。
 func TestVRChatAfterReplyHook(t *testing.T) {
 	received := make(chan osc.Message, 16)
-	vrchatClient, err := osc.Listen("127.0.0.1:0", func(message osc.Message, _ *net.UDPAddr) { received <- message })
+	vrchatClient, err := osc.Listen("127.0.0.1:0", func(message osc.Message, _ *net.UDPAddr) {
+		select {
+		case received <- message:
+		default:
+		}
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -361,11 +409,22 @@ func TestVRChatAfterReplyHook(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := plugins.SetEnabledForProfile(vrchatPluginID, "qq", true); err != nil {
-		t.Fatal(err)
+	for _, profile := range []string{"qq", "zz"} {
+		if _, err := plugins.SetEnabledForProfile(vrchatPluginID, profile, true); err != nil {
+			t.Fatal(err)
+		}
 	}
 	runtime := NewRuntime(BotConfig{OwnerID: "owner", MoodEnabled: boolPointer(true)}, nilChannel{}, plugins, nil, nil, nil, nil)
 	runtime.bumpMood("qq", 5, runtime.clock())
+	runtime.bumpMood("zz", -5, runtime.clock())
+
+	// 只有一个 Avatar：留空时由 ID 排第一的 qq 驱动，zz 的回复既不改表情也不进聊天框。
+	runtime.afterReplyVRChat(MessageEvent{Kind: EventKindGroup, GroupID: "g", UserID: "u", ProfileID: "zz"}, "别的机器人说的话")
+	select {
+	case message := <-received:
+		t.Fatalf("non-driver bot drove the avatar: %#v", message)
+	case <-time.After(200 * time.Millisecond):
+	}
 
 	runtime.afterReplyVRChat(MessageEvent{Kind: EventKindPrivate, UserID: "u", ProfileID: "qq"}, "私聊里的话")
 	select {
@@ -378,7 +437,7 @@ func TestVRChatAfterReplyHook(t *testing.T) {
 		t.Fatal("mood expression never arrived")
 	}
 
-	runtime.afterReplyVRChat(MessageEvent{Kind: EventKindGroup, GroupID: "g", UserID: "u", ProfileID: "qq"}, "群里的话")
+	runtime.afterReplyVRChat(MessageEvent{Kind: EventKindGroup, GroupID: "g", UserID: "u", ProfileID: "qq"}, "群里的话[CQ:record,file=a.mp3]")
 	select {
 	case message := <-received:
 		if message.Address != "/chatbox/input" || message.Args[0] != "群里的话" {
@@ -386,5 +445,120 @@ func TestVRChatAfterReplyHook(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("group reply never mirrored")
+	}
+}
+
+// 回复没发出去（发送失败、被拦下）时不能动 Avatar：钩子挂在发送成功之后。
+func TestVRChatHookRunsOnlyAfterSuccessfulSend(t *testing.T) {
+	run := func(t *testing.T, channel Channel) bool {
+		t.Helper()
+		received := make(chan osc.Message, 32)
+		vrchatClient, err := osc.Listen("127.0.0.1:0", func(message osc.Message, _ *net.UDPAddr) {
+			if strings.HasPrefix(message.Address, "/avatar/parameters/") {
+				select {
+				case received <- message:
+				default:
+				}
+			}
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer vrchatClient.Close()
+		plugins := NewDefaultPluginManager()
+		vrchatPluginFrom(t, plugins)
+		if _, err := plugins.UpdateSettings(vrchatPluginID, map[string]any{
+			vrchatSettingSendPort:      float64(vrchatClient.LocalAddr().Port),
+			vrchatSettingListenEnabled: false,
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := plugins.SetEnabledForProfile(vrchatPluginID, "qq", true); err != nil {
+			t.Fatal(err)
+		}
+		provider := &agentSequenceLLMProvider{responses: []string{
+			`{"action":"none","prompt":"","tools":[],"context_message_ids":[],"keep_older_summary":false}`,
+			`{"action":"final","content":"好"}`,
+		}}
+		runtime := NewRuntime(BotConfig{OwnerID: "owner", AgentEnabled: true, MoodEnabled: boolPointer(true), ReplySafetyMasterEnabled: boolPointer(false)}, channel, plugins, nil, nil, nil, func() (LLMProvider, error) {
+			return provider, nil
+		})
+		runtime.bumpMood("qq", 5, runtime.clock())
+		_, _ = runtime.replyTo(context.Background(), MessageEvent{
+			Kind: EventKindPrivate, UserID: "owner", MessageID: "message-1", ProfileID: "qq",
+		}, "你好")
+		select {
+		case <-received:
+			return true
+		case <-time.After(300 * time.Millisecond):
+			return false
+		}
+	}
+	if !run(t, nilChannel{}) {
+		t.Fatal("发送成功后应按心情换表情")
+	}
+	if run(t, &failingOutboundChannel{err: errors.New("send rejected")}) {
+		t.Fatal("没发出去的回复不该驱动 Avatar")
+	}
+}
+
+type observingTestPlugin struct {
+	changes []PluginStateChange
+}
+
+func (p *observingTestPlugin) Manifest() PluginManifest {
+	return PluginManifest{ID: "test.observer", Name: "observer", Version: "0.0.1"}
+}
+
+func (p *observingTestPlugin) Handle(context.Context, PluginRequest) (*PluginResponse, error) {
+	return nil, nil
+}
+
+func (p *observingTestPlugin) PluginStateChanged(change PluginStateChange) {
+	p.changes = append(p.changes, change)
+}
+
+func (p *observingTestPlugin) last(t *testing.T) PluginStateChange {
+	t.Helper()
+	if len(p.changes) == 0 {
+		t.Fatal("observer was never notified")
+	}
+	return p.changes[len(p.changes)-1]
+}
+
+// 安装、卸载、摘除都要通知插件：卸载后还占着端口就是资源泄漏。
+func TestPluginStateObserverNotifiedOnInstallLifecycle(t *testing.T) {
+	plugin := &observingTestPlugin{}
+	manager := NewPluginManager(plugin)
+	if _, err := manager.Install("test.observer"); err != nil {
+		t.Fatal(err)
+	}
+	if !plugin.last(t).Enabled {
+		t.Fatal("install should report enabled")
+	}
+	if _, err := manager.SetEnabledForProfile("test.observer", "bot-b", true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.SetEnabledForProfile("test.observer", "bot-a", true); err != nil {
+		t.Fatal(err)
+	}
+	if got := plugin.last(t).EnabledProfiles; !slices.Equal(got, []string{"bot-a", "bot-b"}) {
+		t.Fatalf("enabled profiles = %v", got)
+	}
+	if _, err := manager.Uninstall("test.observer"); err != nil {
+		t.Fatal(err)
+	}
+	if plugin.last(t).Enabled {
+		t.Fatal("uninstall must stop the plugin even though profile switches are still on")
+	}
+	if _, err := manager.Install("test.observer"); err != nil {
+		t.Fatal(err)
+	}
+	count := len(plugin.changes)
+	if err := manager.UnregisterPlugin("test.observer"); err != nil {
+		t.Fatal(err)
+	}
+	if len(plugin.changes) != count+1 || plugin.last(t).Enabled {
+		t.Fatal("unregister must tell the plugin to stop")
 	}
 }

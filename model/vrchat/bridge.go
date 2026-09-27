@@ -40,11 +40,18 @@ const (
 	MaxInputHold     = 10 * time.Second
 	DefaultInputHold = 3 * time.Second
 	jumpPress        = 150 * time.Millisecond
+	// 松开失败时的重试：间隔短，总共约一秒，覆盖发送端重连这类瞬时故障。
+	maxReleaseAttempts = 5
+	releaseRetryDelay  = 200 * time.Millisecond
 
 	// explicitExpressionGuard 内心情不覆盖 Agent 刚明确设的表情。
 	explicitExpressionGuard = 2 * time.Minute
 
 	maxTrackedParams = 256
+	// 监听端口局域网里谁都能发包：名字和 ID 限长，免得有人灌大包撑内存，
+	// 或者借参数名把一段文字塞进交给模型的状态里。
+	maxParamNameBytes = 64
+	maxAvatarIDBytes  = 128
 )
 
 // Config 是桥的运行配置，由插件设置换算而来。
@@ -141,6 +148,10 @@ func (b *Bridge) Apply(enabled bool, cfg Config) error {
 	}
 	var errs []error
 	if b.sender == nil || cfg.SendAddress != b.cfg.SendAddress {
+		// 换地址前先在旧地址上松开所有输入，否则旧地址那边的 VRChat 会一直按着键。
+		if b.sender != nil && b.enabled {
+			b.releaseInputsLocked()
+		}
 		b.closeSenderLocked()
 		sender, closer, err := b.dial(cfg.SendAddress)
 		if err != nil {
@@ -445,6 +456,13 @@ var actions = map[string]string{
 	"jump":       "Jump",
 }
 
+// releasableInputs / releasableAxes 是关停时统一归零的输入。轴本身不开放给
+// Agent，但别的 OSC 工具可能推过，归零是无害的。
+var (
+	releasableInputs = []string{"MoveForward", "MoveBackward", "MoveLeft", "MoveRight", "LookLeft", "LookRight", "Run", "Jump"}
+	releasableAxes   = []string{"Vertical", "Horizontal", "LookHorizontal"}
+)
+
 // ActionNames 返回可用动作，顺序稳定，工具 schema 用它生成枚举。
 func ActionNames() []string {
 	return []string{"forward", "backward", "left", "right", "turn_left", "turn_right", "run", "jump", "stop"}
@@ -491,19 +509,62 @@ func (b *Bridge) Input(action string, hold time.Duration) (time.Duration, error)
 		if b.inputs[input] != timer {
 			return
 		}
-		delete(b.inputs, input)
-		_ = b.sendLocked(osc.Message{Address: "/input/" + input, Args: []any{int32(0)}})
+		b.releaseInputLocked(input, 1)
 	})
 	b.inputs[input] = timer
 	return hold, nil
 }
 
+// releaseInputLocked 松开一个按键。发送失败时隔一会儿重试：只发一次 0 而它
+// 恰好没发出去，Avatar 就会一直走下去。重试期间它仍留在 inputs 里，stop 和
+// 关停能看到并接管。
+func (b *Bridge) releaseInputLocked(input string, attempt int) {
+	err := b.sendLocked(osc.Message{Address: "/input/" + input, Args: []any{int32(0)}})
+	if err == nil || !b.enabled || attempt >= maxReleaseAttempts {
+		delete(b.inputs, input)
+		if err != nil {
+			b.lastErr = fmt.Sprintf("松开 %s 失败：%v", input, err)
+		}
+		return
+	}
+	var retry *time.Timer
+	retry = time.AfterFunc(releaseRetryDelay, func() {
+		b.mu.Lock()
+		defer b.mu.Unlock()
+		if b.inputs[input] != retry {
+			return
+		}
+		b.releaseInputLocked(input, attempt+1)
+	})
+	b.inputs[input] = retry
+}
+
+// releaseInputsLocked 停掉所有计时并把全部可控输入归零，不只是记录里按着的那些：
+// 记录和 VRChat 的实际状态可能对不上（上一次松开没送到、换过发送地址），
+// 多发几个 0 没有代价。
 func (b *Bridge) releaseInputsLocked() {
-	for input, timer := range b.inputs {
+	for _, timer := range b.inputs {
 		timer.Stop()
-		_ = b.sendLocked(osc.Message{Address: "/input/" + input, Args: []any{int32(0)}})
 	}
 	b.inputs = nil
+	for _, input := range releasableInputs {
+		_ = b.sendLocked(osc.Message{Address: "/input/" + input, Args: []any{int32(0)}})
+	}
+	for _, axis := range releasableAxes {
+		_ = b.sendLocked(osc.Message{Address: "/input/" + axis, Args: []any{float32(0)}})
+	}
+}
+
+// ToolConfig 是工具要跟桥对齐的那部分配置：表情名和移动时长以桥实际加载的为准，
+// 工具列出的表情桥一定认得。
+func (b *Bridge) ToolConfig() (expressions []string, inputMaxHold time.Duration) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	maxHold := b.cfg.InputMaxHold
+	if maxHold <= 0 {
+		maxHold = DefaultInputHold
+	}
+	return b.cfg.Expressions.Names(), maxHold
 }
 
 // ---- 监听 ----
@@ -544,8 +605,8 @@ func (b *Bridge) receive(message osc.Message, from *net.UDPAddr) {
 	}
 	switch {
 	case message.Address == "/avatar/change":
-		if len(message.Args) > 0 {
-			if id, ok := message.Args[0].(string); ok {
+		if len(message.Args) == 1 {
+			if id, ok := message.Args[0].(string); ok && validAvatarID(id) {
 				b.avatarID = id
 				b.avatarAt = now
 				// 换了 Avatar，旧参数全部作废；刚设的表情也不再成立。
@@ -555,7 +616,13 @@ func (b *Bridge) receive(message osc.Message, from *net.UDPAddr) {
 		}
 	case strings.HasPrefix(message.Address, "/avatar/parameters/"):
 		name := strings.TrimPrefix(message.Address, "/avatar/parameters/")
-		if name == "" || len(message.Args) != 1 || noisyBuiltinParams[name] {
+		if !validParamName(name) || len(message.Args) != 1 || noisyBuiltinParams[name] {
+			return
+		}
+		// VRChat 的 Avatar 参数只有 Int、Float、Bool 三种，别的类型都不是它发的。
+		switch message.Args[0].(type) {
+		case int32, float32, bool:
+		default:
 			return
 		}
 		if b.params == nil {
@@ -566,6 +633,32 @@ func (b *Bridge) receive(message osc.Message, from *net.UDPAddr) {
 		}
 		b.params[name] = paramValue{value: message.Args[0], updatedAt: now}
 	}
+}
+
+func validParamName(name string) bool {
+	if name == "" || len(name) > maxParamNameBytes {
+		return false
+	}
+	for _, r := range name {
+		if r < 0x20 || r == 0x7f {
+			return false
+		}
+	}
+	return true
+}
+
+// validAvatarID 只认 VRChat 的 ID 形态（avtr_ 加 UUID），字符集收窄到字母数字、
+// 下划线和连字符。
+func validAvatarID(id string) bool {
+	if id == "" || len(id) > maxAvatarIDBytes {
+		return false
+	}
+	for _, r := range id {
+		if !(r == '_' || r == '-' || r >= '0' && r <= '9' || r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z') {
+			return false
+		}
+	}
+	return true
 }
 
 func (b *Bridge) evictOldestParamLocked() {

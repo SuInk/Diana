@@ -34,19 +34,21 @@ const (
 var vrchatControlToolNames = []string{dianaVRChatChatboxToolName, dianaVRChatExpressionToolName, dianaVRChatMoveToolName}
 
 // newDianaVRChatTools 按权限返回本轮可用的 VRChat 工具，以及因权限被拒的工具名。
-func newDianaVRChatTools(plugin *VRChatPlugin, settings SettingValues, owner bool) ([]agent.Tool, []string) {
+// 操控类只挂给驱动 Avatar 的那台机器人；表情名和移动时长取自桥实际加载的配置，
+// 工具列出的表情桥一定认得。
+func newDianaVRChatTools(plugin *VRChatPlugin, settings SettingValues, owner bool, profileID string) ([]agent.Tool, []string) {
 	if plugin == nil {
 		return nil, nil
 	}
 	tools := []agent.Tool{&dianaVRChatStatusTool{plugin: plugin}}
-	if !owner && !settings.Bool(vrchatSettingMemberControl, false) {
+	if !plugin.drives(profileID) || (!owner && !settings.Bool(vrchatSettingMemberControl, false)) {
 		return tools, vrchatControlToolNames
 	}
-	cfg, _ := vrchatConfigFromSettings(settings)
+	names, maxHold := plugin.bridge.ToolConfig()
 	tools = append(tools,
 		&dianaVRChatChatboxTool{plugin: plugin},
-		&dianaVRChatExpressionTool{plugin: plugin, names: cfg.Expressions.Names()},
-		&dianaVRChatMoveTool{plugin: plugin, maxHold: cfg.InputMaxHold},
+		&dianaVRChatExpressionTool{plugin: plugin, names: names},
+		&dianaVRChatMoveTool{plugin: plugin, maxHold: maxHold},
 	)
 	return tools, nil
 }

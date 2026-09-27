@@ -14,6 +14,8 @@
     <p v-if="error" class="vrchat-status-error">{{ error }}</p>
     <template v-else-if="status">
       <dl class="vrchat-status-grid">
+        <dt>驱动机器人</dt>
+        <dd>{{ status.driver_profile || "未指定（所有启用的机器人）" }}</dd>
         <dt>发送到</dt>
         <dd>{{ status.send_address || "—" }}</dd>
         <dt>监听</dt>

@@ -408,6 +408,8 @@ export interface PluginSettingSpec {
   rows?: number;
   /** 凭据类设置；读接口不返回明文，提交空串表示保持原值。 */
   secret?: boolean;
+  // 只能全局设置、不能按群覆盖（端口、连接这类进程里只有一份的资源）。
+  global_only?: boolean;
 }
 
 export interface PluginManifest {
@@ -2776,6 +2778,7 @@ export type VRChatStatus = {
   last_chatbox_at?: string;
   active_inputs?: string[];
   mapping_problems?: string[];
+  driver_profile?: string;
 };
 
 export function getVRChatStatus(): Promise<VRChatStatus> {

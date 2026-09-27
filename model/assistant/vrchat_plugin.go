@@ -7,6 +7,7 @@ import (
 	"context"
 	"log"
 	"net"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -33,6 +34,7 @@ const (
 	vrchatSettingExpressions     = "expressions"
 	vrchatSettingInputMaxSeconds = "input_max_seconds"
 	vrchatSettingMemberControl   = "member_control"
+	vrchatSettingDriverProfile   = "driver_profile"
 )
 
 // VRChatPluginID 对外导出，WebUI 用它取桥的实时状态。
@@ -45,6 +47,9 @@ type VRChatPlugin struct {
 	mu       sync.Mutex
 	problems []string
 	applyErr string
+	// driver 是驱动 Avatar 的机器人。桥和 Avatar 都只有一个，多台机器人都去改
+	// 表情、写聊天框只会互相抢；空串表示没有按机器人区分的开关（旧数据），谁都算。
+	driver string
 }
 
 func NewVRChatPlugin() *VRChatPlugin {
@@ -68,6 +73,7 @@ func (p *VRChatPlugin) Manifest() PluginManifest {
 				Description: "运行 VRChat 的机器。和 Diana 在同一台电脑上就保持 127.0.0.1；在另一台机器上要填它的局域网地址，并在 VRChat 启动参数里用 --osc 指定回传地址，见使用说明。",
 				Type:        PluginSettingTypeString,
 				Default:     vrchat.DefaultHost,
+				GlobalOnly:  true,
 			},
 			{
 				Key:         vrchatSettingSendPort,
@@ -77,6 +83,7 @@ func (p *VRChatPlugin) Manifest() PluginManifest {
 				Default:     vrchat.DefaultSendPort,
 				Min:         settingRange(1),
 				Max:         settingRange(65535),
+				GlobalOnly:  true,
 			},
 			{
 				Key:         vrchatSettingListenEnabled,
@@ -84,6 +91,7 @@ func (p *VRChatPlugin) Manifest() PluginManifest {
 				Description: "接收 VRChat 发回的 Avatar 切换和参数变化，群里问「在干嘛」时才答得上来。端口被别的 OSC 工具占用时关掉它，发送不受影响。",
 				Type:        PluginSettingTypeBool,
 				Default:     true,
+				GlobalOnly:  true,
 			},
 			{
 				Key:         vrchatSettingListenHost,
@@ -91,6 +99,7 @@ func (p *VRChatPlugin) Manifest() PluginManifest {
 				Description: "默认只收本机的包。VRChat 在另一台机器上时改成 0.0.0.0，同时注意局域网里谁都能往这个端口发包。",
 				Type:        PluginSettingTypeString,
 				Default:     vrchat.DefaultHost,
+				GlobalOnly:  true,
 			},
 			{
 				Key:         vrchatSettingListenPort,
@@ -100,6 +109,7 @@ func (p *VRChatPlugin) Manifest() PluginManifest {
 				Default:     vrchat.DefaultListenPort,
 				Min:         settingRange(1),
 				Max:         settingRange(65535),
+				GlobalOnly:  true,
 			},
 			{
 				Key:         vrchatSettingChatboxInterval,
@@ -111,6 +121,7 @@ func (p *VRChatPlugin) Manifest() PluginManifest {
 				Max:         settingRange(10),
 				Step:        0.5,
 				Unit:        "秒",
+				GlobalOnly:  true,
 			},
 			{
 				Key:         vrchatSettingChatboxSound,
@@ -118,6 +129,7 @@ func (p *VRChatPlugin) Manifest() PluginManifest {
 				Description: "每条新消息的第一段在 VRChat 里响一下提示音。",
 				Type:        PluginSettingTypeBool,
 				Default:     false,
+				GlobalOnly:  true,
 			},
 			{
 				Key:         vrchatSettingMirrorReply,
@@ -140,6 +152,7 @@ func (p *VRChatPlugin) Manifest() PluginManifest {
 				Type:        PluginSettingTypeText,
 				Default:     vrchat.DefaultExpressionMap,
 				Rows:        10,
+				GlobalOnly:  true,
 			},
 			{
 				Key:         vrchatSettingInputMaxSeconds,
@@ -151,6 +164,15 @@ func (p *VRChatPlugin) Manifest() PluginManifest {
 				Max:         settingRange(vrchat.MaxInputHold.Seconds()),
 				Step:        0.5,
 				Unit:        "秒",
+				GlobalOnly:  true,
+			},
+			{
+				Key:         vrchatSettingDriverProfile,
+				Label:       "驱动 Avatar 的机器人",
+				Description: "填机器人 ID。VRChat 里只有一个 Avatar，只有这台机器人的回复会驱动表情、同步聊天框，操控类工具也只挂给它；其他机器人只能查看状态。留空时由启用了插件的机器人里 ID 排第一的那台驱动。",
+				Type:        PluginSettingTypeString,
+				Default:     "",
+				GlobalOnly:  true,
 			},
 			{
 				Key:         vrchatSettingMemberControl,
@@ -169,11 +191,15 @@ func (p *VRChatPlugin) Handle(context.Context, PluginRequest) (*PluginResponse, 
 }
 
 // PluginStateChanged 跟着插件开关和全局设置启停 OSC 桥。
-func (p *VRChatPlugin) PluginStateChanged(enabled bool, settings SettingValues) {
-	cfg, problems := vrchatConfigFromSettings(settings)
-	err := p.bridge.Apply(enabled, cfg)
+func (p *VRChatPlugin) PluginStateChanged(change PluginStateChange) {
+	cfg, problems := vrchatConfigFromSettings(change.Settings)
+	err := p.bridge.Apply(change.Enabled, cfg)
 	p.mu.Lock()
 	p.problems = problems
+	p.driver = strings.TrimSpace(change.Settings.String(vrchatSettingDriverProfile, ""))
+	if p.driver == "" && len(change.EnabledProfiles) > 0 {
+		p.driver = change.EnabledProfiles[0]
+	}
 	p.applyErr = ""
 	if err != nil {
 		p.applyErr = err.Error()
@@ -189,6 +215,14 @@ type VRChatStatus struct {
 	vrchat.Status
 	MappingProblems []string `json:"mapping_problems,omitempty"`
 	ApplyError      string   `json:"apply_error,omitempty"`
+	DriverProfile   string   `json:"driver_profile,omitempty"`
+}
+
+// drives 判断这台机器人是否驱动 Avatar。
+func (p *VRChatPlugin) drives(profileID string) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.driver == "" || p.driver == strings.TrimSpace(profileID)
 }
 
 // Status 返回桥的实时状态。
@@ -197,6 +231,7 @@ func (p *VRChatPlugin) Status() VRChatStatus {
 	p.mu.Lock()
 	status.MappingProblems = append([]string(nil), p.problems...)
 	status.ApplyError = p.applyErr
+	status.DriverProfile = p.driver
 	p.mu.Unlock()
 	return status
 }
@@ -242,10 +277,14 @@ func vrchatMoodExpression(score float64) string {
 	}
 }
 
-// afterReplyVRChat 是回复发出后的钩子：心情驱动表情、按需把回复同步到聊天框。
-// 桥的发送都是本机 UDP 或入队，不会拖慢回复链路。
+var vrchatCQCode = regexp.MustCompile(`\[CQ:[^\]]*\]`)
+
+// afterReplyVRChat 在回复确认发出之后调用：心情驱动表情、按需把回复同步到聊天框。
+// 被审核拦下、改写前的草稿或没发出去的回复都不会走到这里——聊天框房间里人人
+// 看得见，只能放已经公开说出口的话。桥的发送都是本机 UDP 或入队，不拖慢回复链路。
 func (r *Runtime) afterReplyVRChat(event MessageEvent, reply string) {
-	reply = strings.TrimSpace(reply)
+	// 语音回复这类 CQ 码不是给人看的字，聊天框里只放文字部分。
+	reply = strings.TrimSpace(vrchatCQCode.ReplaceAllString(reply, ""))
 	if reply == "" {
 		return
 	}
@@ -254,7 +293,7 @@ func (r *Runtime) afterReplyVRChat(event MessageEvent, reply string) {
 		return
 	}
 	plugin, ok := pluginValue.(*VRChatPlugin)
-	if !ok {
+	if !ok || !plugin.drives(r.eventProfileID(event)) {
 		return
 	}
 	cfg := r.effectiveConfigForEvent(event)
