@@ -228,6 +228,11 @@ func main() {
 	if len(os.Args) == 3 && os.Args[1] == assistant.CodingApprovalHookCommand {
 		os.Exit(assistant.RunCodingApprovalHook(os.Args[2], os.Stdin, os.Stdout, os.Stderr))
 	}
+	// ACP 编码任务的会话进程：它替 Diana 当 ACP 客户端、写任务日志，同样不碰配置
+	// 和数据库，stdout 就是任务日志。
+	if len(os.Args) == 3 && os.Args[1] == assistant.CodingACPSessionCommand {
+		os.Exit(assistant.RunCodingACPSession(os.Args[2], os.Stdout, os.Stderr))
+	}
 
 	if len(os.Args) == 3 && os.Args[1] == updater.InternalReleaseApplyCommand {
 		if err := updater.RunReleaseApplyHelper(os.Args[2]); err != nil {

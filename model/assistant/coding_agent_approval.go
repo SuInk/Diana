@@ -579,14 +579,21 @@ func isCodeRune(r rune) bool {
 // prepareCodingApproval 为一次任务写好 hook 需要的设置和策略文件，返回要传给
 // CLI 的 --settings 路径。审批关闭时返回空串，模板里的 {{settings}} 会被丢掉。
 // alwaysAllowPath 是派活那台机器人自己的常驻放行清单。
+// ACP 后端返回的是审批策略文件本身：会话进程直接读它，不经过 Claude Code 的 hook。
 func prepareCodingApproval(cfg codingAgentConfig, jobID, alwaysAllowPath string) (string, error) {
 	if cfg.ApprovalMode == codingApprovalModeOff {
 		return "", nil
 	}
+	if cfg.Backend == codingBackendACP {
+		if err := os.MkdirAll(codingApprovalDir(), 0o700); err != nil {
+			return "", err
+		}
+		return writeCodingApprovalPolicy(cfg, jobID, alwaysAllowPath)
+	}
 	if !cfg.StreamJSON {
 		// 审批靠 Claude Code 的 PreToolUse hook 实现。别的后端没有等价机制，
 		// 这时候安静地不审批等于骗人，直接说清楚。
-		return "", fmt.Errorf("聊天里确认只支持 Claude Code 后端，当前后端是 %s；要么换后端，要么把审批模式设成关闭", cfg.Backend)
+		return "", fmt.Errorf("聊天里确认只支持 Claude Code 和 ACP 代理，当前后端是 %s；要么换后端，要么把审批模式设成关闭", cfg.Backend)
 	}
 	if err := os.MkdirAll(codingApprovalDir(), 0o700); err != nil {
 		return "", err
@@ -596,20 +603,8 @@ func prepareCodingApproval(cfg codingAgentConfig, jobID, alwaysAllowPath string)
 		return "", fmt.Errorf("找不到 Diana 自己的可执行文件，无法安装审批 hook：%w", err)
 	}
 	timeout := int(cfg.ApprovalTimeout / time.Second)
-	policy := codingApprovalPolicy{
-		JobID:           jobID,
-		Mode:            cfg.ApprovalMode,
-		Patterns:        cfg.ApprovalPatterns,
-		AlwaysAllowPath: alwaysAllowPath,
-		ApprovalDir:     codingApprovalDir(),
-		TimeoutSeconds:  timeout,
-	}
-	policyPath := codingApprovalPolicyPath(jobID)
-	policyBody, err := json.MarshalIndent(policy, "", "  ")
+	policyPath, err := writeCodingApprovalPolicy(cfg, jobID, alwaysAllowPath)
 	if err != nil {
-		return "", err
-	}
-	if err := os.WriteFile(policyPath, policyBody, 0o600); err != nil {
 		return "", err
 	}
 	settings := map[string]any{
@@ -639,6 +634,27 @@ func prepareCodingApproval(cfg codingAgentConfig, jobID, alwaysAllowPath string)
 		return "", err
 	}
 	return settingsPath, nil
+}
+
+// writeCodingApprovalPolicy 写出这个任务的审批策略，hook 和 ACP 会话进程都读它。
+func writeCodingApprovalPolicy(cfg codingAgentConfig, jobID, alwaysAllowPath string) (string, error) {
+	policy := codingApprovalPolicy{
+		JobID:           jobID,
+		Mode:            cfg.ApprovalMode,
+		Patterns:        cfg.ApprovalPatterns,
+		AlwaysAllowPath: alwaysAllowPath,
+		ApprovalDir:     codingApprovalDir(),
+		TimeoutSeconds:  int(cfg.ApprovalTimeout / time.Second),
+	}
+	policyPath := codingApprovalPolicyPath(jobID)
+	policyBody, err := json.MarshalIndent(policy, "", "  ")
+	if err != nil {
+		return "", err
+	}
+	if err := os.WriteFile(policyPath, policyBody, 0o600); err != nil {
+		return "", err
+	}
+	return policyPath, nil
 }
 
 // codingApprovalMatcher 决定 hook 挂在哪些工具上。危险操作只可能从命令里发出来，

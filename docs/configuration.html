@@ -232,7 +232,7 @@ https://HOST/api/channels/wecom/callback</code></pre>
         <p>派出去几秒内还没结束的任务，由 Diana 自己发一条固定格式的受理消息：任务号、代理、工作区和指令摘要，不经过模型。看到这条才算真派出去了——模型嘴上说「交给 Claude Code 了」却没调工具的时候，群里就不会出现它。几秒内就结束的（认证失败、账号被封这类）不发受理消息，结果直接由派活那一轮回复；结果超过 1500 字时，全文先由系统发出，模型只说结论。跑完的汇报先发一条带 @ 的头部；结果在 1500 字以内就跟在头部里，更长的报告头部只带开头几行，全文紧跟着用一张合并转发发出（机器人关了合并转发或平台不支持时分条发；合并转发没等到回执时按已送达处理，不再重发）。全文没发成会重试，重试只补全文，不重发头部。记录里留全文，上限 2 万字；给模型查进度用的 <code>status</code> 只带开头 1500 字，并用 <code>result_truncated</code> 标明。</p>
         <h3>设置项</h3>
         <div class="table-wrap"><table><thead><tr><th>设置</th><th>说明</th></tr></thead><tbody>
-          <tr><td>后端 CLI</td><td><code>claude</code> / <code>codex</code> / 自定义命令。只有 Claude Code 的 <code>stream-json</code> 能被精确解析出会话 ID、逐步进度和结构化结果（含模型轮次和花费）；其余后端退化成按日志尾巴汇报。</td></tr>
+          <tr><td>后端 CLI</td><td><code>claude</code> / <code>codex</code> / <code>acp</code> / 自定义命令。Claude Code 的 <code>stream-json</code> 能精确解析出会话 ID、逐步进度和结构化结果（含模型轮次和花费）；<code>acp</code> 接 Gemini CLI、opencode 这类 ACP 代理，可执行文件填代理命令、命令模板只填代理参数（如 <code>--acp</code>），有结构化进度和最终结论（设计见 <a href="coding-agent-acp.md">ACP 编码后端</a>）；自定义命令退化成按日志尾巴汇报。</td></tr>
           <tr><td>可执行文件</td><td>留空按后端取默认名从 PATH 查找，不在 PATH 里就填绝对路径。</td></tr>
           <tr><td>命令模板</td><td>留空用后端预置。占位符 <code>{{instruction}}</code>、<code>{{model}}</code>、<code>{{session}}</code>、<code>{{workspace}}</code>；取不到值的占位符连同紧挨在前面的标志一起丢掉，所以没配模型时不会留一个孤零零的 <code>--model</code>。参数不经过 shell，指令里的引号和分号只是普通字符。</td></tr>
           <tr><td>工作区白名单</td><td>一行一个 <code>名字=本地路径</code> 或 <code>名字=git 仓库地址</code>。<strong>只有这里登记过的工作区能被派活。</strong>填仓库地址时首次使用会 clone 到 <code>workspace/coding/&lt;名字&gt;</code> 并常驻。</td></tr>
@@ -259,7 +259,7 @@ Bash：git push origin main
           <tr><td>危险操作清单</td><td>一行一个命令片段，大小写不敏感，命中即要确认。默认收了 <code>git push</code>、<code>git reset --hard</code>、<code>git clean -f</code>、<code>git tag -d</code>、<code>gh pr merge</code>、<code>gh pr create</code>、<code>gh release</code>、<code>npm publish</code>、<code>docker push</code>、<code>rm -rf</code>、<code>sudo</code>。收进来的标准是：做完就收不回来，或者影响跑到工作区外面去。改文件、跑测试、本地提交不在其中——那些是派活时就默许的事。</td></tr>
           <tr><td>等确认多久</td><td>默认 10 分钟，超时按拒绝。等待期间任务是停着的，这段时间也算在单次最长运行时间里，所以把等待调长的时候记得一起看看运行上限。</td></tr>
         </tbody></table></div>
-        <p>这套只支持 Claude Code 后端——它依赖 <code>PreToolUse</code> hook，codex 和自定义命令没有等价机制。<strong>审批开着但后端做不到时，派活会当场报错而不是安静地全放行</strong>：安静地不审批等于骗人。</p>
+        <p>这套支持 Claude Code 和 ACP 代理：Claude Code 靠 <code>PreToolUse</code> hook，ACP 代理靠它自己发来的授权请求，信箱和放行码是同一套；ACP 代理只能审到它主动来问的操作。codex 和自定义命令没有等价机制。<strong>审批开着但后端做不到时，派活会当场报错而不是安静地全放行</strong>：安静地不审批等于骗人。</p>
         <div class="callout"><strong><code>auto</code> 档拦下来的步骤，加进危险清单就能救</strong><p>hook 对清单外的操作不表态，那些仍然由 <code>--permission-mode auto</code> 自己裁决。非交互模式下没人能回答 CLI 的询问，所以 <code>auto</code> 认为需要确认的步骤会直接被拒，任务日志里会写明是哪一步。遇到这种情况把那个命令片段加进危险清单：命中清单的操作走聊天确认，主人回码之后 hook 给出的是<strong>明确放行</strong>，能越过 <code>auto</code> 的犹豫。不想一个个加就把模板里的权限档换成 <code>bypassPermissions</code>——注意那个档位在 root 下会被 Claude Code 自己拒掉，Docker 部署默认就是 root。</p></div>
         <p>审批链路自身出故障（读不到策略文件之类）时 hook 选择放行，理由写进 Diana 的运行日志。这一档是刻意的：自己的辅助设施坏掉不该把任务卡死在半路。真正不想让它碰的东西靠工作区白名单挡，不靠审批。</p>
         <div class="callout"><strong>身份挡不住提示注入</strong><p>和本地文件与命令那三档同理：「调用发生在主人的会话里」不等于「这次调用是主人要的」。群里其他人的消息和主人的消息在同一个上下文里。所以工作区白名单才是真正的闸门——只登记你愿意让它随便改的仓库，不要把生产配置或密钥仓库放进去。不想给推送权限的话，把模板里的权限档换成 <code>--permission-mode acceptEdits</code>，并在那些仓库上用 git hook 拦住 push。</p></div>

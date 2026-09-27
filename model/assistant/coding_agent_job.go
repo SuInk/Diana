@@ -289,6 +289,7 @@ func removeCodingJobFiles(id string) {
 	_ = os.Remove(codingJobLogPath(id))
 	_ = os.Remove(codingApprovalPolicyPath(id))
 	_ = os.Remove(filepath.Join(codingJobRecordDir(), id+".settings.json"))
+	_ = os.Remove(codingACPSpecPath(id))
 }
 
 // codingJobSnapshot 是从日志里读出来的实时进度。任务状态的真相在日志里，记录文件
@@ -445,6 +446,29 @@ func applyCodingLogLine(snapshot *codingJobSnapshot, line string) (string, bool)
 		snapshot.CostUSD = jsonFloat(payload, "total_cost_usd")
 		snapshot.Turns = int(jsonFloat(payload, "num_turns"))
 		return "", false
+	case "acp.session":
+		snapshot.SessionID = jsonString(payload, "session_id")
+		return "会话已建立", true
+	case "acp.message":
+		return jsonString(payload, "text"), true
+	case "acp.tool":
+		return codingACPToolAction(payload)
+	case "acp.plan":
+		return fmt.Sprintf("计划共 %d 项，已完成 %d 项", int(jsonFloat(payload, "total")), int(jsonFloat(payload, "completed"))), true
+	case "acp.permission":
+		return codingACPPermissionAction(payload)
+	case "acp.result":
+		snapshot.Done = true
+		snapshot.IsError = jsonBool(payload, "is_error")
+		if text := jsonString(payload, "result"); text != "" {
+			snapshot.Result = text
+		}
+		return "", false
+	case "acp.error":
+		snapshot.Done = true
+		snapshot.IsError = true
+		snapshot.Result = jsonString(payload, "message")
+		return snapshot.Result, true
 	}
 	// 认不出来的事件（限流通知、工具心跳，或者别的 JSON 后端）：挑几个常见的正文
 	// 字段，都没有就跳过，理由同上。
@@ -452,6 +476,43 @@ func applyCodingLogLine(snapshot *codingJobSnapshot, line string) (string, bool)
 		if text := jsonString(payload, key); text != "" {
 			return text, true
 		}
+	}
+	return "", false
+}
+
+// codingACPToolAction 把 ACP 会话进程记的工具调用翻成进度。同一个调用随状态变化会
+// 记好几行，进度里只报开始和失败，完成不再报一遍。
+func codingACPToolAction(payload map[string]any) (string, bool) {
+	started, failed := jsonBool(payload, "started"), jsonString(payload, "status") == "failed"
+	if !started && !failed {
+		return "", false
+	}
+	target := firstNonEmpty(jsonString(payload, "detail"), jsonString(payload, "title"))
+	label := map[string]string{
+		"execute": "执行命令：", "edit": "编辑：", "delete": "删除：", "move": "移动：",
+		"read": "读取：", "search": "搜索：", "fetch": "抓取：",
+	}[jsonString(payload, "kind")]
+	action := label + target
+	if label == "" {
+		action = firstNonEmpty(jsonString(payload, "title"), target, "工具调用")
+	}
+	if failed {
+		action += "（失败）"
+	}
+	return action, true
+}
+
+func codingACPPermissionAction(payload map[string]any) (string, bool) {
+	target := firstNonEmpty(jsonString(payload, "detail"), jsonString(payload, "tool"))
+	switch jsonString(payload, "decision") {
+	case "pending":
+		return "等主人确认：" + target, true
+	case "allowed":
+		return "主人已放行：" + target, true
+	case "denied":
+		return "未放行：" + target, true
+	case "unchecked":
+		return "审批策略读不到，未经确认放行：" + target, true
 	}
 	return "", false
 }
@@ -722,7 +783,8 @@ func (r *Runtime) startCodingJob(
 	}
 
 	alwaysAllowPath, _ := r.codingAlwaysAllowPathFor(owner)
-	settingsPath, err := prepareCodingApproval(cfg, job.ID, alwaysAllowPath)
+	// Claude Code 拿到的是挂 hook 的 settings 文件，ACP 会话进程拿到的是策略文件本身。
+	approvalPath, err := prepareCodingApproval(cfg, job.ID, alwaysAllowPath)
 	if err != nil {
 		registry.release(workspace.Name, job.ID)
 		return CodingJob{}, nil, err
@@ -740,9 +802,17 @@ func (r *Runtime) startCodingJob(
 		"model":       cfg.Model,
 		"session":     resumeSession,
 		"workspace":   workspace.Dir,
-		"settings":    settingsPath,
+		"settings":    approvalPath,
 	})
 	cmd := exec.Command(cfg.Command, codingProviderArgs(cfg, args)...)
+	if cfg.Backend == codingBackendACP {
+		// ACP 代理由会话进程拉起并占着 stdio；在 Diana 眼里会话进程就是这个任务的 CLI。
+		if cmd, err = codingACPCommand(cfg, job.ID, workspace, instruction, approvalPath); err != nil {
+			logFile.Close()
+			registry.release(workspace.Name, job.ID)
+			return CodingJob{}, nil, err
+		}
+	}
 	cmd.Dir = workspace.Dir
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile

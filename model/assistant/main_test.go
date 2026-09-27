@@ -14,6 +14,14 @@ import (
 )
 
 func TestMain(m *testing.M) {
+	// 编码代理的 ACP 用例会把测试二进制自己拉起来：一次当会话进程，一次当假代理。
+	// 这两种身份都不跑用例，处理完直接退出。
+	if len(os.Args) == 3 && os.Args[1] == CodingACPSessionCommand {
+		os.Exit(RunCodingACPSession(os.Args[2], os.Stdout, os.Stderr))
+	}
+	if len(os.Args) >= 2 && os.Args[1] == fakeACPAgentArg {
+		os.Exit(runFakeACPAgent(os.Stdin, os.Stdout, os.Stderr))
+	}
 	_ = os.Setenv("DIANA_ALLOW_PRIVATE_HTTP_FETCHES", "true")
 	// Agent 的工作目录跟着数据库位置走。测试里把它指到临时目录，免得用例往
 	// 开发机的真实缓存目录写文件。

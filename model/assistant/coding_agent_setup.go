@@ -144,6 +144,9 @@ func CodingAgentSetup(ctx context.Context, settings SettingValues, name, operati
 	if err != nil {
 		return CodingSetupStatus{}, err
 	}
+	if cfg.Backend == codingBackendACP {
+		return CodingSetupStatus{}, fmt.Errorf("ACP 代理暂时要在运行 Diana 的环境里自行安装并登录，WebUI 的检测和安装在后续版本提供")
+	}
 	if cfg.Backend != codingBackendCodex && cfg.Backend != codingBackendClaude {
 		return CodingSetupStatus{}, fmt.Errorf("自定义 CLI 请自行安装配置")
 	}

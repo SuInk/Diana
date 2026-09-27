@@ -69,16 +69,21 @@ func normalizeCodingAgentProfiles(raw any) ([]codingAgentProfile, error) {
 			return nil, fmt.Errorf("编码代理名称必须唯一，使用字母、数字、点、下划线或连字符，且不能是 default")
 		}
 		seen[strings.ToLower(p.ID)] = true
-		if _, ok := codingBackendPresets()[p.Backend]; !ok && p.Backend != codingBackendCustom {
+		if _, ok := codingBackendPresets()[p.Backend]; !ok && p.Backend != codingBackendCustom && p.Backend != codingBackendACP {
 			return nil, fmt.Errorf("编码代理 %s 的后端无效", p.ID)
 		}
 		if p.Backend == codingBackendCustom && (p.Command == "" || p.Template == "") {
 			return nil, fmt.Errorf("自定义编码代理 %s 必须填写可执行文件和命令模板", p.ID)
 		}
-		if p.Template != "" && !strings.Contains(p.Template, "{{instruction}}") {
-			return nil, fmt.Errorf("编码代理 %s 的模板必须包含 {{instruction}}", p.ID)
+		if p.Backend == codingBackendACP && p.Command == "" {
+			return nil, fmt.Errorf("ACP 编码代理 %s 必须填写代理的可执行文件", p.ID)
 		}
-		if p.APIKeyEnv != "" && (!codingEnvName.MatchString(p.APIKeyEnv) || p.Backend == codingBackendCustom) {
+		if p.Template != "" || p.Backend == codingBackendCustom {
+			if err := validateCodingTemplate(p.Backend, p.Template); err != nil {
+				return nil, fmt.Errorf("编码代理 %s：%w", p.ID, err)
+			}
+		}
+		if p.APIKeyEnv != "" && (!codingEnvName.MatchString(p.APIKeyEnv) || p.Backend == codingBackendCustom || p.Backend == codingBackendACP) {
 			return nil, fmt.Errorf("编码代理 %s 的密钥环境变量名无效，自定义后端请使用自身环境配置", p.ID)
 		}
 		switch p.ApprovalMode {
@@ -86,8 +91,8 @@ func normalizeCodingAgentProfiles(raw any) ([]codingAgentProfile, error) {
 		default:
 			return nil, fmt.Errorf("编码代理 %s 必须选择审批模式", p.ID)
 		}
-		if p.Backend != codingBackendClaude && p.ApprovalMode != codingApprovalModeOff {
-			return nil, fmt.Errorf("编码代理 %s 不支持聊天审批，请明确选择关闭或使用 Claude Code", p.ID)
+		if p.Backend != codingBackendClaude && p.Backend != codingBackendACP && p.ApprovalMode != codingApprovalModeOff {
+			return nil, fmt.Errorf("编码代理 %s 不支持聊天审批，请明确选择关闭或使用 Claude Code / ACP 代理", p.ID)
 		}
 		if p.Default && hasDefault {
 			return nil, fmt.Errorf("只能设置一个默认编码代理")

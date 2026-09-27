@@ -33,15 +33,18 @@ const profiles = computed(() => Array.isArray(props.modelValue) ? props.modelVal
 const backends = [
   { value: "claude", label: "Claude Code" },
   { value: "codex", label: "Codex" },
+  { value: "acp", label: "ACP 代理（Gemini CLI、opencode 等）" },
   { value: "custom", label: "自定义命令" }
 ];
 const approvals = [
-  { value: "dangerous", label: "危险操作要确认（仅 Claude Code）" },
-  { value: "all_writes", label: "所有写操作要确认（仅 Claude Code）" },
+  { value: "dangerous", label: "危险操作要确认（Claude Code / ACP 代理）" },
+  { value: "all_writes", label: "所有写操作要确认（Claude Code / ACP 代理）" },
   { value: "off", label: "关闭聊天审批" }
 ];
 function update(index: number, key: keyof AgentProfile, value: string | boolean): void {
-  emit("update:modelValue", profiles.value.map((profile, i) => i === index ? { ...profile, [key]: value, ...(key === "backend" && value === "custom" ? { api_key_env: "" } : {}) } : { ...profile }));
+  // 自定义命令和 ACP 代理用各自的环境配置凭据，切过去时清掉密钥环境变量名。
+  const ownCredentials = key === "backend" && (value === "custom" || value === "acp");
+  emit("update:modelValue", profiles.value.map((profile, i) => i === index ? { ...profile, [key]: value, ...(ownCredentials ? { api_key_env: "" } : {}) } : { ...profile }));
 }
 function text(event: Event): string { return (event.target as HTMLInputElement).value; }
 function setDefault(index: number): void {
@@ -87,15 +90,17 @@ function remove(index: number): void {
           <input class="input" :value="profile.model" placeholder="留空使用 CLI 默认模型" @input="update(index, 'model', text($event))" />
         </label>
         <label class="field">可执行文件
-          <input class="input" :value="profile.command" placeholder="留空按后端查找，可填绝对路径" @input="update(index, 'command', text($event))" />
+          <input class="input" :value="profile.command" :placeholder="profile.backend === 'acp' ? '代理命令，例如 gemini 或 opencode' : '留空按后端查找，可填绝对路径'" @input="update(index, 'command', text($event))" />
         </label>
       </div>
       <div class="field">
         <label :for="`${id}-${index}-approval`">聊天审批</label>
         <AppSelect :id="`${id}-${index}-approval`" :model-value="profile.approval_mode" :options="approvals" @update:model-value="update(index, 'approval_mode', $event)" />
-        <span v-if="profile.backend !== 'claude'" class="hint">此后端不支持聊天审批，需明确选择关闭。Codex 预置命令会绕过 CLI 审批和沙箱。</span>
+        <span v-if="profile.backend === 'acp'" class="hint">ACP 代理只能审到它主动来询问的操作；代理按自己的权限设置直接放行的，不会经过这里。</span>
+        <span v-else-if="profile.backend !== 'claude'" class="hint">此后端不支持聊天审批，需明确选择关闭。Codex 预置命令会绕过 CLI 审批和沙箱。</span>
       </div>
-      <template v-if="profile.backend !== 'custom'">
+      <p v-if="profile.backend === 'acp'" class="hint">ACP 代理需要先在运行 Diana 的环境里安装并登录（或配好代理自己的 API 密钥环境变量，例如 GEMINI_API_KEY）；WebUI 的检测和安装在后续版本提供。</p>
+      <template v-if="profile.backend !== 'custom' && profile.backend !== 'acp'">
         <label class="field">API 服务地址
           <input class="input" :value="profile.base_url || ''" placeholder="留空使用官方服务" @input="update(index, 'base_url', text($event))" />
         </label>
@@ -122,11 +127,12 @@ function remove(index: number): void {
       <details>
         <summary>高级配置</summary>
         <div class="stack" style="margin-top: 12px">
-          <label class="field">命令模板
-            <textarea class="input" rows="3" :value="profile.command_template" placeholder="留空使用预置命令，自定义后端必填" @input="update(index, 'command_template', text($event))"></textarea>
-            <span class="hint">模板需包含 <code v-text="'{{instruction}}'"></code>，其他占位符与原有配置一致。</span>
+          <label class="field">{{ profile.backend === 'acp' ? '代理参数' : '命令模板' }}
+            <textarea class="input" rows="3" :value="profile.command_template" :placeholder="profile.backend === 'acp' ? '例如 --acp（Gemini CLI）或 acp（opencode）' : '留空使用预置命令，自定义后端必填'" @input="update(index, 'command_template', text($event))"></textarea>
+            <span v-if="profile.backend === 'acp'" class="hint">指令通过 ACP 协议发送，这里只填代理自己的参数，不要写 <code v-text="'{{instruction}}'"></code>；可用 <code v-text="'{{model}}'"></code>。</span>
+            <span v-else class="hint">模板需包含 <code v-text="'{{instruction}}'"></code>，其他占位符与原有配置一致。</span>
           </label>
-          <label v-if="profile.backend !== 'custom'" class="field">密钥环境变量名
+          <label v-if="profile.backend !== 'custom' && profile.backend !== 'acp'" class="field">密钥环境变量名
             <input class="input" :value="profile.api_key_env" placeholder="例如 DIANA_CODEX_KEY（不要填写密钥本身）" @input="update(index, 'api_key_env', text($event))" />
             <span class="hint">留空使用 CLI 已有登录或环境配置；额外代理不继承下方 API 密钥。</span>
           </label>

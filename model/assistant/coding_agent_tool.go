@@ -33,7 +33,7 @@ func newDianaCodingTool(runtime *Runtime, event MessageEvent, settings SettingVa
 func (t *dianaCodingTool) Name() string { return dianaCodingToolName }
 
 func (t *dianaCodingTool) Description() string {
-	return `把一件编码工作交给外部编码 CLI（Claude Code / Codex）在持久工作区里长时间执行。submit 派活后进程在后台独立运行，工具先等几秒：这期间就结束的直接返回结果，否则返回任务号，跑完 Diana 会主动汇报；期间用 status 查进度、tail 看最近动作、cancel 终止、followup 在原会话上追加指令；approvals 查看或清空主人说过「以后都同意」的操作类别。适合「改代码、修 Bug、加测试、跑构建」这类要几分钟到几小时的活。可用 agents 查看多个代理配置，submit 用 agent 选择配置；不填使用默认代理。只有机器人主人能用。`
+	return `把一件编码工作交给外部编码 CLI（Claude Code / Codex / ACP 代理）在持久工作区里长时间执行。submit 派活后进程在后台独立运行，工具先等几秒：这期间就结束的直接返回结果，否则返回任务号，跑完 Diana 会主动汇报；期间用 status 查进度、tail 看最近动作、cancel 终止、followup 在原会话上追加指令；approvals 查看或清空主人说过「以后都同意」的操作类别。适合「改代码、修 Bug、加测试、跑构建」这类要几分钟到几小时的活。可用 agents 查看多个代理配置，submit 用 agent 选择配置；不填使用默认代理。只有机器人主人能用。`
 }
 
 func (t *dianaCodingTool) InputSchema() map[string]any {
@@ -264,6 +264,11 @@ func codingBackendLabel(cfg codingAgentConfig) string {
 		return "Claude Code"
 	case codingBackendCodex:
 		return "Codex"
+	case codingBackendACP:
+		if name := filepath.Base(strings.TrimSpace(cfg.Command)); name != "" && name != "." {
+			return name + "（ACP）"
+		}
+		return "ACP 代理"
 	}
 	if name := filepath.Base(strings.TrimSpace(cfg.Command)); name != "" && name != "." {
 		return name

@@ -31,6 +31,8 @@ const (
 	codingBackendClaude = "claude"
 	codingBackendCodex  = "codex"
 	codingBackendCustom = "custom"
+	// codingBackendACP 接任意 ACP（Agent Client Protocol）代理，见 docs/coding-agent-acp.md。
+	codingBackendACP = "acp"
 
 	defaultCodingMaxRuntimeMinutes = 120
 	maxCodingMaxRuntimeMinutes     = 1440
@@ -82,7 +84,7 @@ func (p *CodingAgentPlugin) Manifest() PluginManifest {
 	return PluginManifest{
 		ID:            codingAgentPluginID,
 		Name:          "编码代理",
-		Version:       "0.1.3",
+		Version:       "0.1.4",
 		Description:   "把 Claude Code、Codex 这类编码 CLI 接进对话：在持久工作区里长时间改代码，完成后汇报，运行途中可以随时查询进度。仅机器人主人可用。",
 		Official:      true,
 		BuiltIn:       true,
@@ -95,14 +97,16 @@ func (p *CodingAgentPlugin) Manifest() PluginManifest {
 			{Key: codingAgentSettingProfiles, Label: "额外编码代理", Type: PluginSettingTypeCodingAgents, Default: []codingAgentProfile{},
 				Description: "同时配置多个 CLI 或模型，派任务时按名称选择。下方原有 CLI 设置保留为 default；所有代理共用工作区白名单和并发上限。"},
 			{
-				Key:         codingAgentSettingBackend,
-				Label:       "后端 CLI",
-				Description: "claude 走 Claude Code 的 stream-json，进度和结果解析最完整；codex 支持结构化命令进度和最终回答，但暂不支持续跑；custom 按日志尾巴汇报。",
-				Type:        PluginSettingTypeSelect,
-				Default:     codingBackendClaude,
+				Key:   codingAgentSettingBackend,
+				Label: "后端 CLI",
+				Description: "claude 走 Claude Code 的 stream-json，进度和结果解析最完整；codex 支持结构化命令进度和最终回答，但暂不支持续跑；" +
+					"acp 接 Gemini CLI、opencode 这类 ACP 代理，可执行文件填代理命令，命令模板填代理参数（如 --acp），指令走协议发送；custom 按日志尾巴汇报。",
+				Type:    PluginSettingTypeSelect,
+				Default: codingBackendClaude,
 				Options: []PluginSettingOption{
 					{Value: codingBackendClaude, Label: "Claude Code（claude）"},
 					{Value: codingBackendCodex, Label: "Codex（codex）"},
+					{Value: codingBackendACP, Label: "ACP 代理（Gemini CLI、opencode 等）"},
 					{Value: codingBackendCustom, Label: "自定义命令"},
 				},
 			},
@@ -117,7 +121,7 @@ func (p *CodingAgentPlugin) Manifest() PluginManifest {
 				Key:   codingAgentSettingTemplate,
 				Label: "命令模板",
 				Description: "留空用后端预置。占位符：{{instruction}} 指令、{{model}} 模型、{{session}} 续跑会话 ID、" +
-					"{{workspace}} 工作目录。带空值占位符的参数会整个丢掉。自定义后端必须填。",
+					"{{workspace}} 工作目录。带空值占位符的参数会整个丢掉。自定义后端必须填。ACP 代理这里只填代理参数，不写 {{instruction}}。",
 				Type:    PluginSettingTypeText,
 				Default: "",
 				Rows:    3,
@@ -241,7 +245,7 @@ type codingAgentConfig struct {
 func codingAgentConfigFromSettings(settings SettingValues) (codingAgentConfig, error) {
 	backend := strings.TrimSpace(settings.String(codingAgentSettingBackend, codingBackendClaude))
 	preset, known := codingBackendPresets()[backend]
-	if !known && backend != codingBackendCustom {
+	if !known && backend != codingBackendCustom && backend != codingBackendACP {
 		return codingAgentConfig{}, fmt.Errorf("编码代理：未知后端 %q", backend)
 	}
 	cfg := codingAgentConfig{
@@ -260,13 +264,13 @@ func codingAgentConfigFromSettings(settings SettingValues) (codingAgentConfig, e
 		cfg.Template = preset.Template
 	}
 	if cfg.Command == "" {
+		if backend == codingBackendACP {
+			return codingAgentConfig{}, fmt.Errorf("编码代理：ACP 后端必须配置代理的可执行文件，例如 gemini 或 opencode")
+		}
 		return codingAgentConfig{}, fmt.Errorf("编码代理：自定义后端必须配置可执行文件")
 	}
-	if cfg.Template == "" {
-		return codingAgentConfig{}, fmt.Errorf("编码代理：自定义后端必须配置命令模板")
-	}
-	if !strings.Contains(cfg.Template, "{{instruction}}") {
-		return codingAgentConfig{}, fmt.Errorf("编码代理：命令模板必须包含 {{instruction}}")
+	if err := validateCodingTemplate(backend, cfg.Template); err != nil {
+		return codingAgentConfig{}, fmt.Errorf("编码代理：%w", err)
 	}
 	minutes := settings.Int(codingAgentSettingMaxRuntime, defaultCodingMaxRuntimeMinutes)
 	if minutes <= 0 {
@@ -299,6 +303,24 @@ func codingAgentConfigFromSettings(settings SettingValues) (codingAgentConfig, e
 	}
 	cfg.Workspaces = workspaces
 	return cfg, nil
+}
+
+// validateCodingTemplate 检查命令模板。ACP 代理的指令走 session/prompt 发送，模板里
+// 只有代理自己的参数，可以为空；写了 {{instruction}} 反而说明配错了后端。
+func validateCodingTemplate(backend, template string) error {
+	if backend == codingBackendACP {
+		if strings.Contains(template, "{{instruction}}") {
+			return fmt.Errorf("ACP 代理的指令走协议发送，命令模板里只填代理参数，不要写 {{instruction}}")
+		}
+		return nil
+	}
+	if template == "" {
+		return fmt.Errorf("自定义后端必须配置命令模板")
+	}
+	if !strings.Contains(template, "{{instruction}}") {
+		return fmt.Errorf("命令模板必须包含 {{instruction}}")
+	}
+	return nil
 }
 
 func (cfg codingAgentConfig) workspace(name string) (codingWorkspace, bool) {
