@@ -51,7 +51,7 @@ Diana ──setsid 拉起──▶ diana __coding-acp <spec.json>   ← Diana �
 
 1. 读 `spec.json`：代理命令和参数、环境变量、工作区目录、指令、要续的会话 ID、审批策略文件路径（沿用 hook 用的那份）。
 2. 拉起代理，发 `initialize`：`protocolVersion: 1`，`clientCapabilities` 里 `fs` 和 `terminal` 都不声明。记下代理回的能力（`loadSession`、`sessionCapabilities.resume`）和 `authMethods`。
-3. 代理要求认证（`session/new` 回 `-32000`）时，只按名字挑不需要人在场的方式试 `authenticate`（方法 ID 含 key、env、token，排除 oauth、login、browser），成功后重建会话；都不行就失败，错误里列出代理给的登录方式。不在无人值守的会话里走交互登录。
+3. 代理要求认证（`session/new` 回 `-32000`）时直接失败，错误里列出代理给的登录方式，**不替主人调 `authenticate`**。实测 Gemini CLI 的 `authenticate` 会把所选方式写进 `~/.gemini/settings.json`，换方式时还会清掉已缓存的登录凭据；无人值守的会话进程不该替主人做这个决定。主人在运行 Diana 的环境里用同一个系统用户直接运行一次代理完成登录即可。代理卡在交互提示上时（提示打在 stdout、常常不带换行），错误说明里会附上它打印的内容。
 4. 建会话：新任务发 `session/new`（`cwd` 为工作区，`mcpServers: []`）；续跑优先 `session/resume`（不回放历史），不支持再用 `session/load`，回放期间的 `session/update` 丢弃，不写进日志。
 5. 发 `session/prompt`，内容是指令文本。期间把 `session/update` 规整后逐行写进日志（见下节），`session/request_permission` 按审批映射处理。
 6. `session/prompt` 返回 `stopReason` 后写结果行，关代理 stdin，等它退出（2 秒后强杀），会话进程退出。

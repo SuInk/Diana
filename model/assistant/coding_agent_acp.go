@@ -21,6 +21,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/SuInk/diana/model/version"
+
 	"github.com/google/uuid"
 )
 
@@ -157,10 +159,13 @@ func runCodingACPSession(ctx context.Context, spec codingACPSpec, log *codingACP
 	// 取消时发信号的范围里。
 	defer killCodingACPAgentGroup(agentPID)
 	conn := newCodingACPConn(stdin)
-	session := &codingACPSession{spec: spec, log: log, conn: conn, ctx: ctx, stderr: stderrTail, tools: map[string]*codingACPTool{}}
+	// stdout 原样留一段尾巴：代理卡在交互式登录这类地方时，提示是打在 stdout 上的，
+	// 往往还不带换行，按行解析永远读不到，出错时只能从这里看出它在等什么。
+	stdoutTail := &codingTailBuffer{limit: codingACPStderrTailBytes}
+	session := &codingACPSession{spec: spec, log: log, conn: conn, ctx: ctx, stderr: stderrTail, stdout: stdoutTail, tools: map[string]*codingACPTool{}}
 	conn.onNotify = session.handleNotification
 	conn.onRequest = session.handleRequest
-	go conn.readLoop(stdout)
+	go conn.readLoop(io.TeeReader(stdout, stdoutTail))
 	exited := make(chan struct{})
 	go func() {
 		_ = cmd.Wait()
@@ -198,6 +203,7 @@ type codingACPSession struct {
 	conn      *codingACPConn
 	ctx       context.Context
 	stderr    *codingTailBuffer
+	stdout    *codingTailBuffer
 	sessionID string
 	cancelled atomic.Bool
 
@@ -238,7 +244,8 @@ func (s *codingACPSession) run() int {
 			"fs":       map[string]any{"readTextFile": false, "writeTextFile": false},
 			"terminal": false,
 		},
-		"clientInfo": map[string]any{"name": "diana"},
+		// 规范里 version 可选，但 Gemini CLI 的校验要求必填，缺了直接握手失败。
+		"clientInfo": map[string]any{"name": "diana", "version": version.Source()},
 	}, &initialized)
 	cancelInit()
 	if err != nil {
@@ -305,54 +312,30 @@ type codingACPAuthMethod struct {
 	Name string `json:"name"`
 }
 
-// newSession 建会话。代理要求先认证时，只试不需要人在场的方式（按名字认 API 密钥、
-// 环境变量这类），浏览器登录在无人值守的会话里走不通，直接说清楚要去哪里登录。
+// newSession 建会话。代理要求先认证时不替用户去调 authenticate：各家的认证会改写
+// 代理自己的配置——Gemini CLI 会把选中的方式写进 ~/.gemini/settings.json，换方式时还
+// 会清掉已缓存的登录凭据——无人值守的会话进程不该替主人做这个决定。直接失败，把
+// 代理给的登录方式列出来，让主人在运行 Diana 的环境里自己登录一次。
 func (s *codingACPSession) newSession(methods []codingACPAuthMethod) (string, error) {
-	create := func() (string, error) {
-		var created struct {
-			SessionID string `json:"sessionId"`
-		}
-		ctx, cancel := context.WithTimeout(s.ctx, codingACPSessionTimeout)
-		defer cancel()
-		err := s.conn.call(ctx, "session/new", map[string]any{"cwd": s.spec.Dir, "mcpServers": []any{}}, &created)
-		if err == nil && strings.TrimSpace(created.SessionID) == "" {
-			err = errors.New("代理没有返回会话 ID")
-		}
-		return created.SessionID, err
+	var created struct {
+		SessionID string `json:"sessionId"`
 	}
-	id, err := create()
+	ctx, cancel := context.WithTimeout(s.ctx, codingACPSessionTimeout)
+	defer cancel()
+	err := s.conn.call(ctx, "session/new", map[string]any{"cwd": s.spec.Dir, "mcpServers": []any{}}, &created)
 	var rpcErr *codingACPRPCError
-	if err == nil || !errors.As(err, &rpcErr) || rpcErr.Code != codingACPErrAuthRequired {
-		return id, err
-	}
-	for _, method := range methods {
-		if !codingACPUnattendedAuth(method) {
-			continue
+	if errors.As(err, &rpcErr) && rpcErr.Code == codingACPErrAuthRequired {
+		names := make([]string, 0, len(methods))
+		for _, method := range methods {
+			names = append(names, firstNonEmpty(method.Name, method.ID))
 		}
-		ctx, cancel := context.WithTimeout(s.ctx, codingACPSessionTimeout)
-		authErr := s.conn.call(ctx, "authenticate", map[string]any{"methodId": method.ID}, nil)
-		cancel()
-		if authErr != nil {
-			continue
-		}
-		if id, err = create(); err == nil {
-			return id, nil
-		}
+		return "", fmt.Errorf("代理需要先登录（可用方式：%s）。在运行 Diana 的环境里用同一个系统用户直接运行一次这个代理完成登录，或配好它自己的 API 密钥环境变量：%w",
+			firstNonEmpty(strings.Join(names, "、"), "代理没有列出"), err)
 	}
-	names := make([]string, 0, len(methods))
-	for _, method := range methods {
-		names = append(names, firstNonEmpty(method.Name, method.ID))
+	if err == nil && strings.TrimSpace(created.SessionID) == "" {
+		err = errors.New("代理没有返回会话 ID")
 	}
-	return "", fmt.Errorf("代理需要先登录（可用方式：%s）。在运行 Diana 的环境里完成登录，或配好代理自己的 API 密钥环境变量：%w",
-		firstNonEmpty(strings.Join(names, "、"), "代理没有列出"), err)
-}
-
-func codingACPUnattendedAuth(method codingACPAuthMethod) bool {
-	id := strings.ToLower(method.ID)
-	if strings.Contains(id, "oauth") || strings.Contains(id, "login") || strings.Contains(id, "browser") {
-		return false
-	}
-	return strings.Contains(id, "key") || strings.Contains(id, "env") || strings.Contains(id, "token")
+	return created.SessionID, err
 }
 
 // finish 按代理给的停止原因写结果行。拒绝、超长、轮数到顶都算没做完，汇报按失败说。
@@ -398,11 +381,28 @@ func (s *codingACPSession) abort(what string, err error) int {
 	}
 	s.flushMessage()
 	message := what + "：" + err.Error()
+	if tail := codingACPStdoutNoise(s.stdout.String()); tail != "" {
+		message += "\n代理打印：" + tail
+	}
 	if tail := strings.TrimSpace(s.stderr.String()); tail != "" {
 		message += "\n代理输出：" + tail
 	}
 	s.log.fail(message)
 	return 1
+}
+
+// codingACPStdoutNoise 从 stdout 尾巴里挑出不是协议消息的内容。
+func codingACPStdoutNoise(tail string) string {
+	lines := strings.Split(tail, "\n")
+	kept := make([]string, 0, len(lines))
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "{") {
+			continue
+		}
+		kept = append(kept, line)
+	}
+	return strings.Join(kept, "\n")
 }
 
 func (s *codingACPSession) result() string {

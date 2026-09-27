@@ -162,27 +162,25 @@ func runFakeACPAgent(in io.Reader, out, errOut io.Writer) int {
 		}
 		switch message.Method {
 		case "initialize":
+			if scenario == "login-prompt" {
+				// 像 Gemini CLI 等交互式登录：提示打在 stdout 上，不带换行，然后退出。
+				writeMu.Lock()
+				_, _ = out.Write([]byte("Opening authentication page in your browser. Do you want to continue? [Y/n]: "))
+				writeMu.Unlock()
+				os.Exit(1)
+			}
 			methods := []any{}
-			switch scenario {
-			case "auth":
+			if scenario == "auth" {
 				methods = []any{map[string]any{"id": "oauth-personal", "name": "Google 登录"}, map[string]any{"id": "fake-api-key", "name": "API 密钥"}}
-			case "auth-oauth-only":
-				methods = []any{map[string]any{"id": "oauth-personal", "name": "Google 登录"}}
 			}
 			respond(map[string]any{"protocolVersion": 1, "agentCapabilities": map[string]any{"loadSession": true}, "agentInfo": map[string]any{"name": "fake-agent"}, "authMethods": methods})
 		case "authenticate":
-			var params struct {
-				MethodID string `json:"methodId"`
-			}
-			_ = json.Unmarshal(message.Params, &params)
-			if params.MethodID != "fake-api-key" {
-				fail(-32000, "登录方式不可用")
-				return
-			}
+			// 会话进程不该来调这个：真实代理在这里会改写自己的配置。
+			_, _ = errOut.Write([]byte("authenticate 被调用\n"))
 			authed.Store(true)
 			respond(map[string]any{})
 		case "session/new":
-			if scenario == "auth-oauth-only" || (scenario == "auth" && !authed.Load()) {
+			if scenario == "auth" && !authed.Load() {
 				fail(codingACPErrAuthRequired, "Authentication required")
 				return
 			}
@@ -364,16 +362,30 @@ func TestCodingACPSessionAllowsHarmlessCommandWithoutAsking(t *testing.T) {
 	}
 }
 
-// TestCodingACPSessionAuthenticatesWithKeyMethod 钉住认证：代理要求先登录时，只试不
-// 需要人在场的方式；只剩浏览器登录就停下来说清楚。
-func TestCodingACPSessionAuthenticatesWithKeyMethod(t *testing.T) {
+// TestCodingACPSessionExplainsLoginWithoutAuthenticating 钉住认证：代理要求先登录时
+// 直接失败并列出登录方式，不替主人调 authenticate。真实的 Gemini CLI 在 authenticate
+// 时会改写 ~/.gemini/settings.json，换方式还会清掉已缓存的登录凭据。
+func TestCodingACPSessionExplainsLoginWithoutAuthenticating(t *testing.T) {
 	run := runFakeACPSession(t, context.Background(), "auth", "")
-	if run.code != 0 || run.snapshot.Result != "改好了，测试全过。" {
-		t.Fatalf("exit=%d result=%q\n%s", run.code, run.snapshot.Result, run.log)
+	if run.code != 1 || !run.snapshot.IsError {
+		t.Fatalf("exit=%d result=%q", run.code, run.snapshot.Result)
 	}
-	oauth := runFakeACPSession(t, context.Background(), "auth-oauth-only", "")
-	if oauth.code != 1 || !oauth.snapshot.IsError || !strings.Contains(oauth.snapshot.Result, "需要先登录") || !strings.Contains(oauth.snapshot.Result, "Google 登录") {
-		t.Fatalf("exit=%d result=%q", oauth.code, oauth.snapshot.Result)
+	for _, want := range []string{"需要先登录", "Google 登录", "API 密钥"} {
+		if !strings.Contains(run.snapshot.Result, want) {
+			t.Fatalf("错误说明里少了 %q：%q", want, run.snapshot.Result)
+		}
+	}
+	if strings.Contains(run.snapshot.Result, "authenticate 被调用") {
+		t.Fatalf("不该替主人调 authenticate：%q", run.snapshot.Result)
+	}
+}
+
+// TestCodingACPSessionShowsAgentPrompt 钉住代理卡在交互式登录的情况：它打在 stdout
+// 上的提示要出现在错误说明里，不然只看得到「没有完成握手」。
+func TestCodingACPSessionShowsAgentPrompt(t *testing.T) {
+	run := runFakeACPSession(t, context.Background(), "login-prompt", "")
+	if run.code != 1 || !strings.Contains(run.snapshot.Result, "Opening authentication page") {
+		t.Fatalf("exit=%d result=%q", run.code, run.snapshot.Result)
 	}
 }
 
