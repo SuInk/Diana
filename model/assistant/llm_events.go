@@ -6,10 +6,12 @@ package assistant
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/SuInk/diana/model/applog"
+	"github.com/SuInk/diana/model/llm"
 )
 
 // backgroundLogInterval 是同一件后台事件两次写进运行日志的最短间隔。上游挂了、数据库
@@ -28,11 +30,17 @@ const (
 
 // llmEvent 描述一次线路切换或收缩重试。
 type llmEvent struct {
-	Kind             llmEventKind
-	Group            string
-	Model            string
-	From             string
-	To               string
+	Kind  llmEventKind
+	Group string
+	Model string
+	From  string
+	To    string
+	// FromName、ToName 是给人看的配置档名，没有名字时是 ID；两端是同一个配置档时
+	// 带上模型。From、To 仍是 ID，留在元数据里供检索。
+	FromName string
+	ToName   string
+	// ToModel 是切过去的那一档的模型，同一个配置档下换模型时和 Model 不同。
+	ToModel          string
 	Stream           bool
 	MaxContextTokens int64
 	Err              error
@@ -41,6 +49,37 @@ type llmEvent struct {
 // llmEventReporter 由运行时挂到 provider 上：provider 本身是每次调用临时建的，
 // 拿不到运行日志，也存不住节流状态。
 type llmEventReporter func(llmEvent)
+
+// newLLMFailoverEvent 组一条切档事件。
+func newLLMFailoverEvent(group string, from, to llm.Profile, stream bool, err error) llmEvent {
+	fromName, toName := llmFailoverDisplayNames(from, to)
+	return llmEvent{
+		Kind:     llmEventFailover,
+		Group:    group,
+		Model:    from.Config.Model,
+		ToModel:  to.Config.Model,
+		From:     from.ID,
+		To:       to.ID,
+		FromName: fromName,
+		ToName:   toName,
+		Stream:   stream,
+		Err:      err,
+	}
+}
+
+// llmFailoverDisplayNames 给运行日志取两端的名字：配置档名，没有名字退回 ID；
+// 同一个配置档下换模型时补上模型，不然界面上是「从 A 切到 A」。
+func llmFailoverDisplayNames(from, to llm.Profile) (string, string) {
+	name := func(profile llm.Profile, withModel bool) string {
+		label := firstNonEmpty(strings.TrimSpace(profile.Name), strings.TrimSpace(profile.ID))
+		if model := strings.TrimSpace(profile.Config.Model); withModel && model != "" {
+			label += " / " + model
+		}
+		return label
+	}
+	sameProfile := strings.TrimSpace(from.ID) == strings.TrimSpace(to.ID)
+	return name(from, sameProfile), name(to, sameProfile)
+}
 
 type llmEventReporterKey struct{}
 
@@ -85,7 +124,7 @@ func (r *Runtime) reportLLMEvent(event llmEvent) {
 	if writer == nil {
 		return
 	}
-	key := fmt.Sprintf("%s|%s|%s|%s|%s", event.Kind, event.Group, event.Model, event.From, event.To)
+	key := fmt.Sprintf("%s|%s|%s|%s|%s|%s", event.Kind, event.Group, event.Model, event.From, event.To, event.ToModel)
 	if !r.backgroundLogThrottle.allow(key, time.Now()) {
 		return
 	}
@@ -103,9 +142,12 @@ func (r *Runtime) reportLLMEvent(event llmEvent) {
 	case llmEventFailover:
 		entry.Kind = applog.KindError
 		entry.Level = applog.LevelError
-		entry.Message = fmt.Sprintf("模型配置「%s」调用失败，已切到「%s」", event.From, event.To)
+		entry.Message = fmt.Sprintf("模型配置「%s」调用失败，已切到「%s」", firstNonEmpty(event.FromName, event.From), firstNonEmpty(event.ToName, event.To))
 		entry.Metadata["from"] = event.From
 		entry.Metadata["to"] = event.To
+		if event.ToModel != "" {
+			entry.Metadata["to_model"] = event.ToModel
+		}
 		entry.Metadata["stream"] = event.Stream
 	case llmEventContextShrink:
 		entry.Message = fmt.Sprintf("模型「%s」报上下文超限，已收小到 %d tokens 重发", event.Model, event.MaxContextTokens)

@@ -619,6 +619,8 @@ type Runtime struct {
 	agentFootprints map[string]agentFootprint
 	// backgroundLogThrottle 给后台事件的运行日志节流，见 recordBackgroundFailure。
 	backgroundLogThrottle logThrottle
+	// llmCooldowns 记模型候选的冷却，跨请求保留，见 llmCooldownTable。
+	llmCooldowns llmCooldownTable
 }
 
 // SetGroupConfigStore 注入群级配置存储，运行时会按消息所在群合并群配置。

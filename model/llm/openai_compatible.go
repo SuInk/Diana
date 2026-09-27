@@ -808,6 +808,7 @@ func (c *openAICompatibleClient) generateChatCompletion(ctx context.Context, req
 		}
 		capture.statusCode = resp.StatusCode
 		capture.body = string(errBody)
+		capture.retryAfter = parseRetryAfter(resp.Header.Get("Retry-After"))
 		return nil, openAICompatibleError(fmt.Errorf("openai-compatible chat completions failed"), capture)
 	}
 	if strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "text/event-stream") {
@@ -1001,6 +1002,7 @@ func (c *openAICompatibleClient) newResponse(ctx context.Context, params respons
 		errBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 		capture.statusCode = resp.StatusCode
 		capture.body = string(errBody)
+		capture.retryAfter = parseRetryAfter(resp.Header.Get("Retry-After"))
 		return nil, fmt.Errorf("openai-compatible responses failed"), capture
 	}
 	contentType := strings.ToLower(resp.Header.Get("Content-Type"))
@@ -2414,6 +2416,7 @@ func openAIResponseRole(role Role) responses.EasyInputMessageRole {
 type openAIErrorCapture struct {
 	statusCode int
 	body       string
+	retryAfter time.Duration
 }
 
 // captureOpenAIErrorBody 创建捕获 OpenAI 错误响应体的中间件。
@@ -2431,6 +2434,7 @@ func captureOpenAIErrorBody(capture *openAIErrorCapture) option.Middleware {
 		if readErr == nil {
 			capture.statusCode = res.StatusCode
 			capture.body = string(body)
+			capture.retryAfter = parseRetryAfter(res.Header.Get("Retry-After"))
 		}
 		return res, err
 	}
@@ -2450,14 +2454,18 @@ func openAIRequestOptions(userAgent string, headers map[string]string, capture *
 
 // openAICompatibleError 规范化 OpenAI-compatible 请求错误。
 // openAIRequestError 保留上游状态码以便判断降级，渲染出的文案和原来完全一致。
+// retryAfter 是上游 Retry-After 头给的等待时间，没给时为 0，不进文案。
 type openAIRequestError struct {
 	statusCode int
 	detail     string
+	retryAfter time.Duration
 }
 
 func (e *openAIRequestError) Error() string {
 	return "llm: openai-compatible request failed: " + e.detail
 }
+
+func (e *openAIRequestError) retryAfterHint() time.Duration { return e.retryAfter }
 
 func openAICompatibleError(err error, capture *openAIErrorCapture) error {
 	var apiErr *openai.Error
@@ -2470,11 +2478,18 @@ func openAICompatibleError(err error, capture *openAIErrorCapture) error {
 		if body == "" && capture != nil {
 			body = capture.body
 		}
+		var retryAfter time.Duration
+		if apiErr.Response != nil {
+			retryAfter = parseRetryAfter(apiErr.Response.Header.Get("Retry-After"))
+		}
+		if retryAfter == 0 && capture != nil {
+			retryAfter = capture.retryAfter
+		}
 		// 聚合商错误格式差异很大，统一压成 status/code/type/message/body 便于前端展示。
-		return &openAIRequestError{statusCode: statusCode, detail: formatOpenAIStatusError(statusCode, apiErr.Code, apiErr.Type, apiErr.Message, body)}
+		return &openAIRequestError{statusCode: statusCode, detail: formatOpenAIStatusError(statusCode, apiErr.Code, apiErr.Type, apiErr.Message, body), retryAfter: retryAfter}
 	}
 	if capture != nil && capture.statusCode >= http.StatusBadRequest {
-		return &openAIRequestError{statusCode: capture.statusCode, detail: formatOpenAIStatusError(capture.statusCode, "", "", "", capture.body)}
+		return &openAIRequestError{statusCode: capture.statusCode, detail: formatOpenAIStatusError(capture.statusCode, "", "", "", capture.body), retryAfter: capture.retryAfter}
 	}
 	return err
 }

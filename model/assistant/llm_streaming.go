@@ -136,8 +136,17 @@ func (p *streamingLLMProvider) Generate(ctx context.Context, req llm.GenerateReq
 				return p.retryAfterStreamedRejection(ctx, req, notice)
 			}
 		}
+		if recorder, ok := p.provider.(streamSuccessRecorder); ok {
+			recorder.streamSucceeded()
+		}
 		return response, nil
 	}
+}
+
+// streamSuccessRecorder 由后备 provider 实现：流式正文完整读完才算这个候选调用
+// 成功，这时解除它的冷却。
+type streamSuccessRecorder interface {
+	streamSucceeded()
 }
 
 // skipFailedStreamCandidate 处理「流打开了，上游错误却在读流时才到」。
