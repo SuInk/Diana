@@ -217,7 +217,9 @@ code {
   width: 100%;
   max-width: 1240px;
   margin: 0 auto;
-  padding: 24px clamp(16px, 3vw, 32px) 64px;
+  /* 上内边距 14：平台/机器人那一行跟侧栏的机器人选择器同一条中线，
+     两边的分隔线也落在同一高度。 */
+  padding: 14px clamp(16px, 3vw, 32px) 64px;
 }
 
 .scope-context {
@@ -292,38 +294,34 @@ code {
 }
 
 /* 品牌区 */
+/* 头部跟顶栏等高、抵掉侧栏上内边距，logo 和收起按钮就跟顶栏标题同一条中线；
+   下面的选择器和导航跟着 logo 一起上移，间距不变。 */
 .sidebar-head {
   display: flex;
+  flex: none;
   align-items: center;
-  padding: 6px 8px 18px;
+  height: var(--topbar-height);
+  margin: -20px 0 5px;
+  padding: 0 8px;
 }
 
 .brand {
+  position: relative;
   display: flex;
   align-items: center;
   width: 100%;
   min-width: 0;
-  gap: 10px;
 }
 
-.brand-mark {
-  display: grid;
-  place-items: center;
+.brand-logo {
+  display: block;
   flex: none;
-  width: 36px;
-  height: 36px;
-  border-radius: 11px;
-  background: linear-gradient(135deg, var(--accent), var(--accent-strong));
-  color: var(--accent-contrast);
-  box-shadow: var(--shadow-sm);
-}
-
-.brand-name {
-  flex: 1;
-  min-width: 0;
-  font-size: 14px;
-  line-height: 1.2;
-  letter-spacing: 0.02em;
+  width: 96px;
+  height: auto;
+  color: var(--accent);
+  transition: color 180ms ease;
+  /* 上方的光线把包围盒撑高了，字形主体偏下约 4px；上提后字母中线才对上顶栏标题。 */
+  transform: translateY(-4px);
 }
 
 /* 版本入口跟主题切换同一排：这里是整条侧栏宽，
@@ -706,22 +704,19 @@ code {
   box-shadow: 0 12px 40px rgb(0 0 0 / 12%);
 }
 
-.login-card h1 {
-  margin: 0;
-  font-size: 20px;
-  text-align: center;
-}
-
 .login-card > .muted {
-  margin: -6px 0 4px;
+  margin: 0 0 4px;
   text-align: center;
   font-size: 13px;
 }
 
-.login-mark {
+.login-logo {
+  display: block;
   align-self: center;
-  width: 44px;
-  height: 44px;
+  width: min(220px, 100%);
+  height: auto;
+  color: var(--accent);
+  transition: color 180ms ease;
 }
 
 /* 后端连不上时的整页报错：沿用登录页的卡片骨架，只是宽一点、左对齐正文。 */
@@ -1136,11 +1131,14 @@ code {
   flex: 1;
 }
 
-/* 跟品牌同一行排，而不是绝对定位再给它留位：
-   窄屏按钮隐藏时，那块宽度能直接还给品牌。 */
-.sidebar-toggle {
-  flex: none;
+.sidebar-toggle.btn.icon-only {
+  position: absolute;
+  top: calc(50% - 16px);
+  right: -8px;
+  width: 32px;
+  height: 32px;
   margin: 0;
+  padding: 6px;
 }
 
 /* ---------- 通用组件 ---------- */
@@ -5491,6 +5489,14 @@ a.nav-action {
 /* 顶栏抽屉开关：只在窄屏出现，桌面端用侧栏头部那个 */
 .menu-button {
   display: none;
+}
+
+/* 跟侧栏里的收起按钮同尺寸：展开/收起来回切，图标不该跳大小。
+   32 的框减去 6px 内边距和 1px 边框，正好放下 18px 图标，不会被压小。 */
+.menu-button.btn.icon-only {
+  width: 32px;
+  height: 32px;
+  padding: 6px;
 }
 
 /* 侧栏抽屉遮罩 */

@@ -24,6 +24,17 @@ interface ThemeState {
 }
 
 const STORAGE_KEY = "dqb-next:theme";
+// favicon.svg 只用这一个颜色，换主题时整体替换成当前强调色。
+const FAVICON_BASE_COLOR = "#e0578f";
+let faviconTemplate = "";
+let faviconLink: HTMLLinkElement | null = null;
+
+function updateFavicon(): void {
+  if (!faviconTemplate || !faviconLink) return;
+  const accent = accentOptions.find((option) => option.id === theme.accent)?.color ?? accentOptions[0].color;
+  const svg = faviconTemplate.split(FAVICON_BASE_COLOR).join(accent);
+  faviconLink.href = `data:image/svg+xml,${encodeURIComponent(svg)}`;
+}
 
 function load(): ThemeState {
   try {
@@ -59,10 +70,21 @@ function apply(): void {
   if (meta) {
     meta.setAttribute("content", resolvedMode() === "dark" ? "#17151a" : "#faf7f8");
   }
+  updateFavicon();
 }
 
 /** 初始化主题：应用当前配置并监听系统与用户变更。 */
 export function setupTheme(): void {
+  faviconLink = document.querySelector<HTMLLinkElement>('link[rel="icon"]');
+  if (faviconLink) {
+    fetch(faviconLink.href)
+      .then((response) => (response.ok ? response.text() : ""))
+      .then((svg) => {
+        faviconTemplate = svg;
+        updateFavicon();
+      })
+      .catch(() => { /* 静态 favicon 仍可使用。 */ });
+  }
   apply();
   darkQuery.addEventListener("change", apply);
   watchEffect(() => {

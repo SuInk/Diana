@@ -3,11 +3,8 @@
 
 <template>
   <div class="login-screen">
-    <form class="login-card" @submit.prevent="submit">
-      <span class="brand-mark login-mark">
-        <BotMessageSquare :size="22" aria-hidden="true" />
-      </span>
-      <h1>Diana</h1>
+    <form class="login-card" aria-label="Diana 登录" @submit.prevent="submit">
+      <BrandLogo class="login-logo" />
       <p class="muted">请输入管理员账号和密码</p>
       <input
         v-model="username"
@@ -81,7 +78,7 @@
 
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref } from "vue";
-import { BotMessageSquare, Copy, Eye, EyeOff, LoaderCircle, LogIn, MessageCircle } from "@lucide/vue";
+import { Copy, Eye, EyeOff, LoaderCircle, LogIn, MessageCircle } from "@lucide/vue";
 import {
   claimOwnerLoginPairing,
   createOwnerLoginPairing,
@@ -91,6 +88,7 @@ import {
   pollOwnerLoginPairing
 } from "../api";
 import { toastError, toastSuccess } from "../toast";
+import BrandLogo from "../components/BrandLogo.vue";
 
 const emit = defineEmits<{ success: []; unreachable: [detail: string] }>();
 

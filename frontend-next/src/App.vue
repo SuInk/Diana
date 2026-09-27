@@ -29,10 +29,7 @@
     >
       <div class="sidebar-head">
         <div class="brand">
-          <span class="brand-mark">
-            <BotMessageSquare :size="19" aria-hidden="true" />
-          </span>
-          <strong class="brand-name">Diana</strong>
+          <BrandLogo class="brand-logo" />
           <button
             class="btn ghost icon-only sidebar-toggle"
             type="button"
@@ -177,7 +174,6 @@ import { computed, defineAsyncComponent, KeepAlive, onBeforeUnmount, onMounted, 
 import type { Component } from "vue";
 import {
   Bot,
-  BotMessageSquare,
   Activity,
   BrainCircuit,
   CalendarClock,
@@ -216,6 +212,7 @@ import { autoReloadAllowed, clearUpdateInstalling, markAutoReloaded, updateInsta
 import BackendDownView from "./views/BackendDownView.vue";
 import LoginView from "./views/LoginView.vue";
 import DashboardView from "./views/DashboardView.vue";
+import BrandLogo from "./components/BrandLogo.vue";
 
 // 总览是默认首屏，保持同步加载；其它页面首次打开时才下载代码。异步组件引用
 // 保持稳定，配合 KeepAlive 后只挂载一次，切页回来直接复用已有 DOM 和数据。
