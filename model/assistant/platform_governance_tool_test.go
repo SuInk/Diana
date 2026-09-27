@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -197,5 +198,77 @@ func TestPlatformWriteOperationMatrix(t *testing.T) {
 				t.Errorf("%s %s：实现 = %v，能力表 = %v", def.ID, op, got, want[op])
 			}
 		}
+	}
+}
+
+// writableGroupConfigStore 让全员禁言快照能落进群配置，验证重启后照样还原。
+type writableGroupConfigStore struct {
+	mu      sync.Mutex
+	configs map[string]GroupConfig
+}
+
+func (s *writableGroupConfigStore) ConfigForGroup(_, groupID string) (GroupConfig, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cfg, ok := s.configs[groupID]
+	return cfg, ok
+}
+
+func (s *writableGroupConfigStore) SaveGroupConfig(cfg GroupConfig, _ BotConfig) (GroupConfig, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.configs[cfg.GroupID] = cfg
+	return cfg, nil
+}
+
+// Telegram 解除全员禁言按禁言前的快照还原，群里原本关掉的链接、投票不会被放开；
+// 快照写进群配置，换一个运行时（重启）也能还原。
+func TestTelegramUnmuteAllRestoresSnapshot(t *testing.T) {
+	original := map[string]any{"can_send_messages": true, "can_send_polls": false, "can_add_web_page_previews": false, "can_invite_users": false}
+	store := &writableGroupConfigStore{configs: map[string]GroupConfig{"123": {GroupID: "123", Enabled: true, EnabledSet: true}}}
+
+	tool, runtime, channel := governanceToolFor(t, PlatformTelegram, "administrator")
+	runtime.SetGroupConfigStore(store)
+	channel.apiResponses["getChat"] = map[string]any{"id": int64(123), "permissions": original}
+	if _, err := tool.Run(context.Background(), map[string]any{"operation": "mute_all"}); err != nil {
+		t.Fatalf("mute_all error = %v", err)
+	}
+	// 再按一次 mute_all 读到的是禁言后的权限，不能覆盖掉原来的快照。
+	channel.apiResponses["getChat"] = map[string]any{"id": int64(123), "permissions": telegramMutedPermissions()}
+	if _, err := tool.Run(context.Background(), map[string]any{"operation": "mute_all"}); err != nil {
+		t.Fatalf("second mute_all error = %v", err)
+	}
+	if saved, _ := store.ConfigForGroup("", "123"); saved.WholeMuteRestorePermissions["can_send_polls"] != false || len(saved.WholeMuteRestorePermissions) != len(original) {
+		t.Fatalf("persisted snapshot = %#v", saved.WholeMuteRestorePermissions)
+	}
+
+	// 换一个运行时模拟重启：内存快照没了，从群配置里还原。
+	restarted, _, restartedChannel := governanceToolFor(t, PlatformTelegram, "administrator")
+	restarted.runtime.SetGroupConfigStore(store)
+	out, err := restarted.Run(context.Background(), map[string]any{"operation": "unmute_all"})
+	if err != nil {
+		t.Fatalf("unmute_all error = %v", err)
+	}
+	perms := recordedCallsByAction(restartedChannel.callsSnapshot(), "setChatPermissions")
+	if len(perms) != 1 {
+		t.Fatalf("setChatPermissions calls = %#v", perms)
+	}
+	restored, _ := perms[0].params["permissions"].(map[string]any)
+	for key, want := range original {
+		if restored[key] != want {
+			t.Fatalf("restored %s = %v, want %v (all: %#v)", key, restored[key], want, restored)
+		}
+	}
+	if strings.Contains(out, "默认成员权限") {
+		t.Fatalf("snapshot restore reported default fallback: %s", out)
+	}
+	if saved, _ := store.ConfigForGroup("", "123"); len(saved.WholeMuteRestorePermissions) != 0 {
+		t.Fatalf("snapshot not cleared after restore: %#v", saved.WholeMuteRestorePermissions)
+	}
+
+	// 没有快照时退回默认，并在结果里说明。
+	again, err := restarted.Run(context.Background(), map[string]any{"operation": "unmute_all"})
+	if err != nil || !strings.Contains(again, "默认成员权限") {
+		t.Fatalf("fallback unmute_all = %s, %v", again, err)
 	}
 }

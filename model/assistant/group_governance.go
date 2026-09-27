@@ -203,6 +203,8 @@ func matchGovernanceKeyword(rules []string, text string) string {
 type governanceTracker struct {
 	mu      sync.Mutex
 	members map[string]*governanceMemberState
+	// blocked 是判定违规、不该再回复的消息，入站处理走到回复判断前来取。
+	blocked map[string]time.Time
 }
 
 type governanceMemberState struct {
@@ -210,6 +212,12 @@ type governanceMemberState struct {
 	strikes    int
 	lastStrike time.Time
 	lastSeen   time.Time
+	// cooldownUntil 之前不再计新违规：一次持续刷屏只算一次，不会几秒内连升几档。
+	cooldownUntil time.Time
+	// retention 是这个成员所在群的违规有效期，清理时按它各算各的。
+	retention time.Duration
+	// punishing 表示已有一个处罚协程在跑，同一个人不并发禁言、不连发警告。
+	punishing bool
 }
 
 type governanceMessage struct {
@@ -222,20 +230,28 @@ type governanceVerdict struct {
 	reason string
 	rule   string
 	strike int
+	// recallOnly 表示冷却期内命中违规词：照样撤回，但不计次、不禁言、不警告。
+	recallOnly bool
 	// recallIDs 是要撤回的消息，keyword 只有当前这条，刷屏是整个窗口。
 	recallIDs []string
 }
 
-// observe 记下一条消息并判断是否违规。违规时清空窗口：同一波刷屏只罚一次，
-// 不会因为后面几条还在窗口里就连着升档。
-func (t *governanceTracker) observe(key string, now time.Time, text, messageID string, gov GroupGovernance) (governanceVerdict, bool) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
+const (
+	governanceBlockedTTL   = 10 * time.Minute
+	governanceMinCooldown  = 10 * time.Second
+	governanceTrackerLimit = 4096
+)
+
+func governanceCooldown(gov GroupGovernance) time.Duration {
+	return max(time.Duration(gov.SpamWindowSeconds)*time.Second, governanceMinCooldown)
+}
+
+func (t *governanceTracker) stateLocked(key string, now time.Time, gov GroupGovernance) *governanceMemberState {
 	if t.members == nil {
 		t.members = map[string]*governanceMemberState{}
 	}
-	if len(t.members) > 4096 {
-		t.sweepLocked(now, gov)
+	if len(t.members) > governanceTrackerLimit {
+		t.sweepLocked(now)
 	}
 	state := t.members[key]
 	if state == nil {
@@ -243,63 +259,145 @@ func (t *governanceTracker) observe(key string, now time.Time, text, messageID s
 		t.members[key] = state
 	}
 	state.lastSeen = now
+	state.retention = max(time.Duration(gov.StrikeResetMinutes)*time.Minute, governanceCooldown(gov))
+	return state
+}
 
-	verdict := governanceVerdict{}
+// detect 记下一条消息并判断是否违规，但不计次：身份还没核实完，先不定罪。
+// 冷却期内刷屏不再计数（窗口也不累积，冷却结束从头算），违规词照样认出来，只撤回。
+func (t *governanceTracker) detect(key string, now time.Time, text, messageID string, gov GroupGovernance) (governanceVerdict, bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	state := t.stateLocked(key, now, gov)
+	cooling := now.Before(state.cooldownUntil)
+
 	if gov.KeywordFilterEnabled {
 		if rule := matchGovernanceKeyword(gov.KeywordRules, text); rule != "" {
-			verdict = governanceVerdict{reason: governanceReasonKeyword, rule: rule, recallIDs: nonEmptyStrings([]string{messageID})}
+			return governanceVerdict{reason: governanceReasonKeyword, rule: rule, recallOnly: cooling, recallIDs: nonEmptyStrings([]string{messageID})}, true
 		}
 	}
-	if verdict.reason == "" && gov.AntiSpamEnabled {
-		window := time.Duration(gov.SpamWindowSeconds) * time.Second
-		kept := state.recent[:0]
-		for _, item := range state.recent {
-			if now.Sub(item.at) <= window {
-				kept = append(kept, item)
-			}
-		}
-		normalized := strings.Join(strings.Fields(strings.ToLower(text)), " ")
-		state.recent = append(kept, governanceMessage{at: now, text: normalized, messageID: messageID})
-		repeats := 0
-		for _, item := range state.recent {
-			if normalized != "" && item.text == normalized {
-				repeats++
-			}
-		}
-		switch {
-		case len(state.recent) > gov.SpamMaxMessages:
-			verdict.reason = governanceReasonFlood
-		case repeats >= gov.SpamMaxRepeats:
-			verdict.reason = governanceReasonRepeat
-		}
-		if verdict.reason != "" {
-			for i := len(state.recent) - 1; i >= 0; i-- {
-				if id := state.recent[i].messageID; id != "" {
-					verdict.recallIDs = append(verdict.recallIDs, id)
-				}
-			}
+	if !gov.AntiSpamEnabled || cooling {
+		return governanceVerdict{}, false
+	}
+	window := time.Duration(gov.SpamWindowSeconds) * time.Second
+	kept := state.recent[:0]
+	for _, item := range state.recent {
+		if now.Sub(item.at) <= window {
+			kept = append(kept, item)
 		}
 	}
-	if verdict.reason == "" {
+	normalized := strings.Join(strings.Fields(strings.ToLower(text)), " ")
+	state.recent = append(kept, governanceMessage{at: now, text: normalized, messageID: messageID})
+	repeats := 0
+	for _, item := range state.recent {
+		if normalized != "" && item.text == normalized {
+			repeats++
+		}
+	}
+	verdict := governanceVerdict{}
+	switch {
+	case len(state.recent) > gov.SpamMaxMessages:
+		verdict.reason = governanceReasonFlood
+	case repeats >= gov.SpamMaxRepeats:
+		verdict.reason = governanceReasonRepeat
+	default:
 		return verdict, false
 	}
+	for i := len(state.recent) - 1; i >= 0; i-- {
+		if id := state.recent[i].messageID; id != "" {
+			verdict.recallIDs = append(verdict.recallIDs, id)
+		}
+	}
+	return verdict, true
+}
+
+// commit 把一次违规记上账，返回这是第几次，并进入冷却。
+func (t *governanceTracker) commit(key string, now time.Time, gov GroupGovernance) int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	state := t.stateLocked(key, now, gov)
 	if !state.lastStrike.IsZero() && now.Sub(state.lastStrike) > time.Duration(gov.StrikeResetMinutes)*time.Minute {
 		state.strikes = 0
 	}
 	state.strikes++
 	state.lastStrike = now
 	state.recent = nil
-	verdict.strike = state.strikes
-	return verdict, true
+	state.cooldownUntil = now.Add(governanceCooldown(gov))
+	return state.strikes
 }
 
-func (t *governanceTracker) sweepLocked(now time.Time, gov GroupGovernance) {
-	idle := time.Duration(gov.StrikeResetMinutes) * time.Minute
+// discard 清掉一个人的窗口：核实下来是管理员，之前记的几条不算。
+func (t *governanceTracker) discard(key string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if state := t.members[key]; state != nil {
+		state.recent = nil
+	}
+}
+
+func (t *governanceTracker) beginPunish(key string) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	state := t.members[key]
+	if state == nil || state.punishing {
+		return false
+	}
+	state.punishing = true
+	return true
+}
+
+func (t *governanceTracker) endPunish(key string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if state := t.members[key]; state != nil {
+		state.punishing = false
+	}
+}
+
+// sweepLocked 按每个成员自己所在群的有效期清理，不拿触发清理那个群的配置套到别的群。
+func (t *governanceTracker) sweepLocked(now time.Time) {
 	for key, state := range t.members {
-		if now.Sub(state.lastSeen) > idle && now.Sub(state.lastStrike) > idle {
+		if state.punishing {
+			continue
+		}
+		if now.Sub(state.lastSeen) > state.retention && now.Sub(state.lastStrike) > state.retention {
 			delete(t.members, key)
 		}
 	}
+}
+
+func governanceBlockedKey(event MessageEvent) string {
+	id := strings.TrimSpace(event.MessageID)
+	if id == "" {
+		id = fmt.Sprintf("%s@%d:%s", event.UserID, event.Time, fingerprintOf(event.RawMessage))
+	}
+	return strings.Join([]string{event.ProfileID, event.GroupID, id}, "|")
+}
+
+func (t *governanceTracker) markBlocked(event MessageEvent, now time.Time) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.blocked == nil {
+		t.blocked = map[string]time.Time{}
+	}
+	for key, at := range t.blocked {
+		if now.Sub(at) > governanceBlockedTTL {
+			delete(t.blocked, key)
+		}
+	}
+	t.blocked[governanceBlockedKey(event)] = now
+}
+
+func (t *governanceTracker) takeBlocked(event MessageEvent, now time.Time) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	key := governanceBlockedKey(event)
+	at, ok := t.blocked[key]
+	if !ok {
+		return false
+	}
+	delete(t.blocked, key)
+	return now.Sub(at) <= governanceBlockedTTL
 }
 
 // groupGovernance 取这台机器人在这个群的规则防御配置。
@@ -320,11 +418,13 @@ func (r *Runtime) groupGovernance(event MessageEvent) (GroupGovernance, bool) {
 	return cfg.Governance.Normalized(), true
 }
 
-// enforceGroupGovernance 对一条群消息跑规则防御。返回 true 表示这条违规、已交给
-// 处罚流程，调用方不再回复它——对着广告认真接话，等于帮它再刷一遍。
+// enforceGroupGovernance 对一条群消息跑规则防御，返回 true 表示这条违规、已交给处罚
+// 流程。消息本身照常往下走——落历史、给插件看、进统计——只是到回复判断前会被
+// governanceBlocked 拦下不回：对着广告认真接话，等于帮它再刷一遍。
 //
-// 判定在当前协程里做（纯内存），撤回、禁言、警告这些要调平台接口的放到后台，
-// 不拖慢入站。
+// 判定在当前协程里做，撤回、禁言、警告这些要调平台接口的放到后台，不拖慢入站。
+// 只有真的判出违规、而发言人身份又不明（Telegram 普通消息不带身份）时，才查一次
+// 身份，结果进短期缓存，同一个人后面的消息不再查。
 func (r *Runtime) enforceGroupGovernance(ctx context.Context, event MessageEvent) bool {
 	if event.Kind != EventKindGroup || strings.TrimSpace(event.GroupID) == "" || strings.TrimSpace(event.UserID) == "" {
 		return false
@@ -341,24 +441,52 @@ func (r *Runtime) enforceGroupGovernance(ctx context.Context, event MessageEvent
 	if cfg.IsOwnerEvent(event) || GroupRoleCanConfigure(NormalizeGroupRole(event.SenderRole)) {
 		return false
 	}
+	if role, cached := r.groupRoles.get(groupRoleCacheKey(event.ProfileID, event.GroupID, event.UserID), now); cached && GroupRoleCanConfigure(role) {
+		return false
+	}
 	text := strings.TrimSpace(PlainText(event.Segments))
 	if text == "" {
 		text = strings.TrimSpace(event.RawMessage)
 	}
 	key := strings.Join([]string{event.ProfileID, event.GroupID, event.UserID}, "|")
-	verdict, violated := r.governance.observe(key, now, text, event.MessageID, gov)
+	verdict, violated := r.governance.detect(key, now, text, event.MessageID, gov)
 	if !violated {
 		return false
 	}
-	record := r.decisionEventRecord(event, "[规则防御]", "governance_blocked")
-	record.Reason = "命中本群规则防御：" + governanceReasonLabel(verdict.reason)
-	r.record(record)
+	if GroupRoleCanConfigure(r.cachedGroupRole(ctx, event)) {
+		r.governance.discard(key)
+		return false
+	}
+	r.governance.markBlocked(event, now)
+
+	punish := false
+	if !verdict.recallOnly {
+		verdict.strike = r.governance.commit(key, now, gov)
+		punish = r.governance.beginPunish(key)
+	}
+	if !punish {
+		// 冷却期内的违规词、或同一人已有处罚在跑：只撤回，不计次、不禁言、不警告。
+		verdict.recallOnly, verdict.strike = true, 0
+	}
 	go func() {
 		defer recoverGoroutinePanic("group_governance.penalty")
+		if punish {
+			defer r.governance.endPunish(key)
+		}
 		penaltyCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 		defer cancel()
 		r.applyGovernancePenalty(penaltyCtx, event, gov, verdict)
 	}()
+	return true
+}
+
+// governanceBlocked 在回复判断前取走规则防御的判定：违规的消息记一条事件，不进回复流程。
+func (r *Runtime) governanceBlocked(event MessageEvent, text string) bool {
+	if event.Kind != EventKindGroup || !r.governance.takeBlocked(event, r.clock()) {
+		return false
+	}
+	event.routingReason = "命中本群规则防御，不回复"
+	r.record(r.decisionEventRecord(event, text, "governance_blocked"))
 	return true
 }
 
@@ -384,6 +512,14 @@ func (r *Runtime) applyGovernancePenalty(ctx context.Context, event MessageEvent
 	if verdict.reason != governanceReasonKeyword && !gov.SpamRecallEnabled {
 		recallIDs = nil
 	}
+	if verdict.recallOnly {
+		if len(recallIDs) > 0 && platformSupportsOperation(platform, platformOpRecallMessages) {
+			recalled, _ := r.recallGroupMessages(ctx, event, recallIDs)
+			result["recalled"] = len(recalled)
+		}
+		r.recordGovernanceAction(event, result, nil)
+		return
+	}
 	if len(recallIDs) > 0 && platformSupportsOperation(platform, platformOpRecallMessages) {
 		recalled, failed := r.recallGroupMessages(ctx, event, recallIDs)
 		result["recalled"] = len(recalled)
@@ -397,7 +533,7 @@ func (r *Runtime) applyGovernancePenalty(ctx context.Context, event MessageEvent
 		duration = min(duration, platformMaxMuteSeconds(platform))
 		if !platformSupportsOperation(platform, platformOpMute) {
 			duration = 0
-		} else if _, err := newDianaPlatformTool(r, event).dispatchModeration(ctx, platform, platformOpMute, event.GroupID, event.UserID, duration, false); err != nil {
+		} else if _, err := (&dianaPlatformTool{runtime: r, event: event}).dispatchModeration(ctx, platform, platformOpMute, event.GroupID, event.UserID, duration, false); err != nil {
 			result["mute_error"] = err.Error()
 			duration = 0
 		} else {
@@ -490,8 +626,20 @@ func (r *Runtime) auditMemberLeave(ctx context.Context, event MessageEvent) {
 		return
 	}
 	cfg := r.effectiveConfigForEvent(event)
-	ownerID := strings.TrimSpace(cfg.OwnerID)
-	if ownerID == "" {
+	if strings.TrimSpace(cfg.OwnerID) == "" {
+		return
+	}
+	record := EventRecord{
+		At: r.clock(), Kind: event.Kind, Platform: event.Platform, ProfileID: event.ProfileID,
+		UserID: event.UserID, GroupID: event.GroupID, MessageID: event.MessageID,
+		Text: "[notice] group_decrease", Handled: true, Outcome: "member_leave_audited",
+		Decision: "notified", Reason: "成员离群，已私聊通知主人",
+	}
+	ownerID, err := r.ownerDeliveryID(event, cfg)
+	if err != nil {
+		log.Printf("diana member leave audit skipped: group=%s user=%s: %v", event.GroupID, event.UserID, err)
+		record.Outcome, record.Decision, record.Reason = "member_leave_audit_undeliverable", "skipped", "成员离群，但通知不到主人："+err.Error()
+		r.record(record)
 		return
 	}
 	notice := noticeSegmentData(event)
@@ -527,11 +675,7 @@ func (r *Runtime) auditMemberLeave(ctx context.Context, event MessageEvent) {
 	}
 	if err := r.sendNotification(ctx, notifyEvent, text); err != nil {
 		log.Printf("diana member leave audit notification failed: group=%s user=%s: %v", event.GroupID, event.UserID, err)
+		record.Outcome, record.Decision, record.Reason = "member_leave_audit_failed", "failed", "成员离群，私聊通知主人失败："+err.Error()
 	}
-	r.record(EventRecord{
-		At: r.clock(), Kind: event.Kind, Platform: event.Platform, ProfileID: event.ProfileID,
-		UserID: event.UserID, GroupID: event.GroupID, MessageID: event.MessageID,
-		Text: "[notice] group_decrease", Handled: true, Outcome: "member_leave_audited",
-		Decision: "notified", Reason: "成员离群，已私聊通知主人",
-	})
+	r.record(record)
 }

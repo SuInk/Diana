@@ -991,7 +991,10 @@ type GroupConfig struct {
 	// Governance 是本群的规则防御（刷屏、违规词、退群审计），只有群级、没有机器人级：
 	// 每个群的容忍度差得太远，一刀切的默认值只会误伤。nil 表示全部关闭。
 	Governance *GroupGovernance `json:"governance,omitempty"`
-	UpdatedAt  time.Time        `json:"updated_at,omitempty"`
+	// WholeMuteRestorePermissions 是 Telegram 全员禁言前的群默认权限快照，解除时按它
+	// 还原。运行时写入，WebUI 保存时以存储里的为准，不接受客户端改写。
+	WholeMuteRestorePermissions map[string]bool `json:"whole_mute_restore_permissions,omitempty"`
+	UpdatedAt                   time.Time       `json:"updated_at,omitempty"`
 }
 
 // GroupExtensionAccess 是一个扩展在某个群里的开放范围：一个基线档位，加一对名单。

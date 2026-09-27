@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/SuInk/diana/model/agent"
@@ -85,7 +86,8 @@ func (t *dianaPlatformTool) checkModerationTarget(ctx context.Context, actor pla
 	return nil
 }
 
-// liveGroupRole 实时查询某账号在群里的身份。
+// liveGroupRole 实时查询某账号在群里的身份，查到的结果顺手刷新角色缓存。
+// 门禁（authorizeModeration、checkModerationTarget）只走这条，不读缓存。
 func (r *Runtime) liveGroupRole(ctx context.Context, event MessageEvent, groupID, userID string) (GroupRole, error) {
 	lookupCtx, cancel := context.WithTimeout(ctx, 6*time.Second)
 	defer cancel()
@@ -93,7 +95,76 @@ func (r *Runtime) liveGroupRole(ctx context.Context, event MessageEvent, groupID
 	if err != nil {
 		return "", err
 	}
-	return NormalizeGroupRole(member.Role), nil
+	role := NormalizeGroupRole(member.Role)
+	r.groupRoles.put(groupRoleCacheKey(event.ProfileID, groupID, userID), role, r.clock())
+	return role, nil
+}
+
+// groupRoleCacheTTL 是角色缓存的有效期。缓存只用来决定「要不要展示群管操作」和
+// 「规则防御豁不豁免」，这两处错几分钟的代价远小于每条消息都打一次 getChatMember。
+const groupRoleCacheTTL = 5 * time.Minute
+
+// groupRoleCache 按（机器人, 群, 账号）缓存群身份。自带锁，不受 Runtime.mu 保护。
+type groupRoleCache struct {
+	mu      sync.Mutex
+	entries map[string]groupRoleCacheEntry
+}
+
+type groupRoleCacheEntry struct {
+	role    GroupRole
+	expires time.Time
+}
+
+func groupRoleCacheKey(profileID, groupID, userID string) string {
+	return strings.Join([]string{strings.TrimSpace(profileID), strings.TrimSpace(groupID), strings.TrimSpace(userID)}, "|")
+}
+
+func (c *groupRoleCache) get(key string, now time.Time) (GroupRole, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	entry, ok := c.entries[key]
+	if !ok || now.After(entry.expires) {
+		return "", false
+	}
+	return entry.role, true
+}
+
+func (c *groupRoleCache) put(key string, role GroupRole, now time.Time) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.entries == nil {
+		c.entries = map[string]groupRoleCacheEntry{}
+	}
+	if len(c.entries) > 4096 {
+		for k, entry := range c.entries {
+			if now.After(entry.expires) {
+				delete(c.entries, k)
+			}
+		}
+	}
+	c.entries[key] = groupRoleCacheEntry{role: role, expires: now.Add(groupRoleCacheTTL)}
+}
+
+// cachedGroupRole 先看事件自带的身份，再看缓存，都没有才实时查一次。
+// OneBot 群消息总带 sender.role，缺了就当普通成员，不为此多打接口。
+func (r *Runtime) cachedGroupRole(ctx context.Context, event MessageEvent) GroupRole {
+	if role := NormalizeGroupRole(event.SenderRole); role != "" {
+		return role
+	}
+	if IsOneBotPlatform(r.currentPlatform(event)) {
+		return GroupRoleMember
+	}
+	key := groupRoleCacheKey(event.ProfileID, event.GroupID, event.UserID)
+	if role, ok := r.groupRoles.get(key, r.clock()); ok {
+		return role
+	}
+	lookupCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	role, err := r.liveGroupRole(lookupCtx, event, event.GroupID, event.UserID)
+	if err != nil {
+		return ""
+	}
+	return role
 }
 
 // platformModerationShown 让群管提示词和本轮 platform 工具的 schema 保持一致：工具里
@@ -113,7 +184,7 @@ func platformModerationShown(registry *agent.ToolRegistry, owner bool) bool {
 }
 
 // platformModerationVisible 决定群管操作要不要出现在工具 schema 和提示词里。这只管展示，
-// 门禁在 Run 里实时核验：事件自带身份时直接用，没带（Telegram 普通消息）才查一次。
+// 门禁在 Run 里实时核验：身份取自事件或短期缓存，都没有（Telegram 普通消息）才查一次。
 func (r *Runtime) platformModerationVisible(ctx context.Context, event MessageEvent, owner bool) bool {
 	if owner {
 		return true
@@ -121,15 +192,5 @@ func (r *Runtime) platformModerationVisible(ctx context.Context, event MessageEv
 	if event.Kind != EventKindGroup || strings.TrimSpace(event.GroupID) == "" || strings.TrimSpace(event.UserID) == "" {
 		return false
 	}
-	if role := NormalizeGroupRole(event.SenderRole); role != "" {
-		return GroupRoleCanConfigure(role)
-	}
-	// OneBot 的群消息总带 sender.role，缺了就是普通成员，不为展示再多查一次。
-	if IsOneBotPlatform(r.currentPlatform(event)) {
-		return false
-	}
-	lookupCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
-	defer cancel()
-	role, err := r.liveGroupRole(lookupCtx, event, event.GroupID, event.UserID)
-	return err == nil && GroupRoleCanConfigure(role)
+	return GroupRoleCanConfigure(r.cachedGroupRole(ctx, event))
 }

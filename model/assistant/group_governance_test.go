@@ -7,14 +7,25 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
 
+// observe 是 detect + commit 的合体，给只关心判定结果的用例用。
+func (t *governanceTracker) observe(key string, now time.Time, text, messageID string, gov GroupGovernance) (governanceVerdict, bool) {
+	verdict, violated := t.detect(key, now, text, messageID, gov)
+	if violated && !verdict.recallOnly {
+		verdict.strike = t.commit(key, now, gov)
+	}
+	return verdict, violated
+}
+
 // roleTestChannel 按账号给出群身份：规则防御既要查机器人自己，也要查被罚的人。
 type roleTestChannel struct {
 	*recordingChannel
-	roles map[string]string
+	roles   map[string]string
+	lookups atomic.Int32
 }
 
 func newRoleTestChannel(roles map[string]string) *roleTestChannel {
@@ -22,6 +33,7 @@ func newRoleTestChannel(roles map[string]string) *roleTestChannel {
 }
 
 func (c *roleTestChannel) GroupMember(_ context.Context, groupID, userID string) (OneBotGroupMemberInfo, error) {
+	c.lookups.Add(1)
 	role := c.roles[userID]
 	if role == "" {
 		role = "member"
@@ -38,7 +50,16 @@ func governanceRuntime(t *testing.T, gov *GroupGovernance, roles map[string]stri
 	channel := newRoleTestChannel(roles)
 	runtime := NewRuntime(BotConfig{OwnerID: "owner", BotAccount: "10000", Platform: PlatformOneBotV11}, channel, NewDefaultPluginManager(), nil, nil, nil, nil)
 	runtime.SetAppLogWriter(&captureAppLogs{})
-	runtime.SetGroupConfigStore(&stubGroupConfigStore{configs: map[string]GroupConfig{"123": {GroupID: "123", Governance: gov}}})
+	runtime.SetGroupConfigStore(&stubGroupConfigStore{configs: map[string]GroupConfig{"123": {GroupID: "123", Enabled: true, EnabledSet: true, Governance: gov}}})
+	return runtime, channel
+}
+
+func telegramGovernanceRuntime(t *testing.T, gov *GroupGovernance, ownerID string, roles map[string]string) (*Runtime, *roleTestChannel) {
+	t.Helper()
+	channel := newRoleTestChannel(roles)
+	runtime := NewRuntime(BotConfig{OwnerID: ownerID, BotAccount: "42", Platform: PlatformTelegram}, channel, NewDefaultPluginManager(), nil, nil, nil, nil)
+	runtime.SetAppLogWriter(&captureAppLogs{})
+	runtime.SetGroupConfigStore(&stubGroupConfigStore{configs: map[string]GroupConfig{"-100": {GroupID: "-100", Enabled: true, EnabledSet: true, Governance: gov}}})
 	return runtime, channel
 }
 
@@ -250,5 +271,167 @@ func TestWelcomePlaceholdersExpandNicknameAndGroup(t *testing.T) {
 	got := runtime.renderWelcome(context.Background(), BotConfig{WelcomeMessage: "欢迎 {nickname}（{user_id}）加入 {group}（{group_id}）"}, event)
 	if got != "欢迎 昵称555（555）加入 测试群（123）" {
 		t.Fatalf("welcome = %q", got)
+	}
+}
+
+// 违规消息不回复，但照常落历史：处罚在后台可能什么都没做（机器人不是管理员），
+// 历史里不能因此缺一块。
+func TestGovernanceBlockedMessageStillLandsInHistory(t *testing.T) {
+	gov := GroupGovernance{KeywordFilterEnabled: true, KeywordRules: []string{"广告"}}
+	runtime, channel := governanceRuntime(t, &gov, map[string]string{"10000": "member"})
+	event := MessageEvent{Kind: EventKindGroup, Platform: PlatformOneBotV11, SelfID: "10000", GroupID: "123", UserID: "555", MessageID: "bad-1", Time: time.Now().Unix(), RawMessage: "广告", Segments: []MessageSegment{{Type: "text", Data: map[string]string{"text": "广告"}}}}
+	if err := runtime.HandleEvent(context.Background(), event); err != nil {
+		t.Fatalf("HandleEvent error = %v", err)
+	}
+	found := false
+	for _, item := range runtime.sessionHistorySnapshot(event) {
+		if item.MessageID == "bad-1" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("violating message was dropped before reaching history")
+	}
+	var outcome string
+	for _, record := range runtime.Status().RecentEvents {
+		if record.MessageID == "bad-1" {
+			outcome = record.Outcome
+		}
+	}
+	if outcome != "governance_blocked" {
+		t.Fatalf("event outcome = %q", outcome)
+	}
+	// 机器人不是管理员：不撤回、不警告，只记日志。
+	time.Sleep(100 * time.Millisecond)
+	if got := recordedCallsByAction(channel.callsSnapshot(), "delete_msg"); len(got) != 0 {
+		t.Fatalf("recall without admin rights: %#v", got)
+	}
+}
+
+// Telegram 群消息不带身份：违规时查一次身份，确认是管理员就豁免，之后走缓存不再查。
+func TestGovernanceExemptsTelegramAdminsViaCachedRole(t *testing.T) {
+	gov := GroupGovernance{KeywordFilterEnabled: true, KeywordRules: []string{"广告"}}
+	runtime, channel := telegramGovernanceRuntime(t, &gov, "1", map[string]string{"42": "admin", "777": "admin"})
+	base := MessageEvent{Kind: EventKindGroup, Platform: PlatformTelegram, SelfID: "42", GroupID: "-100", UserID: "777", Time: time.Now().Unix(), RawMessage: "广告", Segments: []MessageSegment{{Type: "text", Data: map[string]string{"text": "广告"}}}}
+	for i := 0; i < 3; i++ {
+		event := base
+		event.MessageID = fmt.Sprintf("a%d", i)
+		if runtime.enforceGroupGovernance(context.Background(), event) {
+			t.Fatalf("telegram admin message %d was flagged", i)
+		}
+	}
+	if got := channel.lookups.Load(); got != 1 {
+		t.Fatalf("role lookups = %d, want 1 (then cached)", got)
+	}
+	// 普通成员照常拦。
+	member := base
+	member.UserID, member.MessageID = "555", "m1"
+	if !runtime.enforceGroupGovernance(context.Background(), member) {
+		t.Fatal("telegram member keyword message was not flagged")
+	}
+}
+
+// 一次持续刷屏（10 秒 30 条）只计一次违规：冷却期内不再升档，也不并发处罚。
+func TestGovernanceSustainedFloodCountsOnce(t *testing.T) {
+	gov := GroupGovernance{AntiSpamEnabled: true, SpamWindowSeconds: 10, SpamMaxMessages: 3}.Normalized()
+	var tracker governanceTracker
+	now := time.Unix(1_700_000_000, 0)
+	strikes := 0
+	for i := 0; i < 30; i++ {
+		at := now.Add(time.Duration(i) * 300 * time.Millisecond)
+		if verdict, violated := tracker.detect("u", at, fmt.Sprintf("刷%d", i), fmt.Sprintf("f%d", i), gov); violated && !verdict.recallOnly {
+			tracker.commit("u", at, gov)
+			strikes++
+		}
+	}
+	if strikes != 1 {
+		t.Fatalf("strikes in one flood = %d, want 1", strikes)
+	}
+	if !tracker.beginPunish("u") || tracker.beginPunish("u") {
+		t.Fatal("a second penalty ran while the first was in flight")
+	}
+	tracker.endPunish("u")
+	if !tracker.beginPunish("u") {
+		t.Fatal("penalty slot not released")
+	}
+
+	// 冷却期内命中违规词只撤回，不计次。
+	kw := GroupGovernance{KeywordFilterEnabled: true, KeywordRules: []string{"广告"}}.Normalized()
+	var kwTracker governanceTracker
+	kwTracker.observe("k", now, "广告", "k1", kw)
+	verdict, violated := kwTracker.detect("k", now.Add(time.Second), "广告", "k2", kw)
+	if !violated || !verdict.recallOnly || strings.Join(verdict.recallIDs, ",") != "k2" {
+		t.Fatalf("keyword during cooldown = %#v, %v", verdict, violated)
+	}
+}
+
+// 清理按每个成员自己群的有效期算，不拿触发清理那个群的配置去清别的群。
+func TestGovernanceSweepUsesPerGroupRetention(t *testing.T) {
+	short := GroupGovernance{KeywordFilterEnabled: true, KeywordRules: []string{"x"}, StrikeResetMinutes: 1}.Normalized()
+	long := GroupGovernance{KeywordFilterEnabled: true, KeywordRules: []string{"x"}, StrikeResetMinutes: 24 * 60}.Normalized()
+	var tracker governanceTracker
+	now := time.Unix(1_700_000_000, 0)
+	tracker.observe("short|u", now, "x", "", short)
+	tracker.observe("long|u", now, "x", "", long)
+	tracker.mu.Lock()
+	tracker.sweepLocked(now.Add(2 * time.Hour))
+	_, shortKept := tracker.members["short|u"]
+	_, longKept := tracker.members["long|u"]
+	tracker.mu.Unlock()
+	if shortKept || !longKept {
+		t.Fatalf("sweep kept short=%v long=%v", shortKept, longKept)
+	}
+}
+
+// Telegram 主人配成 @用户名时，退群通知要发到数字 ID；还不知道时如实记下发不出去的原因。
+func TestMemberLeaveAuditResolvesTelegramOwnerUsername(t *testing.T) {
+	gov := GroupGovernance{MemberLeaveAuditEnabled: true}
+	runtime, channel := telegramGovernanceRuntime(t, &gov, "@owner_name", nil)
+	leave := MessageEvent{Kind: EventKindNotice, SubType: "group_decrease", Platform: PlatformTelegram, SelfID: "42", GroupID: "-100", UserID: "555",
+		Segments: []MessageSegment{{Type: "notice", Data: map[string]string{"sub_type": "leave"}}}}
+	_ = runtime.handleNotice(context.Background(), leave)
+	if len(channel.sentSnapshot()) != 0 {
+		t.Fatalf("sent to an unresolvable owner: %#v", channel.sentSnapshot())
+	}
+	var reason string
+	for _, record := range runtime.Status().RecentEvents {
+		if record.Outcome == "member_leave_audit_undeliverable" {
+			reason = record.Reason
+		}
+	}
+	if !strings.Contains(reason, "@owner_name") {
+		t.Fatalf("undeliverable reason = %q", reason)
+	}
+
+	runtime.rememberTelegramOwnerID(MessageEvent{Kind: EventKindPrivate, Platform: PlatformTelegram, UserID: "9001", SenderUsername: "owner_name"})
+	_ = runtime.handleNotice(context.Background(), leave)
+	sent := channel.sentSnapshot()
+	if len(sent) != 1 || sent[0].UserID != "9001" {
+		t.Fatalf("audit after owner resolved = %#v", sent)
+	}
+}
+
+// 昵称里写着占位符不会被二次展开。
+func TestWelcomePlaceholdersDoNotExpandTwice(t *testing.T) {
+	runtime, channel := governanceRuntime(t, nil, nil)
+	channel.apiResponses["get_group_info"] = map[string]any{"group_id": int64(123), "group_name": "测试群"}
+	event := MessageEvent{Kind: EventKindNotice, SubType: "group_increase", Platform: PlatformOneBotV11, SelfID: "10000", GroupID: "123", UserID: "555", SenderName: "{group_id}{group}"}
+	got := runtime.renderWelcome(context.Background(), BotConfig{WelcomeMessage: "欢迎 {nickname} 来到 {group}"}, event)
+	if got != "欢迎 {group_id}{group} 来到 测试群" {
+		t.Fatalf("welcome = %q", got)
+	}
+}
+
+// 群管展示判定走调用方 ctx 和短期缓存：同一个人连着几轮只查一次。
+func TestPlatformModerationVisibleCachesTelegramRole(t *testing.T) {
+	runtime, channel := telegramGovernanceRuntime(t, nil, "1", map[string]string{"777": "admin"})
+	event := MessageEvent{Kind: EventKindGroup, Platform: PlatformTelegram, SelfID: "42", GroupID: "-100", UserID: "777"}
+	for i := 0; i < 3; i++ {
+		if !runtime.platformModerationVisible(context.Background(), event, false) {
+			t.Fatal("telegram admin should see moderation operations")
+		}
+	}
+	if got := channel.lookups.Load(); got != 1 {
+		t.Fatalf("role lookups = %d, want 1", got)
 	}
 }

@@ -484,6 +484,11 @@ func (h *BotHandler) sanitizeGroupConfigPayload(cfg assistant.GroupConfig, group
 			cfg.Governance = existing.Governance
 		}
 	}
+	// 全员禁言快照是运行时状态，页面上那份可能是禁言前拉的旧值，只认存储里的。
+	cfg.WholeMuteRestorePermissions = nil
+	if existing, ok := h.groupConfigs.ConfigForGroup(cfg.BotProfileID, groupID); ok {
+		cfg.WholeMuteRestorePermissions = existing.WholeMuteRestorePermissions
+	}
 	if cfg.Governance != nil {
 		if err := cfg.Governance.Validate(); err != nil {
 			return assistant.GroupConfig{}, err

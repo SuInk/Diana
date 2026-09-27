@@ -90,9 +90,9 @@ func (r *Runtime) HandleEvent(ctx context.Context, event MessageEvent) error {
 	if r.members != nil {
 		r.members.Observe(event)
 	}
-	if r.enforceGroupGovernance(ctx, event) {
-		return nil
-	}
+	// 规则防御只判定、登记和后台处罚；消息照常落历史、给插件看，到回复判断前再拦。
+	r.enforceGroupGovernance(ctx, event)
+	r.rememberTelegramOwnerID(event)
 	if event.Kind == EventKindPrivate {
 		text := PlainText(event.Segments)
 		if text == "" {

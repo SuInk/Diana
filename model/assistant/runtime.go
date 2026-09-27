@@ -410,10 +410,16 @@ type Runtime struct {
 	welcomeMu      sync.Mutex
 	welcomeLLMLast map[string]time.Time
 	// governance 是群规则防御的刷屏计数和违规次数，见 group_governance.go。
-	governance     governanceTracker
-	buildInfo      BuildInfo
-	releaseStatus  ReleaseStatusProvider
-	reminders      ReminderStore
+	governance governanceTracker
+	// groupRoles 是群身份的短期缓存，见 platform_moderation_auth.go。
+	groupRoles groupRoleCache
+	// wholeMuteSnapshots 是全员禁言前的群默认权限快照，见 platform_whole_mute.go。
+	wholeMuteSnapshots wholeMuteSnapshotStore
+	// telegramOwnerIDs 记主人配成 @用户名时见过的数字 ID（键是机器人 ID），私聊通知要用。
+	telegramOwnerIDs sync.Map
+	buildInfo        BuildInfo
+	releaseStatus    ReleaseStatusProvider
+	reminders        ReminderStore
 	// reminderWake 叫醒提醒调度循环重算下一次唤醒时间，见 runReminderLoop。
 	reminderWake     chan struct{}
 	reminderWakeOnce sync.Once
@@ -1803,6 +1809,9 @@ func (r *Runtime) routeMessageEvent(ctx context.Context, event MessageEvent) (Me
 	// 语音转写、图片和文件解析、转发展开都在上面做完了：从这一刻起它才能被同一个人
 	// 后到的消息接走（见 sender_burst.go）。
 	r.noteSenderTurnReady(event)
+	if r.governanceBlocked(event, text) {
+		return event, text, false, "governance_blocked"
+	}
 	// 表达学习看的是全部群消息，不只被回复的那些：群的口癖长在日常闲聊里。
 	// 群被这台机器人关掉、或不在准入名单（黑/白名单）里时，它永远不会在这个群里回复——
 	// 连被 @、被引用也不回，这一直是 admits 的判法，这里只是把判断提到花钱之前。消息照常
@@ -3956,7 +3965,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			pluginTools[index] = capabilityToolForConfig(tool, cfg)
 		}
 		if r.platformInterfaceEnabled(event) {
-			pluginTools = append(pluginTools, newDianaPlatformTool(r, event))
+			pluginTools = append(pluginTools, newDianaPlatformTool(ctx, r, event))
 		}
 		if fullAgentEnabled {
 			// 因为权限不够而没挂上的工具名。它们不构造、不注册，只是让注册表知道

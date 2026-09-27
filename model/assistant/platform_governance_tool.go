@@ -115,7 +115,11 @@ func (t *dianaPlatformTool) runGovernance(ctx context.Context, input map[string]
 		return fail(req.target, fmt.Errorf("%s 执行失败：%w", operation, err))
 	}
 	t.runtime.recordPlatformInterfaceOperation(t.event, operation, access, owner, req.target, nil)
-	payload := map[string]any{"group_id": groupID, "data": data, "message": governanceSuccessMessage(operation, req)}
+	message := governanceSuccessMessage(operation, req)
+	if note, _ := data["note"].(string); note != "" {
+		message += note + "。"
+	}
+	payload := map[string]any{"group_id": groupID, "data": data, "message": message}
 	if req.target != "" {
 		payload["user_id"] = req.target
 	}
@@ -224,15 +228,15 @@ func (t *dianaPlatformTool) dispatchGovernance(ctx context.Context, platform, op
 		case platformOpSetTitle:
 			return call("setChatAdministratorCustomTitle", map[string]any{"chat_id": groupID, "user_id": oneBotIDParam(req.target), "custom_title": req.text})
 		case platformOpMuteAll:
-			return call("setChatPermissions", map[string]any{"chat_id": groupID, "permissions": telegramMutedPermissions()})
+			return t.telegramMuteAll(ctx, groupID)
 		case platformOpUnmuteAll:
-			return call("setChatPermissions", map[string]any{"chat_id": groupID, "permissions": telegramMemberDefaultPermissions()})
+			return t.telegramUnmuteAll(ctx, groupID)
 		}
 	}
 	return nil, fmt.Errorf("当前平台暂不支持此操作")
 }
 
-// telegramMemberDefaultPermissions 是解除全员禁言后恢复的群默认权限。只放开发言类
+// telegramMemberDefaultPermissions 是找不到禁言前快照时的兜底权限。只放开发言类
 // 和邀请，改群资料、置顶、管理话题这几项仍然关着——群默认权限给了所有成员，
 // 照搬 telegramFullPermissions 会让解禁顺手把改群名的权力发给每个人。
 func telegramMemberDefaultPermissions() map[string]any {

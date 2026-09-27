@@ -42,7 +42,7 @@ func platformToolFor(t *testing.T, cfg BotConfig, channel Channel, event Message
 	logs := &captureAppLogs{}
 	runtime := NewRuntime(cfg, channel, NewDefaultPluginManager(), nil, nil, nil, nil)
 	runtime.SetAppLogWriter(logs)
-	return newDianaPlatformTool(runtime, event), runtime, logs
+	return newDianaPlatformTool(context.Background(), runtime, event), runtime, logs
 }
 
 func TestDefaultPluginManagerIncludesPlatformInterface(t *testing.T) {
@@ -359,8 +359,8 @@ func TestPlatformToolReadsWorkForMembers(t *testing.T) {
 
 func TestPlatformToolMemberSchemaHidesModerationOps(t *testing.T) {
 	channel := &recordingChannel{}
-	memberTool := newDianaPlatformTool(NewRuntime(BotConfig{OwnerID: "owner", Platform: PlatformOneBotV11}, channel, NewDefaultPluginManager(), nil, nil, nil, nil), MessageEvent{Kind: EventKindGroup, UserID: "member", GroupID: "123", Platform: PlatformOneBotV11})
-	ownerTool := newDianaPlatformTool(NewRuntime(BotConfig{OwnerID: "owner", Platform: PlatformOneBotV11}, channel, NewDefaultPluginManager(), nil, nil, nil, nil), MessageEvent{Kind: EventKindGroup, UserID: "owner", GroupID: "123", Platform: PlatformOneBotV11})
+	memberTool := newDianaPlatformTool(context.Background(), NewRuntime(BotConfig{OwnerID: "owner", Platform: PlatformOneBotV11}, channel, NewDefaultPluginManager(), nil, nil, nil, nil), MessageEvent{Kind: EventKindGroup, UserID: "member", GroupID: "123", Platform: PlatformOneBotV11})
+	ownerTool := newDianaPlatformTool(context.Background(), NewRuntime(BotConfig{OwnerID: "owner", Platform: PlatformOneBotV11}, channel, NewDefaultPluginManager(), nil, nil, nil, nil), MessageEvent{Kind: EventKindGroup, UserID: "owner", GroupID: "123", Platform: PlatformOneBotV11})
 
 	if ops := platformSchemaOperations(t, memberTool); containsString(ops, "mute") || containsString(ops, "kick") || containsString(ops, "unmute") {
 		t.Fatalf("member schema exposed moderation ops: %#v", ops)
@@ -400,7 +400,7 @@ func TestPlatformToolMemberRegistryRetainsReadTool(t *testing.T) {
 		cfg.WithDefaults(),
 		event,
 		RelationshipPolicy{Score: 10},
-		newDianaPlatformTool(runtime, event),
+		newDianaPlatformTool(context.Background(), runtime, event),
 		newDianaLLMConfigTool(runtime, event),
 	)
 	if err != nil {

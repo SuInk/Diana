@@ -130,13 +130,13 @@ type dianaPlatformTool struct {
 	moderator bool
 }
 
-func newDianaPlatformTool(runtime *Runtime, event MessageEvent) *dianaPlatformTool {
+func newDianaPlatformTool(ctx context.Context, runtime *Runtime, event MessageEvent) *dianaPlatformTool {
 	tool := &dianaPlatformTool{runtime: runtime, event: event}
 	if runtime != nil {
 		event.Platform = firstNonEmpty(event.Platform, runtime.effectiveConfigForEvent(event).Platform)
 		tool.event = event
-		tool.owner = runtime.relationshipPolicy(context.Background(), event).Owner
-		tool.moderator = runtime.platformModerationVisible(context.Background(), event, tool.owner)
+		tool.owner = runtime.relationshipPolicy(ctx, event).Owner
+		tool.moderator = runtime.platformModerationVisible(ctx, event, tool.owner)
 	}
 	return tool
 }

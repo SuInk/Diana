@@ -39,25 +39,30 @@ func (r *Runtime) expandWelcomePlaceholders(ctx context.Context, event MessageEv
 	}
 	lookupCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
+	nickname, group := "", ""
 	if strings.Contains(text, "{nickname}") {
-		nickname := strings.TrimSpace(event.SenderName)
+		nickname = strings.TrimSpace(event.SenderName)
 		if nickname == "" {
 			if member, err := r.getGroupMemberInfoForEvent(lookupCtx, event, event.GroupID, event.UserID); err == nil {
 				nickname = firstNonEmpty(strings.TrimSpace(member.Card), strings.TrimSpace(member.Nickname))
 			}
 		}
-		text = strings.ReplaceAll(text, "{nickname}", firstNonEmpty(nickname, event.UserID))
 	}
 	if strings.Contains(text, "{group}") {
-		group := strings.TrimSpace(event.GroupName)
+		group = strings.TrimSpace(event.GroupName)
 		if group == "" {
 			if info, err := r.getGroupInfoForEvent(lookupCtx, event, event.GroupID); err == nil {
 				group = strings.TrimSpace(info.GroupName)
 			}
 		}
-		text = strings.ReplaceAll(text, "{group}", firstNonEmpty(group, event.GroupID))
 	}
-	return strings.NewReplacer("{group_id}", event.GroupID, "{user_id}", event.UserID).Replace(text)
+	// 一次替换完：昵称、群名是别人能随便起的，里面要是写着 {group_id}，分步替换会被二次展开。
+	return strings.NewReplacer(
+		"{nickname}", firstNonEmpty(nickname, event.UserID),
+		"{group}", firstNonEmpty(group, event.GroupID),
+		"{group_id}", event.GroupID,
+		"{user_id}", event.UserID,
+	).Replace(text)
 }
 
 // renderTemplateWelcome 从口吻模板池随机抽一条，池为空时回落固定文本。
