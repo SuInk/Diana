@@ -14,6 +14,12 @@ import (
 	"github.com/SuInk/diana/model/llm"
 )
 
+// 没配置时每次屏蔽时长的上下限。
+const (
+	defaultSuppressionMin = defaultReplySuppressionMinMinutes * time.Minute
+	defaultSuppressionMax = defaultReplySuppressionMaxMinutes * time.Minute
+)
+
 func TestConsumeReplyControlIntent(t *testing.T) {
 	tests := []struct {
 		name         string
@@ -96,7 +102,7 @@ func TestReplyRefusalFourthSuccessfulSendActivatesSilentCooldown(t *testing.T) {
 				return provider, nil
 			})
 
-			for index := 0; index < replyRefusalThreshold; index++ {
+			for index := 0; index < defaultReplyRefusalThreshold; index++ {
 				event := refusalTestEvent(tt.kind, tt.group, "user", fmt.Sprintf("message-%d", index))
 				reply, err := runtime.replyTo(context.Background(), event, event.RawMessage)
 				if err != nil {
@@ -106,16 +112,16 @@ func TestReplyRefusalFourthSuccessfulSendActivatesSilentCooldown(t *testing.T) {
 					t.Fatalf("reply %d was not a visible clean refusal: %q", index+1, reply)
 				}
 				_, active := runtime.activeReplySuppression(event, time.Now())
-				if active != (index == replyRefusalThreshold-1) {
+				if active != (index == defaultReplyRefusalThreshold-1) {
 					t.Fatalf("reply %d active=%v", index+1, active)
 				}
 			}
 
-			if provider.mainRequests != replyRefusalThreshold || provider.visualRequests != replyRefusalThreshold {
+			if provider.mainRequests != defaultReplyRefusalThreshold || provider.visualRequests != defaultReplyRefusalThreshold {
 				t.Fatalf("main requests=%d visual requests=%d", provider.mainRequests, provider.visualRequests)
 			}
 			// 暂停不再通报：四条可见的拒答照旧，后面没有那条「已累计拒绝 4 次」。
-			if len(channel.sent) != replyRefusalThreshold {
+			if len(channel.sent) != defaultReplyRefusalThreshold {
 				t.Fatalf("sent=%#v，want 四条拒答且没有任何暂停通报", channel.sent)
 			}
 			for index, sent := range channel.sent {
@@ -185,7 +191,7 @@ func TestImmediateReplySuppressionMarkerOnlyGoesSilent(t *testing.T) {
 
 func TestReplyRefusalFailedSendDoesNotCount(t *testing.T) {
 	provider := &refusalLLMProvider{}
-	for index := 0; index < replyRefusalThreshold+1; index++ {
+	for index := 0; index < defaultReplyRefusalThreshold+1; index++ {
 		provider.replies = append(provider.replies, fmt.Sprintf("拒绝说明 %d。", index+1)+replyRefusalMarker)
 	}
 	channel := &failNthSendChannel{recordingChannel: &recordingChannel{}, failAt: 3}
@@ -193,7 +199,7 @@ func TestReplyRefusalFailedSendDoesNotCount(t *testing.T) {
 		return provider, nil
 	})
 
-	for index := 0; index < replyRefusalThreshold+1; index++ {
+	for index := 0; index < defaultReplyRefusalThreshold+1; index++ {
 		event := refusalTestEvent(EventKindPrivate, "", "user", fmt.Sprintf("send-%d", index))
 		_, err := runtime.replyTo(context.Background(), event, event.RawMessage)
 		if index == 2 {
@@ -209,7 +215,7 @@ func TestReplyRefusalFailedSendDoesNotCount(t *testing.T) {
 			t.Fatalf("send %d: %v", index+1, err)
 		}
 	}
-	if len(channel.sent) != replyRefusalThreshold {
+	if len(channel.sent) != defaultReplyRefusalThreshold {
 		t.Fatalf("successful sends=%#v，want 四条成功发出的拒答且没有暂停通报", channel.sent)
 	}
 	event := refusalTestEvent(EventKindPrivate, "", "user", "check")
@@ -222,7 +228,7 @@ func TestReplyRefusalFailedSendDoesNotCount(t *testing.T) {
 // 于是拒答攒够了次数却还在继续回。现在没有通知这一步，累计够了就地生效。
 func TestReplyRefusalCooldownActivatesWithoutAnyNotice(t *testing.T) {
 	provider := &refusalLLMProvider{}
-	for index := 0; index < replyRefusalThreshold+1; index++ {
+	for index := 0; index < defaultReplyRefusalThreshold+1; index++ {
 		provider.replies = append(provider.replies, fmt.Sprintf("拒绝说明 %d。", index+1)+replyRefusalMarker)
 	}
 	channel := &recordingChannel{}
@@ -230,7 +236,7 @@ func TestReplyRefusalCooldownActivatesWithoutAnyNotice(t *testing.T) {
 		return provider, nil
 	})
 
-	for index := 0; index < replyRefusalThreshold; index++ {
+	for index := 0; index < defaultReplyRefusalThreshold; index++ {
 		event := refusalTestEvent(EventKindPrivate, "", "user", fmt.Sprintf("silent-cooldown-%d", index))
 		if _, err := runtime.replyTo(context.Background(), event, event.RawMessage); err != nil {
 			t.Fatalf("refusal %d: %v", index+1, err)
@@ -240,7 +246,7 @@ func TestReplyRefusalCooldownActivatesWithoutAnyNotice(t *testing.T) {
 	if _, active := runtime.activeReplySuppression(event, time.Now()); !active {
 		t.Fatal("累计够了就该生效，不该再等一条通知")
 	}
-	if len(channel.sent) != replyRefusalThreshold {
+	if len(channel.sent) != defaultReplyRefusalThreshold {
 		t.Fatalf("发出去的应当只有四条拒答：%#v", channel.sent)
 	}
 	for _, sent := range channel.sent {
@@ -257,7 +263,7 @@ func TestReplyRefusalConcurrentThresholdBlocksTheExtraReply(t *testing.T) {
 		return provider, nil
 	})
 	seedAt := time.Now().Add(-time.Minute)
-	for index := 0; index < replyRefusalThreshold-1; index++ {
+	for index := 0; index < defaultReplyRefusalThreshold-1; index++ {
 		event := refusalTestEvent(EventKindPrivate, "", "user", fmt.Sprintf("seed-%d", index))
 		if count, _, reached := runtime.registerReplyRefusal(event, seedAt.Add(time.Duration(index)*time.Second)); count != index+1 || reached {
 			t.Fatalf("seed %d count=%d reached=%v", index, count, reached)
@@ -296,7 +302,7 @@ func TestReplyRefusalCooldownSurvivesCanceledContext(t *testing.T) {
 	channel := &recordingChannel{}
 	runtime := NewRuntime(BotConfig{OwnerID: "owner", BotAccount: "42"}, channel, NewPluginManager(), nil, nil, nil, nil)
 	seedAt := time.Now().Add(-time.Minute)
-	for index := 0; index < replyRefusalThreshold-1; index++ {
+	for index := 0; index < defaultReplyRefusalThreshold-1; index++ {
 		event := refusalTestEvent(EventKindPrivate, "", "user", fmt.Sprintf("seed-context-%d", index))
 		runtime.registerReplyRefusal(event, seedAt.Add(time.Duration(index)*time.Second))
 	}
@@ -487,8 +493,8 @@ func TestReplySuppressionBlocksFollowingMentionAndQuote(t *testing.T) {
 		t.Fatal("generated refusal did not activate response suppression")
 	}
 	remaining := time.Until(item.Until)
-	if remaining < replySuppressionMinDuration-time.Minute || remaining > replySuppressionMaxDuration {
-		t.Fatalf("suppression duration = %s，want 落在 %s 到 %s 之间", remaining, replySuppressionMinDuration, replySuppressionMaxDuration)
+	if remaining < defaultSuppressionMin-time.Minute || remaining > defaultSuppressionMax {
+		t.Fatalf("suppression duration = %s，want 落在 %s 到 %s 之间", remaining, defaultSuppressionMin, defaultSuppressionMax)
 	}
 
 	second := MessageEvent{
@@ -628,7 +634,7 @@ func TestReplySuppressionPersistsAcrossRuntimeRestart(t *testing.T) {
 func TestBotReplyLoopSuppressesAfterThirdMeaninglessReply(t *testing.T) {
 	loopVerdict := func(confidence string, reason string) string {
 		return `{"send_confidence":0.9,"account_safe":true,"count_refusal":false,` +
-			`"reply_loop_automated_ai":true,"reply_loop_meaningless":true,` +
+			`"reply_loop_meaningless":true,` +
 			`"reply_loop_confidence":` + confidence + `,"reply_loop_reason":"` + reason + `"}`
 	}
 	provider := &sequenceLLMProvider{
@@ -651,7 +657,7 @@ func TestBotReplyLoopSuppressesAfterThirdMeaninglessReply(t *testing.T) {
 	}
 	for i, text := range texts {
 		err := runBotReplyLoopReview(t, runtime, "ai-loop", "20002", i, start.Add(time.Duration(i)*10*time.Minute), 2*time.Minute, text, "好的，我在的")
-		if i < botReplyLoopThreshold-1 {
+		if i < defaultBotReplyLoopThreshold-1 {
 			if err != nil {
 				t.Fatalf("round %d unexpectedly blocked: %v", i+1, err)
 			}
@@ -671,8 +677,8 @@ func TestBotReplyLoopSuppressesAfterThirdMeaninglessReply(t *testing.T) {
 	}
 	// 三次审核加一次收声提示：空转判断没有单独占用调用，是跟着发送前审核走的；
 	// 多出来的那一次是暂停生效后那句人设提示。
-	if len(provider.requests) != botReplyLoopThreshold+1 {
-		t.Fatalf("LLM requests = %d, want %d audits and one pause hint", len(provider.requests), botReplyLoopThreshold+1)
+	if len(provider.requests) != defaultBotReplyLoopThreshold+1 {
+		t.Fatalf("LLM requests = %d, want %d audits and one pause hint", len(provider.requests), defaultBotReplyLoopThreshold+1)
 	}
 	// 审核请求里必须同时有待发回复和判断空转要用的近期上下文。
 	first := requestTextContent(provider.requests[0])
@@ -723,14 +729,14 @@ func TestBotReplyLoopJudgementCostsNoExtraCall(t *testing.T) {
 // 而解除暂停的命令恰恰要主人发。
 func TestBotReplyLoopJudgesOwnerButNeverSuppresses(t *testing.T) {
 	loopVerdict := `{"send_confidence":0.9,"account_safe":true,"count_refusal":false,` +
-		`"reply_loop_automated_ai":true,"reply_loop_meaningless":true,"reply_loop_confidence":0.98,"reply_loop_reason":"一直在空转"}`
+		`"reply_loop_meaningless":true,"reply_loop_confidence":0.98,"reply_loop_reason":"一直在空转"}`
 	channel := &recordingChannel{}
 	provider := &sequenceLLMProvider{auditReplies: []string{loopVerdict, loopVerdict, loopVerdict, loopVerdict}}
 	runtime := NewRuntime(BotConfig{OwnerID: "10001", BotAccount: "42"}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
 	})
 	start := time.Now().Add(-25 * time.Minute).Truncate(time.Second)
-	for i := 0; i < botReplyLoopThreshold+1; i++ {
+	for i := 0; i < defaultBotReplyLoopThreshold+1; i++ {
 		event := botReplyLoopEvent(runtime, "owner-loop", "10001", i, start.Add(time.Duration(i)*5*time.Minute), time.Minute, "在吗")
 		cfg := runtime.effectiveConfigForEvent(event)
 		need := runtime.replyAuditNeed(event, "在吗", cfg, false)
@@ -750,7 +756,7 @@ func TestBotReplyLoopJudgesOwnerButNeverSuppresses(t *testing.T) {
 	if len(channel.sentSnapshot()) != 0 {
 		t.Fatalf("owner got a suppression notice: %#v", channel.sentSnapshot())
 	}
-	if len(provider.requestsSnapshot()) != botReplyLoopThreshold+1 {
+	if len(provider.requestsSnapshot()) != defaultBotReplyLoopThreshold+1 {
 		t.Fatalf("owner audits = %d, want one per round", len(provider.requestsSnapshot()))
 	}
 
@@ -772,15 +778,15 @@ func TestBotReplyLoopCountsMeaninglessExchanges(t *testing.T) {
 	if low.counts() {
 		t.Fatal("低置信度不该计数")
 	}
-	audit, ok := parseProactiveReplyQualityDecision(`{"send_confidence":0.9,"account_safe":true,"reply_loop_automated_ai":false,"reply_loop_meaningless":true,"reply_loop_confidence":0.93,"reply_loop_reason":"互相复读"}`)
+	audit, ok := parseProactiveReplyQualityDecision(`{"send_confidence":0.9,"account_safe":true,"reply_loop_meaningless":true,"reply_loop_confidence":0.93,"reply_loop_reason":"互相复读"}`)
 	parsed := audit.loopDecision()
-	if !ok || !parsed.MeaninglessLoop || parsed.AutomatedAIReply || !parsed.counts() {
+	if !ok || !parsed.MeaninglessLoop || !parsed.counts() {
 		t.Fatalf("parsed = %#v ok=%v", parsed, ok)
 	}
 	// 旧提示词没有空转三项，升级期间审核结论必须仍然可解，且当作没有空转。
 	legacyAudit, ok := parseProactiveReplyQualityDecision(`{"send_confidence":0.95,"account_safe":true,"count_refusal":false}`)
 	legacy := legacyAudit.loopDecision()
-	if !ok || legacy.MeaninglessLoop || legacy.AutomatedAIReply || legacy.counts() {
+	if !ok || legacy.MeaninglessLoop || legacy.counts() {
 		t.Fatalf("legacy = %#v ok=%v", legacy, ok)
 	}
 }
@@ -813,14 +819,14 @@ func TestBotReplyLoopDetectionCanBeDisabled(t *testing.T) {
 
 func TestBotReplyLoopDoesNotCountHumanClassifiedMessages(t *testing.T) {
 	provider := &sequenceLLMProvider{}
-	for i := 0; i < botReplyLoopThreshold+2; i++ {
-		provider.auditReplies = append(provider.auditReplies, `{"send_confidence":0.9,"account_safe":true,"count_refusal":false,"reply_loop_automated_ai":false,"reply_loop_meaningless":false,"reply_loop_confidence":0.99,"reply_loop_reason":"普通真人连续聊天"}`)
+	for i := 0; i < defaultBotReplyLoopThreshold+2; i++ {
+		provider.auditReplies = append(provider.auditReplies, `{"send_confidence":0.9,"account_safe":true,"count_refusal":false,"reply_loop_meaningless":false,"reply_loop_confidence":0.99,"reply_loop_reason":"普通真人连续聊天"}`)
 	}
 	runtime := NewRuntime(BotConfig{OwnerID: "10001", BotAccount: "42"}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
 	})
 	start := time.Now().Add(-20 * time.Minute).Truncate(time.Second)
-	for i := 0; i < botReplyLoopThreshold+2; i++ {
+	for i := 0; i < defaultBotReplyLoopThreshold+2; i++ {
 		if err := runBotReplyLoopReview(t, runtime, "human", "20002", i, start.Add(time.Duration(i)*4*time.Minute), time.Minute,
 			fmt.Sprintf("这是普通真人回复 %d", i), fmt.Sprintf("这是机器人的第 %d 条回答", i)); err != nil {
 			t.Fatalf("human round %d blocked: %v", i, err)
@@ -829,8 +835,8 @@ func TestBotReplyLoopDoesNotCountHumanClassifiedMessages(t *testing.T) {
 	if _, active := runtime.activeReplySuppression(MessageEvent{Kind: EventKindGroup, GroupID: "123456", UserID: "20002"}, time.Now()); active {
 		t.Fatal("human-classified messages were incorrectly suppressed")
 	}
-	if len(provider.requests) != botReplyLoopThreshold+2 {
-		t.Fatalf("audit requests = %d, want %d", len(provider.requests), botReplyLoopThreshold+2)
+	if len(provider.requests) != defaultBotReplyLoopThreshold+2 {
+		t.Fatalf("audit requests = %d, want %d", len(provider.requests), defaultBotReplyLoopThreshold+2)
 	}
 }
 
@@ -859,7 +865,7 @@ func TestBotReplyLoopThresholdAndWindowBoundaries(t *testing.T) {
 	for index, at := range []time.Time{t0.Add(15 * time.Minute), t0.Add(botReplyLoopWindow)} {
 		hitCount, _, detected = runtime.registerBotReplyLoopDecision(event(fmt.Sprintf("counted-%d", index)), candidate, counted, at)
 	}
-	if hitCount != botReplyLoopThreshold || !detected {
+	if hitCount != defaultBotReplyLoopThreshold || !detected {
 		t.Fatalf("exact-window threshold count=%d detected=%v", hitCount, detected)
 	}
 
@@ -867,7 +873,7 @@ func TestBotReplyLoopThresholdAndWindowBoundaries(t *testing.T) {
 	for index, at := range []time.Time{t0, t0.Add(15 * time.Minute), t0.Add(botReplyLoopWindow + time.Nanosecond)} {
 		hitCount, _, detected = runtime.registerBotReplyLoopDecision(event(fmt.Sprintf("expired-%d", index)), candidate, counted, at)
 	}
-	if hitCount != botReplyLoopThreshold-1 || detected {
+	if hitCount != defaultBotReplyLoopThreshold-1 || detected {
 		t.Fatalf("expired-window count=%d detected=%v", hitCount, detected)
 	}
 }
@@ -880,8 +886,8 @@ func TestReplySuppressionExpiresAtItsOwnBoundary(t *testing.T) {
 	if !activated {
 		t.Fatalf("item=%#v activated=%v", item, activated)
 	}
-	if got := item.Until.Sub(t0); got < replySuppressionMinDuration || got > replySuppressionMaxDuration {
-		t.Fatalf("时长 %s 不在 %s 到 %s 之间", got, replySuppressionMinDuration, replySuppressionMaxDuration)
+	if got := item.Until.Sub(t0); got < defaultSuppressionMin || got > defaultSuppressionMax {
+		t.Fatalf("时长 %s 不在 %s 到 %s 之间", got, defaultSuppressionMin, defaultSuppressionMax)
 	}
 	if _, active := runtime.activeReplySuppression(event, item.Until.Add(-time.Nanosecond)); !active {
 		t.Fatal("到期前一纳秒就失效了")
@@ -895,9 +901,9 @@ func TestReplySuppressionExpiresAtItsOwnBoundary(t *testing.T) {
 func TestReplySuppressionDurationIsRandomWithinRange(t *testing.T) {
 	seen := map[time.Duration]bool{}
 	for i := 0; i < 200; i++ {
-		got := randomReplySuppressionDuration()
-		if got < replySuppressionMinDuration || got > replySuppressionMaxDuration {
-			t.Fatalf("第 %d 次取到 %s，超出 %s 到 %s", i+1, got, replySuppressionMinDuration, replySuppressionMaxDuration)
+		got := randomReplySuppressionDuration(BotConfig{})
+		if got < defaultSuppressionMin || got > defaultSuppressionMax {
+			t.Fatalf("第 %d 次取到 %s，超出 %s 到 %s", i+1, got, defaultSuppressionMin, defaultSuppressionMax)
 		}
 		seen[got] = true
 	}
@@ -908,14 +914,14 @@ func TestReplySuppressionDurationIsRandomWithinRange(t *testing.T) {
 
 func TestBotReplyLoopNeverClassifiesOwner(t *testing.T) {
 	provider := &sequenceLLMProvider{}
-	for i := 0; i < botReplyLoopThreshold+1; i++ {
+	for i := 0; i < defaultBotReplyLoopThreshold+1; i++ {
 		provider.replies = append(provider.replies, `{"should_reply":false,"confidence":0.99,"category":"none","directed_at_bot":true,"answerable":false,"reason":"没有需要继续回答的内容"}`)
 	}
 	runtime := NewRuntime(BotConfig{OwnerID: "10001", BotAccount: "42"}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
 	})
 	start := time.Now().Add(-time.Minute).Truncate(time.Second)
-	for i := 0; i < botReplyLoopThreshold+1; i++ {
+	for i := 0; i < defaultBotReplyLoopThreshold+1; i++ {
 		handled, outcome := prepareBotReplyLoopRound(t, runtime, "owner", "10001", i, start.Add(time.Duration(i)*time.Minute), time.Minute, "主人正常回复")
 		if !handled || outcome != "replied" {
 			t.Fatalf("owner round %d handled=%v outcome=%q, want a direct reply", i+1, handled, outcome)
@@ -943,10 +949,10 @@ func TestParseReplyLoopVerdictFromAudit(t *testing.T) {
 	if decision = audit.loopDecision(); !ok || decision.counts() {
 		t.Fatalf("low-confidence decision=%#v ok=%v", decision, ok)
 	}
-	// 只判出对方是自动 AI、却在正经做事，不算空转：下棋、做题的 AI 不该被停掉。
+	// 旧提示词还会写 reply_loop_automated_ai，这一项已经删掉，读到了也不影响结论。
 	audit, ok = parseProactiveReplyQualityDecision(`{"send_confidence":0.9,"account_safe":true,"reply_loop_automated_ai":true,"reply_loop_meaningless":false,"reply_loop_purposeless":false,"reply_loop_confidence":0.98,"reply_loop_reason":"对方是 AI，在报棋步"}`)
-	if decision = audit.loopDecision(); !ok || !decision.AutomatedAIReply || decision.counts() {
-		t.Fatalf("automated-but-purposeful decision=%#v ok=%v", decision, ok)
+	if decision = audit.loopDecision(); !ok || decision.counts() {
+		t.Fatalf("legacy automated-ai decision=%#v ok=%v", decision, ok)
 	}
 }
 
@@ -1048,7 +1054,7 @@ func TestReplyRefusalSuppressionCanBeTurnedOff(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			runtime := NewRuntime(BotConfig{OwnerID: "owner", BotAccount: "42", ReplyRefusalSuppressionEnabled: tc.enabled}, &recordingChannel{}, NewPluginManager(), nil, nil, nil, nil)
 			var event MessageEvent
-			for index := 0; index < replyRefusalThreshold; index++ {
+			for index := 0; index < defaultReplyRefusalThreshold; index++ {
 				event = refusalTestEvent(EventKindPrivate, "", "user", fmt.Sprintf("toggle-%s-%d", tc.name, index))
 				runtime.applyReplyControlAfterSend(context.Background(), event, "这条消息我拒绝回答。", replyControlIntent{RefuseCurrent: true})
 			}
@@ -1056,5 +1062,63 @@ func TestReplyRefusalSuppressionCanBeTurnedOff(t *testing.T) {
 				t.Fatalf("暂停 = %v，want %v", paused, tc.wantPaused)
 			}
 		})
+	}
+}
+
+// 临时响应屏蔽可以整体关掉：空转、拒答、叫停都不再暂停人，已有的屏蔽也不拦；
+// 复读照样只丢那一条。
+func TestReplySuppressionMasterSwitchOff(t *testing.T) {
+	disabled := false
+	r := densityTestRuntime(BotConfig{ReplySuppressionEnabled: &disabled, MarkedBotIDs: []string{"20002"}}, nil)
+	event := densityTestEvent("m", "Diana 晚安")
+	if _, ok := r.newReplySuppression(event, "test", time.Now()); ok {
+		t.Fatal("总开关关着不该开出屏蔽")
+	}
+	r.replySuppressByUser = map[string]ReplySuppression{"20002": {UserID: "20002", Until: time.Now().Add(time.Hour)}}
+	if _, blocked := r.activeReplySuppression(event, time.Now()); blocked {
+		t.Fatal("总开关关着，已有的屏蔽也不该拦")
+	}
+	selfRepeat := proactiveReplyQualityDecision{Confidence: 0.9, ReplyLoopSelfRepeat: true, ReplyLoopConfidence: 0.95, ReplyLoopSelfRepeatConfidence: 0.95}
+	now := time.Now()
+	for i := 0; i < defaultBotReplyLoopThreshold+1; i++ {
+		event := botReplyLoopEvent(r, "off", "20002", i, now.Add(time.Duration(i-5)*time.Minute), 10*time.Second, "晚安")
+		if err := r.applyReplyLoopVerdict(context.Background(), event, botReplyLoopCandidate{TriggerKind: "quote"}, selfRepeat, true); !errors.Is(err, errReplySelfRepeatDropped) {
+			t.Fatalf("第 %d 次：总开关关着时复读只丢这一条，err=%v", i+1, err)
+		}
+	}
+}
+
+// 屏蔽时长和触发次数可以自定义；没配或乱配时回到默认值或范围内。
+func TestReplySuppressionCustomSettings(t *testing.T) {
+	cfg := BotConfig{ReplySuppressionMinMinutes: 5, ReplySuppressionMaxMinutes: 5, BotReplyLoopThreshold: 1, ReplyRefusalThreshold: 2}
+	if got := randomReplySuppressionDuration(cfg); got != 5*time.Minute {
+		t.Fatalf("时长 = %s，want 5m", got)
+	}
+	if botReplyLoopThreshold(cfg) != 1 || replyRefusalThreshold(cfg) != 2 {
+		t.Fatalf("次数没按配置：%d %d", botReplyLoopThreshold(cfg), replyRefusalThreshold(cfg))
+	}
+	messy := BotConfig{ReplySuppressionMinMinutes: 60, ReplySuppressionMaxMinutes: 20, BotReplyLoopThreshold: 999, ReplyRefusalThreshold: -1}
+	if replySuppressionMinMinutes(messy) != 60 || replySuppressionMaxMinutes(messy) != 60 {
+		t.Fatalf("上限小于下限时应抬到下限：%d %d", replySuppressionMinMinutes(messy), replySuppressionMaxMinutes(messy))
+	}
+	if botReplyLoopThreshold(messy) != maxReplySuppressionThreshold || replyRefusalThreshold(messy) != defaultReplyRefusalThreshold {
+		t.Fatalf("越界没钳住：%d %d", botReplyLoopThreshold(messy), replyRefusalThreshold(messy))
+	}
+
+	r := densityTestRuntime(BotConfig{BotReplyLoopThreshold: 1}, nil)
+	meaningless := proactiveReplyQualityDecision{Confidence: 0.9, ReplyLoopMeaningless: true, ReplyLoopConfidence: 0.95}
+	event := botReplyLoopEvent(r, "once", "20002", 0, time.Now().Add(-time.Minute), 10*time.Second, "嗯")
+	if err := r.applyReplyLoopVerdict(context.Background(), event, botReplyLoopCandidate{TriggerKind: "quote"}, meaningless, true); !errors.Is(err, errReplyLoopDetected) {
+		t.Fatalf("阈值设成 1 时第一次空转就该屏蔽，err=%v", err)
+	}
+}
+
+// 新设置要能存进去、读出来。
+func TestReplySuppressionSettingsRoundTrip(t *testing.T) {
+	disabled := false
+	cfg := ConfigFromPayload(ConfigPayload{ReplySuppressionEnabled: &disabled, ReplySuppressionMinMinutes: 3, ReplySuppressionMaxMinutes: 7, BotReplyLoopThreshold: 5, ReplyRefusalThreshold: 6}, BotConfig{})
+	payload := PayloadFromConfig(cfg)
+	if payload.ReplySuppressionEnabled == nil || *payload.ReplySuppressionEnabled || payload.ReplySuppressionMinMinutes != 3 || payload.ReplySuppressionMaxMinutes != 7 || payload.BotReplyLoopThreshold != 5 || payload.ReplyRefusalThreshold != 6 {
+		t.Fatalf("往返丢了设置：%+v", payload)
 	}
 }

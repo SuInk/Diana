@@ -353,8 +353,15 @@ func (s *SQLiteStore) SearchMessageEvents(ctx context.Context, query assistant.M
 		where += ` AND session != ?`
 		args = append(args, strings.TrimSpace(query.ExcludeSession))
 	}
+	// 多个词按时间排序时，只按时间排会让只提到其中一个常见词的消息把真正同时
+	// 提到几个词的那条埋没：「DeepSeek harness」按 OR 命中五百多条，逐页翻时间线
+	// 翻不到。这里先按命中了几个词分档，档内仍按时间，总数和翻页口径不变。
+	var words []string
+	if query.Sort == "oldest" || query.Sort == "newest" {
+		words = historySearchWords(query.Text)
+	}
 	if s.historyFTS {
-		if events, total, ok, err := s.searchMessageEventsFTS(ctx, where, args, terms, limit, query.Sort, query.Offset); ok {
+		if events, total, ok, err := s.searchMessageEventsFTS(ctx, where, args, terms, words, limit, query.Sort, query.Offset); ok {
 			return events, total, err
 		}
 	}
@@ -384,6 +391,14 @@ func (s *SQLiteStore) SearchMessageEvents(ctx context.Context, query assistant.M
 	if query.Sort == "oldest" || query.Sort == "newest" {
 		order = historyChronologicalOrder(query.Sort, "")
 		rowArgs = append([]any(nil), args...)
+		if len(words) > 0 {
+			tierParts := make([]string, 0, len(words))
+			for _, word := range words {
+				tierParts = append(tierParts, `CASE WHEN `+searchable+` LIKE ? ESCAPE '\' THEN 1 ELSE 0 END`)
+				rowArgs = append(rowArgs, "%"+escapeMessageHistoryLike(word)+"%")
+			}
+			order = `(` + strings.Join(tierParts, ` + `) + `) DESC, ` + order
+		}
 	}
 	rowArgs = append(rowArgs, limit, max(0, query.Offset))
 	rows, err := s.eventReader().QueryContext(ctx, `
@@ -440,6 +455,33 @@ func historySearchTerms(query assistant.MessageHistorySearchQuery) []string {
 	}
 	return terms
 }
+
+// historySearchWords 取查询里按空格分开的词，用来给按时间排序的结果按命中词数
+// 分档。只有一个词时分档没有意义，返回 nil。
+func historySearchWords(text string) []string {
+	seen := make(map[string]struct{})
+	var words []string
+	for _, word := range strings.Fields(strings.ToLower(text)) {
+		if len([]rune(word)) < 2 || messageHistoryIndexTokens(word) == "" {
+			continue
+		}
+		if _, ok := seen[word]; ok {
+			continue
+		}
+		seen[word] = struct{}{}
+		words = append(words, word)
+		if len(words) == maxHistorySearchTierWords {
+			break
+		}
+	}
+	if len(words) < 2 {
+		return nil
+	}
+	return words
+}
+
+// maxHistorySearchTierWords 限制参与分档的词数，每个词在 FTS 路径上是一次独立的 MATCH。
+const maxHistorySearchTierWords = 6
 
 func escapeMessageHistoryLike(value string) string {
 	replacer := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
@@ -604,7 +646,7 @@ func normalizeMessageHistoryLimit(limit int) int {
 // 按 BM25 排前面，只靠短词命中的按时间排在后面。
 //
 // 第三个返回值为 false 表示这次用不了索引，调用方回退到原来的 LIKE 检索。
-func (s *SQLiteStore) searchMessageEventsFTS(ctx context.Context, where string, args []any, terms []string, limit int, order string, offset int) ([]assistant.MessageEvent, int, bool, error) {
+func (s *SQLiteStore) searchMessageEventsFTS(ctx context.Context, where string, args []any, terms, words []string, limit int, order string, offset int) ([]assistant.MessageEvent, int, bool, error) {
 	defer s.observeStorage(ctx, "searchMessageEventsFTS", "read")()
 	match := messageHistoryFTSQuery(terms)
 	if match == "" {
@@ -613,8 +655,21 @@ func (s *SQLiteStore) searchMessageEventsFTS(ctx context.Context, where string, 
 	scopedWhere := prefixMessageHistoryColumns(where)
 	offset = max(0, offset)
 
-	pageSQL, countSQL := messageHistoryFTSStatements(scopedWhere, order)
-	rowArgs := append([]any{match}, args...)
+	// 分档词各自单独 MATCH，只在多词按时间排序时用上；拼不出 token 的词跳过。
+	var tierMatches []any
+	if order == "oldest" || order == "newest" {
+		for _, word := range words {
+			if tierMatch := messageHistoryFTSQuery([]string{word}); tierMatch != "" {
+				tierMatches = append(tierMatches, tierMatch)
+			}
+		}
+		if len(tierMatches) < 2 {
+			tierMatches = nil
+		}
+	}
+	pageSQL, countSQL := messageHistoryFTSStatements(scopedWhere, order, len(tierMatches))
+	rowArgs := append([]any{match}, tierMatches...)
+	rowArgs = append(rowArgs, args...)
 	rowArgs = append(rowArgs, limit, offset)
 	rows, err := s.eventReader().QueryContext(ctx, pageSQL, rowArgs...)
 	if err != nil {
@@ -651,7 +706,10 @@ func (s *SQLiteStore) searchMessageEventsFTS(ctx context.Context, where string, 
 
 // messageHistoryFTSStatements 拼出 FTS 检索的取页语句和（翻过末尾时用的）计数语句。
 // 参数依次是 MATCH 串、where 的参数，取页语句末尾再加 LIMIT 和 OFFSET。
-func messageHistoryFTSStatements(scopedWhere, order string) (pageSQL, countSQL string) {
+//
+// tierWords 大于 0 时，取页语句在 MATCH 串之后还要依次接这么多个分档词的 MATCH 串：
+// 按时间排序时先按命中了几个分档词降序，档内再按时间。计数语句不带分档。
+func messageHistoryFTSStatements(scopedWhere, order string, tierWords int) (pageSQL, countSQL string) {
 	// 按时间排序时用不到相关度，省掉逐条命中的 BM25 计算。
 	chronological := order == "oldest" || order == "newest"
 	score := `bm25(` + messageHistoryFTSTable + `)`
@@ -682,9 +740,25 @@ func messageHistoryFTSStatements(scopedWhere, order string) (pageSQL, countSQL s
 FROM ` + messageHistoryFTSTable + ` WHERE ` + messageHistoryFTSTable + ` MATCH ?)`
 	from := `FROM message_events AS e JOIN hits AS h ON h.rid = e.rowid`
 
-	pageSQL = hits + `,
+	// 分档词各自物化成一张 rowid 表，理由同 hits。
+	tier := `0`
+	var tierCTEs string
+	if chronological && tierWords > 0 {
+		tierParts := make([]string, 0, tierWords)
+		for index := 0; index < tierWords; index++ {
+			name := fmt.Sprintf("w%d", index)
+			tierCTEs += `,
+` + name + ` AS MATERIALIZED (SELECT rowid AS rid FROM ` + messageHistoryFTSTable + ` WHERE ` + messageHistoryFTSTable + ` MATCH ?)`
+			tierParts = append(tierParts, `(e.rowid IN (SELECT rid FROM `+name+`))`)
+		}
+		tier = `(` + strings.Join(tierParts, ` + `) + `)`
+		pageOrder = "tier DESC, " + pageOrder
+		outerOrder = "p.tier DESC, " + outerOrder
+	}
+
+	pageSQL = hits + tierCTEs + `,
 page AS (
-  SELECT e.rowid AS rid, h.score AS score, e.event_time AS event_time, e.created_at AS created_at, e.id AS id,
+  SELECT e.rowid AS rid, h.score AS score, ` + tier + ` AS tier, e.event_time AS event_time, e.created_at AS created_at, e.id AS id,
          COUNT(*) OVER () AS total
   ` + from + `
   WHERE ` + scopedWhere + `

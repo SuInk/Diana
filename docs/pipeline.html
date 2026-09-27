@@ -95,13 +95,13 @@
           <tr><td>9</td><td>群成员等级门槛（OneBot；@、主人、管理员豁免）</td><td><code>ignored_member_level</code></td></tr>
           <tr><td>10</td><td>响应抑制期内</td><td><code>ignored_response_suppression</code></td></tr>
           <tr><td>11</td><td>只有视频没有文字</td><td><code>ignored_video</code></td></tr>
-          <tr><td>12</td><td>发送者是被标记的机器人或 Telegram bot，且没有明确 @ 或引用本机器人：先过回复抑制，再用模型判断是不是在跟自己说话</td><td><code>ignored_reply_damping</code> / <code>ignored_bot_message</code></td></tr>
+          <tr><td>12</td><td>发送者是被标记的机器人或 Telegram bot，且没有明确 @ 或引用本机器人：用模型判断是不是在跟自己说话</td><td><code>ignored_bot_message</code></td></tr>
         </tbody></table></div>
       </section>
 
       <section class="section searchable" id="proactive">
         <div class="section-heading"><p class="eyebrow">01 回复触发</p><h2>主动接话评分</h2></div>
-        <p>没有直接触发的普通群消息，先过回复抑制和群的随机采样比例（主人豁免），再交给接话模型。模型对每条候选只回答两件事：<code>relevance.directed</code>（是不是明确在跟机器人说话，只有是或否）和 <code>chat_in.score</code>（0–1 的闲聊适合度），各附一句理由。</p>
+        <p>没有直接触发的普通群消息，先过群的随机采样比例（主人豁免），再交给接话模型。模型对每条候选只回答两件事：<code>relevance.directed</code>（是不是明确在跟机器人说话，只有是或否）和 <code>chat_in.score</code>（0–1 的闲聊适合度），各附一句理由。</p>
         <ol class="flow">
           <li class="q"><div class="flow-node"><strong>两个开关都关，或群里 10 分钟内有人叫停？</strong></div><div class="flow-exits"><span class="flow-exit"><b>是</b>沉默，不调用模型</span></div></li>
           <li><div class="flow-node"><strong>组装评分输入</strong><p>寻址信息、按时间排的对话稿、本群补充判据。</p></div></li>
@@ -298,7 +298,7 @@
           <li class="q"><div class="flow-node"><strong>审核调用失败？</strong></div><div class="flow-exits"><span class="flow-exit"><b>主动回复</b>沉默：拿不准就别插话</span><span class="flow-exit go"><b>直接回复</b>放行：模型不可用时集体哑火更糟</span></div></li>
           <li class="q"><div class="flow-node"><strong>私聊收尾 / 叫停</strong><p>私聊里机器人上一条发出 3 分钟内才判；只认置信度 ≥ 0.90 的结论。</p></div><div class="flow-exits"><span class="flow-exit"><b>叫停</b><code>ignored_stop_requested</code>，非主人暂停响应 30 分钟</span><span class="flow-exit"><b>道别超过宽限次数</b><code>ignored_conversation_closed</code></span></div></li>
           <li><div class="flow-node"><strong>群里叫停</strong><p>群里 @、引用、点名机器人的消息顺带判；判出来给本群记 10 分钟窗口，<strong>这一条照常发</strong>。</p></div></li>
-          <li class="q"><div class="flow-node"><strong>空转</strong><p>机器人互聊检测默认开。没内容或没目的时降低回复欲望。</p></div><div class="flow-exits"><span class="flow-exit"><b>复读自己</b><code>ignored_self_repeat</code></span><span class="flow-exit"><b>30 分钟内判中 3 次，对方不是主人</b>暂停并提示 <code>ignored_ai_reply_loop</code></span></div></li>
+          <li class="q"><div class="flow-node"><strong>空转</strong><p>机器人互聊检测默认开。没内容时记一次空转；对方被标记为机器人时，回得密又没目的也记一次。未标记的账号斗嘴不计。</p></div><div class="flow-exits"><span class="flow-exit"><b>复读自己</b><code>ignored_self_repeat</code></span><span class="flow-exit"><b>30 分钟内判中 3 次（次数和暂停时长可在设置里改，也可整体关掉临时响应屏蔽），对方不是主人</b>暂停并提示 <code>ignored_ai_reply_loop</code></span></div></li>
           <li class="q"><div class="flow-node"><strong>账号安全分 &lt; 0.10？</strong><p>刻意压低：疑似风险仍放行，只有接近确定的不安全结论才拦。</p></div><div class="flow-exits"><span class="flow-exit"><b>是</b>改发中性公开提示（可按人设改写）</span></div></li>
           <li class="q"><div class="flow-node"><strong>表达质量（只对主动回复）</strong><p>自相矛盾、答非所问、被截断、有害建议，或 <code>send_confidence</code> 低于 <code>proactive_reply_threshold</code>。</p></div><div class="flow-exits"><span class="flow-exit"><b>不过关</b><code>ignored_proactive_reply_quality</code></span></div></li>
           <li class="end"><div class="flow-node"><strong>放行</strong><p>判为拒答（置信度 ≥ 0.90）的照常发，30 分钟内累计 4 次拒答后暂停响应。</p></div></li>
@@ -323,7 +323,7 @@
         <p>每条消息无论回没回，最后都会写一条结果：<code>decision</code> 是结果代码，<code>decision_reason</code> 是给人看的原因。排查时先看它停在哪一段，再回到对应章节。</p>
         <div class="table-wrap"><table><thead><tr><th>阶段</th><th>结果代码</th></tr></thead><tbody>
           <tr><td><a href="#trigger">入站队列</a></td><td><code>ignored_stale</code> <code>backfill_history_only</code> <code>ignored_private_admission</code> <code>dropped_retries_exhausted</code></td></tr>
-          <tr><td><a href="#gates">确定性门禁</a></td><td><code>ignored_policy</code> <code>ignored_user_blocked</code> <code>ignored_bot_muted</code> <code>ignored_model_quota</code> <code>ignored_member_level</code> <code>ignored_response_suppression</code> <code>ignored_video</code> <code>ignored_reply_damping</code> <code>ignored_bot_message</code></td></tr>
+          <tr><td><a href="#gates">确定性门禁</a></td><td><code>ignored_policy</code> <code>ignored_user_blocked</code> <code>ignored_bot_muted</code> <code>ignored_model_quota</code> <code>ignored_member_level</code> <code>ignored_response_suppression</code> <code>ignored_video</code> <code>ignored_bot_message</code></td></tr>
           <tr><td><a href="#proactive">接话评分</a></td><td><code>ignored</code> <code>replied_proactive</code></td></tr>
           <tr><td><a href="#concurrency">并发与合并</a></td><td><code>merged_into_reply</code> <code>merged_into_backlog_turn</code> <code>superseded_follow_up</code> <code>superseded_reply_turn</code> <code>superseded_proactive</code></td></tr>
           <tr><td><a href="#review">发送前审核</a></td><td><code>ignored_model_silent</code> <code>ignored_no_natural_reply</code> <code>ignored_duplicate_reply</code> <code>ignored_proactive_reply_quality</code> <code>ignored_stop_requested</code> <code>ignored_conversation_closed</code> <code>ignored_self_repeat</code> <code>ignored_ai_reply_loop</code></td></tr>

@@ -1229,19 +1229,85 @@
               </div>
               <div class="field wide">
                 <label class="switch">
+                  <input v-model="form.reply_suppression_enabled" type="checkbox" />
+                  <span class="track" aria-hidden="true"></span>
+                  <span class="switch-label">临时响应屏蔽</span>
+                </label>
+                <span class="hint">对同一账号反复拒答、来回空转，或私聊里对方明确叫停时，暂停响应它一段时间，期间它的消息不回。关掉后这些判断照常做，只是不再暂停任何人，正在生效的屏蔽也一并失效。主人不受影响。</span>
+              </div>
+              <template v-if="form.reply_suppression_enabled">
+                <div class="field">
+                  <label for="bot-suppression-min">屏蔽时长下限（分钟）</label>
+                  <input
+                    id="bot-suppression-min"
+                    v-model.number="form.reply_suppression_min_minutes"
+                    class="input"
+                    type="number"
+                    min="1"
+                    :max="maximumReplySuppressionMinutes"
+                    step="1"
+                    inputmode="numeric"
+                  />
+                  <span class="hint">每次屏蔽在上下限之间随机取，默认 {{ defaultReplySuppressionMinMinutes }}–{{ defaultReplySuppressionMaxMinutes }} 分钟。</span>
+                </div>
+                <div class="field">
+                  <label for="bot-suppression-max">屏蔽时长上限（分钟）</label>
+                  <input
+                    id="bot-suppression-max"
+                    v-model.number="form.reply_suppression_max_minutes"
+                    class="input"
+                    type="number"
+                    min="1"
+                    :max="maximumReplySuppressionMinutes"
+                    step="1"
+                    inputmode="numeric"
+                  />
+                  <span class="hint">上下限都填同一个数就是固定时长，最长 {{ maximumReplySuppressionMinutes }} 分钟。</span>
+                </div>
+              </template>
+              <div v-if="form.reply_suppression_enabled" class="field wide">
+                <label class="switch">
                   <input v-model="form.reply_refusal_suppression_enabled" type="checkbox" />
                   <span class="track" aria-hidden="true"></span>
                   <span class="switch-label">反复拒答后暂停响应该账号</span>
                 </label>
-                <span class="hint">30 分钟内对同一账号拒答满 4 次，暂停响应它 10 到 30 分钟。关掉后拒答照常，只是不再因此暂停。主人不受影响。</span>
+                <span class="hint">30 分钟内对同一账号拒答满设定次数，按上面的时长暂停响应它。关掉后拒答照常，只是不再因此暂停。</span>
+              </div>
+              <div v-if="form.reply_suppression_enabled && form.reply_refusal_suppression_enabled" class="field">
+                <label for="bot-refusal-threshold">拒答几次后暂停</label>
+                <input
+                  id="bot-refusal-threshold"
+                  v-model.number="form.reply_refusal_threshold"
+                  class="input"
+                  type="number"
+                  min="1"
+                  :max="maximumReplySuppressionThreshold"
+                  step="1"
+                  inputmode="numeric"
+                />
+                <span class="hint">30 分钟内累计，默认 {{ defaultReplyRefusalThreshold }} 次。</span>
               </div>
               <div class="field wide">
                 <label class="switch">
                   <input v-model="form.bot_reply_loop_detection_enabled" type="checkbox" />
                   <span class="track" aria-hidden="true"></span>
-                  <span class="switch-label">识别其他机器人的自动回复并停止接续</span>
+                  <span class="switch-label">空转检测：来回空转时停止接话</span>
                 </label>
-                <span class="hint">回复同一账号过于频繁时（10 分钟 10 条，已标记的机器人 2 条），发送前审核会判断这串来回有没有明确目的：下棋、解题、一起做事照常回；漫无目的地接戏、斗嘴、复读则降低回复欲望（不主动接、只接点名并逐步拉长冷却），30 分钟内累计 3 次暂停响应该账号 10 到 30 分钟。机器人自己把同一个意思说了好几遍时只丢那一条回复，对方是机器人才累计。主人不受影响。</span>
+                <span class="hint">对方被标记为机器人时，回复较频繁后发送前审核会判断这串来回有没有明确目的：下棋、解题、一起做事照常回；漫无目的地接戏、斗嘴记一次空转。任何人和机器人来回都没有内容时也记一次。累计到设定次数就暂停响应该账号（需开启临时响应屏蔽）。机器人自己把同一个意思说了好几遍时只丢那一条回复，对方是机器人才累计。未标记的账号斗嘴、闲聊不计空转，想让某台机器人也按这套规则管就把它标记为机器人，主人不受影响。</span>
+              </div>
+              <div v-if="form.reply_suppression_enabled && form.bot_reply_loop_detection_enabled" class="field">
+                <label for="bot-loop-threshold">空转几次后暂停</label>
+                <input
+                  id="bot-loop-threshold"
+                  v-model.number="form.bot_reply_loop_threshold"
+                  class="input"
+                  type="number"
+                  min="1"
+                  :max="maximumReplySuppressionThreshold"
+                  step="1"
+                  inputmode="numeric"
+                />
+                <span class="hint">30 分钟内累计，默认 {{ defaultBotReplyLoopThreshold }} 次。</span>
               </div>
               <div class="field wide">
                 <label class="switch">
@@ -2687,6 +2753,13 @@ const editorTab = ref<EditorTab>("access");
 const residencyPanel = ref<InstanceType<typeof AgentResidencyPanel> | null>(null);
 const defaultRecallReplyAutoDeleteDelaySeconds = 60;
 const maximumRecallReplyAutoDeleteDelaySeconds = 60 * 60;
+// 临时响应屏蔽的默认值与上限，和后端 types.go 里的同名常量保持一致。
+const defaultReplySuppressionMinMinutes = 10;
+const defaultReplySuppressionMaxMinutes = 30;
+const defaultBotReplyLoopThreshold = 3;
+const defaultReplyRefusalThreshold = 4;
+const maximumReplySuppressionMinutes = 24 * 60;
+const maximumReplySuppressionThreshold = 20;
 const platforms = ref<BotPlatform[]>([]);
 
 // 能不能渲染 Markdown 由后端的平台注册表说了算，前端不另维护一份清单——
@@ -4036,6 +4109,11 @@ function setForm(config: BotProfileConfig): void {
     owner_llm_config_enabled: config.owner_llm_config_enabled ?? true,
     bot_reply_loop_detection_enabled: config.bot_reply_loop_detection_enabled ?? true,
     reply_refusal_suppression_enabled: config.reply_refusal_suppression_enabled ?? true,
+    reply_suppression_enabled: config.reply_suppression_enabled ?? true,
+    reply_suppression_min_minutes: config.reply_suppression_min_minutes || defaultReplySuppressionMinMinutes,
+    reply_suppression_max_minutes: config.reply_suppression_max_minutes || defaultReplySuppressionMaxMinutes,
+    bot_reply_loop_threshold: config.bot_reply_loop_threshold || defaultBotReplyLoopThreshold,
+    reply_refusal_threshold: config.reply_refusal_threshold || defaultReplyRefusalThreshold,
     reply_account_safety_audit_master_enabled: config.reply_account_safety_audit_master_enabled ?? true,
     natural_reply_split_enabled: config.natural_reply_split_enabled ?? true,
     reply_preserve_line_breaks: config.reply_preserve_line_breaks ?? true,
@@ -4304,6 +4382,11 @@ async function save(): Promise<void> {
         .map((item) => item.trim())
         .filter((item) => item !== ""),
       welcome_llm_cooldown_seconds: Number(current.welcome_llm_cooldown_seconds) || 0,
+      // 清空的输入框是空字符串，后端的整数字段读不了；0 表示用默认值。
+      reply_suppression_min_minutes: Math.trunc(Number(current.reply_suppression_min_minutes)) || 0,
+      reply_suppression_max_minutes: Math.trunc(Number(current.reply_suppression_max_minutes)) || 0,
+      bot_reply_loop_threshold: Math.trunc(Number(current.bot_reply_loop_threshold)) || 0,
+      reply_refusal_threshold: Math.trunc(Number(current.reply_refusal_threshold)) || 0,
       agent_command_allowlist: splitList(allowlistDraft.value),
       recall_reply_auto_delete_delay_seconds: Number.isInteger(recallDeleteDelay)
         ? recallDeleteDelay

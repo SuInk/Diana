@@ -287,9 +287,10 @@ type OutgoingMessage struct {
 	ImagesFirst          bool
 	ReplyMessageID       string
 	MentionUserID        string
-	// MentionNames 是正文里 [diana-at:ID] 标记要显示的昵称，按 id 索引。
-	// Telegram 的 text_mention 需要一段可见文字，光有 id 显示不出来；查不到
-	// 的 id 退回显示 @<id>。OneBot 不需要它——那边 at 段自己会渲染。
+	// MentionNames 是要 @ 的人（正文里 [diana-at:ID] 标记和 MentionUserID）的
+	// 显示昵称，按 id 索引。Telegram 的 text_mention 需要一段可见文字，光有 id
+	// 显示不出来；查不到的 id 退回显示 @<id>。OneBot 的 at 段有它就带上 name，
+	// 接入端缓存里还没有的新成员才不会被渲染成 @QQ号。
 	MentionNames map[string]string
 	ForwardName  string
 	ForwardUIN   string
@@ -657,7 +658,18 @@ type BotConfig struct {
 	// ReplyRefusalSuppressionEnabled 控制「30 分钟内对同一账号拒答满 4 次就暂停响应它」。
 	// 默认开；关掉后拒答照常，只是不再因此暂停。
 	ReplyRefusalSuppressionEnabled *bool `json:"reply_refusal_suppression_enabled,omitempty"`
-	ReplySafetyMasterEnabled       *bool `json:"reply_account_safety_audit_master_enabled,omitempty"`
+	// ReplySuppressionEnabled 是临时响应屏蔽的总开关：空转、反复拒答、私聊叫停都靠它
+	// 暂停响应一个账号。默认开；关掉后这些判断照常做（复读照样只丢那一条、叫停照样
+	// 不发这一条），只是不再暂停任何人，已经开出去的屏蔽也跟着失效。
+	ReplySuppressionEnabled *bool `json:"reply_suppression_enabled,omitempty"`
+	// ReplySuppressionMinMinutes / MaxMinutes 是每次屏蔽时长的随机范围（分钟）。
+	ReplySuppressionMinMinutes int `json:"reply_suppression_min_minutes,omitempty"`
+	ReplySuppressionMaxMinutes int `json:"reply_suppression_max_minutes,omitempty"`
+	// BotReplyLoopThreshold 是 30 分钟内判中几次空转就屏蔽该账号。
+	BotReplyLoopThreshold int `json:"bot_reply_loop_threshold,omitempty"`
+	// ReplyRefusalThreshold 是 30 分钟内对同一账号拒答几次就屏蔽它。
+	ReplyRefusalThreshold    int   `json:"reply_refusal_threshold,omitempty"`
+	ReplySafetyMasterEnabled *bool `json:"reply_account_safety_audit_master_enabled,omitempty"`
 	// ReplyAccountSafetyAuditPrompt 是账号安全判断的自定义规则。留空使用内置范围；
 	// 非空时作为管理员规则替代默认风险范围，但不改变审核输出协议。
 	ReplyAccountSafetyAuditPrompt        string `json:"reply_account_safety_audit_prompt,omitempty"`
@@ -1198,6 +1210,11 @@ type ConfigPayload struct {
 	ModelRoles                     map[string]ModelRole `json:"model_roles,omitempty"`
 	BotReplyLoopDetectionEnabled   *bool                `json:"bot_reply_loop_detection_enabled,omitempty"`
 	ReplyRefusalSuppressionEnabled *bool                `json:"reply_refusal_suppression_enabled,omitempty"`
+	ReplySuppressionEnabled        *bool                `json:"reply_suppression_enabled,omitempty"`
+	ReplySuppressionMinMinutes     int                  `json:"reply_suppression_min_minutes,omitempty"`
+	ReplySuppressionMaxMinutes     int                  `json:"reply_suppression_max_minutes,omitempty"`
+	BotReplyLoopThreshold          int                  `json:"bot_reply_loop_threshold,omitempty"`
+	ReplyRefusalThreshold          int                  `json:"reply_refusal_threshold,omitempty"`
 	ReplySafetyMasterEnabled       *bool                `json:"reply_account_safety_audit_master_enabled,omitempty"`
 	ReplyAccountSafetyAuditPrompt  string               `json:"reply_account_safety_audit_prompt,omitempty"`
 	// NotebookSharedScopeEnabled 让笔记本跟随机器人：群聊私聊共用一本，新条目写进
@@ -1850,6 +1867,11 @@ func DefaultBotConfig() BotConfig {
 		LLMIdentityBodyAccounts:        boolPointer(true),
 		BotReplyLoopDetectionEnabled:   boolPointer(true),
 		ReplyRefusalSuppressionEnabled: boolPointer(true),
+		ReplySuppressionEnabled:        boolPointer(true),
+		ReplySuppressionMinMinutes:     defaultReplySuppressionMinMinutes,
+		ReplySuppressionMaxMinutes:     defaultReplySuppressionMaxMinutes,
+		BotReplyLoopThreshold:          defaultBotReplyLoopThreshold,
+		ReplyRefusalThreshold:          defaultReplyRefusalThreshold,
 		ReplySafetyMasterEnabled:       boolPointer(true),
 		TelegramSuppressBotMessages:    boolPointer(true),
 		QQTypingEnabled:                boolPointer(true),
@@ -2008,6 +2030,12 @@ func (cfg BotConfig) WithDefaults() BotConfig {
 	if cfg.PrivateClosingGrace == 0 {
 		cfg.PrivateClosingGrace = defaults.PrivateClosingGrace
 	}
+	// 0 或负数表示没配过，用默认；上限一天、二十次，再大就等于永久屏蔽或永不屏蔽，
+	// 那两种分别该用拉黑和总开关。
+	cfg.ReplySuppressionMinMinutes = replySuppressionMinMinutes(cfg)
+	cfg.ReplySuppressionMaxMinutes = replySuppressionMaxMinutes(cfg)
+	cfg.BotReplyLoopThreshold = botReplyLoopThreshold(cfg)
+	cfg.ReplyRefusalThreshold = replyRefusalThreshold(cfg)
 	if cfg.InboundGroupConcurrency <= 0 {
 		cfg.InboundGroupConcurrency = defaults.InboundGroupConcurrency
 	}
@@ -2072,6 +2100,9 @@ func (cfg BotConfig) WithDefaults() BotConfig {
 	}
 	if cfg.ReplyRefusalSuppressionEnabled == nil {
 		cfg.ReplyRefusalSuppressionEnabled = boolPointer(true)
+	}
+	if cfg.ReplySuppressionEnabled == nil {
+		cfg.ReplySuppressionEnabled = boolPointer(true)
 	}
 	if cfg.TelegramSuppressBotMessages == nil {
 		cfg.TelegramSuppressBotMessages = boolPointer(true)
@@ -2434,6 +2465,11 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		sendRetrySettings:                 cfg.sendRetrySettings,
 		SendChunkIntervalMS:               cfg.SendChunkIntervalMS,
 		PrivateClosingGrace:               cfg.PrivateClosingGrace,
+		ReplySuppressionEnabled:           copyBoolPointer(cfg.ReplySuppressionEnabled),
+		ReplySuppressionMinMinutes:        cfg.ReplySuppressionMinMinutes,
+		ReplySuppressionMaxMinutes:        cfg.ReplySuppressionMaxMinutes,
+		BotReplyLoopThreshold:             cfg.BotReplyLoopThreshold,
+		ReplyRefusalThreshold:             cfg.ReplyRefusalThreshold,
 		InboundGroupConcurrency:           cfg.InboundGroupConcurrency,
 		InboundPrivateConcurrency:         cfg.InboundPrivateConcurrency,
 		PromptInjectTime:                  copyBoolPointer(cfg.PromptInjectTime),
@@ -2656,6 +2692,11 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		sendRetrySettings:               payload.sendRetrySettings,
 		SendChunkIntervalMS:             payload.SendChunkIntervalMS,
 		PrivateClosingGrace:             payload.PrivateClosingGrace,
+		ReplySuppressionEnabled:         copyBoolPointer(payload.ReplySuppressionEnabled),
+		ReplySuppressionMinMinutes:      payload.ReplySuppressionMinMinutes,
+		ReplySuppressionMaxMinutes:      payload.ReplySuppressionMaxMinutes,
+		BotReplyLoopThreshold:           payload.BotReplyLoopThreshold,
+		ReplyRefusalThreshold:           payload.ReplyRefusalThreshold,
 		InboundGroupConcurrency:         payload.InboundGroupConcurrency,
 		InboundPrivateConcurrency:       payload.InboundPrivateConcurrency,
 		PromptInjectTime:                copyBoolPointer(payload.PromptInjectTime),
@@ -2944,6 +2985,14 @@ const (
 	// defaultPrivateClosingGrace 是默认答完几轮告别就不再追加。2 来自
 	// 「第一声再见还会接一句，第二声也接得住，第三声就只剩复读」。
 	defaultPrivateClosingGrace = 2
+	// 临时响应屏蔽的默认值：每次随机停 10 到 30 分钟，不想每次都停一样久；
+	// 30 分钟内空转 3 次或拒答 4 次才屏蔽。
+	defaultReplySuppressionMinMinutes = 10
+	defaultReplySuppressionMaxMinutes = 30
+	defaultBotReplyLoopThreshold      = 3
+	defaultReplyRefusalThreshold      = 4
+	maxReplySuppressionMinutes        = 24 * 60
+	maxReplySuppressionThreshold      = 20
 	// 群 3、私聊 2。私聊以前是 1：那时私聊没有「并入正在生成的回复」这一层，并发只会让
 	// 两条回复同时生成、互相看不见。现在私聊也合并，第二条消息得在第一条还在生成时
 	// 就开始处理，才赶得上并进去；串行时它永远等到上一条发完，连发几句就回几遍。

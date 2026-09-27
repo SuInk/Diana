@@ -170,7 +170,7 @@ func TestMessageHistoryFTSHitsAreMaterialized(t *testing.T) {
 	store := ftsStore(t)
 	where := prefixMessageHistoryColumns(`kind != ? AND event_time BETWEEN ? AND ? AND session = ?`)
 	for _, order := range []string{"", "newest", "oldest"} {
-		pageSQL, countSQL := messageHistoryFTSStatements(where, order)
+		pageSQL, countSQL := messageHistoryFTSStatements(where, order, 0)
 		args := []any{`"凤爪"*`, "notice", 0, 100, "onebot-main:group:one"}
 		for name, query := range map[string]struct {
 			sql  string

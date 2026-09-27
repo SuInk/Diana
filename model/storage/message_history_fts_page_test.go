@@ -100,7 +100,7 @@ func TestMessageHistoryFTSPageMatchesLegacyQuery(t *testing.T) {
 				for _, page := range []struct{ limit, offset int }{{20, 0}, {7, 5}, {50, 30}, {20, 500}} {
 					label := fmt.Sprintf("%s/%v/%q/%d+%d", name, terms, order, page.offset, page.limit)
 					wantIDs, wantTotal := legacyFTSSearch(t, store, scope.where, scope.args, terms, page.limit, order, page.offset)
-					events, total, ok, err := store.searchMessageEventsFTS(ctx, scope.where, scope.args, terms, page.limit, order, page.offset)
+					events, total, ok, err := store.searchMessageEventsFTS(ctx, scope.where, scope.args, terms, nil, page.limit, order, page.offset)
 					if err != nil || !ok {
 						t.Fatalf("%s: ok=%v err=%v", label, ok, err)
 					}

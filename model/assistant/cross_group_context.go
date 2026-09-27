@@ -197,12 +197,33 @@ func (r *Runtime) crossGroupContextEvents(event MessageEvent, store MessageHisto
 	return finish(selected, "")
 }
 
+// crossGroupContextQueryText 只取正文检索，@ 段不进查询：「@机器人 准了」里机器人的
+// 账号是十来位的长词，会被当成强信号放过门槛，还能命中每一条 @ 过机器人的消息。
 func crossGroupContextQueryText(event MessageEvent) string {
-	parts := []string{strings.TrimSpace(historyPlainText(event))}
+	parts := []string{crossGroupQueryPlainText(event.Segments, event.RawMessage)}
 	if event.Quoted != nil {
-		parts = append(parts, quotedPlainText(event.Quoted))
+		parts = append(parts, crossGroupQueryPlainText(event.Quoted.Segments, event.Quoted.RawMessage))
 	}
 	return strings.TrimSpace(strings.Join(parts, " "))
+}
+
+// crossGroupQueryPlainText 去掉 @ 段后取纯文本。有消息段时不回退到 RawMessage，
+// 否则只有 @ 的消息会从原始 CQ 码里把账号又带回来。
+func crossGroupQueryPlainText(segments []MessageSegment, raw string) string {
+	if len(segments) == 0 {
+		return strings.TrimSpace(raw)
+	}
+	kept := make([]MessageSegment, 0, len(segments))
+	for _, segment := range segments {
+		if segment.Type != "at" {
+			kept = append(kept, segment)
+		}
+	}
+	text := strings.TrimSpace(PlainText(kept))
+	if hasImageSegment(kept) {
+		text = rawMessageWithoutImagePlaceholders(text)
+	}
+	return text
 }
 
 func crossGroupQueryHasSignal(terms []string) bool {

@@ -416,7 +416,7 @@ func TestDescribeEventOutcomeExplainsReplyAndSilence(t *testing.T) {
 		"replied_direct_followup":      "直接回复了机器人",
 		"ignored_member_level":         "最低回复等级",
 		"ignored_response_suppression": "临时响应限制期",
-		"ignored_ai_reply_loop":        "自动回复",
+		"ignored_ai_reply_loop":        "空转",
 		"ignored_stale":                "离线恢复窗口",
 		"dropped_outbound_delivery":    "投递失败",
 	}

@@ -161,8 +161,8 @@ func TestPrivateStopRequestWithholdsAndSuppresses(t *testing.T) {
 	if !blocked {
 		t.Fatal("stop request did not activate the existing response suppression")
 	}
-	if remaining := time.Until(item.Until); remaining < replySuppressionMinDuration-time.Minute || remaining > replySuppressionMaxDuration {
-		t.Fatalf("suppression duration = %s，want 落在 %s 到 %s 之间", remaining, replySuppressionMinDuration, replySuppressionMaxDuration)
+	if remaining := time.Until(item.Until); remaining < defaultSuppressionMin-time.Minute || remaining > defaultSuppressionMax {
+		t.Fatalf("suppression duration = %s，want 落在 %s 到 %s 之间", remaining, defaultSuppressionMin, defaultSuppressionMax)
 	}
 }
 
@@ -292,7 +292,6 @@ func TestReplyAuditPromptDescribesClosingContract(t *testing.T) {
 		"conversation_closing",
 		"stop_requested",
 		"closing_confidence",
-		"sender_marked_as_bot",
 		"累计几次由运行时自己数",
 	} {
 		if !strings.Contains(proactiveReplyQualityPrompt, want) {

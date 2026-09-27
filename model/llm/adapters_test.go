@@ -120,10 +120,11 @@ func TestAudioPartsReachMultimodalProviderPayloads(t *testing.T) {
 
 func TestOpenAICompatibleGenerateImageUsesImageModel(t *testing.T) {
 	var gotRequest struct {
-		Model  string `json:"model"`
-		Prompt string `json:"prompt"`
-		Size   string `json:"size"`
-		N      int    `json:"n"`
+		Model      string `json:"model"`
+		Prompt     string `json:"prompt"`
+		Size       string `json:"size"`
+		N          int    `json:"n"`
+		Background string `json:"background"`
 	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/images/generations" {
@@ -147,7 +148,7 @@ func TestOpenAICompatibleGenerateImageUsesImageModel(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if gotRequest.Model != "gpt-image-2" || gotRequest.Prompt != "画一只猫" || gotRequest.Size != "1024x1024" || gotRequest.N != 1 {
+	if gotRequest.Model != "gpt-image-2" || gotRequest.Prompt != "画一只猫" || gotRequest.Size != "1024x1024" || gotRequest.N != 1 || gotRequest.Background != "opaque" {
 		t.Fatalf("request = %#v", gotRequest)
 	}
 	if len(resp.Images) != 1 || resp.Images[0] != "data:image/png;base64,YWJjZA==" {
@@ -159,6 +160,7 @@ func TestOpenAICompatibleEditImageUsesImageModelAndMultipart(t *testing.T) {
 	var gotModel string
 	var gotPrompt string
 	var gotImage string
+	var gotBackground string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/images/edits" {
 			t.Fatalf("path = %s", r.URL.Path)
@@ -168,6 +170,7 @@ func TestOpenAICompatibleEditImageUsesImageModelAndMultipart(t *testing.T) {
 		}
 		gotModel = r.FormValue("model")
 		gotPrompt = r.FormValue("prompt")
+		gotBackground = r.FormValue("background")
 		file, _, err := r.FormFile("image")
 		if err != nil {
 			t.Fatalf("FormFile(image) error = %v", err)
@@ -196,8 +199,8 @@ func TestOpenAICompatibleEditImageUsesImageModelAndMultipart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if gotModel != "gpt-image-2" || gotPrompt != "把肤色变黑一点" || gotImage != "hello" {
-		t.Fatalf("model=%q prompt=%q image=%q", gotModel, gotPrompt, gotImage)
+	if gotModel != "gpt-image-2" || gotPrompt != "把肤色变黑一点" || gotImage != "hello" || gotBackground != "opaque" {
+		t.Fatalf("model=%q prompt=%q image=%q background=%q", gotModel, gotPrompt, gotImage, gotBackground)
 	}
 	if len(resp.Images) != 1 || resp.Images[0] != "data:image/png;base64,ZWRpdA==" {
 		t.Fatalf("response = %#v", resp)
@@ -1993,5 +1996,18 @@ func TestFailedDowngradeIsNotRemembered(t *testing.T) {
 	}
 	if requests != 2 {
 		t.Fatalf("a failed downgrade was remembered: requests=%d", requests)
+	}
+}
+
+func TestOpenAIImageBackgroundOnlyForGPTImageModels(t *testing.T) {
+	for model, want := range map[string]string{
+		"gpt-image-2":          "opaque",
+		"openai/GPT-Image-1.5": "opaque",
+		"dall-e-3":             "",
+		"flux-kontext-pro":     "",
+	} {
+		if got := openAIImageBackground(model); got != want {
+			t.Fatalf("openAIImageBackground(%q) = %q, want %q", model, got, want)
+		}
 	}
 }

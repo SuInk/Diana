@@ -113,15 +113,6 @@ func replyAuditDecisionSpec(need replyAuditNeed) *llm.DecisionSpec {
 				ReasonPath:     "reply_loop_reason",
 			},
 			llm.DecisionQuestion{
-				Key:           "reply_loop_automated_ai",
-				Kind:          llm.DecisionNoul,
-				Label:         "对方是不是另一个自动应答的机器人",
-				Instructions:  "只在高置信时判是。",
-				TrueCriteria:  "文本像助手在对上一条逐项回应，带模板化确认、规则复述或待命表述，且同一发送者近期多次保持相似的助手人格和应答结构",
-				FalseCriteria: "真人的简短问答、吐槽、争论、玩梗、角色扮演、口癖、表情或正常连续聊天。引用、@、点名或回复很快都不是证据，文字通顺或很长也不是",
-				Path:          "reply_loop_automated_ai",
-			},
-			llm.DecisionQuestion{
 				Key:            "reply_loop_self_repeat",
 				Kind:           llm.DecisionNoul,
 				Label:          "机器人自己是不是在复读",

@@ -288,10 +288,19 @@ export interface BotProfileConfig extends SendRetrySettings {
     /** 音视频插槽（tts/stt/video）的参数：音色、格式、语速、语言、分辨率等。 */
     params?: Record<string, string>;
   }>;
-  /** 用模型识别其他机器人的自动回复并阻断机器人互聊；缺省等价于开启。 */
+  /** 空转检测：发送前审核判断来回是否空转，累计够了暂停响应；缺省等价于开启。 */
   bot_reply_loop_detection_enabled?: boolean;
-  /** 30 分钟内对同一账号拒答满 4 次就暂停响应它；默认开。 */
+  /** 30 分钟内对同一账号拒答满设定次数就暂停响应它；默认开。 */
   reply_refusal_suppression_enabled?: boolean;
+  /** 临时响应屏蔽总开关：空转、反复拒答、私聊叫停都靠它暂停响应账号；默认开。 */
+  reply_suppression_enabled?: boolean;
+  /** 每次屏蔽时长的随机范围（分钟）；0 或缺省用默认 10–30。 */
+  reply_suppression_min_minutes?: number;
+  reply_suppression_max_minutes?: number;
+  /** 30 分钟内判中几次空转就屏蔽；0 或缺省用默认 3。 */
+  bot_reply_loop_threshold?: number;
+  /** 30 分钟内拒答几次就屏蔽；0 或缺省用默认 4。 */
+  reply_refusal_threshold?: number;
   /** 机器人级账号安全审核总开关；开启后主动和直接回复都审核，关闭后都不审核。 */
   reply_account_safety_audit_master_enabled?: boolean;
   /** 自定义账号风险范围；留空使用内置规则。 */
