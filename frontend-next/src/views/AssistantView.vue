@@ -1071,7 +1071,17 @@
                 <span class="hint">每个人每天最多成功生成几次，跨群和私聊合计。用完后机器人会如实告诉对方今天的次数已用完。主人不受限，也不占别人的次数。</span>
               </div>
               <div class="field">
-                <label for="bot-daily-limit-tz">生图次数 · 重置时区</label>
+                <label for="bot-video-group-limit">视频次数 · 每群每天</label>
+                <input id="bot-video-group-limit" v-model.number="form.video_generation_daily_group_limit" class="input" type="number" min="0" step="1" inputmode="numeric" placeholder="留空不限" />
+                <span class="hint">每个群每天最多生成几段视频。任务一旦被视频接口受理就算一次，之后渲染失败、超时也算（那时已经在计费）；提交时就被拒的不算。群配置里填了就以群为准。</span>
+              </div>
+              <div class="field">
+                <label for="bot-video-user-limit">视频次数 · 每人每天</label>
+                <input id="bot-video-user-limit" v-model.number="form.video_generation_daily_user_limit" class="input" type="number" min="0" step="1" inputmode="numeric" placeholder="留空不限" />
+                <span class="hint">每个人每天最多生成几段视频，跨群和私聊合计，和生图分开计数。主人不受限，也不占别人的次数。</span>
+              </div>
+              <div class="field">
+                <label for="bot-daily-limit-tz">生图、视频次数 · 重置时区</label>
                 <input id="bot-daily-limit-tz" v-model="form.daily_limit_timezone" class="input" list="bot-daily-limit-timezones" placeholder="留空读 TZ 环境变量，未设按 Asia/Shanghai" />
                 <datalist id="bot-daily-limit-timezones">
                   <option value="Asia/Shanghai"></option>
@@ -2082,7 +2092,7 @@ import SkeletonBlock from "../components/SkeletonBlock.vue";
 import { ArrowLeft, Bot, ChevronDown, ChevronRight, Copy, Download, Eye, EyeOff, GripVertical, Pencil, Plus, Power, PowerOff, RefreshCw, RotateCcw, Save, Settings2, Shuffle, Sparkles, Trash2, Upload, X } from "@lucide/vue";
 import { formatClock } from "../format";
 import { sendRetryFields, sendRetryPayload, sendRetryValidationError } from "../send-retry-settings";
-import { botImageGenerationLimitsPayload } from "../media-generation-quota";
+import { botImageGenerationLimitsPayload, botVideoGenerationLimitsPayload } from "../media-generation-quota";
 import {
   deleteBotProfile,
   generatePersona,
@@ -4280,6 +4290,7 @@ async function save(): Promise<void> {
       // 数字框清空后 v-model.number 给的是空串，后端按整数解析会整份拒收。
       model_call_quota: Math.max(0, Math.round(Number(current.model_call_quota) || 0)),
       ...botImageGenerationLimitsPayload(current),
+      ...botVideoGenerationLimitsPayload(current),
       reply_sample_percent: Math.min(100, Math.max(0, Math.round(Number(current.reply_sample_percent) || 0))),
       forward_reply_chunk_threshold: Number(current.forward_reply_chunk_threshold) || 0,
       reply_merge_confidence_percent: Number(current.reply_merge_confidence_percent) || 0,

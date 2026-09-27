@@ -716,6 +716,11 @@ type BotConfig struct {
 	// 管不住它。
 	ImageGenerationDailyGroupLimit int64 `json:"image_generation_daily_group_limit,omitempty"`
 	ImageGenerationDailyUserLimit  int64 `json:"image_generation_daily_user_limit,omitempty"`
+	// VideoGenerationDailyGroupLimit / VideoGenerationDailyUserLimit 是视频生成的
+	// 每群、每人每日次数，口径同生图。和生图分开设：一段视频的价钱抵得上几十张图，
+	// 两者共用一个上限的话，要么图卡得太死，要么视频放得太松。
+	VideoGenerationDailyGroupLimit int64 `json:"video_generation_daily_group_limit,omitempty"`
+	VideoGenerationDailyUserLimit  int64 `json:"video_generation_daily_user_limit,omitempty"`
 	// DailyLimitTimezone 是每日次数在哪个时区的零点重置（IANA 名，如 Asia/Shanghai）。
 	// 留空读 TZ 环境变量，再没有按北京时间：Docker 镜像默认是 UTC，不能拿进程本地
 	// 时区当日界线。
@@ -989,6 +994,8 @@ type GroupConfig struct {
 	// ForwardReplyThreshold。每人每天的上限只在机器人上设：它跨群合计，放进某个群里
 	// 就管不住人换群接着画。
 	ImageGenerationDailyGroupLimit *int64 `json:"image_generation_daily_group_limit,omitempty"`
+	// VideoGenerationDailyGroupLimit 是这个群每天能生成视频的次数，三态同上。
+	VideoGenerationDailyGroupLimit *int64 `json:"video_generation_daily_group_limit,omitempty"`
 	// ReplySamplePercent 是这个群的回复抽样率（1–100），留空跟随机器人。
 	ReplySamplePercent       int   `json:"reply_sample_percent,omitempty"`
 	MaxContextTokens         int64 `json:"max_context_tokens,omitempty"`

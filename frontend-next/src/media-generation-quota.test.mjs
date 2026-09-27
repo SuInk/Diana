@@ -3,9 +3,13 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import {
   botImageGenerationLimitsPayload,
+  botVideoGenerationLimitsPayload,
   dailyLimitValue,
+  groupDailyLimitMode,
   groupImageGenerationLimitsPayload,
   groupImageLimitMode,
+  groupVideoGenerationLimitsPayload,
+  setGroupDailyLimitMode,
   setGroupImageLimitMode
 } from "./media-generation-quota.ts";
 
@@ -73,7 +77,7 @@ test("GroupsView offers follow, unlimited and custom for the per-group image lim
   assert.match(source, /id="group-image-limit-mode"/);
   assert.match(source, /label: "本群不限"/);
   assert.match(source, /跟随机器人（\$\{inherited \? `\$\{inherited\} 次` : "不限"\}）/);
-  assert.match(source, /v-if="groupImageLimitMode\(editing\.image_generation_daily_group_limit\) === 'custom'"/);
+  assert.match(source, /v-if="groupDailyLimitMode\(editing\.image_generation_daily_group_limit\) === 'custom'"/);
   assert.match(source, /v-model.number="editing\.image_generation_daily_group_limit"[^>]+min="1"/);
   assert.match(source, /\.\.\.groupImageGenerationLimitsPayload\(current\)/);
   assert.doesNotMatch(source, /editing\.image_generation_daily_user_limit/);
@@ -83,4 +87,44 @@ test("demo data carries the image limits", async () => {
   const source = await readFile(new URL("./demo.ts", import.meta.url), "utf8");
   assert.match(source, /image_generation_daily_group_limit: 30, image_generation_daily_user_limit: 5/);
   assert.match(source, /model_call_quota: 400, image_generation_daily_group_limit: 50/);
+});
+
+// 视频和生图同一套：机器人页 0 不限，群配置三态，保存往返不变态。
+test("video limits save and read back like image limits", () => {
+  assert.deepEqual(botVideoGenerationLimitsPayload({ video_generation_daily_group_limit: "3", video_generation_daily_user_limit: "" }), {
+    video_generation_daily_group_limit: 3,
+    video_generation_daily_user_limit: 0
+  });
+  const saved = JSON.parse(JSON.stringify(botVideoGenerationLimitsPayload({ video_generation_daily_group_limit: 4, video_generation_daily_user_limit: 1 })));
+  assert.deepEqual(botVideoGenerationLimitsPayload(saved), saved);
+  const roundTrip = (config) => JSON.parse(JSON.stringify({ ...config, ...groupVideoGenerationLimitsPayload(config) }));
+  assert.equal(groupDailyLimitMode(roundTrip({}).video_generation_daily_group_limit), "");
+  assert.equal(groupDailyLimitMode(roundTrip({ video_generation_daily_group_limit: 0 }).video_generation_daily_group_limit), "unlimited");
+  assert.equal(roundTrip({ video_generation_daily_group_limit: "2" }).video_generation_daily_group_limit, 2);
+  assert.equal("video_generation_daily_group_limit" in roundTrip({ video_generation_daily_group_limit: "" }), false);
+  // 切换视频的模式不碰生图那一项。
+  const config = { image_generation_daily_group_limit: 7, video_generation_daily_group_limit: 3 };
+  setGroupDailyLimitMode(config, "video_generation_daily_group_limit", "unlimited");
+  assert.deepEqual(config, { image_generation_daily_group_limit: 7, video_generation_daily_group_limit: 0 });
+  setGroupDailyLimitMode(config, "video_generation_daily_group_limit", "");
+  assert.equal(config.video_generation_daily_group_limit, undefined);
+  assert.equal(config.image_generation_daily_group_limit, 7);
+});
+
+test("AssistantView and GroupsView render and save the video limits", async () => {
+  const assistant = await readFile(new URL("./views/AssistantView.vue", import.meta.url), "utf8");
+  for (const field of ["video_generation_daily_group_limit", "video_generation_daily_user_limit"]) {
+    assert.match(assistant, new RegExp(`v-model.number="form\\.${field}"[^>]+min="0"`));
+  }
+  assert.match(assistant, /\.\.\.botVideoGenerationLimitsPayload\(current\)/);
+  const groups = await readFile(new URL("./views/GroupsView.vue", import.meta.url), "utf8");
+  assert.match(groups, /id="group-video-limit-mode"/);
+  assert.match(groups, /groupDailyLimitOptions\('video_generation_daily_group_limit'\)/);
+  assert.match(groups, /v-if="groupDailyLimitMode\(editing\.video_generation_daily_group_limit\) === 'custom'"/);
+  assert.match(groups, /v-model.number="editing\.video_generation_daily_group_limit"[^>]+min="1"/);
+  assert.match(groups, /\.\.\.groupVideoGenerationLimitsPayload\(current\)/);
+  assert.doesNotMatch(groups, /editing\.video_generation_daily_user_limit/);
+  const demo = await readFile(new URL("./demo.ts", import.meta.url), "utf8");
+  assert.match(demo, /video_generation_daily_group_limit: 5, video_generation_daily_user_limit: 1/);
+  assert.match(demo, /image_generation_daily_group_limit: 50, video_generation_daily_group_limit: 0/);
 });

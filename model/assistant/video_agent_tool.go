@@ -46,6 +46,10 @@ type dianaVideoToolResult struct {
 	Reused    bool   `json:"reused,omitempty"`
 	Announced bool   `json:"announced,omitempty"`
 	Note      string `json:"note,omitempty"`
+	// QuotaExceeded 表示今天的视频次数用完了，这次没有受理；Notice 是要照实转告
+	// 用户的说明。
+	QuotaExceeded bool   `json:"quota_exceeded,omitempty"`
+	Notice        string `json:"notice,omitempty"`
 }
 
 type dianaVideoRequest struct {
@@ -54,6 +58,8 @@ type dianaVideoRequest struct {
 	Image   string
 	Seconds int
 	Size    string
+	// quota 是受理时占下的每日视频次数，任务结束时按是否计费结清。
+	quota *mediaGenerationReservation
 }
 
 func newDianaVideoTool(runtime *Runtime, event MessageEvent, relationship RelationshipPolicy) agent.Tool {
@@ -63,7 +69,7 @@ func newDianaVideoTool(runtime *Runtime, event MessageEvent, relationship Relati
 func (t *dianaVideoTool) Name() string { return dianaVideoToolName }
 
 func (t *dianaVideoTool) Description() string {
-	return "异步生成一段短视频并发到当前会话：只给 prompt 是文生视频；use_image=true 或填 source_message_ids 时以那张图为首帧做图生视频。视频要几分钟才能生成完，调用后直接继续输出 final 文字回复，说清准备生成什么即可，不要等待、不要重复调用，也不要说成已经生成好。只在用户明确要视频时调用。"
+	return "异步生成一段短视频并发到当前会话：只给 prompt 是文生视频；use_image=true 或填 source_message_ids 时以那张图为首帧做图生视频。视频要几分钟才能生成完，调用后直接继续输出 final 文字回复，说清准备生成什么即可，不要等待、不要重复调用，也不要说成已经生成好。只在用户明确要视频时调用。结果里 quota_exceeded 为 true 表示今天的视频次数用完了，照 notice 如实告诉用户，不要换别的途径交付。"
 }
 
 func (t *dianaVideoTool) InputSchema() map[string]any {
@@ -95,6 +101,18 @@ func (t *dianaVideoTool) Run(ctx context.Context, input map[string]any) (string,
 		return "", err
 	}
 	result, err := t.enqueue(ctx, request)
+	var quotaErr *mediaGenerationQuotaError
+	if errors.As(err, &quotaErr) {
+		// 超限是明确的业务结果，不是工具故障：给模型一句能照念的话，别让它去重试。
+		body, marshalErr := json.Marshal(dianaVideoToolResult{
+			Mode: request.mode(), QuotaExceeded: true,
+			Notice: videoQuotaExceededInstruction(quotaErr, t.runtime.effectiveConfigForEvent(t.event)),
+		})
+		if marshalErr != nil {
+			return "", marshalErr
+		}
+		return string(body), nil
+	}
 	if err != nil {
 		return "", err
 	}
@@ -179,11 +197,25 @@ func (t *dianaVideoTool) taskTimeout() time.Duration {
 }
 
 func (t *dianaVideoTool) enqueue(ctx context.Context, request dianaVideoRequest) (dianaVideoToolResult, error) {
+	taskKey := dianaVideoTaskKey(t.event, request)
+	result := dianaVideoToolResult{OK: true, Queued: true, Mode: request.mode()}
+	// 同样的任务已经在跑就直接复用，不占次数。
+	if duplicate, ok := t.runtime.duplicatePluginTask(t.event, PluginTask{Key: taskKey}); ok {
+		result.TaskID, result.Reused = duplicate.ID, true
+		return result, nil
+	}
+	quota, err := t.runtime.reserveMediaGeneration(ctx, t.event, MediaGenerationVideo, 1)
+	if err != nil {
+		return dianaVideoToolResult{}, err
+	}
+	request.quota = quota
 	task := PluginTask{
 		Kind:    "video",
 		Name:    "视频生成",
-		Key:     dianaVideoTaskKey(t.event, request),
+		Key:     taskKey,
 		Timeout: t.taskTimeout(),
+		// execute 按是否计费结清；这里兜没跑起来、半路被取消的那些。
+		Finish: quota.release,
 		Run: func(ctx context.Context, services PluginTaskServices) (PluginTaskResult, error) {
 			message, err := t.execute(ctx, request, services)
 			if err != nil {
@@ -194,9 +226,9 @@ func (t *dianaVideoTool) enqueue(ctx context.Context, request dianaVideoRequest)
 	}
 	reservation := t.runtime.reservePluginTasksForTurn(ctx, t.event, []PluginTask{task})
 	if !reservation.handled {
+		quota.release()
 		return dianaVideoToolResult{}, fmt.Errorf("视频任务无法启动")
 	}
-	result := dianaVideoToolResult{OK: true, Queued: true, Mode: request.mode()}
 	if len(reservation.reserved) > 0 {
 		result.TaskID = reservation.reserved[0].id
 		if sink := imageAnnouncementSinkFrom(ctx); sink != nil {
@@ -210,6 +242,8 @@ func (t *dianaVideoTool) enqueue(ctx context.Context, request dianaVideoRequest)
 		result.Note = "任务已受理，视频还没生成出来；完成后运行时会自动发送。回复里只说准备生成什么，不要描述成品。"
 		return result, nil
 	}
+	// 查重和预约之间同样的任务刚被别人受理：复用它，这边的预占退回。
+	quota.release()
 	if len(reservation.duplicates) > 0 {
 		result.TaskID = reservation.duplicates[0].ID
 		result.Reused = true
@@ -254,6 +288,13 @@ func (t *dianaVideoTool) execute(ctx context.Context, request dianaVideoRequest,
 		// 只更新后台任务状态，不往聊天里发进度。
 		services.Report(PluginTaskProgress{Phase: string(job.Status), Completed: job.Progress, Total: 100})
 	})
+	// 记账口径和用量记录一致：任务被受理后（成功，或 VideoJobMayBeBilled）就算一次，
+	// 失败、超时的任务照样花了钱；提交阶段就被明确拒绝的不算。
+	if err == nil || llm.VideoJobMayBeBilled(err) {
+		request.quota.commit(ctx, 1)
+	} else {
+		request.quota.release()
+	}
 	if err != nil {
 		return OutgoingMessage{}, err
 	}
@@ -303,4 +344,23 @@ func (r *Runtime) shareGeneratedVideo(platform string, result *llm.VideoResult) 
 		return "", fmt.Errorf("生成的视频无法通过本地媒体代理共享")
 	}
 	return shared, nil
+}
+
+// 视频次数用完时同样要堵住两种岔子：照样说「在生成了」，或者拿生图、拼图、网页
+// 之类变相交一段「视频」。
+const promptVideoQuotaExceeded = "【本轮视频任务】{notice}。这次没有开始生成，之后也不会补发。照实把这句话告诉用户，不要说「在生成了」「马上发出来」，不要再调用 video，也不要改用生图、拼接图片、网页、浏览器、插件或其他任何途径变相交付视频。"
+
+var promptVideoQuotaExceededSpec = registerPrompt(PromptSpec{
+	Key:     "media.video_quota_exceeded",
+	Group:   PromptGroupMedia,
+	Title:   "视频次数已用完",
+	Usage:   "本群或这个人今天的视频生成次数用完时，告诉正式回复如实转告、别换别的途径交付。",
+	Default: promptVideoQuotaExceeded,
+	Vars: []PromptVar{
+		{Name: "notice", Description: "给用户的说明，如「今天本群的视频生成次数已用完（3/3），明天再来」"},
+	},
+})
+
+func videoQuotaExceededInstruction(err *mediaGenerationQuotaError, configs ...BotConfig) string {
+	return promptOverridesOf(configs).render(promptVideoQuotaExceededSpec, map[string]string{"notice": err.Notice()})
 }

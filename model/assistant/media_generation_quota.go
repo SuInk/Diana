@@ -17,7 +17,10 @@ import (
 // 生图和以后的视频生成共用这一套，各自只需要一个 kind 和一组上限字段。
 type MediaGenerationKind string
 
-const MediaGenerationImage MediaGenerationKind = "image"
+const (
+	MediaGenerationImage MediaGenerationKind = "image"
+	MediaGenerationVideo MediaGenerationKind = "video"
+)
 
 // mediaGenerationReservationTTL 是一笔预占最长挂多久。任务正常结束、失败、取消
 // 都会结清；这里只兜实在没人来结清的情况，不然那几次额度要一直占到重启。
@@ -62,6 +65,12 @@ func EffectiveMediaGenerationLimits(bot BotConfig, group GroupConfig, kind Media
 			groupLimit = *override
 		}
 		userLimit = bot.ImageGenerationDailyUserLimit
+	case MediaGenerationVideo:
+		groupLimit = bot.VideoGenerationDailyGroupLimit
+		if override := group.VideoGenerationDailyGroupLimit; override != nil && *override >= 0 {
+			groupLimit = *override
+		}
+		userLimit = bot.VideoGenerationDailyUserLimit
 	}
 	return max(groupLimit, 0), max(userLimit, 0)
 }
@@ -89,6 +98,8 @@ func mediaGenerationKindLabel(kind MediaGenerationKind) string {
 	switch kind {
 	case MediaGenerationImage:
 		return "生图"
+	case MediaGenerationVideo:
+		return "视频生成"
 	}
 	return string(kind) + " 生成"
 }
