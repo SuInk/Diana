@@ -62,21 +62,15 @@ curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/docker.sh 
 
 选择写在部署目录的 `.env` 里（`DIANA_IMAGE=`），重复执行安装脚本不会把它改掉。之后想换一种，在终端里重新运行安装脚本，或直接改这一行。
 
-要从 WebUI 手动更新 Docker 镜像，或使用「自动重启并安装」开关，在**原部署目录**运行一次：
-
-```sh
-curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/docker.sh | DIANA_DOCKER_SELF_UPDATE=1 sh
-```
-
-脚本会加入只处理 Diana 容器的独立更新助手，并在 `.env` 生成内部令牌；Docker socket 仅挂给助手，不挂给 Diana。助手的 HTTP 接口不映射到宿主机。自动安装默认关闭，在 WebUI 版本面板开启后才按所选通道定期更新。启用需要宿主机允许挂载 `/var/run/docker.sock`；该挂载可控制宿主机 Docker，请只在可信部署上启用。已有部署首次启用时必须重跑这条命令，旧容器自身无法加装助手。如果原部署已有 Watchtower、Portainer 等自动更新任务，请先停用它们对 Diana 的更新，避免绕过 WebUI 开关。
+一键安装默认加入只处理 Diana 容器的独立更新助手，并在 `.env` 生成内部令牌。Docker socket 仅挂给助手，不挂给 Diana；助手的 HTTP 接口不映射到宿主机。WebUI 可手动请求更新镜像；「自动重启并安装」仍默认关闭，开启后才按所选通道定期更新。宿主机必须允许挂载 `/var/run/docker.sock`，该挂载可控制宿主机 Docker，请只在可信部署中使用。已有 Docker 部署要在**原部署目录**重跑上方同一条一键安装命令，旧容器自身无法加装助手。若已有 Watchtower、Portainer 等更新任务，请停用它们对 Diana 的更新，避免绕过 WebUI 开关。不需要更新助手时，可用 `curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/docker.sh | DIANA_DOCKER_SELF_UPDATE=0 sh` 安装或关闭助手。
 
 以后更新只需在同一目录执行：
 
 ```sh
-docker compose pull && docker compose up -d
+docker compose -f docker-compose.yml -f docker-compose.update.yml pull && docker compose -f docker-compose.yml -f docker-compose.update.yml up -d
 ```
 
-启用了更新助手的部署，手动执行 Compose 命令时要同时带上 `-f docker-compose.update.yml`。切换通道时还要将 `.env` 中 `DIANA_IMAGE=` 改成对应的滚动标签：Release 用 `latest`、Beta 用 `beta`、Canary 用 `canary`，基础版加 `-slim`；随后重建容器。WebUI 的通道设置不会修改宿主机的镜像标签。固定版本标签不会被助手自动升级；版本面板会说明标签不匹配。Docker 更新由镜像摘要校验，容器会短暂重启；健康检查失败不会自动回退镜像，需在宿主机改回已知版本标签。失败时请查看 `docker compose -f docker-compose.yml -f docker-compose.update.yml logs diana-updater`。
+上面的手动命令适用于默认安装；用 `DIANA_DOCKER_SELF_UPDATE=0` 安装的部署只需运行 `docker compose pull && docker compose up -d`。切换通道时还要将 `.env` 中 `DIANA_IMAGE=` 改成对应的滚动标签：Release 用 `latest`、Beta 用 `beta`、Canary 用 `canary`，基础版加 `-slim`；随后重建容器。WebUI 的通道设置不会修改宿主机的镜像标签。固定版本标签不会被助手自动升级；版本面板会说明标签不匹配。Docker 更新由镜像摘要校验，容器会短暂重启；健康检查失败不会自动回退镜像，需在宿主机改回已知版本标签。失败时请查看 `docker compose -f docker-compose.yml -f docker-compose.update.yml logs diana-updater`。
 
 如果 Apple Silicon / ARM64 拉取旧镜像时报 `no matching manifest for linux/arm64/v8`，可临时在 `docker-compose.yml` 的 `services.diana` 下添加 `platform: linux/amd64`（需要 amd64 模拟支持，性能及浏览器兼容性可能受影响），原生 ARM64 镜像发布后删除此项；也可使用上方安装脚本原生部署。构建配置修改不会自动更新线上已有镜像。
 

@@ -1,5 +1,5 @@
-# Optional Docker self-update helper. Enable with DIANA_DOCKER_SELF_UPDATE=1
-# when running scripts/docker.sh. The Docker socket is available only to this
+# The Docker installer loads this updater by default. Set DIANA_DOCKER_SELF_UPDATE=0
+# when running scripts/docker.sh to omit it. The Docker socket is available only to this
 # helper, never to the Diana application container.
 services:
   diana:

@@ -62,21 +62,15 @@ curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/docker.sh 
 
 The choice is stored as `DIANA_IMAGE=` in the deployment directory's `.env`, and re-running the installer leaves it alone. To switch later, re-run the installer in a terminal or edit that line.
 
-To enable updates from the WebUI, run this once in the **existing deployment directory**:
-
-```sh
-curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/docker.sh | DIANA_DOCKER_SELF_UPDATE=1 sh
-```
-
-This starts a separate updater that can only update the Diana container. The Docker socket is mounted into the updater, never into Diana, and the updater API has no published host port. The WebUI's automatic install switch remains off by default. Mounting the Docker socket grants the updater control of the host Docker daemon, so enable it only in a trusted deployment. Existing containers must be recreated once with this option to gain the updater. Disable any existing Watchtower, Portainer, or other automatic updater for Diana first, so it cannot bypass the WebUI switch.
+The one-click installer includes a separate updater for the Diana container by default and generates an internal token in `.env`. The Docker socket is mounted into the updater, never into Diana, and the updater API has no published host port. You can request an image update from the WebUI; its automatic install switch remains off until you enable it. Mounting the Docker socket grants the updater control of the host Docker daemon, so use it only in a trusted deployment. For an existing Docker deployment, rerun the same one-click command above in the **original deployment directory**; a running container cannot install the updater by itself. Disable any existing Watchtower, Portainer, or other automatic updater for Diana so it cannot bypass the WebUI switch. To omit or remove the updater, run `curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/docker.sh | DIANA_DOCKER_SELF_UPDATE=0 sh`.
 
 For subsequent updates, run in the same directory:
 
 ```sh
-docker compose pull && docker compose up -d
+docker compose -f docker-compose.yml -f docker-compose.update.yml pull && docker compose -f docker-compose.yml -f docker-compose.update.yml up -d
 ```
 
-With the updater enabled, include `-f docker-compose.update.yml` in manual Compose commands. The image tag in `.env` must match the WebUI channel: `latest` for Release, `beta` for Beta, or `canary` for Canary (`-slim` for the slim variants). Changing the WebUI channel does not change the host's image reference. Fixed version tags cannot advance automatically. If an update fails, inspect `docker compose -f docker-compose.yml -f docker-compose.update.yml logs diana-updater`.
+The command above applies to the default installation. If you used `DIANA_DOCKER_SELF_UPDATE=0`, use `docker compose pull && docker compose up -d`. The image tag in `.env` must match the WebUI channel: `latest` for Release, `beta` for Beta, or `canary` for Canary (`-slim` for the slim variants). Changing the WebUI channel does not change the host's image reference. Fixed version tags cannot advance automatically. If an update fails, inspect `docker compose -f docker-compose.yml -f docker-compose.update.yml logs diana-updater`.
 
 If an older image fails on Apple Silicon / ARM64 with `no matching manifest for linux/arm64/v8`, temporarily add `platform: linux/amd64` under `services.diana` in `docker-compose.yml` (requires amd64 emulation; performance and browser compatibility may be affected). Remove it once a native ARM64 image is published. Alternatively, use the native installer above. Build configuration changes do not update existing registry images.
 

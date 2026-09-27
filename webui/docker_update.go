@@ -115,7 +115,7 @@ func dockerTagMatchesRelease(channel, release string) bool {
 
 func (h *SystemUpdateHandler) dockerUpdateSupport(channel, latestTag string) updateSupportSummary {
 	if h.dockerUpdater == nil {
-		return updateSupportSummary{Reason: "Docker 自更新助手未启用；请在部署主机运行 DIANA_DOCKER_SELF_UPDATE=1 的安装脚本。"}
+		return updateSupportSummary{Reason: "Docker 自更新助手未启用；请在原部署目录重新运行 Docker 安装脚本。"}
 	}
 	imageChannel := dockerImageChannel(h.dockerUpdater.Image)
 	if imageChannel == "" {

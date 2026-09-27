@@ -117,14 +117,11 @@ current_update_token=''
 if [ -f .env ]; then
   current_update_token=$(sed -n 's/^[[:space:]]*DIANA_DOCKER_UPDATE_TOKEN[[:space:]]*=[[:space:]]*//p' .env | tail -n 1)
 fi
-self_update=${DIANA_DOCKER_SELF_UPDATE:-}
+self_update=${DIANA_DOCKER_SELF_UPDATE:-1}
 case "$self_update" in
-  '' | 0 | 1) ;;
+  0 | 1) ;;
   *) fail 'DIANA_DOCKER_SELF_UPDATE 只能是 0 或 1。' ;;
 esac
-if [ -z "$self_update" ] && [ -n "$current_update_token" ] && [ -f docker-compose.update.yml ]; then
-  self_update=1
-fi
 if [ "$self_update" = 1 ]; then
   if [ ! -f docker-compose.update.yml ]; then
     curl -fsSL "$base/docker-compose.update.yml" -o "$stage/docker-compose.update.yml"
@@ -140,6 +137,9 @@ if [ "$self_update" = 1 ]; then
   chmod 600 .env
   set -- -f docker-compose.yml -f docker-compose.update.yml
 else
+  if [ -n "$current_update_token" ] && [ -f docker-compose.update.yml ]; then
+    docker compose -f docker-compose.yml -f docker-compose.update.yml rm --stop --force diana-updater
+  fi
   set -- -f docker-compose.yml
 fi
 

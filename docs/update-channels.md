@@ -18,7 +18,7 @@ RC 只是可选的预发布阶段，不是独立的更新通道。通常直接�
 
 切换通道不会自动降级。例如当前运行 `v0.8.128-beta.1`，正式版只有 `v0.8.127`，切回 Release 后会等待更高版本；需要立即退回时可使用现有的稳定版回退入口。切换后必须重新检查，其他通道已下载的包不能直接通过普通安装入口安装。后台更新执行期间修改策略会提示稍后重试。
 
-自动下载、自动安装仍由各自开关控制。源码构建仍需显式选择切换。Docker 部署可选择安装独立更新助手：WebUI 的手动更新按钮会请求助手拉取镜像并重建容器，「自动重启并安装」开关默认关闭，开启后后台每 30 分钟检查一次；未安装助手时仍由部署环境更新镜像。GitHub 不可用时现有静态清单回退可能只包含正式版，不能保证发现最新 Beta；恢复连接后重新检查。
+自动下载、自动安装仍由各自开关控制。源码构建仍需显式选择切换。Docker 一键安装默认配置独立更新助手：WebUI 的手动更新按钮会请求助手拉取镜像并重建容器，「自动重启并安装」开关默认关闭，开启后后台每 30 分钟检查一次；未安装助手时仍由部署环境更新镜像。GitHub 不可用时现有静态清单回退可能只包含正式版，不能保证发现最新 Beta；恢复连接后重新检查。
 
 ## 发布
 
@@ -44,4 +44,4 @@ Docker 保留每个完整版本标签（及对应的 `-slim` 标签）。正式�
 
 安装脚本 `scripts/docker.sh` 只在完整版和 slim 之间做选择（交互时提问，非交互默认完整版，`DIANA_VARIANT=full|slim` 可预先指定），通道固定为 Release。选定的镜像写进部署目录 `.env` 的 `DIANA_IMAGE=`，脚本重复执行不会覆盖已有取值；换通道同样改这一行，例如 `DIANA_IMAGE=ghcr.io/suink/diana:beta-slim`。
 
-Docker 更新助手须在原部署目录执行 `curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/docker.sh | DIANA_DOCKER_SELF_UPDATE=1 sh` 启用；脚本生成内部令牌并加载 `docker-compose.update.yml`。助手只监控带标签的 Diana 容器，Docker socket 不挂给主程序，HTTP 接口不映射宿主机端口。WebUI 通道必须与 `DIANA_IMAGE` 的滚动标签一致；`latest` 仅接正式版，`beta` 对应 Beta/RC，`canary` 对应 Canary，`-slim` 同理。固定版本标签不自动前进。若 Beta/Canary 通道当前最新候选是正式版，旧的 `beta`/`canary` 标签并不因此前进，版本面板会拒绝将该候选误报为可安装；要切到正式版需在部署目录改用 `latest` 后重建。Docker 镜像更新不会像完整包更新那样在健康检查失败时自动回退，需在部署主机固定旧版本标签并重建。启用助手会授予它对宿主机 Docker 的控制权，应只在可信部署中开启。
+Docker 一键安装脚本默认生成内部令牌并加载 `docker-compose.update.yml`；已有部署须在原目录重跑同一安装命令，手工 Compose 部署须由宿主机配置助手。可用 `DIANA_DOCKER_SELF_UPDATE=0` 省略或关闭助手。助手只监控带标签的 Diana 容器，Docker socket 不挂给主程序，HTTP 接口不映射宿主机端口。WebUI 通道必须与 `DIANA_IMAGE` 的滚动标签一致；`latest` 仅接正式版，`beta` 对应 Beta/RC，`canary` 对应 Canary，`-slim` 同理。固定版本标签不自动前进。若 Beta/Canary 通道当前最新候选是正式版，旧的 `beta`/`canary` 标签并不因此前进，版本面板会拒绝将该候选误报为可安装；要切到正式版需在部署目录改用 `latest` 后重建。Docker 镜像更新不会像完整包更新那样在健康检查失败时自动回退，需在部署主机固定旧版本标签并重建。启用助手会授予它对宿主机 Docker 的控制权，应只在可信部署中使用。
