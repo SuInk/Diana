@@ -1367,7 +1367,9 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
     }
     return json({
       credentials: [
-        { key: "default", label: "默认凭据", configured: true, state: "valid", account: "DianaAgent", message: "" },
+        (body.settings as Record<string, unknown> | undefined)?.github_auth_mode === "gh"
+          ? { key: "default", label: "默认凭据", configured: true, state: "valid", account: "SuInk", message: "通过服务器 gh CLI。" }
+          : { key: "default", label: "默认凭据", configured: true, state: "valid", account: "DianaAgent", message: "" },
         ...listed.map((item) =>
           item.auth === "gh"
             ? { key: item.id, label: item.name || item.id, configured: true, state: "valid", account: "SuInk", message: "通过服务器 gh CLI。绑定仓库：SuInk/Diana 可写。" }

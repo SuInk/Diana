@@ -21,107 +21,108 @@
       </div>
     </div>
 
-    <form v-if="editingKey" class="repository-watch-editor" @submit.prevent="commitEditing">
-      <div class="form-grid repository-watch-form">
-        <div class="field">
-          <label for="credential-name">名称</label>
-          <input
-            id="credential-name"
-            v-model.trim="form.name"
-            class="input"
-            type="text"
-            :disabled="editingKey === defaultKey"
-            placeholder="例如「组织 Token」「个人账号」"
-          />
-          <span class="hint">{{ editingKey === defaultKey ? "默认凭据不能改名，也不能删除。" : "只用来区分凭据，在「仓库管理」里按这个名字选。" }}</span>
-        </div>
-        <div class="field">
-          <label>认证方式</label>
-          <div class="segmented repository-watch-destination" role="radiogroup" aria-label="认证方式">
-            <button
-              v-for="option in formAuthOptions"
-              :key="option.value"
-              type="button"
-              role="radio"
-              :aria-checked="form.auth === option.value"
-              :class="{ active: form.auth === option.value }"
-              @click="form.auth = option.value"
-            >{{ option.label }}</button>
-          </div>
-          <span class="hint">{{ authHint }}</span>
-        </div>
-        <div v-if="form.auth !== 'gh'" class="field wide">
-          <label for="credential-token">GitHub Token</label>
-          <div class="credential-secret">
-            <input
-              id="credential-token"
-              v-model="form.token"
-              class="input"
-              type="password"
-              autocomplete="off"
-              :disabled="form.clearing"
-              :placeholder="formTokenPlaceholder"
-            />
-            <button v-if="formTokenConfigured" class="btn small ghost" type="button" @click="form.clearing = !form.clearing">
-              {{ form.clearing ? "撤销清除" : "清除" }}
-            </button>
-          </div>
-          <span class="hint">Fine-grained token 只访问选定仓库，适合按仓库最小授权；Classic token 范围更大。保存后不会回显。</span>
-        </div>
-      </div>
-      <div v-if="formCheck" class="credential-form-check">
-        <span :class="['badge', checkTone(formCheck)]">{{ checkLabel(formCheck) }}</span>
-        <span v-if="formCheck.message" class="hint">{{ formCheck.message }}</span>
-      </div>
-      <div class="repository-watch-editor-actions">
-        <button v-if="testCredential" class="btn small" type="button" :disabled="formTesting" @click="testForm">
-          <LoaderCircle v-if="formTesting" :size="14" class="spin" aria-hidden="true" />
-          <UserCheck v-else :size="14" aria-hidden="true" />
-          检测
-        </button>
-        <button class="btn small" type="button" @click="stopEditing">取消</button>
-        <button class="btn small primary" type="submit">{{ editingKey === newKey ? "添加" : "完成" }}</button>
-      </div>
-    </form>
-
     <div class="repository-watch-manager-list">
-      <article class="repository-watch-manager-item">
-        <div class="repository-watch-manager-main">
-          <div class="cluster">
-            <strong>默认凭据</strong>
-            <span class="badge accent">默认</span>
-            <span class="badge">{{ authLabel(effectiveDefaultAuth) }}</span>
-            <span v-if="checkOf(defaultKey)" :class="['badge', checkTone(checkOf(defaultKey))]">{{ checkLabel(checkOf(defaultKey)) }}</span>
+      <!-- 编辑表单跟在正在编辑的那一行下面；新建的表单排在列表最后。 -->
+      <template v-for="row in rows" :key="row.key">
+        <article v-if="row.key === defaultKey" class="repository-watch-manager-item">
+          <div class="repository-watch-manager-main">
+            <div class="cluster">
+              <strong>默认凭据</strong>
+              <span class="badge accent">默认</span>
+              <span class="badge">{{ authLabel(effectiveDefaultAuth) }}</span>
+              <span v-if="checkOf(defaultKey)" :class="['badge', checkTone(checkOf(defaultKey))]">{{ checkLabel(checkOf(defaultKey)) }}</span>
+            </div>
+            <div class="task-facts">
+              <span>{{ defaultTokenState }}</span>
+              <span>兜底所有未单独选凭据的仓库</span>
+            </div>
+            <p v-if="checkOf(defaultKey)?.message" :class="checkMessageClass(checkOf(defaultKey))">{{ checkOf(defaultKey)?.message }}</p>
           </div>
-          <div class="task-facts">
-            <span>{{ defaultTokenState }}</span>
-            <span>兜底所有未单独选凭据的仓库</span>
+          <div class="repository-watch-manager-actions">
+            <button class="btn small" type="button" @click="startEdit(defaultKey)"><Pencil :size="14" aria-hidden="true" />编辑</button>
           </div>
-          <p v-if="checkOf(defaultKey)?.message" :class="checkMessageClass(checkOf(defaultKey))">{{ checkOf(defaultKey)?.message }}</p>
-        </div>
-        <div class="repository-watch-manager-actions">
-          <button class="btn small" type="button" @click="startEdit(defaultKey)"><Pencil :size="14" aria-hidden="true" />编辑</button>
-        </div>
-      </article>
-
-      <article v-for="item in credentials" :key="item.id" class="repository-watch-manager-item">
-        <div class="repository-watch-manager-main">
-          <div class="cluster">
-            <strong>{{ item.name || "未命名凭据" }}</strong>
-            <span class="badge">{{ authLabel(item.auth) }}</span>
-            <span v-if="checkOf(item.id)" :class="['badge', checkTone(checkOf(item.id))]">{{ checkLabel(checkOf(item.id)) }}</span>
+        </article>
+        <article v-else-if="row.item" class="repository-watch-manager-item">
+          <div class="repository-watch-manager-main">
+            <div class="cluster">
+              <strong>{{ row.item.name || "未命名凭据" }}</strong>
+              <span class="badge">{{ authLabel(row.item.auth) }}</span>
+              <span v-if="checkOf(row.item.id)" :class="['badge', checkTone(checkOf(row.item.id))]">{{ checkLabel(checkOf(row.item.id)) }}</span>
+            </div>
+            <div class="task-facts">
+              <span v-if="row.item.auth !== 'gh'">{{ tokenState(row.item.id) }}</span>
+              <span>{{ usageOf(row.item.id) || "还没有仓库选用" }}</span>
+            </div>
+            <p v-if="checkOf(row.item.id)?.message" :class="checkMessageClass(checkOf(row.item.id))">{{ checkOf(row.item.id)?.message }}</p>
           </div>
-          <div class="task-facts">
-            <span v-if="item.auth !== 'gh'">{{ tokenState(item.id) }}</span>
-            <span>{{ usageOf(item.id) || "还没有仓库选用" }}</span>
+          <div class="repository-watch-manager-actions">
+            <button class="btn small" type="button" @click="startEdit(row.item.id)"><Pencil :size="14" aria-hidden="true" />编辑</button>
+            <button class="btn small ghost danger" type="button" @click="removeCredential(row.item.id)"><Trash2 :size="14" aria-hidden="true" />删除</button>
           </div>
-          <p v-if="checkOf(item.id)?.message" :class="checkMessageClass(checkOf(item.id))">{{ checkOf(item.id)?.message }}</p>
-        </div>
-        <div class="repository-watch-manager-actions">
-          <button class="btn small" type="button" @click="startEdit(item.id)"><Pencil :size="14" aria-hidden="true" />编辑</button>
-          <button class="btn small ghost danger" type="button" @click="removeCredential(item.id)"><Trash2 :size="14" aria-hidden="true" />删除</button>
-        </div>
-      </article>
+        </article>
+        <form v-if="editingKey === row.key" class="repository-watch-editor credential-inline-editor" @submit.prevent="commitEditing">
+          <div class="form-grid repository-watch-form">
+            <div class="field">
+              <label for="credential-name">名称</label>
+              <input
+                id="credential-name"
+                v-model.trim="form.name"
+                class="input"
+                type="text"
+                :disabled="editingKey === defaultKey"
+                placeholder="例如「组织 Token」「个人账号」"
+              />
+              <span class="hint">{{ editingKey === defaultKey ? "默认凭据不能改名，也不能删除。" : "只用来区分凭据，在「仓库管理」里按这个名字选。" }}</span>
+            </div>
+            <div class="field">
+              <label>认证方式</label>
+              <div class="segmented repository-watch-destination" role="radiogroup" aria-label="认证方式">
+                <button
+                  v-for="option in formAuthOptions"
+                  :key="option.value"
+                  type="button"
+                  role="radio"
+                  :aria-checked="form.auth === option.value"
+                  :class="{ active: form.auth === option.value }"
+                  @click="form.auth = option.value"
+                >{{ option.label }}</button>
+              </div>
+              <span class="hint">{{ authHint }}</span>
+            </div>
+            <div v-if="form.auth !== 'gh'" class="field wide">
+              <label for="credential-token">GitHub Token</label>
+              <div class="credential-secret">
+                <input
+                  id="credential-token"
+                  v-model="form.token"
+                  class="input"
+                  type="password"
+                  autocomplete="off"
+                  :disabled="form.clearing"
+                  :placeholder="formTokenPlaceholder"
+                />
+                <button v-if="formTokenConfigured" class="btn small ghost" type="button" @click="form.clearing = !form.clearing">
+                  {{ form.clearing ? "撤销清除" : "清除" }}
+                </button>
+              </div>
+              <span class="hint">Fine-grained token 只访问选定仓库，适合按仓库最小授权；Classic token 范围更大。保存后不会回显。</span>
+            </div>
+          </div>
+          <div v-if="formCheck" class="credential-form-check">
+            <span :class="['badge', checkTone(formCheck)]">{{ checkLabel(formCheck) }}</span>
+            <span v-if="formCheck.message" class="hint">{{ formCheck.message }}</span>
+          </div>
+          <div class="repository-watch-editor-actions">
+            <button v-if="testCredential" class="btn small" type="button" :disabled="formTesting" @click="testForm()">
+              <LoaderCircle v-if="formTesting" :size="14" class="spin" aria-hidden="true" />
+              <UserCheck v-else :size="14" aria-hidden="true" />
+              重新检测
+            </button>
+            <button class="btn small" type="button" @click="stopEditing">取消</button>
+            <button class="btn small primary" type="submit">{{ editingKey === newKey ? "添加" : "完成" }}</button>
+          </div>
+        </form>
+      </template>
     </div>
   </section>
 </template>
@@ -198,20 +199,54 @@ const form = ref({ name: "", auth: "token", token: "", clearing: false });
 const formCheck = ref<CredentialCheck | undefined>();
 const formTesting = ref(false);
 
-// 改了认证方式或 Token，之前的检测结果就不再对应当前表单，直接清掉免得误导。
-watch(() => [form.value.auth, form.value.token, form.value.clearing], () => {
-  formCheck.value = undefined;
-});
+// 填写后自动检测：切换认证方式立刻测，输入 Token 停顿一会儿再测。结果总是对应表单
+// 当前的值——改动一发生就先清掉旧结果，晚到的旧请求用序号丢弃。
+const autoTestDelayMs = 800;
+// GitHub 的 Token 都远长于这个长度，短于它多半还没粘贴完，不必发请求。
+const minimumTokenLength = 20;
+let autoTestTimer: ReturnType<typeof setTimeout> | undefined;
+let testSequence = 0;
 
-async function testForm(): Promise<void> {
+function formTestable(): boolean {
+  if (form.value.auth === "gh") return true;
+  if (form.value.clearing) return false;
+  const token = form.value.token.trim();
+  return token ? token.length >= minimumTokenLength : formTokenConfigured.value;
+}
+
+function cancelAutoTest(): void {
+  if (autoTestTimer) clearTimeout(autoTestTimer);
+  autoTestTimer = undefined;
+  testSequence++;
+  formTesting.value = false;
+}
+
+function scheduleAutoTest(delay: number): void {
+  cancelAutoTest();
+  formCheck.value = undefined;
+  if (!props.testCredential || !editingKey.value || !formTestable()) return;
+  autoTestTimer = setTimeout(() => void testForm(false), delay);
+}
+
+watch(() => form.value.token, () => scheduleAutoTest(autoTestDelayMs));
+watch(() => [form.value.auth, form.value.clearing], () => scheduleAutoTest(0));
+
+async function testForm(manual = true): Promise<void> {
   if (!props.testCredential || !editingKey.value) return;
+  if (autoTestTimer) clearTimeout(autoTestTimer);
+  autoTestTimer = undefined;
+  const sequence = ++testSequence;
   formTesting.value = true;
   try {
-    formCheck.value = await props.testCredential({ key: editingKey.value, ...form.value });
+    const result = await props.testCredential({ key: editingKey.value, ...form.value });
+    if (sequence === testSequence) formCheck.value = result;
   } catch (error) {
-    toastError(error instanceof Error ? error.message : "凭据检测失败");
+    if (sequence !== testSequence) return;
+    // 自动检测失败不弹提示，只在表单里标出来；手动点的才弹。
+    if (manual) toastError(error instanceof Error ? error.message : "凭据检测失败");
+    else formCheck.value = { key: editingKey.value, label: "", configured: true, state: "error", message: "检测请求失败，可以稍后点「重新检测」。" };
   } finally {
-    formTesting.value = false;
+    if (sequence === testSequence) formTesting.value = false;
   }
 }
 
@@ -255,19 +290,23 @@ const formTokenPlaceholder = computed(() => {
 function startCreate(): void {
   editingKey.value = newKey;
   form.value = { name: "", auth: "token", token: "", clearing: false };
+  scheduleAutoTest(0);
 }
 
 function startEdit(key: string): void {
   editingKey.value = key;
   if (key === defaultKey) {
     form.value = { name: "默认凭据", auth: effectiveDefaultAuth.value, token: props.defaultToken ?? "", clearing: Boolean(props.defaultClearing) };
-    return;
+  } else {
+    const item = credentials.value.find((entry) => entry.id === key);
+    form.value = { name: item?.name ?? "", auth: item?.auth ?? "token", token: tokenDrafts.value[key] ?? "", clearing: removedIDs.value.has(key) };
   }
-  const item = credentials.value.find((entry) => entry.id === key);
-  form.value = { name: item?.name ?? "", auth: item?.auth ?? "token", token: tokenDrafts.value[key] ?? "", clearing: removedIDs.value.has(key) };
+  // 打开已有凭据就先测一次，已存的 Token 或 gh 登录的是谁一眼可见。
+  scheduleAutoTest(0);
 }
 
 function stopEditing(): void {
+  cancelAutoTest();
   editingKey.value = "";
   formCheck.value = undefined;
 }
@@ -307,7 +346,9 @@ function commitEditing(): boolean {
   }
   emitCredentials();
   emitTokens();
+  cancelAutoTest();
   editingKey.value = "";
+  formCheck.value = undefined;
   return true;
 }
 
@@ -322,6 +363,13 @@ function editorDirty(): boolean {
   const item = credentials.value.find((entry) => entry.id === key);
   return form.value.name !== (item?.name ?? "") || form.value.auth !== (item?.auth ?? "token") || form.value.token !== (tokenDrafts.value[key] ?? "") || form.value.clearing !== removedIDs.value.has(key);
 }
+
+// 列表的行：默认凭据、各条凭据，新建时末尾再多一行只放表单。
+const rows = computed(() => [
+  { key: defaultKey, item: undefined as Credential | undefined },
+  ...credentials.value.map((item) => ({ key: item.id, item })),
+  ...(editingKey.value === newKey ? [{ key: newKey, item: undefined as Credential | undefined }] : [])
+]);
 
 const checksByKey = computed(() => new Map((props.checks ?? []).map((check) => [check.key, check])));
 
@@ -462,6 +510,15 @@ defineExpose({
 .credential-secret .input {
   flex: 1;
   min-width: 0;
+}
+
+/* 表单挂在它编辑的那一行下面，做成一张卡片，和上下的列表行区分开。 */
+.credential-inline-editor {
+  margin: 0 0 12px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-2);
 }
 
 .credential-form-check {
