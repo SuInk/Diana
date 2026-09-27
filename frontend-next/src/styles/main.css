@@ -5018,9 +5018,13 @@ a.nav-action {
    185px 是运行信息那几行不出省略号的下限，130px 是标题不断行的下限，下面两个
    断点按这两个宽度反推，并按「侧栏已经收成抽屉」之后的内容宽度算。 */
 @media (max-width: 1280px) {
-  .dashboard-stats,
-  .dashboard-insights {
+  .dashboard-stats {
     grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  /* 图表占半行、两张卡各占四分之一，三张同一行；按三列排会让图表独占一行，右边空一格。 */
+  .dashboard-insights {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
   }
 
   .dashboard-insights > .card {
@@ -5028,7 +5032,18 @@ a.nav-action {
   }
 
   .dashboard-insights > .dashboard-chart {
-    grid-column: span 3;
+    grid-column: span 2;
+  }
+}
+
+/* 再窄四分之一宽放不下「3 天 8 小时」：图表独占一行，两张卡各占一半。 */
+@media (max-width: 1080px) {
+  .dashboard-insights > .card {
+    grid-column: span 2;
+  }
+
+  .dashboard-insights > .dashboard-chart {
+    grid-column: span 4;
   }
 }
 
@@ -5036,6 +5051,10 @@ a.nav-action {
   .dashboard-stats,
   .dashboard-insights {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .dashboard-insights > .card {
+    grid-column: span 1;
   }
 
   .dashboard-insights > .dashboard-chart {
