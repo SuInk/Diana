@@ -67,6 +67,8 @@ type SQLiteStore struct {
 	// debugTracePruned/debugTraceSinceOnce 服务于调试轨迹文件，见 debug_trace_files.go。
 	debugTracePruned    atomic.Int64
 	debugTraceSinceOnce sync.Once
+	// mediaUsagePrunedDay 是生图计数表上一次清理过期记录的日期，见 media_generation_usage.go。
+	mediaUsagePrunedDay atomic.Value
 	// memoryEventJobDelay 覆盖事件记忆任务的攒批窗口，nil 表示沿用默认值。
 	memoryEventJobDelay *time.Duration
 	// walCancel/walDone 控制 WAL 回收巡检，见 wal_maintenance.go。

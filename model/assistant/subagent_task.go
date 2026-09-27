@@ -144,26 +144,17 @@ func (r *Runtime) reservePluginTasksForTurn(ctx context.Context, event MessageEv
 		if task.Name == "" {
 			task.Name = "后台任务"
 		}
-		key := strings.TrimSpace(task.Key)
-		if key == "" {
+		key, keyed := pluginTaskKey(event, task)
+		if !keyed {
 			key = task.Kind + ":" + uuid.NewString()
-		} else {
-			// 去重只在同一个会话里算：插件给的键常常只按内容算（比如扫描件 OCR 只
-			// 看文件摘要），两台机器人或两个群收到同一份文件时，后来的那边会被当成
-			// 「同一任务正在处理」，结果却只发回先来的那个会话。
-			key = sessionKey(event) + "\x00" + key
 		}
 		for recentKey, recent := range r.subagentRecent {
 			if now.Sub(recent.UpdatedAt) > 30*time.Minute {
 				delete(r.subagentRecent, recentKey)
 			}
 		}
-		if recent, ok := r.subagentRecent[key]; ok && task.ReuseFor > 0 && now.Sub(recent.UpdatedAt) <= task.ReuseFor {
-			duplicates = append(duplicates, recent)
-			continue
-		}
-		if active, ok := r.subagentTasks[key]; ok {
-			duplicates = append(duplicates, active.status)
+		if duplicate, ok := r.duplicatePluginTaskLocked(key, task, now); ok {
+			duplicates = append(duplicates, duplicate)
 			continue
 		}
 		supersedeKey := strings.TrimSpace(task.SupersedeKey)
@@ -205,6 +196,41 @@ func (r *Runtime) reservePluginTasksForTurn(ctx context.Context, event MessageEv
 	}
 }
 
+// pluginTaskKey 算出任务的去重键；插件没给键时返回 false，这种任务从不算重复。
+//
+// 去重只在同一个会话里算：插件给的键常常只按内容算（比如扫描件 OCR 只看文件
+// 摘要），两台机器人或两个群收到同一份文件时，后来的那边会被当成「同一任务正在
+// 处理」，结果却只发回先来的那个会话。
+func pluginTaskKey(event MessageEvent, task PluginTask) (string, bool) {
+	key := strings.TrimSpace(task.Key)
+	if key == "" {
+		return "", false
+	}
+	return sessionKey(event) + "\x00" + key, true
+}
+
+func (r *Runtime) duplicatePluginTaskLocked(key string, task PluginTask, now time.Time) (SubagentTaskStatus, bool) {
+	if recent, ok := r.subagentRecent[key]; ok && task.ReuseFor > 0 && now.Sub(recent.UpdatedAt) <= task.ReuseFor {
+		return recent, true
+	}
+	if active, ok := r.subagentTasks[key]; ok {
+		return active.status, true
+	}
+	return SubagentTaskStatus{}, false
+}
+
+// duplicatePluginTask 在预约之前先看同一任务是不是已经在跑或刚跑完。复用已有任务
+// 不花任何额度，要在占额度之前就知道。
+func (r *Runtime) duplicatePluginTask(event MessageEvent, task PluginTask) (SubagentTaskStatus, bool) {
+	key, keyed := pluginTaskKey(event, task)
+	if !keyed {
+		return SubagentTaskStatus{}, false
+	}
+	r.subagentMu.Lock()
+	defer r.subagentMu.Unlock()
+	return r.duplicatePluginTaskLocked(key, task, time.Now())
+}
+
 func (r *Runtime) startPluginTaskReservation(reservation pluginTaskReservation) {
 	rootCtx := r.subagentRootContext()
 	for _, item := range reservation.reserved {
@@ -218,10 +244,15 @@ func (r *Runtime) startPluginTaskReservation(reservation pluginTaskReservation) 
 
 func (r *Runtime) cancelPluginTaskReservation(reservation pluginTaskReservation) {
 	r.subagentMu.Lock()
-	defer r.subagentMu.Unlock()
 	for _, item := range reservation.reserved {
 		if active, ok := r.subagentTasks[item.key]; ok && active.status.ID == item.id {
 			delete(r.subagentTasks, item.key)
+		}
+	}
+	r.subagentMu.Unlock()
+	for _, item := range reservation.reserved {
+		if item.task.Finish != nil {
+			item.task.Finish()
 		}
 	}
 }
@@ -268,6 +299,9 @@ func (r *Runtime) subagentRootContext() context.Context {
 }
 
 func (r *Runtime) runPluginTask(rootCtx context.Context, item reservedSubagentTask) {
+	if item.task.Finish != nil {
+		defer item.task.Finish()
+	}
 	// withLLMUsageContext 同时挂上模型配置事件；少了用量这一半，后台任务（文档 OCR、
 	// 图片描述）的调用就归不到触发它的那条消息名下。
 	rootCtx = withLLMUsageContext(rootCtx, item.event)

@@ -6,6 +6,7 @@ package storage
 import (
 	"context"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/SuInk/diana/model/assistant"
@@ -110,5 +111,45 @@ func TestMediaGenerationUsagePrunesOldDays(t *testing.T) {
 		if counts.Group != want {
 			t.Fatalf("%s: group = %d，want %d", key.Day, counts.Group, want)
 		}
+	}
+}
+
+// 清理每天只跑一次：同一天再写不再扫表，换了一天才再清，而且走 day 索引。
+func TestMediaGenerationUsagePrunesOncePerDay(t *testing.T) {
+	store, err := NewSQLiteStore(filepath.Join(t.TempDir(), "media-prune-once.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	ctx := context.Background()
+	today := assistant.MediaGenerationKey{ProfileID: "qq", Kind: assistant.MediaGenerationImage, Day: "2026-09-27", GroupID: "20001", UserID: "20002"}
+	if err := store.AddMediaGeneration(ctx, today, 1); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.ExecContext(ctx, `INSERT INTO media_generation_usage (profile_id, platform, kind, day, scope, subject_id, count, updated_at) VALUES ('qq', '', 'image', '2026-01-01', 'group', '20001', 1, 0)`); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.AddMediaGeneration(ctx, today, 1); err != nil {
+		t.Fatal(err)
+	}
+	ancient := today
+	ancient.Day = "2026-01-01"
+	if counts, _ := store.MediaGenerationCounts(ctx, ancient); counts.Group != 1 {
+		t.Fatalf("同一天第二次写入不该再清理，ancient = %#v", counts)
+	}
+	tomorrow := today
+	tomorrow.Day = "2026-09-28"
+	if err := store.AddMediaGeneration(ctx, tomorrow, 1); err != nil {
+		t.Fatal(err)
+	}
+	if counts, _ := store.MediaGenerationCounts(ctx, ancient); counts.Group != 0 {
+		t.Fatalf("换了一天应当清掉过期记录，ancient = %#v", counts)
+	}
+	var plan string
+	if err := store.db.QueryRowContext(ctx, `EXPLAIN QUERY PLAN DELETE FROM media_generation_usage WHERE day < '2026-01-01'`).Scan(new(int), new(int), new(int), &plan); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(plan, "idx_media_generation_usage_day") {
+		t.Fatalf("清理应当走 day 索引：%s", plan)
 	}
 }

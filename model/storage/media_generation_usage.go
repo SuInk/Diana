@@ -27,6 +27,7 @@ CREATE TABLE IF NOT EXISTS media_generation_usage (
   updated_at INTEGER NOT NULL,
   PRIMARY KEY (profile_id, platform, kind, day, scope, subject_id)
 );
+CREATE INDEX IF NOT EXISTS idx_media_generation_usage_day ON media_generation_usage(day);
 `
 
 // mediaGenerationUsageKeepDays 是计数保留的天数。限额只看当天，多留一个月方便
@@ -108,13 +109,28 @@ ON CONFLICT(profile_id, platform, kind, day, scope, subject_id) DO UPDATE SET
 			return err
 		}
 	}
-	if day, err := time.Parse(time.DateOnly, key.Day); err == nil {
-		cutoff := day.AddDate(0, 0, -mediaGenerationUsageKeepDays).Format(time.DateOnly)
-		if _, err := tx.ExecContext(ctx, `DELETE FROM media_generation_usage WHERE day < ?`, cutoff); err != nil {
-			return err
-		}
+	if err := tx.Commit(); err != nil {
+		return err
 	}
-	return tx.Commit()
+	s.pruneMediaGenerationUsage(ctx, key.Day)
+	return nil
+}
+
+// pruneMediaGenerationUsage 每天第一次写入时清一次过了保留期的记录。清理是尽力而为，
+// 失败了下一笔写入再试，不影响这次记账。
+func (s *SQLiteStore) pruneMediaGenerationUsage(ctx context.Context, today string) {
+	if last, _ := s.mediaUsagePrunedDay.Load().(string); last == today {
+		return
+	}
+	day, err := time.Parse(time.DateOnly, today)
+	if err != nil {
+		return
+	}
+	cutoff := day.AddDate(0, 0, -mediaGenerationUsageKeepDays).Format(time.DateOnly)
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM media_generation_usage WHERE day < ?`, cutoff); err != nil {
+		return
+	}
+	s.mediaUsagePrunedDay.Store(today)
 }
 
 var _ assistant.MediaGenerationUsageStore = (*SQLiteStore)(nil)

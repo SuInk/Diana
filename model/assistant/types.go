@@ -716,6 +716,10 @@ type BotConfig struct {
 	// 管不住它。
 	ImageGenerationDailyGroupLimit int64 `json:"image_generation_daily_group_limit,omitempty"`
 	ImageGenerationDailyUserLimit  int64 `json:"image_generation_daily_user_limit,omitempty"`
+	// DailyLimitTimezone 是每日次数在哪个时区的零点重置（IANA 名，如 Asia/Shanghai）。
+	// 留空读 TZ 环境变量，再没有按北京时间：Docker 镜像默认是 UTC，不能拿进程本地
+	// 时区当日界线。
+	DailyLimitTimezone string `json:"daily_limit_timezone,omitempty"`
 	// ReplySamplePercent 是这台机器人的每群回复抽样率默认值（1–100）：没 @、没引用
 	// 机器人、没叫名字的群消息，只有这个比例会交给模型判断要不要接话。0 表示不抽样。
 	ReplySamplePercent int `json:"reply_sample_percent,omitempty"`
@@ -967,9 +971,11 @@ type GroupConfig struct {
 	// 口径和用量统计一致：这个群名下所有模型调用都算，包括判定、路由和工具步，
 	// 不只是最终那句回复。主人不受限——额度用完还能让主人改配置，不然就锁死了。
 	ModelCallQuota int64 `json:"model_call_quota,omitempty"`
-	// ImageGenerationDailyGroupLimit 是这个群每天能成功生图的次数，留空跟随机器人。
-	// 每人每天的上限只在机器人上设：它跨群合计，放进某个群里就管不住人换群接着画。
-	ImageGenerationDailyGroupLimit int64 `json:"image_generation_daily_group_limit,omitempty"`
+	// ImageGenerationDailyGroupLimit 是这个群每天能成功生图的次数：nil 跟随机器人，
+	// 0 本群不限，正数是本群上限。用指针才分得清「跟随」和「不限」，同
+	// ForwardReplyThreshold。每人每天的上限只在机器人上设：它跨群合计，放进某个群里
+	// 就管不住人换群接着画。
+	ImageGenerationDailyGroupLimit *int64 `json:"image_generation_daily_group_limit,omitempty"`
 	// ReplySamplePercent 是这个群的回复抽样率（1–100），留空跟随机器人。
 	ReplySamplePercent       int   `json:"reply_sample_percent,omitempty"`
 	MaxContextTokens         int64 `json:"max_context_tokens,omitempty"`

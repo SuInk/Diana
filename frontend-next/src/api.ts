@@ -342,6 +342,8 @@ export interface BotProfileConfig extends SendRetrySettings {
   image_generation_daily_group_limit?: number;
   /** 每个人每天能成功生图的次数，跨群和私聊合计；留空或 0 表示不限，主人不受限。 */
   image_generation_daily_user_limit?: number;
+  /** 每日次数在哪个时区的零点重置（IANA 名）；留空读 TZ 环境变量，再没有按 Asia/Shanghai。 */
+  daily_limit_timezone?: string;
   /** 回复抽样率（1–100）：没 @ 机器人的群消息只有这个比例交给模型判断要不要接话；留空不抽样。 */
   reply_sample_percent?: number;
   recent_context_limit?: number;
@@ -559,8 +561,8 @@ export interface BotGroupConfig extends SendRetrySettings {
   recent_history_token_budget?: number;
   /** 滚动 5 小时窗口里的模型调用次数上限；留空或 0 表示不限。 */
   model_call_quota?: number;
-  /** 这个群每天能成功生图的次数；留空跟随机器人。 */
-  image_generation_daily_group_limit?: number;
+  /** 这个群每天能成功生图的次数：不带跟随机器人，0 本群不限，正数是本群上限。 */
+  image_generation_daily_group_limit?: number | null;
   /** 回复抽样率（1–100）：没 @ 机器人的群消息只有这个比例交给模型判断要不要接话；留空不抽样。 */
   reply_sample_percent?: number;
   recent_context_limit?: number;

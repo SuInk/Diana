@@ -394,6 +394,18 @@ func (t *dianaImageTool) enqueue(ctx context.Context, request dianaImageToolRequ
 	// 「五子棋 / 棋盘」，命中就把图片绑到共享棋局状态的版本上，防旧图盖掉新落子。
 	// 那是拿关键词猜语义，而且只认五子棋；要防「图片发出来时局面已经变了」，该由
 	// 模型在拿到图之后自己核对状态再决定发不发，不该由通用工具替某个游戏兜底。
+	taskKey := dianaImageTaskKey(t.event, request)
+	result := dianaImageToolResult{OK: true, Queued: true, Action: request.Operation, Caption: request.Caption}
+	if len(request.SourcesUsed) > 0 {
+		result.SourcesUsed = request.SourcesUsed
+		result.SourcesNote = imageSourcesUsedNote
+	}
+	// 同样的任务已经在跑就直接复用，不占次数：名额只剩在途那一个时，用户重发同一个
+	// 请求不该被判「用完」。
+	if duplicate, ok := t.runtime.duplicatePluginTask(t.event, PluginTask{Key: taskKey}); ok {
+		result.TaskID, result.Reused = duplicate.ID, true
+		return result, nil
+	}
 	// 放在找原图之后：原图都没有的话，该让用户补图，而不是先占掉一次次数。
 	amount := 1
 	if request.Operation == "edit" && request.SourceMode == dianaImageSourceModeEach && len(request.Sources) > 1 {
@@ -404,7 +416,6 @@ func (t *dianaImageTool) enqueue(ctx context.Context, request dianaImageToolRequ
 		return dianaImageToolResult{}, err
 	}
 	request.quota = quota
-	taskKey := dianaImageTaskKey(t.event, request)
 	if t.persistsToWorkspace() {
 		request.WorkspaceStem = dianaImageWorkspaceStem(taskKey, time.Now())
 	}
@@ -413,6 +424,8 @@ func (t *dianaImageTool) enqueue(ctx context.Context, request dianaImageToolRequ
 		Name:    name,
 		Key:     taskKey,
 		Timeout: t.taskTimeout(),
+		// 成功时 execute 已经按实际张数结清，这里只兜没跑起来、半路被取消的那些。
+		Finish: quota.release,
 		Run: func(ctx context.Context, services PluginTaskServices) (PluginTaskResult, error) {
 			output, err := t.execute(ctx, request, services)
 			if err != nil {
@@ -439,11 +452,6 @@ func (t *dianaImageTool) enqueue(ctx context.Context, request dianaImageToolRequ
 		quota.release()
 		return dianaImageToolResult{}, fmt.Errorf("图片任务无法启动")
 	}
-	result := dianaImageToolResult{OK: true, Queued: true, Action: request.Operation, Caption: request.Caption}
-	if len(request.SourcesUsed) > 0 {
-		result.SourcesUsed = request.SourcesUsed
-		result.SourcesNote = imageSourcesUsedNote
-	}
 	if len(reservation.reserved) > 0 {
 		result.TaskID = reservation.reserved[0].id
 		if request.WorkspaceStem != "" {
@@ -453,17 +461,14 @@ func (t *dianaImageTool) enqueue(ctx context.Context, request dianaImageToolRequ
 		if sink := imageAnnouncementSinkFrom(ctx); sink != nil {
 			sink.deferTask(
 				func() { t.runtime.startPluginTaskReservation(reservation) },
-				func() {
-					t.runtime.cancelPluginTaskReservation(reservation)
-					quota.release()
-				},
+				func() { t.runtime.cancelPluginTaskReservation(reservation) },
 			)
 		} else {
 			t.runtime.startPluginTaskReservation(reservation)
 		}
 		return result, nil
 	}
-	// 复用已有任务不另算一次：那张图记在最初受理的那笔上。
+	// 查重和预约之间同样的任务刚被别人受理：复用它，这边的预占退回。
 	quota.release()
 	if len(reservation.duplicates) > 0 {
 		result.TaskID = reservation.duplicates[0].ID

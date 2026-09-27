@@ -297,6 +297,10 @@ type PluginTask struct {
 	StartedMessage string
 	Timeout        time.Duration
 	Run            func(context.Context, PluginTaskServices) (PluginTaskResult, error)
+	// Finish 在任务离开运行时时调用一次，不论跑完、失败、被顶替，还是预约后根本
+	// 没跑起来（取消预约、关停时还在排队）。任务占着的外部资源（如每日生图次数的
+	// 预占）靠它归还，不能只指望 Run 走到结尾。
+	Finish func()
 }
 
 type PluginTaskResult struct {

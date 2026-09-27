@@ -340,18 +340,18 @@
           <span class="hint">这个群名下的每次模型调用都算，含路由判断和工具步。留空跟随机器人那一档。</span>
         </div>
         <div class="field">
-          <label for="group-image-limit">生图次数 · 本群每天</label>
-          <input
-            id="group-image-limit"
-            v-model.number="editing.image_generation_daily_group_limit"
-            class="input"
-            type="number"
-            min="0"
-            step="1"
-            inputmode="numeric"
-            :placeholder="inheritedPlaceholder(inheritedBot?.image_generation_daily_group_limit, ' 次')"
+          <label for="group-image-limit-mode">生图次数 · 本群每天</label>
+          <AppSelect
+            id="group-image-limit-mode"
+            :model-value="groupImageLimitMode(editing.image_generation_daily_group_limit)"
+            :options="groupImageLimitOptions"
+            @update:model-value="(value) => { if (editing) setGroupImageLimitMode(editing, value); }"
           />
           <span class="hint">本群每天最多成功生成几次图片，改图也算，失败不算，主人不受限。每人每天的上限在机器人设置里，跨群合计。</span>
+        </div>
+        <div v-if="groupImageLimitMode(editing.image_generation_daily_group_limit) === 'custom'" class="field">
+          <label for="group-image-limit">本群每天生图次数</label>
+          <input id="group-image-limit" v-model.number="editing.image_generation_daily_group_limit" class="input" type="number" min="1" step="1" inputmode="numeric" placeholder="没填跟随机器人" />
         </div>
         <div class="field">
           <label for="group-sample">回复抽样率（%）</label>
@@ -668,7 +668,7 @@ import Modal from "../components/Modal.vue";
 import ReplyGateForm from "../components/ReplyGateForm.vue";
 import GroupGovernanceForm from "../components/GroupGovernanceForm.vue";
 import { sendRetryFields, sendRetryPayload, sendRetryValidationError, withUnsetSendRetryCleared, type SendRetryField, type SendRetrySettings } from "../send-retry-settings";
-import { groupImageGenerationLimitsPayload } from "../media-generation-quota";
+import { groupImageGenerationLimitsPayload, groupImageLimitMode, setGroupImageLimitMode } from "../media-generation-quota";
 
 // 群里留空的项跟随所属机器人（后端不再把机器人的值抄进群配置），占位符和「跟随机器人」
 // 选项里写出机器人现在的值，免得用户以为留空就是没有。
@@ -701,6 +701,14 @@ const effectiveWelcomeMode = computed(() => editing.value?.welcome_mode || inher
 const effectiveRecallDelete = computed(() => editing.value?.recall_reply_auto_delete_enabled ?? inheritedBot.value?.recall_reply_auto_delete_enabled ?? false);
 // 数字框清空后 v-model.number 给的是空串：换成 0，后端按跟随机器人处理，也不会因为
 // 空串解析不成整数把整份配置拒收。
+const groupImageLimitOptions = computed<AppSelectOption[]>(() => {
+  const inherited = inheritedBot.value?.image_generation_daily_group_limit;
+  return [
+    { value: "", label: `跟随机器人（${inherited ? `${inherited} 次` : "不限"}）` },
+    { value: "unlimited", label: "本群不限" },
+    { value: "custom", label: "本群单独设置" }
+  ];
+});
 function followNumber(value: unknown): number {
   const parsed = Number(value);
   return value === "" || value == null || !Number.isFinite(parsed) ? 0 : Math.max(0, Math.round(parsed));

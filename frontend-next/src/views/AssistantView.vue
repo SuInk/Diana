@@ -1016,7 +1016,19 @@
               <div class="field">
                 <label for="bot-image-user-limit">生图次数 · 每人每天</label>
                 <input id="bot-image-user-limit" v-model.number="form.image_generation_daily_user_limit" class="input" type="number" min="0" step="1" inputmode="numeric" placeholder="留空不限" />
-                <span class="hint">每个人每天最多成功生成几次，跨群和私聊合计。「每天」按机器人所在时区的自然日算，零点重新计数。用完后机器人会如实告诉对方今天的次数已用完。主人不受限，也不占别人的次数。</span>
+                <span class="hint">每个人每天最多成功生成几次，跨群和私聊合计。用完后机器人会如实告诉对方今天的次数已用完。主人不受限，也不占别人的次数。</span>
+              </div>
+              <div class="field">
+                <label for="bot-daily-limit-tz">生图次数 · 重置时区</label>
+                <input id="bot-daily-limit-tz" v-model="form.daily_limit_timezone" class="input" list="bot-daily-limit-timezones" placeholder="留空读 TZ 环境变量，未设按 Asia/Shanghai" />
+                <datalist id="bot-daily-limit-timezones">
+                  <option value="Asia/Shanghai"></option>
+                  <option value="Asia/Hong_Kong"></option>
+                  <option value="Asia/Taipei"></option>
+                  <option value="Asia/Tokyo"></option>
+                  <option value="UTC"></option>
+                </datalist>
+                <span class="hint">每天的次数在这个时区的零点重置。Docker 容器默认是 UTC，不按服务器本地时区算，免得北京时间早上 8 点才重置。</span>
               </div>
               <div class="field">
                 <label for="bot-sample">回复抽样率（%）</label>
