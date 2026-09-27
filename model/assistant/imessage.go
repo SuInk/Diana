@@ -33,7 +33,7 @@ type IMessageConfig struct {
 	ServerURL string
 	// Password 是 BlueBubbles Server 的密码，REST 接口以 ?password= 鉴权。
 	Password string
-	// WebhookToken 是 webhook 回调地址里 ?token= 的值，留空时回退为 Password。
+	// WebhookToken 是 webhook 回调地址里 ?token= 的值，留空时拒收所有 webhook。
 	WebhookToken string
 	// PollSeconds 大于 0 时额外轮询新消息，给 webhook 打不进来的部署兜底。
 	PollSeconds int
@@ -47,6 +47,10 @@ const (
 	imessageMaxMediaBytes  = 100 << 20
 	imessageMinPollSeconds = 5
 	imessagePollBatch      = 100
+	// imessagePollFailureLimit 次连续轮询失败后状态改为未连接。
+	imessagePollFailureLimit = 3
+	// imessageMinWebhookTokenLength 挡住手填的短 token：回调地址是公开的，token 是唯一凭据。
+	imessageMinWebhookTokenLength = 16
 )
 
 // IMessageChannel 通过 BlueBubbles Server 接入 iMessage。
@@ -62,14 +66,19 @@ type IMessageChannel struct {
 	cancel  context.CancelFunc
 	// privateAPI 记录服务端 Private API 是否可用，决定回复时能不能带 selectedMessageGuid。
 	privateAPI bool
-	// directChats 记住私聊对象最近一次出现的会话 guid：同一个号码可能走 iMessage
-	// 也可能走 SMS，按入站时的真实会话回发，比拼一个 iMessage;-; 前缀可靠。
-	directChats map[string]string
+	// runCtx 是当前连接的生命周期，会话 worker 用它派生处理超时。
+	runCtx context.Context
+
+	// state 持久化轮询游标、已处理的消息和私聊会话，按配置档和服务器地址分开。
+	state    *imessageState
+	stateKey string
+
+	queueMu sync.Mutex
+	queues  map[string]*imessageChatQueue
 
 	statusMu sync.RWMutex
 	status   ChannelStatus
 
-	dedupe *eventDeduper
 	// mediaClient 下载出站媒体的远程地址，只允许公网目标。
 	mediaClient *http.Client
 }
@@ -80,8 +89,7 @@ func NewIMessageChannel(cfg IMessageConfig) *IMessageChannel {
 		cfg:         cfg,
 		client:      &http.Client{Timeout: 2 * time.Minute},
 		status:      ChannelStatus{Endpoint: imessageEndpointLabel(cfg), UpdatedAt: time.Now()},
-		dedupe:      newEventDeduper(30 * time.Minute),
-		directChats: map[string]string{},
+		queues:      map[string]*imessageChatQueue{},
 		mediaClient: netguard.NewPublicHTTPClient(2 * time.Minute),
 	}
 }
@@ -202,6 +210,7 @@ func (c *IMessageChannel) Connect(ctx context.Context, handler EventHandler) err
 	runCtx, cancel := context.WithCancel(ctx)
 	c.mu.Lock()
 	c.cancel = cancel
+	c.runCtx = runCtx
 	c.mu.Unlock()
 	defer cancel()
 
@@ -232,7 +241,8 @@ func (c *IMessageChannel) Connect(ctx context.Context, handler EventHandler) err
 // ServeCallback 处理 BlueBubbles 推来的 webhook。
 //
 // BlueBubbles 的 webhook 不签名、也不带任何凭据，只是把 {type, data} POST 到登记的
-// 地址。回调地址是公网可达的，所以要求地址里带 ?token=，拿它当来源证明。
+// 地址，所以地址里必须带独立的 ?token=。这里刻意不认服务器密码：写进 webhook 地址
+// 的东西会落进反向代理的访问日志，而服务器密码能读写整个 iMessage 账号。
 func (c *IMessageChannel) ServeCallback(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -241,8 +251,8 @@ func (c *IMessageChannel) ServeCallback(w http.ResponseWriter, r *http.Request) 
 	c.mu.RLock()
 	cfg := c.cfg
 	c.mu.RUnlock()
-	expected := strings.TrimSpace(firstNonEmpty(cfg.WebhookToken, cfg.Password))
-	got := strings.TrimSpace(firstNonEmpty(r.URL.Query().Get("token"), r.URL.Query().Get("password")))
+	expected := strings.TrimSpace(cfg.WebhookToken)
+	got := strings.TrimSpace(r.URL.Query().Get("token"))
 	if expected == "" || subtle.ConstantTimeCompare([]byte(expected), []byte(got)) != 1 {
 		http.Error(w, "token mismatch", http.StatusUnauthorized)
 		return
@@ -260,7 +270,7 @@ func (c *IMessageChannel) ServeCallback(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "bad json", http.StatusBadRequest)
 		return
 	}
-	// 先回 200：BlueBubbles 不重试，但它的 axios 请求会一直挂着等响应。
+	// 入队很快，附件下载和回答都在会话 worker 里做；这里回 200 不会让 BlueBubbles 干等。
 	writeJSON(w, map[string]any{"status": http.StatusOK})
 	if envelope.Type != "new-message" {
 		return
@@ -269,38 +279,110 @@ func (c *IMessageChannel) ServeCallback(w http.ResponseWriter, r *http.Request) 
 	if err := json.Unmarshal(envelope.Data, &message); err != nil {
 		return
 	}
-	go func() {
-		defer recoverGoroutinePanic("imessage.go:callback")
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-		defer cancel()
-		c.dispatch(ctx, message)
-	}()
+	c.enqueue(message)
 }
 
-// dispatch 把一条 BlueBubbles 消息转成统一事件交给上层；webhook 和轮询共用。
-func (c *IMessageChannel) dispatch(ctx context.Context, message imessageMessage) {
-	c.mu.RLock()
-	handler := c.handler
-	c.mu.RUnlock()
-	if handler == nil {
-		return
-	}
+// enqueue 把一条消息交给它所在会话的 worker；webhook 和轮询共用。
+//
+// 同一会话串行处理：附件要先下载，每条各开一个 goroutine 的话，紧跟在图片后面的
+// 文字会比图片先到上层。不同会话互不等待，一个大附件只卡住它自己那个会话。
+func (c *IMessageChannel) enqueue(message imessageMessage) {
 	event, ok := imessageEventFromMessage(message, c.Status().SelfID)
 	if !ok {
 		return
 	}
-	if !c.dedupe.Accept(event.MessageID) {
+	state := c.stateStore()
+	if !state.accept(event.MessageID) {
 		return
 	}
-	if event.Kind == EventKindPrivate {
-		if chat := message.primaryChat(); chat != nil {
-			c.mu.Lock()
-			c.directChats[event.UserID] = chat.GUID
-			c.mu.Unlock()
+	key := event.UserID
+	if chat := message.primaryChat(); chat != nil && strings.TrimSpace(chat.GUID) != "" {
+		key = chat.GUID
+		if event.Kind == EventKindPrivate {
+			state.rememberDirectChat(event.UserID, chat.GUID)
 		}
 	}
-	event = c.resolveIncomingMedia(ctx, event, message.Attachments)
+	item := imessageQueued{event: event, attachments: message.Attachments}
+	c.queueMu.Lock()
+	queue, running := c.queues[key]
+	if !running {
+		queue = &imessageChatQueue{}
+		c.queues[key] = queue
+	}
+	queue.pending = append(queue.pending, item)
+	c.queueMu.Unlock()
+	if !running {
+		go func() {
+			defer recoverGoroutinePanic("imessage.go:queue")
+			c.drainQueue(key, queue)
+		}()
+	}
+}
+
+type imessageQueued struct {
+	event       MessageEvent
+	attachments []imessageAttachment
+}
+
+type imessageChatQueue struct {
+	pending []imessageQueued
+}
+
+func (c *IMessageChannel) drainQueue(key string, queue *imessageChatQueue) {
+	// 处理中途 panic 时把队列摘掉，否则这个会话之后的消息会一直排在一个没人消费的队列里。
+	finished := false
+	defer func() {
+		if finished {
+			return
+		}
+		c.queueMu.Lock()
+		if c.queues[key] == queue {
+			delete(c.queues, key)
+		}
+		c.queueMu.Unlock()
+	}()
+	for {
+		c.queueMu.Lock()
+		if len(queue.pending) == 0 {
+			delete(c.queues, key)
+			c.queueMu.Unlock()
+			finished = true
+			return
+		}
+		item := queue.pending[0]
+		queue.pending = queue.pending[1:]
+		c.queueMu.Unlock()
+		c.deliver(item)
+	}
+}
+
+func (c *IMessageChannel) deliver(item imessageQueued) {
+	c.mu.RLock()
+	handler := c.handler
+	base := c.runCtx
+	c.mu.RUnlock()
+	if handler == nil {
+		return
+	}
+	if base == nil {
+		base = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(base, 5*time.Minute)
+	defer cancel()
+	event := c.resolveIncomingMedia(ctx, item.event, item.attachments)
 	_ = handler(ctx, event)
+}
+
+// stateStore 返回当前配置对应的持久状态，配置换了服务器就换一份。
+func (c *IMessageChannel) stateStore() *imessageState {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	key := strings.TrimSpace(c.cfg.ProfileID) + "\x00" + imessageServerBase(c.cfg)
+	if c.state == nil || c.stateKey != key {
+		c.state = loadIMessageState(c.cfg.ProfileID, imessageServerBase(c.cfg))
+		c.stateKey = key
+	}
+	return c.state
 }
 
 // pollLoop 定期拉取新消息，给 webhook 打不通的部署兜底；与 webhook 同时开也不会
@@ -309,39 +391,88 @@ func (c *IMessageChannel) pollLoop(ctx context.Context, cfg IMessageConfig) {
 	interval := time.Duration(max(cfg.PollSeconds, imessageMinPollSeconds)) * time.Second
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
-	// 只看连上之后的消息，不把 Mac 上的历史记录当成新消息回一遍。
-	after := time.Now().UnixMilli()
+	failures := 0
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
 		}
-		messages, err := c.queryMessagesAfter(ctx, after)
-		if err != nil {
-			c.setStatus(true, c.Status().SelfID, err.Error())
-			continue
+		err := c.pollOnce(ctx)
+		if ctx.Err() != nil {
+			return
 		}
-		for _, message := range messages {
-			if message.DateCreated > after {
-				after = message.DateCreated
-			}
-			c.dispatch(ctx, message)
-		}
+		failures = c.notePollResult(failures, err)
 	}
 }
 
-func (c *IMessageChannel) queryMessagesAfter(ctx context.Context, after int64) ([]imessageMessage, error) {
+// notePollResult 按连续失败次数更新状态。偶发一次失败只记原因；连续失败说明 Mac
+// 那头已经不可用，只开了轮询的部署此时收不到任何消息，状态不能再显示已连接。
+func (c *IMessageChannel) notePollResult(failures int, err error) int {
+	selfID := c.Status().SelfID
+	if err == nil {
+		if failures > 0 {
+			c.setStatus(true, selfID, "")
+		}
+		return 0
+	}
+	failures++
+	if failures >= imessagePollFailureLimit {
+		c.setStatus(false, selfID, fmt.Sprintf("轮询 BlueBubbles 连续失败 %d 次：%v", failures, err))
+	} else {
+		c.setStatus(c.Status().Connected, selfID, err.Error())
+	}
+	return failures
+}
+
+// pollOnce 拉一轮新消息。
+//
+// 游标用服务端的 dateCreated，不用本机时间：两台机器的时钟对不齐，用本机时间做起点，
+// Mac 偏慢时刚到的消息就落在起点之前被跳过。游标持久化，停机期间的消息重启后还能
+// 拉到；第一次启用时从服务端最新一条开始，不把历史记录当新消息回一遍。
+func (c *IMessageChannel) pollOnce(ctx context.Context) error {
+	state := c.stateStore()
+	cursor := state.cursor()
+	if cursor <= 0 {
+		latest, err := c.queryMessages(ctx, 0, "DESC", 1)
+		if err != nil {
+			return err
+		}
+		start := int64(1)
+		for _, message := range latest {
+			state.accept(message.GUID)
+			start = max(start, message.DateCreated)
+		}
+		state.advanceCursor(start)
+		return nil
+	}
+	messages, err := c.queryMessages(ctx, cursor, "ASC", imessagePollBatch)
+	if err != nil {
+		return err
+	}
+	newest := cursor
+	for _, message := range messages {
+		newest = max(newest, message.DateCreated)
+		c.enqueue(message)
+	}
+	state.advanceCursor(newest)
+	return nil
+}
+
+func (c *IMessageChannel) queryMessages(ctx context.Context, after int64, sort string, limit int) ([]imessageMessage, error) {
 	c.mu.RLock()
 	cfg := c.cfg
 	client := c.client
 	c.mu.RUnlock()
-	raw, err := imessageRequest(ctx, client, cfg, http.MethodPost, "/api/v1/message/query", map[string]any{
+	body := map[string]any{
 		"with":  []string{"chat", "handle", "attachment"},
-		"after": after,
-		"sort":  "ASC",
-		"limit": imessagePollBatch,
-	})
+		"sort":  sort,
+		"limit": limit,
+	}
+	if after > 0 {
+		body["after"] = after
+	}
+	raw, err := imessageRequest(ctx, client, cfg, http.MethodPost, "/api/v1/message/query", body)
 	if err != nil {
 		return nil, err
 	}
@@ -443,7 +574,7 @@ func (c *IMessageChannel) Send(ctx context.Context, msg OutgoingMessage) error {
 // 入站事件里被回复消息的 threadOriginatorGuid 与这里的 guid 同属一个空间，
 // 别人回复 Diana 的消息时才能回查到原文。
 func (c *IMessageChannel) SendWithResult(ctx context.Context, msg OutgoingMessage) (map[string]any, error) {
-	chatGUID := c.chatGUIDFor(msg)
+	chatGUID := c.chatGUIDFor(ctx, msg)
 	if chatGUID == "" {
 		return nil, fmt.Errorf("imessage: 缺少会话标识")
 	}
@@ -508,17 +639,48 @@ func (c *IMessageChannel) SendWithResult(ctx context.Context, msg OutgoingMessag
 
 // chatGUIDFor 算出出站消息的会话 guid。
 //
-// 群聊的 GroupID 本身就是 chat guid。私聊只有 handle，优先用入站时记下的真实会话；
-// 没见过的对象按 iMessage 私聊拼，BlueBubbles 的 guid 规则是 服务;-;handle。
-func (c *IMessageChannel) chatGUIDFor(msg OutgoingMessage) string {
+// 群聊的 GroupID 本身就是 chat guid。私聊只有 handle：先用持久化的入站会话；没见过
+// 的对象去服务端按 iMessage、SMS 两种 guid 各查一次（chat/query 只能按 guid 过滤，
+// 不能按参与者查）；都查不到才按 iMessage 私聊拼。只能收短信的联系人如果直接拼成
+// iMessage 会话，消息会发不出去。
+func (c *IMessageChannel) chatGUIDFor(ctx context.Context, msg OutgoingMessage) string {
 	target, isGroup := platformChatTarget(msg)
 	if target == "" || isGroup || strings.Contains(target, ";") {
 		return target
 	}
+	state := c.stateStore()
+	if guid := state.directChat(target); guid != "" {
+		return guid
+	}
+	for _, service := range []string{"iMessage", "SMS"} {
+		guid := service + ";-;" + target
+		if c.chatExists(ctx, guid) {
+			state.rememberDirectChat(target, guid)
+			return guid
+		}
+	}
+	return "iMessage;-;" + target
+}
+
+func (c *IMessageChannel) chatExists(ctx context.Context, guid string) bool {
 	c.mu.RLock()
-	guid := c.directChats[target]
+	cfg := c.cfg
+	client := c.client
 	c.mu.RUnlock()
-	return firstNonEmpty(guid, "iMessage;-;"+target)
+	raw, err := imessageRequest(ctx, client, cfg, http.MethodPost, "/api/v1/chat/query", map[string]any{"guid": guid, "limit": 1})
+	if err != nil {
+		return false
+	}
+	var chats []imessageChat
+	if err := json.Unmarshal(raw, &chats); err != nil {
+		return false
+	}
+	for _, chat := range chats {
+		if strings.EqualFold(strings.TrimSpace(chat.GUID), guid) {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *IMessageChannel) sendAttachment(ctx context.Context, client *http.Client, cfg IMessageConfig, chatGUID, source string) (string, error) {
@@ -658,6 +820,13 @@ func imessageSentGUID(raw json.RawMessage) string {
 		return ""
 	}
 	return strings.TrimSpace(sent.GUID)
+}
+
+// NewIMessageWebhookToken 生成 webhook 回调地址里的 token。
+func NewIMessageWebhookToken() string {
+	buf := make([]byte, 24)
+	_, _ = rand.Read(buf)
+	return hex.EncodeToString(buf)
 }
 
 // imessageTempGUID 生成 tempGuid。AppleScript 发送必须带它，BlueBubbles 靠它把

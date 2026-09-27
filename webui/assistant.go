@@ -802,7 +802,7 @@ type botTransportConfig struct {
 	WeixinBaseURL  string
 }
 
-// platformCredentials 是 QQ 官方、钉钉、飞书、企业微信通道建连时读的配置，
+// platformCredentials 是 QQ 官方、钉钉、飞书、企业微信、iMessage 通道建连时读的配置，
 // 与 assistant.NewChannelForConfig 传进各通道的字段一一对应。只做相等比较，不落日志。
 type platformCredentials struct {
 	QQAppID                 string
@@ -821,6 +821,10 @@ type platformCredentials struct {
 	WeComSecret             string
 	WeComToken              string
 	WeComEncodingAESKey     string
+	IMessageServerURL       string
+	IMessagePassword        string
+	IMessageWebhookToken    string
+	IMessagePollSeconds     int
 }
 
 func platformCredentialsOf(profile assistant.BotConfig) platformCredentials {
@@ -841,6 +845,10 @@ func platformCredentialsOf(profile assistant.BotConfig) platformCredentials {
 		WeComSecret:             profile.WeComSecret,
 		WeComToken:              profile.WeComToken,
 		WeComEncodingAESKey:     profile.WeComEncodingAESKey,
+		IMessageServerURL:       profile.IMessageServerURL,
+		IMessagePassword:        profile.IMessagePassword,
+		IMessageWebhookToken:    profile.IMessageWebhookToken,
+		IMessagePollSeconds:     profile.IMessagePollSeconds,
 	}
 }
 

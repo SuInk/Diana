@@ -379,10 +379,10 @@
                 :placeholder="secretConfigured('imessage_password_configured') ? '留空表示沿用已保存的密码' : 'BlueBubbles Server 设置里的密码'" />
             </div>
             <div class="field wide">
-              <label for="wizard-imessage-webhook">Webhook 密钥（可选）</label>
+              <label for="wizard-imessage-webhook">Webhook 密钥</label>
               <input id="wizard-imessage-webhook" v-model="botForm.imessage_webhook_token" class="input" type="password" autocomplete="off"
-                :placeholder="secretConfigured('imessage_webhook_token_configured') ? '留空表示沿用已保存的密钥' : '留空时用服务器密码'" />
-              <span class="hint">在 BlueBubbles 里添加 webhook 时，把下面的回调地址后面加上 ?token=这个密钥，事件至少勾选 New Messages。</span>
+                :placeholder="secretConfigured('imessage_webhook_token_configured') ? '留空表示沿用已保存的密钥' : '留空保存时自动生成'" />
+              <span class="hint">回调只认这个密钥，不接受服务器密码。保存后到「机器人」页复制带密钥的完整回调地址，填进 BlueBubbles 的 webhook，事件至少勾选 New Messages。</span>
             </div>
           </template>
 

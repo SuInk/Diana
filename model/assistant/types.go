@@ -1651,6 +1651,7 @@ var (
 	ErrMissingIMessageCredentials = errors.New("assistant: bluebubbles server url and password are required")
 	ErrInvalidIMessageServerURL   = errors.New("assistant: bluebubbles server url must be http(s)")
 	ErrInvalidIMessagePoll        = errors.New("assistant: imessage poll interval must be 0 or between 5 and 3600 seconds")
+	ErrWeakIMessageWebhookToken   = errors.New("assistant: imessage webhook token must be at least 16 characters")
 )
 
 // NewProfileSet 基于单个机器人配置创建配置集。
@@ -2274,6 +2275,9 @@ func (cfg BotConfig) Validate() error {
 		if base := strings.TrimSpace(cfg.IMessageServerURL); base != "" && !isHTTPURL(base) {
 			return ErrInvalidIMessageServerURL
 		}
+		if token := strings.TrimSpace(cfg.IMessageWebhookToken); token != "" && len(token) < imessageMinWebhookTokenLength {
+			return ErrWeakIMessageWebhookToken
+		}
 		if cfg.Enabled && (strings.TrimSpace(cfg.IMessageServerURL) == "" || strings.TrimSpace(cfg.IMessagePassword) == "") {
 			return ErrMissingIMessageCredentials
 		}
@@ -2779,6 +2783,10 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 	}
 	if cfg.IMessageWebhookToken == "" {
 		cfg.IMessageWebhookToken = existing.IMessageWebhookToken
+	}
+	// webhook 只认独立的 token，不认服务器密码；首次保存就生成一个，界面拿它拼出完整回调地址。
+	if NormalizePlatformID(cfg.Platform) == PlatformIMessage && strings.TrimSpace(cfg.IMessageWebhookToken) == "" {
+		cfg.IMessageWebhookToken = NewIMessageWebhookToken()
 	}
 	// 界面保存出来的配置一律是迁移过的：Agent 恒开，模式二选一。
 	return migrateAgentMode(cfg)

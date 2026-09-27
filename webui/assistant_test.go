@@ -280,6 +280,11 @@ func TestProfileSetRequiresReconnectForPlatformCredentials(t *testing.T) {
 		{"WeCom AES key", weComProfile(), func(c *assistant.BotConfig) { c.WeComEncodingAESKey = "new-aes-key" }, true},
 		{"WeCom prompt", weComProfile(), func(c *assistant.BotConfig) { c.SystemPrompt = "after" }, false},
 		{"WeCom group triggers", weComProfile(), func(c *assistant.BotConfig) { c.GroupTriggers = []string{"Diana"} }, false},
+		{"iMessage server", iMessageProfile(), func(c *assistant.BotConfig) { c.IMessageServerURL = "http://other-mac:1234" }, true},
+		{"iMessage password", iMessageProfile(), func(c *assistant.BotConfig) { c.IMessagePassword = "new-password" }, true},
+		{"iMessage webhook token", iMessageProfile(), func(c *assistant.BotConfig) { c.IMessageWebhookToken = "another-token-0123456789" }, true},
+		{"iMessage poll interval", iMessageProfile(), func(c *assistant.BotConfig) { c.IMessagePollSeconds = 30 }, true},
+		{"iMessage prompt", iMessageProfile(), func(c *assistant.BotConfig) { c.SystemPrompt = "after" }, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -307,6 +312,10 @@ func feishuProfile() assistant.BotConfig {
 
 func weComProfile() assistant.BotConfig {
 	return assistant.BotConfig{Enabled: true, Platform: assistant.PlatformWeCom, WeComCorpID: "corp", WeComAgentID: "1000002", WeComSecret: "secret", WeComToken: "token", WeComEncodingAESKey: "aes-key", SystemPrompt: "before"}
+}
+
+func iMessageProfile() assistant.BotConfig {
+	return assistant.BotConfig{Enabled: true, Platform: assistant.PlatformIMessage, IMessageServerURL: "http://mac:1234", IMessagePassword: "secret", IMessageWebhookToken: "hook-token-0123456789abcdef", SystemPrompt: "before"}
 }
 
 // TestBotHandlerGroupTestSendsMessage 验证QQ群收发测试会调用当前 channel 发群消息。

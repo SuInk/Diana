@@ -522,9 +522,9 @@
                 <SecretField
                   id="bot-imessage-webhook"
                   v-model="iMessageWebhookDraft"
-                  label="Webhook 密钥（可选）"
-                  placeholder="留空时用服务器密码"
-                  hint="BlueBubbles 的 webhook 不签名，Diana 只认回调地址里 ?token= 带着的这个值。"
+                  label="Webhook 密钥"
+                  placeholder="留空保存时自动生成"
+                  hint="BlueBubbles 的 webhook 不签名，Diana 只认回调地址里 ?token= 带着的这个值，不接受服务器密码。"
                   :configured="form.imessage_webhook_token_configured"
                   :revealed="tokenRevealed.imessage_webhook_token"
                   :busy="tokenRevealBusy === 'imessage_webhook_token'"
@@ -551,8 +551,8 @@
                   </button>
                 </div>
                 <span v-if="currentPlatform === 'imessage'" class="hint">
-                  在 BlueBubbles Server 的 API &amp; Webhooks 里添加这个地址，后面加上 ?token=Webhook 密钥（没填就用服务器密码），
-                  事件至少勾选 New Messages。地址要换成那台 Mac 访问得到的 Diana 地址。
+                  在 BlueBubbles Server 的 API &amp; Webhooks 里原样添加这个地址（已带上 Webhook 密钥，新机器人保存后才会生成），
+                  事件至少勾选 New Messages。域名要换成那台 Mac 访问得到的 Diana 地址。别把服务器密码写进 webhook 地址。
                 </span>
                 <span v-else class="hint">
                   填到该平台后台的事件接收配置里。这里按你当前访问控制台的地址拼出，
@@ -2621,8 +2621,32 @@ const callbackURL = computed(() => {
   const path = platformDefinition(currentPlatform.value)?.callback_path ?? "";
   if (!path) return "";
   const origin = typeof window === "undefined" ? "" : window.location.origin;
-  return origin ? `${origin}${path}` : path;
+  const url = origin ? `${origin}${path}` : path;
+  if (currentPlatform.value !== "imessage") return url;
+  // BlueBubbles 的 webhook 只能靠地址里的 token 证明来源，给出带 token 的完整地址，
+  // 免得用户自己拼时顺手填成服务器密码。
+  const token = iMessageWebhookDraft.value.trim() || iMessageWebhookSaved.value;
+  return `${url}?token=${token ? encodeURIComponent(token) : "保存后生成"}`;
 });
+
+// 已保存的 webhook token 只以 configured 标志回传；编辑 iMessage 机器人时单独取一次明文，
+// 用来拼回调地址。
+const iMessageWebhookSaved = ref("");
+watch(
+  () => [form.value?.id, currentPlatform.value, form.value?.imessage_webhook_token_configured] as const,
+  async ([id, platform, configured]) => {
+    iMessageWebhookSaved.value = "";
+    if (platform !== "imessage" || !configured || !id) return;
+    try {
+      const secrets = await getBotProfileConfig(true);
+      const profile = (secrets.profiles ?? []).find((item) => item.id === id) ?? secrets;
+      if (form.value?.id === id) iMessageWebhookSaved.value = profile.imessage_webhook_token ?? "";
+    } catch {
+      /* 取不到时地址里显示占位，用户仍可点「查看」手动取 */
+    }
+  },
+  { immediate: true }
+);
 
 async function copyCallbackURL(): Promise<void> {
   if (!callbackURL.value) return;
