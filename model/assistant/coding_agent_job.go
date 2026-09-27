@@ -39,9 +39,15 @@ const (
 	// 直接 Wait。
 	codingJobPollInterval = 10 * time.Second
 	codingJobTailLines    = 20
-	codingJobMaxLineBytes = 8 << 10
-	codingJobResultRunes  = 1500
-	codingJobRetainCount  = 60
+	// codingJobMaxLineBytes 要装得下整条 result 事件：最终报告整段就在那一行里，
+	// 长一点的评审报告十几 KB 很常见。以前按 8KB 截，截断的半截 JSON 解析不了，
+	// 结果丢了不说，还把原始 JSON 当进度发进了群。超过上限的只剩几十兆的工具输出，
+	// 那种行整行跳过。
+	codingJobMaxLineBytes = 4 << 20
+	// codingJobPlainLineRunes 是纯文本日志行进进度尾巴时留的长度。
+	codingJobPlainLineRunes = 300
+	codingJobResultRunes    = 1500
+	codingJobRetainCount    = 60
 )
 
 // CodingJob 是一次编码 CLI 调用的持久记录。
@@ -304,7 +310,11 @@ func parseCodingLog(path string) codingJobSnapshot {
 	tail := make([]string, 0, codingJobTailLines)
 	reader := bufio.NewReaderSize(file, 64<<10)
 	for {
-		line, err := readBoundedLine(reader)
+		line, truncated, err := readBoundedLine(reader)
+		// 截断的 JSON 行解析不出来，留着只会被当成纯文本原样塞进进度。
+		if truncated && strings.HasPrefix(strings.TrimSpace(line), "{") {
+			line = ""
+		}
 		if line != "" {
 			snapshot.Lines++
 			if action, ok := applyCodingLogLine(&snapshot, line); ok && action != "" {
@@ -327,24 +337,23 @@ func parseCodingLog(path string) codingJobSnapshot {
 }
 
 // readBoundedLine 读一行并限制长度。工具输出整段落进一行 JSON 很常见，几十兆一行
-// 的日志不该把内存吃掉；超长的部分直接丢，解析只要开头的字段。
-func readBoundedLine(reader *bufio.Reader) (string, error) {
+// 的日志不该把内存吃掉；超长的部分直接丢，truncated 告诉调用方这一行不完整。
+func readBoundedLine(reader *bufio.Reader) (string, bool, error) {
 	var builder strings.Builder
+	truncated := false
 	for {
 		chunk, err := reader.ReadString('\n')
-		if builder.Len() < codingJobMaxLineBytes {
-			remaining := codingJobMaxLineBytes - builder.Len()
-			if len(chunk) > remaining {
-				builder.WriteString(chunk[:remaining])
-			} else {
-				builder.WriteString(chunk)
-			}
+		if remaining := codingJobMaxLineBytes - builder.Len(); len(chunk) > remaining {
+			builder.WriteString(chunk[:max(remaining, 0)])
+			truncated = true
+		} else {
+			builder.WriteString(chunk)
 		}
 		if err != nil {
-			return strings.TrimRight(builder.String(), "\r\n"), err
+			return strings.TrimRight(builder.String(), "\r\n"), truncated, err
 		}
 		if strings.HasSuffix(chunk, "\n") {
-			return strings.TrimRight(builder.String(), "\r\n"), nil
+			return strings.TrimRight(builder.String(), "\r\n"), truncated, nil
 		}
 	}
 }
@@ -356,11 +365,13 @@ func applyCodingLogLine(snapshot *codingJobSnapshot, line string) (string, bool)
 		return "", false
 	}
 	if !strings.HasPrefix(line, "{") {
-		return line, true
+		return truncateRunes(line, codingJobPlainLineRunes), true
 	}
+	// 解析不了的 JSON 行不当进度：进度尾巴在拿不到结果时会顶上去当汇报正文，
+	// 原始 JSON 里还可能带着工具输出（命令回显、凭据状态），不能发进聊天。
 	var payload map[string]any
 	if err := json.Unmarshal([]byte(line), &payload); err != nil {
-		return line, true
+		return "", false
 	}
 	if id := jsonString(payload, "session_id"); id != "" {
 		snapshot.SessionID = id
@@ -416,13 +427,14 @@ func applyCodingLogLine(snapshot *codingJobSnapshot, line string) (string, bool)
 		snapshot.Turns = int(jsonFloat(payload, "num_turns"))
 		return "", false
 	}
-	// 认不出来的 JSON 后端：挑几个常见的正文字段，都没有就留原文。
+	// 认不出来的事件（限流通知、工具心跳，或者别的 JSON 后端）：挑几个常见的正文
+	// 字段，都没有就跳过，理由同上。
 	for _, key := range []string{"text", "message", "msg", "content"} {
 		if text := jsonString(payload, key); text != "" {
-			return text, true
+			return truncateRunes(text, codingJobPlainLineRunes), true
 		}
 	}
-	return line, true
+	return "", false
 }
 
 func codingAssistantAction(payload map[string]any) string {

@@ -164,8 +164,77 @@ func TestParseCodingLogFallsBackToTailForPlainOutput(t *testing.T) {
 func TestParseCodingLogCapsOverlongLines(t *testing.T) {
 	path := writeCodingLog(t, strings.Repeat("x", codingJobMaxLineBytes*3))
 	snapshot := parseCodingLog(path)
-	if len(snapshot.Tail) != 1 || len(snapshot.Tail[0]) > codingJobMaxLineBytes {
+	if len(snapshot.Tail) != 1 || len(snapshot.Tail[0]) > codingJobPlainLineRunes*4 {
 		t.Fatalf("超长行没有被截断：%d", len(snapshot.Tail[0]))
+	}
+}
+
+// TestParseCodingLogReadsLongResultEvent 照生产上的真实日志造的：最终报告十几 KB，
+// 整段在 result 那一行里，而且新版 CLI 把 type 排到了后面。以前按 8KB 截行，这一行
+// 解析失败，任务照样记成成功，汇报正文却是拼起来的原始 JSON。
+func TestParseCodingLogReadsLongResultEvent(t *testing.T) {
+	report := "# 评审报告\n\n" + strings.Repeat("核心结论：方向对，边界要收紧。", 600)
+	resultLine, _ := json.Marshal(map[string]any{
+		"duration_api_ms": 179174,
+		"result":          report,
+		"session_id":      "sess-long",
+		"total_cost_usd":  0.79,
+		"num_turns":       21,
+		"is_error":        false,
+		"type":            "result",
+		"subtype":         "success",
+	})
+	longText, _ := json.Marshal(map[string]any{
+		"type":    "assistant",
+		"message": map[string]any{"content": []any{map[string]any{"type": "text", "text": strings.Repeat("长", 5000)}}},
+	})
+	path := writeCodingLog(t,
+		`{"type":"system","subtype":"init","session_id":"sess-long"}`,
+		`{"type":"rate_limit_event","rate_limit_info":{"status":"allowed","rateLimitType":"five_hour"}}`,
+		string(longText),
+		`{"type":"user","message":{"content":[{"type":"tool_result","content":"github.com\n  ✓ Logged in to github.com account someone\n  - Token: gho_****"}]}}`,
+		`{"type":"tool_progress","tool_name":"Bash","elapsed_time_seconds":150,"heartbeat":true}`,
+		string(resultLine),
+	)
+	if len(resultLine) <= 8<<10 {
+		t.Fatalf("造的 result 行只有 %d 字节，盖不住旧的 8KB 上限", len(resultLine))
+	}
+	snapshot := parseCodingLog(path)
+	if !snapshot.Done || snapshot.IsError {
+		t.Fatalf("done=%v isError=%v", snapshot.Done, snapshot.IsError)
+	}
+	if snapshot.Result != report {
+		t.Fatalf("result 没读全：%d / %d 字节", len(snapshot.Result), len(report))
+	}
+	if snapshot.Turns != 21 || snapshot.CostUSD != 0.79 {
+		t.Fatalf("turns=%d cost=%v", snapshot.Turns, snapshot.CostUSD)
+	}
+	for _, line := range snapshot.Tail {
+		if strings.Contains(line, "{") || strings.Contains(line, "Token") {
+			t.Fatalf("原始 JSON 或工具输出进了进度：%q", line)
+		}
+	}
+}
+
+// TestParseCodingLogNeverFallsBackToRawJSON 钉住拿不到结果时的退路：进度尾巴会顶上去
+// 当汇报正文，里面不能有原始 JSON——截断的半截行、认不出的事件都一样。
+func TestParseCodingLogNeverFallsBackToRawJSON(t *testing.T) {
+	path := writeCodingLog(t,
+		`{"type":"system","subtype":"init","session_id":"sess-cut"}`,
+		`{"type":"rate_limit_event","rate_limit_info":{"status":"allowed"}}`,
+		`{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"gh auth status"}}]}}`,
+		`{"type":"user","message":{"content":[{"type":"tool_result","content":"Token: gho_****`,
+		`{"type":"result","result":"`+strings.Repeat("半", codingJobMaxLineBytes),
+	)
+	snapshot := parseCodingLog(path)
+	if snapshot.Done {
+		t.Fatalf("没有完整的 result 行，不该判定为已完成")
+	}
+	if !strings.Contains(snapshot.Result, "Bash：gh auth status") {
+		t.Fatalf("result = %q", snapshot.Result)
+	}
+	if strings.Contains(snapshot.Result, "{") || strings.Contains(snapshot.Result, "Token") {
+		t.Fatalf("退路里混进了原始 JSON：%q", snapshot.Result)
 	}
 }
 
