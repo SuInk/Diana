@@ -4616,6 +4616,8 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	}
 	// 模型收尾时填了表情包关键词的话，正文发出后跟一张，见 sticker_finalize.go。
 	ctx, finalizeSticker := withFinalizeSticker(ctx)
+	// 收尾时填了表格的话先画好，正文发出后跟一张图，见 render_finalize.go。
+	ctx, finalizeRender := withFinalizeRender(ctx)
 	reply, err = r.generateReply(ctx, replyCfg, event, relationship, messages, agentRegistry)
 	if err == nil && dependencyIndex >= 0 && dependency.pixels && VisionDescriptionRefused(reply) && !hasExternalSideEffect(ctx) {
 		// 附了原图，模型却回「没收到图片」：这条视觉链路送不进图（模型不支持、网关把
@@ -4787,6 +4789,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		// 只同步真正发出去的这一版：审核改写、拦下或发送失败的都到不了这里。
 		r.afterReplyVRChat(event, strings.Join(splitEventChatReply(reply, cfg, event), "\n"))
 		if !controlIntent.RefuseCurrent && !controlIntent.SuppressCurrentUser {
+			r.sendFinalizeRender(sendCtx, event, finalizeRender.take())
 			r.sendFinalizeSticker(sendCtx, event, finalizeSticker.take())
 		}
 		return nil
@@ -4922,6 +4925,9 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 		if _, ok := registry.Get(dianaStickerToolName); ok {
 			agentCfg.FinalizeFields = append(agentCfg.FinalizeFields, stickerFinalizeField())
 		}
+		if r.offersRenderFinalizeField(event, registry) {
+			agentCfg.FinalizeFields = append(agentCfg.FinalizeFields, renderFinalizeField())
+		}
 		r.rememberAgentResidencyCatalog(event, registry, relationship.Owner)
 		agentClient := newRuntimeAgentLLMProvider(r, ctx)
 		// 光在提示词里叮嘱不透露不够：工具在手，被追问两句模型还是会去查。
@@ -4969,7 +4975,8 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 			// 下游任何一条兜底文案补上；调用方按「本轮不发送」处理。
 			return "", newModelSilentFinishError(resp.SilentReason)
 		}
-		return r.prepareGeneratedReply(ctx, cfg, resp.Text, event)
+		text := r.applyFinalizeRender(ctx, event, resp.Text, resp.FinalizeFields[renderFinalizeFieldName])
+		return r.prepareGeneratedReply(ctx, cfg, text, event)
 	}
 	group := llm.GroupChat
 	if messagesContainImages(messages) || messagesContainAudio(messages) {
