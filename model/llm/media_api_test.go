@@ -557,6 +557,43 @@ func TestSubmitVideoTimeoutIsNotRetriedAndMayBeBilled(t *testing.T) {
 	}
 }
 
+// 提交请求已经发出去、还没等到响应时调用方取消：服务端可能已经建好任务在计费，
+// 和超时一样算可能已计费；错误里仍然认得出是取消，调用方据此不换后备。
+func TestSubmitVideoCancelledMidRequestMayBeBilled(t *testing.T) {
+	noMediaRetryWait(t)
+	received := make(chan struct{})
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		if calls.Add(1) == 1 {
+			close(received)
+		}
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+	generator, _ := NewVideoGenerator(mediaTestConfig(server.URL), VideoAPIOpenAI, 0)
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		<-received
+		cancel()
+	}()
+	_, err := GenerateVideo(ctx, generator, VideoGenerateRequest{Prompt: "x"}, VideoPollOptions{Interval: time.Millisecond})
+	if !VideoJobMayBeBilled(err) || !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v", err)
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("a cancelled submit must not be resent, calls = %d", calls.Load())
+	}
+
+	// 还没发请求就取消的，服务端肯定没建任务。
+	cancelled, cancelNow := context.WithCancel(context.Background())
+	cancelNow()
+	_, err = GenerateVideo(cancelled, generator, VideoGenerateRequest{Prompt: "x"}, VideoPollOptions{Interval: time.Millisecond})
+	if err == nil || VideoJobMayBeBilled(err) || calls.Load() != 1 {
+		t.Fatalf("cancelled before submit: err = %v, calls = %d", err, calls.Load())
+	}
+}
+
 func TestGenerateVideoMarksOnlyPostAcceptanceFailuresAsBilled(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"bad size"}`, http.StatusBadRequest)

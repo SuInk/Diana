@@ -6,9 +6,13 @@ package assistant
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -49,12 +53,19 @@ func videoQuotaServer(t *testing.T, behavior string, gate chan struct{}) *httpte
 	return server
 }
 
-func videoQuotaRuntime(t *testing.T, serverURL string, bot BotConfig) *Runtime {
+// fallbackURL 非空时给视频插槽挂一条后备路由。
+func videoQuotaRuntime(t *testing.T, serverURL string, bot BotConfig, fallbackURL ...string) *Runtime {
 	t.Helper()
 	bot.ID = "qq"
 	bot.OwnerID = "10001"
-	bot.ModelRoles = map[string]ModelRole{"video": {ProfileID: "p1", Model: "sora-2", Params: map[string]string{"poll_interval_seconds": "0.001"}}}
-	store := &stubLLMProfileStore{set: llm.ProfileSet{Profiles: []llm.Profile{mediaSlotProfile("p1", serverURL)}}}
+	role := ModelRole{ProfileID: "p1", Model: "sora-2", Params: map[string]string{"poll_interval_seconds": "0.001"}}
+	profiles := []llm.Profile{mediaSlotProfile("p1", serverURL)}
+	if len(fallbackURL) > 0 {
+		role.Fallbacks = []ModelRole{{ProfileID: "p2", Model: "sora-2"}}
+		profiles = append(profiles, mediaSlotProfile("p2", fallbackURL[0]))
+	}
+	bot.ModelRoles = map[string]ModelRole{"video": role}
+	store := &stubLLMProfileStore{set: llm.ProfileSet{Profiles: profiles}}
 	runtime := NewRuntime(bot, nilChannel{}, NewDefaultPluginManager(), store, nil, nil, nil)
 	runtime.SetLocalMediaSharer(&recordingLocalMediaSharer{url: serverURL + "/media"})
 	return runtime
@@ -243,4 +254,51 @@ func reserveVideoAndCommit(runtime *Runtime, event MessageEvent) error {
 	}
 	reservation.commit(context.Background(), 1)
 	return nil
+}
+
+// 提交请求已经发出去时任务被取消：网关可能已经建好任务在计费，按一次记账，而且
+// 不换后备再提交一遍。提交被明确拒绝（400）不记，见 TestVideoToolCountsAcceptedFailuresButNotRejectedSubmits。
+func TestVideoToolCountsSubmitCancelledMidRequest(t *testing.T) {
+	received := make(chan struct{})
+	var once sync.Once
+	primary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// 读完请求体，服务端才开始盯连接断开，r.Context 才会随客户端取消而结束。
+		_, _ = io.Copy(io.Discard, r.Body)
+		once.Do(func() { close(received) })
+		select {
+		case <-r.Context().Done():
+		case <-time.After(5 * time.Second):
+		}
+	}))
+	defer primary.Close()
+	var backupCalls atomic.Int32
+	backup := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		backupCalls.Add(1)
+		http.Error(w, "should not be called", http.StatusTeapot)
+	}))
+	defer backup.Close()
+	runtime := videoQuotaRuntime(t, primary.URL, BotConfig{VideoGenerationDailyGroupLimit: 1}, backup.URL)
+	event := MessageEvent{Platform: "onebot", Kind: EventKindGroup, ProfileID: "qq", GroupID: "20001", UserID: "20002", MessageID: "cancel-1"}
+	tool := newDianaVideoTool(runtime, event, RelationshipPolicyFor(UserMemoryProfile{}, "10001", "20002")).(*dianaVideoTool)
+	request, err := tool.prepareRequest(context.Background(), map[string]any{"prompt": "海边日落"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if request.quota, err = runtime.reserveMediaGeneration(context.Background(), event, MediaGenerationVideo, 1); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		<-received
+		cancel()
+	}()
+	if _, err := tool.execute(ctx, request, PluginTaskServices{}); !errors.Is(err, context.Canceled) || !llm.VideoJobMayBeBilled(err) {
+		t.Fatalf("err = %v", err)
+	}
+	if backupCalls.Load() != 0 {
+		t.Fatalf("取消之后不该换后备再提交，backup calls = %d", backupCalls.Load())
+	}
+	if _, err := runtime.reserveMediaGeneration(context.Background(), event, MediaGenerationVideo, 1); err == nil {
+		t.Fatal("提交中途取消应当记一次次数")
+	}
 }

@@ -153,9 +153,15 @@ func GenerateVideo(ctx context.Context, generator VideoGenerator, req VideoGener
 	}
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
+	// 还没发请求就已经取消的，服务端肯定没建任务。
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	job, err := generator.SubmitVideo(ctx, req)
 	if err != nil {
-		if kind := MediaErrorKindOf(err); kind == MediaErrorTimeout || kind == MediaErrorNetwork {
+		// 请求发出去之后调用方取消，和超时、断连一样不知道服务端建没建任务，按可能
+		// 已计费处理。仍然包着 context.Canceled，上层「取消了不换后备」照旧生效。
+		if kind := MediaErrorKindOf(err); kind == MediaErrorTimeout || kind == MediaErrorNetwork || errors.Is(err, context.Canceled) {
 			return nil, &VideoAcceptedError{Err: err}
 		}
 		return nil, err
