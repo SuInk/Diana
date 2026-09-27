@@ -22,9 +22,65 @@
     </div>
 
     <div class="repository-watch-manager-list">
-      <!-- 编辑表单跟在正在编辑的那一行下面；新建的表单排在列表最后。 -->
+      <!-- 正在编辑的那一行直接换成表单；新建的表单排在列表最后。 -->
       <template v-for="row in rows" :key="row.key">
-        <article v-if="row.key === defaultKey" class="repository-watch-manager-item">
+        <form v-if="editingKey === row.key" class="credential-edit" @submit.prevent="commitEditing">
+          <div class="credential-edit-row">
+            <div v-if="editingKey === defaultKey" class="cluster credential-edit-name">
+              <strong>默认凭据</strong>
+              <span class="badge accent">默认</span>
+            </div>
+            <input
+              v-else
+              v-model.trim="form.name"
+              class="input credential-edit-name"
+              type="text"
+              aria-label="凭据名称"
+              placeholder="凭据名称，例如「组织 Token」"
+            />
+            <div class="segmented" role="radiogroup" aria-label="认证方式">
+              <button
+                v-for="option in formAuthOptions"
+                :key="option.value"
+                type="button"
+                role="radio"
+                :aria-checked="form.auth === option.value"
+                :class="{ active: form.auth === option.value }"
+                @click="form.auth = option.value"
+              >{{ option.label }}</button>
+            </div>
+          </div>
+          <div v-if="form.auth !== 'gh'" class="credential-edit-row">
+            <input
+              v-model="form.token"
+              class="input credential-edit-token"
+              type="password"
+              autocomplete="off"
+              aria-label="GitHub Token"
+              :disabled="form.clearing"
+              :placeholder="formTokenPlaceholder"
+            />
+            <button v-if="formTokenConfigured" class="btn small ghost" type="button" @click="form.clearing = !form.clearing">
+              {{ form.clearing ? "撤销清除" : "清除" }}
+            </button>
+          </div>
+          <div class="credential-edit-foot">
+            <div class="credential-edit-status">
+              <span v-if="formTesting" class="hint"><LoaderCircle :size="13" class="spin" aria-hidden="true" /> 检测中…</span>
+              <template v-else-if="formCheck">
+                <span :class="['badge', checkTone(formCheck)]">{{ checkLabel(formCheck) }}</span>
+                <span v-if="formCheck.message" class="hint">{{ formCheck.message }}</span>
+                <button v-if="testCredential" class="btn small ghost icon-only" type="button" title="重新检测" aria-label="重新检测" @click="testForm()"><RefreshCw :size="13" aria-hidden="true" /></button>
+              </template>
+              <span v-else-if="authHint" class="hint">{{ authHint }}</span>
+            </div>
+            <div class="cluster" style="gap: 7px; flex-wrap: nowrap">
+              <button class="btn small" type="button" @click="stopEditing">取消</button>
+              <button class="btn small primary" type="submit">{{ editingKey === newKey ? "添加" : "完成" }}</button>
+            </div>
+          </div>
+        </form>
+        <article v-else-if="row.key === defaultKey" class="repository-watch-manager-item">
           <div class="repository-watch-manager-main">
             <div class="cluster">
               <strong>默认凭据</strong>
@@ -60,68 +116,6 @@
             <button class="btn small ghost danger" type="button" @click="removeCredential(row.item.id)"><Trash2 :size="14" aria-hidden="true" />删除</button>
           </div>
         </article>
-        <form v-if="editingKey === row.key" class="repository-watch-editor credential-inline-editor" @submit.prevent="commitEditing">
-          <div class="form-grid repository-watch-form">
-            <div class="field">
-              <label for="credential-name">名称</label>
-              <input
-                id="credential-name"
-                v-model.trim="form.name"
-                class="input"
-                type="text"
-                :disabled="editingKey === defaultKey"
-                placeholder="例如「组织 Token」「个人账号」"
-              />
-              <span class="hint">{{ editingKey === defaultKey ? "默认凭据不能改名，也不能删除。" : "只用来区分凭据，在「仓库管理」里按这个名字选。" }}</span>
-            </div>
-            <div class="field">
-              <label>认证方式</label>
-              <div class="segmented repository-watch-destination" role="radiogroup" aria-label="认证方式">
-                <button
-                  v-for="option in formAuthOptions"
-                  :key="option.value"
-                  type="button"
-                  role="radio"
-                  :aria-checked="form.auth === option.value"
-                  :class="{ active: form.auth === option.value }"
-                  @click="form.auth = option.value"
-                >{{ option.label }}</button>
-              </div>
-              <span class="hint">{{ authHint }}</span>
-            </div>
-            <div v-if="form.auth !== 'gh'" class="field wide">
-              <label for="credential-token">GitHub Token</label>
-              <div class="credential-secret">
-                <input
-                  id="credential-token"
-                  v-model="form.token"
-                  class="input"
-                  type="password"
-                  autocomplete="off"
-                  :disabled="form.clearing"
-                  :placeholder="formTokenPlaceholder"
-                />
-                <button v-if="formTokenConfigured" class="btn small ghost" type="button" @click="form.clearing = !form.clearing">
-                  {{ form.clearing ? "撤销清除" : "清除" }}
-                </button>
-              </div>
-              <span class="hint">Fine-grained token 只访问选定仓库，适合按仓库最小授权；Classic token 范围更大。保存后不会回显。</span>
-            </div>
-          </div>
-          <div v-if="formCheck" class="credential-form-check">
-            <span :class="['badge', checkTone(formCheck)]">{{ checkLabel(formCheck) }}</span>
-            <span v-if="formCheck.message" class="hint">{{ formCheck.message }}</span>
-          </div>
-          <div class="repository-watch-editor-actions">
-            <button v-if="testCredential" class="btn small" type="button" :disabled="formTesting" @click="testForm()">
-              <LoaderCircle v-if="formTesting" :size="14" class="spin" aria-hidden="true" />
-              <UserCheck v-else :size="14" aria-hidden="true" />
-              重新检测
-            </button>
-            <button class="btn small" type="button" @click="stopEditing">取消</button>
-            <button class="btn small primary" type="submit">{{ editingKey === newKey ? "添加" : "完成" }}</button>
-          </div>
-        </form>
       </template>
     </div>
   </section>
@@ -129,7 +123,7 @@
 
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
-import { ExternalLink, LoaderCircle, Pencil, Plus, Trash2, UserCheck } from "@lucide/vue";
+import { ExternalLink, LoaderCircle, Pencil, Plus, RefreshCw, Trash2, UserCheck } from "@lucide/vue";
 import type { CredentialCheck } from "../api";
 import { askConfirm } from "../confirm";
 import { toastError } from "../toast";
@@ -263,19 +257,10 @@ const effectiveDefaultAuth = computed(() => {
   return "token";
 });
 
-const authHint = computed(() => {
-  const isDefault = editingKey.value === defaultKey;
-  switch (form.value.auth) {
-    case "gh":
-      return isDefault
-        ? "Issue、PR 操作使用服务器上 gh 登录的账号；仓库更新检查不走 gh，会匿名读取公开仓库。"
-        : "使用服务器上已登录的 GitHub CLI（gh auth login），不需要填 Token。";
-    default:
-      return isDefault
-        ? "仓库更新检查和 Issue、PR 操作都用这个 Token；不填时公开仓库匿名读取，请求额度较低。"
-        : "绑定到这条凭据的仓库用这个 Token 访问 GitHub。";
-  }
-});
+// 表单里只留一句必须知道的：默认凭据选 gh 时，后台的仓库更新检查并不会跟着走 gh。
+const authHint = computed(() =>
+  editingKey.value === defaultKey && form.value.auth === "gh" ? "仓库更新检查不走 gh，会匿名读取公开仓库。" : ""
+);
 
 const formTokenConfigured = computed(() => {
   if (editingKey.value === defaultKey) return Boolean(props.defaultTokenConfigured);
@@ -501,32 +486,54 @@ defineExpose({
   border-top: none;
 }
 
-.credential-secret {
+/* 编辑中的那一行：和列表行同一位置，底色稍亮，内容只有输入框和操作。 */
+.credential-edit {
+  display: grid;
+  gap: 10px;
+  margin: 6px -12px;
+  padding: 12px;
+  border-radius: var(--radius-md);
+  background: var(--surface-2);
+}
+
+.credential-edit-row {
   display: flex;
   align-items: center;
   gap: 8px;
 }
 
-.credential-secret .input {
+.credential-edit-name {
   flex: 1;
   min-width: 0;
 }
 
-/* 表单挂在它编辑的那一行下面，做成一张卡片，和上下的列表行区分开。 */
-.credential-inline-editor {
-  margin: 0 0 12px;
-  padding: 14px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--surface-2);
+.credential-edit-token {
+  flex: 1;
+  min-width: 0;
 }
 
-.credential-form-check {
+.credential-edit-foot {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.credential-edit-status {
+  display: flex;
+  flex: 1;
+  flex-wrap: wrap;
+  align-items: center;
   gap: 6px 8px;
-  margin-top: 12px;
+  min-width: 0;
+  min-height: 30px;
+}
+
+.credential-edit-status .hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
 }
 
 .credential-check-message {
