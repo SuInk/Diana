@@ -223,6 +223,17 @@ func drainCodingJobs(t *testing.T, rt *Runtime) {
 	})
 }
 
+// waitCodingWatcherDone 等某个任务的看护协程写完收尾记录、退出。
+func waitCodingWatcherDone(t *testing.T, rt *Runtime, jobID string) {
+	t.Helper()
+	registry := rt.codingJobs()
+	waitForCondition(t, 10*time.Second, func() bool {
+		registry.mu.Lock()
+		defer registry.mu.Unlock()
+		return !registry.watched[jobID]
+	})
+}
+
 func TestLaunchCodingJobReportsResultAfterProcessExits(t *testing.T) {
 	useTempCodingWorkspace(t)
 	workspace := t.TempDir()
@@ -344,14 +355,14 @@ func TestCodingWorkspaceRunsOneJobAtATime(t *testing.T) {
 	// 这条失败汇报就被下一个启动的 Runtime 当成「重启接回」的遗留任务捡走，
 	// 用它自己的 channel 发出去——TestPrivateBurstUnderConcurrency 随机多出
 	// 一条发送就是这么来的。
+	//
+	// 等 FinishedAt 不算数：cancelCodingJob 自己就写了 FinishedAt，看护协程这时可能
+	// 还卡在 Wait 上，之后还要再存一次记录。只有看护从 watched 里摘掉自己，才说明
+	// 它写完了。
 	if _, err := rt.cancelCodingJob(context.Background(), third.ID); err != nil {
 		t.Fatalf("cancel third: %v", err)
 	}
-	waitForCondition(t, 10*time.Second, func() bool { return !codingProcessAlive(third.PID) })
-	waitForCondition(t, 10*time.Second, func() bool {
-		saved, err := loadCodingJob(third.ID)
-		return err == nil && !saved.FinishedAt.IsZero()
-	})
+	waitCodingWatcherDone(t, rt, third.ID)
 }
 
 // TestCodingTestRuntimeDrainsJobsLeftRunning 钉住上面那条收尾：子用例派了活就走，
@@ -382,6 +393,40 @@ func TestCodingTestRuntimeDrainsJobsLeftRunning(t *testing.T) {
 	}
 }
 
+// TestCancelCodingJobLeavesWatchToWatcher 钉住取消和看护的分工：取消要立刻放开工作区，
+// 但看护登记得留给看护协程自己摘。进程杀掉之后看护还要等 Wait 返回、再存一次收尾
+// 记录，取消若顺手摘掉登记，drainCodingJobs 就以为没人在写了，那次存盘会在
+// APP_DB_PATH 还原后落进整包共享的工作区，被 checkPackageLeftovers 抓到。
+func TestCancelCodingJobLeavesWatchToWatcher(t *testing.T) {
+	useTempCodingWorkspace(t)
+	rt, _, _ := codingTestRuntime(t, "/bin/true", t.TempDir())
+	job := CodingJob{ID: "code-cancelwatch", Workspace: "demo", Status: codingJobStatusRunning, StartedAt: time.Now()}
+	if err := saveCodingJob(job); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	registry := rt.codingJobs()
+	if err := registry.claim(job.Workspace, job.ID, 0); err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	registry.beginWatch(job.ID)
+	// 这里没有真的看护协程，结束时替它摘掉登记，不然收尾会一直等下去。
+	t.Cleanup(func() { registry.release(job.Workspace, job.ID) })
+
+	if _, err := rt.cancelCodingJob(context.Background(), job.ID); err != nil {
+		t.Fatalf("cancel: %v", err)
+	}
+	registry.mu.Lock()
+	_, busy := registry.running[job.Workspace]
+	watched := registry.watched[job.ID]
+	registry.mu.Unlock()
+	if busy {
+		t.Fatalf("取消后工作区应当立刻放开")
+	}
+	if !watched {
+		t.Fatalf("取消不该替看护协程摘掉看护登记")
+	}
+}
+
 func TestCancelledCodingJobIsNotReportedTwice(t *testing.T) {
 	useTempCodingWorkspace(t)
 	workspace := t.TempDir()
@@ -394,17 +439,14 @@ func TestCancelledCodingJobIsNotReportedTwice(t *testing.T) {
 	if _, err := rt.cancelCodingJob(context.Background(), job.ID); err != nil {
 		t.Fatalf("cancel: %v", err)
 	}
-	waitForCondition(t, 10*time.Second, func() bool {
-		saved, err := loadCodingJob(job.ID)
-		return err == nil && !saved.FinishedAt.IsZero()
-	})
+	// 等看护收完尾再查：取消已经写了 FinishedAt，拿它当信号查到的只是取消那一次存盘。
+	waitCodingWatcherDone(t, rt, job.ID)
 	// 取消的回执是工具返回值，watch 那头收尾时不该再改成 failed，也不该推一条汇报。
 	saved, _ := loadCodingJob(job.ID)
 	if saved.Status != codingJobStatusCancelled {
 		t.Fatalf("status = %q", saved.Status)
 	}
 	channel := rt.channel.(*concurrentRecordingChannel)
-	time.Sleep(300 * time.Millisecond)
 	if channel.count() != 0 {
 		t.Fatalf("取消不该推汇报，却发了 %d 条", channel.count())
 	}
