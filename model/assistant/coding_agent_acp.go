@@ -165,13 +165,18 @@ func runCodingACPSession(ctx context.Context, spec codingACPSpec, log *codingACP
 	session := &codingACPSession{spec: spec, log: log, conn: conn, ctx: ctx, stderr: stderrTail, stdout: stdoutTail, tools: map[string]*codingACPTool{}}
 	conn.onNotify = session.handleNotification
 	conn.onRequest = session.handleRequest
-	go conn.readLoop(io.TeeReader(stdout, stdoutTail))
+	go func() {
+		defer recoverGoroutinePanic("coding.acpRead")
+		conn.readLoop(io.TeeReader(stdout, stdoutTail))
+	}()
 	exited := make(chan struct{})
 	go func() {
+		defer recoverGoroutinePanic("coding.acpWait")
 		_ = cmd.Wait()
 		close(exited)
 	}()
 	go func() {
+		defer recoverGoroutinePanic("coding.acpDrain")
 		// 代理退出后给读协程一点时间把剩下的消息读完，再关读端，免得一直等一个
 		// 永远不会来的 EOF，卡住还在等回复的请求。
 		<-exited
@@ -270,6 +275,7 @@ func (s *codingACPSession) run() int {
 	}
 	done := make(chan promptOutcome, 1)
 	go func() {
+		defer recoverGoroutinePanic("coding.acpPrompt")
 		var result struct {
 			StopReason string `json:"stopReason"`
 		}
@@ -633,6 +639,7 @@ func (s *codingACPSession) decidePermission(title, kind, detail string) bool {
 	}
 	answered := make(chan verdict, 1)
 	go func() {
+		defer recoverGoroutinePanic("coding.acpApproval")
 		response, err := requestCodingApproval(policy, request)
 		answered <- verdict{response, err}
 	}()
@@ -842,6 +849,7 @@ func (c *codingACPConn) dispatch(message codingACPMessage) {
 	switch {
 	case message.Method != "" && hasID:
 		go func() {
+			defer recoverGoroutinePanic("coding.acpRequest")
 			result, rpcErr := c.onRequest(message.Method, message.Params)
 			if rpcErr != nil {
 				_ = c.write(map[string]any{"jsonrpc": "2.0", "id": message.ID, "error": rpcErr})
