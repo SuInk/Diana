@@ -229,6 +229,7 @@ https://HOST/api/channels/wecom/callback</code></pre>
         <div class="section-heading"><p class="eyebrow">编码代理</p><h2>把改代码的活交给 Claude Code / Codex，跑完回来汇报</h2></div>
         <p>「编码代理」插件（<code>official.coding-agent</code>）让机器人把一件编码工作派给本机安装的编码 CLI：在持久工作区里改代码、跑测试、提交，几分钟到几小时都行，期间可以随时问进度，跑完机器人主动把结果发回派活的那个会话。<strong>默认不启用</strong>——它会在后台改代码还会自己开口，装完就生效等于替你做了决定。</p>
         <p>工具是 <code>coding</code>，只对主人开放，七个操作：<code>submit</code> 派活、<code>status</code> 查进度、<code>tail</code> 看最近几步动作、<code>cancel</code> 终止、<code>followup</code> 在原会话上追加指令、<code>list</code> 列历史任务、<code>workspaces</code> 列可用工作区。日常用法就是直接说「把刚才聊的那个换行 bug 在 diana 仓库里修掉」，然后隔一会儿问「跑到哪了」。</p>
+        <p>派出去几秒内还没结束的任务，由 Diana 自己发一条固定格式的受理消息：任务号、代理、工作区和指令摘要，不经过模型。看到这条才算真派出去了——模型嘴上说「交给 Claude Code 了」却没调工具的时候，群里就不会出现它。几秒内就结束的（认证失败、账号被封这类）不发受理消息，结果直接由派活那一轮回复。跑完的汇报先发一条带 @ 的头部；结果在 1500 字以内就跟在头部里，更长的报告头部只带开头几行，全文紧跟着用一张合并转发发出（机器人关了合并转发或平台不支持时分条发）。记录里留全文，上限 2 万字；给模型查进度用的 <code>status</code> 只带开头 1500 字，并用 <code>result_truncated</code> 标明。</p>
         <h3>设置项</h3>
         <div class="table-wrap"><table><thead><tr><th>设置</th><th>说明</th></tr></thead><tbody>
           <tr><td>后端 CLI</td><td><code>claude</code> / <code>codex</code> / 自定义命令。只有 Claude Code 的 <code>stream-json</code> 能被精确解析出会话 ID、逐步进度和结构化结果（含模型轮次和花费）；其余后端退化成按日志尾巴汇报。</td></tr>

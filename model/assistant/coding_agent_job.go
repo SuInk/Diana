@@ -50,8 +50,14 @@ const (
 	// 留的长度。自定义后端只打纯文本，最后那段长回答就是它的结论，不能按进度的
 	// 300 字截。
 	codingJobFallbackLineRunes = 8000
-	codingJobResultRunes       = 1500
-	codingJobRetainCount       = 60
+	// codingJobResultRunes 是记录里留的结果全文。最终报告就是用户要的那份东西，汇报
+	// 时整段发出去（长的走合并转发），只挡住离谱的长度。以前这里就截到 1500 字，
+	// 「整理成 md 发群里」的报告到群里只剩开头一段。
+	codingJobResultRunes = 20000
+	// codingJobResultPreviewRunes 是给模型和运行日志看的结果长度：工具返回值、错误
+	// 说明、日志详情用它。全文由汇报直接发给人，不必塞进模型的上下文。
+	codingJobResultPreviewRunes = 1500
+	codingJobRetainCount        = 60
 )
 
 // CodingJob 是一次编码 CLI 调用的持久记录。
@@ -913,7 +919,7 @@ func (r *Runtime) finalizeCodingJob(ctx context.Context, job CodingJob, timedOut
 	case snapshot.Done && snapshot.IsError:
 		job.Status = codingJobStatusFailed
 		if job.Error == "" {
-			job.Error = firstNonEmpty(job.Result, "CLI 报告执行失败")
+			job.Error = firstNonEmpty(truncateRunes(job.Result, codingJobResultPreviewRunes), "CLI 报告执行失败")
 		}
 	case job.ExitCode != 0 && !snapshot.Done:
 		job.Status = codingJobStatusFailed
@@ -929,11 +935,40 @@ func (r *Runtime) finalizeCodingJob(ctx context.Context, job CodingJob, timedOut
 	if job.Status != codingJobStatusSucceeded {
 		level, kind = applog.LevelError, applog.KindError
 	}
-	r.recordCodingJobLog(ctx, job, kind, level, "编码任务已结束："+job.Status, firstNonEmpty(job.Error, job.Result))
+	r.recordCodingJobLog(ctx, job, kind, level, "编码任务已结束："+job.Status, truncateRunes(firstNonEmpty(job.Error, job.Result), codingJobResultPreviewRunes))
 	r.reportCodingJob(ctx, job)
 }
 
+// renderCodingJobReport 是整条汇报：头部加结果全文。结果太长时汇报分成两段发，
+// 见 deliverCodingJobReport。
 func renderCodingJobReport(job CodingJob) string {
+	report := renderCodingJobReportHead(job)
+	if body := codingJobReportBody(job); body != "" {
+		report += "\n结果：\n" + body
+	}
+	return report
+}
+
+// codingJobReportBody 是汇报里的结果正文。结果和错误说明是同一段话时只在「问题」里
+// 说一遍。
+func codingJobReportBody(job CodingJob) string {
+	if job.Result == "" || job.Result == job.Error {
+		return ""
+	}
+	return job.Result
+}
+
+// codingErrorRepeatsResult 说明「问题」是从结果开头截出来的：结果全文会跟在后面，
+// 头部再放一遍截断的开头就是同一段话说两次。
+func codingErrorRepeatsResult(job CodingJob) bool {
+	if job.Error == "" || job.Result == job.Error {
+		return false
+	}
+	return strings.HasPrefix(job.Result, strings.TrimSuffix(job.Error, "..."))
+}
+
+// renderCodingJobReportHead 是汇报的头部：状态、耗时、指令、问题、轮次和花费。
+func renderCodingJobReportHead(job CodingJob) string {
 	var builder strings.Builder
 	switch job.Status {
 	case codingJobStatusSucceeded:
@@ -949,11 +984,8 @@ func renderCodingJobReport(job CodingJob) string {
 		builder.WriteString("，耗时 " + formatCodingDuration(job.FinishedAt.Sub(job.StartedAt)))
 	}
 	builder.WriteString("\n指令：" + truncateRunes(job.Instruction, 200))
-	if job.Error != "" {
+	if job.Error != "" && !codingErrorRepeatsResult(job) {
 		builder.WriteString("\n问题：" + truncateRunes(job.Error, 400))
-	}
-	if job.Result != "" && job.Result != job.Error {
-		builder.WriteString("\n结果：\n" + job.Result)
 	}
 	if job.Turns > 0 {
 		builder.WriteString(fmt.Sprintf("\n模型轮次 %d", job.Turns))

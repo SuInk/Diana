@@ -745,3 +745,41 @@ func TestParseCodingLogKeepsLongPlainAnswerForFallback(t *testing.T) {
 		}
 	}
 }
+
+// TestLaunchCodingJobReportsLongResultInFull 走一遍真实链路：CLI 交出一份几千字的
+// 报告，记录里要留全文，汇报也要把全文送到；给模型看的视图只带开头。
+func TestLaunchCodingJobReportsLongResultInFull(t *testing.T) {
+	useTempCodingWorkspace(t)
+	report := "LONG-START " + strings.Repeat("评审意见：拦截点要下沉到 harness。", 250) + " LONG-END"
+	line, _ := json.Marshal(map[string]any{"type": "result", "subtype": "success", "is_error": false, "result": report, "num_turns": 3, "session_id": "s-long"})
+	workspace := t.TempDir()
+	payload := filepath.Join(t.TempDir(), "result.jsonl")
+	if err := os.WriteFile(payload, append(line, '\n'), 0o600); err != nil {
+		t.Fatalf("write payload: %v", err)
+	}
+	cli := fakeCodingCLI(t, "cat "+payload)
+	rt, settings, event := codingTestRuntime(t, cli, workspace)
+	cfg, _ := codingAgentConfigFromSettings(settings)
+	ws, _ := cfg.workspace("demo")
+
+	job, err := rt.launchCodingJob(context.Background(), event, cfg, ws, "整理评审报告", "")
+	if err != nil {
+		t.Fatalf("launch: %v", err)
+	}
+	waitForCondition(t, 10*time.Second, func() bool { return codingJobReported(t, job.ID) })
+	saved, _ := loadCodingJob(job.ID)
+	if saved.Result != report {
+		t.Fatalf("记录里的结果没留全文：%d / %d 字", len([]rune(saved.Result)), len([]rune(report)))
+	}
+	var delivered strings.Builder
+	for _, msg := range rt.channel.(*concurrentRecordingChannel).messages() {
+		delivered.WriteString(msg.Text)
+	}
+	if !strings.Contains(delivered.String(), "LONG-START") || !strings.Contains(delivered.String(), "LONG-END") {
+		t.Fatalf("汇报没送到全文")
+	}
+	view := codingJobView(saved, nil)
+	if !view.ResultTruncated || len([]rune(view.Result)) > codingJobResultPreviewRunes+3 {
+		t.Fatalf("给模型的视图应当只带开头并标明截断：truncated=%v len=%d", view.ResultTruncated, len([]rune(view.Result)))
+	}
+}

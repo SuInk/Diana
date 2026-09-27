@@ -48,7 +48,9 @@ func TestCodingSubmitHandsQuickFailureToCurrentTurn(t *testing.T) {
 	}
 }
 
-// 等待窗口过了还没结束的任务照旧：先回任务号，跑完再单独汇报，而且只汇报一次。
+// 等待窗口过了还没结束的任务：代码先发受理消息，跑完再单独汇报，而且只汇报一次。
+// 受理消息必须排在汇报前面，也不能由模型来说：模型说「交给 Claude Code 了」却没调
+// 工具时，群里看着和真派了一样。
 func TestCodingSubmitReportsSeparatelyAfterHandOffWindow(t *testing.T) {
 	useTempCodingWorkspace(t)
 	cli := fakeCodingCLI(t, `sleep 0.5
@@ -60,17 +62,22 @@ echo '{"type":"result","subtype":"success","is_error":false,"result":"diana-cli-
 	registry.mu.Unlock()
 	result := submitCodingJob(t, newDianaCodingTool(rt, event, settings))
 
-	if result.Job == nil || result.Job.Status != codingJobStatusRunning || !strings.Contains(result.Message, "后台启动") {
+	if result.Job == nil || result.Job.Status != codingJobStatusRunning || !strings.Contains(result.Message, "受理消息已经由系统发到聊天里") {
 		t.Fatalf("窗口内没结束应当返回在跑：%#v %q", result.Job, result.Message)
 	}
 	channel := rt.channel.(*concurrentRecordingChannel)
-	waitForCondition(t, 10*time.Second, func() bool { return channel.count() >= 1 })
-	if report := channel.messages()[0].Text; !strings.Contains(report, result.Job.ID) || !strings.Contains(report, "diana-cli-ok") {
+	waitForCondition(t, 10*time.Second, func() bool { return channel.count() >= 2 })
+	messages := channel.messages()
+	if card := messages[0].Text; !strings.Contains(card, "已派出编码任务 "+result.Job.ID) ||
+		!strings.Contains(card, "Claude Code") || !strings.Contains(card, "工作区 demo") || !strings.Contains(card, "echo diana-cli-ok") {
+		t.Fatalf("受理消息 = %q", card)
+	}
+	if report := messages[1].Text; !strings.Contains(report, result.Job.ID) || !strings.Contains(report, "diana-cli-ok") {
 		t.Fatalf("report = %q", report)
 	}
 	drainCodingJobs(t, rt)
-	if sent := channel.count(); sent != 1 {
-		t.Fatalf("汇报应当恰好一条，实际 %d 条", sent)
+	if sent := channel.count(); sent != 2 {
+		t.Fatalf("受理加汇报应当恰好两条，实际 %d 条", sent)
 	}
 	registry.mu.Lock()
 	holds := len(registry.reportHolds)

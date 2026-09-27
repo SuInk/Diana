@@ -6,6 +6,7 @@ package assistant
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"strings"
 	"time"
@@ -23,6 +24,11 @@ const (
 	// 命令不存在这类错几秒内就出结果，这时候汇报会比派活那一轮的回复先到，聊天里
 	// 就成了「失败了」排在「已经在后台跑了」前面。窗口内结束的交给那一轮自己说。
 	codingSubmitHandOffWindow = 8 * time.Second
+	// codingReportInlineRunes 以内的结果和头部放一条发。
+	codingReportInlineRunes = 1500
+	// codingReportPreviewRunes 是长结果在头部里带的开头：编码 CLI 的报告通常先说结论，
+	// 群友只看这一条也知道成没成。
+	codingReportPreviewRunes = 300
 )
 
 type codingReportTiming struct {
@@ -200,7 +206,7 @@ func (r *Runtime) attemptCodingReport(ctx context.Context, job CodingJob) bool {
 	if strings.TrimSpace(job.Target.ProfileID) != "" {
 		job.Target.ProfileID = owner
 	}
-	if err := r.sendSubscriberNotice(ctx, job.Target.event(), renderCodingJobReport(job)); err != nil {
+	if err := r.deliverCodingJobReport(ctx, job.Target.event(), job); err != nil {
 		if ctx.Err() != nil {
 			return false
 		}
@@ -213,6 +219,55 @@ func (r *Runtime) attemptCodingReport(ctx context.Context, job CodingJob) bool {
 		r.setError(err.Error())
 	}
 	return false
+}
+
+// deliverCodingJobReport 把汇报发出去。结果不长就一条；长的先发一条带 @ 的头部和
+// 开头摘要，全文走合并转发——几千字的报告拆成十几条会刷屏，群友往上翻都找不到头。
+// 平台不支持合并转发、或者机器人关了合并转发，就在头部后面分条发全文。
+//
+// 头部发出去之后全文没发成会返回错误，汇报协程重试时头部会再发一遍：只有头部没有
+// 全文等于没汇报，宁可多一条头部。合并转发自带出站去重，已经送达的那张不会重发。
+func (r *Runtime) deliverCodingJobReport(ctx context.Context, event MessageEvent, job CodingJob) error {
+	body := codingJobReportBody(job)
+	runes := len([]rune(body))
+	if runes <= codingReportInlineRunes {
+		return r.sendSubscriberNotice(ctx, event, renderCodingJobReport(job))
+	}
+	head := renderCodingJobReportHead(job) +
+		fmt.Sprintf("\n结果共 %d 字，全文见下一条。开头：\n%s", runes, truncateRunes(body, codingReportPreviewRunes))
+	if err := r.sendSubscriberNotice(ctx, event, head); err != nil {
+		return err
+	}
+	return r.deliverCodingReportBody(ctx, event, body)
+}
+
+// deliverCodingReportBody 发长结果的全文，不带 @：点名在头部那条已经点过了。
+func (r *Runtime) deliverCodingReportBody(ctx context.Context, event MessageEvent, body string) error {
+	platform, err := r.outboundPlatformForEvent(event)
+	if err != nil {
+		return err
+	}
+	event.Platform = platform
+	cfg := r.effectiveConfigForEvent(event)
+	if IsOneBotPlatform(platform) && !chatSplitLimitsForEvent(cfg, event).SingleMessage && boolValue(cfg.ForwardReplyEnabled, true) {
+		_, err := r.sendForwardReplyWithResult(ctx, event, body, cfg)
+		if err == nil {
+			return nil
+		}
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		// 卡片被账号安全审核拦下时不能退回逐条发：逐条发的是同一段文字，那条路不再
+		// 审核。也不能返回错误——内容不变，重试多少次都是拦下，汇报协程会一直转。
+		var safetyErr *replyAccountSafetyRejectedError
+		if errors.As(err, &safetyErr) {
+			return r.sendSubscriberNotice(ctx, event, "结果全文没通过发送前的安全审核，没有贴出来；全文还留在任务记录里。")
+		}
+		// 有的 OneBot 实现不支持合并转发，退回分条发，全文照样送到。
+		log.Printf("diana coding report forward failed, falling back to chunks: %v", err)
+	}
+	_, err = r.deliverChunks(ctx, event, splitReply(body, notificationChunkSize), cfg, outboundDecoration{})
+	return err
 }
 
 // retryCodingReport 起一个协程等时机重发。ctx 是这一轮运行的，Stop 时协程跟着退出，

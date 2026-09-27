@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"sync"
@@ -346,5 +347,123 @@ func TestDeferredCodingReportRoutesLegacyProfileToCurrentBot(t *testing.T) {
 	}
 	if saved, _ := loadCodingJob(job.ID); saved.Target.ProfileID != "bot-a" {
 		t.Fatalf("写回的归属 = %q", saved.Target.ProfileID)
+	}
+}
+
+// forwardlessChannel 让合并转发失败、其余照常记录：有的 OneBot 实现不支持合并转发。
+type forwardlessChannel struct {
+	*recordingChannel
+}
+
+func (c forwardlessChannel) CallAPI(ctx context.Context, action string, params map[string]any) (map[string]any, error) {
+	if strings.Contains(action, "forward") {
+		return nil, errors.New("unsupported action")
+	}
+	return c.recordingChannel.CallAPI(ctx, action, params)
+}
+
+// longCodingResult 造一份几千字的报告，开头和结尾各有记号，好判断全文有没有送到。
+func longCodingResult() string {
+	return "REPORT-START 结论：方向对，边界要收紧。\n\n" +
+		strings.Repeat("## 分析\n这一节展开讲拦截点和审批流怎么接。\n\n", 150) +
+		"REPORT-END"
+}
+
+func saveLongCodingJob(t *testing.T, rt *Runtime) CodingJob {
+	t.Helper()
+	job := saveFinishedCodingJob(t, "code-long", codingJobTarget{ProfileID: "bot-a", GroupID: "123", UserID: "7"})
+	job.Result = longCodingResult()
+	if err := saveCodingJob(job); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	return job
+}
+
+// TestCodingReportSendsLongResultAsForward 钉住长报告的发法：以前结果截到 1500 字，
+// 「整理成 md 发群里」的报告到群里只剩开头一段。现在头部带 @ 和开头先发一条，全文
+// 整段进合并转发，不在群里刷十几条。
+func TestCodingReportSendsLongResultAsForward(t *testing.T) {
+	useTempCodingWorkspace(t)
+	channel := &recordingChannel{}
+	rt := NewRuntime(BotConfig{ID: "bot-a", BotAccount: "42", OwnerID: "1", ForwardReplyEnabled: boolPointer(true)}, channel, NewPluginManager(NewCodingAgentPlugin()), nil, nil, nil, nil)
+	job := saveLongCodingJob(t, rt)
+
+	if retry := rt.attemptCodingReport(context.Background(), job); retry {
+		t.Fatalf("发成功了不该再重试")
+	}
+	sent := channel.sentSnapshot()
+	if len(sent) != 1 {
+		t.Fatalf("头部应当只有一条，实际 %d 条：%#v", len(sent), sent)
+	}
+	head := sent[0].Text
+	runes := len([]rune(job.Result))
+	if !strings.Contains(head, fmt.Sprintf("结果共 %d 字", runes)) || !strings.Contains(head, "REPORT-START") || strings.Contains(head, "REPORT-END") {
+		t.Fatalf("头部 = %q", head)
+	}
+	if sent[0].MentionUserID != "7" {
+		t.Fatalf("头部要点名派活的人：%#v", sent[0])
+	}
+	var forwards []recordingAPICall
+	for _, call := range channel.callsSnapshot() {
+		if call.action == "send_group_forward_msg" {
+			forwards = append(forwards, call)
+		}
+	}
+	if len(forwards) != 1 {
+		t.Fatalf("全文应当走一张合并转发，实际 %d 张", len(forwards))
+	}
+	body, _ := json.Marshal(forwards[0].params)
+	if !strings.Contains(string(body), "REPORT-START") || !strings.Contains(string(body), "REPORT-END") {
+		t.Fatalf("合并转发里不是全文：%.300s", body)
+	}
+	if !codingJobReported(t, job.ID) {
+		t.Fatalf("发完要记成已汇报")
+	}
+}
+
+// TestCodingReportFallsBackToChunksWithoutForward 钉住合并转发发不出去时的退路：
+// 全文分条照样送到，只有头部那条点名。
+func TestCodingReportFallsBackToChunksWithoutForward(t *testing.T) {
+	useTempCodingWorkspace(t)
+	channel := forwardlessChannel{&recordingChannel{}}
+	rt := NewRuntime(BotConfig{ID: "bot-a", BotAccount: "42", OwnerID: "1", SendChunkIntervalMS: 1, ForwardReplyEnabled: boolPointer(true)}, channel, NewPluginManager(NewCodingAgentPlugin()), nil, nil, nil, nil)
+	job := saveLongCodingJob(t, rt)
+
+	if retry := rt.attemptCodingReport(context.Background(), job); retry {
+		t.Fatalf("分条发成功了不该再重试")
+	}
+	sent := channel.sentSnapshot()
+	if len(sent) < 3 {
+		t.Fatalf("应当是头部加分条的全文，实际 %d 条", len(sent))
+	}
+	var body strings.Builder
+	for _, msg := range sent[1:] {
+		if msg.MentionUserID != "" {
+			t.Fatalf("全文分条不该再点名：%#v", msg)
+		}
+		body.WriteString(msg.Text)
+	}
+	if !strings.Contains(body.String(), "REPORT-START") || !strings.Contains(body.String(), "REPORT-END") {
+		t.Fatalf("分条没送全文")
+	}
+	if !codingJobReported(t, job.ID) {
+		t.Fatalf("发完要记成已汇报")
+	}
+}
+
+// TestCodingReportKeepsShortResultInline 钉住短结果不变：头部和结果一条发完。
+func TestCodingReportKeepsShortResultInline(t *testing.T) {
+	useTempCodingWorkspace(t)
+	channel := &recordingChannel{}
+	rt := NewRuntime(BotConfig{ID: "bot-a", BotAccount: "42", OwnerID: "1"}, channel, NewPluginManager(NewCodingAgentPlugin()), nil, nil, nil, nil)
+	job := saveFinishedCodingJob(t, "code-short", codingJobTarget{ProfileID: "bot-a", GroupID: "123", UserID: "7"})
+
+	rt.attemptCodingReport(context.Background(), job)
+	sent := channel.sentSnapshot()
+	if len(sent) != 1 || !strings.Contains(sent[0].Text, "结果：\n改好了") {
+		t.Fatalf("短结果应当一条发完：%#v", sent)
+	}
+	if calls := channel.callsSnapshot(); len(calls) != 0 {
+		t.Fatalf("短结果不该走合并转发：%#v", calls)
 	}
 }
