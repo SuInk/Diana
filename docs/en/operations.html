@@ -44,7 +44,7 @@ curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.sh
           <div><strong>Health check</strong><code>GET /api/health</code><span>No login required; use it for process and orchestration probes.</span></div>
           <div><strong>Login state</strong><code>GET /api/auth/status</code><span>Confirms the admin session and whether this is a first start.</span></div>
           <div><strong>Live events</strong><code>GET /api/events/stream</code><span>The frontend should fall back to polling when SSE drops.</span></div>
-          <div><strong>Install logs</strong><code>logs/</code><span>Service output and startup failures.</span></div>
+          <div><strong>Install logs</strong><code>logs/</code><span>Service output and startup failures. When stdout is redirected to a file (launchd, nohup), it only carries the startup phase and later lines go to the application log alone; Docker, terminals and the systemd journal keep the full stream. Set <code>DIANA_LOG_STDOUT=1</code> to always copy, <code>0</code> for startup only.</span></div>
           <div><strong>Application log</strong><code>logs/diana.log</code><span>Filterable and downloadable from the console.</span></div>
           <div><strong>SQLite</strong><code>data/diana.db</code><span>The main store for configuration, messages, memory, tasks and audit.</span></div>
         </div>

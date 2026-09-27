@@ -56,6 +56,22 @@ func withLLMUsagePurpose(ctx context.Context, purpose string) context.Context {
 	return context.WithValue(ctx, llmUsagePurposeKey{}, purpose)
 }
 
+// 下面两个用途只用于记账：它们生成回复走的是主回复同一条路，模型怎么选也跟主回复
+// 以前一样（不进 llmPurposeGroup，界面上不单独绑），只是用量要能和聊天回复分开看。
+const (
+	PurposeScheduledQuery = "scheduled_query"
+	PurposeEventTrigger   = "event_trigger"
+)
+
+// withDefaultLLMUsagePurpose 只在调用方还没打标签时补上 purpose，已有的标签优先：
+// 定时查询、事件触发同样走主回复那条路，但记账时要分得出来。
+func withDefaultLLMUsagePurpose(ctx context.Context, purpose string) context.Context {
+	if llmUsagePurposeFromContext(ctx) != "" {
+		return ctx
+	}
+	return withLLMUsagePurpose(ctx, purpose)
+}
+
 func llmUsagePurposeFromContext(ctx context.Context) string {
 	if ctx == nil {
 		return ""

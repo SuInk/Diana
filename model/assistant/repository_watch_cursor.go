@@ -1,6 +1,7 @@
 package assistant
 
 import (
+	"fmt"
 	"log"
 	"strconv"
 	"strings"
@@ -59,4 +60,51 @@ func observedRepositoryWatchCursor(repository, kind, current, candidate string) 
 
 func logRepositoryOpaqueCursorRetained(repository, kind, current, candidate, reason string) {
 	log.Printf("diana repository_watch cursor retained: repository=%q kind=%s previous=%q observed=%q reason=%q", repository, kind, current, candidate, reason)
+}
+
+// repositoryWatchCursorFields 是一条仓库订阅里会随轮询前移的全部游标。
+type repositoryWatchCursorFields struct {
+	commit, pullRequest, issue, release, star string
+	releaseAt, starAt                         time.Time
+	releaseID                                 int64
+}
+
+func repositoryWatchCursorFieldsOf(item Reminder) repositoryWatchCursorFields {
+	return repositoryWatchCursorFields{
+		commit:      item.LastCommitSHA,
+		pullRequest: item.LastPullRequestCursor,
+		issue:       item.LastIssueCursor,
+		release:     item.LastReleaseTag,
+		releaseAt:   item.LastReleasePublishedAt,
+		releaseID:   item.LastReleaseID,
+		star:        item.LastStarEventID,
+		starAt:      item.LastStarEventAt,
+	}
+}
+
+// repositoryWatchCursorChanges 列出前后不同的游标，格式是 name=前->后，全都没变时
+// 返回空串。时间按 Equal 比较，只差时区或单调时钟读数的不算变化。
+func repositoryWatchCursorChanges(before, after repositoryWatchCursorFields) string {
+	var changes []string
+	text := func(name, previous, next string) {
+		if previous != next {
+			changes = append(changes, fmt.Sprintf("%s=%q->%q", name, previous, next))
+		}
+	}
+	instant := func(name string, previous, next time.Time) {
+		if !previous.Equal(next) {
+			changes = append(changes, fmt.Sprintf("%s=%s->%s", name, previous.UTC().Format(time.RFC3339Nano), next.UTC().Format(time.RFC3339Nano)))
+		}
+	}
+	text("commit", before.commit, after.commit)
+	text("pr", before.pullRequest, after.pullRequest)
+	text("issue", before.issue, after.issue)
+	text("release", before.release, after.release)
+	instant("release_at", before.releaseAt, after.releaseAt)
+	if before.releaseID != after.releaseID {
+		changes = append(changes, fmt.Sprintf("release_id=%d->%d", before.releaseID, after.releaseID))
+	}
+	text("star", before.star, after.star)
+	instant("star_at", before.starAt, after.starAt)
+	return strings.Join(changes, " ")
 }

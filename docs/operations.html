@@ -41,7 +41,7 @@ curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.sh
           <div><strong>健康检查</strong><code>GET /api/health</code><span>无需登录，用于进程与编排探活。</span></div>
           <div><strong>登录状态</strong><code>GET /api/auth/status</code><span>确认管理员会话和首次启动状态。</span></div>
           <div><strong>实时事件</strong><code>GET /api/events/stream</code><span>SSE 断开时前端应退回轮询。</span></div>
-          <div><strong>安装日志</strong><code>logs/</code><span>包含服务输出与启动失败信息。</span></div>
+          <div><strong>安装日志</strong><code>logs/</code><span>包含服务输出与启动失败信息。launchd、nohup 这类把标准输出重定向到文件的部署，服务输出只留启动阶段，之后只写应用日志；Docker、终端和 systemd journal 照旧全程输出。设 <code>DIANA_LOG_STDOUT=1</code> 全程复制，<code>0</code> 只留启动阶段。</span></div>
           <div><strong>应用日志</strong><code>logs/diana.log</code><span>支持控制台筛选和下载。</span></div>
           <div><strong>SQLite</strong><code>data/diana.db</code><span>配置、消息、记忆、任务与审计主库。</span></div>
         </div>

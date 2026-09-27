@@ -4920,7 +4920,9 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 			agentCfg.FinalizeFields = append(agentCfg.FinalizeFields, stickerFinalizeField())
 		}
 		r.rememberAgentResidencyCatalog(event, registry, relationship.Owner)
-		agentClient := newRuntimeAgentLLMProvider(r, ctx)
+		// 用途只挂在模型调用上（见 runtimeAgentLLMProvider.Generate），不挂在整个 ctx 上：
+		// 工具里各自发起的模型调用有自己的用途，不该被记成主回复。
+		agentClient := newRuntimeAgentLLMProvider(r, withDefaultLLMUsagePurpose(ctx, PurposeReply))
 		// 光在提示词里叮嘱不透露不够：工具在手，被追问两句模型还是会去查。
 		if modelDisclosedTo(cfg, relationship.Owner) {
 			registry.Register(newDianaRuntimeModelTool(agentClient, event))
@@ -4972,7 +4974,7 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 	if messagesContainImages(messages) || messagesContainAudio(messages) {
 		group = llm.GroupVision
 	}
-	ctx = withLLMUsagePurpose(ctx, "reply")
+	ctx = withDefaultLLMUsagePurpose(ctx, PurposeReply)
 	raw, err := r.runLLMProviderForGroup(ctx, group, func(client LLMProvider) (string, error) {
 		resp, err := client.Generate(ctx, llm.GenerateRequest{Messages: messages})
 		if err != nil {
@@ -5009,6 +5011,9 @@ func (p *runtimeAgentLLMProvider) Generate(ctx context.Context, req llm.Generate
 	p.mu.Lock()
 	p.lastGroup = group
 	p.mu.Unlock()
+	// Agent 每一轮的 ctx 来自 Runner，不带创建这个 provider 时的用途；补上它，
+	// 记账、调试轨迹和缓存键才认得出这是主回复，而不是落进 unlabeled。
+	ctx = withDefaultLLMUsagePurpose(ctx, llmUsagePurposeFromContext(p.ctx))
 	wrapped := p.runtime.wrapLLMProviderForContext(ctx, provider)
 	return wrapped.Generate(ctx, req)
 }

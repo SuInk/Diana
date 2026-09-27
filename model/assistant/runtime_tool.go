@@ -1839,9 +1839,7 @@ func (r *Runtime) storeRepositoryWatchProgress(id string, snapshot repositoryWat
 		if err := validateRepositoryWatchProgress(*item, snapshot); err != nil {
 			return err
 		}
-		previousCommit, previousRelease, previousStar := item.LastCommitSHA, item.LastReleaseTag, item.LastStarEventID
-		previousReleaseAt, previousReleaseID, previousStarAt := item.LastReleasePublishedAt, item.LastReleaseID, item.LastStarEventAt
-		previousPullCursor, previousIssueCursor := item.LastPullRequestCursor, item.LastIssueCursor
+		before := repositoryWatchCursorFieldsOf(*item)
 		if item.WatchCommits && strings.TrimSpace(snapshot.CommitSHA) != "" {
 			item.LastCommitSHA = snapshot.CommitSHA
 		}
@@ -1881,8 +1879,10 @@ func (r *Runtime) storeRepositoryWatchProgress(id string, snapshot repositoryWat
 		if err := r.reminders.SaveReminders(items); err != nil {
 			return fmt.Errorf("保存仓库更新订阅游标: %w", err)
 		}
-		if item.LastPullRequestCursor != previousPullCursor || item.LastIssueCursor != previousIssueCursor || item.LastCommitSHA != previousCommit || item.LastReleaseTag != previousRelease || item.LastStarEventID != previousStar || !item.LastReleasePublishedAt.Equal(previousReleaseAt) || item.LastReleaseID != previousReleaseID || !item.LastStarEventAt.Equal(previousStarAt) {
-			log.Printf("diana repository_watch cursor saved: id=%s repository=%q commit_before=%q commit_after=%q pr_before=%q pr_after=%q issue_before=%q issue_after=%q release_before=%q release_after=%q release_at_before=%s release_at_after=%s release_id_before=%d release_id_after=%d star_before=%q star_after=%q star_at_before=%s star_at_after=%s", id, item.Repository, previousCommit, item.LastCommitSHA, previousPullCursor, item.LastPullRequestCursor, previousIssueCursor, item.LastIssueCursor, previousRelease, item.LastReleaseTag, previousReleaseAt.UTC().Format(time.RFC3339Nano), item.LastReleasePublishedAt.UTC().Format(time.RFC3339Nano), previousReleaseID, item.LastReleaseID, previousStar, item.LastStarEventID, previousStarAt.UTC().Format(time.RFC3339Nano), item.LastStarEventAt.UTC().Format(time.RFC3339Nano))
+		// 只写变了的字段：以前每次保存都把八组前后值全打一遍，一行 680 字节，
+		// 实际通常只动了一两个游标，其余全是一样的前后对照。
+		if changes := repositoryWatchCursorChanges(before, repositoryWatchCursorFieldsOf(*item)); changes != "" {
+			log.Printf("diana repository_watch cursor saved: id=%s repository=%q %s", id, item.Repository, changes)
 		}
 		return nil
 	}
@@ -2066,7 +2066,7 @@ func (r *Runtime) generateScheduledQueryMessage(ctx context.Context, item Remind
 			}),
 		},
 	}
-	reply, err := r.generateReply(taskCtx, cfg, source, relationship, messages, nil)
+	reply, err := r.generateReply(withLLMUsagePurpose(taskCtx, PurposeScheduledQuery), cfg, source, relationship, messages, nil)
 	if err != nil {
 		return "", err
 	}
