@@ -2,12 +2,9 @@
      Licensed under the Limited Redistribution License in the repository root. -->
 
 <template>
-  <div class="stack credential-editor" style="gap: 10px">
-    <div class="cluster" style="justify-content: space-between">
-      <div class="stack" style="gap: 2px">
-        <strong style="font-size: 13.5px">凭据列表</strong>
-        <span class="hint">默认凭据给所有仓库兜底；个人仓库、组织仓库要用别的账号时，再添加凭据并在「仓库管理」里为仓库选用。</span>
-      </div>
+  <div class="stack credential-editor" style="gap: 8px">
+    <div class="credential-toolbar">
+      <span class="hint">{{ credentials.length + 1 }} 条凭据 · 没单独选凭据的仓库用默认凭据</span>
       <div class="cluster" style="gap: 6px">
         <button class="btn small" type="button" :disabled="testing" @click="emit('test')">
           <UserCheck :size="14" aria-hidden="true" />
@@ -21,58 +18,53 @@
     </div>
 
     <ul class="credential-list">
-      <li class="credential-row credential-row-default">
-        <div class="credential-row-main">
-          <div class="credential-title">
-            <strong>默认凭据</strong>
+      <li class="credential-item" :class="{ open: expanded.has('default') }">
+        <div class="credential-summary">
+          <button class="credential-summary-main" type="button" :aria-expanded="expanded.has('default')" @click="toggle('default')">
+            <ChevronRight :size="14" class="credential-chevron" aria-hidden="true" />
+            <span class="credential-name">默认凭据</span>
             <span class="badge">默认</span>
-          </div>
-          <AppSelect
-            :model-value="defaultAuth || 'token'"
-            :options="defaultAuthOptions"
-            aria-label="默认凭据的认证方式"
-            @update:model-value="emit('update:default-auth', String($event))"
-          />
+            <span class="credential-meta">{{ defaultMeta }}</span>
+          </button>
+          <span v-if="checkOf('default')" :class="['badge', 'credential-account', checkTone(checkOf('default'))]" :title="checkOf('default')?.message">{{ checkLabel(checkOf('default')) }}</span>
           <span class="credential-action-spacer" aria-hidden="true"></span>
         </div>
-        <div v-if="defaultAuth !== 'gh'" class="credential-row-secret">
-          <input
-            :value="defaultToken"
-            class="input"
-            type="password"
-            autocomplete="off"
-            :disabled="defaultClearing"
-            :placeholder="defaultTokenPlaceholder"
-            aria-label="默认凭据的 Token"
-            @input="emit('update:default-token', ($event.target as HTMLInputElement).value)"
-          />
-          <button v-if="defaultTokenConfigured" class="btn small ghost" type="button" @click="emit('toggle-clear-default')">
-            {{ defaultClearing ? "撤销清除" : "清除" }}
-          </button>
-        </div>
-        <span class="hint">{{ defaultAuthHint }}</span>
-        <div v-if="checkOf('default')" class="credential-account">
-          <span :class="['badge', checkTone(checkOf('default'))]">{{ checkLabel(checkOf('default')) }}</span>
+        <div v-if="expanded.has('default')" class="credential-body">
+          <div class="credential-fields">
+            <AppSelect
+              :model-value="defaultAuth || 'token'"
+              :options="defaultAuthOptions"
+              aria-label="默认凭据的认证方式"
+              @update:model-value="emit('update:default-auth', String($event))"
+            />
+            <input
+              v-if="defaultAuth !== 'gh'"
+              :value="defaultToken"
+              class="input"
+              type="password"
+              autocomplete="off"
+              :disabled="defaultClearing"
+              :placeholder="defaultTokenPlaceholder"
+              aria-label="默认凭据的 Token"
+              @input="emit('update:default-token', ($event.target as HTMLInputElement).value)"
+            />
+            <button v-if="defaultAuth !== 'gh' && defaultTokenConfigured" class="btn small ghost" type="button" @click="emit('toggle-clear-default')">
+              {{ defaultClearing ? "撤销清除" : "清除" }}
+            </button>
+          </div>
+          <span class="hint">{{ defaultAuthHint }}</span>
           <span v-if="checkOf('default')?.message" class="hint">{{ checkOf('default')?.message }}</span>
         </div>
       </li>
 
-      <li v-for="(item, index) in credentials" :key="item.id" class="credential-row">
-        <div class="credential-row-main">
-          <input
-            v-model.trim="item.name"
-            class="input"
-            type="text"
-            placeholder="凭据名称，例如「组织 Token」"
-            :aria-label="`第 ${index + 1} 条凭据的名称`"
-            @input="emitCredentials"
-          />
-          <AppSelect
-            v-model="item.auth"
-            :options="authOptions"
-            :aria-label="`第 ${index + 1} 条凭据的认证方式`"
-            @update:model-value="emitCredentials"
-          />
+      <li v-for="(item, index) in credentials" :key="item.id" class="credential-item" :class="{ open: expanded.has(item.id) }">
+        <div class="credential-summary">
+          <button class="credential-summary-main" type="button" :aria-expanded="expanded.has(item.id)" @click="toggle(item.id)">
+            <ChevronRight :size="14" class="credential-chevron" aria-hidden="true" />
+            <span class="credential-name" :class="{ placeholder: !item.name }">{{ item.name || "未命名凭据" }}</span>
+            <span class="credential-meta">{{ credentialMeta(item) }}</span>
+          </button>
+          <span v-if="checkOf(item.id)" :class="['badge', 'credential-account', checkTone(checkOf(item.id))]" :title="checkOf(item.id)?.message">{{ checkLabel(checkOf(item.id)) }}</span>
           <button
             class="btn small ghost danger icon-only"
             type="button"
@@ -83,8 +75,25 @@
             <Trash2 :size="14" aria-hidden="true" />
           </button>
         </div>
-        <div v-if="item.auth !== 'gh'" class="credential-row-secret">
+        <div v-if="expanded.has(item.id)" class="credential-body">
+          <div class="credential-fields">
+            <input
+              v-model.trim="item.name"
+              class="input"
+              type="text"
+              placeholder="凭据名称，例如「组织 Token」"
+              :aria-label="`第 ${index + 1} 条凭据的名称`"
+              @input="emitCredentials"
+            />
+            <AppSelect
+              v-model="item.auth"
+              :options="authOptions"
+              :aria-label="`第 ${index + 1} 条凭据的认证方式`"
+              @update:model-value="emitCredentials"
+            />
+          </div>
           <input
+            v-if="item.auth !== 'gh'"
             v-model="tokenDrafts[item.id]"
             class="input"
             type="password"
@@ -93,11 +102,7 @@
             :aria-label="`第 ${index + 1} 条凭据的 Token`"
             @input="emitTokens"
           />
-          <span v-if="usageOf(item.id)" class="badge accent credential-usage">{{ usageOf(item.id) }}</span>
-        </div>
-        <span v-else class="hint">使用服务器上已登录的 GitHub CLI（gh auth login），不需要填 Token。</span>
-        <div v-if="checkOf(item.id)" class="credential-account">
-          <span :class="['badge', checkTone(checkOf(item.id))]">{{ checkLabel(checkOf(item.id)) }}</span>
+          <span v-else class="hint">使用服务器上已登录的 GitHub CLI（gh auth login），不需要填 Token。</span>
           <span v-if="checkOf(item.id)?.message" class="hint">{{ checkOf(item.id)?.message }}</span>
         </div>
       </li>
@@ -107,7 +112,7 @@
 
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
-import { Plus, Trash2, UserCheck } from "@lucide/vue";
+import { ChevronRight, Plus, Trash2, UserCheck } from "@lucide/vue";
 import AppSelect from "./AppSelect.vue";
 import type { CredentialCheck } from "../api";
 
@@ -163,6 +168,29 @@ const defaultAuthHint = computed(() => {
   }
 });
 
+// 列表默认只显示摘要，点开一行才编辑；新加的凭据直接展开。
+const expanded = ref<Set<string>>(new Set());
+
+function toggle(id: string): void {
+  const next = new Set(expanded.value);
+  if (next.has(id)) next.delete(id);
+  else next.add(id);
+  expanded.value = next;
+}
+
+const defaultMeta = computed(() => {
+  if (props.defaultAuth === "gh") return "服务器 gh CLI";
+  const token = props.defaultClearing ? "保存后清除 Token" : props.defaultToken?.trim() ? "Token 待保存" : props.defaultTokenConfigured ? "Token 已配置" : "未填 Token";
+  return props.defaultAuth === "auto" ? `自动 · ${token}` : token;
+});
+
+function credentialMeta(item: Credential): string {
+  const parts = [item.auth === "gh" ? "服务器 gh CLI" : tokenDrafts.value[item.id]?.trim() ? "Token 待保存" : configured.value.has(item.id) ? "Token 已配置" : "未填 Token"];
+  const usage = usageOf(item.id);
+  if (usage) parts.push(usage);
+  return parts.join(" · ");
+}
+
 const checksByKey = computed(() => new Map((props.checks ?? []).map((check) => [check.key, check])));
 
 function checkOf(key: string): CredentialCheck | undefined {
@@ -186,7 +214,7 @@ function checkTone(check: CredentialCheck | undefined): string {
 function checkLabel(check: CredentialCheck | undefined): string {
   switch (check?.state) {
     case "valid":
-      return `GitHub 账号 · ${check.account}`;
+      return `@${check.account}`;
     case "invalid":
       return "已失效";
     case "unconfigured":
@@ -234,7 +262,9 @@ function newCredentialID(): string {
 }
 
 function addCredential(): void {
-  credentials.value.push({ id: newCredentialID(), name: "", auth: "token" });
+  const id = newCredentialID();
+  credentials.value.push({ id, name: "", auth: "token" });
+  expanded.value = new Set(expanded.value).add(id);
   emitCredentials();
 }
 
@@ -284,66 +314,132 @@ defineExpose({
 </script>
 
 <style scoped>
-.credential-list {
-  display: grid;
-  gap: 8px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.credential-row {
-  display: grid;
-  gap: 6px;
-  padding: 10px 11px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--surface-2);
-}
-
-.credential-row-main {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(140px, 200px) auto;
-  align-items: center;
-  gap: 8px;
-}
-
-.credential-row-secret {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.credential-row-secret .input {
-  flex: 1;
-  min-width: 0;
-}
-
-.credential-title {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-}
-
-.credential-action-spacer {
-  width: 30px;
-}
-
-.credential-account {
+.credential-toolbar {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 6px 8px;
+  justify-content: space-between;
+  gap: 8px;
 }
 
-.credential-usage {
+.credential-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.credential-item + .credential-item {
+  border-top: 1px solid var(--border);
+}
+
+.credential-item.open {
+  background: var(--surface-2);
+}
+
+.credential-summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 4px 8px 4px 0;
+}
+
+.credential-summary-main {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 8px 0 8px 12px;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.credential-chevron {
   flex: 0 0 auto;
+  color: var(--muted);
+  transition: transform 0.15s ease;
+}
+
+.credential-item.open .credential-chevron {
+  transform: rotate(90deg);
+}
+
+.credential-name {
+  flex: 0 1 auto;
+  overflow: hidden;
+  font-weight: 600;
+  font-size: 13.5px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.credential-name.placeholder {
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.credential-meta {
+  flex: 1 1 auto;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12.5px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.credential-account {
+  flex: 0 1 auto;
+  max-width: 40%;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.credential-action-spacer {
+  flex: 0 0 30px;
+}
+
+.credential-body {
+  display: grid;
+  gap: 8px;
+  padding: 0 12px 12px 34px;
+}
+
+.credential-fields {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 2fr) auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.credential-fields:has(> :nth-child(2):last-child) {
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+}
+
+.credential-fields:has(> :only-child) {
+  grid-template-columns: minmax(0, 1fr);
 }
 
 @media (max-width: 640px) {
-  .credential-row-main {
-    grid-template-columns: minmax(0, 1fr) auto;
+  .credential-meta {
+    display: none;
+  }
+
+  .credential-body {
+    padding-left: 12px;
+  }
+
+  .credential-fields,
+  .credential-fields:has(> :nth-child(2):last-child) {
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 </style>

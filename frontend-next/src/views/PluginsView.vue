@@ -248,8 +248,7 @@
         <div class="plugin-settings-section-head">
           <h3>GitHub 认证</h3>
           <p>
-            每条凭据对应一个 GitHub 账号；默认凭据用于仓库更新检查和 Issue、PR 操作，具体仓库能否操作 Issue 在「仓库管理」中配置。
-            点「检测账号」可以看到每条凭据实际登录的是哪个账号。
+            每条凭据对应一个 GitHub 账号，在「仓库管理」里为仓库选用；点「检测账号」看每条凭据实际登录的是谁。
             <a class="token-create-link" href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noreferrer"><ExternalLink :size="13" aria-hidden="true" />创建 Token</a>
           </p>
         </div>
