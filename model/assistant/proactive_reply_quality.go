@@ -43,7 +43,6 @@ type proactiveReplyQualityDecision struct {
 	// ReplyLoop* 是同一次审核顺带做的空转判断：这一来一回是不是在为没有内容的
 	// 消息反复接茬。它单独占一次模型调用不值得——审核本来就拿着「原消息 + 待发
 	// 回复」这对输入，正是判断空转需要的证据。
-	ReplyLoopAutomatedAI bool
 	ReplyLoopMeaningless bool
 	// ReplyLoopPurposeless 只在回复同一账号回得很密时才判：这一连串来回有没有明确任务。
 	ReplyLoopPurposeless bool
@@ -81,9 +80,8 @@ func (decision proactiveReplyQualityDecision) stopCounts() bool {
 // 总置信度取其中最低的那个。
 func (decision proactiveReplyQualityDecision) loopDecision() botReplyLoopAIDecision {
 	loop := botReplyLoopAIDecision{
-		AutomatedAIReply: decision.ReplyLoopAutomatedAI,
-		Confidence:       decision.ReplyLoopConfidence,
-		Reason:           decision.ReplyLoopReason,
+		Confidence: decision.ReplyLoopConfidence,
+		Reason:     decision.ReplyLoopReason,
 	}
 	confident := false
 	keep := func(flag bool, confidence float64) bool {
@@ -210,14 +208,7 @@ original_text_available=false 或 original_message 为空,只表示本审核没�
 recent_same_sender_messages 或 recent_bot_replies 时才判这一组,没带就三个都填 false。
 这两组近期消息只服务于这一项判断,不得用它们去判事实真伪、准确性或账号安全。
 
-reply_loop_automated_ai —— 对方很可能是另一个 AI 机器人在自动回应。
-- 引用、@、点名机器人或回复很快都只是触发背景,绝不能单独作为 AI 证据。
-- 只用于高置信场景:文本像助手在对上一条逐项回应,带模板化确认、规则复述、
-  持续提供帮助或待命表述,且同一发送者近期多次保持相似的助手人格和应答结构。
-- 真人的简短问答、吐槽、争论、玩梗、角色扮演、口癖、表情、正常连续聊天、
-  手动粘贴一段文字都判 false。文字通顺、很长、使用「喵」或「收到」本身不是证据。
-
-reply_loop_meaningless —— 对方未必是机器人,但这一来一回已经空转。
+reply_loop_meaningless —— 这一来一回已经空转。
 - 必须同时满足:当前消息没有实质内容(纯附和、纯复读、只有称呼或标点、机械重复
   上一条),候选回复也只是接了句同样没有内容的话,并且两组近期消息显示这个模式
   已经重复了好几轮。
@@ -235,7 +226,7 @@ recent_bot_replies、当前消息和候选回复整体判断,不要只看这一�
 - 没有目的才判 true:漫无目的地互相接戏、把一个故事无限续写下去、互相吹捧、斗嘴、
   调侃来调侃去、反复寒暄、复读或换个说法重复、每条都只是在接对方上一句而没有要完成的事。
 - 内容丰富、文笔好、剧情有新发展,都不等于有目的。对方是不是 AI 不影响这一项。
-- 拿不准一律 false。这一项判成 true 会让机器人降低回复这个账号的意愿,并计入空转次数。
+- 拿不准一律 false。这一项判成 true 会计入空转次数,累计够了暂停响应这个账号。
 
 reply_loop_self_repeat —— 候选回复是不是把 recent_bot_replies 里已经说过的话又说了
 一遍。只在带了 recent_bot_replies 时判,没带就填 false。只看机器人自己这几条,不看
@@ -246,7 +237,7 @@ reply_loop_self_repeat —— 候选回复是不是把 recent_bot_replies 里已
 - false:候选在同一话题下给出了前面没有的信息、步骤、数字、结论或新的提议,哪怕用词
   高度重合也是 false——连续回答同一个技术问题、逐条讲解、补充细节都是 false。只说过
   一两次同类的话也不算,要明显在原地打转才判 true。
-- 拿不准一律 false。这一项判成 true 会计入空转次数并降低回复这个账号的意愿。
+- 拿不准一律 false。这一项判成 true 会丢掉这条回复,对方是机器人时还计入空转次数。
 
 最后再单独判断一项收尾。只有请求里带了 closing_check=true 时才判这一项,
 没带就两项都填 false、closing_confidence 填 0。这一项只看当前这一来一回,
@@ -274,7 +265,7 @@ stop_requested —— 对方明确要求你不要再回。
 // parseProactiveReplyQualityDecision 按这些字段名解析，运行时按其中的阈值和类别
 // 决定拦不拦，所以锁定不给改。
 const proactiveReplyQualityContract = "\n\n" + `只输出一个合法 JSON 对象,不要输出 Markdown 或额外文字:
-{"send_confidence":0.96,"accuracy_issue":"none","reason":"","account_safe":0.98,"account_risk":"","account_risk_reason":"","count_refusal":false,"refusal_confidence":0.98,"refusal_reason":"","reply_loop_automated_ai":false,"reply_loop_meaningless":false,"reply_loop_purposeless":false,"reply_loop_self_repeat":false,"reply_loop_confidence":0.95,"reply_loop_reason":"","conversation_closing":false,"stop_requested":false,"closing_confidence":0.95,"closing_reason":""}
+{"send_confidence":0.96,"accuracy_issue":"none","reason":"","account_safe":0.98,"account_risk":"","account_risk_reason":"","count_refusal":false,"refusal_confidence":0.98,"refusal_reason":"","reply_loop_meaningless":false,"reply_loop_purposeless":false,"reply_loop_self_repeat":false,"reply_loop_confidence":0.95,"reply_loop_reason":"","conversation_closing":false,"stop_requested":false,"closing_confidence":0.95,"closing_reason":""}
 
 理由只写发现的问题:某一项没有发现问题时,对应的 reason、account_risk_reason、refusal_reason、
 reply_loop_reason、closing_reason 一律填空字符串,不要写「未发现问题」「正常回答」这类说明。
@@ -293,9 +284,7 @@ account_risk_reason 必须单独写清候选回复中触发账号风险的具体
 reply_loop_confidence 必须是 0 到 1 的数字;三项空转都为 false 时,它表示你对
 「这是正常对话」的把握。reply_loop_reason 只解释空转判断。
 closing_confidence 必须是 0 到 1 的数字;两项收尾都为 false 时,它表示你对
-「这次对话还在继续」的把握。closing_reason 只解释收尾判断。
-sender_marked_as_bot=true 表示管理员在某个群里手动把这个账号标成了机器人。
-它只是判 reply_loop_automated_ai 时的一份佐证,不能单独成立,也不影响其他任何一项。`
+「这次对话还在继续」的把握。closing_reason 只解释收尾判断。`
 
 func replyControlIntentFromAudit(decision proactiveReplyQualityDecision) replyControlIntent {
 	return replyControlIntent{RefuseCurrent: decision.CountRefusal && decision.RefusalConfidence >= replyRefusalAuditConfidence}
@@ -465,11 +454,6 @@ func (r *Runtime) runReplyAudit(ctx context.Context, event MessageEvent, input, 
 	if len(evidence.RecentBotReplies) > 0 {
 		fields["recent_bot_replies"] = evidence.RecentBotReplies
 	}
-	// 标记证据只在判空转时才带：不判这一项时多一个字段，只会让审核器拿它去
-	// 影响别的判断。
-	if need.Loop && need.MarkedBot {
-		fields["sender_marked_as_bot"] = true
-	}
 	if need.Loop && need.Density != nil {
 		fields["exchange_density"] = need.Density
 	}
@@ -556,10 +540,12 @@ type replyAuditNeed struct {
 	// 顺带判一下是不是在叫停。判出来只记本群的静默窗口，这条回复照发。它只搭其它
 	// 几项的车，自己不触发审核。
 	GroupStop bool
-	// MarkedBot 表示这个账号被管理员在某个群里标记成了机器人。它只作为空转
-	// 判断的佐证进入审核载荷。
+	// MarkedBot 表示这个账号被管理员在某个群里标记成了机器人。只有这类账号会被问
+	// 「有没有目的」，复读自己也只对它们计数。
 	MarkedBot bool
-	// Density 表示机器人回这个账号回得很密，要额外判这一串来回有没有明确目的。
+	// Density 表示机器人回这个账号回得很密、对方又被标记为机器人，要额外判这一串来回
+	// 有没有明确目的。其他账号不问：斗嘴、调侃来调侃去在群聊里再正常不过，线上被这一项
+	// 暂停的真人就是这么来的。
 	Density   *replyDensity
 	candidate botReplyLoopCandidate
 }
@@ -593,8 +579,10 @@ func (r *Runtime) replyAuditNeed(event MessageEvent, input string, cfg BotConfig
 	if need.Loop {
 		need.LoopSuppress = nonOwner
 		need.MarkedBot = r.accountMarkedAsBot(event)
-		if density, dense := r.replyDensityForAudit(event, time.Now()); dense {
-			need.Density = &density
+		if need.MarkedBot {
+			if density, dense := r.replyDensityForAudit(event, time.Now()); dense {
+				need.Density = &density
+			}
 		}
 	}
 	return need
@@ -684,16 +672,6 @@ func (r *Runtime) applyReplyAudit(ctx context.Context, event MessageEvent, cfg B
 		if need.Density == nil {
 			// 没把密度证据递上去就没问过目的，模型就算填了也不作数。
 			decision.ReplyLoopPurposeless = false
-			// 「没内容」不用等密度：这一来一回本身已经在空转，密度只决定它转得多快。
-			// 但这里只开降欲望、不解除——没问过目的，就没有「有目的」这个结论可以
-			// 拿来解除，一条普通回复不该把刚判出来的空转一笔勾销。
-			if loop := decision.loopDecision(); loop.damps() {
-				r.markReplyPurpose(event, true, replyDampingCause(loop), time.Now())
-			}
-		} else {
-			// 没内容和没目的都开始降欲望。问过了就按结论记，判到有目的当场解除。
-			loop := decision.loopDecision()
-			r.markReplyPurpose(event, loop.damps(), replyDampingCause(loop), time.Now())
 		}
 		if loopErr := r.applyReplyLoopVerdict(ctx, event, need.candidate, decision, need.LoopSuppress); loopErr != nil {
 			return intent, loopErr
@@ -745,8 +723,10 @@ func replyAuditHasStillImageSegment(segments []MessageSegment) bool {
 func (r *Runtime) applyReplyLoopVerdict(ctx context.Context, event MessageEvent, candidate botReplyLoopCandidate, decision proactiveReplyQualityDecision, suppress bool) error {
 	now := time.Now()
 	loop := decision.loopDecision()
-	loop.selfRepeatCounts = loop.AutomatedAIReply || r.accountMarkedAsBot(event)
+	loop.selfRepeatCounts = r.accountMarkedAsBot(event)
 	hitCount, loopReason, detected := r.registerBotReplyLoopDecision(event, candidate, loop, now)
+	// 临时响应屏蔽总开关关着时按「不适用暂停」处理：计数和记录照旧，复读照样只丢这一条。
+	suppress = suppress && replySuppressionEnabled(r.effectiveConfigForEvent(event))
 	r.recordBotReplyLoopClassification(ctx, event, candidate, loop, hitCount, decision.ReplyLoopReason, nil, suppress)
 	if !detected || !suppress {
 		// 还没累计到暂停，但这一条如果只是把自己说过的话又说一遍，就别发了。
@@ -859,7 +839,6 @@ func parseProactiveReplyQualityDecision(raw string) (proactiveReplyQualityDecisi
 		RefusalReason     *string         `json:"refusal_reason"`
 		// 空转三项是后加的，缺省当「没有空转」：升级期间旧提示词生成的回答
 		// 仍然可解，不至于整条审核结论作废。
-		ReplyLoopAutomatedAI *bool    `json:"reply_loop_automated_ai"`
 		ReplyLoopMeaningless *bool    `json:"reply_loop_meaningless"`
 		ReplyLoopPurposeless *bool    `json:"reply_loop_purposeless"`
 		ReplyLoopSelfRepeat  *bool    `json:"reply_loop_self_repeat"`
@@ -907,7 +886,6 @@ func parseProactiveReplyQualityDecision(raw string) (proactiveReplyQualityDecisi
 	if payload.RefusalReason != nil {
 		decision.RefusalReason = strings.TrimSpace(*payload.RefusalReason)
 	}
-	decision.ReplyLoopAutomatedAI = payload.ReplyLoopAutomatedAI != nil && *payload.ReplyLoopAutomatedAI
 	decision.ReplyLoopMeaningless = payload.ReplyLoopMeaningless != nil && *payload.ReplyLoopMeaningless
 	decision.ReplyLoopPurposeless = payload.ReplyLoopPurposeless != nil && *payload.ReplyLoopPurposeless
 	decision.ReplyLoopSelfRepeat = payload.ReplyLoopSelfRepeat != nil && *payload.ReplyLoopSelfRepeat

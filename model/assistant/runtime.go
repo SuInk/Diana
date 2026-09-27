@@ -294,7 +294,7 @@ func DescribeEventOutcome(outcome string) (decision string, reason string, handl
 	case "ignored_self_repeat":
 		return "not_replied", "发送前审核认定这条回复只是把机器人自己刚说过的话换个说法又说一遍，没有发送；只跳过这一条，对方下一条带来新内容时照常回答", false
 	case "ignored_ai_reply_loop":
-		return "not_replied", "发送前审核认定这一来一回已在空转（对方是自动回复，或双方都只在应付没有内容），为避免继续接茬而没有发送", false
+		return "not_replied", "发送前审核认定这一来一回已在空转（双方都只在应付没有内容，或和被标记的机器人没有目的地来回），为避免继续接茬而没有发送", false
 	case "ignored_no_natural_reply":
 		return "not_replied", "自然插话的最终生成没有得到有效回复，已保持静默", false
 	case "ignored_proactive_reply_quality":
@@ -302,6 +302,7 @@ func DescribeEventOutcome(outcome string) (decision string, reason string, handl
 	case "ignored_video":
 		return "not_replied", "消息只有视频内容，当前没有可直接回答的文字或图片请求", false
 	case "ignored_reply_damping":
+		// 回复欲望衰减已删除，只为还能读懂历史事件。
 		return "not_replied", "近期回复该账号过于频繁，已降低回复欲望，这条不再回复", false
 	case "merged_into_backlog_turn":
 		return "not_replied", "消息在队列里积压，已补入上下文历史，交给同会话后面的消息合并成一轮回复", false
@@ -558,7 +559,7 @@ type Runtime struct {
 	replyRefusalMu      sync.Mutex
 	replyRefusalByUser  map[string]replyRefusalState
 	botReplyLoopMu      sync.Mutex
-	replyDamping        replyDamping
+	replyDensity        replyDensityTracker
 	botReplyLoopByKey   map[string]botReplyLoopState
 	// privateClosingBySession 记录每个私聊会话已经互相道别了几轮。只在内存里：
 	// 重启后重新给足宽限次数，方向上偏「多答一句」而不是「误闭嘴」。
@@ -1948,11 +1949,6 @@ func (r *Runtime) routeMessageEvent(ctx context.Context, event MessageEvent) (Me
 		return finishWithoutReply("ignored_video")
 	}
 	if r.requiresTelegramBotMentionJudgment(event) {
-		if reason, skip := r.replyDampingSkipsUnnamed(event, text, now); skip {
-			event.routingReason = reason
-			r.record(r.decisionEventRecord(event, text, "ignored_reply_damping"))
-			return finishWithoutReply("ignored_reply_damping")
-		}
 		if !r.markedBotMessageAddressesSelf(ctx, event, text) {
 			event.routingReason = "发送者已识别或手动标记为机器人，未确认在向本机接话，已自动抑制"
 			r.record(r.decisionEventRecord(event, text, "ignored_bot_message"))
@@ -1979,10 +1975,6 @@ func (r *Runtime) routeMessageEvent(ctx context.Context, event MessageEvent) (Me
 	considerProactive, proactiveSkipReason := false, ""
 	if !handled {
 		considerProactive, proactiveSkipReason = r.proactiveReplyConsideration(event, text)
-		// 已经回这个账号回得很密了，主动接话直接放掉，连路由模型也不必调。
-		if verdict := r.replyDampingJudge(event, text, true, time.Now()); considerProactive && verdict.Skip {
-			considerProactive, proactiveSkipReason = false, verdict.Reason
-		}
 		// 回复抽样同样挡在路由模型之前：没抽中的消息一次模型调用都不花。
 		if considerProactive {
 			if reason, skip := r.groupReplySampleSkips(event); skip {
@@ -2048,15 +2040,6 @@ func (r *Runtime) routeMessageEvent(ctx context.Context, event MessageEvent) (Me
 		}
 		r.record(r.decisionEventRecord(event, text, ignoredOutcome))
 		return finishWithoutReply(ignoredOutcome)
-	}
-	// 回复对象定下来之后再按回复密度过一遍：路由挑中的、积压合并换过来的都要算在内。
-	// 只管聊天回复，链接解析和插件指令不受影响。
-	if successOutcome == "replied_proactive" || r.shouldHandleChat(event, text) || explicitlyRepliesToBot(event, r.effectiveConfigForEvent(event)) {
-		if verdict := r.replyDampingJudge(event, text, successOutcome == "replied_proactive", time.Now()); verdict.Skip {
-			event.routingReason = verdict.Reason
-			r.record(r.decisionEventRecord(event, text, "ignored_reply_damping"))
-			return finishWithoutReply("ignored_reply_damping")
-		}
 	}
 	return event, text, true, successOutcome
 }

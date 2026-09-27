@@ -5164,7 +5164,7 @@ func cloneGenerateRequestForTest(req llm.GenerateRequest) llm.GenerateRequest {
 }
 
 // testReplyAuditPass 是发送前审核的默认放行结论，各 provider 共用。
-const testReplyAuditPass = `{"send_confidence":0.99,"reason":"测试回复通过准确度审核","account_safe":true,"count_refusal":false,"reply_loop_automated_ai":false,"reply_loop_meaningless":false,"reply_loop_confidence":0.99,"reply_loop_reason":"正常对话"}`
+const testReplyAuditPass = `{"send_confidence":0.99,"reason":"测试回复通过准确度审核","account_safe":true,"count_refusal":false,"reply_loop_meaningless":false,"reply_loop_confidence":0.99,"reply_loop_reason":"正常对话"}`
 
 // isReplyAuditRequest 判断这是不是发送前审核的调用。
 func isReplyAuditRequest(req llm.GenerateRequest) bool {

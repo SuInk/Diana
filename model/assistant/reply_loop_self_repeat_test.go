@@ -10,7 +10,7 @@ import (
 )
 
 func selfRepeatVerdict(selfRepeat bool, confidence float64, reason string) string {
-	return fmt.Sprintf(`{"send_confidence":0.9,"account_safe":true,"count_refusal":false,"reply_loop_automated_ai":false,"reply_loop_meaningless":false,"reply_loop_purposeless":false,"reply_loop_self_repeat":%v,"reply_loop_confidence":%.2f,"reply_loop_reason":%q}`, selfRepeat, confidence, reason)
+	return fmt.Sprintf(`{"send_confidence":0.9,"account_safe":true,"count_refusal":false,"reply_loop_meaningless":false,"reply_loop_purposeless":false,"reply_loop_self_repeat":%v,"reply_loop_confidence":%.2f,"reply_loop_reason":%q}`, selfRepeat, confidence, reason)
 }
 
 // 复读自己单独成立：对方的话像真人、每条都有内容、密度也不异常，另外三项全落空，
@@ -26,9 +26,6 @@ func TestSelfRepeatCountsOnItsOwn(t *testing.T) {
 		{"self_repeat_toward_human", botReplyLoopAIDecision{SelfRepeat: true, Confidence: 0.95}, false},
 		{"self_repeat_low_confidence", botReplyLoopAIDecision{SelfRepeat: true, Confidence: 0.75, selfRepeatCounts: true}, false},
 		{"nothing_flagged", botReplyLoopAIDecision{Confidence: 0.99}, false},
-		// 对方是 AI 依旧只记录不计数：两台 AI 正经下棋不该被停。
-		{"automated_ai_alone", botReplyLoopAIDecision{AutomatedAIReply: true, Confidence: 0.99, selfRepeatCounts: true}, false},
-		{"ai_and_self_repeat", botReplyLoopAIDecision{AutomatedAIReply: true, SelfRepeat: true, Confidence: 0.95, selfRepeatCounts: true}, true},
 		// 没内容、没目的说的是整串来回，对真人照样计数。
 		{"purposeless_toward_human", botReplyLoopAIDecision{PurposelessLoop: true, Confidence: 0.95}, true},
 	} {
@@ -40,15 +37,14 @@ func TestSelfRepeatCountsOnItsOwn(t *testing.T) {
 	}
 }
 
-// 复读自己只丢当前这条：不发这一句，但不牵连这个账号后面的消息——降欲望是按账号
-// 收口的，开了以后对方不点名就说不上话，新内容会跟着被连坐。
+// 复读自己只丢当前这条：不发这一句，但不牵连这个账号后面的消息。
 func TestSelfRepeatDropsOnlyThisReply(t *testing.T) {
 	provider := &sequenceLLMProvider{auditReplies: []string{
 		selfRepeatVerdict(true, 0.95, "同一句晚安换了措辞又说一遍，没有推进"),
 	}}
-	r := dampingTestRuntime(BotConfig{}, provider)
+	r := densityTestRuntime(BotConfig{}, provider)
 	now := time.Now()
-	recordDampingSends(r, replyDampingDenseLimit-1, now.Add(-time.Minute))
+	recordDenseSends(r, replyDensityDenseLimit-1, now.Add(-time.Minute))
 	event := botReplyLoopEvent(r, "again", "20002", 0, now.Add(-30*time.Second), 10*time.Second, "Diana 晚安宝宝喵")
 	_, err := r.auditReplyBeforeSend(context.Background(), event, "Diana 晚安宝宝喵", "嗯呐，满格那页见，睡吧喵。", r.effectiveConfigForEvent(event), false)
 	if !errors.Is(err, errReplySelfRepeatDropped) {
@@ -56,27 +52,6 @@ func TestSelfRepeatDropsOnlyThisReply(t *testing.T) {
 	}
 	if payload := requestTextContent(provider.requestsSnapshot()[0]); strings.Contains(payload, `"exchange_density":`) {
 		t.Fatalf("这一轮本来就不该带密度：%s", payload)
-	}
-	// 关键：没有开降欲望，对方下一条照常走到生成。
-	if verdict := r.replyDampingJudge(dampingTestEvent("u", "接着说"), "接着说", false, now); verdict.Skip {
-		t.Fatalf("复读只丢一条，不该把后面的消息一起挡掉：%+v", verdict)
-	}
-}
-
-// 「没内容」仍然开降欲望：它说的是这一整串来回的状态，按账号收口说得通。
-func TestMeaninglessStillDamps(t *testing.T) {
-	provider := &sequenceLLMProvider{auditReplies: []string{
-		meaninglessAuditVerdict(true, "纯附和，已经重复好几轮"),
-	}}
-	r := dampingTestRuntime(BotConfig{}, provider)
-	now := time.Now()
-	recordDampingSends(r, replyDampingDenseLimit-1, now.Add(-time.Minute))
-	event := botReplyLoopEvent(r, "empty", "20002", 0, now.Add(-30*time.Second), 10*time.Second, "Diana 嗯")
-	if _, err := r.auditReplyBeforeSend(context.Background(), event, "Diana 嗯", "嗯呐", r.effectiveConfigForEvent(event), false); err != nil {
-		t.Fatal(err)
-	}
-	if verdict := r.replyDampingJudge(dampingTestEvent("u", "接着说"), "接着说", false, now); !verdict.Skip {
-		t.Fatalf("判到没内容仍然要降欲望：%+v", verdict)
 	}
 }
 
@@ -105,63 +80,6 @@ func TestSelfRepeatDefaultsFalseOnLegacyPayload(t *testing.T) {
 	}
 	if decision.ReplyLoopSelfRepeat {
 		t.Fatal("缺字段时应当按 false 处理")
-	}
-}
-
-// 停下来时写进事件的理由要说清是哪一种空转：复读自己被写成「没有明确目的」，
-// 会让下一个排查的人照着错的方向找——这次的根因就是被 trigger_kind 误导浪费的。
-func TestReplyDampingReasonNamesTheActualCause(t *testing.T) {
-	for _, tc := range []struct {
-		name     string
-		decision botReplyLoopAIDecision
-		want     string
-	}{
-		{"meaningless", botReplyLoopAIDecision{MeaninglessLoop: true}, replyDampingCauseMeaningless},
-		{"purposeless", botReplyLoopAIDecision{PurposelessLoop: true}, replyDampingCausePurposeless},
-		// 同时命中时挑更具体的那个。
-		{"meaningless_beats_purposeless", botReplyLoopAIDecision{MeaninglessLoop: true, PurposelessLoop: true}, replyDampingCauseMeaningless},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := replyDampingCause(tc.decision); got != tc.want {
-				t.Fatalf("理由 = %q，want %q", got, tc.want)
-			}
-		})
-	}
-
-	provider := &sequenceLLMProvider{auditReplies: []string{meaninglessAuditVerdict(true, "纯附和，已经重复好几轮")}}
-	r := dampingTestRuntime(BotConfig{}, provider)
-	now := time.Now()
-	recordDampingSends(r, replyDampingDenseLimit-1, now.Add(-time.Minute))
-	event := botReplyLoopEvent(r, "empty", "20002", 0, now.Add(-30*time.Second), 10*time.Second, "Diana 嗯")
-	if _, err := r.auditReplyBeforeSend(context.Background(), event, "Diana 嗯", "嗯呐", r.effectiveConfigForEvent(event), false); err != nil {
-		t.Fatal(err)
-	}
-	verdict := r.replyDampingJudge(dampingTestEvent("u", "接着说"), "接着说", false, now)
-	if !verdict.Skip {
-		t.Fatalf("应当放掉：%+v", verdict)
-	}
-	if !strings.Contains(verdict.Reason, replyDampingCauseMeaningless) {
-		t.Fatalf("理由该说是没有实质内容，实际是：%s", verdict.Reason)
-	}
-}
-
-// 降欲望按判定时间到期，不随对方继续发消息而续期。曾经改成「每放掉一条就续上」，
-// 结果是这个账号只要不点名就永远说不上话，新内容跟着被连坐；真正要一直挡住的复读
-// 现在逐条判、逐条丢，不靠这一层兜。
-func TestReplyDampingExpiresOnItsOwnSchedule(t *testing.T) {
-	r := dampingTestRuntime(BotConfig{}, nil)
-	start := time.Now()
-	recordDampingSends(r, replyDampingDenseLimit, start)
-	r.markReplyPurpose(dampingTestEvent("mark", "x"), true, replyDampingCauseMeaningless, start)
-
-	within := start.Add(replyDampingPurposelessRetention / 2)
-	if verdict := r.replyDampingJudge(dampingTestEvent("mid", "接着说"), "接着说", false, within); !verdict.Skip {
-		t.Fatalf("保留期内应当放掉：%+v", verdict)
-	}
-	// 对方一直在说也不续期：到点就解除。
-	after := start.Add(replyDampingPurposelessRetention + time.Minute)
-	if verdict := r.replyDampingJudge(dampingTestEvent("late", "接着说"), "接着说", false, after); verdict.Skip {
-		t.Fatalf("保留期过了就该解除：%+v", verdict)
 	}
 }
 
@@ -198,7 +116,7 @@ func TestSelfRepeatYieldsToConfirmedNewContent(t *testing.T) {
 		provider := &sequenceLLMProvider{auditReplies: []string{
 			selfRepeatVerdict(true, 0.95, "又说了一遍拿不到链接"),
 		}}
-		r := dampingTestRuntime(BotConfig{}, provider)
+		r := densityTestRuntime(BotConfig{}, provider)
 		now := time.Now()
 		event := botReplyLoopEvent(r, "again", "20002", 0, now.Add(-30*time.Second), 10*time.Second, "Diana 你把url给我就行")
 		cfg := r.effectiveConfigForEvent(event)
@@ -254,13 +172,13 @@ func TestSelfRepeatSuppressesOnlyBots(t *testing.T) {
 		{"marked_bot", []string{"20002"}, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			r := dampingTestRuntime(BotConfig{MarkedBotIDs: tc.marked}, nil)
+			r := densityTestRuntime(BotConfig{MarkedBotIDs: tc.marked}, nil)
 			now := time.Now()
 			var last MessageEvent
-			for i := 0; i < botReplyLoopThreshold; i++ {
-				last = botReplyLoopEvent(r, tc.name, "20002", i, now.Add(time.Duration(i-botReplyLoopThreshold)*time.Minute), 10*time.Second, "晚安")
+			for i := 0; i < defaultBotReplyLoopThreshold; i++ {
+				last = botReplyLoopEvent(r, tc.name, "20002", i, now.Add(time.Duration(i-defaultBotReplyLoopThreshold)*time.Minute), 10*time.Second, "晚安")
 				err := r.applyReplyLoopVerdict(context.Background(), last, botReplyLoopCandidate{TriggerKind: "quote"}, selfRepeat, true)
-				if tc.wantPaused && i == botReplyLoopThreshold-1 {
+				if tc.wantPaused && i == defaultBotReplyLoopThreshold-1 {
 					if !errors.Is(err, errReplyLoopDetected) {
 						t.Fatalf("第 %d 次复读应当触发暂停，err=%v", i+1, err)
 					}

@@ -16,17 +16,16 @@ func TestReplyAuditDecisionSpecRoundTrips(t *testing.T) {
 	spec := replyAuditDecisionSpec(replyAuditNeed{Quality: true, AccountSafety: true, Loop: true, Closing: true, Density: &replyDensity{}})
 	answers := map[string]llm.DecisionAnswer{
 		// Score 是档位下标（0 起），不是最终分值：这里选最高档。
-		"send_confidence":         {Kind: llm.DecisionScore, Score: 2, Confidence: 0.9},
-		"accuracy_issue":          {Kind: llm.DecisionChoice, Choice: "wording", Confidence: 0.8},
-		"account_safe":            {Kind: llm.DecisionScore, Score: 0, Confidence: 0.9},
-		"account_risk":            {Kind: llm.DecisionChoice, Choice: "politics", Confidence: 0.91},
-		"count_refusal":           {Kind: llm.DecisionNoul, Noul: 0.93},
-		"reply_loop_meaningless":  {Kind: llm.DecisionNoul, Noul: 0.88},
-		"reply_loop_automated_ai": {Kind: llm.DecisionNoul, Noul: 0.12},
-		"reply_loop_self_repeat":  {Kind: llm.DecisionNoul, Noul: 0.20},
-		"reply_loop_purposeless":  {Kind: llm.DecisionNoul, Noul: 0.77},
-		"conversation_closing":    {Kind: llm.DecisionNoul, Noul: 0.95},
-		"stop_requested":          {Kind: llm.DecisionNoul, Noul: 0.10},
+		"send_confidence":        {Kind: llm.DecisionScore, Score: 2, Confidence: 0.9},
+		"accuracy_issue":         {Kind: llm.DecisionChoice, Choice: "wording", Confidence: 0.8},
+		"account_safe":           {Kind: llm.DecisionScore, Score: 0, Confidence: 0.9},
+		"account_risk":           {Kind: llm.DecisionChoice, Choice: "politics", Confidence: 0.91},
+		"count_refusal":          {Kind: llm.DecisionNoul, Noul: 0.93},
+		"reply_loop_meaningless": {Kind: llm.DecisionNoul, Noul: 0.88},
+		"reply_loop_self_repeat": {Kind: llm.DecisionNoul, Noul: 0.20},
+		"reply_loop_purposeless": {Kind: llm.DecisionNoul, Noul: 0.77},
+		"conversation_closing":   {Kind: llm.DecisionNoul, Noul: 0.95},
+		"stop_requested":         {Kind: llm.DecisionNoul, Noul: 0.10},
 	}
 	rendered, err := spec.RenderDecisionAnswers(answers)
 	if err != nil {
@@ -45,7 +44,7 @@ func TestReplyAuditDecisionSpecRoundTrips(t *testing.T) {
 	if !decision.CountRefusal || decision.RefusalConfidence < 0.9 {
 		t.Fatalf("拒答没对上：%#v", decision)
 	}
-	if !decision.ReplyLoopMeaningless || decision.ReplyLoopAutomatedAI || !decision.ReplyLoopPurposeless {
+	if !decision.ReplyLoopMeaningless || !decision.ReplyLoopPurposeless {
 		t.Fatalf("空转没对上：%#v", decision)
 	}
 	if !decision.ConversationClosing || decision.StopRequested {
@@ -105,11 +104,10 @@ func TestReplyAuditSelfRepeatUsesItsOwnConfidence(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			rendered, err := spec.RenderDecisionAnswers(map[string]llm.DecisionAnswer{
-				"send_confidence":         {Kind: llm.DecisionScore, Score: 2, Confidence: 0.9},
-				"reply_loop_meaningless":  {Kind: llm.DecisionNoul, Noul: 0.06},
-				"reply_loop_automated_ai": {Kind: llm.DecisionNoul, Noul: 0.05},
-				"reply_loop_self_repeat":  {Kind: llm.DecisionNoul, Noul: tc.selfRepeat},
-				"reply_loop_purposeless":  {Kind: llm.DecisionNoul, Noul: tc.purpose},
+				"send_confidence":        {Kind: llm.DecisionScore, Score: 2, Confidence: 0.9},
+				"reply_loop_meaningless": {Kind: llm.DecisionNoul, Noul: 0.06},
+				"reply_loop_self_repeat": {Kind: llm.DecisionNoul, Noul: tc.selfRepeat},
+				"reply_loop_purposeless": {Kind: llm.DecisionNoul, Noul: tc.purpose},
 			})
 			if err != nil {
 				t.Fatalf("渲染失败：%v", err)

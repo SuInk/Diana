@@ -22,13 +22,9 @@ const (
 	// 暂停时长在这个区间里随机取，不再固定三十分钟：固定值等于给对方一个精确的
 	// 时刻表，而且每次都一样的「恰好三十分钟」本身就很像机器。
 	replySuppressionNoticeTimeout     = 60 * time.Second
-	replySuppressionMinDuration       = 10 * time.Minute
-	replySuppressionMaxDuration       = 30 * time.Minute
 	replySuppressionMarker            = "[[DIANA_IGNORE_CURRENT_USER_30M]]"
 	replyRefusalMarker                = "[[DIANA_REFUSE_CURRENT]]"
-	replyRefusalThreshold             = 4
 	replyRefusalWindow                = 30 * time.Minute
-	botReplyLoopThreshold             = 3
 	botReplyLoopWindow                = 30 * time.Minute
 	botReplyLoopAIConfidenceThreshold = 0.90
 	botReplyLoopClassificationTimeout = 20 * time.Second
@@ -101,9 +97,7 @@ type botReplyLoopCandidate struct {
 }
 
 type botReplyLoopAIDecision struct {
-	AutomatedAIReply bool `json:"automated_ai_reply"`
-	// MeaninglessLoop 覆盖「对方不是机器人，但这一来一回已经没有任何实质内容」
-	// 的情况：双方都只在应付彼此，机器人却还在一条条认真回。判据见分类器提示词。
+	// MeaninglessLoop 覆盖「这一来一回已经没有任何实质内容」的情况：双方都只在应付彼此，机器人却还在一条条认真回。判据见分类器提示词。
 	MeaninglessLoop bool `json:"meaningless_loop"`
 	// PurposelessLoop 是「回得很密、而且这一连串来回没有明确任务」：漫无目的地互相接戏、
 	// 续剧情、斗嘴。下棋报步、解题、一起做事且在推进的不算。
@@ -122,7 +116,7 @@ type botReplyLoopAIDecision struct {
 	Confidence float64 `json:"confidence"`
 	Reason     string  `json:"reason"`
 	// selfRepeatCounts 决定「在复读自己」算不算一次空转、要不要累计到暂停对方。
-	// 只有对方是机器人（被管理员标记，或这次判为自动应答）时才算：互道晚安七遍的
+	// 只有对方被管理员标记为机器人时才算：互道晚安七遍的
 	// 那种循环，暂停的是另一台机器人。对方是真人时，复读是机器人自己的毛病，只丢
 	// 这一条回复（selfRepeatDropsReply），不该连坐对方——线上被记过的真人里，大多
 	// 是正常追问时机器人答得有点重复。
@@ -130,8 +124,11 @@ type botReplyLoopAIDecision struct {
 }
 
 // counts 决定这次结论算不算一次空转。只有「没内容」「没目的」或（对方是机器人时）
-// 「在复读自己」才算：对方是不是 AI 只记录不计数——两台 AI 正经下棋、做题，不该因为
-// 对面是 AI 就被停掉。
+// 「在复读自己」才算。「没目的」只在对方被标记为机器人时才会问（见 replyAuditNeed），所以
+// 实际上也只对机器人计数。
+//
+// 以前还让审核判「对方是不是自动应答的 AI」，只记录不计数；线上 7 天一次都没判出来，
+// 连刷了上百条晚安的那台 AI 也没有，已经删掉。认机器人只看管理员标记。
 func (decision botReplyLoopAIDecision) counts() bool {
 	if !decision.MeaninglessLoop && !decision.PurposelessLoop && !(decision.SelfRepeat && decision.selfRepeatCounts) {
 		return false
@@ -139,35 +136,15 @@ func (decision botReplyLoopAIDecision) counts() bool {
 	return decision.confident()
 }
 
-// damps 决定这次结论要不要进降欲望。降欲望是按账号的：开了以后这个人后面没点名的
-// 消息一律不接，直到保留期过去。「没内容」和「没目的」说的是这一整串来回的状态，
-// 按账号收口说得通；「在复读自己」说的只是候选回复这一条——下一条要是带来了新东西，
-// 本来就该照常回答，不该被前一条的结论连坐。所以复读只丢当前这条（见
-// selfRepeatDropsReply），不进这一层。
-func (decision botReplyLoopAIDecision) damps() bool {
-	if !decision.MeaninglessLoop && !decision.PurposelessLoop {
-		return false
-	}
-	return decision.confident()
-}
-
 // selfRepeatDropsReply 报告这条候选回复是不是该就地丢掉：判到复读自己就不发这一条，
-// 不牵连这个账号后面的消息。
+// 不牵连这个账号后面的消息——「在复读自己」说的只是候选回复这一条，下一条要是带来
+// 了新东西，本来就该照常回答。
 func (decision botReplyLoopAIDecision) selfRepeatDropsReply() bool {
 	return decision.SelfRepeat && decision.confident()
 }
 
 func (decision botReplyLoopAIDecision) confident() bool {
 	return decision.Confidence >= botReplyLoopAIConfidenceThreshold && decision.Confidence <= 1
-}
-
-// replyDampingCause 把这次空转结论翻译成写进事件理由的那句话。复读自己不在其中：
-// 它只丢当前这条回复，不开降欲望，见 botReplyLoopAIDecision.damps。
-func replyDampingCause(decision botReplyLoopAIDecision) string {
-	if decision.MeaninglessLoop {
-		return replyDampingCauseMeaningless
-	}
-	return replyDampingCausePurposeless
 }
 
 type botReplyLoopClassificationPayload struct {
@@ -331,20 +308,50 @@ func (r *Runtime) activateReplySuppressionWithinOutboundGate(event MessageEvent,
 	return item, true
 }
 
-// randomReplySuppressionDuration 在 [replySuppressionMinDuration, replySuppressionMaxDuration]
-// 里取一个随机时长。用 math/rand 就够：这不是安全边界，只是不想每次都停一样久。
-func randomReplySuppressionDuration() time.Duration {
-	spread := replySuppressionMaxDuration - replySuppressionMinDuration
-	if spread <= 0 {
-		return replySuppressionMinDuration
+// replySuppressionEnabled 是临时响应屏蔽的总开关，默认开。
+func replySuppressionEnabled(cfg BotConfig) bool {
+	return boolValue(cfg.ReplySuppressionEnabled, true)
+}
+
+// 下面几项 0 表示没配过，用默认值；超出范围的钳回范围内。
+func replySuppressionMinMinutes(cfg BotConfig) int {
+	return optionalIntOrDefault(cfg.ReplySuppressionMinMinutes, defaultReplySuppressionMinMinutes, maxReplySuppressionMinutes)
+}
+
+func replySuppressionMaxMinutes(cfg BotConfig) int {
+	return max(replySuppressionMinMinutes(cfg), optionalIntOrDefault(cfg.ReplySuppressionMaxMinutes, defaultReplySuppressionMaxMinutes, maxReplySuppressionMinutes))
+}
+
+func botReplyLoopThreshold(cfg BotConfig) int {
+	return optionalIntOrDefault(cfg.BotReplyLoopThreshold, defaultBotReplyLoopThreshold, maxReplySuppressionThreshold)
+}
+
+func replyRefusalThreshold(cfg BotConfig) int {
+	return optionalIntOrDefault(cfg.ReplyRefusalThreshold, defaultReplyRefusalThreshold, maxReplySuppressionThreshold)
+}
+
+func optionalIntOrDefault(value, fallback, maximum int) int {
+	if value <= 0 {
+		return fallback
 	}
-	return replySuppressionMinDuration + time.Duration(rand.Int63n(int64(spread)+1))
+	return min(value, maximum)
+}
+
+// randomReplySuppressionDuration 在配置的时长范围里取一个随机时长。用 math/rand 就够：
+// 这不是安全边界，只是不想每次都停一样久。
+func randomReplySuppressionDuration(cfg BotConfig) time.Duration {
+	minimum := time.Duration(replySuppressionMinMinutes(cfg)) * time.Minute
+	spread := time.Duration(replySuppressionMaxMinutes(cfg))*time.Minute - minimum
+	if spread <= 0 {
+		return minimum
+	}
+	return minimum + time.Duration(rand.Int63n(int64(spread)+1))
 }
 
 func (r *Runtime) newReplySuppression(event MessageEvent, reason string, now time.Time) (ReplySuppression, bool) {
 	cfg := r.effectiveConfigForEvent(event)
 	userID := strings.TrimSpace(event.UserID)
-	if userID == "" || cfg.IsOwnerEvent(event) || userID == strings.TrimSpace(cfg.BotAccount) {
+	if userID == "" || cfg.IsOwnerEvent(event) || userID == strings.TrimSpace(cfg.BotAccount) || !replySuppressionEnabled(cfg) {
 		return ReplySuppression{}, false
 	}
 	if now.IsZero() {
@@ -356,7 +363,7 @@ func (r *Runtime) newReplySuppression(event MessageEvent, reason string, now tim
 		TriggerMessageID: strings.TrimSpace(event.MessageID),
 		Reason:           truncateRunesFromStart(strings.TrimSpace(reason), 240),
 		CreatedAt:        now,
-		Until:            now.Add(randomReplySuppressionDuration()),
+		Until:            now.Add(randomReplySuppressionDuration(cfg)),
 	}, true
 }
 
@@ -366,7 +373,8 @@ func (r *Runtime) activeReplySuppression(event MessageEvent, now time.Time) (Rep
 	}
 	cfg := r.effectiveConfigForEvent(event)
 	userID := strings.TrimSpace(event.UserID)
-	if userID == "" || cfg.IsOwnerEvent(event) {
+	// 总开关关着时已有的屏蔽也不拦：管理员关掉它，就是不想再有人被晾着。
+	if userID == "" || cfg.IsOwnerEvent(event) || !replySuppressionEnabled(cfg) {
 		return ReplySuppression{}, false
 	}
 	r.replySuppressMu.Lock()
@@ -438,7 +446,7 @@ func (r *Runtime) botReplyLoopCandidate(event MessageEvent, text string) (botRep
 	// 分支放行的回复永远进不了空转判断——2026-09-20 深夜 20003 群里就是这样：
 	// 另一台机器人和 Diana 互道晚安刷了十几轮，每条评分都是「在跟机器人说话：是」，
 	// 但正文里既没有 @ 也没有名字，bot_reply_loop_classification 从 23:56 起就再没
-	// 跑过一次，回复欲望衰减的密度计数自然也一直是空的。
+	// 跑过一次，回复密度计数自然也一直是空的。
 	directBotFollowup := eventRepliesToBot(event, cfg) || event.routingDirected
 	if strings.TrimSpace(readableEventText(event, text)) == "" || (!directBotFollowup && !r.shouldHandleChat(event, text)) {
 		return botReplyLoopCandidate{}, false
@@ -520,6 +528,7 @@ func reverseStrings(items []string) {
 func (r *Runtime) registerBotReplyLoopDecision(event MessageEvent, candidate botReplyLoopCandidate, decision botReplyLoopAIDecision, now time.Time) (int, string, bool) {
 	userID := strings.TrimSpace(event.UserID)
 	key := botReplyLoopKey(event, userID)
+	threshold := botReplyLoopThreshold(r.effectiveConfigForEvent(event))
 	observedAt := now
 	if event.Time > 0 {
 		observedAt = time.Unix(event.Time, 0)
@@ -563,7 +572,7 @@ func (r *Runtime) registerBotReplyLoopDecision(event MessageEvent, candidate bot
 		Confidence:      decision.Confidence,
 		ObservedAt:      observedAt,
 	})
-	if len(hits) < botReplyLoopThreshold {
+	if len(hits) < threshold {
 		state.Hits = hits
 		r.botReplyLoopByKey[key] = state
 		r.botReplyLoopMu.Unlock()
@@ -580,30 +589,31 @@ func (r *Runtime) recordBotReplyLoopClassification(ctx context.Context, event Me
 	if writer == nil {
 		return
 	}
+	threshold := botReplyLoopThreshold(r.effectiveConfigForEvent(event))
 	entry := applog.Entry{
 		Kind:    applog.KindOperation,
 		Level:   applog.LevelInfo,
 		Action:  "bot_reply_loop_classification",
-		Message: "模型已完成 AI 自动回复判断",
+		Message: "模型已完成空转判断",
 		Actor:   oneBotEventActor(event),
 		Target:  event.MessageID,
 		Metadata: map[string]any{
 			"group_id": event.GroupID, "user_id": event.UserID, "trigger_kind": candidate.TriggerKind,
-			"automated_ai_reply": decision.AutomatedAIReply, "meaningless_loop": decision.MeaninglessLoop,
+			"meaningless_loop": decision.MeaninglessLoop,
 			"purposeless_loop": decision.PurposelessLoop, "self_repeat": decision.SelfRepeat,
 			"confidence": decision.Confidence,
 			"reason":     decision.Reason, "counted": decision.counts(), "hit_count": hitCount,
-			"threshold": botReplyLoopThreshold, "window_minutes": int(botReplyLoopWindow / time.Minute),
+			"threshold": threshold, "window_minutes": int(botReplyLoopWindow / time.Minute),
 			"suppression_allowed": suppressionAllowed,
 		},
 	}
-	if hitCount >= botReplyLoopThreshold && !suppressionAllowed {
+	if hitCount >= threshold && !suppressionAllowed {
 		entry.Message = "已累计到空转阈值，但当前发言者不适用暂停，仅记录"
 	}
 	if classifyErr != nil {
 		entry.Kind = applog.KindError
 		entry.Level = applog.LevelError
-		entry.Message = "AI 自动回复判断失败，已放行消息"
+		entry.Message = "空转判断失败，已放行消息"
 		entry.Detail = classifyErr.Error()
 		entry.Metadata["raw"] = truncateRunesFromStart(strings.TrimSpace(raw), 240)
 	}
@@ -618,7 +628,7 @@ func (r *Runtime) resetBotReplyLoopUser(userID string) {
 	if r == nil || strings.TrimSpace(userID) == "" {
 		return
 	}
-	r.resetReplyDampingUser(userID)
+	r.resetReplyDensityUser(userID)
 	r.botReplyLoopMu.Lock()
 	for key, state := range r.botReplyLoopByKey {
 		if state.UserID == userID {
@@ -664,7 +674,7 @@ func (r *Runtime) registerReplyRefusal(event MessageEvent, now time.Time) (int, 
 		}
 	}
 	hits = append(hits, replyRefusalHit{MessageKey: messageKey, ObservedAt: now})
-	if len(hits) < replyRefusalThreshold {
+	if len(hits) < replyRefusalThreshold(cfg) {
 		state.Hits = hits
 		r.replyRefusalByUser[userID] = state
 		r.replyRefusalMu.Unlock()
@@ -695,7 +705,7 @@ func (r *Runtime) applyReplyControlAfterSend(ctx context.Context, event MessageE
 		return
 	}
 	now := time.Now()
-	r.recordReplyDampingSend(event, now)
+	r.recordReplyDensitySend(event, now)
 	if intent.SuppressCurrentUser {
 		r.activateReplySuppressionWithinOutboundGate(event, reply, now)
 		return
@@ -706,7 +716,7 @@ func (r *Runtime) applyReplyControlAfterSend(ctx context.Context, event MessageE
 	if _, blocked := r.activeReplySuppression(event, now); blocked {
 		return
 	}
-	if !boolValue(r.effectiveConfigForEvent(event).ReplyRefusalSuppressionEnabled, true) {
+	if cfg := r.effectiveConfigForEvent(event); !boolValue(cfg.ReplyRefusalSuppressionEnabled, true) || !replySuppressionEnabled(cfg) {
 		return
 	}
 	_, reason, thresholdReached := r.registerReplyRefusal(event, now)

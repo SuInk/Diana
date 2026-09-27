@@ -103,6 +103,11 @@ type dianaBotConfigSnapshot struct {
 	ModelRoles                      map[string]ModelRole `json:"model_roles,omitempty"`
 	BotReplyLoopDetectionEnabled    bool                 `json:"bot_reply_loop_detection_enabled"`
 	ReplyRefusalSuppressionEnabled  bool                 `json:"reply_refusal_suppression_enabled"`
+	ReplySuppressionEnabled         bool                 `json:"reply_suppression_enabled"`
+	ReplySuppressionMinMinutes      int                  `json:"reply_suppression_min_minutes"`
+	ReplySuppressionMaxMinutes      int                  `json:"reply_suppression_max_minutes"`
+	BotReplyLoopThreshold           int                  `json:"bot_reply_loop_threshold"`
+	ReplyRefusalThreshold           int                  `json:"reply_refusal_threshold"`
 	ProactiveReplyRouterPromptChars int                  `json:"proactive_reply_router_prompt_chars,omitempty"`
 	ProactiveReplyPromptChars       int                  `json:"proactive_reply_prompt_chars,omitempty"`
 	// CustomizedPrompts 列出在界面上改过的内置提示词键，正文不外露。
@@ -370,6 +375,11 @@ func dianaBotConfigFromConfig(cfg BotConfig) dianaBotConfigSnapshot {
 		ModelRoles:                      normalizeModelRoles(cfg.ModelRoles),
 		BotReplyLoopDetectionEnabled:    boolValue(cfg.BotReplyLoopDetectionEnabled, true),
 		ReplyRefusalSuppressionEnabled:  boolValue(cfg.ReplyRefusalSuppressionEnabled, true),
+		ReplySuppressionEnabled:         replySuppressionEnabled(cfg),
+		ReplySuppressionMinMinutes:      replySuppressionMinMinutes(cfg),
+		ReplySuppressionMaxMinutes:      replySuppressionMaxMinutes(cfg),
+		BotReplyLoopThreshold:           botReplyLoopThreshold(cfg),
+		ReplyRefusalThreshold:           replyRefusalThreshold(cfg),
 		ProactiveReplyRouterPromptChars: len([]rune(cfg.prompt(promptLegacyRouterSpec))),
 		ProactiveReplyPromptChars:       len([]rune(cfg.prompt(promptProactiveReplySpec))),
 		CustomizedPrompts:               customizedPromptKeys(cfg.PromptOverrides),
