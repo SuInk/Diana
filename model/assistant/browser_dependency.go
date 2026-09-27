@@ -29,6 +29,7 @@ const relationFontDependencyName = "cjk-font"
 // 插件 ID 对外导出，WebUI 要按插件把依赖分组显示。
 const (
 	ResolverPluginID         = resolverPluginID
+	RepositoryWatchPluginID  = repositoryWatchPluginID
 	SandboxedBrowserPluginID = sandboxedBrowserPluginID
 )
 

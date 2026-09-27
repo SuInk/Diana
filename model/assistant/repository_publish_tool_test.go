@@ -1173,3 +1173,34 @@ func TestRepositoryIssueGroupApproverScope(t *testing.T) {
 		t.Fatalf("群审批人没能批下草稿：%#v posts=%d", approved, github.count(http.MethodPost))
 	}
 }
+
+// 整个群被放开时写入走公共 Token。设置里残留的个人认证来源（旧编辑器留下、界面上已经
+// 看不到的 gh）不能把它顶掉，否则换了公共 Token 仍会以旧账号写入。
+func TestRepositoryIssueGroupWideAccessIgnoresStalePersonalAuthMode(t *testing.T) {
+	github := newRepositoryPublishTestGitHub()
+	server := httptest.NewServer(http.HandlerFunc(github.handler))
+	defer server.Close()
+	plugin := newRepositoryPublishPlugin(server.Client(), server.URL)
+	ghCalls := 0
+	plugin.ghAuthToken = func(context.Context) (string, error) {
+		ghCalls++
+		return "old-account-token", nil
+	}
+	tool := newDianaGitHubTool(
+		NewRuntime(BotConfig{OwnerID: "owner"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil),
+		MessageEvent{Kind: EventKindGroup, GroupID: "group-1", UserID: "member", RawMessage: "请在 acme/demo 创建 GitHub Issue，标题为 群里直接提"},
+		plugin,
+		SettingValues{
+			repositoryPublishSettingAllowlist:     "acme/demo",
+			repositoryPublishSettingManagerGroups: "group-1 = acme/demo",
+			repositoryPublishSettingToken:         repositoryPublishTestToken,
+			repositoryPublishSettingUserAuth:      `{"member":"gh"}`,
+		},
+	)
+	result := runRepositoryPublishTestTool(t, tool, map[string]any{
+		"operation": "create", "repository": "acme/demo", "title": "群里直接提",
+	})
+	if !result.OK || result.Outcome != "created" || ghCalls != 0 {
+		t.Fatalf("result=%#v ghCalls=%d", result, ghCalls)
+	}
+}

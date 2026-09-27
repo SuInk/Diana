@@ -248,37 +248,29 @@
         <div class="plugin-settings-section-head">
           <h3>GitHub 认证</h3>
           <p>
-            公共 Token 同时用于仓库更新检查和 Issue 创建；具体仓库是否允许 Issue 操作，在「仓库管理」中配置。
-            公开仓库也可以匿名读取，但请求额度较低。
+            每条凭据对应一个 GitHub 账号；默认凭据用于仓库更新检查和 Issue、PR 操作，具体仓库能否操作 Issue 在「仓库管理」中配置。
+            点「检测账号」可以看到每条凭据实际登录的是哪个账号。
             <a class="token-create-link" href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noreferrer"><ExternalLink :size="13" aria-hidden="true" />创建 Token</a>
           </p>
-        </div>
-        <!-- Token 是这一页的主角，排在最前；认证方式和凭据列表都是围绕它的补充。 -->
-        <div class="stack plugin-settings-form">
-          <PluginSettingField
-            v-for="spec in githubTokenSpecs"
-            :key="spec.key"
-            :spec="spec"
-            :form="settingsForm"
-            :clearing="clearSecrets.includes(spec.key)"
-            :secret-configured="secretConfigured(spec.key)"
-            :secret-placeholder="secretPlaceholder(spec.key)"
-            @toggle-clear="toggleClearSecret"
-          />
-          <div v-if="repositoryPublishAuthSpec" class="field">
-            <label for="setting-github_auth_mode">{{ repositoryPublishAuthSpec.label }}</label>
-            <AppSelect id="setting-github_auth_mode" v-model="repositoryPublishForm.github_auth_mode" :options="repositoryPublishAuthSpec.options ?? []" />
-            <span v-if="repositoryPublishAuthSpec.description" class="hint">{{ repositoryPublishAuthSpec.description }}</span>
-          </div>
         </div>
         <RepositoryCredentialEditor
           ref="credentialEditor"
           :credentials="credentialList"
           :configured-ids="configuredCredentialIDs"
           :repository-credentials="repositoryCredentialMap"
+          :default-auth="String(repositoryPublishForm.github_auth_mode || 'token')"
+          :default-token="String(settingsForm.github_token ?? '')"
+          :default-token-configured="secretConfigured('github_token')"
+          :default-clearing="clearSecrets.includes('github_token')"
+          :checks="githubCredentialChecks"
+          :testing="testingGitHubCredentials"
           @update:credentials="onCredentialsChanged"
           @update:tokens="credentialTokenDrafts = $event"
           @update:repository-credentials="onRepositoryCredentialsChanged"
+          @update:default-auth="repositoryPublishForm.github_auth_mode = $event"
+          @update:default-token="settingsForm.github_token = $event"
+          @toggle-clear-default="toggleClearSecret('github_token')"
+          @test="testGitHubSettings"
         />
         <div v-if="githubNotifySpecs.length" class="plugin-settings-section-head plugin-settings-subsection">
           <h3>通知</h3>
@@ -700,6 +692,7 @@ import {
   updatePluginSettings,
   testMusicConnections,
   testResolverCredentials,
+  testGitHubCredentials,
   listPluginDependencies,
   listBotGroups,
   type PluginSettingSpec,
@@ -932,6 +925,31 @@ function credentialStateLabel(check: CredentialCheck): string {
   }
 }
 
+const testingGitHubCredentials = ref(false);
+const githubCredentialChecks = ref<CredentialCheck[]>([]);
+
+// 用页面上还没保存的输入检测：默认凭据的认证方式在发布插件表单里，凭据 Token 只带本次新填的。
+async function testGitHubSettings(): Promise<void> {
+  testingGitHubCredentials.value = true;
+  try {
+    const payload = buildSettingsPayload();
+    payload.github_auth_mode = repositoryPublishForm.value.github_auth_mode ?? "token";
+    payload.github_credentials = settingsForm.value.github_credentials ?? "";
+    payload.repository_credentials = settingsForm.value.repository_credentials ?? "";
+    const drafts = credentialTokenDrafts.value;
+    payload.github_credential_tokens = Object.keys(drafts).length ? JSON.stringify(drafts) : "";
+    const response = await testGitHubCredentials(payload, clearSecrets.value);
+    githubCredentialChecks.value = response.credentials;
+    const invalid = response.credentials.filter((item) => item.state === "invalid");
+    if (invalid.length > 0) toastError(`${invalid.map((item) => item.label).join("、")} 已失效`);
+    else toastSuccess("检测完成");
+  } catch (error) {
+    toastError(error instanceof Error ? error.message : "凭据检测失败");
+  } finally {
+    testingGitHubCredentials.value = false;
+  }
+}
+
 async function testResolverSettings(): Promise<void> {
   testingResolver.value = true;
   try {
@@ -948,7 +966,6 @@ async function testResolverSettings(): Promise<void> {
     testingResolver.value = false;
   }
 }
-const repositoryPublishAuthSpec = computed(() => repositoryPublishSpecs.value.find((spec) => spec.key === "github_auth_mode"));
 const repositoryPublishTimeoutSpec = computed(() => repositoryPublishSpecs.value.find((spec) => spec.key === "timeout_seconds"));
 const issueEnabledRepositories = computed(() => String(repositoryPublishForm.value.allowed_repositories ?? "").split(/[,;；\n\r]/).map((item) => item.trim()).filter(Boolean));
 const visibleSettingsSpecs = computed<PluginSettingSpec[]>(() =>
@@ -961,7 +978,6 @@ const repositoryManagedKeys = new Set([
   "user_github_tokens", "user_github_token_users", "user_github_auth_modes",
   "github_credentials", "github_credential_tokens", "github_credential_ids", "repository_credentials",
 ]);
-const githubTokenSpecs = computed<PluginSettingSpec[]>(() => settingsSpecs.value.filter((spec) => spec.key === "github_token"));
 // 通知相关的设置按这个顺序排；跟评开关排第一，它是最常被找的那个。
 const githubNotifyKeys = ["ask_agent", "follow_up_include_patch", "template_header", "summary_commit_limit"];
 const githubGeneralSpecs = computed<PluginSettingSpec[]>(() => settingsSpecs.value.filter((spec) => !repositoryManagedKeys.has(spec.key)));

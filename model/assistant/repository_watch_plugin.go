@@ -62,6 +62,8 @@ type RepositoryWatchPlugin struct {
 	paceMu         sync.Mutex
 	lastRequestAt  time.Time
 	requestSpacing time.Duration
+	// ghAuthToken 只给凭据检测用（订阅轮询本身不调 gh）；测试注入桩，为空时调服务器上的 gh。
+	ghAuthToken func(context.Context) (string, error)
 }
 
 // awaitRequestSlot 保证两次 GitHub 请求之间至少隔 repositoryWatchRequestSpacing。

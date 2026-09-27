@@ -3216,9 +3216,16 @@ func (t *dianaGitHubTool) doJSONWithHeadersStatus(ctx context.Context, method, p
 
 func (t *dianaGitHubTool) repositoryPublishCredential(ctx context.Context, repository string) (string, *repositoryIssueAPIError) {
 	userID := strings.TrimSpace(t.event.UserID)
-	tokens, _ := repositoryPublishUserTokens(t.settings.String(repositoryPublishSettingUserTokens, ""))
-	modes, _ := repositoryPublishUserAuthModes(t.settings.String(repositoryPublishSettingUserAuth, ""))
-	userMode := modes[userID]
+	userMode := ""
+	tokens := map[string]string{}
+	// 个人凭据只在这次放行确实落在个人头上时才用。以前只要设置里留着某人的认证来源就
+	// 一律优先，整群放开的群里、主人、名单外的人也照用；而按用户选认证来源的编辑器早已
+	// 下线，残留的 gh 设置界面上看不到也删不掉，换了公共 Token 仍然用旧账号写入。
+	if t.personalCredentialApplies(repository) {
+		tokens, _ = repositoryPublishUserTokens(t.settings.String(repositoryPublishSettingUserTokens, ""))
+		modes, _ := repositoryPublishUserAuthModes(t.settings.String(repositoryPublishSettingUserAuth, ""))
+		userMode = modes[userID]
+	}
 	if userMode == "" || userMode == repositoryPublishAuthToken {
 		if token := strings.TrimSpace(tokens[userID]); token != "" {
 			t.credentialSource = "用户 " + userID + " 的 Token"
@@ -3254,6 +3261,39 @@ func (t *dianaGitHubTool) repositoryPublishCredential(ctx context.Context, repos
 	}
 	t.credentialSource = "gh CLI"
 	return t.repositoryPublishGHCredential(ctx)
+}
+
+// personalCredentialApplies 判断这次请求是否该用发起人自己的凭据：私聊里按用户授权到
+// 该仓库，或在群里是本群指定的草稿审批人。与 validateWriteAccess 的放行口径一致；
+// 不带仓库的请求（跨仓库搜索等）不涉及归因，一律走公共凭据。
+func (t *dianaGitHubTool) personalCredentialApplies(repository string) bool {
+	key := strings.ToLower(strings.TrimSpace(repository))
+	if key == "" {
+		return false
+	}
+	legacyUsers, err := repositoryPublishUserAccess(t.settings.String(repositoryPublishSettingUserAccess, ""))
+	if err != nil {
+		return false
+	}
+	legacyGroups, err := repositoryPublishGroupAccess(t.settings.String(repositoryPublishSettingGroupAccess, ""))
+	if err != nil {
+		return false
+	}
+	managerUsers, _, _, _, err := repositoryPublishEffectiveAccess(t.settings, legacyUsers, legacyGroups)
+	if err != nil {
+		return false
+	}
+	if repositoryPublishUserScopedAllowed(t.event, managerUsers, key) {
+		return true
+	}
+	if t.event.Kind != EventKindGroup {
+		return false
+	}
+	approvers, err := repositoryPublishGroupApprovers(t.settings.String(repositoryPublishSettingApproverGroups, ""))
+	if err != nil {
+		return false
+	}
+	return approvers[strings.TrimSpace(t.event.GroupID)][strings.TrimSpace(t.event.UserID)]
 }
 
 // sharedGitHubToken 回落到「仓库订阅」插件里的 Token。

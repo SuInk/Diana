@@ -404,6 +404,7 @@ func (h *BotHandler) registerRoutes(router gin.IRouter, base string) {
 	router.POST(base+"/plugins/music/test", h.testMusicConnections)
 	router.GET(base+"/plugins/vrchat/status", h.vrchatStatus)
 	router.POST(base+"/plugins/resolver/test", h.testResolverCredentials)
+	router.POST(base+"/plugins/github/credentials/test", h.testGitHubCredentials)
 	router.POST(base+"/plugins/coding-agent/setup", h.codingAgentSetup)
 	router.POST(base+"/plugins/repository-publish/issues", h.createRepositoryIssue)
 	router.GET(base+"/plugins/repository-publish/drafts", h.listRepositoryIssueDrafts)
@@ -1275,6 +1276,30 @@ func (h *BotHandler) testResolverCredentials(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"credentials": resolver.TestCredentials(c.Request.Context(), settings)})
 }
 
+// testGitHubCredentials 检测每条 GitHub 凭据实际登录的账号。凭据存在订阅插件里；默认
+// 凭据走 Token 还是 gh 由发布插件的认证方式决定，页面没带上来时用已保存的值。
+func (h *BotHandler) testGitHubCredentials(c *gin.Context) {
+	plugin, settings, ok := h.pluginTestSettings(c, assistant.RepositoryWatchPluginID, "plugin_github_credentials_test")
+	if !ok {
+		return
+	}
+	watch, ok := plugin.(*assistant.RepositoryWatchPlugin)
+	if !ok {
+		h.writeError(c, http.StatusInternalServerError, "plugin_github_credentials_test", errors.New("repository watch plugin has unexpected implementation"), assistant.RepositoryWatchPluginID, nil)
+		return
+	}
+	const authModeKey = "github_auth_mode"
+	if _, set := settings[authModeKey]; !set {
+		profileID, _ := h.pluginProfileScope(c)
+		if _, publishSettings, found := h.runtime.Plugins().PluginForConfiguration(assistant.RepositoryPublishPluginID, profileID); found {
+			if mode, has := publishSettings[authModeKey]; has {
+				settings[authModeKey] = mode
+			}
+		}
+	}
+	c.JSON(http.StatusOK, gin.H{"credentials": watch.TestCredentials(c.Request.Context(), settings)})
+}
+
 // pluginTestSettings 把设置页还没保存的输入叠到已保存的设置上，让人改完先测、
 // 测好再存。凭据框留空表示沿用已保存的值，和保存接口是同一个约定。
 func (h *BotHandler) pluginTestSettings(c *gin.Context, pluginID, action string) (assistant.Plugin, assistant.SettingValues, bool) {
@@ -1296,9 +1321,18 @@ func (h *BotHandler) pluginTestSettings(c *gin.Context, pluginID, action string)
 	for _, spec := range plugin.Manifest().Settings {
 		secrets[spec.Key] = spec.Secret
 	}
+	merger, _ := plugin.(assistant.SecretSettingMerger)
 	for key, value := range payload.Settings {
-		if text, isText := value.(string); isText && secrets[key] && strings.TrimSpace(text) == "" {
+		text, isText := value.(string)
+		if isText && secrets[key] && strings.TrimSpace(text) == "" {
 			continue
+		}
+		// 按条目合并的密钥（GitHub 凭据 Token）只提交了本次改动的那几条，直接覆盖会把
+		// 已存的其他条目当成没填；和保存接口一样先合并。
+		if isText && secrets[key] && merger != nil {
+			if merged, err := merger.MergeSecretSetting(key, settings.String(key, ""), text); err == nil {
+				value = merged
+			}
 		}
 		settings[key] = value
 	}

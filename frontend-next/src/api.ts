@@ -1874,6 +1874,17 @@ export function testResolverCredentials(
   });
 }
 
+export function testGitHubCredentials(
+  settings: Record<string, unknown>,
+  clearSecrets: string[] = [],
+  profileID = ""
+): Promise<{ credentials: CredentialCheck[] }> {
+  return requestJSON<{ credentials: CredentialCheck[] }>(`/api/assistant/plugins/github/credentials/test?profile=${encodeURIComponent(profileID)}`, {
+    method: "POST",
+    body: JSON.stringify({ settings, clear_secrets: clearSecrets })
+  });
+}
+
 export function createRepositoryIssue(input: RepositoryIssueCreateInput, profileID = ""): Promise<RepositoryIssueCreateResult> {
   return requestJSON<RepositoryIssueCreateResult>(`/api/assistant/plugins/repository-publish/issues?profile=${encodeURIComponent(profileID)}`, {
     method: "POST",

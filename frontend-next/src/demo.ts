@@ -1358,6 +1358,24 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
       ]
     });
   }
+  if (path === "/api/assistant/plugins/github/credentials/test" && method === "POST") {
+    let listed: Array<{ id: string; name?: string; auth?: string }> = [];
+    try {
+      listed = JSON.parse(String((body.settings as Record<string, unknown> | undefined)?.github_credentials ?? "") || "[]");
+    } catch {
+      listed = [];
+    }
+    return json({
+      credentials: [
+        { key: "default", label: "默认凭据", configured: true, state: "valid", account: "DianaAgent", message: "" },
+        ...listed.map((item) =>
+          item.auth === "gh"
+            ? { key: item.id, label: item.name || item.id, configured: true, state: "valid", account: "SuInk", message: "通过服务器 gh CLI。绑定仓库：SuInk/Diana 可写。" }
+            : { key: item.id, label: item.name || item.id, configured: false, state: "unconfigured", message: "未填写 Token，绑定到它的仓库会改用默认凭据。" }
+        )
+      ]
+    });
+  }
   if (path === "/api/assistant/plugins/music/test" && method === "POST") {
     return json({
       sources: [

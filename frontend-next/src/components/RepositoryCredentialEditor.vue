@@ -6,19 +6,57 @@
     <div class="cluster" style="justify-content: space-between">
       <div class="stack" style="gap: 2px">
         <strong style="font-size: 13.5px">凭据列表</strong>
-        <span class="hint">个人仓库、组织仓库可以各用一份凭据；在「仓库管理」里为每个仓库选用。</span>
+        <span class="hint">默认凭据给所有仓库兜底；个人仓库、组织仓库要用别的账号时，再添加凭据并在「仓库管理」里为仓库选用。</span>
       </div>
-      <button class="btn small" type="button" @click="addCredential">
-        <Plus :size="14" aria-hidden="true" />
-        添加凭据
-      </button>
+      <div class="cluster" style="gap: 6px">
+        <button class="btn small" type="button" :disabled="testing" @click="emit('test')">
+          <UserCheck :size="14" aria-hidden="true" />
+          {{ testing ? "检测中…" : "检测账号" }}
+        </button>
+        <button class="btn small" type="button" @click="addCredential">
+          <Plus :size="14" aria-hidden="true" />
+          添加凭据
+        </button>
+      </div>
     </div>
 
-    <p v-if="!credentials.length" class="hint credential-empty">
-      还没有凭据。不添加也可以——所有仓库会使用上方的公共 Token。
-    </p>
+    <ul class="credential-list">
+      <li class="credential-row credential-row-default">
+        <div class="credential-row-main">
+          <div class="credential-title">
+            <strong>默认凭据</strong>
+            <span class="badge">默认</span>
+          </div>
+          <AppSelect
+            :model-value="defaultAuth || 'token'"
+            :options="defaultAuthOptions"
+            aria-label="默认凭据的认证方式"
+            @update:model-value="emit('update:default-auth', String($event))"
+          />
+          <span class="credential-action-spacer" aria-hidden="true"></span>
+        </div>
+        <div v-if="defaultAuth !== 'gh'" class="credential-row-secret">
+          <input
+            :value="defaultToken"
+            class="input"
+            type="password"
+            autocomplete="off"
+            :disabled="defaultClearing"
+            :placeholder="defaultTokenPlaceholder"
+            aria-label="默认凭据的 Token"
+            @input="emit('update:default-token', ($event.target as HTMLInputElement).value)"
+          />
+          <button v-if="defaultTokenConfigured" class="btn small ghost" type="button" @click="emit('toggle-clear-default')">
+            {{ defaultClearing ? "撤销清除" : "清除" }}
+          </button>
+        </div>
+        <span class="hint">{{ defaultAuthHint }}</span>
+        <div v-if="checkOf('default')" class="credential-account">
+          <span :class="['badge', checkTone(checkOf('default'))]">{{ checkLabel(checkOf('default')) }}</span>
+          <span v-if="checkOf('default')?.message" class="hint">{{ checkOf('default')?.message }}</span>
+        </div>
+      </li>
 
-    <ul v-else class="credential-list">
       <li v-for="(item, index) in credentials" :key="item.id" class="credential-row">
         <div class="credential-row-main">
           <input
@@ -58,6 +96,10 @@
           <span v-if="usageOf(item.id)" class="badge accent credential-usage">{{ usageOf(item.id) }}</span>
         </div>
         <span v-else class="hint">使用服务器上已登录的 GitHub CLI（gh auth login），不需要填 Token。</span>
+        <div v-if="checkOf(item.id)" class="credential-account">
+          <span :class="['badge', checkTone(checkOf(item.id))]">{{ checkLabel(checkOf(item.id)) }}</span>
+          <span v-if="checkOf(item.id)?.message" class="hint">{{ checkOf(item.id)?.message }}</span>
+        </div>
       </li>
     </ul>
   </div>
@@ -65,8 +107,9 @@
 
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
-import { Plus, Trash2 } from "@lucide/vue";
+import { Plus, Trash2, UserCheck } from "@lucide/vue";
 import AppSelect from "./AppSelect.vue";
+import type { CredentialCheck } from "../api";
 
 interface Credential {
   id: string;
@@ -78,13 +121,80 @@ const props = defineProps<{
   credentials?: Credential[];
   configuredIds?: string[];
   repositoryCredentials?: Record<string, string>;
+  // 默认凭据就是原来的「公共 Token + 认证方式」，存储不变，只是和其他凭据放进同一张列表。
+  defaultAuth?: string;
+  defaultToken?: string;
+  defaultTokenConfigured?: boolean;
+  defaultClearing?: boolean;
+  checks?: CredentialCheck[];
+  testing?: boolean;
 }>();
 
 const emit = defineEmits<{
   "update:credentials": [Credential[]];
   "update:tokens": [Record<string, string>];
   "update:repository-credentials": [Record<string, string>];
+  "update:default-auth": [string];
+  "update:default-token": [string];
+  "toggle-clear-default": [];
+  test: [];
 }>();
+
+const defaultAuthOptions = [
+  { value: "token", label: "Token" },
+  { value: "gh", label: "服务器 gh CLI" },
+  { value: "auto", label: "自动（有 Token 用 Token，否则 gh）" }
+];
+
+const defaultTokenPlaceholder = computed(() => {
+  if (props.defaultClearing) return "保存后将清除";
+  return props.defaultTokenConfigured ? "已配置 — 留空沿用，填写则覆盖" : "填写 GitHub Token";
+});
+
+// 仓库更新检查是后台任务，不调用 gh；选 gh 时要说清它那边的去向。
+const defaultAuthHint = computed(() => {
+  switch (props.defaultAuth) {
+    case "gh":
+      return "Issue、PR 操作使用服务器上 gh 登录的账号；仓库更新检查不走 gh，会匿名读取公开仓库。";
+    case "auto":
+      return "填了 Token 就用 Token，没填时 Issue、PR 操作改用服务器 gh；仓库更新检查只用 Token。";
+    default:
+      return "仓库更新检查和 Issue、PR 操作都用这个 Token；不填时公开仓库匿名读取，请求额度较低。";
+  }
+});
+
+const checksByKey = computed(() => new Map((props.checks ?? []).map((check) => [check.key, check])));
+
+function checkOf(key: string): CredentialCheck | undefined {
+  return checksByKey.value.get(key);
+}
+
+function checkTone(check: CredentialCheck | undefined): string {
+  switch (check?.state) {
+    case "valid":
+      return "ok";
+    case "invalid":
+      return "err";
+    case "unconfigured":
+      return "";
+    default:
+      return "warn";
+  }
+}
+
+// 账号名是这一行的重点：换了 Token 却不知道实际生效的是哪个号，就靠它一眼看出来。
+function checkLabel(check: CredentialCheck | undefined): string {
+  switch (check?.state) {
+    case "valid":
+      return `GitHub 账号 · ${check.account}`;
+    case "invalid":
+      return "已失效";
+    case "unconfigured":
+      return "未填写";
+    default:
+      return "暂时测不了";
+  }
+}
 
 const authOptions = [
   { value: "token", label: "Token" },
@@ -174,13 +284,6 @@ defineExpose({
 </script>
 
 <style scoped>
-.credential-empty {
-  margin: 0;
-  padding: 10px 12px;
-  border: 1px dashed var(--border);
-  border-radius: 8px;
-}
-
 .credential-list {
   display: grid;
   gap: 8px;
@@ -214,6 +317,24 @@ defineExpose({
 .credential-row-secret .input {
   flex: 1;
   min-width: 0;
+}
+
+.credential-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.credential-action-spacer {
+  width: 30px;
+}
+
+.credential-account {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
 }
 
 .credential-usage {
