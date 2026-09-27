@@ -272,13 +272,23 @@ const formTokenPlaceholder = computed(() => {
   return formTokenConfigured.value ? "已配置 — 留空沿用，填写则覆盖" : "填写 GitHub Token";
 });
 
-function startCreate(): void {
+// 一次只能编辑一条。正在编辑的那条改过还没点「完成」时，切到别的之前先问一次。
+async function confirmSwitch(target: string): Promise<boolean> {
+  if (!editingKey.value || editingKey.value === target || !editorDirty()) return true;
+  const current = editingKey.value === defaultKey ? "默认凭据" : editingKey.value === newKey ? "新凭据" : `「${form.value.name || credentials.value.find((entry) => entry.id === editingKey.value)?.name || "未命名凭据"}」`;
+  return askConfirm({ title: "放弃未完成的改动？", message: `${current}的改动还没点「完成」，切换后会丢失。`, confirmLabel: "放弃改动", danger: true });
+}
+
+async function startCreate(): Promise<void> {
+  if (editingKey.value === newKey) return;
+  if (!(await confirmSwitch(newKey))) return;
   editingKey.value = newKey;
   form.value = { name: "", auth: "token", token: "", clearing: false };
   scheduleAutoTest(0);
 }
 
-function startEdit(key: string): void {
+async function startEdit(key: string): Promise<void> {
+  if (!(await confirmSwitch(key))) return;
   editingKey.value = key;
   if (key === defaultKey) {
     form.value = { name: "默认凭据", auth: effectiveDefaultAuth.value, token: props.defaultToken ?? "", clearing: Boolean(props.defaultClearing) };
