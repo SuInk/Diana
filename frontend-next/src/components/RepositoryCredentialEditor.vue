@@ -69,7 +69,16 @@
           <span class="hint">Fine-grained token 只访问选定仓库，适合按仓库最小授权；Classic token 范围更大。保存后不会回显。</span>
         </div>
       </div>
+      <div v-if="formCheck" class="credential-form-check">
+        <span :class="['badge', checkTone(formCheck)]">{{ checkLabel(formCheck) }}</span>
+        <span v-if="formCheck.message" class="hint">{{ formCheck.message }}</span>
+      </div>
       <div class="repository-watch-editor-actions">
+        <button v-if="testCredential" class="btn small" type="button" :disabled="formTesting" @click="testForm">
+          <LoaderCircle v-if="formTesting" :size="14" class="spin" aria-hidden="true" />
+          <UserCheck v-else :size="14" aria-hidden="true" />
+          检测
+        </button>
         <button class="btn small" type="button" @click="stopEditing">取消</button>
         <button class="btn small primary" type="submit">{{ editingKey === newKey ? "添加" : "完成" }}</button>
       </div>
@@ -124,6 +133,14 @@ import type { CredentialCheck } from "../api";
 import { askConfirm } from "../confirm";
 import { toastError } from "../toast";
 
+export interface CredentialTestInput {
+  key: string;
+  name: string;
+  auth: string;
+  token: string;
+  clearing: boolean;
+}
+
 interface Credential {
   id: string;
   name: string;
@@ -141,6 +158,8 @@ const props = defineProps<{
   defaultClearing?: boolean;
   checks?: CredentialCheck[];
   testing?: boolean;
+  // 用表单里还没点「完成」的值检测这一条凭据；key 为 default、已有凭据 ID，或新建时的占位。
+  testCredential?: (input: CredentialTestInput) => Promise<CredentialCheck | undefined>;
 }>();
 
 const emit = defineEmits<{
@@ -176,6 +195,25 @@ const configured = computed(() => new Set(props.configuredIds ?? []));
 // 「完成」只改本地草稿，真正落库仍然跟着弹窗底部的「保存」。
 const editingKey = ref("");
 const form = ref({ name: "", auth: "token", token: "", clearing: false });
+const formCheck = ref<CredentialCheck | undefined>();
+const formTesting = ref(false);
+
+// 改了认证方式或 Token，之前的检测结果就不再对应当前表单，直接清掉免得误导。
+watch(() => [form.value.auth, form.value.token, form.value.clearing], () => {
+  formCheck.value = undefined;
+});
+
+async function testForm(): Promise<void> {
+  if (!props.testCredential || !editingKey.value) return;
+  formTesting.value = true;
+  try {
+    formCheck.value = await props.testCredential({ key: editingKey.value, ...form.value });
+  } catch (error) {
+    toastError(error instanceof Error ? error.message : "凭据检测失败");
+  } finally {
+    formTesting.value = false;
+  }
+}
 
 const formAuthOptions = [
   { value: "token", label: "Token" },
@@ -231,6 +269,7 @@ function startEdit(key: string): void {
 
 function stopEditing(): void {
   editingKey.value = "";
+  formCheck.value = undefined;
 }
 
 function commitEditing(): boolean {
@@ -423,6 +462,14 @@ defineExpose({
 .credential-secret .input {
   flex: 1;
   min-width: 0;
+}
+
+.credential-form-check {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+  margin-top: 12px;
 }
 
 .credential-check-message {

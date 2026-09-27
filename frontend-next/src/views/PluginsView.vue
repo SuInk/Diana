@@ -263,6 +263,7 @@
           @update:default-token="settingsForm.github_token = $event"
           @toggle-clear-default="toggleClearSecret('github_token')"
           @test="testGitHubSettings"
+          :test-credential="testOneGitHubCredential"
         />
         <div v-if="githubNotifySpecs.length" class="plugin-settings-section-head plugin-settings-subsection">
           <h3>通知</h3>
@@ -706,7 +707,7 @@ import PluginSettingField from "../components/PluginSettingField.vue";
 import PlatformLevelRulesField from "../components/PlatformLevelRulesField.vue";
 import Modal from "../components/Modal.vue";
 import RepositoryIssueDraftList from "../components/RepositoryIssueDraftList.vue";
-import RepositoryCredentialEditor from "../components/RepositoryCredentialEditor.vue";
+import RepositoryCredentialEditor, { type CredentialTestInput } from "../components/RepositoryCredentialEditor.vue";
 import RepositoryWatchManager from "../components/RepositoryWatchManager.vue";
 import StickerLibrary from "../components/StickerLibrary.vue";
 import VRChatStatusPanel from "../components/VRChatStatusPanel.vue";
@@ -940,6 +941,38 @@ async function testGitHubSettings(): Promise<void> {
   } finally {
     testingGitHubCredentials.value = false;
   }
+}
+
+// 表单里的「检测」：在当前草稿上叠加这一条凭据的表单值，只取它自己的结果。
+async function testOneGitHubCredential(input: CredentialTestInput): Promise<CredentialCheck | undefined> {
+  const payload = buildSettingsPayload();
+  payload.github_auth_mode = repositoryPublishForm.value.github_auth_mode ?? "token";
+  payload.repository_credentials = settingsForm.value.repository_credentials ?? "";
+  const clears = [...clearSecrets.value];
+  const tokens: Record<string, string> = { ...credentialTokenDrafts.value };
+  let list = credentialList.value.map((item) => ({ ...item }));
+  let key = input.key;
+  if (key === "default") {
+    payload.github_auth_mode = input.auth;
+    if (input.clearing) {
+      if (!clears.includes("github_token")) clears.push("github_token");
+      delete payload.github_token;
+    } else if (input.token.trim()) {
+      payload.github_token = input.token.trim();
+    }
+  } else {
+    if (!list.some((item) => item.id === key)) {
+      key = "probe";
+      list.push({ id: key, name: input.name, auth: input.auth });
+    }
+    list = list.map((item) => (item.id === key ? { ...item, name: input.name, auth: input.auth } : item));
+    if (input.clearing) tokens[key] = "";
+    else if (input.token.trim()) tokens[key] = input.token.trim();
+  }
+  payload.github_credentials = JSON.stringify(list);
+  payload.github_credential_tokens = Object.keys(tokens).length ? JSON.stringify(tokens) : "";
+  const response = await testGitHubCredentials(payload, clears);
+  return response.credentials.find((item) => item.key === key);
 }
 
 async function testResolverSettings(): Promise<void> {
