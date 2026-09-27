@@ -224,3 +224,33 @@ func decodeSummaryPromptInput(t *testing.T, prompt string) summaryPromptInput {
 	}
 	return input
 }
+
+// 带卷叠的摘要超时后，这个会话在冷却期内首轮也不再带卷叠；冷却过后重试卷叠，写成后清掉冷却。
+func TestMemoryRollupBackoffAfterTimeout(t *testing.T) {
+	runtime := &Runtime{}
+	now := time.Now()
+	if !runtime.memoryRollupAllowed("group:1", now) {
+		t.Fatal("rollup should be allowed before any timeout")
+	}
+	runtime.noteMemoryRollupTimeout("group:1", now)
+	if runtime.memoryRollupAllowed("group:1", now.Add(time.Minute)) {
+		t.Fatal("rollup should be skipped right after a timeout")
+	}
+	if !runtime.memoryRollupAllowed("group:2", now) {
+		t.Fatal("backoff must not leak to other sessions")
+	}
+	if !runtime.memoryRollupAllowed("group:1", now.Add(memoryRollupCooldownBase)) {
+		t.Fatal("rollup should be retried after the cooldown")
+	}
+	runtime.noteMemoryRollupTimeout("group:1", now)
+	if runtime.memoryRollupAllowed("group:1", now.Add(memoryRollupCooldownBase)) {
+		t.Fatal("second timeout should double the cooldown")
+	}
+	if got := memoryRollupCooldown(20); got != memoryRollupCooldownMax {
+		t.Fatalf("cooldown cap = %v", got)
+	}
+	runtime.clearMemoryRollupBackoff("group:1")
+	if !runtime.memoryRollupAllowed("group:1", now) {
+		t.Fatal("a written rollup should clear the backoff")
+	}
+}

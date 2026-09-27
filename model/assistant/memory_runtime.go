@@ -49,6 +49,9 @@ const (
 	// 「当前进行到哪」这件事本身就不成立了，不该继续常驻注入。
 	memoryThreadRetentionDays = 7
 	memorySummaryRollupSize   = 12
+	// 卷叠超时后的冷却起点和上限，见 noteMemoryRollupTimeout。
+	memoryRollupCooldownBase = 6 * time.Hour
+	memoryRollupCooldownMax  = 7 * 24 * time.Hour
 	// memoryEventBatchMax 是一次记忆门控最多带几条新消息。
 	//
 	// 攒批的动机是缓存：门控的固定前缀约 600 token，够不到供应商 1024 token 的
@@ -638,9 +641,10 @@ func (r *Runtime) processSummaryMemoryJob(ctx context.Context, store StructuredM
 	}
 	// 卷叠只在首次尝试做：它要把 12 条旧摘要重写成一条时间线，是整次调用里输出
 	// 最长的部分，而且跟这批新事件无关。重试时先把本职的摘要写出来，卷叠留给这
-	// 个会话下一次摘要任务。
+	// 个会话下一次摘要任务。刚因为带卷叠超时过的会话在冷却期内也不带，否则每个
+	// 任务的首次尝试都会被同一组卷叠拖到超时。
 	var rollup *memorySummaryRollup
-	if job.Attempts <= 1 {
+	if job.Attempts <= 1 && r.memoryRollupAllowed(job.Payload.Session, time.Now()) {
 		rollup = selectMemorySummaryRollup(existing)
 	}
 	input := struct {
@@ -673,6 +677,9 @@ func (r *Runtime) processSummaryMemoryJob(ctx context.Context, store StructuredM
 		return generateMemoryCandidates(ctx, client, messages, memorySummarySubmitTool())
 	})
 	if err != nil {
+		if rollup != nil && isTimeoutError(err) {
+			r.noteMemoryRollupTimeout(job.Payload.Session, time.Now())
+		}
 		return fmt.Errorf("memory summary llm: %w", err)
 	}
 	candidates, err := parseMemoryCandidates(raw)
@@ -720,11 +727,58 @@ func (r *Runtime) processSummaryMemoryJob(ctx context.Context, store StructuredM
 		return fmt.Errorf("apply conversation summaries: %w", err)
 	}
 	if rollup != nil && memoryRollupWasWritten(written, rollup.TargetKey) {
+		r.clearMemoryRollupBackoff(job.Payload.Session)
 		if err := forgetRolledUpSummaries(ctx, store, job, first, last, rollup); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// memoryRollupBackoffState 是一个会话的卷叠冷却：连续超时几次、冷却到什么时候。
+type memoryRollupBackoffState struct {
+	timeouts int
+	until    time.Time
+}
+
+// memoryRollupAllowed 判断这个会话这次摘要能不能带卷叠。
+//
+// 冷却只记在内存里：重启后清空，最多再白跑一次带卷叠的首轮，换来不必给任务表
+// 加列。持久化的是摘要本身，卷叠晚几小时做不影响任何读取。
+func (r *Runtime) memoryRollupAllowed(session string, now time.Time) bool {
+	r.memoryRollupMu.Lock()
+	defer r.memoryRollupMu.Unlock()
+	state, ok := r.memoryRollupBackoff[session]
+	return !ok || !now.Before(state.until)
+}
+
+// noteMemoryRollupTimeout 在带卷叠的调用超时后开始冷却：第一次 6 小时，之后每次
+// 翻倍，封顶 7 天。模型一直跑不完这组卷叠时，代价从「每个任务白烧一次 150 秒」
+// 降到「几天一次」。
+func (r *Runtime) noteMemoryRollupTimeout(session string, now time.Time) {
+	r.memoryRollupMu.Lock()
+	defer r.memoryRollupMu.Unlock()
+	if r.memoryRollupBackoff == nil {
+		r.memoryRollupBackoff = make(map[string]memoryRollupBackoffState)
+	}
+	state := r.memoryRollupBackoff[session]
+	state.timeouts++
+	state.until = now.Add(memoryRollupCooldown(state.timeouts))
+	r.memoryRollupBackoff[session] = state
+}
+
+func (r *Runtime) clearMemoryRollupBackoff(session string) {
+	r.memoryRollupMu.Lock()
+	defer r.memoryRollupMu.Unlock()
+	delete(r.memoryRollupBackoff, session)
+}
+
+func memoryRollupCooldown(timeouts int) time.Duration {
+	cooldown := memoryRollupCooldownBase
+	for index := 1; index < timeouts && cooldown < memoryRollupCooldownMax; index++ {
+		cooldown *= 2
+	}
+	return min(cooldown, memoryRollupCooldownMax)
 }
 
 // mergeStructuredMemories 按顺序合并两批记忆并按 ID 去重：前一批（相关性）整体

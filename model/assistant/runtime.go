@@ -542,6 +542,9 @@ type Runtime struct {
 	inboundDone         chan struct{}
 	memoryWake          chan struct{}
 	memoryDone          chan struct{}
+	// memoryRollupBackoff 记住哪些会话的摘要卷叠刚超时过，见 memoryRollupAllowed。
+	memoryRollupMu      sync.Mutex
+	memoryRollupBackoff map[string]memoryRollupBackoffState
 	inboundReadyMu      sync.RWMutex
 	inboundReady        bool
 	inboundReplayCutoff time.Time
