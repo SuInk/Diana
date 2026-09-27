@@ -551,13 +551,25 @@ func main() {
 		int64(appCfg.Storage.MediaCacheMB)<<20,
 	)
 	botRuntime.SetMediaStore(mediaStore)
-	// 先恢复持久统计再挂监听器。配置保存或切换只重启机器人连接，
+	// 先钉住持久统计的快照再挂监听器。配置保存或切换只重启机器人连接，
 	// 不会重置这组计数；进程重启也能从去重消息记录恢复基线。
+	//
+	// 读基线要把两张大表各扫一遍，生产上 3–16 秒，不再让启动等它：快照在机器人
+	// 启动之前就定住，后台读完再加到实时计数上，启动前的事件只在基线里、启动后的
+	// 只在实时计数里，不重不漏。
 	statsCollector := webui.NewStatsCollector()
-	if baselines, err := sqliteStore.DashboardEventStatsSnapshotByProfile(ctx, time.Now()); err != nil {
+	if loadBaselines, err := sqliteStore.BeginDashboardEventStatsSnapshot(ctx, time.Now()); err != nil {
 		log.Printf("dashboard stats restore failed: %v", err)
 	} else {
-		statsCollector.RestoreDurableBaselines(baselines)
+		go func() {
+			defer recoverGoroutinePanic("main.go:dashboard_baseline")
+			baselines, err := loadBaselines()
+			if err != nil {
+				log.Printf("dashboard stats restore failed: %v", err)
+				return
+			}
+			statsCollector.MergeDurableBaselines(baselines)
+		}()
 	}
 	// 今日 Token 同理：Start 之前垫好，之后的调用才接着往上加，不会被数两遍。
 	if err := botRuntime.RestoreLLMUsageToday(ctx, sqliteStore); err != nil {

@@ -837,12 +837,20 @@ WHERE user_id IN (`+placeholders+`) AND TRIM(COALESCE(display_name, '')) <> ''
 		return nil, err
 	}
 
+	// 每个号只取最近一条带群名片的消息。原来按 user_id 分组取 MAX(event_time)，
+	// 要把这些人的全部历史逐行回表读一遍，活跃的人一个就是几万行，事件列表一页
+	// 最长要 1.7 秒；现在每个号沿 (user_id, event_time DESC) 索引从新往旧找，
+	// 通常第一行就是。
+	values := strings.TrimSuffix(strings.Repeat("(?),", len(list)), ",")
 	cards, err := s.eventReader().QueryContext(ctx, `
-SELECT user_id, sender_name
-FROM message_events
-WHERE user_id IN (`+placeholders+`) AND TRIM(COALESCE(sender_name, '')) <> ''
-GROUP BY user_id
-HAVING event_time = MAX(event_time)
+WITH ids(user_id) AS (VALUES `+values+`)
+SELECT ids.user_id, COALESCE((
+  SELECT m.sender_name FROM message_events AS m
+  WHERE m.user_id = ids.user_id AND TRIM(COALESCE(m.sender_name, '')) <> ''
+  ORDER BY m.event_time DESC
+  LIMIT 1
+), '')
+FROM ids
 `, list...)
 	if err != nil {
 		return nil, fmt.Errorf("resolve mention sender names: %w", err)

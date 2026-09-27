@@ -26,7 +26,7 @@ const (
 )
 
 // InboundHandoffRef 定位一条入站事件：有队列事件 ID 就按主键找，没有才按会话、
-// 发送者和消息 ID 找最新那行（那条查询没有索引，热路径上尽量别走）。
+// 发送者和消息 ID 找最新那行（比主键多一次索引查找，热路径上能给 ID 就给 ID）。
 type InboundHandoffRef struct {
 	ID    string
 	Event MessageEvent
