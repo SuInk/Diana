@@ -545,6 +545,9 @@ func (t *dianaChatHistoryTool) search(ctx context.Context, input map[string]any)
 		Window:  chatHistoryWindowLabel(page.From, page.Through), searchPage: &page,
 		Guidance: "需要原文或前后文时调用 around，传 message_id；跨群命中同时传 group_id。has_more=true 时继续使用 next_cursor，保持 query、scope、order 相同。search_complete 仅表示当前关键词与范围已枚举完，不等于事件事实完整；未核对原文和完整范围时只能说目前查到最早，不能断言最早就是。时间分页采用关键词匹配，不混入不具备完整总数的语义候选。",
 	}
+	if order != "relevance" && len(uniqueLowerFields(query)) > 1 {
+		result.Message += "多个词时先列同时含全部词的消息，再列只含部分词的，每档内按指定时间顺序。"
+	}
 	if order == "relevance" {
 		result.searchPage = nil
 		result.Limited = true
@@ -1087,4 +1090,20 @@ func (t *dianaChatHistoryTool) idNotice() string {
 
 func marshalDianaChatHistoryResult(result dianaChatHistoryResult) (string, error) {
 	return marshalHistoryResultWithBudget(result)
+}
+
+// uniqueLowerFields 取按空格分开、至少两个字的去重词，和存储层按命中词数分档的口径一致。
+func uniqueLowerFields(text string) []string {
+	seen := make(map[string]struct{})
+	var words []string
+	for _, word := range strings.Fields(strings.ToLower(text)) {
+		if len([]rune(word)) < 2 {
+			continue
+		}
+		if _, ok := seen[word]; !ok {
+			seen[word] = struct{}{}
+			words = append(words, word)
+		}
+	}
+	return words
 }
