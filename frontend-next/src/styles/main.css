@@ -316,12 +316,10 @@ code {
 .brand-logo {
   display: block;
   flex: none;
-  width: 96px;
+  width: 108px;
   height: auto;
   color: var(--accent);
   transition: color 180ms ease;
-  /* 上方的光线把包围盒撑高了，字形主体偏下约 4px；上提后字母中线才对上顶栏标题。 */
-  transform: translateY(-4px);
 }
 
 /* 版本入口跟主题切换同一排：这里是整条侧栏宽，
@@ -1039,10 +1037,25 @@ code {
 
 /* 多机器人作用域切换器：紧跟在品牌区下面，和导航之间留一道分隔，表明它管的是
    「看哪台机器人」，不是又一个页面入口。 */
+/* 机器人切换是辅助操作，别跟 logo 和导航抢：次要色、小一号、矮一截，边框留着认得出是控件。
+   上下内边距各多 3px 补回矮掉的 6px，中线和下面分隔线的位置都不变，
+   跟右边平台/机器人那一行的对齐还在。 */
 .bot-scope {
-  padding: 0 4px 10px;
+  padding: 3px 4px 13px;
   margin-bottom: 6px;
   border-bottom: 1px solid var(--border);
+}
+
+.bot-scope .app-select-trigger {
+  padding: 6px 12px;
+  color: var(--text-secondary);
+  font-size: 13px;
+  transition: border-color 0.15s ease, color 0.15s ease;
+}
+
+.bot-scope .app-select-trigger:hover,
+.bot-scope .app-select.open .app-select-trigger {
+  color: var(--text);
 }
 
 /* 导航 */
@@ -1131,10 +1144,11 @@ code {
   flex: 1;
 }
 
+/* 图标中心对齐下面机器人选择器的下拉箭头：头部和选择器那一行共用同一套竖线。 */
 .sidebar-toggle.btn.icon-only {
   position: absolute;
   top: calc(50% - 16px);
-  right: -8px;
+  right: 0;
   width: 32px;
   height: 32px;
   margin: 0;
