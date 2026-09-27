@@ -493,6 +493,54 @@
                 />
               </template>
 
+              <template v-else-if="currentPlatform === 'weixin'">
+                <WeixinLoginPanel
+                  :profile-id="weixinLoginProfileID"
+                  :bot-id="form.weixin_bot_id"
+                  :user-id="form.weixin_user_id"
+                  :logged-in="!!form.weixin_bot_token_configured"
+                  @updated="onWeixinLoginUpdated"
+                />
+              </template>
+
+              <template v-else-if="currentPlatform === 'imessage'">
+                <div class="field">
+                  <label for="bot-imessage-url">BlueBubbles 服务器地址</label>
+                  <input id="bot-imessage-url" v-model="form.imessage_server_url" class="input mono" placeholder="例如 http://192.168.1.10:1234" autocomplete="off" />
+                  <span class="hint">一台常开、登录了 Apple ID 的 Mac 上运行 BlueBubbles Server，Diana 要能访问到它。</span>
+                </div>
+                <SecretField
+                  id="bot-imessage-password"
+                  v-model="iMessagePasswordDraft"
+                  label="服务器密码"
+                  placeholder="BlueBubbles Server 设置里的密码"
+                  :configured="form.imessage_password_configured"
+                  :revealed="tokenRevealed.imessage_password"
+                  :busy="tokenRevealBusy === 'imessage_password'"
+                  @toggle-reveal="toggleTokenReveal('imessage_password')"
+                />
+                <SecretField
+                  id="bot-imessage-webhook"
+                  v-model="iMessageWebhookDraft"
+                  label="Webhook 密钥"
+                  placeholder="留空保存时自动生成"
+                  hint="BlueBubbles 的 webhook 不签名，Diana 只认回调地址里 ?token= 带着的这个值，不接受服务器密码。"
+                  :configured="form.imessage_webhook_token_configured"
+                  :revealed="tokenRevealed.imessage_webhook_token"
+                  :busy="tokenRevealBusy === 'imessage_webhook_token'"
+                  @toggle-reveal="toggleTokenReveal('imessage_webhook_token')"
+                />
+                <div class="field">
+                  <label for="bot-imessage-poll">轮询兜底（秒）</label>
+                  <input id="bot-imessage-poll" v-model.number="form.imessage_poll_seconds" class="input" type="number" min="0" max="3600" step="1" inputmode="numeric" placeholder="留空只用 webhook" />
+                  <span class="hint">Mac 访问不到 Diana、webhook 打不进来时，按这个间隔主动拉新消息。留空只用 webhook，填写时最短 5 秒。</span>
+                </div>
+                <div class="field">
+                  <button class="btn" type="button" :disabled="iMessageTesting" @click="probeIMessageServer">测试连接</button>
+                  <span v-if="iMessageTestResult" class="hint" role="status">{{ iMessageTestSummary }}</span>
+                </div>
+              </template>
+
               <!-- 飞书和企业微信只能靠平台回调收消息，地址要填到对方后台。 -->
               <div v-if="callbackURL" class="field">
                 <label for="bot-callback-url">回调地址</label>
@@ -502,7 +550,11 @@
                     <Copy :size="14" aria-hidden="true" />
                   </button>
                 </div>
-                <span class="hint">
+                <span v-if="currentPlatform === 'imessage'" class="hint">
+                  在 BlueBubbles Server 的 API &amp; Webhooks 里原样添加这个地址（已带上 Webhook 密钥，新机器人保存后才会生成），
+                  事件至少勾选 New Messages。域名要换成那台 Mac 访问得到的 Diana 地址。别把服务器密码写进 webhook 地址。
+                </span>
+                <span v-else class="hint">
                   填到该平台后台的事件接收配置里。这里按你当前访问控制台的地址拼出，
                   必须换成平台服务器能访问到的公网 HTTPS 地址才收得到消息。
                 </span>
@@ -655,6 +707,26 @@
                       <Trash2 :size="16" aria-hidden="true" />
                     </button>
                   </div>
+                </div>
+                <div v-if="isMediaRole(role.key) && roleForm[role.key]" class="model-role-params">
+                  <label v-for="field in mediaParamFields[role.key]" :key="field.key" class="field">
+                    <span>{{ field.label }}</span>
+                    <AppSelect
+                      v-if="field.options"
+                      :model-value="mediaParamValue(role.key, field.key)"
+                      :options="field.options"
+                      :placeholder="field.placeholder"
+                      @update:model-value="(value) => setMediaParam(role.key, field.key, value)"
+                    />
+                    <input
+                      v-else
+                      class="input"
+                      :value="mediaParamValue(role.key, field.key)"
+                      :placeholder="field.placeholder"
+                      @change="(event) => setMediaParam(role.key, field.key, (event.target as HTMLInputElement).value)"
+                    />
+                  </label>
+                  <button type="button" class="btn ghost small" @click="clearRole(role.key)">停用这个插槽</button>
                 </div>
                 <p class="model-role-desc muted">{{ role.description }}</p>
               </div>
@@ -989,6 +1061,38 @@
                 <span class="hint">每个群单独计，一个群刷满不会把别的群一起饿死；群配置里填了就以群为准。这个群名下的每次模型调用都算，含路由判断和工具步，不只是最终那句回复。主人不受限。</span>
               </div>
               <div class="field">
+                <label for="bot-image-group-limit">生图次数 · 每群每天</label>
+                <input id="bot-image-group-limit" v-model.number="form.image_generation_daily_group_limit" class="input" type="number" min="0" step="1" inputmode="numeric" placeholder="留空不限" />
+                <span class="hint">每个群每天最多成功生成几次图片，改图也算一次，逐张改几张算几次；失败、被拒不算。群配置里填了就以群为准。</span>
+              </div>
+              <div class="field">
+                <label for="bot-image-user-limit">生图次数 · 每人每天</label>
+                <input id="bot-image-user-limit" v-model.number="form.image_generation_daily_user_limit" class="input" type="number" min="0" step="1" inputmode="numeric" placeholder="留空不限" />
+                <span class="hint">每个人每天最多成功生成几次，跨群和私聊合计。用完后机器人会如实告诉对方今天的次数已用完。主人不受限，也不占别人的次数。</span>
+              </div>
+              <div class="field">
+                <label for="bot-video-group-limit">视频次数 · 每群每天</label>
+                <input id="bot-video-group-limit" v-model.number="form.video_generation_daily_group_limit" class="input" type="number" min="0" step="1" inputmode="numeric" placeholder="留空不限" />
+                <span class="hint">每个群每天最多生成几段视频。任务一旦被视频接口受理就算一次，之后渲染失败、超时也算（那时已经在计费）；提交时就被拒的不算。群配置里填了就以群为准。</span>
+              </div>
+              <div class="field">
+                <label for="bot-video-user-limit">视频次数 · 每人每天</label>
+                <input id="bot-video-user-limit" v-model.number="form.video_generation_daily_user_limit" class="input" type="number" min="0" step="1" inputmode="numeric" placeholder="留空不限" />
+                <span class="hint">每个人每天最多生成几段视频，跨群和私聊合计，和生图分开计数。主人不受限，也不占别人的次数。</span>
+              </div>
+              <div class="field">
+                <label for="bot-daily-limit-tz">生图、视频次数 · 重置时区</label>
+                <input id="bot-daily-limit-tz" v-model="form.daily_limit_timezone" class="input" list="bot-daily-limit-timezones" placeholder="留空读 TZ 环境变量，未设按 Asia/Shanghai" />
+                <datalist id="bot-daily-limit-timezones">
+                  <option value="Asia/Shanghai"></option>
+                  <option value="Asia/Hong_Kong"></option>
+                  <option value="Asia/Taipei"></option>
+                  <option value="Asia/Tokyo"></option>
+                  <option value="UTC"></option>
+                </datalist>
+                <span class="hint">每天的次数在这个时区的零点重置。Docker 容器默认是 UTC，不按服务器本地时区算，免得北京时间早上 8 点才重置。</span>
+              </div>
+              <div class="field">
                 <label for="bot-sample">回复抽样率（%）</label>
                 <input id="bot-sample" v-model.number="form.reply_sample_percent" class="input" type="number" min="0" max="100" step="1" inputmode="numeric" placeholder="留空不抽样" />
                 <span class="hint">群里没 @、没引用、没叫名字的消息，只有这个比例交给模型判断要不要接话，没抽中的一次调用都不花。被点名的照常回复，主人不受限。群配置里填了就以群为准。</span>
@@ -1031,7 +1135,7 @@
                   v-model="welcomeTemplatesDraft"
                   class="textarea"
                   rows="3"
-                  placeholder="每行一条候选，发送时随机抽一条；{user_id} 会替换成新成员 ID。LLM 模式冷却或失败时也从这里回落。"
+                  placeholder="每行一条候选，发送时随机抽一条；可用 {nickname} 昵称、{user_id} 账号、{group} 群名、{group_id} 群号。LLM 模式冷却或失败时也从这里回落。"
                 ></textarea>
               </div>
               <div v-if="form.welcome_enabled && (form.welcome_mode ?? 'fixed') === 'llm'" class="field">
@@ -1182,6 +1286,17 @@
                 <span class="hint">
                   开启时，账号、群号和消息 ID 在发给模型前换成 im_user_xxx 这类别名，模型调用工具或发消息时再自动换回真实 ID。
                   关闭后模型直接看到真实 ID，适合需要让模型按原始账号查人、对账的场景。
+                </span>
+              </div>
+              <div class="field wide">
+                <label class="switch">
+                  <input v-model="form.llm_identity_body_account_mapping_enabled" type="checkbox" :disabled="!form.llm_identity_masking_enabled" />
+                  <span class="track" aria-hidden="true"></span>
+                  <span class="switch-label">正文里的账号也换成别名（默认开启）</span>
+                </label>
+                <span class="hint">
+                  有人在消息里直接写 QQ 号时，先向平台核实是不是本群成员，是就换成同一个别名，模型能认出是谁、也能拿去查；订单号、手机号等其他数字原样保留。
+                  关闭后正文里没在聊天记录中出现过的号码按原样发给模型。只在上面的隐私开关打开时生效。
                 </span>
               </div>
             </div>
@@ -1977,6 +2092,7 @@ import SkeletonBlock from "../components/SkeletonBlock.vue";
 import { ArrowLeft, Bot, ChevronDown, ChevronRight, Copy, Download, Eye, EyeOff, GripVertical, Pencil, Plus, Power, PowerOff, RefreshCw, RotateCcw, Save, Settings2, Shuffle, Sparkles, Trash2, Upload, X } from "@lucide/vue";
 import { formatClock } from "../format";
 import { sendRetryFields, sendRetryPayload, sendRetryValidationError } from "../send-retry-settings";
+import { botImageGenerationLimitsPayload, botVideoGenerationLimitsPayload } from "../media-generation-quota";
 import {
   deleteBotProfile,
   generatePersona,
@@ -2015,7 +2131,9 @@ import {
   saveProfileEnabled,
   saveAllProfilesEnabled,
   startBot,
-  stopBot
+  stopBot,
+  testIMessageServer,
+  type IMessageProbeResult
 } from "../api";
 import AccountNameHint from "../components/AccountNameHint.vue";
 import AppSelect, { type AppSelectOption } from "../components/AppSelect.vue";
@@ -2033,6 +2151,7 @@ import MessageRelayManager from "../components/MessageRelayManager.vue";
 import Modal from "../components/Modal.vue";
 import ReplyGateForm from "../components/ReplyGateForm.vue";
 import SecretField from "../components/SecretField.vue";
+import WeixinLoginPanel from "../components/WeixinLoginPanel.vue";
 import { pushStatusSnapshot, stream } from "../stream";
 import { askConfirm } from "../confirm";
 import {
@@ -2280,6 +2399,31 @@ const feishuEncryptDraft = ref("");
 const weComSecretDraft = ref("");
 const weComTokenDraft = ref("");
 const weComAESDraft = ref("");
+const iMessagePasswordDraft = ref("");
+const iMessageWebhookDraft = ref("");
+const iMessageTesting = ref(false);
+const iMessageTestResult = ref<IMessageProbeResult | null>(null);
+const iMessageTestSummary = computed(() => {
+  const result = iMessageTestResult.value;
+  if (!result) return "";
+  if (!result.connected) return `连不上：${result.error || "未知错误"}`;
+  const account = result.detected_imessage ? `，登录账号 ${result.detected_imessage}` : "";
+  const privateAPI = result.private_api && result.helper_connected ? "Private API 已启用，可以引用回复" : "未启用 Private API，引用回复会退回普通发送";
+  return `已连接 BlueBubbles ${result.server_version || ""}${account}；${privateAPI}。`;
+});
+
+async function probeIMessageServer(): Promise<void> {
+  if (!form.value) return;
+  iMessageTesting.value = true;
+  iMessageTestResult.value = null;
+  try {
+    iMessageTestResult.value = await testIMessageServer(form.value.id ?? "", form.value.imessage_server_url ?? "", iMessagePasswordDraft.value);
+  } catch (error) {
+    iMessageTestResult.value = { connected: false, error: error instanceof Error ? error.message : String(error) };
+  } finally {
+    iMessageTesting.value = false;
+  }
+}
 
 // 每个平台的凭据都走同一套「留空沿用、点开才取明文」的流程，差别只有草稿变量。
 // 后端的字段名有固定规律（<字段> 和 <字段>_configured），所以这里只登记草稿，
@@ -2296,7 +2440,9 @@ const tokenDrafts = {
   feishu_encrypt_key: feishuEncryptDraft,
   wecom_secret: weComSecretDraft,
   wecom_token: weComTokenDraft,
-  wecom_encoding_aes_key: weComAESDraft
+  wecom_encoding_aes_key: weComAESDraft,
+  imessage_password: iMessagePasswordDraft,
+  imessage_webhook_token: iMessageWebhookDraft
 } satisfies Record<string, Ref<string>>;
 
 type TokenField = keyof typeof tokenDrafts;
@@ -2485,8 +2631,32 @@ const callbackURL = computed(() => {
   const path = platformDefinition(currentPlatform.value)?.callback_path ?? "";
   if (!path) return "";
   const origin = typeof window === "undefined" ? "" : window.location.origin;
-  return origin ? `${origin}${path}` : path;
+  const url = origin ? `${origin}${path}` : path;
+  if (currentPlatform.value !== "imessage") return url;
+  // BlueBubbles 的 webhook 只能靠地址里的 token 证明来源，给出带 token 的完整地址，
+  // 免得用户自己拼时顺手填成服务器密码。
+  const token = iMessageWebhookDraft.value.trim() || iMessageWebhookSaved.value;
+  return `${url}?token=${token ? encodeURIComponent(token) : "保存后生成"}`;
 });
+
+// 已保存的 webhook token 只以 configured 标志回传；编辑 iMessage 机器人时单独取一次明文，
+// 用来拼回调地址。
+const iMessageWebhookSaved = ref("");
+watch(
+  () => [form.value?.id, currentPlatform.value, form.value?.imessage_webhook_token_configured] as const,
+  async ([id, platform, configured]) => {
+    iMessageWebhookSaved.value = "";
+    if (platform !== "imessage" || !configured || !id) return;
+    try {
+      const secrets = await getBotProfileConfig(true);
+      const profile = (secrets.profiles ?? []).find((item) => item.id === id) ?? secrets;
+      if (form.value?.id === id) iMessageWebhookSaved.value = profile.imessage_webhook_token ?? "";
+    } catch {
+      /* 取不到时地址里显示占位，用户仍可点「查看」手动取 */
+    }
+  },
+  { immediate: true }
+);
 
 async function copyCallbackURL(): Promise<void> {
   if (!callbackURL.value) return;
@@ -2912,6 +3082,13 @@ const globalGate = computed({
 
 const status = computed(() => stream.status);
 const profiles = computed<BotProfileConfig[]>(() => profileSet.value?.profiles ?? []);
+// 扫码要挂在一台已经按微信平台保存过的机器人上；刚在下拉框里切过来还没保存时，
+// 后端会拒绝，干脆先让面板提示保存。
+const weixinLoginProfileID = computed(() => {
+  const id = form.value?.id;
+  if (creating.value || !id) return undefined;
+  return profiles.value.find((profile) => profile.id === id)?.platform === "weixin" ? id : undefined;
+});
 const copiedFrom = ref<Pick<BotProfileConfig, "id" | "name" | "platform" | "connection_profile_id"> | null>(null);
 const copySourceID = ref("");
 const copySourceOptions = computed<AppSelectOption[]>(() => [
@@ -3077,9 +3254,14 @@ function onMessageRelaysSaved(config: BotProfileConfig): void {
 // 要快；后台生成在回复之外异步跑，慢一点没关系。
 const purposeRoleKeys = ["reply_assist", "background"] as const;
 
-type RoleKey = "chat" | "vision" | "intent" | "image" | "media_parse" | (typeof purposeRoleKeys)[number];
+// 音视频插槽：不配就没有这项能力，不跟随对话——对话模型接不了这些接口。
+const mediaRoleKeys = ["tts", "stt", "video"] as const;
+type MediaRoleKey = (typeof mediaRoleKeys)[number];
+
+type RoleKey = "chat" | "vision" | "intent" | "image" | "media_parse" | (typeof purposeRoleKeys)[number] | MediaRoleKey;
 type RoleRoute = { profile_id?: string; group?: string; model: string; provider_id?: string; model_id?: string; follow_chat?: boolean };
-type RoleAssignment = RoleRoute & { fallbacks?: RoleRoute[] };
+// params 只在音视频插槽的主路由上有，后备沿用同一份。
+type RoleAssignment = RoleRoute & { fallbacks?: RoleRoute[]; params?: Record<string, string> };
 type ModelRoleRow = { key: RoleKey; label: string; sublabel?: string; description: string };
 const modelRoleRows: ModelRoleRow[] = [
   {
@@ -3136,8 +3318,84 @@ const purposeRoleRows: ModelRoleRow[] = [
   }
 ];
 
-// 细分用途只有这两档，直接和其他用途一起铺开，不再折叠。
-const visibleModelRoleRows = [...modelRoleRows, ...purposeRoleRows, imageRoleRow];
+const mediaRoleRows: ModelRoleRow[] = [
+  {
+    key: "tts",
+    label: "语音合成",
+    sublabel: "可选 · TTS",
+    description:
+      "把文字合成为语音消息。走 OpenAI 兼容的 /audio/speech（OpenAI、CosyVoice、ChatTTS 等自建服务的兼容层），地址是 elevenlabs.io 时自动改用 ElevenLabs 接口。" +
+      "要让机器人用上，还得在插件「语音合成」里把服务预设选成「模型分配 · 语音合成插槽」。"
+  },
+  {
+    key: "stt",
+    label: "语音识别",
+    sublabel: "可选 · STT",
+    description:
+      "把收到的语音转写成文字给上下文用。走 OpenAI 兼容的 /audio/transcriptions（Whisper、FunASR 等），ElevenLabs 地址自动改用它的 speech-to-text。" +
+      "转写开关在插件「语音识别」里：识别后端选「模型分配 · 语音识别插槽」才会使用这里。"
+  },
+  {
+    key: "video",
+    label: "视频生成",
+    sublabel: "可选",
+    description:
+      "文生视频、图生视频，按 OpenAI Sora 的 /videos 任务接口提交并轮询。配好后有生图权限的人（群成员也一样）可以让机器人生成视频，任务在后台跑完再发出来，每个任务计入群的模型调用额度；不配则不提供这项能力。"
+  }
+];
+
+type MediaParamField = { key: string; label: string; placeholder: string; options?: AppSelectOption[] };
+const speechAPIOptions: AppSelectOption[] = [
+  { value: "", label: "按地址自动" },
+  { value: "openai", label: "OpenAI 兼容" },
+  { value: "elevenlabs", label: "ElevenLabs" }
+];
+const mediaParamFields: Record<MediaRoleKey, MediaParamField[]> = {
+  tts: [
+    { key: "api", label: "接口", placeholder: "按地址自动", options: speechAPIOptions },
+    { key: "voice", label: "音色", placeholder: "alloy / 说话人 / voice_id" },
+    { key: "format", label: "格式", placeholder: "mp3", options: ["", "mp3", "wav", "opus", "aac", "flac", "pcm"].map((value) => ({ value, label: value || "默认（mp3）" })) },
+    { key: "speed", label: "语速", placeholder: "1.0" },
+    { key: "instructions", label: "语气说明", placeholder: "可选" },
+    { key: "timeout_seconds", label: "超时（秒）", placeholder: "60" }
+  ],
+  stt: [
+    { key: "api", label: "接口", placeholder: "按地址自动", options: speechAPIOptions },
+    { key: "language", label: "语言", placeholder: "留空自动识别，如 zh" },
+    { key: "prompt", label: "提示词", placeholder: "可选，专有名词" },
+    { key: "timeout_seconds", label: "超时（秒）", placeholder: "120" }
+  ],
+  video: [
+    { key: "size", label: "分辨率", placeholder: "1280x720" },
+    { key: "seconds", label: "默认时长（秒）", placeholder: "由服务决定" },
+    { key: "timeout_seconds", label: "任务总时限（秒）", placeholder: "600" },
+    { key: "poll_interval_seconds", label: "轮询间隔（秒）", placeholder: "5" }
+  ]
+};
+
+function isMediaRole(role: RoleKey): role is MediaRoleKey {
+  return mediaRoleKeys.includes(role as MediaRoleKey);
+}
+
+function mediaParamValue(role: RoleKey, key: string): string {
+  return roleForm.value[role]?.params?.[key] ?? "";
+}
+
+function setMediaParam(role: RoleKey, key: string, value: string): void {
+  const assignment = roleForm.value[role];
+  if (!assignment) return;
+  const params = { ...(assignment.params ?? {}) };
+  if (value.trim()) params[key] = value.trim();
+  else delete params[key];
+  assignment.params = Object.keys(params).length > 0 ? params : undefined;
+}
+
+function clearRole(role: RoleKey): void {
+  delete roleForm.value[role];
+}
+
+// 细分用途只有这两档，直接和其他用途一起铺开，不再折叠。音视频插槽排在最后。
+const visibleModelRoleRows = [...modelRoleRows, ...purposeRoleRows, imageRoleRow, ...mediaRoleRows];
 
 function isPurposeRole(role: RoleKey): boolean {
   return purposeRoleKeys.includes(role as (typeof purposeRoleKeys)[number]);
@@ -3145,7 +3403,7 @@ function isPurposeRole(role: RoleKey): boolean {
 
 // 媒体解析和细分用途可以不配，不配时模型一栏锁定，占位文字说明它跟着谁走。
 function isOptionalRole(role: RoleKey): boolean {
-  return role === "media_parse" || isPurposeRole(role);
+  return role === "media_parse" || isPurposeRole(role) || isMediaRole(role);
 }
 
 // 细分用途留空时跟着谁：回复辅助先找后台生成，后台生成直接跟随对话。
@@ -3157,6 +3415,7 @@ function roleModelPlaceholder(role: RoleKey): string {
   if (!roleForm.value[role]) {
     if (role === "media_parse") return "跟随视觉理解模型";
     if (isPurposeRole(role)) return `跟随${purposeRoleFallbackLabel(role)}模型`;
+    if (isMediaRole(role)) return "未配置，不启用";
   }
   return roleForm.value[role]?.follow_chat ? "跟随对话模型" : "请选择模型（必填）";
 }
@@ -3174,12 +3433,13 @@ const incomingModelRoles = ref<BotProfileConfig["model_roles"]>();
 // roleSnapshot 按固定字段顺序拍平，保证服务端回来的那份和页面草稿能直接比。
 function roleSnapshot(roles: Record<string, RoleAssignment | undefined> | undefined): string {
   const route = (item: RoleRoute): unknown[] => [item.profile_id ?? "", item.group ?? "", item.model ?? "", item.provider_id ?? "", item.model_id ?? "", item.follow_chat === true];
+  const params = (item: RoleAssignment): unknown[] => Object.entries(item.params ?? {}).sort(([a], [b]) => a.localeCompare(b));
   return JSON.stringify(
     Object.keys(roles ?? {})
       .sort()
       .map((key) => {
         const role = roles?.[key];
-        return role ? [key, route(role), (role.fallbacks ?? []).map(route)] : [key];
+        return role ? [key, route(role), (role.fallbacks ?? []).map(route), params(role)] : [key];
       })
   );
 }
@@ -3206,7 +3466,8 @@ function setRoleForm(source: BotProfileConfig["model_roles"]): void {
       provider_id: role.provider_id,
       model_id: role.model_id,
       follow_chat: role.follow_chat,
-      fallbacks: role.fallbacks?.map((fallback) => ({ ...fallback }))
+      fallbacks: role.fallbacks?.map((fallback) => ({ ...fallback })),
+      params: role.params ? { ...role.params } : undefined
     };
   }
   roleForm.value = roles;
@@ -3334,6 +3595,11 @@ function modelCompatibility(model: LLMModelInfo, role: RoleKey): ModelCompatibil
   if (role === "image") {
     return !outputKnown ? "unknown" : output.has("image") ? "compatible" : "incompatible";
   }
+  // 模型目录很少给音视频模型标模态：标了对上就排前面，对不上也不藏，
+  // 自建 TTS/STT 服务的模型名五花八门，藏了就没法选。
+  if (role === "tts") return output.has("audio") ? "compatible" : "unknown";
+  if (role === "stt") return input.has("audio") ? "compatible" : "unknown";
+  if (role === "video") return output.has("video") ? "compatible" : "unknown";
   if (role === "chat" || role === "intent") {
     return !outputKnown ? "unknown" : output.has("text") ? "compatible" : "incompatible";
   }
@@ -3394,8 +3660,8 @@ function channelGroups(): { name: string; count: number }[] {
 function channelOptionsFor(role: RoleKey): AppSelectOption[] {
   const base: AppSelectOption[] = [];
   if (role === "media_parse") base.push({ value: FOLLOW_VISION, label: "跟随视觉理解", hint: "不单独绑定媒体解析模型" });
-  // 对话是被跟随的那一档，不能跟随自己。
-  if (role !== "chat") {
+  // 对话是被跟随的那一档，不能跟随自己；音视频插槽没有可跟随的对话模型。
+  if (role !== "chat" && !isMediaRole(role)) {
     base.push({
       value: FOLLOW_CHAT,
       label: "跟随对话",
@@ -3565,10 +3831,11 @@ function setRoleChannel(role: RoleKey, value: string): void {
   const current = roleForm.value[role];
   const model = current?.follow_chat ? "" : (current?.model ?? "");
   const fallbacks = current?.follow_chat ? undefined : current?.fallbacks;
+  const params = current?.params;
   if (value.startsWith(GROUP_PREFIX)) {
-    roleForm.value[role] = { group: value.slice(GROUP_PREFIX.length), model, fallbacks };
+    roleForm.value[role] = { group: value.slice(GROUP_PREFIX.length), model, fallbacks, params };
   } else {
-    roleForm.value[role] = { profile_id: value, model, fallbacks };
+    roleForm.value[role] = { profile_id: value, model, fallbacks, params };
   }
   const options = modelOptionsFor(role).filter((option) => option.value !== "");
   if (!roleModelIsSelectable(role, model)) {
@@ -3747,7 +4014,7 @@ function setRoleModel(role: RoleKey, value: string): void {
   if (value.includes(MODEL_PAIR_SEP)) {
     // 跨 Provider 选择：一次确定 Provider 和模型。
     const [profileID, model] = value.split(MODEL_PAIR_SEP);
-    roleForm.value[role] = { profile_id: profileID, model, fallbacks: roleForm.value[role]?.fallbacks };
+    roleForm.value[role] = { profile_id: profileID, model, fallbacks: roleForm.value[role]?.fallbacks, params: roleForm.value[role]?.params };
     return;
   }
   if (!value) {
@@ -3821,6 +4088,7 @@ function setForm(config: BotProfileConfig): void {
     auto_video_preprocess: config.auto_video_preprocess ?? true,
     llm_streaming_enabled: config.llm_streaming_enabled ?? true,
     llm_identity_masking_enabled: config.llm_identity_masking_enabled ?? true,
+    llm_identity_body_account_mapping_enabled: config.llm_identity_body_account_mapping_enabled ?? true,
     group_trigger_mode: config.group_trigger_mode ?? "smart",
     refusal_strategy: config.refusal_strategy ?? "smart",
     prompt_inject_time: config.prompt_inject_time ?? true,
@@ -3843,6 +4111,18 @@ function setForm(config: BotProfileConfig): void {
 function applyConfig(config: BotProfileConfig): void {
   profileSet.value = config;
   setForm(config);
+}
+
+// 扫码结果已经在后端落库。只把微信那几个字段和后端代填的主人 ID 合进表单，
+// 别整份替换——用户可能正改着别的设置还没保存。
+function onWeixinLoginUpdated(config: BotProfileConfig): void {
+  profileSet.value = config;
+  const current = form.value;
+  if (!current) return;
+  current.weixin_bot_id = config.weixin_bot_id;
+  current.weixin_user_id = config.weixin_user_id;
+  current.weixin_bot_token_configured = config.weixin_bot_token_configured;
+  if (!current.owner_id?.trim() && config.owner_id) current.owner_id = config.owner_id;
 }
 
 function splitList(raw: string): string[] {
@@ -3942,7 +4222,7 @@ async function save(): Promise<void> {
   for (const row of visibleModelRoleRows) {
     const role = roleForm.value[row.key];
     // 细分用途和媒体解析都可以留空：留空表示跟随它所属的那一档。
-    if (!role && (row.key === "media_parse" || purposeRoleKeys.includes(row.key as (typeof purposeRoleKeys)[number]))) continue;
+    if (!role && (row.key === "media_parse" || purposeRoleKeys.includes(row.key as (typeof purposeRoleKeys)[number]) || isMediaRole(row.key))) continue;
     // 跟随对话的那几档没有自己的提供商和模型，跳过校验；对话本身没有这个选项。
     if (row.key !== "chat" && role?.follow_chat) continue;
     if (!role || (!role.profile_id && !role.group && !(role.provider_id && role.model_id))) {
@@ -3994,7 +4274,8 @@ async function save(): Promise<void> {
         model: role.model.trim(),
         provider_id: role.provider_id,
         model_id: role.model_id,
-        fallbacks: role.fallbacks?.map((fallback) => ({ ...fallback, model: fallback.model.trim() }))
+        fallbacks: role.fallbacks?.map((fallback) => ({ ...fallback, model: fallback.model.trim() })),
+        params: role.params
       };
       }
     }
@@ -4008,11 +4289,14 @@ async function save(): Promise<void> {
       forward_reply_threshold: Number(current.forward_reply_threshold) || 0,
       // 数字框清空后 v-model.number 给的是空串，后端按整数解析会整份拒收。
       model_call_quota: Math.max(0, Math.round(Number(current.model_call_quota) || 0)),
+      ...botImageGenerationLimitsPayload(current),
+      ...botVideoGenerationLimitsPayload(current),
       reply_sample_percent: Math.min(100, Math.max(0, Math.round(Number(current.reply_sample_percent) || 0))),
       forward_reply_chunk_threshold: Number(current.forward_reply_chunk_threshold) || 0,
       reply_merge_confidence_percent: Number(current.reply_merge_confidence_percent) || 0,
       ...sendRetryPayload(current),
       typing_delay_per_char_ms: Number(current.typing_delay_per_char_ms) || 0,
+      imessage_poll_seconds: Math.max(0, Math.round(Number(current.imessage_poll_seconds) || 0)),
       ...secrets,
       group_triggers: splitList(triggersDraft.value),
       welcome_templates: welcomeTemplatesDraft.value

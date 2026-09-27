@@ -47,6 +47,10 @@ type PluginSettingSpec struct {
 	// Secret 标记凭据类设置（Cookie、密钥等）。这类值读接口一律不回传明文，
 	// 前端用密码框 + 「已配置」徽章展示，提交空串表示保持原值不变。
 	Secret bool `json:"secret,omitempty"`
+	// GlobalOnly 标记只能全局设置、不能按群覆盖的项：它们喂给的是进程里只有一份
+	// 的资源（端口、连接），按群改了也到不了那份资源，只会让不同群看到的配置和
+	// 实际生效的对不上。
+	GlobalOnly bool `json:"global_only,omitempty"`
 }
 
 // secretSettingKeys 返回声明为凭据的设置键。
@@ -204,6 +208,11 @@ func normalizeGroupPluginSettings(specs []PluginSettingSpec, values map[string]a
 		if secrets[key] {
 			return nil, fmt.Errorf("diana: secret plugin setting %q cannot be overridden per group", key)
 		}
+		for _, spec := range specs {
+			if spec.Key == key && spec.GlobalOnly {
+				return nil, fmt.Errorf("diana: plugin setting %q is global only and cannot be overridden per group", key)
+			}
+		}
 	}
 	return normalizePluginSettings(nonSecretPluginSettingSpecs(specs), values)
 }
@@ -217,7 +226,7 @@ func sanitizeGroupPluginSettings(specs []PluginSettingSpec, values map[string]an
 func nonSecretPluginSettingSpecs(specs []PluginSettingSpec) []PluginSettingSpec {
 	out := make([]PluginSettingSpec, 0, len(specs))
 	for _, spec := range specs {
-		if !spec.Secret {
+		if !spec.Secret && !spec.GlobalOnly {
 			out = append(out, spec)
 		}
 	}

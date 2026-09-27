@@ -122,6 +122,12 @@ func (p RelationshipPolicy) allowedAgentToolNames() map[string]bool {
 		// 主人在场时存在。清空全部是主人专属，由工具自己判身份。
 		dianaSelfNoteToolName: true,
 		dianaStickerToolName:  true,
+		// VRChat 工具只在插件启用时挂；操控类默认只挂给主人，插件里放开后才给成员，
+		// 所以这里不必再按身份挡一次。
+		dianaVRChatStatusToolName:     true,
+		dianaVRChatChatboxToolName:    true,
+		dianaVRChatExpressionToolName: true,
+		dianaVRChatMoveToolName:       true,
 		// 中途说一句只往当前对话发文字，和最终回复同一个出口，谁都能用。
 		dianaInterimMessageToolName: true,
 		// 只发模型自己写的文本内容，不碰本地文件和命令；「仅主人可用」由插件设置在工具内判断。
@@ -153,7 +159,10 @@ func (p RelationshipPolicy) allowedAgentToolNames() map[string]bool {
 		groupDirectoryToolName: true,
 		dianaPlatformToolName:  true,
 		dianaImageToolName:     true,
-		"reminder":             true,
+		// 视频和生图同一档，跟着生图权限走。费用靠群的模型调用额度兜底：
+		// 每个视频任务都记一次用量，额度见底时整群停在消息入口。
+		dianaVideoToolName: true,
+		"reminder":         true,
 		// 事件触发任务：非主人只能盯当前会话里的自己，由工具自己判，见 parseEventTriggerCreate。
 		dianaEventTriggerToolName: true,
 		// schedule / rss / github 三种订阅现在是同一个工具的 kind 取值。github 那种

@@ -163,6 +163,7 @@ CREATE TABLE IF NOT EXISTS memory_jobs (
   lease_owner TEXT,
   lease_until INTEGER,
   last_error TEXT,
+  consecutive_timeouts INTEGER NOT NULL DEFAULT 0,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
   completed_at INTEGER
@@ -369,6 +370,9 @@ CREATE INDEX IF NOT EXISTS idx_repository_issue_drafts_group_status_time ON repo
 	if err := s.addUserProfileRomanceColumn(); err != nil {
 		return err
 	}
+	if err := s.addMemoryJobTimeoutColumn(); err != nil {
+		return err
+	}
 	if err := s.backfillRecallNoticeAudits(); err != nil {
 		return err
 	}
@@ -427,6 +431,19 @@ func (s *SQLiteStore) addUserProfileRomanceColumn() error {
 		return err
 	}
 	_, err = s.db.Exec(`ALTER TABLE user_profiles ADD COLUMN romance TEXT NOT NULL DEFAULT ''`)
+	return err
+}
+
+// addMemoryJobTimeoutColumn 给记忆任务表补上连续超时计数。
+//
+// 老库补列即可，不回填：升级时还在排队的任务从 0 开始数，最多多试几次，仍受
+// 总次数上限约束。
+func (s *SQLiteStore) addMemoryJobTimeoutColumn() error {
+	has, err := s.hasColumn("memory_jobs", "consecutive_timeouts")
+	if err != nil || has {
+		return err
+	}
+	_, err = s.db.Exec(`ALTER TABLE memory_jobs ADD COLUMN consecutive_timeouts INTEGER NOT NULL DEFAULT 0`)
 	return err
 }
 

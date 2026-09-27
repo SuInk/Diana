@@ -103,6 +103,8 @@ const oneBotProfile: BotProfileConfig = {
   group_triggers: ["Diana", "diana"], disabled_groups: [], system_prompt: demoDefaultSoul,
   debug_mode_enabled: true, bot_reply_loop_detection_enabled: true, reply_refusal_suppression_enabled: true, prompt_inject_time: false,
   proactive_reply_chance: 1, proactive_reply_threshold: 0.9, recent_context_limit: 40, max_reply_chars: 0,
+  image_generation_daily_group_limit: 30, image_generation_daily_user_limit: 5,
+  video_generation_daily_group_limit: 5, video_generation_daily_user_limit: 1,
   cross_group_memory_enabled: true, world_book_enabled: true, romance_enabled: false, mood_enabled: true, poke_reply_enabled: true, expression_learning_enabled: true, dict_segment_enabled: true, semantic_search_enabled: false, agent_enabled: true, agent_mode: "standard", agent_max_steps: 12,
   max_bot_concurrency: 4, request_timeout_ms: 60_000,
   model_roles: {
@@ -282,7 +284,7 @@ const demoGroupAvatar = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(`
 `)}`;
 
 const groups: BotGroupSummary[] = [
-  { group_id: "100200301", group_name: "产品讨论（演示）", avatar_url: demoGroupAvatar, member_count: 186, max_member_count: 500, enabled: true, configured: true, joined: true, group_triggers: ["Diana", "diana"], system_prompt: "以准确、简洁的方式参与产品和工程讨论。", recent_context_limit: 50, model_call_quota: 400, reply_sample_percent: 40, quota_call_limit: 400, quota_calls_used: 168, proactive_reply_chance: 1, proactive_reply_threshold: 0.9, reply_gate: { active_hours_enabled: true, active_start: "08:00", active_end: "23:30", timezone: "Asia/Shanghai", blocked_users: ["100200999"], owner_bypass: true }, plugin_overrides: { "official.repository-watch": true }, updated_at: before(12) },
+  { group_id: "100200301", group_name: "产品讨论（演示）", avatar_url: demoGroupAvatar, member_count: 186, max_member_count: 500, enabled: true, configured: true, joined: true, group_triggers: ["Diana", "diana"], system_prompt: "以准确、简洁的方式参与产品和工程讨论。", recent_context_limit: 50, model_call_quota: 400, image_generation_daily_group_limit: 50, video_generation_daily_group_limit: 0, reply_sample_percent: 40, quota_call_limit: 400, quota_calls_used: 168, proactive_reply_chance: 1, proactive_reply_threshold: 0.9, reply_gate: { active_hours_enabled: true, active_start: "08:00", active_end: "23:30", timezone: "Asia/Shanghai", blocked_users: ["100200999"], owner_bypass: true }, plugin_overrides: { "official.repository-watch": true }, updated_at: before(12) },
   { group_id: "100200418", group_name: "日常交流（演示）", avatar_url: demoGroupAvatar, member_count: 74, max_member_count: 200, enabled: true, configured: true, joined: true, group_triggers: ["Diana"], system_prompt: "自然参与闲聊，事实不确定时优先搜索。", recent_context_limit: 40, quota_call_limit: 400, quota_calls_used: 400, proactive_reply_chance: 1, proactive_reply_threshold: 0.9, plugin_overrides: {}, updated_at: before(28) },
   { group_id: "100200519", group_name: "设计讨论（演示）", avatar_url: demoGroupAvatar, member_count: 52, max_member_count: 200, enabled: true, configured: true, joined: true, group_triggers: ["画一张", "Diana"], system_prompt: "优先理解视觉需求，并在生图前补齐必要约束。", reply_gate: { active_hours_enabled: true, active_start: "09:00", active_end: "22:00", timezone: "Asia/Shanghai", blocked_users: ["100200888", "100200889"] }, plugin_overrides: { "official.sandboxed-browser-renderer": false }, updated_at: before(45) },
   { group_id: "100200627", group_name: "只读观察群（演示）", avatar_url: demoGroupAvatar, member_count: 318, max_member_count: 500, enabled: false, configured: true, joined: true, group_triggers: [], system_prompt: "仅记录事件，不主动回复。", plugin_overrides: {}, updated_at: before(90) }
@@ -562,7 +564,9 @@ const platforms: BotPlatform[] = [
   { id: "qq-official", name: "QQ 官方机器人", protocol: "qq-official-gateway-ws", category: "qq_official", category_label: "QQ 官方机器人", description: "QQ 开放平台 WebSocket 网关，出站长连接，不需要公网地址", inbound: "outbound" },
   { id: "dingtalk", name: "钉钉", protocol: "dingtalk-stream-ws", category: "dingtalk", category_label: "钉钉", description: "Stream 模式出站长连接，不需要公网地址", inbound: "outbound", rich_text: true },
   { id: "feishu", name: "飞书", protocol: "feishu-event-callback", category: "feishu", category_label: "飞书", description: "事件订阅回调，需要一个公网可达的回调地址", inbound: "callback", callback_path: "/api/channels/feishu/callback", rich_text: true },
-  { id: "wecom", name: "企业微信", protocol: "wecom-event-callback", category: "wecom", category_label: "企业微信", description: "应用回调，需要一个公网可达的回调地址", inbound: "callback", callback_path: "/api/channels/wecom/callback", rich_text: true }
+  { id: "wecom", name: "企业微信", protocol: "wecom-event-callback", category: "wecom", category_label: "企业微信", description: "应用回调，需要一个公网可达的回调地址", inbound: "callback", callback_path: "/api/channels/wecom/callback", rich_text: true },
+  { id: "weixin", name: "微信", protocol: "weixin-ilink-longpoll", category: "weixin", category_label: "微信", description: "腾讯 iLink Bot 扫码登录，长轮询收发私聊，不需要公网地址", inbound: "outbound" },
+  { id: "imessage", name: "iMessage", protocol: "bluebubbles", category: "imessage", category_label: "iMessage", description: "通过 Mac 上的 BlueBubbles Server 收发，webhook 回调需要 Mac 能访问到本机", inbound: "callback", callback_path: "/api/channels/imessage/callback" }
 ];
 
 type DemoIssueDraft = {
@@ -1165,6 +1169,28 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
     group_triggers: ["Diana", "diana"], request_timeout_ms: 60000, agent_enabled: true, agent_mode: "standard"
   });
   if (path === "/api/assistant/config" && method === "GET") return json(assistantConfig);
+  // 演示站不连腾讯：给一张占位码，第二轮轮询就当作已在手机上确认。
+  if (path === "/api/assistant/weixin/login" && method === "POST") {
+    const placeholder = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 29 29"><rect width="29" height="29" fill="#fff"/><path d="M1 1h7v7H1zM21 1h7v7h-7zM1 21h7v7H1z" fill="none" stroke="#000" stroke-width="2"/><path d="M11 3h2v2h-2zM15 9h3v3h-3zM11 13h2v4h-2zM19 15h4v2h-4zM13 21h3v3h-3zM23 21h3v5h-3z"/></svg>`;
+    return json({ session_id: "demo-weixin", status: "wait", message: "演示模式：这是一张占位二维码，稍后会自动确认", qrcode_image: `data:image/svg+xml;base64,${btoa(placeholder)}`, qrcode_url: "https://liteapp.weixin.qq.com/q/demo" });
+  }
+  if (path === "/api/assistant/weixin/login/poll" && method === "POST") {
+    await new Promise((resolve) => window.setTimeout(resolve, 1500));
+    const id = String(body.profile_id ?? "");
+    assistantConfig.profiles = (assistantConfig.profiles ?? []).map((profile) => profile.id === id
+      ? { ...profile, weixin_bot_id: "demo-bot@im.bot", weixin_user_id: "demo-owner@im.wechat", weixin_bot_token_configured: true, owner_id: profile.owner_id || "demo-owner@im.wechat" }
+      : profile);
+    const focused = assistantConfig.profiles.find((profile) => profile.id === id);
+    return json({ session_id: "demo-weixin", status: "confirmed", message: "登录成功", config: { ...assistantConfig, ...focused, profiles: assistantConfig.profiles } });
+  }
+  if (path === "/api/assistant/weixin/logout" && method === "POST") {
+    const id = String(body.profile_id ?? "");
+    assistantConfig.profiles = (assistantConfig.profiles ?? []).map((profile) => profile.id === id
+      ? { ...profile, weixin_bot_id: "", weixin_user_id: "", weixin_bot_token_configured: false }
+      : profile);
+    const focused = assistantConfig.profiles.find((profile) => profile.id === id);
+    return json({ ...assistantConfig, ...focused, profiles: assistantConfig.profiles });
+  }
   if (["/api/assistant/config", "/api/assistant/config/new"].includes(path) && method === "POST") {
     const incoming = body as unknown as BotProfileConfig;
     const profiles = [...(assistantConfig.profiles ?? [])];
@@ -1195,6 +1221,7 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
   if (path === "/api/assistant/backfill") return json({ requested: true, window_hours: 24 });
   if (path === "/api/assistant/group-test") return json({ group_id: String(body.group_id ?? url.searchParams.get("group_id") ?? ""), message: String(body.message ?? "模拟通道测试"), message_id: "demo-group-test", sent: true, send_result: { status: "ok" }, channel: demoStatus.channel, recent_events: demoStatus.recent_events, status: demoStatus });
 
+  if (path === "/api/assistant/plugins/vrchat/status") return json({ enabled: false, listening: false, chatbox_pending: 0 });
   if (path === "/api/assistant/plugins/dependencies")
     return json({
       resolver: dependencies,

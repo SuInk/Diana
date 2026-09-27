@@ -409,9 +409,17 @@ type Runtime struct {
 	// 进出群刷屏时不会每条都烧一次 Token。自带锁，不受 mu 保护。
 	welcomeMu      sync.Mutex
 	welcomeLLMLast map[string]time.Time
-	buildInfo      BuildInfo
-	releaseStatus  ReleaseStatusProvider
-	reminders      ReminderStore
+	// governance 是群规则防御的刷屏计数和违规次数，见 group_governance.go。
+	governance governanceTracker
+	// groupRoles 是群身份的短期缓存，见 platform_moderation_auth.go。
+	groupRoles groupRoleCache
+	// wholeMuteSnapshots 是全员禁言前的群默认权限快照，见 platform_whole_mute.go。
+	wholeMuteSnapshots wholeMuteSnapshotStore
+	// telegramOwnerIDs 记主人配成 @用户名时见过的数字 ID（键是机器人 ID），私聊通知要用。
+	telegramOwnerIDs sync.Map
+	buildInfo        BuildInfo
+	releaseStatus    ReleaseStatusProvider
+	reminders        ReminderStore
 	// reminderWake 叫醒提醒调度循环重算下一次唤醒时间，见 runReminderLoop。
 	reminderWake     chan struct{}
 	reminderWakeOnce sync.Once
@@ -464,6 +472,7 @@ type Runtime struct {
 	browserSource             func() string
 	media                     *MediaStore
 	members                   *memberCache
+	bodyAccounts              bodyAccountMembership
 	now                       func() time.Time
 	quietNotices              map[string]time.Time
 	resolverDeliveryMu        sync.Mutex
@@ -523,6 +532,8 @@ type Runtime struct {
 	liveSeqProbedAt map[string]time.Time
 	// groupQuota 缓存按群额度的用量读数，避免每条消息都去扫一遍用量日志。
 	groupQuota groupModelQuotaCache
+	// mediaQuota 管生图这类按天限次的预占，见 media_generation_quota.go。
+	mediaQuota mediaGenerationQuota
 	// replySampleRoll 给回复抽样掷一次 [0,100) 的点数；为 nil 时用 math/rand，测试里替换。
 	replySampleRoll     func() int
 	seqGapActive        atomic.Int32
@@ -531,6 +542,9 @@ type Runtime struct {
 	inboundDone         chan struct{}
 	memoryWake          chan struct{}
 	memoryDone          chan struct{}
+	// memoryRollupBackoff 记住哪些会话的摘要卷叠刚超时过，见 memoryRollupAllowed。
+	memoryRollupMu      sync.Mutex
+	memoryRollupBackoff map[string]memoryRollupBackoffState
 	inboundReadyMu      sync.RWMutex
 	inboundReady        bool
 	inboundReplayCutoff time.Time
@@ -793,6 +807,7 @@ func NewRuntime(cfg BotConfig, channel Channel, plugins *PluginManager, llmStore
 	}
 	runtime.members = newMemberCacheForEvent(runtime.callOneBotAPIForEvent)
 	runtime.reconcileBridges()
+	plugins.SetSpeechSynthesizer(runtime.slotSpeechSynthesizer)
 	return runtime
 }
 
@@ -1800,6 +1815,9 @@ func (r *Runtime) routeMessageEvent(ctx context.Context, event MessageEvent) (Me
 	// 语音转写、图片和文件解析、转发展开都在上面做完了：从这一刻起它才能被同一个人
 	// 后到的消息接走（见 sender_burst.go）。
 	r.noteSenderTurnReady(event)
+	if r.governanceBlocked(event, text) {
+		return event, text, false, "governance_blocked"
+	}
 	// 表达学习看的是全部群消息，不只被回复的那些：群的口癖长在日常闲聊里。
 	// 群被这台机器人关掉、或不在准入名单（黑/白名单）里时，它永远不会在这个群里回复——
 	// 连被 @、被引用也不回，这一直是 admits 的判法，这里只是把判断提到花钱之前。消息照常
@@ -3790,7 +3808,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		}
 	}
 	replyHistory := r.promptContextHistory(event, cfg)
-	ctx = r.withIdentityPrivacyContext(ctx, event, replyHistory)
+	ctx = r.withReplyIdentityPrivacyContext(ctx, event, replyHistory)
 	// 每条消息单独限时，防止慢模型/插件占住并发槽太久。
 	ctx, cancel := context.WithTimeout(ctx, cfg.RequestTimeout)
 	defer cancel()
@@ -3953,7 +3971,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			pluginTools[index] = capabilityToolForConfig(tool, cfg)
 		}
 		if r.platformInterfaceEnabled(event) {
-			pluginTools = append(pluginTools, newDianaPlatformTool(r, event))
+			pluginTools = append(pluginTools, newDianaPlatformTool(ctx, r, event))
 		}
 		if fullAgentEnabled {
 			// 因为权限不够而没挂上的工具名。它们不构造、不注册，只是让注册表知道
@@ -3984,6 +4002,11 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			}
 			if IsOneBotPlatform(r.currentPlatform(event)) {
 				extraTools = append(extraTools, newDianaPokeTool(r, event))
+			}
+			// 视频生成只在模型分配里配了插槽时才挂：没配时模型看得到也只能失败。
+			// 权限跟着生图走，没有生图权限的人也拿不到视频。
+			if relationship.AllowImageGeneration && r.mediaSlotConfigured(ctx, mediaSlotVideo) {
+				extraTools = append(extraTools, newDianaVideoTool(r, event, relationship))
 			}
 			// 存二进制文件和 write_file 同一档：都是往磁盘上写，跟着「允许写入文件」走。
 			// 它不在 allowedAgentToolNames 里，群成员拿不到。
@@ -4034,6 +4057,14 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			}
 			if _, settings, enabled := r.pluginWithSettingsForEvent(stickerPluginID, event); enabled {
 				extraTools = append(extraTools, newDianaStickerTool(r, event, settings))
+			}
+			// VRChat 联动默认关闭；开着时查状态人人可用，操控类工具默认只给主人。
+			if pluginValue, settings, enabled := r.pluginWithSettingsForEvent(vrchatPluginID, event); enabled {
+				if plugin, ok := pluginValue.(*VRChatPlugin); ok {
+					tools, denied := newDianaVRChatTools(plugin, settings, relationship.Owner, r.eventProfileID(event))
+					extraTools = append(extraTools, tools...)
+					deniedTools = append(deniedTools, denied...)
+				}
 			}
 			// 只有能上传文件的平台才挂：其他平台模型看得到也只能失败。
 			if platform := NormalizePlatformID(event.Platform); platform == PlatformTelegram || IsOneBotPlatform(platform) {
@@ -4157,10 +4188,15 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 					return reply, nil
 				}
 				queued, err := r.enqueueImageReplyTask(ctx, event, relationship, "generate", intent.Prompt, "")
-				if err != nil {
+				var quotaErr *mediaGenerationQuotaError
+				switch {
+				case errors.As(err, &quotaErr):
+					asyncImageTaskNotice = imageQuotaExceededInstruction(quotaErr, cfg)
+				case err != nil:
 					return "", err
+				default:
+					asyncImageTaskNotice = asyncImageReplyInstruction(queued, cfg)
 				}
-				asyncImageTaskNotice = asyncImageReplyInstruction(queued, cfg)
 			case visualIntentEditImage:
 				if strings.TrimSpace(intent.Prompt) == "" {
 					reply := "想怎么改？发图时顺便说清楚要改哪里就行。"
@@ -4170,7 +4206,10 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 					return reply, nil
 				}
 				queued, err := r.enqueueImageReplyTask(ctx, event, relationship, "edit", intent.Prompt, "")
+				var quotaErr *mediaGenerationQuotaError
 				switch {
+				case errors.As(err, &quotaErr):
+					asyncImageTaskNotice = imageQuotaExceededInstruction(quotaErr, cfg)
 				case errors.Is(err, errImageEditSourceNotFound):
 					// 找不到原图就别受理：让这一轮回复直接请用户补图，而不是先说
 					// 「在画了」再补一条失败通知。
@@ -4739,6 +4778,8 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			return sendErr
 		}
 		r.applyReplyControlAfterSend(sendCtx, event, reply, controlIntent)
+		// 只同步真正发出去的这一版：审核改写、拦下或发送失败的都到不了这里。
+		r.afterReplyVRChat(event, strings.Join(splitEventChatReply(reply, cfg, event), "\n"))
 		return nil
 	})
 	if err != nil {
@@ -5634,7 +5675,7 @@ func registrySelectionForGroup(registry *llm.ProviderRegistry, set llm.ProfileSe
 // 用的还该是它绑的那个模型。
 func singlePurposeProfileGroup(group string) bool {
 	switch llm.NormalizeProfileGroup(group) {
-	case llm.GroupImage, llm.GroupEmbedding:
+	case llm.GroupImage, llm.GroupEmbedding, llm.GroupTTS, llm.GroupSTT, llm.GroupVideo:
 		return true
 	}
 	return false
@@ -7742,6 +7783,10 @@ func (r *Runtime) handleNotice(ctx context.Context, event MessageEvent) error {
 	// 门槛约束——它不产生新的发言，只是把已经答应过的话送出去。
 	if event.SubType == "friend_add" {
 		r.flushPendingDirectMessages(ctx, event)
+		return nil
+	}
+	if event.SubType == "group_decrease" {
+		r.auditMemberLeave(ctx, event)
 		return nil
 	}
 	cfg := r.effectiveConfigForEvent(event)

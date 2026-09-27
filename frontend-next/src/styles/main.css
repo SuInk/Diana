@@ -396,6 +396,22 @@ code {
   border-top: 1px solid var(--border);
 }
 
+/* 音视频插槽的参数：跟在路由下面，和说明对齐 */
+.model-role-params {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 8px 12px;
+  align-items: end;
+  margin: 10px 44px 0 94px;
+}
+
+.model-role-params .field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+}
+
 .model-role-desc {
   margin: 8px 44px 0 94px;
   font-size: 12.5px;
@@ -500,7 +516,8 @@ code {
     display: none;
   }
 
-  .model-role-desc {
+  .model-role-desc,
+  .model-role-params {
     margin: 8px 0 0;
   }
 }

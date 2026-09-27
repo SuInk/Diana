@@ -195,6 +195,18 @@ export interface BotProfileConfig extends SendRetrySettings {
   wecom_token_configured?: boolean;
   wecom_encoding_aes_key?: string;
   wecom_encoding_aes_key_configured?: boolean;
+  /** 微信 iLink：凭据只能扫码写入，这里只读。 */
+  weixin_bot_id?: string;
+  weixin_user_id?: string;
+  weixin_bot_token?: string;
+  weixin_bot_token_configured?: boolean;
+  /** iMessage：Mac 上的 BlueBubbles Server，webhook 回调进来。 */
+  imessage_server_url?: string;
+  imessage_password?: string;
+  imessage_password_configured?: boolean;
+  imessage_webhook_token?: string;
+  imessage_webhook_token_configured?: boolean;
+  imessage_poll_seconds?: number;
   /** 回调型平台要填到对方后台的路径，只读。 */
   callback_path?: string;
   nonebot_bridge_enabled?: boolean;
@@ -215,6 +227,8 @@ export interface BotProfileConfig extends SendRetrySettings {
   llm_streaming_enabled?: boolean;
   /** 会话标识隐私代理：发给模型前把账号、群号和消息 ID 换成别名；不设等同开启。 */
   llm_identity_masking_enabled?: boolean;
+  /** 隐私代理开着时，正文里直接写的本群成员账号也换成别名；不设等同开启。 */
+  llm_identity_body_account_mapping_enabled?: boolean;
   disabled_groups?: string[];
   /** 新加入的群默认工不工作；逐群开关在群管理里，一个群一份。 */
   group_admission?: GroupAdmission;
@@ -226,7 +240,7 @@ export interface BotProfileConfig extends SendRetrySettings {
   welcome_message?: string;
   /** 欢迎词模式：fixed 固定文本 / template 模板池随机 / llm 按人设实时生成；不设等同 fixed。 */
   welcome_mode?: "fixed" | "template" | "llm";
-  /** 口吻模板池，每条一行，可用 {user_id} 占位；template/llm 回落时使用。 */
+  /** 口吻模板池，每条一行，可用 {user_id}{nickname}{group}{group_id} 占位；template/llm 回落时使用。 */
   welcome_templates?: string[];
   /** LLM 欢迎词每群冷却秒数；不设用默认值 300。 */
   welcome_llm_cooldown_seconds?: number;
@@ -260,7 +274,7 @@ export interface BotProfileConfig extends SendRetrySettings {
   private_closing_grace?: number;
   inbound_group_concurrency?: number;
   inbound_private_concurrency?: number;
-  /** 按用途分配模型：chat/vision/intent/image → 渠道（或渠道分组）+模型。 */
+  /** 按用途分配模型：chat/vision/intent/image/tts/stt/video → 渠道（或渠道分组）+模型。 */
   auto_image_description?: boolean;
   auto_video_preprocess?: boolean;
   model_roles?: Record<string, {
@@ -271,6 +285,8 @@ export interface BotProfileConfig extends SendRetrySettings {
     provider_id?: string;
     model_id?: string;
     fallbacks?: Array<{ profile_id?: string; group?: string; model: string; provider_id?: string; model_id?: string }>;
+    /** 音视频插槽（tts/stt/video）的参数：音色、格式、语速、语言、分辨率等。 */
+    params?: Record<string, string>;
   }>;
   /** 用模型识别其他机器人的自动回复并阻断机器人互聊；缺省等价于开启。 */
   bot_reply_loop_detection_enabled?: boolean;
@@ -334,6 +350,16 @@ export interface BotProfileConfig extends SendRetrySettings {
   recent_history_token_budget?: number;
   /** 滚动 5 小时窗口里的模型调用次数上限；留空或 0 表示不限。 */
   model_call_quota?: number;
+  /** 每个群每天能成功生图（含改图）的次数；群配置可覆盖。留空或 0 表示不限，主人不受限。 */
+  image_generation_daily_group_limit?: number;
+  /** 每个人每天能成功生图的次数，跨群和私聊合计；留空或 0 表示不限，主人不受限。 */
+  image_generation_daily_user_limit?: number;
+  /** 每个群每天能生成视频的次数（任务受理后失败也算）；群配置可覆盖。留空或 0 表示不限，主人不受限。 */
+  video_generation_daily_group_limit?: number;
+  /** 每个人每天能生成视频的次数，跨群和私聊合计；留空或 0 表示不限，主人不受限。 */
+  video_generation_daily_user_limit?: number;
+  /** 每日次数在哪个时区的零点重置（IANA 名）；留空读 TZ 环境变量，再没有按 Asia/Shanghai。 */
+  daily_limit_timezone?: string;
   /** 回复抽样率（1–100）：没 @ 机器人的群消息只有这个比例交给模型判断要不要接话；留空不抽样。 */
   reply_sample_percent?: number;
   recent_context_limit?: number;
@@ -398,6 +424,8 @@ export interface PluginSettingSpec {
   rows?: number;
   /** 凭据类设置；读接口不返回明文，提交空串表示保持原值。 */
   secret?: boolean;
+  // 只能全局设置、不能按群覆盖（端口、连接这类进程里只有一份的资源）。
+  global_only?: boolean;
 }
 
 export interface PluginManifest {
@@ -508,6 +536,23 @@ export interface ResolverDependencyInstallResponse {
 }
 
 /** 分群的 SendRetrySettings 留空跟随机器人。 */
+/** 群规则防御。所有开关默认关闭，数值留空时后端用默认值。 */
+export interface GroupGovernance {
+  anti_spam_enabled?: boolean;
+  spam_window_seconds?: number;
+  spam_max_messages?: number;
+  spam_max_repeats?: number;
+  spam_recall_enabled?: boolean;
+  keyword_filter_enabled?: boolean;
+  /** 每条一行；re: 开头按正则，其余按不区分大小写的子串。 */
+  keyword_rules?: string[];
+  /** 第 2、3… 次违规的禁言秒数；第一次只警告。 */
+  penalty_ladder_seconds?: number[];
+  strike_reset_minutes?: number;
+  warning_message?: string;
+  member_leave_audit_enabled?: boolean;
+}
+
 export interface BotGroupConfig extends SendRetrySettings {
   marked_bot_ids?: string[];
   participation?: import("./participation").ParticipationPreferences;
@@ -526,7 +571,7 @@ export interface BotGroupConfig extends SendRetrySettings {
   welcome_message?: string;
   /** 欢迎词模式：fixed 固定文本 / template 模板池随机 / llm 按人设实时生成；不设等同 fixed。 */
   welcome_mode?: "" | "fixed" | "template" | "llm";
-  /** 口吻模板池，每条一行，可用 {user_id} 占位；留空跟随机器人。 */
+  /** 口吻模板池，每条一行，可用 {user_id}{nickname}{group}{group_id} 占位；留空跟随机器人。 */
   welcome_templates?: string[];
   /** LLM 欢迎词每群冷却秒数；不设跟随机器人。 */
   welcome_llm_cooldown_seconds?: number;
@@ -534,6 +579,10 @@ export interface BotGroupConfig extends SendRetrySettings {
   recent_history_token_budget?: number;
   /** 滚动 5 小时窗口里的模型调用次数上限；留空或 0 表示不限。 */
   model_call_quota?: number;
+  /** 这个群每天能成功生图的次数：不带跟随机器人，0 本群不限，正数是本群上限。 */
+  image_generation_daily_group_limit?: number | null;
+  /** 这个群每天能生成视频的次数：不带跟随机器人，0 本群不限，正数是本群上限。 */
+  video_generation_daily_group_limit?: number | null;
   /** 回复抽样率（1–100）：没 @ 机器人的群消息只有这个比例交给模型判断要不要接话；留空不抽样。 */
   reply_sample_percent?: number;
   recent_context_limit?: number;
@@ -597,6 +646,8 @@ export interface BotGroupConfig extends SendRetrySettings {
   plugin_setting_overrides?: Record<string, Record<string, unknown>>;
   /** 本群专属回复时间、屏蔽账号与准入门槛；不设表示跟随全局。 */
   reply_gate?: ReplyGate | null;
+  /** 本群规则防御（刷屏、违规词、退群审计），只有群级；不设等于全部关闭。 */
+  governance?: GroupGovernance | null;
   updated_at?: string;
 }
 
@@ -1406,6 +1457,36 @@ export function createBotProfileConfig(config: BotProfileConfig): Promise<BotPro
   return requestJSON<BotProfileConfig>("/api/assistant/config/new", { method: "POST", body: JSON.stringify(config) });
 }
 
+/** 微信扫码登录的一步结果。status 取值见后端 WeixinLogin* 常量。 */
+export interface WeixinLoginStatus {
+  session_id: string;
+  status: "wait" | "scaned" | "need_verifycode" | "confirmed" | "binded_redirect" | "expired" | "failed";
+  message?: string;
+  /** PNG data URL，只在新生成或刷新二维码时带上。 */
+  qrcode_image?: string;
+  qrcode_url?: string;
+  expires_at?: string;
+  /** 登录成功并落库后带回的最新配置。 */
+  config?: BotProfileConfig;
+}
+
+export function startWeixinLogin(profileID: string): Promise<WeixinLoginStatus> {
+  return requestJSON<WeixinLoginStatus>("/api/assistant/weixin/login", { method: "POST", body: JSON.stringify({ profile_id: profileID }) });
+}
+
+// 后端会代发一轮最长约 25 秒的长轮询，调用方拿到结果后直接发下一轮即可。
+export function pollWeixinLogin(profileID: string, sessionID: string, verifyCode = "", signal?: AbortSignal): Promise<WeixinLoginStatus> {
+  return requestJSON<WeixinLoginStatus>("/api/assistant/weixin/login/poll", {
+    method: "POST",
+    body: JSON.stringify({ profile_id: profileID, session_id: sessionID, verify_code: verifyCode || undefined }),
+    signal
+  });
+}
+
+export function logoutWeixin(profileID: string): Promise<BotProfileConfig> {
+  return requestJSON<BotProfileConfig>("/api/assistant/weixin/logout", { method: "POST", body: JSON.stringify({ profile_id: profileID }) });
+}
+
 export interface PromptGroupInfo {
   id: string;
   label: string;
@@ -1599,6 +1680,21 @@ export function getAgentBrowser(profile = ""): Promise<AgentBrowserSettings> {
 export function saveAgentBrowser(profile: string, cdpURL: string, timeoutMS: number): Promise<AgentBrowserSettings> {
   return requestJSON("/api/assistant/agent-browser", {method: "POST", body: JSON.stringify({profile_id: profile, cdp_url: cdpURL, timeout_ms: timeoutMS})});
 }
+export type IMessageProbeResult = {
+  connected: boolean;
+  error?: string;
+  server_version?: string;
+  os_version?: string;
+  private_api?: boolean;
+  helper_connected?: boolean;
+  detected_imessage?: string;
+};
+
+/** 用表单里的地址和密码请求一次 BlueBubbles server/info；密码留空时后端沿用已保存的。 */
+export function testIMessageServer(profile: string, serverURL: string, password: string): Promise<IMessageProbeResult> {
+  return requestJSON("/api/assistant/imessage/test", {method: "POST", body: JSON.stringify({profile_id: profile, server_url: serverURL, password})});
+}
+
 export function testAgentBrowser(profile: string, cdpURL: string): Promise<{connected: boolean; browser?: string; error?: string}> {
   return requestJSON("/api/assistant/agent-browser/test", {method: "POST", body: JSON.stringify({profile_id: profile, cdp_url: cdpURL})});
 }
@@ -2720,6 +2816,38 @@ export interface StickerLibraryItem {
 export interface StickerLibraryPage {
   items: StickerLibraryItem[];
   total: number;
+}
+
+export type VRChatParam = { name: string; value: unknown; updated_at: string };
+
+export type VRChatStatus = {
+  enabled: boolean;
+  send_address?: string;
+  listen_address?: string;
+  listening: boolean;
+  listen_error?: string;
+  last_error?: string;
+  apply_error?: string;
+  last_packet_at?: string;
+  last_peer?: string;
+  avatar_id?: string;
+  avatar_changed_at?: string;
+  builtin?: Record<string, unknown>;
+  params?: VRChatParam[];
+  expression?: string;
+  expression_at?: string;
+  expression_by_mood?: boolean;
+  expressions?: string[];
+  chatbox_pending: number;
+  last_chatbox?: string;
+  last_chatbox_at?: string;
+  active_inputs?: string[];
+  mapping_problems?: string[];
+  driver_profile?: string;
+};
+
+export function getVRChatStatus(): Promise<VRChatStatus> {
+  return requestJSON<VRChatStatus>("/api/assistant/plugins/vrchat/status");
 }
 
 export function listStickerLibrary(profile: string, query: string, offset: number, limit: number): Promise<StickerLibraryPage> {

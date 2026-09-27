@@ -37,11 +37,7 @@ func recallableOutboundMessageID(event MessageEvent) string {
 }
 
 func platformSupportsRecall(platform string) bool {
-	switch NormalizePlatformID(platform) {
-	case PlatformOneBotV11, PlatformTelegram:
-		return true
-	}
-	return false
+	return platformSupportsOperation(platform, platformOpRecall)
 }
 
 // resolveRecallTarget 在本会话历史里定位要撤回的消息。

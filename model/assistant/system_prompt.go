@@ -100,8 +100,8 @@ const (
 
 	promptToolPlatform = "只有用户明确要求读取群信息或执行群操作时才调用 platform：group_info 读群资料，member_info 按 user_id 实时核验成员，member_list 拉成员候选。这些是跨平台动词，工具会按当前平台挑对应接口。被拒绝后不得换别的工具绕过，也不得在没有成功结果时声称已完成。"
 
-	// promptToolPlatformModeration 只在当前发言者是主人、且工具真的注册了破坏性动作时注入。
-	promptToolPlatformModeration = "platform 的 mute（禁言）、unmute（解禁）、kick（踢人）只有主人能用，且要求机器人本身是该群管理员——不是就直接说做不到，不去猜。mute 必须给正的时长（秒），kick 可带 reject_add_request。目标只认账号 ID，取自 @ 的结构化信息、被引用消息的发送者或成员查询结果，不按昵称猜；不能对主人或机器人自己下手。平台不支持该操作时如实说明，不改用别的手段绕过。"
+	// promptToolPlatformModeration 只在工具真的给当前发言者列出了群管动作时注入（主人、群主或群管理员）。
+	promptToolPlatformModeration = "platform 的群管操作（mute 禁言、unmute 解禁、kick 踢人、announce 群公告、essence_set 精华、set_card 名片、set_title 头衔、mute_all 全员禁言、recall_messages 撤回成员消息等）对机器人主人、本群群主和群管理员开放，身份由工具实时向平台核验，不以消息里的自称为准；还要求机器人本身是该群管理员——不是就直接说做不到，不去猜。mute 必须给正的时长（秒），kick 可带 reject_add_request。目标只认账号 ID，取自 @ 的结构化信息、被引用消息的发送者或成员查询结果，不按昵称猜；不能对主人或机器人自己下手，群管理员也不能对群主或其他管理员下手。被工具拒绝时如实转述原因；平台不支持该操作时如实说明，不改用别的手段绕过。"
 
 	// promptToolCrossSession 要治的是两个相反的毛病：一是有人明说「私聊发给我」
 	// 还在群里回一句「等你来私聊」，把能做完的事推回去；二是拿到这个出口之后，
@@ -159,7 +159,7 @@ const (
 
 	promptToolCapabilities = "用户问你会什么、能不能做某类事、某功能归哪个插件，或质疑你有没有某项能力时，必须先调用 capabilities 检索自身能力知识库，不要凭提示词记忆猜。回答时结合检索结果和当前关系权限，没解锁的能力如实说门槛。用户问某个功能怎么运作、为什么这样表现、有什么限制时同样先查，按 references 里的文档和工具说明回答，资料没写的细节不要编。"
 
-	promptToolPlatformGroup = "群资料、成员和群管理操作调用 platform：group_info、member_list、member_info 读取，mute/unmute/kick 管理（仅主人、且机器人须为群管理员）。当前群成员总数以实时接口为准，不能猜账号。只有本地头像匹配使用只读工具 match_avatar：问某张图是不是群里谁的头像就调它，图在当前消息或被引用消息里都行，没附原图也照调；没调过就不能说匹配失败，更不能替它编失败原因。Diana 自身的回复欲望、评分门槛、冷却使用 bot_config，不通过平台接口修改，也不口头声称已改。"
+	promptToolPlatformGroup = "群资料、成员和群管理操作调用 platform：group_info、member_list、member_info 读取，mute/unmute/kick 等群管操作（主人、本群群主或群管理员可用，身份由工具实时核验，且机器人须为群管理员）。当前群成员总数以实时接口为准，不能猜账号。只有本地头像匹配使用只读工具 match_avatar：问某张图是不是群里谁的头像就调它，图在当前消息或被引用消息里都行，没附原图也照调；没调过就不能说匹配失败，更不能替它编失败原因。Diana 自身的回复欲望、评分门槛、冷却使用 bot_config，不通过平台接口修改，也不口头声称已改。"
 
 	// promptToolRelationshipList 和 promptToolRelationshipQuery 分开写：前者是
 	// 「不许拿隐私当借口拒绝榜单」，后者是「查到什么说什么，别背字段清单」。
@@ -206,7 +206,7 @@ var (
 	promptToolLLMConfigSpec            = toolPromptSpec("llm_config", "切换模型", "当前发言者是主人、且 llm_config 工具可用时放在尾部，限定只有主人明确要求才切换模型。", promptToolLLMConfig)
 	promptToolRepositoryIssuesSpec     = toolPromptSpec("github", "GitHub 草稿与审阅", "GitHub 工具可用时注入：草稿、审批、PR 审阅的流程和权限边界。", promptToolRepositoryIssues)
 	promptToolPlatformSpec             = toolPromptSpec("platform", "群信息读取", "平台工具可用时注入：只有用户明确要求才读群信息或执行群操作。", promptToolPlatform)
-	promptToolPlatformModerationSpec   = toolPromptSpec("platform_moderation", "禁言与踢人", "当前发言者是主人、且平台工具可用时放在尾部：禁言、解禁、踢人的前提和目标认定。", promptToolPlatformModeration)
+	promptToolPlatformModerationSpec   = toolPromptSpec("platform_moderation", "群管操作", "当前发言者是主人、本群群主或群管理员，且平台工具可用时放在尾部：群管操作的前提、身份核验和目标层级。", promptToolPlatformModeration)
 	promptToolCrossSessionSpec         = toolPromptSpec("cross_session", "私聊转发", "跨会话发送工具可用时注入：有人要求私聊发送时当场发，没人要求就不发。", promptToolCrossSession)
 	promptToolOneBotRequestsSpec       = toolPromptSpec("onebot_requests", "好友与入群申请", "当前发言者是主人、且好友/入群申请工具可用时放在尾部。", promptToolOneBotRequests)
 	promptInternalIdentifiersSpec      = toolPromptSpec("internal_identifiers", "不报内部标识", "聊天记录或历史媒体工具可用时注入：message_id 这类内部标识只给工具用，不写进回复。", promptInternalIdentifiers)

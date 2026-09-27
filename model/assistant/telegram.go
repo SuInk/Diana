@@ -830,6 +830,35 @@ func telegramMessageToEvent(msg *telegramMessage, selfID, botUsername string) Me
 		}
 	}
 
+	// 退群同理：映射成和 OneBot 一样的 group_decrease，退群审计才能跨平台共用。
+	// 操作者不是本人就是被踢。
+	if msg.LeftChatMember != nil && msg.Chat.Type != "private" {
+		left := msg.LeftChatMember
+		leftID := strconv.FormatInt(left.ID, 10)
+		subType, operatorID := "leave", ""
+		if msg.From != nil && msg.From.ID != left.ID {
+			subType, operatorID = "kick", strconv.FormatInt(msg.From.ID, 10)
+		}
+		data := map[string]string{"notice_type": "group_decrease", "sub_type": subType}
+		if operatorID != "" {
+			data["operator_id"] = operatorID
+		}
+		return MessageEvent{
+			Kind:        EventKindNotice,
+			SubType:     "group_decrease",
+			Time:        msg.Date,
+			SelfID:      selfID,
+			MessageID:   strconv.FormatInt(msg.MessageID, 10),
+			MessageType: "notice",
+			GroupID:     strconv.FormatInt(msg.Chat.ID, 10),
+			GroupName:   strings.TrimSpace(msg.Chat.Title),
+			UserID:      leftID,
+			OperatorID:  operatorID,
+			SenderName:  telegramDisplayName(left),
+			Segments:    []MessageSegment{{Type: "notice", Data: data}},
+		}
+	}
+
 	text := msg.Text
 	entities := msg.Entities
 	if text == "" {

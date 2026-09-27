@@ -55,6 +55,19 @@ var expectedPlatformCapabilities = map[string]platformCapabilities{
 		// 和入站 MsgID 不是一个空间。
 		ResultChannel: false, RichText: true, InboundQuote: false,
 	},
+	PlatformWeixin: {
+		// iLink 的 sendmessage 会回 message_id，但入站引用只给 ref_msg.svr_id，
+		// 两者是不是同一个空间官方实现里看不出来，宁可不记。入站的 ref_msg 能还原
+		// 被引用的原文，所以 InboundQuote 为真。纯文本发送，不渲染 Markdown。
+		// 另一条限制不在这张表里：只能回给先发过消息的人（要带对方的 context_token），
+		// 提醒、主人通知这类主动消息发给没说过话的人会直接返回 ErrWeixinNoContext。
+		ResultChannel: false, RichText: false, InboundQuote: true,
+	},
+	PlatformIMessage: {
+		// message/text 返回的 data.guid 与入站 threadOriginatorGuid 同属消息 guid 空间。
+		// Messages 不渲染 Markdown。群管（踢人、禁言）iMessage 本身就没有，不挂群工具。
+		ResultChannel: true, RichText: false, InboundQuote: true,
+	},
 }
 
 // 新增平台却忘了在能力表里表态时，这里先红。
@@ -127,6 +140,10 @@ func newCapabilityProbeChannel(t *testing.T, platform string) Channel {
 		return NewChannelForConfig(BotConfig{Platform: platform, FeishuAppID: "a", FeishuAppSecret: "s"})
 	case PlatformWeCom:
 		return NewChannelForConfig(BotConfig{Platform: platform, WeComCorpID: "c", WeComAgentID: "1", WeComSecret: "s"})
+	case PlatformWeixin:
+		return NewChannelForConfig(BotConfig{Platform: platform, WeixinBotToken: "t", WeixinBotID: "b"})
+	case PlatformIMessage:
+		return NewChannelForConfig(BotConfig{Platform: platform, IMessageServerURL: "http://mac.local:1234", IMessagePassword: "p"})
 	}
 	t.Errorf("平台 %q 没有对应的探测构造，能力矩阵覆盖不到它", platform)
 	return nil

@@ -74,6 +74,8 @@ func (m *PluginManager) MigrateProfileConfigurations(profiles []BotConfig) bool 
 	if len(ids) == 0 && len(profiles) > 0 {
 		return false
 	}
+	// 迁移会改写各机器人的开关，持有常驻资源的插件要按迁移后的结果启停。
+	defer m.notifyAllStateObservers()
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	changed := false

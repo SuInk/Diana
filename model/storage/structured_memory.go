@@ -86,15 +86,15 @@ func (s *SQLiteStore) ClaimNextMemoryJob(ctx context.Context, leaseOwner string,
 	defer observeTransaction("ClaimNextMemoryJob")()
 	defer func() { _ = tx.Rollback() }()
 
-	var id, raw string
-	var attempts int
+	var id, raw, lastError string
+	var attempts, timeouts int
 	err = tx.QueryRowContext(ctx, `
-SELECT id, payload, attempts
+SELECT id, payload, attempts, COALESCE(last_error, ''), consecutive_timeouts
 FROM memory_jobs
 WHERE status = 'pending' AND available_at <= ?
 ORDER BY available_at, created_at, id
 LIMIT 1
-`, time.Now().UTC().UnixNano()).Scan(&id, &raw, &attempts)
+`, time.Now().UTC().UnixNano()).Scan(&id, &raw, &attempts, &lastError, &timeouts)
 	if errors.Is(err, sql.ErrNoRows) {
 		return assistant.MemoryJob{}, false, nil
 	}
@@ -113,14 +113,14 @@ WHERE id = ? AND status = 'pending'
 	if err != nil || rows != 1 {
 		return assistant.MemoryJob{}, false, err
 	}
-	var payload assistant.MemoryJobPayload
-	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
-		return assistant.MemoryJob{}, false, fmt.Errorf("decode memory job: %w", err)
+	job, err := decodeMemoryJob(id, raw, attempts, lastError, timeouts)
+	if err != nil {
+		return assistant.MemoryJob{}, false, err
 	}
 	if err := tx.Commit(); err != nil {
 		return assistant.MemoryJob{}, false, err
 	}
-	return assistant.MemoryJob{ID: id, Payload: payload, Attempts: attempts + 1}, true, nil
+	return job, true, nil
 }
 
 // ClaimMemoryJobBatch 一次领走可以合并处理的一批任务。
@@ -151,29 +151,29 @@ func (s *SQLiteStore) ClaimMemoryJobBatch(ctx context.Context, leaseOwner string
 	defer func() { _ = tx.Rollback() }()
 
 	now := time.Now().UTC().UnixNano()
-	var firstID, firstKind, firstRaw string
-	var firstAttempts int
+	var firstID, firstKind, firstRaw, firstLastError string
+	var firstAttempts, firstTimeouts int
 	err = tx.QueryRowContext(ctx, `
-SELECT id, kind, payload, attempts
+SELECT id, kind, payload, attempts, COALESCE(last_error, ''), consecutive_timeouts
 FROM memory_jobs
 WHERE status = 'pending' AND available_at <= ?
 ORDER BY available_at, created_at, id
 LIMIT 1
-`, now).Scan(&firstID, &firstKind, &firstRaw, &firstAttempts)
+`, now).Scan(&firstID, &firstKind, &firstRaw, &firstAttempts, &firstLastError, &firstTimeouts)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	first, err := decodeMemoryJob(firstID, firstRaw, firstAttempts)
+	first, err := decodeMemoryJob(firstID, firstRaw, firstAttempts, firstLastError, firstTimeouts)
 	if err != nil {
 		return nil, err
 	}
 	claimed := []assistant.MemoryJob{first}
 	if firstKind == string(assistant.MemoryJobEvent) && max > 1 {
 		rows, err := tx.QueryContext(ctx, `
-SELECT id, payload, attempts
+SELECT id, payload, attempts, COALESCE(last_error, ''), consecutive_timeouts
 FROM memory_jobs
 WHERE status = 'pending' AND available_at <= ? AND kind = 'event' AND session = ? AND id <> ?
 ORDER BY available_at, created_at, id
@@ -184,13 +184,13 @@ LIMIT ?
 		}
 		subject := strings.TrimSpace(first.Payload.Event.UserID)
 		for rows.Next() {
-			var id, raw string
-			var attempts int
-			if err := rows.Scan(&id, &raw, &attempts); err != nil {
+			var id, raw, lastError string
+			var attempts, timeouts int
+			if err := rows.Scan(&id, &raw, &attempts, &lastError, &timeouts); err != nil {
 				rows.Close()
 				return nil, err
 			}
-			job, err := decodeMemoryJob(id, raw, attempts)
+			job, err := decodeMemoryJob(id, raw, attempts, lastError, timeouts)
 			if err != nil {
 				rows.Close()
 				return nil, err
@@ -257,14 +257,17 @@ SELECT EXISTS (SELECT 1 FROM memory_jobs WHERE status = 'pending' AND available_
 	return err != nil || due
 }
 
-func decodeMemoryJob(id, raw string, attempts int) (assistant.MemoryJob, error) {
+func decodeMemoryJob(id, raw string, attempts int, lastError string, timeouts int) (assistant.MemoryJob, error) {
 	var payload assistant.MemoryJobPayload
 	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
 		return assistant.MemoryJob{}, fmt.Errorf("decode memory job: %w", err)
 	}
-	return assistant.MemoryJob{ID: id, Payload: payload, Attempts: attempts + 1}, nil
+	return assistant.MemoryJob{ID: id, Payload: payload, Attempts: attempts + 1, LastError: lastError, ConsecutiveTimeouts: timeouts}, nil
 }
 
+// CompleteMemoryJob 把任务标成完成，成功和放弃都走这里。last_error 不清：被放弃
+// 的任务事后要能查到最后是怎么失败的；领取只看 status 和 available_at，留着它
+// 不影响任何调度。
 func (s *SQLiteStore) CompleteMemoryJob(ctx context.Context, id string, leaseOwner string) error {
 	defer s.observeStorage(ctx, "CompleteMemoryJob", "write")()
 	if s == nil || s.db == nil {
@@ -273,7 +276,7 @@ func (s *SQLiteStore) CompleteMemoryJob(ctx context.Context, id string, leaseOwn
 	now := time.Now().UTC().UnixNano()
 	_, err := s.db.ExecContext(ctx, `
 UPDATE memory_jobs
-SET status = 'done', lease_owner = NULL, lease_until = NULL, last_error = NULL,
+SET status = 'done', lease_owner = NULL, lease_until = NULL,
     completed_at = ?, updated_at = ?
 WHERE id = ? AND status = 'processing' AND lease_owner = ?
 `, now, now, strings.TrimSpace(id), strings.TrimSpace(leaseOwner))
@@ -319,7 +322,25 @@ func (s *SQLiteStore) RetryMemoryJob(ctx context.Context, id string, leaseOwner 
 	_, err := s.db.ExecContext(ctx, `
 UPDATE memory_jobs
 SET status = 'pending', available_at = ?, lease_owner = NULL, lease_until = NULL,
-    last_error = ?, updated_at = ?
+    last_error = ?, consecutive_timeouts = 0, updated_at = ?
+WHERE id = ? AND status = 'processing' AND lease_owner = ?
+`, availableAt.UTC().UnixNano(), lastError, time.Now().UTC().UnixNano(), strings.TrimSpace(id), strings.TrimSpace(leaseOwner))
+	return err
+}
+
+var _ assistant.MemoryJobTimeoutRetrier = (*SQLiteStore)(nil)
+
+// RetryTimedOutMemoryJob 和 RetryMemoryJob 一样把任务放回队列并照常计次，另外把
+// 连续超时次数加一；中间夹一次别的失败（RetryMemoryJob）就重新从零数。
+func (s *SQLiteStore) RetryTimedOutMemoryJob(ctx context.Context, id string, leaseOwner string, availableAt time.Time, lastError string) error {
+	defer s.observeStorage(ctx, "RetryTimedOutMemoryJob", "write")()
+	if s == nil || s.db == nil {
+		return nil
+	}
+	_, err := s.db.ExecContext(ctx, `
+UPDATE memory_jobs
+SET status = 'pending', available_at = ?, lease_owner = NULL, lease_until = NULL,
+    last_error = ?, consecutive_timeouts = consecutive_timeouts + 1, updated_at = ?
 WHERE id = ? AND status = 'processing' AND lease_owner = ?
 `, availableAt.UTC().UnixNano(), lastError, time.Now().UTC().UnixNano(), strings.TrimSpace(id), strings.TrimSpace(leaseOwner))
 	return err

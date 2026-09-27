@@ -122,6 +122,9 @@ type BotHandler struct {
 	userNameCache     map[string]userNameCacheEntry
 	avatarsOnce       sync.Once
 	avatars           *avatarCache
+	weixinLoginOnce   sync.Once
+	weixinLogin       *assistant.WeixinLoginManager
+	weixinSaveMu      sync.Mutex
 }
 
 // avatarStore 懒初始化头像缓存：BotHandler 有好几个构造入口，放在 once 里比
@@ -323,6 +326,7 @@ func (h *BotHandler) registerRoutes(router gin.IRouter, base string) {
 	router.POST(base+"/config/message-relays", h.setMessageRelays)
 	router.POST(base+"/config/profile-enabled", h.setProfileEnabled)
 	router.POST(base+"/config/profiles-enabled", h.setAllProfilesEnabled)
+	h.registerWeixinRoutes(router, base)
 	router.GET(base+"/agent-defaults", h.agentDefaults)
 	router.GET(base+"/agent-mode/impact", h.agentModeImpact)
 	router.GET(base+"/features", h.featuresStatus)
@@ -384,6 +388,7 @@ func (h *BotHandler) registerRoutes(router gin.IRouter, base string) {
 	router.GET(base+"/agent-browser", h.agentBrowser)
 	router.POST(base+"/agent-browser", h.setAgentBrowser)
 	router.POST(base+"/agent-browser/test", h.testAgentBrowser)
+	router.POST(base+"/imessage/test", h.testIMessageServer)
 	router.GET(base+"/agent-residency", h.agentResidency)
 	router.POST(base+"/agent-residency", h.setAgentResidency)
 	router.GET(base+"/plugins/dependencies", h.pluginDependencies)
@@ -397,6 +402,7 @@ func (h *BotHandler) registerRoutes(router gin.IRouter, base string) {
 	router.POST(base+"/plugins/repo/install", h.installRepoPlugin)
 	router.POST(base+"/plugins/repo/update/:id", h.updateRepoPlugin)
 	router.POST(base+"/plugins/music/test", h.testMusicConnections)
+	router.GET(base+"/plugins/vrchat/status", h.vrchatStatus)
 	router.POST(base+"/plugins/resolver/test", h.testResolverCredentials)
 	router.POST(base+"/plugins/coding-agent/setup", h.codingAgentSetup)
 	router.POST(base+"/plugins/repository-publish/issues", h.createRepositoryIssue)
@@ -791,9 +797,12 @@ type botTransportConfig struct {
 	TelegramBotToken    string
 	TelegramAPIBaseURL  string
 	TelegramProxyURL    string
+	// 微信凭据是扫码时整组换掉的，同一台机器人重扫之后必须重建长轮询。
+	WeixinBotToken string
+	WeixinBaseURL  string
 }
 
-// platformCredentials 是 QQ 官方、钉钉、飞书、企业微信通道建连时读的配置，
+// platformCredentials 是 QQ 官方、钉钉、飞书、企业微信、iMessage 通道建连时读的配置，
 // 与 assistant.NewChannelForConfig 传进各通道的字段一一对应。只做相等比较，不落日志。
 type platformCredentials struct {
 	QQAppID                 string
@@ -812,6 +821,10 @@ type platformCredentials struct {
 	WeComSecret             string
 	WeComToken              string
 	WeComEncodingAESKey     string
+	IMessageServerURL       string
+	IMessagePassword        string
+	IMessageWebhookToken    string
+	IMessagePollSeconds     int
 }
 
 func platformCredentialsOf(profile assistant.BotConfig) platformCredentials {
@@ -832,6 +845,10 @@ func platformCredentialsOf(profile assistant.BotConfig) platformCredentials {
 		WeComSecret:             profile.WeComSecret,
 		WeComToken:              profile.WeComToken,
 		WeComEncodingAESKey:     profile.WeComEncodingAESKey,
+		IMessageServerURL:       profile.IMessageServerURL,
+		IMessagePassword:        profile.IMessagePassword,
+		IMessageWebhookToken:    profile.IMessageWebhookToken,
+		IMessagePollSeconds:     profile.IMessagePollSeconds,
 	}
 }
 
@@ -877,6 +894,8 @@ func enabledBotTransports(set assistant.ProfileSet) []botTransportConfig {
 			TelegramBotToken:    profile.TelegramBotToken,
 			TelegramAPIBaseURL:  profile.TelegramAPIBaseURL,
 			TelegramProxyURL:    profile.TelegramProxyURL,
+			WeixinBotToken:      profile.WeixinBotToken,
+			WeixinBaseURL:       profile.WeixinBaseURL,
 		})
 	}
 	return transports

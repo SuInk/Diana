@@ -15,6 +15,8 @@ function loadFunction(name, context) {
   return context[name];
 }
 
+const isMediaRole = role => ["tts", "stt", "video"].includes(role);
+
 test("saving requires an explicit provider and model for each role", async () => {
   const keys = ["chat", "vision", "intent", "image"];
   for (const key of keys) {
@@ -23,7 +25,7 @@ test("saving requires an explicit provider and model for each role", async () =>
       const roles = Object.fromEntries(keys.map(key => [key, { profile_id: "p", model: "m" }]));
       roles[key] = invalid;
       const busy = { value: false };
-      const context = vm.createContext({ connectionConflict: { value: undefined }, form: { value: { onebot_reverse_ws_endpoint: "ws://localhost" } }, roleForm: { value: roles }, modelRoleRows: keys.map(key => ({ key, label: key })), purposeRoleRows: [], purposeRoleKeys: [], visibleModelRoleRows: keys.map(key => ({ key, label: key })), editorTab: { value: "access" }, validWebSocketURL: () => true, roleModelIsSelectable: () => true, sendRetryValidationError: () => "", toastError: message => errors.push(message), busy });
+      const context = vm.createContext({ connectionConflict: { value: undefined }, form: { value: { onebot_reverse_ws_endpoint: "ws://localhost" } }, roleForm: { value: roles }, modelRoleRows: keys.map(key => ({ key, label: key })), purposeRoleRows: [], purposeRoleKeys: [], visibleModelRoleRows: keys.map(key => ({ key, label: key })), editorTab: { value: "access" }, validWebSocketURL: () => true, roleModelIsSelectable: () => true, sendRetryValidationError: () => "", toastError: message => errors.push(message), busy, isMediaRole });
       await loadFunction("save", context)();
       assert.equal(busy.value, false);
       assert.equal(errors.length, 1);
@@ -33,7 +35,7 @@ test("saving requires an explicit provider and model for each role", async () =>
 });
 
 test("provider and model menus do not offer an empty assignment", () => {
-  const context = vm.createContext({ roleForm: {value:{}}, llmChannels: { value: [] }, channelGroups: () => [], selectedRoleProfiles: () => [], modelsForRole: () => [], modelRoleRows: [], GROUP_PREFIX: "group:", MODEL_PAIR_SEP: "::", FOLLOW_CHAT: "__follow_chat__" });
+  const context = vm.createContext({ roleForm: {value:{}}, llmChannels: { value: [] }, channelGroups: () => [], selectedRoleProfiles: () => [], modelsForRole: () => [], modelRoleRows: [], GROUP_PREFIX: "group:", MODEL_PAIR_SEP: "::", FOLLOW_CHAT: "__follow_chat__", isMediaRole });
   loadFunction("crossProviderModelOptions", context);
   for (const name of ["channelOptionsFor", "crossProviderModelOptions", "modelOptionsFor"]) {
     const options = loadFunction(name, context)("vision", {});
@@ -48,6 +50,7 @@ test("provider dropdown offers follow chat for every role except chat", () => {
     GROUP_PREFIX: "group:",
     MODEL_PAIR_SEP: "::",
     FOLLOW_CHAT: "__follow_chat__",
+    isMediaRole,
     llmChannels: { value: [] },
     channelGroups: () => [],
     modelsForRole: () => [],
@@ -62,6 +65,10 @@ test("provider dropdown offers follow chat for every role except chat", () => {
     assert.equal(channelOptionsFor(role)[0].label, "跟随对话");
   }
   assert.equal(channelOptionsFor("chat").some(option => option.value === "__follow_chat__"), false);
+  // 音视频插槽没有可跟随的对话模型：对话模型接不了 /audio/speech 这些接口。
+  for (const role of ["tts", "stt", "video"]) {
+    assert.equal(channelOptionsFor(role).some(option => option.value === "__follow_chat__"), false);
+  }
 
   loadFunction("modelOptionsFor", context);
   loadFunction("setRoleChannel", context)("vision", "__follow_chat__");
@@ -165,4 +172,34 @@ test("a configured purpose role still needs a model", async () => {
   await loadFunction("save", context)();
   assert.equal(errors.length, 1);
   assert.ok(errors[0].startsWith("发送前审核"), errors[0]);
+});
+
+// 音视频插槽不配就是不启用，不能被当成漏配拦下保存；配了没选模型照常拦。
+test("media slots may be left unset but a configured slot needs a model", async () => {
+  const keys = ["chat", "vision", "intent", "image"];
+  const media = [{ key: "tts", label: "语音合成" }, { key: "stt", label: "语音识别" }, { key: "video", label: "视频生成" }];
+  for (const [ttsRole, expected] of [[undefined, 0], [{ profile_id: "p", model: "" }, 1]]) {
+    const errors = [];
+    const roles = Object.fromEntries(keys.map(key => [key, { profile_id: "p", model: "m" }]));
+    if (ttsRole) roles.tts = ttsRole;
+    const context = vm.createContext({
+      connectionConflict: { value: undefined },
+      form: { value: { onebot_reverse_ws_endpoint: "ws://localhost" } },
+      roleForm: { value: roles },
+      modelRoleRows: keys.map(key => ({ key, label: key })),
+      purposeRoleRows: [],
+      purposeRoleKeys: [],
+      visibleModelRoleRows: [...keys.map(key => ({ key, label: key })), ...media],
+      isMediaRole,
+      editorTab: { value: "access" },
+      validWebSocketURL: () => true,
+      roleModelIsSelectable: () => true,
+      sendRetryValidationError: () => "",
+      toastError: message => errors.push(message),
+      busy: { value: false }
+    });
+    await loadFunction("save", context)().catch(() => {});
+    const complaints = errors.filter(message => media.some(row => message.startsWith(row.label)));
+    assert.equal(complaints.length, expected, errors.join(" | "));
+  }
 });

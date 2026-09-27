@@ -113,6 +113,7 @@ var llmPurposeGroup = map[string]string{
 // 模型可用。
 var modelBindingGroups = []string{
 	llm.GroupChat, llm.GroupVision, llm.GroupIntent, llm.GroupReplyAssist, llm.GroupBackground, llm.GroupImage, llm.GroupEmbedding,
+	llm.GroupTTS, llm.GroupSTT, llm.GroupVideo,
 }
 
 // modelBindingGroupParent 是分组没绑定时先去找的上一档，找不到才落到 chat。

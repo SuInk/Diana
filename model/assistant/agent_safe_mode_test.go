@@ -179,7 +179,7 @@ func safeModeRegistryForEvent(t *testing.T, mode string, event MessageEvent, rem
 		newDianaRenderTool(runtime, event),
 		newDianaCrossSessionTool(runtime, event, true),
 		newDianaSaveToWorkspaceTool(runtime, event),
-		newDianaPlatformTool(runtime, event),
+		newDianaPlatformTool(context.Background(), runtime, event),
 		newDianaBotParticipationTool(runtime, event),
 		newDianaReplyBlockTool(runtime, event),
 		newDianaOneBotRequestsTool(runtime, event),

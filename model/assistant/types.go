@@ -700,11 +700,31 @@ type BotConfig struct {
 	RecallReplyAutoDeleteEnabled *bool `json:"recall_reply_auto_delete_enabled,omitempty"`
 	RecallReplyTTLSeconds        int   `json:"recall_reply_auto_delete_delay_seconds,omitempty"`
 	LLMIdentityMaskingEnabled    *bool `json:"llm_identity_masking_enabled,omitempty"`
+	// LLMIdentityBodyAccounts 让隐私代理连正文里直接写的账号数字一起换成别名：只换
+	// 核实过是本群成员的号，其余数字原样保留。隐私代理关掉时它不起作用。
+	LLMIdentityBodyAccounts *bool `json:"llm_identity_body_account_mapping_enabled,omitempty"`
 	// ModelCallQuota 是这台机器人的每群额度默认值：滚动 5 小时窗口内，单个群能
 	// 发起的模型调用次数。群配置里填了就以群为准，留空跟随这里；两边都是 0 表示不限。
 	//
 	// 按群算而不是按机器人算：一个群刷起来不该把别的群一起饿死。
 	ModelCallQuota int64 `json:"model_call_quota,omitempty"`
+	// ImageGenerationDailyGroupLimit 是每个群每天能成功生图（含改图）的次数，群配置
+	// 里填了以群为准；ImageGenerationDailyUserLimit 是每个人每天的次数，跨群和私聊
+	// 合计。0 表示不限。「每天」按机器人时钟的自然日算，主人不受限。
+	//
+	// 和 ModelCallQuota 分开设：生图一次的价钱抵得上几十次对话调用，按调用次数
+	// 管不住它。
+	ImageGenerationDailyGroupLimit int64 `json:"image_generation_daily_group_limit,omitempty"`
+	ImageGenerationDailyUserLimit  int64 `json:"image_generation_daily_user_limit,omitempty"`
+	// VideoGenerationDailyGroupLimit / VideoGenerationDailyUserLimit 是视频生成的
+	// 每群、每人每日次数，口径同生图。和生图分开设：一段视频的价钱抵得上几十张图，
+	// 两者共用一个上限的话，要么图卡得太死，要么视频放得太松。
+	VideoGenerationDailyGroupLimit int64 `json:"video_generation_daily_group_limit,omitempty"`
+	VideoGenerationDailyUserLimit  int64 `json:"video_generation_daily_user_limit,omitempty"`
+	// DailyLimitTimezone 是每日次数在哪个时区的零点重置（IANA 名，如 Asia/Shanghai）。
+	// 留空读 TZ 环境变量，再没有按北京时间：Docker 镜像默认是 UTC，不能拿进程本地
+	// 时区当日界线。
+	DailyLimitTimezone string `json:"daily_limit_timezone,omitempty"`
 	// ReplySamplePercent 是这台机器人的每群回复抽样率默认值（1–100）：没 @、没引用
 	// 机器人、没叫名字的群消息，只有这个比例会交给模型判断要不要接话。0 表示不抽样。
 	ReplySamplePercent int `json:"reply_sample_percent,omitempty"`
@@ -806,6 +826,19 @@ type BotConfig struct {
 	// （见 RelationshipPolicy.allowedAgentToolNames），群成员拿不到这组工具，只有
 	// 主人能驱动它；用户按下接管时连主人也当场失效。
 	AgentBrowserBoxDisabled bool `json:"agent_browser_box_disabled,omitempty"`
+
+	// Weixin* 全部由扫码登录写入，界面不能手填：token 只有腾讯服务端发得出来。
+	WeixinBotToken string `json:"weixin_bot_token,omitempty"`
+	WeixinBotID    string `json:"weixin_bot_id,omitempty"`
+	WeixinBaseURL  string `json:"weixin_base_url,omitempty"`
+	WeixinUserID   string `json:"weixin_user_id,omitempty"`
+
+	// IMessage* 是 BlueBubbles Server 的连接配置。WebhookToken 是回调地址里 ?token= 的值，
+	// 与服务器密码分开，首次保存时自动生成。
+	IMessageServerURL    string `json:"imessage_server_url,omitempty"`
+	IMessagePassword     string `json:"imessage_password,omitempty"`
+	IMessageWebhookToken string `json:"imessage_webhook_token,omitempty"`
+	IMessagePollSeconds  int    `json:"imessage_poll_seconds,omitempty"`
 }
 
 type ModelRole struct {
@@ -816,6 +849,10 @@ type ModelRole struct {
 	ProviderID string      `json:"provider_id,omitempty"`
 	ModelID    string      `json:"model_id,omitempty"`
 	Fallbacks  []ModelRole `json:"fallbacks,omitempty"`
+	// Params 只给音视频插槽用：音色、格式、语速、视频尺寸这些不是模型的属性，
+	// 换一个 TTS 模型照样要指定音色。对话类用途用不上，保存时原样丢掉也无妨。
+	// 后备路由不单独带，沿用主路由这一份。
+	Params map[string]string `json:"params,omitempty"`
 }
 
 func normalizeModelRoles(roles map[string]ModelRole) map[string]ModelRole {
@@ -849,6 +886,7 @@ func normalizeModelRole(role ModelRole) ModelRole {
 	role.Model = strings.TrimSpace(role.Model)
 	role.ProviderID = strings.TrimSpace(role.ProviderID)
 	role.ModelID = strings.TrimSpace(role.ModelID)
+	role.Params = normalizeModelRoleParams(role.Params)
 	if role.ProviderID != "" || role.ModelID != "" {
 		role.ProfileID = ""
 		role.Group = ""
@@ -863,6 +901,7 @@ func normalizeModelRole(role ModelRole) ModelRole {
 	for _, fallback := range role.Fallbacks {
 		fallback.FollowChat = false
 		fallback.Fallbacks = nil
+		fallback.Params = nil
 		fallback = normalizeModelRole(fallback)
 		if modelRoleConfigured(fallback) {
 			fallbacks = append(fallbacks, fallback)
@@ -870,6 +909,20 @@ func normalizeModelRole(role ModelRole) ModelRole {
 	}
 	role.Fallbacks = fallbacks
 	return role
+}
+
+func normalizeModelRoleParams(params map[string]string) map[string]string {
+	out := make(map[string]string, len(params))
+	for key, value := range params {
+		key = strings.ToLower(strings.TrimSpace(key))
+		if value = strings.TrimSpace(value); key != "" && value != "" {
+			out[key] = value
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 func modelRoleConfigured(role ModelRole) bool {
@@ -936,6 +989,13 @@ type GroupConfig struct {
 	// 口径和用量统计一致：这个群名下所有模型调用都算，包括判定、路由和工具步，
 	// 不只是最终那句回复。主人不受限——额度用完还能让主人改配置，不然就锁死了。
 	ModelCallQuota int64 `json:"model_call_quota,omitempty"`
+	// ImageGenerationDailyGroupLimit 是这个群每天能成功生图的次数：nil 跟随机器人，
+	// 0 本群不限，正数是本群上限。用指针才分得清「跟随」和「不限」，同
+	// ForwardReplyThreshold。每人每天的上限只在机器人上设：它跨群合计，放进某个群里
+	// 就管不住人换群接着画。
+	ImageGenerationDailyGroupLimit *int64 `json:"image_generation_daily_group_limit,omitempty"`
+	// VideoGenerationDailyGroupLimit 是这个群每天能生成视频的次数，三态同上。
+	VideoGenerationDailyGroupLimit *int64 `json:"video_generation_daily_group_limit,omitempty"`
 	// ReplySamplePercent 是这个群的回复抽样率（1–100），留空跟随机器人。
 	ReplySamplePercent       int   `json:"reply_sample_percent,omitempty"`
 	MaxContextTokens         int64 `json:"max_context_tokens,omitempty"`
@@ -985,7 +1045,13 @@ type GroupConfig struct {
 	PluginOverrides        map[string]bool                 `json:"plugin_overrides,omitempty"`
 	PluginSettingOverrides PluginSettingOverrides          `json:"plugin_setting_overrides,omitempty"`
 	ReplyGate              *ReplyGate                      `json:"reply_gate,omitempty"`
-	UpdatedAt              time.Time                       `json:"updated_at,omitempty"`
+	// Governance 是本群的规则防御（刷屏、违规词、退群审计），只有群级、没有机器人级：
+	// 每个群的容忍度差得太远，一刀切的默认值只会误伤。nil 表示全部关闭。
+	Governance *GroupGovernance `json:"governance,omitempty"`
+	// WholeMuteRestorePermissions 是 Telegram 全员禁言前的群默认权限快照，解除时按它
+	// 还原。运行时写入，WebUI 保存时以存储里的为准，不接受客户端改写。
+	WholeMuteRestorePermissions map[string]bool `json:"whole_mute_restore_permissions,omitempty"`
+	UpdatedAt                   time.Time       `json:"updated_at,omitempty"`
 }
 
 // GroupExtensionAccess 是一个扩展在某个群里的开放范围：一个基线档位，加一对名单。
@@ -1162,6 +1228,7 @@ type ConfigPayload struct {
 	RecallReplyAutoDeleteEnabled *bool `json:"recall_reply_auto_delete_enabled,omitempty"`
 	RecallReplyTTLSeconds        int   `json:"recall_reply_auto_delete_delay_seconds,omitempty"`
 	LLMIdentityMaskingEnabled    *bool `json:"llm_identity_masking_enabled,omitempty"`
+	LLMIdentityBodyAccounts      *bool `json:"llm_identity_body_account_mapping_enabled,omitempty"`
 	// MaxContextTokens 限定这个机器人单次请求最多用掉多少上下文 token。
 	// 0 表示不额外限制，跟随提供商配置档的窗口。它只能收紧不能放宽：配置档说
 	// 模型只有 32K，这里填 200K 也不会真的发出 200K 的请求。
@@ -1206,6 +1273,20 @@ type ConfigPayload struct {
 	AgentBrowserTimeoutMS           int                       `json:"agent_browser_timeout_ms,omitempty"`
 	AgentBrowserControlEnabled      bool                      `json:"agent_browser_control_enabled,omitempty"`
 	AgentBrowserBoxDisabled         bool                      `json:"agent_browser_box_disabled,omitempty"`
+
+	// 微信只回显绑定的是哪个号；token 只在显式索取时回传，保存时永远不从 payload 读。
+	WeixinBotID              string `json:"weixin_bot_id,omitempty"`
+	WeixinUserID             string `json:"weixin_user_id,omitempty"`
+	WeixinBotToken           string `json:"weixin_bot_token,omitempty"`
+	WeixinBotTokenConfigured bool   `json:"weixin_bot_token_configured,omitempty"`
+
+	// iMessage 的服务器密码和 webhook token 只回 configured 标志，显式索取时才回明文。
+	IMessageServerURL              string `json:"imessage_server_url,omitempty"`
+	IMessagePassword               string `json:"imessage_password,omitempty"`
+	IMessagePasswordConfigured     bool   `json:"imessage_password_configured,omitempty"`
+	IMessageWebhookToken           string `json:"imessage_webhook_token,omitempty"`
+	IMessageWebhookTokenConfigured bool   `json:"imessage_webhook_token_configured,omitempty"`
+	IMessagePollSeconds            int    `json:"imessage_poll_seconds,omitempty"`
 }
 
 // DefaultGroupConfig 返回指定群的默认行为配置，只包含群作用域字段。
@@ -1405,6 +1486,10 @@ func (cfg GroupConfig) WithDefaults(groupID string, base BotConfig) GroupConfig 
 		normalized := cfg.ReplyGate.WithDefaults()
 		cfg.ReplyGate = &normalized
 	}
+	if cfg.Governance != nil {
+		normalized := cfg.Governance.Normalized()
+		cfg.Governance = &normalized
+	}
 	// 旧数据里抄进来的机器人值快照只清一次。必须拿到这个群自己那台机器人才动手：
 	// 拿别的机器人比，会把真正的单独设置当成快照清掉。
 	if !cfg.InheritanceMigrated && (cfg.BotProfileID == "" || cfg.BotProfileID == base.ID) {
@@ -1569,6 +1654,11 @@ var (
 	ErrInvalidWeComAgentID        = errors.New("assistant: wecom agent id must be numeric")
 	ErrMissingWeComCallbackKeys   = errors.New("assistant: wecom token and encoding aes key are required to receive messages")
 	ErrInvalidFeishuAPIBase       = errors.New("assistant: feishu api base url must be http(s)")
+	ErrInvalidWeixinBaseURL       = errors.New("assistant: weixin base url must be an https weixin.qq.com address")
+	ErrMissingIMessageCredentials = errors.New("assistant: bluebubbles server url and password are required")
+	ErrInvalidIMessageServerURL   = errors.New("assistant: bluebubbles server url must be http(s)")
+	ErrInvalidIMessagePoll        = errors.New("assistant: imessage poll interval must be 0 or between 5 and 3600 seconds")
+	ErrWeakIMessageWebhookToken   = errors.New("assistant: imessage webhook token must be at least 16 characters")
 )
 
 // NewProfileSet 基于单个机器人配置创建配置集。
@@ -1757,6 +1847,7 @@ func DefaultBotConfig() BotConfig {
 		RecallReplyAutoDeleteEnabled:   boolPointer(false),
 		RecallReplyTTLSeconds:          defaultRecallReplyTTLSeconds,
 		LLMIdentityMaskingEnabled:      boolPointer(true),
+		LLMIdentityBodyAccounts:        boolPointer(true),
 		BotReplyLoopDetectionEnabled:   boolPointer(true),
 		ReplyRefusalSuppressionEnabled: boolPointer(true),
 		ReplySafetyMasterEnabled:       boolPointer(true),
@@ -1967,6 +2058,9 @@ func (cfg BotConfig) WithDefaults() BotConfig {
 	if cfg.LLMIdentityMaskingEnabled == nil {
 		cfg.LLMIdentityMaskingEnabled = boolPointer(true)
 	}
+	if cfg.LLMIdentityBodyAccounts == nil {
+		cfg.LLMIdentityBodyAccounts = boolPointer(true)
+	}
 	if cfg.ReplySafetyMasterEnabled == nil {
 		cfg.ReplySafetyMasterEnabled = boolPointer(true)
 	}
@@ -2174,6 +2268,27 @@ func (cfg BotConfig) Validate() error {
 			return ErrMissingWeComCallbackKeys
 		}
 		return nil
+	case PlatformWeixin:
+		// 不要求先有 token：扫码要挂在一台已保存的机器人上，得先能存下来才能扫。
+		// 没登录时通道只挂着并在状态里提示去扫码。
+		if base := strings.TrimSpace(cfg.WeixinBaseURL); base != "" && !weixinTrustedBaseURL(base) {
+			return ErrInvalidWeixinBaseURL
+		}
+		return nil
+	case PlatformIMessage:
+		if poll := cfg.IMessagePollSeconds; poll != 0 && (poll < imessageMinPollSeconds || poll > 3600) {
+			return ErrInvalidIMessagePoll
+		}
+		if base := strings.TrimSpace(cfg.IMessageServerURL); base != "" && !isHTTPURL(base) {
+			return ErrInvalidIMessageServerURL
+		}
+		if token := strings.TrimSpace(cfg.IMessageWebhookToken); token != "" && len(token) < imessageMinWebhookTokenLength {
+			return ErrWeakIMessageWebhookToken
+		}
+		if cfg.Enabled && (strings.TrimSpace(cfg.IMessageServerURL) == "" || strings.TrimSpace(cfg.IMessagePassword) == "") {
+			return ErrMissingIMessageCredentials
+		}
+		return nil
 	}
 
 	if cfg.OneBotTransport == OneBotTransportHTTP {
@@ -2355,6 +2470,7 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		RecallReplyAutoDeleteEnabled:      copyBoolPointer(cfg.RecallReplyAutoDeleteEnabled),
 		RecallReplyTTLSeconds:             cfg.RecallReplyTTLSeconds,
 		LLMIdentityMaskingEnabled:         copyBoolPointer(cfg.LLMIdentityMaskingEnabled),
+		LLMIdentityBodyAccounts:           copyBoolPointer(cfg.LLMIdentityBodyAccounts),
 		MaxContextTokens:                  cfg.MaxContextTokens,
 		RecentHistoryTokenBudget:          cfg.RecentHistoryTokenBudget,
 		RecentContextLimit:                cfg.RecentContextLimit,
@@ -2396,6 +2512,16 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		AgentBrowserTimeoutMS:             cfg.AgentBrowserTimeoutMS,
 		AgentBrowserControlEnabled:        cfg.AgentBrowserControlEnabled,
 		AgentBrowserBoxDisabled:           cfg.AgentBrowserBoxDisabled,
+
+		// 微信只回显绑定的是哪个号，token 只在显式索取时回传。
+		WeixinBotID:              cfg.WeixinBotID,
+		WeixinUserID:             cfg.WeixinUserID,
+		WeixinBotTokenConfigured: cfg.WeixinBotToken != "",
+
+		IMessageServerURL:              cfg.IMessageServerURL,
+		IMessagePasswordConfigured:     cfg.IMessagePassword != "",
+		IMessageWebhookTokenConfigured: cfg.IMessageWebhookToken != "",
+		IMessagePollSeconds:            cfg.IMessagePollSeconds,
 	}
 }
 
@@ -2418,6 +2544,9 @@ func PayloadFromConfigWithSecrets(cfg BotConfig) ConfigPayload {
 	payload.WeComSecret = cfg.WeComSecret
 	payload.WeComToken = cfg.WeComToken
 	payload.WeComEncodingAESKey = cfg.WeComEncodingAESKey
+	payload.WeixinBotToken = cfg.WeixinBotToken
+	payload.IMessagePassword = cfg.IMessagePassword
+	payload.IMessageWebhookToken = cfg.IMessageWebhookToken
 	return payload
 }
 
@@ -2563,6 +2692,7 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		RecallReplyAutoDeleteEnabled:    copyBoolPointer(payload.RecallReplyAutoDeleteEnabled),
 		RecallReplyTTLSeconds:           payload.RecallReplyTTLSeconds,
 		LLMIdentityMaskingEnabled:       copyBoolPointer(payload.LLMIdentityMaskingEnabled),
+		LLMIdentityBodyAccounts:         copyBoolPointer(payload.LLMIdentityBodyAccounts),
 		MaxContextTokens:                payload.MaxContextTokens,
 		RecentHistoryTokenBudget:        payload.RecentHistoryTokenBudget,
 		RecentContextLimit:              payload.RecentContextLimit,
@@ -2644,6 +2774,26 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 	}
 	if cfg.WeComEncodingAESKey == "" {
 		cfg.WeComEncodingAESKey = existing.WeComEncodingAESKey
+	}
+	// 微信凭据只认扫码结果：payload 里就算带了也不采信，免得前端回传的旧值或
+	// 空值把刚扫出来的登录覆盖掉。解绑走单独的接口。
+	cfg.WeixinBotToken = existing.WeixinBotToken
+	cfg.WeixinBotID = existing.WeixinBotID
+	cfg.WeixinBaseURL = existing.WeixinBaseURL
+	cfg.WeixinUserID = existing.WeixinUserID
+	cfg.IMessageServerURL = strings.TrimSpace(payload.IMessageServerURL)
+	cfg.IMessagePassword = payload.IMessagePassword
+	cfg.IMessageWebhookToken = payload.IMessageWebhookToken
+	cfg.IMessagePollSeconds = payload.IMessagePollSeconds
+	if cfg.IMessagePassword == "" {
+		cfg.IMessagePassword = existing.IMessagePassword
+	}
+	if cfg.IMessageWebhookToken == "" {
+		cfg.IMessageWebhookToken = existing.IMessageWebhookToken
+	}
+	// webhook 只认独立的 token，不认服务器密码；首次保存就生成一个，界面拿它拼出完整回调地址。
+	if NormalizePlatformID(cfg.Platform) == PlatformIMessage && strings.TrimSpace(cfg.IMessageWebhookToken) == "" {
+		cfg.IMessageWebhookToken = NewIMessageWebhookToken()
 	}
 	// 界面保存出来的配置一律是迁移过的：Agent 恒开，模式二选一。
 	return migrateAgentMode(cfg)

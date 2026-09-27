@@ -240,6 +240,16 @@ func withIdentityPrivacyScope(ctx context.Context, scope *identityPrivacyScope) 
 }
 
 func (r *Runtime) withIdentityPrivacyContext(ctx context.Context, event MessageEvent, history []MessageEvent) context.Context {
+	return r.withIdentityPrivacyContextVerifying(ctx, event, history, false)
+}
+
+// withReplyIdentityPrivacyContext 用在已经确定要回复的地方：正文里没见过的账号数字
+// 这时才去平台核实。路由之前那次每条群消息都会经过，不能为它们等平台。
+func (r *Runtime) withReplyIdentityPrivacyContext(ctx context.Context, event MessageEvent, history []MessageEvent) context.Context {
+	return r.withIdentityPrivacyContextVerifying(ctx, event, history, true)
+}
+
+func (r *Runtime) withIdentityPrivacyContextVerifying(ctx context.Context, event MessageEvent, history []MessageEvent, verify bool) context.Context {
 	cfg := r.effectiveConfigForEvent(event)
 	if !llmIdentityMaskingEnabled(cfg) {
 		if ctx == nil {
@@ -261,6 +271,8 @@ func (r *Runtime) withIdentityPrivacyContext(ctx context.Context, event MessageE
 	for _, item := range history {
 		scope.registerEvent(item)
 	}
+	// 放在结构化登记之后：已经认识的号不必再去平台问。
+	r.registerBodyAccounts(ctx, cfg, scope, event, history, verify)
 	return ctx
 }
 
@@ -519,6 +531,11 @@ func isOpaqueChatIdentifier(value string) bool {
 	if value == "" || value == "all" || strings.HasPrefix(value, identityAliasPrefix) {
 		return false
 	}
+	// iMessage 用手机号当账号（+8613800000000），没有字母也超出 QQ 号的位数，
+	// 两条规则都接不住，真号码就会原样进到模型上下文里。
+	if isE164PhoneIdentifier(value) {
+		return true
+	}
 	hasLetter := false
 	for _, char := range value {
 		if unicode.IsSpace(char) || unicode.IsControl(char) {
@@ -527,6 +544,19 @@ func isOpaqueChatIdentifier(value string) bool {
 		hasLetter = hasLetter || unicode.IsLetter(char)
 	}
 	return hasLetter
+}
+
+func isE164PhoneIdentifier(value string) bool {
+	digits, ok := strings.CutPrefix(value, "+")
+	if !ok || len(digits) < 6 || len(digits) > 15 {
+		return false
+	}
+	for _, char := range digits {
+		if char < '0' || char > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *identityPrivacyScope) protectRequest(req llm.GenerateRequest) llm.GenerateRequest {

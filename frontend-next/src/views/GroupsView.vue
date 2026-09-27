@@ -302,6 +302,7 @@
         <div v-if="effectiveWelcomeEnabled" class="field wide">
           <label for="group-welcome">欢迎语</label>
           <textarea id="group-welcome" v-model="editing.welcome_message" class="textarea" rows="2" :placeholder="inheritedPlaceholder(inheritedBot?.welcome_message)"></textarea>
+          <span class="hint">可用 {nickname} 昵称、{user_id} 账号、{group} 群名、{group_id} 群号。</span>
         </div>
         <div v-if="effectiveWelcomeEnabled" class="field">
           <label for="group-welcome-mode">欢迎词模式</label>
@@ -319,7 +320,7 @@
             v-model="welcomeTemplatesDraft"
             class="textarea"
             rows="3"
-            placeholder="每行一条候选，发送时随机抽一条；{user_id} 会替换成新成员 ID。留空跟随机器人。LLM 模式冷却或失败时也从这里回落。"
+            placeholder="每行一条候选，发送时随机抽一条；可用 {nickname} 昵称、{user_id} 账号、{group} 群名、{group_id} 群号。留空跟随机器人。LLM 模式冷却或失败时也从这里回落。"
           ></textarea>
         </div>
         <div v-if="effectiveWelcomeEnabled && effectiveWelcomeMode === 'llm'" class="field">
@@ -337,6 +338,34 @@
           <label for="group-call-quota">模型额度 · 5 小时调用次数</label>
           <input id="group-call-quota" v-model.number="editing.model_call_quota" class="input" type="number" min="0" step="1" inputmode="numeric" placeholder="留空跟随机器人" />
           <span class="hint">这个群名下的每次模型调用都算，含路由判断和工具步。留空跟随机器人那一档。</span>
+        </div>
+        <div class="field">
+          <label for="group-image-limit-mode">生图次数 · 本群每天</label>
+          <AppSelect
+            id="group-image-limit-mode"
+            :model-value="groupDailyLimitMode(editing.image_generation_daily_group_limit)"
+            :options="groupDailyLimitOptions('image_generation_daily_group_limit')"
+            @update:model-value="(value) => { if (editing) setGroupDailyLimitMode(editing, 'image_generation_daily_group_limit', value); }"
+          />
+          <span class="hint">本群每天最多成功生成几次图片，改图也算，失败不算，主人不受限。每人每天的上限在机器人设置里，跨群合计。</span>
+        </div>
+        <div v-if="groupDailyLimitMode(editing.image_generation_daily_group_limit) === 'custom'" class="field">
+          <label for="group-image-limit">本群每天生图次数</label>
+          <input id="group-image-limit" v-model.number="editing.image_generation_daily_group_limit" class="input" type="number" min="1" step="1" inputmode="numeric" placeholder="没填跟随机器人" />
+        </div>
+        <div class="field">
+          <label for="group-video-limit-mode">视频次数 · 本群每天</label>
+          <AppSelect
+            id="group-video-limit-mode"
+            :model-value="groupDailyLimitMode(editing.video_generation_daily_group_limit)"
+            :options="groupDailyLimitOptions('video_generation_daily_group_limit')"
+            @update:model-value="(value) => { if (editing) setGroupDailyLimitMode(editing, 'video_generation_daily_group_limit', value); }"
+          />
+          <span class="hint">本群每天最多生成几段视频，任务被受理后失败也算，提交就被拒的不算，主人不受限。每人每天的上限在机器人设置里。</span>
+        </div>
+        <div v-if="groupDailyLimitMode(editing.video_generation_daily_group_limit) === 'custom'" class="field">
+          <label for="group-video-limit">本群每天视频次数</label>
+          <input id="group-video-limit" v-model.number="editing.video_generation_daily_group_limit" class="input" type="number" min="1" step="1" inputmode="numeric" placeholder="没填跟随机器人" />
         </div>
         <div class="field">
           <label for="group-sample">回复抽样率（%）</label>
@@ -520,6 +549,10 @@
           <span class="hint">{{ field.hint }}</span>
         </div>
         <div class="field wide">
+          <label>规则防御</label>
+          <GroupGovernanceForm v-model="editing.governance" id-prefix="group-governance" />
+        </div>
+        <div class="field wide">
           <label>本群回复时间与屏蔽账号</label>
           <ReplyGateForm v-model="editing.reply_gate" allow-inherit id-prefix="group-gate" :supports-group-level="supportsGroupLevel" />
         </div>
@@ -647,7 +680,15 @@ import BotMarkerList from "../components/BotMarkerList.vue";
 import { participationFromConfig, participationLevelLabel, participationPresetName, type ParticipationPreferences } from "../participation";
 import Modal from "../components/Modal.vue";
 import ReplyGateForm from "../components/ReplyGateForm.vue";
+import GroupGovernanceForm from "../components/GroupGovernanceForm.vue";
 import { sendRetryFields, sendRetryPayload, sendRetryValidationError, withUnsetSendRetryCleared, type SendRetryField, type SendRetrySettings } from "../send-retry-settings";
+import {
+  groupDailyLimitMode,
+  groupImageGenerationLimitsPayload,
+  groupVideoGenerationLimitsPayload,
+  setGroupDailyLimitMode,
+  type GroupDailyLimitField
+} from "../media-generation-quota";
 
 // 群里留空的项跟随所属机器人（后端不再把机器人的值抄进群配置），占位符和「跟随机器人」
 // 选项里写出机器人现在的值，免得用户以为留空就是没有。
@@ -678,6 +719,14 @@ const groupRecallDeleteOptions = computed(() => followSwitchOptions(inheritedBot
 const effectiveWelcomeEnabled = computed(() => editing.value?.welcome_enabled ?? inheritedBot.value?.welcome_enabled ?? false);
 const effectiveWelcomeMode = computed(() => editing.value?.welcome_mode || inheritedBot.value?.welcome_mode || "");
 const effectiveRecallDelete = computed(() => editing.value?.recall_reply_auto_delete_enabled ?? inheritedBot.value?.recall_reply_auto_delete_enabled ?? false);
+function groupDailyLimitOptions(field: GroupDailyLimitField): AppSelectOption[] {
+  const inherited = inheritedBot.value?.[field];
+  return [
+    { value: "", label: `跟随机器人（${inherited ? `${inherited} 次` : "不限"}）` },
+    { value: "unlimited", label: "本群不限" },
+    { value: "custom", label: "本群单独设置" }
+  ];
+}
 // 数字框清空后 v-model.number 给的是空串：换成 0，后端按跟随机器人处理，也不会因为
 // 空串解析不成整数把整份配置拒收。
 function followNumber(value: unknown): number {
@@ -1416,6 +1465,8 @@ async function saveEditing(): Promise<void> {
       forward_reply_threshold: forwardModeOf(current) === "custom" ? optionalForwardThreshold(current.forward_reply_threshold) : undefined,
       // 数字框清空后 v-model.number 给的是空串，后端按整数解析会整份拒收。
       model_call_quota: Math.max(0, Math.round(Number(current.model_call_quota) || 0)),
+      ...groupImageGenerationLimitsPayload(current),
+      ...groupVideoGenerationLimitsPayload(current),
       reply_sample_percent: Math.min(100, Math.max(0, Math.round(Number(current.reply_sample_percent) || 0))),
       forward_reply_chunk_threshold: forwardModeOf(current) === "custom" ? optionalForwardThreshold(current.forward_reply_chunk_threshold) : undefined,
       forward_reply_enabled: forwardModeOf(current) === "custom" ? true : current.forward_reply_enabled,

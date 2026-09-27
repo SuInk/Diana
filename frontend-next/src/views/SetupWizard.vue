@@ -353,6 +353,39 @@
             </div>
           </template>
 
+          <template v-else-if="botForm.platform === 'weixin'">
+            <WeixinLoginPanel
+              v-if="savedBot?.platform === 'weixin' && savedBot.id"
+              :profile-id="savedBot.id"
+              :bot-id="savedBot.weixin_bot_id"
+              :user-id="savedBot.weixin_user_id"
+              :logged-in="!!savedBot.weixin_bot_token_configured"
+              @updated="onWeixinLoginUpdated"
+            />
+            <div v-else class="field wide">
+              <span class="hint">微信不用填凭据：先点下方按钮保存并启动，这里会出现登录二维码，用要当作机器人的微信号扫码即可。</span>
+            </div>
+          </template>
+
+          <template v-else-if="botForm.platform === 'imessage'">
+            <div class="field wide">
+              <label for="wizard-imessage-url">BlueBubbles 服务器地址</label>
+              <input id="wizard-imessage-url" v-model="botForm.imessage_server_url" class="input mono" autocomplete="off" placeholder="例如 http://192.168.1.10:1234" />
+              <span class="hint">Mac 上 BlueBubbles Server 的地址，Diana 要能访问到它。</span>
+            </div>
+            <div class="field wide">
+              <label for="wizard-imessage-password">服务器密码</label>
+              <input id="wizard-imessage-password" v-model="botForm.imessage_password" class="input" type="password" autocomplete="off"
+                :placeholder="secretConfigured('imessage_password_configured') ? '留空表示沿用已保存的密码' : 'BlueBubbles Server 设置里的密码'" />
+            </div>
+            <div class="field wide">
+              <label for="wizard-imessage-webhook">Webhook 密钥</label>
+              <input id="wizard-imessage-webhook" v-model="botForm.imessage_webhook_token" class="input" type="password" autocomplete="off"
+                :placeholder="secretConfigured('imessage_webhook_token_configured') ? '留空表示沿用已保存的密钥' : '留空保存时自动生成'" />
+              <span class="hint">回调只认这个密钥，不接受服务器密码。保存后到「机器人」页复制带密钥的完整回调地址，填进 BlueBubbles 的 webhook，事件至少勾选 New Messages。</span>
+            </div>
+          </template>
+
           <!-- 飞书和企业微信只能靠平台回调收消息，地址要填到对方后台。 -->
           <div v-if="callbackURL" class="field wide">
             <label for="wizard-callback-url">回调地址</label>
@@ -463,6 +496,7 @@ import { navigate } from "../router";
 import { toastError, toastSuccess } from "../toast";
 import AccountNameHint from "../components/AccountNameHint.vue";
 import AppSelect from "../components/AppSelect.vue";
+import WeixinLoginPanel from "../components/WeixinLoginPanel.vue";
 import {
   defaultPresetForProvider,
   detectLLMService,
@@ -628,7 +662,10 @@ const botForm = ref({
   wecom_agent_id: "",
   wecom_secret: "",
   wecom_token: "",
-  wecom_encoding_aes_key: ""
+  wecom_encoding_aes_key: "",
+  imessage_server_url: "",
+  imessage_password: "",
+  imessage_webhook_token: ""
 });
 
 // 平台注册表来自后端，这里先塞一条 OneBot 兜底：/platforms 取不到时这一步仍
@@ -890,6 +927,9 @@ function credentialError(): string {
         return "请填写企业微信「接收消息」里的 Token 和 EncodingAESKey，缺一个就只能发不能收";
       }
       return "";
+    case "imessage":
+      if (!/^https?:\/\/\S+$/.test(form.imessage_server_url.trim())) return "请填写 BlueBubbles 服务器地址，以 http:// 或 https:// 开头";
+      return filled(form.imessage_password, "imessage_password_configured") ? "" : "请填写 BlueBubbles 服务器密码";
     default:
       return "";
   }
@@ -936,6 +976,15 @@ function platformPayload(): Partial<BotProfileConfig> {
         wecom_token: form.wecom_token.trim() || undefined,
         wecom_encoding_aes_key: form.wecom_encoding_aes_key.trim() || undefined
       };
+    case "weixin":
+      // 微信凭据只能扫码写入，保存时没有要提交的接入字段。
+      return {};
+    case "imessage":
+      return {
+        imessage_server_url: form.imessage_server_url.trim(),
+        imessage_password: form.imessage_password.trim() || undefined,
+        imessage_webhook_token: form.imessage_webhook_token.trim() || undefined
+      };
     default:
       return {
         onebot_transport: form.onebot_transport,
@@ -946,6 +995,11 @@ function platformPayload(): Partial<BotProfileConfig> {
         onebot_access_token: form.onebot_access_token.trim() || undefined
       };
   }
+}
+
+function onWeixinLoginUpdated(config: BotProfileConfig): void {
+  savedBot.value = config;
+  if (!botForm.value.owner_id.trim() && config.owner_id) botForm.value.owner_id = config.owner_id;
 }
 
 /** 保存成功后清掉明文密钥草稿：再次保存时留空即表示沿用后端已存的那份。 */
@@ -962,6 +1016,8 @@ function clearSecretDrafts(): void {
   form.wecom_secret = "";
   form.wecom_token = "";
   form.wecom_encoding_aes_key = "";
+  form.imessage_password = "";
+  form.imessage_webhook_token = "";
 }
 
 async function saveBotAndStart(): Promise<void> {
@@ -1033,6 +1089,7 @@ onMounted(async () => {
     botForm.value.feishu_api_base_url = bot.feishu_api_base_url || "";
     botForm.value.wecom_corp_id = bot.wecom_corp_id || "";
     botForm.value.wecom_agent_id = bot.wecom_agent_id || "";
+    botForm.value.imessage_server_url = bot.imessage_server_url || "";
     // 10001 was used by early demo data and should not appear as a real default.
     botForm.value.owner_id = bot.owner_id === "10001" ? "" : (bot.owner_id ?? "");
     if (llmConfigured.value && !connected.value) {
