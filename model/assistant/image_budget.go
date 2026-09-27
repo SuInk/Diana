@@ -29,53 +29,60 @@ func (p *imageBudgetProvider) Generate(ctx context.Context, req llm.GenerateRequ
 	if ctx.Value(imageBudgetActiveKey{}) != nil {
 		return p.provider.Generate(ctx, req)
 	}
-	images := 0
-	for _, m := range req.Messages {
-		for _, part := range m.Parts {
-			if part.Type == llm.ContentPartImageURL && part.ImageURL != "" {
-				images++
-			}
-		}
-	}
+	images := countBudgetImages(req)
 	window, reserve := p.runtime.imageRequestBudget(ctx, p.group, req)
 	budget := llm.InputTokenBudget(window, reserve)
 	before := llm.PlanInputBudget(req, budget)
+	run := inputBudgetRunFromContext(ctx)
+	if run == nil {
+		run = newInputBudgetRun()
+	}
+	if !before.OverBudget() && run.empty() {
+		return p.provider.Generate(ctx, req)
+	}
+	// 本轮裁过就每步都跑：这一步装得下也要照搬之前丢过的历史、截过的工具结果，
+	// 否则前缀在「裁过」和「没裁」之间来回跳，供应商的前缀缓存每步都断。
+	req, trim := pretrimBudgetText(req, budget, run)
 	if !before.OverBudget() {
 		return p.provider.Generate(ctx, req)
 	}
-	timeout := 20 * time.Second
-	if deadline, ok := ctx.Deadline(); ok && time.Until(deadline)/3 < timeout {
-		timeout = time.Until(deadline) / 3
-	}
-	if timeout <= 0 {
-		return p.provider.Generate(ctx, req)
-	}
-	describeCtx, cancel := context.WithTimeout(context.WithValue(ctx, imageBudgetActiveKey{}, true), timeout)
 	event := MessageEvent{}
 	if usage := llmUsageFromContext(ctx); usage != nil {
 		event = usage.event
 	}
 	textCalls := 0
-	req = fitBudgetText(describeCtx, req, budget, &textCalls, p.runtime.summarizeBudgetText)
-	if llm.PlanInputBudget(req, budget).ImageExcess > 0 {
-		req = fitImagesWithDescriptions(describeCtx, req, budget, func(callCtx context.Context, source string) (string, error) {
-			return p.runtime.budgetImageDescription(callCtx, event, source)
-		})
-	}
-	// Image descriptions consume text quota; account for them before proceeding.
-	req = fitBudgetText(describeCtx, req, budget, &textCalls, p.runtime.summarizeBudgetText)
-	req = lowerOverBudgetImageDetail(req, budget)
-	cancel()
-	retained := 0
-	for _, message := range req.Messages {
-		for _, part := range message.Parts {
-			if part.Type == llm.ContentPartImageURL && part.ImageURL != "" {
-				retained++
+	if llm.PlanInputBudget(req, budget).OverBudget() {
+		timeout := 20 * time.Second
+		if deadline, ok := ctx.Deadline(); ok && time.Until(deadline)/3 < timeout {
+			timeout = time.Until(deadline) / 3
+		}
+		if timeout <= 0 {
+			return p.provider.Generate(ctx, req)
+		}
+		describeCtx, cancel := context.WithTimeout(context.WithValue(ctx, imageBudgetActiveKey{}, true), timeout)
+		req = fitBudgetText(describeCtx, req, budget, &textCalls, run, p.runtime.summarizeBudgetText)
+		if llm.PlanInputBudget(req, budget).ImageExcess > 0 {
+			beforeDescriptions := countBudgetImages(req)
+			req = fitImagesWithDescriptions(describeCtx, req, budget, func(callCtx context.Context, source string) (string, error) {
+				return p.runtime.budgetImageDescription(callCtx, event, source)
+			})
+			// 图片描述占文字额度。只有真的换了图才再过一遍文字，以前这第二遍无条件跑，
+			// 描述一张没换时它只会把第一遍摘不动的那几条再送去摘一次。
+			if countBudgetImages(req) < beforeDescriptions {
+				var more budgetPretrimStats
+				req, more = pretrimBudgetText(req, budget, run)
+				trim = trim.add(more)
+				req = fitBudgetText(describeCtx, req, budget, &textCalls, run, p.runtime.summarizeBudgetText)
 			}
 		}
+		req = lowerOverBudgetImageDetail(req, budget)
+		cancel()
 	}
+	retained := countBudgetImages(req)
 	after := llm.PlanInputBudget(req, budget)
-	log.Printf("diana input budget: message_id=%s input_budget=%d text_share_percent=50 estimated_text_before=%d estimated_images_before=%d estimated_text_after=%d estimated_images_after=%d text_limit=%d image_limit=%d text_summary_calls=%d original_images=%d described_images=%d retained_images=%d", event.MessageID, budget, before.TextTokens, before.ImageTokens, after.TextTokens, after.ImageTokens, after.TextLimit, after.ImageLimit, textCalls, images, images-retained, retained)
+	// 格式：text/img 是「处理前->处理后/限额」；dropped/clipped 是预裁剪丢掉的历史
+	// 条数和截短的工具结果条数；images 是「原有/换成描述/保留」。
+	log.Printf("diana input budget: message_id=%s budget=%d text=%d->%d/%d img=%d->%d/%d dropped=%d clipped=%d text_summary_calls=%d images=%d/%d/%d", event.MessageID, budget, before.TextTokens, after.TextTokens, after.TextLimit, before.ImageTokens, after.ImageTokens, after.ImageLimit, trim.Dropped, trim.Clipped, textCalls, images, images-retained, retained)
 	if after.OverBudget() {
 		// 描述、摘要、缩图都做完了还是超，就丢，不让整轮失败。
 		//
@@ -93,6 +100,18 @@ func (p *imageBudgetProvider) Generate(ctx context.Context, req llm.GenerateRequ
 		log.Printf("diana input budget: message_id=%s still over budget after compression: dropped_images=%d budget=%d text=%d images=%d other=%d over=%t, deferring remainder to provider trim", event.MessageID, dropped, budget, remaining.TextTokens, remaining.ImageTokens, remaining.OtherTokens, remaining.OverBudget())
 	}
 	return p.provider.Generate(ctx, req)
+}
+
+func countBudgetImages(req llm.GenerateRequest) int {
+	count := 0
+	for _, message := range req.Messages {
+		for _, part := range message.Parts {
+			if part.Type == llm.ContentPartImageURL && part.ImageURL != "" {
+				count++
+			}
+		}
+	}
+	return count
 }
 
 func (r *Runtime) imageRequestBudget(ctx context.Context, group string, req llm.GenerateRequest) (int64, int64) {

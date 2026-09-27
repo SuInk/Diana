@@ -4878,6 +4878,9 @@ func (r *Runtime) deliverResolverResponse(ctx context.Context, event MessageEven
 
 func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event MessageEvent, relationship RelationshipPolicy, messages []llm.Message, preparedRegistry *agent.ToolRegistry, extraTools ...agent.Tool) (string, error) {
 	messages = withReplyGenerationBudgetForConfig(messages, cfg)
+	// Agent 每一步都带着完整原件重发，预算层丢过的历史、摘要过的文字要记到这一整次
+	// 回复结束，下一步才能照搬，而不是每步从头裁、从头摘要（见 input_budget_pretrim.go）。
+	ctx = withInputBudgetRun(ctx)
 	if _, initialized := identityPrivacyStateFromContext(ctx); !initialized {
 		ctx = r.withIdentityPrivacyContext(ctx, event, r.contextHistory(event))
 	}

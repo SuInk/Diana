@@ -12,9 +12,17 @@ import (
 
 type budgetTextSummarizer func(context.Context, string, int64) (string, error)
 
+// budgetSummaryPrefix 标在每段预算摘要前面，告诉模型这不是原文。
+const budgetSummaryPrefix = "【较早内容的压缩摘要，非原文】"
+
 // Compress text in place so roles, tool-call/result pairs and image attachments
 // retain their ordering. Current input and system instructions are never rewritten.
-func fitBudgetText(ctx context.Context, req llm.GenerateRequest, budget int64, calls *int, summarize budgetTextSummarizer) llm.GenerateRequest {
+//
+// 这是预裁剪（pretrimBudgetText）之后的兜底：只有丢旧历史、截旧工具结果之后仍然
+// 装不下时才会走到这里，典型是一条超长的工具结果或插件资料。run 非空时摘要结果按
+// 原文指纹缓存：Agent 下一步带着同一段原文回来直接复用，失败过的不再重试，也不
+// 计入调用次数。
+func fitBudgetText(ctx context.Context, req llm.GenerateRequest, budget int64, calls *int, run *inputBudgetRun, summarize budgetTextSummarizer) llm.GenerateRequest {
 	if llm.PlanInputBudget(req, budget).TextExcess <= 0 {
 		return req
 	}
@@ -61,7 +69,8 @@ func fitBudgetText(ctx context.Context, req llm.GenerateRequest, budget int64, c
 		}
 		text := strings.Join(pieces, "\n")
 		cost := llm.EstimateTextTokens(text)
-		if cost <= 256 {
+		// 已经是摘要的不再摘要：同一轮描述完图片后的第二遍以前会把它再压一次。
+		if cost <= 256 || isBudgetSummaryText(text) {
 			continue
 		}
 		candidates = append(candidates, budgetTextCandidate{index: i, text: text, cost: cost})
@@ -70,18 +79,32 @@ func fitBudgetText(ctx context.Context, req llm.GenerateRequest, budget int64, c
 	sort.SliceStable(candidates, func(a, b int) bool { return candidates[a].cost > candidates[b].cost })
 
 	for _, candidate := range candidates {
+		key := budgetSummaryKey(candidate.text)
+		summary, cached := run.summary(key)
+		// 次数用完了也接着看后面的候选：缓存里有的不花调用次数。
+		if !cached && *calls >= 2 {
+			continue
+		}
 		plan := llm.PlanInputBudget(req, budget)
-		if !plan.OverBudget() || plan.TextExcess == 0 || *calls >= 2 || ctx.Err() != nil {
+		if !plan.OverBudget() || plan.TextExcess == 0 || ctx.Err() != nil {
 			break
 		}
 		target := min(int64(2048), max(int64(128), candidate.cost-plan.TextExcess-64))
-		*calls = *calls + 1
-		summary, err := summarize(ctx, candidate.text, target)
-		if err != nil || strings.TrimSpace(summary) == "" {
-			continue
+		if !cached {
+			*calls = *calls + 1
+			var err error
+			summary, err = summarize(ctx, candidate.text, target)
+			if err != nil || strings.TrimSpace(summary) == "" {
+				summary = ""
+			} else {
+				summary = budgetSummaryPrefix + strings.TrimSpace(summary)
+			}
+			// ctx 超时导致的失败不记：那是这一步时间不够，不是这段文字摘不动。
+			if summary != "" || ctx.Err() == nil {
+				run.rememberSummary(key, summary)
+			}
 		}
-		summary = "【较早内容的压缩摘要，非原文】" + strings.TrimSpace(summary)
-		if !budgetSummaryWorthKeeping(llm.EstimateTextTokens(summary), candidate.cost, target) {
+		if summary == "" || !budgetSummaryWorthKeeping(llm.EstimateTextTokens(summary), candidate.cost, target) {
 			continue
 		}
 		if req.Messages != nil {
