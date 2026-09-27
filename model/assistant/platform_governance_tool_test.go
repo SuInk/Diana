@@ -179,6 +179,8 @@ var expectedPlatformWriteOperations = map[string][]string{
 	PlatformFeishu:     nil,
 	PlatformDingTalk:   nil,
 	PlatformWeCom:      nil,
+	// 微信 iLink 只有私聊，没有群，群管写操作无从谈起。
+	PlatformWeixin: nil,
 }
 
 func TestPlatformWriteOperationMatrix(t *testing.T) {

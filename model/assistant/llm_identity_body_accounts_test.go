@@ -184,8 +184,11 @@ func TestBodyAccountCandidates(t *testing.T) {
 	if !slices.Equal(got, want) {
 		t.Fatalf("候选 = %v, want %v", got, want)
 	}
-	if _, _, _, ok := bodyAccountDigitsAllowed(PlatformFeishu); ok {
-		t.Fatal("账号不是数字的平台不应扫描正文数字")
+	// 微信的账号是 xxx@im.wechat，也不是数字。
+	for _, platform := range []string{PlatformFeishu, PlatformWeixin} {
+		if _, _, _, ok := bodyAccountDigitsAllowed(platform); ok {
+			t.Fatalf("%s 账号不是数字，不应扫描正文数字", platform)
+		}
 	}
 }
 
