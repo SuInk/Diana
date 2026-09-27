@@ -59,6 +59,8 @@ var expectedPlatformCapabilities = map[string]platformCapabilities{
 		// iLink 的 sendmessage 会回 message_id，但入站引用只给 ref_msg.svr_id，
 		// 两者是不是同一个空间官方实现里看不出来，宁可不记。入站的 ref_msg 能还原
 		// 被引用的原文，所以 InboundQuote 为真。纯文本发送，不渲染 Markdown。
+		// 另一条限制不在这张表里：只能回给先发过消息的人（要带对方的 context_token），
+		// 提醒、主人通知这类主动消息发给没说过话的人会直接返回 ErrWeixinNoContext。
 		ResultChannel: false, RichText: false, InboundQuote: true,
 	},
 }

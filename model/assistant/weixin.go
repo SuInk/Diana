@@ -20,6 +20,9 @@ import (
 	"time"
 )
 
+// ErrWeixinNoContext 表示对方还没给机器人发过消息，iLink 不允许机器人主动开启会话。
+var ErrWeixinNoContext = errors.New("weixin: 对方需要先给机器人发一条消息，微信才允许机器人给他发消息")
+
 // WeixinConfig 是微信（iLink Bot）通道的连接配置。凭据全部来自扫码登录，
 // 不由用户手填。
 type WeixinConfig struct {
@@ -170,14 +173,15 @@ func (c *WeixinChannel) pollLoop(ctx context.Context, api weixinAPI) {
 		if resp.LongPollingTimeoutMs > 0 {
 			timeout = time.Duration(resp.LongPollingTimeoutMs) * time.Millisecond
 		}
+		c.deliverBatch(api, resp.Msgs)
+		// 游标要等这批消息都交给 handler 之后才前移、落盘：先落盘的话，进程在
+		// 处理途中退出，重启会从新游标接着收，这批消息就永远丢了。handler 在运行时
+		// 里是写入持久化入站队列，交出去就算安全。
 		if next := resp.GetUpdatesBuf; next != "" && next != cursor {
 			c.stateMu.Lock()
 			c.state.Cursor = next
 			c.stateMu.Unlock()
 			c.saveState()
-		}
-		for _, msg := range resp.Msgs {
-			c.dispatch(ctx, api, msg)
 		}
 	}
 }
@@ -216,42 +220,78 @@ func (c *WeixinChannel) pauseRemaining() time.Duration {
 	return remaining
 }
 
-func (c *WeixinChannel) dispatch(ctx context.Context, api weixinAPI, msg weixinMessage) {
-	if msg.MessageType == weixinMessageTypeBot {
-		return
-	}
-	if strings.TrimSpace(msg.GroupID) != "" {
-		log.Printf("weixin: 丢弃群消息 group=%s：iLink 只支持私聊回复", msg.GroupID)
-		return
-	}
-	from := strings.TrimSpace(msg.FromUserID)
-	if from == "" {
-		return
-	}
-	if token := strings.TrimSpace(msg.ContextToken); token != "" {
-		c.rememberContextToken(from, token)
-	}
+// deliverBatch 把一批消息交给 handler，返回时全部已经交出。
+//
+// 同一个联系人的消息按到达顺序串行处理：图片要先从 CDN 取回解密，如果每条各开
+// 一个协程，后到的文字会赶在慢吞吞的图片前面进队列，上下文顺序就乱了。不同
+// 联系人之间互不影响，并行处理。
+func (c *WeixinChannel) deliverBatch(api weixinAPI, msgs []weixinMessage) {
 	c.mu.RLock()
 	selfID := c.cfg.BotID
 	cdnBase := c.cfg.CDNBaseURL
 	handler := c.handler
 	c.mu.RUnlock()
 
+	type pending struct {
+		event MessageEvent
+		msg   weixinMessage
+	}
+	byUser := map[string][]pending{}
+	var order []string
+	for _, msg := range msgs {
+		event, ok := c.accept(msg, selfID)
+		if !ok || handler == nil {
+			continue
+		}
+		if _, seen := byUser[event.UserID]; !seen {
+			order = append(order, event.UserID)
+		}
+		byUser[event.UserID] = append(byUser[event.UserID], pending{event: event, msg: msg})
+	}
+	var wg sync.WaitGroup
+	for _, user := range order {
+		queue := byUser[user]
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			defer recoverGoroutinePanic("weixin.go:deliverBatch")
+			for _, item := range queue {
+				eventCtx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+				c.attachImages(eventCtx, api, cdnBase, &item.event, item.msg)
+				if err := handler(eventCtx, item.event); err != nil {
+					log.Printf("weixin: 入站消息交给运行时失败 message=%s: %v", item.event.MessageID, err)
+				}
+				cancel()
+			}
+		}()
+	}
+	wg.Wait()
+}
+
+// accept 过滤掉不该投递的消息，并记下对方最新的 context_token。
+func (c *WeixinChannel) accept(msg weixinMessage, selfID string) (MessageEvent, bool) {
+	if msg.MessageType == weixinMessageTypeBot {
+		return MessageEvent{}, false
+	}
+	if strings.TrimSpace(msg.GroupID) != "" {
+		log.Printf("weixin: 丢弃群消息 group=%s：iLink 只支持私聊回复", msg.GroupID)
+		return MessageEvent{}, false
+	}
+	from := strings.TrimSpace(msg.FromUserID)
+	if from == "" {
+		return MessageEvent{}, false
+	}
+	if token := strings.TrimSpace(msg.ContextToken); token != "" {
+		c.rememberContextToken(from, token)
+	}
 	event, ok := weixinEventFromMessage(msg, selfID)
-	if !ok || handler == nil {
-		return
+	if !ok {
+		return MessageEvent{}, false
 	}
 	if id := strings.TrimSpace(event.MessageID); id != "" && !c.dedupe.Accept(id) {
-		return
+		return MessageEvent{}, false
 	}
-	go func() {
-		defer recoverGoroutinePanic("weixin.go:dispatch")
-		eventCtx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-		defer cancel()
-		// 图片要先从 CDN 取回解密，放在协程里做，别卡住下一轮长轮询。
-		c.attachImages(eventCtx, api, cdnBase, &event, msg)
-		_ = handler(eventCtx, event)
-	}()
+	return event, true
 }
 
 // weixinEventFromMessage 把一条入站消息映射成统一事件，不做任何网络请求。
@@ -398,6 +438,11 @@ func (c *WeixinChannel) Send(ctx context.Context, msg OutgoingMessage) error {
 	}
 	api := c.api()
 	contextToken := c.contextToken(to)
+	if contextToken == "" {
+		// iLink 的消息都挂在对方发起的会话上，没有 context_token 就发不出去。提醒、
+		// 主人通知这类主动消息最容易撞上，要说清楚原因，而不是留一条笼统的发送失败。
+		return ErrWeixinNoContext
+	}
 
 	text := platformOutboundText(msg)
 	images := msg.ImageURLs

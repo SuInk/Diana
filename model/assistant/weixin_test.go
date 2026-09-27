@@ -32,12 +32,14 @@ type weixinFakeServer struct {
 
 	mu sync.Mutex
 	// updates 依次作为 getupdates 的响应；取完后挂住直到请求超时，模拟长轮询。
-	updates  []string
-	cursors  []string
-	sends    []map[string]any
-	uploads  []map[string]any
-	headers  []http.Header
-	cdnBody  []byte
+	updates []string
+	cursors []string
+	sends   []map[string]any
+	uploads []map[string]any
+	headers []http.Header
+	cdnBody []byte
+	// cdnDelay 让图片下载变慢，用来验证同一联系人的消息不会被后来者超车。
+	cdnDelay time.Duration
 	uploaded [][]byte
 }
 
@@ -89,8 +91,9 @@ func (f *weixinFakeServer) serve(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	case "/cdn/download":
 		f.mu.Lock()
-		body := f.cdnBody
+		body, delay := f.cdnBody, f.cdnDelay
 		f.mu.Unlock()
+		time.Sleep(delay)
 		_, _ = w.Write(body)
 	case "/ilink/bot/msg/notifystart", "/ilink/bot/msg/notifystop":
 		_, _ = w.Write([]byte(`{"ret":0}`))
@@ -489,6 +492,7 @@ func TestWeixinInboundImageIsDownloadedAndDecrypted(t *testing.T) {
 func TestWeixinSendImageUploadsEncryptedToCDN(t *testing.T) {
 	fake := newWeixinFakeServer(t)
 	channel := newTestWeixinChannel(fake, t.TempDir())
+	channel.state.ContextTokens = map[string]string{"alice@im.wechat": "ctx-alice"}
 	plain := testPNG(t)
 	source := "base64://" + base64.StdEncoding.EncodeToString(plain)
 

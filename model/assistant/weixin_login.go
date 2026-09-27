@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"net/url"
 	"strings"
@@ -37,6 +38,8 @@ const (
 	weixinLoginTTL = 8 * time.Minute
 	// weixinQRMaxRefresh 是二维码过期后自动换新的次数上限。
 	weixinQRMaxRefresh = 3
+	// weixinQRMaxPollFailures 是状态查询连续出错多少次后放弃，改报连不上。
+	weixinQRMaxPollFailures = 3
 )
 
 // 扫码状态，前端按这些值切换界面。
@@ -82,6 +85,7 @@ type weixinLoginSession struct {
 	pollBase  string
 	startedAt time.Time
 	refreshes int
+	failures  int
 	busy      bool
 }
 
@@ -92,15 +96,18 @@ type WeixinLoginManager struct {
 	apiBase  string
 	client   *http.Client
 	now      func() time.Time
+	// trustHost 判断服务端下发的主机能不能用，测试里放行 httptest 地址。
+	trustHost func(host string) bool
 }
 
 // NewWeixinLoginManager 创建扫码登录管理器。
 func NewWeixinLoginManager() *WeixinLoginManager {
 	return &WeixinLoginManager{
-		sessions: map[string]*weixinLoginSession{},
-		apiBase:  weixinDefaultAPIBase,
-		client:   &http.Client{},
-		now:      time.Now,
+		sessions:  map[string]*weixinLoginSession{},
+		apiBase:   weixinDefaultAPIBase,
+		client:    &http.Client{},
+		now:       time.Now,
+		trustHost: WeixinTrustedHost,
 	}
 }
 
@@ -191,9 +198,22 @@ func (m *WeixinLoginManager) Poll(ctx context.Context, profileID, sessionID, ver
 
 	status, err := m.pollStatus(ctx, pollBase, qr, verifyCode)
 	if err != nil {
-		// 网关超时、网络抖动都按「还在等」处理，和官方一致；前端会接着轮询。
+		// 偶发的网关超时、网络抖动按「还在等」处理，和官方一致；但连续失败说明
+		// 根本连不上，再显示「等待扫码」只会让人对着一张永远不会生效的码干等。
+		m.mu.Lock()
+		session.failures++
+		failures := session.failures
+		m.mu.Unlock()
+		if failures >= weixinQRMaxPollFailures {
+			m.drop(session.id)
+			log.Printf("weixin: 扫码状态连续 %d 次查询失败: %v", failures, err)
+			return WeixinLoginStatus{SessionID: session.id, Status: WeixinLoginFailed, Message: "连不上微信登录服务：" + err.Error() + "。请检查网络后重新生成二维码"}, nil
+		}
 		return WeixinLoginStatus{SessionID: session.id, Status: WeixinLoginWaiting}, nil
 	}
+	m.mu.Lock()
+	session.failures = 0
+	m.mu.Unlock()
 	out := WeixinLoginStatus{SessionID: session.id, Status: status.Status, ExpiresAt: session.startedAt.Add(weixinLoginTTL)}
 	switch status.Status {
 	case WeixinLoginWaiting, "":
@@ -208,9 +228,13 @@ func (m *WeixinLoginManager) Poll(ctx context.Context, profileID, sessionID, ver
 	case weixinLoginRedirect:
 		// 服务端让换机房继续轮询，对用户来说仍然是「已扫码」。
 		if host := strings.TrimSpace(status.RedirectHost); host != "" {
-			m.mu.Lock()
-			session.pollBase = "https://" + host
-			m.mu.Unlock()
+			if base, ok := m.trustedBase("https://" + host); ok {
+				m.mu.Lock()
+				session.pollBase = base
+				m.mu.Unlock()
+			} else {
+				log.Printf("weixin: 忽略不可信的 redirect_host %q", host)
+			}
 		}
 		out.Status = WeixinLoginScanned
 		out.Message = "已扫码，请在手机上确认"
@@ -227,10 +251,19 @@ func (m *WeixinLoginManager) Poll(ctx context.Context, profileID, sessionID, ver
 			return out, nil
 		}
 		out.Message = "登录成功"
+		base := ""
+		if raw := strings.TrimSpace(status.BaseURL); raw != "" {
+			// bot token 之后会发往这个地址，不是腾讯的域名就不用，退回默认地址。
+			if trusted, ok := m.trustedBase(raw); ok {
+				base = trusted
+			} else {
+				log.Printf("weixin: 忽略不可信的 baseurl %q", raw)
+			}
+		}
 		out.Credentials = &WeixinCredentials{
 			BotToken: strings.TrimSpace(status.BotToken),
 			BotID:    strings.TrimSpace(status.BotID),
-			BaseURL:  strings.TrimSpace(status.BaseURL),
+			BaseURL:  base,
 			UserID:   strings.TrimSpace(status.UserID),
 		}
 	default:
@@ -332,6 +365,34 @@ func (m *WeixinLoginManager) pollStatus(ctx context.Context, base, qr, verifyCod
 		return weixinQRStatusResponse{}, err
 	}
 	return status, nil
+}
+
+// trustedBase 校验服务端下发的地址，通过时返回规整后的 scheme://host。
+func (m *WeixinLoginManager) trustedBase(raw string) (string, bool) {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || parsed.User != nil || parsed.Host == "" || strings.Trim(parsed.Path, "/") != "" || parsed.RawQuery != "" {
+		return "", false
+	}
+	if !m.trustHost(parsed.Hostname()) {
+		return "", false
+	}
+	if parsed.Scheme != "https" {
+		return "", false
+	}
+	return parsed.Scheme + "://" + parsed.Host, true
+}
+
+// weixinTrustedBaseURL 用于校验已存进配置的接口地址：只认 https 的腾讯域名。
+func weixinTrustedBaseURL(raw string) bool {
+	_, ok := (&WeixinLoginManager{trustHost: WeixinTrustedHost}).trustedBase(raw)
+	return ok
+}
+
+// WeixinTrustedHost 判断主机是不是腾讯微信的域名。官方包里出现的接口、CDN、
+// 扫码落地页都在 weixin.qq.com 下（ilinkai / novac2c.cdn / liteapp）。
+func WeixinTrustedHost(host string) bool {
+	host = strings.ToLower(strings.TrimSuffix(strings.TrimSpace(host), "."))
+	return host == "weixin.qq.com" || strings.HasSuffix(host, ".weixin.qq.com")
 }
 
 func weixinQRCodeDataURL(content string) (string, error) {

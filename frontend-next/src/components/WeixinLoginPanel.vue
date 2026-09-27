@@ -180,7 +180,7 @@ onBeforeUnmount(stop);
         <input v-model="verifyCode" class="input mono" inputmode="numeric" autocomplete="one-time-code" placeholder="手机上显示的数字" aria-label="配对数字" />
         <button class="btn small" type="submit">提交</button>
       </form>
-      <span class="hint">走腾讯 iLink Bot 接口，只支持私聊：文字、图片收发，语音取服务端转写文字，文件和视频只显示占位。</span>
+      <span class="hint">走腾讯 iLink Bot 接口，只支持私聊：文字、图片收发，语音取服务端转写文字，文件和视频只显示占位。对方要先给机器人发过消息，机器人才能给他发（包括提醒和通知）。</span>
     </template>
   </div>
 </template>

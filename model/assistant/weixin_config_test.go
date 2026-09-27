@@ -30,8 +30,15 @@ func TestValidateAllowsWeixinBeforeLogin(t *testing.T) {
 	if err := (BotConfig{Platform: PlatformWeixin, Enabled: true}).WithDefaults().Validate(); err != nil {
 		t.Fatalf("enabled weixin profile without login failed validation: %v", err)
 	}
-	bad := BotConfig{Platform: PlatformWeixin, Enabled: true, WeixinBaseURL: "ftp://x"}
-	if err := bad.WithDefaults().Validate(); !errors.Is(err, ErrInvalidWeixinBaseURL) {
-		t.Fatalf("Validate() = %v, want ErrInvalidWeixinBaseURL", err)
+	// bot token 会发往这个地址，只认 https 的腾讯域名。
+	for _, base := range []string{"ftp://x", "https://evil.example.com", "http://ilinkai.weixin.qq.com"} {
+		bad := BotConfig{Platform: PlatformWeixin, Enabled: true, WeixinBaseURL: base}
+		if err := bad.WithDefaults().Validate(); !errors.Is(err, ErrInvalidWeixinBaseURL) {
+			t.Fatalf("Validate(%q) = %v, want ErrInvalidWeixinBaseURL", base, err)
+		}
+	}
+	good := BotConfig{Platform: PlatformWeixin, Enabled: true, WeixinBaseURL: "https://ilinkai.weixin.qq.com"}
+	if err := good.WithDefaults().Validate(); err != nil {
+		t.Fatalf("official base url rejected: %v", err)
 	}
 }
