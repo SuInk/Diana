@@ -613,44 +613,10 @@ func (s *SQLiteStore) searchMessageEventsFTS(ctx context.Context, where string, 
 	scopedWhere := prefixMessageHistoryColumns(where)
 	offset = max(0, offset)
 
-	// 按时间排序时用不到相关度，省掉逐条命中的 BM25 计算。
-	chronological := order == "oldest" || order == "newest"
-	score := `bm25(` + messageHistoryFTSTable + `)`
-	pageOrder := "h.score ASC, e.event_time DESC, e.created_at DESC, e.id DESC"
-	outerOrder := "p.score ASC, p.event_time DESC, p.created_at DESC, p.id DESC"
-	if chronological {
-		score = `0`
-		pageOrder = historyChronologicalOrder(order, "e.")
-		outerOrder = historyChronologicalOrder(order, "p.")
-	}
-
-	// MATCH 放进 CTE 只求值一次。写成逐行的相关子查询会让每个候选都重跑一遍
-	// 全文检索，实测比原来的 LIKE 还慢一个数量级。
-	//
-	// 限制条数不能挪进 FTS 子查询：会话、时间范围要回表才能过滤，先截断再过滤会
-	// 把本该命中的行截掉，结果和总数都会变。能省的是重复计算——原先 COUNT 和取
-	// 页各跑一遍 MATCH、BM25 和回表过滤，高频词在大库上命中十几万行，每遍都要
-	// 上百毫秒。现在总数用窗口函数和当前页一起算；排序只带 rowid 和排序键，截出
-	// 当前页之后再回表取 payload，排序器里不再塞整段 JSON。排序键以 id 收尾，
-	// 页内顺序和原来一次排序完全一致。
-	hits := `WITH hits AS (SELECT rowid AS rid, ` + score + ` AS score
-FROM ` + messageHistoryFTSTable + ` WHERE ` + messageHistoryFTSTable + ` MATCH ?)`
-	from := `FROM message_events AS e JOIN hits AS h ON h.rid = e.rowid`
-
+	pageSQL, countSQL := messageHistoryFTSStatements(scopedWhere, order)
 	rowArgs := append([]any{match}, args...)
 	rowArgs = append(rowArgs, limit, offset)
-	rows, err := s.eventReader().QueryContext(ctx, hits+`,
-page AS (
-  SELECT e.rowid AS rid, h.score AS score, e.event_time AS event_time, e.created_at AS created_at, e.id AS id,
-         COUNT(*) OVER () AS total
-  `+from+`
-  WHERE `+scopedWhere+`
-  ORDER BY `+pageOrder+`
-  LIMIT ? OFFSET ?
-)
-SELECT m.payload, p.total
-FROM page AS p JOIN message_events AS m ON m.rowid = p.rid
-ORDER BY `+outerOrder, rowArgs...)
+	rows, err := s.eventReader().QueryContext(ctx, pageSQL, rowArgs...)
 	if err != nil {
 		// 索引出问题时不要让检索整个失败，交回 LIKE 那一路。
 		return nil, 0, false, nil
@@ -677,11 +643,59 @@ ORDER BY `+outerOrder, rowArgs...)
 	}
 	// 翻页翻过了末尾：这一页没有行，窗口函数的总数也就带不回来，只好单独数一次。
 	countArgs := append([]any{match}, args...)
-	if err := s.eventReader().QueryRowContext(ctx,
-		hits+` SELECT COUNT(*) `+from+` WHERE `+scopedWhere, countArgs...).Scan(&total); err != nil {
+	if err := s.eventReader().QueryRowContext(ctx, countSQL, countArgs...).Scan(&total); err != nil {
 		return nil, 0, false, nil
 	}
 	return events, total, true, nil
+}
+
+// messageHistoryFTSStatements 拼出 FTS 检索的取页语句和（翻过末尾时用的）计数语句。
+// 参数依次是 MATCH 串、where 的参数，取页语句末尾再加 LIMIT 和 OFFSET。
+func messageHistoryFTSStatements(scopedWhere, order string) (pageSQL, countSQL string) {
+	// 按时间排序时用不到相关度，省掉逐条命中的 BM25 计算。
+	chronological := order == "oldest" || order == "newest"
+	score := `bm25(` + messageHistoryFTSTable + `)`
+	pageOrder := "h.score ASC, e.event_time DESC, e.created_at DESC, e.id DESC"
+	outerOrder := "p.score ASC, p.event_time DESC, p.created_at DESC, p.id DESC"
+	if chronological {
+		score = `0`
+		pageOrder = historyChronologicalOrder(order, "e.")
+		outerOrder = historyChronologicalOrder(order, "p.")
+	}
+
+	// MATCH 放进 CTE 只求值一次。写成逐行的相关子查询会让每个候选都重跑一遍
+	// 全文检索，实测比原来的 LIKE 还慢一个数量级。
+	//
+	// 限制条数不能挪进 FTS 子查询：会话、时间范围要回表才能过滤，先截断再过滤会
+	// 把本该命中的行截掉，结果和总数都会变。能省的是重复计算——原先 COUNT 和取
+	// 页各跑一遍 MATCH、BM25 和回表过滤，高频词在大库上命中十几万行，每遍都要
+	// 上百毫秒。现在总数用窗口函数和当前页一起算；排序只带 rowid 和排序键，截出
+	// 当前页之后再回表取 payload，排序器里不再塞整段 JSON。排序键以 id 收尾，
+	// 页内顺序和原来一次排序完全一致。
+	//
+	// hits 必须 MATERIALIZED。不加时规划器会把 CTE 展开进连接：同会话检索里它
+	// 先按 (session, event_time) 索引扫这个会话的每一行，再对每一行用 rowid=?
+	// 重跑一遍 MATCH 和 BM25。一个几万条消息的群，合成库上一次检索超过 20 秒，
+	// 连低频词也要十几秒——生产上检索撞 2 秒超时、占满读池就是这么来的。物化后
+	// MATCH 只跑一遍，结果进临时表再按 rowid 连接。
+	hits := `WITH hits AS MATERIALIZED (SELECT rowid AS rid, ` + score + ` AS score
+FROM ` + messageHistoryFTSTable + ` WHERE ` + messageHistoryFTSTable + ` MATCH ?)`
+	from := `FROM message_events AS e JOIN hits AS h ON h.rid = e.rowid`
+
+	pageSQL = hits + `,
+page AS (
+  SELECT e.rowid AS rid, h.score AS score, e.event_time AS event_time, e.created_at AS created_at, e.id AS id,
+         COUNT(*) OVER () AS total
+  ` + from + `
+  WHERE ` + scopedWhere + `
+  ORDER BY ` + pageOrder + `
+  LIMIT ? OFFSET ?
+)
+SELECT m.payload, p.total
+FROM page AS p JOIN message_events AS m ON m.rowid = p.rid
+ORDER BY ` + outerOrder
+	countSQL = hits + ` SELECT COUNT(*) ` + from + ` WHERE ` + scopedWhere
+	return pageSQL, countSQL
 }
 
 func historyChronologicalOrder(order, prefix string) string {

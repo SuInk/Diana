@@ -53,7 +53,7 @@ func finalizeContentLayoutIssue(content string) string {
 // 「我这轮没什么要补的」和「我拒绝回答」是两件事，必须分开表达，否则模型只能在
 // 「硬凑一句」和「被记一次拒答」之间挑一个。silent 是工具调用上的字段，用户消息
 // 里写什么都到不了这里。
-func finalizeToolDefinition(ledger *claimEvidenceLedger, imagePending bool) llm.ToolDefinition {
+func finalizeToolDefinition(ledger *claimEvidenceLedger, imagePending bool, extra ...FinalizeField) llm.ToolDefinition {
 	properties := map[string]any{
 		"content":       toolStringParam("给用户看的最终自然语言回复，必填且不能为空（silent=true 时才可以留空）。正文禁止真实 CR/LF；下一条消息用 [diana-msg]，同一消息内换行用 [diana-line]。不要写成 JSON。"),
 		"silent":        toolBoolParam("这一轮不发任何消息时填 true，content 留空；写了也不会发出去。只在确实没有值得说的话、或对方已经在收尾且你们互相道过别时用。要拒绝就正常说出来，不要用它。"),
@@ -63,6 +63,12 @@ func finalizeToolDefinition(ledger *claimEvidenceLedger, imagePending bool) llm.
 	// Runtime guards enforce conditional requirements without mutating schemas.
 	properties["task_state"] = toolEnumParam("图片任务 queued 后必须填 pending", imageTaskPendingState)
 	properties["claims"] = toolArrayParam("账本启用后必须覆盖全部已声明 claim；ID 与来源以工具结果为准", claimUpdateSchema(nil, nil))
+	for _, field := range extra {
+		if _, builtin := finalizeBuiltinFields[field.Name]; builtin || field.Name == "" {
+			continue
+		}
+		properties[field.Name] = toolStringParam(field.Description)
+	}
 	return llm.ToolDefinition{
 		Name:        finalizeToolName,
 		Description: "结束本轮并提交最终答复。不再需要其他工具时调用它。content 禁止真实换行，只能用 [diana-msg] 表示下一条消息、[diana-line] 表示当前消息内换行。这一轮决定不说话时填 silent=true 并留空 content。",
@@ -71,6 +77,9 @@ func finalizeToolDefinition(ledger *claimEvidenceLedger, imagePending bool) llm.
 		Strict: true,
 	}
 }
+
+// finalizeBuiltinFields 是信封自带的字段；调用方追加的字段不能和它们重名。
+var finalizeBuiltinFields = map[string]struct{}{"content": {}, "task_state": {}, "silent": {}, "silent_reason": {}, "claims": {}}
 
 // finalizeAction 把原生 agent_finalize 调用转成内部的 final 动作。工具调用本身
 // 没带 content 时用调用之外的文本作为回复——供应商在同一轮里既输出正文又调用
@@ -93,6 +102,16 @@ func finalizeAction(call llm.ToolCall, text string) llmAction {
 		action.Silent = payload.Silent
 		action.SilentReason = strings.TrimSpace(payload.SilentReason)
 		action.Claims = payload.Claims
+		for key, value := range call.Arguments {
+			text, isString := value.(string)
+			if _, builtin := finalizeBuiltinFields[key]; builtin || !isString || strings.TrimSpace(text) == "" {
+				continue
+			}
+			if action.Fields == nil {
+				action.Fields = map[string]string{}
+			}
+			action.Fields[key] = strings.TrimSpace(text)
+		}
 	}
 	// 静默收尾不捡信封之外的正文：模型同一轮里随手写的思考不是这轮的回复，
 	// 捡回来就等于把它当成正文发出去，静默也就失效了。
@@ -109,7 +128,7 @@ func (r *Runner) turnDefinitions(ledger *claimEvidenceLedger, imagePending bool)
 		return nil
 	}
 	definitions = r.loader.filter(definitions)
-	return append(definitions, finalizeToolDefinition(ledger, imagePending))
+	return append(definitions, finalizeToolDefinition(ledger, imagePending, r.cfg.FinalizeFields...))
 }
 
 // finalizeEnvelopeFromText 把「正文位置上的 agent_finalize 信封」当成收尾动作。
@@ -139,10 +158,9 @@ func finalizeEnvelopeFromText(text string) (llmAction, bool) {
 	if err := json.Unmarshal(raw, &content); err != nil {
 		return llmAction{}, false
 	}
-	envelopeOnly := map[string]bool{"content": true, "task_state": true, "silent": true, "silent_reason": true, "claims": true}
 	extras := 0
 	for key := range fields {
-		if !envelopeOnly[key] {
+		if _, envelope := finalizeBuiltinFields[key]; !envelope {
 			return llmAction{}, false
 		}
 		if key != "content" {

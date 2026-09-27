@@ -317,6 +317,7 @@
                 <span v-if="event.outbound_message_id">出站 {{ event.outbound_message_id }}</span>
                 <span v-if="event.reply_models?.length">主对话模型 {{ event.reply_models.join(" → ") }}</span>
                 <span v-if="eventOtherModelsText(event)">调用模型 {{ eventOtherModelsText(event) }}</span>
+                <span v-if="event.tool_calls">工具调用 {{ formatNumber(event.tool_calls) }} 次</span>
                 <span v-if="event.total_tokens">
                   Token {{ formatNumber(event.total_tokens) }}（输入 {{ formatNumber(event.input_tokens || 0) }} / 输出 {{ formatNumber(event.output_tokens || 0) }}<template v-if="eventCacheHitText(event)"> / {{ eventCacheHitText(event) }}</template>）
                 </span>
@@ -638,7 +639,7 @@ import { askConfirm } from "../confirm";
 import { displayMessageText, displayChatIdentity } from "../message-display";
 import { currentView, navigate } from "../router";
 import { recordsActionsHost } from "../records-actions";
-import { stream } from "../stream";
+import { stream, type BotEvent } from "../stream";
 import { toastError, toastSuccess } from "../toast";
 import EmptyState from "../components/EmptyState.vue";
 import Modal from "../components/Modal.vue";
@@ -1274,7 +1275,8 @@ async function retryAllFailed(): Promise<void> {
   try {
     const result = await retryFailedAssistantEvents(botScope.value);
     toastSuccess(result.requeued > 0 ? `已重新排队 ${result.requeued} 条消息` : "没有可重试的失败消息");
-    await load(false);
+    // load(false) 是「加载更多」，只会往后翻页，已在列表里的失败卡片不会更新；批量重试影响整页，得从头刷。
+    await load(true);
   } catch (error) {
     toastError(error instanceof Error ? error.message : "重试失败");
   } finally {
@@ -1549,8 +1551,14 @@ async function toggleTrace(event: AssistantEventDetail): Promise<void> {
     return;
   }
   traceOpen.value = { ...traceOpen.value, [event.id]: true };
-  if (traceLoaded.value[event.id]) return;
-  traceLoading.value = { ...traceLoading.value, [event.id]: true };
+  // 还在处理的消息，调用链每跑一步都在变长，收起再展开得重新读，不能拿第一次的缓存。
+  if (traceLoaded.value[event.id] && event.decision !== "pending") return;
+  await fetchTrace(event, !traceLoaded.value[event.id]);
+}
+
+// showLoading 为 false 时不切「正在读取」：处理完自动重读时，已经摊开的调用链原地换内容，不闪一下空白。
+async function fetchTrace(event: AssistantEventDetail, showLoading = true): Promise<void> {
+  if (showLoading) traceLoading.value = { ...traceLoading.value, [event.id]: true };
   try {
     const result = await getAssistantEventTrace(event.id);
     event.memories = result.memories ?? [];
@@ -1559,10 +1567,10 @@ async function toggleTrace(event: AssistantEventDetail): Promise<void> {
     traceEmptyReason.value = { ...traceEmptyReason.value, [event.id]: result.empty_reason ?? "" };
     traceLoaded.value = { ...traceLoaded.value, [event.id]: true };
   } catch (error) {
-    traceOpen.value = { ...traceOpen.value, [event.id]: false };
+    if (showLoading) traceOpen.value = { ...traceOpen.value, [event.id]: false };
     toastError(error instanceof Error ? error.message : "调试调用链加载失败");
   } finally {
-    traceLoading.value = { ...traceLoading.value, [event.id]: false };
+    if (showLoading) traceLoading.value = { ...traceLoading.value, [event.id]: false };
   }
 }
 
@@ -1650,8 +1658,44 @@ watch(
   (value) => {
     if (!value) return;
     pendingLiveEvents.value = true;
+    const record = stream.events[0];
+    if (record) void refreshSettledEvent(record);
   }
 );
+
+// 新事件不自动插进列表（正在读的内容别往下跳），但列表里已有的那条处理完了得跟上：
+// 等待处理的卡片、展开着的调用链都停在旧样子，以前只能整页刷新。
+// SSE 推的是处理结果那一刻的快照，token、模型这些列表字段它没有，所以按消息号把这一条重拉一遍。
+async function refreshSettledEvent(record: BotEvent): Promise<void> {
+  const messageID = record.message_id?.trim();
+  if (!messageID) return;
+  const sameEvent = (event: AssistantEventDetail) =>
+    event.message_id === messageID &&
+    event.kind === record.kind &&
+    (event.group_id ?? "") === (record.group_id ?? "") &&
+    (event.user_id ?? "") === (record.user_id ?? "") &&
+    (!record.profile_id || !event.profile_id || event.profile_id === record.profile_id);
+  if (!events.value.some(sameEvent)) return;
+  const generation = loadGeneration;
+  let fresh: AssistantEventsResponse;
+  try {
+    fresh = await getAssistantEvents(selectedRange.value, "all", 1, 20, "", botScope.value, "", messageID, "list");
+  } catch {
+    return; // 静默补刷，失败了手动刷新还在
+  }
+  if (generation !== loadGeneration) return;
+  for (const item of fresh.events) {
+    const index = events.value.findIndex((event) => event.id === item.id);
+    if (index < 0) continue;
+    const previous = events.value[index];
+    events.value[index] = { ...item, memories: item.memories ?? previous.memories, temporary_memories: item.temporary_memories ?? previous.temporary_memories };
+    if (traceOpen.value[item.id]) {
+      void fetchTrace(events.value[index], false);
+    } else {
+      traceLoaded.value = { ...traceLoaded.value, [item.id]: false };
+    }
+  }
+}
 
 onMounted(() => {
   document.addEventListener("keydown", onImageKeydown);

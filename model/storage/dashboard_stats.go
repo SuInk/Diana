@@ -105,31 +105,10 @@ type DashboardEventStatsBucket struct {
 	Errors   int64
 }
 
-// DashboardEventStatsSnapshot rebuilds the live collector baseline from
-// deduplicated SQLite records. It runs once during process startup so normal
-// config reloads keep using the same in-memory collector.
-func (s *SQLiteStore) DashboardEventStatsSnapshot(ctx context.Context, now time.Time) (DashboardEventStats, error) {
-	baselines, err := s.DashboardEventStatsSnapshotByProfile(ctx, now)
-	if err != nil {
-		return DashboardEventStats{}, err
-	}
-	return baselines[""], nil
-}
-
-// DashboardEventStatsSnapshotByProfile 按机器人拆开基线。键 "" 是全部机器人的
-// 合计，其余键是配置档 ID：控制台切到哪台，恢复出来的历史数字也得跟着切，
-// 否则重启之后那台机器人会顶着别人的历史量。
-func (s *SQLiteStore) DashboardEventStatsSnapshotByProfile(ctx context.Context, now time.Time) (map[string]DashboardEventStats, error) {
-	defer s.observeStorage(ctx, "DashboardEventStatsSnapshotByProfile", "read")()
-	total := DashboardEventStats{ByKind: map[string]int64{}}
-	if s == nil || s.db == nil {
-		return map[string]DashboardEventStats{"": total}, nil
-	}
-	if now.IsZero() {
-		now = time.Now()
-	}
-
-	rows, err := s.eventReader().QueryContext(ctx, `
+// dashboardEventBaselineSQL 读出重建控制台基线要用的全部历史行。两段都要把整张
+// 表读一遍，逐行回表读带着整段 payload 的宽行，2.7 GB 的库冷缓存要 4–16 秒，所以
+// 启动时放到后台跑，见 BeginDashboardEventStatsSnapshot。
+const dashboardEventBaselineSQL = `
 SELECT kind, event_time, outcome, created_at, completed_at, profile_id
 FROM (
   SELECT kind, event_time, COALESCE(outcome, '') AS outcome,
@@ -147,7 +126,73 @@ FROM (
     AND m.kind IN ('group', 'private')
     AND NULLIF(TRIM(m.message_id), '') IS NOT NULL
 )
-`)
+`
+
+// DashboardEventStatsSnapshot rebuilds the live collector baseline from
+// deduplicated SQLite records. It runs once during process startup so normal
+// config reloads keep using the same in-memory collector.
+func (s *SQLiteStore) DashboardEventStatsSnapshot(ctx context.Context, now time.Time) (DashboardEventStats, error) {
+	baselines, err := s.DashboardEventStatsSnapshotByProfile(ctx, now)
+	if err != nil {
+		return DashboardEventStats{}, err
+	}
+	return baselines[""], nil
+}
+
+// DashboardEventStatsSnapshotByProfile 按机器人拆开基线。键 "" 是全部机器人的
+// 合计，其余键是配置档 ID：控制台切到哪台，恢复出来的历史数字也得跟着切，
+// 否则重启之后那台机器人会顶着别人的历史量。
+func (s *SQLiteStore) DashboardEventStatsSnapshotByProfile(ctx context.Context, now time.Time) (map[string]DashboardEventStats, error) {
+	defer s.observeStorage(ctx, "DashboardEventStatsSnapshotByProfile", "read")()
+	if s == nil || s.db == nil {
+		return map[string]DashboardEventStats{"": {ByKind: map[string]int64{}}}, nil
+	}
+	return scanDashboardEventBaselines(ctx, s.eventReader(), now)
+}
+
+// BeginDashboardEventStatsSnapshot 先在只读池上钉住一个快照，再把真正费时的读取
+// 交给返回的函数，调用方可以在后台跑它。
+//
+// 这条查询要把 inbound_events 和 message_events 各读一遍，生产上 3–16 秒，原来在
+// 启动路径上同步等它，机器人和 WebUI 都要等它读完才起来。挪到后台后，基线与运行中
+// 新收的事件不能重也不能漏：这里先开读事务、读一页把快照定在「现在」，之后再启动
+// 机器人。WAL 下快照一旦建立就不会再看到之后提交的写入，所以基线只含启动前已经
+// 完成的事件，启动后的事件只由实时计数器记，两边相加正好各算一次。
+//
+// 返回的函数必须调用恰好一次，它负责结束读事务。内存库和自定义 DSN 没有独立的
+// 只读池，读事务会占住唯一的写连接，所以这时直接同步读完，返回的函数只交出结果。
+func (s *SQLiteStore) BeginDashboardEventStatsSnapshot(ctx context.Context, now time.Time) (func() (map[string]DashboardEventStats, error), error) {
+	if s == nil || s.db == nil || s.readDB == nil {
+		baselines, err := s.DashboardEventStatsSnapshotByProfile(ctx, now)
+		return func() (map[string]DashboardEventStats, error) { return baselines, err }, nil
+	}
+	tx, err := s.readDB.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("begin dashboard event baseline: %w", err)
+	}
+	// BEGIN 本身不建快照，第一次读库才建。读一页就够，结果不要紧。
+	var pinned int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM (SELECT 1 FROM inbound_events LIMIT 1)`).Scan(&pinned); err != nil {
+		_ = tx.Rollback()
+		return nil, fmt.Errorf("pin dashboard event baseline snapshot: %w", err)
+	}
+	return func() (map[string]DashboardEventStats, error) {
+		defer func() { _ = tx.Rollback() }()
+		defer s.observeStorage(ctx, "DashboardEventStatsSnapshotByProfile", "read")()
+		return scanDashboardEventBaselines(ctx, tx, now)
+	}, nil
+}
+
+// dashboardQueryer 是 *sql.DB 和 *sql.Tx 共有的那一个方法。
+type dashboardQueryer interface {
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+}
+
+func scanDashboardEventBaselines(ctx context.Context, db dashboardQueryer, now time.Time) (map[string]DashboardEventStats, error) {
+	if now.IsZero() {
+		now = time.Now()
+	}
+	rows, err := db.QueryContext(ctx, dashboardEventBaselineSQL)
 	if err != nil {
 		return nil, fmt.Errorf("query dashboard event baseline: %w", err)
 	}

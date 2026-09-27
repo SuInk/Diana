@@ -558,6 +558,51 @@ func (s *SQLiteStore) ListHistorySessions(ctx context.Context) ([]assistant.Hist
 	return sessions, nil
 }
 
+// GroupHistoryAnchors 返回这个群最近 limit 条带 seq 的消息，新的在前，给群回补当往新
+// 方向翻的锚点。机器人自己发的消息本地不带 seq，自然不在里面。
+func (s *SQLiteStore) GroupHistoryAnchors(ctx context.Context, profileID, groupID string, limit int) ([]assistant.HistoryAnchor, error) {
+	defer s.observeStorage(ctx, "GroupHistoryAnchors", "read")()
+	if s == nil || s.db == nil {
+		return nil, errors.New("group history anchors: sqlite store is not configured")
+	}
+	groupID = strings.TrimSpace(groupID)
+	if groupID == "" || limit <= 0 {
+		return nil, nil
+	}
+	profileID = strings.TrimSpace(profileID)
+	// 走 idx_message_events_kind_group_time 按时间倒着扫，凑够 limit 条就停。
+	rows, err := s.eventReader().QueryContext(ctx, `
+SELECT message_id, seq
+FROM (
+  SELECT COALESCE(NULLIF(message_id, ''), CASE WHEN json_valid(payload) THEN json_extract(payload, '$.message_id') END) AS message_id,
+         CASE WHEN json_valid(payload) THEN CAST(json_extract(payload, '$.message_seq') AS INTEGER) END AS seq,
+         event_time
+  FROM message_events
+  WHERE kind = ? AND group_id = ? AND id NOT LIKE '%:notice:%'
+    AND (? = '' OR COALESCE(profile_id, CASE WHEN json_valid(payload) THEN json_extract(payload, '$.profile_id') END, '') IN (?, ''))
+  ORDER BY event_time DESC
+)
+WHERE seq > 0 AND COALESCE(message_id, '') != ''
+LIMIT ?
+`, string(assistant.EventKindGroup), groupID, profileID, profileID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("group history anchors %q: %w", groupID, err)
+	}
+	defer func() { _ = rows.Close() }()
+	anchors := make([]assistant.HistoryAnchor, 0, limit)
+	for rows.Next() {
+		var anchor assistant.HistoryAnchor
+		if err := rows.Scan(&anchor.MessageID, &anchor.Seq); err != nil {
+			return nil, fmt.Errorf("scan group history anchor: %w", err)
+		}
+		anchors = append(anchors, anchor)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("group history anchors %q: %w", groupID, err)
+	}
+	return anchors, nil
+}
+
 // GroupSeqGap 比较重连后收到的实时群消息和库里这个群上一条带 seq 的消息，算出中间缺了
 // 几条。机器人自己发的消息本地不带 seq，但同样占号，按条数扣掉。
 func (s *SQLiteStore) GroupSeqGap(ctx context.Context, query assistant.GroupSeqGapQuery) (assistant.GroupSeqGap, error) {

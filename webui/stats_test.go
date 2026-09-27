@@ -149,6 +149,60 @@ func TestStatsCollectorRestoresDurableBaselineAndContinuesIncrementally(t *testi
 	}
 }
 
+// 启动时基线在后台读，读完之前实时事件已经在计数。基线到了要加上去，不能把
+// 已经记下的实时事件覆盖掉；按机器人拆开的那几份也一样。
+func TestStatsCollectorMergesLateBaselineIntoLiveCounts(t *testing.T) {
+	now := time.Date(2026, 7, 26, 15, 30, 0, 0, time.Local)
+	collector := NewStatsCollector()
+	collector.now = func() time.Time { return now }
+	collector.Observe(assistant.EventRecord{At: now, Kind: assistant.EventKindGroup, ProfileID: "bot-a", Handled: true, Duration: 1000})
+
+	lastHour := now.Add(-time.Hour).Truncate(time.Hour).Unix()
+	currentHour := now.Truncate(time.Hour).Unix()
+	baseline := storage.DashboardEventStats{
+		TotalEvents: 4, HandledEvents: 2, ErrorEvents: 1,
+		ByKind:      map[string]int64{"group": 3, "private": 1},
+		LastEventAt: now.Add(-time.Hour), DurationTotalMS: 3000, DurationCount: 2,
+		Hourly: []storage.DashboardEventStatsBucket{
+			{HourUnix: lastHour, Total: 3, Handled: 1, Errors: 1},
+			{HourUnix: currentHour, Total: 1, Handled: 1},
+			// 超出 48 小时窗口的桶要被丢掉。
+			{HourUnix: now.Add(-72 * time.Hour).Truncate(time.Hour).Unix(), Total: 9},
+		},
+	}
+	collector.MergeDurableBaselines(map[string]storage.DashboardEventStats{"": baseline, "bot-a": baseline, "bot-b": {TotalEvents: 2, ByKind: map[string]int64{"private": 2}}})
+
+	snapshot := collector.SnapshotWithProfiles()
+	if snapshot.TotalEvents != 5 || snapshot.HandledEvents != 3 || snapshot.ErrorEvents != 1 {
+		t.Fatalf("totals = %d/%d/%d, want 5/3/1", snapshot.TotalEvents, snapshot.HandledEvents, snapshot.ErrorEvents)
+	}
+	if snapshot.ByKind["group"] != 4 || snapshot.ByKind["private"] != 1 {
+		t.Fatalf("by kind = %#v", snapshot.ByKind)
+	}
+	if snapshot.AvgReplyMS != 1333 {
+		t.Fatalf("AvgReplyMS = %d, want 1333", snapshot.AvgReplyMS)
+	}
+	if snapshot.LastEventAt == nil || !snapshot.LastEventAt.Equal(now) {
+		t.Fatalf("LastEventAt = %v, want %s", snapshot.LastEventAt, now)
+	}
+	buckets := map[int64]hourBucket{}
+	for _, bucket := range snapshot.Hourly {
+		buckets[bucket.HourUnix] = bucket
+	}
+	if buckets[currentHour].Total != 2 || buckets[currentHour].Handled != 2 || buckets[lastHour].Total != 3 {
+		t.Fatalf("hourly = %#v", snapshot.Hourly)
+	}
+	if len(collector.all.buckets) != 2 {
+		t.Fatalf("buckets outside the 48h window were kept: %#v", collector.all.buckets)
+	}
+	if got := snapshot.ByProfile["bot-a"]; got.TotalEvents != 5 || got.HandledEvents != 3 {
+		t.Fatalf("bot-a = %+v", got)
+	}
+	if got := snapshot.ByProfile["bot-b"]; got.TotalEvents != 2 || got.ByKind["private"] != 2 {
+		t.Fatalf("bot-b = %+v", got)
+	}
+}
+
 // TestStatsHandlerReturnsSnapshotWithBotSummary 验证对应功能场景。
 func TestStatsHandlerReturnsSnapshotWithBotSummary(t *testing.T) {
 	collector := NewStatsCollector()

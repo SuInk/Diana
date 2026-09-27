@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -488,7 +489,7 @@ func TestInboundQueueHistorySessionsAndWatermark(t *testing.T) {
 		t.Fatalf("sessions=%#v", sessions)
 	}
 	for i := range want {
-		if sessions[i] != want[i] {
+		if !reflect.DeepEqual(sessions[i], want[i]) {
 			t.Fatalf("sessions[%d]=%#v want %#v", i, sessions[i], want[i])
 		}
 	}
@@ -686,6 +687,42 @@ func TestGroupSeqGapCountsMissingMessagesExcludingBotReplies(t *testing.T) {
 	})
 	if err != nil || unknown.Known {
 		t.Fatalf("gap outside window = %#v err=%v", unknown, err)
+	}
+}
+
+func TestGroupHistoryAnchorsListsRecentSeqMessagesNewestFirst(t *testing.T) {
+	ctx := context.Background()
+	store := openInboundTestStore(t, filepath.Join(t.TempDir(), "anchors.db"))
+	defer func() { _ = store.Close() }()
+
+	withSeq := func(seq int64, eventTime int64) assistant.MessageEvent {
+		event := inboundTestEvent(fmt.Sprintf("m-%d", seq), "hello", eventTime)
+		event.UserID = "2"
+		event.MessageSeq = fmt.Sprint(seq)
+		event.ProfileID = "profile-a"
+		return event
+	}
+	for _, event := range []assistant.MessageEvent{
+		withSeq(100, 1000),
+		withSeq(101, 1010),
+		// 机器人自己的回复不带 seq，当不了锚点。
+		{Kind: assistant.EventKindGroup, GroupID: "1", UserID: "42", MessageID: "self-1", Time: 1020, RawMessage: "reply", ProfileID: "profile-a"},
+		withSeq(103, 1030),
+		func() assistant.MessageEvent { e := withSeq(200, 1040); e.ProfileID = "profile-b"; return e }(),
+		func() assistant.MessageEvent { e := withSeq(300, 1050); e.GroupID = "2"; return e }(),
+	} {
+		if err := store.AppendMessageEvent(ctx, "group:"+event.GroupID, event); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	anchors, err := store.GroupHistoryAnchors(ctx, "profile-a", "1", 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []assistant.HistoryAnchor{{MessageID: "m-103", Seq: 103}, {MessageID: "m-101", Seq: 101}}
+	if len(anchors) != len(want) || anchors[0] != want[0] || anchors[1] != want[1] {
+		t.Fatalf("anchors = %#v, want %#v", anchors, want)
 	}
 }
 

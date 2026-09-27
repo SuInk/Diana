@@ -437,7 +437,7 @@ func (r *Runtime) generateEventTriggerReply(ctx context.Context, item Reminder, 
 				time.Now().Format("2006-01-02 15:04:05 MST"), happened, item.Message),
 		},
 	}
-	reply, err := r.generateReply(ctx, cfg, source, relationship, messages, nil)
+	reply, err := r.generateReply(withLLMUsagePurpose(ctx, PurposeEventTrigger), cfg, source, relationship, messages, nil)
 	if err != nil {
 		return "", err
 	}

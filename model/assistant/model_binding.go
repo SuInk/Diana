@@ -36,9 +36,11 @@ const (
 	// PurposeReplySendAudit 是实际发出这次审核调用时用的用途名。它以前只是
 	// proactive_reply_quality.go 里的一个字面量，没进这张表，于是界面上指不了、
 	// 也没法单独绑——而它是量最大的判定之一。
-	PurposeReplySendAudit   = "reply_send_audit"
-	PurposeReplySuppression = "reply_suppression_notice"
-	PurposeBotReplyLoop     = "bot_reply_loop_detection"
+	PurposeReplySendAudit = "reply_send_audit"
+	// PurposeStickerPersonaFit 判断一张表情包以机器人本人的身份发出去合不合人设。
+	PurposeStickerPersonaFit = "sticker_persona_fit"
+	PurposeReplySuppression  = "reply_suppression_notice"
+	PurposeBotReplyLoop      = "bot_reply_loop_detection"
 	// 三种发送前提示的改写。它们以前只是散在代码里的字面量，没进这张表，
 	// 于是在模型绑定界面上看不见也指不了，只能跟着调用函数走。
 	PurposeUpstreamRejectionNotice = "upstream_rejection_notice"
@@ -90,6 +92,8 @@ var llmPurposeGroup = map[string]string{
 	PurposeErrorNotice:             llm.GroupReplyAssist,
 	// 戳一戳的回应就是一次回复，对方戳完在等。
 	PurposePokeReply: llm.GroupReplyAssist,
+	// 合不合人设要模型写出一句「会」或「不会：原因」，只做判断的模型答不了，归回复辅助。
+	PurposeStickerPersonaFit: llm.GroupReplyAssist,
 
 	// 下面这些也是判定，但眼下还没有各自的判断题表，先留在回复辅助：归进意图
 	// 识别只会让它们在绑判断模型时每次先失败一次再降级。题表补上再挪过去。

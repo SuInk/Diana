@@ -62,11 +62,15 @@ curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/docker.sh 
 
 选择写在部署目录的 `.env` 里（`DIANA_IMAGE=`），重复执行安装脚本不会把它改掉。之后想换一种，在终端里重新运行安装脚本，或直接改这一行。
 
+一键安装默认加入只处理 Diana 容器的独立更新助手，并在 `.env` 生成内部令牌。Docker socket 仅挂给助手，不挂给 Diana；助手的 HTTP 接口不映射到宿主机。WebUI 可手动请求更新镜像；「自动重启并安装」仍默认关闭，开启后才按所选通道定期更新。宿主机必须允许挂载 `/var/run/docker.sock`，该挂载可控制宿主机 Docker，请只在可信部署中使用。已有 Docker 部署要在**原部署目录**重跑上方同一条一键安装命令，旧容器自身无法加装助手。若已有 Watchtower、Portainer 等更新任务，请停用它们对 Diana 的更新，避免绕过 WebUI 开关。不需要更新助手时，可用 `curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/docker.sh | DIANA_DOCKER_SELF_UPDATE=0 sh` 安装或关闭助手。
+
 以后更新只需在同一目录执行：
 
 ```sh
-docker compose pull && docker compose up -d
+docker compose -f docker-compose.yml -f docker-compose.update.yml pull && docker compose -f docker-compose.yml -f docker-compose.update.yml up -d
 ```
+
+上面的手动命令适用于默认安装；用 `DIANA_DOCKER_SELF_UPDATE=0` 安装的部署只需运行 `docker compose pull && docker compose up -d`。切换通道时还要将 `.env` 中 `DIANA_IMAGE=` 改成对应的滚动标签：Release 用 `latest`、Beta 用 `beta`、Canary 用 `canary`，基础版加 `-slim`；随后重建容器。WebUI 的通道设置不会修改宿主机的镜像标签。固定版本标签不会被助手自动升级；版本面板会说明标签不匹配。Docker 更新由镜像摘要校验，容器会短暂重启；健康检查失败不会自动回退镜像，需在宿主机改回已知版本标签。失败时请查看 `docker compose -f docker-compose.yml -f docker-compose.update.yml logs diana-updater`。
 
 如果 Apple Silicon / ARM64 拉取旧镜像时报 `no matching manifest for linux/arm64/v8`，可临时在 `docker-compose.yml` 的 `services.diana` 下添加 `platform: linux/amd64`（需要 amd64 模拟支持，性能及浏览器兼容性可能受影响），原生 ARM64 镜像发布后删除此项；也可使用上方安装脚本原生部署。构建配置修改不会自动更新线上已有镜像。
 
@@ -122,7 +126,7 @@ docker compose pull && docker compose up -d
 <details>
 <summary>Docker 细节 / 手动下载 / 源码构建</summary>
 
-**Docker：** 镜像预装 Chromium 与 Noto CJK 中文字体，网页渲染和中文截图无需在容器内临时安装浏览器。启动时加载上方的 seccomp 配置，为 Chromium 沙箱开放所需的命名空间调用；无需 `--privileged`、`SYS_ADMIN` 或关闭浏览器沙箱。已有容器需按新启动参数重建。详见[浏览器依赖与容器配置](docs/browser-rendering.md)。镜像随每个版本发布（`ghcr.io/suink/diana:latest` 及版本号 tag）。OneBot 客户端连 `ws://<宿主机>:18080/onebot/v11/ws`。想预置配置（无人值守部署），把改好的 `config.yaml` 放到 `data/config.yaml`。从克隆的仓库本地构建时执行 `docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build`。升级拉新镜像重建容器即可，控制台只提示新版本、不在容器里替换程序。只需挂载 `data/` 一个目录，需要持久化的都在里面：数据库、运行日志（`data/logs/diana.log`）、可选的 `config.yaml`、插件、技能、MCP 配置、浏览器和编码 CLI 登录态、`ytb_cookies.txt` 及升级备份；容器启动时自动把它交给容器内的运行用户（UID 10001）。换了镜像版本后第一次启动，会在迁移数据库之前把它备份到 `data/.diana-updates/backups/`（3 天内最多 3 份）。旧部署挂在 `/app/config.yaml` 的配置仍然优先生效；想改放 `data/config.yaml`，要同时删掉旧 Compose 里的 `DIANA_CONFIG` 一行。旧配置里的 `log_path: logs/diana.log` 改成 `data/logs/diana.log`（或删掉这行）后，旧的 `logs/` 挂载就可以去掉。容器内进程以 UID 10001 运行，但 `docker exec` 默认是 root，在容器里手动执行 `diana` 命令请加 `-u diana`。
+**Docker：** 镜像预装 Chromium 与 Noto CJK 中文字体，网页渲染和中文截图无需在容器内临时安装浏览器。启动时加载上方的 seccomp 配置，为 Chromium 沙箱开放所需的命名空间调用；无需 `--privileged`、`SYS_ADMIN` 或关闭浏览器沙箱。已有容器需按新启动参数重建。详见[浏览器依赖与容器配置](docs/browser-rendering.md)。镜像随每个版本发布（`ghcr.io/suink/diana:latest` 及版本号 tag）。OneBot 客户端连 `ws://<宿主机>:18080/onebot/v11/ws`。想预置配置（无人值守部署），把改好的 `config.yaml` 放到 `data/config.yaml`。从克隆的仓库本地构建时执行 `docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build`。普通部署需在宿主机拉新镜像并重建容器；启用上方的 Docker 更新助手后，版本面板也可发起更新。只需挂载 `data/` 一个目录，需要持久化的都在里面：数据库、运行日志（`data/logs/diana.log`）、可选的 `config.yaml`、插件、技能、MCP 配置、浏览器和编码 CLI 登录态、`ytb_cookies.txt` 及升级备份；容器启动时自动把它交给容器内的运行用户（UID 10001）。换了镜像版本后第一次启动，会在迁移数据库之前把它备份到 `data/.diana-updates/backups/`（3 天内最多 3 份）。旧部署挂在 `/app/config.yaml` 的配置仍然优先生效；想改放 `data/config.yaml`，要同时删掉旧 Compose 里的 `DIANA_CONFIG` 一行。旧配置里的 `log_path: logs/diana.log` 改成 `data/logs/diana.log`（或删掉这行）后，旧的 `logs/` 挂载就可以去掉。容器内进程以 UID 10001 运行，但 `docker exec` 默认是 root，在容器里手动执行 `diana` 命令请加 `-u diana`。
 
 **slim 轻量镜像（基础版）：** 同一仓库同时发布 `-slim` 变体（如 `ghcr.io/suink/diana:latest-slim`、`ghcr.io/suink/diana:v0.8.131-slim`）：不预装 Chromium、Noto CJK 字体、ffmpeg、yt-dlp 与 tesseract，体积约为完整版的四分之一（拉取 156 MB / 落盘 662 MB，完整版 619 MB / 2.14 GB），适合不需要网页渲染、媒体下载和 OCR 的部署。安装脚本会问你要哪一种，选择写进部署目录的 `.env`（`DIANA_IMAGE=`），以后 `docker compose pull` 自动跟着走；已部署的想切换，在终端里重跑安装脚本，或直接改 `.env` 里那一行再 `docker compose pull && docker compose up -d`（没有这个文件就新建，Compose 会自动读取）。内置浏览器这一档在 slim 上会明确报「找不到浏览器」并给出安装命令，不会悄悄失效。之后想用网页渲染，在宿主机执行 `docker exec -u root <容器名> sh -c 'apt-get update && apt-get install -y chromium fonts-noto-cjk'` 即可（WebUI 依赖管理里点一键安装会因进程非 root 失败，报错会直接附上这条命令）。注意容器重建后需重新安装，数据在挂出的 `data/` 里不受影响。
 

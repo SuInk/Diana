@@ -4653,7 +4653,9 @@ func TestRuntimeFailsOverLLMProfilesWithinGroup(t *testing.T) {
 	if reply != "备用账号已接管" || len(channel.sent) != 1 {
 		t.Fatalf("reply=%q sent=%#v", reply, channel.sent)
 	}
-	wantAttempts := []string{"bad-model", "bad-model", "good-model"}
+	// 第一次调用撞上 401 后 bad-model 进入冷却，后面的调用直接从 good-model 开始，
+	// 不再每次先撞一遍失效的账号。
+	wantAttempts := []string{"bad-model", "good-model"}
 	if len(attempts) != len(wantAttempts) {
 		t.Fatalf("attempts = %#v, want %#v", attempts, wantAttempts)
 	}

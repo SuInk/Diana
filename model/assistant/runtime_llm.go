@@ -448,6 +448,7 @@ func (r *Runtime) runRawLLMProviderForGroup(ctx context.Context, group string, r
 				return "", err
 			}
 			provider.report = r.reportLLMEvent
+			provider.cooldowns = &r.llmCooldowns
 			return run(provider)
 		}
 	}
@@ -472,6 +473,7 @@ func (r *Runtime) runRawLLMProviderForGroup(ctx context.Context, group string, r
 				return "", err
 			}
 			provider.report = r.reportLLMEvent
+			provider.cooldowns = &r.llmCooldowns
 			return run(provider)
 		}
 		// 没有角色绑定就按本次调用的分组取候选，组内顺序即降级顺序。
@@ -487,6 +489,7 @@ func (r *Runtime) runRawLLMProviderForGroup(ctx context.Context, group string, r
 				return "", err
 			}
 			provider.report = r.reportLLMEvent
+			provider.cooldowns = &r.llmCooldowns
 			return run(provider)
 		}
 		return r.runLLMProviderWithFailover(ctx, store, cfgFactory, run)
@@ -639,6 +642,7 @@ func (r *Runtime) runLLMRouterProviderWithRetry(ctx context.Context, retryTransi
 			provider, err := newRegistryFailoverLLMProvider(registry, profiles, retryTransient, len(profiles) > 1)
 			if err == nil {
 				provider.report = r.reportLLMEvent
+				provider.cooldowns = &r.llmCooldowns
 				return run(provider)
 			}
 			// 注册表里没有能对上的模型时不硬顶，退回下面按单条选择的老路。
@@ -709,6 +713,7 @@ func (r *Runtime) runLLMProviderProfileAttempts(ctx context.Context, profiles []
 		return "", err
 	}
 	provider.report = r.reportLLMEvent
+	provider.cooldowns = &r.llmCooldowns
 	return run(provider)
 }
 
@@ -732,6 +737,7 @@ func (r *Runtime) runLLMProviderWithFailover(ctx context.Context, store LLMProfi
 		return "", err
 	}
 	provider.report = r.reportLLMEvent
+	provider.cooldowns = &r.llmCooldowns
 	return run(provider)
 }
 
@@ -1127,6 +1133,10 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 	// 自述的规则进 head：开关是机器人配置，对同一个群里的所有人逐字相同。
 	if agentEnabled && hasTool(dianaSelfNoteToolName) {
 		builder.WriteString("\n" + cfg.prompt(promptToolSelfNoteSpec))
+	}
+	// 表情包的规则进 head：插件开关按群生效，同一个群里对所有人逐字相同。
+	if agentEnabled && hasTool(dianaStickerToolName) {
+		builder.WriteString("\n" + cfg.prompt(promptToolStickerSpec))
 	}
 	if agentEnabled && hasTool("capabilities") {
 		builder.WriteString("\n" + cfg.prompt(promptToolCapabilitiesSpec))

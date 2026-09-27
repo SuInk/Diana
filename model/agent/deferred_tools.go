@@ -276,44 +276,7 @@ func (l *deferredToolLoader) dispatch(action llmAction) (llmAction, error) {
 			return action, fmt.Errorf("input 必须是 JSON 对象")
 		}
 		action.Tool, action.Input = name, cloneDeferredInput(input).(map[string]any)
-		schema, loaded := l.loaded[name]
-		if !loaded && l.core[name] {
-			// 常驻工具本来就能直接调用，不进目录也不进 loaded，于是把它裹进
-			// tools_execute 时会撞上「未在本轮加载」。这句话对常驻工具是死路：模型照着
-			// 去 tools_load，那一步对常驻工具不登记加载状态，回来还是同一个错，一直耗到
-			// 协议修复次数用尽（线上 browser_render 就这么连撞两次）。信封拆开照常执行。
-			if tool, ok := l.registry.Get(name); ok {
-				if current, err := snapshotToolSchema(tool); err == nil {
-					schema, loaded = current, true
-				}
-			}
-		}
-		if !loaded {
-			if _, exists := l.registry.Get(name); !exists {
-				return action, l.missingToolError(name)
-			}
-			return action, fmt.Errorf("工具 %q 未在本轮加载，请先 tools_load，再 tools_execute", name)
-		}
-		action.Input = coerceToolInputArrays(schema, action.Input)
-		input = action.Input
-		tool, ok := l.registry.Get(name)
-		if !ok {
-			if l.registry.PolicyDenied(name) {
-				return action, l.registry.denialError(name)
-			}
-			return action, fmt.Errorf("工具 %q 已移除或禁用，请重新 tools_load", name)
-		}
-		if err := validateToolInput(schema, input); err != nil {
-			return action, err
-		}
-		current, err := snapshotToolSchema(tool)
-		if err != nil {
-			return action, fmt.Errorf("工具当前 inputSchema 无效，请重新 tools_load")
-		}
-		if err := validateToolInput(current, input); err != nil {
-			return action, fmt.Errorf("当前工具契约校验失败，请重新 tools_load: %w", err)
-		}
-		return action, nil
+		return l.resolveLoaded(action)
 	}
 	if l != nil {
 		if action.Tool == ToolsLoadToolName {
@@ -321,11 +284,78 @@ func (l *deferredToolLoader) dispatch(action llmAction) (llmAction, error) {
 			return action, validateToolInput(l.InputSchema(), action.Input)
 		}
 		if !l.core[action.Tool] {
-			if _, exists := l.registry.Get(action.Tool); !exists {
-				return action, l.missingToolError(action.Tool)
-			}
-			return action, fmt.Errorf("不能直接调用延迟工具 %q；请先 tools_load，再 tools_execute", action.Tool)
+			return l.dispatchDirect(action)
 		}
+	}
+	return action, nil
+}
+
+// dispatchDirect 处理模型不套 tools_execute、直接按名字调用延迟工具的情况。
+//
+// 弱一些的模型（线上是 gemini-3.8-flash-low）看到提示词、工具调用记录和已加载契约里
+// 都写着 platform、reminder 这类名字，就当成函数直接调；以前一律回「请先 tools_load，
+// 再 tools_execute」，白白多走一到两轮模型调用。两天 21 次里 15 次工具其实已经加载过。
+//
+// 已加载就和 tools_execute 走同一套校验后执行；没加载就不执行——模型只看过目录里那一行，
+// 没读过完整描述里的使用约束——而是当场替它加载，把契约连同报错一起交回去，下一步照着
+// 重新调用即可。权限不在这里放宽：取不到的工具（身份白名单、机器人开关、没注册）照旧按
+// 不存在或没权限回话，执行前 Runner 还会再过一遍注册表、确认码和操作开关。
+func (l *deferredToolLoader) dispatchDirect(action llmAction) (llmAction, error) {
+	name := action.Tool
+	if _, exists := l.registry.Get(name); !exists {
+		return action, l.missingToolError(name)
+	}
+	if _, loaded := l.loaded[name]; loaded {
+		action.Input = cloneDeferredInput(action.Input).(map[string]any)
+		return l.resolveLoaded(action)
+	}
+	contract, err := l.Run(context.Background(), map[string]any{"names": []string{name}})
+	if err != nil {
+		return action, err
+	}
+	return action, fmt.Errorf("工具 %q 还没加载，这次没有执行；已经替你加载，完整契约如下，按 inputSchema 用 tools_execute 重新调用：%s", name, contract)
+}
+
+// resolveLoaded 校验一次已经拆开的延迟工具调用：本轮加载过、当前仍可用、入参同时符合
+// 加载时和现在的 inputSchema。
+func (l *deferredToolLoader) resolveLoaded(action llmAction) (llmAction, error) {
+	name := action.Tool
+	schema, loaded := l.loaded[name]
+	if !loaded && l.core[name] {
+		// 常驻工具本来就能直接调用，不进目录也不进 loaded，于是把它裹进
+		// tools_execute 时会撞上「未在本轮加载」。这句话对常驻工具是死路：模型照着
+		// 去 tools_load，那一步对常驻工具不登记加载状态，回来还是同一个错，一直耗到
+		// 协议修复次数用尽（线上 browser_render 就这么连撞两次）。信封拆开照常执行。
+		if tool, ok := l.registry.Get(name); ok {
+			if current, err := snapshotToolSchema(tool); err == nil {
+				schema, loaded = current, true
+			}
+		}
+	}
+	if !loaded {
+		if _, exists := l.registry.Get(name); !exists {
+			return action, l.missingToolError(name)
+		}
+		return action, fmt.Errorf("工具 %q 未在本轮加载，请先 tools_load，再 tools_execute", name)
+	}
+	action.Input = coerceToolInputArrays(schema, action.Input)
+	input := action.Input
+	tool, ok := l.registry.Get(name)
+	if !ok {
+		if l.registry.PolicyDenied(name) {
+			return action, l.registry.denialError(name)
+		}
+		return action, fmt.Errorf("工具 %q 已移除或禁用，请重新 tools_load", name)
+	}
+	if err := validateToolInput(schema, input); err != nil {
+		return action, err
+	}
+	current, err := snapshotToolSchema(tool)
+	if err != nil {
+		return action, fmt.Errorf("工具当前 inputSchema 无效，请重新 tools_load")
+	}
+	if err := validateToolInput(current, input); err != nil {
+		return action, fmt.Errorf("当前工具契约校验失败，请重新 tools_load: %w", err)
 	}
 	return action, nil
 }

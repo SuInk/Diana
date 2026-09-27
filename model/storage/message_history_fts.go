@@ -116,9 +116,12 @@ func ensureMessageHistoryFTS(db *sql.DB) bool {
 	}
 	// token 要在 Go 侧切，触发器做不到，因此写入同步放在 AppendMessageEvent 里。
 	// 这里只补存量：升级到本版本时库里已有的历史都要进索引。
-	rows, err := db.Query(`SELECT e.rowid, COALESCE(e.sender_name, ''), COALESCE(e.user_id, ''), COALESCE(e.text, ''), COALESCE(e.search_extra, '')
-FROM message_events AS e
-WHERE e.rowid NOT IN (SELECT rowid FROM ` + messageHistoryFTSTable + `)`)
+	//
+	// 这一步每次启动都跑。原来一条查询同时找缺口、取正文，规划器只能整表扫
+	// message_events——每行都带着整段 payload，2.7 GB 的库冷缓存要十几秒，平时
+	// 缺的往往一条都没有。现在先只取 rowid 找缺口，这可以只扫一个索引（几十 MB）；
+	// 真有缺的再按 rowid 分批回表取正文。
+	missing, err := missingMessageHistoryFTSRows(db)
 	if err != nil {
 		return false
 	}
@@ -126,19 +129,31 @@ WHERE e.rowid NOT IN (SELECT rowid FROM ` + messageHistoryFTSTable + `)`)
 		rowID  int64
 		tokens string
 	}
-	batch := make([]pending, 0, 256)
-	for rows.Next() {
-		var rowID int64
-		var sender, userID, text, extra string
-		if err := rows.Scan(&rowID, &sender, &userID, &text, &extra); err != nil {
-			_ = rows.Close()
+	batch := make([]pending, 0, len(missing))
+	for start := 0; start < len(missing); start += messageHistoryFTSBackfillChunk {
+		chunk := missing[start:min(start+messageHistoryFTSBackfillChunk, len(missing))]
+		args := make([]any, len(chunk))
+		for index, rowID := range chunk {
+			args[index] = rowID
+		}
+		rows, err := db.Query(`SELECT rowid, COALESCE(sender_name, ''), COALESCE(user_id, ''), COALESCE(text, ''), COALESCE(search_extra, '')
+FROM message_events WHERE rowid IN (`+placeholders(len(args))+`)`, args...)
+		if err != nil {
 			return false
 		}
-		batch = append(batch, pending{rowID: rowID, tokens: messageHistoryIndexTokens(sender, userID, text, extra)})
-	}
-	closeErr := rows.Close()
-	if err := rows.Err(); err != nil || closeErr != nil {
-		return false
+		for rows.Next() {
+			var rowID int64
+			var sender, userID, text, extra string
+			if err := rows.Scan(&rowID, &sender, &userID, &text, &extra); err != nil {
+				_ = rows.Close()
+				return false
+			}
+			batch = append(batch, pending{rowID: rowID, tokens: messageHistoryIndexTokens(sender, userID, text, extra)})
+		}
+		closeErr := rows.Close()
+		if err := rows.Err(); err != nil || closeErr != nil {
+			return false
+		}
 	}
 	for _, item := range batch {
 		if _, err := db.Exec(`INSERT INTO `+messageHistoryFTSTable+`(rowid, search_text) VALUES (?, ?)`,
@@ -147,6 +162,31 @@ WHERE e.rowid NOT IN (SELECT rowid FROM ` + messageHistoryFTSTable + `)`)
 		}
 	}
 	return true
+}
+
+// messageHistoryFTSBackfillChunk 是补索引时每批回表取正文的行数。
+const messageHistoryFTSBackfillChunk = 500
+
+// missingMessageHistoryFTSRows 列出还没进检索索引的消息 rowid。
+//
+// 只选 rowid，规划器可以拿任意一个 message_events 索引做覆盖扫描（每个索引都
+// 带 rowid），不必读正表的宽行。
+func missingMessageHistoryFTSRows(db *sql.DB) ([]int64, error) {
+	rows, err := db.Query(`SELECT e.rowid FROM message_events AS e
+WHERE e.rowid NOT IN (SELECT rowid FROM ` + messageHistoryFTSTable + `)`)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var missing []int64
+	for rows.Next() {
+		var rowID int64
+		if err := rows.Scan(&rowID); err != nil {
+			return nil, err
+		}
+		missing = append(missing, rowID)
+	}
+	return missing, rows.Err()
 }
 
 // indexMessageHistoryRow 让某条消息的索引与正表保持一致。

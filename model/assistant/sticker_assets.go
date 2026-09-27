@@ -24,10 +24,48 @@ type StickerAsset struct {
 	Path             string
 	MIME             string
 	ContentSHA256    string
+	// Description 是这张图的通用图片描述，Gist/Tags 是表情包专用标注；Tagged 表示标注过。
+	Description string
+	Gist        string
+	Tags        []string
+	Tagged      bool
+	// SentCount/LastSentAt 是机器人在查询所在会话里发这张图的记录。
+	SentCount  int
+	LastSentAt int64
 }
 
 type StickerAssetStore interface {
 	ListStickerAssets(context.Context, StickerHistoryQuery) ([]StickerAsset, error)
+}
+
+// StickerTagRecord 是一张表情包的检索标注，按图片哈希存，跨会话共用。
+type StickerTagRecord struct {
+	ContentSHA256 string
+	Gist          string
+	Tags          []string
+}
+
+type StickerTagStore interface {
+	SaveStickerTags(context.Context, StickerTagRecord) error
+}
+
+type StickerUsageStore interface {
+	RecordStickerSent(ctx context.Context, session, contentSHA256 string, sentAt int64) error
+}
+
+// StickerLibraryPruner 把一个会话的表情包库压到上限以内，返回淘汰了几张。
+type StickerLibraryPruner interface {
+	PruneStickerAssets(ctx context.Context, session string, capacity int) (int, error)
+}
+
+// eventHasSticker 判断这条消息会不会往表情包库里新增条目。
+func eventHasSticker(event MessageEvent) bool {
+	for _, segment := range event.Segments {
+		if _, ok := StickerSegmentLabel(segment); ok {
+			return true
+		}
+	}
+	return false
 }
 
 // StickerSegmentLabel recognizes platform sticker metadata while rejecting

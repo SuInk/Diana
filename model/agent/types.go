@@ -131,6 +131,11 @@ type Config struct {
 	ToolTimeoutMS         int
 	FinalizationReserveMS int
 	ProtocolRepairLimit   int
+	// FinalizeFields 给 agent_finalize 追加可选的字符串字段，模型在收尾时顺手填写，
+	// 值原样出现在 Response.FinalizeFields 里，由调用方决定怎么用（例如按关键词配一张
+	// 表情包）。让模型「多填一个字段」比让它先加载、再调用一个工具容易得多。
+	// 字段集合要在同一个会话里保持稳定：它是工具定义的一部分，变了就打断前缀缓存。
+	FinalizeFields []FinalizeField
 	// CoreTools 是每一步都带完整定义的工具；其余工具按需加载，见 deferred_tools.go。
 	// 留空时全部工具都带完整定义。
 	CoreTools []string
@@ -166,6 +171,14 @@ type Response struct {
 	Silent bool `json:"silent,omitempty"`
 	// SilentReason 是模型给出的一句原因，只用于事件记录和日志，不发给用户。
 	SilentReason string `json:"silent_reason,omitempty"`
+	// FinalizeFields 是模型在 agent_finalize 上填的 Config.FinalizeFields 字段，没填的不出现。
+	FinalizeFields map[string]string `json:"finalize_fields,omitempty"`
+}
+
+// FinalizeField 是 agent_finalize 上一个由调用方定义的可选字符串字段。
+type FinalizeField struct {
+	Name        string
+	Description string
 }
 
 type Step struct {
@@ -209,6 +222,9 @@ type RunEvent struct {
 	Error          string
 	FinishReason   string
 	Usage          llm.Usage
+	// ToolsExecuted 只在 completed/failed 上有值：本轮实际执行的工具总数。
+	// ToolCall 只数占 MaxSteps 预算的调用，tools_load 和自省不算进去，拿它当「调了几次工具」会少数。
+	ToolsExecuted int
 }
 
 type RunObserver func(context.Context, RunEvent)

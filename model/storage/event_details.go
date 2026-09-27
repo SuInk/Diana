@@ -55,6 +55,7 @@ type InboundEventDetail struct {
 	SelfEchoAt        *time.Time `json:"self_echo_at,omitempty"`
 	DeliveryError     string     `json:"delivery_error,omitempty"`
 	LLMCalls          int64      `json:"llm_calls,omitempty"`
+	ToolCalls         int64      `json:"tool_calls,omitempty"` // Agent 实际执行的工具次数，一条消息跑过几轮（比如重试）就加总
 	InputTokens       int64      `json:"input_tokens,omitempty"`
 	OutputTokens      int64      `json:"output_tokens,omitempty"`
 	TotalTokens       int64      `json:"total_tokens,omitempty"`
@@ -529,6 +530,13 @@ LIMIT ? OFFSET ?
 			page.Events[index].Models = eventUsage.models
 		}
 	}
+	toolCalls, err := s.inboundEventToolCalls(ctx, query.Since, page.Events)
+	if err != nil {
+		return InboundEventDetailPage{}, err
+	}
+	for index := range page.Events {
+		page.Events[index].ToolCalls = toolCalls[strings.TrimSpace(page.Events[index].MessageID)]
+	}
 	return page, nil
 }
 
@@ -829,12 +837,20 @@ WHERE user_id IN (`+placeholders+`) AND TRIM(COALESCE(display_name, '')) <> ''
 		return nil, err
 	}
 
+	// 每个号只取最近一条带群名片的消息。原来按 user_id 分组取 MAX(event_time)，
+	// 要把这些人的全部历史逐行回表读一遍，活跃的人一个就是几万行，事件列表一页
+	// 最长要 1.7 秒；现在每个号沿 (user_id, event_time DESC) 索引从新往旧找，
+	// 通常第一行就是。
+	values := strings.TrimSuffix(strings.Repeat("(?),", len(list)), ",")
 	cards, err := s.eventReader().QueryContext(ctx, `
-SELECT user_id, sender_name
-FROM message_events
-WHERE user_id IN (`+placeholders+`) AND TRIM(COALESCE(sender_name, '')) <> ''
-GROUP BY user_id
-HAVING event_time = MAX(event_time)
+WITH ids(user_id) AS (VALUES `+values+`)
+SELECT ids.user_id, COALESCE((
+  SELECT m.sender_name FROM message_events AS m
+  WHERE m.user_id = ids.user_id AND TRIM(COALESCE(m.sender_name, '')) <> ''
+  ORDER BY m.event_time DESC
+  LIMIT 1
+), '')
+FROM ids
 `, list...)
 	if err != nil {
 		return nil, fmt.Errorf("resolve mention sender names: %w", err)
@@ -1037,6 +1053,59 @@ ORDER BY created_at`, args...)
 		return nil, inboundEventTokenTotals{}, fmt.Errorf("iterate event token usage: %w", err)
 	}
 	return byMessage, total, nil
+}
+
+// inboundEventToolCalls 按消息号汇总 Agent 执行过的工具次数。数的是每轮 Agent 结束时那条
+// agent_run 日志：它的 target 是消息号，走得上 (action, target) 索引。
+// 老日志没有 tools_executed，退回 tool_call——那是占预算的次数，少算 tools_load 和自省，但有总比没有强。
+func (s *SQLiteStore) inboundEventToolCalls(ctx context.Context, since time.Time, events []InboundEventDetail) (map[string]int64, error) {
+	defer s.observeStorage(ctx, "inboundEventToolCalls", "read")()
+	byMessage := map[string]int64{}
+	sinceText := time.Unix(0, 0).UTC().Format(time.RFC3339Nano)
+	if !since.IsZero() {
+		sinceText = since.UTC().Format(time.RFC3339Nano)
+	}
+	args := []any{}
+	for _, event := range events {
+		if messageID := strings.TrimSpace(event.MessageID); messageID != "" {
+			args = append(args, messageID)
+		}
+	}
+	if len(args) == 0 {
+		return byMessage, nil
+	}
+	count := len(args)
+	args = append(args, sinceText)
+	rows, err := s.eventReader().QueryContext(ctx, `
+SELECT target, metadata
+FROM app_logs
+WHERE action = 'agent_run' AND target IN (`+placeholders(count)+`) AND created_at >= ?`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query event tool calls: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var target, metadata sql.NullString
+		if err := rows.Scan(&target, &metadata); err != nil {
+			return nil, fmt.Errorf("scan event tool calls: %w", err)
+		}
+		meta := map[string]any{}
+		if metadata.Valid && strings.TrimSpace(metadata.String) != "" {
+			_ = json.Unmarshal([]byte(metadata.String), &meta)
+		}
+		if phase, _ := meta["phase"].(string); phase != "completed" && phase != "failed" {
+			continue
+		}
+		calls, found := meta["tools_executed"]
+		if !found {
+			calls = meta["tool_call"]
+		}
+		byMessage[strings.TrimSpace(target.String)] += int64FromAny(calls)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate event tool calls: %w", err)
+	}
+	return byMessage, nil
 }
 
 func (t *inboundEventTokenTotals) add(other inboundEventTokenTotals) {

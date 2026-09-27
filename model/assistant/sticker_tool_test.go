@@ -6,10 +6,16 @@ package assistant
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
+
+	"github.com/SuInk/diana/model/agent"
 )
 
 type stickerHistoryStore struct {
@@ -20,6 +26,33 @@ type stickerAssetTestStore struct {
 	stickerHistoryStore
 	assets []StickerAsset
 	query  StickerHistoryQuery
+	mu     sync.Mutex
+	sent   []string
+	tagged map[string][]string
+}
+
+func (s *stickerAssetTestStore) RecordStickerSent(_ context.Context, session, hash string, _ int64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.sent = append(s.sent, session+"/"+hash)
+	return nil
+}
+
+func (s *stickerAssetTestStore) SaveStickerTags(_ context.Context, record StickerTagRecord) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.tagged == nil {
+		s.tagged = map[string][]string{}
+	}
+	s.tagged[record.ContentSHA256] = record.Tags
+	return nil
+}
+
+func (s *stickerAssetTestStore) taggedSnapshot(hash string) ([]string, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	tags, ok := s.tagged[hash]
+	return tags, ok
 }
 
 func (s *stickerAssetTestStore) ListStickerAssets(_ context.Context, query StickerHistoryQuery) ([]StickerAsset, error) {
@@ -57,10 +90,10 @@ func (s *stickerHistoryStore) ListRecentStickerEvents(_ context.Context, query S
 
 func TestDefaultPluginManagerIncludesStickerSender(t *testing.T) {
 	state, ok := NewDefaultPluginManager().Get(stickerPluginID)
-	if !ok || !state.Enabled || !state.Manifest.BuiltIn || state.Manifest.Version != "0.2.1" {
+	if !ok || !state.Enabled || !state.Manifest.BuiltIn || state.Manifest.Version != "0.2.2" {
 		t.Fatalf("sticker plugin state=%#v ok=%v", state, ok)
 	}
-	if len(state.Manifest.Settings) != 5 {
+	if len(state.Manifest.Settings) != 8 {
 		t.Fatalf("settings=%#v", state.Manifest.Settings)
 	}
 }
@@ -149,7 +182,7 @@ func TestStickerToolKeepsCandidatesForSemanticSelectionWithoutLiteralMatch(t *te
 	if err := json.Unmarshal([]byte(output), &result); err != nil {
 		t.Fatal(err)
 	}
-	if len(result.Candidates) != 2 || !strings.Contains(result.Message, "按当前语义") {
+	if len(result.Candidates) != 2 || result.Candidates[0].Matched || !strings.Contains(result.Message, "随机候选") {
 		t.Fatalf("semantic candidates=%#v", result)
 	}
 
@@ -167,7 +200,7 @@ func TestRankStickerCandidatesPrefersSemanticMatchOverRecency(t *testing.T) {
 		{ID: "recent", Summary: "动画表情", EventTime: 20},
 		{ID: "semantic", Summary: "抱抱", EventTime: 10, SemanticScore: 80},
 	}
-	rankStickerCandidates(candidates, "她今天很难过，安慰一下")
+	rankStickerCandidates(candidates, "她今天很难过，安慰一下", 100)
 	if candidates[0].ID != "semantic" || candidates[0].Score != 80 {
 		t.Fatalf("semantic ranking=%#v", candidates)
 	}
@@ -420,5 +453,343 @@ func TestStickerToolCanExcludeGenericAnimatedCandidates(t *testing.T) {
 	var result stickerToolResult
 	if err := json.Unmarshal([]byte(output), &result); err != nil || len(result.Candidates) != 0 {
 		t.Fatalf("result=%#v err=%v", result, err)
+	}
+}
+
+// 关键词检索：多个词任一命中就算，名称和标签命中比简介命中分高；一个都不沾的不算命中。
+func TestRankStickerCandidatesMatchesAnyKeywordAndPrefersTags(t *testing.T) {
+	candidates := []stickerCandidate{
+		{ID: "recent", Summary: "动画表情", Description: "一只猫坐着", EventTime: 30},
+		{ID: "tagged", Summary: "动画表情", Tags: []string{"安慰", "抱抱"}, EventTime: 10},
+		{ID: "described", Summary: "动画表情", Description: "小熊伸手摸头", EventTime: 20},
+	}
+	rankStickerCandidates(candidates, "安慰 摸头 心疼", 100)
+	if candidates[0].ID != "tagged" || candidates[1].ID != "described" || candidates[2].Score != 0 {
+		t.Fatalf("ranking = %#v", candidates)
+	}
+	if candidates[0].Score <= candidates[1].Score || candidates[1].Score <= 0 {
+		t.Fatalf("scores = %v %v", candidates[0].Score, candidates[1].Score)
+	}
+}
+
+// 发过的表情包降低再被选中的欲望（思路照 vector_meme）：本会话最近 10 次发过的大幅降权，
+// 被更新的发送挤出窗口后恢复；10 分钟内刚发的再降一截；累计发得多的持续小幅降权。
+func TestRankStickerCandidatesPenalizesRepeats(t *testing.T) {
+	now := int64(1_000_000)
+	base := func() []stickerCandidate {
+		return []stickerCandidate{
+			{ID: "sent", Summary: "无语", EventTime: 20, LastSentAt: now - 3600},
+			{ID: "fresh", Summary: "无语", EventTime: 10},
+		}
+	}
+	candidates := base()
+	rankStickerCandidates(candidates, "无语", now)
+	if candidates[0].ID != "fresh" || !candidates[1].RecentlySent || candidates[1].Score >= candidates[0].Score*0.4 {
+		t.Fatalf("recent window: %v", stickerCandidateScores(candidates))
+	}
+
+	// 之后又发了 10 张别的，它被挤出最近窗口，只剩累计次数的轻微降权。
+	candidates = base()
+	for index := 0; index < stickerRecentSendCount; index++ {
+		candidates = append(candidates, stickerCandidate{ID: fmt.Sprintf("other-%d", index), Summary: "别的", LastSentAt: now - int64(60*(index+1))})
+	}
+	candidates[0].SentCount = 1
+	rankStickerCandidates(candidates, "无语", now)
+	if candidates[0].ID != "fresh" || candidates[1].ID != "sent" || candidates[1].RecentlySent {
+		t.Fatalf("after window: %v", stickerCandidateScores(candidates))
+	}
+	if ratio := candidates[1].Score / candidates[0].Score; ratio < 0.94 || ratio > 0.96 {
+		t.Fatalf("one past send should cost ~5%%, ratio=%.3f", ratio)
+	}
+
+	// 累计发了很多次：降权到底是 70%。
+	if got := stickerRepeatFactor(stickerCandidate{SentCount: 20}, now); got != stickerUsagePenaltyFloor {
+		t.Fatalf("usage floor = %v", got)
+	}
+	// 10 分钟内刚发过：最近发过 0.35 × 刚发过 0.5。
+	if got := stickerRepeatFactor(stickerCandidate{RecentlySent: true, LastSentAt: now - 60}, now); math.Abs(got-stickerRecentSendFactor*stickerJustSentFactor) > 1e-9 {
+		t.Fatalf("just sent factor = %v", got)
+	}
+}
+
+// 命中的排在前面；不够时随机补位，没发过的先补，发过的其次，最近发过的最后。
+func TestSelectStickerCandidatesFillsUnusedBeforeUsed(t *testing.T) {
+	candidates := []stickerCandidate{
+		{ID: "hit", Score: 10},
+		{ID: "recent", RecentlySent: true, LastSentAt: 90},
+		{ID: "used", SentCount: 3, LastSentAt: 10},
+		{ID: "a"}, {ID: "b"},
+	}
+	first := func(int) int { return 0 }
+	picked, matched := selectStickerCandidates(candidates, 4, 100, first)
+	if matched != 1 || strings.Join(stickerCandidateIDs(picked), ",") != "hit,a,b,used" {
+		t.Fatalf("picked = %v matched=%d", stickerCandidateIDs(picked), matched)
+	}
+	picked, _ = selectStickerCandidates(candidates, 5, 100, first)
+	if picked[4].ID != "recent" {
+		t.Fatalf("picked = %v", stickerCandidateIDs(picked))
+	}
+}
+
+func stickerCandidateScores(candidates []stickerCandidate) []string {
+	out := make([]string, len(candidates))
+	for index, candidate := range candidates {
+		out[index] = fmt.Sprintf("%s=%.2f", candidate.ID, candidate.Score)
+	}
+	return out
+}
+
+// 命中太多时在前几名里加权抽，不是永远同一批；分数最高的仍然排在返回列表前面。
+func TestSelectStickerCandidatesSamplesAmongTopMatches(t *testing.T) {
+	var candidates []stickerCandidate
+	for index := 0; index < 10; index++ {
+		candidates = append(candidates, stickerCandidate{ID: string(rune('a' + index)), Score: float64(100 - index)})
+	}
+	last := func(n int) int { return n - 1 }
+	picked, matched := selectStickerCandidates(candidates, 2, 0, last)
+	if matched != 2 || len(picked) != 2 {
+		t.Fatalf("picked = %#v", picked)
+	}
+	for _, candidate := range picked {
+		if candidate.Score < 97 {
+			t.Fatalf("picked outside top pool: %#v", picked)
+		}
+	}
+	if picked[0].Score < picked[1].Score {
+		t.Fatalf("picked not ordered: %#v", picked)
+	}
+}
+
+func TestParseStickerAnnotation(t *testing.T) {
+	gist, tags := parseStickerAnnotation("猫猫翻白眼，表示对离谱发言很无语。 标签：无语、翻白眼、离谱，猫猫。")
+	if gist != "猫猫翻白眼，表示对离谱发言很无语。" || strings.Join(tags, "|") != "无语|翻白眼|离谱|猫猫" {
+		t.Fatalf("gist=%q tags=%q", gist, tags)
+	}
+	gist, tags = parseStickerAnnotation("只有简介没有标签")
+	if gist != "只有简介没有标签" || tags != nil {
+		t.Fatalf("gist=%q tags=%q", gist, tags)
+	}
+}
+
+// 资产库带出的标签交给 Agent；发送后记下这次发送；已有通用描述但没标注过的，后台补标签。
+func TestStickerToolUsesAssetTagsRecordsSendAndTagsInBackground(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name string, body []byte) (string, string) {
+		path := filepath.Join(dir, name)
+		if err := os.WriteFile(path, body, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return path, imageBytesSHA256(body)
+	}
+	taggedPath, taggedHash := write("tagged.gif", []byte("tagged"))
+	plainPath, plainHash := writeRecallImageFixture(t)
+	event := MessageEvent{Kind: EventKindGroup, GroupID: "g", UserID: "u", MessageID: "request"}
+	store := &stickerAssetTestStore{stickerHistoryStore: stickerHistoryStore{events: map[string][]MessageEvent{}}, assets: []StickerAsset{
+		{Session: sessionKey(event), Kind: EventKindGroup, GroupID: "g", MessageID: "m1", EventTime: 1,
+			Summary: "动画表情", Path: taggedPath, ContentSHA256: taggedHash, Tagged: true, Gist: "摸摸头安慰", Tags: []string{"安慰", "摸头"}},
+		{Session: sessionKey(event), Kind: EventKindGroup, GroupID: "g", MessageID: "m2", EventTime: 2,
+			Summary: "动画表情", Path: plainPath, ContentSHA256: plainHash, Description: "一张系统面板截图"},
+	}}
+	provider := &recallImageVisionProvider{}
+	runtime := NewRuntime(BotConfig{}, &recordingChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+		return provider, nil
+	})
+	runtime.SetMessageHistoryStore(store)
+	tool := newDianaStickerTool(runtime, event, SettingValues{stickerSettingSearchResults: 8})
+
+	output, err := tool.Run(context.Background(), map[string]any{"operation": "search", "query": "安慰 心疼"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var search stickerToolResult
+	if err := json.Unmarshal([]byte(output), &search); err != nil {
+		t.Fatal(err)
+	}
+	if len(search.Candidates) != 2 || !search.Candidates[0].Matched || search.Candidates[0].Description != "摸摸头安慰" ||
+		strings.Join(search.Candidates[0].Tags, "|") != "安慰|摸头" || search.Candidates[1].Matched {
+		t.Fatalf("search = %s", output)
+	}
+	if _, err := tool.Run(context.Background(), map[string]any{"operation": "send", "sticker_id": search.Candidates[0].ID}); err != nil {
+		t.Fatal(err)
+	}
+	store.mu.Lock()
+	sent := append([]string(nil), store.sent...)
+	store.mu.Unlock()
+	if len(sent) != 1 || sent[0] != sessionKey(event)+"/"+taggedHash {
+		t.Fatalf("sent = %#v", sent)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if _, ok := store.taggedSnapshot(plainHash); ok {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("untagged candidate was not tagged in background")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if _, ok := store.taggedSnapshot(taggedHash); ok {
+		t.Fatal("already tagged candidate was tagged again")
+	}
+}
+
+type stickerPruneTestStore struct {
+	stickerHistoryStore
+	mu       sync.Mutex
+	sessions []string
+	capacity int
+}
+
+func (s *stickerPruneTestStore) PruneStickerAssets(_ context.Context, session string, capacity int) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.sessions = append(s.sessions, session)
+	s.capacity = capacity
+	return 0, nil
+}
+
+// 收到带表情包的消息落库后按插件上限修剪这个会话的表情包库；纯文字消息不触发。
+func TestPersistMessageEventPrunesStickerLibrary(t *testing.T) {
+	store := &stickerPruneTestStore{stickerHistoryStore: stickerHistoryStore{events: map[string][]MessageEvent{}}}
+	runtime := NewRuntime(BotConfig{}, &recordingChannel{}, NewDefaultPluginManager(), nil, nil, nil, nil)
+	runtime.SetMessageHistoryStore(store)
+	text := MessageEvent{Kind: EventKindGroup, GroupID: "g", MessageID: "t", Segments: []MessageSegment{{Type: "text", Data: map[string]string{"text": "hi"}}}}
+	runtime.persistMessageEvent(text)
+	sticker := MessageEvent{Kind: EventKindGroup, GroupID: "g", MessageID: "s", Segments: []MessageSegment{{Type: "image", Data: map[string]string{"summary": "[无语]"}}}}
+	runtime.persistMessageEvent(sticker)
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if len(store.sessions) != 1 || store.sessions[0] != sessionKey(sticker) || store.capacity != 1000 {
+		t.Fatalf("prune calls = %#v capacity=%d", store.sessions, store.capacity)
+	}
+}
+
+func stickerLimitTestTool(t *testing.T, runtime *Runtime, event MessageEvent, settings SettingValues) (*dianaStickerTool, func() string) {
+	t.Helper()
+	tool := newDianaStickerTool(runtime, event, settings)
+	sendOne := func() string {
+		output, err := tool.Run(context.Background(), map[string]any{"operation": "search", "query": "无语"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var search stickerToolResult
+		if err := json.Unmarshal([]byte(output), &search); err != nil {
+			t.Fatal(err)
+		}
+		if search.Action == "limited" {
+			return output
+		}
+		if len(search.Candidates) == 0 {
+			t.Fatalf("search = %s", output)
+		}
+		output, err = tool.Run(context.Background(), map[string]any{"operation": "send", "sticker_id": search.Candidates[0].ID})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return output
+	}
+	return tool, sendOne
+}
+
+// 发送频率上限：一轮默认只发一张；同一会话一小时内到了上限，新的一轮连搜索都直接返回，
+// 不再读库、不调识图；别的会话不受影响。
+func TestStickerToolEnforcesTurnAndHourlySendLimits(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "sticker.gif")
+	body := []byte("limit-sticker")
+	if err := os.WriteFile(path, body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	segment := func() []MessageSegment {
+		return []MessageSegment{{Type: "image", Data: map[string]string{"summary": "[无语]", "cached_file": path, imageContentSHA256Key: imageBytesSHA256(body)}}}
+	}
+	event := MessageEvent{Kind: EventKindGroup, GroupID: "g1", UserID: "u", MessageID: "request"}
+	other := MessageEvent{Kind: EventKindGroup, GroupID: "g2", UserID: "u", MessageID: "request"}
+	store := &stickerHistoryStore{events: map[string][]MessageEvent{
+		sessionKey(event): {{Kind: EventKindGroup, GroupID: "g1", MessageID: "s", Time: 1, Segments: segment()}},
+		sessionKey(other): {{Kind: EventKindGroup, GroupID: "g2", MessageID: "s", Time: 1, Segments: segment()}},
+	}}
+	channel := &recordingChannel{}
+	runtime := NewRuntime(BotConfig{}, channel, NewPluginManager(), nil, nil, nil, nil)
+	runtime.SetMessageHistoryStore(store)
+	settings := SettingValues{stickerSettingHourlyLimit: 2}
+
+	_, sendOne := stickerLimitTestTool(t, runtime, event, settings)
+	if output := sendOne(); !strings.Contains(output, `"action":"sent"`) {
+		t.Fatalf("first send = %s", output)
+	}
+	if output := sendOne(); !strings.Contains(output, `"action":"limited"`) || !strings.Contains(output, "单轮上限") {
+		t.Fatalf("second send in same turn = %s", output)
+	}
+	_, nextTurn := stickerLimitTestTool(t, runtime, event, settings)
+	if output := nextTurn(); !strings.Contains(output, `"action":"sent"`) {
+		t.Fatalf("next turn send = %s", output)
+	}
+	_, thirdTurn := stickerLimitTestTool(t, runtime, event, settings)
+	if output := thirdTurn(); !strings.Contains(output, `"action":"limited"`) || !strings.Contains(output, "最近一小时已发 2 张") {
+		t.Fatalf("hourly limit = %s", output)
+	}
+	_, otherTurn := stickerLimitTestTool(t, runtime, other, settings)
+	if output := otherTurn(); !strings.Contains(output, `"action":"sent"`) {
+		t.Fatalf("other conversation = %s", output)
+	}
+	if sent := channel.sentSnapshot(); len(sent) != 3 {
+		t.Fatalf("sent = %d", len(sent))
+	}
+
+	// 填 0 不限每小时张数。
+	_, unlimited := stickerLimitTestTool(t, runtime, event, SettingValues{stickerSettingHourlyLimit: 0})
+	if output := unlimited(); !strings.Contains(output, `"action":"sent"`) {
+		t.Fatalf("unlimited = %s", output)
+	}
+}
+
+// 占了名额但没发出去要退回，过了一小时的旧记录不再占名额。
+func TestStickerSendLimiterReleasesAndExpires(t *testing.T) {
+	var limiter stickerSendLimiter
+	now := time.Unix(100000, 0)
+	release, ok := limiter.reserve("s", now, 1)
+	if !ok {
+		t.Fatal("first reserve refused")
+	}
+	if _, ok := limiter.reserve("s", now, 1); ok {
+		t.Fatal("reserve over limit accepted")
+	}
+	if full, wait := limiter.full("s", now.Add(10*time.Minute), 1); !full || wait != 50*time.Minute {
+		t.Fatalf("full=%v wait=%v", full, wait)
+	}
+	release()
+	if _, ok := limiter.reserve("s", now, 1); !ok {
+		t.Fatal("released slot not reusable")
+	}
+	if full, _ := limiter.full("s", now.Add(stickerSendRateWindow), 1); full {
+		t.Fatal("expired send still counted")
+	}
+}
+
+// 表情包工具是按需加载的，目录每行只留 120 字：什么时候该发必须写在最前面，被截掉就等于没写。
+func TestStickerCatalogLineKeepsWhenToUse(t *testing.T) {
+	registry := agent.NewToolRegistry()
+	registry.Register(newDianaStickerTool(nil, MessageEvent{}, nil))
+	line := registry.SystemPromptCatalog()
+	for _, want := range []string{"接梗", "安慰", "被要表情包时必用"} {
+		if !strings.Contains(line, want) {
+			t.Fatalf("catalog line lost %q: %s", want, line)
+		}
+	}
+}
+
+// 表情包的发送时机进稳定头部，而且只在工具真挂上时才出现。
+func TestStickerPromptRuleFollowsToolRegistration(t *testing.T) {
+	runtime := NewRuntime(BotConfig{}, &recordingChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	event := MessageEvent{Kind: EventKindGroup, GroupID: "g1", UserID: "1"}
+	registry := agent.NewToolRegistry()
+	registry.Register(newDianaStickerTool(runtime, event, nil))
+	head, tail := runtime.systemPromptPartsWithRelationshipAndAgentTools(event, nil, false, RelationshipPolicy{}, true, registry)
+	if !strings.Contains(head, promptToolSticker) || strings.Contains(tail, promptToolSticker) {
+		t.Fatalf("sticker rule placement: head=%v tail=%v", strings.Contains(head, promptToolSticker), strings.Contains(tail, promptToolSticker))
+	}
+	bare, _ := runtime.systemPromptPartsWithRelationshipAndAgentTools(event, nil, false, RelationshipPolicy{}, true, agent.NewToolRegistry())
+	if strings.Contains(bare, promptToolSticker) {
+		t.Fatal("sticker rule injected without the tool")
 	}
 }

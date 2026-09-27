@@ -599,10 +599,23 @@ func (g *codingJobRegistry) claim(workspace, jobID string, limit int) error {
 func (g *codingJobRegistry) release(workspace, jobID string) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	g.releaseWorkspaceLocked(workspace, jobID)
+	delete(g.watched, jobID)
+}
+
+// releaseWorkspace 只放开工作区，不动看护登记。取消用它：进程虽然杀了，看护协程
+// 还要等 Wait 返回、再写一次收尾记录才退出，这时就把它从 watched 里摘掉，等看护
+// 收尾的人（drainCodingJobs）会以为已经没人在写了。
+func (g *codingJobRegistry) releaseWorkspace(workspace, jobID string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.releaseWorkspaceLocked(workspace, jobID)
+}
+
+func (g *codingJobRegistry) releaseWorkspaceLocked(workspace, jobID string) {
 	if existing, ok := g.running[workspace]; ok && existing == jobID {
 		delete(g.running, workspace)
 	}
-	delete(g.watched, jobID)
 }
 
 func (g *codingJobRegistry) beginWatch(jobID string) bool {
@@ -965,7 +978,7 @@ func (r *Runtime) cancelCodingJob(ctx context.Context, id string) (CodingJob, er
 	if job.PID > 0 {
 		killCodingProcess(job.PID)
 	}
-	r.codingJobs().release(job.Workspace, job.ID)
+	r.codingJobs().releaseWorkspace(job.Workspace, job.ID)
 	r.recordCodingJobLog(ctx, job, applog.KindOperation, applog.LevelInfo, "编码任务已取消", job.Instruction)
 	return job, nil
 }

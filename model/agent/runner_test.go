@@ -743,6 +743,10 @@ func TestRunnerSkipsConsecutiveDuplicateToolCall(t *testing.T) {
 			t.Fatalf("phases=%#v, missing %q", phases, want)
 		}
 	}
+	// 被跳过的重复调用没有真正执行，不算进工具次数。
+	if last := events[len(events)-1]; last.Phase != RunPhaseCompleted || last.ToolsExecuted != 1 {
+		t.Fatalf("completed event = %#v", last)
+	}
 }
 
 func TestRunnerBoundsEveryToolCall(t *testing.T) {

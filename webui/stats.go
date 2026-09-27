@@ -137,6 +137,53 @@ func (s *StatsCollector) RestoreDurableBaselines(baselines map[string]storage.Da
 	}
 }
 
+// MergeDurableBaselines 把持久基线加到已经在跑的计数上。
+//
+// 启动时基线在后台读（大库上要十几秒），这期间实时事件已经开始计数，不能再
+// 整体覆盖。基线必须来自机器人开始处理之前钉住的快照
+// （storage.BeginDashboardEventStatsSnapshot），两边才不会重复计同一条事件。
+func (s *StatsCollector) MergeDurableBaselines(baselines map[string]storage.DashboardEventStats) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cutoff := s.now().Add(-48 * time.Hour).Truncate(time.Hour).Unix()
+	for profileID, stats := range baselines {
+		counters := s.all
+		if profileID != "" {
+			counters = s.byProfile[profileID]
+			if counters == nil {
+				counters = newStatsCounters()
+				s.byProfile[profileID] = counters
+			}
+		}
+		counters.merge(stats)
+		counters.trim(cutoff)
+	}
+}
+
+func (c *statsCounters) merge(stats storage.DashboardEventStats) {
+	c.total += stats.TotalEvents
+	c.handled += stats.HandledEvents
+	c.errors += stats.ErrorEvents
+	for kind, count := range stats.ByKind {
+		c.byKind[kind] += count
+	}
+	for _, restored := range stats.Hourly {
+		bucket := c.buckets[restored.HourUnix]
+		if bucket == nil {
+			bucket = &hourBucket{HourUnix: restored.HourUnix}
+			c.buckets[restored.HourUnix] = bucket
+		}
+		bucket.Total += restored.Total
+		bucket.Handled += restored.Handled
+		bucket.Errors += restored.Errors
+	}
+	if stats.LastEventAt.After(c.lastEventAt) {
+		c.lastEventAt = stats.LastEventAt
+	}
+	c.durTotalMS += stats.DurationTotalMS
+	c.durCount += stats.DurationCount
+}
+
 // NewStatsCollector 创建 StatsCollector。
 func NewStatsCollector() *StatsCollector {
 	return &StatsCollector{

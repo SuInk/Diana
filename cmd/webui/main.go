@@ -248,7 +248,7 @@ func main() {
 		_, _ = fmt.Fprintf(os.Stderr, "%v\n", err)
 		os.Exit(1)
 	}
-	logWriter, closeLog := setupLogging(appCfg.Storage.LogPath)
+	logWriter, closeLog, logStartupDone := setupLogging(appCfg.Storage.LogPath)
 	defer closeLog()
 	if appCfg.path != "" {
 		log.Printf("config loaded from %s", appCfg.path)
@@ -438,6 +438,11 @@ func main() {
 		log.Fatal(err)
 	}
 	systemHandler.SetReleasePackageUpdater(releaseUpdater)
+	if dockerDeployment() {
+		systemHandler.SetDockerDeployment(webui.NewDockerUpdateTrigger(
+			os.Getenv("DIANA_DOCKER_IMAGE"), os.Getenv("DIANA_DOCKER_UPDATE_TOKEN"),
+		))
+	}
 	systemHandler.StartAutoUpdate(ctx)
 	runtimePersistor := webui.NewRuntimePersistor(botProfileStore)
 	runtimePersistor.SetAppLogWriter(sqliteStore)
@@ -551,13 +556,25 @@ func main() {
 		int64(appCfg.Storage.MediaCacheMB)<<20,
 	)
 	botRuntime.SetMediaStore(mediaStore)
-	// 先恢复持久统计再挂监听器。配置保存或切换只重启机器人连接，
+	// 先钉住持久统计的快照再挂监听器。配置保存或切换只重启机器人连接，
 	// 不会重置这组计数；进程重启也能从去重消息记录恢复基线。
+	//
+	// 读基线要把两张大表各扫一遍，生产上 3–16 秒，不再让启动等它：快照在机器人
+	// 启动之前就定住，后台读完再加到实时计数上，启动前的事件只在基线里、启动后的
+	// 只在实时计数里，不重不漏。
 	statsCollector := webui.NewStatsCollector()
-	if baselines, err := sqliteStore.DashboardEventStatsSnapshotByProfile(ctx, time.Now()); err != nil {
+	if loadBaselines, err := sqliteStore.BeginDashboardEventStatsSnapshot(ctx, time.Now()); err != nil {
 		log.Printf("dashboard stats restore failed: %v", err)
 	} else {
-		statsCollector.RestoreDurableBaselines(baselines)
+		go func() {
+			defer recoverGoroutinePanic("main.go:dashboard_baseline")
+			baselines, err := loadBaselines()
+			if err != nil {
+				log.Printf("dashboard stats restore failed: %v", err)
+				return
+			}
+			statsCollector.MergeDurableBaselines(baselines)
+		}()
 	}
 	// 今日 Token 同理：Start 之前垫好，之后的调用才接着往上加，不会被数两遍。
 	if err := botRuntime.RestoreLLMUsageToday(ctx, sqliteStore); err != nil {
@@ -629,7 +646,7 @@ func main() {
 	gin.SetMode(gin.ReleaseMode)
 	router := gin.New()
 	router.Use(limitRequestBody(maxHTTPRequestBodyBytes))
-	router.Use(gin.LoggerWithWriter(logWriter), gin.RecoveryWithWriter(logWriter))
+	router.Use(webuiAccessLogger(logWriter), gin.RecoveryWithWriter(logWriter))
 	// 鉴权中间件必须在业务路由之前挂载；未设密码时等价于关闭。
 	authManager := webui.NewAuthManager(sqliteStore)
 	bootstrap, err := authManager.Bootstrap(strings.TrimSpace(appCfg.Admin.Username), appCfg.Admin.Password)
@@ -755,6 +772,7 @@ func main() {
 	router.NoRoute(spaHandler(http.Dir(frontendDistDir(appCfg.Server.FrontendDist))))
 
 	log.Printf("webui listening on http://%s:%s", displayHost(host), port)
+	logStartupDone()
 	server := &http.Server{
 		Handler:           router,
 		ReadHeaderTimeout: 10 * time.Second,
@@ -773,6 +791,11 @@ func main() {
 	if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Fatal(err)
 	}
+	// 后台 worker 必须赶在数据库关闭之前停下：入站队列和记忆任务退出时要释放
+	// 租约、存恢复检查点。以前没人停它们，main 一返回 defer 就把库关了，worker
+	// 还在收尾，关机日志里一串 sql: database is closed，租约留在库里，下次启动
+	// 要等租约过期才接得回那些任务。原地重启走 exec，不跑 defer，同样要先停。
+	stopBotRuntime(botRuntime)
 	if restartRequested.Load() {
 		log.Printf("webui restarting")
 		instance.Release()
@@ -853,34 +876,41 @@ func dockerDeployment() bool {
 	return strings.TrimSpace(os.Getenv("DIANA_DEPLOYMENT")) == "docker"
 }
 
-// setupLogging 配置控制台和文件日志输出。
 // logRotationBackups 是日志轮转保留的旧文件数：<log>.1 … <log>.N。
 const logRotationBackups = 5
 
-func setupLogging(logPath string) (io.Writer, func()) {
+// setupLogging 配置控制台和文件日志输出。返回的 startupDone 在服务开始监听后调用：
+// 标准输出只需要启动阶段那几行时（见 logStdoutEnv），从这里开始只写文件。
+func setupLogging(logPath string) (io.Writer, func(), func()) {
 	logPath = strings.TrimSpace(logPath)
 	if logPath == "" {
-		return os.Stdout, func() {}
+		return os.Stdout, func() {}, func() {}
 	}
 	// Gin 请求日志和标准 log 共用同一个 writer，方便部署时只收集一个文件。
 	if err := os.MkdirAll(filepath.Dir(logPath), 0o700); err != nil {
 		log.Printf("create log directory skipped: %v", err)
-		return os.Stdout, func() {}
+		return os.Stdout, func() {}, func() {}
 	}
 	file, err := newRotatingLogWriter(logPath, 20<<20, logRotationBackups)
 	if err != nil {
 		log.Printf("open log file skipped: %v", err)
-		return os.Stdout, func() {}
+		return os.Stdout, func() {}, func() {}
 	}
-	writer := io.MultiWriter(os.Stdout, file)
+	writer := newLogOutput(file, os.Stdout)
 	// 统一日志管道：slog 默认 logger 与标准 log 都写到同一 writer，
 	// 输出行格式与历史 log.SetOutput 行为保持一致（见 internal/dlog）。
 	dlog.Init(writer)
-	log.Printf("logging to %s", logPath)
+	mode := resolveLogStdoutMode(currentStdoutFacts())
+	log.Printf("logging to %s (stdout copy: %s)", logPath, mode)
+	startupDone := func() {
+		if mode == logStdoutStartup {
+			writer.stopMirror(logPath)
+		}
+	}
 	return writer, func() {
 		dlog.Init(nil)
 		_ = file.Close()
-	}
+	}, startupDone
 }
 
 // frontendDistDir 查找生产前端静态文件目录。

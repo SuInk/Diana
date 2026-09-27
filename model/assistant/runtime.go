@@ -543,6 +543,9 @@ type Runtime struct {
 	inboundDone         chan struct{}
 	memoryWake          chan struct{}
 	memoryDone          chan struct{}
+	// memoryRollupBackoff 记住哪些会话的摘要卷叠刚超时过，见 memoryRollupAllowed。
+	memoryRollupMu      sync.Mutex
+	memoryRollupBackoff map[string]memoryRollupBackoffState
 	inboundReadyMu      sync.RWMutex
 	inboundReady        bool
 	inboundReplayCutoff time.Time
@@ -581,16 +584,20 @@ type Runtime struct {
 	errorNoticeFreshWindow time.Duration
 	replyBatchMu           sync.Mutex
 	// replyTurns 记「同一个人刚问过」，让紧接着的第二条被当成追问接住而不是重答一遍。
-	replyTurnMu             sync.Mutex
-	replyTurns              map[string]replyTurnRecord
-	replyBatches            map[string]*replyBatchGate
-	unavailableGroupMu      sync.RWMutex
-	botMuteMu               sync.RWMutex
-	botMutes                map[string]botMuteState
-	unavailableGroups       map[string]unavailableGroupSend
-	outboundDeliveryMu      sync.Mutex
-	outboundDeliveries      map[string]*groupOutboundDelivery
-	outboundEchoes          outboundEchoTracker
+	replyTurnMu        sync.Mutex
+	replyTurns         map[string]replyTurnRecord
+	replyBatches       map[string]*replyBatchGate
+	unavailableGroupMu sync.RWMutex
+	botMuteMu          sync.RWMutex
+	botMutes           map[string]botMuteState
+	unavailableGroups  map[string]unavailableGroupSend
+	outboundDeliveryMu sync.Mutex
+	outboundDeliveries map[string]*groupOutboundDelivery
+	outboundEchoes     outboundEchoTracker
+	// stickerTagging 是正在后台补标签的表情包哈希，同一张图只跑一份。
+	stickerTagging sync.Map
+	// stickerSends 记每个会话最近一小时发表情包的时间，用于发送频率上限；重启后清零。
+	stickerSends            stickerSendLimiter
 	historyImageDescMu      sync.Mutex
 	historyImageDescQueue   []*historyImageDescJob
 	historyImageDescJobs    map[string]*historyImageDescJob
@@ -613,6 +620,8 @@ type Runtime struct {
 	agentFootprints map[string]agentFootprint
 	// backgroundLogThrottle 给后台事件的运行日志节流，见 recordBackgroundFailure。
 	backgroundLogThrottle logThrottle
+	// llmCooldowns 记模型候选的冷却，跨请求保留，见 llmCooldownTable。
+	llmCooldowns llmCooldownTable
 }
 
 // SetGroupConfigStore 注入群级配置存储，运行时会按消息所在群合并群配置。
@@ -4590,6 +4599,10 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	if draft := r.telegramReplyDraft(event, replyCfg); draft != nil {
 		ctx = withTextDeltaObserver(ctx, draft)
 	}
+	// 模型收尾时填了表情包关键词的话，正文发出后跟一张，见 sticker_finalize.go。
+	ctx, finalizeSticker := withFinalizeSticker(ctx)
+	// 收尾时填了表格的话先画好，正文发出后跟一张图，见 render_finalize.go。
+	ctx, finalizeRender := withFinalizeRender(ctx)
 	reply, err = r.generateReply(ctx, replyCfg, event, relationship, messages, agentRegistry)
 	if err == nil && dependencyIndex >= 0 && dependency.pixels && VisionDescriptionRefused(reply) && !hasExternalSideEffect(ctx) {
 		// 附了原图，模型却回「没收到图片」：这条视觉链路送不进图（模型不支持、网关把
@@ -4760,6 +4773,10 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		r.applyReplyControlAfterSend(sendCtx, event, reply, controlIntent)
 		// 只同步真正发出去的这一版：审核改写、拦下或发送失败的都到不了这里。
 		r.afterReplyVRChat(event, strings.Join(splitEventChatReply(reply, cfg, event), "\n"))
+		if !controlIntent.RefuseCurrent && !controlIntent.SuppressCurrentUser {
+			r.sendFinalizeRender(sendCtx, event, finalizeRender.take())
+			r.sendFinalizeSticker(sendCtx, event, finalizeSticker.take())
+		}
 		return nil
 	})
 	if err != nil {
@@ -4849,6 +4866,9 @@ func (r *Runtime) deliverResolverResponse(ctx context.Context, event MessageEven
 
 func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event MessageEvent, relationship RelationshipPolicy, messages []llm.Message, preparedRegistry *agent.ToolRegistry, extraTools ...agent.Tool) (string, error) {
 	messages = withReplyGenerationBudgetForConfig(messages, cfg)
+	// Agent 每一步都带着完整原件重发，预算层丢过的历史、摘要过的文字要记到这一整次
+	// 回复结束，下一步才能照搬，而不是每步从头裁、从头摘要（见 input_budget_pretrim.go）。
+	ctx = withInputBudgetRun(ctx)
 	if _, initialized := identityPrivacyStateFromContext(ctx); !initialized {
 		ctx = r.withIdentityPrivacyContext(ctx, event, r.contextHistory(event))
 	}
@@ -4887,8 +4907,16 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 		// 常驻名单要等注册表建好才算得出来：名单记的是插件、MCP 服务和工具的 ID，
 		// 得知道这一轮到底注册了哪些工具、哪条 MCP 和插件各带了哪几个。
 		agentCfg.CoreTools = r.agentCoreTools(event, registry)
+		if _, ok := registry.Get(dianaStickerToolName); ok {
+			agentCfg.FinalizeFields = append(agentCfg.FinalizeFields, stickerFinalizeField())
+		}
+		if r.offersRenderFinalizeField(event, registry) {
+			agentCfg.FinalizeFields = append(agentCfg.FinalizeFields, renderFinalizeField())
+		}
 		r.rememberAgentResidencyCatalog(event, registry, relationship.Owner)
-		agentClient := newRuntimeAgentLLMProvider(r, ctx)
+		// 用途只挂在模型调用上（见 runtimeAgentLLMProvider.Generate），不挂在整个 ctx 上：
+		// 工具里各自发起的模型调用有自己的用途，不该被记成主回复。
+		agentClient := newRuntimeAgentLLMProvider(r, withDefaultLLMUsagePurpose(ctx, PurposeReply))
 		// 光在提示词里叮嘱不透露不够：工具在手，被追问两句模型还是会去查。
 		if modelDisclosedTo(cfg, relationship.Owner) {
 			registry.Register(newDianaRuntimeModelTool(agentClient, event))
@@ -4928,18 +4956,20 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 		r.rememberAgentRunProgress(event, resp)
 		r.rememberClaimSources(event, resp.Claims)
 		r.rememberToolCalls(event, resp.Steps)
+		finalizeStickerFromContext(ctx).set(resp.FinalizeFields[stickerFinalizeFieldName])
 		if resp.Silent {
 			// 模型在 agent_finalize 上自己按下了静默。没有正文可整理，也不该被
 			// 下游任何一条兜底文案补上；调用方按「本轮不发送」处理。
 			return "", newModelSilentFinishError(resp.SilentReason)
 		}
-		return r.prepareGeneratedReply(ctx, cfg, resp.Text, event)
+		text := r.applyFinalizeRender(ctx, event, resp.Text, resp.FinalizeFields[renderFinalizeFieldName])
+		return r.prepareGeneratedReply(ctx, cfg, text, event)
 	}
 	group := llm.GroupChat
 	if messagesContainImages(messages) || messagesContainAudio(messages) {
 		group = llm.GroupVision
 	}
-	ctx = withLLMUsagePurpose(ctx, "reply")
+	ctx = withDefaultLLMUsagePurpose(ctx, PurposeReply)
 	raw, err := r.runLLMProviderForGroup(ctx, group, func(client LLMProvider) (string, error) {
 		resp, err := client.Generate(ctx, llm.GenerateRequest{Messages: messages})
 		if err != nil {
@@ -4976,6 +5006,9 @@ func (p *runtimeAgentLLMProvider) Generate(ctx context.Context, req llm.Generate
 	p.mu.Lock()
 	p.lastGroup = group
 	p.mu.Unlock()
+	// Agent 每一轮的 ctx 来自 Runner，不带创建这个 provider 时的用途；补上它，
+	// 记账、调试轨迹和缓存键才认得出这是主回复，而不是落进 unlabeled。
+	ctx = withDefaultLLMUsagePurpose(ctx, llmUsagePurposeFromContext(p.ctx))
 	wrapped := p.runtime.wrapLLMProviderForContext(ctx, provider)
 	return wrapped.Generate(ctx, req)
 }
@@ -7915,6 +7948,7 @@ func (r *Runtime) persistMessageEvent(event MessageEvent) {
 		log.Printf("diana message history persist failed: %v", err)
 		return
 	}
+	r.pruneStickerLibrary(ctx, store, event)
 	// 语义检索开着的话,落库后把消息投给后台向量化。非阻塞,失败只丢这一条。
 	r.enqueueSemanticIndex(event)
 }

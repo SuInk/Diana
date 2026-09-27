@@ -49,7 +49,8 @@ func (s *SQLiteStore) addInboundEventHandoffColumns() error {
 }
 
 // inboundHandoffRow 给出定位那一行的 WHERE 条件。有队列事件 ID 就走主键；没有才按
-// 会话、发送者和消息 ID 找最新那行——那条查询没有索引，唯一的写连接上一次要扫几十毫秒。
+// 会话、发送者和消息 ID 找最新那行——走 idx_inbound_events_message，比主键多一次
+// 索引查找，而且同一条消息 ID 可能对应多行，要在其中排序取最新。
 func inboundHandoffRow(ref assistant.InboundHandoffRef) (string, []any) {
 	if id := strings.TrimSpace(ref.ID); id != "" {
 		return `id = ?`, []any{id}

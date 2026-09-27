@@ -18,7 +18,7 @@ RC 只是可选的预发布阶段，不是独立的更新通道。通常直接�
 
 切换通道不会自动降级。例如当前运行 `v0.8.128-beta.1`，正式版只有 `v0.8.127`，切回 Release 后会等待更高版本；需要立即退回时可使用现有的稳定版回退入口。切换后必须重新检查，其他通道已下载的包不能直接通过普通安装入口安装。后台更新执行期间修改策略会提示稍后重试。
 
-自动下载、自动安装仍由各自开关控制。源码构建仍需显式选择切换，Docker 部署仍由部署环境更新镜像。GitHub 不可用时现有静态清单回退可能只包含正式版，不能保证发现最新 Beta；恢复连接后重新检查。
+自动下载、自动安装仍由各自开关控制。源码构建仍需显式选择切换。Docker 一键安装默认配置独立更新助手：WebUI 的手动更新按钮会请求助手拉取镜像并重建容器，「自动重启并安装」开关默认关闭，开启后后台每 30 分钟检查一次；未安装助手时仍由部署环境更新镜像。GitHub 不可用时现有静态清单回退可能只包含正式版，不能保证发现最新 Beta；恢复连接后重新检查。
 
 ## 发布
 
@@ -40,6 +40,8 @@ Canary 标签由 CI 在合并提交上创建，标记为 GitHub Prerelease，不
 
 CI 自动将 Beta/RC 标记为 GitHub Prerelease，不设置为最新正式 Release；完整包、SHA256SUMS 和 latest.json 与正式版使用相同的构建和校验流程。latest.json 包含 prerelease 标记。中文更新说明、平台产物检查和下载校验仍按 AGENTS.md 发布要求完成。
 
-Docker 保留每个完整版本标签（及对应的 `-slim` 标签）。正式版更新 `latest` / `latest-slim`，Beta 和 RC 更新 `beta` / `beta-slim`，Canary 更新 `canary` / `canary-slim`；预发布不会覆盖 latest。需要修正或回退 `latest` / `latest-slim` 时，手动运行 `Docker Retag Latest` 工作流并填入已发布的正式版标签，它会把两个标签重新指向该版本的完整版和 slim 镜像，不重新构建。默认安装脚本仍安装正式版，完整包用户安装后可在版本面板切换 Beta；Docker 用户使用 `ghcr.io/suink/diana:beta`、`ghcr.io/suink/diana:canary` 或具体版本标签，并由原部署环境拉取和重建容器。
+Docker 保留每个完整版本标签（及对应的 `-slim` 标签）。正式版更新 `latest` / `latest-slim`，Beta 和 RC 更新 `beta` / `beta-slim`，Canary 更新 `canary` / `canary-slim`；预发布不会覆盖 latest。需要修正或回退 `latest` / `latest-slim` 时，手动运行 `Docker Retag Latest` 工作流并填入已发布的正式版标签，它会把两个标签重新指向该版本的完整版和 slim 镜像，不重新构建。默认安装脚本仍安装正式版，完整包用户安装后可在版本面板切换 Beta；Docker 用户使用 `ghcr.io/suink/diana:beta`、`ghcr.io/suink/diana:canary` 或具体版本标签。启用更新助手后，镜像由宿主机侧助手拉取并重建；否则仍由原部署环境更新。
 
 安装脚本 `scripts/docker.sh` 只在完整版和 slim 之间做选择（交互时提问，非交互默认完整版，`DIANA_VARIANT=full|slim` 可预先指定），通道固定为 Release。选定的镜像写进部署目录 `.env` 的 `DIANA_IMAGE=`，脚本重复执行不会覆盖已有取值；换通道同样改这一行，例如 `DIANA_IMAGE=ghcr.io/suink/diana:beta-slim`。
+
+Docker 一键安装脚本默认生成内部令牌并加载 `docker-compose.update.yml`；已有部署须在原目录重跑同一安装命令，手工 Compose 部署须由宿主机配置助手。可用 `DIANA_DOCKER_SELF_UPDATE=0` 省略或关闭助手。助手只监控带标签的 Diana 容器，Docker socket 不挂给主程序，HTTP 接口不映射宿主机端口。WebUI 通道必须与 `DIANA_IMAGE` 的滚动标签一致；`latest` 仅接正式版，`beta` 对应 Beta/RC，`canary` 对应 Canary，`-slim` 同理。固定版本标签不自动前进。若 Beta/Canary 通道当前最新候选是正式版，旧的 `beta`/`canary` 标签并不因此前进，版本面板会拒绝将该候选误报为可安装；要切到正式版需在部署目录改用 `latest` 后重建。Docker 镜像更新不会像完整包更新那样在健康检查失败时自动回退，需在部署主机固定旧版本标签并重建。启用助手会授予它对宿主机 Docker 的控制权，应只在可信部署中使用。

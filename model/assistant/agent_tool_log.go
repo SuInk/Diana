@@ -92,6 +92,11 @@ func (r *Runtime) agentRunObserver(event MessageEvent) agent.RunObserver {
 		if len(runEvent.Metadata) > 0 {
 			metadata["tool_metadata"] = runEvent.Metadata
 		}
+		if runEvent.Phase == agent.RunPhaseCompleted || runEvent.Phase == agent.RunPhaseFailed {
+			// 运行记录按消息汇总工具次数靠这一条：单次工具日志的 target 是工具名，
+			// 联网搜索那条还特意抹掉了消息号，拿它们数会漏。
+			metadata["tools_executed"] = runEvent.ToolsExecuted
+		}
 		actor := oneBotEventActor(event)
 		if runEvent.Tool == agent.WebSearchToolName {
 			// Search operation logs remain useful without retaining the person or
@@ -146,9 +151,22 @@ func (r *Runtime) agentRunObserver(event MessageEvent) agent.RunObserver {
 				"usage":           runEvent.Usage,
 			})
 		}
-		log.Printf("diana agent progress: trace=%s %s %s phase=%s model_turn=%d tool=%s duration_ms=%d",
-			runEvent.TraceID, progressBar, progressLabel, runEvent.Phase, runEvent.ModelTurn, runEvent.Tool, runEvent.DurationMS)
+		if agentProgressWorthProcessLog(runEvent) {
+			log.Printf("diana agent progress: trace=%s %s %s phase=%s model_turn=%d tool=%s duration_ms=%d",
+				runEvent.TraceID, progressBar, progressLabel, runEvent.Phase, runEvent.ModelTurn, runEvent.Tool, runEvent.DurationMS)
+		}
 	}
+}
+
+// agentProgressWorthProcessLog 决定这一步要不要再往进程日志里写一行。
+//
+// 每一步都已经完整记进操作日志（上面的 AppendLog）和调试追踪，进程日志这一行只是
+// 给翻文件的人看个节奏。「工具调用开始」紧跟着的就是同一个工具的「调用完成」，后者
+// 带着工具名和耗时，前者在进程日志里只是重复（线上 3 天约 7000 行 agent progress，
+// 每次工具调用都占两行）。工具卡住时开始那条仍在操作日志和调试追踪里，查得到是哪个
+// 工具没返回；运行开始、每轮模型、协议修正、工具完成、结束和失败照旧写。
+func agentProgressWorthProcessLog(runEvent agent.RunEvent) bool {
+	return runEvent.Phase != agent.RunPhaseToolStarted
 }
 
 func sanitizePlatformDebugToolCall(input map[string]any, output string) (map[string]any, string) {

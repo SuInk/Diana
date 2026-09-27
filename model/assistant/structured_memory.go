@@ -183,6 +183,11 @@ type MemoryJob struct {
 	ID       string
 	Payload  MemoryJobPayload
 	Attempts int
+	// LastError 是上一次失败留下的原始报错，放弃任务时写进日志详情。
+	LastError string
+	// ConsecutiveTimeouts 是到这次领取为止连续超时的次数，由 MemoryJobTimeoutRetrier
+	// 维护；存储没实现它时恒为 0，只按 Attempts 放弃。
+	ConsecutiveTimeouts int
 }
 
 // StructuredMemoryStore keeps extraction work durable and stores the derived
@@ -207,6 +212,13 @@ type MemoryJobBatchClaimer interface {
 // 次数。存储没实现它时退回 RetryMemoryJob，照常计数。
 type MemoryJobDeferrer interface {
 	DeferMemoryJob(ctx context.Context, id string, leaseOwner string, availableAt time.Time, lastError string, refundCutoff time.Time) error
+}
+
+// MemoryJobTimeoutRetrier 是可选能力：超时失败时把任务放回队列并累加连续超时次数。
+// RetryMemoryJob 负责把这个计数清零；DeferMemoryJob（上游整体不可用）不动它。
+// 存储没实现它时退回 RetryMemoryJob，超时和其他失败一样只按总次数放弃。
+type MemoryJobTimeoutRetrier interface {
+	RetryTimedOutMemoryJob(ctx context.Context, id string, leaseOwner string, availableAt time.Time, lastError string) error
 }
 
 // StructuredMemoryTouchStore 是可选能力：把「这条记忆刚刚被检索命中」写回去。

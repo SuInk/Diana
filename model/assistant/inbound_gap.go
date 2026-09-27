@@ -13,9 +13,11 @@ import (
 	"time"
 )
 
-// 断线回补有没有真的补上，光看「接口没报错」判断不了：QQ 刚登录时离线消息还没从服务器
-// 同步到本地，历史接口会老老实实返回「没有新消息」，回补照样显示完成，漏掉的消息就再也
-// 不会被补。这里用两件事兜底：
+// 断线回补有没有真的补上，光看「接口没报错」判断不了：历史接口可能老老实实返回
+// 「没有新消息」，回补照样显示完成，漏掉的消息就再也不会被补。SnowLuma 就是这样——
+// 不带锚点时它从自己最后收到的那条实时消息往回翻，断线那段根本不在范围里。群回补
+// 现在会拿库里的消息当锚点往新的方向翻（见 fetchGroupHistoryForward），但接入端各有
+// 各的脾气，这里仍用两件事兜底：
 //
 //  1. QQ 群消息的 message_seq 逐条递增。重连后每个群收到第一条实时消息时，拿它的 seq
 //     跟库里这个群上一条的 seq 比，中间缺的号（扣掉机器人自己发的）就是没补上的消息：
@@ -249,6 +251,7 @@ func (r *Runtime) verifyGroupSeqGap(ctx context.Context, store InboundEventStore
 			ProfileID:     event.ProfileID,
 			LastEventTime: gap.PreviousTime,
 		}
+		session = r.withGroupHistoryAnchors(ctx, store, session)
 		if events, fetchErr := r.fetchHistorySerialized(ctx, session); fetchErr != nil {
 			if ctx.Err() == nil {
 				log.Printf("diana inbound seq gap backfill failed: group=%s: %v", event.GroupID, fetchErr)

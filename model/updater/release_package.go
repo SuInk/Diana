@@ -63,6 +63,9 @@ type UpdatePolicy struct {
 	Channel      string `json:"channel"`
 	AutoDownload bool   `json:"auto_download"`
 	AutoInstall  bool   `json:"auto_install"`
+	// DockerAutoInstall is separate so a policy saved by a package deployment
+	// cannot silently start recreating Docker containers after migration.
+	DockerAutoInstall bool `json:"docker_auto_install"`
 	// GitHubMirror 是下载加速策略：auto（实测挑线路）、direct（始终直连），
 	// 或者一条具体的镜像地址。空值按 auto 处理，老配置升级上来不用迁移。
 	GitHubMirror string `json:"github_mirror,omitempty"`

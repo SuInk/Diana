@@ -213,29 +213,34 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 		MaxToolCalls:   r.cfg.MaxSteps,
 		AvailableTools: r.registry.Catalog(0),
 	})
+	// finalizeFields 是最后一次收尾动作带的调用方字段；只有正常收尾才交出去，
+	// 静默和失败时不交（见 finishSilent），免得没说话却单独冒出一张表情包。
+	var finalizeFields map[string]string
 	finish := func(text, reason string) *Response {
 		duration := time.Since(startedAt)
 		response := &Response{
-			Text:         strings.TrimSpace(text),
-			Steps:        steps,
-			Provider:     lastProvider,
-			Model:        lastModel,
-			Usage:        usage,
-			TraceID:      traceID,
-			ModelTurns:   modelTurns,
-			FinishReason: reason,
-			DurationMS:   duration.Milliseconds(),
-			Claims:       claimLedger.traces(),
+			FinalizeFields: finalizeFields,
+			Text:           strings.TrimSpace(text),
+			Steps:          steps,
+			Provider:       lastProvider,
+			Model:          lastModel,
+			Usage:          usage,
+			TraceID:        traceID,
+			ModelTurns:     modelTurns,
+			FinishReason:   reason,
+			DurationMS:     duration.Milliseconds(),
+			Claims:         claimLedger.traces(),
 		}
 		emitRunEvent(ctx, req.Observer, RunEvent{
-			TraceID:      traceID,
-			Phase:        RunPhaseCompleted,
-			ModelTurn:    modelTurns,
-			ToolCall:     toolCalls,
-			MaxToolCalls: r.cfg.MaxSteps,
-			DurationMS:   duration.Milliseconds(),
-			FinishReason: reason,
-			Usage:        usage,
+			TraceID:       traceID,
+			Phase:         RunPhaseCompleted,
+			ModelTurn:     modelTurns,
+			ToolCall:      toolCalls,
+			ToolsExecuted: toolCalls + toolLoadCalls + introspectionCalls,
+			MaxToolCalls:  r.cfg.MaxSteps,
+			DurationMS:    duration.Milliseconds(),
+			FinishReason:  reason,
+			Usage:         usage,
 		})
 		return response
 	}
@@ -243,20 +248,22 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 	// Text 保持为空，由 Silent 告诉调用方「这是模型的决定，不是生成失败」。
 	finishSilent := func(silentReason, reason string) *Response {
 		response := finish("", reason)
+		response.FinalizeFields = nil
 		response.Silent = true
 		response.SilentReason = strings.TrimSpace(silentReason)
 		return response
 	}
 	fail := func(err error) (*Response, error) {
 		emitRunEvent(ctx, req.Observer, RunEvent{
-			TraceID:      traceID,
-			Phase:        RunPhaseFailed,
-			ModelTurn:    modelTurns,
-			ToolCall:     toolCalls,
-			MaxToolCalls: r.cfg.MaxSteps,
-			DurationMS:   time.Since(startedAt).Milliseconds(),
-			Error:        err.Error(),
-			Usage:        usage,
+			TraceID:       traceID,
+			Phase:         RunPhaseFailed,
+			ModelTurn:     modelTurns,
+			ToolCall:      toolCalls,
+			ToolsExecuted: toolCalls + toolLoadCalls + introspectionCalls,
+			MaxToolCalls:  r.cfg.MaxSteps,
+			DurationMS:    time.Since(startedAt).Milliseconds(),
+			Error:         err.Error(),
+			Usage:         usage,
 		})
 		return nil, err
 	}
@@ -405,6 +412,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 			return finish(action.Content, "plain_text"), nil
 		}
 		if action.Action == "final" {
+			finalizeFields = r.finalizeFieldValues(action)
 			if action.Silent {
 				// 图片任务已经受理时不许闭嘴：这一轮必须让用户知道图在画。
 				if imageTaskQueued {
@@ -795,7 +803,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 	if nativeProtocol {
 		// 故意不带其他工具，模型无法再开新工作；同时强制收尾工具，让这一轮的
 		// 结构由供应商的解码语法保证，而不是靠手写 JSON 信封。
-		finalizationRequest.Tools = []llm.ToolDefinition{finalizeToolDefinition(claimLedger, imageTaskQueued)}
+		finalizationRequest.Tools = []llm.ToolDefinition{finalizeToolDefinition(claimLedger, imageTaskQueued, r.cfg.FinalizeFields...)}
 		finalizationRequest.ToolChoice = finalizeToolName
 	}
 	modelStartedAt := time.Now()
@@ -823,6 +831,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 	})
 	if call, found := findFinalizeCall(resp.ToolCalls); found {
 		action := finalizeAction(call, finalText)
+		finalizeFields = r.finalizeFieldValues(action)
 		if action.Silent && !imageTaskQueued {
 			return finishSilent(action.SilentReason, finishReason), nil
 		}
@@ -1321,6 +1330,23 @@ func formatAgentUTCOffset(offsetSeconds int) string {
 	return fmt.Sprintf("%s%02d:%02d", sign, offsetSeconds/3600, (offsetSeconds%3600)/60)
 }
 
+// finalizeFieldValues 只留下调用方在 Config.FinalizeFields 里声明过的字段。
+func (r *Runner) finalizeFieldValues(action llmAction) map[string]string {
+	if len(action.Fields) == 0 || len(r.cfg.FinalizeFields) == 0 {
+		return nil
+	}
+	values := map[string]string{}
+	for _, field := range r.cfg.FinalizeFields {
+		if value, ok := action.Fields[field.Name]; ok {
+			values[field.Name] = value
+		}
+	}
+	if len(values) == 0 {
+		return nil
+	}
+	return values
+}
+
 type llmAction struct {
 	Action    string         `json:"action"`
 	Type      string         `json:"type,omitempty"`
@@ -1338,6 +1364,8 @@ type llmAction struct {
 	// 这个词只是一个词，不是一次决定。
 	Silent       bool   `json:"silent,omitempty"`
 	SilentReason string `json:"silent_reason,omitempty"`
+	// Fields 是原生 agent_finalize 调用里信封以外的非空字符串字段，按 Config.FinalizeFields 过滤后交给调用方。
+	Fields map[string]string `json:"-"`
 	// Salvaged 标记正文是从被网关渲染坏的收尾信封里救回来的，不是模型按协议
 	// 写出来的 content。这种正文不再按信封的换行约定校验。模型不能自己声明。
 	Salvaged bool `json:"-"`

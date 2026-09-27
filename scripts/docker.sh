@@ -76,7 +76,7 @@ if [ -z "$variant" ] && [ -t 0 ]; then
     '  1) 完整版 —— 预装 Chromium、中文字体、ffmpeg、yt-dlp、tesseract，网页渲染、截图、媒体下载和 OCR 开箱可用' \
     '  2) 基础版 —— 以上都不装，体积约为完整版的五分之一，适合不需要这些能力的部署'
   if [ -n "$current" ]; then
-    printf '%s\n' "当前部署用的是$default_label，直接回车保持不变。"
+    printf '%s\n' "当前部署用的是${default_label}，直接回车保持不变。"
   fi
   printf '请输入 1 或 2 [%s]: ' "$default"
   reply=''
@@ -91,7 +91,7 @@ fi
 
 if [ -z "$variant" ] && [ -n "$current" ]; then
   variant=keep
-  printf '%s\n' "沿用 .env 里已有的镜像：$current（改用另一种：在终端里重新运行本脚本，或设 DIANA_VARIANT=full|slim）"
+  printf '%s\n' "沿用 .env 里已有的镜像：${current}（改用另一种：在终端里重新运行本脚本，或设 DIANA_VARIANT=full|slim）"
 fi
 
 [ -n "$variant" ] || variant=full
@@ -110,12 +110,47 @@ if [ "$variant" != keep ]; then
   fi
   printf 'DIANA_IMAGE=%s\n' "$image" >> "$stage/env"
   mv "$stage/env" .env
-  printf '%s\n' "镜像：$image（改用另一种：重新运行本脚本，或直接改 .env 里的 DIANA_IMAGE）"
+  printf '%s\n' "镜像：${image}（改用另一种：重新运行本脚本，或直接改 .env 里的 DIANA_IMAGE）"
 fi
 
-docker compose -f docker-compose.yml config --quiet
-docker compose -f docker-compose.yml pull
-docker compose -f docker-compose.yml up -d
+current_update_token=''
+if [ -f .env ]; then
+  current_update_token=$(sed -n 's/^[[:space:]]*DIANA_DOCKER_UPDATE_TOKEN[[:space:]]*=[[:space:]]*//p' .env | tail -n 1)
+fi
+self_update=${DIANA_DOCKER_SELF_UPDATE:-1}
+case "$self_update" in
+  0 | 1) ;;
+  *) fail 'DIANA_DOCKER_SELF_UPDATE 只能是 0 或 1。' ;;
+esac
+if [ "$self_update" = 1 ]; then
+  if [ ! -f docker-compose.update.yml ]; then
+    curl -fsSL "$base/docker-compose.update.yml" -o "$stage/docker-compose.update.yml"
+    mv "$stage/docker-compose.update.yml" docker-compose.update.yml
+  fi
+  if [ -z "$current_update_token" ]; then
+    # The token is shared only by Diana and its unexposed update helper.
+    current_update_token=$(od -An -N32 -tx1 /dev/urandom | tr -d '[:space:]')
+    [ ${#current_update_token} -eq 64 ] || fail '无法生成 Docker 更新凭据。'
+    umask 077
+    printf 'DIANA_DOCKER_UPDATE_TOKEN=%s\n' "$current_update_token" >> .env
+  fi
+  chmod 600 .env
+  set -- -f docker-compose.yml -f docker-compose.update.yml
+else
+  if [ -n "$current_update_token" ] && [ -f docker-compose.update.yml ]; then
+    docker compose -f docker-compose.yml -f docker-compose.update.yml rm --stop --force diana-updater
+  fi
+  set -- -f docker-compose.yml
+fi
+
+docker compose "$@" config --quiet
+docker compose "$@" pull
+docker compose "$@" up -d
 printf '\n%s\n' 'Diana 已启动。默认控制台：http://localhost:18080' \
-  '查看账号密码：docker compose -f docker-compose.yml logs diana' \
-  '以后在此目录更新：docker compose -f docker-compose.yml pull && docker compose -f docker-compose.yml up -d'
+  '查看账号密码：docker compose -f docker-compose.yml logs diana'
+if [ "$self_update" = 1 ]; then
+  printf '%s\n' 'Docker 自更新助手已启用；可在版本面板手动更新，或开启「自动重启并安装」。'
+  printf '%s\n' '以后在此目录更新：docker compose -f docker-compose.yml -f docker-compose.update.yml pull && docker compose -f docker-compose.yml -f docker-compose.update.yml up -d'
+else
+  printf '%s\n' '以后在此目录更新：docker compose -f docker-compose.yml pull && docker compose -f docker-compose.yml up -d'
+fi
