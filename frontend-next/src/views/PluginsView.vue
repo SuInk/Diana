@@ -245,13 +245,6 @@
       </div>
 
       <template v-if="isGitHubSettings && githubSettingsTab === 'config'">
-        <div class="plugin-settings-section-head">
-          <h3>GitHub 认证</h3>
-          <p>
-            每条凭据对应一个 GitHub 账号，在「仓库管理」里为仓库选用；点「检测账号」看每条凭据实际登录的是谁。
-            <a class="token-create-link" href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noreferrer"><ExternalLink :size="13" aria-hidden="true" />创建 Token</a>
-          </p>
-        </div>
         <RepositoryCredentialEditor
           ref="credentialEditor"
           :credentials="credentialList"
@@ -679,7 +672,7 @@ async function changeExtensionTab(value:ExtensionTab) {
   if (settingsTarget.value) { await closeSettings(); if (settingsTarget.value) return; }
   extensionTab.value=value;
 }
-import { ArrowRight, ChevronDown, Download, ExternalLink, LayoutGrid, RefreshCw, Rows3, Search, SlidersHorizontal } from "@lucide/vue";
+import { ArrowRight, ChevronDown, Download, LayoutGrid, RefreshCw, Rows3, Search, SlidersHorizontal } from "@lucide/vue";
 import {
   installPlugin,
   installRepoPlugin,
@@ -1339,6 +1332,7 @@ function settingsDirty(): boolean {
   // 仓库编辑器的改动不在 settingsForm 里，漏掉它就会从弹窗右上角静默关掉一整屏配置。
   if (repositoryWatchRef.value?.hasUnsavedChanges()) return true;
   if (rssWatchRef.value?.hasUnsavedChanges()) return true;
+  if (credentialEditor.value?.hasUnsavedChanges()) return true;
   return settingsSnapshot() !== openedSnapshot.value;
 }
 
@@ -1438,6 +1432,10 @@ function buildSettingsPayload(specs = settingsSpecs.value, form = settingsForm.v
 async function persistSettings(closeAfterSave: boolean): Promise<void> {
   const target = settingsTarget.value;
   if (!target) {
+    return;
+  }
+  // 凭据表单还开着时先收进草稿（和点「完成」一样），名称没填就停下，弹窗保持打开。
+  if (isGitHubSettings.value && credentialEditor.value && !credentialEditor.value.commitEditing()) {
     return;
   }
   savingSettings.value = true;

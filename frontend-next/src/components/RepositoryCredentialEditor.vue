@@ -2,123 +2,127 @@
      Licensed under the Limited Redistribution License in the repository root. -->
 
 <template>
-  <div class="stack credential-editor" style="gap: 8px">
-    <div class="credential-toolbar">
-      <span class="hint">{{ credentials.length + 1 }} 条凭据 · 没单独选凭据的仓库用默认凭据</span>
-      <div class="cluster" style="gap: 6px">
+  <section class="repository-watch-manager credential-manager">
+    <div class="repository-watch-manager-head">
+      <div>
+        <h3>GitHub 凭据</h3>
+        <p>
+          每条凭据对应一个 GitHub 账号；没在「仓库管理」里单独选凭据的仓库都用默认凭据。
+          <a class="token-create-link" href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noreferrer"><ExternalLink :size="13" aria-hidden="true" />创建 Token</a>
+        </p>
+      </div>
+      <div class="cluster" style="gap: 7px; flex-wrap: nowrap">
         <button class="btn small" type="button" :disabled="testing" @click="emit('test')">
-          <UserCheck :size="14" aria-hidden="true" />
-          {{ testing ? "检测中…" : "检测账号" }}
+          <LoaderCircle v-if="testing" :size="14" class="spin" aria-hidden="true" />
+          <UserCheck v-else :size="14" aria-hidden="true" />
+          检测账号
         </button>
-        <button class="btn small" type="button" @click="addCredential">
-          <Plus :size="14" aria-hidden="true" />
-          添加凭据
-        </button>
+        <button class="btn small primary" type="button" @click="startCreate"><Plus :size="14" aria-hidden="true" />添加凭据</button>
       </div>
     </div>
 
-    <ul class="credential-list">
-      <li class="credential-item" :class="{ open: expanded.has('default') }">
-        <div class="credential-summary">
-          <button class="credential-summary-main" type="button" :aria-expanded="expanded.has('default')" @click="toggle('default')">
-            <ChevronRight :size="14" class="credential-chevron" aria-hidden="true" />
-            <span class="credential-name">默认凭据</span>
-            <span class="badge">默认</span>
-            <span class="credential-meta">{{ defaultMeta }}</span>
-          </button>
-          <span v-if="checkOf('default')" :class="['badge', 'credential-account', checkTone(checkOf('default'))]" :title="checkOf('default')?.message">{{ checkLabel(checkOf('default')) }}</span>
-          <!-- 默认凭据不能删，放一个隐形按钮占住同样的宽度，让各行的账号标签对齐。 -->
-          <span class="btn small ghost icon-only credential-action-spacer" aria-hidden="true"><Trash2 :size="14" /></span>
+    <form v-if="editingKey" class="repository-watch-editor" @submit.prevent="commitEditing">
+      <div class="form-grid repository-watch-form">
+        <div class="field">
+          <label for="credential-name">名称</label>
+          <input
+            id="credential-name"
+            v-model.trim="form.name"
+            class="input"
+            type="text"
+            :disabled="editingKey === defaultKey"
+            placeholder="例如「组织 Token」「个人账号」"
+          />
+          <span class="hint">{{ editingKey === defaultKey ? "默认凭据不能改名，也不能删除。" : "只用来区分凭据，在「仓库管理」里按这个名字选。" }}</span>
         </div>
-        <div v-if="expanded.has('default')" class="credential-body">
-          <div class="credential-fields">
-            <input class="input" type="text" value="默认凭据" disabled aria-label="默认凭据的名称" title="默认凭据不能改名" />
-            <AppSelect
-              :model-value="defaultAuth || 'token'"
-              :options="defaultAuthOptions"
-              aria-label="默认凭据的认证方式"
-              @update:model-value="emit('update:default-auth', String($event))"
-            />
+        <div class="field">
+          <label>认证方式</label>
+          <div class="segmented repository-watch-destination" role="radiogroup" aria-label="认证方式">
+            <button
+              v-for="option in formAuthOptions"
+              :key="option.value"
+              type="button"
+              role="radio"
+              :aria-checked="form.auth === option.value"
+              :class="{ active: form.auth === option.value }"
+              @click="form.auth = option.value"
+            >{{ option.label }}</button>
           </div>
-          <div v-if="defaultAuth !== 'gh'" class="credential-secret">
+          <span class="hint">{{ authHint }}</span>
+        </div>
+        <div v-if="form.auth !== 'gh'" class="field wide">
+          <label for="credential-token">GitHub Token</label>
+          <div class="credential-secret">
             <input
-              :value="defaultToken"
+              id="credential-token"
+              v-model="form.token"
               class="input"
               type="password"
               autocomplete="off"
-              :disabled="defaultClearing"
-              :placeholder="defaultTokenPlaceholder"
-              aria-label="默认凭据的 Token"
-              @input="emit('update:default-token', ($event.target as HTMLInputElement).value)"
+              :disabled="form.clearing"
+              :placeholder="formTokenPlaceholder"
             />
-            <button v-if="defaultTokenConfigured" class="btn small ghost" type="button" @click="emit('toggle-clear-default')">
-              {{ defaultClearing ? "撤销清除" : "清除" }}
+            <button v-if="formTokenConfigured" class="btn small ghost" type="button" @click="form.clearing = !form.clearing">
+              {{ form.clearing ? "撤销清除" : "清除" }}
             </button>
           </div>
-          <span class="hint">{{ defaultAuthHint }}</span>
-          <span v-if="checkOf('default')?.message" class="hint">{{ checkOf('default')?.message }}</span>
+          <span class="hint">Fine-grained token 只访问选定仓库，适合按仓库最小授权；Classic token 范围更大。保存后不会回显。</span>
         </div>
-      </li>
+      </div>
+      <div class="repository-watch-editor-actions">
+        <button class="btn small" type="button" @click="stopEditing">取消</button>
+        <button class="btn small primary" type="submit">{{ editingKey === newKey ? "添加" : "完成" }}</button>
+      </div>
+    </form>
 
-      <li v-for="(item, index) in credentials" :key="item.id" class="credential-item" :class="{ open: expanded.has(item.id) }">
-        <div class="credential-summary">
-          <button class="credential-summary-main" type="button" :aria-expanded="expanded.has(item.id)" @click="toggle(item.id)">
-            <ChevronRight :size="14" class="credential-chevron" aria-hidden="true" />
-            <span class="credential-name" :class="{ placeholder: !item.name }">{{ item.name || "未命名凭据" }}</span>
-            <span class="credential-meta">{{ credentialMeta(item) }}</span>
-          </button>
-          <span v-if="checkOf(item.id)" :class="['badge', 'credential-account', checkTone(checkOf(item.id))]" :title="checkOf(item.id)?.message">{{ checkLabel(checkOf(item.id)) }}</span>
-          <button
-            class="btn small ghost danger icon-only"
-            type="button"
-            :title="`删除凭据 ${item.name || item.id}`"
-            :aria-label="`删除凭据 ${item.name || item.id}`"
-            @click="removeCredential(index)"
-          >
-            <Trash2 :size="14" aria-hidden="true" />
-          </button>
-        </div>
-        <div v-if="expanded.has(item.id)" class="credential-body">
-          <div class="credential-fields">
-            <input
-              v-model.trim="item.name"
-              class="input"
-              type="text"
-              placeholder="凭据名称，例如「组织 Token」"
-              :aria-label="`第 ${index + 1} 条凭据的名称`"
-              @input="emitCredentials"
-            />
-            <AppSelect
-              v-model="item.auth"
-              :options="authOptions"
-              :aria-label="`第 ${index + 1} 条凭据的认证方式`"
-              @update:model-value="emitCredentials"
-            />
+    <div class="repository-watch-manager-list">
+      <article class="repository-watch-manager-item">
+        <div class="repository-watch-manager-main">
+          <div class="cluster">
+            <strong>默认凭据</strong>
+            <span class="badge accent">默认</span>
+            <span class="badge">{{ authLabel(defaultAuth || "token", true) }}</span>
+            <span v-if="checkOf(defaultKey)" :class="['badge', checkTone(checkOf(defaultKey))]">{{ checkLabel(checkOf(defaultKey)) }}</span>
           </div>
-          <div v-if="item.auth !== 'gh'" class="credential-secret">
-            <input
-              v-model="tokenDrafts[item.id]"
-              class="input"
-              type="password"
-              autocomplete="off"
-              :placeholder="tokenPlaceholder(item.id)"
-              :aria-label="`第 ${index + 1} 条凭据的 Token`"
-              @input="emitTokens"
-            />
+          <div class="task-facts">
+            <span>{{ defaultTokenState }}</span>
+            <span>兜底所有未单独选凭据的仓库</span>
           </div>
-          <span v-else class="hint">使用服务器上已登录的 GitHub CLI（gh auth login），不需要填 Token。</span>
-          <span v-if="checkOf(item.id)?.message" class="hint">{{ checkOf(item.id)?.message }}</span>
+          <p v-if="checkOf(defaultKey)?.message" :class="checkMessageClass(checkOf(defaultKey))">{{ checkOf(defaultKey)?.message }}</p>
         </div>
-      </li>
-    </ul>
-  </div>
+        <div class="repository-watch-manager-actions">
+          <button class="btn small" type="button" @click="startEdit(defaultKey)"><Pencil :size="14" aria-hidden="true" />编辑</button>
+        </div>
+      </article>
+
+      <article v-for="item in credentials" :key="item.id" class="repository-watch-manager-item">
+        <div class="repository-watch-manager-main">
+          <div class="cluster">
+            <strong>{{ item.name || "未命名凭据" }}</strong>
+            <span class="badge">{{ authLabel(item.auth, false) }}</span>
+            <span v-if="checkOf(item.id)" :class="['badge', checkTone(checkOf(item.id))]">{{ checkLabel(checkOf(item.id)) }}</span>
+          </div>
+          <div class="task-facts">
+            <span v-if="item.auth !== 'gh'">{{ tokenState(item.id) }}</span>
+            <span>{{ usageOf(item.id) || "还没有仓库选用" }}</span>
+          </div>
+          <p v-if="checkOf(item.id)?.message" :class="checkMessageClass(checkOf(item.id))">{{ checkOf(item.id)?.message }}</p>
+        </div>
+        <div class="repository-watch-manager-actions">
+          <button class="btn small" type="button" @click="startEdit(item.id)"><Pencil :size="14" aria-hidden="true" />编辑</button>
+          <button class="btn small ghost danger" type="button" @click="removeCredential(item.id)"><Trash2 :size="14" aria-hidden="true" />删除</button>
+        </div>
+      </article>
+    </div>
+  </section>
 </template>
 
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
-import { ChevronRight, Plus, Trash2, UserCheck } from "@lucide/vue";
-import AppSelect from "./AppSelect.vue";
+import { ExternalLink, LoaderCircle, Pencil, Plus, Trash2, UserCheck } from "@lucide/vue";
 import type { CredentialCheck } from "../api";
+import { askConfirm } from "../confirm";
+import { toastError } from "../toast";
 
 interface Credential {
   id: string;
@@ -149,50 +153,134 @@ const emit = defineEmits<{
   test: [];
 }>();
 
-const defaultAuthOptions = [
-  { value: "token", label: "Token" },
-  { value: "gh", label: "服务器 gh CLI" },
-  { value: "auto", label: "自动（有 Token 用 Token，否则 gh）" }
-];
+const defaultKey = "default";
+const newKey = "__new__";
 
-const defaultTokenPlaceholder = computed(() => {
-  if (props.defaultClearing) return "保存后将清除";
-  return props.defaultTokenConfigured ? "已配置 — 留空沿用，填写则覆盖" : "填写 GitHub Token";
+const credentials = ref<Credential[]>([]);
+// Token 是密钥，后端不会回显；这里只收本次输入的新值，留空表示沿用已存的。
+const tokenDrafts = ref<Record<string, string>>({});
+// 本次弹窗里被删掉、且服务端存过 Token 的凭据 ID；保存时要连 Token 一起清掉。
+const removedIDs = ref<Set<string>>(new Set());
+
+watch(
+  () => props.credentials,
+  (value) => {
+    credentials.value = (value ?? []).map((item) => ({ ...item }));
+  },
+  { immediate: true, deep: true }
+);
+
+const configured = computed(() => new Set(props.configuredIds ?? []));
+
+// 编辑表单：和 RSS 订阅一样，列表只展示，点「编辑」或「添加」才打开表单；
+// 「完成」只改本地草稿，真正落库仍然跟着弹窗底部的「保存」。
+const editingKey = ref("");
+const form = ref({ name: "", auth: "token", token: "", clearing: false });
+
+const formAuthOptions = computed(() => {
+  const options = [
+    { value: "token", label: "Token" },
+    { value: "gh", label: "服务器 gh" }
+  ];
+  // 「自动」只对默认凭据有意义：有 Token 用 Token，没有再退回 gh。
+  if (editingKey.value === defaultKey) options.push({ value: "auto", label: "自动" });
+  return options;
 });
 
-// 仓库更新检查是后台任务，不调用 gh；选 gh 时要说清它那边的去向。
-const defaultAuthHint = computed(() => {
-  switch (props.defaultAuth) {
+const authHint = computed(() => {
+  const isDefault = editingKey.value === defaultKey;
+  switch (form.value.auth) {
     case "gh":
-      return "Issue、PR 操作使用服务器上 gh 登录的账号；仓库更新检查不走 gh，会匿名读取公开仓库。";
+      return isDefault
+        ? "Issue、PR 操作使用服务器上 gh 登录的账号；仓库更新检查不走 gh，会匿名读取公开仓库。"
+        : "使用服务器上已登录的 GitHub CLI（gh auth login），不需要填 Token。";
     case "auto":
       return "填了 Token 就用 Token，没填时 Issue、PR 操作改用服务器 gh；仓库更新检查只用 Token。";
     default:
-      return "仓库更新检查和 Issue、PR 操作都用这个 Token；不填时公开仓库匿名读取，请求额度较低。";
+      return isDefault
+        ? "仓库更新检查和 Issue、PR 操作都用这个 Token；不填时公开仓库匿名读取，请求额度较低。"
+        : "绑定到这条凭据的仓库用这个 Token 访问 GitHub。";
   }
 });
 
-// 列表默认只显示摘要，点开一行才编辑；新加的凭据直接展开。
-const expanded = ref<Set<string>>(new Set());
-
-function toggle(id: string): void {
-  const next = new Set(expanded.value);
-  if (next.has(id)) next.delete(id);
-  else next.add(id);
-  expanded.value = next;
-}
-
-const defaultMeta = computed(() => {
-  if (props.defaultAuth === "gh") return "服务器 gh CLI";
-  const token = props.defaultClearing ? "保存后清除 Token" : props.defaultToken?.trim() ? "Token 待保存" : props.defaultTokenConfigured ? "Token 已配置" : "未填 Token";
-  return props.defaultAuth === "auto" ? `自动 · ${token}` : token;
+const formTokenConfigured = computed(() => {
+  if (editingKey.value === defaultKey) return Boolean(props.defaultTokenConfigured);
+  return editingKey.value !== newKey && configured.value.has(editingKey.value);
 });
 
-function credentialMeta(item: Credential): string {
-  const parts = [item.auth === "gh" ? "服务器 gh CLI" : tokenDrafts.value[item.id]?.trim() ? "Token 待保存" : configured.value.has(item.id) ? "Token 已配置" : "未填 Token"];
-  const usage = usageOf(item.id);
-  if (usage) parts.push(usage);
-  return parts.join(" · ");
+const formTokenPlaceholder = computed(() => {
+  if (form.value.clearing) return "保存后将清除";
+  return formTokenConfigured.value ? "已配置 — 留空沿用，填写则覆盖" : "填写 GitHub Token";
+});
+
+function startCreate(): void {
+  editingKey.value = newKey;
+  form.value = { name: "", auth: "token", token: "", clearing: false };
+}
+
+function startEdit(key: string): void {
+  editingKey.value = key;
+  if (key === defaultKey) {
+    form.value = { name: "默认凭据", auth: props.defaultAuth || "token", token: props.defaultToken ?? "", clearing: Boolean(props.defaultClearing) };
+    return;
+  }
+  const item = credentials.value.find((entry) => entry.id === key);
+  form.value = { name: item?.name ?? "", auth: item?.auth ?? "token", token: tokenDrafts.value[key] ?? "", clearing: removedIDs.value.has(key) };
+}
+
+function stopEditing(): void {
+  editingKey.value = "";
+}
+
+function commitEditing(): boolean {
+  const key = editingKey.value;
+  if (!key) return true;
+  if (key === defaultKey) {
+    emit("update:default-auth", form.value.auth);
+    emit("update:default-token", form.value.clearing ? "" : form.value.token);
+    if (form.value.clearing !== Boolean(props.defaultClearing)) emit("toggle-clear-default");
+    editingKey.value = "";
+    return true;
+  }
+  if (!form.value.name) {
+    toastError("请填写凭据名称");
+    return false;
+  }
+  if (key === newKey) {
+    const id = newCredentialID();
+    credentials.value.push({ id, name: form.value.name, auth: form.value.auth });
+    if (form.value.auth !== "gh" && form.value.token.trim()) tokenDrafts.value[id] = form.value.token;
+  } else {
+    const item = credentials.value.find((entry) => entry.id === key);
+    if (item) {
+      item.name = form.value.name;
+      item.auth = form.value.auth;
+    }
+    if (form.value.clearing) {
+      delete tokenDrafts.value[key];
+      removedIDs.value.add(key);
+    } else {
+      removedIDs.value.delete(key);
+      if (form.value.token.trim()) tokenDrafts.value[key] = form.value.token;
+      else delete tokenDrafts.value[key];
+    }
+  }
+  emitCredentials();
+  emitTokens();
+  editingKey.value = "";
+  return true;
+}
+
+// 表单还开着且改过内容时，外层「保存」要先把它收进草稿，否则点了保存却没生效。
+function editorDirty(): boolean {
+  const key = editingKey.value;
+  if (!key) return false;
+  if (key === newKey) return Boolean(form.value.name || form.value.token);
+  if (key === defaultKey) {
+    return form.value.auth !== (props.defaultAuth || "token") || form.value.token !== (props.defaultToken ?? "") || form.value.clearing !== Boolean(props.defaultClearing);
+  }
+  const item = credentials.value.find((entry) => entry.id === key);
+  return form.value.name !== (item?.name ?? "") || form.value.auth !== (item?.auth ?? "token") || form.value.token !== (tokenDrafts.value[key] ?? "") || form.value.clearing !== removedIDs.value.has(key);
 }
 
 const checksByKey = computed(() => new Map((props.checks ?? []).map((check) => [check.key, check])));
@@ -228,35 +316,33 @@ function checkLabel(check: CredentialCheck | undefined): string {
   }
 }
 
-const authOptions = [
-  { value: "token", label: "Token" },
-  { value: "gh", label: "服务器 gh CLI" }
-];
+function checkMessageClass(check: CredentialCheck | undefined): string {
+  return check?.state === "invalid" ? "repository-watch-manager-error" : "credential-check-message";
+}
 
-const credentials = ref<Credential[]>([]);
-// Token 是密钥，后端不会回显；这里只收本次输入的新值，留空表示沿用已存的。
-const tokenDrafts = ref<Record<string, string>>({});
+function authLabel(auth: string, isDefault: boolean): string {
+  if (auth === "gh") return "服务器 gh";
+  if (auth === "auto" && isDefault) return "自动";
+  return "Token";
+}
 
-watch(
-  () => props.credentials,
-  (value) => {
-    credentials.value = (value ?? []).map((item) => ({ ...item }));
-  },
-  { immediate: true, deep: true }
-);
+const defaultTokenState = computed(() => {
+  if (props.defaultAuth === "gh") return "不使用 Token";
+  if (props.defaultClearing) return "保存后清除 Token";
+  if (props.defaultToken?.trim()) return "Token 待保存";
+  return props.defaultTokenConfigured ? "Token 已配置" : "未填 Token";
+});
 
-const configured = computed(() => new Set(props.configuredIds ?? []));
-// 本次弹窗里被删掉、且服务端存过 Token 的凭据 ID；保存时要连 Token 一起清掉。
-const removedIDs = ref<Set<string>>(new Set());
+function tokenState(id: string): string {
+  if (removedIDs.value.has(id)) return "保存后清除 Token";
+  if (tokenDrafts.value[id]?.trim()) return "Token 待保存";
+  return configured.value.has(id) ? "Token 已配置" : "未填 Token";
+}
 
 // 统计每条凭据被多少个仓库选用，删除前能看出影响面。
 function usageOf(id: string): string {
   const count = Object.values(props.repositoryCredentials ?? {}).filter((value) => value === id).length;
   return count > 0 ? `${count} 个仓库在用` : "";
-}
-
-function tokenPlaceholder(id: string): string {
-  return configured.value.has(id) ? "已配置 — 留空沿用，填写则覆盖" : "填写 GitHub Token";
 }
 
 function newCredentialID(): string {
@@ -265,31 +351,33 @@ function newCredentialID(): string {
   return `cred-${Date.now().toString(36)}-${random}`;
 }
 
-function addCredential(): void {
-  const id = newCredentialID();
-  credentials.value.push({ id, name: "", auth: "token" });
-  expanded.value = new Set(expanded.value).add(id);
-  emitCredentials();
-}
-
-function removeCredential(index: number): void {
-  const [removed] = credentials.value.splice(index, 1);
-  if (removed) {
-    delete tokenDrafts.value[removed.id];
-    // 删掉的凭据要显式提交一次空串，后端才会把它的 Token 从库里删掉。
-    // 只从列表里去掉 ID 的话，明文 Token 会一直留在 github_credential_tokens 里。
-    if (configured.value.has(removed.id)) removedIDs.value.add(removed.id);
-    // 删掉凭据的同时解绑仓库，否则仓库会指向一条不存在的凭据。
-    const bindings = { ...(props.repositoryCredentials ?? {}) };
-    let changed = false;
-    for (const [repository, id] of Object.entries(bindings)) {
-      if (id === removed.id) {
-        delete bindings[repository];
-        changed = true;
-      }
+async function removeCredential(id: string): Promise<void> {
+  const item = credentials.value.find((entry) => entry.id === id);
+  if (!item) return;
+  const usage = usageOf(id);
+  const confirmed = await askConfirm({
+    title: "删除凭据",
+    message: usage ? `「${item.name || "未命名凭据"}」有 ${usage}，删除后这些仓库改用默认凭据。` : `删除「${item.name || "未命名凭据"}」？`,
+    confirmLabel: "删除",
+    danger: true
+  });
+  if (!confirmed) return;
+  credentials.value = credentials.value.filter((entry) => entry.id !== id);
+  if (editingKey.value === id) editingKey.value = "";
+  delete tokenDrafts.value[id];
+  // 删掉的凭据要显式提交一次空串，后端才会把它的 Token 从库里删掉。
+  // 只从列表里去掉 ID 的话，明文 Token 会一直留在 github_credential_tokens 里。
+  if (configured.value.has(id)) removedIDs.value.add(id);
+  // 删掉凭据的同时解绑仓库，否则仓库会指向一条不存在的凭据。
+  const bindings = { ...(props.repositoryCredentials ?? {}) };
+  let changed = false;
+  for (const [repository, boundID] of Object.entries(bindings)) {
+    if (boundID === id) {
+      delete bindings[repository];
+      changed = true;
     }
-    if (changed) emit("update:repository-credentials", bindings);
   }
+  if (changed) emit("update:repository-credentials", bindings);
   emitCredentials();
   emitTokens();
 }
@@ -310,118 +398,21 @@ function emitTokens(): void {
 }
 
 defineExpose({
+  hasUnsavedChanges: editorDirty,
+  commitEditing,
   clearDrafts(): void {
     tokenDrafts.value = {};
     removedIDs.value = new Set();
+    editingKey.value = "";
   }
 });
 </script>
 
 <style scoped>
-.credential-toolbar {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-
-.credential-list {
-  margin: 0;
-  padding: 0;
-  list-style: none;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  overflow: hidden;
-}
-
-.credential-item + .credential-item {
-  border-top: 1px solid var(--border);
-}
-
-.credential-item.open {
-  background: var(--surface-2);
-}
-
-.credential-summary {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-height: 44px;
-  padding: 4px 8px 4px 0;
-}
-
-.credential-summary-main {
-  display: flex;
-  flex: 1;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-  padding: 8px 0 8px 12px;
-  border: 0;
-  background: none;
-  color: inherit;
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-}
-
-.credential-chevron {
-  flex: 0 0 auto;
-  color: var(--muted);
-  transition: transform 0.15s ease;
-}
-
-.credential-item.open .credential-chevron {
-  transform: rotate(90deg);
-}
-
-.credential-name {
-  flex: 0 1 auto;
-  overflow: hidden;
-  font-weight: 600;
-  font-size: 13.5px;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-}
-
-.credential-name.placeholder {
-  color: var(--muted);
-  font-weight: 500;
-}
-
-.credential-meta {
-  flex: 1 1 auto;
-  overflow: hidden;
-  color: var(--muted);
-  font-size: 12.5px;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-}
-
-.credential-account {
-  flex: 0 1 auto;
-  max-width: 40%;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-}
-
-.credential-action-spacer {
-  visibility: hidden;
-}
-
-.credential-body {
-  display: grid;
-  gap: 8px;
-  padding: 0 12px 12px 34px;
-}
-
-.credential-fields {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(160px, 220px);
-  align-items: center;
-  gap: 8px;
+.credential-manager {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: none;
 }
 
 .credential-secret {
@@ -435,17 +426,9 @@ defineExpose({
   min-width: 0;
 }
 
-@media (max-width: 640px) {
-  .credential-meta {
-    display: none;
-  }
-
-  .credential-body {
-    padding-left: 12px;
-  }
-
-  .credential-fields {
-    grid-template-columns: minmax(0, 1fr);
-  }
+.credential-check-message {
+  margin: 7px 0 0;
+  color: var(--muted);
+  font-size: 12px;
 }
 </style>
