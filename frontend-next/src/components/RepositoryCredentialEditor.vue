@@ -27,18 +27,21 @@
             <span class="credential-meta">{{ defaultMeta }}</span>
           </button>
           <span v-if="checkOf('default')" :class="['badge', 'credential-account', checkTone(checkOf('default'))]" :title="checkOf('default')?.message">{{ checkLabel(checkOf('default')) }}</span>
-          <span class="credential-action-spacer" aria-hidden="true"></span>
+          <!-- 默认凭据不能删，放一个隐形按钮占住同样的宽度，让各行的账号标签对齐。 -->
+          <span class="btn small ghost icon-only credential-action-spacer" aria-hidden="true"><Trash2 :size="14" /></span>
         </div>
         <div v-if="expanded.has('default')" class="credential-body">
           <div class="credential-fields">
+            <input class="input" type="text" value="默认凭据" disabled aria-label="默认凭据的名称" title="默认凭据不能改名" />
             <AppSelect
               :model-value="defaultAuth || 'token'"
               :options="defaultAuthOptions"
               aria-label="默认凭据的认证方式"
               @update:model-value="emit('update:default-auth', String($event))"
             />
+          </div>
+          <div v-if="defaultAuth !== 'gh'" class="credential-secret">
             <input
-              v-if="defaultAuth !== 'gh'"
               :value="defaultToken"
               class="input"
               type="password"
@@ -48,7 +51,7 @@
               aria-label="默认凭据的 Token"
               @input="emit('update:default-token', ($event.target as HTMLInputElement).value)"
             />
-            <button v-if="defaultAuth !== 'gh' && defaultTokenConfigured" class="btn small ghost" type="button" @click="emit('toggle-clear-default')">
+            <button v-if="defaultTokenConfigured" class="btn small ghost" type="button" @click="emit('toggle-clear-default')">
               {{ defaultClearing ? "撤销清除" : "清除" }}
             </button>
           </div>
@@ -92,16 +95,17 @@
               @update:model-value="emitCredentials"
             />
           </div>
-          <input
-            v-if="item.auth !== 'gh'"
-            v-model="tokenDrafts[item.id]"
-            class="input"
-            type="password"
-            autocomplete="off"
-            :placeholder="tokenPlaceholder(item.id)"
-            :aria-label="`第 ${index + 1} 条凭据的 Token`"
-            @input="emitTokens"
-          />
+          <div v-if="item.auth !== 'gh'" class="credential-secret">
+            <input
+              v-model="tokenDrafts[item.id]"
+              class="input"
+              type="password"
+              autocomplete="off"
+              :placeholder="tokenPlaceholder(item.id)"
+              :aria-label="`第 ${index + 1} 条凭据的 Token`"
+              @input="emitTokens"
+            />
+          </div>
           <span v-else class="hint">使用服务器上已登录的 GitHub CLI（gh auth login），不需要填 Token。</span>
           <span v-if="checkOf(item.id)?.message" class="hint">{{ checkOf(item.id)?.message }}</span>
         </div>
@@ -404,7 +408,7 @@ defineExpose({
 }
 
 .credential-action-spacer {
-  flex: 0 0 30px;
+  visibility: hidden;
 }
 
 .credential-body {
@@ -415,17 +419,20 @@ defineExpose({
 
 .credential-fields {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 2fr) auto;
+  grid-template-columns: minmax(0, 1fr) minmax(160px, 220px);
   align-items: center;
   gap: 8px;
 }
 
-.credential-fields:has(> :nth-child(2):last-child) {
-  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+.credential-secret {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
-.credential-fields:has(> :only-child) {
-  grid-template-columns: minmax(0, 1fr);
+.credential-secret .input {
+  flex: 1;
+  min-width: 0;
 }
 
 @media (max-width: 640px) {
@@ -437,8 +444,7 @@ defineExpose({
     padding-left: 12px;
   }
 
-  .credential-fields,
-  .credential-fields:has(> :nth-child(2):last-child) {
+  .credential-fields {
     grid-template-columns: minmax(0, 1fr);
   }
 }
