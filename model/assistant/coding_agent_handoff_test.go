@@ -6,6 +6,8 @@ package assistant
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -84,5 +86,35 @@ echo '{"type":"result","subtype":"success","is_error":false,"result":"diana-cli-
 	registry.mu.Unlock()
 	if holds != 0 {
 		t.Fatalf("等待登记没撤掉：%d", holds)
+	}
+}
+
+// 几秒内就结束、结果又很长的任务：结果交给这一轮时模型只拿得到开头，全文要由
+// 代码直接发出去，否则超出的部分谁也看不到。
+func TestCodingSubmitPostsLongQuickResultInFull(t *testing.T) {
+	useTempCodingWorkspace(t)
+	report := "QUICK-START " + strings.Repeat("秒出的长结论。", 400) + " QUICK-END"
+	line, _ := json.Marshal(map[string]any{"type": "result", "subtype": "success", "is_error": false, "result": report, "num_turns": 1, "session_id": "s3"})
+	payload := filepath.Join(t.TempDir(), "result.jsonl")
+	if err := os.WriteFile(payload, append(line, '\n'), 0o600); err != nil {
+		t.Fatalf("write payload: %v", err)
+	}
+	cli := fakeCodingCLI(t, "cat "+payload)
+	rt, settings, event := codingTestRuntime(t, cli, t.TempDir())
+	result := submitCodingJob(t, newDianaCodingTool(rt, event, settings))
+
+	if result.Job == nil || !result.Job.ResultTruncated || !strings.Contains(result.Message, "全文已经由系统发到聊天里") {
+		t.Fatalf("长结果应当由代码发全文：%#v %q", result.Job, result.Message)
+	}
+	drainCodingJobs(t, rt)
+	var delivered strings.Builder
+	for _, msg := range rt.channel.(*concurrentRecordingChannel).messages() {
+		delivered.WriteString(msg.Text)
+	}
+	if !strings.Contains(delivered.String(), "QUICK-START") || !strings.Contains(delivered.String(), "QUICK-END") {
+		t.Fatalf("全文没送到")
+	}
+	if strings.Contains(delivered.String(), "已派出编码任务") {
+		t.Fatalf("窗口内结束的任务不该发受理消息")
 	}
 }

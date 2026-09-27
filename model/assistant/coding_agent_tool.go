@@ -193,6 +193,11 @@ func (t *dianaCodingTool) submit(ctx context.Context, cfg codingAgentConfig, inp
 		if finished.Status != codingJobStatusSucceeded {
 			message = "任务刚启动就结束了，没有成功，不会再单独汇报。直接把 error 照实告诉用户，不要说还在后台运行。"
 		}
+		// 结果交给这一轮时模型只拿得到开头，全文由这里直接发出去，否则超出的部分
+		// 谁也看不到。
+		if view.ResultTruncated && t.postCodingResultBody(ctx, finished.Result) {
+			message = "任务已经跑完，结果全文已经由系统发到聊天里了，不会再单独汇报。不要重贴结果，用一两句说清结论就行。"
+		}
 		return codingToolJSON(dianaCodingResult{OK: true, Operation: operation, Job: &view, Message: message})
 	}
 	message := fmt.Sprintf("任务已在后台启动，跑完我会主动汇报。期间可以用 status %s 查进度。", job.ID)
@@ -217,6 +222,19 @@ func (t *dianaCodingTool) announceCodingJob(ctx context.Context, text string) bo
 		return false
 	}
 	// 话已经出去了：这一轮不能再被合并重来，否则重新生成时会把受理消息再发一遍。
+	t.runtime.sealDirectReply(ctx)
+	if typing := typingIndicatorFromContext(ctx); typing != nil {
+		typing.resume()
+	}
+	return true
+}
+
+// postCodingResultBody 在这一轮里把结果全文发出去，走和汇报全文一样的合并转发。
+func (t *dianaCodingTool) postCodingResultBody(ctx context.Context, body string) bool {
+	if err := t.runtime.deliverCodingReportBody(ctx, t.event, body); err != nil {
+		log.Printf("diana coding result body not posted: %v", err)
+		return false
+	}
 	t.runtime.sealDirectReply(ctx)
 	if typing := typingIndicatorFromContext(ctx); typing != nil {
 		typing.resume()

@@ -93,6 +93,9 @@ type CodingJob struct {
 	ApprovalTimeoutSeconds int `json:"approval_timeout_seconds,omitempty"`
 	// Reported 标记结果已经发给用户了。重启接回要靠它避免把同一个结果汇报两次。
 	Reported bool `json:"reported,omitempty"`
+	// ReportHeadSent 标记长汇报的头部已经发出，只差全文。全文没发成重试时就不再
+	// 把头部发一遍。
+	ReportHeadSent bool `json:"report_head_sent,omitempty"`
 	// Target 是派活那条消息的来源，用来在任务结束后找回该往哪个会话汇报。其中的
 	// ProfileID 同时是任务的归属：记录目录可能被几个实例共用，只有这台机器人所在
 	// 的 Runtime 才能接回、汇报和操作它。

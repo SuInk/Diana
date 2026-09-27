@@ -206,7 +206,7 @@ func (r *Runtime) attemptCodingReport(ctx context.Context, job CodingJob) bool {
 	if strings.TrimSpace(job.Target.ProfileID) != "" {
 		job.Target.ProfileID = owner
 	}
-	if err := r.deliverCodingJobReport(ctx, job.Target.event(), job); err != nil {
+	if err := r.deliverCodingJobReport(ctx, job.Target.event(), &job); err != nil {
 		if ctx.Err() != nil {
 			return false
 		}
@@ -225,18 +225,25 @@ func (r *Runtime) attemptCodingReport(ctx context.Context, job CodingJob) bool {
 // 开头摘要，全文走合并转发——几千字的报告拆成十几条会刷屏，群友往上翻都找不到头。
 // 平台不支持合并转发、或者机器人关了合并转发，就在头部后面分条发全文。
 //
-// 头部发出去之后全文没发成会返回错误，汇报协程重试时头部会再发一遍：只有头部没有
-// 全文等于没汇报，宁可多一条头部。合并转发自带出站去重，已经送达的那张不会重发。
-func (r *Runtime) deliverCodingJobReport(ctx context.Context, event MessageEvent, job CodingJob) error {
-	body := codingJobReportBody(job)
+// 头部发出去之后全文没发成会返回错误，交给汇报协程重试。汇报跑在后台运行的 ctx 上，
+// 不在入站那一轮里，出站去重管不到这里，所以头部发出后先在记录里落 ReportHeadSent，
+// 重试时只补全文，不再把头部发一遍。调用方持有 reportMu。
+func (r *Runtime) deliverCodingJobReport(ctx context.Context, event MessageEvent, job *CodingJob) error {
+	body := codingJobReportBody(*job)
 	runes := len([]rune(body))
 	if runes <= codingReportInlineRunes {
-		return r.sendSubscriberNotice(ctx, event, renderCodingJobReport(job))
+		return r.sendSubscriberNotice(ctx, event, renderCodingJobReport(*job))
 	}
-	head := renderCodingJobReportHead(job) +
-		fmt.Sprintf("\n结果共 %d 字，全文见下一条。开头：\n%s", runes, truncateRunes(body, codingReportPreviewRunes))
-	if err := r.sendSubscriberNotice(ctx, event, head); err != nil {
-		return err
+	if !job.ReportHeadSent {
+		head := renderCodingJobReportHead(*job) +
+			fmt.Sprintf("\n结果共 %d 字，全文见下一条。开头：\n%s", runes, truncateRunes(body, codingReportPreviewRunes))
+		if err := r.sendSubscriberNotice(ctx, event, head); err != nil {
+			return err
+		}
+		job.ReportHeadSent = true
+		if err := saveCodingJob(*job); err != nil {
+			r.setError(err.Error())
+		}
 	}
 	return r.deliverCodingReportBody(ctx, event, body)
 }
@@ -249,13 +256,26 @@ func (r *Runtime) deliverCodingReportBody(ctx context.Context, event MessageEven
 	}
 	event.Platform = platform
 	cfg := r.effectiveConfigForEvent(event)
-	if IsOneBotPlatform(platform) && !chatSplitLimitsForEvent(cfg, event).SingleMessage && boolValue(cfg.ForwardReplyEnabled, true) {
+	// 不看「自然分条」：那是聊天回复要不要拆开说的偏好，关掉它的机器人照样不想被
+	// 几千字的报告刷屏。
+	if IsOneBotPlatform(platform) && boolValue(cfg.ForwardReplyEnabled, true) {
 		_, err := r.sendForwardReplyWithResult(ctx, event, body, cfg)
 		if err == nil {
 			return nil
 		}
 		if ctx.Err() != nil {
 			return ctx.Err()
+		}
+		// 请求已经写给接入端却没等到回执：卡片可能已经发出去了。这时再分条发一遍或者
+		// 重试，就是同一份全文在群里出现两次，正是换成合并转发要避免的刷屏。按已送达
+		// 处理，只记日志。
+		if errors.Is(err, ErrOutboundOutcomeUnknown) || errors.Is(err, errOutboundOutcomeUnconfirmed) || errors.Is(err, context.DeadlineExceeded) {
+			log.Printf("diana coding report forward outcome unconfirmed, not resending: %v", err)
+			return nil
+		}
+		// 群发不出去（被禁言、被移出）换成分条也一样发不出去，交给汇报协程等着重试。
+		if errors.Is(err, errGroupSendUnavailable) {
+			return err
 		}
 		// 卡片被账号安全审核拦下时不能退回逐条发：逐条发的是同一段文字，那条路不再
 		// 审核。也不能返回错误——内容不变，重试多少次都是拦下，汇报协程会一直转。

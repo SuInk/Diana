@@ -467,3 +467,109 @@ func TestCodingReportKeepsShortResultInline(t *testing.T) {
 		t.Fatalf("短结果不该走合并转发：%#v", calls)
 	}
 }
+
+// scriptedReportChannel 按用例需要让合并转发报错、让不点名的分条发不出去。
+type scriptedReportChannel struct {
+	*recordingChannel
+	mu         sync.Mutex
+	forwardErr error
+	failBody   bool
+}
+
+func (c *scriptedReportChannel) Send(ctx context.Context, msg OutgoingMessage) error {
+	_, err := c.SendWithResult(ctx, msg)
+	return err
+}
+
+func (c *scriptedReportChannel) SendWithResult(ctx context.Context, msg OutgoingMessage) (map[string]any, error) {
+	c.mu.Lock()
+	fail := c.failBody && msg.MentionUserID == ""
+	c.mu.Unlock()
+	if fail {
+		return nil, errors.New("diana: onebot action send_group_msg failed")
+	}
+	return c.recordingChannel.SendWithResult(ctx, msg)
+}
+
+func (c *scriptedReportChannel) CallAPI(ctx context.Context, action string, params map[string]any) (map[string]any, error) {
+	if strings.Contains(action, "forward") && c.forwardErr != nil {
+		return nil, c.forwardErr
+	}
+	return c.recordingChannel.CallAPI(ctx, action, params)
+}
+
+// TestCodingReportDoesNotResendUnconfirmedForward 钉住结果不明的合并转发：卡片可能
+// 已经发出去了，再分条发一遍就是同一份全文刷两次屏。
+func TestCodingReportDoesNotResendUnconfirmedForward(t *testing.T) {
+	useTempCodingWorkspace(t)
+	channel := &scriptedReportChannel{recordingChannel: &recordingChannel{}, forwardErr: fmt.Errorf("forward: %w", errOutboundOutcomeUnconfirmed)}
+	rt := NewRuntime(BotConfig{ID: "bot-a", BotAccount: "42", OwnerID: "1", SendChunkIntervalMS: 1, ForwardReplyEnabled: boolPointer(true)}, channel, NewPluginManager(NewCodingAgentPlugin()), nil, nil, nil, nil)
+	job := saveLongCodingJob(t, rt)
+
+	if retry := rt.attemptCodingReport(context.Background(), job); retry {
+		t.Fatalf("结果不明按已送达处理，不该重试")
+	}
+	if sent := channel.sentSnapshot(); len(sent) != 1 {
+		t.Fatalf("只该有头部一条，实际 %d 条", len(sent))
+	}
+	if !codingJobReported(t, job.ID) {
+		t.Fatalf("要记成已汇报")
+	}
+}
+
+// TestCodingReportRetryDoesNotResendHead 钉住头部只发一次：全文没发成时汇报协程会
+// 重试，汇报不在入站那一轮里、出站去重管不到，重试只该补全文。
+func TestCodingReportRetryDoesNotResendHead(t *testing.T) {
+	useTempCodingWorkspace(t)
+	channel := &scriptedReportChannel{recordingChannel: &recordingChannel{}, forwardErr: errors.New("unsupported action"), failBody: true}
+	rt := NewRuntime(BotConfig{ID: "bot-a", BotAccount: "42", OwnerID: "1", SendChunkIntervalMS: 1, ForwardReplyEnabled: boolPointer(true)}, channel, NewPluginManager(NewCodingAgentPlugin()), nil, nil, nil, nil)
+	job := saveLongCodingJob(t, rt)
+
+	if retry := rt.attemptCodingReport(context.Background(), job); !retry {
+		t.Fatalf("全文没发出去应当重试")
+	}
+	if saved, _ := loadCodingJob(job.ID); !saved.ReportHeadSent || saved.Reported {
+		t.Fatalf("头部发出后要落标记、但还不算汇报完：%#v", saved)
+	}
+	channel.mu.Lock()
+	channel.failBody = false
+	channel.mu.Unlock()
+	if retry := rt.attemptCodingReport(context.Background(), job); retry {
+		t.Fatalf("第二次发成功了不该再重试")
+	}
+	heads := 0
+	var body strings.Builder
+	for _, msg := range channel.sentSnapshot() {
+		if strings.Contains(msg.Text, "结果共") {
+			heads++
+			continue
+		}
+		body.WriteString(msg.Text)
+	}
+	if heads != 1 {
+		t.Fatalf("头部发了 %d 次", heads)
+	}
+	if !strings.Contains(body.String(), "REPORT-END") || !codingJobReported(t, job.ID) {
+		t.Fatalf("重试没把全文补上")
+	}
+}
+
+// TestCodingReportUsesForwardWhenNaturalSplitOff 钉住「自然分条」管不到汇报：那是
+// 聊天回复拆不拆开说的偏好，关了它的机器人照样不该被几千字刷屏。
+func TestCodingReportUsesForwardWhenNaturalSplitOff(t *testing.T) {
+	useTempCodingWorkspace(t)
+	channel := &recordingChannel{}
+	rt := NewRuntime(BotConfig{ID: "bot-a", BotAccount: "42", OwnerID: "1", ForwardReplyEnabled: boolPointer(true), NaturalReplySplitEnabled: boolPointer(false)}, channel, NewPluginManager(NewCodingAgentPlugin()), nil, nil, nil, nil)
+	job := saveLongCodingJob(t, rt)
+
+	rt.attemptCodingReport(context.Background(), job)
+	forwards := 0
+	for _, call := range channel.callsSnapshot() {
+		if call.action == "send_group_forward_msg" {
+			forwards++
+		}
+	}
+	if forwards != 1 || len(channel.sentSnapshot()) != 1 {
+		t.Fatalf("应当是头部一条加一张合并转发：forwards=%d sent=%d", forwards, len(channel.sentSnapshot()))
+	}
+}
