@@ -46,8 +46,12 @@ const (
 	codingJobMaxLineBytes = 4 << 20
 	// codingJobPlainLineRunes 是纯文本日志行进进度尾巴时留的长度。
 	codingJobPlainLineRunes = 300
-	codingJobResultRunes    = 1500
-	codingJobRetainCount    = 60
+	// codingJobFallbackLineRunes 是拿不到结构化结果时，拿来顶汇报正文的那几行每行
+	// 留的长度。自定义后端只打纯文本，最后那段长回答就是它的结论，不能按进度的
+	// 300 字截。
+	codingJobFallbackLineRunes = 8000
+	codingJobResultRunes       = 1500
+	codingJobRetainCount       = 60
 )
 
 // CodingJob 是一次编码 CLI 调用的持久记录。
@@ -308,6 +312,8 @@ func parseCodingLog(path string) codingJobSnapshot {
 	defer file.Close()
 
 	tail := make([]string, 0, codingJobTailLines)
+	// fallback 和 tail 一一对应，只是不按进度的长度截：拿不到结果时顶汇报正文用。
+	fallback := make([]string, 0, codingJobTailLines)
 	reader := bufio.NewReaderSize(file, 64<<10)
 	for {
 		line, truncated, err := readBoundedLine(reader)
@@ -317,11 +323,14 @@ func parseCodingLog(path string) codingJobSnapshot {
 		}
 		if line != "" {
 			snapshot.Lines++
-			if action, ok := applyCodingLogLine(&snapshot, line); ok && action != "" {
+			if text, ok := applyCodingLogLine(&snapshot, line); ok && text != "" {
+				action := truncateRunes(text, codingJobPlainLineRunes)
 				snapshot.LastAction = action
 				tail = append(tail, action)
+				fallback = append(fallback, truncateRunes(text, codingJobFallbackLineRunes))
 				if len(tail) > codingJobTailLines {
 					tail = tail[1:]
+					fallback = fallback[1:]
 				}
 			}
 		}
@@ -330,8 +339,8 @@ func parseCodingLog(path string) codingJobSnapshot {
 		}
 	}
 	snapshot.Tail = tail
-	if snapshot.Result == "" && len(tail) > 0 {
-		snapshot.Result = strings.Join(tail, "\n")
+	if snapshot.Result == "" && len(fallback) > 0 {
+		snapshot.Result = strings.Join(fallback, "\n")
 	}
 	return snapshot
 }
@@ -359,13 +368,14 @@ func readBoundedLine(reader *bufio.Reader) (string, bool, error) {
 }
 
 // applyCodingLogLine 把一行日志并进快照，返回这一行对应的「人能看懂的动作」。
+// 纯文本和兜底取出的正文原样返回，进度要截多短由调用方决定。
 func applyCodingLogLine(snapshot *codingJobSnapshot, line string) (string, bool) {
 	line = strings.TrimSpace(line)
 	if line == "" {
 		return "", false
 	}
 	if !strings.HasPrefix(line, "{") {
-		return truncateRunes(line, codingJobPlainLineRunes), true
+		return line, true
 	}
 	// 解析不了的 JSON 行不当进度：进度尾巴在拿不到结果时会顶上去当汇报正文，
 	// 原始 JSON 里还可能带着工具输出（命令回显、凭据状态），不能发进聊天。
@@ -431,7 +441,7 @@ func applyCodingLogLine(snapshot *codingJobSnapshot, line string) (string, bool)
 	// 字段，都没有就跳过，理由同上。
 	for _, key := range []string{"text", "message", "msg", "content"} {
 		if text := jsonString(payload, key); text != "" {
-			return truncateRunes(text, codingJobPlainLineRunes), true
+			return text, true
 		}
 	}
 	return "", false

@@ -728,3 +728,20 @@ func TestCodingToolIsDroppedFromNonOwnerRegistry(t *testing.T) {
 		t.Fatalf("主人的工具表里缺少 %s", dianaCodingToolName)
 	}
 }
+
+// TestParseCodingLogKeepsLongPlainAnswerForFallback 钉住自定义后端的退路：它只打纯
+// 文本，拿不到 result 事件时汇报正文靠日志尾巴顶上。进度尾巴按 300 字截，顶上来的
+// 正文不能跟着截，否则最后那段长回答只剩开头。
+func TestParseCodingLogKeepsLongPlainAnswerForFallback(t *testing.T) {
+	answer := "PLAIN-START " + strings.Repeat("结论写在一整行里。", 150) + " PLAIN-END"
+	path := writeCodingLog(t, "working...", answer)
+	snapshot := parseCodingLog(path)
+	if !strings.Contains(snapshot.Result, "PLAIN-END") {
+		t.Fatalf("长回答被截断了：%d 字", len([]rune(snapshot.Result)))
+	}
+	for _, line := range snapshot.Tail {
+		if len([]rune(line)) > codingJobPlainLineRunes+3 {
+			t.Fatalf("进度尾巴没按 %d 字截：%d 字", codingJobPlainLineRunes, len([]rune(line)))
+		}
+	}
+}
