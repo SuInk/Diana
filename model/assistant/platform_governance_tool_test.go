@@ -181,6 +181,8 @@ var expectedPlatformWriteOperations = map[string][]string{
 	PlatformWeCom:      nil,
 	// 微信 iLink 只有私聊，没有群，群管写操作无从谈起。
 	PlatformWeixin: nil,
+	// iMessage 本身没有群管理（踢人、禁言、公告、置顶都没有），BlueBubbles 也没有对应接口。
+	PlatformIMessage: nil,
 }
 
 func TestPlatformWriteOperationMatrix(t *testing.T) {
