@@ -94,3 +94,38 @@ func TestInboundEventTokenUsageCountsCallsWithoutReportedUsage(t *testing.T) {
 		t.Fatalf("total usage = %#v", total)
 	}
 }
+
+// 工具次数按每轮 Agent 结束那条 agent_run 日志汇总：开始、单次工具日志不重复计；
+// 重试过的消息把几轮加起来；老日志没有 tools_executed 时退回 tool_call。
+func TestInboundEventToolCallsSumsFinishedAgentRuns(t *testing.T) {
+	ctx := context.Background()
+	store, err := NewSQLiteStore(filepath.Join(t.TempDir(), "event-tools.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+
+	base := time.Now().Add(-time.Hour)
+	entries := []applog.Entry{
+		{Action: "agent_run", Target: "m1", Metadata: map[string]any{"phase": "started"}},
+		{Action: "agent_tool", Target: "web_search", Metadata: map[string]any{"phase": "tool_started", "tool_call": 1}},
+		{Action: "agent_run", Target: "m1", Metadata: map[string]any{"phase": "failed", "tool_call": 1, "tools_executed": 2}},
+		{Action: "agent_run", Target: "m1", Metadata: map[string]any{"phase": "completed", "tool_call": 2, "tools_executed": 3}},
+		{Action: "agent_run", Target: "m2", Metadata: map[string]any{"phase": "completed", "tool_call": 4}},
+		{Action: "agent_run", Target: "m3", Metadata: map[string]any{"phase": "completed", "tool_call": 9, "tools_executed": 9}},
+	}
+	for index, entry := range entries {
+		entry.CreatedAt = base.Add(time.Duration(index) * time.Second)
+		if err := store.AppendLog(ctx, entry); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	got, err := store.inboundEventToolCalls(ctx, base.Add(-time.Minute), []InboundEventDetail{{MessageID: "m1"}, {MessageID: "m2"}, {MessageID: ""}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got["m1"] != 5 || got["m2"] != 4 {
+		t.Fatalf("tool calls = %#v", got)
+	}
+}

@@ -2481,6 +2481,8 @@ export interface AssistantEventDetail extends BotEvent {
   status: string;
   outcome?: string;
   llm_calls?: number;
+  /** Agent 实际执行的工具次数；一条消息跑过几轮（比如重试）就加总。 */
+  tool_calls?: number;
   input_tokens?: number;
   output_tokens?: number;
   total_tokens?: number;

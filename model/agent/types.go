@@ -209,6 +209,9 @@ type RunEvent struct {
 	Error          string
 	FinishReason   string
 	Usage          llm.Usage
+	// ToolsExecuted 只在 completed/failed 上有值：本轮实际执行的工具总数。
+	// ToolCall 只数占 MaxSteps 预算的调用，tools_load 和自省不算进去，拿它当「调了几次工具」会少数。
+	ToolsExecuted int
 }
 
 type RunObserver func(context.Context, RunEvent)

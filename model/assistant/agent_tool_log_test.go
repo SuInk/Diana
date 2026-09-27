@@ -34,13 +34,14 @@ func TestAgentRunObserverWritesCorrelatedLifecycleLogs(t *testing.T) {
 		InputKeys:    []string{"query"},
 	})
 	observe(context.Background(), agent.RunEvent{
-		TraceID:      "trace-1",
-		Phase:        agent.RunPhaseCompleted,
-		ModelTurn:    3,
-		ToolCall:     1,
-		MaxToolCalls: 8,
-		DurationMS:   42,
-		FinishReason: "final",
+		TraceID:       "trace-1",
+		Phase:         agent.RunPhaseCompleted,
+		ModelTurn:     3,
+		ToolCall:      1,
+		ToolsExecuted: 2,
+		MaxToolCalls:  8,
+		DurationMS:    42,
+		FinishReason:  "final",
 	})
 
 	if len(logs.entries) != 2 {
@@ -50,11 +51,14 @@ func TestAgentRunObserverWritesCorrelatedLifecycleLogs(t *testing.T) {
 	if started.Action != "agent_tool" || started.Message != "Agent 工具调用开始 [#-------] 1/8" || started.Target != "demo.tool" {
 		t.Fatalf("tool log = %#v", started)
 	}
+	if _, found := started.Metadata["tools_executed"]; found {
+		t.Fatalf("tool log should not carry tools_executed: %#v", started.Metadata)
+	}
 	if started.Metadata["trace_id"] != "trace-1" || started.Metadata["message_id"] != "30001" || started.Metadata["tool_call"] != 1 || started.Metadata["progress_percent"] != 12 {
 		t.Fatalf("tool metadata = %#v", started.Metadata)
 	}
 	completed := logs.entries[1]
-	if completed.Action != "agent_run" || completed.Message != "Agent 运行完成 [########] done" || completed.Metadata["finish_reason"] != "final" || completed.Metadata["progress_percent"] != 100 {
+	if completed.Action != "agent_run" || completed.Message != "Agent 运行完成 [########] done" || completed.Metadata["finish_reason"] != "final" || completed.Metadata["progress_percent"] != 100 || completed.Metadata["tools_executed"] != 2 {
 		t.Fatalf("completed log = %#v", completed)
 	}
 }

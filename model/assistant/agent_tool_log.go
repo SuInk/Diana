@@ -92,6 +92,11 @@ func (r *Runtime) agentRunObserver(event MessageEvent) agent.RunObserver {
 		if len(runEvent.Metadata) > 0 {
 			metadata["tool_metadata"] = runEvent.Metadata
 		}
+		if runEvent.Phase == agent.RunPhaseCompleted || runEvent.Phase == agent.RunPhaseFailed {
+			// 运行记录按消息汇总工具次数靠这一条：单次工具日志的 target 是工具名，
+			// 联网搜索那条还特意抹掉了消息号，拿它们数会漏。
+			metadata["tools_executed"] = runEvent.ToolsExecuted
+		}
 		actor := oneBotEventActor(event)
 		if runEvent.Tool == agent.WebSearchToolName {
 			// Search operation logs remain useful without retaining the person or

@@ -228,14 +228,15 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 			Claims:       claimLedger.traces(),
 		}
 		emitRunEvent(ctx, req.Observer, RunEvent{
-			TraceID:      traceID,
-			Phase:        RunPhaseCompleted,
-			ModelTurn:    modelTurns,
-			ToolCall:     toolCalls,
-			MaxToolCalls: r.cfg.MaxSteps,
-			DurationMS:   duration.Milliseconds(),
-			FinishReason: reason,
-			Usage:        usage,
+			TraceID:       traceID,
+			Phase:         RunPhaseCompleted,
+			ModelTurn:     modelTurns,
+			ToolCall:      toolCalls,
+			ToolsExecuted: toolCalls + toolLoadCalls + introspectionCalls,
+			MaxToolCalls:  r.cfg.MaxSteps,
+			DurationMS:    duration.Milliseconds(),
+			FinishReason:  reason,
+			Usage:         usage,
 		})
 		return response
 	}
@@ -249,14 +250,15 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 	}
 	fail := func(err error) (*Response, error) {
 		emitRunEvent(ctx, req.Observer, RunEvent{
-			TraceID:      traceID,
-			Phase:        RunPhaseFailed,
-			ModelTurn:    modelTurns,
-			ToolCall:     toolCalls,
-			MaxToolCalls: r.cfg.MaxSteps,
-			DurationMS:   time.Since(startedAt).Milliseconds(),
-			Error:        err.Error(),
-			Usage:        usage,
+			TraceID:       traceID,
+			Phase:         RunPhaseFailed,
+			ModelTurn:     modelTurns,
+			ToolCall:      toolCalls,
+			ToolsExecuted: toolCalls + toolLoadCalls + introspectionCalls,
+			MaxToolCalls:  r.cfg.MaxSteps,
+			DurationMS:    time.Since(startedAt).Milliseconds(),
+			Error:         err.Error(),
+			Usage:         usage,
 		})
 		return nil, err
 	}
