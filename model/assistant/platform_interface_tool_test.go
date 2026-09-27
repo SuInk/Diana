@@ -344,7 +344,7 @@ func TestPlatformToolReadsWorkForMembers(t *testing.T) {
 	tool, _, _ := platformToolFor(t, BotConfig{OwnerID: "owner", Platform: PlatformOneBotV11}, channel, event)
 
 	info, err := tool.Run(context.Background(), map[string]any{"operation": "group_info"})
-	if err != nil || !strings.Contains(info, "Diana users") || !strings.Contains(info, `"access":"member_read_only"`) {
+	if err != nil || !strings.Contains(info, "Diana users") || !strings.Contains(info, `"requester_access":"member_read_only"`) {
 		t.Fatalf("group_info = %s err = %v", info, err)
 	}
 	member, err := tool.Run(context.Background(), map[string]any{"operation": "member_info", "user_id": "555"})
@@ -452,5 +452,23 @@ func TestPlatformInterfaceAuditRedactsFailureDetail(t *testing.T) {
 	}
 	if strings.Contains(entries[0].Detail, "owner-secret") {
 		t.Fatalf("audit detail leaked adapter error: %#v", entries[0])
+	}
+}
+
+// 群主查群资料时，requester_access 要标成群主，不能再是 member_read_only：模型会把后者
+// 当成机器人自己没权限，明明是管理员却拒绝禁言。
+func TestPlatformToolReadReportsRequesterGroupRole(t *testing.T) {
+	channel := &recordingChannel{apiResponses: map[string]map[string]any{
+		"get_group_info": {"group_name": "Diana users", "member_count": 3},
+	}}
+	for _, tc := range []struct {
+		senderRole, want string
+	}{{"owner", "group_owner"}, {"admin", "group_admin"}, {"member", "member_read_only"}} {
+		event := MessageEvent{Kind: EventKindGroup, UserID: "someone", GroupID: "123", Platform: PlatformOneBotV11, SenderRole: tc.senderRole}
+		tool, _, _ := platformToolFor(t, BotConfig{OwnerID: "owner", Platform: PlatformOneBotV11}, channel, event)
+		info, err := tool.Run(context.Background(), map[string]any{"operation": "group_info"})
+		if err != nil || !strings.Contains(info, `"requester_access":"`+tc.want+`"`) || strings.Contains(info, `"access"`) {
+			t.Fatalf("sender %s: group_info = %s err = %v", tc.senderRole, info, err)
+		}
 	}
 }

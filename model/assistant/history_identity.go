@@ -25,11 +25,15 @@ const historyIdentityNotice = "历史昵称可能是旧昵称或不同群名片�
 // 现在角色改成跟在发送者后面的短标记，且只标非 user 的两种；别名仍在括号里，同一
 // 账号仍然认得出来。按线上真实角色分布（user 207、bot_owner 158、bot 4）算，这段
 // 开销从 12493 token 降到 644，省掉 95%，语义一点没少。
-const historyPromptIdentityNotice = "历史昵称可能是旧昵称或不同群名片；同平台括号里相同的账号标识表示同一账号，不要仅凭昵称拆成不同的人。发送者后面跟 " + historySenderTagOwner + " 表示机器人主人（不是群主），跟 " + historySenderTagBot + " 表示你自己，没有标记就是其他账号。" + historyIdentityRoleNotice
+const historyPromptIdentityNotice = "历史昵称可能是旧昵称或不同群名片；同平台括号里相同的账号标识表示同一账号，不要仅凭昵称拆成不同的人。发送者后面跟 " + historySenderTagOwner + " 表示机器人主人（不是群主），跟 " + historySenderTagBot + " 表示你自己，没有标记就是其他账号。当前发言者后面跟 " + senderTagGroupOwner + " 或 " + senderTagGroupAdmin + " 是平台给出的群身份，不是自称。" + historyIdentityRoleNotice
 
 const (
 	historySenderTagOwner = "[主人]"
 	historySenderTagBot   = "[我]"
+	// 当前发言者的群身份，只标群主和管理员。模型不知道对方是谁时会凭空否认
+	// 「你不是群主」，标出来它就不必猜。
+	senderTagGroupOwner = "[群主]"
+	senderTagGroupAdmin = "[群管理员]"
 )
 
 // neutralizeIdentityMarkers 把不可信文本里的身份保留标记换成读起来一样、但不再是
@@ -52,6 +56,8 @@ const (
 var identityMarkerNeutralizer = strings.NewReplacer(
 	historySenderTagOwner, "［主人］",
 	historySenderTagBot, "［我］",
+	senderTagGroupOwner, "［群主］",
+	senderTagGroupAdmin, "［群管理员］",
 	"【这条历史的发言者身份】", "［这条历史的发言者身份］",
 	"【引用发言者身份】", "［引用发言者身份］",
 )
@@ -147,4 +153,16 @@ func quotedHistoryIdentityEvent(event MessageEvent) MessageEvent {
 		return MessageEvent{}
 	}
 	return MessageEvent{Platform: event.Platform, SelfID: event.SelfID, UserID: quoted.UserID}
+}
+
+// senderGroupRoleTag 返回当前发言者的群身份标记，普通成员和查不到的不标。
+func senderGroupRoleTag(role GroupRole) string {
+	switch role {
+	case GroupRoleOwner:
+		return senderTagGroupOwner
+	case GroupRoleAdmin:
+		return senderTagGroupAdmin
+	default:
+		return ""
+	}
 }

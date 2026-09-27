@@ -4508,10 +4508,11 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	// 该处理哪一张。媒体按 segmentMediaTurnKey 去重，来源消息号照样标在段上。
 	messageEvent := attachInboundTurnMedia(event, directReplySupplementEvents(append(r.directReplySupplements(ctx), backlogReplyTurnFromContext(ctx)...)))
 	currentText := currentPromptTextWithSemanticContext(event, cleanText, semanticContext, promptAnnotation{
-		BotID:        firstNonEmpty(strings.TrimSpace(event.SelfID), strings.TrimSpace(cfg.BotAccount)),
-		WakeGuidance: cfg.prompt(promptWakeOnlySpec),
-		TriggerWords: cfg.GroupTriggers,
-		Overrides:    cfg.PromptOverrides,
+		BotID:           firstNonEmpty(strings.TrimSpace(event.SelfID), strings.TrimSpace(cfg.BotAccount)),
+		WakeGuidance:    cfg.prompt(promptWakeOnlySpec),
+		TriggerWords:    cfg.GroupTriggers,
+		Overrides:       cfg.PromptOverrides,
+		SenderGroupRole: r.promptSenderGroupRole(ctx, event),
 	})
 	currentText = updatedReplyRequestText(currentText, r.pendingReplyRequestContexts(r.directReplySupplements(ctx), event))
 	currentText = backlogReplyRequestText(currentText, event, backlogReplyTurnFromContext(ctx))
@@ -6790,6 +6791,8 @@ type promptAnnotation struct {
 	TriggerWords []string
 	// Overrides 是机器人的提示词覆盖，注解里的各句说明从这里取；零值用内置默认值。
 	Overrides PromptOverrides
+	// SenderGroupRole 是当前发言者的群身份，群主和管理员会标在发言者后面。
+	SenderGroupRole GroupRole
 }
 
 func (a promptAnnotation) botID(event MessageEvent) string {

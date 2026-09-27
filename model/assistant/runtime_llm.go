@@ -1625,7 +1625,7 @@ func currentPromptTextWithSemanticContext(event MessageEvent, text string, sourc
 	if reference := recentTextReferencePrompt(event.recentTextReference); reference != "" {
 		text += "\n\n" + reference
 	}
-	return "【当前需要回复的消息】" + contextMessageTiming(event.Time, 0) + "【当前发言者】" + promptSenderIdentity(event) + "\n" + text
+	return "【当前需要回复的消息】" + contextMessageTiming(event.Time, 0) + "【当前发言者】" + promptSenderIdentity(event) + senderGroupRoleTag(annotation.SenderGroupRole) + "\n" + text
 }
 
 func quotedPromptText(quoted *QuotedMessage) string {

@@ -144,7 +144,7 @@ func newDianaPlatformTool(ctx context.Context, runtime *Runtime, event MessageEv
 func (t *dianaPlatformTool) Name() string { return dianaPlatformToolName }
 
 func (t *dianaPlatformTool) Description() string {
-	base := "跨平台群操作接口。group_info 读群资料，member_info 按 user_id 实时核验成员，member_list 拉成员候选。只在用户明确要求读取群信息或执行群操作时调用；被拒绝后不要换别的工具绕过，也不要在没有成功结果时声称已完成。recall 撤回我自己刚发出的消息：发现自己说错、发错内容，要真的撤回就必须调用它，只写「当我没说」「收回刚才那句」并不会让消息消失，没调用成功就不许说自己撤回了。它只能作用于我自己发出的消息，message_id 取自历史里我自己的发言，不按内容猜；撤回失败（不支持、超时限、没权限）时原消息仍在，如实说明并直接发更正内容。"
+	base := "跨平台群操作接口。group_info 读群资料，member_info 按 user_id 实时核验成员，member_list 拉成员候选。只在用户明确要求读取群信息或执行群操作时调用；被拒绝后不要换别的工具绕过，也不要在没有成功结果时声称已完成。recall 撤回我自己刚发出的消息：发现自己说错、发错内容，要真的撤回就必须调用它，只写「当我没说」「收回刚才那句」并不会让消息消失，没调用成功就不许说自己撤回了。它只能作用于我自己发出的消息，message_id 取自历史里我自己的发言，不按内容猜；撤回失败（不支持、超时限、没权限）时原消息仍在，如实说明并直接发更正内容。结果里的 requester_access 是这次发起请求的人的权限，不是机器人自己的；机器人是不是群管理员，以群管操作的实际结果为准。"
 	if t.moderator {
 		base += " 群管操作只对机器人主人、本群群主和群管理员开放（身份由工具实时向平台核验），且需要机器人本身是该群管理员：mute 必须给正的时长（秒），unmute 解除禁言，kick 可带 reject_add_request 决定是否拒绝再次加群；announce 发群公告（content），announce_list 查公告，announce_delete 按 notice_id 删公告；essence_set/essence_unset 设置或取消精华（message_id，省略时取被引用的消息）；set_card 改群名片（card 为空表示清除），set_title 改专属头衔（title）；mute_all/unmute_all 开关全员禁言；recall_messages 撤回成员消息：给 message_id 撤一条，或给 user_id 加 count 撤这个人在本会话最近的 N 条，用来清理刷屏和广告。只认账号 ID，取自 @ 的结构化信息、被引用消息的发送者或成员查询结果，不按昵称猜；禁言和踢人不能对主人或机器人自己下手，群管理员也不能对群主或其他管理员下手。私聊里不能替群管理员执行。不支持该操作的平台会明确说明。"
 	}
@@ -179,9 +179,11 @@ func (t *dianaPlatformTool) Run(ctx context.Context, input map[string]any) (stri
 		return "", fmt.Errorf("平台接口：运行时不可用")
 	}
 	owner := t.runtime.relationshipPolicy(ctx, t.event).Owner
-	access := "member_read_only"
-	if owner {
-		access = "owner_full"
+	// 只读操作也按发言人的群身份标：以前群主查成员也被标成 member_read_only，模型把它
+	// 读成「机器人自己没权限」，明明是管理员却拒绝禁言。群管操作在下面按实时核验改写。
+	access := platformActor{owner: owner}.access()
+	if !owner {
+		access = platformActor{role: t.runtime.promptSenderGroupRole(ctx, t.event)}.access()
 	}
 	operation := t.CanonicalOperation(input)
 	if operation == "" {
@@ -456,7 +458,7 @@ func (t *dianaPlatformTool) resolveTarget(input map[string]any) string {
 }
 
 func (t *dianaPlatformTool) marshal(operation, access string, extra map[string]any) (string, error) {
-	payload := map[string]any{"ok": true, "operation": operation, "access": access}
+	payload := map[string]any{"ok": true, "operation": operation, "requester_access": access}
 	for key, value := range extra {
 		payload[key] = value
 	}

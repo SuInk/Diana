@@ -194,3 +194,12 @@ func (r *Runtime) platformModerationVisible(ctx context.Context, event MessageEv
 	}
 	return GroupRoleCanConfigure(r.cachedGroupRole(ctx, event))
 }
+
+// promptSenderGroupRole 取当前发言者的群身份，和群管操作是否展示同一个来源（事件自带
+// 或短期缓存），私聊和查不到时为空。
+func (r *Runtime) promptSenderGroupRole(ctx context.Context, event MessageEvent) GroupRole {
+	if event.Kind != EventKindGroup || strings.TrimSpace(event.GroupID) == "" || strings.TrimSpace(event.UserID) == "" {
+		return ""
+	}
+	return r.cachedGroupRole(ctx, event)
+}
