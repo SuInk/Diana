@@ -6,6 +6,7 @@ package assistant
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/url"
@@ -29,6 +30,10 @@ const (
 	// 60 秒几乎必然超时。它必须小于租约时长，否则任务还在跑就被别的 worker 领走。
 	memorySummaryTimeout = 150 * time.Second
 	memoryMaxAttempts    = 8
+	// memoryMaxConsecutiveTimeouts 是连续超时几次就放弃。摘要第二次起输入已经缩到
+	// 最小（见 memorySummaryEventWindow、memorySummaryPromptExisting），最小输入再
+	// 超时两次，基本可以断定不是输入的问题。
+	memoryMaxConsecutiveTimeouts = 3
 	// 上游整体不可用（网关 503、并发 429）时的重试间隔和不计次的期限。线上见过
 	// sub2api 连续 5 小时 503，按原来的指数退避 8 次只撑 47 分钟，这段对话的记忆
 	// 就被整批放弃了。一天之内不计次，再往后照常计数，网关一直不恢复也总会放弃。
@@ -38,6 +43,8 @@ const (
 	// memorySummaryMinEvents 是重试缩窗的下限：再往下砍，摘要就只剩零星几句，
 	// 不如保留一段能读出来龙去脉的尾巴。
 	memorySummaryMinEvents = 20
+	// memorySummaryRetryExistingMax 是重试时最多带几条旧摘要，只留时间最近的。
+	memorySummaryRetryExistingMax = 12
 	// memoryThreadRetentionDays 让冷会话的线程便签自然过期：一周没人说话，
 	// 「当前进行到哪」这件事本身就不成立了，不该继续常驻注入。
 	memoryThreadRetentionDays = 7
@@ -218,11 +225,17 @@ func (r *Runtime) runMemoryWorker(ctx context.Context, leaseOwner string, store 
 			}
 			live := make([]MemoryJob, 0, len(jobs))
 			for _, job := range jobs {
-				if memoryJobAttemptsExhausted(job.Attempts) {
-					log.Printf("diana memory job abandoned after %d attempts: id=%s", job.Attempts-1, job.ID)
-					r.recordBackgroundFailure("memory_job_abandoned", memoryJobKindLabel(job.Payload.Kind)+"连续失败，重试次数用完已放弃，这段对话不会再提取记忆",
-						"memory_job_abandoned|"+job.Payload.Session, nil,
-						map[string]any{"job_id": job.ID, "kind": string(job.Payload.Kind), "session": job.Payload.Session, "attempts": job.Attempts - 1})
+				if reason, abandon := memoryJobAbandonReason(job); abandon {
+					log.Printf("diana memory job abandoned after %d attempts (%d consecutive timeouts): id=%s last_error=%s", job.Attempts-1, job.ConsecutiveTimeouts, job.ID, job.LastError)
+					// 放弃时把最后一次报错带进日志详情：任务行里虽然也留着 last_error，
+					// 界面上只看得到这条日志。
+					var lastErr error
+					if text := strings.TrimSpace(job.LastError); text != "" {
+						lastErr = errors.New(text)
+					}
+					r.recordBackgroundFailure("memory_job_abandoned", memoryJobKindLabel(job.Payload.Kind)+reason+"，这段对话不会再提取记忆",
+						"memory_job_abandoned|"+job.Payload.Session, lastErr,
+						map[string]any{"job_id": job.ID, "kind": string(job.Payload.Kind), "session": job.Payload.Session, "attempts": job.Attempts - 1, "timeouts": job.ConsecutiveTimeouts})
 					commitCtx, commitCancel := context.WithTimeout(context.Background(), 5*time.Second)
 					if err := store.CompleteMemoryJob(commitCtx, job.ID, leaseOwner); err != nil {
 						log.Printf("diana memory job state update failed: %v", err)
@@ -297,18 +310,73 @@ func memorySummaryEventWindow(events []MessageEvent, attempts int) []MessageEven
 	return events[len(events)-limit:]
 }
 
+// memorySummaryPromptExisting 挑出放进 existing_summaries 的旧摘要。
+//
+// 卷叠的源摘要已经整份放在 rollup.source_summaries 里，再在这里出现一遍只是
+// 让同样的内容付两次费，所以先去掉。重试时再只留时间最近的几条：新事件要复用
+// 的是同日期、同主题的 key，它们几乎总落在最近的摘要里；按重要度排的其余旧摘
+// 要不影响这一次写什么，却是重试输入里缩不下来的大头。
+func memorySummaryPromptExisting(existing []StructuredMemoryItem, rollup *memorySummaryRollup, attempts int) []StructuredMemoryItem {
+	kept := existing
+	if rollup != nil && len(rollup.Items) > 0 {
+		rolled := make(map[string]bool, len(rollup.Items))
+		for _, item := range rollup.Items {
+			rolled[item.Key] = true
+		}
+		kept = make([]StructuredMemoryItem, 0, len(existing))
+		for _, item := range existing {
+			if !rolled[item.Key] {
+				kept = append(kept, item)
+			}
+		}
+	}
+	if attempts <= 1 || len(kept) <= memorySummaryRetryExistingMax {
+		return kept
+	}
+	recent := append([]StructuredMemoryItem(nil), kept...)
+	sort.SliceStable(recent, func(left, right int) bool {
+		return memorySummaryItemTime(recent[left]).After(memorySummaryItemTime(recent[right]))
+	})
+	return recent[:memorySummaryRetryExistingMax]
+}
+
 func memoryJobAttemptsExhausted(attempts int) bool {
 	return attempts > memoryMaxAttempts
 }
 
+// memoryJobAbandonReason 判断领到的任务还值不值得跑，不值得时给出日志里的原因。
+//
+// 连续超时单独设限：输入已经缩到最小还接连超时，说明是模型或网关本身慢，再试
+// 满 8 次只是每次白烧 150 秒的 token。503、限流这类上游故障走 DeferMemoryJob，
+// 不计入连续超时。
+func memoryJobAbandonReason(job MemoryJob) (string, bool) {
+	if job.ConsecutiveTimeouts >= memoryMaxConsecutiveTimeouts {
+		return fmt.Sprintf("连续 %d 次超时，已放弃", job.ConsecutiveTimeouts), true
+	}
+	if memoryJobAttemptsExhausted(job.Attempts) {
+		return "连续失败，重试次数用完已放弃", true
+	}
+	return "", false
+}
+
 // retryMemoryJob 把失败的任务放回队列。上游整体不可用时走不计次的延后，其余
 // 失败（包括超时）照常计数：摘要的缩窗靠的就是次数，超时不能退还。
+//
+// 超时另外累加连续超时次数。这一次就要到上限时不再等退避，马上放回队列，让下
+// 一轮领取直接按放弃处理——放弃只在领取时判断一处，日志和收尾都走同一条路。
 func retryMemoryJob(ctx context.Context, store StructuredMemoryStore, job MemoryJob, leaseOwner string, err error) error {
 	if deferrer, ok := store.(MemoryJobDeferrer); ok && deferrer != nil && isLLMUpstreamOutage(err) {
 		now := time.Now()
 		return deferrer.DeferMemoryJob(ctx, job.ID, leaseOwner, now.Add(memoryOutageRetryDelay), err.Error(), now.Add(-memoryOutageRefundAge))
 	}
-	return store.RetryMemoryJob(ctx, job.ID, leaseOwner, time.Now().Add(memoryRetryDelay(job.Attempts)), err.Error())
+	availableAt := time.Now().Add(memoryRetryDelay(job.Attempts))
+	if retrier, ok := store.(MemoryJobTimeoutRetrier); ok && retrier != nil && isTimeoutError(err) {
+		if job.ConsecutiveTimeouts+1 >= memoryMaxConsecutiveTimeouts {
+			availableAt = time.Now()
+		}
+		return retrier.RetryTimedOutMemoryJob(ctx, job.ID, leaseOwner, availableAt, err.Error())
+	}
+	return store.RetryMemoryJob(ctx, job.ID, leaseOwner, availableAt, err.Error())
 }
 
 func memoryRetryDelay(attempt int) time.Duration {
@@ -568,7 +636,13 @@ func (r *Runtime) processSummaryMemoryJob(ctx context.Context, store StructuredM
 	if len(lines) == 0 {
 		return nil
 	}
-	rollup := selectMemorySummaryRollup(existing)
+	// 卷叠只在首次尝试做：它要把 12 条旧摘要重写成一条时间线，是整次调用里输出
+	// 最长的部分，而且跟这批新事件无关。重试时先把本职的摘要写出来，卷叠留给这
+	// 个会话下一次摘要任务。
+	var rollup *memorySummaryRollup
+	if job.Attempts <= 1 {
+		rollup = selectMemorySummaryRollup(existing)
+	}
 	input := struct {
 		Session       string               `json:"session"`
 		Events        []string             `json:"events"`
@@ -579,7 +653,7 @@ func (r *Runtime) processSummaryMemoryJob(ctx context.Context, store StructuredM
 	}{
 		Session:       job.Payload.Session,
 		Events:        lines,
-		Existing:      memoryGateExistingMemories(existing, ""),
+		Existing:      memoryGateExistingMemories(memorySummaryPromptExisting(existing, rollup, job.Attempts), ""),
 		Rollup:        rollup,
 		ThreadKey:     threadKey,
 		CurrentThread: currentThread,
