@@ -274,6 +274,16 @@ func (c *OneBotChannel) SendChatAction(ctx context.Context, msg OutgoingMessage,
 	return sendOneBotInputStatus(ctx, msg, action, c.CallAPI)
 }
 
+// mentionSegmentData 组 at 段的 data。知道昵称就带上 name：接入端渲染 @ 时从
+// 自己的群成员缓存取名字，刚入群的人还不在缓存里，只会被写成 @QQ号。
+func mentionSegmentData(userID string, names map[string]string) map[string]string {
+	data := map[string]string{"qq": userID}
+	if name := strings.TrimSpace(names[userID]); name != "" {
+		data["name"] = name
+	}
+	return data
+}
+
 // buildOutgoingSegments 将回复消息转换为 OneBot segment 列表。
 func buildOutgoingSegments(msg OutgoingMessage) []map[string]any {
 	segments := make([]map[string]any, 0, 3+len(msg.ImageURLs)+len(msg.VideoURLs))
@@ -287,7 +297,7 @@ func buildOutgoingSegments(msg OutgoingMessage) []map[string]any {
 	if msg.MentionUserID != "" {
 		segments = append(segments, map[string]any{
 			"type": "at",
-			"data": map[string]string{"qq": msg.MentionUserID},
+			"data": mentionSegmentData(msg.MentionUserID, msg.MentionNames),
 		})
 		segments = append(segments, map[string]any{
 			"type": "text",

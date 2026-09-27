@@ -287,9 +287,10 @@ type OutgoingMessage struct {
 	ImagesFirst          bool
 	ReplyMessageID       string
 	MentionUserID        string
-	// MentionNames 是正文里 [diana-at:ID] 标记要显示的昵称，按 id 索引。
-	// Telegram 的 text_mention 需要一段可见文字，光有 id 显示不出来；查不到
-	// 的 id 退回显示 @<id>。OneBot 不需要它——那边 at 段自己会渲染。
+	// MentionNames 是要 @ 的人（正文里 [diana-at:ID] 标记和 MentionUserID）的
+	// 显示昵称，按 id 索引。Telegram 的 text_mention 需要一段可见文字，光有 id
+	// 显示不出来；查不到的 id 退回显示 @<id>。OneBot 的 at 段有它就带上 name，
+	// 接入端缓存里还没有的新成员才不会被渲染成 @QQ号。
 	MentionNames map[string]string
 	ForwardName  string
 	ForwardUIN   string

@@ -274,6 +274,25 @@ func TestWelcomePlaceholdersExpandNicknameAndGroup(t *testing.T) {
 	}
 }
 
+// 新人刚进群时接入端的成员缓存里还没有他，at 段只带 qq 会被渲染成「@QQ号」。
+// 欢迎消息先查一次成员资料，把昵称作为 at 段的 name 一起发出去。
+func TestWelcomeMentionCarriesMemberName(t *testing.T) {
+	runtime, channel := governanceRuntime(t, nil, nil)
+	runtime.SetGroupConfigStore(&stubGroupConfigStore{configs: map[string]GroupConfig{"123": {GroupID: "123", Enabled: true, EnabledSet: true, WelcomeEnabled: boolPointer(true), WelcomeMessage: "欢迎你来群里"}}})
+	event := MessageEvent{Kind: EventKindNotice, SubType: "group_increase", Platform: PlatformOneBotV11, SelfID: "10000", GroupID: "123", UserID: "555"}
+	if err := runtime.handleNotice(context.Background(), event); err != nil {
+		t.Fatal(err)
+	}
+	sent := channel.sentSnapshot()
+	if len(sent) != 1 || sent[0].MentionUserID != "555" || sent[0].MentionNames["555"] != "昵称555" {
+		t.Fatalf("welcome = %#v", sent)
+	}
+	at := buildOutgoingSegments(sent[0])[0]
+	if at["type"] != "at" || at["data"].(map[string]string)["name"] != "昵称555" {
+		t.Fatalf("at segment = %#v", at)
+	}
+}
+
 // 违规消息不回复，但照常落历史：处罚在后台可能什么都没做（机器人不是管理员），
 // 历史里不能因此缺一块。
 func TestGovernanceBlockedMessageStillLandsInHistory(t *testing.T) {

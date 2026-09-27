@@ -30,8 +30,24 @@ func (r *Runtime) renderWelcome(ctx context.Context, cfg BotConfig, event Messag
 	return r.expandWelcomePlaceholders(ctx, event, text)
 }
 
-// expandWelcomePlaceholders 替换 {nickname}{group}{group_id}。昵称和群名只在模板
-// 真用到时才去平台查：OneBot 的入群通知不带这两样，每次入群都多查两次不划算。
+// welcomeMemberName 查新人的群名片或昵称，查不到返回空。
+//
+// 入群通知不带昵称，而接入端渲染 @ 时只从自己的群成员缓存找名字；新人刚进群
+// 还不在缓存里，@ 就被写成「@QQ号」，连 uid 都解析不出来、对方也收不到提醒。
+// 这里强制刷新查一次：接入端的缓存顺带补上，查到的昵称也随 at 段一起发出去。
+func (r *Runtime) welcomeMemberName(ctx context.Context, event MessageEvent) string {
+	if name := strings.TrimSpace(event.SenderName); name != "" {
+		return name
+	}
+	member, err := r.getGroupMemberInfoForEvent(ctx, event, event.GroupID, event.UserID)
+	if err != nil {
+		return ""
+	}
+	return firstNonEmpty(strings.TrimSpace(member.Card), strings.TrimSpace(member.Nickname))
+}
+
+// expandWelcomePlaceholders 替换 {nickname}{group}{group_id}。群名只在模板真用到
+// 时才去平台查；昵称走入群通知时已由 welcomeMemberName 查好放进 SenderName。
 // 查不到就回落成账号 ID / 群号，不把花括号原样发出去。
 func (r *Runtime) expandWelcomePlaceholders(ctx context.Context, event MessageEvent, text string) string {
 	if !strings.Contains(text, "{") {
@@ -41,12 +57,7 @@ func (r *Runtime) expandWelcomePlaceholders(ctx context.Context, event MessageEv
 	defer cancel()
 	nickname, group := "", ""
 	if strings.Contains(text, "{nickname}") {
-		nickname = strings.TrimSpace(event.SenderName)
-		if nickname == "" {
-			if member, err := r.getGroupMemberInfoForEvent(lookupCtx, event, event.GroupID, event.UserID); err == nil {
-				nickname = firstNonEmpty(strings.TrimSpace(member.Card), strings.TrimSpace(member.Nickname))
-			}
-		}
+		nickname = r.welcomeMemberName(lookupCtx, event)
 	}
 	if strings.Contains(text, "{group}") {
 		group = strings.TrimSpace(event.GroupName)

@@ -7036,8 +7036,15 @@ func (r *Runtime) resolveOutgoingMentionNames(event MessageEvent, msg OutgoingMe
 	history := append([]MessageEvent(nil), r.history[sessionKey(event)]...)
 	r.mu.RUnlock()
 	names := messageParticipantDisplayNames(append(history, event)...)
-	resolved := make(map[string]string, len(ids))
+	// 调用方可能已经填过（比如入群欢迎现查的新人昵称），合并进来，不覆盖。
+	resolved := make(map[string]string, len(ids)+len(msg.MentionNames))
+	for id, name := range msg.MentionNames {
+		resolved[id] = name
+	}
 	for _, id := range ids {
+		if resolved[id] != "" {
+			continue
+		}
 		if name := strings.TrimSpace(names[id]); name != "" {
 			resolved[id] = name
 		}
@@ -7496,7 +7503,7 @@ func prependOutgoingReferenceSegments(segments []MessageSegment, msg OutgoingMes
 		prefix = append(prefix, MessageSegment{Type: "reply", Data: map[string]string{"id": messageID}})
 	}
 	if userID := strings.TrimSpace(msg.MentionUserID); userID != "" && !segmentsContainReference(segments, "at", "qq", userID) {
-		prefix = append(prefix, MessageSegment{Type: "at", Data: map[string]string{"qq": userID}})
+		prefix = append(prefix, MessageSegment{Type: "at", Data: mentionSegmentData(userID, msg.MentionNames)})
 	}
 	if len(prefix) == 0 {
 		return segments
@@ -7830,11 +7837,15 @@ func (r *Runtime) handleNotice(ctx context.Context, event MessageEvent) error {
 		return nil
 	}
 	// 只处理群成员增加通知，避免把其它 notice 类型误当作可回复消息。
+	event.SenderName = r.welcomeMemberName(ctx, event)
 	welcome := r.renderWelcome(ctx, cfg, event)
 	msg := OutgoingMessage{
 		GroupID:       event.GroupID,
 		Text:          welcome,
 		MentionUserID: event.UserID,
+	}
+	if event.SenderName != "" {
+		msg.MentionNames = map[string]string{event.UserID: event.SenderName}
 	}
 	if err := r.sendOutgoing(ctx, event, msg); err != nil {
 		r.setError(err.Error())
