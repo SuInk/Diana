@@ -36,10 +36,17 @@ const (
 	codingACPProtocolVersion = 1
 	codingACPInitTimeout     = time.Minute
 	codingACPSessionTimeout  = 2 * time.Minute
-	// codingACPCancelGrace 是取消后等代理回 stopReason 的时间。Diana 发 SIGTERM 之后
-	// 5 秒就会 SIGKILL 整个进程组，这里要赶在那之前写完结果行。
-	codingACPCancelGrace = 3 * time.Second
-	codingACPExitGrace   = 2 * time.Second
+	// codingACPCancelGrace 是取消后等代理回 stopReason 的时间，codingACPExitGrace 是
+	// 关掉代理 stdin 后等它自己退出的时间。Diana 发 SIGTERM 之后 5 秒就会 SIGKILL，
+	// 两段加起来要留出余量，赶在那之前写完结果行、收掉代理。
+	codingACPCancelGrace = 2500 * time.Millisecond
+	codingACPExitGrace   = time.Second
+	// codingACPDrainGrace 是代理退出后等它输出读完的时间。代理派生的进程可能还攥着
+	// 这根管道，永远等不到 EOF，到点就强行关掉。
+	codingACPDrainGrace = 500 * time.Millisecond
+	// codingACPGoneGrace 是代理断开后等一等取消信号的时间：Diana 取消时代理可能先被
+	// 收掉、信号后到，这时要按取消收尾，而不是报成代理出错。
+	codingACPGoneGrace = 300 * time.Millisecond
 	// codingACPMaxMessageBytes 是单条 ACP 消息的上限。工具调用里可能带着整段 diff，
 	// 放宽到几十兆，再大的整条丢掉，不让一条消息吃光内存。
 	codingACPMaxMessageBytes = 64 << 20
@@ -118,24 +125,37 @@ func RunCodingACPSession(specPath string, stdout, stderr io.Writer) int {
 func runCodingACPSession(ctx context.Context, spec codingACPSpec, log *codingACPLog) int {
 	cmd := exec.Command(spec.Command, spec.Args...)
 	cmd.Dir = spec.Dir
+	cmd.SysProcAttr = codingACPAgentProcAttr()
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		log.fail("启动 ACP 代理失败：" + err.Error())
 		return 1
 	}
-	stdout, err := cmd.StdoutPipe()
+	// stdout 用自己建的管道而不是 StdoutPipe：读端归这里管，代理退出后 Wait 不会
+	// 抢先关掉它，最后几条消息不会丢；代理的子进程攥着写端不放时，也能到点强行关。
+	stdout, stdoutWriter, err := os.Pipe()
 	if err != nil {
 		log.fail("启动 ACP 代理失败：" + err.Error())
 		return 1
 	}
+	cmd.Stdout = stdoutWriter
 	// 代理的 stderr 不进任务日志：各家都往里打一堆启动信息，混进进度只是噪音。只留
-	// 最后一段，出错时附在错误说明后面。
+	// 最后一段，出错时附在错误说明后面。WaitDelay 管住 stderr 那根管道：子进程攥着
+	// 不放时，Wait 最多多等这么久。
 	stderrTail := &codingTailBuffer{limit: codingACPStderrTailBytes}
 	cmd.Stderr = stderrTail
+	cmd.WaitDelay = codingACPExitGrace
 	if err := cmd.Start(); err != nil {
+		_ = stdout.Close()
+		_ = stdoutWriter.Close()
 		log.fail(fmt.Sprintf("启动 ACP 代理 %s 失败：%v", spec.Command, err))
 		return 1
 	}
+	_ = stdoutWriter.Close()
+	agentPID := cmd.Process.Pid
+	// 不管怎么收场，最后都连代理派生的进程一起收掉：它们单独一个进程组，不在 Diana
+	// 取消时发信号的范围里。
+	defer killCodingACPAgentGroup(agentPID)
 	conn := newCodingACPConn(stdin)
 	session := &codingACPSession{spec: spec, log: log, conn: conn, ctx: ctx, stderr: stderrTail, tools: map[string]*codingACPTool{}}
 	conn.onNotify = session.handleNotification
@@ -143,18 +163,29 @@ func runCodingACPSession(ctx context.Context, spec codingACPSpec, log *codingACP
 	go conn.readLoop(stdout)
 	exited := make(chan struct{})
 	go func() {
-		// 管道要等读完再 Wait：Wait 会关掉 stdout，读到一半的消息就丢了。
-		<-conn.closed
 		_ = cmd.Wait()
 		close(exited)
+	}()
+	go func() {
+		// 代理退出后给读协程一点时间把剩下的消息读完，再关读端，免得一直等一个
+		// 永远不会来的 EOF，卡住还在等回复的请求。
+		<-exited
+		select {
+		case <-conn.closed:
+		case <-time.After(codingACPDrainGrace):
+			_ = stdout.Close()
+		}
 	}()
 	code := session.run()
 	_ = stdin.Close()
 	select {
 	case <-exited:
 	case <-time.After(codingACPExitGrace):
-		_ = cmd.Process.Kill()
-		<-exited
+		killCodingACPAgentGroup(agentPID)
+		select {
+		case <-exited:
+		case <-time.After(codingACPExitGrace):
+		}
 	}
 	return code
 }
@@ -244,6 +275,15 @@ func (s *codingACPSession) run() int {
 	}()
 	select {
 	case outcome := <-done:
+		if errors.Is(outcome.err, errCodingACPAgentGone) {
+			// 代理断开和取消信号谁先到说不准：稍等一下，是取消就按取消收尾。
+			select {
+			case <-s.ctx.Done():
+				s.writeResult("cancelled", s.result(), true)
+				return codingACPExitCancelled
+			case <-time.After(codingACPGoneGrace):
+			}
+		}
 		if outcome.err != nil {
 			return s.abort("ACP 代理执行出错", outcome.err)
 		}
@@ -541,7 +581,9 @@ func (s *codingACPSession) requestPermission(params json.RawMessage) any {
 	title = firstNonEmpty(title, kind, "工具调用")
 
 	allow := s.decidePermission(title, kind, detail)
-	if s.cancelled.Load() {
+	// 看 ctx 而不只看 cancelled 标记：标记由另一个协程设，可能还没来得及；协议要求
+	// 取消时悬着的授权一律回 cancelled，不能回成拒绝。
+	if s.cancelled.Load() || s.ctx.Err() != nil {
 		return codingACPPermissionCancelled()
 	}
 	option := codingACPPickOption(request.Options, allow)
@@ -757,6 +799,19 @@ func (c *codingACPConn) call(ctx context.Context, method string, params any, res
 	case <-ctx.Done():
 		return ctx.Err()
 	case <-c.closed:
+		// 回复和断开可能同时就绪（代理回完就退出），select 会随便挑一个：先看有没有
+		// 已经到手的回复，别把有效结果当成代理挂了。
+		select {
+		case message := <-reply:
+			if message.Error != nil {
+				return message.Error
+			}
+			if result != nil && len(message.Result) > 0 {
+				return json.Unmarshal(message.Result, result)
+			}
+			return nil
+		default:
+		}
 		return errCodingACPAgentGone
 	}
 }

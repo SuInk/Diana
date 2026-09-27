@@ -49,3 +49,19 @@ func killCodingProcess(pid int) {
 	}
 	_ = syscall.Kill(-pgid, syscall.SIGKILL)
 }
+
+// codingACPAgentProcAttr 让 ACP 代理单独一个进程组。取消时 Diana 对会话进程所在的组
+// 发 SIGTERM，代理要是也在这个组里，会和会话进程同时挨信号，多半当场就死，
+// session/cancel 就成了空话，做到哪也交代不出来。单独成组后，代理由会话进程按协议
+// 叫停，收尾时再连它派生的进程一起收掉。
+func codingACPAgentProcAttr() *syscall.SysProcAttr {
+	return &syscall.SysProcAttr{Setpgid: true}
+}
+
+// killCodingACPAgentGroup 收掉代理和它派生的进程（MCP 服务之类）。它们不在 Diana
+// 的进程组里，会话进程不收就成了孤儿。
+func killCodingACPAgentGroup(pid int) {
+	if pid > 0 {
+		_ = syscall.Kill(-pid, syscall.SIGKILL)
+	}
+}

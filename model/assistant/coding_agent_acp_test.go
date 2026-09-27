@@ -11,7 +11,9 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -27,8 +29,22 @@ const fakeACPAgentArg = "__fake-acp-agent"
 // fakeACPScenarioEnv 选假代理这一轮怎么演。
 const fakeACPScenarioEnv = "DIANA_FAKE_ACP_SCENARIO"
 
+// fakeACPPIDFileEnv 让假代理把自己（以及它派生的子进程）的 PID 写出来，用例好确认
+// 收尾之后它们都没了。
+const fakeACPPIDFileEnv = "DIANA_FAKE_ACP_PIDFILE"
+
 func runFakeACPAgent(in io.Reader, out, errOut io.Writer) int {
 	scenario := os.Getenv(fakeACPScenarioEnv)
+	recordPID := func(pid int) {
+		if path := os.Getenv(fakeACPPIDFileEnv); path != "" {
+			file, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+			if err == nil {
+				fmt.Fprintln(file, pid)
+				file.Close()
+			}
+		}
+	}
+	recordPID(os.Getpid())
 	var writeMu sync.Mutex
 	write := func(message any) {
 		body, _ := json.Marshal(message)
@@ -107,6 +123,15 @@ func runFakeACPAgent(in io.Reader, out, errOut io.Writer) int {
 				code = reply.Error.Code
 			}
 			say(fmt.Sprintf("读文件被拒：%d", code))
+			return "end_turn", true
+		case "orphan-pipe":
+			// 像一个没跟着退出的 MCP 服务：子进程继承了代理的 stdout，一直攥着。
+			child := exec.Command("sleep", "30")
+			child.Stdout, child.Stderr = os.Stdout, os.Stderr
+			if child.Start() == nil {
+				recordPID(child.Process.Pid)
+			}
+			say("子进程还挂着")
 			return "end_turn", true
 		case "no-final-message":
 			say("先说一句")
@@ -379,6 +404,51 @@ func TestCodingACPSessionCancelsThroughProtocol(t *testing.T) {
 	}
 }
 
+func fakeACPPIDs(t *testing.T, path string) []int {
+	t.Helper()
+	body, _ := os.ReadFile(path)
+	var pids []int
+	for _, line := range strings.Fields(string(body)) {
+		if pid, err := strconv.Atoi(line); err == nil {
+			pids = append(pids, pid)
+		}
+	}
+	return pids
+}
+
+// TestCodingACPSessionExitsWhenAgentChildHoldsPipe 钉住收尾不被卡住：代理派生的进程
+// 攥着输出管道不放时，会话进程写完结果照样按时退出，并把那些进程一起收掉。以前这里
+// 会一直等 EOF，Diana 那边要到单次最长运行时间才收尾，还按超时记成失败。
+func TestCodingACPSessionExitsWhenAgentChildHoldsPipe(t *testing.T) {
+	pidFile := filepath.Join(t.TempDir(), "pids")
+	t.Setenv(fakeACPPIDFileEnv, pidFile)
+	started := time.Now()
+	run := runFakeACPSession(t, context.Background(), "orphan-pipe", "")
+	if elapsed := time.Since(started); elapsed > 4*time.Second {
+		t.Fatalf("会话进程被攥着的管道卡了 %s", elapsed)
+	}
+	if run.code != 0 || run.snapshot.Result != "子进程还挂着" {
+		t.Fatalf("exit=%d result=%q\n%s", run.code, run.snapshot.Result, run.log)
+	}
+	pids := fakeACPPIDs(t, pidFile)
+	if len(pids) != 2 {
+		t.Fatalf("pids = %v", pids)
+	}
+	waitForCondition(t, 5*time.Second, func() bool { return !codingProcessAlive(pids[0]) && !codingProcessAlive(pids[1]) })
+}
+
+// TestCodingACPSessionCancelsPendingPermission 钉住取消时悬着的授权：协议要求回
+// cancelled，不能回成拒绝。
+func TestCodingACPSessionCancelsPendingPermission(t *testing.T) {
+	policyPath, _ := writeACPApprovalPolicy(t, codingApprovalModeDangerous)
+	ctx, cancel := context.WithCancel(context.Background())
+	time.AfterFunc(300*time.Millisecond, cancel)
+	run := runFakeACPSession(t, ctx, "permission", policyPath)
+	if run.code != codingACPExitCancelled || run.snapshot.Result != "授权结果：cancelled" {
+		t.Fatalf("exit=%d result=%q\n%s", run.code, run.snapshot.Result, run.log)
+	}
+}
+
 // TestCodingACPSessionRejectsClientMethods 钉住握手时没声明的能力：代理来要读文件，
 // 按「没有这个方法」回，让它用自己的工具。
 func TestCodingACPSessionRejectsClientMethods(t *testing.T) {
@@ -518,6 +588,8 @@ func TestLaunchCodingJobACPApprovalGoesThroughChat(t *testing.T) {
 func TestCancelACPCodingJobStopsSessionAndAgent(t *testing.T) {
 	useTempCodingWorkspace(t)
 	t.Setenv(fakeACPScenarioEnv, "hang")
+	pidFile := filepath.Join(t.TempDir(), "pids")
+	t.Setenv(fakeACPPIDFileEnv, pidFile)
 	executable, err := os.Executable()
 	if err != nil {
 		t.Fatalf("executable: %v", err)
@@ -547,5 +619,13 @@ func TestCancelACPCodingJobStopsSessionAndAgent(t *testing.T) {
 	}
 	if saved, _ := loadCodingJob(job.ID); saved.Status != codingJobStatusCancelled {
 		t.Fatalf("status = %q", saved.Status)
+	}
+	// 代理单独一个进程组，Diana 的 SIGTERM 打不到它：它是按 session/cancel 停下来的，
+	// 所以做到哪还交代得出来。
+	if snapshot := parseCodingLog(job.LogPath); snapshot.Result != "干到一半" {
+		t.Fatalf("取消后没交代做到哪了：%q", snapshot.Result)
+	}
+	for _, pid := range fakeACPPIDs(t, pidFile) {
+		waitForCondition(t, 5*time.Second, func() bool { return !codingProcessAlive(pid) })
 	}
 }

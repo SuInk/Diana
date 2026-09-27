@@ -43,3 +43,13 @@ func killCodingProcess(pid int) {
 	}
 	_ = exec.Command("taskkill", "/T", "/F", "/PID", strconv.Itoa(pid)).Run()
 }
+
+// codingACPAgentProcAttr 在 Windows 上不另起进程组：Diana 取消时用 taskkill /T 连
+// 会话进程的整棵子树一起收，代理本来就会一起结束。
+func codingACPAgentProcAttr() *syscall.SysProcAttr {
+	return nil
+}
+
+func killCodingACPAgentGroup(pid int) {
+	killCodingProcess(pid)
+}
