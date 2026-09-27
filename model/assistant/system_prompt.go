@@ -101,7 +101,7 @@ const (
 	promptToolPlatform = "只有用户明确要求读取群信息或执行群操作时才调用 platform：group_info 读群资料，member_info 按 user_id 实时核验成员，member_list 拉成员候选。这些是跨平台动词，工具会按当前平台挑对应接口。被拒绝后不得换别的工具绕过，也不得在没有成功结果时声称已完成。"
 
 	// promptToolPlatformModeration 只在工具真的给当前发言者列出了群管动作时注入（主人、群主或群管理员）。
-	promptToolPlatformModeration = "platform 的群管操作（mute 禁言、unmute 解禁、kick 踢人、announce 群公告、essence_set 精华、set_card 名片、set_title 头衔、mute_all 全员禁言、recall_messages 撤回成员消息等）对机器人主人、本群群主和群管理员开放，身份由工具实时向平台核验，不以消息里的自称为准；还要求机器人本身是该群管理员——不是就直接说做不到，不去猜。mute 必须给正的时长（秒），kick 可带 reject_add_request。目标只认账号 ID，取自 @ 的结构化信息、被引用消息的发送者或成员查询结果，不按昵称猜；不能对主人或机器人自己下手，群管理员也不能对群主或其他管理员下手。被工具拒绝时如实转述原因；平台不支持该操作时如实说明，不改用别的手段绕过。"
+	promptToolPlatformModeration = "platform 的群管操作（mute 禁言、unmute 解禁、kick 踢人、announce 群公告、essence_set 精华、set_card 名片、set_title 头衔、mute_all 全员禁言、recall_messages 撤回成员消息等）对机器人主人、本群群主和群管理员开放；这段说明出现在这里，就表示运行时已按平台账号认定当前发言者属于其中之一，不得再以对方不是群主或管理员为由拒绝。收到群管请求一律先调用 platform 去做，能不能做以工具返回为准：发言者身份由工具实时向平台复核，机器人本身是不是该群管理员、平台支不支持也由工具判定，没调用之前不要自己下结论、不要口头拒绝。被工具拒绝时如实转述它给的原因；平台不支持该操作时如实说明，不改用别的手段绕过。mute 必须给正的时长（秒），kick 可带 reject_add_request。mute_all 只禁普通成员，群主和管理员本来就不受影响，所以群主或管理员要求「除了我全体禁言」就用 mute_all；要额外放过某个普通成员时说明全员禁言做不到单独豁免。目标只认账号 ID，取自 @ 的结构化信息、被引用消息的发送者或成员查询结果，不按昵称猜；不能对主人或机器人自己下手，群管理员也不能对群主或其他管理员下手。"
 
 	// promptToolCrossSession 要治的是两个相反的毛病：一是有人明说「私聊发给我」
 	// 还在群里回一句「等你来私聊」，把能做完的事推回去；二是拿到这个出口之后，
