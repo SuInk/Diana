@@ -43,6 +43,12 @@ const (
 	voiceTTSSettingSpeed        = "speed_factor"
 	voiceTTSSettingMaxChars     = "max_chars"
 	voiceTTSSettingTimeout      = "timeout_seconds"
+	voiceTTSSettingSendMode     = "send_mode"
+
+	// voiceTTSSendModeOnDemand 是原来的行为：模型判断用户要语音时才调 tts 工具。
+	voiceTTSSendModeOnDemand = "on_demand"
+	// voiceTTSSendModeAlways 是常驻语音：每条能念出来的回复都在发送前合成成语音。
+	voiceTTSSendModeAlways = "always"
 
 	defaultVoiceTTSEndpoint = "http://127.0.0.1:9880/tts"
 	defaultVoiceTTSTimeout  = 120 * time.Second
@@ -113,12 +119,23 @@ func (p *VoiceTTSPlugin) Manifest() PluginManifest {
 	return PluginManifest{
 		ID:          voiceTTSPluginID,
 		Name:        voiceName + "语音合成",
-		Version:     "0.3.2",
+		Version:     "0.3.3",
 		Description: "通过可配置的 GPT-SoVITS 服务，或模型分配里的语音合成插槽（OpenAI 兼容 /audio/speech、ElevenLabs），把回复合成为" + voiceName + "音色；由模型通过 Agent 工具按需调用。",
 		Official:    true,
 		BuiltIn:     true,
 		Permissions: []string{"agent:tool", "network:http", "file:write", "process:execute", "message:read", "message:send"},
 		Settings: []PluginSettingSpec{
+			{
+				Key:     voiceTTSSettingSendMode,
+				Label:   "发送模式",
+				Type:    PluginSettingTypeSelect,
+				Default: voiceTTSSendModeOnDemand,
+				Options: []PluginSettingOption{
+					{Value: voiceTTSSendModeOnDemand, Label: "按需：用户要语音时才发"},
+					{Value: voiceTTSSendModeAlways, Label: "常驻：回复都用语音发"},
+				},
+				Description: "常驻时每条回复在发送前合成为语音；带链接、图片、@ 或超过单次合成字数的回复仍发文字，合成失败也回退文字。可以在群设置里只给某个群开。",
+			},
 			{
 				Key:     voiceTTSSettingPreset,
 				Label:   "服务预设",

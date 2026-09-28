@@ -4735,6 +4735,9 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		} else if strings.TrimSpace(voiceReply) != "" {
 			reply = voiceReply
 		}
+	} else if !isStandaloneRecordReply(reply) && nestedForwardPluginResponse(pluginResponses) == nil {
+		// 常驻语音不碰合并转发：那条回复是转发卡片的说明，换成语音就和卡片脱节了。
+		reply = r.persistentVoiceReply(ctx, event, reply)
 	}
 	if nested := nestedForwardPluginResponse(pluginResponses); nested != nil {
 		var sentMessageIDs []string

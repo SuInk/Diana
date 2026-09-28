@@ -1227,6 +1227,7 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 	}
 	// 本群消息长度和心情语气紧挨着锚点注入，理由和锚点一样：都是「此刻怎么说」，
 	// 离生成越近越管用。
+	appendPromptSection(&tail, r.persistentVoicePrompt(event, cfg))
 	appendPromptSection(&tail, r.groupStylePrompt(event, cfg))
 	appendPromptSection(&tail, r.groupLengthNormPrompt(event, cfg))
 	appendPromptSection(&tail, r.moodToneForConfig(cfg, event.ProfileID))

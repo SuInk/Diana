@@ -1140,6 +1140,19 @@
       ]
     },
     {
+      "key": "reply.persistent_voice",
+      "group": "reply_tail",
+      "title": "常驻语音模式",
+      "usage": "语音合成插件的发送模式设为「常驻」时注入：告诉模型回复会被念出来，写成口语、控制字数。",
+      "default": "你这条回复会被合成为语音发出去：写成能直接念出口的口语，不用 Markdown、列表、表情符号和括号里的动作描写，不超过 {max_chars} 字。确实要给链接、代码或长清单时照常写，这种回复会改发文字。",
+      "vars": [
+        {
+          "name": "max_chars",
+          "description": "语音插件的单次合成字数上限"
+        }
+      ]
+    },
+    {
       "key": "routing.direct_reply_topic",
       "group": "routing",
       "title": "连续消息的话题关系",
