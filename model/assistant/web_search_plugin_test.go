@@ -38,7 +38,9 @@ func TestWebSearchPluginIsBuiltInAndHonorsOverrides(t *testing.T) {
 	if !state.Installed || !state.Enabled {
 		t.Fatalf("built-in state changed after lifecycle request: %#v", state)
 	}
-	tools, err = manager.AgentToolsWithOverrides(map[string]bool{webSearchPluginID: false})
+	// 只关联网搜索时网页渲染还在，会补一个搜索引擎方式的 web_search（见
+	// TestDisabledWebSearchFallsBackToSearchEngineWhenBrowserIsOn），这里两个一起关。
+	tools, err = manager.AgentToolsWithOverrides(map[string]bool{webSearchPluginID: false, sandboxedBrowserPluginID: false})
 	if err != nil || hasAgentToolNamed(tools, agent.WebSearchToolName) {
 		t.Fatalf("disabled override tools=%#v err=%v", tools, err)
 	}
@@ -171,5 +173,50 @@ func TestWebSearchPluginCustomSearchEngineKeepsOrder(t *testing.T) {
 	}
 	if !strings.Contains(output, `"provider": "bing"`) || !strings.Contains(output, "https://example.org/a") || strings.Contains(output, "evil.example") {
 		t.Fatalf("output = %s", output)
+	}
+}
+
+func TestDisabledWebSearchFallsBackToSearchEngineWhenBrowserIsOn(t *testing.T) {
+	var rendered []string
+	renderer := agent.PageRendererFunc(func(_ context.Context, rawURL string) (agent.RenderedPage, error) {
+		rendered = append(rendered, rawURL)
+		return agent.RenderedPage{URL: rawURL, Title: "结果", Text: "摘要", Links: []agent.RenderedLink{{URL: "https://example.com/a", Text: "结果一"}}}, nil
+	})
+	manager := NewPluginManager(newSandboxedBrowserRenderPlugin(renderer), &WebSearchPlugin{renderer: renderer})
+	if _, err := manager.UpdateSettings(webSearchPluginID, map[string]any{webSearchSettingEngines: "duckduckgo"}); err != nil {
+		t.Fatal(err)
+	}
+
+	tools, err := manager.AgentToolsWithOverrides(map[string]bool{webSearchPluginID: false})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var search agent.Tool
+	for _, tool := range tools {
+		if tool.Name() == agent.WebSearchToolName {
+			search = tool
+		}
+	}
+	if search == nil {
+		t.Fatalf("网页渲染开着时应当补上搜索引擎方式的 web_search: %#v", tools)
+	}
+	if _, err := search.Run(context.Background(), map[string]any{"query": "测试"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(rendered) != 1 || !strings.HasPrefix(rendered[0], "https://duckduckgo.com/?") {
+		t.Fatalf("应当沿用插件里的引擎顺序: %v", rendered)
+	}
+
+	owners := manager.AgentToolOwners("", map[string]bool{webSearchPluginID: false}, nil)
+	if strings.Join(owners[webSearchPluginID], ",") != agent.WebSearchToolName {
+		t.Fatalf("兜底的 web_search 应当记在联网搜索插件名下: %v", owners)
+	}
+
+	tools, err = manager.AgentToolsWithOverrides(map[string]bool{webSearchPluginID: false, sandboxedBrowserPluginID: false})
+	if err != nil || hasAgentToolNamed(tools, agent.WebSearchToolName) {
+		t.Fatalf("两个插件都关掉就不该有 web_search: tools=%#v err=%v", tools, err)
+	}
+	if owners := manager.AgentToolOwners("", map[string]bool{webSearchPluginID: false, sandboxedBrowserPluginID: false}, nil); len(owners[webSearchPluginID]) != 0 {
+		t.Fatalf("owners = %v", owners)
 	}
 }

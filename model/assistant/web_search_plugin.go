@@ -58,7 +58,7 @@ func (p *WebSearchPlugin) Manifest() PluginManifest {
 		ID:          webSearchPluginID,
 		Name:        "联网搜索",
 		Version:     "0.3.2",
-		Description: "为对话提供带候选查询探索和空结果恢复的实时网页搜索。可以走搜索 API（优先 Exa MCP，失败回退 Tavily），也可以用沙盒浏览器直接打开搜索引擎的结果页。",
+		Description: "为对话提供带候选查询探索和空结果恢复的实时网页搜索。可以走搜索 API（优先 Exa MCP，失败回退 Tavily），也可以用沙盒浏览器直接打开搜索引擎的结果页。关闭本插件时，只要网页渲染插件开着，仍按搜索引擎方式提供搜索；要彻底不联网搜索，两个都关掉。",
 		Official:    true,
 		BuiltIn:     true,
 		Permissions: []string{"network:http", "llm:tool"},

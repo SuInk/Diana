@@ -567,16 +567,24 @@ func (r *Runtime) agentBuiltinExtensions(event MessageEvent) []agent.BuiltinExte
 	states := r.plugins.List()
 	extensions := make([]agent.BuiltinExtension, 0, len(states))
 	for _, state := range states {
+		name := state.Manifest.Name
+		enabled := r.plugins.EnabledWithOverrides(state.Manifest.ID, overrides)
+		if state.Manifest.ID == webSearchPluginID && !enabled && len(toolOwners[webSearchPluginID]) > 0 {
+			// 插件关着但 web_search 由网页渲染按搜索引擎方式补上了。照实写「disabled」，
+			// 模型会一边拿着 web_search，一边告诉群友联网搜索没开。
+			name += "（搜索引擎方式，经网页渲染）"
+			enabled = true
+		}
 		extensions = append(extensions, agent.BuiltinExtension{
 			Tools:       append([]string(nil), toolOwners[state.Manifest.ID]...),
 			ID:          state.Manifest.ID,
-			Name:        state.Manifest.Name,
+			Name:        name,
 			Version:     state.Manifest.Version,
 			Description: state.Manifest.Description,
 			Official:    state.Manifest.Official,
 			BuiltIn:     state.Manifest.BuiltIn,
 			Installed:   state.Installed,
-			Enabled:     r.plugins.EnabledWithOverrides(state.Manifest.ID, overrides),
+			Enabled:     enabled,
 			Permissions: append([]string(nil), state.Manifest.Permissions...),
 		})
 	}
