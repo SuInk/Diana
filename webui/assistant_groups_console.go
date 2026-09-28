@@ -686,7 +686,14 @@ func mergeConsoleGroupItems(base assistant.BotConfig, set assistant.GroupConfigS
 		cfg, configured := saved[groupID]
 		if !configured {
 			// 还没配过的群跟着它所在的那台机器人给默认值。
-			cfg = assistant.DefaultGroupConfig(groupID, baseFor(live.BotProfileID))
+			owner := baseFor(live.BotProfileID)
+			cfg = assistant.DefaultGroupConfig(groupID, owner)
+			// 归属也要写上。订阅通知这类下拉框按 bot_profile_id 挑「这台机器人在哪些
+			// 群」，留空的话新群、没在群管理页配置过的群一个都挑不出来。
+			cfg.BotProfileID = strings.TrimSpace(live.BotProfileID)
+			if cfg.BotProfileID == "" {
+				cfg.BotProfileID = strings.TrimSpace(owner.ID)
+			}
 		}
 		avatarURL := groupAvatar(live.BotProfileID, groupID)
 		items = append(items, consoleGroupItem{

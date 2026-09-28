@@ -123,3 +123,24 @@ func TestIsOneBotProfileKeepsLegacyFallbackWithOneBotProfiles(t *testing.T) {
 		t.Fatal("unknown profile should keep the legacy OneBot fallback when a OneBot bot exists")
 	}
 }
+
+// 没在群管理页配置过的群也要带上归属机器人。订阅通知的群下拉框按 bot_profile_id
+// 挑群，留空的话新加的群永远选不到，只剩配置过的那几个。
+func TestMergeConsoleGroupItemsStampsOwnerOnUnconfiguredGroups(t *testing.T) {
+	base := assistant.BotConfig{ID: "qq-main"}
+	live := []botAutoGroupInfo{
+		{GroupID: "10001", GroupName: "新群"},
+		{GroupID: "10002", GroupName: "另一台的群", BotProfileID: "qq-other"},
+	}
+	items := mergeConsoleGroupItems(base, assistant.GroupConfigSet{}, live, nil, nil)
+	byID := map[string]consoleGroupItem{}
+	for _, item := range items {
+		byID[item.GroupID] = item
+	}
+	if got := byID["10001"].BotProfileID; got != "qq-main" {
+		t.Fatalf("未配置的群没跟上当前机器人：%q", got)
+	}
+	if got := byID["10002"].BotProfileID; got != "qq-other" {
+		t.Fatalf("事件里记着的归属被覆盖了：%q", got)
+	}
+}
