@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/SuInk/diana/model/agent"
@@ -110,5 +111,65 @@ func TestRuntimeWithoutSearchPluginRegistersNoSearchTool(t *testing.T) {
 	}
 	if last := runtime.Status().LastError; last != "" {
 		t.Fatalf("reply failed: %s", last)
+	}
+}
+
+func TestWebSearchPluginSearchEngineMode(t *testing.T) {
+	var rendered []string
+	plugin := &WebSearchPlugin{renderer: agent.PageRendererFunc(func(_ context.Context, rawURL string) (agent.RenderedPage, error) {
+		rendered = append(rendered, rawURL)
+		return agent.RenderedPage{URL: rawURL, Title: "结果", Text: "摘要", Links: []agent.RenderedLink{{URL: "https://example.com/a", Text: "结果一"}}}, nil
+	})}
+	tools, err := plugin.AgentTools(SettingValues{
+		webSearchSettingMode:    webSearchModeEngine,
+		webSearchSettingEngines: "Bing，unknown, bing, baidu",
+	})
+	if err != nil || len(tools) != 1 || tools[0].Name() != agent.WebSearchToolName {
+		t.Fatalf("tools=%#v err=%v", tools, err)
+	}
+	output, err := tools[0].Run(context.Background(), map[string]any{"query": "测试"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rendered) != 1 || !strings.HasPrefix(rendered[0], "https://www.bing.com/search?") {
+		t.Fatalf("rendered = %v", rendered)
+	}
+	if !strings.Contains(output, `"provider": "bing"`) || !strings.Contains(output, "https://example.com/a") {
+		t.Fatalf("output = %s", output)
+	}
+	if got := webSearchEngineOrder(" , nope"); strings.Join(got, ",") != strings.Join(agent.DefaultSearchEngines, ",") {
+		t.Fatalf("empty order = %v", got)
+	}
+}
+
+func TestWebSearchPluginCustomSearchEngineKeepsOrder(t *testing.T) {
+	var rendered []string
+	plugin := &WebSearchPlugin{renderer: agent.PageRendererFunc(func(_ context.Context, rawURL string) (agent.RenderedPage, error) {
+		rendered = append(rendered, rawURL)
+		if strings.HasPrefix(rawURL, "https://search.example.com/") {
+			return agent.RenderedPage{URL: rawURL, Title: "没有结果", Text: "没有结果"}, nil
+		}
+		return agent.RenderedPage{URL: rawURL, Title: "结果", Text: "摘要", Links: []agent.RenderedLink{
+			{URL: "https://www.bing.com/settings", Text: "设置"},
+			{URL: "https://example.org/a", Text: "结果一"},
+		}}, nil
+	})}
+	tools, err := plugin.AgentTools(SettingValues{
+		webSearchSettingMode:    webSearchModeEngine,
+		webSearchSettingEngines: "https://search.example.com/s?q={query}&lang=zh\nbing\nhttp://evil.example/?q={query}",
+	})
+	if err != nil || len(tools) != 1 {
+		t.Fatalf("tools=%#v err=%v", tools, err)
+	}
+	output, err := tools[0].Run(context.Background(), map[string]any{"query": "a b&c"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"https://search.example.com/s?q=a+b%26c&lang=zh", "https://www.bing.com/search?q=a+b%26c"}
+	if strings.Join(rendered, " ") != strings.Join(want, " ") {
+		t.Fatalf("rendered = %v", rendered)
+	}
+	if !strings.Contains(output, `"provider": "bing"`) || !strings.Contains(output, "https://example.org/a") || strings.Contains(output, "evil.example") {
+		t.Fatalf("output = %s", output)
 	}
 }

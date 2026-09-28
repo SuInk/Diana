@@ -57,7 +57,18 @@ type RenderedPage struct {
 	PendingRequests int                    `json:"pending_requests,omitempty"`
 	NavigationChain []string               `json:"navigation_chain,omitempty"`
 	PreviousPages   []RenderedPageSnapshot `json:"previous_pages,omitempty"`
+	// Links 是页面上可见的外链，只给搜索引擎后端从结果页里取结果用；不序列化，
+	// browser_render 交给模型的输出和以前一样。
+	Links []RenderedLink `json:"-"`
 }
+
+// RenderedLink 是页面上的一个 <a>：解析成绝对地址的 href 和它的可见文字。
+type RenderedLink struct {
+	URL  string
+	Text string
+}
+
+const maxRenderedPageLinks = 300
 
 // RenderedPageSnapshot preserves meaningful content seen before a redirect.
 type RenderedPageSnapshot struct {
@@ -612,7 +623,32 @@ func parseRenderedPage(data []byte, requestedURL string, maxChars int, truncated
 	if page.Title == "" && page.Description == "" && page.Text == "" {
 		return RenderedPage{}, errors.New("headless browser rendered an empty page")
 	}
+	page.Links = renderedPageLinks(document, requestedURL)
 	return page, nil
+}
+
+func renderedPageLinks(document *html.Node, base string) []RenderedLink {
+	var links []RenderedLink
+	var walk func(*html.Node)
+	walk = func(node *html.Node) {
+		if node == nil || len(links) >= maxRenderedPageLinks || nodeIsHidden(node) {
+			return
+		}
+		if node.Type == html.ElementNode && strings.EqualFold(node.Data, "a") {
+			if resolved := resolveRenderedPageURL(base, strings.TrimSpace(nodeAttr(node, "href"))); resolved != "" {
+				text := normalizeRenderedText(visibleNodeText(node))
+				if text != "" {
+					links = append(links, RenderedLink{URL: resolved, Text: truncateText(text, 300)})
+				}
+			}
+			return
+		}
+		for child := node.FirstChild; child != nil; child = child.NextSibling {
+			walk(child)
+		}
+	}
+	walk(document)
+	return links
 }
 
 func findElement(node *html.Node, tag string) *html.Node {

@@ -184,7 +184,7 @@ func (l *claimEvidenceLedger) observeSearch(output string, runErr error) map[str
 // 沙盒浏览器直接读到的页面属于第一方直接证据，比搜索摘要更强，
 // 因此不能因为它没有出现在搜索候选里就被证据校验拒绝。
 func (l *claimEvidenceLedger) observeRenderedPage(output string, runErr error) map[string]any {
-	if l == nil || !l.active || runErr != nil {
+	if l == nil || runErr != nil {
 		return nil
 	}
 	var page RenderedPage
@@ -192,6 +192,12 @@ func (l *claimEvidenceLedger) observeRenderedPage(output string, runErr error) m
 		return nil
 	}
 	if strings.TrimSpace(page.Text) == "" && strings.TrimSpace(page.Title) == "" {
+		return nil
+	}
+	// 真读到了页面就算查过：用浏览器打开搜索结果页或来源页，和调 web_search 一样
+	// 满足「先检索再收口」，门控不该把它打回去再逼一次 web_search。
+	l.searched = true
+	if !l.active {
 		return nil
 	}
 	added := 0
