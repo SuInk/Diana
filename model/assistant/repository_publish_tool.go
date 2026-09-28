@@ -130,19 +130,21 @@ type repositoryIssueResult struct {
 	Comparison *repositoryCompareView `json:"comparison,omitempty"`
 	Tree       *repositoryTreeView    `json:"tree,omitempty"`
 	// Repositories 只在 repo_search 返回，RepositoryProfile 只在 repo 返回。
-	Repositories         []repositoryProfileView    `json:"repositories,omitempty"`
-	RepositoryProfile    *repositoryProfileView     `json:"repository_profile,omitempty"`
-	ReviewURL            string                     `json:"review_url,omitempty"`
-	File                 *repositoryFileView        `json:"file,omitempty"`
-	Fingerprint          string                     `json:"fingerprint,omitempty"`
-	Idempotent           bool                       `json:"idempotent,omitempty"`
-	Reconciled           bool                       `json:"reconciled,omitempty"`
-	RequiresConfirmation bool                       `json:"requires_confirmation,omitempty"`
-	ConfirmationToken    string                     `json:"confirmation_token,omitempty"`
-	RequiresApproval     bool                       `json:"requires_approval,omitempty"`
-	Draft                *repositoryIssueDraftView  `json:"draft,omitempty"`
-	Drafts               []repositoryIssueDraftView `json:"drafts,omitempty"`
-	Redactions           int                        `json:"redactions,omitempty"`
+	Repositories         []repositoryProfileView `json:"repositories,omitempty"`
+	RepositoryProfile    *repositoryProfileView  `json:"repository_profile,omitempty"`
+	ReviewURL            string                  `json:"review_url,omitempty"`
+	File                 *repositoryFileView     `json:"file,omitempty"`
+	Fingerprint          string                  `json:"fingerprint,omitempty"`
+	Idempotent           bool                    `json:"idempotent,omitempty"`
+	Reconciled           bool                    `json:"reconciled,omitempty"`
+	RequiresConfirmation bool                    `json:"requires_confirmation,omitempty"`
+	ConfirmationToken    string                  `json:"confirmation_token,omitempty"`
+	RequiresApproval     bool                    `json:"requires_approval,omitempty"`
+	// RedirectRepository 是目标仓库在 GitHub 上改名或转移后的新名字，只在因此失败时出现。
+	RedirectRepository string                     `json:"redirect_repository,omitempty"`
+	Draft              *repositoryIssueDraftView  `json:"draft,omitempty"`
+	Drafts             []repositoryIssueDraftView `json:"drafts,omitempty"`
+	Redactions         int                        `json:"redactions,omitempty"`
 }
 
 type RepositoryIssueDraft struct {
@@ -366,12 +368,13 @@ func (t *dianaGitHubTool) InputSchema() map[string]any {
 			"update、close、reopen 只能用于 Issue；get、comment 可用于 Issue 和 PR；pull_files、review 只能用于 PR。"+
 			"要改已有 Issue 之前先 get 读回原文。create 在群聊里由非管理人员发起时会存成草稿，等管理人员 approve 才真正写入。",
 			"repo_search", "repo", "search", "get", "pull_files", "commit_files", "compare_files", "read_file", "list_files", "create", "update", "comment", "review", "close", "reopen", "approve", "cancel_draft", "list_drafts"),
-		"repository": toolStringParam("目标仓库，写成 owner/repo。repo_search、approve、cancel_draft、list_drafts 不需要。"),
-		"number":     toolIntParam("目标 Issue 或 PR 编号；get、pull_files、review 必填，update、comment、close、reopen 单个目标时用它。", 1, 1_000_000),
-		"numbers":    toolIntArrayParam("update、comment、close、reopen 的批量目标：对这些 Issue 执行同样的改动，一份草稿、一个确认码；最多 "+itoa(repositoryIssueBatchLimit)+" 个。", 1, 1_000_000),
-		"query":      toolStringParam("search 与 repo_search 的检索关键词，只写普通词，不要带 repo:、language: 这类限定符。"),
-		"kind":       toolEnumParam("search 专用：搜 Issue（默认）、PR 还是两者都搜。", "issue", "pull_request", "all"),
-		"language":   toolStringParam("repo_search 可选：只要这门语言的仓库，例如 go、rust、typescript。"),
+		"repository": toolStringParam("目标仓库，写成 owner/repo。repo_search、cancel_draft、list_drafts 不需要；approve 平时也不传，" +
+			"只有上一次结果带回 redirect_repository（草稿的仓库在 GitHub 上改了名）时填它，草稿会改投到新名字，确认码不变。"),
+		"number":   toolIntParam("目标 Issue 或 PR 编号；get、pull_files、review 必填，update、comment、close、reopen 单个目标时用它。", 1, 1_000_000),
+		"numbers":  toolIntArrayParam("update、comment、close、reopen 的批量目标：对这些 Issue 执行同样的改动，一份草稿、一个确认码；最多 "+itoa(repositoryIssueBatchLimit)+" 个。", 1, 1_000_000),
+		"query":    toolStringParam("search 与 repo_search 的检索关键词，只写普通词，不要带 repo:、language: 这类限定符。"),
+		"kind":     toolEnumParam("search 专用：搜 Issue（默认）、PR 还是两者都搜。", "issue", "pull_request", "all"),
+		"language": toolStringParam("repo_search 可选：只要这门语言的仓库，例如 go、rust、typescript。"),
 		"sort": toolEnumParam("repo_search 可选：结果排序。best_match 按相关度（默认）；用户问「最流行」用 stars，问「还有人维护吗」用 updated。",
 			"best_match", "stars", "forks", "updated"),
 		"limit":       toolIntParam("repo_search 可选：最多返回几个仓库，默认 "+itoa(repositoryDiscoveryDefaultLimit)+"。", 1, repositoryDiscoveryMaxLimit),
@@ -831,6 +834,7 @@ func (r repositoryIssueResult) fail(code, message string) repositoryIssueResult 
 }
 
 func (t *dianaGitHubTool) finish(ctx context.Context, result repositoryIssueResult) (string, error) {
+	result = t.explainRepositoryRename(ctx, result)
 	if result.Operation != "" && !repositoryIssueReadOnlyOperation(result.Operation) {
 		t.audit(result)
 	}
@@ -1612,6 +1616,24 @@ func (t *dianaGitHubTool) approveDraft(ctx context.Context, input map[string]any
 		}
 		return result.fail("draft_not_found", "本群没有可审批的 Issue 草稿，或草稿已处理。")
 	}
+	retargeted := false
+	if requested := strings.TrimSpace(configToolString(input, "repository")); requested != "" {
+		target, normalizeErr := normalizeGitHubRepository(requested)
+		if normalizeErr != nil {
+			return result.fail("invalid_repository", normalizeErr.Error())
+		}
+		if !strings.EqualFold(target, draft.Repository) {
+			// 只认 GitHub 自己说的新名字：模型填什么都行的话，一个确认码就能被带去写
+			// 别的仓库。权限和白名单随后按新名字重新核对。
+			renamed, ok := t.resolveRepositoryRename(ctx, draft.Repository)
+			if !ok || !strings.EqualFold(renamed, target) {
+				return result.fail("redirect_mismatch", fmt.Sprintf(
+					"草稿的目标仓库是 %s，GitHub 没有确认它改名成 %s，草稿不能改投。approve 不传 repository 即按原仓库提交。", draft.Repository, target))
+			}
+			draft.Repository = renamed
+			retargeted = true
+		}
+	}
 	result.Repository = draft.Repository
 	owner := t.runtime.relationshipPolicy(ctx, t.event).Owner
 	userAllowed, code, message := repositoryPublishEventCanApprove(t.event, draft.Repository, owner, t.settings, t.groupRoleResolver(ctx))
@@ -1630,6 +1652,12 @@ func (t *dianaGitHubTool) approveDraft(ctx context.Context, input map[string]any
 	}
 	if code, message := t.validateWriteAccess(draft.Repository, owner); code != "" {
 		return result.fail(code, message)
+	}
+	if retargeted {
+		// 先落盘再写：写入没成的话，下一次回确认码也直接走新名字。
+		if err := t.plugin.updateDraft(ctx, draft); err != nil {
+			return result.fail("draft_store_failed", "草稿改投到新仓库名时保存失败。")
+		}
 	}
 	return t.executeDraft(ctx, draft, input, "approve")
 }
