@@ -8,11 +8,14 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/SuInk/diana/model/assistant"
 )
 
-// InboundEventRecall 是这一轮发出去的某条消息后来被撤回的记录。
+// InboundEventRecall 是这条消息本身，或这一轮发出去的某条回复后来被撤回的记录。
 type InboundEventRecall struct {
-	// MessageID 是被撤回的那条出站消息号，对应 OutboundMessageID 里的一项。
+	// MessageID 是被撤回的那条消息号：等于事件自己的 MessageID 时撤的是收到的这条
+	// 消息，否则是 OutboundMessageID 里的一项。
 	MessageID    string    `json:"message_id"`
 	At           time.Time `json:"at"`
 	OperatorID   string    `json:"operator_id,omitempty"`
@@ -22,16 +25,23 @@ type InboundEventRecall struct {
 	SelfRecall bool `json:"self_recall,omitempty"`
 }
 
-// attachInboundEventRecalls 把撤回通知挂到发出那条消息的事件上。
+// attachInboundEventRecalls 把撤回通知挂到被撤那条消息所在的事件上。
 //
 // 撤回通知本身也是一行事件，但那一行只写得出「某某撤回了 Diana 的消息」，撤的
-// 是哪句回复、回的是谁，得拿消息号回头对。挂到原回复上，控制台就能把两行合成
-// 一行。撤回通知只按出站消息号查 message_events 的 (message_id, kind) 索引，
-// 一页最多几百个号，不需要扫表。
+// 是哪句回复、回的是谁，得拿消息号回头对。群友撤回自己的消息也一样多出一行，
+// 原话还得往下翻。挂到原消息或原回复上，控制台就能把两行合成一行。撤回通知只按
+// 消息号查 message_events 的 (message_id, kind) 索引，一页最多几百个号，不需要扫表。
 func (s *SQLiteStore) attachInboundEventRecalls(ctx context.Context, events []InboundEventDetail) error {
 	defer s.observeStorage(ctx, "attachInboundEventRecalls", "read")()
 	owners := map[string][]int{}
 	for index, event := range events {
+		// 撤回通知那一行自己也带着被撤的消息号，别把撤回挂回它自己身上。
+		if event.Kind == string(assistant.EventKindNotice) {
+			continue
+		}
+		if id := strings.TrimSpace(event.MessageID); id != "" {
+			owners[id] = append(owners[id], index)
+		}
 		for _, id := range strings.Split(event.OutboundMessageID, ",") {
 			if id = strings.TrimSpace(id); id != "" {
 				owners[id] = append(owners[id], index)

@@ -78,3 +78,56 @@ func TestListInboundEventDetailsAttachesRecallToOriginalReply(t *testing.T) {
 		t.Fatalf("recall = %#v", got)
 	}
 }
+
+// 线上：群友撤回了自己 @ 机器人的一句话，事件页照样多出一行「撤回记录」，原话
+// 夹在那一行里，原消息那行却看不出被撤过。撤回要挂回原消息，通知那行自己不挂。
+func TestListInboundEventDetailsAttachesSelfRecallToOriginalMessage(t *testing.T) {
+	ctx := context.Background()
+	store, err := NewSQLiteStore(filepath.Join(t.TempDir(), "event-recall-inbound.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+
+	now := time.Now().Truncate(time.Second)
+	source := assistant.MessageEvent{
+		Kind: assistant.EventKindGroup, GroupID: "group-1", UserID: "user-1",
+		MessageID: "source-message", Time: now.Add(-time.Minute).Unix(),
+	}
+	if _, inserted, err := store.EnqueueInboundEvent(ctx, "group:group-1", source); err != nil || !inserted {
+		t.Fatalf("enqueue inserted=%v err=%v", inserted, err)
+	}
+	recall := assistant.MessageEvent{
+		Kind: assistant.EventKindNotice, SubType: "group_recall", Time: now.Unix(),
+		GroupID: "group-1", UserID: "user-1", OperatorID: "user-1", MessageID: "source-message",
+	}
+	if err := store.AppendMessageEvent(ctx, "group:group-1", recall); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RecordNoticeEvent(ctx, "group:group-1", recall); err != nil {
+		t.Fatal(err)
+	}
+
+	page, err := store.ListInboundEventDetails(ctx, InboundEventQuery{Since: now.Add(-time.Hour), Limit: 10, Result: InboundEventResultAll})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var original, notice *InboundEventDetail
+	for index := range page.Events {
+		event := &page.Events[index]
+		if event.Kind == string(assistant.EventKindNotice) {
+			notice = event
+		} else if event.MessageID == "source-message" {
+			original = event
+		}
+	}
+	if original == nil || notice == nil {
+		t.Fatalf("events = %#v, want original message and recall notice", page.Events)
+	}
+	if len(original.Recalls) != 1 || original.Recalls[0].MessageID != "source-message" || !original.Recalls[0].SelfRecall {
+		t.Fatalf("original recalls = %#v", original.Recalls)
+	}
+	if len(notice.Recalls) != 0 {
+		t.Fatalf("notice recalls = %#v, want none", notice.Recalls)
+	}
+}

@@ -2630,7 +2630,7 @@ export interface AssistantEventQuote {
 }
 
 export interface AssistantEventRecall {
-  /** 被撤回的出站消息号，对应 outbound_message_id 里的一项。 */
+  /** 被撤回的消息号：等于事件自己的 message_id 时撤的是收到的这条消息，否则是 outbound_message_id 里的一项。 */
   message_id: string;
   at: string;
   operator_id?: string;
