@@ -491,8 +491,17 @@
       </div>
 
       <div v-show="activePage === 'status'" class="settings-section-body">
-        <!-- 运行状态：版本号只在「系统更新」显示一次，这里放运行期信息和重启。 -->
+        <!-- 运行状态：版本号只在「系统更新」显示一次，这里放进程的运行期信息和重启。
+             重启放在同一张卡的底部动作区：看完跑了多久再决定要不要重启，重启过程
+             也直接反映在卡头的状态上。 -->
         <section class="card">
+          <div class="card-header" style="justify-content: space-between">
+            <h2>服务进程</h2>
+            <SkeletonBlock v-if="healthLoading" width="64px" height="21px" />
+            <span v-else class="badge" :class="restarting ? 'warn' : health ? 'ok' : 'warn'">
+              {{ restarting ? "重启中" : health ? "运行中" : "状态未知" }}
+            </span>
+          </div>
           <div class="card-body stack" style="gap: 8px; font-size: 13px">
             <div class="info-row">
               <span class="muted info-label">运行时长</span>
@@ -505,17 +514,16 @@
               <span v-else class="mono info-value">{{ health ? formatTime(health.started_at) : "—" }}</span>
             </div>
           </div>
-        </section>
-        <section class="card">
-          <div class="card-header"><span class="card-sub">重启服务</span></div>
-          <div class="card-body stack" style="gap: 10px; font-size: 13px">
-            <div class="cluster">
-              <button class="btn" type="button" :disabled="restarting" @click="doRestart">
-                <RotateCw :size="15" aria-hidden="true" />
-                {{ restarting ? "重启中，等待服务恢复…" : "重启服务" }}
-              </button>
+          <div class="card-body restart-action">
+            <div class="restart-copy">
+              <strong>重启服务</strong>
+              <span v-if="restarting" class="muted" role="status">正在等待新进程就绪，已等待 {{ restartElapsed }} 秒，恢复后页面会自动刷新。</span>
+              <span v-else class="muted">原地重启当前进程，服务中断几秒，进行中的消息处理会被打断。系统更新下载完成后在这里重启生效。</span>
             </div>
-            <p class="muted" style="font-size: 12.5px; margin: 0">原地重启当前服务进程，更新拉取后需重启才生效。恢复后页面会自动刷新。</p>
+            <button class="btn danger" type="button" :disabled="restarting" @click="doRestart">
+              <RotateCw :size="15" :class="{ spin: restarting }" aria-hidden="true" />
+              {{ restarting ? "重启中…" : "重启" }}
+            </button>
           </div>
         </section>
       </div>
@@ -1169,6 +1177,7 @@ const updatePhaseLabel = computed(() => {
   }
 });
 
+const restartElapsed = ref(0);
 async function doRestart(): Promise<void> {
   const ok = await askConfirm({
     title: "重启服务",
@@ -1180,6 +1189,17 @@ async function doRestart(): Promise<void> {
     return;
   }
   restarting.value = true;
+  restartElapsed.value = 0;
+  const restartStartedAt = Date.now();
+  const elapsedTimer = window.setInterval(() => { restartElapsed.value = Math.round((Date.now() - restartStartedAt) / 1000); }, 1000);
+  try {
+    await waitForRestart();
+  } finally {
+    window.clearInterval(elapsedTimer);
+  }
+}
+
+async function waitForRestart(): Promise<void> {
   const previousStart = health.value?.started_at ?? "";
   try {
     await restartSystem();
@@ -1489,6 +1509,21 @@ onBeforeUnmount(() => {
 
 /* auto-fit 让只有一张卡的分区自己占满整行，右边不留空位；
    两张卡的分区并排，和原来的两列观感一致。 */
+/* 重启是破坏性动作，和上面的只读信息用分隔线隔开，说明在左、按钮在右。 */
+.restart-action {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  border-top: 1px solid var(--border);
+}
+.restart-copy { display: flex; flex-direction: column; gap: 4px; font-size: 13px; min-width: 0; }
+.restart-copy .muted { font-size: 12.5px; }
+.restart-action .btn { flex-shrink: 0; }
+@media (max-width: 520px) {
+  .restart-action { flex-direction: column; align-items: stretch; }
+}
+
 .settings-section-body {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
