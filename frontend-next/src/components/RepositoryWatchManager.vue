@@ -492,7 +492,6 @@ async function saveEditor(): Promise<boolean> {
   if (!form.value.repository) return rejectEditor("请填写 GitHub 仓库");
   if (form.value.interval_seconds < minimumIntervalSeconds) return rejectEditor("检查周期不能低于 30 秒");
   if (form.value.interval_seconds > maximumIntervalSeconds) return rejectEditor("检查周期不能超过 365 天");
-  if (!form.value.watch_commits && !form.value.watch_pull_requests && !form.value.watch_issues && !form.value.watch_releases && !form.value.watch_stars) return rejectEditor("Commit、PR、Issue、Release 和 Star 至少选择一项");
   const starMilestones = parseStarMilestones(form.value.star_milestones_text);
   if (form.value.watch_stars && form.value.star_notify_mode === "milestone" && !starMilestones.length) return rejectEditor("里程碑模式至少填写一个有效 Star 数");
   if (!form.value.profile_id) return rejectEditor("请选择发送机器人");
@@ -572,7 +571,7 @@ async function remove(task: AssistantTask): Promise<void> {
 
 function statusLabel(value: AssistantTaskStatus): string { return { active: "运行中", retrying: "重试中", used: "已执行", cancelled: "已取消", expired: "已到期" }[value] ?? value; }
 function statusTone(value: AssistantTaskStatus): string { return value === "active" ? "ok" : value === "retrying" ? "warn" : value === "cancelled" ? "err" : ""; }
-function watchScopeLabel(task: AssistantTask): string { return [task.watch_commits ? "Commit" : "", task.watch_pull_requests ? "PR" : "", task.watch_issues ? "Issue" : "", task.watch_releases ? "Release" : "", task.watch_stars ? "Star" : ""].filter(Boolean).join(" + "); }
+function watchScopeLabel(task: AssistantTask): string { return [task.watch_commits ? "Commit" : "", task.watch_pull_requests ? "PR" : "", task.watch_issues ? "Issue" : "", task.watch_releases ? "Release" : "", task.watch_stars ? "Star" : ""].filter(Boolean).join(" + ") || "不推送动态"; }
 function parseStarMilestones(value: string): number[] { return [...new Set(value.split(/[\s,，;；]+/).map(Number).filter((item) => Number.isInteger(item) && item >= 1 && item <= 1000000))].sort((a, b) => a - b); }
 function formatInterval(seconds: number): string { return seconds % 86400 === 0 ? `${seconds / 86400} 天` : seconds % 3600 === 0 ? `${seconds / 3600} 小时` : seconds % 60 === 0 ? `${seconds / 60} 分钟` : `${seconds} 秒`; }
 

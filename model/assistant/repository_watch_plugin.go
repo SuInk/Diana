@@ -512,9 +512,8 @@ func (p *RepositoryWatchPlugin) checkSelected(ctx context.Context, repository, b
 	if p == nil || p.client == nil {
 		return repositoryWatchChange{}, fmt.Errorf("repository watch: plugin is not configured")
 	}
-	if !selection.Commits && !selection.PullRequests && !selection.Issues && !selection.Releases && !selection.Stars {
-		return repositoryWatchChange{}, fmt.Errorf("repository watch: at least one update type must be enabled")
-	}
+	// 五类都不选是允许的：只拿这个仓库做 Issue 管理、不要动态推送。下面每类抓取都按
+	// 自己的开关跳过，这时一次 GitHub 请求都不发。
 	cursor.previous = nil
 	change := repositoryWatchChange{Repository: repository, Branch: branch, Snapshot: repositoryWatchSnapshot{CheckedAt: p.clock(), previous: &cursor, repository: repository, branch: branch, selection: selection}}
 	var errs []error

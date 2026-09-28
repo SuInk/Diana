@@ -297,9 +297,6 @@ func (r *Runtime) CreateRepositoryWatch(ctx context.Context, input RepositoryWat
 		Releases: input.WatchReleases, Stars: input.WatchStars,
 		PullRequestEvents: pullEvents, IssueEvents: issueEvents, ReleaseKinds: releaseKinds,
 	}
-	if !selection.Commits && !selection.PullRequests && !selection.Issues && !selection.Releases && !selection.Stars {
-		return Reminder{}, fmt.Errorf("Commit、PR、Issue、Release 和 Star 至少启用一项")
-	}
 	starThreshold, err := normalizeStarNotifyThreshold(input.StarNotifyThreshold)
 	if err != nil {
 		return Reminder{}, err
@@ -474,9 +471,6 @@ func parseRepositoryWatchInterval(raw string, settings SettingValues) (time.Dura
 func (r *Runtime) addRepositoryWatch(event MessageEvent, ownerID, repository, branch string, interval time.Duration, selection repositoryWatchSelection, baseline repositoryWatchSnapshot, starNotifyMode string, starNotifyThreshold int, starNotifyMilestones []int, notificationEnabled bool, targets []ReminderDeliveryTarget) (Reminder, error) {
 	if r.reminders == nil {
 		return Reminder{}, fmt.Errorf("当前未启用定时任务存储")
-	}
-	if !selection.Commits && !selection.PullRequests && !selection.Issues && !selection.Releases && !selection.Stars {
-		return Reminder{}, fmt.Errorf("仓库动态监控类型不能全部关闭")
 	}
 	r.reminderMu.Lock()
 	defer r.reminderMu.Unlock()
@@ -715,9 +709,6 @@ func (r *Runtime) updateRepositoryWatch(ownerID, id string, input map[string]any
 	}
 	if starNotifyMode == starNotifyModeMilestone && len(starNotifyMilestones) == 0 {
 		return Reminder{}, fmt.Errorf("里程碑模式至少需要一个 Star 里程碑")
-	}
-	if !selection.Commits && !selection.PullRequests && !selection.Issues && !selection.Releases && !selection.Stars {
-		return Reminder{}, fmt.Errorf("仓库动态监控类型不能全部关闭")
 	}
 	repositoryChanged := repository != current.Repository || branch != current.RepositoryBranch
 	baselineSelection := repositoryWatchSelection{

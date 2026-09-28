@@ -14,6 +14,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -2467,5 +2468,34 @@ func TestStarCursorStalledOnlyOnRealAnomaly(t *testing.T) {
 	}
 	if !starCursorStalled(events, "100", "100") {
 		t.Fatal("拿到了比游标新的事件、游标却没动，这才是该记的异常")
+	}
+}
+
+// 五类动态都不选也能建：只拿仓库做 Issue 管理、不要推送。这时检查一次 GitHub 都不该请求。
+func TestRuntimeCreatesRepositoryWatchWithNoUpdateTypes(t *testing.T) {
+	github := &repositoryWatchTestGitHub{commits: []map[string]any{repositoryWatchCommitPayload("base-sha", "initial")}}
+	var hits atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		github.handler(w, r)
+	}))
+	defer server.Close()
+	plugin := newTestRepositoryWatchPlugin(server.Client(), server.URL)
+	store := &stubReminderStore{}
+	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(plugin), nil, store, nil, nil)
+	item, err := runtime.CreateRepositoryWatch(context.Background(), RepositoryWatchCreateInput{
+		Repository: "acme/demo", Platform: PlatformOneBotV11, ProfileID: "onebot-main", GroupID: "123",
+	})
+	if err != nil {
+		t.Fatalf("都不选应当允许：%v", err)
+	}
+	if len(store.items) != 1 || item.WatchCommits || item.WatchPullRequests || item.WatchIssues || item.WatchReleases || item.WatchStars {
+		t.Fatalf("item=%#v", item)
+	}
+	if _, err := plugin.checkSelected(context.Background(), "acme/demo", "main", repositoryWatchSnapshot{}, repositoryWatchSelection{}, nil); err != nil {
+		t.Fatalf("都不选时检查不该报错：%v", err)
+	}
+	if hits.Load() != 0 {
+		t.Fatalf("都不选时不该请求 GitHub，实际 %d 次", hits.Load())
 	}
 }
