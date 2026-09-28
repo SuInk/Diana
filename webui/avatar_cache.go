@@ -64,13 +64,17 @@ func newAvatarCache() *avatarCache {
 // cachedSHA 返回已知的内容哈希，不触发任何回源。列表接口用它拼地址：一次列几十
 // 个群，不能为了拼地址把几十张头像都下一遍。还不知道就先不带哈希，等浏览器来取
 // 那张图时再说。
+//
+// 过了校验期的哈希也不能再发：带哈希的地址浏览器永久缓存、不会再来问，服务端
+// 就等不到回源校验的机会，换过的头像永远换不上来。过期就发不带哈希的地址，
+// 浏览器取图时触发校验，下一次列表再拿到新哈希。
 func (c *avatarCache) cachedSHA(key string) string {
 	if c == nil {
 		return ""
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if entry, ok := c.entries[key]; ok {
+	if entry, ok := c.entries[key]; ok && c.now().Sub(entry.checkedAt) < avatarRecheckInterval {
 		return entry.sha
 	}
 	return ""

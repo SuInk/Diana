@@ -606,12 +606,19 @@ func (h *BotHandler) liveConsoleGroups(ctx context.Context, refresh bool) ([]bot
 	}
 	callCtx, cancel := context.WithTimeout(ctx, consoleLiveGroupTimeout)
 	defer cancel()
-	params := map[string]any{}
-	if refresh {
-		params["no_cache"] = true
-	}
-	data, err := h.runtime.CallOneBotAPI(callCtx, "get_group_list", params)
+	// 缓存只留在这一层。NapCat / SnowLuma 自己的群列表缓存不会因为入群、群改名
+	// 失效，不带 no_cache 问到的可能是启动那会儿的快照：新群一直不在下拉框里，
+	// 改过名的群一直是旧名。上面那 20 秒已经挡住了连续打开页面的重复请求。
+	data, err := h.runtime.CallOneBotAPI(callCtx, "get_group_list", map[string]any{"no_cache": true})
 	if err != nil {
+		// 实时拉取要回服务器，偶尔会超时；手上有上一次成功的列表就先用它，
+		// 别让通知目标的下拉框整个退化成手填群号。
+		h.liveGroupMu.Lock()
+		stale := h.liveGroupCache
+		h.liveGroupMu.Unlock()
+		if stale.available && len(stale.groups) > 0 {
+			return cloneLiveGroups(stale.groups), true, "同步群列表失败，暂时显示上一次的结果"
+		}
 		warning := "机器人尚未连接，暂时只显示已保存的群配置"
 		if callCtx.Err() != nil {
 			warning = "同步群列表超时，暂时只显示已保存的群配置"

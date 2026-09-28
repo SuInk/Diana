@@ -131,6 +131,27 @@ func TestCachedSHANeverFetches(t *testing.T) {
 	}
 }
 
+// 带哈希的地址浏览器永久缓存、不会再来取；过了校验期还发它，服务端就永远等不到
+// 回源的机会，换过的头像一直显示旧图。
+func TestCachedSHAExpiresWithRecheckInterval(t *testing.T) {
+	cache := newAvatarCache()
+	now := time.Now()
+	cache.now = func() time.Time { return now }
+	fetch := func(context.Context, *avatarEntry) (*avatarEntry, error) {
+		return &avatarEntry{sha: "abc", contentType: "image/png", body: onePixelPNG("x")}, nil
+	}
+	if _, ok := cache.load(t.Context(), "group:111", fetch); !ok {
+		t.Fatal("没取到头像")
+	}
+	if got := cache.cachedSHA("group:111"); got != "abc" {
+		t.Fatalf("校验期内应带哈希：%q", got)
+	}
+	now = now.Add(avatarRecheckInterval + time.Minute)
+	if got := cache.cachedSHA("group:111"); got != "" {
+		t.Fatalf("过了校验期不该再发旧哈希：%q", got)
+	}
+}
+
 func onePixelPNG(seed string) []byte {
 	// 不必是真 PNG：这几条用例只关心字节内容和哈希，不解码。
 	return []byte("PNG:" + strings.Repeat(seed, 3))

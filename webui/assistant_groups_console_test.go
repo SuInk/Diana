@@ -122,6 +122,7 @@ type countingGroupListChannel struct {
 	calls  atomic.Int32
 	result map[string]any
 	params []map[string]any
+	fail   atomic.Bool
 	mu     sync.Mutex
 }
 
@@ -139,7 +140,30 @@ func (c *countingGroupListChannel) CallAPI(_ context.Context, action string, par
 	c.mu.Lock()
 	c.params = append(c.params, params)
 	c.mu.Unlock()
+	if c.fail.Load() {
+		return nil, errors.New("get_group_list timeout")
+	}
 	return c.result, nil
+}
+
+// 实时拉取失败时退回上一次成功的列表，下拉框不能因为一次超时就空掉。
+func TestConsoleGroupsFallsBackToLastLiveListOnFailure(t *testing.T) {
+	channel := &countingGroupListChannel{result: map[string]any{
+		"items": []any{map[string]any{"group_id": "10001", "group_name": "上次的群"}},
+	}}
+	runtime := assistant.NewRuntime(assistant.DefaultBotConfig(), channel, assistant.NewDefaultPluginManager(), nil, nil, nil, nil)
+	handler := NewBotHandler(context.Background(), runtime)
+	if groups, ok, _ := handler.liveConsoleGroups(t.Context(), true); !ok || len(groups) != 1 {
+		t.Fatalf("first fetch = %#v ok=%v", groups, ok)
+	}
+	channel.fail.Store(true)
+	groups, ok, warning := handler.liveConsoleGroups(t.Context(), true)
+	if !ok || len(groups) != 1 || groups[0].GroupName != "上次的群" {
+		t.Fatalf("fallback = %#v ok=%v", groups, ok)
+	}
+	if warning == "" {
+		t.Fatal("fallback should tell the console the list is stale")
+	}
 }
 
 func TestConsoleGroupsCachesLiveListUntilRefresh(t *testing.T) {
@@ -177,11 +201,11 @@ func TestConsoleGroupsCachesLiveListUntilRefresh(t *testing.T) {
 	if len(channel.params) != 2 {
 		t.Fatalf("params = %#v", channel.params)
 	}
-	if _, cachedCallHasNoCache := channel.params[0]["no_cache"]; cachedCallHasNoCache {
-		t.Fatalf("cached list should not force no_cache: %#v", channel.params[0])
-	}
-	if channel.params[1]["no_cache"] != true {
-		t.Fatalf("refresh list should force no_cache: %#v", channel.params[1])
+	// 协议端自己的群列表缓存不随入群、改名失效，每次真去问都要绕过它。
+	for index, params := range channel.params {
+		if params["no_cache"] != true {
+			t.Fatalf("call %d should force no_cache: %#v", index, params)
+		}
 	}
 }
 
