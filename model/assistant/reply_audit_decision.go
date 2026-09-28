@@ -164,5 +164,34 @@ func replyAuditDecisionSpec(need replyAuditNeed) *llm.DecisionSpec {
 		)
 	}
 
+	if need.Fatigue {
+		questions = append(questions,
+			llm.DecisionQuestion{
+				Key:          "exchange_novelty",
+				Kind:         llm.DecisionScore,
+				Label:        "这一轮带来了多少新东西",
+				Instructions: "只看当前这一轮（对方这句 + 候选回复）相对前几轮有没有新信息、新问题、新进展或新话题。换个说法重复、接同一个梗、反复自嘲互夸寒暄都算低。",
+				Levels:       []string{"没有新东西，在重复或接同一个梗", "有一点新内容", "明显带来了新信息或新话题"},
+				LevelValues:  []float64{0.1, 0.5, 0.9},
+				Min:          0,
+				Max:          1,
+				Decimals:     2,
+				Path:         "exchange_novelty",
+			},
+			llm.DecisionQuestion{
+				Key:          "exchange_purpose",
+				Kind:         llm.DecisionScore,
+				Label:        "这串来回是不是在推进一件具体的事",
+				Instructions: "提问求答、解题、查资料、做事、下棋这类在推进的给高分；纯闲聊接梗、斗嘴、续剧情给低分。对方这句在明确提问或提出请求时给高分。",
+				Levels:       []string{"纯闲聊、接梗、斗嘴", "有点事但不明确", "在明确提问、请求或推进一件事"},
+				LevelValues:  []float64{0.1, 0.5, 0.9},
+				Min:          0,
+				Max:          1,
+				Decimals:     2,
+				Path:         "exchange_purpose",
+			},
+		)
+	}
+
 	return &llm.DecisionSpec{Questions: questions}
 }

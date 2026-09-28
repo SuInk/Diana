@@ -52,7 +52,7 @@
           <div class="input-group"><input id="rss-watch-interval" v-model.number="form.interval_seconds" class="input" type="number" :min="minimumIntervalSeconds" :max="maximumIntervalSeconds" step="60" /><span class="repository-watch-unit">秒</span></div>
           <span class="hint">可设置 5 分钟至 365 天；默认 15 分钟。</span>
         </div>
-        <div class="field wide"><label>通知目标</label><SubscriptionTargetsEditor v-model="form.notification_targets" :profiles="profiles" :groups="joinedGroups" :default-profile="form.profile_id" /></div>
+        <div class="field wide"><label>通知目标</label><SubscriptionTargetsEditor v-model="form.notification_targets" :profiles="profiles" :default-profile="form.profile_id" /></div>
       </div>
       <div class="repository-watch-editor-actions">
         <button class="btn small" type="button" :disabled="saving" @click="stopEditing">取消</button>
@@ -83,7 +83,7 @@
 <script setup lang="ts">
 import { onMounted, ref } from "vue";
 import { CircleX, LoaderCircle, Pencil, Plus, Trash2 } from "@lucide/vue";
-import { cancelRSSWatch, createRSSWatch, deleteRSSWatch, getAssistantTasks, getBotProfileConfig, listBotGroups, updateRSSWatch, type AssistantTask, type AssistantTaskStatus, type BotProfileConfig, type BotGroupSummary, type RSSWatchSource } from "../api";
+import { cancelRSSWatch, createRSSWatch, deleteRSSWatch, getAssistantTasks, getBotProfileConfig, updateRSSWatch, type AssistantTask, type AssistantTaskStatus, type BotProfileConfig, type RSSWatchSource } from "../api";
 import { askConfirm } from "../confirm";
 import { toastError, toastSuccess } from "../toast";
 import SubscriptionTargetsEditor from "./SubscriptionTargetsEditor.vue";
@@ -99,7 +99,6 @@ const maximumSources = 10;
 const emptyForm = () => ({ notification_targets: [] as import("../api").RepositoryWatchTarget[], source: "twitter" as "twitter" | "rss", twitter_handles: [""], feed_urls: [""], judge_prompt: "", interval_seconds: defaultIntervalSeconds, profile_id: "" });
 const watches = ref<AssistantTask[]>([]);
 const profiles = ref<BotProfileConfig[]>([]);
-const joinedGroups = ref<BotGroupSummary[]>([]);
 const loading = ref(false), saving = ref(false), busyID = ref(""), editing = ref(false);
 const editingTask = ref<AssistantTask | null>(null);
 const editorSnapshot = ref("");
@@ -108,8 +107,8 @@ const form = ref(emptyForm());
 async function load(): Promise<void> {
   loading.value = true;
   try {
-    const [tasks, config, groups] = await Promise.all([getAssistantTasks(), getBotProfileConfig(), listBotGroups(false).catch(() => ({ groups: [] }))]);
-    watches.value = tasks.items.filter((task) => task.kind === "rss_watch"); profiles.value = (config.profiles?.length ? config.profiles : [config]); joinedGroups.value = groups.groups;
+    const [tasks, config] = await Promise.all([getAssistantTasks(), getBotProfileConfig()]);
+    watches.value = tasks.items.filter((task) => task.kind === "rss_watch"); profiles.value = (config.profiles?.length ? config.profiles : [config]);
     if (!form.value.profile_id) form.value.profile_id = props.defaultProfileId || profiles.value[0]?.id || "";
   } catch (error) { toastError(error instanceof Error ? error.message : "RSS 订阅加载失败"); } finally { loading.value = false; }
 }

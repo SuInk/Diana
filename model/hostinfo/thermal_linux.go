@@ -88,6 +88,10 @@ var raplState = struct {
 	byZone map[string]raplSample
 }{byZone: map[string]raplSample{}}
 
+// raplNow 是 RAPL 采样打时间戳用的时钟。测试换成可控时钟，功率才是确定值，
+// 不会随 CI 机器快慢漂移。
+var raplNow = time.Now
+
 // powerDraw 读 RAPL 能量计数算功率，并顺带读电池。
 //
 // RAPL 给的是累计能量（微焦），不是瞬时功率，所以功率只能由两次采样的差值除以
@@ -102,7 +106,7 @@ func powerDraw() ([]Reading, *Battery, error) {
 		}
 		return nil, nil, errors.New("这台机器没有可读的功率计数（没有 RAPL，也没有电池）")
 	}
-	now := time.Now()
+	now := raplNow()
 	var readings []Reading
 	var pending int
 	raplState.Lock()

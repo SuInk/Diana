@@ -162,20 +162,25 @@ func TestDisabledGroupKeepsBookkeepingSkipsModelCalls(t *testing.T) {
 }
 
 // TestEnabledGroupRunsCrossGroupSearchAndRouter 反向对照：同一条消息，群开着时
-// 跨群检索和主动回复路由都要照常跑，别把开着的群一起省掉了。
+// 主动回复路由要照常跑，别把开着的群一起省掉了。跨群检索挪到了确定回复之后：
+// 路由判了不回，就不该再查；要回复时照常能查到。
 func TestEnabledGroupRunsCrossGroupSearchAndRouter(t *testing.T) {
 	h := newDisabledGroupSkipHarness(t, BotConfig{}, true)
 
-	_, _, handled, _ := h.runtime.prepareMessageEvent(context.Background(), disabledGroupSignalEvent())
+	prepared, _, handled, _ := h.runtime.prepareMessageEvent(context.Background(), disabledGroupSignalEvent())
 
 	if handled {
 		t.Fatal("router returned {} but the message was still handled")
 	}
-	if h.history.searches == 0 {
-		t.Fatal("enabled group skipped the cross-group search")
+	if h.history.searches != 0 {
+		t.Fatalf("路由判了不回，不该再跑跨群检索，实际 %d 次", h.history.searches)
 	}
 	if h.provider.callCount() == 0 {
 		t.Fatal("enabled group never reached the proactive reply router")
+	}
+	h.runtime.loadDeferredCrossGroupContext(prepared)
+	if h.history.searches == 0 {
+		t.Fatal("enabled group skipped the cross-group search at reply time")
 	}
 }
 

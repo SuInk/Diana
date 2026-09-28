@@ -123,3 +123,61 @@ func TestIsOneBotProfileKeepsLegacyFallbackWithOneBotProfiles(t *testing.T) {
 		t.Fatal("unknown profile should keep the legacy OneBot fallback when a OneBot bot exists")
 	}
 }
+
+// 没在群管理页配置过的群要带上来源记的归属机器人。订阅通知的群下拉框按
+// bot_profile_id 挑群；来源没记的就留空，不拿当前机器人去猜。
+func TestMergeConsoleGroupItemsPassesSourceOwnerThrough(t *testing.T) {
+	base := assistant.BotConfig{ID: "qq-main"}
+	live := []botAutoGroupInfo{
+		{GroupID: "10001", GroupName: "来源没记归属"},
+		{GroupID: "10002", GroupName: "另一台的群", BotProfileID: "qq-other"},
+	}
+	items := mergeConsoleGroupItems(base, assistant.GroupConfigSet{}, live, nil, nil)
+	byID := map[string]consoleGroupItem{}
+	for _, item := range items {
+		byID[item.GroupID] = item
+	}
+	if got := byID["10001"].BotProfileID; got != "" {
+		t.Fatalf("来源没记归属却被猜成了当前机器人：%q", got)
+	}
+	if got := byID["10002"].BotProfileID; got != "qq-other" {
+		t.Fatalf("来源记着的归属丢了：%q", got)
+	}
+}
+
+// 两台机器人同在一个群：全部机器人视图里各是一张卡，各自带自己的配置，不能被
+// 前一台吞掉。
+func TestMergeConsoleGroupItemsKeepsSameGroupPerBot(t *testing.T) {
+	set := assistant.GroupConfigSet{Groups: []assistant.GroupConfig{
+		{GroupID: "10001", BotProfileID: "qq-a", Enabled: true, EnabledSet: true},
+		{GroupID: "10001", BotProfileID: "qq-b", Enabled: false, EnabledSet: true},
+	}}
+	live := []botAutoGroupInfo{
+		{GroupID: "10001", GroupName: "共享群", BotProfileID: "qq-a"},
+		{GroupID: "10001", GroupName: "共享群", BotProfileID: "qq-b"},
+	}
+	items := mergeConsoleGroupItems(assistant.BotConfig{}, set, live, nil, nil)
+	if len(items) != 2 {
+		t.Fatalf("同一个群在两台机器人下应各列一张：%#v", items)
+	}
+	enabled := map[string]bool{}
+	for _, item := range items {
+		if !item.Configured || !item.Joined {
+			t.Fatalf("配置没对上：%#v", item)
+		}
+		enabled[item.BotProfileID] = item.Enabled
+	}
+	if !enabled["qq-a"] || enabled["qq-b"] {
+		t.Fatalf("两台机器人的配置串了：%#v", enabled)
+	}
+}
+
+// 老部署的群配置没写归属，实时列表记了归属时仍要认得出来，不能变成两张卡。
+func TestMergeConsoleGroupItemsMatchesLegacyConfigWithoutOwner(t *testing.T) {
+	set := assistant.GroupConfigSet{Groups: []assistant.GroupConfig{{GroupID: "10001"}}}
+	live := []botAutoGroupInfo{{GroupID: "10001", BotProfileID: "qq-a"}}
+	items := mergeConsoleGroupItems(assistant.BotConfig{}, set, live, nil, nil)
+	if len(items) != 1 || !items[0].Configured || !items[0].Joined {
+		t.Fatalf("老配置没和实时列表合上：%#v", items)
+	}
+}

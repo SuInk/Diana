@@ -107,7 +107,7 @@
           <!-- 群列表拉不到时下拉框只会变成空的，不说一声用户会以为自己没进群。 -->
           <p v-if="form.notification_enabled && groupsLoading" class="hint">正在读取已加入的群聊…</p>
           <p v-else-if="form.notification_enabled && groupsWarning" class="hint warn-text">{{ groupsWarning }}</p>
-          <SubscriptionTargetsEditor v-if="form.notification_enabled" v-model="form.notification_targets" :profiles="profiles" :groups="joinedGroups" :default-profile="form.profile_id" />
+          <SubscriptionTargetsEditor v-if="form.notification_enabled" v-model="form.notification_targets" :profiles="profiles" :default-profile="form.profile_id" />
         </div>
         <div class="field wide repository-notification-settings">
           <div class="repository-section-title"><span id="watch-issue-title">Issue 管理</span><label class="switch"><input v-model="form.issue_enabled" type="checkbox" aria-labelledby="watch-issue-title" /><span class="track" aria-hidden="true"></span></label></div>

@@ -17,7 +17,8 @@ func TestEveryIntentPurposeCanRunOnDecisionModel(t *testing.T) {
 	specs := map[string]*llm.DecisionSpec{
 		PurposeProactiveReplyRouter:  proactiveReplyDecisionSpec(nil, nil),
 		PurposeProactiveReplyQuality: replyAuditDecisionSpec(replyAuditNeed{Quality: true}),
-		PurposeReplySendAudit:        replyAuditDecisionSpec(replyAuditNeed{Quality: true, AccountSafety: true}),
+		PurposeReplySendAudit:        replyAuditDecisionSpec(replyAuditNeed{Quality: true, AccountSafety: true, Fatigue: true}),
+		PurposeReplyFatigueGate:      replyFatigueGateDecision,
 	}
 	for purpose, group := range llmPurposeGroup {
 		if group != llm.GroupIntent {

@@ -83,23 +83,20 @@ type assistantEventGroupItem struct {
 	AvatarURL string `json:"avatar_url,omitempty"`
 }
 
-// namedEventGroups 给筛选器里的群补上名字。名字取自控制台已有的那份群列表缓存，
-// 拿不到就只留群号——筛选器少个名字可以忍，为它多打一次 OneBot 请求不值得。
+// namedEventGroups 给筛选器里的群补上名字。
 func (h *BotHandler) namedEventGroups(ctx context.Context, profileID string, groups []storage.InboundEventGroup) []assistantEventGroupItem {
 	items := make([]assistantEventGroupItem, 0, len(groups))
-	names := map[string]string{}
-	if live, _, _ := h.consoleGroupSources(ctx, profileID, false); len(live) > 0 {
-		for _, group := range live {
-			if name := strings.TrimSpace(group.GroupName); name != "" {
-				names[strings.TrimSpace(group.GroupID)] = name
-			}
-		}
-	}
+	names := h.eventGroupNames(ctx, profileID)
 	for _, group := range groups {
 		groupID := strings.TrimSpace(group.GroupID)
+		name := names[groupID]
+		if name == "" {
+			// 实时列表没有的群（Telegram 这类平台、机器人已退的群）用事件里记的名字。
+			name = strings.TrimSpace(group.GroupName)
+		}
 		items = append(items, assistantEventGroupItem{
 			InboundEventGroup: group,
-			GroupName:         names[groupID],
+			GroupName:         name,
 			// 头像地址是纯拼接，不需要额外请求；由后端给而不是前端拼，
 			// 免得把 QQ 的地址格式写死在界面里——别的平台不长这样。
 			AvatarURL: h.consoleAvatarURL(avatarKindGroup, profileID, groupID),
@@ -338,12 +335,7 @@ func (h *BotHandler) listEvents(c *gin.Context) {
 		}
 	}
 	events := make([]assistantEventDetail, 0, len(stored.Events))
-	groupNames := map[string]string{}
-	if live, _, _ := h.consoleGroupSources(c.Request.Context(), profileID, false); len(live) > 0 {
-		for _, group := range live {
-			groupNames[strings.TrimSpace(group.GroupID)] = strings.TrimSpace(group.GroupName)
-		}
-	}
+	groupNames := h.eventGroupNames(c.Request.Context(), profileID)
 	for _, item := range stored.Events {
 		decision, reason, handled := assistant.DescribeEventOutcome(item.Outcome)
 		unconfirmedErrorReply := item.Outcome == "error_replied" && item.DeliveryStage != string(assistant.OutboundDeliveryAcknowledged) && item.DeliveryStage != string(assistant.OutboundDeliveryEchoPersisted)
