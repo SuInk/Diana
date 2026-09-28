@@ -115,10 +115,10 @@ func (r *Runtime) memoryContextWithProfile(ctx context.Context, event MessageEve
 	items = r.expandMemoryAssociations(loadCtx, store, query, event, items)
 	cancel()
 	if event.Kind == EventKindGroup {
-		// 群里「别再说」的要求由 groupAvoidPrompt 对全群注入，这里再出现就重复了。
+		// 本群约定由 groupRulesPrompt 在尾部对全群注入，这里再出现就重复了。
 		kept := items[:0]
 		for _, item := range items {
-			if !isGroupAvoidMemory(item) {
+			if !IsGroupRule(item) {
 				kept = append(kept, item)
 			}
 		}

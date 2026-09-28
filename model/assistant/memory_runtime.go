@@ -89,7 +89,7 @@ const memoryGateRulesPrompt = `你是 Diana 的长期记忆门控器。消息原
 9. importance 和 confidence 均为 0 到 1。只有 importance>=0.45 的内容才输出；明确要求“记住”的重要内容可提高 importance，但仍要按真实语义组织，不照抄命令。
 10. content 必须写成自包含、无歧义的第三人称事实，保留实体；evidence 是不超过 60 字的最小证据片段。最多输出 5 条。content 里不得出现今天、昨天、早上、刚才、这周这类相对时间：按该条消息的 time 换算成具体日期（需要时带时段）再写，例如「2026-09-23 上午吃了布洛芬」。吃药、生病、喝酒、出行这类只在当时成立的状态只能写成带日期的 episode，不能写成 fact。from_bot=true 的是机器人自己说的话，只能用来理解上下文，不能当成任何人的自述。
 11. 上下文里给的是 current 还是 current_batch 取决于这一轮攒了几条。给 current_batch 时要把整批按时间顺序当成同一个人连续说的话一起理解：跨条的指代、补充和改口都要接上，同一件事不要拆成多条记忆；每条候选必须用 source_index 标明出自 current_batch 的第几条（从 0 开始），最能支撑这条记忆的那一条。整批合计最多输出 5 条。
-12. 群聊里有人要 Diana 在这个群别再说某个具体的词、口头禅、表情或称呼（例如「别说草了」「少加哈哈哈」），哪怕语气是调侃，也算长期交互要求，不按玩梗跳过：kind=instruction，visibility=session，importance 不低于 0.6，key 写成 instruction.group.avoid.<那个词>，content 写清是谁要求 Diana 在本群不再说什么。这个 key 前缀的要求对全群生效，所以只用于「别说什么」；让 Diana 加口头禅、换语气、学某种腔调的仍按普通 instruction 记，不能用这个前缀。这类要求有时效：说了「今天」「这周」之类的期限就按它填 retention_days，没说就填 0，系统默认 30 天后失效；提要求的人后来明确说又可以说了，用同一个 key 做 forget。`
+12. 群聊里有人要 Diana 在这个群别再说某个具体的词、口头禅、表情或称呼（例如「别说草了」「少加哈哈哈」），哪怕语气是调侃，也算长期交互要求，不按玩梗跳过：kind=instruction，applies_to=group，importance 不低于 0.6，content 写清是谁要求 Diana 在本群不再说什么。applies_to=group 的要求对全群生效、谁都能撤销，所以只用于「别说什么」；让 Diana 加口头禅、换语气、学某种腔调的不填 applies_to，仍只对本人生效。这类要求有时效：说了「今天」「这周」之类的期限就按它填 retention_days，没说填 0，系统默认 30 天后失效。群里任何人明确说又可以说了，就对 existing_memories 里 applies_to=group 的那条用原 key 做 forget。`
 
 const memoryGateOutputContract = `
 13. 调用 memory_submit 提交候选，字段含义以工具参数说明为准；没有候选时提交空数组。只有在不支持工具调用时，才退回输出合法 JSON 对象 {"memories":[...]}，不要 Markdown 或解释。`
@@ -163,6 +163,7 @@ type memoryGateMemory struct {
 	Importance float64          `json:"importance"`
 	Visibility MemoryVisibility `json:"visibility"`
 	Version    int              `json:"version"`
+	AppliesTo  MemoryAudience   `json:"applies_to,omitempty"`
 }
 
 type memorySummaryRollup struct {
@@ -490,6 +491,18 @@ func (r *Runtime) processEventMemoryJobs(ctx context.Context, store StructuredMe
 		return fmt.Errorf("load existing memories: %w", err)
 	}
 	existing := mergeStructuredMemories(relevant, important, 40)
+	// 本群约定不挂在任何人名下，上面两批按发言者筛过就看不到了；单独取出来放在前面，
+	// 模型才能在有人说「又可以说了」时复用原 key 撤销。
+	if last.event.Kind == EventKindGroup {
+		rules, err := store.ListStructuredMemories(ctx, StructuredMemoryQuery{
+			Session: last.payload.Session, CurrentSessionOnly: true, GroupRulesOnly: true,
+			Now: time.Now(), MaxCandidates: groupRuleMaxItems,
+		})
+		if err != nil {
+			return fmt.Errorf("load group rules: %w", err)
+		}
+		existing = mergeStructuredMemories(rules, existing, 40)
+	}
 	current := memoryGateEventFromMessage(last.event, last.text)
 	gatePayload := memoryGatePayload{
 		Current:          &current,
@@ -1129,10 +1142,16 @@ func (r *Runtime) memoryGateRecentEvents(current MessageEvent) []memoryGateEvent
 func memoryGateExistingMemories(items []StructuredMemoryItem, subjectUserID string) []memoryGateMemory {
 	out := make([]memoryGateMemory, 0, len(items))
 	for _, item := range items {
-		if subjectUserID != "" && item.SubjectUserID != subjectUserID {
+		groupRule := IsGroupRule(item)
+		if subjectUserID != "" && item.SubjectUserID != subjectUserID && !groupRule {
 			continue
 		}
+		var appliesTo MemoryAudience
+		if groupRule {
+			appliesTo = MemoryAudienceGroup
+		}
 		out = append(out, memoryGateMemory{
+			AppliesTo:  appliesTo,
 			Key:        item.Key,
 			Kind:       item.Kind,
 			Topic:      item.Topic,

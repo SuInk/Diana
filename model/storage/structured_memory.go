@@ -414,30 +414,35 @@ func (s *SQLiteStore) ApplyMemoryCandidates(ctx context.Context, request assista
 	written := make([]assistant.StructuredMemoryItem, 0, len(normalized))
 	touched := map[memoryScope]bool{}
 	for _, candidate := range normalized {
+		// 群约定不挂在发言者名下：查重、更新、撤销和容量都按「本群」算，谁提的只留在出处里。
+		subjectUserID, subjectName := strings.TrimSpace(request.SubjectUserID), strings.TrimSpace(request.SubjectName)
+		if candidate.AppliesTo == assistant.MemoryAudienceGroup {
+			subjectUserID, subjectName = "", ""
+		}
 		scopeKey := request.Session
 		if candidate.Visibility == assistant.MemoryVisibilityUser {
-			scopeKey = memorySessionNamespace(request.Session) + "user:" + strings.TrimSpace(request.SubjectUserID)
+			scopeKey = memorySessionNamespace(request.Session) + "user:" + subjectUserID
 		}
 		key := candidate.Key
 		if candidate.Kind == assistant.MemoryKindEpisode && candidate.Action == assistant.MemoryActionUpsert {
 			key += "." + shortMemoryHash(firstNonEmptyMemory(request.SourceMessageID, sourceTime.Format(time.RFC3339Nano)))
 		}
 		sourceMessageID := memorySourceMessageID(request, candidate, sourceTime)
-		if processed, found, err := findMemoryBySourceAndKey(ctx, tx, request.Session, sourceMessageID, request.SubjectUserID, key); err != nil {
+		if processed, found, err := findMemoryBySourceAndKey(ctx, tx, request.Session, sourceMessageID, subjectUserID, key); err != nil {
 			return nil, err
 		} else if found {
 			written = append(written, processed)
 			continue
 		}
 
-		active, found, err := findActiveMemory(ctx, tx, scopeKey, request.SubjectUserID, key)
+		active, found, err := findActiveMemory(ctx, tx, scopeKey, subjectUserID, key)
 		if err != nil {
 			return nil, err
 		}
 		// Older user memories used a global key. Keep update/forget working only
 		// for their original namespace, never for a same-ID user elsewhere.
 		if !found && candidate.Visibility == assistant.MemoryVisibilityUser && memorySessionNamespace(request.Session) != "" {
-			legacy, exists, err := findActiveMemory(ctx, tx, "user:"+strings.TrimSpace(request.SubjectUserID), request.SubjectUserID, key)
+			legacy, exists, err := findActiveMemory(ctx, tx, "user:"+subjectUserID, subjectUserID, key)
 			if err != nil {
 				return nil, err
 			}
@@ -446,6 +451,16 @@ func (s *SQLiteStore) ApplyMemoryCandidates(ctx context.Context, request assista
 			}
 		}
 		if candidate.Action == assistant.MemoryActionForget {
+			// 撤销群约定时模型不一定带 applies_to：本人名下没有这个 key，就看本群约定里有没有。
+			if !found && subjectUserID != "" && request.EventKind == assistant.EventKindGroup {
+				rule, exists, err := findActiveMemory(ctx, tx, request.Session, "", key)
+				if err != nil {
+					return nil, err
+				}
+				if exists && assistant.IsGroupRule(rule) {
+					active, found = rule, true
+				}
+			}
 			if !found {
 				continue
 			}
@@ -470,7 +485,7 @@ SET subject_name = CASE WHEN ? = '' THEN subject_name ELSE ? END,
     expires_at = CASE WHEN ? = 0 THEN expires_at ELSE MAX(COALESCE(expires_at, 0), ?) END,
     last_verified_at = ?, updated_at = ?
 WHERE id = ? AND status = 'active'
-`, request.SubjectName, request.SubjectName, candidate.Topic, candidate.Entity,
+`, subjectName, subjectName, candidate.Topic, candidate.Entity,
 				candidate.Evidence, candidate.Evidence, candidate.Confidence, candidate.Importance,
 				timeToUnixMemory(expiresAt), timeToUnixMemory(expiresAt), sourceTime.Unix(), now.Unix(), active.ID); err != nil {
 				return nil, err
@@ -500,8 +515,8 @@ UPDATE memory_items SET status = 'superseded', updated_at = ? WHERE id = ? AND s
 		item := assistant.StructuredMemoryItem{
 			ID:              uuid.NewString(),
 			ScopeKey:        scopeKey,
-			SubjectUserID:   strings.TrimSpace(request.SubjectUserID),
-			SubjectName:     strings.TrimSpace(request.SubjectName),
+			SubjectUserID:   subjectUserID,
+			SubjectName:     subjectName,
 			Key:             key,
 			Kind:            candidate.Kind,
 			Topic:           candidate.Topic,
@@ -532,7 +547,7 @@ UPDATE memory_items SET status = 'superseded', updated_at = ? WHERE id = ? AND s
 			return nil, err
 		}
 		written = append(written, item)
-		touched[memoryScope{scopeKey: scopeKey, subjectUserID: strings.TrimSpace(request.SubjectUserID)}] = true
+		touched[memoryScope{scopeKey: scopeKey, subjectUserID: subjectUserID}] = true
 	}
 	for scope := range touched {
 		if err := enforceMemoryCapacity(ctx, tx, scope, now); err != nil {
@@ -649,9 +664,8 @@ func (s *SQLiteStore) ListStructuredMemories(ctx context.Context, query assistan
 		}
 		kindClause += " AND kind NOT IN (" + strings.Join(placeholders, ",") + ")"
 	}
-	if prefix := strings.TrimSpace(query.KeyPrefix); prefix != "" {
-		kindClause += ` AND memory_key LIKE ? ESCAPE '\'`
-		args = append(args, escapeMessageHistoryLike(prefix)+"%")
+	if query.GroupRulesOnly {
+		kindClause += ` AND kind = 'instruction' AND COALESCE(subject_user_id, '') = '' AND visibility = 'session'`
 	}
 	searchTerms := query.SearchTerms
 	if len(query.IDs) > 0 {
@@ -799,6 +813,13 @@ func normalizeMemoryCandidate(candidate assistant.MemoryCandidate, request assis
 		candidate.Kind == assistant.MemoryKindSummary || candidate.Kind == assistant.MemoryKindThread {
 		candidate.Visibility = assistant.MemoryVisibilitySession
 	}
+	if candidate.AppliesTo != assistant.MemoryAudienceGroup || candidate.Kind != assistant.MemoryKindInstruction ||
+		request.EventKind != assistant.EventKindGroup {
+		candidate.AppliesTo = ""
+	}
+	if candidate.AppliesTo == assistant.MemoryAudienceGroup {
+		candidate.Visibility = assistant.MemoryVisibilitySession
+	}
 	if candidate.RetentionDays < 0 {
 		candidate.RetentionDays = 0
 	}
@@ -921,10 +942,8 @@ func scanStructuredMemory(scanner memoryScanner) (assistant.StructuredMemoryItem
 
 func memoryCandidateExpiry(candidate assistant.MemoryCandidate, sourceTime time.Time) time.Time {
 	days := candidate.RetentionDays
-	// 群里「别再说」的要求对全群生效，不能永久有效：没给期限或期限太长都按上限算。
-	if candidate.Kind == assistant.MemoryKindInstruction && strings.HasPrefix(candidate.Key, assistant.GroupAvoidMemoryKeyPrefix) &&
-		(days <= 0 || days > assistant.GroupAvoidRetentionDays) {
-		days = assistant.GroupAvoidRetentionDays
+	if candidate.AppliesTo == assistant.MemoryAudienceGroup && (days <= 0 || days > assistant.GroupRuleRetentionDays) {
+		days = assistant.GroupRuleRetentionDays
 	}
 	if days == 0 {
 		switch {

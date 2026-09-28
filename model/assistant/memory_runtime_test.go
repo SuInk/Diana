@@ -573,7 +573,7 @@ func (s *testStructuredMemoryStore) ListStructuredMemories(_ context.Context, qu
 		if !structuredMemoryFakeInScope(item, query) {
 			continue
 		}
-		if !strings.HasPrefix(item.Key, query.KeyPrefix) {
+		if query.GroupRulesOnly && !IsGroupRule(item) {
 			continue
 		}
 		items = append(items, item)
