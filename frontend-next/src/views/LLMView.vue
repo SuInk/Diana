@@ -383,7 +383,7 @@
                 删除
               </button>
             </div>
-            <div>
+            <div class="header-add">
               <button class="btn" type="button" @click="addHeader">
                 <Plus :size="14" aria-hidden="true" />
                 添加
@@ -1248,6 +1248,17 @@ useConfigurationRefresh(["bot", "llm"], reload);
 
 .header-row > .btn.ghost {
   border-color: var(--border);
+}
+
+/* 添加在列表下面居中，压矮拉宽：它是列表的收尾，不该和每行的删除一样高。 */
+.header-add {
+  display: flex;
+  justify-content: center;
+}
+
+.header-add > .btn {
+  min-width: 180px;
+  padding: 4px 28px;
 }
 
 /* 模型分配引用列表：跟在 hint 后面的一小段列表，排版继承 hint 的字号和颜色。 */
