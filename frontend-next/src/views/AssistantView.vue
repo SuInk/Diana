@@ -223,11 +223,7 @@
                 <template v-else>
                 <div class="field">
                   <label for="bot-onebot-transport">连接方式</label>
-                  <select id="bot-onebot-transport" :value="form.onebot_transport || 'reverse_ws'" @change="form.onebot_transport = ($event.target as HTMLSelectElement).value as BotProfileConfig['onebot_transport']" class="input">
-                    <option value="reverse_ws">反向 WebSocket</option>
-                    <option value="forward_ws">正向 WebSocket</option>
-                    <option value="http">HTTP API + HTTP 事件上报</option>
-                  </select>
+                  <AppSelect id="bot-onebot-transport" :model-value="form.onebot_transport || 'reverse_ws'" :options="oneBotTransportOptions" @update:model-value="(value) => { if (form) form.onebot_transport = value as BotProfileConfig['onebot_transport']; }" />
                 </div>
                 <div v-if="!form.onebot_transport || form.onebot_transport === 'reverse_ws'" class="field">
                   <label for="bot-onebot-endpoint">回连地址</label>
@@ -248,13 +244,13 @@
                 <div v-else-if="form.onebot_transport === 'forward_ws'" class="field">
                   <label for="bot-onebot-ws">OneBot WebSocket 服务地址</label>
                   <input id="bot-onebot-ws" v-model="form.onebot_ws_endpoint" class="input mono" placeholder="ws://127.0.0.1:6700" />
-                  <span class="hint">Diana 主动连接接入端的 WS 服务，请使用同时提供 API 和事件的通用地址（通常为 /）。断线后自动重连。发送文件/图片时接入端按这里的主机名回源拉取媒体：同机或容器（host.docker.internal）部署无需额外配置，跨机或反向代理部署请在「设置 → 媒体与文件」页配置媒体回源基址。</span>
+                  <span class="hint">Diana 主动连接接入端的 WS 服务，请使用同时提供 API 和事件的通用地址（通常为 /）。断线后自动重连。发送文件/图片时接入端按这里的主机名回源拉取媒体：同机或容器（host.docker.internal）部署无需额外配置，跨机或反向代理部署请在下方填写媒体回源基址。</span>
                 </div>
                 <template v-else-if="form.onebot_transport === 'http'">
                   <div class="field">
                     <label for="bot-onebot-http">OneBot HTTP API 地址</label>
                     <input id="bot-onebot-http" v-model="form.onebot_http_url" class="input mono" placeholder="http://127.0.0.1:5700" />
-                    <span class="hint">Diana 调用接入端的 HTTP API。事件上报地址填写接入端能访问的 Diana 地址 + /onebot/v11/http。发送文件/图片时接入端按这里的主机名回源拉取媒体：同机或容器部署无需额外配置，跨机或反向代理部署请在「设置 → 媒体与文件」页配置媒体回源基址。</span>
+                    <span class="hint">Diana 调用接入端的 HTTP API。事件上报地址填写接入端能访问的 Diana 地址 + /onebot/v11/http。发送文件/图片时接入端按这里的主机名回源拉取媒体：同机或容器部署无需额外配置，跨机或反向代理部署请在下方填写媒体回源基址。</span>
                   </div>
                   <SecretField id="bot-onebot-http-secret" v-model="oneBotHTTPSecretDraft"
                     label="HTTP 事件签名密钥" placeholder="与接入端 HTTP POST 的 secret 一致"
@@ -302,6 +298,12 @@
                   </div>
                 </div>
                 <p v-if="oneBotMediaOriginWarning" class="hint warn-text">{{ oneBotMediaOriginWarning }}</p>
+                <div class="field wide">
+                  <label for="bot-media-base-url">媒体回源基址</label>
+                  <input id="bot-media-base-url" v-model="mediaBaseURLDraft" class="input mono" placeholder="留空自动推断，例如 http://192.168.1.10:18080/media/resolver" :disabled="mediaBaseURLLoading" />
+                  <span class="hint">发送文件/图片时，接入端按这个地址回源拉取媒体，所有机器人共用这一项。留空时按接入方式自动推断：反向 ws 用握手地址，正向 ws / HTTP 用接入端地址推主机名 + Diana 的 Web 端口。当前生效来源：{{ mediaBaseURLSourceLabel }}。</span>
+                  <p v-if="mediaBaseURLError" class="error" role="alert">{{ mediaBaseURLError }}</p>
+                </div>
                 </template>
                 <div class="field wide">
                   <label class="switch">
@@ -2173,6 +2175,9 @@ import {
   getBotPlatforms,
   listLLMModels,
   saveBotProfileConfig,
+  getMediaBaseURLSetting,
+  saveMediaBaseURLSetting,
+  type MediaBaseURLSetting,
   createBotProfileConfig,
   getNewBotProfileDefaults,
   type MessageRelayPair,
@@ -2669,16 +2674,58 @@ function isLocalOriginHost(host: string): boolean {
  * 可能回源失败，必须在服务端显式配置 storage.local_media_base_url——这种情况
  * 要在界面上直接警告，而不是只留一行灰字 hint。纯函数，便于单测。
  */
+const oneBotTransportOptions: AppSelectOption[] = [
+  { value: "reverse_ws", label: "反向 WebSocket" },
+  { value: "forward_ws", label: "正向 WebSocket" },
+  { value: "http", label: "HTTP API + HTTP 事件上报" }
+];
+
+// 媒体回源基址是实例级设置，放在接入页是因为只有配连接时才想得到它；
+// 跟着机器人的保存按钮一起提交，没改就不发请求。
+const mediaBaseURLDraft = ref("");
+const mediaBaseURLLoaded = ref<MediaBaseURLSetting | null>(null);
+const mediaBaseURLSource = computed(() => mediaBaseURLLoaded.value?.source ?? "auto");
+const mediaBaseURLLoading = ref(true);
+const mediaBaseURLError = ref("");
+const mediaBaseURLSourceLabel = computed(() => ({
+  database: "已保存的设置",
+  config: "config.yaml",
+  auto: "自动推断"
+})[mediaBaseURLSource.value]);
+function applyMediaBaseURL(setting: MediaBaseURLSetting): void {
+  mediaBaseURLLoaded.value = setting;
+  mediaBaseURLDraft.value = setting.base_url;
+}
+async function loadMediaBaseURL(): Promise<void> {
+  mediaBaseURLLoading.value = true;
+  mediaBaseURLError.value = "";
+  try {
+    applyMediaBaseURL(await getMediaBaseURLSetting());
+  } catch (error) {
+    mediaBaseURLError.value = error instanceof Error ? error.message : "媒体回源基址加载失败";
+  } finally {
+    mediaBaseURLLoading.value = false;
+  }
+}
+// 和加载时的生效值比，没改就不发请求；没加载成功时不知道原值，也不写。
+async function saveMediaBaseURLIfChanged(): Promise<void> {
+  const loaded = mediaBaseURLLoaded.value;
+  const next = mediaBaseURLDraft.value.trim().replace(/\/+$/, "");
+  if (!loaded || next === loaded.base_url) return;
+  mediaBaseURLError.value = "";
+  applyMediaBaseURL(await saveMediaBaseURLSetting({ base_url: next }));
+}
+
 function oneBotMediaOriginWarningText(transport: string, wsEndpoint: string, httpEndpoint: string, currentHost: string): string {
   if (transport === "reverse_ws") return "";
   const host = endpointHostname(transport === "forward_ws" ? wsEndpoint : httpEndpoint);
   if (!host) return "";
   if (isLocalOriginHost(host) || host === (currentHost || "").replace(/^\[|\]$/g, "").toLowerCase()) return "";
-  return `接入端将按 ${host} 回源拉取文件/媒体（端口为 Diana 的 Web 端口）。若该主机访问不到 Diana，文件发送会失败，请在「设置 → 媒体与文件」页配置媒体回源基址。`;
+  return `接入端将按 ${host} 回源拉取文件/媒体（端口为 Diana 的 Web 端口）。若该主机访问不到 Diana，文件发送会失败，请在下方填写媒体回源基址。`;
 }
 
 const oneBotMediaOriginWarning = computed(() => {
-  if (!isOneBotPlatform.value) return "";
+  if (!isOneBotPlatform.value || mediaBaseURLSource.value !== "auto") return "";
   return oneBotMediaOriginWarningText(
     form.value?.onebot_transport || "reverse_ws",
     form.value?.onebot_ws_endpoint ?? "",
@@ -4408,6 +4455,12 @@ async function save(): Promise<void> {
     } catch (error) {
       toastError(error instanceof Error ? `档位没保存成功：${error.message}` : "档位没保存成功");
     }
+    try {
+      await saveMediaBaseURLIfChanged();
+    } catch (error) {
+      mediaBaseURLError.value = error instanceof Error ? error.message : "媒体回源基址保存失败";
+      toastError(`媒体回源基址没保存成功：${mediaBaseURLError.value}`);
+    }
     toastSuccess("机器人配置已保存");
   } catch (error) {
     toastError(error instanceof Error ? error.message : "保存失败");
@@ -4550,6 +4603,7 @@ onMounted(() => {
   trackHeaderHeight();
   void loadAgentSafeModeCatalog();
   void load().then(openRequestedTab);
+  void loadMediaBaseURL();
 });
 
 // 别处（运行记录里的上下文构成）跳过来时带着 ?tab=context：那边看到工具占了多少，

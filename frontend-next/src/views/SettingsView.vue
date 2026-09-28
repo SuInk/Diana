@@ -342,11 +342,7 @@
             <fieldset v-if="!cacheLoading || cachePolicy" class="cache-policy-fields form-grid" :disabled="cacheLoading || cacheSaving || !cachePolicy">
               <div class="field">
                 <label for="cache-cleanup-mode">清理策略</label>
-                <select id="cache-cleanup-mode" v-model="cacheMode" class="input">
-                  <option value="days">按闲置天数清理</option>
-                  <option value="capacity">仅按容量清理</option>
-                  <option value="never">永不自动清理</option>
-                </select>
+                <AppSelect id="cache-cleanup-mode" :model-value="cacheMode" :options="cacheModeOptions" :disabled="cacheLoading || cacheSaving || !cachePolicy" @update:model-value="(value) => { cacheMode = value as CacheMode; }" />
               </div>
               <div v-if="cacheMode === 'days'" class="field">
                 <label for="cache-retention-days">闲置保留天数</label>
@@ -382,28 +378,6 @@
             <div class="field"><label for="history-media-max">容量上限（MiB）</label><input id="history-media-max" v-model.number="historyMediaMaxMB" class="input" type="number" min="0" max="1048576" /><span class="hint">0 表示不限制容量。</span></div>
             <p class="hint field wide">清理只删除图片、视频、音频、PDF 等历史原件；聊天文字、媒体类型和已有摘要保留。删除后历史记录会显示原件不可用。</p>
             <div class="field wide"><button class="btn primary" type="submit" :disabled="historyMediaLoading || historyMediaSaving || !historyMediaValid"><Save :size="15" />{{ historyMediaSaving ? "清理中…" : "保存并立即清理" }}</button></div>
-          </form>
-        </section>
-        <section class="download-cache-settings">
-          <div class="card-header">
-            <h2>媒体回源</h2>
-            <button class="btn small ghost" type="button" :disabled="mediaBaseURLLoading || mediaBaseURLSaving" title="刷新媒体回源设置" aria-label="刷新媒体回源设置" @click="loadMediaBaseURL">
-              <RefreshCw :size="14" aria-hidden="true" />
-            </button>
-          </div>
-          <form class="card-body form-grid" @submit.prevent="saveMediaBaseURL">
-            <p v-if="mediaBaseURLError" class="error field wide" role="alert">{{ mediaBaseURLError }}</p>
-            <div class="field wide">
-              <label for="media-base-url">回源基址</label>
-              <input id="media-base-url" v-model="mediaBaseURL" class="input mono" placeholder="留空自动推断，例如 http://192.168.1.10:18080/media/resolver" :disabled="mediaBaseURLLoading || mediaBaseURLSaving" />
-              <span class="hint">发送文件/图片时，接入端按这个地址回源拉取媒体。留空时按接入方式自动推断：反向 ws 用握手地址，正向 ws / HTTP 用接入端地址推主机名 + Diana 的 Web 端口。跨机或反向代理部署收不到文件时，把接入端实际可访问的 Diana 地址填到这里。当前生效来源：{{ mediaBaseURLSourceLabel }}。</span>
-            </div>
-            <div class="field wide">
-              <button class="btn primary" type="submit" :disabled="mediaBaseURLLoading || mediaBaseURLSaving">
-                <Save :size="15" aria-hidden="true" />
-                {{ mediaBaseURLSaving ? "保存中…" : "保存回源设置" }}
-              </button>
-            </div>
           </form>
         </section>
       </div>
@@ -585,6 +559,7 @@
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import AppSelect, { type AppSelectOption } from "../components/AppSelect.vue";
 import EmptyState from "../components/EmptyState.vue";
 import LoadingSkeleton from "../components/LoadingSkeleton.vue";
 import SkeletonBlock from "../components/SkeletonBlock.vue";
@@ -615,9 +590,6 @@ import {
   getHistoryMediaPolicy,
   saveHistoryMediaPolicy,
   type HistoryMediaPolicy,
-  getMediaBaseURLSetting,
-  saveMediaBaseURLSetting,
-  type MediaBaseURLSetting,
   listOpenAPIKeys,
   createOpenAPIKey,
   revokeOpenAPIKey,
@@ -646,7 +618,7 @@ const settingsPages = [
   { key: "openapi", label: "对外 API", hint: "让 CI、监控这类外部系统通过 HTTP 接口给机器人推送消息。", icon: Plug },
   { key: "storage", label: "存储空间", hint: "这台机器的磁盘还剩多少，以及 Diana 的数据目录被哪类文件占掉了。", icon: PieChart },
   { key: "cache", label: "下载缓存", hint: "控制下载的媒体缓存按闲置天数或容量清理。", icon: HardDriveDownload },
-  { key: "media", label: "媒体与文件", hint: "历史媒体原件的保留策略，以及发送文件时接入端回源拉取媒体的地址。", icon: Images },
+  { key: "media", label: "媒体与文件", hint: "历史媒体原件的保留策略。", icon: Images },
   { key: "update", label: "系统更新", hint: "检查、下载并安装新版本，以及原地重启服务。", icon: Download },
   { key: "status", label: "运行状态", hint: "当前服务的启动时间与运行时长。", icon: Activity },
   { key: "theme", label: "界面主题", hint: "只存在你当前这个浏览器里，不会同步到其它设备，也不影响别的登录用户。", icon: Palette }
@@ -743,37 +715,13 @@ async function saveHistoryMedia() {
   catch (error) { historyMediaError.value = error instanceof Error ? error.message : "历史媒体设置保存失败"; toastError(historyMediaError.value); }
   finally { historyMediaSaving.value = false; }
 }
-const cacheMode = ref<"days" | "capacity" | "never">("days");
-// 媒体回源基址：文件/图片发送时接入端按它回源拉取媒体。留空走自动推断
-// （反向 ws 按握手地址，正向 ws / HTTP 按接入端地址推主机 + 本服务 Web 端口）。
-const mediaBaseURL = ref("");
-const mediaBaseURLSource = ref<MediaBaseURLSetting["source"]>("auto");
-const mediaBaseURLLoading = ref(true);
-const mediaBaseURLSaving = ref(false);
-const mediaBaseURLError = ref("");
-const mediaBaseURLSourceLabel = computed(() => ({
-  database: "已保存的设置",
-  config: "config.yaml",
-  auto: "自动推断"
-})[mediaBaseURLSource.value]);
-async function loadMediaBaseURL() {
-  mediaBaseURLLoading.value = true; mediaBaseURLError.value = "";
-  try {
-    const setting = await getMediaBaseURLSetting();
-    mediaBaseURL.value = setting.base_url; mediaBaseURLSource.value = setting.source;
-  } catch (error) { mediaBaseURLError.value = error instanceof Error ? error.message : "媒体回源基址加载失败"; }
-  finally { mediaBaseURLLoading.value = false; }
-}
-async function saveMediaBaseURL() {
-  if (mediaBaseURLSaving.value) return;
-  mediaBaseURLSaving.value = true; mediaBaseURLError.value = "";
-  try {
-    const setting = await saveMediaBaseURLSetting({ base_url: mediaBaseURL.value.trim() });
-    mediaBaseURL.value = setting.base_url; mediaBaseURLSource.value = setting.source;
-    toastSuccess("媒体回源基址已保存并生效");
-  } catch (error) { mediaBaseURLError.value = error instanceof Error ? error.message : "媒体回源基址保存失败"; toastError(mediaBaseURLError.value); }
-  finally { mediaBaseURLSaving.value = false; }
-}
+type CacheMode = "days" | "capacity" | "never";
+const cacheMode = ref<CacheMode>("days");
+const cacheModeOptions: AppSelectOption[] = [
+  { value: "days", label: "按闲置天数清理" },
+  { value: "capacity", label: "仅按容量清理" },
+  { value: "never", label: "永不自动清理" }
+];
 const cacheDays = ref(7);
 const cacheMaxMB = ref(1024);
 const cacheLimitEnabled = ref(false);
@@ -1263,7 +1211,6 @@ async function doRestart(): Promise<void> {
 onMounted(() => {
   void loadCachePolicy();
   void loadHistoryMediaPolicy();
-  void loadMediaBaseURL();
   void loadUpdates();
   void loadGitHubTokenStatus();
   void loadAuthStatus().then(() => loadSessions());
