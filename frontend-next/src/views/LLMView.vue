@@ -373,16 +373,17 @@
                 :placeholder="row.configured ? '已保存，留空则沿用' : '值'"
               />
               <button
-                class="btn small ghost danger icon-only"
+                class="btn ghost"
                 type="button"
                 :title="row.name ? `删除请求头 ${row.name}` : '清空这一行'"
                 :aria-label="row.name ? `删除请求头 ${row.name}` : '清空这一行'"
                 @click="removeHeader(index)"
               >
-                <Trash2 :size="14" aria-hidden="true" />
+                <X :size="14" :stroke-width="2.25" aria-hidden="true" />
+                删除
               </button>
             </div>
-            <button class="btn small ghost" type="button" @click="addHeader"><Plus :size="14" aria-hidden="true" />添加请求头</button>
+            <button class="btn small ghost header-add" type="button" @click="addHeader"><Plus :size="14" aria-hidden="true" />添加请求头</button>
           </div>
           <span class="hint">
             中转网关常靠请求头做会话亲和、分组或计费标记，填在这里的会原样发给这套配置的每个会话类请求；图片等无状态端点不带。同名时以这里为准，会覆盖内置的请求头。
@@ -1219,13 +1220,33 @@ useConfigurationRefresh(["bot", "llm"], reload);
 </script>
 
 <style scoped>
-/* 请求头行照仓库设置的授权列表：两个输入框平分，尾列是纯图标的删除，添加按钮在
-   列表下面。 */
+/* 请求头行：两个输入框平分，尾列是「删除」。删除是破坏性动作，走 ghost 不抢眼，
+   但 ghost 默认没有边框会像一行浮着的文字，所以补回较淡的那档边框。添加按钮照仓库
+   设置的授权列表，放在列表下面。 */
 .header-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 80px;
   gap: 8px;
   align-items: center;
+}
+
+.header-row > .btn {
+  width: 100%;
+  justify-content: center;
+}
+
+.header-row > .btn.ghost {
+  border-color: var(--border);
+}
+
+/* 光一行文字看不出能点：用虚线框标出「这里能再加一行」，和实线框的输入框区分开。 */
+.header-add {
+  border: 1px dashed var(--border-strong);
+}
+
+.header-add:hover:not(:disabled) {
+  border-color: var(--accent, var(--border-strong));
+  color: var(--text);
 }
 
 /* 模型分配引用列表：跟在 hint 后面的一小段列表，排版继承 hint 的字号和颜色。 */
