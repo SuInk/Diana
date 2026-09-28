@@ -353,7 +353,7 @@
         </div>
         <div v-if="form.provider === 'openai_compatible'" class="field wide">
           <label for="llm-header-name-0">自定义请求头（可选）</label>
-          <div class="stack" style="gap: 6px">
+          <div class="target-list" style="margin-top: 0">
             <div v-for="(row, index) in headerRows" :key="row.key" class="header-row">
               <input
                 :id="`llm-header-name-${index}`"
@@ -373,22 +373,16 @@
                 :placeholder="row.configured ? '已保存，留空则沿用' : '值'"
               />
               <button
-                class="btn ghost"
+                class="btn small ghost danger icon-only"
                 type="button"
                 :title="row.name ? `删除请求头 ${row.name}` : '清空这一行'"
                 :aria-label="row.name ? `删除请求头 ${row.name}` : '清空这一行'"
                 @click="removeHeader(index)"
               >
-                <X :size="14" :stroke-width="2.25" aria-hidden="true" />
-                删除
+                <Trash2 :size="14" aria-hidden="true" />
               </button>
             </div>
-            <div class="header-add">
-              <button class="btn" type="button" @click="addHeader">
-                <Plus :size="14" aria-hidden="true" />
-                添加
-              </button>
-            </div>
+            <button class="btn small ghost" type="button" @click="addHeader"><Plus :size="14" aria-hidden="true" />添加请求头</button>
           </div>
           <span class="hint">
             中转网关常靠请求头做会话亲和、分组或计费标记，填在这里的会原样发给这套配置的每个会话类请求；图片等无状态端点不带。同名时以这里为准，会覆盖内置的请求头。
@@ -1225,40 +1219,13 @@ useConfigurationRefresh(["bot", "llm"], reload);
 </script>
 
 <style scoped>
-/* 请求头的草稿行和已添加行必须逐列对齐。原先两行都用 .input-group（flex 配
-   .input{flex:1}），而尾列一个是带文字的「添加」、一个是纯图标的删除，宽度差了
-   48px，剩余空间被两个输入框平分之后两行就错开了。改成共用同一套网格，尾列按
-   「添加」的实际宽度固定。
-
-   尾列那两个按钮做成同形：同样的尺寸、外框和「图标 + 文字」，都撑满该列，这样它们
-   看着是一套。但重量不同——删除是破坏性动作，跟主动作一样显眼就成了喧宾夺主，所以
-   它走 ghost（透明背景 + 次级文字色）。ghost 默认连边框也去掉，那样又会变成一行浮
-   在那里的文字，所以下面把边框补回来，用比 .btn 更淡的那档。 */
+/* 请求头行照仓库设置的授权列表：两个输入框平分，尾列是纯图标的删除，添加按钮在
+   列表下面。 */
 .header-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 80px;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
   gap: 8px;
   align-items: center;
-}
-
-.header-row > .btn {
-  width: 100%;
-  justify-content: center;
-}
-
-.header-row > .btn.ghost {
-  border-color: var(--border);
-}
-
-/* 添加在列表下面居中，压矮拉宽：它是列表的收尾，不该和每行的删除一样高。 */
-.header-add {
-  display: flex;
-  justify-content: center;
-}
-
-.header-add > .btn {
-  min-width: 180px;
-  padding: 4px 28px;
 }
 
 /* 模型分配引用列表：跟在 hint 后面的一小段列表，排版继承 hint 的字号和颜色。 */
