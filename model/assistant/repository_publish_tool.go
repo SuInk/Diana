@@ -1655,24 +1655,30 @@ func (t *dianaGitHubTool) executeDraft(ctx context.Context, draft repositoryIssu
 	if operation != "create" && operation != "update" && operation != "comment" && operation != "review" && operation != "close" && operation != "reopen" {
 		return result.fail("invalid_operation", "草稿记录的操作无法执行。")
 	}
-	// 草稿确认过之后仓库在 GitHub 上改了名：旧名的 REST 请求会被 301，GraphQL 返回的
-	// 链接又全是新名，按旧名写一定失败。GitHub 认定是同一个仓库，确认的也是这份内容，
-	// 所以直接换成新名写入，并在回复里说明。
-	repository := draft.Repository
-	renamedFrom := ""
-	if current := t.currentRepositoryName(ctx, repository); current != "" && !strings.EqualFold(current, repository) {
-		renamedFrom, repository = repository, current
+	// 草稿确认之后仓库在 GitHub 上改了名：旧名的 REST 请求会被 301，GraphQL 返回的
+	// 链接又全是新名，按旧名写一定失败。用户确认的是旧名，新名得让他再确认一次：
+	// 草稿改指向新名、换一个确认码、保持待审批，这次不写。换码是为了让旧确认码
+	// 不能直接放行到新仓库。
+	if current := t.currentRepositoryName(ctx, draft.Repository); current != "" && !strings.EqualFold(current, draft.Repository) {
+		previous := draft.Repository
 		draft.Repository = current
+		draft.ConfirmationCode = newRepositoryIssueConfirmationCode(draftConfirmationCode(draft))
 		result.Repository = current
+		result.Draft = repositoryIssueDraftViewFromDraft(draft)
+		if err := t.plugin.updateDraft(ctx, draft); err != nil {
+			return result.fail("draft_store_failed", fmt.Sprintf("仓库 %s 已改名为 %s，但草稿改指向新名时保存失败，本次未写入。", previous, current))
+		}
+		confirm := fmt.Sprintf("回复新确认码 %s 确认写到新仓库", draftConfirmationCode(draft))
+		if operationName == "publish" {
+			confirm = "在 WebUI 里再点一次发布确认写到新仓库"
+		}
+		return result.fail("repository_renamed", fmt.Sprintf("仓库 %s 已在 GitHub 上改名为 %s，本次未写入。草稿已改指向 %s，%s。", previous, current, current, confirm))
 	}
 	var executed repositoryIssueResult
 	if targets := repositoryIssueBatchTargets(writeInput); len(targets) > 1 {
-		executed = t.executeBatch(ctx, repository, operation, writeInput, targets)
+		executed = t.executeBatch(ctx, draft.Repository, operation, writeInput, targets)
 	} else {
-		executed = t.executeWrite(ctx, repository, operation, writeInput)
-	}
-	if renamedFrom != "" {
-		executed.Message = fmt.Sprintf("仓库 %s 已改名为 %s，已按新名执行。", renamedFrom, repository) + executed.Message
+		executed = t.executeWrite(ctx, draft.Repository, operation, writeInput)
 	}
 	executed.Operation = operationName
 	executed.Draft = repositoryIssueDraftViewFromDraft(draft)
@@ -2635,8 +2641,8 @@ func (t *dianaGitHubTool) listIssuesGraphQL(ctx context.Context, repository stri
 			return nil, nil, false
 		}
 		// GraphQL 按旧名也能查到改过名的仓库，但返回的 Issue 链接全是新名，逐条比对会
-		// 被当成「别的仓库的 Issue」报 invalid_response，重试多少次都一样。草稿审批会先
-		// 换成新名（见 executeDraft），走到这里说明调用方没换，照实报出新名。
+		// 被当成「别的仓库的 Issue」报 invalid_response，重试多少次都一样。草稿审批在
+		// executeDraft 里就会拦下改名并要求重新确认，走到这里说明调用方没查，照实报出新名。
 		if current := strings.TrimSpace(data.Repository.NameWithOwner); current != "" && !strings.EqualFold(current, repository) {
 			return nil, &repositoryIssueAPIError{Code: "repository_renamed", RenamedTo: current}, true
 		}
