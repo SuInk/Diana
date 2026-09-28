@@ -62,6 +62,11 @@ type proactiveReplyQualityDecision struct {
 	StopRequested       bool
 	ClosingConfidence   float64
 	ClosingReason       string
+	// Exchange* 是回复疲劳的打分：这一来一回的新意和目的。两项都答了才算数，
+	// 缺一项当没打分，既不拦也不累加。见 reply_fatigue.go。
+	ExchangeNovelty float64
+	ExchangePurpose float64
+	ExchangeScored  bool
 }
 
 // closingCounts / stopCounts 给收尾两项加同一道置信度门槛。少答一句的代价
@@ -284,7 +289,16 @@ account_risk_reason 必须单独写清候选回复中触发账号风险的具体
 reply_loop_confidence 必须是 0 到 1 的数字;三项空转都为 false 时,它表示你对
 「这是正常对话」的把握。reply_loop_reason 只解释空转判断。
 closing_confidence 必须是 0 到 1 的数字;两项收尾都为 false 时,它表示你对
-「这次对话还在继续」的把握。closing_reason 只解释收尾判断。`
+「这次对话还在继续」的把握。closing_reason 只解释收尾判断。
+
+只有请求里带了 exchange_check=true 时,再输出 exchange_novelty 和 exchange_purpose 两个
+0 到 1 的数字;没带就不要输出这两个字段。它们评的是「当前这一轮」:original_message
+加上 candidate_reply,前几轮参考 recent_same_sender_messages 和 recent_bot_replies。
+这两项只用来衡量这段来回还值不值得接下去,不影响准确性、账号安全和其它各项的判断。
+- exchange_novelty:这一轮相对前几轮带来了多少新东西:新信息、新问题、新进展、新话题。
+  换个说法重复前面的意思、接同一个梗、反复自嘲、互夸、寒暄,都算低。
+- exchange_purpose:这串来回是否在推进一件具体的事:提问求答、解题、查资料、做事、
+  下棋等。纯闲聊接梗、斗嘴、续剧情为低。对方这句在明确提问或提出请求时给高分。`
 
 func replyControlIntentFromAudit(decision proactiveReplyQualityDecision) replyControlIntent {
 	return replyControlIntent{RefuseCurrent: decision.CountRefusal && decision.RefusalConfidence >= replyRefusalAuditConfidence}
@@ -460,6 +474,9 @@ func (r *Runtime) runReplyAudit(ctx context.Context, event MessageEvent, input, 
 	if need.Closing || need.GroupStop {
 		fields["closing_check"] = true
 	}
+	if need.Fatigue {
+		fields["exchange_check"] = true
+	}
 	payload, err := json.Marshal(fields)
 	if err != nil {
 		return proactiveReplyQualityDecision{}, fmt.Errorf("编码审核上下文: %w", err)
@@ -546,7 +563,10 @@ type replyAuditNeed struct {
 	// Density 表示机器人回这个账号回得很密、对方又被标记为机器人，要额外判这一串来回
 	// 有没有明确目的。其他账号不问：斗嘴、调侃来调侃去在群聊里再正常不过，线上被这一项
 	// 暂停的真人就是这么来的。
-	Density   *replyDensity
+	Density *replyDensity
+	// Fatigue 是回复疲劳：顺带给这一来一回的新意和目的打分，疲劳攒满且没目的时不发。
+	// 只对正常生成的回复、非主人账号打。
+	Fatigue   bool
 	candidate botReplyLoopCandidate
 }
 
@@ -602,6 +622,7 @@ func (r *Runtime) replyAuditNeed(event MessageEvent, input string, cfg BotConfig
 // 私聊收尾这些副作用始终只对最终发出去的那一版执行一次。
 type preparedReplyAudit struct {
 	reply    string
+	input    string
 	skip     bool
 	need     replyAuditNeed
 	decision proactiveReplyQualityDecision
@@ -618,22 +639,27 @@ func (r *Runtime) auditReplyBeforeSend(ctx context.Context, event MessageEvent, 
 
 // prepareReplyAudit 只调用审核模型，不修改任何状态，可以提前并发执行。
 func (r *Runtime) prepareReplyAudit(ctx context.Context, event MessageEvent, input, reply string, cfg BotConfig, proactive bool) preparedReplyAudit {
-	prepared := preparedReplyAudit{reply: reply}
+	prepared := preparedReplyAudit{reply: reply, input: input}
 	if strings.TrimSpace(reply) == "" {
 		prepared.skip = true
 		return prepared
 	}
 	need := r.replyAuditNeed(event, input, cfg, proactive)
+	// replyDensityApplies 已经把主人、空转检测开关和机器人自己排除在外。疲劳打分只搭
+	// 其它几项的车，或者最近刚回过这个人时才问：一段对话的第一句谈不上疲劳，不为它
+	// 单独发起一次审核。
+	need.Fatigue = replyFatigueAuditWanted(ctx) && r.replyDensityApplies(event) &&
+		(need.Quality || need.AccountSafety || need.Loop || need.Closing || r.replyDensityRecent(event, time.Now()) > 0)
 	prepared.need = need
 	// 群叫停只搭车，不单独发起一次审核：账号安全默认开着，群回复几乎都会跑这一次；
 	// 管理员把审核全关了，就不为这一项额外花钱。
-	if !need.Quality && !need.AccountSafety && !need.Loop && !need.Closing {
+	if !need.Quality && !need.AccountSafety && !need.Loop && !need.Closing && !need.Fatigue {
 		prepared.skip = true
 		return prepared
 	}
 	ctx = withLLMUsagePurpose(ctx, PurposeReplySendAudit)
 	evidence := botReplyLoopEvidence{}
-	if need.Loop {
+	if need.Loop || need.Fatigue {
 		evidence = r.collectBotReplyLoopEvidence(event, sessionOnlyHistory(r.contextHistory(event)))
 	}
 	prepared.decision, prepared.err = r.runReplyAudit(ctx, event, input, reply, cfg, evidence, need)
@@ -667,6 +693,9 @@ func (r *Runtime) applyReplyAudit(ctx context.Context, event MessageEvent, cfg B
 	}
 	if need.GroupStop {
 		r.applyGroupStopVerdict(ctx, event, decision, time.Now())
+	}
+	if need.Fatigue {
+		intent.fatigue = replyFatigueChargeFor(event, prepared.input, decision)
 	}
 	if need.Loop {
 		if need.Density == nil {
@@ -853,6 +882,9 @@ func parseProactiveReplyQualityDecision(raw string) (proactiveReplyQualityDecisi
 		StopRequested       *bool    `json:"stop_requested"`
 		ClosingConfidence   *float64 `json:"closing_confidence"`
 		ClosingReason       *string  `json:"closing_reason"`
+		// 回复疲劳两项，缺任何一项都当没打分。
+		ExchangeNovelty *float64 `json:"exchange_novelty"`
+		ExchangePurpose *float64 `json:"exchange_purpose"`
 	}
 	if err := json.Unmarshal([]byte(raw[start:end+1]), &payload); err != nil || payload.Confidence == nil {
 		return proactiveReplyQualityDecision{}, false
@@ -904,6 +936,9 @@ func parseProactiveReplyQualityDecision(raw string) (proactiveReplyQualityDecisi
 	}
 	if payload.ClosingReason != nil {
 		decision.ClosingReason = strings.TrimSpace(*payload.ClosingReason)
+	}
+	if inUnit := func(v *float64) bool { return v != nil && *v >= 0 && *v <= 1 }; inUnit(payload.ExchangeNovelty) && inUnit(payload.ExchangePurpose) {
+		decision.ExchangeNovelty, decision.ExchangePurpose, decision.ExchangeScored = *payload.ExchangeNovelty, *payload.ExchangePurpose, true
 	}
 	return decision, true
 }

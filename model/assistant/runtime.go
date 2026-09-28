@@ -295,6 +295,8 @@ func DescribeEventOutcome(outcome string) (decision string, reason string, handl
 		return "not_replied", "发送前审核认定这条回复只是把机器人自己刚说过的话换个说法又说一遍，没有发送；只跳过这一条，对方下一条带来新内容时照常回答", false
 	case "ignored_ai_reply_loop":
 		return "not_replied", "发送前审核认定这一来一回已在空转（双方都只在应付没有内容，或和被标记的机器人没有目的地来回），为避免继续接茬而没有发送", false
+	case "ignored_reply_fatigue":
+		return "not_replied", "对这个人的回复疲劳已经攒满（最近回了很多没新意、没目的的长句），这一轮也没有明确的提问或请求，这条没有发送；疲劳会随时间消退，对方真有事时照常回答", false
 	case "ignored_no_natural_reply":
 		return "not_replied", "自然插话的最终生成没有得到有效回复，已保持静默", false
 	case "ignored_proactive_reply_quality":
@@ -563,6 +565,7 @@ type Runtime struct {
 	replyRefusalByUser  map[string]replyRefusalState
 	botReplyLoopMu      sync.Mutex
 	replyDensity        replyDensityTracker
+	replyFatigue        replyFatigueTracker
 	botReplyLoopByKey   map[string]botReplyLoopState
 	// privateClosingBySession 记录每个私聊会话已经互相道别了几轮。只在内存里：
 	// 重启后重新给足宽限次数，方向上偏「多答一句」而不是「误闭嘴」。
@@ -2045,6 +2048,15 @@ func (r *Runtime) routeMessageEvent(ctx context.Context, event MessageEvent) (Me
 		}
 		r.record(r.decisionEventRecord(event, text, ignoredOutcome))
 		return finishWithoutReply(ignoredOutcome)
+	}
+	// 回复疲劳：对这个人回得又多又没新意，疲劳攒满后这条若不是在推进一件事就不回，
+	// @ 和引用也一样。放在触发这一层，拦下的这一轮连回复都不用生成。见 reply_fatigue.go。
+	if !statusCommand {
+		if blocked, reason := r.replyFatigueBlocks(ctx, event, text); blocked {
+			event.routingReason = reason
+			r.record(r.decisionEventRecord(event, text, "ignored_reply_fatigue"))
+			return finishWithoutReply("ignored_reply_fatigue")
+		}
 	}
 	return event, text, true, successOutcome
 }
@@ -4664,6 +4676,8 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		// 收尾把中途那句原样又写了一遍：对方已经看到了，不再发第二次。
 		return "", newModelSilentFinishError("收尾和中途说过的话重复")
 	}
+	// 回复疲劳只管正常生成的回复；插件直发的内容（链接解析之类）是对方要的东西，不走这一项。
+	ctx = withReplyFatigueAudit(ctx)
 	var semanticGate *semanticReplyGate
 	var speculativeAudit chan preparedReplyAudit
 	dedupKept := false
@@ -4713,6 +4727,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		return "", err
 	}
 	controlIntent.RefuseCurrent = controlIntent.RefuseCurrent || auditIntent.RefuseCurrent
+	controlIntent.fatigue = auditIntent.fatigue
 	if ruleMatched && ruleDecision.Rule.Action == ReplyRuleActionVoice {
 		voiceReply, voiceErr := r.replyRuleVoiceCQ(ctx, event, ruleDecision.Rule, reply)
 		if voiceErr != nil {

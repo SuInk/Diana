@@ -57,6 +57,8 @@ type replyControlIntent struct {
 	SuppressCurrentUser bool
 	DeliveryMode        replyDeliveryMode
 	LineBreakMode       replyLineBreakMode
+	// fatigue 是审核给这一轮算出的回复疲劳增量，发出去以后才记上。
+	fatigue replyFatigueCharge
 }
 
 // ReplySuppression is a restart-safe temporary refusal to answer one chat user.
@@ -629,6 +631,7 @@ func (r *Runtime) resetBotReplyLoopUser(userID string) {
 		return
 	}
 	r.resetReplyDensityUser(userID)
+	r.resetReplyFatigueUser(userID)
 	r.botReplyLoopMu.Lock()
 	for key, state := range r.botReplyLoopByKey {
 		if state.UserID == userID {
@@ -706,6 +709,7 @@ func (r *Runtime) applyReplyControlAfterSend(ctx context.Context, event MessageE
 	}
 	now := time.Now()
 	r.recordReplyDensitySend(event, now)
+	r.recordReplyFatigueSend(event, intent.fatigue, now)
 	if intent.SuppressCurrentUser {
 		r.activateReplySuppressionWithinOutboundGate(event, reply, now)
 		return

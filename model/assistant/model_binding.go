@@ -41,6 +41,8 @@ const (
 	PurposeStickerPersonaFit = "sticker_persona_fit"
 	PurposeReplySuppression  = "reply_suppression_notice"
 	PurposeBotReplyLoop      = "bot_reply_loop_detection"
+	// PurposeReplyFatigueGate 是回复疲劳攒满后，触发阶段那一问：这条还回不回。
+	PurposeReplyFatigueGate = "reply_fatigue_gate"
 	// 三种发送前提示的改写。它们以前只是散在代码里的字面量，没进这张表，
 	// 于是在模型绑定界面上看不见也指不了，只能跟着调用函数走。
 	PurposeUpstreamRejectionNotice = "upstream_rejection_notice"
@@ -74,6 +76,7 @@ var llmPurposeGroup = map[string]string{
 	PurposeProactiveReplyRouter:  llm.GroupIntent,
 	PurposeProactiveReplyQuality: llm.GroupIntent,
 	PurposeReplySendAudit:        llm.GroupIntent,
+	PurposeReplyFatigueGate:      llm.GroupIntent,
 
 	// 回复辅助：这一轮回复发出之前同步跑的旁路调用，模型慢，回复就跟着慢。
 	// 语义指代、话题合并、语义去重和上下文摘要要写出文字；提示改写的结果直接
