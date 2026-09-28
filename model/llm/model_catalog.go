@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"strings"
@@ -28,6 +29,89 @@ type ModelsDevCatalog struct {
 	url       string
 	fetchedAt time.Time
 	providers map[string]map[string]ModelInfo
+	// refreshing 和 lastAttempt 只给 OutputLimit 的后台刷新用：请求路径上不能等
+	// 网络，离线部署也不能每个请求都去拉一次。
+	refreshing  bool
+	lastAttempt time.Time
+}
+
+// modelsDevRetryInterval 是后台刷新失败后多久再试。
+const modelsDevRetryInterval = 10 * time.Minute
+
+// sharedModelsDevCatalog 是进程里唯一的 models.dev 缓存：同步模型列表和请求时查
+// 输出上限用的是同一份，不重复下载 api.json。
+var sharedModelsDevCatalog = NewModelsDevCatalog(nil)
+
+// outputLimitCatalog 是 ResolveMaxOutputTokens 查表用的目录，测试里换成本地数据。
+var outputLimitCatalog = sharedModelsDevCatalog
+
+// SharedModelsDevCatalog 返回进程共用的 models.dev 目录。
+func SharedModelsDevCatalog() *ModelsDevCatalog {
+	return sharedModelsDevCatalog
+}
+
+// Warm 在后台预取一次目录，让启动后的第一批请求就能查到上限。
+func (c *ModelsDevCatalog) Warm() {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	c.startRefreshLocked()
+	c.mu.Unlock()
+}
+
+// OutputLimit 返回 models.dev 里这个模型的 limit.output，按 opencode 的做法以
+// 「服务商 + 模型 ID」精确匹配。只读缓存、不等网络：缓存为空或过期时在后台刷新，
+// 这一次按查不到处理，由调用方退回默认值。
+func (c *ModelsDevCatalog) OutputLimit(cfg ProviderConfig, model string) (int64, bool) {
+	if c == nil {
+		return 0, false
+	}
+	providers := modelsDevProviderCandidates(cfg)
+	model = strings.TrimSpace(model)
+	if len(providers) == 0 || model == "" {
+		return 0, false
+	}
+	c.mu.Lock()
+	if len(c.providers) == 0 || time.Since(c.fetchedAt) >= modelsDevCacheTTL {
+		c.startRefreshLocked()
+	}
+	catalog := c.providers
+	c.mu.Unlock()
+	for _, provider := range providers {
+		if info, ok := catalog[provider][model]; ok && info.MaxOutputTokens > 0 {
+			return info.MaxOutputTokens, true
+		}
+	}
+	return 0, false
+}
+
+// recoverCatalogRefreshPanic 让解析坏掉的 api.json 只丢掉这一次刷新，不拖垮进程。
+func recoverCatalogRefreshPanic() {
+	if recovered := recover(); recovered != nil {
+		log.Printf("llm: models.dev refresh panicked: %v", recovered)
+	}
+}
+
+// startRefreshLocked 在后台拉一次目录；已经在拉、或刚失败过就不再发起。
+func (c *ModelsDevCatalog) startRefreshLocked() {
+	if c.refreshing || len(c.providers) > 0 && time.Since(c.fetchedAt) < modelsDevCacheTTL {
+		return
+	}
+	if !c.lastAttempt.IsZero() && time.Since(c.lastAttempt) < modelsDevRetryInterval {
+		return
+	}
+	c.refreshing = true
+	c.lastAttempt = time.Now()
+	go func() {
+		defer recoverCatalogRefreshPanic()
+		ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+		defer cancel()
+		_, _ = c.load(ctx)
+		c.mu.Lock()
+		c.refreshing = false
+		c.mu.Unlock()
+	}()
 }
 
 func NewModelsDevCatalog(client *http.Client) *ModelsDevCatalog {
@@ -81,12 +165,16 @@ func (c *ModelsDevCatalog) Enrich(ctx context.Context, cfg ProviderConfig, model
 	return out
 }
 
+// load 返回缓存的目录，过期时重新下载。下载期间不持锁：OutputLimit 在请求路径上
+// 读缓存，不能被一次慢下载卡住。并发时可能多下载一次，结果相同。
 func (c *ModelsDevCatalog) load(ctx context.Context) (map[string]map[string]ModelInfo, error) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	if len(c.providers) > 0 && time.Since(c.fetchedAt) < modelsDevCacheTTL {
-		return c.providers, nil
+		providers := c.providers
+		c.mu.Unlock()
+		return providers, nil
 	}
+	c.mu.Unlock()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.url, nil)
 	if err != nil {
 		return nil, err
@@ -108,9 +196,11 @@ func (c *ModelsDevCatalog) load(ctx context.Context) (map[string]map[string]Mode
 	if err != nil {
 		return nil, err
 	}
+	c.mu.Lock()
 	c.providers = providers
 	c.fetchedAt = time.Now()
-	return c.providers, nil
+	c.mu.Unlock()
+	return providers, nil
 }
 
 func decodeModelsDevCatalog(body []byte) (map[string]map[string]ModelInfo, error) {

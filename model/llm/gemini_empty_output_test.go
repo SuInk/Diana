@@ -27,7 +27,7 @@ func TestGeminiEmptyOutputReportsFinishReason(t *testing.T) {
 			name:          "max tokens with implicit limit",
 			body:          `{"candidates":[{"finishReason":"MAX_TOKENS","content":{"role":"model","parts":[{"text":""}]}}],"usageMetadata":{"promptTokenCount":116611,"totalTokenCount":116611}}`,
 			wantTruncated: true,
-			wantParts:     []string{"finish_reason=MAX_TOKENS", "max_output_tokens=65536", "input_tokens:116611"},
+			wantParts:     []string{"finish_reason=MAX_TOKENS", "max_output_tokens=32000", "input_tokens:116611"},
 		},
 		{
 			name:          "max tokens with limit",
@@ -141,7 +141,7 @@ func TestGeminiSendsImplicitMaxOutputTokens(t *testing.T) {
 		requested int64
 		want      int64
 	}{
-		{name: "unset", want: 65536},
+		{name: "unset", want: DefaultOutputTokenCeiling},
 		{name: "configured", requested: 2048, want: 2048},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

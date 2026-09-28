@@ -398,7 +398,10 @@ func main() {
 	}
 	// 模型列表必须从当前 provider 后端读取；公共目录只补全后端常常省略的
 	// 模态和 token 限制，失败时保留原列表与“能力未知”状态。
-	modelCatalog := llm.NewModelsDevCatalog(nil)
+	// 和请求时查输出上限共用一份缓存；启动就预取，第一批请求就能查到上限。
+	llm.SetOutputTokenCeiling(appCfg.LLMRuntime.OutputTokenMax)
+	modelCatalog := llm.SharedModelsDevCatalog()
+	modelCatalog.Warm()
 	modelListFactory := func(ctx context.Context, cfg llm.ProviderConfig) ([]llm.ModelInfo, error) {
 		models, err := llm.ListModels(ctx, cfg, llmClientOptions(cfg)...)
 		if err != nil {

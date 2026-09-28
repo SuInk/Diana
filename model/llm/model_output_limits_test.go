@@ -15,47 +15,31 @@ import (
 	"time"
 )
 
-func TestBuiltinMaxOutputTokensMatchesFamilies(t *testing.T) {
-	for _, item := range []struct {
-		model string
-		want  int64
-		ok    bool
-	}{
-		// 网关给的档位和日期后缀落在家族前缀后面。
-		{"gemini-3.8-flash-low", 65536, true},
-		{"models/gemini-3.8-flash-low", 65536, true},
-		{"gemini-3-pro-image-4k", 32768, true},
-		{"claude-opus-4.6-thinking", 128000, true},
-		{"claude-opus-4-5-20251101", 64000, true},
-		{"claude-opus-4-1", 32000, true},
-		{"anthropic/claude-sonnet-4-5", 64000, true},
-		{"gpt-5.5", 128000, true},
-		{"gpt-5-pro", 272000, true},
-		{"gpt-5.2-pro", 128000, true},
-		{"gpt-5.2-chat-latest", 16384, true},
-		{"openai/gpt-4o-mini", 16384, true},
-		{"o3-pro", 100000, true},
-		{"glm-4.5v", 16384, true},
-		{"glm-4.5-air", 98304, true},
-		{"deepseek-flash", 384000, true},
-		{"MiniMax-M2.7", 131072, true},
-		// 前缀后面必须是分隔符，也不认没有版本的裸家族名。
-		{"gpt-50", 0, false},
-		{"o3x", 0, false},
-		{"claude", 0, false},
-		{"jev-latest", 0, false},
-		{"", 0, false},
-	} {
-		got, ok := BuiltinMaxOutputTokens(item.model)
-		if got != item.want || ok != item.ok {
-			t.Errorf("BuiltinMaxOutputTokens(%q) = %d, %t; want %d, %t", item.model, got, ok, item.want, item.ok)
-		}
-	}
+// testModelsDevOutputLimits 是测试用的 models.dev 片段。测试不许真的去拉 models.dev：
+// init 里就把目录换成这份本地数据，且标成刚取过，后台刷新不会触发。
+var testModelsDevOutputLimits = map[string]map[string]ModelInfo{
+	"anthropic": {
+		"claude-opus-4-6":            {ID: "claude-opus-4-6", MaxOutputTokens: 128000},
+		"claude-3-5-sonnet-20241022": {ID: "claude-3-5-sonnet-20241022", MaxOutputTokens: 8192},
+	},
+	"google": {
+		"gemini-2.5-flash": {ID: "gemini-2.5-flash", MaxOutputTokens: 65536},
+		"gemini-2.0-flash": {ID: "gemini-2.0-flash", MaxOutputTokens: 8192},
+	},
+	"deepseek": {
+		"deepseek-chat": {ID: "deepseek-chat", MaxOutputTokens: 8192},
+	},
 }
 
-func TestResolveMaxOutputTokensByProtocol(t *testing.T) {
-	// antigravity 这类网关给每个模型报的占位值，不参与取值。
-	catalog := []ModelInfo{{ID: "claude-sonnet-4-6", MaxOutputTokens: 8192}}
+func init() {
+	outputLimitCatalog = &ModelsDevCatalog{providers: testModelsDevOutputLimits, fetchedAt: time.Now().Add(100 * 365 * 24 * time.Hour)}
+}
+
+func TestResolveMaxOutputTokensLikeOpencode(t *testing.T) {
+	// antigravity 这类网关给每个模型报的占位值，不参与取值：只信 models.dev。
+	catalog := []ModelInfo{{ID: "claude-opus-4-6", MaxOutputTokens: 8192}}
+	deepseek := ProviderConfig{Provider: ProviderOpenAICompatible, APIFormat: APIFormatChatCompletions, BaseURL: "https://api.deepseek.com/v1"}
+	relay := ProviderConfig{Provider: ProviderOpenAICompatible, APIFormat: APIFormatChatCompletions, BaseURL: "https://relay.example.com/v1"}
 	for _, item := range []struct {
 		name       string
 		cfg        ProviderConfig
@@ -63,16 +47,16 @@ func TestResolveMaxOutputTokensByProtocol(t *testing.T) {
 		want       int64
 		wantSource MaxOutputTokensSource
 	}{
-		{"用户填的值优先，可以超过封顶", ProviderConfig{Provider: ProviderAnthropic, MaxOutputTokens: 128000}, "claude-sonnet-4-6", 128000, MaxOutputTokensSourceUser},
-		{"表里的上限封顶 65536", ProviderConfig{Provider: ProviderAnthropic, Models: catalog}, "claude-sonnet-4-6", DefaultOutputTokenCeiling, MaxOutputTokensSourceBuiltin},
-		{"表里更小的上限照用", ProviderConfig{Provider: ProviderAnthropic}, "claude-3-5-sonnet-20241022", 8192, MaxOutputTokensSourceBuiltin},
-		{"表里没有按默认值", ProviderConfig{Provider: ProviderAnthropic}, "relay-claude", DefaultOutputTokenCeiling, MaxOutputTokensSourceDefault},
-		{"Gemini 按表", ProviderConfig{Provider: ProviderGemini}, "gemini-3.8-flash-low", 65536, MaxOutputTokensSourceBuiltin},
-		{"Gemini 不认识的名字按默认值", ProviderConfig{Provider: ProviderGemini}, "claude", DefaultOutputTokenCeiling, MaxOutputTokensSourceDefault},
-		{"Chat Completions 按表封顶", ProviderConfig{Provider: ProviderOpenAICompatible, APIFormat: APIFormatChatCompletions}, "deepseek-flash", DefaultOutputTokenCeiling, MaxOutputTokensSourceBuiltin},
-		{"Chat Completions 不认识的按默认值", ProviderConfig{Provider: ProviderOpenAICompatible, APIFormat: APIFormatChatCompletions}, "jev-latest", DefaultOutputTokenCeiling, MaxOutputTokensSourceDefault},
+		{"用户填的值优先，可以超过封顶", ProviderConfig{Provider: ProviderAnthropic, MaxOutputTokens: 128000}, "claude-opus-4-6", 128000, MaxOutputTokensSourceUser},
+		{"models.dev 的上限按 32000 封顶", ProviderConfig{Provider: ProviderAnthropic, Models: catalog}, "claude-opus-4-6", DefaultOutputTokenCeiling, MaxOutputTokensSourceModelsDev},
+		{"models.dev 更小的上限照用", ProviderConfig{Provider: ProviderAnthropic}, "claude-3-5-sonnet-20241022", 8192, MaxOutputTokensSourceModelsDev},
+		{"models.dev 查不到按 32000", ProviderConfig{Provider: ProviderAnthropic}, "relay-claude", DefaultOutputTokenCeiling, MaxOutputTokensSourceDefault},
+		{"Gemini 按 google 查", ProviderConfig{Provider: ProviderGemini}, "gemini-2.5-flash", DefaultOutputTokenCeiling, MaxOutputTokensSourceModelsDev},
+		{"网关加的后缀和 opencode 一样查不到", ProviderConfig{Provider: ProviderGemini}, "gemini-2.5-flash-low", DefaultOutputTokenCeiling, MaxOutputTokensSourceDefault},
+		{"Chat Completions 按地址认服务商", deepseek, "deepseek-chat", 8192, MaxOutputTokensSourceModelsDev},
+		{"认不出服务商的中转按 32000", relay, "deepseek-chat", DefaultOutputTokenCeiling, MaxOutputTokensSourceDefault},
 		{"Responses 不发", ProviderConfig{Provider: ProviderOpenAICompatible, APIFormat: APIFormatResponses}, "gpt-5.5", 0, MaxOutputTokensSourceProvider},
-		{"没传模型时看配置档的默认模型", ProviderConfig{Provider: ProviderGemini, Model: "gemini-2.0-flash"}, "", 8192, MaxOutputTokensSourceBuiltin},
+		{"没传模型时看配置档的默认模型", ProviderConfig{Provider: ProviderGemini, Model: "gemini-2.0-flash"}, "", 8192, MaxOutputTokensSourceModelsDev},
 	} {
 		t.Run(item.name, func(t *testing.T) {
 			got, source := item.cfg.ResolveMaxOutputTokens(item.model)
@@ -81,6 +65,50 @@ func TestResolveMaxOutputTokensByProtocol(t *testing.T) {
 			}
 		})
 	}
+}
+
+// 封顶值可以由 config.yaml 调整，0 恢复默认。
+func TestOutputTokenCeilingConfigurable(t *testing.T) {
+	t.Cleanup(func() { SetOutputTokenCeiling(0) })
+	SetOutputTokenCeiling(64000)
+	cfg := ProviderConfig{Provider: ProviderAnthropic}
+	if got, _ := cfg.ResolveMaxOutputTokens("claude-opus-4-6"); got != 64000 {
+		t.Fatalf("raised ceiling = %d, want 64000", got)
+	}
+	if got, _ := cfg.ResolveMaxOutputTokens("relay-claude"); got != 64000 {
+		t.Fatalf("unknown model = %d, want the raised ceiling 64000", got)
+	}
+	SetOutputTokenCeiling(0)
+	if got := OutputTokenCeiling(); got != DefaultOutputTokenCeiling {
+		t.Fatalf("reset ceiling = %d, want %d", got, DefaultOutputTokenCeiling)
+	}
+}
+
+// OutputLimit 在请求路径上只读缓存：缓存为空时不等网络，后台取回后才查得到。
+func TestModelsDevOutputLimitRefreshesInBackground(t *testing.T) {
+	release := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-release
+		_, _ = w.Write([]byte(`{"anthropic":{"models":{"claude-x":{"limit":{"output":20000}}}}}`))
+	}))
+	defer server.Close()
+	catalog := newModelsDevCatalog(server.Client(), server.URL)
+	cfg := ProviderConfig{Provider: ProviderAnthropic}
+	if _, ok := catalog.OutputLimit(cfg, "claude-x"); ok {
+		t.Fatal("empty cache should miss instead of waiting for the network")
+	}
+	close(release)
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if limit, ok := catalog.OutputLimit(cfg, "claude-x"); ok {
+			if limit != 20000 {
+				t.Fatalf("limit = %d, want 20000", limit)
+			}
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("background refresh never filled the cache")
 }
 
 // 代发值只下发，不进预算；按上下文剩余空间收紧时，至少留出预算预留的那份。
@@ -190,7 +218,7 @@ func TestAnthropicImplicitMaxTokensRetriesWithReportedLimit(t *testing.T) {
 		wantSent  []float64
 		wantErr   bool
 	}{
-		{name: "implicit", wantSent: []float64{65536, 64000}},
+		{name: "implicit", wantSent: []float64{32000, 20000}},
 		{name: "user configured", userLimit: 100000, wantSent: []float64{100000}, wantErr: true},
 	} {
 		t.Run(item.name, func(t *testing.T) {
@@ -201,9 +229,9 @@ func TestAnthropicImplicitMaxTokensRetriesWithReportedLimit(t *testing.T) {
 				maxTokens, _ := body["max_tokens"].(float64)
 				sent = append(sent, maxTokens)
 				w.Header().Set("Content-Type", "application/json")
-				if maxTokens > 64000 {
+				if maxTokens > 20000 {
 					w.WriteHeader(http.StatusBadRequest)
-					_, _ = w.Write([]byte(`{"type":"error","error":{"type":"invalid_request_error","message":"max_tokens: ` + strconv.FormatFloat(maxTokens, 'f', 0, 64) + ` > 64000, which is the maximum allowed number of output tokens for relay-claude"}}`))
+					_, _ = w.Write([]byte(`{"type":"error","error":{"type":"invalid_request_error","message":"max_tokens: ` + strconv.FormatFloat(maxTokens, 'f', 0, 64) + ` > 20000, which is the maximum allowed number of output tokens for relay-claude"}}`))
 					return
 				}
 				_, _ = w.Write([]byte(`{"id":"msg_1","type":"message","role":"assistant","model":"relay-claude","content":[{"type":"text","text":"好"}],"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`))

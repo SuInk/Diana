@@ -904,8 +904,9 @@ function formToPayload(): LLMConfig {
   //
   // temperature、max_context_tokens、max_output_tokens 界面上没有入口，所以一律不
   // 提交——nil 在后端表示「没碰过」，通过 API 设过值的部署不会被这个表单悄悄清掉。
-  // 最大输出和 opencode 一样按模型自动定：内置上限表封顶 65,536，Responses 接口不发，
-  // 代发的值被拒会自动退回；手填一个数反而会把退避关掉。
+  // 最大输出和 opencode 一样按模型自动定：min(models.dev 上限, 32000)，封顶可在
+  // config.yaml 的 llm_runtime.output_token_max 改；Responses 接口不发，代发的值被拒
+  // 会自动退回，手填一个数反而会把退避关掉。
   payload.context_window_tokens = optionalTokenInput(form.value.context_window_tokens);
   return payload;
 }

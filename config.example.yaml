@@ -7,7 +7,7 @@
 #
 # 这份文件分两层，边界是「这项能不能在 WebUI 里改」：
 #
-#   server / storage / admin / update —— 基础设施，WebUI 里没有入口，
+#   server / storage / admin / update / llm_runtime —— 基础设施，WebUI 里没有入口，
 #     这里是唯一来源，每次启动都读。
 #     例外：storage.download_cache_* 可在「设置 → 系统 → 下载缓存」修改；
 #     WebUI 保存后数据库优先于 YAML，保存立即生效。
@@ -71,6 +71,12 @@ update:
   work_dir: ""
   # 群测试能力，默认关闭。
   group_test_enabled: false
+
+llm_runtime:
+  # 没填最大输出时，代发的输出上限取 min(models.dev 里这个模型的上限, 这个值)，
+  # 查不到的模型直接用这个值；和 opencode 的 OUTPUT_TOKEN_MAX 一样。0 用默认值 32000。
+  # Responses 接口不发这个参数，不受它影响。改完要重启。
+  output_token_max: 0
 
 # ---------------------------------------------------------------------------
 # 以下两段只在数据库为空时播种一次。字段名和 WebUI 配置接口的 payload 完全一致。

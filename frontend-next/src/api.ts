@@ -55,7 +55,7 @@ export interface LLMConfig {
   max_output_tokens?: number | null;
   /** 只读回显：默认模型没被调用方覆盖时实际发出的输出上限及来源；0 表示不发。 */
   effective_max_output_tokens?: number;
-  max_output_tokens_source?: "user" | "builtin" | "default" | "provider";
+  max_output_tokens_source?: "user" | "models_dev" | "default" | "provider";
   timeout_ms?: number;
 }
 

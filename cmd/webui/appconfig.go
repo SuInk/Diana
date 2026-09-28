@@ -34,6 +34,8 @@ type appConfig struct {
 	Storage storageConfig `yaml:"storage"`
 	Admin   adminConfig   `yaml:"admin"`
 	Update  updateConfig  `yaml:"update"`
+	// LLMRuntime 是模型调用的运行期参数，和 server 一样每次启动都读，不进数据库。
+	LLMRuntime llmRuntimeConfig `yaml:"llm_runtime"`
 	// Bot 和 LLM 用 yaml.Node 收着，后面按 JSON tag 解码，好让 config.yaml 的
 	// 字段名和 WebUI 接口的 payload 完全一致，不用维护第二套字段名。
 	Bot yaml.Node `yaml:"bot"`
@@ -87,6 +89,11 @@ type updateConfig struct {
 	// 只读根文件系统或数据目录不可写的部署才需要单独指定。
 	WorkDir   string `yaml:"work_dir"`
 	GroupTest *bool  `yaml:"group_test_enabled"`
+}
+
+type llmRuntimeConfig struct {
+	// OutputTokenMax 是没填最大输出时代发值的封顶，0 用默认值 32000。
+	OutputTokenMax int64 `yaml:"output_token_max"`
 }
 
 // configPathEnv 是唯一保留的环境变量：它不是配置，是指向配置文件的引导指针。
