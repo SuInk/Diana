@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -212,6 +213,22 @@ func (s *groupPromptSession) rememberAnchor(anchor string) {
 // Removed/edited events deliberately invalidate the prefix instead of retaining
 // withdrawn content. Memory retrieval is never part of this journal.
 func (r *Runtime) stableGroupHistory(ctx context.Context, event MessageEvent, cfg BotConfig, history []MessageEvent, direct bool, skip map[string]bool) ([]llm.Message, []llm.Message) {
+	stable, volatile, _ := r.stableGroupHistoryKeepingTurn(ctx, event, cfg, history, direct, skip)
+	return stable, volatile
+}
+
+// stableGroupHistoryKeepingTurn 同 stableGroupHistory，另外返回本轮的当前消息和同轮
+// 补充里有哪几条留在了日志里。
+//
+// 当前消息和同轮补充在尾部单独成块，本来不进历史。可几条消息并发处理、或者某一轮
+// 排队晚了的时候，它们早已作为别的轮次的历史写进了日志。这时再把它抽掉，日志中间
+// 就少一行；下一轮它不再是当前消息，又按晚到追加回末尾。两轮的前缀都从这一行起
+// 作废——2026-09-28 线上同一个群 20:54:17、20:54:19 两条几乎同时到，两轮各自抽掉
+// 自己那条，历史在同一个位置先后换成对方。
+//
+// 所以已经在日志里的原样留下，由尾部注解说明「上面那条就是它」；还没进日志的照旧
+// 不进，下一轮按晚到追加到末尾，行首的时间还是它的原始时间。
+func (r *Runtime) stableGroupHistoryKeepingTurn(ctx context.Context, event MessageEvent, cfg BotConfig, history []MessageEvent, direct bool, skip map[string]bool) ([]llm.Message, []llm.Message, []MessageEvent) {
 	s := r.groupPromptSession(event)
 	var previous []GroupPromptHistoryEntry
 	var revision uint64
@@ -226,14 +243,45 @@ func (r *Runtime) stableGroupHistory(ctx context.Context, event MessageEvent, cf
 	for _, entry := range previous {
 		old[entry.Key] = entry
 	}
+	entries := make(map[string]GroupPromptHistoryEntry, len(history))
+	var kept []MessageEvent
+	keepJournaled := func(item MessageEvent) {
+		key := messageHistoryDedupeKey(item)
+		if key == "" {
+			return
+		}
+		if _, done := entries[key]; done {
+			return
+		}
+		// 不重新渲染：留下的是上一轮发出去的那几个字节，下一轮才能接着命中。
+		if entry, ok := old[key]; ok {
+			entries[key] = entry
+			kept = append(kept, item)
+		}
+	}
 	var localHistory []MessageEvent
+	currentInHistory := false
 	for _, item := range history {
+		if item.MessageID != "" && (item.MessageID == event.MessageID || skip[item.MessageID]) {
+			currentInHistory = currentInHistory || item.MessageID == event.MessageID
+			keepJournaled(item)
+		}
 		if !item.crossGroupContext && (event.Kind != EventKindGroup || samePromptGroupScope(event, item)) {
 			localHistory = append(localHistory, item)
 		}
 	}
+	// promptContextHistory 已经把当前消息从历史里滤掉了，这里单独补看一次。
+	if !currentInHistory && strings.TrimSpace(event.MessageID) != "" {
+		before := len(kept)
+		keepJournaled(event)
+		if len(kept) > before {
+			// 留下的当前消息也要参与分轮，否则它没有轮次、优先级落到最低，
+			// 预算一紧先被裁掉，前缀照样断。
+			localHistory = append(localHistory, event)
+			sort.SliceStable(localHistory, func(i, j int) bool { return localHistory[i].Time < localHistory[j].Time })
+		}
+	}
 	groups, recent := historyContextMetadata(localHistory, event.Time, cfg.BotAccount)
-	entries := make(map[string]GroupPromptHistoryEntry, len(history))
 	var order []string
 	var volatile []llm.Message
 	for _, item := range history {
@@ -305,7 +353,7 @@ func (r *Runtime) stableGroupHistory(ctx context.Context, event MessageEvent, cf
 			stable = append(stable, message)
 		}
 	}
-	return stable, volatile
+	return stable, volatile, kept
 }
 
 func (r *Runtime) renderPromptHistoryEvent(ctx context.Context, current, item MessageEvent, cfg BotConfig, direct bool) []llm.Message {

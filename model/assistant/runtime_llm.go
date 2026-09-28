@@ -1393,6 +1393,13 @@ var (
 		Usage:   "同一轮里用户补发的每条消息前都带这句，放在「【当前同轮补充消息，」之后、「】」之前，要求和最后那条当前消息合起来一并回答。",
 		Default: "必须与最后的当前消息合并理解并一并回答；若本消息明确纠正原要求，以纠正后的条件为准，保留未被修改的要求",
 	})
+	promptNoteTurnInHistorySpec = registerPrompt(PromptSpec{
+		Key:     "reply.note.turn_in_history",
+		Group:   PromptGroupReplyRules,
+		Title:   "当前消息注解 · 已在历史里出现",
+		Usage:   "当前消息或同轮补充已经作为历史写在前面时（几条消息并发处理、或这一轮排队晚了），补在当前消息正文后面。",
+		Default: "上面历史里时间和发言者都对得上的那条，就是这条当前消息本身（同轮补充也一样），不是对方又发了一遍；历史里排在它后面的是之后才到的消息。回复仍然只围绕当前消息。",
+	})
 	promptNoteMentionOnlySpec = registerPrompt(PromptSpec{
 		Key:     "reply.note.mention_only",
 		Group:   PromptGroupReplyRules,

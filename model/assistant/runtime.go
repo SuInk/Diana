@@ -4232,6 +4232,8 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	messages := []llm.Message{{Role: llm.RoleSystem, Content: systemHead, Priority: llm.MessagePrioritySystem}}
 	var dependency *senderDependencyContext
 	dependencyIndex := -1
+	// 本轮的当前消息和同轮补充里，已经留在稳定历史中的那几条，见 stableGroupHistoryKeepingTurn。
+	var turnInStableHistory []MessageEvent
 	volatile := pluginContextMessages(ctx, pluginResponses)
 	semanticReferenceContext := r.semanticReferenceContextBlock(ctx, event)
 	if semanticReferenceContext.Block != "" {
@@ -4404,7 +4406,8 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			// 这一轮已经带着那几张图在答了，纯图那条自己的回复就不必再发。
 			r.supersedeDependencyImageTurns(ctx, event, images)
 		}
-		stableHistory, crossGroupTail := r.stableGroupHistory(ctx, event, cfg, replyHistory, directAgentDecision, turnMessageIDs)
+		stableHistory, crossGroupTail, keptTurn := r.stableGroupHistoryKeepingTurn(ctx, event, cfg, replyHistory, directAgentDecision, turnMessageIDs)
+		turnInStableHistory = keptTurn
 		messages = append(messages, stableCheckpoint...)
 		messages = append(messages, stableHistory...)
 		volatile = append(volatile, crossGroupTail...)
@@ -4497,6 +4500,9 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	})
 	currentText = updatedReplyRequestText(currentText, r.pendingReplyRequestContexts(r.directReplySupplements(ctx), event))
 	currentText = backlogReplyRequestText(currentText, event, backlogReplyTurnFromContext(ctx))
+	if len(turnInStableHistory) > 0 {
+		currentText += "\n\n" + cfg.PromptOverrides.text(promptNoteTurnInHistorySpec)
+	}
 	if directAgentDecision {
 		// 只为「确实没取到原图」的引用来源补一句文字摘要；原图已经附上的不再重复描述，
 		// 否则模型会同时看到图和一句「尚无缓存描述」，自相矛盾。
