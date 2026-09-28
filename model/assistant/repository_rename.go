@@ -118,6 +118,8 @@ func (t *dianaGitHubTool) renamedRepository(ctx context.Context, repository stri
 }
 
 func (t *dianaGitHubTool) noteRename(previous, renamed string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	if t.renamedFrom == nil {
 		t.renamedFrom = map[string]string{}
 	}
@@ -129,6 +131,8 @@ func (t *dianaGitHubTool) previousName(repository string) string {
 	if t == nil {
 		return ""
 	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	return t.renamedFrom[strings.ToLower(strings.TrimSpace(repository))]
 }
 

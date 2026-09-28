@@ -20,6 +20,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 
@@ -87,6 +88,9 @@ type dianaGitHubTool struct {
 	event    MessageEvent
 	plugin   *RepositoryPublishPlugin
 	settings SettingValues
+	// mu 保护下面三个按调用记账的字段。同一个工具实例会被并发 Run（消息重投、群里多人
+	// 同时打确认码），不加锁 map 并发写会直接让进程崩掉。
+	mu sync.Mutex
 	// credentialSource 记下本次请求实际用了哪种凭据，只用于把 404 之类的报错说清楚，
 	// 不含 Token 本身。
 	credentialSource string
@@ -2593,18 +2597,30 @@ func (t *dianaGitHubTool) currentRepositoryName(ctx context.Context, repository 
 		return ""
 	}
 	key := strings.ToLower(strings.TrimSpace(repository))
-	if cached, ok := t.repositoryNames[key]; ok {
+	t.mu.Lock()
+	cached, ok := t.repositoryNames[key]
+	t.mu.Unlock()
+	if ok {
 		return cached
 	}
+	// 查询不在锁里做：并发时同一个仓库可能多问一遍，结果相同，后写的覆盖前写的无妨。
 	current := t.graphQLRepositoryName(ctx, repository)
+	t.mu.Lock()
 	if t.repositoryNames == nil {
 		t.repositoryNames = map[string]string{}
 	}
 	t.repositoryNames[key] = current
+	t.mu.Unlock()
 	if current != "" && !strings.EqualFold(current, repository) {
 		t.noteRename(repository, current)
 	}
 	return current
+}
+
+func (t *dianaGitHubTool) setCredentialSource(source string) {
+	t.mu.Lock()
+	t.credentialSource = source
+	t.mu.Unlock()
 }
 
 func (t *dianaGitHubTool) graphQLRepositoryName(ctx context.Context, repository string) string {
@@ -3346,28 +3362,28 @@ func (t *dianaGitHubTool) repositoryPublishCredential(ctx context.Context, repos
 	}
 	if userMode == "" || userMode == repositoryPublishAuthToken {
 		if token := strings.TrimSpace(tokens[userID]); token != "" {
-			t.credentialSource = "用户 " + userID + " 的 Token"
+			t.setCredentialSource("用户 " + userID + " 的 Token")
 			return token, nil
 		}
 	}
 	if userMode == repositoryPublishAuthGH {
-		t.credentialSource = "gh CLI"
+		t.setCredentialSource("gh CLI")
 		return t.repositoryPublishGHCredential(ctx)
 	}
 	// 用户自己配了 Token 的情况上面已经处理；到这里先看目标仓库有没有绑定凭据。
 	if credential, credentialToken, ok := t.repositoryBoundCredential(repository); ok {
 		if credential.authMode() == repositoryCredentialAuthGH {
-			t.credentialSource = "凭据「" + credential.label() + "」（gh CLI）"
+			t.setCredentialSource("凭据「" + credential.label() + "」（gh CLI）")
 			return t.repositoryPublishGHCredential(ctx)
 		}
-		t.credentialSource = "凭据「" + credential.label() + "」"
+		t.setCredentialSource("凭据「" + credential.label() + "」")
 		return credentialToken, nil
 	}
 	token := strings.TrimSpace(t.settings.String(repositoryPublishSettingToken, ""))
-	t.credentialSource = "公共 GitHub Token"
+	t.setCredentialSource("公共 GitHub Token")
 	if token == "" {
 		if token = t.sharedGitHubToken(); token != "" {
-			t.credentialSource = "公共 GitHub Token（来自仓库订阅插件）"
+			t.setCredentialSource("公共 GitHub Token（来自仓库订阅插件）")
 		}
 	}
 	mode := repositoryPublishAuthMode(t.settings)
@@ -3377,7 +3393,7 @@ func (t *dianaGitHubTool) repositoryPublishCredential(ctx context.Context, repos
 		}
 		return token, nil
 	}
-	t.credentialSource = "gh CLI"
+	t.setCredentialSource("gh CLI")
 	return t.repositoryPublishGHCredential(ctx)
 }
 
@@ -3550,7 +3566,9 @@ func (t *dianaGitHubTool) failureMessage(code string) string {
 	message := repositoryIssueFailureMessage(code)
 	source := ""
 	if t != nil {
+		t.mu.Lock()
 		source = strings.TrimSpace(t.credentialSource)
+		t.mu.Unlock()
 	}
 	switch code {
 	case "not_found", "unauthorized", "permission_denied":
