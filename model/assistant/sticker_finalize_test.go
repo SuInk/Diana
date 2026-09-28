@@ -41,7 +41,11 @@ func (p *stickerFinalizeLLMProvider) Generate(ctx context.Context, req llm.Gener
 		}
 		properties, _ := tool.Parameters["properties"].(map[string]any)
 		_, p.sawField = properties[stickerFinalizeFieldName]
-		_, p.sawOrder = properties[stickerOrderFieldName]
+		if order, ok := properties[stickerOrderFieldName].(map[string]any); ok {
+			// 两个值要在 schema 里对等列出，不能靠留空当默认。
+			enum, _ := order["enum"].([]string)
+			p.sawOrder = len(enum) == 2 && enum[0] == stickerOrderBefore && enum[1] == stickerOrderAfter
+		}
 		arguments := map[string]any{"content": response.Text}
 		if p.silent {
 			arguments = map[string]any{"content": "", "silent": true, "silent_reason": "一张图就够了"}
@@ -276,7 +280,7 @@ func TestReplySilentFinalizeSendsStickerOnly(t *testing.T) {
 	}
 }
 
-// 表情包是第一反应时（sticker_order=before）先甩图再补一句，像真人一样；不填就先说完再甩图。
+// 表情包是第一反应时（sticker_order=before）先甩图再补一句，像真人一样；after 或没填就先说完再甩图。
 func TestReplyFinalizeStickerOrderFollowsModelChoice(t *testing.T) {
 	withFastSendTiming(t)
 	path := filepath.Join(t.TempDir(), "shock.gif")
@@ -284,7 +288,7 @@ func TestReplyFinalizeStickerOrderFollowsModelChoice(t *testing.T) {
 	if err := os.WriteFile(path, body, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	for _, order := range []string{"before", ""} {
+	for _, order := range []string{"before", "after", ""} {
 		channel := &recordingChannel{}
 		provider := &stickerFinalizeLLMProvider{capturingLLMProvider: capturingLLMProvider{reply: "真的假的，你居然一次过了"}, sticker: "震惊 瞪眼", order: order, personaVerdict: "会"}
 		rt := NewRuntime(BotConfig{AgentEnabled: true}.WithDefaults(), channel, NewDefaultPluginManager(), nil, nil, nil, func() (LLMProvider, error) { return provider, nil })
@@ -297,7 +301,7 @@ func TestReplyFinalizeStickerOrderFollowsModelChoice(t *testing.T) {
 			t.Fatal(err)
 		}
 		if !provider.sawOrder {
-			t.Fatal("agent_finalize did not offer sticker_order")
+			t.Fatal("agent_finalize did not offer sticker_order as a before/after enum")
 		}
 		sent := channel.sentSnapshot()
 		if len(sent) != 2 {

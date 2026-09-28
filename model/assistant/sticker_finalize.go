@@ -20,6 +20,7 @@ const (
 	// stickerOrderFieldName 让模型按真人习惯决定表情包和文字谁先发：第一反应先甩图，收尾点题后甩图。
 	stickerOrderFieldName = "sticker_order"
 	stickerOrderBefore    = "before"
+	stickerOrderAfter     = "after"
 )
 
 func stickerFinalizeField() agent.FinalizeField {
@@ -33,7 +34,10 @@ func stickerFinalizeField() agent.FinalizeField {
 func stickerOrderField() agent.FinalizeField {
 	return agent.FinalizeField{
 		Name:        stickerOrderFieldName,
-		Description: "填了 sticker 又有正文时，表情包和文字谁先发：before 先甩图再说话，after 或留空先说完再甩图。按真人聊天的习惯自己判断。",
+		Description: "填了 sticker 又有正文时必须二选一：before 先甩图再说话，after 先说话再甩图。表情包是你的第一反应（笑死、震惊、问号、无语）就选 before，是给这句话收尾点题（晚安、好耶、得意）就选 after。",
+		// 以前写的是「after 或留空先说完再甩图」，模型大多直接不填，线上一天 94 张
+		// 只有 1 张先发。两个值写成对等的选项，不给留空一个现成的默认。
+		Enum: []string{stickerOrderBefore, stickerOrderAfter},
 	}
 }
 

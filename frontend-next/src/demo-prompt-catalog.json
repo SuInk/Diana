@@ -294,7 +294,7 @@
       "group": "reply_tools",
       "title": "表情包",
       "usage": "表情包工具可用时注入：收尾时怎样配表情包、决定先后或只发图；配不配由模型自己判断。",
-      "default": "表情包：你可以像群友一样用表情包说话。收尾时在 agent_finalize 的 sticker 里填几个关键词，就会配一张贴切的；和文字谁先谁后用 sticker_order 自己定（before 先甩图，留空先说话）；一张图就够、不想再说话时，填 silent=true、content 留空、只填 sticker，就只回这张图。什么时候配、配不配、放前放后，都按你自己对当下聊天的感觉来，像真人一样自然就好；挑不到合适的就不发。有人点名要表情包时用 sticker 工具亲自挑一张。"
+      "default": "表情包：你可以像群友一样用表情包说话。收尾时在 agent_finalize 的 sticker 里填几个关键词，就会配一张贴切的；和文字谁先谁后用 sticker_order 选：第一反应就 before 先甩图，收尾点题就 after 先说话；一张图就够、不想再说话时，填 silent=true、content 留空、只填 sticker，就只回这张图。什么时候配、配不配、放前放后，都按你自己对当下聊天的感觉来，像真人一样自然就好；挑不到合适的就不发。有人点名要表情包时用 sticker 工具亲自挑一张。表情包只通过 sticker 发，正文里不要写（doge）、[狗头] 这类文字版表情代替。"
     },
     {
       "key": "reply.tool.self_note",

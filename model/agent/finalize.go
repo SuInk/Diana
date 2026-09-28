@@ -67,7 +67,7 @@ func finalizeToolDefinition(ledger *claimEvidenceLedger, imagePending bool, extr
 		if _, builtin := finalizeBuiltinFields[field.Name]; builtin || field.Name == "" {
 			continue
 		}
-		properties[field.Name] = toolStringParam(field.Description)
+		properties[field.Name] = toolEnumParam(field.Description, field.Enum...)
 	}
 	return llm.ToolDefinition{
 		Name:        finalizeToolName,
