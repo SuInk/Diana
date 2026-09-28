@@ -79,14 +79,40 @@ func (c *ModelsDevCatalog) OutputLimit(cfg ProviderConfig, model string) (int64,
 	}
 	catalog := c.providers
 	c.mu.Unlock()
-	for _, name := range modelsDevLookupNames(model) {
+	names := modelsDevLookupNames(model)
+	for _, name := range names {
 		for _, provider := range providers {
 			if info, ok := catalog[provider][name]; ok && info.MaxOutputTokens > 0 {
 				return info.MaxOutputTokens, true
 			}
 		}
 	}
+	// 网关还会在前面加自己的标记（antigravity-gemini-3.8-flash、gcp.claude-x），
+	// 这时按「以分隔符 + 目录里的 ID 结尾」找，取最长的那个，免得短 ID 误配。
+	for _, name := range names {
+		for _, provider := range providers {
+			if limit, ok := modelsDevSuffixMatch(catalog[provider], name); ok {
+				return limit, true
+			}
+		}
+	}
 	return 0, false
+}
+
+func modelsDevSuffixMatch(models map[string]ModelInfo, name string) (int64, bool) {
+	lower := strings.ToLower(name)
+	best, bestLen := int64(0), 0
+	for id, info := range models {
+		if info.MaxOutputTokens <= 0 || len(id) <= bestLen || len(id) >= len(lower) {
+			continue
+		}
+		cut := len(lower) - len(id)
+		if lower[cut:] != strings.ToLower(id) || !strings.ContainsRune("-._:", rune(lower[cut-1])) {
+			continue
+		}
+		best, bestLen = info.MaxOutputTokens, len(id)
+	}
+	return best, bestLen > 0
 }
 
 // modelsDevEffortSuffixes 是网关挂在模型名后面的推理档位。models.dev 只收基础

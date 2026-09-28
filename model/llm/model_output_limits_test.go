@@ -25,6 +25,8 @@ var testModelsDevOutputLimits = map[string]map[string]ModelInfo{
 	"google": {
 		"gemini-2.5-flash": {ID: "gemini-2.5-flash", MaxOutputTokens: 65536},
 		"gemini-2.0-flash": {ID: "gemini-2.0-flash", MaxOutputTokens: 8192},
+		// 专门用来验证前缀匹配取最长 ID：relay-gemini-2.5-flash 也以 -2.5-flash 结尾。
+		"2.5-flash": {ID: "2.5-flash", MaxOutputTokens: 1000},
 	},
 	"deepseek": {
 		"deepseek-chat": {ID: "deepseek-chat", MaxOutputTokens: 8192},
@@ -54,6 +56,10 @@ func TestResolveMaxOutputTokensLikeOpencode(t *testing.T) {
 		{"Gemini 按 google 查", ProviderConfig{Provider: ProviderGemini}, "gemini-2.5-flash", DefaultOutputTokenCeiling, MaxOutputTokensSourceModelsDev},
 		{"网关加的档位后缀去掉再查", ProviderConfig{Provider: ProviderGemini}, "gemini-2.0-flash-low", 8192, MaxOutputTokensSourceModelsDev},
 		{"带命名空间和档位后缀", ProviderConfig{Provider: ProviderGemini}, "models/gemini-2.0-flash-thinking", 8192, MaxOutputTokensSourceModelsDev},
+		{"网关在前面加的标记", ProviderConfig{Provider: ProviderGemini}, "antigravity-gemini-2.0-flash", 8192, MaxOutputTokensSourceModelsDev},
+		{"前缀和档位后缀都有", ProviderConfig{Provider: ProviderGemini}, "gcp.gemini-2.0-flash-low", 8192, MaxOutputTokensSourceModelsDev},
+		{"前缀取最长的 ID，不被短 ID 误配", ProviderConfig{Provider: ProviderGemini}, "relay-gemini-2.5-flash", DefaultOutputTokenCeiling, MaxOutputTokensSourceModelsDev},
+		{"没有分隔符不算前缀", ProviderConfig{Provider: ProviderGemini}, "xgemini-2.0-flash", DefaultOutputTokenCeiling, MaxOutputTokensSourceDefault},
 		{"去掉后缀还查不到按 32000", ProviderConfig{Provider: ProviderGemini}, "gemini-9-flash-low", DefaultOutputTokenCeiling, MaxOutputTokensSourceDefault},
 		{"Chat Completions 按地址认服务商", deepseek, "deepseek-chat", 8192, MaxOutputTokensSourceModelsDev},
 		{"认不出服务商的中转按 32000", relay, "deepseek-chat", DefaultOutputTokenCeiling, MaxOutputTokensSourceDefault},
