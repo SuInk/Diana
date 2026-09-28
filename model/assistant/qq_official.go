@@ -583,6 +583,10 @@ type qqOfficialMessage struct {
 	Content string `json:"content"`
 	// GroupOpenID 只在群消息里出现，是这个群对本机器人的稳定标识。
 	GroupOpenID string `json:"group_openid"`
+	// GroupID 是全量群消息（GROUP_MESSAGE_CREATE）里携带的群标识，与 group_openid 同值，取不到后者时兜底。
+	GroupID string `json:"group_id"`
+	// Mentions 只在全量群消息里出现：@ 了机器人时带 is_you 标记。
+	Mentions []qqOfficialMention `json:"mentions"`
 	// ChannelID / GuildID 出现在频道消息里。
 	ChannelID string `json:"channel_id"`
 	GuildID   string `json:"guild_id"`
@@ -590,6 +594,8 @@ type qqOfficialMessage struct {
 	Author    struct {
 		Avatar string `json:"avatar,omitempty"`
 		ID     string `json:"id"`
+		// Bot 标记发言者是机器人；机器人自己的发言也会在全量群消息里回推。
+		Bot bool `json:"bot,omitempty"`
 		// UserOpenID 是单聊里的用户标识；MemberOpenID 是群里的。
 		UserOpenID   string `json:"user_openid"`
 		MemberOpenID string `json:"member_openid"`
@@ -604,15 +610,65 @@ type qqOfficialMessage struct {
 	} `json:"message_reference"`
 }
 
+// qqOfficialMention 是全量群消息里 @ 目标的描述。
+type qqOfficialMention struct {
+	ID           string `json:"id"`
+	OpenID       string `json:"openid"`
+	UserOpenID   string `json:"user_openid"`
+	MemberOpenID string `json:"member_openid"`
+	// IsYou 是网关给的「这个 @ 指向当前机器人」标记。
+	IsYou bool `json:"is_you"`
+}
+
+// botMentioned 判断这条全量群消息是否叫了当前机器人：优先认网关给的 is_you，
+// 拿不到时再按每个 mention 的 id 和 selfID 比对。
+func (m *qqOfficialMessage) botMentioned(selfID string) bool {
+	for _, mention := range m.Mentions {
+		if mention.IsYou {
+			return true
+		}
+		for _, id := range []string{mention.ID, mention.OpenID, mention.UserOpenID, mention.MemberOpenID} {
+			if id != "" && id == selfID {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// stripQQBotMentionTokens 去掉 content 里残留的机器人 mention 标记。
+//
+// 文档说 content 已去除 @ 前缀，但标记形如 <@openid>，解析不到位就会把一串十六
+// 进制带进模型上下文，所以按 mentions 里指向自己的条目再剥一次。
+func stripQQBotMentionTokens(text string, mentions []qqOfficialMention, selfID string) string {
+	for _, mention := range mentions {
+		if !mention.IsYou && mention.ID != selfID {
+			continue
+		}
+		for _, id := range []string{mention.ID, mention.OpenID, mention.UserOpenID, mention.MemberOpenID, selfID} {
+			if id == "" {
+				continue
+			}
+			text = strings.ReplaceAll(text, "<@"+id+">", "")
+			text = strings.ReplaceAll(text, "<@!"+id+">", "")
+		}
+	}
+	return strings.TrimSpace(text)
+}
+
 // qqOfficialEventFromDispatch 把网关事件映射成统一事件。
 //
 // 语义对照：
 //   - GROUP_AT_MESSAGE_CREATE 群里 @ 机器人 -> 群聊，group_openid 当群号
+//   - GROUP_MESSAGE_CREATE 全量群消息 -> 群聊。开通「接收所有群消息」能力后
+//     @ 机器人的消息也走这个事件（不再推 GROUP_AT_MESSAGE_CREATE），是否被
+//     点名认 mentions 里的 is_you 标记；普通消息 ToMe=false，交给群触发词和
+//     接话策略处理
 //   - C2C_MESSAGE_CREATE 单聊 -> 私聊
 //   - AT_MESSAGE_CREATE 频道里 @ 机器人 -> 群聊，channel_id 当群号
 //
-// 开放平台只把「@ 了机器人」的群消息推过来（这是平台侧的硬限制，拿不到全部群
-// 消息），所以群消息一律 ToMe=true——收到即意味着被点名。
+// GROUP_AT_MESSAGE_CREATE 只推「@ 了机器人」的消息，收到即被点名；全量模式下
+// 群里所有消息都会到达，ToMe 必须按 mentions 逐条判断，不能一律当被点名。
 func qqOfficialEventFromDispatch(eventType string, data json.RawMessage, selfID string) (MessageEvent, bool) {
 	var msg qqOfficialMessage
 	if err := json.Unmarshal(data, &msg); err != nil {
@@ -622,6 +678,13 @@ func qqOfficialEventFromDispatch(eventType string, data json.RawMessage, selfID 
 	quoted := ""
 	if msg.MessageReference != nil {
 		quoted = msg.MessageReference.MessageID
+	}
+	botMentioned := false
+	if eventType == "GROUP_MESSAGE_CREATE" {
+		botMentioned = msg.botMentioned(selfID)
+		if botMentioned {
+			text = stripQQBotMentionTokens(text, msg.Mentions, selfID)
+		}
 	}
 
 	event := MessageEvent{
@@ -644,6 +707,17 @@ func qqOfficialEventFromDispatch(eventType string, data json.RawMessage, selfID 
 		event.MessageType = "group"
 		event.GroupID = msg.GroupOpenID
 		event.UserID = firstNonEmpty(msg.Author.MemberOpenID, msg.Author.ID)
+	case "GROUP_MESSAGE_CREATE":
+		event.PlatformScope = "qq_group"
+		event.Kind = EventKindGroup
+		event.MessageType = "group"
+		event.GroupID = firstNonEmpty(msg.GroupOpenID, msg.GroupID)
+		event.UserID = firstNonEmpty(msg.Author.MemberOpenID, msg.Author.ID)
+		// 机器人自己的发言也会回推；归到 SelfID 让运行时按自发消息处理。
+		if msg.Author.Bot && selfID != "" && msg.Author.ID == selfID {
+			event.UserID = selfID
+		}
+		event.ToMe = botMentioned
 	case "C2C_MESSAGE_CREATE":
 		event.Kind = EventKindPrivate
 		event.MessageType = "private"
