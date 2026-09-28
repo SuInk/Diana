@@ -5,6 +5,7 @@ package assistant
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -42,14 +43,21 @@ type persistentVoiceFixture struct {
 	channel  *recordingChannel
 	provider *sequenceLLMProvider
 	ttsCalls *atomic.Int32
+	ttsText  *atomic.Value
 }
 
 // newPersistentVoiceFixture 起一台只在群 123456 打开常驻语音的机器人，正文由 reply 给出。
 func newPersistentVoiceFixture(t *testing.T, reply string, ttsStatus int, sendMode string) persistentVoiceFixture {
 	t.Helper()
 	var calls atomic.Int32
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	var spoken atomic.Value
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls.Add(1)
+		var body struct {
+			Text string `json:"text"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		spoken.Store(body.Text)
 		if ttsStatus != http.StatusOK {
 			http.Error(w, "model not loaded", ttsStatus)
 			return
@@ -77,7 +85,7 @@ func newPersistentVoiceFixture(t *testing.T, reply string, ttsStatus int, sendMo
 		"123456": {GroupID: "123456", PluginSettingOverrides: PluginSettingOverrides{voiceTTSPluginID: overrides}},
 	}})
 	runtime.SetLocalMediaSharer(&recordingLocalMediaSharer{url: "http://127.0.0.1:18080/api/assistant/media/persistent-voice"})
-	return persistentVoiceFixture{runtime: runtime, channel: channel, provider: provider, ttsCalls: &calls}
+	return persistentVoiceFixture{runtime: runtime, channel: channel, provider: provider, ttsCalls: &calls, ttsText: &spoken}
 }
 
 func (f persistentVoiceFixture) reply(t *testing.T) OutgoingMessage {
@@ -121,6 +129,26 @@ func TestPersistentVoiceSendsPlainReplyAsRecord(t *testing.T) {
 	}
 	if !fixture.promptMentionsVoice() {
 		t.Fatal("常驻语音模式应在提示词里告诉模型回复会被念出来")
+	}
+}
+
+func TestPersistentVoiceConsumesLayoutMarkers(t *testing.T) {
+	fixture := newPersistentVoiceFixture(t, "好呀"+notificationSplitMarker+"那我们明天见"+notificationLineMarker+"记得早点睡", http.StatusOK, voiceTTSSendModeAlways)
+	message := fixture.reply(t)
+	if segments := buildOutgoingSegments(message); len(segments) != 1 || segments[0]["type"] != "record" {
+		t.Fatalf("segments=%#v", segments)
+	}
+	spoken, _ := fixture.ttsText.Load().(string)
+	if strings.Contains(spoken, "diana") || !strings.Contains(spoken, "好呀") || !strings.Contains(spoken, "记得早点睡") {
+		t.Fatalf("送进 TTS 的文字不该带排版标记：%q", spoken)
+	}
+}
+
+func TestPersistentVoiceKeepsQuotedReplyAsText(t *testing.T) {
+	fixture := newPersistentVoiceFixture(t, replyMarkerPrefix+"30003]就是这条", http.StatusOK, voiceTTSSendModeAlways)
+	message := fixture.reply(t)
+	if fixture.ttsCalls.Load() != 0 || !strings.Contains(message.Text, "就是这条") {
+		t.Fatalf("带引用的回复应发文字：%#v calls=%d", message, fixture.ttsCalls.Load())
 	}
 }
 

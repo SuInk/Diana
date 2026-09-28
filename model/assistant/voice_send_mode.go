@@ -92,15 +92,42 @@ func (r *Runtime) persistentVoicePrompt(event MessageEvent, cfg BotConfig) strin
 // 合成失败只记日志，文字照发，不让一次 TTS 故障吞掉整条回复。
 func (r *Runtime) persistentVoiceReply(ctx context.Context, event MessageEvent, reply string) string {
 	tool, cfg, ok := r.persistentVoiceConfig(event)
-	if !ok || !persistentVoiceSpeakable(reply, cfg.MaxChars) {
+	if !ok {
 		return reply
 	}
-	voiceReply, err := synthesizeVoiceReply(ctx, tool, reply)
+	text, ok := r.persistentVoiceText(event, reply)
+	if !ok || !persistentVoiceSpeakable(text, cfg.MaxChars) {
+		return reply
+	}
+	voiceReply, err := synthesizeVoiceReply(ctx, tool, text)
 	if err != nil {
 		r.recordPersistentVoiceError(ctx, event, err)
 		return reply
 	}
 	return voiceReply
+}
+
+// persistentVoiceText 按发送层的规则还原这条回复真正会发出去的文字：发送方式前缀、
+// [diana-msg] / [diana-line] 这些排版标记都在这里消费掉，不然会被原样念出来。分条
+// 之间补一个句号，念的时候有停顿。开头带引用标记的回复不转：语音发出去是单独一条，
+// 引用框会丢。
+func (r *Runtime) persistentVoiceText(event MessageEvent, reply string) (string, bool) {
+	reply, event = prepareReplyDelivery(reply, event)
+	if _, _, quoted := consumeOutgoingReplyControl(normalizeDianaReplyVariants(reply)); quoted {
+		return "", false
+	}
+	var text strings.Builder
+	for _, chunk := range splitEventChatReply(reply, r.effectiveConfigForEvent(event), event) {
+		chunk = strings.TrimSpace(chunk)
+		if chunk == "" {
+			continue
+		}
+		text.WriteString(chunk)
+		if !strings.ContainsRune("。！？!?…~～，,、；;：:", []rune(chunk)[len([]rune(chunk))-1]) {
+			text.WriteString("。")
+		}
+	}
+	return text.String(), true
 }
 
 // persistentVoiceSpeakable 判断一条回复能不能整条念出来。带图片、@、引用之类的
