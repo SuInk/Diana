@@ -39,6 +39,7 @@ type WebSearchTool struct {
 	client           *http.Client
 	providers        []WebSearchProviderConfig
 	apiKeys          map[string]string
+	renderer         PageRenderer
 }
 
 // WebSearchToolOptions configures the search tool without exposing provider
@@ -51,6 +52,8 @@ type WebSearchToolOptions struct {
 	MaxQueries       int
 	MaxProviderCalls int
 	Client           *http.Client
+	// Renderer 是搜索引擎模式打开结果页用的沙盒浏览器；只配了 API 搜索源时可以不给。
+	Renderer PageRenderer
 }
 
 // NewWebSearchTool creates a search tool from an in-memory plugin snapshot.
@@ -75,6 +78,7 @@ func NewWebSearchTool(options WebSearchToolOptions) (*WebSearchTool, error) {
 		client:           options.Client,
 		providers:        append([]WebSearchProviderConfig(nil), config.Providers...),
 		apiKeys:          apiKeys,
+		renderer:         options.Renderer,
 	}, nil
 }
 
@@ -286,6 +290,11 @@ func (t *WebSearchTool) Run(ctx context.Context, input map[string]any) (string, 
 				state.Outcome = mergeWebSearchOutcome(state.Outcome, outcome)
 				candidateOutcome = mergeWebSearchOutcome(candidateOutcome, outcome)
 				anyProviderError = anyProviderError || outcome == "provider_error"
+				if errors.Is(providerErr, errWebSearchBlocked) {
+					// 被人机验证拦下的引擎换个关键词还是会被拦，这次调用里不再用它。
+					providerUsable[providerIndex] = false
+					state.Reason = "blocked_by_verification"
+				}
 				anyTimeout = anyTimeout || outcome == "timeout"
 				if runCtx.Err() != nil {
 					break
@@ -557,13 +566,31 @@ func normalizeWebSearchProviders(providers []webSearchProviderConfig) ([]webSear
 			if provider.APIKeyEnv == "" {
 				provider.APIKeyEnv = "TAVILY_API_KEY"
 			}
+		case WebSearchProviderSearchEngine:
+			// Tool 是引擎名（google、bing……），URL 默认取引擎自己的搜索地址；
+			// 自定义引擎的 URL 是带 {query} 的搜索地址模板。
+			if CustomSearchEngineURL(provider.URL) {
+				provider.Tool = "custom"
+			} else {
+				provider.Tool = strings.ToLower(firstNonEmpty(provider.Tool, provider.Name))
+				engine, ok := searchEngines[provider.Tool]
+				if !ok {
+					return nil, fmt.Errorf("provider %q has unknown search engine %q", provider.Name, provider.Tool)
+				}
+				if provider.URL == "" {
+					provider.URL = engine.searchURL
+				}
+			}
+			if provider.TimeoutMS <= 0 {
+				provider.TimeoutMS = defaultSearchEngineTimeoutMS
+			}
 		default:
 			return nil, fmt.Errorf("provider %q has unsupported type %q", provider.Name, provider.Type)
 		}
 		if provider.APIKeyEnv != "" && !webSearchEnvNameRegexp.MatchString(provider.APIKeyEnv) {
 			return nil, fmt.Errorf("provider %q has invalid api_key_env", provider.Name)
 		}
-		if err := validateWebSearchURL(provider.URL); err != nil {
+		if err := validateWebSearchURL(strings.ReplaceAll(provider.URL, SearchEngineQueryPlaceholder, "q")); err != nil {
 			return nil, fmt.Errorf("provider %q: %w", provider.Name, err)
 		}
 		if provider.TimeoutMS <= 0 {
@@ -610,6 +637,8 @@ func (t *WebSearchTool) runProvider(ctx context.Context, provider webSearchProvi
 		return t.runExaMCP(ctx, provider, query, apiKey)
 	case "tavily":
 		return t.runTavily(ctx, provider, query, apiKey)
+	case WebSearchProviderSearchEngine:
+		return t.runSearchEngine(ctx, provider, query)
 	default:
 		return "", fmt.Errorf("unsupported provider type %q", provider.Type)
 	}

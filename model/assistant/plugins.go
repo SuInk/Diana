@@ -400,6 +400,7 @@ const (
 	resolverPluginID         = "official.nonebot-plugin-resolver-go"
 	messageHistoryPluginID   = "official.message-history"
 	sandboxedBrowserPluginID = "official.sandboxed-browser-renderer"
+	sandboxedBrowserToolName = "browser_render"
 	pluginSettingAskAgent    = "ask_agent"
 )
 
@@ -1215,6 +1216,9 @@ func (m *PluginManager) AgentToolsForPlatformWithGroupOverrides(platform string,
 		}
 		appendTools(item.id, provided)
 	}
+	if !seen[agent.WebSearchToolName] && seen[sandboxedBrowserToolName] {
+		appendTools(webSearchPluginID, m.searchEngineFallbackTools(settingOverrides))
+	}
 
 	m.mu.RLock()
 	legacyProviders := make([]AgentToolProviderPlugin, 0)
@@ -1293,6 +1297,13 @@ func (m *PluginManager) AgentToolOwners(platform string, enabledOverrides map[st
 		}
 		if len(names) > 0 {
 			owners[id] = names
+		}
+	}
+	// 和 AgentToolsForPlatformWithGroupOverrides 的兜底保持一致：联网搜索关着、网页渲染
+	// 开着时，web_search 仍然算联网搜索插件带来的。
+	if len(owners[webSearchPluginID]) == 0 && slices.Contains(owners[sandboxedBrowserPluginID], sandboxedBrowserToolName) {
+		if tools := m.searchEngineFallbackTools(settingOverrides); len(tools) > 0 {
+			owners[webSearchPluginID] = []string{agent.WebSearchToolName}
 		}
 	}
 	return owners
@@ -2203,4 +2214,33 @@ func extractHTMLTitle(html string) string {
 // compactWhitespace 压缩文本中的连续空白。
 func compactWhitespace(text string) string {
 	return strings.Join(strings.Fields(text), " ")
+}
+
+// searchEngineFallbackTools 在联网搜索插件关着、网页渲染开着时，按搜索引擎方式补一个 web_search。
+//
+// 以前这种组合下只剩系统提示词里一句「用 browser_render 打开 Google 搜」，要不要查全凭
+// 模型自觉：09-24 主人为了改走搜索引擎关掉插件之后，「帮我搜索……」零工具直接作答的
+// 情况成批出现，而插件开着的 09-08～09-23 几乎每条都查了。关插件本来就不等于不许搜，
+// 那句提示词照样叫模型去搜——不如把这条路做成同一个常驻的 web_search，证据门控和来源
+// 校验才认得出它。沿用插件自己的设置（引擎顺序、自定义地址、结果上限），只把方式换成
+// 搜索引擎。要彻底不联网搜索，两个插件都关掉。
+func (m *PluginManager) searchEngineFallbackTools(settingOverrides PluginSettingOverrides) []agent.Tool {
+	m.mu.RLock()
+	plugin, _ := m.catalog[webSearchPluginID].(*WebSearchPlugin)
+	state, installed := m.states[webSearchPluginID]
+	m.mu.RUnlock()
+	if plugin == nil || !installed || !state.Installed {
+		return nil
+	}
+	settings := SettingValues{}
+	for key, value := range scopedPluginSettings(state, settingOverrides) {
+		settings[key] = value
+	}
+	settings[webSearchSettingMode] = webSearchModeEngine
+	tools, err := plugin.AgentTools(settings)
+	if err != nil {
+		log.Printf("diana: search engine fallback: %v", err)
+		return nil
+	}
+	return tools
 }

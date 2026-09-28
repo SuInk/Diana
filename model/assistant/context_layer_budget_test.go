@@ -45,7 +45,7 @@ func TestContextLayerBudgetsFollowShareOnSmallWindows(t *testing.T) {
 	}
 }
 
-func TestRecentHistoryBudgetHonoursConfigButCannotExceedShare(t *testing.T) {
+func TestRecentHistoryBudgetHonoursConfigWithinCeilingAndShare(t *testing.T) {
 	cfg := DefaultBotConfig()
 
 	cfg.RecentHistoryTokenBudget = 4000
@@ -53,10 +53,23 @@ func TestRecentHistoryBudgetHonoursConfigButCannotExceedShare(t *testing.T) {
 		t.Fatalf("configured budget = %d, want 4000", got)
 	}
 
-	// 配置只能收紧不能放宽：填得比窗口份额还大时仍按份额走。
+	cfg.RecentHistoryTokenBudget = 24000
+	if got := recentHistoryBudget(128000, cfg); got != 24000 {
+		t.Fatalf("raised budget = %d, want 24000", got)
+	}
+
+	// 生产上填成窗口大小 128000，历史按 55% 份额塞到了 70400。绝对上限要把它拦住。
+	for _, oversized := range []int64{128000, 900000} {
+		cfg.RecentHistoryTokenBudget = oversized
+		if got := recentHistoryBudget(128000, cfg); got != MaximumRecentHistoryTokenBudget {
+			t.Fatalf("budget %d = %d, want the ceiling %d", oversized, got, MaximumRecentHistoryTokenBudget)
+		}
+	}
+
+	// 小窗口下份额比上限还紧，仍按份额走。
 	cfg.RecentHistoryTokenBudget = 900000
-	if got := recentHistoryBudget(128000, cfg); got != 70400 {
-		t.Fatalf("oversized budget = %d, want the 55%% share 70400", got)
+	if got := recentHistoryBudget(32000, cfg); got != 17600 {
+		t.Fatalf("small window budget = %d, want the 55%% share 17600", got)
 	}
 
 	cfg.RecentHistoryTokenBudget = 0

@@ -31,10 +31,18 @@ type tokenBudgetCandidate struct {
 // budget. The estimator is deliberately conservative across providers: CJK and
 // non-ASCII text cost more than ASCII, and image parts reserve vision tokens.
 func applyContextBudget(req GenerateRequest, cfg ProviderConfig) GenerateRequest {
+	// 窗口按这次实际用的模型查：同一套配置里的模型窗口可以差好几倍。
+	if strings.TrimSpace(req.Model) != "" {
+		cfg.Model = req.Model
+	}
 	limit := cfg.MaxContextTokensWithDefault()
 	// 超限重试会带上更小的上限；只接受比配置档更保守的值，避免调用方反向放大。
 	if req.MaxContextTokens > 0 && (limit <= 0 || req.MaxContextTokens < limit) {
 		limit = req.MaxContextTokens
+	}
+	// 之前从超限报错里学到过这个模型的真实窗口，就按它裁，不再每条先撞一次 400。
+	if learned, ok := rememberedContextLimits.get(cfg, req.Model); ok && (limit <= 0 || learned < limit) {
+		limit = learned
 	}
 	if limit <= 0 || len(req.Messages) == 0 {
 		return req

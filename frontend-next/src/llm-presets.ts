@@ -204,7 +204,7 @@ export function defaultPresetForProvider(provider: Provider): LLMServicePreset |
 }
 
 /** 一次 Provider 请求失败时，该标红哪个输入框。空串表示怪不到具体某一个。 */
-export type LLMErrorField = "api_key" | "base_url" | "";
+export type LLMErrorField = "api_key" | "base_url" | "context_window_tokens" | "user_agent" | "";
 
 /**
  * 从报错文本里判断是哪个字段填错了。

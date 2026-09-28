@@ -390,6 +390,7 @@
         <div class="field">
           <label for="group-history-budget">回复历史 token 预算</label>
           <input id="group-history-budget" v-model.number="editing.recent_history_token_budget" class="input" inputmode="numeric" :placeholder="inheritedPlaceholder(inheritedBot?.recent_history_token_budget)" />
+          <span v-if="(editing.recent_history_token_budget ?? 0) > 32000" class="hint warn-text">最多只能调到 32000，超过的部分不生效。</span>
         </div>
         <div class="field">
           <label for="group-context">历史查询条数上限</label>

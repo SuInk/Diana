@@ -327,48 +327,38 @@
         </div>
         <div class="field wide">
           <label for="llm-window">模型上下文窗口</label>
-          <input id="llm-window" v-model="form.context_window_tokens" class="input" inputmode="numeric" :placeholder="contextWindowPlaceholder" />
+          <input
+            id="llm-window"
+            v-model="form.context_window_tokens"
+            class="input"
+            inputmode="numeric"
+            :class="{ invalid: invalidField === 'context_window_tokens' }"
+            :aria-invalid="invalidField === 'context_window_tokens'"
+            :placeholder="contextWindowPlaceholder"
+            @input="clearInvalid('context_window_tokens')"
+          />
           <span class="hint">
-            只填你想强制覆盖的值。{{ effectiveContextHint }}
+            {{ effectiveContextHint }}
             <template v-if="contextWindowBindings.length > 0">在用这套配置的用途：</template>
           </span>
           <ul v-if="contextWindowBindings.length > 0" class="hint context-binding-list">
             <li v-for="line in contextWindowBindings" :key="line">{{ line }}</li>
           </ul>
         </div>
-        <div class="field wide">
-          <label for="llm-max-output">最大输出 Token</label>
-          <input id="llm-max-output" v-model="form.max_output_tokens" class="input" inputmode="numeric" :placeholder="maxOutputPlaceholder" />
-          <span class="hint">{{ maxOutputHint }}</span>
-        </div>
         <div v-if="form.provider === 'openai_compatible'" class="field wide">
-          <label for="llm-header-name">自定义请求头（可选）</label>
-          <div class="header-row">
-            <input
-              id="llm-header-name"
-              v-model="headerNameDraft"
-              class="input"
-              autocomplete="off"
-              spellcheck="false"
-              placeholder="请求头名，如 X-Session-Affinity"
-              @keydown.enter.prevent="addHeader"
-            />
-            <input
-              v-model="headerValueDraft"
-              class="input"
-              autocomplete="off"
-              spellcheck="false"
-              placeholder="值"
-              @keydown.enter.prevent="addHeader"
-            />
-            <button class="btn" type="button" :disabled="headerNameDraft.trim() === ''" @click="addHeader">
-              <Plus :size="14" aria-hidden="true" />
-              添加
-            </button>
-          </div>
-          <div v-if="headerRows.length > 0" class="stack" style="gap: 6px; margin-top: 8px">
-            <div v-for="(row, index) in headerRows" :key="row.name" class="header-row">
-              <input class="input" :value="row.name" readonly :title="row.name" />
+          <label for="llm-header-name-0">自定义请求头（可选）</label>
+          <div class="target-list" style="margin-top: 0">
+            <div v-for="(row, index) in headerRows" :key="row.key" class="header-row">
+              <input
+                :id="`llm-header-name-${index}`"
+                v-model="row.name"
+                class="input"
+                autocomplete="off"
+                spellcheck="false"
+                :readonly="row.configured"
+                :title="row.name"
+                placeholder="请求头名，如 X-Session-Affinity"
+              />
               <input
                 v-model="row.value"
                 class="input"
@@ -379,25 +369,37 @@
               <button
                 class="btn ghost"
                 type="button"
-                :title="`删除请求头 ${row.name}`"
-                :aria-label="`删除请求头 ${row.name}`"
+                :title="row.name ? `删除请求头 ${row.name}` : '清空这一行'"
+                :aria-label="row.name ? `删除请求头 ${row.name}` : '清空这一行'"
                 @click="removeHeader(index)"
               >
                 <X :size="14" :stroke-width="2.25" aria-hidden="true" />
                 删除
               </button>
             </div>
+            <button class="btn small ghost header-add" type="button" @click="addHeader"><Plus :size="14" aria-hidden="true" />添加请求头</button>
           </div>
           <span class="hint">
             中转网关常靠请求头做会话亲和、分组或计费标记，填在这里的会原样发给这套配置的每个会话类请求；图片等无状态端点不带。同名时以这里为准，会覆盖内置的请求头。
             <br />已保存的头出于和 API Key 同样的理由不回显值，留空则沿用，填了新值才覆盖；删掉整行才是删除这个头。
           </span>
         </div>
-        <div v-if="form.provider === 'openai_compatible'" class="field">
-          <label for="llm-ua">User-Agent（可选）</label>
-          <input id="llm-ua" v-model="form.user_agent" class="input" placeholder="跟随内置默认" />
+        <div v-if="form.provider === 'openai_compatible'" class="field wide">
+          <label for="llm-ua">User-Agent</label>
+          <input
+            id="llm-ua"
+            v-model="form.user_agent"
+            class="input mono"
+            required
+            autocomplete="off"
+            spellcheck="false"
+            :class="{ invalid: invalidField === 'user_agent' }"
+            :aria-invalid="invalidField === 'user_agent'"
+            :placeholder="defaultUserAgent || 'diana (darwin; arm64)'"
+            @input="clearInvalid('user_agent')"
+          />
           <span class="hint">
-            留空用内置默认值，形如 <code>diana (darwin; arm64)</code>——自报家门，不带版本号所以不会过期。订阅转发网关通常按「originator 精确匹配加 User-Agent 子串匹配」双因子认客户端，需要冒充特定客户端时在这里填它的 UA，配套的 <code>originator</code> 填到上面的自定义请求头里。
+            默认填本机的内置值 <code>{{ defaultUserAgent || "diana (darwin; arm64)" }}</code>——自报家门，不带版本号所以不会过期。订阅转发网关通常按「originator 精确匹配加 User-Agent 子串匹配」双因子认客户端，需要冒充特定客户端时在这里填它的 UA，配套的 <code>originator</code> 填到上面的自定义请求头里。
           </span>
         </div>
         <div class="field wide">
@@ -467,7 +469,6 @@ interface LLMFormState {
   user_agent: string;
   description: string;
   context_window_tokens: string;
-  max_output_tokens: string;
 }
 
 const emptyForm: LLMFormState = {
@@ -482,7 +483,6 @@ const emptyForm: LLMFormState = {
   user_agent: "",
   description: "",
   context_window_tokens: "",
-  max_output_tokens: "",
 };
 
 const profileSet = ref<LLMConfig | null>(null);
@@ -502,9 +502,9 @@ const modelOptions = ref<LLMModelInfo[]>([]);
 const manualModelDraft = ref("");
 // 请求头按「名字 + 值」逐行编辑，和正上方的模型列表用同一套范式。configured 记住
 // 这一行是从服务端读回来的：它的值被脱敏成空串，留空表示沿用而不是改成空。
-const headerRows = ref<{ name: string; value: string; configured: boolean }[]>([]);
-const headerNameDraft = ref("");
-const headerValueDraft = ref("");
+type HeaderRow = { key: number; name: string; value: string; configured: boolean };
+const headerRows = ref<HeaderRow[]>([]);
+let headerRowSeq = 0;
 const modelsLoading = ref(false);
 // invalidField 记的是「这次失败该回去改哪一格」，由报错文本推出来（见 llmErrorField）。
 const invalidField = ref<LLMErrorField>("");
@@ -616,6 +616,7 @@ function applyServicePreset(id: string): void {
 }
 
 const profiles = computed<LLMConfig[]>(() => profileSet.value?.profiles ?? []);
+const defaultUserAgent = computed(() => profileSet.value?.default_user_agent ?? "");
 
 
 function providerLabel(provider: Provider): string {
@@ -646,7 +647,7 @@ function startCreate(): void {
   editingConfigured.value = false;
   editingKeyPreview.value = "";
   editingProfile.value = null;
-  form.value = { ...emptyForm };
+  form.value = { ...emptyForm, user_agent: defaultUserAgent.value };
   credentialMode.value = "api_key";
   selectedService.value = "deepseek";
   applyServicePreset("deepseek");
@@ -770,10 +771,10 @@ function startEdit(profile: LLMConfig): void {
     base_url: profile.base_url ?? "",
     api_key: "",
     oauth_provider: profile.oauth_provider ?? "",
-    user_agent: profile.user_agent ?? "",
+    user_agent: profile.user_agent || defaultUserAgent.value,
     description: profile.description ?? "",
+    // 老配置没填窗口时先填上默认值（清单里有就用清单的），保存前人能看到、能改。
     context_window_tokens: profile.context_window_tokens ? String(profile.context_window_tokens) : "",
-    max_output_tokens: profile.max_output_tokens ? String(profile.max_output_tokens) : "",
   };
   // 凭据方式跟着这份配置走：绑了提供商就停在「授权登录」，否则回到 API Key。
   credentialMode.value = profile.oauth_provider ? "oauth" : "api_key";
@@ -795,72 +796,20 @@ function optionalTokenInput(raw: string): number {
 
 
 
-// 编辑器里这两个框留空是常态，所以要如实说明「留空时到底用多少、这个数哪来的」，
-// 而不是把推断值预填进输入框冒充用户设置。
-// 窗口只认手填：不填就是兜底值，不再按模型清单或模型名去猜。清单里的数只作参考。
-// 四个可选数值框统一一套占位符约定：灰字只写「留空会怎样」，不写「建议你填什么」。
-//
-// Temperature 和最大输出以前写的是建议值（0.7 / 1024），而灰色的数字看起来和已经
-// 生效的设置几乎一样——有人据此以为系统默认温度就是 0.7，其实留空时这个参数根本
-// 不发。窗口那个更糟：占位符写着「跟随模型」，下面的说明却写着「留空按 128,000
-// 计算，不会自动去猜模型的真实窗口」，两句话直接打架。
+// 窗口可以留空：留空时后端按 models.dev 查这个模型的窗口，查不到按 128,000 兜底，
+// 撞上超限会从报错里学到真实窗口。灰字写留空时实际按多少算、这个数从哪来，不把
+// 它预填进输入框冒充用户设置。显示的是已保存的配置。
 const contextWindowPlaceholder = computed(() => {
-  const window = editingProfile.value?.effective_context_window_tokens;
-  return window ? `默认 ${window.toLocaleString("en-US")}` : "默认内置兜底值";
-});
-
-const effectiveContextHint = computed(() => {
   const profile = editingProfile.value;
   const window = profile?.effective_context_window_tokens;
-  if (profile?.context_window_source === "user" && window) {
-    return `当前生效 ${window.toLocaleString("en-US")}，这套配置统一用它。`;
-  }
-  const fallback = window ? window.toLocaleString("en-US") : "内置兜底值";
-  const reference = profile?.catalog_context_window_tokens
-    ? `模型清单里 ${profile.model} 写的是 ${profile.catalog_context_window_tokens.toLocaleString("en-US")}，可以照着填。`
-    : "";
-  return `留空按 ${fallback} 计算，不会自动去猜模型的真实窗口。${reference}`;
+  if (!window || profile?.context_window_source === "user") return "留空自动";
+  const from = profile?.context_window_source === "models_dev" ? "models.dev" : "兜底值";
+  return `留空按 ${window.toLocaleString("en-US")}（${from}）`;
 });
 
-// 最大输出留空按模型上限发（最多 65,536），免得长文件写进工具参数时被网关的缺省值
-// 截断。灰字只写留空时实际发多少；下面的说明写这个数从哪来。显示的是已保存的配置。
-const maxOutputCeiling = "65,536";
-
-const maxOutputPlaceholder = computed(() => {
-  const profile = editingProfile.value;
-  const limit = profile?.effective_max_output_tokens;
-  switch (profile?.max_output_tokens_source) {
-    case "builtin":
-    case "default":
-      return limit ? `默认 ${limit.toLocaleString("en-US")}` : "默认按模型上限";
-    case "provider":
-      return "默认不发送";
-    default:
-      return "默认按模型上限";
-  }
-});
-
-const maxOutputHint = computed(() => {
-  const profile = editingProfile.value;
-  const base = `留空按模型上限发送，最多 ${maxOutputCeiling}；要更长或想压低就填一个数。`;
-  if (!profile) {
-    return base;
-  }
-  const limit = (profile.effective_max_output_tokens ?? 0).toLocaleString("en-US");
-  const model = profile.model;
-  switch (profile.max_output_tokens_source) {
-    case "user":
-      return `${base}当前按填写的 ${limit} 发送。`;
-    case "builtin":
-      return `${base}${model} 留空时按 ${limit} 发送（内置的主流模型上限表）。`;
-    case "default":
-      return `${base}内置表里没有 ${model}，留空时按 ${limit} 发送；模型不接受时会自动退回。`;
-    case "provider":
-      return "留空时不发送这个参数：Responses 接口由服务端按模型上限处理。要压低就填一个数。";
-    default:
-      return base;
-  }
-});
+const effectiveContextHint = computed(() =>
+  "留空时按 models.dev 查这个模型的窗口，查不到按 128,000 算；超限时会从报错里学到真实窗口并自动重试。模型窗口不在 models.dev 里时，填上更准。"
+);
 
 // 这套配置被哪些用途在用：改窗口会一起影响它们，所以列出来。
 const contextWindowBindings = computed(() =>
@@ -884,47 +833,40 @@ function resolvedDefaultModel(): string {
   return modelOptions.value[0]?.id ?? current;
 }
 
+function blankHeaderRow(): HeaderRow {
+  return { key: ++headerRowSeq, name: "", value: "", configured: false };
+}
+
+// 至少留一行空的可填：没有请求头时也不用先点「添加」。
 function resetHeaderRows(headers: Record<string, string> | undefined): void {
-  headerRows.value = Object.keys(headers ?? {})
+  const rows = Object.keys(headers ?? {})
     .sort()
-    .map((name) => ({ name, value: "", configured: true }));
-  headerNameDraft.value = "";
-  headerValueDraft.value = "";
+    .map((name) => ({ key: ++headerRowSeq, name, value: "", configured: true }));
+  headerRows.value = rows.length > 0 ? rows : [blankHeaderRow()];
 }
 
 function addHeader(): void {
-  const name = headerNameDraft.value.trim();
-  if (!name) {
-    return;
-  }
-  const value = headerValueDraft.value;
-  const existing = headerRows.value.findIndex((row) => row.name.toLowerCase() === name.toLowerCase());
-  if (existing >= 0) {
-    // 同名不新增一行：HTTP 头名大小写不敏感，两行同名在界面上看不出谁生效。
-    headerRows.value[existing].value = value;
-  } else {
-    headerRows.value = [...headerRows.value, { name, value, configured: false }];
-  }
-  headerNameDraft.value = "";
-  headerValueDraft.value = "";
+  headerRows.value = [...headerRows.value, blankHeaderRow()];
 }
 
+// 每行右边都是删除；删的是最后一行时换成空行，也就是清空。
 function removeHeader(index: number): void {
-  headerRows.value = headerRows.value.filter((_, at) => at !== index);
+  const rows = headerRows.value.filter((_, at) => at !== index);
+  headerRows.value = rows.length > 0 ? rows : [blankHeaderRow()];
 }
 
 // headersFromRows 按后端契约拼提交值：值留空表示沿用已存的那个，所以从服务端读回
 // 来的行即使没改也要原样带上；删掉的行不出现在结果里，后端据此删除。没配过的新行
-// 留空则没有意义，直接丢弃。
+// 留空则没有意义，直接丢弃。HTTP 头名大小写不敏感，同名只留最后填的那行。
 function headersFromRows(): Record<string, string> {
-  const result: Record<string, string> = {};
+  const byLower = new Map<string, [string, string]>();
   for (const row of headerRows.value) {
     const name = row.name.trim();
     if (!name) continue;
     if (!row.configured && row.value.trim() === "") continue;
-    result[name] = row.value;
+    byLower.set(name.toLowerCase(), [name, row.value]);
   }
-  return result;
+  return Object.fromEntries(byLower.values());
 }
 
 function formToPayload(): LLMConfig {
@@ -945,15 +887,14 @@ function formToPayload(): LLMConfig {
     headers: form.value.provider === "openai_compatible" ? headersFromRows() : {},
     description: form.value.description.trim() || undefined
   };
-  // 窗口必须每次都提交：留空表示「改回按模型自动推断」，省略掉的话后端会当成
-  // 「这个客户端没提交」而保留旧值，于是填过的数字永远删不掉。
+  // 窗口必须每次都提交：留空提交 0，表示改回自动；省略掉的话后端会当成「这个客户端
+  // 没提交」而保留旧值，填过的数字就永远删不掉。
   //
-  // 最大输出同理，留空表示改回按模型上限。
-  //
-  // temperature、max_context_tokens 界面上没有入口，所以一律不提交——nil 在后端
-  // 表示「没碰过」，通过 API 设过值的部署不会被这个表单悄悄清掉。
+  // temperature、max_context_tokens、max_output_tokens 界面上没有入口，所以一律不
+  // 提交——nil 在后端表示「没碰过」，通过 API 设过值的部署不会被这个表单悄悄清掉。
+  // 最大输出没填就不发，交给服务端按模型处理；只有 Anthropic 必填，按 config.yaml 的
+  // llm_runtime.output_token_max 发。
   payload.context_window_tokens = optionalTokenInput(form.value.context_window_tokens);
-  payload.max_output_tokens = optionalTokenInput(form.value.max_output_tokens);
   return payload;
 }
 
@@ -970,6 +911,17 @@ function closeEditor(): void {
 }
 
 async function save(): Promise<void> {
+  const windowText = form.value.context_window_tokens.trim();
+  if (windowText !== "" && (!Number.isInteger(Number(windowText)) || Number(windowText) < 1024)) {
+    invalidField.value = "context_window_tokens";
+    toastError("模型上下文窗口要填整数，至少 1024；留空则自动");
+    return;
+  }
+  if (form.value.provider === "openai_compatible" && form.value.user_agent.trim() === "") {
+    invalidField.value = "user_agent";
+    toastError("请填写 User-Agent");
+    return;
+  }
   // 一个模型都没有就没法保存：兜底模型和机器人页的模型分配都得从这个列表里取。
   if (modelOptions.value.length === 0) {
     const resolved = await loadModels(true);
@@ -1220,15 +1172,9 @@ useConfigurationRefresh(["bot", "llm"], reload);
 </script>
 
 <style scoped>
-/* 请求头的草稿行和已添加行必须逐列对齐。原先两行都用 .input-group（flex 配
-   .input{flex:1}），而尾列一个是带文字的「添加」、一个是纯图标的删除，宽度差了
-   48px，剩余空间被两个输入框平分之后两行就错开了。改成共用同一套网格，尾列按
-   「添加」的实际宽度固定。
-
-   尾列那两个按钮做成同形：同样的尺寸、外框和「图标 + 文字」，都撑满该列，这样它们
-   看着是一套。但重量不同——删除是破坏性动作，跟主动作一样显眼就成了喧宾夺主，所以
-   它走 ghost（透明背景 + 次级文字色）。ghost 默认连边框也去掉，那样又会变成一行浮
-   在那里的文字，所以下面把边框补回来，用比 .btn 更淡的那档。 */
+/* 请求头行：两个输入框平分，尾列是「删除」。删除是破坏性动作，走 ghost 不抢眼，
+   但 ghost 默认没有边框会像一行浮着的文字，所以补回较淡的那档边框。添加按钮照仓库
+   设置的授权列表，放在列表下面。 */
 .header-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 80px;
@@ -1242,6 +1188,11 @@ useConfigurationRefresh(["bot", "llm"], reload);
 }
 
 .header-row > .btn.ghost {
+  border-color: var(--border);
+}
+
+/* 光一行文字看不出能点，虚线框又太扎眼：用和「删除」同一档的实线淡边框。 */
+.header-add {
   border-color: var(--border);
 }
 

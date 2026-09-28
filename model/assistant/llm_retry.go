@@ -124,7 +124,7 @@ func generateWithTransientRetryPolicy(ctx context.Context, provider LLMProvider,
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				return nil, ctxErr
 			}
-			shrunk, ok := shrinkContextForRetry(req)
+			shrunk, ok := shrinkContextForRetry(req, err)
 			if !ok || shrinkAttempts >= maxContextShrinkRetries {
 				return resp, err
 			}
@@ -577,12 +577,17 @@ const maxContextShrinkRetries = 4
 // 裁掉，那时应当如实报错，而不是发一条残缺的请求。
 const contextOverflowFloorTokens int64 = 8192
 
-// shrinkContextForRetry 把请求上下文上限减半，供上下文超限后重试使用。
-// 首次收缩从推断出来的窗口起算；已经收缩过就在上次的基础上继续减半。
-func shrinkContextForRetry(req llm.GenerateRequest) (llm.GenerateRequest, bool) {
+// shrinkContextForRetry 收缩请求上下文上限，供上下文超限后重试使用。报错里写明了
+// 真实窗口（如智谱的 `max_new_tokens` must be <= 16384）就直接缩到它；读不出来才
+// 减半：首次从配置的窗口起算，已经收缩过就在上次的基础上继续减半。
+func shrinkContextForRetry(req llm.GenerateRequest, err error) (llm.GenerateRequest, bool) {
 	current := req.MaxContextTokens
 	if current <= 0 {
 		current = llm.DefaultMaxContextTokens
+	}
+	if limit, ok := llm.ContextOverflowLimit(err); ok && limit < current {
+		req.MaxContextTokens = limit
+		return req, true
 	}
 	next := current / 2
 	if next < contextOverflowFloorTokens {

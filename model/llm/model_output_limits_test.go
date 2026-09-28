@@ -15,67 +15,57 @@ import (
 	"time"
 )
 
-func TestBuiltinMaxOutputTokensMatchesFamilies(t *testing.T) {
-	for _, item := range []struct {
-		model string
-		want  int64
-		ok    bool
-	}{
-		// 网关给的档位和日期后缀落在家族前缀后面。
-		{"gemini-3.8-flash-low", 65536, true},
-		{"models/gemini-3.8-flash-low", 65536, true},
-		{"gemini-3-pro-image-4k", 32768, true},
-		{"claude-opus-4.6-thinking", 128000, true},
-		{"claude-opus-4-5-20251101", 64000, true},
-		{"claude-opus-4-1", 32000, true},
-		{"anthropic/claude-sonnet-4-5", 64000, true},
-		{"gpt-5.5", 128000, true},
-		{"gpt-5-pro", 272000, true},
-		{"gpt-5.2-pro", 128000, true},
-		{"gpt-5.2-chat-latest", 16384, true},
-		{"openai/gpt-4o-mini", 16384, true},
-		{"o3-pro", 100000, true},
-		{"glm-4.5v", 16384, true},
-		{"glm-4.5-air", 98304, true},
-		{"deepseek-flash", 384000, true},
-		{"MiniMax-M2.7", 131072, true},
-		// 前缀后面必须是分隔符，也不认没有版本的裸家族名。
-		{"gpt-50", 0, false},
-		{"o3x", 0, false},
-		{"claude", 0, false},
-		{"jev-latest", 0, false},
-		{"", 0, false},
-	} {
-		got, ok := BuiltinMaxOutputTokens(item.model)
-		if got != item.want || ok != item.ok {
-			t.Errorf("BuiltinMaxOutputTokens(%q) = %d, %t; want %d, %t", item.model, got, ok, item.want, item.ok)
-		}
-	}
+// testModelsDevOutputLimits 是测试用的 models.dev 片段：测试不依赖随版本打包的快照
+// 内容，init 里就把目录换成这份固定数据。
+var testModelsDevOutputLimits = map[string]map[string]ModelInfo{
+	"anthropic": {
+		"claude-opus-4-6":            {ID: "claude-opus-4-6", MaxOutputTokens: 128000},
+		"claude-3-5-sonnet-20241022": {ID: "claude-3-5-sonnet-20241022", MaxOutputTokens: 8192},
+	},
+	"google": {
+		"gemini-2.5-flash": {ID: "gemini-2.5-flash", MaxOutputTokens: 65536, ContextWindowTokens: 1048576},
+		"gemini-2.0-flash": {ID: "gemini-2.0-flash", MaxOutputTokens: 8192},
+		// 专门用来验证前缀匹配取最长 ID：relay-gemini-2.5-flash 也以 -2.5-flash 结尾。
+		"2.5-flash": {ID: "2.5-flash", MaxOutputTokens: 1000, ContextWindowTokens: 4096},
+	},
+	"deepseek": {
+		"deepseek-chat": {ID: "deepseek-chat", MaxOutputTokens: 8192, ContextWindowTokens: 131072},
+	},
+	// 智谱在 models.dev 里是同一主机的两家：普通接口和编程套餐，靠路径区分。
+	"zhipuai": {
+		"glm-4.5v": {ID: "glm-4.5v", MaxOutputTokens: 16384, ContextWindowTokens: 64000},
+	},
+	"zhipuai-coding-plan": {
+		"glm-4.5v": {ID: "glm-4.5v", MaxOutputTokens: 8000, ContextWindowTokens: 32000},
+	},
 }
 
-func TestResolveMaxOutputTokensByProtocol(t *testing.T) {
-	// antigravity 这类网关给每个模型报的占位值，不参与取值。
-	catalog := []ModelInfo{{ID: "claude-sonnet-4-6", MaxOutputTokens: 8192}}
+var testModelsDevAPIs = map[string]string{
+	"zhipuai":             "https://open.bigmodel.cn/api/paas/v4",
+	"zhipuai-coding-plan": "https://open.bigmodel.cn/api/coding/paas/v4",
+}
+
+func init() {
+	catalog := &ModelsDevCatalog{providers: testModelsDevOutputLimits, apis: testModelsDevAPIs}
+	catalog.once.Do(func() {})
+	modelLimitCatalog = catalog
+}
+
+func TestResolveMaxOutputTokensOnlyWhenNeeded(t *testing.T) {
 	for _, item := range []struct {
 		name       string
 		cfg        ProviderConfig
-		model      string
 		want       int64
 		wantSource MaxOutputTokensSource
 	}{
-		{"用户填的值优先，可以超过封顶", ProviderConfig{Provider: ProviderAnthropic, MaxOutputTokens: 128000}, "claude-sonnet-4-6", 128000, MaxOutputTokensSourceUser},
-		{"表里的上限封顶 65536", ProviderConfig{Provider: ProviderAnthropic, Models: catalog}, "claude-sonnet-4-6", DefaultOutputTokenCeiling, MaxOutputTokensSourceBuiltin},
-		{"表里更小的上限照用", ProviderConfig{Provider: ProviderAnthropic}, "claude-3-5-sonnet-20241022", 8192, MaxOutputTokensSourceBuiltin},
-		{"表里没有按默认值", ProviderConfig{Provider: ProviderAnthropic}, "relay-claude", DefaultOutputTokenCeiling, MaxOutputTokensSourceDefault},
-		{"Gemini 按表", ProviderConfig{Provider: ProviderGemini}, "gemini-3.8-flash-low", 65536, MaxOutputTokensSourceBuiltin},
-		{"Gemini 不认识的名字按默认值", ProviderConfig{Provider: ProviderGemini}, "claude", DefaultOutputTokenCeiling, MaxOutputTokensSourceDefault},
-		{"Chat Completions 按表封顶", ProviderConfig{Provider: ProviderOpenAICompatible, APIFormat: APIFormatChatCompletions}, "deepseek-flash", DefaultOutputTokenCeiling, MaxOutputTokensSourceBuiltin},
-		{"Chat Completions 不认识的按默认值", ProviderConfig{Provider: ProviderOpenAICompatible, APIFormat: APIFormatChatCompletions}, "jev-latest", DefaultOutputTokenCeiling, MaxOutputTokensSourceDefault},
-		{"Responses 不发", ProviderConfig{Provider: ProviderOpenAICompatible, APIFormat: APIFormatResponses}, "gpt-5.5", 0, MaxOutputTokensSourceProvider},
-		{"没传模型时看配置档的默认模型", ProviderConfig{Provider: ProviderGemini, Model: "gemini-2.0-flash"}, "", 8192, MaxOutputTokensSourceBuiltin},
+		{"用户填的值照发", ProviderConfig{Provider: ProviderGemini, MaxOutputTokens: 4096}, 4096, MaxOutputTokensSourceUser},
+		{"Anthropic 必填，按封顶发", ProviderConfig{Provider: ProviderAnthropic}, DefaultOutputTokenCeiling, MaxOutputTokensSourceDefault},
+		{"Gemini 不发", ProviderConfig{Provider: ProviderGemini}, 0, MaxOutputTokensSourceProvider},
+		{"Chat Completions 不发", ProviderConfig{Provider: ProviderOpenAICompatible, APIFormat: APIFormatChatCompletions}, 0, MaxOutputTokensSourceProvider},
+		{"Responses 不发", ProviderConfig{Provider: ProviderOpenAICompatible, APIFormat: APIFormatResponses}, 0, MaxOutputTokensSourceProvider},
 	} {
 		t.Run(item.name, func(t *testing.T) {
-			got, source := item.cfg.ResolveMaxOutputTokens(item.model)
+			got, source := item.cfg.ResolveMaxOutputTokens("gemini-2.5-flash")
 			if got != item.want || source != item.wantSource {
 				t.Fatalf("ResolveMaxOutputTokens = %d, %q; want %d, %q", got, source, item.want, item.wantSource)
 			}
@@ -83,7 +73,20 @@ func TestResolveMaxOutputTokensByProtocol(t *testing.T) {
 	}
 }
 
-// 代发值只下发，不进预算；按上下文剩余空间收紧时，至少留出预算预留的那份。
+// 封顶值可以由 config.yaml 调整，0 恢复默认。
+func TestOutputTokenCeilingConfigurable(t *testing.T) {
+	t.Cleanup(func() { SetOutputTokenCeiling(0) })
+	SetOutputTokenCeiling(64000)
+	cfg := ProviderConfig{Provider: ProviderAnthropic}
+	if got, _ := cfg.ResolveMaxOutputTokens("relay-claude"); got != 64000 {
+		t.Fatalf("raised ceiling = %d, want 64000", got)
+	}
+	SetOutputTokenCeiling(0)
+	if got := OutputTokenCeiling(); got != DefaultOutputTokenCeiling {
+		t.Fatalf("reset ceiling = %d, want %d", got, DefaultOutputTokenCeiling)
+	}
+}
+
 func TestImplicitMaxOutputTokensClampsToContextRoom(t *testing.T) {
 	cfg := ProviderConfig{Provider: ProviderAnthropic}
 	big := GenerateRequest{Model: "claude-opus-4-6", MaxContextTokens: 128000, Messages: []Message{{Role: RoleUser, Content: strings.Repeat("a", 300000)}}}
@@ -135,48 +138,32 @@ func TestAnthropicSendsModelMaxWithoutShrinkingHistory(t *testing.T) {
 	}
 }
 
-// Chat Completions 按表代发 max_tokens；上游不认时摘掉重发并记住，用户自己填的值
-// 被拒则照实报错。
-func TestChatCompletionsImplicitMaxTokensDowngrade(t *testing.T) {
+// Chat Completions 没填就不发 max_tokens，填了照发。
+func TestChatCompletionsSendsMaxTokensOnlyWhenConfigured(t *testing.T) {
 	for _, item := range []struct {
 		name      string
 		userLimit int64
-		wantErr   bool
-		wantCalls int
+		want      any
 	}{
-		{name: "implicit", wantCalls: 2},
-		{name: "user configured", userLimit: 50000, wantErr: true, wantCalls: 1},
+		{name: "unset", want: nil},
+		{name: "user configured", userLimit: 4096, want: float64(4096)},
 	} {
 		t.Run(item.name, func(t *testing.T) {
-			var sent []any
+			var sent any = "not called"
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				var body map[string]any
 				_ = json.NewDecoder(r.Body).Decode(&body)
-				sent = append(sent, body["max_tokens"])
+				sent = body["max_tokens"]
 				w.Header().Set("Content-Type", "application/json")
-				if body["max_tokens"] != nil {
-					w.WriteHeader(http.StatusBadRequest)
-					_, _ = w.Write([]byte(`{"error":{"message":"Invalid max_tokens value, the valid range of max_tokens is [1, 8192]","type":"invalid_request_error"}}`))
-					return
-				}
-				_, _ = w.Write([]byte(`{"id":"chat_1","model":"deepseek-flash","choices":[{"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}`))
+				_, _ = w.Write([]byte(`{"id":"chat_1","model":"glm-4v-flash","choices":[{"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}`))
 			}))
 			defer server.Close()
-			cfg := ProviderConfig{Provider: ProviderOpenAICompatible, APIKey: "test", BaseURL: server.URL + "/v1", APIFormat: APIFormatChatCompletions, Model: "deepseek-flash", MaxOutputTokens: item.userLimit}
-			req := GenerateRequest{Messages: []Message{{Role: RoleUser, Content: "hi"}}}
-			_, err := newOpenAICompatibleClient(cfg, server.Client()).Generate(context.Background(), req)
-			if (err != nil) != item.wantErr || len(sent) != item.wantCalls {
-				t.Fatalf("err=%v sent=%v, want err=%t calls=%d", err, sent, item.wantErr, item.wantCalls)
+			cfg := ProviderConfig{Provider: ProviderOpenAICompatible, APIKey: "test", BaseURL: server.URL + "/v1", APIFormat: APIFormatChatCompletions, Model: "glm-4v-flash", MaxOutputTokens: item.userLimit}
+			if _, err := newOpenAICompatibleClient(cfg, server.Client()).Generate(context.Background(), GenerateRequest{Messages: []Message{{Role: RoleUser, Content: "hi"}}}); err != nil {
+				t.Fatal(err)
 			}
-			if item.wantErr {
-				return
-			}
-			if first, _ := sent[0].(float64); first <= 0 {
-				t.Fatalf("first attempt max_tokens = %v, want the builtin limit", sent[0])
-			}
-			// 新 client 沿用结论，一次就过。
-			if _, err := newOpenAICompatibleClient(cfg, server.Client()).Generate(context.Background(), req); err != nil || len(sent) != 3 || sent[2] != nil {
-				t.Fatalf("remembered downgrade not applied: err=%v sent=%v", err, sent)
+			if sent != item.want {
+				t.Fatalf("max_tokens sent = %v, want %v", sent, item.want)
 			}
 		})
 	}
@@ -190,7 +177,7 @@ func TestAnthropicImplicitMaxTokensRetriesWithReportedLimit(t *testing.T) {
 		wantSent  []float64
 		wantErr   bool
 	}{
-		{name: "implicit", wantSent: []float64{65536, 64000}},
+		{name: "implicit", wantSent: []float64{32000, 20000}},
 		{name: "user configured", userLimit: 100000, wantSent: []float64{100000}, wantErr: true},
 	} {
 		t.Run(item.name, func(t *testing.T) {
@@ -201,9 +188,9 @@ func TestAnthropicImplicitMaxTokensRetriesWithReportedLimit(t *testing.T) {
 				maxTokens, _ := body["max_tokens"].(float64)
 				sent = append(sent, maxTokens)
 				w.Header().Set("Content-Type", "application/json")
-				if maxTokens > 64000 {
+				if maxTokens > 20000 {
 					w.WriteHeader(http.StatusBadRequest)
-					_, _ = w.Write([]byte(`{"type":"error","error":{"type":"invalid_request_error","message":"max_tokens: ` + strconv.FormatFloat(maxTokens, 'f', 0, 64) + ` > 64000, which is the maximum allowed number of output tokens for relay-claude"}}`))
+					_, _ = w.Write([]byte(`{"type":"error","error":{"type":"invalid_request_error","message":"max_tokens: ` + strconv.FormatFloat(maxTokens, 'f', 0, 64) + ` > 20000, which is the maximum allowed number of output tokens for relay-claude"}}`))
 					return
 				}
 				_, _ = w.Write([]byte(`{"id":"msg_1","type":"message","role":"assistant","model":"relay-claude","content":[{"type":"text","text":"好"}],"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`))
@@ -215,5 +202,47 @@ func TestAnthropicImplicitMaxTokensRetriesWithReportedLimit(t *testing.T) {
 				t.Fatalf("err=%v sent=%v, want err=%t sent=%v", err, sent, item.wantErr, item.wantSent)
 			}
 		})
+	}
+}
+
+// 没填窗口时按 models.dev 的 limit.context，按配置的 API 地址认服务商。
+func TestContextWindowFromModelsDev(t *testing.T) {
+	zhipu := ProviderConfig{Provider: ProviderOpenAICompatible, APIFormat: APIFormatChatCompletions, BaseURL: "https://open.bigmodel.cn/api/paas/v4", Model: "glm-4.5v"}
+	coding := zhipu
+	coding.BaseURL = "https://open.bigmodel.cn/api/coding/paas/v4/"
+	for _, item := range []struct {
+		name       string
+		cfg        ProviderConfig
+		want       int64
+		wantSource ContextWindowSource
+	}{
+		{"手填优先", ProviderConfig{Provider: ProviderGemini, Model: "gemini-2.5-flash", ContextWindowTokens: 200000}, 200000, ContextWindowSourceUser},
+		{"Gemini 按 google 查", ProviderConfig{Provider: ProviderGemini, Model: "gemini-2.5-flash-low"}, 1048576, ContextWindowSourceModelsDev},
+		{"按地址认出智谱", zhipu, 64000, ContextWindowSourceModelsDev},
+		{"同主机按路径认出编程套餐", coding, 32000, ContextWindowSourceModelsDev},
+		{"认不出的中转在所有服务商里找", ProviderConfig{Provider: ProviderOpenAICompatible, BaseURL: "https://relay.example.com/v1", Model: "deepseek-chat"}, 131072, ContextWindowSourceModelsDev},
+		{"查不到按兜底", ProviderConfig{Provider: ProviderOpenAICompatible, BaseURL: "https://open.bigmodel.cn/api/paas/v4", Model: "glm-4v-flash"}, DefaultContextWindowTokens, ContextWindowSourceFallback},
+		{"命名空间和档位后缀", ProviderConfig{Provider: ProviderGemini, Model: "models/gemini-2.5-flash-thinking"}, 1048576, ContextWindowSourceModelsDev},
+		{"网关在前面加的标记", ProviderConfig{Provider: ProviderGemini, Model: "antigravity-gemini-2.5-flash"}, 1048576, ContextWindowSourceModelsDev},
+		{"前缀取最长的 ID，不被短 ID 误配", ProviderConfig{Provider: ProviderGemini, Model: "relay-gemini-2.5-flash"}, 1048576, ContextWindowSourceModelsDev},
+		{"没有分隔符的长 ID 不算，退到短 ID", ProviderConfig{Provider: ProviderGemini, Model: "xgemini-2.5-flash"}, 4096, ContextWindowSourceModelsDev},
+	} {
+		t.Run(item.name, func(t *testing.T) {
+			got, source := item.cfg.ResolveContextWindowTokens()
+			if got != item.want || source != item.wantSource {
+				t.Fatalf("ResolveContextWindowTokens = %d, %q; want %d, %q", got, source, item.want, item.wantSource)
+			}
+		})
+	}
+	// 同一套配置里换个模型，预算按这次实际用的模型算。
+	cfg := ProviderConfig{Provider: ProviderGemini, Model: "house-gemini"}
+	req := applyContextBudget(GenerateRequest{Model: "gemini-2.5-flash", Messages: []Message{{Role: RoleUser, Content: "hi"}}}, cfg)
+	if req.MaxContextTokens != 1048576 {
+		t.Fatalf("budget for the requested model = %d, want 1048576", req.MaxContextTokens)
+	}
+	// 手填的值恰好等于目录值也要保留，不能在落库时被当成派生值清掉。
+	kept := ProviderConfig{Provider: ProviderGemini, Model: "gemini-2.5-flash", ContextWindowTokens: 1048576}.WithoutRedundantContextLimits()
+	if kept.ContextWindowTokens != 1048576 {
+		t.Fatalf("user window stripped: %d", kept.ContextWindowTokens)
 	}
 }

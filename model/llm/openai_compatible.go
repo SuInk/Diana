@@ -80,7 +80,6 @@ func (c *openAICompatibleClient) Generate(ctx context.Context, req GenerateReque
 	if err := validateGenerateRequest(req); err != nil {
 		return nil, fmt.Errorf("llm: local request validation failed: %w", err)
 	}
-	req = c.cfg.withImplicitMaxOutputTokens(ProviderOpenAICompatible, req, true)
 	req = c.withRememberedDowngrades(req)
 	response, err := c.generateForAPIFormat(ctx, req)
 	// 兼容网关对严格 schema、强制工具这类字段支持不一。被拒时摘掉字段重发，而
@@ -98,6 +97,7 @@ func (c *openAICompatibleClient) Generate(ctx context.Context, req GenerateReque
 		c.rememberSuccessfulDowngrades(req, applied)
 	}
 	if err != nil {
+		rememberedContextLimits.learn(c.cfg, req.Model, err)
 		return nil, fmt.Errorf("llm: provider request failed: %w", err)
 	}
 	response.Text = VisibleAssistantText(response.Text)

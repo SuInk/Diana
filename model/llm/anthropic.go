@@ -103,6 +103,7 @@ func (c *anthropicClient) Generate(ctx context.Context, req GenerateRequest) (re
 		}
 	}
 	if err != nil {
+		rememberedContextLimits.learn(c.cfg, req.Model, err)
 		return nil, fmt.Errorf("llm: provider request failed: %w", err)
 	}
 

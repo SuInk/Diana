@@ -5,9 +5,7 @@ package llm
 
 import (
 	"context"
-	"net/http"
-	"net/http/httptest"
-	"sync/atomic"
+	"strings"
 	"testing"
 )
 
@@ -52,29 +50,39 @@ func TestModelInfoFromPayloadReadsModalities(t *testing.T) {
 	}
 }
 
-func TestModelsDevCatalogEnrichesOpenCodeGoAndCaches(t *testing.T) {
-	var requests atomic.Int32
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		requests.Add(1)
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"opencode-go":{"models":{"deepseek-v4-flash":{"name":"DeepSeek V4 Flash","modalities":{"input":["text","image"],"output":["text"]},"limit":{"context":1000000,"input":900000,"output":384000}}}}}`))
-	}))
-	defer server.Close()
-
-	catalog := newModelsDevCatalog(server.Client(), server.URL)
+func TestModelsDevCatalogEnrichesOpenCodeGo(t *testing.T) {
+	catalog := newModelsDevCatalogFromJSON([]byte(`{"opencode-go":{"models":{"deepseek-v4-flash":{"name":"DeepSeek V4 Flash","modalities":{"input":["text","image"],"output":["text"]},"limit":{"context":1000000,"input":900000,"output":384000}}}}}`))
 	cfg := ProviderConfig{
 		Provider: ProviderOpenAICompatible,
 		BaseURL:  "https://opencode.ai/zen/go/v1",
 	}
 	models := []ModelInfo{{ID: "deepseek-v4-flash", OwnedBy: "opencode"}}
-	for attempt := 0; attempt < 2; attempt++ {
-		got := catalog.Enrich(context.Background(), cfg, models)
-		if len(got) != 1 || got[0].ContextWindowTokens != 1000000 || got[0].MaxInputTokens != 900000 || got[0].MaxOutputTokens != 384000 || len(got[0].InputModalities) != 2 || len(got[0].OutputModalities) != 1 || got[0].OutputModalities[0] != "text" {
-			t.Fatalf("models = %#v", got)
+	got := catalog.Enrich(context.Background(), cfg, models)
+	if len(got) != 1 || got[0].ContextWindowTokens != 1000000 || got[0].MaxInputTokens != 900000 || got[0].MaxOutputTokens != 384000 || len(got[0].InputModalities) != 2 || len(got[0].OutputModalities) != 1 || got[0].OutputModalities[0] != "text" {
+		t.Fatalf("models = %#v", got)
+	}
+}
+
+// 随版本打包的快照要能解开，并且带着认服务商用的 API 地址和主流模型的窗口。
+func TestBundledModelsDevSnapshotDecodes(t *testing.T) {
+	catalog := &ModelsDevCatalog{source: modelsDevSnapshot}
+	providers, apis := catalog.data()
+	if len(providers) < 50 {
+		t.Fatalf("bundled snapshot has %d providers, want a full catalog", len(providers))
+	}
+	for _, id := range []string{"openai", "anthropic", "google", "deepseek"} {
+		withWindow := 0
+		for _, info := range providers[id] {
+			if info.ContextWindowTokens > 0 {
+				withWindow++
+			}
+		}
+		if withWindow == 0 {
+			t.Errorf("provider %q has no model with a context window", id)
 		}
 	}
-	if got := requests.Load(); got != 1 {
-		t.Fatalf("catalog requests = %d, want 1", got)
+	if !strings.Contains(apis["zhipuai"], "open.bigmodel.cn") {
+		t.Errorf("zhipuai api = %q, want the bigmodel endpoint used to recognize Zhipu", apis["zhipuai"])
 	}
 }
 
@@ -105,7 +113,7 @@ func TestModelsDevProviderCandidatesRecognizesKnownCompatibleEndpoints(t *testin
 }
 
 func TestModelsDevCatalogDoesNotGuessCustomGatewayProvider(t *testing.T) {
-	catalog := newModelsDevCatalog(http.DefaultClient, "https://models.invalid/api.json")
+	catalog := newModelsDevCatalogFromJSON([]byte(`{"openai":{"models":{"gpt-5.6-sol":{"limit":{"context":1050000}}}}}`))
 	models := []ModelInfo{{ID: "gpt-5.6-sol"}}
 	got := catalog.Enrich(context.Background(), ProviderConfig{
 		Provider: ProviderOpenAICompatible,

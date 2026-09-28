@@ -88,8 +88,8 @@ type dianaGitHubTool struct {
 	event    MessageEvent
 	plugin   *RepositoryPublishPlugin
 	settings SettingValues
-	// mu 保护下面三项可变状态：同一个工具实例会被并发调用（消息重投、群里多人同时打
-	// 确认码），map 并发写是 runtime fatal，recover 接不住。持锁期间不发网络请求。
+	// mu 保护下面三个按调用记账的字段。同一个工具实例会被并发 Run（消息重投、群里多人
+	// 同时打确认码），不加锁 map 并发写会直接让进程崩掉。
 	mu sync.Mutex
 	// credentialSource 记下本次请求实际用了哪种凭据，只用于把 404 之类的报错说清楚，
 	// 不含 Token 本身。
@@ -2603,7 +2603,7 @@ func (t *dianaGitHubTool) currentRepositoryName(ctx context.Context, repository 
 	if ok {
 		return cached
 	}
-	// 并发时可能有几路同时查同一个仓库，多问一两次 GitHub 无妨，结果一样。
+	// 查询不在锁里做：并发时同一个仓库可能多问一遍，结果相同，后写的覆盖前写的无妨。
 	current := t.graphQLRepositoryName(ctx, repository)
 	t.mu.Lock()
 	if t.repositoryNames == nil {

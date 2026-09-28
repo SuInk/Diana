@@ -95,6 +95,9 @@ type llmConfigPayload struct {
 	EffectiveMaxOutputTokens int64                     `json:"effective_max_output_tokens,omitempty"`
 	MaxOutputTokensSource    llm.MaxOutputTokensSource `json:"max_output_tokens_source,omitempty"`
 	TimeoutMS                int64                     `json:"timeout_ms,omitempty"`
+	// DefaultUserAgent 是本机的内置 User-Agent，新建配置时界面拿它预填。它带操作系统
+	// 和架构，只有后端知道。
+	DefaultUserAgent string `json:"default_user_agent,omitempty"`
 }
 
 // llmRoleBinding 是「某个机器人的某个用途绑到了这套配置的哪个模型」。
@@ -789,7 +792,9 @@ func payloadFromProfileWithSecrets(profile llm.Profile) llmConfigPayload {
 
 // profileSetPayload 在安全 payload 基础上补上模型分配的引用关系。
 func (h *LLMConfigHandler) profileSetPayload(set llm.ProfileSet) llmConfigPayload {
-	return h.attachRoleBindings(payloadFromProfileSet(set))
+	payload := h.attachRoleBindings(payloadFromProfileSet(set))
+	payload.DefaultUserAgent = llm.DefaultOpenAICompatibleUserAgent
+	return payload
 }
 
 // attachRoleBindings 给每套配置标出「谁在用它、用的哪个模型、那个模型的窗口多大」。

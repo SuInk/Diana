@@ -1,0 +1,68 @@
+name: models.dev 快照
+
+# 每周刷新一次随版本打包的 models.dev 快照（model/llm/models_dev_snapshot.json.gz），
+# 有变化就开一个 PR；没变化什么都不做。生成是确定的，数据不变不会出 diff。
+on:
+  schedule:
+    - cron: "0 3 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: models-dev-snapshot
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    name: 刷新快照
+    runs-on: ubuntu-latest
+    env:
+      BRANCH: chore/models-dev-snapshot
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: 生成快照
+        working-directory: model/llm
+        run: go generate -run models_dev_gen.go .
+
+      - name: 有变化就开 PR
+        run: |
+          if git diff --quiet -- model/llm/models_dev_snapshot.json.gz; then
+            echo "models.dev 没有变化。"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -C "${BRANCH}"
+          git add model/llm/models_dev_snapshot.json.gz
+          git commit -m "更新随版本打包的 models.dev 快照"
+          git push --force origin "${BRANCH}"
+          if [ -n "$(gh pr list --head "${BRANCH}" --state open --json number -q '.[].number')" ]; then
+            echo "已有打开的快照 PR，已更新分支。"
+            exit 0
+          fi
+          gh pr create --base main --head "${BRANCH}" \
+            --title "更新随版本打包的 models.dev 快照" \
+            --body "$(cat <<'EOF'
+          定时任务从 models.dev 拉取了最新数据，重新生成随版本打包的快照。上下文窗口留空的提供商配置按这份快照取窗口，同步模型列表时也用它补全名称、模态和 token 上限，所以新模型要等快照更新后才能自动认出窗口。
+
+          ## 改了什么
+
+          - 重新生成 `model/llm/models_dev_snapshot.json.gz`（`go generate -run models_dev_gen.go ./model/llm`）。
+
+          ## 验证
+
+          - 由 GitHub Actions 自动生成；合并前确认 CI 通过。GITHUB_TOKEN 开的 PR 不会自动触发 CI，需要时关掉再打开这个 PR 或手动重跑。
+          EOF
+          )"

@@ -9,10 +9,9 @@ package llm
 // ResolveContextWindowTokens 按当前模型重新计算，兜底值和推断表以后再变，老部署也
 // 能跟着变，不会被某个版本的默认值永久粘住。
 func (cfg ProviderConfig) WithoutRedundantContextLimits() ProviderConfig {
-	probe := cfg
-	probe.ContextWindowTokens = 0
-	probe.MaxContextTokens = 0
-	window := probe.ContextWindowTokensWithDefault()
+	// 只和兜底常量比：models.dev 的值会变，拿它比会把用户恰好填成同一个数的设置
+	// 悄悄清掉，目录一改，生效值就跟着变了。
+	window := DefaultContextWindowTokens
 	if cfg.ContextWindowTokens == window {
 		cfg.ContextWindowTokens = 0
 	}

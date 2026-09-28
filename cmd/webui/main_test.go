@@ -168,6 +168,8 @@ bot:
   onebot_access_token: "0123456789abcdef"
   owner_id: "10001"
   group_triggers: [Diana, diana]
+llm_runtime:
+  output_token_max: 64000
 llm:
   provider: openai_compatible
   base_url: https://api.example.com/v1
@@ -191,6 +193,9 @@ llm:
 	// 会被当成「配置为 false」。
 	if boolOr(cfg.Update.ApplyEnabled, true) || !boolOr(cfg.Update.ReleaseEnabled, true) {
 		t.Fatalf("update flags = %v / %v", cfg.Update.ApplyEnabled, cfg.Update.ReleaseEnabled)
+	}
+	if cfg.LLMRuntime.OutputTokenMax != 64000 {
+		t.Fatalf("output token max = %d", cfg.LLMRuntime.OutputTokenMax)
 	}
 
 	bot, seeded, err := cfg.botSeedConfig(defaultOneBotEndpoint("19000"))

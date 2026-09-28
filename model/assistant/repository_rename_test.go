@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -117,6 +118,44 @@ func TestRepositoryIssuePersonalCredentialFollowsRename(t *testing.T) {
 		t.Fatalf("draft=%#v", draft)
 	}
 	assertCreatedInRenamedRepository(t, github, approveWithCode(t, tool, draft.Draft.ID))
+}
+
+// 同一个工具实例会被并发 Run（消息重投、多人同时打确认码）：改名缓存和凭据来源都是
+// 按调用记账的字段，并发读写不能让进程崩掉，也不能记丢。要配合 -race 才稳定暴露。
+func TestRepositoryRenameCacheConcurrentUse(t *testing.T) {
+	github := newRepositoryPublishTestGitHub()
+	server := newRenamedRepositoryServer(github, true)
+	defer server.Close()
+	tool := repositoryPublishTestTool(server, "提个 issue", nil)
+	const workers = 16
+	start := make(chan struct{})
+	failures := make(chan string, workers)
+	var wait sync.WaitGroup
+	for range workers {
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			<-start
+			renamed, ok := tool.renamedRepository(context.Background(), "acme/old")
+			if !ok || renamed != "acme/demo" {
+				failures <- "renamed=" + renamed
+				return
+			}
+			if previous := tool.previousName("acme/demo"); previous != "acme/old" {
+				failures <- "previous=" + previous
+				return
+			}
+			if message := tool.failureMessage("not_found"); !strings.Contains(message, "本次凭据") {
+				failures <- "message=" + message
+			}
+		}()
+	}
+	close(start)
+	wait.Wait()
+	close(failures)
+	for failure := range failures {
+		t.Fatal(failure)
+	}
 }
 
 // 没有 Token、GraphQL 用不上时，写入撞上旧名的重定向，改用 REST 问出新名字重试一次。
