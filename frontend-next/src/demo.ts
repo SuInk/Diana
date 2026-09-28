@@ -683,6 +683,7 @@ let demoApiKeys: OpenAPIKey[] = [
 ];
 
 let demoMediaCachePolicy = { retention_days: 7, max_mb: 0 };
+let demoHistoryMediaPolicy = { retention_days: 180, max_mb: 10240 };
 
 let demoMediaBaseURL = { base_url: "", source: "auto" };
 
@@ -873,6 +874,13 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
   const method = (init?.method ?? "GET").toUpperCase();
   const body = bodyOf(init);
   const path = url.pathname;
+
+  if (path === "/api/system/history-media") {
+    if (method === "POST") {
+      demoHistoryMediaPolicy = { retention_days: Number(body.retention_days), max_mb: Number(body.max_mb) };
+    }
+    return json(demoHistoryMediaPolicy);
+  }
 
   if (path === "/api/system/media-cache") {
     if (method === "POST") {

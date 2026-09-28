@@ -42,6 +42,7 @@
           <!-- 访问安全 -->
           <section class="card">
           <div class="card-header">
+            <h2>登录密码</h2>
             <SkeletonBlock v-if="authLoading" width="120px" height="21px" />
             <span v-else class="badge" :class="authRequired ? 'ok' : 'warn'">{{ authRequired ? "已开启密码保护" : "未设置密码" }}</span>
           </div>
@@ -105,11 +106,9 @@
           </div>
         </section>
 
-      </div>
-
-      <div v-show="activePage === 'sessions'" class="settings-section-body">
-          <!-- 登录会话 -->
+          <!-- 登录会话：和管理密码同属「谁能进来」，放同一页。 -->
           <section v-if="authRequired || authLoading" class="card">
+          <div class="card-header"><h2>登录会话</h2></div>
           <div class="card-body stack">
             <LoadingSkeleton v-if="sessionsLoading && sessions.length === 0" kind="sessions" :count="2" label="正在加载登录会话" />
             <p v-else-if="sessions.length === 0" class="muted" style="margin: 0; font-size: 13px">当前没有活跃会话。</p>
@@ -227,8 +226,9 @@
 
 
       <div v-show="activePage === 'storage'" class="settings-section-body">
-        <section class="card">
-          <div class="card-header" style="justify-content: flex-end">
+        <section class="card settings-card-full">
+          <div class="card-header" style="justify-content: space-between">
+            <h2>空间占用</h2>
             <button class="btn small ghost" type="button" :disabled="storageLoading" title="重新统计存储占用" aria-label="重新统计存储占用" @click="loadStorageUsage">
               <RefreshCw :size="14" aria-hidden="true" />
             </button>
@@ -318,16 +318,14 @@
                 数据目录 <code class="mono">{{ storage.path }}</code>。
                 <template v-if="storage.scanning">正在重新统计，稍后自动刷新。</template>
                 <template v-else-if="storage.scanned_at">统计于 {{ formatTime(storage.scanned_at) }}。</template>
-                占得多的话：图片、视频、音频这些历史原件由「媒体与文件」的保留策略清理，下载缓存由「下载缓存」清理，Agent 工作目录里的文件在侧栏「文件」页里按分区浏览、下载或删除。
+                占得多的话：图片、视频、音频这些历史原件由下方「历史媒体原件」的保留策略清理，下载缓存由下方「下载缓存」清理，Agent 工作目录里的文件在侧栏「文件」页里按分区浏览、下载或删除。
               </p>
             </template>
           </div>
         </section>
-      </div>
-
-      <div v-show="activePage === 'cache'" class="settings-section-body">
-        <section class="download-cache-settings">
-          <div class="card-header" style="justify-content: flex-end">
+        <section class="card">
+          <div class="card-header" style="justify-content: space-between">
+            <h2>下载缓存</h2>
             <button class="btn small ghost" type="button" :disabled="cacheLoading || cacheSaving" title="刷新缓存设置" aria-label="刷新缓存设置" @click="loadCachePolicy">
               <RefreshCw :size="14" aria-hidden="true" />
             </button>
@@ -367,27 +365,29 @@
             </fieldset>
           </form>
         </section>
-      </div>
-
-      <div v-show="activePage === 'media'" class="settings-section-body">
-        <section class="download-cache-settings">
-          <div class="card-header"><h2>历史媒体原件</h2><button class="btn small ghost" type="button" :disabled="historyMediaLoading || historyMediaSaving" @click="loadHistoryMediaPolicy"><RefreshCw :size="14" /></button></div>
-          <form class="card-body form-grid" @submit.prevent="saveHistoryMedia">
-            <p v-if="historyMediaError" class="error field wide">{{ historyMediaError }}</p>
-            <div class="field"><label for="history-media-days">保留天数</label><input id="history-media-days" v-model.number="historyMediaDays" class="input" type="number" min="-1" max="36500" /><span class="hint">-1 表示不按时间删除。</span></div>
-            <div class="field"><label for="history-media-max">容量上限（MiB）</label><input id="history-media-max" v-model.number="historyMediaMaxMB" class="input" type="number" min="0" max="1048576" /><span class="hint">0 表示不限制容量。</span></div>
-            <p class="hint field wide">清理只删除图片、视频、音频、PDF 等历史原件；聊天文字、媒体类型和已有摘要保留。删除后历史记录会显示原件不可用。</p>
-            <div class="field wide"><button class="btn primary" type="submit" :disabled="historyMediaLoading || historyMediaSaving || !historyMediaValid"><Save :size="15" />{{ historyMediaSaving ? "清理中…" : "保存并立即清理" }}</button></div>
+        <section class="card">
+          <div class="card-header" style="justify-content: space-between"><h2>历史媒体原件</h2><button class="btn small ghost" type="button" :disabled="historyMediaLoading || historyMediaSaving" title="刷新历史媒体设置" aria-label="刷新历史媒体设置" @click="loadHistoryMediaPolicy"><RefreshCw :size="14" aria-hidden="true" /></button></div>
+          <form class="card-body" @submit.prevent="saveHistoryMedia">
+            <div class="cache-policy-fields form-grid">
+              <p v-if="historyMediaError" class="error field wide">{{ historyMediaError }}</p>
+              <div class="field"><label for="history-media-days">保留天数</label><input id="history-media-days" v-model.number="historyMediaDays" class="input" type="number" min="-1" max="36500" /><span class="hint">-1 表示不按时间删除。</span></div>
+              <div class="field"><label for="history-media-max">容量上限（MiB）</label><input id="history-media-max" v-model.number="historyMediaMaxMB" class="input" type="number" min="0" max="1048576" /><span class="hint">0 表示不限制容量。</span></div>
+              <p class="hint field wide">清理只删除图片、视频、音频、PDF 等历史原件；聊天文字、媒体类型和已有摘要保留。删除后历史记录会显示原件不可用。</p>
+              <div class="field wide"><button class="btn primary" type="submit" :disabled="historyMediaLoading || historyMediaSaving || !historyMediaValid"><Save :size="15" />{{ historyMediaSaving ? "清理中…" : "保存并立即清理" }}</button></div>
+            </div>
           </form>
         </section>
       </div>
 
       <div v-show="activePage === 'update'" class="settings-section-body">
-        <!-- 系统更新：标题和说明在正文页头已经有一份，卡片头只留状态徽标和刷新。 -->
+        <!-- 系统更新：说明在正文页头已经有一份，卡片头只留标题、状态徽标和刷新。 -->
         <section class="card">
           <div class="card-header" style="justify-content: space-between">
-            <SkeletonBlock v-if="loading && !systemVersion" width="90px" height="21px" />
-            <span v-else class="badge">{{ deploymentMode === "git" ? "源码更新" : deploymentMode === "docker" ? "Docker 镜像更新" : "Release 自更新" }}</span>
+            <div class="cluster" style="gap: 8px">
+              <h2>版本</h2>
+              <SkeletonBlock v-if="loading && !systemVersion" width="90px" height="21px" />
+              <span v-else class="badge">{{ deploymentMode === "git" ? "源码更新" : deploymentMode === "docker" ? "Docker 镜像更新" : "Release 自更新" }}</span>
+            </div>
             <button class="btn small ghost" type="button" :disabled="loading" title="刷新更新状态" @click="loadUpdates">
               <RefreshCw :size="14" aria-hidden="true" />
             </button>
@@ -465,7 +465,7 @@
 
         <!-- Token 只影响查询版本时的 API 限额，装不装都能更新：独立一张卡片，不混进更新操作里。 -->
         <section class="card">
-          <div class="card-header"><span class="card-sub">GitHub Token（可选）</span></div>
+          <div class="card-header"><h2>GitHub Token（可选）</h2></div>
           <div class="card-body stack" style="gap: 10px; font-size: 13px">
             <label class="update-token-field">
               <input
@@ -489,7 +489,7 @@
         </section>
 
         <section class="card">
-          <div class="card-header"><span class="card-sub">重启服务</span></div>
+          <div class="card-header"><h2>重启服务</h2></div>
           <div class="card-body stack" style="gap: 10px; font-size: 13px">
             <div class="cluster">
               <button class="btn" type="button" :disabled="restarting" @click="doRestart">
@@ -501,11 +501,9 @@
           </div>
         </section>
 
-      </div>
-
-      <div v-show="activePage === 'status'" class="settings-section-body">
-        <!-- 运行状态：版本号只在「系统更新」显示一次，这里只放运行期信息。 -->
+        <!-- 运行状态：版本号只在更新卡片里显示一次，这里只放运行期信息。 -->
         <section class="card">
+          <div class="card-header"><h2>运行状态</h2></div>
           <div class="card-body stack" style="gap: 8px; font-size: 13px">
             <div class="info-row">
               <span class="muted info-label">运行时长</span>
@@ -565,7 +563,7 @@ import LoadingSkeleton from "../components/LoadingSkeleton.vue";
 import SkeletonBlock from "../components/SkeletonBlock.vue";
 import PluginSettingField from "../components/PluginSettingField.vue";
 import StorageDonut from "../components/StorageDonut.vue";
-import { Activity, Download, Eye, EyeOff, HardDriveDownload, Images, KeyRound, LogOut, MonitorSmartphone, Palette, PieChart, Plug, RefreshCw, RotateCw, Save, ShieldCheck } from "@lucide/vue";
+import { Download, Eye, EyeOff, KeyRound, LogOut, Palette, PieChart, Plug, RefreshCw, RotateCw, Save, ShieldCheck } from "@lucide/vue";
 import {
   changeCredentials,
   getAuthStatus,
@@ -613,14 +611,10 @@ import { toastError, toastSuccess } from "../toast";
 // 侧栏菜单按「改的是谁的」分组：账号与安全决定谁能进来，系统是这台服务本身，
 // 个性化只影响当前浏览器。正文一次只显示选中的一项。
 const settingsPages = [
-  { key: "security", label: "访问安全", hint: "谁能打开这个控制台：管理账号与密码保护。", icon: ShieldCheck },
-  { key: "sessions", label: "登录会话", hint: "机器人发来异常登录提醒时，在这里把对应设备踢下线。", icon: MonitorSmartphone },
+  { key: "security", label: "访问安全", hint: "谁能打开这个控制台：管理账号、密码保护，以及已经登录的设备。", icon: ShieldCheck },
   { key: "openapi", label: "对外 API", hint: "让 CI、监控这类外部系统通过 HTTP 接口给机器人推送消息。", icon: Plug },
-  { key: "storage", label: "存储空间", hint: "这台机器的磁盘还剩多少，以及 Diana 的数据目录被哪类文件占掉了。", icon: PieChart },
-  { key: "cache", label: "下载缓存", hint: "控制下载的媒体缓存按闲置天数或容量清理。", icon: HardDriveDownload },
-  { key: "media", label: "媒体与文件", hint: "历史媒体原件的保留策略。", icon: Images },
-  { key: "update", label: "系统更新", hint: "检查、下载并安装新版本，以及原地重启服务。", icon: Download },
-  { key: "status", label: "运行状态", hint: "当前服务的启动时间与运行时长。", icon: Activity },
+  { key: "storage", label: "存储与清理", hint: "磁盘和数据目录被哪类文件占掉了，以及下载缓存、历史媒体原件怎么清理。", icon: PieChart },
+  { key: "update", label: "更新与运行", hint: "检查、下载并安装新版本，原地重启服务，以及当前服务的运行时长。", icon: Download },
   { key: "theme", label: "界面主题", hint: "只存在你当前这个浏览器里，不会同步到其它设备，也不影响别的登录用户。", icon: Palette }
 ] as const;
 
@@ -628,8 +622,8 @@ const settingsPages = [
 const settingsGroups = (
   [
     { label: "个性化", keys: ["theme"] },
-    { label: "账号与安全", keys: ["security", "sessions", "openapi"] },
-    { label: "系统", keys: ["storage", "cache", "media", "update", "status"] }
+    { label: "账号与安全", keys: ["security", "openapi"] },
+    { label: "系统", keys: ["storage", "update"] }
   ] as const
 ).map((group) => ({
   label: group.label,
@@ -1362,12 +1356,6 @@ onBeforeUnmount(() => {
   gap: 8px;
 }
 
-.download-cache-settings {
-  grid-column: 1 / -1;
-  min-width: 0;
-  border-bottom: 1px solid var(--border);
-}
-
 .cache-policy-fields {
   border: 0;
   padding: 0;
@@ -1496,6 +1484,9 @@ onBeforeUnmount(() => {
   gap: 16px;
   align-items: start;
 }
+
+/* 占用概览图表宽，独占一行；两张清理策略卡在它下面并排。 */
+.settings-card-full { grid-column: 1 / -1; }
 
 @media (max-width: 960px) {
   .settings-section-body { grid-template-columns: minmax(0, 1fr); }
