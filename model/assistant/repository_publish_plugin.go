@@ -113,6 +113,24 @@ func (p *RepositoryPublishPlugin) clearOperationUncertain(key string) {
 	delete(p.uncertain, key)
 }
 
+// repositoryUncertain 报告这个仓库名下有没有结果不确定的写入。操作键都以小写仓库名
+// 加冒号开头。
+func (p *RepositoryPublishPlugin) repositoryUncertain(repository string) bool {
+	if p == nil {
+		return false
+	}
+	prefix := strings.ToLower(strings.TrimSpace(repository)) + ":"
+	p.uncertainMu.Lock()
+	defer p.uncertainMu.Unlock()
+	now := time.Now()
+	for key, expires := range p.uncertain {
+		if expires.After(now) && strings.HasPrefix(key, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
 func (p *RepositoryPublishPlugin) operationUncertain(key string) bool {
 	p.uncertainMu.Lock()
 	defer p.uncertainMu.Unlock()

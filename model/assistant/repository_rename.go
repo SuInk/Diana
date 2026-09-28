@@ -18,13 +18,13 @@ import (
 // Location 指向按数字 ID 寻址的 /repositories/{id}，那里的 full_name 就是新名字。
 var repositoryRenameLocationPattern = regexp.MustCompile(`^/repositories/[0-9]+$`)
 
-// explainRepositoryRename 把「仓库改名」从笼统的失败里认出来。
+// explainRepositoryRename 把没能自动跟过去的「仓库改名」从笼统的失败里认出来。
 //
 // 改名后 REST 回 301（redirect_refused），GraphQL 却悄悄跟到新仓库，返回的链接对不上
 // 旧名，于是报成 invalid_response——群里看到的就是一句「无法解析的响应」，模型只会让人
-// 等网络好了再发，确认码回多少遍都停在同一处。这里对这两种失败问一次 GitHub 仓库现在
-// 叫什么，问到了就换成 repository_renamed 并带回新名字，模型可以直接改用新名字重发，
-// 草稿则用 approve 的 repository 改投。
+// 等网络好了再发，确认码回多少遍都停在同一处。读操作和草稿审批会自己跟到新名字（见
+// Run 和 executeDraft）；走到这里的是跟不过去的：上一次写入结果不确定、跟过去之后又被
+// 重定向，或者别的调用方。这时至少把新名字和下一步说清楚。
 func (t *dianaGitHubTool) explainRepositoryRename(ctx context.Context, result repositoryIssueResult) repositoryIssueResult {
 	if result.OK || result.Repository == "" || (result.FailureCode != "redirect_refused" && result.FailureCode != "invalid_response") {
 		return result
@@ -35,15 +35,101 @@ func (t *dianaGitHubTool) explainRepositoryRename(ctx context.Context, result re
 	}
 	result.FailureCode = "repository_renamed"
 	result.RedirectRepository = renamed
-	if result.Operation == "approve" {
-		result.Message = fmt.Sprintf("草稿的目标仓库 %s 已在 GitHub 上改名为 %s，这次没有写入。"+
-			"带上同一个 draft_id 和 repository=%s 再调一次 approve，草稿就会改投到新名字并提交；确认码不变，不用让人重发。"+
-			"主人以外的人审批时，插件设置里的白名单和授权也要写成新名字才放行。", result.Repository, renamed, renamed)
+	if t.plugin.repositoryUncertain(result.Repository) {
+		result.Message = fmt.Sprintf("仓库 %s 已在 GitHub 上改名或转移为 %s。之前有一次写入结果不确定，为免重复写入，没有自动改投到新名字；"+
+			"请先到 %s 上确认那次是否已经写进去，没写进去再重新提一份草稿。", result.Repository, renamed, renamed)
 		return result
 	}
-	result.Message = fmt.Sprintf("仓库 %s 已在 GitHub 上改名为 %s，这次没有执行。把 repository 换成 %s 重发即可；"+
-		"写操作会按新名字核对白名单和授权。", result.Repository, renamed, renamed)
+	result.Message = fmt.Sprintf("仓库 %s 已在 GitHub 上改名或转移为 %s，这次没有执行。把 repository 换成 %s 重发即可。",
+		result.Repository, renamed, renamed)
 	return result
+}
+
+// followableRename 判断一次失败的写入能不能换新名字再来一次：失败必须是改名的样子，
+// GitHub 确认改过名，而且旧名下没有结果不确定的写入。最后一条是防重复：幂等标记和
+// 操作键都含仓库名，旧名下一次说不清落没落地的写入，换新名字查不到它的标记。
+func (t *dianaGitHubTool) followableRename(ctx context.Context, repository string, result repositoryIssueResult) (string, bool) {
+	if result.OK || len(result.Items) > 0 || (result.FailureCode != "redirect_refused" && result.FailureCode != "invalid_response") {
+		return "", false
+	}
+	if t.plugin.repositoryUncertain(repository) {
+		return "", false
+	}
+	renamed, ok := t.resolveRepositoryRename(ctx, repository)
+	if !ok {
+		return "", false
+	}
+	t.noteRename(repository, renamed)
+	return renamed, true
+}
+
+// retargetDraft 把草稿改投到新名字并先落盘：这次写入没成的话，下一次回确认码也直接
+// 走新名字，不必再撞一次旧名。
+func (t *dianaGitHubTool) retargetDraft(ctx context.Context, draft *repositoryIssueDraft, renamed string) (string, string) {
+	t.noteRename(draft.Repository, renamed)
+	draft.Repository = renamed
+	if err := t.plugin.updateDraft(ctx, *draft); err != nil {
+		return "draft_store_failed", "草稿改投到新仓库名时保存失败。"
+	}
+	return "", ""
+}
+
+func (t *dianaGitHubTool) noteRename(previous, renamed string) {
+	if t.renamedFrom == nil {
+		t.renamedFrom = map[string]string{}
+	}
+	t.renamedFrom[strings.ToLower(renamed)] = previous
+}
+
+// previousName 返回这次调用里已确认的旧名，没有就是空串。
+func (t *dianaGitHubTool) previousName(repository string) string {
+	if t == nil {
+		return ""
+	}
+	return t.renamedFrom[strings.ToLower(strings.TrimSpace(repository))]
+}
+
+func repositoryRenameNote(previous, renamed string) string {
+	return fmt.Sprintf("仓库 %s 已在 GitHub 上改名或转移为 %s，已按新名字执行。", previous, renamed)
+}
+
+// finishRead 给跟到新名字的读操作结果补上说明，再照常收尾。
+func (t *dianaGitHubTool) finishRead(ctx context.Context, redirectedFrom string, result repositoryIssueResult) (string, error) {
+	if redirectedFrom != "" {
+		result.RedirectRepository = result.Repository
+		result.Message = repositoryRenameNote(redirectedFrom, result.Repository) + result.Message
+	}
+	return t.finish(ctx, result)
+}
+
+// repositoryRenameCandidates 在授权检查里兼认改名前后两个名字。设置里写的可能还是
+// 旧名（还没人去改），也可能已经换成新名而草稿记的是旧名；GitHub 确认过它们是同一个
+// 仓库，哪个名字过了检查都算。只有原名没过时才去问 GitHub，问一次就记住。
+type repositoryRenameCandidates struct {
+	tool     *dianaGitHubTool
+	original string
+	renamed  string
+	lookedUp bool
+}
+
+func (c *repositoryRenameCandidates) check(ctx context.Context, fn func(string) (string, string)) (string, string) {
+	code, message := fn(c.original)
+	if code == "" {
+		return "", ""
+	}
+	if !c.lookedUp {
+		c.lookedUp = true
+		if renamed, ok := c.tool.resolveRepositoryRename(ctx, c.original); ok {
+			c.renamed = renamed
+			c.tool.noteRename(c.original, renamed)
+		}
+	}
+	if c.renamed != "" {
+		if renamedCode, _ := fn(c.renamed); renamedCode == "" {
+			return "", ""
+		}
+	}
+	return code, message
 }
 
 // resolveRepositoryRename 问 GitHub 这个仓库现在叫什么。只有确认改过名（或转移过）

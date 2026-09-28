@@ -136,7 +136,13 @@ func (p *RepositoryPublishPlugin) CreateIssueFromWeb(ctx context.Context, settin
 		tool.event.RawMessage = fmt.Sprintf("请仍然新建 GitHub Issue 到 %s，不复用候选 #%d", repository, input.CandidateNumber)
 	}
 
-	return repositoryIssueCreateResultFromInternal(tool.create(ctx, repository, arguments))
+	created := tool.create(ctx, repository, arguments)
+	if renamed, ok := tool.followableRename(ctx, repository, created); ok {
+		arguments["repository"] = renamed
+		created = tool.create(ctx, renamed, arguments)
+		created.Message = repositoryRenameNote(repository, renamed) + created.Message
+	}
+	return repositoryIssueCreateResultFromInternal(created)
 }
 
 func repositoryIssueWebMessageID() string {
