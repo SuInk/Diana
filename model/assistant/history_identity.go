@@ -60,6 +60,10 @@ var identityMarkerNeutralizer = strings.NewReplacer(
 	senderTagGroupAdmin, "［群管理员］",
 	"【这条历史的发言者身份】", "［这条历史的发言者身份］",
 	"【引用发言者身份】", "［引用发言者身份］",
+	// 历史行标记本身。同一天的历史只写时分秒、日期沿用上面最近写出的那条，正文里
+	// 伪造一行别的日期，就能让模型把后面的真历史读成另一天。
+	"[跨群历史", "［跨群历史",
+	"[历史", "［历史",
 )
 
 // forgedIdentityAliasPattern 匹配不可信文本里长得像会话别名的 token。

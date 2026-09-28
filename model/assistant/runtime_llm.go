@@ -366,6 +366,7 @@ func (r *Runtime) runLLMProviderForGroup(ctx context.Context, group string, run 
 	run = r.withLLMIdentityPrivacyRun(ctx, run)
 	run = r.withContextBudgetCapRun(ctx, run)
 	run = r.withImageBudgetRun(group, run)
+	run = withHistoryLineDatesRun(run)
 	run = r.withDebugTraceRun(ctx, run)
 	run = r.withPromptCacheProbeRun(ctx, run)
 	run = r.withLLMUsageAccountingRun(ctx, run)
@@ -391,6 +392,7 @@ func (r *Runtime) wrapLLMProviderForContext(ctx context.Context, provider LLMPro
 	run = r.withLLMIdentityPrivacyRun(ctx, run)
 	run = r.withContextBudgetCapRun(ctx, run)
 	run = r.withImageBudgetRun(group, run)
+	run = withHistoryLineDatesRun(run)
 	run = r.withDebugTraceRun(ctx, run)
 	run = r.withPromptCacheProbeRun(ctx, run)
 	run = r.withLLMUsageAccountingRun(ctx, run)
@@ -605,6 +607,7 @@ func (r *Runtime) runLLMRouterProviderWithRetry(ctx context.Context, retryTransi
 	run = r.withLLMIdentityPrivacyRun(ctx, run)
 	run = r.withContextBudgetCapRun(ctx, run)
 	run = r.withImageBudgetRun(group, run)
+	run = withHistoryLineDatesRun(run)
 	run = r.withDebugTraceRun(ctx, run)
 	run = r.withPromptCacheProbeRun(ctx, run)
 	run = r.withLLMUsageAccountingRun(ctx, run)
@@ -1356,7 +1359,8 @@ func agentImageHistoryPromptTextWithDescriptions(event MessageEvent, currentTime
 	if imageCount+videoCount+videoFrameCount+audioCount+fileCount == 0 {
 		return ""
 	}
-	text := rawMessageWithoutImagePlaceholders(PlainText(event.Segments))
+	// 和纯文字历史一样中和正文，否则带图的那条就成了伪造历史行的后门。
+	text := neutralizeIdentityMarkers(rawMessageWithoutImagePlaceholders(PlainText(event.Segments)))
 	if quoted := quotedPromptText(event.Quoted); quoted != "" {
 		quoted = rawMessageWithoutImagePlaceholders(quoted)
 		if text != "" {
@@ -1651,7 +1655,8 @@ func quotedPromptText(quoted *QuotedMessage) string {
 	// 「昵称（别名）」），以前还会再跟一行
 	// 【引用发言者身份】{"quoted_sender_user_id":"…"}。线上抽样的 30 条引用里，
 	// 这一行的 role 全是空的，剩下的就只有那个重复的别名——整段是纯冗余。
-	return fmt.Sprintf("【%s】%s: %s", label, sender, strings.TrimSpace(text))
+	// 被引用的正文同样不可信，它换行后就是一行新的开头，照样能伪造历史行。
+	return fmt.Sprintf("【%s】%s: %s", label, sender, neutralizeIdentityMarkers(strings.TrimSpace(text)))
 }
 
 func llmMessageFromEvent(event MessageEvent, text string, options ...any) llm.Message {

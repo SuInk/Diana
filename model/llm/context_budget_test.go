@@ -60,6 +60,35 @@ func requireOverBudget(t *testing.T, messages []Message, inputBudget int64) {
 	}
 }
 
+// 依赖上文的简写（省掉日期的历史行）一旦进入裁剪就换回完整写法：带日期的那条可能
+// 被丢，留下的行不能再指望沿用它。装得下时不裁剪，简写原样发出。
+func TestApplyContextBudgetRestoresUntrimmedContentBeforeTrimming(t *testing.T) {
+	messages := []Message{
+		{Role: RoleSystem, Content: "系统规则" + strings.Repeat("甲", 90), Priority: MessagePrioritySystem},
+		{Role: RoleUser, Content: "[历史 2026-09-28 09:00:00] 最旧历史" + strings.Repeat("丁", 320), Priority: MessagePriorityHistory},
+		{Role: RoleUser, Content: "[历史 09:01:00] 较新历史", UntrimmedContent: "[历史 2026-09-28 09:01:00] 较新历史", Priority: MessagePriorityHistory},
+		{Role: RoleUser, Content: "当前问题" + strings.Repeat("己", 40), Priority: MessagePriorityCurrent},
+	}
+	const window = 576
+	cfg := ProviderConfig{Provider: ProviderOpenAICompatible, ContextWindowTokens: window, MaxContextTokens: window}
+	requireOverBudget(t, messages, int64(window-64-contextBudgetSafetyReserve))
+
+	got := applyContextBudget(GenerateRequest{MaxOutputTokens: 64, Messages: messages}, cfg)
+	joined := messageTextForTest(got.Messages)
+	if strings.Contains(joined, "最旧历史") || !strings.Contains(joined, "[历史 2026-09-28 09:01:00] 较新历史") {
+		t.Fatalf("裁剪后留下的历史应换回完整日期: %s", joined)
+	}
+	if messages[2].Content != "[历史 09:01:00] 较新历史" {
+		t.Fatalf("不应改调用方的原件: %q", messages[2].Content)
+	}
+
+	roomy := ProviderConfig{Provider: ProviderOpenAICompatible, ContextWindowTokens: 128000, MaxContextTokens: 128000}
+	kept := applyContextBudget(GenerateRequest{MaxOutputTokens: 64, Messages: messages}, roomy)
+	if kept.Messages[2].Content != "[历史 09:01:00] 较新历史" {
+		t.Fatalf("装得下时应原样发出简写: %q", kept.Messages[2].Content)
+	}
+}
+
 func TestApplyContextBudgetReservesToolSchemas(t *testing.T) {
 	tools := []ToolDefinition{{
 		Name:        "large_lookup",

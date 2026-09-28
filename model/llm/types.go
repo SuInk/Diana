@@ -115,6 +115,10 @@ type Message struct {
 	// keeps such a message whole or drops it whole instead of trimming it. The
 	// producer is responsible for shrinking it to fit beforehand.
 	AtomicText bool `json:"-"`
+	// UntrimmedContent 是 Content 不依赖上下文的完整写法，只在两者不同时设置。
+	// Content 可能要靠前面的消息才读得对（例如历史行省掉了和上一条相同的日期），
+	// 裁剪一旦丢掉或截断消息，这种依赖就不再可靠，所以进入裁剪前先换回它。
+	UntrimmedContent string `json:"-"`
 }
 
 type ToolDefinition struct {

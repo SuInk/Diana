@@ -6713,6 +6713,9 @@ func truncateRunesFromStart(text string, maxRunes int) string {
 // 历史预算的一小半；后者按当前时间算，每过一分钟最近一小时内的所有行都会变，
 // 整段历史因此永远无法命中前缀缓存。现在只标绝对时间：它不随请求时间变化，
 // 「离现在多久」由尾部的运行时钟给模型自己对照。
+//
+// 这里总是渲染完整日期，和上一条同一天的在请求发出前才省成只剩时分秒，见
+// requestWithCompactHistoryDates。
 func historyLinePrefix(event MessageEvent) string {
 	label := "[历史"
 	if event.crossGroupContext {

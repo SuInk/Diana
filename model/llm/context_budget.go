@@ -60,6 +60,26 @@ func applyContextBudget(req GenerateRequest, cfg ProviderConfig) GenerateRequest
 	return req
 }
 
+// withUntrimmedContent 在裁剪前把依赖上下文的简写换回完整写法。复制切片，
+// 不改调用方的原件。
+func withUntrimmedContent(messages []Message) []Message {
+	var out []Message
+	for index, message := range messages {
+		if message.UntrimmedContent == "" {
+			continue
+		}
+		if out == nil {
+			out = append([]Message(nil), messages...)
+		}
+		out[index].Content = message.UntrimmedContent
+		out[index].UntrimmedContent = ""
+	}
+	if out == nil {
+		return messages
+	}
+	return out
+}
+
 func fitMessagesToTokenBudget(messages []Message, budget int64) []Message {
 	fitted, _ := fitMessagesToTokenBudgetDetailed(messages, budget)
 	return fitted
@@ -80,6 +100,7 @@ func fitMessagesToTokenBudgetDetailed(messages []Message, budget int64) ([]Messa
 		}
 		return append([]Message(nil), messages...), kept
 	}
+	messages = withUntrimmedContent(messages)
 
 	candidates := make([]tokenBudgetCandidate, 0, len(messages))
 	lastIndex := currentInputIndex(messages)
