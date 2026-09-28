@@ -1,8 +1,10 @@
 package assistant
 
 import (
+	"context"
 	"fmt"
 	"math/rand"
+	"slices"
 	"strings"
 	"testing"
 
@@ -237,5 +239,123 @@ func TestActiveGroupHistoryWindowMovesInChunksAtTwentyThousandBudget(t *testing.
 	}
 	if average < 0.85 || minRatio < 0.74 {
 		t.Fatalf("历史保留量不够：平均 %.3f，最少 %.3f", average, minRatio)
+	}
+}
+
+// Agent 循环里后续步骤带回的工具结果把请求撑过限额时，以前每一步都从最旧那头
+// 再丢一截，丢多少看这一步的工具结果多大，同一条当前消息的第 1 步和第 2 步开头
+// 就不一样。现在格子始终从原件第一条历史画起：一步里多出来的工具结果通常落在
+// 上一次裁剪留下的那一格余量里，开头不用挪；真要挪也是整格挪，落在和别的回复
+// 共用的格子线上，来回也只在这几条线之间。
+func TestPretrimKeepsHistoryStartAcrossAgentSteps(t *testing.T) {
+	random := rand.New(rand.NewSource(20260929))
+	var history []string
+	for len(history) < 900 {
+		history = append(history, fmt.Sprintf("[群友%05d] 第 %d 条：", 10000+random.Intn(90), len(history))+strings.Repeat("聊", 10+random.Intn(60)))
+	}
+	requests, starts, legacyStarts, stepMoves, legacyStepMoves := 0, 0, 0, 0, 0
+	fillSum, minFill, fills := 0.0, 1.0, 0
+	seen := map[string]bool{}
+	var previousStart, legacyPreviousStart string
+	for reply := 0; reply < 100; reply++ {
+		for n := 1 + random.Intn(4); n > 0; n-- {
+			history = append(history, fmt.Sprintf("[群友%05d] 第 %d 条：", 10000+random.Intn(90), len(history))+strings.Repeat("聊", 10+random.Intn(60)))
+		}
+		req := groupReplyRequest(history, 72000, 3000+random.Intn(3000))
+		run := newInputBudgetRun()
+		// 每轮回复走五步 Agent：第一步没有工具结果，之后每步带回一条一千到六千字的结果。
+		for step := 0; step < 5; step++ {
+			if step > 0 {
+				req = appendAgentStep(req, step, 0)
+				req.Messages[len(req.Messages)-1].Content = fmt.Sprintf("结果 %d：", step) + strings.Repeat("查", 1000+random.Intn(5000))
+			}
+			if llm.PlanInputBudget(req, pretrimTestBudget).TextExcess <= 0 && run.empty() {
+				continue
+			}
+			got, _ := pretrimBudgetText(req, pretrimTestBudget, run)
+			plan := llm.PlanInputBudget(got, pretrimTestBudget)
+			if plan.OverBudget() {
+				t.Fatalf("第 %d 轮第 %d 步：裁完仍超预算：%+v", reply, step, plan)
+			}
+			_, start := pretrimKeptHistory(got)
+			_, legacyStart := legacyPretrimWindow(req, pretrimTestBudget)
+			// 这一步没越线、只是照搬本轮之前的裁剪时，请求本来就不满，不算进占比。
+			if llm.PlanInputBudget(req, pretrimTestBudget).TextExcess > 0 {
+				fill := float64(plan.TextTokens) / float64(plan.TextLimit)
+				fillSum += fill
+				minFill = min(minFill, fill)
+				fills++
+			}
+			requests++
+			if start != previousStart {
+				starts++
+				if step > 0 {
+					stepMoves++
+				}
+			}
+			if legacyStart != legacyPreviousStart {
+				legacyStarts++
+				if step > 0 {
+					legacyStepMoves++
+				}
+			}
+			seen[start] = true
+			previousStart, legacyPreviousStart = start, legacyStart
+		}
+	}
+	average := fillSum / float64(fills)
+	t.Logf("100 轮回复、%d 次越线请求：历史开头和上一次请求不同 %d 次（旧裁法 %d 次），其中同一轮 Agent 步与步之间 %d 次（旧裁法 %d 次），出现过 %d 种开头；裁完的请求占文字限额平均 %.1f%%、最少 %.1f%%", requests, starts, legacyStarts, stepMoves, legacyStepMoves, len(seen), average*100, minFill*100)
+	if requests < 200 || legacyStarts*2 < requests {
+		t.Fatalf("模拟没有覆盖到逐步挪开头的情形：%d 次请求、旧裁法挪 %d 次", requests, legacyStarts)
+	}
+	if starts*5 > legacyStarts || len(seen)*10 > requests {
+		t.Fatalf("开头挪得太勤：%d 次（旧裁法 %d 次），%d 种开头", starts, legacyStarts, len(seen))
+	}
+	if minFill < float64(budgetPretrimTargetPercent)*0.75/100 {
+		t.Fatalf("裁得太狠：最少只占限额的 %.3f", minFill)
+	}
+}
+
+// 历史中间夹着几条带长图片描述的大行时，兜底摘要按体积挑候选，会先挑中它们，
+// 换成「较早内容的压缩摘要」，前缀从那一行断开。有预裁剪以后（#859），只要还有
+// 较早历史可丢，就先从开头成段丢到限额的 85% 以下，兜底摘要不会跑：中间那几行
+// 要么原样留着，要么随开头那一段一起丢掉。这里钉住这个顺序。
+func TestPretrimDropsFromStartInsteadOfSummarizingMiddleHistory(t *testing.T) {
+	var history []string
+	for i := 0; i < 1400; i++ {
+		text := fmt.Sprintf("[群友%05d] 第 %d 条：", 10000+i%90, i) + strings.Repeat("聊", 40)
+		if i%200 == 100 {
+			text += "\n[图片描述] " + strings.Repeat("图", 6000)
+		}
+		history = append(history, text)
+	}
+	req := groupReplyRequest(history, 30000, 3000)
+	if llm.PlanInputBudget(req, pretrimTestBudget).TextExcess <= 0 {
+		t.Fatal("构造的请求应当超出限额")
+	}
+	summaries := &countingSummaryProvider{}
+	client, upstream := newPretrimTestProvider(t, summaries)
+	if _, err := client.Generate(withInputBudgetRun(context.Background()), req); err != nil {
+		t.Fatal(err)
+	}
+	if summaries.calls != 0 {
+		t.Fatalf("调了 %d 次兜底摘要", summaries.calls)
+	}
+	sent := upstream.req.Messages
+	for _, message := range sent {
+		if isBudgetSummaryText(message.Content) {
+			t.Fatalf("历史行被换成了摘要：%q", message.Content[:40])
+		}
+	}
+	// 留下的历史是原件里连续的一段尾巴：省略提示之后逐条和原件对得上。
+	marker := slices.IndexFunc(sent, func(message llm.Message) bool { return message.Content == budgetPretrimMarker })
+	if marker != 1 {
+		t.Fatalf("省略提示应当紧跟系统头部：%d", marker)
+	}
+	offset := len(req.Messages) - len(sent)
+	for i := marker + 1; i < len(sent); i++ {
+		if sent[i].Content != req.Messages[i+offset].Content {
+			t.Fatalf("第 %d 条和原件对不上", i)
+		}
 	}
 }

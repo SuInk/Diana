@@ -165,6 +165,9 @@ type budgetPretrimUnit struct {
 
 // pretrimBudgetText 按确定性规则把文字裁进预算，不调模型。先复用本轮之前的决定，
 // 仍超限才继续裁，一次裁到限额的 budgetPretrimTargetPercent。
+//
+// 格子始终从原件里第一条较早历史画起，不从上一步裁剩的地方重画：同一轮 Agent 的
+// 后续步骤、下一条消息的回复，裁剪点都落在同一组格子线上，开头能对上就能命中缓存。
 func pretrimBudgetText(req llm.GenerateRequest, budget int64, run *inputBudgetRun) (llm.GenerateRequest, budgetPretrimStats) {
 	if run == nil {
 		run = newInputBudgetRun()
@@ -180,12 +183,13 @@ func pretrimBudgetText(req llm.GenerateRequest, budget int64, run *inputBudgetRu
 	clip := map[int]bool{}
 	stats := budgetPretrimStats{}
 	// 先照搬之前的决定。历史只从最旧那头连续地丢，碰到没丢过的就停。
-	next := 0
+	next, dropped := 0, int64(0)
 	for ; next < len(history) && run.wasDropped(history[next].key); next++ {
 		for _, index := range history[next].indexes {
 			drop[index] = true
 		}
 		stats.Dropped += len(history[next].indexes)
+		dropped += history[next].cost
 	}
 	for _, unit := range observations {
 		if run.wasClipped(unit.key) {
@@ -193,34 +197,31 @@ func pretrimBudgetText(req llm.GenerateRequest, budget int64, run *inputBudgetRu
 			stats.Clipped++
 		}
 	}
+	trial := req
 	if len(drop) > 0 || len(clip) > 0 {
-		req = applyBudgetPretrim(req, drop, clip)
-		current = budgetPretrimCurrentIndex(req.Messages)
-		history = budgetPretrimHistoryUnits(req.Messages, current)
-		observations = budgetPretrimObservationUnits(req.Messages, current)
-		next = 0
-		drop = map[int]bool{}
-		clip = map[int]bool{}
+		trial = applyBudgetPretrim(req, drop, clip)
 	}
 
-	plan := llm.PlanInputBudget(req, budget)
+	plan := llm.PlanInputBudget(trial, budget)
 	if plan.TextExcess <= 0 {
-		return req, stats
+		return trial, stats
 	}
 	need := plan.TextTokens - plan.TextLimit*budgetPretrimTargetPercent/100
 	if next < len(history) && need > 0 {
 		// 省略提示第一次丢历史时才插进去，它自己占的那点也算进要丢的量。
-		if !slices.ContainsFunc(req.Messages, func(message llm.Message) bool { return message.Content == budgetPretrimMarker }) {
+		if next == 0 && !slices.ContainsFunc(req.Messages, func(message llm.Message) bool { return message.Content == budgetPretrimMarker }) {
 			need += llm.PlanInputBudget(llm.GenerateRequest{Messages: []llm.Message{{Role: llm.RoleUser, Content: budgetPretrimMarker}}}, 0).TextTokens
 		}
-		// 丢到格子线上：要丢的量向上取整到格子宽度，再往后取到整轮的边界。
+		// 丢到格子线上：从原件第一条历史算起的总丢弃量向上取整到格子宽度，再往后
+		// 取到整轮的边界。
 		total := int64(0)
-		for _, unit := range history[next:] {
+		for _, unit := range history {
 			total += unit.cost
 		}
-		chunk := budgetPretrimChunk(budget, total-need)
-		target := (need + chunk - 1) / chunk * chunk
-		for dropped := int64(0); next < len(history) && dropped < target; next++ {
+		want := dropped + need
+		chunk := budgetPretrimChunk(budget, total-want)
+		target := (want + chunk - 1) / chunk * chunk
+		for ; next < len(history) && dropped < target; next++ {
 			unit := history[next]
 			for _, index := range unit.indexes {
 				drop[index] = true
@@ -236,6 +237,9 @@ func pretrimBudgetText(req llm.GenerateRequest, budget int64, run *inputBudgetRu
 			break
 		}
 		index := unit.indexes[0]
+		if clip[index] {
+			continue
+		}
 		clipped := clipHeadTail(req.Messages[index].Content, budgetPretrimClipRunes)
 		saved := unit.cost - llm.EstimateTextTokens(clipped)
 		if saved <= 0 {
