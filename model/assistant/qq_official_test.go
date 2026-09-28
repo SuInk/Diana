@@ -94,6 +94,68 @@ func TestQQOfficialEventFromDispatchRequiresSender(t *testing.T) {
 	}
 }
 
+// 开通「接收所有群消息」能力后，@ 机器人与普通群消息统一走 GROUP_MESSAGE_CREATE；
+// 是否被点名认 mentions 里的 is_you 标记，content 里残留的 mention 标记要剥掉。
+func TestQQOfficialEventFromDispatchFullGroupMessageMention(t *testing.T) {
+	data := json.RawMessage(`{
+	  "id":"msg-5","content":"<@330F50FCA0ABA93B781CA31A9F9389F6> 在干嘛",
+	  "group_openid":"grp-1","group_id":"grp-1",
+	  "timestamp":"2023-11-14T22:13:20+00:00",
+	  "author":{"member_openid":"member-1"},
+	  "mentions":[{"id":"330F50FCA0ABA93B781CA31A9F9389F6","is_you":true}]
+	}`)
+	event, ok := qqOfficialEventFromDispatch("GROUP_MESSAGE_CREATE", data, "bot-1")
+	if !ok {
+		t.Fatal("full-mode group message was not mapped")
+	}
+	if event.Kind != EventKindGroup || event.GroupID != "grp-1" {
+		t.Fatalf("kind = %q group = %q, want group/grp-1", event.Kind, event.GroupID)
+	}
+	if event.UserID != "member-1" {
+		t.Fatalf("user = %q, want member-1", event.UserID)
+	}
+	if !event.ToMe {
+		t.Fatal("a message with an is_you mention must be addressed to the bot")
+	}
+	if event.RawMessage != "在干嘛" {
+		t.Fatalf("text = %q, want the mention token stripped", event.RawMessage)
+	}
+}
+
+// 全量模式下普通群消息不是被点名，ToMe 必须为 false，交给群触发词与接话策略。
+func TestQQOfficialEventFromDispatchFullGroupMessageWithoutMention(t *testing.T) {
+	data := json.RawMessage(`{
+	  "id":"msg-6","content":"今天天气不错","group_openid":"grp-1",
+	  "author":{"member_openid":"member-1"},
+	  "mentions":[{"id":"someone-else"}]
+	}`)
+	event, ok := qqOfficialEventFromDispatch("GROUP_MESSAGE_CREATE", data, "bot-1")
+	if !ok {
+		t.Fatal("full-mode group message was not mapped")
+	}
+	if event.ToMe {
+		t.Fatal("an ordinary group message is not addressed to the bot")
+	}
+}
+
+// 机器人自己的发言也在全量推送里回推，必须归到 SelfID 让运行时按自发消息处理。
+func TestQQOfficialEventFromDispatchFullGroupMessageSelfEcho(t *testing.T) {
+	data := json.RawMessage(`{
+	  "id":"msg-7","content":"刷视频呢","group_openid":"grp-1",
+	  "author":{"id":"bot-1","member_openid":"bot-member-openid","bot":true}
+	}`)
+	event, ok := qqOfficialEventFromDispatch("GROUP_MESSAGE_CREATE", data, "bot-1")
+	if !ok {
+		t.Fatal("bot self echo was not mapped")
+	}
+	if event.UserID != "bot-1" {
+		t.Fatalf("user = %q, want the bot id so the runtime can treat it as self", event.UserID)
+	}
+	if event.ToMe {
+		t.Fatal("the bot does not mention itself")
+	}
+}
+
 func TestQQGatewayPayloadMarshalOmitsEmptyFields(t *testing.T) {
 	encoded, err := json.Marshal(qqGatewayPayload{Op: qqOpHeartbeat})
 	if err != nil {
