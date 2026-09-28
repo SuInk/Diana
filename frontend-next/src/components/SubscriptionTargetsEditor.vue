@@ -36,8 +36,10 @@ function update(index: number, patch: Partial<RepositoryWatchTarget>) {
 
 <style scoped>
 .subscription-targets { display: grid; gap: 12px; }
-.subscription-target-row { display: grid; grid-template-columns: minmax(0, 1fr) 88px minmax(0, 1fr) 32px; align-items: start; gap: 8px; }
-.subscription-target-account { min-width: 0; }
+/* 私聊昵称拆到第二行，第一行的下拉、输入框和删除按钮才能按同一条中线对齐。 */
+.subscription-target-row { display: grid; grid-template-columns: minmax(0, 1fr) 88px minmax(0, 1fr) 32px; align-items: center; gap: 4px 8px; }
+.subscription-target-account { display: contents; }
+.subscription-target-account > .account-name-hint { grid-row: 2; grid-column: 3; }
 .subscription-target-account .input { width: 100%; }
-@media (max-width: 640px) { .subscription-target-row { grid-template-columns: minmax(0, 1fr) 88px 32px; } .subscription-target-account { grid-row: 2; grid-column: 1 / 3; } .subscription-target-row > button { grid-row: 1; grid-column: 3; } }
+@media (max-width: 640px) { .subscription-target-row { grid-template-columns: minmax(0, 1fr) 88px 32px; } .subscription-target-account > :not(.account-name-hint) { grid-row: 2; grid-column: 1 / 3; } .subscription-target-account > .account-name-hint { grid-row: 3; grid-column: 1 / 3; } .subscription-target-row > button { grid-row: 1; grid-column: 3; } }
 </style>

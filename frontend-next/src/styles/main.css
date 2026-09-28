@@ -568,6 +568,11 @@ code {
   white-space: nowrap;
 }
 
+/* 没选中任何项时文字是空的，按钮会矮一截，跟同排的下拉对不齐；垫一个零宽字符撑住行高。 */
+.app-select-value:empty::before {
+  content: "\200b";
+}
+
 .app-select-chevron {
   flex: 0 0 auto;
   color: var(--muted);
@@ -3922,7 +3927,7 @@ a.nav-action {
 .target-row {
   display: grid;
   grid-template-columns: 120px minmax(0, 1fr) auto;
-  gap: 8px;
+  gap: 4px 8px;
   align-items: center;
 }
 
@@ -3934,11 +3939,16 @@ a.nav-action {
   align-items: center;
 }
 
-/* 私聊对象那一格要摞一行昵称，撑高的是这一格，同行的下拉和删除按钮仍居中对齐。 */
+/* 私聊对象那一格要摞一行昵称。昵称要是跟输入框待在同一格，这格被撑高后同行的下拉和
+   删除按钮会对着「输入框 + 昵称」整体居中，看着比输入框低半截；所以把这格拆开，
+   昵称单独落到第二行，第一行三个控件才是真对齐。 */
 .target-user {
-  display: grid;
-  gap: 4px;
-  min-width: 0;
+  display: contents;
+}
+
+.target-user > .account-name-hint {
+  grid-row: 2;
+  grid-column: 2;
 }
 
 /* 按群授权的那一格里摞着两个下拉：选哪个群，以及这条授权要求什么群身份。
@@ -4221,7 +4231,10 @@ a.nav-action {
 
 @media (max-width: 620px) {
   .target-row { grid-template-columns: 1fr auto; }
-  .target-row > :nth-child(2) { grid-column: 1 / -1; }
+  .target-row > :nth-child(2),
+  .target-user > .input { grid-column: 1 / -1; }
+  .target-user > .account-name-hint { grid-row: 3; grid-column: 1 / -1; }
+  .target-row > .btn.icon-only { grid-row: 1; grid-column: 2; }
 }
 
 .repository-watch-manager-list {
