@@ -10,6 +10,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -78,12 +79,43 @@ func (c *ModelsDevCatalog) OutputLimit(cfg ProviderConfig, model string) (int64,
 	}
 	catalog := c.providers
 	c.mu.Unlock()
-	for _, provider := range providers {
-		if info, ok := catalog[provider][model]; ok && info.MaxOutputTokens > 0 {
-			return info.MaxOutputTokens, true
+	for _, name := range modelsDevLookupNames(model) {
+		for _, provider := range providers {
+			if info, ok := catalog[provider][name]; ok && info.MaxOutputTokens > 0 {
+				return info.MaxOutputTokens, true
+			}
 		}
 	}
 	return 0, false
+}
+
+// modelsDevEffortSuffixes 是网关挂在模型名后面的推理档位。models.dev 只收基础
+// 模型名，gemini-3.8-flash-low 要按 gemini-3.8-flash 查。
+var modelsDevEffortSuffixes = []string{"-minimal", "-low", "-medium", "-high", "-xhigh", "-thinking"}
+
+// modelsDevLookupNames 按先精确、后宽松的顺序给出查表用的名字：原名、去掉命名
+// 空间（models/gemini-x）、再去掉档位后缀。精确匹配永远优先，所以 models.dev 里
+// 本来就收了带后缀的条目时照用它的数。
+func modelsDevLookupNames(model string) []string {
+	names := []string{model}
+	add := func(name string) {
+		if name != "" && !slices.Contains(names, name) {
+			names = append(names, name)
+		}
+	}
+	bare := strings.TrimSpace(model)
+	if index := strings.LastIndex(bare, "/"); index >= 0 {
+		bare = bare[index+1:]
+	}
+	add(bare)
+	lower := strings.ToLower(bare)
+	for _, suffix := range modelsDevEffortSuffixes {
+		if strings.HasSuffix(lower, suffix) {
+			add(bare[:len(bare)-len(suffix)])
+			break
+		}
+	}
+	return names
 }
 
 // recoverCatalogRefreshPanic 让解析坏掉的 api.json 只丢掉这一次刷新，不拖垮进程。

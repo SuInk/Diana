@@ -895,7 +895,7 @@ func TestLLMPayloadReportsEffectiveMaxOutputTokens(t *testing.T) {
 		want       int64
 		wantSource llm.MaxOutputTokensSource
 	}{
-		{"Gemini 带网关后缀查不到按封顶", llm.ProviderConfig{Provider: llm.ProviderGemini, APIKey: "k", Model: "gemini-3.8-flash-low"}, llm.DefaultOutputTokenCeiling, llm.MaxOutputTokensSourceDefault},
+		{"models.dev 里没有的 Gemini 按封顶", llm.ProviderConfig{Provider: llm.ProviderGemini, APIKey: "k", Model: "house-gemini-low"}, llm.DefaultOutputTokenCeiling, llm.MaxOutputTokensSourceDefault},
 		{"models.dev 查不到按封顶", llm.ProviderConfig{Provider: llm.ProviderAnthropic, APIKey: "k", Model: "relay-claude"}, llm.DefaultOutputTokenCeiling, llm.MaxOutputTokensSourceDefault},
 		{"Responses 不发", llm.ProviderConfig{Provider: llm.ProviderOpenAICompatible, APIKey: "k", Model: "gpt-5.5"}, 0, llm.MaxOutputTokensSourceProvider},
 		{"用户填的值", llm.ProviderConfig{Provider: llm.ProviderGemini, APIKey: "k", Model: "gemini-3.8-flash-low", MaxOutputTokens: 4096}, 4096, llm.MaxOutputTokensSourceUser},
