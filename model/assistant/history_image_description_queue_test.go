@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -262,4 +263,129 @@ func TestAwaitHistoryImageDescriptionsJumpsTheQueue(t *testing.T) {
 	}
 	runtime.incActive(-1)
 	waitForCondition(t, 3*time.Second, func() bool { return describedCount(store, backlogHashes) == len(backlogHashes) })
+}
+
+// stickerTagQueueStore 在图片描述缓存之外还存表情包标签。
+type stickerTagQueueStore struct {
+	*recallImageTestStore
+	tagMu sync.Mutex
+	tags  map[string]StickerTagRecord
+}
+
+func (s *stickerTagQueueStore) SaveStickerTags(_ context.Context, record StickerTagRecord) error {
+	s.tagMu.Lock()
+	defer s.tagMu.Unlock()
+	s.tags[record.ContentSHA256] = record
+	return nil
+}
+
+func (s *stickerTagQueueStore) tagRecord(hash string) (StickerTagRecord, bool) {
+	s.tagMu.Lock()
+	defer s.tagMu.Unlock()
+	record, ok := s.tags[hash]
+	return record, ok
+}
+
+// promptRecordingVisionProvider 记下每次识图的系统提示词，按提示词回表情包标注或通用描述。
+type promptRecordingVisionProvider struct {
+	mu      sync.Mutex
+	systems []string
+}
+
+func (p *promptRecordingVisionProvider) Generate(_ context.Context, request llm.GenerateRequest) (*llm.GenerateResponse, error) {
+	system := request.Messages[0].Content
+	p.mu.Lock()
+	p.systems = append(p.systems, system)
+	p.mu.Unlock()
+	if strings.Contains(system, promptStickerSystemSpec.Default) {
+		return &llm.GenerateResponse{Text: "摊手表示无所谓，带点阴阳怪气。\n标签：无所谓、摊手、阴阳怪气"}, nil
+	}
+	return &llm.GenerateResponse{Text: "一张白色背景的图片。"}, nil
+}
+
+func (p *promptRecordingVisionProvider) snapshot() []string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return append([]string(nil), p.systems...)
+}
+
+func newStickerTagQueueRuntime(t *testing.T, plugins *PluginManager) (*Runtime, *stickerTagQueueStore, *promptRecordingVisionProvider) {
+	t.Helper()
+	provider := &promptRecordingVisionProvider{}
+	store := &stickerTagQueueStore{recallImageTestStore: newRecallImageTestStore(), tags: map[string]StickerTagRecord{}}
+	runtime := NewRuntime(BotConfig{BotAccount: "bot"}, nilChannel{}, plugins, nil, nil, nil, func() (LLMProvider, error) {
+		return provider, nil
+	})
+	runtime.SetMessageHistoryStore(store)
+	runtime.historyImageDescTimeout, runtime.historyImageDescBackoff = time.Second, time.Hour
+	return runtime, store, provider
+}
+
+func stickerQueueEvent(t *testing.T, messageID string, extra map[string]string) (MessageEvent, string) {
+	t.Helper()
+	imagePath, hash := writeRecallImageFixture(t)
+	data := map[string]string{"cached_file": imagePath, imageContentSHA256Key: hash}
+	for key, value := range extra {
+		data[key] = value
+	}
+	return MessageEvent{
+		Kind: EventKindGroup, ProfileID: "qq", GroupID: "12345", UserID: "23456", MessageID: messageID, Time: time.Now().Unix(),
+		Segments: []MessageSegment{{Type: "image", Data: data}},
+	}, hash
+}
+
+// 收到的表情包在后台识图时就用表情包提示词，描述和检索标签一次存好，
+// 不用等 sticker 工具搜到它再识一遍。
+func TestHistoryImageDescriptionTagsPlatformSticker(t *testing.T) {
+	runtime, store, provider := newStickerTagQueueRuntime(t, NewDefaultPluginManager())
+	event, hash := stickerQueueEvent(t, "sticker", map[string]string{"sub_type": "1", "summary": "[动画表情]"})
+
+	runtime.enqueueHistoryImageDescriptions(event)
+	waitForCondition(t, 2*time.Second, func() bool { return describedCount(store.recallImageTestStore, []string{hash}) == 1 })
+
+	record, ok := store.tagRecord(hash)
+	if !ok || strings.Join(record.Tags, "、") != "无所谓、摊手、阴阳怪气" || record.Version != stickerAnnotationVersion {
+		t.Fatalf("sticker tags=%#v ok=%v", record, ok)
+	}
+	store.mu.Lock()
+	description := store.descriptions[hash].Description
+	store.mu.Unlock()
+	if description != "摊手表示无所谓，带点阴阳怪气。" || record.Gist != description {
+		t.Fatalf("description=%q gist=%q, want the annotation without the tag line", description, record.Gist)
+	}
+	if systems := provider.snapshot(); len(systems) != 1 || !strings.Contains(systems[0], promptStickerSystemSpec.Default) {
+		t.Fatalf("vision calls=%q, want one sticker annotation", systems)
+	}
+}
+
+// 普通图片要的是客观细节，仍走通用描述，不打标签；表情包插件关掉时表情包也照旧。
+func TestHistoryImageDescriptionKeepsGenericPromptWithoutSticker(t *testing.T) {
+	disabled := NewDefaultPluginManager()
+	if _, err := disabled.SetEnabledForProfile(stickerPluginID, "qq", false); err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		name    string
+		plugins *PluginManager
+		extra   map[string]string
+	}{
+		{name: "ordinary image", plugins: NewDefaultPluginManager(), extra: map[string]string{"sub_type": "0", "summary": "[图片]"}},
+		{name: "sticker plugin disabled", plugins: disabled, extra: map[string]string{"sub_type": "1"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			runtime, store, provider := newStickerTagQueueRuntime(t, tc.plugins)
+			event, hash := stickerQueueEvent(t, "image", tc.extra)
+
+			runtime.enqueueHistoryImageDescriptions(event)
+			waitForCondition(t, 2*time.Second, func() bool { return describedCount(store.recallImageTestStore, []string{hash}) == 1 })
+
+			if record, ok := store.tagRecord(hash); ok {
+				t.Fatalf("tags saved: %#v", record)
+			}
+			if systems := provider.snapshot(); len(systems) != 1 || !strings.Contains(systems[0], promptRecallImageSystemSpec.Default) {
+				t.Fatalf("vision calls=%q, want one generic description", systems)
+			}
+		})
+	}
 }

@@ -60,9 +60,12 @@ type historyImageDescJob struct {
 	indexEvent MessageEvent
 	explicit   bool
 	urgent     bool
-	done       chan struct{}
-	cancel     context.CancelFunc
-	preempted  bool
+	// sticker 表示平台标成了表情包：识图改用表情包标注提示词，顺带存下检索标签。
+	// 入队时削掉了片段元数据，只能在这里记住。
+	sticker   bool
+	done      chan struct{}
+	cancel    context.CancelFunc
+	preempted bool
 	// running 表示任务已经取出在做；countedUrgent 表示它占着加急并发名额
 	//（取出时是加急）。普通任务跑到一半被升成加急时不改名额，只是不再被打断。
 	running       bool
@@ -139,6 +142,7 @@ func (r *Runtime) enqueueHistoryImageDescriptionsWithPolicy(event MessageEvent, 
 			if !retained {
 				continue
 			}
+			_, sticker := StickerSegmentLabel(segment)
 			jobEvent := historyImageDescriptionQueueEvent(sourceEvent)
 			jobEvent.Segments = []MessageSegment{stripImageSegmentForQueue(segment)}
 			job := &historyImageDescJob{
@@ -148,6 +152,7 @@ func (r *Runtime) enqueueHistoryImageDescriptionsWithPolicy(event MessageEvent, 
 				indexEvent: historyImageDescriptionQueueEvent(sourceEvent),
 				explicit:   explicit,
 				urgent:     urgent,
+				sticker:    sticker,
 				done:       make(chan struct{}),
 			}
 			if done := r.pushHistoryImageDescriptionJob(job); done != nil {
@@ -178,6 +183,7 @@ func (r *Runtime) pushHistoryImageDescriptionJob(job *historyImageDescJob) chan 
 	}
 	if existing := r.historyImageDescJobs[job.hash]; existing != nil {
 		var preempt context.CancelFunc
+		existing.sticker = existing.sticker || job.sticker
 		if job.urgent && !existing.urgent {
 			existing.urgent = true
 			existing.explicit = true
@@ -466,7 +472,16 @@ func (r *Runtime) describeHistoryImageJob(ctx context.Context, job *historyImage
 		r.refreshMessageImageSearchText(ctx, job.indexEvent)
 		return nil
 	}
-	description, err := r.describeRecallImage(ctx, job.event, job.source)
+	tagSticker := r.historyImageJobTagsSticker(job)
+	var description string
+	var tags []string
+	if tagSticker {
+		var annotation string
+		annotation, err = r.describeStickerImage(ctx, job.event, job.source)
+		description, tags = parseStickerAnnotation(annotation)
+	} else {
+		description, err = r.describeRecallImage(ctx, job.event, job.source)
+	}
 	if err != nil {
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 			return fmt.Errorf("vision call exceeded %s: %w", r.historyImageDescriptionTimeoutValue(), err)
@@ -483,9 +498,25 @@ func (r *Runtime) describeHistoryImageJob(ctx context.Context, job *historyImage
 	}); err != nil {
 		return err
 	}
+	if tagSticker {
+		r.saveStickerTags(job.hash, compactRecallImageDescription(description), tags)
+	}
 	r.markHistoryImageDescriptionReady(job.hash)
 	r.refreshMessageImageSearchText(ctx, job.indexEvent)
 	return nil
+}
+
+// historyImageJobTagsSticker 决定这张图按表情包标注：平台标成表情包、存得下标签、
+// 这个会话开着表情包插件。普通图片仍走通用描述，要的是客观细节而不是检索词。
+func (r *Runtime) historyImageJobTagsSticker(job *historyImageDescJob) bool {
+	r.historyImageDescMu.Lock()
+	sticker := job.sticker
+	r.historyImageDescMu.Unlock()
+	if !sticker || r.stickerTagStore() == nil {
+		return false
+	}
+	_, _, enabled := r.pluginWithSettingsForEvent(stickerPluginID, job.event)
+	return enabled
 }
 
 // beginHistoryImageDescriptionForeground 让普通描述任务让路给可见回复；加急任务
