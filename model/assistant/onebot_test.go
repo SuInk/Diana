@@ -275,6 +275,50 @@ func TestMessageEventFromEnvelopeNoticeTypeGroupRecall(t *testing.T) {
 	}
 }
 
+// TestMessageEventFromEnvelopeKeepsOfficialBotMarkdown 用 SnowLuma 转来的官方机器人
+// 消息验证：按钮段的数字和数组字段不能拖垮整条解析，markdown 正文要进纯文本。
+func TestMessageEventFromEnvelopeKeepsOfficialBotMarkdown(t *testing.T) {
+	var envelope oneBotEnvelope
+	err := json.Unmarshal([]byte(`{"post_type":"message","message_type":"group","time":1790356356,"self_id":42,"user_id":10001,"group_id":20002,"message_id":30003,
+		"raw_message":"[CQ:markdown][CQ:inline_keyboard]",
+		"message":[
+			{"type":"markdown","data":{"content":"[](%7B%22version%22%3A2%7D)\n![img#190px #190px](https://qqbot.ugcimg.cn/10004/abc)\n**曲师:** [LeaF & Optie](mqqapi://aio/inlinecmd?command=%2Fmai&enter=false)\n> **TAP:** 214"}},
+			{"type":"inline_keyboard","data":{"bot_appid":10004,"rows":[{"buttons":[{"id":"1","label":"再抽一次","style":1,"click_limit":10}]}]}}
+		]}`), &envelope)
+	if err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+	event := messageEventFromEnvelope(envelope)
+	if len(event.Segments) != 3 || event.Segments[0].Type != "markdown" || event.Segments[1].Type != "image" || event.Segments[2].Type != "inline_keyboard" {
+		t.Fatalf("segments = %#v", event.Segments)
+	}
+	if got := ImageURLs(event.Segments); len(got) != 1 || got[0] != "https://qqbot.ugcimg.cn/10004/abc" {
+		t.Fatalf("ImageURLs = %#v", got)
+	}
+	if got := event.Segments[2].Data["bot_appid"]; got != "10004" {
+		t.Fatalf("bot_appid = %q", got)
+	}
+	if got := event.Segments[2].Data["rows"]; !strings.Contains(got, `"label":"再抽一次"`) {
+		t.Fatalf("rows = %q", got)
+	}
+	if text := PlainText(event.Segments); text != "**曲师:** LeaF & Optie\n> **TAP:** 214" {
+		t.Fatalf("PlainText = %q", text)
+	}
+}
+
+func TestMessageSegmentUnmarshalDropsNullData(t *testing.T) {
+	var segment MessageSegment
+	if err := json.Unmarshal([]byte(`{"type":"image","data":{"file":"a.jpg","url":null,"sub_type":0,"flag":true}}`), &segment); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+	if _, ok := segment.Data["url"]; ok {
+		t.Fatalf("null value should be dropped: %#v", segment.Data)
+	}
+	if segment.Data["file"] != "a.jpg" || segment.Data["sub_type"] != "0" || segment.Data["flag"] != "true" {
+		t.Fatalf("data = %#v", segment.Data)
+	}
+}
+
 // TestOneBotEnvelopeAllowsObjectStatus 验证对应功能场景。
 func TestOneBotEnvelopeAllowsObjectStatus(t *testing.T) {
 	var envelope oneBotEnvelope

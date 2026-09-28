@@ -4,6 +4,7 @@
 package assistant
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -109,6 +110,46 @@ const welcomeLLMMaxChars = 200
 type MessageSegment struct {
 	Type string            `json:"type"`
 	Data map[string]string `json:"data,omitempty"`
+}
+
+// UnmarshalJSON 容忍 data 里的非字符串值。官方机器人消息的 inline_keyboard 段带
+// 数字 bot_appid 和数组 rows，按 map[string]string 硬解会让整条消息解析失败，
+// 退回 raw_message 后 markdown 正文就没了。数字、布尔保留字面量，数组和对象保留
+// JSON 原文，null 丢弃。
+func (s *MessageSegment) UnmarshalJSON(raw []byte) error {
+	var wire struct {
+		Type string                     `json:"type"`
+		Data map[string]json.RawMessage `json:"data"`
+	}
+	if err := json.Unmarshal(raw, &wire); err != nil {
+		return err
+	}
+	s.Type = wire.Type
+	s.Data = nil
+	if wire.Data == nil {
+		return nil
+	}
+	s.Data = make(map[string]string, len(wire.Data))
+	for key, value := range wire.Data {
+		trimmed := bytes.TrimSpace(value)
+		if len(trimmed) == 0 || string(trimmed) == "null" {
+			continue
+		}
+		if trimmed[0] == '"' {
+			var text string
+			if err := json.Unmarshal(trimmed, &text); err != nil {
+				return err
+			}
+			s.Data[key] = text
+			continue
+		}
+		var compacted bytes.Buffer
+		if err := json.Compact(&compacted, trimmed); err != nil {
+			return err
+		}
+		s.Data[key] = compacted.String()
+	}
+	return nil
 }
 
 // ImageDescriptionRecord stores reusable visual facts by image content rather

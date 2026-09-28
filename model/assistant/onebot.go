@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -816,7 +817,7 @@ func parseOneBotMessage(raw json.RawMessage, fallback string) []MessageSegment {
 	if len(raw) > 0 && string(raw) != "null" {
 		var segments []MessageSegment
 		if err := json.Unmarshal(raw, &segments); err == nil {
-			return segments
+			return expandMarkdownImages(segments)
 		}
 		var text string
 		if err := json.Unmarshal(raw, &text); err == nil {
@@ -955,6 +956,10 @@ func plainTextWithOptions(segments []MessageSegment, options plainTextOptions) s
 			} else {
 				builder.WriteString("[合并转发]")
 			}
+		case "markdown":
+			// QQ 官方机器人的回复几乎都是 markdown 段加按钮段，正文全在 content 里；
+			// 按钮段只是交互入口，不写进正文。
+			builder.WriteString(markdownSegmentText(segment.Data["content"]))
 		case "json", "xml":
 			// 分享卡片以前一个字都不写：卡片内容全靠链接解析那条路从原始串里抠 URL
 			// 再去抓。链接解析没命中的卡片——小程序、群视频邀请、音乐分享——模型那边
@@ -966,6 +971,52 @@ func plainTextWithOptions(segments []MessageSegment, options plainTextOptions) s
 		}
 	}
 	return strings.TrimSpace(builder.String())
+}
+
+var (
+	markdownImagePattern = regexp.MustCompile(`!\[[^\]]*\]\(([^)\s]*)\)`)
+	markdownLinkPattern  = regexp.MustCompile(`\[([^\]]*)\]\([^)\s]*\)`)
+)
+
+// markdownSegmentText 把官方机器人的 markdown 正文压成模型读的纯文本。图片已经由
+// expandMarkdownImages 拆成图片段走识图，这里只去掉语法；文字链接指向 mqqapi://
+// 内部命令，开头还常有一个空标签的版本头，链接只留文字，空标签的直接去掉——
+// 留着既没信息量，又会被链接解析当成要抓的网页。
+func markdownSegmentText(content string) string {
+	content = markdownImagePattern.ReplaceAllString(content, "")
+	content = markdownLinkPattern.ReplaceAllString(content, "$1")
+	return strings.TrimSpace(content)
+}
+
+// expandMarkdownImages 把 markdown 段里的 http(s) 图片拆成紧跟其后的图片段，让它们
+// 和普通图片一样进识图、缓存和图片描述。官方机器人的查询结果常常只有一张图是正文。
+func expandMarkdownImages(segments []MessageSegment) []MessageSegment {
+	var out []MessageSegment
+	for index, segment := range segments {
+		var images []MessageSegment
+		if segment.Type == "markdown" {
+			for _, match := range markdownImagePattern.FindAllStringSubmatch(segment.Data["content"], -1) {
+				if imageURL := strings.TrimSpace(match[1]); strings.HasPrefix(imageURL, "http://") || strings.HasPrefix(imageURL, "https://") {
+					images = append(images, MessageSegment{Type: "image", Data: map[string]string{"url": imageURL, "file": imageURL}})
+				}
+			}
+		}
+		if len(images) == 0 {
+			if out != nil {
+				out = append(out, segment)
+			}
+			continue
+		}
+		if out == nil {
+			out = append(make([]MessageSegment, 0, len(segments)+len(images)), segments[:index]...)
+		}
+		out = append(out, segment)
+		out = append(out, images...)
+	}
+	if out == nil {
+		return segments
+	}
+	return out
 }
 
 // replyMarkerPrefix 是 Diana 自己的引用标记，与具体平台无关：入站把各平台的
