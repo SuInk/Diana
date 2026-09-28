@@ -352,33 +352,19 @@
           <span class="hint">{{ maxOutputHint }}</span>
         </div>
         <div v-if="form.provider === 'openai_compatible'" class="field wide">
-          <label for="llm-header-name">自定义请求头（可选）</label>
-          <div class="header-row">
-            <input
-              id="llm-header-name"
-              v-model="headerNameDraft"
-              class="input"
-              autocomplete="off"
-              spellcheck="false"
-              placeholder="请求头名，如 X-Session-Affinity"
-              @keydown.enter.prevent="addHeader"
-            />
-            <input
-              v-model="headerValueDraft"
-              class="input"
-              autocomplete="off"
-              spellcheck="false"
-              placeholder="值"
-              @keydown.enter.prevent="addHeader"
-            />
-            <button class="btn" type="button" :disabled="headerNameDraft.trim() === ''" @click="addHeader">
-              <Plus :size="14" aria-hidden="true" />
-              添加
-            </button>
-          </div>
-          <div v-if="headerRows.length > 0" class="stack" style="gap: 6px; margin-top: 8px">
-            <div v-for="(row, index) in headerRows" :key="row.name" class="header-row">
-              <input class="input" :value="row.name" readonly :title="row.name" />
+          <label for="llm-header-name-0">自定义请求头（可选）</label>
+          <div class="stack" style="gap: 6px">
+            <div v-for="(row, index) in headerRows" :key="row.key" class="header-row">
+              <input
+                :id="`llm-header-name-${index}`"
+                v-model="row.name"
+                class="input"
+                autocomplete="off"
+                spellcheck="false"
+                :readonly="row.configured"
+                :title="row.name"
+                placeholder="请求头名，如 X-Session-Affinity"
+              />
               <input
                 v-model="row.value"
                 class="input"
@@ -389,12 +375,18 @@
               <button
                 class="btn ghost"
                 type="button"
-                :title="`删除请求头 ${row.name}`"
-                :aria-label="`删除请求头 ${row.name}`"
+                :title="row.name ? `删除请求头 ${row.name}` : '清空这一行'"
+                :aria-label="row.name ? `删除请求头 ${row.name}` : '清空这一行'"
                 @click="removeHeader(index)"
               >
                 <X :size="14" :stroke-width="2.25" aria-hidden="true" />
                 删除
+              </button>
+            </div>
+            <div>
+              <button class="btn" type="button" @click="addHeader">
+                <Plus :size="14" aria-hidden="true" />
+                添加
               </button>
             </div>
           </div>
@@ -515,9 +507,9 @@ const modelOptions = ref<LLMModelInfo[]>([]);
 const manualModelDraft = ref("");
 // 请求头按「名字 + 值」逐行编辑，和正上方的模型列表用同一套范式。configured 记住
 // 这一行是从服务端读回来的：它的值被脱敏成空串，留空表示沿用而不是改成空。
-const headerRows = ref<{ name: string; value: string; configured: boolean }[]>([]);
-const headerNameDraft = ref("");
-const headerValueDraft = ref("");
+type HeaderRow = { key: number; name: string; value: string; configured: boolean };
+const headerRows = ref<HeaderRow[]>([]);
+let headerRowSeq = 0;
 const modelsLoading = ref(false);
 // invalidField 记的是「这次失败该回去改哪一格」，由报错文本推出来（见 llmErrorField）。
 const invalidField = ref<LLMErrorField>("");
@@ -898,47 +890,40 @@ function resolvedDefaultModel(): string {
   return modelOptions.value[0]?.id ?? current;
 }
 
+function blankHeaderRow(): HeaderRow {
+  return { key: ++headerRowSeq, name: "", value: "", configured: false };
+}
+
+// 至少留一行空的可填：没有请求头时也不用先点「添加」。
 function resetHeaderRows(headers: Record<string, string> | undefined): void {
-  headerRows.value = Object.keys(headers ?? {})
+  const rows = Object.keys(headers ?? {})
     .sort()
-    .map((name) => ({ name, value: "", configured: true }));
-  headerNameDraft.value = "";
-  headerValueDraft.value = "";
+    .map((name) => ({ key: ++headerRowSeq, name, value: "", configured: true }));
+  headerRows.value = rows.length > 0 ? rows : [blankHeaderRow()];
 }
 
 function addHeader(): void {
-  const name = headerNameDraft.value.trim();
-  if (!name) {
-    return;
-  }
-  const value = headerValueDraft.value;
-  const existing = headerRows.value.findIndex((row) => row.name.toLowerCase() === name.toLowerCase());
-  if (existing >= 0) {
-    // 同名不新增一行：HTTP 头名大小写不敏感，两行同名在界面上看不出谁生效。
-    headerRows.value[existing].value = value;
-  } else {
-    headerRows.value = [...headerRows.value, { name, value, configured: false }];
-  }
-  headerNameDraft.value = "";
-  headerValueDraft.value = "";
+  headerRows.value = [...headerRows.value, blankHeaderRow()];
 }
 
+// 每行右边都是删除；删的是最后一行时换成空行，也就是清空。
 function removeHeader(index: number): void {
-  headerRows.value = headerRows.value.filter((_, at) => at !== index);
+  const rows = headerRows.value.filter((_, at) => at !== index);
+  headerRows.value = rows.length > 0 ? rows : [blankHeaderRow()];
 }
 
 // headersFromRows 按后端契约拼提交值：值留空表示沿用已存的那个，所以从服务端读回
 // 来的行即使没改也要原样带上；删掉的行不出现在结果里，后端据此删除。没配过的新行
-// 留空则没有意义，直接丢弃。
+// 留空则没有意义，直接丢弃。HTTP 头名大小写不敏感，同名只留最后填的那行。
 function headersFromRows(): Record<string, string> {
-  const result: Record<string, string> = {};
+  const byLower = new Map<string, [string, string]>();
   for (const row of headerRows.value) {
     const name = row.name.trim();
     if (!name) continue;
     if (!row.configured && row.value.trim() === "") continue;
-    result[name] = row.value;
+    byLower.set(name.toLowerCase(), [name, row.value]);
   }
-  return result;
+  return Object.fromEntries(byLower.values());
 }
 
 function formToPayload(): LLMConfig {
