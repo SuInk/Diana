@@ -66,8 +66,6 @@ const (
 	MemoryStatusForgotten  MemoryStatus = "forgotten"
 )
 
-// MemoryCandidate is proposed by the LLM memory gate. Storage still validates
-// scope, confidence, versioning, and provenance before it becomes canonical.
 // MemoryAudience 说明一条要求管谁。空值是默认：只管提要求的人。
 type MemoryAudience string
 
@@ -90,6 +88,8 @@ func IsGroupRule(item StructuredMemoryItem) bool {
 		item.Visibility == MemoryVisibilitySession
 }
 
+// MemoryCandidate is proposed by the LLM memory gate. Storage still validates
+// scope, confidence, versioning, and provenance before it becomes canonical.
 type MemoryCandidate struct {
 	Action        MemoryCandidateAction `json:"action"`
 	Key           string                `json:"key"`

@@ -476,6 +476,10 @@ UPDATE memory_items SET status = 'forgotten', updated_at = ? WHERE id = ? AND st
 		}
 
 		expiresAt := memoryCandidateExpiry(candidate, sourceTime)
+		// 群约定换个说法再提一次会生成新版本：别人补一句「今天也别说」不该把原来的期限缩短。
+		if found && candidate.AppliesTo == assistant.MemoryAudienceGroup && active.ExpiresAt.After(expiresAt) {
+			expiresAt = active.ExpiresAt
+		}
 		if found && equivalentMemoryContent(active.Content, candidate.Content) {
 			if _, err := tx.ExecContext(ctx, `
 UPDATE memory_items

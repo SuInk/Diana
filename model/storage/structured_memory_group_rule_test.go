@@ -144,6 +144,14 @@ func TestGroupRuleExpires(t *testing.T) {
 	if got := listGroupRules(t, store, again)["instruction.group.no.cao"].ExpiresAt; !near(got, again.Add(30*day)) {
 		t.Fatalf("asking again must extend the deadline: %v", got)
 	}
+	// 换个说法补一句「今天也别说」会生成新版本，但不能把原来的期限缩短。
+	writeGroupRuleCandidate(t, store, assistant.EventKindGroup, "10002", assistant.MemoryCandidate{
+		Key: "instruction.group.no.cao", Content: "群友10002要求 Diana 今天在本群也别说「草」", AppliesTo: assistant.MemoryAudienceGroup, RetentionDays: 1,
+	}, again.Add(time.Hour), "m5")
+	restated := listGroupRules(t, store, again)["instruction.group.no.cao"]
+	if restated.Version < 2 || !near(restated.ExpiresAt, again.Add(30*day)) {
+		t.Fatalf("a shorter restatement must not cut the deadline: version=%d expires_at=%v", restated.Version, restated.ExpiresAt)
+	}
 	later := listGroupRules(t, store, start.Add(35*day))
 	if _, ok := later["instruction.group.no.haha"]; ok {
 		t.Fatalf("expired rule is still returned: %#v", later)
