@@ -255,7 +255,7 @@ func TestRepositoryIssueRecentScanReportsRenamedRepository(t *testing.T) {
 	}
 }
 
-// 草稿确认后仓库改了名：这次不能写，草稿改指向新名、换新确认码，等用户再确认一次才写到新名下。
+// 草稿确认后仓库改了名：旧名的 REST 请求会被 301 拒掉，审批要换成新名写进去，并在回复里说明。
 func TestRepositoryIssueDraftFollowsRenamedRepository(t *testing.T) {
 	var mu sync.Mutex
 	var paths []string
@@ -293,35 +293,17 @@ func TestRepositoryIssueDraftFollowsRenamedRepository(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	oldCode := draftConfirmationCode(draft)
-	first := tool.executeDraft(context.Background(), draft, map[string]any{}, "approve")
-	if first.OK || first.FailureCode != "repository_renamed" || !strings.Contains(first.Message, "acme/demo-next") {
-		t.Fatalf("改名后第一次应停下来要求重新确认：%#v", first)
-	}
-	for _, path := range paths {
-		if strings.HasPrefix(path, "POST /repos/") {
-			t.Fatalf("未重新确认前不该写入：%v", paths)
-		}
-	}
-	pending, ok, err := plugin.findDraft(context.Background(), "private:owner", draft.ID)
-	if err != nil || !ok || pending.Repository != "acme/demo-next" {
-		t.Fatalf("草稿应保持待审批并改指向新名：%#v ok=%v err=%v", pending, ok, err)
-	}
-	newCode := draftConfirmationCode(pending)
-	if newCode == oldCode || !strings.Contains(first.Message, newCode) {
-		t.Fatalf("应换新确认码并在提示里给出：old=%s new=%s msg=%s", oldCode, newCode, first.Message)
-	}
-	if repositoryIssueRequestConfirms(oldCode, pending) {
-		t.Fatal("旧确认码不该再能放行")
-	}
-
-	second := tool.executeDraft(context.Background(), pending, map[string]any{}, "approve")
-	if !second.OK || second.Repository != "acme/demo-next" {
-		t.Fatalf("重新确认后应写到新名下：%#v paths=%v", second, paths)
+	result := tool.executeDraft(context.Background(), draft, map[string]any{}, "approve")
+	if !result.OK || result.Repository != "acme/demo-next" || !strings.Contains(result.Message, "已改名为 acme/demo-next") {
+		t.Fatalf("改名后应按新名写入并说明：%#v paths=%v", result, paths)
 	}
 	for _, path := range paths {
 		if strings.Contains(path, "/repos/acme/demo/") {
 			t.Fatalf("不该再用旧名请求 REST：%v", paths)
 		}
+	}
+	saved, ok, err := plugin.findResolvedDraft(context.Background(), "private:owner", draft.ID)
+	if err != nil || !ok || saved.Repository != "acme/demo-next" {
+		t.Fatalf("草稿记录应更新成新名：%#v ok=%v err=%v", saved, ok, err)
 	}
 }
