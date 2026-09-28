@@ -183,9 +183,11 @@ func (r *Runtime) promptContextHistory(event MessageEvent, cfg BotConfig) []Mess
 }
 
 // historyWindowLowWatermarkPercent 是重新锚定时窗口占预算的比例。窗口从这里开始
-// 逐轮长到预算上限，再一次性回落，中间这段时间前缀逐字节不变。取 70%：回落
-// 一次丢掉三成最旧的历史，对话连贯性几乎不受影响，而重锚之间能隔上百条消息。
-const historyWindowLowWatermarkPercent int64 = 70
+// 逐轮长到预算上限，再一次性回落，中间这段时间前缀逐字节不变。取 75%：留下的
+// 历史平均约占预算的 87%、最少约 75%，和预裁剪那边成段丢历史的保留量对齐；
+// 近期历史预算 20000 的活跃群里，重锚之间仍隔着八九十条消息。以前取 70%，最少
+// 只留七成。
+const historyWindowLowWatermarkPercent int64 = 75
 
 // contextSummaryMinIntervalPercent 是两次上下文压缩之间至少要攒下的新消息，按
 // RecentContextLimit 的百分比算。

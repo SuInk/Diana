@@ -2,6 +2,7 @@ package assistant
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"sync"
 
@@ -24,6 +25,15 @@ import (
 // 再把 Agent 较早的大段工具结果截成开头加结尾。一次裁到限额的 85%，而不是刚好
 // 压线：留出来的余量够后面两三步工具结果用，这几步既不用再裁，前缀也不动。
 //
+// 历史按段丢，不是刚好丢够就停。每次回复都从完整历史重新裁，只丢刚好够的话，
+// 群里每来一条消息裁剪点就后移一点，省略提示后面的第一条历史跟着变，整段历史的
+// 前缀缓存全部失效——线上一个活跃群 5 分钟里有 38 次，每次多出约 7.9 万 token
+// 没命中缓存。现在从请求里第一条历史起按累计 token 画等距格子，裁剪点只落在格子
+// 线上：要丢的量在同一格里涨，裁剪点就不动，跨过格子线才整段后移。格子只由请求
+// 本身决定，不记状态，同样的请求永远裁出同样的窗口。代价是没有滞回：尾部的记忆
+// 和当前消息每轮长短不一，要丢的量正好压在格子线附近时，开头会在相邻两格之间
+// 来回跳几轮；这两个前缀都刚发过，供应商缓存里一般都还在。
+//
 // 不碰的：系统提示、当前触发消息及之后的同轮补充、最近三轮历史（RecentHistory）、
 // 记忆和摘要层、带工具调用的消息，以及 Agent 最新的两条大工具结果。
 // 被丢掉的历史换成一句固定的省略提示；已有的较早摘要、会话便签照常在请求里。
@@ -36,6 +46,13 @@ const (
 	budgetPretrimClipMinTokens int64 = 1024
 	// budgetPretrimClipRunes 是较早工具结果截短后保留的字数（开头加结尾）。
 	budgetPretrimClipRunes = 1200
+	// budgetPretrimChunkDivisor 定格子的起始宽度：输入预算的 1/8。格子越宽，裁剪点
+	// 挪得越少，但每次多丢的历史也越多。
+	budgetPretrimChunkDivisor int64 = 8
+	// budgetPretrimChunkMaxShare 限制格子不超过「只丢刚好够时能留下的历史」的
+	// 1/5，超了就对半缩。多丢的最多一格，所以留下的历史不少于原来的八成、平均
+	// 九成以上；历史本来就不多的请求格子自动变窄，不会一刀丢掉一半。
+	budgetPretrimChunkMaxShare int64 = 5
 )
 
 // budgetPretrimMarker 替换被丢掉的那段历史。内容固定不带条数：同一轮里第二次
@@ -191,14 +208,28 @@ func pretrimBudgetText(req llm.GenerateRequest, budget int64, run *inputBudgetRu
 		return req, stats
 	}
 	need := plan.TextTokens - plan.TextLimit*budgetPretrimTargetPercent/100
-	for ; next < len(history) && need > 0; next++ {
-		unit := history[next]
-		for _, index := range unit.indexes {
-			drop[index] = true
+	if next < len(history) && need > 0 {
+		// 省略提示第一次丢历史时才插进去，它自己占的那点也算进要丢的量。
+		if !slices.ContainsFunc(req.Messages, func(message llm.Message) bool { return message.Content == budgetPretrimMarker }) {
+			need += llm.PlanInputBudget(llm.GenerateRequest{Messages: []llm.Message{{Role: llm.RoleUser, Content: budgetPretrimMarker}}}, 0).TextTokens
 		}
-		run.markDropped(unit.key)
-		stats.Dropped += len(unit.indexes)
-		need -= unit.cost
+		// 丢到格子线上：要丢的量向上取整到格子宽度，再往后取到整轮的边界。
+		total := int64(0)
+		for _, unit := range history[next:] {
+			total += unit.cost
+		}
+		chunk := budgetPretrimChunk(budget, total-need)
+		target := (need + chunk - 1) / chunk * chunk
+		for dropped := int64(0); next < len(history) && dropped < target; next++ {
+			unit := history[next]
+			for _, index := range unit.indexes {
+				drop[index] = true
+			}
+			run.markDropped(unit.key)
+			stats.Dropped += len(unit.indexes)
+			dropped += unit.cost
+			need -= unit.cost
+		}
 	}
 	for _, unit := range observations {
 		if need <= 0 {
@@ -219,6 +250,17 @@ func pretrimBudgetText(req llm.GenerateRequest, budget int64, run *inputBudgetRu
 		return req, stats
 	}
 	return applyBudgetPretrim(req, drop, clip), stats
+}
+
+// budgetPretrimChunk 返回成段丢历史的格子宽度。kept 是只丢刚好够时能留下的历史。
+// 宽度从输入预算的 1/8 起对半缩，只取这一串固定的值：kept 随新消息小幅波动时
+// 宽度基本不变；真缩了一档，窄格子的格子线也包含宽格子的，裁剪点多半不用挪。
+func budgetPretrimChunk(budget, kept int64) int64 {
+	chunk := budget / budgetPretrimChunkDivisor
+	for chunk > 1 && chunk*budgetPretrimChunkMaxShare > kept {
+		chunk /= 2
+	}
+	return max(chunk, 1)
 }
 
 // budgetPretrimCurrentIndex 找当前触发消息：调用方标了 MessagePriorityCurrent 的
