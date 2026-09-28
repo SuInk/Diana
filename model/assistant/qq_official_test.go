@@ -4,8 +4,10 @@
 package assistant
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
+	"time"
 )
 
 func TestQQOfficialEventFromDispatchGroupMessage(t *testing.T) {
@@ -153,6 +155,93 @@ func TestQQOfficialEventFromDispatchFullGroupMessageSelfEcho(t *testing.T) {
 	}
 	if event.ToMe {
 		t.Fatal("the bot does not mention itself")
+	}
+}
+
+// 回推的 author.id 对不上 selfID 时，按发送记录认出自己的发言。
+func TestQQOfficialDispatchRecognizesSelfEchoBySentLedger(t *testing.T) {
+	cases := []struct {
+		name string
+		data string
+	}{
+		{"same message id", `{"id":"sent-1","content":"别的正文","group_openid":"grp-1","author":{"member_openid":"bot-member","bot":true}}`},
+		{"same text", `{"id":"echo-9","content":"刷视频呢","group_openid":"grp-1","author":{"member_openid":"bot-member","bot":true}}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := &QQOfficialChannel{}
+			c.setStatus(true, "bot-1", "")
+			c.sent.record("grp-1", "sent-1", "刷视频呢", time.Now())
+			var got []MessageEvent
+			c.handler = func(_ context.Context, event MessageEvent) error {
+				got = append(got, event)
+				return nil
+			}
+			c.handleDispatch(context.Background(), qqGatewayPayload{T: "GROUP_MESSAGE_CREATE", Data: json.RawMessage(tc.data)})
+			if len(got) != 1 || got[0].UserID != "bot-1" {
+				t.Fatalf("events = %+v, want one self event with user bot-1", got)
+			}
+		})
+	}
+}
+
+// 别的机器人、或者真人复读同样的正文，都不能被当成自己。
+func TestQQOfficialDispatchKeepsOtherSendersDespiteSentLedger(t *testing.T) {
+	cases := []struct {
+		name string
+		data string
+	}{
+		{"human repeats text", `{"id":"m-1","content":"刷视频呢","group_openid":"grp-1","author":{"member_openid":"member-1"}}`},
+		{"other group", `{"id":"m-2","content":"刷视频呢","group_openid":"grp-2","author":{"member_openid":"bot-member","bot":true}}`},
+		{"other bot text", `{"id":"m-3","content":"别的话","group_openid":"grp-1","author":{"member_openid":"other-bot","bot":true}}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := &QQOfficialChannel{}
+			c.setStatus(true, "bot-1", "")
+			c.sent.record("grp-1", "sent-1", "刷视频呢", time.Now())
+			var got []MessageEvent
+			c.handler = func(_ context.Context, event MessageEvent) error {
+				got = append(got, event)
+				return nil
+			}
+			c.handleDispatch(context.Background(), qqGatewayPayload{T: "GROUP_MESSAGE_CREATE", Data: json.RawMessage(tc.data)})
+			if len(got) != 1 || got[0].UserID == "bot-1" {
+				t.Fatalf("events = %+v, want the sender kept as-is", got)
+			}
+		})
+	}
+}
+
+func TestQQSentLedgerExpiresAndConsumes(t *testing.T) {
+	var l qqSentLedger
+	now := time.Now()
+	l.record("grp-1", "sent-1", "你好", now)
+	if !l.matches("grp-1", "", "你好", now.Add(time.Second)) {
+		t.Fatal("fresh entry should match by text")
+	}
+	if l.matches("grp-1", "", "你好", now.Add(2*time.Second)) {
+		t.Fatal("a matched entry must not be claimed twice")
+	}
+	l.record("grp-1", "sent-2", "再见", now)
+	if l.matches("grp-1", "sent-2", "", now.Add(qqSentLedgerTTL+time.Second)) {
+		t.Fatal("expired entry must not match")
+	}
+}
+
+// 没带 is_you、只能靠 id 比对认出的 @，标记也要剥掉。
+func TestQQOfficialFullGroupMessageStripsMentionMatchedByOpenID(t *testing.T) {
+	data := json.RawMessage(`{
+	  "id":"msg-8","content":"<@bot-1> 在吗","group_openid":"grp-1",
+	  "author":{"member_openid":"member-1"},
+	  "mentions":[{"openid":"bot-1"}]
+	}`)
+	event, ok := qqOfficialEventFromDispatch("GROUP_MESSAGE_CREATE", data, "bot-1")
+	if !ok || !event.ToMe {
+		t.Fatalf("event = %+v, want a mention addressed to the bot", event)
+	}
+	if event.RawMessage != "在吗" {
+		t.Fatalf("text = %q, want the mention token stripped", event.RawMessage)
 	}
 }
 

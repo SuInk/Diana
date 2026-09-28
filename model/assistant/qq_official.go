@@ -63,6 +63,9 @@ type QQOfficialChannel struct {
 	conn      *websocket.Conn
 	sessionID string
 	lastSeq   int64
+
+	// sent 记着最近发出的群消息，用来认出全量模式下平台回推的自发消息。
+	sent qqSentLedger
 }
 
 // NewQQOfficialChannel 创建 QQ 官方机器人通道。
@@ -337,6 +340,17 @@ func (c *QQOfficialChannel) handleDispatch(ctx context.Context, payload qqGatewa
 	if !ok {
 		return
 	}
+	var source qqOfficialMessage
+	_ = json.Unmarshal(payload.Data, &source)
+	if payload.T == "GROUP_MESSAGE_CREATE" && source.Author.Bot && event.UserID != event.SelfID &&
+		c.sent.matches(event.GroupID, event.MessageID, event.RawMessage, time.Now()) {
+		// 回推的 author.id 对不上 READY 给的 selfID 时，靠发送记录兜底认出自己。
+		// selfID 还没拿到就没法交给运行时按自发消息处理，只能直接丢掉。
+		if event.SelfID == "" {
+			return
+		}
+		event.UserID = event.SelfID
+	}
 	c.mu.Lock()
 	if event.GuildID != "" {
 		if c.guildChannels == nil {
@@ -344,8 +358,7 @@ func (c *QQOfficialChannel) handleDispatch(ctx context.Context, payload qqGatewa
 		}
 		c.guildChannels[event.GroupID] = event.GuildID
 	}
-	var source qqOfficialMessage
-	if json.Unmarshal(payload.Data, &source) == nil && source.Author.Avatar != "" {
+	if source.Author.Avatar != "" {
 		if c.avatarURLs == nil {
 			c.avatarURLs = map[string]string{}
 		}
@@ -455,10 +468,91 @@ func (c *QQOfficialChannel) SendWithResult(ctx context.Context, msg OutgoingMess
 	if err := json.Unmarshal(raw, &envelope); err == nil && envelope.Code != 0 {
 		return nil, fmt.Errorf("qq: 发送被拒绝: %s (code %d)", envelope.Message, envelope.Code)
 	}
-	if id := strings.TrimSpace(envelope.ID); id != "" {
+	id := strings.TrimSpace(envelope.ID)
+	if isGroup && !isGuild {
+		c.sent.record(target, id, text, time.Now())
+	}
+	if id != "" {
 		return map[string]any{"message_id": id}, nil
 	}
 	return nil, nil
+}
+
+// qqSentLedgerTTL 是发送记录的有效期；平台回推通常在一两秒内，留足余量即可。
+const qqSentLedgerTTL = 2 * time.Minute
+
+// qqSentLedgerCap 限制记录条数，防止刷屏时无限增长。
+const qqSentLedgerCap = 256
+
+// qqSentLedger 记录最近发出的群消息。
+//
+// 开启「获取群内全部消息」后，机器人自己的发言会以 GROUP_MESSAGE_CREATE 回推。
+// 只按 author.id == selfID 认自己的话，平台一旦只带 member_openid 就会把回声
+// 当成群友发言，接话策略可能让它接自己的话。消息 id 对得上最可靠；回推 id 与
+// 发送返回的 id 不同空间时，再退到同群、同正文、有效期内的匹配。调用方只在
+// author.bot 为真时才查，所以正文匹配不会误伤真人复读。
+type qqSentLedger struct {
+	mu      sync.Mutex
+	entries []qqSentEntry
+}
+
+type qqSentEntry struct {
+	group string
+	id    string
+	text  string
+	at    time.Time
+}
+
+func (l *qqSentLedger) record(group, id, text string, now time.Time) {
+	text = strings.TrimSpace(text)
+	if group == "" || (id == "" && text == "") {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.pruneLocked(now)
+	l.entries = append(l.entries, qqSentEntry{group: group, id: id, text: text, at: now})
+	if len(l.entries) > qqSentLedgerCap {
+		l.entries = l.entries[len(l.entries)-qqSentLedgerCap:]
+	}
+}
+
+// matches 判断一条入站群消息是不是自己刚发的；命中后移除该记录，避免同一条
+// 正文之后被重复认领。
+func (l *qqSentLedger) matches(group, id, text string, now time.Time) bool {
+	text = strings.TrimSpace(text)
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.pruneLocked(now)
+	hit := -1
+	for i, entry := range l.entries {
+		if entry.group != group {
+			continue
+		}
+		if id != "" && entry.id == id {
+			hit = i
+			break
+		}
+		if hit < 0 && text != "" && entry.text == text {
+			hit = i
+		}
+	}
+	if hit < 0 {
+		return false
+	}
+	l.entries = append(l.entries[:hit], l.entries[hit+1:]...)
+	return true
+}
+
+func (l *qqSentLedger) pruneLocked(now time.Time) {
+	keep := 0
+	for _, entry := range l.entries {
+		if now.Sub(entry.at) <= qqSentLedgerTTL {
+			l.entries[keep] = entry
+			keep++
+		}
+	}
+	l.entries = l.entries[:keep]
 }
 
 // CallAPI 透传开放平台的 REST 接口，action 形如 "GET /users/@me/guilds"。
@@ -620,17 +714,25 @@ type qqOfficialMention struct {
 	IsYou bool `json:"is_you"`
 }
 
-// botMentioned 判断这条全量群消息是否叫了当前机器人：优先认网关给的 is_you，
-// 拿不到时再按每个 mention 的 id 和 selfID 比对。
-func (m *qqOfficialMessage) botMentioned(selfID string) bool {
-	for _, mention := range m.Mentions {
-		if mention.IsYou {
+// pointsTo 判断这个 @ 是否指向当前机器人：优先认网关给的 is_you，拿不到时再按
+// 各个 id 字段和 selfID 比对。
+func (m qqOfficialMention) pointsTo(selfID string) bool {
+	if m.IsYou {
+		return true
+	}
+	for _, id := range []string{m.ID, m.OpenID, m.UserOpenID, m.MemberOpenID} {
+		if id != "" && id == selfID {
 			return true
 		}
-		for _, id := range []string{mention.ID, mention.OpenID, mention.UserOpenID, mention.MemberOpenID} {
-			if id != "" && id == selfID {
-				return true
-			}
+	}
+	return false
+}
+
+// botMentioned 判断这条全量群消息是否叫了当前机器人。
+func (m *qqOfficialMessage) botMentioned(selfID string) bool {
+	for _, mention := range m.Mentions {
+		if mention.pointsTo(selfID) {
+			return true
 		}
 	}
 	return false
@@ -642,7 +744,7 @@ func (m *qqOfficialMessage) botMentioned(selfID string) bool {
 // 进制带进模型上下文，所以按 mentions 里指向自己的条目再剥一次。
 func stripQQBotMentionTokens(text string, mentions []qqOfficialMention, selfID string) string {
 	for _, mention := range mentions {
-		if !mention.IsYou && mention.ID != selfID {
+		if !mention.pointsTo(selfID) {
 			continue
 		}
 		for _, id := range []string{mention.ID, mention.OpenID, mention.UserOpenID, mention.MemberOpenID, selfID} {
