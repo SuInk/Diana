@@ -190,7 +190,16 @@ func (h *BotHandler) eventOutboundImage(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "出站图片不存在或未保存来源"})
 		return
 	}
-	h.writeEventImage(c, assistant.MessageSegment{Type: "image", Data: map[string]string{"file": media.Source}})
+	data := map[string]string{"file": media.Source}
+	// 贴纸、本地图片发出去时记的是给协议端回源的分享地址，主机名是协议端视角的
+	// （比如 host.docker.internal），WebUI 所在进程自己往往解析不了。能认出是本机
+	// 分享的，就直接读背后的文件。
+	if resolver, ok := h.localMedia.(assistant.LocalMediaPathResolver); ok {
+		if path, found := resolver.ResolveSharedPath(media.Source); found {
+			data["cached_file"] = path
+		}
+	}
+	h.writeEventImage(c, assistant.MessageSegment{Type: "image", Data: data})
 }
 
 func (h *BotHandler) writeEventImage(c *gin.Context, segment assistant.MessageSegment) {

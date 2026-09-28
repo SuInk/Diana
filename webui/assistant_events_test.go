@@ -218,6 +218,14 @@ func TestAssistantEventOutboundImageEndpoint(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// 发给协议端的分享地址用的是协议端视角的主机名（生产上是 host.docker.internal），
+	// WebUI 进程自己解析不了，得认出本机分享、直接读文件。
+	mediaStore := assistant.NewLocalMediaStore("http://onebot-side.invalid:18080/media/resolver")
+	sharedURL, shared := mediaStore.Share(stickerPath, time.Hour)
+	if !shared {
+		t.Fatal("share sticker failed")
+	}
+
 	ctx := context.Background()
 	event := assistant.MessageEvent{
 		Platform: assistant.PlatformOneBotV11, Kind: assistant.EventKindGroup,
@@ -230,9 +238,10 @@ func TestAssistantEventOutboundImageEndpoint(t *testing.T) {
 	if err := store.RecordInboundEventAudit(ctx, assistant.EventRecord{
 		Kind: assistant.EventKindGroup, GroupID: "group-1", UserID: "user-1", MessageID: "sticker-request",
 		Decision: "replied", Handled: true,
-		Delivery: assistant.OutboundDelivery{Messages: 1, Images: 2, Media: []assistant.OutboundMedia{
+		Delivery: assistant.OutboundDelivery{Messages: 1, Images: 3, Media: []assistant.OutboundMedia{
 			{Kind: "image", Label: "表情包：无语", Source: stickerPath},
 			{Kind: "image", Label: "生成的图", Inline: true},
+			{Kind: "image", Label: "[动画表情]", Source: sharedURL},
 		}},
 	}); err != nil {
 		t.Fatal(err)
@@ -240,7 +249,7 @@ func TestAssistantEventOutboundImageEndpoint(t *testing.T) {
 
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
-	handler := &BotHandler{sqlite: store}
+	handler := &BotHandler{sqlite: store, localMedia: mediaStore}
 	router.GET("/api/assistant/events", handler.listEvents)
 	router.GET("/api/assistant/events/:id/outbound-images/:index", handler.eventOutboundImage)
 
@@ -253,17 +262,19 @@ func TestAssistantEventOutboundImageEndpoint(t *testing.T) {
 	if err := json.Unmarshal(listRecorder.Body.Bytes(), &response); err != nil {
 		t.Fatal(err)
 	}
-	if len(response.Events) != 1 || len(response.Events[0].Delivery.Media) != 2 || response.Events[0].Delivery.Media[0].Label != "表情包：无语" {
+	if len(response.Events) != 1 || len(response.Events[0].Delivery.Media) != 3 || response.Events[0].Delivery.Media[0].Label != "表情包：无语" {
 		t.Fatalf("events = %+v", response.Events)
 	}
 
-	imageRecorder := httptest.NewRecorder()
-	router.ServeHTTP(imageRecorder, httptest.NewRequest(http.MethodGet, "/api/assistant/events/"+eventID+"/outbound-images/1", nil))
 	want, _ := os.ReadFile(stickerPath)
-	if imageRecorder.Code != http.StatusOK || imageRecorder.Header().Get("Content-Type") != "image/png" || !bytes.Equal(imageRecorder.Body.Bytes(), want) {
-		t.Fatalf("image status=%d type=%q", imageRecorder.Code, imageRecorder.Header().Get("Content-Type"))
+	for _, index := range []string{"1", "3"} {
+		imageRecorder := httptest.NewRecorder()
+		router.ServeHTTP(imageRecorder, httptest.NewRequest(http.MethodGet, "/api/assistant/events/"+eventID+"/outbound-images/"+index, nil))
+		if imageRecorder.Code != http.StatusOK || imageRecorder.Header().Get("Content-Type") != "image/png" || !bytes.Equal(imageRecorder.Body.Bytes(), want) {
+			t.Fatalf("image %s status=%d type=%q", index, imageRecorder.Code, imageRecorder.Header().Get("Content-Type"))
+		}
 	}
-	for _, index := range []string{"2", "3"} {
+	for _, index := range []string{"2", "4"} {
 		recorder := httptest.NewRecorder()
 		router.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/assistant/events/"+eventID+"/outbound-images/"+index, nil))
 		if recorder.Code != http.StatusNotFound {
