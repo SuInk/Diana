@@ -696,7 +696,7 @@ func TestShrinkContextForRetryHalvesDownToTheFloor(t *testing.T) {
 	req := llm.GenerateRequest{}
 	seen := []int64{}
 	for {
-		next, ok := shrinkContextForRetry(req)
+		next, ok := shrinkContextForRetry(req, nil)
 		if !ok {
 			break
 		}
@@ -822,5 +822,20 @@ func TestTimeoutNoticeStillNamesTheProfile(t *testing.T) {
 		if !strings.Contains(notice, want) {
 			t.Fatalf("notice=%q must mention %q", notice, want)
 		}
+	}
+}
+
+// 报错里写明了真实窗口（智谱 glm-4v-flash 的 16384）就一次缩到位，不再从 128K 减半
+// 四次、每次都白吃一个 400。
+func TestShrinkContextForRetryJumpsToReportedWindow(t *testing.T) {
+	err := errors.New("400 Bad Request: Input validation error: `inputs` tokens + `max_new_tokens` must be <= 16384. Given: 20017 `inputs` tokens and 1024 `max_new_tokens`")
+	next, ok := shrinkContextForRetry(llm.GenerateRequest{MaxContextTokens: 128000}, err)
+	if !ok || next.MaxContextTokens != 16384 {
+		t.Fatalf("shrunk = %d, %t; want 16384", next.MaxContextTokens, ok)
+	}
+	// 已经按报错的窗口发过还超限（估算偏小），就退回减半。
+	again, ok := shrinkContextForRetry(next, err)
+	if !ok || again.MaxContextTokens != 8192 {
+		t.Fatalf("second shrink = %d, %t; want 8192", again.MaxContextTokens, ok)
 	}
 }

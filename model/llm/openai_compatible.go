@@ -98,6 +98,7 @@ func (c *openAICompatibleClient) Generate(ctx context.Context, req GenerateReque
 		c.rememberSuccessfulDowngrades(req, applied)
 	}
 	if err != nil {
+		rememberedContextLimits.learn(c.cfg, req.Model, err)
 		return nil, fmt.Errorf("llm: provider request failed: %w", err)
 	}
 	response.Text = VisibleAssistantText(response.Text)

@@ -36,6 +36,10 @@ func applyContextBudget(req GenerateRequest, cfg ProviderConfig) GenerateRequest
 	if req.MaxContextTokens > 0 && (limit <= 0 || req.MaxContextTokens < limit) {
 		limit = req.MaxContextTokens
 	}
+	// 之前从超限报错里学到过这个模型的真实窗口，就按它裁，不再每条先撞一次 400。
+	if learned, ok := rememberedContextLimits.get(cfg, req.Model); ok && (limit <= 0 || learned < limit) {
+		limit = learned
+	}
 	if limit <= 0 || len(req.Messages) == 0 {
 		return req
 	}

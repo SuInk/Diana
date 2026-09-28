@@ -115,6 +115,7 @@ func (c *geminiClient) Generate(ctx context.Context, req GenerateRequest) (resul
 		resp, err = c.client.Models.GenerateContent(ctx, req.Model, contents, config)
 	}
 	if err != nil {
+		rememberedContextLimits.learn(c.cfg, req.Model, err)
 		return nil, fmt.Errorf("llm: provider request failed: %w", err)
 	}
 	if resp == nil {
