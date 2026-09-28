@@ -346,11 +346,6 @@
             <li v-for="line in contextWindowBindings" :key="line">{{ line }}</li>
           </ul>
         </div>
-        <div class="field wide">
-          <label for="llm-max-output">最大输出 Token</label>
-          <input id="llm-max-output" v-model="form.max_output_tokens" class="input" inputmode="numeric" :placeholder="maxOutputPlaceholder" />
-          <span class="hint">{{ maxOutputHint }}</span>
-        </div>
         <div v-if="form.provider === 'openai_compatible'" class="field wide">
           <label for="llm-header-name-0">自定义请求头（可选）</label>
           <div class="target-list" style="margin-top: 0">
@@ -475,7 +470,6 @@ interface LLMFormState {
   user_agent: string;
   description: string;
   context_window_tokens: string;
-  max_output_tokens: string;
 }
 
 // 和后端 llm.DefaultContextWindowTokens 一致：清单里查不到窗口时先填这个。
@@ -493,7 +487,6 @@ const emptyForm: LLMFormState = {
   user_agent: "",
   description: "",
   context_window_tokens: String(defaultContextWindowTokens),
-  max_output_tokens: "",
 };
 
 const profileSet = ref<LLMConfig | null>(null);
@@ -792,7 +785,6 @@ function startEdit(profile: LLMConfig): void {
     context_window_tokens: String(
       profile.context_window_tokens || profile.catalog_context_window_tokens || defaultContextWindowTokens
     ),
-    max_output_tokens: profile.max_output_tokens ? String(profile.max_output_tokens) : "",
   };
   // 凭据方式跟着这份配置走：绑了提供商就停在「授权登录」，否则回到 API Key。
   credentialMode.value = profile.oauth_provider ? "oauth" : "api_key";
@@ -816,55 +808,12 @@ function optionalTokenInput(raw: string): number {
 
 // 窗口必须手填：留空时按 128,000 兜底，和模型真实窗口对不上，历史预算、压缩时机
 // 全跟着错。清单里的数只作参考，打开编辑器时替人先填上，保存前能看到。
-//
-// Temperature 和最大输出的灰字只写「留空会怎样」，不写建议值：灰色的数字看起来
-// 和已经生效的设置几乎一样，有人据此以为系统默认温度就是 0.7。
 const effectiveContextHint = computed(() => {
   const profile = editingProfile.value;
   const reference = profile?.catalog_context_window_tokens
     ? `模型清单里 ${profile.model} 写的是 ${profile.catalog_context_window_tokens.toLocaleString("en-US")}。`
     : "";
   return `按模型真实的上下文窗口填，历史预算和压缩时机都按它算。${reference}`;
-});
-
-// 最大输出留空按模型上限发（最多 65,536），免得长文件写进工具参数时被网关的缺省值
-// 截断。灰字只写留空时实际发多少；下面的说明写这个数从哪来。显示的是已保存的配置。
-const maxOutputCeiling = "65,536";
-
-const maxOutputPlaceholder = computed(() => {
-  const profile = editingProfile.value;
-  const limit = profile?.effective_max_output_tokens;
-  switch (profile?.max_output_tokens_source) {
-    case "builtin":
-    case "default":
-      return limit ? `默认 ${limit.toLocaleString("en-US")}` : "默认按模型上限";
-    case "provider":
-      return "默认不发送";
-    default:
-      return "默认按模型上限";
-  }
-});
-
-const maxOutputHint = computed(() => {
-  const profile = editingProfile.value;
-  const base = `留空按模型上限发送，最多 ${maxOutputCeiling}；要更长或想压低就填一个数。`;
-  if (!profile) {
-    return base;
-  }
-  const limit = (profile.effective_max_output_tokens ?? 0).toLocaleString("en-US");
-  const model = profile.model;
-  switch (profile.max_output_tokens_source) {
-    case "user":
-      return `${base}当前按填写的 ${limit} 发送。`;
-    case "builtin":
-      return `${base}${model} 留空时按 ${limit} 发送（内置的主流模型上限表）。`;
-    case "default":
-      return `${base}内置表里没有 ${model}，留空时按 ${limit} 发送；模型不接受时会自动退回。`;
-    case "provider":
-      return "留空时不发送这个参数：Responses 接口由服务端按模型上限处理。要压低就填一个数。";
-    default:
-      return base;
-  }
 });
 
 // 这套配置被哪些用途在用：改窗口会一起影响它们，所以列出来。
@@ -953,13 +902,11 @@ function formToPayload(): LLMConfig {
   };
   // 窗口保存前已校验必填，这里照常提交。
   //
-  // 最大输出必须每次都提交：留空表示改回按模型上限，省略掉的话后端会当成「这个
-  // 客户端没提交」而保留旧值，于是填过的数字永远删不掉。
-  //
-  // temperature、max_context_tokens 界面上没有入口，所以一律不提交——nil 在后端
-  // 表示「没碰过」，通过 API 设过值的部署不会被这个表单悄悄清掉。
+  // temperature、max_context_tokens、max_output_tokens 界面上没有入口，所以一律不
+  // 提交——nil 在后端表示「没碰过」，通过 API 设过值的部署不会被这个表单悄悄清掉。
+  // 最大输出和 opencode 一样按模型自动定：内置上限表封顶 65,536，Responses 接口不发，
+  // 代发的值被拒会自动退回；手填一个数反而会把退避关掉。
   payload.context_window_tokens = optionalTokenInput(form.value.context_window_tokens);
-  payload.max_output_tokens = optionalTokenInput(form.value.max_output_tokens);
   return payload;
 }
 
