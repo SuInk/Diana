@@ -238,7 +238,7 @@ func parsePokeReaction(raw string) (pokeReaction, error) {
 
 // pokeRecentChat 把最近几条聊天拼成文字，让回应接得上正在聊的事。
 func (r *Runtime) pokeRecentChat(event MessageEvent) string {
-	history := r.contextHistory(event)
+	history := sessionOnlyHistory(r.contextHistory(event))
 	if len(history) > pokeReactionHistory {
 		history = history[len(history)-pokeReactionHistory:]
 	}

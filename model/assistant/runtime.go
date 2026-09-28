@@ -3213,7 +3213,7 @@ func (r *Runtime) proactiveReplyPayload(event MessageEvent, text string) proacti
 		payload.QuotedImages = imageSegmentCount(event.Quoted.Segments)
 		payload.QuotedIsBot = payload.Addressing.ReplyTarget == "self"
 	}
-	history := r.contextHistory(event)
+	history := sessionOnlyHistory(r.contextHistory(event))
 	for i := len(history) - 1; i >= 0; i-- {
 		item := history[i]
 		if item.MessageID == event.MessageID {
@@ -5135,7 +5135,7 @@ func (r *Runtime) evaluateReplyRules(ctx context.Context, event MessageEvent, te
 	}
 	for i := len(history) - 1; i >= 0 && len(payload.RecentMessages) < 8; i-- {
 		item := history[i]
-		if item.MessageID == event.MessageID {
+		if item.MessageID == event.MessageID || item.crossGroupContext {
 			continue
 		}
 		text := strings.TrimSpace(historyPlainText(item))
@@ -5409,7 +5409,7 @@ func (r *Runtime) visualIntentPayload(event MessageEvent, text string) visualInt
 		payload.QuotedText = quotedPlainText(event.Quoted)
 		payload.QuotedImages = imageSegmentCount(event.Quoted.Segments)
 	}
-	history := r.contextHistory(event)
+	history := sessionOnlyHistory(r.contextHistory(event))
 	for i := len(history) - 1; i >= 0; i-- {
 		item := history[i]
 		if item.MessageID == event.MessageID {

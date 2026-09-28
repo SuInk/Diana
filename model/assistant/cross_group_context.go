@@ -317,6 +317,22 @@ func (r *Runtime) crossGroupCurrentMembers(event MessageEvent, candidatesByAutho
 	return allowed
 }
 
+// sessionOnlyHistory 去掉并进来的跨群参考，只留本会话自己的消息。
+//
+// 跨群参考是给回复正文衔接话题用的，回复提示词里标着「[跨群历史 …]」。判断类的
+// 调用——是不是在跟机器人说话、命中哪条回复规则、要不要识图、是否空转——渲染历史时
+// 不带这个标记，别的群的一句话会被当成本群刚说过的：线上「我又忘了」被接成另一个群
+// 里「我又忘了滚木啥意思了」，就是接话评分和回复都把那句当成了本群上下文。
+func sessionOnlyHistory(history []MessageEvent) []MessageEvent {
+	out := make([]MessageEvent, 0, len(history))
+	for _, item := range history {
+		if !item.crossGroupContext {
+			out = append(out, item)
+		}
+	}
+	return out
+}
+
 func mergeCrossGroupContextHistory(current, crossGroup []MessageEvent) []MessageEvent {
 	if len(crossGroup) == 0 {
 		return current

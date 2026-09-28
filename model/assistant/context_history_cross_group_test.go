@@ -5,6 +5,7 @@ package assistant
 
 import (
 	"context"
+	"strings"
 	"testing"
 )
 
@@ -74,5 +75,58 @@ func TestPromptHistoryPreservesCachedCrossGroupIdentityWithoutSearching(t *testi
 	cfg.CrossGroupMemoryEnabled = boolPointer(false)
 	if history := runtime.promptContextHistory(event, cfg); len(history) != 0 {
 		t.Fatal("disabled cross-group memory retained cached reference")
+	}
+}
+
+// 线上那次：群里刚聊完 issue，主人说「我又忘了」，跨群检索捞到他在另一个群问的
+// 「我又忘了滚木啥意思了」。接话评分的对话稿不标来源，这句被当成本群 38 分钟前说的。
+// 判断类的调用只看本会话；跨群参考仍留给回复正文，那里带「[跨群历史]」标记。
+func TestJudgementPayloadsExcludeCrossGroupReferences(t *testing.T) {
+	cfg := BotConfig{BotAccount: "10001", CrossGroupMemoryEnabled: boolPointer(true)}
+	runtime := NewRuntime(cfg, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	text := "我又忘了"
+	event := MessageEvent{
+		Kind: EventKindGroup, GroupID: "123", UserID: "20001", SenderName: "Winter", MessageID: "m3", Time: 300,
+		RawMessage: text, Segments: []MessageSegment{{Type: "text", Data: map[string]string{"text": text}}},
+	}
+	event.replyHistoryLoaded = true
+	event.replyHistory = []MessageEvent{
+		{Kind: EventKindGroup, GroupID: "456", UserID: "20001", SenderName: "Winter", RawMessage: "我又忘了滚木啥意思了", Time: 100, crossGroupContext: true},
+		{Kind: EventKindGroup, GroupID: "123", UserID: "10001", SenderName: "Diana", MessageID: "m2", RawMessage: "草稿还在，等你看看后台", Time: 290},
+	}
+	leaked := func(texts ...string) bool {
+		for _, value := range texts {
+			if strings.Contains(value, "滚木") {
+				return true
+			}
+		}
+		return false
+	}
+
+	proactive := runtime.proactiveReplyPayload(event, text)
+	var proactiveTexts []string
+	for _, item := range proactive.RecentMessages {
+		proactiveTexts = append(proactiveTexts, item.Text)
+	}
+	if leaked(proactiveTexts...) || leaked(proactiveReplyTranscript(proactive)) || len(proactive.RecentMessages) != 1 {
+		t.Fatalf("接话评分混入了跨群消息：%+v", proactive.RecentMessages)
+	}
+	var visualTexts []string
+	for _, item := range runtime.visualIntentPayload(event, text).RecentMessages {
+		visualTexts = append(visualTexts, item.Text)
+	}
+	if leaked(visualTexts...) {
+		t.Fatalf("识图意图混入了跨群消息：%v", visualTexts)
+	}
+	evidence := runtime.collectBotReplyLoopEvidence(event, sessionOnlyHistory(runtime.contextHistory(event)))
+	if leaked(evidence.RecentSameSenderMessages...) {
+		t.Fatalf("空转证据把别的群的发言算成了同一发送者的近期消息：%v", evidence.RecentSameSenderMessages)
+	}
+	if leaked(runtime.pokeRecentChat(event)) {
+		t.Fatal("戳一戳的最近聊天混入了跨群消息")
+	}
+	// 回复正文那一路照旧拿得到跨群参考。
+	if history := runtime.contextHistory(event); len(history) != 2 || !history[0].crossGroupContext {
+		t.Fatalf("回复历史丢了跨群参考：%+v", history)
 	}
 }

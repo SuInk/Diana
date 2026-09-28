@@ -634,7 +634,7 @@ func (r *Runtime) prepareReplyAudit(ctx context.Context, event MessageEvent, inp
 	ctx = withLLMUsagePurpose(ctx, PurposeReplySendAudit)
 	evidence := botReplyLoopEvidence{}
 	if need.Loop {
-		evidence = r.collectBotReplyLoopEvidence(event, r.contextHistory(event))
+		evidence = r.collectBotReplyLoopEvidence(event, sessionOnlyHistory(r.contextHistory(event)))
 	}
 	prepared.decision, prepared.err = r.runReplyAudit(ctx, event, input, reply, cfg, evidence, need)
 	return prepared
