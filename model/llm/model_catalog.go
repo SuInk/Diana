@@ -26,8 +26,8 @@ import (
 //go:embed models_dev_snapshot.json.gz
 var modelsDevSnapshot []byte
 
-// ModelsDevCatalog 给模型列表补上 /models 接口常常不给的模态和 token 上限，也供请求
-// 时按模型查窗口。数据来自随版本打包的 models.dev 快照。
+// ModelsDevCatalog 给模型列表补上 /models 接口常常不给的模态和 token 上限。数据来自
+// 随版本打包的 models.dev 快照。
 type ModelsDevCatalog struct {
 	once      sync.Once
 	source    []byte
@@ -36,11 +36,8 @@ type ModelsDevCatalog struct {
 	apis map[string]string
 }
 
-// sharedModelsDevCatalog 是进程里唯一的一份：同步模型列表和请求时查窗口共用。
+// sharedModelsDevCatalog 是进程里唯一的一份，同步模型列表时用它补全模态和上限。
 var sharedModelsDevCatalog = &ModelsDevCatalog{source: modelsDevSnapshot}
-
-// modelLimitCatalog 是请求时查窗口用的目录，测试里换成本地数据。
-var modelLimitCatalog = sharedModelsDevCatalog
 
 // SharedModelsDevCatalog 返回进程共用的 models.dev 目录。
 func SharedModelsDevCatalog() *ModelsDevCatalog {
@@ -74,120 +71,6 @@ func (c *ModelsDevCatalog) data() (map[string]map[string]ModelInfo, map[string]s
 		}
 	})
 	return c.providers, c.apis
-}
-
-// ContextLimit 返回 models.dev 里这个模型的 limit.context。
-func (c *ModelsDevCatalog) ContextLimit(cfg ProviderConfig, model string) (int64, bool) {
-	return c.limit(cfg, model, func(info ModelInfo) int64 { return info.ContextWindowTokens })
-}
-
-// limit 按「服务商 + 模型 ID」查 models.dev 快照。
-//
-// 查找顺序从严到宽：认得出服务商时，先精确匹配（和 opencode 一样），再去掉命名空间和
-// 档位后缀，再认网关加的前缀；认不出服务商（自建中转）时，在所有服务商里按模型 ID
-// 精确找，各家数值不同就取出现最多的那个。
-func (c *ModelsDevCatalog) limit(cfg ProviderConfig, model string, pick func(ModelInfo) int64) (int64, bool) {
-	if c == nil {
-		return 0, false
-	}
-	model = strings.TrimSpace(model)
-	if model == "" {
-		return 0, false
-	}
-	catalog, apis := c.data()
-	if len(catalog) == 0 {
-		return 0, false
-	}
-	names := modelsDevLookupNames(model)
-	providers := modelsDevProviderIDs(cfg, apis)
-	if len(providers) == 0 {
-		return modelsDevMostCommonLimit(catalog, names, pick)
-	}
-	for _, name := range names {
-		for _, provider := range providers {
-			if info, ok := catalog[provider][name]; ok && pick(info) > 0 {
-				return pick(info), true
-			}
-		}
-	}
-	// 网关还会在前面加自己的标记（antigravity-gemini-3.8-flash、gcp.claude-x），
-	// 这时按「以分隔符 + 目录里的 ID 结尾」找，取最长的那个，免得短 ID 误配。
-	for _, name := range names {
-		for _, provider := range providers {
-			if limit, ok := modelsDevSuffixMatch(catalog[provider], name, pick); ok {
-				return limit, true
-			}
-		}
-	}
-	return 0, false
-}
-
-func modelsDevSuffixMatch(models map[string]ModelInfo, name string, pick func(ModelInfo) int64) (int64, bool) {
-	lower := strings.ToLower(name)
-	best, bestLen := int64(0), 0
-	for id, info := range models {
-		if pick(info) <= 0 || len(id) <= bestLen || len(id) >= len(lower) {
-			continue
-		}
-		cut := len(lower) - len(id)
-		if lower[cut:] != strings.ToLower(id) || !strings.ContainsRune("-._:", rune(lower[cut-1])) {
-			continue
-		}
-		best, bestLen = pick(info), len(id)
-	}
-	return best, bestLen > 0
-}
-
-// modelsDevMostCommonLimit 在所有服务商里按模型 ID 精确找。同一个模型在不同转售商
-// 那里登记的数常有出入，取出现次数最多的，平票取小的——宁可保守。
-func modelsDevMostCommonLimit(catalog map[string]map[string]ModelInfo, names []string, pick func(ModelInfo) int64) (int64, bool) {
-	for _, name := range names {
-		counts := map[int64]int{}
-		for _, models := range catalog {
-			if info, ok := models[name]; ok && pick(info) > 0 {
-				counts[pick(info)]++
-			}
-		}
-		best, bestCount := int64(0), 0
-		for value, count := range counts {
-			if count > bestCount || count == bestCount && value < best {
-				best, bestCount = value, count
-			}
-		}
-		if bestCount > 0 {
-			return best, true
-		}
-	}
-	return 0, false
-}
-
-// modelsDevEffortSuffixes 是网关挂在模型名后面的推理档位。models.dev 只收基础
-// 模型名，gemini-3.8-flash-low 要按 gemini-3.8-flash 查。
-var modelsDevEffortSuffixes = []string{"-minimal", "-low", "-medium", "-high", "-xhigh", "-thinking"}
-
-// modelsDevLookupNames 按先精确、后宽松的顺序给出查表用的名字：原名、去掉命名
-// 空间（models/gemini-x）、再去掉档位后缀。精确匹配永远优先，所以 models.dev 里
-// 本来就收了带后缀的条目时照用它的数。
-func modelsDevLookupNames(model string) []string {
-	names := []string{model}
-	add := func(name string) {
-		if name != "" && !slices.Contains(names, name) {
-			names = append(names, name)
-		}
-	}
-	bare := strings.TrimSpace(model)
-	if index := strings.LastIndex(bare, "/"); index >= 0 {
-		bare = bare[index+1:]
-	}
-	add(bare)
-	lower := strings.ToLower(bare)
-	for _, suffix := range modelsDevEffortSuffixes {
-		if strings.HasSuffix(lower, suffix) {
-			add(bare[:len(bare)-len(suffix)])
-			break
-		}
-	}
-	return names
 }
 
 // Enrich 给同步下来的模型列表补名称、模态和 token 上限；列表里已有的值不覆盖。

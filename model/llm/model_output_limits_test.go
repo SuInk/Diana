@@ -15,42 +15,6 @@ import (
 	"time"
 )
 
-// testModelsDevOutputLimits 是测试用的 models.dev 片段：测试不依赖随版本打包的快照
-// 内容，init 里就把目录换成这份固定数据。
-var testModelsDevOutputLimits = map[string]map[string]ModelInfo{
-	"anthropic": {
-		"claude-opus-4-6":            {ID: "claude-opus-4-6", MaxOutputTokens: 128000},
-		"claude-3-5-sonnet-20241022": {ID: "claude-3-5-sonnet-20241022", MaxOutputTokens: 8192},
-	},
-	"google": {
-		"gemini-2.5-flash": {ID: "gemini-2.5-flash", MaxOutputTokens: 65536, ContextWindowTokens: 1048576},
-		"gemini-2.0-flash": {ID: "gemini-2.0-flash", MaxOutputTokens: 8192},
-		// 专门用来验证前缀匹配取最长 ID：relay-gemini-2.5-flash 也以 -2.5-flash 结尾。
-		"2.5-flash": {ID: "2.5-flash", MaxOutputTokens: 1000, ContextWindowTokens: 4096},
-	},
-	"deepseek": {
-		"deepseek-chat": {ID: "deepseek-chat", MaxOutputTokens: 8192, ContextWindowTokens: 131072},
-	},
-	// 智谱在 models.dev 里是同一主机的两家：普通接口和编程套餐，靠路径区分。
-	"zhipuai": {
-		"glm-4.5v": {ID: "glm-4.5v", MaxOutputTokens: 16384, ContextWindowTokens: 64000},
-	},
-	"zhipuai-coding-plan": {
-		"glm-4.5v": {ID: "glm-4.5v", MaxOutputTokens: 8000, ContextWindowTokens: 32000},
-	},
-}
-
-var testModelsDevAPIs = map[string]string{
-	"zhipuai":             "https://open.bigmodel.cn/api/paas/v4",
-	"zhipuai-coding-plan": "https://open.bigmodel.cn/api/coding/paas/v4",
-}
-
-func init() {
-	catalog := &ModelsDevCatalog{providers: testModelsDevOutputLimits, apis: testModelsDevAPIs}
-	catalog.once.Do(func() {})
-	modelLimitCatalog = catalog
-}
-
 func TestResolveMaxOutputTokensOnlyWhenNeeded(t *testing.T) {
 	for _, item := range []struct {
 		name       string
@@ -205,44 +169,13 @@ func TestAnthropicImplicitMaxTokensRetriesWithReportedLimit(t *testing.T) {
 	}
 }
 
-// 没填窗口时按 models.dev 的 limit.context，按配置的 API 地址认服务商。
-func TestContextWindowFromModelsDev(t *testing.T) {
-	zhipu := ProviderConfig{Provider: ProviderOpenAICompatible, APIFormat: APIFormatChatCompletions, BaseURL: "https://open.bigmodel.cn/api/paas/v4", Model: "glm-4.5v"}
-	coding := zhipu
-	coding.BaseURL = "https://open.bigmodel.cn/api/coding/paas/v4/"
-	for _, item := range []struct {
-		name       string
-		cfg        ProviderConfig
-		want       int64
-		wantSource ContextWindowSource
-	}{
-		{"手填优先", ProviderConfig{Provider: ProviderGemini, Model: "gemini-2.5-flash", ContextWindowTokens: 200000}, 200000, ContextWindowSourceUser},
-		{"Gemini 按 google 查", ProviderConfig{Provider: ProviderGemini, Model: "gemini-2.5-flash-low"}, 1048576, ContextWindowSourceModelsDev},
-		{"按地址认出智谱", zhipu, 64000, ContextWindowSourceModelsDev},
-		{"同主机按路径认出编程套餐", coding, 32000, ContextWindowSourceModelsDev},
-		{"认不出的中转在所有服务商里找", ProviderConfig{Provider: ProviderOpenAICompatible, BaseURL: "https://relay.example.com/v1", Model: "deepseek-chat"}, 131072, ContextWindowSourceModelsDev},
-		{"查不到按兜底", ProviderConfig{Provider: ProviderOpenAICompatible, BaseURL: "https://open.bigmodel.cn/api/paas/v4", Model: "glm-4v-flash"}, DefaultContextWindowTokens, ContextWindowSourceFallback},
-		{"命名空间和档位后缀", ProviderConfig{Provider: ProviderGemini, Model: "models/gemini-2.5-flash-thinking"}, 1048576, ContextWindowSourceModelsDev},
-		{"网关在前面加的标记", ProviderConfig{Provider: ProviderGemini, Model: "antigravity-gemini-2.5-flash"}, 1048576, ContextWindowSourceModelsDev},
-		{"前缀取最长的 ID，不被短 ID 误配", ProviderConfig{Provider: ProviderGemini, Model: "relay-gemini-2.5-flash"}, 1048576, ContextWindowSourceModelsDev},
-		{"没有分隔符的长 ID 不算，退到短 ID", ProviderConfig{Provider: ProviderGemini, Model: "xgemini-2.5-flash"}, 4096, ContextWindowSourceModelsDev},
-	} {
-		t.Run(item.name, func(t *testing.T) {
-			got, source := item.cfg.ResolveContextWindowTokens()
-			if got != item.want || source != item.wantSource {
-				t.Fatalf("ResolveContextWindowTokens = %d, %q; want %d, %q", got, source, item.want, item.wantSource)
-			}
-		})
+// 窗口只认手填，没填按兜底常量，不从同步下来的模型清单推断。
+func TestContextWindowOnlyFromConfig(t *testing.T) {
+	listed := []ModelInfo{{ID: "gemini-2.5-flash", ContextWindowTokens: 1048576}}
+	if got, source := (ProviderConfig{Provider: ProviderGemini, Model: "gemini-2.5-flash", Models: listed, ContextWindowTokens: 200000}).ResolveContextWindowTokens(); got != 200000 || source != ContextWindowSourceUser {
+		t.Fatalf("user window = %d, %q", got, source)
 	}
-	// 同一套配置里换个模型，预算按这次实际用的模型算。
-	cfg := ProviderConfig{Provider: ProviderGemini, Model: "house-gemini"}
-	req := applyContextBudget(GenerateRequest{Model: "gemini-2.5-flash", Messages: []Message{{Role: RoleUser, Content: "hi"}}}, cfg)
-	if req.MaxContextTokens != 1048576 {
-		t.Fatalf("budget for the requested model = %d, want 1048576", req.MaxContextTokens)
-	}
-	// 手填的值恰好等于目录值也要保留，不能在落库时被当成派生值清掉。
-	kept := ProviderConfig{Provider: ProviderGemini, Model: "gemini-2.5-flash", ContextWindowTokens: 1048576}.WithoutRedundantContextLimits()
-	if kept.ContextWindowTokens != 1048576 {
-		t.Fatalf("user window stripped: %d", kept.ContextWindowTokens)
+	if got, source := (ProviderConfig{Provider: ProviderGemini, Model: "gemini-2.5-flash", Models: listed}).ResolveContextWindowTokens(); got != DefaultContextWindowTokens || source != ContextWindowSourceFallback {
+		t.Fatalf("unset window = %d, %q; want the fallback", got, source)
 	}
 }
