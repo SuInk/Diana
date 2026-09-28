@@ -35,7 +35,7 @@ func TestGroupAvoidRequestAppliesToWholeGroup(t *testing.T) {
 		t.Fatalf("avoid prompt for another member = %q", got)
 	}
 	last := memory.queries[len(memory.queries)-1]
-	if !last.CurrentSessionOnly || last.KeyPrefix != groupAvoidMemoryKeyPrefix {
+	if !last.CurrentSessionOnly || last.KeyPrefix != GroupAvoidMemoryKeyPrefix {
 		t.Fatalf("query = %#v", last)
 	}
 

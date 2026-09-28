@@ -20,10 +20,16 @@ import (
 // 所以记忆门控把这类要求记成 instruction.group.avoid.<词>，回复时单独查出来放在风格
 // 笔记后面，谁发言都带。只收「别说什么」：它只会让 Diana 少说，不会被一个人拿来给
 // 全群换腔调；要加口头禅、换语气的仍按普通 instruction 只对本人生效。
+//
+// 这类要求有时效：群里的梗和情绪会变，一句「别说草了」不该永远管下去。落库时最多
+// 留 GroupAvoidRetentionDays 天，说了「今天别说」这类更短的期限就按说的算；过期前
+// 有人再提一次，同一条的期限往后顺延。
 
 const (
-	// groupAvoidMemoryKeyPrefix 是落库后的 key 前缀（normalizeMemoryKey 把下划线也变成点）。
-	groupAvoidMemoryKeyPrefix = "instruction.group.avoid."
+	// GroupAvoidMemoryKeyPrefix 是落库后的 key 前缀（normalizeMemoryKey 把下划线也变成点）。
+	GroupAvoidMemoryKeyPrefix = "instruction.group.avoid."
+	// GroupAvoidRetentionDays 是这类要求最长的有效天数，存储层按它封顶。
+	GroupAvoidRetentionDays = 30
 	// groupAvoidMaxItems 限制一次带进回复的条数：这一段每轮都在，不能无限长。
 	groupAvoidMaxItems = 8
 	// groupAvoidItemMaxRunes 限制单条要求的长度。
@@ -45,7 +51,7 @@ func (r *Runtime) groupAvoidRequests(event MessageEvent) []StructuredMemoryItem 
 	defer cancel()
 	items, err := store.ListStructuredMemories(ctx, StructuredMemoryQuery{
 		Session: sessionKey(event), CurrentSessionOnly: true, Now: time.Now(),
-		Kinds: []MemoryKind{MemoryKindInstruction}, KeyPrefix: groupAvoidMemoryKeyPrefix,
+		Kinds: []MemoryKind{MemoryKindInstruction}, KeyPrefix: GroupAvoidMemoryKeyPrefix,
 		MaxCandidates: groupAvoidMaxItems,
 	})
 	if err != nil {
@@ -65,7 +71,7 @@ func (r *Runtime) groupAvoidRequests(event MessageEvent) []StructuredMemoryItem 
 }
 
 func isGroupAvoidMemory(item StructuredMemoryItem) bool {
-	return item.Kind == MemoryKindInstruction && strings.HasPrefix(item.Key, groupAvoidMemoryKeyPrefix)
+	return item.Kind == MemoryKindInstruction && strings.HasPrefix(item.Key, GroupAvoidMemoryKeyPrefix)
 }
 
 // groupAvoidPrompt 是回复尾部那段「这个群不想听你说的」，没有要求时返回空串。

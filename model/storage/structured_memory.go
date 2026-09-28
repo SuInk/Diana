@@ -921,6 +921,11 @@ func scanStructuredMemory(scanner memoryScanner) (assistant.StructuredMemoryItem
 
 func memoryCandidateExpiry(candidate assistant.MemoryCandidate, sourceTime time.Time) time.Time {
 	days := candidate.RetentionDays
+	// 群里「别再说」的要求对全群生效，不能永久有效：没给期限或期限太长都按上限算。
+	if candidate.Kind == assistant.MemoryKindInstruction && strings.HasPrefix(candidate.Key, assistant.GroupAvoidMemoryKeyPrefix) &&
+		(days <= 0 || days > assistant.GroupAvoidRetentionDays) {
+		days = assistant.GroupAvoidRetentionDays
+	}
 	if days == 0 {
 		switch {
 		case candidate.Kind == assistant.MemoryKindEpisode:
