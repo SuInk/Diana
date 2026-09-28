@@ -15,13 +15,6 @@ test("plugin settings use global requests while guarding stale UI responses", as
   assert.doesNotMatch(source, /共享插件设置/);
 });
 
-test("OpenAPI configuration lives in system settings", async () => {
-  const source = await readFile(new URL("./views/SettingsView.vue", import.meta.url), "utf8");
-  assert.match(source, /@click="saveOpenAPISettings"/);
-  assert.match(source, /PluginSettingField/);
-  assert.doesNotMatch(source, /限流等参数在「插件」页调整/);
-});
-
 test("subscription settings list every robot and only use the selected robot as a new-target default", async () => {
   for (const view of ["RepositoryWatchManager", "RSSWatchManager"]) {
     const source = await readFile(new URL(`./components/${view}.vue`, import.meta.url), "utf8");

@@ -23,7 +23,8 @@ import (
 const (
 	subscriptionPushRepositoryWatch = "repository_watch"
 	subscriptionPushRSSWatch        = "rss_watch"
-	subscriptionPushExternal        = "external_push"
+	// 对外 API 已下线，库里旧历史仍带这个标记，标签照旧渲染，免得老前缀缓存失效。
+	subscriptionPushExternal = "external_push"
 )
 
 type subscriptionPushContextKey struct{}

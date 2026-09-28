@@ -708,12 +708,6 @@ func main() {
 	ownerLoginHandler.Register(router)
 	botRuntime.SetPrivateMessageInterceptor(ownerLoginHandler.ConsumePrivateMessage)
 	webui.NewChannelCallbackHandler().Register(router)
-	// 对外开放接口：/api/openapi 下的密钥管理走上面的会话鉴权，
-	// /openapi/v1 下的推送接口由 Bearer 密钥自行鉴权，总开关是
-	// 「对外 API」内置插件（默认关闭）。
-	openAPIHandler := webui.NewOpenAPIHandler(webui.NewOpenAPIKeyManager(sqliteStore), botRuntime, plugins)
-	openAPIHandler.SetLogStore(sqliteStore)
-	openAPIHandler.Register(router)
 	// 浏览器控制扩展：/api/browser-control 下的管理接口走会话鉴权，
 	// /browser-control/v1/socket 由令牌加来源白名单自行鉴权。默认全关，
 	// 策略里没打开总开关、没列站点之前，工具那一侧连注册都不会发生。

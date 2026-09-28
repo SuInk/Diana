@@ -11,7 +11,7 @@ import (
 
 // 插件开关在 WebUI 上一律按机器人来，全局开关既看不到也改不了。它却还在库里留着一份值，
 // 排查时看到「enabled=false」会以为插件是关的，其实那个机器人的开关是开的。
-// 现在落库只存用户改得动的部分：全局开关只留给 OpenAPI，manifest 由代码声明不落库。
+// 现在落库只存用户改得动的部分：全局开关不再写，manifest 由代码声明不落库。
 func TestPersistedPluginStateDropsInvisibleGlobalSwitch(t *testing.T) {
 	m := NewDefaultPluginManager()
 	if _, err := m.SetEnabledForProfile(statusCommandPluginID, "qq", true); err != nil {
@@ -29,11 +29,8 @@ func TestPersistedPluginStateDropsInvisibleGlobalSwitch(t *testing.T) {
 		if _, ok := record["manifest"]; ok {
 			t.Fatalf("%s 落库时还带着 manifest", id)
 		}
-		if _, ok := record["enabled"]; ok && id != OpenAPIPluginID {
+		if _, ok := record["enabled"]; ok {
 			t.Fatalf("%s 落库时还带着看不见的全局开关", id)
-		}
-		if id == OpenAPIPluginID && record["enabled"] == nil {
-			t.Fatal("OpenAPI 是进程级服务，全局开关要保留")
 		}
 	}
 	if strings.Contains(string(data), `"manifest"`) {
@@ -41,11 +38,8 @@ func TestPersistedPluginStateDropsInvisibleGlobalSwitch(t *testing.T) {
 	}
 
 	// 全局开关也不能再被设置：漏传机器人时要报错，而不是悄悄写一份没人看得见的值。
-	if _, err := m.SetEnabled(statusCommandPluginID, true); err == nil {
+	if _, err := m.SetEnabledForProfile(statusCommandPluginID, "", true); err == nil {
 		t.Fatal("没指定机器人时不该允许改开关")
-	}
-	if _, err := m.SetEnabled(OpenAPIPluginID, true); err != nil {
-		t.Fatalf("OpenAPI 仍然要能全局开关：%v", err)
 	}
 }
 
@@ -68,5 +62,30 @@ func TestLegacyGlobalSwitchStillSeedsProfileSwitches(t *testing.T) {
 	}
 	if !record.ProfileEnabled["qq"] {
 		t.Fatal("迁移没有把开关落到机器人上")
+	}
+}
+
+// 已下线插件（如对外 API）的旧记录还会留在库里，恢复时要静默跳过，
+// 不能报错，也不能凭空登记出一个目录里没有的插件。
+func TestRestoreIgnoresRetiredPluginRecords(t *testing.T) {
+	const retiredID = "official.open-api"
+	enabled := true
+	m := NewDefaultPluginManager()
+	m.Restore(map[string]PersistedPluginState{
+		retiredID:             {Installed: true, Enabled: &enabled, Settings: map[string]any{"rate_limit_per_minute": 60}},
+		statusCommandPluginID: {Installed: true, ProfileEnabled: map[string]bool{"qq": true}, ProfileConfigMigrated: true},
+	})
+	if _, ok := m.Get(retiredID); ok {
+		t.Fatal("已下线的插件不该被恢复出来")
+	}
+	if _, ok := m.Snapshot()[retiredID]; ok {
+		t.Fatal("已下线的插件不该再写回库里")
+	}
+	if !m.EnabledWithOverrides(statusCommandPluginID, m.ProfileOverrides("qq")) {
+		t.Fatal("旧记录影响了其他插件的恢复")
+	}
+	m.MigrateProfileConfigurations([]BotConfig{{ID: "qq"}})
+	if _, ok := m.Get(retiredID); ok {
+		t.Fatal("迁移不该把已下线的插件带回来")
 	}
 }

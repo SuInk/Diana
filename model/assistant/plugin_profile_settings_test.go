@@ -110,7 +110,7 @@ func TestPluginMigrationPreservesIndependentSettingsAndSwitches(t *testing.T) {
 	if _, err := m.UpdateSettings(resolverPluginID, map[string]any{}); err != nil {
 		t.Fatal("shared writes failed after migration")
 	}
-	if _, err := m.SetEnabled(resolverPluginID, true); err == nil {
+	if _, err := m.SetEnabledForProfile(resolverPluginID, "", true); err == nil {
 		t.Fatal("global toggles allowed after migration")
 	}
 }

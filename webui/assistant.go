@@ -1092,9 +1092,7 @@ func (h *BotHandler) listPlugins(c *gin.Context) {
 	states := h.runtime.Plugins().ListVisibleForProfile(profileID)
 	visible := make([]assistant.PluginState, 0, len(states))
 	for _, state := range states {
-		if profileID == "" || state.Manifest.ID != assistant.OpenAPIPluginID {
-			visible = append(visible, h.withRepoSource(state))
-		}
+		visible = append(visible, h.withRepoSource(state))
 	}
 	c.JSON(http.StatusOK, assistant.RedactStates(visible))
 }
@@ -1108,14 +1106,7 @@ func (h *BotHandler) pluginProfileScope(c *gin.Context) (string, bool) {
 		if !strings.HasSuffix(c.Request.URL.Path, "/enabled") {
 			return "", true
 		}
-		if c.Param("id") == assistant.OpenAPIPluginID {
-			return "", true
-		}
 		c.JSON(http.StatusBadRequest, gin.H{"error": "请选择要切换插件启用状态的机器人"})
-		return "", false
-	}
-	if c.Param("id") == assistant.OpenAPIPluginID {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "OpenAPI 请在系统设置中配置"})
 		return "", false
 	}
 	for _, profile := range h.profiles.Profiles().Profiles {

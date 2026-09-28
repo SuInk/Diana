@@ -151,81 +151,6 @@
 
       </div>
 
-      <div v-show="activePage === 'openapi'" class="settings-section-body">
-          <!-- 对外 API 密钥 -->
-          <section class="card">
-          <div class="card-header">
-            <SkeletonBlock v-if="pluginLoading" width="90px" height="21px" />
-            <span v-else class="badge" :class="openAPIPluginEnabled ? 'ok' : 'warn'">{{ openAPIPluginEnabled ? "插件已启用" : "插件未启用" }}</span>
-          </div>
-          <div class="card-body stack">
-            <div class="cluster" style="gap: 8px; align-items: center">
-              <p class="muted" style="margin: 0; font-size: 13px; flex: 1">
-                未启用时外部调用一律 403。密钥、限流和启停统一在此管理，不属于任何机器人的插件配置。
-              </p>
-              <button class="btn small" type="button" :disabled="togglingPlugin || openAPIPlugin === null" @click="toggleOpenAPIPlugin">
-                {{ togglingPlugin ? "处理中…" : openAPIPluginEnabled ? "停用" : "启用" }}
-              </button>
-            </div>
-            <p class="muted" style="margin: 0; font-size: 13px">
-              携带 <code class="mono">Authorization: Bearer &lt;密钥&gt;</code> 调用
-              <code class="mono">POST /openapi/v1/messages</code>，正文里用
-              <code class="mono">group_id</code> 或 <code class="mono">user_id</code> 指定目标会话、<code class="mono">text</code> 填内容；
-              多通道部署时再带上 <code class="mono">platform</code> 或 <code class="mono">profile_id</code> 指路。
-              <code class="mono">GET /openapi/v1/status</code> 可探活并列出可投递的通道。
-            </p>
-            <div v-if="openAPIPlugin" class="stack">
-              <PluginSettingField v-for="spec in openAPIPlugin.manifest.settings ?? []" :key="spec.key" :spec="spec" :form="openAPISettings" />
-              <button class="btn small" type="button" :disabled="savingOpenAPISettings" @click="saveOpenAPISettings"><Save :size="14" aria-hidden="true" />保存接口参数</button>
-            </div>
-            <div v-if="createdToken" class="openapi-token">
-              <p class="openapi-token-hint">密钥只显示这一次，请立即复制保存：</p>
-              <div class="cluster" style="gap: 8px; flex-wrap: wrap">
-                <code class="mono openapi-token-value">{{ createdToken }}</code>
-                <button class="btn small" type="button" @click="copyCreatedToken">复制</button>
-                <button class="btn small ghost" type="button" @click="createdToken = ''">我已保存</button>
-              </div>
-            </div>
-            <LoadingSkeleton v-if="apiKeysLoading && apiKeys.length === 0" kind="sessions" :count="2" label="正在加载 API 密钥" />
-            <p v-else-if="apiKeys.length === 0" class="muted" style="margin: 0; font-size: 13px">还没有密钥。创建后外部系统才能调用推送接口。</p>
-            <ul v-else class="session-list">
-              <li v-for="key in apiKeys" :key="key.id" class="session-item">
-                <div class="session-main">
-                  <span class="session-name">{{ key.name }}</span>
-                  <span class="session-meta mono">{{ key.prefix }}…</span>
-                  <span class="session-meta">
-                    创建于 {{ formatTime(key.created_at) }}
-                    · {{ key.last_used_at ? `最近使用 ${formatTime(key.last_used_at)}` : "从未使用" }}
-                  </span>
-                </div>
-                <button
-                  class="btn small danger"
-                  type="button"
-                  :disabled="revokingKeyID !== ''"
-                  @click="revokeKey(key)"
-                >
-                  {{ revokingKeyID === key.id ? "处理中…" : "吊销" }}
-                </button>
-              </li>
-            </ul>
-            <div class="cluster" style="gap: 8px">
-              <input
-                v-model="newKeyName"
-                class="input"
-                placeholder="密钥用途，例如 ci-notify"
-                style="max-width: 240px"
-                @keyup.enter="createKey"
-              />
-              <button class="btn primary" type="button" :disabled="creatingKey || newKeyName.trim().length === 0" @click="createKey">
-                <KeyRound :size="15" aria-hidden="true" />
-                {{ creatingKey ? "创建中…" : "创建密钥" }}
-              </button>
-            </div>
-          </div>
-        </section>
-      </div>
-
-
       <div v-show="activePage === 'storage'" class="settings-section-body">
         <section class="card">
           <div class="card-header" style="justify-content: flex-end">
@@ -570,9 +495,8 @@ import AppSelect, { type AppSelectOption } from "../components/AppSelect.vue";
 import EmptyState from "../components/EmptyState.vue";
 import LoadingSkeleton from "../components/LoadingSkeleton.vue";
 import SkeletonBlock from "../components/SkeletonBlock.vue";
-import PluginSettingField from "../components/PluginSettingField.vue";
 import StorageDonut from "../components/StorageDonut.vue";
-import { Activity, Download, Eye, EyeOff, HardDriveDownload, Images, KeyRound, LogOut, MonitorSmartphone, Palette, PieChart, Plug, RefreshCw, RotateCw, Save, ShieldCheck } from "@lucide/vue";
+import { Activity, Download, Eye, EyeOff, HardDriveDownload, Images, KeyRound, LogOut, MonitorSmartphone, Palette, PieChart, RefreshCw, RotateCw, Save, ShieldCheck } from "@lucide/vue";
 import {
   changeCredentials,
   getAuthStatus,
@@ -597,14 +521,6 @@ import {
   getHistoryMediaPolicy,
   saveHistoryMediaPolicy,
   type HistoryMediaPolicy,
-  listOpenAPIKeys,
-  createOpenAPIKey,
-  revokeOpenAPIKey,
-  listPlugins,
-  setPluginEnabled,
-  updatePluginSettings,
-  type PluginState,
-  type OpenAPIKey,
   type AuthSession,
   type HealthResponse,
   type SystemVersion,
@@ -622,7 +538,6 @@ import { toastError, toastSuccess } from "../toast";
 const settingsPages = [
   { key: "security", label: "访问安全", hint: "谁能打开这个控制台：管理账号与密码保护。", icon: ShieldCheck },
   { key: "sessions", label: "登录会话", hint: "机器人发来异常登录提醒时，在这里把对应设备踢下线。", icon: MonitorSmartphone },
-  { key: "openapi", label: "对外 API", hint: "让 CI、监控这类外部系统通过 HTTP 接口给机器人推送消息。", icon: Plug },
   { key: "storage", label: "存储空间", hint: "这台机器的磁盘还剩多少，以及 Diana 的数据目录被哪类文件占掉了。", icon: PieChart },
   { key: "cache", label: "下载缓存", hint: "控制下载的媒体缓存按闲置天数或容量清理。", icon: HardDriveDownload },
   { key: "media", label: "媒体与文件", hint: "历史媒体原件的保留策略。", icon: Images },
@@ -635,7 +550,7 @@ const settingsPages = [
 const settingsGroups = (
   [
     { label: "个性化", keys: ["theme"] },
-    { label: "账号与安全", keys: ["security", "sessions", "openapi"] },
+    { label: "账号与安全", keys: ["security", "sessions"] },
     { label: "系统", keys: ["storage", "cache", "media", "update", "status"] }
   ] as const
 ).map((group) => ({
@@ -791,7 +706,6 @@ const health = ref<HealthResponse | null>(null);
 const loading = ref(true);
 const authLoading = ref(true);
 const healthLoading = ref(true);
-const pluginLoading = ref(true);
 const updating = ref(false);
 const updateFailed = ref(false);
 const restarting = ref(false);
@@ -811,19 +725,6 @@ const deploymentMode = ref<"git" | "release" | "docker">("release");
 const sessions = ref<AuthSession[]>([]);
 const sessionsLoading = ref(true);
 const revokingID = ref("");
-const apiKeys = ref<OpenAPIKey[]>([]);
-const apiKeysLoading = ref(true);
-const creatingKey = ref(false);
-const newKeyName = ref("");
-const createdToken = ref("");
-const revokingKeyID = ref("");
-const openAPIPlugin = ref<PluginState | null>(null);
-const openAPISettings = ref<Record<string, unknown>>({});
-const savingOpenAPISettings = ref(false);
-const togglingPlugin = ref(false);
-const openAPIPluginEnabled = computed(() => openAPIPlugin.value?.enabled === true);
-
-const OPEN_API_PLUGIN_ID = "official.open-api";
 const otherSessionCount = computed(() => sessions.value.filter((item) => !item.current).length);
 const dockerUpdatePending = ref(false);
 const operationRunning = computed(() => updating.value || dockerUpdatePending.value || updateStatus.value?.updating === true);
@@ -969,99 +870,6 @@ async function revokeOthers(): Promise<void> {
     toastError(err instanceof Error ? err.message : "登出其他设备失败");
   } finally {
     revokingID.value = "";
-  }
-}
-
-async function loadOpenAPIPlugin(): Promise<void> {
-  try {
-    const plugins = await listPlugins();
-    openAPIPlugin.value = plugins.find((item) => item.manifest.id === OPEN_API_PLUGIN_ID) ?? null;
-    if (openAPIPlugin.value) openAPISettings.value = Object.fromEntries((openAPIPlugin.value.manifest.settings ?? []).map((spec) => [spec.key, openAPIPlugin.value?.settings?.[spec.key] ?? spec.default]));
-  } catch {
-    /* 拉不到插件状态时按未知处理，开关按钮保持禁用 */
-  } finally {
-    pluginLoading.value = false;
-  }
-}
-
-async function toggleOpenAPIPlugin(): Promise<void> {
-  if (openAPIPlugin.value === null || togglingPlugin.value) return;
-  const next = !openAPIPluginEnabled.value;
-  togglingPlugin.value = true;
-  try {
-    openAPIPlugin.value = await setPluginEnabled(OPEN_API_PLUGIN_ID, next);
-    toastSuccess(next ? "对外 API 已启用" : "对外 API 已停用，外部调用将收到 403");
-  } catch (err) {
-    toastError(err instanceof Error ? err.message : "切换对外 API 状态失败");
-  } finally {
-    togglingPlugin.value = false;
-  }
-}
-
-async function saveOpenAPISettings(): Promise<void> {
-  savingOpenAPISettings.value = true;
-  try {
-    openAPIPlugin.value = await updatePluginSettings(OPEN_API_PLUGIN_ID, openAPISettings.value);
-    toastSuccess("接口参数已保存");
-  } catch (error) { toastError(error instanceof Error ? error.message : "保存失败"); }
-  finally { savingOpenAPISettings.value = false; }
-}
-
-async function loadApiKeys(): Promise<void> {
-  apiKeysLoading.value = true;
-  try {
-    apiKeys.value = (await listOpenAPIKeys()).keys;
-  } catch (err) {
-    toastError(err instanceof Error ? err.message : "读取 API 密钥失败");
-  } finally {
-    apiKeysLoading.value = false;
-  }
-}
-
-async function createKey(): Promise<void> {
-  const name = newKeyName.value.trim();
-  if (name.length === 0 || creatingKey.value) return;
-  creatingKey.value = true;
-  try {
-    const result = await createOpenAPIKey(name);
-    // 明文只在这次响应里出现，先摆在页面上等用户自己复制，刷新即消失。
-    createdToken.value = result.token;
-    newKeyName.value = "";
-    await loadApiKeys();
-  } catch (err) {
-    toastError(err instanceof Error ? err.message : "创建 API 密钥失败");
-  } finally {
-    creatingKey.value = false;
-  }
-}
-
-async function copyCreatedToken(): Promise<void> {
-  try {
-    await navigator.clipboard.writeText(createdToken.value);
-    toastSuccess("密钥已复制");
-  } catch {
-    toastError("复制失败，请手动选中复制");
-  }
-}
-
-async function revokeKey(key: OpenAPIKey): Promise<void> {
-  if (!(await askConfirm({
-    title: "吊销 API 密钥",
-    message: `吊销「${key.name}」后，用它的外部系统会立即收到 401。`,
-    confirmLabel: "吊销",
-    danger: true
-  }))) {
-    return;
-  }
-  revokingKeyID.value = key.id;
-  try {
-    await revokeOpenAPIKey(key.id);
-    toastSuccess("密钥已吊销");
-    await loadApiKeys();
-  } catch (err) {
-    toastError(err instanceof Error ? err.message : "吊销 API 密钥失败");
-  } finally {
-    revokingKeyID.value = "";
   }
 }
 
@@ -1233,8 +1041,6 @@ onMounted(() => {
   void loadUpdates();
   void loadGitHubTokenStatus();
   void loadAuthStatus().then(() => loadSessions());
-  void loadApiKeys();
-  void loadOpenAPIPlugin();
   void getHealth()
     .then((result) => {
       health.value = result;
@@ -1533,26 +1339,6 @@ onBeforeUnmount(() => {
 
 @media (max-width: 960px) {
   .settings-section-body { grid-template-columns: minmax(0, 1fr); }
-}
-
-
-/* 新建密钥的一次性明文展示：要醒目（错过就再也拿不到），但不该像报错。 */
-.openapi-token {
-  display: grid;
-  gap: 6px;
-  padding: 10px;
-  border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--border));
-  background: color-mix(in srgb, var(--accent) 8%, var(--surface-muted));
-  border-radius: 6px;
-}
-.openapi-token-hint { margin: 0; font-size: 12.5px; color: var(--muted); }
-.openapi-token-value {
-  padding: 4px 8px;
-  font-size: 12px;
-  word-break: break-all;
-  background: var(--surface-muted);
-  border: 1px solid var(--border);
-  border-radius: 4px;
 }
 
 .update-progress { display: grid; gap: 7px; }

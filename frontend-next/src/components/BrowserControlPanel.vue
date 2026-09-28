@@ -102,10 +102,10 @@
         <span class="card-sub">扩展用它连接，只显示一次</span>
       </div>
       <div class="card-body stack">
-        <div v-if="browserCreatedToken" class="openapi-token">
-          <p class="openapi-token-hint">令牌只显示这一次，请立即复制并填进扩展选项页：</p>
+        <div v-if="browserCreatedToken" class="token-reveal">
+          <p class="token-reveal-hint">令牌只显示这一次，请立即复制并填进扩展选项页：</p>
           <div class="cluster" style="gap: 8px; flex-wrap: wrap">
-            <code class="mono openapi-token-value">{{ browserCreatedToken }}</code>
+            <code class="mono token-reveal-value">{{ browserCreatedToken }}</code>
             <button class="btn small" type="button" @click="copyBrowserToken">复制</button>
             <button class="btn small ghost" type="button" @click="browserCreatedToken = ''">我已保存</button>
           </div>
@@ -352,3 +352,24 @@ onMounted(() => {
   void loadBrowserControl();
 });
 </script>
+
+<style scoped>
+/* 新签发令牌的一次性明文展示：要醒目（错过就再也拿不到），但不该像报错。 */
+.token-reveal {
+  display: grid;
+  gap: 6px;
+  padding: 10px;
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--border));
+  background: color-mix(in srgb, var(--accent) 8%, var(--surface-muted));
+  border-radius: 6px;
+}
+.token-reveal-hint { margin: 0; font-size: 12.5px; color: var(--muted); }
+.token-reveal-value {
+  padding: 4px 8px;
+  font-size: 12px;
+  word-break: break-all;
+  background: var(--surface-muted);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+</style>

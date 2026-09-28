@@ -44,7 +44,6 @@ const (
 	replySuppressionsKey = "bot_reply_suppressions"
 	webuiAuthKey         = "webui_auth"
 	webuiSessionsKey     = "webui_sessions"
-	webuiAPIKeysKey      = "webui_api_keys"
 	releaseCacheKey      = "system_release_cache"
 	updateGitHubTokenKey = "system_update_github_token"
 	inboundRecoveryKey   = "bot_inbound_recovery_checkpoint"
@@ -384,33 +383,6 @@ func (s *SQLiteStore) LoadWebUISessions(ctx context.Context) (WebUISessionSet, b
 // SaveWebUISessions 保存 WebUI 登录会话集合。
 func (s *SQLiteStore) SaveWebUISessions(ctx context.Context, set WebUISessionSet) error {
 	return s.saveJSON(ctx, webuiSessionsKey, set)
-}
-
-// WebUIAPIKey 是对外开放接口的一把访问密钥；只存 token 哈希，不落明文。
-type WebUIAPIKey struct {
-	ID         string    `json:"id"`
-	Name       string    `json:"name"`
-	Prefix     string    `json:"prefix"`
-	TokenHash  string    `json:"token_hash"`
-	CreatedAt  time.Time `json:"created_at"`
-	LastUsedAt time.Time `json:"last_used_at,omitempty"`
-}
-
-// WebUIAPIKeySet 是全部有效 API 密钥集合。
-type WebUIAPIKeySet struct {
-	Keys []WebUIAPIKey `json:"keys"`
-}
-
-// LoadWebUIAPIKeys 读取对外开放接口密钥集合。
-func (s *SQLiteStore) LoadWebUIAPIKeys(ctx context.Context) (WebUIAPIKeySet, bool, error) {
-	var set WebUIAPIKeySet
-	ok, err := s.loadJSON(ctx, webuiAPIKeysKey, &set)
-	return set, ok, err
-}
-
-// SaveWebUIAPIKeys 保存对外开放接口密钥集合。
-func (s *SQLiteStore) SaveWebUIAPIKeys(ctx context.Context, set WebUIAPIKeySet) error {
-	return s.saveJSON(ctx, webuiAPIKeysKey, set)
 }
 
 // LoadBrowserControl 读取浏览器控制的策略与令牌。
