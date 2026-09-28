@@ -336,7 +336,7 @@
             :class="{ invalid: invalidField === 'context_window_tokens' }"
             :aria-invalid="invalidField === 'context_window_tokens'"
             placeholder="必填，例如 128000"
-            @input="clearInvalid('context_window_tokens')"
+            @input="contextWindowTouched = true; clearInvalid('context_window_tokens')"
           />
           <span class="hint">
             {{ effectiveContextHint }}
@@ -480,6 +480,9 @@ interface LLMFormState {
   max_output_tokens: string;
 }
 
+// 和后端 llm.DefaultContextWindowTokens 一致：清单里查不到窗口时先填这个。
+const defaultContextWindowTokens = 128000;
+
 const emptyForm: LLMFormState = {
   name: "",
   provider: "openai_compatible",
@@ -491,7 +494,7 @@ const emptyForm: LLMFormState = {
   oauth_provider: "",
   user_agent: "",
   description: "",
-  context_window_tokens: "",
+  context_window_tokens: String(defaultContextWindowTokens),
   max_output_tokens: "",
 };
 
@@ -518,6 +521,8 @@ const headerValueDraft = ref("");
 const modelsLoading = ref(false);
 // invalidField 记的是「这次失败该回去改哪一格」，由报错文本推出来（见 llmErrorField）。
 const invalidField = ref<LLMErrorField>("");
+// 窗口框里的数是不是人自己改的。默认填上的值换模型时可以跟着换，人改过的不动。
+const contextWindowTouched = ref(false);
 
 // 一开始改那一格就把标红撤掉：红框是「这里要改」的提示，人动手了它就该让位，
 // 一直挂着会变成「改完了还在报错」的错觉。
@@ -657,6 +662,7 @@ function startCreate(): void {
   editingKeyPreview.value = "";
   editingProfile.value = null;
   form.value = { ...emptyForm };
+  contextWindowTouched.value = false;
   credentialMode.value = "api_key";
   selectedService.value = "deepseek";
   applyServicePreset("deepseek");
@@ -770,6 +776,7 @@ function startEdit(profile: LLMConfig): void {
   editingConfigured.value = Boolean(profile.api_key_configured);
   editingKeyPreview.value = profile.api_key_preview ?? "";
   editingProfile.value = profile;
+  contextWindowTouched.value = Boolean(profile.context_window_tokens);
   form.value = {
     name: profile.name ?? "",
     provider: profile.provider,
@@ -782,12 +789,10 @@ function startEdit(profile: LLMConfig): void {
     oauth_provider: profile.oauth_provider ?? "",
     user_agent: profile.user_agent ?? "",
     description: profile.description ?? "",
-    // 老配置没填窗口时拿模型清单里的数先填上，保存前人能看到、能改。
-    context_window_tokens: profile.context_window_tokens
-      ? String(profile.context_window_tokens)
-      : profile.catalog_context_window_tokens
-        ? String(profile.catalog_context_window_tokens)
-        : "",
+    // 老配置没填窗口时先填上默认值（清单里有就用清单的），保存前人能看到、能改。
+    context_window_tokens: String(
+      profile.context_window_tokens || profile.catalog_context_window_tokens || defaultContextWindowTokens
+    ),
     max_output_tokens: profile.max_output_tokens ? String(profile.max_output_tokens) : "",
   };
   // 凭据方式跟着这份配置走：绑了提供商就停在「授权登录」，否则回到 API Key。
@@ -873,18 +878,18 @@ const contextWindowBindings = computed(() =>
 
 // resolvedDefaultModel 决定提交给后端的 model。
 //
+// 窗口是默认填上的、人还没改过时，换模型就跟着换成清单里的数；人改过的不动。
+watch([() => form.value.model, modelOptions], () => {
+  if (!editorOpen.value || contextWindowTouched.value) return;
+  const model = resolvedDefaultModel();
+  const window = modelOptions.value.find((item) => item.id === model)?.context_window_tokens;
+  form.value.context_window_tokens = String(window || defaultContextWindowTokens);
+});
+
 // 这一格以前是让人手填的「默认模型（可选）」，但它跟上面的模型列表表达的是同一
 // 件事：机器人页的「模型分配」按用途挑模型，挑的就是列表里的项，这个字段只是
 // 后端在没有任何分配时的兜底。让人再填一遍，只会填出一个不在列表里的值——那时
 // 兜底指向一个这套配置里根本没有的模型。现在跟着列表走，选不出不一致的状态。
-// 新建或换模型时窗口还空着，就拿模型清单里的数先填上；已经填了的不动。
-watch([() => form.value.model, modelOptions], () => {
-  if (!editorOpen.value || form.value.context_window_tokens.trim() !== "") return;
-  const model = resolvedDefaultModel();
-  const window = modelOptions.value.find((item) => item.id === model)?.context_window_tokens;
-  if (window) form.value.context_window_tokens = String(window);
-});
-
 function resolvedDefaultModel(): string {
   const current = form.value.model.trim();
   if (current !== "" && modelOptions.value.some((model) => model.id === current)) {
