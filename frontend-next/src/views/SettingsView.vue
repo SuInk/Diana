@@ -488,23 +488,10 @@
           </div>
         </section>
 
-        <section class="card">
-          <div class="card-header"><span class="card-sub">重启服务</span></div>
-          <div class="card-body stack" style="gap: 10px; font-size: 13px">
-            <div class="cluster">
-              <button class="btn" type="button" :disabled="restarting" @click="doRestart">
-                <RotateCw :size="15" aria-hidden="true" />
-                {{ restarting ? "重启中，等待服务恢复…" : "重启服务" }}
-              </button>
-            </div>
-            <p class="muted" style="font-size: 12.5px; margin: 0">原地重启当前服务进程，更新拉取后需重启才生效。恢复后页面会自动刷新。</p>
-          </div>
-        </section>
-
       </div>
 
       <div v-show="activePage === 'status'" class="settings-section-body">
-        <!-- 运行状态：版本号只在「系统更新」显示一次，这里只放运行期信息。 -->
+        <!-- 运行状态：版本号只在「系统更新」显示一次，这里放运行期信息和重启。 -->
         <section class="card">
           <div class="card-body stack" style="gap: 8px; font-size: 13px">
             <div class="info-row">
@@ -517,6 +504,18 @@
               <SkeletonBlock v-if="healthLoading" width="140px" height="18px" />
               <span v-else class="mono info-value">{{ health ? formatTime(health.started_at) : "—" }}</span>
             </div>
+          </div>
+        </section>
+        <section class="card">
+          <div class="card-header"><span class="card-sub">重启服务</span></div>
+          <div class="card-body stack" style="gap: 10px; font-size: 13px">
+            <div class="cluster">
+              <button class="btn" type="button" :disabled="restarting" @click="doRestart">
+                <RotateCw :size="15" aria-hidden="true" />
+                {{ restarting ? "重启中，等待服务恢复…" : "重启服务" }}
+              </button>
+            </div>
+            <p class="muted" style="font-size: 12.5px; margin: 0">原地重启当前服务进程，更新拉取后需重启才生效。恢复后页面会自动刷新。</p>
           </div>
         </section>
       </div>
@@ -619,8 +618,8 @@ const settingsPages = [
   { key: "storage", label: "存储空间", hint: "这台机器的磁盘还剩多少，以及 Diana 的数据目录被哪类文件占掉了。", icon: PieChart },
   { key: "cache", label: "下载缓存", hint: "控制下载的媒体缓存按闲置天数或容量清理。", icon: HardDriveDownload },
   { key: "media", label: "媒体与文件", hint: "历史媒体原件的保留策略。", icon: Images },
-  { key: "update", label: "系统更新", hint: "检查、下载并安装新版本，以及原地重启服务。", icon: Download },
-  { key: "status", label: "运行状态", hint: "当前服务的启动时间与运行时长。", icon: Activity },
+  { key: "update", label: "系统更新", hint: "检查、下载并安装新版本。", icon: Download },
+  { key: "status", label: "运行状态", hint: "当前服务的启动时间与运行时长，以及原地重启服务。", icon: Activity },
   { key: "theme", label: "界面主题", hint: "只存在你当前这个浏览器里，不会同步到其它设备，也不影响别的登录用户。", icon: Palette }
 ] as const;
 
@@ -1144,7 +1143,7 @@ async function runUpdate(): Promise<void> {
 		  ? installingRelease
 			? "已开始重启并安装，完成后将执行健康检查"
 			: result.downloaded ? "更新已下载并通过校验，等待重启并安装" : "已是最新，无需更新"
-		  : result.updated ? "更新完成，重启服务后生效" : "已是最新，无需更新");
+		  : result.updated ? "更新完成，到「运行状态」重启服务后生效" : "已是最新，无需更新");
   } catch (error) {
     const message = error instanceof Error ? error.message : "更新失败";
     updateFailed.value = true;
