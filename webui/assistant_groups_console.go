@@ -5,6 +5,7 @@ package webui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -571,10 +572,9 @@ func consoleGroupAvatarURL(groupID, profileID string) string {
 	return avatarURL
 }
 
+// liveGroupListCache 只存成功拉到的列表：失败不进缓存，下次照常重试。
 type liveGroupListCache struct {
 	groups    []botAutoGroupInfo
-	available bool
-	warning   string
 	fetchedAt time.Time
 }
 
@@ -646,7 +646,10 @@ func (h *BotHandler) oneBotProfileIDs() []string {
 }
 
 // liveConsoleGroups 问某一台机器人要它此刻所在的群。profileID 为空时交给运行时
-// 挑唯一那台 OneBot 机器人。结果按机器人分开缓存，互不覆盖。
+// 挑唯一那台 OneBot 机器人。
+//
+// 缓存和并发合并都按连接算，不按机器人：复用同一条连接的几台机器人是同一个 QQ
+// 号，群列表完全一样，没必要各问一遍。归属在取出之后再按调用方的机器人记上。
 func (h *BotHandler) liveConsoleGroups(ctx context.Context, profileID string, refresh bool) ([]botAutoGroupInfo, bool, string) {
 	// runtime 也要挡：这里要拿它去调 OneBot，少判一层的话没接机器人时直接空指针。
 	// 群配置页一直有 runtime 所以没暴露过，事件筛选器接进来才踩到。
@@ -654,63 +657,97 @@ func (h *BotHandler) liveConsoleGroups(ctx context.Context, profileID string, re
 		return nil, false, "机器人尚未连接，暂时只显示已保存的群配置"
 	}
 	profileID = strings.TrimSpace(profileID)
+	key := h.groupListConnectionKey(profileID)
 	h.liveGroupMu.Lock()
-	cached := h.liveGroupCache[profileID]
+	cached := h.liveGroupCache[key]
 	h.liveGroupMu.Unlock()
-	if !refresh && !cached.fetchedAt.IsZero() && time.Since(cached.fetchedAt) < consoleLiveGroupCacheTTL {
-		return cloneLiveGroups(cached.groups), cached.available, cached.warning
+	fresh := !cached.fetchedAt.IsZero() && time.Since(cached.fetchedAt) < consoleLiveGroupCacheTTL
+	if !refresh && fresh {
+		return ownedLiveGroups(cached.groups, profileID), true, ""
 	}
 
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	callCtx, cancel := context.WithTimeout(ctx, consoleLiveGroupTimeout)
-	defer cancel()
-	// 缓存只留在这一层。NapCat / SnowLuma 自己的群列表缓存不会因为入群、群改名
-	// 失效，不带 no_cache 问到的可能是启动那会儿的快照：新群一直不在下拉框里，
-	// 改过名的群一直是旧名。上面那 20 秒已经挡住了连续打开页面的重复请求。
-	params := map[string]any{"no_cache": true}
-	var (
-		data map[string]any
-		err  error
-	)
-	if profileID != "" {
-		data, err = h.runtime.CallOneBotAPIForProfile(callCtx, profileID, "get_group_list", params)
-	} else {
-		data, err = h.runtime.CallOneBotAPI(callCtx, "get_group_list", params)
-	}
+	// 群管理页、订阅设置、事件筛选常常同时打开，缓存一过期就会一起来问。合成一次，
+	// 免得同一个号在同一时刻被 no_cache 连打好几遍。
+	result, err, _ := h.liveGroupFlight.Do(key, func() (any, error) {
+		callCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), consoleLiveGroupTimeout)
+		defer cancel()
+		// 缓存只留在这一层。NapCat / SnowLuma 自己的群列表缓存不会因为入群、群改名
+		// 失效，不带 no_cache 问到的可能是启动那会儿的快照：新群一直不在下拉框里，
+		// 改过名的群一直是旧名。上面那 20 秒已经挡住了连续打开页面的重复请求。
+		params := map[string]any{"no_cache": true}
+		var (
+			data map[string]any
+			err  error
+		)
+		if profileID != "" {
+			data, err = h.runtime.CallOneBotAPIForProfile(callCtx, profileID, "get_group_list", params)
+		} else {
+			data, err = h.runtime.CallOneBotAPI(callCtx, "get_group_list", params)
+		}
+		if err != nil {
+			if callCtx.Err() != nil {
+				return nil, errLiveGroupListTimeout
+			}
+			return nil, err
+		}
+		groups := autoGroupsFromOneBotData(data)
+		for index := range groups {
+			// 这一份来自 OneBot 的 get_group_list，群号就是 QQ 群号，头像规则适用。
+			groups[index].QQAvatar = true
+		}
+		h.liveGroupMu.Lock()
+		if h.liveGroupCache == nil {
+			h.liveGroupCache = map[string]liveGroupListCache{}
+		}
+		h.liveGroupCache[key] = liveGroupListCache{groups: groups, fetchedAt: time.Now()}
+		h.liveGroupMu.Unlock()
+		return groups, nil
+	})
 	if err != nil {
 		// 实时拉取要回服务器，偶尔会超时；手上有上一次成功的列表就先用它，
 		// 别让通知目标的下拉框整个退化成手填群号。
-		if cached.available && len(cached.groups) > 0 {
-			return cloneLiveGroups(cached.groups), true, "同步群列表失败，暂时显示上一次的结果"
+		if len(cached.groups) > 0 {
+			return ownedLiveGroups(cached.groups, profileID), true, "同步群列表失败，暂时显示上一次的结果"
 		}
-		warning := "机器人尚未连接，暂时只显示已保存的群配置"
-		if callCtx.Err() != nil {
-			warning = "同步群列表超时，暂时只显示已保存的群配置"
+		if errors.Is(err, errLiveGroupListTimeout) {
+			return nil, false, "同步群列表超时，暂时只显示已保存的群配置"
 		}
-		return nil, false, warning
+		return nil, false, "机器人尚未连接，暂时只显示已保存的群配置"
 	}
-	liveGroups := autoGroupsFromOneBotData(data)
-	for index := range liveGroups {
-		// 这一份来自 OneBot 的 get_group_list，群号就是 QQ 群号，头像规则适用。
-		liveGroups[index].QQAvatar = true
-		// 记下是哪台机器人问到的：下拉框按机器人挑群，全部机器人视图也靠它分清归属。
-		if profileID != "" {
-			liveGroups[index].BotProfileID = profileID
+	return ownedLiveGroups(result.([]botAutoGroupInfo), profileID), true, ""
+}
+
+var errLiveGroupListTimeout = errors.New("get_group_list timed out")
+
+// ownedLiveGroups 复制一份缓存里的列表，并记上是哪台机器人问到的：下拉框按机器人
+// 挑群，全部机器人视图也靠它分清归属。缓存本身不带归属，好让共用连接的机器人共享。
+func ownedLiveGroups(groups []botAutoGroupInfo, profileID string) []botAutoGroupInfo {
+	out := cloneLiveGroups(groups)
+	if profileID != "" {
+		for index := range out {
+			out[index].BotProfileID = profileID
 		}
 	}
-	h.liveGroupMu.Lock()
-	if h.liveGroupCache == nil {
-		h.liveGroupCache = map[string]liveGroupListCache{}
+	return out
+}
+
+// groupListConnectionKey 找出这台机器人实际走的连接。没有配置可查时按机器人本身算。
+func (h *BotHandler) groupListConnectionKey(profileID string) string {
+	if profileID == "" || h.profiles == nil {
+		return profileID
 	}
-	h.liveGroupCache[profileID] = liveGroupListCache{
-		groups:    cloneLiveGroups(liveGroups),
-		available: true,
-		fetchedAt: time.Now(),
+	for _, profile := range h.profiles.Profiles().Profiles {
+		if strings.TrimSpace(profile.ID) == profileID {
+			if connection := strings.TrimSpace(profile.ConnectionProfileID); connection != "" {
+				return connection
+			}
+			break
+		}
 	}
-	h.liveGroupMu.Unlock()
-	return liveGroups, true, ""
+	return profileID
 }
 
 // groupAvatarURLForProfile 给出某个群的头像地址。传函数而不是整个 handler，
@@ -758,14 +795,9 @@ func mergeConsoleGroupItems(base assistant.BotConfig, set assistant.GroupConfigS
 		cfg, configured := saved[groupID]
 		if !configured {
 			// 还没配过的群跟着它所在的那台机器人给默认值。
-			owner := baseFor(live.BotProfileID)
-			cfg = assistant.DefaultGroupConfig(groupID, owner)
-			// 归属也要写上。订阅通知这类下拉框按 bot_profile_id 挑「这台机器人在哪些
-			// 群」，留空的话新群、没在群管理页配置过的群一个都挑不出来。
+			cfg = assistant.DefaultGroupConfig(groupID, baseFor(live.BotProfileID))
+			// 来源记着是哪台机器人问到的，原样带出去；来源没记就留空，不替它猜。
 			cfg.BotProfileID = strings.TrimSpace(live.BotProfileID)
-			if cfg.BotProfileID == "" {
-				cfg.BotProfileID = strings.TrimSpace(owner.ID)
-			}
 		}
 		avatarURL := groupAvatar(live.BotProfileID, groupID)
 		items = append(items, consoleGroupItem{

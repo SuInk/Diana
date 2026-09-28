@@ -21,6 +21,7 @@ import (
 	"github.com/SuInk/diana/model/storage"
 
 	"github.com/gin-gonic/gin"
+	"golang.org/x/sync/singleflight"
 )
 
 type BotRuntime interface {
@@ -116,6 +117,7 @@ type BotHandler struct {
 	repoPluginSources *assistant.RepoPluginStore
 	liveGroupMu       sync.Mutex
 	liveGroupCache    map[string]liveGroupListCache
+	liveGroupFlight   singleflight.Group
 	groupNameMu       sync.Mutex
 	groupNameCache    map[string]groupNameCacheEntry
 	userNameMu        sync.Mutex

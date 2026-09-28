@@ -15,19 +15,29 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, reactive, watch } from "vue";
 import { Plus, Trash2 } from "@lucide/vue";
-import type { BotProfileConfig, BotGroupSummary, RepositoryWatchTarget } from "../api";
+import { listBotGroups, type BotProfileConfig, type BotGroupSummary, type RepositoryWatchTarget } from "../api";
 import AppSelect from "./AppSelect.vue";
 import AccountNameHint from "./AccountNameHint.vue";
 
-const props = defineProps<{ modelValue: RepositoryWatchTarget[]; profiles: BotProfileConfig[]; groups: BotGroupSummary[]; defaultProfile?: string }>();
+const props = defineProps<{ modelValue: RepositoryWatchTarget[]; profiles: BotProfileConfig[]; defaultProfile?: string }>();
 const emit = defineEmits<{ 'update:modelValue': [RepositoryWatchTarget[]] }>();
 const profileOptions = computed(() => props.profiles.map(p => ({ value: p.id || '', label: p.name || p.id || '', hint: p.platform })));
 const destinationOptions = [{ value: 'private', label: '私聊' }, { value: 'group', label: '群聊' }];
+// 按机器人各取各的群。「全部机器人」那份列表按群号去重，两台机器人同在一个群时
+// 只记在其中一台名下，另一台的下拉框就少了这个群。
+const groupsByProfile = reactive<Record<string, BotGroupSummary[]>>({});
+watch(() => props.modelValue.filter(t => t.destination === 'group' && t.profile_id).map(t => t.profile_id as string), (ids) => {
+  for (const id of new Set(ids)) {
+    if (id in groupsByProfile) continue;
+    groupsByProfile[id] = [];
+    listBotGroups(false, id).then(result => { groupsByProfile[id] = result.groups ?? []; }).catch(() => { delete groupsByProfile[id]; });
+  }
+}, { immediate: true });
 function groupOptions(profile?: string) {
-	if (!profile) return [];
-  return props.groups.filter(g => g.joined && g.bot_profile_id === profile).map(g => ({ value: g.group_id, label: g.group_name ? `${g.group_name}（${g.group_id}）` : g.group_id }));
+  if (!profile) return [];
+  return (groupsByProfile[profile] ?? []).filter(g => g.joined).map(g => ({ value: g.group_id, label: g.group_name ? `${g.group_name}（${g.group_id}）` : g.group_id }));
 }
 function update(index: number, patch: Partial<RepositoryWatchTarget>) {
   emit('update:modelValue', props.modelValue.map((target, i) => i === index ? { ...target, ...patch } : target));

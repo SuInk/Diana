@@ -586,6 +586,7 @@ func TestConsoleGroupsReportsQuotaUsage(t *testing.T) {
 type perProfileGroupListRuntime struct {
 	BotRuntime
 	groups map[string][]any
+	calls  atomic.Int32
 }
 
 func (r *perProfileGroupListRuntime) CallOneBotAPI(context.Context, string, map[string]any) (map[string]any, error) {
@@ -596,6 +597,7 @@ func (r *perProfileGroupListRuntime) CallOneBotAPIForProfile(_ context.Context, 
 	if action != "get_group_list" {
 		return nil, errors.New("unexpected OneBot action")
 	}
+	r.calls.Add(1)
 	return map[string]any{"items": r.groups[profileID]}, nil
 }
 
@@ -627,5 +629,31 @@ func TestConsoleGroupsListsEveryOneBotProfile(t *testing.T) {
 	scoped, ok, _ := handler.liveConsoleGroups(t.Context(), "qq-b", false)
 	if !ok || len(scoped) != 1 || scoped[0].GroupID != "10002" || scoped[0].BotProfileID != "qq-b" {
 		t.Fatalf("scoped = %#v ok=%v", scoped, ok)
+	}
+}
+
+// 复用同一条连接的两台机器人是同一个 QQ 号，群列表只问一次，各自记上归属。
+func TestConsoleGroupsShareListAcrossSameConnection(t *testing.T) {
+	first := assistant.DefaultBotConfig()
+	first.ID, first.Platform, first.Enabled = "qq-a", assistant.PlatformOneBotV11, true
+	second := assistant.DefaultBotConfig()
+	second.ID, second.Platform, second.Enabled, second.ConnectionProfileID = "qq-b", assistant.PlatformOneBotV11, true, "qq-a"
+	store := NewMemoryBotProfileStore(first)
+	if err := store.SaveProfiles(assistant.ProfileSet{Profiles: []assistant.BotConfig{first, second}}); err != nil {
+		t.Fatal(err)
+	}
+	runtime := &perProfileGroupListRuntime{groups: map[string][]any{
+		"qq-a": {map[string]any{"group_id": "10001", "group_name": "同一个号的群"}},
+	}}
+	handler := &BotHandler{profiles: store, runtime: runtime}
+	if groups, ok, _ := handler.liveConsoleGroups(t.Context(), "qq-a", false); !ok || len(groups) != 1 || groups[0].BotProfileID != "qq-a" {
+		t.Fatalf("qq-a = %#v ok=%v", groups, ok)
+	}
+	groups, ok, _ := handler.liveConsoleGroups(t.Context(), "qq-b", false)
+	if !ok || len(groups) != 1 || groups[0].BotProfileID != "qq-b" {
+		t.Fatalf("qq-b = %#v ok=%v", groups, ok)
+	}
+	if got := runtime.calls.Load(); got != 1 {
+		t.Fatalf("同一条连接问了 %d 次群列表", got)
 	}
 }

@@ -124,12 +124,12 @@ func TestIsOneBotProfileKeepsLegacyFallbackWithOneBotProfiles(t *testing.T) {
 	}
 }
 
-// 没在群管理页配置过的群也要带上归属机器人。订阅通知的群下拉框按 bot_profile_id
-// 挑群，留空的话新加的群永远选不到，只剩配置过的那几个。
-func TestMergeConsoleGroupItemsStampsOwnerOnUnconfiguredGroups(t *testing.T) {
+// 没在群管理页配置过的群要带上来源记的归属机器人。订阅通知的群下拉框按
+// bot_profile_id 挑群；来源没记的就留空，不拿当前机器人去猜。
+func TestMergeConsoleGroupItemsPassesSourceOwnerThrough(t *testing.T) {
 	base := assistant.BotConfig{ID: "qq-main"}
 	live := []botAutoGroupInfo{
-		{GroupID: "10001", GroupName: "新群"},
+		{GroupID: "10001", GroupName: "来源没记归属"},
 		{GroupID: "10002", GroupName: "另一台的群", BotProfileID: "qq-other"},
 	}
 	items := mergeConsoleGroupItems(base, assistant.GroupConfigSet{}, live, nil, nil)
@@ -137,10 +137,10 @@ func TestMergeConsoleGroupItemsStampsOwnerOnUnconfiguredGroups(t *testing.T) {
 	for _, item := range items {
 		byID[item.GroupID] = item
 	}
-	if got := byID["10001"].BotProfileID; got != "qq-main" {
-		t.Fatalf("未配置的群没跟上当前机器人：%q", got)
+	if got := byID["10001"].BotProfileID; got != "" {
+		t.Fatalf("来源没记归属却被猜成了当前机器人：%q", got)
 	}
 	if got := byID["10002"].BotProfileID; got != "qq-other" {
-		t.Fatalf("事件里记着的归属被覆盖了：%q", got)
+		t.Fatalf("来源记着的归属丢了：%q", got)
 	}
 }
