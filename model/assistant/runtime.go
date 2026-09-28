@@ -8812,9 +8812,10 @@ func splitReply(reply string, chunkSize int) []string {
 // 排版换行只认 [diana-line]；真实 CR/LF 一律折叠成软空格。
 //
 // 聊天配置不再限制条数或单条长度；是否收进合并转发由独立阈值决定。
-// splitChatReply 把回复切成实际要发的几条，每条去掉句号（见 chat_periods.go）。
+// splitChatReply 把回复切成实际要发的几条，每条去掉句号（见 chat_periods.go）和行尾的
+// 文字表情（见 chat_text_stickers.go）。
 func splitChatReply(reply string, limits chatSplitLimits) []string {
-	return stripBubblePeriods(splitChatReplyKeepingPeriods(reply, limits))
+	return stripBubbleTextStickers(stripBubblePeriods(splitChatReplyKeepingPeriods(reply, limits)))
 }
 
 // splitChatReplyKeepingPeriods 切条但保留句号：长度规划（replyLengthPlan）还要在句号
