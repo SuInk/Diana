@@ -180,6 +180,8 @@ type Response struct {
 type FinalizeField struct {
 	Name        string
 	Description string
+	// Enum 非空时字段只能取这几个值，由 provider 在解码层约束。
+	Enum []string
 }
 
 type Step struct {

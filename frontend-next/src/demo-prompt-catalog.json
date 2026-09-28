@@ -294,7 +294,7 @@
       "group": "reply_tools",
       "title": "表情包",
       "usage": "表情包工具可用时注入：收尾时怎样配表情包、决定先后或只发图；配不配由模型自己判断。",
-      "default": "表情包：你可以像群友一样用表情包说话。收尾时在 agent_finalize 的 sticker 里填几个关键词，就会配一张贴切的；和文字谁先谁后用 sticker_order 自己定（before 先甩图，留空先说话）；一张图就够、不想再说话时，填 silent=true、content 留空、只填 sticker，就只回这张图。什么时候配、配不配、放前放后，都按你自己对当下聊天的感觉来，像真人一样自然就好；挑不到合适的就不发。有人点名要表情包时用 sticker 工具亲自挑一张。"
+      "default": "表情包：你可以像群友一样用表情包说话。收尾时在 agent_finalize 的 sticker 里填几个关键词，就会配一张贴切的；和文字谁先谁后用 sticker_order 选：第一反应就 before 先甩图，收尾点题就 after 先说话；一张图就够、不想再说话时，填 silent=true、content 留空、只填 sticker，就只回这张图。什么时候配、配不配、放前放后，都按你自己对当下聊天的感觉来，像真人一样自然就好；挑不到合适的就不发。有人点名要表情包时用 sticker 工具亲自挑一张。表情包只通过 sticker 发，正文里不要写（doge）、[狗头] 这类文字版表情代替。"
     },
     {
       "key": "reply.tool.self_note",
@@ -1149,6 +1149,19 @@
         {
           "name": "aliases",
           "description": "这条消息实际命中的别名，带引号、用顿号分隔"
+        }
+      ]
+    },
+    {
+      "key": "reply.persistent_voice",
+      "group": "reply_tail",
+      "title": "常驻语音模式",
+      "usage": "语音合成插件的发送模式设为「常驻」时注入：告诉模型回复会被念出来，写成口语、控制字数。",
+      "default": "你这条回复会被合成为语音发出去：写成能直接念出口的口语，不用 Markdown、列表、表情符号和括号里的动作描写，不超过 {max_chars} 字。确实要给链接、代码或长清单时照常写，这种回复会改发文字。",
+      "vars": [
+        {
+          "name": "max_chars",
+          "description": "语音插件的单次合成字数上限"
         }
       ]
     },

@@ -100,37 +100,13 @@ func (r *Runtime) replyRuleVoiceCQ(ctx context.Context, event MessageEvent, rule
 	if strings.TrimSpace(reply) == "" || isStandaloneRecordReply(reply) {
 		return reply, nil
 	}
-	r.mu.RLock()
-	localMedia := r.localMedia
-	r.mu.RUnlock()
-	var plugin *VoiceTTSPlugin
-	var settings SettingValues
-	if r.plugins != nil {
-		pluginValue, effectiveSettings, enabled := r.plugins.PluginWithSettingsForGroup(
-			voiceTTSPluginID,
-			r.pluginOverridesForEvent(event),
-			r.pluginSettingOverridesForEvent(event),
-		)
-		var ok bool
-		plugin, ok = pluginValue.(*VoiceTTSPlugin)
-		if !enabled || !ok {
-			return "", fmt.Errorf("语音回复规则 %s 命中，但语音插件未启用", firstNonEmpty(rule.Name, rule.ID))
-		}
-		settings = effectiveSettings
+	tool, ok := r.voiceTTSToolForEvent(event)
+	if !ok {
+		return "", fmt.Errorf("语音回复规则 %s 命中，但语音插件未启用", firstNonEmpty(rule.Name, rule.ID))
 	}
-	if plugin == nil {
-		plugin = NewVoiceTTSPlugin(nil)
-		plugin.SetSpeechSynthesizer(r.slotSpeechSynthesizer)
-	}
-	plugin.SetLocalMediaSharer(localMedia)
-	tool := &dianaTTSTool{plugin: plugin, settings: settings}
-	output, err := tool.Run(ctx, map[string]any{"text": reply})
+	cq, err := synthesizeVoiceReply(ctx, tool, reply)
 	if err != nil {
-		return "", err
-	}
-	cq, ok := tool.TerminalResult(output)
-	if !ok || strings.TrimSpace(cq) == "" {
-		return "", fmt.Errorf("语音回复规则 %s 未生成可发送 record", firstNonEmpty(rule.Name, rule.ID))
+		return "", fmt.Errorf("语音回复规则 %s: %w", firstNonEmpty(rule.Name, rule.ID), err)
 	}
 	return cq, nil
 }
