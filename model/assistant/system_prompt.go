@@ -21,12 +21,12 @@ const (
 	// 主动插话时不能再说「只有被提到才回复」：这一轮恰恰没人提到你，同一段提示词
 	// 后面还写着「本次回复是主动插话」，两句话直接打架，模型只能在两条规则里随机取舍。
 	//
-	// 两个取值都是整串写死的常量，一个模式一串，头部仍然逐字节稳定，前缀缓存按
-	// 「触发回复」和「主动接话」各命中一份，不会因为这行字每轮都变而整段失效。
+	// 两串都放在 system 尾部、历史之后：同一个群里被点名和主动接话交替出现，这行
+	// 字要是在 head 里，每切换一次后面整段历史的前缀缓存就全部作废。
 	promptGroupScopeProactive = "当前是群聊，这一轮是你主动接话，没有人点名你；像群友顺口接一句。"
 
 	// promptGroupOwnerDistinction 只在群聊里注入：私聊没有群主，说了是白付 token。
-	// 它跟在 promptGroupScope 后面进稳定前缀，不随发言者变化，不影响前缀缓存。
+	// 它是群聊 head 里唯一的场景段落，不随发言者和轮次变化，不影响前缀缓存。
 	//
 	// 取值直接引常量，措辞和 GroupRole、RelationshipOwner 不会各说各的。
 	promptGroupOwnerDistinction = "群里的身份取值是 " + string(GroupRoleOwner) + "（群主）、" + string(GroupRoleAdmin) + "（管理员）、" + string(GroupRoleMember) + "（普通成员），和平台无关；你的主人在数据里标成 " + RelationshipOwnerRole + "。群主不是主人，两者毫无关系：群主不因为是群主就获得主人的任何权限，也不要把群主称作主人、或把主人说成群主。"
@@ -52,7 +52,7 @@ var promptGroupScopeSpec = registerPrompt(PromptSpec{
 	Key:     "reply.group_scope",
 	Group:   PromptGroupReplyRules,
 	Title:   "群聊场景（被点名）",
-	Usage:   "群聊里有人提到机器人或触发别名、机器人被叫来回复时注入，说明当前是群聊。",
+	Usage:   "群聊里有人提到机器人或触发别名、机器人被叫来回复时放在尾部，说明当前是群聊、这一轮是被点名。",
 	Default: promptGroupScope,
 })
 
@@ -60,7 +60,7 @@ var promptGroupScopeProactiveSpec = registerPrompt(PromptSpec{
 	Key:     "reply.group_scope_proactive",
 	Group:   PromptGroupReplyRules,
 	Title:   "群聊场景（主动接话）",
-	Usage:   "群聊里没人点名、机器人主动插话或闲聊接话的那一轮，替代上一条场景说明。",
+	Usage:   "群聊里没人点名、机器人主动插话或闲聊接话的那一轮放在尾部，替代上一条场景说明。",
 	Default: promptGroupScopeProactive,
 })
 
@@ -402,7 +402,7 @@ var (
 	promptCurrentMessageSpec       = ruleSpec("current_message", "只回当前消息", "每轮都注入：回复目标只看最后那条当前消息，历史只作参考。", promptCurrentMessage)
 	promptHistoryFormatSpec        = ruleSpec("history_format", "历史消息格式", "每轮都注入：说明历史行的写法、跨群历史和发送者角色标记的含义。标记写法和运行时生成的一致，改动时保持原样。", promptHistoryFormat)
 	promptAdjacentSupplementSpec   = ruleSpec("adjacent_supplement", "紧邻补发合并理解", "每轮都注入：同一人紧接着补发的内容合起来理解，但只回一条。", promptAdjacentSupplement)
-	promptPluginAuthoritySpec      = ruleSpec("plugin_authority", "插件结果为准", "本轮有插件返回事实结果时注入：以插件结果为权威依据。", promptPluginAuthority)
+	promptPluginAuthoritySpec      = ruleSpec("plugin_authority", "插件结果为准", "本轮有插件返回事实结果时放在尾部：以插件结果为权威依据。", promptPluginAuthority)
 	promptImageReplySpec           = ruleSpec("image_reply", "对着图说话", "当前消息带图时放在尾部：把图当成对方说的话来回应，不写画面解说。", promptImageReply)
 )
 
@@ -449,10 +449,10 @@ func refusalStrategyPrompt(strategy RefusalStrategy, configs ...BotConfig) strin
 	return overrides.text(promptRefusalBaseSpec) + overrides.text(spec)
 }
 
-// groupScopePrompt 选出这一轮群聊要用的场景说明。
+// groupScopePrompt 选出这一轮群聊要用的场景说明。它随轮次切换，只能进 tail。
 //
 // 主动插话和闲聊接话走同一句：从模型的角度看两者都是「没人叫我，我自己开的口」，
-// 分成两句写只会多一份要维护的文案，也多一份前缀缓存。
+// 分成两句写只会多一份要维护的文案。
 func groupScopePrompt(event MessageEvent, configs ...BotConfig) string {
 	if event.proactiveReply || event.chatInReply {
 		return promptOverridesOf(configs).text(promptGroupScopeProactiveSpec)

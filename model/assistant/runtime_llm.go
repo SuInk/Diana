@@ -956,8 +956,9 @@ func (r *Runtime) systemPromptWithRelationshipAndAgentTools(event MessageEvent, 
 //   - head 只依赖机器人配置、本群配置和本轮注册的工具：同一个群里不管谁说话、
 //     说什么，它逐字节相同。它作为第一条 system 消息发出，供应商的前缀缓存
 //     （tools → system → messages）从它开始命中，后面的历史才有机会一起命中。
-//   - tail 随「谁在说话、这条说了什么」变化：权限档位、主人专属工具规则、主动接话
-//     与闲聊插话说明、发言者昵称、命中的别名、时段与心情语气、语气锚点。它由调用方作为独立 system
+//   - tail 随「谁在说话、这条说了什么」变化：权限档位、主人专属工具规则、群聊场景
+//     （被点名 / 主动接话）、主动接话与闲聊插话说明、换行分条、插件结果为准、发言者
+//     昵称、命中的别名、时段与心情语气、语气锚点。它由调用方作为独立 system
 //     消息放在历史之后、当前消息之前。以前这段直接拼在同一条 system 里，换一个
 //     人说话整条 system 就变，Anthropic / Gemini / Responses 把 system 放在所有
 //     消息之前，system 一变，几千 token 的历史缓存也跟着全部作废。
@@ -1011,16 +1012,14 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 	}
 	appendPromptSection(&builder, replyPresentationPrompt(!chatSplitLimitsForEvent(cfg, event).SingleMessage, cfg))
 	appendPromptSection(&builder, replyLineBreakPrompt(cfg))
-	appendPromptSection(&builder, replyLineSplitPrompt(chatSplitLimitsForEvent(cfg, event)))
 	// 实时时钟不再拼进人设提示词：它每秒都不同，会让这段最长的 system 提示词永远
 	// 无法命中供应商的前缀缓存。改由 runtimeClockPrompt 作为尾部独立 system 消息注入。
 	if boolValue(cfg.PromptChineseSlangHint, true) {
 		appendPromptSection(&builder, cfg.prompt(promptChineseSlangSpec))
 	}
+	// 群聊场景说明（被点名 / 主动接话）逐轮切换，在下面的 tail 里注入；head 只留
+	// 群里一直成立的那段。
 	if event.Kind == EventKindGroup {
-		// 场景说明分「被触发」和「主动接话」两串：后者那一轮没人点名机器人，
-		// 再说「只有被提到才回复」会和下面的主动插话说明当场打架。
-		builder.WriteString("\n" + groupScopePrompt(event, cfg))
 		builder.WriteString("\n" + cfg.prompt(promptGroupOwnerDistinctionSpec))
 	}
 	// 称呼不分群聊私聊：私聊里没有触发这回事，但「别人怎么叫你」仍然是身份的一部分。
@@ -1188,6 +1187,13 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 	// 主动接话和闲聊插话的说明逐条消息变化：同一个群里这条是被点名、下一条是主动
 	// 接话，以前写在 head 里，head 一变，后面整段历史的前缀缓存就跟着作废。放进
 	// tail，和下面的识图说明一样按「这一轮是什么情况」注入。
+	//
+	// 群聊场景那一句同理：它分「被点名」和「主动接话」两串，以前在 head 里，线上同一
+	// 个群两种轮次交替时，每次切换都让后面约 8 万 token 的历史缓存失效。它打头，
+	// 后面紧跟主动接话的细则，两段读在一起不会打架。
+	if event.Kind == EventKindGroup {
+		tail.WriteString("\n" + groupScopePrompt(event, cfg))
+	}
 	if proactiveTriggered {
 		tail.WriteString("\n")
 		tail.WriteString(strings.TrimSpace(cfg.prompt(promptProactiveReplySpec)))
@@ -1200,15 +1206,19 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 		// 就是赞同对方，再给这个无法核实的判断补一段听起来内行的理由。
 		tail.WriteString("\n" + cfg.prompt(promptChatInNoAgreementSpec))
 	}
+	// 换行分条的说明在闲聊插话那一轮不出现（那一轮只认显式分条标记），所以也随轮次变，
+	// 跟着进 tail；条件和发送层一致，不变。
+	appendPromptSection(&tail, replyLineSplitPrompt(chatSplitLimitsForEvent(cfg, event)))
 	if eventCarriesImages(event) {
 		// 逐条消息变化，压到尾部，别把前面几千 token 的稳定规则挤出前缀缓存。
 		tail.WriteString("\n" + cfg.prompt(promptImageReplySpec))
 	}
+	// 插件有没有返回事实结果是这一轮的事，写进 head 会让有插件结果的那轮前缀分叉。
 	for _, resp := range pluginResponses {
 		if strings.TrimSpace(resp.Context) == "" {
 			continue
 		}
-		builder.WriteString("\n" + cfg.prompt(promptPluginAuthoritySpec))
+		tail.WriteString("\n" + cfg.prompt(promptPluginAuthoritySpec))
 		break
 	}
 	// 会变的内容全部进 tail，按易变程度从低到高排列：权限档位段落和发送者昵称在
