@@ -163,6 +163,8 @@ type StructuredMemoryQuery struct {
 	// visibility=user 记忆也一并排除。它与 CrossGroup 是两件事：后者控制的是
 	// 其他群的会话记忆。回复提示词不要设这一项，否则长期记忆会整类失效。
 	CurrentSessionOnly bool
+	// KeyPrefix 只取 memory_key 以它开头的记忆，按落库后的规范写法给（全小写、点分隔）。
+	KeyPrefix string
 }
 
 type MemoryJobKind string

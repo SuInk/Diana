@@ -88,10 +88,11 @@ const memoryGateRulesPrompt = `你是 Diana 的长期记忆门控器。消息原
 8. visibility=session 表示只在当前私聊或群可见；visibility=user 只适用于当前发言者明确陈述、非敏感且跨会话确有帮助的稳定事实/偏好。医疗、心理、财务、身份凭证、住址、联系方式、隐私关系等 sensitive=true，且必须 visibility=session。
 9. importance 和 confidence 均为 0 到 1。只有 importance>=0.45 的内容才输出；明确要求“记住”的重要内容可提高 importance，但仍要按真实语义组织，不照抄命令。
 10. content 必须写成自包含、无歧义的第三人称事实，保留实体；evidence 是不超过 60 字的最小证据片段。最多输出 5 条。content 里不得出现今天、昨天、早上、刚才、这周这类相对时间：按该条消息的 time 换算成具体日期（需要时带时段）再写，例如「2026-09-23 上午吃了布洛芬」。吃药、生病、喝酒、出行这类只在当时成立的状态只能写成带日期的 episode，不能写成 fact。from_bot=true 的是机器人自己说的话，只能用来理解上下文，不能当成任何人的自述。
-11. 上下文里给的是 current 还是 current_batch 取决于这一轮攒了几条。给 current_batch 时要把整批按时间顺序当成同一个人连续说的话一起理解：跨条的指代、补充和改口都要接上，同一件事不要拆成多条记忆；每条候选必须用 source_index 标明出自 current_batch 的第几条（从 0 开始），最能支撑这条记忆的那一条。整批合计最多输出 5 条。`
+11. 上下文里给的是 current 还是 current_batch 取决于这一轮攒了几条。给 current_batch 时要把整批按时间顺序当成同一个人连续说的话一起理解：跨条的指代、补充和改口都要接上，同一件事不要拆成多条记忆；每条候选必须用 source_index 标明出自 current_batch 的第几条（从 0 开始），最能支撑这条记忆的那一条。整批合计最多输出 5 条。
+12. 群聊里有人要 Diana 在这个群别再说某个具体的词、口头禅、表情或称呼（例如「别说草了」「少加哈哈哈」），哪怕语气是调侃，也算长期交互要求，不按玩梗跳过：kind=instruction，visibility=session，importance 不低于 0.6，key 写成 instruction.group.avoid.<那个词>，content 写清是谁要求 Diana 在本群不再说什么。这个 key 前缀的要求对全群生效，所以只用于「别说什么」；让 Diana 加口头禅、换语气、学某种腔调的仍按普通 instruction 记，不能用这个前缀。提要求的人后来明确说又可以说了，用同一个 key 做 forget。`
 
 const memoryGateOutputContract = `
-12. 调用 memory_submit 提交候选，字段含义以工具参数说明为准；没有候选时提交空数组。只有在不支持工具调用时，才退回输出合法 JSON 对象 {"memories":[...]}，不要 Markdown 或解释。`
+13. 调用 memory_submit 提交候选，字段含义以工具参数说明为准；没有候选时提交空数组。只有在不支持工具调用时，才退回输出合法 JSON 对象 {"memories":[...]}，不要 Markdown 或解释。`
 
 var promptMemoryGateSpec = registerPrompt(PromptSpec{
 	Key:      "memory.gate",

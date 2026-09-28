@@ -649,6 +649,10 @@ func (s *SQLiteStore) ListStructuredMemories(ctx context.Context, query assistan
 		}
 		kindClause += " AND kind NOT IN (" + strings.Join(placeholders, ",") + ")"
 	}
+	if prefix := strings.TrimSpace(query.KeyPrefix); prefix != "" {
+		kindClause += ` AND memory_key LIKE ? ESCAPE '\'`
+		args = append(args, escapeMessageHistoryLike(prefix)+"%")
+	}
 	searchTerms := query.SearchTerms
 	if len(query.IDs) > 0 {
 		ids := query.IDs
