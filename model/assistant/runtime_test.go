@@ -3337,7 +3337,7 @@ func TestRuntimeMarksHistoryAsReferenceAndCurrentAsTarget(t *testing.T) {
 		}
 	}
 	current := provider.request.Messages[len(provider.request.Messages)-1].Content
-	if !strings.HasPrefix(history, "[历史 "+time.Unix(1000, 0).Local().Format("2006-01-02 15:04:05")+"] Alice（im_current_user_") || !strings.Contains(history, "）: 旧问题是什么") {
+	if !strings.HasPrefix(history, "[历史 "+time.Unix(1000, 0).Local().Format("2006-01-02 15:04:05")+"] Alice（im_user_") || !strings.Contains(history, "）: 旧问题是什么") {
 		t.Fatalf("history content = %q", history)
 	}
 	// 历史行只标绝对时间：「距当前」随请求时间变化，会让整段历史无法命中前缀缓存。

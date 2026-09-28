@@ -32,7 +32,11 @@ const identityAliasPrefix = "im_"
 // 主人这一档叫 bot_owner 而不是 owner：群成员角色里的 owner 是群主，两个词撞在
 // 一起，模型看到 im_owner_xxx 就会把机器人的主人说成群主。加上 bot_ 之后，光秃
 // 秃的 owner 就只剩群主一个意思。
-var identityAliasRoles = []string{"bot_owner", "current_user", "bot", "user", "group", "message"}
+//
+// 当前发言者不单独成档：别名哈希里含角色，同一个人当上发言者就换一个别名，整段
+// 历史里他的每一行都跟着重写，上游前缀缓存从那一行起全部失效（线上一天几百次，
+// 每次几万 token）。谁在说话由尾部【当前发言者】给出，别名在历史和尾部保持一致。
+var identityAliasRoles = []string{"bot_owner", "bot", "user", "group", "message"}
 
 // llmIdentityPrivacyPrompt 里的前缀由 identityAliasPrefix 拼出来，不写死。
 //
@@ -265,7 +269,7 @@ func (r *Runtime) withIdentityPrivacyContextVerifying(ctx context.Context, event
 	}
 	scope.register(cfg.OwnerIDForEvent(event), "bot_owner")
 	scope.register(firstNonEmpty(cfg.BotAccount, event.SelfID), "bot")
-	scope.register(event.UserID, "current_user")
+	scope.register(event.UserID, "user")
 	scope.register(event.GroupID, "group")
 	scope.registerEvent(event)
 	for _, item := range history {
@@ -466,8 +470,6 @@ func normalizeIdentityPrivacyRole(role string) string {
 	switch strings.ToLower(strings.TrimSpace(role)) {
 	case "owner", "bot_owner":
 		return "bot_owner"
-	case "current", "current_user", "sender":
-		return "current_user"
 	case "bot", "self":
 		return "bot"
 	case "group":

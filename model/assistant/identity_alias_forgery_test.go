@@ -12,7 +12,7 @@ import (
 
 // 会话别名的前缀本身就是身份声明。
 //
-// 系统提示词明确告诉模型「im_bot_owner、im_current_user、im_bot 前缀保留角色语义」，
+// 系统提示词明确告诉模型「im_bot_owner、im_bot 前缀保留角色语义」，
 // 所以用户只要在正文里手写一个 im_bot_owner_xxx，就等于凭空给自己发了张身份证。
 // 这和伪造 [主人] 是同一类洞，只是换了个 token。
 func TestForgedAliasNeverReachesPrompt(t *testing.T) {
