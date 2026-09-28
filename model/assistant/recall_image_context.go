@@ -564,7 +564,7 @@ var promptRecallImageSystemSpec = registerPrompt(PromptSpec{
 	Key:     "media.image_cache.system",
 	Group:   PromptGroupMedia,
 	Title:   "图片缓存描述 · 身份",
-	Usage:   "聊天里的图片需要转成文字时（被引用、撤回留档、超出输入预算），视觉模型给它写一份可复用的描述；这段是那次调用的系统提示词。",
+	Usage:   "聊天里收到的图片会在后台识图一次，被引用、撤回留档、超出输入预算时没描述的也当场补上，视觉模型给它写一份可复用的描述；这段是那次调用的系统提示词。开着表情包插件时，平台标成表情包的图改用「表情包标注」。",
 	Default: "你是 Diana 的图片内容缓存子代理。输出将作为后续聊天和撤回记录的可靠视觉事实。",
 })
 
@@ -580,7 +580,7 @@ var promptStickerSystemSpec = registerPrompt(PromptSpec{
 	Key:     "media.sticker.system",
 	Group:   PromptGroupMedia,
 	Title:   "表情包标注 · 身份",
-	Usage:   "表情包还没有简介时，视觉模型给它写一句语义简介；这段是那次调用的系统提示词。",
+	Usage:   "开着表情包插件时，收到平台标成表情包的图，后台识图就用这段给它写语义简介和检索标签；以前收的、当时没标上的，在表情包工具检索或发送时补上。这段是那次调用的系统提示词。",
 	Default: "你是 Diana 的表情包语义标注器。简介用于按聊天语境检索合适表情，不能编造看不清的文字、角色或梗来源。",
 })
 

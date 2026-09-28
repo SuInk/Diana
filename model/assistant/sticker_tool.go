@@ -878,9 +878,10 @@ func (r *Runtime) saveStickerTags(hash, gist string, tags []string) {
 	}
 }
 
-// enrichCandidateDescriptions only touches the bounded result set returned to the
-// Agent. Cached descriptions stay free; missing ones use the existing vision route
-// and are persisted by image hash so later searches do not call the model again.
+// enrichCandidateDescriptions 只处理这次返回给 Agent 的那几张候选。收到的表情包在后台
+// 识图队列里就标好了（见 historyImageJobTagsSticker），走到这里的多是这项改动之前收的、
+// 当时没开插件的，或者后台识图失败、排队被挤掉的。有缓存描述的不花钱；缺的当场用表情包
+// 标注补上，按图片哈希存下，以后检索不再调模型。
 func (t *dianaStickerTool) enrichCandidateDescriptions(ctx context.Context, candidates []stickerCandidate) {
 	if len(candidates) == 0 || t.runtime.recallImageDescriptionStore() == nil {
 		return
@@ -929,8 +930,9 @@ func (t *dianaStickerTool) enrichCandidateDescriptions(ctx context.Context, cand
 	workers.Wait()
 }
 
-// tagCandidatesInBackground 给已有通用描述、但还没有表情包标签的候选补标签。
-// 这一轮 Agent 先用通用描述挑，不等识图；标好后下次检索就能按标签命中。
+// tagCandidatesInBackground 给已有通用描述、但还没有表情包标签的候选补标签。新收的表情包
+// 在后台识图时已经带上标签，这里补的是那之前按通用提示词描述过的存量。这一轮 Agent 先用
+// 通用描述挑，不等识图；标好后下次检索就能按标签命中。
 func (t *dianaStickerTool) tagCandidatesInBackground(ctx context.Context, candidates []stickerCandidate) {
 	if t.runtime.stickerTagStore() == nil {
 		return
