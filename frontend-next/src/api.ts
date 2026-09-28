@@ -41,6 +41,8 @@ export interface LLMConfig {
   /** 用户手填的窗口；WebUI 保存时必填，老配置缺省时按兜底值 128000。 */
   context_window_tokens?: number;
   max_context_tokens?: number;
+  /** 只读：本机内置的 User-Agent，新建配置时预填。只在配置集顶层返回。 */
+  default_user_agent?: string;
   /** 只读回显：机器人模型分配里指向这套配置的用途，用来说明改它会影响谁。 */
   role_bindings?: LLMRoleBinding[];
   /** 只读回显：当前模型实际生效的窗口与请求上限，以及窗口的来源。 */

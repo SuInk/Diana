@@ -390,11 +390,22 @@
             <br />已保存的头出于和 API Key 同样的理由不回显值，留空则沿用，填了新值才覆盖；删掉整行才是删除这个头。
           </span>
         </div>
-        <div v-if="form.provider === 'openai_compatible'" class="field">
-          <label for="llm-ua">User-Agent（可选）</label>
-          <input id="llm-ua" v-model="form.user_agent" class="input" placeholder="跟随内置默认" />
+        <div v-if="form.provider === 'openai_compatible'" class="field wide">
+          <label for="llm-ua">User-Agent</label>
+          <input
+            id="llm-ua"
+            v-model="form.user_agent"
+            class="input mono"
+            required
+            autocomplete="off"
+            spellcheck="false"
+            :class="{ invalid: invalidField === 'user_agent' }"
+            :aria-invalid="invalidField === 'user_agent'"
+            :placeholder="defaultUserAgent || 'diana (darwin; arm64)'"
+            @input="clearInvalid('user_agent')"
+          />
           <span class="hint">
-            留空用内置默认值，形如 <code>diana (darwin; arm64)</code>——自报家门，不带版本号所以不会过期。订阅转发网关通常按「originator 精确匹配加 User-Agent 子串匹配」双因子认客户端，需要冒充特定客户端时在这里填它的 UA，配套的 <code>originator</code> 填到上面的自定义请求头里。
+            默认填本机的内置值 <code>{{ defaultUserAgent || "diana (darwin; arm64)" }}</code>——自报家门，不带版本号所以不会过期。订阅转发网关通常按「originator 精确匹配加 User-Agent 子串匹配」双因子认客户端，需要冒充特定客户端时在这里填它的 UA，配套的 <code>originator</code> 填到上面的自定义请求头里。
           </span>
         </div>
         <div class="field wide">
@@ -618,6 +629,7 @@ function applyServicePreset(id: string): void {
 }
 
 const profiles = computed<LLMConfig[]>(() => profileSet.value?.profiles ?? []);
+const defaultUserAgent = computed(() => profileSet.value?.default_user_agent ?? "");
 
 
 function providerLabel(provider: Provider): string {
@@ -648,7 +660,7 @@ function startCreate(): void {
   editingConfigured.value = false;
   editingKeyPreview.value = "";
   editingProfile.value = null;
-  form.value = { ...emptyForm };
+  form.value = { ...emptyForm, user_agent: defaultUserAgent.value };
   contextWindowTouched.value = false;
   credentialMode.value = "api_key";
   selectedService.value = "deepseek";
@@ -774,7 +786,7 @@ function startEdit(profile: LLMConfig): void {
     base_url: profile.base_url ?? "",
     api_key: "",
     oauth_provider: profile.oauth_provider ?? "",
-    user_agent: profile.user_agent ?? "",
+    user_agent: profile.user_agent || defaultUserAgent.value,
     description: profile.description ?? "",
     // 老配置没填窗口时先填上默认值（清单里有就用清单的），保存前人能看到、能改。
     context_window_tokens: String(
@@ -968,6 +980,11 @@ async function save(): Promise<void> {
   if (!Number.isInteger(window) || window < 1024) {
     invalidField.value = "context_window_tokens";
     toastError("请填写模型上下文窗口（至少 1024）");
+    return;
+  }
+  if (form.value.provider === "openai_compatible" && form.value.user_agent.trim() === "") {
+    invalidField.value = "user_agent";
+    toastError("请填写 User-Agent");
     return;
   }
   // 一个模型都没有就没法保存：兜底模型和机器人页的模型分配都得从这个列表里取。
@@ -1239,14 +1256,9 @@ useConfigurationRefresh(["bot", "llm"], reload);
   border-color: var(--border);
 }
 
-/* 光一行文字看不出能点：用虚线框标出「这里能再加一行」，和实线框的输入框区分开。 */
+/* 光一行文字看不出能点，虚线框又太扎眼：用和「删除」同一档的实线淡边框。 */
 .header-add {
-  border: 1px dashed var(--border-strong);
-}
-
-.header-add:hover:not(:disabled) {
-  border-color: var(--accent, var(--border-strong));
-  color: var(--text);
+  border-color: var(--border);
 }
 
 /* 模型分配引用列表：跟在 hint 后面的一小段列表，排版继承 hint 的字号和颜色。 */

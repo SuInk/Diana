@@ -81,6 +81,7 @@ const modelCatalog = [
 ];
 
 let llmConfig: LLMConfig = {
+  default_user_agent: "diana (darwin; arm64)",
   provider: "openai_compatible",
   model: "gpt-6-sol",
   api_key_configured: true,
