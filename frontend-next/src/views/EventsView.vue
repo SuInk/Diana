@@ -283,8 +283,8 @@
                 </div>
               </div>
               <div v-for="recall in event.recalls ?? []" :key="recall.message_id" class="event-recall-summary">
-                <strong>回复已撤回</strong>
-                <p>{{ replyRecallText(event, recall) }}</p>
+                <strong>{{ isMessageRecall(event, recall) ? "消息已撤回" : "回复已撤回" }}</strong>
+                <p>{{ isMessageRecall(event, recall) ? messageRecallText(event, recall) : replyRecallText(event, recall) }}</p>
                 <span class="muted">撤回于 {{ formatClock(recall.at) }}</span>
               </div>
               <div v-if="event.subtasks?.length" class="event-subtasks">
@@ -676,9 +676,9 @@ watch(botScope, () => {
   if (currentView.value === "events") void load(true);
 });
 const events = ref<AssistantEventDetail[]>([]);
-// 撤回机器人回复的通知原先单独占一行，只写得出「某某撤回了 Diana 的消息」，撤的
-// 是哪句得自己按时间去对。后端已经把撤回挂到原回复上，这里把那一行藏掉；原回复
-// 还没翻到时照常显示，信息不会丢。
+// 撤回通知原先单独占一行：撤机器人回复的只写得出「某某撤回了 Diana 的消息」，
+// 群友撤自己的消息也多出一行，原消息那行却看不出被撤过。后端已经把撤回挂到原消息
+// 或原回复上，这里把那一行藏掉；原消息还没翻到时照常显示，信息不会丢。
 const visibleEvents = computed(() => {
   const merged = new Set<string>();
   for (const event of events.value) {
@@ -1005,6 +1005,19 @@ function replyRecallText(event: AssistantEventDetail, recall: AssistantEventReca
   const identity = [recall.operator_name?.trim(), recall.operator_id].filter(Boolean).join(" · ") || "未知操作者";
   const role = recallRoleLabel(recall.operator_role);
   return `${identity}${role ? `（${role}）` : ""} 撤回了这条回复${position}`;
+}
+
+// 撤回的消息号就是这条事件自己的，撤的是收到的这条消息，不是机器人的回复。
+function isMessageRecall(event: AssistantEventDetail, recall: AssistantEventRecall): boolean {
+  return Boolean(event.message_id) && recall.message_id === event.message_id;
+}
+
+function messageRecallText(event: AssistantEventDetail, recall: AssistantEventRecall): string {
+  if (recall.operator_role === "history_backfill") return "断线回补确认这条消息已撤回，平台历史接口未提供实际操作者";
+  if (recall.self_recall) return "发送者撤回了这条消息";
+  const identity = [recall.operator_name?.trim(), recall.operator_id].filter(Boolean).join(" · ") || "未知操作者";
+  const role = recallRoleLabel(recall.operator_role);
+  return `${identity}${role ? `（${role}）` : ""} 撤回了这条消息`;
 }
 
 function recallActorText(event: AssistantEventDetail): string {
