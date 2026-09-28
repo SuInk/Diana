@@ -318,27 +318,16 @@
                 数据目录 <code class="mono">{{ storage.path }}</code>。
                 <template v-if="storage.scanning">正在重新统计，稍后自动刷新。</template>
                 <template v-else-if="storage.scanned_at">统计于 {{ formatTime(storage.scanned_at) }}。</template>
-                占得多的话：图片、视频、音频这些历史原件由「媒体与文件」里的历史媒体原件和下载缓存两项策略清理，Agent 工作目录里的文件在侧栏「文件」页里按分区浏览、下载或删除。
+                占得多的话：图片、视频、音频这些历史原件由「媒体与文件」的保留策略清理，下载缓存由「下载缓存」清理，Agent 工作目录里的文件在侧栏「文件」页里按分区浏览、下载或删除。
               </p>
             </template>
           </div>
         </section>
       </div>
 
-      <div v-show="activePage === 'media'" class="settings-section-body">
+      <div v-show="activePage === 'cache'" class="settings-section-body">
         <section class="download-cache-settings">
-          <div class="card-header" style="justify-content: space-between"><h2>历史媒体原件</h2><button class="btn small ghost" type="button" :disabled="historyMediaLoading || historyMediaSaving" title="刷新历史媒体设置" aria-label="刷新历史媒体设置" @click="loadHistoryMediaPolicy"><RefreshCw :size="14" aria-hidden="true" /></button></div>
-          <form class="card-body form-grid" @submit.prevent="saveHistoryMedia">
-            <p v-if="historyMediaError" class="error field wide">{{ historyMediaError }}</p>
-            <div class="field"><label for="history-media-days">保留天数</label><input id="history-media-days" v-model.number="historyMediaDays" class="input" type="number" min="-1" max="36500" /><span class="hint">-1 表示不按时间删除。</span></div>
-            <div class="field"><label for="history-media-max">容量上限（MiB）</label><input id="history-media-max" v-model.number="historyMediaMaxMB" class="input" type="number" min="0" max="1048576" /><span class="hint">0 表示不限制容量。</span></div>
-            <p class="hint field wide">清理只删除图片、视频、音频、PDF 等历史原件；聊天文字、媒体类型和已有摘要保留。删除后历史记录会显示原件不可用。</p>
-            <div class="field wide"><button class="btn primary" type="submit" :disabled="historyMediaLoading || historyMediaSaving || !historyMediaValid"><Save :size="15" />{{ historyMediaSaving ? "清理中…" : "保存并立即清理" }}</button></div>
-          </form>
-        </section>
-        <section class="download-cache-settings">
-          <div class="card-header" style="justify-content: space-between">
-            <h2>下载缓存</h2>
+          <div class="card-header" style="justify-content: flex-end">
             <button class="btn small ghost" type="button" :disabled="cacheLoading || cacheSaving" title="刷新缓存设置" aria-label="刷新缓存设置" @click="loadCachePolicy">
               <RefreshCw :size="14" aria-hidden="true" />
             </button>
@@ -376,6 +365,19 @@
                 </button>
               </div>
             </fieldset>
+          </form>
+        </section>
+      </div>
+
+      <div v-show="activePage === 'media'" class="settings-section-body">
+        <section class="download-cache-settings">
+          <div class="card-header"><h2>历史媒体原件</h2><button class="btn small ghost" type="button" :disabled="historyMediaLoading || historyMediaSaving" @click="loadHistoryMediaPolicy"><RefreshCw :size="14" /></button></div>
+          <form class="card-body form-grid" @submit.prevent="saveHistoryMedia">
+            <p v-if="historyMediaError" class="error field wide">{{ historyMediaError }}</p>
+            <div class="field"><label for="history-media-days">保留天数</label><input id="history-media-days" v-model.number="historyMediaDays" class="input" type="number" min="-1" max="36500" /><span class="hint">-1 表示不按时间删除。</span></div>
+            <div class="field"><label for="history-media-max">容量上限（MiB）</label><input id="history-media-max" v-model.number="historyMediaMaxMB" class="input" type="number" min="0" max="1048576" /><span class="hint">0 表示不限制容量。</span></div>
+            <p class="hint field wide">清理只删除图片、视频、音频、PDF 等历史原件；聊天文字、媒体类型和已有摘要保留。删除后历史记录会显示原件不可用。</p>
+            <div class="field wide"><button class="btn primary" type="submit" :disabled="historyMediaLoading || historyMediaSaving || !historyMediaValid"><Save :size="15" />{{ historyMediaSaving ? "清理中…" : "保存并立即清理" }}</button></div>
           </form>
         </section>
       </div>
@@ -563,7 +565,7 @@ import LoadingSkeleton from "../components/LoadingSkeleton.vue";
 import SkeletonBlock from "../components/SkeletonBlock.vue";
 import PluginSettingField from "../components/PluginSettingField.vue";
 import StorageDonut from "../components/StorageDonut.vue";
-import { Activity, Download, Eye, EyeOff, Images, KeyRound, LogOut, MonitorSmartphone, Palette, PieChart, Plug, RefreshCw, RotateCw, Save, ShieldCheck } from "@lucide/vue";
+import { Activity, Download, Eye, EyeOff, HardDriveDownload, Images, KeyRound, LogOut, MonitorSmartphone, Palette, PieChart, Plug, RefreshCw, RotateCw, Save, ShieldCheck } from "@lucide/vue";
 import {
   changeCredentials,
   getAuthStatus,
@@ -615,7 +617,8 @@ const settingsPages = [
   { key: "sessions", label: "登录会话", hint: "机器人发来异常登录提醒时，在这里把对应设备踢下线。", icon: MonitorSmartphone },
   { key: "openapi", label: "对外 API", hint: "让 CI、监控这类外部系统通过 HTTP 接口给机器人推送消息。", icon: Plug },
   { key: "storage", label: "存储空间", hint: "这台机器的磁盘还剩多少，以及 Diana 的数据目录被哪类文件占掉了。", icon: PieChart },
-  { key: "media", label: "媒体与文件", hint: "历史媒体原件的保留策略，以及下载缓存按闲置天数或容量清理。", icon: Images },
+  { key: "cache", label: "下载缓存", hint: "控制下载的媒体缓存按闲置天数或容量清理。", icon: HardDriveDownload },
+  { key: "media", label: "媒体与文件", hint: "历史媒体原件的保留策略。", icon: Images },
   { key: "update", label: "系统更新", hint: "检查、下载并安装新版本，以及原地重启服务。", icon: Download },
   { key: "status", label: "运行状态", hint: "当前服务的启动时间与运行时长。", icon: Activity },
   { key: "theme", label: "界面主题", hint: "只存在你当前这个浏览器里，不会同步到其它设备，也不影响别的登录用户。", icon: Palette }
@@ -626,7 +629,7 @@ const settingsGroups = (
   [
     { label: "个性化", keys: ["theme"] },
     { label: "账号与安全", keys: ["security", "sessions", "openapi"] },
-    { label: "系统", keys: ["storage", "media", "update", "status"] }
+    { label: "系统", keys: ["storage", "cache", "media", "update", "status"] }
   ] as const
 ).map((group) => ({
   label: group.label,
