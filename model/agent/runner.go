@@ -193,6 +193,8 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 	modelTurns := 0
 	toolCalls := 0
 	protocolRepairs := 0
+	// silentContentRepaired 保证「静默却带正文」只打回一次，见 action.Silent 分支。
+	silentContentRepaired := false
 	forceSearchNextTurn := false
 	lastToolSignature := ""
 	imageTaskQueued := false
@@ -246,10 +248,11 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 	}
 	// finishSilent 收口一次静默结束：没有正文，也不该被下游兜底成任何文案。
 	// Text 保持为空，由 Silent 告诉调用方「这是模型的决定，不是生成失败」。
-	finishSilent := func(silentReason, reason string) *Response {
+	finishSilent := func(action llmAction, reason string) *Response {
 		response := finish("", reason)
 		response.Silent = true
-		response.SilentReason = strings.TrimSpace(silentReason)
+		response.SilentReason = strings.TrimSpace(action.SilentReason)
+		response.SilentContent = action.Content
 		return response
 	}
 	fail := func(err error) (*Response, error) {
@@ -426,9 +429,25 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 					}
 					continue
 				}
+				// 线上出过：静默收尾上写着完整回复，理由是「已通过 say 发出」，可这一轮
+				// 根本没调过 say——模型把自己写在工具调用旁边的正文当成了已经发出的话。
+				// 打回去一次让它重选；再犯就按静默交出去，由调用方核对后发出 content。
+				if action.Content != "" && !silentContentRepaired && !saidThisRun(steps) {
+					silentContentRepaired = true
+					protocolRepairs++
+					reason := "你填了 silent=true，但 content 不为空，而这一轮没有调用过 say"
+					emitProtocolRepair(ctx, req.Observer, traceID, modelTurns, toolCalls, r.cfg.MaxSteps, reason)
+					messages = appendAssistantEcho(messages, lastText)
+					messages = append(messages, llm.Message{Role: llm.RoleUser, Content: reason + "。写在工具调用旁边的正文不会发给用户，目前对方什么都没收到。要回复就重新调用 agent_finalize，silent 填 false，把回复写进 content；确实不回复就 content 留空。"})
+					if protocolRepairs >= r.cfg.ProtocolRepairLimit {
+						finishReason = "protocol_repair_exhausted"
+						break
+					}
+					continue
+				}
 				// 模型自己决定这一轮不说话：没有正文，也就没有排版、证据账本和
 				// 空收尾可校验——那几项校验的对象都是「要发出去的那句话」。
-				return finishSilent(action.SilentReason, "silent"), nil
+				return finishSilent(action, "silent"), nil
 			}
 			if reason := finalizeLayoutIssue(action); reason != "" {
 				protocolRepairs++
@@ -832,7 +851,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 		action := finalizeAction(call, finalText)
 		finalizeFields = r.finalizeFieldValues(action)
 		if action.Silent && !imageTaskQueued {
-			return finishSilent(action.SilentReason, finishReason), nil
+			return finishSilent(action, finishReason), nil
 		}
 		if issue := finalizeLayoutIssue(action); issue != "" {
 			return fail(fmt.Errorf("finalize_layout: %s（finish_reason=%s）", issue, finishReason))
@@ -851,7 +870,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 	}
 	if action, ok := parseAction(finalText); ok && action.Action == "final" {
 		if action.Silent && !imageTaskQueued {
-			return finishSilent(action.SilentReason, finishReason), nil
+			return finishSilent(action, finishReason), nil
 		}
 		if issue := finalizeLayoutIssue(action); issue != "" {
 			return fail(fmt.Errorf("finalize_layout: %s（finish_reason=%s）", issue, finishReason))
@@ -1172,7 +1191,7 @@ func (r *Runner) systemPrompt() string {
 	if hasTool("say") {
 		// 中途说一句（assistant 的 say 工具）：把「说」和「结束」分开。上面那条禁止未执行
 		// 承诺的规则管的是最终答复；say 发的是「正在做」，说完必须接着做。
-		rules = append(rules, "- 要先查、先做几步才能回答时，可以先调用 say 说一句正在做什么（比如「我去查一下」），然后接着调用工具真的去做；长任务每完成一个阶段可以再用 say 报一句进度。say 说了「去做」就必须继续调用工具，不能说完就调用 agent_finalize 收工。say 不是分条发答案用的；它发出去的话对方已经看到，agent_finalize 里不要重复，全都说完了就 silent=true。")
+		rules = append(rules, "- 要先查、先做几步才能回答时，可以先调用 say 说一句正在做什么（比如「我去查一下」），然后接着调用工具真的去做；长任务每完成一个阶段可以再用 say 报一句进度。say 说了「去做」就必须继续调用工具，不能说完就调用 agent_finalize 收工。say 不是分条发答案用的；它发出去的话对方已经看到，agent_finalize 里不要重复，全都说完了就 silent=true。只有真的调用了 say 工具才算说过：你在工具调用旁边写的正文不会发给任何人，本轮没调过 say 就把回复写进 agent_finalize 的 content、silent 填 false。")
 	}
 	// 线上出过：主人让把生成的图存进工作目录，模型手里只有 write_file，就存了一份
 	// 文字描述，然后在没有任何成功调用的情况下回了一句「存好了」。

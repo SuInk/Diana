@@ -56,7 +56,7 @@ func finalizeContentLayoutIssue(content string) string {
 func finalizeToolDefinition(ledger *claimEvidenceLedger, imagePending bool, extra ...FinalizeField) llm.ToolDefinition {
 	properties := map[string]any{
 		"content":       toolStringParam("给用户看的最终自然语言回复，必填且不能为空（silent=true 时才可以留空）。正文禁止真实 CR/LF；下一条消息用 [diana-msg]，同一消息内换行用 [diana-line]。不要写成 JSON。"),
-		"silent":        toolBoolParam("这一轮不发任何消息时填 true，content 留空；写了也不会发出去。只在确实没有值得说的话、或对方已经在收尾且你们互相道过别时用。要拒绝就正常说出来，不要用它。"),
+		"silent":        toolBoolParam("这一轮不发任何消息时填 true，content 留空。它不代表你已经说过话：写在工具调用旁边的正文不会发给用户，只有 say 工具发出去的才算。只在确实没有值得说的话、或对方已经在收尾且你们互相道过别时用。要拒绝就正常说出来，不要用它。"),
 		"silent_reason": toolStringParam("silent=true 时用一句话说明为什么不回复。只写进运行日志，不发给用户。"),
 	}
 	required := []string{"content"}
@@ -119,6 +119,16 @@ func finalizeAction(call llm.ToolCall, text string) llmAction {
 		action.Content = strings.TrimSpace(text)
 	}
 	return action
+}
+
+// saidThisRun 报告这一轮有没有成功调用过 say（assistant 注册的中途发言工具）。
+func saidThisRun(steps []Step) bool {
+	for _, step := range steps {
+		if step.Tool == "say" && !step.Skipped && step.Error == "" {
+			return true
+		}
+	}
+	return false
 }
 
 // turnDefinitions is independent of loaded tools, claim IDs, sources and image state.

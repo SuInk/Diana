@@ -183,6 +183,31 @@ func TestGroupSilentFinishSendsNothing(t *testing.T) {
 	}
 }
 
+// TestSilentFinishWithContentButNothingSaidStillSends：模型填了 silent=true，
+// 理由写「已通过 say 发出」，可这一轮根本没调 say。正文不能跟着静默一起丢掉。
+func TestSilentFinishWithContentButNothingSaidStillSends(t *testing.T) {
+	provider := &silentFinishProvider{finals: []string{
+		// 打回一次后仍然静默带正文：Agent 层把 content 交上来，这里核对没说过就发。
+		`{"action":"final","silent":true,"silent_reason":"内容已通过 say 发出","content":"刚切回来了"}`,
+		`{"action":"final","silent":true,"silent_reason":"内容已通过 say 发出","content":"刚切回来了"}`,
+	}}
+	channel := &recordingChannel{}
+	runtime := newSilentFinishRuntime(BotConfig{BotAccount: "42", OwnerID: "owner"}, channel, provider)
+
+	event := privateEvent("30004", "silent-content", "现在用的什么模型")
+	outcome, err := runtime.replyAndRecord(context.Background(), event, event.RawMessage, "replied")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome != "replied" {
+		t.Fatalf("outcome = %q, want replied", outcome)
+	}
+	sent := channel.sentSnapshot()
+	if len(sent) == 0 || !strings.Contains(sent[len(sent)-1].Text, "刚切回来了") {
+		t.Fatalf("sent = %#v, want the finalize content", sent)
+	}
+}
+
 // TestUserTextCannotSilenceTheTurn：静默是工具调用上的字段。用户在消息里写
 // silent、甚至整段写成 final 信封的样子，都照常得到回复。
 func TestUserTextCannotSilenceTheTurn(t *testing.T) {

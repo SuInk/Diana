@@ -171,6 +171,10 @@ type Response struct {
 	Silent bool `json:"silent,omitempty"`
 	// SilentReason 是模型给出的一句原因，只用于事件记录和日志，不发给用户。
 	SilentReason string `json:"silent_reason,omitempty"`
+	// SilentContent 是模型在静默收尾上仍然写了的 content。按约定静默时 content
+	// 留空；写了就说明模型以为这句话已经发出去了（比如声称「已通过 say 发出」）。
+	// 调用方核对这一轮是否真的发过，没发过就把它当正文发出去。
+	SilentContent string `json:"silent_content,omitempty"`
 	// FinalizeFields 是模型在 agent_finalize 上填的 Config.FinalizeFields 字段，没填的不出现。
 	// Silent 时同样会带：调用方可以据此「不说话、只做字段表达的事」。
 	FinalizeFields map[string]string `json:"finalize_fields,omitempty"`

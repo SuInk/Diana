@@ -4963,12 +4963,19 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 		r.rememberClaimSources(event, resp.Claims)
 		r.rememberToolCalls(event, resp.Steps)
 		finalizeStickerFromContext(ctx).set(resp.FinalizeFields[stickerFinalizeFieldName], resp.FinalizeFields[stickerOrderFieldName])
+		text := resp.Text
 		if resp.Silent {
-			// 模型在 agent_finalize 上自己按下了静默。没有正文可整理，也不该被
-			// 下游任何一条兜底文案补上；调用方按「本轮不发送」处理。
-			return "", newModelSilentFinishError(resp.SilentReason)
+			// 线上出过：模型填 silent=true、silent_reason「内容已通过 say 发出」，
+			// content 里是完整回复，可这一轮根本没调过 say——话一句都没发出去。
+			// 静默带着正文、中途又什么都没说过时，以正文为准照常发送。
+			if resp.SilentContent == "" || len(interimMessagesSent(ctx)) > 0 {
+				// 模型在 agent_finalize 上自己按下了静默。没有正文可整理，也不该被
+				// 下游任何一条兜底文案补上；调用方按「本轮不发送」处理。
+				return "", newModelSilentFinishError(resp.SilentReason)
+			}
+			text = resp.SilentContent
 		}
-		text := r.applyFinalizeRender(ctx, event, resp.Text, resp.FinalizeFields[renderFinalizeFieldName])
+		text = r.applyFinalizeRender(ctx, event, text, resp.FinalizeFields[renderFinalizeFieldName])
 		return r.prepareGeneratedReply(ctx, cfg, text, event)
 	}
 	group := llm.GroupChat

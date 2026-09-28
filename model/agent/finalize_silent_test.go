@@ -55,6 +55,75 @@ func TestRunnerSilentFinalizeViaNativeToolCall(t *testing.T) {
 	}
 }
 
+// TestSilentFinalizeWithContentButNoSayIsRepairedOnce：线上出过，模型填
+// silent=true、理由写「已通过 say 发出」，content 是完整回复，可这一轮根本没调过
+// say。打回去一次；模型改成正常收尾就照常发。
+func TestSilentFinalizeWithContentButNoSayIsRepairedOnce(t *testing.T) {
+	client := &scriptedClient{responses: []string{
+		`{"action":"final","silent":true,"silent_reason":"内容已通过 say 发出","content":"刚切回来了"}`,
+		`{"action":"final","content":"刚切回来了"}`,
+	}}
+	runner, err := NewRunner(client, Config{WorkDir: t.TempDir(), MaxSteps: 2}, NewToolRegistry())
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := runner.Run(context.Background(), Request{Messages: []llm.Message{{Role: llm.RoleUser, Content: "现在什么模型"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Silent || resp.Text != "刚切回来了" {
+		t.Fatalf("resp = %#v, want the repaired reply", resp)
+	}
+	if len(client.requests) != 2 {
+		t.Fatalf("requests = %d, want one repair", len(client.requests))
+	}
+	if last := client.requests[1].Messages; !strings.Contains(last[len(last)-1].Content, "没有调用过 say") {
+		t.Fatalf("repair prompt = %q", last[len(last)-1].Content)
+	}
+}
+
+// TestSilentFinalizeWithContentKeepsItAsideAfterRepair：打回一次后模型还是静默
+// 带正文，就按静默交出去，content 留给调用方核对——不再多耗一轮。
+func TestSilentFinalizeWithContentKeepsItAsideAfterRepair(t *testing.T) {
+	client := &silentFinalizeClient{arguments: map[string]any{
+		"content": "刚切回来了", "silent": true, "silent_reason": "内容已通过 say 发出",
+	}}
+	runner, err := NewRunner(client, Config{WorkDir: t.TempDir(), MaxSteps: 2}, NewToolRegistry())
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := runner.Run(context.Background(), Request{Messages: []llm.Message{{Role: llm.RoleUser, Content: "现在什么模型"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !resp.Silent || resp.Text != "" || resp.SilentContent != "刚切回来了" {
+		t.Fatalf("resp = %#v", resp)
+	}
+	if len(client.requests) != 2 {
+		t.Fatalf("requests = %d, want exactly one repair", len(client.requests))
+	}
+}
+
+// TestSilentFinalizeAfterSayIsNotRepaired：真调过 say 再静默是正常收尾，不打回。
+func TestSilentFinalizeAfterSayIsNotRepaired(t *testing.T) {
+	client := &scriptedClient{responses: []string{
+		`{"action":"tool","tool":"say","input":{"text":"刚切回来了"}}`,
+		`{"action":"final","silent":true,"silent_reason":"说过了","content":"刚切回来了"}`,
+	}}
+	say := &countingTool{name: "say"}
+	runner, err := NewRunner(client, Config{WorkDir: t.TempDir(), MaxSteps: 3}, NewToolRegistry(say))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := runner.Run(context.Background(), Request{Messages: []llm.Message{{Role: llm.RoleUser, Content: "现在什么模型"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if say.calls != 1 || !resp.Silent || len(client.requests) != 2 {
+		t.Fatalf("say calls = %d, resp = %#v, requests = %d", say.calls, resp, len(client.requests))
+	}
+}
+
 // 静默收尾不捡信封之外的正文：模型同一轮里随口写的话不是这一轮的回复。
 func TestSilentFinalizeIgnoresTextOutsideTheEnvelope(t *testing.T) {
 	action := finalizeAction(llm.ToolCall{

@@ -91,7 +91,7 @@ func (t *dianaInterimMessageTool) Description() string {
 	return fmt.Sprintf(`立刻在当前对话里发一句话，本轮不结束，发完可以接着调用工具。`+
 		`用在两种地方：要先查、先做几步才能回答时，动手前说一句正在做什么（比如「我去查一下」）；长任务每做完一个阶段，报一句进度。`+
 		`说了「去做」就必须接着真的去做，不能说完就收工。它不是用来把答案拆开发的：一轮最多 %d 次，每次一句不超过 %d 字的短话。`+
-		`发出去的话对方已经看到了，最后 agent_finalize 只写还没说过的内容；该说的都说完了就 silent=true。`, interimMessageMaxPerTurn, interimMessageMaxRunes)
+		`发出去的话对方已经看到了，最后 agent_finalize 只写还没说过的内容；该说的都说完了就 silent=true。只有真的调用了本工具才算说过：写在工具调用旁边的正文不会发出去。`, interimMessageMaxPerTurn, interimMessageMaxRunes)
 }
 
 func (t *dianaInterimMessageTool) InputSchema() map[string]any {
