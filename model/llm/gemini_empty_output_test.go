@@ -27,7 +27,7 @@ func TestGeminiEmptyOutputReportsFinishReason(t *testing.T) {
 			name:          "max tokens with implicit limit",
 			body:          `{"candidates":[{"finishReason":"MAX_TOKENS","content":{"role":"model","parts":[{"text":""}]}}],"usageMetadata":{"promptTokenCount":116611,"totalTokenCount":116611}}`,
 			wantTruncated: true,
-			wantParts:     []string{"finish_reason=MAX_TOKENS", "max_output_tokens=32000", "input_tokens:116611"},
+			wantParts:     []string{"finish_reason=MAX_TOKENS", "max_output_tokens=unset", "input_tokens:116611"},
 		},
 		{
 			name:          "max tokens with limit",
@@ -53,7 +53,7 @@ func TestGeminiEmptyOutputReportsFinishReason(t *testing.T) {
 				_, _ = w.Write([]byte(tc.body))
 			}))
 			defer server.Close()
-			client, err := newGeminiClient(ProviderConfig{APIKey: "test-key", BaseURL: server.URL, Model: "gemini-test"}, server.Client())
+			client, err := newGeminiClient(ProviderConfig{APIKey: "test-key", BaseURL: server.URL, Model: "gemini-2.5-flash"}, server.Client())
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -102,7 +102,7 @@ func TestGeminiStreamTruncatedAfterTextIsNotEmptyOutput(t *testing.T) {
 		_, _ = w.Write([]byte(`data: {"candidates":[{"finishReason":"MAX_TOKENS","content":{"role":"model","parts":[{"text":""}]}}]}` + "\n\n"))
 	}))
 	defer server.Close()
-	client, err := newGeminiClient(ProviderConfig{APIKey: "test-key", BaseURL: server.URL, Model: "gemini-test"}, server.Client())
+	client, err := newGeminiClient(ProviderConfig{APIKey: "test-key", BaseURL: server.URL, Model: "gemini-2.5-flash"}, server.Client())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -141,7 +141,7 @@ func TestGeminiSendsImplicitMaxOutputTokens(t *testing.T) {
 		requested int64
 		want      int64
 	}{
-		{name: "unset", want: DefaultOutputTokenCeiling},
+		{name: "unset", want: 0},
 		{name: "configured", requested: 2048, want: 2048},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -159,7 +159,7 @@ func TestGeminiSendsImplicitMaxOutputTokens(t *testing.T) {
 				_, _ = w.Write([]byte(body))
 			}))
 			defer server.Close()
-			client, err := newGeminiClient(ProviderConfig{APIKey: "test-key", BaseURL: server.URL, Model: "gemini-test"}, server.Client())
+			client, err := newGeminiClient(ProviderConfig{APIKey: "test-key", BaseURL: server.URL, Model: "gemini-2.5-flash"}, server.Client())
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -175,68 +175,6 @@ func TestGeminiSendsImplicitMaxOutputTokens(t *testing.T) {
 			}
 			if len(seen) != 2 || seen[0] != tc.want || seen[1] != tc.want {
 				t.Fatalf("maxOutputTokens sent = %v, want %d twice", seen, tc.want)
-			}
-		})
-	}
-}
-
-// 上限更低的模型拒绝代填值时，去掉字段重发一次；别的 400 和用户自己填的值都不重发。
-func TestGeminiImplicitOutputLimitRejectionRetriesWithoutLimit(t *testing.T) {
-	const rejection = `{"error":{"code":400,"status":"INVALID_ARGUMENT","message":"Unable to submit request because it has a maxOutputTokens value of 65536 but the supported range is from 1 (inclusive) to 8193 (exclusive)."}}`
-	for _, tc := range []struct {
-		name      string
-		requested int64
-		reject    string
-		wantOK    bool
-		wantCalls int
-	}{
-		{name: "implicit limit rejected", reject: rejection, wantOK: true, wantCalls: 2},
-		{name: "configured limit rejected", requested: 65536, reject: rejection, wantCalls: 1},
-		{name: "unrelated bad request", reject: `{"error":{"code":400,"status":"INVALID_ARGUMENT","message":"invalid request"}}`, wantCalls: 1},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			for _, stream := range []bool{false, true} {
-				calls := 0
-				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-					calls++
-					if _, ok := geminiRequestedOutputLimit(t, r); ok {
-						w.Header().Set("Content-Type", "application/json")
-						w.WriteHeader(http.StatusBadRequest)
-						_, _ = w.Write([]byte(tc.reject))
-						return
-					}
-					body := `{"candidates":[{"finishReason":"STOP","content":{"role":"model","parts":[{"text":"完整回复"}]}}]}`
-					if stream {
-						w.Header().Set("Content-Type", "text/event-stream")
-						_, _ = w.Write([]byte("data: " + body + "\n\n"))
-						return
-					}
-					w.Header().Set("Content-Type", "application/json")
-					_, _ = w.Write([]byte(body))
-				}))
-				client, err := newGeminiClient(ProviderConfig{APIKey: "test-key", BaseURL: server.URL, Model: "gemini-test"}, server.Client())
-				if err != nil {
-					t.Fatal(err)
-				}
-				req := GenerateRequest{Messages: []Message{{Role: RoleUser, Content: "你好"}}, MaxOutputTokens: tc.requested}
-				var text string
-				if stream {
-					events, err := client.Stream(context.Background(), req)
-					if err != nil {
-						t.Fatal(err)
-					}
-					for event := range events {
-						if event.Type == ChatEventTextDelta {
-							text += event.Text
-						}
-					}
-				} else if resp, err := client.Generate(context.Background(), req); err == nil {
-					text = resp.Text
-				}
-				server.Close()
-				if (text == "完整回复") != tc.wantOK || calls != tc.wantCalls {
-					t.Fatalf("stream=%t text=%q calls=%d, want ok=%t calls=%d", stream, text, calls, tc.wantOK, tc.wantCalls)
-				}
 			}
 		})
 	}

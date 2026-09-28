@@ -92,7 +92,7 @@ type updateConfig struct {
 }
 
 type llmRuntimeConfig struct {
-	// OutputTokenMax 是没填最大输出时代发值的封顶，0 用默认值 32000。
+	// OutputTokenMax 是 Anthropic 没填最大输出时代发的值（它的 max_tokens 必填），0 用默认值 32000。
 	OutputTokenMax int64 `yaml:"output_token_max"`
 }
 

@@ -3,25 +3,15 @@
 
 package llm
 
-import (
-	"strings"
-	"sync/atomic"
-)
+import "sync/atomic"
 
-// 输出上限的取法照搬 opencode（packages/opencode/src/provider/transform.ts 的
-// maxOutputTokens）：min(models.dev 里这个模型的 limit.output, 32000)，查不到就是
-// 32000。
-//
-//   - 不填并不等于「按模型最大」。Anthropic 必须给 max_tokens；Gemini 网关看到缺省
-//     会自己补一个（antigravity 补成 9216）；Chat Completions 接口的缺省值也远小于
-//     模型上限。模型把整份文件写进工具参数时，就在这些缺省值上被截断。
-//   - 同步下来的模型清单靠不住：antigravity 给每个模型都报 8192，是占位值。所以只信
-//     models.dev，不信网关自己报的数。
-//   - 封顶是为了不无限要：DeepSeek 384K 这类上限要满了只会让 Anthropic SDK 这类按上限
-//     估算耗时的客户端拒绝请求。
+// 输出上限能不发就不发：用户没填时交给服务端按模型处理。发一个猜的数没有好处——
+// 猜大了撞上智谱 glm-4v-flash 这种只收 [1,1024] 的就是 400，猜小了悄悄截断。
+// 唯一例外是 Anthropic，它的 max_tokens 是必填，只能按封顶发；超出模型上限时
+// 按报错里写的上限重发（anthropic.go）。
 
-// DefaultOutputTokenCeiling 是代发值的默认封顶，也是 models.dev 查不到时的默认值，
-// 和 opencode 的 OUTPUT_TOKEN_MAX 一致。config.yaml 的 llm_runtime.output_token_max
+// DefaultOutputTokenCeiling 是 Anthropic 必须代发时用的值，和 opencode 的
+// OUTPUT_TOKEN_MAX 一致。config.yaml 的 llm_runtime.output_token_max
 // 可以改它（opencode 对应的是环境变量 OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX）。
 const DefaultOutputTokenCeiling int64 = 32000
 
@@ -49,36 +39,23 @@ type MaxOutputTokensSource string
 const (
 	// MaxOutputTokensSourceUser 是配置档里显式填的值。
 	MaxOutputTokensSourceUser MaxOutputTokensSource = "user"
-	// MaxOutputTokensSourceModelsDev 是 models.dev 里这个模型的上限（按 OutputTokenCeiling 封顶）。
-	MaxOutputTokensSourceModelsDev MaxOutputTokensSource = "models_dev"
-	// MaxOutputTokensSourceDefault 是 models.dev 查不到这个模型时的默认值。
+	// MaxOutputTokensSourceDefault 是 Anthropic 必须代发时按封顶发的值。
 	MaxOutputTokensSourceDefault MaxOutputTokensSource = "default"
 	// MaxOutputTokensSourceProvider 表示不发这个字段，由服务端按模型处理。
 	MaxOutputTokensSourceProvider MaxOutputTokensSource = "provider"
 )
 
 // ResolveMaxOutputTokens 返回调用方没覆盖时实际发出的输出上限和来源。返回 0 表示
-// 不发这个字段。发出的值还会按上下文剩余空间收一次（Gemini 除外，它的输入输出
-// 上限分开算），这里给的是收之前的值。
-//
-// 默认值要多了会被拒，各协议都有退路：Gemini 去掉字段重发，Anthropic 按报错里给的
-// 上限重发，Chat Completions 由参数降级摘掉并记住。要少了则是悄悄截断，没有退路。
-func (cfg ProviderConfig) ResolveMaxOutputTokens(model string) (int64, MaxOutputTokensSource) {
+// 不发这个字段。发出的值还会按上下文剩余空间收一次，这里给的是收之前的值。model
+// 留着给调用方传当前模型，取值本身不看模型。
+func (cfg ProviderConfig) ResolveMaxOutputTokens(_ string) (int64, MaxOutputTokensSource) {
 	if cfg.MaxOutputTokens > 0 {
 		return cfg.MaxOutputTokens, MaxOutputTokensSourceUser
 	}
-	if strings.TrimSpace(model) == "" {
-		model = cfg.Model
+	if cfg.Provider == ProviderAnthropic {
+		return OutputTokenCeiling(), MaxOutputTokensSourceDefault
 	}
-	// Responses API 缺省就是模型上限，而 Codex 这类订阅网关会拒掉这个字段，不发。
-	if cfg.Provider == ProviderOpenAICompatible && cfg.APIFormatWithDefault() != APIFormatChatCompletions {
-		return 0, MaxOutputTokensSourceProvider
-	}
-	ceiling := OutputTokenCeiling()
-	if limit, ok := outputLimitCatalog.OutputLimit(cfg, model); ok {
-		return min(limit, ceiling), MaxOutputTokensSourceModelsDev
-	}
-	return ceiling, MaxOutputTokensSourceDefault
+	return 0, MaxOutputTokensSourceProvider
 }
 
 // withImplicitMaxOutputTokens 在调用方和配置档都没给上限时，把代发值写进请求。

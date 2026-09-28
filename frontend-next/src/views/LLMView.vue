@@ -332,11 +332,10 @@
             v-model="form.context_window_tokens"
             class="input"
             inputmode="numeric"
-            required
             :class="{ invalid: invalidField === 'context_window_tokens' }"
             :aria-invalid="invalidField === 'context_window_tokens'"
-            placeholder="必填，例如 128000"
-            @input="contextWindowTouched = true; clearInvalid('context_window_tokens')"
+            :placeholder="contextWindowPlaceholder"
+            @input="clearInvalid('context_window_tokens')"
           />
           <span class="hint">
             {{ effectiveContextHint }}
@@ -472,9 +471,6 @@ interface LLMFormState {
   context_window_tokens: string;
 }
 
-// 和后端 llm.DefaultContextWindowTokens 一致：清单里查不到窗口时先填这个。
-const defaultContextWindowTokens = 128000;
-
 const emptyForm: LLMFormState = {
   name: "",
   provider: "openai_compatible",
@@ -486,7 +482,7 @@ const emptyForm: LLMFormState = {
   oauth_provider: "",
   user_agent: "",
   description: "",
-  context_window_tokens: String(defaultContextWindowTokens),
+  context_window_tokens: "",
 };
 
 const profileSet = ref<LLMConfig | null>(null);
@@ -512,8 +508,6 @@ let headerRowSeq = 0;
 const modelsLoading = ref(false);
 // invalidField 记的是「这次失败该回去改哪一格」，由报错文本推出来（见 llmErrorField）。
 const invalidField = ref<LLMErrorField>("");
-// 窗口框里的数是不是人自己改的。默认填上的值换模型时可以跟着换，人改过的不动。
-const contextWindowTouched = ref(false);
 
 // 一开始改那一格就把标红撤掉：红框是「这里要改」的提示，人动手了它就该让位，
 // 一直挂着会变成「改完了还在报错」的错觉。
@@ -654,7 +648,6 @@ function startCreate(): void {
   editingKeyPreview.value = "";
   editingProfile.value = null;
   form.value = { ...emptyForm, user_agent: defaultUserAgent.value };
-  contextWindowTouched.value = false;
   credentialMode.value = "api_key";
   selectedService.value = "deepseek";
   applyServicePreset("deepseek");
@@ -768,7 +761,6 @@ function startEdit(profile: LLMConfig): void {
   editingConfigured.value = Boolean(profile.api_key_configured);
   editingKeyPreview.value = profile.api_key_preview ?? "";
   editingProfile.value = profile;
-  contextWindowTouched.value = Boolean(profile.context_window_tokens);
   form.value = {
     name: profile.name ?? "",
     provider: profile.provider,
@@ -782,9 +774,7 @@ function startEdit(profile: LLMConfig): void {
     user_agent: profile.user_agent || defaultUserAgent.value,
     description: profile.description ?? "",
     // 老配置没填窗口时先填上默认值（清单里有就用清单的），保存前人能看到、能改。
-    context_window_tokens: String(
-      profile.context_window_tokens || profile.catalog_context_window_tokens || defaultContextWindowTokens
-    ),
+    context_window_tokens: profile.context_window_tokens ? String(profile.context_window_tokens) : "",
   };
   // 凭据方式跟着这份配置走：绑了提供商就停在「授权登录」，否则回到 API Key。
   credentialMode.value = profile.oauth_provider ? "oauth" : "api_key";
@@ -806,15 +796,20 @@ function optionalTokenInput(raw: string): number {
 
 
 
-// 窗口必须手填：留空时按 128,000 兜底，和模型真实窗口对不上，历史预算、压缩时机
-// 全跟着错。清单里的数只作参考，打开编辑器时替人先填上，保存前能看到。
-const effectiveContextHint = computed(() => {
+// 窗口可以留空：留空时后端按 models.dev 查这个模型的窗口，查不到按 128,000 兜底，
+// 撞上超限会从报错里学到真实窗口。灰字写留空时实际按多少算、这个数从哪来，不把
+// 它预填进输入框冒充用户设置。显示的是已保存的配置。
+const contextWindowPlaceholder = computed(() => {
   const profile = editingProfile.value;
-  const reference = profile?.catalog_context_window_tokens
-    ? `模型清单里 ${profile.model} 写的是 ${profile.catalog_context_window_tokens.toLocaleString("en-US")}。`
-    : "";
-  return `按模型真实的上下文窗口填，历史预算和压缩时机都按它算。${reference}`;
+  const window = profile?.effective_context_window_tokens;
+  if (!window || profile?.context_window_source === "user") return "留空自动";
+  const from = profile?.context_window_source === "models_dev" ? "models.dev" : "兜底值";
+  return `留空按 ${window.toLocaleString("en-US")}（${from}）`;
 });
+
+const effectiveContextHint = computed(() =>
+  "留空时按 models.dev 查这个模型的窗口，查不到按 128,000 算；超限时会从报错里学到真实窗口并自动重试。模型窗口不在 models.dev 里时，填上更准。"
+);
 
 // 这套配置被哪些用途在用：改窗口会一起影响它们，所以列出来。
 const contextWindowBindings = computed(() =>
@@ -826,14 +821,6 @@ const contextWindowBindings = computed(() =>
 
 // resolvedDefaultModel 决定提交给后端的 model。
 //
-// 窗口是默认填上的、人还没改过时，换模型就跟着换成清单里的数；人改过的不动。
-watch([() => form.value.model, modelOptions], () => {
-  if (!editorOpen.value || contextWindowTouched.value) return;
-  const model = resolvedDefaultModel();
-  const window = modelOptions.value.find((item) => item.id === model)?.context_window_tokens;
-  form.value.context_window_tokens = String(window || defaultContextWindowTokens);
-});
-
 // 这一格以前是让人手填的「默认模型（可选）」，但它跟上面的模型列表表达的是同一
 // 件事：机器人页的「模型分配」按用途挑模型，挑的就是列表里的项，这个字段只是
 // 后端在没有任何分配时的兜底。让人再填一遍，只会填出一个不在列表里的值——那时
@@ -900,13 +887,13 @@ function formToPayload(): LLMConfig {
     headers: form.value.provider === "openai_compatible" ? headersFromRows() : {},
     description: form.value.description.trim() || undefined
   };
-  // 窗口保存前已校验必填，这里照常提交。
+  // 窗口必须每次都提交：留空提交 0，表示改回自动；省略掉的话后端会当成「这个客户端
+  // 没提交」而保留旧值，填过的数字就永远删不掉。
   //
   // temperature、max_context_tokens、max_output_tokens 界面上没有入口，所以一律不
   // 提交——nil 在后端表示「没碰过」，通过 API 设过值的部署不会被这个表单悄悄清掉。
-  // 最大输出和 opencode 一样按模型自动定：min(models.dev 上限, 32000)，封顶可在
-  // config.yaml 的 llm_runtime.output_token_max 改；Responses 接口不发，代发的值被拒
-  // 会自动退回，手填一个数反而会把退避关掉。
+  // 最大输出没填就不发，交给服务端按模型处理；只有 Anthropic 必填，按 config.yaml 的
+  // llm_runtime.output_token_max 发。
   payload.context_window_tokens = optionalTokenInput(form.value.context_window_tokens);
   return payload;
 }
@@ -924,10 +911,10 @@ function closeEditor(): void {
 }
 
 async function save(): Promise<void> {
-  const window = Number(form.value.context_window_tokens.trim());
-  if (!Number.isInteger(window) || window < 1024) {
+  const windowText = form.value.context_window_tokens.trim();
+  if (windowText !== "" && (!Number.isInteger(Number(windowText)) || Number(windowText) < 1024)) {
     invalidField.value = "context_window_tokens";
-    toastError("请填写模型上下文窗口（至少 1024）");
+    toastError("模型上下文窗口要填整数，至少 1024；留空则自动");
     return;
   }
   if (form.value.provider === "openai_compatible" && form.value.user_agent.trim() === "") {

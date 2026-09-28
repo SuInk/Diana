@@ -30,6 +30,8 @@ type ModelsDevCatalog struct {
 	url       string
 	fetchedAt time.Time
 	providers map[string]map[string]ModelInfo
+	// apis 是 models.dev 给每个服务商登记的 API 地址，用来按配置里的地址认出服务商。
+	apis map[string]string
 	// refreshing 和 lastAttempt 只给 OutputLimit 的后台刷新用：请求路径上不能等
 	// 网络，离线部署也不能每个请求都去拉一次。
 	refreshing  bool
@@ -43,8 +45,8 @@ const modelsDevRetryInterval = 10 * time.Minute
 // 输出上限用的是同一份，不重复下载 api.json。
 var sharedModelsDevCatalog = NewModelsDevCatalog(nil)
 
-// outputLimitCatalog 是 ResolveMaxOutputTokens 查表用的目录，测试里换成本地数据。
-var outputLimitCatalog = sharedModelsDevCatalog
+// modelLimitCatalog 是请求时查输出上限和窗口用的目录，测试里换成本地数据。
+var modelLimitCatalog = sharedModelsDevCatalog
 
 // SharedModelsDevCatalog 返回进程共用的 models.dev 目录。
 func SharedModelsDevCatalog() *ModelsDevCatalog {
@@ -61,29 +63,43 @@ func (c *ModelsDevCatalog) Warm() {
 	c.mu.Unlock()
 }
 
-// OutputLimit 返回 models.dev 里这个模型的 limit.output，按 opencode 的做法以
-// 「服务商 + 模型 ID」精确匹配。只读缓存、不等网络：缓存为空或过期时在后台刷新，
-// 这一次按查不到处理，由调用方退回默认值。
-func (c *ModelsDevCatalog) OutputLimit(cfg ProviderConfig, model string) (int64, bool) {
+// ContextLimit 返回 models.dev 里这个模型的 limit.context。
+func (c *ModelsDevCatalog) ContextLimit(cfg ProviderConfig, model string) (int64, bool) {
+	return c.limit(cfg, model, func(info ModelInfo) int64 { return info.ContextWindowTokens })
+}
+
+// limit 按「服务商 + 模型 ID」查 models.dev。只读缓存、不等网络：缓存为空或过期时
+// 在后台刷新，这一次按查不到处理，由调用方退回默认值。
+//
+// 查找顺序从严到宽：认得出服务商时，先精确匹配（和 opencode 一样），再去掉命名空间和
+// 档位后缀，再认网关加的前缀；认不出服务商（自建中转）时，在所有服务商里按模型 ID
+// 精确找，各家数值不同就取出现最多的那个。
+func (c *ModelsDevCatalog) limit(cfg ProviderConfig, model string, pick func(ModelInfo) int64) (int64, bool) {
 	if c == nil {
 		return 0, false
 	}
-	providers := modelsDevProviderCandidates(cfg)
 	model = strings.TrimSpace(model)
-	if len(providers) == 0 || model == "" {
+	if model == "" {
 		return 0, false
 	}
 	c.mu.Lock()
 	if len(c.providers) == 0 || time.Since(c.fetchedAt) >= modelsDevCacheTTL {
 		c.startRefreshLocked()
 	}
-	catalog := c.providers
+	catalog, apis := c.providers, c.apis
 	c.mu.Unlock()
+	if len(catalog) == 0 {
+		return 0, false
+	}
 	names := modelsDevLookupNames(model)
+	providers := modelsDevProviderIDs(cfg, apis)
+	if len(providers) == 0 {
+		return modelsDevMostCommonLimit(catalog, names, pick)
+	}
 	for _, name := range names {
 		for _, provider := range providers {
-			if info, ok := catalog[provider][name]; ok && info.MaxOutputTokens > 0 {
-				return info.MaxOutputTokens, true
+			if info, ok := catalog[provider][name]; ok && pick(info) > 0 {
+				return pick(info), true
 			}
 		}
 	}
@@ -91,7 +107,7 @@ func (c *ModelsDevCatalog) OutputLimit(cfg ProviderConfig, model string) (int64,
 	// 这时按「以分隔符 + 目录里的 ID 结尾」找，取最长的那个，免得短 ID 误配。
 	for _, name := range names {
 		for _, provider := range providers {
-			if limit, ok := modelsDevSuffixMatch(catalog[provider], name); ok {
+			if limit, ok := modelsDevSuffixMatch(catalog[provider], name, pick); ok {
 				return limit, true
 			}
 		}
@@ -99,20 +115,43 @@ func (c *ModelsDevCatalog) OutputLimit(cfg ProviderConfig, model string) (int64,
 	return 0, false
 }
 
-func modelsDevSuffixMatch(models map[string]ModelInfo, name string) (int64, bool) {
+func modelsDevSuffixMatch(models map[string]ModelInfo, name string, pick func(ModelInfo) int64) (int64, bool) {
 	lower := strings.ToLower(name)
 	best, bestLen := int64(0), 0
 	for id, info := range models {
-		if info.MaxOutputTokens <= 0 || len(id) <= bestLen || len(id) >= len(lower) {
+		if pick(info) <= 0 || len(id) <= bestLen || len(id) >= len(lower) {
 			continue
 		}
 		cut := len(lower) - len(id)
 		if lower[cut:] != strings.ToLower(id) || !strings.ContainsRune("-._:", rune(lower[cut-1])) {
 			continue
 		}
-		best, bestLen = info.MaxOutputTokens, len(id)
+		best, bestLen = pick(info), len(id)
 	}
 	return best, bestLen > 0
+}
+
+// modelsDevMostCommonLimit 在所有服务商里按模型 ID 精确找。同一个模型在不同转售商
+// 那里登记的数常有出入，取出现次数最多的，平票取小的——宁可保守。
+func modelsDevMostCommonLimit(catalog map[string]map[string]ModelInfo, names []string, pick func(ModelInfo) int64) (int64, bool) {
+	for _, name := range names {
+		counts := map[int64]int{}
+		for _, models := range catalog {
+			if info, ok := models[name]; ok && pick(info) > 0 {
+				counts[pick(info)]++
+			}
+		}
+		best, bestCount := int64(0), 0
+		for value, count := range counts {
+			if count > bestCount || count == bestCount && value < best {
+				best, bestCount = value, count
+			}
+		}
+		if bestCount > 0 {
+			return best, true
+		}
+	}
+	return 0, false
 }
 
 // modelsDevEffortSuffixes 是网关挂在模型名后面的推理档位。models.dev 只收基础
@@ -184,12 +223,18 @@ func newModelsDevCatalog(client *http.Client, endpoint string) *ModelsDevCatalog
 }
 
 func (c *ModelsDevCatalog) Enrich(ctx context.Context, cfg ProviderConfig, models []ModelInfo) []ModelInfo {
-	providers := modelsDevProviderCandidates(cfg)
-	if c == nil || len(models) == 0 || len(providers) == 0 {
+	if c == nil || len(models) == 0 {
 		return append([]ModelInfo(nil), models...)
 	}
 	catalog, err := c.load(ctx)
 	if err != nil {
+		return append([]ModelInfo(nil), models...)
+	}
+	c.mu.Lock()
+	apis := c.apis
+	c.mu.Unlock()
+	providers := modelsDevProviderIDs(cfg, apis)
+	if len(providers) == 0 {
 		return append([]ModelInfo(nil), models...)
 	}
 	out := append([]ModelInfo(nil), models...)
@@ -250,19 +295,21 @@ func (c *ModelsDevCatalog) load(ctx context.Context) (map[string]map[string]Mode
 	if err != nil {
 		return nil, err
 	}
-	providers, err := decodeModelsDevCatalog(body)
+	providers, apis, err := decodeModelsDevCatalog(body)
 	if err != nil {
 		return nil, err
 	}
 	c.mu.Lock()
 	c.providers = providers
+	c.apis = apis
 	c.fetchedAt = time.Now()
 	c.mu.Unlock()
 	return providers, nil
 }
 
-func decodeModelsDevCatalog(body []byte) (map[string]map[string]ModelInfo, error) {
+func decodeModelsDevCatalog(body []byte) (map[string]map[string]ModelInfo, map[string]string, error) {
 	var payload map[string]struct {
+		API    string `json:"api"`
 		Models map[string]struct {
 			Name       string `json:"name"`
 			Modalities struct {
@@ -277,10 +324,14 @@ func decodeModelsDevCatalog(body []byte) (map[string]map[string]ModelInfo, error
 		} `json:"models"`
 	}
 	if err := json.Unmarshal(body, &payload); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	out := make(map[string]map[string]ModelInfo, len(payload))
+	apis := make(map[string]string, len(payload))
 	for providerID, provider := range payload {
+		if api := strings.TrimSpace(provider.API); api != "" {
+			apis[providerID] = api
+		}
 		models := make(map[string]ModelInfo, len(provider.Models))
 		for modelID, model := range provider.Models {
 			models[modelID] = ModelInfo{
@@ -295,7 +346,39 @@ func decodeModelsDevCatalog(body []byte) (map[string]map[string]ModelInfo, error
 		}
 		out[providerID] = models
 	}
-	return out, nil
+	return out, apis, nil
+}
+
+// modelsDevProviderIDs 认出这套配置对应 models.dev 里的哪家服务商：先看内置的几家
+// 官方地址，再拿配置的 API 地址去比 models.dev 给每家登记的 api（主机名相同即算，
+// 路径也对得上的排前面，区分智谱的普通和编程套餐这类同主机的两家）。
+func modelsDevProviderIDs(cfg ProviderConfig, apis map[string]string) []string {
+	ids := modelsDevProviderCandidates(cfg)
+	if cfg.Provider != ProviderOpenAICompatible && cfg.Provider != ProviderAnthropic || strings.TrimSpace(cfg.BaseURL) == "" {
+		return ids
+	}
+	base, err := url.Parse(strings.TrimSpace(cfg.BaseURL))
+	if err != nil || base.Hostname() == "" {
+		return ids
+	}
+	host := strings.ToLower(base.Hostname())
+	path := strings.TrimRight(strings.ToLower(base.Path), "/")
+	var exact, sameHost []string
+	for id, api := range apis {
+		parsed, err := url.Parse(api)
+		if err != nil || strings.ToLower(parsed.Hostname()) != host || slices.Contains(ids, id) {
+			continue
+		}
+		apiPath := strings.TrimRight(strings.ToLower(parsed.Path), "/")
+		if apiPath != "" && strings.HasPrefix(path, apiPath) {
+			exact = append(exact, id)
+		} else {
+			sameHost = append(sameHost, id)
+		}
+	}
+	slices.Sort(exact)
+	slices.Sort(sameHost)
+	return append(append(ids, exact...), sameHost...)
 }
 
 func modelsDevProviderCandidates(cfg ProviderConfig) []string {

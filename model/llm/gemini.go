@@ -100,9 +100,7 @@ func (c *geminiClient) Generate(ctx context.Context, req GenerateRequest) (resul
 		temperature := float32(*req.Temperature)
 		config.Temperature = &temperature
 	}
-	req = c.cfg.withImplicitMaxOutputTokens(ProviderGemini, req, false)
-	implicitLimit, err := setGeminiOutputTokenLimit(config, req)
-	if err != nil {
+	if err := setGeminiOutputTokenLimit(config, req); err != nil {
 		return nil, err
 	}
 	config.Tools = geminiTools(req.Tools)
@@ -110,10 +108,6 @@ func (c *geminiClient) Generate(ctx context.Context, req GenerateRequest) (resul
 
 	contents := geminiContents(messages, req.Tools)
 	resp, err := c.client.Models.GenerateContent(ctx, req.Model, contents, config)
-	if err != nil && implicitLimit && isGeminiOutputLimitRejection(err) {
-		config.MaxOutputTokens = 0
-		resp, err = c.client.Models.GenerateContent(ctx, req.Model, contents, config)
-	}
 	if err != nil {
 		rememberedContextLimits.learn(c.cfg, req.Model, err)
 		return nil, fmt.Errorf("llm: provider request failed: %w", err)
@@ -159,9 +153,7 @@ func (c *geminiClient) Stream(ctx context.Context, req GenerateRequest) (streamE
 		value := float32(*req.Temperature)
 		config.Temperature = &value
 	}
-	req = c.cfg.withImplicitMaxOutputTokens(ProviderGemini, req, false)
-	implicitLimit, err := setGeminiOutputTokenLimit(config, req)
-	if err != nil {
+	if err := setGeminiOutputTokenLimit(config, req); err != nil {
 		return nil, err
 	}
 	config.Tools = geminiTools(req.Tools)
@@ -173,7 +165,7 @@ func (c *geminiClient) Stream(ctx context.Context, req GenerateRequest) (streamE
 		defer recoverChatStreamPanic(ctx, out, "gemini")
 		var last Usage
 		finished, emitted := false, false
-		for response, err := range c.streamContent(ctx, req.Model, contents, config, implicitLimit) {
+		for response, err := range c.streamContentOnce(ctx, req.Model, contents, config) {
 			if err != nil {
 				sendChatEvent(ctx, out, ChatEvent{Type: ChatEventError, Error: err.Error()})
 				return
@@ -235,29 +227,6 @@ func (c *geminiClient) Stream(ctx context.Context, req GenerateRequest) (streamE
 		sendChatEvent(ctx, out, ChatEvent{Type: ChatEventDone, Response: &GenerateResponse{Provider: ProviderGemini, Model: req.Model}})
 	}()
 	return out, nil
-}
-
-// streamContent 打开流。代发的默认上限被拒时，400 会在第一个响应之前回来，此时
-// 还没有任何输出，去掉上限重开一次即可，调用方看到的仍是一条完整的流。
-func (c *geminiClient) streamContent(ctx context.Context, model string, contents []*genai.Content, config *genai.GenerateContentConfig, implicitLimit bool) iter.Seq2[*genai.GenerateContentResponse, error] {
-	return func(yield func(*genai.GenerateContentResponse, error) bool) {
-		first := true
-		for response, err := range c.streamContentOnce(ctx, model, contents, config) {
-			if first && err != nil && implicitLimit && isGeminiOutputLimitRejection(err) {
-				config.MaxOutputTokens = 0
-				for response, err := range c.streamContentOnce(ctx, model, contents, config) {
-					if !yield(response, err) {
-						return
-					}
-				}
-				return
-			}
-			first = false
-			if !yield(response, err) {
-				return
-			}
-		}
-	}
 }
 
 // streamContentOnce 发一次流式请求，把读流时断掉的原因交回调用方。
@@ -369,33 +338,17 @@ func (b *geminiStreamBody) Read(p []byte) (int, error) {
 	return n, err
 }
 
-// setGeminiOutputTokenLimit 写入输出上限，返回这个值是不是代填的。
-func setGeminiOutputTokenLimit(config *genai.GenerateContentConfig, req GenerateRequest) (bool, error) {
+// setGeminiOutputTokenLimit 写入调用方或配置档给的输出上限；没给就不发。
+func setGeminiOutputTokenLimit(config *genai.GenerateContentConfig, req GenerateRequest) error {
 	if req.MaxOutputTokens <= 0 {
-		return false, nil
+		return nil
 	}
 	value, err := geminiOutputTokenLimit(req.MaxOutputTokens)
 	if err != nil {
-		return false, err
+		return err
 	}
 	config.MaxOutputTokens = value
-	return req.implicitMaxOutputTokens, nil
-}
-
-// isGeminiOutputLimitRejection 认出「上限超出该模型范围」的 400。上限更低的老模型
-// 会这样拒绝代填的值，这时去掉字段重发，退回由服务端决定的缺省行为。
-func isGeminiOutputLimitRejection(err error) bool {
-	var apiErr genai.APIError
-	if !errors.As(err, &apiErr) || apiErr.Code != http.StatusBadRequest {
-		return false
-	}
-	text := strings.ToLower(apiErr.Message)
-	for _, marker := range []string{"max_output_tokens", "maxoutputtokens", "max output tokens"} {
-		if strings.Contains(text, marker) {
-			return true
-		}
-	}
-	return false
+	return nil
 }
 
 func geminiContentBlock(response *genai.GenerateContentResponse) *ContentBlockedError {

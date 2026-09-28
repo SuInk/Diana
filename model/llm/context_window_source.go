@@ -5,17 +5,13 @@ package llm
 
 import "strings"
 
-// 上下文窗口只认两个来源：用户在 WebUI 里填的值，和填之前的兜底常量。
+// 上下文窗口按顺序取：用户在 WebUI 里填的值 → models.dev 里这个模型的 limit.context
+// （和 opencode 一样）→ 兜底常量。
 //
-// 曾经还有两层自动推断——同步下来的模型清单（含 models.dev 补充）和模型名前缀表。
-// 它们的问题不是不准，而是「第三方目录某一刻的数据」被当成了本地设置：目录会变，
-// 前缀表按 gpt-5 前缀给出 400000 这种粗粒度猜测，而界面上它和用户手填的值长得
-// 一模一样。既然分不清，就不如不猜——要精确就明确填一个。
-//
-// 代价是明摆着的：没填的部署一律按兜底常量算，200K/1M 的模型会被压到这个数。
-// 换来的是「界面上写的就是实际生效的」，以及超限时 ErrContextOverflow 自动收缩重试
-// 这条安全网仍然在。模型清单里带回来的窗口不再参与计算，只作为参考值展示，
-// 提示用户可以照着填。
+// 以前只认手填，理由是「第三方目录某一刻的数据」被写进配置后和手填的值分不清。
+// 现在 models.dev 的值只在读取时查、从不落库，界面也标明来源，那个问题就不存在了。
+// 猜错时还有两层退避：超限报错里写了真实窗口就一次缩到位并记住（context_overflow.go），
+// 没写就逐次减半重试。同步下来的模型清单仍不参与计算：网关报的数常是占位值。
 
 // ContextWindowSource 说明生效的窗口是从哪来的，供界面如实标注。
 type ContextWindowSource string
@@ -23,6 +19,8 @@ type ContextWindowSource string
 const (
 	// ContextWindowSourceUser 是用户手填的值。
 	ContextWindowSourceUser ContextWindowSource = "user"
+	// ContextWindowSourceModelsDev 是 models.dev 里这个模型的窗口。
+	ContextWindowSourceModelsDev ContextWindowSource = "models_dev"
 	// ContextWindowSourceFallback 是没填时的兜底常量。
 	ContextWindowSourceFallback ContextWindowSource = "fallback"
 )
@@ -62,6 +60,9 @@ func bareModelName(model string) string {
 func (cfg ProviderConfig) ResolveContextWindowTokens() (int64, ContextWindowSource) {
 	if cfg.ContextWindowTokens > 0 {
 		return cfg.ContextWindowTokens, ContextWindowSourceUser
+	}
+	if window, ok := modelLimitCatalog.ContextLimit(cfg, cfg.Model); ok && window >= minContextWindowTokens {
+		return window, ContextWindowSourceModelsDev
 	}
 	return DefaultContextWindowTokens, ContextWindowSourceFallback
 }
