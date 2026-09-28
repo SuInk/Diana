@@ -1917,14 +1917,10 @@ func (r *Runtime) routeMessageEvent(ctx context.Context, event MessageEvent) (Me
 		restriction, blocked = r.activeReplySuppression(event, now)
 	}
 	statusCommand := r.statusCommandActive(event, text)
-	var history []MessageEvent
-	if statusCommand || r.replyClosedForUndirectedEvent(event, text) {
-		// 状态卡片用不到跨群上下文，别为它跑一次跨群语义检索。两个接话开关都关、
-		// 又没在叫机器人的消息同理：它注定不回，跨群检索的结果没有人用。
-		history, _ = r.sessionContextHistory(event)
-	} else {
-		history = r.contextHistory(event)
-	}
+	// 这里只加载本群历史。跨群参考只给回复正文用，接话评分、规则匹配这些判断都不看它
+	// （见 sessionOnlyHistory），等确定要回复了再在 replyTo 里检索。以前每条可能接话的
+	// 群消息都先跑一遍跨群全文检索，大半最后不回，结果白查。
+	history, _ := r.sessionContextHistory(event)
 	event.replyHistory = history
 	event.replyHistoryLoaded = true
 	ctx = r.withIdentityPrivacyContext(ctx, event, history)
@@ -2680,34 +2676,6 @@ func eventRoutingText(event MessageEvent) string {
 		return text
 	}
 	return event.RawMessage
-}
-
-// replyClosedForUndirectedEvent 报告这条群消息在当前配置下注定不会得到回复：两个
-// 接话开关都关了，而它又没有 @、引用、点名机器人，也不是插件指令或链接解析。
-//
-// 这种消息走完整条路最后也只落到「回应提问与闲聊均已关闭，不主动接话」，但在那之前
-// 会先跑一次跨群上下文检索——它的输出只给回复用，于是白花一次检索。提前认出来，就只
-// 跳过这一步；识图、记忆、表达学习这些「关掉发言但还要记住」的环节不受影响。
-//
-// 「是不是冲着机器人」沿用 shouldHandle 的判据，不另起一套。被标记为机器人的账号
-// 要先经模型判一次才知道是不是在叫本机（见 requiresTelegramBotMentionJudgment），
-// 这时答案还不确定，按老路走。
-func (r *Runtime) replyClosedForUndirectedEvent(event MessageEvent, text string) bool {
-	if event.Kind != EventKindGroup {
-		return false
-	}
-	if !participationClosed(r.effectiveConfigForEvent(event)) {
-		return false
-	}
-	if r.requiresTelegramBotMentionJudgment(event) {
-		return false
-	}
-	// 带了引用、但被引的那条还没解析出来（入站队列那一步还没走 enrichReplyReference）：
-	// 不知道引的是不是机器人，按老路走。
-	if event.Quoted == nil && len(replyReferenceIDs(event.Segments)) > 0 {
-		return false
-	}
-	return !r.shouldHandle(event, text)
 }
 
 func (r *Runtime) shouldHandleProactiveReply(ctx context.Context, event MessageEvent, text string) bool {
@@ -3796,6 +3764,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			event.replyAuditImageContext = currentImageGrounding
 		}
 	}
+	event = r.loadDeferredCrossGroupContext(event)
 	replyHistory := r.promptContextHistory(event, cfg)
 	ctx = r.withReplyIdentityPrivacyContext(ctx, event, replyHistory)
 	// 每条消息单独限时，防止慢模型/插件占住并发槽太久。
@@ -6752,7 +6721,26 @@ func historyLinePrefix(event MessageEvent) string {
 	if event.Time > 0 {
 		label += " " + time.Unix(event.Time, 0).Local().Format("2006-01-02 15:04:05")
 	}
+	// 跨群参考放在提示词尾部的易变区，不进缓存前缀，可以直接标出离当前消息多久：
+	// 是刚刚另一个群里的事，还是十几天前的旧话，模型自己掂量。
+	if event.crossGroupContext && event.crossGroupAgeSeconds > 0 {
+		label += "，约" + crossGroupAgeText(event.crossGroupAgeSeconds) + "前"
+	}
 	return label + "] "
+}
+
+// crossGroupAgeText 把秒数写成「5分钟」「3小时」「12天」这样的粗略时长。
+func crossGroupAgeText(seconds int64) string {
+	switch {
+	case seconds < 60:
+		return "1分钟"
+	case seconds < 3600:
+		return fmt.Sprintf("%d分钟", seconds/60)
+	case seconds < 48*3600:
+		return fmt.Sprintf("%d小时", seconds/3600)
+	default:
+		return fmt.Sprintf("%d天", seconds/86400)
+	}
 }
 
 func historicalFileCount(event MessageEvent) int {
