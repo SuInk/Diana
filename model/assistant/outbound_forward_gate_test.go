@@ -150,3 +150,38 @@ func TestSendDecoratedDoesNotFallBackToChunksAfterUnsafeCard(t *testing.T) {
 		t.Fatalf("被拦下的回复不该改成逐条发出去：%#v", sent)
 	}
 }
+
+// 回复链路已经审过账号安全的这段话，改成合并转发时卡片不再审第二遍。
+func TestSendDecoratedForwardReplyAuditedOnce(t *testing.T) {
+	withFastSendTiming(t)
+	provider := &qualityTestProvider{reply: `{"send_confidence":0.99,"reason":"ok","account_safe":false,"account_risk":"politics"}`}
+	channel := &recordingChannel{}
+	runtime := NewRuntime(BotConfig{BotAccount: "42", ForwardReplyThreshold: 10}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+		return provider, nil
+	})
+	event := MessageEvent{Kind: EventKindGroup, Platform: PlatformOneBotV11, GroupID: "30003", UserID: "10001"}
+	reply := "第一段很长的回复内容" + notificationSplitMarker + "第二段很长的回复内容" + notificationSplitMarker + "第三段很长的回复内容"
+
+	ctx := withReplyAccountSafetyAudited(t.Context(), reply)
+	if _, err := runtime.sendDecorated(ctx, event, reply, outboundDecoration{}); err != nil {
+		t.Fatal(err)
+	}
+	if len(provider.requests) != 0 {
+		t.Fatalf("审过的回复发卡片时不该再审，实际审了 %d 次", len(provider.requests))
+	}
+	channel.mu.Lock()
+	cards := recordedCallsByAction(channel.calls, "send_group_forward_msg")
+	channel.mu.Unlock()
+	if len(cards) != 1 {
+		t.Fatalf("回复应以一张转发卡片发出，实际 %d 张", len(cards))
+	}
+
+	// 审过的是另一段话时照审：标记只认原文。
+	provider.requests = nil
+	if _, err := runtime.sendDecorated(ctx, event, reply+notificationSplitMarker+"又补了一段", outboundDecoration{}); err == nil {
+		t.Fatal("没审过的文字应在卡片这道被拦下")
+	}
+	if len(provider.requests) != 1 {
+		t.Fatalf("没审过的文字卡片该审一次，实际 %d 次", len(provider.requests))
+	}
+}

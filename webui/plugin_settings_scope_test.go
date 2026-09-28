@@ -96,12 +96,12 @@ func TestPluginProfileSettingsHTTPAndPersistence(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &systemPlugins); err != nil || len(systemPlugins) < 2 {
 		t.Fatal("unscoped list did not expose shared configuration")
 	}
-	foundOpenAPI := false
+	found := false
 	for _, plugin := range systemPlugins {
-		foundOpenAPI = foundOpenAPI || plugin.Manifest.ID == assistant.OpenAPIPluginID
+		found = found || plugin.Manifest.ID == id
 	}
-	if !foundOpenAPI {
-		t.Fatal("system settings lost the OpenAPI configuration")
+	if !found {
+		t.Fatal("unscoped list lost the shared plugin configuration")
 	}
 }
 

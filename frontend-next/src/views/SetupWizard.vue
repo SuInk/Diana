@@ -183,11 +183,7 @@
           <template v-if="isOneBotPlatform">
             <div class="field wide">
               <label for="wizard-onebot-transport">连接方式</label>
-              <select id="wizard-onebot-transport" v-model="botForm.onebot_transport" class="input">
-                <option value="reverse_ws">反向 WebSocket</option>
-                <option value="forward_ws">正向 WebSocket</option>
-                <option value="http">HTTP API + HTTP 事件上报</option>
-              </select>
+              <AppSelect id="wizard-onebot-transport" :model-value="botForm.onebot_transport || 'reverse_ws'" :options="oneBotTransportOptions" @update:model-value="(value) => { botForm.onebot_transport = value as OneBotTransport; }" />
             </div>
             <div v-if="botForm.onebot_transport === 'reverse_ws'" class="field wide">
               <label for="wizard-onebot-endpoint">OneBot v11 回连地址</label>
@@ -208,7 +204,7 @@
             <div v-else-if="botForm.onebot_transport === 'forward_ws'" class="field wide">
               <label for="wizard-onebot-ws">OneBot WS 服务地址</label>
               <input id="wizard-onebot-ws" v-model="botForm.onebot_ws_endpoint" class="input mono" placeholder="ws://127.0.0.1:6700/" />
-              <span class="hint">使用同时提供 API 和事件的通用 WS 地址，Diana 主动连接并自动重连。发送文件/图片时接入端按这里的主机名回源拉取媒体：同机或容器（host.docker.internal）部署无需额外配置，跨机部署稍后可在「设置 → 媒体与文件」页配置媒体回源基址。</span>
+              <span class="hint">使用同时提供 API 和事件的通用 WS 地址，Diana 主动连接并自动重连。发送文件/图片时接入端按这里的主机名回源拉取媒体：同机或容器（host.docker.internal）部署无需额外配置，跨机部署稍后可在「机器人 → 接入」页填写媒体回源基址。</span>
             </div>
             <template v-else>
               <div class="field wide">
@@ -495,7 +491,7 @@ import { stream } from "../stream";
 import { navigate } from "../router";
 import { toastError, toastSuccess } from "../toast";
 import AccountNameHint from "../components/AccountNameHint.vue";
-import AppSelect from "../components/AppSelect.vue";
+import AppSelect, { type AppSelectOption } from "../components/AppSelect.vue";
 import WeixinLoginPanel from "../components/WeixinLoginPanel.vue";
 import {
   defaultPresetForProvider,
@@ -635,9 +631,15 @@ async function loadModels(selectFirst: boolean): Promise<boolean> {
   }
 }
 
+type OneBotTransport = "reverse_ws" | "forward_ws" | "http";
+const oneBotTransportOptions: AppSelectOption[] = [
+  { value: "reverse_ws", label: "反向 WebSocket" },
+  { value: "forward_ws", label: "正向 WebSocket" },
+  { value: "http", label: "HTTP API + HTTP 事件上报" }
+];
 const botForm = ref({
   platform: PlatformOneBotV11,
-  onebot_transport: "reverse_ws" as "reverse_ws" | "forward_ws" | "http",
+  onebot_transport: "reverse_ws" as OneBotTransport,
   onebot_ws_endpoint: "",
   onebot_http_url: "",
   onebot_http_secret: "",
@@ -767,7 +769,7 @@ function oneBotMediaOriginWarningText(transport: string, wsEndpoint: string, htt
   const host = endpointHostname(transport === "forward_ws" ? wsEndpoint : httpEndpoint);
   if (!host) return "";
   if (isLocalOriginHost(host) || host === (currentHost || "").replace(/^\[|\]$/g, "").toLowerCase()) return "";
-  return `接入端将按 ${host} 回源拉取文件/媒体（端口为 Diana 的 Web 端口）。若该主机访问不到 Diana，文件发送会失败，请在「设置 → 媒体与文件」页配置媒体回源基址。`;
+  return `接入端将按 ${host} 回源拉取文件/媒体（端口为 Diana 的 Web 端口）。若该主机访问不到 Diana，文件发送会失败，请在「机器人 → 接入」页填写媒体回源基址。`;
 }
 
 const oneBotMediaOriginWarning = computed(() => {

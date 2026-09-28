@@ -15,7 +15,6 @@ import type {
   BrowserBoxSettings,
   BrowserControlToken,
   LLMConfig,
-  OpenAPIKey,
   Persona,
   PromptCatalog,
   PluginState,
@@ -164,7 +163,6 @@ let plugins: PluginState[] = [
     installed: true, enabled: true
   },
   { manifest: { id: "official.onebot-v11", name: "OneBot 协议", version: "0.1.0", description: "提供 OneBot v11 事件、消息发送、群组列表和协议扩展动作。", official: true, built_in: true, permissions: ["OneBot 读取", "OneBot 写入"] }, installed: true, enabled: true },
-  { manifest: { id: "official.open-api", name: "对外 API", version: "0.1.0", description: "让 CI、监控这类外部系统凭密钥调用 HTTP 接口向指定会话推送消息；密钥在「设置 → 安全」里管理。", official: true, built_in: true, default_disabled: true, permissions: ["network:http", "message:write"], settings: [{ key: "rate_limit_per_minute", label: "单密钥限流", description: "每把密钥每分钟允许的调用次数，超出返回 429。", type: "number", default: 60, min: 1, max: 600, step: 10, unit: "次/分钟" }] }, installed: true, enabled: false },
   {
     manifest: {
       id: "official.repository-publish", name: "GitHub Issue 与 PR", version: "0.6.0", description: "搜索和管理 GitHub Issue；读取 Pull Request 的描述、改动文件和 patch，并在 PR 上发表评论或提交 review（只评论，不批准、不合并）。群成员可生成草稿，由具备仓库权限的授权用户用确认码确认后写入。", official: true, built_in: true, permissions: ["network:https", "github:issues:read", "github:issues:write", "audit:write", "llm:tool"],
@@ -221,7 +219,7 @@ let plugins: PluginState[] = [
   { manifest: { id: "official.status-command", name: "状态查询", version: "0.1.0", description: "群里或私聊发一条 #diana（整条消息只有这一个词）就回一张运行状态卡片：版本、平台、已运行时长。不经过模型，回复固定且立刻返回，用来确认机器人还活着。默认关闭。", official: true, built_in: true, default_disabled: true, permissions: ["message:read", "message:send"] }, installed: true, enabled: false }
 ];
 
-for (const plugin of plugins) if (plugin.manifest.id !== "official.open-api") {
+for (const plugin of plugins) {
   plugin.profile_enabled = Object.fromEntries((assistantConfig.profiles ?? []).map((profile) => [profile.id!, plugin.enabled]));
   plugin.enabled = !plugin.manifest.default_disabled;
 }
@@ -679,11 +677,9 @@ let demoBrowserControlPolicy = {
 let demoBrowserControlTokens: BrowserControlToken[] = [
   { id: "bct-demo", name: "演示台式机 Chrome", prefix: "dianabx_demo0000", extension_id: "abcdefghijklmnopabcdefghijklmnop", created_at: before(1440), last_used_at: before(2) }
 ];
-let demoApiKeys: OpenAPIKey[] = [
-  { id: "key-1", name: "ci-notify", prefix: "diana_3fa8c2e1", created_at: before(4320), last_used_at: before(35) }
-];
 
 let demoMediaCachePolicy = { retention_days: 7, max_mb: 0 };
+let demoHistoryMediaPolicy = { retention_days: 180, max_mb: 10240 };
 
 let demoMediaBaseURL = { base_url: "", source: "auto" };
 
@@ -875,6 +871,13 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
   const body = bodyOf(init);
   const path = url.pathname;
 
+  if (path === "/api/system/history-media") {
+    if (method === "POST") {
+      demoHistoryMediaPolicy = { retention_days: Number(body.retention_days), max_mb: Number(body.max_mb) };
+    }
+    return json(demoHistoryMediaPolicy);
+  }
+
   if (path === "/api/system/media-cache") {
     if (method === "POST") {
       demoMediaCachePolicy = { retention_days: Number(body.retention_days), max_mb: Number(body.max_mb) };
@@ -956,17 +959,6 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
       ]
     });
   if (path.startsWith("/api/auth/")) return json({ ok: true, username: "demo" });
-  if (path === "/api/openapi/keys" && method === "GET") return json({ keys: demoApiKeys });
-  if (path === "/api/openapi/keys" && method === "POST") {
-    const key: OpenAPIKey = { id: `key-${Date.now()}`, name: String(body.name ?? "未命名"), prefix: "diana_demo0000", created_at: new Date().toISOString() };
-    demoApiKeys = [key, ...demoApiKeys];
-    return json({ key, token: "diana_demo00000000000000000000000000000000000000000000000000000000000000" });
-  }
-  if (path.startsWith("/api/openapi/keys/") && method === "DELETE") {
-    const keyID = decodeURIComponent(path.split("/").pop() ?? "");
-    demoApiKeys = demoApiKeys.filter((item) => item.id !== keyID);
-    return json({ revoked: true });
-  }
   // 浏览器来源：演示里内置浏览器找得到 Chrome，扩展有一条连着（见下面的 connections）。
   const demoBrowserSourceState = () => {
     const box = {
@@ -1260,7 +1252,7 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
   }
   if (path === "/api/assistant/plugins") {
     const profile = url.searchParams.get("profile") ?? "";
-    return json(plugins.filter((plugin) => !profile || plugin.manifest.id !== "official.open-api").map((plugin) => demoPluginForProfile(plugin, profile)));
+    return json(plugins.map((plugin) => demoPluginForProfile(plugin, profile)));
   }
   if (path === "/api/assistant/plugins/repository-publish/drafts") {
     const status = url.searchParams.get("status") ?? "all";
@@ -1399,17 +1391,13 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
   if (pluginMatch) {
     const plugin = plugins.find((item) => item.manifest.id === decodeURIComponent(pluginMatch[1]));
     if (!plugin) return json({ error: "演示插件不存在" }, 404);
-    if (pluginMatch[2] === "enabled" && plugin.manifest.id !== "official.open-api" && !url.searchParams.get("profile")) return json({ error: "请选择具体机器人" }, 400);
+    if (pluginMatch[2] === "enabled" && !url.searchParams.get("profile")) return json({ error: "请选择具体机器人" }, 400);
     if (body.inherit) return json({ error: "插件配置不再支持继承" }, 400);
     if (pluginMatch[2] === "install") plugin.installed = true;
     if (pluginMatch[2] === "uninstall") { plugin.installed = false; plugin.enabled = false; delete plugin.repo_source; }
     if (pluginMatch[2] === "enabled") {
       const profile = url.searchParams.get("profile") ?? "";
-      if (profile && plugin.manifest.id !== "official.open-api") {
-        plugin.profile_enabled = { ...plugin.profile_enabled, [profile]: Boolean(body.enabled) };
-      } else {
-        plugin.enabled = Boolean(body.enabled);
-      }
+      plugin.profile_enabled = { ...plugin.profile_enabled, [profile]: Boolean(body.enabled) };
     }
     const profile = url.searchParams.get("profile") ?? "";
     if (pluginMatch[2] === "settings") {

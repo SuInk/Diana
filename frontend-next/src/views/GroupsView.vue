@@ -122,7 +122,7 @@
 
       <LoadingSkeleton v-if="!loaded" kind="groups" label="正在加载群列表" />
       <div v-else-if="filteredGroups.length > 0" class="group-grid">
-        <section v-for="group in filteredGroups" :key="group.group_id" class="group-card">
+        <section v-for="group in filteredGroups" :key="groupKey(group)" class="group-card">
           <div class="group-card-head">
             <div class="group-identity">
               <img v-if="group.avatar_url" :src="group.avatar_url" :alt="group.group_name || `群 ${group.group_id}`" @error="hideBrokenAvatar" />
@@ -135,13 +135,14 @@
               <input
                 type="checkbox"
                 :checked="group.enabled"
-                :disabled="togglingGroupID === group.group_id"
+                :disabled="togglingGroupID === groupKey(group)"
                 @change="toggleGroup(group, $event)"
               />
               <span class="track" aria-hidden="true"></span>
             </label>
           </div>
           <div class="group-card-badges">
+            <span v-if="!botScope && group.bot_profile_id && botFor(group)?.name" class="badge">{{ botFor(group)?.name }}</span>
             <span v-if="liveAvailable" class="badge" :class="{ accent: group.joined }">{{ group.joined ? "已加入" : "当前未加入" }}</span>
             <span class="badge" :class="{ accent: group.configured }">{{ group.configured ? "已配置" : "跟随全局" }}</span>
             <span v-if="group.member_count" class="badge">
@@ -840,9 +841,9 @@ const quotaWindowSeconds = ref(0);
 
 // 弹窗里这一条是「我刚填的这个数，现在用掉多少了」。
 const editingQuota = computed(() => {
-  const groupID = editing.value?.group_id;
-  if (!groupID) return undefined;
-  const summary = groups.value.find((group) => group.group_id === groupID);
+  if (!editing.value?.group_id) return undefined;
+  const target = editing.value;
+  const summary = groups.value.find((group) => sameGroup(group, target));
   if (!summary) return undefined;
   const callLimit = summary.quota_call_limit ?? 0;
   if (callLimit <= 0) return undefined;
@@ -878,6 +879,14 @@ const triggersDraft = ref("");
 const welcomeTemplatesDraft = ref("");
 const saving = ref(false);
 const togglingGroupID = ref("");
+// 群按「机器人 + 群号」认：全部机器人视图里，两台机器人同在一个群时是两张卡。
+// 有一边没记归属（老数据、单机器人部署）时退回只看群号。
+function groupKey(group: { group_id: string; bot_profile_id?: string }): string {
+  return `${group.bot_profile_id ?? ""}:${group.group_id}`;
+}
+function sameGroup(a: { group_id: string; bot_profile_id?: string }, b: { group_id: string; bot_profile_id?: string }): boolean {
+  return a.group_id === b.group_id && (!a.bot_profile_id || !b.bot_profile_id || a.bot_profile_id === b.bot_profile_id);
+}
 // 自然分条默认是开的，跟机器人配置那边的缺省一致。
 const naturalReplySplitDefaults = ref<Record<string, boolean>>({});
 const defaultNaturalReplySplitEnabled = computed(() =>
@@ -1193,7 +1202,7 @@ function addGroup(): void {
     toastError("请输入正确的群号");
     return;
   }
-  const existing = groups.value.find((group) => group.group_id === groupID);
+  const existing = groups.value.find((group) => sameGroup(group, { group_id: groupID, bot_profile_id: botScope.value }));
   openEditor(
     existing ?? {
       group_id: groupID,
@@ -1422,7 +1431,7 @@ async function setAllGroups(enabled: boolean): Promise<void> {
 
 async function toggleGroup(group: BotGroupSummary, event: Event): Promise<void> {
   const enabled = (event.target as HTMLInputElement).checked;
-  togglingGroupID.value = group.group_id;
+  togglingGroupID.value = groupKey(group);
   try {
     const saved = await saveBotGroup({ ...groupConfigOf(group), bot_profile_id: botScope.value || group.bot_profile_id, enabled });
     upsert(saved.config);
@@ -1512,7 +1521,7 @@ function forwardDefaultsOf(config: { forward_reply_enabled?: boolean; forward_re
 }
 
 function upsert(config: BotGroupConfig): void {
-  const index = groups.value.findIndex((group) => group.group_id === config.group_id);
+  const index = groups.value.findIndex((group) => sameGroup(group, config));
   if (index >= 0) {
     // 整份换成保存结果，只留列表自己的群名、头像和成员数：恢复跟随时响应会省略
     // 那个字段，合并旧对象会把先前的显式值留在列表里。

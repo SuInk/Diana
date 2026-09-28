@@ -90,6 +90,11 @@ type dianaGitHubTool struct {
 	// credentialSource 记下本次请求实际用了哪种凭据，只用于把 404 之类的报错说清楚，
 	// 不含 Token 本身。
 	credentialSource string
+	// renamedFrom 记下这次调用里 GitHub 确认过的改名（新名小写 → 旧名）。设置里的
+	// 凭据绑定、按用户授权都还按旧名写着，跟到新名字之后照样要认得出来。
+	renamedFrom map[string]string
+	// repositoryNames 缓存这次调用里问过的仓库现名，同一个仓库不问第二遍。
+	repositoryNames map[string]string
 }
 
 type repositoryIssueResult struct {
@@ -443,6 +448,7 @@ func (t *dianaGitHubTool) Run(ctx context.Context, input map[string]any) (string
 	result.Repository = repository
 	owner := t.runtime.relationshipPolicy(ctx, t.event).Owner
 	readOperation := repositoryIssueReadOnlyOperation(operation) && operation != "repo_search"
+	redirectedFrom := ""
 	if readOperation {
 		// search 的 query 本地校验先于任何网络探测：注入仓库限定符、布尔操作或
 		// 引号必须零请求被拒，不能先挨一发仓库元信息探测。
@@ -466,11 +472,26 @@ func (t *dianaGitHubTool) Run(ctx context.Context, input map[string]any) (string
 		// 元信息探测返回 404 时不在这里拦截：凭据看不到的仓库，真正的读取接口
 		// 同样会 404，让后续请求给出带凭据归因的错误即可，行为与旧版一致。
 		visibility, apiErr := t.repositoryVisibility(ctx, repository)
+		// 仓库改过名，旧名的元信息探测会收到 301。读操作不写东西，直接换新名字接着读。
+		if apiErr != nil && apiErr.Code == "redirect_refused" {
+			if renamed, ok := t.renamedRepository(ctx, repository); ok {
+				redirectedFrom, repository = repository, renamed
+				result.Repository = renamed
+				visibility, apiErr = t.repositoryVisibility(ctx, repository)
+			}
+		}
 		if apiErr != nil && apiErr.Code != "not_found" {
 			return t.finish(ctx, result.fail(apiErr.Code, t.failureMessage(apiErr.Code)))
 		}
 		if apiErr == nil && visibility == repositoryVisibilityPrivate && !owner {
-			if code, message := t.validatePrivateReadAccess(repository); code != "" {
+			code, message := t.validatePrivateReadAccess(repository)
+			// 授权名单里写的可能还是旧名。
+			if code != "" && redirectedFrom != "" {
+				if previousCode, _ := t.validatePrivateReadAccess(redirectedFrom); previousCode == "" {
+					code, message = "", ""
+				}
+			}
+			if code != "" {
 				return t.finish(ctx, result.fail(code, message))
 			}
 		}
@@ -492,27 +513,27 @@ func (t *dianaGitHubTool) Run(ctx context.Context, input map[string]any) (string
 	}
 	if readOperation {
 		if operation == "repo" {
-			return t.finish(ctx, t.repositoryProfile(ctx, repository))
+			return t.finishRead(ctx, redirectedFrom, t.repositoryProfile(ctx, repository))
 		}
 		if operation == "get" {
-			return t.finish(ctx, t.get(ctx, repository, input))
+			return t.finishRead(ctx, redirectedFrom, t.get(ctx, repository, input))
 		}
 		if operation == "pull_files" {
-			return t.finish(ctx, t.pullFiles(ctx, repository, input))
+			return t.finishRead(ctx, redirectedFrom, t.pullFiles(ctx, repository, input))
 		}
 		if operation == "read_file" {
-			return t.finish(ctx, t.readFile(ctx, repository, input))
+			return t.finishRead(ctx, redirectedFrom, t.readFile(ctx, repository, input))
 		}
 		if operation == "commit_files" {
-			return t.finish(ctx, t.commitFiles(ctx, repository, input))
+			return t.finishRead(ctx, redirectedFrom, t.commitFiles(ctx, repository, input))
 		}
 		if operation == "compare_files" {
-			return t.finish(ctx, t.compareFiles(ctx, repository, input))
+			return t.finishRead(ctx, redirectedFrom, t.compareFiles(ctx, repository, input))
 		}
 		if operation == "list_files" {
-			return t.finish(ctx, t.listFiles(ctx, repository, input))
+			return t.finishRead(ctx, redirectedFrom, t.listFiles(ctx, repository, input))
 		}
-		return t.finish(ctx, t.search(ctx, repository, input))
+		return t.finishRead(ctx, redirectedFrom, t.search(ctx, repository, input))
 	}
 	if code, message := t.validateWriteAccess(repository, owner); code != "" {
 		return t.finish(ctx, result.fail(code, message))
@@ -1616,11 +1637,16 @@ func (t *dianaGitHubTool) approveDraft(ctx context.Context, input map[string]any
 	}
 	result.Repository = draft.Repository
 	owner := t.runtime.relationshipPolicy(ctx, t.event).Owner
-	userAllowed, code, message := repositoryPublishEventCanApprove(t.event, draft.Repository, owner, t.settings, t.groupRoleResolver(ctx))
-	if !userAllowed {
-		if code == "" {
+	// 仓库改过名时，设置里可能还是旧名，也可能已经换成新名而草稿记的是旧名：两个
+	// 名字指同一个仓库，哪个过了授权都算。
+	names := repositoryRenameCandidates{tool: t, original: draft.Repository}
+	if code, message := names.check(ctx, func(repository string) (string, string) {
+		userAllowed, code, message := repositoryPublishEventCanApprove(t.event, repository, owner, t.settings, t.groupRoleResolver(ctx))
+		if !userAllowed && code == "" {
 			code, message = "permission_denied", "当前用户没有该仓库的审批权限。"
 		}
+		return code, message
+	}); code != "" {
 		return result.fail(code, message)
 	}
 	// 确认必须是用户本人原样打出运行时给的确认码。以前这里扫「同意/批准/提交」并用
@@ -1630,7 +1656,9 @@ func (t *dianaGitHubTool) approveDraft(ctx context.Context, input map[string]any
 		return result.fail("explicit_approval_required", fmt.Sprintf(
 			"当前消息里没有确认码 %s。请让有权限的人原样回复它再执行。", draftConfirmationCode(draft)))
 	}
-	if code, message := t.validateWriteAccess(draft.Repository, owner); code != "" {
+	if code, message := names.check(ctx, func(repository string) (string, string) {
+		return t.validateWriteAccess(repository, owner)
+	}); code != "" {
 		return result.fail(code, message)
 	}
 	return t.executeDraft(ctx, draft, input, "approve")
@@ -1665,11 +1693,24 @@ func (t *dianaGitHubTool) executeDraft(ctx context.Context, draft repositoryIssu
 		draft.Repository = current
 		result.Repository = current
 	}
-	var executed repositoryIssueResult
-	if targets := repositoryIssueBatchTargets(writeInput); len(targets) > 1 {
-		executed = t.executeBatch(ctx, repository, operation, writeInput, targets)
-	} else {
-		executed = t.executeWrite(ctx, repository, operation, writeInput)
+	run := func(repository string) repositoryIssueResult {
+		if targets := repositoryIssueBatchTargets(writeInput); len(targets) > 1 {
+			return t.executeBatch(ctx, repository, operation, writeInput, targets)
+		}
+		return t.executeWrite(ctx, repository, operation, writeInput)
+	}
+	executed := run(repository)
+	// 上面的预查靠 GraphQL，没有 Token 或查询失败时认不出改名，旧名请求就会被 301/307
+	// 挡回来。重定向说明 GitHub 根本没执行这次请求，这时再用 REST 问出新名字换名重试
+	// 一次不会写重。只认 redirect_refused：invalid_response 可能是写进去了但回包不对。
+	if renamedFrom == "" && !executed.OK && len(executed.Items) == 0 && executed.FailureCode == "redirect_refused" {
+		if current := t.restRepositoryName(ctx, repository); current != "" && !strings.EqualFold(current, repository) {
+			t.noteRename(repository, current)
+			renamedFrom, repository = repository, current
+			draft.Repository = current
+			result.Repository = current
+			executed = run(repository)
+		}
 	}
 	if renamedFrom != "" {
 		executed.Message = fmt.Sprintf("仓库 %s 已改名为 %s，已按新名执行。", renamedFrom, repository) + executed.Message
@@ -2551,6 +2592,22 @@ func (t *dianaGitHubTool) currentRepositoryName(ctx context.Context, repository 
 	if t == nil || t.plugin == nil || t.plugin.client == nil {
 		return ""
 	}
+	key := strings.ToLower(strings.TrimSpace(repository))
+	if cached, ok := t.repositoryNames[key]; ok {
+		return cached
+	}
+	current := t.graphQLRepositoryName(ctx, repository)
+	if t.repositoryNames == nil {
+		t.repositoryNames = map[string]string{}
+	}
+	t.repositoryNames[key] = current
+	if current != "" && !strings.EqualFold(current, repository) {
+		t.noteRename(repository, current)
+	}
+	return current
+}
+
+func (t *dianaGitHubTool) graphQLRepositoryName(ctx context.Context, repository string) string {
 	owner, name, ok := strings.Cut(repository, "/")
 	if !ok || owner == "" || name == "" {
 		return ""
@@ -3282,7 +3339,7 @@ func (t *dianaGitHubTool) repositoryPublishCredential(ctx context.Context, repos
 	// 个人凭据只在这次放行确实落在个人头上时才用。以前只要设置里留着某人的认证来源就
 	// 一律优先，整群放开的群里、主人、名单外的人也照用；而按用户选认证来源的编辑器早已
 	// 下线，残留的 gh 设置界面上看不到也删不掉，换了公共 Token 仍然用旧账号写入。
-	if t.personalCredentialApplies(repository) {
+	if t.personalCredentialApplies(repository) || t.personalCredentialApplies(t.previousName(repository)) {
 		tokens, _ = repositoryPublishUserTokens(t.settings.String(repositoryPublishSettingUserTokens, ""))
 		modes, _ := repositoryPublishUserAuthModes(t.settings.String(repositoryPublishSettingUserAuth, ""))
 		userMode = modes[userID]
@@ -3389,7 +3446,14 @@ func (t *dianaGitHubTool) repositoryBoundCredential(repository string) (reposito
 	if settings == nil {
 		return repositoryCredential{}, "", false
 	}
-	return repositoryCredentialFor(repository, settings)
+	if credential, token, ok := repositoryCredentialFor(repository, settings); ok {
+		return credential, token, true
+	}
+	// 改名后按旧名绑定的凭据照样认。
+	if previous := t.previousName(repository); previous != "" {
+		return repositoryCredentialFor(previous, settings)
+	}
+	return repositoryCredential{}, "", false
 }
 
 func (t *dianaGitHubTool) repositoryPublishGHCredential(ctx context.Context) (string, *repositoryIssueAPIError) {

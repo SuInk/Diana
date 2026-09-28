@@ -104,7 +104,7 @@ func (m *PluginManager) MigrateProfileConfigurations(profiles []BotConfig) bool 
 			m.states[id] = state
 			changed = true
 		}
-		if id == OpenAPIPluginID || state.ProfileConfigMigrated {
+		if state.ProfileConfigMigrated {
 			continue
 		}
 		legacy := state.Settings

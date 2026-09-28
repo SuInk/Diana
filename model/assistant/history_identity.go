@@ -65,7 +65,7 @@ var identityMarkerNeutralizer = strings.NewReplacer(
 // forgedIdentityAliasPattern 匹配不可信文本里长得像会话别名的 token。
 //
 // 隐私代理把真实账号换成 im_bot_owner_xxx 这类别名，系统提示词还明确告诉模型
-// 「im_bot_owner、im_current_user、im_bot 前缀保留角色语义」——也就是说前缀本身
+// 「im_bot_owner、im_bot 前缀保留角色语义」——也就是说前缀本身
 // 就是一句身份声明。用户在正文里手写一个 im_bot_owner_deadbeef，等于凭空给自己
 // 发了张身份证，和伪造 [主人] 是同一类洞，只是换了个 token。
 //

@@ -84,7 +84,7 @@
 
       <section class="section searchable" id="gates">
         <div class="section-heading"><p class="eyebrow">01 Reply triggers</p><h2>Deterministic gates</h2></div>
-        <p>Checked in order; any stop ends with a specific reason. None of these calls a model (except check 12), so results are stable and reproducible.</p>
+        <p>Checked in order; any stop ends with a specific reason. None of these calls a model (except checks 12 and 13), so results are stable and reproducible.</p>
         <div class="table-wrap"><table><thead><tr><th>#</th><th>Check</th><th>Outcome when stopped</th></tr></thead><tbody>
           <tr><td>1</td><td>The bot left the group or the group is unavailable</td><td><code>ignored_unavailable_group</code></td></tr>
           <tr><td>2</td><td>Resolve quotes, forwards and images; plugin observers; store history</td><td>—</td></tr>
@@ -98,6 +98,7 @@
           <tr><td>10</td><td>Reply suppression is active</td><td><code>ignored_response_suppression</code></td></tr>
           <tr><td>11</td><td>Video only, no text</td><td><code>ignored_video</code></td></tr>
           <tr><td>12</td><td>The sender is a marked bot or a Telegram bot and did not mention or quote this bot: a model decides whether it is talking to us</td><td><code>ignored_bot_message</code></td></tr>
+          <tr><td>13</td><td>Reply fatigue is full (many replies to the same person whose messages were long, repetitive and aimless; a fast and a slow trace decaying over 10 minutes and 6 hours, total = fast + 0.2 × slow): after deciding to reply, a model checks whether this message brings anything new or asks/requests something; only when it does neither is there no reply, even for mentions and quotes. No model call while fatigue is below the limit</td><td><code>ignored_reply_fatigue</code></td></tr>
         </tbody></table></div>
       </section>
 
@@ -324,7 +325,7 @@
         <p>Every message, answered or not, ends with a record: <code>decision</code> is the outcome code and <code>decision_reason</code> the human-readable reason. When troubleshooting, find which stage it stopped at, then go back to that section.</p>
         <div class="table-wrap"><table><thead><tr><th>Stage</th><th>Outcome codes</th></tr></thead><tbody>
           <tr><td><a href="#trigger">Inbound queue</a></td><td><code>ignored_stale</code> <code>backfill_history_only</code> <code>ignored_private_admission</code> <code>dropped_retries_exhausted</code></td></tr>
-          <tr><td><a href="#gates">Deterministic gates</a></td><td><code>ignored_policy</code> <code>ignored_user_blocked</code> <code>ignored_bot_muted</code> <code>ignored_model_quota</code> <code>ignored_member_level</code> <code>ignored_response_suppression</code> <code>ignored_video</code> <code>ignored_bot_message</code></td></tr>
+          <tr><td><a href="#gates">Deterministic gates</a></td><td><code>ignored_policy</code> <code>ignored_user_blocked</code> <code>ignored_bot_muted</code> <code>ignored_model_quota</code> <code>ignored_member_level</code> <code>ignored_response_suppression</code> <code>ignored_video</code> <code>ignored_bot_message</code> <code>ignored_reply_fatigue</code></td></tr>
           <tr><td><a href="#proactive">Reply rating</a></td><td><code>ignored</code> <code>replied_proactive</code></td></tr>
           <tr><td><a href="#concurrency">Concurrency</a></td><td><code>merged_into_reply</code> <code>merged_into_backlog_turn</code> <code>superseded_follow_up</code> <code>superseded_reply_turn</code> <code>superseded_proactive</code></td></tr>
           <tr><td><a href="#review">Pre-send review</a></td><td><code>ignored_model_silent</code> <code>ignored_no_natural_reply</code> <code>ignored_duplicate_reply</code> <code>ignored_proactive_reply_quality</code> <code>ignored_stop_requested</code> <code>ignored_conversation_closed</code> <code>ignored_self_repeat</code> <code>ignored_ai_reply_loop</code></td></tr>

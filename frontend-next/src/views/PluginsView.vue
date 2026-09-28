@@ -10,7 +10,7 @@
   <div v-show="extensionTab === 'plugins'" class="plugins-view">
     <header class="view-header plugins-view-header">
       <div class="view-title">
-        <p>{{ botScope ? "插件开关按机器人独立，配置全局共享" : "共享插件配置" }} · OpenAPI 位于系统设置</p>
+        <p>{{ botScope ? "插件开关按机器人独立，配置全局共享" : "共享插件配置" }}</p>
       </div>
       <div class="view-actions">
         <div class="plugin-search">
@@ -1042,7 +1042,7 @@ async function reload(): Promise<void> {
   try {
     const states = await listPlugins();
     if (requestID !== reloadID || scope !== botScope.value) return;
-    plugins.value = states.filter(plugin => plugin.manifest.id !== "official.open-api").map(plugin => pluginForBot(plugin, scope));
+    plugins.value = states.map(plugin => pluginForBot(plugin, scope));
     const requestedSettings = viewQuery().get("settings");
     if (!settingsTarget.value && requestedSettings) {
       const target = plugins.value.find((plugin) => plugin.manifest.id === requestedSettings && plugin.installed);

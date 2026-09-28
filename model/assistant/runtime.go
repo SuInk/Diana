@@ -295,6 +295,8 @@ func DescribeEventOutcome(outcome string) (decision string, reason string, handl
 		return "not_replied", "发送前审核认定这条回复只是把机器人自己刚说过的话换个说法又说一遍，没有发送；只跳过这一条，对方下一条带来新内容时照常回答", false
 	case "ignored_ai_reply_loop":
 		return "not_replied", "发送前审核认定这一来一回已在空转（双方都只在应付没有内容，或和被标记的机器人没有目的地来回），为避免继续接茬而没有发送", false
+	case "ignored_reply_fatigue":
+		return "not_replied", "对这个人的回复疲劳已经攒满（最近回了很多没新意、没目的的长句），这一轮也没有明确的提问或请求，这条没有发送；疲劳会随时间消退，对方真有事时照常回答", false
 	case "ignored_no_natural_reply":
 		return "not_replied", "自然插话的最终生成没有得到有效回复，已保持静默", false
 	case "ignored_proactive_reply_quality":
@@ -563,6 +565,7 @@ type Runtime struct {
 	replyRefusalByUser  map[string]replyRefusalState
 	botReplyLoopMu      sync.Mutex
 	replyDensity        replyDensityTracker
+	replyFatigue        replyFatigueTracker
 	botReplyLoopByKey   map[string]botReplyLoopState
 	// privateClosingBySession 记录每个私聊会话已经互相道别了几轮。只在内存里：
 	// 重启后重新给足宽限次数，方向上偏「多答一句」而不是「误闭嘴」。
@@ -1917,14 +1920,10 @@ func (r *Runtime) routeMessageEvent(ctx context.Context, event MessageEvent) (Me
 		restriction, blocked = r.activeReplySuppression(event, now)
 	}
 	statusCommand := r.statusCommandActive(event, text)
-	var history []MessageEvent
-	if statusCommand || r.replyClosedForUndirectedEvent(event, text) {
-		// 状态卡片用不到跨群上下文，别为它跑一次跨群语义检索。两个接话开关都关、
-		// 又没在叫机器人的消息同理：它注定不回，跨群检索的结果没有人用。
-		history, _ = r.sessionContextHistory(event)
-	} else {
-		history = r.contextHistory(event)
-	}
+	// 这里只加载本群历史。跨群参考只给回复正文用，接话评分、规则匹配这些判断都不看它
+	// （见 sessionOnlyHistory），等确定要回复了再在 replyTo 里检索。以前每条可能接话的
+	// 群消息都先跑一遍跨群全文检索，大半最后不回，结果白查。
+	history, _ := r.sessionContextHistory(event)
 	event.replyHistory = history
 	event.replyHistoryLoaded = true
 	ctx = r.withIdentityPrivacyContext(ctx, event, history)
@@ -2049,6 +2048,15 @@ func (r *Runtime) routeMessageEvent(ctx context.Context, event MessageEvent) (Me
 		}
 		r.record(r.decisionEventRecord(event, text, ignoredOutcome))
 		return finishWithoutReply(ignoredOutcome)
+	}
+	// 回复疲劳：对这个人回得又多又没新意，疲劳攒满后这条若不是在推进一件事就不回，
+	// @ 和引用也一样。放在触发这一层，拦下的这一轮连回复都不用生成。见 reply_fatigue.go。
+	if !statusCommand {
+		if blocked, reason := r.replyFatigueBlocks(ctx, event, text); blocked {
+			event.routingReason = reason
+			r.record(r.decisionEventRecord(event, text, "ignored_reply_fatigue"))
+			return finishWithoutReply("ignored_reply_fatigue")
+		}
 	}
 	return event, text, true, successOutcome
 }
@@ -2680,34 +2688,6 @@ func eventRoutingText(event MessageEvent) string {
 		return text
 	}
 	return event.RawMessage
-}
-
-// replyClosedForUndirectedEvent 报告这条群消息在当前配置下注定不会得到回复：两个
-// 接话开关都关了，而它又没有 @、引用、点名机器人，也不是插件指令或链接解析。
-//
-// 这种消息走完整条路最后也只落到「回应提问与闲聊均已关闭，不主动接话」，但在那之前
-// 会先跑一次跨群上下文检索——它的输出只给回复用，于是白花一次检索。提前认出来，就只
-// 跳过这一步；识图、记忆、表达学习这些「关掉发言但还要记住」的环节不受影响。
-//
-// 「是不是冲着机器人」沿用 shouldHandle 的判据，不另起一套。被标记为机器人的账号
-// 要先经模型判一次才知道是不是在叫本机（见 requiresTelegramBotMentionJudgment），
-// 这时答案还不确定，按老路走。
-func (r *Runtime) replyClosedForUndirectedEvent(event MessageEvent, text string) bool {
-	if event.Kind != EventKindGroup {
-		return false
-	}
-	if !participationClosed(r.effectiveConfigForEvent(event)) {
-		return false
-	}
-	if r.requiresTelegramBotMentionJudgment(event) {
-		return false
-	}
-	// 带了引用、但被引的那条还没解析出来（入站队列那一步还没走 enrichReplyReference）：
-	// 不知道引的是不是机器人，按老路走。
-	if event.Quoted == nil && len(replyReferenceIDs(event.Segments)) > 0 {
-		return false
-	}
-	return !r.shouldHandle(event, text)
 }
 
 func (r *Runtime) shouldHandleProactiveReply(ctx context.Context, event MessageEvent, text string) bool {
@@ -3796,6 +3776,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			event.replyAuditImageContext = currentImageGrounding
 		}
 	}
+	event = r.loadDeferredCrossGroupContext(event)
 	replyHistory := r.promptContextHistory(event, cfg)
 	ctx = r.withReplyIdentityPrivacyContext(ctx, event, replyHistory)
 	// 每条消息单独限时，防止慢模型/插件占住并发槽太久。
@@ -4695,6 +4676,8 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		// 收尾把中途那句原样又写了一遍：对方已经看到了，不再发第二次。
 		return "", newModelSilentFinishError("收尾和中途说过的话重复")
 	}
+	// 回复疲劳只管正常生成的回复；插件直发的内容（链接解析之类）是对方要的东西，不走这一项。
+	ctx = withReplyFatigueAudit(ctx)
 	var semanticGate *semanticReplyGate
 	var speculativeAudit chan preparedReplyAudit
 	dedupKept := false
@@ -4743,7 +4726,11 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	if err != nil {
 		return "", err
 	}
+	if !prepared.skip && prepared.need.AccountSafety && prepared.err == nil && prepared.reply == reply {
+		sendBaseCtx = withReplyAccountSafetyAudited(sendBaseCtx, reply)
+	}
 	controlIntent.RefuseCurrent = controlIntent.RefuseCurrent || auditIntent.RefuseCurrent
+	controlIntent.fatigue = auditIntent.fatigue
 	if ruleMatched && ruleDecision.Rule.Action == ReplyRuleActionVoice {
 		voiceReply, voiceErr := r.replyRuleVoiceCQ(ctx, event, ruleDecision.Rule, reply)
 		if voiceErr != nil {
@@ -4751,6 +4738,9 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		} else if strings.TrimSpace(voiceReply) != "" {
 			reply = voiceReply
 		}
+	} else if !isStandaloneRecordReply(reply) && nestedForwardPluginResponse(pluginResponses) == nil {
+		// 常驻语音不碰合并转发：那条回复是转发卡片的说明，换成语音就和卡片脱节了。
+		reply = r.persistentVoiceReply(ctx, event, reply)
 	}
 	if nested := nestedForwardPluginResponse(pluginResponses); nested != nil {
 		var sentMessageIDs []string
@@ -6752,7 +6742,26 @@ func historyLinePrefix(event MessageEvent) string {
 	if event.Time > 0 {
 		label += " " + time.Unix(event.Time, 0).Local().Format("2006-01-02 15:04:05")
 	}
+	// 跨群参考放在提示词尾部的易变区，不进缓存前缀，可以直接标出离当前消息多久：
+	// 是刚刚另一个群里的事，还是十几天前的旧话，模型自己掂量。
+	if event.crossGroupContext && event.crossGroupAgeSeconds > 0 {
+		label += "，约" + crossGroupAgeText(event.crossGroupAgeSeconds) + "前"
+	}
 	return label + "] "
+}
+
+// crossGroupAgeText 把秒数写成「5分钟」「3小时」「12天」这样的粗略时长。
+func crossGroupAgeText(seconds int64) string {
+	switch {
+	case seconds < 60:
+		return "1分钟"
+	case seconds < 3600:
+		return fmt.Sprintf("%d分钟", seconds/60)
+	case seconds < 48*3600:
+		return fmt.Sprintf("%d小时", seconds/3600)
+	default:
+		return fmt.Sprintf("%d天", seconds/86400)
+	}
 }
 
 func historicalFileCount(event MessageEvent) int {
@@ -7184,7 +7193,7 @@ func (r *Runtime) sendDecorated(ctx context.Context, event MessageEvent, reply s
 			return nil, ctx.Err()
 		}
 		// 卡片被账号安全审核拦下时不能退回逐条发送：逐条发的是同一段文字，那条路
-		// 不再审核。卡片审核不跟审核总开关走，总开关关着时这里是它唯一一次审核。
+		// 不再审核。卡片只在回复链路没审过这段话时才审，这时它是唯一一次审核。
 		var safetyErr *replyAccountSafetyRejectedError
 		if errors.As(err, &safetyErr) {
 			return nil, err
@@ -7789,6 +7798,7 @@ func (r *Runtime) sendForwardReply(ctx context.Context, event MessageEvent, repl
 }
 
 func (r *Runtime) sendForwardReplyWithResult(ctx context.Context, event MessageEvent, reply string, cfg BotConfig) (string, error) {
+	original := reply
 	reply, event = prepareReplyDelivery(reply, event)
 	// 合并转发的节点承载不了 reply 段，标记只能剥掉，免得作为文本进转发卡片。
 	if _, rest, ok := consumeOutgoingReplyControl(reply); ok {
@@ -7808,7 +7818,11 @@ func (r *Runtime) sendForwardReplyWithResult(ctx context.Context, event MessageE
 	if alreadyDelivered {
 		return replayedMessageID, nil
 	}
-	result, err := r.sendForwardNodesWithResult(ctx, event, buildForwardNodes(chunks, senderName, senderUIN))
+	nodeCtx := ctx
+	if replyAccountSafetyAudited(ctx, original) {
+		nodeCtx = withForwardSafetyAuditSkipped(ctx)
+	}
+	result, err := r.sendForwardNodesWithResult(nodeCtx, event, buildForwardNodes(chunks, senderName, senderUIN))
 	if err != nil {
 		return "", err
 	}
@@ -8809,9 +8823,10 @@ func splitReply(reply string, chunkSize int) []string {
 // 排版换行只认 [diana-line]；真实 CR/LF 一律折叠成软空格。
 //
 // 聊天配置不再限制条数或单条长度；是否收进合并转发由独立阈值决定。
-// splitChatReply 把回复切成实际要发的几条，每条去掉句号（见 chat_periods.go）。
+// splitChatReply 把回复切成实际要发的几条，每条去掉句号（见 chat_periods.go）和行尾的
+// 文字表情（见 chat_text_stickers.go）。
 func splitChatReply(reply string, limits chatSplitLimits) []string {
-	return stripBubblePeriods(splitChatReplyKeepingPeriods(reply, limits))
+	return stripBubbleTextStickers(stripBubblePeriods(splitChatReplyKeepingPeriods(reply, limits)))
 }
 
 // splitChatReplyKeepingPeriods 切条但保留句号：长度规划（replyLengthPlan）还要在句号

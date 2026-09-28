@@ -24,7 +24,7 @@ func (r *Runtime) requiresTelegramBotMentionJudgment(event MessageEvent) bool {
 		if eventExplicitlyMentionsBot(event, cfg) || eventRepliesToBot(event, cfg) {
 			return false
 		}
-		// 群里沿用原判据，只把「标记」的范围换成跨群汇总的那一份。
+		// 标记按填写的范围生效（见 marked_bot_scope.go）：群里标的只管本群，机器人级的管全部。
 		return r.accountMarkedAsBot(event) || event.Platform == PlatformTelegram &&
 			event.SenderIsBot && boolValue(cfg.TelegramSuppressBotMessages, true)
 	case EventKindPrivate:

@@ -272,14 +272,18 @@ type MessageEvent struct {
 	imageLoadErr           error
 	// taskRequester 是替别人建提醒、订阅时真正发起的人，只在建任务那一步用，
 	// 落进 Reminder.RequestedBy。
-	taskRequester          string
-	imageContextNotice     string
-	voiceSTTErr            error
-	voiceSTTTransient      bool
-	recentTextReference    *recentTextReference
-	replyHistory           []MessageEvent
-	replyHistoryLoaded     bool
-	crossGroupContext      bool
+	taskRequester       string
+	imageContextNotice  string
+	voiceSTTErr         error
+	voiceSTTTransient   bool
+	recentTextReference *recentTextReference
+	replyHistory        []MessageEvent
+	replyHistoryLoaded  bool
+	crossGroupContext   bool
+	// crossGroupAgeSeconds 是这条跨群参考比当前消息早多少秒，渲染成「约N小时前」。
+	crossGroupAgeSeconds int64
+	// crossGroupLoaded 表示这一轮的跨群参考已经检索过（可能一条都没有），别再查一次。
+	crossGroupLoaded       bool
 	historyRecallCandidate bool
 	userProfile            UserMemoryProfile
 	userProfileLoaded      bool

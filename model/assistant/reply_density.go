@@ -115,6 +115,14 @@ func (r *Runtime) replyDensityForAudit(event MessageEvent, now time.Time) (reply
 	return replyDensity{BotRepliesToSender: len(hits), WindowMinutes: int(replyDensityWindow / time.Minute)}, true
 }
 
+// replyDensityRecent 返回窗口内已经回过这个账号几条。
+func (r *Runtime) replyDensityRecent(event MessageEvent, now time.Time) int {
+	key := botReplyLoopKey(event, event.UserID)
+	r.replyDensity.mu.Lock()
+	defer r.replyDensity.mu.Unlock()
+	return len(pruneReplyDensityHits(append([]replyDensityHit(nil), r.replyDensity.byKey[key]...), now))
+}
+
 func (r *Runtime) resetReplyDensityUser(userID string) {
 	userID = strings.TrimSpace(userID)
 	if r == nil || userID == "" {

@@ -184,6 +184,7 @@ func (r *Runtime) crossGroupContextEvents(event MessageEvent, store MessageHisto
 		selected = selected[:crossGroupContextResultLimit]
 	}
 	sort.SliceStable(selected, func(left, right int) bool { return selected[left].Time < selected[right].Time })
+	neighbors := r.crossGroupNeighbors(event, store, selected)
 	for index, item := range selected {
 		if traced {
 			route := "文字"
@@ -193,8 +194,159 @@ func (r *Runtime) crossGroupContextEvents(event MessageEvent, store MessageHisto
 			trace.SelectedMessages = append(trace.SelectedMessages, map[string]any{"message_id": item.MessageID, "group_id": item.GroupID, "time": item.Time, "route": route, "score": scores[crossGroupCandidateKey(item)]})
 		}
 		selected[index], _ = crossGroupTextContext(item)
+		selected[index] = withCrossGroupNeighbors(selected[index], neighbors[index])
+		if age := throughTime - item.Time; age > 0 {
+			selected[index].crossGroupAgeSeconds = age
+		}
 	}
 	return finish(selected, "")
+}
+
+// loadDeferredCrossGroupContext 在确定要回复之后补上跨群参考。
+//
+// 路由前只加载本群历史（见 handleEvent），接话评分、规则匹配这些判断本来就不看跨群
+// 参考；只有真要写回复了才值得跑这次检索。检索条件、打分和成员过滤与以前完全一样，
+// 只是换了时机。
+func (r *Runtime) loadDeferredCrossGroupContext(event MessageEvent) MessageEvent {
+	if !event.replyHistoryLoaded || event.crossGroupLoaded {
+		return event
+	}
+	event.crossGroupLoaded = true
+	for _, item := range event.replyHistory {
+		if item.crossGroupContext {
+			return event
+		}
+	}
+	if !boolValue(r.effectiveConfigForEvent(event).CrossGroupMemoryEnabled, false) {
+		return event
+	}
+	r.mu.RLock()
+	store := r.messageStore
+	r.mu.RUnlock()
+	if store == nil {
+		return event
+	}
+	history := append([]MessageEvent(nil), event.replyHistory...)
+	event.replyHistory = mergeCrossGroupContextHistory(history, r.crossGroupContextEvents(event, store))
+	return event
+}
+
+const (
+	// crossGroupNeighborWindow 是取原群前后文的时间范围，前后各这么久。
+	crossGroupNeighborWindow = 30 * 60
+	crossGroupNeighborCount  = 2
+	crossGroupNeighborRunes  = 60
+)
+
+// crossGroupNeighborLine 是跨群参考在原群前后的一句话。
+type crossGroupNeighborLine struct {
+	speaker string
+	text    string
+}
+
+// crossGroupNeighbors 取每条跨群参考在原群的前后各两句。
+//
+// 光一句「我又忘了滚木啥意思了」看不出它在聊什么，模型就容易拿它去解释当前群里
+// 同样开头的一句话；带上原群前后文，是不是同一件事一眼就能看出来。前后文的作者
+// 同样得是当前群的成员，否则只留一个占位，不把群外人的话带进来。
+func (r *Runtime) crossGroupNeighbors(event MessageEvent, store MessageHistoryStore, selected []MessageEvent) [][2][]crossGroupNeighborLine {
+	out := make([][2][]crossGroupNeighborLine, len(selected))
+	timeline, ok := store.(MessageTimelineStore)
+	if !ok || len(selected) == 0 {
+		return out
+	}
+	botID := strings.TrimSpace(r.effectiveConfigForEvent(event).BotAccount)
+	type side struct {
+		before, after []MessageEvent
+	}
+	found := make([]side, len(selected))
+	authors := make(map[string][]MessageEvent)
+	for index, item := range selected {
+		loadCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+		around, err := timeline.ListMessageEventsBetween(loadCtx, groupHistorySessionPrefix(event)+strings.TrimSpace(item.GroupID), item.Time-crossGroupNeighborWindow, item.Time+crossGroupNeighborWindow)
+		cancel()
+		if err != nil {
+			continue
+		}
+		position := -1
+		for candidate, value := range around {
+			if (item.MessageID != "" && value.MessageID == item.MessageID) ||
+				(item.MessageID == "" && value.Time == item.Time && value.UserID == item.UserID) {
+				position = candidate
+				break
+			}
+		}
+		if position < 0 {
+			continue
+		}
+		keep := func(value MessageEvent) bool {
+			return value.Kind != EventKindNotice && strings.TrimSpace(historyPlainText(value)) != ""
+		}
+		for cursor := position - 1; cursor >= 0 && len(found[index].before) < crossGroupNeighborCount; cursor-- {
+			if keep(around[cursor]) {
+				found[index].before = append([]MessageEvent{around[cursor]}, found[index].before...)
+			}
+		}
+		for cursor := position + 1; cursor < len(around) && len(found[index].after) < crossGroupNeighborCount; cursor++ {
+			if keep(around[cursor]) {
+				found[index].after = append(found[index].after, around[cursor])
+			}
+		}
+		for _, value := range append(append([]MessageEvent(nil), found[index].before...), found[index].after...) {
+			if author := strings.TrimSpace(value.UserID); author != "" && !value.Outbound && author != botID {
+				authors[author] = append(authors[author], value)
+			}
+		}
+	}
+	allowed := map[string]bool{}
+	if len(authors) > 0 {
+		allowed = r.crossGroupCurrentMembers(event, authors)
+	}
+	render := func(values []MessageEvent) []crossGroupNeighborLine {
+		lines := make([]crossGroupNeighborLine, 0, len(values))
+		for _, value := range values {
+			author := strings.TrimSpace(value.UserID)
+			if value.Outbound || (botID != "" && author == botID) {
+				lines = append(lines, crossGroupNeighborLine{speaker: "你", text: truncateRunes(strings.TrimSpace(historyPlainText(value)), crossGroupNeighborRunes)})
+				continue
+			}
+			if !allowed[author] {
+				lines = append(lines, crossGroupNeighborLine{speaker: "不在本群的人", text: "（内容略）"})
+				continue
+			}
+			lines = append(lines, crossGroupNeighborLine{speaker: strings.TrimSpace(value.SenderNameOrID()), text: truncateRunes(strings.TrimSpace(historyPlainText(value)), crossGroupNeighborRunes)})
+		}
+		return lines
+	}
+	for index := range found {
+		out[index] = [2][]crossGroupNeighborLine{render(found[index].before), render(found[index].after)}
+	}
+	return out
+}
+
+// withCrossGroupNeighbors 把原群前后文接在跨群参考正文后面。
+func withCrossGroupNeighbors(event MessageEvent, neighbors [2][]crossGroupNeighborLine) MessageEvent {
+	if len(neighbors[0]) == 0 && len(neighbors[1]) == 0 {
+		return event
+	}
+	join := func(lines []crossGroupNeighborLine) string {
+		parts := make([]string, 0, len(lines))
+		for _, line := range lines {
+			parts = append(parts, "「"+line.speaker+"："+line.text+"」")
+		}
+		return strings.Join(parts, "")
+	}
+	var context []string
+	if before := join(neighbors[0]); before != "" {
+		context = append(context, "之前"+before)
+	}
+	if after := join(neighbors[1]); after != "" {
+		context = append(context, "之后"+after)
+	}
+	text := strings.TrimSpace(event.RawMessage) + "\n〔原群前后文：" + strings.Join(context, "；") + "〕"
+	event.RawMessage = text
+	event.Segments = []MessageSegment{{Type: "text", Data: map[string]string{"text": text}}}
+	return event
 }
 
 // crossGroupContextQueryText 只取正文检索，@ 段不进查询：「@机器人 准了」里机器人的

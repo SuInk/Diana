@@ -1439,7 +1439,7 @@ func TestInternalPluginIsAlwaysOnAndHidden(t *testing.T) {
 		if !listed[id] {
 			t.Errorf("List 仍应包含 %s，否则能力索引会漏掉它", id)
 		}
-		if _, err := manager.SetEnabled(id, false); !errors.Is(err, ErrInternalPluginDisable) {
+		if _, err := manager.SetEnabledForProfile(id, "", false); !errors.Is(err, ErrInternalPluginDisable) {
 			t.Errorf("停用 %s 应被拒绝，实际错误：%v", id, err)
 		}
 		if !manager.Enabled(id) {

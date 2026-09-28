@@ -119,9 +119,9 @@ func (p *privacyRoundTripProvider) Generate(_ context.Context, req llm.GenerateR
 	}
 	switch p.calls {
 	case 1:
-		p.alias = regexp.MustCompile(`im_current_user_[0-9a-f]+`).FindString(requestText)
+		p.alias = regexp.MustCompile(`im_user_[0-9a-f]+`).FindString(requestText)
 		if p.alias == "" {
-			return nil, fmt.Errorf("current-user alias missing from request: %s", requestText)
+			return nil, fmt.Errorf("current speaker alias missing from request: %s", requestText)
 		}
 		return &llm.GenerateResponse{Text: fmt.Sprintf(`{"action":"tool","tool":"test.qq_lookup","input":{"target_user_id":"%s"}}`, p.alias)}, nil
 	case 2:

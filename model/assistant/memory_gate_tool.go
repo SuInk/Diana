@@ -37,6 +37,7 @@ func memoryCandidateSchema(actions, kinds, sourceTypes, visibilities []string) m
 			"visibility":     toolEnumParam("可见范围", visibilities...),
 			"sensitive":      toolBoolParam("医疗、心理、财务、身份凭证、住址、联系方式、隐私关系等为 true"),
 			"retention_days": toolIntParam("保留天数，0 表示不过期", 0, 3650),
+			"applies_to":     toolEnumParam("可选。group 表示本群约定：不挂在发言者名下、对全群生效，只用于群聊里「在这个群别再说某个词」这类 instruction；其余情况填 speaker 或不填", "speaker", string(MemoryAudienceGroup)),
 			"source_index":   toolIntParam("这条候选出自 current_batch 的第几条，从 0 开始；只给了 current 时填 0", 0, 32),
 		},
 	)

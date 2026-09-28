@@ -5,12 +5,14 @@ package webui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/SuInk/diana/model/applog"
@@ -328,9 +330,10 @@ func (h *BotHandler) listConsoleGroups(c *gin.Context) {
 	groups := mergeConsoleGroupItems(base, set, liveGroups, func(profileID, groupID string) string {
 		return h.consoleAvatarURL(avatarKindGroup, profileID, groupID)
 	}, h.botConfigResolver())
+	sharedWith := h.sharedBotsLookup(profileID)
 	for index := range groups {
 		groups[index].GroupConfig = h.groupConfigForAPI(groups[index].GroupConfig)
-		groups[index].SharedWith = h.groupSharedBots(profileID, groups[index].GroupID)
+		groups[index].SharedWith = sharedWith(groups[index].GroupID)
 	}
 	h.attachGroupQuotaUsage(c.Request.Context(), profileID, base, groups)
 	c.JSON(http.StatusOK, consoleGroupsResponse{
@@ -351,41 +354,56 @@ func (h *BotHandler) listConsoleGroups(c *gin.Context) {
 //
 // 选了「全部机器人」时不算：那个视图里每个群本来就会按机器人各列一遍。
 func (h *BotHandler) groupSharedBots(profileID, groupID string) []consoleGroupSharedBot {
-	profileID, groupID = strings.TrimSpace(profileID), strings.TrimSpace(groupID)
-	if profileID == "" || groupID == "" || h.profiles == nil {
-		return nil
+	return h.sharedBotsLookup(profileID)(groupID)
+}
+
+// sharedBotsLookup 先把「和这台机器人共用连接的其它机器人」找好，再按群查。
+// 群列表一次几十个群，每个群都重读一遍机器人配置、重扫一遍没必要。
+func (h *BotHandler) sharedBotsLookup(profileID string) func(groupID string) []consoleGroupSharedBot {
+	none := func(string) []consoleGroupSharedBot { return nil }
+	profileID = strings.TrimSpace(profileID)
+	if profileID == "" || h.profiles == nil {
+		return none
 	}
 	set := h.profiles.Profiles().WithDefaults()
+	connectionOf := func(profile assistant.BotConfig) string {
+		if profile.ConnectionProfileID != "" {
+			return profile.ConnectionProfileID
+		}
+		return profile.ID
+	}
 	connection := ""
 	for _, profile := range set.Profiles {
 		if profile.ID == profileID {
-			connection = profile.ConnectionProfileID
-			if connection == "" {
-				connection = profile.ID
-			}
+			connection = connectionOf(profile)
 			break
 		}
 	}
 	if connection == "" {
-		return nil
+		return none
 	}
-	var shared []consoleGroupSharedBot
+	var peers []assistant.BotConfig
 	for _, profile := range set.Profiles {
-		if profile.ID == profileID || !profile.Enabled {
-			continue
-		}
-		other := profile.ConnectionProfileID
-		if other == "" {
-			other = profile.ID
-		}
-		if other != connection {
-			continue
-		}
-		if h.groupWorksForProfile(profile, groupID) {
-			shared = append(shared, consoleGroupSharedBot{BotProfileID: profile.ID, Name: profile.Name})
+		if profile.ID != profileID && profile.Enabled && connectionOf(profile) == connection {
+			peers = append(peers, profile)
 		}
 	}
-	return shared
+	if len(peers) == 0 {
+		return none
+	}
+	return func(groupID string) []consoleGroupSharedBot {
+		groupID = strings.TrimSpace(groupID)
+		if groupID == "" {
+			return nil
+		}
+		var shared []consoleGroupSharedBot
+		for _, profile := range peers {
+			if h.groupWorksForProfile(profile, groupID) {
+				shared = append(shared, consoleGroupSharedBot{BotProfileID: profile.ID, Name: profile.Name})
+			}
+		}
+		return shared
+	}
 }
 
 // groupWorksForProfile 复读一遍运行时那条判据：有群配置就看它的开关，没有就
@@ -407,10 +425,10 @@ func (h *BotHandler) consoleGroupSources(ctx context.Context, profileID string, 
 	if profileID != "" && !h.isOneBotProfile(profileID) {
 		return h.localConsoleGroups(ctx, profileID)
 	}
-	live, liveAvailable, warning := h.liveConsoleGroups(ctx, refresh)
 	if profileID != "" {
-		return live, liveAvailable, warning
+		return h.liveConsoleGroups(ctx, profileID, refresh)
 	}
+	live, liveAvailable, warning := h.liveConsoleGroupsForAllBots(ctx, refresh)
 	// 「全部机器人」以前只问 OneBot 的 get_group_list，于是非 OneBot 平台的群在
 	// 默认视图里一个都不出现——纯 Telegram 部署打开这页就是空的。这里把本地
 	// 事件里见过的群并进来，两边按群号去重。
@@ -421,10 +439,14 @@ func (h *BotHandler) consoleGroupSources(ctx context.Context, profileID string, 
 		}
 		return live, liveAvailable, warning
 	}
-	seen := make(map[string]struct{}, len(live))
+	// 按「机器人 + 群号」去重，两台机器人同在一个群时各留一份。本地事件没记归属的
+	// （老数据），只要实时列表里已有这个群就不再重复列。
+	seen := make(map[consoleGroupKey]struct{}, len(live))
+	liveIDs := make(map[string]struct{}, len(live))
 	for _, item := range live {
 		if id := strings.TrimSpace(item.GroupID); id != "" {
-			seen[id] = struct{}{}
+			seen[consoleGroupKey{profileID: strings.TrimSpace(item.BotProfileID), groupID: id}] = struct{}{}
+			liveIDs[id] = struct{}{}
 		}
 	}
 	for _, item := range local {
@@ -432,13 +454,50 @@ func (h *BotHandler) consoleGroupSources(ctx context.Context, profileID string, 
 		if id == "" {
 			continue
 		}
-		if _, ok := seen[id]; ok {
+		profileID := strings.TrimSpace(item.BotProfileID)
+		if _, ok := liveIDs[id]; ok && profileID == "" {
 			continue
 		}
-		seen[id] = struct{}{}
+		key := consoleGroupKey{profileID: profileID, groupID: id}
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
 		live = append(live, item)
 	}
 	return live, true, warning
+}
+
+// eventGroupNames 给事件页补群名用：只要 OneBot 的实时群列表（带 20 秒缓存和并发
+// 合并，基本不回源）和已经查过的群名缓存。不走 localConsoleGroups——那条要扫 30 天
+// 的事件表、再逐个群去问 Telegram，只为了几个名字不值得；事件里本来就记着群名。
+func (h *BotHandler) eventGroupNames(ctx context.Context, profileID string) map[string]string {
+	names := map[string]string{}
+	profileID = strings.TrimSpace(profileID)
+	var live []botAutoGroupInfo
+	switch {
+	case profileID == "":
+		live, _, _ = h.liveConsoleGroupsForAllBots(ctx, false)
+	case h.isOneBotProfile(profileID):
+		live, _, _ = h.liveConsoleGroups(ctx, profileID, false)
+	}
+	for _, group := range live {
+		if name := strings.TrimSpace(group.GroupName); name != "" {
+			names[strings.TrimSpace(group.GroupID)] = name
+		}
+	}
+	h.groupNameMu.Lock()
+	defer h.groupNameMu.Unlock()
+	for key, entry := range h.groupNameCache {
+		owner, groupID, ok := strings.Cut(key, "\x00")
+		if !ok || entry.name == "" || (profileID != "" && owner != profileID) {
+			continue
+		}
+		if _, exists := names[groupID]; !exists {
+			names[groupID] = entry.name
+		}
+	}
+	return names
 }
 
 // localConsoleGroups 从本地事件历史里聚合群列表。Telegram、钉钉这类平台的 Bot
@@ -542,6 +601,8 @@ var (
 
 	consoleLiveGroupTimeout  = 2500 * time.Millisecond
 	consoleLiveGroupCacheTTL = 20 * time.Second
+	// 失败后这段时间内不再重试，直接给上一次的结果；手动刷新不受限制。
+	consoleLiveGroupFailureTTL = 10 * time.Second
 
 	// 群名很少变，缓存久一点；单个查询不值得让整页等太久。
 	consoleGroupNameCacheTTL = 10 * time.Minute
@@ -570,11 +631,14 @@ func consoleGroupAvatarURL(groupID, profileID string) string {
 	return avatarURL
 }
 
+// liveGroupListCache 存上一次成功拉到的列表，以及最近一次失败。
 type liveGroupListCache struct {
 	groups    []botAutoGroupInfo
-	available bool
-	warning   string
 	fetchedAt time.Time
+	// 失败也记一笔：连着但卡住的机器人每次都要等满超时，「全部机器人」视图又要等
+	// 最慢的那台，不记的话每开一次页面都卡 2.5 秒。
+	failedAt time.Time
+	failure  error
 }
 
 func cloneLiveGroups(groups []botAutoGroupInfo) []botAutoGroupInfo {
@@ -586,59 +650,183 @@ func cloneLiveGroups(groups []botAutoGroupInfo) []botAutoGroupInfo {
 	return out
 }
 
-func (h *BotHandler) liveConsoleGroups(ctx context.Context, refresh bool) ([]botAutoGroupInfo, bool, string) {
+// liveConsoleGroupsForAllBots 把每台 OneBot 机器人的群列表合在一起。
+//
+// 不能只问「那一台」：有两台及以上 OneBot 机器人时，不指明机器人的调用会直接报错，
+// 整个列表就退化成只剩已保存的群配置，新群一个都看不到。
+func (h *BotHandler) liveConsoleGroupsForAllBots(ctx context.Context, refresh bool) ([]botAutoGroupInfo, bool, string) {
+	profileIDs := h.oneBotProfileIDs()
+	if len(profileIDs) == 0 {
+		// 没有机器人配置可查（老部署、测试桩）时，交给运行时去找唯一那台。
+		return h.liveConsoleGroups(ctx, "", refresh)
+	}
+	type result struct {
+		groups    []botAutoGroupInfo
+		available bool
+		warning   string
+	}
+	results := make([]result, len(profileIDs))
+	var wg sync.WaitGroup
+	for index, profileID := range profileIDs {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			defer recoverGoroutinePanic("assistant_groups_console.liveConsoleGroupsForAllBots")
+			groups, available, warning := h.liveConsoleGroups(ctx, profileID, refresh)
+			results[index] = result{groups: groups, available: available, warning: warning}
+		}()
+	}
+	wg.Wait()
+	var (
+		merged    []botAutoGroupInfo
+		available bool
+		warning   string
+	)
+	for _, item := range results {
+		merged = append(merged, item.groups...)
+		available = available || item.available
+		if warning == "" {
+			warning = item.warning
+		}
+	}
+	return merged, available, warning
+}
+
+// oneBotProfileIDs 列出启用中的 OneBot 机器人。
+func (h *BotHandler) oneBotProfileIDs() []string {
+	if h.profiles == nil {
+		return nil
+	}
+	var ids []string
+	for _, profile := range h.profiles.Profiles().WithDefaults().Profiles {
+		if profile.Enabled && assistant.IsOneBotPlatform(profile.Platform) {
+			if id := strings.TrimSpace(profile.ID); id != "" {
+				ids = append(ids, id)
+			}
+		}
+	}
+	return ids
+}
+
+// liveConsoleGroups 问某一台机器人要它此刻所在的群。profileID 为空时交给运行时
+// 挑唯一那台 OneBot 机器人。
+//
+// 缓存和并发合并都按连接算，不按机器人：复用同一条连接的几台机器人是同一个 QQ
+// 号，群列表完全一样，没必要各问一遍。归属在取出之后再按调用方的机器人记上。
+func (h *BotHandler) liveConsoleGroups(ctx context.Context, profileID string, refresh bool) ([]botAutoGroupInfo, bool, string) {
 	// runtime 也要挡：这里要拿它去调 OneBot，少判一层的话没接机器人时直接空指针。
 	// 群配置页一直有 runtime 所以没暴露过，事件筛选器接进来才踩到。
 	if h == nil || h.runtime == nil {
 		return nil, false, "机器人尚未连接，暂时只显示已保存的群配置"
 	}
-	if !refresh {
-		h.liveGroupMu.Lock()
-		cached := h.liveGroupCache
-		h.liveGroupMu.Unlock()
-		if !cached.fetchedAt.IsZero() && time.Since(cached.fetchedAt) < consoleLiveGroupCacheTTL {
-			return cloneLiveGroups(cached.groups), cached.available, cached.warning
-		}
+	profileID = strings.TrimSpace(profileID)
+	key := h.groupListConnectionKey(profileID)
+	h.liveGroupMu.Lock()
+	cached := h.liveGroupCache[key]
+	h.liveGroupMu.Unlock()
+	fresh := !cached.fetchedAt.IsZero() && time.Since(cached.fetchedAt) < consoleLiveGroupCacheTTL
+	if !refresh && fresh {
+		return ownedLiveGroups(cached.groups, profileID), true, ""
+	}
+	if !refresh && cached.failure != nil && time.Since(cached.failedAt) < consoleLiveGroupFailureTTL {
+		return liveGroupFailureResult(cached, profileID)
 	}
 
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	callCtx, cancel := context.WithTimeout(ctx, consoleLiveGroupTimeout)
-	defer cancel()
-	// 缓存只留在这一层。NapCat / SnowLuma 自己的群列表缓存不会因为入群、群改名
-	// 失效，不带 no_cache 问到的可能是启动那会儿的快照：新群一直不在下拉框里，
-	// 改过名的群一直是旧名。上面那 20 秒已经挡住了连续打开页面的重复请求。
-	data, err := h.runtime.CallOneBotAPI(callCtx, "get_group_list", map[string]any{"no_cache": true})
-	if err != nil {
-		// 实时拉取要回服务器，偶尔会超时；手上有上一次成功的列表就先用它，
-		// 别让通知目标的下拉框整个退化成手填群号。
+	// 群管理页、订阅设置、事件筛选常常同时打开，缓存一过期就会一起来问。合成一次，
+	// 免得同一个号在同一时刻被 no_cache 连打好几遍。
+	result, err, _ := h.liveGroupFlight.Do(key, func() (any, error) {
+		callCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), consoleLiveGroupTimeout)
+		defer cancel()
+		// 缓存只留在这一层。NapCat / SnowLuma 自己的群列表缓存不会因为入群、群改名
+		// 失效，不带 no_cache 问到的可能是启动那会儿的快照：新群一直不在下拉框里，
+		// 改过名的群一直是旧名。上面那 20 秒已经挡住了连续打开页面的重复请求。
+		params := map[string]any{"no_cache": true}
+		var (
+			data map[string]any
+			err  error
+		)
+		if profileID != "" {
+			data, err = h.runtime.CallOneBotAPIForProfile(callCtx, profileID, "get_group_list", params)
+		} else {
+			data, err = h.runtime.CallOneBotAPI(callCtx, "get_group_list", params)
+		}
+		if err != nil {
+			if callCtx.Err() != nil {
+				err = errLiveGroupListTimeout
+			}
+			h.liveGroupMu.Lock()
+			if h.liveGroupCache == nil {
+				h.liveGroupCache = map[string]liveGroupListCache{}
+			}
+			entry := h.liveGroupCache[key]
+			entry.failedAt, entry.failure = time.Now(), err
+			h.liveGroupCache[key] = entry
+			h.liveGroupMu.Unlock()
+			return nil, err
+		}
+		groups := autoGroupsFromOneBotData(data)
+		for index := range groups {
+			// 这一份来自 OneBot 的 get_group_list，群号就是 QQ 群号，头像规则适用。
+			groups[index].QQAvatar = true
+		}
 		h.liveGroupMu.Lock()
-		stale := h.liveGroupCache
+		if h.liveGroupCache == nil {
+			h.liveGroupCache = map[string]liveGroupListCache{}
+		}
+		h.liveGroupCache[key] = liveGroupListCache{groups: groups, fetchedAt: time.Now()}
 		h.liveGroupMu.Unlock()
-		if stale.available && len(stale.groups) > 0 {
-			return cloneLiveGroups(stale.groups), true, "同步群列表失败，暂时显示上一次的结果"
+		return groups, nil
+	})
+	if err != nil {
+		cached.failure = err
+		return liveGroupFailureResult(cached, profileID)
+	}
+	return ownedLiveGroups(result.([]botAutoGroupInfo), profileID), true, ""
+}
+
+// liveGroupFailureResult 是拉取失败时给出的结果。实时拉取要回服务器，偶尔会超时；
+// 手上有上一次成功的列表就先用它，别让通知目标的下拉框整个退化成手填群号。
+func liveGroupFailureResult(cached liveGroupListCache, profileID string) ([]botAutoGroupInfo, bool, string) {
+	if len(cached.groups) > 0 {
+		return ownedLiveGroups(cached.groups, profileID), true, "同步群列表失败，暂时显示上一次的结果"
+	}
+	if errors.Is(cached.failure, errLiveGroupListTimeout) {
+		return nil, false, "同步群列表超时，暂时只显示已保存的群配置"
+	}
+	return nil, false, "机器人尚未连接，暂时只显示已保存的群配置"
+}
+
+var errLiveGroupListTimeout = errors.New("get_group_list timed out")
+
+// ownedLiveGroups 复制一份缓存里的列表，并记上是哪台机器人问到的：下拉框按机器人
+// 挑群，全部机器人视图也靠它分清归属。缓存本身不带归属，好让共用连接的机器人共享。
+func ownedLiveGroups(groups []botAutoGroupInfo, profileID string) []botAutoGroupInfo {
+	out := cloneLiveGroups(groups)
+	if profileID != "" {
+		for index := range out {
+			out[index].BotProfileID = profileID
 		}
-		warning := "机器人尚未连接，暂时只显示已保存的群配置"
-		if callCtx.Err() != nil {
-			warning = "同步群列表超时，暂时只显示已保存的群配置"
+	}
+	return out
+}
+
+// groupListConnectionKey 找出这台机器人实际走的连接。没有配置可查时按机器人本身算。
+func (h *BotHandler) groupListConnectionKey(profileID string) string {
+	if profileID == "" || h.profiles == nil {
+		return profileID
+	}
+	for _, profile := range h.profiles.Profiles().Profiles {
+		if strings.TrimSpace(profile.ID) == profileID {
+			if connection := strings.TrimSpace(profile.ConnectionProfileID); connection != "" {
+				return connection
+			}
+			break
 		}
-		return nil, false, warning
 	}
-	liveGroups := autoGroupsFromOneBotData(data)
-	// 这一份来自 OneBot 的 get_group_list，群号就是 QQ 群号，头像规则适用。
-	for index := range liveGroups {
-		liveGroups[index].QQAvatar = true
-	}
-	h.liveGroupMu.Lock()
-	h.liveGroupCache = liveGroupListCache{
-		groups:    cloneLiveGroups(liveGroups),
-		available: true,
-		warning:   "",
-		fetchedAt: time.Now(),
-	}
-	h.liveGroupMu.Unlock()
-	return liveGroups, true, ""
+	return profileID
 }
 
 // groupAvatarURLForProfile 给出某个群的头像地址。传函数而不是整个 handler，
@@ -664,48 +852,70 @@ func mergeConsoleGroupItems(base assistant.BotConfig, set assistant.GroupConfigS
 		}
 		return base
 	}
-	saved := make(map[string]assistant.GroupConfig, len(set.Groups))
+	// 群按「机器人 + 群号」认：两台机器人同在一个群时各是一张卡、各有各的配置。
+	// 只按群号认的话，全部机器人视图里后一台的群会被前一台吞掉。
+	saved := make(map[consoleGroupKey]assistant.GroupConfig, len(set.Groups))
 	for _, cfg := range set.Groups {
 		groupID := strings.TrimSpace(cfg.GroupID)
 		if groupID != "" {
-			saved[groupID] = cfg.WithDefaultsResolved(groupID, base, resolve)
+			saved[consoleGroupKey{profileID: strings.TrimSpace(cfg.BotProfileID), groupID: groupID}] = cfg.WithDefaultsResolved(groupID, base, resolve)
 		}
+	}
+	// takeSaved 找这个群已保存的配置。来源没记归属（老部署只有一台机器人）时认同群号
+	// 的任一份；记了归属却没对上时，再认没写归属的老配置。
+	takeSaved := func(profileID, groupID string) (assistant.GroupConfig, bool) {
+		key := consoleGroupKey{profileID: profileID, groupID: groupID}
+		if cfg, ok := saved[key]; ok {
+			delete(saved, key)
+			return cfg, true
+		}
+		for candidate, cfg := range saved {
+			if candidate.groupID != groupID {
+				continue
+			}
+			if profileID == "" || candidate.profileID == "" {
+				delete(saved, candidate)
+				return cfg, true
+			}
+		}
+		return assistant.GroupConfig{}, false
 	}
 
 	items := make([]consoleGroupItem, 0, len(liveGroups)+len(saved))
-	seen := make(map[string]struct{}, len(liveGroups))
+	seen := make(map[consoleGroupKey]struct{}, len(liveGroups))
 	for _, live := range liveGroups {
 		groupID := strings.TrimSpace(live.GroupID)
 		if groupID == "" {
 			continue
 		}
-		if _, ok := seen[groupID]; ok {
+		profileID := strings.TrimSpace(live.BotProfileID)
+		key := consoleGroupKey{profileID: profileID, groupID: groupID}
+		if _, ok := seen[key]; ok {
 			continue
 		}
-		seen[groupID] = struct{}{}
-		cfg, configured := saved[groupID]
+		seen[key] = struct{}{}
+		cfg, configured := takeSaved(profileID, groupID)
 		if !configured {
 			// 还没配过的群跟着它所在的那台机器人给默认值。
-			cfg = assistant.DefaultGroupConfig(groupID, baseFor(live.BotProfileID))
+			cfg = assistant.DefaultGroupConfig(groupID, baseFor(profileID))
+			// 来源记着是哪台机器人问到的，原样带出去；来源没记就留空，不替它猜。
+			cfg.BotProfileID = profileID
 		}
-		avatarURL := groupAvatar(live.BotProfileID, groupID)
 		items = append(items, consoleGroupItem{
 			GroupConfig:    cfg.WithDefaultsResolved(groupID, base, resolve),
 			GroupName:      strings.TrimSpace(live.GroupName),
-			AvatarURL:      avatarURL,
+			AvatarURL:      groupAvatar(profileID, groupID),
 			MemberCount:    live.MemberCount,
 			MaxMemberCount: live.MaxMemberCount,
 			Configured:     configured,
 			Joined:         true,
 		})
-		delete(saved, groupID)
 	}
-	for groupID, cfg := range saved {
+	for key, cfg := range saved {
 		// 已保存的群配置自带归属机器人，据此判断能不能用 QQ 的头像规则。
-		avatarURL := groupAvatar(cfg.BotProfileID, groupID)
 		items = append(items, consoleGroupItem{
 			GroupConfig: cfg,
-			AvatarURL:   avatarURL,
+			AvatarURL:   groupAvatar(cfg.BotProfileID, key.groupID),
 			Configured:  true,
 			Joined:      false,
 		})
@@ -726,9 +936,18 @@ func mergeConsoleGroupItems(base assistant.BotConfig, set assistant.GroupConfigS
 			}
 			return leftName < rightName
 		}
-		return items[i].GroupID < items[j].GroupID
+		if items[i].GroupID != items[j].GroupID {
+			return items[i].GroupID < items[j].GroupID
+		}
+		return items[i].BotProfileID < items[j].BotProfileID
 	})
 	return items
+}
+
+// consoleGroupKey 是控制台里一个群的身份：同一个群号在不同机器人下算两个。
+type consoleGroupKey struct {
+	profileID string
+	groupID   string
 }
 
 // saveConsoleGroup 创建或更新单个群配置。

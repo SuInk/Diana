@@ -153,11 +153,11 @@ func TestConsoleGroupsFallsBackToLastLiveListOnFailure(t *testing.T) {
 	}}
 	runtime := assistant.NewRuntime(assistant.DefaultBotConfig(), channel, assistant.NewDefaultPluginManager(), nil, nil, nil, nil)
 	handler := NewBotHandler(context.Background(), runtime)
-	if groups, ok, _ := handler.liveConsoleGroups(t.Context(), true); !ok || len(groups) != 1 {
+	if groups, ok, _ := handler.liveConsoleGroups(t.Context(), "", true); !ok || len(groups) != 1 {
 		t.Fatalf("first fetch = %#v ok=%v", groups, ok)
 	}
 	channel.fail.Store(true)
-	groups, ok, warning := handler.liveConsoleGroups(t.Context(), true)
+	groups, ok, warning := handler.liveConsoleGroups(t.Context(), "", true)
 	if !ok || len(groups) != 1 || groups[0].GroupName != "上次的群" {
 		t.Fatalf("fallback = %#v ok=%v", groups, ok)
 	}
@@ -578,5 +578,119 @@ func TestConsoleGroupsReportsQuotaUsage(t *testing.T) {
 	// 群里填了以群为准。
 	if group := groups["40002"]; group.QuotaCallLimit != 2 || group.QuotaCallsUsed != 1 {
 		t.Fatalf("自己填了额度的群 = %#v", group)
+	}
+}
+
+// perProfileGroupListRuntime 按机器人给出不同的群列表；不指明机器人的调用照真实
+// 运行时的样子报错，因为有两台 OneBot 机器人时运行时不会替调用方挑。
+type perProfileGroupListRuntime struct {
+	BotRuntime
+	groups map[string][]any
+	calls  atomic.Int32
+}
+
+func (r *perProfileGroupListRuntime) CallOneBotAPI(context.Context, string, map[string]any) (map[string]any, error) {
+	return nil, errors.New("diana: 有多台机器人，请指定要用哪一台")
+}
+
+func (r *perProfileGroupListRuntime) CallOneBotAPIForProfile(_ context.Context, profileID, action string, _ map[string]any) (map[string]any, error) {
+	if action != "get_group_list" {
+		return nil, errors.New("unexpected OneBot action")
+	}
+	r.calls.Add(1)
+	return map[string]any{"items": r.groups[profileID]}, nil
+}
+
+// 两台 OneBot 机器人时，全部机器人视图要把两边的群都列出来，并且各自记上归属；
+// 选了某一台时只列它自己的群。
+func TestConsoleGroupsListsEveryOneBotProfile(t *testing.T) {
+	first := assistant.DefaultBotConfig()
+	first.ID, first.Platform, first.Enabled = "qq-a", assistant.PlatformOneBotV11, true
+	second := assistant.DefaultBotConfig()
+	second.ID, second.Platform, second.Enabled = "qq-b", assistant.PlatformOneBotV11, true
+	store := NewMemoryBotProfileStore(first)
+	if err := store.SaveProfiles(assistant.ProfileSet{Profiles: []assistant.BotConfig{first, second}}); err != nil {
+		t.Fatal(err)
+	}
+	handler := &BotHandler{profiles: store, runtime: &perProfileGroupListRuntime{groups: map[string][]any{
+		"qq-a": {map[string]any{"group_id": "10001", "group_name": "甲群"}},
+		"qq-b": {map[string]any{"group_id": "10002", "group_name": "乙群"}},
+	}}}
+
+	all, ok, _ := handler.liveConsoleGroupsForAllBots(t.Context(), false)
+	owners := map[string]string{}
+	for _, group := range all {
+		owners[group.GroupID] = group.BotProfileID
+	}
+	if !ok || owners["10001"] != "qq-a" || owners["10002"] != "qq-b" {
+		t.Fatalf("all bots = %#v ok=%v", all, ok)
+	}
+
+	scoped, ok, _ := handler.liveConsoleGroups(t.Context(), "qq-b", false)
+	if !ok || len(scoped) != 1 || scoped[0].GroupID != "10002" || scoped[0].BotProfileID != "qq-b" {
+		t.Fatalf("scoped = %#v ok=%v", scoped, ok)
+	}
+}
+
+// 复用同一条连接的两台机器人是同一个 QQ 号，群列表只问一次，各自记上归属。
+func TestConsoleGroupsShareListAcrossSameConnection(t *testing.T) {
+	first := assistant.DefaultBotConfig()
+	first.ID, first.Platform, first.Enabled = "qq-a", assistant.PlatformOneBotV11, true
+	second := assistant.DefaultBotConfig()
+	second.ID, second.Platform, second.Enabled, second.ConnectionProfileID = "qq-b", assistant.PlatformOneBotV11, true, "qq-a"
+	store := NewMemoryBotProfileStore(first)
+	if err := store.SaveProfiles(assistant.ProfileSet{Profiles: []assistant.BotConfig{first, second}}); err != nil {
+		t.Fatal(err)
+	}
+	runtime := &perProfileGroupListRuntime{groups: map[string][]any{
+		"qq-a": {map[string]any{"group_id": "10001", "group_name": "同一个号的群"}},
+	}}
+	handler := &BotHandler{profiles: store, runtime: runtime}
+	if groups, ok, _ := handler.liveConsoleGroups(t.Context(), "qq-a", false); !ok || len(groups) != 1 || groups[0].BotProfileID != "qq-a" {
+		t.Fatalf("qq-a = %#v ok=%v", groups, ok)
+	}
+	groups, ok, _ := handler.liveConsoleGroups(t.Context(), "qq-b", false)
+	if !ok || len(groups) != 1 || groups[0].BotProfileID != "qq-b" {
+		t.Fatalf("qq-b = %#v ok=%v", groups, ok)
+	}
+	if got := runtime.calls.Load(); got != 1 {
+		t.Fatalf("同一条连接问了 %d 次群列表", got)
+	}
+}
+
+// 拉取失败后短时间内不再回源：卡住的机器人不能让每次打开页面都等满超时。
+// 手动刷新不受这个限制。
+func TestConsoleGroupsBacksOffAfterFailure(t *testing.T) {
+	channel := &countingGroupListChannel{result: map[string]any{"items": []any{}}}
+	channel.fail.Store(true)
+	runtime := assistant.NewRuntime(assistant.DefaultBotConfig(), channel, assistant.NewDefaultPluginManager(), nil, nil, nil, nil)
+	handler := NewBotHandler(context.Background(), runtime)
+	for range 3 {
+		if _, ok, warning := handler.liveConsoleGroups(t.Context(), "", false); ok || warning == "" {
+			t.Fatalf("失败时应给出提示：ok=%v warning=%q", ok, warning)
+		}
+	}
+	if got := channel.calls.Load(); got != 1 {
+		t.Fatalf("失败后仍在反复回源：%d 次", got)
+	}
+	_, _, _ = handler.liveConsoleGroups(t.Context(), "", true)
+	if got := channel.calls.Load(); got != 2 {
+		t.Fatalf("手动刷新应绕过失败退避：%d 次", got)
+	}
+}
+
+// 事件页的群名只读现成缓存，Telegram 这类平台不为几个名字挨个去问平台接口。
+func TestEventGroupNamesReadsCacheOnly(t *testing.T) {
+	runtime := &groupInfoStubRuntime{name: "不该被问到", found: true}
+	handler := newGroupNameHandler(runtime)
+	handler.groupNameCache["tg-profile\x00-1001"] = groupNameCacheEntry{name: "读书会", fetchedAt: time.Now()}
+	names := handler.eventGroupNames(t.Context(), "tg-profile")
+	if names["-1001"] != "读书会" {
+		t.Fatalf("names = %#v", names)
+	}
+	runtime.mu.Lock()
+	defer runtime.mu.Unlock()
+	if runtime.calls != 0 {
+		t.Fatalf("事件页为群名打了 %d 次平台接口", runtime.calls)
 	}
 }

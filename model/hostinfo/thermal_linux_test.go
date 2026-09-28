@@ -94,6 +94,8 @@ func TestPowerDrawNeedsTwoSamples(t *testing.T) {
 	raplState.Lock()
 	raplState.byZone = map[string]raplSample{}
 	raplState.Unlock()
+	clock := time.Unix(1700000000, 0)
+	fakeRaplClock(t, func() time.Time { return clock })
 
 	if _, _, err := powerDraw(); err == nil || !strings.Contains(err.Error(), "两次采样") {
 		t.Fatalf("第一次采样应说明还算不出功率，err = %v", err)
@@ -101,12 +103,10 @@ func TestPowerDrawNeedsTwoSamples(t *testing.T) {
 
 	// 一秒后能量涨了 5 焦，也就是 5W。
 	zone := filepath.Join(root, "class/powercap/intel-rapl:0")
-	raplState.Lock()
-	raplState.byZone[zone] = raplSample{microJoules: 1000000, at: time.Now().Add(-time.Second)}
-	raplState.Unlock()
 	if err := os.WriteFile(filepath.Join(zone, "energy_uj"), []byte("6000000\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	clock = clock.Add(time.Second)
 	readings, _, err := powerDraw()
 	if err != nil {
 		t.Fatalf("powerDraw() error = %v", err)
@@ -114,10 +114,17 @@ func TestPowerDrawNeedsTwoSamples(t *testing.T) {
 	if len(readings) != 1 || readings[0].Label != "package-0" || readings[0].Unit != "W" {
 		t.Fatalf("readings = %#v", readings)
 	}
-	// 采样间隔由 time.Now 决定，不会正好是一秒，所以给一点余量。
-	if readings[0].Value < 4.5 || readings[0].Value > 5.5 {
-		t.Fatalf("功率 = %v W，期望 5W 上下", readings[0].Value)
+	if readings[0].Value != 5 {
+		t.Fatalf("功率 = %v W，期望 5W", readings[0].Value)
 	}
+}
+
+// fakeRaplClock 让两次采样的时间戳可控，测试结束恢复真实时钟。
+func fakeRaplClock(t *testing.T, now func() time.Time) {
+	t.Helper()
+	previous := raplNow
+	raplNow = now
+	t.Cleanup(func() { raplNow = previous })
 }
 
 // 计数器回绕那一次的差值没有意义，跳过等下一次，而不是报一个巨大的负功率。

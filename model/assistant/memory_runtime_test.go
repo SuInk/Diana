@@ -573,6 +573,9 @@ func (s *testStructuredMemoryStore) ListStructuredMemories(_ context.Context, qu
 		if !structuredMemoryFakeInScope(item, query) {
 			continue
 		}
+		if query.GroupRulesOnly && !IsGroupRule(item) {
+			continue
+		}
 		items = append(items, item)
 	}
 	return items, nil

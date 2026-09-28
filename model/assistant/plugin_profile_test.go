@@ -42,9 +42,6 @@ func TestPluginProfileSwitchIsolationAndRestore(t *testing.T) {
 	if _, err := restored.SetEnabledForProfile(messageHistoryPluginID, "qq-a", false); !errors.Is(err, ErrInternalPluginDisable) {
 		t.Fatalf("internal plugin disable: %v", err)
 	}
-	if _, err := restored.SetEnabledForProfile(OpenAPIPluginID, "qq-a", true); err != nil || !restored.Enabled(OpenAPIPluginID) {
-		t.Fatalf("OpenAPI must remain process-wide: %v", err)
-	}
 }
 
 func TestRuntimePluginSwitchUsesEventProfileAndGroupOverride(t *testing.T) {

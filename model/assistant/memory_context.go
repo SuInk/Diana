@@ -114,6 +114,16 @@ func (r *Runtime) memoryContextWithProfile(ctx context.Context, event MessageEve
 	}
 	items = r.expandMemoryAssociations(loadCtx, store, query, event, items)
 	cancel()
+	if event.Kind == EventKindGroup {
+		// 本群约定由 groupRulesPrompt 在尾部对全群注入，这里再出现就重复了。
+		kept := items[:0]
+		for _, item := range items {
+			if !IsGroupRule(item) {
+				kept = append(kept, item)
+			}
+		}
+		items = kept
+	}
 	for index := range items {
 		items[index].CompactRecall = cfg.AgentEnabled
 		if crossGroup && items[index].SubjectUserID == "" && items[index].SourceSession != sessionKey(event) && strings.HasPrefix(items[index].SourceSession, groupHistorySessionPrefix(event)) {

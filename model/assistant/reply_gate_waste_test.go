@@ -46,30 +46,21 @@ func TestReplyClosedUndirectedMessageSkipsCrossGroupRetrieval(t *testing.T) {
 
 	directed := atBotEvent(crossGroupProbeEvent(), "90001")
 	directed.MessageID, directed.Time, directed.SelfID = "m3", 210, "90001"
-	_, _, handled, outcome = runtime.prepareMessageEvent(context.Background(), directed)
+	prepared, _, handled, outcome := runtime.prepareMessageEvent(context.Background(), directed)
 	if !handled {
 		t.Fatalf("@ 机器人的消息应进回复，outcome = %s", outcome)
 	}
-	if store.searches == 0 {
-		t.Fatal("@ 机器人的消息应照常检索跨群上下文")
+	// 跨群检索在 replyTo 开头做，路由阶段不查。
+	if store.searches != 0 {
+		t.Fatalf("路由阶段不该跑跨群检索，实际 %d 次", store.searches)
 	}
-}
-
-// 引用还没解析出来时不知道引的是不是机器人，不能当成「注定不回」。
-func TestReplyClosedKeepsUnresolvedQuoteOnOldPath(t *testing.T) {
-	runtime := NewRuntime(replyClosedConfig(), nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
-	event := textEvent("q-1", "10001", "这是什么", 1006)
-	if !runtime.replyClosedForUndirectedEvent(event, "这是什么") {
-		t.Fatal("plain undirected message should be recognized as reply-closed")
+	prepared = runtime.loadDeferredCrossGroupContext(prepared)
+	if store.searches != 1 {
+		t.Fatalf("@ 机器人的消息应在回复时检索一次跨群上下文，实际 %d 次", store.searches)
 	}
-	event.Segments = append([]MessageSegment{{Type: "reply", Data: map[string]string{"id": "777"}}}, event.Segments...)
-	if runtime.replyClosedForUndirectedEvent(event, "这是什么") {
-		t.Fatal("unresolved quote must stay on the old path")
-	}
-	private := event
-	private.Kind, private.GroupID = EventKindPrivate, ""
-	if runtime.replyClosedForUndirectedEvent(private, "这是什么") {
-		t.Fatal("private chat is never reply-closed by the group switches")
+	runtime.loadDeferredCrossGroupContext(prepared)
+	if store.searches != 1 {
+		t.Fatalf("同一轮回复不该重复检索，实际 %d 次", store.searches)
 	}
 }
 

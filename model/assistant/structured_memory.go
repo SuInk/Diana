@@ -66,6 +66,28 @@ const (
 	MemoryStatusForgotten  MemoryStatus = "forgotten"
 )
 
+// MemoryAudience 说明一条要求管谁。空值是默认：只管提要求的人。
+type MemoryAudience string
+
+const (
+	// MemoryAudienceGroup 是「在这个群别再说某个词」这类对全群生效的约定。
+	//
+	// 长期交互要求本来只跟着提要求的人走，这对「叫我主人」「跟我说鼠话」是对的，对
+	// 「别说草了」就不对：线上有人提了，Diana 当场答应，转头接别人的话照样「草，」
+	// 开头。所以群约定落库时不挂在任何人名下（subject 为空），回复时对全群注入。
+	// 门控只允许「别说什么」这类收敛型要求用它，一个人不能借此给全群换腔调。
+	MemoryAudienceGroup MemoryAudience = "group"
+	// GroupRuleRetentionDays 是群约定最长的有效天数：群里的梗和情绪会变，一句「别说
+	// 草了」不该永远管下去。说了更短的期限按说的算，过期前再提一次顺延。
+	GroupRuleRetentionDays = 30
+)
+
+// IsGroupRule 判断一条记忆是不是本群约定：不挂在任何人名下、只在本会话可见的 instruction。
+func IsGroupRule(item StructuredMemoryItem) bool {
+	return item.Kind == MemoryKindInstruction && strings.TrimSpace(item.SubjectUserID) == "" &&
+		item.Visibility == MemoryVisibilitySession
+}
+
 // MemoryCandidate is proposed by the LLM memory gate. Storage still validates
 // scope, confidence, versioning, and provenance before it becomes canonical.
 type MemoryCandidate struct {
@@ -82,6 +104,9 @@ type MemoryCandidate struct {
 	Visibility    MemoryVisibility      `json:"visibility"`
 	Sensitive     bool                  `json:"sensitive"`
 	RetentionDays int                   `json:"retention_days,omitempty"`
+	// AppliesTo 为 group 时这条 instruction 不挂在发言者名下，记成本群的约定：回谁都
+	// 照做，谁都能撤销。只在群聊、只对 instruction 生效，见 MemoryAudienceGroup。
+	AppliesTo MemoryAudience `json:"applies_to,omitempty"`
 	// SourceIndex 指向 current_batch 里的下标：攒批门控时一次调用覆盖多条消息，
 	// 候选要能各自回指到真正支撑它的那条，出处和时间才不会张冠李戴。
 	// 用指针是为了区分「模型没标」和「模型标了 0」：前者归到最新那条，后者是
@@ -163,6 +188,8 @@ type StructuredMemoryQuery struct {
 	// visibility=user 记忆也一并排除。它与 CrossGroup 是两件事：后者控制的是
 	// 其他群的会话记忆。回复提示词不要设这一项，否则长期记忆会整类失效。
 	CurrentSessionOnly bool
+	// GroupRulesOnly 只取本群约定（见 IsGroupRule）。
+	GroupRulesOnly bool
 }
 
 type MemoryJobKind string

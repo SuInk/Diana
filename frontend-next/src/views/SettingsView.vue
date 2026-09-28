@@ -151,81 +151,6 @@
 
       </div>
 
-      <div v-show="activePage === 'openapi'" class="settings-section-body">
-          <!-- 对外 API 密钥 -->
-          <section class="card">
-          <div class="card-header">
-            <SkeletonBlock v-if="pluginLoading" width="90px" height="21px" />
-            <span v-else class="badge" :class="openAPIPluginEnabled ? 'ok' : 'warn'">{{ openAPIPluginEnabled ? "插件已启用" : "插件未启用" }}</span>
-          </div>
-          <div class="card-body stack">
-            <div class="cluster" style="gap: 8px; align-items: center">
-              <p class="muted" style="margin: 0; font-size: 13px; flex: 1">
-                未启用时外部调用一律 403。密钥、限流和启停统一在此管理，不属于任何机器人的插件配置。
-              </p>
-              <button class="btn small" type="button" :disabled="togglingPlugin || openAPIPlugin === null" @click="toggleOpenAPIPlugin">
-                {{ togglingPlugin ? "处理中…" : openAPIPluginEnabled ? "停用" : "启用" }}
-              </button>
-            </div>
-            <p class="muted" style="margin: 0; font-size: 13px">
-              携带 <code class="mono">Authorization: Bearer &lt;密钥&gt;</code> 调用
-              <code class="mono">POST /openapi/v1/messages</code>，正文里用
-              <code class="mono">group_id</code> 或 <code class="mono">user_id</code> 指定目标会话、<code class="mono">text</code> 填内容；
-              多通道部署时再带上 <code class="mono">platform</code> 或 <code class="mono">profile_id</code> 指路。
-              <code class="mono">GET /openapi/v1/status</code> 可探活并列出可投递的通道。
-            </p>
-            <div v-if="openAPIPlugin" class="stack">
-              <PluginSettingField v-for="spec in openAPIPlugin.manifest.settings ?? []" :key="spec.key" :spec="spec" :form="openAPISettings" />
-              <button class="btn small" type="button" :disabled="savingOpenAPISettings" @click="saveOpenAPISettings"><Save :size="14" aria-hidden="true" />保存接口参数</button>
-            </div>
-            <div v-if="createdToken" class="openapi-token">
-              <p class="openapi-token-hint">密钥只显示这一次，请立即复制保存：</p>
-              <div class="cluster" style="gap: 8px; flex-wrap: wrap">
-                <code class="mono openapi-token-value">{{ createdToken }}</code>
-                <button class="btn small" type="button" @click="copyCreatedToken">复制</button>
-                <button class="btn small ghost" type="button" @click="createdToken = ''">我已保存</button>
-              </div>
-            </div>
-            <LoadingSkeleton v-if="apiKeysLoading && apiKeys.length === 0" kind="sessions" :count="2" label="正在加载 API 密钥" />
-            <p v-else-if="apiKeys.length === 0" class="muted" style="margin: 0; font-size: 13px">还没有密钥。创建后外部系统才能调用推送接口。</p>
-            <ul v-else class="session-list">
-              <li v-for="key in apiKeys" :key="key.id" class="session-item">
-                <div class="session-main">
-                  <span class="session-name">{{ key.name }}</span>
-                  <span class="session-meta mono">{{ key.prefix }}…</span>
-                  <span class="session-meta">
-                    创建于 {{ formatTime(key.created_at) }}
-                    · {{ key.last_used_at ? `最近使用 ${formatTime(key.last_used_at)}` : "从未使用" }}
-                  </span>
-                </div>
-                <button
-                  class="btn small danger"
-                  type="button"
-                  :disabled="revokingKeyID !== ''"
-                  @click="revokeKey(key)"
-                >
-                  {{ revokingKeyID === key.id ? "处理中…" : "吊销" }}
-                </button>
-              </li>
-            </ul>
-            <div class="cluster" style="gap: 8px">
-              <input
-                v-model="newKeyName"
-                class="input"
-                placeholder="密钥用途，例如 ci-notify"
-                style="max-width: 240px"
-                @keyup.enter="createKey"
-              />
-              <button class="btn primary" type="button" :disabled="creatingKey || newKeyName.trim().length === 0" @click="createKey">
-                <KeyRound :size="15" aria-hidden="true" />
-                {{ creatingKey ? "创建中…" : "创建密钥" }}
-              </button>
-            </div>
-          </div>
-        </section>
-      </div>
-
-
       <div v-show="activePage === 'storage'" class="settings-section-body">
         <section class="card">
           <div class="card-header" style="justify-content: flex-end">
@@ -342,11 +267,7 @@
             <fieldset v-if="!cacheLoading || cachePolicy" class="cache-policy-fields form-grid" :disabled="cacheLoading || cacheSaving || !cachePolicy">
               <div class="field">
                 <label for="cache-cleanup-mode">清理策略</label>
-                <select id="cache-cleanup-mode" v-model="cacheMode" class="input">
-                  <option value="days">按闲置天数清理</option>
-                  <option value="capacity">仅按容量清理</option>
-                  <option value="never">永不自动清理</option>
-                </select>
+                <AppSelect id="cache-cleanup-mode" :model-value="cacheMode" :options="cacheModeOptions" :disabled="cacheLoading || cacheSaving || !cachePolicy" @update:model-value="(value) => { cacheMode = value as CacheMode; }" />
               </div>
               <div v-if="cacheMode === 'days'" class="field">
                 <label for="cache-retention-days">闲置保留天数</label>
@@ -382,28 +303,6 @@
             <div class="field"><label for="history-media-max">容量上限（MiB）</label><input id="history-media-max" v-model.number="historyMediaMaxMB" class="input" type="number" min="0" max="1048576" /><span class="hint">0 表示不限制容量。</span></div>
             <p class="hint field wide">清理只删除图片、视频、音频、PDF 等历史原件；聊天文字、媒体类型和已有摘要保留。删除后历史记录会显示原件不可用。</p>
             <div class="field wide"><button class="btn primary" type="submit" :disabled="historyMediaLoading || historyMediaSaving || !historyMediaValid"><Save :size="15" />{{ historyMediaSaving ? "清理中…" : "保存并立即清理" }}</button></div>
-          </form>
-        </section>
-        <section class="download-cache-settings">
-          <div class="card-header">
-            <h2>媒体回源</h2>
-            <button class="btn small ghost" type="button" :disabled="mediaBaseURLLoading || mediaBaseURLSaving" title="刷新媒体回源设置" aria-label="刷新媒体回源设置" @click="loadMediaBaseURL">
-              <RefreshCw :size="14" aria-hidden="true" />
-            </button>
-          </div>
-          <form class="card-body form-grid" @submit.prevent="saveMediaBaseURL">
-            <p v-if="mediaBaseURLError" class="error field wide" role="alert">{{ mediaBaseURLError }}</p>
-            <div class="field wide">
-              <label for="media-base-url">回源基址</label>
-              <input id="media-base-url" v-model="mediaBaseURL" class="input mono" placeholder="留空自动推断，例如 http://192.168.1.10:18080/media/resolver" :disabled="mediaBaseURLLoading || mediaBaseURLSaving" />
-              <span class="hint">发送文件/图片时，接入端按这个地址回源拉取媒体。留空时按接入方式自动推断：反向 ws 用握手地址，正向 ws / HTTP 用接入端地址推主机名 + Diana 的 Web 端口。跨机或反向代理部署收不到文件时，把接入端实际可访问的 Diana 地址填到这里。当前生效来源：{{ mediaBaseURLSourceLabel }}。</span>
-            </div>
-            <div class="field wide">
-              <button class="btn primary" type="submit" :disabled="mediaBaseURLLoading || mediaBaseURLSaving">
-                <Save :size="15" aria-hidden="true" />
-                {{ mediaBaseURLSaving ? "保存中…" : "保存回源设置" }}
-              </button>
-            </div>
           </form>
         </section>
       </div>
@@ -514,24 +413,20 @@
           </div>
         </section>
 
-        <section class="card">
-          <div class="card-header"><span class="card-sub">重启服务</span></div>
-          <div class="card-body stack" style="gap: 10px; font-size: 13px">
-            <div class="cluster">
-              <button class="btn" type="button" :disabled="restarting" @click="doRestart">
-                <RotateCw :size="15" aria-hidden="true" />
-                {{ restarting ? "重启中，等待服务恢复…" : "重启服务" }}
-              </button>
-            </div>
-            <p class="muted" style="font-size: 12.5px; margin: 0">原地重启当前服务进程，更新拉取后需重启才生效。恢复后页面会自动刷新。</p>
-          </div>
-        </section>
-
       </div>
 
       <div v-show="activePage === 'status'" class="settings-section-body">
-        <!-- 运行状态：版本号只在「系统更新」显示一次，这里只放运行期信息。 -->
+        <!-- 运行状态：版本号只在「系统更新」显示一次，这里放进程的运行期信息和重启。
+             重启放在同一张卡的底部动作区：看完跑了多久再决定要不要重启，重启过程
+             也直接反映在卡头的状态上。 -->
         <section class="card">
+          <div class="card-header" style="justify-content: space-between">
+            <h2>服务进程</h2>
+            <SkeletonBlock v-if="healthLoading" width="64px" height="21px" />
+            <span v-else class="badge" :class="restarting ? 'warn' : health ? 'ok' : 'warn'">
+              {{ restarting ? "重启中" : health ? "运行中" : "状态未知" }}
+            </span>
+          </div>
           <div class="card-body stack" style="gap: 8px; font-size: 13px">
             <div class="info-row">
               <span class="muted info-label">运行时长</span>
@@ -543,6 +438,17 @@
               <SkeletonBlock v-if="healthLoading" width="140px" height="18px" />
               <span v-else class="mono info-value">{{ health ? formatTime(health.started_at) : "—" }}</span>
             </div>
+          </div>
+          <div class="card-body restart-action">
+            <div class="restart-copy">
+              <strong>重启服务</strong>
+              <span v-if="restarting" class="muted" role="status">正在等待新进程就绪，已等待 {{ restartElapsed }} 秒，恢复后页面会自动刷新。</span>
+              <span v-else class="muted">原地重启当前进程，服务中断几秒，进行中的消息处理会被打断。系统更新下载完成后在这里重启生效。</span>
+            </div>
+            <button class="btn danger" type="button" :disabled="restarting" @click="doRestart">
+              <RotateCw :size="15" :class="{ spin: restarting }" aria-hidden="true" />
+              {{ restarting ? "重启中…" : "重启" }}
+            </button>
           </div>
         </section>
       </div>
@@ -585,12 +491,12 @@
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import AppSelect, { type AppSelectOption } from "../components/AppSelect.vue";
 import EmptyState from "../components/EmptyState.vue";
 import LoadingSkeleton from "../components/LoadingSkeleton.vue";
 import SkeletonBlock from "../components/SkeletonBlock.vue";
-import PluginSettingField from "../components/PluginSettingField.vue";
 import StorageDonut from "../components/StorageDonut.vue";
-import { Activity, Download, Eye, EyeOff, HardDriveDownload, Images, KeyRound, LogOut, MonitorSmartphone, Palette, PieChart, Plug, RefreshCw, RotateCw, Save, ShieldCheck } from "@lucide/vue";
+import { Activity, Download, Eye, EyeOff, HardDriveDownload, Images, KeyRound, LogOut, MonitorSmartphone, Palette, PieChart, RefreshCw, RotateCw, Save, ShieldCheck } from "@lucide/vue";
 import {
   changeCredentials,
   getAuthStatus,
@@ -615,17 +521,6 @@ import {
   getHistoryMediaPolicy,
   saveHistoryMediaPolicy,
   type HistoryMediaPolicy,
-  getMediaBaseURLSetting,
-  saveMediaBaseURLSetting,
-  type MediaBaseURLSetting,
-  listOpenAPIKeys,
-  createOpenAPIKey,
-  revokeOpenAPIKey,
-  listPlugins,
-  setPluginEnabled,
-  updatePluginSettings,
-  type PluginState,
-  type OpenAPIKey,
   type AuthSession,
   type HealthResponse,
   type SystemVersion,
@@ -643,12 +538,11 @@ import { toastError, toastSuccess } from "../toast";
 const settingsPages = [
   { key: "security", label: "访问安全", hint: "谁能打开这个控制台：管理账号与密码保护。", icon: ShieldCheck },
   { key: "sessions", label: "登录会话", hint: "机器人发来异常登录提醒时，在这里把对应设备踢下线。", icon: MonitorSmartphone },
-  { key: "openapi", label: "对外 API", hint: "让 CI、监控这类外部系统通过 HTTP 接口给机器人推送消息。", icon: Plug },
   { key: "storage", label: "存储空间", hint: "这台机器的磁盘还剩多少，以及 Diana 的数据目录被哪类文件占掉了。", icon: PieChart },
   { key: "cache", label: "下载缓存", hint: "控制下载的媒体缓存按闲置天数或容量清理。", icon: HardDriveDownload },
-  { key: "media", label: "媒体与文件", hint: "历史媒体原件的保留策略，以及发送文件时接入端回源拉取媒体的地址。", icon: Images },
-  { key: "update", label: "系统更新", hint: "检查、下载并安装新版本，以及原地重启服务。", icon: Download },
-  { key: "status", label: "运行状态", hint: "当前服务的启动时间与运行时长。", icon: Activity },
+  { key: "media", label: "媒体与文件", hint: "历史媒体原件的保留策略。", icon: Images },
+  { key: "update", label: "系统更新", hint: "检查、下载并安装新版本。", icon: Download },
+  { key: "status", label: "运行状态", hint: "当前服务的启动时间与运行时长，以及原地重启服务。", icon: Activity },
   { key: "theme", label: "界面主题", hint: "只存在你当前这个浏览器里，不会同步到其它设备，也不影响别的登录用户。", icon: Palette }
 ] as const;
 
@@ -656,7 +550,7 @@ const settingsPages = [
 const settingsGroups = (
   [
     { label: "个性化", keys: ["theme"] },
-    { label: "账号与安全", keys: ["security", "sessions", "openapi"] },
+    { label: "账号与安全", keys: ["security", "sessions"] },
     { label: "系统", keys: ["storage", "cache", "media", "update", "status"] }
   ] as const
 ).map((group) => ({
@@ -743,37 +637,13 @@ async function saveHistoryMedia() {
   catch (error) { historyMediaError.value = error instanceof Error ? error.message : "历史媒体设置保存失败"; toastError(historyMediaError.value); }
   finally { historyMediaSaving.value = false; }
 }
-const cacheMode = ref<"days" | "capacity" | "never">("days");
-// 媒体回源基址：文件/图片发送时接入端按它回源拉取媒体。留空走自动推断
-// （反向 ws 按握手地址，正向 ws / HTTP 按接入端地址推主机 + 本服务 Web 端口）。
-const mediaBaseURL = ref("");
-const mediaBaseURLSource = ref<MediaBaseURLSetting["source"]>("auto");
-const mediaBaseURLLoading = ref(true);
-const mediaBaseURLSaving = ref(false);
-const mediaBaseURLError = ref("");
-const mediaBaseURLSourceLabel = computed(() => ({
-  database: "已保存的设置",
-  config: "config.yaml",
-  auto: "自动推断"
-})[mediaBaseURLSource.value]);
-async function loadMediaBaseURL() {
-  mediaBaseURLLoading.value = true; mediaBaseURLError.value = "";
-  try {
-    const setting = await getMediaBaseURLSetting();
-    mediaBaseURL.value = setting.base_url; mediaBaseURLSource.value = setting.source;
-  } catch (error) { mediaBaseURLError.value = error instanceof Error ? error.message : "媒体回源基址加载失败"; }
-  finally { mediaBaseURLLoading.value = false; }
-}
-async function saveMediaBaseURL() {
-  if (mediaBaseURLSaving.value) return;
-  mediaBaseURLSaving.value = true; mediaBaseURLError.value = "";
-  try {
-    const setting = await saveMediaBaseURLSetting({ base_url: mediaBaseURL.value.trim() });
-    mediaBaseURL.value = setting.base_url; mediaBaseURLSource.value = setting.source;
-    toastSuccess("媒体回源基址已保存并生效");
-  } catch (error) { mediaBaseURLError.value = error instanceof Error ? error.message : "媒体回源基址保存失败"; toastError(mediaBaseURLError.value); }
-  finally { mediaBaseURLSaving.value = false; }
-}
+type CacheMode = "days" | "capacity" | "never";
+const cacheMode = ref<CacheMode>("days");
+const cacheModeOptions: AppSelectOption[] = [
+  { value: "days", label: "按闲置天数清理" },
+  { value: "capacity", label: "仅按容量清理" },
+  { value: "never", label: "永不自动清理" }
+];
 const cacheDays = ref(7);
 const cacheMaxMB = ref(1024);
 const cacheLimitEnabled = ref(false);
@@ -836,7 +706,6 @@ const health = ref<HealthResponse | null>(null);
 const loading = ref(true);
 const authLoading = ref(true);
 const healthLoading = ref(true);
-const pluginLoading = ref(true);
 const updating = ref(false);
 const updateFailed = ref(false);
 const restarting = ref(false);
@@ -856,19 +725,6 @@ const deploymentMode = ref<"git" | "release" | "docker">("release");
 const sessions = ref<AuthSession[]>([]);
 const sessionsLoading = ref(true);
 const revokingID = ref("");
-const apiKeys = ref<OpenAPIKey[]>([]);
-const apiKeysLoading = ref(true);
-const creatingKey = ref(false);
-const newKeyName = ref("");
-const createdToken = ref("");
-const revokingKeyID = ref("");
-const openAPIPlugin = ref<PluginState | null>(null);
-const openAPISettings = ref<Record<string, unknown>>({});
-const savingOpenAPISettings = ref(false);
-const togglingPlugin = ref(false);
-const openAPIPluginEnabled = computed(() => openAPIPlugin.value?.enabled === true);
-
-const OPEN_API_PLUGIN_ID = "official.open-api";
 const otherSessionCount = computed(() => sessions.value.filter((item) => !item.current).length);
 const dockerUpdatePending = ref(false);
 const operationRunning = computed(() => updating.value || dockerUpdatePending.value || updateStatus.value?.updating === true);
@@ -1017,99 +873,6 @@ async function revokeOthers(): Promise<void> {
   }
 }
 
-async function loadOpenAPIPlugin(): Promise<void> {
-  try {
-    const plugins = await listPlugins();
-    openAPIPlugin.value = plugins.find((item) => item.manifest.id === OPEN_API_PLUGIN_ID) ?? null;
-    if (openAPIPlugin.value) openAPISettings.value = Object.fromEntries((openAPIPlugin.value.manifest.settings ?? []).map((spec) => [spec.key, openAPIPlugin.value?.settings?.[spec.key] ?? spec.default]));
-  } catch {
-    /* 拉不到插件状态时按未知处理，开关按钮保持禁用 */
-  } finally {
-    pluginLoading.value = false;
-  }
-}
-
-async function toggleOpenAPIPlugin(): Promise<void> {
-  if (openAPIPlugin.value === null || togglingPlugin.value) return;
-  const next = !openAPIPluginEnabled.value;
-  togglingPlugin.value = true;
-  try {
-    openAPIPlugin.value = await setPluginEnabled(OPEN_API_PLUGIN_ID, next);
-    toastSuccess(next ? "对外 API 已启用" : "对外 API 已停用，外部调用将收到 403");
-  } catch (err) {
-    toastError(err instanceof Error ? err.message : "切换对外 API 状态失败");
-  } finally {
-    togglingPlugin.value = false;
-  }
-}
-
-async function saveOpenAPISettings(): Promise<void> {
-  savingOpenAPISettings.value = true;
-  try {
-    openAPIPlugin.value = await updatePluginSettings(OPEN_API_PLUGIN_ID, openAPISettings.value);
-    toastSuccess("接口参数已保存");
-  } catch (error) { toastError(error instanceof Error ? error.message : "保存失败"); }
-  finally { savingOpenAPISettings.value = false; }
-}
-
-async function loadApiKeys(): Promise<void> {
-  apiKeysLoading.value = true;
-  try {
-    apiKeys.value = (await listOpenAPIKeys()).keys;
-  } catch (err) {
-    toastError(err instanceof Error ? err.message : "读取 API 密钥失败");
-  } finally {
-    apiKeysLoading.value = false;
-  }
-}
-
-async function createKey(): Promise<void> {
-  const name = newKeyName.value.trim();
-  if (name.length === 0 || creatingKey.value) return;
-  creatingKey.value = true;
-  try {
-    const result = await createOpenAPIKey(name);
-    // 明文只在这次响应里出现，先摆在页面上等用户自己复制，刷新即消失。
-    createdToken.value = result.token;
-    newKeyName.value = "";
-    await loadApiKeys();
-  } catch (err) {
-    toastError(err instanceof Error ? err.message : "创建 API 密钥失败");
-  } finally {
-    creatingKey.value = false;
-  }
-}
-
-async function copyCreatedToken(): Promise<void> {
-  try {
-    await navigator.clipboard.writeText(createdToken.value);
-    toastSuccess("密钥已复制");
-  } catch {
-    toastError("复制失败，请手动选中复制");
-  }
-}
-
-async function revokeKey(key: OpenAPIKey): Promise<void> {
-  if (!(await askConfirm({
-    title: "吊销 API 密钥",
-    message: `吊销「${key.name}」后，用它的外部系统会立即收到 401。`,
-    confirmLabel: "吊销",
-    danger: true
-  }))) {
-    return;
-  }
-  revokingKeyID.value = key.id;
-  try {
-    await revokeOpenAPIKey(key.id);
-    toastSuccess("密钥已吊销");
-    await loadApiKeys();
-  } catch (err) {
-    toastError(err instanceof Error ? err.message : "吊销 API 密钥失败");
-  } finally {
-    revokingKeyID.value = "";
-  }
-}
-
 const shortCommit = computed(() => {
   const commit = updateStatus.value?.head_commit;
   return commit ? commit.slice(0, 10) : "—";
@@ -1196,7 +959,7 @@ async function runUpdate(): Promise<void> {
 		  ? installingRelease
 			? "已开始重启并安装，完成后将执行健康检查"
 			: result.downloaded ? "更新已下载并通过校验，等待重启并安装" : "已是最新，无需更新"
-		  : result.updated ? "更新完成，重启服务后生效" : "已是最新，无需更新");
+		  : result.updated ? "更新完成，到「运行状态」重启服务后生效" : "已是最新，无需更新");
   } catch (error) {
     const message = error instanceof Error ? error.message : "更新失败";
     updateFailed.value = true;
@@ -1222,6 +985,7 @@ const updatePhaseLabel = computed(() => {
   }
 });
 
+const restartElapsed = ref(0);
 async function doRestart(): Promise<void> {
   const ok = await askConfirm({
     title: "重启服务",
@@ -1233,6 +997,17 @@ async function doRestart(): Promise<void> {
     return;
   }
   restarting.value = true;
+  restartElapsed.value = 0;
+  const restartStartedAt = Date.now();
+  const elapsedTimer = window.setInterval(() => { restartElapsed.value = Math.round((Date.now() - restartStartedAt) / 1000); }, 1000);
+  try {
+    await waitForRestart();
+  } finally {
+    window.clearInterval(elapsedTimer);
+  }
+}
+
+async function waitForRestart(): Promise<void> {
   const previousStart = health.value?.started_at ?? "";
   try {
     await restartSystem();
@@ -1263,12 +1038,9 @@ async function doRestart(): Promise<void> {
 onMounted(() => {
   void loadCachePolicy();
   void loadHistoryMediaPolicy();
-  void loadMediaBaseURL();
   void loadUpdates();
   void loadGitHubTokenStatus();
   void loadAuthStatus().then(() => loadSessions());
-  void loadApiKeys();
-  void loadOpenAPIPlugin();
   void getHealth()
     .then((result) => {
       health.value = result;
@@ -1543,6 +1315,21 @@ onBeforeUnmount(() => {
 
 /* auto-fit 让只有一张卡的分区自己占满整行，右边不留空位；
    两张卡的分区并排，和原来的两列观感一致。 */
+/* 重启是破坏性动作，和上面的只读信息用分隔线隔开，说明在左、按钮在右。 */
+.restart-action {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  border-top: 1px solid var(--border);
+}
+.restart-copy { display: flex; flex-direction: column; gap: 4px; font-size: 13px; min-width: 0; }
+.restart-copy .muted { font-size: 12.5px; }
+.restart-action .btn { flex-shrink: 0; }
+@media (max-width: 520px) {
+  .restart-action { flex-direction: column; align-items: stretch; }
+}
+
 .settings-section-body {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
@@ -1552,26 +1339,6 @@ onBeforeUnmount(() => {
 
 @media (max-width: 960px) {
   .settings-section-body { grid-template-columns: minmax(0, 1fr); }
-}
-
-
-/* 新建密钥的一次性明文展示：要醒目（错过就再也拿不到），但不该像报错。 */
-.openapi-token {
-  display: grid;
-  gap: 6px;
-  padding: 10px;
-  border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--border));
-  background: color-mix(in srgb, var(--accent) 8%, var(--surface-muted));
-  border-radius: 6px;
-}
-.openapi-token-hint { margin: 0; font-size: 12.5px; color: var(--muted); }
-.openapi-token-value {
-  padding: 4px 8px;
-  font-size: 12px;
-  word-break: break-all;
-  background: var(--surface-muted);
-  border: 1px solid var(--border);
-  border-radius: 4px;
 }
 
 .update-progress { display: grid; gap: 7px; }

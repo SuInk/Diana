@@ -175,9 +175,8 @@ type PluginState struct {
 }
 
 // ForProfile selects this robot's enabled state; settings are always shared.
-// OpenAPI is a process-wide HTTP service, not an event-bound bot capability.
 func (s PluginState) ForProfile(profileID string) PluginState {
-	if s.Manifest.ID != OpenAPIPluginID && !s.Manifest.Internal {
+	if !s.Manifest.Internal {
 		if enabled, ok := s.ProfileEnabled[strings.TrimSpace(profileID)]; ok && strings.TrimSpace(profileID) != "" {
 			s.Enabled = enabled
 		}
@@ -193,7 +192,7 @@ func (m *PluginManager) ProfileOverrides(profileID string) map[string]bool {
 	defer m.mu.RUnlock()
 	out := map[string]bool{}
 	for id, state := range m.states {
-		if enabled, ok := state.ProfileEnabled[strings.TrimSpace(profileID)]; ok && strings.TrimSpace(profileID) != "" && id != OpenAPIPluginID && !state.Manifest.Internal {
+		if enabled, ok := state.ProfileEnabled[strings.TrimSpace(profileID)]; ok && strings.TrimSpace(profileID) != "" && !state.Manifest.Internal {
 			out[id] = enabled
 		}
 	}
@@ -450,7 +449,6 @@ func NewDefaultPluginManager() *PluginManager {
 		NewFileDeliveryPlugin(),
 		NewCodingAgentPlugin(),
 		NewStatusCommandPlugin(),
-		NewOpenAPIPlugin(),
 		capabilities,
 	)
 	capabilities.setPluginStateProvider(manager.List)
@@ -673,11 +671,11 @@ func (m *PluginManager) SanitizeGroupSettingOverrides(overrides PluginSettingOve
 //
 // Manifest 由代码声明，启动时按当前版本重建，存一份旧的只会在排查时误导。
 // 全局启用开关同理：WebUI 上的开关一律按机器人来，全局开关既看不到也改不了，
-// 只有 OpenAPI 这种进程级服务用得上，其余插件的开关都在 ProfileEnabled 里。
+// 插件的开关都在 ProfileEnabled 里。
 type PersistedPluginState struct {
 	Installed bool `json:"installed"`
-	// Enabled 只对进程级插件有意义；其余插件为空，表示按插件自己声明的默认值起步。
-	// 指针是为了认出升级前的老数据：那时每个插件都存了全局开关，迁移要用它。
+	// Enabled 只在升级前的老数据里出现：那时每个插件都存了全局开关，迁移要用它。
+	// 新快照不再写，为空表示按插件自己声明的默认值起步。
 	Enabled               *bool                     `json:"enabled,omitempty"`
 	ProfileEnabled        map[string]bool           `json:"profile_enabled,omitempty"`
 	ProfileSettings       map[string]map[string]any `json:"profile_settings,omitempty"`
@@ -687,17 +685,13 @@ type PersistedPluginState struct {
 	Settings              map[string]any            `json:"settings,omitempty"`
 }
 
-// pluginKeepsGlobalSwitch 说明这个插件的全局开关是不是用户真能操作的。
-// OpenAPI 是进程级 HTTP 服务，不绑定某个机器人，只有它保留全局开关。
-func pluginKeepsGlobalSwitch(id string) bool { return id == OpenAPIPluginID }
-
 // Snapshot 返回插件状态快照用于持久化。
 func (m *PluginManager) Snapshot() map[string]PersistedPluginState {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	out := make(map[string]PersistedPluginState, len(m.states))
 	for id, state := range m.states {
-		record := PersistedPluginState{
+		out[id] = PersistedPluginState{
 			Installed:             state.Installed,
 			ProfileEnabled:        maps.Clone(state.ProfileEnabled),
 			ProfileSettings:       cloneProfileSettings(state.ProfileSettings),
@@ -706,11 +700,6 @@ func (m *PluginManager) Snapshot() map[string]PersistedPluginState {
 			SharedConfigSource:    state.SharedConfigSource,
 			Settings:              clonePluginValues(state.Settings),
 		}
-		if pluginKeepsGlobalSwitch(id) {
-			enabled := state.Enabled
-			record.Enabled = &enabled
-		}
-		out[id] = record
 	}
 	return out
 }
@@ -723,11 +712,11 @@ func (m *PluginManager) Restore(states map[string]PersistedPluginState) {
 	for id, plugin := range m.catalog {
 		current := m.states[id]
 		current.Manifest = plugin.Manifest()
-		// 没有全局开关的插件以插件自己声明的默认值起步，再由每个机器人的开关覆盖。
+		// 插件以自己声明的默认值起步，再由每个机器人的开关覆盖。
 		current.Enabled = !current.Manifest.DefaultDisabled
 		if saved, ok := states[id]; ok {
 			current.Installed = saved.Installed
-			if saved.Enabled != nil && (pluginKeepsGlobalSwitch(id) || !saved.ProfileConfigMigrated) {
+			if saved.Enabled != nil && !saved.ProfileConfigMigrated {
 				// 升级前的数据里，全局开关就是各机器人开关的来源，迁移之前要留着。
 				current.Enabled = *saved.Enabled
 			}
@@ -927,11 +916,6 @@ func (m *PluginManager) UpdateSettingsForProfile(id, profileID string, values ma
 	return state.ForProfile(profileID), nil
 }
 
-// SetEnabled 更新指定插件启用状态。
-func (m *PluginManager) SetEnabled(id string, enabled bool) (PluginState, error) {
-	return m.SetEnabledForProfile(id, "", enabled)
-}
-
 func (m *PluginManager) SetEnabledForProfile(id, profileID string, enabled bool) (PluginState, error) {
 	defer m.notifyStateObserver(id)
 	m.mu.Lock()
@@ -949,19 +933,15 @@ func (m *PluginManager) SetEnabledForProfile(id, profileID string, enabled bool)
 		return state, ErrInternalPluginDisable
 	}
 	profileID = strings.TrimSpace(profileID)
-	if profileID == "" || id == OpenAPIPluginID {
-		if profileID == "" && !pluginKeepsGlobalSwitch(id) {
-			return PluginState{}, fmt.Errorf("插件开关必须指定机器人")
-		}
-		state.Enabled = enabled
-	} else {
-		// Copy on write keeps previously returned snapshots stable during saves.
-		state.ProfileEnabled = maps.Clone(state.ProfileEnabled)
-		if state.ProfileEnabled == nil {
-			state.ProfileEnabled = map[string]bool{}
-		}
-		state.ProfileEnabled[profileID] = enabled
+	if profileID == "" {
+		return PluginState{}, fmt.Errorf("插件开关必须指定机器人")
 	}
+	// Copy on write keeps previously returned snapshots stable during saves.
+	state.ProfileEnabled = maps.Clone(state.ProfileEnabled)
+	if state.ProfileEnabled == nil {
+		state.ProfileEnabled = map[string]bool{}
+	}
+	state.ProfileEnabled[profileID] = enabled
 	m.states[id] = state
 	return state.ForProfile(profileID), nil
 }
