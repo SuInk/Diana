@@ -4,48 +4,42 @@
 package llm
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
+	_ "embed"
 	"encoding/json"
 	"io"
 	"log"
-	"net/http"
 	"net/url"
 	"slices"
 	"strings"
 	"sync"
-	"time"
 )
 
-const (
-	modelsDevCatalogURL = "https://models.dev/api.json"
-	modelsDevCacheTTL   = 6 * time.Hour
-)
+// models.dev 的数据随版本打包，不在运行时联网：同一个版本的行为是确定的，离线部署
+// 也一样，测试也不碰网络。更新快照跑 `make models-dev`（即 go generate），它拉取
+// https://models.dev/api.json，只留名称、模态、窗口和输出上限，gzip 后写进仓库。
+// 数据来自 sst/models.dev，MIT 许可。
+//
+//go:generate go run models_dev_gen.go
+//go:embed models_dev_snapshot.json.gz
+var modelsDevSnapshot []byte
 
-// ModelsDevCatalog adds model modalities and context/output limits that many
-// OpenAI-compatible /models endpoints omit. Failures are non-fatal; unknown
-// capabilities and the configured conservative context fallback remain in force.
+// ModelsDevCatalog 给模型列表补上 /models 接口常常不给的模态和 token 上限，也供请求
+// 时按模型查窗口。数据来自随版本打包的 models.dev 快照。
 type ModelsDevCatalog struct {
-	mu        sync.Mutex
-	client    *http.Client
-	url       string
-	fetchedAt time.Time
+	once      sync.Once
+	source    []byte
 	providers map[string]map[string]ModelInfo
 	// apis 是 models.dev 给每个服务商登记的 API 地址，用来按配置里的地址认出服务商。
 	apis map[string]string
-	// refreshing 和 lastAttempt 只给 OutputLimit 的后台刷新用：请求路径上不能等
-	// 网络，离线部署也不能每个请求都去拉一次。
-	refreshing  bool
-	lastAttempt time.Time
 }
 
-// modelsDevRetryInterval 是后台刷新失败后多久再试。
-const modelsDevRetryInterval = 10 * time.Minute
+// sharedModelsDevCatalog 是进程里唯一的一份：同步模型列表和请求时查窗口共用。
+var sharedModelsDevCatalog = &ModelsDevCatalog{source: modelsDevSnapshot}
 
-// sharedModelsDevCatalog 是进程里唯一的 models.dev 缓存：同步模型列表和请求时查
-// 输出上限用的是同一份，不重复下载 api.json。
-var sharedModelsDevCatalog = NewModelsDevCatalog(nil)
-
-// modelLimitCatalog 是请求时查输出上限和窗口用的目录，测试里换成本地数据。
+// modelLimitCatalog 是请求时查窗口用的目录，测试里换成本地数据。
 var modelLimitCatalog = sharedModelsDevCatalog
 
 // SharedModelsDevCatalog 返回进程共用的 models.dev 目录。
@@ -53,14 +47,33 @@ func SharedModelsDevCatalog() *ModelsDevCatalog {
 	return sharedModelsDevCatalog
 }
 
-// Warm 在后台预取一次目录，让启动后的第一批请求就能查到上限。
-func (c *ModelsDevCatalog) Warm() {
-	if c == nil {
-		return
-	}
-	c.mu.Lock()
-	c.startRefreshLocked()
-	c.mu.Unlock()
+// newModelsDevCatalogFromJSON 用一份 api.json 格式的数据建目录，测试用。
+func newModelsDevCatalogFromJSON(body []byte) *ModelsDevCatalog {
+	catalog := &ModelsDevCatalog{}
+	catalog.once.Do(func() {
+		catalog.providers, catalog.apis, _ = decodeModelsDevCatalog(body)
+	})
+	return catalog
+}
+
+// data 第一次用到时解压快照；解不开只记一条日志，按「目录里什么都没有」处理。
+func (c *ModelsDevCatalog) data() (map[string]map[string]ModelInfo, map[string]string) {
+	c.once.Do(func() {
+		if len(c.source) == 0 {
+			return
+		}
+		reader, err := gzip.NewReader(bytes.NewReader(c.source))
+		if err == nil {
+			var body []byte
+			if body, err = io.ReadAll(reader); err == nil {
+				c.providers, c.apis, err = decodeModelsDevCatalog(body)
+			}
+		}
+		if err != nil {
+			log.Printf("llm: bundled models.dev snapshot unreadable: %v", err)
+		}
+	})
+	return c.providers, c.apis
 }
 
 // ContextLimit 返回 models.dev 里这个模型的 limit.context。
@@ -68,8 +81,7 @@ func (c *ModelsDevCatalog) ContextLimit(cfg ProviderConfig, model string) (int64
 	return c.limit(cfg, model, func(info ModelInfo) int64 { return info.ContextWindowTokens })
 }
 
-// limit 按「服务商 + 模型 ID」查 models.dev。只读缓存、不等网络：缓存为空或过期时
-// 在后台刷新，这一次按查不到处理，由调用方退回默认值。
+// limit 按「服务商 + 模型 ID」查 models.dev 快照。
 //
 // 查找顺序从严到宽：认得出服务商时，先精确匹配（和 opencode 一样），再去掉命名空间和
 // 档位后缀，再认网关加的前缀；认不出服务商（自建中转）时，在所有服务商里按模型 ID
@@ -82,12 +94,7 @@ func (c *ModelsDevCatalog) limit(cfg ProviderConfig, model string, pick func(Mod
 	if model == "" {
 		return 0, false
 	}
-	c.mu.Lock()
-	if len(c.providers) == 0 || time.Since(c.fetchedAt) >= modelsDevCacheTTL {
-		c.startRefreshLocked()
-	}
-	catalog, apis := c.providers, c.apis
-	c.mu.Unlock()
+	catalog, apis := c.data()
 	if len(catalog) == 0 {
 		return 0, false
 	}
@@ -183,56 +190,12 @@ func modelsDevLookupNames(model string) []string {
 	return names
 }
 
-// recoverCatalogRefreshPanic 让解析坏掉的 api.json 只丢掉这一次刷新，不拖垮进程。
-func recoverCatalogRefreshPanic() {
-	if recovered := recover(); recovered != nil {
-		log.Printf("llm: models.dev refresh panicked: %v", recovered)
-	}
-}
-
-// startRefreshLocked 在后台拉一次目录；已经在拉、或刚失败过就不再发起。
-func (c *ModelsDevCatalog) startRefreshLocked() {
-	if c.refreshing || len(c.providers) > 0 && time.Since(c.fetchedAt) < modelsDevCacheTTL {
-		return
-	}
-	if !c.lastAttempt.IsZero() && time.Since(c.lastAttempt) < modelsDevRetryInterval {
-		return
-	}
-	c.refreshing = true
-	c.lastAttempt = time.Now()
-	go func() {
-		defer recoverCatalogRefreshPanic()
-		ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
-		defer cancel()
-		_, _ = c.load(ctx)
-		c.mu.Lock()
-		c.refreshing = false
-		c.mu.Unlock()
-	}()
-}
-
-func NewModelsDevCatalog(client *http.Client) *ModelsDevCatalog {
-	return newModelsDevCatalog(client, modelsDevCatalogURL)
-}
-
-func newModelsDevCatalog(client *http.Client, endpoint string) *ModelsDevCatalog {
-	if client == nil {
-		client = &http.Client{Timeout: 45 * time.Second}
-	}
-	return &ModelsDevCatalog{client: client, url: endpoint}
-}
-
-func (c *ModelsDevCatalog) Enrich(ctx context.Context, cfg ProviderConfig, models []ModelInfo) []ModelInfo {
+// Enrich 给同步下来的模型列表补名称、模态和 token 上限；列表里已有的值不覆盖。
+func (c *ModelsDevCatalog) Enrich(_ context.Context, cfg ProviderConfig, models []ModelInfo) []ModelInfo {
 	if c == nil || len(models) == 0 {
 		return append([]ModelInfo(nil), models...)
 	}
-	catalog, err := c.load(ctx)
-	if err != nil {
-		return append([]ModelInfo(nil), models...)
-	}
-	c.mu.Lock()
-	apis := c.apis
-	c.mu.Unlock()
+	catalog, apis := c.data()
 	providers := modelsDevProviderIDs(cfg, apis)
 	if len(providers) == 0 {
 		return append([]ModelInfo(nil), models...)
@@ -266,45 +229,6 @@ func (c *ModelsDevCatalog) Enrich(ctx context.Context, cfg ProviderConfig, model
 		}
 	}
 	return out
-}
-
-// load 返回缓存的目录，过期时重新下载。下载期间不持锁：OutputLimit 在请求路径上
-// 读缓存，不能被一次慢下载卡住。并发时可能多下载一次，结果相同。
-func (c *ModelsDevCatalog) load(ctx context.Context) (map[string]map[string]ModelInfo, error) {
-	c.mu.Lock()
-	if len(c.providers) > 0 && time.Since(c.fetchedAt) < modelsDevCacheTTL {
-		providers := c.providers
-		c.mu.Unlock()
-		return providers, nil
-	}
-	c.mu.Unlock()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.url, nil)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Accept", "application/json")
-	resp, err := c.client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		return nil, modelListHTTPError{statusCode: resp.StatusCode}
-	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 32<<20))
-	if err != nil {
-		return nil, err
-	}
-	providers, apis, err := decodeModelsDevCatalog(body)
-	if err != nil {
-		return nil, err
-	}
-	c.mu.Lock()
-	c.providers = providers
-	c.apis = apis
-	c.fetchedAt = time.Now()
-	c.mu.Unlock()
-	return providers, nil
 }
 
 func decodeModelsDevCatalog(body []byte) (map[string]map[string]ModelInfo, map[string]string, error) {

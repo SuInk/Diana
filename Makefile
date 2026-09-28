@@ -42,10 +42,10 @@ export VITE_BACKEND_TARGET
 
 .DEFAULT_GOAL := help
 
-.PHONY: help dev backend frontend frontend-next deps deps-next fmt audit-public test test-go test-web build build-go build-local-mac install-local-mac-app start-local-mac build-web build-web-next run run-next preview clean docker-build docker-up docker-down
+.PHONY: help models-dev dev backend frontend frontend-next deps deps-next fmt audit-public test test-go test-web build build-go build-local-mac install-local-mac-app start-local-mac build-web build-web-next run run-next preview clean docker-build docker-up docker-down
 
 help:
-	@$(NODE) -e "console.log(['Diana Makefile','', 'Usage:', '  make dev                         Start Go backend and frontend-next', '  make dev BACKEND_PORT=18081      Start with custom backend port', '  make backend                     Start Go backend only', '  make frontend                    Start frontend-next only', '  make deps                        Install Go and frontend-next dependencies', '  make fmt                         Format Go code', '  make audit-public                Scan tracked files for private data and secrets', '  make test                        Run public audit, Go tests, and frontend-next build', '  make build                       Build frontend-next and backend binary', '  make build-local-mac             Build a stable macOS-signed binary', '  make install-local-mac-app       Install the Diana macOS app', '  make start-local-mac             Start the installed/local macOS build', '  make run                         Build frontend-next, then run backend', '  make clean                       Remove build artifacts', '  make docker-build                Build Docker image', '  make docker-up                   Start Docker Compose stack', '  make docker-down                 Stop Docker Compose stack'].join('\n'))"
+	@$(NODE) -e "console.log(['Diana Makefile','', 'Usage:', '  make dev                         Start Go backend and frontend-next', '  make dev BACKEND_PORT=18081      Start with custom backend port', '  make backend                     Start Go backend only', '  make frontend                    Start frontend-next only', '  make deps                        Install Go and frontend-next dependencies', '  make fmt                         Format Go code', '  make models-dev                  Refresh the bundled models.dev snapshot', '  make audit-public                Scan tracked files for private data and secrets', '  make test                        Run public audit, Go tests, and frontend-next build', '  make build                       Build frontend-next and backend binary', '  make build-local-mac             Build a stable macOS-signed binary', '  make install-local-mac-app       Install the Diana macOS app', '  make start-local-mac             Start the installed/local macOS build', '  make run                         Build frontend-next, then run backend', '  make clean                       Remove build artifacts', '  make docker-build                Build Docker image', '  make docker-up                   Start Docker Compose stack', '  make docker-down                 Stop Docker Compose stack'].join('\n'))"
 
 dev:
 	$(NODE) scripts/dev.mjs
@@ -70,6 +70,10 @@ fmt:
 
 audit-public:
 	./scripts/check-public-repo.sh
+
+# 刷新随版本打包的 models.dev 快照（上下文窗口、模态），改完随代码一起提交。
+models-dev:
+	cd model/llm && $(GO) generate -run models_dev_gen.go .
 
 test: audit-public test-go test-web
 

@@ -15,8 +15,8 @@ import (
 	"time"
 )
 
-// testModelsDevOutputLimits 是测试用的 models.dev 片段。测试不许真的去拉 models.dev：
-// init 里就把目录换成这份本地数据，且标成刚取过，后台刷新不会触发。
+// testModelsDevOutputLimits 是测试用的 models.dev 片段：测试不依赖随版本打包的快照
+// 内容，init 里就把目录换成这份固定数据。
 var testModelsDevOutputLimits = map[string]map[string]ModelInfo{
 	"anthropic": {
 		"claude-opus-4-6":            {ID: "claude-opus-4-6", MaxOutputTokens: 128000},
@@ -46,7 +46,9 @@ var testModelsDevAPIs = map[string]string{
 }
 
 func init() {
-	modelLimitCatalog = &ModelsDevCatalog{providers: testModelsDevOutputLimits, apis: testModelsDevAPIs, fetchedAt: time.Now().Add(100 * 365 * 24 * time.Hour)}
+	catalog := &ModelsDevCatalog{providers: testModelsDevOutputLimits, apis: testModelsDevAPIs}
+	catalog.once.Do(func() {})
+	modelLimitCatalog = catalog
 }
 
 func TestResolveMaxOutputTokensOnlyWhenNeeded(t *testing.T) {
@@ -85,34 +87,6 @@ func TestOutputTokenCeilingConfigurable(t *testing.T) {
 	}
 }
 
-// 查 models.dev 在请求路径上只读缓存：缓存为空时不等网络，后台取回后才查得到。
-func TestModelsDevOutputLimitRefreshesInBackground(t *testing.T) {
-	release := make(chan struct{})
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		<-release
-		_, _ = w.Write([]byte(`{"anthropic":{"models":{"claude-x":{"limit":{"context":200000}}}}}`))
-	}))
-	defer server.Close()
-	catalog := newModelsDevCatalog(server.Client(), server.URL)
-	cfg := ProviderConfig{Provider: ProviderAnthropic}
-	if _, ok := catalog.ContextLimit(cfg, "claude-x"); ok {
-		t.Fatal("empty cache should miss instead of waiting for the network")
-	}
-	close(release)
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		if limit, ok := catalog.ContextLimit(cfg, "claude-x"); ok {
-			if limit != 200000 {
-				t.Fatalf("limit = %d, want 200000", limit)
-			}
-			return
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	t.Fatal("background refresh never filled the cache")
-}
-
-// 代发值只下发，不进预算；按上下文剩余空间收紧时，至少留出预算预留的那份。
 func TestImplicitMaxOutputTokensClampsToContextRoom(t *testing.T) {
 	cfg := ProviderConfig{Provider: ProviderAnthropic}
 	big := GenerateRequest{Model: "claude-opus-4-6", MaxContextTokens: 128000, Messages: []Message{{Role: RoleUser, Content: strings.Repeat("a", 300000)}}}
