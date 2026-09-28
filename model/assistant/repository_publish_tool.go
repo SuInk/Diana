@@ -288,6 +288,8 @@ type repositoryIssueAPIError struct {
 	Code      string
 	Status    int
 	Uncertain bool
+	// RenamedTo 是 GitHub 报告的仓库新全名，只在 Code 为 repository_renamed 时有值。
+	RenamedTo string
 }
 
 type repositoryIssueMarkerMatch int
@@ -1653,11 +1655,24 @@ func (t *dianaGitHubTool) executeDraft(ctx context.Context, draft repositoryIssu
 	if operation != "create" && operation != "update" && operation != "comment" && operation != "review" && operation != "close" && operation != "reopen" {
 		return result.fail("invalid_operation", "草稿记录的操作无法执行。")
 	}
+	// 草稿确认过之后仓库在 GitHub 上改了名：旧名的 REST 请求会被 301，GraphQL 返回的
+	// 链接又全是新名，按旧名写一定失败。GitHub 认定是同一个仓库，确认的也是这份内容，
+	// 所以直接换成新名写入，并在回复里说明。
+	repository := draft.Repository
+	renamedFrom := ""
+	if current := t.currentRepositoryName(ctx, repository); current != "" && !strings.EqualFold(current, repository) {
+		renamedFrom, repository = repository, current
+		draft.Repository = current
+		result.Repository = current
+	}
 	var executed repositoryIssueResult
 	if targets := repositoryIssueBatchTargets(writeInput); len(targets) > 1 {
-		executed = t.executeBatch(ctx, draft.Repository, operation, writeInput, targets)
+		executed = t.executeBatch(ctx, repository, operation, writeInput, targets)
 	} else {
-		executed = t.executeWrite(ctx, draft.Repository, operation, writeInput)
+		executed = t.executeWrite(ctx, repository, operation, writeInput)
+	}
+	if renamedFrom != "" {
+		executed.Message = fmt.Sprintf("仓库 %s 已改名为 %s，已按新名执行。", renamedFrom, repository) + executed.Message
 	}
 	executed.Operation = operationName
 	executed.Draft = repositoryIssueDraftViewFromDraft(draft)
@@ -2111,6 +2126,9 @@ func (t *dianaGitHubTool) create(ctx context.Context, repository string, input m
 
 	issues, apiErr := t.listRecentIssues(ctx, repository)
 	if apiErr != nil {
+		if apiErr.Code == "repository_renamed" {
+			return result.fail(apiErr.Code, repositoryIssueRenamedMessage(repository, apiErr.RenamedTo))
+		}
 		return result.fail(apiErr.Code, t.failureMessage(apiErr.Code))
 	}
 	if existing, ok := repositoryIssueWithAnyMarker(issues, marker, legacyMarker); ok {
@@ -2523,8 +2541,44 @@ func (t *dianaGitHubTool) listRecentIssues(ctx context.Context, repository strin
 	return issues, nil
 }
 
+const repositoryPublishNameGraphQLQuery = `query($owner: String!, $name: String!) {
+  repository(owner: $owner, name: $name) { nameWithOwner }
+}`
+
+// currentRepositoryName 查仓库在 GitHub 上现在的全名；改过名时 GraphQL 按旧名也能解析到
+// 同一个仓库。没有凭据或查询失败返回空串，调用方按原名继续。
+func (t *dianaGitHubTool) currentRepositoryName(ctx context.Context, repository string) string {
+	if t == nil || t.plugin == nil || t.plugin.client == nil {
+		return ""
+	}
+	owner, name, ok := strings.Cut(repository, "/")
+	if !ok || owner == "" || name == "" {
+		return ""
+	}
+	token, credentialErr := t.repositoryPublishCredential(ctx, repository)
+	if credentialErr != nil || strings.TrimSpace(token) == "" {
+		return ""
+	}
+	var data struct {
+		Repository *struct {
+			NameWithOwner string `json:"nameWithOwner"`
+		} `json:"repository"`
+	}
+	requestCtx, cancel := context.WithTimeout(ctx, t.requestTimeout())
+	defer cancel()
+	if err := postGitHubGraphQL(requestCtx, t.plugin.client, t.plugin.baseURL, token, "Diana-Repository-Issues", repositoryPublishNameGraphQLQuery, map[string]any{"owner": owner, "name": name}, &data); err != nil || data.Repository == nil {
+		return ""
+	}
+	current := strings.TrimSpace(data.Repository.NameWithOwner)
+	if _, _, ok := strings.Cut(current, "/"); !ok {
+		return ""
+	}
+	return current
+}
+
 const repositoryPublishIssuesGraphQLQuery = `query($owner: String!, $name: String!, $after: String) {
   repository(owner: $owner, name: $name) {
+    nameWithOwner
     issues(first: 100, after: $after, orderBy: {field: UPDATED_AT, direction: DESC}) {
       pageInfo { hasNextPage endCursor }
       nodes { number title body state url updatedAt closedAt labels(first: 20) { nodes { name } } }
@@ -2551,7 +2605,8 @@ func (t *dianaGitHubTool) listIssuesGraphQL(ctx context.Context, repository stri
 	for page := 1; page <= repositoryIssueListMaxPages; page++ {
 		var data struct {
 			Repository *struct {
-				Issues struct {
+				NameWithOwner string `json:"nameWithOwner"`
+				Issues        struct {
 					PageInfo struct {
 						HasNextPage bool   `json:"hasNextPage"`
 						EndCursor   string `json:"endCursor"`
@@ -2578,6 +2633,12 @@ func (t *dianaGitHubTool) listIssuesGraphQL(ctx context.Context, repository stri
 		cancel()
 		if err != nil || data.Repository == nil {
 			return nil, nil, false
+		}
+		// GraphQL 按旧名也能查到改过名的仓库，但返回的 Issue 链接全是新名，逐条比对会
+		// 被当成「别的仓库的 Issue」报 invalid_response，重试多少次都一样。草稿审批会先
+		// 换成新名（见 executeDraft），走到这里说明调用方没换，照实报出新名。
+		if current := strings.TrimSpace(data.Repository.NameWithOwner); current != "" && !strings.EqualFold(current, repository) {
+			return nil, &repositoryIssueAPIError{Code: "repository_renamed", RenamedTo: current}, true
 		}
 		for _, node := range data.Repository.Issues.Nodes {
 			if !validRepositoryIssueCanonicalURL(node.URL, repository, "issues", node.Number) {
@@ -3436,6 +3497,10 @@ func (t *dianaGitHubTool) failureMessage(code string) string {
 	return message
 }
 
+func repositoryIssueRenamedMessage(repository, renamedTo string) string {
+	return fmt.Sprintf("仓库 %s 已在 GitHub 上改名为 %s，操作已停止。请把 %s 加进 allowlist，再用新名重新发起草稿。", repository, renamedTo, renamedTo)
+}
+
 func repositoryIssueFailureMessage(code string) string {
 	switch code {
 	case "unauthorized":
@@ -3461,8 +3526,10 @@ func repositoryIssueFailureMessage(code string) string {
 		return "目标编号不是 Pull Request；pull_files 和 review 只能用于 PR，Issue 请用 get 或 comment。"
 	case "gone":
 		return "GitHub 端点或资源已不可用。"
+	case "repository_renamed":
+		return "目标仓库已在 GitHub 上改名，操作已停止；请用新名更新 allowlist 并重新发起草稿。"
 	case "redirect_refused":
-		return "GitHub 返回了仓库重定向；为避免跨仓库误写，操作已停止，请更新并重新确认目标 allowlist。"
+		return "GitHub 返回了仓库重定向，仓库可能已改名或转移；为避免跨仓库误写，操作已停止，请用仓库现在的名字更新 allowlist 并重新发起。"
 	case "validation_failed":
 		return "GitHub 拒绝了字段校验；请检查标题、标签、负责人或里程碑。"
 	case "operation_id_conflict":

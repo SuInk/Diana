@@ -24,6 +24,7 @@ type graphQLRepoServer struct {
 	graphQLVars   []map[string]any
 	restIssueHits int
 	failGraphQL   bool
+	nameWithOwner string
 	pullQueries   []string
 	events        [][]map[string]any
 	eventPages    []string
@@ -56,10 +57,14 @@ func (s *graphQLRepoServer) handler(w http.ResponseWriter, r *http.Request) {
 		if page < len(s.issuePages) {
 			nodes = s.issuePages[page]
 		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"repository": map[string]any{"issues": map[string]any{
+		repository := map[string]any{"issues": map[string]any{
 			"pageInfo": map[string]any{"hasNextPage": page+1 < len(s.issuePages), "endCursor": fmt.Sprintf("cursor-%d", page+1)},
 			"nodes":    nodes,
-		}}}})
+		}}
+		if s.nameWithOwner != "" {
+			repository["nameWithOwner"] = s.nameWithOwner
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"repository": repository}})
 	case r.URL.Path == "/repos/acme/demo/issues":
 		s.restIssueHits++
 		items := make([]map[string]any, 0, 100)
@@ -221,5 +226,84 @@ func TestRepositoryIssueRecentScanUsesGraphQL(t *testing.T) {
 	server.mu.Unlock()
 	if _, apiErr := tool.listRecentIssues(context.Background(), "acme/demo"); apiErr == nil || apiErr.Code != "idempotency_scan_incomplete" {
 		t.Fatalf("超过翻页上限应报扫描不完整：%#v", apiErr)
+	}
+}
+
+// 仓库改名后 GraphQL 按旧名仍能查到，但链接全是新名。以前逐条比对报 invalid_response，
+// 现在要认出改名、带回新名，也不能退回 REST 或当成扫描成功。
+func TestRepositoryIssueRecentScanReportsRenamedRepository(t *testing.T) {
+	now := time.Now().UTC()
+	server := &graphQLRepoServer{issuePages: [][]map[string]any{{graphQLIssueNode(2, "OPEN", now, nil)}}, nameWithOwner: "acme/demo-next"}
+	httpServer := httptest.NewServer(http.HandlerFunc(server.handler))
+	defer httpServer.Close()
+	tool := newDianaGitHubTool(NewRuntime(BotConfig{OwnerID: "owner"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil),
+		MessageEvent{Kind: EventKindPrivate, UserID: "owner"}, newRepositoryPublishPlugin(httpServer.Client(), httpServer.URL),
+		SettingValues{repositoryPublishSettingToken: "test-token", repositoryPublishSettingAllowlist: "acme/demo", repositoryPublishSettingTimeout: 5})
+	_, apiErr := tool.listRecentIssues(context.Background(), "acme/demo")
+	if apiErr == nil || apiErr.Code != "repository_renamed" || apiErr.RenamedTo != "acme/demo-next" || server.restIssueHits != 0 {
+		t.Fatalf("改名应报 repository_renamed 并带回新名：%#v rest=%d", apiErr, server.restIssueHits)
+	}
+	if message := repositoryIssueRenamedMessage("acme/demo", apiErr.RenamedTo); !strings.Contains(message, "acme/demo-next") {
+		t.Fatalf("提示里要有新名：%s", message)
+	}
+
+	server.mu.Lock()
+	server.nameWithOwner = "Acme/Demo"
+	server.mu.Unlock()
+	if _, apiErr := tool.listRecentIssues(context.Background(), "acme/demo"); apiErr != nil {
+		t.Fatalf("只差大小写不算改名：%#v", apiErr)
+	}
+}
+
+// 草稿确认后仓库改了名：旧名的 REST 请求会被 301 拒掉，审批要换成新名写进去，并在回复里说明。
+func TestRepositoryIssueDraftFollowsRenamedRepository(t *testing.T) {
+	var mu sync.Mutex
+	var paths []string
+	httpServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		paths = append(paths, r.Method+" "+r.URL.Path)
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.URL.Path == "/graphql":
+			_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"repository": map[string]any{"nameWithOwner": "acme/demo-next"}}})
+		case strings.HasPrefix(r.URL.Path, "/repos/acme/demo/"):
+			w.Header().Set("Location", "https://api.github.com/repositories/1"+strings.TrimPrefix(r.URL.Path, "/repos/acme/demo"))
+			w.WriteHeader(http.StatusMovedPermanently)
+		case r.Method == http.MethodGet && r.URL.Path == "/repos/acme/demo-next/issues/7":
+			_ = json.NewEncoder(w).Encode(map[string]any{"number": 7, "title": "t", "state": "open", "html_url": "https://github.com/acme/demo-next/issues/7"})
+		case r.Method == http.MethodGet && r.URL.Path == "/repos/acme/demo-next/issues/7/comments":
+			_ = json.NewEncoder(w).Encode([]any{})
+		case r.Method == http.MethodPost && r.URL.Path == "/repos/acme/demo-next/issues/7/comments":
+			w.WriteHeader(http.StatusCreated)
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": 1, "html_url": "https://github.com/acme/demo-next/issues/7#issuecomment-1"})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer httpServer.Close()
+	plugin := newRepositoryPublishPlugin(httpServer.Client(), httpServer.URL)
+	tool := newDianaGitHubTool(NewRuntime(BotConfig{OwnerID: "owner"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil),
+		MessageEvent{Kind: EventKindPrivate, UserID: "owner"}, plugin,
+		SettingValues{repositoryPublishSettingToken: "test-token", repositoryPublishSettingAllowlist: "acme/demo", repositoryPublishSettingTimeout: 5})
+	draft, err := plugin.saveDraft(context.Background(), repositoryIssueDraft{
+		GroupID: "private:owner", Repository: "acme/demo", RequesterID: "owner",
+		Input: map[string]any{"operation": "comment", "number": 7, "body": "跟进一下"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := tool.executeDraft(context.Background(), draft, map[string]any{}, "approve")
+	if !result.OK || result.Repository != "acme/demo-next" || !strings.Contains(result.Message, "已改名为 acme/demo-next") {
+		t.Fatalf("改名后应按新名写入并说明：%#v paths=%v", result, paths)
+	}
+	for _, path := range paths {
+		if strings.Contains(path, "/repos/acme/demo/") {
+			t.Fatalf("不该再用旧名请求 REST：%v", paths)
+		}
+	}
+	saved, ok, err := plugin.findResolvedDraft(context.Background(), "private:owner", draft.ID)
+	if err != nil || !ok || saved.Repository != "acme/demo-next" {
+		t.Fatalf("草稿记录应更新成新名：%#v ok=%v err=%v", saved, ok, err)
 	}
 }

@@ -144,7 +144,7 @@ func TestRepositoryIssueCommentPreflightFailureStopsPOST(t *testing.T) {
 					_ = json.NewEncoder(w).Encode(githubRepositoryIssue{Number: 9, Title: "tracked", State: "open", HTMLURL: "https://github.com/acme/demo/issues/9"})
 				case r.Method == http.MethodGet && r.URL.Path == "/repos/acme/demo/issues/9/comments":
 					test.write(w)
-				case r.Method == http.MethodPost:
+				case r.Method == http.MethodPost && r.URL.Path != "/graphql": // GraphQL 是只读查询，不算写入
 					postHits.Add(1)
 					w.WriteHeader(http.StatusCreated)
 					_ = json.NewEncoder(w).Encode(githubIssueComment{HTMLURL: "https://example.invalid/comment"})
@@ -574,7 +574,7 @@ func TestRepositoryIssueCommentScansLastPageAndFailsClosedOnUnknownPagination(t 
 						return
 					}
 					_ = json.NewEncoder(w).Encode(test.lastPage)
-				case r.Method == http.MethodPost:
+				case r.Method == http.MethodPost && r.URL.Path != "/graphql": // GraphQL 是只读查询，不算写入
 					posts.Add(1)
 					http.Error(w, `{"message":"unexpected"}`, http.StatusInternalServerError)
 				default:
