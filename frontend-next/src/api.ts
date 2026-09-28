@@ -38,7 +38,7 @@ export interface LLMConfig {
   user_agent?: string;
   headers?: Record<string, string>;
   temperature?: number | null;
-  /** 用户手填的覆盖值；0 或缺省表示按当前模型自动判断。 */
+  /** 用户手填的窗口；WebUI 保存时必填，老配置缺省时按兜底值 128000。 */
   context_window_tokens?: number;
   max_context_tokens?: number;
   /** 只读回显：机器人模型分配里指向这套配置的用途，用来说明改它会影响谁。 */
@@ -82,6 +82,7 @@ export interface LLMModelInfo {
   created?: number;
   input_modalities?: string[];
   output_modalities?: string[];
+  context_window_tokens?: number;
 }
 
 export interface LLMModelsResponse {

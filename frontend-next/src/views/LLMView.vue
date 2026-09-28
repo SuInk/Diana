@@ -327,9 +327,19 @@
         </div>
         <div class="field wide">
           <label for="llm-window">模型上下文窗口</label>
-          <input id="llm-window" v-model="form.context_window_tokens" class="input" inputmode="numeric" :placeholder="contextWindowPlaceholder" />
+          <input
+            id="llm-window"
+            v-model="form.context_window_tokens"
+            class="input"
+            inputmode="numeric"
+            required
+            :class="{ invalid: invalidField === 'context_window_tokens' }"
+            :aria-invalid="invalidField === 'context_window_tokens'"
+            placeholder="必填，例如 128000"
+            @input="clearInvalid('context_window_tokens')"
+          />
           <span class="hint">
-            只填你想强制覆盖的值。{{ effectiveContextHint }}
+            {{ effectiveContextHint }}
             <template v-if="contextWindowBindings.length > 0">在用这套配置的用途：</template>
           </span>
           <ul v-if="contextWindowBindings.length > 0" class="hint context-binding-list">
@@ -772,7 +782,12 @@ function startEdit(profile: LLMConfig): void {
     oauth_provider: profile.oauth_provider ?? "",
     user_agent: profile.user_agent ?? "",
     description: profile.description ?? "",
-    context_window_tokens: profile.context_window_tokens ? String(profile.context_window_tokens) : "",
+    // 老配置没填窗口时拿模型清单里的数先填上，保存前人能看到、能改。
+    context_window_tokens: profile.context_window_tokens
+      ? String(profile.context_window_tokens)
+      : profile.catalog_context_window_tokens
+        ? String(profile.catalog_context_window_tokens)
+        : "",
     max_output_tokens: profile.max_output_tokens ? String(profile.max_output_tokens) : "",
   };
   // 凭据方式跟着这份配置走：绑了提供商就停在「授权登录」，否则回到 API Key。
@@ -795,31 +810,17 @@ function optionalTokenInput(raw: string): number {
 
 
 
-// 编辑器里这两个框留空是常态，所以要如实说明「留空时到底用多少、这个数哪来的」，
-// 而不是把推断值预填进输入框冒充用户设置。
-// 窗口只认手填：不填就是兜底值，不再按模型清单或模型名去猜。清单里的数只作参考。
-// 四个可选数值框统一一套占位符约定：灰字只写「留空会怎样」，不写「建议你填什么」。
+// 窗口必须手填：留空时按 128,000 兜底，和模型真实窗口对不上，历史预算、压缩时机
+// 全跟着错。清单里的数只作参考，打开编辑器时替人先填上，保存前能看到。
 //
-// Temperature 和最大输出以前写的是建议值（0.7 / 1024），而灰色的数字看起来和已经
-// 生效的设置几乎一样——有人据此以为系统默认温度就是 0.7，其实留空时这个参数根本
-// 不发。窗口那个更糟：占位符写着「跟随模型」，下面的说明却写着「留空按 128,000
-// 计算，不会自动去猜模型的真实窗口」，两句话直接打架。
-const contextWindowPlaceholder = computed(() => {
-  const window = editingProfile.value?.effective_context_window_tokens;
-  return window ? `默认 ${window.toLocaleString("en-US")}` : "默认内置兜底值";
-});
-
+// Temperature 和最大输出的灰字只写「留空会怎样」，不写建议值：灰色的数字看起来
+// 和已经生效的设置几乎一样，有人据此以为系统默认温度就是 0.7。
 const effectiveContextHint = computed(() => {
   const profile = editingProfile.value;
-  const window = profile?.effective_context_window_tokens;
-  if (profile?.context_window_source === "user" && window) {
-    return `当前生效 ${window.toLocaleString("en-US")}，这套配置统一用它。`;
-  }
-  const fallback = window ? window.toLocaleString("en-US") : "内置兜底值";
   const reference = profile?.catalog_context_window_tokens
-    ? `模型清单里 ${profile.model} 写的是 ${profile.catalog_context_window_tokens.toLocaleString("en-US")}，可以照着填。`
+    ? `模型清单里 ${profile.model} 写的是 ${profile.catalog_context_window_tokens.toLocaleString("en-US")}。`
     : "";
-  return `留空按 ${fallback} 计算，不会自动去猜模型的真实窗口。${reference}`;
+  return `按模型真实的上下文窗口填，历史预算和压缩时机都按它算。${reference}`;
 });
 
 // 最大输出留空按模型上限发（最多 65,536），免得长文件写进工具参数时被网关的缺省值
@@ -876,6 +877,14 @@ const contextWindowBindings = computed(() =>
 // 件事：机器人页的「模型分配」按用途挑模型，挑的就是列表里的项，这个字段只是
 // 后端在没有任何分配时的兜底。让人再填一遍，只会填出一个不在列表里的值——那时
 // 兜底指向一个这套配置里根本没有的模型。现在跟着列表走，选不出不一致的状态。
+// 新建或换模型时窗口还空着，就拿模型清单里的数先填上；已经填了的不动。
+watch([() => form.value.model, modelOptions], () => {
+  if (!editorOpen.value || form.value.context_window_tokens.trim() !== "") return;
+  const model = resolvedDefaultModel();
+  const window = modelOptions.value.find((item) => item.id === model)?.context_window_tokens;
+  if (window) form.value.context_window_tokens = String(window);
+});
+
 function resolvedDefaultModel(): string {
   const current = form.value.model.trim();
   if (current !== "" && modelOptions.value.some((model) => model.id === current)) {
@@ -945,10 +954,10 @@ function formToPayload(): LLMConfig {
     headers: form.value.provider === "openai_compatible" ? headersFromRows() : {},
     description: form.value.description.trim() || undefined
   };
-  // 窗口必须每次都提交：留空表示「改回按模型自动推断」，省略掉的话后端会当成
-  // 「这个客户端没提交」而保留旧值，于是填过的数字永远删不掉。
+  // 窗口保存前已校验必填，这里照常提交。
   //
-  // 最大输出同理，留空表示改回按模型上限。
+  // 最大输出必须每次都提交：留空表示改回按模型上限，省略掉的话后端会当成「这个
+  // 客户端没提交」而保留旧值，于是填过的数字永远删不掉。
   //
   // temperature、max_context_tokens 界面上没有入口，所以一律不提交——nil 在后端
   // 表示「没碰过」，通过 API 设过值的部署不会被这个表单悄悄清掉。
@@ -970,6 +979,12 @@ function closeEditor(): void {
 }
 
 async function save(): Promise<void> {
+  const window = Number(form.value.context_window_tokens.trim());
+  if (!Number.isInteger(window) || window < 1024) {
+    invalidField.value = "context_window_tokens";
+    toastError("请填写模型上下文窗口（至少 1024）");
+    return;
+  }
   // 一个模型都没有就没法保存：兜底模型和机器人页的模型分配都得从这个列表里取。
   if (modelOptions.value.length === 0) {
     const resolved = await loadModels(true);

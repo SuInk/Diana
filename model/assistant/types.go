@@ -787,7 +787,8 @@ type BotConfig struct {
 	// 模型只有 32K，这里填 200K 也不会真的发出 200K 的请求。
 	MaxContextTokens int64 `json:"max_context_tokens,omitempty"`
 	// RecentHistoryTokenBudget 限定正式回复提示词里近期聊天历史最多占多少 token。
-	// 0 表示用默认值。生效值还要再按窗口份额收一次，所以它只能收紧不能放宽。
+	// 0 表示用默认值 16000；可以往上调，但最多到 MaximumRecentHistoryTokenBudget，
+	// 生效值还要再按窗口份额收一次。
 	//
 	// 这里用 token 而不是条数：要钉住的成本、窗口和延迟三样都按 token 计价，而一条
 	// 群消息可能是十几 token 的表情占位，也可能是三千 token 的长粘贴——按条数配，

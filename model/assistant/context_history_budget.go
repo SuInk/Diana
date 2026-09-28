@@ -35,6 +35,11 @@ const (
 	// 300–600 条。它按群聊场景估算，没有实测支撑，所以做成可配置而不是常量：
 	// 长期只用到一半说明虚高，长期顶满说明该调大。
 	DefaultRecentHistoryTokenBudget int64 = 16000
+	// MaximumRecentHistoryTokenBudget 是配置能放宽到的最高值。只有窗口份额兜底时，
+	// 在 128K 窗口里填上窗口大小会让每条群消息带进 70K、几百上千条、跨一个多月的
+	// 历史——生产上就这样把正式回复顶到了 10 万 token。再往上的历史价值已经可以
+	// 忽略，要更远的内容走摘要、记忆和聊天记录工具。
+	MaximumRecentHistoryTokenBudget int64 = 32000
 	// sessionThreadTokenCeiling 限制会话线程便签。它天然只有几百字，撞上限通常
 	// 说明模型把已完结话题囤在了 thread 里，而不是预算不够。
 	sessionThreadTokenCeiling int64 = 1200
@@ -57,14 +62,20 @@ func contextLayerBudget(contextWindow, share, ceiling int64) int64 {
 	return budget
 }
 
-// recentHistoryBudget 返回本轮近期历史的 token 预算。配置值只能收紧不能放宽：
-// 填得比窗口份额还大时仍按份额走，否则单群配置能绕过窗口保护。
-func recentHistoryBudget(contextWindow int64, cfg BotConfig) int64 {
+// recentHistoryCeiling 返回近期历史的绝对上限：没填按默认值，填得再大也不超过
+// MaximumRecentHistoryTokenBudget。
+func recentHistoryCeiling(cfg BotConfig) int64 {
 	ceiling := cfg.RecentHistoryTokenBudget
 	if ceiling <= 0 {
 		ceiling = DefaultRecentHistoryTokenBudget
 	}
-	return contextLayerBudget(contextWindow, recentHistoryTokenShare, ceiling)
+	return min(ceiling, MaximumRecentHistoryTokenBudget)
+}
+
+// recentHistoryBudget 返回本轮近期历史的 token 预算。绝对上限之外还要再按窗口
+// 份额收一次，否则单群配置能绕过小窗口的保护。
+func recentHistoryBudget(contextWindow int64, cfg BotConfig) int64 {
+	return contextLayerBudget(contextWindow, recentHistoryTokenShare, recentHistoryCeiling(cfg))
 }
 
 // sessionThreadBudget 返回会话线程便签的 token 预算。
@@ -693,10 +704,7 @@ func (r *Runtime) ContextBudgetBreakdownForGroup(groupID string) ContextBudgetBr
 	cfg := r.effectiveConfigForEvent(event)
 	window := r.promptContextWindowTokens(event, cfg)
 
-	historyCeiling := cfg.RecentHistoryTokenBudget
-	if historyCeiling <= 0 {
-		historyCeiling = DefaultRecentHistoryTokenBudget
-	}
+	historyCeiling := recentHistoryCeiling(cfg)
 	breakdown := ContextBudgetBreakdown{
 		GroupID:       event.GroupID,
 		ContextWindow: window,

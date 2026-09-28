@@ -1639,7 +1639,8 @@
               <div class="field">
                 <label for="bot-history-budget">回复历史 token 预算</label>
                 <input id="bot-history-budget" v-model.number="form.recent_history_token_budget" class="input" inputmode="numeric" placeholder="留空按 16000" />
-                <span class="hint">正式回复里聊天历史最多占多少 token，16000 大致相当于普通群聊 300–600 条；同时受模型窗口 55% 约束，填了只会收紧不会放宽。</span>
+                <span class="hint">正式回复里聊天历史最多占多少 token，16000 大致相当于普通群聊 300–600 条。最多只能调到 32000，同时不超过模型窗口的 55%。更早的内容靠摘要、记忆和聊天记录工具找回。</span>
+                <span v-if="(form.recent_history_token_budget ?? 0) > 32000" class="hint warn-text">超过 32000 的部分不生效，按 32000 算。</span>
               </div>
               <div class="field">
                 <label for="bot-maxcontext">单次请求上下文上限</label>
