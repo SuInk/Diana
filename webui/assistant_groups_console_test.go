@@ -657,3 +657,40 @@ func TestConsoleGroupsShareListAcrossSameConnection(t *testing.T) {
 		t.Fatalf("同一条连接问了 %d 次群列表", got)
 	}
 }
+
+// 拉取失败后短时间内不再回源：卡住的机器人不能让每次打开页面都等满超时。
+// 手动刷新不受这个限制。
+func TestConsoleGroupsBacksOffAfterFailure(t *testing.T) {
+	channel := &countingGroupListChannel{result: map[string]any{"items": []any{}}}
+	channel.fail.Store(true)
+	runtime := assistant.NewRuntime(assistant.DefaultBotConfig(), channel, assistant.NewDefaultPluginManager(), nil, nil, nil, nil)
+	handler := NewBotHandler(context.Background(), runtime)
+	for range 3 {
+		if _, ok, warning := handler.liveConsoleGroups(t.Context(), "", false); ok || warning == "" {
+			t.Fatalf("失败时应给出提示：ok=%v warning=%q", ok, warning)
+		}
+	}
+	if got := channel.calls.Load(); got != 1 {
+		t.Fatalf("失败后仍在反复回源：%d 次", got)
+	}
+	_, _, _ = handler.liveConsoleGroups(t.Context(), "", true)
+	if got := channel.calls.Load(); got != 2 {
+		t.Fatalf("手动刷新应绕过失败退避：%d 次", got)
+	}
+}
+
+// 事件页的群名只读现成缓存，Telegram 这类平台不为几个名字挨个去问平台接口。
+func TestEventGroupNamesReadsCacheOnly(t *testing.T) {
+	runtime := &groupInfoStubRuntime{name: "不该被问到", found: true}
+	handler := newGroupNameHandler(runtime)
+	handler.groupNameCache["tg-profile\x00-1001"] = groupNameCacheEntry{name: "读书会", fetchedAt: time.Now()}
+	names := handler.eventGroupNames(t.Context(), "tg-profile")
+	if names["-1001"] != "读书会" {
+		t.Fatalf("names = %#v", names)
+	}
+	runtime.mu.Lock()
+	defer runtime.mu.Unlock()
+	if runtime.calls != 0 {
+		t.Fatalf("事件页为群名打了 %d 次平台接口", runtime.calls)
+	}
+}
