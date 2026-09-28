@@ -23,6 +23,31 @@ import (
 // sendForwardNodesWithResult，那条路把封群、回复抑制、打断这几道守卫都各自
 // 复制了一遍，唯独没有内容审核——卡片里装的恰恰是最该看一眼的东西。
 
+// 同一段话只审一次：回复链路上已经实际审过账号安全的回复，改成合并转发发出时卡片
+// 不再审第二遍。只认「审过的就是这段文字」，别的一律照审——审核开关关着、审核调用
+// 挂掉放行的、子任务和编程报告这类没走回复链路的长文，卡片这道仍是它们唯一的审核。
+type replyAccountSafetyAuditedContextKey struct{}
+
+func withReplyAccountSafetyAudited(ctx context.Context, reply string) context.Context {
+	return context.WithValue(ctx, replyAccountSafetyAuditedContextKey{}, strings.TrimSpace(reply))
+}
+
+func replyAccountSafetyAudited(ctx context.Context, reply string) bool {
+	audited, ok := ctx.Value(replyAccountSafetyAuditedContextKey{}).(string)
+	return ok && audited != "" && audited == strings.TrimSpace(reply)
+}
+
+type forwardSafetyAuditSkippedContextKey struct{}
+
+func withForwardSafetyAuditSkipped(ctx context.Context) context.Context {
+	return context.WithValue(ctx, forwardSafetyAuditSkippedContextKey{}, true)
+}
+
+func forwardSafetyAuditSkipped(ctx context.Context) bool {
+	skipped, _ := ctx.Value(forwardSafetyAuditSkippedContextKey{}).(bool)
+	return skipped
+}
+
 // forwardNodeAuditText 把转发节点里会显示给人看的文字抽出来。
 //
 // 作者昵称也要审：截图里出事的就是这一处，正文尚可，发帖人昵称本身带着违禁词。
@@ -95,7 +120,7 @@ func segmentDataString(data any, key string) string {
 // 审核失败（超时、报错、返回读不出来）时放行，和 auditReplyAccountSafety 的既有
 // 取舍一致：审核挂掉不该让机器人整个哑掉。返回的错误只有「审出来不该发」这一种。
 func (r *Runtime) auditForwardNodesSafety(ctx context.Context, event MessageEvent, nodes []map[string]any) error {
-	if r == nil || len(nodes) == 0 {
+	if r == nil || len(nodes) == 0 || forwardSafetyAuditSkipped(ctx) {
 		return nil
 	}
 	text := forwardNodeAuditText(nodes)

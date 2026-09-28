@@ -4726,6 +4726,9 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	if err != nil {
 		return "", err
 	}
+	if !prepared.skip && prepared.need.AccountSafety && prepared.err == nil && prepared.reply == reply {
+		sendBaseCtx = withReplyAccountSafetyAudited(sendBaseCtx, reply)
+	}
 	controlIntent.RefuseCurrent = controlIntent.RefuseCurrent || auditIntent.RefuseCurrent
 	controlIntent.fatigue = auditIntent.fatigue
 	if ruleMatched && ruleDecision.Rule.Action == ReplyRuleActionVoice {
@@ -7190,7 +7193,7 @@ func (r *Runtime) sendDecorated(ctx context.Context, event MessageEvent, reply s
 			return nil, ctx.Err()
 		}
 		// 卡片被账号安全审核拦下时不能退回逐条发送：逐条发的是同一段文字，那条路
-		// 不再审核。卡片审核不跟审核总开关走，总开关关着时这里是它唯一一次审核。
+		// 不再审核。卡片只在回复链路没审过这段话时才审，这时它是唯一一次审核。
 		var safetyErr *replyAccountSafetyRejectedError
 		if errors.As(err, &safetyErr) {
 			return nil, err
@@ -7795,6 +7798,7 @@ func (r *Runtime) sendForwardReply(ctx context.Context, event MessageEvent, repl
 }
 
 func (r *Runtime) sendForwardReplyWithResult(ctx context.Context, event MessageEvent, reply string, cfg BotConfig) (string, error) {
+	original := reply
 	reply, event = prepareReplyDelivery(reply, event)
 	// 合并转发的节点承载不了 reply 段，标记只能剥掉，免得作为文本进转发卡片。
 	if _, rest, ok := consumeOutgoingReplyControl(reply); ok {
@@ -7814,7 +7818,11 @@ func (r *Runtime) sendForwardReplyWithResult(ctx context.Context, event MessageE
 	if alreadyDelivered {
 		return replayedMessageID, nil
 	}
-	result, err := r.sendForwardNodesWithResult(ctx, event, buildForwardNodes(chunks, senderName, senderUIN))
+	nodeCtx := ctx
+	if replyAccountSafetyAudited(ctx, original) {
+		nodeCtx = withForwardSafetyAuditSkipped(ctx)
+	}
+	result, err := r.sendForwardNodesWithResult(nodeCtx, event, buildForwardNodes(chunks, senderName, senderUIN))
 	if err != nil {
 		return "", err
 	}
