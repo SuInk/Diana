@@ -153,11 +153,11 @@ func TestConsoleGroupsFallsBackToLastLiveListOnFailure(t *testing.T) {
 	}}
 	runtime := assistant.NewRuntime(assistant.DefaultBotConfig(), channel, assistant.NewDefaultPluginManager(), nil, nil, nil, nil)
 	handler := NewBotHandler(context.Background(), runtime)
-	if groups, ok, _ := handler.liveConsoleGroups(t.Context(), true); !ok || len(groups) != 1 {
+	if groups, ok, _ := handler.liveConsoleGroups(t.Context(), "", true); !ok || len(groups) != 1 {
 		t.Fatalf("first fetch = %#v ok=%v", groups, ok)
 	}
 	channel.fail.Store(true)
-	groups, ok, warning := handler.liveConsoleGroups(t.Context(), true)
+	groups, ok, warning := handler.liveConsoleGroups(t.Context(), "", true)
 	if !ok || len(groups) != 1 || groups[0].GroupName != "上次的群" {
 		t.Fatalf("fallback = %#v ok=%v", groups, ok)
 	}
@@ -578,5 +578,54 @@ func TestConsoleGroupsReportsQuotaUsage(t *testing.T) {
 	// 群里填了以群为准。
 	if group := groups["40002"]; group.QuotaCallLimit != 2 || group.QuotaCallsUsed != 1 {
 		t.Fatalf("自己填了额度的群 = %#v", group)
+	}
+}
+
+// perProfileGroupListRuntime 按机器人给出不同的群列表；不指明机器人的调用照真实
+// 运行时的样子报错，因为有两台 OneBot 机器人时运行时不会替调用方挑。
+type perProfileGroupListRuntime struct {
+	BotRuntime
+	groups map[string][]any
+}
+
+func (r *perProfileGroupListRuntime) CallOneBotAPI(context.Context, string, map[string]any) (map[string]any, error) {
+	return nil, errors.New("diana: 有多台机器人，请指定要用哪一台")
+}
+
+func (r *perProfileGroupListRuntime) CallOneBotAPIForProfile(_ context.Context, profileID, action string, _ map[string]any) (map[string]any, error) {
+	if action != "get_group_list" {
+		return nil, errors.New("unexpected OneBot action")
+	}
+	return map[string]any{"items": r.groups[profileID]}, nil
+}
+
+// 两台 OneBot 机器人时，全部机器人视图要把两边的群都列出来，并且各自记上归属；
+// 选了某一台时只列它自己的群。
+func TestConsoleGroupsListsEveryOneBotProfile(t *testing.T) {
+	first := assistant.DefaultBotConfig()
+	first.ID, first.Platform, first.Enabled = "qq-a", assistant.PlatformOneBotV11, true
+	second := assistant.DefaultBotConfig()
+	second.ID, second.Platform, second.Enabled = "qq-b", assistant.PlatformOneBotV11, true
+	store := NewMemoryBotProfileStore(first)
+	if err := store.SaveProfiles(assistant.ProfileSet{Profiles: []assistant.BotConfig{first, second}}); err != nil {
+		t.Fatal(err)
+	}
+	handler := &BotHandler{profiles: store, runtime: &perProfileGroupListRuntime{groups: map[string][]any{
+		"qq-a": {map[string]any{"group_id": "10001", "group_name": "甲群"}},
+		"qq-b": {map[string]any{"group_id": "10002", "group_name": "乙群"}},
+	}}}
+
+	all, ok, _ := handler.liveConsoleGroupsForAllBots(t.Context(), false)
+	owners := map[string]string{}
+	for _, group := range all {
+		owners[group.GroupID] = group.BotProfileID
+	}
+	if !ok || owners["10001"] != "qq-a" || owners["10002"] != "qq-b" {
+		t.Fatalf("all bots = %#v ok=%v", all, ok)
+	}
+
+	scoped, ok, _ := handler.liveConsoleGroups(t.Context(), "qq-b", false)
+	if !ok || len(scoped) != 1 || scoped[0].GroupID != "10002" || scoped[0].BotProfileID != "qq-b" {
+		t.Fatalf("scoped = %#v ok=%v", scoped, ok)
 	}
 }

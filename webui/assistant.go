@@ -115,7 +115,7 @@ type BotHandler struct {
 	repoPlugins       *assistant.RepoPluginInstaller
 	repoPluginSources *assistant.RepoPluginStore
 	liveGroupMu       sync.Mutex
-	liveGroupCache    liveGroupListCache
+	liveGroupCache    map[string]liveGroupListCache
 	groupNameMu       sync.Mutex
 	groupNameCache    map[string]groupNameCacheEntry
 	userNameMu        sync.Mutex
