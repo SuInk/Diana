@@ -8856,7 +8856,7 @@ func splitChatReplyKeepingPeriods(reply string, limits chatSplitLimits) []string
 	for _, part := range strings.Split(reply, notificationSplitMarker) {
 		part = strings.TrimSpace(restoreExplicitReplyLines(part))
 		pieces := []string{part}
-		if limits.LineSplit && !limits.MarkerOnly {
+		if limits.LineSplit && !limits.SingleMessage {
 			pieces = splitReplyLinesKeepingLists(part)
 		}
 		for _, segment := range pieces {
@@ -8904,7 +8904,8 @@ type chatSplitLimits struct {
 	// Document 表示这条回复是一份行程、清单或方案：按小节分条，不按行分。
 	Document bool
 	// LineSplit 让消息内的每次换行另起一条，列表、表格和代码块整块不拆。
-	// 单条发送和闲聊插话（MarkerOnly）下不生效。
+	// 单条发送下不生效。闲聊插话照样生效：插话里模型写的 [diana-line] 多半是在隔开
+	// 两句话，留在一条里就是气泡中间莫名其妙断一行。
 	LineSplit bool
 }
 

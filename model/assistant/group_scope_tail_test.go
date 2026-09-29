@@ -110,8 +110,8 @@ func TestSystemHeadIsStableAcrossTurnKinds(t *testing.T) {
 	if lineSplitRule == "" || strings.Contains(triggeredHead, lineSplitRule) || !strings.Contains(triggeredTail, lineSplitRule) {
 		t.Fatalf("换行分条说明应在尾部：head=%q tail=%q", triggeredHead, triggeredTail)
 	}
-	if _, tail := parts(chatInEvent, true, nil); strings.Contains(tail, lineSplitRule) {
-		t.Fatalf("闲聊插话那轮只认显式分条标记，不该说换行会分条：%q", tail)
+	if _, tail := parts(chatInEvent, true, nil); !strings.Contains(tail, lineSplitRule) {
+		t.Fatalf("闲聊插话那轮也按行分条，尾部应该说明：%q", tail)
 	}
 	if _, tail := parts(base, false, []PluginResponse{{Context: "天气：晴"}}); !strings.Contains(tail, promptPluginAuthority) {
 		t.Fatalf("插件结果为准应在尾部：%q", tail)

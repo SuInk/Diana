@@ -50,11 +50,11 @@ func TestLineSplitOffKeepsLinesInOneMessage(t *testing.T) {
 			t.Fatalf("lines were split without the toggle: %q", got)
 		}
 	}
-	// 闲聊插话只认显式标记。
+	// 闲聊插话也按行分条：插话里的换行多半是在隔开两句话。
 	cfg := BotConfig{ReplyLineSplitEnabled: boolPointer(true)}.WithDefaults()
 	got := splitEventChatReply(reply, cfg, MessageEvent{Kind: EventKindGroup, proactiveReply: true, chatInReply: true})
-	if len(got) != 1 {
-		t.Fatalf("casual interjection was split by lines: %q", got)
+	if len(got) != 2 || got[0] != "第一行" || got[1] != "第二行" {
+		t.Fatalf("casual interjection kept the line break inside one bubble: %q", got)
 	}
 	// 本轮要求一条发送优先。
 	got = splitEventChatReply(replySingleMarker+reply, cfg, MessageEvent{Kind: EventKindGroup})
@@ -83,7 +83,7 @@ func TestLineSplitPromptMatchesDelivery(t *testing.T) {
 			{Kind: EventKindPrivate},
 			{Kind: EventKindGroup, proactiveReply: true, chatInReply: true},
 		} {
-			want := enabled && !event.chatInReply
+			want := enabled
 			mainPrompt := r.systemPromptWithMode(event, nil, event.proactiveReply)
 			persona := r.withUserFacingPersona(event, []llm.Message{{Role: llm.RoleUser, Content: "test"}})
 			for _, prompt := range []string{mainPrompt, persona[0].Content} {
