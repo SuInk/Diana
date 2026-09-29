@@ -13,26 +13,36 @@ func TestMoodBumpDecayAndThresholds(t *testing.T) {
 	runtime := NewRuntime(BotConfig{ID: "bot", MoodEnabled: boolPointer(true)}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	now := time.Date(2026, 9, 1, 12, 0, 0, 0, time.Local)
 
-	// 三次 +1 过开心线。
-	for range 3 {
-		runtime.bumpMood("bot", 1, now)
+	// 没人惹它时就在基线上，基线是开心。
+	if score := runtime.moodScore("bot", now); score != moodBaseline || score < moodHappyThreshold {
+		t.Fatalf("baseline score = %v", score)
 	}
+
+	// 轻轻怼一句（-1 按 -1.5 记）还开心。
+	runtime.bumpMood("bot", -1, now)
 	if score := runtime.moodScore("bot", now); score < moodHappyThreshold {
-		t.Fatalf("score = %v", score)
+		t.Fatalf("score after one jab = %v", score)
 	}
 
-	// 负面事件权重更大：一次 -2 按 -3 记。
-	runtime.bumpMood("bot", -2, now)
+	// 连着被骂到底也只是平静，不往下欠账。
+	for range 10 {
+		runtime.bumpMood("bot", -2, now)
+	}
 	if score := runtime.moodScore("bot", now); score != 0 {
-		t.Fatalf("score after insult = %v", score)
+		t.Fatalf("score after insults = %v", score)
 	}
 
-	// 半衰期回落：+6 过两个小时剩一半。
-	runtime.bumpMood("bot", 3, now)
-	runtime.bumpMood("bot", 3, now)
+	// 没人再惹它，三个小时内自己回到开心。
+	if score := runtime.moodScore("bot", now.Add(3*time.Hour)); score < moodHappyThreshold {
+		t.Fatalf("score after recovery = %v", score)
+	}
+
+	// 半衰期回落：比基线高出的部分两小时后剩一半。
+	runtime.bumpMood("bot", 10, now)
 	later := now.Add(moodHalfLife)
-	if score := runtime.moodScore("bot", later); score < 2.9 || score > 3.1 {
-		t.Fatalf("decayed score = %v", score)
+	want := moodBaseline + (moodScoreLimit-moodBaseline)/2
+	if score := runtime.moodScore("bot", later); score < want-0.1 || score > want+0.1 {
+		t.Fatalf("decayed score = %v, want %v", score, want)
 	}
 
 	// delta 为 0 不刷新时间，也不建条目。
@@ -40,20 +50,6 @@ func TestMoodBumpDecayAndThresholds(t *testing.T) {
 	fresh.bumpMood("bot", 0, now)
 	if len(fresh.moods) != 0 {
 		t.Fatalf("neutral delta created state: %#v", fresh.moods)
-	}
-
-	// 心情最低是平静：被骂不往下欠账，之后夸三次照样开心。
-	for range 10 {
-		runtime.bumpMood("bot", -2, now)
-	}
-	if score := runtime.moodScore("bot", now); score != 0 {
-		t.Fatalf("score after insults = %v", score)
-	}
-	for range 3 {
-		runtime.bumpMood("bot", 1, now)
-	}
-	if score := runtime.moodScore("bot", now); score < moodHappyThreshold {
-		t.Fatalf("score after recovery = %v", score)
 	}
 
 	// 封顶：夸一晚上也顶不破上限。
@@ -69,17 +65,11 @@ func TestMoodToneForConfigGates(t *testing.T) {
 	runtime := NewRuntime(BotConfig{ID: "bot", MoodEnabled: boolPointer(true)}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	now := runtime.clock()
 
-	// 平静时一个字都不注入。
-	if tone := runtime.moodToneForConfig(runtime.ProfileConfig(""), "bot"); tone != "" {
-		t.Fatalf("neutral tone = %q", tone)
-	}
-	for range 4 {
-		runtime.bumpMood("bot", 1, now)
-	}
+	// 开着心情时默认就是开心。
 	if tone := runtime.moodToneForConfig(runtime.ProfileConfig(""), "bot"); !strings.Contains(tone, "心情不错") {
-		t.Fatalf("happy tone = %q", tone)
+		t.Fatalf("baseline tone = %q", tone)
 	}
-	// 没有低落档：骂得再狠也只回到平静，不注入任何语气。
+	// 被骂狠了掉出开心，只是不注入，没有低落语气。
 	for range 10 {
 		runtime.bumpMood("bot", -2, now)
 	}
