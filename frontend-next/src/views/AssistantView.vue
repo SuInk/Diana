@@ -948,7 +948,7 @@
               <div v-if="isOneBotPlatform && form.forward_reply_enabled" class="field">
                 <label for="bot-forward-len">合并转发字数</label>
                 <input id="bot-forward-len" v-model.number="form.forward_reply_threshold" class="input" type="number" min="1" step="1" inputmode="numeric" placeholder="留空不按字数触发" />
-                <span class="hint">整轮正文超过此值触发卡片；新建机器人默认 140 字。</span>
+                <span class="hint">整轮正文超过此值触发卡片；新建机器人默认 240 字。</span>
               </div>
               <div v-if="isOneBotPlatform && form.forward_reply_enabled" class="field">
                 <label for="bot-forward-chunks">合并转发块数</label>
@@ -2642,14 +2642,14 @@ function togglePlatform(category: string): void {
   selectedPlatforms.value = only ? [] : [category];
 }
 
-// 打开合并转发时两个阈值都空着，就先填上新建机器人的默认 140 字，免得开了等于没开。
+// 打开合并转发时两个阈值都空着，就先填上新建机器人的默认 240 字，免得开了等于没开。
 function onForwardReplyToggle(): void {
   const current = form.value;
   if (!current?.forward_reply_enabled) {
     return;
   }
   if (!(Number(current.forward_reply_threshold) > 0) && !(Number(current.forward_reply_chunk_threshold) > 0)) {
-    current.forward_reply_threshold = 140;
+    current.forward_reply_threshold = 240;
   }
 }
 const isOneBotPlatform = computed(() => {

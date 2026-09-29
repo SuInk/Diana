@@ -9,19 +9,19 @@ import (
 	"testing"
 )
 
-// 新建 OneBot 机器人默认 140 字走合并转发卡片。
-func TestNewProfileDefaultsToForwardingAt140Chars(t *testing.T) {
+// 新建 OneBot 机器人默认 240 字走合并转发卡片。
+func TestNewProfileDefaultsToForwardingAt240Chars(t *testing.T) {
 	cfg := DefaultBotConfig().WithDefaults()
-	if cfg.ForwardReplyThreshold != 140 {
-		t.Fatalf("default forward threshold=%d, want 140", cfg.ForwardReplyThreshold)
+	if cfg.ForwardReplyThreshold != 240 {
+		t.Fatalf("default forward threshold=%d, want 240", cfg.ForwardReplyThreshold)
 	}
-	long := strings.Repeat("字", 141)
+	long := strings.Repeat("字", 241)
 	if !shouldUseForwardReply(long, []string{long}, cfg.ForwardReplyThreshold, cfg.ForwardReplyChunkThreshold) {
-		t.Fatal("141 chars must go through a forward card by default")
+		t.Fatal("241 chars must go through a forward card by default")
 	}
-	short := strings.Repeat("字", 140)
+	short := strings.Repeat("字", 240)
 	if shouldUseForwardReply(short, []string{short}, cfg.ForwardReplyThreshold, cfg.ForwardReplyChunkThreshold) {
-		t.Fatal("140 chars is still at the threshold and must stay an ordinary message")
+		t.Fatal("240 chars is still at the threshold and must stay an ordinary message")
 	}
 }
 
