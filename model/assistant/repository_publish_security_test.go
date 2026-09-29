@@ -133,6 +133,12 @@ func TestRepositoryIssueCommentPreflightFailureStopsPOST(t *testing.T) {
 			name: "invalid json", failureCode: "invalid_response",
 			write: func(w http.ResponseWriter) { _, _ = w.Write([]byte(`{"broken"`)) },
 		},
+		{
+			name: "oversized response", failureCode: "response_too_large",
+			write: func(w http.ResponseWriter) {
+				_, _ = w.Write([]byte(strings.Repeat(" ", repositoryIssueResponseLimit+1)))
+			},
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

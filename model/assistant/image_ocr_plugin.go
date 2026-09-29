@@ -12,7 +12,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log"
 	"net/http"
 	"os"
@@ -24,6 +23,7 @@ import (
 
 	"github.com/SuInk/diana/internal/procgroup"
 	"github.com/SuInk/diana/model/llm"
+	"github.com/SuInk/diana/model/netguard"
 )
 
 // 图片文字转写插件：聊天图片进上下文前，先用 vision 组模型跑一次严格转写，
@@ -594,7 +594,7 @@ func (p *ImageOCRPlugin) httpImageOCRTranscription(ctx context.Context, cfg imag
 		return "", err
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	body, err := netguard.ReadResponseBody(resp, 1<<20)
 	if err != nil {
 		return "", err
 	}

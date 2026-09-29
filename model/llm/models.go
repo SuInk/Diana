@@ -12,11 +12,17 @@ import (
 	"net/url"
 	"runtime"
 	"strings"
+
+	"github.com/SuInk/diana/model/netguard"
 )
 
 // OpenAI-compatible backends do not share a universal model name. The model
 // must come from the backend list or an explicit user selection.
 const DefaultOpenAICompatibleModel = ""
+
+// modelListResponseLimit 是模型列表响应的读取上限。OpenRouter 这类聚合站一次返回
+// 几百个模型、每个都带描述和定价，原来的 1 MiB 截断后只会报 JSON 解析失败。
+const modelListResponseLimit = 16 << 20
 const DefaultGeminiModel = "gemini-3.7-flash"
 const DefaultAnthropicModel = "claude-sonnet-5"
 const DefaultTypeSafeModel = typeSafeDefaultModel
@@ -231,7 +237,7 @@ func listAnthropicModels(ctx context.Context, cfg ProviderConfig, httpClient *ht
 		if err != nil {
 			return nil, err
 		}
-		body, readErr := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+		body, readErr := netguard.ReadResponseBody(resp, modelListResponseLimit)
 		_ = resp.Body.Close()
 		if readErr != nil {
 			return nil, readErr
@@ -317,7 +323,7 @@ func requestOpenAICompatibleModels(ctx context.Context, httpClient *http.Client,
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	body, err := netguard.ReadResponseBody(resp, modelListResponseLimit)
 	if err != nil {
 		return nil, err
 	}

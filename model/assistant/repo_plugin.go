@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/SuInk/diana/model/ghmirror"
+	"github.com/SuInk/diana/model/netguard"
 )
 
 // 第三方插件（仓库插件）：以 GitHub 仓库为分发载体，默认通过仓库链接安装。
@@ -719,7 +720,7 @@ func (i *RepoPluginInstaller) fetch(ctx context.Context, rawURL string) ([]byte,
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("diana: 获取 %s 失败: HTTP %d", rawURL, resp.StatusCode)
 	}
-	return io.ReadAll(io.LimitReader(resp.Body, repoPluginMaxTotalBytes))
+	return netguard.ReadLimited(resp.Body, repoPluginMaxTotalBytes)
 }
 
 func (i *RepoPluginInstaller) archiveURL(ref RepoPluginRef) string {

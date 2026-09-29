@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/SuInk/diana/internal/secretmask"
+	"github.com/SuInk/diana/model/netguard"
 )
 
 // AI 图片检测插件：群里丢来一张图问「这是不是 AI 画的」，看图猜是猜不准的——
@@ -204,7 +205,7 @@ func (p *AIImageDetectPlugin) checkSynthID(ctx context.Context, cfg aiImageDetec
 		return AIImageSynthIDResult{}, err
 	}
 	defer resp.Body.Close()
-	payload, err := io.ReadAll(io.LimitReader(resp.Body, imageSourceMaxResponseBytes))
+	payload, err := netguard.ReadResponseBody(resp, imageSourceMaxResponseBytes)
 	if err != nil {
 		return AIImageSynthIDResult{}, err
 	}

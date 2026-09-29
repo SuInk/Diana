@@ -5,7 +5,6 @@ package assistant
 
 import (
 	"context"
-	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -63,7 +62,7 @@ func fetchCredentialProbe(ctx context.Context, client *http.Client, endpoint str
 		return 0, "", err
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 4*1024*1024))
+	body, err := netguard.ReadResponseBody(resp, 4<<20)
 	return resp.StatusCode, string(body), err
 }
 

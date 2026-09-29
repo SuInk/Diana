@@ -14,6 +14,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/SuInk/diana/model/netguard"
 )
 
 // 四个国内平台（QQ 官方、钉钉、飞书、企业微信）都是同一套模式：拿 appid/secret
@@ -106,7 +108,7 @@ func platformJSONRequest(ctx context.Context, client *http.Client, method, endpo
 		return nil, safePlatformError(err, endpoint, headers)
 	}
 	defer resp.Body.Close()
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, platformHTTPResponseLimit))
+	raw, err := netguard.ReadResponseBody(resp, platformHTTPResponseLimit)
 	if err != nil {
 		return nil, err
 	}

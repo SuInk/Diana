@@ -8,10 +8,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"sort"
 	"strings"
+
+	"github.com/SuInk/diana/model/netguard"
 )
 
 // EmbedTexts 调用 OpenAI 兼容的 /embeddings 接口把文本批量转成向量。
@@ -69,7 +70,7 @@ func EmbedTextsWithUsage(ctx context.Context, cfg ProviderConfig, texts []string
 		return nil, Usage{}, err
 	}
 	defer func() { _ = resp.Body.Close() }()
-	payload, err := io.ReadAll(io.LimitReader(resp.Body, 64<<20))
+	payload, err := netguard.ReadResponseBody(resp, 64<<20)
 	if err != nil {
 		return nil, Usage{}, err
 	}

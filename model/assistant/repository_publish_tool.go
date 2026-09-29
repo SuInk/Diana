@@ -3336,7 +3336,7 @@ func (t *dianaGitHubTool) doJSONWithHeadersStatus(ctx context.Context, method, p
 		return headers, repositoryIssueTransportError(requestCtx, err, method == http.MethodPost)
 	}
 	if len(responseBody) > repositoryIssueResponseLimit {
-		return headers, &repositoryIssueAPIError{Code: "invalid_response", Status: resp.StatusCode, Uncertain: method == http.MethodPost}
+		return headers, &repositoryIssueAPIError{Code: "response_too_large", Status: resp.StatusCode, Uncertain: method == http.MethodPost}
 	}
 	if raw, ok := target.(*repositoryRawBody); ok {
 		raw.data = responseBody
@@ -3630,6 +3630,8 @@ func repositoryIssueFailureMessage(code string) string {
 		return "GitHub 暂时不可用，且未能确认写入结果。"
 	case "invalid_response":
 		return "GitHub 返回了无法解析的响应；写操作不会盲目重试。"
+	case "response_too_large":
+		return fmt.Sprintf("GitHub 响应超过 %d MiB 读取上限，结果未采用；大仓库请缩小范围（例如指定编号或减少条数）后重试，写操作不会盲目重试。", repositoryIssueResponseLimit>>20)
 	default:
 		return "GitHub API 请求失败。"
 	}

@@ -11,7 +11,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -323,7 +322,7 @@ func (f *Flow) postToken(ctx context.Context, provider Provider, payload map[str
 		return Token{}, fmt.Errorf("llmauth: 请求令牌失败: %w", err)
 	}
 	defer resp.Body.Close()
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	raw, err := netguard.ReadResponseBody(resp, 1<<20)
 	if err != nil {
 		return Token{}, fmt.Errorf("llmauth: 读取令牌响应失败: %w", err)
 	}

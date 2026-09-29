@@ -606,7 +606,12 @@ func fetchBilibiliJSON(ctx context.Context, raw string, referer string, out any)
 		log.Printf("resolver bilibili api bad status for %s: %s", redactURLQuery(raw), resp.Status)
 		return false
 	}
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 4*1024*1024)).Decode(out); err != nil {
+	body, err := netguard.ReadLimited(resp.Body, 4<<20)
+	if err != nil {
+		log.Printf("resolver bilibili api read failed for %s: %v", redactURLQuery(raw), err)
+		return false
+	}
+	if err := json.Unmarshal(body, out); err != nil {
 		log.Printf("resolver bilibili api json parse failed for %s: %v", redactURLQuery(raw), err)
 		return false
 	}

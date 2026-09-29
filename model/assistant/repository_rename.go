@@ -7,11 +7,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"regexp"
 	"strings"
+
+	"github.com/SuInk/diana/model/netguard"
 )
 
 // 仓库改名之后，草稿、设置、凭据绑定里写的都还是旧名。executeDraft 已经会在写入前
@@ -71,7 +72,7 @@ func (t *dianaGitHubTool) probeRepositoryName(ctx context.Context, path, token s
 		var meta struct {
 			FullName string `json:"full_name"`
 		}
-		body, err := io.ReadAll(io.LimitReader(resp.Body, repositoryIssueResponseLimit))
+		body, err := netguard.ReadLimited(resp.Body, repositoryIssueResponseLimit)
 		if err != nil || json.Unmarshal(body, &meta) != nil {
 			return "", ""
 		}

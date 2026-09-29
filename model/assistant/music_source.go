@@ -178,7 +178,7 @@ func (f *musicFetcher) fetchJSON(ctx context.Context, cfg musicConfig, endpoint 
 		return false
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	body, err := netguard.ReadResponseBody(resp, 1<<20)
 	if err != nil || len(body) == 0 {
 		recordMusicFailure(ctx, "读取 %s 返回失败：%v", redactURLQuery(endpoint), err)
 		return false

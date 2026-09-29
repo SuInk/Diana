@@ -22,6 +22,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/SuInk/diana/model/netguard"
 	"github.com/SuInk/diana/model/version"
 )
 
@@ -290,7 +291,7 @@ func (a weixinAPI) do(req *http.Request, path string) ([]byte, error) {
 		return nil, fmt.Errorf("weixin: %s: %w", op, err)
 	}
 	defer resp.Body.Close()
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, platformHTTPResponseLimit))
+	raw, err := netguard.ReadResponseBody(resp, platformHTTPResponseLimit)
 	if err != nil {
 		return nil, err
 	}

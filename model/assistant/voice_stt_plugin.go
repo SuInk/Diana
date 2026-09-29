@@ -553,7 +553,7 @@ func (p *VoiceSTTPlugin) openAITranscription(ctx context.Context, wav string, cf
 		return "", err
 	}
 	defer resp.Body.Close()
-	data, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	data, err := netguard.ReadResponseBody(resp, 1<<20)
 	if err != nil {
 		return "", err
 	}

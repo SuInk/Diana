@@ -724,7 +724,7 @@ func (c *IMessageChannel) sendAttachment(ctx context.Context, client *http.Clien
 		return "", fmt.Errorf("imessage: 发送附件失败: %w", safePlatformError(err, endpoint, nil))
 	}
 	defer resp.Body.Close()
-	raw, readErr := io.ReadAll(io.LimitReader(resp.Body, platformHTTPResponseLimit))
+	raw, readErr := netguard.ReadResponseBody(resp, platformHTTPResponseLimit)
 	if readErr != nil {
 		return "", readErr
 	}

@@ -9,7 +9,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"mime/multipart"
 	"net/http"
 	"net/url"
@@ -17,6 +16,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/SuInk/diana/model/netguard"
 )
 
 // 图片溯源插件：群里丢来一张图问「这谁画的」「出处呢」，靠看图是答不出来的——
@@ -513,7 +514,7 @@ func (p *ImageSourcePlugin) readJSONResponse(req *http.Request) ([]byte, error) 
 		return nil, err
 	}
 	defer resp.Body.Close()
-	payload, err := io.ReadAll(io.LimitReader(resp.Body, imageSourceMaxResponseBytes))
+	payload, err := netguard.ReadResponseBody(resp, imageSourceMaxResponseBytes)
 	if err != nil {
 		return nil, err
 	}

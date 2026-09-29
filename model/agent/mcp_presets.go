@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"os"
@@ -16,6 +15,8 @@ import (
 	"runtime"
 	"strings"
 	"time"
+
+	"github.com/SuInk/diana/model/netguard"
 )
 
 // MCPPreset 是一条内置的 MCP 接入模板：告诉界面要问用户哪几个字段，以及怎么
@@ -328,7 +329,7 @@ func verifyGiteaToken(ctx context.Context, cfg mcpServerConfig) (string, error) 
 	var account struct {
 		Login string `json:"login"`
 	}
-	body, err := io.ReadAll(io.LimitReader(response.Body, 1<<20))
+	body, err := netguard.ReadLimited(response.Body, 1<<20)
 	if err != nil {
 		return "", fmt.Errorf("读取 Gitea 响应失败：%w", err)
 	}

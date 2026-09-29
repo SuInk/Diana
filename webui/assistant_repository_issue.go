@@ -235,7 +235,7 @@ func repositoryIssueCreateFailureStatus(code string) int {
 		return http.StatusForbidden
 	case "rate_limited":
 		return http.StatusTooManyRequests
-	case "timeout", "unauthorized", "network_error", "github_unavailable", "gh_unavailable", "gh_auth_required", "invalid_response", "idempotency_scan_incomplete":
+	case "timeout", "unauthorized", "network_error", "github_unavailable", "gh_unavailable", "gh_auth_required", "invalid_response", "response_too_large", "idempotency_scan_incomplete":
 		return statusUpstreamFailed
 	default:
 		return http.StatusBadRequest

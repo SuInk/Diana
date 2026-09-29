@@ -21,6 +21,8 @@ import (
 	"sync"
 	"time"
 	"unicode/utf16"
+
+	"github.com/SuInk/diana/model/netguard"
 )
 
 // TelegramConfig 是 Telegram Bot API 通道的连接配置。
@@ -601,7 +603,7 @@ func (c *TelegramChannel) do(req *http.Request) (json.RawMessage, error) {
 		return nil, fmt.Errorf("telegram: request failed: %w", err)
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+	body, err := netguard.ReadResponseBody(resp, 8<<20)
 	if err != nil {
 		return nil, err
 	}

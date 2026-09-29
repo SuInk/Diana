@@ -16,6 +16,8 @@ import (
 	"runtime"
 	"strings"
 	"time"
+
+	"github.com/SuInk/diana/model/netguard"
 )
 
 const (
@@ -139,7 +141,11 @@ func resolveChromeDownloadURL(ctx context.Context, client *http.Client) (string,
 		return "", fmt.Errorf("查询 Chrome for Testing 版本信息失败：HTTP %d", resp.StatusCode)
 	}
 	var versions chromeForTestingVersions
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&versions); err != nil {
+	body, err := netguard.ReadLimited(resp.Body, 1<<20)
+	if err != nil {
+		return "", fmt.Errorf("读取 Chrome for Testing 版本信息失败：%w", err)
+	}
+	if err := json.Unmarshal(body, &versions); err != nil {
 		return "", fmt.Errorf("解析 Chrome for Testing 版本信息失败：%w", err)
 	}
 	for _, download := range versions.Channels.Stable.Downloads.Chrome {

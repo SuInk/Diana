@@ -9,9 +9,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
+
+	"github.com/SuInk/diana/model/netguard"
 )
 
 const (
@@ -161,7 +162,7 @@ func (c *typeSafeClient) post(ctx context.Context, payload typeSafeRequest) (*ty
 		return nil, fmt.Errorf("llm: provider request failed: %w", err)
 	}
 	defer response.Body.Close()
-	raw, err := io.ReadAll(io.LimitReader(response.Body, 1<<20))
+	raw, err := netguard.ReadResponseBody(response, 1<<20)
 	if err != nil {
 		return nil, fmt.Errorf("llm: provider response read failed: %w", err)
 	}

@@ -19,6 +19,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/SuInk/diana/model/netguard"
 )
 
 const (
@@ -1652,7 +1654,7 @@ func postGitHubGraphQL(ctx context.Context, client *http.Client, baseURL, token,
 		return err
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+	body, err := netguard.ReadResponseBody(resp, 8<<20)
 	if err != nil {
 		return err
 	}
@@ -1741,12 +1743,9 @@ func (p *RepositoryWatchPlugin) getJSONAccept(ctx context.Context, path string, 
 	}
 	// 先整段读进来再解析：直接把截断的 LimitReader 交给解码器，超限时只会报一句
 	// unexpected EOF，看不出是响应太大。
-	body, err := io.ReadAll(io.LimitReader(resp.Body, repositoryWatchMaxResponseBytes+1))
+	body, err := netguard.ReadLimited(resp.Body, repositoryWatchMaxResponseBytes)
 	if err != nil {
 		return fmt.Errorf("读取 GitHub API 响应: %w", err)
-	}
-	if len(body) > repositoryWatchMaxResponseBytes {
-		return fmt.Errorf("GitHub API 响应超过 %d MiB 上限", repositoryWatchMaxResponseBytes>>20)
 	}
 	if err := json.Unmarshal(body, target); err != nil {
 		return fmt.Errorf("解析 GitHub API 响应: %w", err)
