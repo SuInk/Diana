@@ -118,6 +118,8 @@ func (r *Runtime) notifyRepositoryWatchFailure(ctx context.Context, item Reminde
 		repositoryWatchFailureStageLabel(stage),
 		reason,
 	)
+	// 错误原文里常带着仓库路径（「读取 owner/repo 仓库信息」），和标题一起换成称呼。
+	notice = maskRepositoryWatchText(notice, item.Repository, repositoryWatchLabel(item))
 	acknowledged := false
 	var firstErr error
 	for _, target := range repositoryWatchDeliveryTargets(item) {
@@ -173,7 +175,7 @@ func (r *Runtime) notifyRepositoryWatchRecovery(ctx context.Context, item Remind
 	if !repositoryWatchHasDeliveryTarget(item) {
 		return nil
 	}
-	notice := fmt.Sprintf("仓库订阅 %s 已恢复，后续更新将继续正常推送。", item.Repository)
+	notice := fmt.Sprintf("仓库订阅 %s 已恢复，后续更新将继续正常推送。", repositoryWatchLabel(item))
 	if err := r.sendDiagnosticNotice(ctx, reminderSourceEvent(item), repositoryWatchPluginID, notice); err != nil {
 		return err
 	}

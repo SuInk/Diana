@@ -96,6 +96,8 @@ type repositoryWatchCreatePayload struct {
 	StarNotifyMode       string                         `json:"star_notify_mode,omitempty"`
 	StarNotifyThreshold  int                            `json:"star_notify_threshold,omitempty"`
 	StarNotifyMilestones []int                          `json:"star_notify_milestones,omitempty"`
+	DisplayName          string                         `json:"repository_display_name,omitempty"`
+	Mask                 string                         `json:"repository_mask,omitempty"`
 	ProfileID            string                         `json:"profile_id"`
 	Destination          string                         `json:"destination"`
 	GroupID              string                         `json:"group_id,omitempty"`
@@ -127,6 +129,8 @@ type repositoryWatchUpdatePayload struct {
 	StarNotifyMode       *string                        `json:"star_notify_mode,omitempty"`
 	StarNotifyThreshold  *int                           `json:"star_notify_threshold,omitempty"`
 	StarNotifyMilestones []int                          `json:"star_notify_milestones,omitempty"`
+	DisplayName          *string                        `json:"repository_display_name,omitempty"`
+	Mask                 *string                        `json:"repository_mask,omitempty"`
 	ProfileID            string                         `json:"profile_id"`
 	Destination          string                         `json:"destination"`
 	GroupID              string                         `json:"group_id,omitempty"`
@@ -169,48 +173,53 @@ type rssWatchSourcePayload struct {
 }
 
 type botTaskPayload struct {
-	ID                    string    `json:"id"`
-	Kind                  string    `json:"kind"`
-	Platform              string    `json:"platform,omitempty"`
-	ProfileID             string    `json:"profile_id,omitempty"`
-	OwnerID               string    `json:"owner_id"`
-	GroupID               string    `json:"group_id,omitempty"`
-	UserID                string    `json:"user_id,omitempty"`
-	Message               string    `json:"message"`
-	Status                string    `json:"status"`
-	TriggerAt             time.Time `json:"trigger_at"`
-	IntervalSeconds       int64     `json:"interval_seconds,omitempty"`
-	IntervalMonths        int       `json:"interval_months,omitempty"`
-	ScheduleRule          string    `json:"schedule_rule,omitempty"`
-	LastRunAt             time.Time `json:"last_run_at,omitempty"`
-	CancelledAt           time.Time `json:"cancelled_at,omitempty"`
-	LastError             string    `json:"last_error,omitempty"`
-	ConsecutiveFailures   int       `json:"consecutive_failures,omitempty"`
-	PendingDelivery       bool      `json:"pending_delivery,omitempty"`
-	PendingSince          time.Time `json:"pending_since,omitempty"`
-	Repository            string    `json:"repository,omitempty"`
-	RepositoryBranch      string    `json:"repository_branch,omitempty"`
-	WatchCommits          bool      `json:"watch_commits,omitempty"`
-	WatchPullRequests     bool      `json:"watch_pull_requests,omitempty"`
-	PullRequestEvents     []string  `json:"watch_pull_request_events"`
-	IssueEvents           []string  `json:"watch_issue_events"`
-	WatchIssues           bool      `json:"watch_issues,omitempty"`
-	WatchReleases         bool      `json:"watch_releases,omitempty"`
-	ReleaseKinds          []string  `json:"watch_release_kinds"`
-	WatchStars            bool      `json:"watch_stars,omitempty"`
-	StarNotifyMode        string    `json:"star_notify_mode,omitempty"`
-	StarNotifyThreshold   int       `json:"star_notify_threshold,omitempty"`
-	StarNotifyMilestones  []int     `json:"star_notify_milestones,omitempty"`
-	LastCommitSHA         string    `json:"last_commit_sha,omitempty"`
-	LastPullRequestCursor string    `json:"last_pull_request_cursor,omitempty"`
-	LastIssueCursor       string    `json:"last_issue_cursor,omitempty"`
-	LastReleaseTag        string    `json:"last_release_tag,omitempty"`
-	LastStarCount         int       `json:"last_star_count,omitempty"`
-	LastNotifiedStarCount int       `json:"last_notified_star_count,omitempty"`
-	FeedURL               string    `json:"feed_url,omitempty"`
-	FeedSource            string    `json:"feed_source,omitempty"`
-	FeedHandle            string    `json:"feed_handle,omitempty"`
-	FeedJudgePrompt       string    `json:"feed_judge_prompt,omitempty"`
+	ID                  string    `json:"id"`
+	Kind                string    `json:"kind"`
+	Platform            string    `json:"platform,omitempty"`
+	ProfileID           string    `json:"profile_id,omitempty"`
+	OwnerID             string    `json:"owner_id"`
+	GroupID             string    `json:"group_id,omitempty"`
+	UserID              string    `json:"user_id,omitempty"`
+	Message             string    `json:"message"`
+	Status              string    `json:"status"`
+	TriggerAt           time.Time `json:"trigger_at"`
+	IntervalSeconds     int64     `json:"interval_seconds,omitempty"`
+	IntervalMonths      int       `json:"interval_months,omitempty"`
+	ScheduleRule        string    `json:"schedule_rule,omitempty"`
+	LastRunAt           time.Time `json:"last_run_at,omitempty"`
+	CancelledAt         time.Time `json:"cancelled_at,omitempty"`
+	LastError           string    `json:"last_error,omitempty"`
+	ConsecutiveFailures int       `json:"consecutive_failures,omitempty"`
+	PendingDelivery     bool      `json:"pending_delivery,omitempty"`
+	PendingSince        time.Time `json:"pending_since,omitempty"`
+	Repository          string    `json:"repository,omitempty"`
+	RepositoryBranch    string    `json:"repository_branch,omitempty"`
+	// RepositoryMasked 是推送实际会不会打码（自动模式下取决于仓库是否私有）。
+	RepositoryDisplayName string   `json:"repository_display_name,omitempty"`
+	RepositoryMask        string   `json:"repository_mask,omitempty"`
+	RepositoryPrivate     *bool    `json:"repository_private,omitempty"`
+	RepositoryMasked      bool     `json:"repository_masked,omitempty"`
+	WatchCommits          bool     `json:"watch_commits,omitempty"`
+	WatchPullRequests     bool     `json:"watch_pull_requests,omitempty"`
+	PullRequestEvents     []string `json:"watch_pull_request_events"`
+	IssueEvents           []string `json:"watch_issue_events"`
+	WatchIssues           bool     `json:"watch_issues,omitempty"`
+	WatchReleases         bool     `json:"watch_releases,omitempty"`
+	ReleaseKinds          []string `json:"watch_release_kinds"`
+	WatchStars            bool     `json:"watch_stars,omitempty"`
+	StarNotifyMode        string   `json:"star_notify_mode,omitempty"`
+	StarNotifyThreshold   int      `json:"star_notify_threshold,omitempty"`
+	StarNotifyMilestones  []int    `json:"star_notify_milestones,omitempty"`
+	LastCommitSHA         string   `json:"last_commit_sha,omitempty"`
+	LastPullRequestCursor string   `json:"last_pull_request_cursor,omitempty"`
+	LastIssueCursor       string   `json:"last_issue_cursor,omitempty"`
+	LastReleaseTag        string   `json:"last_release_tag,omitempty"`
+	LastStarCount         int      `json:"last_star_count,omitempty"`
+	LastNotifiedStarCount int      `json:"last_notified_star_count,omitempty"`
+	FeedURL               string   `json:"feed_url,omitempty"`
+	FeedSource            string   `json:"feed_source,omitempty"`
+	FeedHandle            string   `json:"feed_handle,omitempty"`
+	FeedJudgePrompt       string   `json:"feed_judge_prompt,omitempty"`
 	// FeedSources 让编辑框读得回多来源订阅的完整名单，只有 feed_url 的话
 	// 一打开就只剩第一个来源，保存等于把其余的人删掉。
 	FeedSources         []rssWatchSourcePayload `json:"feed_sources,omitempty"`
@@ -504,6 +513,7 @@ func (h *BotHandler) createRepositoryWatch(c *gin.Context) {
 		WatchPullRequestEvents: payload.PullRequestEvents, WatchIssueEvents: payload.IssueEvents,
 		WatchReleaseKinds: payload.ReleaseKinds,
 		StarNotifyMode:    payload.StarNotifyMode, StarNotifyThreshold: payload.StarNotifyThreshold, StarNotifyMilestones: payload.StarNotifyMilestones,
+		DisplayName: payload.DisplayName, Mask: payload.Mask,
 		Platform: profile.Platform, ProfileID: profile.ID, OwnerID: "webui:" + strings.TrimSpace(profile.ID), UserID: userID, GroupID: groupID,
 		ContextNamespace:    strings.TrimSpace(profile.ID),
 		NotificationEnabled: notificationEnabled, NotificationTargets: targets,
@@ -541,6 +551,7 @@ func (h *BotHandler) updateRepositoryWatch(c *gin.Context) {
 		WatchPullRequestEvents: payload.PullRequestEvents, WatchIssueEvents: payload.IssueEvents,
 		WatchReleaseKinds: payload.ReleaseKinds,
 		StarNotifyMode:    payload.StarNotifyMode, StarNotifyThreshold: payload.StarNotifyThreshold, StarNotifyMilestones: payload.StarNotifyMilestones,
+		DisplayName: payload.DisplayName, Mask: payload.Mask,
 	}
 	if deliveryRequested {
 		profile, profileErr := h.repositoryWatchProfile(payload.ProfileID)
@@ -936,7 +947,9 @@ func botTaskPayloadFromReminder(item assistant.Reminder) botTaskPayload {
 		LastRunAt:    item.LastRunAt, CancelledAt: item.CancelledAt, LastError: item.LastError,
 		ConsecutiveFailures: item.ConsecutiveFailures, PendingDelivery: strings.TrimSpace(item.PendingDelivery) != "",
 		PendingSince: item.PendingSince, Repository: item.Repository, RepositoryBranch: item.RepositoryBranch,
-		WatchCommits: item.WatchCommits, WatchPullRequests: item.WatchPullRequests,
+		RepositoryDisplayName: item.RepositoryDisplayName, RepositoryMask: item.RepositoryMask, RepositoryPrivate: item.RepositoryPrivate,
+		RepositoryMasked: assistant.RepositoryWatchMasked(item),
+		WatchCommits:     item.WatchCommits, WatchPullRequests: item.WatchPullRequests,
 		WatchIssues: item.WatchIssues, WatchReleases: item.WatchReleases, WatchStars: item.WatchStars,
 		PullRequestEvents: assistant.EffectiveRepositoryWatchPullRequestEvents(item.WatchPullRequestEvents),
 		IssueEvents:       assistant.EffectiveRepositoryWatchIssueEvents(item.WatchIssueEvents),

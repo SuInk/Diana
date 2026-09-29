@@ -1231,8 +1231,8 @@ func (r *Runtime) runClaimedRepositoryWatch(ctx context.Context, item Reminder) 
 	if len(change.Commits) == 0 && len(change.PullRequests) == 0 && len(change.Issues) == 0 && len(change.Releases) == 0 && change.Stars == nil {
 		return startedAt, repositoryWatchStageFailure(repositoryWatchFailureStageState, r.storeRepositoryWatchProgress(item.ID, change.Snapshot, "", ""))
 	}
-	message := r.renderRepositoryWatchMessage(change, settings)
-	reference := renderRepositoryWatchReferenceWithPatch(change, settings.Bool(repositoryWatchSettingPatch, false))
+	item = r.resolveRepositoryWatchVisibility(ctx, item, plugin, settings, change.Private)
+	message, reference := r.renderRepositoryWatchDelivery(item, change, settings)
 	if err := r.storeRepositoryWatchProgress(item.ID, change.Snapshot, message, reference); err != nil {
 		return startedAt, repositoryWatchStageFailure(repositoryWatchFailureStageState, err)
 	}
@@ -1374,6 +1374,23 @@ func (r *Runtime) storeRepositoryWatchAnchors(id string, encoded string) {
 // 而实测表明即使 diff 就在手边，模型也会照抄可能已经过期的 PR 标题。想要一句
 // 人话，用发出去之后的跟评（maybeSendRepositoryWatchFollowUp）——那是感想，
 // 不会被当成事实。
+// renderRepositoryWatchDelivery 按订阅的打码设置渲染推送正文和跟评参考资料。
+// 打码只作用于发出去的这两份；游标、锚点和「是不是机器人自己刚写的」判断仍用原始动态。
+func (r *Runtime) renderRepositoryWatchDelivery(item Reminder, change repositoryWatchChange, settings SettingValues) (string, string) {
+	label := repositoryWatchLabel(item)
+	masked := repositoryWatchMasked(item)
+	if masked {
+		change = maskRepositoryWatchChange(change)
+	}
+	change.Repository = label
+	message := r.renderRepositoryWatchMessage(change, settings)
+	reference := renderRepositoryWatchReferenceWithPatch(change, settings.Bool(repositoryWatchSettingPatch, false))
+	if masked {
+		reference = strings.TrimSpace(repositoryWatchMaskReferenceNote(label) + "\n\n" + reference)
+	}
+	return message, reference
+}
+
 func (r *Runtime) renderRepositoryWatchMessage(change repositoryWatchChange, settings SettingValues) string {
 	// 一个轮询区间里可能攒了好几条动态。游标照常推进到最新状态，通知则按「摘要动态
 	// 上限」列出最近若干条，超出部分只标一句还剩多少。
@@ -1645,13 +1662,18 @@ func renderRepositoryWatchChangesWithTemplates(change repositoryWatchChange, tem
 				if len(names) >= 5 {
 					break
 				}
-				names = append(names, "@"+strings.TrimSpace(user.Login))
+				// 打码时账号名被清空，名单整行不写。
+				if login := strings.TrimSpace(user.Login); login != "" {
+					names = append(names, "@"+login)
+				}
 			}
-			line := strings.Join(names, "、")
-			if len(change.Stars.AddedUsers) > len(names) {
-				line += fmt.Sprintf(" 等 %d 人", len(change.Stars.AddedUsers)-len(names))
+			if len(names) > 0 {
+				line := strings.Join(names, "、")
+				if len(change.Stars.AddedUsers) > len(names) {
+					line += fmt.Sprintf(" 等 %d 人", len(change.Stars.AddedUsers)-len(names))
+				}
+				lines = append(lines, line)
 			}
-			lines = append(lines, line)
 		}
 		latestStar := time.Time{}
 		if change.Stars.Delta > 0 {

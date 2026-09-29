@@ -44,6 +44,7 @@ type repositoryWatchTestGitHub struct {
 	pullCommitCalls int
 	issueEventCal   int
 	failIssueEvts   bool
+	private         bool
 }
 
 func (s *repositoryWatchTestGitHub) handler(w http.ResponseWriter, r *http.Request) {
@@ -131,7 +132,7 @@ func (s *repositoryWatchTestGitHub) handler(w http.ResponseWriter, r *http.Reque
 	}
 	if r.URL.Path == "/repos/acme/demo" {
 		s.starCalls++
-		_ = json.NewEncoder(w).Encode(map[string]any{"stargazers_count": s.starCount, "html_url": "https://github.com/acme/demo", "description": "A repository used to test delivery behavior."})
+		_ = json.NewEncoder(w).Encode(map[string]any{"stargazers_count": s.starCount, "html_url": "https://github.com/acme/demo", "description": "A repository used to test delivery behavior.", "private": s.private})
 		return
 	}
 	http.NotFound(w, r)
@@ -917,10 +918,14 @@ func TestRepositoryWatchFailureAlertThresholdPersistsAcrossRestartAndRecovers(t 
 	channel.mu.Lock()
 	alertText := channel.sent[0].Text
 	channel.mu.Unlock()
-	for _, want := range []string{"acme/demo", fmt.Sprintf("连续 %d 次", defaultRecurringFailureAlertThreshold), "仓库更新检查", "自动重试"} {
+	// 还没查到是否私有的订阅按私有打码：告警里的仓库路径（含错误原文里的）换成「私有仓库」。
+	for _, want := range []string{"私有仓库", fmt.Sprintf("连续 %d 次", defaultRecurringFailureAlertThreshold), "仓库更新检查", "自动重试"} {
 		if !strings.Contains(alertText, want) {
 			t.Fatalf("alert %q missing %q", alertText, want)
 		}
+	}
+	if strings.Contains(alertText, "acme/demo") {
+		t.Fatalf("alert %q leaks the repository path", alertText)
 	}
 	for _, diagnostic := range []string{"commits", "503", "commit endpoint unavailable"} {
 		if !strings.Contains(alertText, diagnostic) {

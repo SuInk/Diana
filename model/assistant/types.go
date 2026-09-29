@@ -418,8 +418,14 @@ type Reminder struct {
 	PendingSince             time.Time `json:"pending_since,omitempty"`
 	Repository               string    `json:"repository,omitempty"`
 	RepositoryBranch         string    `json:"repository_branch,omitempty"`
-	WatchCommits             bool      `json:"watch_commits,omitempty"`
-	WatchPullRequests        bool      `json:"watch_pull_requests,omitempty"`
+	// RepositoryDisplayName 是推送里对仓库的称呼，代替 owner/repo；RepositoryMask 是打码
+	// 模式（见 repository_watch_mask.go）；RepositoryPrivate 为 nil 表示还不知道是否私有。
+	RepositoryDisplayName         string    `json:"repository_display_name,omitempty"`
+	RepositoryMask                string    `json:"repository_mask,omitempty"`
+	RepositoryPrivate             *bool     `json:"repository_private,omitempty"`
+	RepositoryVisibilityCheckedAt time.Time `json:"repository_visibility_checked_at,omitempty"`
+	WatchCommits                  bool      `json:"watch_commits,omitempty"`
+	WatchPullRequests             bool      `json:"watch_pull_requests,omitempty"`
 	// WatchPullRequestEvents / WatchIssueEvents：nil 是未配置的旧记录，按全选兼容；
 	// 非 nil 空数组表示明确全不选，因此 JSON 不能使用 omitempty。
 	WatchPullRequestEvents []string `json:"watch_pull_request_events"`

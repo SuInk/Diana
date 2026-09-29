@@ -426,3 +426,22 @@ func TestRepositoryWatchCreateForwardsSelectedEventKinds(t *testing.T) {
 		t.Fatalf("event kinds were dropped: pull=%v issue=%v", input.WatchPullRequestEvents, input.WatchIssueEvents)
 	}
 }
+
+// 任务列表带出打码设置和实际是否打码，编辑框才读得回来、列表才能标「推送已打码」。
+func TestTaskListCarriesRepositoryWatchMaskSettings(t *testing.T) {
+	private := true
+	payload := botTaskPayloadFromReminder(assistant.Reminder{
+		ID: "watch", Kind: assistant.ReminderKindRepositoryWatch, Repository: "acme/secret-lab", IntervalSeconds: 300,
+		RepositoryDisplayName: "实验室项目", RepositoryPrivate: &private,
+	})
+	if payload.RepositoryDisplayName != "实验室项目" || payload.RepositoryMask != "" || payload.RepositoryPrivate == nil || !payload.RepositoryMasked {
+		t.Fatalf("payload = %#v", payload)
+	}
+	payload = botTaskPayloadFromReminder(assistant.Reminder{
+		ID: "watch", Kind: assistant.ReminderKindRepositoryWatch, Repository: "acme/secret-lab", IntervalSeconds: 300,
+		RepositoryPrivate: &private, RepositoryMask: "never",
+	})
+	if payload.RepositoryMasked {
+		t.Fatalf("never mode should not be masked: %#v", payload)
+	}
+}

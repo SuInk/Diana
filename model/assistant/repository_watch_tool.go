@@ -189,14 +189,17 @@ type RepositoryWatchCreateInput struct {
 	StarNotifyMode         string
 	StarNotifyThreshold    int
 	StarNotifyMilestones   []int
-	Platform               string
-	ProfileID              string
-	ContextNamespace       string
-	OwnerID                string
-	GroupID                string
-	UserID                 string
-	NotificationEnabled    bool
-	NotificationTargets    []ReminderDeliveryTarget
+	// DisplayName 和 Mask 是推送打码设置，见 repository_watch_mask.go。
+	DisplayName         string
+	Mask                string
+	Platform            string
+	ProfileID           string
+	ContextNamespace    string
+	OwnerID             string
+	GroupID             string
+	UserID              string
+	NotificationEnabled bool
+	NotificationTargets []ReminderDeliveryTarget
 }
 
 type RepositoryWatchUpdateInput struct {
@@ -214,6 +217,8 @@ type RepositoryWatchUpdateInput struct {
 	StarNotifyMode         *string
 	StarNotifyThreshold    *int
 	StarNotifyMilestones   []int
+	DisplayName            *string
+	Mask                   *string
 	Delivery               bool
 	Platform               string
 	ProfileID              string
@@ -312,12 +317,29 @@ func (r *Runtime) CreateRepositoryWatch(ctx context.Context, input RepositoryWat
 	if starMode == starNotifyModeMilestone && len(starMilestones) == 0 {
 		return Reminder{}, fmt.Errorf("里程碑模式至少需要一个 Star 里程碑")
 	}
+	displayName, err := normalizeRepositoryWatchDisplayName(input.DisplayName)
+	if err != nil {
+		return Reminder{}, err
+	}
+	mask, err := normalizeRepositoryWatchMask(input.Mask)
+	if err != nil {
+		return Reminder{}, err
+	}
 	baseline, err := plugin.snapshotSelected(ctx, repository, strings.TrimSpace(input.Branch), selection, settings)
 	if err != nil {
 		return Reminder{}, fmt.Errorf("建立仓库基线失败: %w", err)
 	}
 	ownerID := firstNonEmpty(strings.TrimSpace(input.OwnerID), repositoryWatchWebUIOwner(event.ProfileID))
-	return r.addRepositoryWatch(event, ownerID, repository, strings.TrimSpace(input.Branch), interval, selection, baseline, starMode, starThreshold, starMilestones, input.NotificationEnabled, input.NotificationTargets)
+	item, err := r.addRepositoryWatch(event, ownerID, repository, strings.TrimSpace(input.Branch), interval, selection, baseline, starMode, starThreshold, starMilestones, input.NotificationEnabled, input.NotificationTargets)
+	// 是否私有不在这里查：第一次有动态要推时 resolveRepositoryWatchVisibility 会查，
+	// 建订阅本身不多花请求。
+	if err != nil || (displayName == "" && mask == repositoryWatchMaskAuto) {
+		return item, err
+	}
+	return r.mutateRepositoryWatch(item.OwnerID, item.ID, func(stored *Reminder) error {
+		stored.RepositoryDisplayName, stored.RepositoryMask = displayName, mask
+		return nil
+	})
 }
 
 func repositoryWatchWebUIOwner(profileID string) string {
@@ -412,6 +434,12 @@ func (r *Runtime) UpdateRepositoryWatch(ctx context.Context, ownerID, id string,
 	}
 	if input.StarNotifyMilestones != nil {
 		values["star_notify_milestones"] = input.StarNotifyMilestones
+	}
+	if input.DisplayName != nil {
+		values["display_name"] = *input.DisplayName
+	}
+	if input.Mask != nil {
+		values["mask"] = *input.Mask
 	}
 	if input.Delivery {
 		values["delivery"] = true
@@ -711,6 +739,19 @@ func (r *Runtime) updateRepositoryWatch(ownerID, id string, input map[string]any
 		return Reminder{}, fmt.Errorf("里程碑模式至少需要一个 Star 里程碑")
 	}
 	repositoryChanged := repository != current.Repository || branch != current.RepositoryBranch
+	displayName, displayNameProvided := current.RepositoryDisplayName, false
+	if raw, ok := input["display_name"].(string); ok {
+		if displayName, err = normalizeRepositoryWatchDisplayName(raw); err != nil {
+			return Reminder{}, err
+		}
+		displayNameProvided = true
+	}
+	mask := current.RepositoryMask
+	if raw, ok := input["mask"].(string); ok {
+		if mask, err = normalizeRepositoryWatchMask(raw); err != nil {
+			return Reminder{}, err
+		}
+	}
 	baselineSelection := repositoryWatchSelection{
 		Commits:      repositoryChanged && selection.Commits || selection.Commits && !current.WatchCommits,
 		PullRequests: repositoryChanged && selection.PullRequests || selection.PullRequests && !current.WatchPullRequests,
@@ -752,6 +793,14 @@ func (r *Runtime) updateRepositoryWatch(ownerID, id string, input map[string]any
 		if starConfigChanged {
 			item.LastNotifiedStarCount = item.LastStarCount
 		}
+		// 换了仓库，旧的可见性结论作废，下次推送前重新查。
+		if item.Repository != repository {
+			item.RepositoryPrivate, item.RepositoryVisibilityCheckedAt = nil, time.Time{}
+		}
+		if displayNameProvided {
+			item.RepositoryDisplayName = displayName
+		}
+		item.RepositoryMask = mask
 		item.Repository = repository
 		item.RepositoryBranch = branch
 		item.WatchCommits = selection.Commits

@@ -3612,6 +3612,14 @@ export interface AssistantTask {
   pending_since?: string;
   repository?: string;
   repository_branch?: string;
+  /** 推送里对仓库的称呼，代替 owner/repo。 */
+  repository_display_name?: string;
+  /** 打码模式：空为自动（私有仓库打码），always 总是打码，never 不打码。 */
+  repository_mask?: "" | "always" | "never";
+  /** 仓库是否私有；还没查到时没有这一项。 */
+  repository_private?: boolean;
+  /** 推送实际会不会打码。 */
+  repository_masked?: boolean;
   watch_commits?: boolean;
   watch_pull_requests?: boolean;
   watch_pull_request_events?: RepositoryWatchPullEvent[];
@@ -3661,6 +3669,8 @@ export interface AssistantTasksResponse {
 export interface RepositoryWatchInput {
   repository: string;
   branch?: string;
+  repository_display_name?: string;
+  repository_mask?: "auto" | "always" | "never";
   interval_seconds: number;
   watch_commits: boolean;
   watch_pull_requests: boolean;
