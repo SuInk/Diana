@@ -3,7 +3,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { formatCompactNumber } from "./format.ts";
+import { formatCompactNumber, formatDurationMS } from "./format.ts";
 
 test("四位数以下照原样给，不必读成 0.97K", () => {
   assert.equal(formatCompactNumber(0), "0");
@@ -23,4 +23,18 @@ test("缺值和非数不该把卡片打成 NaN", () => {
   assert.equal(formatCompactNumber(undefined), "0");
   assert.equal(formatCompactNumber(null), "0");
   assert.equal(formatCompactNumber(Number.NaN), "0");
+});
+
+test("耗时按量级换单位", () => {
+  assert.equal(formatDurationMS(0), "0ms");
+  assert.equal(formatDurationMS(742), "742ms");
+  assert.equal(formatDurationMS(1000), "1.0s");
+  assert.equal(formatDurationMS(51_300), "51.3s");
+  assert.equal(formatDurationMS(72_400), "1m 12s");
+});
+
+test("缺值和负数给破折号，不写成 0ms", () => {
+  assert.equal(formatDurationMS(undefined), "—");
+  assert.equal(formatDurationMS(null), "—");
+  assert.equal(formatDurationMS(-1), "—");
 });

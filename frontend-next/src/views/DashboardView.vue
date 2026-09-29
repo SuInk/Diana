@@ -217,7 +217,7 @@
     </div>
 
     <!-- 所有卡片共用这一个明细弹窗：卡面一行只放得下一个数，分解、占比和口径说明都在这里。 -->
-    <Modal v-if="activeDetail" :title="activeDetail.title" @close="openDetail = null">
+    <Modal v-if="activeDetail" :title="activeDetail.title" :wide="openDetail === 'latency'" @close="openDetail = null">
       <div class="stack" style="gap: 14px">
         <div class="usage-detail-total">
           <span class="muted">{{ activeDetail.totalLabel }}</span>
@@ -230,6 +230,14 @@
           </div>
         </div>
         <p class="hint" style="margin: 0">{{ activeDetail.note }}</p>
+        <!-- 平均值会被个别慢回复拖偏：分位数、阶段分解和最慢最快的几条都在这里，
+             读库算，跨重启成立，7 天窗口也有。 -->
+        <LatencyDetail
+          v-if="openDetail === 'latency'"
+          :profile-id="botScope"
+          :initial-window="selectedRange === '1h' ? '1h' : '24h'"
+          :group-label="displayGroupIdentity"
+        />
       </div>
     </Modal>
   </div>
@@ -270,6 +278,7 @@ import StatCard from "../components/StatCard.vue";
 import HourlyBars from "../components/HourlyBars.vue";
 import EmptyState from "../components/EmptyState.vue";
 import Modal from "../components/Modal.vue";
+import LatencyDetail from "../components/LatencyDetail.vue";
 import LoadingSkeleton from "../components/LoadingSkeleton.vue";
 import SkeletonBlock from "../components/SkeletonBlock.vue";
 

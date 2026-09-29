@@ -2522,6 +2522,65 @@ export function getStatsRanges(): Promise<StatsRanges> {
   return requestJSON<StatsRanges>("/api/stats/ranges");
 }
 
+export type LatencyWindowID = "1h" | "24h" | "7d";
+
+/** 一组耗时的分布；samples 为 0 时其余字段没有意义，界面显示「—」。 */
+export interface LatencyDistribution {
+  samples: number;
+  avg_ms: number;
+  p50_ms: number;
+  p90_ms: number;
+  p99_ms: number;
+  min_ms: number;
+  max_ms: number;
+}
+
+/** 一次回复的耗时。阶段字段缺省表示这一条量不到，不是 0。 */
+export interface ReplyLatencySample {
+  event_id: string;
+  message_id?: string;
+  profile_id?: string;
+  kind: string;
+  group_id?: string;
+  completed_at: string;
+  total_ms: number;
+  wait_ms?: number;
+  ttft_ms?: number;
+  model_ms?: number;
+  tool_ms?: number;
+  model_calls?: number;
+}
+
+export interface ReplyLatencySummary {
+  since: string;
+  until: string;
+  total: LatencyDistribution;
+  wait: LatencyDistribution;
+  ttft: LatencyDistribution;
+  model: LatencyDistribution;
+  tool: LatencyDistribution;
+  slowest?: ReplyLatencySample[];
+  fastest?: ReplyLatencySample[];
+}
+
+export interface LatencyWindow {
+  id: LatencyWindowID;
+  current: ReplyLatencySummary;
+  /** 紧挨着的前一段等长窗口，用来看变快还是变慢。 */
+  previous: ReplyLatencySummary;
+}
+
+export interface StatsLatency {
+  until: string;
+  windows: LatencyWindow[];
+}
+
+/** 最近 1 小时 / 24 小时 / 7 天的回复耗时分位数和阶段分解；profileID 为空表示全部机器人。 */
+export function getStatsLatency(profileID = ""): Promise<StatsLatency> {
+  const query = profileID ? `?profile_id=${encodeURIComponent(profileID)}` : "";
+  return requestJSON<StatsLatency>(`/api/stats/latency${query}`);
+}
+
 export type AssistantEventRange = "1h" | "24h" | "7d" | "30d" | "all";
 export type AssistantEventResultFilter = "all" | "replied" | "not_replied" | "pending" | "error" | "notice";
 

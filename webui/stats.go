@@ -385,7 +385,9 @@ type StatsHandler struct {
 	// 零值让前端当成「这段时间什么都没发生」，不如明确说读不到。
 	usage  applog.UsageReader
 	events eventStatsRangeReader
-	now    func() time.Time
+	// latency 为空时响应耗时明细接口返回 503，理由同上。
+	latency replyLatencyReader
+	now     func() time.Time
 }
 
 // WithRangeReaders 注入时间窗统计要用的两个读取器：队列事件和用量日志。
@@ -408,6 +410,7 @@ func NewStatsHandler(collector *StatsCollector, runtime statsStatusProvider, sto
 func (h *StatsHandler) Register(router gin.IRouter) {
 	router.GET("/api/stats", h.stats)
 	router.GET("/api/stats/ranges", h.statsRanges)
+	router.GET("/api/stats/latency", h.statsLatency)
 }
 
 // stats 返回运行统计和机器人状态摘要。

@@ -747,6 +747,16 @@ func TestRunnerSkipsConsecutiveDuplicateToolCall(t *testing.T) {
 	if last := events[len(events)-1]; last.Phase != RunPhaseCompleted || last.ToolsExecuted != 1 {
 		t.Fatalf("completed event = %#v", last)
 	}
+	// 收尾事件的工具耗时是各次工具完成事件耗时之和，跳过的那次不占时间。
+	var toolMS int64
+	for _, event := range events {
+		if event.Phase == RunPhaseToolCompleted {
+			toolMS += event.DurationMS
+		}
+	}
+	if last := events[len(events)-1]; last.ToolsDurationMS != toolMS {
+		t.Fatalf("ToolsDurationMS = %d, want %d", last.ToolsDurationMS, toolMS)
+	}
 }
 
 func TestRunnerBoundsEveryToolCall(t *testing.T) {
