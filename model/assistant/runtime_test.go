@@ -4733,7 +4733,6 @@ func TestRuntimeReplyRuleConvertsReplyToVoice(t *testing.T) {
 	defer server.Close()
 	t.Setenv("DIANA_TTS_ENDPOINT", server.URL)
 	t.Setenv("DIANA_TTS_OUTPUT_DIR", t.TempDir())
-	t.Setenv("DIANA_TTS_SILK_ENCODER_PATH", "")
 
 	channel := &recordingChannel{}
 	provider := &sequenceLLMProvider{replies: []string{

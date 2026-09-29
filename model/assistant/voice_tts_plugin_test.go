@@ -96,7 +96,6 @@ func TestDianaTTSToolSynthesizesAndReturnsTerminalRecord(t *testing.T) {
 	t.Setenv("DIANA_TTS_ENDPOINT", server.URL)
 	t.Setenv("DIANA_TTS_REF_AUDIO_PATH", "/models/reference.wav")
 	t.Setenv("DIANA_TTS_OUTPUT_DIR", outputDir)
-	t.Setenv("DIANA_TTS_SILK_ENCODER_PATH", "")
 	plugin := NewVoiceTTSPlugin(server.Client())
 	sharer := &recordingLocalMediaSharer{url: "http://127.0.0.1:18080/api/assistant/media/voice-token"}
 	plugin.SetLocalMediaSharer(sharer)
@@ -134,60 +133,6 @@ func TestDianaTTSToolSynthesizesAndReturnsTerminalRecord(t *testing.T) {
 	}
 }
 
-func TestDianaTTSToolPreEncodesTencentSilkForOneBot(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "audio/wav")
-		_, _ = w.Write(testWAVBytes())
-	}))
-	defer server.Close()
-
-	outputDir := t.TempDir()
-	t.Setenv("DIANA_TTS_ENDPOINT", server.URL)
-	t.Setenv("DIANA_TTS_OUTPUT_DIR", outputDir)
-	t.Setenv("DIANA_TTS_FFMPEG_PATH", "/test/ffmpeg")
-	t.Setenv("DIANA_TTS_SILK_ENCODER_PATH", "/test/silk-encoder")
-	t.Setenv("DIANA_TTS_SILK_BITRATE", "24000")
-
-	plugin := NewVoiceTTSPlugin(server.Client())
-	var commands []string
-	plugin.commandRunner = func(_ context.Context, name string, args ...string) ([]byte, error) {
-		commands = append(commands, name+" "+strings.Join(args, " "))
-		switch name {
-		case "/test/ffmpeg":
-			return nil, os.WriteFile(args[len(args)-1], []byte{0, 1, 2, 3}, 0o600)
-		case "/test/silk-encoder":
-			for i := 0; i+1 < len(args); i++ {
-				if args[i] == "-o" {
-					return nil, os.WriteFile(args[i+1], append([]byte{0x02}, []byte("#!SILK_V3\x00voice")...), 0o600)
-				}
-			}
-			return nil, fmt.Errorf("missing -o")
-		default:
-			return nil, fmt.Errorf("unexpected command %q", name)
-		}
-	}
-	sharer := &recordingLocalMediaSharer{url: "http://127.0.0.1:18080/api/assistant/media/silk-token"}
-	plugin.SetLocalMediaSharer(sharer)
-
-	if _, err := mustVoiceTTSTool(t, plugin, nil).Run(context.Background(), map[string]any{"text": "用语音说晚安"}); err != nil {
-		t.Fatal(err)
-	}
-	if len(commands) != 2 || !strings.Contains(commands[0], "-ar 24000 -ac 1 -f s16le") || !strings.Contains(commands[1], "-rate 24000") {
-		t.Fatalf("commands=%#v", commands)
-	}
-	if len(sharer.paths) != 1 || filepath.Ext(sharer.paths[0]) != ".silk" {
-		t.Fatalf("shared paths=%#v", sharer.paths)
-	}
-	header, err := readFilePrefix(sharer.paths[0], 16)
-	if err != nil || !looksLikeTencentSilk(header) {
-		t.Fatalf("silk header=%q err=%v", header, err)
-	}
-	entries, err := os.ReadDir(outputDir)
-	if err != nil || len(entries) != 1 || filepath.Ext(entries[0].Name()) != ".silk" {
-		t.Fatalf("cache entries=%#v err=%v", entries, err)
-	}
-}
-
 func TestDianaTTSToolRejectsNonAudioResponse(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -197,7 +142,6 @@ func TestDianaTTSToolRejectsNonAudioResponse(t *testing.T) {
 
 	t.Setenv("DIANA_TTS_ENDPOINT", server.URL)
 	t.Setenv("DIANA_TTS_OUTPUT_DIR", t.TempDir())
-	t.Setenv("DIANA_TTS_SILK_ENCODER_PATH", "")
 	plugin := NewVoiceTTSPlugin(server.Client())
 	plugin.SetLocalMediaSharer(&recordingLocalMediaSharer{url: "http://127.0.0.1/audio"})
 	_, err := mustVoiceTTSTool(t, plugin, nil).Run(context.Background(), map[string]any{"text": "测试"})
@@ -226,7 +170,6 @@ func TestRuntimeAgentUsesTTSForModelSelectedVoiceRequest(t *testing.T) {
 	defer server.Close()
 	t.Setenv("DIANA_TTS_ENDPOINT", server.URL)
 	t.Setenv("DIANA_TTS_OUTPUT_DIR", t.TempDir())
-	t.Setenv("DIANA_TTS_SILK_ENCODER_PATH", "")
 
 	provider := &sequenceLLMProvider{replies: []string{
 		`{"action":"none","prompt":""}`,
@@ -273,7 +216,6 @@ func TestRuntimeGroupTTSVoiceIsAStandaloneRecord(t *testing.T) {
 	defer server.Close()
 	t.Setenv("DIANA_TTS_ENDPOINT", "http://127.0.0.1:1/tts")
 	t.Setenv("DIANA_TTS_OUTPUT_DIR", t.TempDir())
-	t.Setenv("DIANA_TTS_SILK_ENCODER_PATH", "")
 
 	provider := &sequenceLLMProvider{replies: []string{
 		`{"action":"none","prompt":""}`,

@@ -18,7 +18,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/SuInk/diana/internal/procgroup"
 	"github.com/SuInk/diana/model/agent"
 	"github.com/SuInk/diana/model/llm"
 )
@@ -55,7 +54,6 @@ const (
 	defaultVoiceTTSMaxChars = 500
 	defaultVoiceTTSMaxBytes = 32 << 20
 	defaultVoiceTTSMediaTTL = 10 * time.Minute
-	defaultVoiceTTSSilkRate = 25000
 )
 
 type voiceCommandRunner func(context.Context, string, ...string) ([]byte, error)
@@ -65,8 +63,7 @@ type voiceCommandRunner func(context.Context, string, ...string) ([]byte, error)
 type speechSynthesizer func(ctx context.Context, text string) (*llm.SpeechResponse, error)
 
 type VoiceTTSPlugin struct {
-	client        *http.Client
-	commandRunner voiceCommandRunner
+	client *http.Client
 
 	mu     sync.RWMutex
 	sharer LocalMediaSharer
@@ -89,9 +86,6 @@ type voiceTTSConfig struct {
 	Timeout      time.Duration
 	MaxChars     int
 	SpeedFactor  float64
-	FFmpegPath   string
-	SilkEncoder  string
-	SilkBitrate  int
 	UseModelSlot bool
 }
 
@@ -108,9 +102,6 @@ func NewVoiceTTSPlugin(client *http.Client) *VoiceTTSPlugin {
 	}
 	return &VoiceTTSPlugin{
 		client: client,
-		commandRunner: func(ctx context.Context, name string, args ...string) ([]byte, error) {
-			return procgroup.CommandContext(ctx, name, args...).CombinedOutput()
-		},
 	}
 }
 
@@ -393,9 +384,8 @@ func slotSpeechExtension(resp *llm.SpeechResponse) string {
 	return "mp3"
 }
 
-// storeVoiceAudio 把合成好的音频落进缓存目录；配了 Silk 编码器时再转成 QQ 语音
-// 原生的 Silk。ffmpeg 先解码成 PCM，所以插槽给出的 mp3、opus 也能走这条路。
-// SnowLuma 这类自己转码的客户端不该配编码器，原因见 encodeSilkIfConfigured。
+// storeVoiceAudio 把合成好的音频原样落进缓存目录。不在这里转 Silk：OneBot 客户端
+// 自己会转码，SnowLuma 收到现成的 Silk 量不出时长，QQ 里会显示成 1 秒（#920）。
 func (p *VoiceTTSPlugin) storeVoiceAudio(ctx context.Context, cfg voiceTTSConfig, audio []byte, extension string) (string, error) {
 	if err := os.MkdirAll(cfg.OutputDir, 0o700); err != nil {
 		return "", fmt.Errorf("创建语音缓存目录失败: %w", err)
@@ -414,84 +404,7 @@ func (p *VoiceTTSPlugin) storeVoiceAudio(ctx context.Context, cfg voiceTTSConfig
 		_ = os.Remove(path)
 		return "", fmt.Errorf("保存语音缓存失败: %w", closeErr)
 	}
-	if cfg.SilkEncoder == "" {
-		return path, nil
-	}
-	silkPath, err := p.encodeTencentSilk(ctx, cfg, path)
-	if err != nil {
-		_ = os.Remove(path)
-		return "", err
-	}
-	_ = os.Remove(path)
-	return silkPath, nil
-}
-
-func (p *VoiceTTSPlugin) encodeTencentSilk(ctx context.Context, cfg voiceTTSConfig, wavPath string) (string, error) {
-	pcmFile, err := os.CreateTemp(cfg.OutputDir, "diana-tts-*.pcm")
-	if err != nil {
-		return "", fmt.Errorf("创建 PCM 缓存文件失败: %w", err)
-	}
-	pcmPath := pcmFile.Name()
-	if closeErr := pcmFile.Close(); closeErr != nil {
-		_ = os.Remove(pcmPath)
-		return "", fmt.Errorf("创建 PCM 缓存文件失败: %w", closeErr)
-	}
-	defer os.Remove(pcmPath)
-
-	silkFile, err := os.CreateTemp(cfg.OutputDir, "diana-tts-*.silk")
-	if err != nil {
-		return "", fmt.Errorf("创建 Silk 缓存文件失败: %w", err)
-	}
-	silkPath := silkFile.Name()
-	if closeErr := silkFile.Close(); closeErr != nil {
-		_ = os.Remove(silkPath)
-		return "", fmt.Errorf("创建 Silk 缓存文件失败: %w", closeErr)
-	}
-	removeSilk := true
-	defer func() {
-		if removeSilk {
-			_ = os.Remove(silkPath)
-		}
-	}()
-
-	conversionCtx, cancel := context.WithTimeout(ctx, cfg.Timeout)
-	defer cancel()
-	output, err := p.runVoiceCommand(conversionCtx, cfg.FFmpegPath,
-		"-hide_banner", "-loglevel", "error", "-y", "-i", wavPath,
-		"-ar", "24000", "-ac", "1", "-f", "s16le", pcmPath,
-	)
-	if err != nil {
-		return "", voiceCommandError("系统 ffmpeg 转换 PCM", output, err)
-	}
-	output, err = p.runVoiceCommand(conversionCtx, cfg.SilkEncoder,
-		"-i", pcmPath,
-		"-o", silkPath,
-		"-Fs_API", "24000",
-		"-Fs_maxInternal", "24000",
-		"-packetlength", "20",
-		"-rate", strconv.Itoa(cfg.SilkBitrate),
-		"-complexity", "2",
-		"-STX=true",
-	)
-	if err != nil {
-		return "", voiceCommandError("Silk 编码", output, err)
-	}
-	header, err := readFilePrefix(silkPath, 16)
-	if err != nil {
-		return "", fmt.Errorf("读取 Silk 结果失败: %w", err)
-	}
-	if !looksLikeTencentSilk(header) {
-		return "", fmt.Errorf("Silk 编码器未返回有效 Tencent Silk 音频")
-	}
-	removeSilk = false
-	return silkPath, nil
-}
-
-func (p *VoiceTTSPlugin) runVoiceCommand(ctx context.Context, name string, args ...string) ([]byte, error) {
-	if p.commandRunner == nil {
-		return procgroup.CommandContext(ctx, name, args...).CombinedOutput()
-	}
-	return p.commandRunner(ctx, name, args...)
+	return path, nil
 }
 
 func voiceCommandError(action string, output []byte, err error) error {
@@ -538,9 +451,6 @@ func voiceTTSConfigFromEnv() voiceTTSConfig {
 		Timeout:      time.Duration(timeoutSeconds) * time.Second,
 		MaxChars:     maxChars,
 		SpeedFactor:  speedFactor,
-		FFmpegPath:   firstNonEmpty(strings.TrimSpace(os.Getenv("DIANA_TTS_FFMPEG_PATH")), "ffmpeg"),
-		SilkEncoder:  strings.TrimSpace(os.Getenv("DIANA_TTS_SILK_ENCODER_PATH")),
-		SilkBitrate:  voiceTTSSilkBitrate(),
 	}
 }
 
@@ -582,14 +492,6 @@ func settingFloat(settings SettingValues, key string, fallback float64) float64 
 
 func voiceTTSVoiceName() string {
 	return firstNonEmpty(strings.TrimSpace(os.Getenv("DIANA_TTS_VOICE_NAME")), "自定义")
-}
-
-func voiceTTSSilkBitrate() int {
-	bitrate := envInt("DIANA_TTS_SILK_BITRATE", defaultVoiceTTSSilkRate)
-	if bitrate < 5000 || bitrate > 100000 {
-		return defaultVoiceTTSSilkRate
-	}
-	return bitrate
 }
 
 func voiceTTSOutputDir() string {

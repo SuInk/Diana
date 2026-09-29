@@ -67,7 +67,6 @@ func newPersistentVoiceFixture(t *testing.T, reply string, ttsStatus int, sendMo
 	}))
 	t.Cleanup(server.Close)
 	t.Setenv("DIANA_TTS_OUTPUT_DIR", t.TempDir())
-	t.Setenv("DIANA_TTS_SILK_ENCODER_PATH", "")
 
 	provider := &sequenceLLMProvider{replies: []string{`{"action":"none","prompt":""}`, reply}}
 	channel := &recordingChannel{}

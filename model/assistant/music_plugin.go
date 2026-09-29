@@ -52,6 +52,7 @@ const (
 	defaultMusicMaxMB       = 20
 	defaultMusicTimeout     = 45
 	musicMediaTTL           = 10 * time.Minute
+	musicSilkBitrate        = 25000
 )
 
 type MusicPlugin struct {
@@ -282,7 +283,7 @@ func (p *MusicPlugin) Manifest() PluginManifest {
 				Label:       "Silk 编码器路径",
 				Type:        PluginSettingTypeString,
 				Default:     "",
-				Description: "填了就把音频转成 Tencent Silk 再发，只适合自己不做转码的 OneBot 客户端。SnowLuma、NapCat 会自己转码，请留空：SnowLuma 量不出现成 Silk 的时长，QQ 里会显示成 1 秒。留空沿用语音合成插件的 DIANA_TTS_SILK_ENCODER_PATH。",
+				Description: "填了就把音频转成 Tencent Silk 再发，只适合自己不做转码的 OneBot 客户端。SnowLuma、NapCat 会自己转码，请留空：SnowLuma 量不出现成 Silk 的时长，QQ 里会显示成 1 秒。",
 			},
 		},
 	}
@@ -697,13 +698,8 @@ func musicConfigFromSettings(settings SettingValues) musicConfig {
 		RequestedSong:   settings.Bool(musicSettingRequestSong, true),
 		OutputDir:       musicOutputDir(),
 		FFmpegPath:      firstNonEmpty(strings.TrimSpace(os.Getenv("DIANA_TTS_FFMPEG_PATH")), "ffmpeg"),
-		// Silk 编码器全机器一台就够，默认沿用语音合成插件已经配好的那个，
-		// 不逼用户在两个插件里把同一个路径填两遍。
-		SilkEncoder: firstNonEmpty(
-			strings.TrimSpace(settings.String(musicSettingSilkEncoder, "")),
-			strings.TrimSpace(os.Getenv("DIANA_TTS_SILK_ENCODER_PATH")),
-		),
-		SilkBitrate: voiceTTSSilkBitrate(),
+		SilkEncoder:     strings.TrimSpace(settings.String(musicSettingSilkEncoder, "")),
+		SilkBitrate:     musicSilkBitrate,
 	}
 }
 
