@@ -232,6 +232,8 @@ type RunEvent struct {
 	// ToolsExecuted 只在 completed/failed 上有值：本轮实际执行的工具总数。
 	// ToolCall 只数占 MaxSteps 预算的调用，tools_load 和自省不算进去，拿它当「调了几次工具」会少数。
 	ToolsExecuted int
+	// ToolsDurationMS 同样只在 completed/failed 上有值：本轮执行工具的耗时之和。
+	ToolsDurationMS int64
 }
 
 type RunObserver func(context.Context, RunEvent)

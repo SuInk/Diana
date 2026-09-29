@@ -52,6 +52,7 @@ const (
 	defaultMusicMaxMB       = 20
 	defaultMusicTimeout     = 45
 	musicMediaTTL           = 10 * time.Minute
+	musicSilkBitrate        = 25000
 )
 
 type MusicPlugin struct {
@@ -282,7 +283,7 @@ func (p *MusicPlugin) Manifest() PluginManifest {
 				Label:       "Silk 编码器路径",
 				Type:        PluginSettingTypeString,
 				Default:     "",
-				Description: "填了就把音频转成 Tencent Silk 再发，适合自己不做转码的 OneBot 客户端。留空沿用语音合成插件的 DIANA_TTS_SILK_ENCODER_PATH。",
+				Description: "填了就把音频转成 Tencent Silk 再发，只适合自己不做转码的 OneBot 客户端。SnowLuma、NapCat 会自己转码，请留空：SnowLuma 量不出现成 Silk 的时长，QQ 里会显示成 1 秒。",
 			},
 		},
 	}
@@ -697,13 +698,8 @@ func musicConfigFromSettings(settings SettingValues) musicConfig {
 		RequestedSong:   settings.Bool(musicSettingRequestSong, true),
 		OutputDir:       musicOutputDir(),
 		FFmpegPath:      firstNonEmpty(strings.TrimSpace(os.Getenv("DIANA_TTS_FFMPEG_PATH")), "ffmpeg"),
-		// Silk 编码器全机器一台就够，默认沿用语音合成插件已经配好的那个，
-		// 不逼用户在两个插件里把同一个路径填两遍。
-		SilkEncoder: firstNonEmpty(
-			strings.TrimSpace(settings.String(musicSettingSilkEncoder, "")),
-			strings.TrimSpace(os.Getenv("DIANA_TTS_SILK_ENCODER_PATH")),
-		),
-		SilkBitrate: voiceTTSSilkBitrate(),
+		SilkEncoder:     strings.TrimSpace(settings.String(musicSettingSilkEncoder, "")),
+		SilkBitrate:     musicSilkBitrate,
 	}
 }
 
@@ -786,6 +782,9 @@ func musicOutputDir() string {
 // 没配就原样返回：常见 OneBot 客户端自己会转码，逼所有人先装一个
 // 编码器才能听歌是没必要的门槛。转码失败也返回原文件——发一条客户端可能转不了的
 // mp3，好过什么都不发。
+//
+// 反过来，会自己转码的客户端别配：SnowLuma 收到现成的 Silk 时用 ffmpeg 量时长，
+// 量出来是 0，再兜底成 1 秒，QQ 气泡就一直显示 1"（#920）。段里带 duration 它也不认。
 func (p *MusicPlugin) encodeSilkIfConfigured(ctx context.Context, cfg musicConfig, audioPath string) (string, error) {
 	if cfg.SilkEncoder == "" {
 		return audioPath, nil

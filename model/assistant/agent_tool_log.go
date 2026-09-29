@@ -96,6 +96,8 @@ func (r *Runtime) agentRunObserver(event MessageEvent) agent.RunObserver {
 			// 运行记录按消息汇总工具次数靠这一条：单次工具日志的 target 是工具名，
 			// 联网搜索那条还特意抹掉了消息号，拿它们数会漏。
 			metadata["tools_executed"] = runEvent.ToolsExecuted
+			// 响应耗时分解按消息汇总工具耗时也靠这一条，理由同上。
+			metadata["tools_duration_ms"] = runEvent.ToolsDurationMS
 		}
 		actor := oneBotEventActor(event)
 		if runEvent.Tool == agent.WebSearchToolName {

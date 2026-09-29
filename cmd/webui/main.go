@@ -641,7 +641,7 @@ func main() {
 	botHandler.SetRepoPluginInstaller(repoPluginInstaller)
 	botHandler.SetRepoPluginSourceStore(repoPluginStore)
 	logHandler := webui.NewAppLogHandler(sqliteStore)
-	statsHandler := webui.NewStatsHandler(statsCollector, botRuntime, sqliteStore.Path()).WithRangeReaders(sqliteStore, sqliteStore)
+	statsHandler := webui.NewStatsHandler(statsCollector, botRuntime, sqliteStore.Path()).WithRangeReaders(sqliteStore, sqliteStore).WithLatencyReader(sqliteStore)
 	eventStreamHandler := webui.NewEventStreamHandler(eventHub, botRuntime, statsCollector, sqliteStore.Path())
 	eventStreamHandler.StartWatcher(ctx, 2*time.Second)
 	healthHandler := webui.NewHealthHandlerWithVersion(runtimeVersion)

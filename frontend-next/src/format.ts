@@ -123,6 +123,22 @@ export function formatHourLabel(hourUnix: number): string {
   return `${String(date.getHours()).padStart(2, "0")}:00`;
 }
 
+// 耗时按量级换单位：一秒以内给毫秒（首 token 这类几百毫秒的数写成 0.3s 看不出差别），
+// 一分钟以内给一位小数的秒，再长给「分 秒」。
+export function formatDurationMS(value: number | undefined | null): string {
+  if (value === undefined || value === null || !Number.isFinite(value) || value < 0) {
+    return "—";
+  }
+  if (value < 1000) {
+    return `${Math.round(value)}ms`;
+  }
+  if (value < 60_000) {
+    return `${(value / 1000).toFixed(1)}s`;
+  }
+  const totalSeconds = Math.round(value / 1000);
+  return `${Math.floor(totalSeconds / 60)}m ${totalSeconds % 60}s`;
+}
+
 export function truncate(text: string | undefined | null, max = 80): string {
   if (!text) {
     return "";

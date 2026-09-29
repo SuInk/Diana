@@ -144,7 +144,6 @@ func TestTTSPluginModelSlotPresetUsesSpeechSlot(t *testing.T) {
 	defer server.Close()
 	outputDir := t.TempDir()
 	t.Setenv("DIANA_TTS_OUTPUT_DIR", outputDir)
-	t.Setenv("DIANA_TTS_SILK_ENCODER_PATH", "")
 	r := mediaSlotTestRuntime(t, map[string]ModelRole{
 		"tts": {ProfileID: "p1", Model: "gpt-4o-mini-tts", Params: map[string]string{"voice": "alloy"}},
 	}, mediaSlotProfile("p1", server.URL))

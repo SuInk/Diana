@@ -34,14 +34,15 @@ func TestAgentRunObserverWritesCorrelatedLifecycleLogs(t *testing.T) {
 		InputKeys:    []string{"query"},
 	})
 	observe(context.Background(), agent.RunEvent{
-		TraceID:       "trace-1",
-		Phase:         agent.RunPhaseCompleted,
-		ModelTurn:     3,
-		ToolCall:      1,
-		ToolsExecuted: 2,
-		MaxToolCalls:  8,
-		DurationMS:    42,
-		FinishReason:  "final",
+		TraceID:         "trace-1",
+		Phase:           agent.RunPhaseCompleted,
+		ModelTurn:       3,
+		ToolCall:        1,
+		ToolsExecuted:   2,
+		ToolsDurationMS: 15,
+		MaxToolCalls:    8,
+		DurationMS:      42,
+		FinishReason:    "final",
 	})
 
 	if len(logs.entries) != 2 {
@@ -58,7 +59,7 @@ func TestAgentRunObserverWritesCorrelatedLifecycleLogs(t *testing.T) {
 		t.Fatalf("tool metadata = %#v", started.Metadata)
 	}
 	completed := logs.entries[1]
-	if completed.Action != "agent_run" || completed.Message != "Agent 运行完成 [########] done" || completed.Metadata["finish_reason"] != "final" || completed.Metadata["progress_percent"] != 100 || completed.Metadata["tools_executed"] != 2 {
+	if completed.Action != "agent_run" || completed.Message != "Agent 运行完成 [########] done" || completed.Metadata["finish_reason"] != "final" || completed.Metadata["progress_percent"] != 100 || completed.Metadata["tools_executed"] != 2 || completed.Metadata["tools_duration_ms"] != int64(15) {
 		t.Fatalf("completed log = %#v", completed)
 	}
 }

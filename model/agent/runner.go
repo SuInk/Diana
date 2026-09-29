@@ -192,6 +192,9 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 	introspectionCalls := 0
 	modelTurns := 0
 	toolCalls := 0
+	// toolsDuration 是本轮实际执行工具的墙钟耗时之和。工具是逐个串行执行的，
+	// 加起来就是这一轮花在工具上的时间，控制台的响应耗时分解用它。
+	var toolsDuration time.Duration
 	protocolRepairs := 0
 	// silentContentRepaired 保证「静默却带正文」只打回一次，见 action.Silent 分支。
 	silentContentRepaired := false
@@ -234,15 +237,16 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 			Claims:         claimLedger.traces(),
 		}
 		emitRunEvent(ctx, req.Observer, RunEvent{
-			TraceID:       traceID,
-			Phase:         RunPhaseCompleted,
-			ModelTurn:     modelTurns,
-			ToolCall:      toolCalls,
-			ToolsExecuted: toolCalls + toolLoadCalls + introspectionCalls,
-			MaxToolCalls:  r.cfg.MaxSteps,
-			DurationMS:    duration.Milliseconds(),
-			FinishReason:  reason,
-			Usage:         usage,
+			TraceID:         traceID,
+			Phase:           RunPhaseCompleted,
+			ModelTurn:       modelTurns,
+			ToolCall:        toolCalls,
+			ToolsExecuted:   toolCalls + toolLoadCalls + introspectionCalls,
+			ToolsDurationMS: toolsDuration.Milliseconds(),
+			MaxToolCalls:    r.cfg.MaxSteps,
+			DurationMS:      duration.Milliseconds(),
+			FinishReason:    reason,
+			Usage:           usage,
 		})
 		return response
 	}
@@ -257,15 +261,16 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 	}
 	fail := func(err error) (*Response, error) {
 		emitRunEvent(ctx, req.Observer, RunEvent{
-			TraceID:       traceID,
-			Phase:         RunPhaseFailed,
-			ModelTurn:     modelTurns,
-			ToolCall:      toolCalls,
-			ToolsExecuted: toolCalls + toolLoadCalls + introspectionCalls,
-			MaxToolCalls:  r.cfg.MaxSteps,
-			DurationMS:    time.Since(startedAt).Milliseconds(),
-			Error:         err.Error(),
-			Usage:         usage,
+			TraceID:         traceID,
+			Phase:           RunPhaseFailed,
+			ModelTurn:       modelTurns,
+			ToolCall:        toolCalls,
+			ToolsExecuted:   toolCalls + toolLoadCalls + introspectionCalls,
+			ToolsDurationMS: toolsDuration.Milliseconds(),
+			MaxToolCalls:    r.cfg.MaxSteps,
+			DurationMS:      time.Since(startedAt).Milliseconds(),
+			Error:           err.Error(),
+			Usage:           usage,
 		})
 		return nil, err
 	}
@@ -698,6 +703,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 		}
 		toolCancel()
 		toolDuration := time.Since(toolStartedAt)
+		toolsDuration += toolDuration
 		record := Step{Index: len(steps) + 1, Tool: action.Tool, Input: action.Input, DurationMS: toolDuration.Milliseconds()}
 		// 证据登记必须读未截断的原始结果：截断后的 JSON 无法反序列化，
 		// 会让成功的搜索被当成 provider_error、渲染成功的页面登记不上。

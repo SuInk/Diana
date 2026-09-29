@@ -27,11 +27,13 @@ const (
 	assistantOutcomeHandedOffPending = "handed_off_pending"
 )
 
-// addInboundEventHandoffColumns 给事件表补上交接状态列。
+// addInboundEventHandoffColumns 给事件表补上后加的列：交接状态，以及回复开始前的等待。
 func (s *SQLiteStore) addInboundEventHandoffColumns() error {
 	for _, column := range []struct{ name, ddl string }{
 		{"handoff_state", `ALTER TABLE inbound_events ADD COLUMN handoff_state TEXT`},
 		{"handoff_at", `ALTER TABLE inbound_events ADD COLUMN handoff_at INTEGER`},
+		// 回复开始前的等待，响应耗时分解要用；见 RecordInboundEventAudit。
+		{"reply_wait_ms", `ALTER TABLE inbound_events ADD COLUMN reply_wait_ms INTEGER`},
 	} {
 		has, err := s.hasColumn("inbound_events", column.name)
 		if err != nil {

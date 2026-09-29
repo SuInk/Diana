@@ -157,7 +157,7 @@ let plugins: PluginState[] = [
         { key: "max_file_mb", label: "最大文件", type: "number", default: 20, min: 1, max: 100, step: 1, unit: "MB" },
         { key: "timeout_seconds", label: "请求超时", type: "number", default: 45, min: 5, max: 180, step: 5, unit: "秒" },
         { key: "send_song_info", label: "同时发送歌曲信息", type: "bool", default: true, description: "在语音前补一条「歌名 - 歌手」，否则群里只看到一条不知道是什么的语音。" },
-        { key: "silk_encoder_path", label: "Silk 编码器路径", type: "string", default: "", description: "填了就把音频转成 Tencent Silk 再发。留空沿用语音合成插件的配置。" }
+        { key: "silk_encoder_path", label: "Silk 编码器路径", type: "string", default: "", description: "填了就把音频转成 Tencent Silk 再发，只适合自己不做转码的 OneBot 客户端；SnowLuma、NapCat 请留空。" }
       ]
     },
     installed: true, enabled: true
@@ -614,6 +614,57 @@ const logs: AppLogEntry[] = [
   { id: "log-2", kind: "operation", level: "info", action: "repository_watch", message: "仓库检查完成，未发现新 Commit 或 Release", actor: "scheduler", target: "SuInk/Diana", created_at: before(4) },
   { id: "log-3", kind: "operation", level: "info", action: "memory_compress", message: "已更新群聊压缩摘要与长期事实索引", actor: "memory", target: "group:100200418", created_at: before(16) }
 ];
+
+// 响应耗时的演示数据：长尾明显（P99 远高于 P50），1 小时比前一段略慢、7 天比前一段快，
+// 好让趋势的红绿两种状态都看得到。有一条没有流式调用、一条是升级前的老记录，缺的阶段就缺着。
+function demoLatency() {
+  const until = new Date().toISOString();
+  const dist = (samples: number, avg: number, p50: number, p90: number, p99: number, min: number, max: number) => ({
+    samples,
+    avg_ms: avg,
+    p50_ms: p50,
+    p90_ms: p90,
+    p99_ms: p99,
+    min_ms: min,
+    max_ms: max
+  });
+  const sample = (id: string, minutesAgo: number, total: number, extra: Record<string, unknown>) => ({
+    event_id: `demo-latency-${id}`,
+    kind: "group",
+    group_id: "10001",
+    completed_at: before(minutesAgo),
+    total_ms: total,
+    ...extra
+  });
+  const slowest = [
+    sample("s1", 12, 51_300, { wait_ms: 820, ttft_ms: 1_840, model_ms: 21_600, tool_ms: 27_900, model_calls: 4 }),
+    sample("s2", 35, 38_700, { wait_ms: 460, ttft_ms: 1_210, model_ms: 30_100, tool_ms: 6_400, model_calls: 3 }),
+    sample("s3", 48, 24_900, { wait_ms: 5_300, ttft_ms: 960, model_ms: 18_200, model_calls: 2 }),
+    { ...sample("s4", 52, 19_400, { model_ms: 17_800, model_calls: 1 }), kind: "private", group_id: undefined }
+  ];
+  const fastest = [
+    sample("f1", 5, 1_120, { wait_ms: 90, ttft_ms: 410, model_ms: 980, model_calls: 1 }),
+    sample("f2", 22, 1_480, { wait_ms: 130, ttft_ms: 520, model_ms: 1_290, model_calls: 1 }),
+    sample("f3", 41, 1_730, { wait_ms: 70, model_ms: 1_520, model_calls: 1 })
+  ];
+  const latencyWindow = (id: string, minutes: number, scale: number, previousScale: number, samples: number) => {
+    const summary = (factor: number, count: number, withExtremes: boolean) => ({
+      since: before(minutes * (withExtremes ? 1 : 2)),
+      until: withExtremes ? until : before(minutes),
+      total: dist(count, Math.round(6_480 * factor), Math.round(3_900 * factor), Math.round(12_800 * factor), Math.round(41_000 * factor), 1_120, 51_300),
+      wait: dist(Math.round(count * 0.8), Math.round(640 * factor), 210, 1_900, 5_300, 40, 7_800),
+      ttft: dist(Math.round(count * 0.7), Math.round(880 * factor), 760, 1_500, 2_300, 310, 2_900),
+      model: dist(count - 2, Math.round(4_300 * factor), Math.round(2_900 * factor), Math.round(9_600 * factor), Math.round(28_000 * factor), 640, 30_100),
+      tool: dist(Math.round(count * 0.25), Math.round(3_700 * factor), 1_900, 8_400, 26_000, 120, 27_900),
+      ...(withExtremes ? { slowest, fastest } : {})
+    });
+    return { id, current: summary(scale, samples, true), previous: summary(previousScale, Math.round(samples * 0.9), false) };
+  };
+  return {
+    until,
+    windows: [latencyWindow("1h", 60, 1.08, 0.94, 33), latencyWindow("24h", 1440, 1, 1.02, 694), latencyWindow("7d", 10_080, 0.97, 1.21, 4_812)]
+  };
+}
 
 function json(value: unknown, status = 200): Response {
   return new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" } });
@@ -1087,6 +1138,7 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
     }));
     return json({ until, ranges });
   }
+  if (path === "/api/stats/latency") return json(demoLatency());
 
   // 授权登录：演示模式给出内置提供商的未登录状态，登录流程本身不模拟——
   // 真去打一次 OAuth 授权页在演示环境里既做不到也不该做。
