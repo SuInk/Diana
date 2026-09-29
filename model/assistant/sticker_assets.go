@@ -29,6 +29,9 @@ type StickerAsset struct {
 	Gist        string
 	Tags        []string
 	Tagged      bool
+	// Category 是画风大类；CategoryKnown 表示判过，判不出来时 Category 为空。
+	Category      string
+	CategoryKnown bool
 	// SentCount/LastSentAt 是机器人在查询所在会话里发这张图的记录。
 	SentCount  int
 	LastSentAt int64
@@ -49,7 +52,38 @@ type StickerTagRecord struct {
 	ContentSHA256 string
 	Gist          string
 	Tags          []string
-	Version       string
+	// Category 是 StickerCategories 里的一个画风大类，判不出来为空。
+	Category string
+	Version  string
+}
+
+// StickerCategories 是表情包的画风大类，控制台按它分类，标注提示词让模型从里面选一个。
+var StickerCategories = []string{"二次元", "真人", "动物", "文字", "其他"}
+
+// NormalizeStickerCategory 把模型写的大类收敛到 StickerCategories，常见的近义说法也认。
+func NormalizeStickerCategory(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	for _, category := range StickerCategories {
+		if value == category {
+			return category
+		}
+	}
+	for category, aliases := range map[string][]string{
+		"二次元": {"动漫", "动画", "漫画", "卡通", "游戏", "插画", "ACG", "acg"},
+		"真人":  {"人物", "照片", "明星", "影视", "三次元"},
+		"动物":  {"猫", "狗", "宠物"},
+		"文字":  {"纯文字", "字"},
+	} {
+		for _, alias := range aliases {
+			if strings.Contains(value, alias) {
+				return category
+			}
+		}
+	}
+	return "其他"
 }
 
 type StickerTagStore interface {

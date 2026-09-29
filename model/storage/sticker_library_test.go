@@ -5,9 +5,11 @@ package storage
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/SuInk/diana/model/assistant"
 )
@@ -276,5 +278,234 @@ func TestStickerTagsFromBeforeGIFStoryboardAreStaleForGIFsOnly(t *testing.T) {
 	}
 	if again := tagged()[gifHash]; !again.Tagged || again.Gist != "趴在床上扭动" {
 		t.Fatalf("re-annotated gif = %#v", again)
+	}
+}
+
+func stickerPrivateEvent(profile, user, messageID string, at int64, hash, summary, path string) assistant.MessageEvent {
+	event := stickerLibraryEvent(profile, "", messageID, at, hash, summary, path)
+	event.Kind, event.UserID = assistant.EventKindPrivate, user
+	return event
+}
+
+// 控制台的分类栏和筛选：画风大类、来源、关键词、多久没用、机器人发没发过，各条件叠加生效；
+// 分类栏每一栏按「只放开这一栏」计数；排序可以把最久没用的排前面。
+func TestStickerLibraryFacetsAndFilters(t *testing.T) {
+	ctx := context.Background()
+	store, err := NewSQLiteStore(filepath.Join(t.TempDir(), "sticker-facets.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+
+	now := time.Now().Unix()
+	day := int64(24 * 3600)
+	anime := strings.Repeat("a", 64)
+	cat := strings.Repeat("b", 64)
+	oldText := strings.Repeat("c", 64)
+	plain := strings.Repeat("d", 64)
+	foreign := strings.Repeat("e", 64)
+	for _, item := range []struct {
+		session string
+		event   assistant.MessageEvent
+	}{
+		{"group:g1", stickerLibraryEvent("bot", "g1", "m1", now-day, anime, "[害羞]", "/cache/anime.gif")},
+		{"group:g2", stickerLibraryEvent("bot", "g2", "m2", now-2*day, anime, "[害羞]", "/cache/anime.gif")},
+		{"group:g1", stickerLibraryEvent("bot", "g1", "m3", now-3*day, cat, "[无语]", "/cache/cat.gif")},
+		{"private:u1", stickerPrivateEvent("bot", "u1", "m4", now-100*day, oldText, "[收到]", "/cache/text.gif")},
+		{"group:g2", stickerLibraryEvent("bot", "g2", "m5", now-120*day, plain, "[动画表情]", "/cache/plain.gif")},
+		{"group:g9", stickerLibraryEvent("other-bot", "g9", "m9", now, foreign, "[别人的]", "/cache/foreign.gif")},
+	} {
+		if err := store.indexStickerAssets(ctx, item.session, item.event); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, record := range []assistant.StickerTagRecord{
+		{ContentSHA256: anime, Gist: "少女捂脸", Tags: []string{"害羞", "可爱"}, Category: "二次元", Version: assistant.StickerAnnotationVersion},
+		{ContentSHA256: cat, Gist: "猫猫翻白眼", Tags: []string{"无语", "可爱"}, Category: "动物", Version: assistant.StickerAnnotationVersion},
+		{ContentSHA256: oldText, Gist: "收到两个字", Tags: []string{"收到"}, Category: "纯文字", Version: assistant.StickerAnnotationVersion},
+		{ContentSHA256: foreign, Gist: "别的机器人", Tags: []string{"可爱"}, Category: "二次元", Version: assistant.StickerAnnotationVersion},
+	} {
+		if err := store.SaveStickerTags(ctx, record); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := store.RecordStickerSent(ctx, "group:g1", cat, now-day); err != nil {
+		t.Fatal(err)
+	}
+
+	list := func(query StickerLibraryQuery) []string {
+		t.Helper()
+		query.ProfileID = "bot"
+		page, err := store.ListStickerLibrary(ctx, query)
+		if err != nil {
+			t.Fatal(err)
+		}
+		hashes := make([]string, 0, len(page.Items))
+		for _, item := range page.Items {
+			hashes = append(hashes, item.Hash[:1])
+		}
+		if page.Total != len(hashes) {
+			t.Fatalf("total=%d items=%v", page.Total, hashes)
+		}
+		return hashes
+	}
+	check := func(name string, got []string, want string) {
+		t.Helper()
+		if strings.Join(got, "") != want {
+			t.Fatalf("%s = %v, want %s", name, got, want)
+		}
+	}
+	check("all", list(StickerLibraryQuery{}), "abcd")
+	check("二次元", list(StickerLibraryQuery{Category: "二次元"}), "a")
+	// 「纯文字」存的时候已经收敛成「文字」。
+	check("文字", list(StickerLibraryQuery{Category: "文字"}), "c")
+	check("uncategorized", list(StickerLibraryQuery{Category: StickerLibraryUncategorized}), "d")
+	check("tag", list(StickerLibraryQuery{Tag: "可爱"}), "ab")
+	check("tag+category", list(StickerLibraryQuery{Tag: "可爱", Category: "动物"}), "b")
+	check("group g2", list(StickerLibraryQuery{Source: "group:g2"}), "ad")
+	check("private", list(StickerLibraryQuery{Source: "private"}), "c")
+	check("idle 30d", list(StickerLibraryQuery{IdleDays: 30}), "cd")
+	check("never sent", list(StickerLibraryQuery{NeverSent: true}), "acd")
+	// b 三天前收的，但机器人昨天发过，和 a 一样算昨天用过。
+	check("idle first", list(StickerLibraryQuery{Sort: "idle"}), "dcab")
+	check("most sent", list(StickerLibraryQuery{Sort: "most_sent"})[:1], "b")
+
+	page, err := store.ListStickerLibrary(ctx, StickerLibraryQuery{ProfileID: "bot", Category: "动物"})
+	if err != nil || page.Items[0].Category != "动物" || page.Items[0].SentCount != 1 || page.Items[0].LastSent == nil {
+		t.Fatalf("item = %#v err=%v", page.Items, err)
+	}
+
+	facets, err := store.ListStickerLibraryFacets(ctx, StickerLibraryQuery{ProfileID: "bot", Source: "group:g1"}, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 画风栏按来源 g1 数，来源栏放开来源、只按机器人数，关键词栏按来源 g1 数。
+	if got := facetString(facets.Categories); got != "二次元=1 动物=1" {
+		t.Fatalf("categories = %s", got)
+	}
+	if got := facetString(facets.Sources); got != "group:g1=2 group:g2=2 private=1" {
+		t.Fatalf("sources = %s", got)
+	}
+	if got := facetString(facets.Tags); got != "可爱=2 害羞=1 无语=1" {
+		t.Fatalf("tags = %s", got)
+	}
+}
+
+func facetString(counts []StickerFacetCount) string {
+	parts := make([]string, 0, len(counts))
+	for _, item := range counts {
+		parts = append(parts, fmt.Sprintf("%s=%d", item.Value, item.Count))
+	}
+	return strings.Join(parts, " ")
+}
+
+// 按条件清理：先试算不删；按来源清理只移出这个来源的记录，别的群里的同一张还在；
+// 清理旧的不拉黑，以后再有人发照样收；勾了拉黑的以后不再收。
+func TestCleanupStickerLibrary(t *testing.T) {
+	ctx := context.Background()
+	store, err := NewSQLiteStore(filepath.Join(t.TempDir(), "sticker-cleanup.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+
+	now := time.Now().Unix()
+	day := int64(24 * 3600)
+	shared := strings.Repeat("a", 64)
+	stale := strings.Repeat("b", 64)
+	fresh := strings.Repeat("c", 64)
+	index := func(session string, event assistant.MessageEvent) {
+		t.Helper()
+		if err := store.indexStickerAssets(ctx, session, event); err != nil {
+			t.Fatal(err)
+		}
+	}
+	index("group:g1", stickerLibraryEvent("bot", "g1", "m1", now-day, shared, "[共享]", "/cache/shared.gif"))
+	index("group:g2", stickerLibraryEvent("bot", "g2", "m2", now-day, shared, "[共享]", "/cache/shared.gif"))
+	index("group:g1", stickerLibraryEvent("bot", "g1", "m3", now-90*day, stale, "[旧的]", "/cache/stale.gif"))
+	index("group:g1", stickerLibraryEvent("bot", "g1", "m4", now, fresh, "[新的]", "/cache/fresh.gif"))
+
+	dry, err := store.CleanupStickerLibrary(ctx, StickerLibraryQuery{ProfileID: "bot", Source: "group:g1"}, false, true)
+	if err != nil || dry.Stickers != 3 || dry.Removed != 3 || !dry.DryRun {
+		t.Fatalf("dry = %#v err=%v", dry, err)
+	}
+	if page, _ := store.ListStickerLibrary(ctx, StickerLibraryQuery{ProfileID: "bot"}); page.Total != 3 {
+		t.Fatalf("dry run deleted something: %#v", page)
+	}
+
+	removed, err := store.CleanupStickerLibrary(ctx, StickerLibraryQuery{ProfileID: "bot", IdleDays: 30}, false, false)
+	if err != nil || removed.Stickers != 1 || removed.Removed != 1 {
+		t.Fatalf("idle cleanup = %#v err=%v", removed, err)
+	}
+	// 没拉黑：旧的那张再有人发还能收回来。
+	index("group:g1", stickerLibraryEvent("bot", "g1", "m5", now, stale, "[旧的]", "/cache/stale.gif"))
+
+	removed, err = store.CleanupStickerLibrary(ctx, StickerLibraryQuery{ProfileID: "bot", Source: "group:g1"}, true, false)
+	if err != nil || removed.Stickers != 3 {
+		t.Fatalf("source cleanup = %#v err=%v", removed, err)
+	}
+	page, err := store.ListStickerLibrary(ctx, StickerLibraryQuery{ProfileID: "bot"})
+	if err != nil || page.Total != 1 || page.Items[0].Hash != shared || page.Items[0].GroupID != "g2" {
+		t.Fatalf("after source cleanup = %#v err=%v", page, err)
+	}
+	// 拉黑了：g1 里的那几张以后在哪个群都不再收。
+	index("group:g3", stickerLibraryEvent("bot", "g3", "m6", now, fresh, "[新的]", "/cache/fresh.gif"))
+	if page, _ := store.ListStickerLibrary(ctx, StickerLibraryQuery{ProfileID: "bot", Source: "group:g3"}); page.Total != 0 {
+		t.Fatalf("blocked sticker came back: %#v", page)
+	}
+}
+
+// 控制台删掉的表情包移出池子，之后再有人发同一张也不收；只拉黑这个机器人的，别的机器人照收。
+func TestDeleteStickerAssetBlocksReindex(t *testing.T) {
+	ctx := context.Background()
+	store, err := NewSQLiteStore(filepath.Join(t.TempDir(), "sticker-delete.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+
+	weird := strings.Repeat("e", 64)
+	for _, item := range []struct {
+		session string
+		event   assistant.MessageEvent
+	}{
+		{"group:g1", stickerLibraryEvent("bot", "g1", "m1", 100, weird, "[猎奇]", "/cache/weird.gif")},
+		{"group:g2", stickerLibraryEvent("bot", "g2", "m2", 200, weird, "[猎奇]", "/cache/weird.gif")},
+		{"group:g9", stickerLibraryEvent("other-bot", "g9", "m9", 300, weird, "[猎奇]", "/cache/weird.gif")},
+	} {
+		if err := store.indexStickerAssets(ctx, item.session, item.event); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	removed, err := store.DeleteStickerAsset(ctx, weird, "bot")
+	if err != nil || removed != 2 {
+		t.Fatalf("removed = %d err=%v", removed, err)
+	}
+	if err := store.indexStickerAssets(ctx, "group:g3", stickerLibraryEvent("bot", "g3", "m3", 400, weird, "[猎奇]", "/cache/weird.gif")); err != nil {
+		t.Fatal(err)
+	}
+	page, err := store.ListStickerLibrary(ctx, StickerLibraryQuery{ProfileID: "bot"})
+	if err != nil || page.Total != 0 {
+		t.Fatalf("deleted sticker came back = %#v err=%v", page, err)
+	}
+	assets, err := store.ListStickerAssets(ctx, assistant.StickerHistoryQuery{Session: "group:g3", ProfileID: "bot", ShareGroups: true, SharePrivate: true, Limit: 100})
+	if err != nil || len(assets) != 0 {
+		t.Fatalf("deleted sticker still a candidate = %#v err=%v", assets, err)
+	}
+	page, err = store.ListStickerLibrary(ctx, StickerLibraryQuery{ProfileID: "other-bot"})
+	if err != nil || page.Total != 1 {
+		t.Fatalf("other bot's library = %#v err=%v", page, err)
+	}
+
+	// 不选机器人时删除对全部机器人生效。
+	if removed, err := store.DeleteStickerAsset(ctx, weird, ""); err != nil || removed != 1 {
+		t.Fatalf("global removed = %d err=%v", removed, err)
+	}
+	if err := store.indexStickerAssets(ctx, "group:g8", stickerLibraryEvent("other-bot", "g8", "m8", 500, weird, "[猎奇]", "/cache/weird.gif")); err != nil {
+		t.Fatal(err)
+	}
+	if page, err := store.ListStickerLibrary(ctx, StickerLibraryQuery{}); err != nil || page.Total != 0 {
+		t.Fatalf("globally blocked sticker came back = %#v err=%v", page, err)
 	}
 }

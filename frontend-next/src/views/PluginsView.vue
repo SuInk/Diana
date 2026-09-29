@@ -236,6 +236,7 @@
       v-if="settingsTarget"
       :title="isGitHubSettings ? 'GitHub 仓库 · 设置' : `${settingsTarget.manifest.name} · 设置`"
       :wide="settingsTarget.manifest.id === repositoryWatchPluginID || settingsTarget.manifest.id === repositoryPublishPluginID || settingsTarget.manifest.id === rssWatchPluginID || settingsTarget.manifest.id === musicPluginID || settingsTarget.manifest.id === stickerPluginID"
+      :fixed-height="isStickerSettings"
       @close="closeSettings"
     >
       <p class="hint">设置和凭据全局共享；保存或恢复默认会影响使用此插件的所有机器人。</p>
@@ -267,6 +268,10 @@
         <button type="button" role="tab" :aria-selected="githubSettingsTab === 'config'" :class="{ active: githubSettingsTab === 'config' }" @click="githubSettingsTab = 'config'">配置信息</button>
         <button type="button" role="tab" :aria-selected="githubSettingsTab === 'repositories'" :class="{ active: githubSettingsTab === 'repositories' }" @click="githubSettingsTab = 'repositories'">仓库管理</button>
         <button type="button" role="tab" :aria-selected="githubSettingsTab === 'records'" :class="{ active: githubSettingsTab === 'records' }" @click="githubSettingsTab = 'records'">运行记录</button>
+      </div>
+      <div v-if="isStickerSettings" class="segmented github-settings-tabs sticker-settings-tabs" role="tablist" aria-label="表情包设置">
+        <button type="button" role="tab" :aria-selected="stickerSettingsTab === 'config'" :class="{ active: stickerSettingsTab === 'config' }" @click="stickerSettingsTab = 'config'">发送设置</button>
+        <button type="button" role="tab" :aria-selected="stickerSettingsTab === 'library'" :class="{ active: stickerSettingsTab === 'library' }" @click="stickerSettingsTab = 'library'">表情包池</button>
       </div>
 
       <template v-if="isGitHubSettings && githubSettingsTab === 'config'">
@@ -369,7 +374,7 @@
           <PluginSettingField v-for="spec in musicGeneralSpecs" :key="spec.key" :spec="spec" :form="settingsForm" />
         </div>
       </template>
-      <div v-if="!isGitHubSettings && !isMusicSettings" class="stack plugin-settings-form">
+      <div v-if="!isGitHubSettings && !isMusicSettings && !(isStickerSettings && stickerSettingsTab === 'library')" class="stack plugin-settings-form">
         <template v-for="spec in visibleSettingsSpecs" :key="spec.key">
           <PlatformLevelRulesField
             v-if="spec.type === 'platform_level_rules'"
@@ -446,7 +451,7 @@
           <button class="btn small ghost" type="button" @click="navigate('logs')">查看执行日志</button>
         </div>
       </div>
-      <StickerLibrary v-if="settingsTarget.manifest.id === stickerPluginID" :profile="botScope" />
+      <StickerLibrary v-if="isStickerSettings && stickerSettingsTab === 'library'" :profile="botScope" />
       <VRChatStatusPanel v-if="settingsTarget.manifest.id === vrchatPluginID" />
       <RSSWatchManager
         v-if="settingsTarget.manifest.id === rssWatchPluginID"
@@ -885,6 +890,9 @@ const repositoryPublishTarget = computed(() => plugins.value.find((plugin) => pl
 const repositoryPublishSpecs = computed<PluginSettingSpec[]>(() => repositoryPublishTarget.value?.manifest.settings ?? []);
 const isGitHubSettings = computed(() => settingsTarget.value?.manifest.id === repositoryWatchPluginID);
 const isMusicSettings = computed(() => settingsTarget.value?.manifest.id === musicPluginID);
+const isStickerSettings = computed(() => settingsTarget.value?.manifest.id === stickerPluginID);
+// 表情包池内容多，和发送设置挤在一页会被埋在底下，分成两个标签页。
+const stickerSettingsTab = ref<"config" | "library">("config");
 const testingMusic = ref(false);
 const musicTestResults = ref<Record<string, MusicConnectionStatus>>({});
 const musicPlatforms = [
@@ -1346,6 +1354,7 @@ function openSettings(plugin: PluginState): void {
   musicTestResults.value = {};
   resolverChecks.value = [];
   githubSettingsTab.value = "config";
+  stickerSettingsTab.value = "config";
   openedSnapshot.value = settingsSnapshot();
   if (isGitHubSettings.value) void loadJoinedGroups();
 }

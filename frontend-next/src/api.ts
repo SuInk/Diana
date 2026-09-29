@@ -2861,6 +2861,10 @@ export interface StickerLibraryItem {
   summary: string;
   /** 视觉模型写的简介；还没被搜到过的表情包没有。 */
   description?: string;
+  /** 检索关键词，和简介一起由视觉模型标注；没标注过的没有。 */
+  tags?: string[];
+  /** 画风大类（二次元、真人、动物、文字、其他）；还没判过的没有。 */
+  category?: string;
   mime?: string;
   kind: string;
   group_id?: string;
@@ -2869,6 +2873,9 @@ export interface StickerLibraryItem {
   /** 出现过的会话数。 */
   sessions: number;
   last_seen: string;
+  /** 机器人发过几次、最近一次什么时候。 */
+  sent_count: number;
+  last_sent?: string;
 }
 
 export interface StickerLibraryPage {
@@ -2908,11 +2915,79 @@ export function getVRChatStatus(): Promise<VRChatStatus> {
   return requestJSON<VRChatStatus>("/api/assistant/plugins/vrchat/status");
 }
 
-export function listStickerLibrary(profile: string, query: string, offset: number, limit: number): Promise<StickerLibraryPage> {
-  const params = new URLSearchParams({ offset: String(offset), limit: String(limit) });
+/** 画风大类筛选里「还没判出大类」那一项的值。 */
+export const stickerUncategorized = "none";
+
+/** 表情包池的筛选条件，各条件同时生效；列表、分类栏和批量清理共用。 */
+export type StickerLibraryFilter = {
+  q?: string;
+  /** 画风大类，stickerUncategorized 表示没判出大类的。 */
+  category?: string;
+  tag?: string;
+  /** group:<群号> 或 private。 */
+  source?: string;
+  /** 只看这么多天既没人发、机器人也没发过的。 */
+  idle_days?: number;
+  never_sent?: boolean;
+  sort?: "recent" | "idle" | "most_sent";
+};
+
+export type StickerFacetCount = { value: string; count: number };
+
+/** 分类栏：每一栏按「其他条件不变、只放开这一栏」计数。 */
+export interface StickerLibraryFacets {
+  categories: StickerFacetCount[];
+  sources: StickerFacetCount[];
+  tags: StickerFacetCount[];
+}
+
+export interface StickerCleanupResult {
+  /** 涉及几张不同的图。 */
+  stickers: number;
+  /** 删掉几条会话记录（同一张图在多个群算多条）。 */
+  removed: number;
+  dry_run?: boolean;
+}
+
+function stickerLibraryParams(profile: string, filter: StickerLibraryFilter): URLSearchParams {
+  const params = new URLSearchParams();
   if (profile) params.set("profile", profile);
-  if (query.trim()) params.set("q", query.trim());
+  if (filter.q?.trim()) params.set("q", filter.q.trim());
+  if (filter.category) params.set("category", filter.category);
+  if (filter.tag) params.set("tag", filter.tag);
+  if (filter.source) params.set("source", filter.source);
+  if (filter.idle_days) params.set("idle_days", String(filter.idle_days));
+  if (filter.never_sent) params.set("never_sent", "true");
+  if (filter.sort && filter.sort !== "recent") params.set("sort", filter.sort);
+  return params;
+}
+
+export function listStickerLibrary(profile: string, filter: StickerLibraryFilter, offset: number, limit: number): Promise<StickerLibraryPage> {
+  const params = stickerLibraryParams(profile, filter);
+  params.set("offset", String(offset));
+  params.set("limit", String(limit));
   return requestJSON<StickerLibraryPage>(`/api/assistant/stickers?${params.toString()}`);
+}
+
+export function listStickerFacets(profile: string, filter: StickerLibraryFilter): Promise<StickerLibraryFacets> {
+  const suffix = stickerLibraryParams(profile, filter).toString();
+  return requestJSON<StickerLibraryFacets>(`/api/assistant/stickers/facets${suffix ? `?${suffix}` : ""}`);
+}
+
+/** 把符合筛选条件的表情包批量移出池子；dryRun 只数不删。按来源筛时只移出这个来源的记录。 */
+export function cleanupStickers(profile: string, filter: StickerLibraryFilter, options: { block: boolean; dryRun: boolean }): Promise<StickerCleanupResult> {
+  const params = stickerLibraryParams(profile, filter);
+  if (options.block) params.set("block", "true");
+  if (options.dryRun) params.set("dry_run", "true");
+  return requestJSON<StickerCleanupResult>(`/api/assistant/stickers/cleanup?${params.toString()}`, { method: "POST" });
+}
+
+/** 移出表情包池，之后再有人发同一张也不收录；聊天记录里的图片不受影响。 */
+export function deleteSticker(hash: string, profile: string): Promise<{ removed: number }> {
+  const params = new URLSearchParams();
+  if (profile) params.set("profile", profile);
+  const suffix = params.toString();
+  return requestJSON<{ removed: number }>(`/api/assistant/stickers/${encodeURIComponent(hash)}${suffix ? `?${suffix}` : ""}`, { method: "DELETE" });
 }
 
 export function stickerImageURL(hash: string, profile: string, thumbnail = false): string {

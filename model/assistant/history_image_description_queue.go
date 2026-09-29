@@ -475,10 +475,11 @@ func (r *Runtime) describeHistoryImageJob(ctx context.Context, job *historyImage
 	tagSticker := r.historyImageJobTagsSticker(job)
 	var description string
 	var tags []string
+	var category string
 	if tagSticker {
 		var annotation string
 		annotation, err = r.describeStickerImage(ctx, job.event, job.source)
-		description, tags = parseStickerAnnotation(annotation)
+		description, tags, category = parseStickerAnnotation(annotation)
 	} else {
 		description, err = r.describeRecallImage(ctx, job.event, job.source)
 	}
@@ -499,7 +500,7 @@ func (r *Runtime) describeHistoryImageJob(ctx context.Context, job *historyImage
 		return err
 	}
 	if tagSticker {
-		r.saveStickerTags(job.hash, compactRecallImageDescription(description), tags)
+		r.saveStickerTags(job.hash, compactRecallImageDescription(description), tags, category)
 	}
 	r.markHistoryImageDescriptionReady(job.hash)
 	r.refreshMessageImageSearchText(ctx, job.indexEvent)

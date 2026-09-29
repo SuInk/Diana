@@ -11,11 +11,13 @@ const (
 	stickerSettingHistoryLimit   = "history_limit"
 	stickerSettingSearchResults  = "search_results"
 	stickerSettingIncludeGeneric = "include_generic_animated"
-	stickerSettingCrossGroup     = "cross_group"
-	stickerSettingCrossPrivate   = "cross_private"
-	stickerSettingLibraryLimit   = "library_capacity"
-	stickerSettingTurnLimit      = "turn_limit"
-	stickerSettingHourlyLimit    = "hourly_limit"
+	// 共享开关原来叫 cross_group / cross_private、默认关。前端保存时会把默认值一起写进库，
+	// 只改默认值的话，保存过设置的实例还是关着；换个键名让旧值作废，统一回到默认开。
+	stickerSettingCrossGroup   = "share_groups"
+	stickerSettingCrossPrivate = "share_private"
+	stickerSettingLibraryLimit = "library_capacity"
+	stickerSettingTurnLimit    = "turn_limit"
+	stickerSettingHourlyLimit  = "hourly_limit"
 )
 
 // StickerPlugin exposes a conversation-local sticker library backed by durable message history.
@@ -27,8 +29,8 @@ func (p *StickerPlugin) Manifest() PluginManifest {
 	return PluginManifest{
 		ID:          stickerPluginID,
 		Name:        "表情包发送",
-		Version:     "0.2.3",
-		Description: "启用内置 Agent 后，从持久表情资产库中按关键词检索候选；当前会话和明确开启的共享范围各有独立配额。Agent 查看候选的名称、标签与简介后选择一张发送，刚发过的会往后排。支持识图时，收到的表情包在后台识图时就写好简介和标签；以前收的、当时没标上的，检索到时再补。",
+		Version:     "0.2.4",
+		Description: "启用内置 Agent 后，从持久表情资产库中按关键词检索候选；当前会话和其他群聊、私聊（默认共享）各有独立配额。Agent 查看候选的名称、标签与简介后选择一张发送，刚发过的会往后排。支持识图时，收到的表情包在后台识图时就写好简介和标签；以前收的、当时没标上的，检索到时再补。",
 		Official:    true,
 		BuiltIn:     true,
 		Permissions: []string{"message:read", "message:send"},
@@ -81,16 +83,16 @@ func (p *StickerPlugin) Manifest() PluginManifest {
 			{
 				Key:         stickerSettingCrossGroup,
 				Label:       "跨群共享表情包",
-				Description: "允许从同一机器人会话命名空间下的其他群聊检索表情包。默认关闭，不会跨机器人配置。",
+				Description: "在一个群里收到的表情包，到别的群也能发。默认开启，不会跨机器人配置。",
 				Type:        PluginSettingTypeBool,
-				Default:     false,
+				Default:     true,
 			},
 			{
 				Key:         stickerSettingCrossPrivate,
 				Label:       "跨私聊共享表情包",
-				Description: "允许从同一机器人会话命名空间下的其他私聊检索表情包。默认关闭，不会暴露来源用户。",
+				Description: "私聊里收到的表情包，到群里和别的私聊也能发。默认开启，不会暴露来源用户。",
 				Type:        PluginSettingTypeBool,
-				Default:     false,
+				Default:     true,
 			},
 			{
 				Key:         stickerSettingIncludeGeneric,

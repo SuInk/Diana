@@ -1799,6 +1799,14 @@ a.nav-action {
   width: min(760px, 100%);
 }
 
+.modal.fixed-height {
+  height: min(82vh, 720px);
+}
+
+.modal.fixed-height .modal-body {
+  flex: 1;
+}
+
 .modal-header {
   display: flex;
   align-items: center;
@@ -3528,6 +3536,10 @@ a.nav-action {
 .github-settings-tabs {
   width: 100%;
   margin-bottom: 20px;
+}
+
+.sticker-settings-tabs {
+  margin-top: 8px;
 }
 
 .github-settings-tabs > button {

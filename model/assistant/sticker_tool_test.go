@@ -90,7 +90,7 @@ func (s *stickerHistoryStore) ListRecentStickerEvents(_ context.Context, query S
 
 func TestDefaultPluginManagerIncludesStickerSender(t *testing.T) {
 	state, ok := NewDefaultPluginManager().Get(stickerPluginID)
-	if !ok || !state.Enabled || !state.Manifest.BuiltIn || state.Manifest.Version != "0.2.3" {
+	if !ok || !state.Enabled || !state.Manifest.BuiltIn || state.Manifest.Version != "0.2.4" {
 		t.Fatalf("sticker plugin state=%#v ok=%v", state, ok)
 	}
 	if len(state.Manifest.Settings) != 8 {
@@ -365,7 +365,11 @@ func TestStickerToolSearchesThenSendsOnlyCurrentConversationSticker(t *testing.T
 	channel := &recordingChannel{}
 	runtime := NewRuntime(BotConfig{}, channel, NewPluginManager(), nil, nil, nil, nil)
 	runtime.SetMessageHistoryStore(store)
-	tool := newDianaStickerTool(runtime, event, SettingValues{stickerSettingHistoryLimit: 1000, stickerSettingSearchResults: 8, stickerSettingIncludeGeneric: true})
+	// 两个共享开关都关掉时只认当前会话的表情包。
+	tool := newDianaStickerTool(runtime, event, SettingValues{
+		stickerSettingHistoryLimit: 1000, stickerSettingSearchResults: 8, stickerSettingIncludeGeneric: true,
+		stickerSettingCrossGroup: false, stickerSettingCrossPrivate: false,
+	})
 
 	output, err := tool.Run(context.Background(), map[string]any{"operation": "search", "query": "无语"})
 	if err != nil {
@@ -405,7 +409,7 @@ func TestStickerToolSearchesThenSendsOnlyCurrentConversationSticker(t *testing.T
 
 	crossGroupTool := newDianaStickerTool(runtime, event, SettingValues{
 		stickerSettingHistoryLimit: 1000, stickerSettingSearchResults: 8,
-		stickerSettingIncludeGeneric: true, stickerSettingCrossGroup: true,
+		stickerSettingIncludeGeneric: true, stickerSettingCrossGroup: true, stickerSettingCrossPrivate: false,
 	})
 	output, err = crossGroupTool.Run(context.Background(), map[string]any{"operation": "search", "query": "无语"})
 	if err != nil {
@@ -420,7 +424,7 @@ func TestStickerToolSearchesThenSendsOnlyCurrentConversationSticker(t *testing.T
 
 	crossPrivateTool := newDianaStickerTool(runtime, event, SettingValues{
 		stickerSettingHistoryLimit: 1000, stickerSettingSearchResults: 8,
-		stickerSettingIncludeGeneric: true, stickerSettingCrossPrivate: true,
+		stickerSettingIncludeGeneric: true, stickerSettingCrossGroup: false, stickerSettingCrossPrivate: true,
 	})
 	output, err = crossPrivateTool.Run(context.Background(), map[string]any{"operation": "search", "query": "无语"})
 	if err != nil {
@@ -431,6 +435,23 @@ func TestStickerToolSearchesThenSendsOnlyCurrentConversationSticker(t *testing.T
 	}
 	if len(search.Candidates) != 2 || search.Candidates[0].Scope == search.Candidates[1].Scope {
 		t.Fatalf("cross-private search=%#v", search)
+	}
+
+	// 没配过共享开关时默认跨群、跨私聊都能搜到。
+	defaultTool := newDianaStickerTool(runtime, event, SettingValues{stickerSettingHistoryLimit: 1000, stickerSettingSearchResults: 8, stickerSettingIncludeGeneric: true})
+	output, err = defaultTool.Run(context.Background(), map[string]any{"operation": "search", "query": "无语"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal([]byte(output), &search); err != nil {
+		t.Fatal(err)
+	}
+	scopes := map[string]bool{}
+	for _, candidate := range search.Candidates {
+		scopes[candidate.Scope] = true
+	}
+	if len(search.Candidates) != 3 || !scopes["current_conversation"] || !scopes["shared_group"] || !scopes["shared_private"] {
+		t.Fatalf("default search=%#v", search)
 	}
 }
 
@@ -561,13 +582,18 @@ func TestSelectStickerCandidatesSamplesAmongTopMatches(t *testing.T) {
 }
 
 func TestParseStickerAnnotation(t *testing.T) {
-	gist, tags := parseStickerAnnotation("猫猫翻白眼，表示对离谱发言很无语。 标签：无语、翻白眼、离谱，猫猫。")
-	if gist != "猫猫翻白眼，表示对离谱发言很无语。" || strings.Join(tags, "|") != "无语|翻白眼|离谱|猫猫" {
-		t.Fatalf("gist=%q tags=%q", gist, tags)
+	gist, tags, category := parseStickerAnnotation("猫猫翻白眼，表示对离谱发言很无语。 分类：动物 标签：无语、翻白眼、离谱，猫猫。")
+	if gist != "猫猫翻白眼，表示对离谱发言很无语。" || strings.Join(tags, "|") != "无语|翻白眼|离谱|猫猫" || category != "动物" {
+		t.Fatalf("gist=%q tags=%q category=%q", gist, tags, category)
 	}
-	gist, tags = parseStickerAnnotation("只有简介没有标签")
-	if gist != "只有简介没有标签" || tags != nil {
-		t.Fatalf("gist=%q tags=%q", gist, tags)
+	// 分类写在标签后面、用了近义说法也认。
+	gist, tags, category = parseStickerAnnotation("少女捂脸害羞。 标签：害羞、捂脸 分类：动漫角色")
+	if gist != "少女捂脸害羞。" || strings.Join(tags, "|") != "害羞|捂脸" || category != "二次元" {
+		t.Fatalf("gist=%q tags=%q category=%q", gist, tags, category)
+	}
+	gist, tags, category = parseStickerAnnotation("只有简介没有标签")
+	if gist != "只有简介没有标签" || tags != nil || category != "" {
+		t.Fatalf("gist=%q tags=%q category=%q", gist, tags, category)
 	}
 }
 

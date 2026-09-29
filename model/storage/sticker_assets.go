@@ -59,6 +59,13 @@ CREATE TABLE IF NOT EXISTS sticker_persona_fit (
   updated_at INTEGER NOT NULL,
   PRIMARY KEY (persona_key, content_sha256)
 );
+-- 控制台里删掉的表情包：之后再有人发同一张也不收。profile_id 为空表示对所有机器人生效。
+CREATE TABLE IF NOT EXISTS sticker_blocklist (
+  profile_id TEXT NOT NULL,
+  content_sha256 TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (profile_id, content_sha256)
+);
 -- 机器人在某个会话里发过哪张表情包：用来避免连发同一张，也算作这张图「还在用」。
 CREATE TABLE IF NOT EXISTS sticker_usage (
   session TEXT NOT NULL,
@@ -76,6 +83,15 @@ CREATE TABLE IF NOT EXISTS sticker_usage (
 	} else if !has {
 		if _, err := s.db.Exec(`ALTER TABLE sticker_tags ADD COLUMN version TEXT NOT NULL DEFAULT ''`); err != nil {
 			return fmt.Errorf("add sticker tag version: %w", err)
+		}
+	}
+
+	// 画风大类是后加的。NULL 表示这张还没判过大类，由检索时补标；判过但没判出来存空串。
+	if has, err := s.hasColumn("sticker_tags", "category"); err != nil {
+		return err
+	} else if !has {
+		if _, err := s.db.Exec(`ALTER TABLE sticker_tags ADD COLUMN category TEXT`); err != nil {
+			return fmt.Errorf("add sticker tag category: %w", err)
 		}
 	}
 
@@ -171,7 +187,10 @@ INSERT INTO sticker_assets (
   session, content_sha256, profile_id, context_namespace, kind, group_id, user_id,
   message_id, event_time, segment_index, summary, cached_file, cached_mime, updated_at
 )
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+WHERE NOT EXISTS (
+  SELECT 1 FROM sticker_blocklist AS b WHERE b.content_sha256 = ? AND b.profile_id IN (?, '')
+)
 ON CONFLICT(session, content_sha256) DO UPDATE SET
   profile_id=excluded.profile_id,
   context_namespace=excluded.context_namespace,
@@ -188,7 +207,8 @@ ON CONFLICT(session, content_sha256) DO UPDATE SET
 WHERE excluded.event_time >= sticker_assets.event_time
 `, session, hash, event.ProfileID, event.ContextNamespace, string(event.Kind), event.GroupID,
 			event.UserID, event.MessageID, eventTime, index, summary, path,
-			strings.TrimSpace(segment.Data["cached_mime"]), time.Now().UTC().Format(time.RFC3339Nano))
+			strings.TrimSpace(segment.Data["cached_mime"]), time.Now().UTC().Format(time.RFC3339Nano),
+			hash, event.ProfileID)
 		if err != nil {
 			return err
 		}
@@ -273,6 +293,7 @@ SELECT a.session, COALESCE(a.profile_id, ''), COALESCE(a.context_namespace, ''),
        COALESCE(a.cached_mime, ''), a.content_sha256,
        COALESCE(d.description, ''), `+stickerTagCurrent+`, CASE WHEN `+stickerTagCurrent+` THEN COALESCE(t.gist, '') ELSE '' END,
        CASE WHEN `+stickerTagCurrent+` THEN COALESCE(t.tags, '') ELSE '' END,
+       COALESCE(t.category, ''), t.category IS NOT NULL,
        COALESCE(u.sent_count, 0), COALESCE(u.last_sent_at, 0)
 FROM sticker_assets AS a
 LEFT JOIN image_descriptions AS d ON d.content_sha256 = a.content_sha256
@@ -292,7 +313,8 @@ LIMIT ?`, args...)
 		if err := rows.Scan(&asset.Session, &asset.ProfileID, &asset.ContextNamespace, &kind,
 			&asset.GroupID, &asset.UserID, &asset.MessageID, &asset.EventTime,
 			&asset.SegmentIndex, &asset.Summary, &asset.Path, &asset.MIME, &asset.ContentSHA256,
-			&asset.Description, &asset.Tagged, &asset.Gist, &tags, &asset.SentCount, &asset.LastSentAt); err != nil {
+			&asset.Description, &asset.Tagged, &asset.Gist, &tags, &asset.Category, &asset.CategoryKnown,
+			&asset.SentCount, &asset.LastSentAt); err != nil {
 			return nil, err
 		}
 		asset.Kind = assistant.EventKind(kind)
@@ -354,9 +376,9 @@ func (s *SQLiteStore) SaveStickerTags(ctx context.Context, record assistant.Stic
 		return err
 	}
 	_, err = s.db.ExecContext(ctx, `
-INSERT INTO sticker_tags (content_sha256, gist, tags, version, updated_at) VALUES (?, ?, ?, ?, ?)
-ON CONFLICT(content_sha256) DO UPDATE SET gist=excluded.gist, tags=excluded.tags, version=excluded.version, updated_at=excluded.updated_at
-`, hash, strings.TrimSpace(record.Gist), string(encoded), strings.TrimSpace(record.Version), time.Now().Unix())
+INSERT INTO sticker_tags (content_sha256, gist, tags, category, version, updated_at) VALUES (?, ?, ?, ?, ?, ?)
+ON CONFLICT(content_sha256) DO UPDATE SET gist=excluded.gist, tags=excluded.tags, category=excluded.category, version=excluded.version, updated_at=excluded.updated_at
+`, hash, strings.TrimSpace(record.Gist), string(encoded), assistant.NormalizeStickerCategory(record.Category), strings.TrimSpace(record.Version), time.Now().Unix())
 	return err
 }
 
@@ -471,28 +493,47 @@ WHERE session IN `+in+` AND content_sha256 IN (
 	return int(removed), nil
 }
 
-// StickerLibraryQuery 是控制台浏览表情包池的筛选条件。ProfileID 为空时列出全部机器人的。
+// StickerLibraryUncategorized 作为 StickerLibraryQuery.Category 时只列还没判出画风大类的。
+const StickerLibraryUncategorized = "none"
+
+// StickerLibraryQuery 是控制台浏览和清理表情包池的筛选条件，各条件同时生效。
+// ProfileID 为空时覆盖全部机器人。
 type StickerLibraryQuery struct {
 	ProfileID string
 	Search    string
-	Limit     int
-	Offset    int
+	// Category 是画风大类，StickerLibraryUncategorized 表示没判出大类的。
+	Category string
+	// Tag 按关键词整词匹配。
+	Tag string
+	// Source 是来源会话：group:<群号> 或 private（全部私聊）。按来源清理时只移出这个来源的记录。
+	Source string
+	// IdleDays 只看最近这么多天既没人发、机器人也没发过的。
+	IdleDays int
+	// NeverSent 只看机器人从没发过的。
+	NeverSent bool
+	// Sort：recent（默认，最近出现在前）、idle（最久没用在前）、most_sent（机器人发得多的在前）。
+	Sort   string
+	Limit  int
+	Offset int
 }
 
 // StickerLibraryItem 是池子里的一张表情包。同一张图在多个会话里出现只列一次，
 // 字段取最近那次；Sessions 是它出现过的会话数。本地路径不在这里，取图走 StickerAssetFile。
 type StickerLibraryItem struct {
-	Hash        string    `json:"hash"`
-	Summary     string    `json:"summary"`
-	Description string    `json:"description,omitempty"`
-	Tags        []string  `json:"tags,omitempty"`
-	MIME        string    `json:"mime,omitempty"`
-	Kind        string    `json:"kind"`
-	GroupID     string    `json:"group_id,omitempty"`
-	UserID      string    `json:"user_id,omitempty"`
-	ProfileID   string    `json:"profile_id,omitempty"`
-	Sessions    int       `json:"sessions"`
-	LastSeen    time.Time `json:"last_seen"`
+	Hash        string     `json:"hash"`
+	Summary     string     `json:"summary"`
+	Description string     `json:"description,omitempty"`
+	Tags        []string   `json:"tags,omitempty"`
+	Category    string     `json:"category,omitempty"`
+	MIME        string     `json:"mime,omitempty"`
+	Kind        string     `json:"kind"`
+	GroupID     string     `json:"group_id,omitempty"`
+	UserID      string     `json:"user_id,omitempty"`
+	ProfileID   string     `json:"profile_id,omitempty"`
+	Sessions    int        `json:"sessions"`
+	LastSeen    time.Time  `json:"last_seen"`
+	SentCount   int        `json:"sent_count"`
+	LastSent    *time.Time `json:"last_sent,omitempty"`
 }
 
 type StickerLibraryPage struct {
@@ -500,17 +541,10 @@ type StickerLibraryPage struct {
 	Total int                  `json:"total"`
 }
 
-// ListStickerLibrary 列出已经收进池子的表情包，最近出现的在前。
-func (s *SQLiteStore) ListStickerLibrary(ctx context.Context, query StickerLibraryQuery) (StickerLibraryPage, error) {
-	page := StickerLibraryPage{Items: []StickerLibraryItem{}}
-	if s == nil || s.db == nil {
-		return page, nil
-	}
-	limit := query.Limit
-	if limit <= 0 || limit > 200 {
-		limit = 60
-	}
-	offset := max(query.Offset, 0)
+// stickerLibraryCTE 把筛选条件拼成三段 CTE：scoped 是命中条件的资产行（每张图最近那行 rank=1），
+// usage 是机器人按图片汇总的发送记录，matched 是按图片去重、再过一遍「多久没用」条件后的结果。
+// 列表、分类计数和清理都从这里出发，数字才对得上。
+func stickerLibraryCTE(query StickerLibraryQuery, now time.Time) (string, []any) {
 	conditions := []string{"1 = 1"}
 	args := []any{}
 	if profile := strings.TrimSpace(query.ProfileID); profile != "" {
@@ -523,28 +557,94 @@ func (s *SQLiteStore) ListStickerLibrary(ctx context.Context, query StickerLibra
   OR COALESCE(t.gist, '') LIKE ? ESCAPE '\' OR COALESCE(t.tags, '') LIKE ? ESCAPE '\')`)
 		args = append(args, pattern, pattern, pattern, pattern)
 	}
-	where := strings.Join(conditions, " AND ")
-	// 先按哈希挑出最近的那一行，再分页；count 和列表用同一个子查询，数字才对得上。
-	base := `
-WITH ranked AS (
-  SELECT a.content_sha256, COALESCE(a.summary, '') AS summary,
-         COALESCE(NULLIF(t.gist, ''), d.description, '') AS description, COALESCE(t.tags, '') AS tags,
-         COALESCE(a.cached_mime, '') AS mime, a.kind, COALESCE(a.group_id, '') AS group_id,
-         COALESCE(a.user_id, '') AS user_id, COALESCE(a.profile_id, '') AS profile_id, a.event_time,
-         COUNT(*) OVER (PARTITION BY a.content_sha256) AS sessions,
+	switch category := strings.TrimSpace(query.Category); category {
+	case "":
+	case StickerLibraryUncategorized:
+		conditions = append(conditions, `COALESCE(t.category, '') = ''`)
+	default:
+		conditions = append(conditions, `t.category = ?`)
+		args = append(args, category)
+	}
+	if tag := strings.TrimSpace(query.Tag); tag != "" {
+		conditions = append(conditions, `EXISTS (SELECT 1 FROM json_each(CASE WHEN json_valid(t.tags) THEN t.tags ELSE '[]' END) WHERE value = ?)`)
+		args = append(args, tag)
+	}
+	switch source := strings.TrimSpace(query.Source); {
+	case source == "":
+	case source == "private":
+		conditions = append(conditions, `a.kind = ?`)
+		args = append(args, string(assistant.EventKindPrivate))
+	case strings.HasPrefix(source, "group:"):
+		conditions = append(conditions, `a.kind = ? AND a.group_id = ?`)
+		args = append(args, string(assistant.EventKindGroup), strings.TrimPrefix(source, "group:"))
+	default:
+		conditions = append(conditions, `0 = 1`)
+	}
+	having := []string{"1 = 1"}
+	if query.IdleDays > 0 {
+		cutoff := now.Add(-time.Duration(query.IdleDays) * 24 * time.Hour).Unix()
+		having = append(having, `MAX(s.event_time) < ? AND COALESCE(MAX(u.last_sent_at), 0) < ?`)
+		args = append(args, cutoff, cutoff)
+	}
+	if query.NeverSent {
+		having = append(having, `COALESCE(MAX(u.sent_count), 0) = 0`)
+	}
+	return `
+WITH scoped AS (
+  SELECT a.rowid AS row_id, a.content_sha256, a.kind, COALESCE(a.group_id, '') AS group_id, a.event_time,
          ROW_NUMBER() OVER (PARTITION BY a.content_sha256 ORDER BY a.event_time DESC, a.updated_at DESC) AS rank
   FROM sticker_assets AS a
   LEFT JOIN image_descriptions AS d ON d.content_sha256 = a.content_sha256
   LEFT JOIN sticker_tags AS t ON t.content_sha256 = a.content_sha256
-  WHERE ` + where + `
-)`
-	if err := s.eventReader().QueryRowContext(ctx, base+`SELECT COUNT(*) FROM ranked WHERE rank = 1`, args...).Scan(&page.Total); err != nil {
+  WHERE ` + strings.Join(conditions, " AND ") + `
+),
+usage AS (
+  SELECT content_sha256, SUM(sent_count) AS sent_count, MAX(last_sent_at) AS last_sent_at
+  FROM sticker_usage GROUP BY content_sha256
+),
+matched AS (
+  SELECT s.content_sha256, MAX(s.event_time) AS last_seen, COUNT(*) AS sessions,
+         COALESCE(MAX(u.sent_count), 0) AS sent_count, COALESCE(MAX(u.last_sent_at), 0) AS last_sent_at
+  FROM scoped AS s
+  LEFT JOIN usage AS u ON u.content_sha256 = s.content_sha256
+  GROUP BY s.content_sha256
+  HAVING ` + strings.Join(having, " AND ") + `
+)`, args
+}
+
+// ListStickerLibrary 列出已经收进池子、符合筛选条件的表情包。
+func (s *SQLiteStore) ListStickerLibrary(ctx context.Context, query StickerLibraryQuery) (StickerLibraryPage, error) {
+	page := StickerLibraryPage{Items: []StickerLibraryItem{}}
+	if s == nil || s.db == nil {
+		return page, nil
+	}
+	limit := query.Limit
+	if limit <= 0 || limit > 200 {
+		limit = 60
+	}
+	offset := max(query.Offset, 0)
+	base, args := stickerLibraryCTE(query, time.Now())
+	if err := s.eventReader().QueryRowContext(ctx, base+`SELECT COUNT(*) FROM matched`, args...).Scan(&page.Total); err != nil {
 		return page, fmt.Errorf("count sticker library: %w", err)
 	}
+	order := "m.last_seen DESC, m.content_sha256"
+	switch query.Sort {
+	case "idle":
+		order = "MAX(m.last_seen, m.last_sent_at) ASC, m.content_sha256"
+	case "most_sent":
+		order = "m.sent_count DESC, m.last_seen DESC, m.content_sha256"
+	}
 	rows, err := s.eventReader().QueryContext(ctx, base+`
-SELECT content_sha256, summary, description, tags, mime, kind, group_id, user_id, profile_id, sessions, event_time
-FROM ranked WHERE rank = 1
-ORDER BY event_time DESC, content_sha256
+SELECT m.content_sha256, COALESCE(a.summary, ''), COALESCE(NULLIF(t.gist, ''), d.description, ''),
+       COALESCE(t.tags, ''), COALESCE(t.category, ''), COALESCE(a.cached_mime, ''), a.kind,
+       COALESCE(a.group_id, ''), COALESCE(a.user_id, ''), COALESCE(a.profile_id, ''),
+       m.sessions, m.last_seen, m.sent_count, m.last_sent_at
+FROM matched AS m
+JOIN scoped AS latest ON latest.content_sha256 = m.content_sha256 AND latest.rank = 1
+JOIN sticker_assets AS a ON a.rowid = latest.row_id
+LEFT JOIN image_descriptions AS d ON d.content_sha256 = m.content_sha256
+LEFT JOIN sticker_tags AS t ON t.content_sha256 = m.content_sha256
+ORDER BY `+order+`
 LIMIT ? OFFSET ?`, append(args, limit, offset)...)
 	if err != nil {
 		return page, fmt.Errorf("list sticker library: %w", err)
@@ -552,14 +652,18 @@ LIMIT ? OFFSET ?`, append(args, limit, offset)...)
 	defer func() { _ = rows.Close() }()
 	for rows.Next() {
 		var item StickerLibraryItem
-		var eventTime int64
+		var lastSeen, lastSent int64
 		var tags string
-		if err := rows.Scan(&item.Hash, &item.Summary, &item.Description, &tags, &item.MIME, &item.Kind,
-			&item.GroupID, &item.UserID, &item.ProfileID, &item.Sessions, &eventTime); err != nil {
+		if err := rows.Scan(&item.Hash, &item.Summary, &item.Description, &tags, &item.Category, &item.MIME, &item.Kind,
+			&item.GroupID, &item.UserID, &item.ProfileID, &item.Sessions, &lastSeen, &item.SentCount, &lastSent); err != nil {
 			return page, fmt.Errorf("scan sticker library: %w", err)
 		}
 		item.Tags = decodeStickerTags(tags)
-		item.LastSeen = time.Unix(eventTime, 0)
+		item.LastSeen = time.Unix(lastSeen, 0)
+		if lastSent > 0 {
+			sent := time.Unix(lastSent, 0)
+			item.LastSent = &sent
+		}
 		page.Items = append(page.Items, item)
 	}
 	return page, rows.Err()
@@ -590,4 +694,209 @@ func (s *SQLiteStore) StickerAssetFile(ctx context.Context, hash, profileID stri
 		return "", false, fmt.Errorf("load sticker asset file: %w", err)
 	}
 	return path, true, nil
+}
+
+// StickerFacetCount 是分类栏上一个选项和它下面有几张图。
+type StickerFacetCount struct {
+	Value string `json:"value"`
+	Count int    `json:"count"`
+}
+
+// StickerLibraryFacets 是控制台的分类栏：画风大类、来源会话和常见关键词。
+// 每一栏都按「其他条件不变、只放开这一栏」来数，点哪个选项看到的张数就是分类栏上写的。
+type StickerLibraryFacets struct {
+	// Categories 按 StickerCategories 的顺序，Value 为 StickerLibraryUncategorized 的是没判出大类的。
+	Categories []StickerFacetCount `json:"categories"`
+	// Sources 的 Value 是 group:<群号> 或 private，张数多的在前。
+	Sources []StickerFacetCount `json:"sources"`
+	// Tags 是出现最多的关键词。
+	Tags []StickerFacetCount `json:"tags"`
+}
+
+// ListStickerLibraryFacets 统计分类栏，都按图片去重计数。
+func (s *SQLiteStore) ListStickerLibraryFacets(ctx context.Context, query StickerLibraryQuery, tagLimit int) (StickerLibraryFacets, error) {
+	facets := StickerLibraryFacets{Categories: []StickerFacetCount{}, Sources: []StickerFacetCount{}, Tags: []StickerFacetCount{}}
+	if s == nil || s.db == nil {
+		return facets, nil
+	}
+	if tagLimit <= 0 || tagLimit > 100 {
+		tagLimit = 40
+	}
+	now := time.Now()
+
+	withoutCategory := query
+	withoutCategory.Category = ""
+	base, args := stickerLibraryCTE(withoutCategory, now)
+	counts, err := s.stickerFacetCounts(ctx, base+`
+SELECT COALESCE(NULLIF(t.category, ''), '`+StickerLibraryUncategorized+`'), COUNT(*)
+FROM matched AS m LEFT JOIN sticker_tags AS t ON t.content_sha256 = m.content_sha256
+GROUP BY 1`, args)
+	if err != nil {
+		return facets, fmt.Errorf("count sticker categories: %w", err)
+	}
+	byValue := map[string]int{}
+	for _, item := range counts {
+		byValue[item.Value] = item.Count
+	}
+	for _, category := range append(append([]string{}, assistant.StickerCategories...), StickerLibraryUncategorized) {
+		if byValue[category] > 0 {
+			facets.Categories = append(facets.Categories, StickerFacetCount{Value: category, Count: byValue[category]})
+		}
+	}
+
+	withoutSource := query
+	withoutSource.Source = ""
+	base, args = stickerLibraryCTE(withoutSource, now)
+	if facets.Sources, err = s.stickerFacetCounts(ctx, base+`
+SELECT CASE WHEN s.kind = '`+string(assistant.EventKindPrivate)+`' THEN 'private' ELSE 'group:' || s.group_id END AS source,
+       COUNT(DISTINCT s.content_sha256) AS total
+FROM scoped AS s JOIN matched AS m ON m.content_sha256 = s.content_sha256
+GROUP BY source
+ORDER BY total DESC, source`, args); err != nil {
+		return facets, fmt.Errorf("count sticker sources: %w", err)
+	}
+
+	withoutTag := query
+	withoutTag.Tag = ""
+	base, args = stickerLibraryCTE(withoutTag, now)
+	if facets.Tags, err = s.stickerFacetCounts(ctx, base+`
+SELECT tag.value, COUNT(*) AS total
+FROM matched AS m
+JOIN sticker_tags AS t ON t.content_sha256 = m.content_sha256,
+     json_each(CASE WHEN json_valid(t.tags) THEN t.tags ELSE '[]' END) AS tag
+WHERE TRIM(tag.value) <> ''
+GROUP BY tag.value
+ORDER BY total DESC, tag.value
+LIMIT ?`, append(args, tagLimit)); err != nil {
+		return facets, fmt.Errorf("count sticker tags: %w", err)
+	}
+	return facets, nil
+}
+
+func (s *SQLiteStore) stickerFacetCounts(ctx context.Context, query string, args []any) ([]StickerFacetCount, error) {
+	rows, err := s.eventReader().QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	counts := []StickerFacetCount{}
+	for rows.Next() {
+		var item StickerFacetCount
+		if err := rows.Scan(&item.Value, &item.Count); err != nil {
+			return nil, err
+		}
+		counts = append(counts, item)
+	}
+	return counts, rows.Err()
+}
+
+// StickerCleanupResult 是一次按条件清理的结果：Stickers 是涉及几张不同的图，Removed 是删掉几条会话记录。
+type StickerCleanupResult struct {
+	Stickers int  `json:"stickers"`
+	Removed  int  `json:"removed"`
+	DryRun   bool `json:"dry_run,omitempty"`
+}
+
+// CleanupStickerLibrary 把符合筛选条件的表情包移出池子。按来源筛时只移出这个来源的记录，
+// 同一张图在别的群里的记录留着。block 为真时同时拉黑，以后再有人发也不收；dryRun 只数不删。
+// 聊天记录里的图片不动。
+func (s *SQLiteStore) CleanupStickerLibrary(ctx context.Context, query StickerLibraryQuery, block, dryRun bool) (StickerCleanupResult, error) {
+	result := StickerCleanupResult{DryRun: dryRun}
+	if s == nil || s.db == nil {
+		return result, nil
+	}
+	base, args := stickerLibraryCTE(query, time.Now())
+	selectRows := base + `SELECT s.row_id, s.content_sha256 FROM scoped AS s JOIN matched AS m ON m.content_sha256 = s.content_sha256`
+	if dryRun {
+		err := s.eventReader().QueryRowContext(ctx, base+`SELECT COUNT(*), COALESCE((SELECT COUNT(*) FROM scoped AS s JOIN matched AS m ON m.content_sha256 = s.content_sha256), 0) FROM matched`, args...).
+			Scan(&result.Stickers, &result.Removed)
+		if err != nil {
+			return result, fmt.Errorf("count sticker cleanup: %w", err)
+		}
+		return result, nil
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return result, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	rows, err := tx.QueryContext(ctx, selectRows, args...)
+	if err != nil {
+		return result, fmt.Errorf("select sticker cleanup: %w", err)
+	}
+	var rowIDs []any
+	hashes := map[string]bool{}
+	for rows.Next() {
+		var rowID int64
+		var hash string
+		if err := rows.Scan(&rowID, &hash); err != nil {
+			_ = rows.Close()
+			return result, err
+		}
+		rowIDs = append(rowIDs, rowID)
+		hashes[hash] = true
+	}
+	if err := rows.Close(); err != nil {
+		return result, err
+	}
+	for start := 0; start < len(rowIDs); start += 500 {
+		batch := rowIDs[start:min(start+500, len(rowIDs))]
+		if _, err := tx.ExecContext(ctx, `DELETE FROM sticker_assets WHERE rowid IN (`+sqlPlaceholders(len(batch))+`)`, batch...); err != nil {
+			return result, fmt.Errorf("delete sticker cleanup: %w", err)
+		}
+	}
+	if block {
+		profileID := strings.TrimSpace(query.ProfileID)
+		now := time.Now().Unix()
+		for hash := range hashes {
+			if _, err := tx.ExecContext(ctx, `
+INSERT INTO sticker_blocklist (profile_id, content_sha256, created_at) VALUES (?, ?, ?)
+ON CONFLICT(profile_id, content_sha256) DO NOTHING`, profileID, hash, now); err != nil {
+				return result, fmt.Errorf("block sticker cleanup: %w", err)
+			}
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return result, err
+	}
+	result.Stickers, result.Removed = len(hashes), len(rowIDs)
+	return result, nil
+}
+
+// DeleteStickerAsset 把一张表情包移出池子，并记进黑名单，之后再有人发同一张也不收。
+// profileID 非空时只动这个机器人的；为空时对全部机器人生效。聊天记录里的图片不动。
+func (s *SQLiteStore) DeleteStickerAsset(ctx context.Context, hash, profileID string) (int, error) {
+	if s == nil || s.db == nil {
+		return 0, nil
+	}
+	hash = strings.ToLower(strings.TrimSpace(hash))
+	if !validStickerAssetHash(hash) {
+		return 0, nil
+	}
+	profileID = strings.TrimSpace(profileID)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	query := `DELETE FROM sticker_assets WHERE content_sha256 = ?`
+	args := []any{hash}
+	if profileID != "" {
+		query += ` AND profile_id = ?`
+		args = append(args, profileID)
+	}
+	result, err := tx.ExecContext(ctx, query, args...)
+	if err != nil {
+		return 0, fmt.Errorf("delete sticker asset: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `
+INSERT INTO sticker_blocklist (profile_id, content_sha256, created_at) VALUES (?, ?, ?)
+ON CONFLICT(profile_id, content_sha256) DO NOTHING`, profileID, hash, time.Now().Unix()); err != nil {
+		return 0, fmt.Errorf("block sticker asset: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	removed, _ := result.RowsAffected()
+	return int(removed), nil
 }

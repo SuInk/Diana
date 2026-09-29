@@ -193,7 +193,7 @@ let plugins: PluginState[] = [
     installed: true, enabled: true, settings: { default_interval_seconds: 60 }, secrets_configured: { github_token: true }
   },
   {
-    manifest: { id: "official.sticker-sender", name: "表情包发送", version: "0.2.0", description: "启用内置 Agent 后，从持久表情资产库中检索候选，按当前语义选一张发送。", official: true, built_in: true, permissions: ["message:read", "message:send"], settings: [{ key: "history_limit", label: "每个范围候选上限", type: "number", default: 1000 }, { key: "search_results", label: "候选返回数量", type: "number", default: 8 }] },
+    manifest: { id: "official.sticker-sender", name: "表情包发送", version: "0.2.4", description: "启用内置 Agent 后，从持久表情资产库中检索候选，按当前语义选一张发送。", official: true, built_in: true, permissions: ["message:read", "message:send"], settings: [{ key: "history_limit", label: "每个范围候选上限", type: "number", default: 1000 }, { key: "search_results", label: "候选返回数量", type: "number", default: 8 }, { key: "share_groups", label: "跨群共享表情包", description: "在一个群里收到的表情包，到别的群也能发。默认开启，不会跨机器人配置。", type: "bool", default: true }, { key: "share_private", label: "跨私聊共享表情包", description: "私聊里收到的表情包，到群里和别的私聊也能发。默认开启，不会暴露来源用户。", type: "bool", default: true }] },
     installed: true, enabled: true
   },
   {
@@ -266,12 +266,49 @@ const demoRepoPluginPreview = {
   }
 };
 
-const demoStickers = [
-  { hash: "a".repeat(64), summary: "懂了", description: "猫猫认真点头，表示已经明白对方的意思，语气轻松，适合接在解释之后。", kind: "group", group_id: "100200301", sessions: 3, last_seen: before(12) },
-  { hash: "b".repeat(64), summary: "无语", description: "角色面无表情地盯着镜头，表达对离谱发言的无奈。", kind: "group", group_id: "100200418", sessions: 1, last_seen: before(40) },
-  { hash: "c".repeat(64), summary: "动画表情", kind: "private", user_id: "880024", sessions: 1, last_seen: before(90) },
-  { hash: "d".repeat(64), summary: "贴贴", description: "两只小动物蹭在一起，表示亲近或安慰。", kind: "group", group_id: "100200301", sessions: 2, last_seen: before(200) }
+type DemoSticker = { hash: string; summary: string; description?: string; tags?: string[]; category?: string; kind: string; group_id?: string; user_id?: string; sessions: number; last_seen: string; sent_count: number; last_sent?: string; sources: string[] };
+const demoStickerHash = (seed: string) => seed.repeat(64).slice(0, 64);
+let demoStickers: DemoSticker[] = [
+  { hash: demoStickerHash("a1"), summary: "懂了", description: "猫猫认真点头，表示已经明白对方的意思，语气轻松，适合接在解释之后。", tags: ["明白", "点头", "可爱"], category: "动物", kind: "group", group_id: "100200301", sessions: 3, last_seen: before(12), sent_count: 6, last_sent: before(30), sources: ["group:100200301", "group:100200418", "group:100200519"] },
+  { hash: demoStickerHash("b2"), summary: "无语", description: "角色面无表情地盯着镜头，表达对离谱发言的无奈。", tags: ["无语", "离谱", "盯"], category: "二次元", kind: "group", group_id: "100200418", sessions: 1, last_seen: before(40), sent_count: 2, last_sent: before(200), sources: ["group:100200418"] },
+  { hash: demoStickerHash("c3"), summary: "动画表情", kind: "private", user_id: "880024", sessions: 1, last_seen: before(60 * 24 * 95), sent_count: 0, sources: ["private"] },
+  { hash: demoStickerHash("d4"), summary: "贴贴", description: "两只小动物蹭在一起，表示亲近或安慰。", tags: ["安慰", "贴贴", "可爱"], category: "动物", kind: "group", group_id: "100200301", sessions: 2, last_seen: before(200), sent_count: 3, last_sent: before(600), sources: ["group:100200301", "private"] },
+  { hash: demoStickerHash("e5"), summary: "害羞", description: "少女捂脸偷看，表示被夸得不好意思。", tags: ["害羞", "捂脸", "可爱"], category: "二次元", kind: "group", group_id: "100200519", sessions: 2, last_seen: before(90), sent_count: 1, last_sent: before(1440), sources: ["group:100200519", "group:100200301"] },
+  { hash: demoStickerHash("f6"), summary: "收到", description: "大字「收到」，确认信息时用。", tags: ["收到", "确认"], category: "文字", kind: "group", group_id: "100200301", sessions: 1, last_seen: before(60 * 24 * 40), sent_count: 0, sources: ["group:100200301"] },
+  { hash: demoStickerHash("07"), summary: "震惊", description: "演员瞪大眼睛后仰，表示难以置信。", tags: ["震惊", "离谱"], category: "真人", kind: "group", group_id: "100200418", sessions: 1, last_seen: before(60 * 24 * 12), sent_count: 0, sources: ["group:100200418"] },
+  { hash: demoStickerHash("18"), summary: "摸鱼", description: "Q 版角色趴在桌上，表示在偷懒。", tags: ["摸鱼", "躺平", "可爱"], category: "二次元", kind: "private", user_id: "880031", sessions: 1, last_seen: before(60 * 24 * 3), sent_count: 4, last_sent: before(60 * 24 * 2), sources: ["private"] }
 ];
+
+function demoFilterStickers(params: URLSearchParams, skip = ""): DemoSticker[] {
+  const q = (params.get("q") ?? "").trim();
+  const category = skip === "category" ? "" : params.get("category") ?? "";
+  const tag = skip === "tag" ? "" : params.get("tag") ?? "";
+  const source = skip === "source" ? "" : params.get("source") ?? "";
+  const idleDays = Number(params.get("idle_days") ?? 0);
+  const cutoff = Date.now() - idleDays * 86_400_000;
+  return demoStickers.filter((item) =>
+    (!q || item.summary.includes(q) || (item.description ?? "").includes(q) || (item.tags ?? []).some((value) => value.includes(q))) &&
+    (!category || (category === "none" ? !item.category : item.category === category)) &&
+    (!tag || (item.tags ?? []).includes(tag)) &&
+    (!source || item.sources.includes(source)) &&
+    (!idleDays || (Date.parse(item.last_seen) < cutoff && (!item.last_sent || Date.parse(item.last_sent) < cutoff))) &&
+    (params.get("never_sent") !== "true" || item.sent_count === 0)
+  );
+}
+
+function demoStickerFacets(params: URLSearchParams) {
+  const count = (values: string[]) => {
+    const counts = new Map<string, number>();
+    for (const value of values) counts.set(value, (counts.get(value) ?? 0) + 1);
+    return [...counts].map(([value, total]) => ({ value, count: total }));
+  };
+  const order = ["二次元", "真人", "动物", "文字", "其他", "none"];
+  return {
+    categories: count(demoFilterStickers(params, "category").map((item) => item.category ?? "none")).sort((a, b) => order.indexOf(a.value) - order.indexOf(b.value)),
+    sources: count(demoFilterStickers(params, "source").flatMap((item) => item.sources)).sort((a, b) => b.count - a.count || a.value.localeCompare(b.value)),
+    tags: count(demoFilterStickers(params, "tag").flatMap((item) => item.tags ?? [])).sort((a, b) => b.count - a.count || a.value.localeCompare(b.value))
+  };
+}
 
 const demoGroupAvatar = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(`
   <svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
@@ -1183,9 +1220,29 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
     return json({ provider: "openai_compatible", model: String(body.model ?? "gpt-6-sol"), text: "模型测试通过。这是 Pages 演示模式返回的模拟结果，不会消耗真实 Token。", usage: { input_tokens: 36, output_tokens: 24, total_tokens: 60 } });
   }
 
+  if (path === "/api/assistant/stickers/facets") return json(demoStickerFacets(url.searchParams));
+  if (path === "/api/assistant/stickers/cleanup" && method === "POST") {
+    const matched = demoFilterStickers(url.searchParams);
+    const result = { stickers: matched.length, removed: matched.length, dry_run: url.searchParams.get("dry_run") === "true" };
+    if (!result.dry_run) {
+      const hashes = new Set(matched.map((item) => item.hash));
+      demoStickers = demoStickers.filter((item) => !hashes.has(item.hash));
+    }
+    return json(result);
+  }
+  const stickerHash = path.match(/^\/api\/assistant\/stickers\/([0-9a-f]{64})$/)?.[1];
+  if (stickerHash && method === "DELETE") {
+    const count = demoStickers.length;
+    demoStickers = demoStickers.filter((item) => item.hash !== stickerHash);
+    return count === demoStickers.length ? json({ error: "表情包不存在" }, 404) : json({ removed: 1 });
+  }
   if (path === "/api/assistant/stickers") {
-    const q = (url.searchParams.get("q") ?? "").trim();
-    const items = demoStickers.filter((item) => !q || item.summary.includes(q) || (item.description ?? "").includes(q));
+    const items = demoFilterStickers(url.searchParams);
+    const sort = url.searchParams.get("sort");
+    const activity = (item: DemoSticker) => Math.max(Date.parse(item.last_seen), item.last_sent ? Date.parse(item.last_sent) : 0);
+    if (sort === "idle") items.sort((a, b) => activity(a) - activity(b));
+    else if (sort === "most_sent") items.sort((a, b) => b.sent_count - a.sent_count);
+    else items.sort((a, b) => Date.parse(b.last_seen) - Date.parse(a.last_seen));
     const offset = Number(url.searchParams.get("offset") ?? 0);
     const limit = Number(url.searchParams.get("limit") ?? 48);
     return json({ items: items.slice(offset, offset + limit), total: items.length });
