@@ -3592,10 +3592,12 @@ const incomingModelRoles = ref<BotProfileConfig["model_roles"]>();
 
 // roleSnapshot 按固定字段顺序拍平，保证服务端回来的那份和页面草稿能直接比。
 function roleSnapshot(roles: Record<string, RoleAssignment | undefined> | undefined): string {
+  const implicit = (key: string, role?: RoleAssignment): boolean => role?.follow_chat === true && defaultFollowChatRoles.includes(key as RoleKey);
   const route = (item: RoleRoute): unknown[] => [item.profile_id ?? "", item.group ?? "", item.model ?? "", item.provider_id ?? "", item.model_id ?? "", item.follow_chat === true];
   const params = (item: RoleAssignment): unknown[] => Object.entries(item.params ?? {}).sort(([a], [b]) => a.localeCompare(b));
   return JSON.stringify(
     Object.keys(roles ?? {})
+      .filter((key) => !implicit(key, roles?.[key]))
       .sort()
       .map((key) => {
         const role = roles?.[key];
@@ -3630,6 +3632,9 @@ function setRoleForm(source: BotProfileConfig["model_roles"]): void {
       params: role.params ? { ...role.params } : undefined,
       reasoning_effort: role.reasoning_effort || undefined
     };
+  }
+  for (const key of defaultFollowChatRoles) {
+    roles[key] ??= { model: "", follow_chat: true };
   }
   roleForm.value = roles;
   savedRoleSnapshot.value = roleSnapshot(roles);
@@ -3690,6 +3695,11 @@ const GROUP_PREFIX = "group:";
 // 只能靠「什么都不填」隐式回落，改了对话之后也看不出哪些用途跟着变了。
 const FOLLOW_CHAT = "__follow_chat__";
 const FOLLOW_VISION = "__follow_vision__";
+const DISABLED = "__disabled__";
+
+// 没设过就跟随对话的用途：视觉理解、意图识别、图片生成。留空和显式「跟随对话」
+// 是同一个意思，界面上统一显示成后者，保存时也写成后者。
+const defaultFollowChatRoles: RoleKey[] = ["vision", "intent", "image"];
 
 function llmProviderLabel(provider: LLMConfig["provider"]): string {
   const labels: Record<LLMConfig["provider"], string> = {
@@ -3822,6 +3832,7 @@ function channelOptionsFor(role: RoleKey): AppSelectOption[] {
   const base: AppSelectOption[] = [];
   if (role === "media_parse") base.push({ value: FOLLOW_VISION, label: "跟随视觉理解", hint: "不单独绑定媒体解析模型" });
   // 对话是被跟随的那一档，不能跟随自己；音视频插槽没有可跟随的对话模型。
+  if (isMediaRole(role)) base.push({ value: DISABLED, label: "不启用", hint: "不配置这项能力" });
   if (role !== "chat" && !isMediaRole(role)) {
     base.push({
       value: FOLLOW_CHAT,
@@ -3966,6 +3977,7 @@ function roleModelValue(role: RoleKey): string {
 
 function roleSelectionValue(role: RoleKey): string {
   if (role === "media_parse" && !roleForm.value[role]) return FOLLOW_VISION;
+  if (isMediaRole(role) && !roleForm.value[role]) return DISABLED;
   return routeSelectionValue(roleForm.value[role]);
 }
 
@@ -3977,6 +3989,10 @@ function routeSelectionValue(route?: RoleRoute): string {
 
 function setRoleChannel(role: RoleKey, value: string): void {
   if (role === "media_parse" && value === FOLLOW_VISION) {
+    delete roleForm.value[role];
+    return;
+  }
+  if (isMediaRole(role) && value === DISABLED) {
     delete roleForm.value[role];
     return;
   }
