@@ -51,9 +51,11 @@ type QQOfficialChannel struct {
 	avatarURLs    map[string]string
 	mu            sync.RWMutex
 	cfg           QQOfficialConfig
-	handler       EventHandler
-	client        *http.Client
-	cancel        context.CancelFunc
+	// apiBaseOverride 只给测试指向本地服务。
+	apiBaseOverride string
+	handler         EventHandler
+	client          *http.Client
+	cancel          context.CancelFunc
 
 	statusMu sync.RWMutex
 	status   ChannelStatus
@@ -113,6 +115,9 @@ func (c *QQOfficialChannel) SetConfig(cfg QQOfficialConfig) {
 func (c *QQOfficialChannel) apiBase() string {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
+	if c.apiBaseOverride != "" {
+		return c.apiBaseOverride
+	}
 	if c.cfg.Sandbox {
 		return qqOfficialSandboxAPI
 	}
@@ -446,50 +451,85 @@ func (c *QQOfficialChannel) SendWithResult(ctx context.Context, msg OutgoingMess
 	if err != nil {
 		return nil, err
 	}
-	body := map[string]any{
-		"content": text,
-		// msg_type 0 是纯文本。富媒体要先上传拿 file_info，另走一条链路。
-		"msg_type": 0,
-	}
 	// 群里的主动消息能力已被平台关闭，不带 msg_id 会被 40034105 拒收；被动回复
 	// 用触发这轮的入站消息 ID，拿不到才退回引用目标。
-	if replyID := firstNonEmpty(strings.TrimSpace(msg.PassiveReplyMessageID), strings.TrimSpace(msg.ReplyMessageID)); replyID != "" {
-		body["msg_id"] = replyID
-		if !isGuild {
-			// 同一个 msg_id 下的多条回复要靠递增的 msg_seq 区分，否则第二条起被去重拒收。
-			body["msg_seq"] = c.nextPassiveSeq(replyID)
-		}
-	}
-	if isGuild {
-		delete(body, "msg_type")
-	}
+	replyID := firstNonEmpty(strings.TrimSpace(msg.PassiveReplyMessageID), strings.TrimSpace(msg.ReplyMessageID))
 	c.mu.RLock()
 	client := c.client
 	c.mu.RUnlock()
-	raw, err := platformJSONRequest(ctx, client, http.MethodPost, endpoint, map[string]string{
-		"Authorization": auth,
-	}, body)
-	if err != nil {
-		// token 过期时开放平台返回 401；丢掉缓存让下一次重新换。
-		if strings.Contains(err.Error(), "http 401") {
-			c.tokens.Invalidate()
+	// post 发一条消息。同一个 msg_id 下的多条回复要靠递增的 msg_seq 区分，否则第二条起被去重拒收。
+	post := func(body map[string]any) (string, error) {
+		if replyID != "" {
+			body["msg_id"] = replyID
+			if !isGuild {
+				body["msg_seq"] = c.nextPassiveSeq(replyID)
+			}
 		}
-		return nil, fmt.Errorf("qq: 发送失败: %w", err)
+		raw, err := platformJSONRequest(ctx, client, http.MethodPost, endpoint, map[string]string{
+			"Authorization": auth,
+		}, body)
+		if err != nil {
+			// token 过期时开放平台返回 401；丢掉缓存让下一次重新换。
+			if strings.Contains(err.Error(), "http 401") {
+				c.tokens.Invalidate()
+			}
+			return "", fmt.Errorf("qq: 发送失败: %w", err)
+		}
+		var envelope struct {
+			Code    int    `json:"code"`
+			Message string `json:"message"`
+			ID      string `json:"id"`
+		}
+		if err := json.Unmarshal(raw, &envelope); err == nil && envelope.Code != 0 {
+			return "", fmt.Errorf("qq: 发送被拒绝: %s (code %d)", envelope.Message, envelope.Code)
+		}
+		return strings.TrimSpace(envelope.ID), nil
 	}
-	var envelope struct {
-		Code    int    `json:"code"`
-		Message string `json:"message"`
-		ID      string `json:"id"`
+
+	var firstID string
+	if text != "" {
+		// msg_type 0 是纯文本；频道消息没有这个字段。
+		body := map[string]any{"content": text}
+		if !isGuild {
+			body["msg_type"] = 0
+		}
+		id, err := post(body)
+		if err != nil {
+			return nil, err
+		}
+		if isGroup && !isGuild {
+			c.sent.record(target, id, text, time.Now())
+		}
+		firstID = id
 	}
-	if err := json.Unmarshal(raw, &envelope); err == nil && envelope.Code != 0 {
-		return nil, fmt.Errorf("qq: 发送被拒绝: %s (code %d)", envelope.Message, envelope.Code)
+	if len(msg.ImageURLs) > 0 && isGuild {
+		return nil, fmt.Errorf("qq: 频道消息暂不支持发送图片")
 	}
-	id := strings.TrimSpace(envelope.ID)
-	if isGroup && !isGuild {
-		c.sent.record(target, id, text, time.Now())
+	prefix := c.apiBase() + "/v2/users/" + target
+	if isGroup {
+		prefix = c.apiBase() + "/v2/groups/" + target
 	}
-	if id != "" {
-		return map[string]any{"message_id": id}, nil
+	for _, source := range msg.ImageURLs {
+		if strings.TrimSpace(source) == "" {
+			continue
+		}
+		fileInfo, err := c.qqUploadImage(ctx, auth, prefix, source)
+		if err != nil {
+			return nil, err
+		}
+		id, err := post(map[string]any{
+			"msg_type": 7,
+			"media":    map[string]any{"file_info": fileInfo},
+		})
+		if err != nil {
+			return nil, err
+		}
+		if firstID == "" {
+			firstID = id
+		}
+	}
+	if firstID != "" {
+		return map[string]any{"message_id": firstID}, nil
 	}
 	return nil, nil
 }
