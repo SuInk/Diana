@@ -118,7 +118,7 @@
 
         <p class="plugin-card-desc" :title="pluginDisplayDescription(plugin)">{{ pluginDisplayDescription(plugin) }}</p>
 
-        <div v-if="plugin.manifest.permissions?.length || showFooter(plugin)" class="plugin-card-bottom">
+        <div v-if="plugin.manifest.permissions?.length || showFooter(plugin) || groupExceptions(plugin).length" class="plugin-card-bottom">
           <!-- 权限在左，设置等操作在右；有无设置都不再改变卡片的基础高度。 -->
           <div class="plugin-card-meta">
             <!-- 依赖列表展开后比整张卡片还高，行内展开会把这一条撑得和邻居完全
@@ -138,6 +138,20 @@
                 :class="{ warn: hasDependencyProblem(plugin.manifest.id) }"
               >
                 {{ readyDependencyCount(plugin.manifest.id) }}/{{ dependenciesFor(plugin.manifest.id).length }}
+              </span>
+            </button>
+
+            <!-- 卡片开关是这台机器人的，群管理里还能按群单独开关。不在这里说一句，
+                 开关开着、某个群里就是不工作，只能挨个群去翻。 -->
+            <button
+              v-if="groupExceptions(plugin).length"
+              class="plugin-perms-head"
+              type="button"
+              title="查看单独设置的群"
+              @click="exceptionsTarget = plugin"
+            >
+              <span class="plugin-dependency-count" :class="{ warn: pluginEnabled(plugin) }">
+                {{ groupExceptions(plugin).length }} 个群单独{{ pluginEnabled(plugin) ? "关闭" : "开启" }}
               </span>
             </button>
 
@@ -453,6 +467,25 @@
     </Modal>
 
     <Modal
+      v-if="exceptionsTarget"
+      :title="`${pluginDisplayName(exceptionsTarget)} · 按群设置`"
+      @close="exceptionsTarget = null"
+    >
+      <p class="plugin-dependencies-hint">
+        这台机器人{{ pluginEnabled(exceptionsTarget) ? "启用了" : "停用了" }}这个插件，下列群在群管理里单独设成了「{{ pluginEnabled(exceptionsTarget) ? "关" : "开" }}」，以群的设置为准。要让它们跟着机器人走，在群管理里把本群插件改回「跟随」。
+      </p>
+      <div class="cluster plugin-card-perms">
+        <span v-for="group in groupExceptions(exceptionsTarget)" :key="group.group_id" class="badge" :title="group.group_id">
+          {{ group.group_name ? `${group.group_name}（${group.group_id}）` : group.group_id }}
+        </span>
+      </div>
+      <template #footer>
+        <button class="btn" type="button" @click="openGroups">去群管理</button>
+        <button class="btn primary" type="button" @click="exceptionsTarget = null">完成</button>
+      </template>
+    </Modal>
+
+    <Modal
       v-if="dependenciesTarget"
       :title="`${dependenciesTarget.manifest.name} · 运行依赖`"
       @close="dependenciesTarget = null"
@@ -661,7 +694,7 @@
 
 <script setup lang="ts">
 import { useConfigurationRefresh } from "../configuration-sync";
-import { computed, onMounted, ref, watch } from "vue";
+import { computed, onActivated, onMounted, ref, watch } from "vue";
 import ExtensionManager from "../components/ExtensionManager.vue";
 const extensionTabs = [{value:'plugins' as const,label:'插件'},{value:'skill' as const,label:'Skills'},{value:'mcp' as const,label:'MCP'}];
 type ExtensionTab = typeof extensionTabs[number]['value'];
@@ -1033,12 +1066,46 @@ function upsert(state: PluginState, scope = botScope.value): void {
   }
 }
 
+// 各群的插件覆盖只用来在卡片上提示「哪些群和机器人开关不一致」。取不到不影响
+// 插件页本身，提示不显示就是了。
+const scopedGroups = ref<BotGroupSummary[]>([]);
+const exceptionsTarget = ref<PluginState | null>(null);
+
+async function loadScopedGroups(scope: string): Promise<void> {
+  if (!scope) {
+    scopedGroups.value = [];
+    return;
+  }
+  try {
+    const groups = (await listBotGroups(false, scope)).groups ?? [];
+    if (scope === botScope.value) scopedGroups.value = groups;
+  } catch {
+    if (scope === botScope.value) scopedGroups.value = [];
+  }
+}
+
+// groupExceptions 列出单独设成和机器人开关相反的群。本群没启用的不算：机器人在
+// 那个群本来就不工作，插件开不开无从谈起。GitHub 卡片合并了仓库发布插件，两个
+// 插件任一被单独设置都算这个群。
+function groupExceptions(plugin: PluginState): BotGroupSummary[] {
+  if (!botScope.value || !plugin.installed) return [];
+  const enabled = pluginEnabled(plugin);
+  const ids = plugin.manifest.id === repositoryWatchPluginID ? [repositoryWatchPluginID, repositoryPublishPluginID] : [plugin.manifest.id];
+  return scopedGroups.value.filter((group) => group.enabled && ids.some((id) => group.plugin_overrides?.[id] === !enabled));
+}
+
+function openGroups(): void {
+  exceptionsTarget.value = null;
+  navigate("groups");
+}
+
 let reloadID = 0;
 async function reload(): Promise<void> {
   const requestID = ++reloadID;
   const scope = botScope.value;
   loading.value = true;
   loadError.value = "";
+  void loadScopedGroups(scope);
   try {
     const states = await listPlugins();
     if (requestID !== reloadID || scope !== botScope.value) return;
@@ -1605,8 +1672,20 @@ watch(botScope, () => {
   settingsTarget.value = null;
   permissionsTarget.value = null;
   dependenciesTarget.value = null;
+  exceptionsTarget.value = null;
   plugins.value = [];
   void reload();
+});
+
+// 页面被 KeepAlive 缓存：从群管理改完群的插件设置切回来时，提示要跟着更新。
+// 首次挂载时 reload 已经取过一次，这里跳过首次激活。
+let activatedOnce = false;
+onActivated(() => {
+  if (!activatedOnce) {
+    activatedOnce = true;
+    return;
+  }
+  void loadScopedGroups(botScope.value);
 });
 
 onMounted(() => {
