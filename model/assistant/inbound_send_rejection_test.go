@@ -120,3 +120,10 @@ func TestPermanentSendRejectionOutcomeIsExplained(t *testing.T) {
 		t.Fatalf("reason = %q", reason)
 	}
 }
+
+func TestIsPermanentSendRejectionQQOfficialProactiveDenied(t *testing.T) {
+	denied := &outboundSendError{Cause: errors.New(`diana: send failed after 1 attempts: qq: 发送失败: http 400: {"message":"主动消息失败, 无权限","code":40034105}`)}
+	if !isPermanentSendRejection(denied) {
+		t.Fatal("QQ official 40034105 must not be retried")
+	}
+}

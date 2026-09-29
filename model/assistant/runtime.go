@@ -7038,6 +7038,9 @@ func routeOutgoingToEvent(event MessageEvent, msg OutgoingMessage) OutgoingMessa
 	msg.PlatformScope = event.PlatformScope
 	msg.GuildID = event.GuildID
 	msg.ProfileID = event.ProfileID
+	if event.Platform == PlatformQQOfficial && msg.PassiveReplyMessageID == "" {
+		msg.PassiveReplyMessageID = strings.TrimSpace(event.MessageID)
+	}
 	if event.Kind == EventKindGroup {
 		msg.GroupID = event.GroupID
 		msg.MessageThreadID = event.MessageThreadID

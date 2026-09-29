@@ -378,3 +378,39 @@ func TestQQOfficialEventFromDispatchImageOnlyMessage(t *testing.T) {
 		t.Fatalf("segments = %+v, want the image segment kept", event.Segments)
 	}
 }
+
+// 同群其他机器人的发言（作者是 bot 但不是自己）只当上下文，不能触发回复。
+func TestQQOfficialEventFromDispatchOtherBotIsNotAddressedToMe(t *testing.T) {
+	for _, eventType := range []string{"GROUP_AT_MESSAGE_CREATE", "GROUP_MESSAGE_CREATE"} {
+		data := json.RawMessage(`{
+		  "id":"msg-8","content":"欢迎你进群","group_openid":"grp-1",
+		  "author":{"id":"other-bot","member_openid":"other-openid","bot":true},
+		  "mentions":[{"id":"bot-1","is_you":true}]
+		}`)
+		event, ok := qqOfficialEventFromDispatch(eventType, data, "bot-1")
+		if !ok {
+			t.Fatalf("%s: other bot message was not mapped", eventType)
+		}
+		if event.ToMe {
+			t.Fatalf("%s: a message from another bot must not be addressed to this bot", eventType)
+		}
+	}
+}
+
+func TestQQOfficialNextPassiveSeqIncrementsPerMessage(t *testing.T) {
+	c := NewQQOfficialChannel(QQOfficialConfig{})
+	if a, b, other := c.nextPassiveSeq("m1"), c.nextPassiveSeq("m1"), c.nextPassiveSeq("m2"); a != 1 || b != 2 || other != 1 {
+		t.Fatalf("seq = %d,%d,%d, want 1,2,1", a, b, other)
+	}
+}
+
+func TestRouteOutgoingToEventQQOfficialCarriesPassiveMessageID(t *testing.T) {
+	msg := routeOutgoingToEvent(MessageEvent{Platform: PlatformQQOfficial, Kind: EventKindGroup, GroupID: "g", MessageID: "ROBOT1.0_x"}, OutgoingMessage{Text: "hi"})
+	if msg.PassiveReplyMessageID != "ROBOT1.0_x" || msg.ReplyMessageID != "" {
+		t.Fatalf("passive=%q reply=%q, want passive id only", msg.PassiveReplyMessageID, msg.ReplyMessageID)
+	}
+	other := routeOutgoingToEvent(MessageEvent{Platform: "onebot", Kind: EventKindGroup, GroupID: "g", MessageID: "1"}, OutgoingMessage{Text: "hi"})
+	if other.PassiveReplyMessageID != "" {
+		t.Fatalf("passive id leaked to another platform: %q", other.PassiveReplyMessageID)
+	}
+}

@@ -66,8 +66,16 @@ type QQOfficialChannel struct {
 	sessionID string
 	lastSeq   int64
 
+	seqMu      sync.Mutex
+	passiveSeq map[string]qqPassiveSeq
+
 	// sent 记着最近发出的群消息，用来认出全量模式下平台回推的自发消息。
 	sent qqSentLedger
+}
+
+type qqPassiveSeq struct {
+	seq int
+	at  time.Time
 }
 
 // NewQQOfficialChannel 创建 QQ 官方机器人通道。
@@ -443,8 +451,14 @@ func (c *QQOfficialChannel) SendWithResult(ctx context.Context, msg OutgoingMess
 		// msg_type 0 是纯文本。富媒体要先上传拿 file_info，另走一条链路。
 		"msg_type": 0,
 	}
-	if replyID := strings.TrimSpace(msg.ReplyMessageID); replyID != "" {
+	// 群里的主动消息能力已被平台关闭，不带 msg_id 会被 40034105 拒收；被动回复
+	// 用触发这轮的入站消息 ID，拿不到才退回引用目标。
+	if replyID := firstNonEmpty(strings.TrimSpace(msg.PassiveReplyMessageID), strings.TrimSpace(msg.ReplyMessageID)); replyID != "" {
 		body["msg_id"] = replyID
+		if !isGuild {
+			// 同一个 msg_id 下的多条回复要靠递增的 msg_seq 区分，否则第二条起被去重拒收。
+			body["msg_seq"] = c.nextPassiveSeq(replyID)
+		}
 	}
 	if isGuild {
 		delete(body, "msg_type")
@@ -558,6 +572,27 @@ func (l *qqSentLedger) pruneLocked(now time.Time) {
 }
 
 // CallAPI 透传开放平台的 REST 接口，action 形如 "GET /users/@me/guilds"。
+// nextPassiveSeq 给同一个 msg_id 的第 N 次被动回复分配 msg_seq（从 1 起）。
+func (c *QQOfficialChannel) nextPassiveSeq(msgID string) int {
+	c.seqMu.Lock()
+	defer c.seqMu.Unlock()
+	now := time.Now()
+	if c.passiveSeq == nil {
+		c.passiveSeq = map[string]qqPassiveSeq{}
+	}
+	for id, entry := range c.passiveSeq {
+		// 群聊被动回复窗口 5 分钟、单聊 60 分钟，超过一小时的记录不会再被用到。
+		if now.Sub(entry.at) > time.Hour {
+			delete(c.passiveSeq, id)
+		}
+	}
+	entry := c.passiveSeq[msgID]
+	entry.seq++
+	entry.at = now
+	c.passiveSeq[msgID] = entry
+	return entry.seq
+}
+
 func (c *QQOfficialChannel) CallAPI(ctx context.Context, action string, params map[string]any) (map[string]any, error) {
 	method, path := http.MethodGet, strings.TrimSpace(action)
 	if fields := strings.SplitN(path, " ", 2); len(fields) == 2 {
@@ -937,6 +972,11 @@ func qqOfficialEventFromDispatch(eventType string, data json.RawMessage, selfID 
 	}
 	if event.UserID == "" {
 		return MessageEvent{}, false
+	}
+	// 别的机器人（同群的其他 Bot）发的话只当上下文，不当成对我说的：回复它们既没
+	// 意义，也回不出去，还可能两个机器人互相接话。
+	if msg.Author.Bot && event.Kind == EventKindGroup && event.UserID != selfID {
+		event.ToMe = false
 	}
 	return event, true
 }

@@ -394,6 +394,11 @@ var permanentSendRejectionMarkers = []string{
 	"failed to resolve uid for uin",
 	"blocked by target",
 	"被对方拉黑",
+	// QQ 官方机器人：群里不带有效 msg_id 的发送一律按主动消息拒收（40034105），
+	// 重试同一条不会变成被动回复。
+	"40034105",
+	"40034102",
+	"主动消息失败",
 }
 
 // isPermanentSendRejection 判断这次发送失败是不是重试也不可能成功。
