@@ -331,7 +331,7 @@ func TestRepositoryReleasesPageUntilCursorAndReportOversizedResponse(t *testing.
 	huge := strings.Repeat("x", repositoryWatchMaxResponseBytes)
 	f.set(page(1), []any{map[string]any{"tag_name": "v1", "id": 1, "published_at": at, "body": huge}})
 	_, _, err = p.fetchReleases(context.Background(), "acme/demo", repositoryWatchSnapshot{}, repositoryWatchSelection{}, nil)
-	if err == nil || !strings.Contains(err.Error(), "超过 4 MiB") {
+	if err == nil || !strings.Contains(err.Error(), fmt.Sprintf("超过 %d MiB", repositoryWatchMaxResponseBytes>>20)) {
 		t.Fatalf("oversized err=%v", err)
 	}
 }

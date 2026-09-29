@@ -113,11 +113,13 @@ const (
 	repositoryWatchIssueScanPages = 5
 	// repositoryWatchEventPages 是仓库事件流最多翻的页数，GitHub 最多只给 300 条。
 	repositoryWatchEventPages = 3
-	// repositoryWatchMaxResponseBytes 是单个 GitHub API 响应的读取上限。
-	repositoryWatchMaxResponseBytes = 4 << 20
+	// repositoryWatchMaxResponseBytes 是单个 GitHub API 响应的读取上限。compare 接口
+	// 不论 per_page 多少都会带上整个区间的文件 patch，go-gitea/gitea 这类一次改动大量
+	// 语言文件的仓库很容易超过 4 MiB，而游标核对依赖它，截断就整轮失败，所以放宽到 32 MiB。
+	repositoryWatchMaxResponseBytes = 32 << 20
 	// repositoryWatchReleasePageSize 是 releases 列表的分页大小。每个 Release 都带着
 	// 完整的 assets 列表，go-gitea/gitea 这类每版挂几十个二进制的仓库，一页 50 条
-	// 就超过 4 MiB；取 10 条一页，需要时再往后翻。
+	// 就有好几 MiB；取 10 条一页，需要时再往后翻。
 	repositoryWatchReleasePageSize = 10
 	// repositoryWatchReleasePages 是 releases 最多翻的页数，合计仍覆盖最近 50 个 Release。
 	repositoryWatchReleasePages = 5
