@@ -7,6 +7,7 @@
         <AppSelect v-if="target.destination === 'group' && groupOptions(target.profile_id).length" :model-value="target.group_id || ''" :options="groupOptions(target.profile_id)" aria-label="通知群聊" @update:model-value="update(index, { group_id: String($event) })" />
         <input v-else class="input" :value="target.destination === 'group' ? target.group_id : target.user_id" :aria-label="target.destination === 'group' ? '通知群聊 ID' : '通知私聊 ID'" :placeholder="target.destination === 'group' ? '群号或 Chat ID' : '私聊对象 ID'" @input="update(index, { [target.destination === 'group' ? 'group_id' : 'user_id']: ($event.target as HTMLInputElement).value.trim() })" />
         <AccountNameHint v-if="target.destination === 'private'" :user-id="target.user_id" :profile="target.profile_id" />
+        <p v-else-if="groupNotice(target)" class="hint warn-text subscription-target-notice">{{ groupNotice(target) }}</p>
       </div>
       <button class="btn small ghost danger icon-only" type="button" title="移除通知目标" aria-label="移除通知目标" @click="emit('update:modelValue', modelValue.filter((_, i) => i !== index))"><Trash2 :size="14" /></button>
     </div>
@@ -21,7 +22,8 @@ import { listBotGroups, type BotProfileConfig, type BotGroupSummary, type Reposi
 import AppSelect from "./AppSelect.vue";
 import AccountNameHint from "./AccountNameHint.vue";
 
-const props = defineProps<{ modelValue: RepositoryWatchTarget[]; profiles: BotProfileConfig[]; defaultProfile?: string }>();
+// pluginIds 是发这条推送的插件：用来判断目标群是不是单独关了它。
+const props = defineProps<{ modelValue: RepositoryWatchTarget[]; profiles: BotProfileConfig[]; defaultProfile?: string; pluginIds?: string[] }>();
 const emit = defineEmits<{ 'update:modelValue': [RepositoryWatchTarget[]] }>();
 const profileOptions = computed(() => props.profiles.map(p => ({ value: p.id || '', label: p.name || p.id || '', hint: p.platform })));
 const destinationOptions = [{ value: 'private', label: '私聊' }, { value: 'group', label: '群聊' }];
@@ -39,6 +41,17 @@ function groupOptions(profile?: string) {
   if (!profile) return [];
   return (groupsByProfile[profile] ?? []).filter(g => g.joined).map(g => ({ value: g.group_id, label: g.group_name ? `${g.group_name}（${g.group_id}）` : g.group_id }));
 }
+// groupNotice 提醒目标群的状态和推送不一致的地方。推送只在整台机器人停用时拦截，
+// 群关着、或者群里单独关了这个插件，推送照样发到群里：不说一句，看起来像是
+// 「群关了就不会收到」。
+function groupNotice(target: RepositoryWatchTarget): string {
+  if (target.destination !== 'group' || !target.profile_id || !target.group_id) return '';
+  const group = (groupsByProfile[target.profile_id] ?? []).find(g => g.group_id === target.group_id);
+  if (!group) return '';
+  if (!group.enabled) return '这个群已关闭，机器人不在群里回复，但订阅推送仍会发到这里。';
+  if ((props.pluginIds ?? []).some(id => group.plugin_overrides?.[id] === false)) return '这个群单独关了本插件，群里对话用不了它，但订阅推送仍会发到这里。';
+  return '';
+}
 function update(index: number, patch: Partial<RepositoryWatchTarget>) {
   emit('update:modelValue', props.modelValue.map((target, i) => i === index ? { ...target, ...patch } : target));
 }
@@ -49,7 +62,8 @@ function update(index: number, patch: Partial<RepositoryWatchTarget>) {
 /* 私聊昵称拆到第二行，第一行的下拉、输入框和删除按钮才能按同一条中线对齐。 */
 .subscription-target-row { display: grid; grid-template-columns: minmax(0, 1fr) 88px minmax(0, 1fr) 32px; align-items: center; gap: 4px 8px; }
 .subscription-target-account { display: contents; }
-.subscription-target-account > .account-name-hint { grid-row: 2; grid-column: 3; }
+.subscription-target-account > .account-name-hint, .subscription-target-account > .subscription-target-notice { grid-row: 2; grid-column: 3; }
+.subscription-target-notice { margin: 0; }
 .subscription-target-account .input { width: 100%; }
-@media (max-width: 640px) { .subscription-target-row { grid-template-columns: minmax(0, 1fr) 88px 32px; } .subscription-target-account > :not(.account-name-hint) { grid-row: 2; grid-column: 1 / 3; } .subscription-target-account > .account-name-hint { grid-row: 3; grid-column: 1 / 3; } .subscription-target-row > button { grid-row: 1; grid-column: 3; } }
+@media (max-width: 640px) { .subscription-target-row { grid-template-columns: minmax(0, 1fr) 88px 32px; } .subscription-target-account > :not(.account-name-hint):not(.subscription-target-notice) { grid-row: 2; grid-column: 1 / 3; } .subscription-target-account > .account-name-hint, .subscription-target-account > .subscription-target-notice { grid-row: 3; grid-column: 1 / 3; } .subscription-target-row > button { grid-row: 1; grid-column: 3; } }
 </style>
