@@ -121,6 +121,9 @@ func RestoreDowngradeRecords(records []DowngradeRecord) {
 const (
 	downgradeFieldToolChoice  = "tool_choice"
 	downgradeFieldStrictTools = "strict_tools"
+	// downgradeFieldReasoning 是思考强度相关的字段（reasoning_effort、thinking 及各家
+	// 原生协议的对应参数），三种协议共用这一个记录名。
+	downgradeFieldReasoning = "reasoning_effort"
 )
 
 // paramDowngrade 描述一次「上游拒了某个请求字段 → 去掉它重发」的降级。
@@ -132,11 +135,12 @@ type paramDowngrade struct {
 	strip    func(GenerateRequest) (GenerateRequest, bool)
 }
 
-// paramDowngrades 按先精确后兜底排序：tool_choice 按字段名匹配，
+// paramDowngrades 按先精确后兜底排序：tool_choice、思考强度按字段名匹配，
 // 严格模式只能按状态码判定，放在后面，否则它会把所有 400 都收走。
 func paramDowngrades() []paramDowngrade {
 	return []paramDowngrade{
 		{name: downgradeFieldToolChoice, rejected: forcedToolChoiceRejected, strip: stripForcedToolChoice},
+		{name: downgradeFieldReasoning, rejected: openAIReasoningRejected, strip: stripReasoningEffort},
 		{name: downgradeFieldStrictTools, rejected: strictToolsRejected, strip: stripStrictTools},
 	}
 }
@@ -207,6 +211,27 @@ func forcedToolChoiceRejected(err error) bool {
 	var reqErr *openAIRequestError
 	errors.As(err, &reqErr)
 	return strings.Contains(strings.ToLower(reqErr.detail), "tool_choice")
+}
+
+// openAIReasoningRejected 判断这次失败是不是上游不认思考参数，例如非思考模型收到
+// reasoning_effort，或网关不认 DeepSeek 的 thinking 字段。排在 tool_choice 后面：
+// DeepSeek 的「Thinking mode does not support this tool_choice」该摘的是 tool_choice。
+func openAIReasoningRejected(err error) bool {
+	if paramRejectionStatus(err) == 0 {
+		return false
+	}
+	var reqErr *openAIRequestError
+	errors.As(err, &reqErr)
+	return reasoningRejectedText(reqErr.detail)
+}
+
+// stripReasoningEffort 不再发任何思考参数，交给模型自己的默认行为。
+func stripReasoningEffort(req GenerateRequest) (GenerateRequest, bool) {
+	if req.ReasoningEffort == "" {
+		return req, false
+	}
+	req.ReasoningEffort = ""
+	return req, true
 }
 
 // stripForcedToolChoice 退回 auto，工具本身照发，模型仍然可以调用。

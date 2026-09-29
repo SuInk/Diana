@@ -105,9 +105,17 @@ func (c *geminiClient) Generate(ctx context.Context, req GenerateRequest) (resul
 	}
 	config.Tools = geminiTools(req.Tools)
 	config.ToolConfig = geminiToolConfig(req)
+	config.ThinkingConfig = c.thinkingConfig(req)
 
 	contents := geminiContents(messages, req.Tools)
 	resp, err := c.client.Models.GenerateContent(ctx, req.Model, contents, config)
+	if err != nil && config.ThinkingConfig != nil && geminiReasoningRejected(err) {
+		config.ThinkingConfig = nil
+		resp, err = c.client.Models.GenerateContent(ctx, req.Model, contents, config)
+		if err == nil {
+			rememberReasoningDowngrade(c.cfg, req.Model)
+		}
+	}
 	if err != nil {
 		rememberedContextLimits.learn(c.cfg, req.Model, err)
 		return nil, fmt.Errorf("llm: provider request failed: %w", err)
@@ -158,6 +166,7 @@ func (c *geminiClient) Stream(ctx context.Context, req GenerateRequest) (streamE
 	}
 	config.Tools = geminiTools(req.Tools)
 	config.ToolConfig = geminiToolConfig(req)
+	config.ThinkingConfig = c.thinkingConfig(req)
 	contents := geminiContents(messages, req.Tools)
 	out := make(chan ChatEvent, 4)
 	go func() {
@@ -165,7 +174,7 @@ func (c *geminiClient) Stream(ctx context.Context, req GenerateRequest) (streamE
 		defer recoverChatStreamPanic(ctx, out, "gemini")
 		var last Usage
 		finished, emitted := false, false
-		for response, err := range c.streamContentOnce(ctx, req.Model, contents, config) {
+		for response, err := range c.streamWithReasoningBackoff(ctx, req.Model, contents, config) {
 			if err != nil {
 				sendChatEvent(ctx, out, ChatEvent{Type: ChatEventError, Error: err.Error()})
 				return
@@ -227,6 +236,42 @@ func (c *geminiClient) Stream(ctx context.Context, req GenerateRequest) (streamE
 		sendChatEvent(ctx, out, ChatEvent{Type: ChatEventDone, Response: &GenerateResponse{Provider: ProviderGemini, Model: req.Model}})
 	}()
 	return out, nil
+}
+
+// thinkingConfig 折算思考参数；这个端点和模型已经学到不认时不发。
+func (c *geminiClient) thinkingConfig(req GenerateRequest) *genai.ThinkingConfig {
+	if reasoningDowngradeRemembered(c.cfg, req.Model) {
+		return nil
+	}
+	return geminiThinkingConfig(req.Model, req.ReasoningEffort)
+}
+
+// streamWithReasoningBackoff 在上游拒了思考参数时摘掉它们重开一次流。被拒的请求
+// 第一下就带着错误回来，那时还什么都没输出，重开对调用方是透明的。
+func (c *geminiClient) streamWithReasoningBackoff(ctx context.Context, model string, contents []*genai.Content, config *genai.GenerateContentConfig) iter.Seq2[*genai.GenerateContentResponse, error] {
+	return func(yield func(*genai.GenerateContentResponse, error) bool) {
+		first := true
+		for response, err := range c.streamContentOnce(ctx, model, contents, config) {
+			if first && err != nil && config.ThinkingConfig != nil && geminiReasoningRejected(err) {
+				config.ThinkingConfig = nil
+				remembered := false
+				for retried, retryErr := range c.streamContentOnce(ctx, model, contents, config) {
+					if !remembered && retryErr == nil {
+						rememberReasoningDowngrade(c.cfg, model)
+						remembered = true
+					}
+					if !yield(retried, retryErr) {
+						return
+					}
+				}
+				return
+			}
+			first = false
+			if !yield(response, err) {
+				return
+			}
+		}
+	}
 }
 
 // streamContentOnce 发一次流式请求，把读流时断掉的原因交回调用方。

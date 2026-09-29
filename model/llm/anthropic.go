@@ -88,6 +88,7 @@ func (c *anthropicClient) Generate(ctx context.Context, req GenerateRequest) (re
 	}
 	params.Tools = anthropicTools(req.Tools)
 	params.ToolChoice = anthropicToolChoice(req)
+	c.applyReasoning(&params, req)
 
 	var opts []option.RequestOption
 	if req.implicitMaxOutputTokens && c.cfg.Timeout <= 0 {
@@ -96,6 +97,12 @@ func (c *anthropicClient) Generate(ctx context.Context, req GenerateRequest) (re
 		opts = append(opts, option.WithRequestTimeout(anthropicNonStreamingTimeout))
 	}
 	resp, err := c.client.Messages.New(ctx, params, opts...)
+	if firstErr := err; err != nil && c.backOffReasoning(&params, req, err) {
+		resp, err = c.client.Messages.New(ctx, params, opts...)
+		if err == nil && !anthropicThinkingHistoryRejected(firstErr) {
+			rememberReasoningDowngrade(c.cfg, req.Model)
+		}
+	}
 	if err != nil && req.implicitMaxOutputTokens {
 		if limit, ok := anthropicMaxTokensRejection(err); ok && limit < params.MaxTokens {
 			params.MaxTokens = limit
@@ -150,7 +157,17 @@ func (c *anthropicClient) Stream(ctx context.Context, req GenerateRequest) (stre
 	if req.Temperature != nil {
 		params.Temperature = param.NewOpt(*req.Temperature)
 	}
+	c.applyReasoning(&params, req)
 	stream := c.client.Messages.NewStreaming(ctx, params)
+	// SDK 在 NewStreaming 里就发出请求，HTTP 层的拒绝此刻已经在 Err 里，还没输出
+	// 任何事件，可以透明地摘掉思考参数重发。
+	if err := stream.Err(); err != nil && c.backOffReasoning(&params, req, err) {
+		stream.Close()
+		stream = c.client.Messages.NewStreaming(ctx, params)
+		if stream.Err() == nil && !anthropicThinkingHistoryRejected(err) {
+			rememberReasoningDowngrade(c.cfg, req.Model)
+		}
+	}
 	out := make(chan ChatEvent, 8)
 	go func() {
 		defer close(out)
@@ -223,6 +240,26 @@ func (c *anthropicClient) Stream(ctx context.Context, req GenerateRequest) (stre
 		emit(ChatEvent{Type: ChatEventDone, Response: &GenerateResponse{Provider: ProviderAnthropic, Model: string(message.Model), AnthropicThinking: anthropicThinkingBlocks(message.Content)}})
 	}()
 	return out, nil
+}
+
+// applyReasoning 写入思考参数；这个端点和模型已经学到不认这些参数时不发。
+func (c *anthropicClient) applyReasoning(params *anthropic.MessageNewParams, req GenerateRequest) {
+	if reasoningDowngradeRemembered(c.cfg, req.Model) {
+		return
+	}
+	applyAnthropicReasoning(params, req)
+}
+
+// backOffReasoning 在上游拒了思考参数时把它们摘掉，报告是否值得重发。开思考时
+// 去掉的 temperature 也还原回来。
+func (c *anthropicClient) backOffReasoning(params *anthropic.MessageNewParams, req GenerateRequest, err error) bool {
+	if !anthropicReasoningRejected(err) || !stripAnthropicReasoning(params) {
+		return false
+	}
+	if req.Temperature != nil {
+		params.Temperature = param.NewOpt(*req.Temperature)
+	}
+	return true
 }
 
 func anthropicThinkingBlocks(content []anthropic.ContentBlockUnion) []json.RawMessage {

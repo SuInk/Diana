@@ -193,10 +193,10 @@
           />
           <span class="hint">平台预设会选择推荐模式，也可按服务实际支持情况切换。</span>
         </div>
-        <div v-if="supportsAPIStyle" class="field">
+        <div v-if="supportsReasoningEffort" class="field">
           <label for="llm-reasoning-effort">思考强度</label>
           <AppSelect id="llm-reasoning-effort" v-model="form.reasoning_effort" :options="reasoningEffortOptions" />
-          <span class="hint">越低回得越快、越省 token。DeepSeek 只有低、高、最高三档，「中」按「高」发；选了档位会同时开启思考，「关闭思考」改发 <code>thinking: disabled</code>。不支持思考的模型可能拒绝这个参数，留「跟随模型」即可。</span>
+          <span class="hint">越低回得越快、越省 token。各家档位不同，会按模型折算：DeepSeek 只有低、高、最高三档，其余就近取；新款 Claude（Fable、Opus 5.5）和 Gemini 3 Pro 关不掉思考，「关闭思考」按最低一档发。模型不认这个参数时会自动去掉重发，并记住以后不再发。</span>
         </div>
         <div class="field wide">
           <label for="llm-baseurl">API 地址</label>
@@ -496,6 +496,9 @@ const emptyForm: LLMFormState = {
   context_window_tokens: String(defaultContextWindowTokens),
   reasoning_effort: "default",
 };
+
+// 对话类协议都能调思考强度；TypeSafe 是只做判断的模型，没有这个概念。
+const supportsReasoningEffort = computed(() => ["openai_compatible", "anthropic", "gemini"].includes(form.value.provider));
 
 const baseReasoningEffortOptions = [
   { value: "default", label: "跟随模型" },
@@ -905,8 +908,8 @@ function formToPayload(): LLMConfig {
     // 必须每次都提交：后端把缺省的 headers 当成「这个客户端没提交」而保留旧值，
     // 省略掉的话清空输入框永远删不掉已经填过的头。
     headers: form.value.provider === "openai_compatible" ? headersFromRows() : {},
-    // 只有 OpenAI 兼容接口会发这个参数；原生协议不提交，沿用旧值。
-    reasoning_effort: form.value.provider === "openai_compatible" ? form.value.reasoning_effort : undefined,
+    // TypeSafe 判断模型没有思考档位，不提交，沿用旧值。
+    reasoning_effort: supportsReasoningEffort.value ? form.value.reasoning_effort : undefined,
     description: form.value.description.trim() || undefined
   };
   // 窗口保存前已校验必填，这里照常提交。
