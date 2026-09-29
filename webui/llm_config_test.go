@@ -803,6 +803,19 @@ func TestLLMPayloadDistinguishesClearedFromUnsubmitted(t *testing.T) {
 	}
 }
 
+func TestReasoningEffortDefaultClearsSavedValue(t *testing.T) {
+	existing := llm.ProviderConfig{Provider: llm.ProviderOpenAICompatible, Model: "deepseek-v4-flash", ReasoningEffort: "none"}
+
+	reset := llmConfigPayload{Provider: llm.ProviderOpenAICompatible, Model: "deepseek-v4-flash", ReasoningEffort: "default"}
+	if got := mergeUnsubmittedLLMConfig(reset, configFromPayload(reset), existing).ReasoningEffort; got != "" {
+		t.Fatalf("default 应清回跟随模型, got %q", got)
+	}
+	untouched := llmConfigPayload{Provider: llm.ProviderOpenAICompatible, Model: "deepseek-v4-flash"}
+	if got := mergeUnsubmittedLLMConfig(untouched, configFromPayload(untouched), existing).ReasoningEffort; got != "none" {
+		t.Fatalf("没提交应保留旧值, got %q", got)
+	}
+}
+
 type stubBotProfileSource struct {
 	set assistant.ProfileSet
 }

@@ -33,7 +33,8 @@ func (c *openAICompatibleClient) streamChatCompletion(ctx context.Context, req G
 	// 非流式，也绝不把工具调用退化成 JSON。每个字段最多摘一次，所以循环会收敛。
 	applied := map[string]bool{}
 	for {
-		params := openAIChatCompletionRequest{PromptCacheKey: req.PromptCacheKey, Model: req.Model, Messages: openAIChatCompletionMessages(req.Messages, req.Tools), Temperature: req.Temperature, ReasoningEffort: req.ReasoningEffort, MaxTokens: req.MaxOutputTokens, Stream: true, Tools: openAIChatTools(req.Tools), ToolChoice: openAIChatToolChoice(req)}
+		params := openAIChatCompletionRequest{PromptCacheKey: req.PromptCacheKey, Model: req.Model, Messages: openAIChatCompletionMessages(req.Messages, req.Tools), Temperature: req.Temperature, MaxTokens: req.MaxOutputTokens, Stream: true, Tools: openAIChatTools(req.Tools), ToolChoice: openAIChatToolChoice(req)}
+		params.ReasoningEffort, params.Thinking = c.chatCompletionReasoning(req)
 		params.StreamOptions = map[string]bool{"include_usage": true}
 		if len(req.Tools) > 0 {
 			parallel := false

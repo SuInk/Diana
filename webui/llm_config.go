@@ -909,6 +909,10 @@ func configFromPayload(payload llmConfigPayload) llm.ProviderConfig {
 		MaxOutputTokens:     tokenLimitValue(payload.MaxOutputTokens),
 		Timeout:             time.Duration(payload.TimeoutMS) * time.Millisecond,
 	}.WithDefaults()
+	// 空串已经表示「没提交、沿用旧值」，想改回跟随模型只能靠显式的 default。
+	if strings.EqualFold(strings.TrimSpace(payload.ReasoningEffort), "default") {
+		cfg.ReasoningEffort = ""
+	}
 	// An explicitly empty model asks the save handler to discover the provider's
 	// model list before choosing the first available model.
 	if strings.TrimSpace(payload.Model) == "" {

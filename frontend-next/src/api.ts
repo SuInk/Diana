@@ -38,6 +38,8 @@ export interface LLMConfig {
   user_agent?: string;
   headers?: Record<string, string>;
   temperature?: number | null;
+  /** 思考强度；空表示跟随模型。提交 default 可把已保存的值清回跟随模型。 */
+  reasoning_effort?: string;
   /** 用户手填的窗口；WebUI 保存时必填，老配置缺省时按兜底值 128000。 */
   context_window_tokens?: number;
   max_context_tokens?: number;

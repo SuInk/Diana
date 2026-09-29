@@ -50,6 +50,12 @@ func scopedContinuationMessages(messages []Message, scope string) []Message {
 // 条目），缺了整轮 400。按端点主机或模型名识别，经网关转发、模型名仍带
 // deepseek 的也算。
 func requiresReasoningReplay(cfg ProviderConfig, model string) bool {
+	return isDeepSeekTarget(cfg, model)
+}
+
+// isDeepSeekTarget 按端点主机或模型名认出 DeepSeek，经网关转发、模型名仍带
+// deepseek 的也算。
+func isDeepSeekTarget(cfg ProviderConfig, model string) bool {
 	if cfg.Provider != ProviderOpenAICompatible {
 		return false
 	}

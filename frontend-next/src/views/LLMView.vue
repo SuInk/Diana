@@ -193,6 +193,11 @@
           />
           <span class="hint">平台预设会选择推荐模式，也可按服务实际支持情况切换。</span>
         </div>
+        <div v-if="supportsAPIStyle" class="field">
+          <label for="llm-reasoning-effort">思考强度</label>
+          <AppSelect id="llm-reasoning-effort" v-model="form.reasoning_effort" :options="reasoningEffortOptions" />
+          <span class="hint">越低回得越快、越省 token。DeepSeek 选「关闭思考」会改发 <code>thinking: disabled</code>；不支持思考的模型可能拒绝这个参数，留「跟随模型」即可。</span>
+        </div>
         <div class="field wide">
           <label for="llm-baseurl">API 地址</label>
           <input
@@ -470,6 +475,8 @@ interface LLMFormState {
   user_agent: string;
   description: string;
   context_window_tokens: string;
+  /** default 表示跟随模型，保存时显式提交，好把之前设过的值清掉。 */
+  reasoning_effort: string;
 }
 
 // 和后端 llm.DefaultContextWindowTokens 一致：没填过窗口时默认填这个。
@@ -487,7 +494,24 @@ const emptyForm: LLMFormState = {
   user_agent: "",
   description: "",
   context_window_tokens: String(defaultContextWindowTokens),
+  reasoning_effort: "default",
 };
+
+const baseReasoningEffortOptions = [
+  { value: "default", label: "跟随模型" },
+  { value: "none", label: "关闭思考" },
+  { value: "low", label: "低" },
+  { value: "medium", label: "中" },
+  { value: "high", label: "高" },
+  { value: "max", label: "最高" }
+];
+
+// 通过 API 设过的其他档位（如 minimal、xhigh）也要能回显，不然一打开就显示空白。
+const reasoningEffortOptions = computed(() => {
+  const current = form.value.reasoning_effort;
+  if (baseReasoningEffortOptions.some((option) => option.value === current)) return baseReasoningEffortOptions;
+  return [...baseReasoningEffortOptions, { value: current, label: current }];
+});
 
 const profileSet = ref<LLMConfig | null>(null);
 const loading = ref(true);
@@ -779,6 +803,7 @@ function startEdit(profile: LLMConfig): void {
     description: profile.description ?? "",
     // 老配置没填窗口时先填上默认值（清单里有就用清单的），保存前人能看到、能改。
     context_window_tokens: String(profile.context_window_tokens || defaultContextWindowTokens),
+    reasoning_effort: profile.reasoning_effort || "default",
   };
   // 凭据方式跟着这份配置走：绑了提供商就停在「授权登录」，否则回到 API Key。
   credentialMode.value = profile.oauth_provider ? "oauth" : "api_key";
@@ -880,6 +905,8 @@ function formToPayload(): LLMConfig {
     // 必须每次都提交：后端把缺省的 headers 当成「这个客户端没提交」而保留旧值，
     // 省略掉的话清空输入框永远删不掉已经填过的头。
     headers: form.value.provider === "openai_compatible" ? headersFromRows() : {},
+    // 只有 OpenAI 兼容接口会发这个参数；原生协议不提交，沿用旧值。
+    reasoning_effort: form.value.provider === "openai_compatible" ? form.value.reasoning_effort : undefined,
     description: form.value.description.trim() || undefined
   };
   // 窗口保存前已校验必填，这里照常提交。
