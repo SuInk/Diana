@@ -35,6 +35,10 @@ const (
 	stickerJustSentFactor    = 0.5  // 10 分钟内刚发过，再乘一次
 	stickerUsagePenaltyStep  = 0.05 // 本会话每发过一次降 5%
 	stickerUsagePenaltyFloor = 0.7  // 最多降到 70%
+	// 表情包默认跨群共享后，同一张图可能刚在别的群发过。群友常常同在几个群里，照样算重复：
+	// 刚发过时降到 50%，之后按半衰期回升，一天后基本不再影响。
+	stickerElsewhereSentFactor   = 0.5
+	stickerElsewhereHalfLifeSecs = 6 * 3600
 	// 命中的候选先取「返回数量 × 这个倍数」进池子，再按分数加权抽，排名靠前的更容易被抽中。
 	stickerMatchedPoolFactor = 2
 	stickerBackgroundTagTTL  = 3 * time.Minute
@@ -84,6 +88,8 @@ type stickerCandidate struct {
 	EventTime     int64
 	LastSentAt    int64
 	SentCount     int
+	// ElsewhereLastSentAt 是机器人最近一次在别的会话里发这张图的时间。
+	ElsewhereLastSentAt int64
 	// RecentlySent 是这张或和它算同一张的图刚在本会话发过，见 rankStickerCandidates。
 	RecentlySent  bool
 	Score         float64
@@ -545,7 +551,7 @@ func stickerCandidatesFromAssets(assets []StickerAsset, currentSession string, i
 		candidates = append(candidates, stickerCandidate{
 			ID: hash[:24], Summary: summary, Path: path, Hash: hash, MessageID: asset.MessageID, EventTime: asset.EventTime,
 			Description: strings.TrimSpace(firstNonEmpty(asset.Gist, asset.Description)),
-			Tags:        asset.Tags, Tagged: asset.Tagged, Category: asset.Category, CategoryKnown: asset.CategoryKnown, FromAssets: true, LastSentAt: asset.LastSentAt, SentCount: asset.SentCount,
+			Tags:        asset.Tags, Tagged: asset.Tagged, Category: asset.Category, CategoryKnown: asset.CategoryKnown, FromAssets: true, LastSentAt: asset.LastSentAt, SentCount: asset.SentCount, ElsewhereLastSentAt: asset.ElsewhereLastSentAt,
 			SemanticScore: semanticScores[stickerCandidateEventKey(source)], SourceEvent: source,
 			SharedGroup:   asset.Kind == EventKindGroup && asset.Session != currentSession,
 			SharedPrivate: asset.Kind == EventKindPrivate && asset.Session != currentSession,
@@ -723,6 +729,11 @@ func stickerRepeatFactor(candidate stickerCandidate, now int64) float64 {
 	}
 	if candidate.SentCount > 0 {
 		factor *= math.Max(1-stickerUsagePenaltyStep*float64(candidate.SentCount), stickerUsagePenaltyFloor)
+	}
+	// 本会话发得更晚的话，上面几项已经管住了，不再叠别处的。
+	if candidate.ElsewhereLastSentAt > candidate.LastSentAt {
+		age := math.Max(float64(now-candidate.ElsewhereLastSentAt), 0)
+		factor *= 1 - (1-stickerElsewhereSentFactor)*math.Exp2(-age/stickerElsewhereHalfLifeSecs)
 	}
 	return factor
 }

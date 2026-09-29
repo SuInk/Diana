@@ -531,6 +531,19 @@ func TestRankStickerCandidatesPenalizesRepeats(t *testing.T) {
 	if got := stickerRepeatFactor(stickerCandidate{RecentlySent: true, LastSentAt: now - 60}, now); math.Abs(got-stickerRecentSendFactor*stickerJustSentFactor) > 1e-9 {
 		t.Fatalf("just sent factor = %v", got)
 	}
+	// 刚在别的群发过：降到一半；过一个半衰期回到 75%；一天后几乎不影响。
+	for _, step := range []struct {
+		age  int64
+		want float64
+	}{{0, 0.5}, {stickerElsewhereHalfLifeSecs, 0.75}, {24 * 3600, 1 - 0.5/16}} {
+		if got := stickerRepeatFactor(stickerCandidate{ElsewhereLastSentAt: now - step.age}, now); math.Abs(got-step.want) > 1e-9 {
+			t.Fatalf("elsewhere age=%d factor=%v want %v", step.age, got, step.want)
+		}
+	}
+	// 本会话发得更晚时只按本会话算，不再叠别处的。
+	if got := stickerRepeatFactor(stickerCandidate{LastSentAt: now - 3600, ElsewhereLastSentAt: now - 7200}, now); got != 1 {
+		t.Fatalf("elsewhere older than local send = %v", got)
+	}
 }
 
 // 命中的排在前面；不够时随机补位，没发过的先补，发过的其次，最近发过的最后。

@@ -283,7 +283,7 @@ const stickerTagCurrent = `(t.content_sha256 IS NOT NULL AND (COALESCE(t.version
 // queryStickerAssets 顺带取出简介、标签和机器人在 currentSession 里的发送记录，
 // 候选排序和防重复都靠这几列，不必再逐张回查。
 func (s *SQLiteStore) queryStickerAssets(ctx context.Context, currentSession, where string, args []any, limit int) ([]assistant.StickerAsset, error) {
-	args = append([]any{currentSession}, args...)
+	args = append([]any{currentSession, currentSession}, args...)
 	args = append(args, limit)
 	// 表情库浏览和检索都是只读的，走读池。
 	rows, err := s.eventReader().QueryContext(ctx, `
@@ -294,11 +294,14 @@ SELECT a.session, COALESCE(a.profile_id, ''), COALESCE(a.context_namespace, ''),
        COALESCE(d.description, ''), `+stickerTagCurrent+`, CASE WHEN `+stickerTagCurrent+` THEN COALESCE(t.gist, '') ELSE '' END,
        CASE WHEN `+stickerTagCurrent+` THEN COALESCE(t.tags, '') ELSE '' END,
        COALESCE(t.category, ''), t.category IS NOT NULL,
-       COALESCE(u.sent_count, 0), COALESCE(u.last_sent_at, 0)
+       COALESCE(u.sent_count, 0), COALESCE(u.last_sent_at, 0), COALESCE(g.last_sent_at, 0)
 FROM sticker_assets AS a
 LEFT JOIN image_descriptions AS d ON d.content_sha256 = a.content_sha256
 LEFT JOIN sticker_tags AS t ON t.content_sha256 = a.content_sha256
 LEFT JOIN sticker_usage AS u ON u.session = ? AND u.content_sha256 = a.content_sha256
+LEFT JOIN (
+  SELECT content_sha256, MAX(last_sent_at) AS last_sent_at FROM sticker_usage WHERE session <> ? GROUP BY content_sha256
+) AS g ON g.content_sha256 = a.content_sha256
 WHERE `+where+`
 ORDER BY a.event_time DESC, a.updated_at DESC
 LIMIT ?`, args...)
@@ -314,7 +317,7 @@ LIMIT ?`, args...)
 			&asset.GroupID, &asset.UserID, &asset.MessageID, &asset.EventTime,
 			&asset.SegmentIndex, &asset.Summary, &asset.Path, &asset.MIME, &asset.ContentSHA256,
 			&asset.Description, &asset.Tagged, &asset.Gist, &tags, &asset.Category, &asset.CategoryKnown,
-			&asset.SentCount, &asset.LastSentAt); err != nil {
+			&asset.SentCount, &asset.LastSentAt, &asset.ElsewhereLastSentAt); err != nil {
 			return nil, err
 		}
 		asset.Kind = assistant.EventKind(kind)

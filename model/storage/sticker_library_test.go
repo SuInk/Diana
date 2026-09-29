@@ -139,10 +139,11 @@ func TestStickerAssetsCarryTagsUsageAndPrune(t *testing.T) {
 	if got := byHash[newest]; !got.Tagged || got.Gist != "摸头安慰" || strings.Join(got.Tags, "|") != "安慰|摸头" {
 		t.Fatalf("tagged asset = %#v", got)
 	}
-	if got := byHash[middle]; got.Tagged || got.Description != "通用描述" || got.LastSentAt != 0 {
+	// 别的会话发过的单独带出来，跨会话共享时按它降权。
+	if got := byHash[middle]; got.Tagged || got.Description != "通用描述" || got.LastSentAt != 0 || got.ElsewhereLastSentAt != 2000 {
 		t.Fatalf("described asset = %#v", got)
 	}
-	if got := byHash[oldest]; got.SentCount != 2 || got.LastSentAt != 1000 {
+	if got := byHash[oldest]; got.SentCount != 2 || got.LastSentAt != 1000 || got.ElsewhereLastSentAt != 0 {
 		t.Fatalf("sent asset = %#v", got)
 	}
 

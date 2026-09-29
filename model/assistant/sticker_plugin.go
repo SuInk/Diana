@@ -30,7 +30,7 @@ func (p *StickerPlugin) Manifest() PluginManifest {
 		ID:          stickerPluginID,
 		Name:        "表情包发送",
 		Version:     "0.2.4",
-		Description: "启用内置 Agent 后，从持久表情资产库中按关键词检索候选；当前会话和其他群聊、私聊（默认共享）各有独立配额。Agent 查看候选的名称、标签与简介后选择一张发送，刚发过的会往后排。支持识图时，收到的表情包在后台识图时就写好简介和标签；以前收的、当时没标上的，检索到时再补。",
+		Description: "启用内置 Agent 后，从持久表情资产库中按关键词检索候选；当前会话和其他群聊、私聊（默认共享）各有独立配额。Agent 查看候选的名称、标签与简介后选择一张发送，刚发过的会往后排（在别的群刚发过的也算，一天内逐渐恢复）。支持识图时，收到的表情包在后台识图时就写好简介和标签；以前收的、当时没标上的，检索到时再补。",
 		Official:    true,
 		BuiltIn:     true,
 		Permissions: []string{"message:read", "message:send"},

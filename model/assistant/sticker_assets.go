@@ -35,6 +35,8 @@ type StickerAsset struct {
 	// SentCount/LastSentAt 是机器人在查询所在会话里发这张图的记录。
 	SentCount  int
 	LastSentAt int64
+	// ElsewhereLastSentAt 是机器人最近一次在别的会话里发这张图，跨会话共享时用来降权。
+	ElsewhereLastSentAt int64
 }
 
 type StickerAssetStore interface {
