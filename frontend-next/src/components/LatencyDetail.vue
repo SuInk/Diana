@@ -117,15 +117,20 @@ const data = ref<StatsLatency | null>(null);
 const loading = ref(false);
 const error = ref("");
 
+// 切换机器人时先发的请求可能后返回，只认最后一次，免得标题是这台、数据是上一台。
+let requestSeq = 0;
+
 async function load(): Promise<void> {
+  const seq = ++requestSeq;
   loading.value = true;
   error.value = "";
   try {
-    data.value = await getStatsLatency(props.profileId);
+    const result = await getStatsLatency(props.profileId);
+    if (seq === requestSeq) data.value = result;
   } catch (err) {
-    error.value = err instanceof Error ? err.message : "读取响应耗时失败";
+    if (seq === requestSeq) error.value = err instanceof Error ? err.message : "读取响应耗时失败";
   } finally {
-    loading.value = false;
+    if (seq === requestSeq) loading.value = false;
   }
 }
 
