@@ -35,8 +35,8 @@ func releaseCursorAfter(at time.Time, id int64, previousAt time.Time, previousID
 
 func (p *RepositoryWatchPlugin) fetchReleases(ctx context.Context, repository string, cursor repositoryWatchSnapshot, selection repositoryWatchSelection, settings SettingValues) ([]repositoryWatchRelease, repositoryWatchSnapshot, error) {
 	base := repositoryWatchSnapshot{ReleaseTag: strings.TrimSpace(cursor.ReleaseTag), ReleasePublishedAt: cursor.ReleasePublishedAt, ReleaseID: cursor.ReleaseID}
-	var payload []repositoryReleaseRecord
-	if err := p.getJSON(ctx, "/repos/"+repository+"/releases?per_page=50", settings, &payload); err != nil {
+	payload, err := p.listReleases(ctx, repository, base, settings)
+	if err != nil {
 		return nil, base, fmt.Errorf("读取 %s releases: %w", repository, err)
 	}
 	filtered := payload[:0]
@@ -114,4 +114,36 @@ func (p *RepositoryWatchPlugin) fetchReleases(ctx context.Context, repository st
 		logRepositoryOpaqueCursorRetained(repository, "release", base.ReleaseTag, filtered[0].Tag, "older_or_unverifiable_response")
 	}
 	return result, next, nil
+}
+
+// listReleases 分页读取 releases。建基线只要第一页；已有游标时，一页里还有比游标新的
+// Release 才继续往后翻，最多 repositoryWatchReleasePages 页。翻页期间有新发布会让
+// 同一条出现在两页里，按 ID 去重。
+func (p *RepositoryWatchPlugin) listReleases(ctx context.Context, repository string, base repositoryWatchSnapshot, settings SettingValues) ([]repositoryReleaseRecord, error) {
+	var result []repositoryReleaseRecord
+	seen := map[int64]bool{}
+	for page := 1; page <= repositoryWatchReleasePages; page++ {
+		var batch []repositoryReleaseRecord
+		path := fmt.Sprintf("/repos/%s/releases?per_page=%d&page=%d", repository, repositoryWatchReleasePageSize, page)
+		if err := p.getJSON(ctx, path, settings, &batch); err != nil {
+			return nil, err
+		}
+		fresh := false
+		for _, item := range batch {
+			if item.ID != 0 && seen[item.ID] {
+				continue
+			}
+			seen[item.ID] = true
+			result = append(result, item)
+			if base.ReleasePublishedAt.IsZero() || releaseCursorAfter(item.PublishedAt, item.ID, base.ReleasePublishedAt, base.ReleaseID) {
+				fresh = true
+			}
+		}
+		// 没有游标（建基线或旧版只记了标签）时第一页就够：基线取最新一条，旧游标
+		// 在列表里找不到还会按标签单独核对。
+		if len(batch) < repositoryWatchReleasePageSize || base.ReleaseTag == "" || base.ReleaseTag == repositoryWatchNoReleaseCursor || base.ReleasePublishedAt.IsZero() || !fresh {
+			break
+		}
+	}
+	return result, nil
 }

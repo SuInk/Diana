@@ -300,3 +300,38 @@ func TestRepositoryAllCursorStalePollCannotOverwritePendingDelivery(t *testing.T
 		t.Fatalf("old snapshot accepted twice: %v", err)
 	}
 }
+
+func TestRepositoryReleasesPageUntilCursorAndReportOversizedResponse(t *testing.T) {
+	f, p := newRepositoryCursorFixture(t)
+	at := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	releases := func(first, last int) []any {
+		var items []any
+		for id := last; id >= first; id-- {
+			items = append(items, map[string]any{"tag_name": fmt.Sprintf("v%d", id), "id": id, "published_at": at.Add(time.Duration(id) * time.Hour)})
+		}
+		return items
+	}
+	page := func(n int) string {
+		return fmt.Sprintf("/repos/acme/demo/releases?per_page=%d&page=%d", repositoryWatchReleasePageSize, n)
+	}
+	f.set(page(1), releases(16, 25))
+	f.set(page(2), releases(6, 15))
+	f.set(page(3), releases(1, 5))
+	_, baseline, err := p.fetchReleases(context.Background(), "acme/demo", repositoryWatchSnapshot{}, repositoryWatchSelection{}, nil)
+	if err != nil || baseline.ReleaseID != 25 {
+		t.Fatalf("baseline=%#v %v", baseline, err)
+	}
+	cursor := repositoryWatchSnapshot{ReleaseTag: "v8", ReleasePublishedAt: at.Add(8 * time.Hour), ReleaseID: 8}
+	got, next, err := p.fetchReleases(context.Background(), "acme/demo", cursor, repositoryWatchSelection{}, nil)
+	if err != nil || len(got) != 17 || next.ReleaseID != 25 {
+		t.Fatalf("paged=%d %#v %v", len(got), next, err)
+	}
+
+	// 单页超过读取上限时要说清楚是响应太大，而不是只报 unexpected EOF。
+	huge := strings.Repeat("x", repositoryWatchMaxResponseBytes)
+	f.set(page(1), []any{map[string]any{"tag_name": "v1", "id": 1, "published_at": at, "body": huge}})
+	_, _, err = p.fetchReleases(context.Background(), "acme/demo", repositoryWatchSnapshot{}, repositoryWatchSelection{}, nil)
+	if err == nil || !strings.Contains(err.Error(), "超过 4 MiB") {
+		t.Fatalf("oversized err=%v", err)
+	}
+}
