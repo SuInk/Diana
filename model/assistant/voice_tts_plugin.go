@@ -395,6 +395,7 @@ func slotSpeechExtension(resp *llm.SpeechResponse) string {
 
 // storeVoiceAudio 把合成好的音频落进缓存目录；配了 Silk 编码器时再转成 QQ 语音
 // 原生的 Silk。ffmpeg 先解码成 PCM，所以插槽给出的 mp3、opus 也能走这条路。
+// SnowLuma 这类自己转码的客户端不该配编码器，原因见 encodeSilkIfConfigured。
 func (p *VoiceTTSPlugin) storeVoiceAudio(ctx context.Context, cfg voiceTTSConfig, audio []byte, extension string) (string, error) {
 	if err := os.MkdirAll(cfg.OutputDir, 0o700); err != nil {
 		return "", fmt.Errorf("创建语音缓存目录失败: %w", err)
