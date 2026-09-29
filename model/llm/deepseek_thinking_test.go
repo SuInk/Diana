@@ -6,13 +6,14 @@ package llm
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 )
 
 // DeepSeek 不认 reasoning_effort=none，关思考要发 thinking.type=disabled；
-// 其他档位和其他端点保持原样。
+// 其他档位折算成 low/high/max 并显式开启思考。其他端点保持原样。
 func TestChatCompletionsDeepSeekThinkingToggle(t *testing.T) {
 	cases := []struct {
 		name         string
@@ -22,13 +23,19 @@ func TestChatCompletionsDeepSeekThinkingToggle(t *testing.T) {
 		wantThinking any
 	}{
 		{name: "deepseek none disables thinking", model: "deepseek-v4-flash", effort: "none", wantEffort: nil, wantThinking: map[string]any{"type": "disabled"}},
-		{name: "deepseek other effort passes through", model: "deepseek-v4-flash", effort: "low", wantEffort: "low", wantThinking: nil},
+		{name: "deepseek low enables thinking", model: "deepseek-v4-flash", effort: "low", wantEffort: "low", wantThinking: map[string]any{"type": "enabled"}},
+		{name: "deepseek minimal folds to low", model: "deepseek-v4-flash", effort: "minimal", wantEffort: "low", wantThinking: map[string]any{"type": "enabled"}},
+		{name: "deepseek medium folds to high", model: "deepseek-v4-flash", effort: "medium", wantEffort: "high", wantThinking: map[string]any{"type": "enabled"}},
+		{name: "deepseek xhigh folds to high", model: "deepseek-v4-flash", effort: "xhigh", wantEffort: "high", wantThinking: map[string]any{"type": "enabled"}},
+		{name: "deepseek ultra folds to max", model: "deepseek-v4-flash", effort: "ultra", wantEffort: "max", wantThinking: map[string]any{"type": "enabled"}},
+		{name: "deepseek-chat max turns thinking on", model: "deepseek-chat", effort: "max", wantEffort: "max", wantThinking: map[string]any{"type": "enabled"}},
+		{name: "other endpoint keeps medium", model: "gpt-5.1", effort: "medium", wantEffort: "medium", wantThinking: nil},
 		{name: "deepseek default sends nothing", model: "deepseek-v4-flash", effort: "", wantEffort: nil, wantThinking: nil},
 		{name: "other endpoint keeps none", model: "gpt-5.1", effort: "none", wantEffort: "none", wantThinking: nil},
 	}
 	for _, tc := range cases {
 		for _, stream := range []bool{false, true} {
-			t.Run(tc.name, func(t *testing.T) {
+			t.Run(fmt.Sprintf("%s/stream=%v", tc.name, stream), func(t *testing.T) {
 				var body map[string]any
 				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 					_ = json.NewDecoder(r.Body).Decode(&body)

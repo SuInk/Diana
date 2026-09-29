@@ -196,7 +196,7 @@
         <div v-if="supportsAPIStyle" class="field">
           <label for="llm-reasoning-effort">思考强度</label>
           <AppSelect id="llm-reasoning-effort" v-model="form.reasoning_effort" :options="reasoningEffortOptions" />
-          <span class="hint">越低回得越快、越省 token。DeepSeek 选「关闭思考」会改发 <code>thinking: disabled</code>；不支持思考的模型可能拒绝这个参数，留「跟随模型」即可。</span>
+          <span class="hint">越低回得越快、越省 token。DeepSeek 只有低、高、最高三档，「中」按「高」发；选了档位会同时开启思考，「关闭思考」改发 <code>thinking: disabled</code>。不支持思考的模型可能拒绝这个参数，留「跟随模型」即可。</span>
         </div>
         <div class="field wide">
           <label for="llm-baseurl">API 地址</label>
