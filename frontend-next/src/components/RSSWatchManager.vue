@@ -52,7 +52,7 @@
           <div class="input-group"><input id="rss-watch-interval" v-model.number="form.interval_seconds" class="input" type="number" :min="minimumIntervalSeconds" :max="maximumIntervalSeconds" step="60" /><span class="repository-watch-unit">秒</span></div>
           <span class="hint">可设置 5 分钟至 365 天；默认 15 分钟。</span>
         </div>
-        <div class="field wide"><label>通知目标</label><SubscriptionTargetsEditor v-model="form.notification_targets" :profiles="profiles" :default-profile="form.profile_id" /></div>
+        <div class="field wide"><label>通知目标</label><SubscriptionTargetsEditor v-model="form.notification_targets" :profiles="profiles" :default-profile="form.profile_id" :plugin-ids='["official.rss-watch"]' /></div>
       </div>
       <div class="repository-watch-editor-actions">
         <button class="btn small" type="button" :disabled="saving" @click="stopEditing">取消</button>
