@@ -17,6 +17,7 @@ import (
 
 	"github.com/SuInk/diana/internal/secretmask"
 	"github.com/SuInk/diana/model/agent"
+	"github.com/SuInk/diana/model/llm"
 
 	"github.com/google/uuid"
 )
@@ -911,6 +912,10 @@ type ModelRole struct {
 	// 换一个 TTS 模型照样要指定音色。对话类用途用不上，保存时原样丢掉也无妨。
 	// 后备路由不单独带，沿用主路由这一份。
 	Params map[string]string `json:"params,omitempty"`
+	// ReasoningEffort 覆盖这个用途的思考强度，空表示跟随提供商配置。后备路由
+	// 不单独带，和 Params 一样沿用主路由这一份：想让意图识别不思考，换到后备
+	// 模型时也该不思考。
+	ReasoningEffort string `json:"reasoning_effort,omitempty"`
 }
 
 func normalizeModelRoles(roles map[string]ModelRole) map[string]ModelRole {
@@ -945,6 +950,7 @@ func normalizeModelRole(role ModelRole) ModelRole {
 	role.ProviderID = strings.TrimSpace(role.ProviderID)
 	role.ModelID = strings.TrimSpace(role.ModelID)
 	role.Params = normalizeModelRoleParams(role.Params)
+	role.ReasoningEffort = llm.NormalizeReasoningEffortSetting(role.ReasoningEffort)
 	if role.ProviderID != "" || role.ModelID != "" {
 		role.ProfileID = ""
 		role.Group = ""
@@ -960,6 +966,7 @@ func normalizeModelRole(role ModelRole) ModelRole {
 		fallback.FollowChat = false
 		fallback.Fallbacks = nil
 		fallback.Params = nil
+		fallback.ReasoningEffort = ""
 		fallback = normalizeModelRole(fallback)
 		if modelRoleConfigured(fallback) {
 			fallbacks = append(fallbacks, fallback)

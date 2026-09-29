@@ -732,6 +732,16 @@ func normalizeReasoningEffort(value string) string {
 	return strings.ToLower(strings.TrimSpace(value))
 }
 
+// NormalizeReasoningEffortSetting 归一化一个思考强度设置，认不出的档位返回空串
+// （即跟随提供商配置），供提供商配置以外的地方（如按用途的模型分配）复用同一张表。
+func NormalizeReasoningEffortSetting(value string) string {
+	value = normalizeReasoningEffort(value)
+	if validateReasoningEffort(value) != nil {
+		return ""
+	}
+	return value
+}
+
 func validateReasoningEffort(value string) error {
 	switch normalizeReasoningEffort(value) {
 	case "", "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra":

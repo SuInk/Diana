@@ -316,7 +316,7 @@ func (p *registryFailoverLLMProvider) Generate(ctx context.Context, req llm.Gene
 		}
 		candidate := p.candidates[index]
 		client := llm.RegistryClient{Registry: p.registry, Selection: candidate.selection}
-		resp, err := generateWithTransientRetryTimeout(ctx, client, req, p.retryTransient, candidate.profile.Config.Timeout)
+		resp, err := generateWithTransientRetryTimeout(ctx, client, candidateReasoningRequest(req, candidate.profile), p.retryTransient, candidate.profile.Config.Timeout)
 		if err == nil {
 			p.current = index
 			p.cooldowns.clear(candidate.profile)
@@ -428,7 +428,7 @@ func (p *registryFailoverLLMProvider) Stream(ctx context.Context, req llm.Genera
 			attempts += llmTransientMaxRetries
 		}
 		for attempt := 0; attempt < attempts; attempt++ {
-			events, err = client.Stream(ctx, req)
+			events, err = client.Stream(ctx, candidateReasoningRequest(req, candidate.profile))
 			if err == nil && events != nil {
 				break
 			}
@@ -475,6 +475,16 @@ func (p *registryFailoverLLMProvider) reportFailover(from, to llm.Profile, strea
 	if p.report != nil {
 		p.report(newLLMFailoverEvent(p.group, from, to, stream, err))
 	}
+}
+
+// candidateReasoningRequest 把候选配置档上的思考强度带进请求。注册表里的客户端
+// 用的是存盘的提供商配置，模型分配按用途改的思考强度只落在候选的 profile 上，
+// 不借请求这一层就发不出去。调用方已经指定的以调用方为准。
+func candidateReasoningRequest(req llm.GenerateRequest, profile llm.Profile) llm.GenerateRequest {
+	if req.ReasoningEffort == "" {
+		req.ReasoningEffort = profile.Config.ReasoningEffort
+	}
+	return req
 }
 
 func newProfileFailoverLLMProvider(

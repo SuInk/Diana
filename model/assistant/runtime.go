@@ -5770,6 +5770,9 @@ func (r *Runtime) roleBoundProfiles(purpose string, set llm.ProfileSet, group st
 				continue
 			}
 			seen[key] = true
+			if role.ReasoningEffort != "" {
+				profile.Config.ReasoningEffort = role.ReasoningEffort
+			}
 			profiles = append(profiles, profile)
 		}
 	}

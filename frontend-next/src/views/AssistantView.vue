@@ -730,6 +730,16 @@
                   </label>
                   <button type="button" class="btn ghost small" @click="clearRole(role.key)">停用这个插槽</button>
                 </div>
+                <div v-if="roleSupportsReasoning(role.key) && roleForm[role.key] && !roleForm[role.key]?.follow_chat" class="model-role-params">
+                  <label class="field">
+                    <span>思考强度</span>
+                    <AppSelect
+                      :model-value="roleForm[role.key]?.reasoning_effort ?? ''"
+                      :options="roleReasoningOptions(role.key)"
+                      @update:model-value="(value) => setRoleReasoning(role.key, value)"
+                    />
+                  </label>
+                </div>
                 <p class="model-role-desc muted">{{ role.description }}</p>
               </div>
               <p class="muted model-role-note">
@@ -3382,7 +3392,8 @@ type MediaRoleKey = (typeof mediaRoleKeys)[number];
 type RoleKey = "chat" | "vision" | "intent" | "image" | "media_parse" | (typeof purposeRoleKeys)[number] | MediaRoleKey;
 type RoleRoute = { profile_id?: string; group?: string; model: string; provider_id?: string; model_id?: string; follow_chat?: boolean };
 // params 只在音视频插槽的主路由上有，后备沿用同一份。
-type RoleAssignment = RoleRoute & { fallbacks?: RoleRoute[]; params?: Record<string, string> };
+// reasoning_effort 同样只在主路由上有，后备沿用；空表示跟随提供商配置。
+type RoleAssignment = RoleRoute & { fallbacks?: RoleRoute[]; params?: Record<string, string>; reasoning_effort?: string };
 type ModelRoleRow = { key: RoleKey; label: string; sublabel?: string; description: string };
 const modelRoleRows: ModelRoleRow[] = [
   {
@@ -3511,6 +3522,34 @@ function setMediaParam(role: RoleKey, key: string, value: string): void {
   assignment.params = Object.keys(params).length > 0 ? params : undefined;
 }
 
+// 思考强度只对读写文字的用途有意义；生图和音视频插槽不是对话模型，不显示。
+// 跟随对话的那几档连同思考强度一起跟着对话走，也不显示。
+function roleSupportsReasoning(role: RoleKey): boolean {
+  return role !== "image" && !isMediaRole(role);
+}
+
+const baseRoleReasoningOptions = [
+  { value: "", label: "跟随提供商配置" },
+  { value: "none", label: "关闭思考" },
+  { value: "low", label: "低" },
+  { value: "medium", label: "中" },
+  { value: "high", label: "高" },
+  { value: "max", label: "最高" }
+];
+
+// 通过聊天或 API 设过的其他档位（如 minimal、xhigh）也要能回显。
+function roleReasoningOptions(role: RoleKey): { value: string; label: string }[] {
+  const current = roleForm.value[role]?.reasoning_effort ?? "";
+  if (baseRoleReasoningOptions.some((option) => option.value === current)) return baseRoleReasoningOptions;
+  return [...baseRoleReasoningOptions, { value: current, label: current }];
+}
+
+function setRoleReasoning(role: RoleKey, value: string): void {
+  const assignment = roleForm.value[role];
+  if (!assignment) return;
+  assignment.reasoning_effort = value || undefined;
+}
+
 function clearRole(role: RoleKey): void {
   delete roleForm.value[role];
 }
@@ -3560,7 +3599,7 @@ function roleSnapshot(roles: Record<string, RoleAssignment | undefined> | undefi
       .sort()
       .map((key) => {
         const role = roles?.[key];
-        return role ? [key, route(role), (role.fallbacks ?? []).map(route), params(role)] : [key];
+        return role ? [key, route(role), (role.fallbacks ?? []).map(route), params(role), role.reasoning_effort ?? ""] : [key];
       })
   );
 }
@@ -3588,7 +3627,8 @@ function setRoleForm(source: BotProfileConfig["model_roles"]): void {
       model_id: role.model_id,
       follow_chat: role.follow_chat,
       fallbacks: role.fallbacks?.map((fallback) => ({ ...fallback })),
-      params: role.params ? { ...role.params } : undefined
+      params: role.params ? { ...role.params } : undefined,
+      reasoning_effort: role.reasoning_effort || undefined
     };
   }
   roleForm.value = roles;
@@ -3953,10 +3993,12 @@ function setRoleChannel(role: RoleKey, value: string): void {
   const model = current?.follow_chat ? "" : (current?.model ?? "");
   const fallbacks = current?.follow_chat ? undefined : current?.fallbacks;
   const params = current?.params;
+  // 思考强度是这个用途的设置，不跟某家提供商绑定，换提供商时保留。
+  const reasoning_effort = current?.reasoning_effort;
   if (value.startsWith(GROUP_PREFIX)) {
-    roleForm.value[role] = { group: value.slice(GROUP_PREFIX.length), model, fallbacks, params };
+    roleForm.value[role] = { group: value.slice(GROUP_PREFIX.length), model, fallbacks, params, reasoning_effort };
   } else {
-    roleForm.value[role] = { profile_id: value, model, fallbacks, params };
+    roleForm.value[role] = { profile_id: value, model, fallbacks, params, reasoning_effort };
   }
   const options = modelOptionsFor(role).filter((option) => option.value !== "");
   if (!roleModelIsSelectable(role, model)) {
@@ -3988,13 +4030,15 @@ function routeReorderable(role: RoleKey): boolean {
 function moveRoleRoute(role: RoleKey, from: number, to: number): void {
   const assignment = roleForm.value[role];
   if (!assignment || assignment.follow_chat) return;
-  const { fallbacks = [], ...primary } = assignment;
+  // params 和思考强度属于这个用途而不是某一条路由，换主路由时留在原地，
+  // 不能跟着原来的主路由一起挪进后备。
+  const { fallbacks = [], params, reasoning_effort, ...primary } = assignment;
   const routes: RoleRoute[] = [primary, ...fallbacks];
   if (from === to || from < 0 || to < 0 || from >= routes.length || to >= routes.length) return;
   const [moved] = routes.splice(from, 1);
   routes.splice(to, 0, moved);
   const [first, ...rest] = routes;
-  roleForm.value[role] = { ...first, fallbacks: rest };
+  roleForm.value[role] = { ...first, fallbacks: rest, params, reasoning_effort };
 }
 
 function routeDragClasses(role: RoleKey, index: number): Record<string, boolean> {
@@ -4135,7 +4179,7 @@ function setRoleModel(role: RoleKey, value: string): void {
   if (value.includes(MODEL_PAIR_SEP)) {
     // 跨 Provider 选择：一次确定 Provider 和模型。
     const [profileID, model] = value.split(MODEL_PAIR_SEP);
-    roleForm.value[role] = { profile_id: profileID, model, fallbacks: roleForm.value[role]?.fallbacks, params: roleForm.value[role]?.params };
+    roleForm.value[role] = { profile_id: profileID, model, fallbacks: roleForm.value[role]?.fallbacks, params: roleForm.value[role]?.params, reasoning_effort: roleForm.value[role]?.reasoning_effort };
     return;
   }
   if (!value) {
@@ -4401,7 +4445,8 @@ async function save(): Promise<void> {
         provider_id: role.provider_id,
         model_id: role.model_id,
         fallbacks: role.fallbacks?.map((fallback) => ({ ...fallback, model: fallback.model.trim() })),
-        params: role.params
+        params: role.params,
+        reasoning_effort: role.reasoning_effort || undefined
       };
       }
     }

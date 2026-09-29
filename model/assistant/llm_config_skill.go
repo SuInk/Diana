@@ -496,7 +496,7 @@ func nextModelRole(role ModelRole, target llm.Profile, model string, explicitPro
 	}
 	// 换到另一家供应商，这一档改成对这家的单绑定，原有的分组或后备路由一并作废
 	// ——它们指向的是上一套路由方案。回执会把这件事说出来，不让它悄悄发生。
-	return ModelRole{ProfileID: target.ID, Model: model}, role.Group != "" || len(role.Fallbacks) > 0
+	return ModelRole{ProfileID: target.ID, Model: model, ReasoningEffort: role.ReasoningEffort}, role.Group != "" || len(role.Fallbacks) > 0
 }
 
 // modelRoleProfileID 报出这条绑定实际指向哪套供应商配置：注册表式绑定写在

@@ -292,6 +292,8 @@ export interface BotProfileConfig extends SendRetrySettings {
     fallbacks?: Array<{ profile_id?: string; group?: string; model: string; provider_id?: string; model_id?: string }>;
     /** 音视频插槽（tts/stt/video）的参数：音色、格式、语速、语言、分辨率等。 */
     params?: Record<string, string>;
+    /** 这个用途的思考强度，覆盖提供商配置；空表示跟随提供商。后备路由沿用。 */
+    reasoning_effort?: string;
   }>;
   /** 空转检测：发送前审核判断来回是否空转，累计够了暂停响应；缺省等价于开启。 */
   bot_reply_loop_detection_enabled?: boolean;
