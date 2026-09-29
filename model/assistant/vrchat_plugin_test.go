@@ -331,8 +331,7 @@ func TestVRChatMoodExpression(t *testing.T) {
 	cases := map[float64]string{
 		moodHappyThreshold: vrchat.ExpressionHappy,
 		0:                  vrchat.ExpressionNeutral,
-		moodLowThreshold:   vrchat.ExpressionLow,
-		-moodScoreLimit:    vrchat.ExpressionLow,
+		-moodScoreLimit:    vrchat.ExpressionNeutral,
 	}
 	for score, want := range cases {
 		if got := vrchatMoodExpression(score); got != want {

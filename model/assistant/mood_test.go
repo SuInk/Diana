@@ -42,6 +42,20 @@ func TestMoodBumpDecayAndThresholds(t *testing.T) {
 		t.Fatalf("neutral delta created state: %#v", fresh.moods)
 	}
 
+	// 心情最低是平静：被骂不往下欠账，之后夸三次照样开心。
+	for range 10 {
+		runtime.bumpMood("bot", -2, now)
+	}
+	if score := runtime.moodScore("bot", now); score != 0 {
+		t.Fatalf("score after insults = %v", score)
+	}
+	for range 3 {
+		runtime.bumpMood("bot", 1, now)
+	}
+	if score := runtime.moodScore("bot", now); score < moodHappyThreshold {
+		t.Fatalf("score after recovery = %v", score)
+	}
+
 	// 封顶：夸一晚上也顶不破上限。
 	for range 100 {
 		runtime.bumpMood("bot", 3, now)
@@ -65,11 +79,12 @@ func TestMoodToneForConfigGates(t *testing.T) {
 	if tone := runtime.moodToneForConfig(runtime.ProfileConfig(""), "bot"); !strings.Contains(tone, "心情不错") {
 		t.Fatalf("happy tone = %q", tone)
 	}
-	for range 4 {
+	// 没有低落档：骂得再狠也只回到平静，不注入任何语气。
+	for range 10 {
 		runtime.bumpMood("bot", -2, now)
 	}
-	if tone := runtime.moodToneForConfig(runtime.ProfileConfig(""), "bot"); !strings.Contains(tone, "低落") {
-		t.Fatalf("low tone = %q", tone)
+	if tone := runtime.moodToneForConfig(runtime.ProfileConfig(""), "bot"); tone != "" {
+		t.Fatalf("tone after insults = %q", tone)
 	}
 
 	// 总开关关着（默认）时，哪怕心情爆表也不注入。

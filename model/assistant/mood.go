@@ -20,19 +20,22 @@ import (
 // 这正是拟人的点。它是短时状态，进程重启归零合理——睡一觉起来心情本来就会重置，
 // 所以不落库。
 //
-// 对外只有两档可感知的偏移：开心和低落。中间的大片区域什么都不注入——平静是
-// 常态，不该有一条「你现在很平静」的提示词稀释注意力。
+// 对外只有一档可感知的偏移：开心。平静时什么都不注入——平静是常态，不该有一条
+// 「你现在很平静」的提示词稀释注意力。
+//
+// 以前还有「低落」一档：被骂了就话少、不接梗。它挂在整个机器人上，一个人在一个群
+// 里连着骂十几句，就把心情顶到下限，六个群一起蔫好几个小时（线上 2026-09-29 一个
+// 人 14 次减分，108 轮回复带着低落语气）。现在心情最低就是平静：被骂只会把开心
+// 抵掉，不会往下欠账；对这个人的态度留给他自己的好感度去管。
 
 const (
 	// moodHalfLife 是心情向平静回落的半衰期。两小时没人理，再大的情绪也淡了一半。
 	moodHalfLife = 2 * time.Hour
 	// moodScoreLimit 封顶心情的绝对值，防止一群人连续夸一晚上把状态顶到回不来。
 	moodScoreLimit = 10.0
-	// moodHappyThreshold / moodLowThreshold 是两档语气的触发线。加分事件权重小
-	//（日常 +1 居多），开心线设得比低落线远一点：变开心该比变难过慢。
+	// moodHappyThreshold 是开心语气的触发线。加分事件日常 +1 居多，三次才开心。
 	moodHappyThreshold = 3.0
-	moodLowThreshold   = -3.0
-	// moodNegativeWeight 放大减分事件：被骂一句比被夸一句更影响心情，这也是人。
+	// moodNegativeWeight 放大减分事件：被骂一句比被夸一句更能把好心情抵掉。
 	moodNegativeWeight = 1.5
 )
 
@@ -78,8 +81,8 @@ func (r *Runtime) bumpMood(profileID string, delta int, now time.Time) {
 	if score > moodScoreLimit {
 		score = moodScoreLimit
 	}
-	if score < -moodScoreLimit {
-		score = -moodScoreLimit
+	if score < 0 {
+		score = 0
 	}
 	state.score = score
 	state.updatedAt = now
@@ -107,23 +110,12 @@ func (r *Runtime) moodToneForConfig(cfg BotConfig, profileID string) string {
 	if !boolValue(cfg.MoodEnabled, false) {
 		return ""
 	}
-	score := r.moodScore(profileID, r.clock())
-	switch {
-	case score >= moodHappyThreshold:
-		return cfg.prompt(promptMoodHappySpec)
-	case score <= moodLowThreshold:
-		return cfg.prompt(promptMoodLowSpec)
-	default:
+	if r.moodScore(profileID, r.clock()) < moodHappyThreshold {
 		return ""
 	}
+	return cfg.prompt(promptMoodHappySpec)
 }
 
-const (
-	promptMoodHappy = "你现在心情不错：语气轻快一点，话可以稍微多一点，更愿意接梗。心情是你自己的状态，没人问就不用解释为什么开心。"
-	promptMoodLow   = "你现在情绪有点低落：话少一点、语气蔫一点，该答的照样答准，但不主动接梗、不硬装活泼。没人问就不要解释，也不要卖惨；有人关心你可以承认心情一般，不编具体理由。"
-)
+const promptMoodHappy = "你现在心情不错：语气轻快一点，话可以稍微多一点，更愿意接梗。心情是你自己的状态，没人问就不用解释为什么开心。"
 
-var (
-	promptMoodHappySpec = tailSpec("mood.happy", "心情：不错", "开启心情、最近被夸得多时放在尾部。", promptMoodHappy)
-	promptMoodLowSpec   = tailSpec("mood.low", "心情：低落", "开启心情、最近被骂得多时放在尾部。", promptMoodLow)
-)
+var promptMoodHappySpec = tailSpec("mood.happy", "心情：不错", "开启心情、最近被夸得多时放在尾部。", promptMoodHappy)

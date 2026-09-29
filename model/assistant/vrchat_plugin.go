@@ -266,15 +266,12 @@ func vrchatSeconds(settings SettingValues, key string, fallback time.Duration) t
 }
 
 // vrchatMoodExpression 把心情分换成映射表里的表情名，档位线和语气注入共用。
+// 心情没有低落档，「低落」表情只能由 Agent 用工具指定。
 func vrchatMoodExpression(score float64) string {
-	switch {
-	case score >= moodHappyThreshold:
+	if score >= moodHappyThreshold {
 		return vrchat.ExpressionHappy
-	case score <= moodLowThreshold:
-		return vrchat.ExpressionLow
-	default:
-		return vrchat.ExpressionNeutral
 	}
+	return vrchat.ExpressionNeutral
 }
 
 var vrchatCQCode = regexp.MustCompile(`\[CQ:[^\]]*\]`)
