@@ -35,7 +35,7 @@ test("saving requires an explicit provider and model for each role", async () =>
 });
 
 test("provider and model menus do not offer an empty assignment", () => {
-  const context = vm.createContext({ roleForm: {value:{}}, llmChannels: { value: [] }, channelGroups: () => [], selectedRoleProfiles: () => [], modelsForRole: () => [], modelRoleRows: [], GROUP_PREFIX: "group:", MODEL_PAIR_SEP: "::", FOLLOW_CHAT: "__follow_chat__", isMediaRole });
+  const context = vm.createContext({ roleForm: {value:{}}, llmChannels: { value: [] }, channelGroups: () => [], selectedRoleProfiles: () => [], modelsForRole: () => [], modelRoleRows: [], GROUP_PREFIX: "group:", MODEL_PAIR_SEP: "::", FOLLOW_CHAT: "__follow_chat__", DISABLED: "__disabled__", isMediaRole });
   loadFunction("crossProviderModelOptions", context);
   for (const name of ["channelOptionsFor", "crossProviderModelOptions", "modelOptionsFor"]) {
     const options = loadFunction(name, context)("vision", {});
@@ -50,6 +50,7 @@ test("provider dropdown offers follow chat for every role except chat", () => {
     GROUP_PREFIX: "group:",
     MODEL_PAIR_SEP: "::",
     FOLLOW_CHAT: "__follow_chat__",
+    DISABLED: "__disabled__",
     isMediaRole,
     llmChannels: { value: [] },
     channelGroups: () => [],

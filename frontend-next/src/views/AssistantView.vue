@@ -3617,7 +3617,10 @@ function orderedRoleKeys(roles: Partial<Record<string, unknown>>): string[] {
 }
 
 function setRoleForm(source: BotProfileConfig["model_roles"]): void {
-  const incoming = source ?? {};
+  const incoming: NonNullable<BotProfileConfig["model_roles"]> = { ...(source ?? {}) };
+  for (const key of defaultFollowChatRoles) {
+    incoming[key] ??= { model: "", follow_chat: true };
+  }
   const roles: typeof roleForm.value = {};
   for (const key of orderedRoleKeys(incoming)) {
     const role = incoming[key];
@@ -3632,9 +3635,6 @@ function setRoleForm(source: BotProfileConfig["model_roles"]): void {
       params: role.params ? { ...role.params } : undefined,
       reasoning_effort: role.reasoning_effort || undefined
     };
-  }
-  for (const key of defaultFollowChatRoles) {
-    roles[key] ??= { model: "", follow_chat: true };
   }
   roleForm.value = roles;
   savedRoleSnapshot.value = roleSnapshot(roles);

@@ -24,7 +24,8 @@ function editorContext() {
     savedRoleSnapshot: { value: "" },
     modelRolesChangedElsewhere: { value: false },
     incomingModelRoles: { value: undefined },
-    visibleModelRoleRows: ROLE_ROWS.map(key => ({ key }))
+    visibleModelRoleRows: ROLE_ROWS.map(key => ({ key })),
+    defaultFollowChatRoles: ["vision", "intent", "image"]
   });
   for (const name of ["orderedRoleKeys", "roleSnapshot", "setRoleForm", "syncModelRolesWhileEditing", "adoptIncomingModelRoles"]) {
     loadFunction(name, context);
@@ -70,14 +71,14 @@ test("model assignments keep the page's own order whatever order they arrive in"
   const context = editorContext();
   // 服务端那份是个 map，序列化出来按字母排；页面不跟着它排。
   context.setRoleForm({ intent: { profile_id: "p", model: "i" }, chat: { profile_id: "p", model: "c" }, vision: { profile_id: "p", model: "v" } });
-  assert.deepEqual(Object.keys(context.roleForm.value), ["chat", "vision", "intent"]);
+  assert.deepEqual(Object.keys(context.roleForm.value), ["chat", "vision", "intent", "image"]);
   // 编辑途中被别处的改动整份换掉，键序同样不变。
   context.syncModelRolesWhileEditing({ id: "bot", model_roles: { vision: { profile_id: "p", model: "v2" }, chat: { profile_id: "p", model: "c" }, intent: { profile_id: "p", model: "i" } } });
-  assert.deepEqual(Object.keys(context.roleForm.value), ["chat", "vision", "intent"]);
+  assert.deepEqual(Object.keys(context.roleForm.value), ["chat", "vision", "intent", "image"]);
   // 细分用途也按页面排：字母序里 background 在前，页面上回复辅助在前。
   context.setRoleForm({ background: { profile_id: "p", model: "b" }, chat: { profile_id: "p", model: "c" }, reply_assist: { profile_id: "p", model: "r" } });
-  assert.deepEqual(Object.keys(context.roleForm.value), ["chat", "reply_assist", "background"]);
+  assert.deepEqual(Object.keys(context.roleForm.value), ["chat", "vision", "intent", "reply_assist", "background", "image"]);
   // 认不出的用途排在后面，不会被丢掉。
   context.setRoleForm({ future: { profile_id: "p", model: "f" }, chat: { profile_id: "p", model: "c" } });
-  assert.deepEqual(Object.keys(context.roleForm.value), ["chat", "future"]);
+  assert.deepEqual(Object.keys(context.roleForm.value), ["chat", "vision", "intent", "image", "future"]);
 });
