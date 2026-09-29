@@ -39,10 +39,14 @@ const (
 	inboundWorkerPollInterval = 2 * time.Second
 	// inboundWorkerPollMax 是空闲时的上限，空手而归就翻倍一路退到这里。30 秒是按
 	// 「三条唤醒路径全失灵时最久等多久」定的，不是按响应速度定的。
-	inboundWorkerPollMax    = 30 * time.Second
-	inboundLeaseDuration    = 10 * time.Minute
-	historyInitialDelay     = time.Second
-	historyRetryDelay       = 30 * time.Second
+	inboundWorkerPollMax = 30 * time.Second
+	inboundLeaseDuration = 10 * time.Minute
+	historyInitialDelay  = time.Second
+	historyRetryDelay    = 30 * time.Second
+	// 回补连续失败时按倍数退避，超过次数就放弃，等下次重连或手动触发再来，
+	// 免得配置不全之类的永久性错误每 30 秒刷一条日志。
+	historyRetryDelayMax    = 10 * time.Minute
+	historyRetryMaxAttempts = 5
 	historyBaselineOverlap  = 5 * time.Second
 	inboundReplayPadding    = 30 * time.Minute
 	inboundCheckpointPeriod = 30 * time.Second
@@ -379,6 +383,7 @@ func (r *Runtime) runInboundCoordinator(ctx context.Context, leaseOwner string, 
 	// advancing the baseline, so the queued rerun still covers the window.
 	pendingManualFloor := int64(0)
 	nextBackfillAt := time.Time{}
+	backfillFailures := 0
 	// followUps 是重连后还要补跑的整体回补时间点，followUpFloor 是补跑时水位退回到的位置。
 	var followUps []time.Time
 	followUpFloor := int64(0)
@@ -388,6 +393,13 @@ func (r *Runtime) runInboundCoordinator(ctx context.Context, leaseOwner string, 
 	launchBackfill := func() {
 		if backfillRunning {
 			backfillRequested = true
+			return
+		}
+		// 回补协议全是 OneBot 接口；只接了 QQ 官方、Telegram 等机器人时没有可回补的对象。
+		if !r.hasOneBotProfile() {
+			r.historyBackfillBusy.Store(false)
+			nextBackfillAt = time.Time{}
+			followUps = followUps[:0]
 			return
 		}
 		backfillRunning = true
@@ -461,6 +473,7 @@ func (r *Runtime) runInboundCoordinator(ctx context.Context, leaseOwner string, 
 			cancel()
 			return
 		case window := <-r.inboundManualBackfill:
+			backfillFailures = 0
 			status := r.channelStatus()
 			if !channelEffectivelyOnline(status) {
 				r.recordOneBotConnectionLifecycle(ctx, status, "backfill_manual_rejected", "手动回补已跳过：OneBot 连接或账号当前不在线", nil)
@@ -490,8 +503,17 @@ func (r *Runtime) runInboundCoordinator(ctx context.Context, leaseOwner string, 
 			if result.err != nil && ctx.Err() == nil {
 				log.Printf("diana inbound history backfill incomplete: %v", result.err)
 				r.recordOneBotConnectionLifecycleWithMetadata(ctx, r.channelStatus(), "backfill_failed", "OneBot 断线消息回补失败", result.err, result.stats.metadata())
-				nextBackfillAt = time.Now().Add(historyRetryDelay)
+				backfillFailures++
+				if delay, retry := historyRetryBackoff(backfillFailures); retry {
+					nextBackfillAt = time.Now().Add(delay)
+				} else {
+					log.Printf("diana inbound history backfill gave up after %d attempts", backfillFailures)
+					r.recordOneBotConnectionLifecycle(ctx, r.channelStatus(), "backfill_gave_up",
+						fmt.Sprintf("OneBot 断线消息回补连续失败 %d 次，已停止自动重试，重连或手动回补时会再试", backfillFailures), nil)
+					nextBackfillAt = time.Time{}
+				}
 			} else {
+				backfillFailures = 0
 				r.recordOneBotConnectionLifecycleWithMetadata(ctx, r.channelStatus(), "backfill_completed",
 					fmt.Sprintf("OneBot 断线消息回补已完成：拉取 %d 条，新入库 %d 条", result.stats.Fetched, result.stats.Inserted), nil, result.stats.metadata())
 				nextBackfillAt = time.Time{}
@@ -594,6 +616,7 @@ func (r *Runtime) runInboundCoordinator(ctx context.Context, leaseOwner string, 
 				followUps = append(followUps, now.Add(delay))
 			}
 			r.armGroupSeqProbes()
+			backfillFailures = 0
 			connected = true
 			lastConnectedAt = now
 			disconnectedAt = now
@@ -1972,4 +1995,13 @@ func (r *Runtime) recoverGroupRecallFromHistory(ctx context.Context, candidate M
 		return false, err
 	}
 	return true, nil
+}
+
+// historyRetryBackoff 给出第 failures 次连续失败后的重试间隔；超过次数上限时 retry 为 false。
+func historyRetryBackoff(failures int) (delay time.Duration, retry bool) {
+	if failures >= historyRetryMaxAttempts {
+		return 0, false
+	}
+	delay = historyRetryDelay << max(failures-1, 0)
+	return min(delay, historyRetryDelayMax), true
 }

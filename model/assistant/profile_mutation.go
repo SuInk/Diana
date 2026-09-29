@@ -166,3 +166,22 @@ func (r *Runtime) commitProfileChange(profileID string, mutate func(*BotConfig) 
 	r.updatedAt = time.Now()
 	return profile, nil
 }
+
+// hasOneBotProfile 报告是否配置了 OneBot 机器人；断线回补只对它们有意义。
+// 选取规则和 soleAdminProfile 一致：有启用的就只看启用的，否则看全部。
+func (r *Runtime) hasOneBotProfile() bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	anyOneBot := func(profiles []BotConfig) bool {
+		for _, profile := range profiles {
+			if IsOneBotPlatform(profile.Platform) {
+				return true
+			}
+		}
+		return false
+	}
+	if enabled := r.enabledProfilesLocked(); len(enabled) > 0 {
+		return anyOneBot(enabled)
+	}
+	return anyOneBot(r.orderedProfilesLocked())
+}
