@@ -603,6 +603,9 @@
         </div>
         <div class="field wide">
           <label>本群插件</label>
+          <p v-if="!editing.enabled && openedPluginNames(editing).length" class="hint warn-text" style="margin: 4px 0 0">
+            本群已关闭，机器人不在这个群工作：单独设成「开」的{{ openedPluginNames(editing).join("、") }}不会生效。要用的话先启用本群。
+          </p>
           <div class="row-list" style="margin-top: 6px">
             <div v-for="plugin in plugins" :key="plugin.manifest.id" class="row-item group-plugin-row">
               <div class="group-plugin-row-head">
@@ -1298,6 +1301,13 @@ function setList(extensionID: string, kind: "allow" | "deny", accounts: string[]
   patchAccess(extensionID, kind === "allow" ? { allow: accounts } : { deny: accounts });
 }
 
+// openedPluginNames 是本群单独设成「开」的插件名，用来在群关着时提醒这些开关不会生效。
+function openedPluginNames(group: BotGroupConfig): string[] {
+  return Object.entries(group.plugin_overrides ?? {})
+    .filter(([, enabled]) => enabled)
+    .map(([id]) => plugins.value.find((plugin) => plugin.manifest.id === id)?.manifest.name ?? id);
+}
+
 function overrideOf(pluginID: string): boolean | undefined {
   return editing.value?.plugin_overrides?.[pluginID];
 }
@@ -1503,6 +1513,9 @@ async function saveEditing(): Promise<void> {
     editing.value = null;
     toastSuccess(`群 ${payload.group_id} 配置已保存`);
     if (saved.warning) toastError(saved.warning);
+    // 保存成功不代表生效：群关着时单独开的插件用不上，单独说一句，别被「已保存」盖过去。
+    const opened = saved.config.enabled ? [] : openedPluginNames(saved.config);
+    if (opened.length) toastError(`群 ${payload.group_id} 已关闭，单独开启的${opened.join("、")}不会生效，启用本群后才会工作`);
   } catch (error) {
     toastError(error instanceof Error ? error.message : "保存失败");
   } finally {

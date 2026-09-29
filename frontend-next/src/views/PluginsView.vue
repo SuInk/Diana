@@ -118,7 +118,7 @@
 
         <p class="plugin-card-desc" :title="pluginDisplayDescription(plugin)">{{ pluginDisplayDescription(plugin) }}</p>
 
-        <div v-if="plugin.manifest.permissions?.length || showFooter(plugin) || groupExceptions(plugin).length" class="plugin-card-bottom">
+        <div v-if="plugin.manifest.permissions?.length || showFooter(plugin) || groupExceptions(plugin).length || closedGroupsWithPlugin(plugin).length" class="plugin-card-bottom">
           <!-- 权限在左，设置等操作在右；有无设置都不再改变卡片的基础高度。 -->
           <div class="plugin-card-meta">
             <!-- 依赖列表展开后比整张卡片还高，行内展开会把这一条撑得和邻居完全
@@ -153,6 +153,17 @@
               <span class="plugin-dependency-count" :class="{ warn: pluginEnabled(plugin) }">
                 {{ groupExceptions(plugin).length }} 个群单独{{ pluginEnabled(plugin) ? "关闭" : "开启" }}
               </span>
+            </button>
+            <!-- 群里单独开了插件、群本身却关着：保存没问题，但机器人不在这个群
+                 工作，插件也就用不上。和上面分开说，处理办法不一样。 -->
+            <button
+              v-if="closedGroupsWithPlugin(plugin).length"
+              class="plugin-perms-head"
+              type="button"
+              title="查看开了插件但本群已关闭的群"
+              @click="exceptionsTarget = plugin"
+            >
+              <span class="plugin-dependency-count warn">{{ closedGroupsWithPlugin(plugin).length }} 个群开了插件但群已关闭</span>
             </button>
 
             <!-- 和运行依赖一样走弹窗：权限标签展开后会把这一行顶高一截，
@@ -471,14 +482,26 @@
       :title="`${pluginDisplayName(exceptionsTarget)} · 按群设置`"
       @close="exceptionsTarget = null"
     >
-      <p class="plugin-dependencies-hint">
-        这台机器人{{ pluginEnabled(exceptionsTarget) ? "启用了" : "停用了" }}这个插件，下列群在群管理里单独设成了「{{ pluginEnabled(exceptionsTarget) ? "关" : "开" }}」，以群的设置为准。要让它们跟着机器人走，在群管理里把本群插件改回「跟随」。
-      </p>
-      <div class="cluster plugin-card-perms">
-        <span v-for="group in groupExceptions(exceptionsTarget)" :key="group.group_id" class="badge" :title="group.group_id">
-          {{ group.group_name ? `${group.group_name}（${group.group_id}）` : group.group_id }}
-        </span>
-      </div>
+      <template v-if="groupExceptions(exceptionsTarget).length">
+        <p class="plugin-dependencies-hint">
+          这台机器人{{ pluginEnabled(exceptionsTarget) ? "启用了" : "停用了" }}这个插件，下列群在群管理里单独设成了「{{ pluginEnabled(exceptionsTarget) ? "关" : "开" }}」，以群的设置为准。要让它们跟着机器人走，在群管理里把本群插件改回「跟随」。
+        </p>
+        <div class="cluster plugin-card-perms">
+          <span v-for="group in groupExceptions(exceptionsTarget)" :key="group.group_id" class="badge" :title="group.group_id">
+            {{ groupLabel(group) }}
+          </span>
+        </div>
+      </template>
+      <template v-if="closedGroupsWithPlugin(exceptionsTarget).length">
+        <p class="plugin-dependencies-hint" :style="groupExceptions(exceptionsTarget).length ? 'margin-top: 14px' : undefined">
+          下列群在群管理里单独把这个插件设成了「开」，但群本身是关闭的：机器人不在这些群里工作，插件也不会生效。要用的话先在群管理里启用这个群。
+        </p>
+        <div class="cluster plugin-card-perms">
+          <span v-for="group in closedGroupsWithPlugin(exceptionsTarget)" :key="group.group_id" class="badge warn" :title="group.group_id">
+            {{ groupLabel(group) }}
+          </span>
+        </div>
+      </template>
       <template #footer>
         <button class="btn" type="button" @click="openGroups">去群管理</button>
         <button class="btn primary" type="button" @click="exceptionsTarget = null">完成</button>
@@ -1084,14 +1107,30 @@ async function loadScopedGroups(scope: string): Promise<void> {
   }
 }
 
-// groupExceptions 列出单独设成和机器人开关相反的群。本群没启用的不算：机器人在
-// 那个群本来就不工作，插件开不开无从谈起。GitHub 卡片合并了仓库发布插件，两个
+// groupExceptions 列出单独设成和机器人开关相反的群。本群没启用的不算在这里，
+// 由 closedGroupsWithPlugin 单独提醒。GitHub 卡片合并了仓库发布插件，两个
 // 插件任一被单独设置都算这个群。
 function groupExceptions(plugin: PluginState): BotGroupSummary[] {
   if (!botScope.value || !plugin.installed) return [];
   const enabled = pluginEnabled(plugin);
-  const ids = plugin.manifest.id === repositoryWatchPluginID ? [repositoryWatchPluginID, repositoryPublishPluginID] : [plugin.manifest.id];
+  const ids = groupOverrideIDs(plugin);
   return scopedGroups.value.filter((group) => group.enabled && ids.some((id) => group.plugin_overrides?.[id] === !enabled));
+}
+
+// closedGroupsWithPlugin 列出单独把插件设成「开」、群本身却关着的群。保存时不会
+// 报错，但机器人不在这些群工作，开了等于没开，要单独提醒。
+function closedGroupsWithPlugin(plugin: PluginState): BotGroupSummary[] {
+  if (!botScope.value || !plugin.installed) return [];
+  const ids = groupOverrideIDs(plugin);
+  return scopedGroups.value.filter((group) => !group.enabled && ids.some((id) => group.plugin_overrides?.[id] === true));
+}
+
+function groupOverrideIDs(plugin: PluginState): string[] {
+  return plugin.manifest.id === repositoryWatchPluginID ? [repositoryWatchPluginID, repositoryPublishPluginID] : [plugin.manifest.id];
+}
+
+function groupLabel(group: BotGroupSummary): string {
+  return group.group_name ? `${group.group_name}（${group.group_id}）` : group.group_id;
 }
 
 function openGroups(): void {
