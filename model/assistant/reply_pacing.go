@@ -12,6 +12,9 @@ func chatSplitLimitsForEvent(cfg BotConfig, event MessageEvent) chatSplitLimits 
 	if event.replyLineBreakMode != "" {
 		limits.LineBreakMode = event.replyLineBreakMode
 	}
+	if event.replyLineBreakMode == replyLinesPreserve {
+		limits.KeepProseLines = true
+	}
 	if event.replyDeliveryMode != "" {
 		return replyDeliveryLimits(limits, event.replyDeliveryMode)
 	}
@@ -27,7 +30,7 @@ func supportsOneBotGroupTool(cfg BotConfig, event MessageEvent) bool {
 	return event.Kind == EventKindGroup && (platform == PlatformOneBotV11 || platform == PlatformTelegram || platform == PlatformFeishu || platform == PlatformDingTalk || platform == PlatformWeCom || platform == PlatformQQOfficial)
 }
 
-const proactiveReplyPacingPrompt = `闲聊插话的发送节奏：默认只写一条简短消息，一两句说完；确实需要分开发言时使用 ` + notificationSplitMarker + `，同一条内部需要换行时使用 ` + notificationLineMarker + `。正文禁止输出真实换行符。不把动作描写单独写成一段。同一发言者连续补充的内容合起来回答，不逐条复述再各答一遍。有人反馈你太吵或要求减少发言时，尊重这个反馈，不用多段道歉或动作表演继续占屏；需要回应时一句即可。`
+const proactiveReplyPacingPrompt = `闲聊插话的发送节奏：默认只写一条简短消息，一两句说完；确实需要分开发言时用 ` + notificationSplitMarker + ` 另起一条，不要用 ` + notificationLineMarker + ` 在一条里隔开两句话。正文禁止输出真实换行符。不把动作描写单独写成一段。同一发言者连续补充的内容合起来回答，不逐条复述再各答一遍。有人反馈你太吵或要求减少发言时，尊重这个反馈，不用多段道歉或动作表演继续占屏；需要回应时一句即可。`
 
 const proactiveReplyToolResultPrompt = `读取配置不等于修改配置，工具失败不等于执行成功；没有成功的修改结果，不得声称已降低频率、已静音或已改好设置。`
 

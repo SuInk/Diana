@@ -91,7 +91,7 @@ const replyEmojiRule = "不要在回复里使用 emoji（😂🤣👍✨ 这类�
 // ——以前在下面五条子规则里各写了一遍，措辞还各不相同；模型读到的是同一件事被
 // 反复叮嘱，占了篇幅还稀释注意力。现在只在这里说一次，其余子规则只讲自己那份
 // 独有的内容（什么时候另起一条、长文怎么分组、本轮用户要求怎么覆盖）。
-const replyBlankLineRule = "回复正文中不得输出真实换行符（CR 或 LF），也不要用空行排版。开始下一条消息写 " + notificationSplitMarker + "；同一条消息内部需要换行写 " + notificationLineMarker + "。除这两个标记外，正文连续输出。"
+const replyBlankLineRule = "回复正文中不得输出真实换行符（CR 或 LF），也不要用空行排版。开始下一条消息写 " + notificationSplitMarker + "；同一条消息内部需要换行写 " + notificationLineMarker + "。" + notificationLineMarker + " 只用于列表、步骤、代码、表格、链接这类要逐行看的内容；两句普通的话之间不要用它隔开，要么写在同一行，要么用 " + notificationSplitMarker + " 另起一条。除这两个标记外，正文连续输出。"
 
 // 以前这里写的是「尽量少发几条、相关的放在一起、不逐句拆分」，结果是一条回复塞进
 // 结论、理由、保留意见和补充，群友十几个字一条，机器人一条上百字。真人发消息是一条

@@ -8850,6 +8850,9 @@ func splitChatReplyKeepingPeriods(reply string, limits chatSplitLimits) []string
 	if lines != "" {
 		limits.LineBreakMode = lines
 	}
+	if lines == replyLinesPreserve {
+		limits.KeepProseLines = true
+	}
 	if limits.SingleMessage {
 		body := strings.Join(singleChatReply(reply, 0), "\n")
 		return chunkTextByLength(formatReplyLineBreaks(body, limits.LineBreakMode), limits.ChunkSize)
@@ -8862,8 +8865,12 @@ func splitChatReplyKeepingPeriods(reply string, limits chatSplitLimits) []string
 	for _, part := range strings.Split(reply, notificationSplitMarker) {
 		part = strings.TrimSpace(restoreExplicitReplyLines(part))
 		pieces := []string{part}
-		if limits.LineSplit && !limits.MarkerOnly {
+		switch {
+		case limits.LineSplit && !limits.MarkerOnly:
 			pieces = splitReplyLinesKeepingLists(part)
+		case !limits.KeepProseLines && limits.LineBreakMode != replyLinesCompact:
+			// 配置成「收拢换行」时由 formatReplyLineBreaks 把普通话连成一段，不在这里拆。
+			pieces = splitPlainProseLines(part)
 		}
 		for _, segment := range pieces {
 			segment = formatReplyLineBreaks(segment, limits.LineBreakMode)
@@ -8883,6 +8890,7 @@ func splitChatReplyKeepingPeriods(reply string, limits chatSplitLimits) []string
 // Forward cards package the same messages; they do not infer new boundaries.
 func splitForwardReply(reply string, limits chatSplitLimits) []string {
 	limits.PreserveBlankLines = true
+	limits.KeepProseLines = true
 	return splitChatReply(reply, limits)
 }
 
@@ -8909,6 +8917,9 @@ type chatSplitLimits struct {
 	PreserveBlankLines bool
 	// Document 表示这条回复是一份行程、清单或方案：按小节分条，不按行分。
 	Document bool
+	// KeepProseLines 关掉「普通话之间的换行拆成两条」的兜底：本轮用户明确要求保留
+	// 换行，或者这是一张合并转发卡片（卡片里本来就是一整篇）。
+	KeepProseLines bool
 	// LineSplit 让消息内的每次换行另起一条，列表、表格和代码块整块不拆。
 	// 单条发送和闲聊插话（MarkerOnly）下不生效。
 	LineSplit bool
