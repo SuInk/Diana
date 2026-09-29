@@ -393,6 +393,8 @@ type Runtime struct {
 	notebook         NotebookStore
 	worldBook        WorldBookStore
 	selfNotes        SelfNoteStore
+	feed             FeedStore
+	feedReply        feedReplyState
 	groupStyles      groupStyleState
 	moodMu           sync.Mutex
 	moods            map[string]*moodState
@@ -4001,6 +4003,10 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			// 模型会写进一个不会被读出来的地方。
 			if r.selfNoteEnabled(event) {
 				extraTools = append(extraTools, newDianaSelfNoteTool(r, event, relationship))
+			}
+			// 动态只给主人：发在控制台里的内容不该由群里任何人一句话就能塞进去。
+			if relationship.Owner && r.feedStore() != nil {
+				extraTools = append(extraTools, newDianaFeedTool(r, event))
 			}
 			r.mu.RLock()
 			memoryAvailable := r.structuredMemory != nil

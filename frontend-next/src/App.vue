@@ -192,6 +192,7 @@ import {
   SunMoon,
   Tag,
   BookUser,
+  Newspaper,
   Users,
   Wrench
 } from "@lucide/vue";
@@ -227,6 +228,7 @@ const MemoryView = defineAsyncComponent(() => import("./views/MemoryView.vue"));
 const SettingsView = defineAsyncComponent(() => import("./views/SettingsView.vue"));
 const BrowserBoxView = defineAsyncComponent(() => import("./views/BrowserBoxView.vue"));
 const WorkspaceView = defineAsyncComponent(() => import("./views/WorkspaceView.vue"));
+const FeedView = defineAsyncComponent(() => import("./views/FeedView.vue"));
 
 const VIEW_CACHE_LIMIT = 16;
 
@@ -241,6 +243,7 @@ const viewComponents: Record<ViewID, Component> = {
   groups: GroupsView,
   users: MemoryView,
   notebook: MemoryView,
+  feed: FeedView,
   browser: BrowserBoxView,
   workspace: WorkspaceView,
   logs: RecordsView,
@@ -336,6 +339,7 @@ const viewTitles: Record<ViewID, string> = {
   groups: "群管理",
   users: "记忆",
   notebook: "记忆",
+  feed: "动态",
   logs: "运行记录",
   favorability: "运行记录",
   settings: "设置"
@@ -445,6 +449,7 @@ function navIcon(id: ViewID): Component {
     plugins: PlugZap,
     groups: Users,
     users: BookUser,
+    feed: Newspaper,
     browser: Globe,
     workspace: FolderOpen,
     logs: FileClock,

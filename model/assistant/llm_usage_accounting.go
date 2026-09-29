@@ -61,6 +61,7 @@ func withLLMUsagePurpose(ctx context.Context, purpose string) context.Context {
 const (
 	PurposeScheduledQuery = "scheduled_query"
 	PurposeEventTrigger   = "event_trigger"
+	PurposeFeedReply      = "feed_reply"
 )
 
 // withDefaultLLMUsagePurpose 只在调用方还没打标签时补上 purpose，已有的标签优先：

@@ -389,6 +389,7 @@ export interface BotProfileConfig extends SendRetrySettings {
   world_book_enabled?: boolean;
   /** 允许机器人自己写自述（自我认知），只进提示词尾部、改不动人设和权限；缺省关闭。 */
   self_note_enabled?: boolean;
+  feed_auto_reply_enabled?: boolean;
   /** 人机恋（恋爱模式）总开关；缺省关闭。 */
   romance_enabled?: boolean;
   /** 情绪系统：随相处涨落、随时间回落的心情，只影响语气；缺省关闭。 */
@@ -3353,6 +3354,103 @@ export function deleteSelfNote(profile: string, id: string): Promise<SelfNoteLis
 
 export function purgeSelfNotes(profile: string): Promise<SelfNoteListResult> {
   return requestJSON<SelfNoteListResult>(`/api/assistant/self-notes/purge${selfNoteQuery(profile)}`, { method: "POST" });
+}
+
+/** 动态页里的一张配图。字节不随列表返回，用 feedImageURL 按 ID 取。 */
+export interface FeedImage {
+  id: string;
+  mime: string;
+  width?: number;
+  height?: number;
+  bytes: number;
+  position: number;
+}
+
+export type FeedKind = "post" | "diary";
+
+/** author_kind：bot 是机器人自己，admin 是控制台里的主人。 */
+export interface FeedComment {
+  id: string;
+  post_id: string;
+  /** 回复所在串的顶层评论；顶层评论为空。 */
+  parent_id?: string;
+  reply_to_id?: string;
+  reply_to_author?: "bot" | "admin";
+  author_kind: "bot" | "admin";
+  content: string;
+  created_at: string;
+}
+
+/** 机器人自己发的一条动态或日记。发帖只有机器人能做，控制台只看和删。 */
+export interface FeedPost {
+  id: string;
+  profile_id?: string;
+  kind: FeedKind;
+  title?: string;
+  content: string;
+  images: FeedImage[];
+  comments: FeedComment[];
+  like_count: number;
+  liked_by_bot: boolean;
+  liked_by_admin: boolean;
+  source_user_id?: string;
+  created_at: string;
+}
+
+export interface FeedListResult {
+  posts: FeedPost[];
+  /** 非空表示还有更早的，原样作为下一页的 before 传回去。 */
+  next_before?: string;
+}
+
+export function listFeed(profile: string, kind: FeedKind | "" = "", before = ""): Promise<FeedListResult> {
+  const params = new URLSearchParams();
+  if (profile) params.set("profile", profile);
+  if (kind) params.set("kind", kind);
+  if (before) params.set("before", before);
+  const search = params.toString();
+  return requestJSON<FeedListResult>(`/api/assistant/feed${search ? `?${search}` : ""}`);
+}
+
+export function deleteFeedPost(id: string): Promise<{ ok: boolean }> {
+  return requestJSON<{ ok: boolean }>(`/api/assistant/feed/${encodeURIComponent(id)}`, { method: "DELETE" });
+}
+
+export interface FeedCommentResult {
+  comment: FeedComment;
+  /** 机器人开了自动回复：后台正在写回复，前端该去轮询新评论。 */
+  reply_pending: boolean;
+}
+
+export interface FeedLikes {
+  like_count: number;
+  liked_by_bot: boolean;
+  liked_by_admin: boolean;
+}
+
+export function likeFeedPost(postID: string, liked: boolean): Promise<FeedLikes> {
+  return requestJSON<FeedLikes>(`/api/assistant/feed/${encodeURIComponent(postID)}/like`, {
+    method: "POST",
+    body: JSON.stringify({ liked })
+  });
+}
+
+export function addFeedComment(postID: string, content: string, replyTo = ""): Promise<FeedCommentResult> {
+  return requestJSON<FeedCommentResult>(`/api/assistant/feed/${encodeURIComponent(postID)}/comments`, {
+    method: "POST",
+    body: JSON.stringify({ content, reply_to: replyTo || undefined })
+  });
+}
+
+export function deleteFeedComment(postID: string, commentID: string): Promise<{ ok: boolean }> {
+  return requestJSON<{ ok: boolean }>(
+    `/api/assistant/feed/${encodeURIComponent(postID)}/comments/${encodeURIComponent(commentID)}`,
+    { method: "DELETE" }
+  );
+}
+
+export function feedImageURL(id: string): string {
+  return `/api/assistant/feed/images/${encodeURIComponent(id)}`;
 }
 
 /** 导入一份 SOUL.md：名字取第一行一级标题，没有标题用文件名。 */

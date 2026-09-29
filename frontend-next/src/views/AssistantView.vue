@@ -1492,6 +1492,25 @@
             </div>
           </section>
 
+          <section class="card">
+            <div class="card-header">
+              <div>
+                <h2>动态</h2>
+                <span class="card-sub">它在「动态」页发的动态和日记，以及评论区的互动</span>
+              </div>
+            </div>
+            <div class="card-body form-grid">
+              <div class="field wide">
+                <label class="switch">
+                  <input v-model="form.feed_auto_reply_enabled" type="checkbox" />
+                  <span class="track" aria-hidden="true"></span>
+                  <span class="switch-label">主人评论后自动回复</span>
+                </label>
+                <span class="hint">你在动态页评论后，它会用当前人设在后台回一两句。每条评论会调用一次模型，所以默认关闭；回复不带任何工具，同一条动态两次回复之间至少隔几秒，每台机器人每天最多回 50 条（重启后重新计数）。关闭时它不会自动回复，只在下次翻动态时才看到评论。保存配置后生效。</span>
+              </div>
+            </div>
+          </section>
+
           <!-- 拟人化：情绪、风格学习、戳一戳。都是「更像一个人」的可选行为，默认全关。 -->
           <section class="card">
             <div class="card-header">
@@ -4258,6 +4277,7 @@ function setForm(config: BotProfileConfig): void {
     cross_platform_memory_enabled: config.cross_platform_memory_enabled ?? false,
     world_book_enabled: config.world_book_enabled ?? true,
     self_note_enabled: config.self_note_enabled ?? false,
+    feed_auto_reply_enabled: config.feed_auto_reply_enabled ?? false,
     romance_enabled: config.romance_enabled ?? false,
     mood_enabled: config.mood_enabled ?? false,
     poke_reply_enabled: config.poke_reply_enabled ?? false,

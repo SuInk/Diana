@@ -11,3 +11,11 @@ export function demoStickerImage(hash: string): string {
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128"><rect width="128" height="128" rx="28" fill="hsl(${hue} 70% 82%)"/><circle cx="64" cy="66" r="44" fill="hsl(${hue} 65% 62%)"/><circle cx="48" cy="58" r="7" fill="#fff"/><circle cx="80" cy="58" r="7" fill="#fff"/><circle cx="49" cy="59" r="3.5" fill="#222"/><circle cx="81" cy="59" r="3.5" fill="#222"/><path d="${mouth}" fill="none" stroke="#222" stroke-width="5" stroke-linecap="round"/></svg>`;
   return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
 }
+
+/** 演示模式的动态配图：按 ID 生成一张渐变风景小图，不同 ID 颜色不同。 */
+export function demoFeedImage(id: string): string {
+  let seed = 0;
+  for (const char of id) seed = (seed * 31 + char.charCodeAt(0)) % 360;
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="480" height="360" viewBox="0 0 480 360"><defs><linearGradient id="g" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="hsl(${seed} 75% 72%)"/><stop offset="1" stop-color="hsl(${(seed + 40) % 360} 70% 88%)"/></linearGradient></defs><rect width="480" height="360" fill="url(#g)"/><circle cx="340" cy="120" r="48" fill="hsl(${(seed + 20) % 360} 90% 92%)"/><path d="M0 300 Q120 220 240 290 T480 270 V360 H0Z" fill="hsl(${(seed + 200) % 360} 40% 45%)"/></svg>`;
+  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+}

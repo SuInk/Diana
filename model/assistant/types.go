@@ -824,6 +824,10 @@ type BotConfig struct {
 	// 让机器人改写关于自己的描述是行为变化，不该在升级后突然发生。开着时它写的
 	// 条目只进提示词尾部的自述层，改不动人设正文，也改不动任何权限。
 	SelfNoteEnabled *bool `json:"self_note_enabled,omitempty"`
+	// FeedAutoReplyEnabled 控制主人在动态页评论后，机器人要不要自动回一句。默认关闭：
+	// 每条评论都会触发一次模型调用，升级后不该突然开始花钱。回复不带工具，只是照
+	// 人设写一两句话存进评论串；另有每天条数上限和单条动态的冷却。
+	FeedAutoReplyEnabled *bool `json:"feed_auto_reply_enabled,omitempty"`
 	// RomanceEnabled 是人机恋（恋爱模式）的总开关。开着时用户才能和机器人确立
 	// 恋人关系。默认关闭：机器人愿不愿意谈恋爱是部署者该亲手做的决定，不该在
 	// 升级后突然发生。
@@ -1320,6 +1324,7 @@ type ConfigPayload struct {
 	CrossPlatformMemoryEnabled      *bool                     `json:"cross_platform_memory_enabled,omitempty"`
 	WorldBookEnabled                *bool                     `json:"world_book_enabled,omitempty"`
 	SelfNoteEnabled                 *bool                     `json:"self_note_enabled,omitempty"`
+	FeedAutoReplyEnabled            *bool                     `json:"feed_auto_reply_enabled,omitempty"`
 	RomanceEnabled                  *bool                     `json:"romance_enabled,omitempty"`
 	MoodEnabled                     *bool                     `json:"mood_enabled,omitempty"`
 	PokeReplyEnabled                *bool                     `json:"poke_reply_enabled,omitempty"`
@@ -1949,6 +1954,7 @@ func DefaultBotConfig() BotConfig {
 		CrossPlatformMemoryEnabled:  boolPointer(false),
 		WorldBookEnabled:            boolPointer(true),
 		SelfNoteEnabled:             boolPointer(false),
+		FeedAutoReplyEnabled:        boolPointer(false),
 		RomanceEnabled:              boolPointer(false),
 		MoodEnabled:                 boolPointer(false),
 		PokeReplyEnabled:            boolPointer(false),
@@ -2202,6 +2208,9 @@ func (cfg BotConfig) WithDefaults() BotConfig {
 	}
 	if cfg.SelfNoteEnabled == nil {
 		cfg.SelfNoteEnabled = boolPointer(false)
+	}
+	if cfg.FeedAutoReplyEnabled == nil {
+		cfg.FeedAutoReplyEnabled = boolPointer(false)
 	}
 	if cfg.RomanceEnabled == nil {
 		cfg.RomanceEnabled = boolPointer(false)
@@ -2578,6 +2587,7 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		CrossPlatformMemoryEnabled:        copyBoolPointer(cfg.CrossPlatformMemoryEnabled),
 		WorldBookEnabled:                  copyBoolPointer(cfg.WorldBookEnabled),
 		SelfNoteEnabled:                   copyBoolPointer(cfg.SelfNoteEnabled),
+		FeedAutoReplyEnabled:              copyBoolPointer(cfg.FeedAutoReplyEnabled),
 		RomanceEnabled:                    copyBoolPointer(cfg.RomanceEnabled),
 		MoodEnabled:                       copyBoolPointer(cfg.MoodEnabled),
 		PokeReplyEnabled:                  copyBoolPointer(cfg.PokeReplyEnabled),
@@ -2805,6 +2815,7 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		CrossPlatformMemoryEnabled:      copyBoolPointer(payload.CrossPlatformMemoryEnabled),
 		WorldBookEnabled:                copyBoolPointer(payload.WorldBookEnabled),
 		SelfNoteEnabled:                 copyBoolPointer(payload.SelfNoteEnabled),
+		FeedAutoReplyEnabled:            copyBoolPointer(payload.FeedAutoReplyEnabled),
 		RomanceEnabled:                  copyBoolPointer(payload.RomanceEnabled),
 		MoodEnabled:                     copyBoolPointer(payload.MoodEnabled),
 		PokeReplyEnabled:                copyBoolPointer(payload.PokeReplyEnabled),
