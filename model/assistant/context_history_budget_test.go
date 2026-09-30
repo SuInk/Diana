@@ -569,7 +569,7 @@ func TestContextBudgetCapReachesTheGenerateRequest(t *testing.T) {
 // 改了预算逻辑而忘了改图，图就开始骗人。
 func TestContextBudgetBreakdownMatchesRuntimeBudgets(t *testing.T) {
 	runtime := NewRuntime(BotConfig{MaxContextTokens: 128000}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
-	breakdown := runtime.ContextBudgetBreakdownForGroup("123456")
+	breakdown := runtime.ContextBudgetBreakdownForGroup("", "123456")
 	if breakdown.GroupID != "123456" {
 		t.Fatalf("group = %q", breakdown.GroupID)
 	}
@@ -614,13 +614,13 @@ func TestContextBudgetBreakdownMatchesRuntimeBudgets(t *testing.T) {
 // 图上那个「上限 16000」还是「窗口 55%」的说明不能反过来。
 func TestContextBudgetBreakdownReportsWhichBoundApplies(t *testing.T) {
 	large := NewRuntime(BotConfig{MaxContextTokens: 128000}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
-	for _, layer := range large.ContextBudgetBreakdownForGroup("g").Layers {
+	for _, layer := range large.ContextBudgetBreakdownForGroup("", "g").Layers {
 		if !layer.CappedByCeiling {
 			t.Fatalf("128K 窗口下 %s 应当被绝对上限压住：%#v", layer.Key, layer)
 		}
 	}
 	small := NewRuntime(BotConfig{MaxContextTokens: 8000}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
-	breakdown := small.ContextBudgetBreakdownForGroup("g")
+	breakdown := small.ContextBudgetBreakdownForGroup("", "g")
 	for _, layer := range breakdown.Layers {
 		if layer.CappedByCeiling {
 			t.Fatalf("8K 窗口下 %s 应当按份额走：%#v", layer.Key, layer)

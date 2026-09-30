@@ -442,7 +442,7 @@ func (h *BotHandler) listEvents(c *gin.Context) {
 		}
 	}
 	if budgetRuntime, ok := h.runtime.(contextBudgetRuntime); ok && groupID != "" {
-		breakdown := budgetRuntime.ContextBudgetBreakdownForGroup(groupID)
+		breakdown := budgetRuntime.ContextBudgetBreakdownForGroup(profileID, groupID)
 		response.ContextBudget = &breakdown
 	}
 	// 常驻上下文不要求选中群：不选群就是这台机器人私聊场景下的底价，选了群再叠上

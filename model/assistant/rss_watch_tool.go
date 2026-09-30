@@ -132,7 +132,11 @@ func (t *dianaRSSWatchTool) Run(ctx context.Context, input map[string]any) (stri
 	}
 	switch operation {
 	case "create", "add":
-		if err := t.runtime.ensureRecurringTaskCapacity(targetID, policy.personalScheduleLimit()); err != nil {
+		// 额度按被代建的人算，和周期查询、一次性提醒同一个口径：主人替别人建，
+		// 占的是对方的名额，上限也看对方的好感度，不能借主人的 50 个绕过去。
+		targetEvent := t.event
+		targetEvent.UserID = targetID
+		if err := t.runtime.ensureRecurringTaskCapacity(targetEvent, t.runtime.relationshipPolicy(ctx, targetEvent).personalScheduleLimit()); err != nil {
 			return "", err
 		}
 		interval, err := parseRSSWatchInterval(configToolString(input, "interval"))
@@ -217,7 +221,7 @@ func (t *dianaRSSWatchTool) Run(ctx context.Context, input map[string]any) (stri
 	}
 }
 
-func (r *Runtime) ensureRecurringTaskCapacity(ownerID string, limit int) error {
+func (r *Runtime) ensureRecurringTaskCapacity(event MessageEvent, limit int) error {
 	if r.reminders == nil {
 		return fmt.Errorf("当前未启用定时任务存储")
 	}
@@ -226,16 +230,30 @@ func (r *Runtime) ensureRecurringTaskCapacity(ownerID string, limit int) error {
 	}
 	r.reminderMu.Lock()
 	defer r.reminderMu.Unlock()
-	count := 0
-	for _, item := range r.reminders.Reminders() {
-		if reminderIsRecurring(item) && item.OwnerID == ownerID && item.CancelledAt.IsZero() {
-			count++
-		}
-	}
-	if count >= limit {
+	if r.activeRecurringTaskCount(r.reminders.Reminders(), event) >= limit {
 		return fmt.Errorf("当前最多可创建 %d 个定时订阅，额度已满", limit)
 	}
 	return nil
+}
+
+// activeRecurringTaskCount 数 event.UserID 在这台机器人上还在跑的周期任务，周期
+// 查询和 RSS 订阅共用这一个名额池。调用方负责持有 reminderMu。
+func (r *Runtime) activeRecurringTaskCount(items []Reminder, event MessageEvent) int {
+	count := 0
+	for _, item := range items {
+		if reminderIsRecurring(item) && item.CancelledAt.IsZero() && r.taskCountsTowardQuota(item, event) {
+			count++
+		}
+	}
+	return count
+}
+
+// taskCountsTowardQuota 报告一条任务算不算进 event.UserID 在这台机器人上的额度。
+// 上限来自好感度，而好感度是按机器人各记各的，所以名额也按机器人分：在 A 上
+// 建的任务不能吃掉 B 给的名额。没有归属的老任务按 sameBotAsEvent 算在每台头上，
+// 宁可少给名额也不多给。
+func (r *Runtime) taskCountsTowardQuota(item Reminder, event MessageEvent) bool {
+	return item.OwnerID == event.UserID && r.sameBotAsEvent(item.ProfileID, event)
 }
 
 func parseRSSWatchInterval(raw string) (time.Duration, error) {

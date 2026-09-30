@@ -345,16 +345,7 @@ func (r *Runtime) agentCurrentHistoricalImageReference(ctx context.Context, even
 		sources = append(sources, source)
 	}
 	if event.Quoted != nil {
-		quotedEvent := MessageEvent{
-			Kind:       event.Kind,
-			GroupID:    firstNonEmpty(event.Quoted.GroupID, event.GroupID),
-			UserID:     event.Quoted.UserID,
-			MessageID:  event.Quoted.MessageID,
-			RawMessage: event.Quoted.RawMessage,
-			Segments:   event.Quoted.Segments,
-			SenderName: event.Quoted.SenderName,
-		}
-		appendEvent(quotedEvent)
+		appendEvent(quotedSourceEvent(event))
 	}
 	for _, messageID := range eventSemanticSourceMessageIDs(event) {
 		if source, found := r.findSemanticReferenceEvent(ctx, event, messageID); found {

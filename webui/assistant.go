@@ -58,7 +58,7 @@ type groupAvatarRuntime interface {
 // contextBudgetRuntime 让事件页拿到按群算好的上下文预算分配。做成可选接口而不是
 // 塞进 BotRuntime：它只服务一个页面，测试里的假运行时不必为此实现一个空方法。
 type contextBudgetRuntime interface {
-	ContextBudgetBreakdownForGroup(string) assistant.ContextBudgetBreakdown
+	ContextBudgetBreakdownForGroup(profileID, groupID string) assistant.ContextBudgetBreakdown
 }
 
 // residentContextRuntime 让事件页拿到「每轮都注入」那几块的原文。和上面那条一样

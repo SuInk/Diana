@@ -5,6 +5,7 @@ package assistant
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"strings"
 	"time"
@@ -177,7 +178,7 @@ func (r *Runtime) writeUserMemory(event MessageEvent, update UserMemoryUpdate) (
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	update.OwnerID = cfg.OwnerIDForEvent(event)
-	profile, err := store.UpdateUserMemory(ctx, event, update)
+	profile, err := r.saveUserMemory(ctx, store, event, update)
 	if err != nil {
 		log.Printf("diana user memory update failed: %v", err)
 		r.recordBackgroundFailure("user_memory_write_failed", "人员档案写入失败，这次的好感度、画像或互动次数没有记上", "", err,
@@ -185,6 +186,26 @@ func (r *Runtime) writeUserMemory(event MessageEvent, update UserMemoryUpdate) (
 		return UserMemoryProfile{}, false
 	}
 	return profile, true
+}
+
+// saveUserMemory 是写人员档案的唯一入口，别处不要直接调 store.UpdateUserMemory
+// （TestUserMemoryWritesGoThroughSaveUserMemory 盯着）。
+//
+// 档案按机器人分行存，写到哪一行只看 event.ProfileID，读却是调用方显式传归属——
+// 两边各拿各的，手拼事件漏了 ProfileID，写就落进空归属那一行，读的人照旧读本机
+// 那一行：工具报「已更新」，实际什么都没变。这里统一补归属：只有一台机器人时补上
+// 它；几台机器人又说不清是哪台时直接报错，不去猜，也不写进空归属。
+func (r *Runtime) saveUserMemory(ctx context.Context, store UserMemoryStore, event MessageEvent, update UserMemoryUpdate) (UserMemoryProfile, error) {
+	event.ProfileID = r.eventProfileID(event)
+	if event.ProfileID == "" {
+		r.mu.RLock()
+		bots := len(r.profileConfigs)
+		r.mu.RUnlock()
+		if bots > 1 {
+			return UserMemoryProfile{}, fmt.Errorf("人员档案写入缺少机器人归属：user=%s message=%s", event.UserID, event.MessageID)
+		}
+	}
+	return store.UpdateUserMemory(ctx, event, update)
 }
 
 func (r *Runtime) loadUserMemoryProfile(ctx context.Context, event MessageEvent) (UserMemoryProfile, bool) {

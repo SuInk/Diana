@@ -4975,8 +4975,15 @@ func newMemoryUserMemoryStore() *memoryUserMemoryStore {
 
 func (s *memoryUserMemoryStore) UpdateUserMemory(_ context.Context, event MessageEvent, update UserMemoryUpdate) (UserMemoryProfile, error) {
 	profile := s.profiles[event.UserID]
+	// 真库按 (bot_profile_id, user_id) 分行，这里只按 user_id 存。为了不让归属
+	// 写错这类 bug 在测试里被抹平：档案已经标了归属，写入却带着另一个归属时直接
+	// 报错——真库在这种情况下会悄悄写到另一行，读的人看不到。
+	if scope := strings.TrimSpace(profile.BotProfileID); scope != "" && scope != strings.TrimSpace(event.ProfileID) {
+		return UserMemoryProfile{}, fmt.Errorf("user memory scope mismatch: profile %q belongs to bot %q, write came with %q", event.UserID, scope, event.ProfileID)
+	}
 	if profile.UserID == "" {
 		profile.UserID = event.UserID
+		profile.BotProfileID = strings.TrimSpace(event.ProfileID)
 	}
 	if event.SenderName != "" {
 		profile.DisplayName = event.SenderName
@@ -5041,8 +5048,12 @@ func (s *memoryUserMemoryStore) ListUserFavorabilityChanges(_ context.Context, _
 	return changes, nil
 }
 
-func (s *memoryUserMemoryStore) GetUserMemory(_ context.Context, _, userID string) (UserMemoryProfile, bool, error) {
+func (s *memoryUserMemoryStore) GetUserMemory(_ context.Context, botProfileID, userID string) (UserMemoryProfile, bool, error) {
 	profile, ok := s.profiles[userID]
+	// 和真库一致：指明了机器人就只认那台机器人的档案；留空表示不限。
+	if scope := strings.TrimSpace(botProfileID); ok && scope != "" && profile.BotProfileID != "" && profile.BotProfileID != scope {
+		return UserMemoryProfile{}, false, nil
+	}
 	return profile, ok, nil
 }
 

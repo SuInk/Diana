@@ -64,6 +64,26 @@ func setQuotedSemanticSourceMessageIDs(quoted *QuotedMessage, messageIDs []strin
 	}
 }
 
+// quotedSourceEvent 把当前消息引用的那条还原成一条独立事件，拿去补图、识图、
+// 回写历史。归属（机器人、平台、会话命名空间）必须从当前消息继承：几台机器人
+// 时少了 ProfileID，取图找不到通道、识图用的是默认配置、用量记到空归属上，
+// 少了 ContextNamespace，识图结果就回写到别的会话键下。
+func quotedSourceEvent(event MessageEvent) MessageEvent {
+	return MessageEvent{
+		Platform:         event.Platform,
+		ProfileID:        event.ProfileID,
+		ContextNamespace: event.ContextNamespace,
+		SelfID:           event.SelfID,
+		Kind:             event.Kind,
+		GroupID:          firstNonEmpty(event.Quoted.GroupID, event.GroupID),
+		UserID:           event.Quoted.UserID,
+		MessageID:        event.Quoted.MessageID,
+		RawMessage:       event.Quoted.RawMessage,
+		Segments:         event.Quoted.Segments,
+		SenderName:       event.Quoted.SenderName,
+	}
+}
+
 func (r *Runtime) semanticReferenceImageURLs(ctx context.Context, event MessageEvent) []string {
 	images, _, _ := r.semanticReferenceImageURLsDetailed(ctx, event)
 	return images
@@ -79,13 +99,8 @@ func (r *Runtime) semanticReferenceImageURLsDetailed(ctx context.Context, event 
 	skippedImages := 0
 	for _, messageID := range messageIDs {
 		if event.Quoted != nil && strings.TrimSpace(event.Quoted.MessageID) == messageID {
-			quotedEvent := MessageEvent{
-				Kind:      event.Kind,
-				GroupID:   firstNonEmpty(event.Quoted.GroupID, event.GroupID),
-				UserID:    firstNonEmpty(event.Quoted.UserID, event.UserID),
-				MessageID: event.Quoted.MessageID,
-				Segments:  event.Quoted.Segments,
-			}
+			quotedEvent := quotedSourceEvent(event)
+			quotedEvent.UserID = firstNonEmpty(quotedEvent.UserID, event.UserID)
 			originalQuotedEvent := quotedEvent
 			quotedEvent = r.prepareHistoricalEventImages(ctx, quotedEvent)
 			if historicalImageStateChanged(originalQuotedEvent, quotedEvent) {
@@ -133,15 +148,7 @@ func (r *Runtime) semanticReferenceContext(ctx context.Context, event MessageEve
 	for _, messageID := range messageIDs {
 		source, found := r.findSemanticReferenceEvent(ctx, event, messageID)
 		if !found && event.Quoted != nil && strings.TrimSpace(event.Quoted.MessageID) == messageID {
-			source = MessageEvent{
-				Kind:       event.Kind,
-				GroupID:    firstNonEmpty(event.Quoted.GroupID, event.GroupID),
-				UserID:     event.Quoted.UserID,
-				MessageID:  event.Quoted.MessageID,
-				RawMessage: event.Quoted.RawMessage,
-				Segments:   event.Quoted.Segments,
-				SenderName: event.Quoted.SenderName,
-			}
+			source = quotedSourceEvent(event)
 			found = true
 		}
 		if !found {

@@ -395,13 +395,7 @@ func (r *Runtime) addScheduledQueries(event MessageEvent, requests []scheduleCre
 	r.reminderMu.Lock()
 	defer r.reminderMu.Unlock()
 	items := r.reminders.Reminders()
-	count := 0
-	for _, item := range items {
-		if reminderIsRecurring(item) && item.OwnerID == event.UserID && item.CancelledAt.IsZero() {
-			count++
-		}
-	}
-	remaining := limit - count
+	remaining := limit - r.activeRecurringTaskCount(items, event)
 	if remaining <= 0 {
 		return nil, fmt.Errorf("当前最多可创建 %d 个定时订阅，额度已满", limit)
 	}

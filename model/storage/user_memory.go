@@ -42,8 +42,11 @@ func (s *SQLiteStore) UpdateUserMemory(ctx context.Context, event assistant.Mess
 		return profile, nil
 	}
 
+	// 读要和写落在同一行，所以精确匹配归属。GetUserMemory 的空归属表示「不限」，
+	// 拿它读会把别台机器人最近那份档案（好感度、记忆、恋爱状态）整份抄进空归属那
+	// 一行再改；这正是 relationship set 漏带 ProfileID 时发生的事。
 	botProfileID := strings.TrimSpace(event.ProfileID)
-	profile, ok, err := s.GetUserMemory(ctx, botProfileID, userID)
+	profile, ok, err := s.GetUserMemoryExact(ctx, botProfileID, userID)
 	if err != nil {
 		return assistant.UserMemoryProfile{}, err
 	}

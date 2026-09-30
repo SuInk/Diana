@@ -348,7 +348,7 @@ func (r *Runtime) addOneTimeReminders(event MessageEvent, requests []reminderCre
 	items := r.reminders.Reminders()
 	count := 0
 	for _, existing := range items {
-		if existing.Kind == ReminderKindMessage && existing.OwnerID == event.UserID && existing.LastRunAt.IsZero() && existing.CancelledAt.IsZero() {
+		if existing.Kind == ReminderKindMessage && existing.LastRunAt.IsZero() && existing.CancelledAt.IsZero() && r.taskCountsTowardQuota(existing, event) {
 			count++
 		}
 	}

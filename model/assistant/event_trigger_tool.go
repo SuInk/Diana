@@ -335,7 +335,7 @@ func (r *Runtime) addEventTrigger(ctx context.Context, event MessageEvent, spec 
 	items := r.reminders.Reminders()
 	count := 0
 	for _, existing := range items {
-		if existing.OwnerID != event.UserID {
+		if !r.taskCountsTowardQuota(existing, event) {
 			continue
 		}
 		if existingSpec, ok := EventTriggerSpec(existing); ok && eventTriggerArmed(existing, existingSpec, now) {

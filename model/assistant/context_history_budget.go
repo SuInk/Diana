@@ -692,12 +692,13 @@ type ContextBudgetBreakdown struct {
 	Headroom  int64 `json:"headroom"`
 }
 
-// ContextBudgetBreakdownForGroup 按群算出当前的预算分配。
+// ContextBudgetBreakdownForGroup 按机器人和群算出当前的预算分配。
 //
 // 它复用运行时真正用的那几个预算函数，不另算一遍：分配图一旦自己实现一份
-// min(份额, 上限)，改了预算逻辑而忘了改图，图就开始骗人。
-func (r *Runtime) ContextBudgetBreakdownForGroup(groupID string) ContextBudgetBreakdown {
-	event := MessageEvent{Kind: EventKindGroup, GroupID: strings.TrimSpace(groupID)}
+// min(份额, 上限)，改了预算逻辑而忘了改图，图就开始骗人。profileID 要带上：
+// 几台机器人时不带就落回默认配置，窗口和分群覆盖都是别人的。
+func (r *Runtime) ContextBudgetBreakdownForGroup(profileID, groupID string) ContextBudgetBreakdown {
+	event := MessageEvent{Kind: EventKindGroup, GroupID: strings.TrimSpace(groupID), ProfileID: strings.TrimSpace(profileID)}
 	if event.GroupID == "" {
 		event.Kind = EventKindPrivate
 	}

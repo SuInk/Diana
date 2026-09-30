@@ -141,3 +141,32 @@ func TestSQLiteStoreRecordsOwnerFavorabilityBothWays(t *testing.T) {
 		t.Fatalf("owner change history = %#v", changes)
 	}
 }
+
+// 空归属的写只动空归属那一行，不能先按「不限」读到别台机器人的档案，再整份抄过去改。
+func TestSQLiteStoreUnscopedWriteDoesNotCopyAnotherBotsProfile(t *testing.T) {
+	ctx := context.Background()
+	store, err := NewSQLiteStore(filepath.Join(t.TempDir(), "favorability.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+
+	scoped := assistant.MessageEvent{Kind: assistant.EventKindGroup, GroupID: "20001", UserID: "10002", MessageID: "30001", ProfileID: "bot-a"}
+	cold := -23
+	if _, err := store.UpdateUserMemory(ctx, scoped, assistant.UserMemoryUpdate{SetFavorability: &cold, FavorabilityChangeSource: "interaction", Administrative: true}); err != nil {
+		t.Fatal(err)
+	}
+	unscoped := scoped
+	unscoped.ProfileID = ""
+	updated, err := store.UpdateUserMemory(ctx, unscoped, assistant.UserMemoryUpdate{FavorabilityDelta: 1, Administrative: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Favorability < 0 {
+		t.Fatalf("unscoped write started from bot-a's score: %#v", updated)
+	}
+	profile, ok, err := store.GetUserMemoryExact(ctx, "bot-a", "10002")
+	if err != nil || !ok || profile.Favorability != cold {
+		t.Fatalf("bot-a profile = %#v, %v, %v; want untouched %d", profile, ok, err, cold)
+	}
+}

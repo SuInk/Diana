@@ -232,14 +232,7 @@ func (t *dianaRelationshipTool) runRomanceOperation(ctx context.Context, operati
 	}
 
 	writeState := func(state *UserRomanceState) error {
-		_, err := store.UpdateUserMemory(ctx, MessageEvent{
-			Kind:       t.event.Kind,
-			GroupID:    t.event.GroupID,
-			UserID:     targetID,
-			SenderName: profile.DisplayName,
-			MessageID:  t.event.MessageID,
-			ProfileID:  t.event.ProfileID,
-		}, UserMemoryUpdate{
+		_, err := t.runtime.saveUserMemory(ctx, store, t.targetMemoryEvent(targetID, profile.DisplayName), UserMemoryUpdate{
 			OwnerID:        cfg.OwnerID,
 			SetRomance:     state,
 			Administrative: true,
@@ -357,13 +350,7 @@ func (t *dianaRelationshipTool) runPortraitOperation(ctx context.Context, operat
 		message = fmt.Sprintf("已清空画像的%s栏。", PortraitFieldLabel(field))
 	}
 
-	profile, written := t.runtime.writeUserMemory(MessageEvent{
-		Kind:      t.event.Kind,
-		GroupID:   t.event.GroupID,
-		UserID:    targetID,
-		MessageID: t.event.MessageID,
-		ProfileID: t.event.ProfileID,
-	}, update)
+	profile, written := t.runtime.writeUserMemory(t.targetMemoryEvent(targetID, ""), update)
 	if !written {
 		return "", fmt.Errorf("保存人员画像失败")
 	}
@@ -415,13 +402,7 @@ func (t *dianaRelationshipTool) updatedFavorability(ctx context.Context, operati
 	if value < minimumFavorability || value > maximumFavorability {
 		return 0, fmt.Errorf("好感度必须在 %d 到 %d 之间", minimumFavorability, maximumFavorability)
 	}
-	updated, err := store.UpdateUserMemory(ctx, MessageEvent{
-		Kind:       t.event.Kind,
-		GroupID:    t.event.GroupID,
-		UserID:     targetID,
-		SenderName: profile.DisplayName,
-		MessageID:  t.event.MessageID,
-	}, UserMemoryUpdate{
+	updated, err := t.runtime.saveUserMemory(ctx, store, t.targetMemoryEvent(targetID, profile.DisplayName), UserMemoryUpdate{
 		OwnerID:                    t.runtime.effectiveConfigForEvent(t.event).OwnerID,
 		SetFavorability:            &value,
 		FavorabilityChangeSource:   "owner_" + operation,
@@ -433,6 +414,23 @@ func (t *dianaRelationshipTool) updatedFavorability(ctx context.Context, operati
 		return 0, fmt.Errorf("保存用户好感度失败: %w", err)
 	}
 	return updated.Favorability, nil
+}
+
+// targetMemoryEvent 是主人改别人档案（好感度、画像、恋爱状态）时写库用的事件。
+// 人员档案按机器人分行存，归属只认事件上的 ProfileID；这里统一从当前消息带过来，
+// 别再各处手拼 MessageEvent——漏一个字段，写就落到空归属那一行，读的却还是本机
+// 那一行，工具报「已更新」、实际什么都没变。
+func (t *dianaRelationshipTool) targetMemoryEvent(targetID, displayName string) MessageEvent {
+	return MessageEvent{
+		Platform:         t.event.Platform,
+		ProfileID:        t.event.ProfileID,
+		ContextNamespace: t.event.ContextNamespace,
+		Kind:             t.event.Kind,
+		GroupID:          t.event.GroupID,
+		UserID:           targetID,
+		SenderName:       displayName,
+		MessageID:        t.event.MessageID,
+	}
 }
 
 func (t *dianaRelationshipTool) defaultTargetUserID() string {
