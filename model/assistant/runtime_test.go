@@ -5187,6 +5187,11 @@ type sequenceLLMProvider struct {
 }
 
 func (p *sequenceLLMProvider) Generate(ctx context.Context, req llm.GenerateRequest) (*llm.GenerateResponse, error) {
+	// 查证判断和 Agent 并行起跑，抢到哪条脚本全看调度；一律答不需要，不消耗
+	// replies，也不记进 requests。
+	if llmUsagePurposeFromContext(ctx) == PurposeEvidenceGate {
+		return &llm.GenerateResponse{Provider: llm.ProviderOpenAICompatible, Model: "test", Text: `{"needs_evidence":false}`}, nil
+	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.requests = append(p.requests, req)

@@ -205,8 +205,18 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 	finishReason := "final"
 	claimLedger := newClaimEvidenceLedger()
 	// 没有 web_search 就没法要求证据，硬要只会把回复卡在修复循环里。
-	if _, searchAvailable := r.registry.Get(webSearchToolName); searchAvailable {
+	_, searchAvailable := r.registry.Get(webSearchToolName)
+	if searchAvailable {
 		claimLedger.required = req.RequireEvidence
+	}
+	// evidenceChecked 保证 EvidenceCheck 每轮只问一次：判过不需要，后面再收尾也不再等。
+	evidenceChecked := false
+	checkEvidenceBeforeFinal := func() {
+		if evidenceChecked || !searchAvailable || req.EvidenceCheck == nil || claimLedger.required || claimLedger.searched {
+			return
+		}
+		evidenceChecked = true
+		claimLedger.required = req.EvidenceCheck(ctx)
 	}
 	// 用户自己贴的链接、历史消息里出现过的链接，模型复述不算编造来源。
 	for _, message := range req.Messages {
@@ -403,6 +413,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 				})
 				continue
 			}
+			checkEvidenceBeforeFinal()
 			if claimLedger.missingRequiredSearch() {
 				protocolRepairs++
 				emitProtocolRepair(ctx, req.Observer, traceID, modelTurns, toolCalls, r.cfg.MaxSteps, evidenceRequiredRepairReason)
@@ -472,6 +483,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 			// 要求继续」这条规则已经写进系统提示词，模型仍然停下来是提示词的问题，不该
 			// 由代码回头猜正文。
 			claimLedger.applyUpdates(action.Claims)
+			checkEvidenceBeforeFinal()
 			if claimLedger.missingRequiredSearch() {
 				protocolRepairs++
 				emitProtocolRepair(ctx, req.Observer, traceID, modelTurns, toolCalls, r.cfg.MaxSteps, evidenceRequiredRepairReason)

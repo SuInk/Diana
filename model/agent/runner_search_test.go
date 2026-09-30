@@ -587,3 +587,71 @@ func TestRunnerRequireEvidenceForcesToolChoiceOnRepair(t *testing.T) {
 		t.Fatalf("强制粘在了后续轮次: %q", client.requests[2].ToolChoice)
 	}
 }
+
+// EvidenceCheck 是收尾时才取的判断：判为需要时和 RequireEvidence 一样打回去先搜。
+func TestRunnerEvidenceCheckSendsModelBackToSearch(t *testing.T) {
+	searchResult, _ := json.Marshal(webSearchResult{
+		Status: "ok", StopReason: "sufficient_evidence",
+		Sources: []string{"https://store.example/mac-mini"}, Content: "Mac mini M6 已发布",
+	})
+	tool := &recordingSearchTool{output: string(searchResult)}
+	client := &scriptedClient{responses: []string{
+		`{"action":"final","content":"苹果连 M5 都还没出，这是 P 的。"}`,
+		`{"action":"tool","tool":"web_search","input":{"query":"Mac mini M6"}}`,
+		`{"action":"final","content":"M6 版已经上架了（来源：https://store.example/mac-mini）。"}`,
+	}}
+	runner, err := NewRunner(client, Config{MaxSteps: 3, ProtocolRepairLimit: 3}, NewToolRegistry(tool))
+	if err != nil {
+		t.Fatal(err)
+	}
+	checks := 0
+	resp, err := runner.Run(context.Background(), Request{
+		Messages:      []llm.Message{{Role: llm.RoleUser, Content: "这台 Mac mini 贵不贵"}},
+		EvidenceCheck: func(context.Context) bool { checks++; return true },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tool.calls != 1 || checks != 1 {
+		t.Fatalf("calls=%d checks=%d", tool.calls, checks)
+	}
+	if strings.Contains(resp.Text, "P 的") {
+		t.Fatalf("凭印象的初稿被放行了: %q", resp.Text)
+	}
+}
+
+// 判为不需要就照常收尾；模型自己搜过时根本不去问。
+func TestRunnerEvidenceCheckSkippedWhenNotNeededOrAlreadySearched(t *testing.T) {
+	client := &scriptedClient{responses: []string{`{"action":"final","content":"哈哈哈"}`}}
+	runner, err := NewRunner(client, Config{MaxSteps: 3, ProtocolRepairLimit: 3}, NewToolRegistry(&recordingSearchTool{output: `{"status":"ok"}`}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := runner.Run(context.Background(), Request{
+		Messages:      []llm.Message{{Role: llm.RoleUser, Content: "哈哈"}},
+		EvidenceCheck: func(context.Context) bool { return false },
+	})
+	if err != nil || resp.Text != "哈哈哈" {
+		t.Fatalf("resp=%#v err=%v", resp, err)
+	}
+
+	searchResult, _ := json.Marshal(webSearchResult{Status: "ok", StopReason: "sufficient_evidence", Sources: []string{"https://a.example"}, Content: "x"})
+	client = &scriptedClient{responses: []string{
+		`{"action":"tool","tool":"web_search","input":{"query":"x"}}`,
+		`{"action":"final","content":"查到了（来源：https://a.example）"}`,
+	}}
+	runner, err = NewRunner(client, Config{MaxSteps: 3, ProtocolRepairLimit: 3}, NewToolRegistry(&recordingSearchTool{output: string(searchResult)}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	checks := 0
+	if _, err := runner.Run(context.Background(), Request{
+		Messages:      []llm.Message{{Role: llm.RoleUser, Content: "x 发布了吗"}},
+		EvidenceCheck: func(context.Context) bool { checks++; return true },
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if checks != 0 {
+		t.Fatalf("已经检索过仍去等判断: checks=%d", checks)
+	}
+}

@@ -4954,6 +4954,10 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 			messages = append(messages, carryover)
 		}
 		promptSession := r.groupPromptSession(event)
+		var evidenceCheck func(context.Context) bool
+		if !requireEvidenceFromContext(ctx) {
+			evidenceCheck = r.startEvidenceGate(ctx, event, registry)
+		}
 		resp, err := agentRunner.Run(agent.WithCallerIdentity(ctx, callerIdentityForEvent(cfg, event)), agent.Request{
 			Messages:        messages,
 			TraceID:         traceID,
@@ -4961,6 +4965,7 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 			LoadedTools:     promptSession.loadedTools(),
 			ToolsLoaded:     promptSession.rememberTools,
 			RequireEvidence: requireEvidenceFromContext(ctx),
+			EvidenceCheck:   evidenceCheck,
 		})
 		if err != nil {
 			return "", err

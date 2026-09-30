@@ -153,6 +153,10 @@ type Request struct {
 	// 给终稿时会被打回，要求它先查。调用方判断这一轮在问外部事实时置位。
 	// 没有 web_search 工具时该标记自动失效，不会把回复卡死。
 	RequireEvidence bool
+	// EvidenceCheck 是 RequireEvidence 的延迟版：调用方在起跑时并行发起判断，
+	// Runner 只在模型一次都没检索就要收尾时才调用它取结果，返回 true 就按
+	// RequireEvidence 打回去先搜。每轮最多调用一次；为 nil 时不做这项检查。
+	EvidenceCheck func(context.Context) bool
 }
 
 type Response struct {
