@@ -29,6 +29,8 @@ type promptContextPreload struct {
 	notebookContext  string
 	worldBookContext string
 	selfNoteContext  string
+	// selfFactContext 是按触发词带上的「关于自己的事实」，纯本地匹配，不需要并发。
+	selfFactContext string
 	// selfNoteUsage 是自述层进入全局预算之前的自有账。
 	selfNoteUsage contextLayerUsage
 	mediaIndex    string
@@ -44,7 +46,9 @@ func (r *Runtime) startPromptContextPreload(
 	policy RelationshipPolicy,
 	wantMediaIndex bool,
 ) *promptContextPreload {
-	preload := &promptContextPreload{}
+	preload := &promptContextPreload{
+		selfFactContext: capabilitySelfFactContext(memoryRetrievalText(event, queryText)),
+	}
 
 	preload.wg.Add(6)
 	go func() {

@@ -4300,6 +4300,15 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 				AtomicText: true,
 			})
 		}
+		// 关于自己的事实和世界书同级：都是回答这条消息要用的背景，按记忆优先级让位。
+		if selfFactContext := contextPreload.selfFactContext; selfFactContext != "" {
+			volatile = append(volatile, llm.Message{
+				Role:       llm.RoleUser,
+				Content:    selfFactContext,
+				Priority:   llm.MessagePriorityMemory,
+				AtomicText: true,
+			})
+		}
 		// 自述和世界书同级：世界书是「我活在什么世界里」，自述是「我注意到的我自己」。
 		// 两者都是理解这条消息所需的背景，都在尾部按记忆优先级让位，都不得覆盖人设。
 		if selfNoteContext := contextPreload.selfNoteContext; selfNoteContext != "" {
