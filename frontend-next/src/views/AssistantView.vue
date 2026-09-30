@@ -740,21 +740,6 @@
                     />
                   </label>
                 </div>
-                <!-- 图片交付方式：对话模型看原图，还是只看视觉理解写的描述。 -->
-                <div v-if="role.key === 'vision'" class="model-role-params">
-                  <label class="field">
-                    <span>图片交付方式</span>
-                    <AppSelect
-                      :model-value="form.image_input_mode ?? 'auto'"
-                      :options="imageInputModeOptions"
-                      @update:model-value="(value) => { if (form) form.image_input_mode = value as ImageInputMode; }"
-                    />
-                  </label>
-                </div>
-                <p v-if="role.key === 'vision'" class="model-role-desc muted">
-                  图片交付方式：描述本来就会写，所以「自动」平时只把描述给对话模型；要看小字、数量这类细节时它才去看原图——
-                  对话模型能看图就自己看，看不了就带着问题让视觉理解代看。「仅摘要」对话模型从不收原图。「总是附原图」原图和描述一起给，多花一份 token。
-                </p>
                 <p class="model-role-desc muted">{{ role.description }}</p>
               </div>
               <p class="muted model-role-note">
@@ -2232,7 +2217,6 @@ import {
   type BotChannelStatus,
   type BotPlatform,
   type AliasTriggerMode,
-  type ImageInputMode,
   type RefusalStrategy,
   listWorldBook,
   saveWorldBookNode,
@@ -2891,13 +2875,6 @@ const triggerModeOptions: AppSelectOption[] = [
 
 // 拒答话术。默认「智能」：什么时候能绕开、什么时候原因本身不能说，是看语境的
 // 判断，固定档位在群里连着触发几次会很假。
-// 图片交付方式，照搬 Hermes Agent 的 image_input_mode 三档。
-const imageInputModeOptions: AppSelectOption[] = [
-  { value: "auto", label: "自动（推荐）", hint: "平时只给描述，要看细节时才看原图" },
-  { value: "text", label: "仅摘要", hint: "对话模型从不收原图，细节由视觉理解代看" },
-  { value: "native", label: "总是附原图", hint: "原图和描述一起给，多花一份 token" }
-];
-
 const refusalStrategyOptions: AppSelectOption[] = [
   { value: "smart", label: "智能（推荐）", hint: "先试着改写，改不动再按原因性质决定说不说" },
   { value: "rewrite", label: "尽量改写", hint: "优先绕开，实在不行才模糊拒答" },
@@ -3446,10 +3423,8 @@ const modelRoleRows: ModelRoleRow[] = [
   {
     key: "vision",
     label: "视觉理解",
-    description:
-      "替对话模型看图的辅助模型：写图片描述、视频帧描述、表情包简介，图片识别插件的看图与模型 OCR，以及对话模型带着问题回来问图时作答。" +
-      "带图的消息本身由对话模型回答，不会整轮换到这里。对话模型能识图时保持跟随对话即可；对话模型是纯文本模型，" +
-      "或者想让写描述的模型更强或更便宜时，再单独指一个视觉模型并配上后备。"
+    sublabel: "可选",
+    description: "替对话模型看图、写图片描述。对话模型能看图时跟随对话即可；对话模型不能看图，或想单独指定写描述的模型时再配。"
   },
   {
     key: "intent",
@@ -4309,7 +4284,6 @@ function setForm(config: BotProfileConfig): void {
     response_mode: "custom",
     auto_image_description: config.auto_image_description ?? true,
     auto_video_preprocess: config.auto_video_preprocess ?? true,
-    image_input_mode: config.image_input_mode ?? "auto",
     llm_streaming_enabled: config.llm_streaming_enabled ?? true,
     llm_identity_masking_enabled: config.llm_identity_masking_enabled ?? true,
     llm_identity_body_account_mapping_enabled: config.llm_identity_body_account_mapping_enabled ?? true,
