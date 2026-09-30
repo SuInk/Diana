@@ -515,8 +515,14 @@ const (
 		"如果查完确实没有可用结果，就在正文里如实说明没查到，不要凭印象断言。"
 )
 
+// onBehalfSearchPrompt 是替模型检索之后交回去的说明。第一个 %s 是检索词，第二个是
+// 工具结果（和模型自己调用时看到的一样）。
+const onBehalfSearchPrompt = "这一轮的问题需要外部事实支撑，你没有检索就想收尾，系统已经替你用「%s」查了一次。" +
+	"你记得的价格、日期、版本和安排可能已经过时，以下面的结果为准：结果里有的照结果说；结果里没有的就如实说没查到、暂时无法确认，不要拿印象补上，也不要说自己查过官方。" +
+	"结果不够时可以继续调用 web_search 或 browser_render 再查，然后用 agent_finalize 收尾。\n\n%s"
+
 // finalReviewRepairReason 是终稿复核打回时记进调用链的原因，具体说法由 FinalReview 给出。
-const finalReviewRepairReason = "终稿复核：否定结论缺少直接证据"
+const finalReviewRepairReason = "终稿复核：结论缺少检索依据"
 
 // evidenceSteps 取出本轮真正执行过的检索与读网页记录，交给终稿复核对照。
 func evidenceSteps(steps []Step) []Step {

@@ -25,7 +25,13 @@ const (
 
 	// BrowserAcceptLanguage 是两条路共用的语言偏好。浏览器那条不设的话会跟着
 	// 宿主机 locale 走，容器里通常是 C/POSIX，取回来的就是英文页面。
-	BrowserAcceptLanguage = "zh-CN,zh;q=0.9,en;q=0.8"
+	//
+	// 这是给 Chrome --accept-lang 的列表，只能写语言代码，不能带 q 值：Chrome 会
+	// 原样塞进 navigator.languages，页面拿 "zh;q=0.9" 去构造 Intl.Locale 当场抛错。
+	// Steam 社区这类前端因此整页只剩一句「Invalid language tag」，搜索和读网页都
+	// 拿不到正文。q 值由 Chrome 自己补，发出去的请求头就是 HTTP 抓取那条路写死的
+	// "zh-CN,zh;q=0.9,en;q=0.8"。
+	BrowserAcceptLanguage = "zh-CN,zh,en"
 )
 
 // BrowserUserAgent 是本机对外声明的浏览器身份。

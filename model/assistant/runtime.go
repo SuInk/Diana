@@ -4954,7 +4954,7 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 			messages = append(messages, carryover)
 		}
 		promptSession := r.groupPromptSession(event)
-		var evidenceCheck func(context.Context) bool
+		var evidenceCheck func(context.Context) agent.EvidenceDecision
 		if !requireEvidenceFromContext(ctx) {
 			evidenceCheck = r.startEvidenceGate(ctx, event, registry)
 		}

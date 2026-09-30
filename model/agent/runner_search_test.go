@@ -607,7 +607,7 @@ func TestRunnerEvidenceCheckSendsModelBackToSearch(t *testing.T) {
 	checks := 0
 	resp, err := runner.Run(context.Background(), Request{
 		Messages:      []llm.Message{{Role: llm.RoleUser, Content: "这台 Mac mini 贵不贵"}},
-		EvidenceCheck: func(context.Context) bool { checks++; return true },
+		EvidenceCheck: func(context.Context) EvidenceDecision { checks++; return EvidenceDecision{Needed: true} },
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -620,6 +620,83 @@ func TestRunnerEvidenceCheckSendsModelBackToSearch(t *testing.T) {
 	}
 }
 
+// 判断方给了检索词时，模型不搜就替它搜一次，不再指望它听打回话术。
+// 生产的 gemini 被打回后去调 capabilities 找 web_search，四次里一次都没搜。
+func TestRunnerEvidenceCheckSearchesOnBehalfOfModel(t *testing.T) {
+	searchResult, _ := json.Marshal(webSearchResult{
+		Status: "ok", StopReason: "sufficient_evidence",
+		Sources: []string{"https://store.example/sale"}, Content: "Autumn Sale runs October 1 to October 8",
+	})
+	tool := &recordingSearchTool{output: string(searchResult)}
+	client := &scriptedClient{responses: []string{
+		`{"action":"final","content":"秋促要等到 11 月下旬。"}`,
+		`{"action":"final","content":"秋促是 10 月 1 日到 8 日（来源：https://store.example/sale）。"}`,
+	}}
+	runner, err := NewRunner(client, Config{MaxSteps: 3, ProtocolRepairLimit: 3}, NewToolRegistry(tool))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var events []RunEvent
+	resp, err := runner.Run(context.Background(), Request{
+		Messages: []llm.Message{{Role: llm.RoleUser, Content: "秋促开始了吗"}},
+		EvidenceCheck: func(context.Context) EvidenceDecision {
+			return EvidenceDecision{Needed: true, Query: "Steam 秋季特卖 2026 日期"}
+		},
+		Observer: func(_ context.Context, event RunEvent) { events = append(events, event) },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tool.calls != 1 || tool.input["query"] != "Steam 秋季特卖 2026 日期" {
+		t.Fatalf("没有替模型检索: calls=%d input=%v", tool.calls, tool.input)
+	}
+	if !strings.Contains(resp.Text, "10 月 1 日") || len(client.requests) != 2 {
+		t.Fatalf("resp=%q requests=%d", resp.Text, len(client.requests))
+	}
+	// 检索结果要交回模型，还要说明以结果为准。
+	last := client.requests[1].Messages
+	if got := last[len(last)-1].Content; !strings.Contains(got, "October 1 to October 8") || !strings.Contains(got, "不要拿印象补上") {
+		t.Fatalf("交回模型的内容不对: %q", got)
+	}
+	if len(resp.Steps) != 1 || resp.Steps[0].Tool != WebSearchToolName {
+		t.Fatalf("运行记录里没有这次检索: %+v", resp.Steps)
+	}
+	var started, completed bool
+	for _, event := range events {
+		started = started || (event.Phase == RunPhaseToolStarted && event.Tool == WebSearchToolName)
+		completed = completed || (event.Phase == RunPhaseToolCompleted && event.Tool == WebSearchToolName && event.Metadata["on_behalf_of_model"] == true)
+		if event.Phase == RunPhaseProtocolRepair {
+			t.Fatalf("替模型检索不该算一次协议修复: %+v", event)
+		}
+	}
+	if !started || !completed {
+		t.Fatalf("调用链没记下这次检索: %+v", events)
+	}
+}
+
+// 没有检索词时照旧打回去让模型自己搜。
+func TestRunnerEvidenceCheckWithoutQueryFallsBackToRepair(t *testing.T) {
+	tool := &recordingSearchTool{output: `{"status":"ok","content":"x","sources":["https://a.example"]}`}
+	client := &scriptedClient{responses: []string{
+		`{"action":"final","content":"我就是知道。"}`,
+		`{"action":"tool","tool":"web_search","input":{"query":"模型自己的检索词"}}`,
+		`{"action":"final","content":"查完了。"}`,
+	}}
+	runner, err := NewRunner(client, Config{MaxSteps: 3, ProtocolRepairLimit: 3}, NewToolRegistry(tool))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runner.Run(context.Background(), Request{
+		Messages:      []llm.Message{{Role: llm.RoleUser, Content: "发布了吗"}},
+		EvidenceCheck: func(context.Context) EvidenceDecision { return EvidenceDecision{Needed: true} },
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if tool.calls != 1 || tool.input["query"] != "模型自己的检索词" {
+		t.Fatalf("calls=%d input=%v", tool.calls, tool.input)
+	}
+}
+
 // 判为不需要就照常收尾；模型自己搜过时根本不去问。
 func TestRunnerEvidenceCheckSkippedWhenNotNeededOrAlreadySearched(t *testing.T) {
 	client := &scriptedClient{responses: []string{`{"action":"final","content":"哈哈哈"}`}}
@@ -629,7 +706,7 @@ func TestRunnerEvidenceCheckSkippedWhenNotNeededOrAlreadySearched(t *testing.T) 
 	}
 	resp, err := runner.Run(context.Background(), Request{
 		Messages:      []llm.Message{{Role: llm.RoleUser, Content: "哈哈"}},
-		EvidenceCheck: func(context.Context) bool { return false },
+		EvidenceCheck: func(context.Context) EvidenceDecision { return EvidenceDecision{} },
 	})
 	if err != nil || resp.Text != "哈哈哈" {
 		t.Fatalf("resp=%#v err=%v", resp, err)
@@ -647,7 +724,7 @@ func TestRunnerEvidenceCheckSkippedWhenNotNeededOrAlreadySearched(t *testing.T) 
 	checks := 0
 	if _, err := runner.Run(context.Background(), Request{
 		Messages:      []llm.Message{{Role: llm.RoleUser, Content: "x 发布了吗"}},
-		EvidenceCheck: func(context.Context) bool { checks++; return true },
+		EvidenceCheck: func(context.Context) EvidenceDecision { checks++; return EvidenceDecision{Needed: true} },
 	}); err != nil {
 		t.Fatal(err)
 	}

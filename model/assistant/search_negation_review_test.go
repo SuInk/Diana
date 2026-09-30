@@ -4,6 +4,7 @@
 package assistant
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -11,16 +12,55 @@ import (
 )
 
 func TestParseSearchNegationReview(t *testing.T) {
-	if claim, ok := parseSearchNegationReview("```json\n{\"unsupported_negation\":true,\"claim\":\"6.1 没发布\"}\n```"); !ok || claim != "6.1 没发布" {
+	if claim, ok := parseSearchNegationReview("```json\n{\"unsupported\":true,\"claim\":\"秋促 11 月下旬才开\"}\n```"); !ok || claim != "秋促 11 月下旬才开" {
 		t.Fatalf("claim=%q ok=%v", claim, ok)
 	}
-	for _, raw := range []string{`{"unsupported_negation":false,"claim":"x"}`, `看不懂`, `{"unsupported_negation":"yes"}`} {
+	// 自定义过输出格式的配置还在用只复核否定句时的字段名。
+	if claim, ok := parseSearchNegationReview(`{"unsupported_negation":true,"claim":"6.1 没发布"}`); !ok || claim != "6.1 没发布" {
+		t.Fatalf("旧字段名没认: claim=%q ok=%v", claim, ok)
+	}
+	for _, raw := range []string{`{"unsupported":false,"claim":"x"}`, `看不懂`, `{"unsupported":"yes"}`} {
 		if _, ok := parseSearchNegationReview(raw); ok {
 			t.Errorf("%q 不该被当成打回", raw)
 		}
 	}
-	if claim, ok := parseSearchNegationReview(`{"unsupported_negation":true}`); !ok || claim == "" {
+	if claim, ok := parseSearchNegationReview(`{"unsupported":true}`); !ok || claim == "" {
 		t.Fatalf("缺 claim 时要有兜底说法: %q", claim)
+	}
+}
+
+// web_search 的输出开头一千多字是查询计划，按字数截断会把结果全截掉。
+func TestSearchNegationEvidenceTakesResultsNotMetadata(t *testing.T) {
+	search, _ := json.Marshal(map[string]any{
+		"source_notice": strings.Repeat("说明", 800),
+		"queries":       []map[string]any{{"query": "steam autumn sale"}},
+		"status":        "ok",
+		"sources":       []string{"https://store.example/news"},
+		"content":       "Autumn Sale runs from October 1 to October 8",
+	})
+	page, _ := json.Marshal(map[string]any{
+		"retrieved_at":     "2026-09-30T16:30:08Z",
+		"url":              "https://store.example/news",
+		"title":            "Sale schedule",
+		"text":             "Next Fest: October 12",
+		"navigation_chain": []string{strings.Repeat("x", 3000)},
+	})
+	evidence := searchNegationEvidenceFromSteps([]agent.Step{
+		{Tool: agent.WebSearchToolName, Output: string(search)},
+		{Tool: "browser_render", Output: string(page)},
+	})
+	if len(evidence) != 2 {
+		t.Fatalf("evidence=%+v", evidence)
+	}
+	if got := evidence[0].Output; !strings.Contains(got, "October 1 to October 8") || !strings.Contains(got, "https://store.example/news") || strings.Contains(got, "说明") {
+		t.Fatalf("检索结果没摘对: %q", got)
+	}
+	if got := evidence[1].Output; !strings.Contains(got, "Next Fest: October 12") || !strings.Contains(got, "Sale schedule") || strings.Contains(got, "xxx") {
+		t.Fatalf("网页正文没摘对: %q", got)
+	}
+	// 解析不了的输出原样给，别让复核什么都看不到。
+	if got := searchNegationEvidenceFromSteps([]agent.Step{{Tool: "browser_render", Output: "plain text"}}); got[0].Output != "plain text" {
+		t.Fatalf("非 JSON 输出被吞了: %q", got[0].Output)
 	}
 }
 

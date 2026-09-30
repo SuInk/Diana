@@ -211,12 +211,39 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 	}
 	// evidenceChecked 保证 EvidenceCheck 每轮只问一次：判过不需要，后面再收尾也不再等。
 	evidenceChecked := false
+	// evidenceQuery 是判断方给的检索词，替模型查过一次就清空。
+	evidenceQuery := ""
 	checkEvidenceBeforeFinal := func() {
 		if evidenceChecked || !searchAvailable || req.EvidenceCheck == nil || claimLedger.required || claimLedger.searched {
 			return
 		}
 		evidenceChecked = true
-		claimLedger.required = req.EvidenceCheck(ctx)
+		decision := req.EvidenceCheck(ctx)
+		claimLedger.required = decision.Needed
+		if decision.Needed {
+			evidenceQuery = strings.TrimSpace(decision.Query)
+		}
+	}
+	// searchInsteadOfModel 在模型该查不查时替它查一次，结果当作补充资料交回去。
+	//
+	// 打回去让它自己查，对生产的 gemini-3.8-flash-low 不管用：antigravity 网关不认
+	// tool_choice，被打回后它去调 capabilities 找 web_search 在哪，实测四次里一次
+	// 都没搜；只声明 web_search 一个工具，它又会生成调用别的工具的非法调用，整轮报错。
+	// 检索词由证据判断顺手给出，不用再多问模型一轮。
+	searchInsteadOfModel := func() bool {
+		if evidenceQuery == "" || webSearchCalls >= maxWebSearchCallsPerAgentRun || toolCalls >= r.cfg.MaxSteps {
+			return false
+		}
+		query := evidenceQuery
+		evidenceQuery = ""
+		webSearchCalls++
+		toolCalls++
+		record, observation, duration := r.searchOnBehalf(ctx, req.Observer, traceID, modelTurns, toolCalls, query, claimLedger)
+		toolsDuration += duration
+		steps = append(steps, record)
+		messages = appendAssistantEcho(messages, lastText)
+		messages = append(messages, llm.Message{Role: llm.RoleUser, Content: observation})
+		return true
 	}
 	// finalReviewed 保证 FinalReview 每轮只复核一次：打回去改过的第二稿直接放行，
 	// 复核判错也最多多花一轮，不会把回复卡在修复循环里。
@@ -310,6 +337,8 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 			// 话术退回对某些模型无效：实测 gemini-3.8-flash-low 被连退三次仍然
 			// 一个工具都不调，只是把正文改得更含糊。这一步直接用供应商的
 			// tool_choice 把选择权收走，让它只能发出一次检索。
+			// 不是所有网关都认 tool_choice（生产的 antigravity 就不认），所以证据
+			// 判断给了检索词时根本不走到这里，由 searchInsteadOfModel 替模型查。
 			planningRequest.ToolChoice = webSearchToolName
 			forceSearchNextTurn = false
 		}
@@ -424,6 +453,9 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 				continue
 			}
 			checkEvidenceBeforeFinal()
+			if claimLedger.missingRequiredSearch() && searchInsteadOfModel() {
+				continue
+			}
 			if claimLedger.missingRequiredSearch() {
 				protocolRepairs++
 				emitProtocolRepair(ctx, req.Observer, traceID, modelTurns, toolCalls, r.cfg.MaxSteps, evidenceRequiredRepairReason)
@@ -505,6 +537,9 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 			// 由代码回头猜正文。
 			claimLedger.applyUpdates(action.Claims)
 			checkEvidenceBeforeFinal()
+			if claimLedger.missingRequiredSearch() && searchInsteadOfModel() {
+				continue
+			}
 			if claimLedger.missingRequiredSearch() {
 				protocolRepairs++
 				emitProtocolRepair(ctx, req.Observer, traceID, modelTurns, toolCalls, r.cfg.MaxSteps, evidenceRequiredRepairReason)
@@ -1106,6 +1141,55 @@ func cloneToolInput(input map[string]any) map[string]any {
 		cloned[key] = value
 	}
 	return cloned
+}
+
+// searchOnBehalf 替模型执行一次 web_search。它走和模型自己调用时一样的记录：
+// 调用链事件、证据账本、凭据遮盖、输出截断；返回运行记录、交回模型的说明和耗时。
+func (r *Runner) searchOnBehalf(ctx context.Context, observer RunObserver, traceID string, modelTurn, toolCall int, query string, ledger *claimEvidenceLedger) (Step, string, time.Duration) {
+	input := map[string]any{"query": query}
+	metadata := mergeRunMetadata(webSearchRunMetadataFromInput(webSearchToolName, input), ledger.prepareSearch(input))
+	emitRunEvent(ctx, observer, RunEvent{
+		TraceID: traceID, Phase: RunPhaseToolStarted, ModelTurn: modelTurn, ToolCall: toolCall, MaxToolCalls: r.cfg.MaxSteps,
+		Tool: webSearchToolName, InputKeys: sortedInputKeys(input), ToolInput: cloneToolInput(input), Metadata: metadata,
+	})
+	record := Step{Tool: webSearchToolName, Input: input}
+	output, err := "", error(nil)
+	tool, ok := r.registry.Get(webSearchToolName)
+	startedAt := time.Now()
+	outputLimit := DefaultMaxToolOutputChars
+	if ok {
+		outputLimit = r.toolOutputLimit(tool)
+		toolCtx, cancel := contextWithToolBudget(WithToolOutputBudget(ctx, outputLimit), time.Duration(r.cfg.ToolTimeoutMS)*time.Millisecond, time.Duration(r.cfg.FinalizationReserveMS)*time.Millisecond)
+		output, err = tool.Run(toolCtx, input)
+		if err != nil {
+			err = errors.New(normalizeToolError(err, toolCtx, ctx, r.cfg.ToolTimeoutMS))
+		}
+		cancel()
+	} else {
+		err = errors.New("tool not found")
+	}
+	duration := time.Since(startedAt)
+	record.DurationMS = duration.Milliseconds()
+	output = secretmask.Output(output)
+	rawOutput := output
+	if err != nil {
+		record.Error = secretmask.Text(err.Error())
+		output = toolExecutionErrorForModel(webSearchToolName, record.Error)
+		rawOutput = ""
+	} else {
+		record.Output = truncateToolOutput(output, outputLimit)
+		output = record.Output
+	}
+	metadata = mergeRunMetadata(metadata, webSearchRunMetadataFromOutput(webSearchToolName, output, err))
+	metadata = mergeRunMetadata(metadata, ledger.observeSearch(rawOutput, err))
+	metadata = mergeRunMetadata(metadata, map[string]any{"on_behalf_of_model": true})
+	ledger.noteCitableText(rawOutput)
+	emitRunEvent(ctx, observer, RunEvent{
+		TraceID: traceID, Phase: RunPhaseToolCompleted, ModelTurn: modelTurn, ToolCall: toolCall, MaxToolCalls: r.cfg.MaxSteps,
+		Tool: webSearchToolName, InputKeys: sortedInputKeys(input), ToolInput: cloneToolInput(input), ToolOutput: record.Output,
+		Metadata: metadata, OutputChars: len([]rune(record.Output)), DurationMS: record.DurationMS, Error: record.Error,
+	})
+	return record, fmt.Sprintf(onBehalfSearchPrompt, query, toolObservationMessage(webSearchToolName, output, err == nil, r.cfg.MaxSteps-toolCall)), duration
 }
 
 func toolObservationMessage(tool, output string, success bool, remaining int) string {

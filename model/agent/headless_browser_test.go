@@ -467,6 +467,10 @@ func TestSandboxedArgsCarryBrowserIdentity(t *testing.T) {
 			t.Fatalf("底座缺少 %q：%v", want, base)
 		}
 	}
+	// --accept-lang 带 q 值会原样进 navigator.languages，页面的 Intl.Locale 当场抛错。
+	if strings.Contains(BrowserAcceptLanguage, ";") {
+		t.Fatalf("--accept-lang 只能写语言代码，不能带 q 值：%s", BrowserAcceptLanguage)
+	}
 	// 身份属于底座，不是某一条路自己加的：截图那条路也要一样。
 	if !strings.Contains(BrowserUserAgent, "Chrome/") || strings.Contains(BrowserUserAgent, "Headless") {
 		t.Fatalf("对外 UA 不是一台正常的桌面浏览器：%s", BrowserUserAgent)
