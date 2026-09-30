@@ -157,7 +157,7 @@ let plugins: PluginState[] = [
         { key: "max_file_mb", label: "最大文件", type: "number", default: 20, min: 1, max: 100, step: 1, unit: "MB" },
         { key: "timeout_seconds", label: "请求超时", type: "number", default: 45, min: 5, max: 180, step: 5, unit: "秒" },
         { key: "send_song_info", label: "同时发送歌曲信息", type: "bool", default: true, description: "在语音前补一条「歌名 - 歌手」，否则群里只看到一条不知道是什么的语音。" },
-        { key: "silk_encoder_path", label: "Silk 编码器路径", type: "string", default: "", description: "填了就把音频转成 Tencent Silk 再发，只适合自己不做转码的 OneBot 客户端；SnowLuma、NapCat 请留空。" }
+        { key: "silk_encoder_path", label: "Silk 编码器路径", type: "string", default: "", description: "填了就把音频转成 Tencent Silk 再发，只适合自己不做转码的 OneBot 客户端；SnowLuma 请留空。" }
       ]
     },
     installed: true, enabled: true
@@ -596,7 +596,7 @@ let tasks: AssistantTask[] = [
 // 与后端 SupportedPlatforms 注册表保持一致：配置向导和机器人页的平台下拉都
 // 按它渲染，少一个平台，演示站就看不到那一套接入表单。
 const platforms: BotPlatform[] = [
-  { id: "onebot-v11", name: "QQ · OneBot v11", protocol: "onebot-v11", category: "qq", category_label: "QQ", description: "通过 Snowluma、NapCat 或 Lagrange 接入 OneBot v11。", inbound: "reverse_ws" },
+  { id: "onebot-v11", name: "QQ · OneBot v11", protocol: "onebot-v11", category: "qq", category_label: "QQ", description: "推荐通过 SnowLuma 接入 OneBot v11。", inbound: "reverse_ws" },
   { id: "telegram", name: "Telegram Bot", protocol: "telegram-bot-api", category: "telegram", category_label: "Telegram", description: "通过 Telegram Bot API 长轮询接入。", inbound: "outbound", rich_text: true },
   { id: "qq-official", name: "QQ 官方机器人", protocol: "qq-official-gateway-ws", category: "qq_official", category_label: "QQ 官方机器人", description: "QQ 开放平台 WebSocket 网关，出站长连接，不需要公网地址", inbound: "outbound" },
   { id: "dingtalk", name: "钉钉", protocol: "dingtalk-stream-ws", category: "dingtalk", category_label: "钉钉", description: "Stream 模式出站长连接，不需要公网地址", inbound: "outbound", rich_text: true },

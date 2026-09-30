@@ -283,7 +283,7 @@ func (p *MusicPlugin) Manifest() PluginManifest {
 				Label:       "Silk 编码器路径",
 				Type:        PluginSettingTypeString,
 				Default:     "",
-				Description: "填了就把音频转成 Tencent Silk 再发，只适合自己不做转码的 OneBot 客户端。SnowLuma、NapCat 会自己转码，请留空：SnowLuma 量不出现成 Silk 的时长，QQ 里会显示成 1 秒。",
+				Description: "填了就把音频转成 Tencent Silk 再发，只适合自己不做转码的 OneBot 客户端。SnowLuma 会自己转码，请留空：SnowLuma 量不出现成 Silk 的时长，QQ 里会显示成 1 秒。",
 			},
 		},
 	}

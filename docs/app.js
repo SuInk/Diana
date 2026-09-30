@@ -9,7 +9,7 @@ const content = {
   zh: {
     docsLabel: "文档",
     searchLabel: "搜索全部文档",
-    searchPlaceholder: "部署、模型、NapCat…",
+    searchPlaceholder: "部署、模型、SnowLuma…",
     found: (n) => `找到 ${n} 个相关章节`,
     skip: "跳到正文",
     menu: "打开目录",
@@ -42,7 +42,7 @@ const content = {
           ["one-click", "一键安装", "部署 更新 SHA-256 校验 备份 健康检查"],
           ["installer-options", "安装参数", "环境变量 版本 端口 管理员"],
           ["manual-release", "手工 Release", "下载 完整包 离线"],
-          ["docker", "Docker", "容器 compose NapCat"],
+          ["docker", "Docker", "容器 compose SnowLuma"],
           ["source", "源码部署", "Go Node npm 构建"],
           ["first-run", "首次登录", "管理员 验证码 模型 通道"],
         ],
@@ -51,7 +51,7 @@ const content = {
         title: "配置",
         file: "configuration",
         sections: [
-          ["channels", "平台接入", "OneBot NapCat Telegram QQ 钉钉 飞书 企业微信 回调 多通道 隔离"],
+          ["channels", "平台接入", "OneBot SnowLuma Telegram QQ 钉钉 飞书 企业微信 回调 多通道 隔离"],
           ["models", "模型与视觉", "LLM Provider 生图 OCR token 超时"],
           ["groups", "群聊策略", "群管理 回复时间 屏蔽 QQ 触发词"],
           ["agent", "Agent 与工具", "联网搜索 MCP Skills 提醒 订阅"],
@@ -98,7 +98,7 @@ const content = {
   en: {
     docsLabel: "Docs",
     searchLabel: "Search the docs",
-    searchPlaceholder: "deploy, models, NapCat…",
+    searchPlaceholder: "deploy, models, SnowLuma…",
     found: (n) => `${n} matching section${n === 1 ? "" : "s"}`,
     skip: "Skip to content",
     menu: "Open the table of contents",
@@ -131,7 +131,7 @@ const content = {
           ["one-click", "One-line install", "deploy update SHA-256 checksum backup health check"],
           ["installer-options", "Installer options", "environment variables version port admin"],
           ["manual-release", "Manual release", "download archive offline"],
-          ["docker", "Docker", "container compose NapCat image"],
+          ["docker", "Docker", "container compose SnowLuma image"],
           ["source", "From source", "Go Node npm build"],
           ["first-run", "First login", "admin code models channels"],
         ],
@@ -140,7 +140,7 @@ const content = {
         title: "Configure",
         file: "configuration",
         sections: [
-          ["channels", "Platforms", "OneBot NapCat Telegram QQ DingTalk Feishu WeCom callback isolation"],
+          ["channels", "Platforms", "OneBot SnowLuma Telegram QQ DingTalk Feishu WeCom callback isolation"],
           ["models", "Models and vision", "LLM provider image OCR token timeout"],
           ["groups", "Group policy", "group admin reply window mute triggers"],
           ["agent", "Agent and tools", "web search MCP skills reminders feeds"],

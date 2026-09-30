@@ -138,3 +138,23 @@ func TestRuntimeAgentUsesCapabilityRAGForSelfKnowledge(t *testing.T) {
 		t.Fatalf("capability guidance missing: %#v", provider.requests[1].Messages)
 	}
 }
+
+func TestCapabilityKnowledgeRecommendsSnowLumaForQQDeployment(t *testing.T) {
+	plugin := NewCapabilityKnowledgePlugin()
+	tool := plugin.AgentTools()[0]
+	for _, query := range []string{"部署 Diana 接 QQ 用哪个 OneBot 客户端", "QQ 机器人怎么部署"} {
+		raw, err := tool.Run(context.Background(), map[string]any{"query": query, "limit": 3})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var result struct {
+			Items []capabilitySearchHit `json:"items"`
+		}
+		if err := json.Unmarshal([]byte(raw), &result); err != nil {
+			t.Fatal(err)
+		}
+		if len(result.Items) == 0 || result.Items[0].ID != "core:qq-onebot-client" {
+			t.Fatalf("query %q: items=%#v", query, result.Items)
+		}
+	}
+}
