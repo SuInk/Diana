@@ -4112,7 +4112,8 @@ func TestRuntimeImageEditCommandUsesRecentImageAndSendsImage(t *testing.T) {
 		Model:      "gpt-test",
 		ImageModel: "gpt-image-2",
 	})}
-	runtime := NewRuntime(BotConfig{BotAccount: "42", OwnerID: "owner"}, channel, NewPluginManager(), store, nil, nil, nil)
+	// 这里测的是改图链路；gpt-test 查不到能否收图，自动档会先识图，把预设的回复序列打乱。
+	runtime := NewRuntime(BotConfig{BotAccount: "42", OwnerID: "owner", ImageInputMode: ImageInputModeNative}, channel, NewPluginManager(), store, nil, nil, nil)
 	memory := newMemoryUserMemoryStore()
 	memory.profiles["10001"] = UserMemoryProfile{UserID: "10001", Favorability: 20, MessageCount: 10}
 	runtime.SetUserMemoryStore(memory)

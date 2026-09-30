@@ -70,22 +70,30 @@ func TestAutomaticVideoDisabledPreservesMediaIndex(t *testing.T) {
 	}
 }
 
-func TestMediaParserOverridesVisionFollowChat(t *testing.T) {
+// 旧的「媒体解析」并进「视觉理解」：单独绑过的媒体解析顶替跟随对话的视觉理解，
+// 看图的用途都走它；正式回复不受影响。
+func TestMediaParserMergesIntoVision(t *testing.T) {
 	roles := normalizeModelRoles(map[string]ModelRole{"chat": bindingRole("expensive"), "vision": {FollowChat: true}, PurposeMediaParse: bindingRole("cheap-vision")})
-	for _, purpose := range []string{"image_description_cache", "sticker_description", "image_describe", "image_ocr"} {
+	if _, ok := roles[PurposeMediaParse]; ok {
+		t.Fatal("media_parse should be merged away")
+	}
+	for _, purpose := range []string{"image_description_cache", "sticker_description", "image_describe", "image_ocr", imageQuestionPurpose} {
 		role, ok := modelRoleFor(roles, purpose, llm.GroupVision)
 		if !ok || role.Model != "cheap-vision" {
 			t.Fatalf("%s routed to %#v", purpose, role)
 		}
 	}
-	role, _ := modelRoleFor(roles, PurposeReply, llm.GroupVision)
-	if role.Model != "expensive" {
+	if role, _ := modelRoleFor(roles, PurposeReply, llm.GroupChat); role.Model != "expensive" {
 		t.Fatal("normal replies changed model")
 	}
-	delete(roles, PurposeMediaParse)
-	role, _ = modelRoleFor(roles, "image_description_cache", llm.GroupVision)
-	if role.Model != "expensive" {
-		t.Fatal("unconfigured parser lost legacy fallback")
+	// 媒体解析只是跟随对话、视觉理解单独绑了的，留视觉理解。
+	roles = normalizeModelRoles(map[string]ModelRole{"chat": bindingRole("expensive"), "vision": bindingRole("strong-vision"), PurposeMediaParse: {FollowChat: true}})
+	if role, _ := modelRoleFor(roles, "image_description_cache", llm.GroupVision); role.Model != "strong-vision" {
+		t.Fatalf("a follow-chat media parser must not override a bound vision role: %#v", role)
+	}
+	delete(roles, "vision")
+	if role, _ := modelRoleFor(roles, "image_description_cache", llm.GroupVision); role.Model != "expensive" {
+		t.Fatal("unconfigured vision lost the chat fallback")
 	}
 }
 

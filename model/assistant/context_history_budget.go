@@ -317,11 +317,8 @@ func (r *Runtime) promptContextWindowTokens(event MessageEvent, cfg BotConfig) i
 		// 返回常量，于是机器人或群配的 max_context_tokens 在这条路径上完全不生效。
 		return clampContextWindowToConfig(llm.DefaultContextWindowTokens, cfg)
 	}
+	// 带图的轮次也由对话模型回答，窗口按对话模型算。
 	group := llm.GroupChat
-	// 仅摘要模式下带图的轮次也由对话模型回答，窗口按对话模型算。
-	if (hasImageSegment(event.Segments) || (event.Quoted != nil && hasImageSegment(event.Quoted.Segments))) && !r.imageInputTextOnly(withModelConfigEvent(context.Background(), event), cfg) {
-		group = llm.GroupVision
-	}
 	set := store.Profiles().WithDefaults()
 	// 与真正发请求时的挑选顺序保持一致：角色绑定 → 分组 → 当前激活配置。
 	// 只看角色绑定的话，没配模型角色的部署会一路回落到兜底常量，等于从来没看过

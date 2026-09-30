@@ -4996,8 +4996,10 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 	if mode := imageTextModeFromContext(ctx); mode != nil {
 		messages = mode.replaceImageParts(ctx, messages)
 	}
+	// 图直接交给对话模型（它不收图时这一轮已经换成了描述，见 image_input_mode.go）；
+	// 只有语音还要走多模态那条路由。
 	group := llm.GroupChat
-	if messagesContainImages(messages) || messagesContainAudio(messages) {
+	if messagesContainAudio(messages) {
 		group = llm.GroupVision
 	}
 	ctx = withDefaultLLMUsagePurpose(ctx, PurposeReply)
@@ -5030,8 +5032,9 @@ func (p *runtimeAgentLLMProvider) Generate(ctx context.Context, req llm.Generate
 	if mode := firstImageTextMode(ctx, p.ctx); mode != nil {
 		req.Messages = mode.replaceImageParts(ctx, req.Messages)
 	}
+	// 工具中途带回的图也照样交给对话模型；只有语音还要走多模态那条路由。
 	group := llm.GroupChat
-	if messagesContainImages(req.Messages) || messagesContainAudio(req.Messages) {
+	if messagesContainAudio(req.Messages) {
 		group = llm.GroupVision
 	}
 	provider, err := p.providerForGroup(group)

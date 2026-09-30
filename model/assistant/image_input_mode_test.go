@@ -42,9 +42,33 @@ func TestImageInputTextOnlyResolvesExplicitModes(t *testing.T) {
 	if runtime.imageInputTextOnly(ctx, BotConfig{ImageInputMode: ImageInputModeNative}) {
 		t.Fatal("native mode must attach images")
 	}
-	// 查不到模型清单时自动档按原图走，老部署行为不变。
+	// 没有模型配置库时看图和回答本来就是同一个模型，照原样给图。
 	if runtime.imageInputTextOnly(ctx, BotConfig{ImageInputMode: ImageInputModeAuto}) {
-		t.Fatal("auto without model metadata must keep native behavior")
+		t.Fatal("auto without an llm store must attach images")
+	}
+}
+
+// 自动档看对话模型：清单写了按清单，没写查随版本打包的目录，都查不到按仅摘要。
+func TestImageInputAutoFollowsChatModelModalities(t *testing.T) {
+	autoFor := func(model string, modalities []string) bool {
+		store := &stubLLMProfileStore{set: llm.ProfileSet{Profiles: []llm.Profile{{ID: "chat", Group: llm.GroupChat, Config: llm.ProviderConfig{
+			Provider: llm.ProviderOpenAICompatible, APIKey: "key", Model: model,
+			Models: []llm.ModelInfo{{ID: model, InputModalities: modalities}},
+		}}}}}
+		runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), store, nil, nil, nil)
+		return runtime.imageInputTextOnly(context.Background(), BotConfig{ImageInputMode: ImageInputModeAuto})
+	}
+	if autoFor("house-model", []string{"text", "image"}) {
+		t.Fatal("a chat model listed with image input should get pixels")
+	}
+	if !autoFor("house-model", []string{"text"}) {
+		t.Fatal("a text-only chat model should get descriptions")
+	}
+	if autoFor("gemini-3.8-flash-low", nil) {
+		t.Fatal("the bundled catalog knows gemini-3.8-flash takes images")
+	}
+	if !autoFor("house-model-unknown", nil) {
+		t.Fatal("an unknown chat model should fall back to descriptions")
 	}
 }
 

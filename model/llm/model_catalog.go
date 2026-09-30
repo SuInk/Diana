@@ -34,6 +34,8 @@ type ModelsDevCatalog struct {
 	providers map[string]map[string]ModelInfo
 	// apis 是 models.dev 给每个服务商登记的 API 地址，用来按配置里的地址认出服务商。
 	apis map[string]string
+	// modalities 缓存 InputModalities 的结果，每轮回复都要查一次，不必每次扫整份目录。
+	modalities sync.Map
 }
 
 // sharedModelsDevCatalog 是进程里唯一的一份，同步模型列表时用它补全模态和上限。
@@ -217,6 +219,58 @@ func modelsDevProviderCandidates(cfg ProviderConfig) []string {
 			return []string{"google"}
 		case host == "openrouter.ai":
 			return []string{"openrouter"}
+		}
+	}
+	return nil
+}
+
+// reasoningEffortModelSuffixes 是聚合网关常挂在模型名后面的思考档后缀：
+// gemini-3.8-flash-low 实际就是 gemini-3.8-flash，目录里只登记后者。
+var reasoningEffortModelSuffixes = []string{"-minimal", "-low", "-medium", "-high", "-xhigh"}
+
+// InputModalities 按模型名在快照里查输入模态，不认服务商：自建网关的地址认不出是
+// 哪家，而同一个模型在各家登记的输入模态基本一致，这里取所有登记的并集。名字查不到时
+// 去掉思考档后缀再查一次。返回空表示目录里没有这个模型。
+func (c *ModelsDevCatalog) InputModalities(model string) []string {
+	if c == nil {
+		return nil
+	}
+	name := bareModelName(model)
+	if cached, ok := c.modalities.Load(name); ok {
+		return cached.([]string)
+	}
+	modalities := c.lookupInputModalities(name)
+	c.modalities.Store(name, modalities)
+	return modalities
+}
+
+func (c *ModelsDevCatalog) lookupInputModalities(name string) []string {
+	providers, _ := c.data()
+	candidates := []string{name}
+	for _, suffix := range reasoningEffortModelSuffixes {
+		if trimmed, ok := strings.CutSuffix(name, suffix); ok && trimmed != "" {
+			candidates = append(candidates, trimmed)
+		}
+	}
+	for _, candidate := range candidates {
+		seen := map[string]bool{}
+		var modalities []string
+		for _, models := range providers {
+			for id, info := range models {
+				if bareModelName(id) != candidate {
+					continue
+				}
+				for _, modality := range info.InputModalities {
+					if !seen[modality] {
+						seen[modality] = true
+						modalities = append(modalities, modality)
+					}
+				}
+			}
+		}
+		if len(modalities) > 0 {
+			slices.Sort(modalities)
+			return modalities
 		}
 	}
 	return nil

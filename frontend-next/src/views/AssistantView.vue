@@ -740,6 +740,21 @@
                     />
                   </label>
                 </div>
+                <!-- 图片交付方式：对话模型看原图，还是只看视觉理解写的描述。 -->
+                <div v-if="role.key === 'vision'" class="model-role-params">
+                  <label class="field">
+                    <span>图片交付方式</span>
+                    <AppSelect
+                      :model-value="form.image_input_mode ?? 'auto'"
+                      :options="imageInputModeOptions"
+                      @update:model-value="(value) => { if (form) form.image_input_mode = value as ImageInputMode; }"
+                    />
+                  </label>
+                </div>
+                <p v-if="role.key === 'vision'" class="model-role-desc muted">
+                  图片交付方式：「原图」时图直接交给对话模型。「仅摘要」时每张图先由视觉理解写成描述，对话模型只看描述、不收原图，
+                  要看小字、数量这类细节时，它会带着问题让视觉理解再看一次。「自动」看对话模型能不能收图：能收用原图，不能收或查不到用仅摘要。
+                </p>
                 <p class="model-role-desc muted">{{ role.description }}</p>
               </div>
               <p class="muted model-role-note">
@@ -1187,21 +1202,7 @@
                   <span class="switch-label">自动下载视频并提取关键帧</span>
                 </label>
                 <span class="hint">关闭后保留媒体索引和已有缓存；普通图片不再后台调用模型，视频不再预下载或抽帧。主动读取、引用分析及工具调用仍可按需解析；远程媒体过期后可能无法读取。</span>
-                <span class="hint">图片描述、视频帧描述和模型 OCR 用的是<a href="#" @click.prevent="editorTab = 'model'">「模型」标签</a>里「模型分配」的「媒体解析」。文本文件提取和本地 OCR 不消耗模型额度。</span>
-              </div>
-              <div class="field wide">
-                <label for="bot-image-input-mode">图片交付方式</label>
-                <AppSelect
-                  id="bot-image-input-mode"
-                  :model-value="form.image_input_mode ?? 'auto'"
-                  :options="imageInputModeOptions"
-                  @update:model-value="(value) => { if (form) form.image_input_mode = value as ImageInputMode; }"
-                />
-                <span class="hint">
-                  仅摘要：每张图先由「媒体解析」模型写成描述，回复模型只看描述、不收原图，带图的轮次也由对话模型回答；
-                  要看小字、数量这类细节时，它会带着问题让视觉模型再看一次。适合「识图用好模型、回答按成本选」。
-                  原图：图直接交给回复模型，带图的轮次走「视觉理解」。自动：视觉理解的模型在模型清单里写明不收图时用仅摘要，否则用原图。
-                </span>
+                <span class="hint">图片描述、视频帧描述和模型 OCR 用的是<a href="#" @click.prevent="editorTab = 'model'">「模型」标签</a>里「模型分配」的「视觉理解」。文本文件提取和本地 OCR 不消耗模型额度。</span>
               </div>
             </div>
           </section>
@@ -2892,9 +2893,9 @@ const triggerModeOptions: AppSelectOption[] = [
 // 判断，固定档位在群里连着触发几次会很假。
 // 图片交付方式，照搬 Hermes Agent 的 image_input_mode 三档。
 const imageInputModeOptions: AppSelectOption[] = [
-  { value: "auto", label: "自动（推荐）", hint: "按视觉理解模型能不能收图决定" },
-  { value: "text", label: "仅摘要", hint: "回复模型只看描述，要细节时再问视觉模型" },
-  { value: "native", label: "原图", hint: "原图交给回复模型，带图的轮次走视觉理解" }
+  { value: "auto", label: "自动（推荐）", hint: "对话模型能收图用原图，否则用仅摘要" },
+  { value: "text", label: "仅摘要", hint: "对话模型只看描述，要细节时再问视觉理解" },
+  { value: "native", label: "原图", hint: "原图直接交给对话模型" }
 ];
 
 const refusalStrategyOptions: AppSelectOption[] = [
@@ -3445,16 +3446,10 @@ const modelRoleRows: ModelRoleRow[] = [
   {
     key: "vision",
     label: "视觉理解",
-    description: "聊天中直接看图回答时使用。选「跟随对话」时，对话模型本身要能识图。"
-  },
-  {
-    key: "media_parse",
-    label: "媒体解析",
-    sublabel: "可选",
     description:
-      "后台批量识图：历史图片和视频每一帧的描述、表情包语义简介，以及图片识别插件的看图与模型 OCR。这些调用量大、在后台排队逐张执行，" +
-      "建议单独指一个便宜、快、识图稳定的视觉模型并配上后备。跟随视觉理解时，更换对话模型会连带换掉它，换成慢模型会让识图队列积压；" +
-      "单独指定后只使用这一档及其后备，不再回落到视觉理解。"
+      "替对话模型看图的辅助模型：写图片描述、视频帧描述、表情包简介，图片识别插件的看图与模型 OCR，以及对话模型带着问题回来问图时作答。" +
+      "带图的消息本身由对话模型回答，不会整轮换到这里。调用量大、在后台排队逐张执行，建议单独指一个识图稳定、价格合适的视觉模型并配上后备；" +
+      "跟随对话时，对话模型本身要能识图。"
   },
   {
     key: "intent",

@@ -233,8 +233,10 @@ func (r *Runtime) generateReplyWithAgentTools(ctx context.Context, cfg BotConfig
 		}
 		return r.prepareGeneratedReply(ctx, cfg, resp.Text)
 	}
+	// 图直接交给对话模型（它不收图时这一轮已经换成了描述，见 image_input_mode.go）；
+	// 只有语音还要走多模态那条路由。
 	group := llm.GroupChat
-	if messagesContainImages(messages) || messagesContainAudio(messages) {
+	if messagesContainAudio(messages) {
 		group = llm.GroupVision
 	}
 	raw, err := r.runLLMProviderForGroup(ctx, group, func(client LLMProvider) (string, error) {
