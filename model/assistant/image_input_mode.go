@@ -157,7 +157,8 @@ func (m *imageTextMode) sourceDescription(ctx context.Context, source string) st
 const videoFramesQuestion = "这些是同一段视频按时间顺序抽出的关键帧。按先后说清这段视频在拍什么、发生了什么动作和变化，能认出的人物、角色、物体直接点名，完整抄录清晰可辨的字幕和画面文字。"
 
 // framesDescription 把一段视频的关键帧一次交给视觉理解，按时间顺序描述整段内容。
-// 同一轮里 agent 每一步都会重拼消息，结果记在本轮，不重复识别。
+// 同一轮里 agent 每一步都会重拼消息，结果记在本轮，不重复识别。拿不到描述返回空，
+// 调用方照原样把关键帧附给对话模型。
 func (m *imageTextMode) framesDescription(ctx context.Context, frames []string) string {
 	key := "frames:" + sha256Hex(strings.Join(frames, "\n"))
 	m.mu.Lock()
@@ -166,7 +167,7 @@ func (m *imageTextMode) framesDescription(ctx context.Context, frames []string) 
 	if !ok {
 		parts := make([]llm.ContentPart, 0, len(frames))
 		for _, ready := range llmReadyImageURLs(ctx, frames) {
-			parts = append(parts, llm.ContentPart{Type: llm.ContentPartImageURL, ImageURL: ready, Detail: "low"})
+			parts = append(parts, llm.ContentPart{Type: llm.ContentPartImageURL, ImageURL: ready, Detail: "auto"})
 		}
 		if len(parts) > 0 {
 			callCtx, cancel := context.WithTimeout(ctx, replyImageGroundingTimeout)
@@ -182,7 +183,7 @@ func (m *imageTextMode) framesDescription(ctx context.Context, frames []string) 
 		m.mu.Unlock()
 	}
 	if description == "" {
-		return "【视频关键帧内容】（未能识别出这段视频的画面，不要猜它拍了什么）"
+		return ""
 	}
 	return "【视频关键帧内容，由视觉模型按时间顺序描述，可能有误】" + description
 }
@@ -206,10 +207,11 @@ func describeAll[T any](items []T, describe func(T) string) []string {
 	return out
 }
 
-// message 是 llmMessageFromEventWithImageDetail 在仅摘要模式下的版本：图一张不附，
-// 每张换成一行描述。消息自己的图（含引用）按原图逐张描述，不按长图切块、GIF 分镜
-// 之后的碎片描述。
-func (m *imageTextMode) message(ctx context.Context, event MessageEvent, text string, extraImageURLs []string) llm.Message {
+// message 是 llmMessageFromEventWithImageDetail 在只给描述时的版本：每张图换成一行
+// 描述。消息自己的图（含引用）按原图逐张描述，不按长图切块、GIF 分镜之后的碎片描述。
+// 描述拿不到的图退回附原图——没看图就答是最不能接受的；原图也读不到时照原来的
+// 规则报读取失败，由调用方拦下这一轮。
+func (m *imageTextMode) message(ctx context.Context, event MessageEvent, text string, extraImageURLs []string, detail string) (llm.Message, []error) {
 	text = strings.TrimSpace(text)
 	segments := append([]MessageSegment(nil), event.Segments...)
 	if event.Quoted != nil {
@@ -228,7 +230,7 @@ func (m *imageTextMode) message(ctx context.Context, event MessageEvent, text st
 		}
 	}
 	if len(images)+len(extras) == 0 {
-		return llm.Message{Role: llm.RoleUser, Content: text}
+		return llm.Message{Role: llm.RoleUser, Content: text}, nil
 	}
 	descriptions := describeAll(images, func(segment MessageSegment) string { return m.segmentDescription(ctx, segment) })
 	descriptions = append(descriptions, describeAll(extras, func(source string) string { return m.sourceDescription(ctx, source) })...)
@@ -243,10 +245,16 @@ func (m *imageTextMode) message(ctx context.Context, event MessageEvent, text st
 	}
 	lines := []string{overrides.text(promptImageTextModeSpec)}
 	seen := map[string]int{}
+	var fallback []string
 	for index, description := range descriptions {
 		switch {
 		case description == "":
-			description = "（未能识别出这张图的内容，不要猜它画了什么）"
+			description = "（视觉模型没能描述这张图，原图附在消息后面，直接看原图）"
+			if index < len(images) {
+				fallback = append(fallback, availableImageURLs([]MessageSegment{images[index]})...)
+			} else {
+				fallback = append(fallback, extras[index-len(images)])
+			}
 		case seen[description] > 0:
 			description = fmt.Sprintf("（和图片%d是同一张）", seen[description])
 		default:
@@ -255,7 +263,15 @@ func (m *imageTextMode) message(ctx context.Context, event MessageEvent, text st
 		lines = append(lines, fmt.Sprintf("图片%d：%s", index+1, description))
 	}
 	text = strings.TrimSpace(text + "\n\n" + strings.Join(lines, "\n"))
-	return llm.Message{Role: llm.RoleUser, Content: text}
+	if len(fallback) == 0 {
+		return llm.Message{Role: llm.RoleUser, Content: text}, nil
+	}
+	groups, failures := loadLLMImageURLGroupsDetailed(ctx, fallback)
+	parts := []llm.ContentPart{{Type: llm.ContentPartText, Text: text}}
+	for _, imageURL := range flattenLLMImageGroups(dedupeLLMImageGroups(groups)) {
+		parts = append(parts, llm.ContentPart{Type: llm.ContentPartImageURL, ImageURL: imageURL, Detail: detail})
+	}
+	return llm.Message{Role: llm.RoleUser, Content: text, Parts: parts}, failures
 }
 
 // replaceImageParts 是模型出口的兜底：拼消息时换不到的图（工具返回的截图、插件
@@ -286,7 +302,8 @@ func (m *imageTextMode) replaceImageParts(ctx context.Context, messages []llm.Me
 		message := &out[pos.message]
 		description := descriptions[index]
 		if description == "" {
-			description = "（未能识别出这张图的内容，不要猜它画了什么）"
+			// 描述拿不到就留着原图，让对话模型自己看，不能让它对着一张没看过的图作答。
+			continue
 		}
 		replacement := "【一张图片的文字描述，替代原图；由视觉模型生成，可能有误】" + description
 		// 消息只有图段时正文还在 Content 里，第一个文本段得带上它，否则适配器只发段会丢正文。

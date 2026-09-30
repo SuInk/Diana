@@ -219,3 +219,30 @@ func TestImageTextModeDescribesVideoFramesInOneCall(t *testing.T) {
 		t.Fatalf("frames should be described in one vision call per turn, got %d", calls)
 	}
 }
+
+// 描述拿不到的图退回附原图：对话模型要看过图才答，不能对着一句「未能识别」硬答。
+func TestImageTextModeFallsBackToPixelsWhenDescriptionFails(t *testing.T) {
+	provider := &capturingLLMProvider{reply: ""}
+	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) { return provider, nil })
+	event := MessageEvent{
+		Kind: EventKindGroup, GroupID: "123456", UserID: "10001", MessageID: "30007",
+		Segments: []MessageSegment{{Type: "image", Data: map[string]string{"file": "cat.png", "url": imageInputModeTestPNG}}},
+	}
+	ctx := withImageTextMode(context.Background(), runtime, event)
+	message, failures := llmMessageFromEventWithImageDetail(ctx, event, "这是啥", nil, "high")
+	if len(failures) != 0 || !llmMessageHasImagePart(message) {
+		t.Fatalf("an undescribed image must be attached as is: %+v failures=%v", message, failures)
+	}
+	if !strings.Contains(message.Content, "直接看原图") {
+		t.Fatalf("the model should be told the original is attached: %s", message.Content)
+	}
+
+	mode := imageTextModeFromContext(ctx)
+	leftover := []llm.Message{{Role: llm.RoleUser, Parts: []llm.ContentPart{{Type: llm.ContentPartImageURL, ImageURL: imageInputModeTestPNG}}}}
+	if !messagesContainImages(mode.replaceImageParts(ctx, leftover)) {
+		t.Fatal("a tool image without a description must stay attached")
+	}
+	if mode.framesDescription(ctx, []string{imageInputModeTestPNG}) != "" {
+		t.Fatal("failed frame descriptions should return empty so the frames stay attached")
+	}
+}
