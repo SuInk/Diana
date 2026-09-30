@@ -154,6 +154,39 @@ func (m *imageTextMode) sourceDescription(ctx context.Context, source string) st
 	return description
 }
 
+const videoFramesQuestion = "这些是同一段视频按时间顺序抽出的关键帧。按先后说清这段视频在拍什么、发生了什么动作和变化，能认出的人物、角色、物体直接点名，完整抄录清晰可辨的字幕和画面文字。"
+
+// framesDescription 把一段视频的关键帧一次交给视觉理解，按时间顺序描述整段内容。
+// 同一轮里 agent 每一步都会重拼消息，结果记在本轮，不重复识别。
+func (m *imageTextMode) framesDescription(ctx context.Context, frames []string) string {
+	key := "frames:" + sha256Hex(strings.Join(frames, "\n"))
+	m.mu.Lock()
+	description, ok := m.sources[key]
+	m.mu.Unlock()
+	if !ok {
+		parts := make([]llm.ContentPart, 0, len(frames))
+		for _, ready := range llmReadyImageURLs(ctx, frames) {
+			parts = append(parts, llm.ContentPart{Type: llm.ContentPartImageURL, ImageURL: ready, Detail: "low"})
+		}
+		if len(parts) > 0 {
+			callCtx, cancel := context.WithTimeout(ctx, replyImageGroundingTimeout)
+			answer, err := m.runtime.askImages(callCtx, m.event, parts, videoFramesQuestion)
+			cancel()
+			if err != nil {
+				log.Printf("diana image text mode: describe video frames failed: message_id=%s err=%v", m.event.MessageID, err)
+			}
+			description = strings.TrimSpace(answer)
+		}
+		m.mu.Lock()
+		m.sources[key] = description
+		m.mu.Unlock()
+	}
+	if description == "" {
+		return "【视频关键帧内容】（未能识别出这段视频的画面，不要猜它拍了什么）"
+	}
+	return "【视频关键帧内容，由视觉模型按时间顺序描述，可能有误】" + description
+}
+
 // describeAll 并发取一组描述，顺序和输入一致。
 func describeAll[T any](items []T, describe func(T) string) []string {
 	out := make([]string, len(items))

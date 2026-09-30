@@ -1758,6 +1758,11 @@ func llmMessageFromEventWithVideoFramesDiagnostics(ctx context.Context, event Me
 			text += "\n\n【系统提示】" + overrides.render(promptNoteVideoFailedSpec, map[string]string{"reason": videoFailureReason(videoFailure)})
 		}
 	}
+	// 只给描述时关键帧合成一次看：逐帧各识一次，16 帧要排好几批，还看不出先后动作。
+	if mode := imageTextModeFromContext(ctx); mode != nil && len(frames) > 0 {
+		text += "\n" + mode.framesDescription(ctx, frames)
+		frames = nil
+	}
 	extraImageURLs = append(extraImageURLs, frames...)
 	return llmMessageFromEventWithImagesForContextDiagnostics(ctx, event, text, extraImageURLs)
 }

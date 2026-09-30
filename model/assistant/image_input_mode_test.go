@@ -200,3 +200,22 @@ func TestReplyImageInputModeEndToEnd(t *testing.T) {
 		t.Fatal("off mode should hand the original image to the chat model")
 	}
 }
+
+// 视频关键帧合成一次交给视觉理解，不逐帧各识一次；同一轮重拼消息不再重复识别。
+func TestImageTextModeDescribesVideoFramesInOneCall(t *testing.T) {
+	provider := &capturingLLMProvider{reply: "一只猫从沙发跳到桌上"}
+	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) { return provider, nil })
+	mode := imageTextModeFromContext(withImageTextMode(context.Background(), runtime, MessageEvent{MessageID: "30006"}))
+	frames := []string{imageInputModeTestPNG, imageInputModeTestPNG + "#2", imageInputModeTestPNG + "#3"}
+	for range 2 {
+		if text := mode.framesDescription(context.Background(), frames); !strings.Contains(text, "一只猫从沙发跳到桌上") {
+			t.Fatalf("frames description = %q", text)
+		}
+	}
+	provider.mu.Lock()
+	calls := provider.calls
+	provider.mu.Unlock()
+	if calls != 1 {
+		t.Fatalf("frames should be described in one vision call per turn, got %d", calls)
+	}
+}
