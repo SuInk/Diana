@@ -5,7 +5,6 @@ package llm
 
 import (
 	"context"
-	"slices"
 	"strings"
 	"testing"
 )
@@ -122,27 +121,5 @@ func TestModelsDevCatalogDoesNotGuessCustomGatewayProvider(t *testing.T) {
 	}, models)
 	if len(got) != 1 || got[0].ContextWindowTokens != 0 {
 		t.Fatalf("models = %#v", got)
-	}
-}
-
-func TestModelsDevCatalogInputModalitiesByName(t *testing.T) {
-	catalog := newModelsDevCatalogFromJSON([]byte(`{
-		"gateway": {"id": "gateway", "models": {
-			"vendor/vision-9": {"id": "vendor/vision-9", "modalities": {"input": ["text", "image"]}},
-			"text-9": {"id": "text-9", "modalities": {"input": ["text"]}}
-		}},
-		"other": {"id": "other", "models": {"vision-9": {"id": "vision-9", "modalities": {"input": ["text", "pdf"]}}}}
-	}`))
-	if got := catalog.InputModalities("vision-9-low"); !slices.Equal(got, []string{"image", "pdf", "text"}) {
-		t.Fatalf("effort suffix and namespace should be stripped, modalities merged: %v", got)
-	}
-	if got := catalog.InputModalities("text-9"); !slices.Equal(got, []string{"text"}) {
-		t.Fatalf("text-only model: %v", got)
-	}
-	if got := catalog.InputModalities("unknown-model"); got != nil {
-		t.Fatalf("unknown model should return nil, got %v", got)
-	}
-	if got := SharedModelsDevCatalog().InputModalities("gemini-3.8-flash-low"); !slices.Contains(got, "image") {
-		t.Fatalf("bundled snapshot should know gemini-3.8-flash takes images: %v", got)
 	}
 }

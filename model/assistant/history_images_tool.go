@@ -22,12 +22,12 @@ const (
 type dianaHistoryImagesTool struct {
 	runtime *Runtime
 	event   MessageEvent
-	// textMode 是对话模型看不了原图的时候：画面不交给它，改为带着 question 交给视觉
-	// 理解看，只把回答的文字带回来（见 image_input_mode.go）。
-	textMode bool
-	// currentDescribed 表示当前这条消息的图在提示词里只有描述：不传消息 ID 时默认
-	// 连当前这条一起读，按当前消息 ID 也读得到——哪怕它还没进历史。
+	// currentDescribed 表示这一轮的图在提示词里只有描述：画面不交给对话模型，
+	// 自动档带着 question 交给视觉理解看、只回文字，仅文字描述档只回描述（见
+	// image_input_mode.go）。不传消息 ID 时默认连当前这条一起读，按当前消息 ID
+	// 也读得到——哪怕它还没进历史。
 	currentDescribed bool
+	imageMode        ImageInputMode
 
 	mu          sync.Mutex
 	resultParts []llm.ContentPart
@@ -64,10 +64,20 @@ func newDianaHistoryImagesTool(runtime *Runtime, event MessageEvent) *dianaHisto
 }
 
 // withImageInput 按这一轮的图片交付方式切换工具的形态。
-func (t *dianaHistoryImagesTool) withImageInput(currentDescribed, textMode bool) *dianaHistoryImagesTool {
+func (t *dianaHistoryImagesTool) withImageInput(currentDescribed bool, mode ImageInputMode) *dianaHistoryImagesTool {
 	t.currentDescribed = currentDescribed
-	t.textMode = textMode
+	t.imageMode = normalizeImageInputMode(mode)
 	return t
+}
+
+// asksVision 是自动档：带着问题让视觉理解看图作答。
+func (t *dianaHistoryImagesTool) asksVision() bool {
+	return t.currentDescribed && t.imageMode == ImageInputModeAuto
+}
+
+// describesOnly 是仅文字描述档：只回描述，不再看图。
+func (t *dianaHistoryImagesTool) describesOnly() bool {
+	return t.currentDescribed && t.imageMode == ImageInputModeText
 }
 
 func (t *dianaHistoryImagesTool) Name() string {
@@ -75,7 +85,10 @@ func (t *dianaHistoryImagesTool) Name() string {
 }
 
 func (t *dianaHistoryImagesTool) Description() string {
-	if t.textMode {
+	if t.describesOnly() {
+		return `读取当前会话历史消息里图片或视频关键帧的文字描述。你看不到原图，只能拿到视觉模型写的描述；消息里已经带着的描述就不必再调用。一次传入所有相关消息。`
+	}
+	if t.asksVision() {
 		return `看当前会话历史消息里的原始图片或视频关键帧并回答问题。你看不到原图，只有视觉模型写的摘要；摘要够用时不要调用。需要辨认小字、数数量、比较画面、认出是谁或核对摘要是否说对时调用：在 question 里写清要看什么，视觉模型会看图作答，只返回文字。一次传入所有相关消息。`
 	}
 	return `读取当前会话历史消息里的原始图片或按需提取的视频关键帧，作为真实多模态附件交给下一轮模型。历史摘要够用时不要调用；需要辨认小字、比较画面或核对视频细节时才调用，并一次传入所有相关消息。单张失效会跳过并报告，不影响其他画面。`
@@ -95,7 +108,7 @@ func (t *dianaHistoryImagesTool) InputSchema() map[string]any {
 			}),
 		"detail": toolEnumParam("图片细节档位。auto 由运行时按预算决定；辨认细小文字时用 high。", "auto", "low", "high"),
 	}
-	if t.textMode {
+	if t.asksVision() {
 		properties["question"] = toolStringParam("要视觉模型看图回答的问题，写清要看哪里、要什么，例如「第二张图右下角的价格是多少」「这是猫还是狗」。省略时返回画面的完整描述。")
 	}
 	return toolObjectSchema(nil, properties)
@@ -113,6 +126,7 @@ func (t *dianaHistoryImagesTool) Run(ctx context.Context, input map[string]any) 
 	detail := normalizeHistoryImageDetail(configToolString(input, "detail"))
 	result := dianaHistoryImagesResult{Media: make([]dianaHistoryImageStatus, 0)}
 	parts := make([]llm.ContentPart, 0)
+	var loaded []historyLoadedImage
 	attempted := 0
 
 	followed := make(map[string]bool, len(selectors))
@@ -233,6 +247,7 @@ func (t *dianaHistoryImagesTool) Run(ctx context.Context, input map[string]any) 
 				}
 			}
 			parts = append(parts, imageParts...)
+			loaded = append(loaded, historyLoadedImage{messageID: selector.MessageID, index: index, segment: segment})
 			result.FocusCrops += len(imageParts) - 1
 			result.Loaded++
 			result.Media = append(result.Media, dianaHistoryImageStatus{
@@ -262,7 +277,27 @@ func (t *dianaHistoryImagesTool) Run(ctx context.Context, input map[string]any) 
 	if result.Failed > 0 {
 		result.Message += fmt.Sprintf(" 另有 %d 张读取失败，禁止推测其内容。", result.Failed)
 	}
-	if t.textMode && len(parts) > 0 {
+	if t.describesOnly() && len(loaded) > 0 {
+		lines := make([]string, 0, len(loaded))
+		mode := imageTextModeFromContext(ctx)
+		for _, item := range loaded {
+			description := ""
+			if mode != nil {
+				description = mode.segmentDescription(ctx, item.segment)
+			}
+			if description == "" {
+				description = "（未能识别出这张图的内容，不要猜它画了什么）"
+			}
+			lines = append(lines, fmt.Sprintf("message_id=%s 第%d张：%s", item.messageID, item.index, description))
+		}
+		result.Text = append(result.Text, lines...)
+		result.Message = fmt.Sprintf("已取得 %d 张历史图片或视频关键帧的文字描述，在 text 里；描述由视觉模型写成，可能有误。", len(lines))
+		if result.Failed > 0 {
+			result.Message += fmt.Sprintf(" 另有 %d 张读取失败，禁止推测其内容。", result.Failed)
+		}
+		parts = nil
+	}
+	if t.asksVision() && len(parts) > 0 {
 		answer, err := t.runtime.askImages(ctx, t.event, parts, configToolString(input, "question"))
 		if err != nil {
 			return "", fmt.Errorf("历史媒体看图失败：%w", err)
@@ -280,6 +315,12 @@ func (t *dianaHistoryImagesTool) Run(ctx context.Context, input map[string]any) 
 	}
 	t.setResultParts(parts)
 	return string(body), nil
+}
+
+type historyLoadedImage struct {
+	messageID string
+	index     int
+	segment   MessageSegment
 }
 
 // unfollowedSemanticSources 取出这条消息指向、还没读过的来源消息，并记成已读，

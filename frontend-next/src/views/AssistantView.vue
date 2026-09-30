@@ -740,6 +740,17 @@
                     />
                   </label>
                 </div>
+                <!-- 图片交付方式：对话模型怎么看图，所以跟着对话这一档。 -->
+                <div v-if="role.key === 'chat'" class="model-role-params">
+                  <label class="field">
+                    <span>看图方式</span>
+                    <AppSelect
+                      :model-value="form.image_input_mode ?? 'auto'"
+                      :options="imageInputModeOptions"
+                      @update:model-value="(value) => { if (form) form.image_input_mode = value as ImageInputMode; }"
+                    />
+                  </label>
+                </div>
                 <p class="model-role-desc muted">{{ role.description }}</p>
               </div>
               <p class="muted model-role-note">
@@ -2217,6 +2228,7 @@ import {
   type BotChannelStatus,
   type BotPlatform,
   type AliasTriggerMode,
+  type ImageInputMode,
   type RefusalStrategy,
   listWorldBook,
   saveWorldBookNode,
@@ -2875,6 +2887,13 @@ const triggerModeOptions: AppSelectOption[] = [
 
 // 拒答话术。默认「智能」：什么时候能绕开、什么时候原因本身不能说，是看语境的
 // 判断，固定档位在群里连着触发几次会很假。
+// 看图方式：描述本来就会写，默认只给描述，要细节时带着问题问视觉理解。
+const imageInputModeOptions: AppSelectOption[] = [
+  { value: "auto", label: "自动（推荐）", hint: "平时看描述，要看细节时带着问题问视觉理解" },
+  { value: "text", label: "仅文字描述", hint: "只看描述，不再追问" },
+  { value: "off", label: "关闭", hint: "不经过视觉理解，原图直接给对话模型；对话模型要能看图" }
+];
+
 const refusalStrategyOptions: AppSelectOption[] = [
   { value: "smart", label: "智能（推荐）", hint: "先试着改写，改不动再按原因性质决定说不说" },
   { value: "rewrite", label: "尽量改写", hint: "优先绕开，实在不行才模糊拒答" },
@@ -3444,20 +3463,20 @@ const imageRoleRow: ModelRoleRow = {
 // 回复辅助留空时沿用后台生成（它就是从那一档拆出来的），后台生成留空时跟随对话。
 const purposeRoleRows: ModelRoleRow[] = [
   {
-    key: "reply_assist",
-    label: "回复辅助",
-    sublabel: "指代 · 摘要 · 提示",
-    description:
-      "语义指代、话题合并、语义去重、上下文摘要、转发内容安全、戳一戳回应，以及出错、被拦、收声时发给用户的那句提示改写。" +
-      "它们都在这一轮回复发出之前同步执行，模型慢，回复就跟着慢——选一个响应快、能写文字的模型，不需要判断题表。不指定时沿用后台生成。"
-  },
-  {
     key: "background",
     label: "后台生成",
     sublabel: "好感度 · 记忆",
     description:
       "好感度评估、长期记忆抽取与归纳、RSS 订阅判定、入群欢迎语和纪念日问候。它们都要写出成段文字，判断模型答不了；" +
       "都在回复之外异步执行，慢一点没关系，适合指一个便宜的模型。不指定时跟随对话。"
+  },
+  {
+    key: "reply_assist",
+    label: "回复辅助",
+    sublabel: "指代 · 摘要 · 提示",
+    description:
+      "语义指代、话题合并、语义去重、上下文摘要、转发内容安全、戳一戳回应，以及出错、被拦、收声时发给用户的那句提示改写。" +
+      "它们都在这一轮回复发出之前同步执行，模型慢，回复就跟着慢——选一个响应快、能写文字的模型，不需要判断题表。不指定时沿用后台生成。"
   }
 ];
 
@@ -3707,6 +3726,8 @@ const GROUP_PREFIX = "group:";
 const FOLLOW_CHAT = "__follow_chat__";
 const FOLLOW_VISION = "__follow_vision__";
 const DISABLED = "__disabled__";
+// 细分用途的「不指定」：不存这一档，跟随它所属的那一档（见 purposeRoleFallbackLabel）。
+const UNSPECIFIED = "__unspecified__";
 
 // 没设过就跟随对话的用途：视觉理解、意图识别、图片生成。留空和显式「跟随对话」
 // 是同一个意思，界面上统一显示成后者，保存时也写成后者。
@@ -3844,6 +3865,9 @@ function channelOptionsFor(role: RoleKey): AppSelectOption[] {
   if (role === "media_parse") base.push({ value: FOLLOW_VISION, label: "跟随视觉理解", hint: "不单独绑定媒体解析模型" });
   // 对话是被跟随的那一档，不能跟随自己；音视频插槽没有可跟随的对话模型。
   if (isMediaRole(role)) base.push({ value: DISABLED, label: "不启用", hint: "不配置这项能力" });
+  if (isPurposeRole(role)) {
+    base.push({ value: UNSPECIFIED, label: `不指定，跟随${purposeRoleFallbackLabel(role)}`, hint: "不单独绑定，换模型时跟着一起换" });
+  }
   if (role !== "chat" && !isMediaRole(role)) {
     base.push({
       value: FOLLOW_CHAT,
@@ -3989,6 +4013,7 @@ function roleModelValue(role: RoleKey): string {
 function roleSelectionValue(role: RoleKey): string {
   if (role === "media_parse" && !roleForm.value[role]) return FOLLOW_VISION;
   if (isMediaRole(role) && !roleForm.value[role]) return DISABLED;
+  if (isPurposeRole(role) && !roleForm.value[role]) return UNSPECIFIED;
   return routeSelectionValue(roleForm.value[role]);
 }
 
@@ -4003,7 +4028,7 @@ function setRoleChannel(role: RoleKey, value: string): void {
     delete roleForm.value[role];
     return;
   }
-  if (isMediaRole(role) && value === DISABLED) {
+  if ((isMediaRole(role) && value === DISABLED) || (isPurposeRole(role) && value === UNSPECIFIED)) {
     delete roleForm.value[role];
     return;
   }
@@ -4284,6 +4309,7 @@ function setForm(config: BotProfileConfig): void {
     response_mode: "custom",
     auto_image_description: config.auto_image_description ?? true,
     auto_video_preprocess: config.auto_video_preprocess ?? true,
+    image_input_mode: config.image_input_mode ?? "auto",
     llm_streaming_enabled: config.llm_streaming_enabled ?? true,
     llm_identity_masking_enabled: config.llm_identity_masking_enabled ?? true,
     llm_identity_body_account_mapping_enabled: config.llm_identity_body_account_mapping_enabled ?? true,

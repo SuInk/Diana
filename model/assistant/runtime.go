@@ -3760,9 +3760,10 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	defer r.endHistoryImageDescriptionForeground()
 	cfg := r.effectiveConfigForEvent(event)
 	// 图片交付方式挂在 ctx 上，这一轮拼出来的每条消息、每一步模型调用都认它。
-	imageTextOnly, pixelsOnDemand := r.imageInputPlan(ctx, cfg)
+	imageMode := normalizeImageInputMode(cfg.ImageInputMode)
+	imageTextOnly := r.imageDescriptionsInPrompt(cfg)
 	if imageTextOnly {
-		ctx = withImageTextMode(ctx, r, event, pixelsOnDemand)
+		ctx = withImageTextMode(ctx, r, event)
 	}
 	directQuotedReply := explicitlyRepliesToBot(event, cfg)
 	if directQuotedReply {
@@ -3779,7 +3780,8 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	currentImageGrounding := strings.TrimSpace(event.replyAuditImageContext)
 	// 图片文字识别插件在「仅识别文字」时自己会识别一遍，这里再同步识图一次就是白跑。
 	// 仅摘要模式照跑：描述进缓存，拼消息时直接命中，发送审核也要用它。
-	if (cfg.AgentEnabled || imageTextOnly) && r.chatModelReceivesImages(event) && hasImageSegment(event.Segments) && currentImageGrounding == "" {
+	// 视觉理解关掉时不写描述，原图直接交给对话模型。
+	if (cfg.AgentEnabled || imageTextOnly) && imageMode != ImageInputModeOff && r.chatModelReceivesImages(event) && hasImageSegment(event.Segments) && currentImageGrounding == "" {
 		event, currentImageGrounding = r.ensureReplyImageDescription(ctx, event)
 		if currentImageGrounding != "" {
 			event.replyAuditImageContext = currentImageGrounding
@@ -3958,7 +3960,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			var deniedTools []string
 			extraTools := []agent.Tool{
 				newDianaChatHistoryTool(r, event).withRecallSink(recallSink),
-				newDianaHistoryImagesTool(r, event).withImageInput(imageTextOnly, imageTextOnly && !pixelsOnDemand),
+				newDianaHistoryImagesTool(r, event).withImageInput(imageTextOnly, imageMode),
 				newDianaRemoteImageTool(r, event),
 				newDianaMCPMediaTool(r, event),
 				&dianaTelegramImagesTool{runtime: r, event: event},

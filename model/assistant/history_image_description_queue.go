@@ -85,7 +85,7 @@ func (r *Runtime) enqueueHistoryImageDescriptions(event MessageEvent) {
 	// 自动路径只补近期图片。重连回填会把很久以前的消息重放一遍，每条都排一次
 	// 识图，等于拿单并发去补一整个库——按当前速度是几十小时起步，而这些老图
 	// 绝大多数没人再提起。真被引用时会走 enqueueHistoryImageDescriptionsNow。
-	if r == nil || !boolValue(r.effectiveConfigForEvent(event).AutoImageDescription, true) || !withinHistoryImageDescriptionWindow(event, time.Now()) {
+	if r == nil || !r.effectiveConfigForEvent(event).backgroundImageDescriptionEnabled() || !withinHistoryImageDescriptionWindow(event, time.Now()) {
 		return
 	}
 	r.enqueueHistoryImageDescriptionsWithPolicy(event, false, false)
@@ -454,7 +454,12 @@ func (r *Runtime) runHistoryImageDescriptionJob(job *historyImageDescJob) {
 }
 
 func (r *Runtime) describeHistoryImageJob(ctx context.Context, job *historyImageDescJob) error {
-	if !job.explicit && !boolValue(r.effectiveConfigForEvent(job.event).AutoImageDescription, true) {
+	cfg := r.effectiveConfigForEvent(job.event)
+	if !job.explicit && !boolValue(cfg.AutoImageDescription, true) {
+		return nil
+	}
+	// 视觉理解整个关掉时，被读到的图也不补描述：原图已经直接交给对话模型了。
+	if normalizeImageInputMode(cfg.ImageInputMode) == ImageInputModeOff {
 		return nil
 	}
 	store := r.recallImageDescriptionStore()

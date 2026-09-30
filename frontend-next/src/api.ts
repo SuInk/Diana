@@ -122,8 +122,8 @@ export type AliasTriggerMode = "loose" | "smart" | "strict";
 /** 拒答话术：决定机器人不正面回答时说什么。见后端 RefusalStrategy。 */
 export type RefusalStrategy = "smart" | "rewrite" | "explain" | "vague";
 
-/** 图片交付方式：原图给回复模型，还是只给视觉模型写的描述。见后端 ImageInputMode。 */
-export type ImageInputMode = "auto" | "native" | "text";
+/** 对话模型怎么看图：自动（描述 + 按需问视觉理解）、仅文字描述、关闭（原图直接给对话模型）。见后端 ImageInputMode。 */
+export type ImageInputMode = "auto" | "text" | "off";
 
 export type MessageRelayKind = "group" | "private";
 
