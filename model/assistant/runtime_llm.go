@@ -1784,6 +1784,9 @@ func llmMessageFromEventWithImagesForContextDiagnostics(ctx context.Context, eve
 // 正式回复要看清图里的字和细节，一直用 high；只做是非判断的路由用 low 就够——
 // 它要知道「这是张什么图」，不用逐字读，high 档一张图的 token 往往比整段上下文还多。
 func llmMessageFromEventWithImageDetail(ctx context.Context, event MessageEvent, text string, extraImageURLs []string, detail string) (llm.Message, []error) {
+	if mode := imageTextModeFromContext(ctx); mode != nil {
+		return mode.message(ctx, event, text, extraImageURLs), nil
+	}
 	text = strings.TrimSpace(text)
 	imageURLs := availableImageURLs(event.Segments)
 	if event.Quoted != nil {

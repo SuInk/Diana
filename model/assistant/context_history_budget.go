@@ -318,7 +318,8 @@ func (r *Runtime) promptContextWindowTokens(event MessageEvent, cfg BotConfig) i
 		return clampContextWindowToConfig(llm.DefaultContextWindowTokens, cfg)
 	}
 	group := llm.GroupChat
-	if hasImageSegment(event.Segments) || (event.Quoted != nil && hasImageSegment(event.Quoted.Segments)) {
+	// 仅摘要模式下带图的轮次也由对话模型回答，窗口按对话模型算。
+	if (hasImageSegment(event.Segments) || (event.Quoted != nil && hasImageSegment(event.Quoted.Segments))) && !r.imageInputTextOnly(withModelConfigEvent(context.Background(), event), cfg) {
 		group = llm.GroupVision
 	}
 	set := store.Profiles().WithDefaults()

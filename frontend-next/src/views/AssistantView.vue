@@ -1189,6 +1189,20 @@
                 <span class="hint">关闭后保留媒体索引和已有缓存；普通图片不再后台调用模型，视频不再预下载或抽帧。主动读取、引用分析及工具调用仍可按需解析；远程媒体过期后可能无法读取。</span>
                 <span class="hint">图片描述、视频帧描述和模型 OCR 用的是<a href="#" @click.prevent="editorTab = 'model'">「模型」标签</a>里「模型分配」的「媒体解析」。文本文件提取和本地 OCR 不消耗模型额度。</span>
               </div>
+              <div class="field wide">
+                <label for="bot-image-input-mode">图片交付方式</label>
+                <AppSelect
+                  id="bot-image-input-mode"
+                  :model-value="form.image_input_mode ?? 'auto'"
+                  :options="imageInputModeOptions"
+                  @update:model-value="(value) => { if (form) form.image_input_mode = value as ImageInputMode; }"
+                />
+                <span class="hint">
+                  仅摘要：每张图先由「媒体解析」模型写成描述，回复模型只看描述、不收原图，带图的轮次也由对话模型回答；
+                  要看小字、数量这类细节时，它会带着问题让视觉模型再看一次。适合「识图用好模型、回答按成本选」。
+                  原图：图直接交给回复模型，带图的轮次走「视觉理解」。自动：视觉理解的模型在模型清单里写明不收图时用仅摘要，否则用原图。
+                </span>
+              </div>
             </div>
           </section>
 
@@ -2217,6 +2231,7 @@ import {
   type BotChannelStatus,
   type BotPlatform,
   type AliasTriggerMode,
+  type ImageInputMode,
   type RefusalStrategy,
   listWorldBook,
   saveWorldBookNode,
@@ -2875,6 +2890,13 @@ const triggerModeOptions: AppSelectOption[] = [
 
 // 拒答话术。默认「智能」：什么时候能绕开、什么时候原因本身不能说，是看语境的
 // 判断，固定档位在群里连着触发几次会很假。
+// 图片交付方式，照搬 Hermes Agent 的 image_input_mode 三档。
+const imageInputModeOptions: AppSelectOption[] = [
+  { value: "auto", label: "自动（推荐）", hint: "按视觉理解模型能不能收图决定" },
+  { value: "text", label: "仅摘要", hint: "回复模型只看描述，要细节时再问视觉模型" },
+  { value: "native", label: "原图", hint: "原图交给回复模型，带图的轮次走视觉理解" }
+];
+
 const refusalStrategyOptions: AppSelectOption[] = [
   { value: "smart", label: "智能（推荐）", hint: "先试着改写，改不动再按原因性质决定说不说" },
   { value: "rewrite", label: "尽量改写", hint: "优先绕开，实在不行才模糊拒答" },
@@ -4292,6 +4314,7 @@ function setForm(config: BotProfileConfig): void {
     response_mode: "custom",
     auto_image_description: config.auto_image_description ?? true,
     auto_video_preprocess: config.auto_video_preprocess ?? true,
+    image_input_mode: config.image_input_mode ?? "auto",
     llm_streaming_enabled: config.llm_streaming_enabled ?? true,
     llm_identity_masking_enabled: config.llm_identity_masking_enabled ?? true,
     llm_identity_body_account_mapping_enabled: config.llm_identity_body_account_mapping_enabled ?? true,

@@ -22,6 +22,9 @@ const (
 type dianaHistoryImagesTool struct {
 	runtime *Runtime
 	event   MessageEvent
+	// textMode 是仅摘要模式：画面不交给回复模型，改为带着 question 交给视觉模型看，
+	// 只把回答的文字带回来（见 image_input_mode.go）。
+	textMode bool
 
 	mu          sync.Mutex
 	resultParts []llm.ContentPart
@@ -41,6 +44,7 @@ type dianaHistoryImagesResult struct {
 	Limited    bool                      `json:"limited,omitempty"`
 	Media      []dianaHistoryImageStatus `json:"media"`
 	Text       []string                  `json:"text,omitempty"`
+	Answer     string                    `json:"answer,omitempty"`
 	Message    string                    `json:"message"`
 }
 
@@ -56,16 +60,25 @@ func newDianaHistoryImagesTool(runtime *Runtime, event MessageEvent) *dianaHisto
 	return &dianaHistoryImagesTool{runtime: runtime, event: event}
 }
 
+// withTextMode 按这一轮的图片交付方式切换工具的形态。
+func (t *dianaHistoryImagesTool) withTextMode(textMode bool) *dianaHistoryImagesTool {
+	t.textMode = textMode
+	return t
+}
+
 func (t *dianaHistoryImagesTool) Name() string {
 	return dianaHistoryImagesToolName
 }
 
 func (t *dianaHistoryImagesTool) Description() string {
+	if t.textMode {
+		return `看当前会话历史消息里的原始图片或视频关键帧并回答问题。你看不到原图，只有视觉模型写的摘要；摘要够用时不要调用。需要辨认小字、数数量、比较画面、认出是谁或核对摘要是否说对时调用：在 question 里写清要看什么，视觉模型会看图作答，只返回文字。一次传入所有相关消息。`
+	}
 	return `读取当前会话历史消息里的原始图片或按需提取的视频关键帧，作为真实多模态附件交给下一轮模型。历史摘要够用时不要调用；需要辨认小字、比较画面或核对视频细节时才调用，并一次传入所有相关消息。单张失效会跳过并报告，不影响其他画面。`
 }
 
 func (t *dianaHistoryImagesTool) InputSchema() map[string]any {
-	return toolObjectSchema(nil, map[string]any{
+	properties := map[string]any{
 		"message_id":    toolStringParam("只读一条消息时用它：该消息的 ID，只接受当前会话中真实存在的 message_id，不接受文件路径或 URL。"),
 		"media_indexes": map[string]any{"type": "array", "description": "配合 message_id 使用：要读取的图片或视频关键帧序号，从 1 开始；省略表示全部画面。", "items": map[string]any{"type": "integer", "minimum": 1}},
 		"message_ids":   toolStringArrayParam("一次读多条消息时用它：消息 ID 数组。省略 message_id、message_ids 和 items 时使用当前引用或语义来源。"),
@@ -77,7 +90,11 @@ func (t *dianaHistoryImagesTool) InputSchema() map[string]any {
 				"media_indexes": map[string]any{"type": "array", "description": "要读取的图片或视频关键帧序号，从 1 开始；省略表示该消息里的全部画面。文件与音频无需指定序号。", "items": map[string]any{"type": "integer", "minimum": 1}},
 			}),
 		"detail": toolEnumParam("图片细节档位。auto 由运行时按预算决定；辨认细小文字时用 high。", "auto", "low", "high"),
-	})
+	}
+	if t.textMode {
+		properties["question"] = toolStringParam("要视觉模型看图回答的问题，写清要看哪里、要什么，例如「第二张图右下角的价格是多少」「这是猫还是狗」。省略时返回画面的完整描述。")
+	}
+	return toolObjectSchema(nil, properties)
 }
 
 func (t *dianaHistoryImagesTool) Run(ctx context.Context, input map[string]any) (string, error) {
@@ -240,6 +257,18 @@ func (t *dianaHistoryImagesTool) Run(ctx context.Context, input map[string]any) 
 	}
 	if result.Failed > 0 {
 		result.Message += fmt.Sprintf(" 另有 %d 张读取失败，禁止推测其内容。", result.Failed)
+	}
+	if t.textMode && len(parts) > 0 {
+		answer, err := t.runtime.askImages(ctx, t.event, parts, configToolString(input, "question"))
+		if err != nil {
+			return "", fmt.Errorf("历史媒体看图失败：%w", err)
+		}
+		result.Answer = answer
+		result.Message = fmt.Sprintf("视觉模型看了 %d 张历史图片或视频关键帧，回答在 answer 里；它也可能看错，不确定的地方照实说。", result.Loaded)
+		if result.Failed > 0 {
+			result.Message += fmt.Sprintf(" 另有 %d 张读取失败，禁止推测其内容。", result.Failed)
+		}
+		parts = nil
 	}
 	body, err := json.Marshal(result)
 	if err != nil {
