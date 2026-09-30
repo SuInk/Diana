@@ -22,9 +22,12 @@ const (
 type dianaHistoryImagesTool struct {
 	runtime *Runtime
 	event   MessageEvent
-	// textMode 是仅摘要模式：画面不交给回复模型，改为带着 question 交给视觉模型看，
-	// 只把回答的文字带回来（见 image_input_mode.go）。
+	// textMode 是对话模型看不了原图的时候：画面不交给它，改为带着 question 交给视觉
+	// 理解看，只把回答的文字带回来（见 image_input_mode.go）。
 	textMode bool
+	// currentDescribed 表示当前这条消息的图在提示词里只有描述：不传消息 ID 时默认
+	// 连当前这条一起读，按当前消息 ID 也读得到——哪怕它还没进历史。
+	currentDescribed bool
 
 	mu          sync.Mutex
 	resultParts []llm.ContentPart
@@ -60,8 +63,9 @@ func newDianaHistoryImagesTool(runtime *Runtime, event MessageEvent) *dianaHisto
 	return &dianaHistoryImagesTool{runtime: runtime, event: event}
 }
 
-// withTextMode 按这一轮的图片交付方式切换工具的形态。
-func (t *dianaHistoryImagesTool) withTextMode(textMode bool) *dianaHistoryImagesTool {
+// withImageInput 按这一轮的图片交付方式切换工具的形态。
+func (t *dianaHistoryImagesTool) withImageInput(currentDescribed, textMode bool) *dianaHistoryImagesTool {
+	t.currentDescribed = currentDescribed
 	t.textMode = textMode
 	return t
 }
@@ -102,7 +106,7 @@ func (t *dianaHistoryImagesTool) Run(ctx context.Context, input map[string]any) 
 		return "", fmt.Errorf("diana history images: runtime is not configured")
 	}
 	t.setResultParts(nil)
-	selectors, err := historyImageSelectors(input, t.event)
+	selectors, err := historyImageSelectors(input, t.event, t.currentDescribed)
 	if err != nil {
 		return "", err
 	}
@@ -323,6 +327,10 @@ func (t *dianaHistoryImagesTool) findSourceEvent(ctx context.Context, messageID 
 	if storedFound {
 		return stored, true, true
 	}
+	// 当前这条的图在提示词里只有描述，模型回头要看原图时它可能还没进历史。
+	if t.currentDescribed && strings.TrimSpace(t.event.MessageID) == messageID {
+		return cloneHistoricalImageEvent(t.event), true, false
+	}
 	return MessageEvent{}, false, false
 }
 
@@ -412,7 +420,7 @@ func (t *dianaHistoryImagesTool) setResultParts(parts []llm.ContentPart) {
 	t.resultParts = append([]llm.ContentPart(nil), parts...)
 }
 
-func historyImageSelectors(input map[string]any, event MessageEvent) ([]historyImageSelector, error) {
+func historyImageSelectors(input map[string]any, event MessageEvent, includeCurrent bool) ([]historyImageSelector, error) {
 	var selectors []historyImageSelector
 	if rawItems, ok := input["items"]; ok {
 		items, ok := rawItems.([]any)
@@ -448,6 +456,9 @@ func historyImageSelectors(input map[string]any, event MessageEvent) ([]historyI
 		}
 	}
 	if len(selectors) == 0 {
+		if includeCurrent && hasImageSegment(event.Segments) {
+			selectors = append(selectors, historyImageSelector{MessageID: event.MessageID})
+		}
 		for _, messageID := range eventSemanticSourceMessageIDs(event) {
 			selectors = append(selectors, historyImageSelector{MessageID: messageID})
 		}

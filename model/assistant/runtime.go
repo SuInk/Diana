@@ -3759,10 +3759,10 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	r.beginHistoryImageDescriptionForeground()
 	defer r.endHistoryImageDescriptionForeground()
 	cfg := r.effectiveConfigForEvent(event)
-	// 仅摘要模式挂在 ctx 上，这一轮拼出来的每条消息、每一步模型调用都认它。
-	imageTextOnly := r.imageInputTextOnly(ctx, cfg)
+	// 图片交付方式挂在 ctx 上，这一轮拼出来的每条消息、每一步模型调用都认它。
+	imageTextOnly, pixelsOnDemand := r.imageInputPlan(ctx, cfg)
 	if imageTextOnly {
-		ctx = withImageTextMode(ctx, r, event)
+		ctx = withImageTextMode(ctx, r, event, pixelsOnDemand)
 	}
 	directQuotedReply := explicitlyRepliesToBot(event, cfg)
 	if directQuotedReply {
@@ -3958,7 +3958,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			var deniedTools []string
 			extraTools := []agent.Tool{
 				newDianaChatHistoryTool(r, event).withRecallSink(recallSink),
-				newDianaHistoryImagesTool(r, event).withTextMode(imageTextModeFromContext(ctx) != nil),
+				newDianaHistoryImagesTool(r, event).withImageInput(imageTextOnly, imageTextOnly && !pixelsOnDemand),
 				newDianaRemoteImageTool(r, event),
 				newDianaMCPMediaTool(r, event),
 				&dianaTelegramImagesTool{runtime: r, event: event},

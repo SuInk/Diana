@@ -33,42 +33,46 @@ func TestImageInputModeNormalizeAndPayload(t *testing.T) {
 	}
 }
 
-func TestImageInputTextOnlyResolvesExplicitModes(t *testing.T) {
+func TestImageInputPlanResolvesExplicitModes(t *testing.T) {
 	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	ctx := context.Background()
-	if !runtime.imageInputTextOnly(ctx, BotConfig{ImageInputMode: ImageInputModeText}) {
-		t.Fatal("text mode should be text-only")
+	if describe, pixels := runtime.imageInputPlan(ctx, BotConfig{ImageInputMode: ImageInputModeText}); !describe || pixels {
+		t.Fatalf("text mode: describe=%v pixels=%v", describe, pixels)
 	}
-	if runtime.imageInputTextOnly(ctx, BotConfig{ImageInputMode: ImageInputModeNative}) {
-		t.Fatal("native mode must attach images")
+	if describe, pixels := runtime.imageInputPlan(ctx, BotConfig{ImageInputMode: ImageInputModeNative}); describe || !pixels {
+		t.Fatalf("native mode: describe=%v pixels=%v", describe, pixels)
 	}
-	// 没有模型配置库时看图和回答本来就是同一个模型，照原样给图。
-	if runtime.imageInputTextOnly(ctx, BotConfig{ImageInputMode: ImageInputModeAuto}) {
+	// 没有模型配置库时写描述和回答是同一个模型，照原样给图。
+	if describe, _ := runtime.imageInputPlan(ctx, BotConfig{ImageInputMode: ImageInputModeAuto}); describe {
 		t.Fatal("auto without an llm store must attach images")
 	}
 }
 
-// 自动档看对话模型：清单写了按清单，没写查随版本打包的目录，都查不到按仅摘要。
-func TestImageInputAutoFollowsChatModelModalities(t *testing.T) {
-	autoFor := func(model string, modalities []string) bool {
+// 自动档：消息里的图总是给描述；对话模型能看图时，模型要看原图就交给它自己看，
+// 看不了（清单写明不收或查不到）就由视觉理解代看。
+func TestImageInputAutoDescribesAndGivesPixelsOnDemand(t *testing.T) {
+	planFor := func(model string, modalities []string) (bool, bool) {
 		store := &stubLLMProfileStore{set: llm.ProfileSet{Profiles: []llm.Profile{{ID: "chat", Group: llm.GroupChat, Config: llm.ProviderConfig{
 			Provider: llm.ProviderOpenAICompatible, APIKey: "key", Model: model,
 			Models: []llm.ModelInfo{{ID: model, InputModalities: modalities}},
 		}}}}}
 		runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), store, nil, nil, nil)
-		return runtime.imageInputTextOnly(context.Background(), BotConfig{ImageInputMode: ImageInputModeAuto})
+		return runtime.imageInputPlan(context.Background(), BotConfig{ImageInputMode: ImageInputModeAuto})
 	}
-	if autoFor("house-model", []string{"text", "image"}) {
-		t.Fatal("a chat model listed with image input should get pixels")
-	}
-	if !autoFor("house-model", []string{"text"}) {
-		t.Fatal("a text-only chat model should get descriptions")
-	}
-	if autoFor("gemini-3.8-flash-low", nil) {
-		t.Fatal("the bundled catalog knows gemini-3.8-flash takes images")
-	}
-	if !autoFor("house-model-unknown", nil) {
-		t.Fatal("an unknown chat model should fall back to descriptions")
+	for _, c := range []struct {
+		model      string
+		modalities []string
+		pixels     bool
+	}{
+		{"house-model", []string{"text", "image"}, true},
+		{"house-model", []string{"text"}, false},
+		{"gemini-3.8-flash-low", nil, true},
+		{"house-model-unknown", nil, false},
+	} {
+		describe, pixels := planFor(c.model, c.modalities)
+		if !describe || pixels != c.pixels {
+			t.Fatalf("%s %v: describe=%v pixels=%v, want describe and pixels=%v", c.model, c.modalities, describe, pixels, c.pixels)
+		}
 	}
 }
 
@@ -77,7 +81,7 @@ func TestImageTextModeMessageReplacesImagesWithDescriptions(t *testing.T) {
 	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	event := photoEvent("30001", "10001", 1_800_000_000)
 	event.Segments[0].Data[recallImageDescriptionKey] = "一只橘猫张大嘴在笑"
-	ctx := withImageTextMode(context.Background(), runtime, event)
+	ctx := withImageTextMode(context.Background(), runtime, event, false)
 
 	message, failures := llmMessageFromEventWithImageDetail(ctx, event, "这是啥", nil, "high")
 	if len(failures) != 0 || llmMessageHasImagePart(message) || len(message.Parts) != 0 {
@@ -93,7 +97,7 @@ func TestImageTextModeMessageReplacesImagesWithDescriptions(t *testing.T) {
 // 模型出口兜底：工具返回的截图也换成描述，整轮不再切到视觉路由。
 func TestImageTextModeReplacesLeftoverImageParts(t *testing.T) {
 	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
-	ctx := withImageTextMode(context.Background(), runtime, MessageEvent{MessageID: "30002"})
+	ctx := withImageTextMode(context.Background(), runtime, MessageEvent{MessageID: "30002"}, false)
 	mode := imageTextModeFromContext(ctx)
 	mode.sources[sha256Hex(imageInputModeTestPNG)] = "网页截图：价格 99 元"
 
@@ -108,6 +112,11 @@ func TestImageTextModeReplacesLeftoverImageParts(t *testing.T) {
 	if !messagesContainImages(messages) {
 		t.Fatal("the caller's messages must not be mutated")
 	}
+	// 对话模型看得了图时，那是模型自己要看的原图，照原样放行。
+	pixels := imageTextModeFromContext(withImageTextMode(context.Background(), runtime, MessageEvent{MessageID: "30002"}, true))
+	if !messagesContainImages(pixels.replaceImageParts(ctx, messages)) {
+		t.Fatal("on-demand pixels must reach a chat model that can see images")
+	}
 }
 
 // history_media 在仅摘要模式下带着问题让视觉模型看图，只回文字。
@@ -118,7 +127,7 @@ func TestHistoryMediaTextModeAsksVisionModel(t *testing.T) {
 	if _, ok := tool.InputSchema()["properties"].(map[string]any)["question"]; ok {
 		t.Fatal("native mode schema should not grow a question field")
 	}
-	tool.withTextMode(true)
+	tool.withImageInput(true, true)
 	if _, ok := tool.InputSchema()["properties"].(map[string]any)["question"]; !ok {
 		t.Fatal("text mode schema needs a question field")
 	}
@@ -173,5 +182,40 @@ func TestReplyInImageTextModeSendsNoPixels(t *testing.T) {
 	}
 	if !attached {
 		t.Fatal("native mode should still attach the original image")
+	}
+}
+
+// 自动档下当前这条的图只有描述；模型回头要看原图时，不传消息 ID 也能读到当前这条，
+// 哪怕它还没进历史。对话模型看得了图就拿到原图，看不了就由视觉理解代看。
+func TestHistoryMediaReadsDescribedCurrentImage(t *testing.T) {
+	provider := &capturingLLMProvider{reply: "右下角写着 99 元"}
+	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) { return provider, nil })
+	current := MessageEvent{
+		Kind: EventKindGroup, GroupID: "123456", UserID: "10001", MessageID: "30005",
+		Segments: []MessageSegment{{Type: "image", Data: map[string]string{"file": "price.png", "url": imageInputModeTestPNG}}},
+	}
+
+	pixels := newDianaHistoryImagesTool(runtime, current).withImageInput(true, false)
+	output, err := pixels.Run(context.Background(), map[string]any{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pixels.ToolResultParts(output)) == 0 {
+		t.Fatalf("a chat model that can see images should get the current image: %s", output)
+	}
+
+	asking := newDianaHistoryImagesTool(runtime, current).withImageInput(true, true)
+	output, err = asking.Run(context.Background(), map[string]any{"message_id": "30005", "question": "价格是多少"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(asking.ToolResultParts(output)) != 0 || !strings.Contains(output, "右下角写着 99 元") {
+		t.Fatalf("a text-only chat model should get the vision model's answer, not pixels: %s", output)
+	}
+
+	// 原图档下当前这条本来就附着原图，不传 ID 时不重复读它。
+	native := newDianaHistoryImagesTool(runtime, current)
+	if _, err := native.Run(context.Background(), map[string]any{}); err == nil {
+		t.Fatal("native mode should not default to re-reading the current message")
 	}
 }

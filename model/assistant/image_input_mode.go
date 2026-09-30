@@ -17,16 +17,17 @@ import (
 	"github.com/SuInk/diana/model/llm"
 )
 
-// ImageInputMode 决定对话模型怎么看图，三档照搬 Hermes Agent 的 image_input_mode：
+// ImageInputMode 决定对话模型怎么看图。描述本来就会写（后台描述队列、当前图的
+// 描述锚点），所以默认只给描述，对话模型要看细节时才看原图——照 Hermes 的
+// vision_analyze：对话模型能看图就把原图交给它自己看，看不了就由视觉理解代看。
 //
-//   - native：原图直接交给对话模型，不换模型。
-//   - text：对话模型一张原图都不收。每张图先由「视觉理解」模型写成描述，描述替换原图；
-//     要看某处细节时，模型调 history_media 带上问题，由视觉理解模型看图作答、只回文字。
-//   - auto：对话模型能收图就用 native，不能收或查不到就用 text。
+//   - auto（默认）：消息里的图只给描述。模型调 history_media 时，对话模型能收图就
+//     返回原图，收不了就带着问题让视觉理解代看、只回文字。
+//   - text：消息里的图只给描述，history_media 也始终由视觉理解代看，对话模型从不收原图。
+//   - native：原图始终附上。原图和描述是两份钱，只在想让对话模型每次都亲眼看图时用。
 //
-// 以前带图的轮次整轮切到「视觉理解」模型回答，agent 每走一步都把原图再发一遍，
-// 对话模型的选择在带图时完全不作数。现在视觉理解只做 Hermes 里 auxiliary.vision
-// 那件事：替看不了图的对话模型看图。描述按图片内容哈希缓存，同一张图只识别一次。
+// 带图的消息始终由对话模型回答，不再整轮切到视觉理解。视觉理解只做 Hermes 里
+// auxiliary.vision 那件事：写描述、替看不了图的对话模型看图。
 type ImageInputMode string
 
 const (
@@ -46,26 +47,27 @@ func normalizeImageInputMode(mode ImageInputMode) ImageInputMode {
 	}
 }
 
-// imageInputTextOnly 把配置落到这一轮实际用哪一档上。
-func (r *Runtime) imageInputTextOnly(ctx context.Context, cfg BotConfig) bool {
+// imageInputPlan 把配置落到这一轮：describe 表示消息里的图换成描述，
+// pixelsOnDemand 表示模型主动要看时可以把原图交给对话模型本身。
+func (r *Runtime) imageInputPlan(ctx context.Context, cfg BotConfig) (describe, pixelsOnDemand bool) {
 	switch normalizeImageInputMode(cfg.ImageInputMode) {
 	case ImageInputModeText:
-		return true
+		return true, false
 	case ImageInputModeNative:
-		return false
+		return false, true
 	}
 	modalities, configured := r.chatModelInputModalities(ctx)
 	if !configured {
-		// 没有模型配置库（单一提供商的嵌入用法）：看图和回答本来就是同一个模型，
-		// 换成描述也是它自己写，照原样给图。
-		return false
+		// 没有模型配置库（单一提供商的嵌入用法）：写描述和回答是同一个模型，
+		// 描述不会更便宜，照原样给图。
+		return false, true
 	}
-	return !slices.Contains(modalities, "image")
+	return true, slices.Contains(modalities, "image")
 }
 
 // chatModelInputModalities 查对话模型的输入模态：先看这个配置同步下来的模型清单，
-// 清单没写再按模型名查随版本打包的 models.dev 目录。都查不到返回空，自动档按
-// 「不收图」处理——把图发给不收图的模型会整轮报错，给描述只是少看些细节。
+// 清单没写再按模型名查随版本打包的 models.dev 目录。都查不到返回空，按「不收图」
+// 处理——把图发给不收图的模型会整轮报错，改由视觉理解代看只是多一次调用。
 // configured=false 表示没有模型配置库，谈不上查。
 func (r *Runtime) chatModelInputModalities(ctx context.Context) (modalities []string, configured bool) {
 	r.mu.RLock()
@@ -96,18 +98,20 @@ func (r *Runtime) chatModelInputModalities(ctx context.Context) (modalities []st
 
 type imageTextModeKey struct{}
 
-// imageTextMode 挂在这一轮回复的 ctx 上：拼消息的地方看到它就把图换成描述，
-// 模型出口看到它就把漏网的图（工具返回的截图等）也换掉。
+// imageTextMode 挂在这一轮回复的 ctx 上：拼消息的地方看到它就把图换成描述。
+// allowPixels 为假时，模型出口把漏网的图（工具返回的截图等）也换掉；为真时那些是
+// 模型自己要看的图，对话模型看得了，照原样放行。
 type imageTextMode struct {
-	runtime *Runtime
-	event   MessageEvent
+	runtime     *Runtime
+	event       MessageEvent
+	allowPixels bool
 
 	mu      sync.Mutex
 	sources map[string]string
 }
 
-func withImageTextMode(ctx context.Context, r *Runtime, event MessageEvent) context.Context {
-	return context.WithValue(ctx, imageTextModeKey{}, &imageTextMode{runtime: r, event: event, sources: map[string]string{}})
+func withImageTextMode(ctx context.Context, r *Runtime, event MessageEvent, allowPixels bool) context.Context {
+	return context.WithValue(ctx, imageTextModeKey{}, &imageTextMode{runtime: r, event: event, allowPixels: allowPixels, sources: map[string]string{}})
 }
 
 func imageTextModeFromContext(ctx context.Context) *imageTextMode {
@@ -118,13 +122,13 @@ func imageTextModeFromContext(ctx context.Context) *imageTextMode {
 	return mode
 }
 
-const imageTextModeHeading = "【图片内容】对话模型没有直接看到下面这些图，内容由视觉模型描述，可能有误或漏掉细节。描述只用来理解图片，不要原样复述给用户；要确认图里某处细节（小字、数量、位置、是谁），调用 history_media 并在 question 里写清要看什么。"
+const imageTextModeHeading = "【图片内容】下面这些图没有附原图，内容由视觉模型描述，可能有误或漏掉细节。描述只用来理解图片，不要原样复述给用户；描述够用就直接答，要确认图里某处细节（小字、数量、位置、是谁）再调用 history_media 看原图。"
 
 var promptImageTextModeSpec = registerPrompt(PromptSpec{
 	Key:     "media.image_text_mode",
 	Group:   PromptGroupMedia,
-	Title:   "仅摘要模式的图片段头",
-	Usage:   "对话模型不看原图时（图片交付方式为仅摘要，或自动档判定对话模型不收图），消息里的每张图都换成视觉理解模型写的描述，这句放在描述前面，告诉对话模型它没看到原图、要看细节该怎么办。",
+	Title:   "图片描述段头",
+	Usage:   "图片交付方式为自动或仅摘要时，消息里的每张图都换成视觉理解写的描述，这句放在描述前面，告诉对话模型它没看到原图、要看细节该怎么办。",
 	Default: imageTextModeHeading,
 })
 
@@ -256,10 +260,10 @@ func (m *imageTextMode) message(ctx context.Context, event MessageEvent, text st
 	return llm.Message{Role: llm.RoleUser, Content: text}
 }
 
-// replaceImageParts 是模型出口的兜底：拼消息时换不到的图（工具返回的截图、插件
-// 附图、依赖图兜底）在这里逐张换成描述，保证整轮一个像素都不进回复模型。
+// replaceImageParts 是模型出口的兜底：对话模型看不了图时，拼消息时换不到的图（工具
+// 返回的截图、插件附图、依赖图兜底）在这里逐张换成描述，保证一个像素都不进对话模型。
 func (m *imageTextMode) replaceImageParts(ctx context.Context, messages []llm.Message) []llm.Message {
-	if !messagesContainImages(messages) {
+	if m.allowPixels || !messagesContainImages(messages) {
 		return messages
 	}
 	type position struct{ message, part int }
@@ -315,7 +319,7 @@ var promptImageQuestionSystemSpec = registerPrompt(PromptSpec{
 	Key:     "media.image_question.system",
 	Group:   PromptGroupMedia,
 	Title:   "看图问答 · 要求",
-	Usage:   "对话模型不看原图时，它调 history_media 带着问题来问，视觉理解模型按这段要求看图作答，回答以文字交回。",
+	Usage:   "对话模型看不了原图时（仅摘要，或自动档下对话模型不收图），它调 history_media 带着问题来问，视觉理解按这段要求看图作答，回答以文字交回。",
 	Default: "你替一个看不到图片的对话模型看图。只根据图片回答它的问题：看得见的直接说，能认出的主体直接点名，拿不准写最可能的判断并注明「疑似」，看不清的就说看不清，不要编。问题涉及图中文字时完整抄录原文。不要回答图片之外的问题，不要使用 Markdown。",
 })
 

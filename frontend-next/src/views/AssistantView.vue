@@ -752,8 +752,8 @@
                   </label>
                 </div>
                 <p v-if="role.key === 'vision'" class="model-role-desc muted">
-                  图片交付方式：「原图」时图直接交给对话模型。「仅摘要」时每张图先由视觉理解写成描述，对话模型只看描述、不收原图，
-                  要看小字、数量这类细节时，它会带着问题让视觉理解再看一次。「自动」看对话模型能不能收图：能收用原图，不能收或查不到用仅摘要。
+                  图片交付方式：描述本来就会写，所以「自动」平时只把描述给对话模型；要看小字、数量这类细节时它才去看原图——
+                  对话模型能看图就自己看，看不了就带着问题让视觉理解代看。「仅摘要」对话模型从不收原图。「总是附原图」原图和描述一起给，多花一份 token。
                 </p>
                 <p class="model-role-desc muted">{{ role.description }}</p>
               </div>
@@ -2893,9 +2893,9 @@ const triggerModeOptions: AppSelectOption[] = [
 // 判断，固定档位在群里连着触发几次会很假。
 // 图片交付方式，照搬 Hermes Agent 的 image_input_mode 三档。
 const imageInputModeOptions: AppSelectOption[] = [
-  { value: "auto", label: "自动（推荐）", hint: "对话模型能收图用原图，否则用仅摘要" },
-  { value: "text", label: "仅摘要", hint: "对话模型只看描述，要细节时再问视觉理解" },
-  { value: "native", label: "原图", hint: "原图直接交给对话模型" }
+  { value: "auto", label: "自动（推荐）", hint: "平时只给描述，要看细节时才看原图" },
+  { value: "text", label: "仅摘要", hint: "对话模型从不收原图，细节由视觉理解代看" },
+  { value: "native", label: "总是附原图", hint: "原图和描述一起给，多花一份 token" }
 ];
 
 const refusalStrategyOptions: AppSelectOption[] = [
@@ -3448,8 +3448,8 @@ const modelRoleRows: ModelRoleRow[] = [
     label: "视觉理解",
     description:
       "替对话模型看图的辅助模型：写图片描述、视频帧描述、表情包简介，图片识别插件的看图与模型 OCR，以及对话模型带着问题回来问图时作答。" +
-      "带图的消息本身由对话模型回答，不会整轮换到这里。调用量大、在后台排队逐张执行，建议单独指一个识图稳定、价格合适的视觉模型并配上后备；" +
-      "跟随对话时，对话模型本身要能识图。"
+      "带图的消息本身由对话模型回答，不会整轮换到这里。对话模型能识图时保持跟随对话即可；对话模型是纯文本模型，" +
+      "或者想让写描述的模型更强或更便宜时，再单独指一个视觉模型并配上后备。"
   },
   {
     key: "intent",
