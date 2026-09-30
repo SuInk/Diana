@@ -872,6 +872,34 @@ func senderImageThenShortText(root MessageEvent, rootArrived time.Time, event Me
 	if text == "" || len([]rune(text)) > senderImageFollowUpMaxRunes || textLooksLikeURL(text) {
 		return false
 	}
+	return senderImageFollowUpInWindow(root, rootArrived, event, eventArrived)
+}
+
+// senderImageOnlyFollowUp 判断「前一条还没回完，同一个人几十秒内又补了一条纯图」。
+// 补的图几乎都是给前一句配的材料：「你看这个」之后的截图、调侃之后甩的表情图。
+// 话题判断器看不到图，纯图在它眼里是空消息，只会判 uncertain，图就漏出了这一轮。
+func senderImageOnlyFollowUp(root MessageEvent, rootArrived time.Time, event MessageEvent, eventArrived time.Time) bool {
+	if strings.TrimSpace(root.UserID) == "" || strings.TrimSpace(root.UserID) != strings.TrimSpace(event.UserID) {
+		return false
+	}
+	images := 0
+	for _, segment := range event.Segments {
+		switch segment.Type {
+		case "image":
+			images++
+		case "at", "reply":
+		case "text":
+			if strings.TrimSpace(segment.Data["text"]) != "" {
+				return false
+			}
+		default:
+			return false
+		}
+	}
+	return images > 0 && senderImageFollowUpInWindow(root, rootArrived, event, eventArrived)
+}
+
+func senderImageFollowUpInWindow(root MessageEvent, rootArrived time.Time, event MessageEvent, eventArrived time.Time) bool {
 	gap := eventArrived.Sub(rootArrived)
 	if root.Time > 0 && event.Time > 0 {
 		gap = time.Duration(event.Time-root.Time) * time.Second
@@ -879,27 +907,39 @@ func senderImageThenShortText(root MessageEvent, rootArrived time.Time, event Me
 	return gap >= 0 && gap <= senderImageFollowUpWindow
 }
 
-// imageFollowUpBySameSender 是话题判断前的那条规则：纯图之后同一个人补的一句短话
-// 直接算补充。这一步发生在「要不要回」的判断之前，所以要把不是冲着那张图来的
-// 挡在外面：带链接的、会触发插件或链接解析的、@ 了别人的、引用了别的消息的。
-func (r *Runtime) imageFollowUpBySameSender(root MessageEvent, rootArrived time.Time, event MessageEvent, eventArrived time.Time, text string) bool {
-	if !senderImageThenShortText(root, rootArrived, event, eventArrived, text) {
-		return false
+const (
+	imageFollowUpRuleShortText = "image_then_short_text"
+	imageFollowUpRuleImageOnly = "then_image_only"
+)
+
+// imageFollowUpBySameSender 是话题判断前的那条规则：纯图之后同一个人补的一句短话、
+// 或者同一个人紧跟着补的纯图，直接算补充，返回命中的规则名。这一步发生在「要不要回」
+// 的判断之前，所以要把不是冲着前一条来的挡在外面：带链接的、会触发插件或链接解析的、
+// @ 了别人的、引用了别的消息的。
+func (r *Runtime) imageFollowUpBySameSender(root MessageEvent, rootArrived time.Time, event MessageEvent, eventArrived time.Time, text string) (string, bool) {
+	var rule string
+	switch {
+	case senderImageThenShortText(root, rootArrived, event, eventArrived, text):
+		rule = imageFollowUpRuleShortText
+	case senderImageOnlyFollowUp(root, rootArrived, event, eventArrived):
+		rule = imageFollowUpRuleImageOnly
+	default:
+		return "", false
 	}
 	if !r.burstChatMessage(event, text) {
-		return false
+		return "", false
 	}
 	cfg := r.effectiveConfigForEvent(event)
 	botID := firstNonEmpty(strings.TrimSpace(event.SelfID), strings.TrimSpace(cfg.BotAccount))
 	for _, id := range mentionedUserIDs(event.Segments) {
 		if strings.TrimSpace(id) != botID {
-			return false
+			return "", false
 		}
 	}
 	if event.Quoted != nil && strings.TrimSpace(event.Quoted.MessageID) != strings.TrimSpace(root.MessageID) {
-		return false
+		return "", false
 	}
-	return true
+	return rule, true
 }
 
 // textLooksLikeURL 粗略认链接：带协议头或 www. 的一律不走规则，交给判断器。

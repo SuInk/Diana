@@ -206,9 +206,9 @@ func (r *Runtime) mergeIntoActiveDirectReply(ctx context.Context, event MessageE
 	}
 	r.replyInterruptMu.Unlock()
 	var relation string
-	if r.imageFollowUpBySameSender(root, rootArrived, event, eventArrived, text) {
+	if rule, ok := r.imageFollowUpBySameSender(root, rootArrived, event, eventArrived, text); ok {
 		relation = "supplement"
-		r.recordDirectReplyTopicRule(ctx, root, event, relation)
+		r.recordDirectReplyTopicRule(ctx, root, event, relation, rule)
 	} else {
 		relation = r.classifyDirectReplyTopic(ctx, root, supplements, event, text)
 	}
@@ -363,10 +363,14 @@ func (r *Runtime) classifyDirectReplyTopic(ctx context.Context, root MessageEven
 
 // recordDirectReplyTopicRule 把按规则判定的话题关系也记进运行日志，和模型判断
 // 落在同一个 action 下，排查时不会以为这次没判。
-func (r *Runtime) recordDirectReplyTopicRule(ctx context.Context, root, event MessageEvent, relation string) {
+func (r *Runtime) recordDirectReplyTopicRule(ctx context.Context, root, event MessageEvent, relation, rule string) {
 	writer := r.appLogWriter()
 	if writer == nil {
 		return
+	}
+	reason := "前一条是纯图，同一个人随后补了一句短话"
+	if rule == imageFollowUpRuleImageOnly {
+		reason = "前一条还没回完，同一个人随后补了一条纯图"
 	}
 	logCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Second)
 	defer cancel()
@@ -376,8 +380,8 @@ func (r *Runtime) recordDirectReplyTopicRule(ctx context.Context, root, event Me
 		Actor: oneBotEventActor(event), Target: event.MessageID,
 		Metadata: map[string]any{
 			"root_message_id": root.MessageID, "relation": relation,
-			"merge_allowed": true, "rule": "image_then_short_text",
-			"reason": "前一条是纯图，同一个人随后补了一句短话",
+			"merge_allowed": true, "rule": rule,
+			"reason": reason,
 		},
 	})
 }

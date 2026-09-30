@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/SuInk/diana/model/llm"
 )
@@ -191,6 +192,51 @@ func TestImageFollowUpRuleIgnoresLinksAndMentionsOfOthers(t *testing.T) {
 	runtime.noteSenderTurnArrival(plain)
 	if _, _, _, outcome := runtime.prepareMessageEvent(context.Background(), plain); outcome != "merged_into_reply" {
 		t.Fatalf("plain short follow-up should merge by rule, outcome=%q", outcome)
+	}
+}
+
+// 一句话还在回、同一个人几秒后甩来一张图：判断器看不到图，只会说「新消息为空」判
+// uncertain，图就漏出了这一轮。按规则直接算补充，并进同一份答案里。
+func TestImageOnlyFollowUpMergesWithoutJudge(t *testing.T) {
+	provider := &capturingLLMProvider{reply: `{"relation":"uncertain","confidence":0.95,"reason":"新消息内容为空"}`}
+	runtime := NewRuntime(BotConfig{BotAccount: "42"}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) { return provider, nil })
+	root := directedGroupMessage("20151", "10001", "你又猫狗不分了")
+	root.Time = 1_800_000_000
+	runtime.noteSenderTurnArrival(root)
+	runtime.remember(root)
+	ctx, finish := runtime.beginDirectReply(context.Background(), root)
+	defer finish()
+
+	image := photoEvent("20152", "10001", 1_800_000_003)
+	runtime.noteSenderTurnArrival(image)
+	if rootID, merged := runtime.mergeIntoActiveDirectReply(ctx, image, image.RawMessage); !merged || rootID != "20151" {
+		t.Fatalf("an image right after the question should merge, merged=%v root=%q", merged, rootID)
+	}
+	if topicJudgeCalled(provider) {
+		t.Fatal("the rule should decide without calling the judge")
+	}
+	if supplements := runtime.directReplySupplements(ctx); len(supplements) != 1 || supplements[0].Event.MessageID != "20152" {
+		t.Fatalf("the image should be kept as a supplement of the pending reply, got %+v", supplements)
+	}
+
+	withAt := photoEvent("20153", "10001", 1_800_000_004)
+	withAt.Segments = append([]MessageSegment{{Type: "at", Data: map[string]string{"qq": "42"}}, {Type: "text", Data: map[string]string{"text": " "}}}, withAt.Segments...)
+	if !senderImageOnlyFollowUp(root, time.Time{}, withAt, time.Time{}) {
+		t.Fatal("an image that only @s the bot is still an image-only follow-up")
+	}
+	late := photoEvent("20154", "10001", 1_800_000_000+int64(senderImageFollowUpWindow/time.Second)+5)
+	other := photoEvent("20155", "10002", 1_800_000_003)
+	captioned := photoEvent("20156", "10001", 1_800_000_003)
+	captioned.Segments = append(captioned.Segments, MessageSegment{Type: "text", Data: map[string]string{"text": "顺便问下周末去哪"}})
+	for _, follow := range []MessageEvent{late, other, captioned} {
+		if senderImageOnlyFollowUp(root, time.Time{}, follow, time.Time{}) {
+			t.Fatalf("%s must go to the judge instead of merging by rule", follow.MessageID)
+		}
+	}
+	mentionOther := photoEvent("20157", "10001", 1_800_000_005)
+	mentionOther.Segments = append([]MessageSegment{{Type: "at", Data: map[string]string{"qq": "10002"}}}, mentionOther.Segments...)
+	if _, ok := runtime.imageFollowUpBySameSender(root, time.Time{}, mentionOther, time.Time{}, ""); ok {
+		t.Fatal("an image that @s someone else is not a supplement to the bot's pending reply")
 	}
 }
 
