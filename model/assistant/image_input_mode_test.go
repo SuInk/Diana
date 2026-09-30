@@ -6,6 +6,7 @@ package assistant
 import (
 	"context"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/SuInk/diana/model/llm"
@@ -13,6 +14,26 @@ import (
 
 // 1x1 透明 PNG，够加载链路当成一张真图。
 const imageInputModeTestPNG = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
+
+// finalReplyProvider 每次都直接给最终回复，并记下每次请求。这里要看的是请求里有没有
+// 原图、有没有描述，agent 多走一轮也不该让测试崩。
+type finalReplyProvider struct {
+	mu       sync.Mutex
+	requests []llm.GenerateRequest
+}
+
+func (p *finalReplyProvider) Generate(_ context.Context, req llm.GenerateRequest) (*llm.GenerateResponse, error) {
+	p.mu.Lock()
+	p.requests = append(p.requests, cloneGenerateRequestForTest(req))
+	p.mu.Unlock()
+	return &llm.GenerateResponse{Text: `{"action":"final","content":"是只猫"}`}, nil
+}
+
+func (p *finalReplyProvider) snapshot() []llm.GenerateRequest {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return append([]llm.GenerateRequest(nil), p.requests...)
+}
 
 func imageInputModeTestStore() *stubLLMProfileStore {
 	return &stubLLMProfileStore{set: llm.ProfileSet{Profiles: []llm.Profile{{ID: "chat", Group: llm.GroupChat, Config: llm.ProviderConfig{
@@ -163,7 +184,7 @@ func TestHistoryMediaReadsDescribedCurrentImage(t *testing.T) {
 func TestReplyImageInputModeEndToEnd(t *testing.T) {
 	requestsFor := func(t *testing.T, mode ImageInputMode) []llm.GenerateRequest {
 		t.Helper()
-		provider := &agentSequenceLLMProvider{responses: []string{`{"action":"final","content":"是只猫"}`}}
+		provider := &finalReplyProvider{}
 		runtime := NewRuntime(BotConfig{OwnerID: "owner", AgentEnabled: true, ImageInputMode: mode, ReplySafetyMasterEnabled: boolPointer(false)}, nilChannel{}, NewDefaultPluginManager(), imageInputModeTestStore(), nil, nil, nil)
 		runtime.SetLLMProviderConfigFactory(func(llm.ProviderConfig) (LLMProvider, error) { return provider, nil })
 		event := MessageEvent{
@@ -176,10 +197,11 @@ func TestReplyImageInputModeEndToEnd(t *testing.T) {
 		if _, err := runtime.replyTo(context.Background(), event, "这是啥"); err != nil {
 			t.Fatal(err)
 		}
-		if len(provider.requests) == 0 {
+		requests := provider.snapshot()
+		if len(requests) == 0 {
 			t.Fatal("provider was not called")
 		}
-		return provider.requests
+		return requests
 	}
 
 	found := false
