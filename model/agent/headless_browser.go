@@ -897,7 +897,7 @@ type BrowserRenderTool struct {
 
 func NewBrowserRenderTool(renderer PageRenderer) *BrowserRenderTool {
 	if renderer == nil {
-		renderer = NewSandboxedHeadlessBrowser(SandboxedBrowserConfig{})
+		renderer = NewSandboxedHeadlessBrowser(SandboxedBrowserConfig{Window: BrowserWindowHidden})
 	}
 	return &BrowserRenderTool{renderer: renderer}
 }
