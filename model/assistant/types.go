@@ -791,9 +791,12 @@ type BotConfig struct {
 	VideoGenerationDailyGroupLimit int64 `json:"video_generation_daily_group_limit,omitempty"`
 	VideoGenerationDailyUserLimit  int64 `json:"video_generation_daily_user_limit,omitempty"`
 	// DailyLimitTimezone 是每日次数在哪个时区的零点重置（IANA 名，如 Asia/Shanghai）。
-	// 留空读 TZ 环境变量，再没有按北京时间：Docker 镜像默认是 UTC，不能拿进程本地
-	// 时区当日界线。
+	// 留空跟随机器人时区（Timezone）。
 	DailyLimitTimezone string `json:"daily_limit_timezone,omitempty"`
+	// Timezone 是机器人的时区（IANA 名，如 Asia/Shanghai）：注入的当前时间、回复时段、
+	// 每日次数的日界线、「明天八点」的换算都按它。留空读 TZ 环境变量，再用本机时区；
+	// 本机是裸 UTC（Docker 默认）时按北京时间，见 BotConfig.Location。
+	Timezone string `json:"timezone,omitempty"`
 	// ReplySamplePercent 是这台机器人的每群回复抽样率默认值（1–100）：没 @、没引用
 	// 机器人、没叫名字的群消息，只有这个比例会交给模型判断要不要接话。0 表示不抽样。
 	ReplySamplePercent int `json:"reply_sample_percent,omitempty"`

@@ -142,8 +142,10 @@ func TestMediaQuotaResetsAtConfiguredMidnight(t *testing.T) {
 	}
 }
 
-// 机器人上填了时区以它为准，其次 TZ，最后北京时间；填错的时区名退到下一档。
+// 单独的日界线时区优先，其次机器人时区，再其次 TZ，本机是裸 UTC 时按北京时间；
+// 填错的时区名退到下一档。
 func TestDailyLimitLocationPrecedence(t *testing.T) {
+	useSystemLocation(t, time.UTC)
 	t.Setenv("TZ", "")
 	if got := DailyLimitLocation(BotConfig{}).String(); got != "Asia/Shanghai" {
 		t.Fatalf("默认时区 = %s", got)
@@ -152,8 +154,11 @@ func TestDailyLimitLocationPrecedence(t *testing.T) {
 	if got := DailyLimitLocation(BotConfig{}).String(); got != "Europe/Berlin" {
 		t.Fatalf("应当读 TZ，得到 %s", got)
 	}
-	if got := DailyLimitLocation(BotConfig{DailyLimitTimezone: "America/New_York"}).String(); got != "America/New_York" {
-		t.Fatalf("机器人配置应当优先，得到 %s", got)
+	if got := DailyLimitLocation(BotConfig{Timezone: "Asia/Tokyo"}).String(); got != "Asia/Tokyo" {
+		t.Fatalf("应当跟随机器人时区，得到 %s", got)
+	}
+	if got := DailyLimitLocation(BotConfig{Timezone: "Asia/Tokyo", DailyLimitTimezone: "America/New_York"}).String(); got != "America/New_York" {
+		t.Fatalf("日界线时区应当优先，得到 %s", got)
 	}
 	if got := DailyLimitLocation(BotConfig{DailyLimitTimezone: "Mars/Olympus"}).String(); got != "Europe/Berlin" {
 		t.Fatalf("填错的时区应退到 TZ，得到 %s", got)

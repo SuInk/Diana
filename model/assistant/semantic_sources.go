@@ -170,7 +170,7 @@ func (r *Runtime) semanticReferenceContext(ctx context.Context, event MessageEve
 		}
 		at := "未知"
 		if source.Time > 0 {
-			at = time.Unix(source.Time, 0).Local().Format("2006-01-02 15:04:05")
+			at = time.Unix(source.Time, 0).In(profileLocation(source.ProfileID)).Format("2006-01-02 15:04:05")
 		}
 		line := fmt.Sprintf(
 			"- message_id=%s；sender=%s；role=%s；time=%s；image_count=%d",

@@ -144,7 +144,7 @@ func (r *Runtime) notifyReminderFailure(ctx context.Context, item Reminder, caus
 }
 
 func reminderFailureNotice(item Reminder, cause error) string {
-	nextAttempt := item.TriggerAt.Format("2006-01-02 15:04:05")
+	nextAttempt := reminderLocalTime(item, item.TriggerAt).Format("2006-01-02 15:04:05")
 	if reminderIsRecurring(item) {
 		// 周期订阅攒够连续失败次数才会走到这里，措辞照实说「连续 N 次」，
 		// 不然「本次执行失败」会让人以为刚坏，其实已经坏了几个周期。

@@ -23,11 +23,11 @@ const contextSummaryMaxRunes = 4000
 // 几条结论的空间；比这更小就不值得带摘要了。
 const minimumContextSummaryTokens int64 = 192
 
-func contextSummaryTimeLabel(unix int64) string {
+func contextSummaryTimeLabel(unix int64, location *time.Location) string {
 	if unix <= 0 {
 		return "未知时间"
 	}
-	return time.Unix(unix, 0).Local().Format("2006-01-02 15:04")
+	return time.Unix(unix, 0).In(location).Format("2006-01-02 15:04")
 }
 
 // contextSummaryHeader 渲染水位标识。条数为零时返回空串。

@@ -206,7 +206,7 @@ func (p RelationshipPolicy) personalScheduleLimit() int {
 func RelationshipPolicyForConfig(cfg BotConfig, profile UserMemoryProfile, userID string) RelationshipPolicy {
 	policy := RelationshipPolicyFor(profile, cfg.OwnerID, userID)
 	if boolValue(cfg.RomanceEnabled, false) {
-		policy = applyRomancePolicy(policy, profile, time.Now())
+		policy = applyRomancePolicy(policy, profile, time.Now().In(cfg.Location()))
 	}
 	return policy
 }

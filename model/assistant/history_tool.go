@@ -159,7 +159,7 @@ func (t *dianaChatHistoryTool) recalls(ctx context.Context, input map[string]any
 		OK:      true,
 		Action:  "recalls",
 		Message: message,
-		Window:  chatHistoryWindowLabel(referenceTime-int64(recallDefaultWindow/time.Second), referenceTime),
+		Window:  chatHistoryWindowLabel(referenceTime-int64(recallDefaultWindow/time.Second), referenceTime, profileLocation(t.event.ProfileID)),
 		Items:   items,
 		Total:   total,
 	}, nil
@@ -264,7 +264,7 @@ func (t *dianaChatHistoryTool) overview(ctx context.Context, input map[string]an
 	total := len(timeline)
 	if total == 0 {
 		return dianaChatHistoryResult{
-			OK: true, Action: "overview", Window: chatHistoryWindowLabel(fromTime, throughTime),
+			OK: true, Action: "overview", Window: chatHistoryWindowLabel(fromTime, throughTime, profileLocation(t.event.ProfileID)),
 			Message: "这个时间段在本地记录里没有消息，可能当时没人说话，或机器人那会儿不在这个会话里；不要凭空编造内容。",
 			Items:   []dianaChatHistoryItem{},
 		}, nil
@@ -279,7 +279,7 @@ func (t *dianaChatHistoryTool) overview(ctx context.Context, input map[string]an
 		items[index].QuotedImageDescriptions = nil
 	}
 	return dianaChatHistoryResult{
-		OK: true, Action: "overview", Window: chatHistoryWindowLabel(fromTime, throughTime),
+		OK: true, Action: "overview", Window: chatHistoryWindowLabel(fromTime, throughTime, profileLocation(t.event.ProfileID)),
 		Message: fmt.Sprintf("已从整个时间段的 %d 条记录中按时间均匀抽取 %d 条代表消息，样本覆盖开头、中段和结尾，可据此概括全天；这是概览而非完整逐条清单，需要核对具体说法时再用 range 或 search。", total, len(items)),
 		Items:   items, Total: total, Limited: total > len(items),
 	}, nil
@@ -542,7 +542,7 @@ func (t *dianaChatHistoryTool) search(ctx context.Context, input map[string]any)
 	result := dianaChatHistoryResult{
 		OK: true, Action: "search", Query: query, Order: order, Items: items, Total: total,
 		Message: "已在" + label + "内按指定时间顺序进行关键词检索，返回精简命中；图片仅保留相关片段。",
-		Window:  chatHistoryWindowLabel(page.From, page.Through), searchPage: &page,
+		Window:  chatHistoryWindowLabel(page.From, page.Through, profileLocation(t.event.ProfileID)), searchPage: &page,
 		Guidance: "需要原文或前后文时调用 around，传 message_id；跨群命中同时传 group_id。has_more=true 时继续使用 next_cursor，保持 query、scope、order 相同。search_complete 仅表示当前关键词与范围已枚举完，不等于事件事实完整；未核对原文和完整范围时只能说目前查到最早，不能断言最早就是。时间分页采用关键词匹配，不混入不具备完整总数的语义候选。",
 	}
 	if order != "relevance" && len(uniqueLowerFields(query)) > 1 {
@@ -591,7 +591,7 @@ func (t *dianaChatHistoryTool) window(ctx context.Context, input map[string]any)
 	}
 	return dianaChatHistoryResult{
 		OK: true, Action: "range", Order: "oldest", Items: items, Total: total,
-		Window: chatHistoryWindowLabel(page.From, page.Through), searchPage: &page, rangeTimes: times,
+		Window: chatHistoryWindowLabel(page.From, page.Through, profileLocation(t.event.ProfileID)), searchPage: &page, rangeTimes: times,
 		Message:  message,
 		Guidance: "有 next_cursor 时使用 range 和 cursor 续查，游标固定时间范围且不会跳过同一秒的消息。next_from_time 仅在时间边界无重复时提供。若需概括整个时间段可用 overview；truncated=true 时细节不完整，不得据此断言没有其他记录。",
 	}, nil
@@ -604,7 +604,7 @@ func (t *dianaChatHistoryTool) resolveWindow(input map[string]any) (fromTime, th
 	if throughTime <= 0 {
 		throughTime = time.Now().Unix()
 	}
-	if value, dateOnly, ok := chatHistoryTimeValue(input, "through_time"); ok {
+	if value, dateOnly, ok := chatHistoryTimeValue(input, "through_time", profileLocation(t.event.ProfileID)); ok {
 		throughTime = value
 		if dateOnly {
 			// 只给日期时按整天算，否则「through=昨天」会截在零点。
@@ -615,7 +615,7 @@ func (t *dianaChatHistoryTool) resolveWindow(input map[string]any) (fromTime, th
 	case chatHistoryBool(input, "all_time"):
 		fromTime = 0
 	case hasChatHistoryTimeValue(input, "from_time"):
-		value, _, _ := chatHistoryTimeValue(input, "from_time")
+		value, _, _ := chatHistoryTimeValue(input, "from_time", profileLocation(t.event.ProfileID))
 		fromTime = value
 	case intFromAny(input["days"]) > 0:
 		days := chatHistoryPositiveInt(input, "days", 1, maximumChatHistorySearchHours/24)
@@ -644,12 +644,13 @@ var chatHistoryTimeLayouts = []struct {
 }
 
 func hasChatHistoryTimeValue(input map[string]any, key string) bool {
-	_, _, ok := chatHistoryTimeValue(input, key)
+	_, _, ok := chatHistoryTimeValue(input, key, time.UTC)
 	return ok
 }
 
-// chatHistoryTimeValue 把 Unix 秒或本地时间字符串解析成时间戳。
-func chatHistoryTimeValue(input map[string]any, key string) (value int64, dateOnly, ok bool) {
+// chatHistoryTimeValue 把 Unix 秒或本地时间字符串解析成时间戳。不带时区的字面时间
+// 按 location（机器人时区）理解，和历史行上标的时间同一个时区。
+func chatHistoryTimeValue(input map[string]any, key string, location *time.Location) (value int64, dateOnly, ok bool) {
 	raw, exists := input[key]
 	if !exists || raw == nil {
 		return 0, false, false
@@ -666,7 +667,7 @@ func chatHistoryTimeValue(input map[string]any, key string) (value int64, dateOn
 			return parsed.Unix(), false, true
 		}
 		for _, candidate := range chatHistoryTimeLayouts {
-			if parsed, err := time.ParseInLocation(candidate.layout, text, time.Local); err == nil {
+			if parsed, err := time.ParseInLocation(candidate.layout, text, location); err == nil {
 				return parsed.Unix(), candidate.dateOnly, true
 			}
 		}
@@ -678,13 +679,13 @@ func chatHistoryTimeValue(input map[string]any, key string) (value int64, dateOn
 	return 0, false, false
 }
 
-func chatHistoryWindowLabel(fromTime, throughTime int64) string {
+func chatHistoryWindowLabel(fromTime, throughTime int64, location *time.Location) string {
 	layout := "2006-01-02 15:04:05"
 	from := "最早"
 	if fromTime > 0 {
-		from = time.Unix(fromTime, 0).Local().Format(layout)
+		from = time.Unix(fromTime, 0).In(location).Format(layout)
 	}
-	return from + " ~ " + time.Unix(throughTime, 0).Local().Format(layout)
+	return from + " ~ " + time.Unix(throughTime, 0).In(location).Format(layout)
 }
 
 func (t *dianaChatHistoryTool) timeline(ctx context.Context, fromTime, throughTime int64) ([]MessageEvent, error) {
@@ -810,7 +811,7 @@ func chatHistoryItem(event MessageEvent, configs ...BotConfig) dianaChatHistoryI
 		GroupID:      strings.TrimSpace(event.GroupID),
 	}
 	if event.Time > 0 {
-		item.LocalTime = time.Unix(event.Time, 0).Local().Format("2006-01-02 15:04:05 -07:00")
+		item.LocalTime = time.Unix(event.Time, 0).In(profileLocation(event.ProfileID)).Format("2006-01-02 15:04:05 -07:00")
 	}
 	item.TextTruncated = item.Text != strings.TrimSpace(historyToolEventText(event))
 	for _, segment := range event.Segments {

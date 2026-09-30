@@ -29,7 +29,7 @@ type taskClock struct {
 }
 
 // taskClockForEvent 取这条消息的换算基准。发言者画像里记过时区就用他的时区——他说的
-// 「明天八点」是他那边的八点；否则用机器人这台机器的时区。基准时刻取消息发出时间，
+// 「明天八点」是他那边的八点；否则用机器人时区。基准时刻取消息发出时间，
 // 回补的旧消息也按它当时的「今天」算。
 func (r *Runtime) taskClockForEvent(event MessageEvent) taskClock {
 	now := time.Now()
@@ -37,6 +37,9 @@ func (r *Runtime) taskClockForEvent(event MessageEvent) taskClock {
 		now = r.clock()
 	}
 	location := now.Location()
+	if r != nil {
+		location = r.effectiveConfigForEvent(event).Location()
+	}
 	if event.userProfileLoaded {
 		if speaker, _ := PortraitTimezoneWithRecordedAt(event.userProfile.Portrait); speaker != nil {
 			location = speaker

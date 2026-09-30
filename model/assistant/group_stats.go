@@ -240,7 +240,7 @@ func (t *dianaChatHistoryTool) speakerStats(ctx context.Context, input map[strin
 	}
 	message += "is_bot=true 的是机器人（包括本群标记过的其他机器人）。这是发言条数，不是点赞数。"
 	return codingToolJSONAny(groupStatsResult{
-		OK: true, Action: "speakers", Message: message, Window: chatHistoryWindowLabel(from, through),
+		OK: true, Action: "speakers", Message: message, Window: chatHistoryWindowLabel(from, through, profileLocation(t.event.ProfileID)),
 		Total: total, Ranks: t.rankItems(ranks),
 	})
 }
@@ -294,7 +294,7 @@ func (t *dianaChatHistoryTool) reactionStats(ctx context.Context, input map[stri
 		message += fmt.Sprintf("只列出前 %d 人，要看全部把 limit 调大。", len(ranks))
 	}
 	return codingToolJSONAny(groupStatsResult{
-		OK: true, Action: "reactions", Message: message + coverage, Window: chatHistoryWindowLabel(from, through),
+		OK: true, Action: "reactions", Message: message + coverage, Window: chatHistoryWindowLabel(from, through, profileLocation(t.event.ProfileID)),
 		Total: total, Ranks: t.rankItems(ranks),
 	})
 }

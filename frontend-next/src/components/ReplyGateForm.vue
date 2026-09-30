@@ -81,7 +81,7 @@
             :id="`${idPrefix}-tz`"
             class="input"
             list="reply-gate-timezones"
-            placeholder="留空用服务器本地时区"
+            placeholder="留空跟随机器人时区"
             :value="gate.timezone ?? ''"
             @input="patch({ timezone: valueOf($event) })"
           />

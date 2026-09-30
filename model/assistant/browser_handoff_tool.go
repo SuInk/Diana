@@ -192,7 +192,7 @@ func (r *Runtime) resumeAfterBrowserHandoff(job browserHandoffJob, outcome strin
 		{
 			Role: llm.RoleUser,
 			Content: fmt.Sprintf("【当前需要回复的消息】\n接着做之前的事。当前时间：%s。\n主人原来那条消息：%s\n交接前你记下的待办：%s\n交接结果：%s",
-				time.Now().Format("2006-01-02 15:04:05 MST"), firstNonEmpty(job.original, "（没有文字）"), job.task, result),
+				formatZonedTime(time.Now().In(profileLocation(job.event.ProfileID)), "2006-01-02 15:04:05"), firstNonEmpty(job.original, "（没有文字）"), job.task, result),
 		},
 	}
 	reply, err := browserHandoffReply(r, runCtx, cfg, job.event, relationship, messages, newDianaBrowserHandoffTool(r, job.event, cfg))

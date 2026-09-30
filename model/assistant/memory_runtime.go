@@ -1093,14 +1093,14 @@ func memoryEventText(event MessageEvent) string {
 	return strings.Join(strings.Fields(text), " ")
 }
 
-// memoryEventTime 用本机时区：门控和摘要要按它把「今天、早上」换算成日期，它得和
+// memoryEventTime 用机器人时区：门控和摘要要按它把「今天、早上」换算成日期，它得和
 // 运行时钟、历史行时间是同一个时区。以前给的是 UTC，北京时间早上七点半的消息在
 // 摘要里成了前一天 23:30，日期就差了一天。存储层按 Unix 秒落库，不受影响。
 func memoryEventTime(event MessageEvent) time.Time {
 	if event.Time > 0 {
-		return time.Unix(event.Time, 0).Local()
+		return time.Unix(event.Time, 0).In(profileLocation(event.ProfileID))
 	}
-	return time.Now()
+	return time.Now().In(profileLocation(event.ProfileID))
 }
 
 func memoryGateEventFromMessage(event MessageEvent, text string) memoryGateEvent {

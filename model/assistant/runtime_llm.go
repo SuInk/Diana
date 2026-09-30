@@ -880,7 +880,7 @@ func (r *Runtime) runtimeClockPrompt(event MessageEvent) string {
 	if !boolValue(cfg.PromptInjectTime, true) {
 		return ""
 	}
-	now := r.clock()
+	now := r.clock().In(cfg.Location())
 	zoneName, zoneOffset := now.Zone()
 	var builder strings.Builder
 	builder.WriteString(renderPromptTemplate(cfg.prompt(promptTimeTemplateSpec), map[string]string{
@@ -899,7 +899,7 @@ func (r *Runtime) runtimeClockPrompt(event MessageEvent) string {
 }
 
 // speakerTimezonePrompt 在画像里记过对方时区时，给出他那边的当地时间和时差。
-// 机器人自己的「现在几点」仍然只看运行时钟，也就是本机时区。
+// 机器人自己的「现在几点」仍然只看运行时钟，也就是机器人时区。
 func (r *Runtime) speakerTimezonePrompt(event MessageEvent, now time.Time) string {
 	if !event.userProfileLoaded {
 		return ""
@@ -1559,7 +1559,7 @@ func proactiveTurnPromptTextAt(event MessageEvent, fallbackText string, currentT
 	if quoted := quotedPromptText(event.Quoted); quoted != "" {
 		text += "\n" + quoted
 	}
-	return "【当前同轮补充消息，" + overrides.text(promptNoteSupplementSpec) + "】" + contextMessageTiming(event.Time, currentTime) + promptSenderIdentity(event) + ": " + text
+	return "【当前同轮补充消息，" + overrides.text(promptNoteSupplementSpec) + "】" + contextMessageTiming(event.Time, currentTime, profileLocation(event.ProfileID)) + promptSenderIdentity(event) + ": " + text
 }
 
 func currentPromptText(event MessageEvent, text string) string {
@@ -1637,7 +1637,7 @@ func currentPromptTextWithSemanticContext(event MessageEvent, text string, sourc
 	if reference := recentTextReferencePrompt(event.recentTextReference); reference != "" {
 		text += "\n\n" + reference
 	}
-	return "【当前需要回复的消息】" + contextMessageTiming(event.Time, 0) + "【当前发言者】" + promptSenderIdentity(event) + senderGroupRoleTag(annotation.SenderGroupRole) + "\n" + text
+	return "【当前需要回复的消息】" + contextMessageTiming(event.Time, 0, profileLocation(event.ProfileID)) + "【当前发言者】" + promptSenderIdentity(event) + senderGroupRoleTag(annotation.SenderGroupRole) + "\n" + text
 }
 
 func quotedPromptText(quoted *QuotedMessage) string {

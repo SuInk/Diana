@@ -64,12 +64,12 @@ func (r *Runtime) dispatchRomanceAnniversaryGreetings(ctx context.Context) {
 	if !ok {
 		return
 	}
-	now := r.clock()
-	hour := now.Local().Hour()
-	if hour < romanceGreetingStartHour || hour >= romanceGreetingEndHour {
-		return
-	}
 	for _, cfg := range r.romanceEnabledConfigs() {
+		// 问候时段按各自机器人的时区算。
+		now := r.clock().In(cfg.Location())
+		if hour := now.Hour(); hour < romanceGreetingStartHour || hour >= romanceGreetingEndHour {
+			continue
+		}
 		r.greetRomanceMilestones(ctx, lister, cfg, now)
 	}
 }
@@ -98,7 +98,7 @@ func (r *Runtime) romanceEnabledConfigs() []BotConfig {
 
 func (r *Runtime) greetRomanceMilestones(ctx context.Context, lister UserMemoryListStore, cfg BotConfig, now time.Time) {
 	profileID := strings.TrimSpace(cfg.ID)
-	today := now.Local().Format("2006-01-02")
+	today := now.Format("2006-01-02")
 	scanned := 0
 	for offset := 0; scanned < romanceGreetingScanLimit; {
 		listCtx, cancel := context.WithTimeout(ctx, 5*time.Second)

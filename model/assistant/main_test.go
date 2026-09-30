@@ -23,6 +23,12 @@ func TestMain(m *testing.M) {
 		os.Exit(runFakeACPAgent(os.Stdin, os.Stdout, os.Stderr))
 	}
 	_ = os.Setenv("DIANA_ALLOW_PRIVATE_HTTP_FETCHES", "true")
+	// 机器人没填时区、本机又是裸 UTC 时按北京时间（见 DefaultBotLocation）。CI 就是
+	// 这种环境，而大量用例拿进程本地时间算期望值；显式设 TZ=UTC 让两者一致。按北京
+	// 时间兜底这条本身由 bot_timezone_test 里换掉 systemLocation 的用例单独覆盖。
+	if name, _ := time.Now().Zone(); name == "UTC" && os.Getenv("TZ") == "" {
+		_ = os.Setenv("TZ", "UTC")
+	}
 	// Agent 的工作目录跟着数据库位置走。测试里把它指到临时目录，免得用例往
 	// 开发机的真实缓存目录写文件。
 	workspaceRoot, err := os.MkdirTemp("", "diana-assistant-test-*")

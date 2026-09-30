@@ -27,8 +27,8 @@ func TestCoarseRelativeTimingIsStableAcrossNearbyTurns(t *testing.T) {
 		}
 	}
 	// 同一条历史在相邻两轮里必须渲染成同一个字符串，否则整段历史无法命中前缀缓存。
-	first := contextMessageTiming(1000, 1100)
-	second := contextMessageTiming(1000, 1110)
+	first := contextMessageTiming(1000, 1100, time.UTC)
+	second := contextMessageTiming(1000, 1110, time.UTC)
 	if first != second {
 		t.Fatalf("history timing drifted between turns: %q vs %q", first, second)
 	}

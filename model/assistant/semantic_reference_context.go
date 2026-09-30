@@ -41,7 +41,7 @@ func (r *Runtime) semanticReferenceContextBlock(ctx context.Context, event Messa
 		}
 		timeLabel := "未知时间"
 		if source.Time > 0 {
-			timeLabel = time.Unix(source.Time, 0).Local().Format("2006-01-02 15:04:05")
+			timeLabel = time.Unix(source.Time, 0).In(profileLocation(source.ProfileID)).Format("2006-01-02 15:04:05")
 		}
 		lines = append(lines, fmt.Sprintf("- message_id=%s；时间=%s；角色=%s；发送者=%s\n  正文：%s",
 			messageID, timeLabel, role, source.SenderNameOrID(), text))

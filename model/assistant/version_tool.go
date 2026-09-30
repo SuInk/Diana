@@ -233,11 +233,11 @@ func (t *dianaVersionTool) applyReleaseStatus(ctx context.Context, result *diana
 	result.DeploymentMode = deploymentModeLabel(status.DeploymentMode)
 	result.LatestVersion = status.LatestVersion
 	if !status.LatestPublishedAt.IsZero() {
-		result.LatestPublishedAt = status.LatestPublishedAt.Local().Format("2006-01-02 15:04:05")
+		result.LatestPublishedAt = status.LatestPublishedAt.In(DefaultBotLocation()).Format("2006-01-02 15:04:05")
 		result.LatestReleasedAgo = humanizeChineseDuration(now.Sub(status.LatestPublishedAt))
 	}
 	if !status.CheckedAt.IsZero() {
-		result.CheckedAt = status.CheckedAt.Local().Format("2006-01-02 15:04:05")
+		result.CheckedAt = status.CheckedAt.In(DefaultBotLocation()).Format("2006-01-02 15:04:05")
 	}
 	if result.Version == "" && status.CurrentVersion != "" {
 		result.Version = status.CurrentVersion

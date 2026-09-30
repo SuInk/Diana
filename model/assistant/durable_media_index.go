@@ -69,7 +69,7 @@ func durableMediaIndexLine(ctx context.Context, runtime *Runtime, item MessageEv
 	var builder strings.Builder
 	builder.WriteString("- message_id=")
 	builder.WriteString(strings.TrimSpace(item.MessageID))
-	builder.WriteString(contextMessageTiming(item.Time, currentTime))
+	builder.WriteString(contextMessageTiming(item.Time, currentTime, profileLocation(item.ProfileID)))
 	if sender := strings.TrimSpace(item.SenderNameOrID()); sender != "" {
 		builder.WriteString(" ")
 		builder.WriteString(sender)

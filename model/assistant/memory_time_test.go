@@ -79,9 +79,10 @@ func TestBotOwnMessagesAreNotAttributedToTheUser(t *testing.T) {
 
 // 门控和摘要看到的时间要和运行时钟同一时区，规则里要求把相对时间换算成日期。
 func TestMemoryPromptsResolveRelativeTime(t *testing.T) {
-	event := MessageEvent{Time: time.Date(2026, 9, 24, 23, 30, 0, 0, time.UTC).Unix()}
-	if got := memoryEventTime(event).Location(); got != time.Local {
-		t.Fatalf("memory event time zone = %v, want local", got)
+	registerProfileTimezone(BotConfig{ID: "memory-tz-bot", Timezone: "Asia/Tokyo"})
+	event := MessageEvent{ProfileID: "memory-tz-bot", Time: time.Date(2026, 9, 24, 23, 30, 0, 0, time.UTC).Unix()}
+	if got := memoryEventTime(event); got.Location().String() != "Asia/Tokyo" || got.Day() != 25 {
+		t.Fatalf("memory event time = %v, want the bot's timezone", got)
 	}
 	for name, prompt := range map[string]string{"gate": memoryGateRulesPrompt, "summary": memorySummaryRulesPrompt} {
 		if !strings.Contains(prompt, "相对") || !strings.Contains(prompt, "具体日期") {

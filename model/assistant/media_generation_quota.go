@@ -7,7 +7,6 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"os"
 	"strings"
 	"sync"
 	"time"
@@ -25,11 +24,6 @@ const (
 // mediaGenerationReservationTTL 是一笔预占最长挂多久。任务正常结束、失败、取消
 // 都会结清；这里只兜实在没人来结清的情况，不然那几次额度要一直占到重启。
 const mediaGenerationReservationTTL = time.Hour
-
-// defaultDailyLimitTimezone 是没配时区、也没设 TZ 时的日界线。Docker 镜像不带
-// TZ，进程本地时区是 UTC，按它算的话北京时间早上 8 点才重置；用户绝大多数在
-// 国内，默认按北京时间。
-const defaultDailyLimitTimezone = "Asia/Shanghai"
 
 // MediaGenerationKey 定位一笔计数：哪台机器人、哪个平台、哪种媒体、哪一天，
 // 归到哪个群（私聊为空）和哪个人。Day 是日界线时区下的自然日（2006-01-02）。
@@ -75,23 +69,13 @@ func EffectiveMediaGenerationLimits(bot BotConfig, group GroupConfig, kind Media
 	return max(groupLimit, 0), max(userLimit, 0)
 }
 
-// DailyLimitLocation 是每日次数的日界线时区：机器人上填了以它为准，否则读 TZ
-// 环境变量，都没有按北京时间。填错的时区名退到下一档，不让一个拼写错误把限制弄失效。
+// DailyLimitLocation 是每日次数的日界线时区：填了单独的日界线时区以它为准，否则跟随
+// 机器人时区。填错的时区名退到下一档，不让一个拼写错误把限制弄失效。
 func DailyLimitLocation(bot BotConfig) *time.Location {
-	if name := strings.TrimSpace(bot.DailyLimitTimezone); name != "" {
-		if location, err := time.LoadLocation(name); err == nil {
-			return location
-		}
-	}
-	if name := strings.TrimPrefix(strings.TrimSpace(os.Getenv("TZ")), ":"); name != "" {
-		if location, err := time.LoadLocation(name); err == nil {
-			return location
-		}
-	}
-	if location, err := time.LoadLocation(defaultDailyLimitTimezone); err == nil {
+	if location := loadBotLocation(bot.DailyLimitTimezone); location != nil {
 		return location
 	}
-	return time.Local
+	return bot.Location()
 }
 
 func mediaGenerationKindLabel(kind MediaGenerationKind) string {

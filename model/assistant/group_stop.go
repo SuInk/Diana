@@ -137,7 +137,7 @@ func (r *Runtime) applyGroupStopVerdict(ctx context.Context, event MessageEvent,
 
 func groupStopRoutingReason(state groupStopState, now time.Time) string {
 	minutes := int(now.Sub(state.At).Minutes())
-	return fmt.Sprintf("群里 %d 分钟前有人要求闭嘴，接话暂停到 %s，只回 @、引用和点名", minutes, state.Until.Local().Format("15:04"))
+	return fmt.Sprintf("群里 %d 分钟前有人要求闭嘴，接话暂停到 %s，只回 @、引用和点名", minutes, state.Until.In(now.Location()).Format("15:04"))
 }
 
 // groupStopDropsReply 拦下叫停之后才轮到发送的接话回复。接话评分在窗口里本来就不会

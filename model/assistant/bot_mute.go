@@ -64,7 +64,7 @@ func (s botMuteState) describe(now time.Time) string {
 	case s.PersonalIndefinite:
 		return "机器人在本群被禁言，未给出解除时间"
 	case now.Before(s.PersonalUntil):
-		return "机器人在本群被禁言至 " + s.PersonalUntil.Local().Format("01-02 15:04")
+		return "机器人在本群被禁言至 " + s.PersonalUntil.In(now.Location()).Format("01-02 15:04")
 	case s.WholeGroup:
 		return "群处于全员禁言，机器人不是管理员"
 	default:
@@ -173,7 +173,7 @@ func (r *Runtime) botMutedSendError(event MessageEvent) error {
 	}
 	return &outboundSendError{
 		GroupID:  strings.TrimSpace(event.GroupID),
-		Cause:    errors.New("diana: " + state.describe(now)),
+		Cause:    errors.New("diana: " + state.describe(now.In(profileLocation(event.ProfileID)))),
 		BotMuted: true,
 	}
 }
@@ -201,7 +201,7 @@ func (r *Runtime) botMutedForReply(event MessageEvent) (string, bool) {
 			}
 		}()
 	}
-	return state.describe(now), true
+	return state.describe(now.In(profileLocation(event.ProfileID))), true
 }
 
 // checkBotMuteAfterSendFailure 在群发送失败后查一次是不是被禁言了。
@@ -217,7 +217,7 @@ func (r *Runtime) checkBotMuteAfterSendFailure(ctx context.Context, event Messag
 	}
 	r.setBotMute(event, state)
 	if state.active(time.Now()) {
-		log.Printf("diana bot muted (detected after send failure): group=%s %s", event.GroupID, state.describe(time.Now()))
+		log.Printf("diana bot muted (detected after send failure): group=%s %s", event.GroupID, state.describe(time.Now().In(profileLocation(event.ProfileID))))
 		return true
 	}
 	return false
@@ -269,7 +269,7 @@ func (r *Runtime) observeBotMuteNotice(ctx context.Context, event MessageEvent) 
 	log.Printf("diana bot muted: group=%s until=%s indefinite=%v", event.GroupID, until.Format(time.RFC3339), indefinite)
 	text := "机器人被禁言，未给出解除时间"
 	if !indefinite {
-		text = "机器人被禁言 " + formatMuteDuration(until.Sub(now)) + "，至 " + until.Local().Format("01-02 15:04")
+		text = "机器人被禁言 " + formatMuteDuration(until.Sub(now)) + "，至 " + until.In(profileLocation(event.ProfileID)).Format("01-02 15:04")
 	}
 	r.recordBotMuteNotice(event, text+botMuteOperatorSuffix(event))
 	return true

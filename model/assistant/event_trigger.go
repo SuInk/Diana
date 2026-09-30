@@ -434,7 +434,7 @@ func (r *Runtime) generateEventTriggerReply(ctx context.Context, item Reminder, 
 		{
 			Role: llm.RoleUser,
 			Content: fmt.Sprintf("【当前需要回复的消息】\n执行事件触发任务。当前时间：%s。\n发生的事：%s\n任务要求：%s",
-				time.Now().Format("2006-01-02 15:04:05 MST"), happened, item.Message),
+				formatZonedTime(time.Now().In(cfg.Location()), "2006-01-02 15:04:05"), happened, item.Message),
 		},
 	}
 	reply, err := r.generateReply(withLLMUsagePurpose(ctx, PurposeEventTrigger), cfg, source, relationship, messages, nil)

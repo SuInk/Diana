@@ -760,6 +760,7 @@ func NewRuntime(cfg BotConfig, channel Channel, plugins *PluginManager, llmStore
 	plugins.MigrateProfileConfigurations([]BotConfig{cfg})
 	// 词典分词按配置启用;加载要几秒,后台预热,别让第一条消息扛这个延迟。
 	applyCJKSegmentConfig(cfg)
+	registerProfileTimezone(cfg)
 	runtime := &Runtime{
 		profileConfigs:          map[string]BotConfig{cfg.ID: cfg},
 		profileOrder:            []string{cfg.ID},
@@ -844,6 +845,7 @@ func (r *Runtime) SetProfiles(set ProfileSet) {
 		profiles[id] = resolved
 		order = append(order, id)
 		applyCJKSegmentConfig(resolved)
+		registerProfileTimezone(resolved)
 	}
 	r.mu.Lock()
 	r.profileConfigs = profiles
@@ -2767,7 +2769,7 @@ func (r *Runtime) routeProactiveReplyBatch(ctx context.Context, candidates []pro
 	// 群里刚有人叫停：不跑模型，直接沉默。靠提示词让评分自己记住「刚被要求闭嘴」
 	// 只能撑到那句话滑出上下文窗口为止。
 	if stop, ok := r.activeGroupStop(event, time.Now()); ok {
-		event.routingReason = groupStopRoutingReason(stop, time.Now())
+		event.routingReason = groupStopRoutingReason(stop, time.Now().In(profileLocation(event.ProfileID)))
 		return event, text, nil, false
 	}
 	payload := r.proactiveReplyPayloadWithContext(ctx, event, readableEventText(event, text))
@@ -6731,7 +6733,7 @@ func mergeContextSummary(existing string, events []MessageEvent) string {
 		}
 		lines = append(lines, line)
 		count++
-		label := contextSummaryTimeLabel(event.Time)
+		label := contextSummaryTimeLabel(event.Time, profileLocation(event.ProfileID))
 		if start == "" {
 			start = label
 		}
@@ -6792,7 +6794,7 @@ func historyLinePrefix(event MessageEvent) string {
 		label = "[跨群历史"
 	}
 	if event.Time > 0 {
-		label += " " + time.Unix(event.Time, 0).Local().Format("2006-01-02 15:04:05")
+		label += " " + time.Unix(event.Time, 0).In(profileLocation(event.ProfileID)).Format("2006-01-02 15:04:05")
 	}
 	// 跨群参考放在提示词尾部的易变区，不进缓存前缀，可以直接标出离当前消息多久：
 	// 是刚刚另一个群里的事，还是十几天前的旧话，模型自己掂量。
@@ -6913,11 +6915,13 @@ func mentionsSomeoneElseFor(event MessageEvent, botID string) bool {
 	return false
 }
 
-func contextMessageTiming(eventTime, currentTime int64) string {
+// contextMessageTiming 标出消息时间并带上 UTC 偏移：它在易变的尾部，多几个字不影响缓存，
+// 而模型对照它和运行时钟算「刚才」「昨晚」时不该再猜时区。
+func contextMessageTiming(eventTime, currentTime int64, location *time.Location) string {
 	if eventTime <= 0 {
 		return ""
 	}
-	timing := "【消息时间：" + time.Unix(eventTime, 0).Local().Format("2006-01-02 15:04:05")
+	timing := "【消息时间：" + formatZonedTime(time.Unix(eventTime, 0).In(location), "2006-01-02 15:04:05")
 	if currentTime >= eventTime {
 		timing += "；距当前：" + coarseRelativeTiming(currentTime-eventTime)
 	}
@@ -8624,7 +8628,7 @@ const quietNoticeInterval = time.Hour
 func (r *Runtime) maybeNotifyQuietHours(ctx context.Context, event MessageEvent, text string) {
 	cfg := r.effectiveConfigForEvent(event)
 	gate := cfg.ReplyGate
-	if gate == nil || strings.TrimSpace(gate.QuietReply) == "" || gate.WithinActiveHours(r.clock()) {
+	if gate == nil || strings.TrimSpace(gate.QuietReply) == "" || gate.WithinActiveHours(r.clock().In(cfg.Location())) {
 		return
 	}
 	ownerID := cfg.OwnerIDForEvent(event)
@@ -8700,7 +8704,7 @@ func (r *Runtime) replyGateAllows(cfg BotConfig, event MessageEvent) bool {
 	if gate.IsExempt(event.UserID) {
 		return true
 	}
-	if !gate.WithinActiveHours(r.clock()) {
+	if !gate.WithinActiveHours(r.clock().In(cfg.Location())) {
 		return false
 	}
 	if strings.TrimSpace(event.GroupID) != "" && gate.MinGroupLevel > 0 && IsOneBotPlatform(cfg.Platform) {

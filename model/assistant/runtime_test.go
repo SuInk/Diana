@@ -1403,7 +1403,7 @@ func TestRuntimeTrustedRuntimeClockStaysOutOfSystemPrompt(t *testing.T) {
 		t.Fatalf("system prompt must stay clock-free for prefix caching: %q", prompt)
 	}
 	clock := runtime.runtimeClockPrompt(event)
-	if !strings.Contains(clock, "当前运行时钟") || !strings.Contains(clock, time.Now().Format("2006-01-02")) {
+	if !strings.Contains(clock, "当前运行时钟") || !strings.Contains(clock, time.Now().In(DefaultBotLocation()).Format("2006-01-02")) {
 		t.Fatalf("clock prompt missing current date: %q", clock)
 	}
 	if !strings.Contains(clock, "UTC") || !strings.Contains(clock, "不要声称无法访问实时时钟") {

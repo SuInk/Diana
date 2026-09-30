@@ -120,7 +120,7 @@ func romanceMilestoneNote(since time.Time, now time.Time) string {
 	if since.IsZero() || now.Before(since) {
 		return ""
 	}
-	since, now = since.Local(), now.Local()
+	since = since.In(now.Location())
 	if since.Day() != now.Day() {
 		return ""
 	}

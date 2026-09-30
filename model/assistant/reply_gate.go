@@ -71,7 +71,7 @@ type ReplyGate struct {
 	// 例如 22:00-06:00；两者相同视为全天开放。
 	ActiveStart string `json:"active_start,omitempty"`
 	ActiveEnd   string `json:"active_end,omitempty"`
-	// Timezone 为 IANA 名称（如 Asia/Shanghai），留空用服务器本地时区。
+	// Timezone 为 IANA 名称（如 Asia/Shanghai），留空跟随机器人时区。
 	Timezone string `json:"timezone,omitempty"`
 	// OwnerBypass 为 nil 时按 true 处理，主人不受时段和等级限制。
 	OwnerBypass *bool `json:"owner_bypass,omitempty"`
@@ -313,19 +313,16 @@ func (g ReplyGate) OwnerBypassEnabled() bool {
 	return *g.OwnerBypass
 }
 
-// Location 解析时区，失败退回服务器本地时区。
-func (g ReplyGate) Location() *time.Location {
-	if g.Timezone == "" {
-		return time.Local
+// Location 解析时区，没填或填错时返回 fallback（机器人时区）。
+func (g ReplyGate) Location(fallback *time.Location) *time.Location {
+	if location := loadBotLocation(g.Timezone); location != nil {
+		return location
 	}
-	loc, err := time.LoadLocation(g.Timezone)
-	if err != nil {
-		return time.Local
-	}
-	return loc
+	return fallback
 }
 
-// WithinActiveHours 判断当前时刻是否在允许回复的时段内。
+// WithinActiveHours 判断当前时刻是否在允许回复的时段内。门禁没填时区时按 now 自带的
+// 时区算，调用方应传机器人时区下的时刻。
 func (g ReplyGate) WithinActiveHours(now time.Time) bool {
 	if !g.ActiveHoursEnabled {
 		return true
@@ -340,7 +337,7 @@ func (g ReplyGate) WithinActiveHours(now time.Time) bool {
 		// 起止相同视为全天开放。
 		return true
 	}
-	local := now.In(g.Location())
+	local := now.In(g.Location(now.Location()))
 	current := local.Hour()*60 + local.Minute()
 	if start < end {
 		return current >= start && current < end

@@ -584,12 +584,12 @@ func TestChatHistoryTimeValueParsesLocalStringsAndUnixSeconds(t *testing.T) {
 		{"1755600000", 1755600000, false},
 	}
 	for _, test := range tests {
-		value, dateOnly, ok := chatHistoryTimeValue(map[string]any{"from_time": test.raw}, "from_time")
+		value, dateOnly, ok := chatHistoryTimeValue(map[string]any{"from_time": test.raw}, "from_time", time.Local)
 		if !ok || value != test.want || dateOnly != test.dateOnly {
 			t.Fatalf("%v -> (%d, %v, %v), want (%d, %v, true)", test.raw, value, dateOnly, ok, test.want, test.dateOnly)
 		}
 	}
-	if _, _, ok := chatHistoryTimeValue(map[string]any{"from_time": "昨天"}, "from_time"); ok {
+	if _, _, ok := chatHistoryTimeValue(map[string]any{"from_time": "昨天"}, "from_time", time.Local); ok {
 		t.Fatal("unparsable time should not be accepted")
 	}
 }

@@ -343,9 +343,13 @@ func (event MessageEvent) SegmentsData(key string) string {
 func formatRecallRecords(recalls []MessageEvent, referenceTime int64) string {
 	blocks := make([]string, 0, len(recalls)+1)
 	windowStart := referenceTime - int64(recallDefaultWindow/time.Second)
+	location := DefaultBotLocation()
+	if len(recalls) > 0 {
+		location = profileLocation(recalls[0].ProfileID)
+	}
 	blocks = append(blocks, strings.Join([]string{
 		"最近24小时群撤回消息时间线（结构化事实，仅包含该时间窗口；按撤回时间从旧到新）：",
-		"时间窗口=" + formatRecallTime(windowStart) + " 至 " + formatRecallTime(referenceTime),
+		"时间窗口=" + formatRecallTime(windowStart, location) + " 至 " + formatRecallTime(referenceTime, location),
 		fmt.Sprintf("记录总数=%d", len(recalls)),
 		"回复要求=根据当前用户的问题直接生成最终回复，不得猜测，也不要声称看不到撤回内容。",
 		"字段顺序=序号|撤回时间|原消息发送时间|原消息ID|原消息发送者|被@对象|执行撤回者|执行者身份|结论",
@@ -372,8 +376,8 @@ func formatRecallRecords(recalls []MessageEvent, referenceTime int64) string {
 		lines := []string{
 			strings.Join([]string{
 				fmt.Sprintf("%d", i+1),
-				formatRecallTime(record.Time),
-				formatRecallTime(record.OriginalTime),
+				formatRecallTime(record.Time, location),
+				formatRecallTime(record.OriginalTime, location),
 				firstNonEmpty(messageID, "未知"),
 				sender,
 				mentions,
@@ -413,11 +417,11 @@ func recallMentionIdentityText(record MessageEvent) string {
 	return strings.Join(identities, "、")
 }
 
-func formatRecallTime(timestamp int64) string {
+func formatRecallTime(timestamp int64, location *time.Location) string {
 	if timestamp <= 0 {
 		return "未知"
 	}
-	return time.Unix(timestamp, 0).In(time.Local).Format("2006-01-02 15:04:05 -07:00")
+	return time.Unix(timestamp, 0).In(location).Format("2006-01-02 15:04:05 -07:00")
 }
 
 func recallForwardMessages(recalls []MessageEvent) []OutgoingMessage {

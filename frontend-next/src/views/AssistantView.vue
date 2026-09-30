@@ -1105,7 +1105,7 @@
               </div>
               <div class="field">
                 <label for="bot-daily-limit-tz">生图、视频次数 · 重置时区</label>
-                <input id="bot-daily-limit-tz" v-model="form.daily_limit_timezone" class="input" list="bot-daily-limit-timezones" placeholder="留空读 TZ 环境变量，未设按 Asia/Shanghai" />
+                <input id="bot-daily-limit-tz" v-model="form.daily_limit_timezone" class="input" list="bot-daily-limit-timezones" placeholder="留空跟随机器人时区" />
                 <datalist id="bot-daily-limit-timezones">
                   <option value="Asia/Shanghai"></option>
                   <option value="Asia/Hong_Kong"></option>
@@ -1113,7 +1113,7 @@
                   <option value="Asia/Tokyo"></option>
                   <option value="UTC"></option>
                 </datalist>
-                <span class="hint">每天的次数在这个时区的零点重置。Docker 容器默认是 UTC，不按服务器本地时区算，免得北京时间早上 8 点才重置。</span>
+                <span class="hint">每天的次数在这个时区的零点重置，留空跟随「运行」里的机器人时区。只有想让次数按别的时区重置时才填。</span>
               </div>
               <div class="field">
                 <label for="bot-sample">回复抽样率（%）</label>
@@ -1979,6 +1979,18 @@
                   <span class="switch-label">调试模式</span>
                 </label>
                 <span class="hint">记录完整模型上下文、工具参数、工具结果和调用链，在事件页查看，内容可能包含聊天隐私。默认开启；记录存在数据目录的 debug-traces 下，不占数据库，按调试日志保留天数清理。</span>
+              </div>
+              <div class="field">
+                <label for="bot-timezone">机器人时区</label>
+                <input id="bot-timezone" v-model="form.timezone" class="input" list="bot-timezones" placeholder="留空读 TZ 环境变量，再用本机时区" />
+                <datalist id="bot-timezones">
+                  <option value="Asia/Shanghai"></option>
+                  <option value="Asia/Hong_Kong"></option>
+                  <option value="Asia/Taipei"></option>
+                  <option value="Asia/Tokyo"></option>
+                  <option value="UTC"></option>
+                </datalist>
+                <span class="hint">IANA 时区名。告诉模型的当前时间、回复时段、每日次数的零点、「明天八点」的换算和聊天记录上的时间都按它。留空时先看 TZ 环境变量，再用服务器本地时区；服务器是 UTC（Docker 默认）时按 Asia/Shanghai。</span>
               </div>
               <div class="field">
                 <label for="bot-concurrency">全局并发数</label>
@@ -4516,6 +4528,7 @@ async function save(): Promise<void> {
       model_call_quota: Math.max(0, Math.round(Number(current.model_call_quota) || 0)),
       ...botImageGenerationLimitsPayload(current),
       ...botVideoGenerationLimitsPayload(current),
+      timezone: (current.timezone ?? "").trim(),
       reply_sample_percent: Math.min(100, Math.max(0, Math.round(Number(current.reply_sample_percent) || 0))),
       forward_reply_chunk_threshold: Number(current.forward_reply_chunk_threshold) || 0,
       reply_merge_confidence_percent: Number(current.reply_merge_confidence_percent) || 0,

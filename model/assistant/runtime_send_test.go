@@ -404,7 +404,7 @@ func TestSystemPromptInjectsRulesTimeAndSender(t *testing.T) {
 		}
 	}
 	// 时间已移出人设提示词，改由尾部独立 system 消息承载。
-	if clock := runtime.runtimeClockPrompt(event); !strings.Contains(clock, "当前时间："+time.Now().Format("2006-01-02")) {
+	if clock := runtime.runtimeClockPrompt(event); !strings.Contains(clock, "当前时间："+time.Now().In(DefaultBotLocation()).Format("2006-01-02")) {
 		t.Fatalf("clock prompt missing rendered time: %q", clock)
 	}
 }

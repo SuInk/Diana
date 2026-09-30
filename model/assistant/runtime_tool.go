@@ -683,13 +683,13 @@ func (r *Runtime) renderReminders(event MessageEvent) string {
 					state = "重试中"
 				}
 			}
-			lines = append(lines, fmt.Sprintf("- %s | %s | %s | 下次 %s | %s", item.ID, state, scheduleEveryLabel(item), item.TriggerAt.Format("2006-01-02 15:04:05"), item.Message))
+			lines = append(lines, fmt.Sprintf("- %s | %s | %s | 下次 %s | %s", item.ID, state, scheduleEveryLabel(item), reminderLocalTime(item, item.TriggerAt).Format("2006-01-02 15:04:05"), item.Message))
 			continue
 		}
 		if item.ConsecutiveFailures > 0 && item.LastRunAt.IsZero() && item.CancelledAt.IsZero() {
 			state = "重试中"
 		}
-		lines = append(lines, fmt.Sprintf("- %s | %s | %s | %s", item.ID, state, item.TriggerAt.Format("2006-01-02 15:04:05"), item.Message))
+		lines = append(lines, fmt.Sprintf("- %s | %s | %s | %s", item.ID, state, reminderLocalTime(item, item.TriggerAt).Format("2006-01-02 15:04:05"), item.Message))
 	}
 	return strings.Join(lines, "\n")
 }
@@ -736,7 +736,7 @@ func (r *Runtime) addReminder(event MessageEvent, args string) string {
 	if err != nil {
 		return "创建提醒失败：" + err.Error()
 	}
-	return fmt.Sprintf("提醒已创建：%s，将在 %s 提醒你。", reminder.ID, reminder.TriggerAt.Format("2006-01-02 15:04:05"))
+	return fmt.Sprintf("提醒已创建：%s，将在 %s 提醒你。", reminder.ID, reminderLocalTime(reminder, reminder.TriggerAt).Format("2006-01-02 15:04:05"))
 }
 
 func (r *Runtime) addScheduledQueryCommand(event MessageEvent, args string) string {
@@ -756,7 +756,7 @@ func (r *Runtime) addScheduledQueryCommand(event MessageEvent, args string) stri
 	if err != nil {
 		return "创建定时订阅失败：" + err.Error()
 	}
-	return fmt.Sprintf("定时订阅已创建：%s，每 %s 执行一次，下次执行时间 %s。", item.ID, interval, item.TriggerAt.Format("2006-01-02 15:04:05"))
+	return fmt.Sprintf("定时订阅已创建：%s，每 %s 执行一次，下次执行时间 %s。", item.ID, interval, reminderLocalTime(item, item.TriggerAt).Format("2006-01-02 15:04:05"))
 }
 
 func (r *Runtime) renderScheduledQueries(ownerID string) string {
@@ -776,7 +776,7 @@ func (r *Runtime) renderScheduledQueries(ownerID string) string {
 		if item.LastError != "" {
 			status += fmt.Sprintf("，连续失败 %d 次", item.ConsecutiveFailures)
 		}
-		lines = append(lines, fmt.Sprintf("- %s | %s | %s | 下次 %s | %s", item.ID, status, scheduleEveryLabel(item), item.TriggerAt.Format("2006-01-02 15:04:05"), item.Message))
+		lines = append(lines, fmt.Sprintf("- %s | %s | %s | 下次 %s | %s", item.ID, status, scheduleEveryLabel(item), reminderLocalTime(item, item.TriggerAt).Format("2006-01-02 15:04:05"), item.Message))
 	}
 	return strings.Join(lines, "\n")
 }
@@ -1085,7 +1085,7 @@ func (r *Runtime) executeClaimedReminder(ctx context.Context, item Reminder) {
 			log.Printf("diana reminder: 提醒 %s 原定 %s，安全模式期间停发，过期超过 %s，不再补发，已取消", item.ID, held.Format(time.RFC3339), safeModeHeldReminderMaxDelay)
 			return
 		}
-		notice += "（原定 " + held.Local().Format("01-02 15:04") + "，安全模式期间暂停，推迟送达）"
+		notice += "（原定 " + reminderLocalTime(item, held).Format("01-02 15:04") + "，安全模式期间暂停，推迟送达）"
 	}
 	// 停机、连接断开或连续发送失败让提醒晚到太久时，照原样说「提醒你：开会」只会让人
 	// 以为现在该开会。改成明说这是一条错过的提醒、原定什么时候，并且不再戳人——它已经
@@ -1095,7 +1095,7 @@ func (r *Runtime) executeClaimedReminder(ctx context.Context, item Reminder) {
 		if due, late := missedReminderLateness(item, time.Now()); late > missedReminderGrace {
 			missed = true
 			notice = fmt.Sprintf("错过的提醒（原定 %s，当时没能按时送达，晚了%s）：%s",
-				due.Local().Format("01-02 15:04"), formatReminderLateness(late), item.Message)
+				reminderLocalTime(item, due).Format("01-02 15:04"), formatReminderLateness(late), item.Message)
 		}
 	}
 	// 提醒到点先戳一下设提醒的人，像人叫人一样；戳不出去不影响提醒本身。
@@ -1732,7 +1732,7 @@ func formatRepositoryWatchTime(value time.Time) string {
 	if value.IsZero() {
 		return ""
 	}
-	return value.Local().Format("2006-01-02 15:04:05")
+	return value.In(DefaultBotLocation()).Format("2006-01-02 15:04:05")
 }
 
 // repositoryWatchShortCommitURL 把 commit 链接里的 40 位 SHA 换成 7 位短 SHA。
@@ -2008,6 +2008,9 @@ func nextRecurringTrigger(item Reminder, startedAt time.Time, now time.Time) tim
 	if anchor.IsZero() {
 		anchor = startedAt
 	}
+	// 「每周一」「每月 1 号」按锚点所在时区数日子。锚点从库里读回来是进程本地时区
+	// （容器里是 UTC），北京时间周一早上七点在 UTC 还是周日，不换回来会排错一天。
+	anchor = reminderLocalTime(item, anchor)
 	if rule := ruleFromReminder(item); !rule.IsZero() {
 		// 规则在创建时校验过一定能找到日子；万一找不到也不能返回零值——零值的
 		// TriggerAt 永远算到期，会每秒跑一次。退回下面按起点排。
@@ -2062,7 +2065,7 @@ var promptScheduledQueryRequestSpec = registerPrompt(PromptSpec{
 	Usage:   "周期查询到点执行时，代替用户消息发给模型的那段话，带上当前时间和用户当初设定的查询要求。",
 	Default: "执行本次定时订阅。当前时间：{time}。\n任务内容：{query}",
 	Vars: []PromptVar{
-		{Name: "time", Description: "执行时的本机时间，如 2026-09-23 14:05:00 CST"},
+		{Name: "time", Description: "执行时的机器人时区时间，如 2026-09-23 14:05:00（UTC+08:00）"},
 		{Name: "query", Description: "用户创建定时任务时写的查询要求或提醒内容"},
 	},
 })
@@ -2085,7 +2088,7 @@ func (r *Runtime) generateScheduledQueryMessage(ctx context.Context, item Remind
 		{
 			Role: llm.RoleUser,
 			Content: "【当前需要回复的消息】\n" + cfg.promptf(promptScheduledQueryRequestSpec, map[string]string{
-				"time":  time.Now().Format("2006-01-02 15:04:05 MST"),
+				"time":  formatZonedTime(time.Now().In(cfg.Location()), "2006-01-02 15:04:05"),
 				"query": item.Message,
 			}),
 		},
@@ -2128,4 +2131,10 @@ func allPluginsDisabled(plugins *PluginManager) map[string]bool {
 		}
 	}
 	return out
+}
+
+// reminderLocalTime 把提醒相关的时刻换到它所属机器人的时区。从库里读回来的时间是
+// 进程本地时区，容器里就是 UTC，直接格式化会差出几个小时。
+func reminderLocalTime(item Reminder, at time.Time) time.Time {
+	return at.In(profileLocation(item.ProfileID))
 }

@@ -378,8 +378,10 @@ export interface BotProfileConfig extends SendRetrySettings {
   video_generation_daily_group_limit?: number;
   /** 每个人每天能生成视频的次数，跨群和私聊合计；留空或 0 表示不限，主人不受限。 */
   video_generation_daily_user_limit?: number;
-  /** 每日次数在哪个时区的零点重置（IANA 名）；留空读 TZ 环境变量，再没有按 Asia/Shanghai。 */
+  /** 每日次数在哪个时区的零点重置（IANA 名）；留空跟随机器人时区。 */
   daily_limit_timezone?: string;
+  /** 机器人时区（IANA 名）：当前时间、回复时段、每日次数、提醒换算都按它；留空读 TZ，再用本机时区，本机是 UTC 时按 Asia/Shanghai。 */
+  timezone?: string;
   /** 回复抽样率（1–100）：没 @ 机器人的群消息只有这个比例交给模型判断要不要接话；留空不抽样。 */
   reply_sample_percent?: number;
   recent_context_limit?: number;
@@ -727,7 +729,7 @@ export interface ReplyGate {
   /** HH:MM；结束早于开始表示跨夜。 */
   active_start?: string;
   active_end?: string;
-  /** IANA 时区名，留空用服务器本地时区。 */
+  /** IANA 时区名，留空跟随机器人时区。 */
   timezone?: string;
   /** 静默期主人是否仍可用，默认 true。 */
   owner_bypass?: boolean | null;

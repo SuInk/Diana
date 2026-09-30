@@ -72,7 +72,7 @@ func TestSpeakerTimezonePromptConvertsForTheOtherSide(t *testing.T) {
 		t.Skip("tzdata unavailable")
 	}
 	now := time.Date(2026, 9, 16, 9, 0, 0, 0, shanghai)
-	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	runtime := NewRuntime(BotConfig{Timezone: "Asia/Shanghai"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	runtime.now = func() time.Time { return now }
 
 	event := MessageEvent{Kind: EventKindPrivate, UserID: "u1"}
@@ -114,7 +114,7 @@ func TestRuntimeClockPromptAddsSpeakerTimezoneOnlyWhenRecorded(t *testing.T) {
 		t.Skipf("时区库不可用：%v", err)
 	}
 	now := time.Date(2026, 9, 21, 2, 0, 0, 0, shanghai)
-	runtime := NewRuntime(BotConfig{ReplyGate: &ReplyGate{Timezone: "Asia/Shanghai"}}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	runtime := NewRuntime(BotConfig{Timezone: "Asia/Shanghai", ReplyGate: &ReplyGate{Timezone: "Asia/Shanghai"}}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	runtime.now = func() time.Time { return now }
 
 	event := MessageEvent{Kind: EventKindPrivate, UserID: "u1"}
