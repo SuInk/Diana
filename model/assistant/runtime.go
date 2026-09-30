@@ -4966,6 +4966,7 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 			ToolsLoaded:     promptSession.rememberTools,
 			RequireEvidence: requireEvidenceFromContext(ctx),
 			EvidenceCheck:   evidenceCheck,
+			FinalReview:     r.searchNegationReview(event),
 		})
 		if err != nil {
 			return "", err

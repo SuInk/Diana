@@ -218,6 +218,16 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 		evidenceChecked = true
 		claimLedger.required = req.EvidenceCheck(ctx)
 	}
+	// finalReviewed 保证 FinalReview 每轮只复核一次：打回去改过的第二稿直接放行，
+	// 复核判错也最多多花一轮，不会把回复卡在修复循环里。
+	finalReviewed := false
+	reviewFinalDraft := func(content string) string {
+		if finalReviewed || req.FinalReview == nil || !claimLedger.searched || strings.TrimSpace(content) == "" {
+			return ""
+		}
+		finalReviewed = true
+		return strings.TrimSpace(req.FinalReview(ctx, content, evidenceSteps(steps)))
+	}
 	// 用户自己贴的链接、历史消息里出现过的链接，模型复述不算编造来源。
 	for _, message := range req.Messages {
 		claimLedger.noteCitableText(message.Content)
@@ -427,6 +437,17 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 				}
 				continue
 			}
+			if repair := reviewFinalDraft(action.Content); repair != "" {
+				protocolRepairs++
+				emitProtocolRepair(ctx, req.Observer, traceID, modelTurns, toolCalls, r.cfg.MaxSteps, finalReviewRepairReason)
+				messages = appendAssistantEcho(messages, lastText)
+				messages = append(messages, llm.Message{Role: llm.RoleUser, Content: repair})
+				if protocolRepairs >= r.cfg.ProtocolRepairLimit {
+					finishReason = "protocol_repair_exhausted"
+					break
+				}
+				continue
+			}
 			return finish(action.Content, "plain_text"), nil
 		}
 		if action.Action == "final" {
@@ -532,6 +553,17 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 				emitProtocolRepair(ctx, req.Observer, traceID, modelTurns, toolCalls, r.cfg.MaxSteps, reason)
 				messages = appendAssistantEcho(messages, lastText)
 				messages = append(messages, llm.Message{Role: llm.RoleUser, Content: reason + "。请重新调用 agent_finalize，把给用户看的完整回复写进 content，不能为空。"})
+				if protocolRepairs >= r.cfg.ProtocolRepairLimit {
+					finishReason = "protocol_repair_exhausted"
+					break
+				}
+				continue
+			}
+			if repair := reviewFinalDraft(action.Content); repair != "" {
+				protocolRepairs++
+				emitProtocolRepair(ctx, req.Observer, traceID, modelTurns, toolCalls, r.cfg.MaxSteps, finalReviewRepairReason)
+				messages = appendAssistantEcho(messages, lastText)
+				messages = append(messages, llm.Message{Role: llm.RoleUser, Content: repair + "\n复核之后照常调用 agent_finalize 收尾，claims 按实际检索结果填写。"})
 				if protocolRepairs >= r.cfg.ProtocolRepairLimit {
 					finishReason = "protocol_repair_exhausted"
 					break

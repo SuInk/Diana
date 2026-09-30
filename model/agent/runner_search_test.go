@@ -655,3 +655,61 @@ func TestRunnerEvidenceCheckSkippedWhenNotNeededOrAlreadySearched(t *testing.T) 
 		t.Fatalf("已经检索过仍去等判断: checks=%d", checks)
 	}
 }
+
+// 检索过后的终稿复核：打回一次，第二稿不再复核。没检索过的轮次不复核。
+func TestRunnerFinalReviewSendsBackUnsupportedNegationOnce(t *testing.T) {
+	searchResult, _ := json.Marshal(webSearchResult{
+		Status: "ok", StopReason: "sufficient_evidence",
+		Sources: []string{"https://vendor.example/"}, Content: "官网首页列出 Model 6",
+	})
+	tool := &recordingSearchTool{output: string(searchResult)}
+	client := &scriptedClient{responses: []string{
+		`{"action":"tool","tool":"web_search","input":{"query":"Model 6.1 发布"}}`,
+		`{"action":"final","content":"官网只有 Model 6，6.1 根本没发，你这图是 P 的。"}`,
+		`{"action":"final","content":"我这边暂时没查到 6.1 的官方消息，可能还没收录。"}`,
+	}}
+	runner, err := NewRunner(client, Config{MaxSteps: 3, ProtocolRepairLimit: 3}, NewToolRegistry(tool))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var reviewed []string
+	var evidenceTools []string
+	resp, err := runner.Run(context.Background(), Request{
+		Messages: []llm.Message{{Role: llm.RoleUser, Content: "6.1 发布了"}},
+		FinalReview: func(_ context.Context, draft string, evidence []Step) string {
+			reviewed = append(reviewed, draft)
+			for _, step := range evidence {
+				evidenceTools = append(evidenceTools, step.Tool)
+			}
+			return "复核发现：没查到不等于不存在"
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(reviewed) != 1 || !strings.Contains(reviewed[0], "P 的") {
+		t.Fatalf("reviewed=%q", reviewed)
+	}
+	if len(evidenceTools) != 1 || evidenceTools[0] != webSearchToolName {
+		t.Fatalf("evidence=%v", evidenceTools)
+	}
+	if !strings.Contains(resp.Text, "没查到") {
+		t.Fatalf("第一稿被放行了: %q", resp.Text)
+	}
+
+	client = &scriptedClient{responses: []string{`{"action":"final","content":"没有这回事"}`}}
+	runner, err = NewRunner(client, Config{MaxSteps: 3, ProtocolRepairLimit: 3}, NewToolRegistry(&recordingSearchTool{output: string(searchResult)}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	calls := 0
+	if _, err := runner.Run(context.Background(), Request{
+		Messages:    []llm.Message{{Role: llm.RoleUser, Content: "x"}},
+		FinalReview: func(context.Context, string, []Step) string { calls++; return "打回" },
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 0 {
+		t.Fatalf("没检索过也去复核了: calls=%d", calls)
+	}
+}

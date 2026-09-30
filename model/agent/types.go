@@ -157,6 +157,10 @@ type Request struct {
 	// Runner 只在模型一次都没检索就要收尾时才调用它取结果，返回 true 就按
 	// RequireEvidence 打回去先搜。每轮最多调用一次；为 nil 时不做这项检查。
 	EvidenceCheck func(context.Context) bool
+	// FinalReview 在本轮检索或读过网页、模型准备收尾时复核草稿一次。evidence 是
+	// 本轮 web_search / browser_render 的调用记录。返回非空字符串就把它作为修复
+	// 提示打回去，空串放行。为 nil 时不复核。
+	FinalReview func(ctx context.Context, draft string, evidence []Step) string
 }
 
 type Response struct {

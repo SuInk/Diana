@@ -515,6 +515,23 @@ const (
 		"如果查完确实没有可用结果，就在正文里如实说明没查到，不要凭印象断言。"
 )
 
+// finalReviewRepairReason 是终稿复核打回时记进调用链的原因，具体说法由 FinalReview 给出。
+const finalReviewRepairReason = "终稿复核：否定结论缺少直接证据"
+
+// evidenceSteps 取出本轮真正执行过的检索与读网页记录，交给终稿复核对照。
+func evidenceSteps(steps []Step) []Step {
+	var out []Step
+	for _, step := range steps {
+		if step.Skipped {
+			continue
+		}
+		if step.Tool == webSearchToolName || step.Tool == browserRenderToolName {
+			out = append(out, step)
+		}
+	}
+	return out
+}
+
 // citationURLPattern 从任意文本里抓 http(s) 链接。字符集按 URL 允许的那些收窄，
 // 而不是「非空白」——中文正文里「见 https://a.example/b。」这种写法很常见，
 // 用非空白匹配会把后面整句中文一起吞进链接里。
