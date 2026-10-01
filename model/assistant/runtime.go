@@ -7251,24 +7251,7 @@ func (r *Runtime) sendDecorated(ctx context.Context, event MessageEvent, reply s
 	defer releaseBatch()
 
 	if IsOneBotPlatform(platform) && !chatSplitLimitsForEvent(cfg, event).SingleMessage && shouldUseForwardReplyFor(cfg, reply, chunks) {
-		messageID, err := r.sendForwardReplyWithResult(ctx, event, reply, cfg)
-		if err == nil {
-			if messageID == "" {
-				return nil, nil
-			}
-			return []string{messageID}, nil
-		}
-		if ctx.Err() != nil {
-			return nil, ctx.Err()
-		}
-		// 卡片被账号安全审核拦下时不能退回逐条发送：逐条发的是同一段文字，那条路
-		// 不再审核。卡片只在回复链路没审过这段话时才审，这时它是唯一一次审核。
-		var safetyErr *replyAccountSafetyRejectedError
-		if errors.As(err, &safetyErr) {
-			return nil, err
-		}
-		// Some OneBot implementations do not support merged forwards. Continue
-		// through the normal chunk path so long replies are still delivered.
+		return r.sendForwardReplyDecorated(ctx, event, reply, chunks, cfg, decoration)
 	}
 	return r.deliverChunks(ctx, event, chunks, cfg, decoration)
 }
@@ -7873,7 +7856,12 @@ func (r *Runtime) sendForwardReplyWithResult(ctx context.Context, event MessageE
 	if _, rest, ok := consumeOutgoingReplyControl(reply); ok {
 		reply = rest
 	}
-	chunks := splitForwardReply(reply, chatSplitLimitsForEvent(cfg, event))
+	return r.sendForwardChunksWithResult(ctx, event, splitForwardReply(reply, chatSplitLimitsForEvent(cfg, event)), original, cfg)
+}
+
+// sendForwardChunksWithResult 把已经切好的几条打包成一张卡片。original 是回复链路
+// 审核时看到的整段原文：卡片只装了其中一部分时，「审过没有」也得拿整段去比。
+func (r *Runtime) sendForwardChunksWithResult(ctx context.Context, event MessageEvent, chunks []string, original string, cfg BotConfig) (string, error) {
 	if len(chunks) == 0 {
 		return "", nil
 	}
