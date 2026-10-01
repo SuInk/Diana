@@ -17,7 +17,7 @@ import (
 // 工具（gpt-6-sol 0/180）。sticker 工具保留给「明确要表情包」这种场合。
 const (
 	stickerFinalizeFieldName = "sticker"
-	// stickerOrderFieldName 让模型按真人习惯决定表情包和文字谁先发：第一反应先甩图，收尾点题后甩图。
+	// stickerOrderFieldName 让模型按真人习惯决定表情包和文字谁先发：对别人的反应先甩图，给自己这段话收尾后甩图。
 	stickerOrderFieldName = "sticker_order"
 	stickerOrderBefore    = "before"
 	stickerOrderAfter     = "after"
@@ -34,9 +34,11 @@ func stickerFinalizeField() agent.FinalizeField {
 func stickerOrderField() agent.FinalizeField {
 	return agent.FinalizeField{
 		Name:        stickerOrderFieldName,
-		Description: "填了 sticker 又有正文时二选一：before 先甩图（第一反应），after 后甩图（收尾点题）",
+		Description: "填了 sticker 又有正文时二选一：before 先甩图（对别人这句话的反应），after 后甩图（给自己这段话收尾点题）",
 		// 以前写的是「after 或留空先说完再甩图」，模型大多直接不填，线上一天 94 张
 		// 只有 1 张先发。两个值写成对等的选项，不给留空一个现成的默认。
+		// 改成枚举后 9/29–10/1 是 13/78 先发：接梗的「哈哈哈救命」「草」也选 after，
+		// 所以 before 写成「对别人的反应」、after 收窄到「给自己这段话收尾」。
 		Enum: []string{stickerOrderBefore, stickerOrderAfter},
 	}
 }

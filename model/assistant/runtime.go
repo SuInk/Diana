@@ -4801,7 +4801,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	}
 	var sentMessageIDs []string
 	err = r.withReplySuppressionOutboundGate(sendBaseCtx, event, func(sendCtx context.Context) error {
-		// 表情包和文字谁先发由模型按真人习惯选（sticker_order）：第一反应先甩图，收尾点题后甩图。
+		// 表情包和文字谁先发由模型按真人习惯选（sticker_order）：对别人的反应先甩图，给自己这段话收尾后甩图。
 		stickerAllowed := !controlIntent.RefuseCurrent && !controlIntent.SuppressCurrentUser
 		stickerQuery, stickerFirst := finalizeSticker.take()
 		if stickerAllowed && stickerFirst {
