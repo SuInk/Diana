@@ -669,7 +669,18 @@ func main() {
 		}
 		_, _ = fmt.Fprintln(os.Stderr)
 	}
-	if appCfg.path == "" {
+	if appCfg.path != "" && bootstrap.Created && bootstrap.GeneratedPassword != "" {
+		// 配置文件在但 admin.password 留空（比如数据库被删后重建）：生成的凭据同样
+		// 写回去，否则新密码只在这一次的日志里，用户又得去翻日志。
+		if err := writeAdminCredentials(appCfg.path, bootstrap.Username, bootstrap.GeneratedPassword); err != nil {
+			log.Printf("write generated administrator credentials to %s: %v", appCfg.path, err)
+		} else {
+			log.Printf("generated administrator credentials written to %s", appCfg.path)
+			appCfg.Admin.Username = bootstrap.Username
+			appCfg.Admin.Password = bootstrap.GeneratedPassword
+			secretmask.Register(bootstrap.GeneratedPassword)
+		}
+	} else if appCfg.path == "" {
 		explicit := configPathFromArgs(os.Args[1:]) != "" || strings.TrimSpace(os.Getenv(configPathEnv)) != ""
 		created, err := ensureDataDirConfig(explicit, dbPath, bootstrap.Username, bootstrap.GeneratedPassword)
 		if err != nil {
