@@ -362,7 +362,7 @@ try {
         # 健康说明管理员已经写进数据库(只存哈希),admin.password 从此不再生效。留着它
         # 只会是一份会过期的明文密码:WebUI 改过或 diana passwd 重置过就对不上了。
         if (Get-DianaYamlValue -Path $configFile -Section "admin" -Key "password") {
-            Replace-DianaYamlKey -Path $configFile -Section "admin" -Key "password" -Replacement "  # 密码不存在这里,只以哈希存在数据库中。忘记密码:停掉服务后执行 diana passwd 重置。"
+            Replace-DianaYamlKey -Path $configFile -Section "admin" -Key "password" -Replacement "  # 密码不存在这里,只以哈希存在数据库中。忘记密码:执行 diana passwd 重置。"
             $passwordCleared = $true
             if (-not $generatedPassword) {
                 Write-Host "==> Configuration -> removed the plain-text admin.password (the password itself is unchanged)"
@@ -403,11 +403,11 @@ try {
         } else {
             Write-Host "           Kept in $configFile until Diana first starts."
         }
-        Write-Host "           Forgot it later? Stop Diana and run ``diana passwd``."
+        Write-Host "           Forgot it later? Run ``diana passwd``."
     }
     if ($generatedUsername) {
         Write-Host "Username:  $generatedUsername"
-        Write-Host "           The password is unchanged. Forgot it? Stop Diana and run ``diana passwd``."
+        Write-Host "           The password is unchanged. Forgot it? Run ``diana passwd``."
     }
 } finally {
     if (Test-Path $tempDir) { Remove-Item -Recurse -Force $tempDir }

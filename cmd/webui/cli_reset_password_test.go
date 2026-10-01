@@ -5,10 +5,15 @@ package main
 
 import (
 	"context"
+	"fmt"
+	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/SuInk/diana/model/storage"
 	"github.com/SuInk/diana/webui"
@@ -156,5 +161,104 @@ func TestResetPasswordCommandAsksForConfirmation(t *testing.T) {
 	}
 	if !strings.Contains(output.String(), "Administrator password reset") || passwordStillWorks() {
 		t.Fatalf("confirmed reset did not apply: %s", output.String())
+	}
+}
+
+// fakeRunningService 用测试持有的实例锁模拟一个运行中的一键安装服务。
+func fakeRunningService(t *testing.T, dbPath string) (*installedService, *[]string) {
+	t.Helper()
+	lock, err := acquireInstanceLock(dbPath, "http://127.0.0.1:18080")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(lock.Release)
+	var calls []string
+	service := &installedService{
+		name: "test service",
+		stop: func() error {
+			calls = append(calls, "stop")
+			lock.Release()
+			return nil
+		},
+		start: func() error {
+			calls = append(calls, "start")
+			return nil
+		},
+	}
+	previous := findInstalledServiceFunc
+	findInstalledServiceFunc = func(string, string, string) *installedService { return service }
+	t.Cleanup(func() { findInstalledServiceFunc = previous })
+	return service, &calls
+}
+
+// writeHealthyConfig 让配置指向一个总是健康的假服务，用来验证「重新启动后等健康」。
+func writeHealthyConfig(t *testing.T, configPath string) {
+	t.Helper()
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		_, _ = writer.Write([]byte(`{"status":"ok","version":"test"}`))
+	}))
+	t.Cleanup(server.Close)
+	host, port, _ := net.SplitHostPort(strings.TrimPrefix(server.URL, "http://"))
+	content := fmt.Sprintf("server:\n  host: %s\n  port: %q\nstorage:\n  db_path: data/diana.db\n", host, port)
+	if err := os.WriteFile(configPath, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestResetPasswordStopsAndRestartsInstalledService(t *testing.T) {
+	configPath, dbPath := writeResetPasswordFixture(t)
+	writeHealthyConfig(t, configPath)
+	_, calls := fakeRunningService(t, dbPath)
+	var output strings.Builder
+	err := runResetPasswordCommand([]string{"--config", configPath}, cliPrompt{input: strings.NewReader("y\n"), interactive: true}, &output)
+	if err != nil {
+		t.Fatalf("passwd error = %v\n%s", err, output.String())
+	}
+	if strings.Join(*calls, ",") != "stop,start" {
+		t.Fatalf("service calls = %v", *calls)
+	}
+	for _, want := range []string{"stopped now and started again", "Administrator password reset", "running again"} {
+		if !strings.Contains(output.String(), want) {
+			t.Fatalf("output lacks %q:\n%s", want, output.String())
+		}
+	}
+	store, err := storage.NewSQLiteStore(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if _, err := webui.NewAuthManager(store).Login("owner", "old-password"); err == nil {
+		t.Fatal("old password still works")
+	}
+}
+
+func TestResetPasswordCancelLeavesInstalledServiceRunning(t *testing.T) {
+	configPath, dbPath := writeResetPasswordFixture(t)
+	_, calls := fakeRunningService(t, dbPath)
+	var output strings.Builder
+	if err := runResetPasswordCommand([]string{"--config", configPath}, cliPrompt{input: strings.NewReader("n\n"), interactive: true}, &output); err != nil {
+		t.Fatal(err)
+	}
+	if len(*calls) != 0 || !strings.Contains(output.String(), "Cancelled") {
+		t.Fatalf("cancel touched the service: calls=%v output=%s", *calls, output.String())
+	}
+}
+
+func TestResetPasswordRestartsServiceThatDidNotStop(t *testing.T) {
+	configPath, dbPath := writeResetPasswordFixture(t)
+	service, calls := fakeRunningService(t, dbPath)
+	service.stop = func() error {
+		*calls = append(*calls, "stop")
+		return nil // 锁一直不放，模拟服务没停下来
+	}
+	previous := serviceStopTimeout
+	serviceStopTimeout = 500 * time.Millisecond
+	t.Cleanup(func() { serviceStopTimeout = previous })
+	err := runResetPasswordCommand([]string{"--config", configPath, "-y"}, cliPrompt{}, &strings.Builder{})
+	if err == nil || !strings.Contains(err.Error(), "nothing was changed") {
+		t.Fatalf("expected stop timeout error, got %v", err)
+	}
+	if strings.Join(*calls, ",") != "stop,start" {
+		t.Fatalf("service calls = %v", *calls)
 	}
 }

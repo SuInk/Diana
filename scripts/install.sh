@@ -553,7 +553,7 @@ generated_password=""
 generated_username=""
 password_cleared=false
 # 明文密码删掉后留在原处的说明:密码去了哪、忘了怎么办。
-admin_password_note='  # 密码不存在这里,只以哈希存在数据库中。忘记密码:停掉服务后执行 diana passwd 重置。'
+admin_password_note='  # 密码不存在这里,只以哈希存在数据库中。忘记密码:执行 diana passwd 重置。'
 config_file="$install_dir/config.yaml"
 if [ ! -f "$config_file" ]; then
   username="${DIANA_ADMIN_USERNAME:-diana#$(random_hex 8)}"
@@ -983,9 +983,9 @@ if [ -n "$generated_password" ]; then
   else
     printf '           Kept in %s/config.yaml (mode 600) until Diana first starts.\n' "$install_dir"
   fi
-  printf '           Forgot it later? Stop Diana and run `diana passwd`.\n'
+  printf '           Forgot it later? Run `diana passwd`.\n'
 fi
 if [ -n "$generated_username" ]; then
   printf 'Username:  %s\n' "$generated_username"
-  printf '           The password is unchanged. Forgot it? Stop Diana and run `diana passwd`.\n'
+  printf '           The password is unchanged. Forgot it? Run `diana passwd`.\n'
 fi

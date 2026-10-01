@@ -46,19 +46,11 @@ func runRestartCommand(args []string, output io.Writer) error {
 		return err
 	}
 	address := healthAddress(config)
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-	defer cancel()
-	for {
-		if _, err := fetchHealth(ctx, address); err == nil {
-			_, err = fmt.Fprintf(output, "Diana restarted and is healthy at %s\n", address)
-			return err
-		}
-		select {
-		case <-ctx.Done():
-			return fmt.Errorf("Diana restart was requested but health did not recover at %s", address)
-		case <-time.After(500 * time.Millisecond):
-		}
+	if err := waitForHealth(address, 20*time.Second); err != nil {
+		return fmt.Errorf("Diana restart was requested but health did not recover at %s", address)
 	}
+	_, err = fmt.Fprintf(output, "Diana restarted and is healthy at %s\n", address)
+	return err
 }
 
 func runDoctorCommand(args []string, output io.Writer) error {
