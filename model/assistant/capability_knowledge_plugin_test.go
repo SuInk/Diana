@@ -163,7 +163,7 @@ func TestCapabilityKnowledgeRecommendsSnowLumaForQQDeployment(t *testing.T) {
 func TestCapabilityKnowledgeFindsCLI(t *testing.T) {
 	plugin := NewCapabilityKnowledgePlugin()
 	tool := plugin.AgentTools()[0]
-	for _, query := range []string{"终端命令 命令行 执行 diana 命令", "Diana 有 CLI 子命令吗", "diana doctor 是干嘛的"} {
+	for _, query := range []string{"终端命令 命令行 执行 diana 命令", "Diana 有 CLI 子命令吗", "diana doctor 是干嘛的", "管理员密码忘了怎么重置"} {
 		raw, err := tool.Run(context.Background(), map[string]any{"query": query, "limit": 3})
 		if err != nil {
 			t.Fatal(err)
