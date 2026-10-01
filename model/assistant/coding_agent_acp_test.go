@@ -33,6 +33,10 @@ const fakeACPScenarioEnv = "DIANA_FAKE_ACP_SCENARIO"
 // 收尾之后它们都没了。
 const fakeACPPIDFileEnv = "DIANA_FAKE_ACP_PIDFILE"
 
+// fakeACPReadyFileEnv 让假代理在走到「等着被取消」的那一步时建一个标记文件。取消类
+// 用例看到它再取消：按固定延时取消，机器一忙，代理还没握手就被取消了，交代不出做到哪。
+const fakeACPReadyFileEnv = "DIANA_FAKE_ACP_READYFILE"
+
 func runFakeACPAgent(in io.Reader, out, errOut io.Writer) int {
 	scenario := os.Getenv(fakeACPScenarioEnv)
 	recordPID := func(pid int) {
@@ -45,6 +49,13 @@ func runFakeACPAgent(in io.Reader, out, errOut io.Writer) int {
 		}
 	}
 	recordPID(os.Getpid())
+	markReady := func() {
+		if path := os.Getenv(fakeACPReadyFileEnv); path != "" {
+			_ = os.WriteFile(path, nil, 0o600)
+		}
+	}
+	// readyOnRequest 为真时，下一次 call 把请求写出去之后就标记就绪。
+	var readyOnRequest atomic.Bool
 	var writeMu sync.Mutex
 	write := func(message any) {
 		body, _ := json.Marshal(message)
@@ -62,6 +73,9 @@ func runFakeACPAgent(in io.Reader, out, errOut io.Writer) int {
 		replies[id] = reply
 		repliesMu.Unlock()
 		write(map[string]any{"jsonrpc": "2.0", "id": id, "method": method, "params": params})
+		if readyOnRequest.CompareAndSwap(true, false) {
+			markReady()
+		}
 		return <-reply
 	}
 	cancelled := make(chan struct{})
@@ -87,6 +101,7 @@ func runFakeACPAgent(in io.Reader, out, errOut io.Writer) int {
 				command = "go test ./..."
 			}
 			tool("t1", command, command)
+			readyOnRequest.Store(true)
 			reply := call("session/request_permission", map[string]any{
 				"sessionId": "fake-sess",
 				"toolCall":  map[string]any{"toolCallId": "t1"},
@@ -112,6 +127,7 @@ func runFakeACPAgent(in io.Reader, out, errOut io.Writer) int {
 			os.Exit(3)
 		case "hang":
 			say("干到一半")
+			markReady()
 			<-cancelled
 			return "cancelled", true
 		case "refusal":
@@ -401,19 +417,41 @@ func TestCodingACPSessionReportsAgentCrash(t *testing.T) {
 // TestCodingACPSessionCancelsThroughProtocol 钉住取消：收到信号先按协议 session/cancel，
 // 代理停下后写结果行再退出，赶在 Diana 的 SIGKILL 之前。
 func TestCodingACPSessionCancelsThroughProtocol(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	time.AfterFunc(300*time.Millisecond, cancel)
-	started := time.Now()
+	ctx, cancelledAt := cancelWhenFakeACPReady(t)
 	run := runFakeACPSession(t, ctx, "hang", "")
 	if run.code != codingACPExitCancelled {
 		t.Fatalf("exit = %d\n%s", run.code, run.log)
 	}
-	if elapsed := time.Since(started); elapsed > codingACPCancelGrace {
+	// 从取消那一刻算：代理进程启动慢不该算在宽限期里。
+	if elapsed := time.Since(cancelledAt()); elapsed > codingACPCancelGrace {
 		t.Fatalf("代理停下来之后还等满了宽限期：%s", elapsed)
 	}
 	if !strings.Contains(run.log, `"stop_reason":"cancelled"`) || run.snapshot.Result != "干到一半" {
 		t.Fatalf("取消后没交代做到哪了：%q", run.log)
 	}
+}
+
+// cancelWhenFakeACPReady 返回一个在假代理标记就绪后才取消的 ctx，以及取消发生的时刻。
+// 等太久（代理压根没走到那一步）也取消，让用例照常收尾、由断言报出问题。
+func cancelWhenFakeACPReady(t *testing.T) (context.Context, func() time.Time) {
+	t.Helper()
+	readyFile := filepath.Join(t.TempDir(), "ready")
+	t.Setenv(fakeACPReadyFileEnv, readyFile)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	var cancelledAt atomic.Int64
+	go func() {
+		deadline := time.Now().Add(30 * time.Second)
+		for time.Now().Before(deadline) && ctx.Err() == nil {
+			if _, err := os.Stat(readyFile); err == nil {
+				break
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		cancelledAt.Store(time.Now().UnixNano())
+		cancel()
+	}()
+	return ctx, func() time.Time { return time.Unix(0, cancelledAt.Load()) }
 }
 
 func fakeACPPIDs(t *testing.T, path string) []int {
@@ -453,8 +491,7 @@ func TestCodingACPSessionExitsWhenAgentChildHoldsPipe(t *testing.T) {
 // cancelled，不能回成拒绝。
 func TestCodingACPSessionCancelsPendingPermission(t *testing.T) {
 	policyPath, _ := writeACPApprovalPolicy(t, codingApprovalModeDangerous)
-	ctx, cancel := context.WithCancel(context.Background())
-	time.AfterFunc(300*time.Millisecond, cancel)
+	ctx, _ := cancelWhenFakeACPReady(t)
 	run := runFakeACPSession(t, ctx, "permission", policyPath)
 	if run.code != codingACPExitCancelled || run.snapshot.Result != "授权结果：cancelled" {
 		t.Fatalf("exit=%d result=%q\n%s", run.code, run.snapshot.Result, run.log)
