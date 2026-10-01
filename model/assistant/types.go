@@ -1074,6 +1074,9 @@ type GroupConfig struct {
 	EnabledSet       bool             `json:"enabled_set,omitempty"`
 	GroupTriggers    []string         `json:"group_triggers,omitempty"`
 	GroupTriggerMode AliasTriggerMode `json:"group_trigger_mode,omitempty"`
+	// DisabledMode 覆盖机器人的「群停用后」，只在这个群停用时起作用；留空跟随机器人
+	// （GroupAdmission.DisabledMode）。
+	DisabledMode GroupDisabledMode `json:"disabled_mode,omitempty"`
 	// SystemPrompt 非空时整份替换机器人的 SOUL.md，只在这个群里生效；留空跟随机器人。
 	SystemPrompt string       `json:"system_prompt,omitempty"`
 	ResponseMode ResponseMode `json:"response_mode,omitempty"`
@@ -1403,7 +1406,8 @@ type ConfigPayload struct {
 	IMessagePollSeconds            int    `json:"imessage_poll_seconds,omitempty"`
 }
 
-// GroupDisabledMode 决定停用的群还做哪些事，按机器人设一份，存在 GroupAdmission 里。
+// GroupDisabledMode 决定停用的群还做哪些事。机器人设一份（GroupAdmission），单个群
+// 可以在群配置里覆盖。
 // 两档都不回复，都把消息落进本地历史，群重新打开后上下文接得上；区别只在要不要为它
 // 花后台模型 token。
 type GroupDisabledMode string
@@ -1417,13 +1421,15 @@ const (
 	GroupDisabledObserve GroupDisabledMode = "observe"
 )
 
-// Normalized 只留下 observe，其余（包括显式的 dormant 和认不出的值）都归成空，
-// 也就是默认的彻底休眠。
+// Normalized 认得 dormant 和 observe，其余归成空。机器人级的空值就是彻底休眠；
+// 群配置里的空值表示跟随机器人，所以显式的 dormant 要留着。
 func (m GroupDisabledMode) Normalized() GroupDisabledMode {
-	if GroupDisabledMode(strings.ToLower(strings.TrimSpace(string(m)))) == GroupDisabledObserve {
-		return GroupDisabledObserve
+	switch value := GroupDisabledMode(strings.ToLower(strings.TrimSpace(string(m)))); value {
+	case GroupDisabledDormant, GroupDisabledObserve:
+		return value
+	default:
+		return ""
 	}
-	return ""
 }
 
 // Observes 报告停用时是否仍旁观学习。
@@ -1583,6 +1589,7 @@ func (cfg GroupConfig) WithDefaults(groupID string, base BotConfig) GroupConfig 
 		cfg.EnabledSet = true
 	}
 	// 下面只做清洗和钳制，不再从机器人补值：空着就是跟随机器人，运行时再取。
+	cfg.DisabledMode = cfg.DisabledMode.Normalized()
 	cfg.GroupTriggers = cleanStrings(cfg.GroupTriggers)
 	cfg.WelcomeMessage = strings.TrimSpace(cfg.WelcomeMessage)
 	if strings.TrimSpace(string(cfg.WelcomeMode)) != "" {

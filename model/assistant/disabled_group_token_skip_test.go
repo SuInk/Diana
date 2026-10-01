@@ -265,6 +265,42 @@ func TestObservingDisabledGroupStillLearnsMemory(t *testing.T) {
 	}
 }
 
+// TestGroupDisabledModeOverridesBot 群配置里的档位覆盖机器人的「群停用后」，两个方向
+// 都要生效；没填就跟随机器人。
+func TestGroupDisabledModeOverridesBot(t *testing.T) {
+	h := newDisabledGroupSkipHarness(t, BotConfig{GroupAdmission: GroupAdmission{DisabledMode: GroupDisabledObserve}}, false)
+	event := disabledGroupPhraseEvent()
+	if h.runtime.groupDormant(event) {
+		t.Fatal("没填覆盖时应当跟随机器人的静默旁观")
+	}
+	save := func(mode GroupDisabledMode) {
+		t.Helper()
+		if _, err := h.groups.SaveGroupConfig(GroupConfig{
+			BotProfileID: "a", GroupID: "g1", Enabled: false, EnabledSet: true, DisabledMode: mode,
+		}, h.base); err != nil {
+			t.Fatal(err)
+		}
+	}
+	save(GroupDisabledDormant)
+	if !h.runtime.groupDormant(event) {
+		t.Fatal("群覆盖成彻底关闭后应当休眠")
+	}
+	h.runtime.enqueueEventMemory(event, memoryEventText(event))
+	if got := len(h.memory.enqueued); got != 0 {
+		t.Fatalf("覆盖成彻底关闭的群入队了 %d 条记忆", got)
+	}
+
+	dormantBot := newDisabledGroupSkipHarness(t, BotConfig{}, false)
+	if _, err := dormantBot.groups.SaveGroupConfig(GroupConfig{
+		BotProfileID: "a", GroupID: "g1", Enabled: false, EnabledSet: true, DisabledMode: GroupDisabledObserve,
+	}, dormantBot.base); err != nil {
+		t.Fatal(err)
+	}
+	if dormantBot.runtime.groupDormant(event) {
+		t.Fatal("机器人彻底关闭、群覆盖成静默旁观时不该休眠")
+	}
+}
+
 // TestDormantGroupSkipsEveryMemoryEnqueue 休眠档的判断在入队入口：禁言、额度、积压
 // 合并这些分支直接调 enqueueEventMemory 也排不进去；群重新打开后照常入队。
 func TestDormantGroupSkipsEveryMemoryEnqueue(t *testing.T) {

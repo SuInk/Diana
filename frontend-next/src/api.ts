@@ -583,6 +583,8 @@ export interface BotGroupConfig extends SendRetrySettings {
   group_id: string;
   enabled: boolean;
   enabled_set?: boolean;
+  /** 本群停用后怎么处理，覆盖机器人的「群停用后」；空或不设跟随机器人。 */
+  disabled_mode?: GroupDisabledMode;
   group_triggers?: string[];
   /** 本群触发称呼的匹配松紧；空串或不设表示沿用全局配置。 */
   group_trigger_mode?: AliasTriggerMode | "";

@@ -156,7 +156,10 @@
             <span v-if="!botScope && group.bot_profile_id && botFor(group)?.name" class="badge">{{ botFor(group)?.name }}</span>
             <span v-if="liveAvailable" class="badge" :class="{ accent: group.joined }">{{ group.joined ? "已加入" : "当前未加入" }}</span>
             <span class="badge" :class="{ accent: group.configured }">{{ group.configured ? "已配置" : "跟随全局" }}</span>
-            <span v-if="!group.enabled && disabledModeFor(group) === 'observe'" class="badge" title="停用但仍提取长期记忆，会消耗后台 token">静默旁观</span>
+            <span v-if="group.configured && group.disabled_mode" class="badge" :class="{ warn: !group.enabled && group.disabled_mode === 'observe' }" title="本群单独设置，不跟随机器人的「群停用后」">
+              停用后{{ group.disabled_mode === "observe" ? "静默旁观" : "彻底关闭" }}
+            </span>
+            <span v-else-if="!group.enabled && disabledModeFor(group) === 'observe'" class="badge" title="停用但仍提取长期记忆，会消耗后台 token">静默旁观</span>
             <span v-if="group.member_count" class="badge">
               <Users :size="12" aria-hidden="true" />
               {{ group.member_count }}<template v-if="group.max_member_count"> / {{ group.max_member_count }}</template>
@@ -254,6 +257,16 @@
             <span class="track" aria-hidden="true"></span>
             <span class="switch-label">在本群启用机器人</span>
           </label>
+        </div>
+        <div class="field">
+          <label for="group-disabled-override">本群停用后</label>
+          <AppSelect
+            id="group-disabled-override"
+            :model-value="editing.disabled_mode || ''"
+            :options="groupDisabledOverrideOptions"
+            @update:model-value="(value) => { if (editing) editing.disabled_mode = value as GroupDisabledMode; }"
+          />
+          <span class="hint">只在本群停用时起作用。</span>
         </div>
         <div class="field wide">
           <label for="group-triggers">本群触发词（逗号分隔，留空跟随机器人）</label>
@@ -684,6 +697,7 @@ import {
   type BotGroupConfig,
   type BotProfileConfig,
   type BotGroupSummary,
+  type GroupDisabledMode,
   type AssistantEventRange,
   type GroupRelationGraph
 } from "../api";
@@ -1410,11 +1424,29 @@ async function saveLevelUnknownPolicy(policy: "allow" | "deny"): Promise<void> {
   }
 }
 
-// 选了某台机器人时以页面上刚存的值为准；看全部机器人时按群各自那台的配置。
-function disabledModeFor(group: BotGroupSummary): "dormant" | "observe" {
+// 机器人的「群停用后」：选了某台机器人时以页面上刚存的值为准；看全部机器人时按群
+// 各自那台的配置。
+function botDisabledModeFor(group: { bot_profile_id?: string }): "dormant" | "observe" {
   const mode = botScope.value ? defaultDisabledMode.value : botFor(group)?.group_admission?.disabled_mode;
   return mode === "observe" ? "observe" : "dormant";
 }
+
+// 群里单独设了就按群的，没设跟随机器人。
+function disabledModeFor(group: BotGroupConfig): "dormant" | "observe" {
+  if (group.disabled_mode === "observe" || group.disabled_mode === "dormant") {
+    return group.disabled_mode;
+  }
+  return botDisabledModeFor(group);
+}
+
+const groupDisabledOverrideOptions = computed<AppSelectOption[]>(() => {
+  const inherited = editing.value && botDisabledModeFor(editing.value) === "observe" ? "静默旁观" : "彻底关闭";
+  return [
+    { value: "", label: `跟随机器人（${inherited}）` },
+    { value: "dormant", label: "彻底关闭" },
+    { value: "observe", label: "静默旁观" }
+  ];
+});
 
 async function saveDisabledMode(mode: "dormant" | "observe"): Promise<void> {
   if (mode === defaultDisabledMode.value) {
