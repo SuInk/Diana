@@ -11,6 +11,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
+	"sort"
 	"strings"
 	"time"
 	"unicode"
@@ -412,7 +414,8 @@ func (s *SQLiteStore) ApplyMemoryCandidates(ctx context.Context, request assista
 	defer func() { _ = tx.Rollback() }()
 
 	written := make([]assistant.StructuredMemoryItem, 0, len(normalized))
-	touched := map[memoryScope]bool{}
+	// touched 记下每个作用域本次新写入的记忆，容量淘汰时不动它们。
+	touched := map[memoryScope][]string{}
 	for _, candidate := range normalized {
 		// 群约定不挂在发言者名下：查重、更新、撤销和容量都按「本群」算，谁提的只留在出处里。
 		subjectUserID, subjectName := strings.TrimSpace(request.SubjectUserID), strings.TrimSpace(request.SubjectName)
@@ -551,10 +554,11 @@ UPDATE memory_items SET status = 'superseded', updated_at = ? WHERE id = ? AND s
 			return nil, err
 		}
 		written = append(written, item)
-		touched[memoryScope{scopeKey: scopeKey, subjectUserID: subjectUserID}] = true
+		scope := memoryScope{scopeKey: scopeKey, subjectUserID: subjectUserID}
+		touched[scope] = append(touched[scope], item.ID)
 	}
-	for scope := range touched {
-		if err := enforceMemoryCapacity(ctx, tx, scope, now); err != nil {
+	for scope, fresh := range touched {
+		if err := enforceMemoryCapacity(ctx, tx, scope, fresh, now); err != nil {
 			return nil, err
 		}
 	}
@@ -571,28 +575,100 @@ type memoryScope struct {
 
 // enforceMemoryCapacity 把一个主体在一个作用域里的活跃长期记忆压到上限之内。
 //
-// 淘汰顺序：先看重要度，再看最近一次被证实的时间，最后看更新时间。摘要和会话
-// 便签不参与——它们条数自有其它机制管（memorySummaryRollupSize），和"这个人有
-// 哪些长期事实"不是一回事。
+// 淘汰顺序看保留分：重要度按最近一次被证实的时间衰减，半衰期
+// memoryRetentionHalfLife。只按重要度排时，新记下的事情（门控给的重要度多在
+// 0.5 上下）比不过记满的老记忆，写进去当场就被淘汰——同一个人改口说了三次
+// 「现在更推荐 X」，三次都没留下，旧说法却一直在。衰减之后，久未提起的老记忆
+// 会慢慢让位；重新提起同一件事会刷新 last_verified_at，重要的事不会因为老就丢。
+//
+// fresh 是本次刚写入的记忆，不参与淘汰：刚记下就忘掉等于没记。一次最多写
+// maxMemoryCandidatesPerWrite 条，远小于上限，不会因此超额。
+//
+// 摘要和会话便签不参与——它们条数自有其它机制管（memorySummaryRollupSize），
+// 和"这个人有哪些长期事实"不是一回事。
 //
 // 淘汰掉的行置为 forgotten 而不是删除：memory_sources 里的出处还在，回头要查
 // "这条记忆当初是哪句话带出来的"仍然查得到。
-func enforceMemoryCapacity(ctx context.Context, tx *sql.Tx, scope memoryScope, now time.Time) error {
+func enforceMemoryCapacity(ctx context.Context, tx *sql.Tx, scope memoryScope, fresh []string, now time.Time) error {
 	if strings.TrimSpace(scope.scopeKey) == "" {
 		return nil
 	}
-	_, err := tx.ExecContext(ctx, `
-UPDATE memory_items
-SET status = 'forgotten', updated_at = ?
-WHERE id IN (
-  SELECT id FROM memory_items
-  WHERE scope_key = ? AND subject_user_id = ? AND status = 'active'
-    AND kind IN ('fact', 'preference', 'episode', 'instruction')
-  ORDER BY importance DESC, last_verified_at DESC, updated_at DESC, id
-  LIMIT -1 OFFSET ?
-)
-`, now.Unix(), scope.scopeKey, scope.subjectUserID, maxActiveMemoriesPerSubject)
-	return err
+	rows, err := tx.QueryContext(ctx, `
+SELECT id, importance, last_verified_at, updated_at FROM memory_items
+WHERE scope_key = ? AND subject_user_id = ? AND status = 'active'
+  AND kind IN ('fact', 'preference', 'episode', 'instruction')
+`, scope.scopeKey, scope.subjectUserID)
+	if err != nil {
+		return err
+	}
+	type retained struct {
+		id                string
+		score             float64
+		verified, updated int64
+	}
+	protected := make(map[string]bool, len(fresh))
+	for _, id := range fresh {
+		protected[id] = true
+	}
+	var candidates []retained
+	active := 0
+	for rows.Next() {
+		var item retained
+		var importance float64
+		if err := rows.Scan(&item.id, &importance, &item.verified, &item.updated); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		active++
+		if protected[item.id] {
+			continue
+		}
+		item.score = memoryRetentionScore(importance, time.Unix(item.verified, 0), now)
+		candidates = append(candidates, item)
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	overflow := active - maxActiveMemoriesPerSubject
+	if overflow <= 0 {
+		return nil
+	}
+	sort.Slice(candidates, func(i, j int) bool {
+		a, b := candidates[i], candidates[j]
+		if a.score != b.score {
+			return a.score < b.score
+		}
+		if a.verified != b.verified {
+			return a.verified < b.verified
+		}
+		if a.updated != b.updated {
+			return a.updated < b.updated
+		}
+		return a.id > b.id
+	})
+	if overflow > len(candidates) {
+		overflow = len(candidates)
+	}
+	for _, item := range candidates[:overflow] {
+		if _, err := tx.ExecContext(ctx, `
+UPDATE memory_items SET status = 'forgotten', updated_at = ? WHERE id = ? AND status = 'active'
+`, now.Unix(), item.id); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// memoryRetentionHalfLife 是容量淘汰时重要度的衰减半衰期。30 天下，0.74 的老
+// 记忆约 17 天不被提起就排到 0.5 的新记忆后面，0.58 的约 6 天。
+const memoryRetentionHalfLife = 30 * 24 * time.Hour
+
+func memoryRetentionScore(importance float64, verified, now time.Time) float64 {
+	age := now.Sub(verified)
+	if age <= 0 {
+		return importance
+	}
+	return importance * math.Exp2(-float64(age)/float64(memoryRetentionHalfLife))
 }
 
 func (s *SQLiteStore) ListStructuredMemories(ctx context.Context, query assistant.StructuredMemoryQuery) ([]assistant.StructuredMemoryItem, error) {
