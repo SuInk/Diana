@@ -251,7 +251,6 @@ try {
     Copy-Item -Recurse -Force -Path (Join-Path $packageDir "*") -Destination $installDir
     $configFile = Join-Path $installDir "config.yaml"
     $generatedPassword = $null
-    $generatedUsername = $null
     $passwordCleared = $false
     if (-not (Test-Path $configFile)) {
         $username = if ($env:DIANA_ADMIN_USERNAME) { $env:DIANA_ADMIN_USERNAME } else { "diana#$(New-DianaRandomHex 8)" }
@@ -285,12 +284,8 @@ try {
             }
         }
         if ($env:DIANA_PORT) { Set-DianaYamlValue -Path $configFile -Section "server" -Key "port" -Value ([string]$port) }
-        $existingUsername = Get-DianaYamlValue -Path $configFile -Section "admin" -Key "username"
-        if ($existingUsername -in @("diana#admin", "diana#admin0000") -or $existingUsername -notmatch '^diana#[A-Za-z0-9]{8,}$') {
-            $generatedUsername = "diana#$(New-DianaRandomHex 8)"
-            Set-DianaYamlValue -Path $configFile -Section "admin" -Key "username" -Value $generatedUsername
-            Write-Host "==> Configuration -> repaired invalid administrator username"
-        }
+        # admin 段不碰:它只在数据库还没有管理员时播种一次,重装时账号以数据库为准,
+        # 改这里既不生效,还会让结尾打印一个登不上的用户名。
     }
     Set-Content -Encoding ASCII -Path (Join-Path $installDir ".installed-version") -Value $version
 
@@ -404,10 +399,6 @@ try {
             Write-Host "           Kept in $configFile until Diana first starts."
         }
         Write-Host "           Forgot it later? Run ``diana passwd``."
-    }
-    if ($generatedUsername) {
-        Write-Host "Username:  $generatedUsername"
-        Write-Host "           The password is unchanged. Forgot it? Run ``diana passwd``."
     }
 } finally {
     if (Test-Path $tempDir) { Remove-Item -Recurse -Force $tempDir }

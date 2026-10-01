@@ -550,7 +550,6 @@ read_yaml_value() {
 assemble_macos_app
 
 generated_password=""
-generated_username=""
 password_cleared=false
 # 明文密码删掉后留在原处的说明:密码去了哪、忘了怎么办。
 admin_password_note='  # 密码不存在这里,只以哈希存在数据库中。忘记密码:执行 diana passwd 重置。'
@@ -605,17 +604,9 @@ else
   if [ -n "${DIANA_PORT:-}" ]; then
     set_yaml_value "$config_file" server port "$port"
   fi
+  # admin 段不碰:它只在数据库还没有管理员时播种一次,重装时账号以数据库为准,
+  # 改这里既不生效,还会让结尾打印一个登不上的用户名。
   chmod 600 "$config_file"
-  existing_username=$(read_yaml_value "$config_file" admin username)
-  username_suffix=${existing_username#diana#}
-  username_valid=true
-  case "$username_suffix" in *[!A-Za-z0-9]*) username_valid=false ;; esac
-  if [ "$existing_username" = "diana#admin" ] || [ "$existing_username" = "diana#admin0000" ] || [ "$username_suffix" = "$existing_username" ] || [ "${#username_suffix}" -lt 8 ] || [ "$username_valid" != "true" ]; then
-    generated_username="diana#$(random_hex 8)"
-    set_yaml_value "$config_file" admin username "$generated_username"
-    chmod 600 "$config_file"
-    info "Configuration → repaired invalid administrator username"
-  fi
 fi
 
 if [ "$os" = "darwin" ]; then
@@ -984,8 +975,4 @@ if [ -n "$generated_password" ]; then
     printf '           Kept in %s/config.yaml (mode 600) until Diana first starts.\n' "$install_dir"
   fi
   printf '           Forgot it later? Run `diana passwd`.\n'
-fi
-if [ -n "$generated_username" ]; then
-  printf 'Username:  %s\n' "$generated_username"
-  printf '           The password is unchanged. Forgot it? Run `diana passwd`.\n'
 fi
