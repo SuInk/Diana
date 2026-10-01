@@ -131,21 +131,26 @@
                 <span class="mono">{{ group.group_id }}</span>
               </div>
             </div>
-            <label class="switch" :title="group.enabled ? '在本群启用' : '在本群停用'">
-              <input
-                type="checkbox"
-                :checked="group.enabled"
+            <div class="segmented group-work-mode" role="radiogroup" :aria-label="`群 ${group.group_id} 工作状态`">
+              <button
+                v-for="option in groupWorkModeOptions"
+                :key="option.value"
+                type="button"
+                role="radio"
+                :title="option.hint"
+                :aria-checked="groupWorkMode(group) === option.value"
+                :class="{ active: groupWorkMode(group) === option.value }"
                 :disabled="togglingGroupID === groupKey(group)"
-                @change="toggleGroup(group, $event)"
-              />
-              <span class="track" aria-hidden="true"></span>
-            </label>
+                @click="setCardWorkMode(group, option.value)"
+              >
+                {{ option.label }}
+              </button>
+            </div>
           </div>
           <div class="group-card-badges">
             <span v-if="!botScope && group.bot_profile_id && botFor(group)?.name" class="badge">{{ botFor(group)?.name }}</span>
             <span v-if="liveAvailable" class="badge" :class="{ accent: group.joined }">{{ group.joined ? "已加入" : "当前未加入" }}</span>
             <span class="badge" :class="{ accent: group.configured }">{{ group.configured ? "已配置" : "跟随全局" }}</span>
-            <span v-if="!group.enabled && group.disabled_mode === 'observe'" class="badge" title="停用但仍提取长期记忆，会消耗后台 token">静默旁观</span>
             <span v-if="group.member_count" class="badge">
               <Users :size="12" aria-hidden="true" />
               {{ group.member_count }}<template v-if="group.max_member_count"> / {{ group.max_member_count }}</template>
@@ -175,7 +180,7 @@
             {{ group.system_prompt ? truncate(group.system_prompt, 68) : group.configured ? "沿用全局人设与默认行为。" : "尚未设置群级覆盖，当前跟随全局配置。" }}
           </p>
           <div class="group-card-foot">
-            <span class="muted">{{ group.enabled ? "机器人已启用" : "机器人已停用" }}</span>
+            <span class="muted">{{ groupWorkModeSummary(group) }}</span>
             <div class="cluster" style="gap: 8px">
               <button v-if="group.configured" class="btn small ghost" type="button" title="删除群配置" aria-label="删除群配置" :disabled="deleting" @click="pendingDelete = group">
                 <Trash2 :size="14" aria-hidden="true" />
@@ -237,21 +242,6 @@
 
     <Modal v-if="editing" :title="`${editingGroupName || `群 ${editing.group_id}`} · 配置`" wide @close="editing = null">
       <div class="form-grid">
-        <div class="field wide">
-          <label id="group-work-mode-label">本群工作状态</label>
-          <div class="stack" style="gap: 4px" role="radiogroup" aria-labelledby="group-work-mode-label">
-            <label v-for="option in groupWorkModeOptions" :key="option.value" class="check-item">
-              <input
-                type="radio"
-                name="group-work-mode"
-                :value="option.value"
-                :checked="groupWorkMode(editing) === option.value"
-                @change="setGroupWorkMode(option.value)"
-              />
-              <span>{{ option.label }}<span class="hint">：{{ option.hint }}</span></span>
-            </label>
-          </div>
-        </div>
         <div class="field wide">
           <label for="group-triggers">本群触发词（逗号分隔，留空跟随机器人）</label>
           <input id="group-triggers" v-model="triggersDraft" class="input" :placeholder="inheritedPlaceholder(inheritedBot?.group_triggers)" />
@@ -749,13 +739,18 @@ function followNumber(value: unknown): number {
 }
 
 // 空值代表「跟随全局」，与后端把空字符串当成未覆盖的约定一致。
-// 停用分两档：旁观照常学记忆（花后台 token），休眠只落本地历史。列表行的开关只管
-// 开和关，档位在这里选，关掉时沿用这里存的档位。
+// 群卡片右上角三档：工作、静默（不回复但照常学记忆，花后台 token）、关闭（彻底休眠，
+// 只落本地历史）。后端停用档位存在 disabled_mode，重新打开时原样留着。
 type GroupWorkMode = "on" | "observe" | "dormant";
-const groupWorkModeOptions: { value: GroupWorkMode; label: string; hint: string }[] = [
-  { value: "on", label: "正常工作", hint: "按配置回复。" },
-  { value: "observe", label: "静默旁观", hint: "不回复，仍学习长期记忆，会消耗后台 token。" },
-  { value: "dormant", label: "彻底休眠", hint: "不回复、不跑后台模型，零额外 token；消息仍存进本地历史，重新打开后上下文还在。" }
+const groupWorkModeOptions: { value: GroupWorkMode; label: string; hint: string; summary: string }[] = [
+  { value: "on", label: "工作", hint: "按配置回复。", summary: "工作中" },
+  { value: "observe", label: "静默", hint: "不回复，仍学习长期记忆，会消耗后台 token。", summary: "静默中，仍学习记忆" },
+  {
+    value: "dormant",
+    label: "关闭",
+    hint: "不回复、不跑后台模型，零额外 token；消息仍存进本地历史，重新打开后上下文还在。",
+    summary: "已关闭，不花 token"
+  }
 ];
 
 function groupWorkMode(config: BotGroupConfig): GroupWorkMode {
@@ -763,14 +758,9 @@ function groupWorkMode(config: BotGroupConfig): GroupWorkMode {
   return config.disabled_mode === "observe" ? "observe" : "dormant";
 }
 
-function setGroupWorkMode(mode: GroupWorkMode): void {
-  if (!editing.value) return;
-  if (mode === "on") {
-    editing.value.enabled = true;
-    return;
-  }
-  editing.value.enabled = false;
-  editing.value.disabled_mode = mode;
+function groupWorkModeSummary(config: BotGroupConfig): string {
+  const mode = groupWorkMode(config);
+  return groupWorkModeOptions.find((option) => option.value === mode)?.summary ?? "";
 }
 
 const groupTriggerModeOptions: AppSelectOption[] = [
@@ -1472,18 +1462,26 @@ async function setAllGroups(enabled: boolean): Promise<void> {
   }
 }
 
-async function toggleGroup(group: BotGroupSummary, event: Event): Promise<void> {
-  const enabled = (event.target as HTMLInputElement).checked;
+async function setCardWorkMode(group: BotGroupSummary, mode: GroupWorkMode): Promise<void> {
+  if (groupWorkMode(group) === mode) {
+    return;
+  }
+  const enabled = mode === "on";
   togglingGroupID.value = groupKey(group);
   try {
-    const saved = await saveBotGroup({ ...groupConfigOf(group), bot_profile_id: botScope.value || group.bot_profile_id, enabled });
+    const saved = await saveBotGroup({
+      ...groupConfigOf(group),
+      bot_profile_id: botScope.value || group.bot_profile_id,
+      enabled,
+      // 切回工作时不动已存的停用档位，下次关掉还是那一档。
+      disabled_mode: enabled ? group.disabled_mode : mode
+    });
     upsert(saved.config);
-    toastSuccess(enabled ? `群 ${group.group_id} 已启用` : `群 ${group.group_id} 已停用`);
+    toastSuccess(`群 ${group.group_id} ${groupWorkModeSummary(saved.config)}`);
     if (saved.warning) toastError(saved.warning);
     // 冲突提示来自别的机器人的配置，本页那枚「同连接 N 台都在回」的角标也得跟着变。
     await load();
   } catch (error) {
-    (event.target as HTMLInputElement).checked = !enabled;
     toastError(error instanceof Error ? error.message : "保存失败");
   } finally {
     togglingGroupID.value = "";
