@@ -74,12 +74,9 @@
             :disabled="bulkBusy"
             @update:model-value="saveDisabledMode($event as 'dormant' | 'observe')"
           />
-          <span>{{ defaultDisabledMode === "observe" ? "不回复，但仍学习长期记忆，会消耗后台 token。" : "不回复、不跑后台模型，零额外 token；消息仍存进本地历史，重新启用后上下文还在。" }}</span>
+          <span>{{ defaultDisabledMode === "observe" ? "不回复，仍学习记忆，会花后台 token。" : "不回复、不跑后台模型，不花 token。" }}</span>
         </div>
-      </div>
-
-      <div v-if="loaded && botScope && supportsGroupLevel" class="group-scope-bar group-scope-levels">
-        <div class="group-scope-level">
+        <div v-if="supportsGroupLevel" class="group-scope-level">
           <label for="group-default-level">群等级门槛</label>
           <input
             id="group-default-level"
@@ -91,7 +88,7 @@
           />
           <span>0 表示不限。指群内活跃度等级（Lv.1~6），不是账号等级。单个群可以在它的配置里覆盖。</span>
         </div>
-        <div class="group-scope-level">
+        <div v-if="supportsGroupLevel" class="group-scope-level">
           <label for="group-default-unknown">等级读不到时</label>
           <AppSelect
             id="group-default-unknown"
