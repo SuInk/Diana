@@ -125,6 +125,10 @@ func (r *Runtime) prepareIncomingVoice(ctx context.Context, event MessageEvent) 
 	if (!hasRecordSegment(event.Segments) && (event.Quoted == nil || !hasRecordSegment(event.Quoted.Segments))) || r.plugins == nil {
 		return event
 	}
+	// 彻底休眠的群不转写：转写要花钱，而这条消息既不会被回复，也不会进记忆提取。
+	if r.groupDormant(event) {
+		return event
+	}
 	pluginValue, settings, enabled := r.pluginWithSettingsForEvent(voiceSTTPluginID, event)
 	plugin, ok := pluginValue.(*VoiceSTTPlugin)
 	if !enabled || !ok {

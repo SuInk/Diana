@@ -89,6 +89,10 @@ func (r *Runtime) enqueueSemanticIndex(event MessageEvent) {
 	if !r.semanticSearchActive(r.effectiveConfigForEvent(event)) || r.messageVectorStore() == nil {
 		return
 	}
+	// 彻底休眠的群不算向量：消息照样落库，只是语义检索搜不到这段。
+	if r.groupDormant(event) {
+		return
+	}
 	// #diana 口令没有可检索的内容，不值得为它算一次向量。
 	if r.statusCommandActive(event, PlainText(event.Segments)) {
 		return

@@ -145,6 +145,7 @@
             <span v-if="!botScope && group.bot_profile_id && botFor(group)?.name" class="badge">{{ botFor(group)?.name }}</span>
             <span v-if="liveAvailable" class="badge" :class="{ accent: group.joined }">{{ group.joined ? "已加入" : "当前未加入" }}</span>
             <span class="badge" :class="{ accent: group.configured }">{{ group.configured ? "已配置" : "跟随全局" }}</span>
+            <span v-if="!group.enabled && group.disabled_mode === 'observe'" class="badge" title="停用但仍提取长期记忆，会消耗后台 token">静默旁观</span>
             <span v-if="group.member_count" class="badge">
               <Users :size="12" aria-hidden="true" />
               {{ group.member_count }}<template v-if="group.max_member_count"> / {{ group.max_member_count }}</template>
@@ -237,11 +238,19 @@
     <Modal v-if="editing" :title="`${editingGroupName || `群 ${editing.group_id}`} · 配置`" wide @close="editing = null">
       <div class="form-grid">
         <div class="field wide">
-          <label class="switch">
-            <input v-model="editing.enabled" type="checkbox" />
-            <span class="track" aria-hidden="true"></span>
-            <span class="switch-label">在本群启用机器人</span>
-          </label>
+          <label id="group-work-mode-label">本群工作状态</label>
+          <div class="stack" style="gap: 4px" role="radiogroup" aria-labelledby="group-work-mode-label">
+            <label v-for="option in groupWorkModeOptions" :key="option.value" class="check-item">
+              <input
+                type="radio"
+                name="group-work-mode"
+                :value="option.value"
+                :checked="groupWorkMode(editing) === option.value"
+                @change="setGroupWorkMode(option.value)"
+              />
+              <span>{{ option.label }}<span class="hint">：{{ option.hint }}</span></span>
+            </label>
+          </div>
         </div>
         <div class="field wide">
           <label for="group-triggers">本群触发词（逗号分隔，留空跟随机器人）</label>
@@ -740,6 +749,30 @@ function followNumber(value: unknown): number {
 }
 
 // 空值代表「跟随全局」，与后端把空字符串当成未覆盖的约定一致。
+// 停用分两档：旁观照常学记忆（花后台 token），休眠只落本地历史。列表行的开关只管
+// 开和关，档位在这里选，关掉时沿用这里存的档位。
+type GroupWorkMode = "on" | "observe" | "dormant";
+const groupWorkModeOptions: { value: GroupWorkMode; label: string; hint: string }[] = [
+  { value: "on", label: "正常工作", hint: "按配置回复。" },
+  { value: "observe", label: "静默旁观", hint: "不回复，仍学习长期记忆，会消耗后台 token。" },
+  { value: "dormant", label: "彻底休眠", hint: "不回复、不跑后台模型，零额外 token；消息仍存进本地历史，重新打开后上下文还在。" }
+];
+
+function groupWorkMode(config: BotGroupConfig): GroupWorkMode {
+  if (config.enabled) return "on";
+  return config.disabled_mode === "observe" ? "observe" : "dormant";
+}
+
+function setGroupWorkMode(mode: GroupWorkMode): void {
+  if (!editing.value) return;
+  if (mode === "on") {
+    editing.value.enabled = true;
+    return;
+  }
+  editing.value.enabled = false;
+  editing.value.disabled_mode = mode;
+}
+
 const groupTriggerModeOptions: AppSelectOption[] = [
   { value: "", label: "跟随全局" },
   { value: "smart", label: "智能" },

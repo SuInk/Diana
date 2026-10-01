@@ -576,6 +576,8 @@ export interface GroupGovernance {
   member_leave_audit_enabled?: boolean;
 }
 
+export type GroupDisabledMode = "" | "dormant" | "observe";
+
 export interface BotGroupConfig extends SendRetrySettings {
   marked_bot_ids?: string[];
   participation?: import("./participation").ParticipationPreferences;
@@ -583,6 +585,8 @@ export interface BotGroupConfig extends SendRetrySettings {
   group_id: string;
   enabled: boolean;
   enabled_set?: boolean;
+  /** 停用档位，只在 enabled=false 时起作用：dormant（或空）彻底休眠，不跑后台模型；observe 静默旁观，仍提取记忆。 */
+  disabled_mode?: GroupDisabledMode;
   group_triggers?: string[];
   /** 本群触发称呼的匹配松紧；空串或不设表示沿用全局配置。 */
   group_trigger_mode?: AliasTriggerMode | "";

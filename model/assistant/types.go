@@ -1068,12 +1068,15 @@ type GroupConfig struct {
 	// BotProfileID 指明这份群配置属于哪台机器人。两台机器人可以同时在一个群里，
 	// 各自的触发词、回复频率和人格都该各管各的。空值是升级前的老记录，迁移时会
 	// 归给当时的当前配置档。
-	BotProfileID     string           `json:"bot_profile_id,omitempty"`
-	GroupID          string           `json:"group_id"`
-	Enabled          bool             `json:"enabled"`
-	EnabledSet       bool             `json:"enabled_set,omitempty"`
-	GroupTriggers    []string         `json:"group_triggers,omitempty"`
-	GroupTriggerMode AliasTriggerMode `json:"group_trigger_mode,omitempty"`
+	BotProfileID string `json:"bot_profile_id,omitempty"`
+	GroupID      string `json:"group_id"`
+	Enabled      bool   `json:"enabled"`
+	EnabledSet   bool   `json:"enabled_set,omitempty"`
+	// DisabledMode 是停用档位，只在 Enabled=false 时起作用，群重新打开时原样留着，
+	// 下次关掉还是这一档。空值和 dormant 都是彻底休眠，见 GroupDisabledMode。
+	DisabledMode     GroupDisabledMode `json:"disabled_mode,omitempty"`
+	GroupTriggers    []string          `json:"group_triggers,omitempty"`
+	GroupTriggerMode AliasTriggerMode  `json:"group_trigger_mode,omitempty"`
 	// SystemPrompt 非空时整份替换机器人的 SOUL.md，只在这个群里生效；留空跟随机器人。
 	SystemPrompt string       `json:"system_prompt,omitempty"`
 	ResponseMode ResponseMode `json:"response_mode,omitempty"`
@@ -1403,6 +1406,37 @@ type ConfigPayload struct {
 	IMessagePollSeconds            int    `json:"imessage_poll_seconds,omitempty"`
 }
 
+// GroupDisabledMode 决定停用的群还做哪些事。两档都不回复，都把消息落进本地历史，
+// 群重新打开后上下文接得上；区别只在要不要为它花后台模型 token。
+type GroupDisabledMode string
+
+const (
+	// GroupDisabledDormant 彻底休眠：长期记忆提取、会话摘要、语音转写、语义索引
+	// 这些后台模型调用全部不跑。空值等同于它，是默认档。
+	GroupDisabledDormant GroupDisabledMode = "dormant"
+	// GroupDisabledObserve 静默旁观：不回复，但照常提取长期记忆、做摘要和索引，
+	// 以前停用的群就是这个行为。
+	GroupDisabledObserve GroupDisabledMode = "observe"
+)
+
+// Normalized 把认不出的值归成空（休眠）。显式的 dormant 原样保留：保存接口靠它
+// 区分「选了休眠」和「旧页面没传这个字段」。
+func (m GroupDisabledMode) Normalized() GroupDisabledMode {
+	switch GroupDisabledMode(strings.ToLower(strings.TrimSpace(string(m)))) {
+	case GroupDisabledObserve:
+		return GroupDisabledObserve
+	case GroupDisabledDormant:
+		return GroupDisabledDormant
+	default:
+		return ""
+	}
+}
+
+// Observes 报告停用时是否仍旁观学习。
+func (m GroupDisabledMode) Observes() bool {
+	return m.Normalized() == GroupDisabledObserve
+}
+
 // DefaultGroupConfig 返回指定群的默认行为配置，只包含群作用域字段。
 func DefaultGroupConfig(groupID string, base BotConfig) GroupConfig {
 	base = base.WithDefaults()
@@ -1554,6 +1588,7 @@ func (cfg GroupConfig) WithDefaults(groupID string, base BotConfig) GroupConfig 
 		cfg.Enabled = true
 		cfg.EnabledSet = true
 	}
+	cfg.DisabledMode = cfg.DisabledMode.Normalized()
 	// 下面只做清洗和钳制，不再从机器人补值：空着就是跟随机器人，运行时再取。
 	cfg.GroupTriggers = cleanStrings(cfg.GroupTriggers)
 	cfg.WelcomeMessage = strings.TrimSpace(cfg.WelcomeMessage)

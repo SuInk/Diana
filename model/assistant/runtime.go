@@ -1835,8 +1835,9 @@ func (r *Runtime) routeMessageEvent(ctx context.Context, event MessageEvent) (Me
 	// 表达学习看的是全部群消息，不只被回复的那些：群的口癖长在日常闲聊里。
 	// 群被这台机器人关掉、或不在准入名单（黑/白名单）里时，它永远不会在这个群里回复——
 	// 连被 @、被引用也不回，这一直是 admits 的判法，这里只是把判断提到花钱之前。消息照常
-	// 进历史（上面的 remember 已经落库并排了语义索引）和长期记忆，好让
-	// 群重新打开后上下文接得上；但所有要花模型 token 的环节全部跳过：contextHistory 里那次
+	// 进历史（上面的 remember 已经落库），好让群重新打开后上下文接得上；静默旁观档
+	// 还照常排语义索引、进长期记忆，彻底休眠档连这些也不做（见 groupDormant 各处判断）。
+	// 两档都跳过所有为回复花模型 token 的环节：contextHistory 里那次
 	// 跨群语义检索、Telegram 接话判定、主动回复路由、历史识图，以及回复生成本身。主人的
 	// 响应限制命令是本地控制指令、不花 token，放它照旧落到 shouldHandle 那条老路，不拦。
 	if cfg := r.effectiveConfigForEvent(event); event.Kind == EventKindGroup &&
@@ -8023,7 +8024,8 @@ func (r *Runtime) remember(event MessageEvent) {
 	}
 	r.mu.Unlock()
 	r.persistMessageEvent(event)
-	if len(compressed) > 0 {
+	// 彻底休眠的群只在本地合并摘要，不排模型摘要任务。
+	if len(compressed) > 0 && !r.groupDormant(event) {
 		r.enqueueContextSummary(session, compressed)
 	}
 }
@@ -8753,19 +8755,47 @@ func (r *Runtime) isSelfMessage(event MessageEvent) bool {
 // DisabledGroups 是聊天指令写过的老存储，启动时会迁进群配置，这里继续读一个
 // 版本，免得迁移之前的一瞬间被停用的群又开口。
 func (r *Runtime) isGroupDisabled(botProfileID, groupID string) bool {
+	disabled, _ := r.groupDisabledMode(botProfileID, groupID)
+	return disabled
+}
+
+// groupDisabledMode 返回群是否停用以及停用档位。旧版 DisabledGroups 名单里的群、
+// 没有群配置而按新群默认关着的群，都没处选档位，一律按休眠算。
+func (r *Runtime) groupDisabledMode(botProfileID, groupID string) (bool, GroupDisabledMode) {
 	r.mu.RLock()
 	cfg := r.profileConfigLocked(botProfileID)
 	store := r.groupConfigs
 	r.mu.RUnlock()
 	if slices.Contains(cfg.DisabledGroups, groupID) {
-		return true
+		return true, GroupDisabledDormant
 	}
 	if store != nil {
 		if groupCfg, ok := store.ConfigForGroup(botProfileID, groupID); ok {
-			return !groupCfg.WithDefaults(groupID, cfg).Enabled
+			groupCfg = groupCfg.WithDefaults(groupID, cfg)
+			if groupCfg.Enabled {
+				return false, ""
+			}
+			if groupCfg.DisabledMode.Observes() {
+				return true, GroupDisabledObserve
+			}
+			return true, GroupDisabledDormant
 		}
 	}
-	return !cfg.GroupAdmission.NewGroupEnabled()
+	if cfg.GroupAdmission.NewGroupEnabled() {
+		return false, ""
+	}
+	return true, GroupDisabledDormant
+}
+
+// groupDormant 报告这条事件所在的群是否停用且彻底休眠：这种群不该再为它花任何
+// 后台模型 token。只看群作用域，私聊和不带群号的事件一律 false。
+func (r *Runtime) groupDormant(event MessageEvent) bool {
+	groupID := strings.TrimSpace(event.GroupID)
+	if groupID == "" {
+		return false
+	}
+	disabled, mode := r.groupDisabledMode(strings.TrimSpace(event.ProfileID), groupID)
+	return disabled && mode == GroupDisabledDormant
 }
 
 // userBlocked 判断发送者是否在这台机器人（及所在群）的屏蔽名单里。链接解析、插件入口

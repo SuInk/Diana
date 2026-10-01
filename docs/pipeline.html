@@ -86,7 +86,7 @@
         <div class="table-wrap"><table><thead><tr><th>#</th><th>检查</th><th>拦下时的结果</th></tr></thead><tbody>
           <tr><td>1</td><td>机器人已退群或群不可用</td><td><code>ignored_unavailable_group</code></td></tr>
           <tr><td>2</td><td>补全引用、转发、图片，插件观察，写入历史</td><td>—</td></tr>
-          <tr><td>3</td><td>群未启用 / 不在准入范围（主人的抑制命令例外）</td><td><code>ignored_policy</code>；被屏蔽的用户记 <code>ignored_user_blocked</code></td></tr>
+          <tr><td>3</td><td>群未启用 / 不在准入范围（主人的抑制命令例外）。停用分两档：彻底休眠（默认）只落本地历史，不跑长期记忆提取、会话摘要、语义索引和语音转写；静默旁观照常做这些，只是不回复</td><td><code>ignored_policy</code>；被屏蔽的用户记 <code>ignored_user_blocked</code></td></tr>
           <tr><td>4</td><td>机器人在该群被禁言</td><td><code>ignored_bot_muted</code>；开了「禁言期间仍判断」时跑完判断再记 <code>ignored_bot_muted_judged</code></td></tr>
           <tr><td>5</td><td>群模型配额用尽</td><td><code>ignored_model_quota</code></td></tr>
           <tr><td>6</td><td>事件触发器（关键词 / 正则任务）</td><td>不拦截，任务在后台照常跑</td></tr>

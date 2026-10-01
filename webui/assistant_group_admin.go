@@ -484,6 +484,14 @@ func (h *BotHandler) sanitizeGroupConfigPayload(cfg assistant.GroupConfig, group
 			cfg.Governance = existing.Governance
 		}
 	}
+	// 停用档位同理：当前页面总会显式传 dormant 或 observe，空值只可能来自不认识这个
+	// 字段的旧页面，沿用已存的档位，免得一次保存把静默旁观悄悄改回休眠。
+	cfg.DisabledMode = cfg.DisabledMode.Normalized()
+	if cfg.DisabledMode == "" {
+		if existing, ok := h.groupConfigs.ConfigForGroup(cfg.BotProfileID, groupID); ok {
+			cfg.DisabledMode = existing.DisabledMode.Normalized()
+		}
+	}
 	// 全员禁言快照是运行时状态，页面上那份可能是禁言前拉的旧值，只认存储里的。
 	cfg.WholeMuteRestorePermissions = nil
 	if existing, ok := h.groupConfigs.ConfigForGroup(cfg.BotProfileID, groupID); ok {

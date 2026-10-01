@@ -88,7 +88,7 @@
         <div class="table-wrap"><table><thead><tr><th>#</th><th>Check</th><th>Outcome when stopped</th></tr></thead><tbody>
           <tr><td>1</td><td>The bot left the group or the group is unavailable</td><td><code>ignored_unavailable_group</code></td></tr>
           <tr><td>2</td><td>Resolve quotes, forwards and images; plugin observers; store history</td><td>—</td></tr>
-          <tr><td>3</td><td>Group not enabled or not admitted (owner suppression commands excepted)</td><td><code>ignored_policy</code>; blocked users record <code>ignored_user_blocked</code></td></tr>
+          <tr><td>3</td><td>Group not enabled or not admitted (owner suppression commands excepted). A disabled group is either dormant (default: local history only, no memory extraction, context summaries, semantic indexing or voice transcription) or silently observing (all of those keep running, it just never replies)</td><td><code>ignored_policy</code>; blocked users record <code>ignored_user_blocked</code></td></tr>
           <tr><td>4</td><td>The bot is muted in the group</td><td><code>ignored_bot_muted</code>; with "judge while muted" on, the judgement runs and records <code>ignored_bot_muted_judged</code></td></tr>
           <tr><td>5</td><td>Group model quota exhausted</td><td><code>ignored_model_quota</code></td></tr>
           <tr><td>6</td><td>Event triggers (keyword / regex tasks)</td><td>Not a stop; tasks run in the background</td></tr>

@@ -895,6 +895,11 @@ func forgetRolledUpSummaries(ctx context.Context, store StructuredMemoryStore, j
 }
 
 func (r *Runtime) enqueueEventMemory(event MessageEvent, text string) {
+	// 彻底休眠的群不提取长期记忆。判断放在入口而不是各个停用分支：禁言、额度、积压
+	// 合并这些分支同样会走到这里，休眠群一条都不该排进去。
+	if r.groupDormant(event) {
+		return
+	}
 	event = withoutReplyRuntimeState(event)
 	cfg := r.effectiveConfigForEvent(event)
 	if !memoryEventEligible(cfg, event, text) || hasKnownResolverPlatformURL(event, text) {
