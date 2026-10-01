@@ -27,9 +27,8 @@ func runLogsCommand(args []string, output io.Writer) error {
 	configPath := options.configPath
 	if configPath == "" {
 		configPath = resolveConfigPath(nil)
-	}
-	if configPath == "" {
-		return fmt.Errorf("config.yaml was not found; pass --config to locate the Diana configuration")
+	} else if info, err := os.Stat(configPath); err != nil || !info.Mode().IsRegular() {
+		return fmt.Errorf("config file does not exist: %s", configPath)
 	}
 	config, err := loadAppConfig(configPath)
 	if err != nil {

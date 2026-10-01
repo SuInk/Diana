@@ -177,6 +177,7 @@ func configPathFromArgs(args []string) string {
 func loadAppConfig(path string) (appConfig, error) {
 	cfg := appConfig{path: path}
 	if strings.TrimSpace(path) == "" {
+		cfg.applyEnvironmentDefaults()
 		return cfg, nil
 	}
 	data, err := os.ReadFile(path)

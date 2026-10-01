@@ -148,3 +148,38 @@ func sameDirectory(t *testing.T, a, b string) bool {
 	}
 	return os.SameFile(infoA, infoB)
 }
+
+// TestCLIWorksWithoutConfigFile Docker 默认没有 config.yaml，服务按内置默认值
+// 运行；命令行也得照常工作，日志位置取 DIANA_LOG_PATH。
+func TestCLIWorksWithoutConfigFile(t *testing.T) {
+	root := t.TempDir()
+	t.Chdir(root)
+	t.Setenv(configPathEnv, "")
+	logPath := filepath.Join(root, "data", "logs", "diana.log")
+	if err := os.MkdirAll(filepath.Dir(logPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(logPath, []byte("hello from diana\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(logPathEnv, logPath)
+
+	config, path, err := loadCLIConfig(nil)
+	if err != nil || path != "" || config.Storage.LogPath != logPath {
+		t.Fatalf("loadCLIConfig() = %+v, %q, %v", config.Storage, path, err)
+	}
+	var output strings.Builder
+	if err := runLogsCommand([]string{"--lines", "1"}, &output); err != nil || !strings.Contains(output.String(), "hello from diana") {
+		t.Fatalf("logs = %q, %v", output.String(), err)
+	}
+	output.Reset()
+	if err := runConfigCommand([]string{"check"}, &output); err != nil || !strings.Contains(output.String(), "built-in defaults") {
+		t.Fatalf("config check = %q, %v", output.String(), err)
+	}
+	if err := runConfigCommand([]string{"path"}, &strings.Builder{}); err == nil {
+		t.Fatal("config path reported a file that does not exist")
+	}
+	if err := runLogsCommand([]string{"--config", filepath.Join(root, "missing.yaml")}, &strings.Builder{}); err == nil {
+		t.Fatal("logs accepted a missing explicit config")
+	}
+}
