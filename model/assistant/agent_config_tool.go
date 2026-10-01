@@ -277,10 +277,13 @@ func (t *dianaConfigTool) Run(_ context.Context, input map[string]any) (string, 
 func (r *Runtime) dianaConfigSnapshot(event MessageEvent) dianaConfigSnapshot {
 	status := r.Status()
 	cfg := r.profileConfig(event.ProfileID)
+	bot := dianaBotConfigFromConfig(cfg)
+	// 逐群开关存在群配置里，机器人配置那份旧名单迁移后是空的，这里换成实际停用的群。
+	bot.DisabledGroups = r.disabledGroupIDs(r.eventProfileID(event))
 	return dianaConfigSnapshot{
 		Note:        "配置已脱敏：不会返回 API key、OneBot token、自定义 header 值、config.yaml 原文或 secrets 文件内容。",
 		Runtime:     dianaRuntimeFromStatus(status, cfg.ID),
-		Bot:         dianaBotConfigFromConfig(cfg),
+		Bot:         bot,
 		LLM:         r.dianaLLMSnapshot(),
 		Skills:      dianaPluginSkillsFromStates(status.Plugins),
 		RuntimePath: dianaRuntimePathsFromEnv(),

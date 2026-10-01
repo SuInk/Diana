@@ -8171,15 +8171,53 @@ func sessionKey(event MessageEvent) string {
 
 // renderDisabledGroups 渲染这台机器人的禁用群列表。
 func (r *Runtime) renderDisabledGroups(event MessageEvent) string {
-	cfg := r.profileConfig(r.eventProfileID(event))
-	if len(cfg.DisabledGroups) == 0 {
-		return "当前没有被禁用的群。"
+	profileID := r.eventProfileID(event)
+	groupIDs := r.disabledGroupIDs(profileID)
+	var lines []string
+	if len(groupIDs) == 0 {
+		lines = append(lines, "当前没有被禁用的群。")
+	} else {
+		lines = append(lines, "已禁用群列表：")
+		for _, groupID := range groupIDs {
+			lines = append(lines, "- "+groupID)
+		}
 	}
-	lines := []string{"已禁用群列表："}
-	for _, groupID := range cfg.DisabledGroups {
-		lines = append(lines, "- "+groupID)
+	if !r.profileConfig(profileID).GroupAdmission.NewGroupEnabled() {
+		lines = append(lines, "没单独开过的新群默认也不工作。")
 	}
 	return strings.Join(lines, "\n")
+}
+
+// groupConfigLister 是能列出全部群配置的存储，控制台注入的那两种都满足。
+type groupConfigLister interface {
+	Groups() GroupConfigSet
+}
+
+// disabledGroupIDs 列出这台机器人明确停用的群，判据和 isGroupDisabled 同一处。
+//
+// 开关早就挪进群配置了，机器人配置里的 DisabledGroups 迁移后一直是空的；只读它
+// 会让「群 列表」和配置快照在控制台关了群之后仍报「没有被禁用的群」。
+func (r *Runtime) disabledGroupIDs(profileID string) []string {
+	profileID = strings.TrimSpace(profileID)
+	candidates := append([]string(nil), r.profileConfig(profileID).DisabledGroups...)
+	r.mu.RLock()
+	lister, _ := r.groupConfigs.(groupConfigLister)
+	r.mu.RUnlock()
+	if lister != nil {
+		for _, groupCfg := range lister.Groups().Groups {
+			if owner := strings.TrimSpace(groupCfg.BotProfileID); owner == profileID || owner == "" {
+				candidates = append(candidates, groupCfg.GroupID)
+			}
+		}
+	}
+	var out []string
+	for _, groupID := range cleanStrings(candidates) {
+		if r.isGroupDisabled(profileID, groupID) {
+			out = append(out, groupID)
+		}
+	}
+	slices.Sort(out)
+	return out
 }
 
 // disabledGroupsSaver 只改一台机器人的禁用群列表，和屏蔽名单、机器人标记一样窄。
