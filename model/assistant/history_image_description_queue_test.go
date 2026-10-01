@@ -111,16 +111,33 @@ func TestHistoryImageDescriptionTimeoutExcludesQueueWait(t *testing.T) {
 }
 
 // 一条消息的全部图（含每一帧）都要描述，而且一张一张来，不因为排在后面就超时。
+// 不靠「单次耗时 < 超时 < 总耗时」的墙钟余量判定：那样在 -race 下偶尔一次调用被拖过
+// 超时就进退避，测试随机挂。改为直接检查每次调用的超时起点——第 k 次的计时必须
+// 晚于第 k-1 次返回；若排队时间被算进超时，各帧的起点都是入队时刻，这里必挂。
 func TestHistoryImageDescriptionDescribesEveryFrameSerially(t *testing.T) {
-	provider := &queueVisionProvider{behave: func(ctx context.Context, _ int) error {
-		select {
-		case <-time.After(40 * time.Millisecond):
-			return nil
-		case <-ctx.Done():
-			return ctx.Err()
+	const timeout = time.Hour
+	var (
+		mu        sync.Mutex
+		lastEnd   time.Time
+		badTimers []string
+	)
+	provider := &queueVisionProvider{behave: func(ctx context.Context, call int) error {
+		deadline, ok := ctx.Deadline()
+		mu.Lock()
+		if !ok {
+			badTimers = append(badTimers, fmt.Sprintf("call %d has no deadline", call))
+		} else if timerStart := deadline.Add(-timeout); timerStart.Before(lastEnd) {
+			badTimers = append(badTimers, fmt.Sprintf("call %d timer started %s before previous call returned", call, lastEnd.Sub(timerStart)))
 		}
+		mu.Unlock()
+		// 留一小段重叠窗口，若有并发执行 maxActive 能看出来。
+		time.Sleep(5 * time.Millisecond)
+		mu.Lock()
+		lastEnd = time.Now()
+		mu.Unlock()
+		return nil
 	}}
-	runtime, store := newQueueTestRuntime(t, provider, 150*time.Millisecond, time.Hour)
+	runtime, store := newQueueTestRuntime(t, provider, timeout, time.Hour)
 	event, hashes := multiImageEvent(t, "video-with-frames", 12)
 
 	runtime.enqueueHistoryImageDescriptions(event)
@@ -128,6 +145,11 @@ func TestHistoryImageDescriptionDescribesEveryFrameSerially(t *testing.T) {
 	calls, maxActive := provider.snapshot()
 	if calls != len(hashes) || maxActive != 1 {
 		t.Fatalf("calls=%d maxActive=%d, want %d serial calls", calls, maxActive, len(hashes))
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(badTimers) > 0 {
+		t.Fatalf("description timeout counted queue wait: %s", strings.Join(badTimers, "; "))
 	}
 }
 
