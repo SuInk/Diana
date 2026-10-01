@@ -74,7 +74,7 @@ docker compose -f docker-compose.yml -f docker-compose.update.yml pull && docker
 
 如果 Apple Silicon / ARM64 拉取旧镜像时报 `no matching manifest for linux/arm64/v8`，可临时在 `docker-compose.yml` 的 `services.diana` 下添加 `platform: linux/amd64`（需要 amd64 模拟支持，性能及浏览器兼容性可能受影响），原生 ARM64 镜像发布后删除此项；也可使用上方安装脚本原生部署。构建配置修改不会自动更新线上已有镜像。
 
-**② 登录控制台。** 打开 `http://127.0.0.1:18080`。管理员账号密码在刚才的终端输出里（Docker 方式用 `docker logs diana` 查看；脚本安装的还会写进安装目录的 `config.yaml`，别把这个文件给别人）。忘记密码时，在 `config.yaml` 的 `admin:` 段填上 `password`（Docker 是 `data/config.yaml`），重启后就以它为准。
+**② 登录控制台。** 打开 `http://127.0.0.1:18080`。管理员账号密码在刚才的终端输出里（Docker 方式用 `docker logs diana` 查看；脚本安装的还会写进安装目录的 `config.yaml`，别把这个文件给别人）。忘记密码时，在 `config.yaml` 的 `admin:` 段填上 `password`，重启后就以它为准；Docker 部署首次启动会自动生成 `data/config.yaml`（属主是容器用户，宿主机上可能要 `sudo` 才能编辑）。
 
 **③ 配置。** 控制台里依次完成三件事：
 

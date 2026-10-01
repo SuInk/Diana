@@ -6,7 +6,7 @@ package main
 import (
 	"os"
 	"path/filepath"
-	"strings"
+	"runtime"
 	"testing"
 )
 
@@ -91,7 +91,61 @@ func TestWriteAdminCredentialsKeepsPermissions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if perm := info.Mode().Perm(); perm != 0o600 && !strings.EqualFold(os.Getenv("GOOS"), "windows") {
+	if perm := info.Mode().Perm(); perm != 0o600 && runtime.GOOS != "windows" {
 		t.Fatalf("permissions changed to %o", perm)
+	}
+}
+
+func TestEnsureDataDirConfig(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	dbPath := filepath.Join(dir, "data", "diana.db")
+	if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// --config / DIANA_CONFIG 指向别处、数据库不在默认数据目录时都不生成。
+	if path, err := ensureDataDirConfig(true, dbPath, "admin", "generated-pass"); err != nil || path != "" {
+		t.Fatalf("explicit config path: path=%q err=%v", path, err)
+	}
+	if path, err := ensureDataDirConfig(false, filepath.Join(dir, "elsewhere", "diana.db"), "admin", "generated-pass"); err != nil || path != "" {
+		t.Fatalf("custom db dir: path=%q err=%v", path, err)
+	}
+
+	path, err := ensureDataDirConfig(false, dbPath, "diana#abc", "generated-pass")
+	if err != nil || path == "" {
+		t.Fatalf("ensureDataDirConfig() path=%q err=%v", path, err)
+	}
+	if found := resolveConfigPath(nil); found != dataDirConfigPath {
+		t.Fatalf("generated config is not found on next start: %q", found)
+	}
+	cfg, err := loadAppConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Admin.Username != "diana#abc" || cfg.Admin.Password != "generated-pass" {
+		t.Fatalf("generated admin = %+v", cfg.Admin)
+	}
+	if info, err := os.Stat(path); err == nil && runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
+		t.Fatalf("generated config permissions = %o", info.Mode().Perm())
+	}
+	// 已经有了就不覆盖。
+	if again, err := ensureDataDirConfig(false, dbPath, "other", "other-pass"); err != nil || again != "" {
+		t.Fatalf("existing config overwritten: path=%q err=%v", again, err)
+	}
+
+	// 旧部署：只知道账号，密码留空，写回后就能改。
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ensureDataDirConfig(false, dbPath, "admin", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeAdminCredentials(path, "admin", "reset-password"); err != nil {
+		t.Fatalf("fill password in generated config: %v", err)
+	}
+	cfg, err = loadAppConfig(path)
+	if err != nil || cfg.Admin.Password != "reset-password" {
+		t.Fatalf("filled config admin = %+v err=%v", cfg.Admin, err)
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"go.yaml.in/yaml/v4"
@@ -176,4 +177,53 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+// ensureDataDirConfig 在哪都没找到 config.yaml 时，在默认数据目录生成一份只有 admin
+// 段的配置。Docker 部署只挂 data/ 一个目录、镜像不带配置文件，不生成的话用户在挂载
+// 目录里根本看不到 config.yaml，忘了密码也无处可改。
+//
+// 首次启动刚生成的账号密码原样写进去，之后由它管凭据；已有管理员的旧部署只知道
+// 账号，密码留空并注明忘记时怎么填。--config / DIANA_CONFIG 指向别处、或者数据库
+// 不在默认数据目录时不生成：下次启动按查找顺序找不到这份文件，生成了也不生效。
+// 返回空路径表示没有生成。
+func ensureDataDirConfig(explicitPath bool, dbPath, username, generatedPassword string) (string, error) {
+	if explicitPath || strings.TrimSpace(dbPath) == "" {
+		return "", nil
+	}
+	target, err := filepath.Abs(dataDirConfigPath)
+	if err != nil {
+		return "", err
+	}
+	if filepath.Dir(filepath.Clean(dbPath)) != filepath.Dir(target) {
+		return "", nil
+	}
+	var b strings.Builder
+	b.WriteString("# Diana 配置，启动时自动生成。完整字段见仓库里的 config.example.yaml，改完重启生效。\n")
+	b.WriteString("# admin 段每次启动都以这里为准；在 WebUI 里改账号密码会同步写回这两项。\n")
+	b.WriteString("# 这份文件里有管理员密码，别给别人。\n")
+	b.WriteString("admin:\n")
+	b.WriteString("  username: " + yamlQuoted(username) + "\n")
+	if generatedPassword == "" {
+		b.WriteString("  # 忘记密码时在这里填新密码（至少 8 位）再重启，启动时以它为准。\n")
+	}
+	b.WriteString("  password: " + yamlQuoted(generatedPassword) + "\n")
+	// O_EXCL：并发或别人刚放进来的文件一律不覆盖。
+	file, err := os.OpenFile(target, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		if errors.Is(err, os.ErrExist) {
+			return "", nil
+		}
+		return "", err
+	}
+	if _, err := file.WriteString(b.String()); err != nil {
+		_ = file.Close()
+		_ = os.Remove(target)
+		return "", err
+	}
+	if err := file.Close(); err != nil {
+		_ = os.Remove(target)
+		return "", err
+	}
+	return target, nil
 }

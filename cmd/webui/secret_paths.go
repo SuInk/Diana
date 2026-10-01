@@ -29,6 +29,9 @@ func protectRuntimeSecrets(appCfg appConfig, dbPath, dataDir string) {
 	var files []string
 	if appCfg.path != "" {
 		files = append(files, appCfg.path)
+	} else if generated, err := filepath.Abs(dataDirConfigPath); err == nil {
+		// 没找到配置文件时，稍后会在这里生成一份带管理员密码的（ensureDataDirConfig）。
+		files = append(files, generated)
 	}
 	if dbPath = strings.TrimSpace(dbPath); dbPath != "" {
 		files = append(files, dbPath, dbPath+"-wal", dbPath+"-shm", dbPath+"-journal")

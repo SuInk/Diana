@@ -14,9 +14,10 @@ services:
       # 要持久化的东西全在这一个目录里，不挂出来的话容器重建就全丢了：
       #   diana.db          SQLite（配置、管理员凭据、插件状态）
       #   logs/diana.log    运行日志（按 20 MiB 轮转，保留 5 份）
-      #   config.yaml       可选。复制 config.example.yaml 改好放进来；没有也能起，
-      #                     打开 WebUI 走安装向导即可。基础设施段每次启动生效，
-      #                     bot/llm 段只在数据库为空时播种一次，之后以 WebUI 为准。
+      #   config.yaml       没有时启动自动生成一份，只含管理员账号密码；忘记密码就改
+      #                     这里的 admin.password 再重启。也可以复制 config.example.yaml
+      #                     改好放进来。基础设施段每次启动生效，bot/llm 段只在数据库
+      #                     为空时播种一次，之后以 WebUI 为准。
       #   其余              媒体缓存、插件与技能、MCP 配置、浏览器与编码 CLI 登录态、
       #                     ytb_cookies.txt、升级备份
       # 目录不存在时由 Docker 以 root 创建，容器启动时会自动交给运行用户（UID 10001）。

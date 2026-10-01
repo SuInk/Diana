@@ -669,6 +669,19 @@ func main() {
 		}
 		_, _ = fmt.Fprintln(os.Stderr)
 	}
+	if appCfg.path == "" {
+		explicit := configPathFromArgs(os.Args[1:]) != "" || strings.TrimSpace(os.Getenv(configPathEnv)) != ""
+		created, err := ensureDataDirConfig(explicit, dbPath, bootstrap.Username, bootstrap.GeneratedPassword)
+		if err != nil {
+			log.Printf("create %s: %v", dataDirConfigPath, err)
+		} else if created != "" {
+			log.Printf("config file created at %s; edit its admin section and restart to reset the administrator password", created)
+			appCfg.path = created
+			appCfg.Admin.Username = bootstrap.Username
+			appCfg.Admin.Password = bootstrap.GeneratedPassword
+			secretmask.Register(bootstrap.GeneratedPassword)
+		}
+	}
 	if bootstrap.Synced {
 		log.Printf("administrator credentials updated from %s (username: %s)", appCfg.path, bootstrap.Username)
 	}
