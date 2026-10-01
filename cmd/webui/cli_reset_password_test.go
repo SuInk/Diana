@@ -42,7 +42,7 @@ func writeResetPasswordFixture(t *testing.T) (string, string) {
 func TestResetPasswordCommandReplacesCredentials(t *testing.T) {
 	configPath, dbPath := writeResetPasswordFixture(t)
 	var output strings.Builder
-	if err := runResetPasswordCommand([]string{"--config", configPath}, &output); err != nil {
+	if err := runResetPasswordCommand([]string{"--config", configPath, "--yes"}, cliPrompt{}, &output); err != nil {
 		t.Fatalf("reset-password error = %v", err)
 	}
 	password := ""
@@ -79,7 +79,7 @@ func TestResetPasswordCommandRefusesWhileDianaRuns(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer lock.Release()
-	err = runResetPasswordCommand([]string{"--config", configPath}, &strings.Builder{})
+	err = runResetPasswordCommand([]string{"--config", configPath, "--yes"}, cliPrompt{}, &strings.Builder{})
 	if err == nil || !strings.Contains(err.Error(), "stop it first") {
 		t.Fatalf("expected running-instance refusal, got %v", err)
 	}
@@ -91,7 +91,7 @@ func TestResetPasswordCommandDoesNotCreateMissingDatabase(t *testing.T) {
 	if err := os.WriteFile(configPath, []byte("storage:\n  db_path: data/diana.db\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	err := runResetPasswordCommand([]string{"--config", configPath}, &strings.Builder{})
+	err := runResetPasswordCommand([]string{"--config", configPath, "--yes"}, cliPrompt{}, &strings.Builder{})
 	if err == nil || !strings.Contains(err.Error(), "database was not found") {
 		t.Fatalf("expected missing database error, got %v", err)
 	}
@@ -101,8 +101,8 @@ func TestResetPasswordCommandDoesNotCreateMissingDatabase(t *testing.T) {
 }
 
 func TestParseResetPasswordOptions(t *testing.T) {
-	options, err := parseResetPasswordOptions([]string{"--username=admin", "--config", "x.yaml"})
-	if err != nil || options.username != "admin" || options.configPath != "x.yaml" {
+	options, err := parseResetPasswordOptions([]string{"--username=admin", "--config", "x.yaml", "-y"})
+	if err != nil || options.username != "admin" || options.configPath != "x.yaml" || !options.yes {
 		t.Fatalf("options = %+v, %v", options, err)
 	}
 	for _, args := range [][]string{{"--username"}, {"--username="}, {"--bogus"}} {
@@ -118,5 +118,40 @@ func TestResetAliasesRunResetPassword(t *testing.T) {
 		if !handled || err == nil || !strings.Contains(err.Error(), "unknown reset-password option") {
 			t.Fatalf("handleCLI(%s) = (%v, %v), want reset-password option error", command, handled, err)
 		}
+	}
+}
+
+func TestResetPasswordCommandAsksForConfirmation(t *testing.T) {
+	configPath, dbPath := writeResetPasswordFixture(t)
+	passwordStillWorks := func() bool {
+		store, err := storage.NewSQLiteStore(dbPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer store.Close()
+		_, err = webui.NewAuthManager(store).Login("owner", "old-password")
+		return err == nil
+	}
+
+	err := runResetPasswordCommand([]string{"--config", configPath}, cliPrompt{input: strings.NewReader("y\n")}, &strings.Builder{})
+	if err == nil || !strings.Contains(err.Error(), "--yes") || !passwordStillWorks() {
+		t.Fatalf("non-interactive reset without --yes: err=%v", err)
+	}
+	var output strings.Builder
+	for _, answer := range []string{"n\n", "\n", ""} {
+		output.Reset()
+		if err := runResetPasswordCommand([]string{"--config", configPath}, cliPrompt{input: strings.NewReader(answer), interactive: true}, &output); err != nil {
+			t.Fatalf("answer %q: %v", answer, err)
+		}
+		if !strings.Contains(output.String(), "Cancelled") || !passwordStillWorks() {
+			t.Fatalf("answer %q changed the password: %s", answer, output.String())
+		}
+	}
+	output.Reset()
+	if err := runResetPasswordCommand([]string{"--config", configPath}, cliPrompt{input: strings.NewReader("y\n"), interactive: true}, &output); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(output.String(), "credentials were reset") || passwordStillWorks() {
+		t.Fatalf("confirmed reset did not apply: %s", output.String())
 	}
 }

@@ -218,7 +218,7 @@ diana doctor    # 体检：配置、目录、前端资源、服务健康
 
 Docker 部署在宿主机用 `docker exec diana diana <命令>`，例如 `docker exec diana diana logs -f`。
 
-**忘记密码**：先停掉服务，执行 `diana reset`（也可写 `passwd` 或 `reset-password`）重置管理员密码：生成新的随机密码并打印出来，所有已登录的浏览器会被登出，其余数据不动；加 `--username 名字` 可同时改账号名。服务运行中执行会直接拒绝。Docker 部署要停掉容器后再执行，在部署目录运行：
+**忘记密码**：先停掉服务，执行 `diana reset`（也可写 `passwd` 或 `reset-password`）重置管理员密码：生成新的随机密码并打印出来，所有已登录的浏览器会被登出，其余数据不动；执行前会要求输入 `y` 确认，加 `-y` 跳过（脚本里无法交互时必须加）；加 `--username 名字` 可同时改账号名。服务运行中执行会直接拒绝。Docker 部署要停掉容器后再执行，在部署目录运行：
 
 ```sh
 docker compose stop diana
