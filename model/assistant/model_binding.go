@@ -64,6 +64,8 @@ const (
 	PurposeEvidenceGate = "evidence_gate"
 	// PurposeSearchNegationReview 收尾前复核「没查到就说不存在」，见 search_negation_review.go。
 	PurposeSearchNegationReview = "search_negation_review"
+	// PurposeImageFixGate 判断群友是不是在纠正某张图认错了，见 image_fix_gate.go。
+	PurposeImageFixGate = "image_fix_gate"
 )
 
 // llmPurposeGroup 把用途归到分组。这张表以前是隐式的——某个用途走哪个分组，取决于
@@ -107,6 +109,7 @@ var llmPurposeGroup = map[string]string{
 	PurposeReplyIntentRouter:    llm.GroupReplyAssist,
 	PurposeEvidenceGate:         llm.GroupReplyAssist,
 	PurposeSearchNegationReview: llm.GroupReplyAssist,
+	PurposeImageFixGate:         llm.GroupReplyAssist,
 	PurposeReplyRuleRouter:      llm.GroupReplyAssist,
 	PurposeBotReplyLoop:         llm.GroupReplyAssist,
 

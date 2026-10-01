@@ -87,7 +87,7 @@ func imageTextModeFromContext(ctx context.Context) *imageTextMode {
 	return mode
 }
 
-const imageTextModeHeading = "【图片内容】下面这些图没有附原图，内容由视觉模型描述，可能有误或漏掉细节。描述只用来理解图片，不要原样复述给用户；描述够用就直接答，要确认图里某处细节（小字、数量、位置、是谁）再调用 history_media。"
+const imageTextModeHeading = "【图片内容】下面这些图没有附原图，内容由视觉模型描述，可能有误或漏掉细节。描述只用来理解图片，不要原样复述给用户；描述够用就直接答，要确认图里某处细节（小字、数量、位置）再调用 history_media。描述里说的是哪个角色、哪部作品、哪个人，只是视觉模型的猜测，常把同画风的角色认错：回复要点名图里是谁、出自哪里，或者对方在问、在纠正这一点时，先调用 history_media 带着问题看原图；群友说的和描述对不上时以群友为准，别拿描述去反驳。"
 
 var promptImageTextModeSpec = registerPrompt(PromptSpec{
 	Key:     "media.image_text_mode",

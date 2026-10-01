@@ -4985,6 +4985,7 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 		if !requireEvidenceFromContext(ctx) {
 			evidenceCheck = r.startEvidenceGate(ctx, event, registry)
 		}
+		r.startImageFixGate(ctx, cfg, event)
 		resp, err := agentRunner.Run(agent.WithCallerIdentity(ctx, callerIdentityForEvent(cfg, event)), agent.Request{
 			Messages:        messages,
 			TraceID:         traceID,
