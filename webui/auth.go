@@ -43,14 +43,22 @@ var (
 	ErrWrongPassword    = errors.New("账号或密码不正确")
 	ErrPasswordTooShort = errors.New("密码至少 8 位")
 	ErrUsernameInvalid  = errors.New("账号需为 2-64 个字符，且不能包含空格或控制字符")
+	// ErrPasswordEdgeSpace 只在凭据写回 config.yaml 时出现。
+	ErrPasswordEdgeSpace = errors.New("密码首尾不能有空格")
 )
 
-// AuthBootstrapResult 描述首次启动创建的管理员凭据。
+// AuthBootstrapResult 描述启动时管理员凭据的处理结果。
 type AuthBootstrapResult struct {
-	Created           bool
+	Created bool
+	// Synced 表示数据库里的凭据和配置文件不一致，已按配置文件改写。
+	Synced            bool
 	Username          string
 	GeneratedPassword string
 }
+
+// CredentialsWriter 把 WebUI 改好的账号密码写回配置文件。配置文件管着凭据时
+// 每次启动都以它为准，不写回的话改过的密码一重启就被覆盖回去。
+type CredentialsWriter func(username, password string) error
 
 // AuthStore 持久化 WebUI 密码与会话。
 type AuthStore interface {
@@ -95,6 +103,7 @@ type AuthManager struct {
 	mu       sync.Mutex
 	auth     *storage.WebUIAuth
 	sessions map[string]storage.WebUISession // token 哈希 -> 会话元数据
+	writer   CredentialsWriter
 }
 
 type AuthSessionMetadata struct {
@@ -137,16 +146,34 @@ func NewAuthManager(store AuthStore) *AuthManager {
 	return m
 }
 
-// Bootstrap 首次初始化管理员；空账号和密码会分别生成安全随机值。
+// Bootstrap 在启动时按配置文件确定管理员凭据。数据库里还没有管理员时创建一个，
+// 空账号和密码分别生成安全随机值；已有管理员且配置文件填了密码时以配置文件为准，
+// 不一致就改写数据库（账号留空表示沿用数据库里的账号）。配置文件没填密码时
+// 不动已有凭据。
 func (m *AuthManager) Bootstrap(username, password string) (AuthBootstrapResult, error) {
 	password = strings.TrimSpace(password)
+	username = strings.TrimSpace(username)
 	m.mu.Lock()
 	auth := m.auth
 	m.mu.Unlock()
 	if auth != nil {
-		return AuthBootstrapResult{Username: auth.Username}, nil
+		if password == "" {
+			return AuthBootstrapResult{Username: auth.Username}, nil
+		}
+		if username == "" {
+			username = auth.Username
+		} else if err := validateAdminUsername(username); err != nil {
+			return AuthBootstrapResult{}, err
+		}
+		// 一致时什么都不做：每次启动都重写会清空所有会话，人人都得重新登录。
+		if m.verify(username, password) {
+			return AuthBootstrapResult{Username: username}, nil
+		}
+		if err := m.setCredentials(username, password); err != nil {
+			return AuthBootstrapResult{}, err
+		}
+		return AuthBootstrapResult{Synced: true, Username: username}, nil
 	}
-	username = strings.TrimSpace(username)
 	if username == "" {
 		var err error
 		username, err = randomAdminUsername()
@@ -169,6 +196,13 @@ func (m *AuthManager) Bootstrap(username, password string) (AuthBootstrapResult,
 		return AuthBootstrapResult{}, err
 	}
 	return AuthBootstrapResult{Created: true, Username: username, GeneratedPassword: generatedPassword}, nil
+}
+
+// SetCredentialsWriter 设置 WebUI 改密时的配置文件写回；nil 表示不写回。
+func (m *AuthManager) SetCredentialsWriter(writer CredentialsWriter) {
+	m.mu.Lock()
+	m.writer = writer
+	m.mu.Unlock()
 }
 
 func randomAdminUsername() (string, error) {
@@ -286,6 +320,23 @@ func (m *AuthManager) SetCredentials(current, nextUsername, nextPassword string)
 		}
 	} else if err := validateAdminUsername(username); err != nil {
 		return "", err
+	}
+	if len([]rune(nextPassword)) < authMinPasswordLen {
+		return "", ErrPasswordTooShort
+	}
+	// 先写配置文件再写数据库：写回失败就整个不改，免得两边不一致、
+	// 下次启动又被配置文件里的旧密码覆盖回去。
+	m.mu.Lock()
+	writer := m.writer
+	m.mu.Unlock()
+	if writer != nil {
+		// 启动时读配置文件会去掉首尾空白，带空白的密码写回去下次启动就对不上了。
+		if strings.TrimSpace(nextPassword) != nextPassword {
+			return "", ErrPasswordEdgeSpace
+		}
+		if err := writer(username, nextPassword); err != nil {
+			return "", fmt.Errorf("写回配置文件失败，凭据未修改: %w", err)
+		}
 	}
 	if err := m.setCredentials(username, nextPassword); err != nil {
 		return "", err

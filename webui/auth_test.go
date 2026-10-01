@@ -180,16 +180,13 @@ func TestAuthBootstrapAndPasswordRules(t *testing.T) {
 	if !manager.Required() {
 		t.Fatal("bootstrap should enable auth")
 	}
-	// Bootstrap 不覆盖已有密码。
-	second, err := manager.Bootstrap("", "another-pass-xx")
+	// 配置文件没填密码时，Bootstrap 不动已有凭据。
+	second, err := manager.Bootstrap("", "")
 	if err != nil {
 		t.Fatalf("Bootstrap() second error = %v", err)
 	}
-	if second.Created || second.Username != bootstrap.Username {
+	if second.Created || second.Synced || second.Username != bootstrap.Username {
 		t.Fatalf("second bootstrap changed account: %+v", second)
-	}
-	if _, err := manager.Login(bootstrap.Username, "another-pass-xx"); err == nil {
-		t.Fatal("second bootstrap should not overwrite password")
 	}
 	if _, err := manager.Login(bootstrap.Username, "bootstrap-pass"); err != nil {
 		t.Fatalf("original password should work: %v", err)
@@ -342,5 +339,85 @@ func TestAuthSessionManagementRoutes(t *testing.T) {
 	}
 	if cookie := recorder.Header().Get("Set-Cookie"); !strings.Contains(cookie, "Max-Age=0") {
 		t.Fatalf("current session cookie was not cleared: %q", cookie)
+	}
+}
+
+// config.yaml 填了 admin 段时每次启动以它为准：不一致就改写，一致时不清会话。
+func TestAuthBootstrapSyncsCredentialsFromConfig(t *testing.T) {
+	store := &memoryAuthStore{}
+	if _, err := NewAuthManager(store).Bootstrap("admin", "first-password"); err != nil {
+		t.Fatalf("Bootstrap() error = %v", err)
+	}
+
+	restarted := NewAuthManager(store)
+	token, err := restarted.Login("admin", "first-password")
+	if err != nil {
+		t.Fatalf("Login() error = %v", err)
+	}
+	same, err := restarted.Bootstrap("admin", "first-password")
+	if err != nil || same.Created || same.Synced {
+		t.Fatalf("unchanged config rewrote credentials: result=%+v err=%v", same, err)
+	}
+	if !restarted.Authenticate(token) {
+		t.Fatal("unchanged config should keep sessions")
+	}
+
+	// 忘记密码：改 config.yaml 后重启即可。
+	reset := NewAuthManager(store)
+	result, err := reset.Bootstrap("", "second-password")
+	if err != nil || !result.Synced || result.Username != "admin" {
+		t.Fatalf("password change not synced: result=%+v err=%v", result, err)
+	}
+	if _, err := reset.Login("admin", "first-password"); err == nil {
+		t.Fatal("old password still works")
+	}
+	if _, err := reset.Login("admin", "second-password"); err != nil {
+		t.Fatalf("new password login failed: %v", err)
+	}
+
+	renamed := NewAuthManager(store)
+	result, err = renamed.Bootstrap("owner", "second-password")
+	if err != nil || !result.Synced || result.Username != "owner" {
+		t.Fatalf("username change not synced: result=%+v err=%v", result, err)
+	}
+	if _, err := renamed.Login("owner", "second-password"); err != nil {
+		t.Fatalf("renamed login failed: %v", err)
+	}
+	if _, err := renamed.Bootstrap("有 空格", "second-password"); !errors.Is(err, ErrUsernameInvalid) {
+		t.Fatalf("invalid configured username error = %v", err)
+	}
+}
+
+// WebUI 改密时先写回配置文件，写回失败则数据库里的凭据保持不变。
+func TestAuthSetCredentialsWritesBackToConfig(t *testing.T) {
+	manager := NewAuthManager(&memoryAuthStore{})
+	if _, err := manager.Bootstrap("admin", "first-password"); err != nil {
+		t.Fatalf("Bootstrap() error = %v", err)
+	}
+	var gotUser, gotPass string
+	manager.SetCredentialsWriter(func(username, password string) error {
+		gotUser, gotPass = username, password
+		return nil
+	})
+	if _, err := manager.SetCredentials("first-password", "owner", "second-password"); err != nil {
+		t.Fatalf("SetCredentials() error = %v", err)
+	}
+	if gotUser != "owner" || gotPass != "second-password" {
+		t.Fatalf("writer got %q/%q", gotUser, gotPass)
+	}
+	if _, err := manager.SetCredentials("second-password", "", " padded-password"); !errors.Is(err, ErrPasswordEdgeSpace) {
+		t.Fatalf("padded password error = %v", err)
+	}
+	gotPass = ""
+	if _, err := manager.SetCredentials("second-password", "", "short"); !errors.Is(err, ErrPasswordTooShort) || gotPass != "" {
+		t.Fatalf("short password reached writer: err=%v wrote=%q", err, gotPass)
+	}
+
+	manager.SetCredentialsWriter(func(string, string) error { return errors.New("read-only") })
+	if _, err := manager.SetCredentials("second-password", "", "third-password"); err == nil {
+		t.Fatal("write-back failure should fail the change")
+	}
+	if _, err := manager.Login("owner", "second-password"); err != nil {
+		t.Fatalf("credentials changed despite write-back failure: %v", err)
 	}
 }

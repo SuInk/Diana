@@ -30,6 +30,7 @@ import (
 	_ "time/tzdata"
 
 	"github.com/SuInk/diana/internal/dlog"
+	"github.com/SuInk/diana/internal/secretmask"
 	"github.com/SuInk/diana/model/agent"
 	"github.com/SuInk/diana/model/assistant"
 	"github.com/SuInk/diana/model/browserbox"
@@ -667,6 +668,20 @@ func main() {
 			_, _ = fmt.Fprintf(os.Stderr, "  password: %s\n", bootstrap.GeneratedPassword)
 		}
 		_, _ = fmt.Fprintln(os.Stderr)
+	}
+	if bootstrap.Synced {
+		log.Printf("administrator credentials updated from %s (username: %s)", appCfg.path, bootstrap.Username)
+	}
+	// config.yaml 填了 admin.password 就由它管凭据：每次启动以它为准，WebUI 改密
+	// 同步写回，否则改过的密码下次启动又被覆盖回去。
+	if configPath := appCfg.path; configPath != "" && strings.TrimSpace(appCfg.Admin.Password) != "" {
+		authManager.SetCredentialsWriter(func(username, password string) error {
+			if err := writeAdminCredentials(configPath, username, password); err != nil {
+				return err
+			}
+			secretmask.Register(password)
+			return nil
+		})
 	}
 	// 反向 ws 客户端可能只填裸地址（如 ws://host:18080，没有 /onebot/v11/ws
 	// 后缀）。带 OneBot 握手特征的升级请求不论路径都直接交给 oneBotServer，
