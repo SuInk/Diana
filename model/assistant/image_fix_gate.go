@@ -82,9 +82,24 @@ type imageFixGatePayload struct {
 	RecentMessages  []visualIntentHistoryItem `json:"recent_messages,omitempty"`
 }
 
+// startQuotedImageFixGate 给机器人不回复的消息用：群友之间互相纠正时机器人未必接话，
+// 可每条群消息都判一次太贵（10-01 一天 2011 条带文字的消息，近 8 条里有图的就有
+// 1003 条），所以只看直接引用了带描述图片的那些，一天十几二十条。
+func (r *Runtime) startQuotedImageFixGate(ctx context.Context, event MessageEvent) {
+	if r == nil || event.Quoted == nil || !hasImageSegment(event.Quoted.Segments) {
+		return
+	}
+	r.startImageFixGateScoped(ctx, r.effectiveConfigForEvent(event), event, true)
+}
+
 // startImageFixGate 在后台判断并改写，不等结果。图在提示词里换成描述、又有描述缓存
 // 可改时才跑；近期没有带描述的图就不发请求。
 func (r *Runtime) startImageFixGate(ctx context.Context, cfg BotConfig, event MessageEvent) {
+	r.startImageFixGateScoped(ctx, cfg, event, false)
+}
+
+// quotedOnly 时只拿被引用的那条当候选，不翻近期聊天。
+func (r *Runtime) startImageFixGateScoped(ctx context.Context, cfg BotConfig, event MessageEvent, quotedOnly bool) {
 	if r == nil || !r.imageDescriptionsInPrompt(cfg) {
 		return
 	}
@@ -95,7 +110,7 @@ func (r *Runtime) startImageFixGate(ctx context.Context, cfg BotConfig, event Me
 	go func() {
 		defer recoverGoroutinePanic("image_fix_gate")
 		gateCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), imageFixGateTimeout)
-		correction, messageID := r.detectImageFix(gateCtx, event, store)
+		correction, messageID := r.detectImageFix(gateCtx, event, store, quotedOnly)
 		cancel()
 		if correction == "" {
 			return
@@ -107,7 +122,7 @@ func (r *Runtime) startImageFixGate(ctx context.Context, cfg BotConfig, event Me
 	}()
 }
 
-func (r *Runtime) detectImageFix(ctx context.Context, event MessageEvent, store ImageDescriptionStore) (string, string) {
+func (r *Runtime) detectImageFix(ctx context.Context, event MessageEvent, store ImageDescriptionStore, quotedOnly bool) (string, string) {
 	payload := imageFixGatePayload{CurrentText: truncateRunes(strings.TrimSpace(readableEventText(event, historyPlainText(event))), 480)}
 	candidates := map[string]bool{}
 	addCandidates := func(messageID, sender string, segments []MessageSegment) {
@@ -133,6 +148,9 @@ func (r *Runtime) detectImageFix(ctx context.Context, event MessageEvent, store 
 		addCandidates(payload.QuotedMessageID, strings.TrimSpace(event.Quoted.SenderName), event.Quoted.Segments)
 	}
 	history := sessionOnlyHistory(r.contextHistory(event))
+	if quotedOnly && len(payload.Images) == 0 {
+		return "", ""
+	}
 	seen := 0
 	for i := len(history) - 1; i >= 0 && seen < imageFixScanMessages; i-- {
 		item := history[i]
@@ -140,7 +158,7 @@ func (r *Runtime) detectImageFix(ctx context.Context, event MessageEvent, store 
 			continue
 		}
 		seen++
-		if !candidates[item.MessageID] {
+		if !quotedOnly && !candidates[item.MessageID] {
 			addCandidates(item.MessageID, strings.TrimSpace(item.SenderNameOrID()), item.Segments)
 		}
 		if historyItem := visualIntentHistoryItemFromEvent(item); seen <= imageFixRecentMessages && (historyItem.Text != "" || historyItem.Images > 0) {

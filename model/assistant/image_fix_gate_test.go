@@ -106,7 +106,7 @@ func TestImageFixGateDetectsCorrectionOnCandidateImages(t *testing.T) {
 	runtime.SetMessageHistoryStore(store)
 	event := imageFixTestEvent(imagePath)
 
-	fix, messageID := runtime.detectImageFix(context.Background(), event, store)
+	fix, messageID := runtime.detectImageFix(context.Background(), event, store, false)
 	if fix != "这是舞萌的百合咲，不是白洲梓" || messageID != "30009" {
 		t.Fatalf("fix=%q message_id=%q", fix, messageID)
 	}
@@ -116,11 +116,11 @@ func TestImageFixGateDetectsCorrectionOnCandidateImages(t *testing.T) {
 
 	// 只有一张候选图时，模型填了别的消息 ID 也落到这张上；判为不是纠正就什么都不改。
 	provider.reply = `{"fix":"这是舞萌的百合咲","message_id":"99999"}`
-	if _, messageID := runtime.detectImageFix(context.Background(), event, store); messageID != "30009" {
+	if _, messageID := runtime.detectImageFix(context.Background(), event, store, false); messageID != "30009" {
 		t.Fatalf("single candidate should be used, got %q", messageID)
 	}
 	provider.reply = `{"fix":"","message_id":""}`
-	if fix, _ := runtime.detectImageFix(context.Background(), event, store); fix != "" {
+	if fix, _ := runtime.detectImageFix(context.Background(), event, store, false); fix != "" {
 		t.Fatalf("no correction expected, got %q", fix)
 	}
 }
@@ -132,7 +132,28 @@ func TestImageFixGateSkipsWithoutDescribedImages(t *testing.T) {
 	provider := &imageFixGateProvider{reply: `{"fix":"x","message_id":"30009"}`}
 	runtime := NewRuntime(BotConfig{BotAccount: "bot"}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) { return provider, nil })
 	runtime.SetMessageHistoryStore(store)
-	if fix, _ := runtime.detectImageFix(context.Background(), imageFixTestEvent(imagePath), store); fix != "" || provider.calls != 0 {
+	if fix, _ := runtime.detectImageFix(context.Background(), imageFixTestEvent(imagePath), store, false); fix != "" || provider.calls != 0 {
 		t.Fatalf("fix=%q calls=%d", fix, provider.calls)
+	}
+}
+
+// 不回复的消息只看被引用的图：没引用带描述的图就不发请求，近期聊天里的图不算候选。
+func TestQuotedImageFixGateOnlyUsesQuotedImage(t *testing.T) {
+	imagePath, hash := writeRecallImageFixture(t)
+	store := newRecallImageTestStore()
+	store.descriptions[hash] = ImageDescriptionRecord{ContentSHA256: hash, Description: "《蔚蓝档案》中的白洲梓", Source: "vision"}
+	provider := &imageFixGateProvider{reply: `{"fix":"这是舞萌的百合咲","message_id":"30009"}`}
+	runtime := NewRuntime(BotConfig{BotAccount: "bot"}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) { return provider, nil })
+	runtime.SetMessageHistoryStore(store)
+
+	event := imageFixTestEvent(imagePath)
+	if fix, messageID := runtime.detectImageFix(context.Background(), event, store, true); fix == "" || messageID != "30009" {
+		t.Fatalf("quoted image correction: fix=%q message_id=%q", fix, messageID)
+	}
+	event.Quoted.Segments = []MessageSegment{{Type: "text", Data: map[string]string{"text": "没有图"}}}
+	store.timeline = []MessageEvent{{Kind: EventKindGroup, GroupID: "12345", MessageID: "30008", Segments: []MessageSegment{{Type: "image", Data: map[string]string{"cached_file": imagePath}}}}}
+	calls := provider.calls
+	if fix, _ := runtime.detectImageFix(context.Background(), event, store, true); fix != "" || provider.calls != calls {
+		t.Fatalf("quote without image must not call the gate: fix=%q calls=%d", fix, provider.calls-calls)
 	}
 }
