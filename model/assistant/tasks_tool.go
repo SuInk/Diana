@@ -34,7 +34,9 @@ type dianaTask struct {
 	GroupID string `json:"group_id,omitempty"`
 	UserID  string `json:"user_id,omitempty"`
 	Message string `json:"message"`
-	Status  string `json:"status"`
+	// RunQuery 表示这条一次性提醒到点会执行 Message 里的事，而不是原样念出来。
+	RunQuery bool   `json:"run_query,omitempty"`
+	Status   string `json:"status"`
 	// HeldBySafeMode 表示机器人在安全模式，这条任务往当前会话以外投递，到点暂停发送；
 	// 任务保留，切回标准模式后恢复。
 	HeldBySafeMode bool      `json:"held_by_safe_mode,omitempty"`
@@ -344,6 +346,7 @@ func taskForTool(item Reminder) dianaTask {
 		GroupID:               item.GroupID,
 		UserID:                item.UserID,
 		Message:               item.Message,
+		RunQuery:              item.RunQuery,
 		Status:                status,
 		TriggerAt:             item.TriggerAt,
 		Interval:              interval,

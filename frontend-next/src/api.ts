@@ -3701,6 +3701,8 @@ export interface AssistantTask {
   notification_enabled?: boolean;
   notification_targets?: RepositoryWatchTarget[];
   message: string;
+  // 一次性提醒到点会实际执行 message 里的事（可以调工具），而不是原样念出来。
+  run_query?: boolean;
   status: AssistantTaskStatus;
   trigger_at: string;
   interval_seconds?: number;

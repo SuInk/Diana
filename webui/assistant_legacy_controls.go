@@ -181,6 +181,7 @@ type botTaskPayload struct {
 	GroupID             string    `json:"group_id,omitempty"`
 	UserID              string    `json:"user_id,omitempty"`
 	Message             string    `json:"message"`
+	RunQuery            bool      `json:"run_query,omitempty"`
 	Status              string    `json:"status"`
 	TriggerAt           time.Time `json:"trigger_at"`
 	IntervalSeconds     int64     `json:"interval_seconds,omitempty"`
@@ -941,7 +942,7 @@ func botTaskFromReminder(item assistant.Reminder) botTaskPayload {
 func botTaskPayloadFromReminder(item assistant.Reminder) botTaskPayload {
 	return botTaskPayload{
 		ID: item.ID, Kind: botTaskKind(item), Platform: item.Platform, ProfileID: item.ProfileID,
-		OwnerID: item.OwnerID, GroupID: item.GroupID, UserID: item.UserID, Message: item.Message,
+		OwnerID: item.OwnerID, GroupID: item.GroupID, UserID: item.UserID, Message: item.Message, RunQuery: item.RunQuery,
 		Status: botTaskStatus(item), TriggerAt: item.TriggerAt, IntervalSeconds: item.IntervalSeconds, IntervalMonths: item.IntervalMonths,
 		ScheduleRule: assistant.ScheduleRuleLabel(item),
 		LastRunAt:    item.LastRunAt, CancelledAt: item.CancelledAt, LastError: item.LastError,

@@ -46,30 +46,32 @@ func durableReminderRetryDelay(item Reminder, cause error, failures int) time.Du
 	return jittered
 }
 
-func (r *Runtime) storeScheduledQueryPending(id, message string) error {
+// storeReminderPending 把任务执行出的结果存下来，发送失败重试时直接补发，不再重跑。
+// 定时订阅和到点执行的一次性提醒共用。
+func (r *Runtime) storeReminderPending(id, message string) error {
 	message = strings.TrimSpace(message)
 	if message == "" {
-		return fmt.Errorf("定时订阅 %s 没有可持久化的发送结果", id)
+		return fmt.Errorf("任务 %s 没有可持久化的发送结果", id)
 	}
 	r.reminderMu.Lock()
 	defer r.reminderMu.Unlock()
 	items := r.reminders.Reminders()
 	for index := range items {
 		item := &items[index]
-		if item.ID != id || !reminderIsRecurring(*item) {
+		if item.ID != id || (!reminderIsRecurring(*item) && !item.RunQuery) {
 			continue
 		}
 		if !item.CancelledAt.IsZero() {
-			return fmt.Errorf("定时订阅 %s 已取消", id)
+			return fmt.Errorf("任务 %s 已取消", id)
 		}
 		item.PendingDelivery = message
 		item.PendingSince = time.Now()
 		if err := r.reminders.SaveReminders(items); err != nil {
-			return fmt.Errorf("保存定时订阅待发送结果: %w", err)
+			return fmt.Errorf("保存任务待发送结果: %w", err)
 		}
 		return nil
 	}
-	return fmt.Errorf("没有找到定时订阅 %s", id)
+	return fmt.Errorf("没有找到任务 %s", id)
 }
 
 func (r *Runtime) rescheduleOneTimeReminder(id string, cause error) (Reminder, error) {
@@ -153,6 +155,10 @@ func reminderFailureNotice(item Reminder, cause error) string {
 			return fmt.Sprintf("%s结果连续 %d 次发送失败，结果已保留。将在 %s 自动重试发送。", label, item.ConsecutiveFailures, nextAttempt)
 		}
 		return fmt.Sprintf("%s连续 %d 次执行失败：%s 将在 %s 自动重试。", label, item.ConsecutiveFailures, publicTaskErrorMessage(cause), nextAttempt)
+	}
+	if item.RunQuery && strings.TrimSpace(item.PendingDelivery) == "" {
+		// 还没跑出结果就失败了，不是发不出去。
+		return fmt.Sprintf("提醒 %s 到点执行失败：%s 将在 %s 自动重试（连续失败 %d 次）。", item.ID, publicTaskErrorMessage(cause), nextAttempt, item.ConsecutiveFailures)
 	}
 	return fmt.Sprintf("提醒 %s 本次发送失败，将在 %s 自动重试（连续失败 %d 次）。", item.ID, nextAttempt, item.ConsecutiveFailures)
 }

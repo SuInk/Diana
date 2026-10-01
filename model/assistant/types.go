@@ -382,7 +382,10 @@ type Reminder struct {
 	// OriginalTriggerAt 是一次性提醒第一次因为失败重试被挪走触发时间之前的原定时间：
 	// 重试会改 TriggerAt，判断「晚了多久」要看原定的那个。零值表示没被挪过，原定时间
 	// 就是 TriggerAt。用户改了提醒时间就清掉。
-	OriginalTriggerAt       time.Time `json:"original_trigger_at,omitempty"`
+	OriginalTriggerAt time.Time `json:"original_trigger_at,omitempty"`
+	// RunQuery 只对一次性提醒有意义：为真时 Message 是到点要做的事（查天气、看新闻），
+	// 到点交给 Agent 带工具执行，发出去的是执行结果；为假时 Message 原样念出来。
+	RunQuery                bool      `json:"run_query,omitempty"`
 	NotificationEnabled     bool      `json:"notification_enabled,omitempty"`
 	NotificationTargetsJSON string    `json:"notification_targets,omitempty"`
 	Message                 string    `json:"message"`

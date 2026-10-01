@@ -97,6 +97,7 @@
                 <span class="badge">{{ taskKindLabel(task.kind) }}</span>
                 <span class="badge" :class="statusTone(task.status)">{{ statusLabel(task.status) }}</span>
                 <span v-if="task.platform" class="badge">{{ platformLabel(task.platform) }}</span>
+                <span v-if="task.run_query" class="badge">到点执行</span>
                 <span v-if="task.consumes_quota" class="badge warn">占用额度</span>
                 <span class="mono muted">{{ task.id }}</span>
               </div>

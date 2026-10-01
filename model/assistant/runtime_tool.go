@@ -1072,40 +1072,25 @@ func (r *Runtime) executeClaimedReminder(ctx context.Context, item Reminder) {
 		return
 	}
 
-	notice := "提醒你：" + item.Message
 	// 在安全模式期间被停发过的提醒，切回标准模式才发出去：注明原定时间；原定时间过去
 	// 超过 safeModeHeldReminderMaxDelay 的不再补发，直接取消——一条隔天才到的「该开会
 	// 了」只会让人困惑。只管真被停发过的（有 SafeModeHeldTriggerAt）；停机、重试造成的
-	// 迟到照旧投递、不作废，晚得太久的由下面注明是错过的提醒。
-	if held := item.SafeModeHeldTriggerAt; !held.IsZero() {
-		if time.Since(held) > safeModeHeldReminderMaxDelay {
-			if _, err := r.cancelOneTimeReminder(item.OwnerID, item.ID); err != nil {
-				r.setError(err.Error())
-			}
-			log.Printf("diana reminder: 提醒 %s 原定 %s，安全模式期间停发，过期超过 %s，不再补发，已取消", item.ID, held.Format(time.RFC3339), safeModeHeldReminderMaxDelay)
-			return
+	// 迟到照旧投递、不作废，晚得太久的由 deliverOneTimeReminder 注明是错过的提醒。
+	if held := item.SafeModeHeldTriggerAt; !held.IsZero() && time.Since(held) > safeModeHeldReminderMaxDelay {
+		if _, err := r.cancelOneTimeReminder(item.OwnerID, item.ID); err != nil {
+			r.setError(err.Error())
 		}
-		notice += "（原定 " + reminderLocalTime(item, held).Format("01-02 15:04") + "，安全模式期间暂停，推迟送达）"
+		log.Printf("diana reminder: 提醒 %s 原定 %s，安全模式期间停发，过期超过 %s，不再补发，已取消", item.ID, held.Format(time.RFC3339), safeModeHeldReminderMaxDelay)
+		return
 	}
-	// 停机、连接断开或连续发送失败让提醒晚到太久时，照原样说「提醒你：开会」只会让人
-	// 以为现在该开会。改成明说这是一条错过的提醒、原定什么时候，并且不再戳人——它已经
-	// 不是「到点了」。安全模式停发的上面已经注明过，不重复处理。
-	missed := false
-	if item.SafeModeHeldTriggerAt.IsZero() {
-		if due, late := missedReminderLateness(item, time.Now()); late > missedReminderGrace {
-			missed = true
-			notice = fmt.Sprintf("错过的提醒（原定 %s，当时没能按时送达，晚了%s）：%s",
-				reminderLocalTime(item, due).Format("01-02 15:04"), formatReminderLateness(late), item.Message)
-		}
+	// 到点要执行的提醒先跑出结果再发；没跑出来就和发送失败一样挂起重试。
+	content := "提醒你：" + item.Message
+	var err error
+	if item.RunQuery {
+		content, err = r.runOneTimeReminderQuery(ctx, item)
 	}
-	// 提醒到点先戳一下设提醒的人，像人叫人一样；戳不出去不影响提醒本身。
-	if source := reminderSourceEvent(item); !missed && strings.TrimSpace(item.UserID) != "" && IsOneBotPlatform(r.currentPlatform(source)) {
-		_, _ = r.sendPoke(ctx, source, item.UserID, pokeSceneReminder)
-	}
-	err := r.sendSubscriberNotice(ctx, reminderSourceEvent(item), notice)
 	if err == nil {
-		// 提醒刚找过这个人：接下来一分钟里他随口一句，主动接话不必再把提醒说一遍。
-		r.noteTriggeredDelivery(reminderSourceEvent(item))
+		err = r.deliverOneTimeReminder(ctx, item, content)
 	}
 	if reminderRunInterrupted(ctx, err) {
 		// 进程正在退出：这条提醒还没送到，保持原样等下次启动后再投。
@@ -1131,6 +1116,64 @@ func (r *Runtime) executeClaimedReminder(ctx context.Context, item Reminder) {
 	r.markDeliveredReminder(item.ID, time.Now())
 }
 
+// deliverOneTimeReminder 把一次性提醒的内容（原样的「提醒你：…」或执行出的结果）
+// 加上迟到说明发出去。
+func (r *Runtime) deliverOneTimeReminder(ctx context.Context, item Reminder, content string) error {
+	notice := content
+	if held := item.SafeModeHeldTriggerAt; !held.IsZero() {
+		notice += "（原定 " + reminderLocalTime(item, held).Format("01-02 15:04") + "，安全模式期间暂停，推迟送达）"
+	}
+	// 停机、连接断开或连续发送失败让提醒晚到太久时，照原样说「提醒你：开会」只会让人
+	// 以为现在该开会。改成明说这是一条错过的提醒、原定什么时候，并且不再戳人——它已经
+	// 不是「到点了」。安全模式停发的上面已经注明过，不重复处理。
+	missed := false
+	if item.SafeModeHeldTriggerAt.IsZero() {
+		if due, late := missedReminderLateness(item, time.Now()); late > missedReminderGrace {
+			missed = true
+			body := item.Message
+			if item.RunQuery {
+				// 执行出的结果照发，只是说明这件事本该早些做。
+				body = "\n" + content
+			}
+			notice = fmt.Sprintf("错过的提醒（原定 %s，当时没能按时送达，晚了%s）：%s",
+				reminderLocalTime(item, due).Format("01-02 15:04"), formatReminderLateness(late), body)
+		}
+	}
+	source := reminderSourceEvent(item)
+	// 提醒到点先戳一下设提醒的人，像人叫人一样；戳不出去不影响提醒本身。
+	if !missed && strings.TrimSpace(item.UserID) != "" && IsOneBotPlatform(r.currentPlatform(source)) {
+		_, _ = r.sendPoke(ctx, source, item.UserID, pokeSceneReminder)
+	}
+	err := r.sendSubscriberNotice(ctx, source, notice)
+	if err == nil {
+		// 提醒刚找过这个人：接下来一分钟里他随口一句，主动接话不必再把提醒说一遍。
+		r.noteTriggeredDelivery(source)
+	}
+	return err
+}
+
+// runOneTimeReminderQuery 执行一次性提醒里要做的事，返回要发出去的结果。结果先存进
+// PendingDelivery：发送失败重试时直接补发这份，不再把工具重跑一遍。机器人关了 Agent
+// 时退回原样念出任务内容——一次性提醒只有这一次，不能因为没法执行就一直重试下去。
+func (r *Runtime) runOneTimeReminderQuery(ctx context.Context, item Reminder) (string, error) {
+	if pending := strings.TrimSpace(item.PendingDelivery); pending != "" {
+		return pending, nil
+	}
+	if !r.effectiveConfigForEvent(reminderSourceEvent(item)).AgentEnabled {
+		return "提醒你：" + item.Message, nil
+	}
+	reply, err := r.runTaskQueryWithSlot(ctx, func(ctx context.Context) (string, error) {
+		return r.runTaskQuery(ctx, item, promptReminderQuerySystemSpec, promptReminderQueryRequestSpec)
+	})
+	if err != nil {
+		return "", err
+	}
+	if err := r.storeReminderPending(item.ID, reply); err != nil {
+		return "", err
+	}
+	return reply, nil
+}
+
 func (r *Runtime) runClaimedScheduledQuery(ctx context.Context, item Reminder) (time.Time, error) {
 	startedAt := time.Now()
 	source := reminderSourceEvent(item)
@@ -1138,32 +1181,13 @@ func (r *Runtime) runClaimedScheduledQuery(ctx context.Context, item Reminder) (
 		return startedAt, r.sendSubscriberNotice(ctx, source, pending)
 	}
 
-	r.mu.RLock()
-	sem := r.sem
-	r.mu.RUnlock()
-	acquired := false
-	if sem != nil {
-		select {
-		case sem <- struct{}{}:
-			acquired = true
-			r.incActive(1)
-		case <-ctx.Done():
-			return startedAt, ctx.Err()
-		}
-	}
-	message, err := func() (string, error) {
-		if acquired {
-			defer func() {
-				<-sem
-				r.incActive(-1)
-			}()
-		}
+	message, err := r.runTaskQueryWithSlot(ctx, func(ctx context.Context) (string, error) {
 		return r.generateScheduledQueryMessage(ctx, item)
-	}()
+	})
 	if err != nil {
 		return startedAt, err
 	}
-	if err := r.storeScheduledQueryPending(item.ID, message); err != nil {
+	if err := r.storeReminderPending(item.ID, message); err != nil {
 		return startedAt, err
 	}
 	return startedAt, r.sendSubscriberNotice(ctx, source, message)
@@ -1977,6 +2001,8 @@ func (r *Runtime) markDeliveredReminder(id string, deliveredAt time.Time) {
 			items[index].LastRunAt = deliveredAt
 			items[index].LastError = ""
 			items[index].ConsecutiveFailures = 0
+			items[index].PendingDelivery = ""
+			items[index].PendingSince = time.Time{}
 			updated = true
 			break
 		}
@@ -2060,6 +2086,26 @@ var promptScheduledQuerySystemSpec = registerPrompt(PromptSpec{
 	Default: "本次是后台定时订阅执行。需要查资料的，必须实际调用适合的工具完成查询，优先获取最新信息；只是到点提醒用户做某件事的，直接把提醒说出来，不必调用工具；不要创建、修改或删除其他定时任务。最终只返回本次查询结果，并保持当前人设和自然聊天语气，不要写成生硬的系统通告。",
 })
 
+var promptReminderQuerySystemSpec = registerPrompt(PromptSpec{
+	Key:     "tasks.reminder_query.system",
+	Group:   PromptGroupTasks,
+	Title:   "到点执行的提醒 · 执行要求",
+	Usage:   "一次性提醒设成「到点去做某件事」时，到点执行，接在机器人完整系统提示词之后，要求模型真的调工具去做、并用人设语气交结果。",
+	Default: "本次是后台一次性提醒到点执行：用户之前约好到这个时间让你去做一件事，现在时间到了。需要查资料的，必须实际调用适合的工具完成，优先获取最新信息；不要创建、修改或删除任何提醒和订阅。最终只返回要发给用户的内容，像到点主动来找对方说这件事，保持当前人设和自然聊天语气，不要写成生硬的系统通告。",
+})
+
+var promptReminderQueryRequestSpec = registerPrompt(PromptSpec{
+	Key:     "tasks.reminder_query.request",
+	Group:   PromptGroupTasks,
+	Title:   "到点执行的提醒 · 本次请求",
+	Usage:   "到点执行的一次性提醒触发时，代替用户消息发给模型的那段话，带上当前时间和用户当初约好的事。",
+	Default: "执行到点的提醒任务。当前时间：{time}。\n约好要做的事：{query}",
+	Vars: []PromptVar{
+		{Name: "time", Description: "执行时的机器人时区时间，如 2026-09-23 14:05:00（UTC+08:00）"},
+		{Name: "query", Description: "用户创建提醒时写的要做的事"},
+	},
+})
+
 var promptScheduledQueryRequestSpec = registerPrompt(PromptSpec{
 	Key:     "tasks.scheduled_query.request",
 	Group:   PromptGroupTasks,
@@ -2072,12 +2118,43 @@ var promptScheduledQueryRequestSpec = registerPrompt(PromptSpec{
 	},
 })
 
+// runTaskQueryWithSlot 占一个回复并发名额再跑 run：后台任务的 Agent 和聊天回复
+// 共用同一个并发上限。
+func (r *Runtime) runTaskQueryWithSlot(ctx context.Context, run func(context.Context) (string, error)) (string, error) {
+	r.mu.RLock()
+	sem := r.sem
+	r.mu.RUnlock()
+	if sem != nil {
+		select {
+		case sem <- struct{}{}:
+			r.incActive(1)
+		case <-ctx.Done():
+			return "", ctx.Err()
+		}
+		defer func() {
+			<-sem
+			r.incActive(-1)
+		}()
+	}
+	return run(ctx)
+}
+
 func (r *Runtime) generateScheduledQueryMessage(ctx context.Context, item Reminder) (string, error) {
-	source := reminderSourceEvent(item)
-	cfg := r.effectiveConfigForEvent(source)
-	if !cfg.AgentEnabled {
+	if !r.effectiveConfigForEvent(reminderSourceEvent(item)).AgentEnabled {
 		return "", fmt.Errorf("Agent 已禁用，无法执行周期查询")
 	}
+	reply, err := r.runTaskQuery(ctx, item, promptScheduledQuerySystemSpec, promptScheduledQueryRequestSpec)
+	if err != nil {
+		return "", err
+	}
+	return "定时订阅结果：\n" + reply, nil
+}
+
+// runTaskQuery 让 Agent 按任务内容实际执行一次（可以调工具），返回模型的最终回复。
+// 定时订阅和一次性提醒共用，只是提示词不同。
+func (r *Runtime) runTaskQuery(ctx context.Context, item Reminder, systemSpec, requestSpec *PromptSpec) (string, error) {
+	source := reminderSourceEvent(item)
+	cfg := r.effectiveConfigForEvent(source)
 	taskCtx, cancel := context.WithTimeout(ctx, cfg.RequestTimeout)
 	defer cancel()
 	relationship := r.relationshipPolicy(taskCtx, source)
@@ -2085,11 +2162,11 @@ func (r *Runtime) generateScheduledQueryMessage(ctx context.Context, item Remind
 		{
 			Role: llm.RoleSystem,
 			Content: r.systemPromptWithRelationship(source, nil, false, relationship) +
-				"\n" + cfg.prompt(promptScheduledQuerySystemSpec),
+				"\n" + cfg.prompt(systemSpec),
 		},
 		{
 			Role: llm.RoleUser,
-			Content: "【当前需要回复的消息】\n" + cfg.promptf(promptScheduledQueryRequestSpec, map[string]string{
+			Content: "【当前需要回复的消息】\n" + cfg.promptf(requestSpec, map[string]string{
 				"time":  formatZonedTime(time.Now().In(cfg.Location()), "2006-01-02 15:04:05"),
 				"query": item.Message,
 			}),
@@ -2099,10 +2176,11 @@ func (r *Runtime) generateScheduledQueryMessage(ctx context.Context, item Remind
 	if err != nil {
 		return "", err
 	}
-	if strings.TrimSpace(reply) == "" {
-		return "", fmt.Errorf("定时订阅没有生成有效结果")
+	reply = strings.TrimSpace(reply)
+	if reply == "" {
+		return "", fmt.Errorf("任务没有生成有效结果")
 	}
-	return "定时订阅结果：\n" + reply, nil
+	return reply, nil
 }
 
 func reminderSourceEvent(item Reminder) MessageEvent {
