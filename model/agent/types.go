@@ -12,7 +12,10 @@ import (
 )
 
 const (
-	DefaultMaxSteps           = 12
+	// DefaultMaxSteps 是每轮规划步数（每步执行一个工具）。以前是 12、上限 16：10-02 起
+	// browser_render 能顺着链接翻页、web_search 不再单独限 3 次，查一个价格问题要 7–9 步，
+	// 12 步留不出换路的余地。Codex CLI 不设步数上限，这里保留上限只为兜住空转。
+	DefaultMaxSteps           = 20
 	DefaultMaxToolOutputChars = 8000
 	DefaultReadFileMaxBytes   = 64 * 1024
 	// DefaultFileWriteMaxBytes 是单次写入的默认上限。比读的上限大一些：模型生成
@@ -43,7 +46,7 @@ const (
 	DefaultToolTimeoutMS            = 60_000
 	DefaultFinalizationReserveMS    = 20_000
 	DefaultProtocolRepairLimit      = 3
-	MaxAllowedSteps                 = 16
+	MaxAllowedSteps                 = 32
 	MaxAllowedToolOutputChars       = 20000
 	MaxAllowedReadFileMaxBytes      = 512 * 1024
 	MaxAllowedFileWriteMaxBytes     = 2 << 20

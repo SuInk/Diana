@@ -186,7 +186,7 @@
         <div class="section-heading"><p class="eyebrow">03 Agent 运行</p><h2>一步只做一件事</h2></div>
         <p>机器人开了 Agent 且对方的关系允许用工具时，这一轮由 <code>Runner.Run</code> 生成：模型每一步要么调用一个工具，要么用 <code>agent_finalize</code> 收尾。</p>
         <ol class="flow">
-          <li><div class="flow-node"><strong>组装配置</strong><p>默认 12 步（上限 16）；主人 16 步、最终回复 20000 字，其他人 8000 字。单工具 60 秒，收尾预留 20 秒，协议修复 3 次。</p></div></li>
+          <li><div class="flow-node"><strong>组装配置</strong><p>默认 20 步（上限 32）；主人 32 步、最终回复 20000 字，其他人 8000 字。单工具 60 秒，收尾预留 20 秒，协议修复 3 次。</p></div></li>
           <li><div class="flow-node"><strong>组装工具</strong><p>核心工具每轮直接可用；其余只在目录里列一行，先 <code>tools_load</code> 再经 <code>tools_execute</code> 调用。按权限白名单与机器人 / 群级扩展开关裁剪，无权工具回答「没有权限」而不是「不存在」。群聊加载过的工具随群会话快照跨轮恢复。</p></div></li>
           <li><div class="flow-node"><strong>Runner.Run 启动</strong><p>协议提示词与延迟工具目录；按触发词注入 Skill；可信时钟；上一轮被迫收尾时附上续跑档案。</p></div></li>
           <li class="q"><div class="flow-node"><strong>还有步数，离截止还够收尾？</strong></div><div class="flow-exits"><span class="flow-exit go"><b>否</b>强制收尾</span></div></li>

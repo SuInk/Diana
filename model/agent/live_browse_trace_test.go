@@ -22,7 +22,7 @@ import (
 //
 //	DIANA_LIVE_LLM=1 DIANA_TEST_LLM_PROVIDER=gemini \
 //	DIANA_TEST_LLM_BASE_URL=... DIANA_TEST_LLM_MODEL=gemini-3.8-flash-low DIANA_TEST_LLM_API_KEY=... \
-//	DIANA_LIVE_TRACE=/path/messages.json DIANA_LIVE_RUNS=3 DIANA_LIVE_MAX_STEPS=16 \
+//	DIANA_LIVE_TRACE=/path/messages.json DIANA_LIVE_RUNS=3 DIANA_LIVE_MAX_STEPS=32 \
 //	go test ./model/agent/ -run TestLiveBrowseTraceReplay -v -timeout 30m
 func TestLiveBrowseTraceReplay(t *testing.T) {
 	client := liveAgentClient(t)
@@ -52,7 +52,7 @@ func TestLiveBrowseTraceReplay(t *testing.T) {
 	if runs <= 0 {
 		runs = 1
 	}
-	// 主人对话的步数上限是 16，群成员默认 12，按轨迹里的身份传。
+	// 主人对话的步数上限是 MaxAllowedSteps，群成员按机器人配置，按轨迹里的身份传。
 	maxSteps, _ := strconv.Atoi(os.Getenv("DIANA_LIVE_MAX_STEPS"))
 	if maxSteps <= 0 {
 		maxSteps = DefaultMaxSteps

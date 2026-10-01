@@ -105,7 +105,7 @@ const oneBotProfile: BotProfileConfig = {
   proactive_reply_chance: 1, proactive_reply_threshold: 0.9, recent_context_limit: 40, max_reply_chars: 0,
   image_generation_daily_group_limit: 30, image_generation_daily_user_limit: 5,
   video_generation_daily_group_limit: 5, video_generation_daily_user_limit: 1,
-  cross_group_memory_enabled: true, world_book_enabled: true, romance_enabled: false, mood_enabled: true, poke_reply_enabled: true, expression_learning_enabled: true, style_filter_enabled: true, dict_segment_enabled: true, semantic_search_enabled: false, agent_enabled: true, agent_mode: "standard", agent_max_steps: 12,
+  cross_group_memory_enabled: true, world_book_enabled: true, romance_enabled: false, mood_enabled: true, poke_reply_enabled: true, expression_learning_enabled: true, style_filter_enabled: true, dict_segment_enabled: true, semantic_search_enabled: false, agent_enabled: true, agent_mode: "standard", agent_max_steps: 20,
   max_bot_concurrency: 4, request_timeout_ms: 60_000,
   model_roles: {
     chat: { profile_id: "llm-chat", model: "gpt-6-sol" }, vision: { profile_id: "llm-vision", model: "gpt-6-sol" },
@@ -1296,7 +1296,7 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
       agent_command_allowlist: ["uptime", "free", "df", "uname", "nproc", "date", "hostname", "whoami"],
       agent_file_write_enabled: true,
       agent_command_sandbox: "auto",
-      agent_max_steps: 12,
+      agent_max_steps: 20,
       agent_command_timeout_ms: 10000,
       agent_safe_mode: demoAgentSafeMode
     });

@@ -1805,8 +1805,8 @@
                 <span class="hint">查资料、记忆、提醒订阅、画图和读取工作区文件两种模式都照常。新建的机器人默认标准模式，安全模式只在你在这里选择后开启。</span>
               </div>
               <div class="field">
-                <label for="agent-steps">最大工具步数（1–16，默认 12；只管群成员，主人对话固定 16）</label>
-                <input id="agent-steps" v-model.number="form.agent_max_steps" class="input" type="number" inputmode="numeric" min="1" max="16" />
+                <label for="agent-steps">最大工具步数（1–32，默认 20；只管群成员，主人对话固定 32）</label>
+                <input id="agent-steps" v-model.number="form.agent_max_steps" class="input" type="number" inputmode="numeric" min="1" max="32" />
               </div>
               <div v-if="agentMode !== 'standard'" class="field wide">
                 <span class="hint">命令白名单、文件写入、浏览器和命令沙盒这些设置在安全模式下不起作用，切回标准模式后按原来的值生效。</span>

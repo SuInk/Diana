@@ -411,7 +411,7 @@ func browserSessionKey(cfg BotConfig, event MessageEvent) string {
 // withOwnerAgentLimits 给主人的 Agent 放宽到上限：步数用满 agent.MaxAllowedSteps，
 // 单次工具输出用满 agent.MaxAllowedToolOutputChars。
 //
-// 主人这一侧的活是「登进去翻十几页后台」「把这张长表整理出来」这种，12 步和 8000 字
+// 主人这一侧的活是「登进去翻十几页后台」「把这张长表整理出来」这种，默认步数和 8000 字
 // 经常不够用，做到一半就被截断。群成员那边照旧用机器人配置的步数和默认输出上限：
 // 他们的每一步都花的是主人的钱。
 func withOwnerAgentLimits(cfg agent.Config, owner bool) agent.Config {
