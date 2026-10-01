@@ -86,7 +86,8 @@ type imageFixGatePayload struct {
 // 可每条群消息都判一次太贵（10-01 一天 2011 条带文字的消息，近 8 条里有图的就有
 // 1003 条），所以只看直接引用了带描述图片的那些，一天十几二十条。
 func (r *Runtime) startQuotedImageFixGate(ctx context.Context, event MessageEvent) {
-	if r == nil || event.Quoted == nil || !hasImageSegment(event.Quoted.Segments) {
+	// 彻底关闭的群不跑后台模型（见 groupDormant），静默旁观的群照常检查。
+	if r == nil || event.Quoted == nil || !hasImageSegment(event.Quoted.Segments) || r.groupDormant(event) {
 		return
 	}
 	r.startImageFixGateScoped(ctx, r.effectiveConfigForEvent(event), event, true)
