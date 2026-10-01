@@ -40,7 +40,7 @@ func handleCLI(args []string) (bool, error) {
 		return true, runDoctorCommand(args[1:], os.Stdout)
 	case "config":
 		return true, runConfigCommand(args[1:], os.Stdout)
-	case "reset-password", "passwd", "reset":
+	case "passwd":
 		return true, runResetPasswordCommand(args[1:], cliPrompt{input: os.Stdin, interactive: stdinIsTerminal()}, os.Stdout)
 	}
 	if args[0] == "logs" {
@@ -73,11 +73,10 @@ Commands:
   doctor                 Check configuration, paths, assets, and health
   config path|check      Locate or validate config.yaml
   logs [--lines N] [-f]  Show or follow the configured Diana log
-  reset [--username NAME] [-y]
-                         Reset the administrator password (aliases: passwd,
-                         reset-password) and sign out every session; only
-                         the password changes, no other data; run while
-                         Diana is stopped; asks first unless -y is given
+  passwd [--username NAME] [-y]
+                         Reset the administrator password and sign out every
+                         session; no other data changes; run while Diana is
+                         stopped; asks first unless -y is given
   uninstall [--purge]    Remove Diana, preserving data unless --purge is used
   version                Print the Diana version
   help                   Show this help

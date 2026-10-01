@@ -43,7 +43,7 @@ func TestResetPasswordCommandReplacesCredentials(t *testing.T) {
 	configPath, dbPath := writeResetPasswordFixture(t)
 	var output strings.Builder
 	if err := runResetPasswordCommand([]string{"--config", configPath, "--yes"}, cliPrompt{}, &output); err != nil {
-		t.Fatalf("reset-password error = %v", err)
+		t.Fatalf("passwd error = %v", err)
 	}
 	password := ""
 	for _, line := range strings.Split(output.String(), "\n") {
@@ -96,7 +96,7 @@ func TestResetPasswordCommandDoesNotCreateMissingDatabase(t *testing.T) {
 		t.Fatalf("expected missing database error, got %v", err)
 	}
 	if _, statErr := os.Stat(filepath.Join(root, "data", "diana.db")); !os.IsNotExist(statErr) {
-		t.Fatalf("reset-password created a database: %v", statErr)
+		t.Fatalf("passwd created a database: %v", statErr)
 	}
 }
 
@@ -112,11 +112,14 @@ func TestParseResetPasswordOptions(t *testing.T) {
 	}
 }
 
-func TestResetAliasesRunResetPassword(t *testing.T) {
-	for _, command := range []string{"reset", "passwd"} {
-		handled, err := handleCLI([]string{command, "--bogus"})
-		if !handled || err == nil || !strings.Contains(err.Error(), "unknown reset-password option") {
-			t.Fatalf("handleCLI(%s) = (%v, %v), want reset-password option error", command, handled, err)
+func TestPasswdCommandName(t *testing.T) {
+	handled, err := handleCLI([]string{"passwd", "--bogus"})
+	if !handled || err == nil || !strings.Contains(err.Error(), "unknown passwd option") {
+		t.Fatalf("handleCLI(passwd) = (%v, %v), want passwd option error", handled, err)
+	}
+	for _, command := range []string{"reset", "reset-password"} {
+		if handled, _ := handleCLI([]string{command}); handled {
+			t.Fatalf("%s should not be a command", command)
 		}
 	}
 }

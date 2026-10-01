@@ -55,7 +55,7 @@ func runResetPasswordCommand(args []string, prompt cliPrompt, output io.Writer) 
 	lock, err := acquireInstanceLock(dbPath, "")
 	if err != nil {
 		if errors.Is(err, errInstanceLocked) {
-			return fmt.Errorf("Diana is still running with the data at %s; stop it first, then run reset-password again%s", dbPath, resetPasswordStopHint())
+			return fmt.Errorf("Diana is still running with the data at %s; stop it first, then run `diana passwd` again%s", dbPath, resetPasswordStopHint())
 		}
 		return err
 	}
@@ -63,7 +63,7 @@ func runResetPasswordCommand(args []string, prompt cliPrompt, output io.Writer) 
 	// 确认放在确认服务已停止之后：先问了再报“服务还在运行”，等于白问。
 	if !options.yes {
 		if !prompt.interactive {
-			return fmt.Errorf("reset needs confirmation; run it in a terminal, or pass --yes to skip the prompt")
+			return fmt.Errorf("passwd needs confirmation; run it in a terminal, or pass --yes to skip the prompt")
 		}
 		_, _ = fmt.Fprintf(output, "This replaces the Diana administrator password for %s and signs out every WebUI session.\nOther data is not changed. Continue? [y/N] ", dbPath)
 		answer, _ := bufio.NewReader(prompt.input).ReadString('\n')
@@ -90,7 +90,7 @@ func runResetPasswordCommand(args []string, prompt cliPrompt, output io.Writer) 
 	if sessions, ok, err := store.LoadWebUISessions(context.Background()); err != nil {
 		return fmt.Errorf("password was reset but sessions could not be verified: %w", err)
 	} else if ok && len(sessions.Sessions) > 0 {
-		return fmt.Errorf("password was reset but %d old session(s) are still stored; run reset-password again", len(sessions.Sessions))
+		return fmt.Errorf("password was reset but %d old session(s) are still stored; run `diana passwd` again", len(sessions.Sessions))
 	}
 	_, err = fmt.Fprintf(output, "Diana administrator credentials were reset\n  username: %s\n  password: %s\nAll existing WebUI sessions were signed out. Start Diana and sign in with these credentials.\n", result.Username, result.GeneratedPassword)
 	if err == nil && strings.TrimSpace(config.Admin.Password) != "" {
@@ -128,7 +128,7 @@ func parseResetPasswordOptions(args []string) (resetPasswordOptions, error) {
 		case argument == "--yes" || argument == "-y":
 			options.yes = true
 		default:
-			return options, fmt.Errorf("unknown reset-password option: %s", argument)
+			return options, fmt.Errorf("unknown passwd option: %s", argument)
 		}
 	}
 	return options, nil
@@ -141,7 +141,7 @@ func parseResetPasswordOptions(args []string) (resetPasswordOptions, error) {
 func cliDatabasePath(config appConfig) (string, error) {
 	setting := strings.TrimSpace(config.Storage.DBPath)
 	if setting == ":memory:" || strings.HasPrefix(setting, "file:") {
-		return "", fmt.Errorf("storage.db_path %q is not a database file; reset-password cannot change it", setting)
+		return "", fmt.Errorf("storage.db_path %q is not a database file; passwd cannot change it", setting)
 	}
 	if setting == "" {
 		setting = filepath.Join("data", "diana.db")
@@ -166,7 +166,7 @@ func cliDatabasePath(config appConfig) (string, error) {
 
 func resetPasswordStopHint() string {
 	if dockerDeployment() {
-		return " (Docker: on the host run `docker compose stop diana`, then `docker compose run --rm diana reset`, then `docker compose start diana`)"
+		return " (Docker: on the host run `docker compose stop diana`, then `docker compose run --rm diana passwd`, then `docker compose start diana`)"
 	}
 	return " (for example `sudo systemctl stop diana` or `systemctl --user stop diana`; start it again afterwards)"
 }

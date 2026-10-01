@@ -192,11 +192,11 @@ diana doctor    # check config, directories, frontend assets, service health
 
 For Docker, use `docker exec diana diana <command>` on the host, e.g. `docker exec diana diana logs -f`.
 
-**Forgot the password**: stop the service, then run `diana reset` (also `passwd` or `reset-password`) to reset the administrator password. It prints a new random password and signs out every browser session; nothing else is touched. It asks for `y` before changing anything; pass `-y` to skip the prompt (required when there is no terminal, e.g. in scripts). Add `--username NAME` to rename the account at the same time. It refuses to run while Diana is running. For Docker the container must be stopped first; run this in the deployment directory:
+**Forgot the password**: stop the service, then run `diana passwd` to reset the administrator password. It prints a new random password and signs out every browser session; nothing else is touched. It asks for `y` before changing anything; pass `-y` to skip the prompt (required when there is no terminal, e.g. in scripts). Add `--username NAME` to rename the account at the same time. It refuses to run while Diana is running. For Docker the container must be stopped first; run this in the deployment directory:
 
 ```sh
 docker compose stop diana
-docker compose run --rm diana reset
+docker compose run --rm diana passwd
 docker compose start diana
 ```
 
