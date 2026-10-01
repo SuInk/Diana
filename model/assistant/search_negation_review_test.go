@@ -64,6 +64,20 @@ func TestSearchNegationEvidenceTakesResultsNotMetadata(t *testing.T) {
 	}
 }
 
+// browser_render 按 find 找到的段落排在正文前面：正文长时按字数截断也不会丢。
+func TestSearchNegationEvidencePutsFindMatchesFirst(t *testing.T) {
+	page, _ := json.Marshal(map[string]any{
+		"url":          "https://dimagent.example/docs/credits",
+		"title":        "套餐与 Credits",
+		"text":         strings.Repeat("导航", 3000),
+		"find_matches": []string{"Nano 套餐 ¥9.9 / 月"},
+	})
+	evidence := searchNegationEvidenceFromSteps([]agent.Step{{Tool: "browser_render", Output: string(page)}})
+	if got := evidence[0].Output; !strings.Contains(got, "页内查找命中：Nano 套餐 ¥9.9 / 月") {
+		t.Fatalf("find 命中被截掉了: %q", got[:200])
+	}
+}
+
 // 检索记录超出总量时保留最后几次：它们最接近草稿的依据。
 func TestSearchNegationEvidenceKeepsLatestWithinBudget(t *testing.T) {
 	long := strings.Repeat("字", searchNegationReviewStepRunes*2)

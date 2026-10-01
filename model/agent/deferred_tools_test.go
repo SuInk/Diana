@@ -325,7 +325,8 @@ func TestDeferredRunnerPreservesCrossCuttingBehavior(t *testing.T) {
 					client.replies = append(client.replies, &llm.GenerateResponse{Text: `{"action":"final","content":"done"}`}, &llm.GenerateResponse{Text: `{"action":"final","task_state":"pending","content":"queued"}`})
 				}
 				if kind == "search" {
-					for i := 0; i < maxWebSearchCallsPerAgentRun+1; i++ {
+					// 搜索不单独限次：加载后的第一次调用加上这里四次都会执行。
+					for i := 0; i < 4; i++ {
 						client.replies = append(client.replies, executeReply(native, tool.Name(), map[string]any{"query": fmt.Sprint(i)}))
 					}
 				}
@@ -372,8 +373,8 @@ func TestDeferredRunnerPreservesCrossCuttingBehavior(t *testing.T) {
 						t.Fatal("error lost")
 					}
 				case "search":
-					if tool.(*countingWebSearchTool).calls != maxWebSearchCallsPerAgentRun {
-						t.Fatal("search cap bypassed")
+					if calls := tool.(*countingWebSearchTool).calls; calls != 5 {
+						t.Fatalf("search calls = %d, want 5", calls)
 					}
 				}
 				for _, e := range events {

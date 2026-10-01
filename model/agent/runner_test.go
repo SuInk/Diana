@@ -580,7 +580,7 @@ func TestRunnerSkipsClockWhenCallerAlreadyProvidesOne(t *testing.T) {
 func TestRunnerPromptExplainsBoundedIterativeWebSearch(t *testing.T) {
 	runner := &Runner{cfg: Config{MaxSteps: 8}.WithDefaults(), registry: NewToolRegistry(&countingWebSearchTool{})}
 	prompt := runner.systemPrompt()
-	for _, expected := range []string{"搜索词是可迭代假设", "queries 追加 1–3 个", "最多调用 3 次", "总计 8 个工具步骤", "不要把完整聊天记录", "insufficient_evidence", "优先核对官方或法定披露来源"} {
+	for _, expected := range []string{"搜索词是可迭代假设", "queries 追加 1–3 个", "搜索次数不单独设限", "一轮最多 8 步", "不要把完整聊天记录", "insufficient_evidence", "优先核对官方或法定披露来源"} {
 		if !strings.Contains(prompt, expected) {
 			t.Fatalf("prompt does not contain %q: %s", expected, prompt)
 		}
@@ -654,14 +654,15 @@ func TestRunnerOnlyPassesQueryToWebSearch(t *testing.T) {
 	}
 }
 
-func TestRunnerEnforcesPerRunWebSearchLimit(t *testing.T) {
+// 联网搜索不再单独限次：只受每轮规划步数（MaxSteps）约束。
+func TestRunnerAllowsWebSearchUpToStepBudget(t *testing.T) {
 	tool := &countingWebSearchTool{}
 	client := &scriptedClient{responses: []string{
 		`{"action":"tool","tool":"web_search","input":{"query":"first"}}`,
 		`{"action":"tool","tool":"web_search","input":{"query":"second"}}`,
 		`{"action":"tool","tool":"web_search","input":{"query":"third"}}`,
 		`{"action":"tool","tool":"web_search","input":{"query":"fourth"}}`,
-		`{"action":"final","content":"根据前三次搜索结果回答"}`,
+		`{"action":"final","content":"根据四次搜索结果回答"}`,
 	}}
 	runner, err := NewRunner(client, Config{WorkDir: t.TempDir(), MaxSteps: 5}, NewToolRegistry(tool))
 	if err != nil {
@@ -671,13 +672,10 @@ func TestRunnerEnforcesPerRunWebSearchLimit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if tool.calls != maxWebSearchCallsPerAgentRun {
-		t.Fatalf("search calls = %d, want %d", tool.calls, maxWebSearchCallsPerAgentRun)
+	if tool.calls != 4 || len(resp.Steps) != 4 {
+		t.Fatalf("search calls = %d steps = %#v", tool.calls, resp.Steps)
 	}
-	if len(resp.Steps) != 4 || !strings.Contains(resp.Steps[3].Error, "最多执行 3 次联网搜索") {
-		t.Fatalf("steps = %#v", resp.Steps)
-	}
-	if resp.Text != "根据前三次搜索结果回答" {
+	if resp.Text != "根据四次搜索结果回答" {
 		t.Fatalf("Text = %q", resp.Text)
 	}
 }

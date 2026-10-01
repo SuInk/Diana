@@ -172,31 +172,6 @@ func TestRunnerSynthesizesFinalReplyAfterToolBudget(t *testing.T) {
 	}
 }
 
-func TestRunnerLimitsWebSearchCalls(t *testing.T) {
-	tool := &recordingSearchTool{output: "result"}
-	client := &scriptedClient{responses: []string{
-		`{"action":"tool","tool":"web_search","input":{"query":"one"}}`,
-		`{"action":"tool","tool":"web_search","input":{"query":"two"}}`,
-		`{"action":"tool","tool":"web_search","input":{"query":"three"}}`,
-		`{"action":"tool","tool":"web_search","input":{"query":"four"}}`,
-		`{"action":"final","content":"done"}`,
-	}}
-	runner, err := NewRunner(client, Config{MaxSteps: 5}, NewToolRegistry(tool))
-	if err != nil {
-		t.Fatal(err)
-	}
-	resp, err := runner.Run(context.Background(), Request{Messages: []llm.Message{{Role: llm.RoleUser, Content: "search"}}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if resp.Text != "done" || tool.calls != maxWebSearchCallsPerAgentRun {
-		t.Fatalf("response=%#v calls=%d", resp, tool.calls)
-	}
-	if len(resp.Steps) != 4 || !strings.Contains(resp.Steps[3].Error, "最多执行") {
-		t.Fatalf("steps = %#v", resp.Steps)
-	}
-}
-
 func TestRunnerPromptRequiresSearchForSpecificProductOpinions(t *testing.T) {
 	runner, err := NewRunner(&scriptedClient{}, Config{MaxSteps: 3}, NewToolRegistry(&recordingSearchTool{}))
 	if err != nil {
@@ -733,7 +708,7 @@ func TestRunnerEvidenceCheckSkippedWhenNotNeededOrAlreadySearched(t *testing.T) 
 	}
 }
 
-// 检索过后的终稿复核：打回一次，第二稿不再复核。没检索过的轮次不复核。
+// 检索过后的终稿复核：打回后的第二稿也复核，最多复核两次，第三稿放行。没检索过的轮次不复核。
 func TestRunnerFinalReviewSendsBackUnsupportedNegationOnce(t *testing.T) {
 	searchResult, _ := json.Marshal(webSearchResult{
 		Status: "ok", StopReason: "sufficient_evidence",
@@ -758,20 +733,47 @@ func TestRunnerFinalReviewSendsBackUnsupportedNegationOnce(t *testing.T) {
 			for _, step := range evidence {
 				evidenceTools = append(evidenceTools, step.Tool)
 			}
-			return "复核发现：没查到不等于不存在"
+			if strings.Contains(draft, "P 的") {
+				return "复核发现：没查到不等于不存在"
+			}
+			return ""
 		},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(reviewed) != 1 || !strings.Contains(reviewed[0], "P 的") {
+	// 第二稿同样过一遍复核，复核放行才发出去。
+	if len(reviewed) != 2 || !strings.Contains(reviewed[0], "P 的") || !strings.Contains(reviewed[1], "没查到") {
 		t.Fatalf("reviewed=%q", reviewed)
 	}
-	if len(evidenceTools) != 1 || evidenceTools[0] != webSearchToolName {
+	if len(evidenceTools) != 2 || evidenceTools[0] != webSearchToolName {
 		t.Fatalf("evidence=%v", evidenceTools)
 	}
 	if !strings.Contains(resp.Text, "没查到") {
 		t.Fatalf("第一稿被放行了: %q", resp.Text)
+	}
+
+	// 复核一直打回时最多复核两次，第三稿放行，不卡在修复循环里。
+	client = &scriptedClient{responses: []string{
+		`{"action":"tool","tool":"web_search","input":{"query":"Model 6.1"}}`,
+		`{"action":"final","content":"第一稿"}`,
+		`{"action":"final","content":"第二稿"}`,
+		`{"action":"final","content":"第三稿"}`,
+	}}
+	runner, err = NewRunner(client, Config{MaxSteps: 3, ProtocolRepairLimit: 3}, NewToolRegistry(&recordingSearchTool{output: string(searchResult)}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rejections := 0
+	resp, err = runner.Run(context.Background(), Request{
+		Messages:    []llm.Message{{Role: llm.RoleUser, Content: "6.1 发布了"}},
+		FinalReview: func(context.Context, string, []Step) string { rejections++; return "打回" },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rejections != maxFinalReviewsPerAgentRun || resp.Text != "第三稿" {
+		t.Fatalf("rejections=%d text=%q", rejections, resp.Text)
 	}
 
 	client = &scriptedClient{responses: []string{`{"action":"final","content":"没有这回事"}`}}

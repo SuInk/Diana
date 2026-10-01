@@ -6,7 +6,6 @@ package agent
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"github.com/SuInk/diana/internal/xvfb"
@@ -57,9 +56,11 @@ type RenderedPage struct {
 	PendingRequests int                    `json:"pending_requests,omitempty"`
 	NavigationChain []string               `json:"navigation_chain,omitempty"`
 	PreviousPages   []RenderedPageSnapshot `json:"previous_pages,omitempty"`
-	// Links 是页面上可见的外链，只给搜索引擎后端从结果页里取结果用；不序列化，
-	// browser_render 交给模型的输出和以前一样。
+	// Links 是页面上可见的链接。不直接序列化：搜索引擎后端从结果页里取结果用全量，
+	// browser_render 交给模型时挑一部分编进输出，见 browser_render_output.go。
 	Links []RenderedLink `json:"-"`
+	// FullText 是截断前的正文，给 browser_render 的 find 在整页里查找。
+	FullText string `json:"-"`
 }
 
 // RenderedLink 是页面上的一个 <a>：解析成绝对地址的 href 和它的可见文字。
@@ -69,6 +70,9 @@ type RenderedLink struct {
 }
 
 const maxRenderedPageLinks = 300
+
+// maxRenderedFullTextChars 是留给 find 的整页正文上限，够覆盖文档页和定价页。
+const maxRenderedFullTextChars = 200000
 
 // RenderedPageSnapshot preserves meaningful content seen before a redirect.
 type RenderedPageSnapshot struct {
@@ -616,10 +620,12 @@ func parseRenderedPage(data []byte, requestedURL string, maxChars int, truncated
 		}
 	}
 	content := firstNonNilNode(findElement(document, "main"), findElement(document, "article"), findElement(document, "body"), document)
-	page.Text = truncateText(normalizeRenderedText(visibleNodeText(content)), maxChars)
-	if maxChars > 0 && len([]rune(normalizeRenderedText(visibleNodeText(content)))) > maxChars {
+	fullText := normalizeRenderedText(visibleNodeText(content))
+	page.Text = truncateText(fullText, maxChars)
+	if maxChars > 0 && len([]rune(fullText)) > maxChars {
 		page.Truncated = true
 	}
+	page.FullText = truncateText(fullText, maxRenderedFullTextChars)
 	if page.Title == "" && page.Description == "" && page.Text == "" {
 		return RenderedPage{}, errors.New("headless browser rendered an empty page")
 	}
@@ -905,12 +911,14 @@ func NewBrowserRenderTool(renderer PageRenderer) *BrowserRenderTool {
 func (t *BrowserRenderTool) Name() string { return "browser_render" }
 
 func (t *BrowserRenderTool) Description() string {
-	return `用一次性沙箱浏览器读取公网网页，不带用户登录态。GitHub Release 地址改读官方 API 的版本与发布时间。`
+	return `用一次性沙箱浏览器读取公网网页，不带用户登录态。返回正文和页面上的链接（links），要看站内别的页面就从 links 里取真实网址再打开，不要猜网址。` +
+		`GitHub Release 地址改读官方 API 的版本与发布时间。`
 }
 
 func (t *BrowserRenderTool) InputSchema() map[string]any {
 	return toolObjectSchema([]string{"url"}, map[string]any{
-		"url": toolStringParam("公网页面地址"),
+		"url":  toolStringParam("公网页面地址"),
+		"find": toolStringParam("在整页正文里查找的关键词，多个用 | 隔开，如 pricing|价格|套餐"),
 	})
 }
 
@@ -920,9 +928,5 @@ func (t *BrowserRenderTool) Run(ctx context.Context, input map[string]any) (stri
 	if err != nil {
 		return "", err
 	}
-	data, err := json.MarshalIndent(page, "", "  ")
-	if err != nil {
-		return "", err
-	}
-	return string(data), nil
+	return browserRenderOutput(page, stringFromInput(input, "find"))
 }

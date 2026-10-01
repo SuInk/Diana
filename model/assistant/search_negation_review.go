@@ -172,6 +172,9 @@ func evidenceExcerpt(step agent.Step) string {
 		URL        string   `json:"url"`
 		Title      string   `json:"title"`
 		Text       string   `json:"text"`
+		// FindMatches 是 browser_render 按 find 在整页里找到的段落，常常就是答案所在；
+		// 放在正文前面，按字数截断时不会被截掉。
+		FindMatches []string `json:"find_matches"`
 	}
 	if json.Unmarshal([]byte(output), &parsed) != nil {
 		return output
@@ -187,10 +190,14 @@ func evidenceExcerpt(step agent.Step) string {
 			parts = append(parts, "来源："+strings.Join(parsed.Sources, " "))
 		}
 	default:
-		if strings.TrimSpace(parsed.Text) == "" {
+		if strings.TrimSpace(parsed.Text) == "" && len(parsed.FindMatches) == 0 {
 			return output
 		}
-		parts = append(parts, strings.TrimSpace(parsed.URL), strings.TrimSpace(parsed.Title), strings.TrimSpace(parsed.Text))
+		parts = append(parts, strings.TrimSpace(parsed.URL), strings.TrimSpace(parsed.Title))
+		if len(parsed.FindMatches) > 0 {
+			parts = append(parts, "页内查找命中："+strings.Join(parsed.FindMatches, "\n"))
+		}
+		parts = append(parts, strings.TrimSpace(parsed.Text))
 	}
 	return strings.Join(parts, "\n")
 }

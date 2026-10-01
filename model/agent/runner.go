@@ -28,11 +28,14 @@ type Runner struct {
 }
 
 const (
-	webSearchToolName            = "web_search"
-	browserRenderToolName        = "browser_render"
-	dianaImageToolName           = "image"
-	imageTaskPendingState        = "pending"
-	maxWebSearchCallsPerAgentRun = 3
+	webSearchToolName     = "web_search"
+	browserRenderToolName = "browser_render"
+	dianaImageToolName    = "image"
+	imageTaskPendingState = "pending"
+	// maxFinalReviewsPerAgentRun 是终稿复核每轮最多跑几次。只复核一次时，打回后的
+	// 第二稿直接放行：10-01 问 DimAgent 价格，第二稿删掉了被点名的那句，却留着「没有
+	// 官方付费订阅套餐」照样发了出去。复核两次，再错也只多花一轮，不会卡在修复循环里。
+	maxFinalReviewsPerAgentRun = 2
 
 	// maxToolLoadCallsPerAgentRun 给 tools_load 单独的配额，不占 MaxSteps。
 	//
@@ -187,7 +190,6 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 	var lastProvider llm.Provider
 	var lastModel string
 	var usage llm.Usage
-	webSearchCalls := 0
 	toolLoadCalls := 0
 	introspectionCalls := 0
 	modelTurns := 0
@@ -231,12 +233,11 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 	// 都没搜；只声明 web_search 一个工具，它又会生成调用别的工具的非法调用，整轮报错。
 	// 检索词由证据判断顺手给出，不用再多问模型一轮。
 	searchInsteadOfModel := func() bool {
-		if evidenceQuery == "" || webSearchCalls >= maxWebSearchCallsPerAgentRun || toolCalls >= r.cfg.MaxSteps {
+		if evidenceQuery == "" || toolCalls >= r.cfg.MaxSteps {
 			return false
 		}
 		query := evidenceQuery
 		evidenceQuery = ""
-		webSearchCalls++
 		toolCalls++
 		record, observation, duration := r.searchOnBehalf(ctx, req.Observer, traceID, modelTurns, toolCalls, query, claimLedger)
 		toolsDuration += duration
@@ -245,14 +246,13 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 		messages = append(messages, llm.Message{Role: llm.RoleUser, Content: observation})
 		return true
 	}
-	// finalReviewed 保证 FinalReview 每轮只复核一次：打回去改过的第二稿直接放行，
-	// 复核判错也最多多花一轮，不会把回复卡在修复循环里。
-	finalReviewed := false
+	// finalReviews 记复核次数，上限见 maxFinalReviewsPerAgentRun。
+	finalReviews := 0
 	reviewFinalDraft := func(content string) string {
-		if finalReviewed || req.FinalReview == nil || !claimLedger.searched || strings.TrimSpace(content) == "" {
+		if finalReviews >= maxFinalReviewsPerAgentRun || req.FinalReview == nil || !claimLedger.searched || strings.TrimSpace(content) == "" {
 			return ""
 		}
-		finalReviewed = true
+		finalReviews++
 		return strings.TrimSpace(req.FinalReview(ctx, content, evidenceSteps(steps)))
 	}
 	// 用户自己贴的链接、历史消息里出现过的链接，模型复述不算编造来源。
@@ -702,22 +702,6 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 				break
 			}
 			continue
-		}
-		if action.Tool == webSearchToolName {
-			if webSearchCalls >= maxWebSearchCallsPerAgentRun {
-				claimLedger.recordRejectedSearch(searchProtocolInput, "search_call_limit")
-				limitErr := fmt.Sprintf("每次回复最多执行 %d 次联网搜索；请使用已有搜索结果继续分析或直接给出最终回复", maxWebSearchCallsPerAgentRun)
-				protocolRepairs++
-				steps = append(steps, Step{Index: len(steps) + 1, Tool: action.Tool, Input: action.Input, Error: limitErr, Skipped: true})
-				emitProtocolRepair(ctx, req.Observer, traceID, modelTurns, toolCalls, r.cfg.MaxSteps, limitErr)
-				messages = appendToolRepair(messages, resp, lastText, "联网搜索次数已达上限："+limitErr+"。不要再次调用联网搜索。\n"+claimLedger.digest())
-				if protocolRepairs >= r.cfg.ProtocolRepairLimit {
-					finishReason = "protocol_repair_exhausted"
-					break
-				}
-				continue
-			}
-			webSearchCalls++
 		}
 		if isIntrospectionCall(tool, action.Input) {
 			// 只读自省不占 MaxSteps；自己的配额兜住「反复打听」的空转。
@@ -1261,7 +1245,7 @@ func (r *Runner) systemPrompt() string {
 			"- 遇到需要外部事实、可能随时间变化、自己不能可靠确认或适合参考公开评价的问题，先调用 web_search 再回答。典型场景包括新闻、价格、规则、日程、人物或机构现状，具体商品、品牌、餐饮、作品的口碑、味道、规格和购买建议，以及某个软件、库、开源项目或服务是否支持某项能力、有没有现成实现或插件、当前版本与 API 现状；不要凭印象编造亲身体验或把不确定判断说成事实。纯闲聊、创作请求以及完全可由当前上下文回答的问题不需要搜索。",
 			"- 「当前上下文已经足够」只在答案本身就写在上下文里时成立。聊天记录里讨论过这个话题不等于其中的事实已经核实：别人的说法、你自己先前的回复和记忆摘要都只是线索，不能拿来替代检索。同样，熟悉一个项目的设计或原理，不代表你知道它此刻有哪些实现、插件、版本或生态现状——讲原理可以直接答，断言「有没有」「支不支持」「有哪些」必须先搜。",
 			"- 搜索词是可迭代假设，不是必须一次猜对的最终关键词。web_search 的 query 传当前最佳假设；存在拼写、别名、缩写、音译、语言或限定条件不确定性时，用 queries 追加 1–3 个有覆盖差异的候选，按信息增益从高到低排序。不要把完整聊天记录、用户身份或无关字段塞进搜索词。",
-			"- web_search 会在统一 deadline 和调用预算内自动规范化查询、逐步放宽引号/标点/括号约束并回退 provider。一次回复最多调用 "+fmt.Sprintf("%d", maxWebSearchCallsPerAgentRun)+" 次，并与总计 "+fmt.Sprintf("%d", r.cfg.MaxSteps)+" 个工具步骤共享预算；不要重复相同 query 或只机械替换一个词。",
+			"- web_search 会在统一 deadline 和调用预算内自动规范化查询、逐步放宽引号/标点/括号约束并回退 provider。搜索次数不单独设限，一轮最多 "+fmt.Sprintf("%d", r.cfg.MaxSteps)+" 步、每步调一个工具，没查到就接着查；不要重复相同 query 或只机械替换一个词。",
 			"- 多部分检索必须先拆成可独立验证的通用 claims。首次搜索在 input.claims 声明每个 id/statement，并用 claim_ids 标明本次查询覆盖项；后续搜索先用 claim_updates 结算已有证据，再优先覆盖 insufficient 或 not_searched。不得按品牌、站点或垂直领域硬编码 claim。",
 			"- claim 状态只允许 supported、conflicting、insufficient、not_searched。supported/conflicting 必须绑定工具真实返回的 URL，并记录 relation、source_type、published_at、distance 和 strength；标题、摘要、正文冲突时不得标 supported。第一方来源只能支持它直接覆盖的条件，不能外推未覆盖的地点、时间或渠道。",
 			"- 工具返回 no_results、provider_error、timeout、budget_exhausted 或 insufficient_evidence 时，不要立即断言资料不存在。仍有工具预算时，根据已尝试的 query hash、结果中的新实体和未覆盖的信息缺口生成下一轮候选；结果已经有权威来源直接支持答案时立即停止搜索。",
@@ -1289,6 +1273,9 @@ func (r *Runner) systemPrompt() string {
 	}
 	if hasTool("browser_render") {
 		rules = append(rules, "- 需要读取或渲染网页时优先使用 browser_render；普通页面在一次性沙盒浏览器中运行，GitHub Release 地址优先读取官方 API，不使用用户浏览器登录态。查询 GitHub 最新版本时读取 /owner/repo/releases/latest；核验用户给出的版本时读取 /owner/repo/releases/tag/<tag>，不能以精确 site: 搜索为空替代核验。浏览器失败不等于站点拦截，更不等于版本不存在；来源查询时间与发布时间必须分开。")
+		// 10-01 问 DimAgent 价格：只读了英文首页，首页没列价格就答「没有付费套餐」。
+		// 规则参照 Codex 的 web.run：技术问题只认一手来源，顺着官网链接找到对应页面再下结论。
+		rules = append(rules, "- 问价格、套餐、额度、版本、是否支持这类事实，以官方的定价、文档、更新日志页为准：从 browser_render 返回的 links 里找到对应页面打开读，或用 find 在页内查关键词。只看了首页或搜索摘要时，没写不等于没有，不能据此断言「没有」；技术问题只认官方文档等一手来源。")
 	}
 	if hasAnyTool(InteractiveBrowserToolNames...) {
 		// 交互式浏览器只登记给主人，带着主人的登录态。主人的事需要用浏览器就直接用，
