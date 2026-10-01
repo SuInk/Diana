@@ -5,6 +5,7 @@ package assistant
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -77,26 +78,63 @@ func TestReplyPathRunsInstalledPluginToolWhenAgentDisabled(t *testing.T) {
 	}
 }
 
-// agentSequenceLLMProvider 按顺序吐出预排的回复，给主对话那条链用。
+// agentSequenceLLMProvider 按顺序回放预设回复，只服务主链路（路由、Agent 各轮）。
 //
-// 证据门控在后台和 Agent 同时调用同一个提供方，不能让它从这份脚本里取：谁先拿到
-// 第几条回复全看调度，测试会时好时坏。门控一律答「不需要」，也不记进 requests。
+// 查证门控（evidence_gate.go）在后台和 Agent 同时调用同一个 provider。共用一条
+// 序列时谁先拿到哪条全看调度：Agent 先到就拿着给路由的 JSON 去协议修复、多跑一轮，
+// 把序列耗尽。门控一律答「不需要」，不占序列，记在 sideRequests 而不是 requests。
 type agentSequenceLLMProvider struct {
 	mu        sync.Mutex
 	responses []string
 	requests  []llm.GenerateRequest
+	// sideRequests 记录被单独答掉的并行判断请求，便于需要时断言。
+	sideRequests []llm.GenerateRequest
+	// last 是序列用完后的兜底：重复最后一条，一般就是收尾的 final。多出来的
+	// 调用仍会记进 requests，按调用次数断言的测试照样能发现。
+	last string
 }
 
 func (p *agentSequenceLLMProvider) Generate(ctx context.Context, req llm.GenerateRequest) (*llm.GenerateResponse, error) {
-	if llmUsagePurposeFromContext(ctx) == PurposeEvidenceGate {
-		return &llm.GenerateResponse{Text: `{"needs_evidence":false}`}, nil
-	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if llmUsagePurposeFromContext(ctx) == PurposeEvidenceGate {
+		p.sideRequests = append(p.sideRequests, req)
+		return &llm.GenerateResponse{Text: `{"needs_evidence":false,"reason":"test"}`}, nil
+	}
 	p.requests = append(p.requests, req)
-	response := p.responses[0]
+	if len(p.responses) == 0 {
+		if p.last == "" {
+			return nil, errors.New("agentSequenceLLMProvider: 预设回复为空")
+		}
+		return &llm.GenerateResponse{Text: p.last}, nil
+	}
+	p.last = p.responses[0]
 	p.responses = p.responses[1:]
-	return &llm.GenerateResponse{Text: response}, nil
+	return &llm.GenerateResponse{Text: p.last}, nil
+}
+
+// 查证门控和 Agent 并行调同一个 provider，不论谁先到，门控都不能吃掉主链路的序列。
+func TestAgentSequenceProviderKeepsSequenceForEvidenceGate(t *testing.T) {
+	provider := &agentSequenceLLMProvider{responses: []string{`{"action":"final","content":"好"}`}}
+	gateCtx := withLLMUsagePurpose(context.Background(), PurposeEvidenceGate)
+	var wg sync.WaitGroup
+	for range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, _ = provider.Generate(gateCtx, llm.GenerateRequest{})
+		}()
+	}
+	wg.Wait()
+	for range 2 {
+		resp, err := provider.Generate(context.Background(), llm.GenerateRequest{})
+		if err != nil || resp.Text != `{"action":"final","content":"好"}` {
+			t.Fatalf("resp=%#v err=%v", resp, err)
+		}
+	}
+	if len(provider.requests) != 2 || len(provider.sideRequests) != 8 {
+		t.Fatalf("requests=%d side=%d", len(provider.requests), len(provider.sideRequests))
+	}
 }
 
 type echoAgentTool struct {

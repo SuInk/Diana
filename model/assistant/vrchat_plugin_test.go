@@ -345,7 +345,6 @@ func TestVRChatToolRegistration(t *testing.T) {
 	toolPromptFor := func(t *testing.T, enabled bool) string {
 		t.Helper()
 		provider := &agentSequenceLLMProvider{responses: []string{
-			`{"action":"none","prompt":"","tools":[],"context_message_ids":[],"keep_older_summary":false}`,
 			`{"action":"final","content":"好"}`,
 		}}
 		plugins := NewDefaultPluginManager()
@@ -476,7 +475,6 @@ func TestVRChatHookRunsOnlyAfterSuccessfulSend(t *testing.T) {
 			t.Fatal(err)
 		}
 		provider := &agentSequenceLLMProvider{responses: []string{
-			`{"action":"none","prompt":"","tools":[],"context_message_ids":[],"keep_older_summary":false}`,
 			`{"action":"final","content":"好"}`,
 		}}
 		runtime := NewRuntime(BotConfig{OwnerID: "owner", AgentEnabled: true, MoodEnabled: boolPointer(true), ReplySafetyMasterEnabled: boolPointer(false)}, channel, plugins, nil, nil, nil, func() (LLMProvider, error) {

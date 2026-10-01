@@ -198,7 +198,6 @@ func TestImageSourceToolRegisteredOnlyWhenProviderConfigured(t *testing.T) {
 	toolPromptFor := func(t *testing.T, settings map[string]any) string {
 		t.Helper()
 		provider := &agentSequenceLLMProvider{responses: []string{
-			`{"action":"none","prompt":"","tools":[],"context_message_ids":[],"keep_older_summary":false}`,
 			`{"action":"final","content":"好"}`,
 		}}
 		plugins := NewDefaultPluginManager()
@@ -215,10 +214,11 @@ func TestImageSourceToolRegisteredOnlyWhenProviderConfigured(t *testing.T) {
 		}, "这图哪来的"); err != nil {
 			t.Fatal(err)
 		}
-		if len(provider.requests) == 0 {
-			t.Fatal("provider was not called")
+		// 完整 Agent 模式不走路由，主链路只有一轮；多出来的说明有请求抢了序列。
+		if len(provider.requests) != 1 {
+			t.Fatalf("主链路请求 %d 次，want 1", len(provider.requests))
 		}
-		return provider.requests[len(provider.requests)-1].Messages[0].Content
+		return provider.requests[0].Messages[0].Content
 	}
 
 	configured := toolPromptFor(t, map[string]any{
@@ -331,7 +331,6 @@ func TestImageSourceIsInCapabilityKnowledge(t *testing.T) {
 // 而上面那些测试全用主人身份跑，看不出来。这里换成群成员走一遍 replyTo。
 func TestImageToolsReachGroupMembers(t *testing.T) {
 	provider := &agentSequenceLLMProvider{responses: []string{
-		`{"action":"none","prompt":"","tools":[],"context_message_ids":[],"keep_older_summary":false}`,
 		`{"action":"final","content":"好"}`,
 	}}
 	plugins := NewDefaultPluginManager()
