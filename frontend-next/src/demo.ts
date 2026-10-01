@@ -105,7 +105,7 @@ const oneBotProfile: BotProfileConfig = {
   proactive_reply_chance: 1, proactive_reply_threshold: 0.9, recent_context_limit: 40, max_reply_chars: 0,
   image_generation_daily_group_limit: 30, image_generation_daily_user_limit: 5,
   video_generation_daily_group_limit: 5, video_generation_daily_user_limit: 1,
-  cross_group_memory_enabled: true, world_book_enabled: true, romance_enabled: false, mood_enabled: true, poke_reply_enabled: true, expression_learning_enabled: true, dict_segment_enabled: true, semantic_search_enabled: false, agent_enabled: true, agent_mode: "standard", agent_max_steps: 12,
+  cross_group_memory_enabled: true, world_book_enabled: true, romance_enabled: false, mood_enabled: true, poke_reply_enabled: true, expression_learning_enabled: true, style_filter_enabled: true, dict_segment_enabled: true, semantic_search_enabled: false, agent_enabled: true, agent_mode: "standard", agent_max_steps: 12,
   max_bot_concurrency: 4, request_timeout_ms: 60_000,
   model_roles: {
     chat: { profile_id: "llm-chat", model: "gpt-6-sol" }, vision: { profile_id: "llm-vision", model: "gpt-6-sol" },
@@ -1591,7 +1591,7 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
   if (path === "/api/assistant/groups" && method === "POST") {
     const config = body.config as BotGroupSummary;
     const index = groups.findIndex((group) => group.group_id === config.group_id);
-    if (index >= 0) groups[index] = { ...groups[index], ...config, natural_reply_split_enabled: config.natural_reply_split_enabled, reply_preserve_line_breaks: config.reply_preserve_line_breaks, reply_line_split_enabled: config.reply_line_split_enabled, typing_delay_enabled: config.typing_delay_enabled, configured: true, joined: true }; else groups.push({ ...config, configured: true, joined: false });
+    if (index >= 0) groups[index] = { ...groups[index], ...config, natural_reply_split_enabled: config.natural_reply_split_enabled, reply_preserve_line_breaks: config.reply_preserve_line_breaks, reply_line_split_enabled: config.reply_line_split_enabled, typing_delay_enabled: config.typing_delay_enabled, style_filter_enabled: config.style_filter_enabled, configured: true, joined: true }; else groups.push({ ...config, configured: true, joined: false });
     return json({ config });
   }
 

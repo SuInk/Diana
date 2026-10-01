@@ -133,6 +133,7 @@ type dianaBotConfigSnapshot struct {
 	MoodEnabled                  bool                      `json:"mood_enabled"`
 	PokeReplyEnabled             bool                      `json:"poke_reply_enabled"`
 	ExpressionLearningEnabled    bool                      `json:"expression_learning_enabled"`
+	StyleFilterEnabled           bool                      `json:"style_filter_enabled"`
 	DictSegmentEnabled           bool                      `json:"dict_segment_enabled"`
 	SemanticSearchEnabled        bool                      `json:"semantic_search_enabled"`
 	ProactiveReplyChance         float64                   `json:"proactive_reply_chance"`
@@ -404,6 +405,7 @@ func dianaBotConfigFromConfig(cfg BotConfig) dianaBotConfigSnapshot {
 		MoodEnabled:                     boolValue(cfg.MoodEnabled, false),
 		PokeReplyEnabled:                boolValue(cfg.PokeReplyEnabled, false),
 		ExpressionLearningEnabled:       boolValue(cfg.ExpressionLearningEnabled, false),
+		StyleFilterEnabled:              styleFilterEnabled(cfg),
 		DictSegmentEnabled:              boolValue(cfg.DictSegmentEnabled, false),
 		SemanticSearchEnabled:           boolValue(cfg.SemanticSearchEnabled, false),
 		ProactiveReplyChance:            cfg.ProactiveReplyChance,

@@ -51,7 +51,8 @@ func (r *Runtime) withUserFacingPersona(event MessageEvent, messages []llm.Messa
 	// 语气锚点和风格描述一起注入，让这条旁路的说话方式与主回复链路保持一致。
 	limits := chatSplitLimitsForEvent(cfg, event)
 	// 心情这条旁路也要带上：主链路蔫着、旁路却活蹦乱跳，一台机器人像两个人。
-	persona := strings.TrimSpace(cfg.SystemPrompt + "\n" + replyPresentationPrompt(!limits.SingleMessage, cfg) + "\n" + replyLineBreakPrompt(cfg) + "\n" + replyLineSplitPrompt(limits) + "\n" + r.groupLengthNormPrompt(event, cfg) + "\n" + r.moodToneForConfig(cfg, event.ProfileID) + "\n" + personaClosingAnchor(cfg))
+	groupVoice := r.groupLengthNormPrompt(event, cfg)
+	persona := strings.TrimSpace(cfg.SystemPrompt + "\n" + replyPresentationPrompt(!limits.SingleMessage, cfg) + "\n" + replyLineBreakPrompt(cfg) + "\n" + replyLineSplitPrompt(limits) + "\n" + groupVoice + "\n" + styleFilterPrompt(cfg, groupVoice) + "\n" + r.moodToneForConfig(cfg, event.ProfileID) + "\n" + personaClosingAnchor(cfg))
 	if persona == "" {
 		return messages
 	}

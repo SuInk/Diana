@@ -1238,9 +1238,13 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 	// 本群消息长度和心情语气紧挨着锚点注入，理由和锚点一样：都是「此刻怎么说」，
 	// 离生成越近越管用。
 	appendPromptSection(&tail, r.persistentVoicePrompt(event, cfg))
-	appendPromptSection(&tail, r.groupStylePrompt(event, cfg))
+	groupStyle := r.groupStylePrompt(event, cfg)
+	appendPromptSection(&tail, groupStyle)
 	appendPromptSection(&tail, r.groupRulesPrompt(event, cfg))
-	appendPromptSection(&tail, r.groupLengthNormPrompt(event, cfg))
+	groupVoice := r.groupLengthNormPrompt(event, cfg)
+	appendPromptSection(&tail, groupVoice)
+	// 学群友的段落后面跟一段「这几类不学」，见 group_style_filter.go。
+	appendPromptSection(&tail, styleFilterPrompt(cfg, groupStyle, groupVoice))
 	appendPromptSection(&tail, r.moodToneForConfig(cfg, event.ProfileID))
 	// 语气锚点必须留在最后：前面的工具规则、权限说明和拒答流程都是公文体，离生成
 	// 最近的一段最容易被模仿，这里重新把语域拉回配置的表达风格。

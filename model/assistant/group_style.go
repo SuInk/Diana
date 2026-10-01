@@ -185,8 +185,12 @@ func (r *Runtime) learnGroupStyle(ctx context.Context, event MessageEvent) (Grou
 		return GroupStyle{}, ErrGroupStyleNotEnoughMessages
 	}
 	ctx = withLLMUsagePurpose(ctx, PurposeGroupStyle)
+	system := cfg.prompt(promptGroupStyleLearnSpec)
+	if styleFilterEnabled(cfg) {
+		system += "\n\n" + cfg.prompt(promptGroupStyleLearnFilterSpec)
+	}
 	messages := []llm.Message{
-		{Role: llm.RoleSystem, Content: cfg.prompt(promptGroupStyleLearnSpec)},
+		{Role: llm.RoleSystem, Content: system},
 		{Role: llm.RoleUser, Content: fmt.Sprintf("下面是这个群最近的 %d 条群友消息，按时间先后，发言人用字母代替：\n%s", len(lines), strings.Join(lines, "\n"))},
 	}
 	raw, err := r.runLLMRouterProvider(ctx, func(client LLMProvider) (string, error) {

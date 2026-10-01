@@ -1555,6 +1555,17 @@
               </div>
               <div class="field wide">
                 <label class="switch">
+                  <input v-model="form.style_filter_enabled" type="checkbox" />
+                  <span class="track" aria-hidden="true"></span>
+                  <span class="switch-label">不学怪话</span>
+                </label>
+                <span class="hint">
+                  学群友说话时，脏话骂人、黄段子和擦边、歧视引战，以及认爹认妈、发癫复读这类崩人设的烂梗不跟着学。管风格笔记和平时「照着群友的腔调说话」两处；群友的消息照常看，只是不学这几类。
+                  已经学到的风格笔记不会重写，回复时一样生效。每个群可以在「群管理」里单独开关。
+                </span>
+              </div>
+              <div class="field wide">
+                <label class="switch">
                   <input v-model="form.poke_reply_enabled" type="checkbox" />
                   <span class="track" aria-hidden="true"></span>
                   <span class="switch-label">戳一戳回应</span>
@@ -4311,6 +4322,7 @@ function setForm(config: BotProfileConfig): void {
     mood_enabled: config.mood_enabled ?? false,
     poke_reply_enabled: config.poke_reply_enabled ?? false,
     expression_learning_enabled: config.expression_learning_enabled ?? false,
+    style_filter_enabled: config.style_filter_enabled ?? true,
     dict_segment_enabled: config.dict_segment_enabled ?? false,
     semantic_search_enabled: config.semantic_search_enabled ?? false,
     natural_interjection_enabled: undefined,

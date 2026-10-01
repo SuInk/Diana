@@ -404,6 +404,8 @@ export interface BotProfileConfig extends SendRetrySettings {
   poke_reply_enabled?: boolean;
   /** 表达学习：按群收集高频短表达当风格参考；缺省关闭。 */
   expression_learning_enabled?: boolean;
+  /** 学群友说话时不学怪话（脏话骂人、擦边、歧视引战、崩人设的烂梗）；默认开启。 */
+  style_filter_enabled?: boolean;
   dict_segment_enabled?: boolean;
   semantic_search_enabled?: boolean;
   max_bot_concurrency?: number;
@@ -619,6 +621,8 @@ export interface BotGroupConfig extends SendRetrySettings {
   reply_line_split_enabled?: boolean;
   /** 本群的模拟打字延时开关；不设表示跟随机器人。 */
   typing_delay_enabled?: boolean;
+  /** 本群的「不学怪话」开关；不设表示跟随机器人。 */
+  style_filter_enabled?: boolean;
   /** @deprecated 仅兼容历史配置，不再限制聊天分条。 */
   reply_max_bubbles?: number;
   /** @deprecated 仅兼容历史配置，不再限制聊天长度。 */

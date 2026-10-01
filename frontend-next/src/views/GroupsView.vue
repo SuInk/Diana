@@ -284,6 +284,16 @@
           <GroupStylePanel :profile-id="editing.bot_profile_id || botScope || ''" :group-id="editing.group_id" />
         </div>
         <div class="field wide">
+          <label for="group-style-filter">本群不学怪话</label>
+          <AppSelect
+            id="group-style-filter"
+            :model-value="editing.style_filter_enabled == null ? '' : editing.style_filter_enabled ? 'on' : 'off'"
+            :options="groupStyleFilterOptions"
+            @update:model-value="(value) => { if (editing) editing.style_filter_enabled = value === '' ? undefined : value === 'on'; }"
+          />
+          <span class="hint">学群友说话时，脏话骂人、擦边、歧视引战和崩人设的烂梗不跟着学；群友的消息照常看。</span>
+        </div>
+        <div class="field wide">
           <label>接话设置</label>
           <ParticipationControls :key="`${editing.bot_profile_id}:${editing.group_id}`" :model-value="editing.participation" :level="groupReplyDesireValue(editing)" :inherited-value="participationDefaults[editing.bot_profile_id || botScope || '']" :criteria="editing.proactive_reply_extra_criteria" inheritable @update:model-value="setGroupParticipation" @update:criteria="value => { if (editing) editing.proactive_reply_extra_criteria = value; }" />
         </div>
@@ -994,6 +1004,9 @@ function inheritedSwitchOptions(defaults: Record<string, boolean>): AppSelectOpt
 }
 const groupLineSplitOptions = computed(() => inheritedSwitchOptions(lineSplitDefaults.value));
 const groupTypingDelayOptions = computed(() => inheritedSwitchOptions(typingDelayDefaults.value));
+// 不学怪话默认开启。
+const styleFilterDefaults = ref<Record<string, boolean>>({});
+const groupStyleFilterOptions = computed(() => inheritedSwitchOptions(styleFilterDefaults.value));
 const groupAccountSafetyOptions: AppSelectOption[] = [
   { value: "", label: "跟随机器人" },
   { value: "on", label: "开启（主动和直接回复）" },
@@ -1173,6 +1186,10 @@ async function load(showFeedback = false): Promise<void> {
       typingDelayDefaults.value = Object.fromEntries([
         ["", current.typing_delay_enabled ?? false],
         ...(config.profiles ?? []).map((profile) => [profile.id, profile.typing_delay_enabled ?? false])
+      ]);
+      styleFilterDefaults.value = Object.fromEntries([
+        ["", current.style_filter_enabled ?? true],
+        ...(config.profiles ?? []).map((profile) => [profile.id, profile.style_filter_enabled ?? true])
       ]);
       mutedReplyPauseDefaults.value = Object.fromEntries([
         ["", current.muted_reply_pause_enabled ?? true],
