@@ -89,6 +89,8 @@ type consoleGroupSwitchesPayload struct {
 	// 一样是「关于群的默认」，所以入口也在群管理这一页。
 	MinGroupLevel      *int   `json:"min_group_level,omitempty"`
 	LevelUnknownPolicy string `json:"level_unknown_policy,omitempty"`
+	// DisabledMode 是停用群的档位，dormant 或 observe，这台机器人所有停用的群共用。
+	DisabledMode string `json:"disabled_mode,omitempty"`
 }
 
 func (h *BotHandler) saveConsoleGroupSwitches(c *gin.Context) {
@@ -174,7 +176,14 @@ func (p consoleGroupSwitchesPayload) groupDefaults() (string, func(*assistant.Bo
 			mode = assistant.GroupAdmissionBlacklist
 		}
 		steps = append(steps, func(cfg *assistant.BotConfig) {
-			cfg.GroupAdmission = assistant.GroupAdmission{Mode: mode}.WithDefaults()
+			cfg.GroupAdmission = assistant.GroupAdmission{Mode: mode, DisabledMode: cfg.GroupAdmission.DisabledMode}.WithDefaults()
+		})
+	}
+	if raw := strings.ToLower(strings.TrimSpace(p.DisabledMode)); raw == string(assistant.GroupDisabledDormant) || raw == string(assistant.GroupDisabledObserve) {
+		mode := assistant.GroupDisabledMode(raw).Normalized()
+		notes = append(notes, map[bool]string{true: "停用的群静默旁观", false: "停用的群彻底关闭"}[mode.Observes()])
+		steps = append(steps, func(cfg *assistant.BotConfig) {
+			cfg.GroupAdmission.DisabledMode = mode
 		})
 	}
 	if p.MinGroupLevel != nil {

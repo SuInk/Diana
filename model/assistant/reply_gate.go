@@ -31,13 +31,16 @@ const (
 	LevelUnknownDeny  = "deny"
 )
 
-// GroupAdmission 只剩一件事：还没有群配置的群，这台机器人默认工不工作。
+// GroupAdmission 管这台机器人的群默认：还没有群配置的群默认工不工作，以及停用的群
+// 还做哪些事。
 //
 // 逐群开关统一在群配置的 Enabled 上，一个群一份，改哪里都是改它，见
 // Runtime.isGroupDisabled。whitelist 表示新群默认不工作，也就是「被拉进新群
 // 不会回话」；blacklist（默认）表示新群默认工作。
 type GroupAdmission struct {
 	Mode string `json:"mode,omitempty"`
+	// DisabledMode 对这台机器人所有停用的群生效，空值是彻底关闭，见 GroupDisabledMode。
+	DisabledMode GroupDisabledMode `json:"disabled_mode,omitempty"`
 	// Deprecated: 逐群开关已经收敛到群配置，这份名单只在迁移时读一次，之后清空。
 	AllowedGroups []string `json:"allowed_groups,omitempty"`
 }
@@ -86,6 +89,7 @@ func (a GroupAdmission) WithDefaults() GroupAdmission {
 		a.Mode = GroupAdmissionBlacklist
 	}
 	a.AllowedGroups = cleanStrings(a.AllowedGroups)
+	a.DisabledMode = a.DisabledMode.Normalized()
 	return a
 }
 

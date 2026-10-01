@@ -4,72 +4,48 @@
 package webui
 
 import (
-	"context"
 	"net/http"
-	"net/http/httptest"
-	"strings"
 	"testing"
 
 	"github.com/SuInk/diana/model/assistant"
 )
 
-// TestConsoleGroupsKeepDisabledMode 停用档位要能存、能读回，不认识这个字段的旧页面
-// 保存时不冲掉它，列表那排开关来回拨也不丢。
-func TestConsoleGroupsKeepDisabledMode(t *testing.T) {
-	base := assistant.DefaultBotConfig()
-	runtime := assistant.NewRuntime(base, consoleGroupListChannel{}, assistant.NewDefaultPluginManager(), nil, nil, nil, nil)
-	store := NewMemoryBotGroupConfigStore()
-	handler := NewBotHandler(context.Background(), runtime)
-	handler.SetGroupConfigStore(store)
-	router := botTestRouter(handler)
-
-	post := func(path, body string) {
-		t.Helper()
-		req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
-		req.Header.Set("Content-Type", "application/json")
-		rec := httptest.NewRecorder()
-		router.ServeHTTP(rec, req)
-		if rec.Code != http.StatusOK {
-			t.Fatalf("%s status = %d, body = %s", path, rec.Code, rec.Body.String())
-		}
-	}
+// TestConsoleGroupSwitchesSaveDisabledMode 停用档位是机器人级的群默认：在群管理顶部
+// 改，存进机器人配置，切「新群默认」时不能把它冲掉，认不出的值不改动。
+func TestConsoleGroupSwitchesSaveDisabledMode(t *testing.T) {
+	handler, _, profiles := switchesTestRouter(t)
 	mode := func() assistant.GroupDisabledMode {
 		t.Helper()
-		for _, saved := range store.Groups().Groups {
-			if saved.GroupID == "50006" {
-				return saved.DisabledMode
-			}
+		cfg, ok := profiles.Profiles().ConfigForProfile("a")
+		if !ok {
+			t.Fatal("profile a missing")
 		}
-		t.Fatal("group config not saved")
-		return ""
+		return cfg.GroupAdmission.DisabledMode
+	}
+	post := func(body string) {
+		t.Helper()
+		if rec := postSwitches(t, handler, body); rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+		}
 	}
 
-	post("/api/assistant/groups", `{"config":{"group_id":"50006","enabled":false,"enabled_set":true,"disabled_mode":"observe"}}`)
+	if got := mode(); got != "" {
+		t.Fatalf("默认档位 = %q，应当是彻底关闭（空值）", got)
+	}
+	post(`{"bot_profile_id":"a","disabled_mode":"observe"}`)
 	if got := mode(); got != assistant.GroupDisabledObserve {
 		t.Fatalf("disabled_mode = %q, want observe", got)
 	}
-	// 旧页面不带这个字段：沿用已存的档位。
-	post("/api/assistant/groups", `{"config":{"group_id":"50006","enabled":false,"enabled_set":true}}`)
+	post(`{"bot_profile_id":"a","new_group_enabled":false}`)
 	if got := mode(); got != assistant.GroupDisabledObserve {
-		t.Fatalf("legacy save reset disabled_mode to %q", got)
+		t.Fatalf("切新群默认把档位冲成了 %q", got)
 	}
-	// 列表开关打开再关上，档位留着。
-	post("/api/assistant/groups/switches", `{"group_ids":["50006"],"enabled":true}`)
-	post("/api/assistant/groups/switches", `{"group_ids":["50006"],"enabled":false}`)
+	post(`{"bot_profile_id":"a","disabled_mode":"whatever"}`)
 	if got := mode(); got != assistant.GroupDisabledObserve {
-		t.Fatalf("switch toggle changed disabled_mode to %q", got)
+		t.Fatalf("认不出的值改动了档位：%q", got)
 	}
-	rec := httptest.NewRecorder()
-	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/assistant/groups", nil))
-	if !strings.Contains(rec.Body.String(), `"disabled_mode":"observe"`) {
-		t.Fatalf("group list does not carry disabled_mode: %s", rec.Body.String())
-	}
-	// 显式选回休眠；认不出的值按休眠处理。
-	post("/api/assistant/groups", `{"config":{"group_id":"50006","enabled":false,"enabled_set":true,"disabled_mode":"dormant"}}`)
-	if got := mode(); got != assistant.GroupDisabledDormant {
-		t.Fatalf("disabled_mode = %q, want dormant", got)
-	}
-	if got := assistant.GroupDisabledMode("whatever").Normalized(); got != "" {
-		t.Fatalf("unknown mode normalized to %q, want empty", got)
+	post(`{"bot_profile_id":"a","disabled_mode":"dormant"}`)
+	if got := mode(); got != "" {
+		t.Fatalf("选回彻底关闭后 disabled_mode = %q", got)
 	}
 }

@@ -49,11 +49,11 @@ type disabledGroupSkipHarness struct {
 	base     BotConfig
 }
 
-// setDisabledMode 把 g1 改成停用并设成指定档位。
-func (h disabledGroupSkipHarness) setDisabledMode(t *testing.T, mode GroupDisabledMode) {
+// setGroupEnabled 改 g1 的逐群开关。
+func (h disabledGroupSkipHarness) setGroupEnabled(t *testing.T, enabled bool) {
 	t.Helper()
 	if _, err := h.groups.SaveGroupConfig(GroupConfig{
-		BotProfileID: "a", GroupID: "g1", Enabled: false, EnabledSet: true, DisabledMode: mode,
+		BotProfileID: "a", GroupID: "g1", Enabled: enabled, EnabledSet: true,
 	}, h.base); err != nil {
 		t.Fatal(err)
 	}
@@ -246,11 +246,10 @@ func TestNotAdmittedGroupSkipsModelCalls(t *testing.T) {
 	}
 }
 
-// TestObservingDisabledGroupStillLearnsMemory 静默旁观档保留旧行为：不回复、不花回复
-// 侧的 token，但消息照常排进长期记忆提取。
+// TestObservingDisabledGroupStillLearnsMemory 机器人设成静默旁观时保留旧行为：不回复、
+// 不花回复侧的 token，但消息照常排进长期记忆提取。
 func TestObservingDisabledGroupStillLearnsMemory(t *testing.T) {
-	h := newDisabledGroupSkipHarness(t, BotConfig{}, true)
-	h.setDisabledMode(t, GroupDisabledObserve)
+	h := newDisabledGroupSkipHarness(t, BotConfig{GroupAdmission: GroupAdmission{DisabledMode: GroupDisabledObserve}}, false)
 	event := disabledGroupPhraseEvent()
 
 	_, _, handled, outcome := h.runtime.prepareMessageEvent(context.Background(), event)
@@ -269,8 +268,7 @@ func TestObservingDisabledGroupStillLearnsMemory(t *testing.T) {
 // TestDormantGroupSkipsEveryMemoryEnqueue 休眠档的判断在入队入口：禁言、额度、积压
 // 合并这些分支直接调 enqueueEventMemory 也排不进去；群重新打开后照常入队。
 func TestDormantGroupSkipsEveryMemoryEnqueue(t *testing.T) {
-	h := newDisabledGroupSkipHarness(t, BotConfig{}, true)
-	h.setDisabledMode(t, GroupDisabledDormant)
+	h := newDisabledGroupSkipHarness(t, BotConfig{}, false)
 	event := disabledGroupPhraseEvent()
 
 	h.runtime.enqueueEventMemory(event, memoryEventText(event))
@@ -278,11 +276,7 @@ func TestDormantGroupSkipsEveryMemoryEnqueue(t *testing.T) {
 		t.Fatalf("dormant group enqueued %d memory jobs, want 0", got)
 	}
 
-	if _, err := h.groups.SaveGroupConfig(GroupConfig{
-		BotProfileID: "a", GroupID: "g1", Enabled: true, EnabledSet: true, DisabledMode: GroupDisabledDormant,
-	}, h.base); err != nil {
-		t.Fatal(err)
-	}
+	h.setGroupEnabled(t, true)
 	h.runtime.enqueueEventMemory(event, memoryEventText(event))
 	if got := len(h.memory.enqueued); got != 1 {
 		t.Fatalf("reopened group enqueued %d memory jobs, want 1", got)

@@ -8759,30 +8759,26 @@ func (r *Runtime) isGroupDisabled(botProfileID, groupID string) bool {
 	return disabled
 }
 
-// groupDisabledMode 返回群是否停用以及停用档位。旧版 DisabledGroups 名单里的群、
-// 没有群配置而按新群默认关着的群，都没处选档位，一律按休眠算。
+// groupDisabledMode 返回群是否停用以及停用档位。档位按机器人设一份
+// （GroupAdmission.DisabledMode），这台机器人所有停用的群都按它走。
 func (r *Runtime) groupDisabledMode(botProfileID, groupID string) (bool, GroupDisabledMode) {
 	r.mu.RLock()
 	cfg := r.profileConfigLocked(botProfileID)
 	store := r.groupConfigs
 	r.mu.RUnlock()
+	disabled := !cfg.GroupAdmission.NewGroupEnabled()
 	if slices.Contains(cfg.DisabledGroups, groupID) {
-		return true, GroupDisabledDormant
-	}
-	if store != nil {
+		disabled = true
+	} else if store != nil {
 		if groupCfg, ok := store.ConfigForGroup(botProfileID, groupID); ok {
-			groupCfg = groupCfg.WithDefaults(groupID, cfg)
-			if groupCfg.Enabled {
-				return false, ""
-			}
-			if groupCfg.DisabledMode.Observes() {
-				return true, GroupDisabledObserve
-			}
-			return true, GroupDisabledDormant
+			disabled = !groupCfg.WithDefaults(groupID, cfg).Enabled
 		}
 	}
-	if cfg.GroupAdmission.NewGroupEnabled() {
+	if !disabled {
 		return false, ""
+	}
+	if cfg.GroupAdmission.DisabledMode.Observes() {
+		return true, GroupDisabledObserve
 	}
 	return true, GroupDisabledDormant
 }

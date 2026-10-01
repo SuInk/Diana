@@ -576,8 +576,6 @@ export interface GroupGovernance {
   member_leave_audit_enabled?: boolean;
 }
 
-export type GroupDisabledMode = "" | "dormant" | "observe";
-
 export interface BotGroupConfig extends SendRetrySettings {
   marked_bot_ids?: string[];
   participation?: import("./participation").ParticipationPreferences;
@@ -585,8 +583,6 @@ export interface BotGroupConfig extends SendRetrySettings {
   group_id: string;
   enabled: boolean;
   enabled_set?: boolean;
-  /** 停用档位，只在 enabled=false 时起作用：dormant（或空）彻底休眠，不跑后台模型；observe 静默旁观，仍提取记忆。 */
-  disabled_mode?: GroupDisabledMode;
   group_triggers?: string[];
   /** 本群触发称呼的匹配松紧；空串或不设表示沿用全局配置。 */
   group_trigger_mode?: AliasTriggerMode | "";
@@ -703,8 +699,13 @@ export interface BotGroupSharedBot {
  */
 export type GroupAdmissionMode = "blacklist" | "whitelist";
 
+/** 停用的群怎么处理：空或 dormant 彻底关闭，不跑后台模型；observe 静默旁观，仍提取记忆。 */
+export type GroupDisabledMode = "" | "dormant" | "observe";
+
 export interface GroupAdmission {
   mode?: GroupAdmissionMode;
+  /** 这台机器人所有停用的群共用的档位，在群管理顶部改。 */
+  disabled_mode?: GroupDisabledMode;
   /** @deprecated 已迁进群配置的逐群开关，后端不再写这份名单。 */
   allowed_groups?: string[];
 }
@@ -2289,6 +2290,7 @@ export function saveBotGroupSwitches(payload: {
   new_group_enabled?: boolean;
   min_group_level?: number;
   level_unknown_policy?: "allow" | "deny";
+  disabled_mode?: "dormant" | "observe";
 }): Promise<{ ok: boolean; updated: number; warning?: string }> {
   return requestJSON<{ ok: boolean; updated: number; warning?: string }>("/api/assistant/groups/switches", {
     method: "POST",
