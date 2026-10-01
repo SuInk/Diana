@@ -200,3 +200,17 @@ func TestRunConfigCheckRejectsShortAdminPassword(t *testing.T) {
 		t.Fatalf("valid admin section rejected: %v", err)
 	}
 }
+
+// TestAdminPasswordInlineCommentIsNotPartOfPassword 一键安装写的 admin.password
+// 行尾带注释，注释不能被当成密码的一部分。
+func TestAdminPasswordInlineCommentIsNotPartOfPassword(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	content := "admin:\n  username: 'diana#abcd1234abcd1234'\n  password: 'it''s-a-secret'  # 只用于首次启动创建管理员\n"
+	if err := os.WriteFile(configPath, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	config, err := loadAppConfig(configPath)
+	if err != nil || config.Admin.Password != "it's-a-secret" {
+		t.Fatalf("admin.password = %q, %v", config.Admin.Password, err)
+	}
+}

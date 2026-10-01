@@ -192,13 +192,28 @@ diana doctor    # check config, directories, frontend assets, service health
 
 For Docker, use `docker exec diana diana <command>` on the host, e.g. `docker exec diana diana logs -f`.
 
-**Forgot the password**: stop the service, then run `diana passwd` to reset the administrator password. It prints a new random password and signs out every browser session; nothing else is touched. It asks for `y` before changing anything; pass `-y` to skip the prompt (required when there is no terminal, e.g. in scripts). Add `--username NAME` to rename the account at the same time. It refuses to run while Diana is running. For Docker the container must be stopped first; run this in the deployment directory:
+**Forgot the password**: the password is stored only as a hash in the database, so it cannot be recovered anywhere — reset it instead: stop the service → `diana passwd` → start the service. It generates a new random password and shows it once, signs out every browser session, and leaves bots, models, plugins and all other data untouched. It refuses to run while Diana is running.
 
 ```sh
+# Docker (in the deployment directory)
 docker compose stop diana
 docker compose run --rm diana passwd
 docker compose start diana
+
+# Linux one-click install (for a user-level install, use systemctl --user instead of sudo systemctl)
+sudo systemctl stop diana
+diana passwd
+sudo systemctl start diana
+
+# macOS one-click install
+launchctl bootout gui/$(id -u)/com.suink.diana
+diana passwd
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.suink.diana.plist
 ```
+
+Windows: end `diana-webui.exe` in Task Manager, run `diana passwd`, then re-run the install command to start the service again (data is kept).
+
+It asks for `y` before changing anything; pass `-y` to skip the prompt (required when there is no terminal, e.g. in scripts). Add `--username NEW_NAME` to rename the account at the same time.
 
 **Upgrading**: for complete Release packages, re-run the install command or click upgrade in the console; both paths back up data, verify the package and roll back if the health check fails. Docker deployments pull and recreate the container, either on the host or through the optional updater. Docker image updates do not automatically roll back after a failed health check; restore a known version tag on the host if needed.
 

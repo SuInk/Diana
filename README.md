@@ -218,13 +218,28 @@ diana doctor    # 体检：配置、目录、前端资源、服务健康
 
 Docker 部署在宿主机用 `docker exec diana diana <命令>`，例如 `docker exec diana diana logs -f`。
 
-**忘记密码**：先停掉服务，执行 `diana passwd` 重置管理员密码：生成新的随机密码并打印出来，所有已登录的浏览器会被登出，其余数据不动；执行前会要求输入 `y` 确认，加 `-y` 跳过（脚本里无法交互时必须加）；加 `--username 名字` 可同时改账号名。服务运行中执行会直接拒绝。Docker 部署要停掉容器后再执行，在部署目录运行：
+**忘记密码**：密码只以哈希存在数据库里，任何地方都查不回原密码，只能重置。步骤是「停掉服务 → `diana passwd` → 启动服务」：它会生成新的随机密码并只显示这一次，所有已登录的浏览器会被登出，机器人、模型、插件等其他数据不动。服务没停时它会直接拒绝。
 
 ```sh
+# Docker（在部署目录执行）
 docker compose stop diana
 docker compose run --rm diana passwd
 docker compose start diana
+
+# Linux 一键安装（用户级安装把 sudo systemctl 换成 systemctl --user）
+sudo systemctl stop diana
+diana passwd
+sudo systemctl start diana
+
+# macOS 一键安装
+launchctl bootout gui/$(id -u)/com.suink.diana
+diana passwd
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.suink.diana.plist
 ```
+
+Windows：在任务管理器结束 `diana-webui.exe`，执行 `diana passwd`，再重跑一遍安装命令启动服务（数据保留）。
+
+执行前会要求输入 `y` 确认，加 `-y` 跳过（脚本里无法交互时必须加）；加 `--username 新账号名` 可以顺便改账号名。
 
 **升级**：重跑一遍安装命令，或直接在控制台里点升级。两条路都会先备份数据、校验新版本，健康检查不过自动回滚。Docker 部署则是拉新镜像重建容器。
 

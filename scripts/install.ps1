@@ -84,9 +84,10 @@ function Set-DianaYamlValue {
     [IO.File]::WriteAllLines($Path, $result, (New-Object System.Text.UTF8Encoding($false)))
 }
 
-# Remove-DianaYamlKey 删掉指定顶层段下的一个键,其余内容原样保留。
-function Remove-DianaYamlKey {
-    param([string]$Path, [string]$Section, [string]$Key)
+# Replace-DianaYamlKey 把指定顶层段下的一个键整行换成 $Replacement(通常是一行注释),
+# 其余内容原样保留。
+function Replace-DianaYamlKey {
+    param([string]$Path, [string]$Section, [string]$Key, [string]$Replacement)
     $result = @()
     $inSection = $false
     foreach ($line in @(Get-Content $Path)) {
@@ -95,7 +96,7 @@ function Remove-DianaYamlKey {
             $result += $line
             continue
         }
-        if ($inSection -and $line -match "^\s+$($Key):") { continue }
+        if ($inSection -and $line -match "^\s+$($Key):") { $result += $Replacement; continue }
         $result += $line
     }
     [IO.File]::WriteAllLines($Path, $result, (New-Object System.Text.UTF8Encoding($false)))
@@ -267,7 +268,7 @@ try {
             "  log_path: $(ConvertTo-DianaYamlScalar (Join-Path $installDir 'logs\diana.log'))",
             "admin:",
             "  username: $(ConvertTo-DianaYamlScalar $username)",
-            "  password: $(ConvertTo-DianaYamlScalar $generatedPassword)"
+            "  password: $(ConvertTo-DianaYamlScalar $generatedPassword)  # 只用于首次启动创建管理员,启动成功后安装脚本会删掉这一行"
         )
         $configLines += Get-DianaOptionalConfigLines
         [IO.File]::WriteAllLines($configFile, $configLines, (New-Object System.Text.UTF8Encoding($false)))
@@ -361,7 +362,7 @@ try {
         # 健康说明管理员已经写进数据库(只存哈希),admin.password 从此不再生效。留着它
         # 只会是一份会过期的明文密码:WebUI 改过或 diana passwd 重置过就对不上了。
         if (Get-DianaYamlValue -Path $configFile -Section "admin" -Key "password") {
-            Remove-DianaYamlKey -Path $configFile -Section "admin" -Key "password"
+            Replace-DianaYamlKey -Path $configFile -Section "admin" -Key "password" -Replacement "  # 密码不存在这里,只以哈希存在数据库中。忘记密码:停掉服务后执行 diana passwd 重置。"
             $passwordCleared = $true
             if (-not $generatedPassword) {
                 Write-Host "==> Configuration -> removed the plain-text admin.password (the password itself is unchanged)"

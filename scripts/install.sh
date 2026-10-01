@@ -519,13 +519,14 @@ set_yaml_value() {
   mv "$rewritten" "$target"
 }
 
-# remove_yaml_key 删掉指定顶层段下的一个键,其余内容原样保留。
-remove_yaml_key() {
+# replace_yaml_key 把指定顶层段下的一个键整行换成第 4 个参数(通常是一行注释),
+# 其余内容原样保留。
+replace_yaml_key() {
   target=$1
   rewritten="$temp_dir/config.yaml.rewritten"
-  awk -v section="$2" -v key="$3" '
+  awk -v section="$2" -v key="$3" -v replacement="$4" '
     /^[a-z_]+:[[:space:]]*$/ { in_section = ($0 == section ":"); print; next }
-    in_section && $0 ~ "^[[:space:]]+" key ":" { next }
+    in_section && $0 ~ "^[[:space:]]+" key ":" { print replacement; next }
     { print }
   ' "$target" >"$rewritten"
   mv "$rewritten" "$target"
@@ -551,6 +552,8 @@ assemble_macos_app
 generated_password=""
 generated_username=""
 password_cleared=false
+# 明文密码删掉后留在原处的说明:密码去了哪、忘了怎么办。
+admin_password_note='  # 密码不存在这里,只以哈希存在数据库中。忘记密码:停掉服务后执行 diana passwd 重置。'
 config_file="$install_dir/config.yaml"
 if [ ! -f "$config_file" ]; then
   username="${DIANA_ADMIN_USERNAME:-diana#$(random_hex 8)}"
@@ -575,7 +578,7 @@ storage:
   log_path: $(yaml_quote "$install_dir/logs/diana.log")
 admin:
   username: $(yaml_quote "$username")
-  password: $(yaml_quote "$generated_password")
+  password: $(yaml_quote "$generated_password")  # 只用于首次启动创建管理员,启动成功后安装脚本会删掉这一行
 EOF
   append_optional_section "$config_file" storage $optional_storage_keys
   append_optional_section "$config_file" llm $optional_llm_keys
@@ -922,7 +925,7 @@ if [ "$start_after_install" = "true" ]; then
   # 健康说明管理员已经写进数据库(只存哈希),admin.password 从此不再生效。留着它
   # 只会是一份会过期的明文密码:WebUI 改过或 diana passwd 重置过就对不上了。
   if [ -n "$(read_yaml_value "$config_file" admin password)" ]; then
-    remove_yaml_key "$config_file" admin password
+    replace_yaml_key "$config_file" admin password "$admin_password_note"
     password_cleared=true
     if [ -z "$generated_password" ]; then
       info "Configuration → removed the plain-text admin.password (the password itself is unchanged)"
