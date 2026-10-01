@@ -164,15 +164,14 @@ func (t *dianaCapabilitiesTool) Name() string {
 func (t *dianaCapabilitiesTool) Introspection(map[string]any) bool { return true }
 
 func (t *dianaCapabilitiesTool) Description() string {
-	return `从 Diana 自身能力知识库检索相关能力、工具、权限门槛和实时插件状态。用户问「你会什么」「能不能处理某事」「哪个插件负责某功能」或质疑机器人能力时必须先调用，不要凭提示词记忆猜测。` +
-		`用户问某个功能具体怎么运作、为什么这样表现、有什么限制或设计取舍时也调用：references 返回随当前版本编译的设计文档章节、内置提示词默认原文和本轮工具说明；摘录不够时带 detail=true 取完整章节。`
+	return `检索 Diana 自身能力、工具、权限门槛和插件状态，以及功能的设计文档、内置提示词。问能做什么或某功能怎么运作时先查，别凭记忆猜。`
 }
 
 func (t *dianaCapabilitiesTool) InputSchema() map[string]any {
 	return toolObjectSchema([]string{"query"}, map[string]any{
-		"query":  toolStringParam("用户关于能力的问题，原样或稍加归纳后传入。"),
-		"limit":  toolIntParam("能力条目返回条数，默认 "+itoa(defaultCapabilityResultLimit)+"。", 1, maximumCapabilityResultLimit),
-		"detail": toolBoolParam("为 true 时 references 返回完整章节（最多 " + itoa(detailCapabilityReferenceLimit) + " 条），用于追问机制细节；默认只给 " + itoa(defaultCapabilityReferenceLimit) + " 条命中段落摘录。"),
+		"query":  toolStringParam("关于能力或机制的问题。"),
+		"limit":  toolIntParam("能力条目数，默认 "+itoa(defaultCapabilityResultLimit)+"。", 1, maximumCapabilityResultLimit),
+		"detail": toolBoolParam("true 时 references 给完整章节，默认只给命中摘录。"),
 	})
 }
 

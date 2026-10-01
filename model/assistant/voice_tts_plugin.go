@@ -233,7 +233,9 @@ func (t *dianaTTSTool) Name() string {
 }
 
 func (t *dianaTTSTool) Description() string {
-	return fmt.Sprintf(`将最终回复合成为%s音色并直接发送一条 语音。仅当用户明确要求用语音回复、要求朗读/念出内容，或明确要求把某段文字说出来时调用；普通文字聊天、仅讨论声音/TTS/语音功能时严禁调用。调用后工具会直接完成本次回复，不要再发送重复文字。input: {"text":"实际要说的完整自然语言内容，不含 Markdown、CQ 码或工具说明"}`, voiceTTSVoiceName())
+	// 这个工具没有 InputSchema，参数只能写在说明里。普通聊天、讨论 TTS 功能时
+	// 模型曾误调，所以「只在明确要语音时用」要留。
+	return fmt.Sprintf(`把最终回复合成为%s音色的语音直接发送。只在用户明确要语音回复或朗读时用，普通聊天、讨论语音功能时不用。工具会完成本次回复，不再重复发文字。input: {"text":"要说的纯文本，不含 Markdown、CQ 码"}`, voiceTTSVoiceName())
 }
 
 func (t *dianaTTSTool) Run(ctx context.Context, input map[string]any) (string, error) {

@@ -170,7 +170,7 @@ func TestLiveAgentReadsPublicRepoWithoutInventingPermissionExcuse(t *testing.T) 
 	}
 }
 
-// review 之前必须先 pull_files：这句原来在描述正文，现在只写在 operation 枚举说明里。
+// review 之前必须先 pull_files：这句写在工具描述里（曾挪到 operation 枚举说明，后又收回描述）。
 // 同时盯住写操作停在草稿，以及确认码有没有被复述——确认码的说明现在只剩
 // user_confirmed_write 的参数说明和草稿结果的 message 两处。
 func TestLiveAgentReadsPullFilesBeforeReviewAndRecitesConfirmationCode(t *testing.T) {

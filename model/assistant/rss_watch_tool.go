@@ -94,21 +94,23 @@ func (t *dianaRSSWatchTool) targetOwner(requesterIsOwner bool, fallbackOwner, id
 
 func (*dianaRSSWatchTool) Name() string { return "rss" }
 
+// 本工具只作为 subscription 的 kind=rss 后端，描述和 schema 不直接发给模型；
+// 模型看到的说明在 subscriptionKindFields。「同一条件的多个来源建一条订阅」见那里。
 func (*dianaRSSWatchTool) Description() string {
-	return `创建和管理 RSS/Atom 或 X (Twitter) 用户订阅：发现新条目后由模型按 judge_prompt 判断是否值得通知，不符合条件就保持静默。普通用户只能查看和管理自己的订阅，机器人主人可以查看和管理全部订阅，包括 WebUI 创建的订阅。一条订阅可以同时盯多个账号或多个 Feed，它们共用同一套 judge_prompt，命中的内容合成一条消息发出；用户说「盯这几个人，条件一样」时建一条多来源订阅，不要一人建一条。用户要求持续关注某个网站 Feed 或某个推特用户、并且只在特定内容出现时才通知，必须使用本工具；普通周期搜索改用 schedule。首次创建只建立当前内容基线，不补发历史条目。`
+	return `管理 RSS/Atom 或 X 用户订阅：新条目按 judge_prompt 判断，符合才通知。多个来源条件相同时建一条订阅。普通周期查询用 schedule。`
 }
 
 func (*dianaRSSWatchTool) InputSchema() map[string]any {
 	return toolObjectSchema([]string{"operation"}, map[string]any{
-		"operation": toolEnumParam("要执行的操作。cancel 只停止并保留记录，delete 才彻底删除。",
+		"operation": toolEnumParam("cancel 停止并保留记录，delete 彻底删除",
 			"create", "list", "update", "cancel", "delete"),
-		"twitter_handle":  toolStringParam("要关注的单个 X (Twitter) 用户名，不带 @。盯多个人用 twitter_handles。"),
-		"twitter_handles": toolStringArrayParam("要关注的多个 X (Twitter) 用户名，共用同一套 judge_prompt。最多 " + itoa(maximumRSSWatchSources) + " 个来源（和 feed_urls 合计）。"),
-		"feed_url":        toolStringParam("要关注的单个 RSS/Atom feed 地址。盯多个 Feed 用 feed_urls。"),
-		"feed_urls":       toolStringArrayParam("要关注的多个 RSS/Atom feed 地址，共用同一套 judge_prompt。"),
-		"interval":        toolStringParam("检查间隔，单位 " + durationUnitsHint + "。例如 15m、1h。不短于 " + formatDurationUnits(minimumRSSWatchInterval) + "，省略按 " + formatDurationUnits(defaultRSSWatchInterval) + " 处理。"),
-		"judge_prompt":    toolStringParam("判断条件：写清楚什么样的新条目才值得通知、通知时要说什么。最多 " + itoa(maximumRSSJudgeRunes) + " 个字符。例如「仅当推文明确提到额度重置、恢复或刷新时通知，并用中文说明时间和原文链接」。"),
-		"id":              toolStringParam("要操作的订阅 ID；update、cancel、delete 必填，可先用 list 查到。"),
+		"twitter_handle":  toolStringParam("单个 X 用户名，不带 @"),
+		"twitter_handles": toolStringArrayParam("多个 X 用户名；与 feed_urls 合计最多 " + itoa(maximumRSSWatchSources) + " 个"),
+		"feed_url":        toolStringParam("单个 RSS/Atom 地址"),
+		"feed_urls":       toolStringArrayParam("多个 RSS/Atom 地址，共用 judge_prompt"),
+		"interval":        toolStringParam("检查间隔，最短 " + formatDurationUnits(minimumRSSWatchInterval) + "，默认 " + formatDurationUnits(defaultRSSWatchInterval)),
+		"judge_prompt":    toolStringParam("什么新条目值得通知、通知说什么，最多 " + itoa(maximumRSSJudgeRunes) + " 字"),
+		"id":              toolStringParam("订阅 ID，可用 list 查"),
 	})
 }
 

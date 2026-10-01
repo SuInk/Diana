@@ -29,17 +29,18 @@ func newDianaAIImageDetectTool(runtime *Runtime, event MessageEvent, plugin *AII
 
 func (t *dianaAIImageDetectTool) Name() string { return dianaAIImageDetectToolName }
 
+// 检测依据是 C2PA、IPTC、SynthID 标注、AIGC 隐式标识和 SD/ComfyUI/NovelAI 等生成
+// 参数，配置了服务时再查 SynthID 像素水印。「没查到不等于真图」必须留：平台转发、
+// 截图会抹掉元数据，模型曾据此断言是真图。
 func (t *dianaAIImageDetectTool) Description() string {
-	return `检测一张聊天图片是不是 AI 生成的：解析图片里的 AI 生成标识（C2PA 内容凭证、IPTC 数字来源类型、Google SynthID/「Made with Google AI」标注、国内 AIGC 隐式标识、Stable Diffusion/ComfyUI/NovelAI/Midjourney 等生成参数），配置了检测服务时还会检查 SynthID 像素水印。` +
-		`用户问「这是 AI 图吗」「是不是 AI 画的」「有没有 SynthID 水印」时用它——你自己看图判断不了。` +
-		`默认检测当前消息（或引用消息）里的图片；要查更早的图就传那条消息的 message_id。` +
-		`没查到标识不等于真图：聊天平台转发、截图、重新保存都会抹掉元数据，转述时要说清楚这一点。`
+	return `检测聊天图片是否 AI 生成：解析 C2PA、SynthID 等 AI 标识和生成参数，可查 SynthID 水印。` +
+		`用户问是不是 AI 图时用，自己看图判断不了。没查到标识不等于真图，转发、截图会抹掉元数据，转述时要说明。`
 }
 
 func (t *dianaAIImageDetectTool) InputSchema() map[string]any {
 	return toolObjectSchema(nil, map[string]any{
-		"message_id":  toolStringParam("要检测的图片所在的消息 ID；省略表示当前消息或它引用的那条。"),
-		"image_index": toolIntParam("这条消息里的第几张图，从 1 开始，默认第 1 张。", 1, 8),
+		"message_id":  toolStringParam("图片所在消息 ID，省略为当前或引用消息"),
+		"image_index": toolIntParam("消息里第几张图，从 1 起，默认 1", 1, 8),
 	})
 }
 

@@ -70,7 +70,7 @@ func (l *deferredToolLoader) filter(definitions []llm.ToolDefinition) []llm.Tool
 	}
 	return append(out,
 		llm.ToolDefinition{Name: ToolsLoadToolName, Description: l.Description(), Parameters: l.InputSchema()},
-		llm.ToolDefinition{Name: ToolsExecuteToolName, Description: "执行本轮 tools_load 已加载的工具；name 为工具名，input 必须符合加载返回的 inputSchema。", Parameters: executeInputSchema()},
+		llm.ToolDefinition{Name: ToolsExecuteToolName, Description: "执行已用 tools_load 加载的工具，input 须符合其 inputSchema。", Parameters: executeInputSchema()},
 	)
 }
 
@@ -129,7 +129,7 @@ func executeInputSchema() map[string]any {
 func (l *deferredToolLoader) Name() string { return ToolsLoadToolName }
 
 func (l *deferredToolLoader) Description() string {
-	return "加载系统提示词「按需加载的工具」里列出的工具。names 传工具名；加载结果包含完整契约，随后通过 tools_execute(name,input) 调用。已加载工具会在当前群会话后续运行中保留。只加载确实要用的工具。"
+	return "加载「按需加载的工具」目录里的工具，返回完整契约，之后用 tools_execute 调用。已加载的在本会话后续保留；只加载确实要用的。"
 }
 
 func (l *deferredToolLoader) InputSchema() map[string]any {
@@ -140,7 +140,7 @@ func (l *deferredToolLoader) InputSchema() map[string]any {
 		"properties": map[string]any{
 			"names": map[string]any{
 				"type":        "array",
-				"description": "要加载的工具名，取自按需加载的工具目录。",
+				"description": "工具名，取自按需加载目录",
 				"items":       map[string]any{"type": "string"},
 				"minItems":    1,
 				"maxItems":    8,

@@ -57,24 +57,35 @@ func (t *dianaReminderTool) Name() string {
 	return "reminder"
 }
 
+// Description 里留下的都是事故规则：
+//   - 一次性用本工具、重复用 subscription：选错就建出只响一次或天天响的提醒。
+//   - 日期时刻传 date+time 由系统换算：模型自己把「明天」「28 号」算成 RFC3339 常跨月、
+//     跨时区算错，见 task_datetime.go。
+//   - message 与 query 的分工（#957）：到点要查天气、看比赛结果的写进 message 只会
+//     原样念出「查下天气」，必须走 query 才会真的执行。
+//   - 不用 sleep/后台进程代替：run_command 里的 sleep 撑不过重启，提醒会悄悄丢。
 func (t *dianaReminderTool) Description() string {
-	return `创建和管理持久化一次性提醒。用户要求在某个时间点或某段时间之后提醒一次时必须使用此工具；「明天晚上十点」「28 号上午九点」传 date + time，系统按自然日换算；每天、每周这类重复提醒，以及周期性查询、RSS/推特关注、GitHub 仓库更新这类会重复触发的订阅改用 subscription，用 kind 选种类。到点只是把一句话念给用户用 message；到点要先查资料、调工具再告诉用户的（「明早八点查下天气」「下午三点看看比赛结果」）用 query，到时会实际执行并发出结果。禁止用 run_command、sleep 或后台进程代替。初识及以上可用。`
+	return `创建和管理一次性提醒，到点触发一次。日期时刻传 date+time 由系统换算，不要自己算。` +
+		`每天、每周这类重复提醒和其他订阅用 subscription。` +
+		`到点只念一句话用 message；到点要先查资料或调工具再告诉用户的（如明早查天气）用 query。` +
+		`不要用 sleep 或后台进程代替。初识及以上可用。`
 }
 
 // InputSchema 声明参数契约。相对时间使用 delay，绝对时间使用 at，避免模型把
-// 按当前时间算出的延时再叠加到回补消息的原始时间上。
+// 按当前时间算出的延时再叠加到回补消息的原始时间上。三者互斥、message/query 互斥
+// 都由 Run 返回具体错误，说明里只写一次「二选一」。
 func (t *dianaReminderTool) InputSchema() map[string]any {
 	item := map[string]any{
-		"delay":      toolStringParam("相对当前消息的等待时长，单位 " + durationUnitsHint + "。例如 30s、5m、2h、3d、1w、1mo。仅用于‘过一段时间后’；与 at/trigger_at 二选一。最长 1y。"),
-		"at":         toolStringParam("绝对触发时间，使用 RFC3339（例如 2026-08-30T19:00:00+08:00）。用户说今天、明天、后天、几号、几点时优先改传 date + time，由系统换算日期；与 delay、date/time 三选一。"),
-		"trigger_at": toolStringParam("at 的兼容别名：绝对触发时间，使用 RFC3339。与 delay 二选一。"),
-		"date":       toolStringParam(taskDateDescription),
+		"delay":      toolStringParam("从现在起的等待时长，如 30s、5m、2h、3d、1mo（月写 mo），最长 1y"),
+		"at":         toolStringParam("绝对时间 RFC3339；说了哪天几点的优先用 date+time。与 delay 二选一"),
+		"trigger_at": toolStringParam("at 的旧别名"),
+		"date":       toolStringParam("日期，系统换算：" + taskDateDescription),
 		"time":       toolStringParam(taskTimeDescription),
-		"message":    toolStringParam("到点要原样发出的提醒内容，最多 " + itoa(maximumReminderMessageRunes) + " 个字符。与 query 二选一。"),
-		"query":      toolStringParam("到点要实际去做的事，写成一句完整指令（如「查今天杭州天气，下雨就提醒带伞」），到时会调用工具执行并把结果发给用户；最多 " + itoa(maximumReminderMessageRunes) + " 个字符。与 message 二选一。"),
+		"message":    toolStringParam("到点原样发出的内容，最多 " + itoa(maximumReminderMessageRunes) + " 字。与 query 二选一"),
+		"query":      toolStringParam("到点要执行的一句完整指令，执行结果发给用户，最多 " + itoa(maximumReminderMessageRunes) + " 字"),
 	}
 	return toolObjectSchema([]string{"operation"}, map[string]any{
-		"operation": toolEnumParam("要执行的操作。cancel 只停止并保留记录，delete 才彻底删除。",
+		"operation": toolEnumParam("cancel 停止并保留记录，delete 彻底删除",
 			"create", "list", "update", "cancel", "delete"),
 		"delay":      item["delay"],
 		"at":         item["at"],
@@ -83,10 +94,10 @@ func (t *dianaReminderTool) InputSchema() map[string]any {
 		"time":       item["time"],
 		"message":    item["message"],
 		"query":      item["query"],
-		"items": toolItemsParam("一次创建多个提醒；只在 create 时有效，最多 "+itoa(maximumTasksPerToolCall)+" 项。每项的 delay 与 at/trigger_at 二选一，message 与 query 二选一；剩余额度不足时按顺序创建到额度上限。",
+		"items": toolItemsParam("create 批量创建，最多 "+itoa(maximumTasksPerToolCall)+" 项",
 			maximumTasksPerToolCall, nil, item),
-		"id":             toolStringParam("要操作的提醒 ID；update、cancel、delete 必填，可先用 list 查到。"),
-		"target_user_id": toolStringParam("代其他用户管理时的目标账号，仅机器人主人可用；创建仍占目标用户的额度。"),
+		"id":             toolStringParam("提醒 ID，可用 list 查"),
+		"target_user_id": toolStringParam("代管的目标用户，仅主人；占对方额度"),
 	})
 }
 

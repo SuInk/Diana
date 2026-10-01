@@ -30,7 +30,7 @@ func newDianaExtensionAccessTool(runtime *Runtime, event MessageEvent) *dianaExt
 func (t *dianaExtensionAccessTool) Name() string { return dianaExtensionAccessToolName }
 
 func (t *dianaExtensionAccessTool) Description() string {
-	return `读写 MCP 服务和 Skill 的开放范围，仅主人可用。list 查看本群生效档位（tier）、机器人默认档和本群覆盖；bot_tier 改机器人默认档；group_tier 改某个群的档位；allow / deny 改某个群的白名单、黑名单。档位取值 off（停用）、owner（仅主人）、admins（群主和群管理员）、members（群成员）；group_tier 传空档位表示这个群跟随机器人，会连本群名单一起清掉。判定顺序是停用 > 黑名单 > 白名单 > 档位，白名单里的人不看档位和群身份，黑名单一律不给，两份名单都不作用于主人。写操作第一次会被拒绝并给出确认码，等用户原样回复后再重发。`
+	return `读写 MCP 服务和 Skill 的开放范围，仅主人可用。档位 off/owner/admins（群主和管理员）/members。判定顺序：停用 > 黑名单 > 白名单 > 档位，名单不作用于主人。写操作首次被拒并给出确认码，用户原样回复后再重发。`
 }
 
 // Introspection 只认 list 这一路：查档位是打听，改档位和改名单是真动作，照常占预算。
@@ -40,13 +40,13 @@ func (t *dianaExtensionAccessTool) Introspection(input map[string]any) bool {
 
 func (t *dianaExtensionAccessTool) InputSchema() map[string]any {
 	return toolObjectSchema([]string{"action"}, map[string]any{
-		"action": toolEnumParam("要做的事，省略 id 时只有 list 可用。",
+		"action": toolEnumParam("bot_tier 改默认档，group_tier 改群档，allow/deny 改群名单；无 id 只能 list。",
 			"list", "bot_tier", "group_tier", "allow", "deny"),
-		"id":       toolStringParam(`扩展 ID，形如 mcp:notes 或 skill:daily-summary，取自 list 结果。`),
-		"tier":     toolStringParam("档位：off、owner、admins、members；group_tier 传空表示跟随机器人。"),
-		"user_id":  toolStringParam("allow / deny 的目标账号 ID，不认昵称。"),
-		"group_id": toolStringParam("目标群号，省略表示当前群。"),
-		"remove":   toolBoolParam("true 表示从名单里移除，默认是加入。"),
+		"id":       toolStringParam(`扩展 ID，如 mcp:notes，取自 list。`),
+		"tier":     toolStringParam("档位；group_tier 传空为跟随机器人并清空本群名单。"),
+		"user_id":  toolStringParam("allow/deny 的目标账号 ID，不认昵称。"),
+		"group_id": toolStringParam("群号，默认当前群。"),
+		"remove":   toolBoolParam("true 为移出名单，默认加入。"),
 	})
 }
 

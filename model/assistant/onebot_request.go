@@ -221,15 +221,15 @@ func newDianaOneBotRequestsTool(runtime *Runtime, event MessageEvent) *dianaOneB
 func (*dianaOneBotRequestsTool) Name() string { return dianaOneBotRequestsToolName }
 
 func (*dianaOneBotRequestsTool) Description() string {
-	return "列出并处理 OneBot v11 好友请求、成员入群申请和机器人群邀请。只对机器人主人开放；批准或拒绝必须对应当前用户明确表达的决定。工具使用内部保存的 flag，不要向用户索要或展示 flag。"
+	return "列出并处理 OneBot 好友请求、入群申请和群邀请，仅主人。批准或拒绝须对应用户明确的决定。flag 由工具内部保存，不要向用户索要或展示。"
 }
 
 func (*dianaOneBotRequestsTool) InputSchema() map[string]any {
 	return toolObjectSchema([]string{"operation"}, map[string]any{
-		"operation": toolEnumParam("操作：list 查看待处理请求；approve 同意；reject 拒绝。", "list", "approve", "reject"),
-		"id":        toolStringParam("approve/reject 必填的请求编号；来自主人通知或 list 结果。"),
-		"reason":    toolStringParam("拒绝群申请或群邀请时的简短原因，最多 200 字。"),
-		"remark":    toolStringParam("同意好友请求时设置的备注，最多 200 字。"),
+		"operation": toolEnumParam("list 查看待处理请求", "list", "approve", "reject"),
+		"id":        toolStringParam("approve/reject 必填：请求编号，来自通知或 list"),
+		"reason":    toolStringParam("拒绝群申请/邀请的原因，≤200 字"),
+		"remark":    toolStringParam("同意好友时的备注，≤200 字"),
 	})
 }
 

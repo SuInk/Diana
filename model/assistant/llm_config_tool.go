@@ -26,23 +26,20 @@ func (t *dianaLLMConfigTool) Name() string {
 }
 
 func (t *dianaLLMConfigTool) Description() string {
-	return `切换 Diana 各个用途使用的模型：对话、视觉理解、意图识别、图片生成，由 role 指定，默认对话。` +
-		`只修改当前消息所属机器人。跨供应商切换时先 list 查看供应商 ID 与模型，再用 provider_id 精确选择；不要猜测同名供应商。` +
-		`改的是机器人的模型分配，不动 provider 的地址和密钥。` +
-		`更新前会实际测试目标模型，失败时保留原配置。图片生成用途会生成一张不发送到聊天的测试图。` +
-		`只有主人明确要求更改机器人自身配置时才能调用；讨论模型、推荐 API 中转、分析别人的 Agent 或模型、用户说「我用某模型」都不得调用。`
+	return `切换 Diana 各用途的模型（role 指定，默认对话），只改当前机器人，不动供应商地址和密钥。` +
+		`仅在主人明确要求改机器人自身配置时调用；讨论或推荐模型、用户说「我用某模型」都不调用。` +
+		`跨供应商先 list，再用 provider_id 精确选，别猜同名供应商。更新前实测目标模型，失败保留原配置；image 会生成一张不发送的测试图。`
 }
 
 func (t *dianaLLMConfigTool) InputSchema() map[string]any {
 	return toolObjectSchema([]string{"operation"}, map[string]any{
-		"operation": toolEnumParam("list 查看已配置供应商和缓存模型清单；update 修改当前机器人。", "list", "update"),
-		"role": toolEnumParam("要改哪个用途的模型：chat 对话（默认）、vision 视觉理解、intent 意图识别、image 图片生成。"+
-			"用户说「识图用 X」「生图换成 Y」「意图判断用 Z」时要传对应的值。",
+		"operation": toolEnumParam("list 看供应商和模型清单，update 修改当前机器人。", "list", "update"),
+		"role": toolEnumParam("chat 对话（默认）、vision 识图、intent 意图识别、image 生图。",
 			"chat", "vision", "intent", "image"),
-		"provider":      toolEnumParam("要切换到的 provider，不改则省略。", "openai_compatible", "gemini", "anthropic", "typesafe"),
-		"provider_id":   toolStringParam("WebUI 已配置的具体供应商 ID，优先使用 list 返回的 ID。不是机器人 ID。"),
-		"provider_name": toolStringParam("供应商的准确名称；重名时必须改用 provider_id。"),
-		"model":         toolStringParam("要切换到的模型 ID，不改则省略。"),
+		"provider":      toolEnumParam("目标 provider 类型，不改则省略。", "openai_compatible", "gemini", "anthropic", "typesafe"),
+		"provider_id":   toolStringParam("供应商 ID（不是机器人 ID），取自 list。"),
+		"provider_name": toolStringParam("供应商准确名称；重名时改用 provider_id。"),
+		"model":         toolStringParam("目标模型 ID，不改则省略。"),
 	})
 }
 

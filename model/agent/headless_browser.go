@@ -905,12 +905,12 @@ func NewBrowserRenderTool(renderer PageRenderer) *BrowserRenderTool {
 func (t *BrowserRenderTool) Name() string { return "browser_render" }
 
 func (t *BrowserRenderTool) Description() string {
-	return `读取公网网页。GitHub Release 地址优先读取官方 API 的版本与发布时间；其他页面通过一次性 Chrome/Chromium 沙箱读取 DOM。结果注明来源，不使用用户浏览器登录态。`
+	return `用一次性沙箱浏览器读取公网网页，不带用户登录态。GitHub Release 地址改读官方 API 的版本与发布时间。`
 }
 
 func (t *BrowserRenderTool) InputSchema() map[string]any {
 	return toolObjectSchema([]string{"url"}, map[string]any{
-		"url": toolStringParam("要渲染的公网页面地址"),
+		"url": toolStringParam("公网页面地址"),
 	})
 }
 

@@ -69,7 +69,7 @@ func TestRuntimeModelToolReadsRegistrySelectionThroughRetryWrapper(t *testing.T)
 
 func TestRuntimeModelToolIsSemanticToolWithoutPromptMatching(t *testing.T) {
 	tool := newDianaRuntimeModelTool(nil)
-	if tool.Name() != dianaRuntimeModelToolName || !strings.Contains(tool.Description(), "用户询问") {
+	if tool.Name() != dianaRuntimeModelToolName || !strings.Contains(tool.Description(), "用户问模型") {
 		t.Fatalf("unexpected tool metadata: %q %q", tool.Name(), tool.Description())
 	}
 }

@@ -38,9 +38,8 @@ func newDianaHostStatsTool(runtime *Runtime, event MessageEvent) *dianaHostStats
 func (t *dianaHostStatsTool) Name() string { return dianaHostStatsToolName }
 
 func (t *dianaHostStatsTool) Description() string {
-	return `读取本机运行状态：CPU 型号与占用、平均负载、内存、磁盘、Diana 自身的占用，` +
-		`以及这台机器能提供的温度、功率和电池读数。用户问「内存占了多少」「CPU 忙不忙」` +
-		`「现在多少度」「功耗多少」时调用它，不要用命令执行工具去拼这些数字。只有主人可以调用。`
+	return `读取本机 CPU、负载、内存、磁盘、Diana 自身占用，以及温度、功率和电池读数，仅主人。` +
+		`问这些时用它，不要用命令执行工具拼数字。`
 }
 
 func (t *dianaHostStatsTool) InputSchema() map[string]any {

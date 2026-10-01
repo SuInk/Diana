@@ -178,14 +178,16 @@ func newDianaPokeTool(runtime *Runtime, event MessageEvent) *dianaPokeTool {
 func (t *dianaPokeTool) Name() string { return dianaPokeToolName }
 
 func (t *dianaPokeTool) Description() string {
-	return "戳一戳（QQ 的拍一拍）：像人一样顺手用，不需要对方要求。适合的时候：对方刚戳了你想戳回去；叫了对方没回想再叫一下；开完玩笑或调侃时轻轻戳一下；对方说累、难过、想被安慰时戳一下表示你在；对方说晚安、回来了这类不需要长篇回应的话时，戳一下就是回应。" +
-		"不要用的时候：严肃讨论或正在吵架、对方心情很差不想被打扰、你们还不熟、对方说过别戳、刚戳过或群里正热闹。戳完正文照常写，不要在回复里说「我戳了你一下」。" +
-		"只能戳当前消息的发送者、被引用的人或被 @ 的人；user_id 省略时戳发送者。同一个人一分钟内只能戳一次，同一个会话十分钟内最多三次，超了会被拒绝，拒绝了就算了，不要反复重试。"
+	// 关键词由 TestPokeToolDescriptionUsesItNaturally 守护：鼓励自然地用，同时
+	// 列出不该用的场合，且不在正文里描述「我戳了你」。
+	return "戳一戳（QQ 拍一拍），像人一样顺手用：想戳回去、叫人没回、调侃后、对方需要安慰、说晚安或回来了时都可以。" +
+		"不要用的时候：严肃话题或吵架、对方心情差、还不熟、说过别戳、刚戳过或群里正热闹。" +
+		"正文照常写，不要在回复里说戳了谁。超频会被拒，拒了别重试。"
 }
 
 func (t *dianaPokeTool) InputSchema() map[string]any {
 	return toolObjectSchema(nil, map[string]any{
-		"user_id": toolStringParam("要戳的人：当前消息发送者、被引用的人或被 @ 的人的账号 ID；省略时戳发送者。"),
+		"user_id": toolStringParam("发送者、被引用或被 @ 者的账号，默认发送者"),
 	})
 }
 

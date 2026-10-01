@@ -27,16 +27,17 @@ func newDianaMCPMediaTool(r *Runtime, event MessageEvent) *dianaMCPMediaTool {
 
 func (t *dianaMCPMediaTool) Name() string { return dianaMCPMediaToolName }
 
+// 「描述画面前先看附图」来自 #778：模型曾凭文件名编图片内容。只发不存，模型曾以为
+// 发了就存进工作目录（#811）。media_id 只在内存暂存 30 分钟，过期由 Run 报错。
 func (t *dianaMCPMediaTool) Description() string {
-	return "把 MCP 工具返回的图片、音频或文件发到当前会话。MCP 结果里出现 media_id=mcpm_… 时用它，media_id 原样填进来。" +
-		"as 省略时图片按图片发、音频和其他内容按文件发；as=file 强制按原文件发。只认 MCP 返回的 media_id（暂存 30 分钟），不能发本机任意文件。" +
-		"描述画面前先看结果里附上的图，没附图的别编内容。它只发送不留存，要存进工作目录用 save_to_workspace source=mcp。"
+	return "把 MCP 结果里的图片、音频或文件（media_id=mcpm_…）发到当前会话，不能发本机文件。" +
+		"描述画面前先看结果附图，没附图别编内容。只发送不留存，要存进工作目录用 save_to_workspace source=mcp。"
 }
 
 func (t *dianaMCPMediaTool) InputSchema() map[string]any {
 	return toolObjectSchema([]string{"media_id"}, map[string]any{
-		"media_id": toolStringParam("MCP 结果里给出的 media_id，形如 mcpm_ 加 24 位十六进制。"),
-		"as":       toolEnumParam("auto 按类型决定；image 按图片发；file 按原文件发。省略时为 auto。", "auto", "image", "file"),
+		"media_id": toolStringParam("MCP 结果里的 media_id，原样填"),
+		"as":       toolEnumParam("auto 按类型（默认，音频按文件发）；file 强制按原文件发", "auto", "image", "file"),
 	})
 }
 

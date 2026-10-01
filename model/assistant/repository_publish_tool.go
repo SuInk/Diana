@@ -324,17 +324,25 @@ func (t *dianaGitHubTool) Name() string {
 	return dianaGitHubToolName
 }
 
-// Description 只说这个工具是什么，一句话。
+// Description 先一句话说这个工具是什么，再把 operation 的分工写在这里（原先挂在
+// operation 枚举说明里，600 多字）。
 //
-// 怎么调写在各自的参数说明里（operation 的语义、read_file 的 path、写操作的
-// user_confirmed_write），调完之后该做什么写在工具结果的 message 里——描述是每个请求
-// 都要付的钱，结果只在真用到时付一次。原先这段有 1300 字、按本项目的
-// estimateTextTokens 算 1656 token，其中六段和 operation 枚举、body/append_body/
-// numbers/user_confirmed_write 的参数说明、草稿结果的 message 或
-// repositoryDiscoveryReadingHint 逐字重复；「被拒绝时把 message 原样转达」那句挪进了
-// repositoryIssueResult.fail，跟着真正发生的那次失败回去。
+// 第一句要写成完整的动宾句并点明「由 operation 决定」。压成「GitHub 仓库、Issue
+// 和 PR：……」这种名词清单后，回放里主人说「把某人好感度改到 50」，gpt-6-sol 有
+// 6/10 次先拿 repo_search 随便搜一个词，换回这句后 0/8。
+//
+// 后面只留模型不说就会做错的几条：
+//   - 推荐仓库用 repo_search/repo，不靠网页搜索或印象。
+//   - 读代码和 diff 用专门的 operation，GitHub 链接按路径映射，不改用网页渲染
+//     （live_github_tool_shape_test 盯着）。
+//   - review 之前先 pull_files，只看 PR 描述不算读过代码。
+//   - review 只评论，不批准不合并；update/close/reopen 只对 Issue。
+//
+// 续读参数由结果 message 给出，确认码流程写在 user_confirmed_write 和草稿结果的
+// message 里，「被拒绝时把 message 原样转达」在 repositoryIssueResult.fail 里。
 func (t *dianaGitHubTool) Description() string {
-	description := `找仓库、搜索和管理 GitHub Issues，并读取、评论和 review Pull Request；具体做什么由 operation 决定。`
+	description := `找仓库、搜索和管理 GitHub Issues，并读取、评论和 review Pull Request；具体做什么由 operation 决定。
+推荐仓库用 repo_search/repo 查 star 和推送时间，不靠网页搜索。读代码和 diff 用 pull_files/commit_files/compare_files/read_file/list_files，链接按 /pull、/commit、/compare、/blob、/tree 对应，不用网页渲染。review 前先 pull_files；review 只评论，不批准不合并。update/close/reopen 仅 Issue，改前先 get。`
 	if t == nil || t.runtime == nil {
 		return description
 	}
@@ -351,74 +359,65 @@ func (t *dianaGitHubTool) Description() string {
 	repositories := repositoryPublishEventRepositories(t.event, isOwner, t.settings)
 	if isOwner {
 		if len(repositories) == 0 {
-			return description + "\n你是主人：写操作不受仓库白名单限制，按用户给出的 owner/repo 直接执行；读操作公开仓库全员可读，私有仓库主人可读。"
+			return description + "\n你是主人：写操作不受仓库白名单限制，按用户给的 owner/repo 直接执行。"
 		}
-		return description + "\n你是主人：写操作不受仓库白名单限制，任何 owner/repo 都可以直接写。白名单内的仓库：" + strings.Join(repositories, "、") +
-			"，用户只给出简称、别名或链接时优先按这份清单匹配；匹配不上就按用户给出的 owner/repo 直接执行，不要以「不在白名单」为由拒绝。"
+		return description + "\n你是主人：写操作不受仓库白名单限制。白名单仓库：" + strings.Join(repositories, "、") +
+			"，用户给简称时优先按它匹配，匹配不上照用户给的 owner/repo 执行。"
 	}
 	if len(repositories) == 0 {
-		return description + "\n当前会话没有已授权的写入仓库，create、comment 等写操作会因未授权被拒；读操作不受此限，公开仓库照常可读，不要以「尚未授权」为由拒绝读取公开仓库。"
+		return description + "\n当前会话无写入授权，写操作会被拒；公开仓库照常可读，别以未授权为由拒读。"
 	}
 	return description + "\n当前会话有写入授权的仓库：" + strings.Join(repositories, "、") +
-		"。写操作只对清单内仓库开放，用户只给出仓库简称、别名或链接时按清单匹配后直接填 repository，不要反问完整的 owner/repo；读操作不受清单限制，公开仓库按用户给出的 owner/repo 直接读，只有确实对不上时才追问。"
+		"。写操作仅限清单内，用户给简称时按清单填 repository，不要反问；读操作不受清单限制。"
 }
 
-// InputSchema 声明参数契约。写操作对当前用户消息原文的要求写在 user_confirmed_write
-// 的字段说明里——这是最容易踩的一条，放在参数旁边比埋在描述中段更显眼。
+// InputSchema 声明参数契约。写操作要走确认码写在 user_confirmed_write 的字段说明里
+// ——这是最容易踩的一条，放在参数旁边比埋在描述中段更显眼。
+// comments 的 line 必须落在 patch 里、标题/正文超长截断、numbers 超上限，都由
+// 代码校验或返回 message 说明，这里不重复。
 func (t *dianaGitHubTool) InputSchema() map[string]any {
 	return toolObjectSchema([]string{"operation"}, map[string]any{
-		"operation": toolEnumParam("要执行的操作。repo_search 按关键词找公开仓库，repo 读单个仓库的 star、fork 和最近推送时间——给用户推荐仓库时用这两个，不要靠网页搜索或印象。"+
-			"search 在某个仓库里按关键词找 Issue 或 PR（用 kind 选）；get 读回标题、正文和最近评论，PR 另带分支、合并状态、改动统计和已有 review；"+
-			"pull_files 读 PR 改动的文件和 patch，review 之前必须先调它，只看 PR 描述不算读过代码；commit_files 读单个提交的改动，compare_files 读两个版本之间的改动；"+
-			"read_file 读仓库里某个文件的代码，list_files 列目录。读仓库代码和 diff 一律用这几个，不要改用网页渲染；用户贴的 GitHub 链接照路径对应："+
-			"/pull/N 用 pull_files，/commit/SHA 用 commit_files，/compare/A...B 用 compare_files，/blob/REF/PATH#L10-L20 用 read_file，/tree/REF/PATH 用 list_files。"+
-			"结果装不下时 message 会给出续读参数（start_line、patch_line、file_offset），照着传就能接着读。"+
-			"review 只提交评论，不批准也不要求修改；合并 PR、关闭 PR、改 PR 本身都不支持。"+
-			"update、close、reopen 只能用于 Issue；get、comment 可用于 Issue 和 PR；pull_files、review 只能用于 PR。"+
-			"要改已有 Issue 之前先 get 读回原文。create 在群聊里由非管理人员发起时会存成草稿，等管理人员 approve 才真正写入。",
+		"operation": toolEnumParam("要执行的操作，分工见工具描述。",
 			"repo_search", "repo", "search", "get", "pull_files", "commit_files", "compare_files", "read_file", "list_files", "create", "update", "comment", "review", "close", "reopen", "approve", "cancel_draft", "list_drafts"),
-		"repository": toolStringParam("目标仓库，写成 owner/repo。repo_search、approve、cancel_draft、list_drafts 不需要。"),
-		"number":     toolIntParam("目标 Issue 或 PR 编号；get、pull_files、review 必填，update、comment、close、reopen 单个目标时用它。", 1, 1_000_000),
-		"numbers":    toolIntArrayParam("update、comment、close、reopen 的批量目标：对这些 Issue 执行同样的改动，一份草稿、一个确认码；最多 "+itoa(repositoryIssueBatchLimit)+" 个。", 1, 1_000_000),
-		"query":      toolStringParam("search 与 repo_search 的检索关键词，只写普通词，不要带 repo:、language: 这类限定符。"),
-		"kind":       toolEnumParam("search 专用：搜 Issue（默认）、PR 还是两者都搜。", "issue", "pull_request", "all"),
-		"language":   toolStringParam("repo_search 可选：只要这门语言的仓库，例如 go、rust、typescript。"),
-		"sort": toolEnumParam("repo_search 可选：结果排序。best_match 按相关度（默认）；用户问「最流行」用 stars，问「还有人维护吗」用 updated。",
+		"repository": toolStringParam("owner/repo；repo_search 与草稿类操作不需要。"),
+		"number":     toolIntParam("Issue 或 PR 编号。", 1, 1_000_000),
+		"numbers":    toolIntArrayParam("多个 Issue 做同样改动，合成一份草稿；最多 "+itoa(repositoryIssueBatchLimit)+" 个。", 1, 1_000_000),
+		"query":      toolStringParam("检索词，不带 repo:、language: 等限定符。"),
+		"kind":       toolEnumParam("search 专用，默认 issue。", "issue", "pull_request", "all"),
+		"language":   toolStringParam("repo_search 可选：语言，如 go。"),
+		"sort": toolEnumParam("repo_search 排序，默认 best_match。",
 			"best_match", "stars", "forks", "updated"),
-		"limit":       toolIntParam("repo_search 可选：最多返回几个仓库，默认 "+itoa(repositoryDiscoveryDefaultLimit)+"。", 1, repositoryDiscoveryMaxLimit),
-		"path":        toolStringParam("read_file 的文件路径；list_files 的目录，不传就是根目录。"),
-		"ref":         toolStringParam("分支、标签或提交 SHA。commit_files 必填（要读的提交）；read_file、list_files 可选，不传读默认分支，read_file 传了 number 且不传 ref 时读 PR head。"),
-		"base":        toolStringParam("compare_files 必填：对比的起点（分支、标签或提交）。"),
-		"head":        toolStringParam("compare_files 必填：对比的终点（分支、标签或提交）。"),
-		"recursive":   toolBoolParam("list_files 可选：true 时列出 path 下所有层级的文件，默认只列这一层。"),
-		"file_offset": toolIntParam("pull_files、commit_files、compare_files、list_files 续读用：跳过前面这么多项，按上一次 message 给的值传。", 0, 1_000_000),
-		"patch_line":  toolIntParam("pull_files、commit_files、compare_files 续读用：从 patch 的第几行开始给，只在 paths 只匹配一个文件时有效，按上一次 message 给的值传。", 1, 10_000_000),
-		"start_line":  toolIntParam("read_file 可选：从第几行开始读，默认 1。", 1, 10_000_000),
-		"end_line":    toolIntParam("read_file 可选：读到第几行，默认往后 "+itoa(repositoryFileDefaultLines)+" 行，一次最多 "+itoa(repositoryFileMaxLines)+" 行。", 1, 10_000_000),
-		"paths":       toolStringArrayParam("pull_files、commit_files、compare_files 可选：只读这些文件或目录的改动，patch 给得更完整；不传则列出全部文件、每个文件只给开头一段 patch。"),
+		"limit":       toolIntParam("repo_search 返回个数，默认 "+itoa(repositoryDiscoveryDefaultLimit)+"。", 1, repositoryDiscoveryMaxLimit),
+		"path":        toolStringParam("read_file 的文件路径；list_files 的目录，默认根目录。"),
+		"ref":         toolStringParam("分支/标签/SHA，commit_files 必填；默认为默认分支，带 number 时为 PR head。"),
+		"base":        toolStringParam("compare_files 起点。"),
+		"head":        toolStringParam("compare_files 终点。"),
+		"recursive":   toolBoolParam("list_files 是否递归，默认 false。"),
+		"file_offset": toolIntParam("续读：按上次 message 给的值传。", 0, 1_000_000),
+		"patch_line":  toolIntParam("续读：按上次 message 给的值传。", 1, 10_000_000),
+		"start_line":  toolIntParam("read_file 起始行，默认 1。", 1, 10_000_000),
+		"end_line":    toolIntParam("read_file 结束行，一次最多 "+itoa(repositoryFileMaxLines)+" 行。", 1, 10_000_000),
+		"paths":       toolStringArrayParam("只读这些文件或目录的 diff，patch 更完整；默认全部、各给开头一段。"),
 		"comments": map[string]any{
 			"type":        "array",
-			"description": "review 专用：行内评论，最多 " + itoa(repositoryPullRequestReviewCommentLimit) + " 条。line 必须是 pull_files 的 patch 里出现过的行号；side 为 RIGHT 指新代码（默认），LEFT 指被删掉的旧代码。",
+			"description": "review 行内评论，最多 " + itoa(repositoryPullRequestReviewCommentLimit) + " 条，line 须在 patch 内。",
 			"items": toolObjectSchema([]string{"path", "line", "body"}, map[string]any{
-				"path": toolStringParam("文件路径，和 pull_files 返回的 path 一致。"),
-				"line": toolIntParam("评论落在的行号。", 1, 1_000_000),
-				"side": toolEnumParam("RIGHT 新代码，LEFT 旧代码。", "RIGHT", "LEFT"),
-				"body": toolStringParam("这条行内评论的内容。"),
+				"path": toolStringParam("文件路径。"),
+				"line": toolIntParam("行号。", 1, 1_000_000),
+				"side": toolEnumParam("RIGHT 新代码（默认），LEFT 旧代码。", "RIGHT", "LEFT"),
+				"body": toolStringParam("评论内容。"),
 			}),
 		},
-		"title":       toolStringParam("create 必填、update 可选：Issue 标题，最多 " + itoa(repositoryIssueTitleLimit) + " 字符。"),
-		"body":        toolStringParam("create 的正文、comment 的评论内容、review 的总体意见；update 时整段覆盖原正文，最多 " + itoa(repositoryIssueBodyLimit) + " 字符。不得写入凭据、运行时 ID 或私密上下文。"),
-		"append_body": toolStringParam("update 专用：追加到现有正文末尾的内容，原正文保持不动；给已有 Issue 补充信息（复现版本、补图说明）用它，不要用 body 重写整段。"),
-		"labels":      toolStringArrayParam("要设置的标签；传空数组表示清空。"),
-		"assignees":   toolStringArrayParam("要设置的负责人；传空数组表示清空。"),
-		"milestone":   toolStringParam("要设置的里程碑；传 null 表示清空。"),
-		"user_confirmed_write": toolBoolParam("确认当前这条用户消息就是在要求执行这次写入。写操作必填 true。" +
-			"写操作不会直接落到 GitHub：create/update/comment/review/close/reopen 都先存成待审批草稿并返回确认码，" +
-			"把草稿内容和确认码复述给用户，等有权限的人原样打出确认码后再用 approve 提交。" +
-			"后端不再按用户消息的措辞核对仓库或编号，只认确认码；对多个 Issue 做同样的改动用 numbers 合成一份草稿。"),
-		"operation_id":       toolStringParam("幂等标识：同一次写入重试时传相同值，避免重复发布。"),
-		"draft_id":           toolStringParam("approve 与 cancel_draft 必填：要审批或取消的草稿 ID，可用 list_drafts 查到。"),
-		"confirmation_token": toolStringParam("审批流程返回的确认令牌，按提示原样回传。"),
+		"title":                toolStringParam("Issue 标题，create 必填。"),
+		"body":                 toolStringParam("正文/评论/review 总评；update 时覆盖原文。勿写凭据、运行时 ID 或私密内容。"),
+		"append_body":          toolStringParam("update 专用：追加到正文末尾；补充信息用它，不用 body 重写。"),
+		"labels":               toolStringArrayParam("标签，空数组为清空。"),
+		"assignees":            toolStringArrayParam("负责人，空数组为清空。"),
+		"milestone":            toolStringParam("里程碑，null 为清空。"),
+		"user_confirmed_write": toolBoolParam("本条消息确实要求写入时传 true，写操作必填。草稿和确认码复述给用户，有权限者原样打出后再 approve。"),
+		"operation_id":         toolStringParam("幂等标识，重试时传相同值。"),
+		"draft_id":             toolStringParam("approve、cancel_draft 必填，可用 list_drafts 查。"),
+		"confirmation_token":   toolStringParam("审批返回的确认令牌，原样回传。"),
 	})
 }
 

@@ -13,11 +13,13 @@ type dianaTelegramImagesTool struct {
 
 func (t *dianaTelegramImagesTool) Name() string { return "telegram_images" }
 func (t *dianaTelegramImagesTool) Description() string {
-	return "按当前会话历史消息 ID 复用 Telegram 原有图片的 file_id，直接发送，不重新下载上传。传一条消息发送单图，2 至 10 条消息发送相册；每条选该消息的第一张照片。不接受猜测的 file_id 或其他会话消息。需要判断图片内容时先用 history_media 看图。"
+	return "按当前会话历史消息 ID 复用 Telegram 原图 file_id 直接发送，1 条为单图、2～10 条为相册，每条取第一张照片。要判断图片内容先用 history_media 看图。"
 }
+
 func (t *dianaTelegramImagesTool) InputSchema() map[string]any {
-	return toolObjectSchema([]string{"message_ids"}, map[string]any{"message_ids": toolStringArrayParam("当前会话内含照片的 1 至 10 个历史消息 ID，按发送顺序。")})
+	return toolObjectSchema([]string{"message_ids"}, map[string]any{"message_ids": toolStringArrayParam("当前会话内含照片的 1～10 个消息 ID，按发送顺序")})
 }
+
 func attachmentInputStrings(value any) []string {
 	var result []string
 	switch values := value.(type) {

@@ -53,11 +53,16 @@ func finalizeContentLayoutIssue(content string) string {
 // 「我这轮没什么要补的」和「我拒绝回答」是两件事，必须分开表达，否则模型只能在
 // 「硬凑一句」和「被记一次拒答」之间挑一个。silent 是工具调用上的字段，用户消息
 // 里写什么都到不了这里。
+//
+// 参数说明里压成短句的几条都是事故规则：真实换行会被网关渲染坏（finalizeLayoutIssue）；
+// 「勿写成 JSON」防整个信封被当正文发出（见 finalizeEnvelopeFromText）；「工具调用旁
+// 的正文不算说过」防模型以为已说过而静默吞掉回复（#912）；「拒绝要说出来」防把拒答
+// 伪装成 silent（8c693bbd）。
 func finalizeToolDefinition(ledger *claimEvidenceLedger, imagePending bool, extra ...FinalizeField) llm.ToolDefinition {
 	properties := map[string]any{
-		"content":       toolStringParam("给用户看的最终自然语言回复，必填且不能为空（silent=true 时才可以留空）。正文禁止真实 CR/LF；下一条消息用 [diana-msg]，同一消息内换行用 [diana-line]。不要写成 JSON。"),
-		"silent":        toolBoolParam("这一轮不发任何消息时填 true，content 留空。它不代表你已经说过话：写在工具调用旁边的正文不会发给用户，只有 say 工具发出去的才算。只在确实没有值得说的话、或对方已经在收尾且你们互相道过别时用。要拒绝就正常说出来，不要用它。"),
-		"silent_reason": toolStringParam("silent=true 时用一句话说明为什么不回复。只写进运行日志，不发给用户。"),
+		"content":       toolStringParam("最终回复，silent 时留空；禁真实换行，分条 [diana-msg]，换行 [diana-line]；勿写 JSON"),
+		"silent":        toolBoolParam("true 则本轮不发消息。仅无话可说或已道别时用，拒绝要说出来；工具调用旁的正文不算说过"),
+		"silent_reason": toolStringParam("不回复的原因，只进日志"),
 	}
 	required := []string{"content"}
 	// Runtime guards enforce conditional requirements without mutating schemas.
@@ -71,7 +76,7 @@ func finalizeToolDefinition(ledger *claimEvidenceLedger, imagePending bool, extr
 	}
 	return llm.ToolDefinition{
 		Name:        finalizeToolName,
-		Description: "结束本轮并提交最终答复。不再需要其他工具时调用它。content 禁止真实换行，只能用 [diana-msg] 表示下一条消息、[diana-line] 表示当前消息内换行。这一轮决定不说话时填 silent=true 并留空 content。",
+		Description: "结束本轮并提交最终答复，不再需要其他工具时调用。",
 		Parameters:  toolObjectSchema(required, properties),
 		// 畸形的收尾是唯一一种必然要花掉一整轮修复的协议错误，值得在解码层约束。
 		Strict: true,

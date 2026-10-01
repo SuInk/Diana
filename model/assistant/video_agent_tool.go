@@ -68,18 +68,19 @@ func newDianaVideoTool(runtime *Runtime, event MessageEvent, relationship Relati
 
 func (t *dianaVideoTool) Name() string { return dianaVideoToolName }
 
+// 视频要几分钟，模型曾等待、重复调用或说成已经生成好；次数用完后曾换途径交付（#851）。
 func (t *dianaVideoTool) Description() string {
-	return "异步生成一段短视频并发到当前会话：只给 prompt 是文生视频；use_image=true 或填 source_message_ids 时以那张图为首帧做图生视频。视频要几分钟才能生成完，调用后直接继续输出 final 文字回复，说清准备生成什么即可，不要等待、不要重复调用，也不要说成已经生成好。只在用户明确要视频时调用。结果里 quota_exceeded 为 true 表示今天的视频次数用完了，照 notice 如实告诉用户，不要换别的途径交付。"
+	return "异步生成短视频并发到当前会话，只在用户明确要视频时用。填 use_image 或 source_message_ids 为图生视频。调用后直接写文字回复说清准备生成什么，不等待、不重复调用、不说成已生成好。quota_exceeded 为 true 时照 notice 转告，不换途径交付。"
 }
 
 func (t *dianaVideoTool) InputSchema() map[string]any {
 	return toolObjectSchema([]string{"prompt"}, map[string]any{
-		"prompt":             toolStringParam("交给视频模型的完整、自包含的画面描述：主体、动作、镜头、风格。不要写成对话口吻，也不要依赖上下文里的指代。"),
-		"caption":            toolStringParam("视频完成后随视频发送的一句短文字，可选。"),
-		"use_image":          map[string]any{"type": "boolean", "description": "用当前消息或引用消息里的图作为首帧（图生视频）。"},
-		"source_message_ids": toolStringArrayParam("首帧图所在消息的 message_id，用户指的是聊天记录里某条消息的图时填；只取第一张图。"),
-		"seconds":            map[string]any{"type": "integer", "description": "视频时长（秒），可选；不填用模型分配里的默认值。", "minimum": 1, "maximum": dianaVideoMaxSeconds},
-		"size":               toolStringParam("分辨率，形如 1280x720 或 720x1280，可选；不填用模型分配里的默认值。"),
+		"prompt":             toolStringParam("给视频模型的完整自包含画面描述（主体、动作、镜头、风格），不用上下文指代"),
+		"caption":            toolStringParam("随视频发送的一句短文字"),
+		"use_image":          map[string]any{"type": "boolean", "description": "用当前或引用消息里的图作首帧"},
+		"source_message_ids": toolStringArrayParam("首帧图所在消息的 message_id，只取第一张"),
+		"seconds":            map[string]any{"type": "integer", "description": "时长（秒），默认按模型分配", "minimum": 1, "maximum": dianaVideoMaxSeconds},
+		"size":               toolStringParam("分辨率，如 1280x720，默认按模型分配"),
 	})
 }
 

@@ -22,10 +22,10 @@ const renderFinalizeFieldName = "render"
 func renderFinalizeField() agent.FinalizeField {
 	return agent.FinalizeField{
 		Name: renderFinalizeFieldName,
-		Description: "可选。回复里有多列对比、排行榜/榜单、参数对照这类行列数据时，把这部分写成 GitHub 风格 Markdown 表格放在这里，" +
-			"运行时会渲染成一张图片随回复发出（聊天窗口不渲染 Markdown，表格发成文字会散成竖线）。" +
-			"填了它，content 只写一两句结论或点评，不要把表里的内容再抄一遍。" +
-			"普通聊天、解释说明、要对方复制的草稿/代码/命令、三五条的短列表都不要填。",
+		// 「content 只写结论」防表格内容在正文里再抄一遍；排除清单防普通聊天误填，
+		// 回放里不该出图的 126 条 0 误填靠的就是它。
+		Description: "回复里有多列对比、排行榜、参数对照这类行列数据时，把它写成 Markdown 表格填这里，运行时渲染成图随回复发出。" +
+			"填了 content 只写一两句结论，不抄表。普通聊天、解释、要复制的代码/命令、三五条短列表不填。",
 	}
 }
 

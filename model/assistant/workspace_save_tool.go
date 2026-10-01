@@ -51,25 +51,25 @@ func newDianaSaveToWorkspaceTool(r *Runtime, event MessageEvent) *dianaSaveToWor
 
 func (t *dianaSaveToWorkspaceTool) Name() string { return dianaSaveToWorkspaceToolName }
 
+// 二进制走这里、文本走 write_file：模型曾用 write_file 写图片字节，存下来是坏文件
+// （#811）。source=chat 也能取机器人自己发出的生成图。默认目录 downloads/ 7 天、
+// outputs/ 30 天清理；keep/ 长期区每台机器人上限 2 GB，超了 Run 会拒绝。
 func (t *dianaSaveToWorkspaceTool) Description() string {
-	return "把图片、视频、语音、PDF、压缩包这类二进制文件原样存进 Agent 工作目录。source=chat 按 message_id 取当前会话里某条消息的媒体（包括你自己发出去的生成图），" +
-		"source=url 下载公网文件，source=mcp 按 media_id 存 MCP 工具返回的媒体。按内容认类型并纠正扩展名，返回实际保存的 path、大小、类型和图片宽高；" +
-		"没指定 path 时聊天媒体和网址存到 " + agent.WorkspaceDownloadsDir + "/（7 天后清理），机器人自己产出的存到 " + agent.WorkspaceOutputsDir + "/（30 天后清理），同名不覆盖、自动加序号。" +
-		"主人说存下来、留着、别过期、放持久目录时传 keep=true，存进本机器人的长期保存区 " + agent.WorkspaceKeepDir + "/（不自动清理，每台机器人上限 2 GB，超了会拒绝），并用 description 写一句这是什么；没这么说就用默认目录。" +
-		"文本文件用 write_file；存好后要发给用户用 send_attachment，要整理用 manage_files。仅主人可用。"
+	return "把图片、视频、语音、PDF、压缩包等二进制文件原样存进 Agent 工作目录，仅主人。按内容纠正扩展名，返回实际 path。" +
+		"文本文件用 write_file；存好要发给用户用 send_attachment，整理用 manage_files。"
 }
 
 func (t *dianaSaveToWorkspaceTool) InputSchema() map[string]any {
 	return toolObjectSchema([]string{"source"}, map[string]any{
-		"source":      toolEnumParam("从哪里存：chat 当前会话的消息媒体，url 公网文件，mcp MCP 工具返回的媒体。", saveSourceChat, saveSourceURL, saveSourceMCP),
-		"message_id":  toolStringParam("source=chat 必填：带媒体的那条消息的 message_id。"),
-		"media_index": toolIntParam("source=chat 时取消息里第几个媒体（图片、视频、语音、文件按出现顺序统一编号，从 1 开始）；消息里只有一个媒体时可省略。", 1, 64),
-		"url":         toolStringParam("source=url 必填：公网 HTTP(S) 文件直链。"),
-		"media_id":    toolStringParam("source=mcp 必填：MCP 结果里的 media_id（mcpm_ 开头）。"),
-		"path":        toolStringParam("可选：工作目录内的相对保存路径。以 / 结尾表示目录，文件名自动取；给了文件名时扩展名仍按内容纠正。keep=true 时是长期区内的相对路径。"),
-		"overwrite":   toolBoolParam("可选：目标文件已存在时覆盖，默认 false（自动改名加序号）。"),
-		"keep":        toolBoolParam("可选：存进长期保存区 " + agent.WorkspaceKeepDir + "/，不会被自动清理。主人要求存下来、留着、别过期、放持久目录时传 true。"),
-		"description": toolStringParam("keep=true 时写一句这是什么（例如「群活动海报 9 月版」），记进长期区索引，以后靠它认出这个文件。"),
+		"source":      toolEnumParam("chat 会话消息媒体（含你发的生成图），url 公网文件，mcp MCP 媒体", saveSourceChat, saveSourceURL, saveSourceMCP),
+		"message_id":  toolStringParam("source=chat，带媒体的消息 ID"),
+		"media_index": toolIntParam("source=chat，消息里第几个媒体，从 1 起，只有一个可省略", 1, 64),
+		"url":         toolStringParam("source=url，公网文件直链"),
+		"media_id":    toolStringParam("source=mcp，MCP 结果里的 media_id"),
+		"path":        toolStringParam("相对保存路径，/ 结尾为目录；默认存 " + agent.WorkspaceDownloadsDir + "/ 或 " + agent.WorkspaceOutputsDir + "/，会定期清理"),
+		"overwrite":   toolBoolParam("同名时覆盖，默认自动加序号"),
+		"keep":        toolBoolParam("存进长期区 " + agent.WorkspaceKeepDir + "/ 不清理，仅主人说要留着时传"),
+		"description": toolStringParam("keep=true 时写一句这是什么，记进长期区索引"),
 	})
 }
 

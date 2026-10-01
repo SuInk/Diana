@@ -14,7 +14,6 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
@@ -127,18 +126,23 @@ func (t *dianaImageTool) Name() string {
 	return dianaImageToolName
 }
 
+// Description 里的几条约束都来自线上问题：
+//   - 运行时会替模型发「开始处理」，模型再说一遍或二次调用会刷屏重复。
+//   - 用户要求先查资料再画时，模型曾凭空编 prompt 内容。
+//   - sources_used 是实际用到的原图，模型曾把没用上的候选图说成用了（#816）。
+//   - 次数用完后模型曾换搜图/HTML 渲染等途径变相出图（#851）。
 func (t *dianaImageTool) Description() string {
 	operations := make([]string, 0, 2)
 	if t.relationship.AllowImageGeneration {
-		operations = append(operations, `"generate"（根据完整文字 prompt 生成新图片）`)
+		operations = append(operations, "generate")
 	}
 	if t.relationship.AllowImageEditing {
-		operations = append(operations, `"edit"（编辑当前、引用或指定消息里的图片/成员头像）`)
+		operations = append(operations, "edit")
 	}
 	if len(operations) == 0 {
 		operations = append(operations, "无")
 	}
-	return `异步生成或编辑图片。工具受理后由运行时替你告诉用户「开始处理」，图片在后台完成后自动发送。调用后直接继续输出 final 文字回复即可，不要等待图片，不要再次调用本工具，也不要重复说一遍「正在处理」。当前允许操作：` + strings.Join(operations, "、") + `。要对多张参考图逐张各出一张，用 source_mode="each"。如果用户要求先搜索、核验网页或读取外部资料再出图，必须先完成搜索或浏览器调用，prompt 里只能写已确认的事实，不能虚构没查到的内容。结果里的 sources_used 是这次实际用到的原图，回复里说用了什么只能照它说。结果里 quota_exceeded 为 true 表示今天的生图次数用完了，照 notice 如实告诉用户，不要换别的途径出图。`
+	return `异步生成或编辑图片，后台完成后自动发送。当前可用：` + strings.Join(operations, "、") + `。受理后运行时会告诉用户开始处理，你直接写文字回复，不等图、不重复调用、不再说「正在处理」。用户要先查资料的，先查完，prompt 只写已确认的事实。说用了哪些原图以结果 sources_used 为准。quota_exceeded 为 true 时照 notice 转告，不换途径出图。`
 }
 
 // imageAnnouncementSubjectMaxRunes 是开场白里能带上的画面描述长度上限。
@@ -200,35 +204,23 @@ func (t *dianaImageTool) InputSchema() map[string]any {
 		operations = append(operations, "edit")
 	}
 	properties := map[string]any{
-		"operation": toolEnumParam("generate 凭文字生成新图片，不读任何原图；edit 以图片或头像为底修改。填了 identity_sources 或 source_message_ids 就是 edit；省略时有原图来源按 edit 处理，否则按 generate。", operations...),
-		"prompt":    toolStringParam("交给图片模型的完整、自包含的最终提示词。不要写成对话口吻，也不要依赖上下文里的指代。"),
-		"caption":   toolStringParam("图片完成后随图发送的一句短文字，可选。"),
+		"operation": toolEnumParam("generate 凭文字出新图；edit 以图或头像为底修改。省略时有原图来源按 edit", operations...),
+		"prompt":    toolStringParam("给图片模型的完整自包含提示词，不用对话口吻和上下文指代"),
+		"caption":   toolStringParam("随图发送的一句短文字"),
 	}
 	// 要编辑谁的头像由你来判断：运行时不去读用户的措辞，只负责把你点名的 id 换成
 	// 头像地址，并核对这个人在当前会话里确实存在。
+	//
+	// identity_sources 说明里的「优先于当前消息里的图」来自 #816：点名头像时
+	// 当前消息里的表情曾把头像顶掉。按名字指人要先查 user_id，模型曾编造 id。
+	// source_message_ids 的「候选图要点名」「重试填最初原图」分别来自 #816、#744。
 	if t.relationship.AllowImageEditing {
 		properties["identity_sources"] = toolStringArrayParam(
-			`用户说到某个人的头像（包括「把 XX 的头像改成……」「照着 XX 头像画」）时，在这里点名头像来源；当前消息或引用消息带着别的图（例如一张表情）也照样要填，点名的来源优先，不会被当前消息里的图顶掉。` +
-				`可选值："` + avatarSourceSender + `"（本条消息的发送者）、"` + avatarSourceBot + `"（机器人自己）、"` +
-				avatarSourceGroup + `"（本群的群头像）、"` + avatarSourceGroupPrefix + `<group_id>"（私聊里用户明确给出群号时的群头像）、"` +
-				avatarSourceMemberPrefix + `<user_id>"（指定成员，user_id 使用当前平台的账号标识或其脱敏别名）。` +
-				`用户按名字或昵称指人时，先从上下文或群成员工具里查出对应 user_id 再填，不要编造；最多 ` +
-				strconv.Itoa(maxAvatarImageSources) + ` 个。`)
-	}
-	if t.relationship.AllowImageEditing {
-		properties["source_message_ids"] = toolStringArrayParam(
-			`要改的图在哪几条消息里：填聊天记录、媒体索引或「稍早发的图」里的 message_id，可以多条，每条消息里的所有图片都会作为原图。` +
-				`用户指的是某条具体消息里的图（「这张」「刚才那几张」「他刚发的图」「重试」「继续改」）时就填；同一个人稍早发的候选图不会自动当原图，要用就在这里点名。` +
-				`重试或继续改上一张时填最初那张原图（或上一次生成结果）所在的消息。填了它和 identity_sources 就只用这些来源；两个都不填才按当前消息、引用消息里的图去找。最多 ` +
-				strconv.Itoa(maxImageEditSourceMessages) + ` 条。`)
-		properties["source_labels"] = toolStringArrayParam(
-			`与 identity_sources 一一对应的说明文字，可选，逐张发送时原样作为对应图片附带的说明发出（例如「Winter 的头像」），让大家知道每张是谁的。` +
-				`填写时数量必须与 identity_sources 相同。`)
-		properties["source_mode"] = toolEnumParam(
-			`operation="edit" 时多张参考图怎么用。combine：把它们合成为一张（默认）。`+
-				`each：对每张各做一次编辑，产出多张图一起发出——用户要求「每个人的头像都处理一下」`+
-				`「挨个改」这类逐张产出时用它。`,
-			"combine", "each")
+			`点名头像，优先于当前消息里的图：` + avatarSourceSender + `、` + avatarSourceBot + `、` + avatarSourceGroup + `、` +
+				avatarSourceGroupPrefix + `<群号>、` + avatarSourceMemberPrefix + `<user_id>（当前平台账号，按名字指人先查出 id）`)
+		properties["source_message_ids"] = toolStringArrayParam(`原图所在消息 ID，整条的图都用；稍早的候选图要在此点名，重试填最初原图所在消息`)
+		properties["source_labels"] = toolStringArrayParam(`与 identity_sources 一一对应、数量相同，逐张发送时作该图说明`)
+		properties["source_mode"] = toolEnumParam(`多张参考图：combine 合成一张（默认）；each 逐张各出一张`, "combine", "each")
 	}
 	return toolObjectSchema([]string{"prompt"}, properties)
 }

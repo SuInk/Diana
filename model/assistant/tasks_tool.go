@@ -86,16 +86,17 @@ func (t *dianaTasksTool) Name() string {
 	return "tasks"
 }
 
+// 「不要分别去查」留着：用户问全部任务时，模型会挨个调 reminder、subscription、
+// event_trigger 的 list，三轮还容易漏掉一类。
 func (t *dianaTasksTool) Description() string {
-	return `一次查询持久化存储中的全部一次性提醒、事件触发任务和周期订阅，含运行中、已使用、已取消状态以及是否占用额度。用户问「我的所有任务/提醒/订阅」「现在有哪些定时任务」时必须使用本工具，不要分别猜测。`
+	return `一次列出全部一次性提醒、事件触发任务和周期订阅，含状态和额度占用。用户问「我有哪些任务/提醒/订阅」时用它，不要分别去查。`
 }
 
 func (t *dianaTasksTool) InputSchema() map[string]any {
 	return toolObjectSchema([]string{"operation"}, map[string]any{
-		"operation": toolEnumParam("要执行的操作。", "list"),
-		"scope": toolEnumParam("查询范围。默认 mine 只返回当前用户；all 查询所有用户，仅机器人主人可用。",
-			"mine", "all"),
-		"target_user_id": toolStringParam("查询指定用户的任务，仅机器人主人可用。"),
+		"operation":      toolEnumParam("固定 list", "list"),
+		"scope":          toolEnumParam("mine 只看自己（默认）；all 所有用户，仅主人", "mine", "all"),
+		"target_user_id": toolStringParam("查指定用户，仅主人"),
 	})
 }
 

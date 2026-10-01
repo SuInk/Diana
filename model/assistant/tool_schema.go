@@ -33,59 +33,55 @@ func toolObjectSchema(required []string, properties map[string]any) map[string]a
 }
 
 func toolStringParam(description string) map[string]any {
-	return map[string]any{"type": "string", "description": description}
+	return describedParam(description, map[string]any{"type": "string"})
 }
 
 func toolEnumParam(description string, values ...string) map[string]any {
-	return map[string]any{"type": "string", "description": description, "enum": values}
+	return describedParam(description, map[string]any{"type": "string", "enum": values})
 }
 
 func toolBoolParam(description string) map[string]any {
-	return map[string]any{"type": "boolean", "description": description}
+	return describedParam(description, map[string]any{"type": "boolean"})
 }
 
 func toolNumberParam(description string, minimum, maximum float64) map[string]any {
-	return map[string]any{"type": "number", "description": description, "minimum": minimum, "maximum": maximum}
+	return describedParam(description, map[string]any{"type": "number", "minimum": minimum, "maximum": maximum})
 }
 
 func toolIntParam(description string, minimum, maximum int) map[string]any {
-	return map[string]any{"type": "integer", "description": description, "minimum": minimum, "maximum": maximum}
+	return describedParam(description, map[string]any{"type": "integer", "minimum": minimum, "maximum": maximum})
 }
 
 func toolStringArrayParam(description string) map[string]any {
-	return map[string]any{
-		"type":        "array",
-		"description": description,
-		"items":       map[string]any{"type": "string"},
-	}
+	return describedParam(description, map[string]any{
+		"type":  "array",
+		"items": map[string]any{"type": "string"},
+	})
 }
 
 // toolIntArrayParam 描述整数数组，比如一批 Issue 编号。
 func toolIntArrayParam(description string, minimum, maximum int) map[string]any {
-	return map[string]any{
-		"type":        "array",
-		"description": description,
-		"items":       map[string]any{"type": "integer", "minimum": minimum, "maximum": maximum},
-	}
+	return describedParam(description, map[string]any{
+		"type":  "array",
+		"items": map[string]any{"type": "integer", "minimum": minimum, "maximum": maximum},
+	})
 }
 
 // toolEnumArrayParam 描述取值受限的字符串数组，比如「只收这几种动态」。
 func toolEnumArrayParam(description string, values ...string) map[string]any {
-	return map[string]any{
-		"type":        "array",
-		"description": description,
-		"items":       map[string]any{"type": "string", "enum": values},
-	}
+	return describedParam(description, map[string]any{
+		"type":  "array",
+		"items": map[string]any{"type": "string", "enum": values},
+	})
 }
 
 // toolItemsParam 描述批量创建用的 items 数组。
 func toolItemsParam(description string, maxItems int, required []string, properties map[string]any) map[string]any {
-	return map[string]any{
-		"type":        "array",
-		"description": description,
-		"maxItems":    maxItems,
-		"items":       toolObjectSchema(required, properties),
-	}
+	return describedParam(description, map[string]any{
+		"type":     "array",
+		"maxItems": maxItems,
+		"items":    toolObjectSchema(required, properties),
+	})
 }
 
 // toolStringValues 把模型给的数组读成 []string。模型偶尔会把单个值直接写成字符串
@@ -137,4 +133,13 @@ func toolInputBool(input map[string]any, key string) bool {
 	default:
 		return intFromAny(raw) != 0
 	}
+}
+
+// describedParam 只在说明非空时写 description：名字和类型已经说清的参数不带说明，
+// 省得每轮都发一个空字段。
+func describedParam(description string, property map[string]any) map[string]any {
+	if description != "" {
+		property["description"] = description
+	}
+	return property
 }

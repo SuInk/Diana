@@ -49,11 +49,13 @@ var scheduleWeekdayOrder = []string{"mon", "tue", "wed", "thu", "fri", "sat", "s
 
 const scheduleWeek = 7 * 24 * time.Hour
 
+// 日期规则的参数说明只写含义和格式。规则和 interval 搭不上、没给 at、三种规则混用，
+// 都由 parseScheduleDayRule / checkRuleInterval / firstScheduleTrigger 返回具体原因。
 const (
-	scheduleWeekdaysDescription  = "按周重复时可选：每周的哪几天，例如每周一三五传 [\"mon\",\"wed\",\"fri\"]，工作日传 mon~fri 五天。interval 必须是整周（1w，隔周 2w）；必须传 at 定从哪周开始和几点触发。"
-	scheduleMonthDaysDescription = "按月或按年重复时可选：每月的哪几号，可以多个，例如每月 1 号和 15 号传 [1,15]。1~31 是几号（没有这一天的月份取月末），-1 是最后一天，-2 是倒数第二天。必须传 at 定起始月份和几点触发。"
-	scheduleWeekdayDescription   = "按月或按年重复时可选：配合 week 表示当月第几个星期几，例如 weekday=mon、week=1 是每月第一个周一。必须传 at。"
-	scheduleWeekDescription      = "配合 weekday：第几个，1~5 从月初数，-1 是最后一个，-2 是倒数第二个。第五个这类不是每月都有的，没有的月份跳过。"
+	scheduleWeekdaysDescription  = "按周重复的星期几，如工作日 mon~fri；interval 用 1w、2w"
+	scheduleMonthDaysDescription = "按月/年重复的几号，如 [1,15]；-1 为最后一天"
+	scheduleWeekdayDescription   = "按月/年重复：配合 week 表示第几个星期几"
+	scheduleWeekDescription      = "配合 weekday：1~5 从月初数，-1 为最后一个"
 )
 
 // ruleFromReminder 读出记录上的日期规则。

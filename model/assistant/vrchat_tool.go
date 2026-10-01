@@ -86,9 +86,10 @@ type dianaVRChatStatusTool struct {
 func (t *dianaVRChatStatusTool) Name() string { return dianaVRChatStatusToolName }
 
 func (t *dianaVRChatStatusTool) Description() string {
-	return `查看机器人在 VRChat 里的当前状态：当前 Avatar、是否 AFK/坐下/静音、正在显示的表情、最近变化的 Avatar 参数、聊天框最后一句和排队情况、正在进行的移动。` +
-		`群里有人问「你在 VRChat 干嘛」「现在是什么形象」时用它，按结果如实转述。` +
-		`状态来自 VRChat 通过 OSC 发回的数据：最后收包时间很久以前说明 VRChat 可能没开或没开 OSC，不要编造在房间里的活动。拍不了房间截图。`
+	// 状态全靠 OSC 回包：最后收包时间很久以前说明 VRChat 没开或没开 OSC，
+	// 这时模型容易编造房间里的活动。
+	return `查看机器人在 VRChat 的当前状态：Avatar、AFK/坐下/静音、表情、参数变化、聊天框和移动。` +
+		`最后收包时间很久以前说明 VRChat 或 OSC 没开，别编造房间里的活动。拍不了房间截图。`
 }
 
 func (t *dianaVRChatStatusTool) InputSchema() map[string]any {
@@ -191,17 +192,15 @@ type dianaVRChatChatboxTool struct {
 func (t *dianaVRChatChatboxTool) Name() string { return dianaVRChatChatboxToolName }
 
 func (t *dianaVRChatChatboxTool) Description() string {
-	return `在 VRChat 的聊天框（头顶气泡）里显示文字，房间里所有人都看得到。` +
-		`operation=send 发送 text：超过 144 字会自动分段按间隔依次显示，不用自己拆；replace=true 会丢掉还没显示完的旧段。` +
-		`typing_on/typing_off 切换「正在输入」指示；clear 清空聊天框。` +
-		`只在用户要你在 VRChat 里说话、或明确需要房间里的人看到时使用；聊天平台上的回复照常写，不要把这里当成回复渠道。`
+	return `在 VRChat 头顶聊天框显示文字，房间里所有人可见，超过 144 字自动分段。` +
+		`只在用户要你在 VRChat 里说话时用；聊天平台的回复照常写，这里不是回复渠道。`
 }
 
 func (t *dianaVRChatChatboxTool) InputSchema() map[string]any {
 	return toolObjectSchema([]string{"operation"}, map[string]any{
-		"operation": toolEnumParam("send 发送文字；typing_on/typing_off 切换输入指示；clear 清空。", "send", "typing_on", "typing_off", "clear"),
-		"text":      toolStringParam("operation=send 时要显示的文字。"),
-		"replace":   toolBoolParam("为 true 时先丢掉还没显示完的旧段。"),
+		"operation": toolEnumParam("typing_on/off 切换「正在输入」指示", "send", "typing_on", "typing_off", "clear"),
+		"text":      toolStringParam("send 专用，要显示的文字"),
+		"replace":   toolBoolParam("先丢掉还没显示完的旧段"),
 	})
 }
 
@@ -247,19 +246,17 @@ type dianaVRChatExpressionTool struct {
 func (t *dianaVRChatExpressionTool) Name() string { return dianaVRChatExpressionToolName }
 
 func (t *dianaVRChatExpressionTool) Description() string {
-	return `切换机器人在 VRChat 里的 Avatar 表情或动作（按主人配置的映射表写 Avatar 参数）。` +
-		`想在房间里表现情绪时用它，例如被夸了换「开心」、看不懂换「疑惑」、犯困换「趴桌」。` +
-		`hold_seconds 大于 0 时到点自动回到「平静」；不填就一直保持，直到下次切换。只能用 expression 枚举里列出的名字。`
+	return `切换机器人在 VRChat 里的 Avatar 表情或动作，想在房间里表现情绪时用。`
 }
 
 func (t *dianaVRChatExpressionTool) InputSchema() map[string]any {
-	expression := toolStringParam("表情名。")
+	expression := toolStringParam("表情名")
 	if len(t.names) > 0 {
-		expression = toolEnumParam("表情名，来自映射表。", t.names...)
+		expression = toolEnumParam("表情名", t.names...)
 	}
 	return toolObjectSchema([]string{"expression"}, map[string]any{
 		"expression":   expression,
-		"hold_seconds": toolNumberParam("保持多少秒后回到「平静」，0 表示一直保持。", 0, vrchatMaxExpressionHold.Seconds()),
+		"hold_seconds": toolNumberParam("保持秒数，到点回到「平静」；0 为一直保持", 0, vrchatMaxExpressionHold.Seconds()),
 	})
 }
 
@@ -296,15 +293,13 @@ type dianaVRChatMoveTool struct {
 func (t *dianaVRChatMoveTool) Name() string { return dianaVRChatMoveToolName }
 
 func (t *dianaVRChatMoveTool) Description() string {
-	return fmt.Sprintf(`在 VRChat 里短时操控移动和视角：前后左右走、左右转、跑、跳，stop 立即停下。`+
-		`每次最多按住 %.1f 秒，到点自动松开，不会一直走下去；要走远就分几次调用。`+
-		`只在用户明确让你在房间里动一动时使用。`, t.maxHold.Seconds())
+	return fmt.Sprintf(`在 VRChat 里短时移动、转向、跑跳。每次最多按住 %.1f 秒，走远就分几次调用。只在用户明确让你动时用。`, t.maxHold.Seconds())
 }
 
 func (t *dianaVRChatMoveTool) InputSchema() map[string]any {
 	return toolObjectSchema([]string{"action"}, map[string]any{
-		"action":  toolEnumParam("forward/backward/left/right 移动，turn_left/turn_right 转向，run 奔跑，jump 跳一下，stop 全部松开。", vrchat.ActionNames()...),
-		"seconds": toolNumberParam("按住多少秒，默认 1 秒，超过上限会被截短。jump 和 stop 忽略它。", 0.1, t.maxHold.Seconds()),
+		"action":  toolEnumParam("stop 全部松开", vrchat.ActionNames()...),
+		"seconds": toolNumberParam("按住秒数，默认 1；jump、stop 忽略", 0.1, t.maxHold.Seconds()),
 	})
 }
 

@@ -19,7 +19,7 @@ type dianaUsageTool struct {
 
 func (t *dianaUsageTool) Name() string { return dianaUsageToolName }
 func (t *dianaUsageTool) Description() string {
-	return "仅主人可查询当前 Diana 实例最近 24 小时的 LLM Token 用量，跨机器人与模型合计。主人问最近一天消耗多少 token、输入输出量或缓存命中时调用。以工具实际结果回答，不估算、不当作供应商账户账单，也不要称为今天零点以来的用量。"
+	return "查询本实例最近 24 小时的 LLM Token 用量（跨机器人和模型合计），仅主人。按结果回答，不估算；不是供应商账单，也不是今天零点以来的用量。"
 }
 func (t *dianaUsageTool) InputSchema() map[string]any { return toolObjectSchema(nil, map[string]any{}) }
 func (t *dianaUsageTool) Run(ctx context.Context, input map[string]any) (string, error) {

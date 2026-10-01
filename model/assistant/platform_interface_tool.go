@@ -144,9 +144,14 @@ func newDianaPlatformTool(ctx context.Context, runtime *Runtime, event MessageEv
 func (t *dianaPlatformTool) Name() string { return dianaPlatformToolName }
 
 func (t *dianaPlatformTool) Description() string {
-	base := "跨平台群操作接口。group_info 读群资料，member_info 按 user_id 实时核验成员，member_list 拉成员候选。只在用户明确要求读取群信息或执行群操作时调用；被拒绝后不要换别的工具绕过，也不要在没有成功结果时声称已完成。recall 撤回我自己刚发出的消息：发现自己说错、发错内容，要真的撤回就必须调用它，只写「当我没说」「收回刚才那句」并不会让消息消失，没调用成功就不许说自己撤回了。它只能作用于我自己发出的消息，message_id 取自历史里我自己的发言，不按内容猜；撤回失败（不支持、超时限、没权限）时原消息仍在，如实说明并直接发更正内容。结果里的 requester_access 是这次发起请求的人的权限，不是机器人自己的；机器人是不是群管理员，以群管操作的实际结果为准。"
+	// recall 那句来自 #690：模型说错话后只写「当我没说」，消息其实还在。
+	// requester_access 那句来自 #877：模型把请求人的权限当成机器人自己的群身份。
+	// 各操作配哪些参数写在参数说明里，平台不支持、参数缺失由 Run 返回具体错误。
+	base := "读群资料、核验成员、拉成员名单、撤回我自己的消息，以及群管操作（各平台通用）。只在用户明确要求时调用；被拒绝不要换工具绕过，没成功不要说已完成。" +
+		"说错话要撤回必须调 recall，光说「当我没说」消息不会消失；撤回失败就如实说并直接发更正。" +
+		"结果里的 requester_access 是请求人的权限，不是机器人的。"
 	if t.moderator {
-		base += " 群管操作只对机器人主人、本群群主和群管理员开放（身份由工具实时向平台核验），且需要机器人本身是该群管理员：mute 必须给正的时长（秒），unmute 解除禁言，kick 可带 reject_add_request 决定是否拒绝再次加群；announce 发群公告（content），announce_list 查公告，announce_delete 按 notice_id 删公告；essence_set/essence_unset 设置或取消精华（message_id，省略时取被引用的消息）；set_card 改群名片（card 为空表示清除），set_title 改专属头衔（title）；mute_all/unmute_all 开关全员禁言；recall_messages 撤回成员消息：给 message_id 撤一条，或给 user_id 加 count 撤这个人在本会话最近的 N 条，用来清理刷屏和广告。只认账号 ID，取自 @ 的结构化信息、被引用消息的发送者或成员查询结果，不按昵称猜；禁言和踢人不能对主人或机器人自己下手，群管理员也不能对群主或其他管理员下手。私聊里不能替群管理员执行。不支持该操作的平台会明确说明。"
+		base += "群管操作仅主人、群主、群管理员可用（实时核验），且机器人须是管理员；不能对主人或机器人下手，管理员不能动群主和其他管理员。私聊里不替群管执行。"
 	}
 	return base
 }
@@ -154,23 +159,27 @@ func (t *dianaPlatformTool) Description() string {
 func (t *dianaPlatformTool) InputSchema() map[string]any {
 	operations := []string{platformOpGroupInfo, platformOpMemberInfo, platformOpMemberList, platformOpRecall}
 	properties := map[string]any{
-		"message_id": toolStringParam("recall 专用：要撤回的消息 ID，只能是我自己刚发出的那条，取自历史里我自己的发言标识。省略时撤回我在本会话最近发出的一条。不要按内容或印象编 ID。"),
-		"group_id":   toolStringParam("目标群 ID；省略时用当前群。"),
-		"user_id":    toolStringParam("目标账号 ID，必须取自消息里 @ 的结构化信息、被引用消息的发送者，或成员查询结果。不要按昵称猜 ID，拿不准就先查成员或问清楚。member_info 必填；member_info 省略时用当前引用消息的发送者。"),
+		"message_id": toolStringParam("recall：我自己发的消息 ID，取自历史，勿编；默认最近一条"),
+		"group_id":   toolStringParam("目标群 ID，默认当前群"),
+		"user_id":    toolStringParam("目标账号，取自 @、引用或成员查询，勿按昵称猜；默认引用消息发送者"),
 	}
 	if t.moderator {
 		operations = append(operations, platformOpAnnounceList)
 		operations = append(operations, platformModerationOperations...)
-		properties["message_id"] = toolStringParam("recall：要撤回的我自己的消息 ID，省略时撤回我在本会话最近发出的一条。essence_set/essence_unset/recall_messages：目标消息 ID，取自历史里的消息标识，省略时用当前被引用的消息。不要按内容或印象编 ID。")
-		properties["duration"] = toolIntParam("mute 专用：禁言时长（秒），必须为正；超过平台上限时按上限执行。", 1, telegramMaxMuteSeconds)
-		properties["reject_add_request"] = toolBoolParam("kick 专用：为 true 时同时拒绝该账号再次加群（OneBot 的 reject_add_request；Telegram 保持封禁而非仅移出）。默认 false，只移出、允许再加。")
-		properties["content"] = toolStringParam("announce 专用：群公告正文。")
-		properties["notice_id"] = toolStringParam("announce_delete 专用：要删除的公告 ID，取自 announce_list 结果。")
-		properties["card"] = toolStringParam("set_card 专用：新的群名片；空串表示清除名片。")
-		properties["title"] = toolStringParam("set_title 专用：新的专属头衔；空串表示清除头衔。")
-		properties["count"] = toolIntParam("recall_messages 按 user_id 撤回时的条数，默认 10。只撤本会话里看得到的消息。", 1, maxRecallMessagesCount)
+		properties["message_id"] = toolStringParam("目标消息 ID，取自历史，勿编；recall 默认我最近一条，其余默认被引用消息")
+		properties["duration"] = toolIntParam("mute：禁言秒数，超平台上限按上限", 1, telegramMaxMuteSeconds)
+		properties["reject_add_request"] = toolBoolParam("kick：同时拒绝再次加群，默认 false")
+		properties["content"] = toolStringParam("announce：公告正文")
+		properties["notice_id"] = toolStringParam("announce_delete：公告 ID，取自 announce_list")
+		properties["card"] = toolStringParam("set_card：新群名片，空串清除")
+		properties["title"] = toolStringParam("set_title：新头衔，空串清除")
+		properties["count"] = toolIntParam("recall_messages 按 user_id 撤回的条数，默认 10", 1, maxRecallMessagesCount)
 	}
-	properties["operation"] = toolEnumParam("要执行的操作。group_info/member_info/member_list/announce_list 只读；recall 撤回我自己刚发出的消息；其余是群管理操作，仅主人、群主和群管理员可用。", operations...)
+	operationHint := "recall 撤回我自己的消息"
+	if t.moderator {
+		operationHint += "；recall_messages 撤成员消息（清刷屏）"
+	}
+	properties["operation"] = toolEnumParam(operationHint, operations...)
 	return toolObjectSchema([]string{"operation"}, properties)
 }
 
@@ -550,7 +559,7 @@ func (r *Runtime) platformInterfaceBuiltinSkills(event MessageEvent) []agent.Ski
 	}
 	return []agent.SkillMetadata{{
 		Name:             "platform",
-		Description:      "Read group information and members, recall the bot's own recently sent messages, and perform moderation for the bot owner and group administrators (mute, unmute, kick, announcements, essence, member card and title, whole-group mute, recalling members' messages) through the current platform when the bot is a group administrator.",
+		Description:      "Read group info and members, recall the bot's own recent messages, and let the bot owner and group admins moderate (mute, kick, announcements, essence, card/title, whole-group mute, recalling members' messages) when the bot is a group admin.",
 		ShortDescription: "跨平台群资料读取、撤回自己发出的消息与主人及群管理员的群管",
 		Path:             "builtin://platform/SKILL.md",
 		Source:           platformInterfaceSkillSource,

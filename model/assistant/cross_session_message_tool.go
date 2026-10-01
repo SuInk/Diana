@@ -71,29 +71,25 @@ func newDianaCrossSessionTool(runtime *Runtime, event MessageEvent, owner bool) 
 func (t *dianaCrossSessionTool) Name() string { return dianaCrossSessionToolName }
 
 func (t *dianaCrossSessionTool) Description() string {
-	base := "把内容发到另一条会话里去，不用等对方先来找你。" +
-		"最常见的用法是主动发起私聊：群里有人说「私聊发给我」「私信我」「别发群里」时，直接用它把完整内容送进你和对方的私聊窗口；" +
-		"只和一个人有关的长篇（说话风格分析、单独的复盘或整理）也可以这样发。" +
-		"不要用的时候：对方没要求，也没有只对他一个人说的理由；只是想避开别人看见；当前会话里已经说过的话再发一遍。" +
-		"目的地不能是当前这条会话——想对眼前的人说话就照常写正文，这个工具只通向别处。"
+	// 发完怎么交代、pending（未加好友、内容已存）时怎么说，都由 Run 的结果
+	// Message 现场给出，这里不重复。
+	base := "把内容发到另一条会话，最常见是主动私聊：有人说「私聊发我」「别发群里」，或只关乎一个人的长篇。" +
+		"对方没要求、只是想避人耳目、或已说过的话不要发。不能发回当前会话。"
 	if t.owner {
-		base += " 主人还可以指定发给谁（user_id）或者发到哪个群（group_id），两者只能填一个；不填就是发给当前说话的人的私聊。"
+		base += "主人可指定 user_id 或 group_id，默认发给当前说话人的私聊。"
 	} else {
-		base += " 只能发给当前说话的人，不填 user_id 即可；指定别人或指定群只有主人能要求，你填了会被拒绝。"
+		base += "只能发给当前说话的人。"
 	}
-	return base + " 发完在当前会话里用一句话交代一下就够，不要把正文再复述一遍，也不要把同一条内容发第二次。" +
-		"结果里 delivered 为 false、pending 为 true 时，表示对方还不是好友、当场没发出去，内容已经存下：这时要照工具给的说明告诉对方来加好友，并说清好友请求要机器人主人同意，不要说成已经发过去了。" +
-		"被拒绝就照实说，不要换别的工具绕过去。"
+	return base + "被拒绝就照实说，不要换工具绕过。"
 }
 
 func (t *dianaCrossSessionTool) InputSchema() map[string]any {
 	properties := map[string]any{
-		"message": toolStringParam("要发出去的完整正文，最多 " + itoa(crossSessionMaxRunes) + " 个字符。" +
-			"按你平时说话的样子写完整，不要写成「见私聊」这种占位；需要分成几条发时用 [diana-msg] 分隔。"),
+		"message": toolStringParam("完整正文，≤" + itoa(crossSessionMaxRunes) + " 字，勿写「见私聊」占位；分条用 [diana-msg]"),
 	}
 	if t.owner {
-		properties["user_id"] = toolStringParam("私聊目标的账号 ID；省略时发给当前说话的人。必须取自 @ 的结构化信息、被引用消息的发送者或成员查询结果，不按昵称猜。与 group_id 二选一。")
-		properties["group_id"] = toolStringParam("目标群的 ID：把内容发到这个群里，而不是发给某个人。只能填机器人自己在、且没有被关掉的群，不能是当前这个群。与 user_id 二选一。")
+		properties["user_id"] = toolStringParam("私聊目标账号，取自 @ 或成员查询，勿按昵称猜；与 group_id 二选一")
+		properties["group_id"] = toolStringParam("目标群 ID，须是机器人在的其他群；与 user_id 二选一")
 	}
 	return toolObjectSchema([]string{"message"}, properties)
 }

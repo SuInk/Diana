@@ -84,22 +84,30 @@ func (t *dianaRelationshipTool) Name() string {
 }
 
 func (t *dianaRelationshipTool) Description() string {
-	return `查询 Diana 对用户的好感度、关系等级、互动次数、最近的增减分记录和人员画像（居住地点、职业、作息、生活习惯、兴趣爱好、家庭关系、时区）。用户说“记住我住在……/我是做……的/我在德国、和你差几小时”，或要求改掉、忘掉画像里的某一栏时，调用本工具的 portrait_set / portrait_forget。用户询问自己、被 @ 成员或指定群成员的好感度或关系时必须调用，不要根据上下文猜测，也不要声称无法查询隐藏数据。人机恋模式开启时，用户本人明确表白用 romance_start，明确提出分手用 romance_end。本工具不返回能力清单——用户问「你能做什么」应改用 capabilities，基础能力对所有关系等级一律开放。`
+	// 「别猜、别说查不了」防模型凭上下文编好感度，或以隐藏数据为由拒查。
+	// 能力问题转 capabilities：本工具早年带过权限清单，模型拿它当能力边界（d9b73dbe）。
+	return `查好感度、关系等级、互动记录和人员画像；主人可设定或增减好感度；可写画像、确立/解除恋人。` +
+		`问自己、被 @ 或指定成员的好感度或关系时必须查，不要猜，也不要说查不了。` +
+		`用户让记住或忘掉自己的住处、职业等个人情况时用 portrait_set/portrait_forget。` +
+		`人机恋开启时，本人明确表白用 romance_start，提分手用 romance_end。` +
+		`不返回能力清单，「你能做什么」用 capabilities。`
 }
 
 // InputSchema 声明参数契约。「拿到结果后怎么说话」不在这里，也不在 Description
 // 里，而是随结果一起返回（见 relationshipReplyGuidance）。
+// list 对群成员开放，说明里点明是防模型以隐私或权限为由拒绝排行榜。
+// 画像栏目的完整含义在 portraitFieldSpecs，这里只留会写错的两栏。
 func (t *dianaRelationshipTool) InputSchema() map[string]any {
 	return toolObjectSchema([]string{"operation"}, map[string]any{
-		"operation": toolEnumParam("要执行的操作：get 查单个用户；list 查当前群内已有互动记录的成员并按好感度排序（群内成员均可使用，不得以隐私或权限为由拒绝）；set 直接设置、adjust 增减好感度，后两者仅机器人主人可用且不增加互动次数；portrait_set 记下画像里的一栏，portrait_forget 清空画像里的一栏；romance_start 在当前发言者本人明确表白时确立恋人关系（单偶：已有恋人或好感度不够都会被婉拒），romance_end 在本人提出分手时解除，两者都要求人机恋模式已开启。",
+		"operation": toolEnumParam("list 群内好感排行，成员均可查，勿以隐私拒绝；set 设定、adjust 增减好感度，仅主人",
 			"get", "list", "set", "adjust", "portrait_set", "portrait_forget", "romance_start", "romance_end"),
-		"target_user_id": toolStringParam("目标账号。get 可省略：消息里 @ 了成员就查该成员，否则查当前发言者；set 和 adjust 必填，且不能指向主人自己（主人的好感度由互动自动记录）；画像操作省略表示当前发言者，只有主人能改别人的画像。"),
-		"portrait_field": toolEnumParam("portrait_set 和 portrait_forget 必填：要写或要清空的画像栏目，"+portraitFieldSchemaHint(), PortraitFieldIDs()...),
-		"portrait_value": toolStringParam("portrait_set 必填：这一栏的新内容，写成不超过 30 字的第三人称短语，例如“住在杭州”。同一栏原有内容会被顶掉。"),
-		"history_limit":  toolIntParam("get 返回的最近变化条数，默认 "+itoa(defaultRelationshipHistoryLimit)+"。", 1, maximumRelationshipHistoryLimit),
-		"value":          toolIntParam("set 专用：直接设置成的好感度数值。", minimumFavorability, maximumFavorability),
-		"delta":          toolIntParam("adjust 专用：好感度增减量，可为负数；结果会被夹在可写区间内。", minimumFavorability-maximumFavorability, maximumFavorability-minimumFavorability),
-		"reason":         toolStringParam("set 和 adjust 可选：这次调整的备注原因。"),
+		"target_user_id": toolStringParam("目标账号，默认被 @ 者或发言者；set/adjust 必填且不能是主人"),
+		"portrait_field": toolEnumParam("画像栏目；residence 只记城市，timezone 填 IANA 名，城市能定时区就一并记", PortraitFieldIDs()...),
+		"portrait_value": toolStringParam("portrait_set：≤30 字第三人称短语，覆盖原内容"),
+		"history_limit":  toolIntParam("get 返回的最近变化条数，默认 "+itoa(defaultRelationshipHistoryLimit), 1, maximumRelationshipHistoryLimit),
+		"value":          toolIntParam("set：目标好感度", minimumFavorability, maximumFavorability),
+		"delta":          toolIntParam("adjust：增减量，可为负", minimumFavorability-maximumFavorability, maximumFavorability-minimumFavorability),
+		"reason":         toolStringParam("set/adjust 备注"),
 	})
 }
 
@@ -365,16 +373,6 @@ func (t *dianaRelationshipTool) runPortraitOperation(ctx context.Context, operat
 		Message: message,
 		Target:  &snapshot,
 	})
-}
-
-// portraitFieldSchemaHint 把栏目表拼成一句枚举说明，字段和含义只维护在
-// portraitFieldSpecs 一处。
-func portraitFieldSchemaHint() string {
-	parts := make([]string, 0, len(portraitFieldSpecs))
-	for _, spec := range portraitFieldSpecs {
-		parts = append(parts, string(spec.Field)+"="+spec.Label+"（"+spec.Hint+"）")
-	}
-	return strings.Join(parts, "；")
 }
 
 func (t *dianaRelationshipTool) updatedFavorability(ctx context.Context, operation string, targetID string, input map[string]any) (int, error) {

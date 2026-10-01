@@ -45,30 +45,32 @@ func newDianaFeedTool(runtime *Runtime, event MessageEvent) *dianaFeedTool {
 
 func (*dianaFeedTool) Name() string { return dianaFeedToolName }
 
+// Description 精简时保留了 #939 原描述里的这些约束，各压成一句：
+//   - 动态页只给主人看，不会发到群或私聊：不能拿它当通知某人的渠道。
+//   - 写日记前先 list，避免重复。
+//   - needs_reply + comment：主人评论后的回复流程。
+//   - 配图来源限制、生图异步要等落盘：代码会拒绝，但提前说能省掉白费的一轮。
+//   - 第一人称、不编造、不写别人隐私。
 func (*dianaFeedTool) Description() string {
-	return "往你自己的「动态」页发帖：随手一句心情或见闻发成动态（kind=post），一天下来的回顾写成日记（kind=diary）。" +
-		"动态页是你自己的时间线，在 WebUI 里给主人看，不会发到任何群或私聊；要告诉某个人什么，直接回复或用别的发送工具。" +
-		"operation=post 发布，list 看最近发过什么和各条下的评论（写日记前先看，避免重复），delete 删掉一条，" +
-		"comment 在动态下评论或回复。主人会在控制台里评论你的动态：list 传 needs_reply=true 只看最后一条评论来自主人、还没回的动态，" +
-		"再用 comment 回复（reply_to 填要回的那条评论 id，不填就是新开一条顶层评论）；回复像朋友聊天，一两句就好。" +
-		"配图只能用你自己生成的图，或你自己发出去过的图，不能用别人发的图或网上的图：images 每项是 " + agent.WorkspaceOutputsDir + "/ 目录下的图片文件路径（生图工具的结果、save_to_workspace 存下的你自己发过的图都在这里），" +
-		"或 chat:<message_id> 或 chat:<message_id>:<第几个媒体>，取当前会话里你自己发出的某条消息的图。最多 " + itoa(FeedMaxImages) + " 张。想配图就先用 image 工具生成；生图是异步的，图还没画完时文件不存在，等落盘后再发。" +
-		"正文用第一人称写你自己经历和想的，不要写成给谁的回复；不要编造没发生过的事，也不要把别人的隐私（真实姓名、联系方式、住址）写进去。"
+	return "往你自己的「动态」页发动态（kind=post）或日记（kind=diary），只在 WebUI 给主人看，不会发到群或私聊。" +
+		"写日记前先 list 免得重复。主人评论了的动态用 list needs_reply=true 找出，再 comment 回复，一两句即可。" +
+		"配图只能用你自己生成或发过的图；生图是异步的，等文件落盘再发。" +
+		"用第一人称写自己的经历和想法，不编造，不写别人的隐私。"
 }
 
 func (*dianaFeedTool) InputSchema() map[string]any {
 	return toolObjectSchema([]string{"operation"}, map[string]any{
-		"operation": toolEnumParam("post 发布；list 列出最近的；delete 删除一条；comment 评论或回复；like 给动态点赞或取消点赞。", "post", "list", "delete", "comment", "like"),
-		"kind":      toolEnumParam("post 用：post 是动态（默认），diary 是日记。list 用：只看这一类，省略则都看。", FeedKindPost, FeedKindDiary),
-		"title":     toolStringParam("可选的标题，日记常用，最多 " + itoa(FeedTitleMaxRunes) + " 字。"),
-		"content":   toolStringParam("post 时是正文，可以分段，最多 " + itoa(FeedContentMaxRunes) + " 字；comment 时是评论内容，最多 " + itoa(FeedCommentMaxRunes) + " 字。两者必填。"),
-		"images": toolStringArrayParam("配图来源，最多 " + itoa(FeedMaxImages) + " 张，按顺序显示，只能是你自己生成或自己发出去的图。每项是 " + agent.WorkspaceOutputsDir + "/ 下的图片路径，" +
-			"或 chat:<message_id>[:<媒体序号>]（必须是你自己发的那条消息）。"),
-		"id":          toolStringParam("动态 ID，取自 list 的返回值。delete 和 comment 必填。"),
-		"reply_to":    toolStringParam("comment 可选：要回复的评论 id，取自 list 返回的 comments。"),
-		"liked":       toolBoolParam("like 可选：true 点赞（默认），false 取消点赞。"),
-		"needs_reply": toolBoolParam("list 可选：只列出最后一条评论来自主人、你还没回的动态。"),
-		"limit":       toolIntParam("list 返回条数，默认 "+itoa(defaultFeedListLimit)+"。", 1, maximumFeedListLimit),
+		"operation": toolEnumParam("comment 评论或回复，like 点赞或取消", "post", "list", "delete", "comment", "like"),
+		"kind":      toolEnumParam("post 动态（默认）、diary 日记；list 时按类筛选", FeedKindPost, FeedKindDiary),
+		"title":     toolStringParam("标题，可选，最多 " + itoa(FeedTitleMaxRunes) + " 字"),
+		"content":   toolStringParam("post 正文最多 " + itoa(FeedContentMaxRunes) + " 字，comment 内容最多 " + itoa(FeedCommentMaxRunes) + " 字"),
+		"images": toolStringArrayParam("最多 " + itoa(FeedMaxImages) + " 张：" + agent.WorkspaceOutputsDir + "/ 下的图片路径，" +
+			"或 chat:<message_id>[:<序号>]（须是你发的消息）"),
+		"id":          toolStringParam("动态 ID，取自 list"),
+		"reply_to":    toolStringParam("要回复的评论 ID，取自 list；不填为顶层评论"),
+		"liked":       toolBoolParam("false 取消点赞，默认 true"),
+		"needs_reply": toolBoolParam("只列主人评论后你还没回的动态"),
+		"limit":       toolIntParam("返回条数，默认 "+itoa(defaultFeedListLimit), 1, maximumFeedListLimit),
 	})
 }
 

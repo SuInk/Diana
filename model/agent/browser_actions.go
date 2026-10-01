@@ -42,7 +42,7 @@ type RepeatableTool interface {
 }
 
 func toolNumberParam(description string) map[string]any {
-	return map[string]any{"type": "number", "description": description}
+	return describedParam(description, map[string]any{"type": "number"})
 }
 
 // numberFromInput 读一个数值参数，第二个返回值说明调用方到底传没传。
@@ -368,14 +368,14 @@ type BrowserTabsTool struct {
 func (t *BrowserTabsTool) Name() string { return "browser_tabs" }
 
 func (t *BrowserTabsTool) Description() string {
-	return `管理浏览器标签页：列出、切换、关闭、新开。切换之后其他浏览器工具都作用在那一页上。`
+	return `列出、切换、关闭或新开浏览器标签页；切换后其他浏览器工具作用在那一页。`
 }
 
 func (t *BrowserTabsTool) InputSchema() map[string]any {
 	return toolObjectSchema([]string{"action"}, map[string]any{
-		"action": toolEnumParam("list 列出；switch 切换到 tab_id；close 关闭 tab_id（省略时关当前页）；new 新开一页", "list", "switch", "close", "new"),
-		"tab_id": toolStringParam("标签页 ID，来自 list 的结果"),
-		"url":    toolStringParam("new 时要打开的地址，省略时是空白页"),
+		"action": toolEnumParam("close 省略 tab_id 时关当前页", "list", "switch", "close", "new"),
+		"tab_id": toolStringParam("标签页 ID，来自 list"),
+		"url":    toolStringParam("new 专用，默认空白页"),
 	})
 }
 
@@ -513,14 +513,14 @@ type BrowserScrollTool struct {
 func (t *BrowserScrollTool) Name() string { return "browser_scroll" }
 
 func (t *BrowserScrollTool) Description() string {
-	return `滚动页面：按方向滚整页，或把某个元素滚进视口；给了 selector 又给了 direction 时滚的是那个可滚动容器。`
+	return `滚动页面，或把某个元素滚进视口。`
 }
 
 func (t *BrowserScrollTool) InputSchema() map[string]any {
 	return toolObjectSchema(nil, map[string]any{
-		"direction": toolEnumParam("滚动方向", "down", "up", "top", "bottom"),
-		"amount":    toolIntParam("up/down 滚动的像素数，默认大约一屏"),
-		"selector":  toolStringParam("只给 selector：把这个元素滚进视口；同时给 direction：滚这个容器自己"),
+		"direction": toolEnumParam("", "down", "up", "top", "bottom"),
+		"amount":    toolIntParam("up/down 的像素数，默认约一屏"),
+		"selector":  toolStringParam("单独给时滚进视口；配 direction 时滚这个容器"),
 	})
 }
 
@@ -582,13 +582,13 @@ type BrowserPressKeyTool struct {
 func (t *BrowserPressKeyTool) Name() string { return "browser_press_key" }
 
 func (t *BrowserPressKeyTool) Description() string {
-	return `按键盘键，走真实按键事件：Enter、Tab、Escape、Backspace、方向键、PageDown、单个字符，或 Control+A 这类组合键。`
+	return `按键盘键，走真实按键事件，支持组合键。`
 }
 
 func (t *BrowserPressKeyTool) InputSchema() map[string]any {
 	return toolObjectSchema([]string{"key"}, map[string]any{
-		"key":      toolStringParam("键名，例如 Enter、Escape、ArrowDown、PageDown、a、Control+A、Shift+Tab"),
-		"selector": toolStringParam("先聚焦这个元素再按；省略时按在当前焦点上"),
+		"key":      toolStringParam("键名，如 Enter、ArrowDown、Control+A"),
+		"selector": toolStringParam("先聚焦的元素，默认当前焦点"),
 		"repeat":   toolIntParam("连按次数，默认 1，最多 20"),
 	})
 }
@@ -646,12 +646,12 @@ type BrowserNavigateTool struct {
 func (t *BrowserNavigateTool) Name() string { return "browser_navigate" }
 
 func (t *BrowserNavigateTool) Description() string {
-	return `在当前标签页后退、前进或刷新，返回之后的页面文本。`
+	return `当前标签页后退、前进或刷新，返回新页面文本。`
 }
 
 func (t *BrowserNavigateTool) InputSchema() map[string]any {
 	return toolObjectSchema([]string{"action"}, map[string]any{
-		"action": toolEnumParam("back 后退、forward 前进、reload 刷新", "back", "forward", "reload"),
+		"action": toolEnumParam("", "back", "forward", "reload"),
 	})
 }
 
@@ -706,14 +706,14 @@ type BrowserSelectTool struct {
 func (t *BrowserSelectTool) Name() string { return "browser_select" }
 
 func (t *BrowserSelectTool) Description() string {
-	return `在 <select> 下拉框里选一项，按选项的 value 或显示文字选。`
+	return `在 <select> 下拉框里选一项。`
 }
 
 func (t *BrowserSelectTool) InputSchema() map[string]any {
 	return toolObjectSchema([]string{"selector"}, map[string]any{
-		"selector": toolStringParam("<select> 元素的 CSS 选择器"),
-		"value":    toolStringParam("要选的 option 的 value"),
-		"label":    toolStringParam("要选的 option 的显示文字，和 value 二选一"),
+		"selector": toolStringParam("<select> 的 CSS 选择器"),
+		"value":    toolStringParam("option 的 value"),
+		"label":    toolStringParam("option 的显示文字，与 value 二选一"),
 	})
 }
 
@@ -763,14 +763,14 @@ type BrowserWaitTool struct {
 func (t *BrowserWaitTool) Name() string { return "browser_wait" }
 
 func (t *BrowserWaitTool) Description() string {
-	return `等页面上出现某个元素或某段文字（异步加载、跳转之后用），或者单纯等一会儿。超时不算失败，返回 found=false。`
+	return `等某个元素或文字出现，或单纯等一会儿。超时返回 found=false，不算失败。`
 }
 
 func (t *BrowserWaitTool) InputSchema() map[string]any {
 	return toolObjectSchema(nil, map[string]any{
-		"selector":   toolStringParam("等这个元素出现并可见"),
-		"text":       toolStringParam("等页面上出现这段文字"),
-		"timeout_ms": toolIntParam(fmt.Sprintf("最多等多久，默认 %d，最多 %d；selector 和 text 都不给时就是单纯等这么久", defaultBrowserWaitMS, maxBrowserWaitMS)),
+		"selector":   toolStringParam("等它可见"),
+		"text":       toolStringParam("等页面出现这段文字"),
+		"timeout_ms": toolIntParam(fmt.Sprintf("默认 %d，最多 %d；不给 selector/text 时就纯等", defaultBrowserWaitMS, maxBrowserWaitMS)),
 	})
 }
 
@@ -850,13 +850,13 @@ type BrowserEvalTool struct {
 func (t *BrowserEvalTool) Name() string { return "browser_eval" }
 
 func (t *BrowserEvalTool) Description() string {
-	return `在当前页面执行一段 JavaScript 并返回结果（按 JSON 返回，Promise 会等它完成）。适合批量提取结构化数据、操作其他工具覆盖不到的页面状态。`
+	return `在当前页面执行 JavaScript，按 JSON 返回结果，Promise 会等完成。`
 }
 
 func (t *BrowserEvalTool) InputSchema() map[string]any {
 	return toolObjectSchema([]string{"script"}, map[string]any{
-		"script":     toolStringParam("JavaScript 表达式；多条语句写成 (() => { ...; return 结果 })()，异步写成 (async () => { ... })()"),
-		"timeout_ms": toolIntParam(fmt.Sprintf("脚本最多跑多久，默认等于浏览器超时，最多 %d；超时的同步脚本会被中断", maxBrowserWaitMS)),
+		"script":     toolStringParam("JS 表达式；多条语句包成 (() => {…; return x})()"),
+		"timeout_ms": toolIntParam(fmt.Sprintf("默认浏览器超时，最多 %d", maxBrowserWaitMS)),
 	})
 }
 

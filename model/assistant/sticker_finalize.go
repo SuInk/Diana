@@ -26,15 +26,15 @@ const (
 func stickerFinalizeField() agent.FinalizeField {
 	return agent.FinalizeField{
 		Name: stickerFinalizeFieldName,
-		Description: "想配一张表情包时，填 2 到 6 个空格分隔的短关键词（情绪、动作、场景和同义说法），例如“得意 叉腰”“晚安 摸头”。" +
-			"有正文时和正文一起发，先后看 sticker_order；只想回一张图时填 silent=true、content 留空。挑不到合适的就不发，也不会补文字。配不配由你按当下的聊天自己判断。",
+		// 「配不配由你判断」「挑不到就不发」是回放里触发率和误发的平衡点，别删。
+		Description: "想配表情包时填 2～6 个空格分隔的短关键词，如「得意 叉腰」。有正文时一起发，先后看 sticker_order；只回图填 silent=true、content 留空。挑不到合适的就不发。配不配由你按聊天判断。",
 	}
 }
 
 func stickerOrderField() agent.FinalizeField {
 	return agent.FinalizeField{
 		Name:        stickerOrderFieldName,
-		Description: "填了 sticker 又有正文时必须二选一：before 先甩图再说话，after 先说话再甩图。表情包是你的第一反应（笑死、震惊、问号、无语）就选 before，是给这句话收尾点题（晚安、好耶、得意）就选 after。",
+		Description: "填了 sticker 又有正文时二选一：before 先甩图（第一反应），after 后甩图（收尾点题）",
 		// 以前写的是「after 或留空先说完再甩图」，模型大多直接不填，线上一天 94 张
 		// 只有 1 张先发。两个值写成对等的选项，不给留空一个现成的默认。
 		Enum: []string{stickerOrderBefore, stickerOrderAfter},

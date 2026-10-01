@@ -58,14 +58,14 @@ func (t *dianaSubtaskTool) Name() string {
 }
 
 func (t *dianaSubtaskTool) Description() string {
-	return `把一个自足的小问题交给一次独立的轻量模型调用，用于并行归纳多份材料或对同一份材料做互不相干的判断。子调用只看到你传入的素材，没有聊天历史、长期记忆和工具。自己就能回答、需要聊天上下文、或者需要调用其他工具的问题不要用它。`
+	return `把自足的小问题交给独立的轻量模型调用，用于并行归纳多份材料或做互不相干的判断。子调用只看得到传入的素材，没有聊天历史、记忆和工具；需要这些的问题别用。`
 }
 
 func (t *dianaSubtaskTool) InputSchema() map[string]any {
 	return toolObjectSchema([]string{"question", "material"}, map[string]any{
-		"question": toolStringParam("要子调用回答的问题，必须自足：不能依赖聊天上下文或未随 material 传入的信息。"),
-		"material": toolStringParam("回答该问题所需的全部素材原文。子调用看不到别的东西。"),
-		"scope":    toolEnumParam("子调用使用的模型类型。素材是文字用 text；素材里含图片描述之外的视觉判断需求时用 vision。", "text", "vision"),
+		"question": toolStringParam("自足的问题，不依赖聊天上下文"),
+		"material": toolStringParam("所需的全部素材原文"),
+		"scope":    toolEnumParam("需要视觉判断时用 vision，默认 text", "text", "vision"),
 	})
 }
 

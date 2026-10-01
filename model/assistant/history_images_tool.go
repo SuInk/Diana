@@ -86,30 +86,30 @@ func (t *dianaHistoryImagesTool) Name() string {
 
 func (t *dianaHistoryImagesTool) Description() string {
 	if t.describesOnly() {
-		return `读取当前会话历史消息里图片或视频关键帧的文字描述，以及文件的正文。你看不到原图，只能拿到视觉模型写的描述；消息里已经带着的描述就不必再调用。一次传入所有相关消息。`
+		return `读取历史消息里图片/视频关键帧的文字描述和文件正文。你看不到原图；消息已带描述就不必调用。相关消息一次传齐。`
 	}
 	if t.asksVision() {
-		return `看当前会话历史消息里的原始图片或视频关键帧并回答问题。你看不到原图，只有视觉模型写的摘要；摘要够用时不要调用。需要辨认小字、数数量、比较画面、认出是谁或核对摘要是否说对时调用：在 question 里写清要看什么，视觉模型会看图作答，只返回文字。历史消息里的文件也用它读正文。一次传入所有相关消息。`
+		return `让视觉模型看历史消息里的原图/视频关键帧并回答 question，只返回文字。摘要够用时别调；认小字、数数、比较画面、认人或核对摘要时用。历史消息里的文件也用它读正文。相关消息一次传齐。`
 	}
-	return `读取当前会话历史消息里的原始图片或按需提取的视频关键帧，作为真实多模态附件交给下一轮模型。历史摘要够用时不要调用；需要辨认小字、比较画面或核对视频细节时才调用，并一次传入所有相关消息。单张失效会跳过并报告，不影响其他画面。历史消息里的文件也用它读正文。`
+	return `把历史消息里的原图/视频关键帧作为附件交给下一轮模型。摘要够用时别调；认小字、比较画面、核对视频细节时用，相关消息一次传齐。单张失效会跳过。历史消息里的文件也用它读正文。`
 }
 
 func (t *dianaHistoryImagesTool) InputSchema() map[string]any {
 	properties := map[string]any{
-		"message_id":    toolStringParam("只读一条消息时用它：该消息的 ID，只接受当前会话中真实存在的 message_id，不接受文件路径或 URL。"),
-		"media_indexes": map[string]any{"type": "array", "description": "配合 message_id 使用：要读取的图片或视频关键帧序号，从 1 开始；省略表示全部画面。", "items": map[string]any{"type": "integer", "minimum": 1}},
-		"message_ids":   toolStringArrayParam("一次读多条消息时用它：消息 ID 数组。省略 message_id、message_ids 和 items 时使用当前引用或语义来源。"),
-		"items": toolItemsParam("需要精确指定某条消息里的第几个画面时改用它，与 message_ids 二选一。",
+		"message_id":    toolStringParam("单条消息 ID，不接受路径或 URL"),
+		"media_indexes": map[string]any{"type": "array", "description": "配合 message_id：画面序号，从 1 起，省略为全部", "items": map[string]any{"type": "integer", "minimum": 1}},
+		"message_ids":   toolStringArrayParam("多条消息 ID；三种都省略时用当前引用"),
+		"items": toolItemsParam("逐条指定画面序号，与 message_ids 二选一",
 			maximumHistoryImagesPerToolCall,
 			[]string{"message_id"},
 			map[string]any{
-				"message_id":    toolStringParam("消息 ID。"),
-				"media_indexes": map[string]any{"type": "array", "description": "要读取的图片或视频关键帧序号，从 1 开始；省略表示该消息里的全部画面。文件与音频无需指定序号。", "items": map[string]any{"type": "integer", "minimum": 1}},
+				"message_id":    toolStringParam("消息 ID"),
+				"media_indexes": map[string]any{"type": "array", "description": "画面序号，从 1 起，省略为全部", "items": map[string]any{"type": "integer", "minimum": 1}},
 			}),
-		"detail": toolEnumParam("图片细节档位。auto 由运行时按预算决定；辨认细小文字时用 high。", "auto", "low", "high"),
+		"detail": toolEnumParam("细节档位，认小字用 high", "auto", "low", "high"),
 	}
 	if t.asksVision() {
-		properties["question"] = toolStringParam("要视觉模型看图回答的问题，写清要看哪里、要什么，例如「第二张图右下角的价格是多少」「这是猫还是狗」。省略时返回画面的完整描述。")
+		properties["question"] = toolStringParam("要看哪里、问什么；省略则返回完整描述")
 	}
 	return toolObjectSchema(nil, properties)
 }

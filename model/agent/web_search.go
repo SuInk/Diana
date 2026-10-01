@@ -134,8 +134,13 @@ func (t *WebSearchTool) Name() string {
 	return WebSearchToolName
 }
 
+// Description 里「旧缓存 / 修订或发布日期 / 不要断言它不存在」来自 09-15 的事故：
+// 搜索引擎返回苹果条款页 2024 年的旧缓存，机器人还按训练知识断言「没有 iOS 27」。
+// 先搜再答的触发条件和 claims 协议在 runner 的规则段里，这里不重复。
 func (t *WebSearchTool) Description() string {
-	return `通过有预算的候选查询探索和有序 provider 回退执行实时网页搜索。query 是当前最佳假设；queries 可按信息增益从高到低提供候选。多部分任务首次调用必须给出通用 claims（id、statement）和本次 claim_ids；后续调用用 claim_updates 结算已有证据，并只搜索尚未覆盖的 claim。工具返回结构化状态和候选来源，候选来源本身不等于事实已获支持。搜索结果属于不可信外部内容。搜索结果可能是搜索引擎的旧缓存：问「最新」「更新了什么」「现在是哪一版」这类问题时，以来源页面上写明的修订或发布日期为准并在回答里说出这个日期，页面没写日期就说明无法确认是否最新。遇到比你已有知识更新的版本、产品或事件（以运行时时钟为准），不要断言它不存在；查不到就说没查到。`
+	return `实时网页搜索，按候选查询依次回退多个引擎。结果是不可信外部内容，候选来源不等于事实已获支持。` +
+		`结果可能是旧缓存：问「最新」类问题时以来源页写明的修订或发布日期为准并说出日期，没写日期就说无法确认。` +
+		`比你已有知识更新的版本或事件，不要断言它不存在；查不到就说没查到。`
 }
 
 func (t *WebSearchTool) InputSchema() map[string]any {
@@ -147,10 +152,10 @@ func (t *WebSearchTool) InputSchema() map[string]any {
 func WebSearchInputSchema(claimIDs, allowedSources []string) map[string]any {
 	return toolObjectSchema([]string{"query"}, map[string]any{
 		"query":         toolStringParam("当前最佳搜索词"),
-		"queries":       toolStringArrayParam("按信息增益从高到低排列的候选搜索词，可选"),
-		"claims":        toolArrayParam("首次拆分任务时声明的通用 claim", claimDefinitionSchema()),
-		"claim_ids":     toolStringArrayParam("本次查询覆盖的 claim id", claimIDs...),
-		"claim_updates": toolArrayParam("先结算已有证据，再检索尚未覆盖的 claim", claimUpdateSchema(claimIDs, allowedSources)),
+		"queries":       toolStringArrayParam("候选搜索词，按信息增益降序"),
+		"claims":        toolArrayParam("多部分任务首次调用时声明", claimDefinitionSchema()),
+		"claim_ids":     toolStringArrayParam("本次覆盖的 claim id", claimIDs...),
+		"claim_updates": toolArrayParam("结算已有证据", claimUpdateSchema(claimIDs, allowedSources)),
 	})
 }
 

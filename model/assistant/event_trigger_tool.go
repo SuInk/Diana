@@ -59,31 +59,35 @@ func (t *dianaEventTriggerTool) Name() string {
 	return dianaEventTriggerToolName
 }
 
+// 「不要口头答应代替」留着：只回一句「好的，他说话时提醒你」却没建任务，用户会以为
+// 设上了。和 reminder、subscription 的分工也保留，选错工具就建不出来。
 func (t *dianaEventTriggerTool) Description() string {
-	return `创建和管理持久化的事件触发任务：「某人下次说话时提醒他」「有人提到某个词时做某事」「有人进群时做某事」。条件满足时发一句固定文本，或者跑一轮带工具的 agent 按指令去做。按时间点触发的改用 reminder，按固定间隔重复的改用 subscription。不得用口头答应、run_command 或后台进程代替。`
+	return `管理事件触发任务：某人下次说话、有人提到某词、有人进群时，发一句话或让 agent 按指令执行。` +
+		`按时间点触发用 reminder，按间隔重复用 subscription。不要口头答应或用后台进程代替。`
 }
 
+// 时长格式、范围、互斥条件填错都由 Run 返回具体原因，说明里只写默认值和范围。
 func (t *dianaEventTriggerTool) InputSchema() map[string]any {
 	return toolObjectSchema([]string{"operation"}, map[string]any{
-		"operation": toolEnumParam("要执行的操作。cancel 只停止并保留记录，delete 才彻底删除。",
+		"operation": toolEnumParam("cancel 停止并保留记录，delete 彻底删除",
 			"create", "list", "cancel", "delete"),
-		"event": toolEnumParam("触发事件：message 是有人发消息（默认），member_join 是有人进群。",
+		"event": toolEnumParam("message 有人发消息（默认），member_join 有人进群",
 			eventTriggerEventMessage, eventTriggerEventMemberJoin),
-		"where": toolEnumParam("在哪里盯：here 是当前会话（默认）；group 是 group_id 指定的群；anywhere 是这台机器人所在的任何群和私聊。group 和 anywhere 仅主人可用。",
+		"where": toolEnumParam("here 当前会话（默认）；group 指定群；anywhere 所有群和私聊。后两者仅主人",
 			eventTriggerWhereHere, eventTriggerWhereGroup, eventTriggerWhereAnywhere),
-		"group_id": toolStringParam("where=group 时要盯的群号。"),
-		"users":    toolStringArrayParam("触发者账号列表，最多 " + itoa(maximumEventTriggerUsers) + " 个。不传默认只有当前说话的人；\"*\" 表示任何人。指定别人或 \"*\" 仅主人可用。"),
-		"keywords": toolStringArrayParam("可选：消息里含任一关键词才触发（不区分大小写），最多 " + itoa(maximumEventTriggerKeywords) + " 个。"),
-		"pattern":  toolStringParam("可选：消息须匹配的 Go 正则，最多 " + itoa(maximumEventTriggerPattern) + " 个字符。和 keywords 同时给时两者都要满足。"),
-		"action": toolEnumParam("触发后做什么：message 原样发出 message 里的文本（默认）；agent 把 message 当成指令，结合触发消息跑一轮带工具的 agent，把结果发出去。",
+		"group_id": toolStringParam("where=group 的群号"),
+		"users":    toolStringArrayParam("触发者账号，默认当前说话人，\"*\" 为任何人；指定他人或 * 仅主人，最多 " + itoa(maximumEventTriggerUsers) + " 个"),
+		"keywords": toolStringArrayParam("含任一关键词才触发，不区分大小写，最多 " + itoa(maximumEventTriggerKeywords) + " 个"),
+		"pattern":  toolStringParam("须匹配的 Go 正则，最多 " + itoa(maximumEventTriggerPattern) + " 字；与 keywords 同给时都要满足"),
+		"action": toolEnumParam("message 原样发出 message；agent 把 message 当指令结合触发消息执行，发出结果",
 			eventTriggerActionMessage, eventTriggerActionAgent),
-		"message": toolStringParam("action=message 时是要发的文本，action=agent 时是要执行的指令，最多 " + itoa(maximumReminderMessageRunes) + " 个字符。create 必填。"),
-		"deliver_to": toolEnumParam("结果发到哪：event 是事件发生的会话，并引用、@ 触发者（默认）；origin 是现在这条会话，适合「他上线了告诉我」。",
+		"message": toolStringParam("action=message 时为文本，agent 时为指令，最多 " + itoa(maximumReminderMessageRunes) + " 字；create 必填"),
+		"deliver_to": toolEnumParam("event 发到事件会话并 @ 触发者（默认）；origin 发到当前会话，如「他上线告诉我」",
 			eventTriggerDeliverEvent, eventTriggerDeliverOrigin),
-		"repeat":     toolBoolParam("true 表示每次满足条件都触发；默认 false，触发一次就用掉。"),
-		"cooldown":   toolStringParam("repeat=true 时两次触发的最短间隔，单位 " + durationUnitsHint + "。默认 " + formatDurationUnits(defaultEventTriggerCooldown) + "，范围 " + formatDurationUnits(minimumEventTriggerCooldown) + " 到 " + formatDurationUnits(maximumEventTriggerCooldown) + "。"),
-		"expires_in": toolStringParam("多久之后自动失效，单位 " + durationUnitsHint + "。默认 " + formatDurationUnits(defaultEventTriggerLifetime) + "，最长 " + formatDurationUnits(maximumEventTriggerLifetime) + "。到期一次都没触发会告诉设置的人。"),
-		"id":         toolStringParam("要取消或删除的任务 ID；可先用 list 查到。"),
+		"repeat":     toolBoolParam("每次满足都触发；默认 false，触发一次即用掉"),
+		"cooldown":   toolStringParam("repeat 时两次触发最短间隔，默认 " + formatDurationUnits(defaultEventTriggerCooldown) + "，范围 " + formatDurationUnits(minimumEventTriggerCooldown) + "~" + formatDurationUnits(maximumEventTriggerCooldown)),
+		"expires_in": toolStringParam("多久后失效，默认 " + formatDurationUnits(defaultEventTriggerLifetime) + "，最长 " + formatDurationUnits(maximumEventTriggerLifetime)),
+		"id":         toolStringParam("任务 ID，可用 list 查"),
 	})
 }
 

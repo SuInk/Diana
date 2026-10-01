@@ -48,18 +48,16 @@ type WriteFileTool struct {
 
 func (t *WriteFileTool) Name() string { return "write_file" }
 
+// 分区约定（tmp/outputs/keep 各自的保留期）在 runner 的规则段里；二进制会被代码拒绝并
+// 指向 save_to_workspace，这里只留一句防止模型写一份文字描述冒充文件。
 func (t *WriteFileTool) Description() string {
-	return `在 Agent 工作目录内写入文本文件，父目录会自动创建。` +
-		`整体覆盖：已存在的文件会被完全替换，要改其中一段请用 edit_file，别把整个文件重写一遍。` +
-		`只能写文本：图片、音视频、PDF、压缩包这类二进制文件写不出来，要存这些用 save_to_workspace。` +
-		`不要写在工作目录根下：草稿和中间文件放 ` + WorkspaceTmpDir + `/（1 天后清理），给用户的成品放 ` + WorkspaceOutputsDir +
-		`/（30 天后清理），主人要长期留着的放 ` + WorkspaceKeepDir + `/（不清理，自动归到本机器人名下）。`
+	return `在工作目录内写文本文件，整体覆盖，父目录自动创建。改其中一段用 edit_file。只能写文本，二进制用 save_to_workspace。`
 }
 
 func (t *WriteFileTool) InputSchema() map[string]any {
 	return toolObjectSchema([]string{"path", "content"}, map[string]any{
-		"path":    toolStringParam("工作目录内的相对文件路径，放进 " + WorkspaceTmpDir + "/、" + WorkspaceOutputsDir + "/ 或 " + WorkspaceKeepDir + "/ 这些分区，不要直接写在根下"),
-		"content": toolStringParam("要写入的完整内容"),
+		"path":    toolStringParam("相对路径，放 " + WorkspaceTmpDir + "/、" + WorkspaceOutputsDir + "/ 或 " + WorkspaceKeepDir + "/，别放根下"),
+		"content": toolStringParam("完整内容"),
 	})
 }
 
@@ -160,20 +158,18 @@ type EditFileTool struct {
 func (t *EditFileTool) Name() string { return "edit_file" }
 
 func (t *EditFileTool) Description() string {
-	return `用精确文本替换修改工作目录内的文件。每个 old_text 必须在原文件里唯一命中一处，` +
-		`多处命中或找不到都会整批拒绝而不是改错地方；多个替换互相不能重叠，且都按原文件匹配，不是依次生效。` +
-		`要整体重写用 write_file。`
+	return `用精确文本替换修改工作目录内的文件。每个 old_text 须唯一命中，否则整批拒绝；各替换按原文件匹配、不能重叠。`
 }
 
 func (t *EditFileTool) InputSchema() map[string]any {
 	return toolObjectSchema([]string{"path", "edits"}, map[string]any{
-		"path": toolStringParam("工作目录内的相对文件路径"),
+		"path": toolStringParam("相对路径"),
 		"edits": map[string]any{
 			"type":        "array",
-			"description": "要应用的替换，按原文件匹配",
+			"description": "替换列表",
 			"items": toolObjectSchema([]string{"old_text", "new_text"}, map[string]any{
-				"old_text": toolStringParam("原文件里要被替换的片段，必须唯一命中"),
-				"new_text": toolStringParam("替换成的内容，留空表示删除"),
+				"old_text": toolStringParam("原文片段，须唯一命中"),
+				"new_text": toolStringParam("新内容，留空即删除"),
 			}),
 		},
 	})
@@ -330,19 +326,18 @@ type GrepTool struct {
 func (t *GrepTool) Name() string { return "grep" }
 
 func (t *GrepTool) Description() string {
-	return `在 Agent 工作目录内按内容检索文件，返回「路径:行号: 内容」。` +
-		`默认按正则解释 pattern，literal 为真时按字面量。用它定位代码或配置在哪，比逐个 read_file 快得多。`
+	return `在工作目录内按内容检索文件，返回「路径:行号: 内容」。定位代码或配置比逐个 read_file 快。`
 }
 
 func (t *GrepTool) InputSchema() map[string]any {
 	return toolObjectSchema([]string{"pattern"}, map[string]any{
-		"pattern":     toolStringParam("要检索的正则；literal 为真时按字面量处理"),
-		"path":        toolStringParam("限定在工作目录内的这个子目录里找，可选"),
-		"glob":        toolStringParam("只看匹配这个通配符的文件，例如 *.go 或 src/**/*.ts，可选"),
-		"ignore_case": toolBoolParam("忽略大小写，可选"),
-		"literal":     toolBoolParam("把 pattern 当字面量而不是正则，可选"),
-		"context":     toolIntParam("每条匹配额外带前后多少行，可选"),
-		"limit":       toolIntParam("最多返回多少条匹配，默认 " + fmt.Sprint(defaultGrepLimit)),
+		"pattern":     toolStringParam("正则；literal=true 时按字面量"),
+		"path":        toolStringParam("限定子目录"),
+		"glob":        toolStringParam("文件通配符，如 *.go"),
+		"ignore_case": toolBoolParam(""),
+		"literal":     toolBoolParam("pattern 按字面量"),
+		"context":     toolIntParam("匹配前后各带几行"),
+		"limit":       toolIntParam("最多条数，默认 " + fmt.Sprint(defaultGrepLimit)),
 	})
 }
 
@@ -460,15 +455,14 @@ type FindFilesTool struct {
 func (t *FindFilesTool) Name() string { return "find_files" }
 
 func (t *FindFilesTool) Description() string {
-	return `在 Agent 工作目录内按通配符找文件，返回相对路径。` +
-		`pattern 不含 / 时只比对文件名（*.go），含 / 时比对相对路径，** 跨目录（src/**/*.ts）。`
+	return `在工作目录内按通配符找文件，返回相对路径。`
 }
 
 func (t *FindFilesTool) InputSchema() map[string]any {
 	return toolObjectSchema([]string{"pattern"}, map[string]any{
-		"pattern": toolStringParam("通配符，例如 *.go、config.*、src/**/*.ts"),
-		"path":    toolStringParam("限定在工作目录内的这个子目录里找，可选"),
-		"limit":   toolIntParam("最多返回多少条，默认 " + fmt.Sprint(defaultFindLimit)),
+		"pattern": toolStringParam("不含 / 只比文件名，含 / 比相对路径，** 跨目录"),
+		"path":    toolStringParam("限定子目录"),
+		"limit":   toolIntParam("最多条数，默认 " + fmt.Sprint(defaultFindLimit)),
 	})
 }
 

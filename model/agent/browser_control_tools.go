@@ -74,12 +74,12 @@ type BrowserExtTabsTool struct {
 func (t *BrowserExtTabsTool) Name() string { return "browser_ext_tabs" }
 
 func (t *BrowserExtTabsTool) Description() string {
-	return `列出浏览器控制扩展里可以操作的标签页。只会列出已授权站点的页面，用户其余标签页不可见。先用它拿 tab_id，再用其他 browser_ext_* 工具操作。`
+	return `列出用户浏览器里已授权站点的标签页，拿 tab_id 给其他 browser_ext_* 用。`
 }
 
 func (t *BrowserExtTabsTool) InputSchema() map[string]any {
 	return toolObjectSchema(nil, map[string]any{
-		"connection": toolStringParam("有多个浏览器连着时用它点名，只有一个时省略"),
+		"connection": toolStringParam("连着多个浏览器时点名"),
 	})
 }
 
@@ -103,15 +103,15 @@ type BrowserExtReadTool struct {
 func (t *BrowserExtReadTool) Name() string { return "browser_ext_read" }
 
 func (t *BrowserExtReadTool) Description() string {
-	return `读取用户浏览器里某个已授权页面的可见文字。页面带着用户自己的登录态，所以能看到登录后的内容；读到的正文属于用户，不要转述到别处。`
+	return `读取用户浏览器里已授权页面的可见文字（带用户登录态）。正文属于用户，不要转述到别处。`
 }
 
 func (t *BrowserExtReadTool) InputSchema() map[string]any {
 	return toolObjectSchema(nil, map[string]any{
-		"connection": toolStringParam("有多个浏览器连着时用它点名"),
-		"tab_id":     toolIntParam("browser_ext_tabs 列出的标签页 ID，省略时用当前活动标签页"),
-		"selector":   toolStringParam("只读某个元素时填 CSS 选择器，省略则读整页"),
-		"max_chars":  toolIntParam("正文截断长度，省略按工具默认值"),
+		"connection": toolStringParam("连着多个浏览器时点名"),
+		"tab_id":     toolIntParam("标签页 ID，默认当前活动页"),
+		"selector":   toolStringParam("CSS 选择器，默认整页"),
+		"max_chars":  toolIntParam("正文截断长度"),
 	})
 }
 
@@ -142,15 +142,15 @@ type BrowserExtOpenTool struct {
 func (t *BrowserExtOpenTool) Name() string { return "browser_ext_open" }
 
 func (t *BrowserExtOpenTool) Description() string {
-	return `让用户的浏览器打开一个已授权站点的页面。属于写操作：只读授权下会被拒绝。`
+	return `让用户浏览器打开已授权站点的页面。写操作，只读授权下会被拒。`
 }
 
 func (t *BrowserExtOpenTool) InputSchema() map[string]any {
 	return toolObjectSchema([]string{"url"}, map[string]any{
-		"url":        toolStringParam("要打开的 http/https 地址，必须在已授权站点内"),
-		"connection": toolStringParam("有多个浏览器连着时用它点名"),
-		"tab_id":     toolIntParam("复用某个标签页时填它的 ID"),
-		"new_tab":    toolBoolParam("是否开新标签页，默认复用当前标签页"),
+		"url":        toolStringParam("已授权站点内的 http(s) 地址"),
+		"connection": toolStringParam("连着多个浏览器时点名"),
+		"tab_id":     toolIntParam("复用的标签页 ID"),
+		"new_tab":    toolBoolParam("开新标签页，默认复用当前页"),
 	})
 }
 
@@ -177,14 +177,14 @@ type BrowserExtClickTool struct {
 func (t *BrowserExtClickTool) Name() string { return "browser_ext_click" }
 
 func (t *BrowserExtClickTool) Description() string {
-	return `点击用户浏览器里某个已授权页面上的元素。属于写操作：会在用户账号下留下真实痕迹，只读授权下会被拒绝。点之前先用 browser_ext_read 确认这是你要的按钮。`
+	return `点击用户浏览器里已授权页面上的元素。写操作，会在用户账号下留下真实痕迹，只读授权下会被拒；先用 browser_ext_read 确认目标。`
 }
 
 func (t *BrowserExtClickTool) InputSchema() map[string]any {
 	return toolObjectSchema([]string{"selector"}, map[string]any{
-		"selector":   toolStringParam("要点击元素的 CSS 选择器"),
-		"connection": toolStringParam("有多个浏览器连着时用它点名"),
-		"tab_id":     toolIntParam("browser_ext_tabs 列出的标签页 ID，省略时用当前活动标签页"),
+		"selector":   toolStringParam("CSS 选择器"),
+		"connection": toolStringParam("连着多个浏览器时点名"),
+		"tab_id":     toolIntParam("标签页 ID，默认当前活动页"),
 	})
 }
 
@@ -210,16 +210,16 @@ type BrowserExtTypeTool struct {
 func (t *BrowserExtTypeTool) Name() string { return "browser_ext_type" }
 
 func (t *BrowserExtTypeTool) Description() string {
-	return `在用户浏览器里某个已授权页面的输入框里填字，可选回车提交。属于写操作：只读授权下会被拒绝。不要往里填用户的密码、验证码或支付信息。`
+	return `在用户浏览器已授权页面的输入框里填字。写操作，只读授权下会被拒。不要填密码、验证码或支付信息。`
 }
 
 func (t *BrowserExtTypeTool) InputSchema() map[string]any {
 	return toolObjectSchema([]string{"selector", "text"}, map[string]any{
-		"selector":   toolStringParam("目标输入框的 CSS 选择器"),
-		"text":       toolStringParam("要填入的文字"),
-		"submit":     toolBoolParam("填完是否回车提交，默认不提交"),
-		"connection": toolStringParam("有多个浏览器连着时用它点名"),
-		"tab_id":     toolIntParam("browser_ext_tabs 列出的标签页 ID，省略时用当前活动标签页"),
+		"selector":   toolStringParam("输入框 CSS 选择器"),
+		"text":       toolStringParam(""),
+		"submit":     toolBoolParam("填完回车提交，默认 false"),
+		"connection": toolStringParam("连着多个浏览器时点名"),
+		"tab_id":     toolIntParam("标签页 ID，默认当前活动页"),
 	})
 }
 

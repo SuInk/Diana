@@ -33,14 +33,14 @@ func newDianaReplyBlockTool(r *Runtime, event MessageEvent) *dianaReplyBlockTool
 func (*dianaReplyBlockTool) Name() string { return replyBlockToolName }
 
 func (*dianaReplyBlockTool) Description() string {
-	return "屏蔽某个人：被屏蔽的人之后说什么都不回复，一直到解除为止，没有时限。block 屏蔽，unblock 解除，list 看当前名单。scope=group 只管当前群，主人或实时核验的群管理员可改；scope=bot 对本机所有群和私聊生效，只有主人能改。只认账号 ID，不认昵称；不操作平台禁言，也不撤回消息。"
+	return "屏蔽某人：之后他说什么都不回，直到解除，无时限。scope=group 主人或核验过的群管可改，scope=bot 全局且仅主人。只认账号 ID；不禁言、不撤回。"
 }
 
 func (*dianaReplyBlockTool) InputSchema() map[string]any {
 	return toolObjectSchema([]string{"operation"}, map[string]any{
-		"operation": toolEnumParam("block 加入屏蔽名单，unblock 移出，list 只读当前名单；只有保存成功才报告已生效。", "block", "unblock", "list"),
-		"scope":     toolEnumParam("群聊默认 group，私聊默认 bot。group 只影响当前群，bot 对本机所有群和私聊生效且仅主人可改；不能指定别的机器人或别的群。", "group", "bot"),
-		"user_id":   toolStringParam("目标账号 ID，必须取自消息里 @ 的结构化信息、被引用消息的发送者，或群成员查询结果里的成员 ID。不要按昵称猜 ID，拿不准就先查成员或问清楚。省略时用当前引用消息的发送者；list 不需要。"),
+		"operation": toolEnumParam("list 只读名单；保存成功才算生效", "block", "unblock", "list"),
+		"scope":     toolEnumParam("群聊默认 group（仅当前群），私聊默认 bot", "group", "bot"),
+		"user_id":   toolStringParam("目标账号，取自 @、引用或成员查询，勿按昵称猜；默认引用消息发送者"),
 	})
 }
 

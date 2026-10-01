@@ -172,13 +172,13 @@ func (t *BrowserOpenTool) Name() string {
 func (t *BrowserOpenTool) RepeatableCalls() bool { return true }
 
 func (t *BrowserOpenTool) Description() string {
-	return `通过 Chrome DevTools Protocol 打开网页。需要 Chrome 启用 remote debugging。`
+	return `在浏览器里打开网页。`
 }
 
 func (t *BrowserOpenTool) InputSchema() map[string]any {
 	return toolObjectSchema([]string{"url"}, map[string]any{
-		"url":     toolStringParam("要打开的页面地址"),
-		"new_tab": toolBoolParam("是否在新标签页打开，默认沿用当前标签页"),
+		"url":     toolStringParam("页面地址"),
+		"new_tab": toolBoolParam("新标签页打开，默认沿用当前页"),
 	})
 }
 
@@ -261,7 +261,7 @@ func (t *BrowserTextTool) Name() string {
 }
 
 func (t *BrowserTextTool) Description() string {
-	return `读取当前浏览器页面文本。`
+	return `读取当前页面文本。`
 }
 
 // RepeatableCalls：页面会变，隔一步再读一次同一页不是原地打转。
@@ -269,7 +269,7 @@ func (t *BrowserTextTool) RepeatableCalls() bool { return true }
 
 func (t *BrowserTextTool) InputSchema() map[string]any {
 	return toolObjectSchema(nil, map[string]any{
-		"selector": toolStringParam("CSS 选择器，省略时读取整页文本"),
+		"selector": toolStringParam("CSS 选择器，默认整页"),
 	})
 }
 
@@ -291,16 +291,16 @@ func (t *BrowserClickTool) Name() string {
 }
 
 func (t *BrowserClickTool) Description() string {
-	return `点击当前页面中的元素：给 selector 点元素，或给 x/y 点截图上的那个坐标（视口像素）。走真实鼠标事件。`
+	return `点击当前页面：给 selector 点元素，或给截图上的 x/y 坐标。走真实鼠标事件。`
 }
 
 func (t *BrowserClickTool) InputSchema() map[string]any {
 	return toolObjectSchema(nil, map[string]any{
-		"selector":    toolStringParam("要点击元素的 CSS 选择器"),
-		"x":           toolNumberParam("按坐标点击时的横坐标（视口 CSS 像素，和 browser_screenshot 的图一致）"),
-		"y":           toolNumberParam("按坐标点击时的纵坐标"),
-		"button":      toolEnumParam("鼠标键，默认 left", "left", "right", "middle"),
-		"click_count": toolIntParam("连击次数，双击填 2"),
+		"selector":    toolStringParam("CSS 选择器"),
+		"x":           toolNumberParam("视口 CSS 像素，同截图坐标"),
+		"y":           toolNumberParam("视口 CSS 像素"),
+		"button":      toolEnumParam("默认 left", "left", "right", "middle"),
+		"click_count": toolIntParam("双击填 2"),
 	})
 }
 
@@ -388,15 +388,15 @@ func (t *BrowserTypeTool) Name() string {
 }
 
 func (t *BrowserTypeTool) Description() string {
-	return `向当前页面元素输入文本，走真实键盘输入（React 等框架的受控输入框也认）。省略 selector 时输入到当前焦点。`
+	return `向当前页面元素输入文本，走真实键盘输入，受控输入框也认。`
 }
 
 func (t *BrowserTypeTool) InputSchema() map[string]any {
 	return toolObjectSchema([]string{"text"}, map[string]any{
-		"selector":    toolStringParam("目标输入框的 CSS 选择器，省略时输入到当前焦点元素"),
-		"text":        toolStringParam("要输入的文本"),
-		"clear":       toolBoolParam("输入前是否清空原有内容，默认清空"),
-		"press_enter": toolBoolParam("输入后是否回车提交"),
+		"selector":    toolStringParam("输入框 CSS 选择器，默认当前焦点"),
+		"text":        toolStringParam(""),
+		"clear":       toolBoolParam("先清空原内容，默认 true"),
+		"press_enter": toolBoolParam("输入后回车"),
 	})
 }
 
@@ -478,7 +478,7 @@ func (t *BrowserScreenshotTool) Name() string {
 }
 
 func (t *BrowserScreenshotTool) Description() string {
-	return `截取当前页面可见区域：图片直接给你看，同时存进 Agent 工作目录。图上的像素坐标可以直接交给 browser_click 的 x/y。`
+	return `截取当前页面可见区域，图片直接给你看并存进工作目录。图上坐标可直接给 browser_click。`
 }
 
 func (t *BrowserScreenshotTool) RepeatableCalls() bool { return true }
@@ -499,7 +499,7 @@ func (t *BrowserScreenshotTool) setParts(parts []llm.ContentPart) {
 
 func (t *BrowserScreenshotTool) InputSchema() map[string]any {
 	return toolObjectSchema(nil, map[string]any{
-		"path": toolStringParam("工作目录内的相对保存路径，省略时存到 " + WorkspaceBrowserDir + "/（7 天后清理）；要交给用户的成品放 " + WorkspaceOutputsDir + "/，不要写在工作目录根下；主人要长期留着的截完再用 manage_files 挪进 " + WorkspaceKeepDir + "/"),
+		"path": toolStringParam("相对路径，默认 " + WorkspaceBrowserDir + "/；成品放 " + WorkspaceOutputsDir + "/，别放根下"),
 	})
 }
 

@@ -47,16 +47,14 @@ type ManageFilesTool struct {
 
 func (t *ManageFilesTool) Name() string { return ManageFilesToolName }
 
+// Description 只留模型不说就会做错的部分：delete 进回收站、长期区要写 description。
+// 覆盖确认、长期区配额、别的机器人长期区只读、运行时配置不能碰，代码都会返回具体错误。
 func (t *ManageFilesTool) Description() string {
 	if !t.writeEnabled {
-		return `查看 Agent 工作目录内文件或目录的信息：大小、按内容判断的真实类型、图片宽高、修改时间、是否目录。` +
-			`文件写入没有打开，挪动、复制、删除、建目录都不可用。`
+		return `查看工作目录内文件或目录的大小、真实类型、图片宽高和修改时间。文件写入没开，只能 stat。`
 	}
-	return `整理 Agent 工作目录内的文件：move 挪动或改名，copy 复制文件，delete 删除（挪进回收站 ` + WorkspaceTrashDir +
-		`/<时间戳>/，不是真删），mkdir 建目录，stat 查看大小、按内容判断的真实类型、图片宽高、修改时间、是否目录。` +
-		`目标已存在时默认拒绝，确认要覆盖才传 overwrite=true。只动工作目录内的相对路径，运行时配置和回收站内部都不能碰。` +
-		`主人要把东西长期留着（存下来、留着、别过期、放持久目录）时 move 或 copy 到 ` + WorkspaceKeepDir + `/，会自动归到本机器人的长期保存区，并用 description 写一句这是什么；` +
-		`长期区不会自动清理、每台机器人上限 ` + formatKeepBytes(KeepQuotaBytes) + `，别的机器人的长期区只能读。`
+	return `整理工作目录内的文件：移动/改名、复制、删除、建目录、查看信息。delete 挪进回收站 ` + WorkspaceTrashDir + `/，不是真删。` +
+		`主人要长期留着的 move 或 copy 进 ` + WorkspaceKeepDir + `/ 并写 description，长期区不自动清理。`
 }
 
 func (t *ManageFilesTool) actions() []string {
@@ -68,13 +66,13 @@ func (t *ManageFilesTool) actions() []string {
 
 func (t *ManageFilesTool) InputSchema() map[string]any {
 	properties := map[string]any{
-		"action": toolEnumParam("要做的事", t.actions()...),
-		"path":   toolStringParam("工作目录内的相对路径：move/copy 的来源，其他动作的对象"),
+		"action": toolEnumParam("", t.actions()...),
+		"path":   toolStringParam("相对路径；move/copy 时是来源"),
 	}
 	if t.writeEnabled {
-		properties["to"] = toolStringParam("move/copy 的目标相对路径；指向已有目录时放进这个目录，文件名不变")
-		properties["overwrite"] = toolBoolParam("目标文件已存在时是否覆盖，默认 false")
-		properties["description"] = toolStringParam("move/copy 进长期保存区 " + WorkspaceKeepDir + "/ 时写一句这是什么（例如「群活动海报 9 月版」），会记进长期区索引，以后靠它认出这个文件")
+		properties["to"] = toolStringParam("目标相对路径；是已有目录时放进去，文件名不变")
+		properties["overwrite"] = toolBoolParam("覆盖已存在的目标，默认 false")
+		properties["description"] = toolStringParam("进 " + WorkspaceKeepDir + "/ 时写一句这是什么，记入长期区索引")
 	}
 	return toolObjectSchema([]string{"action", "path"}, properties)
 }

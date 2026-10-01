@@ -64,16 +64,20 @@ func (t *dianaLocalAttachmentTool) Name() string {
 
 func (t *dianaLocalAttachmentTool) Description() string {
 	if t.view {
-		return "读取 Agent 工作目录内的真实图片，把画面作为附件交给下一轮模型。用于查看 save_to_workspace 存下来、browser_screenshot 截下来或其他工具生成在工作目录里的图片；按文件内容认类型，内容不是图片的会被拒绝，不能把文件名当作画面证据。svg 会经「网页渲染」插件栅格化后再看。path 必须是工作目录相对路径。读取成功不代表已发送到聊天。"
+		// 「文件名不是画面证据」「读取不等于已发送」都是早期事故：模型按文件名编画面，
+		// 或看完图就说发过去了。svg 栅格化、类型校验的细节由 Run 的报错给出。
+		return "查看 Agent 工作目录里的图片，画面作为附件交给下一轮模型。文件名不能当画面证据；读取成功不代表已发到聊天。"
 	}
-	return "把 Agent 工作目录内的文件发送到当前会话，支持 Telegram 和 OneBot。mode=image 作为图片发送（位图发原文件，只在超出平台限制时才发缩放版；svg 会经「网页渲染」插件栅格化成 PNG 再发，插件没启用时请改用 mode=file），mode=file 作为原文件附件发送（常见文档、压缩包、音视频，可执行文件一律拒绝）。文件存进工作目录不等于用户收到了；需要交付时调用本工具。聊天里的图片、网址上的文件要先用 save_to_workspace 存进来。描述图片内容前先用 view_image 查看。不会执行文件；仅主人可用。"
+	// 「存进工作目录不等于用户收到」是事故规则：模型存好文件就宣称已发送。svg 需要
+	// 「网页渲染」插件、可执行文件拒发、超限发缩放版，这些都由 Run 的报错或结果说明。
+	return "把 Agent 工作目录里的文件发到当前会话，仅主人。存进工作目录不等于用户收到，交付要调本工具。聊天图片、网上文件先用 save_to_workspace 存进来；描述图片前先用 view_image 看。"
 }
 
 func (t *dianaLocalAttachmentTool) InputSchema() map[string]any {
-	properties := map[string]any{"path": toolStringParam("Agent 工作目录相对路径，例如 downloads/photo.jpg。发送前会做类型与大小（32MB）校验。")}
+	properties := map[string]any{"path": toolStringParam("工作目录相对路径，如 downloads/photo.jpg")}
 	required := []string{"path"}
 	if !t.view {
-		properties["mode"] = toolEnumParam("图片或原始文件附件。", "image", "file")
+		properties["mode"] = toolEnumParam("image 按图片发，file 按原文件附件发", "image", "file")
 		required = append(required, "mode")
 	}
 	return toolObjectSchema(required, properties)

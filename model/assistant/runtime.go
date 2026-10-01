@@ -4104,17 +4104,17 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			}
 			if subscription := newDianaSubscriptionTool(
 				subscriptionBackend{
-					kind: subscriptionKindSchedule, label: "定时重复任务：每天、每周固定时间的提醒，或按固定间隔重复查询并通知结果",
+					kind: subscriptionKindSchedule, label: "重复提醒或周期查询",
 					operations: []string{"create", "list", "update", "cancel", "delete"},
 					delegate:   newDianaScheduleTool(r, event),
 				},
 				subscriptionBackend{
-					kind: subscriptionKindRSS, label: "盯 RSS/Atom Feed 或 X (Twitter) 用户，由模型按 judge_prompt 判断是否值得通知",
+					kind: subscriptionKindRSS, label: "盯 RSS/Atom 或 X 用户，按 judge_prompt 判断是否通知",
 					operations: []string{"create", "list", "update", "cancel", "delete"},
 					delegate:   newDianaRSSWatchTool(r, event),
 				},
 				subscriptionBackend{
-					kind: subscriptionKindGitHub, label: "盯 GitHub 仓库的 Commit / PR / Issue / Release / Star",
+					kind: subscriptionKindGitHub, label: "盯 GitHub 仓库动态",
 					operations: []string{"create", "list", "update", "cancel", "delete", "run"},
 					delegate:   subscriptionGitHubDelegate(githubWatch),
 				},

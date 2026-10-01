@@ -33,21 +33,19 @@ func newDianaCodingTool(runtime *Runtime, event MessageEvent, settings SettingVa
 func (t *dianaCodingTool) Name() string { return dianaCodingToolName }
 
 func (t *dianaCodingTool) Description() string {
-	return `把一件编码工作交给外部编码 CLI（Claude Code / Codex / ACP 代理）在持久工作区里长时间执行。submit 派活后进程在后台独立运行，工具先等几秒：这期间就结束的直接返回结果，否则返回任务号，跑完 Diana 会主动汇报；期间用 status 查进度、tail 看最近动作、cancel 终止、followup 在原会话上追加指令；approvals 查看或清空主人说过「以后都同意」的操作类别。适合「改代码、修 Bug、加测试、跑构建」这类要几分钟到几小时的活。可用 agents 查看多个代理配置，submit 用 agent 选择配置；不填使用默认代理。只有机器人主人能用。`
+	return `把编码工作交给外部编码 CLI（Claude Code/Codex/ACP）在持久工作区后台执行，仅主人可用。submit 派活，没很快结束就返回任务号，跑完会主动汇报；status 查进度，tail 看最近动作，cancel 终止，followup 在原会话追加指令；agents 列代理配置；approvals 查看或清空常驻放行。适合改代码、修 Bug、跑构建等长任务。`
 }
 
 func (t *dianaCodingTool) InputSchema() map[string]any {
 	return toolObjectSchema([]string{"operation"}, map[string]any{
-		"operation": toolEnumParam("要执行的操作。", "submit", "status", "tail", "cancel", "followup", "list", "workspaces", "approvals", "agents"),
-		"agent":     toolStringParam("编码代理配置名称。submit 不填使用默认配置；agents 列出配置。followup 固定使用原任务配置。"),
-		"workspace": toolStringParam("工作区名字，必须是设置里登记过的。只登记了一个时可以省略。submit 必填。"),
-		"instruction": toolStringParam("交给编码 CLI 的完整指令。它看不到这里的聊天记录，" +
-			"所以要改什么、为什么改、验收标准都要写进来。submit 和 followup 必填。"),
-		"context": toolStringParam("相关聊天记录原文摘录。CLI 拿不到对话历史，需要依据聊天内容改代码时，" +
-			"把原话挑出来放这里，会作为背景附在指令前面。"),
-		"job_id":     toolStringParam("要查询、追加或取消的任务号。status / tail / cancel / followup 用；status 省略时返回最近的任务。"),
-		"tail_lines": toolIntParam("tail 返回的最近动作行数，默认 10。", 1, codingJobTailLines),
-		"clear":      toolBoolParam("approvals 专用：清空主人说过「以后都同意」的那些操作类别，清空后它们会重新逐次询问。"),
+		"operation":   toolEnumParam("操作。", "submit", "status", "tail", "cancel", "followup", "list", "workspaces", "approvals", "agents"),
+		"agent":       toolStringParam("代理配置名，submit 默认用默认配置，followup 沿用原任务。"),
+		"workspace":   toolStringParam("设置里登记的工作区名，submit 必填；只登记一个时可省。"),
+		"instruction": toolStringParam("完整指令，submit/followup 必填。CLI 看不到聊天记录，写清改什么、为什么、验收标准。"),
+		"context":     toolStringParam("相关聊天原文摘录，作为背景附在指令前。"),
+		"job_id":      toolStringParam("任务号；status 省略时取最近的任务。"),
+		"tail_lines":  toolIntParam("tail 行数，默认 10。", 1, codingJobTailLines),
+		"clear":       toolBoolParam("approvals 专用：清空主人说过「以后都同意」的操作类别。"),
 	})
 }
 

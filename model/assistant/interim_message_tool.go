@@ -88,15 +88,16 @@ func newDianaInterimMessageTool(r *Runtime, event MessageEvent) *dianaInterimMes
 func (t *dianaInterimMessageTool) Name() string { return dianaInterimMessageToolName }
 
 func (t *dianaInterimMessageTool) Description() string {
-	return fmt.Sprintf(`立刻在当前对话里发一句话，本轮不结束，发完可以接着调用工具。`+
-		`用在两种地方：要先查、先做几步才能回答时，动手前说一句正在做什么（比如「我去查一下」）；长任务每做完一个阶段，报一句进度。`+
-		`说了「去做」就必须接着真的去做，不能说完就收工。它不是用来把答案拆开发的：一轮最多 %d 次，每次一句不超过 %d 字的短话。`+
-		`发出去的话对方已经看到了，最后 agent_finalize 只写还没说过的内容；该说的都说完了就 silent=true。只有真的调用了本工具才算说过：写在工具调用旁边的正文不会发出去。`, interimMessageMaxPerTurn, interimMessageMaxRunes)
+	// 「说了去做就得接着做」「旁边的正文不算说过」是事故规则（#812、#912）：
+	// 模型 say 完「我去查」就直接收尾，或把工具调用旁的正文当成已发出。
+	return fmt.Sprintf(`立刻发一句话且本轮不结束，用于动手前说「我去查一下」或长任务报进度。`+
+		`说了去做就必须接着调工具真的做，不能说完就收工。不用来拆分答案：每轮最多 %d 次，每次≤%d 字。`+
+		`说过的话 agent_finalize 不要重复，都说完就 silent=true。只有调了本工具才算说过，工具调用旁的正文不会发出。`, interimMessageMaxPerTurn, interimMessageMaxRunes)
 }
 
 func (t *dianaInterimMessageTool) InputSchema() map[string]any {
 	return toolObjectSchema([]string{"text"}, map[string]any{
-		"text": toolStringParam("要立刻发出去的一句话，照平常说话的口吻写。"),
+		"text": toolStringParam("要立刻发的一句话"),
 	})
 }
 

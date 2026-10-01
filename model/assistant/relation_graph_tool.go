@@ -47,9 +47,8 @@ func (t *dianaGroupRelationsTool) defaultRange() string {
 func (t *dianaGroupRelationsTool) Name() string { return dianaGroupRelationsToolName }
 
 func (t *dianaGroupRelationsTool) Description() string {
-	return `画一张本群的关系图并直接发到群里：你在正中间，群友按和你的互动次数围一圈，连线粗细是互动次数，圆点大小是发言量。` +
-		`用户想看「群里谁跟谁熟」「关系图」「互动图」这类东西时用它。range 可选 24h、7d、30d、all，不填按插件设置里的默认区间。` +
-		`图由运行时发送，你只要在调用后用一句话说明就行，不要描述图里的具体数字——你看不到那张图。`
+	return `画本群关系图并直接发到群里：你在中间，连线粗细是互动次数，圆点大小是发言量。` +
+		`图由运行时发送，调用后一句话交代即可；你看不到图，不要描述里面的数字。`
 }
 
 func (t *dianaGroupRelationsTool) InputSchema() map[string]any {
@@ -59,7 +58,7 @@ func (t *dianaGroupRelationsTool) InputSchema() map[string]any {
 			"range": map[string]any{
 				"type":        "string",
 				"enum":        []string{"24h", "7d", "30d", "all"},
-				"description": "统计区间，默认 7d",
+				"description": "统计区间，默认按插件设置",
 			},
 		},
 	}

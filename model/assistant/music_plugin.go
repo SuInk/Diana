@@ -591,7 +591,7 @@ type musicToolResult struct {
 func (t *dianaMusicTool) Name() string { return musicToolName }
 
 func (t *dianaMusicTool) Description() string {
-	return `按歌名或歌手搜索并点播歌曲。OneBot QQ 发送语音；Telegram 上传歌曲，使用原生音乐播放器；其他平台仅发送歌曲来源链接。仅当用户要求放歌、点歌、来一首，或指名要听某首歌时调用；讨论音乐、问歌词或歌手信息时不要调用。工具会完成本次回复，不要重复发送文字。没有可用音频时如实说明，不能声称播放成功。`
+	return `按歌名或歌手点播歌曲：QQ 发语音，Telegram 发音频，其他平台发链接。只在用户要放歌、点歌时用，聊音乐、问歌词不用。工具会完成本次回复，不再重复发文字；没有可用音频时如实说明，不说播放成功。`
 }
 
 func (t *dianaMusicTool) InputSchema() map[string]any {
@@ -600,7 +600,7 @@ func (t *dianaMusicTool) InputSchema() map[string]any {
 		"properties": map[string]any{
 			"query": map[string]any{
 				"type":        "string",
-				"description": "搜索词，尽量写成「歌名 歌手」。",
+				"description": "「歌名 歌手」",
 			},
 		},
 		"required": []string{"query"},

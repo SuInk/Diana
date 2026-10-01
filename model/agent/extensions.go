@@ -310,7 +310,7 @@ func (t *ExtensionsListTool) Name() string { return extensionsListToolName }
 func (t *ExtensionsListTool) Introspection(map[string]any) bool { return true }
 
 func (t *ExtensionsListTool) Description() string {
-	return `列出 Diana 的统一能力目录，包括默认内置插件、本地 Skills、MCP 服务、启用状态和 MCP 工具名。技能正文用 read_skill 读取。`
+	return `列出 Diana 的能力目录：内置插件、本地 Skills、MCP 服务及其启用状态和工具名。Skill 正文用 read_skill 读。`
 }
 
 func (t *ExtensionsListTool) InputSchema() map[string]any {

@@ -58,18 +58,18 @@ func newDianaBrowserHandoffTool(r *Runtime, event MessageEvent, cfg BotConfig) *
 
 func (t *dianaBrowserHandoffTool) Name() string { return dianaBrowserHandoffToolName }
 
+// 怎么去控制台点「开始处理」「完成」写在发给主人的通知里，模型不需要知道。
 func (t *dianaBrowserHandoffTool) Description() string {
-	return `请主人亲手在内置浏览器里做一步：登录、扫码、输短信或邮箱验证码、过人机验证、确认付款这类你做不了、也不该代劳的操作。` +
-		`调用后会把说明发给主人（去控制台「浏览器」页点「开始处理」，做完点「完成」），这一轮随即结束；` +
-		`主人处理完你会在这个对话里被叫醒接着做，醒来时只看得到 task，所以 task 要写完整。` +
-		`先把要处理的页面在内置浏览器里打开再调用。自己能做完的事不要调用；同一步主人说过做不了就别再请。`
+	return `请主人在内置浏览器里亲手做一步你做不了的操作，如登录、扫码、验证码、人机验证、确认付款。` +
+		`先在内置浏览器打开那一页再调用；调用后本轮结束，主人处理完你会被叫醒，届时只看得到 task 和原消息。` +
+		`自己能做完的别调；主人说过做不了的同一步别再请。`
 }
 
 func (t *dianaBrowserHandoffTool) InputSchema() map[string]any {
 	return toolObjectSchema([]string{"reason", "task"}, map[string]any{
-		"reason":       toolStringParam(fmt.Sprintf("请主人做什么，一个动宾短语，比如「登录小红书」「扫码登录微信读书」「过一下人机验证」。会显示在浏览器页上，不超过 %d 字。", browserHandoffReasonMaxRunes)),
-		"task":         toolStringParam("交接之后要接着做完的事，写给之后的你自己看：主人要什么、做到哪一步了、接下来怎么做、最后回复什么。醒来时你只看得到这段话和主人原来那条消息。"),
-		"wait_minutes": toolIntParam(fmt.Sprintf("最多等主人多少分钟，默认 %d。", defaultBrowserHandoffMinutes), 1, maxBrowserHandoffMinutes),
+		"reason":       toolStringParam(fmt.Sprintf("请主人做什么的动宾短语，如「登录小红书」，≤%d 字", browserHandoffReasonMaxRunes)),
+		"task":         toolStringParam("写给醒来的自己：主人要什么、做到哪、接下来怎么做、最后回复什么"),
+		"wait_minutes": toolIntParam(fmt.Sprintf("最多等几分钟，默认 %d", defaultBrowserHandoffMinutes), 1, maxBrowserHandoffMinutes),
 	})
 }
 

@@ -66,24 +66,24 @@ func (t *dianaGroupTool) Name() string {
 
 func (t *dianaGroupTool) Description() string {
 	if !t.runtime.groupToolUsesPlatform(t.event) {
-		return t.runtime.groupToolPrompt(t.event, t.runtime.effectiveConfigForEvent(t.event)) + " 此工具只读；Diana 回复设置使用 bot_config。match_avatar 仅比较已知且能核验的成员头像，不代表全群匹配。"
+		return t.runtime.groupToolPrompt(t.event, t.runtime.effectiveConfigForEvent(t.event)) + " 只读；回复设置用 bot_config。match_avatar 只比对能核验的成员头像，不代表全群。"
 	}
-	return `本地群成员头像匹配：把图片与可用成员头像做模式比对，不凭视觉猜身份。取当前消息里的图，当前消息没有图就取被引用消息里的图，所以「回复一张图问这是谁的头像」可以直接调。群资料、名单和成员查询使用 platform；Diana 回复设置使用 bot_config。此工具只读。`
+	return `把当前或被引用消息里的图与本地群成员头像做模式比对，找出是谁的头像，不凭视觉猜身份。只读；群资料和成员查询用 platform，回复设置用 bot_config。`
 }
 
 // InputSchema 声明参数契约。取值范围引用与校验同一份常量。
 func (t *dianaGroupTool) InputSchema() map[string]any {
 	if t.runtime.groupToolUsesPlatform(t.event) {
-		return toolObjectSchema([]string{"operation"}, map[string]any{"operation": toolEnumParam("本地头像匹配；群资料和成员查询使用 platform。", "match_avatar")})
+		return toolObjectSchema([]string{"operation"}, map[string]any{"operation": toolEnumParam("本地头像匹配", "match_avatar")})
 	}
 	return toolObjectSchema([]string{"operation"}, map[string]any{
-		"operation": toolEnumParam("要执行的操作：info 读群资料；members 获取或检索成员候选；member 按 user_id 实时核验成员；match_avatar 将当前图片与可用成员头像做本地模式匹配。",
+		"operation": toolEnumParam("info 群资料；members 检索成员；member 实时核验；match_avatar 头像比对",
 			"info", "members", "member", "match_avatar"),
-		"user_id":                toolStringParam("member 专用：要实时核验的成员账号；不能凭昵称猜账号。"),
-		"query":                  toolStringParam("members 专用：按群名片、昵称或账号筛选成员。"),
-		"exclude_current_sender": toolBoolParam("members 专用：排除当前发言者，用户说「其他人」「除了我」时置 true。"),
-		"exclude_user_ids":       toolStringArrayParam("members 专用：排除指定账号。"),
-		"limit":                  toolIntParam("members 专用：返回条数，默认 "+itoa(defaultGroupMemberLimit)+"。", 1, maximumGroupMemberLimit),
+		"user_id":                toolStringParam("member：要核验的账号，勿凭昵称猜"),
+		"query":                  toolStringParam("members：按群名片、昵称或账号筛选"),
+		"exclude_current_sender": toolBoolParam("members：排除当前发言者"),
+		"exclude_user_ids":       toolStringArrayParam("members：排除这些账号"),
+		"limit":                  toolIntParam("members 条数，默认 "+itoa(defaultGroupMemberLimit), 1, maximumGroupMemberLimit),
 	})
 }
 

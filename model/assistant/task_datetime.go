@@ -16,10 +16,13 @@ import (
 //
 // 以前全靠模型自己把「后天」「26 号」算成 RFC3339：跨月、跨年、日子已过、发言者在
 // 别的时区时都容易算错，而算错了代码里看不出来。
+//
+// 「由系统换算、别自己算 RFC3339」这条事故规则写在 reminder / subscription 的主描述
+// 里，这两个参数说明只给格式；格式填错、date 缺 time、和 at/delay 同时给都由
+// applyTaskDateTime 返回具体原因。
 const (
-	taskDateDescription = "哪天，由系统按自然日换算，不要自己算日期：today（今天）、tomorrow（明天）、day_after_tomorrow（后天）、" +
-		"2026-09-28（完整日期）、09-28（今年这天，已过去取明年）、28（本月 28 号，已过去取下个月）。配合 time 使用，和 at、delay 二选一。"
-	taskTimeDescription = "几点，24 小时制 HH:MM，例如 22:00、08:30。只给 time 不给 date 时取最近的那个时刻（今天已过就是明天）。和 at、delay 二选一。"
+	taskDateDescription = "today、tomorrow、day_after_tomorrow、2026-09-28 或 28"
+	taskTimeDescription = "时刻 HH:MM（24 小时制）；只给 time 取最近的一次"
 )
 
 // taskClock 是换算「今天」「明天」用的基准：消息发出的时刻，和发言者所在时区。
@@ -165,7 +168,7 @@ func resolveTaskCalendarDate(raw string, reference time.Time, hour, minute int, 
 	return time.Time{}, "", fmt.Errorf("date %q 格式不正确，%s", raw, taskDateFormatsHint)
 }
 
-const taskDateFormatsHint = "可用 today、tomorrow、day_after_tomorrow、2026-09-28、09-28 或 28"
+const taskDateFormatsHint = "可用 today、tomorrow、day_after_tomorrow、2026-09-28 或 28（本月）"
 
 func parseTaskClockTime(raw string) (int, int, error) {
 	raw = strings.ReplaceAll(strings.TrimSpace(raw), "：", ":")

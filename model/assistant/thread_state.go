@@ -167,22 +167,26 @@ func newDianaThreadStateTool(runtime *Runtime, event MessageEvent) *dianaThreadS
 func (*dianaThreadStateTool) Name() string { return dianaThreadStateToolName }
 
 func (*dianaThreadStateTool) Description() string {
-	return "保存、读取和结束 Diana 自己创建的多轮任务状态。scope=user 只属于当前发言者，其他人的轮次读不到；群聊里发起、其他群友可能接着提问或参与的任务（猜谜、棋局、共同计划）必须用 scope=session。你自己出的谜底属于任务状态，放 session，并用 locked_keys 锁住，本局内不能再改。get 不传 task_kind 时列出当前会话和当前发言者全部进行中的状态；回答前先 get，读不到已锁定的谜底时不要重新出题。更新时必须携带 expected_version，完成或取消时及时清理，不得用长期记忆代替。"
+	// 完整的多人任务规则在系统提示词 promptToolThreadState，这里只留路由要点：
+	// 群里多人参与的任务和自出谜底放 session 并锁定；读不到谜底别重新出题。
+	return "保存、读取、结束 Diana 自建的多轮任务状态，不用长期记忆代替。" +
+		"群里他人可能参与的任务（猜谜、棋局）用 scope=session，自出谜底用 locked_keys 锁住。" +
+		"get 不传 task_kind 列出全部进行中状态；回答前先 get，读不到锁定谜底时不要重新出题。"
 }
 
 func (*dianaThreadStateTool) InputSchema() map[string]any {
 	return toolObjectSchema([]string{"operation"}, map[string]any{
-		"operation":   toolEnumParam("操作：set 创建或更新；get 读取；complete 正常结束；cancel 取消。", "set", "get", "complete", "cancel"),
-		"task_kind":   toolStringParam("通用任务类型标识，使用小写字母、数字、点、横线或下划线，例如 guess.character、form.onboarding。set、complete、cancel 必填；get 不传时列出全部进行中的状态。不要把具体答案写进 task_kind。"),
-		"scope":       toolEnumParam("状态作用域：user 仅当前发言者可见（默认），只用于私聊或明确只和一个人进行的任务；session 供当前会话所有人共享，群聊里其他人可能接着参与的任务和你自己出的谜底都放这里。session 不得存放某个参与者自己提供、不该让别人知道的秘密。get 不传 scope 时不按作用域过滤。", string(ThreadStateScopeUser), string(ThreadStateScopeSession)),
-		"locked_keys": toolStringArrayParam("set 可选：state 里需要锁定的顶层字段名，例如谜底字段。锁定后本任务结束前再 set 时这些字段不能改，也不会被省略掉；只能追加锁定，不能解锁。要换题必须先 complete 或 cancel。"),
+		"operation":   toolEnumParam("set 创建或更新；complete 正常结束；cancel 取消", "set", "get", "complete", "cancel"),
+		"task_kind":   toolStringParam("任务类型，如 guess.character，勿含答案；get 外必填"),
+		"scope":       toolEnumParam("user 仅当前发言者（默认）；session 会话共享，勿放参与者的私密信息", string(ThreadStateScopeUser), string(ThreadStateScopeSession)),
+		"locked_keys": toolStringArrayParam("set：锁定的 state 顶层字段，结束前不可改、不可解锁"),
 		"state": map[string]any{
 			"type":                 "object",
-			"description":          "set 时必填的结构化状态。保存完成任务所需的 canonical target、约束和进度；session 作用域不得放秘密；最多 8 KiB。",
+			"description":          "set 必填：目标、约束和进度，≤8 KiB",
 			"additionalProperties": true,
 		},
-		"expected_version": toolIntParam("更新或结束时可传当前版本，避免并发覆盖；首次创建和不做并发校验时省略。", 1, 1_000_000),
-		"ttl_seconds":      toolIntParam("set 后闲置有效期，默认 1800 秒，范围 60 到 86400 秒。", int(minimumThreadStateTTL/time.Second), int(maximumThreadStateTTL/time.Second)),
+		"expected_version": toolIntParam("当前版本，防并发覆盖；首次创建省略", 1, 1_000_000),
+		"ttl_seconds":      toolIntParam("闲置有效期秒数，默认 1800", int(minimumThreadStateTTL/time.Second), int(maximumThreadStateTTL/time.Second)),
 	})
 }
 

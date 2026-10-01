@@ -956,12 +956,12 @@ func (t *ListFilesTool) Name() string {
 
 // Description 返回列目录工具说明。
 func (t *ListFilesTool) Description() string {
-	return `列出 Agent 工作目录内的文件。`
+	return `列出工作目录内的文件。`
 }
 
 func (t *ListFilesTool) InputSchema() map[string]any {
 	return toolObjectSchema(nil, map[string]any{
-		"path": toolStringParam("工作目录内的相对目录，省略时列出根目录"),
+		"path": toolStringParam("相对目录，默认根目录"),
 	})
 }
 
@@ -1056,15 +1056,15 @@ func (t *RunCommandTool) Name() string {
 
 // Description 返回命令执行工具说明。
 func (t *RunCommandTool) Description() string {
-	return `在 Agent 工作目录内执行短时本地命令，不经过 shell。不要用于网页搜索、计时、提醒、周期任务、sleep 或后台驻留；这些场景必须使用对应的专用工具。实时网页搜索必须优先使用 web_search。`
+	return `在工作目录内执行允许列表里的短时命令，不经过 shell。不用于网页搜索、计时、提醒、周期任务、sleep 或后台驻留，这些有专用工具。`
 }
 
 func (t *RunCommandTool) InputSchema() map[string]any {
 	return toolObjectSchema([]string{"command"}, map[string]any{
-		"command":    toolStringParam("命令名，必须在允许列表内"),
-		"args":       toolStringArrayParam("命令参数，按顺序传入，不经过 shell 解析"),
-		"cwd":        toolStringParam("工作目录内的相对执行目录，可选"),
-		"timeout_ms": toolIntParam("超时毫秒数，可选"),
+		"command":    toolStringParam("命令名"),
+		"args":       toolStringArrayParam("参数，不经 shell 解析"),
+		"cwd":        toolStringParam("相对执行目录"),
+		"timeout_ms": toolIntParam("超时毫秒"),
 	})
 }
 
@@ -1254,18 +1254,17 @@ func (t *ReadFileTool) Name() string {
 }
 
 // Description 返回读文件工具说明。
+// 二进制和超大文件代码会拒绝，并在错误里指向 view_image / grep / manage_files stat。
 func (t *ReadFileTool) Description() string {
-	return `按行读取 Agent 工作目录内的文本文件。默认从第 1 行起读 ` + fmt.Sprint(defaultReadFileLines) +
-		` 行；文件更长时结果里会写明总行数和下一段的 offset，用 offset 继续读，不要指望一次拿到整个文件。` +
-		`二进制文件（图片、音视频、压缩包）会被拒绝：图片用 view_image 看，其他用 manage_files stat 看大小和类型。`
+	return `按行读取工作目录内的文本文件，默认从第 1 行读 ` + fmt.Sprint(defaultReadFileLines) + ` 行；更长时结果会给出续读的 offset。`
 }
 
 func (t *ReadFileTool) InputSchema() map[string]any {
 	return toolObjectSchema([]string{"path"}, map[string]any{
-		"path":      toolStringParam("工作目录内的相对文件路径"),
-		"offset":    toolIntParam("从第几行开始读，1 表示文件开头，可选"),
-		"limit":     toolIntParam("最多读多少行，可选"),
-		"max_bytes": toolIntParam("最大读取字节数，可选"),
+		"path":      toolStringParam("相对路径"),
+		"offset":    toolIntParam("起始行，从 1 起"),
+		"limit":     toolIntParam("最多行数"),
+		"max_bytes": toolIntParam("最大字节数"),
 	})
 }
 

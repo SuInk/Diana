@@ -29,11 +29,11 @@ func toolEmptySchema() map[string]any {
 }
 
 func toolStringParam(description string) map[string]any {
-	return map[string]any{"type": "string", "description": description}
+	return describedParam(description, map[string]any{"type": "string"})
 }
 
 func toolEnumParam(description string, values ...string) map[string]any {
-	property := map[string]any{"type": "string", "description": description}
+	property := describedParam(description, map[string]any{"type": "string"})
 	if len(values) > 0 {
 		property["enum"] = values
 	}
@@ -41,11 +41,11 @@ func toolEnumParam(description string, values ...string) map[string]any {
 }
 
 func toolBoolParam(description string) map[string]any {
-	return map[string]any{"type": "boolean", "description": description}
+	return describedParam(description, map[string]any{"type": "boolean"})
 }
 
 func toolIntParam(description string) map[string]any {
-	return map[string]any{"type": "integer", "description": description}
+	return describedParam(description, map[string]any{"type": "integer"})
 }
 
 func toolStringArrayParam(description string, values ...string) map[string]any {
@@ -53,18 +53,26 @@ func toolStringArrayParam(description string, values ...string) map[string]any {
 	if len(values) > 0 {
 		items["enum"] = values
 	}
-	return map[string]any{"type": "array", "description": description, "items": items}
+	return describedParam(description, map[string]any{"type": "array", "items": items})
 }
 
 func toolArrayParam(description string, items map[string]any) map[string]any {
-	return map[string]any{"type": "array", "description": description, "items": items}
+	return describedParam(description, map[string]any{"type": "array", "items": items})
 }
 
 // toolStringMapParam 描述 env、headers 这类自由键值对。
 func toolStringMapParam(description string) map[string]any {
-	return map[string]any{
+	return describedParam(description, map[string]any{
 		"type":                 "object",
-		"description":          description,
 		"additionalProperties": map[string]any{"type": "string"},
+	})
+}
+
+// describedParam 只在说明非空时写 description：名字和类型已经说清的参数不带说明，
+// 省得每轮都发一个空字段。
+func describedParam(description string, property map[string]any) map[string]any {
+	if description != "" {
+		property["description"] = description
 	}
+	return property
 }

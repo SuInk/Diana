@@ -20,14 +20,14 @@ type dianaMemoryTool struct {
 
 func (t *dianaMemoryTool) Name() string { return dianaMemoryToolName }
 func (t *dianaMemoryTool) Description() string {
-	return "按需查阅已提取的长期记忆，不需要 embedding。先 search 获取简短索引，再 read 读取相关记忆全文与提取证据。未命中时可根据任务换关键词，不要编造历史；原始聊天请使用 chat_history。"
+	return "查阅已提取的长期记忆：先 search 拿索引，再 read 读全文和证据。未命中可换词，不要编造历史；原始聊天用 chat_history。"
 }
 func (t *dianaMemoryTool) InputSchema() map[string]any {
 	return toolObjectSchema([]string{"operation"}, map[string]any{
-		"operation": toolEnumParam("search 查询记忆索引；read 读取单条当前有效记忆。", "search", "read"),
-		"query":     toolStringParam("search 必填，任务相关关键词，最多 512 字符。"),
-		"id":        toolStringParam("read 必填，search 返回的记忆 ID。"),
-		"limit":     toolIntParam("search 返回数量，默认 8。", 1, 12),
+		"operation": toolEnumParam("search 查索引；read 读单条全文", "search", "read"),
+		"query":     toolStringParam("search 必填：关键词，≤512 字符"),
+		"id":        toolStringParam("read 必填：search 返回的记忆 ID"),
+		"limit":     toolIntParam("search 条数，默认 8", 1, 12),
 	})
 }
 

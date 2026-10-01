@@ -230,7 +230,7 @@ func (t *dianaConfigTool) Description() string {
 
 func (t *dianaConfigTool) InputSchema() map[string]any {
 	return toolObjectSchema(nil, map[string]any{
-		"section": toolEnumParam("要读取的部分，省略等同 all。",
+		"section": toolEnumParam("省略为 all。",
 			"all", "bot", "llm", "skills", "runtime", "paths"),
 	})
 }

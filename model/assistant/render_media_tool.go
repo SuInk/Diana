@@ -71,25 +71,25 @@ func newDianaRenderMediaTool(runtime *Runtime, event MessageEvent, settings Sett
 
 func (t *dianaRenderMediaTool) Name() string { return dianaRenderMediaToolName }
 
+// 渲染环境不联网：外链脚本、样式、字体、CDN 库都加载不到，模型常写 <script src=cdn>
+// 导致白屏，所以「资源全内联」必须留在说明里。录制用虚拟时钟，setTimeout/rAF/CSS
+// 动画都按帧推进，从 0 秒录 duration 秒。
 func (t *dianaRenderMediaTool) Description() string {
-	return `把你写的 HTML 页面或 SVG 渲染成图片、视频或 GIF 直接发到当前会话。` +
-		`适合排好版的卡片、海报、数据看板、canvas 绘图、CSS/JS 动画、SVG 动画演示——对方要看的是效果而不是源码时用它；要源码文件用 send_file。` +
-		`format 选 html（完整页面，可以写 <style> 和 <script>）或 svg（以 <svg> 开头，可带 SMIL/CSS 动画，不能有脚本）。` +
-		`output 选 image（PNG 静帧，HTML 按整页高度截）、video（MP4）或 gif（短循环动图，画面宜小）。` +
-		`页面完全离线：外链的脚本、样式、字体、图片一律加载不到，所有资源都要内联（CDN 上的库也用不了）。` +
-		`动画从 0 秒开始按 duration 录制，时间是虚拟的，setTimeout、requestAnimationFrame、CSS 动画都按帧推进。` +
-		`成品由运行时发送，调用后用一句话交代即可。`
+	return `把 HTML 页面或 SVG 渲染成图片、视频或 GIF 发到当前会话。` +
+		`用于卡片、海报、看板、canvas/CSS/JS/SVG 动画等要看效果的场合；要源码文件用 send_file。` +
+		`页面离线运行，外链脚本、样式、字体、图片、CDN 库都加载不到，资源须内联；svg 不能有脚本。` +
+		`成品由运行时发送，调用后一句话交代即可。`
 }
 
 func (t *dianaRenderMediaTool) InputSchema() map[string]any {
 	return toolObjectSchema([]string{"format", "content"}, map[string]any{
-		"format":   map[string]any{"type": "string", "enum": []string{renderMediaFormatHTML, renderMediaFormatSVG}, "description": "内容格式"},
-		"content":  toolStringParam("完整的 HTML 文档，或以 <svg> 开头的 SVG。"),
-		"output":   map[string]any{"type": "string", "enum": []string{renderMediaOutputImage, renderMediaOutputVideo, renderMediaOutputGIF}, "description": "输出类型，默认 image。"},
-		"duration": map[string]any{"type": "number", "description": "video/gif 的时长（秒），默认 4。"},
-		"fps":      map[string]any{"type": "integer", "description": "video/gif 的帧率，默认 video 24、gif 12，最高 30。"},
-		"width":    map[string]any{"type": "integer", "description": "画面宽度（像素）。默认 image 1000、video 1280、gif 640；svg 按图形自身大小。"},
-		"height":   map[string]any{"type": "integer", "description": "画面高度（像素）。默认 video 720、gif 360；image 省略时截整页。"},
+		"format":   map[string]any{"type": "string", "enum": []string{renderMediaFormatHTML, renderMediaFormatSVG}},
+		"content":  toolStringParam("完整 HTML 文档，或以 <svg> 开头的 SVG"),
+		"output":   map[string]any{"type": "string", "enum": []string{renderMediaOutputImage, renderMediaOutputVideo, renderMediaOutputGIF}, "description": "image 为 PNG 整页截图，video 为 MP4；默认 image"},
+		"duration": map[string]any{"type": "number", "description": "video/gif 时长（秒），默认 4"},
+		"fps":      map[string]any{"type": "integer", "description": "video/gif 帧率，默认 video 24、gif 12，最高 30"},
+		"width":    map[string]any{"type": "integer", "description": "宽度像素，默认 image 1000、video 1280、gif 640"},
+		"height":   map[string]any{"type": "integer", "description": "高度像素，默认 video 720、gif 360；image 省略截整页"},
 	})
 }
 

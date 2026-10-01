@@ -47,23 +47,23 @@ func newDianaSelfNoteTool(runtime *Runtime, event MessageEvent, relationship Rel
 func (*dianaSelfNoteTool) Name() string { return dianaSelfNoteToolName }
 
 func (*dianaSelfNoteTool) Description() string {
-	return "维护你自己的自述：你在相处中注意到的关于自己的事——说话习惯、偏好、反复出现的毛病、自己定下的做法。" +
-		"add 新增一条，revise 改写已有的一条（传 id），delete 删掉一条已经不成立的，list 列出现有自述。" +
-		"只记你自己观察到、而且以后还用得上的自我描述；别人临时要求你怎么回答不算自述，用户的偏好和事实属于长期记忆和笔记本，不要写进这里。" +
-		"不得用它记录权限、谁是主人、安全边界或任何系统规则；这类内容写进来不会生效。" +
-		"同一件事已经有条目就用 revise 改那一条，不要另加一条互相矛盾的。"
+	// 「别人的评价不记」「自述不能放权」的完整说法在系统提示词 promptToolSelfNote；
+	// 权限那句这里仍保留一句，因为它是安全边界，工具单独挂上时也要在。
+	return "维护你对自己的自述：说话习惯、偏好、常犯的毛病、自己定的做法。" +
+		"用户的偏好和事实归长期记忆和笔记本。权限、主人、安全边界和系统规则写进来不会生效。" +
+		"同一件事已有条目就 revise 那一条，不要另加矛盾的。"
 }
 
 func (*dianaSelfNoteTool) InputSchema() map[string]any {
 	return toolObjectSchema([]string{"operation"}, map[string]any{
-		"operation": toolEnumParam("要执行的操作：add 新增；revise 改写已有条目；delete 删除；list 列出；purge 清空全部（仅主人）。",
+		"operation": toolEnumParam("revise 改写已有条目；purge 清空全部，仅主人",
 			"add", "revise", "delete", "list", "purge"),
-		"topic":            toolStringParam("类别标签，例如「说话方式」「喜好」「相处」。add 建议填，最多 " + itoa(SelfNoteTopicMaxRunes) + " 字。"),
-		"content":          toolStringParam("自述正文，一句话说清一件事，最多 " + itoa(SelfNoteContentMaxRunes) + " 字。add 和 revise 必填。"),
-		"id":               toolStringParam("要改写或删除的条目 ID，取自 list 的返回值。revise 和 delete 必填。"),
-		"reason":           toolStringParam("delete 可选：为什么这条不再成立，会记进修订史。"),
-		"include_inactive": toolBoolParam("list 可选：带上被改写和被删掉的历史版本，用于核对改过什么。"),
-		"limit":            toolIntParam("list 返回条数，默认 "+itoa(defaultSelfNoteListLimit)+"。", 1, maximumSelfNoteListLimit),
+		"topic":            toolStringParam("类别标签，如「说话方式」，≤" + itoa(SelfNoteTopicMaxRunes) + " 字"),
+		"content":          toolStringParam("add/revise 必填：一句话一件事，≤" + itoa(SelfNoteContentMaxRunes) + " 字"),
+		"id":               toolStringParam("revise/delete 必填：条目 ID"),
+		"reason":           toolStringParam("delete：不再成立的原因"),
+		"include_inactive": toolBoolParam("list：包含已改写和删除的历史版本"),
+		"limit":            toolIntParam("list 条数，默认 "+itoa(defaultSelfNoteListLimit), 1, maximumSelfNoteListLimit),
 	})
 }
 

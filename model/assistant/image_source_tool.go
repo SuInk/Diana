@@ -35,17 +35,17 @@ func newDianaImageSourceTool(runtime *Runtime, event MessageEvent, plugin *Image
 
 func (t *dianaImageSourceTool) Name() string { return dianaImageSourceToolName }
 
+// 「看图看不出出处」是给模型的路由理由：它常自己看一眼就编个出处。相似度低时
+// 只能当猜测，模型曾把低分候选说成定论。
 func (t *dianaImageSourceTool) Description() string {
-	return `反查一张图片的出处：把图上传到图库做以图搜图，返回可能的原作名、作者和链接（插画走 SauceNAO，番剧截图走 trace.moe）。` +
-		`用户问「这图哪来的」「谁画的」「出处」「是哪部番」这类问题时用它——你自己看图只能看出画的是什么，看不出它出自哪里。` +
-		`默认反查当前消息（或引用消息）里的图片；要查更早的图就传那条消息的 message_id。` +
-		`结果是机器比对出来的候选，相似度不高时要如实说明这只是猜测，不要把它当定论。`
+	return `以图搜图反查图片出处（插画走 SauceNAO，番剧截图走 trace.moe），返回原作、作者和链接。` +
+		`用户问出处、谁画的、哪部番时用，自己看图看不出出处。结果是候选，相似度不高时要说明只是猜测。`
 }
 
 func (t *dianaImageSourceTool) InputSchema() map[string]any {
 	return toolObjectSchema(nil, map[string]any{
-		"message_id":  toolStringParam("要反查的图片所在的消息 ID；省略表示当前消息或它引用的那条。"),
-		"image_index": toolIntParam("这条消息里的第几张图，从 1 开始，默认第 1 张。", 1, 8),
+		"message_id":  toolStringParam("图片所在消息 ID，省略为当前或引用消息"),
+		"image_index": toolIntParam("消息里第几张图，从 1 起，默认 1", 1, 8),
 	})
 }
 

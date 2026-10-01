@@ -27,18 +27,21 @@ func newDianaRemoteImageTool(r *Runtime, event MessageEvent) *dianaRemoteImageTo
 
 func (t *dianaRemoteImageTool) Name() string { return dianaRemoteImageToolName }
 
+// 几条约束的来历：网页文字和文件名曾被当成图片内容；模型曾自己编头像链接（#532）；
+// 别人说机器人头像换了时，模型凭印象答错，所以先 view_avatar 看 bot_avatar，
+// updated_at/change_note 比印象可靠（#808）；只贴链接冒充发图。
 func (t *dianaRemoteImageTool) Description() string {
-	return "读取或发送网上现有图片和头像，不生成图片。先用 action=view 和图片直链加载真实画面，附件会交给下一轮模型；网页文字、文件名不能证明图片内容。要看头像（包括机器人自己的头像）用 action=view_avatar 和 avatar_source，由运行时按平台取图，Telegram 等没有公开头像链接的平台也能看，不要编头像链接；有人说你头像换了时先 view_avatar 看 bot_avatar 再答，结果里的 updated_at/updated_hint 是平台记录的头像更新时间，change_note 是和你上次看到的比对，比你的印象可靠。查看确认符合用户要求后，用 action=send 和返回的 image_id 发送单图；用 action=send_album 和 image_ids 将已查看的图片作为 Telegram 相册发送。不要只输出链接冒充发图。不能读取本机文件。"
+	return "查看或发送网上现有图片和头像，不生成图片、不读本机文件。先 view 加载直链看真实画面，网页文字和文件名不能证明图片内容；确认后 send / send_album 发送，不只贴链接冒充发图。" +
+		"看头像用 view_avatar，不编头像链接；有人说你头像换了先看 bot_avatar，结果里的 updated_at、change_note 比你的印象可靠。"
 }
 
 func (t *dianaRemoteImageTool) InputSchema() map[string]any {
 	return toolObjectSchema([]string{"action"}, map[string]any{
-		"action": toolEnumParam("先看图，再发送已查看的图；view_avatar 看头像；send_album 将多图合成 Telegram 相册。", "view", "view_avatar", "send", "send_album"),
-		"url":    toolStringParam("view 必填：公网 HTTP(S) 图片直链，不是网页地址。"),
-		"avatar_source": toolStringParam(`view_avatar 必填：` + avatarSourceBot + `（机器人自己）、` + avatarSourceSender + `（本条消息发送者）、` +
-			avatarSourceGroup + `（本群群头像）或 ` + avatarSourceMemberPrefix + `<user_id>（当前会话里能核验的成员）。`),
-		"image_id":  toolStringParam("send 必填：本轮 view 返回的图片 ID。"),
-		"image_ids": toolStringArrayParam("send_album 必填：本轮 view 返回的 2 至 8 个图片 ID，按发送顺序排列。"),
+		"action":        toolEnumParam("send_album 为 Telegram 相册", "view", "view_avatar", "send", "send_album"),
+		"url":           toolStringParam("view 专用，公网图片直链，不是网页地址"),
+		"avatar_source": toolStringParam(avatarSourceBot + `、` + avatarSourceSender + `、` + avatarSourceGroup + `、` + avatarSourceMemberPrefix + `<id>`),
+		"image_id":      toolStringParam("send 专用，本轮 view 返回的图片 ID"),
+		"image_ids":     toolStringArrayParam("send_album 专用，本轮 view 返回的 2～8 个图片 ID，按发送顺序"),
 	})
 }
 

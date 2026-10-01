@@ -79,27 +79,25 @@ func newDianaRepositoryWatchTool(runtime *Runtime, event MessageEvent, owner boo
 
 func (*dianaRepositoryWatchTool) Name() string { return dianaRepositoryWatchToolName }
 
+// 本工具只作为 subscription 的 kind=github 后端，模型看到的参数说明在
+// subscriptionKindFields。权限（主人和仓库管理人员）由 runtime 决定挂不挂。
 func (*dianaRepositoryWatchTool) Description() string {
-	return `管理 GitHub 仓库更新订阅：新建、查看、改设置、暂停、删除，也可以立刻检查一次。` +
-		`能改监控哪几类动态（Commit / PR / Issue / Release / Star），以及 PR、Issue、Release 各自只收哪几种。` +
-		`新建的订阅推送到当前这个会话。只有主人和该仓库的管理人员能调用。` +
-		`关注 RSS 或推特用户改用 kind=rss，普通周期任务改用 kind=schedule。`
+	return `管理 GitHub 仓库更新订阅，可立即检查一次。新订阅推送到当前会话。仅主人和该仓库管理人员可用。`
 }
 
 func (*dianaRepositoryWatchTool) InputSchema() map[string]any {
 	return toolObjectSchema([]string{"operation"}, map[string]any{
-		"operation": toolEnumParam("要执行的操作。cancel 只暂停并保留记录，delete 才彻底删除；run 是立刻检查一次。",
+		"operation": toolEnumParam("cancel 暂停并保留记录，delete 彻底删除；run 立即检查",
 			"create", "list", "update", "cancel", "delete", "run"),
-		"id":         toolStringParam("要操作的订阅 ID；update、cancel、delete、run 必填，可以先用 list 查。"),
-		"repository": toolStringParam("仓库，写成 owner/repo 或 GitHub 链接；create 必填。"),
-		"branch":     toolStringParam("要盯的分支，留空是默认分支。"),
-		"interval":   toolStringParam("检查间隔，单位 " + durationUnitsHint + "。例如 30m、2h、1d。不短于 " + formatDurationUnits(minimumRepositoryWatchInterval) + "。"),
-		"watch": toolEnumArrayParam("要监控的类型，可多选。create 省略按全部处理；update 省略表示不改。",
+		"id":         toolStringParam("订阅 ID，可用 list 查"),
+		"repository": toolStringParam("owner/repo 或仓库链接；create 必填"),
+		"branch":     toolStringParam("分支，留空为默认分支"),
+		"interval":   toolStringParam("检查间隔，最短 " + formatDurationUnits(minimumRepositoryWatchInterval)),
+		"watch": toolEnumArrayParam("监控类型；create 省略为全部，update 省略不改",
 			"commits", "pull_requests", "issues", "releases", "stars"),
-		"pull_request_events": toolEnumArrayParam("PR 只收这几种动态；省略表示新订阅默认全选，空数组表示全不选。", repositoryWatchPullEventKinds...),
-		"issue_events":        toolEnumArrayParam("Issue 只收这几种动态；省略表示新订阅默认全选，空数组表示全不选。", repositoryWatchIssueEventKinds...),
-		"release_kinds": toolEnumArrayParam("Release 只收这几种版本：stable 是正式版，prerelease 是预发布；"+
-			"省略表示新订阅默认全选，空数组表示全不选。草稿任何时候都不推送。", repositoryWatchReleaseKindList...),
+		"pull_request_events": toolEnumArrayParam("只收的 PR 动态；省略全选，[] 全不选", repositoryWatchPullEventKinds...),
+		"issue_events":        toolEnumArrayParam("只收的 Issue 动态；省略全选，[] 全不选", repositoryWatchIssueEventKinds...),
+		"release_kinds":       toolEnumArrayParam("只收的版本类型；省略全选，[] 全不选", repositoryWatchReleaseKindList...),
 	})
 }
 

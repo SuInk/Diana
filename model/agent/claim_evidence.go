@@ -352,10 +352,10 @@ func (l *claimEvidenceLedger) declaredClaimIDs() []string {
 // 真实返回过的来源枚举。
 func claimEvidenceSchema(allowedSources []string) map[string]any {
 	return toolObjectSchema([]string{"url", "relation", "source_type", "distance", "strength"}, map[string]any{
-		"url":          toolEnumParam("证据 URL，必须原样取自工具返回的候选来源", allowedSources...),
-		"relation":     toolEnumParam("该来源支持还是反驳这条 claim", "supports", "refutes"),
+		"url":          toolEnumParam("原样取自工具返回的候选来源", allowedSources...),
+		"relation":     toolEnumParam("支持或反驳", "supports", "refutes"),
 		"source_type":  toolEnumParam("来源类型", "first_party", "official_record", "primary_reporting", "secondary", "unknown"),
-		"published_at": toolStringParam("来源发布日期，可选"),
+		"published_at": toolStringParam("来源发布日期"),
 		"distance":     toolEnumParam("来源与结论的距离", "direct", "near", "secondary"),
 		"strength":     toolEnumParam("证据强度", "high", "medium", "low"),
 	})
@@ -364,8 +364,8 @@ func claimEvidenceSchema(allowedSources []string) map[string]any {
 // claimDefinitionSchema 描述一条新声明的 claim。
 func claimDefinitionSchema() map[string]any {
 	return toolObjectSchema([]string{"id", "statement"}, map[string]any{
-		"id":        toolStringParam("claim 标识，小写字母、数字、下划线或连字符"),
-		"statement": toolStringParam("待验证的通用主张，不得按品牌或站点硬编码"),
+		"id":        toolStringParam("小写字母、数字、_ 或 -"),
+		"statement": toolStringParam("待验证的通用主张，不按品牌或站点硬编码"),
 	})
 }
 
@@ -374,9 +374,9 @@ func claimDefinitionSchema() map[string]any {
 func claimUpdateSchema(claimIDs, allowedSources []string) map[string]any {
 	return toolObjectSchema([]string{"id", "status"}, map[string]any{
 		"id":       toolEnumParam("已声明的 claim id", claimIDs...),
-		"status":   toolEnumParam("结算状态；没有检索到证据只能用 insufficient", string(ClaimStatusSupported), string(ClaimStatusConflicting), string(ClaimStatusInsufficient), string(ClaimStatusNotSearched)),
-		"summary":  toolStringParam("该 claim 的结论摘要"),
-		"evidence": toolArrayParam("supported/conflicting 必须给出已检索来源证据", claimEvidenceSchema(allowedSources)),
+		"status":   toolEnumParam("没检索到证据只能用 insufficient", string(ClaimStatusSupported), string(ClaimStatusConflicting), string(ClaimStatusInsufficient), string(ClaimStatusNotSearched)),
+		"summary":  toolStringParam("结论摘要"),
+		"evidence": toolArrayParam("supported/conflicting 必填", claimEvidenceSchema(allowedSources)),
 	})
 }
 

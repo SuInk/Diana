@@ -57,28 +57,29 @@ func (t *dianaNotebookTool) Name() string {
 }
 
 func (t *dianaNotebookTool) Description() string {
-	return `维护 Diana 自己的笔记本：把需要长期记住、而且必须准确的事写下来——群里的梗和黑话（term）、群规和约定（fact）、某人的偏好和忌口（preference）、发生过的事（event）、答应了还没做的事（todo）、某个人是谁（person）。` +
-		`get 查单条（带修订记录），list 列出当前作用域的笔记，upsert 新建或更新，delete 作废一条已经不成立的，restore 恢复删错的。` +
-		`笔记是长期维护的：发现旧内容过时、不准或变了，用 upsert 更新同一条并在 note 里写清这次改了什么，不要另建一条重复的。` +
-		`只记「记错了要能改」的事；随口聊到的东西会被自动记忆收走，不必写进这里。`
+	return `维护 Diana 的笔记本，记需要长期准确的事：梗和黑话、群规、偏好忌口、事件、待办、人物。` +
+		`内容过时就 upsert 同一条并在 note 写改了什么，不要另建重复条目。` +
+		`随口聊的交给自动记忆，不必写这里。`
 }
 
+// InputSchema 声明参数契约。aliases 的说明保留「没有触发词基本命不中」：
+// 非 term 类笔记的标题不会原样出现在聊天里，漏填 aliases 的笔记形同虚设。
 func (t *dianaNotebookTool) InputSchema() map[string]any {
 	return toolObjectSchema([]string{"operation"}, map[string]any{
-		"operation": toolEnumParam("要执行的操作：get 查条目；list 列出条目；upsert 新建或更新；delete 作废；restore 恢复被作废的条目。",
+		"operation": toolEnumParam("delete 作废，restore 恢复作废条目",
 			"get", "list", "upsert", "delete", "restore"),
-		"kind": toolEnumParam("upsert 可选，默认 term：term 梗/黑话/缩写/外号；fact 群规、约定、谁负责什么；preference 喜好与忌口；event 发生过的事；todo 答应了还没做的事；person 某个人是谁。",
+		"kind": toolEnumParam("upsert 类型，默认 term（梗/黑话/外号）；fact 群规约定；todo 待办",
 			notebookKindValues()...),
-		"term":            toolStringParam("标题。term 类型填那个词本身；其余类型填一句概括，例如「群规：十点后不刷屏」。get、upsert、delete、restore 必填。"),
-		"meaning":         toolStringParam("upsert 必填：这条笔记的正文，一两句话说清楚。term 类型写清是褒是贬、谁在用。条目已存在而你不是主人、也不是当初记它的人时，这段会作为「补充说法」并存，不会覆盖原释义。"),
-		"aliases":         toolStringArrayParam("可选：触发词，出现在对话里就会想起这条笔记。term 类型填这个词的其它写法；其余类型填这条笔记该被什么话题勾起来——标题不会原样出现在聊天里，没有触发词的笔记基本命不中。"),
-		"example":         toolStringParam("可选：一句能体现用法或场景的例子。"),
-		"note":            toolStringParam("upsert 和 delete 可选：这次改动或作废的原因，会记进修订记录。"),
-		"global":          toolBoolParam("可选：笔记本默认跟随机器人、所有会话共用，不用传。只有笔记本被设成按会话隔离时才有意义，且仅主人可用：写进跨会话生效的全局笔记本。"),
-		"query":           toolStringParam("list 可选：只列出包含该关键词的笔记。"),
-		"kinds":           toolStringArrayParam("list 可选：只列出这些类型。"),
-		"limit":           toolIntParam("list 返回条数，默认 "+itoa(defaultNotebookListLimit)+"。", 1, maximumNotebookListLimit),
-		"include_deleted": toolBoolParam("list 和 get 可选：把已作废的笔记也带出来，用于确认删过什么。"),
+		"term":            toolStringParam("标题：term 填词本身，其余填一句概括；list 外必填"),
+		"meaning":         toolStringParam("upsert 必填：正文一两句；非主人或原作者写时作为补充并存"),
+		"aliases":         toolStringArrayParam("触发词：词的其它写法或该勾起它的话题；没有基本命不中"),
+		"example":         toolStringParam("用法例句"),
+		"note":            toolStringParam("改动或作废原因，记入修订记录"),
+		"global":          toolBoolParam("仅主人：笔记本按会话隔离时写入全局笔记本，默认不传"),
+		"query":           toolStringParam("list：关键词过滤"),
+		"kinds":           toolStringArrayParam("list：类型过滤"),
+		"limit":           toolIntParam("list 条数，默认 "+itoa(defaultNotebookListLimit), 1, maximumNotebookListLimit),
+		"include_deleted": toolBoolParam("list/get：包含已作废条目"),
 	})
 }
 

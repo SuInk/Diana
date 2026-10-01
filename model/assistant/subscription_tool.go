@@ -84,17 +84,26 @@ func (t *dianaSubscriptionTool) backend(kind string) (subscriptionBackend, bool)
 	return subscriptionBackend{}, false
 }
 
+// Description 每句都在防一个线上问题，删之前先看这里：
+//   - 「kind/operation 是参数不是子工具」：弱模型会把取值脑补成 subscription.schedule
+//     这样的子工具名去调（见文件头注释）。
+//   - 「list 不填 kind 列全部」：用户问「我有哪些订阅」时模型会逐个 kind 试三轮。
+//   - 「一次性用 reminder、重复用 kind=schedule」：两个工具分工，选错就建出只响一次
+//     或天天响的提醒。
+//   - 「date+time 由系统换算」：模型自己把「后天」「26 号」算成 RFC3339 常跨月算错，
+//     见 task_datetime.go。
+//
+// 每个 kind 专属字段的说明以「schedule：」「rss：」「github：」开头标明归属——合并之后
+// 模型同时看得见三套字段，不标清楚就会串。
 func (t *dianaSubscriptionTool) Description() string {
 	labels := make([]string, 0, len(t.backends))
 	for _, backend := range t.backends {
 		labels = append(labels, backend.kind+"="+backend.label)
 	}
-	return `这是一个工具，不是一组子工具：kind 和 operation 都是参数的取值，调用时工具名永远是 subscription。` +
-		`管理持久化订阅：` + strings.Join(labels, "；") + `。` +
-		`先用 kind 选订阅种类，再用 operation 选动作；每个字段的说明里写了它属于哪个 kind，不属于当前 kind 的字段不要填。` +
-		`operation=list 不填 kind 就一次列出全部种类，每条带 kind 字段——用户问「我有哪些订阅」时这样调，不要逐个 kind 试。` +
-		`cancel 只停止并保留记录，delete 才彻底删除。只执行一次的提醒不在本工具，改用 reminder；` +
-		`「每天八点」「每周日 22:00」这类重复的提醒属于 kind=schedule，用 at 定首次时间、interval 定间隔。`
+	return `管理持久化订阅：` + strings.Join(labels, "；") + `。` +
+		`工具名始终是 subscription，kind 和 operation 是参数不是子工具。` +
+		`参数说明开头标了所属 kind，别的 kind 的字段不填。list 不填 kind 一次列出全部。` +
+		`一次性提醒用 reminder；每天、每周这类重复提醒用 kind=schedule，日期时刻传 date+time 由系统换算。`
 }
 
 func (t *dianaSubscriptionTool) InputSchema() map[string]any {
@@ -111,14 +120,12 @@ func (t *dianaSubscriptionTool) InputSchema() map[string]any {
 		}
 	}
 	schema := map[string]any{
-		"kind": toolEnumParam("订阅种类。create、update、cancel、delete、run 必填；list 省略表示列出全部种类。",
-			t.kinds()...),
-		"operation": toolEnumParam("要执行的操作。cancel 只停止并保留记录，delete 才彻底删除；run 是立刻检查一次，只有 kind=github 支持。",
+		"kind": toolEnumParam("订阅种类；list 省略则列出全部", t.kinds()...),
+		"operation": toolEnumParam("cancel 停止并保留记录，delete 彻底删除；run 立即检查，仅 github",
 			ordered...),
-		"id": toolStringParam("要操作的订阅 ID；update、cancel、delete、run 必填，可先用 list 查到。"),
-		"interval": toolStringParam("重复间隔，单位 " + durationUnitsHint + "。" +
-			"kind=schedule 必填：每天 1d、每周 1w、每月 1mo、每年 1y，固定时间点另用 at 指定；kind=rss 是检查 Feed 的间隔，例如 15m，省略按默认间隔处理。" +
-			"各 kind 的上下限不同，填错会返回具体数值。"),
+		"id": toolStringParam("订阅 ID，可用 list 查"),
+		// 「月是 mo 不是 m」见 scheduleIntervalDescription；各 kind 的上下限由下游校验报具体数值。
+		"interval": toolStringParam("重复间隔，如 15m、1d、1w、1mo；月写 mo 不是 m。rss 为检查间隔，可省略"),
 	}
 	for key, value := range subscriptionKindFields() {
 		schema[key] = value
@@ -126,43 +133,43 @@ func (t *dianaSubscriptionTool) InputSchema() map[string]any {
 	return toolObjectSchema([]string{"operation"}, schema)
 }
 
-// subscriptionKindFields 是各 kind 专属的参数。说明一律以「kind=x 专用」开头：
-// 合并之后模型同时看得见三套字段，不标清楚归属就会串。
+// subscriptionKindFields 是各 kind 专属的参数，说明一律以所属 kind 开头，见 Description 的注释。
+// items 里的同名字段只写最短的一句，外层说明不再抄一遍。
 func subscriptionKindFields() map[string]any {
 	return map[string]any{
-		"query":      toolStringParam("kind=schedule 专用：" + scheduleQueryDescription),
-		"at":         toolStringParam("kind=schedule 专用：" + scheduleAtDescription),
-		"weekdays":   toolEnumArrayParam("kind=schedule 专用："+scheduleWeekdaysDescription, scheduleWeekdayOrder...),
-		"date":       toolStringParam("kind=schedule 专用：首次触发的日期，可代替 at。" + taskDateDescription),
-		"time":       toolStringParam("kind=schedule 专用：每次触发的时刻，可代替 at；每天 8 点只传 time=08:00 即可。" + taskTimeDescription),
-		"month_days": toolIntArrayParam("kind=schedule 专用："+scheduleMonthDaysDescription, -31, 31),
-		"weekday":    toolEnumParam("kind=schedule 专用："+scheduleWeekdayDescription, scheduleWeekdayOrder...),
-		"week":       toolIntParam("kind=schedule 专用："+scheduleWeekDescription, -5, 5),
-		"items": toolItemsParam("kind=schedule 专用：一次创建多个订阅，只在 create 时有效，最多 "+itoa(maximumTasksPerToolCall)+" 项。",
+		"query":      toolStringParam("schedule：" + scheduleQueryDescription),
+		"at":         toolStringParam("schedule：" + scheduleAtDescription),
+		"weekdays":   toolEnumArrayParam("schedule："+scheduleWeekdaysDescription, scheduleWeekdayOrder...),
+		"date":       toolStringParam("schedule：" + taskDateDescription),
+		"time":       toolStringParam("schedule：每次触发时刻，" + taskTimeDescription),
+		"month_days": toolIntArrayParam("schedule："+scheduleMonthDaysDescription, -31, 31),
+		"weekday":    toolEnumParam("schedule："+scheduleWeekdayDescription, scheduleWeekdayOrder...),
+		"week":       toolIntParam("schedule："+scheduleWeekDescription, -5, 5),
+		"items": toolItemsParam("schedule：create 批量创建，最多 "+itoa(maximumTasksPerToolCall)+" 项",
 			maximumTasksPerToolCall, []string{"interval", "query"}, map[string]any{
-				"interval":   toolStringParam("重复间隔：每天 1d、每周 1w、每月 1mo、每年 1y；m 是分钟，月写 mo。"),
-				"query":      toolStringParam("每次触发时要查的内容，或到点要提醒的内容。"),
-				"at":         toolStringParam("首次触发时间，RFC3339；有固定时间点时必须传。"),
-				"date":       toolStringParam("首次触发日期，可代替 at：today、tomorrow、day_after_tomorrow、2026-09-28、28。"),
-				"time":       toolStringParam("触发时刻 HH:MM，可代替 at。"),
-				"weekdays":   toolEnumArrayParam("按周重复时每周的哪几天，例如 [\"mon\",\"wed\",\"fri\"]；interval 用 1w。", scheduleWeekdayOrder...),
-				"month_days": toolIntArrayParam("按月重复时每月的哪几号，例如 [1,15]，-1 是最后一天。", -31, 31),
-				"weekday":    toolEnumParam("按月重复时配合 week 表示第几个星期几。", scheduleWeekdayOrder...),
-				"week":       toolIntParam("配合 weekday：1~5 从月初数，-1 是最后一个。", -5, 5),
+				"interval":   toolStringParam("重复间隔，月写 mo"),
+				"query":      toolStringParam("每次触发要做的事"),
+				"at":         toolStringParam("首次触发时间 RFC3339"),
+				"date":       toolStringParam("首次日期，可代替 at"),
+				"time":       toolStringParam("触发时刻 HH:MM"),
+				"weekdays":   toolEnumArrayParam("按周重复的星期几", scheduleWeekdayOrder...),
+				"month_days": toolIntArrayParam("按月重复的几号，-1 为最后一天", -31, 31),
+				"weekday":    toolEnumParam("配合 week：第几个星期几", scheduleWeekdayOrder...),
+				"week":       toolIntParam("配合 weekday，-1 为最后一个", -5, 5),
 			}),
-		"target_user_id":  toolStringParam("kind=schedule 专用：代其他用户管理时的目标账号，仅机器人主人可用；创建仍占目标用户的额度。"),
-		"twitter_handle":  toolStringParam("kind=rss 专用：要关注的单个 X (Twitter) 用户名，不带 @。盯多个人用 twitter_handles。"),
-		"twitter_handles": toolStringArrayParam("kind=rss 专用：要关注的多个 X (Twitter) 用户名，共用同一套 judge_prompt。最多 " + itoa(maximumRSSWatchSources) + " 个来源（和 feed_urls 合计）。"),
-		"feed_url":        toolStringParam("kind=rss 专用：要关注的单个 RSS/Atom feed 地址。盯多个 Feed 用 feed_urls。"),
-		"feed_urls":       toolStringArrayParam("kind=rss 专用：要关注的多个 RSS/Atom feed 地址，共用同一套 judge_prompt。"),
-		"judge_prompt":    toolStringParam("kind=rss 专用：判断条件，写清楚什么样的新条目才值得通知、通知时要说什么。最多 " + itoa(maximumRSSJudgeRunes) + " 个字符。"),
-		"repository":      toolStringParam("kind=github 专用：仓库，写成 owner/repo 或 GitHub 链接；create 必填。"),
-		"branch":          toolStringParam("kind=github 专用：要盯的分支，留空是默认分支。"),
-		"watch": toolEnumArrayParam("kind=github 专用：要监控的类型，可多选。create 省略按全部处理；update 省略表示不改。",
+		"target_user_id":  toolStringParam("schedule：代管的目标用户，仅主人；占对方额度"),
+		"twitter_handle":  toolStringParam("rss：单个 X 用户名，不带 @"),
+		"twitter_handles": toolStringArrayParam("rss：多个 X 用户名，同一条件合成一条订阅；与 feed_urls 合计最多 " + itoa(maximumRSSWatchSources) + " 个"),
+		"feed_url":        toolStringParam("rss：单个 RSS/Atom 地址"),
+		"feed_urls":       toolStringArrayParam("rss：多个 RSS/Atom 地址，共用 judge_prompt"),
+		"judge_prompt":    toolStringParam("rss：什么新条目值得通知、通知说什么，最多 " + itoa(maximumRSSJudgeRunes) + " 字"),
+		"repository":      toolStringParam("github：owner/repo 或仓库链接；create 必填"),
+		"branch":          toolStringParam("github：分支，留空为默认分支"),
+		"watch": toolEnumArrayParam("github：监控类型；create 省略为全部，update 省略不改",
 			"commits", "pull_requests", "issues", "releases", "stars"),
-		"pull_request_events": toolEnumArrayParam("kind=github 专用：PR 只收这几种动态；省略表示新订阅默认全选，空数组表示全不选。", repositoryWatchPullEventKinds...),
-		"issue_events":        toolEnumArrayParam("kind=github 专用：Issue 只收这几种动态；省略表示新订阅默认全选，空数组表示全不选。", repositoryWatchIssueEventKinds...),
-		"release_kinds": toolEnumArrayParam("kind=github 专用：Release 只收这几种版本；省略表示新订阅默认全选，空数组表示全不选。草稿任何时候都不推送。",
+		"pull_request_events": toolEnumArrayParam("github：只收的 PR 动态；省略全选，[] 全不选", repositoryWatchPullEventKinds...),
+		"issue_events":        toolEnumArrayParam("github：只收的 Issue 动态；省略全选，[] 全不选", repositoryWatchIssueEventKinds...),
+		"release_kinds": toolEnumArrayParam("github：只收的版本类型；省略全选，[] 全不选",
 			repositoryWatchReleaseKindList...),
 	}
 }

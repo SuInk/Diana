@@ -60,7 +60,7 @@ func (t *dianaScheduleTool) Name() string {
 }
 
 func (t *dianaScheduleTool) Description() string {
-	return `创建和管理持久化周期查询/订阅：按固定间隔重复执行一段查询或提醒并把结果通知用户，包括「每天早上八点提醒我」「每周日 22:00 提醒我睡觉」这类周期提醒——用 at 指定首次时间、interval 指定重复间隔。只执行一次的提醒改用 reminder。GitHub 仓库的 Commit、PR、Release、Star 更新订阅不属于本工具，也不能由聊天创建，只能提示用户去 WebUI 的「提醒与订阅」页面管理。禁止用 run_command、sleep 或后台进程代替。初识及以上可用。`
+	return `管理周期任务：按固定间隔重复查询或提醒，如每天八点提醒。at 定首次时间，interval 定间隔。一次性提醒用 reminder。不要用 sleep 或后台进程代替。初识及以上可用。`
 }
 
 // InputSchema 声明参数契约。interval 的上下限直接引用校验用的同一份常量，
@@ -72,13 +72,13 @@ func (t *dianaScheduleTool) InputSchema() map[string]any {
 		"at":         toolStringParam(scheduleAtDescription),
 		"weekdays":   toolEnumArrayParam(scheduleWeekdaysDescription, scheduleWeekdayOrder...),
 		"month_days": toolIntArrayParam(scheduleMonthDaysDescription, -31, 31),
-		"date":       toolStringParam("首次触发的日期，可代替 at。" + taskDateDescription),
-		"time":       toolStringParam("每次触发的时刻，可代替 at；每天 8 点只传 time=08:00 即可。" + taskTimeDescription),
+		"date":       toolStringParam("首次日期，系统换算：" + taskDateDescription),
+		"time":       toolStringParam("每次触发时刻，可代替 at；" + taskTimeDescription),
 		"weekday":    toolEnumParam(scheduleWeekdayDescription, scheduleWeekdayOrder...),
 		"week":       toolIntParam(scheduleWeekDescription, -5, 5),
 	}
 	return toolObjectSchema([]string{"operation"}, map[string]any{
-		"operation": toolEnumParam("要执行的操作。cancel 只停止并保留记录，delete 才彻底删除。",
+		"operation": toolEnumParam("cancel 停止并保留记录，delete 彻底删除",
 			"create", "list", "update", "cancel", "delete"),
 		"interval":   item["interval"],
 		"query":      item["query"],
@@ -89,10 +89,10 @@ func (t *dianaScheduleTool) InputSchema() map[string]any {
 		"time":       item["time"],
 		"weekday":    item["weekday"],
 		"week":       item["week"],
-		"items": toolItemsParam("一次创建多个订阅；只在 create 时有效，最多 "+itoa(maximumTasksPerToolCall)+" 项。剩余额度不足时按顺序创建到额度上限。",
+		"items": toolItemsParam("create 批量创建，最多 "+itoa(maximumTasksPerToolCall)+" 项",
 			maximumTasksPerToolCall, []string{"interval", "query"}, item),
-		"id":             toolStringParam("要操作的订阅 ID；update、cancel、delete 必填，可先用 list 查到。"),
-		"target_user_id": toolStringParam("代其他用户管理时的目标账号，仅机器人主人可用；创建仍占目标用户的额度。"),
+		"id":             toolStringParam("订阅 ID，可用 list 查"),
+		"target_user_id": toolStringParam("代管的目标用户，仅主人；占对方额度"),
 	})
 }
 
@@ -218,14 +218,17 @@ func (t *dianaScheduleTool) Run(_ context.Context, input map[string]any) (string
 
 // scheduleQueryDescription 是 query 参数的说明，schedule 和 subscription 两处共用。
 // 周期提醒也走 query，说明里不能只写「查询」，否则模型会觉得「提醒睡觉」不属于这里。
-const scheduleQueryDescription = "每次触发时要做的事，写成一句完整的自然语言指令：要查资料的写查询要求（如「查今天杭州天气，下雨就提醒带伞」），纯提醒写到点要提醒什么（如「提醒用户该睡觉了」）。"
+const scheduleQueryDescription = "每次触发要做的事，一句完整指令：要查的写查询要求，纯提醒写提醒内容"
 
 // scheduleIntervalDescription 是 interval 参数的说明，schedule 和 subscription 两处共用。
-var scheduleIntervalDescription = "重复间隔，单位 " + durationUnitsHint + "。每小时 1h、每天 1d、每周 1w、每月 1mo、每年 1y；" +
-	"按月或按年重复时只写 mo/y，不和其他单位混用。不短于 " + formatDurationUnits(minimumScheduleInterval) + "，不超过 1y。"
+// 「月是 mo 不是 m」要留：每月写成 1m 会变成每分钟触发。按月混用
+// 其他单位、超出上下限都由 parseScheduleInterval 返回具体原因。
+var scheduleIntervalDescription = "重复间隔，如 1h、1d、1w、1mo、1y；月写 mo 不是 m，最短 " + formatDurationUnits(minimumScheduleInterval)
 
 // scheduleAtDescription 是 at 参数的说明，schedule 和 subscription 两处共用。
-const scheduleAtDescription = "首次触发时间，RFC3339（例如 2026-09-27T22:00:00+08:00）。用户说了固定时间点（每天早上八点、每周日 22:00）时必须传，之后每隔 interval 在同一时间点重复；省略表示从现在起过一个 interval 首次触发。已经过去的时间会按 interval 顺延到下一个时间点。"
+// 有固定时间点却不传 at，就会从「现在起过一个 interval」开始，每天八点的提醒变成
+// 每天此刻；所以「固定时刻必传」要留着。已过去的时间按 interval 顺延，返回里会写明。
+const scheduleAtDescription = "首次触发 RFC3339；固定时刻必传（可改用 date+time），省略则一个间隔后"
 
 type scheduleCreateRequest struct {
 	Interval calendarDuration

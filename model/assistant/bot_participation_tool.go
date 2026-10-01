@@ -26,17 +26,17 @@ func newDianaBotParticipationTool(r *Runtime, event MessageEvent) *dianaBotParti
 }
 func (*dianaBotParticipationTool) Name() string { return botParticipationToolName }
 func (*dianaBotParticipationTool) Description() string {
-	return "读取或修改 Diana 的相关度、闲聊门槛及闲聊冷却。get 读取，update 局部修改；scope=group 只改当前群（主人或实时核验的群管理员），scope=bot 仅主人修改当前机器人。关闭所有主动接话同时设置 relevance_level=off 和 chat_level=off；只关闭闲聊设置 chat_level=off。相关度或闲聊分支任一满足条件即回复；机器人近期发言占比过高时暂停闲聊分支，相关度分支不受影响；不操作平台禁言。"
+	return "读取或修改 Diana 的相关度、闲聊门槛和冷却。scope=group 改当前群（主人或实时核验的群管理员），scope=bot 仅主人。关闭所有主动接话要把 relevance_level 和 chat_level 都设 off；只关闲聊设 chat_level=off。不操作平台禁言。"
 }
 func (*dianaBotParticipationTool) InputSchema() map[string]any {
 	return toolObjectSchema([]string{"operation"}, map[string]any{
-		"operation":                  toolEnumParam("读取或局部更新；只有保存成功才报告已修改。", "get", "update"),
-		"scope":                      toolEnumParam("群聊默认 group，私聊默认 bot。不能指定其他机器人或群。", "group", "bot"),
-		"desire_level":               toolEnumParam("回复欲望；off 关闭主动插话，明确请求仍可回复。仅修改欲望，保留门槛和冷却。", "off", "low", "medium", "high", "max"),
-		"relevance_level":            toolEnumParam("回应提问开关：on 明确在跟机器人说话时回应，off 关闭。", "on", "off"),
-		"chat_level":                 toolEnumParam("闲聊档位，仍受闲聊冷却限制；机器人近期发言占比过高时暂不插话，总是除外。", "off", "minimal", "low", "medium", "high", "always"),
-		"cooldown_seconds":           toolIntParam("主动闲聊冷却，0 关闭冷却。", 0, 3600),
-		"minimum_reply_member_level": toolIntParam("仅 OneBot 群支持的最低回复成员等级。", 0, maximumReplyMemberLevel),
+		"operation":                  toolEnumParam("update 局部修改，保存成功才算已改。", "get", "update"),
+		"scope":                      toolEnumParam("群聊默认 group，私聊默认 bot；不能指定别的机器人或群。", "group", "bot"),
+		"desire_level":               toolEnumParam("回复欲望；off 关主动插话，明确请求仍回复。", "off", "low", "medium", "high", "max"),
+		"relevance_level":            toolEnumParam("on：明确跟机器人说话时回应。", "on", "off"),
+		"chat_level":                 toolEnumParam("闲聊档位，受冷却限制；机器人近期发言过多时暂停，always 除外。", "off", "minimal", "low", "medium", "high", "always"),
+		"cooldown_seconds":           toolIntParam("主动闲聊冷却秒数，0 关闭。", 0, 3600),
+		"minimum_reply_member_level": toolIntParam("最低回复成员等级，仅 OneBot 群。", 0, maximumReplyMemberLevel),
 	})
 }
 
