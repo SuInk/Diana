@@ -6,6 +6,7 @@ package assistant
 import (
 	"context"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/SuInk/diana/model/agent"
@@ -76,12 +77,22 @@ func TestReplyPathRunsInstalledPluginToolWhenAgentDisabled(t *testing.T) {
 	}
 }
 
+// agentSequenceLLMProvider 按顺序吐出预排的回复，给主对话那条链用。
+//
+// 证据门控在后台和 Agent 同时调用同一个提供方，不能让它从这份脚本里取：谁先拿到
+// 第几条回复全看调度，测试会时好时坏。门控一律答「不需要」，也不记进 requests。
 type agentSequenceLLMProvider struct {
+	mu        sync.Mutex
 	responses []string
 	requests  []llm.GenerateRequest
 }
 
-func (p *agentSequenceLLMProvider) Generate(_ context.Context, req llm.GenerateRequest) (*llm.GenerateResponse, error) {
+func (p *agentSequenceLLMProvider) Generate(ctx context.Context, req llm.GenerateRequest) (*llm.GenerateResponse, error) {
+	if llmUsagePurposeFromContext(ctx) == PurposeEvidenceGate {
+		return &llm.GenerateResponse{Text: `{"needs_evidence":false}`}, nil
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	p.requests = append(p.requests, req)
 	response := p.responses[0]
 	p.responses = p.responses[1:]
