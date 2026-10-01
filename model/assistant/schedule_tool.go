@@ -352,6 +352,21 @@ func parseScheduleFirstAt(raw string) (time.Time, error) {
 //
 // 带日期规则时，at 只提供起始月份和时刻：第一次是 at 当月起、按规则落到的第一个
 // 不早于 at 且晚于现在的日子，后续都以它为原点。
+// scheduleStartIn 决定任务按哪个时区排期。起点自带的偏移和 location 在那一刻一致
+// （date/time 换算出来的，或者模型按同一时区写的 at）就换进 location 并记下它的名字，
+// 往后跨夏令时也按当地钟点走；不一致说明 at 是按别的时区写的，尊重它自带的偏移，
+// 不记时区，按起点自己的偏移数日子。没给起点时按 location。
+func scheduleStartIn(start time.Time, location *time.Location) (time.Time, string) {
+	if start.IsZero() {
+		return start, location.String()
+	}
+	_, given := start.Zone()
+	if _, local := start.In(location).Zone(); local != given {
+		return start, ""
+	}
+	return start.In(location), location.String()
+}
+
 func firstScheduleTrigger(firstAt time.Time, interval calendarDuration, rule scheduleDayRule, now time.Time) (time.Time, error) {
 	if !rule.IsZero() {
 		if err := checkRuleInterval(rule, interval); err != nil {
@@ -392,6 +407,9 @@ func (r *Runtime) addScheduledQueries(event MessageEvent, requests []scheduleCre
 	}
 	policy := r.relationshipPolicy(context.Background(), event)
 	limit := policy.personalScheduleLimit()
+	// 规则按建任务时的时区数日子（发言者记过时区用他的），并记进任务里。取时区要读
+	// 配置锁，放在拿提醒锁之前。
+	location := r.taskClockForEvent(event).Location
 	r.reminderMu.Lock()
 	defer r.reminderMu.Unlock()
 	items := r.reminders.Reminders()
@@ -402,7 +420,7 @@ func (r *Runtime) addScheduledQueries(event MessageEvent, requests []scheduleCre
 	if len(requests) > remaining {
 		requests = requests[:remaining]
 	}
-	now := time.Now()
+	now := time.Now().In(location)
 	created := make([]Reminder, 0, len(requests))
 	for index, request := range requests {
 		query := strings.TrimSpace(request.Query)
@@ -412,7 +430,8 @@ func (r *Runtime) addScheduledQueries(event MessageEvent, requests []scheduleCre
 		if query == "" || len([]rune(query)) > maximumScheduleQueryRunes {
 			return nil, fmt.Errorf("第 %d 个周期任务 query 无效", index+1)
 		}
-		triggerAt, err := firstScheduleTrigger(request.FirstAt, request.Interval, request.Rule, now)
+		firstAt, timezone := scheduleStartIn(request.FirstAt, location)
+		triggerAt, err := firstScheduleTrigger(firstAt, request.Interval, request.Rule, now)
 		if err != nil {
 			return nil, fmt.Errorf("第 %d 个周期任务: %w", index+1, err)
 		}
@@ -429,6 +448,7 @@ func (r *Runtime) addScheduledQueries(event MessageEvent, requests []scheduleCre
 			Message:          query,
 			TriggerAt:        triggerAt,
 			ScheduleAnchorAt: triggerAt,
+			Timezone:         timezone,
 			CreatedAt:        now,
 		}
 		setReminderScheduleInterval(&reminder, request.Interval)
@@ -571,7 +591,13 @@ func (r *Runtime) updateScheduledQuery(ownerID string, id string, input map[stri
 			if start.IsZero() && !rule.IsZero() {
 				start = item.ScheduleAnchorAt
 			}
-			next, err := firstScheduleTrigger(start, current, rule, now)
+			// 重新定原点时按任务自己的时区排；没记过时区的旧任务按机器人时区重新认定。
+			location := reminderScheduleLocation(*item)
+			if location == nil {
+				location = profileLocation(item.ProfileID)
+			}
+			start, item.Timezone = scheduleStartIn(start, location)
+			next, err := firstScheduleTrigger(start, current, rule, now.In(location))
 			if err != nil {
 				return Reminder{}, err
 			}

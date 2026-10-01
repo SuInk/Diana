@@ -401,7 +401,11 @@ type Reminder struct {
 	// ScheduleAnchorAt 是周期任务的时间网格原点：每次成功后下一次落在 anchor + k*interval
 	// 上，不跟着实际开跑时间或失败重试漂。「每周日 22:00」靠它一直停在 22:00。
 	// 零值是这个字段之前的旧记录，仍按实际开跑时间往后排。
-	ScheduleAnchorAt        time.Time `json:"schedule_anchor_at,omitempty"`
+	ScheduleAnchorAt time.Time `json:"schedule_anchor_at,omitempty"`
+	// Timezone 是建这条任务时用的时区（IANA 名，发言者记过时区就是他的，否则是机器人
+	// 时区）。「每周一」「每月 1 号」按它数日子，之后改机器人时区不会让已有任务挪天。
+	// 空值是这个字段之前的旧记录，按锚点自带的时区排，保持升级前的行为。
+	Timezone                string    `json:"timezone,omitempty"`
 	LastRunAt               time.Time `json:"last_run_at,omitempty"`
 	CancelledAt             time.Time `json:"cancelled_at,omitempty"`
 	LastError               string    `json:"last_error,omitempty"`

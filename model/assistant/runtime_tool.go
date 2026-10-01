@@ -2008,9 +2008,11 @@ func nextRecurringTrigger(item Reminder, startedAt time.Time, now time.Time) tim
 	if anchor.IsZero() {
 		anchor = startedAt
 	}
-	// 「每周一」「每月 1 号」按锚点所在时区数日子。锚点从库里读回来是进程本地时区
-	// （容器里是 UTC），北京时间周一早上七点在 UTC 还是周日，不换回来会排错一天。
-	anchor = reminderLocalTime(item, anchor)
+	// 「每周一」「每月 1 号」按任务自己的时区数日子。锚点从库里读回来只剩一个偏移，
+	// 北京时间周一早上七点换到别的时区可能还是周日，不换回来会排错一天。
+	if location := reminderScheduleLocation(item); location != nil {
+		anchor = anchor.In(location)
+	}
 	if rule := ruleFromReminder(item); !rule.IsZero() {
 		// 规则在创建时校验过一定能找到日子；万一找不到也不能返回零值——零值的
 		// TriggerAt 永远算到期，会每秒跑一次。退回下面按起点排。
@@ -2131,6 +2133,12 @@ func allPluginsDisabled(plugins *PluginManager) map[string]bool {
 		}
 	}
 	return out
+}
+
+// reminderScheduleLocation 是任务排期用的时区；旧记录没记时区时返回 nil，按锚点自带的
+// 时区排，和升级前一致。
+func reminderScheduleLocation(item Reminder) *time.Location {
+	return loadBotLocation(item.Timezone)
 }
 
 // reminderLocalTime 把提醒相关的时刻换到它所属机器人的时区。从库里读回来的时间是

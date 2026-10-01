@@ -342,6 +342,8 @@ func (r *Runtime) addOneTimeReminders(event MessageEvent, requests []reminderCre
 	}
 	policy := r.relationshipPolicy(context.Background(), event)
 	limit := policy.personalScheduleLimit()
+	// 取时区要读配置锁，放在拿提醒锁之前。
+	timezone := r.taskClockForEvent(event).Location.String()
 
 	r.reminderMu.Lock()
 	defer r.reminderMu.Unlock()
@@ -400,6 +402,7 @@ func (r *Runtime) addOneTimeReminders(event MessageEvent, requests []reminderCre
 			RequestedBy:      firstNonEmpty(event.taskRequester, event.UserID),
 			Message:          message,
 			TriggerAt:        triggerAt,
+			Timezone:         timezone,
 			CreatedAt:        now,
 		})
 	}

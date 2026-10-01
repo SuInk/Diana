@@ -23,11 +23,13 @@ const contextSummaryMaxRunes = 4000
 // 几条结论的空间；比这更小就不值得带摘要了。
 const minimumContextSummaryTokens int64 = 192
 
+// contextSummaryTimeLabel 是摘要水位标识里的时间，带 UTC 偏移：摘要文本会一直累积，
+// 中途改过机器人时区时，起点和终点可能是不同时区写下的，不标偏移模型分不出来。
 func contextSummaryTimeLabel(unix int64, location *time.Location) string {
 	if unix <= 0 {
 		return "未知时间"
 	}
-	return time.Unix(unix, 0).In(location).Format("2006-01-02 15:04")
+	return formatZonedTime(time.Unix(unix, 0).In(location), "2006-01-02 15:04")
 }
 
 // contextSummaryHeader 渲染水位标识。条数为零时返回空串。
