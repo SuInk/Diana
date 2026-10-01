@@ -55,7 +55,7 @@ func runResetPasswordCommand(args []string, prompt cliPrompt, output io.Writer) 
 	lock, err := acquireInstanceLock(dbPath, "")
 	if err != nil {
 		if errors.Is(err, errInstanceLocked) {
-			return fmt.Errorf("Diana is still running with the data at %s; stop it first, then run `diana passwd` again%s", dbPath, resetPasswordStopHint())
+			return fmt.Errorf("Diana is still running with the data at %s. Stop it, run `diana passwd`, then start it again%s", dbPath, resetPasswordStopHint())
 		}
 		return err
 	}
@@ -63,14 +63,18 @@ func runResetPasswordCommand(args []string, prompt cliPrompt, output io.Writer) 
 	// 确认放在确认服务已停止之后：先问了再报“服务还在运行”，等于白问。
 	if !options.yes {
 		if !prompt.interactive {
-			return fmt.Errorf("passwd needs confirmation; run it in a terminal, or pass --yes to skip the prompt")
+			return fmt.Errorf("`diana passwd` needs confirmation: run it in a terminal, or add -y to skip the prompt")
 		}
-		_, _ = fmt.Fprintf(output, "This resets the Diana administrator password for %s and signs out every WebUI session.\nOther data is not changed. Continue? [y/N] ", dbPath)
+		renamed := ""
+		if options.username != "" {
+			renamed = fmt.Sprintf("  - The username becomes %q\n", options.username)
+		}
+		_, _ = fmt.Fprintf(output, "Reset the Diana administrator password?\n  - A new random password is generated and shown once\n%s  - Every WebUI session is signed out\n  - Nothing else is changed\nDatabase: %s\nContinue? [y/N] ", renamed, dbPath)
 		answer, _ := bufio.NewReader(prompt.input).ReadString('\n')
 		switch strings.ToLower(strings.TrimSpace(answer)) {
 		case "y", "yes":
 		default:
-			_, err := fmt.Fprintln(output, "Cancelled; nothing was changed.")
+			_, err := fmt.Fprintln(output, "Cancelled. Nothing was changed.")
 			return err
 		}
 	}
@@ -92,10 +96,10 @@ func runResetPasswordCommand(args []string, prompt cliPrompt, output io.Writer) 
 	} else if ok && len(sessions.Sessions) > 0 {
 		return fmt.Errorf("password was reset but %d old session(s) are still stored; run `diana passwd` again", len(sessions.Sessions))
 	}
-	_, err = fmt.Fprintf(output, "Diana administrator credentials were reset\n  username: %s\n  password: %s\nAll existing WebUI sessions were signed out. Start Diana and sign in with these credentials.\n", result.Username, result.GeneratedPassword)
+	_, err = fmt.Fprintf(output, "Administrator password reset. Save it now; it is not shown again.\n  username: %s\n  password: %s\nStart Diana and sign in with these credentials.\n", result.Username, result.GeneratedPassword)
 	if err == nil && strings.TrimSpace(config.Admin.Password) != "" {
 		// admin 段只在数据库为空时播种，一键安装写下的旧密码不会再生效，提醒一句免得照着它登录。
-		_, err = fmt.Fprintf(output, "Note: admin.password in %s is the old initial password and no longer applies.\n", config.path)
+		_, err = fmt.Fprintf(output, "Note: admin.password in %s is no longer used; sign in with the password above.\n", config.path)
 	}
 	return err
 }
@@ -166,9 +170,9 @@ func cliDatabasePath(config appConfig) (string, error) {
 
 func resetPasswordStopHint() string {
 	if dockerDeployment() {
-		return " (Docker: on the host run `docker compose stop diana`, then `docker compose run --rm diana passwd`, then `docker compose start diana`)"
+		return ". On Docker, run on the host: docker compose stop diana && docker compose run --rm diana passwd && docker compose start diana"
 	}
-	return " (for example `sudo systemctl stop diana` or `systemctl --user stop diana`; start it again afterwards)"
+	return " (for example `sudo systemctl stop diana` or `systemctl --user stop diana`)"
 }
 
 // stdinIsTerminal 报告标准输入是不是终端，决定命令行能不能当面问用户。

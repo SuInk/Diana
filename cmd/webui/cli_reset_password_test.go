@@ -80,7 +80,7 @@ func TestResetPasswordCommandRefusesWhileDianaRuns(t *testing.T) {
 	}
 	defer lock.Release()
 	err = runResetPasswordCommand([]string{"--config", configPath, "--yes"}, cliPrompt{}, &strings.Builder{})
-	if err == nil || !strings.Contains(err.Error(), "stop it first") {
+	if err == nil || !strings.Contains(err.Error(), "Stop it, run `diana passwd`") {
 		t.Fatalf("expected running-instance refusal, got %v", err)
 	}
 }
@@ -137,7 +137,7 @@ func TestResetPasswordCommandAsksForConfirmation(t *testing.T) {
 	}
 
 	err := runResetPasswordCommand([]string{"--config", configPath}, cliPrompt{input: strings.NewReader("y\n")}, &strings.Builder{})
-	if err == nil || !strings.Contains(err.Error(), "--yes") || !passwordStillWorks() {
+	if err == nil || !strings.Contains(err.Error(), "add -y") || !passwordStillWorks() {
 		t.Fatalf("non-interactive reset without --yes: err=%v", err)
 	}
 	var output strings.Builder
@@ -154,7 +154,7 @@ func TestResetPasswordCommandAsksForConfirmation(t *testing.T) {
 	if err := runResetPasswordCommand([]string{"--config", configPath}, cliPrompt{input: strings.NewReader("y\n"), interactive: true}, &output); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(output.String(), "credentials were reset") || passwordStillWorks() {
+	if !strings.Contains(output.String(), "Administrator password reset") || passwordStillWorks() {
 		t.Fatalf("confirmed reset did not apply: %s", output.String())
 	}
 }

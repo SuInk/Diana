@@ -74,9 +74,8 @@ Commands:
   config path|check      Locate or validate config.yaml
   logs [--lines N] [-f]  Show or follow the configured Diana log
   passwd [--username NAME] [-y]
-                         Reset the administrator password and sign out every
-                         session; no other data changes; run while Diana is
-                         stopped; asks first unless -y is given
+                         Reset the administrator password while Diana is
+                         stopped; signs out every session, keeps other data
   uninstall [--purge]    Remove Diana, preserving data unless --purge is used
   version                Print the Diana version
   help                   Show this help
