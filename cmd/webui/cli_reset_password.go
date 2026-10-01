@@ -65,7 +65,7 @@ func runResetPasswordCommand(args []string, prompt cliPrompt, output io.Writer) 
 		if !prompt.interactive {
 			return fmt.Errorf("passwd needs confirmation; run it in a terminal, or pass --yes to skip the prompt")
 		}
-		_, _ = fmt.Fprintf(output, "This replaces the Diana administrator password for %s and signs out every WebUI session.\nOther data is not changed. Continue? [y/N] ", dbPath)
+		_, _ = fmt.Fprintf(output, "This resets the Diana administrator password for %s and signs out every WebUI session.\nOther data is not changed. Continue? [y/N] ", dbPath)
 		answer, _ := bufio.NewReader(prompt.input).ReadString('\n')
 		switch strings.ToLower(strings.TrimSpace(answer)) {
 		case "y", "yes":
