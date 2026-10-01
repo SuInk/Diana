@@ -1758,8 +1758,42 @@ func llmMessageFromEventWithVideoFramesDiagnostics(ctx context.Context, event Me
 			text += "\n\n【系统提示】" + overrides.render(promptNoteVideoFailedSpec, map[string]string{"reason": videoFailureReason(videoFailure)})
 		}
 	}
+	// 只给描述时关键帧合成一次看：逐帧各识一次，16 帧要排好几批，还看不出先后动作。
+	// 描述拿不到时原帧直接附给对话模型，不再退回逐帧识图。
+	var rawFrames []string
+	if mode := imageTextModeFromContext(ctx); mode != nil && len(frames) > 0 {
+		if description := mode.framesDescription(ctx, frames); description != "" {
+			text += "\n" + description
+		} else {
+			rawFrames = frames
+		}
+		frames = nil
+	}
 	extraImageURLs = append(extraImageURLs, frames...)
-	return llmMessageFromEventWithImagesForContextDiagnostics(ctx, event, text, extraImageURLs)
+	message, failures := llmMessageFromEventWithImagesForContextDiagnostics(ctx, event, text, extraImageURLs)
+	if len(rawFrames) > 0 {
+		var frameFailures []error
+		message, frameFailures = appendLLMImageURLs(ctx, message, rawFrames)
+		failures = append(failures, frameFailures...)
+	}
+	return message, failures
+}
+
+// appendLLMImageURLs 把一组图按原样加进消息末尾。消息原来只有 Content 时先补成
+// 文本段，否则适配器只发段会丢正文。
+func appendLLMImageURLs(ctx context.Context, message llm.Message, imageURLs []string) (llm.Message, []error) {
+	groups, failures := loadLLMImageURLGroupsDetailed(ctx, imageURLs)
+	ready := flattenLLMImageGroups(dedupeLLMImageGroups(groups))
+	if len(ready) == 0 {
+		return message, failures
+	}
+	if len(message.Parts) == 0 && strings.TrimSpace(message.Content) != "" {
+		message.Parts = []llm.ContentPart{{Type: llm.ContentPartText, Text: message.Content}}
+	}
+	for _, imageURL := range ready {
+		message.Parts = append(message.Parts, llm.ContentPart{Type: llm.ContentPartImageURL, ImageURL: imageURL, Detail: "high"})
+	}
+	return message, failures
 }
 
 func llmMessageFromEventWithImages(event MessageEvent, text string, extraImageURLs []string) llm.Message {
@@ -1784,6 +1818,9 @@ func llmMessageFromEventWithImagesForContextDiagnostics(ctx context.Context, eve
 // 正式回复要看清图里的字和细节，一直用 high；只做是非判断的路由用 low 就够——
 // 它要知道「这是张什么图」，不用逐字读，high 档一张图的 token 往往比整段上下文还多。
 func llmMessageFromEventWithImageDetail(ctx context.Context, event MessageEvent, text string, extraImageURLs []string, detail string) (llm.Message, []error) {
+	if mode := imageTextModeFromContext(ctx); mode != nil {
+		return mode.message(ctx, event, text, extraImageURLs, detail)
+	}
 	text = strings.TrimSpace(text)
 	imageURLs := availableImageURLs(event.Segments)
 	if event.Quoted != nil {

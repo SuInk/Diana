@@ -15,7 +15,7 @@ function loadFunction(name, context) {
   return context[name];
 }
 
-const ROLE_ROWS = ["chat", "vision", "media_parse", "intent", "reply_assist", "background", "image"];
+const ROLE_ROWS = ["chat", "vision", "intent", "reply_assist", "background", "image"];
 
 function editorContext() {
   const context = vm.createContext({

@@ -16,6 +16,9 @@ function loadFunction(name, context) {
 }
 
 const isMediaRole = role => ["tts", "stt", "video"].includes(role);
+const isPurposeRole = role => ["reply_assist", "background"].includes(role);
+const purposeRoleFallbackLabel = role => (role === "reply_assist" ? "后台生成" : "对话");
+const purposeHelpers = { isPurposeRole, purposeRoleFallbackLabel, UNSPECIFIED: "__unspecified__" };
 
 test("saving requires an explicit provider and model for each role", async () => {
   const keys = ["chat", "vision", "intent", "image"];
@@ -35,7 +38,7 @@ test("saving requires an explicit provider and model for each role", async () =>
 });
 
 test("provider and model menus do not offer an empty assignment", () => {
-  const context = vm.createContext({ roleForm: {value:{}}, llmChannels: { value: [] }, channelGroups: () => [], selectedRoleProfiles: () => [], modelsForRole: () => [], modelRoleRows: [], GROUP_PREFIX: "group:", MODEL_PAIR_SEP: "::", FOLLOW_CHAT: "__follow_chat__", DISABLED: "__disabled__", isMediaRole });
+  const context = vm.createContext({ roleForm: {value:{}}, llmChannels: { value: [] }, channelGroups: () => [], selectedRoleProfiles: () => [], modelsForRole: () => [], modelRoleRows: [], GROUP_PREFIX: "group:", MODEL_PAIR_SEP: "::", FOLLOW_CHAT: "__follow_chat__", DISABLED: "__disabled__", isMediaRole, ...purposeHelpers });
   loadFunction("crossProviderModelOptions", context);
   for (const name of ["channelOptionsFor", "crossProviderModelOptions", "modelOptionsFor"]) {
     const options = loadFunction(name, context)("vision", {});
@@ -52,6 +55,7 @@ test("provider dropdown offers follow chat for every role except chat", () => {
     FOLLOW_CHAT: "__follow_chat__",
     DISABLED: "__disabled__",
     isMediaRole,
+    ...purposeHelpers,
     llmChannels: { value: [] },
     channelGroups: () => [],
     modelsForRole: () => [],
@@ -203,4 +207,31 @@ test("media slots may be left unset but a configured slot needs a model", async 
     const complaints = errors.filter(message => media.some(row => message.startsWith(row.label)));
     assert.equal(complaints.length, expected, errors.join(" | "));
   }
+});
+
+test("optional purpose roles can go back to unspecified", () => {
+  const roleForm = { value: { reply_assist: { profile_id: "p", model: "m" } } };
+  const context = vm.createContext({
+    roleForm,
+    GROUP_PREFIX: "group:",
+    FOLLOW_CHAT: "__follow_chat__",
+    DISABLED: "__disabled__",
+    isMediaRole,
+    ...purposeHelpers,
+    llmChannels: { value: [] },
+    channelGroups: () => []
+  });
+  const channelOptionsFor = loadFunction("channelOptionsFor", context);
+  // 选过一次提供商之后也要能退回「不指定」，否则只能跟随对话，跟不回后台生成。
+  const first = channelOptionsFor("reply_assist")[0];
+  assert.equal(first.value, "__unspecified__");
+  assert.equal(first.label, "不指定，跟随后台生成");
+  assert.equal(channelOptionsFor("background")[0].label, "不指定，跟随对话");
+  assert.equal(channelOptionsFor("vision").some(option => option.value === "__unspecified__"), false);
+  loadFunction("routeSelectionValue", context);
+  const roleSelectionValue = loadFunction("roleSelectionValue", context);
+  assert.equal(roleSelectionValue("reply_assist"), "p");
+  loadFunction("setRoleChannel", context)("reply_assist", "__unspecified__");
+  assert.equal(roleForm.value.reply_assist, undefined);
+  assert.equal(roleSelectionValue("reply_assist"), "__unspecified__");
 });

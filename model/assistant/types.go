@@ -696,10 +696,12 @@ type BotConfig struct {
 	SendRetryAttempts              int   `json:"send_retry_attempts,omitempty"`
 	// 群退避与入站重跑的五个参数，见 send_retry_policy.go。
 	sendRetrySettings
-	SendChunkIntervalMS  int                  `json:"send_chunk_interval_ms,omitempty"`
-	AutoImageDescription *bool                `json:"auto_image_description,omitempty"`
-	AutoVideoPreprocess  *bool                `json:"auto_video_preprocess,omitempty"`
-	ModelRoles           map[string]ModelRole `json:"model_roles,omitempty"`
+	SendChunkIntervalMS  int   `json:"send_chunk_interval_ms,omitempty"`
+	AutoImageDescription *bool `json:"auto_image_description,omitempty"`
+	AutoVideoPreprocess  *bool `json:"auto_video_preprocess,omitempty"`
+	// ImageInputMode 决定主回复模型怎么看图，见 image_input_mode.go。
+	ImageInputMode ImageInputMode       `json:"image_input_mode,omitempty"`
+	ModelRoles     map[string]ModelRole `json:"model_roles,omitempty"`
 	// PrivateClosingGrace 是私聊里「对方在收尾」时仍然照常回答的轮数。
 	// 第一声再见就闭嘴不像人：正常人会接一两句「拜拜」再停。到这个数之后，
 	// 候选回复只是又一句告别时就不再发出去。明确要求停止不受它约束，当场生效。
@@ -947,10 +949,27 @@ func normalizeModelRoles(roles map[string]ModelRole) map[string]ModelRole {
 			out[key] = role
 		}
 	}
+	mergeMediaParseIntoVision(out)
 	if len(out) == 0 {
 		return nil
 	}
 	return out
+}
+
+// mergeMediaParseIntoVision 把旧的「媒体解析」并进「视觉理解」。视觉理解以前是带图
+// 那一轮的回答模型，现在图直接交给对话模型，它只剩「替对话模型看图」这一件事：
+// 写描述、带着问题再看一次，和媒体解析是同一份活。媒体解析单独绑过的以它为准——
+// 那才是用户为看图挑的模型；它只是跟随对话、而视觉理解单独绑了的，留视觉理解。
+func mergeMediaParseIntoVision(roles map[string]ModelRole) {
+	media, ok := roles[PurposeMediaParse]
+	if !ok {
+		return
+	}
+	delete(roles, PurposeMediaParse)
+	if vision, bound := roles["vision"]; bound && !vision.FollowChat && media.FollowChat {
+		return
+	}
+	roles["vision"] = media
 }
 
 func normalizeModelRole(role ModelRole) ModelRole {
@@ -1273,6 +1292,7 @@ type ConfigPayload struct {
 	PromptChineseSlangHint         *bool                `json:"prompt_chinese_slang_hint,omitempty"`
 	AutoImageDescription           *bool                `json:"auto_image_description,omitempty"`
 	AutoVideoPreprocess            *bool                `json:"auto_video_preprocess,omitempty"`
+	ImageInputMode                 ImageInputMode       `json:"image_input_mode,omitempty"`
 	ModelRoles                     map[string]ModelRole `json:"model_roles,omitempty"`
 	BotReplyLoopDetectionEnabled   *bool                `json:"bot_reply_loop_detection_enabled,omitempty"`
 	ReplyRefusalSuppressionEnabled *bool                `json:"reply_refusal_suppression_enabled,omitempty"`
@@ -2139,6 +2159,7 @@ func (cfg BotConfig) WithDefaults() BotConfig {
 		cfg.ForwardReplyEnabled = boolPointer(cfg.ForwardReplyThreshold > 0 || cfg.ForwardReplyChunkThreshold > 0)
 	}
 	cfg.RecallReplyMode = normalizeRecallReplyMode(cfg.RecallReplyMode)
+	cfg.ImageInputMode = normalizeImageInputMode(cfg.ImageInputMode)
 	cfg.RefusalStrategy = normalizeRefusalStrategy(cfg.RefusalStrategy)
 	if cfg.LLMStreamingEnabled == nil {
 		cfg.LLMStreamingEnabled = copyBoolPointer(defaults.LLMStreamingEnabled)
@@ -2549,6 +2570,7 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		PromptChineseSlangHint:            copyBoolPointer(cfg.PromptChineseSlangHint),
 		AutoImageDescription:              copyBoolPointer(cfg.AutoImageDescription),
 		AutoVideoPreprocess:               copyBoolPointer(cfg.AutoVideoPreprocess),
+		ImageInputMode:                    cfg.ImageInputMode,
 		ModelRoles:                        normalizeModelRoles(cfg.ModelRoles),
 		BotReplyLoopDetectionEnabled:      copyBoolPointer(cfg.BotReplyLoopDetectionEnabled),
 		ReplyRefusalSuppressionEnabled:    copyBoolPointer(cfg.ReplyRefusalSuppressionEnabled),
@@ -2777,6 +2799,7 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		PromptChineseSlangHint:          copyBoolPointer(payload.PromptChineseSlangHint),
 		AutoImageDescription:            copyBoolPointer(firstNonNilBoolPointer(payload.AutoImageDescription, existing.AutoImageDescription)),
 		AutoVideoPreprocess:             copyBoolPointer(firstNonNilBoolPointer(payload.AutoVideoPreprocess, existing.AutoVideoPreprocess)),
+		ImageInputMode:                  ImageInputMode(firstNonEmpty(string(payload.ImageInputMode), string(existing.ImageInputMode))),
 		ModelRoles:                      normalizeModelRoles(payload.ModelRoles),
 		BotReplyLoopDetectionEnabled:    copyBoolPointer(payload.BotReplyLoopDetectionEnabled),
 		ReplyRefusalSuppressionEnabled:  copyBoolPointer(payload.ReplyRefusalSuppressionEnabled),

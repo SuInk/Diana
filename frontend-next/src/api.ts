@@ -122,6 +122,9 @@ export type AliasTriggerMode = "loose" | "smart" | "strict";
 /** 拒答话术：决定机器人不正面回答时说什么。见后端 RefusalStrategy。 */
 export type RefusalStrategy = "smart" | "rewrite" | "explain" | "vague";
 
+/** 对话模型怎么看图：自动（描述 + 按需问视觉理解）、仅文字描述、关闭（原图直接给对话模型）。见后端 ImageInputMode。 */
+export type ImageInputMode = "auto" | "text" | "off";
+
 export type MessageRelayKind = "group" | "private";
 
 /** 互通链路的一端：某台机器人上的某个群聊或某个人。 */
@@ -282,6 +285,7 @@ export interface BotProfileConfig extends SendRetrySettings {
   /** 按用途分配模型：chat/vision/intent/image/tts/stt/video → 渠道（或渠道分组）+模型。 */
   auto_image_description?: boolean;
   auto_video_preprocess?: boolean;
+  image_input_mode?: ImageInputMode;
   model_roles?: Record<string, {
 	 follow_chat?: boolean;
     profile_id?: string;

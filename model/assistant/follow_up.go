@@ -207,10 +207,8 @@ func (r *Runtime) followUpCommentWithReference(ctx context.Context, kind followU
 	// im_message_* 别名时无法恢复成真实 message_id，引用标记就会失效。
 	// 仓库订阅的 ctx 来自定时轮询，这里也同时负责首次建立脱敏状态。
 	ctx = r.withIdentityPrivacyContext(ctx, source, history)
+	// 图直接交给对话模型，不再整轮切到视觉理解（见 image_input_mode.go）。
 	group := llm.GroupChat
-	if messagesContainImages(messages) {
-		group = llm.GroupVision
-	}
 	// 和上面的脱敏同理：定时轮询进来的 ctx 没带用量上下文，补上才记得到账。
 	ctx = withLLMUsagePurpose(withLLMUsageContext(ctx, source), kind.usageTag())
 	messages = withReplyGenerationBudgetForConfig(messages, cfg)

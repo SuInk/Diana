@@ -32,7 +32,7 @@ func (p restoredDynamicAgentProvider) Generate(_ context.Context, request llm.Ge
 	if len(*p.requests) == 1 {
 		text = `{"action":"tool","tool":"tools_load","input":{"names":["history_images"]}}`
 	}
-	if p.model == "vision-model" {
+	if requestHasAnyImage(request) {
 		text = `{"action":"final","content":"视觉细节已读取"}`
 	}
 	return &llm.GenerateResponse{Provider: llm.ProviderOpenAICompatible, Model: p.model, Text: text}, nil
@@ -56,7 +56,8 @@ func (p restoredModelProvider) Generate(context.Context, llm.GenerateRequest) (*
 	return &llm.GenerateResponse{Provider: llm.ProviderOpenAICompatible, Model: p.model, Text: "ok from " + p.model}, nil
 }
 
-func TestRestoredGenerateReplyRoutesVisionGroup(t *testing.T) {
+// 带图的回复照样交给对话模型，不再整轮切到视觉理解（见 image_input_mode.go）。
+func TestGenerateReplyKeepsImagesOnChatModel(t *testing.T) {
 	store := &stubLLMProfileStore{set: llm.ProfileSet{
 		Profiles: []llm.Profile{
 			{ID: "chat", Group: llm.GroupChat, Config: llm.ProviderConfig{Provider: llm.ProviderOpenAICompatible, APIKey: "chat-key", Model: "chat-model"}},
@@ -72,19 +73,20 @@ func TestRestoredGenerateReplyRoutesVisionGroup(t *testing.T) {
 
 	imageMessages := []llm.Message{{Role: llm.RoleUser, Parts: []llm.ContentPart{{Type: llm.ContentPartImageURL, ImageURL: "https://example.com/image.png"}}}}
 	reply, err := runtime.generateReply(context.Background(), BotConfig{}, MessageEvent{}, RelationshipPolicy{}, imageMessages, nil)
-	if err != nil || reply != "ok from vision-model" {
+	if err != nil || reply != "ok from chat-model" {
 		t.Fatalf("image reply=%q err=%v", reply, err)
 	}
 	reply, err = runtime.generateReply(context.Background(), BotConfig{}, MessageEvent{}, RelationshipPolicy{}, []llm.Message{{Role: llm.RoleUser, Content: "hello"}}, nil)
 	if err != nil || reply != "ok from chat-model" {
 		t.Fatalf("chat reply=%q err=%v", reply, err)
 	}
-	if len(used) != 2 || used[0] != "vision-model" || used[1] != "chat-model" {
+	if len(used) != 2 || used[0] != "chat-model" || used[1] != "chat-model" {
 		t.Fatalf("used models=%v", used)
 	}
 }
 
-func TestAgentSwitchesFromChatToVisionAfterRichToolResult(t *testing.T) {
+// 工具中途带回的图也交给对话模型本身，不为这一步换模型。
+func TestAgentKeepsChatModelAfterRichToolResult(t *testing.T) {
 	store := &stubLLMProfileStore{set: llm.ProfileSet{
 		Profiles: []llm.Profile{
 			{ID: "chat", Group: llm.GroupChat, Config: llm.ProviderConfig{Provider: llm.ProviderOpenAICompatible, APIKey: "chat-key", Model: "chat-model"}},
@@ -110,7 +112,7 @@ func TestAgentSwitchesFromChatToVisionAfterRichToolResult(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if reply != "视觉细节已读取" || strings.Join(used, ",") != "chat-model,chat-model,vision-model" {
+	if reply != "视觉细节已读取" || strings.Join(used, ",") != "chat-model,chat-model,chat-model" {
 		t.Fatalf("reply=%q used=%v", reply, used)
 	}
 	if len(requests) != 3 || requestHasAnyImage(requests[0]) || requestHasAnyImage(requests[1]) || !requestHasAnyImage(requests[2]) {
@@ -369,7 +371,7 @@ func TestRestoredModelRoleProfileBindingsAndVisionFallback(t *testing.T) {
 	if _, err := runtime.generateReply(context.Background(), cfg, MessageEvent{}, RelationshipPolicy{}, imageMessages, nil); err != nil {
 		t.Fatal(err)
 	}
-	if len(used) != 2 || used[0] != "gpt-chat@key-a" || used[1] != "gpt-vision@key-b" {
+	if len(used) != 2 || used[0] != "gpt-chat@key-a" || used[1] != "gpt-chat@key-a" {
 		t.Fatalf("used = %v", used)
 	}
 

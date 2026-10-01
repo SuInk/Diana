@@ -3759,6 +3759,12 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	r.beginHistoryImageDescriptionForeground()
 	defer r.endHistoryImageDescriptionForeground()
 	cfg := r.effectiveConfigForEvent(event)
+	// 图片交付方式挂在 ctx 上，这一轮拼出来的每条消息、每一步模型调用都认它。
+	imageMode := normalizeImageInputMode(cfg.ImageInputMode)
+	imageTextOnly := r.imageDescriptionsInPrompt(cfg)
+	if imageTextOnly {
+		ctx = withImageTextMode(ctx, r, event)
+	}
 	directQuotedReply := explicitlyRepliesToBot(event, cfg)
 	if directQuotedReply {
 		event.chatInReply = false
@@ -3772,7 +3778,10 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		}
 	}
 	currentImageGrounding := strings.TrimSpace(event.replyAuditImageContext)
-	if cfg.AgentEnabled && hasImageSegment(event.Segments) && currentImageGrounding == "" {
+	// 图片文字识别插件在「仅识别文字」时自己会识别一遍，这里再同步识图一次就是白跑。
+	// 仅摘要模式照跑：描述进缓存，拼消息时直接命中，发送审核也要用它。
+	// 视觉理解关掉时不写描述，原图直接交给对话模型。
+	if (cfg.AgentEnabled || imageTextOnly) && imageMode != ImageInputModeOff && r.chatModelReceivesImages(event) && hasImageSegment(event.Segments) && currentImageGrounding == "" {
 		event, currentImageGrounding = r.ensureReplyImageDescription(ctx, event)
 		if currentImageGrounding != "" {
 			event.replyAuditImageContext = currentImageGrounding
@@ -3951,7 +3960,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			var deniedTools []string
 			extraTools := []agent.Tool{
 				newDianaChatHistoryTool(r, event).withRecallSink(recallSink),
-				newDianaHistoryImagesTool(r, event),
+				newDianaHistoryImagesTool(r, event).withImageInput(imageTextOnly, imageMode),
 				newDianaRemoteImageTool(r, event),
 				newDianaMCPMediaTool(r, event),
 				&dianaTelegramImagesTool{runtime: r, event: event},
@@ -4406,7 +4415,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		// 先发图、隔一会儿再单独问「这是啥」：这个人刚发、还没人接的图作为候选单独
 		// 附上（agent 和非 agent 都一样），见 sender_dependency_images.go。
 		if images := senderDependencyImages(replyHistory, event, turnMessageIDs, firstNonEmpty(strings.TrimSpace(cfg.BotAccount), strings.TrimSpace(event.SelfID))); len(images) > 0 {
-			dependency = &senderDependencyContext{images: images, toolHint: directAgentDecision, pixels: r.chatModelReceivesImages(event)}
+			dependency = &senderDependencyContext{images: images, toolHint: directAgentDecision, pixels: r.chatModelReceivesImages(event) && imageTextModeFromContext(ctx) == nil}
 			// 这一轮已经带着那几张图在答了，纯图那条自己的回复就不必再发。
 			r.supersedeDependencyImageTurns(ctx, event, images)
 		}
@@ -4538,6 +4547,8 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	currentMessage, imageOCRContext := r.imageOCRAdjustMessageWithContext(ctx, event, currentMessage)
 	if imageOCRContext != "" {
 		event.replyAuditImageContext = imageOCRContext
+	} else if imageTextModeFromContext(ctx) != nil {
+		// 仅摘要模式下描述已经替换原图写进消息里了，不再附一遍，也不报「没收到图」。
 	} else if currentImageGrounding != "" {
 		// The raw image is still attached. The independent description anchors
 		// small-text screenshots so the chat model cannot silently replace their
@@ -4990,8 +5001,13 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 		text = r.applyFinalizeRender(ctx, event, text, resp.FinalizeFields[renderFinalizeFieldName])
 		return r.prepareGeneratedReply(ctx, cfg, text, event)
 	}
+	if mode := imageTextModeFromContext(ctx); mode != nil {
+		messages = mode.replaceImageParts(ctx, messages)
+	}
+	// 图直接交给对话模型（它不收图时这一轮已经换成了描述，见 image_input_mode.go）；
+	// 只有语音还要走多模态那条路由。
 	group := llm.GroupChat
-	if messagesContainImages(messages) || messagesContainAudio(messages) {
+	if messagesContainAudio(messages) {
 		group = llm.GroupVision
 	}
 	ctx = withDefaultLLMUsagePurpose(ctx, PurposeReply)
@@ -5020,8 +5036,13 @@ func (p *runtimeAgentLLMProvider) Generate(ctx context.Context, req llm.Generate
 	if p == nil || p.runtime == nil {
 		return nil, fmt.Errorf("diana: runtime agent llm provider is not configured")
 	}
+	// 工具返回的截图、历史原图也在这里换成描述：仅摘要模式下这一轮一张图都不进回复模型。
+	if mode := firstImageTextMode(ctx, p.ctx); mode != nil {
+		req.Messages = mode.replaceImageParts(ctx, req.Messages)
+	}
+	// 工具中途带回的图也照样交给对话模型；只有语音还要走多模态那条路由。
 	group := llm.GroupChat
-	if messagesContainImages(req.Messages) || messagesContainAudio(req.Messages) {
+	if messagesContainAudio(req.Messages) {
 		group = llm.GroupVision
 	}
 	provider, err := p.providerForGroup(group)

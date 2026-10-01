@@ -17,7 +17,7 @@ func skipAutomaticVideo(ctx context.Context) bool {
 
 func isMediaParsePurpose(purpose string) bool {
 	switch purpose {
-	case PurposeMediaParse, "image_description_cache", "sticker_description", "image_describe", "image_ocr":
+	case PurposeMediaParse, "image_description_cache", "sticker_description", "image_describe", "image_ocr", imageQuestionPurpose:
 		return true
 	default:
 		return false
