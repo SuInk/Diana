@@ -221,7 +221,7 @@ func TestImageOnlyFollowUpMergesWithoutJudge(t *testing.T) {
 
 	withAt := photoEvent("20153", "10001", 1_800_000_004)
 	withAt.Segments = append([]MessageSegment{{Type: "at", Data: map[string]string{"qq": "42"}}, {Type: "text", Data: map[string]string{"text": " "}}}, withAt.Segments...)
-	if !senderImageOnlyFollowUp(root, time.Time{}, withAt, time.Time{}) {
+	if rule, ok := senderAttachmentOnlyFollowUp(root, time.Time{}, withAt, time.Time{}); !ok || rule != imageFollowUpRuleImageOnly {
 		t.Fatal("an image that only @s the bot is still an image-only follow-up")
 	}
 	late := photoEvent("20154", "10001", 1_800_000_000+int64(senderImageFollowUpWindow/time.Second)+5)
@@ -229,7 +229,7 @@ func TestImageOnlyFollowUpMergesWithoutJudge(t *testing.T) {
 	captioned := photoEvent("20156", "10001", 1_800_000_003)
 	captioned.Segments = append(captioned.Segments, MessageSegment{Type: "text", Data: map[string]string{"text": "顺便问下周末去哪"}})
 	for _, follow := range []MessageEvent{late, other, captioned} {
-		if senderImageOnlyFollowUp(root, time.Time{}, follow, time.Time{}) {
+		if _, ok := senderAttachmentOnlyFollowUp(root, time.Time{}, follow, time.Time{}); ok {
 			t.Fatalf("%s must go to the judge instead of merging by rule", follow.MessageID)
 		}
 	}
@@ -237,6 +237,48 @@ func TestImageOnlyFollowUpMergesWithoutJudge(t *testing.T) {
 	mentionOther.Segments = append([]MessageSegment{{Type: "at", Data: map[string]string{"qq": "10002"}}}, mentionOther.Segments...)
 	if _, ok := runtime.imageFollowUpBySameSender(root, time.Time{}, mentionOther, time.Time{}, ""); ok {
 		t.Fatal("an image that @s someone else is not a supplement to the bot's pending reply")
+	}
+}
+
+// 「帮我看下作业」还在回，同一个人几秒后才把文件传上来：判断器读不到文件正文，
+// 和纯图一样按规则算补充，文件并进同一份答案里，不再单独回一遍。
+func TestFileOnlyFollowUpMergesWithoutJudge(t *testing.T) {
+	provider := &capturingLLMProvider{reply: `{"relation":"uncertain","confidence":0.95,"reason":"新消息内容为空"}`}
+	runtime := NewRuntime(BotConfig{BotAccount: "42"}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) { return provider, nil })
+	root := directedGroupMessage("20161", "10001", "帮我看下这份作业")
+	root.Time = 1_800_000_000
+	runtime.noteSenderTurnArrival(root)
+	runtime.remember(root)
+	ctx, finish := runtime.beginDirectReply(context.Background(), root)
+	defer finish()
+
+	file := fileEvent("20162", "10001", 1_800_000_008)
+	runtime.noteSenderTurnArrival(file)
+	if rootID, merged := runtime.mergeIntoActiveDirectReply(ctx, file, file.RawMessage); !merged || rootID != "20161" {
+		t.Fatalf("a file right after the request should merge, merged=%v root=%q", merged, rootID)
+	}
+	if topicJudgeCalled(provider) {
+		t.Fatal("the rule should decide without calling the judge")
+	}
+	if supplements := runtime.directReplySupplements(ctx); len(supplements) != 1 || supplements[0].Event.MessageID != "20162" {
+		t.Fatalf("the file should be kept as a supplement of the pending reply, got %+v", supplements)
+	}
+
+	late := fileEvent("20163", "10001", 1_800_000_000+int64(senderImageFollowUpWindow/time.Second)+5)
+	other := fileEvent("20164", "10002", 1_800_000_003)
+	captioned := fileEvent("20165", "10001", 1_800_000_003)
+	captioned.Segments = append(captioned.Segments, MessageSegment{Type: "text", Data: map[string]string{"text": "顺便问下周末去哪"}})
+	for _, follow := range []MessageEvent{late, other, captioned} {
+		if _, ok := senderAttachmentOnlyFollowUp(root, time.Time{}, follow, time.Time{}); ok {
+			t.Fatalf("%s must go to the judge instead of merging by rule", follow.MessageID)
+		}
+	}
+}
+
+func fileEvent(messageID, userID string, at int64) MessageEvent {
+	return MessageEvent{
+		Kind: EventKindGroup, GroupID: "123456", UserID: userID, MessageID: messageID, Time: at, RawMessage: "[文件]",
+		Segments: []MessageSegment{{Type: "file", Data: map[string]string{"name": "作业.docx", "file_id": "/" + messageID}}},
 	}
 }
 

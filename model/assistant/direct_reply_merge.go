@@ -369,8 +369,11 @@ func (r *Runtime) recordDirectReplyTopicRule(ctx context.Context, root, event Me
 		return
 	}
 	reason := "前一条是纯图，同一个人随后补了一句短话"
-	if rule == imageFollowUpRuleImageOnly {
+	switch rule {
+	case imageFollowUpRuleImageOnly:
 		reason = "前一条还没回完，同一个人随后补了一条纯图"
+	case imageFollowUpRuleFileOnly:
+		reason = "前一条还没回完，同一个人随后补了一条纯文件"
 	}
 	logCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Second)
 	defer cancel()
