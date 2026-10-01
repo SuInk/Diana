@@ -378,9 +378,12 @@ type Runtime struct {
 	// llmDowngrades 落盘「哪个端点的哪个模型拒过哪些请求字段」，重启后
 	// 不必重新学。
 	llmDowngrades LLMDowngradeStore
-	modelLister   LLMModelLister
-	appLogs       applog.Writer
-	messageStore  MessageHistoryStore
+	// replyFatigueStore 落盘回复疲劳，重启后接着算，见 reply_fatigue_store.go。
+	replyFatigueStore ReplyFatigueStore
+
+	modelLister  LLMModelLister
+	appLogs      applog.Writer
+	messageStore MessageHistoryStore
 	// aliasSalt 是脱敏别名的全局盐，进程内只定一次，落库后跨重启不变。
 	aliasSalt        string
 	inboundStore     InboundEventStore
@@ -1003,6 +1006,10 @@ func (r *Runtime) Start(parent context.Context) error {
 		go func() {
 			defer recoverGoroutinePanic("runtime.llmDowngradeMemoLoop")
 			r.runLLMDowngradeMemoLoop(ctx)
+		}()
+		go func() {
+			defer recoverGoroutinePanic("runtime.replyFatiguePersistLoop")
+			r.runReplyFatiguePersistLoop(ctx)
 		}()
 		go func() {
 			defer recoverGoroutinePanic("runtime.pendingDirectMessagePurgeLoop")

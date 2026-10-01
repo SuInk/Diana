@@ -46,8 +46,9 @@ import (
 // 已经删掉（#873）。这里判的是这一轮本身有没有新东西、有没有目的。
 //
 // 累加用的新意和目的由发送前审核顺带打分，不额外调用模型；回复真的发出去以后
-// 才累加，没回的那一轮不累加。触发阶段那一问只在疲劳攒满时才发生。状态只在内存
-// 里：重启就清零，方向上偏多回一句。
+// 才累加，没回的那一轮不累加。触发阶段那一问只在疲劳攒满时才发生。状态每分钟
+// 落一次盘（有变化才写），退出时再写一次，启动时读回：慢档按 6 小时消退，只放
+// 内存的话每次部署重启都把机器人刷了一天的疲劳清零。
 const (
 	replyFatigueDecay     = 10 * time.Minute
 	replyFatigueSlowDecay = 6 * time.Hour
@@ -98,6 +99,8 @@ type replyFatigueState struct {
 type replyFatigueTracker struct {
 	mu    sync.Mutex
 	byKey map[string]replyFatigueState
+	// dirty 表示上次落盘以后有过变化。
+	dirty bool
 }
 
 // decayReplyFatigue 把两档都消退到 now，返回消退后的快、慢两个值。
@@ -282,10 +285,16 @@ func (r *Runtime) recordReplyFatigueSend(event MessageEvent, charge replyFatigue
 	r.replyFatigue.byKey[key] = replyFatigueState{Fast: fast + amount, Slow: slow + amount, Engage: engage, At: now}
 	// 顺手清掉已经消退干净的，免得长期运行时表只增不减。
 	for other, state := range r.replyFatigue.byKey {
-		if other != key && replyFatigueTotal(decayReplyFatigue(state, now)) < 0.01 {
+		if other != key && replyFatigueSpent(state, now) {
 			delete(r.replyFatigue.byKey, other)
 		}
 	}
+	r.replyFatigue.dirty = true
+}
+
+// replyFatigueSpent 判断一条记录是否已经消退干净，可以丢掉。
+func replyFatigueSpent(state replyFatigueState, now time.Time) bool {
+	return replyFatigueTotal(decayReplyFatigue(state, now)) < 0.01 && decayReplyFatigueEngage(state, now) < 0.01
 }
 
 // resetReplyFatigueUser 随主人解除暂停一起清掉这个人的疲劳。
@@ -299,6 +308,7 @@ func (r *Runtime) resetReplyFatigueUser(userID string) {
 	for key := range r.replyFatigue.byKey {
 		if strings.HasSuffix(key, suffix) {
 			delete(r.replyFatigue.byKey, key)
+			r.replyFatigue.dirty = true
 		}
 	}
 	r.replyFatigue.mu.Unlock()

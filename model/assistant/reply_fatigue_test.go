@@ -252,6 +252,66 @@ func TestReplyFatigueGateSeesOrderedTranscript(t *testing.T) {
 	}
 }
 
+// memoryReplyFatigueStore 是测试用的落盘存储。
+type memoryReplyFatigueStore struct {
+	mu      sync.Mutex
+	records []ReplyFatigueRecord
+	saves   int
+}
+
+func (s *memoryReplyFatigueStore) LoadReplyFatigue(context.Context) ([]ReplyFatigueRecord, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]ReplyFatigueRecord(nil), s.records...), nil
+}
+
+func (s *memoryReplyFatigueStore) SaveReplyFatigue(_ context.Context, records []ReplyFatigueRecord) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.records = append([]ReplyFatigueRecord(nil), records...)
+	s.saves++
+	return nil
+}
+
+// 疲劳落盘：重启以后接着算，不会每次部署都把刷了一天的机器人清零。
+func TestReplyFatigueSurvivesRestart(t *testing.T) {
+	store := &memoryReplyFatigueStore{}
+	r := densityTestRuntime(BotConfig{}, nil)
+	event := densityTestEvent("m1", "Diana 锦旗绣八个金字")
+	now := time.Now()
+	r.recordReplyFatigueSend(event, replyFatigueCharge{Scored: true, Amount: 1.2, Purpose: 0.8}, now)
+	r.persistReplyFatigue(context.Background(), store)
+	if store.saves != 1 || len(store.records) != 1 {
+		t.Fatalf("应写下一条记录：saves=%d records=%#v", store.saves, store.records)
+	}
+	// 没有变化就不重复写。
+	r.persistReplyFatigue(context.Background(), store)
+	if store.saves != 1 {
+		t.Fatalf("没有变化不该再写，写了 %d 次", store.saves)
+	}
+
+	restarted := densityTestRuntime(BotConfig{}, nil)
+	records, _ := store.LoadReplyFatigue(context.Background())
+	restarted.restoreReplyFatigue(records, now)
+	wantLevel, wantEngage := r.replyFatigueSnapshot(event, now)
+	level, engage := restarted.replyFatigueSnapshot(event, now)
+	if math.Abs(level-wantLevel) > 1e-9 || math.Abs(engage-wantEngage) > 1e-9 {
+		t.Fatalf("重启后应接着算：疲劳 %.3f/%.3f，目的 %.3f/%.3f", level, wantLevel, engage, wantEngage)
+	}
+
+	// 已经消退干净的不装回来；解除暂停清掉的人也要落盘。
+	stale := densityTestRuntime(BotConfig{}, nil)
+	stale.restoreReplyFatigue(records, now.Add(48*time.Hour))
+	if len(stale.replyFatigue.byKey) != 0 {
+		t.Fatalf("消退干净的记录不该装回：%#v", stale.replyFatigue.byKey)
+	}
+	restarted.resetReplyFatigueUser(event.UserID)
+	restarted.persistReplyFatigue(context.Background(), store)
+	if len(store.records) != 0 {
+		t.Fatalf("清掉的人应从落盘里删掉：%#v", store.records)
+	}
+}
+
 // 新意和目的由发送前审核顺带打分：只有正常生成的回复才问，发出去以后才累加。
 func TestReplyAuditScoresExchangeForFatigue(t *testing.T) {
 	provider := &sequenceLLMProvider{auditReplies: []string{

@@ -512,6 +512,7 @@ func main() {
 	botRuntime.SetInboundEventStore(sqliteStore)
 	botRuntime.SetUserMemoryStore(sqliteStore)
 	botRuntime.SetLLMDowngradeStore(sqliteStore)
+	botRuntime.SetReplyFatigueStore(sqliteStore)
 	botRuntime.SetStructuredMemoryStore(sqliteStore)
 	botRuntime.SetThreadStateStore(sqliteStore)
 	botRuntime.SetOneBotRequestStore(sqliteStore)
