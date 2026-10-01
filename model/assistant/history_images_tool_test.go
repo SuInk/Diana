@@ -113,6 +113,53 @@ func TestHistoryMediaToolReturnsVoiceAndFileText(t *testing.T) {
 	}
 }
 
+func TestHistoryMediaToolParsesHistoricalFileBody(t *testing.T) {
+	notePath := filepath.Join(t.TempDir(), "作业要求.txt")
+	if err := os.WriteFile(notePath, []byte("第三题要写推导过程，周五前交"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(NewFileParserPlugin(nil)), nil, nil, nil, nil)
+	runtime.remember(MessageEvent{
+		Kind:      EventKindGroup,
+		GroupID:   "10001",
+		UserID:    "20001",
+		MessageID: "file-1",
+		Segments:  []MessageSegment{{Type: "file", Data: map[string]string{"name": "作业要求.txt", "file": notePath}}},
+	})
+
+	tool := newDianaHistoryImagesTool(runtime, MessageEvent{Kind: EventKindGroup, GroupID: "10001", UserID: "20002"})
+	output, err := tool.Run(context.Background(), map[string]any{"message_id": "file-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(output, "第三题要写推导过程") || !strings.Contains(output, "message_id=file-1") || strings.Contains(output, "正文尚未解析") {
+		t.Fatalf("history file output = %s", output)
+	}
+}
+
+func TestHistoryMediaToolKeepsFileSummaryWithoutParser(t *testing.T) {
+	notePath := filepath.Join(t.TempDir(), "作业要求.txt")
+	if err := os.WriteFile(notePath, []byte("第三题要写推导过程"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	runtime.remember(MessageEvent{
+		Kind:      EventKindPrivate,
+		UserID:    "20001",
+		MessageID: "file-1",
+		Segments:  []MessageSegment{{Type: "file", Data: map[string]string{"name": "作业要求.txt", "file": notePath}}},
+	})
+
+	tool := newDianaHistoryImagesTool(runtime, MessageEvent{Kind: EventKindPrivate, UserID: "20001"})
+	output, err := tool.Run(context.Background(), map[string]any{"message_id": "file-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(output, "第三题要写推导过程") || !strings.Contains(output, "文件名：作业要求.txt") {
+		t.Fatalf("disabled parser output = %s", output)
+	}
+}
+
 func TestHistoryImagesToolAddsOverlappingCropsForLargeHighDetailImage(t *testing.T) {
 	large := image.NewRGBA(image.Rect(0, 0, 3000, 1600))
 	var encoded bytes.Buffer
@@ -412,5 +459,15 @@ func TestHistoryImagesToolAcceptsTopLevelMessageID(t *testing.T) {
 	}
 	if secondCalls.Load() != 0 || !strings.Contains(output, `"loaded":1`) {
 		t.Fatalf("second=%d output=%s", secondCalls.Load(), output)
+	}
+}
+
+func TestChatHistoryItemListsFileNamesWithoutFileIDs(t *testing.T) {
+	item := chatHistoryItem(MessageEvent{Segments: []MessageSegment{
+		{Type: "file", Data: map[string]string{"name": "作业要求.txt", "file": "a1b2c3d4", "file_id": "/a1b2c3d4"}},
+		{Type: "file", Data: map[string]string{"file": "e5f6a7b8"}},
+	}})
+	if item.FileCount != 2 || len(item.FileNames) != 2 || item.FileNames[0] != "作业要求.txt" || item.FileNames[1] != "未命名文件" {
+		t.Fatalf("item = %#v", item)
 	}
 }

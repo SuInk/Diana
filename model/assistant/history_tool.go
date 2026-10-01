@@ -82,6 +82,7 @@ type dianaChatHistoryItem struct {
 	ImageDescriptions       []string               `json:"image_descriptions,omitempty"`
 	VideoCount              int                    `json:"video_count,omitempty"`
 	FileCount               int                    `json:"file_count,omitempty"`
+	FileNames               []string               `json:"file_names,omitempty"`
 	QuotedMessageID         string                 `json:"quoted_message_id,omitempty"`
 	QuotedSender            string                 `json:"quoted_sender,omitempty"`
 	QuotedSenderUserID      string                 `json:"quoted_sender_user_id,omitempty"`
@@ -835,6 +836,9 @@ func chatHistoryItem(event MessageEvent, configs ...BotConfig) dianaChatHistoryI
 			} else {
 				item.FileCount++
 				item.ContentTypes = appendUniqueStrings(item.ContentTypes, "file")
+				// 只用平台给的文件名：OneBot 的 file 字段常是哈希或文件 ID，拿来顶替会误导模型。
+				// 正文要用 history_media 按 message_id 读，这里只够模型认出是哪个文件。
+				item.FileNames = append(item.FileNames, firstNonEmpty(strings.TrimSpace(segment.Data["name"]), strings.TrimSpace(segment.Data["filename"]), "未命名文件"))
 			}
 		case "forward":
 			item.ContentTypes = appendUniqueStrings(item.ContentTypes, "forward")

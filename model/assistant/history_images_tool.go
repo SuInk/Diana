@@ -86,12 +86,12 @@ func (t *dianaHistoryImagesTool) Name() string {
 
 func (t *dianaHistoryImagesTool) Description() string {
 	if t.describesOnly() {
-		return `读取当前会话历史消息里图片或视频关键帧的文字描述。你看不到原图，只能拿到视觉模型写的描述；消息里已经带着的描述就不必再调用。一次传入所有相关消息。`
+		return `读取当前会话历史消息里图片或视频关键帧的文字描述，以及文件的正文。你看不到原图，只能拿到视觉模型写的描述；消息里已经带着的描述就不必再调用。一次传入所有相关消息。`
 	}
 	if t.asksVision() {
-		return `看当前会话历史消息里的原始图片或视频关键帧并回答问题。你看不到原图，只有视觉模型写的摘要；摘要够用时不要调用。需要辨认小字、数数量、比较画面、认出是谁或核对摘要是否说对时调用：在 question 里写清要看什么，视觉模型会看图作答，只返回文字。一次传入所有相关消息。`
+		return `看当前会话历史消息里的原始图片或视频关键帧并回答问题。你看不到原图，只有视觉模型写的摘要；摘要够用时不要调用。需要辨认小字、数数量、比较画面、认出是谁或核对摘要是否说对时调用：在 question 里写清要看什么，视觉模型会看图作答，只返回文字。历史消息里的文件也用它读正文。一次传入所有相关消息。`
 	}
-	return `读取当前会话历史消息里的原始图片或按需提取的视频关键帧，作为真实多模态附件交给下一轮模型。历史摘要够用时不要调用；需要辨认小字、比较画面或核对视频细节时才调用，并一次传入所有相关消息。单张失效会跳过并报告，不影响其他画面。`
+	return `读取当前会话历史消息里的原始图片或按需提取的视频关键帧，作为真实多模态附件交给下一轮模型。历史摘要够用时不要调用；需要辨认小字、比较画面或核对视频细节时才调用，并一次传入所有相关消息。单张失效会跳过并报告，不影响其他画面。历史消息里的文件也用它读正文。`
 }
 
 func (t *dianaHistoryImagesTool) InputSchema() map[string]any {
@@ -127,6 +127,7 @@ func (t *dianaHistoryImagesTool) Run(ctx context.Context, input map[string]any) 
 	result := dianaHistoryImagesResult{Media: make([]dianaHistoryImageStatus, 0)}
 	parts := make([]llm.ContentPart, 0)
 	var loaded []historyLoadedImage
+	var files []historyFileSource
 	attempted := 0
 
 	followed := make(map[string]bool, len(selectors))
@@ -153,7 +154,8 @@ func (t *dianaHistoryImagesTool) Run(ctx context.Context, input map[string]any) 
 		if source.Quoted != nil {
 			textSegments = append(textSegments, source.Quoted.Segments...)
 		}
-		result.Text = append(result.Text, historicalNonImageMediaDescriptions(textSegments)...)
+		result.Text = append(result.Text, historicalAudioDescriptions(textSegments)...)
+		files = append(files, historyFileSources(selector.MessageID, source)...)
 		images := historicalToolImageRefs(source)
 		if len(images) == 0 && len(historicalNonImageMediaDescriptions(textSegments)) == 0 {
 			// 「发张图，接着问这是什么」那句文字本身不带图，图在它问的那条媒体消息里。
@@ -263,6 +265,7 @@ func (t *dianaHistoryImagesTool) Run(ctx context.Context, input map[string]any) 
 		t.runtime.enqueueHistoryImageDescriptionsNow(source)
 	}
 
+	result.Text = append(result.Text, t.historyFileTexts(ctx, files)...)
 	if result.Loaded == 0 && len(result.Text) == 0 {
 		return "", fmt.Errorf("历史媒体读取失败：请求的媒体均不可用（%s）", historyImageFailureSummary(result.Media))
 	}
@@ -315,6 +318,91 @@ func (t *dianaHistoryImagesTool) Run(ctx context.Context, input map[string]any) 
 	}
 	t.setResultParts(parts)
 	return string(body), nil
+}
+
+type historyFileSource struct {
+	messageID string
+	groupID   string
+	index     int
+	segment   MessageSegment
+}
+
+func historyFileSources(messageID string, event MessageEvent) []historyFileSource {
+	var files []historyFileSource
+	add := func(groupID string, segments []MessageSegment) {
+		for _, segment := range segments {
+			if segment.Type == "file" {
+				files = append(files, historyFileSource{messageID: messageID, groupID: groupID, index: len(files) + 1, segment: segment})
+			}
+		}
+	}
+	add(event.GroupID, event.Segments)
+	if event.Quoted != nil {
+		add(firstNonEmpty(event.Quoted.GroupID, event.GroupID), event.Quoted.Segments)
+	}
+	return files
+}
+
+// historyFileTexts 把历史消息里的文件交给文件解析插件读出正文。
+//
+// 解析插件只看当前消息和引用消息，历史里的文件以前只回文件名加「正文尚未解析」，
+// 模型翻到了也读不了。这里按插件的开关和设置走同一套下载与解析，一次调用里的
+// 文件共用一轮的字数预算，不会因为读了几条历史就挤掉对话上下文。
+func (t *dianaHistoryImagesTool) historyFileTexts(ctx context.Context, files []historyFileSource) []string {
+	if len(files) == 0 {
+		return nil
+	}
+	var parser *FileParserPlugin
+	var settings SettingValues
+	if plugin, values, enabled := t.runtime.pluginWithSettingsForEvent(fileParserPluginID, t.event); enabled {
+		parser, _ = plugin.(*FileParserPlugin)
+		settings = values
+	}
+	refs := make([]*fileRef, len(files))
+	parsable := 0
+	if parser != nil {
+		for index, file := range files {
+			found := collectFileRefs(PluginRequest{Event: MessageEvent{ProfileID: t.event.ProfileID, Platform: t.event.Platform, GroupID: file.groupID, Segments: []MessageSegment{file.segment}}})
+			if len(found) == 1 {
+				refs[index] = &found[0]
+				parsable++
+			}
+		}
+	}
+	lines := make([]string, 0, len(files)+1)
+	if parsable == 0 {
+		for _, file := range files {
+			lines = append(lines, fmt.Sprintf("message_id=%s %s", file.messageID, historicalFileDescription(file.index, file.segment)))
+		}
+		return lines
+	}
+	maxBytes := settings.Bytes(fileParserSettingMaxFileBytes, parser.maxBytes)
+	maxChars, expand := fileParserTurnBudget(settings.Int(fileParserSettingMaxChars, parser.maxChars), parsable)
+	channel, _, err := t.runtime.outboundChannelForEvent(t.event)
+	if err != nil {
+		channel = nil
+	}
+	lines = append(lines, strings.TrimSpace(fileContentNotice))
+	parsed := 0
+	for index, file := range files {
+		ref := refs[index]
+		if ref == nil {
+			lines = append(lines, fmt.Sprintf("message_id=%s %s", file.messageID, historicalFileDescription(file.index, file.segment)))
+			continue
+		}
+		if parsed >= expand {
+			lines = append(lines, fmt.Sprintf("message_id=%s 文件%d\n- %s\n  状态：这次读的文件太多，为了不挤掉对话上下文没有展开；需要时单独读这条消息", file.messageID, file.index, ref.Name))
+			continue
+		}
+		parsed++
+		result := parser.parseRef(ctx, channel, *ref, maxBytes, maxChars)
+		body := result.Context
+		if result.ScannedPDF != nil {
+			body = fmt.Sprintf("- %s\n  状态：扫描版 PDF，没有文字层，这里读不出正文；让用户引用这条文件消息再问，会转成 OCR 子任务识别", ref.Name)
+		}
+		lines = append(lines, fmt.Sprintf("message_id=%s 文件%d\n%s", file.messageID, file.index, body))
+	}
+	return lines
 }
 
 type historyLoadedImage struct {

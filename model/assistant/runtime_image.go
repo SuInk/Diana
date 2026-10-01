@@ -852,41 +852,54 @@ func (r *Runtime) historyImageCachedSegmentDescriptions(ctx context.Context, seg
 }
 
 func historicalNonImageMediaDescriptions(segments []MessageSegment) []string {
-	lines := make([]string, 0)
-	audioIndex, fileIndex := 0, 0
+	lines := historicalAudioDescriptions(segments)
+	fileIndex := 0
 	for _, segment := range segments {
-		switch segment.Type {
-		case "record":
-			audioIndex++
-			transcript := strings.TrimSpace(segment.Data[voiceSTTTranscriptKey])
-			if transcript == "" {
-				lines = append(lines, fmt.Sprintf("语音%d摘要=尚无可用转写", audioIndex))
-				continue
-			}
-			lines = append(lines, fmt.Sprintf("语音%d转写=%s", audioIndex, truncateRunes(strings.Join(strings.Fields(transcript), " "), historyImageDescriptionMaxRunes)))
-		case "file":
+		if segment.Type == "file" {
 			fileIndex++
-			name := strings.TrimSpace(firstNonEmpty(segment.Data["name"], segment.Data["filename"], segment.Data["fileName"], segment.Data["file"]))
-			if name == "" {
-				name = "未命名文件"
-			}
-			format := strings.TrimPrefix(strings.ToLower(filepath.Ext(name)), ".")
-			if format == "" {
-				format = "未知"
-			}
-			description := strings.TrimSpace(firstNonEmpty(segment.Data["summary"], segment.Data["description"], segment.Data["parsed_text"], segment.Data["content"]))
-			line := fmt.Sprintf("文件%d摘要=文件名：%s；格式：%s", fileIndex, name, format)
-			if description != "" {
-				line += "；内容摘要：" + truncateRunes(strings.Join(strings.Fields(description), " "), historyImageDescriptionMaxRunes)
-			} else if isSupportedFileName(name) || isSniffableFileName(name, segment.Data["size"]) {
-				line += "；正文尚未解析"
-			} else {
-				line += "；当前格式不支持正文解析"
-			}
-			lines = append(lines, line)
+			lines = append(lines, historicalFileDescription(fileIndex, segment))
 		}
 	}
 	return lines
+}
+
+func historicalAudioDescriptions(segments []MessageSegment) []string {
+	lines := make([]string, 0)
+	audioIndex := 0
+	for _, segment := range segments {
+		if segment.Type != "record" {
+			continue
+		}
+		audioIndex++
+		transcript := strings.TrimSpace(segment.Data[voiceSTTTranscriptKey])
+		if transcript == "" {
+			lines = append(lines, fmt.Sprintf("语音%d摘要=尚无可用转写", audioIndex))
+			continue
+		}
+		lines = append(lines, fmt.Sprintf("语音%d转写=%s", audioIndex, truncateRunes(strings.Join(strings.Fields(transcript), " "), historyImageDescriptionMaxRunes)))
+	}
+	return lines
+}
+
+func historicalFileDescription(index int, segment MessageSegment) string {
+	name := strings.TrimSpace(firstNonEmpty(segment.Data["name"], segment.Data["filename"], segment.Data["fileName"], segment.Data["file"]))
+	if name == "" {
+		name = "未命名文件"
+	}
+	format := strings.TrimPrefix(strings.ToLower(filepath.Ext(name)), ".")
+	if format == "" {
+		format = "未知"
+	}
+	description := strings.TrimSpace(firstNonEmpty(segment.Data["summary"], segment.Data["description"], segment.Data["parsed_text"], segment.Data["content"]))
+	line := fmt.Sprintf("文件%d摘要=文件名：%s；格式：%s", index, name, format)
+	if description != "" {
+		line += "；内容摘要：" + truncateRunes(strings.Join(strings.Fields(description), " "), historyImageDescriptionMaxRunes)
+	} else if isSupportedFileName(name) || isSniffableFileName(name, segment.Data["size"]) {
+		line += "；正文尚未解析"
+	} else {
+		line += "；当前格式不支持正文解析"
+	}
+	return line
 }
 
 // videoFailureReason 补上兜底文案：拿不到具体原因时也不能把这句写成空的，
