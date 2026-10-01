@@ -1565,6 +1565,18 @@
                 </span>
               </div>
               <div class="field wide">
+                <label for="bot-style-filter-rules">自定义不学的话</label>
+                <textarea
+                  id="bot-style-filter-rules"
+                  v-model="form.style_filter_rules"
+                  class="textarea"
+                  rows="3"
+                  :disabled="!form.style_filter_enabled"
+                  placeholder="一行一条，例如：&#10;别学「典」「急了」这类嘲讽梗&#10;别跟着叫人「老婆」"
+                ></textarea>
+                <span class="hint">追加在上面四类后面，最多 20 条、每条 100 字；群里另加的和这里的一起生效。关掉「不学怪话」时不生效。</span>
+              </div>
+              <div class="field wide">
                 <label class="switch">
                   <input v-model="form.poke_reply_enabled" type="checkbox" />
                   <span class="track" aria-hidden="true"></span>
@@ -4323,6 +4335,7 @@ function setForm(config: BotProfileConfig): void {
     poke_reply_enabled: config.poke_reply_enabled ?? false,
     expression_learning_enabled: config.expression_learning_enabled ?? false,
     style_filter_enabled: config.style_filter_enabled ?? true,
+    style_filter_rules: config.style_filter_rules ?? "",
     dict_segment_enabled: config.dict_segment_enabled ?? false,
     semantic_search_enabled: config.semantic_search_enabled ?? false,
     natural_interjection_enabled: undefined,

@@ -92,3 +92,52 @@ func TestStyleFilterFollowsGroupVoiceInReplyTail(t *testing.T) {
 		t.Fatal("nothing learned from the group, nothing to filter")
 	}
 }
+
+func TestStyleFilterRulesAreCleanedAndCapped(t *testing.T) {
+	long := strings.Repeat("长", styleFilterRuleMaxRunes+20)
+	raw := "- 别学「典」\n\n  * 别叫人老婆 \n别学「典」\n" + long + "\n" + long + "x"
+	for i := 0; i < styleFilterMaxRules+5; i++ {
+		raw += fmt.Sprintf("\n规则%d", i)
+	}
+	rules := styleFilterRules(raw)
+	if len(rules) != styleFilterMaxRules || rules[0] != "别学「典」" || rules[1] != "别叫人老婆" {
+		t.Fatalf("rules = %q", rules)
+	}
+	if got := []rune(rules[2]); len(got) != styleFilterRuleMaxRunes || rules[3] == rules[2] {
+		t.Fatalf("long rules must be cut and deduped after cutting: %q", rules[2:4])
+	}
+}
+
+// 群里另加的规则和机器人的合并生效；两处注入都带上，过滤关掉时连自定义规则一起不带。
+func TestStyleFilterCustomRulesMergeAndInject(t *testing.T) {
+	cfg := BotConfig{ID: "bot", BotAccount: "42", StyleFilterRules: "别学「典」"}.WithDefaults()
+	runtime := NewRuntime(cfg, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	runtime.SetGroupConfigStore(styleFilterGroupConfigs{
+		"g1":  {GroupID: "g1", StyleFilterRules: "别学「典」\n别叫人老婆"},
+		"off": {GroupID: "off", StyleFilterEnabled: boolPointer(false), StyleFilterRules: "别叫人老婆"},
+	})
+	merged := runtime.effectiveConfigForEvent(MessageEvent{Kind: EventKindGroup, ProfileID: "bot", GroupID: "g1"})
+	if merged.StyleFilterRules != "别学「典」\n别叫人老婆" {
+		t.Fatalf("merged rules = %q", merged.StyleFilterRules)
+	}
+	if other := runtime.effectiveConfigForEvent(MessageEvent{Kind: EventKindGroup, ProfileID: "bot", GroupID: "g2"}); other.StyleFilterRules != "别学「典」" {
+		t.Fatalf("a group without its own rules uses the bot's: %q", other.StyleFilterRules)
+	}
+
+	reply := styleFilterPrompt(merged, "学群友")
+	if !strings.Contains(reply, promptStyleFilter) || !strings.Contains(reply, "另外这几条也不学：\n- 别学「典」\n- 别叫人老婆") {
+		t.Fatalf("reply filter = %q", reply)
+	}
+	if learn := styleFilterLearnPrompt(merged); !strings.Contains(learn, promptGroupStyleLearnFilter) || !strings.Contains(learn, "也不要写进笔记：\n- 别学「典」\n- 别叫人老婆") {
+		t.Fatalf("learn filter = %q", learn)
+	}
+
+	off := runtime.effectiveConfigForEvent(MessageEvent{Kind: EventKindGroup, ProfileID: "bot", GroupID: "off"})
+	if styleFilterPrompt(off, "学群友") != "" || styleFilterLearnPrompt(off) != "" {
+		t.Fatal("custom rules must not apply when the filter is off")
+	}
+	plain := BotConfig{ID: "bot"}.WithDefaults()
+	if got := styleFilterPrompt(plain, "学群友"); got != promptStyleFilter {
+		t.Fatalf("no custom rules, only the built-in part: %q", got)
+	}
+}

@@ -294,6 +294,17 @@
           <span class="hint">学群友说话时，脏话骂人、擦边、歧视引战和崩人设的烂梗不跟着学；群友的消息照常看。</span>
         </div>
         <div class="field wide">
+          <label for="group-style-filter-rules">本群另外不学的话</label>
+          <textarea
+            id="group-style-filter-rules"
+            v-model="editing.style_filter_rules"
+            class="textarea"
+            rows="2"
+            placeholder="一行一条，例如：别学本群的「xx」梗"
+          ></textarea>
+          <span class="hint">和机器人设置里的自定义规则一起生效，不是替换；本群不学怪话关闭时不生效。</span>
+        </div>
+        <div class="field wide">
           <label>接话设置</label>
           <ParticipationControls :key="`${editing.bot_profile_id}:${editing.group_id}`" :model-value="editing.participation" :level="groupReplyDesireValue(editing)" :inherited-value="participationDefaults[editing.bot_profile_id || botScope || '']" :criteria="editing.proactive_reply_extra_criteria" inheritable @update:model-value="setGroupParticipation" @update:criteria="value => { if (editing) editing.proactive_reply_extra_criteria = value; }" />
         </div>

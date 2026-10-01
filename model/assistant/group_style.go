@@ -186,8 +186,8 @@ func (r *Runtime) learnGroupStyle(ctx context.Context, event MessageEvent) (Grou
 	}
 	ctx = withLLMUsagePurpose(ctx, PurposeGroupStyle)
 	system := cfg.prompt(promptGroupStyleLearnSpec)
-	if styleFilterEnabled(cfg) {
-		system += "\n\n" + cfg.prompt(promptGroupStyleLearnFilterSpec)
+	if filter := styleFilterLearnPrompt(cfg); filter != "" {
+		system += "\n\n" + filter
 	}
 	messages := []llm.Message{
 		{Role: llm.RoleSystem, Content: system},

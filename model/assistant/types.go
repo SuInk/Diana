@@ -856,6 +856,9 @@ type BotConfig struct {
 	// 崩人设的烂梗。管风格笔记和「学群友的腔调」两条路，见 group_style_filter.go。
 	// 默认开：群友怎么说是群友的事，机器人跟着学坏是我们的事。
 	StyleFilterEnabled *bool `json:"style_filter_enabled,omitempty"`
+	// StyleFilterRules 是主人自己加的「也不学」规则，一行一条，追加在内置四类后面；
+	// 群里另填的和这里的合并生效。过滤关着时不生效。
+	StyleFilterRules string `json:"style_filter_rules,omitempty"`
 	// 词典分词要把整个分词词典常驻内存（约 130MB），所以默认关。开启立即生效
 	// （后台加载笔记本，期间选词退回 n-gram）；关闭要重启进程才真正生效——
 	// 笔记本占用的内存本来也只有重启才能归还。
@@ -1068,6 +1071,8 @@ type GroupConfig struct {
 	TypingDelayEnabled    *bool `json:"typing_delay_enabled,omitempty"`
 	// StyleFilterEnabled 为 nil 时跟随所属机器人。
 	StyleFilterEnabled *bool `json:"style_filter_enabled,omitempty"`
+	// StyleFilterRules 是本群另加的「也不学」规则，和机器人的合并生效，不是替换。
+	StyleFilterRules string `json:"style_filter_rules,omitempty"`
 	// Zero follows the bot's current merge threshold.
 	ReplyMergeConfidencePercent int      `json:"reply_merge_confidence_percent,omitempty"`
 	MarkedBotIDs                []string `json:"marked_bot_ids,omitempty"`
@@ -1366,6 +1371,7 @@ type ConfigPayload struct {
 	PokeReplyEnabled                *bool                     `json:"poke_reply_enabled,omitempty"`
 	ExpressionLearningEnabled       *bool                     `json:"expression_learning_enabled,omitempty"`
 	StyleFilterEnabled              *bool                     `json:"style_filter_enabled,omitempty"`
+	StyleFilterRules                string                    `json:"style_filter_rules,omitempty"`
 	DictSegmentEnabled              *bool                     `json:"dict_segment_enabled,omitempty"`
 	SemanticSearchEnabled           *bool                     `json:"semantic_search_enabled,omitempty"`
 	ProactiveReplyChance            float64                   `json:"proactive_reply_chance,omitempty"`
@@ -2636,6 +2642,7 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		PokeReplyEnabled:                  copyBoolPointer(cfg.PokeReplyEnabled),
 		ExpressionLearningEnabled:         copyBoolPointer(cfg.ExpressionLearningEnabled),
 		StyleFilterEnabled:                copyBoolPointer(cfg.StyleFilterEnabled),
+		StyleFilterRules:                  cfg.StyleFilterRules,
 		DictSegmentEnabled:                copyBoolPointer(cfg.DictSegmentEnabled),
 		SemanticSearchEnabled:             copyBoolPointer(cfg.SemanticSearchEnabled),
 		ProactiveReplyChance:              cfg.ProactiveReplyChance,
@@ -2866,6 +2873,7 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		PokeReplyEnabled:                copyBoolPointer(payload.PokeReplyEnabled),
 		ExpressionLearningEnabled:       copyBoolPointer(payload.ExpressionLearningEnabled),
 		StyleFilterEnabled:              copyBoolPointer(payload.StyleFilterEnabled),
+		StyleFilterRules:                payload.StyleFilterRules,
 		DictSegmentEnabled:              copyBoolPointer(payload.DictSegmentEnabled),
 		SemanticSearchEnabled:           copyBoolPointer(payload.SemanticSearchEnabled),
 		ProactiveReplyChance:            payload.ProactiveReplyChance,

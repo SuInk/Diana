@@ -406,6 +406,8 @@ export interface BotProfileConfig extends SendRetrySettings {
   expression_learning_enabled?: boolean;
   /** 学群友说话时不学怪话（脏话骂人、擦边、歧视引战、崩人设的烂梗）；默认开启。 */
   style_filter_enabled?: boolean;
+  /** 自定义的「也不学」规则，一行一条，追加在内置四类后面。 */
+  style_filter_rules?: string;
   dict_segment_enabled?: boolean;
   semantic_search_enabled?: boolean;
   max_bot_concurrency?: number;
@@ -623,6 +625,8 @@ export interface BotGroupConfig extends SendRetrySettings {
   typing_delay_enabled?: boolean;
   /** 本群的「不学怪话」开关；不设表示跟随机器人。 */
   style_filter_enabled?: boolean;
+  /** 本群另加的「也不学」规则，和机器人的合并生效。 */
+  style_filter_rules?: string;
   /** @deprecated 仅兼容历史配置，不再限制聊天分条。 */
   reply_max_bubbles?: number;
   /** @deprecated 仅兼容历史配置，不再限制聊天长度。 */
