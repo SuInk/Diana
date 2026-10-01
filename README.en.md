@@ -74,7 +74,7 @@ The command above applies to the default installation. If you used `DIANA_DOCKER
 
 If an older image fails on Apple Silicon / ARM64 with `no matching manifest for linux/arm64/v8`, temporarily add `platform: linux/amd64` under `services.diana` in `docker-compose.yml` (requires amd64 emulation; performance and browser compatibility may be affected). Remove it once a native ARM64 image is published. Alternatively, use the native installer above. Build configuration changes do not update existing registry images.
 
-**② Log in to the console.** Open `http://127.0.0.1:18080`. The admin username and password are in the terminal output (for Docker, check `docker logs diana`; script installs also write them to `config.yaml` in the install directory — don't share that file).
+**② Log in to the console.** Open `http://127.0.0.1:18080`. The admin username and password are in the terminal output and shown only once, so save them right away (for Docker, check `docker logs diana`). The password is stored only as a hash in the database, not in `config.yaml`; if you forget it, reset it with `diana passwd` (see below).
 
 **③ Configure.** Three things in the console:
 
@@ -208,7 +208,7 @@ docker compose start diana
 
 One rule of thumb: **everyday settings are changed in the web console; `config.yaml` only covers the service itself.**
 
-`config.yaml` (in the install directory) handles infrastructure: listen address, port, data paths, initial admin password — changes require a restart. Bot and model configuration lives in the database and takes effect immediately when changed in the console. The `bot:` / `llm:` sections of `config.yaml` are seeded **once**, on first startup with an empty database, and are ignored afterwards (the startup log says so explicitly) — they exist for unattended deployments.
+`config.yaml` (in the install directory) handles infrastructure: listen address, port, data paths — changes require a restart. The `admin:` section can preset the first administrator's username and password; it only applies while the database has no administrator, and the one-click installer removes the plain-text password once Diana has started. Bot and model configuration lives in the database and takes effect immediately when changed in the console. The `bot:` / `llm:` sections of `config.yaml` are seeded **once**, on first startup with an empty database, and are ignored afterwards (the startup log says so explicitly) — they exist for unattended deployments.
 
 Every field is documented in [`config.example.yaml`](./config.example.yaml).
 
