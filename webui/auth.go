@@ -293,6 +293,33 @@ func (m *AuthManager) SetCredentials(current, nextUsername, nextPassword string)
 	return username, nil
 }
 
+// ResetCredentials 供命令行在忘记密码时使用：不校验旧密码，生成新的随机密码并
+// 清空全部会话。username 为空时沿用现有账号，还没有账号时随机生成。调用方须保证
+// 服务已停止，运行中的进程内存里还留着旧凭据和旧会话。
+func (m *AuthManager) ResetCredentials(username string) (AuthBootstrapResult, error) {
+	username = strings.TrimSpace(username)
+	if username == "" {
+		username = m.Username()
+	}
+	if username == "" {
+		var err error
+		if username, err = randomAdminUsername(); err != nil {
+			return AuthBootstrapResult{}, err
+		}
+	} else if err := validateAdminUsername(username); err != nil {
+		return AuthBootstrapResult{}, err
+	}
+	raw := make([]byte, 24)
+	if _, err := rand.Read(raw); err != nil {
+		return AuthBootstrapResult{}, err
+	}
+	password := base64.RawURLEncoding.EncodeToString(raw)
+	if err := m.setCredentials(username, password); err != nil {
+		return AuthBootstrapResult{}, err
+	}
+	return AuthBootstrapResult{Created: true, Username: username, GeneratedPassword: password}, nil
+}
+
 // SetPassword 保留旧调用方式，并在首次设置时生成随机账号。
 func (m *AuthManager) SetPassword(current, next string) error {
 	_, err := m.SetCredentials(current, "", next)

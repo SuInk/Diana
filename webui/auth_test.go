@@ -344,3 +344,42 @@ func TestAuthSessionManagementRoutes(t *testing.T) {
 		t.Fatalf("current session cookie was not cleared: %q", cookie)
 	}
 }
+
+func TestAuthResetCredentialsReplacesPasswordAndSignsOut(t *testing.T) {
+	store := &memoryAuthStore{}
+	manager := NewAuthManager(store)
+	bootstrap, err := manager.Bootstrap("owner", "old-password")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.Login(bootstrap.Username, "old-password"); err != nil {
+		t.Fatal(err)
+	}
+
+	offline := NewAuthManager(store)
+	result, err := offline.ResetCredentials("")
+	if err != nil {
+		t.Fatalf("ResetCredentials() error = %v", err)
+	}
+	if result.Username != "owner" || len(result.GeneratedPassword) < authMinPasswordLen {
+		t.Fatalf("unexpected reset result: %+v", result)
+	}
+	if len(store.sessions.Sessions) != 0 {
+		t.Fatalf("reset kept %d session(s)", len(store.sessions.Sessions))
+	}
+	restarted := NewAuthManager(store)
+	if _, err := restarted.Login("owner", "old-password"); err == nil {
+		t.Fatal("old password still works after reset")
+	}
+	if _, err := restarted.Login("owner", result.GeneratedPassword); err != nil {
+		t.Fatalf("new password rejected: %v", err)
+	}
+
+	renamed, err := NewAuthManager(store).ResetCredentials("new-owner")
+	if err != nil || renamed.Username != "new-owner" {
+		t.Fatalf("rename reset = %+v, %v", renamed, err)
+	}
+	if _, err := NewAuthManager(store).ResetCredentials("has space"); err == nil {
+		t.Fatal("invalid username was accepted")
+	}
+}

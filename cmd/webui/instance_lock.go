@@ -57,6 +57,13 @@ func acquireInstanceLock(dbPath, address string) (*instanceLock, error) {
 	return &instanceLock{file: file}, nil
 }
 
+// instanceRunningError 是锁被占用时给用户看的说明，errors.Is 仍能认出 errInstanceLocked。
+type instanceRunningError struct{ message string }
+
+func (e instanceRunningError) Error() string { return e.message }
+
+func (e instanceRunningError) Unwrap() error { return errInstanceLocked }
+
 func runningInstanceError(path string) error {
 	pid, address := "", ""
 	if file, err := os.Open(path); err == nil {
@@ -68,9 +75,9 @@ func runningInstanceError(path string) error {
 		}
 	}
 	if pid == "" {
-		return fmt.Errorf("another Diana is already running with the data at %s; use `diana status` or `diana restart` to manage it", strings.TrimSuffix(path, ".lock"))
+		return instanceRunningError{fmt.Sprintf("another Diana is already running with the data at %s; use `diana status` or `diana restart` to manage it", strings.TrimSuffix(path, ".lock"))}
 	}
-	return fmt.Errorf("Diana is already running at %s (pid %s) with the same data; use `diana status`, `diana restart` or `diana logs` to manage it", address, pid)
+	return instanceRunningError{fmt.Sprintf("Diana is already running at %s (pid %s) with the same data; use `diana status`, `diana restart` or `diana logs` to manage it", address, pid)}
 }
 
 // Release 在原地重启前调用：Windows 上新进程会在旧进程退出前启动，锁必须先放。
