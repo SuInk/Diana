@@ -243,7 +243,9 @@ jobs:
             '' \
             'Run ./run.sh on Linux/macOS or run.bat on Windows.' \
             'Default WebUI port: 18080' \
-            'Set DIANA_ADMIN_PASSWORD before first start to choose the administrator password.' \
+            'On first start Diana prints a generated administrator username and password once; save them.' \
+            'To choose them instead, set admin.username and admin.password (at least 8 characters) in a config.yaml next to the program.' \
+            'Forgot the password? Stop Diana, then run ./diana-webui passwd (diana-webui.exe passwd on Windows).' \
             'The frontend is included under frontend-next/dist.' \
             'One-click installations expose `diana uninstall`; this package also includes an uninstall script.' \
             'Future stable Releases can be installed from the WebUI with SHA-256 verification, backup, restart, and health-check rollback.' > "${package_dir}/README.txt"
