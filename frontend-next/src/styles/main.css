@@ -2990,22 +2990,6 @@ a.nav-action {
   gap: 10px;
 }
 
-/* 卡片右上角的工作 / 静默 / 关闭：群名再长也不能把它挤窄。 */
-.group-work-mode {
-  flex-shrink: 0;
-  padding: 2px;
-}
-
-.group-work-mode button {
-  padding: 3px 8px;
-  font-size: 12px;
-}
-
-.group-work-mode button:disabled {
-  cursor: progress;
-  opacity: 0.6;
-}
-
 .group-identity {
   display: flex;
   align-items: center;
