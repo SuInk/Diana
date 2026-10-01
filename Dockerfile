@@ -78,6 +78,8 @@ COPY --from=gitea-mcp /out/gitea-mcp.LICENSE /app/gitea-mcp.LICENSE
 # 不能直接 USER diana：Linux 上 bind mount 自动建出来的宿主机目录归 root，
 # diana 写不进去，SQLite 和日志都起不来。
 COPY --chmod=0755 scripts/docker/entrypoint.sh /usr/local/bin/diana-entrypoint
+# docker exec <容器> diana <命令> 直接可用，root 身份执行时自动降权到 diana。
+COPY --chmod=0755 scripts/docker/diana-cli.sh /usr/local/bin/diana
 # DIANA_DEPLOYMENT 让控制台按 Docker 部署处理更新：只提示新版本，不在容器里下载和
 # 替换程序（/app 只读，重建容器也会丢），升级靠拉新镜像。日志写进数据目录，
 # DIANA_LOG_PATH 只在 config.yaml 没写 storage.log_path 时生效。配置文件不写死
