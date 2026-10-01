@@ -15,6 +15,7 @@ import (
 
 	"github.com/SuInk/diana/model/assistant"
 	"github.com/SuInk/diana/model/llm"
+	"github.com/SuInk/diana/webui"
 
 	"go.yaml.in/yaml/v4"
 )
@@ -79,6 +80,19 @@ type adminConfig struct {
 	// 两项都留空时首启自动生成账号和强密码，只打印一次。
 	Username string `yaml:"username"`
 	Password string `yaml:"password"`
+}
+
+// validateAdmin 检查 admin 段。它只在数据库还没有管理员时生效，但写错了首启就
+// 起不来，所以报错要指明是配置文件里的哪一项、怎么改。
+func (cfg appConfig) validateAdmin() error {
+	if err := webui.ValidateAdminCredentials(cfg.Admin.Username, cfg.Admin.Password); err != nil {
+		source := "config.yaml"
+		if cfg.path != "" {
+			source = cfg.path
+		}
+		return fmt.Errorf("invalid admin section in %s: %v; fix admin.username/admin.password, or leave both empty to generate them", source, err)
+	}
+	return nil
 }
 
 type updateConfig struct {

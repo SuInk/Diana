@@ -141,6 +141,9 @@ func runConfigCommand(args []string, output io.Writer) error {
 		if _, _, err := config.llmSeedConfig(); err != nil {
 			return err
 		}
+		if err := config.validateAdmin(); err != nil {
+			return err
+		}
 		_, err = fmt.Fprintln(output, "Configuration is valid: "+configPathLabel(path))
 		return err
 	default:

@@ -659,6 +659,10 @@ func main() {
 	authManager := webui.NewAuthManager(sqliteStore)
 	bootstrap, err := authManager.Bootstrap(strings.TrimSpace(appCfg.Admin.Username), appCfg.Admin.Password)
 	if err != nil {
+		// 只有数据库还没有管理员时才会用到 admin 段，所以这里才检查，已有管理员的部署不受影响。
+		if configErr := appCfg.validateAdmin(); configErr != nil {
+			log.Fatal(configErr)
+		}
 		log.Fatalf("bootstrap admin credentials: %v", err)
 	}
 	if bootstrap.Created {

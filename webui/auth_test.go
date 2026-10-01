@@ -383,3 +383,19 @@ func TestAuthResetCredentialsReplacesPasswordAndSignsOut(t *testing.T) {
 		t.Fatal("invalid username was accepted")
 	}
 }
+
+func TestValidateAdminCredentials(t *testing.T) {
+	for _, tc := range []struct {
+		username, password string
+		ok                 bool
+	}{
+		{"", "", true},
+		{"admin", "long-enough", true},
+		{"admin", "admin", false},
+		{"has space", "", false},
+	} {
+		if err := ValidateAdminCredentials(tc.username, tc.password); (err == nil) != tc.ok {
+			t.Fatalf("ValidateAdminCredentials(%q, %q) = %v", tc.username, tc.password, err)
+		}
+	}
+}

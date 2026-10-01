@@ -183,3 +183,20 @@ func TestCLIWorksWithoutConfigFile(t *testing.T) {
 		t.Fatal("logs accepted a missing explicit config")
 	}
 }
+
+func TestRunConfigCheckRejectsShortAdminPassword(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(configPath, []byte("admin:\n  username: admin\n  password: admin\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	err := runConfigCommand([]string{"check", "--config", configPath}, &strings.Builder{})
+	if err == nil || !strings.Contains(err.Error(), "admin.password") || !strings.Contains(err.Error(), configPath) {
+		t.Fatalf("config check error = %v", err)
+	}
+	if err := os.WriteFile(configPath, []byte("admin:\n  username: admin\n  password: long-enough\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := runConfigCommand([]string{"check", "--config", configPath}, &strings.Builder{}); err != nil {
+		t.Fatalf("valid admin section rejected: %v", err)
+	}
+}

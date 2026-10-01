@@ -194,6 +194,19 @@ func validateAdminUsername(username string) error {
 	return nil
 }
 
+// ValidateAdminCredentials 按首启播种的规则检查预置账号和密码；空值表示自动生成，不算错。
+func ValidateAdminCredentials(username, password string) error {
+	if username = strings.TrimSpace(username); username != "" {
+		if err := validateAdminUsername(username); err != nil {
+			return err
+		}
+	}
+	if password = strings.TrimSpace(password); password != "" && len([]rune(password)) < authMinPasswordLen {
+		return ErrPasswordTooShort
+	}
+	return nil
+}
+
 // Required 返回当前是否启用了密码鉴权。
 func (m *AuthManager) Required() bool {
 	m.mu.Lock()
