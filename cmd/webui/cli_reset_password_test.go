@@ -112,9 +112,11 @@ func TestParseResetPasswordOptions(t *testing.T) {
 	}
 }
 
-func TestPasswdIsResetPasswordAlias(t *testing.T) {
-	handled, err := handleCLI([]string{"passwd", "--bogus"})
-	if !handled || err == nil || !strings.Contains(err.Error(), "unknown reset-password option") {
-		t.Fatalf("handleCLI(passwd) = (%v, %v), want reset-password option error", handled, err)
+func TestResetAliasesRunResetPassword(t *testing.T) {
+	for _, command := range []string{"reset", "passwd"} {
+		handled, err := handleCLI([]string{command, "--bogus"})
+		if !handled || err == nil || !strings.Contains(err.Error(), "unknown reset-password option") {
+			t.Fatalf("handleCLI(%s) = (%v, %v), want reset-password option error", command, handled, err)
+		}
 	}
 }

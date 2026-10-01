@@ -34,7 +34,7 @@ func TestWindowsUninstallArgs(t *testing.T) {
 func TestCLIHelpListsCommands(t *testing.T) {
 	var output strings.Builder
 	printCLIHelp(&output)
-	for _, command := range []string{"logs", "reset-password", "uninstall", "version", "help"} {
+	for _, command := range []string{"logs", "reset", "uninstall", "version", "help"} {
 		if !strings.Contains(output.String(), command) {
 			t.Fatalf("help output does not contain %q: %s", command, output.String())
 		}

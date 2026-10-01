@@ -142,7 +142,7 @@ func cliDatabasePath(config appConfig) (string, error) {
 
 func resetPasswordStopHint() string {
 	if dockerDeployment() {
-		return " (Docker: on the host run `docker compose stop diana`, then `docker compose run --rm diana passwd`, then `docker compose start diana`)"
+		return " (Docker: on the host run `docker compose stop diana`, then `docker compose run --rm diana reset`, then `docker compose start diana`)"
 	}
 	return " (for example `sudo systemctl stop diana` or `systemctl --user stop diana`; start it again afterwards)"
 }

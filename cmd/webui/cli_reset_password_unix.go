@@ -32,9 +32,9 @@ func checkDatabaseOwner(dbPath string) error {
 	if account, err := user.LookupId(owner); err == nil {
 		owner = account.Username
 	}
-	hint := fmt.Sprintf(" (for example `sudo -u %s diana passwd`)", owner)
+	hint := fmt.Sprintf(" (for example `sudo -u %s diana reset`)", owner)
 	if dockerDeployment() {
-		hint = " (Docker: on the host run `docker compose run --rm diana passwd`, which switches to that user by itself)"
+		hint = " (Docker: on the host run `docker compose run --rm diana reset`, which switches to that user by itself)"
 	}
 	return fmt.Errorf("refusing to run as root: %s belongs to %s; run reset-password as that user so the service can still write the database%s", dbPath, owner, hint)
 }
