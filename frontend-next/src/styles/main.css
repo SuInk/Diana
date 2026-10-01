@@ -2632,6 +2632,12 @@ a.nav-action {
   margin-inline-start: auto;
 }
 
+/* 标题栏固定，复制配置和平台列表一起滚动，矮屏也能点到最后一张卡片。 */
+.platform-picker-body {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
 .platform-picker .modal-header p {
   margin: 4px 0 0;
   font-size: 12.5px;

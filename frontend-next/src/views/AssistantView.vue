@@ -2107,35 +2107,37 @@
             <X :size="18" aria-hidden="true" />
           </button>
         </div>
-        <div class="field" v-if="profiles.length" style="padding: 0 20px 16px">
-          <label>从已有机器人复制配置</label>
-          <div class="input-group">
-            <AppSelect v-model="copySourceID" :options="copySourceOptions" />
-            <button class="btn small" type="button" :disabled="busy || !copySourceID" @click="copySelectedProfile">使用这份配置</button>
+        <div class="platform-picker-body">
+          <div class="field" v-if="profiles.length" style="padding: 0 20px 16px">
+            <label>从已有机器人复制配置</label>
+            <div class="input-group">
+              <AppSelect v-model="copySourceID" :options="copySourceOptions" />
+              <button class="btn small" type="button" :disabled="busy || !copySourceID" @click="copySelectedProfile">使用这份配置</button>
+            </div>
+            <span class="hint">沿用人设、模型和行为，接入连接另选；保存后各自独立。</span>
           </div>
-          <span class="hint">沿用人设、模型和行为，接入连接另选；保存后各自独立。</span>
-        </div>
-        <div class="platform-choice-list">
-          <button v-for="source in reusableConnections" :key="`reuse-${source.id}`" class="platform-choice" type="button" @click="beginCreateShared(source)">
-            <span class="platform-choice-icon"><Bot :size="21" aria-hidden="true" /></span>
-            <span><strong>复用 {{ source.name || '未命名机器人' }} 的连接</strong><small>同一平台账号，免填地址和 Token，人设与行为单独配置</small></span>
-            <ChevronRight :size="18" aria-hidden="true" />
-          </button>
-          <button
-            v-for="platform in platforms"
-            :key="platform.id"
-            class="platform-choice"
-            type="button"
-            @click="beginCreate(platform)"
-          >
-            <span class="platform-choice-icon"><Bot :size="21" aria-hidden="true" /></span>
-            <span>
-              <strong>{{ platform.name }}</strong>
-              <small>{{ platform.description }}</small>
-              <code>{{ platformProtocol(platform.id) }}</code>
-            </span>
-            <ChevronRight :size="18" aria-hidden="true" />
-          </button>
+          <div class="platform-choice-list">
+            <button v-for="source in reusableConnections" :key="`reuse-${source.id}`" class="platform-choice" type="button" @click="beginCreateShared(source)">
+              <span class="platform-choice-icon"><Bot :size="21" aria-hidden="true" /></span>
+              <span><strong>复用 {{ source.name || '未命名机器人' }} 的连接</strong><small>同一平台账号，免填地址和 Token，人设与行为单独配置</small></span>
+              <ChevronRight :size="18" aria-hidden="true" />
+            </button>
+            <button
+              v-for="platform in platforms"
+              :key="platform.id"
+              class="platform-choice"
+              type="button"
+              @click="beginCreate(platform)"
+            >
+              <span class="platform-choice-icon"><Bot :size="21" aria-hidden="true" /></span>
+              <span>
+                <strong>{{ platform.name }}</strong>
+                <small>{{ platform.description }}</small>
+                <code>{{ platformProtocol(platform.id) }}</code>
+              </span>
+              <ChevronRight :size="18" aria-hidden="true" />
+            </button>
+          </div>
         </div>
       </section>
     </div>
