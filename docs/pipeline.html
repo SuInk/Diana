@@ -96,7 +96,7 @@
           <tr><td>10</td><td>响应抑制期内</td><td><code>ignored_response_suppression</code></td></tr>
           <tr><td>11</td><td>只有视频没有文字</td><td><code>ignored_video</code></td></tr>
           <tr><td>12</td><td>发送者是被标记的机器人或 Telegram bot，且没有明确 @ 或引用本机器人：用模型判断是不是在跟自己说话</td><td><code>ignored_bot_message</code></td></tr>
-          <tr><td>13</td><td>回复疲劳攒满（对同一个人回得多，且对方长句、没新意、没目的；分快慢两档消退，时间常数 10 分钟和 6 小时，总疲劳 = 快 + 0.2 × 慢）：已决定要回之后用模型判断这句有没有新东西、是不是在提问或请求，两样都没有才不回，@ 和引用也一样；疲劳没攒满时不调用</td><td><code>ignored_reply_fatigue</code></td></tr>
+          <tr><td>13</td><td>回复疲劳攒满（对同一个人回得多，且对方长句、没新意、没目的；分快慢两档消退，时间常数 10 分钟和 6 小时，总疲劳 = 快 + 0.2 × 慢）：已决定要回之后先看攒着的判断：最近几轮审核打的目的分按权重攒着、30 分钟消退，这个人一直在追问、纠正、请它做事就照回；攒得不够再用模型看这句（和意图识别同一份按时间排的对话）有没有新东西、是不是在提问或请求，两样都没有才不回，@ 和引用也一样；疲劳没攒满或攒着的目的够高时不调用</td><td><code>ignored_reply_fatigue</code></td></tr>
         </tbody></table></div>
       </section>
 

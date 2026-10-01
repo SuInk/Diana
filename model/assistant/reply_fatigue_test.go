@@ -22,13 +22,15 @@ type fatigueGateProvider struct {
 	purpose string
 	err     error
 	calls   int
+	last    llm.GenerateRequest
 }
 
 func (p *fatigueGateProvider) Generate(ctx context.Context, req llm.GenerateRequest) (*llm.GenerateResponse, error) {
 	for _, message := range req.Messages {
-		if strings.Contains(message.Content, "聊到有点累了") {
+		if strings.Contains(message.Content, "在原地打转") {
 			p.mu.Lock()
 			p.calls++
+			p.last = req
 			p.mu.Unlock()
 			if p.err != nil {
 				return nil, p.err
@@ -152,6 +154,101 @@ func TestReplyFatigueBlocksDirectMentionAtTrigger(t *testing.T) {
 	_, _, handled, outcome := r.prepareMessageEvent(context.Background(), event)
 	if handled || outcome != "ignored_reply_fatigue" {
 		t.Fatalf("handled=%v outcome=%q，想要 ignored_reply_fatigue", handled, outcome)
+	}
+}
+
+// 判断攒着：最近几轮审核打的目的分攒得够高，疲劳满了也照回，不再单独问。
+// 一直在追问、纠正、请你做事的人，不会因为某一句被单独判低就被晾着。
+func TestReplyFatigueEngagedPartnerSkipsGate(t *testing.T) {
+	provider := &fatigueGateProvider{purpose: "0.1"}
+	r := densityTestRuntime(BotConfig{}, provider)
+	event := densityTestEvent("m1", "Diana 要不你再问我吧，先把你的答案带上")
+	now := time.Now()
+	for i := 0; i < 3; i++ {
+		r.recordReplyFatigueSend(event, replyFatigueCharge{Scored: true, Amount: 0.5, Purpose: 0.85}, now)
+	}
+	level, engage := r.replyFatigueSnapshot(event, now)
+	if level < replyFatigueLimit || engage < replyFatigueEngageGate {
+		t.Fatalf("疲劳 %.2f 应已攒满、目的 %.2f 应攒够", level, engage)
+	}
+	if blocked, reason := r.replyFatigueBlocks(context.Background(), event, "Diana 要不你再问我吧，先把你的答案带上"); blocked {
+		t.Fatalf("攒着的目的够高不该拦：%s", reason)
+	}
+	if provider.gateCalls() != 0 {
+		t.Fatalf("攒着的目的够高不该再调模型，调了 %d 次", provider.gateCalls())
+	}
+
+	// 攒着的目的随时间消退：隔了一个多小时，又回到逐句判断。
+	if _, engage := r.replyFatigueSnapshot(event, now.Add(time.Hour)); engage >= replyFatigueEngageGate {
+		t.Fatalf("一小时后攒着的目的应已消退，得到 %.2f", engage)
+	}
+}
+
+// 接梗的来回目的分低，攒不起来，疲劳满了照样逐句判断。
+func TestReplyFatigueBanterDoesNotAccumulatePurpose(t *testing.T) {
+	provider := &fatigueGateProvider{purpose: "0.1"}
+	r := densityTestRuntime(BotConfig{}, provider)
+	event := densityTestEvent("m1", "Diana 锦旗绣八个金字")
+	now := time.Now()
+	for i := 0; i < 3; i++ {
+		r.recordReplyFatigueSend(event, replyFatigueCharge{Scored: true, Amount: 0.5, Purpose: 0.2}, now)
+	}
+	if blocked, _ := r.replyFatigueBlocks(context.Background(), event, "Diana 锦旗绣八个金字"); !blocked {
+		t.Fatal("接梗攒不起目的，车轱辘话应当拦下")
+	}
+}
+
+// 增量为 0 的一轮（对方只发了图、或这一轮满分）也要把目的攒进去。
+func TestReplyFatigueRecordsPurposeWithoutAmount(t *testing.T) {
+	r := densityTestRuntime(BotConfig{}, nil)
+	event := densityTestEvent("m1", "[图片]")
+	now := time.Now()
+	r.recordReplyFatigueSend(event, replyFatigueCharge{Scored: true, Amount: 0, Purpose: 0.9}, now)
+	if _, engage := r.replyFatigueSnapshot(event, now); math.Abs(engage-replyFatigueEngageWeight*0.9) > 1e-9 {
+		t.Fatalf("目的应攒到 %.2f，得到 %.3f", replyFatigueEngageWeight*0.9, engage)
+	}
+}
+
+// 门控和意图识别看同一份按时间排的对话：机器人拆成几条发的回复都在，先后看得出来。
+func TestReplyFatigueGateSeesOrderedTranscript(t *testing.T) {
+	provider := &fatigueGateProvider{purpose: "0.1"}
+	r := densityTestRuntime(BotConfig{}, provider)
+	event := densityTestEvent("m9", "Diana 要不你再问我吧")
+	event.SenderName = "群友"
+	base := time.Now().Unix()
+	event.Time = base
+	history := []MessageEvent{
+		{Kind: EventKindGroup, GroupID: "123456", UserID: "42", MessageID: "b1", Time: base - 50, RawMessage: "那我出题：火在架构里是什么"},
+		{Kind: EventKindGroup, GroupID: "123456", UserID: "20002", SenderName: "群友", MessageID: "u1", Time: base - 40, RawMessage: "你说的都不在点子上"},
+		{Kind: EventKindGroup, GroupID: "123456", UserID: "42", MessageID: "b2", Time: base - 30, RawMessage: "确实是我没想清楚"},
+		{Kind: EventKindGroup, GroupID: "123456", UserID: "42", MessageID: "b3", Time: base - 29, RawMessage: "你这种先把边界敲死的思路才对"},
+	}
+	for i := range history {
+		history[i].Segments = []MessageSegment{{Type: "text", Data: map[string]string{"text": history[i].RawMessage}}}
+	}
+	event.replyHistory, event.replyHistoryLoaded = history, true
+	r.recordReplyFatigueSend(event, replyFatigueCharge{Scored: true, Amount: 1.2}, time.Now())
+
+	if blocked, _ := r.replyFatigueBlocks(context.Background(), event, "Diana 要不你再问我吧"); !blocked {
+		t.Fatal("测试前提：目的 0.1 应当拦下")
+	}
+	provider.mu.Lock()
+	content := requestTextContent(provider.last)
+	provider.mu.Unlock()
+	order := []string{"那我出题", "你说的都不在点子上", "确实是我没想清楚", "你这种先把边界敲死的思路才对", "【当前消息】"}
+	// 系统提示词里也提到【当前消息】，从对话稿开头往后找。
+	start := strings.Index(content, "对话按时间从早到晚：")
+	if start < 0 {
+		t.Fatalf("门控应收到对话稿：\n%s", content)
+	}
+	content = content[start:]
+	last := -1
+	for _, want := range order {
+		at := strings.Index(content, want)
+		if at <= last {
+			t.Fatalf("对话稿应按时间排出 %q：\n%s", want, content)
+		}
+		last = at
 	}
 }
 
