@@ -555,7 +555,7 @@
         <div v-if="supportsGroupLevel && forwardModeOf(editing) === 'custom'" class="field">
           <label for="group-forward-chunks">合并转发块数</label>
           <input id="group-forward-chunks" v-model.number="editing.forward_reply_chunk_threshold" class="input" type="number" min="1" step="1" inputmode="numeric" :placeholder="forwardThresholdPlaceholder('forward_reply_chunk_threshold', '条')" />
-          <span class="hint">实际消息数超过此值触发卡片，填 4 表示至少 5 条。不按正文行数计数。</span>
+          <span class="hint">实际消息数超过此值触发卡片，新建群配置跟随机器人。填 4 表示至少 5 条。不按正文行数计数。</span>
         </div>
         <div class="field wide">
           <label for="group-recall-delete">本群查看撤回消息后自动撤回回复</label>

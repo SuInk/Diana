@@ -65,6 +65,11 @@ func TestGroupConfigInheritsForwardSettings(t *testing.T) {
 	if group.ForwardReplyEnabled != nil || group.ForwardReplyThreshold != nil || group.ForwardReplyChunkThreshold != nil {
 		t.Fatalf("new group must follow the bot, got %v/%v/%v", group.ForwardReplyEnabled, group.ForwardReplyThreshold, group.ForwardReplyChunkThreshold)
 	}
+	runtime := NewRuntime(base, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	runtime.SetGroupConfigStore(&stubGroupConfigStore{configs: map[string]GroupConfig{"12345": group}})
+	if cfg := runtime.effectiveConfigForEvent(MessageEvent{Kind: EventKindGroup, GroupID: "12345"}); cfg.ForwardReplyChunkThreshold != 5 {
+		t.Fatalf("group inherited chunk threshold=%d, want 5", cfg.ForwardReplyChunkThreshold)
+	}
 	for _, value := range []int{0, -3} {
 		group.ForwardReplyThreshold = intPointer(value)
 		if got := group.WithDefaults("12345", base).ForwardReplyThreshold; got != nil {

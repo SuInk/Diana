@@ -1999,7 +1999,7 @@ func DefaultBotConfig() BotConfig {
 		ReplyMergeConfidencePercent:    defaultReplyMergeConfidencePercent,
 		MaxReplyChars:                  3500,
 		ReplyMaxBubbles:                replyMaxChatBubbles,
-		ForwardReplyChunkThreshold:     0,
+		ForwardReplyChunkThreshold:     forwardReplyChunkCountThreshold,
 		ForwardReplyEnabled:            boolPointer(true),
 		DirectReplyChunkSize:           chatReplyChunkSize,
 		ForwardReplyThreshold:          defaultForwardReplyThreshold,

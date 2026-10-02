@@ -964,7 +964,7 @@
               <div v-if="isOneBotPlatform && form.forward_reply_enabled" class="field">
                 <label for="bot-forward-chunks">合并转发块数</label>
                 <input id="bot-forward-chunks" v-model.number="form.forward_reply_chunk_threshold" class="input" type="number" min="1" step="1" inputmode="numeric" placeholder="留空不按块数触发" />
-                <span class="hint">实际消息数超过此值触发卡片，填 4 表示至少 5 条。不按正文行数计数。</span>
+                <span class="hint">实际消息数超过此值触发卡片；新建机器人默认 5，即至少 6 条。填 4 表示至少 5 条。不按正文行数计数。</span>
               </div>
               <div class="field">
                 <label for="bot-reply-reference-mode">群聊引用原消息</label>

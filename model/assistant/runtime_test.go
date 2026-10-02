@@ -1784,36 +1784,43 @@ func TestRuntimeGroupSplitReplyQuotesOnlyFirstChunk(t *testing.T) {
 }
 
 // 「大于 5 块」才走卡片：正好 5 块仍然逐条发。
-func TestRuntimeMoreThanFiveReplyChunksUseForwardMessage(t *testing.T) {
-	channel := &recordingChannel{}
-	runtime := NewRuntime(BotConfig{
-		Name:                       "Diana",
-		BotAccount:                 "42",
-		ForwardReplyChunkThreshold: 5,
-	}, channel, NewPluginManager(), nil, nil, nil, nil)
-
-	err := runtime.send(context.Background(), MessageEvent{
-		Kind:      EventKindGroup,
-		GroupID:   "123456",
-		UserID:    "10001",
-		MessageID: "msg-1",
-	}, strings.Join([]string{"a", "b", "c", "d", "e", "f"}, notificationSplitMarker))
-	if err != nil {
-		t.Fatalf("send() error = %v", err)
-	}
-	if len(channel.sent) != 0 {
-		t.Fatalf("direct messages should not be sent: %#v", channel.sent)
-	}
-	if len(channel.calls) != 1 {
-		t.Fatalf("api calls = %#v", channel.calls)
-	}
-	call := channel.calls[0]
-	if call.action != "send_group_forward_msg" || call.params["group_id"] != int64(123456) {
-		t.Fatalf("api call = %#v", call)
-	}
-	nodes, ok := call.params["messages"].([]map[string]any)
-	if !ok || len(nodes) != forwardReplyChunkCountThreshold+1 {
-		t.Fatalf("messages = %#v", call.params["messages"])
+func TestRuntimeDefaultForwardChunkThreshold(t *testing.T) {
+	withFastSendTiming(t)
+	parts := []string{"a", "b", "c", "d", "e", "f"}
+	for _, count := range []int{5, 6} {
+		t.Run(fmt.Sprintf("%d_chunks", count), func(t *testing.T) {
+			channel := &recordingChannel{}
+			cfg := DefaultBotConfig()
+			cfg.BotAccount = "42"
+			runtime := NewRuntime(cfg, channel, NewPluginManager(), nil, nil, nil, nil)
+			err := runtime.send(context.Background(), MessageEvent{
+				Kind:      EventKindGroup,
+				GroupID:   "123456",
+				UserID:    "10001",
+				MessageID: "msg-1",
+			}, strings.Join(parts[:count], notificationSplitMarker))
+			if err != nil {
+				t.Fatalf("send() error = %v", err)
+			}
+			sent, calls := channel.sentSnapshot(), channel.callsSnapshot()
+			if count == 5 {
+				if len(sent) != count || len(calls) != 0 {
+					t.Fatalf("five chunks should stay ordinary messages: sent=%#v calls=%#v", sent, calls)
+				}
+				return
+			}
+			if len(sent) != 0 || len(calls) != 1 {
+				t.Fatalf("six chunks should use one forward card: sent=%#v calls=%#v", sent, calls)
+			}
+			call := calls[0]
+			if call.action != "send_group_forward_msg" || call.params["group_id"] != int64(123456) {
+				t.Fatalf("api call = %#v", call)
+			}
+			nodes, ok := call.params["messages"].([]map[string]any)
+			if !ok || len(nodes) != count {
+				t.Fatalf("messages = %#v", call.params["messages"])
+			}
+		})
 	}
 }
 
