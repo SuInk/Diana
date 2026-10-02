@@ -133,8 +133,11 @@ func TestRelationshipEvaluationRecordsSaturationSkip(t *testing.T) {
 // 前后差异不算截断。
 func TestRelationshipEvaluationStatusDetectsCap(t *testing.T) {
 	decision := relationshipEvaluationDecision{ShouldUpdate: true, Delta: 3, Confidence: 0.9}
-	if got := relationshipEvaluationStatus(decision, UserMemoryProfile{Favorability: 199}, UserMemoryProfile{Favorability: 200}); got != RelationshipEvaluationCapped {
+	if got := relationshipEvaluationStatus(decision, UserMemoryProfile{Favorability: 999}, UserMemoryProfile{Favorability: 1000}); got != RelationshipEvaluationCapped {
 		t.Fatalf("capped status = %q", got)
+	}
+	if got := relationshipEvaluationStatus(decision, UserMemoryProfile{Favorability: 199}, UserMemoryProfile{Favorability: 200}); got != RelationshipEvaluationChanged {
+		t.Fatalf("old ceiling should no longer count as capped: %q", got)
 	}
 	if got := relationshipEvaluationStatus(decision, UserMemoryProfile{Favorability: 50}, UserMemoryProfile{Favorability: 55}); got != RelationshipEvaluationChanged {
 		t.Fatalf("concurrent write status = %q", got)
@@ -160,7 +163,7 @@ func TestRelationshipEvaluationLogMessage(t *testing.T) {
 	}{
 		{"changed", 10, 12, relationshipEvaluationDecision{ShouldUpdate: true, Delta: 2, Confidence: 0.9}, RelationshipEvaluationChanged, nil, "小林：好感度 +2（10 → 12）"},
 		{"down", 5, 2, relationshipEvaluationDecision{ShouldUpdate: true, Delta: -3, Confidence: 0.9}, RelationshipEvaluationChanged, nil, "小林：好感度 -3（5 → 2）"},
-		{"capped", 200, 200, relationshipEvaluationDecision{ShouldUpdate: true, Delta: 2, Confidence: 0.9}, RelationshipEvaluationCapped, nil, "小林：好感度已到头（200），模型给的 +2 没加上"},
+		{"capped", 1000, 1000, relationshipEvaluationDecision{ShouldUpdate: true, Delta: 2, Confidence: 0.9}, RelationshipEvaluationCapped, nil, "小林：好感度已到头（1000），模型给的 +2 没加上"},
 		{"low confidence", 25, 25, relationshipEvaluationDecision{ShouldUpdate: true, Delta: -1, Confidence: 0.55}, RelationshipEvaluationLowConfidence, nil, "小林：模型想 -1，但把握不够（55%），好感度不变"},
 		{"portrait only", 12, 12, relationshipEvaluationDecision{Confidence: 0.97}, RelationshipEvaluationUnchanged, []string{"居住地点 杭州", "兴趣爱好 爬山"}, "小林：好感度不变；记下画像：居住地点 杭州、兴趣爱好 爬山"},
 	}

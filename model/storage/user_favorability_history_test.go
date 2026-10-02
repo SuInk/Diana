@@ -11,6 +11,52 @@ import (
 	"github.com/SuInk/diana/model/assistant"
 )
 
+func TestSQLiteStoreFavorabilityGrowsToOneThousand(t *testing.T) {
+	ctx := context.Background()
+	store, err := NewSQLiteStore(filepath.Join(t.TempDir(), "favorability-limit.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+	event := assistant.MessageEvent{ProfileID: "bot-a", UserID: "10002"}
+	for _, tc := range []struct {
+		name        string
+		set         bool
+		value       int
+		want        int
+		wantChanges int
+		wantDelta   int
+	}{
+		{"old ceiling", true, 200, 200, 1, 190},
+		{"grow past old ceiling", false, 3, 203, 2, 3},
+		{"set near new ceiling", true, 999, 999, 3, 796},
+		{"growth capped at one thousand", false, 3, 1000, 4, 1},
+		{"no change at ceiling", false, 3, 1000, 4, 1},
+		{"can decrease from ceiling", false, -3, 997, 5, -3},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			update := assistant.UserMemoryUpdate{Administrative: true, FavorabilityDelta: tc.value}
+			if tc.set {
+				update.SetFavorability = &tc.value
+			}
+			if _, err := store.UpdateUserMemory(ctx, event, update); err != nil {
+				t.Fatal(err)
+			}
+			profile, found, err := store.GetUserMemoryExact(ctx, event.ProfileID, event.UserID)
+			if err != nil || !found || profile.Favorability != tc.want {
+				t.Fatalf("stored profile=%#v found=%v err=%v, want score %d", profile, found, err, tc.want)
+			}
+			changes, err := store.ListUserFavorabilityChangesExact(ctx, event.ProfileID, event.UserID, 10)
+			if err != nil || len(changes) != tc.wantChanges {
+				t.Fatalf("changes=%#v err=%v, want %d changes", changes, err, tc.wantChanges)
+			}
+			if changes[0].Delta != tc.wantDelta {
+				t.Fatalf("latest change=%#v, want actual delta %d", changes[0], tc.wantDelta)
+			}
+		})
+	}
+}
+
 func TestSQLiteStoreRecordsRealFavorabilityChangesNewestFirst(t *testing.T) {
 	ctx := context.Background()
 	store, err := NewSQLiteStore(filepath.Join(t.TempDir(), "favorability.db"))

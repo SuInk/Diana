@@ -126,7 +126,7 @@ func relationshipEvaluationStatus(decision relationshipEvaluationDecision, befor
 	// 只有顶到上下限才算「被截」。前后分数之差不一定等于模型给的幅度：同一个人
 	// 可能有别的评估在并发写，那种差异不是截断。
 	applied := after.Favorability - before.Favorability
-	if applied != effective && (after.Favorability >= maximumFavorability || after.Favorability <= minimumFavorability) {
+	if applied != effective && (after.Favorability >= MaximumFavorability || after.Favorability <= MinimumFavorability) {
 		return RelationshipEvaluationCapped
 	}
 	return RelationshipEvaluationChanged

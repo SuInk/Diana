@@ -43,7 +43,7 @@ func TestFavorabilityStanceReplacesTiers(t *testing.T) {
 // 负分的惩罚只作用于主动性，绝不关闭任何能力：否则任何人都能靠激怒机器人
 // 把自己的功能弄坏。
 func TestNegativeFavorabilityNeverDisablesCapabilities(t *testing.T) {
-	for _, score := range []int{-100, -50, -1, 0, 10, 200} {
+	for _, score := range []int{-100, -50, -1, 0, 10, 200, 1000} {
 		policy := RelationshipPolicyFor(UserMemoryProfile{Favorability: score}, "owner", "user")
 		if !policy.AllowImageGeneration || !policy.AllowImageEditing ||
 			!policy.AllowDocumentOCR || !policy.AllowPersonalSchedule {
@@ -158,6 +158,9 @@ func TestRelationshipContextDrivesToneAndHardPermissionMessage(t *testing.T) {
 func TestRelationshipContextDoesNotListBaselineAsGrants(t *testing.T) {
 	profile := UserMemoryProfile{UserID: "10005", DisplayName: "小林", Favorability: 101, MessageCount: 1128}
 	policy := RelationshipPolicyFor(profile, "owner", "user")
+	if context := relationshipPermissionContext(policy); !strings.Contains(context, "区间 -100 到 1000") {
+		t.Fatalf("context missing the current favorability range: %s", context)
+	}
 
 	// 模型看到的是「稳定头部的固定规则 + 尾部的本人等级」两段合起来。
 	permissionContext := promptRelationshipTierRules + "\n" + relationshipPermissionContext(policy)

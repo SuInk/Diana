@@ -18,10 +18,6 @@ const (
 	maximumRelationshipListLimit    = 50
 	defaultRelationshipHistoryLimit = 5
 	maximumRelationshipHistoryLimit = 20
-
-	// 好感度的可写区间。schema 文案和写入校验引用同一份常量。
-	minimumFavorability = -100
-	maximumFavorability = 200
 )
 
 type dianaRelationshipTool struct {
@@ -105,8 +101,8 @@ func (t *dianaRelationshipTool) InputSchema() map[string]any {
 		"portrait_field": toolEnumParam("画像栏目；residence 只记城市，timezone 填 IANA 名，城市能定时区就一并记", PortraitFieldIDs()...),
 		"portrait_value": toolStringParam("portrait_set：≤30 字第三人称短语，覆盖原内容"),
 		"history_limit":  toolIntParam("get 返回的最近变化条数，默认 "+itoa(defaultRelationshipHistoryLimit), 1, maximumRelationshipHistoryLimit),
-		"value":          toolIntParam("set：目标好感度", minimumFavorability, maximumFavorability),
-		"delta":          toolIntParam("adjust：增减量，可为负", minimumFavorability-maximumFavorability, maximumFavorability-minimumFavorability),
+		"value":          toolIntParam("set：目标好感度", MinimumFavorability, MaximumFavorability),
+		"delta":          toolIntParam("adjust：增减量，可为负", MinimumFavorability-MaximumFavorability, MaximumFavorability-MinimumFavorability),
 		"reason":         toolStringParam("set/adjust 备注"),
 	})
 }
@@ -397,8 +393,8 @@ func (t *dianaRelationshipTool) updatedFavorability(ctx context.Context, operati
 		return 0, fmt.Errorf("%s 必须是整数", valueKey)
 	}
 	value += change
-	if value < minimumFavorability || value > maximumFavorability {
-		return 0, fmt.Errorf("好感度必须在 %d 到 %d 之间", minimumFavorability, maximumFavorability)
+	if value < MinimumFavorability || value > MaximumFavorability {
+		return 0, fmt.Errorf("好感度必须在 %d 到 %d 之间", MinimumFavorability, MaximumFavorability)
 	}
 	updated, err := t.runtime.saveUserMemory(ctx, store, t.targetMemoryEvent(targetID, profile.DisplayName), UserMemoryUpdate{
 		OwnerID:                    t.runtime.effectiveConfigForEvent(t.event).OwnerID,

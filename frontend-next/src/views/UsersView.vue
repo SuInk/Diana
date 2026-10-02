@@ -110,7 +110,7 @@
           </div>
           <div class="field">
             <label for="user-score">好感度</label>
-            <input id="user-score" v-model.number="draft.favorability" class="input" type="number" min="-100" max="200" step="1" />
+            <input id="user-score" v-model.number="draft.favorability" class="input" type="number" min="-100" max="1000" step="1" />
           </div>
           <h3 class="detail-section-title">人员画像</h3>
           <p class="muted" style="font-size: 12.5px">每一栏都常驻在这里，没推断出来的留空。手填的按「当面记下」保存，机器人后面自己观察到的会接着往上叠。</p>
@@ -397,8 +397,8 @@ async function saveUser(remove = false): Promise<void> {
     // 空行是「这一栏没有」，不是一条画像：留着会被后端按内容为空打回来。
     profile.portrait = profile.portrait.filter((trait) => trait.value.trim() !== "");
   }
-  if (!remove && (!Number.isInteger(profile.favorability) || profile.favorability < -100 || profile.favorability > 200)) {
-    toastError("好感度请输入 -100 到 200 之间的整数");
+  if (!remove && (!Number.isInteger(profile.favorability) || profile.favorability < -100 || profile.favorability > 1000)) {
+    toastError("好感度请输入 -100 到 1000 之间的整数");
     return;
   }
   saving.value = true;

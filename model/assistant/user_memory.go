@@ -5,6 +5,12 @@ package assistant
 
 import "time"
 
+// 好感度的可写区间由存储、工具和 WebUI 校验共用。
+const (
+	MinimumFavorability = -100
+	MaximumFavorability = 1000
+)
+
 type UserMemoryUpdate struct {
 	OwnerID                    string `json:"owner_id,omitempty"`
 	FavorabilityDelta          int    `json:"favorability_delta,omitempty"`

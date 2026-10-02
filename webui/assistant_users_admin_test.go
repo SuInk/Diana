@@ -28,7 +28,7 @@ func TestAssistantUserEditsAndDeletesExactProfile(t *testing.T) {
 		if err != nil || !found {
 			t.Fatalf("profile: %v %v", found, err)
 		}
-		p.DisplayName, p.Favorability, p.Memories = "Edited", 42, nil
+		p.DisplayName, p.Favorability, p.Memories = "Edited", 1000, nil
 		body, _ := json.Marshal(map[string]any{"profile": p})
 		request := func(method, suffix string, want int) {
 			t.Helper()
@@ -42,11 +42,18 @@ func TestAssistantUserEditsAndDeletesExactProfile(t *testing.T) {
 		}
 		request(http.MethodPut, "", http.StatusBadRequest)
 		request(http.MethodPut, "?profile=bot-b", http.StatusBadRequest)
+		for _, value := range []int{-101, 1001} {
+			invalid := p
+			invalid.Favorability = value
+			body, _ = json.Marshal(map[string]any{"profile": invalid})
+			request(http.MethodPut, "?profile="+id, http.StatusBadRequest)
+		}
+		body, _ = json.Marshal(map[string]any{"profile": p})
 		request(http.MethodPut, "?profile="+id, http.StatusOK)
 		request(http.MethodPut, "?profile="+id, http.StatusConflict)
 		request(http.MethodDelete, "?profile="+id, http.StatusConflict)
 		after, _, err := store.GetUserMemoryExact(ctx, id, "10001")
-		if err != nil || after.DisplayName != "Edited" || after.Favorability != 42 || len(after.Memories) != 0 || after.MessageCount != p.MessageCount || !after.LastSeenAt.Equal(p.LastSeenAt) {
+		if err != nil || after.DisplayName != "Edited" || after.Favorability != 1000 || len(after.Memories) != 0 || after.MessageCount != p.MessageCount || !after.LastSeenAt.Equal(p.LastSeenAt) {
 			t.Fatalf("after: %+v %v", after, err)
 		}
 		changes, err := store.ListUserFavorabilityChangesExact(ctx, id, "10001", 50)

@@ -47,7 +47,7 @@ func (h *BotHandler) editAssistantUser(c *gin.Context) {
 	}
 	remove := c.Request.Method == http.MethodDelete
 	if !remove {
-		if p.Favorability < -100 || p.Favorability > 200 || len([]rune(p.DisplayName)) > 200 || len(p.Memories) > 20 || len(p.Portrait) > 100 {
+		if p.Favorability < assistant.MinimumFavorability || p.Favorability > assistant.MaximumFavorability || len([]rune(p.DisplayName)) > 200 || len(p.Memories) > 20 || len(p.Portrait) > 100 {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "昵称、好感度或记忆条数超出限制"})
 			return
 		}

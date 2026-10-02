@@ -22,8 +22,6 @@ const (
 	// 但之后照样按互动记录涨落。等级由身份决定（见 RelationshipPolicyFor），
 	// 所以分数掉下来也不会把主人降级，只是如实反映最近处得怎么样。
 	ownerUserFavorability  = 100
-	minUserFavorability    = -100
-	maxUserFavorability    = 200
 	maxUserMemoryItems     = 20
 	maxUserMemoryTextRunes = 180
 )
@@ -563,11 +561,11 @@ func initialUserFavorability(ownerID, userID string) int {
 // clampUserFavorability 把分数夹进可写区间。主人没有专属下限——他的等级由身份
 // 决定，分数只是「最近处得怎么样」的如实记录，托底反而会把真实的疏远抹平。
 func clampUserFavorability(value int) int {
-	if value < minUserFavorability {
-		return minUserFavorability
+	if value < assistant.MinimumFavorability {
+		return assistant.MinimumFavorability
 	}
-	if value > maxUserFavorability {
-		return maxUserFavorability
+	if value > assistant.MaximumFavorability {
+		return assistant.MaximumFavorability
 	}
 	return value
 }
