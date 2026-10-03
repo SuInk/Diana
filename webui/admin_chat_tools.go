@@ -190,7 +190,10 @@ func (h *BotHandler) adminChatRedactor() func(string) string {
 	}
 	var secrets []string
 	for _, cfg := range h.runtime.ProfileConfigs() {
-		secrets = append(secrets, cfg.OneBotAccessToken, cfg.NoneBotBridgeToken, cfg.OneBotHTTPSecret)
+		secrets = append(secrets, cfg.OneBotAccessToken, cfg.NoneBotBridgeToken, cfg.OneBotHTTPSecret,
+			cfg.TelegramBotToken, cfg.QQAppSecret, cfg.DingTalkClientSecret, cfg.FeishuAppSecret,
+			cfg.FeishuVerificationToken, cfg.FeishuEncryptKey, cfg.WeComSecret, cfg.WeComToken,
+			cfg.WeComEncodingAESKey, cfg.WeixinBotToken)
 	}
 	return func(text string) string {
 		text = runtimeRedact(text)
