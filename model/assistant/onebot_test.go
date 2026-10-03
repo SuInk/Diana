@@ -851,3 +851,28 @@ func TestReverseServerRejectsHandshakeWithoutRunningBot(t *testing.T) {
 		t.Fatalf("status = %d, want 503 after the bot stopped", recorder.Code)
 	}
 }
+
+// QQ 官方的 ROBOT1.0_ 长 ID 也要认得出：分条识别在标记消费之前，认不出的整行
+// 会被误判成「短标签：内容」的结构化行，自然分条就堵死了。
+func TestExtractOutgoingReplyMarkerParsesQQOfficialLongID(t *testing.T) {
+	input := replyMarkerPrefix + qqOfficialProbeID + "]就是这张，我喜欢的第 3 个房间。"
+	id, rest, ok := extractOutgoingReplyMarker(input)
+	if !ok || id != qqOfficialProbeID || rest != "就是这张，我喜欢的第 3 个房间。" {
+		t.Fatalf("extractOutgoingReplyMarker(qq official) = (%q, %q, %t)", id, rest, ok)
+	}
+	// 伪装成标记的字样仍要原样留在文本里。
+	for _, nonMarker := range []string{
+		"[diana-reply:12ab]",
+		"[diana-reply:谁]",
+		"[diana-reply:]",
+		"[diana-reply:" + qqOfficialProbeID + " 尾巴带空格]",
+	} {
+		if _, rest, ok := extractOutgoingReplyMarker(nonMarker); ok || rest != nonMarker {
+			t.Fatalf("extractOutgoingReplyMarker(%q) = (%q, %t), want untouched", nonMarker, rest, ok)
+		}
+	}
+	// stripReplyMarkers 同样要清得掉正文中间的 QQ 官方长标记。
+	if got := stripReplyMarkers("我刚才[" + replyMarkerPrefix[1:] + qqOfficialProbeID + "]过了"); got != "我刚才过了" {
+		t.Fatalf("stripReplyMarkers(qq official) = %q", got)
+	}
+}

@@ -6891,7 +6891,9 @@ func (r *Runtime) applyOutgoingReplyMarker(ctx context.Context, event MessageEve
 	if scope := identityPrivacyScopeFromContext(ctx); scope != nil {
 		id = scope.restoreText(id)
 	}
-	if !validOutgoingReplyMessageID(id) {
+	// 平台感知：QQ 官方的 ROBOT1.0_/REFIDX_ 不是纯数字，数字校验会把模型自发
+	// 写的标记消费后丢弃。目标存在性由下面的历史回查把关。
+	if !replyMarkerIDAcceptable(event.Platform, id) {
 		return msg
 	}
 	// 指向当前这条消息时不必再查一次：它一定存在，而历史查询可能因为存储未接入或

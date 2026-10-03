@@ -1026,8 +1026,11 @@ func expandMarkdownImages(segments []MessageSegment) []MessageSegment {
 const replyMarkerPrefix = "[diana-reply:"
 
 // extractOutgoingReplyMarker 解析模型写在正文开头的引用标记。
-// 出站若不解析回来，标记就会作为纯文本发出去。只认开头、且 ID 形如可选负号加
-// 数字的写法，避免把正文里提到的字样当成指令。
+// 出站若不解析回来，标记就会作为纯文本发出去。只认开头，且 ID 形态可辨识——
+// 拿不到平台上下文，没法像 replyMarkerIDAcceptable 那样按平台分支，所以按语法
+// 放行：真 ID 不会带 ] 和空白，形态对得上就当标记处理，目标是否可发由消费侧
+// 校验。分条发生在消费之前，这里若认不出 QQ 官方那种 ROBOT1.0_ 前缀的长 ID，
+// 带标记的整行会被误判成「短标签：内容」的结构化行，自然分条就堵死了。
 func extractOutgoingReplyMarker(text string) (string, string, bool) {
 	if !strings.HasPrefix(text, replyMarkerPrefix) {
 		return "", text, false
@@ -1038,7 +1041,7 @@ func extractOutgoingReplyMarker(text string) (string, string, bool) {
 		return "", text, false
 	}
 	id := text[len(prefix):end]
-	if !validOutgoingReplyMessageID(id) {
+	if !validReplyMarkerPayload(id) {
 		return "", text, false
 	}
 	return id, strings.TrimLeft(text[end+1:], " \t\r\n"), true
@@ -1061,7 +1064,9 @@ func stripReplyMarkers(text string) string {
 				break
 			}
 			end := start + relativeEnd
-			if !validOutgoingReplyMessageID(text[start+len(prefix) : end]) {
+			// 宽松形态：这里同样拿不到平台上下文，QQ 官方长 ID 要认得出；无法发送
+			// 的目标在消费侧另有校验。
+			if !validReplyMarkerPayload(text[start+len(prefix) : end]) {
 				// 不是真的标记，跳过这次命中继续往后找，别漏掉后面的真标记。
 				offset = start + len(prefix)
 				continue
@@ -1087,6 +1092,40 @@ func validOutgoingReplyMessageID(id string) bool {
 	}
 	return true
 }
+
+// validReplyMarkerPayload 按语法判断引用标记里的 ID 是否可辨识，不区分平台：
+// 真消息 ID 要么是纯数字（OneBot/Telegram，含负号形式），要么是 QQ 官方的
+// 长串——d.id（ROBOT1.0_ 前缀）和引用键 REFIDX_——由字母
+// 数字和少量符号组成且不少于 9 个字符。脱敏别名 im_ 前缀和把标记名写进 ID 的
+// 除外——别名能在 restoreText 那步换成真 ID，还原不了说明这个 ID 是编的。
+// 能不能发由 replyMarkerIDAcceptable 按平台把关，这里只负责把标记认出来。
+func validReplyMarkerPayload(id string) bool {
+	id = strings.TrimSpace(id)
+	if id == "" || len(id) > 200 {
+		return false
+	}
+	if strings.Contains(strings.ToLower(id), "diana") || strings.HasPrefix(id, identityAliasPrefix) {
+		return false
+	}
+	if validOutgoingReplyMessageID(id) {
+		return true
+	}
+	if len(id) < 9 {
+		return false
+	}
+	for index := 0; index < len(id); index++ {
+		if strings.IndexByte(replyMarkerIDCharset, id[index]) < 0 {
+			return false
+		}
+	}
+	return true
+}
+
+// replyMarkerIDCharset 是各平台消息 ID 里出现过的字节：字母数字加 QQ 官方
+// d.id 使用的符号（下划线、点、加号、等号、斜杠、感叹号、连字符）。
+// 不含 ] 和空白——那分别是标记的终结符和不可能出现在 ID 里的东西，也是拿
+// 它们排除正文中伪装成标记的字样的依据。
+const replyMarkerIDCharset = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_.+=/!-"
 
 // ImageURLs 提取 OneBot 图片段里可被远端多模态模型读取的图片 URL。
 func ImageURLs(segments []MessageSegment) []string {

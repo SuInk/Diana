@@ -75,7 +75,11 @@ func newQQFakeAPI(t *testing.T) *qqFakeAPI {
 				_ = json.NewEncoder(w).Encode(map[string]any{"message": "消息被去重，请检查请求msgseq", "code": 40054005})
 				return
 			}
-			_ = json.NewEncoder(w).Encode(map[string]any{"id": "m" + string(rune('0'+n))})
+			// 发送响应带 ext_info.ref_idx，拟真环境同样返回它。
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"id":       "m" + string(rune('0'+n)),
+				"ext_info": map[string]any{"ref_idx": "REFIDX_m" + string(rune('0'+n))},
+			})
 		default:
 			http.NotFound(w, r)
 		}
@@ -249,5 +253,105 @@ func TestQQOfficialRetriesDedupRejectionWithNextSeq(t *testing.T) {
 	}
 	if api.messagePosts[0]["msg_seq"].(float64) != 1 || api.messagePosts[1]["msg_seq"].(float64) != 2 {
 		t.Fatalf("msg_seq values = %#v, want 1 then 2", api.messagePosts)
+	}
+}
+
+// 出站引用：message_reference 与被动回复 msg_id 正交共存，引用目标取 REFIDX_ 形态。
+// 索引里能反查出目标消息的 REFIDX_ 键时，文本消息携带 message_reference；富媒体
+// 消息不携带；反查不到时不带引用照常发送（引用值非法可能被平台整条拒收）。
+func TestQQOfficialSendsOutboundQuoteOnTextMessage(t *testing.T) {
+	api := newQQFakeAPI(t)
+	channel := api.channel()
+	// 触发消息的 d.id 已在入站侧登记进引用索引（handleDispatch 里做，这里直接种）。
+	channel.refs.recordInbound("REFIDX_in", "ROBOT1.0_trigger", "member-1", false, time.Now())
+	png := "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
+	if _, err := channel.SendWithResult(context.Background(), OutgoingMessage{
+		GroupID: "G", Text: "收到", ImageURLs: []string{png},
+		PassiveReplyMessageID: "ROBOT1.0_trigger", ReplyMessageID: "ROBOT1.0_trigger",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(api.messages) != 2 {
+		t.Fatalf("messages = %#v, want text + image", api.messages)
+	}
+	text, image := api.messages[0], api.messages[1]
+	// msg_id（被动回复）与 message_reference（引用卡片）同体携带，互不干扰。
+	if text["msg_id"] != "ROBOT1.0_trigger" || text["msg_seq"].(float64) != 1 {
+		t.Fatalf("text message = %#v, want passive reply metadata", text)
+	}
+	reference, ok := text["message_reference"].(map[string]any)
+	if !ok || reference["message_id"] != "REFIDX_in" {
+		t.Fatalf("text message_reference = %#v, want the REFIDX_ key of the trigger", text["message_reference"])
+	}
+	if _, has := image["message_reference"]; has {
+		t.Fatalf("image message = %#v, media must not carry message_reference", image)
+	}
+	if image["msg_id"] != "ROBOT1.0_trigger" {
+		t.Fatalf("image message = %#v, want passive reply metadata only", image)
+	}
+}
+
+// 引用目标在索引里查不到（进程重启后索引丢失、目标超出时效）：不带引用照常发送，
+// 不能因为引用拼不上就丢消息。
+func TestQQOfficialOutboundQuoteSkippedWhenIndexMisses(t *testing.T) {
+	api := newQQFakeAPI(t)
+	channel := api.channel()
+	if _, err := channel.SendWithResult(context.Background(), OutgoingMessage{
+		GroupID: "G", Text: "收到",
+		PassiveReplyMessageID: "ROBOT1.0_trigger", ReplyMessageID: "ROBOT1.0_trigger",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(api.messages) != 1 {
+		t.Fatalf("messages = %#v, want one text message", api.messages)
+	}
+	if _, has := api.messages[0]["message_reference"]; has {
+		t.Fatalf("message = %#v, unresolvable quote target must not attach message_reference", api.messages[0])
+	}
+}
+
+// 机器人引用自己上一条发言：发送响应的 ext_info.ref_idx 已登记进索引（链式引用），
+// 下一轮拿响应 id 反查即得 REFIDX_ 键。
+func TestQQOfficialOutboundQuoteOfOwnPreviousMessage(t *testing.T) {
+	api := newQQFakeAPI(t)
+	channel := api.channel()
+	// 第一条：无引用，响应 m1 的 ref_idx=REFIDX_m1 被登记。
+	if _, err := channel.SendWithResult(context.Background(), OutgoingMessage{
+		GroupID: "G", Text: "第一条", PassiveReplyMessageID: "in1",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// 第二条：引用自己上一条（运行时用响应 id 标识历史消息）。
+	if _, err := channel.SendWithResult(context.Background(), OutgoingMessage{
+		GroupID: "G", Text: "第二条",
+		PassiveReplyMessageID: "in2", ReplyMessageID: "m1",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(api.messages) != 2 {
+		t.Fatalf("messages = %#v, want two messages", api.messages)
+	}
+	reference, ok := api.messages[1]["message_reference"].(map[string]any)
+	if !ok || reference["message_id"] != "REFIDX_m1" {
+		t.Fatalf("message_reference = %#v, want the previous response ref_idx", api.messages[1]["message_reference"])
+	}
+}
+
+// 频道（子频道）通道不携带 message_reference。
+func TestQQOfficialGuildMessageOmitsOutboundQuote(t *testing.T) {
+	api := newQQFakeAPI(t)
+	channel := api.channel()
+	channel.refs.recordInbound("REFIDX_guild", "ROBOT1.0_guild", "member-1", false, time.Now())
+	if _, err := channel.SendWithResult(context.Background(), OutgoingMessage{
+		GroupID: "G", PlatformScope: "qq_guild", Text: "收到",
+		PassiveReplyMessageID: "ROBOT1.0_guild", ReplyMessageID: "ROBOT1.0_guild",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(api.messages) != 1 {
+		t.Fatalf("messages = %#v, want one message", api.messages)
+	}
+	if _, has := api.messages[0]["message_reference"]; has {
+		t.Fatalf("message = %#v, guild messages must not carry message_reference", api.messages[0])
 	}
 }

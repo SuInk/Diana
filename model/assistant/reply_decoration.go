@@ -240,7 +240,9 @@ func replyDecorationPrompt(cfg BotConfig, event MessageEvent, history []MessageE
 	case ReplyDecorationOff:
 		appendPromptSection(&builder, "本轮关闭引用消息，你只输出正文，不要生成或复制任何引用控制标记。历史里的引用标记仅表示已有消息关系。")
 	case ReplyDecorationAuto:
-		if messageID := strings.TrimSpace(event.MessageID); validOutgoingReplyMessageID(messageID) {
+		// 平台感知：QQ 官方等平台的 MessageID 不是纯数字，数字校验会把这些平台上
+		// 的提示词全部拦掉，auto 档就永远不会教模型自己写引用（见 replyMarkerIDAcceptable）。
+		if messageID := strings.TrimSpace(event.MessageID); replyMarkerIDAcceptable(event.Platform, messageID) {
 			appendPromptSection(&builder, "本次是否引用原消息由你自己决定：话题跳转、隔了几轮才回应、或群里同时有多个话题时，在回复最开头写 "+
 				replyMarkerPrefix+messageID+"] 来指向当前这条消息；正常一问一答、连续对话时不要引用。整段标记必须写在最开头，正文里不要出现。引用标识只能逐字复制本轮提供的候选，不能猜测、补写或拼接；不能确认目标就省略标记。")
 		}

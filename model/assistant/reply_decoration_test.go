@@ -509,3 +509,23 @@ func TestReplyDecorationPromptTellsFollowUpNotToRepeat(t *testing.T) {
 		t.Fatalf("这一档不该再给出提及标记的写法：%s", prompt)
 	}
 }
+
+// QQ 官方的 MessageID 不是纯数字，数字校验曾把 auto 档提示词全部拦掉。
+// 平台感知校验放行后，提示词必须真的带出标记候选。
+func TestReplyDecorationPromptGuidesQQOfficialAutoMode(t *testing.T) {
+	cfg := BotConfig{ReplyReferenceMode: ReplyDecorationAuto, MentionUserMode: ReplyDecorationAuto}
+	event := MessageEvent{
+		Platform: PlatformQQOfficial, Kind: EventKindGroup,
+		GroupID: "g-qq", UserID: "member-1", MessageID: qqOfficialProbeID,
+	}
+	prompt := replyDecorationPrompt(cfg, event, nil)
+	if !strings.Contains(prompt, replyMarkerPrefix+qqOfficialProbeID+"]") {
+		t.Fatalf("auto prompt is missing the qq official message marker: %q", prompt)
+	}
+	// 同一条消息在 OneBot 语义下（无平台标记的旧事件）行为不变：提示词照旧按
+	// 数字校验给出或拦截。
+	numeric := MessageEvent{Kind: EventKindGroup, GroupID: "g", UserID: "10001", MessageID: "1244393238"}
+	if prompt := replyDecorationPrompt(cfg, numeric, nil); !strings.Contains(prompt, replyMarkerPrefix+"1244393238]") {
+		t.Fatalf("numeric prompt regressed: %q", prompt)
+	}
+}

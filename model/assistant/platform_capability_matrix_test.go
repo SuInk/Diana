@@ -38,7 +38,8 @@ var expectedPlatformCapabilities = map[string]platformCapabilities{
 	PlatformOneBotV11: {ResultChannel: true, RichText: false, InboundQuote: true},
 	PlatformTelegram:  {ResultChannel: true, RichText: true, InboundQuote: true},
 	PlatformQQOfficial: {
-		// 开放平台发送后返回 id，入站的 message_reference.message_id 与之同空间。
+		// 发送后返回 id 与 ext_info.ref_idx：id 进历史，ref_idx 登记进通道的引用
+		// 索引，入站 ref_msg_idx（REFIDX_ 键空间）靠它对上；两者不共空间。
 		ResultChannel: true, RichText: false, InboundQuote: true,
 	},
 	PlatformFeishu: {

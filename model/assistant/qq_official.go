@@ -42,6 +42,11 @@ const (
 	// qqQuotaExhaustedErrorCode 是「被动回复时间或次数超过限制」的错误码，重试无益。
 	qqQuotaExhaustedErrorCode = "40034128"
 
+	// qqMessageTypeQuote 标记入站消息是引用消息：被引用的正文与附件直接放在顶层
+	// msg_elements 里，引用索引在 message_scene.ext 的 ref_msg_idx，入站不出现
+	// message_reference 字段。
+	qqMessageTypeQuote = 103
+
 	// qqIntentGroupAndC2C 订阅群聊 @ 消息和单聊消息，这是「QQ 机器人」这个形态
 	// 的主场景；频道相关意图另算，没开通频道能力时订阅了会被网关拒绝。
 	qqIntentGroupAndC2C = 1 << 25
@@ -81,6 +86,9 @@ type QQOfficialChannel struct {
 
 	// sent 记着最近发出的群消息，用来认出全量模式下平台回推的自发消息。
 	sent qqSentLedger
+	// refs 是 REFIDX_ 引用索引：入站按 message_scene.ext 的 msg_idx 登记，出站按
+	// 发送响应 ext_info.ref_idx 登记，收到引用消息时用 ref_msg_idx 反查。
+	refs qqRefLedger
 }
 
 type qqPassiveSeq struct {
@@ -388,6 +396,22 @@ func (c *QQOfficialChannel) handleDispatch(ctx context.Context, payload qqGatewa
 		c.avatarURLs[event.GroupID+"\x00"+event.UserID] = source.Author.Avatar
 	}
 	c.mu.Unlock()
+
+	// 入站登记：本条消息的 msg_idx 到发言者，以及出站 ref_idx 到自己，都进引用
+	// 索引；随后用 ref_msg_idx 反查被引用者，回填到事件里。晚一步登记就查不到
+	// 自己刚才那条，所以必须在 handler 之前做。
+	if key := source.sceneExtValue("msg_idx"); key != "" {
+		c.refs.recordInbound(key, event.MessageID, event.UserID, source.Author.Bot, time.Now())
+	}
+	if event.Quoted != nil && event.Quoted.MessageID != "" {
+		if sender, _, ok := c.refs.lookup(event.Quoted.MessageID, time.Now()); ok && sender != "" {
+			event.Quoted.UserID = sender
+			if sender == event.SelfID {
+				// 引用的正是自己的发言：当被点名处理。
+				event.ToMe = true
+			}
+		}
+	}
 	c.mu.RLock()
 	handler := c.handler
 	c.mu.RUnlock()
@@ -432,9 +456,10 @@ func (c *QQOfficialChannel) Send(ctx context.Context, msg OutgoingMessage) error
 
 // SendWithResult 发送消息并把开放平台返回的消息 id 交回上层。
 //
-// 上层靠它把 Diana 自己这条发言连同平台 ID 记进历史；别人引用这条消息时，入站事件
-// 的 message_reference.message_id 与之同属一个空间，回查才对得上。不实现的话出站
-// 消息以空 ID 入库，引用 Diana 必然还原不出内容。
+// 上层靠它把 Diana 自己这条发言连同平台 ID 记进历史；而别人引用这条消息时，
+// 入站事件给的是 message_scene.ext 的 ref_msg_idx（REFIDX_ 键空间，与这里的 id
+// 不是同一个空间），回查靠发送响应的 ext_info.ref_idx 登记进引用索引，不靠这个
+// id。不带 id 的话出站消息以空 ID 入库，历史锚点就断了。
 func (c *QQOfficialChannel) SendWithResult(ctx context.Context, msg OutgoingMessage) (map[string]any, error) {
 	target, isGroup := platformChatTarget(msg)
 	if target == "" {
@@ -499,9 +524,17 @@ func (c *QQOfficialChannel) SendWithResult(ctx context.Context, msg OutgoingMess
 			Code    int    `json:"code"`
 			Message string `json:"message"`
 			ID      string `json:"id"`
+			ExtInfo *struct {
+				RefIdx string `json:"ref_idx"`
+			} `json:"ext_info"`
 		}
 		if err := json.Unmarshal(raw, &envelope); err == nil && envelope.Code != 0 {
 			return "", fmt.Errorf("qq: 发送被拒绝: %s (code %d)", envelope.Message, envelope.Code)
+		}
+		// ext_info.ref_idx 是这条自发消息的引用索引键，别人引用这条消息时入站
+		// ref_msg_idx 就会等于它，不登记就无法反查被引用的是自己哪句话。频道消息不登记。
+		if !isGuild && envelope.ExtInfo != nil {
+			c.refs.recordOutbound(envelope.ExtInfo.RefIdx, envelope.ID, c.Status().SelfID, time.Now())
 		}
 		return strings.TrimSpace(envelope.ID), nil
 	}
@@ -512,6 +545,13 @@ func (c *QQOfficialChannel) SendWithResult(ctx context.Context, msg OutgoingMess
 		body := map[string]any{"content": text}
 		if !isGuild {
 			body["msg_type"] = 0
+			// 出站引用与被动回复正交：message_reference 渲染引用卡片，msg_id 永远指向
+			// 触发本轮的消息，两者同体携带互不干扰。引用目标按官方字段说明取 REFIDX_
+			// 形态，从引用索引反查；查不到（进程重启后索引丢失、目标超出时效）就不带
+			// 引用照常发送，避免引用值非法被平台整条拒收。引用只挂在文本消息上。
+			if quoteRef := c.refs.refIdxFor(msg.ReplyMessageID, time.Now()); quoteRef != "" {
+				body["message_reference"] = map[string]any{"message_id": quoteRef}
+			}
 		}
 		id, err := post(body)
 		if err != nil {
@@ -588,6 +628,111 @@ const qqSentLedgerTTL = 2 * time.Minute
 
 // qqSentLedgerCap 限制记录条数，防止刷屏时无限增长。
 const qqSentLedgerCap = 256
+
+// qqRefLedgerTTL 是 REFIDX_ 引用索引的有效期。REFIDX_ 本身无时效说明，这里与
+// 会话历史窗口对齐：更早的消息在历史里也找不到了，索引留着没意义。
+const qqRefLedgerTTL = 24 * time.Hour
+
+// qqRefLedgerCap 限制索引条数，防止长期运行无限增长。
+const qqRefLedgerCap = 1024
+
+// qqRefLedger 登记两条键空间到发送者身份的映射：
+//   - 出站：发送响应 ext_info.ref_idx → 自己（selfID）
+//   - 入站：message_scene.ext.msg_idx → 发言者
+//
+// 别人引用一条消息时，入站事件只给 ref_msg_idx，引用元素不带 author，
+// 想知道「被引用的是谁说的」只能靠这张表反查。
+type qqRefLedger struct {
+	mu      sync.Mutex
+	entries []qqRefEntry
+}
+
+type qqRefEntry struct {
+	// key 是 REFIDX_ 引用键；msgID 是同一消息的平台 id（入站 d.id / 出站发送响应
+	// id）。出站引用（message_reference）按官方字段说明取 REFIDX_ 形态，而运行时
+	// 侧引用目标用的是平台 id，两个方向都靠这张表互查。
+	key   string
+	msgID string
+	user  string
+	bot   bool
+	at    time.Time
+}
+
+// recordInbound 登记一条入站消息的 msg_idx。speaker 已经是统一事件的 UserID。
+func (l *qqRefLedger) recordInbound(key, msgID, userID string, bot bool, now time.Time) {
+	l.record(qqRefEntry{key: strings.TrimSpace(key), msgID: strings.TrimSpace(msgID), user: strings.TrimSpace(userID), bot: bot, at: now}, now)
+}
+
+// recordOutbound 登记一次出站发送返回的 ext_info.ref_idx。被引用者是自己，
+// 记下 selfID 供反查。
+func (l *qqRefLedger) recordOutbound(key, msgID, selfID string, now time.Time) {
+	l.record(qqRefEntry{key: strings.TrimSpace(key), msgID: strings.TrimSpace(msgID), user: strings.TrimSpace(selfID), bot: true, at: now}, now)
+}
+
+func (l *qqRefLedger) record(entry qqRefEntry, now time.Time) {
+	if entry.key == "" {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.pruneLocked(now)
+	for i := range l.entries {
+		if l.entries[i].key == entry.key {
+			l.entries[i] = entry
+			return
+		}
+	}
+	l.entries = append(l.entries, entry)
+	if len(l.entries) > qqRefLedgerCap {
+		l.entries = l.entries[len(l.entries)-qqRefLedgerCap:]
+	}
+}
+
+// lookup 反查一个引用索引键（入站 ref_msg_idx / msg_idx）。取不到返回空。
+func (l *qqRefLedger) lookup(key string, now time.Time) (userID string, isBot bool, ok bool) {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return "", false, false
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.pruneLocked(now)
+	for i := range l.entries {
+		if l.entries[i].key == key {
+			return l.entries[i].user, l.entries[i].bot, true
+		}
+	}
+	return "", false, false
+}
+
+// refIdxFor 由消息的平台 id（入站 d.id / 出站发送响应 id）反查它的 REFIDX_
+// 引用键。没登记过（进程重启后索引丢失、目标超出时效）返回空串。
+func (l *qqRefLedger) refIdxFor(msgID string, now time.Time) string {
+	msgID = strings.TrimSpace(msgID)
+	if msgID == "" {
+		return ""
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.pruneLocked(now)
+	for i := range l.entries {
+		if l.entries[i].msgID == msgID {
+			return l.entries[i].key
+		}
+	}
+	return ""
+}
+
+func (l *qqRefLedger) pruneLocked(now time.Time) {
+	keep := 0
+	for _, entry := range l.entries {
+		if now.Sub(entry.at) <= qqRefLedgerTTL {
+			l.entries[keep] = entry
+			keep++
+		}
+	}
+	l.entries = l.entries[:keep]
+}
 
 // qqSentLedger 记录最近发出的群消息。
 //
@@ -828,9 +973,46 @@ type qqOfficialMessage struct {
 		Nick  string   `json:"nick"`
 		Roles []string `json:"roles"`
 	} `json:"member"`
+	// MessageReference 属于发送方向协议，入站事件不携带；保留解析以兼容频道消息。
 	MessageReference *struct {
 		MessageID string `json:"message_id"`
 	} `json:"message_reference"`
+	// MessageType 标记消息形态：0 纯文本、102 聊天记录（合并转发原件）、103 引用。
+	MessageType int `json:"message_type"`
+	// MsgElements 只在引用消息（MessageType=103）出现，是被引用消息的正文与
+	// 附件，随事件直接下发，无需回查历史。
+	MsgElements []qqOfficialMsgElement `json:"msg_elements"`
+	// MessageScene.ext 是 key=value 字符串数组：msg_idx 是本条消息的引用索引键，
+	// ref_msg_idx 指向被引用消息；auth_token 是敏感值，不解析。
+	MessageScene *qqOfficialMessageScene `json:"message_scene"`
+}
+
+// qqOfficialMessageScene 是消息自带的场景信息，只有 ext 数组被用到。
+type qqOfficialMessageScene struct {
+	Ext []string `json:"ext"`
+}
+
+// sceneExtValue 取 message_scene.ext 里某个键的值，取不到返回空串。值是整串
+// 比对（REFIDX_ 键不可解析），不能按 = 切分——base64 值理论上可能带 = 填充。
+func (m *qqOfficialMessage) sceneExtValue(key string) string {
+	if m.MessageScene == nil {
+		return ""
+	}
+	prefix := key + "="
+	for _, item := range m.MessageScene.Ext {
+		if value, ok := strings.CutPrefix(strings.TrimSpace(item), prefix); ok {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
+}
+
+// qqOfficialMsgElement 是引用消息里被引用内容的一个元素。content 是拍平的正文，
+// attachments 与顶层附件同构；元素的 message_type 恒为 103 而非被引用消息的真实
+// 类型、不含 author，都不解析。
+type qqOfficialMsgElement struct {
+	Content     string                 `json:"content"`
+	Attachments []qqOfficialAttachment `json:"attachments"`
 }
 
 // qqOfficialMention 是全量群消息里 @ 目标的描述。
@@ -1186,6 +1368,9 @@ func qqOfficialEventFromDispatch(eventType string, data json.RawMessage, selfID 
 		return MessageEvent{}, false
 	}
 	text := qqOfficialFaceText(strings.TrimSpace(msg.Content))
+	// 入站引用不随 message_reference 下发：引用消息是 message_type=103 +
+	// msg_elements + message_scene.ext 的 ref_msg_idx，被引用正文与附件直接随事件
+	// 携带。只有频道消息保留 message_reference 兼容。
 	quoted := ""
 	if msg.MessageReference != nil {
 		quoted = msg.MessageReference.MessageID
@@ -1215,6 +1400,19 @@ func qqOfficialEventFromDispatch(eventType string, data json.RawMessage, selfID 
 	}
 	if quoted != "" {
 		event.Quoted = &QuotedMessage{MessageID: quoted}
+	}
+	// 引用消息：被引用的正文与附件在 msg_elements 里，索引键在 ref_msg_idx。
+	// TMP_ 前缀是聊天记录的临时键，不属于 REFIDX_ 键空间，取不到发送者，
+	// 但正文还在元素里，引用关系照常交付。引用元素不带 author，发送者只能由
+	// 调用方拿索引反查后回填。
+	if msg.MessageType == qqMessageTypeQuote {
+		quotedText, quotedMedia := qqOfficialQuotedPayload(msg.MsgElements)
+		refKey := firstNonEmpty(msg.sceneExtValue("ref_msg_idx"), quoted)
+		event.Quoted = &QuotedMessage{
+			MessageID:  refKey,
+			RawMessage: quotedText,
+			Segments:   quotedMedia,
+		}
 	}
 
 	switch eventType {
@@ -1262,4 +1460,21 @@ func qqOfficialEventFromDispatch(eventType string, data json.RawMessage, selfID 
 		event.ToMe = false
 	}
 	return event, true
+}
+
+// qqOfficialQuotedPayload 把引用消息 msg_elements 里的被引用正文与附件拼出来。
+//
+// 文字直接在元素 content 里，媒体附件与顶层 attachments 完全同构（复用
+// qqOfficialMediaSegments 拆段）。图文混发不拆元素：同一个元素同时带正文与附件。
+// 元素里拍平的展示文本（如 [图片] 占位）不动，那是平台给的原文。
+func qqOfficialQuotedPayload(elements []qqOfficialMsgElement) (string, []MessageSegment) {
+	var parts []string
+	var segments []MessageSegment
+	for _, element := range elements {
+		if content := strings.TrimSpace(element.Content); content != "" {
+			parts = append(parts, content)
+		}
+		segments = append(segments, qqOfficialMediaSegments(element.Attachments)...)
+	}
+	return strings.Join(parts, "\n"), segments
 }

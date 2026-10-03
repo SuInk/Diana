@@ -81,6 +81,200 @@ func TestQQOfficialEventFromDispatchKeepsQuotedMessage(t *testing.T) {
 	}
 }
 
+// 群聊真实形态的引用事件：message_type=103，被引用正文在 msg_elements 里，索引键
+// 在 message_scene.ext 的 ref_msg_idx，不出现 message_reference。
+// 被引用的发送者只能由 handleDispatch 拿索引反查回填，这里单独验映射层不丢正文。
+func TestQQOfficialEventFromDispatchQuotedMessageFromMsgElements(t *testing.T) {
+	data := json.RawMessage(`{
+	  "id":"msg-q1","content":"这条信息引用了上一条消息","group_openid":"grp-1",
+	  "message_type":103,
+	  "message_scene":{"ext":[
+	    "ref_msg_idx=REFIDX_quoted",
+	    "msg_idx=REFIDX_current",
+	    "auth_token=<redacted>"
+	  ],"source":"default"},
+	  "msg_elements":[{
+	    "content":"这是一条即将被引用的信息",
+	    "message_type":103,
+	    "msg_idx":"REFIDX_quoted"
+	  }],
+	  "parallel_message":{"msg_nodes":[{"content":"这是一条即将被引用的信息","message_type":0}]},
+	  "author":{"member_openid":"member-1"}
+	}`)
+	event, ok := qqOfficialEventFromDispatch("GROUP_MESSAGE_CREATE", data, "bot-1")
+	if !ok {
+		t.Fatal("quoted group message was not mapped")
+	}
+	if event.Quoted == nil {
+		t.Fatal("the quoted message was dropped")
+	}
+	if event.Quoted.MessageID != "REFIDX_quoted" {
+		t.Fatalf("quoted id = %q, want the ref_msg_idx key", event.Quoted.MessageID)
+	}
+	if event.Quoted.RawMessage != "这是一条即将被引用的信息" {
+		t.Fatalf("quoted text = %q, want the payload from msg_elements", event.Quoted.RawMessage)
+	}
+	// 本轮输入在 content 里，不带被引用文本。
+	if event.RawMessage != "这条信息引用了上一条消息" {
+		t.Fatalf("raw message = %q", event.RawMessage)
+	}
+	if len(event.Segments) == 0 || event.Segments[0].Type != "text" {
+		t.Fatalf("segments = %+v, want the current text to lead", event.Segments)
+	}
+}
+
+// 引用携带媒体：元素附件与顶层 attachments 完全同构，拆成对应消息段进入识图链路。
+func TestQQOfficialEventFromDispatchQuotedMessageKeepsMedia(t *testing.T) {
+	data := json.RawMessage(`{
+	  "id":"msg-q2","content":"引用图片","group_openid":"grp-1",
+	  "message_type":103,
+	  "message_scene":{"ext":["msg_idx=REFIDX_current","ref_msg_idx=REFIDX_quoted"]},
+	  "msg_elements":[{
+	    "content":"",
+	    "message_type":103,
+	    "msg_idx":"REFIDX_quoted",
+	    "attachments":[{
+	      "content":"","content_type":"image/jpeg","filename":"a.jpg",
+	      "height":1500,"width":1887,"size":352256,
+	      "url":"https://multimedia.nt.qq.com.cn/download?fileid=a"
+	    }]
+	  }],
+	  "author":{"member_openid":"member-1"}
+	}`)
+	event, ok := qqOfficialEventFromDispatch("GROUP_MESSAGE_CREATE", data, "bot-1")
+	if !ok {
+		t.Fatal("quoted media message was not mapped")
+	}
+	if event.Quoted == nil {
+		t.Fatal("the quoted message was dropped")
+	}
+	found := false
+	for _, segment := range event.Quoted.Segments {
+		if segment.Type == "image" && segment.Data["url"] == "https://multimedia.nt.qq.com.cn/download?fileid=a" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("quoted segments = %+v, want the image attachment kept", event.Quoted.Segments)
+	}
+}
+
+// 聊天记录引用：ref_msg_idx 是 TMP_ 前缀（另一套键空间），元素不带 msg_idx；
+// 正文仍在元素里，引用关系照常交付，只是查不到发送者。
+func TestQQOfficialEventFromDispatchQuotedChatRecord(t *testing.T) {
+	data := json.RawMessage(`{
+	  "id":"msg-q3","content":"引用聊天记录","group_openid":"grp-1",
+	  "message_type":103,
+	  "message_scene":{"ext":["msg_idx=REFIDX_current","ref_msg_idx=TMP_f01d7008-df53-42f0-840e-7d9a6ffc60b4"]},
+	  "msg_elements":[{
+	    "content":"=== 消息 1 ===\n[消息内容] 合并信息测试\n[发送者] 张三"
+	  }],
+	  "author":{"member_openid":"member-1"}
+	}`)
+	event, ok := qqOfficialEventFromDispatch("GROUP_MESSAGE_CREATE", data, "bot-1")
+	if !ok {
+		t.Fatal("chat-record quote was not mapped")
+	}
+	if event.Quoted == nil {
+		t.Fatal("the quoted chat record was dropped")
+	}
+	if event.Quoted.MessageID != "TMP_f01d7008-df53-42f0-840e-7d9a6ffc60b4" {
+		t.Fatalf("quoted id = %q, want the TMP key as-is", event.Quoted.MessageID)
+	}
+	if !strings.Contains(event.Quoted.RawMessage, "合并信息测试") {
+		t.Fatalf("quoted text = %q, want the nested payload kept", event.Quoted.RawMessage)
+	}
+}
+
+// 入站登记与引用反查：handleDispatch 把入站 msg_idx、出站 ref_idx 都登记进索引，
+// 收到引用时用 ref_msg_idx 反查发送者；引用机器人的自发消息时回填 ToMe。
+func TestQQOfficialDispatchEnrichesQuoteSenderFromRefIndex(t *testing.T) {
+	c := &QQOfficialChannel{}
+	c.setStatus(true, "bot-1", "")
+	var got []MessageEvent
+	c.handler = func(_ context.Context, event MessageEvent) error {
+		got = append(got, event)
+		return nil
+	}
+	// 先收一条普通消息登记它的 msg_idx。
+	c.handleDispatch(context.Background(), qqGatewayPayload{T: "GROUP_MESSAGE_CREATE", Data: json.RawMessage(`{
+	  "id":"m-1","content":"这是一条即将被引用的信息","group_openid":"grp-1",
+	  "message_type":0,
+	  "message_scene":{"ext":["msg_idx=REFIDX_member-msg"]},
+	  "author":{"member_openid":"member-1"}
+	}`)})
+	// 出站发送返回的 ref_idx 指向自己。
+	c.refs.recordOutbound("REFIDX_bot-msg", "m-bot", "bot-1", time.Now())
+	// 再收一条引用 member-1 那条消息的引用事件。
+	c.handleDispatch(context.Background(), qqGatewayPayload{T: "GROUP_MESSAGE_CREATE", Data: json.RawMessage(`{
+	  "id":"m-2","content":"引用了上一条","group_openid":"grp-1",
+	  "message_type":103,
+	  "message_scene":{"ext":["msg_idx=REFIDX_m-2","ref_msg_idx=REFIDX_member-msg"]},
+	  "msg_elements":[{"content":"这是一条即将被引用的信息","message_type":103,"msg_idx":"REFIDX_member-msg"}],
+	  "author":{"member_openid":"member-1"}
+	}`)})
+	if len(got) != 2 {
+		t.Fatalf("events = %d, want two dispatched events", len(got))
+	}
+	quoted := got[1].Quoted
+	if quoted == nil || quoted.UserID != "member-1" {
+		t.Fatalf("quoted = %+v, want the sender resolved from the ref index", quoted)
+	}
+	if got[1].ToMe {
+		t.Fatal("quoting another member's message is not addressed to the bot")
+	}
+	// 引用机器人自己的发言：反查出自己并置 ToMe。
+	c.handleDispatch(context.Background(), qqGatewayPayload{T: "GROUP_MESSAGE_CREATE", Data: json.RawMessage(`{
+	  "id":"m-3","content":"引用了机器人的信息","group_openid":"grp-1",
+	  "message_type":103,
+	  "message_scene":{"ext":["msg_idx=REFIDX_m-3","ref_msg_idx=REFIDX_bot-msg"]},
+	  "msg_elements":[{"content":"[probe] 收到","message_type":103,"msg_idx":"REFIDX_bot-msg"}],
+	  "author":{"member_openid":"member-1"}
+	}`)})
+	if len(got) != 3 {
+		t.Fatalf("events = %d, want three dispatched events", len(got))
+	}
+	if quoted := got[2].Quoted; quoted == nil || quoted.UserID != "bot-1" {
+		t.Fatalf("quoted = %+v, want the bot itself resolved", quoted)
+	}
+	if !got[2].ToMe {
+		t.Fatal("quoting the bot's own message must count as addressed to the bot")
+	}
+}
+
+// 索引过期后反查不到发送者：引用关系仍交付，只是 UserID 为空，交给上层继续按
+// 历史回查（enrichReplyReference 会用 MessageID 查本地历史）。
+func TestQQRefLedgerExpiresAndPrunes(t *testing.T) {
+	var l qqRefLedger
+	now := time.Now()
+	l.recordInbound("REFIDX_a", "m-a", "member-1", false, now)
+	if sender, _, ok := l.lookup("REFIDX_a", now.Add(time.Second)); !ok || sender != "member-1" {
+		t.Fatalf("lookup = %q,%v, want member-1", sender, ok)
+	}
+	l.recordInbound("REFIDX_a", "m-a", "member-2", false, now.Add(qqRefLedgerTTL+time.Second))
+	if sender, _, ok := l.lookup("REFIDX_a", now.Add(qqRefLedgerTTL+2*time.Second)); !ok || sender != "member-2" {
+		t.Fatalf("lookup = %q,%v, want the refreshed sender", sender, ok)
+	}
+	if _, _, ok := l.lookup("REFIDX_missing", now); ok {
+		t.Fatal("an unknown key must not resolve")
+	}
+	// 平台 id → REFIDX_ 反查：入站与出站两侧都登记，同一张表双向可查。
+	l.recordInbound("REFIDX_in", "m-in", "member-1", false, now)
+	l.recordOutbound("REFIDX_out", "m-out", "bot-1", now)
+	if key := l.refIdxFor("m-in", now.Add(time.Second)); key != "REFIDX_in" {
+		t.Fatalf("refIdxFor(inbound) = %q, want REFIDX_in", key)
+	}
+	if key := l.refIdxFor("m-out", now.Add(time.Second)); key != "REFIDX_out" {
+		t.Fatalf("refIdxFor(outbound) = %q, want REFIDX_out", key)
+	}
+	if key := l.refIdxFor("m-unknown", now.Add(time.Second)); key != "" {
+		t.Fatalf("refIdxFor(unknown) = %q, want empty", key)
+	}
+	if key := l.refIdxFor("m-in", now.Add(qqRefLedgerTTL+time.Second)); key != "" {
+		t.Fatalf("refIdxFor(expired) = %q, want empty", key)
+	}
+}
+
 // 未订阅或不认识的事件类型不该被硬塞成一条对话。
 func TestQQOfficialEventFromDispatchIgnoresUnknownTypes(t *testing.T) {
 	data := json.RawMessage(`{"id":"x","content":"y","author":{"id":"a"}}`)
