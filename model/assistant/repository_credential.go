@@ -156,7 +156,10 @@ func repositoryFromGitHubAPIPath(path string) string {
 	if index := strings.IndexAny(path, "?#"); index >= 0 {
 		path = path[:index]
 	}
-	const prefix = "/repos/"
+	prefix := "/repos/"
+	if strings.HasPrefix(path, "/user/starred/") {
+		prefix = "/user/starred/"
+	}
 	if !strings.HasPrefix(path, prefix) {
 		return ""
 	}

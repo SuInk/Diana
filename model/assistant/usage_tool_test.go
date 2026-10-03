@@ -65,3 +65,37 @@ func TestUsageToolOwnerOnly(t *testing.T) {
 		t.Fatal("missing storage reported as zero")
 	}
 }
+
+type usageReportTestStore struct {
+	usageTestStore
+	filter applog.UsageFilter
+}
+
+func (s *usageReportTestStore) LLMUsageReport(_ context.Context, filter applog.UsageFilter, since, until time.Time) (applog.UsageReport, error) {
+	s.calls++
+	s.filter = filter
+	s.since, s.until = since, until
+	return applog.UsageReport{Usage: applog.UsageSummary{Calls: 1, TotalTokens: 123}}, s.err
+}
+func TestUsageToolCurrentGroupFilterAndInputValidation(t *testing.T) {
+	runtime := NewRuntime(BotConfig{OwnerID: "owner"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	store := &usageReportTestStore{}
+	runtime.SetAppLogWriter(store)
+	tool := &dianaUsageTool{runtime: runtime, event: MessageEvent{Kind: EventKindGroup, ProfileID: "bot-a", Platform: "onebot-v11", GroupID: "g", UserID: "owner"}}
+	if _, err := tool.Run(context.Background(), map[string]any{"scope": "current_group", "hours": float64(168)}); err != nil {
+		t.Fatal(err)
+	}
+	if store.filter != (applog.UsageFilter{ProfileID: "bot-a", Platform: "onebot-v11", GroupID: "g"}) || store.until.Sub(store.since) != 168*time.Hour {
+		t.Fatalf("wrong filter/window: %+v", store)
+	}
+	for _, input := range []map[string]any{{"scope": "current_group", "group_id": "other"}, {"scope": "all", "group_id": "g"}, {"scope": "group"}, {"hours": 1.5}, {"hours": 0}, {"hours": 2161}, {"bogus": true}} {
+		before := store.calls
+		if _, err := tool.Run(context.Background(), input); err == nil || store.calls != before {
+			t.Fatalf("invalid input read storage: %v", input)
+		}
+	}
+	tool.event.Kind = EventKindPrivate
+	if _, err := tool.Run(context.Background(), map[string]any{"scope": "current_group"}); err == nil {
+		t.Fatal("private query pretended to be a group")
+	}
+}

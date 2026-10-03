@@ -166,8 +166,9 @@ let plugins: PluginState[] = [
   { manifest: { id: "official.onebot-v11", name: "OneBot 协议", version: "0.1.0", description: "提供 OneBot v11 事件、消息发送、群组列表和协议扩展动作。", official: true, built_in: true, permissions: ["OneBot 读取", "OneBot 写入"] }, installed: true, enabled: true },
   {
     manifest: {
-      id: "official.repository-publish", name: "GitHub Issue 与 PR", version: "0.6.0", description: "搜索和管理 GitHub Issue；读取 Pull Request 的描述、改动文件和 patch，并在 PR 上发表评论或提交 review（只评论，不批准、不合并）。群成员可生成草稿，由具备仓库权限的授权用户用确认码确认后写入。", official: true, built_in: true, permissions: ["network:https", "github:issues:read", "github:issues:write", "audit:write", "llm:tool"],
+      id: "official.repository-publish", name: "GitHub Issue 与 PR", version: "0.7.1", description: "搜索和管理 GitHub Issue；读取 Pull Request 的描述、改动文件和 patch，并在 PR 上发表评论或提交 review（只评论，不批准、不合并）。群成员可生成草稿，由具备仓库权限的授权用户用确认码确认后写入。", official: true, built_in: true, permissions: ["network:https", "github:issues:read", "github:issues:write", "audit:write", "llm:tool"],
       settings: [
+        { key: "github_star_enabled", label: "允许 GitHub Star", description: "默认关闭。开启后仅主人能提出 Star 草稿，回复确认码后才写入目标仓库配置的 GitHub 账号。Fine-grained Token 需要 Starring: write 权限。", type: "bool", default: false },
         { key: "github_auth_mode", label: "GitHub 认证方式", description: "可使用独立 Token 或当前系统的 gh 登录。", type: "select", default: "token", options: [{ value: "token", label: "独立 Token" }, { value: "gh", label: "GitHub CLI (gh)" }, { value: "auto", label: "自动选择" }] },
         { key: "github_token", label: "GitHub Issues Token", description: "在 Token 或自动模式下使用，保存后不回显。", type: "string", default: "", secret: true },
         { key: "allowed_repositories", label: "允许操作的仓库", description: "Issue 的读写操作白名单；精确填写 owner/repo，多个仓库用逗号或换行分隔。", type: "string", default: "" },
@@ -1589,6 +1590,14 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
       return reply();
     }
     return reply();
+  }
+  if (path === "/api/assistant/llm-usage" && method === "GET") {
+    const profile=url.searchParams.get("profile") || "";
+    const hours=Number(url.searchParams.get("hours") || 24);
+    const since=new Date(Date.now()-hours*3600000).toISOString(),until=new Date().toISOString();
+    const rows=groups.filter(group=>!profile || !group.bot_profile_id || group.bot_profile_id===profile).map((group,index)=>({profile_id:group.bot_profile_id || profile || "demo",platform:profile==="bot-telegram"?"telegram":"onebot-v11",group_id:group.group_id,usage:{since,until,recorded_calls:Math.max(1,groups.length-index)*22,input_tokens:Math.max(1,groups.length-index)*24000,output_tokens:Math.max(1,groups.length-index)*3200,total_tokens:Math.max(1,groups.length-index)*27200,cached_input_tokens:Math.max(1,groups.length-index)*16000,usage_missing_calls:index===0?1:0},purposes:{}}));
+    const usage=rows.reduce((sum,row)=>({...sum,recorded_calls:sum.recorded_calls+row.usage.recorded_calls,input_tokens:sum.input_tokens+row.usage.input_tokens,output_tokens:sum.output_tokens+row.usage.output_tokens,total_tokens:sum.total_tokens+row.usage.total_tokens,cached_input_tokens:sum.cached_input_tokens+row.usage.cached_input_tokens,usage_missing_calls:sum.usage_missing_calls+row.usage.usage_missing_calls}),{since,until,recorded_calls:0,input_tokens:0,output_tokens:0,total_tokens:0,cached_input_tokens:0,usage_missing_calls:0});
+    return json({usage,groups:rows});
   }
   if (path === "/api/assistant/groups" && method === "GET") return json({ groups, plugins, live_available: true, quota_window_seconds: 5 * 3600 });
   if (path === "/api/assistant/groups" && method === "POST") {

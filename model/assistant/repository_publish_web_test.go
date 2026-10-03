@@ -99,3 +99,24 @@ func TestRepositoryIssueWebDuplicateNeedsSecondConfirmation(t *testing.T) {
 		t.Fatalf("confirmed create issued %d POSTs", github.count(http.MethodPost))
 	}
 }
+
+func TestRepositoryStarWebPublishRespectsDisabledSettingWithoutRuntime(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusNoContent) }))
+	defer server.Close()
+	tool := repositoryPublishTestTool(server, "为 acme/demo 点 Star", nil)
+	tool.settings[repositoryPublishSettingStarEnabled] = true
+	pending := runRepositoryPublishToolOnce(t, tool, map[string]any{"operation": "star", "repository": "acme/demo"})
+	if pending.Draft == nil {
+		t.Fatalf("draft=%+v", pending)
+	}
+	settings := SettingValues{repositoryPublishSettingToken: repositoryPublishTestToken}
+	result, err := tool.plugin.PublishDraftFromWeb(context.Background(), settings, pending.Draft.ID)
+	if err != nil || result.FailureCode != "star_disabled" {
+		t.Fatalf("disabled WebUI star=%+v %v", result, err)
+	}
+	settings[repositoryPublishSettingStarEnabled] = true
+	result, err = tool.plugin.PublishDraftFromWeb(context.Background(), settings, pending.Draft.ID)
+	if err != nil || !result.OK || result.Outcome != "starred" {
+		t.Fatalf("WebUI star=%+v %v", result, err)
+	}
+}

@@ -44,6 +44,8 @@
         </div>
       </div>
 
+      <GroupTokenUsage v-if="loaded" :profile="botScope" :groups="groups" />
+
       <div v-if="loaded && botScope" class="group-scope-bar">
         <div class="group-scope-default">
           <label class="switch" :title="newGroupEnabled ? '新加入的群默认工作' : '新加入的群默认不工作'">
@@ -695,6 +697,7 @@
 <script setup lang="ts">
 import { useConfigurationRefresh } from "../configuration-sync";
 import { computed, onMounted, ref, watch } from "vue";
+import GroupTokenUsage from "../components/GroupTokenUsage.vue";
 import LoadingSkeleton from "../components/LoadingSkeleton.vue";
 import SkeletonBlock from "../components/SkeletonBlock.vue";
 import { askConfirm } from "../confirm";

@@ -184,6 +184,7 @@ func (s ProfileSet) WithDefaults() ProfileSet {
 		}
 		seen[id] = struct{}{}
 		s.Profiles[i].ID = id
+		s.Profiles[i].Config.RequestLimitID = id
 		s.Profiles[i].Name = NormalizeProfileName(s.Profiles[i].Name)
 		s.Profiles[i].Group = NormalizeProfileGroup(s.Profiles[i].Group)
 		s.Profiles[i].Description = strings.TrimSpace(s.Profiles[i].Description)

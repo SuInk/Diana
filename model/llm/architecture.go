@@ -26,13 +26,15 @@ const (
 )
 
 type ProviderDefinition struct {
-	ID       string            `json:"id"`
-	Name     string            `json:"name"`
-	Protocol Protocol          `json:"protocol"`
-	BaseURL  string            `json:"baseUrl,omitempty"`
-	APIKey   string            `json:"apiKey,omitempty"`
-	Headers  map[string]string `json:"headers,omitempty"`
-	Enabled  bool              `json:"enabled"`
+	MaxConcurrency int               `json:"maxConcurrency,omitempty"`
+	MaxRPS         float64           `json:"maxRps,omitempty"`
+	ID             string            `json:"id"`
+	Name           string            `json:"name"`
+	Protocol       Protocol          `json:"protocol"`
+	BaseURL        string            `json:"baseUrl,omitempty"`
+	APIKey         string            `json:"apiKey,omitempty"`
+	Headers        map[string]string `json:"headers,omitempty"`
+	Enabled        bool              `json:"enabled"`
 	// OAuthProvider 是配置档绑定的 OAuth 提供商标识，凭据在发请求时由
 	// SetClientOptions 注入的选项现取。它只是个名字，不是秘密，公开视图里保留。
 	OAuthProvider string `json:"oauthProvider,omitempty"`
@@ -203,7 +205,7 @@ func RegistryFromDocument(document ProviderRegistryDocument) (*ProviderRegistry,
 	}
 	r := NewProviderRegistry()
 	for _, provider := range document.Providers {
-		cfg := ProviderConfig{APIKey: provider.APIKey, BaseURL: provider.BaseURL, Headers: provider.Headers, OAuthProvider: provider.OAuthProvider}
+		cfg := ProviderConfig{RequestLimitID: provider.ID, MaxConcurrency: provider.MaxConcurrency, MaxRPS: provider.MaxRPS, APIKey: provider.APIKey, BaseURL: provider.BaseURL, Headers: provider.Headers, OAuthProvider: provider.OAuthProvider}
 		switch provider.Protocol {
 		case ProtocolAnthropicMessages:
 			cfg.Provider = ProviderAnthropic
@@ -474,7 +476,8 @@ func NewProviderRegistryFromProfiles(set ProfileSet) (*ProviderRegistry, AgentMo
 		if providerID == "" {
 			continue
 		}
-		provider := ProviderDefinition{ID: providerID, Name: profile.Name, Protocol: protocolForConfig(cfg), BaseURL: cfg.BaseURL, APIKey: cfg.APIKey, Headers: cfg.Headers, OAuthProvider: cfg.OAuthProvider, Enabled: true}
+		cfg.RequestLimitID = providerID
+		provider := ProviderDefinition{MaxConcurrency: cfg.MaxConcurrency, MaxRPS: cfg.MaxRPS, ID: providerID, Name: profile.Name, Protocol: protocolForConfig(cfg), BaseURL: cfg.BaseURL, APIKey: cfg.APIKey, Headers: cfg.Headers, OAuthProvider: cfg.OAuthProvider, Enabled: true}
 		if provider.Name == "" {
 			provider.Name = providerID
 		}

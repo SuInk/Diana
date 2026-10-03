@@ -268,7 +268,9 @@ func (r *Runtime) recordLLMUsage(ctx context.Context, event MessageEvent, provid
 		Actor:   oneBotEventActor(event),
 		Target:  event.MessageID,
 		Metadata: map[string]any{
-			"group_id": event.GroupID,
+			"group_id":     event.GroupID,
+			"platform":     r.currentPlatform(event),
+			"session_kind": string(event.Kind),
 			// profile_id 让同一个群里的两台机器人各算各的额度。
 			"profile_id":          event.ProfileID,
 			"user_id":             event.UserID,

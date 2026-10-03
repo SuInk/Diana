@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -1202,5 +1203,63 @@ func TestRepositoryIssueGroupWideAccessIgnoresStalePersonalAuthMode(t *testing.T
 	})
 	if !result.OK || result.Outcome != "created" || ghCalls != 0 {
 		t.Fatalf("result=%#v ghCalls=%d", result, ghCalls)
+	}
+}
+
+func TestRepositoryStarRequiresEnabledOwnerAndFreshConfirmation(t *testing.T) {
+	var starCalls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/user/starred/acme/demo" {
+			if r.Method != http.MethodPut || r.Header.Get("Authorization") != "Bearer "+repositoryPublishTestToken {
+				t.Errorf("wrong star request: %s %s", r.Method, r.URL.Path)
+			}
+			starCalls.Add(1)
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+	tool := repositoryPublishTestTool(server, "帮 acme/demo 点 Star", nil)
+	input := map[string]any{"operation": "star", "repository": "acme/demo"}
+	disabled := runRepositoryPublishToolOnce(t, tool, input)
+	if disabled.FailureCode != "star_disabled" || starCalls.Load() != 0 {
+		t.Fatalf("disabled=%+v calls=%d", disabled, starCalls.Load())
+	}
+	tool.settings[repositoryPublishSettingStarEnabled] = true
+	tool.event.UserID = "member"
+	denied := runRepositoryPublishToolOnce(t, tool, input)
+	if denied.FailureCode != "permission_denied" || starCalls.Load() != 0 {
+		t.Fatalf("member=%+v calls=%d", denied, starCalls.Load())
+	}
+	tool.event.UserID = "owner"
+	pending := runRepositoryPublishToolOnce(t, tool, input)
+	if !pending.RequiresApproval || pending.Draft == nil || starCalls.Load() != 0 {
+		t.Fatalf("pending=%+v calls=%d", pending, starCalls.Load())
+	}
+	approve := map[string]any{"operation": "approve", "draft_id": pending.Draft.ID}
+	premature := runRepositoryPublishToolOnce(t, tool, approve)
+	if premature.FailureCode != "explicit_approval_required" || starCalls.Load() != 0 {
+		t.Fatalf("premature=%+v", premature)
+	}
+	tool.event.RawMessage = repositoryIssueConfirmationCode(pending.Draft.ID)
+	tool.settings[repositoryPublishSettingStarEnabled] = false
+	disabled = runRepositoryPublishToolOnce(t, tool, approve)
+	if disabled.FailureCode != "star_disabled" || starCalls.Load() != 0 {
+		t.Fatalf("disabled approval=%+v", disabled)
+	}
+	tool.settings[repositoryPublishSettingStarEnabled] = true
+	backgroundCtx := withLLMUsagePurpose(context.WithValue(context.Background(), scheduledQueryRunContextKey{}, true), "subtask")
+	background, err := tool.Run(backgroundCtx, approve)
+	if err != nil || !strings.Contains(background, "explicit_approval_required") || starCalls.Load() != 0 {
+		t.Fatalf("background approval bypassed human confirmation: %s %v", background, err)
+	}
+	done := runRepositoryPublishToolOnce(t, tool, approve)
+	if !done.OK || done.Outcome != "starred" || starCalls.Load() != 1 {
+		t.Fatalf("done=%+v calls=%d", done, starCalls.Load())
+	}
+	repeated := runRepositoryPublishToolOnce(t, tool, approve)
+	if !repeated.Idempotent || starCalls.Load() != 1 {
+		t.Fatalf("repeat=%+v calls=%d", repeated, starCalls.Load())
 	}
 }

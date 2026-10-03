@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net"
 	"net/http"
 	"net/url"
@@ -246,8 +247,12 @@ type ImageGenerateResponse struct {
 }
 
 type ProviderConfig struct {
-	Provider Provider `json:"provider"`
-	APIKey   string   `json:"api_key,omitempty"`
+	// RequestLimitID is the provider profile identity, shared by all robots.
+	RequestLimitID string   `json:"-"`
+	MaxConcurrency int      `json:"max_concurrency,omitempty"`
+	MaxRPS         float64  `json:"max_rps,omitempty"`
+	Provider       Provider `json:"provider"`
+	APIKey         string   `json:"api_key,omitempty"`
 	// OAuthProvider 指向 model/llmauth 里某个已登录的提供商。填了它就用授权登录
 	// 的令牌，此时 APIKey 可以留空——但填了也不浪费：续期失败时它是兜底。
 	OAuthProvider       string            `json:"oauth_provider,omitempty"`
@@ -362,6 +367,12 @@ func EditImage(ctx context.Context, cfg ProviderConfig, req ImageEditRequest, op
 
 // Validate 校验 provider 配置是否可用于调用。
 func (cfg ProviderConfig) Validate() error {
+	if cfg.MaxConcurrency < 0 || cfg.MaxConcurrency > 10000 {
+		return fmt.Errorf("llm: max_concurrency must be between 0 and 10000")
+	}
+	if math.IsNaN(cfg.MaxRPS) || math.IsInf(cfg.MaxRPS, 0) || cfg.MaxRPS < 0 || cfg.MaxRPS > 10000 || cfg.MaxRPS > 0 && cfg.MaxRPS < 0.001 {
+		return fmt.Errorf("llm: max_rps must be 0 or between 0.001 and 10000")
+	}
 	// Validate 会先规整空白，避免前端输入带空格导致 provider/model 比较失败。
 	cfg.Provider = Provider(strings.TrimSpace(string(cfg.Provider)))
 	cfg.APIKey = strings.TrimSpace(cfg.APIKey)

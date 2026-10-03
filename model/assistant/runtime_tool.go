@@ -2150,6 +2150,9 @@ func (r *Runtime) generateScheduledQueryMessage(ctx context.Context, item Remind
 	return "定时订阅结果：\n" + reply, nil
 }
 
+// scheduledQueryRunContextKey survives nested tools changing the usage purpose.
+type scheduledQueryRunContextKey struct{}
+
 // runTaskQuery 让 Agent 按任务内容实际执行一次（可以调工具），返回模型的最终回复。
 // 定时订阅和一次性提醒共用，只是提示词不同。
 func (r *Runtime) runTaskQuery(ctx context.Context, item Reminder, systemSpec, requestSpec *PromptSpec) (string, error) {
@@ -2157,6 +2160,8 @@ func (r *Runtime) runTaskQuery(ctx context.Context, item Reminder, systemSpec, r
 	cfg := r.effectiveConfigForEvent(source)
 	taskCtx, cancel := context.WithTimeout(ctx, cfg.RequestTimeout)
 	defer cancel()
+	taskCtx = context.WithValue(taskCtx, scheduledQueryRunContextKey{}, true)
+	taskCtx = withLLMUsageContext(taskCtx, source)
 	relationship := r.relationshipPolicy(taskCtx, source)
 	messages := []llm.Message{
 		{
@@ -2172,7 +2177,14 @@ func (r *Runtime) runTaskQuery(ctx context.Context, item Reminder, systemSpec, r
 			}),
 		},
 	}
-	reply, err := r.generateReply(withLLMUsagePurpose(taskCtx, PurposeScheduledQuery), cfg, source, relationship, messages, nil)
+	registry, err := r.newReplyAgentRegistry(taskCtx, cfg, source, relationship, nil)
+	if err != nil {
+		return "", err
+	}
+	if registry != nil {
+		defer registry.Close()
+	}
+	reply, err := r.generateReply(withLLMUsagePurpose(taskCtx, PurposeScheduledQuery), cfg, source, relationship, messages, registry)
 	if err != nil {
 		return "", err
 	}
@@ -2189,6 +2201,8 @@ func reminderSourceEvent(item Reminder) MessageEvent {
 		Platform:         item.Platform,
 		ProfileID:        item.ProfileID,
 		ContextNamespace: item.ContextNamespace,
+		RawMessage:       item.Message,
+		Segments:         []MessageSegment{{Type: "text", Data: map[string]string{"text": item.Message}}},
 		UserID:           item.UserID,
 	}
 	if item.GroupID != "" {

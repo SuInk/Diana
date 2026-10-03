@@ -338,6 +338,7 @@ func (h *BotHandler) registerRoutes(router gin.IRouter, base string) {
 	router.GET(base+"/status", h.status)
 	router.GET(base+"/auto-info", h.autoInfo)
 	router.GET(base+"/dashboard-stats", h.dashboardStats)
+	router.GET(base+"/llm-usage", h.llmUsage)
 	router.GET(base+"/events", h.listEvents)
 	router.GET(base+"/events/:id/trace", h.eventTrace)
 	router.POST(base+"/events/:id/retry", h.retryFailedEvent)

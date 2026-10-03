@@ -408,6 +408,16 @@
             默认填本机的内置值 <code>{{ defaultUserAgent || "diana (darwin; arm64)" }}</code>——自报家门，不带版本号所以不会过期。订阅转发网关通常按「originator 精确匹配加 User-Agent 子串匹配」双因子认客户端，需要冒充特定客户端时在这里填它的 UA，配套的 <code>originator</code> 填到上面的自定义请求头里。
           </span>
         </div>
+        <div class="field">
+          <label for="llm-max-concurrency">最大并发请求</label>
+          <input id="llm-max-concurrency" v-model="form.max_concurrency" class="input" type="number" min="0" max="10000" step="1" />
+          <span class="hint">0 表示不限。共用这套配置的机器人一起排队，流式请求结束后释放名额。</span>
+        </div>
+        <div class="field">
+          <label for="llm-max-rps">每秒请求上限（RPS）</label>
+          <input id="llm-max-rps" v-model="form.max_rps" class="input" type="number" min="0" max="10000" step="0.001" />
+          <span class="hint">0 表示不限；正数至少 0.001。请求均匀发出，重试也受限制，等待计入请求超时。</span>
+        </div>
         <div class="field wide">
           <label for="llm-desc">备注（可选）</label>
           <input id="llm-desc" v-model="form.description" class="input" placeholder="这套配置的用途" />
@@ -464,6 +474,8 @@ import {
 } from "../llm-presets";
 
 interface LLMFormState {
+  max_concurrency: string;
+  max_rps: string;
   name: string;
   provider: Provider;
   api_style: "responses" | "chat_completions" | "";
@@ -483,6 +495,8 @@ interface LLMFormState {
 const defaultContextWindowTokens = 128000;
 
 const emptyForm: LLMFormState = {
+  max_concurrency: "0",
+  max_rps: "0",
   name: "",
   provider: "openai_compatible",
   api_style: "responses",
@@ -793,6 +807,8 @@ function startEdit(profile: LLMConfig): void {
   editingKeyPreview.value = profile.api_key_preview ?? "";
   editingProfile.value = profile;
   form.value = {
+    max_concurrency: String(profile.max_concurrency ?? 0),
+    max_rps: String(profile.max_rps ?? 0),
     name: profile.name ?? "",
     provider: profile.provider,
     // 原生协议没有接口模式，补默认值会在保存时被后端拒绝。
@@ -894,6 +910,8 @@ function headersFromRows(): Record<string, string> {
 
 function formToPayload(): LLMConfig {
   const payload: LLMConfig = {
+    max_concurrency: Number(form.value.max_concurrency),
+    max_rps: Number(form.value.max_rps),
     id: editingID.value,
     name: form.value.name.trim() || undefined,
     provider: form.value.provider,
@@ -935,6 +953,12 @@ function closeEditor(): void {
 }
 
 async function save(): Promise<void> {
+  const concurrency = Number(form.value.max_concurrency);
+  const rps = Number(form.value.max_rps);
+  if (!Number.isInteger(concurrency) || concurrency < 0 || concurrency > 10000 || !Number.isFinite(rps) || rps < 0 || rps > 10000 || (rps > 0 && rps < 0.001)) {
+    toastError("并发须为 0–10000 的整数；RPS 须为 0 或 0.001–10000，0 表示不限");
+    return;
+  }
   const window = Number(form.value.context_window_tokens.trim());
   if (!Number.isInteger(window) || window < 1024) {
     invalidField.value = "context_window_tokens";

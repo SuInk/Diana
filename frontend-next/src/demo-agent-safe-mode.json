@@ -164,6 +164,7 @@
           "review",
           "close",
           "reopen",
+          "star",
           "approve"
         ],
         "reason": "以主人配置的 GitHub 身份写入仓库；读仓库、搜 Issue 照常"

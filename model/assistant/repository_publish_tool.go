@@ -84,10 +84,11 @@ var (
 )
 
 type dianaGitHubTool struct {
-	runtime  *Runtime
-	event    MessageEvent
-	plugin   *RepositoryPublishPlugin
-	settings SettingValues
+	trustedWebOwner bool
+	runtime         *Runtime
+	event           MessageEvent
+	plugin          *RepositoryPublishPlugin
+	settings        SettingValues
 	// mu 保护下面三个按调用记账的字段。同一个工具实例会被并发 Run（消息重投、群里多人
 	// 同时打确认码），不加锁 map 并发写会直接让进程崩掉。
 	mu sync.Mutex
@@ -359,9 +360,9 @@ func (t *dianaGitHubTool) Description() string {
 	repositories := repositoryPublishEventRepositories(t.event, isOwner, t.settings)
 	if isOwner {
 		if len(repositories) == 0 {
-			return description + "\n你是主人：写操作不受仓库白名单限制，按用户给的 owner/repo 直接执行。"
+			return description + "\nStar 仅主人可用，且需开启 github_star_enabled；operation=star、repository=owner/repo 生成草稿后必须等用户原样回复确认码。使用该仓库当前配置的 GitHub 账号。\n你是主人：写操作不受仓库白名单限制，按用户给的 owner/repo 直接执行。"
 		}
-		return description + "\n你是主人：写操作不受仓库白名单限制。白名单仓库：" + strings.Join(repositories, "、") +
+		return description + "\nStar 仅主人可用，且需开启 github_star_enabled；operation=star、repository=owner/repo 生成草稿后必须等用户原样回复确认码。使用该仓库当前配置的 GitHub 账号。\n你是主人：写操作不受仓库白名单限制。白名单仓库：" + strings.Join(repositories, "、") +
 			"，用户给简称时优先按它匹配，匹配不上照用户给的 owner/repo 执行。"
 	}
 	if len(repositories) == 0 {
@@ -378,7 +379,7 @@ func (t *dianaGitHubTool) Description() string {
 func (t *dianaGitHubTool) InputSchema() map[string]any {
 	return toolObjectSchema([]string{"operation"}, map[string]any{
 		"operation": toolEnumParam("要执行的操作，分工见工具描述。",
-			"repo_search", "repo", "search", "get", "pull_files", "commit_files", "compare_files", "read_file", "list_files", "create", "update", "comment", "review", "close", "reopen", "approve", "cancel_draft", "list_drafts"),
+			"repo_search", "repo", "search", "get", "pull_files", "commit_files", "compare_files", "read_file", "list_files", "create", "update", "comment", "review", "close", "reopen", "star", "approve", "cancel_draft", "list_drafts"),
 		"repository": toolStringParam("owner/repo；repo_search 与草稿类操作不需要。"),
 		"number":     toolIntParam("Issue 或 PR 编号。", 1, 1_000_000),
 		"numbers":    toolIntArrayParam("多个 Issue 做同样改动，合成一份草稿；最多 "+itoa(repositoryIssueBatchLimit)+" 个。", 1, 1_000_000),
@@ -425,7 +426,7 @@ func (t *dianaGitHubTool) Run(ctx context.Context, input map[string]any) (string
 	operation := t.CanonicalOperation(input)
 	result := repositoryIssueResult{Operation: operation, Message: "GitHub Issue 操作未执行。"}
 	if operation == "" {
-		return t.finish(ctx, result.fail("invalid_operation", "operation 必须是 repo_search、repo、search、get、pull_files、commit_files、compare_files、read_file、list_files、create、update、comment、review、close、reopen、approve、cancel_draft 或 list_drafts。"))
+		return t.finish(ctx, result.fail("invalid_operation", "operation 必须是 repo_search、repo、search、get、pull_files、commit_files、compare_files、read_file、list_files、create、update、comment、review、close、reopen、star、approve、cancel_draft 或 list_drafts。"))
 	}
 	if t == nil || t.runtime == nil || t.plugin == nil || t.plugin.client == nil {
 		return t.finish(ctx, result.fail("plugin_unavailable", "GitHub Issue 与 PR 插件未正确配置。"))
@@ -450,6 +451,11 @@ func (t *dianaGitHubTool) Run(ctx context.Context, input map[string]any) (string
 	}
 	result.Repository = repository
 	owner := t.runtime.relationshipPolicy(ctx, t.event).Owner
+	if operation == "star" {
+		if code, message := t.validateStarAccess(ctx); code != "" {
+			return t.finish(ctx, result.fail(code, message))
+		}
+	}
 	readOperation := repositoryIssueReadOnlyOperation(operation) && operation != "repo_search"
 	redirectedFrom := ""
 	if readOperation {
@@ -557,6 +563,8 @@ func normalizeRepositoryIssueOperation(operation, state string) string {
 		return "repo"
 	case "get", "get_issue", "view", "read", "show":
 		return "get"
+	case "star":
+		return "star"
 	case "create", "create_issue", "new":
 		return "create"
 	case "update", "update_issue", "edit":
@@ -1526,11 +1534,11 @@ func (t *dianaGitHubTool) createWriteDraft(ctx context.Context, repository, oper
 	if code != "" {
 		return result.fail(code, message)
 	}
-	if operation != "create" && len(numbers) == 0 {
+	if operation != "create" && operation != "star" && len(numbers) == 0 {
 		return result.fail("invalid_input", "改动已有 Issue 必须提供 issue 编号（number 或 numbers）。")
 	}
-	if operation == "create" && len(numbers) > 0 {
-		return result.fail("invalid_input", "create 不接受 number/numbers。")
+	if (operation == "create" || operation == "star") && len(numbers) > 0 {
+		return result.fail("invalid_input", "create 和 star 不接受 number/numbers。")
 	}
 	result.RequestedNumbers = repositoryIssueBatchTargets(input)
 	appendBody, appendRedactions := sanitizeRepositoryIssueText(configToolString(input, "append_body"), repositoryIssueBodyLimit, false)
@@ -1592,6 +1600,10 @@ func (t *dianaGitHubTool) createWriteDraft(ctx context.Context, repository, oper
 	} else if present {
 		draftInput["milestone"] = milestone
 	}
+	if operation == "star" {
+		// Star 不携带 Issue 字段，确认卡片明确展示目标与账号来源。
+		draftInput = map[string]any{"title": "为 " + repository + " 点 Star（使用该仓库当前配置的 GitHub 账号）"}
+	}
 	draft, err := t.plugin.saveDraft(ctx, repositoryIssueDraft{
 		Platform: t.event.Platform, ProfileID: t.event.ProfileID,
 		GroupID: draftScope, Repository: repository, Operation: operation,
@@ -1618,6 +1630,14 @@ func (t *dianaGitHubTool) createWriteDraft(ctx context.Context, repository, oper
 
 func (t *dianaGitHubTool) approveDraft(ctx context.Context, input map[string]any) repositoryIssueResult {
 	result := repositoryIssueResult{Operation: "approve", Message: "Issue 草稿未提交。"}
+	// 后台任务的原文可能带着旧确认码，不能当成本轮用户的新确认。
+	if ctx.Value(scheduledQueryRunContextKey{}) == true || eventTriggerRunFromContext(ctx) {
+		return result.fail("explicit_approval_required", "后台任务不能确认 GitHub 写入，请主人或授权用户在聊天中原样回复确认码。")
+	}
+	switch llmUsagePurposeFromContext(ctx) {
+	case PurposeScheduledQuery, PurposeEventTrigger, PurposeFeedReply:
+		return result.fail("explicit_approval_required", "后台任务不能确认 GitHub 写入，请主人或授权用户在聊天中原样回复确认码。")
+	}
 	scope := strings.TrimSpace(t.event.GroupID)
 	if t.event.Kind != EventKindGroup {
 		scope = "private:" + strings.TrimSpace(t.event.UserID)
@@ -1639,6 +1659,11 @@ func (t *dianaGitHubTool) approveDraft(ctx context.Context, input map[string]any
 		return result.fail("draft_not_found", "本群没有可审批的 Issue 草稿，或草稿已处理。")
 	}
 	result.Repository = draft.Repository
+	if repositoryIssueDraftOperation(draft) == "star" {
+		if code, message := t.validateStarAccess(ctx); code != "" {
+			return result.fail(code, message)
+		}
+	}
 	owner := t.runtime.relationshipPolicy(ctx, t.event).Owner
 	// 仓库改过名时，设置里可能还是旧名，也可能已经换成新名而草稿记的是旧名：两个
 	// 名字指同一个仓库，哪个过了授权都算。
@@ -1683,8 +1708,13 @@ func (t *dianaGitHubTool) executeDraft(ctx context.Context, draft repositoryIssu
 	// 执行草稿记录的那个操作，而不是一律当成 create：草稿现在也承载 update、comment
 	// 和开关状态。旧草稿没有 operation 字段，按 create 处理保持兼容。
 	operation := repositoryIssueDraftOperation(draft)
-	if operation != "create" && operation != "update" && operation != "comment" && operation != "review" && operation != "close" && operation != "reopen" {
+	if operation != "create" && operation != "update" && operation != "comment" && operation != "review" && operation != "close" && operation != "reopen" && operation != "star" {
 		return result.fail("invalid_operation", "草稿记录的操作无法执行。")
+	}
+	if operation == "star" {
+		if code, message := t.validateStarAccess(ctx); code != "" {
+			return result.fail(code, message)
+		}
 	}
 	// 草稿确认过之后仓库在 GitHub 上改了名：旧名的 REST 请求会被 301，GraphQL 返回的
 	// 链接又全是新名，按旧名写一定失败。GitHub 认定是同一个仓库，确认的也是这份内容，
@@ -1739,6 +1769,8 @@ func (t *dianaGitHubTool) executeDraft(ctx context.Context, draft repositoryIssu
 // executeWrite 对单个目标执行草稿记录的写操作。
 func (t *dianaGitHubTool) executeWrite(ctx context.Context, repository, operation string, input map[string]any) repositoryIssueResult {
 	switch operation {
+	case "star":
+		return t.star(ctx, repository)
 	case "create":
 		return t.create(ctx, repository, input)
 	case "update":

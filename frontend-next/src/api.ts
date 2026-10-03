@@ -59,6 +59,8 @@ export interface LLMConfig {
   effective_max_output_tokens?: number;
   max_output_tokens_source?: "user" | "default" | "provider";
   timeout_ms?: number;
+  max_concurrency?: number;
+  max_rps?: number;
 }
 
 export interface GenerateResponse {
@@ -94,6 +96,8 @@ export interface LLMModelsResponse {
 }
 
 export interface LLMProviderDefinition {
+  maxConcurrency?: number;
+  maxRps?: number;
   id: string;
   name: string;
   protocol: "openai-completions" | "openai-responses" | "anthropic-messages" | "gemini" | string;
@@ -4222,4 +4226,31 @@ export function setGroupStyleEnabled(groupID: string, profileID: string, enabled
 /** 立刻重新学一次，手动写的也会被覆盖。要等后台模型读完群聊，可能要十几秒。 */
 export function relearnGroupStyle(groupID: string, profileID: string): Promise<GroupStyleResponse> {
   return requestJSON<GroupStyleResponse>(groupStylePath(groupID, profileID, "/relearn"), { method: "POST" });
+}
+
+export interface GroupUsageSummary {
+  since: string;
+  until: string;
+  recorded_calls: number;
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens: number;
+  cached_input_tokens: number;
+  usage_missing_calls?: number;
+}
+export interface GroupTokenUsage {
+  profile_id?: string;
+  platform?: string;
+  group_id: string;
+  usage: GroupUsageSummary;
+  purposes: Record<string, GroupUsageSummary>;
+}
+export interface GroupUsageReport {
+  usage: GroupUsageSummary;
+  groups: GroupTokenUsage[];
+}
+export function getGroupTokenUsage(profile: string, hours: number): Promise<GroupUsageReport> {
+  const params = new URLSearchParams({ hours: String(hours) });
+  if (profile) params.set("profile", profile);
+  return requestJSON(`/api/assistant/llm-usage?${params}`);
 }

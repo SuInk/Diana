@@ -220,7 +220,7 @@ var AgentSafeModeRules = []AgentSafeModeRule{
 	{Category: safeModeCategoryActAsOwner, Tool: "browser_ext_click", Reason: "操作主人自己的浏览器（浏览器控制扩展）"},
 	{Category: safeModeCategoryActAsOwner, Tool: "browser_ext_type", Reason: "操作主人自己的浏览器（浏览器控制扩展）"},
 	{Category: safeModeCategoryActAsOwner, Tool: dianaGitHubToolName, Field: "operation",
-		Operations: []string{"create", "update", "comment", "review", "close", "reopen", "approve"},
+		Operations: []string{"create", "update", "comment", "review", "close", "reopen", "star", "approve"},
 		Reason:     "以主人配置的 GitHub 身份写入仓库；读仓库、搜 Issue 照常"},
 	{Category: safeModeCategoryActAsOwner, Tool: dianaCrossSessionToolName, Reason: "往当前会话以外的私聊或群发消息"},
 	// 事件触发任务：盯别的群或任何地方的（where=group / anywhere）等于一条往别的会话

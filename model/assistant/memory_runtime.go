@@ -459,6 +459,7 @@ func (r *Runtime) processEventMemoryJobs(ctx context.Context, store StructuredMe
 	// 相关记忆按整批消息一起检索：分开领取时每条消息都要重查一遍，查出来的还
 	// 大量重合。
 	last := sources[len(sources)-1]
+	ctx = withLLMUsageContext(ctx, last.event)
 	searchText := last.text
 	for index := 0; index < len(sources)-1; index++ {
 		searchText = sources[index].text + "\n" + searchText
@@ -612,6 +613,7 @@ func (r *Runtime) processSummaryMemoryJob(ctx context.Context, store StructuredM
 	if r.profileDisabled(events[len(events)-1].ProfileID) {
 		return nil
 	}
+	ctx = withLLMUsageContext(ctx, events[len(events)-1])
 	summaryCfg := r.effectiveConfigForEvent(events[len(events)-1])
 	events = memorySummaryEventWindow(events, job.Attempts)
 	existing, err := store.ListStructuredMemories(ctx, StructuredMemoryQuery{

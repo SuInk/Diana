@@ -319,6 +319,12 @@
             :form="settingsForm"
           />
           <PluginSettingField
+            v-if="repositoryPublishStarSpec"
+            :spec="repositoryPublishStarSpec"
+            :form="repositoryPublishForm"
+            field-id="setting-publish-star"
+          />
+          <PluginSettingField
             v-if="repositoryPublishTimeoutSpec"
             :spec="repositoryPublishTimeoutSpec"
             :form="repositoryPublishForm"
@@ -1055,6 +1061,7 @@ async function testResolverSettings(): Promise<void> {
     testingResolver.value = false;
   }
 }
+const repositoryPublishStarSpec = computed(() => repositoryPublishSpecs.value.find((spec) => spec.key === "github_star_enabled"));
 const repositoryPublishTimeoutSpec = computed(() => repositoryPublishSpecs.value.find((spec) => spec.key === "timeout_seconds"));
 const issueEnabledRepositories = computed(() => String(repositoryPublishForm.value.allowed_repositories ?? "").split(/[,;；\n\r]/).map((item) => item.trim()).filter(Boolean));
 const visibleSettingsSpecs = computed<PluginSettingSpec[]>(() =>
@@ -1585,6 +1592,14 @@ async function persistSettings(closeAfterSave: boolean): Promise<void> {
   // 凭据表单还开着时先收进草稿（和点「完成」一样），名称没填就停下，弹窗保持打开。
   if (isGitHubSettings.value && credentialEditor.value && !credentialEditor.value.commitEditing()) {
     return;
+  }
+  if (isGitHubSettings.value && repositoryPublishForm.value.github_star_enabled === true && repositoryPublishTarget.value?.settings?.github_star_enabled !== true) {
+    const confirmed = await askConfirm({
+      title: "允许机器人为仓库点 Star？",
+      message: "Star 会写入目标仓库配置的 GitHub 账号。开启后仍仅限主人提出，并须在聊天中原样回复确认码；Fine-grained Token 需要 Starring: write 权限。",
+      confirmLabel: "允许 Star",
+    });
+    if (!confirmed) return;
   }
   savingSettings.value = true;
   const scope = botScope.value;

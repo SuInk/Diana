@@ -184,7 +184,7 @@ func (r *Runtime) learnGroupStyle(ctx context.Context, event MessageEvent) (Grou
 	if len(lines) < groupStyleMinMessages {
 		return GroupStyle{}, ErrGroupStyleNotEnoughMessages
 	}
-	ctx = withLLMUsagePurpose(ctx, PurposeGroupStyle)
+	ctx = withLLMUsagePurpose(withLLMUsageContext(ctx, event), PurposeGroupStyle)
 	system := cfg.prompt(promptGroupStyleLearnSpec)
 	if filter := styleFilterLearnPrompt(cfg); filter != "" {
 		system += "\n\n" + filter

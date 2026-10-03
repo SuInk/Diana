@@ -106,3 +106,53 @@ func TestGroupLLMUsageSplitsByGroupAndProfile(t *testing.T) {
 		t.Fatalf("多出了不该有的分组: %+v", bulk)
 	}
 }
+
+func TestLLMUsageReportSeparatesRobotsPlatformsPurposesAndUnknownHistory(t *testing.T) {
+	s, err := NewSQLiteStore(filepath.Join(t.TempDir(), "report.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	ctx := context.Background()
+	since := time.Date(2026, 10, 3, 0, 0, 0, 500000000, time.UTC)
+	until := since.Add(time.Hour)
+	entries := []struct {
+		at   time.Time
+		meta map[string]any
+	}{
+		{since.Add(-time.Nanosecond), map[string]any{"total_tokens": 99999}},
+		{since, map[string]any{"profile_id": "a", "platform": "onebot", "group_id": "g", "purpose": "reply", "input_tokens": 100, "output_tokens": 20, "cached_input_tokens": 60}},
+		{until.Add(-time.Nanosecond), map[string]any{"profile_id": "a", "platform": "onebot", "group_id": "g", "purpose": "memory", "usage_missing": true}},
+		{since.Add(time.Minute), map[string]any{"profile_id": "b", "platform": "onebot", "group_id": "g", "total_tokens": 500}},
+		{since.Add(time.Minute), map[string]any{"profile_id": "a", "platform": "telegram", "group_id": "g", "total_tokens": 300}},
+		{since.Add(time.Minute), map[string]any{"profile_id": "a", "total_tokens": 200}},
+		{since.Add(time.Minute), map[string]any{"total_tokens": 1000}},
+		{until, map[string]any{"total_tokens": 99999}},
+	}
+	for _, e := range entries {
+		if err := s.AppendLog(ctx, applog.Entry{Action: "llm_usage", CreatedAt: e.at, Metadata: e.meta}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	report, err := s.LLMUsageReport(ctx, applog.UsageFilter{}, since, until)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Usage.Calls != 6 || report.Usage.TotalTokens != 2120 || report.Usage.CachedInputTokens != 60 || report.Usage.MissingUsageCalls != 1 || len(report.Groups) != 3 {
+		t.Fatalf("report=%+v", report)
+	}
+	if report.Groups[0].ProfileID != "b" || report.Groups[1].Platform != "telegram" {
+		t.Fatalf("ranking=%+v", report.Groups)
+	}
+	filtered, err := s.LLMUsageReport(ctx, applog.UsageFilter{ProfileID: "a", Platform: "onebot", GroupID: "g"}, since, until)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if filtered.Usage.Calls != 2 || filtered.Usage.TotalTokens != 120 || len(filtered.Groups) != 1 || filtered.Groups[0].Purposes["memory"].MissingUsageCalls != 1 || filtered.Groups[0].Purposes["reply"].CachedInputTokens != 60 {
+		t.Fatalf("filtered=%+v", filtered)
+	}
+	robot, err := s.LLMUsageReport(ctx, applog.UsageFilter{ProfileID: "a"}, since, until)
+	if err != nil || robot.Usage.TotalTokens != 620 {
+		t.Fatalf("robot=%+v err=%v", robot, err)
+	}
+}

@@ -28,6 +28,7 @@ const (
 
 	repositoryPublishSettingToken          = "github_token"
 	repositoryPublishSettingAuthMode       = "github_auth_mode"
+	repositoryPublishSettingStarEnabled    = "github_star_enabled"
 	repositoryPublishSettingAllowlist      = "allowed_repositories"
 	repositoryPublishSettingUserAccess     = "user_repository_access"
 	repositoryPublishSettingGroupAccess    = "group_repository_access"
@@ -426,12 +427,17 @@ func (p *RepositoryPublishPlugin) Manifest() PluginManifest {
 	return PluginManifest{
 		ID:          repositoryPublishPluginID,
 		Name:        "GitHub Issue 与 PR",
-		Version:     "0.7.0",
+		Version:     "0.7.1",
 		Description: "搜索和管理 GitHub Issue；读取 Pull Request 的描述、改动文件和 patch，并在 PR 上发表评论或提交 review（只评论，不批准、不合并）。read_file 读取仓库文件：公开仓库全员可查，私有仓库仅主人与授权用户可读。群成员可生成草稿，由具备仓库权限的授权用户用确认码确认后写入。",
 		Official:    true,
 		BuiltIn:     true,
-		Permissions: []string{"network:https", "github:issues:read", "github:issues:write", "github:pull_requests:read", "github:pull_requests:write", "github:contents:read", "audit:write", "llm:tool"},
+		Permissions: []string{"network:https", "github:issues:read", "github:issues:write", "github:pull_requests:read", "github:pull_requests:write", "github:contents:read", "github:starring:write", "audit:write", "llm:tool"},
 		Settings: []PluginSettingSpec{
+			{
+				Key: repositoryPublishSettingStarEnabled, Label: "允许 GitHub Star",
+				Description: "默认关闭。启用后仅主人能生成 Star 草稿，原样回复确认码后为目标仓库点 Star。使用目标仓库绑定的凭据，否则使用公共 Token 或 gh 登录账号；Fine-grained Token 需要账号级 Starring: write 权限。",
+				Type:        PluginSettingTypeBool, Default: false,
+			},
 			{
 				Key:         repositoryPublishSettingAuthMode,
 				Label:       "GitHub 认证方式",

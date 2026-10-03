@@ -75,8 +75,9 @@ func (p *RepositoryPublishPlugin) PublishDraftFromWeb(ctx context.Context, setti
 		return RepositoryIssueCreateResult{}, fmt.Errorf("这份草稿已经处理过了")
 	}
 	tool := &dianaGitHubTool{
-		plugin:   p,
-		settings: settings,
+		plugin:          p,
+		trustedWebOwner: true,
+		settings:        settings,
 		event: MessageEvent{
 			Platform:  "webui",
 			Kind:      EventKindPrivate,

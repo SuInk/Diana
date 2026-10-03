@@ -253,3 +253,23 @@ func TestImageUsageIsRecordedUnderTheMessage(t *testing.T) {
 		t.Fatalf("edit entry = %#v", entries[1])
 	}
 }
+
+func TestLLMUsageAccountingRetainsGroupWithoutMessageID(t *testing.T) {
+	logs := &captureAppLogs{}
+	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	runtime.SetAppLogWriter(logs)
+	event := MessageEvent{Kind: EventKindGroup, ProfileID: "bot-a", Platform: "telegram", GroupID: "g", UserID: "owner"}
+	ctx := withLLMUsagePurpose(withLLMUsageContext(context.Background(), event), PurposeScheduledQuery)
+	provider := &usageCountingProvider{}
+	run := runtime.withLLMUsageAccountingRun(ctx, func(client LLMProvider) (string, error) {
+		_, err := client.Generate(ctx, llm.GenerateRequest{})
+		return "", err
+	})
+	if _, err := run(provider); err != nil {
+		t.Fatal(err)
+	}
+	entries := usageEntriesFor(logs, "")
+	if len(entries) != 1 || entries[0]["profile_id"] != "bot-a" || entries[0]["group_id"] != "g" || entries[0]["platform"] != "telegram" || entries[0]["purpose"] != PurposeScheduledQuery {
+		t.Fatalf("unattributed schedule: %+v", entries)
+	}
+}

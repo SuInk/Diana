@@ -210,3 +210,100 @@ func TestQueryReminderExecutionFailureRetries(t *testing.T) {
 		t.Fatalf("sent = %#v", channel.sent)
 	}
 }
+
+// Both recurring and one-time queries must execute the same history tool as chat,
+// rather than receiving only a generic filesystem/search registry.
+func TestTaskQueriesExecuteChatHistory(t *testing.T) {
+	for _, kind := range []ReminderKind{ReminderKindQuery, ReminderKindMessage} {
+		t.Run(string(kind), func(t *testing.T) {
+			item := Reminder{ID: "history-task", Kind: kind, GroupID: "group-1", UserID: "owner", OwnerID: "owner", Message: "查询群聊历史", RunQuery: true}
+			store := &stubReminderStore{items: []Reminder{item}}
+			provider := &sequenceLLMProvider{replies: []string{
+				`{"action":"tool","tool":"chat_history","input":{"operation":"recent","limit":5}}`,
+				`{"action":"final","content":"已查到群聊记录。"}`,
+			}}
+			runtime := NewRuntime(BotConfig{OwnerID: "owner", AgentEnabled: true, AgentMode: AgentModeSafe, AgentMaxSteps: 5, RequestTimeout: 5 * time.Second}, nilChannel{}, NewPluginManager(), nil, store, nil, func() (LLMProvider, error) { return provider, nil })
+			runtime.remember(chatHistoryTextEvent(time.Now().Unix(), "member", "成员", "history-fixture", "早报测试：今天讨论了限流"))
+			var err error
+			if kind == ReminderKindQuery {
+				_, err = runtime.generateScheduledQueryMessage(context.Background(), item)
+			} else {
+				_, err = runtime.runOneTimeReminderQuery(context.Background(), item)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			requests := provider.requestsSnapshot()
+			if len(requests) != 2 || !requestMessagesContain(requests[1].Messages, "今天讨论了限流") {
+				t.Fatalf("task did not actually read history: %#v", requests)
+			}
+		})
+	}
+}
+
+func TestTaskQueryExecutesPluginToolAndRespectsGroupSwitch(t *testing.T) {
+	tool := &echoAgentTool{}
+	plugins := NewPluginManager(&echoAgentToolPlugin{tool: tool})
+	provider := &sequenceLLMProvider{replies: []string{
+		`{"action":"tool","tool":"tools_load","input":{"names":["plugin.echo"]}}`,
+		`{"action":"tool","tool":"tools_execute","input":{"name":"plugin.echo","input":{"text":"定时插件查询"}}}`,
+		`{"action":"final","content":"查询完成"}`,
+	}}
+	runtime := NewRuntime(BotConfig{OwnerID: "owner", AgentEnabled: true, AgentMaxSteps: 5, RequestTimeout: 5 * time.Second}, nilChannel{}, plugins, nil, nil, nil, func() (LLMProvider, error) { return provider, nil })
+	item := Reminder{GroupID: "group-1", UserID: "owner", Message: "调用插件查询"}
+	if _, err := runtime.generateScheduledQueryMessage(context.Background(), item); err != nil {
+		t.Fatal(err)
+	}
+	requests := provider.requestsSnapshot()
+	if tool.calls != 1 || len(requests) != 3 || !requestMessagesContain(requests[2].Messages, "echo: 定时插件查询") {
+		t.Fatalf("plugin was not executed: calls=%d requests=%#v", tool.calls, requests)
+	}
+	runtime.SetGroupConfigStore(&stubGroupConfigStore{configs: map[string]GroupConfig{"group-1": {GroupID: "group-1", PluginOverrides: map[string]bool{"test.echo-tool": false}}}})
+	source := reminderSourceEvent(item)
+	cfg := runtime.effectiveConfigForEvent(source)
+	registry, err := runtime.newReplyAgentRegistry(context.Background(), cfg, source, runtime.relationshipPolicy(context.Background(), source), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer registry.Close()
+	if _, ok := registry.Get("plugin.echo"); ok {
+		t.Fatal("disabled group plugin leaked into task registry")
+	}
+}
+
+// Real-model regression for the two tool paths that previously disappeared from
+// scheduled execution. Only fixture history and a local echo plugin are exposed.
+func TestLiveScheduledQueriesUseHistoryAndPluginTools(t *testing.T) {
+	client := liveLLMClient(t)
+	for _, once := range []bool{false, true} {
+		name := "recurring"
+		if once {
+			name = "once"
+		}
+		t.Run(name, func(t *testing.T) {
+			store := &stubReminderStore{}
+			tool := &echoAgentTool{}
+			probe := &liveGitHubShapeProbe{LLMClient: client}
+			runtime := NewRuntime(BotConfig{OwnerID: "owner", AgentEnabled: true, AgentMode: AgentModeSafe, AgentMaxSteps: 10, RequestTimeout: 120 * time.Second}, nilChannel{}, NewPluginManager(&echoAgentToolPlugin{tool: tool}), nil, store, nil, func() (LLMProvider, error) { return probe, nil })
+			runtime.remember(chatHistoryTextEvent(time.Now().Unix(), "member", "成员", "scheduled-replay-fixture", "回放记录：部署暗号是青柠四十二。"))
+			item := Reminder{ID: "live-scheduled-fixture", GroupID: "group-1", UserID: "owner", OwnerID: "owner", RunQuery: true, Message: "先用 chat_history 查询当前群最近消息，找出部署暗号，再调用 plugin.echo，把查到的暗号作为 text 参数。最后把插件返回的内容告诉我。必须实际调用这两个工具。"}
+			store.items = []Reminder{item}
+			ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
+			defer cancel()
+			var reply string
+			var err error
+			if once {
+				reply, err = runtime.runOneTimeReminderQuery(ctx, item)
+			} else {
+				reply, err = runtime.generateScheduledQueryMessage(ctx, item)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tool.calls != 1 || !strings.Contains(reply, "青柠四十二") {
+				t.Fatalf("tools=%v echo_calls=%d reply=%q", probe.snapshot(), tool.calls, reply)
+			}
+			t.Logf("tools=%v echo_calls=%d reply=%q", probe.snapshot(), tool.calls, reply)
+		})
+	}
+}

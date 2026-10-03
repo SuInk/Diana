@@ -10,6 +10,7 @@ import (
 type UsageSummary struct {
 	Since             time.Time `json:"since"`
 	Until             time.Time `json:"until"`
+	MissingUsageCalls int64     `json:"usage_missing_calls,omitempty"`
 	Calls             int64     `json:"recorded_calls"`
 	InputTokens       int64     `json:"input_tokens"`
 	OutputTokens      int64     `json:"output_tokens"`
@@ -36,4 +37,26 @@ type GroupUsageReader interface {
 // 里画进度条，逐群查会变成 N 次全表扫描；额度判断只关心一个群，两条路径各用各的。
 type GroupUsageBulkReader interface {
 	GroupLLMUsageSinceByProfile(ctx context.Context, profileID string, since, until time.Time) (map[string]GroupUsage, error)
+}
+
+// UsageFilter uses strict attribution: unlabelled historical calls are never
+// silently assigned to a robot, platform or group.
+type UsageFilter struct {
+	ProfileID string
+	Platform  string
+	GroupID   string
+}
+type GroupTokenUsage struct {
+	ProfileID string                  `json:"profile_id,omitempty"`
+	Platform  string                  `json:"platform,omitempty"`
+	GroupID   string                  `json:"group_id"`
+	Usage     UsageSummary            `json:"usage"`
+	Purposes  map[string]UsageSummary `json:"purposes"`
+}
+type UsageReport struct {
+	Usage  UsageSummary      `json:"usage"`
+	Groups []GroupTokenUsage `json:"groups"`
+}
+type UsageReportReader interface {
+	LLMUsageReport(context.Context, UsageFilter, time.Time, time.Time) (UsageReport, error)
 }

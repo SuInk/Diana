@@ -70,6 +70,7 @@ func TestRepositoryFromGitHubAPIPath(t *testing.T) {
 		"/repos/acme/demo":                      "acme/demo",
 		"/repos/acme/demo/issues/12/comments":   "acme/demo",
 		"/repos/acme/demo/compare/aaa...bbb":    "acme/demo",
+		"/user/starred/acme/demo":               "acme/demo",
 		"/user/repos":                           "",
 		"/repos/acme":                           "",
 		"/repos//demo":                          "",

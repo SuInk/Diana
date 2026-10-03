@@ -266,6 +266,7 @@ func oauthOnlyTransport(client *http.Client) bool {
 // httpClientWithConfigCredentials 和 httpClientWithCredentials 一样，另外按配置档
 // 决定 OAuth 失败时还能不能回退到 API Key：配置档没填 API Key 时不能，直接报清楚。
 func httpClientWithConfigCredentials(client *http.Client, source CredentialSource, cfg ProviderConfig) *http.Client {
+	client = httpClientWithRequestLimits(client, cfg)
 	wrapped := httpClientWithCredentials(client, source)
 	if wrapped == nil || wrapped == client {
 		return wrapped

@@ -47,6 +47,8 @@ type LLMClientFactory func(llm.ProviderConfig) (llm.LLMClient, error)
 type LLMModelListFactory func(context.Context, llm.ProviderConfig) ([]llm.ModelInfo, error)
 
 type llmConfigPayload struct {
+	MaxConcurrency   *int               `json:"max_concurrency"`
+	MaxRPS           *float64           `json:"max_rps"`
 	ID               string             `json:"id,omitempty"`
 	Name             string             `json:"name,omitempty"`
 	Group            string             `json:"group,omitempty"`
@@ -646,6 +648,8 @@ func payloadFromConfig(cfg llm.ProviderConfig) llmConfigPayload {
 	cfg = cfg.WithDefaults()
 	// API Key 只暴露“是否已配置”，实际值由 WithSecrets 版本在可信场景下返回。
 	payload := llmConfigPayload{
+		MaxConcurrency:   &cfg.MaxConcurrency,
+		MaxRPS:           &cfg.MaxRPS,
 		Provider:         cfg.Provider,
 		APIStyle:         cfg.APIStyle,
 		APIFormat:        cfg.APIFormatWithDefault(),
@@ -909,6 +913,12 @@ func configFromPayload(payload llmConfigPayload) llm.ProviderConfig {
 		MaxOutputTokens:     tokenLimitValue(payload.MaxOutputTokens),
 		Timeout:             time.Duration(payload.TimeoutMS) * time.Millisecond,
 	}.WithDefaults()
+	if payload.MaxConcurrency != nil {
+		cfg.MaxConcurrency = *payload.MaxConcurrency
+	}
+	if payload.MaxRPS != nil {
+		cfg.MaxRPS = *payload.MaxRPS
+	}
 	// 空串已经表示「没提交、沿用旧值」，想改回跟随模型只能靠显式的 default。
 	if strings.EqualFold(strings.TrimSpace(payload.ReasoningEffort), "default") {
 		cfg.ReasoningEffort = ""
@@ -924,6 +934,13 @@ func configFromPayload(payload llmConfigPayload) llm.ProviderConfig {
 // mergeUnsubmittedLLMConfig protects advanced settings that the compact current
 // editor does not expose. Legacy API clients can still submit those fields.
 func mergeUnsubmittedLLMConfig(payload llmConfigPayload, cfg, existing llm.ProviderConfig) llm.ProviderConfig {
+	cfg.RequestLimitID = existing.RequestLimitID
+	if payload.MaxConcurrency == nil {
+		cfg.MaxConcurrency = existing.MaxConcurrency
+	}
+	if payload.MaxRPS == nil {
+		cfg.MaxRPS = existing.MaxRPS
+	}
 	if existing.Provider == "" || existing.Provider != cfg.Provider {
 		return cfg
 	}

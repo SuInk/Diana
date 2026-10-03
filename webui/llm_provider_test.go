@@ -39,3 +39,27 @@ func containsAll(value string, needles ...string) bool {
 	}
 	return true
 }
+
+func TestProviderRequestLimitsPayloadRoundTripAndLegacyPreservation(t *testing.T) {
+	existing := llm.ProviderConfig{Provider: llm.ProviderOpenAICompatible, MaxConcurrency: 2, MaxRPS: 0.5}
+	payload := payloadFromConfig(existing)
+	if payload.MaxConcurrency == nil || *payload.MaxConcurrency != 2 || payload.MaxRPS == nil || *payload.MaxRPS != 0.5 {
+		t.Fatalf("payload=%+v", payload)
+	}
+	cfg := configFromPayload(payload)
+	if cfg.MaxConcurrency != 2 || cfg.MaxRPS != 0.5 {
+		t.Fatalf("round trip=%+v", cfg)
+	}
+	legacy := llmConfigPayload{Provider: llm.ProviderOpenAICompatible}
+	cfg = mergeUnsubmittedLLMConfig(legacy, configFromPayload(legacy), existing)
+	if cfg.MaxConcurrency != 2 || cfg.MaxRPS != 0.5 {
+		t.Fatalf("legacy client erased limits: %+v", cfg)
+	}
+	zeroInt, zeroFloat := 0, 0.0
+	legacy.MaxConcurrency = &zeroInt
+	legacy.MaxRPS = &zeroFloat
+	cfg = mergeUnsubmittedLLMConfig(legacy, configFromPayload(legacy), existing)
+	if cfg.MaxConcurrency != 0 || cfg.MaxRPS != 0 {
+		t.Fatalf("explicit unlimited was ignored: %+v", cfg)
+	}
+}

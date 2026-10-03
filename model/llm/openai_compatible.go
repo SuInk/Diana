@@ -1178,6 +1178,10 @@ func newImageHTTPClient(base *http.Client, cfg ProviderConfig) *http.Client {
 	if credentials != nil {
 		inner = credentials.base
 	}
+	limits, _ := inner.(*requestLimitTransport)
+	if limits != nil {
+		inner = limits.base
+	}
 	transport := cloneHTTPTransport(inner)
 	transport.Proxy = nil
 	dialer := &net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}
@@ -1185,9 +1189,14 @@ func newImageHTTPClient(base *http.Client, cfg ProviderConfig) *http.Client {
 		return dialer.DialContext(ctx, network, origin)
 	}
 	client.Transport = transport
+	if limits != nil {
+		rewrapped := *limits
+		rewrapped.base = transport
+		client.Transport = &rewrapped
+	}
 	if credentials != nil {
 		rewrapped := *credentials
-		rewrapped.base = transport
+		rewrapped.base = client.Transport
 		client.Transport = &rewrapped
 	}
 	return &client

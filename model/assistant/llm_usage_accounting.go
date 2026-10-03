@@ -31,10 +31,10 @@ type llmUsageState struct {
 // withLLMUsageContext 记下这一轮的消息事件，供装饰器把用量归到这条消息名下。
 // 和 debug trace 不同，它不受调试开关影响：用量统计任何时候都要准。
 func withLLMUsageContext(ctx context.Context, event MessageEvent) context.Context {
-	ctx = withModelConfigEvent(ctx, event)
-	if ctx == nil || strings.TrimSpace(event.MessageID) == "" {
+	if ctx == nil {
 		return ctx
 	}
+	ctx = withModelConfigEvent(ctx, event)
 	return context.WithValue(ctx, llmUsageContextKey{}, &llmUsageState{event: event})
 }
 
