@@ -16,12 +16,15 @@ import (
 // 一模一样，于是把同一件事完整答了两遍。
 //
 // 修法不是把第二轮掐掉——第二条有时确实带了新信息，掐掉就成了「问了不理」。这里
-// 只告诉模型「同一个人刚问过、你已经在答」，让它把第二条当追问接住：已经说过的
-// 不重说，没有新内容就一句话确认。
+// 尚未答完时，重复请求并入正在生成的答案；已经答完后再次提问，则重新理解诉求。
+// 不能把「这件事答过」一律当成「当前用户已经满意」，否则不满意后再问会被压成确认。
 //
 // 只按「会话 + 发言人」计，不按会话：群里两个人先后问不同的问题，本来就该各答各的。
 
 const (
+	// 各阶段共用回答前后这条边界，避免生成器愿意重答、路由或审核却当复读丢掉。
+	replyAfterAnswerRule = "区分尚未发送答案时的重复请求和答案发出后的再次提问：尚未答完的同一请求可以合并成一份回复；答案已经发出后，同一发言者又针对同一问题提问、反驳、质疑或换个说法问，通常表示上一条答案没有解决问题或对答案不满意，应重新审视并作答，不要求用户明说‘重新回答’。依据当前追问检查上一条是否答错、答偏或只在玩梗，给出修正、解释或更合适的完整回答；不要只确认收到、说已经答过，或复用上一条的包袱。重答所必需的内容允许重复，重复的铺垫和无关调侃可以合并删减。同一消息的重复投递、答案发出前的重复催促、纯确认收尾和机械循环不能冒充新的重答要求。"
+
 	// consecutiveReplyWindow 是「算作连着说」的时间窗。
 	//
 	// 取 45 秒：补一个 @、把话说完整、贴个链接补充，都发生在这个尺度上；再长就会
@@ -114,6 +117,8 @@ func consecutiveReplyContext(previous replyTurnRecord) string {
 	if previous.inFlight() {
 		// 并发的那一路：答案还没生成完，只能告诉它「正在答」。
 		builder.WriteString("这个人上一条消息你正在回答，那条回复马上就会发出去。")
+		builder.WriteString("\n这条多半是同一件事的补充，或者只是补一个 @、把话说完整。")
+		builder.WriteString("正在生成的答案与这条消息合并回复，已经纳入的内容不要再说一遍；新增条件和纠正则更新同一份答案。")
 	} else {
 		builder.WriteString("你刚刚已经回答过这个人的上一条消息")
 		if excerpt := truncateReplyExcerpt(previous.reply, consecutiveReplyExcerptRunes); excerpt != "" {
@@ -121,10 +126,8 @@ func consecutiveReplyContext(previous replyTurnRecord) string {
 			builder.WriteString(excerpt)
 		}
 		builder.WriteString("。")
+		builder.WriteString("\n上一条答案已发出。这条如果仍在提问、反驳或质疑，应按未解决的问题重新审视并作答；重答需要的内容可以重复，不要压成一句确认或沿用上一条的玩笑。")
 	}
-	builder.WriteString("\n这条多半是同一件事的追问，或者只是补一个 @、把话说完整。")
-	builder.WriteString("已经答过的内容不要再说一遍——哪怕换个说法也不行；只回应这条新增的部分。")
-	builder.WriteString("如果它没带来新问题，就用一句话接住（例如确认一声），不要重新组织一遍完整答案。")
 	builder.WriteString("确实是另一件事时照常正常回答。")
 	return builder.String()
 }
