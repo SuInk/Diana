@@ -140,7 +140,7 @@
       </header>
 
       <main class="app-content">
-        <section class="scope-context" aria-label="当前平台与机器人">
+        <section v-if="currentView !== 'admin-chat'" class="scope-context" aria-label="当前平台与机器人">
           <div class="scope-identity">
             <span class="badge">{{ scopePlatform }}</span>
             <strong>{{ scopeProfile?.name || (botScope ? "未命名机器人" : "全部机器人") }}</strong>
@@ -218,6 +218,7 @@ import BrandLogo from "./components/BrandLogo.vue";
 // 总览是默认首屏，保持同步加载；其它页面首次打开时才下载代码。异步组件引用
 // 保持稳定，配合 KeepAlive 后只挂载一次，切页回来直接复用已有 DOM 和数据。
 const RecordsView = defineAsyncComponent(() => import("./views/RecordsView.vue"));
+const AdminChatView = defineAsyncComponent(() => import("./views/AdminChatView.vue"));
 const TasksView = defineAsyncComponent(() => import("./views/TasksView.vue"));
 const SetupWizard = defineAsyncComponent(() => import("./views/SetupWizard.vue"));
 const LLMView = defineAsyncComponent(() => import("./views/LLMView.vue"));
@@ -234,6 +235,7 @@ const VIEW_CACHE_LIMIT = 16;
 
 const viewComponents: Record<ViewID, Component> = {
   dashboard: DashboardView,
+  "admin-chat": AdminChatView,
   events: RecordsView,
   tasks: TasksView,
   setup: SetupWizard,
@@ -328,6 +330,7 @@ const SETUP_DISMISS_KEY = "dqb-next:setup-seen";
 
 const viewTitles: Record<ViewID, string> = {
   dashboard: "总览",
+  "admin-chat": "管理对话",
   browser: "浏览器",
   workspace: "文件",
   events: "运行记录",
@@ -442,6 +445,7 @@ const themeIcon = computed<Component>(() => (theme.mode === "light" ? Sun : them
 function navIcon(id: ViewID): Component {
   const icons: Partial<Record<ViewID, Component>> = {
     dashboard: LayoutGrid,
+    "admin-chat": MessageCircle,
     events: Activity,
     tasks: CalendarClock,
     provider: BrainCircuit,

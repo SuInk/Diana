@@ -117,6 +117,9 @@ func (r *Runtime) newAgentRegistry(ctx context.Context, cfg BotConfig, event Mes
 		// 群成员的 skill 面固定成「内置协议 + 放行的那几份」：视图挂在共享底座下
 		// 之后，不显式设置就会把底座上的自定义 Skill 全部继承过来。
 		registry.RegisterScopedSkills(agentCfg.BuiltinSkills, memberSkills(skillSource, memberExtensions), agentCfg.ReservedSkillNames)
+	} else if err := r.registerRepoPluginBundles(ctx, registry, agentCfg, event); err != nil {
+		_ = registry.Close()
+		return nil, err
 	}
 	registry.Retain(allowed)
 	// 一次性交给注册表：ApplyExtensionOverrides 是整份替换，分两次调用后一次会
@@ -544,6 +547,7 @@ func (r *Runtime) prewarmAgentRegistries(ctx context.Context, configs []BotConfi
 }
 
 func (r *Runtime) closeAgentRegistryCache() {
+	r.plugins.CloseRepoPluginRuntimes()
 	r.agentRegistryMu.Lock()
 	registries := make([]*agent.ToolRegistry, 0, len(r.agentRegistryCache))
 	for _, registry := range r.agentRegistryCache {

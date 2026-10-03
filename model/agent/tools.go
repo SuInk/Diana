@@ -1047,6 +1047,9 @@ type RunCommandTool struct {
 	sandboxMode    string
 	sandbox        commandSandbox
 	sandboxNetwork bool
+	// env is set only by fixed plugin entry points, never by model input.
+	env     []string
+	secrets []string
 }
 
 // Name 返回命令执行工具名称。
@@ -1084,6 +1087,10 @@ func (t *RunCommandTool) Run(ctx context.Context, input map[string]any) (string,
 	if err != nil {
 		return "", err
 	}
+	return t.run(ctx, input, command, stringSliceFromInput(input, "args"), cwd)
+}
+
+func (t *RunCommandTool) run(ctx context.Context, input map[string]any, command string, args []string, cwd string) (string, error) {
 	timeout := time.Duration(intFromInput(input, "timeout_ms", int(t.timeout.Milliseconds()))) * time.Millisecond
 	if timeout <= 0 || timeout > t.timeout {
 		timeout = t.timeout
@@ -1091,13 +1098,16 @@ func (t *RunCommandTool) Run(ctx context.Context, input map[string]any) (string,
 	runCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	args := stringSliceFromInput(input, "args")
 	cmd, sandboxKind, err := t.commandFor(runCtx, command, args)
 	if err != nil {
 		return "", err
 	}
 	cmd.Dir = cwd
-	cmd.Env = environmentWithCaller(ctx, t.commandEnvironment())
+	environment := t.commandEnvironment()
+	if t.env != nil {
+		environment = t.env
+	}
+	cmd.Env = environmentWithCaller(ctx, environment)
 	commandOutput, err := os.CreateTemp("", "diana-agent-command-*")
 	if err != nil {
 		return "", err
@@ -1121,7 +1131,14 @@ func (t *RunCommandTool) Run(ctx context.Context, input map[string]any) (string,
 			return "", err
 		}
 	}
-	output, truncated, readErr := readCommandOutput(commandOutput, t.maxBytes, exitCode != 0)
+	var output string
+	var truncated bool
+	var readErr error
+	if len(t.secrets) > 0 {
+		output, truncated, readErr = readPluginCommandOutput(commandOutput, t.maxBytes, t.secrets)
+	} else {
+		output, truncated, readErr = readCommandOutput(commandOutput, t.maxBytes, exitCode != 0)
+	}
 	if readErr != nil {
 		return "", readErr
 	}

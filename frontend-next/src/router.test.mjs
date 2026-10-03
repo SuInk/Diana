@@ -28,7 +28,7 @@ async function load(href) {
 }
 
 test("clean paths map to views and keep their query", async () => {
-  for (const [href, view] of [["/", "dashboard"], ["/bot", "bot"], ["/groups?group=123", "groups"], ["/plugins?settings=rss", "plugins"]]) {
+  for (const [href, view] of [["/", "dashboard"], ["/admin-chat", "admin-chat"], ["/bot", "bot"], ["/groups?group=123", "groups"], ["/plugins?settings=rss", "plugins"]]) {
     const { router, here } = await load(href);
     router.setupRouter();
     assert.equal(router.currentView.value, view);

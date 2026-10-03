@@ -5,6 +5,7 @@ import { ref } from "vue";
 
 export type ViewID =
   | "dashboard"
+  | "admin-chat"
   | "events"
   | "tasks"
   | "setup"
@@ -55,6 +56,7 @@ export const navItems: NavItem[] = [
   { id: "bot", label: "机器人", hint: "OneBot v11 接入与行为", group: "setup" },
   { id: "plugins", label: "扩展", hint: "插件、Skills 与 MCP", group: "setup" },
   { id: "groups", label: "群管理", hint: "群管理员自助配置", group: "setup" },
+  { id: "admin-chat", label: "管理对话", hint: "安装扩展与排查问题", group: "operate" },
   { id: "users", label: "记忆", hint: "机器人记住的人和事", group: "operate", covers: ["notebook"] },
   { id: "feed", label: "动态", hint: "机器人自己发的动态和日记，可以配图", group: "operate" },
   { id: "tasks", label: "任务", hint: "提醒、周期查询与仓库订阅", group: "operate" },
@@ -89,7 +91,7 @@ export function navSections(): { group?: NavGroup; items: NavItem[] }[] {
   return sections;
 }
 
-const validViews = new Set<ViewID>(["dashboard", "events", "tasks", "setup", "provider", "bot", "groups", "users", "notebook", "feed", "plugins", "browser", "workspace", "logs", "favorability", "settings"]);
+const validViews = new Set<ViewID>(["dashboard", "admin-chat", "events", "tasks", "setup", "provider", "bot", "groups", "users", "notebook", "feed", "plugins", "browser", "workspace", "logs", "favorability", "settings"]);
 
 // 首页：地址栏里是根路径，也是所有认不出来的地址的落点。
 const homeView: ViewID = "dashboard";

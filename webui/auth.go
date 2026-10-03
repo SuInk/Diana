@@ -601,6 +601,7 @@ func (m *AuthManager) Middleware() gin.HandlerFunc {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "需要登录", "auth_required": true})
 			return
 		}
+		c.Set("webui_admin", true)
 		c.Next()
 	}
 }

@@ -762,6 +762,9 @@ func (m *PluginManager) RegisterPlugin(p Plugin) error {
 	defer m.notifyStateObserver(manifest.ID)
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if previous := m.catalog[manifest.ID]; previous != nil {
+		closeRepoPluginRuntime(previous, "")
+	}
 	if state, ok := m.states[manifest.ID]; ok {
 		// 已登记的内置插件不能被外来插件顶替。判据是「登记表里这个 ID 已经是
 		// 内置的」，不是 ID 前缀——前缀只是命名约定，group_relations 就是个
@@ -796,6 +799,7 @@ func (m *PluginManager) UnregisterPlugin(id string) error {
 		return ErrBuiltInPluginAction
 	}
 	plugin := m.catalog[id]
+	closeRepoPluginRuntime(m.catalog[id], "")
 	delete(m.catalog, id)
 	delete(m.states, id)
 	m.mu.Unlock()
@@ -842,6 +846,7 @@ func (m *PluginManager) Uninstall(id string) (PluginState, error) {
 	}
 	state.Installed = false
 	state.Enabled = false
+	closeRepoPluginRuntime(plugin, "")
 	m.states[id] = state
 	return state, nil
 }
@@ -912,6 +917,7 @@ func (m *PluginManager) UpdateSettingsForProfile(id, profileID string, values ma
 		}
 	}
 	state.Settings = normalized
+	closeRepoPluginRuntime(plugin, "")
 	m.states[id] = state
 	registerPluginSecrets(state)
 	return state.ForProfile(profileID), nil
@@ -943,6 +949,9 @@ func (m *PluginManager) SetEnabledForProfile(id, profileID string, enabled bool)
 		state.ProfileEnabled = map[string]bool{}
 	}
 	state.ProfileEnabled[profileID] = enabled
+	if !enabled {
+		closeRepoPluginRuntime(plugin, profileID)
+	}
 	m.states[id] = state
 	return state.ForProfile(profileID), nil
 }

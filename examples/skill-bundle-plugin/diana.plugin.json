@@ -1,0 +1,20 @@
+{
+  "id": "yourname.skill-bundle",
+  "name": "Skill 脚本插件示例",
+  "version": "1.0.0",
+  "description": "演示原样打包 Skills、读取参考资源和执行固定 Node.js 脚本",
+  "permissions": ["process:execute"],
+  "entry": "SKILL.md",
+  "skills": ["skills"],
+  "scripts": {
+    "hello": {
+      "command": "node",
+      "entry": "scripts/hello.js",
+      "env": {"GREETING_PREFIX": "${settings.greeting_prefix}"}
+    }
+  },
+  "files": ["README.md"],
+  "settings": [
+    {"key": "greeting_prefix", "label": "问候前缀", "type": "string", "default": "你好"}
+  ]
+}

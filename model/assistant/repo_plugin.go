@@ -23,6 +23,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/SuInk/diana/model/agent"
 	"github.com/SuInk/diana/model/ghmirror"
 	"github.com/SuInk/diana/model/netguard"
 )
@@ -122,20 +123,23 @@ func ParseGitHubRepoURL(raw string) (RepoPluginRef, error) {
 // DisallowUnknownFields 让 official/built_in 这类内置字段直接判为格式错误，
 // 第三方清单永远拿不到内置语义。
 type repoPluginManifestFile struct {
-	ID            string              `json:"id"`
-	Name          string              `json:"name"`
-	Version       string              `json:"version"`
-	Description   string              `json:"description"`
-	Permissions   []string            `json:"permissions"`
-	Platforms     []string            `json:"platforms,omitempty"`
-	PlatformNotes map[string]string   `json:"platform_notes,omitempty"`
-	Settings      []PluginSettingSpec `json:"settings,omitempty"`
-	ReportsErrors bool                `json:"reports_errors,omitempty"`
-	Entry         string              `json:"entry"`
-	Files         []string            `json:"files,omitempty"`
-	MinDiana      string              `json:"min_diana,omitempty"`
-	Homepage      string              `json:"homepage,omitempty"`
-	Source        string              `json:"source,omitempty"`
+	ID            string                           `json:"id"`
+	Name          string                           `json:"name"`
+	Version       string                           `json:"version"`
+	Description   string                           `json:"description"`
+	Permissions   []string                         `json:"permissions"`
+	Platforms     []string                         `json:"platforms,omitempty"`
+	PlatformNotes map[string]string                `json:"platform_notes,omitempty"`
+	Settings      []PluginSettingSpec              `json:"settings,omitempty"`
+	ReportsErrors bool                             `json:"reports_errors,omitempty"`
+	Entry         string                           `json:"entry"`
+	Files         []string                         `json:"files,omitempty"`
+	MinDiana      string                           `json:"min_diana,omitempty"`
+	Homepage      string                           `json:"homepage,omitempty"`
+	Source        string                           `json:"source,omitempty"`
+	Skills        []string                         `json:"skills,omitempty"`
+	Scripts       map[string]agent.PluginScript    `json:"scripts,omitempty"`
+	MCPServers    map[string]agent.PluginMCPServer `json:"mcp_servers,omitempty"`
 }
 
 // decodeRepoPluginManifest 严格解码清单：未知字段、多份 JSON 都拒绝。
@@ -227,7 +231,10 @@ func (m repoPluginManifestFile) validate() error {
 			}
 		}
 	}
-	return m.validateSettings(wrap)
+	if err := m.validateSettings(wrap); err != nil {
+		return err
+	}
+	return m.validateBundle(wrap)
 }
 
 func (m repoPluginManifestFile) validateSettings(wrap func(string, ...any) error) error {
@@ -282,7 +289,16 @@ func (m repoPluginManifestFile) validateSettings(wrap func(string, ...any) error
 func (m repoPluginManifestFile) normalizedFiles() []string {
 	files := []string{RepoPluginEntryFile}
 	seen := map[string]bool{RepoPluginEntryFile: true}
-	for _, entry := range m.Files {
+	entries := append([]string(nil), m.Files...)
+	for _, root := range m.Skills {
+		if strings.TrimSpace(root) != "." {
+			entries = append(entries, strings.TrimSuffix(root, "/")+"/")
+		}
+	}
+	for _, name := range sortedPluginScriptNames(m.Scripts) {
+		entries = append(entries, m.Scripts[name].Entry)
+	}
+	for _, entry := range entries {
 		entry = strings.Trim(strings.TrimSpace(entry), " ")
 		entry = strings.TrimPrefix(entry, "/")
 		if entry == "" {
@@ -595,17 +611,20 @@ func (s *RepoPluginStore) writeLocked() error {
 	return os.Rename(tmp, s.path)
 }
 
-// RepoPlugin 是从仓库安装的第三方插件。v1 的运行时形态是上下文插件：
-// 每次请求把 SKILL.md 指令作为「第三方插件说明」注入对话，由模型参考执行。
-// 插件声明的权限只用于安装确认与展示，Diana 不据此限制插件，见 repoPluginRiskWarnings。
+// RepoPlugin 保留旧版上下文入口；声明 skills/scripts/mcp_servers 的插件通过
+// Agent 的请求视图加载技能和工具。文字权限声明仍不能限制模型的其他工具。
 type RepoPlugin struct {
 	manifest PluginManifest
 	dir      string
 	source   RepoPluginSource
 
-	loadOnce sync.Once
-	context  string
-	loadErr  error
+	loadOnce       sync.Once
+	context        string
+	loadErr        error
+	bundleErr      error
+	bundle         *repoPluginManifestFile
+	bundleMu       sync.Mutex
+	bundleSessions map[string]*repoPluginBundleSession
 }
 
 // repoPluginMaxContextRunes 限制注入对话的 SKILL.md 长度。单文件上限是 8MB，
@@ -614,7 +633,21 @@ const repoPluginMaxContextRunes = 12000
 
 // NewRepoPlugin 从已安装目录构造插件实例。
 func NewRepoPlugin(dir string, source RepoPluginSource, manifest PluginManifest) *RepoPlugin {
-	return &RepoPlugin{manifest: manifest, dir: dir, source: source}
+	p := &RepoPlugin{manifest: manifest, dir: dir, source: source}
+	if body, err := os.ReadFile(filepath.Join(dir, RepoPluginManifestFile)); err == nil {
+		decoded, err := decodeRepoPluginManifest(body)
+		if err == nil {
+			err = decoded.validate()
+		}
+		if err != nil {
+			p.bundleErr = err
+		} else if decoded.hasBundle() {
+			p.bundle = &decoded
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		p.bundleErr = err
+	}
+	return p
 }
 
 func (p *RepoPlugin) Manifest() PluginManifest { return p.manifest }
@@ -625,6 +658,12 @@ func (p *RepoPlugin) Source() RepoPluginSource { return p.source }
 // Handle 注入插件说明。SKILL.md 只在首次使用时读一次：更新插件会重新构造实例，
 // 不需要每条消息都读盘。
 func (p *RepoPlugin) Handle(_ context.Context, _ PluginRequest) (*PluginResponse, error) {
+	if p.bundleErr != nil {
+		return nil, p.bundleErr
+	}
+	if p.bundle != nil {
+		return nil, nil
+	}
 	p.loadOnce.Do(func() {
 		body, err := os.ReadFile(filepath.Join(p.dir, RepoPluginEntryFile))
 		if err != nil {
@@ -790,6 +829,9 @@ func (i *RepoPluginInstaller) loadSnapshot(ctx context.Context, rawURL string) (
 			return repoPluginSnapshot{}, fmt.Errorf("%w: 清单引用的文件 %s 在仓库中不存在", ErrRepoPluginFormat, path)
 		}
 	}
+	if err := manifestFile.validateBundleArchive(index); err != nil {
+		return repoPluginSnapshot{}, err
+	}
 	manifest := manifestFile.pluginManifest()
 	if err := checkTagVersion(ref, manifest.Version); err != nil {
 		return repoPluginSnapshot{}, err
@@ -816,6 +858,7 @@ func readRepoArchiveIndex(archive []byte) (repoArchiveIndex, error) {
 	defer gz.Close()
 	index := repoArchiveIndex{paths: map[string]bool{}, contents: map[string][]byte{}}
 	reader := tar.NewReader(gz)
+	var contentBytes int64
 	for {
 		header, err := reader.Next()
 		if errors.Is(err, io.EOF) {
@@ -836,17 +879,24 @@ func readRepoArchiveIndex(archive []byte) (repoArchiveIndex, error) {
 			continue
 		}
 		index.paths[rel] = true
-		if rel != RepoPluginManifestFile && rel != RepoPluginEntryFile {
+		if rel != RepoPluginManifestFile && filepath.Base(rel) != RepoPluginEntryFile {
 			continue
 		}
 		if header.Size > repoPluginMaxFileBytes {
 			return repoArchiveIndex{}, fmt.Errorf("diana: 插件文件 %s 超过单文件上限 %dMB", rel, repoPluginMaxFileBytes>>20)
+		}
+		contentBytes += header.Size
+		if contentBytes > repoPluginMaxTotalBytes {
+			return repoArchiveIndex{}, fmt.Errorf("diana: 插件清单和 Skill 总体积超过上限")
 		}
 		body, err := io.ReadAll(io.LimitReader(reader, header.Size))
 		if err != nil {
 			return repoArchiveIndex{}, fmt.Errorf("diana: 读取 %s 失败: %w", rel, err)
 		}
 		index.contents[rel] = body
+		if len(index.contents) > repoPluginMaxFiles {
+			return repoArchiveIndex{}, fmt.Errorf("diana: 插件 Skill 文件数超过上限")
+		}
 	}
 }
 
@@ -936,6 +986,11 @@ func (i *RepoPluginInstaller) InstallGuarded(ctx context.Context, rawURL, expect
 	defer os.RemoveAll(staging)
 	if err := extractRepoArchive(snapshot.archive, staging, snapshot.files); err != nil {
 		return nil, RepoPluginSource{}, err
+	}
+	if snapshot.manifestFile.hasBundle() {
+		if _, err := agent.LoadPluginSkills(manifest.ID, staging, snapshot.ref.RepoURL(), snapshot.manifestFile.skillRoots(), len(snapshot.manifestFile.Scripts) > 0); err != nil {
+			return nil, RepoPluginSource{}, fmt.Errorf("%w: %v", ErrRepoPluginSkill, err)
+		}
 	}
 	// 清单副本落盘：重启恢复按本地副本读，不再走网络。写进暂存目录再整体换上，
 	// 不会出现目录已替换、清单还没写的半截状态。

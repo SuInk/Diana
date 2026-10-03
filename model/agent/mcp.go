@@ -29,8 +29,9 @@ import (
 )
 
 type MCPRegistry struct {
-	Tools   []Tool
-	Closers []closeableTool
+	Tools    []Tool
+	Closers  []closeableTool
+	Warnings []string
 }
 
 type mcpConfigFile struct {
@@ -38,6 +39,9 @@ type mcpConfigFile struct {
 }
 
 type mcpServerConfig struct {
+	// Plugin runtimes use the bot's command policy and already-resolved settings.
+	commandPolicy     *Config           `json:"-" toml:"-"`
+	literalSettings   bool              `json:"-" toml:"-"`
 	Command           string            `json:"command,omitempty" toml:"command,omitempty"`
 	Args              []string          `json:"args,omitempty" toml:"args,omitempty"`
 	Env               map[string]string `json:"env,omitempty" toml:"env,omitempty"`
@@ -423,6 +427,15 @@ func openMCPSession(ctx context.Context, name string, cfg mcpServerConfig, workD
 	)
 	if command := resolveLocalMCPCommand(cfg.Command); command != "" {
 		cmd := procgroup.Isolate(exec.Command(command, cfg.Args...))
+		if policy := cfg.commandPolicy; policy != nil {
+			runner := pluginCommandRunner(*policy)
+			var err error
+			cmd, _, err = runner.commandFor(context.Background(), command, cfg.Args)
+			if err != nil {
+				return nil, err
+			}
+		}
+		cmd = procgroup.Isolate(cmd)
 		if cwd := strings.TrimSpace(cfg.CWD); cwd != "" {
 			if !filepath.IsAbs(cwd) {
 				cwd = filepath.Join(workDir, cwd)
@@ -430,6 +443,9 @@ func openMCPSession(ctx context.Context, name string, cfg mcpServerConfig, workD
 			cmd.Dir = filepath.Clean(cwd)
 		}
 		cmd.Env = mergedCommandEnvironment(cfg.Env, cfg.inheritEnvironment())
+		if cfg.literalSettings {
+			cmd.Env = literalCommandEnvironment(cfg.Env)
+		}
 		stderr = &lockedBuffer{}
 		cmd.Stderr = stderr
 		process = &mcpProcessTransport{inner: &mcpsdk.CommandTransport{Command: cmd, TerminateDuration: 2 * time.Second}}
@@ -444,7 +460,11 @@ func openMCPSession(ctx context.Context, name string, cfg mcpServerConfig, workD
 			return nil, fmt.Errorf("mcp server %q URL rejected: %w", name, err)
 		}
 		httpClient := netguard.NewPublicHTTPClient(toolTimeout)
-		httpClient.Transport = &mcpHeaderTransport{base: httpClient.Transport, headers: expandedMCPHeaders(cfg.Headers), origin: origin}
+		headers := expandedMCPHeaders(cfg.Headers)
+		if cfg.literalSettings {
+			headers = cfg.Headers
+		}
+		httpClient.Transport = &mcpHeaderTransport{base: httpClient.Transport, headers: headers, origin: origin}
 		transport = &mcpsdk.StreamableClientTransport{
 			Endpoint:             endpoint,
 			HTTPClient:           httpClient,

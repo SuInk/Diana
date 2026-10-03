@@ -2,6 +2,7 @@
 // Licensed under the Limited Redistribution License in the repository root.
 
 import { extensionDemoResponse } from './extension-demo';
+import { adminChatDemoResponse } from './admin-chat-demo';
 // 和后端登记表逐字相同的提示词目录，由 webui/demo_prompt_catalog_test.go 生成并校验。
 import demoPromptCatalogData from './demo-prompt-catalog.json';
 import demoBuiltinSouls from './demo-builtin-souls.json';
@@ -994,6 +995,8 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
   const method = (init?.method ?? "GET").toUpperCase();
   const body = bodyOf(init);
   const path = url.pathname;
+  const adminChat = adminChatDemoResponse(url, method, body);
+  if (adminChat) return adminChat;
 
   if (path === "/api/system/history-media") {
     if (method === "POST") {
