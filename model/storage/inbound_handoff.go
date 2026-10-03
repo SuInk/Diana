@@ -62,8 +62,9 @@ func inboundHandoffRow(ref assistant.InboundHandoffRef) (string, []any) {
   SELECT id FROM inbound_events
   WHERE message_id = ? AND kind = ?
     AND COALESCE(group_id, '') = ? AND COALESCE(user_id, '') = ?
+    AND COALESCE(profile_id, '') = ?
   ORDER BY created_at DESC, id DESC LIMIT 1
-)`, []any{strings.TrimSpace(event.MessageID), strings.TrimSpace(string(event.Kind)), strings.TrimSpace(event.GroupID), strings.TrimSpace(event.UserID)}
+)`, []any{strings.TrimSpace(event.MessageID), strings.TrimSpace(string(event.Kind)), strings.TrimSpace(event.GroupID), strings.TrimSpace(event.UserID), strings.TrimSpace(event.ProfileID)}
 }
 
 func inboundHandoffRefUsable(ref assistant.InboundHandoffRef) bool {
@@ -96,12 +97,12 @@ func (s *SQLiteStore) FinalizeInboundHandoff(ctx context.Context, ref assistant.
 	}
 	now := time.Now().UTC().UnixNano()
 	where, whereArgs := inboundHandoffRow(ref)
-	args := append([]any{inboundHandoffFinal, inboundStatusDone, assistantOutcomeHandedOffPending, now}, whereArgs...)
+	args := append([]any{inboundHandoffFinal, inboundStatusDone, now}, whereArgs...)
 	args = append(args, strings.TrimSpace(absorberID), inboundHandoffPending)
 	_, err := s.db.ExecContext(ctx, `
 UPDATE inbound_events
 SET handoff_state = ?,
-    outcome = CASE WHEN status = ? AND outcome = ? THEN 'superseded_follow_up' ELSE outcome END,
+    outcome = CASE WHEN status = ? AND outcome IN ('handed_off_pending', 'merged_into_reply') THEN 'superseded_follow_up' ELSE outcome END,
     updated_at = ?
 WHERE `+where+`
   AND superseded_by = ? AND handoff_state = ?
@@ -120,7 +121,7 @@ func (s *SQLiteStore) ReleaseInboundHandoff(ctx context.Context, ref assistant.I
 		return false, false, nil
 	}
 	now := time.Now().UTC().UnixNano()
-	handedOff := `(status = '` + inboundStatusDone + `' AND outcome = '` + assistantOutcomeHandedOffPending + `')`
+	handedOff := `(status = '` + inboundStatusDone + `' AND outcome IN ('handed_off_pending', 'merged_into_reply'))`
 	where, whereArgs := inboundHandoffRow(ref)
 	args := []any{inboundStatusPending, assistant.InboundPriorityTriggered, assistant.InboundPriorityTriggered, now, now}
 	args = append(args, whereArgs...)

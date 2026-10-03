@@ -36,6 +36,7 @@ type activeDirectReply struct {
 	startedAt   time.Time
 	generation  uint64
 	accepting   bool
+	opened      bool
 	supplements []proactiveReplyCandidate
 }
 
@@ -57,7 +58,7 @@ func directReplyMergeKey(event MessageEvent) string {
 	if (event.Kind != EventKindGroup && event.Kind != EventKindPrivate) || strings.TrimSpace(event.UserID) == "" {
 		return ""
 	}
-	return sessionKey(event) + "|sender:" + strings.TrimSpace(event.UserID)
+	return sessionKey(event) + "|profile:" + strings.TrimSpace(event.ProfileID) + "|sender:" + strings.TrimSpace(event.UserID)
 }
 
 // directReplyTopicTimeout 给话题判断留的时间。按 5 秒卡时，会思考的模型（线上
@@ -65,9 +66,11 @@ func directReplyMergeKey(event MessageEvent) string {
 // 取和记忆抽取一致的 60 秒：超时只是退回默认判断，与其卡掉不如等；它不阻塞回复本身。
 const directReplyTopicTimeout = 60 * time.Second
 
-func (r *Runtime) beginDirectReply(ctx context.Context, event MessageEvent) (context.Context, func()) {
+func (r *Runtime) beginDirectReply(ctx context.Context, event MessageEvent, ready ...bool) (context.Context, func()) {
 	key := directReplyMergeKey(event)
-	if key == "" {
+	// 只有会把补充材料带进提示词、并支持发送前重生成的对话轮次能接手。
+	// 解析结果、插件指令和本地命令各自负责交付，不能替后来的问题作答。
+	if key == "" || !r.burstChatMessage(event, directedInboundText(event)) {
 		return ctx, func() {}
 	}
 	turnID := strings.TrimSpace(event.MessageID)
@@ -86,7 +89,8 @@ func (r *Runtime) beginDirectReply(ctx context.Context, event MessageEvent) (con
 	if turn := r.senderTurnLocked(key, strings.TrimSpace(event.MessageID)); turn != nil {
 		startedAt = turn.arrivedAt
 	}
-	active := &activeDirectReply{token: token, turnID: turnID, root: event, startedAt: startedAt, accepting: true}
+	accepting := len(ready) == 0 || ready[0]
+	active := &activeDirectReply{token: token, turnID: turnID, root: event, startedAt: startedAt, accepting: accepting, opened: accepting}
 	r.activeDirectReplies[key] = active
 	r.replyInterruptMu.Unlock()
 	ctx = context.WithValue(ctx, directReplyRunContextKey{}, directReplyRunContext{key: key, token: token, active: active})
@@ -98,6 +102,20 @@ func (r *Runtime) beginDirectReply(ctx context.Context, event MessageEvent) (con
 		}
 		r.replyInterruptMu.Unlock()
 	}
+}
+
+// openDirectReply 只在已经确定走可重生成的对话路径时开放一次。
+// 后续尝试和副作用之后不会重新打开已关闭的窗口。
+func (r *Runtime) openDirectReply(ctx context.Context) {
+	run, ok := ctx.Value(directReplyRunContextKey{}).(directReplyRunContext)
+	if !ok {
+		return
+	}
+	r.replyInterruptMu.Lock()
+	if active := run.active; active != nil && active.token == run.token && !active.opened {
+		active.accepting, active.opened = true, true
+	}
+	r.replyInterruptMu.Unlock()
 }
 
 func (r *Runtime) directReplyAttemptContext(ctx context.Context) context.Context {
@@ -143,7 +161,7 @@ func (r *Runtime) directReplyHasNewSupplements(ctx context.Context) bool {
 	}
 	// This is the final send gate. Seal atomically with the generation check so
 	// classification cannot accept a supplement after this answer is committed.
-	active.accepting = false
+	active.accepting, active.opened = false, true
 	return false
 }
 
@@ -177,14 +195,14 @@ func (r *Runtime) sealDirectReply(ctx context.Context) {
 	}
 	r.replyInterruptMu.Lock()
 	if active := run.active; active != nil && active.token == run.token {
-		active.accepting = false
+		active.accepting, active.opened = false, true
 	}
 	r.replyInterruptMu.Unlock()
 }
 
 func (r *Runtime) mergeIntoActiveDirectReply(ctx context.Context, event MessageEvent, text string) (string, bool) {
 	key := directReplyMergeKey(event)
-	if key == "" || strings.TrimSpace(event.MessageID) == "" {
+	if key == "" || strings.TrimSpace(event.MessageID) == "" || !r.burstChatMessage(event, text) || !preprocessedForCarryOver(event) || event.imageLoadErr != nil {
 		return "", false
 	}
 	// 已经交给后一条的消息不再当「补充」并进任何一轮：交接会替它结算，并进去的话
@@ -192,6 +210,7 @@ func (r *Runtime) mergeIntoActiveDirectReply(ctx context.Context, event MessageE
 	if _, handedOff := r.senderTurnSupersededBy(event); handedOff {
 		return "", false
 	}
+	store := r.inboundHandoffStore()
 	r.replyInterruptMu.Lock()
 	active := r.activeDirectReplies[key]
 	if active == nil || !active.accepting || active.root.MessageID == event.MessageID || time.Since(active.startedAt) > directReplyMergeRetention {
@@ -224,24 +243,38 @@ func (r *Runtime) mergeIntoActiveDirectReply(ctx context.Context, event MessageE
 		r.replyInterruptMu.Unlock()
 		return "", false
 	}
+	current := r.ensureSenderTurnLocked(key, root, active.startedAt)
+	turn := r.ensureSenderTurnLocked(key, event, eventArrived)
+	if turn.supersededBy != "" || turn.sideEffect || turn.stage == senderTurnSending || len(turn.absorbed) > 0 {
+		r.replyInterruptMu.Unlock()
+		return "", false
+	}
+	current.turnID = active.turnID
+	ref := InboundHandoffRef{ID: turn.inboundID, Event: event}
+	if store != nil {
+		// 先持久化再公开合并；同一把锁阻止发送/结算抢先于这次写入。
+		// 写入失败则让新消息继续自己的处理流程，不能只吞消息并打印日志。
+		mergeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
+		err := store.MarkInboundHandoff(mergeCtx, ref, active.turnID)
+		cancel()
+		if err != nil {
+			r.replyInterruptMu.Unlock()
+			log.Printf("diana record inbound reply merge failed: %v", err)
+			return "", false
+		}
+	}
+	r.absorbLocked(current, turn, false)
+	// 接受补充不等于已经回答；发送确认时按实际生成的版本标记覆盖范围。
+	current.covered[strings.TrimSpace(event.MessageID)] = false
+	turn.event = event
+	turn.handedOff, turn.replayText, turn.replayOutcome = true, text, "replied"
 	// Repeats share the pending answer without invalidating its generation.
 	if relation != "repeat" {
 		active.generation++
 	}
 	active.supplements = append(active.supplements, proactiveReplyCandidate{Event: event, Text: text, QueuedAt: time.Now(), Generation: active.generation})
-	rootTurnID, rootMessageID := active.turnID, active.root.MessageID
+	rootMessageID := active.root.MessageID
 	r.replyInterruptMu.Unlock()
-
-	r.mu.RLock()
-	store, _ := r.inboundStore.(InboundReplyMergeStore)
-	r.mu.RUnlock()
-	if store != nil {
-		mergeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
-		if err := store.RecordInboundEventReplyMerge(mergeCtx, event, rootTurnID); err != nil {
-			log.Printf("diana record inbound reply merge failed: %v", err)
-		}
-		cancel()
-	}
 	return strings.TrimSpace(rootMessageID), true
 }
 

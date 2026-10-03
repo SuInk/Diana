@@ -78,7 +78,7 @@ func directedInboundKey(event MessageEvent) string {
 	if userID == "" {
 		return ""
 	}
-	return sessionKey(event) + "|" + userID
+	return directReplyMergeKey(event)
 }
 
 // noteRecalledInbound 登记一条撤回通知。撤回的消息仍会被回答，追发登记也保持

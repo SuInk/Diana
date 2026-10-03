@@ -2140,12 +2140,15 @@ func (r *Runtime) replyAndRecordTurn(ctx context.Context, event MessageEvent, te
 	replyCtx := withReplyTurnStart(withExternalSideEffectLedger(withReplyTriggerGate(withReplySuppressionSendGuard(ctx))), start)
 	// 工具一写外部系统就同步给连发交接：这一轮哪怕随后出错、什么都没发，也不能再算
 	// 交出去——否则被放回队列重跑时，工具会再调一遍（见 sender_burst.go）。
-	onExternalSideEffect(replyCtx, func() { r.markSenderTurnSideEffect(event) })
 	if successOutcome == "replied" || successOutcome == "replied_direct_followup" || event.proactiveReply || event.chatInReply {
 		var finish func()
-		replyCtx, finish = r.beginDirectReply(replyCtx, event)
+		replyCtx, finish = r.beginDirectReply(replyCtx, event, false)
 		defer finish()
 	}
+	onExternalSideEffect(replyCtx, func() {
+		r.sealDirectReply(replyCtx)
+		r.markSenderTurnSideEffect(event)
+	})
 	var reply string
 	var err error
 	for attempt := 0; attempt < 3; attempt++ {
@@ -2165,6 +2168,9 @@ func (r *Runtime) replyAndRecordTurn(ctx context.Context, event MessageEvent, te
 		if !errors.Is(err, errDirectReplySupplemented) {
 			break
 		}
+	}
+	if err == nil {
+		r.noteSenderTurnReplyComplete(event)
 	}
 	record.Duration = time.Since(start).Milliseconds()
 	// 出错也要带上：resolver 可能已经把图发出去了才在后面某步失败，这时事件页
@@ -3767,7 +3773,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	// 本地重置命令不需要加载旧上下文、调用模型或登记续聊状态。
 	if r.isOwnerContextResetCommand(event, text) {
 		reply, _ := r.handleOwnerCommand(event, r.cleanInput(event, text))
-		if err := r.send(ctx, event, reply); err != nil {
+		if err := r.send(withoutReplyTriggerGate(ctx), event, reply); err != nil {
 			return "", err
 		}
 		return reply, nil
@@ -3835,14 +3841,14 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	}
 	if reply, handled := r.handleOwnerCommand(event, cleanText); handled {
 		// owner 指令优先级最高，避免“切模型/禁群”等管理命令被普通 LLM 回复吞掉。
-		if err := r.send(ctx, event, reply); err != nil {
+		if err := r.send(withoutReplyTriggerGate(ctx), event, reply); err != nil {
 			return "", err
 		}
 		return reply, nil
 	}
 	if reply, handled := r.replyStatusCommand(ctx, event, cleanText); handled {
 		// #diana 是本地状态卡片，不经过话题解析、插件上下文和发送前审核这些要花 token 的环节。
-		if err := r.send(ctx, event, reply); err != nil {
+		if err := r.send(withoutReplyTriggerGate(ctx), event, reply); err != nil {
 			return "", err
 		}
 		return reply, nil
@@ -3915,7 +3921,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	for _, resp := range pluginResponses {
 		pluginTasks = append(pluginTasks, resp.Tasks...)
 	}
-	if ack, handled, err := r.launchPluginTasks(ctx, event, pluginTasks); handled {
+	if ack, handled, err := r.launchPluginTasks(withoutReplyTriggerGate(ctx), event, pluginTasks); handled {
 		if err != nil {
 			return "", err
 		}
@@ -3932,7 +3938,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			} else if err := r.auditReplyAccountSafety(ctx, event, cleanText, resp.Reply, cfg); err != nil {
 				return "", err
 			}
-			messageIDs, err := r.sendWithMessageIDs(ctx, event, resp.Reply)
+			messageIDs, err := r.sendWithMessageIDs(withoutReplyTriggerGate(ctx), event, resp.Reply)
 			if err != nil {
 				return "", err
 			}
@@ -3942,6 +3948,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			return resp.Reply, nil
 		}
 	}
+	r.openDirectReply(ctx)
 	fullAgentEnabled := cfg.AgentEnabled && !authoritativePluginContext
 	olderSummary := ""
 	sessionThread := ""
@@ -4654,8 +4661,8 @@ func (r *Runtime) replyWithResolverOnly(ctx context.Context, event MessageEvent,
 	// 追发时丢掉回复是安全的——新的一轮会把两条一起答。解析结果不是回复，
 	// 它是这一轮独有的内容，新的一轮既不会重新解析，模型也拿不到视频信息，
 	// 丢了就永久没有了。后台插件任务用 rootCtx 发送，同样不带这道闸门。
-	ctx = withoutReplyTriggerGate(ctx)
-	resp, err := r.plugins.RunOneWithGroupOverrides(ctx, resolverPluginID, PluginRequest{
+	deliveryCtx := withoutReplyTriggerGate(ctx)
+	resp, err := r.plugins.RunOneWithGroupOverrides(deliveryCtx, resolverPluginID, PluginRequest{
 		Event:          event,
 		Text:           text,
 		OwnerID:        r.effectiveConfigForEvent(event).OwnerIDForEvent(event),
@@ -4684,7 +4691,7 @@ func (r *Runtime) replyWithResolverOnly(ctx context.Context, event MessageEvent,
 	}
 	delivered := false
 	defer func() { r.finishResolverDelivery(reservation, delivered) }()
-	if _, err := r.deliverResolverResponse(ctx, event, *resp); err != nil {
+	if _, err := r.deliverResolverResponse(deliveryCtx, event, *resp); err != nil {
 		return "", err
 	}
 	delivered = true
@@ -7641,6 +7648,9 @@ func (r *Runtime) sendForwardNodesWithResult(ctx context.Context, event MessageE
 		return r.callOneBotAPIForEvent(callCtx, event, action, params)
 	})
 	if err != nil {
+		if errors.Is(err, errOutboundOutcomeUnconfirmed) {
+			r.noteSenderTurnUnconfirmed(ctx, event)
+		}
 		return nil, err
 	}
 	outboundTurnFromContext(ctx).recordSentForward(len(nodes))

@@ -5,6 +5,7 @@ package assistant
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"strings"
@@ -200,6 +201,9 @@ func (r *Runtime) sendOutgoingWithResult(ctx context.Context, event MessageEvent
 	})
 	if err != nil {
 		r.recordInboundDelivery(outboundTurnID(ctx), event, OutboundDeliveryFailed, "", err.Error())
+		if errors.Is(err, errOutboundOutcomeUnconfirmed) {
+			r.noteSenderTurnUnconfirmed(ctx, event)
+		}
 		return nil, err
 	}
 	messageID := apiMessageID(result)
@@ -218,7 +222,7 @@ func (r *Runtime) sendOutgoingWithResult(ctx context.Context, event MessageEvent
 	outboundTurnFromContext(ctx).recordSentMessage(msg)
 	// 连发交接据此落定（见 sender_burst.go）。结果不明的发送经回推或历史确认送达后
 	// 也走到这里（confirmOutboundOutcome 返回成功）；确认不了的是
-	// errOutboundOutcomeUnconfirmed，在上面就返回了，不算回出去。
+	// errOutboundOutcomeUnconfirmed 另记为结果不明，不能通过补充消息重排而重发。
 	r.noteSenderTurnDelivered(ctx, event)
 	if !r.rememberTelegramPhotoResults(ctx, event, msg, result) {
 		r.rememberOutgoingWithMessageID(ctx, event, msg, messageID)

@@ -137,15 +137,16 @@
             <li class="end"><div class="flow-node"><strong>Taken by the next message</strong><p>The newest direct trigger becomes the reply target; without one, eligible candidates go to the rating together.</p></div></li>
           </ol></div>
           <div class="flow-branch"><h3>Merge while generating</h3><ol class="flow">
-            <li><div class="flow-node"><strong>Same person adds a message within 2 minutes</strong></div></li>
+            <li><div class="flow-node"><strong>Same bot, session and sender within 2 minutes</strong><p>Admission opens only after choosing a dialogue path that can regenerate. Resolvers, fixed plugin responses and local commands leave new questions to their own turns.</p></div></li>
             <li class="q"><div class="flow-node"><strong>Repeat / supplement / correction / independent?</strong><p>Merged only at or above the confidence threshold (default 75%).</p></div></li>
-            <li class="end"><div class="flow-node"><strong>Old draft discarded, regenerated</strong><p>Up to 3 times; no merging after chunks started sending or a side effect happened.</p></div></li>
+            <li class="end"><div class="flow-node"><strong>Repeats share a draft; supplements and corrections regenerate</strong><p>At most 3 generations. Admission closes before the final attempt, before sending, or after an external side effect. A question asked after the answer starts a new reply.</p></div></li>
           </ol></div>
           <div class="flow-branch"><h3>Interrupt</h3><ol class="flow">
             <li><div class="flow-node"><strong>The same person addresses the bot again in a group</strong></div></li>
             <li class="end"><div class="flow-node"><strong>The old reply is dropped before sending</strong><p><code>superseded_follow_up</code>; a recall only removes the quote, it never cancels a reply.</p></div></li>
           </ol></div>
         </div>
+        <div class="callout"><strong>Merged requests still need settlement</strong><p>Merging creates a durable pending handoff. It is finalized when the complete answer covering those requests is delivered. Silence, generation failure, cancellation and partial delivery requeue unanswered requests. Restart recovery releases pending handoffs without a live owner. An attempted answer with an unconfirmed outcome is not automatically resent; supplements absent from that answer are still recovered. Plugin facts retain independent delivery, while optional model commentary obeys the follow-up send gate.</p></div>
         <div class="callout"><strong>Group stop</strong><p>Mentioning, quoting or naming the bot in a group with "shut up" or "stop" is caught by the pre-send review, which opens a 10-minute window for that group: the rating is skipped and in-flight unprompted replies are dropped. Mentions, quotes and names are still answered — "stop" means "stop butting in", not "ignore me".</p></div>
       </section>
 

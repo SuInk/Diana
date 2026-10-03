@@ -258,7 +258,7 @@ type InboundEventStore interface {
 }
 
 // InboundSupersessionStore 把「这条消息已经并进别的回复轮」的标记交给最后那道
-// 发送闸门。标记由追发合并写入（RecordInboundEventReplyMerge）：被并进去的那条
+// 发送闸门。标记由合并/连发交接写入（MarkInboundHandoff）：被并进去的那条
 // 自己的任务如果还是走到了发送，就在这里拦下，别把同一个问题答两遍。
 type InboundSupersessionStore interface {
 	InboundEventSuperseded(ctx context.Context, event MessageEvent) (string, bool, error)
@@ -700,7 +700,7 @@ func (r *Runtime) runInboundWorker(ctx context.Context, leaseOwner string, store
 			outcome, processErr := r.processInboundQueueItem(withInboundLeaseExtension(ctx, store, item.ID, leaseOwner, leaseUntil), item)
 			commitCtx, commitCancel := context.WithTimeout(context.Background(), 5*time.Second)
 			switch {
-			case processErr == nil && outcome == inboundOutcomeHandedOffPending:
+			case processErr == nil && (outcome == inboundOutcomeHandedOffPending || outcome == "merged_into_reply"):
 				err = r.completeHandedOffInbound(commitCtx, store, item, leaseOwner)
 			case processErr == nil:
 				err = store.CompleteInboundEvent(commitCtx, item.ID, leaseOwner, outcome)

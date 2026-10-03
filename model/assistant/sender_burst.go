@@ -94,11 +94,14 @@ type senderTurn struct {
 	// 接手的一方。turnID 是本轮的入站事件 ID（没有就用消息 ID）；covered 是提示词里
 	// 确实点名承接了的消息；delivered 是至少有一条模型回复发了出去；live 表示它在
 	// liveAbsorbers 里记过数。
-	turnID    string
-	absorbed  []*senderTurn
-	covered   map[string]bool
-	delivered bool
-	live      bool
+	turnID        string
+	absorbed      []*senderTurn
+	covered       map[string]bool
+	delivered     bool
+	replyComplete bool
+	// 已尝试发送但无法取得确认的答案不能重发；只结算该版本实际包含的请求。
+	deliveryUnconfirmed bool
+	live                bool
 
 	// mergeCheckedRoot 记下预处理阶段已经拿哪一轮做过话题判断，回复入口不再重复问一遍。
 	mergeCheckedRoot string
@@ -300,6 +303,22 @@ func withoutCarryOverDelivery(ctx context.Context) context.Context {
 
 // noteSenderTurnDelivered 在一条模型回复真的发出去之后调用，供接手那一轮结算。
 func (r *Runtime) noteSenderTurnDelivered(ctx context.Context, event MessageEvent) {
+	r.noteSenderTurnDelivery(ctx, event, true)
+}
+
+func (r *Runtime) noteSenderTurnUnconfirmed(ctx context.Context, event MessageEvent) {
+	r.noteSenderTurnDelivery(ctx, event, false)
+}
+
+func (r *Runtime) noteSenderTurnReplyComplete(event MessageEvent) {
+	r.replyInterruptMu.Lock()
+	if turn := r.senderTurnLocked(directReplyMergeKey(event), strings.TrimSpace(event.MessageID)); turn != nil {
+		turn.replyComplete = true
+	}
+	r.replyInterruptMu.Unlock()
+}
+
+func (r *Runtime) noteSenderTurnDelivery(ctx context.Context, event MessageEvent, confirmed bool) {
 	if !replyTriggerGateEnabled(ctx) {
 		return
 	}
@@ -314,7 +333,18 @@ func (r *Runtime) noteSenderTurnDelivered(ctx context.Context, event MessageEven
 	r.replyInterruptMu.Lock()
 	defer r.replyInterruptMu.Unlock()
 	if turn := r.senderTurnLocked(key, messageID); turn != nil {
-		turn.delivered = true
+		if confirmed {
+			turn.delivered = true
+		} else {
+			turn.deliveryUnconfirmed = true
+		}
+		if run, ok := ctx.Value(directReplyRunContextKey{}).(directReplyRunContext); ok && run.active != nil && run.active.token == run.token && turn.covered != nil {
+			for _, supplement := range run.active.supplements {
+				if supplement.Generation <= run.generation {
+					turn.covered[strings.TrimSpace(supplement.Event.MessageID)] = true
+				}
+			}
+		}
 	}
 }
 
@@ -352,7 +382,7 @@ func (r *Runtime) handOffSenderTurn(event MessageEvent, text, successOutcome str
 	// 一轮跑完时已经发出过模型回复、或者在外部系统留下了痕迹：它不是交出去的，
 	// 不能记成 handed_off_pending——否则接手那一轮没回出去时它会被重新排队，
 	// 出站幂等账本已经清掉，工具和回复会再来一遍。还没落定的交接就地撤销。
-	if stopped && (turn.delivered || turn.sideEffect) {
+	if stopped && (turn.delivered || turn.deliveryUnconfirmed || turn.sideEffect) {
 		if turn.pendingHandoff() {
 			turn.supersededBy, turn.absorberID, turn.viaDependency = "", "", false
 		}
@@ -613,7 +643,7 @@ func (r *Runtime) settleSenderBurst(ctx context.Context, event MessageEvent) {
 			continue
 		}
 		item := settled{event: turn.event, text: turn.replayText, outcome: turn.replayOutcome, handedOff: turn.handedOff, inboundID: turn.inboundID, absorberID: turn.absorberID}
-		if current.delivered && current.covered[strings.TrimSpace(turn.event.MessageID)] {
+		if ((current.delivered && current.replyComplete) || current.deliveryUnconfirmed) && current.covered[strings.TrimSpace(turn.event.MessageID)] {
 			turn.final = true
 			finalized = append(finalized, item)
 			continue
@@ -638,7 +668,7 @@ func (r *Runtime) settleSenderBurst(ctx context.Context, event MessageEvent) {
 		}
 		if item.handedOff && (store == nil || item.inboundID == "") {
 			record := r.decisionEventRecord(item.event, item.text, "superseded_follow_up")
-			record.Reason = fmt.Sprintf("同一用户随后又发来消息（%s），由那一轮一并回答", messageID)
+			record.Reason = fmt.Sprintf("由同一用户的回复轮（%s）一并处理", messageID)
 			r.record(record)
 		}
 	}
@@ -783,6 +813,9 @@ func directReplyOutcome(event MessageEvent, successOutcome string) bool {
 // 只是各回各的），也不能把一条指令吞掉。
 func (r *Runtime) burstChatMessage(event MessageEvent, text string) bool {
 	text = firstNonEmpty(strings.TrimSpace(text), directedInboundText(event))
+	if r.statusCommandActive(event, text) {
+		return false
+	}
 	for _, candidate := range r.burstCommandTexts(event, text) {
 		if r.shouldHandleResolver(event, candidate) || r.shouldHandlePlugin(event, candidate) {
 			return false

@@ -135,15 +135,16 @@
             <li class="end"><div class="flow-node"><strong>下一条一并取走</strong><p>最新的直接触发当回复目标；没有直接触发时，能接话的候选一起交给接话评分。</p></div></li>
           </ol></div>
           <div class="flow-branch"><h3>生成中合并</h3><ol class="flow">
-            <li><div class="flow-node"><strong>同一人 2 分钟内追加</strong></div></li>
+            <li><div class="flow-node"><strong>同一机器人、会话和用户在 2 分钟内追加</strong><p>仅在确定走可重生成的对话路径后开放；解析、固定插件结果和本地命令不接走新问题。</p></div></li>
             <li class="q"><div class="flow-node"><strong>重复 / 补充 / 纠正 / 独立？</strong><p>置信度 ≥ 阈值（默认 75%）才合并。</p></div></li>
-            <li class="end"><div class="flow-node"><strong>旧版作废，重新生成</strong><p>最多 3 次；已开始分条发送或产生外部副作用后不再合并。</p></div></li>
+            <li class="end"><div class="flow-node"><strong>重复共用答案，补充和纠正重新生成</strong><p>最多生成 3 次；最后一次生成前、开始发送或产生外部副作用时关闭窗口。回答之后再问，走新的回复。</p></div></li>
           </ol></div>
           <div class="flow-branch"><h3>打断</h3><ol class="flow">
             <li><div class="flow-node"><strong>群里同一人又直接叫了机器人</strong></div></li>
             <li class="end"><div class="flow-node"><strong>旧回复发送前丢弃</strong><p><code>superseded_follow_up</code>；撤回只去掉引用装饰，不取消回复。</p></div></li>
           </ol></div>
         </div>
+        <div class="callout"><strong>合并后的请求仍需结算</strong><p>合并先记为持久化待定交接。包含这些请求的回答完整送达后才落定；沉默、生成失败、取消或仅发出部分答案时，未完成的请求重新排队。进程重启会恢复无人负责的待定交接。已经尝试发送、却无法确认结果的答案不自动重发；未包含在该答案里的补充仍恢复处理。插件事实投递保留独立交付，可选的模型跟评遵守追问发送闸门。</p></div>
         <div class="callout"><strong>群里叫停</strong><p>在群里 @、引用或点名机器人说「闭嘴」「别说了」，发送前审核会顺带判出叫停，给本群记 10 分钟窗口：窗口内接话评分直接跳过，在路上的主动接话回复发送前丢掉；@、引用和点名照常回答——叫停说的是别插话，不是不理人。</p></div>
       </section>
 

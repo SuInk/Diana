@@ -19,7 +19,7 @@ var _ assistant.InboundBacklogStore = (*SQLiteStore)(nil)
 
 // InboundEventSuperseded 报告这条入站消息是否已被标记为并入另一轮回复。
 //
-// 标记现在只由追发合并写入（RecordInboundEventReplyMerge）。旧版相邻媒体合并留下的
+// 标记由追发合并和连发交接写入（MarkInboundHandoff）。旧版相邻媒体合并留下的
 // superseded_by 行照样读得出来：那些任务早已落终态，读到也只是在发送前多拦一次。
 func (s *SQLiteStore) InboundEventSuperseded(ctx context.Context, event assistant.MessageEvent) (string, bool, error) {
 	if s == nil || s.db == nil || strings.TrimSpace(event.MessageID) == "" {
@@ -31,8 +31,9 @@ SELECT superseded_by
 FROM inbound_events
 WHERE message_id = ? AND kind = ?
   AND COALESCE(group_id, '') = ? AND COALESCE(user_id, '') = ?
+  AND COALESCE(profile_id, '') = ?
 ORDER BY created_at DESC, id DESC LIMIT 1
-`, strings.TrimSpace(event.MessageID), string(event.Kind), strings.TrimSpace(event.GroupID), strings.TrimSpace(event.UserID)).Scan(&supersededBy)
+`, strings.TrimSpace(event.MessageID), string(event.Kind), strings.TrimSpace(event.GroupID), strings.TrimSpace(event.UserID), strings.TrimSpace(event.ProfileID)).Scan(&supersededBy)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return "", false, nil

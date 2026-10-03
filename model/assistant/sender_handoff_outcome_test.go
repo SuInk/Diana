@@ -25,7 +25,7 @@ func outcomeDirectedMessage(messageID, text string, at int64) MessageEvent {
 	}
 }
 
-func TestHandoffSettlesByConfirmedDeliveryOfAmbiguousSend(t *testing.T) {
+func TestHandoffSettlesByActualDeliveryOutcome(t *testing.T) {
 	for _, tc := range []struct {
 		name        string
 		outcomes    []error
@@ -38,9 +38,8 @@ func TestHandoffSettlesByConfirmedDeliveryOfAmbiguousSend(t *testing.T) {
 		{name: "confirmed by echo", outcomes: []error{ambiguousSendError("send_group_msg")}, echo: true, wantFirst: "superseded_follow_up", wantAttempt: 1},
 		// 没有回推，历史里查到了这条：同样算回出去。
 		{name: "confirmed by history", outcomes: []error{ambiguousSendError("send_group_msg")}, history: true, wantFirst: "superseded_follow_up", wantAttempt: 1},
-		// 超时、查不到、重发一次仍然不明：确认不了，不算回出去，前一条被放回来自己回答
-		// （原来那次、重发一次，加上前一条自己的回复）。
-		{name: "unconfirmed", outcomes: []error{ambiguousSendError("send_group_msg"), ambiguousSendError("send_group_msg")}, wantFirst: "replied", wantAttempt: 3},
+		// 重发一次仍无法确认时，已经包含在该答案里的请求也不能重新排队重发。
+		{name: "unconfirmed", outcomes: []error{ambiguousSendError("send_group_msg"), ambiguousSendError("send_group_msg")}, wantFirst: "superseded_follow_up", wantAttempt: 2},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			channel := &ambiguousOutboundChannel{outcomes: tc.outcomes}

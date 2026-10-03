@@ -132,6 +132,8 @@ func (r *Runtime) maybeSendPluginFollowUp(ctx context.Context, event MessageEven
 	if !resp.FollowUp {
 		return
 	}
+	// 可选模型跟评遵守追问发送闸门，不能继承插件事实投递的豁免。
+	ctx = withReplyTriggerGate(ctx)
 	ctx = r.withFileParserVideoLimit(ctx, event)
 	// 跟评有自己的时间预算：解析慢一点就把整条回复链路的超时吃光，
 	// 跟着上游 ctx 一起被取消的话，跟评会毫无规律地时有时无。
