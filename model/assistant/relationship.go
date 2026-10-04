@@ -7,7 +7,6 @@ import (
 	"context"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/SuInk/diana/model/agent"
 )
@@ -26,11 +25,6 @@ type RelationshipPolicy struct {
 	AllowImageEditing     bool   `json:"allow_image_editing"`
 	AllowDocumentOCR      bool   `json:"allow_document_ocr"`
 	AllowPersonalSchedule bool   `json:"allow_personal_schedule"`
-	// Romance 及其两个附属字段只在人机恋开启且当前发言者是恋人时才有值。
-	// 它们只影响语气和上下文，不出现在任何权限判断里。
-	Romance     bool   `json:"romance,omitempty"`
-	RomanceDays int    `json:"romance_days,omitempty"`
-	RomanceNote string `json:"romance_note,omitempty"`
 }
 
 // 五个非主人等级的能力完全一样——聊天、媒体理解、搜索与沙盒渲染、生图与修图、
@@ -200,15 +194,9 @@ func (p RelationshipPolicy) personalScheduleLimit() int {
 	}
 }
 
-// RelationshipPolicyForConfig 在基础策略上按机器人配置叠加恋爱模式。所有拿得到
-// BotConfig 的调用方都该走它；RelationshipPolicyFor 保持原样，供不感知配置的
-// 场景和旧测试使用。
+// RelationshipPolicyForConfig 按机器人配置中的主人账号生成关系策略。
 func RelationshipPolicyForConfig(cfg BotConfig, profile UserMemoryProfile, userID string) RelationshipPolicy {
-	policy := RelationshipPolicyFor(profile, cfg.OwnerID, userID)
-	if boolValue(cfg.RomanceEnabled, false) {
-		policy = applyRomancePolicy(policy, profile, time.Now().In(cfg.Location()))
-	}
-	return policy
+	return RelationshipPolicyFor(profile, cfg.OwnerID, userID)
 }
 
 func (r *Runtime) relationshipPolicy(ctx context.Context, event MessageEvent) RelationshipPolicy {
@@ -246,9 +234,6 @@ func relationshipPermissionContext(policy RelationshipPolicy, configs ...BotConf
 		context += "\n" + currentSpeakerIdentityMarker + overrides.text(promptSpeakerOwnerSpec)
 	} else {
 		context += "\n" + currentSpeakerIdentityMarker + overrides.text(promptSpeakerNotOwnerSpec)
-	}
-	if line := romanceContextLine(policy); line != "" {
-		context += "\n" + line
 	}
 	return context
 }

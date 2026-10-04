@@ -59,12 +59,8 @@ type dianaRelationshipSnapshot struct {
 	CanDocumentOCR   bool   `json:"can_document_ocr"`
 	// Owner 说的是机器人的主人，不是群主，所以键名写成 bot_owner——群成员角色
 	// 里的 owner 是群主，同名会让模型把两者混成一个人。
-	Owner      bool `json:"bot_owner"`
-	HasHistory bool `json:"has_history"`
-	// Romance 系列只在人机恋开启且目标是恋人时才有值，见 RelationshipPolicy。
-	Romance       bool                     `json:"romance,omitempty"`
-	RomanceDays   int                      `json:"romance_days,omitempty"`
-	RomanceNote   string                   `json:"romance_note,omitempty"`
+	Owner         bool                     `json:"bot_owner"`
+	HasHistory    bool                     `json:"has_history"`
 	RecentChanges []UserFavorabilityChange `json:"recent_changes,omitempty"`
 	// Portrait 和好感度一样是群里公开的：谁都查得到别人的。写画像仍然要权限，
 	// 见 runPortraitOperation。榜单不带它，那是体积考虑，不是可见性。
@@ -82,10 +78,9 @@ func (t *dianaRelationshipTool) Name() string {
 func (t *dianaRelationshipTool) Description() string {
 	// 「别猜、别说查不了」防模型凭上下文编好感度，或以隐藏数据为由拒查。
 	// 能力问题转 capabilities：本工具早年带过权限清单，模型拿它当能力边界（d9b73dbe）。
-	return `查好感度、关系等级、互动记录和人员画像；主人可设定或增减好感度；可写画像、确立/解除恋人。` +
+	return `查好感度、关系等级、互动记录和人员画像；主人可设定或增减好感度；可写画像。` +
 		`问自己、被 @ 或指定成员的好感度或关系时必须查，不要猜，也不要说查不了。` +
 		`用户让记住或忘掉自己的住处、职业等个人情况时用 portrait_set/portrait_forget。` +
-		`人机恋开启时，本人明确表白用 romance_start，提分手用 romance_end。` +
 		`不返回能力清单，「你能做什么」用 capabilities。`
 }
 
@@ -96,7 +91,7 @@ func (t *dianaRelationshipTool) Description() string {
 func (t *dianaRelationshipTool) InputSchema() map[string]any {
 	return toolObjectSchema([]string{"operation"}, map[string]any{
 		"operation": toolEnumParam("list 群内好感排行，成员均可查，勿以隐私拒绝；set 设定、adjust 增减好感度，仅主人",
-			"get", "list", "set", "adjust", "portrait_set", "portrait_forget", "romance_start", "romance_end"),
+			"get", "list", "set", "adjust", "portrait_set", "portrait_forget"),
 		"target_user_id": toolStringParam("目标账号，默认被 @ 者或发言者；set/adjust 必填且不能是主人"),
 		"portrait_field": toolEnumParam("画像栏目；residence 只记城市，timezone 填 IANA 名，城市能定时区就一并记", PortraitFieldIDs()...),
 		"portrait_value": toolStringParam("portrait_set：≤30 字第三人称短语，覆盖原内容"),
@@ -191,128 +186,9 @@ func (t *dianaRelationshipTool) Run(ctx context.Context, input map[string]any) (
 		})
 	case "portrait_set", "portrait_forget":
 		return t.runPortraitOperation(ctx, operation, input)
-	case "romance_start", "romance_end":
-		return t.runRomanceOperation(ctx, operation, input)
 	default:
-		return "", fmt.Errorf("operation 必须是 get、list、set、adjust、portrait_set、portrait_forget、romance_start 或 romance_end")
+		return "", fmt.Errorf("operation 必须是 get、list、set、adjust、portrait_set 或 portrait_forget")
 	}
-}
-
-// runRomanceOperation 确立或解除恋人关系。
-//
-// 恋爱是当事人自己的事：romance_start 只对当前发言者本人生效，主人也不能替别人
-// 表白；romance_end 本人随时可用，主人可以替任何人解除（处理骚扰或代已离群的人
-// 收尾）。达不到门槛时返回 declined 而不是错误——「还不到时候」是关系的正常状态，
-// 不是故障，模型拿到它才能好好把话说软。
-func (t *dianaRelationshipTool) runRomanceOperation(ctx context.Context, operation string, input map[string]any) (string, error) {
-	cfg := t.runtime.effectiveConfigForEvent(t.event)
-	if !boolValue(cfg.RomanceEnabled, false) {
-		return "", fmt.Errorf("人机恋模式未开启：需要主人先在控制台的机器人设置里打开恋爱模式")
-	}
-	speakerID := strings.TrimSpace(t.event.UserID)
-	targetID := normalizeRelationshipUserID(configToolString(input, "target_user_id"))
-	if targetID == "" {
-		targetID = speakerID
-	}
-	if targetID == "" {
-		return "", fmt.Errorf("没有找到要操作的用户")
-	}
-	if operation == "romance_start" && targetID != speakerID {
-		return "", fmt.Errorf("恋人关系只能由本人当面确立，不能替别人表白")
-	}
-	if operation == "romance_end" && targetID != speakerID && !t.runtime.relationshipPolicy(ctx, t.event).Owner {
-		return "", fmt.Errorf("只能解除自己的恋人关系")
-	}
-
-	t.runtime.mu.RLock()
-	store := t.runtime.userMemory
-	t.runtime.mu.RUnlock()
-	if store == nil {
-		return "", fmt.Errorf("当前未启用用户关系存储")
-	}
-	profile, _, err := store.GetUserMemory(ctx, strings.TrimSpace(t.event.ProfileID), targetID)
-	if err != nil {
-		return "", fmt.Errorf("读取用户关系失败: %w", err)
-	}
-
-	writeState := func(state *UserRomanceState) error {
-		_, err := t.runtime.saveUserMemory(ctx, store, t.targetMemoryEvent(targetID, profile.DisplayName), UserMemoryUpdate{
-			OwnerID:        cfg.OwnerID,
-			SetRomance:     state,
-			Administrative: true,
-		})
-		return err
-	}
-
-	if operation == "romance_end" {
-		if !romanceActive(profile) {
-			return marshalDianaRelationshipResult(dianaRelationshipResult{
-				OK:      true,
-				Action:  "noop",
-				Message: "目标用户和机器人当前不是恋人关系，无需解除。",
-			})
-		}
-		if err := writeState(&UserRomanceState{Active: false}); err != nil {
-			return "", fmt.Errorf("保存恋爱关系失败: %w", err)
-		}
-		snapshot, err := t.relationshipSnapshot(ctx, targetID, "", 0, false)
-		if err != nil {
-			return "", err
-		}
-		return marshalDianaRelationshipResult(dianaRelationshipResult{
-			OK:      true,
-			Action:  "romance_ended",
-			Message: "恋人关系已解除。好感度、画像和记忆都保留，按当前关系等级正常相处；语气尊重对方的决定，好聚好散，不纠缠、不报复性冷淡。",
-			Target:  &snapshot,
-		})
-	}
-
-	if romanceActive(profile) {
-		snapshot, err := t.relationshipSnapshot(ctx, targetID, "", 0, false)
-		if err != nil {
-			return "", err
-		}
-		return marshalDianaRelationshipResult(dianaRelationshipResult{
-			OK:      true,
-			Action:  "noop",
-			Message: "你们已经是恋人了，不需要再确立一次；可以顺着这份心意回应对方。",
-			Target:  &snapshot,
-		})
-	}
-	// 恋爱是单偶的：已经有恋人时，任何人的表白都被婉拒，好感度再高也一样。
-	// 这个理由比门槛更根本，所以排在门槛之前——拒绝的原因要说真话。
-	if _, taken := t.runtime.currentRomancePartner(ctx, t.event.ProfileID, targetID); taken {
-		return marshalDianaRelationshipResult(dianaRelationshipResult{
-			OK:     true,
-			Action: "declined",
-			Message: "机器人婉拒了这次表白：它已经有确立关系的恋人了，同一时间只会有一位。" +
-				"用自己的语气温柔而明确地拒绝：可以说明自己已经有喜欢的人，不要透露对方是谁，" +
-				"不要嘲讽，也不要留下模糊的希望；对方可以继续做重要的朋友。",
-		})
-	}
-	// 主人身份免门槛没有道理：恋爱看的是相处，不是权限。门槛对谁都一样。
-	if profile.Favorability < romanceStartMinFavorability || profile.MessageCount < romanceStartMinMessages {
-		return marshalDianaRelationshipResult(dianaRelationshipResult{
-			OK:     true,
-			Action: "declined",
-			Message: fmt.Sprintf(
-				"机器人婉拒了这次表白：当前好感度 %d、累计互动 %d 次，还没到确立恋人关系的门槛（好感度 %d 且互动 %d 次以上）。用自己的语气温柔地把话说软：说明现在还想再多相处、多了解一下，不要报出具体数字和门槛，不要嘲讽，也不要把话说死。",
-				profile.Favorability, profile.MessageCount, romanceStartMinFavorability, romanceStartMinMessages),
-		})
-	}
-	if err := writeState(&UserRomanceState{Active: true, Since: time.Now().UTC(), StartedBy: "user"}); err != nil {
-		return "", fmt.Errorf("保存恋爱关系失败: %w", err)
-	}
-	snapshot, err := t.relationshipSnapshot(ctx, targetID, "", 0, false)
-	if err != nil {
-		return "", err
-	}
-	return marshalDianaRelationshipResult(dianaRelationshipResult{
-		OK:      true,
-		Action:  "romance_started",
-		Message: "恋人关系已确立，从现在开始记纪念日。用自己的语气自然地答应下来；关系只改变语气和相处方式，不改变任何权限。",
-		Target:  &snapshot,
-	})
 }
 
 // runPortraitOperation 记下或清空画像里的一栏。
@@ -518,9 +394,6 @@ func (t *dianaRelationshipTool) relationshipSnapshot(ctx context.Context, userID
 		CanDocumentOCR:   policy.AllowDocumentOCR,
 		Owner:            policy.Owner,
 		HasHistory:       found,
-		Romance:          policy.Romance,
-		RomanceDays:      policy.RomanceDays,
-		RomanceNote:      policy.RomanceNote,
 		RecentChanges:    recentChanges,
 		Portrait:         portrait,
 	}, nil

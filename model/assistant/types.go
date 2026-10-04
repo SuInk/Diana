@@ -840,10 +840,6 @@ type BotConfig struct {
 	// 每条评论都会触发一次模型调用，升级后不该突然开始花钱。回复不带工具，只是照
 	// 人设写一两句话存进评论串；另有每天条数上限和单条动态的冷却。
 	FeedAutoReplyEnabled *bool `json:"feed_auto_reply_enabled,omitempty"`
-	// RomanceEnabled 是人机恋（恋爱模式）的总开关。开着时用户才能和机器人确立
-	// 恋人关系。默认关闭：机器人愿不愿意谈恋爱是部署者该亲手做的决定，不该在
-	// 升级后突然发生。
-	RomanceEnabled *bool `json:"romance_enabled,omitempty"`
 	// MoodEnabled 让机器人有随相处涨落、随时间回落的心情，只影响语气。
 	// 默认关闭：可感知的行为变化不该在升级后突然发生。
 	MoodEnabled *bool `json:"mood_enabled,omitempty"`
@@ -1369,7 +1365,6 @@ type ConfigPayload struct {
 	WorldBookEnabled                *bool                     `json:"world_book_enabled,omitempty"`
 	SelfNoteEnabled                 *bool                     `json:"self_note_enabled,omitempty"`
 	FeedAutoReplyEnabled            *bool                     `json:"feed_auto_reply_enabled,omitempty"`
-	RomanceEnabled                  *bool                     `json:"romance_enabled,omitempty"`
 	MoodEnabled                     *bool                     `json:"mood_enabled,omitempty"`
 	PokeReplyEnabled                *bool                     `json:"poke_reply_enabled,omitempty"`
 	ExpressionLearningEnabled       *bool                     `json:"expression_learning_enabled,omitempty"`
@@ -2033,7 +2028,6 @@ func DefaultBotConfig() BotConfig {
 		WorldBookEnabled:            boolPointer(true),
 		SelfNoteEnabled:             boolPointer(false),
 		FeedAutoReplyEnabled:        boolPointer(false),
-		RomanceEnabled:              boolPointer(false),
 		MoodEnabled:                 boolPointer(false),
 		PokeReplyEnabled:            boolPointer(false),
 		ExpressionLearningEnabled:   boolPointer(false),
@@ -2291,9 +2285,6 @@ func (cfg BotConfig) WithDefaults() BotConfig {
 	}
 	if cfg.FeedAutoReplyEnabled == nil {
 		cfg.FeedAutoReplyEnabled = boolPointer(false)
-	}
-	if cfg.RomanceEnabled == nil {
-		cfg.RomanceEnabled = boolPointer(false)
 	}
 	if cfg.MoodEnabled == nil {
 		cfg.MoodEnabled = boolPointer(false)
@@ -2672,7 +2663,6 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		WorldBookEnabled:                  copyBoolPointer(cfg.WorldBookEnabled),
 		SelfNoteEnabled:                   copyBoolPointer(cfg.SelfNoteEnabled),
 		FeedAutoReplyEnabled:              copyBoolPointer(cfg.FeedAutoReplyEnabled),
-		RomanceEnabled:                    copyBoolPointer(cfg.RomanceEnabled),
 		MoodEnabled:                       copyBoolPointer(cfg.MoodEnabled),
 		PokeReplyEnabled:                  copyBoolPointer(cfg.PokeReplyEnabled),
 		ExpressionLearningEnabled:         copyBoolPointer(cfg.ExpressionLearningEnabled),
@@ -2903,7 +2893,6 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		WorldBookEnabled:                copyBoolPointer(payload.WorldBookEnabled),
 		SelfNoteEnabled:                 copyBoolPointer(payload.SelfNoteEnabled),
 		FeedAutoReplyEnabled:            copyBoolPointer(payload.FeedAutoReplyEnabled),
-		RomanceEnabled:                  copyBoolPointer(payload.RomanceEnabled),
 		MoodEnabled:                     copyBoolPointer(payload.MoodEnabled),
 		PokeReplyEnabled:                copyBoolPointer(payload.PokeReplyEnabled),
 		ExpressionLearningEnabled:       copyBoolPointer(payload.ExpressionLearningEnabled),

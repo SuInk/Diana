@@ -1912,32 +1912,6 @@
             </div>
           </section>
 
-          <!-- 人机恋：总开关归部署者。开着时用户才能对机器人表白；确立与否还要看好感度门槛。 -->
-          <section class="card">
-            <div class="card-header">
-              <div>
-                <h2>人机恋</h2>
-                <span class="card-sub">允许用户和机器人确立恋人关系</span>
-              </div>
-              <span class="badge" :class="form.romance_enabled ? 'accent' : ''">{{ form.romance_enabled ? "已开启" : "未开启" }}</span>
-            </div>
-            <div class="card-body form-grid">
-              <div class="field wide">
-                <label class="switch">
-                  <input v-model="form.romance_enabled" type="checkbox" />
-                  <span class="track" aria-hidden="true"></span>
-                  <span class="switch-label">恋爱模式</span>
-                </label>
-                <span class="hint">
-                  开启后，用户本人认真表白时机器人才会考虑答应：好感度和相处时长要先到位，不够会被温柔婉拒。
-                  恋爱是单偶的——同一时间只有一位恋人，已有恋人时任何表白都会被婉拒（不透露现任是谁），现任分手后才能确立新的关系。
-                  确立后记纪念日、语气按恋人来，好感度掉太低会进入冷战；整月和周年当天的白天，它还会主动私聊一句纪念日祝福（每天至多一条）。
-                  本人随时可以提出分手，主人也能替任何人解除。恋人关系只改变语气和相处方式，不解锁任何权限；机器人不会主动向用户求爱。关闭时机器人完全不知道有这个功能。
-                </span>
-              </div>
-            </div>
-          </section>
-
           <!-- NoneBot 桥 -->
           <section class="card">
             <div class="card-header">
@@ -3504,7 +3478,7 @@ const purposeRoleRows: ModelRoleRow[] = [
     label: "后台生成",
     sublabel: "好感度 · 记忆",
     description:
-      "好感度评估、长期记忆抽取与归纳、RSS 订阅判定、入群欢迎语和纪念日问候。它们都要写出成段文字，判断模型答不了；" +
+      "好感度评估、长期记忆抽取与归纳、RSS 订阅判定和入群欢迎语。它们都要写出成段文字，判断模型答不了；" +
       "都在回复之外异步执行，慢一点没关系，适合指一个便宜的模型。不指定时跟随对话。"
   },
   {
@@ -4332,7 +4306,6 @@ function setForm(config: BotProfileConfig): void {
     world_book_enabled: config.world_book_enabled ?? true,
     self_note_enabled: config.self_note_enabled ?? false,
     feed_auto_reply_enabled: config.feed_auto_reply_enabled ?? false,
-    romance_enabled: config.romance_enabled ?? false,
     mood_enabled: config.mood_enabled ?? false,
     poke_reply_enabled: config.poke_reply_enabled ?? false,
     expression_learning_enabled: config.expression_learning_enabled ?? false,

@@ -76,7 +76,6 @@ func TestTextPurposesStayOffIntent(t *testing.T) {
 		PurposeReplySuppression:     llm.GroupReplyAssist,
 		PurposePokeReply:            llm.GroupReplyAssist,
 		PurposeWelcomeGenerator:     llm.GroupBackground,
-		PurposeRomanceGreeting:      llm.GroupBackground,
 	}
 	for purpose, want := range writers {
 		if got := ModelBindingGroupOf(purpose); got != want {

@@ -101,12 +101,9 @@ func knownPortraitForEvaluation(traits []UserPortraitTrait) []relationshipKnownP
 }
 
 type relationshipEvaluationPayload struct {
-	Message      proactiveReplyPayload `json:"message"`
-	CurrentScore int                   `json:"current_score"`
-	MessageCount int                   `json:"message_count"`
-	// RomanceActive 让评估器知道双方已是恋人：亲密表达在恋人之间是日常，不该
-	// 每句都当成「关系变化」加分。
-	RomanceActive  bool                        `json:"romance_active,omitempty"`
+	Message        proactiveReplyPayload       `json:"message"`
+	CurrentScore   int                         `json:"current_score"`
+	MessageCount   int                         `json:"message_count"`
 	PortraitFields []PortraitFieldSpec         `json:"portrait_fields"`
 	KnownPortrait  []relationshipKnownPortrait `json:"known_portrait,omitempty"`
 }
@@ -127,7 +124,7 @@ const relationshipEvaluationRulesPrompt = `你是聊天机器人 Diana 的关系
 3. 好感度不会因为「聊得多」自然上涨。普通的提问、任务请求、闲聊本身一律判 0，无论对方说了多少条。只有当这条消息真正表达了善意、感谢、信任、关心、冒犯或恶意时才动分——相处次数不是理由，内容才是。
 4. 普通提问、任务请求、唤醒和闲聊默认 delta=0，不能因为 @ 机器人或机器人会回复就加分。
 5. 当前发言者对机器人表达清晰且有上下文支撑的善意、感谢、信任、关心或持续亲近时可以加分；明确针对机器人的轻视、攻击、骚扰、威胁或恶意时应减分。
-6. 玩笑、昵称和亲密调侃必须结合双方最近语境判断；拿不准时不更新。混合表达要按整体含义判断，严重威胁不能因同时出现亲密表达而加分。当 romance_active=true 时双方已是恋人：日常的亲昵、情话和恋人间的称呼是常态，默认不加分，只有明显超出日常的关心、付出或伤害才算关系变化。
+6. 玩笑、昵称和亲密调侃必须结合双方最近语境判断；拿不准时不更新。混合表达要按整体含义判断，严重威胁不能因同时出现亲密表达而加分。
 7. delta 只能是 -3、-2、-1、0、1、2、3。轻微变化用 1，明确变化用 2，极强且罕见的变化用 3。confidence 是对关系变化判断的置信度，范围 0 到 1。
 8. 机器人的主人不是特例：主人身份由账号决定、不受分数影响，但好感度照样按上面几条如实评估，该加就加、该减就减，不要因为对方是主人就一律判 0 或一律加分。
 
@@ -175,12 +172,10 @@ func (r *Runtime) evaluateRelationshipUpdateDetailed(ctx context.Context, event 
 	}
 	profile, _ := r.loadUserMemoryProfile(ctx, event)
 	cfg := r.effectiveConfigForEvent(event)
-	policy := relationshipPolicyForEvent(cfg, profile, event)
 	payload := relationshipEvaluationPayload{
 		Message:        r.proactiveReplyPayload(event, r.cleanInput(event, text)),
 		CurrentScore:   profile.Favorability,
 		MessageCount:   profile.MessageCount,
-		RomanceActive:  policy.Romance,
 		PortraitFields: PortraitFieldSpecs(),
 		KnownPortrait:  knownPortraitForEvaluation(profile.Portrait),
 	}

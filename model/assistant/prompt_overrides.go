@@ -53,7 +53,7 @@ var promptGroupOrder = []PromptGroupInfo{
 	{PromptGroupRouting, "接话与意图判断", "决定这条消息要不要回、回哪一条、指的是哪条的判断模型提示词。"},
 	{PromptGroupAudit, "发送前审核与改写", "候选回复发出去之前的审核、压缩、去重和提示语改写。"},
 	{PromptGroupMemory, "记忆与关系", "长期记忆门控、会话摘要、好感度与画像评估。"},
-	{PromptGroupSocial, "欢迎、戳一戳与纪念日", "不经过正式回复链路的几种社交回应。"},
+	{PromptGroupSocial, "欢迎与戳一戳", "不经过正式回复链路的几种社交回应。"},
 	{PromptGroupMedia, "图片、文档与子任务", "看图、OCR、读文档和独立子问题。"},
 	{PromptGroupTasks, "订阅与定时任务", "RSS 筛选和定时查询。"},
 }

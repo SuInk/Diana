@@ -175,8 +175,8 @@ var AgentSafeModeCategories = []AgentSafeModeCategory{
 // 只读工具（list_files、read_file、find_files、grep、manage_files 的 stat、view_image、
 // send_attachment）。
 //
-// 有意保留、不算漏网的写操作：relationship 的 set / adjust / portrait_* / romance_*（好感度、
-// 画像和恋人关系）、self_note 的写入、notebook、thread_state。它们和记忆同一类，只改
+// 有意保留、不算漏网的写操作：relationship 的 set / adjust / portrait_*（好感度、
+// 画像）、self_note 的写入、notebook、thread_state。它们和记忆同一类，只改
 // 机器人自己记下的东西，不碰本机、不对外发消息、不改权限；其中改别人好感度和清空自述
 // 本来就只给主人，被带偏的代价是一段记错的记忆，主人在控制台能看到并改回。
 //

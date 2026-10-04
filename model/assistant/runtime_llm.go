@@ -1156,11 +1156,6 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 		builder.WriteString("\n" + cfg.prompt(promptToolRelationshipListSpec))
 		builder.WriteString("\n" + cfg.prompt(promptToolRelationshipQuerySpec))
 		builder.WriteString("\n" + cfg.prompt(promptToolRelationshipPortraitSpec))
-		// 恋爱模式的规则跟着配置走：同一台机器人整段稳定，不影响前缀缓存。
-		// 关着时一个字不注入——模型不知道有这回事，被表白就按普通关系自然回应。
-		if boolValue(cfg.RomanceEnabled, false) {
-			builder.WriteString("\n" + cfg.prompt(promptToolRelationshipRomanceSpec))
-		}
 	}
 	if agentEnabled && hasTool(dianaImageToolName) {
 		builder.WriteString("\n" + cfg.prompt(promptToolImageSpec))

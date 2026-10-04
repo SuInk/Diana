@@ -1000,10 +1000,6 @@ func (r *Runtime) Start(parent context.Context) error {
 			r.ResumeCodingJobs(ctx)
 		}()
 		go func() {
-			defer recoverGoroutinePanic("runtime.romanceGreetingLoop")
-			r.runRomanceGreetingLoop(ctx)
-		}()
-		go func() {
 			defer recoverGoroutinePanic("runtime.llmDowngradeMemoLoop")
 			r.runLLMDowngradeMemoLoop(ctx)
 		}()

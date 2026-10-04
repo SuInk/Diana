@@ -400,8 +400,6 @@ export interface BotProfileConfig extends SendRetrySettings {
   /** 允许机器人自己写自述（自我认知），只进提示词尾部、改不动人设和权限；缺省关闭。 */
   self_note_enabled?: boolean;
   feed_auto_reply_enabled?: boolean;
-  /** 人机恋（恋爱模式）总开关；缺省关闭。 */
-  romance_enabled?: boolean;
   /** 情绪系统：随相处涨落、随时间回落的心情，只影响语气；缺省关闭。 */
   mood_enabled?: boolean;
   /** 被戳一戳时回一句（OneBot）；缺省关闭。 */
@@ -3069,14 +3067,6 @@ export interface PortraitFieldSpec {
   capacity: number;
 }
 
-/** 与机器人的恋爱关系状态（人机恋）；没谈过就是缺省。 */
-export interface UserRomanceState {
-  active: boolean;
-  /** 确立关系的时间，纪念日从它算。 */
-  since?: string;
-  started_by?: string;
-}
-
 export interface UserMemoryProfile {
 	bot_profile_id?: string;
   user_id: string;
@@ -3086,7 +3076,6 @@ export interface UserMemoryProfile {
   /** 原始发言缓冲，不是长期记忆；见 UserMemoryItem。 */
   memories?: UserMemoryItem[];
   portrait?: UserPortraitTrait[];
-  romance?: UserRomanceState;
   /** 列表接口不带正文，只带条数；详情接口带完整内容。 */
   memory_count?: number;
   /** 门控器写出来的长期记忆条数，和 memory_count 不是一回事。 */

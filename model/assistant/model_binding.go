@@ -55,11 +55,10 @@ const (
 	PurposeDirectReplyTopic   = "direct_reply_topic"
 	PurposeReplySemanticDedup = "reply_semantic_dedup"
 	PurposeSemanticTextRef    = "semantic_text_reference"
-	// 下面三个也是写给用户看的话，以前不在表里：旁路调用查不到归属就按意图识别
+	// 下面两个也是写给用户看的话，以前不在表里：旁路调用查不到归属就按意图识别
 	// 取模型，意图识别绑了只做判断的模型时，它们每次都先失败一次再降级。
 	PurposePokeReply        = "poke_reply"
 	PurposeWelcomeGenerator = "welcome_generator"
-	PurposeRomanceGreeting  = "romance_greeting"
 	// PurposeImageFixGate 判断群友是不是在纠正某张图认错了，见 image_fix_gate.go。
 	PurposeImageFixGate = "image_fix_gate"
 )
@@ -114,9 +113,8 @@ var llmPurposeGroup = map[string]string{
 	PurposeMemoryExtract:        llm.GroupBackground,
 	PurposeMemorySummary:        llm.GroupBackground,
 	PurposeRSSWatchJudge:        llm.GroupBackground,
-	// 入群欢迎和纪念日问候是机器人自己起的头，没人在等，慢一点没关系。
+	// 入群欢迎是机器人自己起的头，没人在等，慢一点没关系。
 	PurposeWelcomeGenerator: llm.GroupBackground,
-	PurposeRomanceGreeting:  llm.GroupBackground,
 }
 
 // modelBindingGroups 是所有分组。它们就是「用途的归属地」，缺一个就有一批用途没有

@@ -71,7 +71,6 @@
                 <span class="muted mono" style="font-size: 11.5px">{{ user.user_id }}</span>
                 <span v-if="!botScope" class="badge">{{ user.bot_profile_id || "旧版记录" }}</span>
                 <span class="badge" :class="favorabilityClass(user.favorability)">好感 {{ user.favorability }}</span>
-                <span v-if="user.romance?.active" class="badge accent">恋人</span>
               </div>
               <p class="log-detail">
                 画像 {{ user.portrait_count ?? 0 }} 条 · 长期记忆 {{ user.structured_memory_count ?? 0 }} 条 · 消息 {{ formatNumber(user.message_count) }} 条
@@ -142,7 +141,6 @@
         <template v-else>
         <div class="cluster" style="gap: 8px">
           <span class="badge" :class="favorabilityClass(detail.profile.favorability)">好感度 {{ detail.profile.favorability }}</span>
-          <span v-if="detail.profile.romance?.active" class="badge accent" :title="detail.profile.romance.since ? `确立于 ${formatTime(detail.profile.romance.since)}` : undefined">恋人</span>
           <span class="badge">消息 {{ formatNumber(detail.profile.message_count) }} 条</span>
           <span v-if="detail.profile.last_seen_at" class="muted" style="font-size: 12.5px">
             最近活跃 {{ formatTime(detail.profile.last_seen_at) }}
@@ -305,7 +303,7 @@
       </template>
     </Modal>
     <Modal v-if="confirmDelete && detail" title="删除人员记录" @close="!saving && (confirmDelete = false)">
-      <p>删除 {{ detail.profile.display_name || detail.profile.user_id }} 在此机器人下的画像、最近发言缓冲、好感度历史、恋人状态和结构化长期记忆？聊天记录会保留，不会踢出群聊。后续互动可能重新建立人员记录，机器人也会重新记住新说的事。</p>
+      <p>删除 {{ detail.profile.display_name || detail.profile.user_id }} 在此机器人下的画像、最近发言缓冲、好感度历史和结构化长期记忆？聊天记录会保留，不会踢出群聊。后续互动可能重新建立人员记录，机器人也会重新记住新说的事。</p>
       <template #footer>
         <button class="btn ghost" :disabled="saving" @click="confirmDelete = false">取消</button>
         <button class="btn" :disabled="saving" @click="saveUser(true)"><Trash2 :size="15" />{{ saving ? "删除中…" : "删除人员" }}</button>

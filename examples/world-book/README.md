@@ -1,7 +1,7 @@
 # 世界书示例
 
 可以直接在 WebUI「机器人 → 人设 → 世界书 → 导入」里选中的文件。格式说明见
-[配置文档](../../docs/configuration.html#world-book-romance)。
+[配置文档](../../docs/configuration.html#world-book)。
 
 这个文件是手写的：纯 JSON，`id` 只用来表达文件内部的父子引用，导入时会统一
 换成新 ID 并按引用重连，不会和本地已有节点撞车。

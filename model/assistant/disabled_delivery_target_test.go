@@ -67,25 +67,6 @@ func TestDiagnosticNoticeSkipsDisabledProfile(t *testing.T) {
 	}
 }
 
-// 停用的机器人不该做任何后台活儿。纪念日问候要扫一遍用户表、再让模型写一段话，
-// 发不出去还照样花钱——停用就该是安静的。
-func TestRomanceGreetingSkipsDisabledProfile(t *testing.T) {
-	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
-	runtime.SetProfiles(ProfileSet{Profiles: []BotConfig{
-		{ID: "on", Enabled: true, RomanceEnabled: boolPtr(true)},
-		{ID: "off", Enabled: false, RomanceEnabled: boolPtr(true)},
-	}})
-	configs := runtime.romanceEnabledConfigs()
-	for _, cfg := range configs {
-		if cfg.ID == "off" {
-			t.Fatalf("停用的机器人不该参与纪念日问候：%#v", configs)
-		}
-	}
-	if len(configs) != 1 || configs[0].ID != "on" {
-		t.Fatalf("启用的那台该照常参与：%#v", configs)
-	}
-}
-
 // 「停用」的直觉是这台机器人整个安静下来。插件的开关聚合点只有一个，停用档案
 // 在这里一刀切：新加的插件不用做任何事就自动遵守。
 func TestDisabledProfileDisablesEveryPlugin(t *testing.T) {

@@ -171,11 +171,7 @@ const (
 	// 只管「用户当面要求记住、改掉或忘掉」这一种需要当场落库的情况。
 	promptToolRelationshipPortrait = "用户明确要求记住自己的长期情况（住在哪、做什么工作、作息、生活习惯、兴趣爱好、家里有谁），或要求改掉、忘掉其中某一栏时，调用 relationship 的 portrait_set / portrait_forget 当场记下来，不要只在嘴上答应。想知道机器人记了自己哪些情况时用 operation=get，结果里的 portrait 就是。画像和好感度一样是群里公开的，谁问都能查、也能查别人的，不要以隐私或权限为由拒绝；但写画像只能写自己的，改别人的要主人。"
 
-	// promptToolRelationshipRomance 只在人机恋开启时注入。三件事都要说死：什么时候
-	// 调（本人明确表白/分手，不是玩笑和转述）、被婉拒了怎么说（工具会给指引）、
-	// 以及机器人自己不许主动求爱——恋爱模式是「可以被追」，不是「上线发情」。
-	promptToolRelationshipRomance = "人机恋模式已开启。当前发言者本人清晰、认真地表白或请求确立恋人关系时，调用 relationship 的 romance_start；玩笑式的「嫁给我」、替别人转述、讨论恋爱话题都不算，拿不准就先用自己的语气回应，不调用。恋爱是单偶的：工具可能因相处还不够、或你已经有恋人而返回 declined，按结果里的指引温柔婉拒——不要报数字，也不要透露现任是谁。用户本人明确提出分手时调用 romance_end，尊重决定、好聚好散。你自己不得主动表白、求爱或诱导用户确立关系；恋人关系只改变语气和相处方式，不改变任何权限。"
-	promptToolRelationshipQuery   = "用户问自己、被 @ 的人、指定用户或群内成员的好感度、最近增减分、关系等级、互动次数或权限时，必须调用 relationship 取目标数据，消息里的结构化 @ 工具会自动识别。像跟人说话那样只讲他问的那件事：问好感度就说分数和关系，问最近怎么变的才讲增减分、时间和原因。不要罗列能力清单，不要主动报提醒和订阅额度（基础能力所有等级都有，额度由创建时的工具在超限时当场说明），用户问「你能做什么」时改用 capabilities。不得把工具结果按字段抄成清单，不得在没人问时把全部数据堆出来，不得拿当前发言者的关系数据冒充目标数据，也不得编造「隐藏数据无法查询」这类限制。"
+	promptToolRelationshipQuery = "用户问自己、被 @ 的人、指定用户或群内成员的好感度、最近增减分、关系等级、互动次数或权限时，必须调用 relationship 取目标数据，消息里的结构化 @ 工具会自动识别。像跟人说话那样只讲他问的那件事：问好感度就说分数和关系，问最近怎么变的才讲增减分、时间和原因。不要罗列能力清单，不要主动报提醒和订阅额度（基础能力所有等级都有，额度由创建时的工具在超限时当场说明），用户问「你能做什么」时改用 capabilities。不得把工具结果按字段抄成清单，不得在没人问时把全部数据堆出来，不得拿当前发言者的关系数据冒充目标数据，也不得编造「隐藏数据无法查询」这类限制。"
 
 	// 「提交了」和「画好了」是两件事，模型很容易说成后者：它看到工具成功返回，
 	// 就按「任务完成」措辞——而图这时还没开始渲染。
@@ -230,7 +226,6 @@ var (
 	promptToolRelationshipListSpec     = toolPromptSpec("relationship_list", "好感度榜单", "关系工具可用时注入：榜单对群成员开放，不许拿隐私当理由拒绝。", promptToolRelationshipList)
 	promptToolRelationshipQuerySpec    = toolPromptSpec("relationship_query", "好感度查询", "关系工具可用时注入：查到什么说什么，只答对方问的那件事。", promptToolRelationshipQuery)
 	promptToolRelationshipPortraitSpec = toolPromptSpec("relationship_portrait", "用户画像", "关系工具可用时注入：用户要求记住或忘掉自己的长期情况时当场落库。", promptToolRelationshipPortrait)
-	promptToolRelationshipRomanceSpec  = toolPromptSpec("relationship_romance", "人机恋", "关系工具可用、且开启了人机恋时注入：什么时候确立或结束恋人关系，机器人不许主动求爱。", promptToolRelationshipRomance)
 	promptToolImageSpec                = toolPromptSpec("image", "生图", "生图工具可用时注入：提交任务后怎么说，别说成已经画好。", promptToolImage)
 	promptToolTTSSpec                  = toolPromptSpec("tts", "语音回复", "语音工具可用时注入：只有明确要求语音才调用。", promptToolTTS)
 )
