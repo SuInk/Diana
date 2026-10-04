@@ -35,6 +35,27 @@ func batchPayload(messageID, text string, at int64) MemoryJobPayload {
 	}}
 }
 
+func TestMemoryPayloadsByProfileNeverMixesModelContexts(t *testing.T) {
+	payloads := []MemoryJobPayload{
+		batchPayload("a1", "来自 A", 100),
+		batchPayload("b1", "来自 B", 200),
+		batchPayload("a2", "来自 A 的第二条", 300),
+	}
+	payloads[0].Event.ProfileID = "bot-a"
+	payloads[1].Event.ProfileID = "bot-b"
+	payloads[2].Event.ProfileID = "bot-a"
+	batches := memoryPayloadsByProfile(payloads)
+	if len(batches) != 2 || len(batches[0]) != 2 || len(batches[1]) != 1 {
+		t.Fatalf("profile batches = %#v", batches)
+	}
+	if got := batches[0][0].Event.ProfileID; got != "bot-a" {
+		t.Fatalf("first batch profile = %q", got)
+	}
+	if got := batches[1][0].Event.ProfileID; got != "bot-b" {
+		t.Fatalf("second batch profile = %q", got)
+	}
+}
+
 // 攒批的意义在于一次调用覆盖多条消息：三条消息只能产生一次 LLM 请求，
 // 固定前缀和 existing_memories 才不会被重复付费三遍。
 func TestMemoryGateBatchesSeveralMessagesIntoOneCall(t *testing.T) {

@@ -167,7 +167,9 @@ type relationshipEvaluationResult struct {
 }
 
 func (r *Runtime) evaluateRelationshipUpdateDetailed(ctx context.Context, event MessageEvent, text string, handled bool) relationshipEvaluationResult {
-	ctx = withLLMUsagePurpose(ctx, "relationship_evaluate")
+	// 关系评估在回复完成后异步执行，不能依赖调用方还留着的运行时 context。
+	// 事件本身才是这次调用的归属：它决定机器人 profile、模型角色和用量记账。
+	ctx = withLLMUsagePurpose(withLLMUsageContext(ctx, event), "relationship_evaluate")
 	if !handled || !r.relationshipEvaluationAvailable(event) {
 		return relationshipEvaluationResult{}
 	}

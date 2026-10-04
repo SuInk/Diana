@@ -84,6 +84,36 @@ func TestMemoryWithoutRolesSkipsActiveImageProfile(t *testing.T) {
 	}
 }
 
+func TestMemoryUsesEventProfileModelRole(t *testing.T) {
+	store := &stubLLMProfileStore{set: llm.ProfileSet{Profiles: []llm.Profile{
+		{ID: "provider-a", Group: llm.GroupChat, Config: llm.ProviderConfig{Provider: llm.ProviderOpenAICompatible, Model: "model-a"}},
+		{ID: "provider-b", Group: llm.GroupChat, Config: llm.ProviderConfig{Provider: llm.ProviderOpenAICompatible, Model: "model-b"}},
+	}}}
+	botA := BotConfig{ID: "bot-a", ModelRoles: map[string]ModelRole{"chat": {ProfileID: "provider-a", Model: "model-a"}}}
+	botB := BotConfig{ID: "bot-b", ModelRoles: map[string]ModelRole{"chat": {ProfileID: "provider-b", Model: "model-b"}}}
+	runtime := NewRuntime(botA, nilChannel{}, NewPluginManager(), store, nil, nil, nil)
+	runtime.SetProfiles(ProfileSet{Profiles: []BotConfig{botA, botB}})
+	selected := ""
+	runtime.SetLLMProviderConfigFactory(func(cfg llm.ProviderConfig) (LLMProvider, error) {
+		selected = cfg.Model
+		return &capturingLLMProvider{reply: `{}`}, nil
+	})
+	event := MessageEvent{ProfileID: "bot-b", MessageID: "message-b"}
+	ctx := withLLMUsagePurpose(withLLMUsageContext(context.Background(), event), PurposeMemoryExtract)
+	if _, err := runtime.runLLMMemoryProvider(ctx, func(client LLMProvider) (string, error) {
+		resp, err := client.Generate(ctx, llm.GenerateRequest{})
+		if err != nil {
+			return "", err
+		}
+		return resp.Text, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if selected != "model-b" {
+		t.Fatalf("memory selected %q for event profile %q, want model-b", selected, event.ProfileID)
+	}
+}
+
 func groupFallbackRegistry(t *testing.T) *llm.ProviderRegistry {
 	t.Helper()
 	registry, err := llm.RegistryFromDocument(llm.ProviderRegistryDocument{

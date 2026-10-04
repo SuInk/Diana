@@ -80,6 +80,35 @@ func TestRelationshipEvaluationUsesRouterSemantics(t *testing.T) {
 	}
 }
 
+func TestRelationshipEvaluationUsesEventProfileModelRole(t *testing.T) {
+	providerStore := &stubLLMProfileStore{set: llm.ProfileSet{Profiles: []llm.Profile{
+		{ID: "provider-a", Group: llm.GroupChat, Config: llm.ProviderConfig{Provider: llm.ProviderOpenAICompatible, Model: "model-a"}},
+		{ID: "provider-b", Group: llm.GroupChat, Config: llm.ProviderConfig{Provider: llm.ProviderOpenAICompatible, Model: "model-b"}},
+	}}}
+	botA := BotConfig{ID: "bot-a", BotAccount: "bot-a", ModelRoles: map[string]ModelRole{"background": {ProfileID: "provider-a", Model: "model-a"}}}
+	botB := BotConfig{ID: "bot-b", BotAccount: "bot-b", ModelRoles: map[string]ModelRole{"background": {ProfileID: "provider-b", Model: "model-b"}}}
+	runtime := NewRuntime(botA, nilChannel{}, NewPluginManager(), providerStore, nil, nil, nil)
+	runtime.SetProfiles(ProfileSet{Profiles: []BotConfig{botA, botB}})
+	memory := newMemoryUserMemoryStore()
+	memory.profiles["user"] = UserMemoryProfile{UserID: "user", Favorability: 3, MessageCount: 1}
+	runtime.SetUserMemoryStore(memory)
+	event := MessageEvent{
+		Kind: EventKindPrivate, ProfileID: "bot-b", UserID: "user", MessageID: "message-b", ToMe: true,
+		RawMessage: "继续说", Segments: []MessageSegment{{Type: "text", Data: map[string]string{"text": "继续说"}}},
+	}
+	selected := ""
+	runtime.SetLLMProviderConfigFactory(func(cfg llm.ProviderConfig) (LLMProvider, error) {
+		selected = cfg.Model
+		return &capturingLLMProvider{reply: `{"should_update":false,"delta":0,"confidence":0.98,"reason":"普通消息"}`}, nil
+	})
+	if _, _, evaluated := runtime.evaluateRelationshipUpdate(context.Background(), event, "继续说", true); !evaluated {
+		t.Fatal("relationship evaluation did not run")
+	}
+	if selected != "model-b" {
+		t.Fatalf("relationship evaluation selected %q for event profile %q, want model-b", selected, event.ProfileID)
+	}
+}
+
 func TestRuntimeAppliesNaturalInteractionFavorability(t *testing.T) {
 	provider := &sequenceLLMProvider{replies: []string{
 		"我来帮你整理。",

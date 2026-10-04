@@ -433,6 +433,17 @@ func (r *Runtime) processMemoryJobs(ctx context.Context, store StructuredMemoryS
 }
 
 func (r *Runtime) processEventMemoryJobs(ctx context.Context, store StructuredMemoryStore, payloads []MemoryJobPayload) error {
+	// 一次批量领取可能跨越机器人 profile。模型上下文只能绑定一个 profile，
+	// 把它们混在同一个 prompt 里会让最后一条消息的配置覆盖整批任务。
+	// 先按事件归属拆批，保证每次模型调用只服务一个机器人。
+	if batches := memoryPayloadsByProfile(payloads); len(batches) > 1 {
+		for _, batch := range batches {
+			if err := r.processEventMemoryJobs(ctx, store, batch); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
 	ctx = withLLMUsagePurpose(ctx, "memory_extract")
 	type gateSource struct {
 		payload MemoryJobPayload
@@ -602,6 +613,32 @@ func memoryGateEventsExcluding(items []memoryGateEvent, batch []memoryGateEvent)
 		kept = append(kept, item)
 	}
 	return kept
+}
+
+// memoryPayloadsByProfile 按稳定顺序把记忆任务分成 profile 同质的批次。
+// 空 profile 也单独成组：它只能使用兼容旧数据的默认路由，不能和明确归属的
+// 机器人共享一次模型调用。
+func memoryPayloadsByProfile(payloads []MemoryJobPayload) [][]MemoryJobPayload {
+	if len(payloads) < 2 {
+		return nil
+	}
+	groups := make(map[string][]MemoryJobPayload, len(payloads))
+	order := make([]string, 0, len(payloads))
+	for _, payload := range payloads {
+		profileID := strings.TrimSpace(payload.Event.ProfileID)
+		if _, ok := groups[profileID]; !ok {
+			order = append(order, profileID)
+		}
+		groups[profileID] = append(groups[profileID], payload)
+	}
+	if len(order) < 2 {
+		return nil
+	}
+	batches := make([][]MemoryJobPayload, 0, len(order))
+	for _, profileID := range order {
+		batches = append(batches, groups[profileID])
+	}
+	return batches
 }
 
 func (r *Runtime) processSummaryMemoryJob(ctx context.Context, store StructuredMemoryStore, job MemoryJob) error {
@@ -977,7 +1014,68 @@ func (r *Runtime) runLLMMemoryProvider(ctx context.Context, run llmProviderRunFu
 	cfgFactory := r.llmCfgFactory
 	factory := r.llmFactory
 	store := r.llmStore
+	registry := r.llmRegistry
 	r.mu.RUnlock()
+	if registry == nil {
+		if registryStore, ok := store.(LLMProviderRegistryStore); ok {
+			registry, _ = registryStore.ProviderRegistry()
+		}
+	}
+	registry = r.bindLLMRegistry(registry)
+	roles := r.modelRolesForContext(ctx)
+	if registry != nil && store != nil {
+		set := store.Profiles().WithDefaults()
+		// 持久化配置同时提供 ProviderRegistry 时，记忆和聊天必须走同一套
+		// provider/model 路由。没有注册表条目时才继续下面的旧配置工厂路径。
+		groups := append([]string(nil), memoryProfileGroups...)
+		seen := map[string]bool{}
+		for _, group := range groups {
+			group = llm.NormalizeProfileGroup(group)
+			if seen[group] {
+				continue
+			}
+			seen[group] = true
+			if profiles := llmProfilesInGroup(set, group); len(profiles) > 0 {
+				if provider, err := newRegistryFailoverLLMProvider(registry, profiles, true, len(profiles) > 1); err == nil {
+					provider.report = r.reportLLMEvent
+					provider.cooldowns = &r.llmCooldowns
+					return run(provider)
+				}
+			}
+		}
+		profiles, roleErr := r.roleBoundProfiles(llmUsagePurposeFromContext(ctx), set, llm.GroupBackground, roles)
+		if roleErr != nil {
+			return "", roleErr
+		}
+		if len(profiles) > 0 {
+			if provider, err := newRegistryFailoverLLMProvider(registry, profiles, true, len(profiles) > 1); err == nil {
+				provider.report = r.reportLLMEvent
+				provider.cooldowns = &r.llmCooldowns
+				return run(provider)
+			}
+		}
+		for _, group := range semanticRouteProfileGroups {
+			group = llm.NormalizeProfileGroup(group)
+			if seen[group] {
+				continue
+			}
+			seen[group] = true
+			if profiles := llmProfilesInGroup(set, group); len(profiles) > 0 {
+				if provider, err := newRegistryFailoverLLMProvider(registry, profiles, true, len(profiles) > 1); err == nil {
+					provider.report = r.reportLLMEvent
+					provider.cooldowns = &r.llmCooldowns
+					return run(provider)
+				}
+			}
+		}
+		if profiles := llmProfilesInGroup(set, llm.GroupChat); len(profiles) > 0 {
+			if provider, err := newRegistryFailoverLLMProvider(registry, profiles, true, len(profiles) > 1); err == nil {
+				provider.report = r.reportLLMEvent
+				provider.cooldowns = &r.llmCooldowns
+				return run(provider)
+			}
+		}
+	}
 	if cfgFactory != nil && store != nil {
 		set := store.Profiles().WithDefaults()
 		// 记忆是自动文本任务：专用 memory 分组优先，其次使用机器人给「后台生成」
@@ -999,7 +1097,7 @@ func (r *Runtime) runLLMMemoryProvider(ctx context.Context, run llmProviderRunFu
 		// 这里以前按 intent 取。本次调用的分组排在用途归属前面，于是只要 intent
 		// 绑了模型，后台生成那一档对记忆就从来不起作用——落到的还多半是只做判断、
 		// 写不出记忆的模型。
-		profiles, roleErr := r.roleBoundProfiles(llmUsagePurposeFromContext(ctx), set, llm.GroupBackground)
+		profiles, roleErr := r.roleBoundProfiles(llmUsagePurposeFromContext(ctx), set, llm.GroupBackground, roles)
 		if roleErr != nil {
 			return "", roleErr
 		}
@@ -1020,6 +1118,9 @@ func (r *Runtime) runLLMMemoryProvider(ctx context.Context, run llmProviderRunFu
 			return r.runLLMProviderProfileAttempts(ctx, profiles, cfgFactory, true, run)
 		}
 		return "", fmt.Errorf("diana: no text-capable llm profile is configured for memory")
+	}
+	if usage := llmUsageFromContext(ctx); usage != nil && strings.TrimSpace(usage.event.ProfileID) != "" {
+		return "", fmt.Errorf("diana: memory llm provider cannot resolve profile %q", strings.TrimSpace(usage.event.ProfileID))
 	}
 	if factory == nil {
 		return "", fmt.Errorf("diana: llm provider is not configured")
