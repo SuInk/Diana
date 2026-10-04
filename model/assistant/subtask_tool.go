@@ -91,6 +91,9 @@ func (t *dianaSubtaskTool) Run(ctx context.Context, input map[string]any) (strin
 
 	callCtx, cancel := context.WithTimeout(ctx, subtaskTimeout)
 	defer cancel()
+	// 子调用是 Agent 工具的独立异步边界；事件 profile 不能只依赖主回复
+	// context 恰好还在链上，否则多机器人运行时会回落到默认模型。
+	callCtx = withLLMUsageContext(callCtx, t.event)
 	answer, err := t.runtime.runSubtask(callCtx, t.runtime.effectiveConfigForEvent(t.event), group, question, material)
 	if err != nil {
 		return "", fmt.Errorf("diana subtask: %w", err)

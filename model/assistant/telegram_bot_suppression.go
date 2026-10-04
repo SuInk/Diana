@@ -69,6 +69,7 @@ var promptMarkedBotPrivateSpec = registerPrompt(PromptSpec{
 })
 
 func (r *Runtime) markedBotPrivateMessageNeedsReply(ctx context.Context, event MessageEvent, text string) bool {
+	ctx = withLLMUsageContext(ctx, event)
 	payload, err := json.Marshal(r.proactiveReplyPayload(event, readableEventText(event, text)))
 	if err != nil {
 		return false
@@ -108,6 +109,7 @@ var promptMarkedBotMentionSpec = registerPrompt(PromptSpec{
 })
 
 func (r *Runtime) telegramBotMessageMentionsSelf(ctx context.Context, event MessageEvent, text string) bool {
+	ctx = withLLMUsageContext(ctx, event)
 	cfg := r.effectiveConfigForEvent(event)
 	routePayload := r.proactiveReplyPayload(event, readableEventText(event, text))
 	// 只有结构上可能在叫本机时才问模型：正文里叫了机器人的名字，或者机器人上一句正是

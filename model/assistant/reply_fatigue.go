@@ -220,6 +220,7 @@ var replyFatigueGateDecision = &llm.DecisionSpec{Questions: []llm.DecisionQuesti
 // replyFatigueBlocks 在触发阶段、生成回复之前判断：疲劳攒满时这条还回不回。
 // 疲劳没攒满、或攒着的目的够高时不调用模型；判断失败按放行处理。@ 和引用也走这里。
 func (r *Runtime) replyFatigueBlocks(ctx context.Context, event MessageEvent, text string) (bool, string) {
+	ctx = withLLMUsageContext(ctx, event)
 	if !r.replyDensityApplies(event) {
 		return false, ""
 	}

@@ -492,6 +492,7 @@ func (r *Runtime) generateForPluginTask(ctx context.Context, req llm.GenerateReq
 
 func (r *Runtime) generateUserFacingPluginReply(ctx context.Context, event MessageEvent, req llm.GenerateRequest) (string, error) {
 	req.Messages = r.withUserFacingPersona(event, req.Messages)
+	ctx = withLLMUsageContext(ctx, event)
 	return r.generateForPluginTask(ctx, req)
 }
 

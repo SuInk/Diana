@@ -437,6 +437,7 @@ func accountRiskLabel(risk string) string {
 // runReplyAudit 做一次审核调用，同时拿回表达质量和账号安全两个结论。
 // 两者共用一次模型调用：主动回复本来就要审一次，直接回复只额外多这一次。
 func (r *Runtime) runReplyAudit(ctx context.Context, event MessageEvent, input, reply string, cfg BotConfig, evidence botReplyLoopEvidence, need replyAuditNeed) (proactiveReplyQualityDecision, error) {
+	ctx = withLLMUsageContext(ctx, event)
 	original := strings.TrimSpace(readableEventText(event, input))
 	fields := map[string]any{
 		"original_message":        original,

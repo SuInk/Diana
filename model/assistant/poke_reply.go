@@ -172,7 +172,7 @@ var promptPokeReactionSpec = registerPrompt(PromptSpec{
 
 // generatePokeReaction 让模型像人一样决定怎么回应这一戳：戳回去、说句话、都做，或者不理。
 func (r *Runtime) generatePokeReaction(ctx context.Context, event MessageEvent) (pokeReaction, error) {
-	ctx = withLLMUsagePurpose(ctx, PurposePokeReply)
+	ctx = withLLMUsagePurpose(withLLMUsageContext(ctx, event), PurposePokeReply)
 	profile, _ := r.loadUserMemoryProfile(ctx, event)
 	cfg := r.effectiveConfigForEvent(event)
 	policy := relationshipPolicyForEvent(cfg, profile, event)

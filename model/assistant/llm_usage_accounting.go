@@ -30,6 +30,10 @@ type llmUsageState struct {
 
 // withLLMUsageContext 记下这一轮的消息事件，供装饰器把用量归到这条消息名下。
 // 和 debug trace 不同，它不受调试开关影响：用量统计任何时候都要准。
+//
+// context.Context 只在当前调用链内有效，不能跨队列或定时器充当业务句柄。
+// 异步入口必须从持久化的 MessageEvent 重新调用这个函数，不能继续沿用入队时的
+// context；这样模型 profile、角色选择和用量归属才会一起恢复。
 func withLLMUsageContext(ctx context.Context, event MessageEvent) context.Context {
 	if ctx == nil {
 		return ctx

@@ -127,6 +127,7 @@ func (r *Runtime) deduplicateReply(ctx context.Context, event MessageEvent, inpu
 // 「复读自己」只看得到机器人最近几条回复，看不到对方这次在问什么；去重拿着完整
 // 的请求和引用判过「有新内容」，就不该再被复读那一项整条丢掉。
 func (r *Runtime) deduplicateReplyVerdict(ctx context.Context, event MessageEvent, input, reply string, cfg BotConfig, gate *semanticReplyGate, allowDrop bool) (string, bool, error) {
+	ctx = withLLMUsageContext(ctx, event)
 	var recent []semanticSentReply
 	for _, item := range gate.sent {
 		if time.Since(item.SentAt) <= semanticReplyRetention {

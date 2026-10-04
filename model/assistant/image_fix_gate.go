@@ -173,7 +173,7 @@ func (r *Runtime) detectImageFix(ctx context.Context, event MessageEvent, store 
 	if err != nil {
 		return "", ""
 	}
-	ctx = withLLMUsagePurpose(r.withIdentityPrivacyContext(ctx, event, history), PurposeImageFixGate)
+	ctx = withLLMUsagePurpose(withLLMUsageContext(r.withIdentityPrivacyContext(ctx, event, history), event), PurposeImageFixGate)
 	raw, err := r.generateImageFixDecision(ctx, r.effectiveConfigForEvent(event).prompt(promptImageFixGateSpec), llm.Message{Role: llm.RoleUser, Content: string(payloadJSON)})
 	if err != nil {
 		return "", ""

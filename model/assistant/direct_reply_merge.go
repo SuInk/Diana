@@ -310,6 +310,7 @@ var promptDirectReplyTopicSpec = registerPrompt(PromptSpec{
 })
 
 func (r *Runtime) classifyDirectReplyTopic(ctx context.Context, root MessageEvent, supplements []proactiveReplyCandidate, event MessageEvent, text string) string {
+	ctx = withLLMUsageContext(ctx, event)
 	prior := make([]string, 0, len(supplements))
 	for _, item := range supplements {
 		prior = append(prior, readableEventText(item.Event, item.Text))

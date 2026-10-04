@@ -2749,15 +2749,13 @@ var promptParticipationRouteInstructionSpec = registerPrompt(PromptSpec{
 })
 
 func (r *Runtime) routeProactiveReplyBatch(ctx context.Context, candidates []proactiveReplyCandidate) (MessageEvent, string, []proactiveReplyCandidate, bool) {
-	ctx = withLLMUsagePurpose(ctx, "proactive_reply_router")
 	if len(candidates) == 0 {
 		return MessageEvent{}, "", nil, false
 	}
 	// 攒批是定时器触发的，那时的 ctx 不带消息事件：这一路的判断调用以前一次都
-	// 没进过用量统计。记到批里最新那条消息名下，事件列表里点开它就能看到。
-	if llmUsageFromContext(ctx) == nil {
-		ctx = withLLMUsageContext(ctx, candidates[len(candidates)-1].Event)
-	}
+	// 没进过用量统计。每次都用批里最新那条消息恢复上下文，不能沿用定时器或
+	// 上游调用方残留的另一条消息：批处理是跨调用边界的，旧 context 不是业务句柄。
+	ctx = withLLMUsagePurpose(withLLMUsageContext(ctx, candidates[len(candidates)-1].Event), "proactive_reply_router")
 	eligible := make([]proactiveReplyCandidate, 0, len(candidates))
 	for _, candidate := range candidates {
 		if ignored, decision := r.shouldIgnoreGroupReplyByMemberLevel(ctx, candidate.Event); ignored {
@@ -2774,7 +2772,7 @@ func (r *Runtime) routeProactiveReplyBatch(ctx context.Context, candidates []pro
 	candidates = eligible
 	latest := candidates[len(candidates)-1]
 	event, text := latest.Event, latest.Text
-	ctx = withModelConfigEvent(ctx, event)
+	ctx = withLLMUsageContext(ctx, event)
 	select {
 	case r.proactiveRouteSem <- struct{}{}:
 		defer func() { <-r.proactiveRouteSem }()
@@ -3778,7 +3776,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		}
 		return reply, nil
 	}
-	ctx = withModelConfigEvent(ctx, event)
+	ctx = withLLMUsageContext(ctx, event)
 	ctx = r.withFileParserVideoLimit(ctx, event)
 	r.beginHistoryImageDescriptionForeground()
 	defer r.endHistoryImageDescriptionForeground()
@@ -4717,6 +4715,9 @@ func (r *Runtime) deliverResolverResponse(ctx context.Context, event MessageEven
 }
 
 func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event MessageEvent, relationship RelationshipPolicy, messages []llm.Message, preparedRegistry *agent.ToolRegistry, extraTools ...agent.Tool) (string, error) {
+	// generateReply 也被订阅、动态页和事件触发等后台入口直接调用；这些入口
+	// 没有入站 worker 的上下文，必须在这里按事件恢复 profile 和用量归属。
+	ctx = withLLMUsageContext(ctx, event)
 	messages = withReplyGenerationBudgetForConfig(messages, cfg)
 	// Agent 每一步都带着完整原件重发，预算层丢过的历史、摘要过的文字要记到这一整次
 	// 回复结束，下一步才能照搬，而不是每步从头裁、从头摘要（见 input_budget_pretrim.go）。
@@ -4971,7 +4972,7 @@ var promptReplyRuleRouterSpec = registerPrompt(PromptSpec{
 })
 
 func (r *Runtime) evaluateReplyRules(ctx context.Context, event MessageEvent, text string, history []MessageEvent, cfg BotConfig) (replyRuleDecision, bool) {
-	ctx = withLLMUsagePurpose(ctx, "reply_rule_router")
+	ctx = withLLMUsagePurpose(withLLMUsageContext(ctx, event), "reply_rule_router")
 	rules := enabledReplyRules(cfg.ReplyRules)
 	if len(rules) == 0 {
 		return replyRuleDecision{}, false
@@ -5203,7 +5204,7 @@ func (r *Runtime) classifyVisualIntent(ctx context.Context, event MessageEvent, 
 }
 
 func (r *Runtime) routeReplyIntent(ctx context.Context, event MessageEvent, text string, registry *agent.ToolRegistry, olderSummaryAvailable bool) (visualIntentDecision, agentReplyScope, bool) {
-	ctx = withLLMUsagePurpose(ctx, "reply_intent_router")
+	ctx = withLLMUsagePurpose(withLLMUsageContext(ctx, event), "reply_intent_router")
 	payload := r.visualIntentPayload(event, text)
 	if registry != nil {
 		payload.AvailableTools = registry.Catalog(180)

@@ -100,7 +100,7 @@ var promptSemanticReferenceSpec = registerPrompt(PromptSpec{
 })
 
 func (r *Runtime) enrichSemanticReference(ctx context.Context, event MessageEvent, text string) MessageEvent {
-	ctx = withLLMUsagePurpose(ctx, "semantic_reference")
+	ctx = withLLMUsagePurpose(withLLMUsageContext(ctx, event), "semantic_reference")
 	if eventHasDirectReferenceContent(event) || quotedMessageHasReferenceContent(event.Quoted) {
 		return event
 	}

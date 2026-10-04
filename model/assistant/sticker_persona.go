@@ -115,7 +115,7 @@ func (t *dianaStickerTool) fitsPersona(ctx context.Context, candidate stickerCan
 		"name": firstNonEmpty(candidate.Summary, "动画表情"), "description": truncateRunes(description, 400), "tags": tags,
 	})
 	messages := t.runtime.withUserFacingPersona(t.event, []llm.Message{{Role: llm.RoleUser, Content: instruction}})
-	callCtx, cancel := context.WithTimeout(withLLMUsagePurpose(ctx, PurposeStickerPersonaFit), stickerPersonaFitTimeout)
+	callCtx, cancel := context.WithTimeout(withLLMUsagePurpose(withLLMUsageContext(ctx, t.event), PurposeStickerPersonaFit), stickerPersonaFitTimeout)
 	defer cancel()
 	raw, err := t.runtime.runLLMRouterProvider(callCtx, func(client LLMProvider) (string, error) {
 		resp, err := client.Generate(callCtx, llm.GenerateRequest{Messages: messages})

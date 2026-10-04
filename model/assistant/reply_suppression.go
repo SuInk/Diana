@@ -893,7 +893,7 @@ var promptReplyPauseHintSpec = registerPrompt(PromptSpec{
 })
 
 func (r *Runtime) generateReplyPauseHint(ctx context.Context, event MessageEvent) (string, error) {
-	ctx = withLLMUsagePurpose(ctx, "reply_suppression_notice")
+	ctx = withLLMUsagePurpose(withLLMUsageContext(ctx, event), "reply_suppression_notice")
 	messages := r.withUserFacingPersona(event, []llm.Message{
 		{Role: llm.RoleSystem, Content: r.effectiveConfigForEvent(event).prompt(promptReplyPauseHintSpec)},
 		{Role: llm.RoleUser, Content: "现在说这一句。"},

@@ -87,6 +87,7 @@ var promptSemanticTextReferenceSpec = registerPrompt(PromptSpec{
 })
 
 func (r *Runtime) resolveSemanticTextReference(ctx context.Context, event MessageEvent, text string, history []MessageEvent) *recentTextReference {
+	ctx = withLLMUsageContext(ctx, event)
 	text = strings.TrimSpace(text)
 	if r == nil || text == "" || utf8.RuneCountInString(text) > semanticTextReferenceMaxRunes || len(history) == 0 {
 		return nil

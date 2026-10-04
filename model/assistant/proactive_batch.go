@@ -49,6 +49,12 @@ type proactiveReplyRunContext struct {
 
 func proactiveReplyBatchKey(event MessageEvent) string {
 	key := sessionKey(event)
+	// sessionKey 主要依赖 ContextNamespace；历史事件或某些平台回调可能没有填它。
+	// profile 是消息归属的一部分，不能让同群同发送者的两台机器人共用一批，
+	// 否则批处理只能按最后一条事件选择模型，前面的消息就会落到错误 profile。
+	if profileID := strings.TrimSpace(event.ProfileID); profileID != "" {
+		key += "|profile:" + profileID
+	}
 	if event.Kind != EventKindGroup {
 		return key
 	}
