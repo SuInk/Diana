@@ -457,6 +457,10 @@ export interface PluginSettingSpec {
   secret?: boolean;
   // 只能全局设置、不能按群覆盖（端口、连接这类进程里只有一份的资源）。
   global_only?: boolean;
+  /** 可覆盖的作用域：bot、group、user。缺省兼容旧插件的 bot/group 行为。 */
+  scopes?: Array<"bot" | "group" | "user">;
+  /** 可修改此设置的角色：owner、group_admin、member。 */
+  configure_by?: Array<"owner" | "group_admin" | "member">;
 }
 
 export interface PluginManifest {

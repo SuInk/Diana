@@ -51,6 +51,66 @@ type PluginSettingSpec struct {
 	// 的资源（端口、连接），按群改了也到不了那份资源，只会让不同群看到的配置和
 	// 实际生效的对不上。
 	GlobalOnly bool `json:"global_only,omitempty"`
+	// Scopes declares where this setting may be overridden. Empty keeps the
+	// historical behaviour: non-secret, non-global settings may be overridden
+	// for a group. The values are bot, group and user.
+	Scopes []string `json:"scopes,omitempty"`
+	// ConfigureBy declares who may edit the setting at its allowed scope. Empty
+	// keeps the historical behaviour: the bot owner may edit everything, group
+	// administrators may edit group overrides, and members cannot edit shared
+	// settings. Values are owner, group_admin and member.
+	ConfigureBy []string `json:"configure_by,omitempty"`
+}
+
+const (
+	PluginSettingScopeBot   = "bot"
+	PluginSettingScopeGroup = "group"
+	PluginSettingScopeUser  = "user"
+
+	PluginSettingEditorOwner      = "owner"
+	PluginSettingEditorGroupAdmin = "group_admin"
+	PluginSettingEditorMember     = "member"
+)
+
+func (s PluginSettingSpec) allowsScope(scope string) bool {
+	if s.Secret || (scope == PluginSettingScopeGroup && s.GlobalOnly) {
+		return false
+	}
+	if len(s.Scopes) == 0 {
+		return scope == PluginSettingScopeBot || scope == PluginSettingScopeGroup
+	}
+	for _, candidate := range s.Scopes {
+		if strings.EqualFold(strings.TrimSpace(candidate), scope) {
+			return true
+		}
+	}
+	return false
+}
+
+// CanConfigure is the single policy check for Skill/Plugin setting editors.
+// The owner is always allowed to configure a declared setting; narrower roles
+// are constrained by both the setting scope and its ConfigureBy declaration.
+func (s PluginSettingSpec) CanConfigure(scope, editor string) bool {
+	if strings.EqualFold(strings.TrimSpace(editor), PluginSettingEditorOwner) {
+		return true
+	}
+	if !s.allowsScope(scope) {
+		return false
+	}
+	allowed := s.ConfigureBy
+	if len(allowed) == 0 {
+		if scope == PluginSettingScopeGroup {
+			allowed = []string{PluginSettingEditorGroupAdmin}
+		} else {
+			return false
+		}
+	}
+	for _, candidate := range allowed {
+		if strings.EqualFold(strings.TrimSpace(candidate), strings.TrimSpace(editor)) {
+			return true
+		}
+	}
+	return false
 }
 
 // secretSettingKeys 返回声明为凭据的设置键。
@@ -209,8 +269,8 @@ func normalizeGroupPluginSettings(specs []PluginSettingSpec, values map[string]a
 			return nil, fmt.Errorf("diana: secret plugin setting %q cannot be overridden per group", key)
 		}
 		for _, spec := range specs {
-			if spec.Key == key && spec.GlobalOnly {
-				return nil, fmt.Errorf("diana: plugin setting %q is global only and cannot be overridden per group", key)
+			if spec.Key == key && !spec.allowsScope(PluginSettingScopeGroup) {
+				return nil, fmt.Errorf("diana: plugin setting %q cannot be overridden per group", key)
 			}
 		}
 	}
