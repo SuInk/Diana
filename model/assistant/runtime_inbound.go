@@ -17,7 +17,7 @@ func (r *Runtime) SetInboundEventStore(store InboundEventStore) {
 	r.inboundStore = store
 }
 
-// privateAdmissionAllows 判断用户的私聊是否准入。all（默认）直接放行；
+// privateAdmissionAllows 判断用户的私聊是否准入。disabled（默认）拦截所有人；all 直接放行；
 // owner_only 只放行主人；whitelist 放行主人与白名单。空用户 ID 只在 all 下放行。
 func (r *Runtime) privateAdmissionAllows(event MessageEvent) bool {
 	return privateAdmissionAllowsConfig(r.effectiveConfigForEvent(event), event)
@@ -26,6 +26,9 @@ func (r *Runtime) privateAdmissionAllows(event MessageEvent) bool {
 // privateAdmissionAllowsConfig 按统一的主人判定放行主人：Telegram 主人填的是用户名时，
 // 私聊发来的是数字 ID，直接比对 OwnerID 会把主人自己挡在外面。
 func privateAdmissionAllowsConfig(cfg BotConfig, event MessageEvent) bool {
+	if cfg.PrivateAdmission.WithDefaults().Mode == PrivateAdmissionDisabled {
+		return false
+	}
 	return cfg.IsOwnerEvent(event) || cfg.PrivateAdmission.Allows(event.UserID, cfg.OwnerID)
 }
 
@@ -61,6 +64,11 @@ func (r *Runtime) HandleEvent(ctx context.Context, event MessageEvent) error {
 		return nil
 	}
 	if event.Kind == EventKindNotice {
+		// 关闭私聊时也忽略私聊通知，避免戳一戳等通知先被插件处理或写入历史。
+		// 已开启的准入模式继续沿用各类通知原有的处理规则。
+		if strings.TrimSpace(event.GroupID) == "" && r.effectiveConfigForEvent(event).PrivateAdmission.WithDefaults().Mode == PrivateAdmissionDisabled {
+			return nil
+		}
 		if reaction, ok := messageReactionFromEvent(event, event.Platform); ok {
 			// 表情回应只用来统计，不进回复流程，也不当成一条消息记进聊天记录。
 			r.recordMessageReaction(reaction)

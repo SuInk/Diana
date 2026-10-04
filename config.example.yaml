@@ -95,6 +95,9 @@ llm_runtime:
 #   onebot_access_token: "" # 反向 WS 模式必填（server 侧为空会拒绝一切握手），正向 WS / HTTP 可留空
 #   bot_account: ""
 #   owner_id: ""
+#   private_admission:
+#     mode: disabled # 默认关闭私聊；可选 all / owner_only / whitelist
+#     allowed_users: [] # 仅 whitelist 模式生效；主人也会放行
 #   group_triggers:
 #     - Diana
 #     - diana

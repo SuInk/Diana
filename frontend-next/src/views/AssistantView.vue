@@ -837,7 +837,7 @@
               <div class="field wide">
                 <label for="bot-triggers">群聊触发词（逗号分隔）</label>
                 <input id="bot-triggers" v-model="triggersDraft" class="input" placeholder="Diana,diana" />
-                <span class="hint">群聊中 @ 机器人或消息里出现触发词会触发；私聊总是触发。</span>
+                <span class="hint">群聊中 @ 机器人或消息里出现触发词会触发；已准入的私聊会触发。</span>
               </div>
               <div class="field wide">
                 <label for="bot-trigger-mode">触发词匹配</label>
@@ -1023,9 +1023,9 @@
                   id="bot-private-admission-mode"
                   :model-value="privateAdmissionMode"
                   :options="privateAdmissionModeOptions"
-                  @update:model-value="setPrivateAdmissionMode($event as 'all' | 'owner_only' | 'whitelist')"
+                  @update:model-value="setPrivateAdmissionMode($event as 'disabled' | 'all' | 'owner_only' | 'whitelist')"
                 />
-                <span class="hint">被准入拦截的私聊整条静默忽略：不排队、不预处理、不调模型，对方收不到任何回应；与群聊无关，主人任何模式下都放行。</span>
+                <span class="hint">私聊默认关闭，主人也不响应；可按需启用所有人、仅主人或白名单。被拦截的私聊和私聊通知静默忽略，不排队、不预处理、不调模型；群聊和控制台登录配对不受影响。</span>
               </div>
               <div v-if="privateAdmissionMode === 'whitelist'" class="field wide">
                 <label for="bot-private-allowed-users">私聊白名单</label>
@@ -3261,14 +3261,15 @@ function setParticipation(value: ParticipationPreferences | undefined): void {
 const admissionMode = computed(() => form.value?.group_admission?.mode ?? "blacklist");
 
 const privateAdmissionModeOptions: AppSelectOption[] = [
-  { value: "all", label: "所有人（默认）", hint: "任何用户的私聊都会响应" },
+  { value: "disabled", label: "关闭（默认）", hint: "所有用户的私聊静默忽略，包括主人" },
+  { value: "all", label: "所有人", hint: "任何用户的私聊都会响应" },
   { value: "owner_only", label: "仅主人", hint: "非主人的私聊静默忽略" },
   { value: "whitelist", label: "白名单", hint: "仅主人与白名单用户的私聊响应" }
 ];
 
-const privateAdmissionMode = computed(() => form.value?.private_admission?.mode ?? "all");
+const privateAdmissionMode = computed(() => form.value?.private_admission?.mode ?? "disabled");
 
-function setPrivateAdmissionMode(mode: "all" | "owner_only" | "whitelist"): void {
+function setPrivateAdmissionMode(mode: "disabled" | "all" | "owner_only" | "whitelist"): void {
   if (!form.value) {
     return;
   }

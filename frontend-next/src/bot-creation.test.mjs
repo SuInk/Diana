@@ -15,7 +15,7 @@ function load(name, context) {
 
 test("new bot loads independent defaults and enables both switches", async () => {
   let form;
-  const defaults = { enabled: true, owner_login_enabled: true, system_prompt: "default persona", onebot_access_token_configured: false };
+  const defaults = { enabled: true, owner_login_enabled: true, private_admission: { mode: "disabled" }, system_prompt: "default persona", onebot_access_token_configured: false };
   const context = vm.createContext({
     copiedFrom: { value: null }, busy: { value: false }, creating: { value: false }, platformPickerOpen: { value: true }, editorTab: { value: "model" }, page: { value: "list" },
     profiles: { value: [{ id: "old", system_prompt: "old persona", owner_id: "123", onebot_access_token_configured: true }] },
@@ -25,6 +25,7 @@ test("new bot loads independent defaults and enables both switches", async () =>
   await load("beginCreate", context)({ id: "telegram", name: "Telegram" });
   assert.equal(form.enabled, true);
   assert.equal(form.owner_login_enabled, true);
+  assert.equal(form.private_admission.mode, "disabled");
   assert.equal(form.owner_id, undefined);
   assert.equal(form.system_prompt, "default persona");
   assert.equal(form.onebot_access_token_configured, false);

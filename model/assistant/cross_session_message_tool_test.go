@@ -70,6 +70,10 @@ func oneBotIDListItems(field string, ids []string) []any {
 }
 
 func crossSessionTestRuntime(channel Channel, cfg BotConfig) *Runtime {
+	// 投递测试显式启用私聊；准入限制用例可传入其他模式覆盖。
+	if cfg.PrivateAdmission.Mode == "" {
+		cfg.PrivateAdmission.Mode = PrivateAdmissionAll
+	}
 	if strings.TrimSpace(cfg.Platform) == "" {
 		cfg.Platform = PlatformOneBotV11
 	}
@@ -302,6 +306,7 @@ func TestCrossSessionToolRespectsPrivateAdmissionAndBlocklist(t *testing.T) {
 	}{
 		{"屏蔽名单", BotConfig{ReplyGate: &ReplyGate{BlockedUsers: []string{"555"}}}},
 		{"私聊准入", BotConfig{OwnerID: "999", PrivateAdmission: PrivateAdmission{Mode: PrivateAdmissionOwnerOnly}}},
+		{"私聊关闭", BotConfig{OwnerID: "555", PrivateAdmission: PrivateAdmission{Mode: PrivateAdmissionDisabled}}},
 	} {
 		channel := newFriendRosterChannel("555")
 		runtime := crossSessionTestRuntime(channel, item.cfg)

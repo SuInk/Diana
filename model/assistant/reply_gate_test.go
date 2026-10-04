@@ -19,12 +19,13 @@ func gateRuntime(t *testing.T, cfg BotConfig, now time.Time) *Runtime {
 	return rt
 }
 
-// 最重要的一条回归保护：没配任何准入项的老配置，行为必须和改造前完全一致。
+// 显式启用私聊且未配置回复门槛时，原有群聊和私聊触发行为保持一致。
 func TestReplyGateAbsentKeepsLegacyBehaviour(t *testing.T) {
 	rt := gateRuntime(t, BotConfig{
-		GroupTriggers:  []string{"Diana"},
-		BotAccount:     "42",
-		DisabledGroups: []string{"999"},
+		PrivateAdmission: PrivateAdmission{Mode: PrivateAdmissionAll},
+		GroupTriggers:    []string{"Diana"},
+		BotAccount:       "42",
+		DisabledGroups:   []string{"999"},
 	}, time.Date(2026, 8, 4, 3, 0, 0, 0, time.Local))
 
 	if !rt.shouldHandle(MessageEvent{Kind: EventKindGroup, GroupID: "1", ToMe: true}, "hello") {
@@ -48,8 +49,9 @@ func TestReplyGateAbsentKeepsLegacyBehaviour(t *testing.T) {
 // 有群配置并且开着的群照常工作。逐群开关只有群配置那一份。
 func TestNewGroupDefaultOff(t *testing.T) {
 	rt := gateRuntime(t, BotConfig{
-		BotAccount:     "42",
-		GroupAdmission: GroupAdmission{Mode: GroupAdmissionWhitelist},
+		PrivateAdmission: PrivateAdmission{Mode: PrivateAdmissionAll},
+		BotAccount:       "42",
+		GroupAdmission:   GroupAdmission{Mode: GroupAdmissionWhitelist},
 	}, time.Now())
 	store := &testWritableGroupConfigStore{}
 	if _, err := store.SaveGroupConfig(GroupConfig{GroupID: "100", Enabled: true, EnabledSet: true}, BotConfig{}); err != nil {
@@ -245,7 +247,7 @@ func TestGroupReplyGateUsesItsOwnActiveHours(t *testing.T) {
 }
 
 func TestGroupReplyGateBlocksOneBotOnlyInConfiguredGroup(t *testing.T) {
-	base := BotConfig{BotAccount: "42"}
+	base := BotConfig{PrivateAdmission: PrivateAdmission{Mode: PrivateAdmissionAll}, BotAccount: "42"}
 	rt := gateRuntime(t, base, time.Now())
 	store := &testWritableGroupConfigStore{}
 	_, _ = store.SaveGroupConfig(GroupConfig{
@@ -357,7 +359,8 @@ func TestLevelGateCanFailClosed(t *testing.T) {
 // 等级门槛只作用于群聊，私聊没有群等级这回事。
 func TestLevelGateDoesNotAffectPrivateChat(t *testing.T) {
 	rt := gateRuntime(t, BotConfig{
-		BotAccount: "42",
+		PrivateAdmission: PrivateAdmission{Mode: PrivateAdmissionAll},
+		BotAccount:       "42",
 		ReplyGate: &ReplyGate{
 			MinGroupLevel:      6,
 			LevelUnknownPolicy: LevelUnknownDeny,
@@ -497,9 +500,15 @@ func TestPrivateAdmissionAllows(t *testing.T) {
 		userID    string
 		want      bool
 	}{
-		{"默认 all 放行任何人", PrivateAdmission{}, "42", true},
-		{"all 放行空 ID", PrivateAdmission{}, "", true},
-		{"非法模式退回 all", PrivateAdmission{Mode: "nonsense"}, "42", true},
+		{"默认关闭普通人私聊", PrivateAdmission{}, "42", false},
+		{"默认关闭主人私聊", PrivateAdmission{}, owner, false},
+		{"默认关闭空 ID 私聊", PrivateAdmission{}, "", false},
+		{"非法模式退回关闭", PrivateAdmission{Mode: "nonsense"}, "42", false},
+		{"disabled 拦截主人", PrivateAdmission{Mode: PrivateAdmissionDisabled}, owner, false},
+		{"disabled 拦截白名单", PrivateAdmission{Mode: PrivateAdmissionDisabled, AllowedUsers: []string{"42"}}, "42", false},
+		{"all 放行普通人", PrivateAdmission{Mode: PrivateAdmissionAll}, "42", true},
+		{"all 放行空 ID", PrivateAdmission{Mode: PrivateAdmissionAll}, "", true},
+		{"all 模式清洗后放行", PrivateAdmission{Mode: " ALL "}, "42", true},
 		{"owner_only 放行主人", PrivateAdmission{Mode: PrivateAdmissionOwnerOnly}, owner, true},
 		{"owner_only 拦截普通人", PrivateAdmission{Mode: PrivateAdmissionOwnerOnly}, "42", false},
 		{"owner_only 拦截空 ID", PrivateAdmission{Mode: PrivateAdmissionOwnerOnly}, "", false},
@@ -517,13 +526,12 @@ func TestPrivateAdmissionAllows(t *testing.T) {
 	}
 }
 
-// 私聊准入是接入层整条丢弃，不应被 shouldHandle 的群门槛逻辑感知；
-// 这里只验证群聊路径不受私聊准入配置影响。
+// 私聊准入不影响群聊路径，即使私聊关闭，群里 @ 机器人仍可回复。
 func TestPrivateAdmissionDoesNotAffectGroupReplies(t *testing.T) {
 	rt := gateRuntime(t, BotConfig{
 		BotAccount:       "42",
 		OwnerID:          "10001",
-		PrivateAdmission: PrivateAdmission{Mode: PrivateAdmissionOwnerOnly},
+		PrivateAdmission: PrivateAdmission{Mode: PrivateAdmissionDisabled},
 	}, time.Now())
 	if !rt.shouldHandle(MessageEvent{Kind: EventKindGroup, GroupID: "100", UserID: "7", ToMe: true}, "hi") {
 		t.Fatal("私聊准入不该影响群聊响应")

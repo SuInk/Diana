@@ -101,6 +101,7 @@ const oneBotProfile: BotProfileConfig = {
   id: "bot-onebot", name: "Diana OneBot（演示）", platform: "onebot-v11", enabled: true,
   onebot_reverse_ws_endpoint: "ws://127.0.0.1:18080/onebot/v11/ws", onebot_access_token_configured: true, onebot_access_token_preview: "d1…2a",
   bot_account: "100000001", owner_id: "100200001", owner_login_enabled: true,
+  private_admission: { mode: "disabled" },
   group_triggers: ["Diana", "diana"], disabled_groups: [], system_prompt: demoDefaultSoul,
   debug_mode_enabled: true, bot_reply_loop_detection_enabled: true, reply_refusal_suppression_enabled: true, reply_suppression_enabled: true, prompt_inject_time: false,
   proactive_reply_chance: 1, proactive_reply_threshold: 0.9, recent_context_limit: 40, max_reply_chars: 0,
@@ -116,6 +117,7 @@ const oneBotProfile: BotProfileConfig = {
 
 const telegramProfile: BotProfileConfig = {
   ...oneBotProfile, id: "bot-telegram", name: "Diana Telegram（演示）", platform: "telegram", enabled: true,
+  private_admission: { mode: "all" },
   onebot_reverse_ws_endpoint: "", onebot_access_token_configured: false, telegram_bot_token_configured: true,
   telegram_api_base_url: "https://api.telegram.org", bot_account: "", owner_id: "880024"
 };
@@ -516,7 +518,7 @@ const demoRelationshipEvaluations: RelationshipEvaluation[] = [
 export const demoEvents: AssistantEventDetail[] = [
   { id: "demo-event-1", at: before(2), kind: "group", platform: "onebot-v11", profile_id: "bot-onebot", group_id: "100200301", user_id: "100200711", sender_name: "青禾", message_id: "demo-7319", text: "@Diana 帮我总结一下今天的发布变更", reply: "今天的更新重点是事件原因审计、仓库动态订阅和多通道会话隔离。引用消息同时 @机器人时也会正确进入主 Agent。", handled: true, status: "replied", outcome: "replied", decision: "replied", reason: "检测到显式 @机器人，直接进入主 Agent；问题需要读取仓库近期变更后回答。", duration_ms: 6800, llm_calls: 2, tool_calls: 1, input_tokens: 2470, output_tokens: 376, total_tokens: 2846, reply_models: ["gpt-5.6-terra"], models: [{ model: "gpt-5.6-terra", provider: "openai_compatible", calls: 1 }, { model: "gpt-5.6-terra", provider: "openai_compatible", calls: 1 }], delivery_stage: "echo_persisted", outbound_message_id: "demo-out-7319", self_echo_at: before(1) },
   { id: "demo-event-2", at: before(9), kind: "group", platform: "onebot-v11", profile_id: "bot-onebot", group_id: "100200418", user_id: "100200812", sender_name: "栖迟", message_id: "demo-7298", text: "[图片]", handled: false, status: "ignored", outcome: "bot_message_ignored", decision: "not_replied", reason: "识别为其他机器人发送的自动消息；“识别机器人后不回复”已启用，因此未启动视觉模型和主 Agent。", duration_ms: 42, llm_calls: 0, input_tokens: 0, output_tokens: 0, total_tokens: 0 },
-  { id: "demo-event-3", at: before(18), kind: "private", platform: "telegram", profile_id: "bot-telegram", user_id: "880024", sender_name: "Demo User", message_id: "demo-tg-114", text: "Zeabur 最近有什么产品更新？", reply: "我检索了官方更新渠道，并按发布时间整理了近期变化；真实服务会在回答中保留来源链接。", handled: true, status: "replied", outcome: "replied", decision: "replied", reason: "私聊默认响应；问题包含时效性要求，Agent 先调用内置联网搜索再组织答案。", duration_ms: 8200, llm_calls: 2, input_tokens: 2844, output_tokens: 387, total_tokens: 3231, reply_models: ["claude-sonnet-5"], models: [{ model: "claude-sonnet-5", provider: "anthropic", calls: 2 }], delivery_stage: "acknowledged", outbound_message_id: "demo-tg-out-114" },
+  { id: "demo-event-3", at: before(18), kind: "private", platform: "telegram", profile_id: "bot-telegram", user_id: "880024", sender_name: "Demo User", message_id: "demo-tg-114", text: "Zeabur 最近有什么产品更新？", reply: "我检索了官方更新渠道，并按发布时间整理了近期变化；真实服务会在回答中保留来源链接。", handled: true, status: "replied", outcome: "replied", decision: "replied", reason: "此机器人已启用私聊；问题包含时效性要求，Agent 先调用内置联网搜索再组织答案。", duration_ms: 8200, llm_calls: 2, input_tokens: 2844, output_tokens: 387, total_tokens: 3231, reply_models: ["claude-sonnet-5"], models: [{ model: "claude-sonnet-5", provider: "anthropic", calls: 2 }], delivery_stage: "acknowledged", outbound_message_id: "demo-tg-out-114" },
   { id: "demo-event-4", at: before(31), kind: "group", platform: "onebot-v11", profile_id: "bot-onebot", group_id: "100200519", user_id: "100200913", sender_name: "星野", message_id: "demo-7220", text: "画一张雨夜城市里的复古电车", reply: "图片已生成并发送。事件明细默认显示缩略图，点击后查看原图。", handled: true, status: "replied", outcome: "image_generated", decision: "replied", reason: "命中群触发词并识别为明确的图片生成请求；调用独立生图模型。", duration_ms: 18400, llm_calls: 1, input_tokens: 1410, output_tokens: 262, total_tokens: 1672, delivery_stage: "acknowledged", outbound_message_id: "demo-out-7220" },
   { id: "demo-event-quote-7240", at: before(40), kind: "group", platform: "onebot-v11", profile_id: "bot-onebot", group_id: "100200301", user_id: "100200711", sender_name: "青禾", message_id: "demo-7240", text: "那 Zeabur 自己的控制台也是这个路子吗", quote: { message_id: "demo-out-7166", user_id: "3129583166", sender_name: "Diana", text: "如果是在说产品界面，通常指偏开发者工具的克制布局：高信息密度、明确状态和较少装饰。" }, handled: false, status: "done", outcome: "not_replied", decision: "not_replied", reason: "引用的是机器人的回复，但只是在和其他群友讨论，主动回复判断认为不必插话。", duration_ms: 1200 },
   // 撤回机器人回复的通知：控制台会把它合进 demo-event-5，不单独占一行。
@@ -1308,7 +1310,7 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
   if (path === "/api/assistant/config/defaults" && method === "GET") return json({
     platform: url.searchParams.get("platform") || "onebot-v11", enabled: true, owner_login_enabled: true,
     onebot_transport: "reverse_ws", onebot_reverse_ws_endpoint: "ws://127.0.0.1:18080/onebot/v11/ws",
-    group_triggers: ["Diana", "diana"], request_timeout_ms: 60000, agent_enabled: true, agent_mode: "standard"
+    group_triggers: ["Diana", "diana"], private_admission: { mode: "disabled" }, request_timeout_ms: 60000, agent_enabled: true, agent_mode: "standard"
   });
   if (path === "/api/assistant/config" && method === "GET") return json(assistantConfig);
   // 演示站不连腾讯：给一张占位码，第二轮轮询就当作已在手机上确认。

@@ -26,6 +26,7 @@ func TestNewBotUsesFreshDefaultsAndDoesNotInheritSecrets(t *testing.T) {
 	existing.FeishuAppSecret = "original-feishu-secret"
 	existing.WeComSecret = "original-wecom-secret"
 	existing.GroupTriggers = []string{"old trigger"}
+	existing.PrivateAdmission.Mode = assistant.PrivateAdmissionAll
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	runtime := assistant.NewRuntime(existing, fakeChannel{}, assistant.NewDefaultPluginManager(), nil, nil, nil, nil)
@@ -44,6 +45,9 @@ func TestNewBotUsesFreshDefaultsAndDoesNotInheritSecrets(t *testing.T) {
 	}
 	if !draft.Enabled || !draft.OwnerLoginEnabled {
 		t.Fatal("new bot switches must default on")
+	}
+	if draft.PrivateAdmission.Mode != assistant.PrivateAdmissionDisabled {
+		t.Fatalf("new bot private admission = %q, want disabled", draft.PrivateAdmission.Mode)
 	}
 	if draft.Platform != "telegram" || draft.ID != "" || draft.OwnerID != "" || draft.SystemPrompt == existing.SystemPrompt || draft.TelegramBotTokenConfigured || draft.OneBotAccessTokenConfigured || draft.OneBotHTTPSecretConfigured {
 		t.Fatalf("defaults contain existing profile settings: %+v", draft)
@@ -77,6 +81,9 @@ func TestNewBotUsesFreshDefaultsAndDoesNotInheritSecrets(t *testing.T) {
 	fresh := set.Profiles[len(set.Profiles)-1]
 	if fresh.ID == existing.ID || fresh.Enabled || fresh.OwnerLoginEnabled {
 		t.Fatalf("incorrect new identity or switches: %s", fresh.ID)
+	}
+	if fresh.PrivateAdmission.Mode != assistant.PrivateAdmissionDisabled {
+		t.Fatalf("created bot private admission = %q, want disabled", fresh.PrivateAdmission.Mode)
 	}
 	for field, value := range map[string]string{
 		"onebot": fresh.OneBotAccessToken, "http": fresh.OneBotHTTPSecret, "telegram": fresh.TelegramBotToken, "bridge": fresh.NoneBotBridgeToken,

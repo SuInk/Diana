@@ -142,6 +142,7 @@ https://HOST/api/channels/wecom/callback</code></pre>
       <section class="section searchable" id="groups">
         <div class="section-heading"><p class="eyebrow">Group policy</p><h2>Configured per group, as actually joined</h2></div>
         <p>Group management syncs every group the bot has joined through the OneBot <code>get_group_list</code> call, not just the ones with local configuration. It falls back to the groups stored in SQLite only when the connection is unavailable.</p>
+        <p>Private chats are disabled by default, including ordinary messages and private notices from the owner. Enable all users, owner only or a whitelist under Bot → Behavior → Admission and limits when needed. Disabled messages are silently ignored without queueing, preprocessing or model calls; group chats and console login pairing are unaffected. Explicitly saved admission modes remain effective; missing or invalid modes disable private chats.</p>
         <div class="tool-grid">
           <article><h3>Enabled state</h3><p>Stopping one group does not affect other groups or direct messages.</p></article>
           <article><h3>Triggers and unprompted replies</h3><p>Explicit mentions, quotes, trigger words and semantic routing are evaluated in layers; an explicit mention outranks a quote.</p></article>

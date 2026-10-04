@@ -1777,6 +1777,14 @@ func (r *Runtime) recordNoticeEvent(event MessageEvent) {
 }
 
 func (r *Runtime) prepareMessageEvent(ctx context.Context, event MessageEvent) (MessageEvent, string, bool, string) {
+	// 已入队的私聊也按当前准入配置检查，关闭后不再预处理积压消息。
+	if event.Kind == EventKindPrivate && !r.privateAdmissionAllows(event) {
+		const outcome = "ignored_private_admission"
+		record := r.decisionEventRecord(event, "[私聊准入]", outcome)
+		record.Reason = "私聊准入模式限制，该用户的私聊被静默忽略"
+		r.record(record)
+		return event, "", false, outcome
+	}
 	event, text, handled, outcome := r.routeMessageEvent(ctx, event)
 	if !handled && outcome != "ignored_bot_message" {
 		// 不回的消息里，群友之间也会互相纠正图片认错了；只看引用了图的，见 image_fix_gate.go。
@@ -2564,7 +2572,7 @@ func (r *Runtime) shouldHandle(event MessageEvent, text string) bool {
 // chat, resolver, or plugin trigger is allowed to start work.
 func (r *Runtime) admits(cfg BotConfig, event MessageEvent) bool {
 	if event.Kind == EventKindPrivate {
-		return r.replyGateAllows(cfg, event)
+		return privateAdmissionAllowsConfig(cfg, event) && r.replyGateAllows(cfg, event)
 	}
 	if event.Kind != EventKindGroup {
 		return false

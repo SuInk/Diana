@@ -98,13 +98,14 @@ func (a GroupAdmission) NewGroupEnabled() bool {
 	return a.WithDefaults().Mode != GroupAdmissionWhitelist
 }
 
-// 私聊准入模式。空串等同 all，保证老配置行为完全不变。
+// 私聊准入模式。未设置或非法模式默认关闭，需显式选择放行策略。
 //
 // 和群里的「人员准入」不同：那是「满足什么条件才回复」的门槛；私聊准入是
 // 接入层策略，决定哪些人的私聊会被整条丢弃——不排队、不预处理、不调模型，
 // 被丢弃的人收不到任何回应（和全局黑名单一致），也不是门槛那种「条件不满足
 // 但换个时段又能回」的语义。
 const (
+	PrivateAdmissionDisabled  = "disabled"
 	PrivateAdmissionAll       = "all"
 	PrivateAdmissionOwnerOnly = "owner_only"
 	PrivateAdmissionWhitelist = "whitelist"
@@ -112,27 +113,30 @@ const (
 
 // PrivateAdmission 决定哪些用户的私聊会得到响应，全局唯一，不按群覆盖。
 type PrivateAdmission struct {
-	// Mode 为 owner_only 时仅响应主人；whitelist 时仅响应主人与 AllowedUsers
-	// 里的用户；all（默认）不限制。
+	// Mode 为 disabled（默认）时关闭私聊，包括主人；owner_only 时仅响应主人；
+	// whitelist 时仅响应主人与 AllowedUsers 里的用户；all 不限制。
 	Mode string `json:"mode,omitempty"`
 	// AllowedUsers 仅 whitelist 模式生效。
 	AllowedUsers []string `json:"allowed_users,omitempty"`
 }
 
-// WithDefaults 归一化私聊准入配置，非法值一律退回不拦截的方向。
+// WithDefaults 归一化私聊准入配置，未设置或非法值一律关闭私聊。
 func (a PrivateAdmission) WithDefaults() PrivateAdmission {
 	a.Mode = strings.ToLower(strings.TrimSpace(a.Mode))
-	if a.Mode != PrivateAdmissionOwnerOnly && a.Mode != PrivateAdmissionWhitelist {
-		a.Mode = PrivateAdmissionAll
+	if a.Mode != PrivateAdmissionAll && a.Mode != PrivateAdmissionOwnerOnly && a.Mode != PrivateAdmissionWhitelist {
+		a.Mode = PrivateAdmissionDisabled
 	}
 	a.AllowedUsers = cleanStrings(a.AllowedUsers)
 	return a
 }
 
-// Allows 判断某个用户的私聊是否准入。ownerID 在任何模式下都放行；
+// Allows 判断某个用户的私聊是否准入。disabled 拦截所有人，其余模式放行主人；
 // 空用户 ID 只放行 all 模式，未知身份不该被当作名单成员。
 func (a PrivateAdmission) Allows(userID, ownerID string) bool {
 	a = a.WithDefaults()
+	if a.Mode == PrivateAdmissionDisabled {
+		return false
+	}
 	if a.Mode == PrivateAdmissionAll {
 		return true
 	}

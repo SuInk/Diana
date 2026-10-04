@@ -98,7 +98,7 @@ func TestReplyRefusalFourthSuccessfulSendActivatesSilentCooldown(t *testing.T) {
 				"这个请求我还是不能回答。" + replyRefusalMarker,
 			}}
 			channel := &recordingChannel{}
-			runtime := NewRuntime(BotConfig{OwnerID: "owner", BotAccount: "42"}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+			runtime := NewRuntime(BotConfig{PrivateAdmission: PrivateAdmission{Mode: PrivateAdmissionAll}, OwnerID: "owner", BotAccount: "42"}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 				return provider, nil
 			})
 

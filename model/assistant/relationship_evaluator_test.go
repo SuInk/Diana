@@ -116,7 +116,7 @@ func TestRuntimeAppliesNaturalInteractionFavorability(t *testing.T) {
 	}}
 	memory := newMemoryUserMemoryStore()
 	channel := &recordingChannel{}
-	runtime := NewRuntime(BotConfig{BotAccount: "bot", OwnerID: "owner", AgentEnabled: true, ReplySafetyMasterEnabled: boolPointer(false)}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+	runtime := NewRuntime(BotConfig{PrivateAdmission: PrivateAdmission{Mode: PrivateAdmissionAll}, BotAccount: "bot", OwnerID: "owner", AgentEnabled: true, ReplySafetyMasterEnabled: boolPointer(false)}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
 	})
 	runtime.SetUserMemoryStore(memory)
@@ -176,7 +176,7 @@ func TestRelationshipQuestionUsesNormalLLMReply(t *testing.T) {
 		"按我们最近的相处来看，现在是朋友；你离下一阶段还差一点稳定互动。",
 	}}
 	channel := &recordingChannel{}
-	runtime := NewRuntime(BotConfig{AgentEnabled: false, OwnerID: "owner", ReplySafetyMasterEnabled: boolPointer(false)}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+	runtime := NewRuntime(BotConfig{AgentEnabled: false, OwnerID: "owner", PrivateAdmission: PrivateAdmission{Mode: PrivateAdmissionAll}, ReplySafetyMasterEnabled: boolPointer(false)}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
 	})
 	memory := newMemoryUserMemoryStore()

@@ -29,9 +29,10 @@ import (
 // TestRuntimeShouldHandleGroupMentionAndTrigger 验证对应功能场景。
 func TestRuntimeShouldHandleGroupMentionAndTrigger(t *testing.T) {
 	runtime := NewRuntime(BotConfig{
-		GroupTriggers:  []string{"Diana"},
-		BotAccount:     "42",
-		DisabledGroups: []string{"999"},
+		PrivateAdmission: PrivateAdmission{Mode: PrivateAdmissionAll},
+		GroupTriggers:    []string{"Diana"},
+		BotAccount:       "42",
+		DisabledGroups:   []string{"999"},
 	}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 
 	if !runtime.shouldHandle(MessageEvent{Kind: EventKindGroup, ToMe: true}, "hello") {
@@ -2336,7 +2337,7 @@ func TestRuntimeCarriesRecentImageIntoFollowup(t *testing.T) {
 		"这是一张测试图片。",
 	}}
 	// 发送前审核默认会多一次模型调用，这条只数带图请求的归属，把它关掉。
-	runtime := NewRuntime(BotConfig{ReplySafetyMasterEnabled: boolPointer(false)}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+	runtime := NewRuntime(BotConfig{PrivateAdmission: PrivateAdmission{Mode: PrivateAdmissionAll}, ReplySafetyMasterEnabled: boolPointer(false)}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
 	})
 	imageBody := []byte{0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00}
@@ -3239,7 +3240,7 @@ func TestRuntimeCachesImagesWithoutHistoryPlugin(t *testing.T) {
 
 	channel := &recordingChannel{}
 	provider := &capturingLLMProvider{reply: "看到了"}
-	runtime := NewRuntime(BotConfig{}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+	runtime := NewRuntime(BotConfig{PrivateAdmission: PrivateAdmission{Mode: PrivateAdmissionAll}}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
 	})
 	err := runtime.HandleEvent(context.Background(), MessageEvent{
@@ -3596,7 +3597,7 @@ func TestRuntimeResolverPrivateLinkSkipsLLM(t *testing.T) {
 	manager := NewPluginManager(plugin)
 	channel := &recordingChannel{}
 	var llmCalls atomic.Int32
-	runtime := NewRuntime(BotConfig{BotAccount: "42"}, channel, manager, nil, nil, nil, func() (LLMProvider, error) {
+	runtime := NewRuntime(BotConfig{PrivateAdmission: PrivateAdmission{Mode: PrivateAdmissionAll}, BotAccount: "42"}, channel, manager, nil, nil, nil, func() (LLMProvider, error) {
 		llmCalls.Add(1)
 		return &capturingLLMProvider{reply: "不应该调用"}, nil
 	})
@@ -3825,7 +3826,7 @@ func TestRuntimeImageGenerationCommandSendsImage(t *testing.T) {
 		Model:      "gpt-test",
 		ImageModel: "gpt-image-2",
 	})}
-	runtime := NewRuntime(BotConfig{OwnerID: "owner"}, channel, NewPluginManager(), store, nil, nil, nil)
+	runtime := NewRuntime(BotConfig{PrivateAdmission: PrivateAdmission{Mode: PrivateAdmissionAll}, OwnerID: "owner"}, channel, NewPluginManager(), store, nil, nil, nil)
 	memory := newMemoryUserMemoryStore()
 	memory.profiles["10001"] = UserMemoryProfile{UserID: "10001", Favorability: 20, MessageCount: 10}
 	runtime.SetUserMemoryStore(memory)
@@ -3908,7 +3909,7 @@ func TestRuntimeImageGenerationRepliesWhileImageRunsInBackground(t *testing.T) {
 		`{"action":"generate_image","prompt":"一张异步测试海报"}`,
 		"我先把构思发给你：画面会用醒目的几何构图，成图稍后自动跟上。",
 	}}
-	runtime := NewRuntime(BotConfig{OwnerID: "owner"}, channel, NewPluginManager(), store, nil, nil, nil)
+	runtime := NewRuntime(BotConfig{PrivateAdmission: PrivateAdmission{Mode: PrivateAdmissionAll}, OwnerID: "owner"}, channel, NewPluginManager(), store, nil, nil, nil)
 	memory := newMemoryUserMemoryStore()
 	memory.profiles["10001"] = UserMemoryProfile{UserID: "10001", Favorability: 20, MessageCount: 10}
 	runtime.SetUserMemoryStore(memory)
@@ -3985,7 +3986,7 @@ func TestRuntimeImageEditWithoutSourceAsksForImageInsteadOfQueueing(t *testing.T
 		`{"action":"edit_image","prompt":"把他画成室内自拍"}`,
 		"没找到要改的图，重新发一下或者直接引用那张图吧",
 	}}
-	runtime := NewRuntime(BotConfig{OwnerID: "owner"}, channel, NewPluginManager(), store, nil, nil, nil)
+	runtime := NewRuntime(BotConfig{PrivateAdmission: PrivateAdmission{Mode: PrivateAdmissionAll}, OwnerID: "owner"}, channel, NewPluginManager(), store, nil, nil, nil)
 	memory := newMemoryUserMemoryStore()
 	memory.profiles["10001"] = UserMemoryProfile{UserID: "10001", Favorability: 20, MessageCount: 10}
 	runtime.SetUserMemoryStore(memory)
@@ -4646,6 +4647,7 @@ func TestRuntimeFailsOverLLMProfilesWithinGroup(t *testing.T) {
 		},
 	}
 	runtime := NewRuntime(BotConfig{
+		PrivateAdmission: PrivateAdmission{Mode: PrivateAdmissionAll},
 		// 只验证多账号 failover 的尝试顺序，发送前审核的额外调用与本断言无关，关掉。
 		ReplySafetyMasterEnabled: boolPointer(false),
 	}, channel, NewPluginManager(), store, nil, nil, nil)
@@ -4694,7 +4696,8 @@ func TestRuntimeReplyRuleUsesSpecificLLMProfile(t *testing.T) {
 		},
 	}
 	runtime := NewRuntime(BotConfig{
-		AgentEnabled: false,
+		PrivateAdmission: PrivateAdmission{Mode: PrivateAdmissionAll},
+		AgentEnabled:     false,
 		ReplyRules: []ReplyRule{{
 			ID:           "rule-special",
 			Name:         "严肃问题走强模型",

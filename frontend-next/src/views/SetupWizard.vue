@@ -437,8 +437,8 @@
           </div>
         </div>
         <p class="muted">
-          现在给机器人发一条私聊消息，或在群里 @ 它试试。群聊触发词默认为
-          <code>Diana</code>、<code>diana</code>。
+          现在可以在群里 @ 机器人试试。群聊触发词默认为
+          <code>Diana</code>、<code>diana</code>。私聊默认关闭，需要时在「机器人 → 行为 → 准入与限额」里启用。
         </p>
         <div class="cluster">
           <button class="btn primary" type="button" @click="finishSetup">

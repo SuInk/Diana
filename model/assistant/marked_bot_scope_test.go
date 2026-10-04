@@ -21,7 +21,7 @@ func markedBotRuntime(t *testing.T, provider LLMProvider) *Runtime {
 	}, BotConfig{ID: "a", BotAccount: "42"}); err != nil {
 		t.Fatal(err)
 	}
-	runtime := NewRuntime(BotConfig{ID: "a", BotAccount: "42", OwnerID: "owner", MarkedBotIDs: []string{"30004"}},
+	runtime := NewRuntime(BotConfig{PrivateAdmission: PrivateAdmission{Mode: PrivateAdmissionAll}, ID: "a", BotAccount: "42", OwnerID: "owner", MarkedBotIDs: []string{"30004"}},
 		nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) { return provider, nil })
 	runtime.SetGroupConfigStore(store)
 	return runtime
@@ -104,7 +104,7 @@ func TestMarkedBotPrivatePromptRejectsMentionHeuristics(t *testing.T) {
 // TestBotReplyLoopCandidateCoversPrivate 空转判断以前按事件类型挡掉私聊
 // （reply_suppression.go:341），于是那次 57 条私聊里一次都没跑过。
 func TestBotReplyLoopCandidateCoversPrivate(t *testing.T) {
-	runtime := NewRuntime(BotConfig{BotAccount: "42", OwnerID: "owner"},
+	runtime := NewRuntime(BotConfig{PrivateAdmission: PrivateAdmission{Mode: PrivateAdmissionAll}, BotAccount: "42", OwnerID: "owner"},
 		nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	event := privateEvent("30004", "loop-1", "嗯 拜")
 
@@ -123,7 +123,7 @@ func TestBotReplyLoopCandidateCoversPrivate(t *testing.T) {
 	}
 
 	// 隔了很久的那一句同样不判。
-	stale := NewRuntime(BotConfig{BotAccount: "42", OwnerID: "owner"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	stale := NewRuntime(BotConfig{PrivateAdmission: PrivateAdmission{Mode: PrivateAdmissionAll}, BotAccount: "42", OwnerID: "owner"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	rememberPrivateBotReply(stale, "30004", "bot-old", time.Now().Add(-privateClosingAuditWindow-time.Minute))
 	if _, ok := stale.botReplyLoopCandidate(event, event.RawMessage); ok {
 		t.Fatal("private loop candidate fired after a long silence")

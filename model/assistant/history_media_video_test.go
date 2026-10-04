@@ -181,7 +181,7 @@ func TestRuntimeRefreshesExpiredImageURLThroughGetImage(t *testing.T) {
 		"get_image": {"file": server.URL + "/refreshed.jpg"},
 	}}
 	provider := &capturingLLMProvider{reply: "图片已读取"}
-	runtime := NewRuntime(BotConfig{}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+	runtime := NewRuntime(BotConfig{PrivateAdmission: PrivateAdmission{Mode: PrivateAdmissionAll}}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
 	})
 	event, text, handled, outcome := runtime.prepareMessageEvent(context.Background(), MessageEvent{
@@ -641,7 +641,7 @@ func TestRuntimeReportsImageErrorWhenURLAndGetImageFail(t *testing.T) {
 		"get_msg":   {},
 	}}
 	provider := &capturingLLMProvider{reply: "不应调用模型"}
-	runtime := NewRuntime(BotConfig{}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+	runtime := NewRuntime(BotConfig{PrivateAdmission: PrivateAdmission{Mode: PrivateAdmissionAll}}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
 	})
 	event, text, handled, successOutcome := runtime.prepareMessageEvent(context.Background(), MessageEvent{
