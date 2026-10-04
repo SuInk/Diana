@@ -14,7 +14,7 @@ import (
 // 也不能覆盖信封自带的字段。
 func TestFinalizeFieldsRoundTrip(t *testing.T) {
 	fields := []FinalizeField{{Name: "sticker", Description: "配一张表情包的关键词"}, {Name: "content", Description: "不许覆盖"}}
-	definition := finalizeToolDefinition(nil, false, fields...)
+	definition := finalizeToolDefinition(false, fields...)
 	properties, _ := definition.Parameters["properties"].(map[string]any)
 	if _, ok := properties["sticker"]; !ok {
 		t.Fatalf("sticker missing from finalize schema: %#v", properties)

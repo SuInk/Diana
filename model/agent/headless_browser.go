@@ -65,8 +65,9 @@ type RenderedPage struct {
 
 // RenderedLink 是页面上的一个 <a>：解析成绝对地址的 href 和它的可见文字。
 type RenderedLink struct {
-	URL  string
-	Text string
+	URL     string
+	Snippet string
+	Text    string
 }
 
 const maxRenderedPageLinks = 300
@@ -645,7 +646,17 @@ func renderedPageLinks(document *html.Node, base string) []RenderedLink {
 			if resolved := resolveRenderedPageURL(base, strings.TrimSpace(nodeAttr(node, "href"))); resolved != "" {
 				text := normalizeRenderedText(visibleNodeText(node))
 				if text != "" {
-					links = append(links, RenderedLink{URL: resolved, Text: truncateText(text, 300)})
+					snippet := ""
+					for parent, depth := node.Parent, 0; parent != nil && depth < 3; parent, depth = parent.Parent, depth+1 {
+						context := normalizeRenderedText(visibleNodeText(parent))
+						if len([]rune(context)) > 1200 {
+							break
+						}
+						if len(context) > len(text)+20 {
+							snippet = truncateText(context, 600)
+						}
+					}
+					links = append(links, RenderedLink{URL: resolved, Text: truncateText(text, 300), Snippet: snippet})
 				}
 			}
 			return

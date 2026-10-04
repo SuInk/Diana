@@ -37,6 +37,20 @@ func (r liveResearchRecordedTool) Run(ctx context.Context, input map[string]any)
 	return output, err
 }
 
+// Keep the production schema when wrapping tools for read-only trace collection.
+func (r liveResearchRecordedTool) InputSchema() map[string]any {
+	if typed, ok := r.Tool.(agent.ToolInputSchema); ok {
+		return typed.InputSchema()
+	}
+	return nil
+}
+func (r liveResearchRecordedTool) PrefersStrictDecoding() bool {
+	if strict, ok := r.Tool.(interface{ PrefersStrictDecoding() bool }); ok {
+		return strict.PrefersStrictDecoding()
+	}
+	return false
+}
+
 type liveResearchRecordedClient struct {
 	client llm.LLMClient
 	mu     sync.Mutex
@@ -59,7 +73,7 @@ func (r *liveResearchRecordedClient) Generate(ctx context.Context, req llm.Gener
 	return resp, err
 }
 
-// 实际回复生成链路：生产模型配置/角色正文 + 真搜索/浏览器 + 现有终稿复核。
+// 实际回复生成链路：生产模型配置/角色正文 + 真搜索/浏览器 + 完整回复运行时。
 // 使用记录通道，不向真实群聊发送；凭据仅从环境读取，不写入回放文件。
 func TestLiveResearchPipeline(t *testing.T) {
 	if os.Getenv("DIANA_LIVE_LLM") != "1" {

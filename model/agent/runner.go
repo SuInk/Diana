@@ -10,7 +10,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -32,10 +31,6 @@ const (
 	browserRenderToolName = "browser_render"
 	dianaImageToolName    = "image"
 	imageTaskPendingState = "pending"
-	// maxFinalReviewsPerAgentRun 是终稿复核每轮最多跑几次。只复核一次时，打回后的
-	// 第二稿直接放行：10-01 问 DimAgent 价格，第二稿删掉了被点名的那句，却留着「没有
-	// 官方付费订阅套餐」照样发了出去。复核两次，再错也只多花一轮，不会卡在修复循环里。
-	maxFinalReviewsPerAgentRun = 2
 
 	// maxToolLoadCallsPerAgentRun 给 tools_load 单独的配额，不占 MaxSteps。
 	//
@@ -65,16 +60,6 @@ const (
 func isIntrospectionCall(tool Tool, input map[string]any) bool {
 	probe, ok := tool.(IntrospectionTool)
 	return ok && probe.Introspection(input)
-}
-
-// internalProtocolTermPattern 是证据账本协议里的固定字段名和术语。它们是代码定义的
-// 协议词，不是自然语言，按字面拦截是准确的。
-var internalProtocolTermPattern = regexp.MustCompile(`(?i)证据账本|逐主张|candidate_sources|rendered_sources|claim_updates|claim_ids|not_searched|stop_reason|\bclaim[ _-]?c[0-9]+\b`)
-
-// internalProtocolLeak 返回正文里泄漏的内部协议词；证据账本只用于内部校验，
-// 不能出现在发给用户的回复里，靠提示词约束兜不住，需要在出口再拦一次。
-func internalProtocolLeak(content string) string {
-	return strings.TrimSpace(internalProtocolTermPattern.FindString(content))
 }
 
 // NewRunner 创建内置 Agent 运行器。
@@ -159,6 +144,9 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 			Priority: llm.MessagePrioritySystem,
 		})
 	}
+	if _, available := r.registry.Get(webSearchToolName); available {
+		volatile = append(volatile, llm.Message{Role: llm.RoleSystem, Priority: llm.MessagePrioritySystem, Content: webSearchTurnPolicy})
+	}
 	// Insert the volatile block just before the final message so the current
 	// turn stays last, which downstream priority handling depends on.
 	// 前缀缓存读到最后一个断点为止，因此断点打在稳定前缀的末尾：系统提示词、
@@ -204,20 +192,6 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 	imageTaskQueued := false
 	nativeProtocol := false
 	finishReason := "final"
-	claimLedger := newClaimEvidenceLedger()
-	// finalReviews 记复核次数，上限见 maxFinalReviewsPerAgentRun。
-	finalReviews := 0
-	reviewFinalDraft := func(content string) string {
-		if finalReviews >= maxFinalReviewsPerAgentRun || req.FinalReview == nil || !claimLedger.searched || strings.TrimSpace(content) == "" {
-			return ""
-		}
-		finalReviews++
-		return strings.TrimSpace(req.FinalReview(ctx, content, evidenceSteps(steps)))
-	}
-	// 用户自己贴的链接、历史消息里出现过的链接，模型复述不算编造来源。
-	for _, message := range req.Messages {
-		claimLedger.noteCitableText(message.Content)
-	}
 	emitRunEvent(ctx, req.Observer, RunEvent{
 		TraceID:        traceID,
 		Phase:          RunPhaseStarted,
@@ -240,7 +214,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 			ModelTurns:     modelTurns,
 			FinishReason:   reason,
 			DurationMS:     duration.Milliseconds(),
-			Claims:         claimLedger.traces(),
+			Sources:        responseSources(text, steps),
 		}
 		emitRunEvent(ctx, req.Observer, RunEvent{
 			TraceID:         traceID,
@@ -288,7 +262,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 		}
 		// 每个规划步都带上原生工具定义，包括结构化收尾工具。不支持原生 function
 		// calling 的供应商仍可使用兼容的 JSON 动作协议。
-		definitions := r.turnDefinitions(claimLedger, imageTaskQueued)
+		definitions := r.turnDefinitions(imageTaskQueued)
 		markLoopCacheBreakpoint(messages, stableCacheIndex)
 		modelStartedAt := time.Now()
 		planningRequest := llm.GenerateRequest{Messages: messages, Tools: definitions}
@@ -402,17 +376,6 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 				})
 				continue
 			}
-			if repair := reviewFinalDraft(action.Content); repair != "" {
-				protocolRepairs++
-				emitProtocolRepair(ctx, req.Observer, traceID, modelTurns, toolCalls, r.cfg.MaxSteps, finalReviewRepairReason)
-				messages = appendAssistantEcho(messages, action.Content)
-				messages = append(messages, llm.Message{Role: llm.RoleUser, Content: repair})
-				if protocolRepairs >= r.cfg.ProtocolRepairLimit {
-					finishReason = "protocol_repair_exhausted"
-					break
-				}
-				continue
-			}
 			return finish(action.Content, "plain_text"), nil
 		}
 		if action.Action == "final" {
@@ -455,7 +418,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 				protocolRepairs++
 				emitProtocolRepair(ctx, req.Observer, traceID, modelTurns, toolCalls, r.cfg.MaxSteps, reason)
 				messages = appendAssistantEcho(messages, lastText)
-				messages = append(messages, llm.Message{Role: llm.RoleUser, Content: reason + "。请保持正文内容、task_state 和 claims 不变，重新调用 agent_finalize：下一条消息用 [diana-msg]，同一消息内换行用 [diana-line]，content 中不得出现真实换行符。"})
+				messages = append(messages, llm.Message{Role: llm.RoleUser, Content: reason + "。请保持正文内容、task_state 不变，重新调用 agent_finalize：下一条消息用 [diana-msg]，同一消息内换行用 [diana-line]，content 中不得出现真实换行符。"})
 				if protocolRepairs >= r.cfg.ProtocolRepairLimit {
 					finishReason = "protocol_repair_exhausted"
 					break
@@ -468,34 +431,6 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 			// 你这段话里的情绪」反而误中，每次误中都白烧一次修复预算。「预算没用完就别停下来
 			// 要求继续」这条规则已经写进系统提示词，模型仍然停下来是提示词的问题，不该
 			// 由代码回头猜正文。
-			claimLedger.applyUpdates(action.Claims)
-			if unbound := claimLedger.unboundCitations(action.Content); len(unbound) > 0 {
-				protocolRepairs++
-				reason := "正文引用了本轮没有检索到的来源：" + strings.Join(unbound, " ")
-				emitProtocolRepair(ctx, req.Observer, traceID, modelTurns, toolCalls, r.cfg.MaxSteps, reason)
-				messages = appendAssistantEcho(messages, lastText)
-				messages = append(messages, llm.Message{Role: llm.RoleUser, Content: reason +
-					"。只能引用这一轮检索或渲染真正返回的链接，以及对话里本来就出现过的链接；" +
-					"凭记忆写出的网址即使看起来合理也不算来源。请删掉这些链接，或改成如实说明这一点没有查到，再重新调用 agent_finalize。\n" +
-					claimLedger.digest()})
-				if protocolRepairs >= r.cfg.ProtocolRepairLimit {
-					finishReason = "unbound_citation"
-					break
-				}
-				continue
-			}
-			if leak := internalProtocolLeak(action.Content); leak != "" {
-				protocolRepairs++
-				reason := "最终回复里出现了内部协议词「" + leak + "」"
-				emitProtocolRepair(ctx, req.Observer, traceID, modelTurns, toolCalls, r.cfg.MaxSteps, reason)
-				messages = appendAssistantEcho(messages, lastText)
-				messages = append(messages, llm.Message{Role: llm.RoleUser, Content: reason + "。claims、证据账本、字段名和校验过程只用于内部结构化校验，不能出现在给用户看的正文里。保持结论和 claims 不变，只改写 content 后重新调用 agent_finalize。"})
-				if protocolRepairs >= r.cfg.ProtocolRepairLimit {
-					finishReason = "protocol_repair_exhausted"
-					break
-				}
-				continue
-			}
 			// 空收尾是协议错误：既没有 content，工具调用之外也没有正文。直接按
 			// final 结束会让下游把空回复兜底成无意义文案发出去，必须让模型重试。
 			// 图片任务 pending 的空收尾除外——运行时会用图片开场白兜底。
@@ -505,18 +440,6 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 				emitProtocolRepair(ctx, req.Observer, traceID, modelTurns, toolCalls, r.cfg.MaxSteps, reason)
 				messages = appendAssistantEcho(messages, lastText)
 				messages = append(messages, llm.Message{Role: llm.RoleUser, Content: reason + "。请重新调用 agent_finalize，把给用户看的完整回复写进 content，不能为空。"})
-				if protocolRepairs >= r.cfg.ProtocolRepairLimit {
-					finishReason = "protocol_repair_exhausted"
-					break
-				}
-				continue
-			}
-			if repair := reviewFinalDraft(action.Content); repair != "" {
-				protocolRepairs++
-				emitProtocolRepair(ctx, req.Observer, traceID, modelTurns, toolCalls, r.cfg.MaxSteps, finalReviewRepairReason)
-				// 原生 finalize 往往没有 Text，草稿在工具参数里；回填正文才能真正改稿。
-				messages = appendAssistantEcho(messages, action.Content)
-				messages = append(messages, llm.Message{Role: llm.RoleUser, Content: repair + "\n复核之后照常调用 agent_finalize 收尾，claims 按实际检索结果填写。"})
 				if protocolRepairs >= r.cfg.ProtocolRepairLimit {
 					finishReason = "protocol_repair_exhausted"
 					break
@@ -599,11 +522,6 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 			}
 			continue
 		}
-		searchProtocolInput := action.Input
-		claimMetadata := map[string]any(nil)
-		if action.Tool == webSearchToolName {
-			claimMetadata = claimLedger.prepareSearch(searchProtocolInput)
-		}
 		action.Input = minimalToolInput(action.Tool, action.Input)
 		signature := toolCallSignature(action.Tool, action.Input)
 		if repeatable, ok := tool.(RepeatableTool); ok && repeatable.RepeatableCalls() {
@@ -656,7 +574,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 		}
 		lastToolSignature = signature
 		inputKeys := sortedInputKeys(action.Input)
-		toolMetadata := mergeRunMetadata(webSearchRunMetadataFromInput(action.Tool, action.Input), claimMetadata)
+		toolMetadata := webSearchRunMetadataFromInput(action.Tool, action.Input)
 		emitRunEvent(ctx, req.Observer, RunEvent{
 			TraceID:      traceID,
 			Phase:        RunPhaseToolStarted,
@@ -695,11 +613,9 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 		// 报错按形态和已登记原文一起遮；正常输出只遮已登记原文和 userinfo，网页里的
 		// 签名链接模型还要接着用。
 		output = secretmask.Output(output)
-		rawOutput := output
 		if err != nil {
 			record.Error = secretmask.Text(normalizeToolError(err, toolCtx, ctx, r.cfg.ToolTimeoutMS))
 			output = toolExecutionErrorForModel(action.Tool, record.Error)
-			rawOutput = ""
 		} else {
 			record.Output = truncateToolOutput(output, outputLimit)
 			if action.Tool == ToolsLoadToolName {
@@ -714,12 +630,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 		}
 		steps = append(steps, record)
 		toolMetadata = mergeRunMetadata(toolMetadata, webSearchRunMetadataFromOutput(action.Tool, output, err))
-		switch action.Tool {
-		case webSearchToolName:
-			toolMetadata = mergeRunMetadata(toolMetadata, claimLedger.observeSearch(rawOutput, err))
-		case browserRenderToolName:
-			toolMetadata = mergeRunMetadata(toolMetadata, claimLedger.observeRenderedPage(rawOutput, err))
-		}
+
 		emitRunEvent(ctx, req.Observer, RunEvent{
 			TraceID:      traceID,
 			Phase:        RunPhaseToolCompleted,
@@ -743,11 +654,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 			}
 		}
 		// 把上一轮 assistant JSON 和工具输出一起回填，模型据此决定下一步或 final。
-		claimLedger.noteCitableText(rawOutput)
 		observationText := toolObservationMessage(action.Tool, output, err == nil, r.cfg.MaxSteps-toolCalls) + parallelDropNotice
-		if action.Tool == webSearchToolName && claimLedger.active {
-			observationText += "\n\n" + claimLedger.digest()
-		}
 		observation := llm.Message{Role: llm.RoleUser, Content: observationText}
 		if err == nil {
 			if rich, ok := tool.(ToolResultPartsTool); ok {
@@ -801,14 +708,14 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 	}
 	messages = append(messages, llm.Message{
 		Role:    llm.RoleUser,
-		Content: finalizationInstruction(finishReason, claimLedger.active) + "\n" + claimLedger.digest(),
+		Content: finalizationInstruction(finishReason),
 	})
 	markLoopCacheBreakpoint(messages, stableCacheIndex)
 	finalizationRequest := llm.GenerateRequest{Messages: messages}
 	if nativeProtocol {
 		// 故意不带其他工具，模型无法再开新工作；同时强制收尾工具，让这一轮的
 		// 结构由供应商的解码语法保证，而不是靠手写 JSON 信封。
-		finalizationRequest.Tools = []llm.ToolDefinition{finalizeToolDefinition(claimLedger, imageTaskQueued, r.cfg.FinalizeFields...)}
+		finalizationRequest.Tools = []llm.ToolDefinition{finalizeToolDefinition(imageTaskQueued, r.cfg.FinalizeFields...)}
 		finalizationRequest.ToolChoice = finalizeToolName
 	}
 	var resp *llm.GenerateResponse
@@ -842,29 +749,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 			Usage:        usage,
 		})
 
-		draft := finalText
-		if call, found := findFinalizeCall(resp.ToolCalls); found {
-			action := finalizeAction(call, finalText)
-			if action.Silent {
-				break
-			}
-			draft = action.Content
-		} else if action, ok := parseAction(finalText); ok && action.Action == "final" {
-			if action.Silent {
-				break
-			}
-			draft = action.Content
-		}
-		repair := reviewFinalDraft(draft)
-		if repair == "" {
-			break
-		}
-		// 收尾也遵守相同复核上限，只允许改稿，绝不重新开放工具预算。
-		protocolRepairs++
-		emitProtocolRepair(ctx, req.Observer, traceID, modelTurns, toolCalls, r.cfg.MaxSteps, finalReviewRepairReason)
-		finalizationRequest.Messages = appendAssistantEcho(finalizationRequest.Messages, draft)
-		finalizationRequest.Messages = append(finalizationRequest.Messages, llm.Message{Role: llm.RoleUser, Content: repair + "\n" + finalizationInstruction(finishReason, claimLedger.active)})
-		markLoopCacheBreakpoint(finalizationRequest.Messages, stableCacheIndex)
+		break
 	}
 	if call, found := findFinalizeCall(resp.ToolCalls); found {
 		action := finalizeAction(call, finalText)
@@ -875,7 +760,6 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 		if issue := finalizeLayoutIssue(action); issue != "" {
 			return fail(fmt.Errorf("finalize_layout: %s（finish_reason=%s）", issue, finishReason))
 		}
-		claimLedger.applyUpdates(action.Claims)
 		if imageTaskQueued && !imageTaskFinalIsPending(action) {
 			return finish("图片任务已经开始生成，完成后会自动发送。", finishReason), nil
 		}
@@ -894,7 +778,6 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 		if issue := finalizeLayoutIssue(action); issue != "" {
 			return fail(fmt.Errorf("finalize_layout: %s（finish_reason=%s）", issue, finishReason))
 		}
-		claimLedger.applyUpdates(action.Claims)
 		if imageTaskQueued && !imageTaskFinalIsPending(action) {
 			return finish("图片任务已经开始生成，完成后会自动发送。", finishReason), nil
 		}
@@ -1093,7 +976,7 @@ func toolObservationMessage(tool, output string, success bool, remaining int) st
 	return fmt.Sprintf("工具 %s 执行%s（剩余工具预算 %d）：\n%s\n\n%s", tool, status, max(remaining, 0), output, guidance)
 }
 
-func finalizationInstruction(reason string, claimsActive bool) string {
+func finalizationInstruction(reason string) string {
 	prefix := "当前阶段需要结束工具循环。"
 	switch reason {
 	case "tool_budget_exhausted":
@@ -1104,10 +987,7 @@ func finalizationInstruction(reason string, claimsActive bool) string {
 		prefix = "剩余请求时间已保留给最终答复。"
 	}
 	requirement := "现在禁止再调用任何工具；请仅根据已有工具结果调用 agent_finalize 结束本轮"
-	if claimsActive {
-		requirement += "，并在 claims 中结算全部已声明主张"
-	}
-	return prefix + requirement + "。即使信息不完整，也要说明已确认的结果和限制；保留此前复核要求的修正，联网调研正文附实际来源链接（用户明确禁用链接时除外），不要输出 tool 动作。content 只写面向用户的自然回答，不得暴露 claim ID、证据账本、协议字段、元数据或内部校验过程；用户询问观点是否正确时，应区分可直接判断的逻辑或措辞与需要外部证据的事实，不要因为部分事实未核实而拒绝回答整个问题。"
+	return prefix + requirement + "。即使信息不完整，也要说明已确认的结果和限制；联网调研正文附实际来源链接（用户明确禁用链接时除外），不要输出 tool 动作。content 只写面向用户的自然回答；用户询问观点是否正确时，应区分可直接判断的逻辑或措辞与需要外部证据的事实，不要因为部分事实未核实而拒绝回答整个问题。"
 }
 
 func addLLMUsage(total llm.Usage, usage llm.Usage) llm.Usage {
@@ -1152,12 +1032,8 @@ func (r *Runner) systemPrompt() string {
 			"- 「当前上下文已经足够」只在答案本身就写在上下文里时成立。聊天记录里讨论过这个话题不等于其中的事实已经核实：别人的说法、你自己先前的回复和记忆摘要都只是线索，不能拿来替代检索。同样，熟悉一个项目的设计或原理，不代表你知道它此刻有哪些实现、插件、版本或生态现状——讲原理可以直接答，断言「有没有」「支不支持」「有哪些」必须先搜。",
 			"- 搜索词围绕一个信息缺口，用简短自然关键词：实体名称加定义、文档、源码、价格或所需能力。query 放一个清晰问题，queries 仅补充确有区别的查证角度；不要把完整聊天记录、用户身份或无关字段塞进搜索词；不要堆 OR、近义词和整句问话，不要无依据地混入相邻概念。用户给出的产品、模型名称和版本号原样保留，这同样适用于每个候选查询；没有证据不得改名、降版本或把别的型号价格当成目标型号价格。",
 			"- 先宽搜找到可信来源和准确实体，再读来源原文；只在确认域名确属目标官方项目后才用 site: 限定。找到相关页面后用网页工具打开、用 find 定位缺口，不要反复用 site: 去搜同一篇文章里的词。优先确认并读取官网、官方文档、官方仓库和发布记录；第三方文章用于追踪官方出处。已找到相关官方页面时不能只读转载就收尾；官方无法访问或未覆盖时才采用其他可信来源并说明限制。缺少这些证据时只说本次未确认，不能断言项目没有该能力。",
-			"- web_search 会在统一 deadline 和调用预算内自动规范化查询、逐步放宽引号/标点/括号约束并回退 provider。搜索次数不单独设限，一轮最多 "+fmt.Sprintf("%d", r.cfg.MaxSteps)+" 步、每步调一个工具，没查到就接着查；不要重复相同 query 或只机械替换一个词。",
-			"- 多部分检索必须先拆成可独立验证的通用 claims。首次搜索在 input.claims 声明每个 id/statement，并用 claim_ids 标明本次查询覆盖项；后续搜索先用 claim_updates 结算已有证据，再优先覆盖 insufficient 或 not_searched。不得按品牌、站点或垂直领域硬编码 claim。",
-			"- claim 状态只允许 supported、conflicting、insufficient、not_searched。supported/conflicting 必须绑定工具真实返回的 URL，并记录 relation、source_type、published_at、distance 和 strength；标题、摘要、正文冲突时不得标 supported。第一方来源只能支持它直接覆盖的条件，不能外推未覆盖的地点、时间或渠道。",
+			"- web_search 原样执行你提供的查询；不同 queries 会并行搜索，每个查询独立回退配置的搜索引擎。搜索次数不单独设限，一轮最多 "+fmt.Sprintf("%d", r.cfg.MaxSteps)+" 步、每步调一个工具，没查到就接着查；不要重复相同 query 或只机械替换一个词。",
 			"- 工具返回 no_results、provider_error、timeout、budget_exhausted 或 insufficient_evidence 时，不要立即断言资料不存在。仍有工具预算时，根据已尝试的 query hash、结果中的新实体和未覆盖的信息缺口生成下一轮候选；结果已经有权威来源直接支持答案时立即停止搜索。",
-			"- agent_finalize 必须携带完整 claims 数组，并按 claim 分别表达已确认、冲突和未确认内容。一个 claim 缺证据不得否定其他 claim；没有检索到只能标 insufficient，除非权威来源提供直接否定证据。不得生成搜索未验证的候选渠道、组织、价格或其他事实。",
-			"- claims、claim ID、证据账本、协议字段和校验过程只用于内部结构化校验，绝不能出现在 content。content 必须像普通对话一样直接回答用户；事实证据不足时只限定对应事实，逻辑关系、措辞是否严谨和基于已知前提的推理仍应正常回答。",
 			"- 最终回答要附来源，并明确区分来源直接支持的事实、多来源推导的结论和仍未验证的假设。金融、新闻及其他时效性问题应优先核对官方或法定披露来源，并区分不同事件日期。",
 			"- web_search 的全部 provider 都失败（provider_error、timeout）时，如果还有浏览器工具，按下面「用浏览器搜索」的办法接着查；浏览器也没有或也失败，才在最终回复里说明这次没能联网查到。",
 		)
@@ -1235,7 +1111,7 @@ func (r *Runner) systemPrompt() string {
 	sections := []string{
 		"你是 Diana 的内置 Agent。使用工具完成任务和核实外部事实，观察结果后再给出最终答复。征求你的观点或讨论你的架构，也要先核实其中具体技术的外部事实前提；不能把熟悉的术语自动当成已查证的知识。",
 		"需要工具时必须使用请求中提供的原生 function calling，不要把工具调用写进正文。每个规划步只选择一个工具，观察结果后可以继续选择下一个。",
-		"不再需要工具时调用 agent_finalize 结束本轮：给用户看的完整正文写进 content（必填，不能为空），task_state、claims 这类元数据按需一并携带。content 禁止真实 CR/LF；下一条消息写 [diana-msg]，同一消息内换行写 [diana-line]。正文不要写成 JSON。",
+		"不再需要工具时调用 agent_finalize 结束本轮：给用户看的完整正文写进 content（必填，不能为空），task_state 等元数据按需一并携带。content 禁止真实 CR/LF；下一条消息写 [diana-msg]，同一消息内换行写 [diana-line]。正文不要写成 JSON。",
 		"这一轮确实不需要说话时，调用 agent_finalize 并填 silent=true、content 留空，本轮就不发任何消息；silent_reason 里用一句话说明原因，只进日志。它不是拒答：要拒绝就正常把话说出来。",
 		"若 Provider 不支持原生 function calling，才可兼容输出 {\"action\":\"final\",\"content\":\"给用户看的自然语言回复\"} 或 {\"action\":\"tool\",\"tool\":\"工具名\",\"input\":{...}}。",
 	}
@@ -1407,7 +1283,6 @@ type llmAction struct {
 	Content   string         `json:"content,omitempty"`
 	TaskState string         `json:"task_state,omitempty"`
 	Reply     *string        `json:"reply,omitempty"`
-	Claims    []ClaimUpdate  `json:"claims,omitempty"`
 	// Silent 是模型自己决定「这一轮不发任何消息」。只有两种来源：原生
 	// agent_finalize 调用的 silent 字段，和文本兼容协议里那个完整的 final JSON
 	// 对象。任何把普通正文兜底成 final 的路径都不得置位——正文里出现 silent

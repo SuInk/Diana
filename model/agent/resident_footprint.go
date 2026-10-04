@@ -27,7 +27,7 @@ func (r *Runner) ResidentFootprint() ResidentFootprint {
 	catalog, _ := renderSkillsCatalog(SelectSkillBodies(r.registry.Skills(), ""), r.cfg.SkillsListBudget)
 	return ResidentFootprint{
 		SystemPrompt:  probe.systemPrompt(),
-		Tools:         probe.turnDefinitions(newClaimEvidenceLedger(), false),
+		Tools:         probe.turnDefinitions(false),
 		SkillsCatalog: catalog,
 	}
 }

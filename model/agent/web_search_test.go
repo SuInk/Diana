@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -105,6 +106,7 @@ func TestWebSearchToolCallsExaMCP(t *testing.T) {
 
 func TestWebSearchToolExploresModelCandidatesAfterNoResults(t *testing.T) {
 	var queries []string
+	var queriesMu sync.Mutex
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var payload struct {
 			Query string `json:"query"`
@@ -113,7 +115,9 @@ func TestWebSearchToolExploresModelCandidatesAfterNoResults(t *testing.T) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
+		queriesMu.Lock()
 		queries = append(queries, payload.Query)
+		queriesMu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
 		if payload.Query == "overly precise phrase" {
 			_, _ = w.Write([]byte(`{"results":[]}`))
@@ -143,10 +147,10 @@ func TestWebSearchToolExploresModelCandidatesAfterNoResults(t *testing.T) {
 	if err := json.Unmarshal([]byte(output), &result); err != nil {
 		t.Fatal(err)
 	}
-	if result.Status != "ok" || result.SelectedQuery != "broader alias" || !result.FallbackUsed {
+	if result.Status != "ok" || len(result.Searches) != 2 || result.Searches[1].Status != "ok" {
 		t.Fatalf("result = %#v", result)
 	}
-	if strings.Join(queries, ",") != "overly precise phrase,broader alias" {
+	if len(queries) != 2 {
 		t.Fatalf("queries = %#v", queries)
 	}
 	if len(result.Attempts) != 2 || result.Attempts[0].Status != "no_results" || result.Attempts[1].Status != "success" {
@@ -154,14 +158,17 @@ func TestWebSearchToolExploresModelCandidatesAfterNoResults(t *testing.T) {
 	}
 }
 
-func TestWebSearchToolRelaxesStrictQuotesWithoutDomainRules(t *testing.T) {
+func TestWebSearchToolDoesNotRewriteModelQueries(t *testing.T) {
 	var queries []string
+	var queriesMu sync.Mutex
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var payload struct {
 			Query string `json:"query"`
 		}
 		_ = json.NewDecoder(r.Body).Decode(&payload)
+		queriesMu.Lock()
 		queries = append(queries, payload.Query)
+		queriesMu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
 		if strings.Contains(payload.Query, `"`) {
 			_, _ = w.Write([]byte(`{"results":[]}`))
@@ -186,10 +193,10 @@ func TestWebSearchToolRelaxesStrictQuotesWithoutDomainRules(t *testing.T) {
 	if err := json.Unmarshal([]byte(output), &result); err != nil {
 		t.Fatal(err)
 	}
-	if result.Status != "ok" || len(queries) != 2 || queries[1] != "strict phrase" {
+	if result.Status != "no_results" || len(queries) != 1 || queries[0] != `"strict phrase"` {
 		t.Fatalf("result=%#v queries=%#v", result, queries)
 	}
-	if len(result.Queries) < 2 || result.Queries[1].Strategy != "quotes_relaxed" {
+	if len(result.Queries) != 1 {
 		t.Fatalf("candidates = %#v", result.Queries)
 	}
 }
@@ -250,7 +257,7 @@ func TestWebSearchToolStopsAtProviderCallBudget(t *testing.T) {
 	if err := json.Unmarshal([]byte(output), &result); err != nil {
 		t.Fatal(err)
 	}
-	if result.Status != "budget_exhausted" || result.Budget.ProviderCalls != 1 || result.Queries[1].Status != "not_executed" {
+	if result.Status != "budget_exhausted" || result.Budget.ProviderCalls != 1 || result.Searches[1].Status != "budget_exhausted" {
 		t.Fatalf("result = %#v", result)
 	}
 }
@@ -350,7 +357,7 @@ func TestWebSearchToolKeepsStructuredOutputWithinLimit(t *testing.T) {
 	if err := json.Unmarshal([]byte(output), &result); err != nil {
 		t.Fatalf("truncated output is not valid JSON: %v\n%s", err, output)
 	}
-	if result.Status != "ok" || result.Content == "" {
+	if result.Status != "ok" || len(result.Results) == 0 {
 		t.Fatalf("result = %#v", result)
 	}
 }
@@ -468,65 +475,28 @@ func writeTestMCPEvent(w http.ResponseWriter, payload string) {
 	_, _ = fmt.Fprintf(w, "event: message\ndata: %s\n\n", payload)
 }
 
-func TestWebSearchReadsRankedSourcesInParallel(t *testing.T) {
+func TestWebSearchReturnsDiscoveryWithoutReadingArbitrarySources(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprint(w, `{"results":[{"url":"https://example.com/one","content":"摘要一"},{"url":"https://example.com/two","content":"摘要二"},{"url":"https://example.com/three","content":"摘要三"}]}`)
+		fmt.Fprint(w, `{"results":[{"title":"Source","url":"https://example.com/page","content":"Search snippet"}]}`)
 	}))
 	defer server.Close()
-	started := make(chan string, 2)
-	release := make(chan struct{})
-	renderer := PageRendererFunc(func(ctx context.Context, u string) (RenderedPage, error) {
-		started <- u
-		select {
-		case <-release:
-		case <-ctx.Done():
-			return RenderedPage{}, ctx.Err()
-		}
-		if strings.HasSuffix(u, "/two") {
-			return RenderedPage{}, fmt.Errorf("source unavailable")
-		}
-		return RenderedPage{RequestedURL: u, URL: u + "/", Text: strings.Repeat("真正读取的正文", 1000), RetrievedAt: "2026-10-03T00:00:00Z"}, nil
+	renderer := PageRendererFunc(func(context.Context, string) (RenderedPage, error) {
+		t.Error("search must not choose pages for the model")
+		return RenderedPage{}, nil
 	})
-	tool, err := NewWebSearchTool(WebSearchToolOptions{Config: WebSearchConfig{Providers: []WebSearchProviderConfig{{Name: "test", Type: "tavily", URL: server.URL}}}, APIKeys: map[string]string{"test": "test"}, Renderer: renderer, ReadSources: true, Timeout: 3 * time.Second})
+	tool, err := NewWebSearchTool(WebSearchToolOptions{Config: WebSearchConfig{Providers: []WebSearchProviderConfig{{Name: "test", Type: "tavily", URL: server.URL}}}, APIKeys: map[string]string{"test": "test"}, Renderer: renderer})
 	if err != nil {
 		t.Fatal(err)
 	}
-	done := make(chan struct {
-		output string
-		err    error
-	}, 1)
-	go func() {
-		o, e := tool.Run(context.Background(), map[string]any{"query": "example sources"})
-		done <- struct {
-			output string
-			err    error
-		}{o, e}
-	}()
-	for i := 0; i < 2; i++ {
-		select {
-		case <-started:
-		case <-time.After(time.Second):
-			close(release)
-			t.Fatal("两个来源没有并行开始读取")
-		}
-	}
-	close(release)
-	result := <-done
-	if result.err != nil {
-		t.Fatal(result.err)
-	}
-	if len([]rune(result.output)) > DefaultMaxToolOutputChars {
-		t.Fatal("原文输出超出预算")
-	}
-	var parsed webSearchResult
-	if err := json.Unmarshal([]byte(result.output), &parsed); err != nil {
+	raw, err := tool.Run(context.Background(), map[string]any{"query": "example"})
+	if err != nil {
 		t.Fatal(err)
 	}
-	if len(parsed.Documents) != 2 || parsed.Documents[0].Text == "" || !parsed.Documents[0].Truncated || parsed.Documents[0].URL != "https://example.com/one/" {
-		t.Fatalf("实际原文或重定向来源丢失：%+v", parsed.Documents)
+	var result webSearchResult
+	if err = json.Unmarshal([]byte(raw), &result); err != nil {
+		t.Fatal(err)
 	}
-	if parsed.Documents[1].Text != "" || !strings.Contains(parsed.Documents[1].Error, "source unavailable") || parsed.Status != "ok" {
-		t.Fatalf("页面失败不能冒充读取成功，也不能丢掉搜索结果：%+v", parsed)
+	if len(result.Results) != 1 || result.Results[0].Snippet != "Search snippet" || result.Results[0].Title != "Source" {
+		t.Fatalf("discovery lost: %s", raw)
 	}
 }

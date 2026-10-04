@@ -57,8 +57,8 @@ func (p *WebSearchPlugin) Manifest() PluginManifest {
 	return PluginManifest{
 		ID:          webSearchPluginID,
 		Name:        "联网搜索",
-		Version:     "0.3.2",
-		Description: "为对话提供带候选查询探索和空结果恢复的实时网页搜索。可以走搜索 API（优先 Exa MCP，失败回退 Tavily），也可以用沙盒浏览器直接打开搜索引擎的结果页。关闭本插件时，只要网页渲染插件开着，仍按搜索引擎方式提供搜索；要彻底不联网搜索，两个都关掉。",
+		Version:     "0.3.3",
+		Description: "为对话提供可并行查询的实时网页搜索。默认用沙盒浏览器打开搜索引擎，返回标题、摘要和链接，由模型选择原文继续调研；也支持显式配置搜索 API。关闭本插件时，只要网页渲染插件开着，仍按搜索引擎方式提供搜索；要彻底不联网搜索，两个都关掉。",
 		Official:    true,
 		BuiltIn:     true,
 		Permissions: []string{"network:http", "llm:tool"},
@@ -69,7 +69,7 @@ func (p *WebSearchPlugin) Manifest() PluginManifest {
 				Description: "API 搜索调用 Exa / Tavily，快、结果带摘要；搜索引擎用「网页渲染」的一次性沙盒浏览器打开 Google、Bing 等的结果页，不需要 API Key，" +
 					"但每次要起浏览器、慢一些，遇到人机验证会自动换下一家。两种方式对模型都是同一个 web_search 工具。",
 				Type:    PluginSettingTypeSelect,
-				Default: webSearchModeAPI,
+				Default: webSearchModeEngine,
 				Options: []PluginSettingOption{
 					{Value: webSearchModeAPI, Label: "API 搜索（Exa / Tavily）"},
 					{Value: webSearchModeEngine, Label: "搜索引擎（沙盒浏览器）"},
@@ -196,7 +196,7 @@ func (p *WebSearchPlugin) AgentTools(settings SettingValues) ([]agent.Tool, erro
 	apiKeys := map[string]string{}
 	var renderer agent.PageRenderer
 
-	if strings.TrimSpace(settings.String(webSearchSettingMode, webSearchModeAPI)) == webSearchModeEngine {
+	if strings.TrimSpace(settings.String(webSearchSettingMode, webSearchModeEngine)) == webSearchModeEngine {
 		// 单源超时不沿用 API 那档：起一次浏览器加渲染就要十来秒，12 秒会把能用的引擎也掐掉。
 		for index, engine := range webSearchEngineOrder(settings.String(webSearchSettingEngines, "")) {
 			provider := agent.WebSearchProviderConfig{
@@ -261,7 +261,6 @@ func (p *WebSearchPlugin) AgentTools(settings SettingValues) ([]agent.Tool, erro
 		MaxOutputChars: agent.DefaultMaxToolOutputChars,
 		Client:         p.client,
 		Renderer:       renderer,
-		ReadSources:    true,
 	})
 	if err != nil {
 		return nil, err

@@ -14,10 +14,7 @@ import (
 func TestClaimSourcesSurviveIntoTheNextTurn(t *testing.T) {
 	runtime := &Runtime{plugins: NewDefaultPluginManager(), recentClaimSources: map[string][]claimSourceRecord{}}
 	event := MessageEvent{GroupID: "42"}
-	runtime.rememberClaimSources(event, []agent.ClaimTrace{{
-		ID: "commit", Statement: "最新提交做了什么", Summary: "提交页写明改了环境代理",
-		Evidence: []agent.ClaimEvidence{{URL: "https://official.example/commit/abc123"}},
-	}})
+	runtime.rememberClaimSources(event, []agent.SourceReference{{URL: "https://official.example/commit/abc123", Title: "提交页写明改了环境代理"}})
 	context := runtime.claimSourceContext(event)
 	if !strings.Contains(context, "https://official.example/commit/abc123") {
 		t.Fatalf("下一轮拿不到来源链接：%q", context)
@@ -36,9 +33,7 @@ func TestClaimSourcesSurviveIntoTheNextTurn(t *testing.T) {
 func TestClaimSourcesIgnoreClaimsWithoutEvidence(t *testing.T) {
 	runtime := &Runtime{plugins: NewDefaultPluginManager(), recentClaimSources: map[string][]claimSourceRecord{}}
 	event := MessageEvent{UserID: "u1"}
-	runtime.rememberClaimSources(event, []agent.ClaimTrace{{
-		ID: "state", Statement: "状态是否成立", Summary: "没有找到来源",
-	}})
+	runtime.rememberClaimSources(event, []agent.SourceReference{})
 	if context := runtime.claimSourceContext(event); context != "" {
 		t.Fatalf("没有证据时不该注入来源块：%q", context)
 	}
@@ -47,18 +42,8 @@ func TestClaimSourcesIgnoreClaimsWithoutEvidence(t *testing.T) {
 func TestClaimSourcesFallBackToRetrievedCandidatesWhenNothingWasBound(t *testing.T) {
 	runtime := &Runtime{plugins: NewDefaultPluginManager(), recentClaimSources: map[string][]claimSourceRecord{}}
 	event := MessageEvent{GroupID: "44"}
-	// 模型用纯文本收尾时 claims 不会被结算，但这一轮确实检索过——链接照样留得下来。
-	runtime.rememberClaimSources(event, []agent.ClaimTrace{
-		{
-			ID: "bound", Statement: "官方是否公告过", Summary: "公告写明了",
-			Evidence:         []agent.ClaimEvidence{{URL: "https://official.example/notice"}},
-			CandidateSources: []string{"https://aggregator.example/notice"},
-		},
-		{
-			ID: "unbound", Statement: "时间是否变更", Summary: "检索到但没绑定",
-			CandidateSources: []string{"https://searched.example/schedule"},
-		},
-	})
+	// 纯文本收尾也保留工具实际返回的来源。
+	runtime.rememberClaimSources(event, []agent.SourceReference{{URL: "https://official.example/notice", Title: "公告写明了"}, {URL: "https://searched.example/schedule", Title: "检索到但没绑定"}})
 	context := runtime.claimSourceContext(event)
 	if !strings.Contains(context, "https://searched.example/schedule") {
 		t.Fatalf("没绑定的 claim 丢掉了已检索来源：%q", context)
@@ -78,11 +63,8 @@ func TestClaimSourcesSwitchStopsRecordingAndClearsWhatWasKept(t *testing.T) {
 	plugins := NewDefaultPluginManager()
 	runtime := &Runtime{plugins: plugins, recentClaimSources: map[string][]claimSourceRecord{}}
 	event := MessageEvent{GroupID: "88"}
-	claims := []agent.ClaimTrace{{
-		ID: "commit", Summary: "提交页写明改了环境代理",
-		Evidence: []agent.ClaimEvidence{{URL: "https://official.example/commit/abc123"}},
-	}}
-	runtime.rememberClaimSources(event, claims)
+	sources := []agent.SourceReference{{URL: "https://official.example/commit/abc123", Title: "提交页写明改了环境代理"}}
+	runtime.rememberClaimSources(event, sources)
 	if runtime.claimSourceContext(event) == "" {
 		t.Fatal("默认应保留来源以便追问")
 	}
@@ -98,7 +80,7 @@ func TestClaimSourcesSwitchStopsRecordingAndClearsWhatWasKept(t *testing.T) {
 	if kept != 0 {
 		t.Fatalf("关掉开关后已存来源应被清掉，仍剩 %d 条", kept)
 	}
-	runtime.rememberClaimSources(event, claims)
+	runtime.rememberClaimSources(event, sources)
 	if context := runtime.claimSourceContext(event); context != "" {
 		t.Fatalf("关掉开关后不该继续记录：%q", context)
 	}
@@ -129,10 +111,7 @@ func TestReplyLinkPolicyNeverKeepsSourcesOutOfContextButNotDiscarded(t *testing.
 	plugins := NewDefaultPluginManager()
 	runtime := &Runtime{plugins: plugins, recentClaimSources: map[string][]claimSourceRecord{}}
 	event := MessageEvent{GroupID: "100"}
-	runtime.rememberClaimSources(event, []agent.ClaimTrace{{
-		ID: "commit", Summary: "提交页写明改了环境代理",
-		Evidence: []agent.ClaimEvidence{{URL: "https://official.example/commit/abc123"}},
-	}})
+	runtime.rememberClaimSources(event, []agent.SourceReference{{URL: "https://official.example/commit/abc123", Title: "提交页写明改了环境代理"}})
 	if _, err := plugins.UpdateSettings(webSearchPluginID, map[string]any{webSearchSettingLinkPolicy: replyLinkPolicyNever}); err != nil {
 		t.Fatal(err)
 	}
@@ -176,14 +155,8 @@ func TestClaimSourcesDedupeExpireAndCap(t *testing.T) {
 func TestClaimSourcesKeepNewestAcrossRuns(t *testing.T) {
 	runtime := &Runtime{plugins: NewDefaultPluginManager(), recentClaimSources: map[string][]claimSourceRecord{}}
 	event := MessageEvent{GroupID: "7"}
-	runtime.rememberClaimSources(event, []agent.ClaimTrace{{
-		ID: "first", Summary: "第一轮结论",
-		Evidence: []agent.ClaimEvidence{{URL: "https://first.example/page"}},
-	}})
-	runtime.rememberClaimSources(event, []agent.ClaimTrace{{
-		ID: "second", Summary: "第二轮结论",
-		Evidence: []agent.ClaimEvidence{{URL: "https://second.example/page"}},
-	}})
+	runtime.rememberClaimSources(event, []agent.SourceReference{{URL: "https://first.example/page", Title: "第一轮结论"}})
+	runtime.rememberClaimSources(event, []agent.SourceReference{{URL: "https://second.example/page", Title: "第二轮结论"}})
 	context := runtime.claimSourceContext(event)
 	first := strings.Index(context, "https://first.example/page")
 	second := strings.Index(context, "https://second.example/page")

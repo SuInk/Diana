@@ -97,7 +97,7 @@ func TestBrowserRenderFindMatchesMergeAndCap(t *testing.T) {
 	}
 }
 
-// Runner 不能在 JSON 中间截断，否则终稿复核读不到 text/find_matches。
+// Runner 不能在 JSON 中间截断，否则模型读不到 text/find_matches。
 func TestBrowserRenderKeepsValidJSONWithinRunnerBudget(t *testing.T) {
 	page := RenderedPage{URL: "https://example.com/docs", Text: strings.Repeat("正文", 5000), FullText: strings.Repeat("正文", 5000) + "关键能力有条件支持"}
 	for i := 0; i < 40; i++ {

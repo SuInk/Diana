@@ -152,23 +152,19 @@ type Request struct {
 	LoadedTools []string
 	// ToolsLoaded is called immediately, including when a later model call fails.
 	ToolsLoaded func([]string)
-	// FinalReview 在本轮检索或读过网页、模型准备收尾时复核草稿一次。evidence 是
-	// 本轮 web_search / browser_render 的调用记录。返回非空字符串就把它作为修复
-	// 提示打回去，空串放行。为 nil 时不复核。
-	FinalReview func(ctx context.Context, draft string, evidence []Step) string
 }
 
 type Response struct {
-	Text         string       `json:"text"`
-	Steps        []Step       `json:"steps,omitempty"`
-	Provider     llm.Provider `json:"provider,omitempty"`
-	Model        string       `json:"model,omitempty"`
-	Usage        llm.Usage    `json:"usage,omitempty"`
-	TraceID      string       `json:"trace_id,omitempty"`
-	ModelTurns   int          `json:"model_turns,omitempty"`
-	FinishReason string       `json:"finish_reason,omitempty"`
-	DurationMS   int64        `json:"duration_ms,omitempty"`
-	Claims       []ClaimTrace `json:"claims,omitempty"`
+	Text         string            `json:"text"`
+	Steps        []Step            `json:"steps,omitempty"`
+	Provider     llm.Provider      `json:"provider,omitempty"`
+	Model        string            `json:"model,omitempty"`
+	Usage        llm.Usage         `json:"usage,omitempty"`
+	TraceID      string            `json:"trace_id,omitempty"`
+	ModelTurns   int               `json:"model_turns,omitempty"`
+	FinishReason string            `json:"finish_reason,omitempty"`
+	DurationMS   int64             `json:"duration_ms,omitempty"`
+	Sources      []SourceReference `json:"sources,omitempty"`
 	// Silent 表示模型调用 agent_finalize 时自己选择了不发消息。Text 为空但这不是
 	// 生成失败：调用方必须按「本轮不发送」处理，不要用任何兜底文案补一句。
 	Silent bool `json:"silent,omitempty"`

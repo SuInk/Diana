@@ -4806,7 +4806,7 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 			return "", err
 		}
 		r.rememberAgentRunProgress(event, resp)
-		r.rememberClaimSources(event, resp.Claims)
+		r.rememberClaimSources(event, resp.Sources)
 		r.rememberToolCalls(event, resp.Steps)
 		finalizeStickerFromContext(ctx).set(resp.FinalizeFields[stickerFinalizeFieldName], resp.FinalizeFields[stickerOrderFieldName])
 		text := resp.Text

@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"strings"
 	"testing"
-	"time"
 )
 
 type releaseTestTransport func(*http.Request) (*http.Response, error)
@@ -44,36 +43,6 @@ func releaseFixtureClient(status int, release githubReleaseRecord) *http.Client 
 		raw, _ := json.Marshal(release)
 		return &http.Response{StatusCode: status, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(string(raw)))}, nil
 	})}
-}
-
-func TestGitHubReleaseReadsCurrentOfficialRecordWithoutBrowser(t *testing.T) {
-	requested := "https://github.com/go-gitea/gitea/releases"
-	api, _ := githubReleaseAPIURL(requested)
-	client := releaseFixtureClient(200, releaseFixture())
-	original := client.Transport
-	client.Transport = releaseTestTransport(func(req *http.Request) (*http.Response, error) {
-		if req.URL.String() != api || req.Header.Get("Authorization") != "" || req.Header.Get("Cache-Control") != "no-cache" {
-			t.Fatalf("unsafe or stale request: %v", req)
-		}
-		return original.RoundTrip(req)
-	})
-	page, err := fetchGitHubRelease(context.Background(), client, requested, api, 8000)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(page.Text, "v1.27.3") || !strings.Contains(page.Text, "2026-08-29T17:42:17Z") || page.SourceType != "github_release_api" || page.Sandboxed || page.BrowserEngine != "" {
-		t.Fatalf("bad provenance: %+v", page)
-	}
-	if _, err := time.Parse(time.RFC3339, page.RetrievedAt); err != nil {
-		t.Fatal(err)
-	}
-	ledger := newClaimEvidenceLedger()
-	ledger.prepareSearch(map[string]any{"claims": []any{map[string]any{"id": "version", "statement": "latest version"}}})
-	raw, _ := json.Marshal(page)
-	ledger.observeRenderedPage(string(raw), nil)
-	if !ledger.firstPartySources[canonicalEvidenceURL(api)] || !ledger.firstPartySources[canonicalEvidenceURL(page.URL)] {
-		t.Fatal("official API and release URL not available as evidence")
-	}
 }
 
 func TestGitHubReleaseFailuresAreNotNegativeEvidence(t *testing.T) {

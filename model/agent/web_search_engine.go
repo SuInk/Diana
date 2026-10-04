@@ -17,9 +17,7 @@ import (
 )
 
 // 搜索引擎模式：web_search 不走搜索 API，而是用一次性沙盒浏览器打开搜索引擎的结果页，
-// 从页面上取结果。对模型来说仍然是同一个 web_search，claims 和来源校验
-// 都照旧生效——以前关掉联网搜索、只在提示词里叫模型「用 browser_render 打开 Google」，
-// 模型经常干脆不查，门控也认不出浏览器那条路。
+// 从页面上取候选标题、摘要和 URL，由模型选择页面继续读取。
 
 const (
 	WebSearchProviderSearchEngine = "search_engine"
@@ -112,20 +110,22 @@ func KnownSearchEngine(name string) bool {
 }
 
 type searchEngineResult struct {
-	Title string `json:"title"`
-	URL   string `json:"url"`
+	Title   string `json:"title"`
+	Snippet string `json:"snippet,omitempty"`
+	URL     string `json:"url"`
 }
 
 func (t *WebSearchTool) runSearchEngine(ctx context.Context, provider webSearchProviderConfig, query string) (string, error) {
-	if t.renderer == nil {
-		return "", errors.New("search engine mode needs the sandboxed browser")
+	renderer := t.renderer
+	if renderer == nil {
+		renderer = NewSandboxedHeadlessBrowser(SandboxedBrowserConfig{Window: BrowserWindowHidden})
 	}
 	target, engine, err := searchEngineRequestURL(provider, query)
 	if err != nil {
 		return "", err
 	}
 
-	page, err := t.renderer.Render(ctx, target)
+	page, err := renderer.Render(ctx, target)
 	if err != nil {
 		return "", err
 	}
@@ -137,6 +137,15 @@ func (t *WebSearchTool) runSearchEngine(ctx context.Context, provider webSearchP
 		return "", fmt.Errorf("%s returned no search results: %w", provider.Tool, errWebSearchNoResults)
 	}
 	results = dedupeSearchEngineResults(t.resolveSearchEngineRedirects(ctx, results))
+	for i := range results {
+		if results[i].Snippet != "" {
+			continue
+		}
+		if start := strings.Index(page.Text, results[i].Title); start >= 0 {
+			results[i].Snippet = truncateText(strings.TrimSpace(page.Text[start+len(results[i].Title):]), 400)
+		}
+	}
+
 	// 输出里的每个 URL 都会被当成候选来源：结果页地址不放进来，正文里的网址也去掉协议头
 	// ——那是结果下面印的显示网址（常常只有域名），真正的链接已经在 results 里。
 	formatted, err := json.MarshalIndent(map[string]any{
@@ -208,7 +217,7 @@ func searchEngineResults(engine searchEngine, links []RenderedLink, limit int) [
 			continue
 		}
 		seen[key] = true
-		results = append(results, searchEngineResult{Title: title, URL: normalized})
+		results = append(results, searchEngineResult{Title: title, URL: normalized, Snippet: link.Snippet})
 		if len(results) >= limit {
 			break
 		}
@@ -219,6 +228,7 @@ func searchEngineResults(engine searchEngine, links []RenderedLink, limit int) [
 // unwrapSearchEngineLink 把参数里明文带着目标地址的跳转链接还原成目标地址。
 // Google 的 /goto?url= 和百度的 /link?url= 是加密串，交给 resolveSearchEngineRedirects。
 func unwrapSearchEngineLink(raw string) string {
+	raw = strings.ReplaceAll(raw, `\u0026`, "&")
 	parsed, err := url.Parse(raw)
 	if err != nil {
 		return raw
@@ -240,6 +250,7 @@ func unwrapSearchEngineLink(raw string) string {
 			return target
 		}
 	case strings.Contains(host, "google.") && parsed.Path == "/url":
+		query, _ = url.ParseQuery(strings.ReplaceAll(strings.ReplaceAll(parsed.RawQuery, "%5Cu0026", "&"), "%5cu0026", "&"))
 		for _, key := range []string{"q", "url"} {
 			if target := query.Get(key); strings.HasPrefix(target, "http") {
 				return target

@@ -16,9 +16,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"sort"
 	"strings"
-	"sync"
 	"time"
 )
 
@@ -42,7 +40,6 @@ type WebSearchTool struct {
 	providers        []WebSearchProviderConfig
 	apiKeys          map[string]string
 	renderer         PageRenderer
-	readSources      bool
 }
 
 // WebSearchToolOptions configures the search tool without exposing provider
@@ -57,8 +54,6 @@ type WebSearchToolOptions struct {
 	Client           *http.Client
 	// Renderer 是搜索引擎模式打开结果页用的沙盒浏览器；只配了 API 搜索源时可以不给。
 	Renderer PageRenderer
-	// ReadSources 在相同 deadline 内并行读取前两个来源，返回可核对的原文节选。
-	ReadSources bool
 }
 
 // NewWebSearchTool creates a search tool from an in-memory plugin snapshot.
@@ -84,7 +79,6 @@ func NewWebSearchTool(options WebSearchToolOptions) (*WebSearchTool, error) {
 		providers:        append([]WebSearchProviderConfig(nil), config.Providers...),
 		apiKeys:          apiKeys,
 		renderer:         options.Renderer,
-		readSources:      options.ReadSources,
 	}, nil
 }
 
@@ -140,13 +134,17 @@ func (t *WebSearchTool) Name() string {
 	return WebSearchToolName
 }
 
-// 联网决策参照 Codex CLI 的 web_run_description.md Decision boundary。
+// Diana 的联网决策策略；与工具契约共享。公开 Codex CLI 不提供这段提示词。
 // 同时放进工具契约与 Runner 提示词，避免两处对「该不该搜」给出不同答案。
 const webSearchDecisionBoundary = `拿不准就搜；信息变化或记错概率至少 10% 时必须查。用户要搜索、动态事实、陌生或新兴技术、具体技术方案的定义/评价/项目适配、推荐选型、引用或未读链接、医疗法律金融问题，都先查。问你自身能力也不豁免外部概念。直接搜索再答，不要问要不要查。稳定常识、纯创作或已给材料可直接答；用户明确不联网时遵守。`
 
+// A short current-turn reminder follows caller persona/history. It changes no
+// tool choice and applies to every topic, including conversational requests.
+const webSearchTurnPolicy = `本轮联网与调研要求：用户要查询、使用、购买、实现、比较或评价具体外部产品、版本或技术时，先搜索当前事实再回应；即使语气像玩笑，也要完成其中的实际请求，人设和接梗不能代替调研。聊天历史和你熟悉的旧知识只作线索。每个查询保留用户给出的名称和版本，用自然关键词定位相关官方发布、文档或源码；不要把其他版本或相邻型号并入 OR 查询。官网候选不相关时换查询继续定位，不能把一次无关结果当作官网没有覆盖；从候选中选择直接回答问题的页面，读取后再判断，原文不相关就换页面或查询。用户问“是不是不存在/不支持”时同样核实；没搜到、页面没提到或读取失败都只能说明本次未确认，不能推出不存在。发现与已有知识冲突的新官方材料时，按材料及其日期修正答案。答复里的数字、日期、规格、价格和实现机制必须由实际读到的正文直接支持；搜索摘要、旧印象和推测不能补成事实，没有依据的细节省略或说明未确认。明确不联网时遵守。`
+
 const webSearchDecisionPolicy = webSearchDecisionBoundary + `
 来源优先级：目标项目/服务的官网、官方文档、官方仓库和发布记录优先；第三方文章只作发现官方出处与交叉核对的线索。首次查询用实体原名加官网、官方文档或所需事实定位归属，先确认官网与仓库是谁维护，不能猜域名或把同名项目当成目标。发现官方候选 URL 后优先打开相关原文，必要时用 find 定位；官网首页或目录也不能支持页面未写出的细节。只有官方来源无法访问或确实未覆盖问题时才采用其他可信资料，并在答复中明确来源性质和未获官方确认的部分。价格、版本、当前功能尤其优先核对官方页面，不能读到转载就结束。
-调研顺序：简短查询定位来源 → 阅读搜索返回的 documents 原文或用 browser_render 打开一手页面 → 根据原文回答并附来源链接。documents 是实际读取的正文节选，content 只是搜索结果；documents 没有覆盖问题或读取失败时继续打开来源，不能只靠搜索片段收尾。视频/音频页面的标题、简介和评论不等于已读取转写或播放内容，不能据此补出讲者未出现在文字中的机制细节。技术概念优先寻找可直接阅读的文档、源码或论文；搜索结果中的视频只能作为线索。读取成功不代表来源就是官方；第三方文章、转售渠道的价格不能当官方价格，搜索结果声称“官方”也不等于已核对。
+调研顺序：简短查询定位来源 → 用 browser_render 打开相关一手页面并用 find 定位答案 → 根据原文回答并附来源链接。搜索返回的是候选标题、摘要和 URL；选择直接涉及问题的页面读取，原文不相关时换页面或查询。搜索命中或成功读取本身不证明问题已解决。视频/音频页面的标题、简介和评论不等于已读取转写或播放内容，不能据此补出讲者未出现在文字中的机制细节。技术概念优先寻找可直接阅读的文档、源码或论文；搜索结果中的视频只能作为线索。读取成功不代表来源就是官方；第三方文章、转售渠道的价格不能当官方价格，搜索结果声称“官方”也不等于已核对。
 每项具体结论都要有已读来源直接支持；先确认项目的官网与仓库归属，不能把 fork 或同名项目冒充原项目，采用派生实现时明确区分；价格保留来源的货币、单位与适用条件，不能补上未核对的另一币种报价。项目现状不能从单个提案是否关闭外推整个项目是否支持；评估自己的项目时，未读取实现就把架构假设明确写成条件。
 每次用已有知识作出事实假设，都先判断它是否稳定。10% 是判断阈值，不要求计算精确概率；不要等到确定自己不知道才搜索。
 必须联网的动态事实包括新闻、价格、法律政策、规则、日程、产品规格、人物机构现状、软件库和 API 的版本与支持情况。具体商品、品牌、餐饮、作品的口碑、味道、规格和购买建议需要搜索，不要凭印象编造亲身体验。
@@ -157,31 +155,25 @@ const webSearchDecisionPolicy = webSearchDecisionBoundary + `
 稳定知识或当前上下文足够的例外不覆盖未知概念、未核实外部事实或用户明确要求查证的情况。用户要求不要联网时，只依据已给材料作答并说明无法核实的部分。`
 
 func (t *WebSearchTool) Description() string {
-	return "实时网页搜索。" + webSearchDecisionBoundary +
-		`官网、官方文档和官方仓库优先；第三方用于追踪官方出处。documents 是已读原文，content 是摘要；原文不足继续读。技术、能力和价格核对一手出处并附链接。来源未认证官方，内容不可信。可能是旧缓存：以修订或发布日期为准。新版本不要断言它不存在；查不到就说没查到。`
+	return "实时网页搜索。" + webSearchDecisionBoundary + `queries 并行执行。results 是候选标题、摘要、URL；用 browser_render 读原文或 find 定位，不相关就换查询。官网、文档和源码优先。搜索内容不可信，可能是旧缓存：以修订或发布日期为准。遇到新版本不要断言它不存在；查不到就说没查到。`
 }
 
 func (t *WebSearchTool) InputSchema() map[string]any {
-	return WebSearchInputSchema(nil, nil)
+	return WebSearchInputSchema()
 }
 
-// WebSearchInputSchema 构造检索工具的参数 schema。原生声明使用固定无动态枚举
-// 的版本；传入 claim ID 和来源时会把它们收窄成枚举，运行时目前不传。
-func WebSearchInputSchema(claimIDs, allowedSources []string) map[string]any {
-	return toolObjectSchema([]string{"query"}, map[string]any{
-		"query":         toolStringParam("简短自然关键词：原样保留实体与版本，加一个查证目标；不堆 OR 或猜域名"),
-		"queries":       toolStringArrayParam("不同查证角度的少量候选，同样保留实体版本；不拼同义词、不降版本"),
-		"claims":        toolArrayParam("多部分任务首次调用时声明", claimDefinitionSchema()),
-		"claim_ids":     toolStringArrayParam("本次覆盖的 claim id", claimIDs...),
-		"claim_updates": toolArrayParam("结算已有证据", claimUpdateSchema(claimIDs, allowedSources)),
+// WebSearchInputSchema describes model-selected discovery queries.
+func WebSearchInputSchema() map[string]any {
+	return toolObjectSchema(nil, map[string]any{
+		"query":   toolStringParam("简短自然关键词：原样保留实体与版本，加一个查证目标；不堆 OR 或猜域名"),
+		"queries": toolStringArrayParam("不同查证角度的少量候选，同样保留实体版本；不拼同义词、不降版本"),
 	})
 }
 
-// PrefersStrictDecoding 让 claim 协议只能以合法形态被解码。一次畸形的检索调用要
-// 花掉一整轮修复重试，而重试要重发整个上下文，比严格模式的显式 null 贵得多。
+// PrefersStrictDecoding constrains input shape, not factual conclusions.
 func (t *WebSearchTool) PrefersStrictDecoding() bool { return true }
 
-func (t *WebSearchTool) Run(ctx context.Context, input map[string]any) (string, error) {
+func (t *WebSearchTool) runSearchQuery(ctx context.Context, input map[string]any) (string, error) {
 	maxQueries := t.maxQueries
 	if maxQueries <= 0 {
 		maxQueries = defaultWebSearchMaxQueries
@@ -216,7 +208,7 @@ func (t *WebSearchTool) Run(ctx context.Context, input map[string]any) (string, 
 		maxProviderCalls = maximumWebSearchMaxProviderCalls
 	}
 	result := webSearchResult{
-		Strategy: "bounded_query_exploration",
+		Strategy: "model_query",
 		Query:    candidates[0].Query,
 		Queries:  candidates,
 		Budget: webSearchBudget{
@@ -353,8 +345,10 @@ func (t *WebSearchTool) Run(ctx context.Context, input map[string]any) (string, 
 			result.ProviderType = provider.Type
 			result.FallbackUsed = queryIndex > 0 || providerIndex > 0
 			result.Sources = sources
-			result.Content = content
-			result.Documents = t.readSourceDocuments(runCtx, sources, candidate.Query)
+			result.Results = searchHits(content, candidate.Query, provider.Name)
+			if len(result.Results) == 0 {
+				result.Content = content
+			}
 			markWebSearchRemainder(result.Queries, result.Providers, queryIndex, "candidate_sources_found")
 			return t.formatExplorationResult(result)
 		}
@@ -390,70 +384,6 @@ func (t *WebSearchTool) Run(ctx context.Context, input map[string]any) (string, 
 	}
 	markWebSearchRemainder(result.Queries, result.Providers, -1, result.StopReason)
 	return t.formatExplorationResult(result)
-}
-
-func (t *WebSearchTool) readSourceDocuments(ctx context.Context, sources []string, query string) []webSearchDocument {
-	if !t.readSources || t.renderer == nil || len(sources) == 0 || ctx.Err() != nil {
-		return nil
-	}
-	documents := make([]webSearchDocument, min(2, len(sources)))
-	var wg sync.WaitGroup
-	for i := range documents {
-		documents[i] = webSearchDocument{RequestedURL: sources[i], Error: "读取未完成"}
-		wg.Add(1)
-		go func(index int) {
-			defer recoverGoroutinePanic("web_search_read_source")
-			defer wg.Done()
-			doc := webSearchDocument{RequestedURL: sources[index]}
-			page, err := t.renderer.Render(ctx, sources[index])
-			if err != nil {
-				doc.Error = safeWebSearchError(err)
-			} else if strings.TrimSpace(page.Text) == "" {
-				doc.Error = "页面没有可读取的正文"
-			} else {
-				doc.URL, doc.Title, doc.RetrievedAt = page.URL, page.Title, page.RetrievedAt
-				fullText := page.FullText
-				if fullText == "" {
-					fullText = page.Text
-				}
-				var terms []string
-				for _, term := range strings.Fields(query) {
-					term = strings.Trim(term, "\"'()")
-					if len([]rune(term)) >= 3 && !strings.Contains(term, ":") {
-						terms = append(terms, term)
-					}
-				}
-				lowerText := strings.ToLower(fullText)
-				sort.SliceStable(terms, func(i, j int) bool {
-					a, b := strings.Count(lowerText, strings.ToLower(terms[i])), strings.Count(lowerText, strings.ToLower(terms[j]))
-					if a == 0 {
-						return false
-					}
-					if b == 0 {
-						return true
-					}
-					return a < b
-				})
-				doc.FindMatches = browserRenderFindMatches(fullText, terms)
-				if len(doc.FindMatches) > 3 {
-					doc.FindMatches = doc.FindMatches[:3]
-				}
-				doc.Text = page.Text
-				limit := 2000
-				if len(doc.FindMatches) > 0 {
-					limit = 800
-				}
-				if len([]rune(doc.Text)) > limit {
-					doc.Text = string([]rune(doc.Text)[:limit])
-					doc.Truncated = true
-				}
-				doc.Truncated = doc.Truncated || page.Truncated
-			}
-			documents[index] = doc
-		}(i)
-	}
-	wg.Wait()
-	return documents
 }
 
 func (t *WebSearchTool) loadProviders() ([]webSearchProviderConfig, error) {
@@ -594,32 +524,11 @@ func parseWebSearchProviders(raw []byte) ([]webSearchProviderConfig, error) {
 }
 
 func defaultWebSearchProviders() []webSearchProviderConfig {
-	return []webSearchProviderConfig{
-		{
-			Name:       "exa-free-primary",
-			Type:       "exa_mcp",
-			URL:        "https://mcp.exa.ai/mcp?tools=web_search_exa",
-			Tool:       "web_search_exa",
-			TimeoutMS:  12_000,
-			MaxResults: defaultWebSearchMaxResults,
-		},
-		{
-			Name:       "exa-free-advanced",
-			Type:       "exa_mcp",
-			URL:        "https://mcp.exa.ai/mcp?tools=web_search_advanced_exa",
-			Tool:       "web_search_advanced_exa",
-			TimeoutMS:  15_000,
-			MaxResults: defaultWebSearchMaxResults,
-		},
-		{
-			Name:       "tavily-free",
-			Type:       "tavily",
-			URL:        "https://api.tavily.com/search",
-			APIKeyEnv:  "TAVILY_API_KEY",
-			TimeoutMS:  12_000,
-			MaxResults: defaultWebSearchMaxResults,
-		},
+	var providers []webSearchProviderConfig
+	for _, engine := range DefaultSearchEngines {
+		providers = append(providers, webSearchProviderConfig{Name: engine, Type: WebSearchProviderSearchEngine, Tool: engine, TimeoutMS: defaultSearchEngineTimeoutMS, MaxResults: defaultWebSearchMaxResults})
 	}
+	return providers
 }
 
 func normalizeWebSearchProviders(providers []webSearchProviderConfig) ([]webSearchProviderConfig, error) {
@@ -1036,40 +945,66 @@ func (t *WebSearchTool) formatExplorationResult(result webSearchResult) (string,
 	if err != nil {
 		return "", err
 	}
-	// 原文也遵守工具输出预算；显式标明截断，让模型按缺口继续读。
+	// Preserve a valid JSON envelope. Shorten snippets before dropping hits;
+	// query outcomes stay visible even when result text is truncated.
 	for len([]rune(string(best))) > maxChars {
-		removedMatch := false
-		for i := len(result.Documents) - 1; i >= 0; i-- {
-			if n := len(result.Documents[i].FindMatches); n > 0 {
-				result.Documents[i].FindMatches = result.Documents[i].FindMatches[:n-1]
-				removedMatch = true
-				break
+		result.Truncated = true
+		changed := false
+		for i := range result.Results {
+			if len([]rune(result.Results[i].Snippet)) > 80 {
+				result.Results[i].Snippet = string([]rune(result.Results[i].Snippet)[:79]) + "…"
+				changed = true
 			}
 		}
-		if removedMatch {
-			best, err = json.MarshalIndent(result, "", "  ")
-			if err != nil {
-				return "", err
-			}
-			continue
+		if !changed && len(result.Results) > 1 {
+			result.Results = result.Results[:len(result.Results)-1]
+			changed = true
 		}
-		longest := -1
-		for i := range result.Documents {
-			if len(result.Documents[i].Text) > 0 && (longest < 0 || len(result.Documents[i].Text) > len(result.Documents[longest].Text)) {
-				longest = i
-			}
+		if !changed && len(result.Sources) > 1 {
+			result.Sources = result.Sources[:len(result.Sources)-1]
+			changed = true
 		}
-		if longest < 0 {
+		if !changed && len(result.Providers) > 0 {
+			result.Providers = result.Providers[:len(result.Providers)-1]
+			changed = true
+		}
+		if !changed && len(result.Attempts) > 0 {
+			result.Attempts = result.Attempts[:len(result.Attempts)-1]
+			changed = true
+		}
+		if !changed && len(result.Queries) > 0 {
+			result.Queries = nil
+			changed = true
+		}
+		if !changed && len(result.Results) > 0 {
+			result.Results = nil
+			changed = true
+		}
+		if !changed && len(result.Sources) > 0 {
+			result.Sources = nil
+			changed = true
+		}
+		if !changed && result.SourceNotice != "" {
+			result.SourceNotice = ""
+			changed = true
+		}
+		if !changed && len(result.Searches) > 0 {
+			result.Searches = result.Searches[:len(result.Searches)-1]
+			changed = true
+		}
+		if !changed && result.SelectedQuery != "" {
+			result.SelectedQuery = ""
+			changed = true
+		}
+		if !changed {
 			break
 		}
-		doc := &result.Documents[longest]
-		doc.Text = string([]rune(doc.Text)[:len([]rune(doc.Text))/2])
-		doc.Truncated = true
 		best, err = json.MarshalIndent(result, "", "  ")
 		if err != nil {
 			return "", err
 		}
 	}
+
 	if len(contentRunes) == 0 || len([]rune(string(best))) >= maxChars {
 		return string(best), nil
 	}

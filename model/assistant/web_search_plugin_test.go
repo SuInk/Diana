@@ -79,6 +79,7 @@ func TestWebSearchPluginSecretsAreRedacted(t *testing.T) {
 func TestWebSearchPluginCanDisableAllProviders(t *testing.T) {
 	plugin := NewWebSearchPlugin(nil)
 	tools, err := plugin.AgentTools(SettingValues{
+		webSearchSettingMode:          webSearchModeAPI,
 		webSearchSettingExaEnabled:    false,
 		webSearchSettingTavilyEnabled: false,
 	})
@@ -136,7 +137,7 @@ func TestWebSearchPluginSearchEngineMode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(rendered) != 2 || !strings.HasPrefix(rendered[0], "https://www.bing.com/search?") || rendered[1] != "https://example.com/a" {
+	if len(rendered) != 1 || !strings.HasPrefix(rendered[0], "https://www.bing.com/search?") {
 		t.Fatalf("rendered = %v", rendered)
 	}
 	if !strings.Contains(output, `"provider": "bing"`) || !strings.Contains(output, "https://example.com/a") {
@@ -170,7 +171,7 @@ func TestWebSearchPluginCustomSearchEngineKeepsOrder(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"https://search.example.com/s?q=a+b%26c&lang=zh", "https://www.bing.com/search?q=a+b%26c", "https://example.org/a"}
+	want := []string{"https://search.example.com/s?q=a+b%26c&lang=zh", "https://www.bing.com/search?q=a+b%26c"}
 	if strings.Join(rendered, " ") != strings.Join(want, " ") {
 		t.Fatalf("rendered = %v", rendered)
 	}
@@ -206,7 +207,7 @@ func TestDisabledWebSearchFallsBackToSearchEngineWhenBrowserIsOn(t *testing.T) {
 	if _, err := search.Run(context.Background(), map[string]any{"query": "测试"}); err != nil {
 		t.Fatal(err)
 	}
-	if len(rendered) != 2 || !strings.HasPrefix(rendered[0], "https://duckduckgo.com/?") || rendered[1] != "https://example.com/a" {
+	if len(rendered) != 1 || !strings.HasPrefix(rendered[0], "https://duckduckgo.com/?") {
 		t.Fatalf("应当沿用插件里的引擎顺序: %v", rendered)
 	}
 
@@ -224,7 +225,7 @@ func TestDisabledWebSearchFallsBackToSearchEngineWhenBrowserIsOn(t *testing.T) {
 	}
 }
 
-func TestWebSearchPluginAPIModeReadsActualSource(t *testing.T) {
+func TestWebSearchPluginAPIModeReturnsDiscovery(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprint(w, `{"results":[{"url":"https://example.com/docs","content":"只是搜索摘要"}]}`)
@@ -251,7 +252,7 @@ func TestWebSearchPluginAPIModeReadsActualSource(t *testing.T) {
 	if err := json.Unmarshal([]byte(out), &result); err != nil {
 		t.Fatal(err)
 	}
-	if requested != "https://example.com/docs" || len(result.Documents) != 1 || result.Documents[0].Text != "实际原文，不能被摘要替代" {
-		t.Fatalf("API 模式未接原文读取：%s", out)
+	if requested != "" || len(result.Documents) != 0 || !strings.Contains(out, "只是搜索摘要") {
+		t.Fatalf("搜索不应替模型选择页面：%s", out)
 	}
 }

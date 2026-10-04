@@ -223,7 +223,7 @@ func TestSilentFinalizeRefusedWhileImageTaskPending(t *testing.T) {
 
 // 工具定义和 Agent 系统消息都要讲清楚这条出路，否则模型无从知道它存在。
 func TestFinalizeToolDefinitionDeclaresSilent(t *testing.T) {
-	definition := finalizeToolDefinition(newClaimEvidenceLedger(), false)
+	definition := finalizeToolDefinition(false)
 	properties, ok := definition.Parameters["properties"].(map[string]any)
 	if !ok {
 		t.Fatalf("parameters = %#v", definition.Parameters)

@@ -249,7 +249,7 @@ func TestSystemPromptCatalogDoesNotRepeatFullDescriptions(t *testing.T) {
 
 func TestFinishAndSearchRequestStrictDecoding(t *testing.T) {
 	registry := NewToolRegistry(&WebSearchTool{})
-	definitions := (&Runner{registry: registry, cfg: Config{}.WithDefaults()}).turnDefinitions(newClaimEvidenceLedger(), false)
+	definitions := (&Runner{registry: registry, cfg: Config{}.WithDefaults()}).turnDefinitions(false)
 	strictByName := map[string]bool{}
 	for _, definition := range definitions {
 		strictByName[definition.Name] = definition.Strict

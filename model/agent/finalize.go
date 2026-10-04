@@ -58,7 +58,7 @@ func finalizeContentLayoutIssue(content string) string {
 // 「勿写成 JSON」防整个信封被当正文发出（见 finalizeEnvelopeFromText）；「工具调用旁
 // 的正文不算说过」防模型以为已说过而静默吞掉回复（#912）；「拒绝要说出来」防把拒答
 // 伪装成 silent（8c693bbd）。
-func finalizeToolDefinition(ledger *claimEvidenceLedger, imagePending bool, extra ...FinalizeField) llm.ToolDefinition {
+func finalizeToolDefinition(imagePending bool, extra ...FinalizeField) llm.ToolDefinition {
 	properties := map[string]any{
 		"content":       toolStringParam("正文，按会话要求附链接；silent空；禁真换行，分条[diana-msg]，换行[diana-line]；勿写JSON"),
 		"silent":        toolBoolParam("true 则本轮不发消息。仅无话可说或已道别时用，拒绝要说出来；工具调用旁的正文不算说过"),
@@ -67,7 +67,6 @@ func finalizeToolDefinition(ledger *claimEvidenceLedger, imagePending bool, extr
 	required := []string{"content"}
 	// Runtime guards enforce conditional requirements without mutating schemas.
 	properties["task_state"] = toolEnumParam("图片任务 queued 后必须填 pending", imageTaskPendingState)
-	properties["claims"] = toolArrayParam("账本启用后必须覆盖全部已声明 claim；ID 与来源以工具结果为准", claimUpdateSchema(nil, nil))
 	for _, field := range extra {
 		if _, builtin := finalizeBuiltinFields[field.Name]; builtin || field.Name == "" {
 			continue
@@ -93,11 +92,10 @@ func finalizeAction(call llm.ToolCall, text string) llmAction {
 	action := llmAction{Action: "final"}
 	if len(call.Arguments) > 0 {
 		var payload struct {
-			Content      string        `json:"content"`
-			TaskState    string        `json:"task_state"`
-			Silent       bool          `json:"silent"`
-			SilentReason string        `json:"silent_reason"`
-			Claims       []ClaimUpdate `json:"claims"`
+			Content      string `json:"content"`
+			TaskState    string `json:"task_state"`
+			Silent       bool   `json:"silent"`
+			SilentReason string `json:"silent_reason"`
 		}
 		if raw, err := json.Marshal(call.Arguments); err == nil {
 			_ = json.Unmarshal(raw, &payload)
@@ -106,7 +104,6 @@ func finalizeAction(call llm.ToolCall, text string) llmAction {
 		action.TaskState = strings.TrimSpace(payload.TaskState)
 		action.Silent = payload.Silent
 		action.SilentReason = strings.TrimSpace(payload.SilentReason)
-		action.Claims = payload.Claims
 		for key, value := range call.Arguments {
 			text, isString := value.(string)
 			if _, builtin := finalizeBuiltinFields[key]; builtin || !isString || strings.TrimSpace(text) == "" {
@@ -137,13 +134,13 @@ func saidThisRun(steps []Step) bool {
 }
 
 // turnDefinitions is independent of loaded tools, claim IDs, sources and image state.
-func (r *Runner) turnDefinitions(ledger *claimEvidenceLedger, imagePending bool) []llm.ToolDefinition {
+func (r *Runner) turnDefinitions(imagePending bool) []llm.ToolDefinition {
 	definitions := r.registry.Definitions()
 	if len(definitions) == 0 {
 		return nil
 	}
 	definitions = r.loader.filter(definitions)
-	return append(definitions, finalizeToolDefinition(ledger, imagePending, r.cfg.FinalizeFields...))
+	return append(definitions, finalizeToolDefinition(imagePending, r.cfg.FinalizeFields...))
 }
 
 // finalizeEnvelopeFromText 把「正文位置上的 agent_finalize 信封」当成收尾动作。

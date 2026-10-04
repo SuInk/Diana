@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -64,7 +65,7 @@ func TestSearchEngineModeReadsResultsFromResultPage(t *testing.T) {
 	if strings.Join(result.Sources, " ") != strings.Join(want, " ") {
 		t.Fatalf("sources = %v", result.Sources)
 	}
-	if !strings.Contains(result.Content, `"title": "Diana 发布说明"`) || !strings.Contains(result.Content, "这里是摘要") {
+	if len(result.Results) != 2 || result.Results[0].Title != "Diana 发布说明" || !strings.Contains(result.Results[0].Snippet, "这里是摘要") {
 		t.Fatalf("content = %s", result.Content)
 	}
 	if strings.Contains(result.Content, "google.com/search") {
@@ -72,11 +73,14 @@ func TestSearchEngineModeReadsResultsFromResultPage(t *testing.T) {
 	}
 }
 
-func TestSearchEngineModeSkipsBlockedEngineForRestOfCall(t *testing.T) {
+func TestSearchEngineModeFallsBackIndependentlyForParallelQueries(t *testing.T) {
 	calls := map[string]int{}
+	var callsMu sync.Mutex
 	renderer := PageRendererFunc(func(_ context.Context, rawURL string) (RenderedPage, error) {
 		parsed, _ := url.Parse(rawURL)
+		callsMu.Lock()
 		calls[parsed.Host]++
+		callsMu.Unlock()
 		if parsed.Host == "www.google.com" {
 			return RenderedPage{URL: "https://www.google.com/sorry/index?continue=x", Title: "Google", Text: "Our systems have detected unusual traffic"}, nil
 		}
@@ -100,7 +104,7 @@ func TestSearchEngineModeSkipsBlockedEngineForRestOfCall(t *testing.T) {
 	if result.Status != "ok" || result.Provider != "bing" || len(result.Sources) != 1 || result.Sources[0] != "https://example.org/answer" {
 		t.Fatalf("result = %+v", result)
 	}
-	if calls["www.google.com"] != 1 || calls["www.bing.com"] != 2 {
+	if calls["www.google.com"] != 2 || calls["www.bing.com"] != 2 {
 		t.Fatalf("calls = %v", calls)
 	}
 }
@@ -114,18 +118,6 @@ func TestSearchEngineBlockMarkerInBodyNeedsEmptyResults(t *testing.T) {
 	}
 	if !searchEnginePageBlocked(engine, RenderedPage{URL: page.URL, Title: "Google", Text: page.Text}, false) {
 		t.Fatal("没有结果、正文带验证提示应当算被拦")
-	}
-}
-
-func TestRenderedPageCountsAsSearch(t *testing.T) {
-	ledger := newClaimEvidenceLedger()
-	if ledger.searched {
-		t.Fatal("还没查过不应标为已检索")
-	}
-	output, _ := json.Marshal(RenderedPage{URL: "https://www.bing.com/search?q=x", Title: "x - 搜索", Text: "结果"})
-	ledger.observeRenderedPage(string(output), nil)
-	if !ledger.searched {
-		t.Fatal("浏览器读到页面后应当算已检索")
 	}
 }
 
@@ -185,7 +177,7 @@ func TestSearchEngineResultsSkipDisplayURLsAndResolveOpaqueRedirects(t *testing.
 	if strings.Join(result.Sources, " ") != strings.Join(want, " ") {
 		t.Fatalf("sources = %v", result.Sources)
 	}
-	if strings.Contains(result.Content, "全部 图片") || !strings.Contains(result.Content, "摘要写在这里") {
+	if strings.Contains(output, "全部 图片") || !strings.Contains(output, "摘要写在这里") {
 		t.Fatalf("正文应当从第一条结果开始: %s", result.Content)
 	}
 }

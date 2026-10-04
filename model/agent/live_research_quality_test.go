@@ -47,11 +47,11 @@ func TestLiveResearchQuality(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			recorder := &researchRecordedClient{client: client}
 			renderer := NewSandboxedHeadlessBrowser(SandboxedBrowserConfig{Window: BrowserWindowHidden, Timeout: 30 * time.Second})
-			search, err := NewWebSearchTool(WebSearchToolOptions{Config: DefaultWebSearchConfig(), Timeout: 30 * time.Second, Renderer: renderer, ReadSources: true})
+			search, err := NewWebSearchTool(WebSearchToolOptions{Config: browserSearchEvalConfig(), Timeout: 60 * time.Second, Renderer: renderer})
 			if err != nil {
 				t.Fatal(err)
 			}
-			runner, err := NewRunner(recorder, Config{MaxSteps: 12, ToolTimeoutMS: 35000}, NewToolRegistry(search, NewBrowserRenderTool(renderer)))
+			runner, err := NewRunner(recorder, Config{MaxSteps: 12, ToolTimeoutMS: 65000}, NewToolRegistry(search, NewBrowserRenderTool(renderer)))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -90,16 +90,6 @@ func TestLiveResearchQuality(t *testing.T) {
 			for _, step := range resp.Steps {
 				if step.Tool == WebSearchToolName {
 					searches++
-					var result webSearchResult
-					if json.Unmarshal([]byte(step.Output), &result) == nil {
-						for _, doc := range result.Documents {
-							t.Logf("source_read=%s error=%s", doc.RequestedURL, doc.Error)
-							if doc.Error == "" && doc.Text != "" {
-								reads++
-								visited[doc.URL], visited[doc.RequestedURL] = true, true
-							}
-						}
-					}
 					t.Logf("search=%v error=%s", step.Input, step.Error)
 					candidates := []string{stringFromInput(step.Input, "query")}
 					if values, ok := step.Input["queries"].([]any); ok {
@@ -170,16 +160,6 @@ func judgeResearchAnswer(t *testing.T, client llm.LLMClient, question string, an
 	t.Helper()
 	pages := map[string]string{}
 	for _, step := range answer.Steps {
-		if step.Tool == WebSearchToolName && step.Error == "" {
-			var result webSearchResult
-			if json.Unmarshal([]byte(step.Output), &result) == nil {
-				for _, doc := range result.Documents {
-					if doc.Error == "" && doc.Text != "" {
-						pages[doc.URL] += "\n" + doc.Text + "\n原文相关段落：\n" + strings.Join(doc.FindMatches, "\n")
-					}
-				}
-			}
-		}
 		if step.Tool != "browser_render" || step.Error != "" {
 			continue
 		}

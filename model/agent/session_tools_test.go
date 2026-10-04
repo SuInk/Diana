@@ -13,7 +13,7 @@ import (
 func TestSessionToolDefinitionsAppendAndRestoreOnlyAllowedTools(t *testing.T) {
 	registry := NewToolRegistry(&countingTool{name: "common"}, &countingTool{name: "rare"}, &countingTool{name: "admin"})
 	loader := newDeferredToolLoader(registry, []string{"common"})
-	definitions := append(registry.Definitions(), finalizeToolDefinition(nil, false))
+	definitions := append(registry.Definitions(), finalizeToolDefinition(false))
 	first := loader.filter(definitions)
 	loader.restore([]string{"rare", "admin", "rare", "gone"})
 	next := loader.filter(definitions)
@@ -75,8 +75,8 @@ func TestRunnerRestoresDiscoveredToolsOnNewRun(t *testing.T) {
 }
 
 func TestFinalizeSchemaIsStableWhenTaskOrEvidenceStateChanges(t *testing.T) {
-	a, _ := json.Marshal(finalizeToolDefinition(nil, false))
-	b, _ := json.Marshal(finalizeToolDefinition(&claimEvidenceLedger{active: true}, true))
+	a, _ := json.Marshal(finalizeToolDefinition(false))
+	b, _ := json.Marshal(finalizeToolDefinition(true))
 	if string(a) != string(b) {
 		t.Fatal("live state changed finalize schema")
 	}

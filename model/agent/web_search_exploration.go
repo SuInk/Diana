@@ -63,6 +63,9 @@ type webSearchBudget struct {
 }
 
 type webSearchResult struct {
+	Truncated         bool                      `json:"truncated,omitempty"`
+	Results           []WebSearchHit            `json:"results,omitempty"`
+	Searches          []webSearchQueryResponse  `json:"searches,omitempty"`
 	RetrievedAt       string                    `json:"retrieved_at"`
 	FreshnessVerified bool                      `json:"freshness_verified"`
 	SourceNotice      string                    `json:"source_notice,omitempty"`
@@ -80,18 +83,6 @@ type webSearchResult struct {
 	Budget            webSearchBudget           `json:"budget"`
 	Sources           []string                  `json:"sources,omitempty"`
 	Content           string                    `json:"content,omitempty"`
-	Documents         []webSearchDocument       `json:"documents,omitempty"`
-}
-
-type webSearchDocument struct {
-	RequestedURL string   `json:"requested_url"`
-	URL          string   `json:"url,omitempty"`
-	Title        string   `json:"title,omitempty"`
-	RetrievedAt  string   `json:"retrieved_at,omitempty"`
-	Text         string   `json:"text,omitempty"`
-	Truncated    bool     `json:"truncated,omitempty"`
-	Error        string   `json:"error,omitempty"`
-	FindMatches  []string `json:"find_matches,omitempty"`
 }
 
 func webSearchCandidates(input map[string]any, limit int) ([]webSearchQueryCandidate, error) {
@@ -147,14 +138,6 @@ func webSearchCandidates(input map[string]any, limit int) ([]webSearchQueryCandi
 		}
 		appendCandidate(query, strategy)
 	}
-	for _, query := range append([]string(nil), supplied...) {
-		query = sanitizeExternalSearchQuery(normalizeWebSearchQuery(query))
-		appendCandidate(relaxWebSearchURLPaths(query), "url_path_terms")
-		appendCandidate(relaxWebSearchOperators(query), "operators_relaxed")
-		appendCandidate(relaxWebSearchQuotes(query), "quotes_relaxed")
-		appendCandidate(normalizeWebSearchSeparators(query), "separators_normalized")
-		appendCandidate(relaxWebSearchParentheticalConstraints(normalizeWebSearchSeparators(relaxWebSearchQuotes(query))), "constraints_relaxed")
-	}
 	if len(candidates) == 0 {
 		return nil, errors.New("query is empty after privacy filtering")
 	}
@@ -172,90 +155,6 @@ func normalizeWebSearchQuery(query string) string {
 	}, query)
 	query = strings.Join(strings.Fields(query), " ")
 	return truncateRunes(strings.TrimSpace(query), maximumWebSearchQueryRunes)
-}
-
-// relaxWebSearchOperators 去掉 site:、inurl: 这类检索算子前缀，只保留后面的关键词。
-// 多数 provider 不支持这些算子，带着它们的查询会直接返回 no_results 并浪费一轮回退。
-func relaxWebSearchOperators(query string) string {
-	return webSearchOperatorPattern.ReplaceAllString(query, "$1")
-}
-
-// An exact site:path can miss an existing, unindexed URL. Keep the path's
-// topic/version tokens while searching beyond that exact indexed address.
-func relaxWebSearchURLPaths(query string) string {
-	words := strings.Fields(query)
-	changed := false
-	for i, word := range words {
-		value := strings.Trim(word, "\"'`")
-		if strings.HasPrefix(value, "-") {
-			continue
-		}
-		if strings.HasPrefix(strings.ToLower(value), "site:") {
-			value = value[5:]
-		}
-		if !strings.Contains(value, "://") {
-			value = "https://" + value
-		}
-		u, err := url.Parse(value)
-		if err != nil || u.User != nil || !strings.Contains(u.Hostname(), ".") || strings.Trim(u.Path, "/") == "" {
-			continue
-		}
-		path := strings.Join(strings.FieldsFunc(u.Path, func(r rune) bool { return r == '/' || r == '_' }), " ")
-		if path == "" {
-			continue
-		}
-		words[i] = path
-		changed = true
-	}
-	if !changed {
-		return query
-	}
-	return strings.Join(words, " ")
-}
-
-func relaxWebSearchQuotes(query string) string {
-	return strings.Map(func(r rune) rune {
-		switch r {
-		case '"', '\'', '`', '“', '”', '‘', '’', '「', '」', '『', '』':
-			return ' '
-		default:
-			return r
-		}
-	}, query)
-}
-
-func normalizeWebSearchSeparators(query string) string {
-	return strings.Map(func(r rune) rune {
-		switch r {
-		case '—', '–', '－', '，', '、', '；', ';', '|':
-			return ' '
-		default:
-			return r
-		}
-	}, query)
-}
-
-func relaxWebSearchParentheticalConstraints(query string) string {
-	var builder strings.Builder
-	depth := 0
-	for _, r := range query {
-		switch r {
-		case '(', '[', '{', '（', '【', '〔':
-			depth++
-			if depth == 1 {
-				builder.WriteRune(' ')
-			}
-		case ')', ']', '}', '）', '】', '〕':
-			if depth > 0 {
-				depth--
-			}
-		default:
-			if depth == 0 {
-				builder.WriteRune(r)
-			}
-		}
-	}
-	return builder.String()
 }
 
 func sanitizeExternalSearchQuery(query string) string {

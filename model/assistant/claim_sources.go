@@ -14,7 +14,7 @@ const (
 	recentClaimSourceLimit = 8
 	recentClaimSourceTTL   = 30 * time.Minute
 	claimSourceContextHint = "【上一轮结论引用的来源，仅在有人索取链接时使用】\n" +
-		"这些 URL 是机器人自己在前面几轮里实际检索或渲染过的页面。有人问「链接呢」「来源是什么」" +
+		"这些 URL 是前面几轮工具实际返回的候选或已读页面；候选不代表已读。有人问「链接呢」「来源是什么」" +
 		"「发一下原文」时，原样给出对应的 URL，不要改写、不要凭印象另造一个地址；没有对应条目就直说没有存下来。" +
 		"没人索取时不要主动罗列这些链接。\n"
 )
@@ -40,41 +40,19 @@ type claimSourceRecord struct {
 	SavedAt   time.Time
 }
 
-// rememberClaimSources 把本轮检索到的来源留到会话里。模型自己绑定的证据排在前面，
-// 没绑定的 claim 退回它这一轮检索到的候选来源——两者都是机器人真的读过的页面。
-func (r *Runtime) rememberClaimSources(event MessageEvent, claims []agent.ClaimTrace) {
-	if r == nil || len(claims) == 0 || !r.claimSourceRecallEnabled(event) {
+// rememberClaimSources remembers URLs returned by actual tools, with cited URLs first.
+func (r *Runtime) rememberClaimSources(event MessageEvent, sources []agent.SourceReference) {
+	if r == nil || len(sources) == 0 || !r.claimSourceRecallEnabled(event) {
 		return
 	}
 	fresh := make([]claimSourceRecord, 0, recentClaimSourceLimit)
 	now := time.Now()
-	statementOf := func(claim agent.ClaimTrace) string {
-		if summary := strings.TrimSpace(claim.Summary); summary != "" {
-			return summary
-		}
-		return strings.TrimSpace(claim.Statement)
-	}
-	for _, claim := range claims {
-		for _, evidence := range claim.Evidence {
-			url := strings.TrimSpace(evidence.URL)
-			if url == "" {
-				continue
-			}
-			fresh = append(fresh, claimSourceRecord{Statement: statementOf(claim), URL: url, SavedAt: now})
+	for _, source := range sources {
+		if source.URL != "" {
+			fresh = append(fresh, claimSourceRecord{Statement: source.Title, URL: source.URL, SavedAt: now})
 		}
 	}
-	for _, claim := range claims {
-		if len(claim.Evidence) > 0 {
-			continue
-		}
-		for _, candidate := range claim.CandidateSources {
-			url := strings.TrimSpace(candidate)
-			if url == "" {
-				continue
-			}
-			fresh = append(fresh, claimSourceRecord{Statement: statementOf(claim), URL: url, SavedAt: now})
-		}
-	}
+
 	if len(fresh) == 0 {
 		return
 	}

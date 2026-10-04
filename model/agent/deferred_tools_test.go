@@ -110,14 +110,11 @@ func TestDeferredDefinitionsRemainByteStable(t *testing.T) {
 	registry := NewToolRegistry(&countingTool{name: "common"}, &countingTool{name: webSearchToolName}, &countingTool{name: "rare"})
 	r, _ := NewRunner(&scriptedClient{}, Config{CoreTools: []string{"common", webSearchToolName}}, registry)
 	r.loader = newDeferredToolLoader(registry, r.cfg.CoreTools)
-	ledger := newClaimEvidenceLedger()
-	before, _ := json.Marshal(r.turnDefinitions(ledger, false))
+	before, _ := json.Marshal(r.turnDefinitions(false))
 	if _, err := r.loader.Run(context.Background(), map[string]any{"names": []string{"rare"}}); err != nil {
 		t.Fatal(err)
 	}
-	ledger.prepareSearch(map[string]any{"claims": []any{map[string]any{"id": "c1", "statement": "fact"}}, "claim_ids": []any{"c1"}})
-	ledger.observeSearch(`{"status":"ok","sources":["https://example.org"]}`, nil)
-	after, _ := json.Marshal(r.turnDefinitions(ledger, true))
+	after, _ := json.Marshal(r.turnDefinitions(true))
 	if string(before) != string(after) {
 		t.Fatalf("definitions changed: %s -> %s", before, after)
 	}
