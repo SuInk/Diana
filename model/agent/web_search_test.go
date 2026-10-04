@@ -467,3 +467,66 @@ func writeTestMCPEvent(w http.ResponseWriter, payload string) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	_, _ = fmt.Fprintf(w, "event: message\ndata: %s\n\n", payload)
 }
+
+func TestWebSearchReadsRankedSourcesInParallel(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"results":[{"url":"https://example.com/one","content":"摘要一"},{"url":"https://example.com/two","content":"摘要二"},{"url":"https://example.com/three","content":"摘要三"}]}`)
+	}))
+	defer server.Close()
+	started := make(chan string, 2)
+	release := make(chan struct{})
+	renderer := PageRendererFunc(func(ctx context.Context, u string) (RenderedPage, error) {
+		started <- u
+		select {
+		case <-release:
+		case <-ctx.Done():
+			return RenderedPage{}, ctx.Err()
+		}
+		if strings.HasSuffix(u, "/two") {
+			return RenderedPage{}, fmt.Errorf("source unavailable")
+		}
+		return RenderedPage{RequestedURL: u, URL: u + "/", Text: strings.Repeat("真正读取的正文", 1000), RetrievedAt: "2026-10-03T00:00:00Z"}, nil
+	})
+	tool, err := NewWebSearchTool(WebSearchToolOptions{Config: WebSearchConfig{Providers: []WebSearchProviderConfig{{Name: "test", Type: "tavily", URL: server.URL}}}, APIKeys: map[string]string{"test": "test"}, Renderer: renderer, ReadSources: true, Timeout: 3 * time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan struct {
+		output string
+		err    error
+	}, 1)
+	go func() {
+		o, e := tool.Run(context.Background(), map[string]any{"query": "example sources"})
+		done <- struct {
+			output string
+			err    error
+		}{o, e}
+	}()
+	for i := 0; i < 2; i++ {
+		select {
+		case <-started:
+		case <-time.After(time.Second):
+			close(release)
+			t.Fatal("两个来源没有并行开始读取")
+		}
+	}
+	close(release)
+	result := <-done
+	if result.err != nil {
+		t.Fatal(result.err)
+	}
+	if len([]rune(result.output)) > DefaultMaxToolOutputChars {
+		t.Fatal("原文输出超出预算")
+	}
+	var parsed webSearchResult
+	if err := json.Unmarshal([]byte(result.output), &parsed); err != nil {
+		t.Fatal(err)
+	}
+	if len(parsed.Documents) != 2 || parsed.Documents[0].Text == "" || !parsed.Documents[0].Truncated || parsed.Documents[0].URL != "https://example.com/one/" {
+		t.Fatalf("实际原文或重定向来源丢失：%+v", parsed.Documents)
+	}
+	if parsed.Documents[1].Text != "" || !strings.Contains(parsed.Documents[1].Error, "source unavailable") || parsed.Status != "ok" {
+		t.Fatalf("页面失败不能冒充读取成功，也不能丢掉搜索结果：%+v", parsed)
+	}
+}

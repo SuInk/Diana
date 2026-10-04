@@ -17,7 +17,7 @@ import (
 )
 
 func TestParseRenderedPageExtractsVisibleContent(t *testing.T) {
-	raw := []byte(`<!doctype html><html><head><title>测试站点</title><meta name="description" content="站点描述"><link rel="canonical" href="/home"></head><body><nav>导航</nav><main><h1>欢迎</h1><script>secret()</script><p>动态正文</p><p hidden>隐藏内容</p></main></body></html>`)
+	raw := []byte(`<!doctype html><html><head><title>测试站点</title><meta name="description" content="站点描述"><link rel="canonical" href="/home"></head><body><nav>导航</nav><main><section>仓库文件列表</section><article><nav>无关菜单</nav><div class="toc">无关目录</div><h1>欢迎</h1><script>secret()</script><p>动态正文</p><p hidden>隐藏内容</p></article></main></body></html>`)
 	page, err := parseRenderedPage(raw, "https://example.com/start", 1000, false)
 	if err != nil {
 		t.Fatal(err)
@@ -25,7 +25,7 @@ func TestParseRenderedPageExtractsVisibleContent(t *testing.T) {
 	if page.Title != "测试站点" || page.Description != "站点描述" || page.URL != "https://example.com/home" {
 		t.Fatalf("page = %#v", page)
 	}
-	if !strings.Contains(page.Text, "欢迎") || !strings.Contains(page.Text, "动态正文") || strings.Contains(page.Text, "secret") || strings.Contains(page.Text, "隐藏内容") {
+	if !strings.Contains(page.Text, "欢迎") || !strings.Contains(page.Text, "动态正文") || strings.Contains(page.Text, "secret") || strings.Contains(page.Text, "隐藏内容") || strings.Contains(page.Text, "无关菜单") || strings.Contains(page.Text, "无关目录") || strings.Contains(page.Text, "仓库文件列表") {
 		t.Fatalf("text = %q", page.Text)
 	}
 }

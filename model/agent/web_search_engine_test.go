@@ -117,15 +117,14 @@ func TestSearchEngineBlockMarkerInBodyNeedsEmptyResults(t *testing.T) {
 	}
 }
 
-func TestRenderedPageCountsAsRequiredSearch(t *testing.T) {
+func TestRenderedPageCountsAsSearch(t *testing.T) {
 	ledger := newClaimEvidenceLedger()
-	ledger.required = true
-	if !ledger.missingRequiredSearch() {
-		t.Fatal("还没查过应当被门控拦下")
+	if ledger.searched {
+		t.Fatal("还没查过不应标为已检索")
 	}
 	output, _ := json.Marshal(RenderedPage{URL: "https://www.bing.com/search?q=x", Title: "x - 搜索", Text: "结果"})
 	ledger.observeRenderedPage(string(output), nil)
-	if ledger.missingRequiredSearch() {
+	if !ledger.searched {
 		t.Fatal("浏览器读到页面后应当算已检索")
 	}
 }
@@ -194,3 +193,23 @@ func TestSearchEngineResultsSkipDisplayURLsAndResolveOpaqueRedirects(t *testing.
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) { return f(req) }
+
+func TestSearchEngineResultsUnwrapAndDeduplicateTranslationLinks(t *testing.T) {
+	original := "https://docs.example.com/pricing?model=pro&region=cn"
+	standard := "https://translate.google.com/translate?u=" + url.QueryEscape(original) + "&hl=zh-CN"
+	escaped := "https://translate.google.com/translate?client=" + url.QueryEscape(`search\u0026hl=zh-CN\u0026u=`+url.QueryEscape(original))
+	for _, translated := range []string{standard, escaped} {
+		results := searchEngineResults(searchEngines["google"], []RenderedLink{
+			{URL: original, Text: "Official pricing"},
+			{URL: translated, Text: "Translate this page"},
+			{URL: "https://example.org/release", Text: "Release notes"},
+		}, 2)
+		if len(results) != 2 || results[0].URL != original || results[1].URL != "https://example.org/release" {
+			t.Fatalf("duplicate translation consumed source slot: %+v", results)
+		}
+		sources := webSearchResultSources(original + " " + translated)
+		if len(sources) != 1 || sources[0] != original {
+			t.Fatalf("translation duplicated source evidence: %v", sources)
+		}
+	}
+}

@@ -3550,6 +3550,15 @@ func TestRuntimeResolverOnlySendsAndRecordsWithoutLLM(t *testing.T) {
 	if !messageSegmentsContainType(forwardNodeContent(t, nodes[1]), "video") {
 		t.Fatalf("second forward node = %#v", nodes[1])
 	}
+	// recordingChannel 在 Call 开始时记下请求；发送返回后才写回复历史，必须等到后者完成。
+	waitForCondition(t, time.Second, func() bool {
+		for _, item := range runtime.contextHistory(event) {
+			if item.MessageID == "42" && strings.Contains(item.RawMessage, "识别：小蓝鸟学习版") && eventHasSegmentType(item, "video") {
+				return true
+			}
+		}
+		return false
+	})
 	history := runtime.contextHistory(event)
 	if len(history) < 1 {
 		t.Fatalf("history = %#v", history)
@@ -5206,13 +5215,9 @@ type sequenceLLMProvider struct {
 }
 
 func (p *sequenceLLMProvider) Generate(ctx context.Context, req llm.GenerateRequest) (*llm.GenerateResponse, error) {
-	// 查证判断和 Agent 并行起跑，抢到哪条脚本全看调度；它和终稿复核一律放行，
+	// 终稿复核一律放行，
 	// 不消耗 replies，也不记进 requests。
 	switch llmUsagePurposeFromContext(ctx) {
-	case PurposeEvidenceGate:
-		return &llm.GenerateResponse{Provider: llm.ProviderOpenAICompatible, Model: "test", Text: `{"needs_evidence":false}`}, nil
-	case PurposeSearchNegationReview:
-		return &llm.GenerateResponse{Provider: llm.ProviderOpenAICompatible, Model: "test", Text: `{"unsupported_negation":false}`}, nil
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()

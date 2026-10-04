@@ -4238,11 +4238,6 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		// Planner output is advisory only. The Agent owns context selection and
 		// tool planning; planner suggestions are retained for observability.
 		r.recordAgentScope(ctx, event, agentScope, toolsBefore, contextBefore, len(replyHistory))
-		// 工具选择是建议，这一条不是：路由器判定答案必须落在外部事实上时，
-		// Agent 不检索就不许收口。没有 web_search 时 Runner 会自动忽略这个标记。
-		if agentScope.NeedsEvidence {
-			ctx = withRequireEvidence(ctx)
-		}
 	}
 	agentActive := agentRegistry != nil && (!agentScope.Routed || agentRegistry.Len() > 0)
 	systemHead, systemTail := r.systemPromptPartsWithRelationshipAndAgentTools(event, pluginResponses, proactiveTriggered, relationship, agentActive, agentRegistry)
@@ -4992,20 +4987,13 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 			messages = append(messages, carryover)
 		}
 		promptSession := r.groupPromptSession(event)
-		var evidenceCheck func(context.Context) agent.EvidenceDecision
-		if !requireEvidenceFromContext(ctx) {
-			evidenceCheck = r.startEvidenceGate(ctx, event, registry)
-		}
 		r.startImageFixGate(ctx, cfg, event)
 		resp, err := agentRunner.Run(agent.WithCallerIdentity(ctx, callerIdentityForEvent(cfg, event)), agent.Request{
-			Messages:        messages,
-			TraceID:         traceID,
-			Observer:        r.agentRunObserver(event),
-			LoadedTools:     promptSession.loadedTools(),
-			ToolsLoaded:     promptSession.rememberTools,
-			RequireEvidence: requireEvidenceFromContext(ctx),
-			EvidenceCheck:   evidenceCheck,
-			FinalReview:     r.searchNegationReview(event),
+			Messages:    messages,
+			TraceID:     traceID,
+			Observer:    r.agentRunObserver(event),
+			LoadedTools: promptSession.loadedTools(),
+			ToolsLoaded: promptSession.rememberTools,
 		})
 		if err != nil {
 			return "", err
@@ -5553,8 +5541,6 @@ func parseReplyIntentDecision(raw string, registry *agent.ToolRegistry) (visualI
 		Tools             *[]string `json:"tools"`
 		ContextMessageIDs *[]string `json:"context_message_ids"`
 		KeepOlderSummary  *bool     `json:"keep_older_summary"`
-		// 可选：老模型漏填时按 false 处理，不影响其余路由结果。
-		NeedsEvidence *bool `json:"needs_evidence"`
 	}
 	if err := json.Unmarshal([]byte(raw[start:end+1]), &payload); err != nil {
 		return visualIntentDecision{}, agentReplyScope{}, false
@@ -5580,7 +5566,6 @@ func parseReplyIntentDecision(raw string, registry *agent.ToolRegistry) (visualI
 			}
 		}
 		scope.ContextMessageIDs = dedupeStrings(*payload.ContextMessageIDs)
-		scope.NeedsEvidence = payload.NeedsEvidence != nil && *payload.NeedsEvidence
 	}
 	return decision, scope, true
 }
@@ -9310,7 +9295,7 @@ var promptReplyIntentToolsFormatSpec = registerPrompt(PromptSpec{
 	Group:   PromptGroupRouting,
 	Title:   "功能路由 · 输出格式（含工具与上下文选择）",
 	Usage:   "本轮带工具目录时，功能路由的输出格式。程序按它解析，字段名和结构必须保持，改坏了图片功能和工具选择都会失效。",
-	Default: "输出格式：\n" + `{"action":"none","prompt":"","tools":[],"context_message_ids":[],"keep_older_summary":false,"needs_evidence":false}`,
+	Default: "输出格式：\n" + `{"action":"none","prompt":"","tools":[],"context_message_ids":[],"keep_older_summary":false}`,
 })
 
 const replyIntentImagePrompt = `你是聊天机器人 Diana 的功能路由器。你的任务只是在语义层面判断当前消息是否需要调用内置图片功能。
@@ -9348,13 +9333,12 @@ const replyIntentToolsPrompt = `同时为普通回复选择本轮上下文和工
 20. 当前消息的直接引用和语义指向会由运行时强制保留，不必依靠关键词。older_summary_available=true 且当前问题确实延续更早话题时，keep_older_summary=true；独立新问题则为 false。
 21. 工具参数应保持最小且符合工具说明。搜索只需要工具根据当前信息缺口整理出的 query，不要把聊天记录、工具目录或系统说明塞进搜索词。
 22. available_tools 中存在 web_search 时，凡回答依赖外部事实、信息可能随时间变化、模型不能可靠确认，或适合参考公开评价，都应保留该工具。具体商品、品牌、餐饮、作品的口碑、味道、规格、价格、现状和“好不好/怎么样/值得买吗”等问题属于搜索场景；不要把它们误判成无需工具的主观闲聊。纯创作、寒暄，或完全可由当前消息和已保留上下文回答的问题才不需要搜索。
-23. tools、context_message_ids、keep_older_summary 和 needs_evidence 四个字段必须始终给出，即使它们为空或为 false。
-24. needs_evidence 表示这一轮的答案必须建立在本轮检索到的外部事实之上，运行时会据此要求先检索再收口。只有当回答的核心就是外部事实、而这些事实不在当前消息和已保留上下文里时才填 true：某个产品、项目或服务此刻是否支持某功能、有没有现成实现或插件、版本与价格现状、新闻、规则、人物或机构近况、公开评价等。讲原理、讲概念、写代码、创作、闲聊，以及答案本来就写在上下文里的问题一律 false。聊天记录里别人提过某件事不等于已经核实，不能据此填 false。它比 tools 是否保留 web_search 严格得多：tools 拿不准就保留，needs_evidence 拿不准就填 false。`
+23. tools、context_message_ids、keep_older_summary 三个字段必须始终给出，即使它们为空或为 false。`
 
 var promptReplyIntentToolsSpec = registerPrompt(PromptSpec{
 	Key:     "routing.reply_intent.tools",
 	Group:   PromptGroupRouting,
 	Title:   "功能路由 · 上下文与工具选择",
-	Usage:   "功能路由为正式回复选上下文时接在图片动作规则后面：挑出本轮用得上的历史消息和工具，并判断是否必须先检索。正文里点了 tools、context_message_ids、keep_older_summary、needs_evidence 四个字段，改动时保持不变。",
+	Usage:   "功能路由为正式回复选上下文时接在图片动作规则后面：挑出本轮用得上的历史消息和工具。正文里点了 tools、context_message_ids、keep_older_summary 三个字段，改动时保持不变。",
 	Default: replyIntentToolsPrompt,
 })

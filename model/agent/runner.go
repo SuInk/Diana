@@ -200,52 +200,11 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 	protocolRepairs := 0
 	// silentContentRepaired 保证「静默却带正文」只打回一次，见 action.Silent 分支。
 	silentContentRepaired := false
-	forceSearchNextTurn := false
 	lastToolSignature := ""
 	imageTaskQueued := false
 	nativeProtocol := false
 	finishReason := "final"
 	claimLedger := newClaimEvidenceLedger()
-	// 没有 web_search 就没法要求证据，硬要只会把回复卡在修复循环里。
-	_, searchAvailable := r.registry.Get(webSearchToolName)
-	if searchAvailable {
-		claimLedger.required = req.RequireEvidence
-	}
-	// evidenceChecked 保证 EvidenceCheck 每轮只问一次：判过不需要，后面再收尾也不再等。
-	evidenceChecked := false
-	// evidenceQuery 是判断方给的检索词，替模型查过一次就清空。
-	evidenceQuery := ""
-	checkEvidenceBeforeFinal := func() {
-		if evidenceChecked || !searchAvailable || req.EvidenceCheck == nil || claimLedger.required || claimLedger.searched {
-			return
-		}
-		evidenceChecked = true
-		decision := req.EvidenceCheck(ctx)
-		claimLedger.required = decision.Needed
-		if decision.Needed {
-			evidenceQuery = strings.TrimSpace(decision.Query)
-		}
-	}
-	// searchInsteadOfModel 在模型该查不查时替它查一次，结果当作补充资料交回去。
-	//
-	// 打回去让它自己查，对生产的 gemini-3.8-flash-low 不管用：antigravity 网关不认
-	// tool_choice，被打回后它去调 capabilities 找 web_search 在哪，实测四次里一次
-	// 都没搜；只声明 web_search 一个工具，它又会生成调用别的工具的非法调用，整轮报错。
-	// 检索词由证据判断顺手给出，不用再多问模型一轮。
-	searchInsteadOfModel := func() bool {
-		if evidenceQuery == "" || toolCalls >= r.cfg.MaxSteps {
-			return false
-		}
-		query := evidenceQuery
-		evidenceQuery = ""
-		toolCalls++
-		record, observation, duration := r.searchOnBehalf(ctx, req.Observer, traceID, modelTurns, toolCalls, query, claimLedger)
-		toolsDuration += duration
-		steps = append(steps, record)
-		messages = appendAssistantEcho(messages, lastText)
-		messages = append(messages, llm.Message{Role: llm.RoleUser, Content: observation})
-		return true
-	}
 	// finalReviews 记复核次数，上限见 maxFinalReviewsPerAgentRun。
 	finalReviews := 0
 	reviewFinalDraft := func(content string) string {
@@ -333,15 +292,6 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 		markLoopCacheBreakpoint(messages, stableCacheIndex)
 		modelStartedAt := time.Now()
 		planningRequest := llm.GenerateRequest{Messages: messages, Tools: definitions}
-		if forceSearchNextTurn {
-			// 话术退回对某些模型无效：实测 gemini-3.8-flash-low 被连退三次仍然
-			// 一个工具都不调，只是把正文改得更含糊。这一步直接用供应商的
-			// tool_choice 把选择权收走，让它只能发出一次检索。
-			// 不是所有网关都认 tool_choice（生产的 antigravity 就不认），所以证据
-			// 判断给了检索词时根本不走到这里，由 searchInsteadOfModel 替模型查。
-			planningRequest.ToolChoice = webSearchToolName
-			forceSearchNextTurn = false
-		}
 		resp, err := r.client.Generate(planningCtx, planningRequest)
 		if err == nil && resp != nil && len(resp.ToolCalls) == 0 {
 			err = llm.RejectionNoticeError(resp.Text)
@@ -452,27 +402,10 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 				})
 				continue
 			}
-			checkEvidenceBeforeFinal()
-			if claimLedger.missingRequiredSearch() && searchInsteadOfModel() {
-				continue
-			}
-			if claimLedger.missingRequiredSearch() {
-				protocolRepairs++
-				emitProtocolRepair(ctx, req.Observer, traceID, modelTurns, toolCalls, r.cfg.MaxSteps, evidenceRequiredRepairReason)
-				messages = appendAssistantEcho(messages, lastText)
-				messages = append(messages, llm.Message{Role: llm.RoleUser, Content: evidenceRequiredRepairPrompt})
-				forceSearchNextTurn = true
-				if protocolRepairs >= r.cfg.ProtocolRepairLimit {
-					// 失败按放行处理：模型死活不搜也不能把这条回复卡掉。
-					finishReason = "evidence_required_unmet"
-					break
-				}
-				continue
-			}
 			if repair := reviewFinalDraft(action.Content); repair != "" {
 				protocolRepairs++
 				emitProtocolRepair(ctx, req.Observer, traceID, modelTurns, toolCalls, r.cfg.MaxSteps, finalReviewRepairReason)
-				messages = appendAssistantEcho(messages, lastText)
+				messages = appendAssistantEcho(messages, action.Content)
 				messages = append(messages, llm.Message{Role: llm.RoleUser, Content: repair})
 				if protocolRepairs >= r.cfg.ProtocolRepairLimit {
 					finishReason = "protocol_repair_exhausted"
@@ -536,22 +469,6 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 			// 要求继续」这条规则已经写进系统提示词，模型仍然停下来是提示词的问题，不该
 			// 由代码回头猜正文。
 			claimLedger.applyUpdates(action.Claims)
-			checkEvidenceBeforeFinal()
-			if claimLedger.missingRequiredSearch() && searchInsteadOfModel() {
-				continue
-			}
-			if claimLedger.missingRequiredSearch() {
-				protocolRepairs++
-				emitProtocolRepair(ctx, req.Observer, traceID, modelTurns, toolCalls, r.cfg.MaxSteps, evidenceRequiredRepairReason)
-				messages = appendAssistantEcho(messages, lastText)
-				messages = append(messages, llm.Message{Role: llm.RoleUser, Content: evidenceRequiredRepairPrompt})
-				forceSearchNextTurn = true
-				if protocolRepairs >= r.cfg.ProtocolRepairLimit {
-					finishReason = "evidence_required_unmet"
-					break
-				}
-				continue
-			}
 			if unbound := claimLedger.unboundCitations(action.Content); len(unbound) > 0 {
 				protocolRepairs++
 				reason := "正文引用了本轮没有检索到的来源：" + strings.Join(unbound, " ")
@@ -597,7 +514,8 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 			if repair := reviewFinalDraft(action.Content); repair != "" {
 				protocolRepairs++
 				emitProtocolRepair(ctx, req.Observer, traceID, modelTurns, toolCalls, r.cfg.MaxSteps, finalReviewRepairReason)
-				messages = appendAssistantEcho(messages, lastText)
+				// 原生 finalize 往往没有 Text，草稿在工具参数里；回填正文才能真正改稿。
+				messages = appendAssistantEcho(messages, action.Content)
 				messages = append(messages, llm.Message{Role: llm.RoleUser, Content: repair + "\n复核之后照常调用 agent_finalize 收尾，claims 按实际检索结果填写。"})
 				if protocolRepairs >= r.cfg.ProtocolRepairLimit {
 					finishReason = "protocol_repair_exhausted"
@@ -893,29 +811,61 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 		finalizationRequest.Tools = []llm.ToolDefinition{finalizeToolDefinition(claimLedger, imageTaskQueued, r.cfg.FinalizeFields...)}
 		finalizationRequest.ToolChoice = finalizeToolName
 	}
-	modelStartedAt := time.Now()
-	resp, err := r.client.Generate(ctx, finalizationRequest)
-	if err == nil && resp != nil && len(resp.ToolCalls) == 0 {
-		err = llm.RejectionNoticeError(resp.Text)
+	var resp *llm.GenerateResponse
+	var finalText string
+	for {
+		modelStartedAt := time.Now()
+		var err error
+		resp, err = r.client.Generate(ctx, finalizationRequest)
+		if err == nil && resp != nil && len(resp.ToolCalls) == 0 {
+			err = llm.RejectionNoticeError(resp.Text)
+		}
+		modelTurns++
+		if err != nil {
+			return fail(err)
+		}
+		if resp == nil {
+			return fail(errors.New("LLM returned an empty finalization response"))
+		}
+		lastProvider = resp.Provider
+		lastModel = resp.Model
+		usage = addLLMUsage(usage, resp.Usage)
+		finalText = strings.TrimSpace(resp.Text)
+		emitRunEvent(ctx, req.Observer, RunEvent{
+			TraceID:      traceID,
+			Phase:        RunPhaseModelCompleted,
+			ModelTurn:    modelTurns,
+			ToolCall:     toolCalls,
+			MaxToolCalls: r.cfg.MaxSteps,
+			OutputChars:  len([]rune(finalText)),
+			DurationMS:   time.Since(modelStartedAt).Milliseconds(),
+			Usage:        usage,
+		})
+
+		draft := finalText
+		if call, found := findFinalizeCall(resp.ToolCalls); found {
+			action := finalizeAction(call, finalText)
+			if action.Silent {
+				break
+			}
+			draft = action.Content
+		} else if action, ok := parseAction(finalText); ok && action.Action == "final" {
+			if action.Silent {
+				break
+			}
+			draft = action.Content
+		}
+		repair := reviewFinalDraft(draft)
+		if repair == "" {
+			break
+		}
+		// 收尾也遵守相同复核上限，只允许改稿，绝不重新开放工具预算。
+		protocolRepairs++
+		emitProtocolRepair(ctx, req.Observer, traceID, modelTurns, toolCalls, r.cfg.MaxSteps, finalReviewRepairReason)
+		finalizationRequest.Messages = appendAssistantEcho(finalizationRequest.Messages, draft)
+		finalizationRequest.Messages = append(finalizationRequest.Messages, llm.Message{Role: llm.RoleUser, Content: repair + "\n" + finalizationInstruction(finishReason, claimLedger.active)})
+		markLoopCacheBreakpoint(finalizationRequest.Messages, stableCacheIndex)
 	}
-	modelTurns++
-	if err != nil {
-		return fail(err)
-	}
-	lastProvider = resp.Provider
-	lastModel = resp.Model
-	usage = addLLMUsage(usage, resp.Usage)
-	finalText := strings.TrimSpace(resp.Text)
-	emitRunEvent(ctx, req.Observer, RunEvent{
-		TraceID:      traceID,
-		Phase:        RunPhaseModelCompleted,
-		ModelTurn:    modelTurns,
-		ToolCall:     toolCalls,
-		MaxToolCalls: r.cfg.MaxSteps,
-		OutputChars:  len([]rune(finalText)),
-		DurationMS:   time.Since(modelStartedAt).Milliseconds(),
-		Usage:        usage,
-	})
 	if call, found := findFinalizeCall(resp.ToolCalls); found {
 		action := finalizeAction(call, finalText)
 		finalizeFields = r.finalizeFieldValues(action)
@@ -1127,58 +1077,15 @@ func cloneToolInput(input map[string]any) map[string]any {
 	return cloned
 }
 
-// searchOnBehalf 替模型执行一次 web_search。它走和模型自己调用时一样的记录：
-// 调用链事件、证据账本、凭据遮盖、输出截断；返回运行记录、交回模型的说明和耗时。
-func (r *Runner) searchOnBehalf(ctx context.Context, observer RunObserver, traceID string, modelTurn, toolCall int, query string, ledger *claimEvidenceLedger) (Step, string, time.Duration) {
-	input := map[string]any{"query": query}
-	metadata := mergeRunMetadata(webSearchRunMetadataFromInput(webSearchToolName, input), ledger.prepareSearch(input))
-	emitRunEvent(ctx, observer, RunEvent{
-		TraceID: traceID, Phase: RunPhaseToolStarted, ModelTurn: modelTurn, ToolCall: toolCall, MaxToolCalls: r.cfg.MaxSteps,
-		Tool: webSearchToolName, InputKeys: sortedInputKeys(input), ToolInput: cloneToolInput(input), Metadata: metadata,
-	})
-	record := Step{Tool: webSearchToolName, Input: input}
-	output, err := "", error(nil)
-	tool, ok := r.registry.Get(webSearchToolName)
-	startedAt := time.Now()
-	outputLimit := DefaultMaxToolOutputChars
-	if ok {
-		outputLimit = r.toolOutputLimit(tool)
-		toolCtx, cancel := contextWithToolBudget(WithToolOutputBudget(ctx, outputLimit), time.Duration(r.cfg.ToolTimeoutMS)*time.Millisecond, time.Duration(r.cfg.FinalizationReserveMS)*time.Millisecond)
-		output, err = tool.Run(toolCtx, input)
-		if err != nil {
-			err = errors.New(normalizeToolError(err, toolCtx, ctx, r.cfg.ToolTimeoutMS))
-		}
-		cancel()
-	} else {
-		err = errors.New("tool not found")
-	}
-	duration := time.Since(startedAt)
-	record.DurationMS = duration.Milliseconds()
-	output = secretmask.Output(output)
-	rawOutput := output
-	if err != nil {
-		record.Error = secretmask.Text(err.Error())
-		output = toolExecutionErrorForModel(webSearchToolName, record.Error)
-		rawOutput = ""
-	} else {
-		record.Output = truncateToolOutput(output, outputLimit)
-		output = record.Output
-	}
-	metadata = mergeRunMetadata(metadata, webSearchRunMetadataFromOutput(webSearchToolName, output, err))
-	metadata = mergeRunMetadata(metadata, ledger.observeSearch(rawOutput, err))
-	metadata = mergeRunMetadata(metadata, map[string]any{"on_behalf_of_model": true})
-	ledger.noteCitableText(rawOutput)
-	emitRunEvent(ctx, observer, RunEvent{
-		TraceID: traceID, Phase: RunPhaseToolCompleted, ModelTurn: modelTurn, ToolCall: toolCall, MaxToolCalls: r.cfg.MaxSteps,
-		Tool: webSearchToolName, InputKeys: sortedInputKeys(input), ToolInput: cloneToolInput(input), ToolOutput: record.Output,
-		Metadata: metadata, OutputChars: len([]rune(record.Output)), DurationMS: record.DurationMS, Error: record.Error,
-	})
-	return record, fmt.Sprintf(onBehalfSearchPrompt, query, toolObservationMessage(webSearchToolName, output, err == nil, r.cfg.MaxSteps-toolCall)), duration
-}
-
 func toolObservationMessage(tool, output string, success bool, remaining int) string {
 	status := "成功"
 	guidance := "请基于结果继续；信息已足够时调用 agent_finalize 结束本轮。"
+	if success && tool == WebSearchToolName {
+		guidance = "documents 是实际读取的原文节选，content 只是搜索摘要。优先读取目标官网、官方文档和官方仓库。若 documents 只有第三方文章，先从正文或 links 追踪官方出处并用 browser_render 打开；找不到官方入口时用实体名加官网/官方文档查询，不从转载直接收尾。仅官方页面无法访问或未覆盖问题时使用第三方并标明限制。根据实际原文核对技术、能力、版本与价格，正文附出处；视频页面若只有简介和评论，不得当成已读视频转写，技术机制另找可阅读的一手文档；原文不足或不是一手来源时继续打开最相关页面。确有新的信息缺口才补搜，用实体名加一个查证目标，不堆 OR、不重复站内搜索。无法核实时如实说明限制。"
+	}
+	if success && tool == browserRenderToolName {
+		guidance = "本次只读取了返回 url 的页面，links 指向的页面尚未读取。若这是搜索引擎结果页，标题和摘要只是线索，必须从 links 选最相关的一手来源再用 browser_render 打开正文；不能以搜索结果页代替原文收尾。原文 truncated=true 或提示正文截断且缺少答案所需细节时，优先对该 url 调用 browser_render，arguments 填 {\"url\":\"来源真实网址\",\"find\":\"机制/条件的关键术语，用 | 分隔\"} 读取整页匹配段落，不要再用同页标题或 site: 搜索代替页内查找。答复只引用实际读过且支持结论的来源 URL；技术问题优先官方文档、源码或论文，不拿相近概念替代用户点名的概念。"
+	}
 	if !success {
 		status = "失败"
 		guidance = "不要原样重复同一调用；请分析错误后调整参数、改用其他工具，或如实调用 agent_finalize 说明限制。"
@@ -1200,7 +1107,7 @@ func finalizationInstruction(reason string, claimsActive bool) string {
 	if claimsActive {
 		requirement += "，并在 claims 中结算全部已声明主张"
 	}
-	return prefix + requirement + "。即使信息不完整，也要说明已确认的结果和限制，不要输出 tool 动作。content 只写面向用户的自然回答，不得暴露 claim ID、证据账本、协议字段、元数据或内部校验过程；用户询问观点是否正确时，应区分可直接判断的逻辑或措辞与需要外部证据的事实，不要因为部分事实未核实而拒绝回答整个问题。"
+	return prefix + requirement + "。即使信息不完整，也要说明已确认的结果和限制；保留此前复核要求的修正，联网调研正文附实际来源链接（用户明确禁用链接时除外），不要输出 tool 动作。content 只写面向用户的自然回答，不得暴露 claim ID、证据账本、协议字段、元数据或内部校验过程；用户询问观点是否正确时，应区分可直接判断的逻辑或措辞与需要外部证据的事实，不要因为部分事实未核实而拒绝回答整个问题。"
 }
 
 func addLLMUsage(total llm.Usage, usage llm.Usage) llm.Usage {
@@ -1242,9 +1149,9 @@ func (r *Runner) systemPrompt() string {
 	}
 	if hasTool(webSearchToolName) {
 		rules = append(rules,
-			"- 遇到需要外部事实、可能随时间变化、自己不能可靠确认或适合参考公开评价的问题，先调用 web_search 再回答。典型场景包括新闻、价格、规则、日程、人物或机构现状，具体商品、品牌、餐饮、作品的口碑、味道、规格和购买建议，以及某个软件、库、开源项目或服务是否支持某项能力、有没有现成实现或插件、当前版本与 API 现状；不要凭印象编造亲身体验或把不确定判断说成事实。纯闲聊、创作请求以及完全可由当前上下文回答的问题不需要搜索。",
 			"- 「当前上下文已经足够」只在答案本身就写在上下文里时成立。聊天记录里讨论过这个话题不等于其中的事实已经核实：别人的说法、你自己先前的回复和记忆摘要都只是线索，不能拿来替代检索。同样，熟悉一个项目的设计或原理，不代表你知道它此刻有哪些实现、插件、版本或生态现状——讲原理可以直接答，断言「有没有」「支不支持」「有哪些」必须先搜。",
-			"- 搜索词是可迭代假设，不是必须一次猜对的最终关键词。web_search 的 query 传当前最佳假设；存在拼写、别名、缩写、音译、语言或限定条件不确定性时，用 queries 追加 1–3 个有覆盖差异的候选，按信息增益从高到低排序。不要把完整聊天记录、用户身份或无关字段塞进搜索词。",
+			"- 搜索词围绕一个信息缺口，用简短自然关键词：实体名称加定义、文档、源码、价格或所需能力。query 放一个清晰问题，queries 仅补充确有区别的查证角度；不要把完整聊天记录、用户身份或无关字段塞进搜索词；不要堆 OR、近义词和整句问话，不要无依据地混入相邻概念。用户给出的产品、模型名称和版本号原样保留，这同样适用于每个候选查询；没有证据不得改名、降版本或把别的型号价格当成目标型号价格。",
+			"- 先宽搜找到可信来源和准确实体，再读来源原文；只在确认域名确属目标官方项目后才用 site: 限定。找到相关页面后用网页工具打开、用 find 定位缺口，不要反复用 site: 去搜同一篇文章里的词。优先确认并读取官网、官方文档、官方仓库和发布记录；第三方文章用于追踪官方出处。已找到相关官方页面时不能只读转载就收尾；官方无法访问或未覆盖时才采用其他可信来源并说明限制。缺少这些证据时只说本次未确认，不能断言项目没有该能力。",
 			"- web_search 会在统一 deadline 和调用预算内自动规范化查询、逐步放宽引号/标点/括号约束并回退 provider。搜索次数不单独设限，一轮最多 "+fmt.Sprintf("%d", r.cfg.MaxSteps)+" 步、每步调一个工具，没查到就接着查；不要重复相同 query 或只机械替换一个词。",
 			"- 多部分检索必须先拆成可独立验证的通用 claims。首次搜索在 input.claims 声明每个 id/statement，并用 claim_ids 标明本次查询覆盖项；后续搜索先用 claim_updates 结算已有证据，再优先覆盖 insufficient 或 not_searched。不得按品牌、站点或垂直领域硬编码 claim。",
 			"- claim 状态只允许 supported、conflicting、insufficient、not_searched。supported/conflicting 必须绑定工具真实返回的 URL，并记录 relation、source_type、published_at、distance 和 strength；标题、摘要、正文冲突时不得标 supported。第一方来源只能支持它直接覆盖的条件，不能外推未覆盖的地点、时间或渠道。",
@@ -1326,11 +1233,15 @@ func (r *Runner) systemPrompt() string {
 	}
 	rules = append(rules, "- 已经足够回答时必须调用 agent_finalize 结束本轮。")
 	sections := []string{
-		"你是 Diana 的内置 Agent。需要执行外部操作时调用工具，观察结果后再给出最终答复。",
+		"你是 Diana 的内置 Agent。使用工具完成任务和核实外部事实，观察结果后再给出最终答复。征求你的观点或讨论你的架构，也要先核实其中具体技术的外部事实前提；不能把熟悉的术语自动当成已查证的知识。",
 		"需要工具时必须使用请求中提供的原生 function calling，不要把工具调用写进正文。每个规划步只选择一个工具，观察结果后可以继续选择下一个。",
 		"不再需要工具时调用 agent_finalize 结束本轮：给用户看的完整正文写进 content（必填，不能为空），task_state、claims 这类元数据按需一并携带。content 禁止真实 CR/LF；下一条消息写 [diana-msg]，同一消息内换行写 [diana-line]。正文不要写成 JSON。",
 		"这一轮确实不需要说话时，调用 agent_finalize 并填 silent=true、content 留空，本轮就不发任何消息；silent_reason 里用一句话说明原因，只进日志。它不是拒答：要拒绝就正常把话说出来。",
 		"若 Provider 不支持原生 function calling，才可兼容输出 {\"action\":\"final\",\"content\":\"给用户看的自然语言回复\"} 或 {\"action\":\"tool\",\"tool\":\"工具名\",\"input\":{...}}。",
+	}
+	if hasAnyTool(webSearchToolName, "browser_render", "browser_open") {
+		// 联网决策先于收尾协议，避免模型先把观点类问题归入直接回答。
+		sections = append(sections[:1], append([]string{"联网与调研：\n" + webSearchDecisionPolicy}, sections[1:]...)...)
 	}
 	// loadedContracts 是整段系统提示词里唯一会在会话中途增长的内容：每次
 	// tools_load 都往里追加一份契约。它以前紧跟在工具目录后面，也就是夹在系统提示词

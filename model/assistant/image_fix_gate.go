@@ -23,7 +23,7 @@ import (
 //
 // 先试过在 agent_finalize 上加可选字段让模型认错时顺手填：10-01 线上回放（gemini-3.8-
 // flash-low），群友说「这里面一个提纳里，一个主角，一个派蒙」，机器人 3/3 都回「原来是
-// 提纳里、荧和派蒙」，可一次都没填那个字段。所以改成和证据门控一样，Agent 起跑时并行
+// 提纳里、荧和派蒙」，可一次都没填那个字段。所以改成在 Agent 起跑时并行
 // 单独问一次，不靠主模型自觉，也不拖慢回复。
 //
 // 描述缓存跨群共用，乱「纠正」会污染所有群，所以重写时让视觉模型对照画面核对，和画面
@@ -174,7 +174,7 @@ func (r *Runtime) detectImageFix(ctx context.Context, event MessageEvent, store 
 		return "", ""
 	}
 	ctx = withLLMUsagePurpose(r.withIdentityPrivacyContext(ctx, event, history), PurposeImageFixGate)
-	raw, err := r.generateEvidenceGate(ctx, r.effectiveConfigForEvent(event).prompt(promptImageFixGateSpec), llm.Message{Role: llm.RoleUser, Content: string(payloadJSON)})
+	raw, err := r.generateImageFixDecision(ctx, r.effectiveConfigForEvent(event).prompt(promptImageFixGateSpec), llm.Message{Role: llm.RoleUser, Content: string(payloadJSON)})
 	if err != nil {
 		return "", ""
 	}
@@ -182,7 +182,7 @@ func (r *Runtime) detectImageFix(ctx context.Context, event MessageEvent, store 
 		Fix       string `json:"fix"`
 		MessageID string `json:"message_id"`
 	}
-	if !decodeEvidenceGateJSON(raw, &decision) {
+	if !decodeImageFixJSON(raw, &decision) {
 		return "", ""
 	}
 	correction := truncateRunes(strings.TrimSpace(decision.Fix), 200)
@@ -259,4 +259,28 @@ func (r *Runtime) rewriteImageDescriptions(ctx context.Context, event MessageEve
 		r.refreshMessageImageSearchText(ctx, source)
 	}
 	return fixed
+}
+
+func (r *Runtime) generateImageFixDecision(ctx context.Context, system string, userMessage llm.Message) (string, error) {
+	messages := []llm.Message{{Role: llm.RoleSystem, Content: system}, userMessage}
+	return r.runLLMRouterProviderOnce(ctx, func(client LLMProvider) (string, error) {
+		resp, err := client.Generate(ctx, llm.GenerateRequest{Messages: messages})
+		if err != nil {
+			return "", err
+		}
+		if resp == nil {
+			return "", nil
+		}
+		return resp.Text, nil
+	})
+}
+
+func decodeImageFixJSON(raw string, target any) bool {
+	raw = strings.TrimSpace(stripJSONCodeFence(raw))
+	start := strings.Index(raw, "{")
+	end := strings.LastIndex(raw, "}")
+	if start < 0 || end < start {
+		return false
+	}
+	return json.Unmarshal([]byte(raw[start:end+1]), target) == nil
 }

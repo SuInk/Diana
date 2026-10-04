@@ -80,6 +80,18 @@ type webSearchResult struct {
 	Budget            webSearchBudget           `json:"budget"`
 	Sources           []string                  `json:"sources,omitempty"`
 	Content           string                    `json:"content,omitempty"`
+	Documents         []webSearchDocument       `json:"documents,omitempty"`
+}
+
+type webSearchDocument struct {
+	RequestedURL string   `json:"requested_url"`
+	URL          string   `json:"url,omitempty"`
+	Title        string   `json:"title,omitempty"`
+	RetrievedAt  string   `json:"retrieved_at,omitempty"`
+	Text         string   `json:"text,omitempty"`
+	Truncated    bool     `json:"truncated,omitempty"`
+	Error        string   `json:"error,omitempty"`
+	FindMatches  []string `json:"find_matches,omitempty"`
 }
 
 func webSearchCandidates(input map[string]any, limit int) ([]webSearchQueryCandidate, error) {
@@ -308,6 +320,7 @@ func webSearchResultSources(content string) []string {
 }
 
 func canonicalWebSearchURL(raw string) (string, string) {
+	raw = unwrapSearchEngineLink(raw)
 	parsed, err := url.Parse(raw)
 	if err != nil || parsed.Hostname() == "" {
 		return strings.ToLower(raw), raw

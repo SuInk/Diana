@@ -5,8 +5,11 @@ package assistant
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -133,7 +136,7 @@ func TestWebSearchPluginSearchEngineMode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(rendered) != 1 || !strings.HasPrefix(rendered[0], "https://www.bing.com/search?") {
+	if len(rendered) != 2 || !strings.HasPrefix(rendered[0], "https://www.bing.com/search?") || rendered[1] != "https://example.com/a" {
 		t.Fatalf("rendered = %v", rendered)
 	}
 	if !strings.Contains(output, `"provider": "bing"`) || !strings.Contains(output, "https://example.com/a") {
@@ -167,7 +170,7 @@ func TestWebSearchPluginCustomSearchEngineKeepsOrder(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"https://search.example.com/s?q=a+b%26c&lang=zh", "https://www.bing.com/search?q=a+b%26c"}
+	want := []string{"https://search.example.com/s?q=a+b%26c&lang=zh", "https://www.bing.com/search?q=a+b%26c", "https://example.org/a"}
 	if strings.Join(rendered, " ") != strings.Join(want, " ") {
 		t.Fatalf("rendered = %v", rendered)
 	}
@@ -203,7 +206,7 @@ func TestDisabledWebSearchFallsBackToSearchEngineWhenBrowserIsOn(t *testing.T) {
 	if _, err := search.Run(context.Background(), map[string]any{"query": "测试"}); err != nil {
 		t.Fatal(err)
 	}
-	if len(rendered) != 1 || !strings.HasPrefix(rendered[0], "https://duckduckgo.com/?") {
+	if len(rendered) != 2 || !strings.HasPrefix(rendered[0], "https://duckduckgo.com/?") || rendered[1] != "https://example.com/a" {
 		t.Fatalf("应当沿用插件里的引擎顺序: %v", rendered)
 	}
 
@@ -218,5 +221,37 @@ func TestDisabledWebSearchFallsBackToSearchEngineWhenBrowserIsOn(t *testing.T) {
 	}
 	if owners := manager.AgentToolOwners("", map[string]bool{webSearchPluginID: false, sandboxedBrowserPluginID: false}, nil); len(owners[webSearchPluginID]) != 0 {
 		t.Fatalf("owners = %v", owners)
+	}
+}
+
+func TestWebSearchPluginAPIModeReadsActualSource(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"results":[{"url":"https://example.com/docs","content":"只是搜索摘要"}]}`)
+	}))
+	defer server.Close()
+	var requested string
+	plugin := &WebSearchPlugin{renderer: agent.PageRendererFunc(func(_ context.Context, u string) (agent.RenderedPage, error) {
+		requested = u
+		return agent.RenderedPage{URL: u, Text: "实际原文，不能被摘要替代"}, nil
+	})}
+	tools, err := plugin.AgentTools(SettingValues{webSearchSettingMode: webSearchModeAPI, webSearchSettingExaEnabled: false, webSearchSettingTavilyEnabled: true, webSearchSettingTavilyURL: server.URL, webSearchSettingTavilyAPIKey: "unit-test"})
+	if err != nil || len(tools) != 1 {
+		t.Fatalf("tools=%v err=%v", tools, err)
+	}
+	out, err := tools[0].Run(context.Background(), map[string]any{"query": "source docs"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var result struct {
+		Documents []struct {
+			Text string `json:"text"`
+		} `json:"documents"`
+	}
+	if err := json.Unmarshal([]byte(out), &result); err != nil {
+		t.Fatal(err)
+	}
+	if requested != "https://example.com/docs" || len(result.Documents) != 1 || result.Documents[0].Text != "实际原文，不能被摘要替代" {
+		t.Fatalf("API 模式未接原文读取：%s", out)
 	}
 }

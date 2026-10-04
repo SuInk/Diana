@@ -2221,7 +2221,7 @@ func compactWhitespace(text string) string {
 // 以前这种组合下只剩系统提示词里一句「用 browser_render 打开 Google 搜」，要不要查全凭
 // 模型自觉：09-24 主人为了改走搜索引擎关掉插件之后，「帮我搜索……」零工具直接作答的
 // 情况成批出现，而插件开着的 09-08～09-23 几乎每条都查了。关插件本来就不等于不许搜，
-// 那句提示词照样叫模型去搜——不如把这条路做成同一个常驻的 web_search，证据门控和来源
+// 那句提示词照样叫模型去搜——不如把这条路做成同一个常驻的 web_search，来源
 // 校验才认得出它。沿用插件自己的设置（引擎顺序、自定义地址、结果上限），只把方式换成
 // 搜索引擎。要彻底不联网搜索，两个插件都关掉。
 func (m *PluginManager) searchEngineFallbackTools(settingOverrides PluginSettingOverrides) []agent.Tool {

@@ -60,10 +60,6 @@ const (
 	PurposePokeReply        = "poke_reply"
 	PurposeWelcomeGenerator = "welcome_generator"
 	PurposeRomanceGreeting  = "romance_greeting"
-	// PurposeEvidenceGate 判断这一轮回复是否必须先联网查证，见 evidence_gate.go。
-	PurposeEvidenceGate = "evidence_gate"
-	// PurposeSearchNegationReview 收尾前复核「没查到就说不存在」，见 search_negation_review.go。
-	PurposeSearchNegationReview = "search_negation_review"
 	// PurposeImageFixGate 判断群友是不是在纠正某张图认错了，见 image_fix_gate.go。
 	PurposeImageFixGate = "image_fix_gate"
 )
@@ -106,12 +102,10 @@ var llmPurposeGroup = map[string]string{
 
 	// 下面这些也是判定，但眼下还没有各自的判断题表，先留在回复辅助：归进意图
 	// 识别只会让它们在绑判断模型时每次先失败一次再降级。题表补上再挪过去。
-	PurposeReplyIntentRouter:    llm.GroupReplyAssist,
-	PurposeEvidenceGate:         llm.GroupReplyAssist,
-	PurposeSearchNegationReview: llm.GroupReplyAssist,
-	PurposeImageFixGate:         llm.GroupReplyAssist,
-	PurposeReplyRuleRouter:      llm.GroupReplyAssist,
-	PurposeBotReplyLoop:         llm.GroupReplyAssist,
+	PurposeReplyIntentRouter: llm.GroupReplyAssist,
+	PurposeImageFixGate:      llm.GroupReplyAssist,
+	PurposeReplyRuleRouter:   llm.GroupReplyAssist,
+	PurposeBotReplyLoop:      llm.GroupReplyAssist,
 
 	// 后台生成：好感度、长期记忆、RSS 判定和主动问候都要写出成段文字，判断模型答不了；
 	// 它们也都在回复之外异步跑，可以指一个便宜的慢模型。

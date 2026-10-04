@@ -33,9 +33,14 @@ type browserRenderPayload struct {
 	Links       []string `json:"links,omitempty"`
 	FindMatches []string `json:"find_matches,omitempty"`
 	FindNote    string   `json:"find_note,omitempty"`
+	ReadNotice  string   `json:"read_notice,omitempty"`
 }
 
 func browserRenderOutput(page RenderedPage, find string) (string, error) {
+	return browserRenderOutputWithBudget(page, find, DefaultMaxToolOutputChars)
+}
+
+func browserRenderOutputWithBudget(page RenderedPage, find string, budget int) (string, error) {
 	terms := browserRenderFindTerms(find)
 	payload := browserRenderPayload{RenderedPage: page, Links: browserRenderLinks(page, terms)}
 	if len(terms) > 0 {
@@ -48,11 +53,37 @@ func browserRenderOutput(page RenderedPage, find string) (string, error) {
 			payload.FindNote = "整页正文里没找到 " + strings.Join(terms, "、") + "；页面没写不等于没有，可以从 links 打开相关页面接着找。"
 		}
 	}
-	data, err := json.MarshalIndent(payload, "", "  ")
-	if err != nil {
-		return "", err
+	for {
+		if payload.Truncated && len(terms) == 0 {
+			payload.ReadNotice = `正文已截断；若需要未出现的细节，请对本页再次调用 browser_render，参数为 {"url":"本次返回的 url","find":"所需关键词，可用 | 分隔"}。不要用重复搜索代替页内查找，也不能凭印象补出未读取的机制。`
+		}
+		data, err := json.MarshalIndent(payload, "", "  ")
+		if err != nil {
+			return "", err
+		}
+		if len([]rune(string(data))) <= budget {
+			return string(data), nil
+		}
+		// 先去掉低优先级链接和元数据，保留正文及 find 真正命中的段落。
+		if len(payload.Links) > 5 {
+			payload.Links = payload.Links[:len(payload.Links)-1]
+		} else if payload.Description != "" {
+			payload.Description = ""
+		} else if payload.Text != "" {
+			payload.Text = string([]rune(payload.Text)[:len([]rune(payload.Text))/2])
+			payload.Truncated = true
+		} else if len(payload.FindMatches) > 1 {
+			payload.FindMatches = payload.FindMatches[:len(payload.FindMatches)-1]
+		} else if len(payload.FindMatches) == 1 && payload.FindMatches[0] != "" {
+			match := []rune(payload.FindMatches[0])
+			payload.FindMatches[0] = string(match[:len(match)/2])
+			payload.Truncated = true
+		} else if len(payload.Links) > 0 {
+			payload.Links = payload.Links[:len(payload.Links)-1]
+		} else {
+			return string(data), nil
+		}
 	}
-	return string(data), nil
 }
 
 func browserRenderFindTerms(find string) []string {

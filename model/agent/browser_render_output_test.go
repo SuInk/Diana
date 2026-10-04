@@ -96,3 +96,52 @@ func TestBrowserRenderFindMatchesMergeAndCap(t *testing.T) {
 		t.Fatalf("matches = %d, want %d", len(got), browserRenderMaxMatches)
 	}
 }
+
+// Runner 不能在 JSON 中间截断，否则终稿复核读不到 text/find_matches。
+func TestBrowserRenderKeepsValidJSONWithinRunnerBudget(t *testing.T) {
+	page := RenderedPage{URL: "https://example.com/docs", Text: strings.Repeat("正文", 5000), FullText: strings.Repeat("正文", 5000) + "关键能力有条件支持"}
+	for i := 0; i < 40; i++ {
+		page.Links = append(page.Links, RenderedLink{URL: "https://example.com/" + strings.Repeat("a", i+100), Text: "文档"})
+	}
+	raw, err := browserRenderOutputWithBudget(page, "关键能力", 1500)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out browserRenderOutputForTest
+	if err := json.Unmarshal([]byte(raw), &out); err != nil {
+		t.Fatal(err)
+	}
+	if len([]rune(raw)) > 1500 || !strings.Contains(strings.Join(out.FindMatches, " "), "关键能力有条件支持") {
+		t.Fatalf("budget or evidence lost: %s", raw)
+	}
+}
+
+func TestBrowserRenderMissingURLExplainsNativeArguments(t *testing.T) {
+	tool := NewBrowserRenderTool(PageRendererFunc(func(context.Context, string) (RenderedPage, error) {
+		t.Fatal("missing URL reached renderer")
+		return RenderedPage{}, nil
+	}))
+	_, err := tool.Run(context.Background(), nil)
+	if err == nil || !strings.Contains(err.Error(), `arguments 形如 {"url"`) || !strings.Contains(err.Error(), "不要只发工具名") {
+		t.Fatalf("missing native arguments not explained: %v", err)
+	}
+}
+
+func TestBrowserRenderTruncationProvidesFindRecovery(t *testing.T) {
+	page := RenderedPage{URL: "https://docs.example/architecture", Text: strings.Repeat("正文", 5000), FullText: strings.Repeat("正文", 5000) + "sandbox execution", Truncated: true}
+	raw, err := browserRenderOutputWithBudget(page, "", 1500)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out browserRenderPayload
+	if err := json.Unmarshal([]byte(raw), &out); err != nil {
+		t.Fatal(err)
+	}
+	if len([]rune(raw)) > 1500 || !strings.Contains(out.ReadNotice, `"find"`) {
+		t.Fatalf("truncated source lacks usable recovery: %s", raw)
+	}
+	found, err := browserRenderOutputWithBudget(page, "sandbox", 1500)
+	if err != nil || !strings.Contains(found, "sandbox execution") {
+		t.Fatalf("find cannot recover omitted passage: %s %v", found, err)
+	}
+}

@@ -247,6 +247,12 @@ func (p *WebSearchPlugin) AgentTools(settings SettingValues) ([]agent.Tool, erro
 	if len(providers) == 0 {
 		return nil, nil
 	}
+	if renderer == nil {
+		renderer = p.renderer
+		if renderer == nil {
+			renderer = agent.NewSandboxedHeadlessBrowser(agent.SandboxedBrowserConfig{Window: agent.BrowserWindowHidden})
+		}
+	}
 
 	tool, err := agent.NewWebSearchTool(agent.WebSearchToolOptions{
 		Config:         agent.WebSearchConfig{Providers: providers},
@@ -255,6 +261,7 @@ func (p *WebSearchPlugin) AgentTools(settings SettingValues) ([]agent.Tool, erro
 		MaxOutputChars: agent.DefaultMaxToolOutputChars,
 		Client:         p.client,
 		Renderer:       renderer,
+		ReadSources:    true,
 	})
 	if err != nil {
 		return nil, err

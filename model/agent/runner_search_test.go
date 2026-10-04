@@ -6,6 +6,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -178,7 +179,7 @@ func TestRunnerPromptRequiresSearchForSpecificProductOpinions(t *testing.T) {
 		t.Fatal(err)
 	}
 	prompt := runner.systemPrompt()
-	for _, expected := range []string{"具体商品", "口碑", "味道", "先调用 web_search 再回答", "不要凭印象编造亲身体验"} {
+	for _, expected := range []string{"具体商品", "口碑", "味道", "必须搜索", "不要凭印象编造亲身体验"} {
 		if !strings.Contains(prompt, expected) {
 			t.Fatalf("search guidance missing %q: %s", expected, prompt)
 		}
@@ -260,149 +261,23 @@ func TestRunnerKeepsFinalReplyWhenEvidenceDoesNotBind(t *testing.T) {
 	}
 }
 
-// RequireEvidence 补的是证据账本够不着的那一段：账本只有在模型已经调过
-// web_search 之后才 active，模型不搜就直接按 plain_text 或 final 收口，
-// 一点校验都不过。线上那次「某个开源项目有没有现成实现」答错就是这么来的。
-func TestRunnerRequireEvidenceSendsModelBackToSearch(t *testing.T) {
-	searchResult, _ := json.Marshal(webSearchResult{
-		Status: "ok", StopReason: "sufficient_evidence",
-		Sources: []string{"https://registry.example/pkg"}, Content: "现成实现共四个",
-	})
-	tool := &recordingSearchTool{output: string(searchResult)}
-	client := &scriptedClient{responses: []string{
-		// 第一次：凭印象直接下结论，一个工具都没调。
-		`{"action":"final","content":"生态里没有现成实现。"}`,
-		`{"action":"tool","tool":"web_search","input":{"query":"pkg 非阻塞实现","claims":[{"id":"exists","statement":"生态里是否存在现成实现"}],"claim_ids":["exists"]}}`,
-		`{"action":"final","content":"查到有现成实现（来源：https://registry.example/pkg）。","claims":[{"id":"exists","status":"supported","summary":"检索到现成实现","evidence":[{"url":"https://registry.example/pkg","relation":"supports","source_type":"official_record","distance":"direct","strength":"high"}]}]}`,
-	}}
-	runner, err := NewRunner(client, Config{MaxSteps: 3, ProtocolRepairLimit: 3}, NewToolRegistry(tool))
-	if err != nil {
-		t.Fatal(err)
-	}
-	resp, err := runner.Run(context.Background(), Request{
-		Messages:        []llm.Message{{Role: llm.RoleUser, Content: "这个项目生态里有没有现成实现"}},
-		RequireEvidence: true,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if tool.calls != 1 {
-		t.Fatalf("模型没有被退回去检索: calls=%d", tool.calls)
-	}
-	if strings.Contains(resp.Text, "没有现成实现") {
-		t.Fatalf("凭印象的初稿被放行了: %q", resp.Text)
-	}
-	if len(resp.Claims) != 1 || resp.Claims[0].Status != ClaimStatusSupported {
-		t.Fatalf("claims=%#v", resp.Claims)
-	}
-	// 退回时给模型的话要说清楚「聊天记录不算已核实」，这正是它上次踩的坑。
-	var repaired bool
-	for _, req := range client.requests {
-		for _, msg := range req.Messages {
-			if strings.Contains(msg.Content, "不能替代检索") {
-				repaired = true
+func TestRunnerModelCanFinalizeWithoutSearch(t *testing.T) {
+	for _, response := range []string{`{"action":"final","content":"今天挺好的。"}`, "今天挺好的。"} {
+		t.Run(response, func(t *testing.T) {
+			tool := &recordingSearchTool{output: "unused"}
+			client := &scriptedClient{responses: []string{response}}
+			runner, err := NewRunner(client, Config{MaxSteps: 2, ProtocolRepairLimit: 2}, NewToolRegistry(tool))
+			if err != nil {
+				t.Fatal(err)
 			}
-		}
-	}
-	if !repaired {
-		t.Fatal("退回提示没有说明聊天记录不能替代检索")
-	}
-}
-
-// 模型只调 web_search、不声明 claims 时也算满足门控。用 active 当判据会把这种
-// 模型反复打回，真机上就是这么暴露的：3 次检索全是被退回来的，最后撞修复上限
-// 才收口。门控管的是「不许不查就下结论」，claims 是检索之后的结构化校验。
-func TestRunnerRequireEvidenceSatisfiedBySearchWithoutClaims(t *testing.T) {
-	tool := &recordingSearchTool{output: "检索结果正文"}
-	client := &scriptedClient{responses: []string{
-		`{"action":"tool","tool":"web_search","input":{"query":"pkg 非阻塞实现"}}`,
-		`{"action":"final","content":"查到的资料是这样的。"}`,
-	}}
-	runner, err := NewRunner(client, Config{MaxSteps: 3, ProtocolRepairLimit: 3}, NewToolRegistry(tool))
-	if err != nil {
-		t.Fatal(err)
-	}
-	resp, err := runner.Run(context.Background(), Request{
-		Messages:        []llm.Message{{Role: llm.RoleUser, Content: "有没有现成实现"}},
-		RequireEvidence: true,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if tool.calls != 1 {
-		t.Fatalf("搜过一次就该放行，却被反复打回: calls=%d", tool.calls)
-	}
-	if resp.Text != "查到的资料是这样的。" {
-		t.Fatalf("resp=%#v", resp)
-	}
-	if resp.FinishReason == "evidence_required_unmet" {
-		t.Fatal("搜过了还判成未满足证据要求")
-	}
-}
-
-// 模型死活不搜时必须放行：把回复卡掉比偶尔答错更糟。
-func TestRunnerRequireEvidenceFailsOpenAfterRepairLimit(t *testing.T) {
-	tool := &recordingSearchTool{output: "unused"}
-	client := &scriptedClient{responses: []string{
-		`{"action":"final","content":"我就是知道。"}`,
-		`{"action":"final","content":"我还是知道。"}`,
-		`{"action":"final","content":"就不搜。"}`,
-		`{"action":"final","content":"就不搜。"}`,
-	}}
-	runner, err := NewRunner(client, Config{MaxSteps: 3, ProtocolRepairLimit: 2}, NewToolRegistry(tool))
-	if err != nil {
-		t.Fatal(err)
-	}
-	resp, err := runner.Run(context.Background(), Request{
-		Messages:        []llm.Message{{Role: llm.RoleUser, Content: "有没有现成实现"}},
-		RequireEvidence: true,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.TrimSpace(resp.Text) == "" {
-		t.Fatal("修复预算耗尽后把回复卡掉了")
-	}
-	if tool.calls != 0 {
-		t.Fatalf("calls=%d", tool.calls)
-	}
-}
-
-// 没有 web_search 工具时这个标记必须自动失效，否则回复会卡在修复循环里。
-func TestRunnerRequireEvidenceIgnoredWithoutSearchTool(t *testing.T) {
-	client := &scriptedClient{responses: []string{`{"action":"final","content":"直接回答。"}`}}
-	runner, err := NewRunner(client, Config{MaxSteps: 2, ProtocolRepairLimit: 2}, NewToolRegistry())
-	if err != nil {
-		t.Fatal(err)
-	}
-	resp, err := runner.Run(context.Background(), Request{
-		Messages:        []llm.Message{{Role: llm.RoleUser, Content: "有没有现成实现"}},
-		RequireEvidence: true,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if resp.Text != "直接回答。" {
-		t.Fatalf("resp=%#v", resp)
-	}
-}
-
-// 不要求证据时行为完全不变：绝大多数闲聊轮次不该因此多跑一次检索。
-func TestRunnerWithoutRequireEvidenceKeepsDirectAnswer(t *testing.T) {
-	tool := &recordingSearchTool{output: "unused"}
-	client := &scriptedClient{responses: []string{`{"action":"final","content":"今天挺好的。"}`}}
-	runner, err := NewRunner(client, Config{MaxSteps: 2, ProtocolRepairLimit: 2}, NewToolRegistry(tool))
-	if err != nil {
-		t.Fatal(err)
-	}
-	resp, err := runner.Run(context.Background(), Request{
-		Messages: []llm.Message{{Role: llm.RoleUser, Content: "今天怎么样"}},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if resp.Text != "今天挺好的。" || tool.calls != 0 {
-		t.Fatalf("resp=%#v calls=%d", resp, tool.calls)
+			resp, err := runner.Run(context.Background(), Request{Messages: []llm.Message{{Role: llm.RoleUser, Content: "今天怎么样"}}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if resp.Text != "今天挺好的。" || tool.calls != 0 || len(client.requests) != 1 || client.requests[0].ToolChoice != "" {
+				t.Fatalf("resp=%#v calls=%d requests=%#v", resp, tool.calls, client.requests)
+			}
+		})
 	}
 }
 
@@ -527,187 +402,6 @@ func TestExtractCitationURLsStopsAtChineseText(t *testing.T) {
 	}
 }
 
-// 话术退回对某些模型无效。实测 gemini-3.8-flash-low：被连退三次仍然一个工具都
-// 不调，只把正文改得更含糊，4 个模型轮次 0 个工具步骤，最后 fail-open 放行。
-// 退回的同时用供应商的 tool_choice 把选择权收走，它才真的去检索。
-func TestRunnerRequireEvidenceForcesToolChoiceOnRepair(t *testing.T) {
-	tool := &recordingSearchTool{output: "检索结果正文"}
-	client := &scriptedClient{responses: []string{
-		`{"action":"final","content":"我就是知道。"}`,
-		`{"action":"tool","tool":"web_search","input":{"query":"q"}}`,
-		`{"action":"final","content":"查完了。"}`,
-	}}
-	runner, err := NewRunner(client, Config{MaxSteps: 3, ProtocolRepairLimit: 3}, NewToolRegistry(tool))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := runner.Run(context.Background(), Request{
-		Messages:        []llm.Message{{Role: llm.RoleUser, Content: "有没有现成实现"}},
-		RequireEvidence: true,
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if len(client.requests) < 2 {
-		t.Fatalf("requests=%d", len(client.requests))
-	}
-	// 第一轮不强制，退回之后那一轮必须强制。
-	if client.requests[0].ToolChoice != "" {
-		t.Fatalf("第一轮就强制了工具选择: %q", client.requests[0].ToolChoice)
-	}
-	if client.requests[1].ToolChoice != WebSearchToolName {
-		t.Fatalf("退回后没有强制检索: %q", client.requests[1].ToolChoice)
-	}
-	// 强制只作用于紧接着那一轮，不能黏住。
-	if len(client.requests) > 2 && client.requests[2].ToolChoice != "" {
-		t.Fatalf("强制粘在了后续轮次: %q", client.requests[2].ToolChoice)
-	}
-}
-
-// EvidenceCheck 是收尾时才取的判断：判为需要时和 RequireEvidence 一样打回去先搜。
-func TestRunnerEvidenceCheckSendsModelBackToSearch(t *testing.T) {
-	searchResult, _ := json.Marshal(webSearchResult{
-		Status: "ok", StopReason: "sufficient_evidence",
-		Sources: []string{"https://store.example/mac-mini"}, Content: "Mac mini M6 已发布",
-	})
-	tool := &recordingSearchTool{output: string(searchResult)}
-	client := &scriptedClient{responses: []string{
-		`{"action":"final","content":"苹果连 M5 都还没出，这是 P 的。"}`,
-		`{"action":"tool","tool":"web_search","input":{"query":"Mac mini M6"}}`,
-		`{"action":"final","content":"M6 版已经上架了（来源：https://store.example/mac-mini）。"}`,
-	}}
-	runner, err := NewRunner(client, Config{MaxSteps: 3, ProtocolRepairLimit: 3}, NewToolRegistry(tool))
-	if err != nil {
-		t.Fatal(err)
-	}
-	checks := 0
-	resp, err := runner.Run(context.Background(), Request{
-		Messages:      []llm.Message{{Role: llm.RoleUser, Content: "这台 Mac mini 贵不贵"}},
-		EvidenceCheck: func(context.Context) EvidenceDecision { checks++; return EvidenceDecision{Needed: true} },
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if tool.calls != 1 || checks != 1 {
-		t.Fatalf("calls=%d checks=%d", tool.calls, checks)
-	}
-	if strings.Contains(resp.Text, "P 的") {
-		t.Fatalf("凭印象的初稿被放行了: %q", resp.Text)
-	}
-}
-
-// 判断方给了检索词时，模型不搜就替它搜一次，不再指望它听打回话术。
-// 生产的 gemini 被打回后去调 capabilities 找 web_search，四次里一次都没搜。
-func TestRunnerEvidenceCheckSearchesOnBehalfOfModel(t *testing.T) {
-	searchResult, _ := json.Marshal(webSearchResult{
-		Status: "ok", StopReason: "sufficient_evidence",
-		Sources: []string{"https://store.example/sale"}, Content: "Autumn Sale runs October 1 to October 8",
-	})
-	tool := &recordingSearchTool{output: string(searchResult)}
-	client := &scriptedClient{responses: []string{
-		`{"action":"final","content":"秋促要等到 11 月下旬。"}`,
-		`{"action":"final","content":"秋促是 10 月 1 日到 8 日（来源：https://store.example/sale）。"}`,
-	}}
-	runner, err := NewRunner(client, Config{MaxSteps: 3, ProtocolRepairLimit: 3}, NewToolRegistry(tool))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var events []RunEvent
-	resp, err := runner.Run(context.Background(), Request{
-		Messages: []llm.Message{{Role: llm.RoleUser, Content: "秋促开始了吗"}},
-		EvidenceCheck: func(context.Context) EvidenceDecision {
-			return EvidenceDecision{Needed: true, Query: "Steam 秋季特卖 2026 日期"}
-		},
-		Observer: func(_ context.Context, event RunEvent) { events = append(events, event) },
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if tool.calls != 1 || tool.input["query"] != "Steam 秋季特卖 2026 日期" {
-		t.Fatalf("没有替模型检索: calls=%d input=%v", tool.calls, tool.input)
-	}
-	if !strings.Contains(resp.Text, "10 月 1 日") || len(client.requests) != 2 {
-		t.Fatalf("resp=%q requests=%d", resp.Text, len(client.requests))
-	}
-	// 检索结果要交回模型，还要说明以结果为准。
-	last := client.requests[1].Messages
-	if got := last[len(last)-1].Content; !strings.Contains(got, "October 1 to October 8") || !strings.Contains(got, "不要拿印象补上") {
-		t.Fatalf("交回模型的内容不对: %q", got)
-	}
-	if len(resp.Steps) != 1 || resp.Steps[0].Tool != WebSearchToolName {
-		t.Fatalf("运行记录里没有这次检索: %+v", resp.Steps)
-	}
-	var started, completed bool
-	for _, event := range events {
-		started = started || (event.Phase == RunPhaseToolStarted && event.Tool == WebSearchToolName)
-		completed = completed || (event.Phase == RunPhaseToolCompleted && event.Tool == WebSearchToolName && event.Metadata["on_behalf_of_model"] == true)
-		if event.Phase == RunPhaseProtocolRepair {
-			t.Fatalf("替模型检索不该算一次协议修复: %+v", event)
-		}
-	}
-	if !started || !completed {
-		t.Fatalf("调用链没记下这次检索: %+v", events)
-	}
-}
-
-// 没有检索词时照旧打回去让模型自己搜。
-func TestRunnerEvidenceCheckWithoutQueryFallsBackToRepair(t *testing.T) {
-	tool := &recordingSearchTool{output: `{"status":"ok","content":"x","sources":["https://a.example"]}`}
-	client := &scriptedClient{responses: []string{
-		`{"action":"final","content":"我就是知道。"}`,
-		`{"action":"tool","tool":"web_search","input":{"query":"模型自己的检索词"}}`,
-		`{"action":"final","content":"查完了。"}`,
-	}}
-	runner, err := NewRunner(client, Config{MaxSteps: 3, ProtocolRepairLimit: 3}, NewToolRegistry(tool))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := runner.Run(context.Background(), Request{
-		Messages:      []llm.Message{{Role: llm.RoleUser, Content: "发布了吗"}},
-		EvidenceCheck: func(context.Context) EvidenceDecision { return EvidenceDecision{Needed: true} },
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if tool.calls != 1 || tool.input["query"] != "模型自己的检索词" {
-		t.Fatalf("calls=%d input=%v", tool.calls, tool.input)
-	}
-}
-
-// 判为不需要就照常收尾；模型自己搜过时根本不去问。
-func TestRunnerEvidenceCheckSkippedWhenNotNeededOrAlreadySearched(t *testing.T) {
-	client := &scriptedClient{responses: []string{`{"action":"final","content":"哈哈哈"}`}}
-	runner, err := NewRunner(client, Config{MaxSteps: 3, ProtocolRepairLimit: 3}, NewToolRegistry(&recordingSearchTool{output: `{"status":"ok"}`}))
-	if err != nil {
-		t.Fatal(err)
-	}
-	resp, err := runner.Run(context.Background(), Request{
-		Messages:      []llm.Message{{Role: llm.RoleUser, Content: "哈哈"}},
-		EvidenceCheck: func(context.Context) EvidenceDecision { return EvidenceDecision{} },
-	})
-	if err != nil || resp.Text != "哈哈哈" {
-		t.Fatalf("resp=%#v err=%v", resp, err)
-	}
-
-	searchResult, _ := json.Marshal(webSearchResult{Status: "ok", StopReason: "sufficient_evidence", Sources: []string{"https://a.example"}, Content: "x"})
-	client = &scriptedClient{responses: []string{
-		`{"action":"tool","tool":"web_search","input":{"query":"x"}}`,
-		`{"action":"final","content":"查到了（来源：https://a.example）"}`,
-	}}
-	runner, err = NewRunner(client, Config{MaxSteps: 3, ProtocolRepairLimit: 3}, NewToolRegistry(&recordingSearchTool{output: string(searchResult)}))
-	if err != nil {
-		t.Fatal(err)
-	}
-	checks := 0
-	if _, err := runner.Run(context.Background(), Request{
-		Messages:      []llm.Message{{Role: llm.RoleUser, Content: "x 发布了吗"}},
-		EvidenceCheck: func(context.Context) EvidenceDecision { checks++; return EvidenceDecision{Needed: true} },
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if checks != 0 {
-		t.Fatalf("已经检索过仍去等判断: checks=%d", checks)
-	}
-}
-
 // 检索过后的终稿复核：打回后的第二稿也复核，最多复核两次，第三稿放行。没检索过的轮次不复核。
 func TestRunnerFinalReviewSendsBackUnsupportedNegationOnce(t *testing.T) {
 	searchResult, _ := json.Marshal(webSearchResult{
@@ -790,5 +484,51 @@ func TestRunnerFinalReviewSendsBackUnsupportedNegationOnce(t *testing.T) {
 	}
 	if calls != 0 {
 		t.Fatalf("没检索过也去复核了: calls=%d", calls)
+	}
+}
+
+type nativeReviewDraftClient struct{ requests []llm.GenerateRequest }
+
+func (c *nativeReviewDraftClient) Generate(_ context.Context, req llm.GenerateRequest) (*llm.GenerateResponse, error) {
+	c.requests = append(c.requests, req)
+	if len(c.requests) == 1 {
+		return &llm.GenerateResponse{ToolCalls: []llm.ToolCall{{ID: "search", Name: WebSearchToolName, Arguments: map[string]any{"query": "feature"}}}}, nil
+	}
+	draft := "未验证的具体断言"
+	if len(c.requests) > 2 {
+		draft = "该具体能力本次未确认"
+	}
+	return &llm.GenerateResponse{ToolCalls: []llm.ToolCall{{ID: "final", Name: finalizeToolName, Arguments: map[string]any{"content": draft}}}}, nil
+}
+func TestRunnerFinalReviewPreservesNativeDraftForRevision(t *testing.T) {
+	for _, maxSteps := range []int{1, 3} {
+		t.Run(fmt.Sprintf("steps_%d", maxSteps), func(t *testing.T) {
+			client := &nativeReviewDraftClient{}
+			runner, err := NewRunner(client, Config{MaxSteps: maxSteps}, NewToolRegistry(&recordingSearchTool{output: `{"status":"ok","content":"项目介绍","sources":["https://example.com/docs"]}`}))
+			if err != nil {
+				t.Fatal(err)
+			}
+			resp, err := runner.Run(context.Background(), Request{Messages: []llm.Message{{Role: llm.RoleUser, Content: "查能力"}}, FinalReview: func(_ context.Context, draft string, _ []Step) string {
+				if draft == "未验证的具体断言" {
+					return "删掉这条缺证据的断言"
+				}
+				return ""
+			}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if resp.Text != "该具体能力本次未确认" {
+				t.Fatalf("答复=%s", resp.Text)
+			}
+			found := false
+			for _, m := range client.requests[2].Messages {
+				if m.Role == llm.RoleAssistant && m.Content == "未验证的具体断言" {
+					found = true
+				}
+			}
+			if !found {
+				t.Fatal("原生 finalize 的草稿丢失，下一轮看不到要修改的正文")
+			}
+		})
 	}
 }

@@ -17,7 +17,7 @@ import (
 )
 
 // 搜索引擎模式：web_search 不走搜索 API，而是用一次性沙盒浏览器打开搜索引擎的结果页，
-// 从页面上取结果。对模型来说仍然是同一个 web_search，证据门控、claims 和来源校验
+// 从页面上取结果。对模型来说仍然是同一个 web_search，claims 和来源校验
 // 都照旧生效——以前关掉联网搜索、只在提示词里叫模型「用 browser_render 打开 Google」，
 // 模型经常干脆不查，门控也认不出浏览器那条路。
 
@@ -226,6 +226,19 @@ func unwrapSearchEngineLink(raw string) string {
 	host := strings.ToLower(parsed.Hostname())
 	query := parsed.Query()
 	switch {
+	case host == "translate.google.com":
+		target := query.Get("u")
+		if target == "" {
+			// 搜索页有时把整串翻译参数放进 client，分隔符是编码后的 JSON 转义。
+			decoded, err := url.QueryUnescape(parsed.RawQuery)
+			if err == nil && strings.Contains(decoded, `\u0026`) {
+				values, _ := url.ParseQuery(strings.ReplaceAll(decoded, `\u0026`, "&"))
+				target = values.Get("u")
+			}
+		}
+		if strings.HasPrefix(target, "https://") || strings.HasPrefix(target, "http://") {
+			return target
+		}
 	case strings.Contains(host, "google.") && parsed.Path == "/url":
 		for _, key := range []string{"q", "url"} {
 			if target := query.Get(key); strings.HasPrefix(target, "http") {

@@ -60,7 +60,7 @@ func finalizeContentLayoutIssue(content string) string {
 // 伪装成 silent（8c693bbd）。
 func finalizeToolDefinition(ledger *claimEvidenceLedger, imagePending bool, extra ...FinalizeField) llm.ToolDefinition {
 	properties := map[string]any{
-		"content":       toolStringParam("最终回复，silent 时留空；禁真实换行，分条 [diana-msg]，换行 [diana-line]；勿写 JSON"),
+		"content":       toolStringParam("正文，按会话要求附链接；silent空；禁真换行，分条[diana-msg]，换行[diana-line]；勿写JSON"),
 		"silent":        toolBoolParam("true 则本轮不发消息。仅无话可说或已道别时用，拒绝要说出来；工具调用旁的正文不算说过"),
 		"silent_reason": toolStringParam("不回复的原因，只进日志"),
 	}
@@ -76,7 +76,7 @@ func finalizeToolDefinition(ledger *claimEvidenceLedger, imagePending bool, extr
 	}
 	return llm.ToolDefinition{
 		Name:        finalizeToolName,
-		Description: "结束本轮并提交最终答复，不再需要其他工具时调用。",
+		Description: "提交最终答复。联网调研正文附实际来源链接；用户或会话明确禁用链接时不附。逐句核对外部事实是否被已读原文直接支持；目录、搜索摘要、页面没有提及均不证明功能存在或不存在，缺证据只说本次未确认。不能补出未读到的工具名、委托或并发机制。具体技术、项目能力、版本与价格先搜索核实。未读取自身项目实现时，架构建议写成条件。用户明确不联网时遵守。",
 		Parameters:  toolObjectSchema(required, properties),
 		// 畸形的收尾是唯一一种必然要花掉一整轮修复的协议错误，值得在解码层约束。
 		Strict: true,

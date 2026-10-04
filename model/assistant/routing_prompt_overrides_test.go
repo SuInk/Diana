@@ -75,7 +75,7 @@ func TestReplyIntentPromptsUseOverrides(t *testing.T) {
 		promptReplyIntentToolsSpec.Key: "工具一律不选。",
 	}
 	system, _ := replyIntentPrompts(agent.NewToolRegistry(), overrides)
-	want := "只在用户说「画」时出图。工具一律不选。\n\n输出格式：\n" + `{"action":"none","prompt":"","tools":[],"context_message_ids":[],"keep_older_summary":false,"needs_evidence":false}`
+	want := "只在用户说「画」时出图。工具一律不选。\n\n输出格式：\n" + `{"action":"none","prompt":"","tools":[],"context_message_ids":[],"keep_older_summary":false}`
 	if system != want {
 		t.Fatalf("system = %q", system)
 	}

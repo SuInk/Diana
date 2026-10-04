@@ -152,25 +152,10 @@ type Request struct {
 	LoadedTools []string
 	// ToolsLoaded is called immediately, including when a later model call fails.
 	ToolsLoaded func([]string)
-	// RequireEvidence 让本轮必须先检索再收口：模型不调用 web_search 就直接
-	// 给终稿时会被打回，要求它先查。调用方判断这一轮在问外部事实时置位。
-	// 没有 web_search 工具时该标记自动失效，不会把回复卡死。
-	RequireEvidence bool
-	// EvidenceCheck 是 RequireEvidence 的延迟版：调用方在起跑时并行发起判断，
-	// Runner 只在模型一次都没检索就要收尾时才调用它取结果，Needed 为 true 就按
-	// RequireEvidence 处理；带了 Query 时 Runner 直接替模型查一次，不再等它自己
-	// 去查。每轮最多调用一次；为 nil 时不做这项检查。
-	EvidenceCheck func(context.Context) EvidenceDecision
 	// FinalReview 在本轮检索或读过网页、模型准备收尾时复核草稿一次。evidence 是
 	// 本轮 web_search / browser_render 的调用记录。返回非空字符串就把它作为修复
 	// 提示打回去，空串放行。为 nil 时不复核。
 	FinalReview func(ctx context.Context, draft string, evidence []Step) string
-}
-
-// EvidenceDecision 是 EvidenceCheck 的判断结果。Query 是判断方顺手给出的检索词。
-type EvidenceDecision struct {
-	Needed bool
-	Query  string
 }
 
 type Response struct {

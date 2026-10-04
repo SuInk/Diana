@@ -580,7 +580,7 @@ func TestRunnerSkipsClockWhenCallerAlreadyProvidesOne(t *testing.T) {
 func TestRunnerPromptExplainsBoundedIterativeWebSearch(t *testing.T) {
 	runner := &Runner{cfg: Config{MaxSteps: 8}.WithDefaults(), registry: NewToolRegistry(&countingWebSearchTool{})}
 	prompt := runner.systemPrompt()
-	for _, expected := range []string{"搜索词是可迭代假设", "queries 追加 1–3 个", "搜索次数不单独设限", "一轮最多 8 步", "不要把完整聊天记录", "insufficient_evidence", "优先核对官方或法定披露来源"} {
+	for _, expected := range []string{"围绕一个信息缺口", "queries 仅补充确有区别的查证角度", "搜索次数不单独设限", "一轮最多 8 步", "不要把完整聊天记录", "insufficient_evidence", "优先核对官方或法定披露来源"} {
 		if !strings.Contains(prompt, expected) {
 			t.Fatalf("prompt does not contain %q: %s", expected, prompt)
 		}

@@ -619,7 +619,8 @@ func parseRenderedPage(data []byte, requestedURL string, maxChars int, truncated
 			page.URL = resolved
 		}
 	}
-	content := firstNonNilNode(findElement(document, "main"), findElement(document, "article"), findElement(document, "body"), document)
+	// GitHub 的 main 还包含完整文件列表；article 才是 README 正文。
+	content := firstNonNilNode(findElement(document, "article"), findElement(document, "main"), findElement(document, "body"), document)
 	fullText := normalizeRenderedText(visibleNodeText(content))
 	page.Text = truncateText(fullText, maxChars)
 	if maxChars > 0 && len([]rune(fullText)) > maxChars {
@@ -711,9 +712,19 @@ func visibleNodeText(node *html.Node) string {
 			return
 		}
 		if current.Type == html.ElementNode {
+			// 文档目录只重复章节标题，不能挤掉正文里的实现与条件。
+			for _, attr := range current.Attr {
+				if attr.Key == "class" || attr.Key == "id" {
+					for _, token := range strings.Fields(strings.ToLower(attr.Val)) {
+						if token == "toc" || token == "table-of-contents" {
+							return
+						}
+					}
+				}
+			}
 			tag := strings.ToLower(current.Data)
 			switch tag {
-			case "script", "style", "noscript", "svg", "canvas", "template", "head":
+			case "script", "style", "noscript", "svg", "canvas", "template", "head", "nav":
 				return
 			}
 			hidden = hidden || nodeIsHidden(current)
@@ -911,8 +922,8 @@ func NewBrowserRenderTool(renderer PageRenderer) *BrowserRenderTool {
 func (t *BrowserRenderTool) Name() string { return "browser_render" }
 
 func (t *BrowserRenderTool) Description() string {
-	return `用一次性沙箱浏览器读取公网网页，不带用户登录态。返回正文和页面上的链接（links），要看站内别的页面就从 links 里取真实网址再打开，不要猜网址。` +
-		`GitHub Release 地址改读官方 API 的版本与发布时间。`
+	return `用一次性沙箱浏览器读取公网网页，不带用户登录态。技术、项目能力、价格或版本调研，在搜索定位到出处后用本工具核对一手原文，不能只靠搜索摘要收尾。返回正文和页面上的链接（links），要看站内别的页面就从 links 里取真实网址再打开，不要猜网址。` +
+		`正文截断或只有目录时，填 find 在整页定位关键段落，不能把目录标题当实现依据。GitHub Release 地址改读官方 API 的版本与发布时间。`
 }
 
 func (t *BrowserRenderTool) InputSchema() map[string]any {
@@ -924,9 +935,16 @@ func (t *BrowserRenderTool) InputSchema() map[string]any {
 
 func (t *BrowserRenderTool) Run(ctx context.Context, input map[string]any) (string, error) {
 	rawURL := stringFromInput(input, "url")
+	if strings.TrimSpace(rawURL) == "" {
+		return "", errors.New(`browser_render 缺少必填 url。请重新调用，arguments 形如 {"url":"完整的 HTTP(S) 网址","find":"可选页内关键词"}。不要只发工具名，也不要把 url 放进 input 子对象；搜索时使用已编码关键词的搜索引擎网址，读来源时照抄来源 URL。`)
+	}
 	page, err := t.renderer.Render(ctx, rawURL)
 	if err != nil {
 		return "", err
 	}
-	return browserRenderOutput(page, stringFromInput(input, "find"))
+	budget := ToolOutputBudget(ctx)
+	if budget <= 0 {
+		budget = DefaultMaxToolOutputChars
+	}
+	return browserRenderOutputWithBudget(page, stringFromInput(input, "find"), budget)
 }

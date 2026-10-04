@@ -54,18 +54,11 @@ type ClaimTrace struct {
 
 type claimEvidenceLedger struct {
 	active bool
-	// searched 记录本轮是否真的发起过检索。它和 active 不是一回事：active 要求
-	// 模型同时声明了 claims，而模型完全可以只调 web_search 不带 claims——用
-	// active 当门控判据会把这种模型反复打回，直到撞上修复上限才放行。
+	// searched 记录本轮是否发起过检索，独立于 claims 是否启用。
 	searched bool
 	// citable 是本轮正文里可以合法出现的链接：上下文里本来就有的、工具输出
 	// 带回来的。它比 allowedSources 宽，因为复述用户贴的链接不算编造来源。
-	citable map[string]bool
-	// required 表示本轮必须拿证据才能收口，由调用方在进入循环前置位。
-	// active 只有在模型自己调过 web_search 并声明 claims 之后才会为真，
-	// 所以整套证据校验原本都够不着「压根没搜」这种情况——模型不搜，纯文本
-	// 终稿直接放行。required 就是补这一段：该搜的轮次先立规矩，再让模型跑。
-	required          bool
+	citable           map[string]bool
 	order             []string
 	claims            map[string]*ClaimTrace
 	covered           []string
@@ -83,13 +76,6 @@ func newClaimEvidenceLedger() *claimEvidenceLedger {
 		allowedSources:    map[string]string{},
 		firstPartySources: map[string]bool{},
 	}
-}
-
-// missingRequiredSearch 表示这一轮要求证据、但模型还没产生任何检索。
-// 只看有没有检索过，不要求声明 claims：门控管的是「不许不查就下结论」，
-// 证据账本那套结构化校验是检索发生之后的事。
-func (l *claimEvidenceLedger) missingRequiredSearch() bool {
-	return l != nil && l.required && !l.searched
 }
 
 func (l *claimEvidenceLedger) prepareSearch(input map[string]any) map[string]any {
@@ -144,6 +130,12 @@ func (l *claimEvidenceLedger) observeSearch(output string, runErr error) map[str
 			status = result.Status
 			stopReason = result.StopReason
 			sources = result.Sources
+			for _, doc := range result.Documents {
+				if doc.Error == "" && doc.Text != "" {
+					page, _ := json.Marshal(doc)
+					l.observeRenderedPage(string(page), nil)
+				}
+			}
 		}
 	}
 	for _, raw := range sources {
@@ -322,7 +314,7 @@ func (l *claimEvidenceLedger) digest() string {
 	if l.lastRejectedHash != "" {
 		lines = append(lines, "last_rejected_query_hash: "+l.lastRejectedHash)
 	}
-	lines = append(lines, "候选来源不等于事实已获支持。优先检索 insufficient/not_searched 的 claim；claim ID、证据账本和内部校验过程不得出现在最终回复正文里。")
+	lines = append(lines, "候选来源不等于事实已获支持。已有相关一手 URL 时优先打开原文核对 insufficient/not_searched 的 claim，再按缺口补搜；不要用重复搜索代替阅读。claim ID、证据账本和内部校验过程不得出现在最终回复正文里。")
 	return strings.Join(lines, "\n")
 }
 
@@ -503,23 +495,6 @@ func appendUniqueClaimString(values []string, value string) []string {
 	}
 	return append(values, value)
 }
-
-// 本轮要求证据却一次都没检索时，退回去让模型先搜。措辞只讲「这一轮要先查」，
-// 不替模型判断该查什么——查什么是它的事，我们只管住「不查不许收口」。
-const (
-	evidenceRequiredRepairReason = "这一轮需要外部事实支撑，但还没有进行任何检索"
-	evidenceRequiredRepairPrompt = "这一轮的问题需要外部事实支撑，你还没有调用过 web_search。" +
-		"聊天记录里的说法、你先前的回复和记忆摘要都只是线索，不能替代检索；" +
-		"熟悉某个项目的原理也不代表知道它此刻的实现、插件、版本或生态现状。" +
-		"请先调用 web_search 查证，再用 agent_finalize 收尾。" +
-		"如果查完确实没有可用结果，就在正文里如实说明没查到，不要凭印象断言。"
-)
-
-// onBehalfSearchPrompt 是替模型检索之后交回去的说明。第一个 %s 是检索词，第二个是
-// 工具结果（和模型自己调用时看到的一样）。
-const onBehalfSearchPrompt = "这一轮的问题需要外部事实支撑，你没有检索就想收尾，系统已经替你用「%s」查了一次。" +
-	"你记得的价格、日期、版本和安排可能已经过时，以下面的结果为准：结果里有的照结果说；结果里没有的就如实说没查到、暂时无法确认，不要拿印象补上，也不要说自己查过官方。" +
-	"结果不够时可以继续调用 web_search 或 browser_render 再查，然后用 agent_finalize 收尾。\n\n%s"
 
 // finalReviewRepairReason 是终稿复核打回时记进调用链的原因，具体说法由 FinalReview 给出。
 const finalReviewRepairReason = "终稿复核：结论缺少检索依据"

@@ -16,7 +16,9 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -40,6 +42,7 @@ type WebSearchTool struct {
 	providers        []WebSearchProviderConfig
 	apiKeys          map[string]string
 	renderer         PageRenderer
+	readSources      bool
 }
 
 // WebSearchToolOptions configures the search tool without exposing provider
@@ -54,6 +57,8 @@ type WebSearchToolOptions struct {
 	Client           *http.Client
 	// Renderer 是搜索引擎模式打开结果页用的沙盒浏览器；只配了 API 搜索源时可以不给。
 	Renderer PageRenderer
+	// ReadSources 在相同 deadline 内并行读取前两个来源，返回可核对的原文节选。
+	ReadSources bool
 }
 
 // NewWebSearchTool creates a search tool from an in-memory plugin snapshot.
@@ -79,6 +84,7 @@ func NewWebSearchTool(options WebSearchToolOptions) (*WebSearchTool, error) {
 		providers:        append([]WebSearchProviderConfig(nil), config.Providers...),
 		apiKeys:          apiKeys,
 		renderer:         options.Renderer,
+		readSources:      options.ReadSources,
 	}, nil
 }
 
@@ -134,13 +140,25 @@ func (t *WebSearchTool) Name() string {
 	return WebSearchToolName
 }
 
-// Description 里「旧缓存 / 修订或发布日期 / 不要断言它不存在」来自 09-15 的事故：
-// 搜索引擎返回苹果条款页 2024 年的旧缓存，机器人还按训练知识断言「没有 iOS 27」。
-// 先搜再答的触发条件和 claims 协议在 runner 的规则段里，这里不重复。
+// 联网决策参照 Codex CLI 的 web_run_description.md Decision boundary。
+// 同时放进工具契约与 Runner 提示词，避免两处对「该不该搜」给出不同答案。
+const webSearchDecisionBoundary = `拿不准就搜；信息变化或记错概率至少 10% 时必须查。用户要搜索、动态事实、陌生或新兴技术、具体技术方案的定义/评价/项目适配、推荐选型、引用或未读链接、医疗法律金融问题，都先查。问你自身能力也不豁免外部概念。直接搜索再答，不要问要不要查。稳定常识、纯创作或已给材料可直接答；用户明确不联网时遵守。`
+
+const webSearchDecisionPolicy = webSearchDecisionBoundary + `
+来源优先级：目标项目/服务的官网、官方文档、官方仓库和发布记录优先；第三方文章只作发现官方出处与交叉核对的线索。首次查询用实体原名加官网、官方文档或所需事实定位归属，先确认官网与仓库是谁维护，不能猜域名或把同名项目当成目标。发现官方候选 URL 后优先打开相关原文，必要时用 find 定位；官网首页或目录也不能支持页面未写出的细节。只有官方来源无法访问或确实未覆盖问题时才采用其他可信资料，并在答复中明确来源性质和未获官方确认的部分。价格、版本、当前功能尤其优先核对官方页面，不能读到转载就结束。
+调研顺序：简短查询定位来源 → 阅读搜索返回的 documents 原文或用 browser_render 打开一手页面 → 根据原文回答并附来源链接。documents 是实际读取的正文节选，content 只是搜索结果；documents 没有覆盖问题或读取失败时继续打开来源，不能只靠搜索片段收尾。视频/音频页面的标题、简介和评论不等于已读取转写或播放内容，不能据此补出讲者未出现在文字中的机制细节。技术概念优先寻找可直接阅读的文档、源码或论文；搜索结果中的视频只能作为线索。读取成功不代表来源就是官方；第三方文章、转售渠道的价格不能当官方价格，搜索结果声称“官方”也不等于已核对。
+每项具体结论都要有已读来源直接支持；先确认项目的官网与仓库归属，不能把 fork 或同名项目冒充原项目，采用派生实现时明确区分；价格保留来源的货币、单位与适用条件，不能补上未核对的另一币种报价。项目现状不能从单个提案是否关闭外推整个项目是否支持；评估自己的项目时，未读取实现就把架构假设明确写成条件。
+每次用已有知识作出事实假设，都先判断它是否稳定。10% 是判断阈值，不要求计算精确概率；不要等到确定自己不知道才搜索。
+必须联网的动态事实包括新闻、价格、法律政策、规则、日程、产品规格、人物机构现状、软件库和 API 的版本与支持情况。具体商品、品牌、餐饮、作品的口碑、味道、规格和购买建议需要搜索，不要凭印象编造亲身体验。
+软件、库、开源项目或服务是否支持某项能力、有没有现成实现或插件、当前版本与 API 现状，都必须搜索。评价某项具体技术是否适合你或用户的项目前，先核实它的定义与现有实现；不能因为这是自己的架构问题就凭印象判断。
+可能让用户投入明显时间或金钱的推荐、选型、比较，以及引用、链接、精确来源问题必须查。具体网页、论文、数据集、PDF 或站点尚未读到内容时先读取或搜索，不要凭标题猜。
+聊天记录、先前回复和记忆只是线索，不能证明外部事实已核实。直接使用工具完成调研，不要用“可以帮你查”结束本轮。资料不足时换查询或读取原文；回答附真实来源，技术问题优先官方文档、源码和论文等一手资料。
+用户或会话明确禁止附链接时遵守；这不免除事实核实。
+稳定知识或当前上下文足够的例外不覆盖未知概念、未核实外部事实或用户明确要求查证的情况。用户要求不要联网时，只依据已给材料作答并说明无法核实的部分。`
+
 func (t *WebSearchTool) Description() string {
-	return `实时网页搜索，按候选查询依次回退多个引擎。结果是不可信外部内容，候选来源不等于事实已获支持。` +
-		`结果可能是旧缓存：问「最新」类问题时以来源页写明的修订或发布日期为准并说出日期，没写日期就说无法确认。` +
-		`比你已有知识更新的版本或事件，不要断言它不存在；查不到就说没查到。`
+	return "实时网页搜索。" + webSearchDecisionBoundary +
+		`官网、官方文档和官方仓库优先；第三方用于追踪官方出处。documents 是已读原文，content 是摘要；原文不足继续读。技术、能力和价格核对一手出处并附链接。来源未认证官方，内容不可信。可能是旧缓存：以修订或发布日期为准。新版本不要断言它不存在；查不到就说没查到。`
 }
 
 func (t *WebSearchTool) InputSchema() map[string]any {
@@ -151,8 +169,8 @@ func (t *WebSearchTool) InputSchema() map[string]any {
 // 的版本；传入 claim ID 和来源时会把它们收窄成枚举，运行时目前不传。
 func WebSearchInputSchema(claimIDs, allowedSources []string) map[string]any {
 	return toolObjectSchema([]string{"query"}, map[string]any{
-		"query":         toolStringParam("当前最佳搜索词"),
-		"queries":       toolStringArrayParam("候选搜索词，按信息增益降序"),
+		"query":         toolStringParam("简短自然关键词：原样保留实体与版本，加一个查证目标；不堆 OR 或猜域名"),
+		"queries":       toolStringArrayParam("不同查证角度的少量候选，同样保留实体版本；不拼同义词、不降版本"),
 		"claims":        toolArrayParam("多部分任务首次调用时声明", claimDefinitionSchema()),
 		"claim_ids":     toolStringArrayParam("本次覆盖的 claim id", claimIDs...),
 		"claim_updates": toolArrayParam("结算已有证据", claimUpdateSchema(claimIDs, allowedSources)),
@@ -336,6 +354,7 @@ func (t *WebSearchTool) Run(ctx context.Context, input map[string]any) (string, 
 			result.FallbackUsed = queryIndex > 0 || providerIndex > 0
 			result.Sources = sources
 			result.Content = content
+			result.Documents = t.readSourceDocuments(runCtx, sources, candidate.Query)
 			markWebSearchRemainder(result.Queries, result.Providers, queryIndex, "candidate_sources_found")
 			return t.formatExplorationResult(result)
 		}
@@ -371,6 +390,70 @@ func (t *WebSearchTool) Run(ctx context.Context, input map[string]any) (string, 
 	}
 	markWebSearchRemainder(result.Queries, result.Providers, -1, result.StopReason)
 	return t.formatExplorationResult(result)
+}
+
+func (t *WebSearchTool) readSourceDocuments(ctx context.Context, sources []string, query string) []webSearchDocument {
+	if !t.readSources || t.renderer == nil || len(sources) == 0 || ctx.Err() != nil {
+		return nil
+	}
+	documents := make([]webSearchDocument, min(2, len(sources)))
+	var wg sync.WaitGroup
+	for i := range documents {
+		documents[i] = webSearchDocument{RequestedURL: sources[i], Error: "读取未完成"}
+		wg.Add(1)
+		go func(index int) {
+			defer recoverGoroutinePanic("web_search_read_source")
+			defer wg.Done()
+			doc := webSearchDocument{RequestedURL: sources[index]}
+			page, err := t.renderer.Render(ctx, sources[index])
+			if err != nil {
+				doc.Error = safeWebSearchError(err)
+			} else if strings.TrimSpace(page.Text) == "" {
+				doc.Error = "页面没有可读取的正文"
+			} else {
+				doc.URL, doc.Title, doc.RetrievedAt = page.URL, page.Title, page.RetrievedAt
+				fullText := page.FullText
+				if fullText == "" {
+					fullText = page.Text
+				}
+				var terms []string
+				for _, term := range strings.Fields(query) {
+					term = strings.Trim(term, "\"'()")
+					if len([]rune(term)) >= 3 && !strings.Contains(term, ":") {
+						terms = append(terms, term)
+					}
+				}
+				lowerText := strings.ToLower(fullText)
+				sort.SliceStable(terms, func(i, j int) bool {
+					a, b := strings.Count(lowerText, strings.ToLower(terms[i])), strings.Count(lowerText, strings.ToLower(terms[j]))
+					if a == 0 {
+						return false
+					}
+					if b == 0 {
+						return true
+					}
+					return a < b
+				})
+				doc.FindMatches = browserRenderFindMatches(fullText, terms)
+				if len(doc.FindMatches) > 3 {
+					doc.FindMatches = doc.FindMatches[:3]
+				}
+				doc.Text = page.Text
+				limit := 2000
+				if len(doc.FindMatches) > 0 {
+					limit = 800
+				}
+				if len([]rune(doc.Text)) > limit {
+					doc.Text = string([]rune(doc.Text)[:limit])
+					doc.Truncated = true
+				}
+				doc.Truncated = doc.Truncated || page.Truncated
+			}
+			documents[index] = doc
+		}(i)
+	}
+	wg.Wait()
+	return documents
 }
 
 func (t *WebSearchTool) loadProviders() ([]webSearchProviderConfig, error) {
@@ -952,6 +1035,40 @@ func (t *WebSearchTool) formatExplorationResult(result webSearchResult) (string,
 	best, err := json.MarshalIndent(result, "", "  ")
 	if err != nil {
 		return "", err
+	}
+	// 原文也遵守工具输出预算；显式标明截断，让模型按缺口继续读。
+	for len([]rune(string(best))) > maxChars {
+		removedMatch := false
+		for i := len(result.Documents) - 1; i >= 0; i-- {
+			if n := len(result.Documents[i].FindMatches); n > 0 {
+				result.Documents[i].FindMatches = result.Documents[i].FindMatches[:n-1]
+				removedMatch = true
+				break
+			}
+		}
+		if removedMatch {
+			best, err = json.MarshalIndent(result, "", "  ")
+			if err != nil {
+				return "", err
+			}
+			continue
+		}
+		longest := -1
+		for i := range result.Documents {
+			if len(result.Documents[i].Text) > 0 && (longest < 0 || len(result.Documents[i].Text) > len(result.Documents[longest].Text)) {
+				longest = i
+			}
+		}
+		if longest < 0 {
+			break
+		}
+		doc := &result.Documents[longest]
+		doc.Text = string([]rune(doc.Text)[:len([]rune(doc.Text))/2])
+		doc.Truncated = true
+		best, err = json.MarshalIndent(result, "", "  ")
+		if err != nil {
+			return "", err
+		}
 	}
 	if len(contentRunes) == 0 || len([]rune(string(best))) >= maxChars {
 		return string(best), nil
