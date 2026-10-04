@@ -146,3 +146,38 @@ func TestParallelSearchLargeResultsFinishWithinOutputBudget(t *testing.T) {
 		t.Fatal("search result formatting failed to terminate")
 	}
 }
+
+func TestParallelSearchBudgetPreservesEveryQuery(t *testing.T) {
+	renderer := PageRendererFunc(func(_ context.Context, raw string) (RenderedPage, error) {
+		u, _ := url.Parse(raw)
+		query := u.Query().Get("q")
+		var links []RenderedLink
+		for i := 0; i < 8; i++ {
+			links = append(links, RenderedLink{URL: "https://source.example/" + query + "/" + string(rune('a'+i)), Text: strings.Repeat("Useful documentation ", 4), Snippet: strings.Repeat("Evidence context ", 40)})
+		}
+		return RenderedPage{URL: raw, Text: "Search results", Links: links}, nil
+	})
+	tool := searchEngineTestTool(t, renderer, "google")
+	tool.maxBytes = 5000
+	queries := []string{"alpha", "beta", "gamma", "delta"}
+	raw, err := tool.Run(context.Background(), map[string]any{"queries": queries})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got webSearchResult
+	if err = json.Unmarshal([]byte(raw), &got); err != nil {
+		t.Fatal(err)
+	}
+	represented := map[string]bool{}
+	for _, hit := range got.Results {
+		represented[hit.Query] = true
+	}
+	for _, query := range queries {
+		if !represented[query] {
+			t.Fatalf("successful query %q lost its discovery hits: %s", query, raw)
+		}
+	}
+	if !got.Truncated || len([]rune(raw)) > 5000 || got.Budget.ProviderCalls != 4 {
+		t.Fatalf("invalid search budget: %s", raw)
+	}
+}

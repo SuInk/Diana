@@ -109,7 +109,6 @@ func (t *WebSearchTool) Run(ctx context.Context, input map[string]any) (string, 
 				batch.Sources = append(batch.Sources, url)
 			}
 		}
-		batch.Results = append(batch.Results, result.Results...)
 		if result.Content != "" && len(result.Results) == 0 {
 			batch.Content += fmt.Sprintf("Query: %s\n%s\n", candidates[i].Query, result.Content)
 		}
@@ -127,6 +126,20 @@ func (t *WebSearchTool) Run(ctx context.Context, input map[string]any) (string, 
 			} else {
 				batch.Status = mergeWebSearchOutcome(batch.Status, status)
 			}
+		}
+	}
+	// Interleave hits by query so output truncation cannot privilege the first
+	// query merely because its results were appended first.
+	for depth := 0; ; depth++ {
+		added := false
+		for _, result := range results {
+			if depth < len(result.Results) {
+				batch.Results = append(batch.Results, result.Results[depth])
+				added = true
+			}
+		}
+		if !added {
+			break
 		}
 	}
 	return t.formatExplorationResult(batch)

@@ -1,0 +1,28 @@
+[
+  {
+    "Name": "implicit-code-mode-full",
+    "Question": "嘉然你觉得Code Mode适合我的机器人吗？会不会让工具调用更慢？",
+    "Full": true,
+    "Search": true
+  },
+  {
+    "Name": "go-current",
+    "Question": "现在Go最新稳定版本是哪个？发布日期是多少？官方安装页面在哪里？",
+    "Search": true
+  },
+  {
+    "Name": "misleading-code-mode",
+    "Question": "Code Mode不就是只能用Python串行调工具吗？你确认下。",
+    "Search": true
+  },
+  {
+    "Name": "parallel-research",
+    "Question": "查一下Memoh、OpenCode和Pi Agent各自怎么提供联网搜索、网页读取和并行调研。优先官方源码；没有读到的部分直接说明，不要猜。",
+    "Search": true
+  },
+  {
+    "Name": "explicit-off-new",
+    "Question": "不要联网，只按这段材料总结：A方案用浏览器搜索，B方案用付费API，两者都支持并行查询。不要添加材料之外的功能。",
+    "Search": false
+  }
+]

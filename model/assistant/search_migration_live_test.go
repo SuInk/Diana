@@ -14,6 +14,11 @@ import (
 	"github.com/SuInk/diana/model/llm"
 )
 
+type searchMigrationCase struct {
+	Name, Question     string
+	Full, Search, Opus bool
+}
+
 // Opt-in, read-only: the production plugin factory, complete current Runner,
 // real LLM and disposable browser. No chat delivery or runtime database writes.
 func TestLiveSearchMigration(t *testing.T) {
@@ -44,10 +49,7 @@ func TestLiveSearchMigration(t *testing.T) {
 		t.Fatal("cannot initialize replay model")
 	}
 	renderer := agent.NewSandboxedHeadlessBrowser(agent.SandboxedBrowserConfig{Window: agent.BrowserWindowHidden, Timeout: 30 * time.Second})
-	for _, tc := range []struct {
-		name, question     string
-		full, search, opus bool
-	}{
+	cases := []searchMigrationCase{
 		{"opus-original-full", "", true, true, true},
 		{"opus-leading-full-1", "嘉然 Claude Opus5.5是不是根本不存在？", true, true, true},
 		{"opus-leading-full-2", "嘉然 Claude Opus5.5是不是根本不存在？", true, true, true},
@@ -56,8 +58,20 @@ func TestLiveSearchMigration(t *testing.T) {
 		{"unknown-version", "Claude Opus 999.123 已经发布了吗？查一下官网。", false, true, false},
 		{"explicit-off", "不要联网，只根据材料解释：Code Mode 使用代码组合多个工具调用。", false, false, false},
 		{"arithmetic", "2 加 2 等于多少？", false, false, false},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
+	}
+	if path := os.Getenv("DIANA_SEARCH_REPLAY_CASES"); path != "" {
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var configured []searchMigrationCase
+		if err = json.Unmarshal(raw, &configured); err != nil || len(configured) == 0 {
+			t.Fatal("invalid replay cases")
+		}
+		cases = configured
+	}
+	for _, tc := range cases {
+		t.Run(tc.Name, func(t *testing.T) {
 			plugins := NewPluginManager(&WebSearchPlugin{renderer: renderer}, NewSandboxedBrowserRenderPlugin())
 			plugins.Restore(bundle.PluginStates)
 			cfg := bundle.BotConfig.WithDefaults()
@@ -79,30 +93,32 @@ func TestLiveSearchMigration(t *testing.T) {
 			if _, ok := registry.Get(agent.WebSearchToolName); !ok {
 				t.Fatal("production search plugin unavailable")
 			}
-			event := MessageEvent{Kind: EventKindGroup, SelfID: "search-replay", GroupID: "search-replay", UserID: "search-replay", MessageID: tc.name, RawMessage: tc.question, Segments: []MessageSegment{{Type: "text", Data: map[string]string{"text": tc.question}}}}
+			event := MessageEvent{Kind: EventKindGroup, SelfID: "search-replay", GroupID: "search-replay", UserID: "search-replay", MessageID: tc.Name, RawMessage: tc.Question, Segments: []MessageSegment{{Type: "text", Data: map[string]string{"text": tc.Question}}}}
 			relation := RelationshipPolicy{}
-			messages := []llm.Message{{Role: llm.RoleSystem, Content: rt.systemPromptWithRelationshipAndAgentTools(event, nil, false, relation, true, registry)}, {Role: llm.RoleUser, Content: tc.question}}
-			if tc.full {
+			messages := []llm.Message{{Role: llm.RoleSystem, Content: rt.systemPromptWithRelationshipAndAgentTools(event, nil, false, relation, true, registry)}, {Role: llm.RoleUser, Content: tc.Question}}
+			if tc.Full {
 				if len(bundle.Messages) < 2 {
 					t.Fatal("missing complete historical context")
 				}
 				messages = append([]llm.Message(nil), bundle.Messages[1:]...) // current Runner regenerates only its own protocol prompt
-				if tc.question != "" {
-					messages[len(messages)-1].Content = tc.question
+				if tc.Question != "" {
+					messages[len(messages)-1].Content = tc.Question
 				}
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
 			defer cancel()
+			started := time.Now()
 			text, runErr := rt.generateReply(ctx, cfg, event, relation, messages, registry)
+			duration := time.Since(started)
 			mu.Lock()
 			snapshot := append([]agent.Step(nil), steps...)
 			mu.Unlock()
-			resp := &agent.Response{Text: text, Steps: snapshot, Model: bundle.Config.Model}
+			resp := &agent.Response{Text: text, Steps: snapshot, Model: bundle.Config.Model, DurationMS: duration.Milliseconds()}
 			for _, step := range snapshot {
 				input, _ := json.Marshal(step.Input)
 				t.Logf("CALL %s %s error=%s", step.Tool, input, step.Error)
 			}
-			artifact := map[string]any{"case": tc.name, "model": bundle.Config.Model, "messages": len(messages), "model_calls": recorder.calls, "response": resp}
+			artifact := map[string]any{"case": tc.Name, "model": bundle.Config.Model, "messages": len(messages), "model_calls": recorder.calls, "response": resp}
 			if runErr != nil {
 				artifact["error"] = runErr.Error()
 			}
@@ -112,7 +128,7 @@ func TestLiveSearchMigration(t *testing.T) {
 						t.Fatal(err)
 					}
 					b, _ := json.MarshalIndent(artifact, "", "  ")
-					if err := os.WriteFile(filepath.Join(dir, tc.name+".json"), b, 0600); err != nil {
+					if err := os.WriteFile(filepath.Join(dir, tc.Name+".json"), b, 0600); err != nil {
 						t.Fatal(err)
 					}
 				}
@@ -121,7 +137,7 @@ func TestLiveSearchMigration(t *testing.T) {
 			if runErr != nil {
 				t.Fatal(runErr)
 			}
-			t.Logf("FINAL model_calls=%d text=%s", len(recorder.calls), resp.Text)
+			t.Logf("FINAL model_calls=%d duration_ms=%d text=%s", len(recorder.calls), resp.DurationMS, resp.Text)
 			searches := 0
 			var read []agent.Step
 			for _, step := range resp.Steps {
@@ -132,15 +148,15 @@ func TestLiveSearchMigration(t *testing.T) {
 					read = append(read, step)
 				}
 			}
-			if (searches > 0) != tc.search {
-				t.Errorf("search=%d expected=%t", searches, tc.search)
+			if (searches > 0) != tc.Search {
+				t.Errorf("search=%d expected=%t", searches, tc.Search)
 			}
-			if !tc.search {
+			if !tc.Search {
 				return
 			}
 			// Answer quality is judged separately, never fed back into the runtime.
 			reference := ""
-			if tc.opus {
+			if tc.Opus {
 				page, err := renderer.Render(ctx, "https://www.anthropic.com/claude-opus-5-5")
 				if err != nil {
 					t.Fatal("cannot read independent official reference:", err)

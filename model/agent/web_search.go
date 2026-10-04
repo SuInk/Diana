@@ -956,20 +956,26 @@ func (t *WebSearchTool) formatExplorationResult(result webSearchResult) (string,
 				changed = true
 			}
 		}
+		// Discovery hits are useful to the model; duplicated source lists and
+		// provider diagnostics must not consume their output budget first.
+		if !changed && len(result.Providers) > 0 {
+			result.Providers = nil
+			changed = true
+		}
+		if !changed && len(result.Attempts) > 0 {
+			result.Attempts = nil
+			changed = true
+		}
+		if !changed && len(result.Results) > 0 && len(result.Sources) > 0 {
+			result.Sources = nil
+			changed = true
+		}
 		if !changed && len(result.Results) > 1 {
 			result.Results = result.Results[:len(result.Results)-1]
 			changed = true
 		}
 		if !changed && len(result.Sources) > 1 {
 			result.Sources = result.Sources[:len(result.Sources)-1]
-			changed = true
-		}
-		if !changed && len(result.Providers) > 0 {
-			result.Providers = result.Providers[:len(result.Providers)-1]
-			changed = true
-		}
-		if !changed && len(result.Attempts) > 0 {
-			result.Attempts = result.Attempts[:len(result.Attempts)-1]
 			changed = true
 		}
 		if !changed && len(result.Queries) > 0 {
