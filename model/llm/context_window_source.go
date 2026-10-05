@@ -5,7 +5,7 @@ package llm
 
 import "strings"
 
-// 上下文窗口只认用户在 WebUI 里填的值，没填按兜底常量 128000。
+// 上下文窗口使用用户填写的值（提供商统一覆盖或单个模型覆盖），否则使用兜底常量。
 //
 // 不从模型清单或 models.dev 推断：第三方目录某一刻的数据一旦参与计算，就和用户
 // 手填的值分不清，目录一变生效值也跟着变。界面上新建配置默认就填 128000，要更准就
@@ -18,14 +18,14 @@ type ContextWindowSource string
 const (
 	// ContextWindowSourceUser 是用户手填的值。
 	ContextWindowSourceUser ContextWindowSource = "user"
+	// ContextWindowSourceModel 是当前模型的手动覆盖值。
+	ContextWindowSourceModel ContextWindowSource = "model"
 	// ContextWindowSourceFallback 是没填时的兜底常量。
 	ContextWindowSourceFallback ContextWindowSource = "fallback"
 )
 
 // ModelInfoFor 返回同步下来的模型清单里某个模型的条目。模型名在聚合网关上常带
 // 供应商命名空间（openai/gpt-4o），所以精确匹配不中时再按去掉命名空间比一次。
-//
-// 它不再参与窗口计算，只用来给界面提供「这个模型的清单里写着多少」这个参考值。
 func (cfg ProviderConfig) ModelInfoFor(model string) (ModelInfo, bool) {
 	model = strings.TrimSpace(model)
 	if model == "" {
@@ -57,6 +57,12 @@ func bareModelName(model string) string {
 func (cfg ProviderConfig) ResolveContextWindowTokens() (int64, ContextWindowSource) {
 	if cfg.ContextWindowTokens > 0 {
 		return cfg.ContextWindowTokens, ContextWindowSourceUser
+	}
+	// 手动设置只按完整 ID 匹配，不能把不同命名空间下的同名模型当作同一项。
+	for _, info := range cfg.Models {
+		if strings.TrimSpace(info.ID) == strings.TrimSpace(cfg.Model) && info.ContextWindowOverride > 0 {
+			return info.ContextWindowOverride, ContextWindowSourceModel
+		}
 	}
 	return DefaultContextWindowTokens, ContextWindowSourceFallback
 }

@@ -433,7 +433,7 @@ func (r *Runtime) runRawLLMProviderForGroup(ctx context.Context, group string, r
 			}
 		} else {
 			var roleErr error
-			profiles, roleErr = r.roleBoundProfiles(llmUsagePurposeFromContext(ctx), set, group, roles)
+			profiles, roleErr = r.scheduledRoleProfiles(ctx, llmUsagePurposeFromContext(ctx), set, group, roles)
 			if roleErr != nil {
 				return "", roleErr
 			}
@@ -465,7 +465,7 @@ func (r *Runtime) runRawLLMProviderForGroup(ctx context.Context, group string, r
 			}
 			return "", fmt.Errorf("diana: reply rule llm profile %q not found", profileID)
 		}
-		profiles, roleErr := r.roleBoundProfiles(llmUsagePurposeFromContext(ctx), set, group, roles)
+		profiles, roleErr := r.scheduledRoleProfiles(ctx, llmUsagePurposeFromContext(ctx), set, group, roles)
 		if roleErr != nil {
 			return "", roleErr
 		}
@@ -507,22 +507,43 @@ func (r *Runtime) runRawLLMProviderForGroup(ctx context.Context, group string, r
 }
 
 func (r *Runtime) imageProviderConfigs(contexts ...context.Context) []llm.ProviderConfig {
-	r.mu.RLock()
-	store := r.llmStore
-	r.mu.RUnlock()
 	var ctx context.Context
 	if len(contexts) > 0 {
 		ctx = contexts[0]
 	}
+	return r.resolveImageProviderConfigs(ctx, false)
+}
+
+func (r *Runtime) resolveImageProviderConfigs(ctx context.Context, schedule bool) []llm.ProviderConfig {
+	r.mu.RLock()
+	store := r.llmStore
+	r.mu.RUnlock()
 	roles := r.modelRolesForContext(ctx)
 	if store == nil {
 		return nil
 	}
 	set := store.Profiles().WithDefaults()
 	role, explicitImageRole := roles["image"]
-	if !explicitImageRole {
-		role = roles["chat"]
+	if explicitImageRole {
+		var profiles []llm.Profile
+		var err error
+		if schedule {
+			profiles, err = r.scheduledRoleProfiles(ctx, "image", set, llm.GroupImage, roles)
+		} else {
+			profiles, err = r.roleBoundProfiles("image", set, llm.GroupImage, roles)
+		}
+		if err != nil {
+			return nil
+		}
+		configs := make([]llm.ProviderConfig, 0, len(profiles))
+		for _, profile := range profiles {
+			cfg := profile.Config.WithDefaults()
+			cfg.ImageModel = cfg.Model
+			configs = append(configs, cfg)
+		}
+		return configs
 	}
+	role = roles["chat"]
 	if role.ProviderID != "" && role.ModelID != "" {
 		role.ProfileID = role.ProviderID
 		role.Model = strings.TrimPrefix(role.ModelID, role.ProviderID+":")
@@ -546,9 +567,6 @@ func (r *Runtime) imageProviderConfigs(contexts ...context.Context) []llm.Provid
 	configs := make([]llm.ProviderConfig, 0, len(profiles))
 	for _, profile := range profiles {
 		cfg := profile.Config.WithDefaults()
-		if explicitImageRole {
-			cfg.ImageModel = role.Model
-		}
 		configs = append(configs, cfg)
 	}
 	return configs
@@ -630,7 +648,7 @@ func (r *Runtime) runLLMRouterProviderWithRetry(ctx context.Context, retryTransi
 		// 这里原来只取一条 selection 就直接跑，绑定里配的 fallbacks 从来没被用过——
 		// 线上把 intent 绑到只做判断的模型之后，所有没备判断题表的用途整条失败，配好
 		// 的降级档一次都没被碰。降级是全局承诺，不该只有对话享有。
-		profiles, roleErr := r.roleBoundProfiles(llmUsagePurposeFromContext(ctx), set, group, roles)
+		profiles, roleErr := r.scheduledRoleProfiles(ctx, llmUsagePurposeFromContext(ctx), set, group, roles)
 		if roleErr != nil {
 			return "", roleErr
 		}
@@ -660,7 +678,7 @@ func (r *Runtime) runLLMRouterProviderWithRetry(ctx context.Context, retryTransi
 
 	if cfgFactory != nil && store != nil {
 		set := store.Profiles().WithDefaults()
-		profiles, roleErr := r.roleBoundProfiles(llmUsagePurposeFromContext(ctx), set, group, roles)
+		profiles, roleErr := r.scheduledRoleProfiles(ctx, llmUsagePurposeFromContext(ctx), set, group, roles)
 		if roleErr != nil {
 			return "", roleErr
 		}

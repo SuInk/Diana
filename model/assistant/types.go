@@ -709,6 +709,7 @@ type BotConfig struct {
 	// ImageInputMode 决定主回复模型怎么看图，见 image_input_mode.go。
 	ImageInputMode ImageInputMode       `json:"image_input_mode,omitempty"`
 	ModelRoles     map[string]ModelRole `json:"model_roles,omitempty"`
+	WebSearch      *WebSearchAssignment `json:"web_search,omitempty"`
 	// PrivateClosingGrace 是私聊里「对方在收尾」时仍然照常回答的轮数。
 	// 第一声再见就闭嘴不像人：正常人会接一两句「拜拜」再停。到这个数之后，
 	// 候选回复只是又一句告别时就不再发出去。明确要求停止不受它约束，当场生效。
@@ -944,6 +945,11 @@ type ModelRole struct {
 	// 不单独带，和 Params 一样沿用主路由这一份：想让意图识别不思考，换到后备
 	// 模型时也该不思考。
 	ReasoningEffort string `json:"reasoning_effort,omitempty"`
+	// 空策略沿用历史主备顺序；权重只用于加权轮询，停用的路由不发请求。
+	RoutingStrategy string `json:"routing_strategy,omitempty"`
+	Weight          int    `json:"weight,omitempty"`
+	Disabled        bool   `json:"disabled,omitempty"`
+	Standby         bool   `json:"standby,omitempty"`
 }
 
 func normalizeModelRoles(roles map[string]ModelRole) map[string]ModelRole {
@@ -996,6 +1002,18 @@ func normalizeModelRole(role ModelRole) ModelRole {
 	role.ModelID = strings.TrimSpace(role.ModelID)
 	role.Params = normalizeModelRoleParams(role.Params)
 	role.ReasoningEffort = llm.NormalizeReasoningEffortSetting(role.ReasoningEffort)
+	switch strings.TrimSpace(role.RoutingStrategy) {
+	case "round_robin", "weighted":
+		role.RoutingStrategy = strings.TrimSpace(role.RoutingStrategy)
+	default:
+		role.RoutingStrategy = ""
+	}
+	if role.Weight < 0 {
+		role.Weight = 0
+	}
+	if role.Weight > 1000 {
+		role.Weight = 1000
+	}
 	if role.ProviderID != "" || role.ModelID != "" {
 		role.ProfileID = ""
 		role.Group = ""
@@ -1012,6 +1030,7 @@ func normalizeModelRole(role ModelRole) ModelRole {
 		fallback.Fallbacks = nil
 		fallback.Params = nil
 		fallback.ReasoningEffort = ""
+		fallback.RoutingStrategy = ""
 		fallback = normalizeModelRole(fallback)
 		if modelRoleConfigured(fallback) {
 			fallbacks = append(fallbacks, fallback)
@@ -1314,6 +1333,7 @@ type ConfigPayload struct {
 	AutoVideoPreprocess            *bool                `json:"auto_video_preprocess,omitempty"`
 	ImageInputMode                 ImageInputMode       `json:"image_input_mode,omitempty"`
 	ModelRoles                     map[string]ModelRole `json:"model_roles,omitempty"`
+	WebSearch                      *WebSearchAssignment `json:"web_search,omitempty"`
 	BotReplyLoopDetectionEnabled   *bool                `json:"bot_reply_loop_detection_enabled,omitempty"`
 	ReplyRefusalSuppressionEnabled *bool                `json:"reply_refusal_suppression_enabled,omitempty"`
 	ReplySuppressionEnabled        *bool                `json:"reply_suppression_enabled,omitempty"`
@@ -2361,11 +2381,15 @@ func (cfg BotConfig) WithDefaults() BotConfig {
 	cfg.MarkedBotIDs = cleanStrings(append([]string(nil), cfg.MarkedBotIDs...))
 	cfg.ReplyRules = normalizeReplyRules(cfg.ReplyRules)
 	cfg.ModelRoles = normalizeModelRoles(cfg.ModelRoles)
+	cfg.WebSearch = normalizeWebSearchAssignment(cfg.WebSearch)
 	return cfg
 }
 
 // Validate 校验 OneBot v11 机器人配置是否可运行。
 func (cfg BotConfig) Validate() error {
+	if err := cfg.WebSearch.Validate(); err != nil {
+		return err
+	}
 	if len(cfg.WelcomeTemplates) > 50 {
 		return fmt.Errorf("欢迎词模板最多 50 条")
 	}
@@ -2625,6 +2649,7 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		AutoVideoPreprocess:               copyBoolPointer(cfg.AutoVideoPreprocess),
 		ImageInputMode:                    cfg.ImageInputMode,
 		ModelRoles:                        normalizeModelRoles(cfg.ModelRoles),
+		WebSearch:                         normalizeWebSearchAssignment(cfg.WebSearch),
 		BotReplyLoopDetectionEnabled:      copyBoolPointer(cfg.BotReplyLoopDetectionEnabled),
 		ReplyRefusalSuppressionEnabled:    copyBoolPointer(cfg.ReplyRefusalSuppressionEnabled),
 		ReplySafetyMasterEnabled:          copyBoolPointer(cfg.ReplySafetyMasterEnabled),
@@ -2855,6 +2880,7 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		AutoVideoPreprocess:             copyBoolPointer(firstNonNilBoolPointer(payload.AutoVideoPreprocess, existing.AutoVideoPreprocess)),
 		ImageInputMode:                  ImageInputMode(firstNonEmpty(string(payload.ImageInputMode), string(existing.ImageInputMode))),
 		ModelRoles:                      normalizeModelRoles(payload.ModelRoles),
+		WebSearch:                       normalizeWebSearchAssignment(firstWebSearchAssignment(payload.WebSearch, existing.WebSearch)),
 		BotReplyLoopDetectionEnabled:    copyBoolPointer(payload.BotReplyLoopDetectionEnabled),
 		ReplyRefusalSuppressionEnabled:  copyBoolPointer(payload.ReplyRefusalSuppressionEnabled),
 		ReplySafetyMasterEnabled:        copyBoolPointer(payload.ReplySafetyMasterEnabled),

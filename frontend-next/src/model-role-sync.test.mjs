@@ -82,3 +82,28 @@ test("model assignments keep the page's own order whatever order they arrive in"
   context.setRoleForm({ future: { profile_id: "p", model: "f" }, chat: { profile_id: "p", model: "c" } });
   assert.deepEqual(Object.keys(context.roleForm.value), ["chat", "vision", "intent", "image", "future"]);
 });
+
+test("balancing edits survive incoming model updates and explicit adoption loads every setting", () => {
+  for (const mutate of [
+    role => { role.routing_strategy = "weighted"; },
+    role => { role.weight = 3; },
+    role => { role.disabled = true; },
+    role => { role.fallbacks[0].standby = true; },
+    role => { role.fallbacks[0].weight = 4; },
+    role => { role.fallbacks[0].disabled = true; }
+  ]) {
+    const context = editorContext();
+    context.setRoleForm({ chat: { profile_id: "p", model: "m", fallbacks: [{ profile_id: "b", model: "m" }] } });
+    mutate(context.roleForm.value.chat);
+    const draft = context.roleSnapshot(context.roleForm.value);
+    context.syncModelRolesWhileEditing({ id: "bot", model_roles: { chat: { profile_id: "p", model: "new", routing_strategy: "round_robin", weight: 2, disabled: true, fallbacks: [{ profile_id: "b", model: "new", weight: 5, standby: true }] } } });
+    assert.equal(context.roleSnapshot(context.roleForm.value), draft);
+    assert.equal(context.modelRolesChangedElsewhere.value, true);
+    context.adoptIncomingModelRoles();
+    assert.equal(context.roleForm.value.chat.routing_strategy, "round_robin");
+    assert.equal(context.roleForm.value.chat.weight, 2);
+    assert.equal(context.roleForm.value.chat.disabled, true);
+    assert.equal(context.roleForm.value.chat.fallbacks[0].weight, 5);
+    assert.equal(context.roleForm.value.chat.fallbacks[0].standby, true);
+  }
+});

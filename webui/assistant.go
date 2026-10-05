@@ -407,6 +407,9 @@ func (h *BotHandler) registerRoutes(router gin.IRouter, base string) {
 	router.POST(base+"/plugins/:id/uninstall", h.uninstallPlugin)
 	router.POST(base+"/plugins/:id/enabled", h.setPluginEnabled)
 	router.POST(base+"/plugins/:id/settings", h.updatePluginSettings)
+	router.GET(base+"/search-providers", h.searchProviders)
+	router.POST(base+"/search-providers", h.saveSearchProvider)
+	router.DELETE(base+"/search-providers/:id", h.deleteSearchProvider)
 	// 第三方（仓库安装）插件。repo/* 是静态段，gin 里与 :id 参数段共存不冲突。
 	router.POST(base+"/plugins/repo/preview", h.previewRepoPlugin)
 	router.POST(base+"/plugins/repo/install", h.installRepoPlugin)
@@ -532,6 +535,10 @@ func (h *BotHandler) saveProfile(c *gin.Context, create bool) {
 		return
 	}
 	if err := cfg.Validate(); err != nil {
+		h.writeError(c, http.StatusBadRequest, "config_save", err, botLogTarget(cfg), botLogMetadata(cfg))
+		return
+	}
+	if err := h.validateSearchAssignment(cfg.WebSearch); err != nil {
 		h.writeError(c, http.StatusBadRequest, "config_save", err, botLogTarget(cfg), botLogMetadata(cfg))
 		return
 	}
@@ -1358,14 +1365,16 @@ func (h *BotHandler) writeError(c *gin.Context, status int, action string, err e
 }
 
 // persistState 将插件状态写入 SQLite。
-func (h *BotHandler) persistState() {
+func (h *BotHandler) persistState() error {
 	if h.sqlite == nil {
-		return
+		return nil
 	}
 	// 插件开关/安装状态不在 runtime.Config 里，因此单独持久化。
 	if err := h.sqlite.SavePluginStates(h.ctx, h.runtime.Plugins().Snapshot()); err != nil {
 		recordError(h.ctx, h.logs, "persist", err, "plugin_states", nil)
+		return err
 	}
+	return nil
 }
 
 // botLogMetadata 构造 OneBot v11 机器人操作日志的附加信息。

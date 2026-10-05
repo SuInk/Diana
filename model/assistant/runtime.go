@@ -348,8 +348,10 @@ type EventListener func(EventRecord)
 type PrivateMessageInterceptor func(context.Context, MessageEvent, string) bool
 
 type Runtime struct {
-	mu            sync.RWMutex
-	modelConfigMu sync.Mutex
+	mu                  sync.RWMutex
+	modelConfigMu       sync.Mutex
+	modelRoutingMu      sync.Mutex
+	modelRouteSchedules map[string]*modelRouteSchedule
 	// promptCacheProbe 记住每个会话上一次请求的分段指纹，用来定位前缀缓存在哪里断的。
 	// 自带锁，不受 mu 保护。
 	promptCacheProbe promptCacheProbeStore
@@ -1073,6 +1075,7 @@ func (r *Runtime) Stop() error {
 		}
 	}
 	r.closeAgentRegistryCache()
+
 	return err
 }
 
@@ -5625,6 +5628,9 @@ func (r *Runtime) roleBoundProfiles(purpose string, set llm.ProfileSet, group st
 	profiles := make([]llm.Profile, 0, len(routes))
 	seen := map[string]bool{}
 	for _, route := range routes {
+		if route.Disabled {
+			continue
+		}
 		candidates, err := profilesForModelRole(set, route)
 		if err != nil {
 			return nil, err
@@ -5640,6 +5646,9 @@ func (r *Runtime) roleBoundProfiles(purpose string, set llm.ProfileSet, group st
 			}
 			profiles = append(profiles, profile)
 		}
+	}
+	if len(profiles) == 0 {
+		return nil, fmt.Errorf("diana: model role has no enabled route")
 	}
 	return profiles, nil
 }

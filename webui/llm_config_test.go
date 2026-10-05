@@ -70,6 +70,43 @@ func TestLLMConfigHandlerGetAndPost(t *testing.T) {
 	}
 }
 
+func TestModelMetadataOverridesSaveReadAndLegacySave(t *testing.T) {
+	store := NewMemoryLLMProfileStore(llm.ProviderConfig{Provider: llm.ProviderOpenAICompatible, APIKey: "key", Model: "custom-model"})
+	router := testRouter(NewLLMConfigHandler(store))
+	id := store.Profiles().Profiles[0].ID
+	body := []byte(`{"id":"` + id + `","provider":"openai_compatible","model":"custom-model","models":[{"id":"custom-model","custom":true,"context_window_override":64000,"capabilities_override":{"input_modalities":["text","image"],"output_modalities":["text"]}},{"id":"synced-model","context_window_tokens":1000000,"context_window_override":32000,"capabilities_override":{"input_modalities":["text"],"output_modalities":["text"]}}]}`)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/llm/config", bytes.NewReader(body)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("save status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	get := httptest.NewRecorder()
+	router.ServeHTTP(get, httptest.NewRequest(http.MethodGet, "/api/llm/config", nil))
+	var payload llmConfigPayload
+	if err := json.Unmarshal(get.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if len(payload.Models) != 2 || !payload.Models[0].Custom || payload.Models[0].ContextWindowOverride != 64000 || len(payload.Models[0].CapabilitiesOverride.InputModalities) != 2 || payload.Models[1].ContextWindowOverride != 32000 {
+		t.Fatalf("metadata lost: %#v", payload.Models)
+	}
+	if payload.EffectiveContextWindowTokens != 64000 || payload.ContextWindowSource != llm.ContextWindowSourceModel {
+		t.Fatalf("effective window = %d/%s", payload.EffectiveContextWindowTokens, payload.ContextWindowSource)
+	}
+	// 旧客户端不提交 models 时保留整份模型元数据，实际切到另一个模型时使用它的窗口。
+	legacy := []byte(`{"id":"` + id + `","provider":"openai_compatible","model":"synced-model"}`)
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/llm/config", bytes.NewReader(legacy)))
+	if rec.Code != http.StatusOK || store.Current().ContextWindowTokensWithDefault() != 32000 || store.Current().Models[0].CapabilitiesOverride == nil {
+		t.Fatalf("legacy save lost metadata: %d, %s", rec.Code, rec.Body.String())
+	}
+	bad := bytes.Replace(body, []byte(`"context_window_override":64000`), []byte(`"context_window_override":-1`), 1)
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/llm/config", bytes.NewReader(bad)))
+	if rec.Code != http.StatusBadRequest || store.Current().Model != "synced-model" {
+		t.Fatalf("invalid override was saved: %d, %s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestMaskLLMAPIKeyKeepsMiddleHidden(t *testing.T) {
 	tests := map[string]string{
 		"sk-1234567890abcdef": "sk-12…cdef",

@@ -72,3 +72,53 @@ func TestWithDefaultsKeepsContextOverridesUntouched(t *testing.T) {
 		t.Fatalf("超窗口的上限没有收敛: %d", capped.MaxContextTokensWithDefault())
 	}
 }
+
+func TestModelContextOverridesFollowSelectedModelAndRespectProviderLimits(t *testing.T) {
+	cfg := ProviderConfig{Model: "local/text", Models: []ModelInfo{
+		{ID: "local/text", ContextWindowOverride: 32000, ContextWindowTokens: 1000000},
+		{ID: "local/vision", ContextWindowOverride: 64000},
+		{ID: "text", ContextWindowOverride: 4096},
+	}}
+	if window, source := cfg.ResolveContextWindowTokens(); window != 32000 || source != ContextWindowSourceModel {
+		t.Fatalf("model override = %d/%s", window, source)
+	}
+	cfg.Model = "local/vision"
+	if got := cfg.MaxContextTokensWithDefault(); got != 64000 {
+		t.Fatalf("selected vision budget = %d", got)
+	}
+	cfg.MaxContextTokens = 100000
+	if got := cfg.MaxContextTokensWithDefault(); got != 64000 {
+		t.Fatalf("budget exceeds model window: %d", got)
+	}
+	cfg.MaxContextTokens = 12000
+	if got := cfg.MaxContextTokensWithDefault(); got != 12000 {
+		t.Fatalf("request cap = %d", got)
+	}
+	cfg.ContextWindowTokens = 20000
+	if window, source := cfg.ResolveContextWindowTokens(); window != 20000 || source != ContextWindowSourceUser {
+		t.Fatalf("provider override = %d/%s", window, source)
+	}
+	cfg.ContextWindowTokens = 0
+	cfg.Model = "other/text"
+	if window, source := cfg.ResolveContextWindowTokens(); window != DefaultContextWindowTokens || source != ContextWindowSourceFallback {
+		t.Fatalf("a namespaced alias inherited another model's settings: %d/%s", window, source)
+	}
+}
+
+func TestModelContextOverrideDoesNotStripExplicitProviderLimits(t *testing.T) {
+	cfg := ProviderConfig{Model: "m", ContextWindowTokens: 32000, MaxContextTokens: 32000,
+		Models: []ModelInfo{{ID: "m", ContextWindowOverride: 32000}},
+	}
+	stripped := cfg.WithoutRedundantContextLimits()
+	if stripped.ContextWindowTokens != 32000 || stripped.MaxContextTokens != 32000 {
+		t.Fatalf("explicit limits stripped: %#v", stripped)
+	}
+	cfg.Model = "another-model"
+	cfg.ContextWindowTokens = DefaultContextWindowTokens
+	cfg.MaxContextTokens = DefaultContextWindowTokens
+	stripped = cfg.WithoutRedundantContextLimits()
+	stripped.Model = "m"
+	if stripped.ContextWindowTokensWithDefault() != DefaultContextWindowTokens || stripped.MaxContextTokens != DefaultContextWindowTokens {
+		t.Fatalf("provider fallback-sized limits were lost when switching to an edited model: %#v", stripped)
+	}
+}

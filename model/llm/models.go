@@ -58,6 +58,15 @@ type ModelInfo struct {
 	ContextWindowTokens int64    `json:"context_window_tokens,omitempty"`
 	MaxInputTokens      int64    `json:"max_input_tokens,omitempty"`
 	MaxOutputTokens     int64    `json:"max_output_tokens,omitempty"`
+	// 本地补充的模型和手动覆盖值独立于上游清单，重新同步时仍须保留。
+	Custom                bool               `json:"custom,omitempty"`
+	ContextWindowOverride int64              `json:"context_window_override,omitempty"`
+	CapabilitiesOverride  *ModelCapabilities `json:"capabilities_override,omitempty"`
+}
+
+type ModelCapabilities struct {
+	InputModalities  []string `json:"input_modalities"`
+	OutputModalities []string `json:"output_modalities"`
 }
 
 // DefaultModel 返回 provider 对应的默认文本模型。
@@ -632,6 +641,12 @@ func uniqueModels(models []ModelInfo) []ModelInfo {
 		model.OwnedBy = strings.TrimSpace(model.OwnedBy)
 		model.InputModalities = normalizeModalities(model.InputModalities)
 		model.OutputModalities = normalizeModalities(model.OutputModalities)
+		if model.CapabilitiesOverride != nil {
+			model.CapabilitiesOverride = &ModelCapabilities{
+				InputModalities:  normalizeModalities(model.CapabilitiesOverride.InputModalities),
+				OutputModalities: normalizeModalities(model.CapabilitiesOverride.OutputModalities),
+			}
+		}
 		if model.ID == "" {
 			continue
 		}

@@ -384,6 +384,14 @@ func (cfg ProviderConfig) Validate() error {
 		cfg.APIFormat = APIFormat(cfg.APIStyle)
 	}
 	cfg.Models = uniqueModels(cfg.Models)
+	for _, info := range cfg.Models {
+		if info.ContextWindowOverride < 0 {
+			return fmt.Errorf("llm: model %q context_window_override must be greater than or equal to 0", info.ID)
+		}
+		if info.CapabilitiesOverride != nil && (len(info.CapabilitiesOverride.InputModalities) == 0 || len(info.CapabilitiesOverride.OutputModalities) == 0) {
+			return fmt.Errorf("llm: model %q capabilities_override requires input and output modalities", info.ID)
+		}
+	}
 	cfg.ImageBaseURL = strings.TrimSpace(cfg.ImageBaseURL)
 	cfg.ImageOrigin = strings.TrimSpace(cfg.ImageOrigin)
 	cfg.Model = strings.TrimSpace(cfg.Model)

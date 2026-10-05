@@ -628,6 +628,13 @@ func (m *PluginManager) ValidateGroupSettingOverrides(overrides PluginSettingOve
 		if !ok {
 			return nil, fmt.Errorf("%w: %s", ErrPluginNotFound, id)
 		}
+		if id == webSearchPluginID {
+			for _, key := range []string{searchProvidersSetting, searchProviderKeysSetting, searchProviderOrderSetting} {
+				if _, exists := values[key]; exists {
+					return nil, fmt.Errorf("搜索提供商和路由不能在群参数中覆盖")
+				}
+			}
+		}
 		normalized, err := normalizeGroupPluginSettings(plugin.Manifest().Settings, values)
 		if err != nil {
 			return nil, fmt.Errorf("diana: plugin %q group settings: %w", id, err)
@@ -658,6 +665,11 @@ func (m *PluginManager) SanitizeGroupSettingOverrides(overrides PluginSettingOve
 			continue
 		}
 		sanitized := sanitizeGroupPluginSettings(plugin.Manifest().Settings, values)
+		if id == webSearchPluginID {
+			delete(sanitized, searchProvidersSetting)
+			delete(sanitized, searchProviderKeysSetting)
+			delete(sanitized, searchProviderOrderSetting)
+		}
 		if len(sanitized) > 0 {
 			out[id] = sanitized
 		}
@@ -875,6 +887,16 @@ func (m *PluginManager) UpdateSettingsForProfile(id, profileID string, values ma
 		return PluginState{}, ErrPluginNotFound
 	}
 	manifest := withBuiltinPlatformSupport(plugin.Manifest())
+	if id == webSearchPluginID {
+		for _, key := range []string{searchProvidersSetting, searchProviderKeysSetting, searchProviderOrderSetting} {
+			if value, exists := values[key]; exists && strings.TrimSpace(fmt.Sprint(value)) != "" {
+				return PluginState{}, fmt.Errorf("搜索提供商和路由请通过统一配置页面修改")
+			}
+			if slices.Contains(clear, key) {
+				return PluginState{}, fmt.Errorf("搜索提供商和路由请通过统一配置页面修改")
+			}
+		}
+	}
 	if len(manifest.Settings) == 0 {
 		return PluginState{}, fmt.Errorf("diana: plugin %q has no configurable settings", id)
 	}
@@ -886,6 +908,16 @@ func (m *PluginManager) UpdateSettingsForProfile(id, profileID string, values ma
 	state.Manifest = manifest
 	profileID = strings.TrimSpace(profileID)
 	previousSettings := state.Settings
+	if id == webSearchPluginID {
+		for _, key := range []string{searchProvidersSetting, searchProviderKeysSetting} {
+			if previous, exists := previousSettings[key]; exists {
+				if normalized == nil {
+					normalized = map[string]any{}
+				}
+				normalized[key] = previous
+			}
+		}
+	}
 	cleared := map[string]bool{}
 	for _, key := range clear {
 		cleared[strings.TrimSpace(key)] = true
@@ -1225,7 +1257,7 @@ func (m *PluginManager) AgentToolsForPlatformWithGroupOverrides(platform string,
 		}
 		appendTools(item.id, provided)
 	}
-	if !seen[agent.WebSearchToolName] && seen[sandboxedBrowserToolName] {
+	if !seen[agent.WebSearchToolName] && seen[sandboxedBrowserToolName] && !searchDisabledByOverride(settingOverrides) {
 		appendTools(webSearchPluginID, m.searchEngineFallbackTools(settingOverrides))
 	}
 
@@ -1310,7 +1342,7 @@ func (m *PluginManager) AgentToolOwners(platform string, enabledOverrides map[st
 	}
 	// 和 AgentToolsForPlatformWithGroupOverrides 的兜底保持一致：联网搜索关着、网页渲染
 	// 开着时，web_search 仍然算联网搜索插件带来的。
-	if len(owners[webSearchPluginID]) == 0 && slices.Contains(owners[sandboxedBrowserPluginID], sandboxedBrowserToolName) {
+	if len(owners[webSearchPluginID]) == 0 && slices.Contains(owners[sandboxedBrowserPluginID], sandboxedBrowserToolName) && !searchDisabledByOverride(settingOverrides) {
 		if tools := m.searchEngineFallbackTools(settingOverrides); len(tools) > 0 {
 			owners[webSearchPluginID] = []string{agent.WebSearchToolName}
 		}

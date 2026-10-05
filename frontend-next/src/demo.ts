@@ -22,6 +22,8 @@ import type {
   LLMUsageCounters,
   PluginState,
   BotProfileConfig,
+  SearchProvider,
+  SearchConfiguration,
   BotGroupSummary,
   BotPlatform,
   BotStatus,
@@ -153,6 +155,16 @@ const telegramProfile: BotProfileConfig = {
 
 let assistantConfig: BotProfileConfig = { ...oneBotProfile, profiles: [oneBotProfile, telegramProfile] };
 
+let demoSearchProviders: SearchProvider[] = [
+  { id: 'exa', name: 'Exa', type: 'exa_mcp', url: 'https://mcp.exa.ai/mcp?tools=web_search_exa', tool: 'web_search_exa' },
+  { id: 'tavily', name: 'Tavily', type: 'tavily', url: 'https://api.tavily.com/search', api_key_configured: true },
+  { id: 'browser', name: '浏览器搜索', type: 'browser', url: 'https://www.google.com/search', query_param: 'q' },
+];
+const demoSearchKeys: Record<string, string> = { tavily: 'demo-secret' };
+function demoSearchConfiguration(): SearchConfiguration {
+  return { providers: demoSearchProviders.map(provider => ({ ...provider, api_key_configured: !!demoSearchKeys[provider.id] })), default_assignment: { provider_ids: demoSearchProviders.filter(provider => ['exa', 'tavily'].includes(provider.id) && !provider.disabled).map(provider => provider.id), max_results: 5, provider_timeout_seconds: 12, total_timeout_seconds: 35, source_recall: true, reply_link_policy: 'on_request' } };
+}
+
 
 function demoPluginForProfile(plugin: PluginState, profile: string): PluginState {
   const settings = { ...plugin.settings };
@@ -165,6 +177,7 @@ function demoPluginForProfile(plugin: PluginState, profile: string): PluginState
 }
 
 let plugins: PluginState[] = [
+  { manifest: { id: 'official.web-search', name: '联网搜索', version: '0.3.4', description: '为对话提供实时联网搜索。搜索来源与凭据在提供商页管理，机器人在模型与搜索页选择首选和后备来源。', official: true, built_in: true, permissions: ['network:http', 'llm:tool'], settings: [{ key: 'max_results', label: '每次结果上限', type: 'number', default: 5 }] }, installed: true, enabled: true },
   { manifest: { id: "official.file-parser", name: "文件解析", version: "0.3.0", description: "解析 PDF、图片和文本附件，把结构化内容交给模型。", official: true, built_in: true, permissions: ["文件解析", "消息读取"] }, installed: true, enabled: true },
   { manifest: { id: "official.nonebot-plugin-resolver-go", name: "链接解析", version: "0.3.0", description: "解析社交媒体链接，支持合并转发图片和限定大小的视频。", official: true, built_in: true, permissions: ["网络请求", "消息发送"],
       settings: [
@@ -1041,6 +1054,28 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
     return json(demoHistoryMediaPolicy);
   }
 
+  if (path === '/api/assistant/search-providers') {
+    if (method === 'POST') {
+      if (!String(body.name ?? '').trim() || !['exa_mcp', 'tavily', 'search_mcp', 'browser'].includes(String(body.type))) return json({ error: '请填写名称并选择接入协议' }, 400);
+      try { const endpoint = new URL(String(body.url)); if (endpoint.protocol !== 'https:' && !(endpoint.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(endpoint.hostname))) throw new Error(); } catch { return json({ error: '请填写 HTTPS 服务地址或本机 HTTP 地址' }, 400); }
+      if (body.type === 'search_mcp' && !String(body.tool ?? '').trim()) return json({ error: '请填写 MCP 搜索工具名' }, 400);
+      const id = String(body.id || `search-${Date.now()}`);
+      const provider: SearchProvider = { id, name: String(body.name), type: body.type as SearchProvider['type'], url: String(body.url), tool: String(body.tool ?? ''), query_param: String(body.query_param ?? ''), results_param: String(body.results_param ?? ''), disabled: !!body.disabled };
+      if (body.clear_api_key || body.type === 'browser') delete demoSearchKeys[id];
+      else if (String(body.api_key ?? '').trim()) demoSearchKeys[id] = String(body.api_key).trim();
+      const index = demoSearchProviders.findIndex(item => item.id === id);
+      if (index >= 0) demoSearchProviders[index] = provider; else demoSearchProviders.push(provider);
+    }
+    return json(demoSearchConfiguration());
+  }
+  if (path.startsWith('/api/assistant/search-providers/') && method === 'DELETE') {
+    const id = decodeURIComponent(path.split('/').pop()!);
+    if (assistantConfig.profiles?.some(profile => profile.web_search?.provider_ids.includes(id))) return json({ error: '机器人仍在使用此搜索提供商，请先更换搜索来源' }, 409);
+    demoSearchProviders = demoSearchProviders.filter(provider => provider.id !== id);
+    delete demoSearchKeys[id];
+    return json(demoSearchConfiguration());
+  }
+
   if (path === "/api/system/media-cache") {
     if (method === "POST") {
       demoMediaCachePolicy = { retention_days: Number(body.retention_days), max_mb: Number(body.max_mb) };
@@ -1282,7 +1317,16 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
   if (path === "/api/llm/config" && method === "POST") {
     const incoming = body as unknown as LLMConfig;
     const profiles = [...(llmConfig.profiles ?? [])];
-    const saved = { ...incoming, id: incoming.id || `llm-${Date.now()}`, api_key_configured: true, models: incoming.models?.length ? incoming.models : modelCatalog };
+    const model = incoming.models?.find(model => model.id === incoming.model);
+    const window = incoming.context_window_tokens || model?.context_window_override || 128_000;
+    const saved: LLMConfig = {
+      ...incoming, id: incoming.id || `llm-${Date.now()}`, api_key_configured: true,
+      models: incoming.models ?? modelCatalog,
+      effective_context_window_tokens: window,
+      effective_max_context_tokens: incoming.max_context_tokens ? Math.min(incoming.max_context_tokens, window) : window,
+      context_window_source: incoming.context_window_tokens ? "user" : model?.context_window_override ? "model" : "fallback",
+      catalog_context_window_tokens: model?.context_window_tokens
+    };
     const index = profiles.findIndex((profile) => profile.id === saved.id);
     if (index >= 0) profiles[index] = saved; else profiles.push(saved);
     llmConfig = { ...llmConfig, profiles };

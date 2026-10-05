@@ -57,12 +57,15 @@ func (p *WebSearchPlugin) Manifest() PluginManifest {
 	return PluginManifest{
 		ID:          webSearchPluginID,
 		Name:        "联网搜索",
-		Version:     "0.3.3",
-		Description: "为对话提供可并行查询的实时网页搜索。默认用沙盒浏览器打开搜索引擎，返回标题、摘要和链接，由模型选择原文继续调研；也支持显式配置搜索 API。关闭本插件时，只要网页渲染插件开着，仍按搜索引擎方式提供搜索；要彻底不联网搜索，两个都关掉。",
+		Version:     "0.3.4",
+		Description: "为对话提供可并行查询的实时网页搜索。来源与凭据在提供商页管理，机器人可选择首选和后备来源。默认用沙盒浏览器打开搜索引擎，返回标题、摘要和链接，由模型选择原文继续调研；也支持显式配置搜索 API。关闭本插件时，只要网页渲染插件开着，仍按搜索引擎方式提供搜索；要彻底不联网搜索，两个都关掉。",
 		Official:    true,
 		BuiltIn:     true,
 		Permissions: []string{"network:http", "llm:tool"},
 		Settings: []PluginSettingSpec{
+			{Key: searchProvidersSetting, Label: "搜索提供商存档", Type: PluginSettingTypeText, Default: ""},
+			{Key: searchProviderKeysSetting, Label: "搜索提供商凭据", Type: PluginSettingTypeText, Default: "", Secret: true},
+			{Key: searchProviderOrderSetting, Label: "搜索路由", Type: PluginSettingTypeText, Default: ""},
 			{
 				Key:   webSearchSettingMode,
 				Label: "搜索方式",
@@ -196,7 +199,19 @@ func (p *WebSearchPlugin) AgentTools(settings SettingValues) ([]agent.Tool, erro
 	apiKeys := map[string]string{}
 	var renderer agent.PageRenderer
 
-	if strings.TrimSpace(settings.String(webSearchSettingMode, webSearchModeEngine)) == webSearchModeEngine {
+	if strings.TrimSpace(settings.String(searchProviderOrderSetting, "")) != "" || strings.TrimSpace(settings.String(searchProvidersSetting, "")) != "" {
+		var err error
+		providers, apiKeys, err = orderedSearchProviders(settings)
+		if err != nil {
+			return nil, err
+		}
+		for i := range providers {
+			if providers[i].Type == "browser" {
+				providers[i].TimeoutMS = 25000
+				totalTimeout = max(totalTimeout, minSearchEngineTotalTimeout)
+			}
+		}
+	} else if strings.TrimSpace(settings.String(webSearchSettingMode, webSearchModeEngine)) == webSearchModeEngine {
 		// 单源超时不沿用 API 那档：起一次浏览器加渲染就要十来秒，12 秒会把能用的引擎也掐掉。
 		for index, engine := range webSearchEngineOrder(settings.String(webSearchSettingEngines, "")) {
 			provider := agent.WebSearchProviderConfig{

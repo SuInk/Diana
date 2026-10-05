@@ -5,9 +5,9 @@
   <div class="provider-view">
     <header class="view-header">
       <div class="view-title">
-        <p>管理提供商、凭据、分组与可用模型；机器人按用途选择提供商和模型</p>
+        <p>管理模型与搜索提供商的接入和凭据，再到机器人配置中按用途分配</p>
       </div>
-      <div class="view-actions">
+      <div v-if="providerTab === 'model'" class="view-actions">
         <button class="btn" type="button" :disabled="!profileSet" @click="exportProfiles">
           <Download :size="15" aria-hidden="true" />
           导出
@@ -24,7 +24,8 @@
       </div>
     </header>
 
-    <div class="stack">
+    <nav class="editor-tabs provider-tabs" aria-label="提供商类型" role="tablist"><button id="provider-tab-model" class="editor-tab" :class="{ active: providerTab === 'model' }" type="button" role="tab" :aria-selected="providerTab === 'model'" aria-controls="provider-panel-model" @click="providerTab = 'model'">模型提供商</button><button id="provider-tab-search" class="editor-tab" :class="{ active: providerTab === 'search' }" type="button" role="tab" :aria-selected="providerTab === 'search'" aria-controls="provider-panel-search" @click="providerTab = 'search'">搜索提供商</button></nav>
+    <div v-show="providerTab === 'model'" id="provider-panel-model" role="tabpanel" aria-labelledby="provider-tab-model" class="stack">
       <!-- 配置列表 -->
       <section class="card">
         <div class="card-header">
@@ -68,7 +69,7 @@
                 <button class="btn small ghost" type="button" title="测试这套配置" @click="openTest(profile)">
                   <Send :size="13" aria-hidden="true" />
                 </button>
-                <button class="btn small ghost" type="button" @click="startEdit(profile)">
+                <button class="btn small ghost" type="button" :aria-label="`编辑提供商 ${profile.name || profile.model}`" @click="startEdit(profile)">
                   <Pencil :size="13" aria-hidden="true" />
                 </button>
                 <button class="btn small ghost" type="button" :disabled="busy" @click="clone(profile)" title="克隆">
@@ -95,6 +96,8 @@
       </section>
 
     </div>
+
+    <div v-if="providerTab === 'search'" id="provider-panel-search" role="tabpanel" aria-labelledby="provider-tab-search"><SearchProviderManager /></div>
 
     <!-- 单配置连通测试弹窗 -->
     <Modal v-if="testTarget" :title="`测试 · ${testTarget.name || testTarget.model}`" @close="testTarget = null">
@@ -283,7 +286,7 @@
           <div class="model-sync-row">
             <div class="model-sync-copy">
               <span class="model-sync-title">模型列表</span>
-              <span v-if="modelOptions.length > 0" class="hint">当前有 {{ modelOptions.length }} 个可用模型，可同步刷新或手动补充。</span>
+              <span v-if="modelOptions.length > 0" class="hint">{{ modelOptions.length }} 个模型，点击任意模型可编辑上下文和能力。手动设置会在同步后保留。</span>
               <span v-else class="hint">从服务同步模型列表，也可手动添加中转或自建模型 ID。</span>
             </div>
             <span class="cluster" style="gap: 8px">
@@ -291,58 +294,29 @@
                 v-if="modelOptions.length > 0"
                 class="btn ghost"
                 type="button"
-                :disabled="modelsLoading"
+                :disabled="modelsLoading || modelMetadataEditing"
                 title="移除全部模型，然后手动补上要留的那几个"
                 @click="clearModels"
               >
                 <Trash2 :size="14" aria-hidden="true" />
                 清空
               </button>
-              <button class="btn" type="button" :disabled="modelsLoading" @click="loadModels(false)">
+              <button class="btn" type="button" :disabled="modelsLoading || modelMetadataEditing" @click="loadModels(false)">
                 <RefreshCw :size="14" aria-hidden="true" />
                 {{ modelsLoading ? "同步中…" : "同步模型列表" }}
               </button>
             </span>
           </div>
-          <!-- 中转和自建 endpoint 常常不实现 /models，拉不到时得能手填，
-               否则机器人页的「模型分配」和这里的连通测试都无从选起。 -->
-          <div class="model-manual">
-            <div class="input-group">
-              <input
-                v-model="manualModelDraft"
-                class="input"
-                placeholder="手动添加模型 ID，多个用逗号或换行分隔"
-                autocomplete="off"
-                @keydown.enter.prevent="addManualModels"
-              />
-              <button class="btn" type="button" :disabled="manualModelDraft.trim() === ''" @click="addManualModels">
-                <Plus :size="14" aria-hidden="true" />
-                添加
-              </button>
-            </div>
-            <div v-if="modelOptions.length > 0" class="model-chips">
-              <span v-for="model in modelOptions" :key="model.id" class="model-chip">
-                <span class="model-chip-id" :title="model.id">{{ model.id }}</span>
-                <button type="button" class="model-chip-remove" :title="`移除模型 ${model.id}`" :aria-label="`移除模型 ${model.id}`" @click="removeModel(model.id)">
-                  <X :size="14" :stroke-width="2.25" aria-hidden="true" />
-                </button>
-              </span>
-            </div>
-          </div>
-        </div>
-        <div class="field wide">
-          <label for="llm-window">模型上下文窗口</label>
-          <input
-            id="llm-window"
-            v-model="form.context_window_tokens"
-            class="input"
-            inputmode="numeric"
-            required
-            :class="{ invalid: invalidField === 'context_window_tokens' }"
-            :aria-invalid="invalidField === 'context_window_tokens'"
-            placeholder="必填，例如 128000"
-            @input="clearInvalid('context_window_tokens')"
+          <ModelCatalogEditor
+            v-model="modelOptions"
+            :disabled="modelsLoading || busy"
+            :provider-window="optionalTokenInput(form.context_window_tokens)"
+            @editing-change="modelMetadataEditing = $event"
           />
+        </div>
+        <div class="field">
+          <label for="llm-window">统一上下文窗口（可选）</label>
+          <input id="llm-window" v-model="form.context_window_tokens" class="input" inputmode="numeric" placeholder="使用每个模型的设置" />
           <span class="hint">
             {{ effectiveContextHint }}
             <template v-if="contextWindowBindings.length > 0">在用这套配置的用途：</template>
@@ -425,7 +399,7 @@
       </div>
       <template #footer>
         <button class="btn ghost" type="button" @click="closeEditor">取消</button>
-        <button class="btn primary" type="button" :disabled="busy" @click="save">
+        <button class="btn primary" type="button" :disabled="busy || modelsLoading || modelMetadataEditing" @click="save">
           <Save :size="15" aria-hidden="true" />
           保存
         </button>
@@ -436,10 +410,14 @@
 
 <script setup lang="ts">
 import { useConfigurationRefresh } from "../configuration-sync";
-import { computed, onMounted, ref, watch } from "vue";
+import { computed, onActivated, onMounted, ref, watch } from "vue";
+import { viewQuery } from "../router";
+import SearchProviderManager from "../components/SearchProviderManager.vue";
+import ModelCatalogEditor from "../components/ModelCatalogEditor.vue";
+import { syncModelMetadata } from "../model-metadata";
 import LoadingSkeleton from "../components/LoadingSkeleton.vue";
 import LLMOAuthPicker from "../components/LLMOAuthPicker.vue";
-import { ChevronDown, ChevronUp, CircleCheck, Copy, Download, Eye, EyeOff, Image as ImageIcon, Pencil, Plus, RefreshCw, Save, Send, Trash2, Upload, X } from "@lucide/vue";
+import { ChevronDown, ChevronUp, CircleCheck, Copy, Download, Eye, EyeOff, Image as ImageIcon, Pencil, Plus, RefreshCw, Save, Send, Trash2, Upload } from "@lucide/vue";
 import {
   cloneConfigProfile,
   deleteConfigProfile,
@@ -472,6 +450,9 @@ import {
   presetsForProvider,
   type LLMErrorField
 } from "../llm-presets";
+
+const providerTab = ref<'model' | 'search'>(viewQuery().get('section') === 'search' ? 'search' : 'model');
+onActivated(() => { if (viewQuery().get('section') === 'search') providerTab.value = 'search'; });
 
 interface LLMFormState {
   max_concurrency: string;
@@ -507,7 +488,7 @@ const emptyForm: LLMFormState = {
   oauth_provider: "",
   user_agent: "",
   description: "",
-  context_window_tokens: String(defaultContextWindowTokens),
+  context_window_tokens: "",
   reasoning_effort: "default",
 };
 
@@ -544,12 +525,12 @@ const showKey = ref(false);
 const form = ref<LLMFormState>({ ...emptyForm });
 const selectedService = ref("deepseek");
 const modelOptions = ref<LLMModelInfo[]>([]);
-const manualModelDraft = ref("");
 // 请求头按「名字 + 值」逐行编辑，和正上方的模型列表用同一套范式。configured 记住
 // 这一行是从服务端读回来的：它的值被脱敏成空串，留空表示沿用而不是改成空。
 type HeaderRow = { key: number; name: string; value: string; configured: boolean };
 const headerRows = ref<HeaderRow[]>([]);
 let headerRowSeq = 0;
+const modelMetadataEditing = ref(false);
 const modelsLoading = ref(false);
 // invalidField 记的是「这次失败该回去改哪一格」，由报错文本推出来（见 llmErrorField）。
 const invalidField = ref<LLMErrorField>("");
@@ -698,6 +679,7 @@ function startCreate(): void {
   applyServicePreset("deepseek");
   modelOptions.value = [];
   resetHeaderRows(undefined);
+  modelMetadataEditing.value = false;
   invalidField.value = "";
   editorOpen.value = true;
 }
@@ -821,7 +803,7 @@ function startEdit(profile: LLMConfig): void {
     user_agent: profile.user_agent || defaultUserAgent.value,
     description: profile.description ?? "",
     // 老配置没填窗口时先填上默认值（清单里有就用清单的），保存前人能看到、能改。
-    context_window_tokens: String(profile.context_window_tokens || defaultContextWindowTokens),
+    context_window_tokens: profile.context_window_tokens ? String(profile.context_window_tokens) : "",
     reasoning_effort: profile.reasoning_effort || "default",
   };
   // 凭据方式跟着这份配置走：绑了提供商就停在「授权登录」，否则回到 API Key。
@@ -829,6 +811,10 @@ function startEdit(profile: LLMConfig): void {
   selectedService.value = detectLLMService(profile.base_url, profile.provider);
   modelOptions.value = [...(profile.models ?? [])];
   resetHeaderRows(profile.headers);
+  if (profile.model && !modelOptions.value.some(model => model.id === profile.model)) {
+    modelOptions.value.push({ id: profile.model, custom: true });
+  }
+  modelMetadataEditing.value = false;
   invalidField.value = "";
   editorOpen.value = true;
 }
@@ -844,11 +830,24 @@ function optionalTokenInput(raw: string): number {
 
 
 
-// 窗口必填，默认 128,000。按模型真实窗口改更准；填大了超限时会从报错里学到真实
-// 窗口并自动重试，填小了只是少带些历史。
-const effectiveContextHint = computed(() =>
-  "按模型真实的上下文窗口填，历史预算和压缩时机都按它算。填大了超限时会从报错里学到真实窗口并自动重试。"
-);
+// 编辑器里这两个框留空是常态，所以要如实说明「留空时到底用多少、这个数哪来的」，
+// 而不是把推断值预填进输入框冒充用户设置。
+// 提供商统一覆盖优先，其次是所选模型的手动窗口；目录窗口只作参考。
+const effectiveContextHint = computed(() => {
+  const profile = editingProfile.value;
+  const window = profile?.effective_context_window_tokens;
+  if (profile?.context_window_source === "user" && window) {
+    return `当前生效 ${window.toLocaleString("en-US")}，这套配置统一用它。`;
+  }
+  if (profile?.context_window_source === "model" && window) {
+    return `当前默认模型使用手动设置的 ${window.toLocaleString("en-US")} Token；切换模型时使用对应的设置。`;
+  }
+  const fallback = window ? window.toLocaleString("en-US") : "内置兜底值";
+  const reference = profile?.catalog_context_window_tokens
+    ? `模型清单里 ${profile.model} 写的是 ${profile.catalog_context_window_tokens.toLocaleString("en-US")}，可以照着填。`
+    : "";
+  return `留空时优先使用每个模型的手动窗口；未设置的模型按 ${fallback} 计算。${reference}`;
+});
 
 // 这套配置被哪些用途在用：改窗口会一起影响它们，所以列出来。
 const contextWindowBindings = computed(() =>
@@ -950,6 +949,7 @@ function closeEditor(): void {
   editorOpen.value = false;
   editingID.value = undefined;
   editingProfile.value = null;
+  modelMetadataEditing.value = false;
 }
 
 async function save(): Promise<void> {
@@ -959,17 +959,12 @@ async function save(): Promise<void> {
     toastError("并发须为 0–10000 的整数；RPS 须为 0 或 0.001–10000，0 表示不限");
     return;
   }
-  const window = Number(form.value.context_window_tokens.trim());
-  if (!Number.isInteger(window) || window < 1024) {
-    invalidField.value = "context_window_tokens";
-    toastError("请填写模型上下文窗口（整数，至少 1024）");
-    return;
-  }
   if (form.value.provider === "openai_compatible" && form.value.user_agent.trim() === "") {
     invalidField.value = "user_agent";
     toastError("请填写 User-Agent");
     return;
   }
+  if (modelMetadataEditing.value || modelsLoading.value) return;
   // 一个模型都没有就没法保存：兜底模型和机器人页的模型分配都得从这个列表里取。
   if (modelOptions.value.length === 0) {
     const resolved = await loadModels(true);
@@ -1051,12 +1046,11 @@ async function loadModels(selectFirst: boolean): Promise<boolean> {
       toastError("该提供商未返回模型列表");
       return false;
     } else {
-	  // “同步”必须准确反映服务端当前返回，不能把旧缓存或内置默认混进成功结果。
-	  modelOptions.value = [...result.models];
+      modelOptions.value = syncModelMetadata(result.models, modelOptions.value);
       if (selectFirst && !form.value.model.trim()) {
         form.value.model = result.models[0].id;
       }
-	  toastSuccess(`成功同步 ${result.models.length} 个模型`);
+      toastSuccess(`成功同步 ${result.models.length} 个模型，手动设置已保留`);
     }
     return true;
   } catch (error) {
@@ -1069,31 +1063,6 @@ async function loadModels(selectFirst: boolean): Promise<boolean> {
   } finally {
     modelsLoading.value = false;
   }
-}
-
-/** 手动补充模型：拉不到列表时也能让机器人页有多个模型可分配。 */
-function addManualModels(): void {
-  const ids = manualModelDraft.value
-    .split(/[,，\s]+/)
-    .map((item) => item.trim())
-    .filter((item) => item !== "");
-  if (ids.length === 0) {
-    return;
-  }
-  const existing = new Set(modelOptions.value.map((model) => model.id));
-  let added = 0;
-  for (const id of ids) {
-    if (existing.has(id)) continue;
-    existing.add(id);
-    modelOptions.value.push({ id });
-    added++;
-  }
-  // 还没有默认模型时，第一个手填的就当默认。
-  if (!form.value?.model.trim() && modelOptions.value.length > 0 && form.value) {
-    form.value.model = modelOptions.value[0].id;
-  }
-  manualModelDraft.value = "";
-  toastSuccess(added > 0 ? `已添加 ${added} 个模型` : "这些模型已在列表里");
 }
 
 // clearModels 一次清掉整张模型清单。同步会把服务端返回的全部模型拉进来，中转动辄
@@ -1119,13 +1088,6 @@ async function clearModels(): Promise<void> {
   modelOptions.value = [];
   if (form.value) {
     form.value.model = "";
-  }
-}
-
-function removeModel(id: string): void {
-  modelOptions.value = modelOptions.value.filter((model) => model.id !== id);
-  if (form.value?.model === id) {
-    form.value.model = modelOptions.value[0]?.id ?? "";
   }
 }
 

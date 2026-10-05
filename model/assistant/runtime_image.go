@@ -485,7 +485,7 @@ func appendImageEditSourceImages(out []string, images ...string) []string {
 }
 
 func (r *Runtime) generateImageWithFailover(ctx context.Context, req llm.ImageGenerateRequest) (*llm.ImageGenerateResponse, llm.ProviderConfig, error) {
-	configs := r.imageProviderConfigs(ctx)
+	configs := r.resolveImageProviderConfigs(ctx, true)
 	if len(configs) == 0 {
 		return nil, llm.ProviderConfig{}, fmt.Errorf("diana: llm profile store is not configured")
 	}
@@ -508,7 +508,7 @@ func (r *Runtime) generateImageWithFailover(ctx context.Context, req llm.ImageGe
 }
 
 func (r *Runtime) editImageWithFailover(ctx context.Context, req llm.ImageEditRequest) (*llm.ImageGenerateResponse, llm.ProviderConfig, error) {
-	configs := r.imageProviderConfigs(ctx)
+	configs := r.resolveImageProviderConfigs(ctx, true)
 	if len(configs) == 0 {
 		return nil, llm.ProviderConfig{}, fmt.Errorf("diana: llm profile store is not configured")
 	}

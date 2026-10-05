@@ -9,6 +9,13 @@ package llm
 // ResolveContextWindowTokens 按当前模型重新计算，兜底值和推断表以后再变，老部署也
 // 能跟着变，不会被某个版本的默认值永久粘住。
 func (cfg ProviderConfig) WithoutRedundantContextLimits() ProviderConfig {
+	// 存在单个模型的手动窗口时，统一覆盖/请求上限即使等于兜底值，
+	// 也会影响其他模型的预算，不能再当作历史派生值清除。
+	for _, info := range cfg.Models {
+		if info.ContextWindowOverride > 0 {
+			return cfg
+		}
+	}
 	// 只和兜底常量比：models.dev 的值会变，拿它比会把用户恰好填成同一个数的设置
 	// 悄悄清掉，目录一改，生效值就跟着变了。
 	window := DefaultContextWindowTokens

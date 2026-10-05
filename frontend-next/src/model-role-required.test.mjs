@@ -4,6 +4,7 @@ import { test } from "node:test";
 import vm from "node:vm";
 import ts from "typescript";
 import { parse } from "@vue/compiler-sfc";
+import { effectiveModelInfo, mergeModelMetadata } from "./model-metadata.ts";
 
 const source = readFileSync(new URL("./views/AssistantView.vue", import.meta.url), "utf8");
 const script = parse(source).descriptor.scriptSetup.content;
@@ -19,6 +20,46 @@ const isMediaRole = role => ["tts", "stt", "video"].includes(role);
 const isPurposeRole = role => ["reply_assist", "background"].includes(role);
 const purposeRoleFallbackLabel = role => (role === "reply_assist" ? "后台生成" : "对话");
 const purposeHelpers = { isPurposeRole, purposeRoleFallbackLabel, UNSPECIFIED: "__unspecified__" };
+test("every role uses the edited capabilities, including text-only background models", () => {
+  const context = vm.createContext({ ...purposeHelpers, isMediaRole, effectiveModelInfo, mergeModelMetadata });
+  loadFunction("normalizedModalities", context);
+  loadFunction("mergeModelInfo", context);
+  const compatibility = loadFunction("modelCompatibility", context);
+  const text = { id: "m", input_modalities: ["text", "image"], output_modalities: ["text"], capabilities_override: { input_modalities: ["text"], output_modalities: ["text"] } };
+  for (const role of ["chat", "intent", "background"]) assert.equal(compatibility(text, role), "compatible");
+  for (const role of ["vision", "media_parse", "image"]) assert.equal(compatibility(text, role), "incompatible");
+  const image = { ...text, capabilities_override: { input_modalities: ["text", "image"], output_modalities: ["image"] } };
+  assert.equal(compatibility(image, "image"), "compatible");
+  assert.equal(compatibility(image, "chat"), "incompatible");
+  const vision = { ...text, capabilities_override: { input_modalities: ["text", "image"], output_modalities: ["text"] } };
+  for (const role of ["chat", "vision", "media_parse"]) assert.equal(compatibility(vision, role), "compatible");
+  for (const role of ["chat", "vision", "image", "background"]) assert.equal(compatibility({ id: "unknown" }, role), "unknown");
+  const refreshed = context.mergeModelInfo({ id: "m", input_modalities: ["text", "image"], output_modalities: ["text"] }, text);
+  assert.equal(compatibility(refreshed, "vision"), "incompatible");
+});
+
+test("mismatched capabilities remain selectable in every provider, group and cross-provider menu", () => {
+  const models = [
+    { id: "text", input_modalities: ["text"], output_modalities: ["text"] },
+    { id: "image", input_modalities: ["text"], output_modalities: ["image"] },
+    { id: "unknown", custom: true }
+  ];
+  const profiles = [{ id: "p", name: "P", group: "pool", provider: "openai_compatible", model: "text", models }, { id: "backup", name: "Backup", group: "pool", provider: "openai_compatible", model: "text", models }];
+  const context = vm.createContext({ ...purposeHelpers, isMediaRole, effectiveModelInfo, mergeModelMetadata, llmChannels: { value: profiles }, roleForm: { value: {} }, MODEL_PAIR_SEP: "::", GROUP_PREFIX: "group:", FOLLOW_CHAT: "__follow_chat__", FOLLOW_VISION: "__follow_vision__" });
+  for (const name of ["normalizedModalities", "mergeModelInfo", "profileModels", "modelCompatibility", "compatibilityRank", "modelCapabilityLabel", "modelHint", "modelsForRole", "llmProviderLabel", "channelGroups", "channelOptionsFor", "selectedRoleProfiles", "profileCanRouteRoleModel", "roleModelIsSelectable", "crossProviderModelOptions", "modelOptionsFor"]) loadFunction(name, context);
+  for (const role of ["chat", "vision", "intent", "image", "media_parse", "background"]) {
+    const options = context.modelOptionsFor(role, { profile_id: "p" });
+    assert.equal(options.length, 3, role);
+    assert.equal(options.some(option => option.disabled), false);
+    const groupOptions = context.modelOptionsFor(role, { group: "pool" });
+    assert.equal(groupOptions.length, 3, role);
+    assert.equal(context.crossProviderModelOptions(role).length, 6, role);
+    context.roleForm.value[role] = { profile_id: "p", model: "text" };
+    for (const model of models) assert.equal(context.roleModelIsSelectable(role, model.id), true, `${role}/${model.id}`);
+    assert.equal(context.profileCanRouteRoleModel(profiles[0], role, "not-configured"), false);
+  }
+  assert.match(context.modelOptionsFor("vision", { profile_id: "p" }).find(option => option.value === "text").hint, /仍可选择/);
+});
 
 test("saving requires an explicit provider and model for each role", async () => {
   const keys = ["chat", "vision", "intent", "image"];
@@ -28,7 +69,7 @@ test("saving requires an explicit provider and model for each role", async () =>
       const roles = Object.fromEntries(keys.map(key => [key, { profile_id: "p", model: "m" }]));
       roles[key] = invalid;
       const busy = { value: false };
-      const context = vm.createContext({ connectionConflict: { value: undefined }, form: { value: { onebot_reverse_ws_endpoint: "ws://localhost" } }, roleForm: { value: roles }, modelRoleRows: keys.map(key => ({ key, label: key })), purposeRoleRows: [], purposeRoleKeys: [], visibleModelRoleRows: keys.map(key => ({ key, label: key })), editorTab: { value: "access" }, validWebSocketURL: () => true, roleModelIsSelectable: () => true, sendRetryValidationError: () => "", toastError: message => errors.push(message), busy, isMediaRole });
+      const context = vm.createContext({ connectionConflict: { value: undefined }, form: { value: { onebot_reverse_ws_endpoint: "ws://localhost" } }, roleForm: { value: roles }, modelRoleRows: keys.map(key => ({ key, label: key })), purposeRoleRows: [], purposeRoleKeys: [], selectedModelRole: { value: "chat" }, visibleModelRoleRows: keys.map(key => ({ key, label: key })), editorTab: { value: "access" }, validWebSocketURL: () => true, roleModelIsSelectable: () => true, sendRetryValidationError: () => "", toastError: message => errors.push(message), busy, isMediaRole });
       await loadFunction("save", context)();
       assert.equal(busy.value, false);
       assert.equal(errors.length, 1);
@@ -137,8 +178,8 @@ test("purpose-level roles may be left unset", async () => {
     modelRoleRows: keys.map(key => ({ key, label: key })),
     purposeRoleRows: [{ key: "reply_account_safety", label: "发送前审核" }, { key: "memory_extract", label: "记忆抽取" }],
     purposeRoleKeys: ["reply_account_safety", "memory_extract"],
+    selectedModelRole: { value: "chat" }, editorTab: { value: "access" },
     visibleModelRoleRows: [...keys.map(key => ({ key, label: key })), { key: "reply_account_safety", label: "发送前审核" }, { key: "memory_extract", label: "记忆抽取" }],
-    editorTab: { value: "access" },
     validWebSocketURL: () => true,
     roleModelIsSelectable: () => true,
     sendRetryValidationError: () => "",
@@ -166,8 +207,8 @@ test("a configured purpose role still needs a model", async () => {
     modelRoleRows: keys.map(key => ({ key, label: key })),
     purposeRoleRows: [{ key: "reply_account_safety", label: "发送前审核" }],
     purposeRoleKeys: ["reply_account_safety"],
+    selectedModelRole: { value: "chat" }, editorTab: { value: "access" },
     visibleModelRoleRows: [...keys.map(key => ({ key, label: key })), { key: "reply_account_safety", label: "发送前审核" }],
-    editorTab: { value: "access" },
     validWebSocketURL: () => true,
     roleModelIsSelectable: () => true,
     sendRetryValidationError: () => "",
@@ -196,6 +237,7 @@ test("media slots may be left unset but a configured slot needs a model", async 
       purposeRoleKeys: [],
       visibleModelRoleRows: [...keys.map(key => ({ key, label: key })), ...media],
       isMediaRole,
+      selectedModelRole: { value: "chat" },
       editorTab: { value: "access" },
       validWebSocketURL: () => true,
       roleModelIsSelectable: () => true,
@@ -234,4 +276,36 @@ test("optional purpose roles can go back to unspecified", () => {
   loadFunction("setRoleChannel", context)("reply_assist", "__unspecified__");
   assert.equal(roleForm.value.reply_assist, undefined);
   assert.equal(roleSelectionValue("reply_assist"), "__unspecified__");
+});
+
+test("changing provider or promoting a channel preserves balancing settings", () => {
+  const roleForm = { value: { chat: { profile_id: "a", model: "m", routing_strategy: "weighted", weight: 3, disabled: true, fallbacks: [{ profile_id: "b", model: "m", weight: 2, standby: true }] } } };
+  const context = vm.createContext({ ...purposeHelpers, isMediaRole, roleForm, GROUP_PREFIX: "group:", MODEL_PAIR_SEP: "::", FOLLOW_CHAT: "__follow_chat__", roleModelIsSelectable: () => true, modelOptionsFor: () => [{ value: "m" }] });
+  loadFunction("setRoleChannel", context)("chat", "c");
+  assert.equal(roleForm.value.chat.routing_strategy, "weighted");
+  assert.equal(roleForm.value.chat.weight, 3);
+  assert.equal(roleForm.value.chat.disabled, true);
+  loadFunction("setRoleModel", context)("chat", "d::m2");
+  assert.equal(roleForm.value.chat.routing_strategy, "weighted");
+  assert.equal(roleForm.value.chat.weight, 3);
+  loadFunction("moveRoleRoute", context)("chat", 1, 0);
+  assert.equal(roleForm.value.chat.profile_id, "b");
+  assert.equal(roleForm.value.chat.weight, 2);
+  assert.equal(roleForm.value.chat.standby, undefined);
+  assert.equal(roleForm.value.chat.routing_strategy, "weighted");
+  assert.equal(roleForm.value.chat.fallbacks[0].disabled, true);
+  assert.equal(roleForm.value.chat.fallbacks[0].routing_strategy, undefined);
+});
+
+test("all-disabled model routes are rejected and their purpose is opened", async () => {
+  const errors = [];
+  const keys = ["chat", "vision", "intent", "image"];
+  const roleForm = { value: Object.fromEntries(keys.map(key => [key, { profile_id: "p", model: "m" }])) };
+  roleForm.value.intent.disabled = true;
+  roleForm.value.intent.fallbacks = [{ profile_id: "p2", model: "m", disabled: true }];
+  const selectedModelRole = { value: "chat" };
+  const context = vm.createContext({ connectionConflict: { value: undefined }, form: { value: { onebot_reverse_ws_endpoint: "ws://localhost" } }, roleForm, modelRoleRows: keys.map(key => ({ key, label: key })), purposeRoleRows: [], purposeRoleKeys: [], editorTab: { value: "access" }, selectedModelRole, visibleModelRoleRows: keys.map(key => ({ key, label: key })), isMediaRole, sendRetryValidationError: () => "", validWebSocketURL: () => true, roleModelIsSelectable: () => true, toastError: message => errors.push(message), busy: { value: false } });
+  await loadFunction("save", context)();
+  assert.equal(errors[0], "intent至少需要启用一个模型");
+  assert.equal(selectedModelRole.value, "intent");
 });

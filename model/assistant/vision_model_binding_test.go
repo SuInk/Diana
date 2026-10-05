@@ -72,6 +72,22 @@ func TestVisionTurnUsesItsOwnBindingWhenPresent(t *testing.T) {
 	}
 }
 
+func TestVisionBindingAcceptsTextMetadataAndUsesSelectedModelWindow(t *testing.T) {
+	set := visionBindingProfileSet()
+	set.Profiles[0].Config.Models = []llm.ModelInfo{
+		{ID: "bound-chat-model", ContextWindowOverride: 64000},
+		{ID: "text-only", ContextWindowOverride: 8192, CapabilitiesOverride: &llm.ModelCapabilities{InputModalities: []string{"text"}, OutputModalities: []string{"text"}}},
+	}
+	runtime := NewRuntime(BotConfig{ModelRoles: map[string]ModelRole{"vision": {ProfileID: "bot-chat", Model: "text-only"}}}, nilChannel{}, NewPluginManager(), &stubLLMProfileStore{set: set}, nil, nil, nil)
+	profiles, err := runtime.roleBoundProfiles("", set, llm.GroupVision)
+	if err != nil || len(profiles) != 1 {
+		t.Fatalf("explicit text model was blocked by vision metadata: profiles=%#v err=%v", profiles, err)
+	}
+	if profiles[0].Config.Model != "text-only" || profiles[0].Config.MaxContextTokensWithDefault() != 8192 {
+		t.Fatalf("selected model/window not used: %#v", profiles[0].Config)
+	}
+}
+
 // 新的 provider 注册表走另一条选路代码。它以前不做 chat 回落，视觉轮次直接落到
 // 全局激活配置——这正是「用完 history_media 之后换了个模型答话」的由来。
 func TestRegistrySelectionFallsBackToBoundChatRole(t *testing.T) {

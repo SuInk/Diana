@@ -500,7 +500,9 @@ func NewProviderRegistryFromProfiles(set ProfileSet) (*ProviderRegistry, AgentMo
 				continue
 			}
 			seen[modelID] = true
-			model := ModelDefinition{ID: providerID + ":" + modelID, ProviderID: providerID, ModelID: modelID, Name: modelID, ContextWindow: cfg.MaxContextTokensWithDefault(), MaxTokens: cfg.MaxOutputTokens}
+			modelConfig := cfg
+			modelConfig.Model = modelID
+			model := ModelDefinition{ID: providerID + ":" + modelID, ProviderID: providerID, ModelID: modelID, Name: modelID, ContextWindow: modelConfig.MaxContextTokensWithDefault(), MaxTokens: cfg.MaxOutputTokens}
 			if err := r.RegisterModel(model); err != nil {
 				return nil, AgentModelConfig{}, err
 			}
