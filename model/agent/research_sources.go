@@ -63,7 +63,7 @@ func researchObservationGuidance(tool, rawOutput string, remaining int) string {
 			case sourceStagePagePartial:
 				guidance = "正文已读取但被截断；只使用可见内容支持的条件，缺失段落不能当成否定证据。需要的条件不在可见部分时，读取更具体的来源或调整查询。某来源只讨论一个范围时，不能据此断言其他范围尚未开放或全部不支持。"
 			default:
-				guidance = "已读到页面正文；这不自动表示官方、最新或所问条件已被证实。将正文的主体、日期和适用条件与原说法逐项对应；公开提供与免费、无门槛、覆盖所有对象是不同命题，收费或范围限制不能作为‘未公开’的证据。也不要替原说法添加条件来表示赞同。直接支持的部分可以确认，冲突或未覆盖的部分继续核对或限定表达。证据足够时即可结束。"
+				guidance = "已读到页面正文；这不自动表示官方、最新或所问条件已被证实。将正文的主体、日期和适用条件与原说法逐项对应；原文未显示的发布日期不从摘要、旧印象或相关链接补出，未被问到的日期省略即可。公开提供与免费、无门槛、覆盖所有对象是不同命题，收费或范围限制不能作为‘未公开’的证据。也不要替原说法添加条件来表示赞同。直接支持的部分可以确认，冲突或未覆盖的部分继续核对或限定表达。证据足够时即可结束。"
 			}
 		}
 	default:
@@ -72,7 +72,7 @@ func researchObservationGuidance(tool, rawOutput string, remaining int) string {
 	if remaining <= 0 {
 		return guidance + " 工具预算已耗尽，按已有证据回答，明确仍未确认的部分，不要承诺继续查询。"
 	}
-	return guidance + " 需要核对时直接调用工具；信息足够时调用 agent_finalize。"
+	return guidance + " 保留来源的产品名称和范围限定；‘尚未提供’不能改写成‘正在分批提供’，某子产品可用也不能扩写为全部渠道可用。需要核对时直接调用工具；信息足够时调用 agent_finalize。"
 }
 
 func browserPayloadSourceStage(page browserRenderPayload) string {
