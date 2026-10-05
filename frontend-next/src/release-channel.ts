@@ -23,6 +23,14 @@ export function releaseAllowedOnChannel(release: { tag: string; prerelease?: boo
   return false;
 }
 
+/** 回退范围固定为 GitHub 最新 5 个稳定 Release，当前版本和较新版本也占名额。 */
+export function latestRollbackReleaseTags(releases: readonly { tag: string; prerelease?: boolean }[]): Set<string> {
+  const stable = releases.filter((release) => !release.prerelease
+    && release.tag.trim() !== ""
+    && !release.tag.split("+")[0].includes("-"));
+  return new Set(stable.slice(0, 5).map((release) => release.tag));
+}
+
 export interface ChannelSwitchConfirm {
   title: string;
   message: string;

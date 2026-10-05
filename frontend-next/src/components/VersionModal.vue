@@ -174,7 +174,7 @@
           <h3 style="margin: 0; font-size: 14px">版本历史</h3>
           <span class="cluster" style="gap: 12px">
             <span v-if="loaded && kind === 'releases' && releases.length" class="muted" style="font-size: 12.5px">
-              {{ deploymentMode === "git" || releaseSelfUpdate ? "可回退最近 5 个稳定版本" : "固定镜像标签后由部署环境重启" }}
+              {{ deploymentMode === "git" || releaseSelfUpdate ? "回退范围：GitHub 最新 5 个稳定版本" : "固定镜像标签后由部署环境重启" }}
             </span>
             <a
               v-if="repo"
@@ -304,7 +304,7 @@ import {
 } from "../api";
 import { toastError, toastSuccess } from "../toast";
 import { askConfirm } from "../confirm";
-import { channelSwitchConfirm, releaseAllowedOnChannel, type UpdateChannel } from "../release-channel";
+import { channelSwitchConfirm, latestRollbackReleaseTags, releaseAllowedOnChannel, type UpdateChannel } from "../release-channel";
 import { markUpdateInstalling } from "../backendState";
 
 const emit = defineEmits<{ close: []; checked: [available: boolean]; versionChanged: [version: SystemVersion] }>();
@@ -395,21 +395,12 @@ const currentTag = computed(() => {
 const channelReleases = computed(() => releases.value.filter((release) =>
   release.tag === currentTag.value || releaseAllowedOnChannel(release, policy.value.channel || "release")));
 
-// 与服务端回退白名单保持一致：比当前版本旧的最近 5 个稳定 Release。
-const rollbackTags = computed(() => {
-  const tags = new Set<string>();
-  for (const release of releases.value) {
-    if (release.prerelease || !release.tag) continue;
-    if (!isOlderRelease(release.tag)) continue;
-    tags.add(release.tag);
-    if (tags.size === 5) break;
-  }
-  return tags;
-});
+// 先固定 GitHub 最新 5 个稳定 Release，再判断其中哪些比当前版本旧。
+const rollbackTags = computed(() => latestRollbackReleaseTags(releases.value));
 
 function canRollbackTo(release: ReleaseEntry): boolean {
   if (deploymentMode.value !== "git" && !releaseSelfUpdate.value) return false;
-  return rollbackTags.value.has(release.tag);
+  return rollbackTags.value.has(release.tag) && isOlderRelease(release.tag);
 }
 
 function formatDate(value?: string): string {

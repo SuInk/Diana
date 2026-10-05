@@ -62,7 +62,7 @@ curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/docker.sh 
 
 选择写在部署目录的 `.env` 里（`DIANA_IMAGE=`），重复执行安装脚本不会把它改掉。之后想换一种，在终端里重新运行安装脚本，或直接改这一行。
 
-一键安装默认加入只处理 Diana 容器的独立更新助手，并在 `.env` 生成内部令牌。Docker socket 仅挂给助手，不挂给 Diana；助手的 HTTP 接口不映射到宿主机。WebUI 可手动请求更新镜像；「自动重启并安装」仍默认关闭，开启后才按所选通道定期更新。宿主机必须允许挂载 `/var/run/docker.sock`，该挂载可控制宿主机 Docker，请只在可信部署中使用。已有 Docker 部署要在**原部署目录**重跑上方同一条一键安装命令，旧容器自身无法加装助手。若已有 Watchtower、Portainer 等更新任务，请停用它们对 Diana 的更新，避免绕过 WebUI 开关。不需要更新助手时，可用 `curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/docker.sh | DIANA_DOCKER_SELF_UPDATE=0 sh` 安装或关闭助手。
+一键安装默认加入只处理 Diana 容器的独立更新助手，并在 `.env` 生成内部令牌。Docker socket 仅挂给助手，不挂给 Diana；助手的 HTTP 接口不映射到宿主机。WebUI 可手动请求更新镜像；「自动安装并重启」仍默认关闭，开启后才按所选通道定期更新。宿主机必须允许挂载 `/var/run/docker.sock`，该挂载可控制宿主机 Docker，请只在可信部署中使用。已有 Docker 部署要在**原部署目录**重跑上方同一条一键安装命令，旧容器自身无法加装助手。若已有 Watchtower、Portainer 等更新任务，请停用它们对 Diana 的更新，避免绕过 WebUI 开关。不需要更新助手时，可用 `curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/docker.sh | DIANA_DOCKER_SELF_UPDATE=0 sh` 安装或关闭助手。
 
 以后更新只需在同一目录执行：
 

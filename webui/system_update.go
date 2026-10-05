@@ -905,9 +905,8 @@ func (h *SystemUpdateHandler) latestStableRelease(ctx context.Context, remoteURL
 	return releases[0], nil
 }
 
-// recentStableReleases returns the newest stable releases. Rollback applies
-// the five-version, older-than-current allowlist after this fetch so a current
-// version or a newer release cannot consume one of the rollback slots.
+// recentStableReleases returns the newest stable releases in GitHub order.
+// Rollback limits this list to five before excluding current or newer versions.
 func (h *SystemUpdateHandler) recentStableReleases(ctx context.Context, remoteURL string) ([]ReleaseEntry, error) {
 	owner, repo, ok := githubRepoFromRemote(remoteURL)
 	if !ok {
@@ -967,9 +966,11 @@ func (h *SystemUpdateHandler) rollback(c *gin.Context) {
 		return
 	}
 	var target ReleaseEntry
-	rollbackSlots := 0
 	_, currentSemver := versionParts(currentVersion)
-	for _, release := range releases {
+	for index, release := range releases {
+		if index == maxRollbackReleases {
+			break
+		}
 		if currentSemver {
 			older, versionErr := isNewerVersion(release.Tag, currentVersion)
 			if versionErr != nil || !older {
@@ -978,17 +979,13 @@ func (h *SystemUpdateHandler) rollback(c *gin.Context) {
 		} else if release.Tag == currentVersion {
 			continue
 		}
-		if rollbackSlots == maxRollbackReleases {
-			break
-		}
-		rollbackSlots++
 		if release.Tag == payload.Ref {
 			target = release
 			break
 		}
 	}
 	if strings.TrimSpace(target.Tag) == "" {
-		writeError(c, http.StatusBadRequest, fmt.Errorf("只能回退最近 %d 个稳定版本", maxRollbackReleases))
+		writeError(c, http.StatusBadRequest, fmt.Errorf("只能回退 GitHub 最新 %d 个稳定版本中的旧版本", maxRollbackReleases))
 		return
 	}
 

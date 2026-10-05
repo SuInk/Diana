@@ -465,7 +465,7 @@ func TestSystemUpdateHandlerRejectsInstallingStaleDownloadedRelease(t *testing.T
 	}
 }
 
-func TestSystemUpdateHandlerRollsBackCompleteReleasePackageWithinRecentFive(t *testing.T) {
+func TestSystemUpdateHandlerRollbackUsesGitHubLatestFiveStableReleases(t *testing.T) {
 	const assetName = "diana-webui-darwin-arm64.tar.gz"
 	github := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !strings.HasPrefix(r.URL.Path, "/repos/SuInk/Diana/releases") {
@@ -473,6 +473,10 @@ func TestSystemUpdateHandlerRollsBackCompleteReleasePackageWithinRecentFive(t *t
 			return
 		}
 		_, _ = w.Write([]byte(`[
+            {"tag_name":"v1.4.0-canary.1","prerelease":true},
+            {"tag_name":"v1.4.0-beta.1","prerelease":true},
+            {"tag_name":"v1.4.0-rc.1","prerelease":false},
+            {"tag_name":"v1.4.0","draft":true},
             {"tag_name":"v1.3.0","published_at":"2026-08-09T10:00:00Z","assets":[{"name":"SHA256SUMS","browser_download_url":"https://example.test/SHA256SUMS"},{"name":"` + assetName + `","browser_download_url":"https://example.test/package.tar.gz"}]},
             {"tag_name":"v1.2.0","published_at":"2026-08-08T10:00:00Z","assets":[{"name":"SHA256SUMS","browser_download_url":"https://example.test/SHA256SUMS"},{"name":"` + assetName + `","browser_download_url":"https://example.test/package.tar.gz"}]},
             {"tag_name":"v1.1.0","published_at":"2026-08-07T10:00:00Z","assets":[{"name":"SHA256SUMS","browser_download_url":"https://example.test/SHA256SUMS"},{"name":"` + assetName + `","browser_download_url":"https://example.test/package.tar.gz"}]},
@@ -484,29 +488,71 @@ func TestSystemUpdateHandlerRollsBackCompleteReleasePackageWithinRecentFive(t *t
 	}))
 	defer github.Close()
 
-	releaseUpdater := &recordingReleasePackageUpdater{
-		status:   updater.Status{Root: "/Applications/Diana", NearestTag: "v1.3.0", RunningCommit: "v1.3.0", ApplySupported: true},
-		expected: assetName,
+	cases := []struct {
+		name    string
+		current string
+		target  string
+		allowed bool
+	}{
+		{"latest accepts fifth", "v1.3.0", "v0.9.0", true},
+		{"latest rejects sixth", "v1.3.0", "v0.8.0", false},
+		{"middle accepts fifth", "v1.1.0", "v0.9.0", true},
+		{"middle rejects sixth", "v1.1.0", "v0.8.0", false},
+		{"old cannot extend window", "v0.8.0", "v0.7.0", false},
+		{"current is rejected", "v1.1.0", "v1.1.0", false},
+		{"newer is rejected", "v1.1.0", "v1.2.0", false},
+		{"unknown accepts fifth", "abc1234", "v0.9.0", true},
+		{"unknown rejects sixth", "abc1234", "v0.8.0", false},
 	}
-	handler := NewSystemUpdateHandler(fakeSystemUpdater{err: updater.ErrRepositoryNotFound})
-	handler.SetReleasePackageUpdater(releaseUpdater)
-	handler.githubAPIBase = github.URL
-	router := systemUpdateTestRouter(handler)
+	for _, deployment := range []string{"release", "git"} {
+		for _, tc := range cases {
+			t.Run(deployment+"/"+tc.name, func(t *testing.T) {
+				status := updater.Status{
+					Root: "/Applications/Diana", RemoteURL: "https://github.com/SuInk/Diana.git",
+					NearestTag: tc.current, RunningCommit: tc.current, ApplySupported: true,
+				}
+				releaseUpdater := &recordingReleasePackageUpdater{status: status, expected: assetName}
+				handler := NewSystemUpdateHandler(fakeSystemUpdater{status: status})
+				if deployment == "release" {
+					handler.SetReleasePackageUpdater(releaseUpdater)
+				}
+				handler.githubAPIBase = github.URL
+				router := systemUpdateTestRouter(handler)
 
-	req := httptest.NewRequest(http.MethodPost, "/api/system/update/rollback", strings.NewReader(`{"ref":"v1.0.0","confirmation":"rollback-version"}`))
-	req.Header.Set("Content-Type", "application/json")
-	rec := httptest.NewRecorder()
-	router.ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK || !releaseUpdater.installed || releaseUpdater.release.Tag != "v1.0.0" {
-		t.Fatalf("rollback status = %d, body = %s, updater = %#v", rec.Code, rec.Body.String(), releaseUpdater)
-	}
-
-	req = httptest.NewRequest(http.MethodPost, "/api/system/update/rollback", strings.NewReader(`{"ref":"v0.7.0","confirmation":"rollback-version"}`))
-	req.Header.Set("Content-Type", "application/json")
-	rec = httptest.NewRecorder()
-	router.ServeHTTP(rec, req)
-	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "最近 5 个稳定版本") {
-		t.Fatalf("old rollback status = %d, body = %s", rec.Code, rec.Body.String())
+				body := fmt.Sprintf(`{"ref":%q,"confirmation":"rollback-version"}`, tc.target)
+				request := httptest.NewRequest(http.MethodPost, "/api/system/update/rollback", strings.NewReader(body))
+				request.Header.Set("Content-Type", "application/json")
+				recorder := httptest.NewRecorder()
+				router.ServeHTTP(recorder, request)
+				if !tc.allowed {
+					if recorder.Code != http.StatusBadRequest || !strings.Contains(recorder.Body.String(), "GitHub 最新 5 个稳定版本") {
+						t.Fatalf("rejected rollback status = %d, body = %s", recorder.Code, recorder.Body.String())
+					}
+					if releaseUpdater.downloaded || releaseUpdater.installed {
+						t.Fatal("rejected rollback must not download or install a package")
+					}
+					return
+				}
+				if recorder.Code != http.StatusOK {
+					t.Fatalf("rollback status = %d, body = %s", recorder.Code, recorder.Body.String())
+				}
+				if deployment == "release" {
+					if !releaseUpdater.installed || !releaseUpdater.force || releaseUpdater.release.Tag != tc.target {
+						t.Fatalf("rollback updater = %#v", releaseUpdater)
+					}
+				} else {
+					var response struct {
+						Result updater.Result `json:"result"`
+					}
+					if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+						t.Fatal(err)
+					}
+					if response.Result.Status.HeadCommit != tc.target {
+						t.Fatalf("rollback target = %q, want %q", response.Result.Status.HeadCommit, tc.target)
+					}
+				}
+			})
+		}
 	}
 }
 

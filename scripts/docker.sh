@@ -149,7 +149,7 @@ docker compose "$@" up -d
 printf '\n%s\n' 'Diana 已启动。默认控制台：http://localhost:18080' \
   '查看账号密码：docker compose -f docker-compose.yml logs diana'
 if [ "$self_update" = 1 ]; then
-  printf '%s\n' 'Docker 自更新助手已启用；可在版本面板手动更新，或开启「自动重启并安装」。'
+  printf '%s\n' 'Docker 自更新助手已启用；可在版本面板手动更新，或开启「自动安装并重启」。'
   printf '%s\n' '以后在此目录更新：docker compose -f docker-compose.yml -f docker-compose.update.yml pull && docker compose -f docker-compose.yml -f docker-compose.update.yml up -d'
 else
   printf '%s\n' '以后在此目录更新：docker compose -f docker-compose.yml pull && docker compose -f docker-compose.yml up -d'
