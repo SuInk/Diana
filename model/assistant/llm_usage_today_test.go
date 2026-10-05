@@ -37,7 +37,7 @@ func TestRestoreLLMUsageTodayFromLogs(t *testing.T) {
 	if want := time.Date(2026, 9, 24, 0, 0, 0, 0, loc); !stub.since.Equal(want) || !stub.until.Equal(now) {
 		t.Fatalf("窗口 = [%s, %s)，应当从本地零点到现在", stub.since, stub.until)
 	}
-	runtime.recordLLMUsageTotals(llm.Usage{InputTokens: 1000, OutputTokens: 10, TotalTokens: 1010})
+	runtime.recordLLMUsageTotals(llm.Usage{InputTokens: 1000, OutputTokens: 10, TotalTokens: 1010}, "provider-a", "model-a", "reply")
 	totals := runtime.llmUsageTotals()
 	if totals.Today.Calls != 301 || totals.Today.TotalTokens != 9_101_010 || totals.Today.CachedInputTokens != 5_000_000 {
 		t.Fatalf("today = %+v", totals.Today)
@@ -52,7 +52,7 @@ func TestRestoreLLMUsageTodayFromLogs(t *testing.T) {
 	if got := runtime.llmUsageTotals().Today; got.Calls != 0 || got.TotalTokens != 0 {
 		t.Fatalf("跨日后 today = %+v", got)
 	}
-	runtime.recordLLMUsageTotals(llm.Usage{InputTokens: 5, OutputTokens: 5, TotalTokens: 10})
+	runtime.recordLLMUsageTotals(llm.Usage{InputTokens: 5, OutputTokens: 5, TotalTokens: 10}, "provider-a", "model-a", "reply")
 	if got := runtime.llmUsageTotals().Today; got.Calls != 1 || got.TotalTokens != 10 {
 		t.Fatalf("跨日后第一次调用 today = %+v", got)
 	}
@@ -63,11 +63,39 @@ func TestRestoreLLMUsageTodayAfterCallsIsNoop(t *testing.T) {
 	now := time.Date(2026, 9, 24, 12, 0, 0, 0, time.Local)
 	runtime := NewRuntime(BotConfig{}, &recordingChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	runtime.now = func() time.Time { return now }
-	runtime.recordLLMUsageTotals(llm.Usage{TotalTokens: 10})
+	runtime.recordLLMUsageTotals(llm.Usage{TotalTokens: 10}, "provider-a", "model-a", "reply")
 	if err := runtime.RestoreLLMUsageToday(context.Background(), &usageSinceStub{summary: applog.UsageSummary{Calls: 99, TotalTokens: 999}}); err != nil {
 		t.Fatal(err)
 	}
 	if got := runtime.llmUsageTotals().Today; got.Calls != 1 || got.TotalTokens != 10 {
 		t.Fatalf("today = %+v", got)
+	}
+}
+
+func TestRestoreLLMUsageTodayRestoresBreakdowns(t *testing.T) {
+	now := time.Date(2026, 10, 5, 12, 0, 0, 0, time.Local)
+	runtime := NewRuntime(BotConfig{}, &recordingChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	runtime.now = func() time.Time { return now }
+	stub := &usageSinceStub{summary: applog.UsageSummary{
+		Calls: 2, InputTokens: 100, OutputTokens: 20, TotalTokens: 120,
+		CachedInputTokens: 60, MissingUsageCalls: 1,
+		Breakdown: []applog.UsageBreakdown{{
+			Purpose: "reply", Provider: "provider-a", Model: "model-a", Calls: 2,
+			InputTokens: 100, OutputTokens: 20, TotalTokens: 120, CachedInputTokens: 60, MissingUsageCalls: 1,
+		}},
+	}}
+	// Reading status before startup restoration must not prevent restoration.
+	_ = runtime.llmUsageTotals()
+	if err := runtime.RestoreLLMUsageToday(context.Background(), stub); err != nil {
+		t.Fatal(err)
+	}
+	stub.summary.Breakdown[0].TotalTokens = -1
+	runtime.recordLLMUsageTotals(llm.Usage{InputTokens: 10, TotalTokens: 10}, "provider-a", "model-a", "memory_extract")
+	got := runtime.llmUsageTotals()
+	if got.Today.Calls != 3 || got.Today.TotalTokens != 130 || got.Today.MissingUsageCalls != 1 || len(got.Today.Breakdown) != 2 || got.Today.Breakdown[0].TotalTokens != 120 {
+		t.Fatalf("restored today = %+v", got.Today)
+	}
+	if got.Session.Calls != 1 || len(got.Session.Breakdown) != 1 || got.Session.Breakdown[0].Purpose != "memory_extract" {
+		t.Fatalf("session = %+v", got.Session)
 	}
 }

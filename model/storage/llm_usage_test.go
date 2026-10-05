@@ -3,6 +3,8 @@ package storage
 import (
 	"context"
 	"path/filepath"
+	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -52,7 +54,7 @@ func TestLLMUsageRollingWindow(t *testing.T) {
 		t.Fatalf("fractional timestamps: %+v, %v", got, err)
 	}
 	got, err = s.LLMUsageSince(ctx, until.Add(time.Hour), until.Add(2*time.Hour))
-	if err != nil || got.Calls != 0 {
+	if err != nil || got.Calls != 0 || got.Breakdown == nil || len(got.Breakdown) != 0 {
 		t.Fatalf("empty window: %+v, %v", got, err)
 	}
 }
@@ -151,8 +153,129 @@ func TestLLMUsageReportSeparatesRobotsPlatformsPurposesAndUnknownHistory(t *test
 	if filtered.Usage.Calls != 2 || filtered.Usage.TotalTokens != 120 || len(filtered.Groups) != 1 || filtered.Groups[0].Purposes["memory"].MissingUsageCalls != 1 || filtered.Groups[0].Purposes["reply"].CachedInputTokens != 60 {
 		t.Fatalf("filtered=%+v", filtered)
 	}
+	if len(filtered.Usage.Breakdown) != 2 || len(filtered.Groups[0].Usage.Breakdown) != 2 || len(filtered.Groups[0].Purposes["reply"].Breakdown) != 1 {
+		t.Fatalf("filtered breakdowns = %+v", filtered)
+	}
+	var calls, tokens int64
+	for _, entry := range filtered.Usage.Breakdown {
+		calls += entry.Calls
+		tokens += entry.TotalTokens
+	}
+	if calls != filtered.Usage.Calls || tokens != filtered.Usage.TotalTokens {
+		t.Fatalf("filtered breakdown differs from totals: %+v", filtered)
+	}
 	robot, err := s.LLMUsageReport(ctx, applog.UsageFilter{ProfileID: "a"}, since, until)
 	if err != nil || robot.Usage.TotalTokens != 620 {
 		t.Fatalf("robot=%+v err=%v", robot, err)
+	}
+}
+
+func TestLLMUsageEmptyMetadataAndCorruption(t *testing.T) {
+	s, err := NewSQLiteStore(filepath.Join(t.TempDir(), "usage.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	ctx := context.Background()
+	now := time.Date(2026, 10, 5, 12, 0, 0, 0, time.UTC)
+	if err := s.AppendLog(ctx, applog.Entry{ID: "legacy", Action: "llm_usage", CreatedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	for _, metadata := range []any{nil, "", "  ", "null", "{}"} {
+		if _, err := s.db.ExecContext(ctx, `UPDATE app_logs SET metadata = ? WHERE id = 'legacy'`, metadata); err != nil {
+			t.Fatal(err)
+		}
+		got, err := s.LLMUsageSince(ctx, now, now.Add(time.Second))
+		if err != nil || got.Calls != 1 || got.TotalTokens != 0 || got.MissingUsageCalls != 1 || len(got.Breakdown) != 1 {
+			t.Fatalf("metadata=%#v: %+v, %v", metadata, got, err)
+		}
+	}
+	if _, err := s.db.ExecContext(ctx, `UPDATE app_logs SET metadata = '{broken' WHERE id = 'legacy'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.LLMUsageSince(ctx, now, now.Add(time.Second)); err == nil || !strings.Contains(err.Error(), "invalid usage metadata") {
+		t.Fatalf("corrupted metadata must report a read error, got %v", err)
+	}
+}
+
+func TestLLMUsageBreakdownSurvivesRestartAndMatchesTotals(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "usage.db")
+	s, err := NewSQLiteStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = s.Close() }()
+	ctx := context.Background()
+	until := time.Date(2026, 10, 5, 12, 0, 0, 500000000, time.UTC)
+	since := until.Add(-time.Hour)
+	entries := []map[string]any{
+		{"purpose": " reply ", "provider": "provider-a", "model": " model-a ", "input_tokens": 100, "output_tokens": 20, "cached_input_tokens": 60},
+		{"purpose": "reply", "provider": "provider-a", "model": "model-a", "input_tokens": 10, "output_tokens": 5, "total_tokens": 18},
+		{"purpose": "memory_extract", "provider": "provider-a", "model": "model-a", "input_tokens": 30, "output_tokens": 4},
+		{"purpose": "reply", "provider": "provider-b", "model": "model-a", "input_tokens": 8, "output_tokens": 2},
+		{"purpose": "image_generate", "provider": "provider-a", "model": "image-model", "usage_missing": true},
+		{"input_tokens": 2, "output_tokens": 1},
+		{}, // Historical calls without reported usage still count.
+	}
+	for i, metadata := range entries {
+		if err := s.AppendLog(ctx, applog.Entry{Action: "llm_usage", CreatedAt: since.Add(time.Duration(i) * time.Minute), Metadata: metadata}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Exact upper boundary and unrelated logs must not enter any group.
+	for _, entry := range []applog.Entry{
+		{Action: "llm_usage", CreatedAt: until, Metadata: entries[0]},
+		{Action: "agent_tool", CreatedAt: since, Metadata: entries[0]},
+	} {
+		if err := s.AppendLog(ctx, entry); err != nil {
+			t.Fatal(err)
+		}
+	}
+	before, err := s.LLMUsageSince(ctx, since, until)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s, err = NewSQLiteStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.LLMUsageSince(ctx, since, until)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got, before) {
+		t.Fatalf("usage changed after restart: before=%+v after=%+v", before, got)
+	}
+	want := []applog.UsageBreakdown{
+		{Purpose: "reply", Provider: "provider-a", Model: "model-a", Calls: 2, InputTokens: 110, OutputTokens: 25, TotalTokens: 138, CachedInputTokens: 60},
+		{Purpose: "memory_extract", Provider: "provider-a", Model: "model-a", Calls: 1, InputTokens: 30, OutputTokens: 4, TotalTokens: 34},
+		{Purpose: "reply", Provider: "provider-b", Model: "model-a", Calls: 1, InputTokens: 8, OutputTokens: 2, TotalTokens: 10},
+		{Purpose: "unlabeled", Model: "unknown", Calls: 2, InputTokens: 2, OutputTokens: 1, TotalTokens: 3, MissingUsageCalls: 1},
+		{Purpose: "image_generate", Provider: "provider-a", Model: "image-model", Calls: 1, MissingUsageCalls: 1},
+	}
+	if !reflect.DeepEqual(got.Breakdown, want) {
+		t.Fatalf("breakdown = %+v, want %+v", got.Breakdown, want)
+	}
+	if got.Calls != 7 || got.InputTokens != 150 || got.OutputTokens != 32 || got.TotalTokens != 185 || got.CachedInputTokens != 60 || got.MissingUsageCalls != 2 {
+		t.Fatalf("totals = %+v", got)
+	}
+	var sum applog.UsageSummary
+	for _, group := range got.Breakdown {
+		sum.Calls += group.Calls
+		sum.InputTokens += group.InputTokens
+		sum.OutputTokens += group.OutputTokens
+		sum.TotalTokens += group.TotalTokens
+		sum.CachedInputTokens += group.CachedInputTokens
+		sum.MissingUsageCalls += group.MissingUsageCalls
+	}
+	if sum.Calls != got.Calls || sum.InputTokens != got.InputTokens || sum.OutputTokens != got.OutputTokens || sum.TotalTokens != got.TotalTokens || sum.CachedInputTokens != got.CachedInputTokens || sum.MissingUsageCalls != got.MissingUsageCalls {
+		t.Fatalf("breakdown sums differ from totals: sum=%+v totals=%+v", sum, got)
+	}
+	empty, err := s.LLMUsageSince(ctx, until, until.Add(time.Nanosecond))
+	if err != nil || len(empty.Breakdown) != 1 || empty.Calls != 1 {
+		t.Fatalf("upper boundary call: %+v, %v", empty, err)
 	}
 }

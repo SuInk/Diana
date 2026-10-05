@@ -2,20 +2,97 @@ package applog
 
 import (
 	"context"
+	"sort"
+	"strings"
 	"time"
 )
 
 // UsageSummary counts recorded calls across this Diana instance.
 // CachedInputTokens is already included in InputTokens.
 type UsageSummary struct {
-	Since             time.Time `json:"since"`
-	Until             time.Time `json:"until"`
-	MissingUsageCalls int64     `json:"usage_missing_calls,omitempty"`
-	Calls             int64     `json:"recorded_calls"`
-	InputTokens       int64     `json:"input_tokens"`
-	OutputTokens      int64     `json:"output_tokens"`
-	TotalTokens       int64     `json:"total_tokens"`
-	CachedInputTokens int64     `json:"cached_input_tokens"`
+	Since             time.Time        `json:"since"`
+	Until             time.Time        `json:"until"`
+	Calls             int64            `json:"recorded_calls"`
+	InputTokens       int64            `json:"input_tokens"`
+	OutputTokens      int64            `json:"output_tokens"`
+	TotalTokens       int64            `json:"total_tokens"`
+	CachedInputTokens int64            `json:"cached_input_tokens"`
+	MissingUsageCalls int64            `json:"usage_missing_calls,omitempty"`
+	Breakdown         []UsageBreakdown `json:"breakdown"`
+}
+
+// UsageBreakdown preserves the combination of purpose and actual model so
+// consumers can group by either dimension or inspect their intersection.
+// CachedInputTokens is included in InputTokens, never added to TotalTokens.
+type UsageBreakdown struct {
+	Purpose           string `json:"purpose"`
+	Provider          string `json:"provider"`
+	Model             string `json:"model"`
+	Calls             int64  `json:"recorded_calls"`
+	InputTokens       int64  `json:"input_tokens"`
+	OutputTokens      int64  `json:"output_tokens"`
+	TotalTokens       int64  `json:"total_tokens"`
+	CachedInputTokens int64  `json:"cached_input_tokens"`
+	MissingUsageCalls int64  `json:"missing_usage_calls"`
+}
+
+type usageBreakdownKey struct {
+	purpose, provider, model string
+}
+
+// UsageBreakdownAccumulator is shared by runtime counters and durable log
+// queries. Callers provide synchronization when used across goroutines.
+type UsageBreakdownAccumulator struct {
+	entries map[usageBreakdownKey]UsageBreakdown
+}
+
+func (a *UsageBreakdownAccumulator) Add(entry UsageBreakdown) {
+	entry.Purpose = strings.TrimSpace(entry.Purpose)
+	entry.Provider = strings.TrimSpace(entry.Provider)
+	entry.Model = strings.TrimSpace(entry.Model)
+	if entry.Purpose == "" {
+		entry.Purpose = "unlabeled"
+	}
+	if entry.Model == "" {
+		entry.Model = "unknown"
+	}
+	if a.entries == nil {
+		a.entries = make(map[usageBreakdownKey]UsageBreakdown)
+	}
+	key := usageBreakdownKey{entry.Purpose, entry.Provider, entry.Model}
+	current := a.entries[key]
+	current.Purpose, current.Provider, current.Model = entry.Purpose, entry.Provider, entry.Model
+	current.Calls += entry.Calls
+	current.InputTokens += entry.InputTokens
+	current.OutputTokens += entry.OutputTokens
+	current.TotalTokens += entry.TotalTokens
+	current.CachedInputTokens += entry.CachedInputTokens
+	current.MissingUsageCalls += entry.MissingUsageCalls
+	a.entries[key] = current
+}
+
+func (a *UsageBreakdownAccumulator) Snapshot() []UsageBreakdown {
+	entries := make([]UsageBreakdown, 0, len(a.entries))
+	for _, entry := range a.entries {
+		entries = append(entries, entry)
+	}
+	sort.Slice(entries, func(i, j int) bool {
+		a, b := entries[i], entries[j]
+		if a.TotalTokens != b.TotalTokens {
+			return a.TotalTokens > b.TotalTokens
+		}
+		if a.Calls != b.Calls {
+			return a.Calls > b.Calls
+		}
+		if a.Purpose != b.Purpose {
+			return a.Purpose < b.Purpose
+		}
+		if a.Provider != b.Provider {
+			return a.Provider < b.Provider
+		}
+		return a.Model < b.Model
+	})
+	return entries
 }
 
 type UsageReader interface {

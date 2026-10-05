@@ -34,7 +34,13 @@ func (s *SQLiteStore) LLMUsageReport(ctx context.Context, filter applog.UsageFil
 		return report, err
 	}
 	defer rows.Close()
-	groups := map[string]*applog.GroupTokenUsage{}
+	type groupAccumulator struct {
+		entry    applog.GroupTokenUsage
+		usage    applog.UsageBreakdownAccumulator
+		purposes map[string]*applog.UsageBreakdownAccumulator
+	}
+	var breakdown applog.UsageBreakdownAccumulator
+	groups := map[string]*groupAccumulator{}
 	for rows.Next() {
 		var metadata sql.NullString
 		var timestamp string
@@ -49,25 +55,35 @@ func (s *SQLiteStore) LLMUsageReport(ctx context.Context, filter applog.UsageFil
 			continue
 		}
 		var meta map[string]any
-		if err := json.Unmarshal([]byte(metadata.String), &meta); err != nil {
-			return report, fmt.Errorf("invalid usage metadata: %w", err)
+		// Empty historical metadata still represents a call with unknown usage.
+		// Malformed nonempty JSON remains a read error.
+		if metadata.Valid && strings.TrimSpace(metadata.String) != "" {
+			if err := json.Unmarshal([]byte(metadata.String), &meta); err != nil {
+				return report, fmt.Errorf("invalid usage metadata: %w", err)
+			}
 		}
 		str := func(key string) string { v, _ := meta[key].(string); return strings.TrimSpace(v) }
 		profile, platform, group := str("profile_id"), str("platform"), str("group_id")
 		if filter.ProfileID != "" && filter.ProfileID != profile || filter.Platform != "" && filter.Platform != platform || filter.GroupID != "" && filter.GroupID != group {
 			continue
 		}
-		addUsageMetadata(&report.Usage, meta)
+		call := addUsageMetadata(&report.Usage, meta)
+		breakdown.Add(call)
 		if group == "" {
 			continue
 		}
 		key := profile + "\x00" + platform + "\x00" + group
-		entry := groups[key]
-		if entry == nil {
-			entry = &applog.GroupTokenUsage{ProfileID: profile, Platform: platform, GroupID: group, Usage: applog.UsageSummary{Since: since, Until: until}, Purposes: map[string]applog.UsageSummary{}}
-			groups[key] = entry
+		accumulator := groups[key]
+		if accumulator == nil {
+			accumulator = &groupAccumulator{
+				entry:    applog.GroupTokenUsage{ProfileID: profile, Platform: platform, GroupID: group, Usage: applog.UsageSummary{Since: since, Until: until}, Purposes: map[string]applog.UsageSummary{}},
+				purposes: map[string]*applog.UsageBreakdownAccumulator{},
+			}
+			groups[key] = accumulator
 		}
+		entry := &accumulator.entry
 		addUsageMetadata(&entry.Usage, meta)
+		accumulator.usage.Add(call)
 		purpose := str("purpose")
 		if purpose == "" {
 			purpose = "unlabeled"
@@ -76,12 +92,24 @@ func (s *SQLiteStore) LLMUsageReport(ctx context.Context, filter applog.UsageFil
 		usage.Since, usage.Until = since, until
 		addUsageMetadata(&usage, meta)
 		entry.Purposes[purpose] = usage
+		if accumulator.purposes[purpose] == nil {
+			accumulator.purposes[purpose] = &applog.UsageBreakdownAccumulator{}
+		}
+		accumulator.purposes[purpose].Add(call)
 	}
 	if err := rows.Err(); err != nil {
 		return report, err
 	}
-	for _, entry := range groups {
-		report.Groups = append(report.Groups, *entry)
+	report.Usage.Breakdown = breakdown.Snapshot()
+	for _, accumulator := range groups {
+		entry := accumulator.entry
+		entry.Usage.Breakdown = accumulator.usage.Snapshot()
+		for purpose, breakdown := range accumulator.purposes {
+			usage := entry.Purposes[purpose]
+			usage.Breakdown = breakdown.Snapshot()
+			entry.Purposes[purpose] = usage
+		}
+		report.Groups = append(report.Groups, entry)
 	}
 	sort.Slice(report.Groups, func(i, j int) bool {
 		a, b := report.Groups[i], report.Groups[j]
@@ -93,7 +121,7 @@ func (s *SQLiteStore) LLMUsageReport(ctx context.Context, filter applog.UsageFil
 	return report, nil
 }
 
-func addUsageMetadata(usage *applog.UsageSummary, meta map[string]any) {
+func addUsageMetadata(usage *applog.UsageSummary, meta map[string]any) applog.UsageBreakdown {
 	input, output := int64FromAny(meta["input_tokens"]), int64FromAny(meta["output_tokens"])
 	total := int64FromAny(meta["total_tokens"])
 	if total <= 0 {
@@ -104,8 +132,18 @@ func addUsageMetadata(usage *applog.UsageSummary, meta map[string]any) {
 	usage.OutputTokens += output
 	usage.TotalTokens += total
 	usage.CachedInputTokens += int64FromAny(meta["cached_input_tokens"])
+	var missingCalls int64
 	if missing, _ := meta["usage_missing"].(bool); missing || input == 0 && output == 0 && total == 0 {
 		usage.MissingUsageCalls++
+		missingCalls = 1
+	}
+	purpose, _ := meta["purpose"].(string)
+	provider, _ := meta["provider"].(string)
+	model, _ := meta["model"].(string)
+	return applog.UsageBreakdown{
+		Purpose: purpose, Provider: provider, Model: model, Calls: 1,
+		InputTokens: input, OutputTokens: output, TotalTokens: total,
+		CachedInputTokens: int64FromAny(meta["cached_input_tokens"]), MissingUsageCalls: missingCalls,
 	}
 }
 

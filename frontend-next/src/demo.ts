@@ -18,6 +18,8 @@ import type {
   LLMConfig,
   Persona,
   PromptCatalog,
+  LLMUsageBreakdown,
+  LLMUsageCounters,
   PluginState,
   BotProfileConfig,
   BotGroupSummary,
@@ -73,6 +75,33 @@ const demoResidentContext = {
 const now = Date.now();
 const before = (minutes: number) => new Date(now - minutes * 60_000).toISOString();
 const after = (minutes: number) => new Date(now + minutes * 60_000).toISOString();
+
+function demoUsageBreakdown(usage: LLMUsageCounters): LLMUsageBreakdown[] {
+  const templates = [
+    { purpose: "reply", model: "gpt-6-sol", share: 0.6 },
+    { purpose: "proactive_reply_router", model: "gpt-5.6-terra", share: 0.24 },
+    { purpose: "memory_extract", model: "gpt-5.6-terra", share: 0.1 },
+    { purpose: "image_generate", model: "gpt-image-2", share: 0.06 }
+  ];
+  const remaining = { ...usage };
+  return templates.map((template, index) => {
+    const last = index === templates.length - 1;
+    const calls = last ? remaining.calls : Math.floor(usage.calls * template.share);
+    const input = last ? remaining.input_tokens : Math.floor(usage.input_tokens * template.share);
+    const output = last ? remaining.output_tokens : Math.floor(usage.output_tokens * template.share);
+    const cached = last ? remaining.cached_input_tokens : Math.floor(usage.cached_input_tokens * template.share);
+    remaining.calls -= calls;
+    remaining.input_tokens -= input;
+    remaining.output_tokens -= output;
+    remaining.cached_input_tokens -= cached;
+    return {
+      purpose: template.purpose, provider: "openai_compatible", model: template.model,
+      recorded_calls: calls, input_tokens: input, output_tokens: output,
+      cached_input_tokens: cached, total_tokens: input + output,
+      missing_usage_calls: last ? usage.missing_usage_calls : 0
+    };
+  });
+}
 
 const modelCatalog = [
   { id: "gpt-6-sol", input_modalities: ["text", "image"], output_modalities: ["text"], context_window_tokens: 1_050_000 },
@@ -586,6 +615,11 @@ export const demoStatus: BotStatus = {
   },
   updated_at: before(1)
 };
+
+if (demoStatus.llm_usage) {
+  demoStatus.llm_usage.today.breakdown = demoUsageBreakdown(demoStatus.llm_usage.today);
+  demoStatus.llm_usage.session.breakdown = demoUsageBreakdown(demoStatus.llm_usage.session);
+}
 
 let tasks: AssistantTask[] = [
   { id: "task-reminder-01", kind: "reminder", platform: "onebot-v11", owner_id: "100200301", user_id: "100200301", message: "15:30 提醒提交周报", status: "active", trigger_at: after(70), created_at: before(20), consumes_quota: true },
@@ -1211,7 +1245,12 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
         input_tokens: entry.input,
         output_tokens: entry.output,
         total_tokens: entry.total,
-        cached_input_tokens: entry.cached
+        cached_input_tokens: entry.cached,
+        usage_missing_calls: 0,
+        breakdown: demoUsageBreakdown({
+          calls: entry.calls, input_tokens: entry.input, output_tokens: entry.output,
+          cached_input_tokens: entry.cached, total_tokens: entry.total, missing_usage_calls: 0
+        })
       }
     }));
     return json({ until, ranges });

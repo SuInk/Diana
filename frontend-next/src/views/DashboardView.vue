@@ -217,7 +217,7 @@
     </div>
 
     <!-- 所有卡片共用这一个明细弹窗：卡面一行只放得下一个数，分解、占比和口径说明都在这里。 -->
-    <Modal v-if="activeDetail" :title="activeDetail.title" :wide="openDetail === 'latency'" @close="openDetail = null">
+    <Modal v-if="activeDetail" :title="activeDetail.title" :wide="openDetail === 'latency' || openDetail === 'usage'" @close="openDetail = null">
       <div class="stack" style="gap: 14px">
         <div class="usage-detail-total">
           <span class="muted">{{ activeDetail.totalLabel }}</span>
@@ -238,6 +238,7 @@
           :initial-window="selectedRange === '1h' ? '1h' : '24h'"
           :group-label="displayGroupIdentity"
         />
+        <TokenUsageBreakdown v-if="openDetail === 'usage'" :entries="selectedUsage?.breakdown" :range-label="rangeLabel" />
       </div>
     </Modal>
   </div>
@@ -266,7 +267,8 @@ import {
   type StatsHourBucket,
   type StatsRange,
   type StatsRangeID,
-  type StatsRanges
+  type StatsRanges,
+  type LLMUsageBreakdown
 } from "../api";
 import { pushStatsSnapshot, pushStatusSnapshot, scopedStats, stream, type BotEvent } from "../stream";
 import { navigate } from "../router";
@@ -281,6 +283,8 @@ import Modal from "../components/Modal.vue";
 import LatencyDetail from "../components/LatencyDetail.vue";
 import LoadingSkeleton from "../components/LoadingSkeleton.vue";
 import SkeletonBlock from "../components/SkeletonBlock.vue";
+import TokenUsageBreakdown from "../components/TokenUsageBreakdown.vue";
+import { cacheUsageDisplay } from "../llm-usage";
 
 const pending = ref(true);
 const setupNeeded = ref(false);
@@ -398,20 +402,22 @@ interface UsageDetail {
   output_tokens: number;
   cached_input_tokens: number;
   total_tokens: number;
+  missing_usage_calls?: number;
+  breakdown?: readonly LLMUsageBreakdown[];
 }
 
 const selectedUsage = computed<UsageDetail | null>(() => {
   const range = activeRange.value;
-  if (range) return { ...range.usage, calls: range.usage.recorded_calls };
+  if (range) return { ...range.usage, calls: range.usage.recorded_calls, missing_usage_calls: range.usage.usage_missing_calls };
   const today = status.value?.llm_usage?.today;
   return today ? { ...today } : null;
 });
 
 const usageRangeNote = computed(() => {
   if (selectedRange.value === "today") {
-    return "今日合计从本地时间零点算起：Diana 启动时先把当天已记下的用量从日志里读回来，之后实时累加，重启不会清零。";
+    return "今日合计覆盖当前实例全部机器人，从本地时间零点算起：Diana 启动时先把当天已记下的用量从日志里读回来，之后实时累加，重启不会清零。";
   }
-  return "统计窗口内已写入日志的全部调用，包括路由判断、后台子任务这些不直接产生回复的调用。";
+  return "统计当前实例全部机器人在窗口内已写入日志的调用，包括路由判断、后台子任务和控制台测试。";
 });
 
 // 每张卡都能点开看明细。卡面一行只放得下一个数，点开给的是这个数的分解、占比，
@@ -525,7 +531,7 @@ const detailViews = computed<Record<DetailID, DetailView>>(() => {
       total: formatNumber(usage?.total_tokens ?? 0),
       rows: [
         { label: "输入", value: formatNumber(usage?.input_tokens ?? 0) },
-        { label: "其中缓存命中", value: formatNumber(usage?.cached_input_tokens ?? 0), hint: "命中供应商前缀缓存的输入量，已经算在输入里，不要重复相加" },
+        { label: "其中缓存命中", value: cacheUsageDisplay(usage?.cached_input_tokens ?? 0, usage?.input_tokens ?? 0), hint: "同时显示缓存命中数量和利用率；利用率 = 缓存命中 ÷ 输入 Token，缓存已经包含在输入里" },
         { label: "输出", value: formatNumber(usage?.output_tokens ?? 0) },
         { label: "调用次数", value: formatNumber(usage?.calls ?? 0) },
         ...(selectedRange.value === "today" && status.value?.llm_usage
@@ -537,13 +543,12 @@ const detailViews = computed<Record<DetailID, DetailView>>(() => {
               }
             ]
           : []),
-        // 上游没报用量的调用只有运行时那份累加器数得出来，所以只在「今日」这一档有。
-        ...(selectedRange.value === "today" && (status.value?.llm_usage?.today.missing_usage_calls ?? 0) > 0
+        ...((usage?.missing_usage_calls ?? 0) > 0
           ? [
               {
                 label: "上游没报用量",
-                value: `${formatNumber(status.value?.llm_usage?.today.missing_usage_calls ?? 0)} 次`,
-                hint: "这些调用的 token 没被计入，合计只会偏少；这一项只从本次启动算起"
+                value: `${formatNumber(usage?.missing_usage_calls ?? 0)} 次`,
+                hint: "这些调用的 token 没被计入，合计只会偏少"
               }
             ]
           : [])

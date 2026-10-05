@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/SuInk/diana/model/applog"
-
 	"github.com/SuInk/diana/model/llm"
 )
 
@@ -160,7 +159,8 @@ type LLMUsageCounters struct {
 	TotalTokens       int64 `json:"total_tokens"`
 	// MissingUsageCalls 是上游没报用量的调用数。不为 0 时 token 合计只会偏少，
 	// 不标出来就会被当成「这几次没花钱」。
-	MissingUsageCalls int64 `json:"missing_usage_calls"`
+	MissingUsageCalls int64                   `json:"missing_usage_calls"`
+	Breakdown         []applog.UsageBreakdown `json:"breakdown"`
 }
 
 func (c *LLMUsageCounters) add(usage llm.Usage) {
@@ -182,23 +182,40 @@ type LLMUsageTotals struct {
 }
 
 type llmUsageTracker struct {
-	mu     sync.Mutex
-	day    string
-	totals LLMUsageTotals
+	mu               sync.Mutex
+	day              string
+	totals           LLMUsageTotals
+	todayBreakdown   applog.UsageBreakdownAccumulator
+	sessionBreakdown applog.UsageBreakdownAccumulator
+}
+
+func (t *llmUsageTracker) resetDay(now time.Time) {
+	day := now.Format(time.DateOnly)
+	if t.day != day {
+		t.day = day
+		t.totals.Today = LLMUsageCounters{}
+		t.todayBreakdown = applog.UsageBreakdownAccumulator{}
+	}
 }
 
 // observe 累加一次调用的用量。跨日时先把今天那一桶清零：日期一换，「今日」就该
 // 从头数，而不是把昨天的量一直挂在上面。
-func (t *llmUsageTracker) observe(usage llm.Usage, now time.Time) {
-	day := now.Format(time.DateOnly)
+func (t *llmUsageTracker) observe(usage llm.Usage, provider, model, purpose string, now time.Time) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if t.day != day {
-		t.day = day
-		t.totals.Today = LLMUsageCounters{}
-	}
+	t.resetDay(now)
 	t.totals.Today.add(usage)
 	t.totals.Session.add(usage)
+	entry := applog.UsageBreakdown{
+		Purpose: purpose, Provider: provider, Model: model, Calls: 1,
+		InputTokens: usage.InputTokens, OutputTokens: usage.OutputTokens, TotalTokens: usage.TotalTokens,
+		CachedInputTokens: usage.CachedInputTokens,
+	}
+	if usage.InputTokens == 0 && usage.OutputTokens == 0 && usage.TotalTokens == 0 {
+		entry.MissingUsageCalls = 1
+	}
+	t.todayBreakdown.Add(entry)
+	t.sessionBreakdown.Add(entry)
 }
 
 // snapshot 返回当前合计。过了零点还没有新调用时，今天那一桶还是昨天的数，这里
@@ -207,8 +224,11 @@ func (t *llmUsageTracker) snapshot(now time.Time) LLMUsageTotals {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	totals := t.totals
+	totals.Session.Breakdown = t.sessionBreakdown.Snapshot()
 	if t.day != now.Format(time.DateOnly) {
-		totals.Today = LLMUsageCounters{}
+		totals.Today = LLMUsageCounters{Breakdown: []applog.UsageBreakdown{}}
+	} else {
+		totals.Today.Breakdown = t.todayBreakdown.Snapshot()
 	}
 	return totals
 }
@@ -224,14 +244,27 @@ func (t *llmUsageTracker) restoreToday(now time.Time, counters LLMUsageCounters)
 	}
 	t.day = day
 	t.totals.Today = counters
+	t.totals.Today.Breakdown = nil
+	t.todayBreakdown = applog.UsageBreakdownAccumulator{}
+	for _, entry := range counters.Breakdown {
+		t.todayBreakdown.Add(entry)
+	}
+	// Older readers may provide only totals. Preserve those calls as unlabelled.
+	if len(counters.Breakdown) == 0 && counters.Calls > 0 {
+		t.todayBreakdown.Add(applog.UsageBreakdown{
+			Calls: counters.Calls, InputTokens: counters.InputTokens,
+			OutputTokens: counters.OutputTokens, TotalTokens: counters.TotalTokens,
+			CachedInputTokens: counters.CachedInputTokens, MissingUsageCalls: counters.MissingUsageCalls,
+		})
+	}
 }
 
 // recordLLMUsageTotals 把一次调用的用量计入运行期合计。
-func (r *Runtime) recordLLMUsageTotals(usage llm.Usage) {
+func (r *Runtime) recordLLMUsageTotals(usage llm.Usage, provider, model, purpose string) {
 	if r == nil {
 		return
 	}
-	r.llmUsage.observe(usage, r.clock())
+	r.llmUsage.observe(usage, provider, model, purpose, r.clock())
 }
 
 // llmUsageTotals 返回运行时状态里的用量合计。
@@ -246,8 +279,8 @@ func (r *Runtime) llmUsageTotals() LLMUsageTotals {
 //
 // 以前「今日」是纯内存累加，Diana 一重启就从零数起：早上九点半重启过，总览页的
 // 今日 Token 就只剩九点半以后的量，和同一页上跨重启的今日消息数对不上。消息那几
-// 张卡启动时已经从库里恢复基线，这里对齐同一个做法。上游没报用量的调用次数只在
-// 内存里数，库里没有，这一项仍从启动算起。
+// 张卡启动时已经从库里恢复基线，这里对齐同一个做法。分类明细和未报用量次数
+// 一并恢复，保证当天合计与明细保持一致。
 func (r *Runtime) RestoreLLMUsageToday(ctx context.Context, reader applog.UsageReader) error {
 	if r == nil || reader == nil {
 		return nil
@@ -267,6 +300,8 @@ func (r *Runtime) RestoreLLMUsageToday(ctx context.Context, reader applog.UsageR
 		OutputTokens:      summary.OutputTokens,
 		CachedInputTokens: summary.CachedInputTokens,
 		TotalTokens:       summary.TotalTokens,
+		MissingUsageCalls: summary.MissingUsageCalls,
+		Breakdown:         summary.Breakdown,
 	})
 	return nil
 }

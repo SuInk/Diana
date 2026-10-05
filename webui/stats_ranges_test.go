@@ -47,6 +47,10 @@ func (s *stubRangeReader) LLMUsageSince(_ context.Context, since, until time.Tim
 		OutputTokens:      hours * 10,
 		TotalTokens:       hours * 110,
 		CachedInputTokens: hours * 40,
+		Breakdown: []applog.UsageBreakdown{{
+			Purpose: "reply", Provider: "openai_compatible", Model: "model-a", Calls: hours,
+			InputTokens: hours * 100, OutputTokens: hours * 10, TotalTokens: hours * 110, CachedInputTokens: hours * 40,
+		}},
 	}, nil
 }
 
@@ -95,6 +99,9 @@ func TestStatsRangesReturnsEveryWindow(t *testing.T) {
 	// 数值原样透传，不该在这一层被改写或换算。
 	if got := response.Ranges[2].Usage.TotalTokens; got != 24*110 {
 		t.Fatalf("24h TotalTokens = %d, want %d", got, 24*110)
+	}
+	if groups := response.Ranges[2].Usage.Breakdown; len(groups) != 1 || groups[0].Purpose != "reply" || groups[0].Model != "model-a" || groups[0].Calls != 24 || groups[0].TotalTokens != 24*110 {
+		t.Fatalf("24h breakdown = %+v", groups)
 	}
 	if got := response.Ranges[2].Messages; got != 24*7 {
 		t.Fatalf("24h Messages = %d, want %d", got, 24*7)

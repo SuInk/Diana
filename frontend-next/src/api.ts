@@ -940,6 +940,20 @@ export interface LLMUsageCounters {
   total_tokens: number;
   /** 上游没报用量的调用数；不为 0 时 token 合计只会偏少。 */
   missing_usage_calls: number;
+  breakdown?: LLMUsageBreakdown[];
+}
+
+/** 按调用用途、提供商和实际模型保存的用量，可按任一维度汇总或交叉筛选。 */
+export interface LLMUsageBreakdown {
+  purpose: string;
+  provider: string;
+  model: string;
+  recorded_calls: number;
+  input_tokens: number;
+  output_tokens: number;
+  cached_input_tokens: number;
+  total_tokens: number;
+  missing_usage_calls: number;
 }
 
 /** 运行中的后台子任务。跑完即从状态里消失，历史记录见事件详情的 subtasks。 */
@@ -2527,6 +2541,8 @@ export interface LLMUsageSummary {
   output_tokens: number;
   total_tokens: number;
   cached_input_tokens: number;
+  usage_missing_calls?: number;
+  breakdown?: LLMUsageBreakdown[];
 }
 
 /** 一个时间窗内总览页要用的全部数字。 */

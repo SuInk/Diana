@@ -19,6 +19,60 @@ type blockingLLMProvider struct {
 	release chan struct{}
 }
 
+func TestLLMUsageBreakdownsTrackPurposeAndActualModel(t *testing.T) {
+	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	now := time.Date(2026, 10, 5, 23, 30, 0, 0, time.Local)
+	runtime.now = func() time.Time { return now }
+	ctx := context.Background()
+	for _, call := range []struct {
+		provider       llm.Provider
+		model, purpose string
+		usage          llm.Usage
+	}{
+		{llm.ProviderOpenAICompatible, "model-a", "reply", llm.Usage{InputTokens: 100, OutputTokens: 20, CachedInputTokens: 60}},
+		{llm.ProviderOpenAICompatible, "model-a", "reply", llm.Usage{}},
+		{llm.ProviderOpenAICompatible, "model-a", "memory_extract", llm.Usage{InputTokens: 10, OutputTokens: 5}},
+		{llm.ProviderAnthropic, "model-a", "reply", llm.Usage{InputTokens: 8, OutputTokens: 2}},
+		{llm.ProviderOpenAICompatible, "model-b", "reply", llm.Usage{InputTokens: 2, OutputTokens: 1}},
+		{"", "", "", llm.Usage{}},
+	} {
+		runtime.recordLLMUsage(ctx, MessageEvent{}, call.provider, call.model, call.usage, call.purpose, time.Second, 0)
+	}
+	usage := runtime.Status().LLMUsage
+	if len(usage.Today.Breakdown) != 5 || len(usage.Session.Breakdown) != 5 {
+		t.Fatalf("breakdowns = %+v", usage)
+	}
+	first := usage.Today.Breakdown[0]
+	if first.Purpose != "reply" || first.Model != "model-a" || first.Calls != 2 || first.TotalTokens != 120 || first.CachedInputTokens != 60 || first.MissingUsageCalls != 1 {
+		t.Fatalf("first group = %+v", first)
+	}
+	var calls, total, missing int64
+	for _, group := range usage.Today.Breakdown {
+		calls += group.Calls
+		total += group.TotalTokens
+		missing += group.MissingUsageCalls
+	}
+	if calls != usage.Today.Calls || total != usage.Today.TotalTokens || missing != usage.Today.MissingUsageCalls {
+		t.Fatalf("breakdown differs from totals: %+v", usage.Today)
+	}
+	// Consumers may retain or modify a snapshot without changing future snapshots.
+	usage.Today.Breakdown[0].TotalTokens = -1
+	if runtime.Status().LLMUsage.Today.Breakdown[0].TotalTokens != 120 || usage.Session.Breakdown[0].TotalTokens != 120 {
+		t.Fatal("breakdown snapshot shares mutable entries")
+	}
+	// No new call is needed to clear yesterday's counters and groups at midnight.
+	now = now.Add(time.Hour)
+	usage = runtime.Status().LLMUsage
+	if usage.Today.Calls != 0 || len(usage.Today.Breakdown) != 0 || usage.Session.Calls != 6 || len(usage.Session.Breakdown) != 5 {
+		t.Fatalf("midnight snapshot = %+v", usage)
+	}
+	runtime.recordLLMUsage(ctx, MessageEvent{}, llm.ProviderOpenAICompatible, "model-c", llm.Usage{InputTokens: 1}, "reply", time.Second, 0)
+	usage = runtime.Status().LLMUsage
+	if len(usage.Today.Breakdown) != 1 || usage.Today.Breakdown[0].Model != "model-c" || usage.Today.TotalTokens != 1 || usage.Session.TotalTokens != 149 {
+		t.Fatalf("new day snapshot = %+v", usage)
+	}
+}
+
 func (p *blockingLLMProvider) Generate(context.Context, llm.GenerateRequest) (*llm.GenerateResponse, error) {
 	p.entered <- struct{}{}
 	<-p.release

@@ -255,7 +255,7 @@ func (r *Runtime) recordLLMUsage(ctx context.Context, event MessageEvent, provid
 		usage.TotalTokens = usage.InputTokens + usage.OutputTokens
 	}
 	// 运行期合计先记：它给总览页读，不该因为没配日志写入器就停掉。
-	r.recordLLMUsageTotals(usage)
+	r.recordLLMUsageTotals(usage, string(provider), model, purpose)
 	writer := r.appLogWriter()
 	if writer == nil {
 		return
