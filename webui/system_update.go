@@ -578,7 +578,7 @@ func (h *SystemUpdateHandler) installDownloaded(c *gin.Context) {
 		h.writeUpdateError(c, "system_update_install", err)
 		return
 	}
-	recordRequestOperation(c, h.logs, "system_update_install", "已开始安装更新并重启", result.TargetCommit, nil)
+	recordRequestOperation(c, h.logs, "system_update_install", "已开始安装并重启", result.TargetCommit, nil)
 	c.JSON(http.StatusOK, result)
 }
 

@@ -339,7 +339,7 @@
               </span>
             </div>
             <p class="muted" style="font-size: 12.5px; margin: 0">
-              {{ deploymentMode === "git" ? "发现新版本时仅显示黄色提示点，确认后才会同步最新稳定 Release。" : deploymentMode === "docker" ? updateCheck?.update_unsupported_reason || (systemVersion?.update_supported ? "更新助手可按当前镜像标签拉取并重建 Diana 容器。" : systemVersion?.update_unsupported_reason || "Docker 更新助手尚未启用。") : "Release 更新先下载并校验；重启并安装必须单独确认，默认不会自动执行。" }}
+              {{ deploymentMode === "git" ? "发现新版本时仅显示黄色提示点，确认后才会同步最新稳定 Release。" : deploymentMode === "docker" ? updateCheck?.update_unsupported_reason || (systemVersion?.update_supported ? "更新助手可按当前镜像标签拉取并重建 Diana 容器。" : systemVersion?.update_unsupported_reason || "Docker 更新助手尚未启用。") : "Release 更新先下载并校验；安装并重启必须单独确认，默认不会自动执行。" }}
             </p>
 
             <template v-if="deploymentMode === 'git' && updateStatus">
@@ -741,9 +741,9 @@ const downloadReadyForLatest = computed(() => updateStatus.value?.download_ready
 const upToDate = computed(() => updateCheck.value?.update_available === false && !downloadReadyForLatest.value);
 const primaryUpdateLabel = computed(() => {
   if (operationRunning.value) return "处理中…";
-  if (downloadReadyForLatest.value) return "重启并安装";
+  if (downloadReadyForLatest.value) return "安装并重启";
   if (upToDate.value) return "已是最新";
-  return deploymentMode.value === "git" ? "重启并安装" : deploymentMode.value === "docker" ? "拉取镜像并重建" : "下载最新 Release";
+  return deploymentMode.value === "git" ? "安装并重启" : deploymentMode.value === "docker" ? "拉取镜像并重建" : "下载最新 Release";
 });
 const staleDownloadedVersion = computed(() => updateStatus.value?.download_ready === true
   && Boolean(updateStatus.value.downloaded_version)
@@ -927,13 +927,13 @@ async function runUpdate(): Promise<void> {
 	if (operationRunning.value) return;
 	const installingRelease = deploymentMode.value === "release" && downloadReadyForLatest.value;
   const confirmed = await askConfirm({
-		title: installingRelease ? "重启并安装已下载版本？" : deploymentMode.value === "release" ? "下载最新稳定版本？" : deploymentMode.value === "docker" ? "拉取镜像并重建容器？" : "重启并安装最新稳定版本？",
+		title: installingRelease ? "安装并重启已下载版本？" : deploymentMode.value === "release" ? "下载最新稳定版本？" : deploymentMode.value === "docker" ? "拉取镜像并重建容器？" : "安装并重启最新稳定版本？",
 		message: deploymentMode.value === "release"
 		  ? installingRelease
 			? "将备份数据库和当前版本，安装后自动重启并执行健康检查；失败时自动恢复。"
 			: "只下载、校验并暂存完整 Release 包，不会安装或重启服务。"
 		  : deploymentMode.value === "docker" ? "更新助手会从当前 Docker 标签拉取镜像并重建 Diana 容器。" : "确认后才会同步到最新稳定 Release。更新完成前请勿关闭服务。",
-		confirmLabel: installingRelease ? "重启并安装" : deploymentMode.value === "release" ? "下载更新" : deploymentMode.value === "docker" ? "拉取并重建" : "重启并安装"
+		confirmLabel: installingRelease ? "安装并重启" : deploymentMode.value === "release" ? "下载更新" : deploymentMode.value === "docker" ? "拉取并重建" : "安装并重启"
   });
   if (!confirmed) return;
   updating.value = true;
@@ -957,8 +957,8 @@ async function runUpdate(): Promise<void> {
 		}
 		toastSuccess(deploymentMode.value === "docker" ? result.updated ? "已请求更新助手重建容器" : "已是最新，无需更新" : deploymentMode.value === "release"
 		  ? installingRelease
-			? "已开始重启并安装，完成后将执行健康检查"
-			: result.downloaded ? "更新已下载并通过校验，等待重启并安装" : "已是最新，无需更新"
+			? "已开始安装并重启，完成后将执行健康检查"
+			: result.downloaded ? "更新已下载并通过校验，等待安装并重启" : "已是最新，无需更新"
 		  : result.updated ? "更新完成，到「运行状态」重启服务后生效" : "已是最新，无需更新");
   } catch (error) {
     const message = error instanceof Error ? error.message : "更新失败";

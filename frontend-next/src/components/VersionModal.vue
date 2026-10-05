@@ -14,11 +14,11 @@
             <span class="mono version-latest">{{ checkResult.latest_version }}</span>
           </template>
           <span v-if="checking" class="version-checking"><LoaderCircle class="spin" :size="13" aria-hidden="true" />检查中…</span>
-          <span v-else-if="installTracking" class="badge warn">重启并安装中</span>
+          <span v-else-if="installTracking" class="badge warn">安装并重启中</span>
           <span v-else-if="checkError" class="badge err">检查失败</span>
           <span v-else-if="status?.restart_required" class="badge warn">等待重启</span>
           <span v-else-if="staleDownloadedVersion" class="badge warn">旧安装包待替换</span>
-          <span v-else-if="downloadReadyForLatest" class="badge warn">已下载，待重启并安装</span>
+          <span v-else-if="downloadReadyForLatest" class="badge warn">已下载，待安装并重启</span>
           <span v-else-if="operationRunning" class="badge warn">正在下载并校验</span>
           <span v-else-if="checkResult?.update_available" class="badge accent">发现新版本</span>
           <span v-else-if="switchToRelease" class="badge accent">可切换到发布版本</span>
@@ -98,7 +98,7 @@
             </span>
           </label>
           <label class="policy-toggle" title="下载完成后自动备份、切换版本并重启，健康检查失败会自动恢复；开启时会一并开启自动下载">
-            <span>自动重启并安装</span>
+            <span>自动安装并重启</span>
             <span class="switch">
               <input v-model="policy.auto_install" type="checkbox" :disabled="savingPolicy" @change="persistPolicy('install')" />
               <span class="track"></span>
@@ -106,7 +106,7 @@
           </label>
         </template>
         <label v-else-if="dockerSelfUpdate" class="policy-toggle" title="发现所选通道的新镜像后，由独立更新助手拉取镜像并重建容器；默认关闭">
-          <span>自动重启并安装</span>
+          <span>自动安装并重启</span>
           <span class="switch">
             <input v-model="policy.docker_auto_install" type="checkbox" :disabled="savingPolicy" @change="persistPolicy('install')" />
             <span class="track"></span>
@@ -135,7 +135,7 @@
           <!-- 加载态只换图标不换文字：文案一变长按钮就变宽，整排按钮跟着跳。 -->
           <LoaderCircle v-if="operationRunning" class="spin" :size="14" aria-hidden="true" />
           <RefreshCcw v-else :size="14" aria-hidden="true" />
-          重启并安装
+          安装并重启
         </button>
         <button v-if="switchToRelease && !downloadReadyForLatest" class="btn primary small" type="button" :disabled="operationRunning" @click="confirmSwitchToRelease">
           <Download :size="14" aria-hidden="true" />
@@ -143,7 +143,7 @@
         </button>
         <button v-if="!releaseSelfUpdate && checkResult?.update_supported && checkResult.update_available" class="btn primary small" type="button" :disabled="operationRunning" @click="confirmUpdate">
           <Download :size="14" aria-hidden="true" />
-          {{ operationRunning ? "重启并安装中…" : deploymentMode === "docker" ? "拉取镜像并重建" : "重启并安装" }}
+          {{ operationRunning ? "安装并重启中…" : deploymentMode === "docker" ? "拉取镜像并重建" : "安装并重启" }}
         </button>
         <button class="btn small" type="button" :disabled="checking || operationRunning" @click="check()">
           <LoaderCircle v-if="checking" class="spin" :size="14" aria-hidden="true" />
@@ -366,7 +366,7 @@ const canDownloadUpdate = computed(() => releaseSelfUpdate.value
   && checkResult.value.checksum_available
   && !downloadReadyForLatest.value
   // 安装一开始后端就把 download_ready 清掉了（包已交给 helper），但新版本还没起来，
-  // update_available 仍是 true。不排除 installTracking 的话，用户刚点完「重启并安装」，
+  // update_available 仍是 true。不排除 installTracking 的话，用户刚点完「安装并重启」，
   // 按钮就当场变回「下载并校验」，等超时解锁后还能真的再下一遍。
   && !installTracking.value
   && !status.value?.restart_required);
@@ -624,7 +624,7 @@ async function downloadUpdate(force = false): Promise<void> {
     status.value = result.status;
     toastSuccess(result.status.updating
       ? "更新包正在下载或处理中"
-      : result.downloaded ? `${result.target_commit || "新版本"} 已下载并通过校验，等待重启并安装` : "已是当前通道最新版本");
+      : result.downloaded ? `${result.target_commit || "新版本"} 已下载并通过校验，等待安装并重启` : "已是当前通道最新版本");
   } catch (error) {
     operationError.value = error instanceof Error ? error.message : "下载更新失败";
     toastError(operationError.value);
@@ -637,7 +637,7 @@ async function downloadUpdate(force = false): Promise<void> {
 
 async function confirmInstall(): Promise<void> {
   const target = status.value?.downloaded_version || "已下载版本";
-  const confirmed = await askConfirm({title: `重启并安装 ${target}？`, message: "安装时会备份当前版本和数据库，切换后自动重启并执行健康检查；失败时自动恢复。", confirmLabel: "重启并安装"});
+  const confirmed = await askConfirm({title: `安装并重启 ${target}？`, message: "安装时会备份当前版本和数据库，切换后自动重启并执行健康检查；失败时自动恢复。", confirmLabel: "安装并重启"});
   if (!confirmed) return;
   updating.value = true;
   operationError.value = "";
@@ -650,9 +650,9 @@ async function confirmInstall(): Promise<void> {
     // 记一笔「正在升级」：接下来旧进程会退出，页面这边的内存标记撑不过那一下，
     // 断线期间要靠它把「正在重启」和「后端挂了」区分开。
     markUpdateInstalling();
-    toastSuccess(`已开始重启并安装 ${result.target_commit || target}`);
+    toastSuccess(`已开始安装并重启 ${result.target_commit || target}`);
   } catch (error) {
-    operationError.value = error instanceof Error ? error.message : "重启并安装失败";
+    operationError.value = error instanceof Error ? error.message : "安装并重启失败";
     toastError(operationError.value);
   } finally {
     updating.value = false;
@@ -725,11 +725,11 @@ function applyPersistedUpdateResult(value: UpdateStatus): void {
     return;
   }
   if (value.last_update_status === "rolled_back") {
-    operationError.value = `重启并安装 ${target} 失败，已自动恢复旧版本${value.last_update_error ? `：${value.last_update_error}` : ""}`;
+    operationError.value = `安装并重启 ${target} 失败，已自动恢复旧版本${value.last_update_error ? `：${value.last_update_error}` : ""}`;
     return;
   }
   if (value.last_update_status === "failed") {
-    operationError.value = `重启并安装 ${target} 失败${value.last_update_error ? `：${value.last_update_error}` : ""}`;
+    operationError.value = `安装并重启 ${target} 失败${value.last_update_error ? `：${value.last_update_error}` : ""}`;
   }
 }
 
@@ -760,7 +760,7 @@ async function pollInstallResult(): Promise<void> {
     // 服务切换期间请求会短暂失败，保留升级中状态并继续等待新进程。
     if (installStartedAt > 0 && Date.now() - installStartedAt > 150_000) {
       installTracking.value = false;
-      operationError.value = `重启并安装 ${installTarget || "目标版本"} 后服务超过 150 秒仍未恢复，请检查数据目录下的 .diana-updates/last-update.log`;
+      operationError.value = `安装并重启 ${installTarget || "目标版本"} 后服务超过 150 秒仍未恢复，请检查数据目录下的 .diana-updates/last-update.log`;
       toastError(operationError.value);
     }
   }
@@ -825,13 +825,13 @@ async function update(): Promise<void> {
 async function confirmUpdate(): Promise<void> {
   const target = checkResult.value?.latest_version || "当前通道最新版本";
   const confirmed = await askConfirm({
-    title: `重启并安装 ${target}？`,
+    title: `安装并重启 ${target}？`,
     message: deploymentMode.value === "docker"
       ? "更新助手将从当前 Docker 滚动标签拉取镜像并重建 Diana 容器，期间服务会短暂断开。"
       : releaseSelfUpdate.value
       ? "确认后才会下载并校验完整 Release 包、备份数据库和当前版本，再切换版本并执行健康检查。"
       : "确认后才会同步到当前通道最新 Release。更新完成前请勿关闭服务。",
-    confirmLabel: "重启并安装"
+    confirmLabel: "安装并重启"
   });
   if (confirmed) {
     await update();

@@ -25,8 +25,8 @@ test("a plain version tag marked prerelease is not a stable release", () => {
 });
 
 test("switching to a prerelease channel warns about automatic install only when it is on", () => {
-  assert.match(channelSwitchConfirm("canary", true).message, /自动重启并安装/);
-  assert.doesNotMatch(channelSwitchConfirm("canary", false).message, /自动重启并安装/);
+  assert.match(channelSwitchConfirm("canary", true).message, /自动安装并重启/);
+  assert.doesNotMatch(channelSwitchConfirm("canary", false).message, /自动安装并重启/);
   assert.equal(channelSwitchConfirm("beta", false).danger, true);
   assert.match(channelSwitchConfirm("release", true).message, /不会自动降级/);
 });

@@ -32,7 +32,7 @@ export interface ChannelSwitchConfirm {
 
 /** 切换更新通道前的确认文案。autoInstall 开着时切到预发布通道要额外提醒。 */
 export function channelSwitchConfirm(target: UpdateChannel, autoInstall: boolean): ChannelSwitchConfirm {
-  const autoInstallNote = autoInstall ? "「自动重启并安装」已开启，符合条件的新版本下载校验后会自动安装并重启。" : "";
+  const autoInstallNote = autoInstall ? "「自动安装并重启」已开启，符合条件的新版本下载校验后会自动安装并重启。" : "";
   switch (target) {
     case "canary":
       return {
