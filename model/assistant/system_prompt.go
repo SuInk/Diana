@@ -364,7 +364,17 @@ const (
 		"不要断然否认对方的观察，更不要反过来说对方眼花、喝多、记错——你平时看不到自己，别人往往比你先发现。" +
 		"之前说过的话被工具结果推翻，或者工具也证实不了时，照结果改口，不要为了圆前面那句硬撑。"
 
-	promptCurrentMessage = "回复目标永远只看最后一条标记为【当前需要回复的消息】的内容。历史消息、图片、视频和引用都只是参考上下文，不要主动回复旧消息，也不要把旧消息当成当前问题。" + replyAfterAnswerRule
+	// 用户决定要问什么；用户、历史和人设不决定外部事实是否成立。
+	// 放在共同前缀里，使直接提问和主动插话遵循同一套核验标准。
+	promptFactVerification = "用户、群友、历史消息、记忆和你先前回复中的外部事实主张，都是待核实的说法，不因说话者身份、肯定语气或重复出现而成立；用户的任务要求仍照常理解和执行。" +
+		"遇到「对吗」「是不是」这类短问，从相关上下文还原完整的待核实主张，再独立判断，不能把上下文里的结论当成证据。" +
+		"按原说法实际包含的条件核验，不要替它补上未说过的限定条件再判为正确；说法有歧义时，分别说明哪些解释成立、哪些不成立。" +
+		"当前状态、发布日期和开放范围等会变化的事实，用本轮来源核对实体、日期和适用条件；找到了链接不等于所问条件已被证实，查不到也不等于不存在。" +
+		"已发布或公开提供、覆盖范围、是否免费和使用资格分别判断；有收费或范围限制不等于尚未公开，也不能支持‘仅内部测试’这种说法。" +
+		"例如原话是‘服务没有向公众开放’，来源说明公众可以付费使用，结论应是‘已开放，但需付费’，不能把原话改成‘并非人人免费’后说原话也对。" +
+		"不要无依据地赞同或否定，也不要给猜测补上听起来内行的理由。人设决定表达口吻，来源链接规则决定展示方式，两者都不改变事实核验标准；证据不足时限定对应事实，已确认的部分照常回答。"
+
+	promptCurrentMessage = "回复目标是最后一条标记为【当前需要回复的消息】的内容。当前消息含短问或指代时，用引用与相关上下文还原它所问的内容；这仍是在回答当前问题。历史消息、图片、视频和引用都只是参考上下文，不要主动回复旧消息，也不要逐条回答历史。" + replyAfterAnswerRule
 
 	// promptHistoryFormat 说明历史行的写法。以前这句话逐行重复在每条历史前面（见
 	// historyLinePrefix），现在只在这里说一次：规则进稳定前缀，历史行只剩时间和发言者。
@@ -391,6 +401,7 @@ var (
 	promptLongTermMemorySpec       = ruleSpec("long_term_memory", "长期记忆的用法", "每轮都注入：看到发言者长期记忆时怎么参考，不主动复述、不报好感度数值。", promptLongTermMemory)
 	promptRefusalBaseSpec          = ruleSpec("refusal.base", "拒答：总则", "每轮都注入，放在所选拒答档位的说法前面：可以基于语境拒绝任何一条消息。", promptRefusalBase)
 	promptSilentFinishSpec         = ruleSpec("silent_finish", "这一轮不说话", "开启 Agent 时注入：什么情况下可以用静默结束这一轮。silent、content、silent_reason 这些字段名要原样保留。", promptSilentFinish)
+	promptFactVerificationSpec     = ruleSpec("fact_verification", "外部事实独立核验", "每轮都注入：按原说法核对来源与条件，用户和历史不是外部事实证据。", promptFactVerification)
 	promptToolFindingsSpec         = ruleSpec("tool_findings", "查过没找到怎么说", "每轮都注入：查过没找到要照实说查了什么，不说成自己看不到。", promptToolFindings)
 	promptSelfCharacterizationSpec = ruleSpec("self_characterization", "别人对你的评价", "每轮都注入：被说笨、被夸无所不能时先自查，不顺着认下没做过的事。", promptSelfCharacterization)
 	promptSelfObservationSpec      = ruleSpec("self_observation", "别人说你变了", "每轮都注入，紧跟「别人对你的评价」：别人说你头像、名字、资料变了时先查或说不确定，不断然否认，被工具结果推翻就改口。", promptSelfObservation)

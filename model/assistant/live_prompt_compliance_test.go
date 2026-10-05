@@ -5,6 +5,7 @@ package assistant
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"strconv"
@@ -40,6 +41,23 @@ func liveLLMClientWithHeaders(t *testing.T, headers map[string]string) llm.LLMCl
 	t.Helper()
 	if os.Getenv("DIANA_LIVE_LLM") != "1" {
 		t.Skip("set DIANA_LIVE_LLM=1 and DIANA_TEST_LLM_API_KEY to run prompt compliance against a real model")
+	}
+	if path := strings.TrimSpace(os.Getenv("DIANA_TEST_LLM_CONFIG")); path != "" {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var config llm.ProviderConfig
+		if err := json.Unmarshal(data, &config); err != nil {
+			t.Fatal(err)
+		}
+		config.Timeout = 90 * time.Second
+		config.Headers = headers
+		client, err := llm.NewClient(config)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return client
 	}
 	apiKey := strings.TrimSpace(os.Getenv("DIANA_TEST_LLM_API_KEY"))
 	if apiKey == "" {

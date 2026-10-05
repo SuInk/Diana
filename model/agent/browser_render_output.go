@@ -54,6 +54,7 @@ func browserRenderOutputWithBudget(page RenderedPage, find string, budget int) (
 		}
 	}
 	for {
+		payload.SourceStage = browserPayloadSourceStage(payload)
 		if payload.Truncated && len(terms) == 0 {
 			payload.ReadNotice = `正文已截断；若需要未出现的细节，请对本页再次调用 browser_render，参数为 {"url":"本次返回的 url","find":"所需关键词，可用 | 分隔"}。不要用重复搜索代替页内查找，也不能凭印象补出未读取的机制。`
 		}

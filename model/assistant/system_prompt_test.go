@@ -8,6 +8,23 @@ import (
 	"testing"
 )
 
+func TestFactVerificationAppliesToDirectQuestionsAndInterjections(t *testing.T) {
+	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	for _, event := range []MessageEvent{
+		{Kind: EventKindPrivate, UserID: "u", RawMessage: "对吗"},
+		{Kind: EventKindGroup, GroupID: "g", UserID: "u", RawMessage: "对吗"},
+		{Kind: EventKindGroup, GroupID: "g", UserID: "u", chatInReply: true},
+	} {
+		prompt := runtime.systemPromptWithRelationshipAndAgentTools(event, nil, false, RelationshipPolicy{}, true, nil)
+		if strings.Count(prompt, promptFactVerification) != 1 {
+			t.Fatalf("fact rule missing or duplicated for kind=%s chatIn=%v", event.Kind, event.chatInReply)
+		}
+		if !event.chatInReply && strings.Contains(prompt, "就放弃这次插话") {
+			t.Fatal("direct question inherited interjection silence rule")
+		}
+	}
+}
+
 // 默认人设只写「它是谁」，排版规则由独立的输出规范段落负责，不在人设里重复。
 func TestDefaultSystemPromptCarriesNoFormattingRules(t *testing.T) {
 	for _, unwanted := range []string{"Markdown", notificationSplitMarker, "OneBot v11 消息里"} {

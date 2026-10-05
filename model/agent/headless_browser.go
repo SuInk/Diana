@@ -35,6 +35,7 @@ const (
 
 // RenderedPage is the sanitized result of one disposable headless browser run.
 type RenderedPage struct {
+	SourceStage     string                 `json:"source_stage,omitempty"`
 	SourceType      string                 `json:"source_type,omitempty"`
 	SourceURLs      []string               `json:"source_urls,omitempty"`
 	SourceNotice    string                 `json:"source_notice,omitempty"`
