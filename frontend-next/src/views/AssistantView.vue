@@ -759,23 +759,6 @@
             </div>
           </section>
 
-          <!-- 聊天内模型管理 -->
-          <section class="card">
-            <div class="card-header">
-              <h2>聊天内模型管理</h2>
-              <span class="badge" :class="form.owner_llm_config_enabled ? 'accent' : ''">
-                {{ form.owner_llm_config_enabled ? "已启用" : "未启用" }}
-              </span>
-            </div>
-            <div class="card-body form-grid">
-              <div class="field wide">
-                <AppSwitch v-model="form.owner_llm_config_enabled">允许主人在聊天中修改提供商和模型</AppSwitch>
-                <span class="hint">仅主人账号可修改，保存前会校验目标模型是否可用。</span>
-              </div>
-            </div>
-          </section>
-
-
           <section class="card">
             <div class="card-header"><h2>媒体预处理</h2></div>
             <div class="card-body stack">
@@ -835,11 +818,7 @@
             </div>
             <div class="card-body form-grid">
               <div class="field wide">
-                <label class="switch">
-                  <input v-model="form.owner_llm_config_enabled" type="checkbox" />
-                  <span class="track" aria-hidden="true"></span>
-                  <span class="switch-label">允许主人在聊天中修改提供商和模型</span>
-                </label>
+                <AppSwitch v-model="form.owner_llm_config_enabled">允许主人在聊天中修改提供商和模型</AppSwitch>
                 <span class="hint">仅主人账号可修改，保存前会校验目标模型是否可用。</span>
               </div>
             </div>
@@ -3498,6 +3477,12 @@ const modelRoleRows: ModelRoleRow[] = [
     description: "替对话模型看图、写图片描述。对话模型能看图时跟随对话即可；对话模型不能看图，或想单独指定写描述的模型时再配。"
   },
   {
+    key: "media_parse",
+    label: "媒体解析",
+    sublabel: "可选",
+    description: "图片描述、视频帧描述和模型 OCR 使用的模型。未指定时沿用视觉理解；文本提取和本地 OCR 不消耗模型额度。"
+  },
+  {
     key: "intent",
     label: "意图识别",
     description:
@@ -3825,7 +3810,7 @@ function modelPurposeIcon(role: RoleKey) {
 function modelPurposeSummary(role: RoleKey): string {
   const assignment = roleForm.value[role];
   if (assignment?.follow_chat) return "跟随对话";
-  if (!assignment) return role === "media_parse" ? "跟随视觉理解" : role === "background" ? "跟随对话" : "尚未配置";
+  if (!assignment) return role === "media_parse" ? "跟随视觉理解" : isPurposeRole(role) ? `跟随${purposeRoleFallbackLabel(role)}` : isMediaRole(role) ? "未启用" : "尚未配置";
   return assignment.model || "请选择模型";
 }
 

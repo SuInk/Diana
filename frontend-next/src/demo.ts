@@ -159,10 +159,11 @@ let demoSearchProviders: SearchProvider[] = [
   { id: 'exa', name: 'Exa', type: 'exa_mcp', url: 'https://mcp.exa.ai/mcp?tools=web_search_exa', tool: 'web_search_exa' },
   { id: 'tavily', name: 'Tavily', type: 'tavily', url: 'https://api.tavily.com/search', api_key_configured: true },
   { id: 'browser', name: '浏览器搜索', type: 'browser', url: 'https://www.google.com/search', query_param: 'q' },
+  ...[{id:'google',url:'https://www.google.com/search',param:'q'}, {id:'bing',url:'https://www.bing.com/search',param:'q'}, {id:'duckduckgo',url:'https://duckduckgo.com/',param:'q'}, {id:'baidu',url:'https://www.baidu.com/s',param:'wd'}].map(engine => ({id:`engine-${engine.id}`,name:engine.id,type:'browser' as const,url:engine.url,tool:engine.id,query_param:engine.param})),
 ];
 const demoSearchKeys: Record<string, string> = { tavily: 'demo-secret' };
 function demoSearchConfiguration(): SearchConfiguration {
-  return { providers: demoSearchProviders.map(provider => ({ ...provider, api_key_configured: !!demoSearchKeys[provider.id] })), default_assignment: { provider_ids: demoSearchProviders.filter(provider => ['exa', 'tavily'].includes(provider.id) && !provider.disabled).map(provider => provider.id), max_results: 5, provider_timeout_seconds: 12, total_timeout_seconds: 35, source_recall: true, reply_link_policy: 'on_request' } };
+  return { providers: demoSearchProviders.map(provider => ({ ...provider, api_key_configured: !!demoSearchKeys[provider.id] })), default_assignment: { provider_ids: demoSearchProviders.filter(provider => provider.id.startsWith('engine-') && !provider.disabled).map(provider => provider.id), max_results: 5, provider_timeout_seconds: 25, total_timeout_seconds: 90, source_recall: true, reply_link_policy: 'on_request' } };
 }
 
 
