@@ -860,9 +860,9 @@ async function forceUpdate(): Promise<void> {
 async function confirmRollback(release: ReleaseEntry): Promise<void> {
   const confirmed = await askConfirm({
     title: `回退到 ${release.tag}？`,
-    message: releaseSelfUpdate.value
+    message: "回退会关闭自动下载和自动安装，需要时可手动重新开启。" + (releaseSelfUpdate.value
       ? "会重新下载并校验目标完整 Release 包，安装后重启并执行健康检查；失败会自动恢复。"
-      : "会把已跟踪代码重置到该版本，工作区有未提交修改时服务端会拒绝执行；回退后需重启服务。",
+      : "会把已跟踪代码重置到该版本，工作区有未提交修改时服务端会拒绝执行；回退后需重启服务。"),
     confirmLabel: "确认回退",
     danger: true
   });
@@ -876,13 +876,17 @@ async function rollback(target: string): Promise<void> {
   try {
     const response = await rollbackSystem(target);
     status.value = response.result.status;
+    if (response.policy) policy.value = response.policy;
+    else await loadPolicy();
     if (releaseSelfUpdate.value && response.result.restart_required) {
       installTarget = response.result.target_commit || target;
       installStartedAt = Date.now();
       installTracking.value = true;
     }
-    toastSuccess(releaseSelfUpdate.value && response.result.restart_required ? `已开始回退到 ${target}` : `已回退到 ${target}`);
+    toastSuccess((releaseSelfUpdate.value && response.result.restart_required ? `已开始回退到 ${target}` : `已回退到 ${target}`) + "，自动更新已关闭");
   } catch (error) {
+    // 策略在切换版本前就已保存；安装启动失败时也需要显示真实的开关状态。
+    await loadPolicy();
     toastError(error instanceof Error ? error.message : "版本回退失败");
   } finally {
     updating.value = false;

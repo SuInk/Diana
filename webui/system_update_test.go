@@ -23,9 +23,11 @@ import (
 )
 
 type fakeSystemUpdater struct {
-	status updater.Status
-	result updater.Result
-	err    error
+	status         updater.Status
+	result         updater.Result
+	err            error
+	beforeRollback func()
+	rollbackErr    error
 }
 
 type recordingSystemUpdater struct {
@@ -43,6 +45,8 @@ type recordingReleasePackageUpdater struct {
 	downloaded        bool
 	installed         bool
 	downloadErr       error
+	beforeInstall     func()
+	installErr        error
 }
 
 func (r *recordingReleasePackageUpdater) Supported() bool { return true }
@@ -69,6 +73,12 @@ func (r *recordingReleasePackageUpdater) Download(_ context.Context, release upd
 }
 
 func (r *recordingReleasePackageUpdater) InstallDownloaded(context.Context) (updater.Result, error) {
+	if r.beforeInstall != nil {
+		r.beforeInstall()
+	}
+	if r.installErr != nil {
+		return updater.Result{}, r.installErr
+	}
 	r.installed = true
 	r.status.DownloadReady = false
 	r.status.RestartRequired = true
@@ -136,6 +146,12 @@ func (f fakeSystemUpdater) Check(context.Context) (updater.Status, error) {
 
 // Rollback 返回回退后的结果快照。
 func (f fakeSystemUpdater) Rollback(_ context.Context, ref string) (updater.Result, error) {
+	if f.beforeRollback != nil {
+		f.beforeRollback()
+	}
+	if f.rollbackErr != nil {
+		return updater.Result{}, f.rollbackErr
+	}
 	if f.err != nil {
 		return updater.Result{}, f.err
 	}
@@ -511,8 +527,18 @@ func TestSystemUpdateHandlerRollbackUsesGitHubLatestFiveStableReleases(t *testin
 					Root: "/Applications/Diana", RemoteURL: "https://github.com/SuInk/Diana.git",
 					NearestTag: tc.current, RunningCommit: tc.current, ApplySupported: true,
 				}
-				releaseUpdater := &recordingReleasePackageUpdater{status: status, expected: assetName}
-				handler := NewSystemUpdateHandler(fakeSystemUpdater{status: status})
+				initialPolicy := updater.UpdatePolicy{Channel: "beta", AutoDownload: true, AutoInstall: true, DockerAutoInstall: true, GitHubMirror: "auto"}
+				store := &memoryUpdatePolicyStore{policy: initialPolicy, ok: true}
+				beforeApply := func() {
+					if store.policy.AutoDownload || store.policy.AutoInstall || store.policy.DockerAutoInstall {
+						t.Fatal("automatic update policy must be persisted off before switching versions")
+					}
+				}
+				releaseUpdater := &recordingReleasePackageUpdater{status: status, expected: assetName, beforeInstall: beforeApply}
+				handler := NewSystemUpdateHandler(fakeSystemUpdater{status: status, beforeRollback: beforeApply})
+				if err := handler.SetUpdatePolicyStore(context.Background(), store); err != nil {
+					t.Fatal(err)
+				}
 				if deployment == "release" {
 					handler.SetReleasePackageUpdater(releaseUpdater)
 				}
@@ -531,24 +557,128 @@ func TestSystemUpdateHandlerRollbackUsesGitHubLatestFiveStableReleases(t *testin
 					if releaseUpdater.downloaded || releaseUpdater.installed {
 						t.Fatal("rejected rollback must not download or install a package")
 					}
+					if store.policy != initialPolicy || handler.currentPolicy() != initialPolicy {
+						t.Fatal("rejected rollback must not change automatic update settings")
+					}
 					return
 				}
 				if recorder.Code != http.StatusOK {
 					t.Fatalf("rollback status = %d, body = %s", recorder.Code, recorder.Body.String())
+				}
+				disabledPolicy := initialPolicy
+				disabledPolicy.AutoDownload = false
+				disabledPolicy.AutoInstall = false
+				disabledPolicy.DockerAutoInstall = false
+				var response struct {
+					Result updater.Result       `json:"result"`
+					Policy updater.UpdatePolicy `json:"policy"`
+				}
+				if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+					t.Fatal(err)
+				}
+				if store.policy != disabledPolicy || handler.currentPolicy() != disabledPolicy || response.Policy != disabledPolicy {
+					t.Fatalf("rollback policy = %#v, response = %#v", store.policy, response.Policy)
+				}
+				restarted := NewSystemUpdateHandler(fakeSystemUpdater{})
+				if err := restarted.SetUpdatePolicyStore(context.Background(), store); err != nil {
+					t.Fatal(err)
+				}
+				if restarted.currentPolicy() != disabledPolicy {
+					t.Fatal("automatic updates must stay disabled after restart")
 				}
 				if deployment == "release" {
 					if !releaseUpdater.installed || !releaseUpdater.force || releaseUpdater.release.Tag != tc.target {
 						t.Fatalf("rollback updater = %#v", releaseUpdater)
 					}
 				} else {
-					var response struct {
-						Result updater.Result `json:"result"`
-					}
-					if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
-						t.Fatal(err)
-					}
 					if response.Result.Status.HeadCommit != tc.target {
 						t.Fatalf("rollback target = %q, want %q", response.Result.Status.HeadCommit, tc.target)
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestRollbackAutoUpdatePolicyFailureBoundaries(t *testing.T) {
+	const assetName = "diana-linux-amd64.tar.gz"
+	github := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`[{"tag_name":"v1.2.0","assets":[{"name":"SHA256SUMS","browser_download_url":"https://example.test/SHA256SUMS"},{"name":"` + assetName + `","browser_download_url":"https://example.test/package.tar.gz"}]}]`))
+	}))
+	defer github.Close()
+	for _, deployment := range []string{"release", "git"} {
+		for _, failure := range []string{"policy-save", "apply", "busy", "download"} {
+			if deployment == "git" && failure == "download" {
+				continue
+			}
+			t.Run(deployment+"/"+failure, func(t *testing.T) {
+				initialPolicy := updater.UpdatePolicy{Channel: "beta", AutoDownload: true, AutoInstall: true, DockerAutoInstall: true, GitHubMirror: "auto"}
+				store := &memoryUpdatePolicyStore{policy: initialPolicy, ok: true}
+				if failure == "policy-save" {
+					store.saveErr = errors.New("policy store unavailable")
+				}
+				applyStarted := false
+				beforeApply := func() {
+					applyStarted = true
+					if store.policy.AutoDownload || store.policy.AutoInstall || store.policy.DockerAutoInstall {
+						t.Fatal("automatic updates must be saved off before attempting rollback")
+					}
+				}
+				status := updater.Status{NearestTag: "v1.3.0", RunningCommit: "v1.3.0", RemoteURL: "https://github.com/SuInk/Diana.git"}
+				gitUpdater := fakeSystemUpdater{status: status, beforeRollback: beforeApply, rollbackErr: errors.New("git reset failed")}
+				releaseUpdater := &recordingReleasePackageUpdater{status: status, expected: assetName, beforeInstall: beforeApply, installErr: errors.New("helper start failed")}
+				if failure == "download" {
+					releaseUpdater.downloadErr = errors.New("download failed")
+				}
+				handler := NewSystemUpdateHandler(gitUpdater)
+				if deployment == "release" {
+					handler.SetReleasePackageUpdater(releaseUpdater)
+				}
+				if err := handler.SetUpdatePolicyStore(context.Background(), store); err != nil {
+					t.Fatal(err)
+				}
+				handler.githubAPIBase = github.URL
+				router := systemUpdateTestRouter(handler)
+				if failure == "busy" {
+					handler.autoUpdateMu.Lock()
+				}
+				request := httptest.NewRequest(http.MethodPost, "/api/system/update/rollback", strings.NewReader(`{"ref":"v1.2.0","confirmation":"rollback-version"}`))
+				request.Header.Set("Content-Type", "application/json")
+				recorder := httptest.NewRecorder()
+				router.ServeHTTP(recorder, request)
+				if failure == "busy" {
+					handler.autoUpdateMu.Unlock()
+				}
+				wantStatus := http.StatusBadRequest
+				if failure == "busy" {
+					wantStatus = http.StatusConflict
+				}
+				if recorder.Code != wantStatus {
+					t.Fatalf("rollback status = %d, body = %s", recorder.Code, recorder.Body.String())
+				}
+				if failure == "policy-save" && !strings.Contains(recorder.Body.String(), "关闭自动更新失败") {
+					t.Fatalf("policy error = %s", recorder.Body.String())
+				}
+				wantPolicy := initialPolicy
+				if failure == "apply" {
+					wantPolicy.AutoDownload = false
+					wantPolicy.AutoInstall = false
+					wantPolicy.DockerAutoInstall = false
+				}
+				if store.policy != wantPolicy || handler.currentPolicy() != wantPolicy {
+					t.Fatalf("policy = %#v, want %#v", store.policy, wantPolicy)
+				}
+				if applyStarted != (failure == "apply") || releaseUpdater.installed {
+					t.Fatalf("apply started = %v, installed = %v", applyStarted, releaseUpdater.installed)
+				}
+				if failure == "busy" && releaseUpdater.downloaded {
+					t.Fatal("a concurrent automatic update must prevent starting rollback")
+				}
+				if failure == "apply" {
+					releaseUpdater.downloaded = false
+					handler.runAutoUpdate(context.Background())
+					if releaseUpdater.downloaded || releaseUpdater.installed {
+						t.Fatal("failed rollback must not automatically update back to the latest version")
 					}
 				}
 			})
@@ -595,8 +725,9 @@ type memoryReleaseCacheStore struct {
 }
 
 type memoryUpdatePolicyStore struct {
-	policy updater.UpdatePolicy
-	ok     bool
+	policy  updater.UpdatePolicy
+	ok      bool
+	saveErr error
 }
 
 func TestReleaseCacheCadence(t *testing.T) {
@@ -610,6 +741,9 @@ func (s *memoryUpdatePolicyStore) LoadUpdatePolicy(context.Context) (updater.Upd
 }
 
 func (s *memoryUpdatePolicyStore) SaveUpdatePolicy(_ context.Context, policy updater.UpdatePolicy) error {
+	if s.saveErr != nil {
+		return s.saveErr
+	}
 	s.policy = policy
 	s.ok = true
 	return nil

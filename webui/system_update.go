@@ -444,6 +444,24 @@ func (h *SystemUpdateHandler) currentPolicy() updater.UpdatePolicy {
 	return h.policy
 }
 
+// disableAutoUpdatesForRollback 在安装器备份数据库及切换版本前持久化关闭自动更新。
+// 调用方持有 autoUpdateMu，避免后台更新或策略保存覆盖本次关闭操作。
+func (h *SystemUpdateHandler) disableAutoUpdatesForRollback(ctx context.Context) (updater.UpdatePolicy, error) {
+	policy := h.currentPolicy()
+	policy.AutoDownload = false
+	policy.AutoInstall = false
+	policy.DockerAutoInstall = false
+	if h.policyStore != nil {
+		if err := h.policyStore.SaveUpdatePolicy(ctx, policy); err != nil {
+			return updater.UpdatePolicy{}, fmt.Errorf("关闭自动更新失败，未启动版本回退：%w", err)
+		}
+	}
+	h.policyMu.Lock()
+	h.policy = policy
+	h.policyMu.Unlock()
+	return policy, nil
+}
+
 func (h *SystemUpdateHandler) currentGitHubToken() string {
 	if token := strings.TrimSpace(os.Getenv("DIANA_GITHUB_TOKEN")); token != "" {
 		return token
@@ -945,6 +963,11 @@ func (h *SystemUpdateHandler) rollback(c *gin.Context) {
 		writeError(c, http.StatusBadRequest, errors.New("版本回退目标不能为空"))
 		return
 	}
+	if !h.autoUpdateMu.TryLock() {
+		writeError(c, http.StatusConflict, errors.New("更新操作正在进行，请稍后回退版本"))
+		return
+	}
+	defer h.autoUpdateMu.Unlock()
 
 	releaseAvailable := h.releaseUpdater != nil && h.releaseUpdater.Supported()
 	remoteURL := ""
@@ -1008,28 +1031,38 @@ func (h *SystemUpdateHandler) rollback(c *gin.Context) {
 			h.writeUpdateError(c, "system_update_rollback", err)
 			return
 		}
+		policy, err := h.disableAutoUpdatesForRollback(c.Request.Context())
+		if err != nil {
+			h.writeUpdateError(c, "system_update_rollback", err)
+			return
+		}
 		result, err := h.releaseUpdater.InstallDownloaded(c.Request.Context())
 		if err != nil {
 			h.writeUpdateError(c, "system_update_rollback", err)
 			return
 		}
-		recordRequestOperation(c, h.logs, "system_update_rollback", "已开始回退到 "+target.Tag+" 并重启", target.Tag, map[string]any{
+		recordRequestOperation(c, h.logs, "system_update_rollback", "已开始回退到 "+target.Tag+" 并重启，自动更新已关闭", target.Tag, map[string]any{
 			"ref":             payload.Ref,
 			"deployment_mode": "release",
 		})
-		c.JSON(http.StatusOK, gin.H{"result": result})
+		c.JSON(http.StatusOK, gin.H{"result": result, "policy": policy})
 		return
 	}
 
+	policy, err := h.disableAutoUpdatesForRollback(c.Request.Context())
+	if err != nil {
+		h.writeUpdateError(c, "system_update_rollback", err)
+		return
+	}
 	result, err := h.updater.Rollback(c.Request.Context(), payload.Ref)
 	if err != nil {
 		h.writeUpdateError(c, "system_update_rollback", err)
 		return
 	}
-	recordRequestOperation(c, h.logs, "system_update_rollback", "系统已回退到 "+result.Status.HeadCommit, result.Status.Root, map[string]any{
+	recordRequestOperation(c, h.logs, "system_update_rollback", "系统已回退到 "+result.Status.HeadCommit+"，自动更新已关闭", result.Status.Root, map[string]any{
 		"ref": payload.Ref,
 	})
-	c.JSON(http.StatusOK, gin.H{"result": result})
+	c.JSON(http.StatusOK, gin.H{"result": result, "policy": policy})
 }
 
 // changelogList 返回 GitHub 更新日志：源码部署使用 origin，Release/Docker 使用官方仓库。

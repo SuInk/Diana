@@ -2263,6 +2263,7 @@ export interface ChangelogResponse {
 
 export interface RollbackResponse {
   result: UpdateResult;
+  policy?: UpdatePolicy;
 }
 
 /** 同一条连接上的另一台机器人及其群归属：路由表散在各台自己的配置里，这是那张全貌。 */
