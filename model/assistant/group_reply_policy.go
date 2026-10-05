@@ -100,7 +100,7 @@ func (r *Runtime) canConfigureGroup(ctx context.Context, event MessageEvent) (st
 	//
 	// 这里原本有一条快捷路径：上报的角色是群主或管理员就直接放行。它信任的是桥接端
 	// 上报的字段，自建桥和 HTTP 上报模式下可以伪造。两个写操作调用方
-	// （reply_block、bot_participation）都在调用前手动把 SenderRole 清空来绕过它，
+	// （reply_block、bot_config）都在调用前手动把 SenderRole 清空来绕过它，
 	// 说明这条路径事实上已经没人敢用——但「靠每个调用方自觉」本身就是个失败模式：
 	// 将来新增的调用方忘了清空，就会直接踩上去拿到伪造的权限。
 	//

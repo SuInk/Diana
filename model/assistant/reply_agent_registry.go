@@ -51,7 +51,7 @@ func (r *Runtime) newReplyAgentRegistry(ctx context.Context, cfg BotConfig, even
 			newDianaVersionTool(r, repositoryDisclosedTo(cfg, relationship.Owner)),
 			newDianaImageTool(r, event, relationship),
 			newDianaTasksTool(r, event),
-			newDianaBotParticipationTool(r, event),
+			newDianaBotConfigTool(r, event),
 			newDianaReplyBlockTool(r, event),
 			newDianaReminderTool(r, event),
 			newDianaEventTriggerTool(r, event),

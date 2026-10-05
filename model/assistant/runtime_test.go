@@ -1288,7 +1288,7 @@ func TestMessageHistoryPluginHandlesRecallBeforeCachedMessage(t *testing.T) {
 	}
 }
 
-func TestDianaConfigToolReturnsRedactedBotConfigAndSkills(t *testing.T) {
+func TestBotConfigDiagnosticsReturnsRedactedBotConfigAndSkills(t *testing.T) {
 	store := &stubLLMProfileStore{
 		set: llm.ProfileSet{
 			Profiles: []llm.Profile{{
@@ -1305,6 +1305,7 @@ func TestDianaConfigToolReturnsRedactedBotConfigAndSkills(t *testing.T) {
 		},
 	}
 	runtime := NewRuntime(BotConfig{
+		OwnerID:            "owner",
 		Enabled:            true,
 		OneBotAccessToken:  "onebot-secret-value",
 		NoneBotBridgeToken: "bridge-secret-value",
@@ -1313,7 +1314,7 @@ func TestDianaConfigToolReturnsRedactedBotConfigAndSkills(t *testing.T) {
 		AgentMCPConfigPath: "/tmp/diana/.mcp.json",
 	}, nilChannel{}, NewDefaultPluginManager(), store, nil, nil, nil)
 
-	got, err := newDianaConfigTool(runtime, MessageEvent{}).Run(context.Background(), map[string]any{"section": "all"})
+	got, err := newDianaBotConfigTool(runtime, MessageEvent{UserID: "owner"}).Run(context.Background(), map[string]any{"operation": "get", "section": "all"})
 	if err != nil {
 		t.Fatal(err)
 	}

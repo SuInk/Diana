@@ -77,7 +77,7 @@ func (r *Runtime) newAgentRegistry(ctx context.Context, cfg BotConfig, event Mes
 		skillSource = base.Skills()
 	}
 	if relationship.Owner {
-		registry.Register(newDianaConfigTool(r, event))
+		registry.Register(newDianaBotConfigTool(r, event))
 		registry.Register(&dianaUsageTool{runtime: r, event: event})
 		registry.Register(&dianaBotMarkersTool{runtime: r, event: event})
 		registry.Register(newDianaExtensionAccessTool(r, event))

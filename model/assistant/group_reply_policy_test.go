@@ -177,7 +177,7 @@ func TestDianaOneBotGroupToolUpdatesReplyPolicyForBotOwner(t *testing.T) {
 	runtime := NewRuntime(BotConfig{OwnerID: "10001", ProactiveReplyChance: 1, ProactiveReplyThreshold: 0.8}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	store := &testWritableGroupConfigStore{}
 	runtime.SetGroupConfigStore(store)
-	tool := newDianaBotParticipationTool(runtime, MessageEvent{Kind: EventKindGroup, GroupID: "123", UserID: "10001"})
+	tool := newDianaBotConfigTool(runtime, MessageEvent{Kind: EventKindGroup, GroupID: "123", UserID: "10001"})
 
 	raw, err := tool.Run(context.Background(), map[string]any{
 		"operation":                  "update",
@@ -210,7 +210,7 @@ func TestDianaOneBotGroupToolRejectsOrdinaryMemberReplyPolicyUpdate(t *testing.T
 	}}
 	runtime := NewRuntime(BotConfig{OwnerID: "900"}, channel, NewPluginManager(), nil, nil, nil, nil)
 	runtime.SetGroupConfigStore(&testWritableGroupConfigStore{})
-	tool := newDianaBotParticipationTool(runtime, MessageEvent{Kind: EventKindGroup, GroupID: "123", UserID: "10001", SenderRole: "member"})
+	tool := newDianaBotConfigTool(runtime, MessageEvent{Kind: EventKindGroup, GroupID: "123", UserID: "10001", SenderRole: "member"})
 
 	_, err := tool.Run(context.Background(), map[string]any{
 		"operation":                  "update",
@@ -241,7 +241,7 @@ func TestDianaOneBotGroupToolSwitchesToCustomWhenChatInChanges(t *testing.T) {
 	store := &testWritableGroupConfigStore{}
 	_, _ = store.SaveGroupConfig(GroupConfig{GroupID: "123", Enabled: true, EnabledSet: true, ResponseMode: ResponseModeStandard}, runtime.ProfileConfig(""))
 	runtime.SetGroupConfigStore(store)
-	tool := newDianaBotParticipationTool(runtime, MessageEvent{Kind: EventKindGroup, GroupID: "123", UserID: "10001"})
+	tool := newDianaBotConfigTool(runtime, MessageEvent{Kind: EventKindGroup, GroupID: "123", UserID: "10001"})
 
 	raw, err := tool.Run(context.Background(), map[string]any{
 		"operation":    "update",
@@ -273,7 +273,7 @@ func TestDianaOneBotGroupToolSwitchesToCustomWhenChatInChanges(t *testing.T) {
 func TestBotConfigGetReportsEffectiveInheritedPreferences(t *testing.T) {
 	r := NewRuntime(BotConfig{OwnerID: "owner", Participation: &ParticipationPreferences{Desire: 50, CooldownSeconds: 120}}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	r.SetGroupConfigStore(&testWritableGroupConfigStore{})
-	raw, err := newDianaBotParticipationTool(r, MessageEvent{Kind: EventKindGroup, GroupID: "g", UserID: "owner"}).Run(context.Background(), map[string]any{"operation": "get"})
+	raw, err := newDianaBotConfigTool(r, MessageEvent{Kind: EventKindGroup, GroupID: "g", UserID: "owner"}).Run(context.Background(), map[string]any{"operation": "get"})
 	if err != nil {
 		t.Fatal(err)
 	}

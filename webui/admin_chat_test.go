@@ -116,7 +116,7 @@ func TestAdminChatStreamsHistoryAndOmitsRawToolSecrets(t *testing.T) {
 		if calls == 2 && (len(req.Messages) != 4 || req.Messages[2].Content != "已检查") {
 			t.Fatalf("history: %#v", req.Messages)
 		}
-		req.Observer(ctx, agent.RunEvent{Phase: agent.RunPhaseToolCompleted, Tool: "config", ToolInput: map[string]any{"api_key": "raw-secret"}, ToolOutput: "bot-secret", DurationMS: 3})
+		req.Observer(ctx, agent.RunEvent{Phase: agent.RunPhaseToolCompleted, Tool: "bot_config", ToolInput: map[string]any{"api_key": "raw-secret"}, ToolOutput: "bot-secret", DurationMS: 3})
 		return &agent.Response{Text: "已检查"}, nil
 	})
 	id := adminChatSessionID(t, router, token)

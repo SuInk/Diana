@@ -313,9 +313,9 @@
     {
       "key": "reply.tool.bot_config",
       "group": "reply_tools",
-      "title": "回复欲望设置",
-      "usage": "回复欲望设置工具可用时注入：改活跃度和冷却走这个工具，保存成功才算数。",
-      "default": "修改 Diana 回复欲望、相关度或实质性门槛、主动闲聊冷却时按 bot-protocol skill 使用 bot_config。关闭话痨用 desire_level=off，降低活跃度用 low；群管理员只改当前群，机器人默认设置仅主人可改。成功保存后才报告生效，不通过平台禁言或口头承诺代替。"
+      "title": "机器人配置",
+      "usage": "统一配置工具可用时注入：查询诊断、改接话和欢迎设置走此工具，保存成功才算数。",
+      "default": "读取 Diana 配置和诊断、修改接话或入群欢迎时按 bot-protocol skill 使用 bot_config。开启或关闭入群欢迎设置 welcome_enabled，修改欢迎词使用 welcome_message、welcome_mode 等字段；操作已有欢迎功能不创建 event_trigger。关闭话痨用 desire_level=off，降低活跃度用 low。群管理员只改当前群；机器人默认设置及完整脱敏诊断仅主人可用。只提交用户要求的字段，成功保存后才报告生效。"
     },
     {
       "key": "reply.tool.reply_block",
@@ -399,7 +399,7 @@
       "group": "reply_tools",
       "title": "事件触发",
       "usage": "事件触发工具可用时注入：什么时候用事件触发、动作和投递怎么选。",
-      "default": "用户要求在某件事发生时去做某事——某人下次说话或上线时提醒他、有人提到某个词时回应、有人进群时处理——调用 event_trigger，不要口头答应；机器人看不到在线状态，「上线」按他第一次说话算。只提醒一句用 action=message，需要查资料或随机应变用 action=agent；要把消息告诉设置的人而不是当场回复时传 deliver_to=origin。"
+      "default": "用户明确要求新增事件任务——某人下次说话或上线时提醒他、有人提到某个词时回应、有人进群时执行额外操作——调用 event_trigger，不要口头答应。开启、关闭或修改内置入群欢迎走 bot_config，不创建欢迎任务。机器人看不到在线状态，「上线」按他第一次说话算。只提醒一句用 action=message，需要查资料或随机应变用 action=agent；要把消息告诉设置的人而不是当场回复时传 deliver_to=origin。"
     },
     {
       "key": "reply.tool.tasks",

@@ -16,7 +16,7 @@ func TestBotConfigOffOverridesInheritedParticipation(t *testing.T) {
 	store := &testWritableGroupConfigStore{}
 	r.SetGroupConfigStore(store)
 	event := MessageEvent{ProfileID: "a", Platform: PlatformOneBotV11, Kind: EventKindGroup, GroupID: "g", UserID: "owner"}
-	tool := newDianaBotParticipationTool(r, event)
+	tool := newDianaBotConfigTool(r, event)
 	raw, err := tool.Run(context.Background(), map[string]any{"operation": "update", "desire_level": "off"})
 	if err != nil {
 		t.Fatal(err)
@@ -78,7 +78,7 @@ func TestBotConfigRejectsInvalidFieldsAndPersistenceFailure(t *testing.T) {
 	r := NewRuntime(BotConfig{OwnerID: "owner"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	store := &failedGroupPolicyStore{}
 	r.SetGroupConfigStore(store)
-	tool := newDianaBotParticipationTool(r, MessageEvent{Kind: EventKindGroup, GroupID: "g", UserID: "owner"})
+	tool := newDianaBotConfigTool(r, MessageEvent{Kind: EventKindGroup, GroupID: "g", UserID: "owner"})
 	for _, input := range []map[string]any{
 		{"operation": "update", "desire_level": "invalid"},
 		{"operation": "update", "cooldown_seconds": -1},
@@ -101,7 +101,7 @@ func TestBotConfigRejectsInvalidFieldsAndPersistenceFailure(t *testing.T) {
 func TestGroupToolsAndSkillsDoNotExposeOldMixedTool(t *testing.T) {
 	r := NewRuntime(BotConfig{OwnerID: "owner"}, nilChannel{}, NewDefaultPluginManager(), nil, nil, nil, nil)
 	event := MessageEvent{Platform: PlatformOneBotV11, Kind: EventKindGroup, GroupID: "g", UserID: "member"}
-	registry, err := r.newAgentRegistry(context.Background(), r.ProfileConfig("a"), event, RelationshipPolicyFor(UserMemoryProfile{}, "owner", "member"), newDianaGroupTool(r, event), newDianaBotParticipationTool(r, event))
+	registry, err := r.newAgentRegistry(context.Background(), r.ProfileConfig("a"), event, RelationshipPolicyFor(UserMemoryProfile{}, "owner", "member"), newDianaGroupTool(r, event), newDianaBotConfigTool(r, event))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -109,7 +109,7 @@ func TestGroupToolsAndSkillsDoNotExposeOldMixedTool(t *testing.T) {
 	if _, ok := registry.Get("diana.onebot_group"); ok {
 		t.Fatal("old mixed tool remains registered")
 	}
-	if _, ok := registry.Get(botParticipationToolName); !ok {
+	if _, ok := registry.Get(botConfigToolName); !ok {
 		t.Fatal("config tool unavailable to group admins")
 	}
 	group := newDianaGroupTool(r, event)
@@ -130,14 +130,14 @@ type participationToolSaver struct {
 }
 
 func (*participationToolSaver) SaveBotConfig(BotConfig) { panic("legacy config save used") }
-func (s *participationToolSaver) SaveParticipation(expected BotConfig, prefs ParticipationPreferences) (BotConfig, error) {
+func (s *participationToolSaver) SaveBotSettings(expected BotConfig, update BotSettingsUpdate) (BotConfig, error) {
 	if s.fail {
 		return BotConfig{}, errors.New("disk full")
 	}
 	if expected.ID != s.cfg.ID {
 		return BotConfig{}, errors.New("wrong bot")
 	}
-	s.cfg.Participation = copyParticipation(&prefs)
+	s.cfg = update.Apply(s.cfg)
 	return s.cfg, nil
 }
 
@@ -148,7 +148,7 @@ func TestBotConfigOwnerScopeAndFailedSave(t *testing.T) {
 	r := NewRuntime(a, nilChannel{}, NewPluginManager(), nil, nil, saver, nil)
 	r.SetProfiles(ProfileSet{Profiles: []BotConfig{a, b}})
 	event := MessageEvent{Kind: EventKindPrivate, ProfileID: "b", UserID: "b-owner"}
-	tool := newDianaBotParticipationTool(r, event)
+	tool := newDianaBotConfigTool(r, event)
 	if _, err := tool.Run(context.Background(), map[string]any{"operation": "update", "desire_level": "off"}); err != nil {
 		t.Fatal(err)
 	}
@@ -164,7 +164,7 @@ func TestBotConfigOwnerScopeAndFailedSave(t *testing.T) {
 	}
 	for _, user := range []string{"member", "a-owner"} {
 		event.UserID = user
-		if _, err := newDianaBotParticipationTool(r, event).Run(context.Background(), map[string]any{"operation": "update", "scope": "bot", "desire_level": "max"}); err == nil {
+		if _, err := newDianaBotConfigTool(r, event).Run(context.Background(), map[string]any{"operation": "update", "scope": "bot", "desire_level": "max"}); err == nil {
 			t.Fatal("non-owner changed another bot")
 		}
 	}
@@ -175,7 +175,7 @@ func TestBotConfigDoesNotTrustOldAdministratorRole(t *testing.T) {
 	r := NewRuntime(BotConfig{OwnerID: "owner"}, channel, NewPluginManager(), nil, nil, nil, nil)
 	r.SetGroupConfigStore(&testWritableGroupConfigStore{})
 	event := MessageEvent{Kind: EventKindGroup, GroupID: "123", UserID: "member", SenderRole: "group_admin"}
-	if _, err := newDianaBotParticipationTool(r, event).Run(context.Background(), map[string]any{"operation": "update", "desire_level": "off"}); err == nil {
+	if _, err := newDianaBotConfigTool(r, event).Run(context.Background(), map[string]any{"operation": "update", "desire_level": "off"}); err == nil {
 		t.Fatal("stale administrator role allowed mutation")
 	}
 }
@@ -185,7 +185,7 @@ func TestChangingMemberLevelPreservesParticipationInheritance(t *testing.T) {
 	store := &testWritableGroupConfigStore{}
 	r.SetGroupConfigStore(store)
 	event := MessageEvent{Kind: EventKindGroup, GroupID: "g", UserID: "owner"}
-	if _, err := newDianaBotParticipationTool(r, event).Run(context.Background(), map[string]any{"operation": "update", "minimum_reply_member_level": 10}); err != nil {
+	if _, err := newDianaBotConfigTool(r, event).Run(context.Background(), map[string]any{"operation": "update", "minimum_reply_member_level": 10}); err != nil {
 		t.Fatal(err)
 	}
 	saved, ok := store.ConfigForGroup("", "g")

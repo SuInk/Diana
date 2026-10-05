@@ -1,6 +1,6 @@
 ---
 name: bot-protocol
-description: Choose the current platform's supported protocol tools for group information and moderation, or Diana's configuration tool for reply behavior.
+description: Choose the current platform's supported protocol tools for group information and moderation, or Diana's configuration tool for reply behavior, member welcome and redacted diagnostics.
 ---
 
 # Bot Protocol
@@ -14,18 +14,31 @@ Use the current event's platform and bot identity. Never substitute another bot,
 - Image-to-avatar matching is a local operation: use the `match_avatar` tool, or `group_directory` with operation `match_avatar` where that tool is registered instead. Do not guess identity from an image.
 - Do not bypass a denied action with shell, raw network requests, an alias or another tool.
 
-## Diana Reply Settings
+## Diana Configuration
 
-Platform protocol actions do not change Diana's participation settings. Use `bot_config`:
+Use `bot_config` for Diana's settings and redacted diagnostics. Platform protocol actions do not change these settings:
 
 - `{"operation":"get","scope":"group"}` reads the current group's effective behavior.
 - `{"operation":"update","scope":"group","desire_level":"off"}` stops unsolicited participation in this group. It does not disable the bot, mute a platform account or stop responding to explicit requests.
 - `desire_level` accepts `off`, `low`, `medium`, `high`, `max`. Lowering to `low` is different from turning participation off.
-- Prefer `relevance_level`, `chat_level`, and `answerability_level`: `off`, `minimal`, `low`, `medium`, `high`, `extreme`, `always`. Numeric thresholds are 0.90, 0.70, 0.50, 0.30, 0.10. Answerability is required AND (relevance passes OR chat passes after cooldown). The chat branch is also blocked when the bot wrote at least 35% of the last 20 context messages and `chat_level` is not `always`; the relevance branch is unaffected. A rating response whose JSON cannot be parsed is retried once before the message is dropped. To disable only chat, set `chat_level=off`; to disable both unsolicited paths, also set `relevance_level=off`. Disabling answerability removes that quality gate. Legacy `desire_level=off` also disables both new paths.
+- `relevance_level` is the respond-to-questions switch: `on` or `off`. `chat_level` accepts `off`, `minimal`, `low`, `medium`, `high`, `always`; the four scored levels use thresholds 0.90, 0.70, 0.50, 0.30. Replies pass when the message is directed at Diana with the switch on, or when chat passes after cooldown. Do not submit `answerability_level` or `substance_level`: the separate answerability gate has been removed, and legacy numeric thresholds do not control this decision. Do not claim to change that removed gate.
+- The chat branch pauses when, within the last 10 minutes and up to 30 context messages, Diana sent at least 3 messages and accounts for at least 25% of the messages, with more than one other speaker. `chat_level=always` bypasses this share limit; the question branch is unaffected. A rating response whose JSON cannot be parsed is retried once before the message is dropped. To disable only chat, set `chat_level=off`; to disable both unsolicited paths, also set `relevance_level=off`. Legacy `desire_level=off` also disables both paths.
 - `cooldown_seconds` accepts 0 through 3600; 0 disables cooldown, not participation.
 - Use `scope=bot` only when the owner explicitly wants to change the current bot's defaults. Group administrators can update only their current group after backend verification.
-- Submit only requested fields. Changing desire must preserve score thresholds and cooldown. Do not submit legacy `chat_in_enabled`, `chat_in_level` or `natural_interjection_enabled` fields.
+- Submit only requested fields. Changing desire must preserve other settings and cooldown. Do not submit legacy `chat_in_enabled`, `chat_in_level` or `natural_interjection_enabled` fields.
 - Report success only after a successful save, using returned `participation`. On failure, report the error; never just promise to stay silent as if configuration changed.
+
+### Built-in Member Welcome
+
+- Turn welcome on or off with `{"operation":"update","welcome_enabled":true}` or `false`. In a group this changes only the current group's setting; `scope=bot` changes the current bot's defaults and is owner-only.
+- Update `welcome_message`, `welcome_mode` (`fixed`, `template`, `llm`), `welcome_templates` (up to 50 texts, each up to 200 characters), or `welcome_llm_cooldown_seconds` (0–86400). Zero uses the bot or system default. Submit only fields the user requested; changing welcome must preserve participation settings.
+- Requests such as “开启入群欢迎” configure the existing built-in feature. Repeated requests update the same setting. Do not create an `event_trigger` task to implement a welcome switch or change its wording. Use `event_trigger` only when the user explicitly requests an additional event task.
+- Report the returned effective `welcome` settings only after persistence succeeds.
+
+### Owner Diagnostics
+
+- `{"operation":"get","section":"all","scope":"bot"}` reads redacted bot, runtime, LLM, installed skills/plugins and path information. Select `bot`, `runtime`, `llm`, `skills` or `paths` to limit the output. These sections are owner-only and read-only; the scope may be omitted or set to `bot`. `section=settings` is the default editable settings view.
+- `llm_config` remains responsible for model assignment. There is no separate `config` tool or compatibility alias.
 
 ## Blocking One Person
 

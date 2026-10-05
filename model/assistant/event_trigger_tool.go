@@ -63,7 +63,7 @@ func (t *dianaEventTriggerTool) Name() string {
 // 设上了。和 reminder、subscription 的分工也保留，选错工具就建不出来。
 func (t *dianaEventTriggerTool) Description() string {
 	return `管理事件触发任务：某人下次说话、有人提到某词、有人进群时，发一句话或让 agent 按指令执行。` +
-		`按时间点触发用 reminder，按间隔重复用 subscription。不要口头答应或用后台进程代替。`
+		`开关或修改内置入群欢迎用 bot_config；仅新增任务用此工具。按时间点触发用 reminder，按间隔重复用 subscription。不要口头答应或用后台进程代替。`
 }
 
 // 时长格式、范围、互斥条件填错都由 Run 返回具体原因，说明里只写默认值和范围。

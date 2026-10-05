@@ -51,7 +51,9 @@ func (r *Runtime) RunAdminChat(ctx context.Context, profileID string, req agent.
 	if err := r.registerRepoPluginBundles(ctx, registry, adminCfg, event); err != nil {
 		return nil, err
 	}
-	registry.Register(newDianaConfigTool(r, event))
+	configTool := newDianaBotConfigTool(r, event)
+	configTool.admin = true
+	registry.Register(configTool)
 	client := newRuntimeAgentLLMProvider(r, ctx)
 	registry.Register(newDianaRuntimeModelTool(client))
 	if plugin, settings, enabled := r.pluginWithSettingsForEvent(webSearchPluginID, event); enabled {

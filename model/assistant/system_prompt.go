@@ -185,7 +185,7 @@ const (
 
 	// 下面三条原来是 builder 里的行内字面量，挪成常量才能登记覆盖。
 	promptToolMemory     = "长期记忆摘要不够时，先用 memory search 查索引，再按 id read 核对全文与证据；可按实体或主题改写关键词继续查，不得凭空补全旧事。"
-	promptToolBotConfig  = "修改 Diana 回复欲望、相关度或实质性门槛、主动闲聊冷却时按 bot-protocol skill 使用 bot_config。关闭话痨用 desire_level=off，降低活跃度用 low；群管理员只改当前群，机器人默认设置仅主人可改。成功保存后才报告生效，不通过平台禁言或口头承诺代替。"
+	promptToolBotConfig  = "读取 Diana 配置和诊断、修改接话或入群欢迎时按 bot-protocol skill 使用 bot_config。开启或关闭入群欢迎设置 welcome_enabled，修改欢迎词使用 welcome_message、welcome_mode 等字段；操作已有欢迎功能不创建 event_trigger。关闭话痨用 desire_level=off，降低活跃度用 low。群管理员只改当前群；机器人默认设置及完整脱敏诊断仅主人可用。只提交用户要求的字段，成功保存后才报告生效。"
 	promptToolReplyBlock = "主人或群管理员要求以后别理某个人、把某人屏蔽或把谁放出来时，用 reply_block，目标账号 ID 取自 @ 的结构化信息、被引用消息的发送者或群成员查询结果，不要按昵称猜。群管理员只能改当前群，机器人级名单仅主人可改。成功保存后才报告生效，不用平台禁言或口头答应代替；它只影响回不回复，不禁言也不撤消息。"
 )
 
@@ -221,7 +221,7 @@ var (
 	promptToolStickerSpec              = toolPromptSpec("sticker", "表情包", "表情包工具可用时注入：收尾时怎样配表情包、决定先后或只发图；配不配由模型自己判断。", promptToolSticker)
 	promptToolSelfNoteSpec             = toolPromptSpec("self_note", "自述", "自述工具可用时注入：什么算自我认知、什么不该写进自述。", promptToolSelfNote)
 	promptToolCapabilitiesSpec         = toolPromptSpec("capabilities", "能力查询", "能力知识库工具可用时注入：被问会什么时先查再答。", promptToolCapabilities)
-	promptToolBotConfigSpec            = toolPromptSpec("bot_config", "回复欲望设置", "回复欲望设置工具可用时注入：改活跃度和冷却走这个工具，保存成功才算数。", promptToolBotConfig)
+	promptToolBotConfigSpec            = toolPromptSpec("bot_config", "机器人配置", "统一配置工具可用时注入：查询诊断、改接话和欢迎设置走此工具，保存成功才算数。", promptToolBotConfig)
 	promptToolReplyBlockSpec           = toolPromptSpec("reply_block", "屏蔽名单", "屏蔽名单工具可用时注入：别理某人、放出来某人时怎么改名单。", promptToolReplyBlock)
 	promptToolRelationshipListSpec     = toolPromptSpec("relationship_list", "好感度榜单", "关系工具可用时注入：榜单对群成员开放，不许拿隐私当理由拒绝。", promptToolRelationshipList)
 	promptToolRelationshipQuerySpec    = toolPromptSpec("relationship_query", "好感度查询", "关系工具可用时注入：查到什么说什么，只答对方问的那件事。", promptToolRelationshipQuery)
@@ -252,7 +252,7 @@ const (
 	promptTaskSchedule = "用户要求每隔一段时间自动查询、搜索并通知，或要求每天、每周固定时间重复提醒时，调用 subscription 并传 kind=schedule：interval 是重复间隔，单位 s、m（分钟）、h、d、w、mo（月）、y（每天 1d、每周 1w、每月 1mo、每年 1y；m 是分钟，月写 mo），固定时间点传 time（例如每天 8 点 time=08:00），从某天开始就再加 date，也可以直接传 at（RFC3339）；每周一三五传 interval=1w、weekdays=[mon,wed,fri]，工作日传 weekdays=mon~fri；每月 1 号和 15 号传 interval=1mo、month_days=[1,15]，每月最后一天传 month_days=[-1]；每月第一个周一传 weekday=mon、week=1，最后一个周五传 weekday=fri、week=-1；用了这些规则时 at 只定从哪周/哪月开始和几点，一条订阅就能覆盖，不要拆成多条；不要只建一次性提醒再让用户下次重说；取消或删除单项周期查询也用它。RSS、Atom 和 Twitter 用户更新监控要改传 kind=rss。"
 	promptTaskRSS      = "用户要求持续订阅 RSS/Atom、关注指定 Twitter/X 用户，或只在新条目符合条件时通知时，调用 subscription 并传 kind=rss，judge_prompt 里写清通知条件和回复要求。要盯的人或 Feed 有好几个而条件相同时，用 twitter_handles/feed_urls 建一条多来源订阅，不要一人建一条。"
 	// 事件触发和提醒最容易混：「明天提醒他」是时间，「他下次说话时提醒他」是事件。
-	promptTaskEventTrigger = "用户要求在某件事发生时去做某事——某人下次说话或上线时提醒他、有人提到某个词时回应、有人进群时处理——调用 event_trigger，不要口头答应；机器人看不到在线状态，「上线」按他第一次说话算。只提醒一句用 action=message，需要查资料或随机应变用 action=agent；要把消息告诉设置的人而不是当场回复时传 deliver_to=origin。"
+	promptTaskEventTrigger = "用户明确要求新增事件任务——某人下次说话或上线时提醒他、有人提到某个词时回应、有人进群时执行额外操作——调用 event_trigger，不要口头答应。开启、关闭或修改内置入群欢迎走 bot_config，不创建欢迎任务。机器人看不到在线状态，「上线」按他第一次说话算。只提醒一句用 action=message，需要查资料或随机应变用 action=agent；要把消息告诉设置的人而不是当场回复时传 deliver_to=origin。"
 	promptTaskList         = "查询当前用户的全部提醒和订阅时，必须调用 tasks；只看订阅、不看一次性提醒时，用 subscription 的 operation=list 不传 kind，一次列出全部种类。"
 	// 订阅是配置，不是记忆：口头答应「以后合并了告诉你」，重启后什么都不剩。
 	promptTaskRepositoryWatch = "用户要求订阅某个 GitHub 仓库的更新，或要改、暂停、删除已有的仓库订阅（包括只收 PR/Issue 的某几种动态、换分支、改检查间隔）时，调用 subscription 并传 kind=github，不要口头答应。"

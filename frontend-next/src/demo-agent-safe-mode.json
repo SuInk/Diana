@@ -252,7 +252,7 @@
         "operations": [
           "update"
         ],
-        "reason": "修改机器人的接话和闲聊设置；读取照常"
+        "reason": "修改机器人的接话和入群欢迎设置；脱敏读取照常"
       },
       {
         "category": "self_modify",

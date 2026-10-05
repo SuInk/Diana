@@ -252,7 +252,7 @@ var AgentSafeModeRules = []AgentSafeModeRule{
 		Reason:     "挪动、复制、删除文件或建目录；stat 照常"},
 
 	// 改机器人设置和群管：被带偏的模型改掉自己的设置，主人未必马上察觉。
-	{Category: safeModeCategorySelfModify, Tool: botParticipationToolName, Field: "operation", Operations: []string{"update"}, Reason: "修改机器人的接话和闲聊设置；读取照常"},
+	{Category: safeModeCategorySelfModify, Tool: botConfigToolName, Field: "operation", Operations: []string{"update"}, Reason: "修改机器人的接话和入群欢迎设置；脱敏读取照常"},
 	{Category: safeModeCategorySelfModify, Tool: replyBlockToolName, Field: "operation", Operations: []string{"block", "unblock"}, Reason: "修改回复屏蔽名单；查看照常"},
 	{Category: safeModeCategorySelfModify, Tool: "bot_markers", Field: "operation", Operations: []string{"mark", "unmark"}, Reason: "修改机器人标记名单；查看照常"},
 	{Category: safeModeCategorySelfModify, Tool: "llm_config", Field: "operation", Operations: []string{"update"}, Reason: "切换这台机器人用的模型；查看照常"},
@@ -335,7 +335,7 @@ func AgentSafeModeCatalog() []AgentSafeModeCatalogCategory {
 	return out
 }
 
-// agentSafeModeDisabledList 把规则表压成一行一条，给 config 工具的只读快照用。
+// agentSafeModeDisabledList 把规则表压成一行一条，给 bot_config 的只读快照用。
 func agentSafeModeDisabledList(cfg BotConfig) []string {
 	if !cfg.agentSafeMode() {
 		return nil

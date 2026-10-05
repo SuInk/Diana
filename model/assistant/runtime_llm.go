@@ -1146,7 +1146,7 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 	if agentEnabled && hasTool(r.groupToolName(groupEvent)) {
 		builder.WriteString("\n" + r.groupToolPrompt(groupEvent, cfg))
 	}
-	if agentEnabled && hasTool(botParticipationToolName) {
+	if agentEnabled && hasTool(botConfigToolName) {
 		builder.WriteString("\n" + cfg.prompt(promptToolBotConfigSpec))
 	}
 	if agentEnabled && hasTool(replyBlockToolName) {

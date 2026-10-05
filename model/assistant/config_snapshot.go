@@ -4,7 +4,6 @@
 package assistant
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -15,11 +14,6 @@ import (
 	"github.com/SuInk/diana/internal/secretmask"
 	"github.com/SuInk/diana/model/llm"
 )
-
-type dianaConfigTool struct {
-	runtime *Runtime
-	event   MessageEvent
-}
 
 type dianaConfigSnapshot struct {
 	Note        string                   `json:"note"`
@@ -215,32 +209,10 @@ type dianaRuntimePathSnapshot struct {
 	AgentMCPConfig  string `json:"agent_mcp_config,omitempty"`
 }
 
-// newDianaConfigTool exposes the bot's own redacted runtime configuration to Agent skills.
-func newDianaConfigTool(runtime *Runtime, event MessageEvent) *dianaConfigTool {
-	return &dianaConfigTool{runtime: runtime, event: event}
-}
-
-func (t *dianaConfigTool) Name() string {
-	return "config"
-}
-
-func (t *dianaConfigTool) Description() string {
-	return `读取 Diana 自己的脱敏运行配置、当前 LLM profile、已安装 skills 与插件状态和运行路径。`
-}
-
-func (t *dianaConfigTool) InputSchema() map[string]any {
-	return toolObjectSchema(nil, map[string]any{
-		"section": toolEnumParam("省略为 all。",
-			"all", "bot", "llm", "skills", "runtime", "paths"),
-	})
-}
-
-func (t *dianaConfigTool) Run(_ context.Context, input map[string]any) (string, error) {
-	section := strings.ToLower(strings.TrimSpace(configToolString(input, "section")))
-	if section == "" {
-		section = "all"
-	}
-	snapshot := t.runtime.dianaConfigSnapshot(t.event)
+// readConfigDiagnostics is the owner-only diagnostic view of bot_config. The
+// caller authorizes the event before collecting any runtime or host details.
+func (r *Runtime) readConfigDiagnostics(event MessageEvent, section string) (string, error) {
+	snapshot := r.dianaConfigSnapshot(event)
 	filtered := map[string]any{"note": snapshot.Note}
 	switch section {
 	case "all":
@@ -260,11 +232,7 @@ func (t *dianaConfigTool) Run(_ context.Context, input map[string]any) (string, 
 	case "paths":
 		filtered["runtime_paths"] = snapshot.RuntimePath
 	default:
-		filtered["runtime"] = snapshot.Runtime
-		filtered["bot"] = snapshot.Bot
-		filtered["llm"] = snapshot.LLM
-		filtered["installed_skills"] = snapshot.Skills
-		filtered["runtime_paths"] = snapshot.RuntimePath
+		return "", fmt.Errorf("不支持的配置查询部分 %q", section)
 	}
 	body, err := json.MarshalIndent(filtered, "", "  ")
 	if err != nil {

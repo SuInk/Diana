@@ -180,7 +180,7 @@ func safeModeRegistryForEvent(t *testing.T, mode string, event MessageEvent, rem
 		newDianaCrossSessionTool(runtime, event, true),
 		newDianaSaveToWorkspaceTool(runtime, event),
 		newDianaPlatformTool(context.Background(), runtime, event),
-		newDianaBotParticipationTool(runtime, event),
+		newDianaBotConfigTool(runtime, event),
 		newDianaReplyBlockTool(runtime, event),
 		newDianaOneBotRequestsTool(runtime, event),
 		newDianaLLMConfigTool(runtime, event),
@@ -238,7 +238,7 @@ func TestSafeModeDisablesEveryRuleForOwner(t *testing.T) {
 	for _, name := range []string{
 		"read_file", "list_files", "grep", "find_files", agent.ManageFilesToolName,
 		dianaChatHistoryToolName, "reminder", dianaRenderToolName, dianaPlatformToolName,
-		botParticipationToolName, dianaGitHubToolName, "llm_config", dianaIdentityCheckToolName,
+		botConfigToolName, dianaGitHubToolName, "llm_config", dianaIdentityCheckToolName,
 	} {
 		if _, ok := registry.Get(name); !ok {
 			t.Fatalf("安全模式不该关掉 %s", name)
@@ -248,7 +248,7 @@ func TestSafeModeDisablesEveryRuleForOwner(t *testing.T) {
 		agent.ManageFilesToolName: {"action": "stat"},
 		dianaPlatformToolName:     {"operation": platformOpGroupInfo},
 		dianaGitHubToolName:       {"operation": "get"},
-		botParticipationToolName:  {"operation": "get"},
+		botConfigToolName:         {"operation": "get"},
 		"llm_config":              {"operation": "list"},
 	} {
 		if err := registry.OperationDisabledError(tool, input); err != nil {

@@ -141,7 +141,7 @@ func (t *dianaIdentityCheckTool) Run(ctx context.Context, input map[string]any) 
 // fillGroupRole 实时核验平台群身份。
 //
 // 只走平台成员接口，绝不读 event.SenderRole——那是桥接端上报的字段，自建桥或 HTTP
-// 上报模式下可以伪造，reply_block 和 bot_participation 两个写操作工具也正是为此在
+// 上报模式下可以伪造，reply_block 和 bot_config 两个写操作工具也正是为此在
 // 调 canConfigureGroup 前把它清空。核验身份的工具更不该比它们宽松。
 //
 // 查不到就如实报错，不降级成 member：把一个真群主误判成普通成员，和把冒充者判成

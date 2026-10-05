@@ -78,8 +78,8 @@ func TestRSSWatchToolMasksFeedURLAndRestoresOnUpdate(t *testing.T) {
 	}
 }
 
-// config 工具给模型看的运行状态：连接地址里的 access_token、上次失败的原始报错都只给掩码。
-func TestConfigToolRuntimeSnapshotMasksCredentials(t *testing.T) {
+// bot_config 给模型看的运行状态：连接地址里的 access_token、上次失败的原始报错都只给掩码。
+func TestBotConfigRuntimeSnapshotMasksCredentials(t *testing.T) {
 	token := "obtok" + "0123456789abcdef"
 	endpoint := "ws://127.0.0.1:3001/?access_token=" + token
 	status := RuntimeStatus{
