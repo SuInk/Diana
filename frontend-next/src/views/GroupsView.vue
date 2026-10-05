@@ -659,7 +659,7 @@
               <div class="group-plugin-row-head">
                 <div class="row-main">
                   <div class="row-title">{{ plugin.manifest.name }}</div>
-                  <div class="row-sub">机器人：{{ plugin.enabled ? "已启用" : "已停用" }}</div>
+                  <div class="row-sub">{{ plugin.manifest.id === 'official.web-search' ? '来源与启用状态沿用机器人配置' : `全局：${plugin.enabled ? '已启用' : '已停用'}` }}</div>
                 </div>
                 <div class="segmented">
                   <button type="button" :class="{ active: overrideOf(plugin.manifest.id) === undefined }" @click="setOverride(plugin.manifest.id, undefined)">

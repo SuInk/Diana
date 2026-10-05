@@ -3,7 +3,7 @@
 
 <template>
   <div ref="rootRef" class="app-select" :class="{ open }">
-    <button :id="id" ref="triggerRef" type="button" class="app-select-trigger" :disabled="disabled" @click="toggle" @keydown="onKeydown">
+    <button :id="id" ref="triggerRef" type="button" class="app-select-trigger" :disabled="disabled" :aria-label="ariaLabel" aria-haspopup="listbox" :aria-expanded="open" @click="toggle" @keydown="onKeydown">
       <img v-if="currentAvatar" class="app-select-avatar" :src="currentAvatar" alt="" loading="lazy" @error="hideAvatar" />
       <span class="app-select-value">{{ currentLabel }}</span>
       <ChevronDown :size="14" class="app-select-chevron" aria-hidden="true" />
@@ -68,6 +68,7 @@ const props = defineProps<{
   modelValue: string;
   options: AppSelectOption[];
   id?: string;
+  ariaLabel?: string;
   disabled?: boolean;
   placeholder?: string;
   /** 选项多到需要翻找时打开：菜单顶部出现搜索框，按标签和 hint 过滤。 */
@@ -166,6 +167,7 @@ function placeMenu(): void {
 
 function close(): void {
   open.value = false;
+  triggerRef.value?.focus();
 }
 
 function toggle(): void {
@@ -181,12 +183,15 @@ watch(open, async (isOpen) => {
 
 function pick(value: string): void {
   emit("update:modelValue", value);
-  open.value = false;
+  close();
 }
 
 function onKeydown(event: KeyboardEvent): void {
   if (event.key === "Escape") {
-    open.value = false;
+    if (open.value) {
+      event.stopPropagation();
+      close();
+    }
     return;
   }
   // 上下键在选项间移动，无需展开也能快速切换。

@@ -600,116 +600,117 @@
           <!-- 模型分配 -->
           <section class="card">
             <div class="card-header">
-              <h2>模型分配</h2>
-              <span class="card-sub">按用途选择提供商与模型；提供商的接入与凭据在「提供商」页管理</span>
+              <h2>模型与搜索</h2>
+              <span class="card-sub">按用途分配模型与搜索来源；接入地址和凭据在「提供商」页管理</span>
             </div>
-            <div class="card-body stack model-role-list" style="gap: 0">
+            <div class="card-body model-allocation-workspace">
               <p v-if="modelRolesChangedElsewhere" class="hint warn-text">
                 模型分配刚在别处改过，通常是在聊天里让机器人自己换的。你在这一档也有未保存的修改，所以没有自动替换；直接保存会把那次改动覆盖掉。
                 <button type="button" class="btn ghost small" @click="adoptIncomingModelRoles">载入最新</button>
               </p>
-              <div class="model-role-row model-role-head" aria-hidden="true">
-                <span>用途</span>
-                <span>提供商 / 分组</span>
-                <span>模型</span>
-              </div>
-              <div v-for="role in visibleModelRoleRows" :key="role.key" class="model-role-block">
-                <div class="model-role-row">
-                  <div
-                    class="model-route-group"
-                    :class="routeDragClasses(role.key, 0)"
-                    :data-route-slot="`${role.key}:0`"
-                    @dragover="(event) => onRouteDragOver(role.key, 0, event)"
-                    @drop="(event) => onRouteDrop(role.key, 0, event)"
-                  >
-                    <button
-                      v-if="routeReorderable(role.key)"
-                      class="model-role-label model-route-handle"
-                      type="button"
-                      draggable="true"
-                      :data-route-handle="`${role.key}-0`"
-                      title="拖动调整顺序，或按 ↑ ↓ 键；排在最上面的是主路由"
-                      :aria-label="`${role.label}：主路由，按上下方向键调整顺序`"
-                      @dragstart="(event) => onRouteDragStart(role.key, 0, event)"
-                      @pointerdown="(event) => onRouteHandlePointerDown(role.key, 0, event)"
-                      @dragend="onRouteDragEnd"
-                      @keydown="(event) => onRouteHandleKeydown(role.key, 0, event)"
-                    >
-                      <GripVertical :size="14" aria-hidden="true" />
-                      <span class="model-role-name">
-                        {{ role.label }}
-                        <small v-if="role.sublabel">{{ role.sublabel }}</small>
-                      </span>
-                    </button>
-                    <span v-else class="model-role-label model-role-name">
-                      {{ role.label }}
-                      <small v-if="role.sublabel">{{ role.sublabel }}</small>
-                    </span>
-                    <AppSelect
-                      :model-value="roleSelectionValue(role.key)"
-                      :options="channelOptionsFor(role.key)"
-                      :placeholder="isPurposeRole(role.key) ? `不指定，跟随${purposeRoleFallbackLabel(role.key)}` : '请选择提供商 / 分组'"
-                      @update:model-value="(value) => setRoleChannel(role.key, value)"
-                    />
-                    <AppSelect
-                      :model-value="roleModelValue(role.key)"
-                      :options="modelOptionsFor(role.key)"
-                      :disabled="roleForm[role.key]?.follow_chat || (isOptionalRole(role.key) && !roleForm[role.key])"
-                      :placeholder="roleModelPlaceholder(role.key)"
-                      @update:model-value="(value) => setRoleModel(role.key, value)"
-                    />
-                    <button
-                      class="btn icon-only ghost model-route-action"
-                      type="button"
-                      title="添加后备路由"
-                      :aria-label="`${role.label}：添加后备路由`"
-                      :disabled="!roleForm[role.key] || roleForm[role.key]?.follow_chat"
-                      @click="addRoleFallback(role.key)"
-                    >
-                      <Plus :size="16" aria-hidden="true" />
+              <nav class="model-purpose-nav" aria-label="模型与搜索用途" role="tablist">
+                <span class="model-purpose-caption">用途</span>
+                <button
+                  v-for="role in visibleModelRoleRows"
+                  :id="`model-purpose-${role.key}`"
+                  :key="role.key"
+                  type="button"
+                  role="tab"
+                  class="model-purpose-tab"
+                  :class="{ active: selectedModelRole === role.key }"
+                  :aria-selected="selectedModelRole === role.key"
+                  :aria-controls="`model-purpose-panel-${role.key}`"
+                  :tabindex="selectedModelRole === role.key ? 0 : -1"
+                  @click="selectedModelRole = role.key"
+                  @keydown="(event) => onModelPurposeKeydown(role.key, event)"
+                >
+                  <span>
+                    <component :is="modelPurposeIcon(role.key)" :size="16" aria-hidden="true" />
+                    {{ modelPurposeLabel(role.key) }}
+                    <ChevronRight v-if="selectedModelRole === role.key" :size="13" aria-hidden="true" />
+                  </span>
+                  <small>{{ modelPurposeSummary(role.key) }}</small>
+                </button>
+                <button id="model-purpose-search" type="button" role="tab" class="model-purpose-tab" :class="{ active: selectedModelRole === 'search' }" :aria-selected="selectedModelRole === 'search'" aria-controls="model-purpose-panel-search" :tabindex="selectedModelRole === 'search' ? 0 : -1" @click="selectedModelRole = 'search'" @keydown="onModelPurposeKeydown('search', $event)"><span><Search :size="16" aria-hidden="true" />联网搜索<ChevronRight v-if="selectedModelRole === 'search'" :size="13" aria-hidden="true" /></span><small>{{ form.web_search?.disabled ? '已关闭' : '来源与后备' }}</small></button>
+                <p class="model-purpose-foot">切换用途会保留未保存的修改。保存后仅影响当前机器人。</p>
+              </nav>
+              <div class="model-allocation-panels">
+                <div
+                  v-for="role in visibleModelRoleRows"
+                  v-show="selectedModelRole === role.key"
+                  :id="`model-purpose-panel-${role.key}`"
+                  :key="role.key"
+                  class="model-role-block"
+                  role="tabpanel"
+                  :aria-labelledby="`model-purpose-${role.key}`"
+                >
+                  <div class="model-purpose-heading">
+                    <div>
+                      <h3>{{ modelPurposeLabel(role.key) }}</h3>
+                      <span class="badge">{{ modelRoleRouteSummary(role.key) }}</span>
+                    </div>
+                    <button class="btn small primary" type="button" @click="openModelRouteEditor(role.key)">
+                      <Plus :size="14" aria-hidden="true" />添加模型
                     </button>
                   </div>
-                  <div
-                    v-for="(fallback, index) in roleForm[role.key]?.fallbacks ?? []"
-                    :key="`${role.key}-fallback-${index}`"
-                    class="model-route-group"
-                    :class="routeDragClasses(role.key, index + 1)"
-                    :data-route-slot="`${role.key}:${index + 1}`"
-                    @dragover="(event) => onRouteDragOver(role.key, index + 1, event)"
-                    @drop="(event) => onRouteDrop(role.key, index + 1, event)"
-                  >
-                    <button
-                      class="model-role-label muted model-route-handle"
-                      type="button"
-                      draggable="true"
-                      :data-route-handle="`${role.key}-${index + 1}`"
-                      title="拖动调整顺序，或按 ↑ ↓ 键；排在最上面的是主路由"
-                      :aria-label="`${role.label}：后备 ${index + 1}，按上下方向键调整顺序`"
-                      @dragstart="(event) => onRouteDragStart(role.key, index + 1, event)"
-                      @pointerdown="(event) => onRouteHandlePointerDown(role.key, index + 1, event)"
-                      @dragend="onRouteDragEnd"
-                      @keydown="(event) => onRouteHandleKeydown(role.key, index + 1, event)"
-                    >
-                      <GripVertical :size="14" aria-hidden="true" />
-                      后备 {{ index + 1 }}
-                    </button>
-                    <AppSelect
-                      :model-value="routeSelectionValue(fallback)"
-                      :options="channelOptionsFor(role.key)"
-                      placeholder="请选择提供商 / 分组"
-                      @update:model-value="(value) => setFallbackChannel(role.key, index, value)"
-                    />
-                    <AppSelect
-                      :model-value="fallback.model"
-                      :options="modelOptionsFor(role.key, fallback)"
-                      placeholder="请选择后备模型"
-                      @update:model-value="(value) => setFallbackModel(role.key, index, value)"
-                    />
-                    <button class="btn icon-only ghost model-route-action" type="button" title="删除后备路由" :aria-label="`${role.label}：删除后备 ${index + 1}`" @click="removeRoleFallback(role.key, index)">
-                      <Trash2 :size="16" aria-hidden="true" />
-                    </button>
+                  <div class="model-routing-toolbar">
+                    <div v-if="role.key !== 'chat'" class="model-routing-control">
+                      <label :for="`model-source-${role.key}`">模型来源</label>
+                      <AppSelect :id="`model-source-${role.key}`" :model-value="modelRoleSource(role.key)" :options="modelRoleSourceOptions(role.key)" @update:model-value="(value) => setModelRoleSource(role.key, value)" />
+                    </div>
+                    <div v-if="roleForm[role.key] && !modelRoleInherited(role.key)" class="model-routing-control">
+                      <label :for="`model-strategy-${role.key}`">调度方式</label>
+                      <AppSelect :id="`model-strategy-${role.key}`" :model-value="roleForm[role.key]?.routing_strategy || ''" :options="modelRoutingStrategies" @update:model-value="(value) => setRoleRoutingStrategy(role.key, value)" />
+                    </div>
+                    <span v-if="!modelRoleInherited(role.key)" class="model-routing-toolbar-hint">{{ modelRoutingDescription(role.key) }}</span>
                   </div>
-                </div>
+                  <div v-if="modelRoleInherited(role.key)" class="model-inherited-state">
+                    <GitBranch :size="22" aria-hidden="true" />
+                    <div><strong>{{ modelRoleSource(role.key) === FOLLOW_VISION ? '沿用视觉理解的模型配置' : modelRoleSource(role.key) === UNSPECIFIED ? `跟随${purposeRoleFallbackLabel(role.key)}的模型配置` : '沿用对话的模型配置' }}</strong><p>模型、调度方式和后备路由随来源一起更新。</p></div>
+                    <button class="btn small" type="button" @click="openModelRouteEditor(role.key, 0)">独立配置</button>
+                  </div>
+                  <template v-else>
+                    <div class="model-list-toolbar">
+                      <div class="model-list-search">
+                        <Search :size="14" aria-hidden="true" />
+                        <input v-model="modelRouteSearch" class="input" :aria-label="`搜索${modelPurposeLabel(role.key)}模型`" placeholder="搜索模型或提供商" />
+                      </div>
+                      <AppSelect :id="`model-status-filter-${role.key}`" v-model="modelRouteStatusFilter" :options="modelRouteStatusOptions" />
+                    </div>
+                    <div class="model-route-table-wrap">
+                      <table class="model-route-table" :aria-label="`${modelPurposeLabel(role.key)}模型列表`">
+                        <thead><tr><th class="model-route-order-col" scope="col">顺序</th><th scope="col">提供商 / 模型</th><th class="model-route-kind-col" scope="col">调度</th><th v-if="roleForm[role.key]?.routing_strategy === 'weighted'" class="model-route-weight-col" scope="col">权重</th><th class="model-route-enable-col" scope="col">启用</th><th class="model-route-actions-col" scope="col">操作</th></tr></thead>
+                        <tbody>
+                          <tr
+                            v-for="item in filteredModelRoutes(role.key)"
+                            :key="`${role.key}-${item.index}`"
+                            class="model-route-list-row"
+                            :class="{ ...routeDragClasses(role.key, item.index), 'is-disabled': item.route.disabled }"
+                            @dragover="(event) => onRouteDragOver(role.key, item.index, event)"
+                            @drop="(event) => onRouteDrop(role.key, item.index, event)"
+                          >
+                            <td class="model-route-order-cell">
+                              <button v-if="routeReorderable(role.key)" class="model-route-handle" type="button" draggable="true" :data-route-handle="`${role.key}-${item.index}`" :title="modelRouteSearch || modelRouteStatusFilter !== 'all' ? '筛选时无法调整顺序，请先清除筛选' : '拖动或按上下方向键调整顺序'" :disabled="!!modelRouteSearch || modelRouteStatusFilter !== 'all'" :aria-label="`${role.label}：模型 ${item.index + 1}，按上下方向键调整顺序`" @dragstart="(event) => { if (modelRouteSearch || modelRouteStatusFilter !== 'all') event.preventDefault(); else onRouteDragStart(role.key, item.index, event); }" @dragend="onRouteDragEnd" @keydown="(event) => onRouteHandleKeydown(role.key, item.index, event)"><GripVertical :size="14" aria-hidden="true" /><span>{{ item.index + 1 }}</span></button>
+                              <span v-else class="model-route-order-number">{{ item.index + 1 }}</span>
+                            </td>
+                            <td class="model-route-identity">
+                              <span class="model-route-provider"><Layers v-if="item.route.group" :size="12" aria-hidden="true" />{{ modelRouteProviderLabel(item.route) }}</span>
+                              <button class="model-route-model-name mono" type="button" :title="item.route.model" @click="openModelRouteEditor(role.key, item.index)">{{ item.route.model || '请选择模型' }}</button>
+                            </td>
+                            <td class="model-route-kind-cell"><span class="badge" :class="modelRouteIsStandby(role.key, item.index) ? '' : 'accent'">{{ modelRouteIsStandby(role.key, item.index) ? '后备' : roleForm[role.key]?.routing_strategy ? '参与调度' : '主模型' }}</span></td>
+                            <td v-if="roleForm[role.key]?.routing_strategy === 'weighted'" class="model-route-weight-cell">
+                              <span v-if="modelRouteIsStandby(role.key, item.index)" class="muted">—</span>
+                              <AppNumberInput v-else :model-value="item.route.weight || 1" :min="1" :max="1000" :label="`${role.label}模型 ${item.index + 1} 权重`" :disabled="item.route.disabled" compact @update:model-value="(value) => setRoleRouteWeight(role.key, item.index, value)" />
+                            </td>
+                            <td class="model-route-enable-cell"><AppSwitch :model-value="!item.route.disabled" :aria-label="`${role.label}模型 ${item.index + 1} 启用`" compact @update:model-value="(value) => setRoleRouteDisabled(role.key, item.index, !value)" /></td>
+                            <td class="model-route-actions"><button class="btn icon-only small ghost" type="button" :aria-label="`编辑${role.label}模型 ${item.index + 1}`" title="编辑模型" @click="openModelRouteEditor(role.key, item.index)"><Pencil :size="14" aria-hidden="true" /></button><button v-if="item.index > 0" class="btn icon-only small ghost" type="button" :aria-label="`删除${role.label}模型 ${item.index + 1}`" title="删除模型" @click="removeRoleFallback(role.key, item.index - 1)"><Trash2 :size="14" aria-hidden="true" /></button></td>
+                          </tr>
+                          <tr v-if="!filteredModelRoutes(role.key).length"><td :colspan="roleForm[role.key]?.routing_strategy === 'weighted' ? 6 : 5" class="model-list-empty">{{ modelRoleRoutes(role.key).length ? '没有匹配的模型' : '还没有配置模型，点击「添加模型」开始。' }}<button v-if="modelRoleRoutes(role.key).length" class="btn ghost small" type="button" @click="clearModelRouteFilters">清除筛选</button></td></tr>
+                        </tbody>
+                      </table>
+                    </div>
+                    <p v-if="roleForm[role.key]?.routing_strategy" class="hint model-routing-hint">后备模型仅在参与渠道均失败时使用。<template v-if="roleForm[role.key]?.routing_strategy === 'weighted'">分组中的每个兼容渠道使用该行权重；</template>一次调用中的后续请求沿用当前渠道。</p>
+                  </template>
                 <div v-if="isMediaRole(role.key) && roleForm[role.key]" class="model-role-params">
                   <label v-for="field in mediaParamFields[role.key]" :key="field.key" class="field">
                     <span>{{ field.label }}</span>
@@ -751,12 +752,20 @@
                     />
                   </label>
                 </div>
-                <p class="model-role-desc muted">{{ role.description }}</p>
+                  <AppDisclosure :id="`model-description-${role.key}`" class="model-purpose-description" title="用途与调度说明"><p>{{ role.description }}</p><p>主备切换按列表顺序尝试；轮询和加权轮询先尝试选中的渠道，再尝试其余参与渠道，最后尝试后备模型。拖动顺序编号或聚焦后按 ↑ ↓ 调整顺序。</p></AppDisclosure>
+                </div>
+                <div v-show="selectedModelRole === 'search'" id="model-purpose-panel-search" role="tabpanel" aria-labelledby="model-purpose-search" class="model-role-block"><SearchRoutingPanel :profile-id="form.id" v-model="form.web_search" /></div>
               </div>
-              <p class="muted model-role-note">
-                每个用途的主路由和后备路由按从上到下的顺序依次尝试。有后备时，拖动左侧的名称可以调整顺序（也可以聚焦后按 ↑ ↓ 键），
-                拖到最上面的那条就成为主路由，原来的主路由顺延为后备。
-              </p>
+            </div>
+          </section>
+
+          <section class="card">
+            <div class="card-header"><h2>媒体预处理</h2></div>
+            <div class="card-body stack">
+              <AppSwitch v-model="form.auto_image_description">自动生成图片描述</AppSwitch>
+              <AppSwitch v-model="form.auto_video_preprocess">自动下载视频并提取关键帧</AppSwitch>
+              <p class="muted">关闭后保留媒体索引和已有缓存；普通图片不再后台调用模型，视频不再预下载或抽帧。主动读取、引用分析及工具调用仍可按需解析；远程媒体过期后可能无法读取。</p>
+              <p class="muted">图片描述、视频帧描述和模型 OCR 用的是「模型分配」里的「媒体解析」。文本文件提取和本地 OCR 不消耗模型额度。</p>
             </div>
           </section>
 
@@ -770,11 +779,7 @@
             </div>
             <div class="card-body form-grid">
               <div class="field wide">
-                <label class="switch">
-                  <input v-model="form.llm_streaming_enabled" type="checkbox" />
-                  <span class="track" aria-hidden="true"></span>
-                  <span class="switch-label">流式调用模型（默认开启）</span>
-                </label>
+                <AppSwitch v-model="form.llm_streaming_enabled">流式调用模型（默认开启）</AppSwitch>
                 <span class="hint">
                   默认使用流式接收正文、思考和工具调用；思考不会作为聊天正文发送，工具参数完整后才会执行。
                   可统计首 token 时延（TTFT），Telegram 私聊支持回复预览。供应商不支持流式或请求失败时会尝试普通调用。
@@ -813,11 +818,7 @@
             </div>
             <div class="card-body form-grid">
               <div class="field wide">
-                <label class="switch">
-                  <input v-model="form.owner_llm_config_enabled" type="checkbox" />
-                  <span class="track" aria-hidden="true"></span>
-                  <span class="switch-label">允许主人在聊天中修改提供商和模型</span>
-                </label>
+                <AppSwitch v-model="form.owner_llm_config_enabled">允许主人在聊天中修改提供商和模型</AppSwitch>
                 <span class="hint">仅主人账号可修改，保存前会校验目标模型是否可用。</span>
               </div>
             </div>
@@ -2139,6 +2140,19 @@
       </section>
     </div>
 
+    <Modal v-if="modelRouteEditor" :title="`${modelRouteEditor.adding ? '添加' : '编辑'}${modelPurposeLabel(modelRouteEditor.role)}模型`" initial-focus="#model-route-editor-provider" @close="modelRouteEditor = null">
+      <div class="stack model-route-editor">
+        <p class="muted">选择提供商和模型，并设置它在当前用途中的调度方式。</p>
+        <div class="field"><label for="model-route-editor-provider">提供商 / 分组</label><AppSelect id="model-route-editor-provider" :model-value="routeSelectionValue(modelRouteEditor.draft)" :options="channelOptionsFor(modelRouteEditor.role).filter((option) => option.value !== FOLLOW_CHAT && option.value !== FOLLOW_VISION)" searchable search-placeholder="搜索提供商或分组" placeholder="选择提供商 / 分组" @update:model-value="setModelRouteEditorChannel" /></div>
+        <div class="field"><label for="model-route-editor-model">模型</label><AppSelect id="model-route-editor-model" :model-value="modelRouteEditor.draft.model" :options="modelOptionsFor(modelRouteEditor.role, modelRouteEditor.draft)" searchable search-placeholder="搜索模型" placeholder="选择模型" @update:model-value="setModelRouteEditorModel" /></div>
+        <div v-if="roleForm[modelRouteEditor.role]?.routing_strategy && modelRouteEditor.index > 0" class="field"><AppSwitch v-model="modelRouteEditor.draft.standby">仅作后备</AppSwitch><span class="hint">关闭时参与负载均衡；开启后只在参与渠道全部失败时使用。</span></div>
+        <div v-if="roleForm[modelRouteEditor.role]?.routing_strategy === 'weighted' && !modelRouteEditor.draft.standby" class="field"><label for="model-route-editor-weight">调度权重</label><AppNumberInput id="model-route-editor-weight" v-model="modelRouteEditor.draft.weight" :min="1" :max="1000" label="调度权重" :disabled="modelRouteEditor.draft.disabled" /><span class="hint">权重越大，分配到的请求越多，范围 1–1000。</span></div>
+        <div class="field"><AppSwitch :model-value="!modelRouteEditor.draft.disabled" @update:model-value="(value) => { if (modelRouteEditor) modelRouteEditor.draft.disabled = !value || undefined; }">启用模型</AppSwitch></div>
+        <p v-if="modelRouteEditorError" class="warn-text" role="alert">{{ modelRouteEditorError }}</p>
+      </div>
+      <template #footer><span class="muted model-route-editor-save-hint">修改后，点击页面「保存配置」生效。</span><button class="btn" type="button" @click="modelRouteEditor = null">取消</button><button class="btn primary" type="button" @click="applyModelRouteEditor">{{ modelRouteEditor.adding ? '添加' : '应用修改' }}</button></template>
+    </Modal>
+
     <MessageRelayManager
       v-if="relayManagerOpen"
       :profiles="profiles"
@@ -2206,10 +2220,11 @@ import { botScope } from "../bot-scope";
 import { copyBotConfiguration } from "../bot-config-copy";
 import { findWebSocketConnectionConflict } from "../bot-connection-conflicts";
 import { useConfigurationRefresh } from "../configuration-sync";
+import { mergeModelMetadata, effectiveModelInfo } from "../model-metadata";
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch, type Ref } from "vue";
 import LoadingSkeleton from "../components/LoadingSkeleton.vue";
 import SkeletonBlock from "../components/SkeletonBlock.vue";
-import { ArrowLeft, Bot, ChevronDown, ChevronRight, Copy, Download, Eye, EyeOff, GripVertical, Pencil, Plus, Power, PowerOff, RefreshCw, RotateCcw, Save, Settings2, Shuffle, Sparkles, Trash2, Upload, X } from "@lucide/vue";
+import { ArrowLeft, Bot, ChevronDown, ChevronRight, Copy, Download, Eye, EyeOff, GitBranch, GripVertical, History, Image, Layers, MessageSquare, Pencil, Plus, Power, PowerOff, RefreshCw, RotateCcw, Save, ScanLine, Search, Settings2, Shuffle, SlidersHorizontal, Sparkles, Trash2, Upload, Waypoints, X } from "@lucide/vue";
 import { formatClock } from "../format";
 import { sendRetryFields, sendRetryPayload, sendRetryValidationError } from "../send-retry-settings";
 import { botImageGenerationLimitsPayload, botVideoGenerationLimitsPayload } from "../media-generation-quota";
@@ -2261,6 +2276,10 @@ import {
 } from "../api";
 import AccountNameHint from "../components/AccountNameHint.vue";
 import AppSelect, { type AppSelectOption } from "../components/AppSelect.vue";
+import AppNumberInput from "../components/AppNumberInput.vue";
+import AppSwitch from "../components/AppSwitch.vue";
+import AppDisclosure from "../components/AppDisclosure.vue";
+import SearchRoutingPanel from "../components/SearchRoutingPanel.vue";
 import ParticipationControls from "../components/ParticipationControls.vue";
 import BotMarkerList from "../components/BotMarkerList.vue";
 import AgentResidencyPanel from "../components/AgentResidencyPanel.vue";
@@ -2842,7 +2861,7 @@ async function copyCallbackURL(): Promise<void> {
 // 保持一致，免得读代码时对不上。
 const editorTabs = [
   { key: "access", label: "接入" },
-  { key: "model", label: "模型" },
+  { key: "model", label: "模型与搜索" },
   { key: "persona", label: "人设" },
   { key: "behavior", label: "行为" },
   { key: "context", label: "上下文" },
@@ -3440,10 +3459,10 @@ const mediaRoleKeys = ["tts", "stt", "video"] as const;
 type MediaRoleKey = (typeof mediaRoleKeys)[number];
 
 type RoleKey = "chat" | "vision" | "intent" | "image" | "media_parse" | (typeof purposeRoleKeys)[number] | MediaRoleKey;
-type RoleRoute = { profile_id?: string; group?: string; model: string; provider_id?: string; model_id?: string; follow_chat?: boolean };
+type RoleRoute = { profile_id?: string; group?: string; model: string; provider_id?: string; model_id?: string; follow_chat?: boolean; weight?: number; disabled?: boolean; standby?: boolean };
 // params 只在音视频插槽的主路由上有，后备沿用同一份。
 // reasoning_effort 同样只在主路由上有，后备沿用；空表示跟随提供商配置。
-type RoleAssignment = RoleRoute & { fallbacks?: RoleRoute[]; params?: Record<string, string>; reasoning_effort?: string };
+type RoleAssignment = RoleRoute & { routing_strategy?: "round_robin" | "weighted"; fallbacks?: RoleRoute[]; params?: Record<string, string>; reasoning_effort?: string };
 type ModelRoleRow = { key: RoleKey; label: string; sublabel?: string; description: string };
 const modelRoleRows: ModelRoleRow[] = [
   {
@@ -3456,6 +3475,12 @@ const modelRoleRows: ModelRoleRow[] = [
     label: "视觉理解",
     sublabel: "可选",
     description: "替对话模型看图、写图片描述。对话模型能看图时跟随对话即可；对话模型不能看图，或想单独指定写描述的模型时再配。"
+  },
+  {
+    key: "media_parse",
+    label: "媒体解析",
+    sublabel: "可选",
+    description: "图片描述、视频帧描述和模型 OCR 使用的模型。未指定时沿用视觉理解；文本提取和本地 OCR 不消耗模型额度。"
   },
   {
     key: "intent",
@@ -3622,6 +3647,203 @@ function roleModelPlaceholder(role: RoleKey): string {
   return roleForm.value[role]?.follow_chat ? "跟随对话模型" : "请选择模型（必填）";
 }
 
+// 所有用途都在侧栏中，右侧只展开当前选择的用途。
+const selectedModelRole = ref<RoleKey | 'search'>("chat");
+const modelRouteSearch = ref("");
+const modelRouteStatusFilter = ref("all");
+const modelRouteStatusOptions = [
+  { value: "all", label: "全部状态" },
+  { value: "enabled", label: "已启用" },
+  { value: "disabled", label: "已停用" },
+  { value: "standby", label: "后备模型" }
+];
+const modelRouteEditor = ref<{ role: RoleKey; index: number; adding: boolean; draft: RoleRoute; baseline: string } | null>(null);
+const modelRouteEditorError = ref("");
+watch(selectedModelRole, clearModelRouteFilters);
+const modelRoutingStrategies = [
+  { value: "", label: "主备切换", hint: "失败时按顺序切换", icon: GitBranch },
+  { value: "round_robin", label: "轮询", hint: "请求依次均匀分配", icon: RotateCcw },
+  { value: "weighted", label: "加权轮询", hint: "按渠道权重分配", icon: SlidersHorizontal }
+];
+
+function clearModelRouteFilters(): void {
+  modelRouteSearch.value = "";
+  modelRouteStatusFilter.value = "all";
+}
+
+function modelRoleInherited(role: RoleKey): boolean {
+  return !!roleForm.value[role]?.follow_chat || (!roleForm.value[role] && (role === "media_parse" || isPurposeRole(role)));
+}
+
+function modelRoleSource(role: RoleKey): string {
+  return roleForm.value[role]?.follow_chat ? FOLLOW_CHAT : !roleForm.value[role] && role === "media_parse" ? FOLLOW_VISION : !roleForm.value[role] && isPurposeRole(role) ? UNSPECIFIED : "independent";
+}
+
+function modelRoleSourceOptions(role: RoleKey): AppSelectOption[] {
+  return [{ value: "independent", label: "独立配置" }, ...channelOptionsFor(role).filter((option) => option.value === FOLLOW_CHAT || option.value === FOLLOW_VISION || option.value === UNSPECIFIED)];
+}
+
+function setModelRoleSource(role: RoleKey, value: string): void {
+  if (value === "independent") {
+    if (modelRoleInherited(role) || !roleForm.value[role]) openModelRouteEditor(role, 0);
+    return;
+  }
+  setRoleChannel(role, value);
+}
+
+function modelRoleRoutes(role: RoleKey): { route: RoleRoute; index: number }[] {
+  const assignment = roleForm.value[role];
+  if (!assignment || assignment.follow_chat) return [];
+  return [assignment, ...(assignment.fallbacks ?? [])].map((route, index) => ({ route, index }));
+}
+
+function modelRouteIsStandby(role: RoleKey, index: number): boolean {
+  const assignment = roleForm.value[role];
+  return index > 0 && (!assignment?.routing_strategy || !!assignment.fallbacks?.[index - 1]?.standby);
+}
+
+function modelRoleRouteSummary(role: RoleKey): string {
+  if (modelRoleInherited(role)) return modelRoleSource(role) === FOLLOW_VISION ? "跟随视觉理解" : modelRoleSource(role) === UNSPECIFIED ? `跟随${purposeRoleFallbackLabel(role)}` : "跟随对话";
+  const routes = modelRoleRoutes(role);
+  return `${routes.length} 个模型 · ${routes.filter(({ route }) => !route.disabled).length} 已启用`;
+}
+
+function modelRoutingDescription(role: RoleKey): string {
+  const strategy = roleForm.value[role]?.routing_strategy;
+  return strategy === "weighted" ? "权重越大，分配请求越多" : strategy === "round_robin" ? "在参与渠道间均匀分配请求" : "主模型失败后，按顺序尝试后备";
+}
+
+function modelRouteProviderLabel(route: RoleRoute): string {
+  if (route.group) return route.group === "default" ? "默认分组" : route.group;
+  const provider = llmChannels.value.find((channel) => channel.id === route.profile_id);
+  return provider ? provider.name || llmProviderLabel(provider.provider) : route.profile_id || "尚未选择提供商";
+}
+
+function filteredModelRoutes(role: RoleKey): { route: RoleRoute; index: number }[] {
+  const term = modelRouteSearch.value.trim().toLowerCase();
+  return modelRoleRoutes(role).filter(({ route, index }) => {
+    if (term && !`${route.model} ${modelRouteProviderLabel(route)}`.toLowerCase().includes(term)) return false;
+    const status = modelRouteStatusFilter.value;
+    return status === "disabled" ? !!route.disabled : status === "enabled" ? !route.disabled : status === "standby" ? modelRouteIsStandby(role, index) : true;
+  });
+}
+
+function openModelRouteEditor(role: RoleKey, index?: number): void {
+  const routes = modelRoleRoutes(role);
+  const target = index ?? routes.length;
+  const adding = target >= routes.length;
+  const selected = routes[target]?.route;
+  // 编辑器只操作副本，取消不会改变模型列表或解除跟随。
+  const draft: RoleRoute = selected ? { ...selected } : { profile_id: routes[0]?.route.profile_id, group: routes[0]?.route.group, model: "", weight: 1 };
+  delete (draft as RoleAssignment).fallbacks;
+  delete (draft as RoleAssignment).routing_strategy;
+  delete draft.follow_chat;
+  draft.weight ??= 1;
+  modelRouteEditor.value = { role, index: target, adding, draft, baseline: roleSnapshot({ [role]: roleForm.value[role] }) };
+  modelRouteEditorError.value = "";
+}
+
+function setModelRouteEditorChannel(value: string): void {
+  const editor = modelRouteEditor.value;
+  if (!editor || !value || value === FOLLOW_CHAT || value === FOLLOW_VISION) return;
+  const draft = editor.draft;
+  delete draft.profile_id;
+  delete draft.group;
+  delete draft.provider_id;
+  delete draft.model_id;
+  if (value.startsWith(GROUP_PREFIX)) draft.group = value.slice(GROUP_PREFIX.length);
+  else draft.profile_id = value;
+  const options = modelOptionsFor(editor.role, draft);
+  if (!options.some((option) => option.value === draft.model)) draft.model = options[0]?.value ?? "";
+  modelRouteEditorError.value = "";
+}
+
+function setModelRouteEditorModel(value: string): void {
+  const editor = modelRouteEditor.value;
+  if (!editor || !value) return;
+  const draft = editor.draft;
+  delete draft.provider_id;
+  delete draft.model_id;
+  const separator = value.indexOf(MODEL_PAIR_SEP);
+  if (separator >= 0) {
+    draft.profile_id = value.slice(0, separator);
+    delete draft.group;
+    draft.model = value.slice(separator + MODEL_PAIR_SEP.length);
+  } else draft.model = value;
+  modelRouteEditorError.value = "";
+}
+
+function applyModelRouteEditor(): void {
+  const editor = modelRouteEditor.value;
+  if (!editor) return;
+  if (editor.baseline !== roleSnapshot({ [editor.role]: roleForm.value[editor.role] })) {
+    modelRouteEditorError.value = "模型配置已在别处更新，请关闭后重新打开编辑。";
+    return;
+  }
+  const draft = editor.draft;
+  if (!draft.model || !selectedRoleProfiles(editor.role, draft).some((profile) => profileCanRouteRoleModel(profile, editor.role, draft.model))) {
+    modelRouteEditorError.value = "请选择提供商和该用途可用的模型。";
+    return;
+  }
+  const route: RoleRoute = { ...draft, weight: Math.max(1, Math.min(1000, Math.round(Number(draft.weight)) || 1)) };
+  const current = roleForm.value[editor.role];
+  if (editor.index === 0) {
+    route.standby = undefined;
+    roleForm.value[editor.role] = { ...route, params: current?.params, reasoning_effort: current?.reasoning_effort, routing_strategy: current?.follow_chat ? undefined : current?.routing_strategy, fallbacks: current?.follow_chat ? undefined : current?.fallbacks };
+  } else if (current && !current.follow_chat) {
+    current.fallbacks ??= [];
+    if (editor.adding) current.fallbacks.push(route);
+    else current.fallbacks[editor.index - 1] = route;
+  }
+  clearModelRouteFilters();
+  modelRouteEditor.value = null;
+}
+
+function modelPurposeLabel(role: RoleKey): string {
+  return role === "media_parse" ? "媒体解析" : role === "background" ? "后台生成" : visibleModelRoleRows.find((row) => row.key === role)?.label || role;
+}
+
+function modelPurposeIcon(role: RoleKey) {
+  return { chat: MessageSquare, vision: Eye, media_parse: ScanLine, intent: Waypoints, image: Image, background: Layers, reply_assist: MessageSquare, tts: MessageSquare, stt: MessageSquare, video: Image }[role];
+}
+
+function modelPurposeSummary(role: RoleKey): string {
+  const assignment = roleForm.value[role];
+  if (assignment?.follow_chat) return "跟随对话";
+  if (!assignment) return role === "media_parse" ? "跟随视觉理解" : isPurposeRole(role) ? `跟随${purposeRoleFallbackLabel(role)}` : isMediaRole(role) ? "未启用" : "尚未配置";
+  return assignment.model || "请选择模型";
+}
+
+async function onModelPurposeKeydown(role: RoleKey | 'search', event: KeyboardEvent): Promise<void> {
+  const rows: (RoleKey | 'search')[] = [...visibleModelRoleRows.map(row => row.key), 'search'];
+  const index = rows.indexOf(role);
+  const delta = event.key === "ArrowDown" || event.key === "ArrowRight" ? 1 : event.key === "ArrowUp" || event.key === "ArrowLeft" ? -1 : 0;
+  const target = event.key === "Home" ? 0 : event.key === "End" ? rows.length - 1 : delta ? (index + delta + rows.length) % rows.length : -1;
+  if (target < 0) return;
+  event.preventDefault();
+  selectedModelRole.value = rows[target];
+  await nextTick();
+  document.getElementById(`model-purpose-${selectedModelRole.value}`)?.focus();
+}
+
+function setRoleRoutingStrategy(role: RoleKey, value: string): void {
+  const assignment = roleForm.value[role];
+  if (!assignment || assignment.follow_chat) return;
+  assignment.routing_strategy = value === "round_robin" || value === "weighted" ? value : undefined;
+}
+
+function setRoleRouteWeight(role: RoleKey, index: number, value: number): void {
+  const assignment = roleForm.value[role];
+  const route = index === 0 ? assignment : assignment?.fallbacks?.[index - 1];
+  if (route) route.weight = Math.max(1, Math.min(1000, Math.round(Number(value)) || 1));
+}
+
+function setRoleRouteDisabled(role: RoleKey, index: number, disabled: boolean): void {
+  const assignment = roleForm.value[role];
+  const route = index === 0 ? assignment : assignment?.fallbacks?.[index - 1];
+  if (route) route.disabled = disabled || undefined;
+}
+
 const llmChannels = ref<LLMConfig[]>([]);
 const roleForm = ref<Partial<Record<RoleKey, RoleAssignment>>>({});
 
@@ -3635,7 +3857,7 @@ const incomingModelRoles = ref<BotProfileConfig["model_roles"]>();
 // roleSnapshot 按固定字段顺序拍平，保证服务端回来的那份和页面草稿能直接比。
 function roleSnapshot(roles: Record<string, RoleAssignment | undefined> | undefined): string {
   const implicit = (key: string, role?: RoleAssignment): boolean => role?.follow_chat === true && defaultFollowChatRoles.includes(key as RoleKey);
-  const route = (item: RoleRoute): unknown[] => [item.profile_id ?? "", item.group ?? "", item.model ?? "", item.provider_id ?? "", item.model_id ?? "", item.follow_chat === true];
+  const route = (item: RoleRoute): unknown[] => [item.profile_id ?? "", item.group ?? "", item.model ?? "", item.provider_id ?? "", item.model_id ?? "", item.follow_chat === true, item.weight || 1, item.disabled === true, item.standby === true];
   const params = (item: RoleAssignment): unknown[] => Object.entries(item.params ?? {}).sort(([a], [b]) => a.localeCompare(b));
   return JSON.stringify(
     Object.keys(roles ?? {})
@@ -3643,7 +3865,7 @@ function roleSnapshot(roles: Record<string, RoleAssignment | undefined> | undefi
       .sort()
       .map((key) => {
         const role = roles?.[key];
-        return role ? [key, route(role), (role.fallbacks ?? []).map(route), params(role), role.reasoning_effort ?? ""] : [key];
+        return role ? [key, role.routing_strategy ?? "", route(role), (role.fallbacks ?? []).map(route), params(role), role.reasoning_effort ?? ""] : [key];
       })
   );
 }
@@ -3673,6 +3895,10 @@ function setRoleForm(source: BotProfileConfig["model_roles"]): void {
       provider_id: role.provider_id,
       model_id: role.model_id,
       follow_chat: role.follow_chat,
+      routing_strategy: role.routing_strategy,
+      weight: role.weight,
+      disabled: role.disabled,
+      standby: role.standby,
       fallbacks: role.fallbacks?.map((fallback) => ({ ...fallback })),
       params: role.params ? { ...role.params } : undefined,
       reasoning_effort: role.reasoning_effort || undefined
@@ -3762,18 +3988,7 @@ function normalizedModalities(values?: string[]): string[] {
 }
 
 function mergeModelInfo(preferred: LLMModelInfo, fallback?: LLMModelInfo): LLMModelInfo {
-  return {
-    ...fallback,
-    ...preferred,
-    input_modalities: normalizedModalities([
-      ...(preferred.input_modalities ?? []),
-      ...(fallback?.input_modalities ?? [])
-    ]),
-    output_modalities: normalizedModalities([
-      ...(preferred.output_modalities ?? []),
-      ...(fallback?.output_modalities ?? [])
-    ])
-  };
+  return mergeModelMetadata(preferred, fallback);
 }
 
 function profileModels(profile: LLMConfig): LLMModelInfo[] {
@@ -3794,7 +4009,7 @@ function profileModels(profile: LLMConfig): LLMModelInfo[] {
     const current = models.get(id);
     if (!current) {
       models.set(id, { id, output_modalities: ["image"] });
-    } else if (normalizedModalities(current.output_modalities).length === 0) {
+    } else if (!current.capabilities_override && normalizedModalities(current.output_modalities).length === 0) {
       models.set(id, { ...current, output_modalities: ["image"] });
     }
   }
@@ -3802,6 +4017,7 @@ function profileModels(profile: LLMConfig): LLMModelInfo[] {
 }
 
 function modelCompatibility(model: LLMModelInfo, role: RoleKey): ModelCompatibility {
+  model = effectiveModelInfo(model);
   const input = new Set(normalizedModalities(model.input_modalities));
   const output = new Set(normalizedModalities(model.output_modalities));
   const inputKnown = input.size > 0;
@@ -3815,7 +4031,7 @@ function modelCompatibility(model: LLMModelInfo, role: RoleKey): ModelCompatibil
   if (role === "tts") return output.has("audio") ? "compatible" : "unknown";
   if (role === "stt") return input.has("audio") ? "compatible" : "unknown";
   if (role === "video") return output.has("video") ? "compatible" : "unknown";
-  if (role === "chat" || role === "intent") {
+  if (role === "chat" || role === "intent" || isPurposeRole(role)) {
     return !outputKnown ? "unknown" : output.has("text") ? "compatible" : "incompatible";
   }
   if ((inputKnown && !input.has("image")) || (outputKnown && !output.has("text"))) {
@@ -3844,20 +4060,13 @@ function modelCapabilityLabel(model: LLMModelInfo): string {
 }
 
 function modelHint(model: LLMModelInfo, compatibility: ModelCompatibility, prefix?: string): string {
-  const capability = compatibility === "incompatible" ? "当前模型能力不匹配" : modelCapabilityLabel(model);
+  const capability = [modelCapabilityLabel(model), compatibility === "incompatible" ? "能力标注与用途不匹配，仍可选择" : ""].filter(Boolean).join(" · ");
   return [prefix, capability].filter(Boolean).join(" · ");
 }
 
-function modelsForRole(profile: LLMConfig, role: RoleKey, current: RoleRoute | undefined = roleForm.value[role]): { model: LLMModelInfo; compatibility: ModelCompatibility }[] {
-  const profileIsSelected = current?.group
-    ? (profile.group?.trim() || "default") === current.group
-    : Boolean(current?.profile_id && profile.id === current.profile_id);
+function modelsForRole(profile: LLMConfig, role: RoleKey, _current?: RoleRoute): { model: LLMModelInfo; compatibility: ModelCompatibility }[] {
   return profileModels(profile)
     .map((model) => ({ model, compatibility: modelCompatibility(model, role) }))
-    .filter(
-      ({ model, compatibility }) =>
-        compatibility !== "incompatible" || (profileIsSelected && model.id === current?.model)
-    )
     .sort((a, b) => compatibilityRank(a.compatibility) - compatibilityRank(b.compatibility));
 }
 
@@ -3902,7 +4111,7 @@ function channelOptionsFor(role: RoleKey): AppSelectOption[] {
     base.push({
       value: channel.id ?? "",
       label: channel.name || llmProviderLabel(channel.provider),
-      hint: `${llmProviderLabel(channel.provider)} · ${selectableModels.length} 个匹配模型`
+      hint: `${llmProviderLabel(channel.provider)} · ${selectableModels.length} 个模型`
     });
   }
   return base;
@@ -4059,10 +4268,11 @@ function setRoleChannel(role: RoleKey, value: string): void {
   const params = current?.params;
   // 思考强度是这个用途的设置，不跟某家提供商绑定，换提供商时保留。
   const reasoning_effort = current?.reasoning_effort;
+  const routing = current?.follow_chat ? {} : { routing_strategy: current?.routing_strategy, weight: current?.weight, disabled: current?.disabled };
   if (value.startsWith(GROUP_PREFIX)) {
-    roleForm.value[role] = { group: value.slice(GROUP_PREFIX.length), model, fallbacks, params, reasoning_effort };
+    roleForm.value[role] = { ...routing, params, reasoning_effort, group: value.slice(GROUP_PREFIX.length), model, fallbacks };
   } else {
-    roleForm.value[role] = { profile_id: value, model, fallbacks, params, reasoning_effort };
+    roleForm.value[role] = { ...routing, params, reasoning_effort, profile_id: value, model, fallbacks };
   }
   const options = modelOptionsFor(role).filter((option) => option.value !== "");
   if (!roleModelIsSelectable(role, model)) {
@@ -4096,13 +4306,13 @@ function moveRoleRoute(role: RoleKey, from: number, to: number): void {
   if (!assignment || assignment.follow_chat) return;
   // params 和思考强度属于这个用途而不是某一条路由，换主路由时留在原地，
   // 不能跟着原来的主路由一起挪进后备。
-  const { fallbacks = [], params, reasoning_effort, ...primary } = assignment;
+  const { fallbacks = [], params, reasoning_effort, routing_strategy, ...primary } = assignment;
   const routes: RoleRoute[] = [primary, ...fallbacks];
   if (from === to || from < 0 || to < 0 || from >= routes.length || to >= routes.length) return;
   const [moved] = routes.splice(from, 1);
   routes.splice(to, 0, moved);
   const [first, ...rest] = routes;
-  roleForm.value[role] = { ...first, fallbacks: rest, params, reasoning_effort };
+  roleForm.value[role] = { ...first, standby: undefined, routing_strategy, fallbacks: rest, params, reasoning_effort };
 }
 
 function routeDragClasses(role: RoleKey, index: number): Record<string, boolean> {
@@ -4230,20 +4440,20 @@ function roleModelIsSelectable(role: RoleKey, modelID: string): boolean {
   return selectedRoleProfiles(role).some((profile) => profileCanRouteRoleModel(profile, role, modelID));
 }
 
-function profileCanRouteRoleModel(profile: LLMConfig, role: RoleKey, modelID: string): boolean {
+function profileCanRouteRoleModel(profile: LLMConfig, _role: RoleKey, modelID: string): boolean {
   const catalog = profile.models ?? [];
   // 没有同步到模型目录的 Provider 能力未知，运行时仍可尝试。
   if (catalog.length === 0) return true;
-  return catalog.some(
-    (model) => model.id === modelID && modelCompatibility(model, role) !== "incompatible"
-  );
+  // 能力只用于提示和排序；用户可以主动选任何已配置的模型。
+  return profileModels(profile).some(model => model.id === modelID);
 }
 
 function setRoleModel(role: RoleKey, value: string): void {
   if (value.includes(MODEL_PAIR_SEP)) {
     // 跨 Provider 选择：一次确定 Provider 和模型。
     const [profileID, model] = value.split(MODEL_PAIR_SEP);
-    roleForm.value[role] = { profile_id: profileID, model, fallbacks: roleForm.value[role]?.fallbacks, params: roleForm.value[role]?.params, reasoning_effort: roleForm.value[role]?.reasoning_effort };
+    const current = roleForm.value[role];
+    roleForm.value[role] = { profile_id: profileID, model, fallbacks: current?.fallbacks, routing_strategy: current?.routing_strategy, weight: current?.weight, disabled: current?.disabled, params: current?.params, reasoning_effort: current?.reasoning_effort };
     return;
   }
   if (!value) {
@@ -4422,6 +4632,12 @@ async function save(): Promise<void> {
   if (!current) {
     return;
   }
+  if (current.web_search && !current.web_search.disabled && !current.web_search.provider_ids.length) {
+    editorTab.value = 'model';
+    selectedModelRole.value = 'search';
+    toastError('联网搜索需要选择一个首选提供商');
+    return;
+  }
   if (!current.connection_profile_id && (!current.platform || current.platform === "onebot-v11") && current.onebot_transport !== "http" && !validWebSocketURL(current.onebot_transport === "forward_ws" ? current.onebot_ws_endpoint || "" : current.onebot_reverse_ws_endpoint)) {
     toastError("请填写有效的 ws:// 或 wss:// 连接地址");
     return;
@@ -4462,28 +4678,38 @@ async function save(): Promise<void> {
     if (!role && (row.key === "media_parse" || purposeRoleKeys.includes(row.key as (typeof purposeRoleKeys)[number]) || isMediaRole(row.key))) continue;
     // 跟随对话的那几档没有自己的提供商和模型，跳过校验；对话本身没有这个选项。
     if (row.key !== "chat" && role?.follow_chat) continue;
+    const modelError = (message: string) => {
+      editorTab.value = "model";
+      selectedModelRole.value = row.key;
+      toastError(message);
+    };
     if (!role || (!role.profile_id && !role.group && !(role.provider_id && role.model_id))) {
       editorTab.value = "model";
-      toastError(`${row.label}必须选择提供商和模型`);
+      modelError(`${row.label}必须选择提供商和模型`);
       return;
     }
     if (!role.model.trim()) {
-      toastError(`${row.label}模型尚未选择`);
+      modelError(`${row.label}模型尚未选择`);
       return;
     }
-		if (!role.provider_id && !role.model_id && !roleModelIsSelectable(row.key, role.model.trim())) {
-      toastError(`${row.label}模型 ${role.model.trim()} 与当前提供商配置不兼容，请重新选择`);
+    if (!role.disabled && !role.provider_id && !role.model_id && !roleModelIsSelectable(row.key, role.model.trim())) {
+      modelError(`${row.label}模型 ${role.model.trim()} 不在当前提供商的模型列表中，请重新选择`);
       return;
     }
     for (const [index, fallback] of (role.fallbacks ?? []).entries()) {
+      if (fallback.disabled) continue;
       if ((!fallback.profile_id && !fallback.group && !(fallback.provider_id && fallback.model_id)) || !fallback.model.trim()) {
-        toastError(`${row.label}后备 ${index + 1} 尚未完整选择`);
+        modelError(`${row.label}后备 ${index + 1} 尚未完整选择`);
         return;
       }
       if (!fallback.provider_id && !fallback.model_id && !selectedRoleProfiles(row.key, fallback).some((profile) => profileCanRouteRoleModel(profile, row.key, fallback.model.trim()))) {
-        toastError(`${row.label}后备 ${index + 1} 的模型与所选提供商不兼容`);
+        modelError(`${row.label}后备 ${index + 1} 的模型不在所选提供商的模型列表中`);
         return;
       }
+    }
+    if (role.disabled && !(role.fallbacks ?? []).some((fallback) => !fallback.disabled)) {
+      modelError(`${row.label}至少需要启用一个模型`);
+      return;
     }
   }
   if (
@@ -4511,6 +4737,9 @@ async function save(): Promise<void> {
         model: role.model.trim(),
         provider_id: role.provider_id,
         model_id: role.model_id,
+        routing_strategy: role.routing_strategy,
+        weight: role.weight,
+        disabled: role.disabled,
         fallbacks: role.fallbacks?.map((fallback) => ({ ...fallback, model: fallback.model.trim() })),
         params: role.params,
         reasoning_effort: role.reasoning_effort || undefined

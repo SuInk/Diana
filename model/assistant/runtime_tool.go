@@ -48,6 +48,12 @@ func (r *Runtime) pluginOverridesForEvent(event MessageEvent) map[string]bool {
 		return allPluginsDisabled(r.plugins)
 	}
 	out := r.plugins.ProfileOverrides(profileID)
+	if assignment := r.ProfileConfig(profileID).WebSearch; assignment != nil {
+		if out == nil {
+			out = map[string]bool{}
+		}
+		out[webSearchPluginID] = !assignment.Disabled
+	}
 	groupCfg, ok := r.groupConfigForEvent(event)
 	if !ok || len(groupCfg.PluginOverrides) == 0 {
 		return out
@@ -88,6 +94,9 @@ func (r *Runtime) webSearchPluginSettings(event MessageEvent) (SettingValues, bo
 func (r *Runtime) pluginSettingOverridesForEvent(event MessageEvent) PluginSettingOverrides {
 	profileID := r.eventProfileID(event)
 	out := PluginSettingOverrides{pluginSettingsProfileKey: map[string]any{"profile_id": profileID}}
+	if assignment := r.ProfileConfig(profileID).WebSearch; assignment != nil {
+		out[webSearchPluginID] = assignment.settings()
+	}
 	groupCfg, ok := r.groupConfigForEvent(event)
 	if !ok || len(groupCfg.PluginSettingOverrides) == 0 {
 		return out
@@ -97,7 +106,10 @@ func (r *Runtime) pluginSettingOverridesForEvent(event MessageEvent) PluginSetti
 		if id == "" || id == pluginSettingsProfileKey || len(values) == 0 {
 			continue
 		}
-		copied := make(map[string]any, len(values))
+		copied := clonePluginValues(out[id])
+		if copied == nil {
+			copied = make(map[string]any, len(values))
+		}
 		for key, value := range values {
 			copied[strings.TrimSpace(key)] = value
 		}

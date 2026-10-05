@@ -80,12 +80,12 @@
         v-for="plugin in visiblePlugins"
         :key="plugin.manifest.id"
         class="plugin-card"
-        :class="{ off: plugin.installed && !pluginEnabled(plugin), uninstalled: !plugin.installed }"
+        :class="{ off: plugin.manifest.id !== 'official.web-search' && plugin.installed && !pluginEnabled(plugin), uninstalled: !plugin.installed }"
       >
         <div class="plugin-card-head">
           <h2 class="plugin-card-name">{{ pluginDisplayName(plugin) }}</h2>
           <label
-            v-if="plugin.installed && botScope"
+            v-if="plugin.installed && botScope && plugin.manifest.id !== 'official.web-search'"
             class="switch"
             :title="pluginEnabled(plugin) ? '点击停用' : '点击启用'"
           >
@@ -100,6 +100,7 @@
         </div>
 
         <div class="cluster plugin-card-badges">
+          <span v-if="plugin.manifest.id === 'official.web-search'" class="badge accent">统一配置</span>
           <!-- 官方 + 内置目前是全部插件的共同属性，逐张重复没有信息量；
                只在例外时标注，第三方插件出现后这里才会有内容。 -->
           <span v-if="!plugin.manifest.official" class="badge warn">第三方</span>
@@ -189,7 +190,7 @@
                 @click="openSettings(plugin)"
               >
                 <SlidersHorizontal :size="14" aria-hidden="true" />
-                设置
+                {{ plugin.manifest.id === 'official.web-search' ? '配置搜索' : '设置' }}
               </button>
               <!-- 更新与安装同一套确认流程：重新预览权限、重新勾风险，不静默升级 -->
               <button
@@ -1338,6 +1339,10 @@ async function confirmRepoInstall(): Promise<void> {
 }
 
 function openSettings(plugin: PluginState): void {
+  if (plugin.manifest.id === 'official.web-search') {
+    navigate('provider', { section: 'search' });
+    return;
+  }
   if (plugin.manifest.id === repositoryPublishPluginID) {
     plugin = plugins.value.find((candidate) => candidate.manifest.id === repositoryWatchPluginID) ?? plugin;
   }

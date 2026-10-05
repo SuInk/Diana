@@ -3,10 +3,11 @@
 
 import { onScopeDispose, reactive, watch } from "vue";
 
-export type ConfigurationKind = "bot" | "llm";
-const revisions = reactive<Record<ConfigurationKind, number>>({ bot: 0, llm: 0 });
+export type ConfigurationKind = "bot" | "llm" | "search";
+const revisions = reactive<Record<ConfigurationKind, number>>({ bot: 0, llm: 0, search: 0 });
 
 export function configurationKindForMutation(path: string): ConfigurationKind | undefined {
+  if (path === "/api/assistant/search-providers" || path.startsWith("/api/assistant/search-providers/")) return "search";
   if (path === "/api/assistant/config" || path.startsWith("/api/assistant/config/")) return "bot";
   if (path === "/api/llm/config" || path.startsWith("/api/llm/config/")) return "llm";
   if (["/api/llm/oauth/providers", "/api/llm/oauth/providers/delete", "/api/llm/oauth/login/complete", "/api/llm/oauth/logout"].includes(path)) return "llm";

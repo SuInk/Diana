@@ -79,3 +79,14 @@ test("cached page subscriptions refresh after changes, serialize updates, and st
   await flush();
   assert.equal(calls, 2);
 });
+
+test("search provider writes refresh search lists and encode custom IDs", async () => {
+  const calls = [];
+  const { api, changes } = apiHarness(async (url, init) => { calls.push([url, init.method]); return response({ providers: [], default_assignment: { provider_ids: [] } }); });
+  await api.getSearchProviders('bot & test');
+  await api.saveSearchProvider({ id: '', name: 'Custom', type: 'search_mcp', url: 'https://example.org/mcp', tool: 'lookup' });
+  await api.deleteSearchProvider('custom & test');
+  assert.deepEqual(changes, ['search', 'search']);
+  assert.equal(calls[0][0], '/api/assistant/search-providers?profile=bot%20%26%20test');
+  assert.equal(calls[2][0], '/api/assistant/search-providers/custom%20%26%20test');
+});

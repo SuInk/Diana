@@ -85,6 +85,10 @@ func (route mediaSlotRoute) paramSeconds(key string) time.Duration {
 // mediaSlotRoutes 按当前机器人的模型分配解析某个插槽。没配、或者配成了「跟随对话」
 // 都返回空：这几个插槽不存在可跟随的对话模型。
 func (r *Runtime) mediaSlotRoutes(ctx context.Context, slot string) []mediaSlotRoute {
+	return r.resolveMediaSlotRoutes(ctx, slot, false)
+}
+
+func (r *Runtime) resolveMediaSlotRoutes(ctx context.Context, slot string, schedule bool) []mediaSlotRoute {
 	r.mu.RLock()
 	store := r.llmStore
 	r.mu.RUnlock()
@@ -96,9 +100,27 @@ func (r *Runtime) mediaSlotRoutes(ctx context.Context, slot string) []mediaSlotR
 		return nil
 	}
 	set := store.Profiles().WithDefaults()
+	if schedule {
+		// Media slots accept service-specific IDs without requiring a catalog entry.
+		for i := range set.Profiles {
+			set.Profiles[i].Config.Models = nil
+		}
+		profiles, err := r.scheduledRoleProfiles(ctx, slot, set, slot, map[string]ModelRole{slot: role})
+		if err != nil {
+			return nil
+		}
+		routes := make([]mediaSlotRoute, 0, len(profiles))
+		for _, profile := range profiles {
+			routes = append(routes, mediaSlotRoute{Name: profile.Name, Config: profile.Config.WithDefaults(), Model: profile.Config.Model, Params: role.Params})
+		}
+		return routes
+	}
 	routes := make([]mediaSlotRoute, 0, 1+len(role.Fallbacks))
 	seen := map[string]bool{}
 	for _, binding := range append([]ModelRole{role}, role.Fallbacks...) {
+		if binding.Disabled {
+			continue
+		}
 		model := mediaSlotModel(binding)
 		for _, profile := range mediaSlotProfiles(set, binding) {
 			key := profile.ID + "\x00" + model
@@ -178,7 +200,7 @@ func (r *Runtime) recordMediaSlotUsage(ctx context.Context, route mediaSlotRoute
 // synthesizeSpeech 用语音合成插槽把文字合成为音频。format 非空时盖过插槽上的格式，
 // 给那些只收得下某种格式的调用方用。
 func (r *Runtime) synthesizeSpeech(ctx context.Context, text, format string) (*llm.SpeechResponse, error) {
-	resp, _, err := runMediaSlot(ctx, r.mediaSlotRoutes(ctx, mediaSlotTTS), "语音合成", func(route mediaSlotRoute) (*llm.SpeechResponse, error) {
+	resp, _, err := runMediaSlot(ctx, r.resolveMediaSlotRoutes(ctx, mediaSlotTTS, true), "语音合成", func(route mediaSlotRoute) (*llm.SpeechResponse, error) {
 		started := time.Now()
 		resp, err := llm.SynthesizeSpeech(ctx, route.Config, llm.SpeechRequest{
 			API:          llm.SpeechAPI(route.param(mediaParamAPI)),
@@ -206,7 +228,7 @@ func (r *Runtime) slotSpeechSynthesizer(ctx context.Context, text string) (*llm.
 // transcribeAudio 用语音识别插槽转写一段音频。language 非空时盖过插槽上的语言。
 // 返回实际应答的那条路由：后备顶上时，缓存和记录要记在后备的模型名下。
 func (r *Runtime) transcribeAudio(ctx context.Context, audio []byte, filename, language string) (*llm.TranscriptionResponse, mediaSlotRoute, error) {
-	return runMediaSlot(ctx, r.mediaSlotRoutes(ctx, mediaSlotSTT), "语音识别", func(route mediaSlotRoute) (*llm.TranscriptionResponse, error) {
+	return runMediaSlot(ctx, r.resolveMediaSlotRoutes(ctx, mediaSlotSTT, true), "语音识别", func(route mediaSlotRoute) (*llm.TranscriptionResponse, error) {
 		started := time.Now()
 		resp, err := llm.TranscribeAudio(ctx, route.Config, llm.TranscriptionRequest{
 			API:      llm.SpeechAPI(route.param(mediaParamAPI)),
@@ -236,7 +258,7 @@ func (route mediaSlotRoute) videoJobTimeout() time.Duration {
 
 // generateVideo 用视频生成插槽跑完一个异步任务，返回成品和实际用到的路由。
 func (r *Runtime) generateVideo(ctx context.Context, req llm.VideoGenerateRequest, onProgress func(llm.VideoJob)) (*llm.VideoResult, mediaSlotRoute, error) {
-	return runMediaSlot(ctx, r.mediaSlotRoutes(ctx, mediaSlotVideo), "视频生成", func(route mediaSlotRoute) (*llm.VideoResult, error) {
+	return runMediaSlot(ctx, r.resolveMediaSlotRoutes(ctx, mediaSlotVideo, true), "视频生成", func(route mediaSlotRoute) (*llm.VideoResult, error) {
 		generator, err := llm.NewVideoGenerator(route.Config, llm.VideoAPI(route.param(mediaParamAPI)), 0, r.llmClientOptionsFor(route.Config)...)
 		if err != nil {
 			return nil, err

@@ -40,7 +40,7 @@ export interface LLMConfig {
   temperature?: number | null;
   /** 思考强度；空表示跟随模型。提交 default 可把已保存的值清回跟随模型。 */
   reasoning_effort?: string;
-  /** 用户手填的窗口；WebUI 保存时必填，老配置缺省时按兜底值 128000。 */
+  /** 提供商统一覆盖值；0 或缺省表示使用单个模型的手动窗口或兜底值。 */
   context_window_tokens?: number;
   max_context_tokens?: number;
   /** 只读：本机内置的 User-Agent，新建配置时预填。只在配置集顶层返回。 */
@@ -50,7 +50,7 @@ export interface LLMConfig {
   /** 只读回显：当前模型实际生效的窗口与请求上限，以及窗口的来源。 */
   effective_context_window_tokens?: number;
   effective_max_context_tokens?: number;
-  context_window_source?: "user" | "fallback";
+  context_window_source?: "user" | "model" | "fallback";
   /** 只读回显：模型清单里记的窗口，只作参考值，不参与计算。 */
   catalog_context_window_tokens?: number;
   /** 用户手填的输出上限；0 或缺省表示按模型上限。 */
@@ -89,6 +89,16 @@ export interface LLMModelInfo {
   input_modalities?: string[];
   output_modalities?: string[];
   context_window_tokens?: number;
+  max_input_tokens?: number;
+  max_output_tokens?: number;
+  /** 本地补充的模型 ID，同步时保留。 */
+  custom?: boolean;
+  /** 用户针对这个模型设置的窗口；上游目录的窗口仍只作参考。 */
+  context_window_override?: number;
+  capabilities_override?: {
+    input_modalities: string[];
+    output_modalities: string[];
+  };
 }
 
 export interface LLMModelsResponse {
@@ -290,6 +300,7 @@ export interface BotProfileConfig extends SendRetrySettings {
   auto_image_description?: boolean;
   auto_video_preprocess?: boolean;
   image_input_mode?: ImageInputMode;
+  web_search?: WebSearchAssignment;
   model_roles?: Record<string, {
 	 follow_chat?: boolean;
     profile_id?: string;
@@ -297,7 +308,11 @@ export interface BotProfileConfig extends SendRetrySettings {
     model: string;
     provider_id?: string;
     model_id?: string;
-    fallbacks?: Array<{ profile_id?: string; group?: string; model: string; provider_id?: string; model_id?: string }>;
+    routing_strategy?: "round_robin" | "weighted";
+    weight?: number;
+    disabled?: boolean;
+    standby?: boolean;
+    fallbacks?: Array<{ profile_id?: string; group?: string; model: string; provider_id?: string; model_id?: string; weight?: number; disabled?: boolean; standby?: boolean }>;
     /** 音视频插槽（tts/stt/video）的参数：音色、格式、语速、语言、分辨率等。 */
     params?: Record<string, string>;
     /** 这个用途的思考强度，覆盖提供商配置；空表示跟随提供商。后备路由沿用。 */
@@ -436,6 +451,45 @@ export interface BotProfileConfig extends SendRetrySettings {
 export interface PluginSettingOption {
   value: string;
   label: string;
+}
+
+export interface WebSearchAssignment {
+  provider_ids: string[];
+  disabled?: boolean;
+  max_results?: number;
+  provider_timeout_seconds?: number;
+  total_timeout_seconds?: number;
+  source_recall?: boolean;
+  reply_link_policy?: "on_request" | "always" | "never";
+}
+
+export interface SearchProvider {
+  id: string;
+  name: string;
+  type: "exa_mcp" | "tavily" | "search_mcp" | "browser";
+  url: string;
+  tool?: string;
+  query_param?: string;
+  results_param?: string;
+  disabled?: boolean;
+  api_key_configured?: boolean;
+}
+
+export interface SearchConfiguration {
+  providers: SearchProvider[];
+  default_assignment: WebSearchAssignment;
+}
+
+export function getSearchProviders(profile = ""): Promise<SearchConfiguration> {
+  return requestJSON<SearchConfiguration>(`/api/assistant/search-providers?profile=${encodeURIComponent(profile)}`);
+}
+
+export function saveSearchProvider(provider: SearchProvider & { api_key?: string; clear_api_key?: boolean }): Promise<SearchConfiguration> {
+  return requestJSON<SearchConfiguration>("/api/assistant/search-providers", { method: "POST", body: JSON.stringify(provider) });
+}
+
+export function deleteSearchProvider(id: string): Promise<SearchConfiguration> {
+  return requestJSON<SearchConfiguration>(`/api/assistant/search-providers/${encodeURIComponent(id)}`, { method: "DELETE" });
 }
 
 export interface PluginSettingSpec {

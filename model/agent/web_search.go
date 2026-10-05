@@ -87,14 +87,17 @@ type WebSearchConfig struct {
 }
 
 type WebSearchProviderConfig struct {
-	Name       string `json:"name"`
-	Type       string `json:"type"`
-	URL        string `json:"url"`
-	Tool       string `json:"tool,omitempty"`
-	APIKeyEnv  string `json:"api_key_env,omitempty"`
-	TimeoutMS  int    `json:"timeout_ms,omitempty"`
-	MaxResults int    `json:"max_results,omitempty"`
-	Disabled   bool   `json:"disabled,omitempty"`
+	Name         string `json:"name"`
+	Type         string `json:"type"`
+	URL          string `json:"url"`
+	Tool         string `json:"tool,omitempty"`
+	APIKeyEnv    string `json:"api_key_env,omitempty"`
+	TimeoutMS    int    `json:"timeout_ms,omitempty"`
+	MaxResults   int    `json:"max_results,omitempty"`
+	Disabled     bool   `json:"disabled,omitempty"`
+	QueryParam   string `json:"query_param,omitempty"`
+	ResultsParam string `json:"results_param,omitempty"`
+	NoEnvAPIKey  bool   `json:"no_env_api_key,omitempty"`
 }
 
 type webSearchConfig = WebSearchConfig
@@ -300,7 +303,7 @@ func (t *WebSearchTool) runSearchQuery(ctx context.Context, input map[string]any
 				outcome := classifyWebSearchError(providerErr, providerCtxErr, runCtx.Err())
 				attempt.Status = outcome
 				attempt.ErrorCode = outcome
-				attempt.Error = safeWebSearchError(providerErr)
+				attempt.Error = safeWebSearchError(providerErr, providerKeys[providerIndex])
 				result.Attempts = append(result.Attempts, attempt)
 				state.Outcome = mergeWebSearchOutcome(state.Outcome, outcome)
 				candidateOutcome = mergeWebSearchOutcome(candidateOutcome, outcome)
@@ -495,7 +498,7 @@ func TestWebSearchProvider(ctx context.Context, provider WebSearchProviderConfig
 	tool := &WebSearchTool{maxBytes: DefaultMaxToolOutputChars}
 	content, err := tool.runProvider(testCtx, provider, query, apiKey)
 	if err != nil {
-		return "", errors.New(safeWebSearchError(err))
+		return "", errors.New(safeWebSearchError(err, apiKey))
 	}
 	return truncateRunes(strings.TrimSpace(content), 2_000), nil
 }
@@ -539,6 +542,8 @@ func normalizeWebSearchProviders(providers []webSearchProviderConfig) ([]webSear
 		provider.Type = strings.ToLower(strings.TrimSpace(provider.Type))
 		provider.URL = strings.TrimSpace(provider.URL)
 		provider.Tool = strings.TrimSpace(provider.Tool)
+		provider.QueryParam = strings.TrimSpace(provider.QueryParam)
+		provider.ResultsParam = strings.TrimSpace(provider.ResultsParam)
 		provider.APIKeyEnv = strings.TrimSpace(provider.APIKeyEnv)
 		if provider.Name == "" {
 			provider.Name = fmt.Sprintf("%s-%d", firstNonEmpty(provider.Type, "provider"), index+1)
@@ -556,11 +561,25 @@ func normalizeWebSearchProviders(providers []webSearchProviderConfig) ([]webSear
 			if provider.Tool == "" {
 				provider.Tool = "web_search_exa"
 			}
+		case "search_mcp":
+			if provider.URL == "" || provider.Tool == "" {
+				return nil, fmt.Errorf("provider %q requires an MCP URL and tool name", provider.Name)
+			}
+			if provider.QueryParam == "" {
+				provider.QueryParam = "query"
+			}
+		case "browser":
+			if provider.URL == "" {
+				provider.URL = "https://www.google.com/search"
+			}
+			if provider.QueryParam == "" {
+				provider.QueryParam = "q"
+			}
 		case "tavily":
 			if provider.URL == "" {
 				provider.URL = "https://api.tavily.com/search"
 			}
-			if provider.APIKeyEnv == "" {
+			if provider.APIKeyEnv == "" && !provider.NoEnvAPIKey {
 				provider.APIKeyEnv = "TAVILY_API_KEY"
 			}
 		case WebSearchProviderSearchEngine:
@@ -583,6 +602,12 @@ func normalizeWebSearchProviders(providers []webSearchProviderConfig) ([]webSear
 			}
 		default:
 			return nil, fmt.Errorf("provider %q has unsupported type %q", provider.Name, provider.Type)
+		}
+		if provider.QueryParam != "" && !webSearchEnvNameRegexp.MatchString(provider.QueryParam) || provider.ResultsParam != "" && !webSearchEnvNameRegexp.MatchString(provider.ResultsParam) {
+			return nil, fmt.Errorf("provider %q has invalid argument names", provider.Name)
+		}
+		if provider.Type == "search_mcp" && provider.ResultsParam != "" && provider.QueryParam == provider.ResultsParam {
+			return nil, fmt.Errorf("provider %q query and results argument names must differ", provider.Name)
 		}
 		if provider.APIKeyEnv != "" && !webSearchEnvNameRegexp.MatchString(provider.APIKeyEnv) {
 			return nil, fmt.Errorf("provider %q has invalid api_key_env", provider.Name)
@@ -630,12 +655,14 @@ func validateWebSearchURL(raw string) error {
 
 func (t *WebSearchTool) runProvider(ctx context.Context, provider webSearchProviderConfig, query, apiKey string) (string, error) {
 	switch provider.Type {
-	case "exa_mcp":
+	case "exa_mcp", "search_mcp":
 		return t.runExaMCP(ctx, provider, query, apiKey)
 	case "tavily":
 		return t.runTavily(ctx, provider, query, apiKey)
 	case WebSearchProviderSearchEngine:
 		return t.runSearchEngine(ctx, provider, query)
+	case "browser":
+		return t.runBrowserSearch(ctx, provider, query)
 	default:
 		return "", fmt.Errorf("unsupported provider type %q", provider.Type)
 	}
@@ -681,10 +708,16 @@ func (t *WebSearchTool) runExaMCP(ctx context.Context, provider webSearchProvide
 		"query":      query,
 		"numResults": provider.MaxResults,
 	}
-	if endpoint, err := url.Parse(provider.URL); err == nil && strings.EqualFold(endpoint.Hostname(), "mcp.exa.ai") && provider.Tool == "web_search_exa" {
+	if provider.Type == "search_mcp" {
+		arguments = map[string]any{provider.QueryParam: query}
+		if provider.ResultsParam != "" {
+			arguments[provider.ResultsParam] = provider.MaxResults
+		}
+	}
+	if endpoint, err := url.Parse(provider.URL); provider.Type == "exa_mcp" && err == nil && strings.EqualFold(endpoint.Hostname(), "mcp.exa.ai") && provider.Tool == "web_search_exa" {
 		arguments["objective"] = "Find primary sources directly answering: " + query + ". For current/latest claims, prioritize official dated records; absence from search is not proof of nonexistence."
 	}
-	if provider.Tool == "web_search_advanced_exa" {
+	if provider.Type == "exa_mcp" && provider.Tool == "web_search_advanced_exa" {
 		arguments["type"] = "auto"
 		arguments["enableHighlights"] = true
 		arguments["highlightsMaxCharacters"] = 1_200
@@ -727,6 +760,7 @@ func (t *WebSearchTool) callRemoteMCP(ctx context.Context, endpoint, apiKey, ses
 	}
 	if apiKey != "" {
 		req.Header.Set("x-api-key", apiKey)
+		req.Header.Set("Authorization", "Bearer "+apiKey)
 	}
 	resp, err := t.httpClient().Do(req)
 	if err != nil {
@@ -767,6 +801,7 @@ func (t *WebSearchTool) closeRemoteMCPSession(endpoint, apiKey, sessionID string
 	req.Header.Set("MCP-Protocol-Version", mcpProtocolVersion)
 	if apiKey != "" {
 		req.Header.Set("x-api-key", apiKey)
+		req.Header.Set("Authorization", "Bearer "+apiKey)
 	}
 	resp, err := t.httpClient().Do(req)
 	if err == nil {
@@ -1089,10 +1124,16 @@ func readWebSearchBody(reader io.Reader) ([]byte, error) {
 	return body, nil
 }
 
-func safeWebSearchError(err error) string {
+func safeWebSearchError(err error, keys ...string) string {
 	if err == nil {
 		return ""
 	}
-	text := webSearchURLPattern.ReplaceAllString(err.Error(), "[remote endpoint]")
+	text := err.Error()
+	for _, key := range keys {
+		if key != "" {
+			text = strings.ReplaceAll(text, key, "[redacted]")
+		}
+	}
+	text = webSearchURLPattern.ReplaceAllString(text, "[remote endpoint]")
 	return truncateRunes(strings.TrimSpace(text), 300)
 }

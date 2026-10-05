@@ -1025,6 +1025,25 @@ func (r *Runtime) runLLMMemoryProvider(ctx context.Context, run llmProviderRunFu
 	roles := r.modelRolesForContext(ctx)
 	if registry != nil && store != nil {
 		set := store.Profiles().WithDefaults()
+		purpose := llmUsagePurposeFromContext(ctx)
+		_, backgroundBound := roles[llm.GroupBackground]
+		_, purposeBound := roles[purpose]
+		if purposeBound || (backgroundBound && ModelBindingGroupOf(purpose) == llm.GroupBackground) {
+			profiles, err := r.scheduledRoleProfiles(ctx, purpose, set, llm.GroupBackground, roles)
+			if err != nil {
+				return "", err
+			}
+			if len(profiles) > 0 {
+				provider, err := newRegistryFailoverLLMProvider(registry, profiles, true, len(profiles) > 1)
+				if err != nil {
+					return "", err
+				}
+				provider.report = r.reportLLMEvent
+				provider.cooldowns = &r.llmCooldowns
+				return run(provider)
+			}
+		}
+
 		// 持久化配置同时提供 ProviderRegistry 时，记忆和聊天必须走同一套
 		// provider/model 路由。没有注册表条目时才继续下面的旧配置工厂路径。
 		groups := append([]string(nil), memoryProfileGroups...)
@@ -1043,7 +1062,7 @@ func (r *Runtime) runLLMMemoryProvider(ctx context.Context, run llmProviderRunFu
 				}
 			}
 		}
-		profiles, roleErr := r.roleBoundProfiles(llmUsagePurposeFromContext(ctx), set, llm.GroupBackground, roles)
+		profiles, roleErr := r.scheduledRoleProfiles(ctx, purpose, set, llm.GroupBackground, roles)
 		if roleErr != nil {
 			return "", roleErr
 		}
@@ -1078,6 +1097,20 @@ func (r *Runtime) runLLMMemoryProvider(ctx context.Context, run llmProviderRunFu
 	}
 	if cfgFactory != nil && store != nil {
 		set := store.Profiles().WithDefaults()
+		purpose := llmUsagePurposeFromContext(ctx)
+		// 显式指定后台生成后，记忆任务也使用这份绑定及其调度策略。
+		// 未配置时保留历史 memory 分组和后台生成兜底顺序。
+		_, backgroundBound := roles[llm.GroupBackground]
+		_, purposeBound := roles[purpose]
+		if purposeBound || (backgroundBound && ModelBindingGroupOf(purpose) == llm.GroupBackground) {
+			profiles, roleErr := r.scheduledRoleProfiles(ctx, purpose, set, llm.GroupBackground, roles)
+			if roleErr != nil {
+				return "", roleErr
+			}
+			if len(profiles) > 0 {
+				return r.runLLMProviderProfileAttempts(ctx, profiles, cfgFactory, true, run)
+			}
+		}
 		// 记忆是自动文本任务：专用 memory 分组优先，其次使用机器人给「后台生成」
 		// 绑的模型（没绑时 roleBoundProfiles 会回退 chat）。不能直接取 Current，
 		// 否则激活生图配置时会拿图片模型发送文本 Responses 请求。
@@ -1094,10 +1127,7 @@ func (r *Runtime) runLLMMemoryProvider(ctx context.Context, run llmProviderRunFu
 				return r.runLLMProviderProfileAttempts(ctx, profiles, cfgFactory, true, run)
 			}
 		}
-		// 这里以前按 intent 取。本次调用的分组排在用途归属前面，于是只要 intent
-		// 绑了模型，后台生成那一档对记忆就从来不起作用——落到的还多半是只做判断、
-		// 写不出记忆的模型。
-		profiles, roleErr := r.roleBoundProfiles(llmUsagePurposeFromContext(ctx), set, llm.GroupBackground, roles)
+		profiles, roleErr := r.scheduledRoleProfiles(ctx, purpose, set, llm.GroupBackground, roles)
 		if roleErr != nil {
 			return "", roleErr
 		}
