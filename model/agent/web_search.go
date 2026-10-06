@@ -967,7 +967,7 @@ func (t *WebSearchTool) runTavily(ctx context.Context, provider webSearchProvide
 
 func (t *WebSearchTool) formatExplorationResult(result webSearchResult) (string, error) {
 	result.RetrievedAt = time.Now().UTC().Format(time.RFC3339)
-	result.FreshnessVerified = false
+	result.SourceStage = searchSourceStage(result)
 	result.SourceNotice = "搜索结果可能来自转载或聚合页面，页面日期不一定是原始内容的真实发布时间。未核实原始来源时，不要据此断言发布时间或‘最新’。本次查询时间不是索引更新时间；搜索空结果不证明页面、版本或事件不存在。精确 URL 可能未收录，应直接读取官方页面或 API。"
 	maxChars := t.maxBytes
 	if maxChars <= 0 {

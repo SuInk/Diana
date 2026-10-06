@@ -19,6 +19,9 @@ func TestSearchResultIncludesSourceNoticeWithoutChangingContent(t *testing.T) {
 	if result.Content != content {
 		t.Fatal("notice must not rewrite source content or dates")
 	}
+	if result.SourceStage != sourceStageSearchCandidates || strings.Contains(raw, "freshness_verified") {
+		t.Fatal("retrieval must describe candidates without a factual verification flag")
+	}
 	for _, want := range []string{"可能来自转载", "不一定", "真实发布时间", "未核实原始来源", "最新"} {
 		if !strings.Contains(result.SourceNotice, want) {
 			t.Errorf("source notice missing %q", want)

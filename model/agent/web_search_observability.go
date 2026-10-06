@@ -29,7 +29,17 @@ func webSearchRunMetadataFromInput(tool string, input map[string]any) map[string
 	}
 }
 
-func webSearchRunMetadataFromOutput(tool, output string, runErr error) map[string]any {
+func researchRunMetadataFromOutput(tool, output string, runErr error) map[string]any {
+	if tool == browserRenderToolName {
+		if runErr != nil {
+			return map[string]any{"status": "render_error"}
+		}
+		var page browserRenderPayload
+		if json.Unmarshal([]byte(output), &page) != nil {
+			return map[string]any{"status": "invalid_result"}
+		}
+		return map[string]any{"source_stage": browserPayloadSourceStage(page), "truncated": page.Truncated}
+	}
 	if tool != WebSearchToolName {
 		return nil
 	}
@@ -76,16 +86,16 @@ func webSearchRunMetadataFromOutput(tool, output string, runErr error) map[strin
 		})
 	}
 	return map[string]any{
-		"retrieved_at":       result.RetrievedAt,
-		"freshness_verified": result.FreshnessVerified,
-		"status":             result.Status,
-		"stop_reason":        result.StopReason,
-		"strategy":           result.Strategy,
-		"source_count":       len(result.Sources),
-		"queries":            queries,
-		"providers":          providers,
-		"attempts":           attempts,
-		"budget":             result.Budget,
+		"retrieved_at": result.RetrievedAt,
+		"source_stage": searchSourceStage(result),
+		"status":       result.Status,
+		"stop_reason":  result.StopReason,
+		"strategy":     result.Strategy,
+		"source_count": len(result.Sources),
+		"queries":      queries,
+		"providers":    providers,
+		"attempts":     attempts,
+		"budget":       result.Budget,
 	}
 }
 

@@ -1191,6 +1191,7 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 		builder.WriteString("\n" + cfg.prompt(promptSilentFinishSpec))
 	}
 	builder.WriteString("\n" + cfg.prompt(promptToolFindingsSpec))
+	builder.WriteString("\n" + cfg.prompt(promptFactVerificationSpec))
 	builder.WriteString("\n" + cfg.prompt(promptSelfCharacterizationSpec))
 	builder.WriteString("\n" + cfg.prompt(promptSelfObservationSpec))
 	builder.WriteString("\n" + cfg.prompt(promptCurrentMessageSpec))

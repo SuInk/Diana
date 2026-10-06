@@ -44,7 +44,7 @@ func TestSearchRecoversUnindexedReleaseURLWithoutLosingVersion(t *testing.T) {
 	if err := json.Unmarshal([]byte(output), &result); err != nil {
 		t.Fatal(err)
 	}
-	if result.Status != "ok" || len(queries) != 2 || result.Queries[1].Strategy != "model_alternative" || result.FreshnessVerified || result.RetrievedAt == "" || result.StopReason != "queries_completed" {
+	if result.Status != "ok" || len(queries) != 2 || result.Queries[1].Strategy != "model_alternative" || result.SourceStage != sourceStageSearchCandidates || result.RetrievedAt == "" || result.StopReason != "queries_completed" {
 		t.Fatalf("incorrect recovery: %s", output)
 	}
 	if !strings.Contains(result.SourceNotice, "不证明") || !strings.Contains(result.SourceNotice, "索引更新时间") {

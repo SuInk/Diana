@@ -63,26 +63,26 @@ type webSearchBudget struct {
 }
 
 type webSearchResult struct {
-	Truncated         bool                      `json:"truncated,omitempty"`
-	Results           []WebSearchHit            `json:"results,omitempty"`
-	Searches          []webSearchQueryResponse  `json:"searches,omitempty"`
-	RetrievedAt       string                    `json:"retrieved_at"`
-	FreshnessVerified bool                      `json:"freshness_verified"`
-	SourceNotice      string                    `json:"source_notice,omitempty"`
-	Status            string                    `json:"status"`
-	StopReason        string                    `json:"stop_reason"`
-	Strategy          string                    `json:"strategy"`
-	Query             string                    `json:"query"`
-	SelectedQuery     string                    `json:"selected_query,omitempty"`
-	Provider          string                    `json:"provider,omitempty"`
-	ProviderType      string                    `json:"provider_type,omitempty"`
-	FallbackUsed      bool                      `json:"fallback_used"`
-	Queries           []webSearchQueryCandidate `json:"queries"`
-	Providers         []webSearchProviderState  `json:"providers"`
-	Attempts          []webSearchAttempt        `json:"attempts"`
-	Budget            webSearchBudget           `json:"budget"`
-	Sources           []string                  `json:"sources,omitempty"`
-	Content           string                    `json:"content,omitempty"`
+	Truncated     bool                      `json:"truncated,omitempty"`
+	Results       []WebSearchHit            `json:"results,omitempty"`
+	Searches      []webSearchQueryResponse  `json:"searches,omitempty"`
+	RetrievedAt   string                    `json:"retrieved_at"`
+	SourceStage   string                    `json:"source_stage"`
+	SourceNotice  string                    `json:"source_notice,omitempty"`
+	Status        string                    `json:"status"`
+	StopReason    string                    `json:"stop_reason"`
+	Strategy      string                    `json:"strategy"`
+	Query         string                    `json:"query"`
+	SelectedQuery string                    `json:"selected_query,omitempty"`
+	Provider      string                    `json:"provider,omitempty"`
+	ProviderType  string                    `json:"provider_type,omitempty"`
+	FallbackUsed  bool                      `json:"fallback_used"`
+	Queries       []webSearchQueryCandidate `json:"queries"`
+	Providers     []webSearchProviderState  `json:"providers"`
+	Attempts      []webSearchAttempt        `json:"attempts"`
+	Budget        webSearchBudget           `json:"budget"`
+	Sources       []string                  `json:"sources,omitempty"`
+	Content       string                    `json:"content,omitempty"`
 }
 
 func webSearchCandidates(input map[string]any, limit int) ([]webSearchQueryCandidate, error) {

@@ -604,8 +604,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 		toolDuration := time.Since(toolStartedAt)
 		toolsDuration += toolDuration
 		record := Step{Index: len(steps) + 1, Tool: action.Tool, Input: action.Input, DurationMS: toolDuration.Milliseconds()}
-		// 证据登记必须读未截断的原始结果：截断后的 JSON 无法反序列化，
-		// 会让成功的搜索被当成 provider_error、渲染成功的页面登记不上。
+		// 检索阶段从未截断的输出提取，避免外层截断损坏 JSON 后误报来源缺失。
 		//
 		// 工具结果和报错原样进模型上下文，也进运行记录（下一轮的 carryover、事件
 		// 记录）。凭据在这里统一遮掉：HTTP 客户端报错带着整条请求地址（查询参数里的
@@ -613,6 +612,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 		// 报错按形态和已登记原文一起遮；正常输出只遮已登记原文和 userinfo，网页里的
 		// 签名链接模型还要接着用。
 		output = secretmask.Output(output)
+		rawOutput := output
 		if err != nil {
 			record.Error = secretmask.Text(normalizeToolError(err, toolCtx, ctx, r.cfg.ToolTimeoutMS))
 			output = toolExecutionErrorForModel(action.Tool, record.Error)
@@ -629,7 +629,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 			}
 		}
 		steps = append(steps, record)
-		toolMetadata = mergeRunMetadata(toolMetadata, webSearchRunMetadataFromOutput(action.Tool, output, err))
+		toolMetadata = mergeRunMetadata(toolMetadata, researchRunMetadataFromOutput(action.Tool, rawOutput, err))
 
 		emitRunEvent(ctx, req.Observer, RunEvent{
 			TraceID:      traceID,
@@ -698,6 +698,14 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 				llm.Message{Role: llm.RoleAssistant, Content: lastText},
 				observation,
 			)
+		}
+		if err == nil {
+			if guidance := researchObservationGuidance(action.Tool, rawOutput, r.cfg.MaxSteps-toolCalls); guidance != "" {
+				if output != rawOutput {
+					guidance += " 本轮工具输出另外被截断，未显示的部分不能作证据。"
+				}
+				messages = append(messages, llm.Message{Role: llm.RoleSystem, Priority: llm.MessagePrioritySystem, Content: guidance})
+			}
 		}
 	}
 
@@ -964,7 +972,7 @@ func toolObservationMessage(tool, output string, success bool, remaining int) st
 	status := "成功"
 	guidance := "请基于结果继续；信息已足够时调用 agent_finalize 结束本轮。"
 	if success && tool == WebSearchToolName {
-		guidance = "documents 是实际读取的原文节选，content 只是搜索摘要。优先读取目标官网、官方文档和官方仓库。若 documents 只有第三方文章，先从正文或 links 追踪官方出处并用 browser_render 打开；找不到官方入口时用实体名加官网/官方文档查询，不从转载直接收尾。仅官方页面无法访问或未覆盖问题时使用第三方并标明限制。根据实际原文核对技术、能力、版本与价格，正文附出处；视频页面若只有简介和评论，不得当成已读视频转写，技术机制另找可阅读的一手文档；原文不足或不是一手来源时继续打开最相关页面。确有新的信息缺口才补搜，用实体名加一个查证目标，不堆 OR、不重复站内搜索。无法核实时如实说明限制。"
+		guidance = "搜索结果和摘要是候选来源，不等于已读取原始页面。优先读取目标官网、官方文档和官方仓库。若候选来源只有第三方文章，先从正文或 links 追踪官方出处并用 browser_render 打开；找不到官方入口时用实体名加官网/官方文档查询，不从转载直接收尾。仅官方页面无法访问或未覆盖问题时使用第三方并标明限制。根据实际原文核对技术、能力、版本与价格，正文附出处；视频页面若只有简介和评论，不得当成已读视频转写，技术机制另找可阅读的一手文档；原文不足或不是一手来源时继续打开最相关页面。确有新的信息缺口才补搜，用实体名加一个查证目标，不堆 OR、不重复站内搜索。无法核实时如实说明限制。"
 	}
 	if success && tool == browserRenderToolName {
 		guidance = "本次只读取了返回 url 的页面，links 指向的页面尚未读取。若这是搜索引擎结果页，标题和摘要只是线索，必须从 links 选最相关的一手来源再用 browser_render 打开正文；不能以搜索结果页代替原文收尾。原文 truncated=true 或提示正文截断且缺少答案所需细节时，优先对该 url 调用 browser_render，arguments 填 {\"url\":\"来源真实网址\",\"find\":\"机制/条件的关键术语，用 | 分隔\"} 读取整页匹配段落，不要再用同页标题或 site: 搜索代替页内查找。答复只引用实际读过且支持结论的来源 URL；技术问题优先官方文档、源码或论文，不拿相近概念替代用户点名的概念。"
