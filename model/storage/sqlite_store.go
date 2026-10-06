@@ -29,29 +29,30 @@ import (
 )
 
 const (
-	defaultDatabasePath  = "data/diana.db"
-	llmProfilesKey       = "llm_profiles"
-	llmRegistryKey       = "llm_provider_registry"
-	llmAuthKey           = "llm_oauth"
-	botProfilesKey       = "bot_profiles"
-	botSeedProfileKey    = "bot_seed_profile"
-	llmSeedProfileKey    = "llm_seed_profile"
-	botPersonasKey       = "bot_personas"
-	botWorldBookKey      = "bot_world_book"
-	botGroupConfigKey    = "bot_group_configs"
-	pluginStateKey       = "plugin_states"
-	remindersKey         = "reminders"
-	updatePolicyKey      = "system_update_policy"
-	replySuppressionsKey = "bot_reply_suppressions"
-	webuiAuthKey         = "webui_auth"
-	webuiSessionsKey     = "webui_sessions"
-	releaseCacheKey      = "system_release_cache"
-	updateGitHubTokenKey = "system_update_github_token"
-	inboundRecoveryKey   = "bot_inbound_recovery_checkpoint"
-	browserControlKey    = "browser_control"
-	desktopControlKey    = "desktop_control"
-	browserBoxKey        = "browser_box"
-	browserSourceKey     = "browser_source"
+	defaultDatabasePath   = "data/diana.db"
+	llmProfilesKey        = "llm_profiles"
+	llmRegistryKey        = "llm_provider_registry"
+	llmAuthKey            = "llm_oauth"
+	botProfilesKey        = "bot_profiles"
+	botSeedProfileKey     = "bot_seed_profile"
+	llmSeedProfileKey     = "llm_seed_profile"
+	botPersonasKey        = "bot_personas"
+	botWorldBookKey       = "bot_world_book"
+	botGroupConfigKey     = "bot_group_configs"
+	pluginStateKey        = "plugin_states"
+	remindersKey          = "reminders"
+	updatePolicyKey       = "system_update_policy"
+	replySuppressionsKey  = "bot_reply_suppressions"
+	webuiAuthKey          = "webui_auth"
+	webuiSessionsKey      = "webui_sessions"
+	releaseCacheKey       = "system_release_cache"
+	updateGitHubTokenKey  = "system_update_github_token"
+	inboundRecoveryKey    = "bot_inbound_recovery_checkpoint"
+	browserControlKey     = "browser_control"
+	desktopControlKey     = "desktop_control"
+	desktopControlJobsKey = "desktop_control_jobs"
+	browserBoxKey         = "browser_box"
+	browserSourceKey      = "browser_source"
 )
 
 type SQLiteStore struct {
@@ -409,6 +410,27 @@ func (s *SQLiteStore) LoadDesktopControl(ctx context.Context) (desktopctl.Docume
 // SaveDesktopControl 保存桌面控制的策略与令牌。
 func (s *SQLiteStore) SaveDesktopControl(ctx context.Context, doc desktopctl.Document) error {
 	return s.saveJSON(ctx, desktopControlKey, doc)
+}
+
+// LoadDesktopJobs 读取桌面控制持久任务。
+func (s *SQLiteStore) LoadDesktopJobs(ctx context.Context) ([]desktopctl.Job, error) {
+	var jobs []desktopctl.Job
+	ok, err := s.loadJSON(ctx, desktopControlJobsKey, &jobs)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, nil
+	}
+	return jobs, nil
+}
+
+// SaveDesktopJobs 保存桌面控制持久任务。
+func (s *SQLiteStore) SaveDesktopJobs(ctx context.Context, jobs []desktopctl.Job) error {
+	if jobs == nil {
+		jobs = []desktopctl.Job{}
+	}
+	return s.saveJSON(ctx, desktopControlJobsKey, jobs)
 }
 
 // LoadBrowserSource 读取浏览器来源的优先级。

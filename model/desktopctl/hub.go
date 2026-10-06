@@ -75,6 +75,7 @@ type ConnectionStatus struct {
 // Hub 保管已握手的控制连接。
 type Hub struct {
 	registry *Registry
+	jobs     *JobManager
 	now      func() time.Time
 
 	mu    sync.RWMutex
@@ -85,6 +86,22 @@ type Hub struct {
 // NewHub 创建控制面。
 func NewHub(registry *Registry) *Hub {
 	return &Hub{registry: registry, now: time.Now, conns: map[string]*Connection{}}
+}
+
+// SetJobManager 挂上持久任务管理器；为 nil 时 Dispatch 不走任务门禁。
+func (h *Hub) SetJobManager(jobs *JobManager) {
+	if h == nil {
+		return
+	}
+	h.jobs = jobs
+}
+
+// Jobs 返回任务管理器。
+func (h *Hub) Jobs() *JobManager {
+	if h == nil {
+		return nil
+	}
+	return h.jobs
 }
 
 // Policy 返回当前策略。

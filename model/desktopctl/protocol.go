@@ -9,8 +9,8 @@
 // 与 model/browserctl 是两回事：浏览器控制管的是用户浏览器里的标签页；桌面控制
 // 管的是操作系统窗口。两套白名单、两套工具、互不替代。
 //
-// 阶段 1：只读（列窗口、截图）。阶段 2：在 WriteEnabled 打开后允许点击与键盘。
-// 持久任务与控制台画面仍不在本包。
+// 阶段 1：只读。阶段 2：WriteEnabled 下点击与键盘。阶段 3：持久电脑任务（暂停/恢复/确认/取消/预算）。
+// 控制台实时画面仍不在本包。
 package desktopctl
 
 import (
@@ -87,7 +87,7 @@ type Frame struct {
 	Type string `json:"type"`
 	ID   string `json:"id,omitempty"`
 	Op   string `json:"op,omitempty"`
-	// JobID / Observation 为后续持久任务与失效观察预留，阶段 1 可空。
+	// JobID / Observation / Idempotency 由持久任务与执行器观察版本使用。
 	JobID       string          `json:"job_id,omitempty"`
 	Observation int64           `json:"observation,omitempty"`
 	Params      json.RawMessage `json:"params,omitempty"`

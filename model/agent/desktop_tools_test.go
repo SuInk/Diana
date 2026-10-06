@@ -22,6 +22,8 @@ type stubDesktopBridge struct {
 
 func (b *stubDesktopBridge) Ready() bool { return b.ready }
 
+func (b *stubDesktopBridge) Jobs() *desktopctl.JobManager { return nil }
+
 func (b *stubDesktopBridge) Dispatch(_ context.Context, cmd desktopctl.Command) (desktopctl.Result, error) {
 	b.last = cmd
 	if b.failure != nil {
@@ -55,7 +57,11 @@ func TestDesktopToolsUnregisteredWithoutBridge(t *testing.T) {
 
 func TestDesktopToolsRegisteredWithBridge(t *testing.T) {
 	names := desktopToolNames(t, Config{WorkDir: t.TempDir(), DesktopControl: &stubDesktopBridge{ready: true}})
-	for _, want := range []string{"desktop_windows", "desktop_screenshot", "desktop_click", "desktop_type", "desktop_key"} {
+	for _, want := range []string{
+		"desktop_windows", "desktop_screenshot", "desktop_click", "desktop_type", "desktop_key",
+		"desktop_job_create", "desktop_job_status", "desktop_job_pause", "desktop_job_resume",
+		"desktop_job_wait_confirm", "desktop_job_confirm", "desktop_job_cancel",
+	} {
 		if !names[want] {
 			t.Errorf("缺少工具 %s，实际 %v", want, names)
 		}

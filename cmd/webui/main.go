@@ -731,6 +731,8 @@ func main() {
 	// 打开总开关并连接执行器后，再在机器人配置里打开 agent_desktop_control_enabled。
 	desktopControlRegistry := desktopctl.NewRegistry(ctx, sqliteStore)
 	desktopControlHub := desktopctl.NewHub(desktopControlRegistry)
+	desktopControlJobs := desktopctl.NewJobManager(ctx, sqliteStore)
+	desktopControlHub.SetJobManager(desktopControlJobs)
 	botRuntime.SetDesktopControl(desktopControlHub)
 	defer desktopControlHub.CloseAll()
 	// 内置浏览器：Diana 自己那个常驻 Chrome，profile 落在数据目录里，

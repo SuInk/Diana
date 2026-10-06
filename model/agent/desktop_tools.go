@@ -24,6 +24,8 @@ import (
 type DesktopControlBridge interface {
 	Ready() bool
 	Dispatch(ctx context.Context, cmd desktopctl.Command) (desktopctl.Result, error)
+	// Jobs 返回持久任务管理器；未挂载时为 nil，桌面任务工具会说明不可用。
+	Jobs() *desktopctl.JobManager
 }
 
 type desktopControlToolBase struct {
@@ -36,6 +38,32 @@ func (b desktopControlToolBase) dispatch(ctx context.Context, cmd desktopctl.Com
 		return desktopctl.Result{}, errors.New("桌面控制未启用：需要打开桌面控制总开关、连接执行器，并给本机器人授权")
 	}
 	return b.bridge.Dispatch(ctx, cmd)
+}
+
+func desktopJobParams() map[string]any {
+	return map[string]any{
+		"job_id":          toolStringParam("持久电脑任务 ID；传入后本步记入任务并受暂停/取消/预算约束"),
+		"idempotency_key": toolStringParam("同任务内相同键的已完成步骤不再下发，避免恢复后重复提交"),
+	}
+}
+
+func mergeDesktopSchema(required []string, props map[string]any) map[string]any {
+	for k, v := range desktopJobParams() {
+		if _, ok := props[k]; !ok {
+			props[k] = v
+		}
+	}
+	return toolObjectSchema(required, props)
+}
+
+func desktopCmdFromInput(op string, input map[string]any) desktopctl.Command {
+	return desktopctl.Command{
+		Op:             op,
+		Connection:     stringFromInput(input, "connection"),
+		WindowID:       stringFromInput(input, "window_id"),
+		JobID:          stringFromInput(input, "job_id"),
+		IdempotencyKey: stringFromInput(input, "idempotency_key"),
+	}
 }
 
 func desktopJSONOutput(data json.RawMessage) (string, error) {
@@ -65,16 +93,13 @@ func (t *DesktopWindowsTool) Description() string {
 }
 
 func (t *DesktopWindowsTool) InputSchema() map[string]any {
-	return toolObjectSchema(nil, map[string]any{
+	return mergeDesktopSchema(nil, map[string]any{
 		"connection": toolStringParam("连着多个桌面执行器时点名"),
 	})
 }
 
 func (t *DesktopWindowsTool) Run(ctx context.Context, input map[string]any) (string, error) {
-	result, err := t.base.dispatch(ctx, desktopctl.Command{
-		Op:         desktopctl.OpWindowsList,
-		Connection: stringFromInput(input, "connection"),
-	})
+	result, err := t.base.dispatch(ctx, desktopCmdFromInput(desktopctl.OpWindowsList, input))
 	if err != nil {
 		return "", err
 	}
@@ -110,7 +135,7 @@ func (t *DesktopScreenshotTool) setParts(parts []llm.ContentPart) {
 }
 
 func (t *DesktopScreenshotTool) InputSchema() map[string]any {
-	return toolObjectSchema(nil, map[string]any{
+	return mergeDesktopSchema(nil, map[string]any{
 		"window_id":  toolStringParam("窗口 ID，来自 desktop_windows；省略则用当前活动的已授权窗口"),
 		"connection": toolStringParam("连着多个桌面执行器时点名"),
 		"path":       toolStringParam("相对工作目录的保存路径，可选"),
@@ -119,11 +144,7 @@ func (t *DesktopScreenshotTool) InputSchema() map[string]any {
 
 func (t *DesktopScreenshotTool) Run(ctx context.Context, input map[string]any) (string, error) {
 	t.setParts(nil)
-	result, err := t.base.dispatch(ctx, desktopctl.Command{
-		Op:         desktopctl.OpWindowScreenshot,
-		Connection: stringFromInput(input, "connection"),
-		WindowID:   stringFromInput(input, "window_id"),
-	})
+	result, err := t.base.dispatch(ctx, desktopCmdFromInput(desktopctl.OpWindowScreenshot, input))
 	if err != nil {
 		return "", err
 	}
@@ -186,7 +207,7 @@ func (t *DesktopClickTool) Description() string {
 }
 
 func (t *DesktopClickTool) InputSchema() map[string]any {
-	return toolObjectSchema([]string{"x", "y"}, map[string]any{
+	return mergeDesktopSchema([]string{"x", "y"}, map[string]any{
 		"x":          toolNumberParam("相对窗口左上角的 X（逻辑像素）"),
 		"y":          toolNumberParam("相对窗口左上角的 Y（逻辑像素）"),
 		"button":     toolStringParam("left（默认）/ right / middle"),
@@ -201,14 +222,9 @@ func (t *DesktopClickTool) Run(ctx context.Context, input map[string]any) (strin
 	if !okX || !okY {
 		return "", errors.New("desktop_click 需要 x 与 y")
 	}
-	result, err := t.base.dispatch(ctx, desktopctl.Command{
-		Op:         desktopctl.OpWindowClick,
-		Connection: stringFromInput(input, "connection"),
-		WindowID:   stringFromInput(input, "window_id"),
-		X:          &x,
-		Y:          &y,
-		Button:     stringFromInput(input, "button"),
-	})
+	cmd := desktopCmdFromInput(desktopctl.OpWindowClick, input)
+	cmd.X, cmd.Y, cmd.Button = &x, &y, stringFromInput(input, "button")
+	result, err := t.base.dispatch(ctx, cmd)
 	if err != nil {
 		return "", err
 	}
@@ -227,7 +243,7 @@ func (t *DesktopTypeTool) Description() string {
 }
 
 func (t *DesktopTypeTool) InputSchema() map[string]any {
-	return toolObjectSchema([]string{"text"}, map[string]any{
+	return mergeDesktopSchema([]string{"text"}, map[string]any{
 		"text":       toolStringParam(""),
 		"window_id":  toolStringParam("窗口 ID，来自 desktop_windows"),
 		"connection": toolStringParam("连着多个桌面执行器时点名"),
@@ -235,12 +251,9 @@ func (t *DesktopTypeTool) InputSchema() map[string]any {
 }
 
 func (t *DesktopTypeTool) Run(ctx context.Context, input map[string]any) (string, error) {
-	result, err := t.base.dispatch(ctx, desktopctl.Command{
-		Op:         desktopctl.OpWindowType,
-		Connection: stringFromInput(input, "connection"),
-		WindowID:   stringFromInput(input, "window_id"),
-		Text:       stringFromInput(input, "text"),
-	})
+	cmd := desktopCmdFromInput(desktopctl.OpWindowType, input)
+	cmd.Text = stringFromInput(input, "text")
+	result, err := t.base.dispatch(ctx, cmd)
 	if err != nil {
 		return "", err
 	}
@@ -259,7 +272,7 @@ func (t *DesktopKeyTool) Description() string {
 }
 
 func (t *DesktopKeyTool) InputSchema() map[string]any {
-	return toolObjectSchema([]string{"key"}, map[string]any{
+	return mergeDesktopSchema([]string{"key"}, map[string]any{
 		"key":        toolStringParam("按键名，如 Return、Tab、Escape、cmd+c"),
 		"window_id":  toolStringParam("窗口 ID，来自 desktop_windows"),
 		"connection": toolStringParam("连着多个桌面执行器时点名"),
@@ -267,12 +280,9 @@ func (t *DesktopKeyTool) InputSchema() map[string]any {
 }
 
 func (t *DesktopKeyTool) Run(ctx context.Context, input map[string]any) (string, error) {
-	result, err := t.base.dispatch(ctx, desktopctl.Command{
-		Op:         desktopctl.OpWindowKey,
-		Connection: stringFromInput(input, "connection"),
-		WindowID:   stringFromInput(input, "window_id"),
-		Key:        stringFromInput(input, "key"),
-	})
+	cmd := desktopCmdFromInput(desktopctl.OpWindowKey, input)
+	cmd.Key = stringFromInput(input, "key")
+	result, err := t.base.dispatch(ctx, cmd)
 	if err != nil {
 		return "", err
 	}
@@ -293,4 +303,210 @@ func (r *ToolRegistry) RegisterDesktopTools(root string, cfg Config) {
 	r.Register(&DesktopClickTool{base: base})
 	r.Register(&DesktopTypeTool{base: base})
 	r.Register(&DesktopKeyTool{base: base})
+	r.Register(&DesktopJobCreateTool{base: base})
+	r.Register(&DesktopJobStatusTool{base: base})
+	r.Register(&DesktopJobPauseTool{base: base})
+	r.Register(&DesktopJobResumeTool{base: base})
+	r.Register(&DesktopJobWaitConfirmTool{base: base})
+	r.Register(&DesktopJobConfirmTool{base: base})
+	r.Register(&DesktopJobCancelTool{base: base})
+}
+
+func (b desktopControlToolBase) jobs() (*desktopctl.JobManager, error) {
+	if b.bridge == nil {
+		return nil, errors.New("桌面控制未启用")
+	}
+	jm := b.bridge.Jobs()
+	if jm == nil {
+		return nil, errors.New("桌面持久任务未启用")
+	}
+	return jm, nil
+}
+
+// DesktopJobCreateTool 创建持久电脑任务。
+type DesktopJobCreateTool struct{ base desktopControlToolBase }
+
+func (t *DesktopJobCreateTool) Name() string { return "desktop_job_create" }
+func (t *DesktopJobCreateTool) Description() string {
+	return `创建一条持久电脑任务（可暂停/恢复/取消/等待确认，重启后保留）。后续 desktop_* 调用带上返回的 job_id。恢复后须先 desktop_screenshot 再写操作。`
+}
+func (t *DesktopJobCreateTool) InputSchema() map[string]any {
+	return toolObjectSchema(nil, map[string]any{
+		"goal":            toolStringParam("任务目标简述"),
+		"max_steps":       toolIntParam("步数预算，默认 32"),
+		"max_duration_ms": toolIntParam("时长预算毫秒，默认 30 分钟"),
+		"connection":      toolStringParam("可选，绑定执行器连接"),
+		"start":           toolBoolParam("创建后立即标为 running，默认 true"),
+	})
+}
+func (t *DesktopJobCreateTool) Run(ctx context.Context, input map[string]any) (string, error) {
+	jm, err := t.base.jobs()
+	if err != nil {
+		return "", err
+	}
+	budget := desktopctl.JobBudget{
+		MaxSteps:      intFromInput(input, "max_steps", 0),
+		MaxDurationMS: intFromInput(input, "max_duration_ms", 0),
+	}
+	job, err := jm.Create(ctx, stringFromInput(input, "goal"), "", stringFromInput(input, "connection"), budget)
+	if err != nil {
+		return "", err
+	}
+	if boolFromInput(input, "start", true) {
+		job, err = jm.Start(ctx, job.ID)
+		if err != nil {
+			return "", err
+		}
+	}
+	body, err := json.MarshalIndent(job, "", "  ")
+	return string(body), err
+}
+
+// DesktopJobStatusTool 查询任务。
+type DesktopJobStatusTool struct{ base desktopControlToolBase }
+
+func (t *DesktopJobStatusTool) Name() string { return "desktop_job_status" }
+func (t *DesktopJobStatusTool) Description() string {
+	return `查询持久电脑任务状态与步骤；不传 job_id 则列出最近任务。`
+}
+func (t *DesktopJobStatusTool) InputSchema() map[string]any {
+	return toolObjectSchema(nil, map[string]any{
+		"job_id": toolStringParam("任务 ID；省略则列出"),
+	})
+}
+func (t *DesktopJobStatusTool) Run(ctx context.Context, input map[string]any) (string, error) {
+	jm, err := t.base.jobs()
+	if err != nil {
+		return "", err
+	}
+	id := stringFromInput(input, "job_id")
+	if id == "" {
+		body, err := json.MarshalIndent(jm.List(""), "", "  ")
+		return string(body), err
+	}
+	job, ok := jm.Get(id)
+	if !ok {
+		return "", fmt.Errorf("桌面任务 %s 不存在", id)
+	}
+	body, err := json.MarshalIndent(job, "", "  ")
+	return string(body), err
+}
+
+type DesktopJobPauseTool struct{ base desktopControlToolBase }
+
+func (t *DesktopJobPauseTool) Name() string { return "desktop_job_pause" }
+func (t *DesktopJobPauseTool) Description() string {
+	return `暂停持久电脑任务：之后不再下发；恢复前须重新观察。`
+}
+func (t *DesktopJobPauseTool) InputSchema() map[string]any {
+	return toolObjectSchema([]string{"job_id"}, map[string]any{
+		"job_id": toolStringParam(""),
+		"reason": toolStringParam("暂停原因"),
+	})
+}
+func (t *DesktopJobPauseTool) Run(ctx context.Context, input map[string]any) (string, error) {
+	jm, err := t.base.jobs()
+	if err != nil {
+		return "", err
+	}
+	job, err := jm.Pause(ctx, stringFromInput(input, "job_id"), stringFromInput(input, "reason"))
+	if err != nil {
+		return "", err
+	}
+	body, err := json.MarshalIndent(job, "", "  ")
+	return string(body), err
+}
+
+type DesktopJobResumeTool struct{ base desktopControlToolBase }
+
+func (t *DesktopJobResumeTool) Name() string { return "desktop_job_resume" }
+func (t *DesktopJobResumeTool) Description() string {
+	return `恢复已暂停的电脑任务。不会重放已完成步骤；恢复后须先 desktop_screenshot 再写操作。`
+}
+func (t *DesktopJobResumeTool) InputSchema() map[string]any {
+	return toolObjectSchema([]string{"job_id"}, map[string]any{"job_id": toolStringParam("")})
+}
+func (t *DesktopJobResumeTool) Run(ctx context.Context, input map[string]any) (string, error) {
+	jm, err := t.base.jobs()
+	if err != nil {
+		return "", err
+	}
+	job, err := jm.Resume(ctx, stringFromInput(input, "job_id"))
+	if err != nil {
+		return "", err
+	}
+	body, err := json.MarshalIndent(job, "", "  ")
+	return string(body), err
+}
+
+type DesktopJobWaitConfirmTool struct{ base desktopControlToolBase }
+
+func (t *DesktopJobWaitConfirmTool) Name() string { return "desktop_job_wait_confirm" }
+func (t *DesktopJobWaitConfirmTool) Description() string {
+	return `让持久电脑任务进入等待确认（例如提交前）。确认前不再下发；主人确认后须重新观察再继续。`
+}
+func (t *DesktopJobWaitConfirmTool) InputSchema() map[string]any {
+	return toolObjectSchema([]string{"job_id"}, map[string]any{
+		"job_id": toolStringParam(""),
+		"reason": toolStringParam("等待原因，展示给主人"),
+	})
+}
+func (t *DesktopJobWaitConfirmTool) Run(ctx context.Context, input map[string]any) (string, error) {
+	jm, err := t.base.jobs()
+	if err != nil {
+		return "", err
+	}
+	job, err := jm.WaitConfirm(ctx, stringFromInput(input, "job_id"), stringFromInput(input, "reason"))
+	if err != nil {
+		return "", err
+	}
+	body, err := json.MarshalIndent(job, "", "  ")
+	return string(body), err
+}
+
+type DesktopJobConfirmTool struct{ base desktopControlToolBase }
+
+func (t *DesktopJobConfirmTool) Name() string { return "desktop_job_confirm" }
+func (t *DesktopJobConfirmTool) Description() string {
+	return `确认等待中的电脑任务（例如提交前）。确认后须重新观察再继续写操作。`
+}
+func (t *DesktopJobConfirmTool) InputSchema() map[string]any {
+	return toolObjectSchema([]string{"job_id"}, map[string]any{"job_id": toolStringParam("")})
+}
+func (t *DesktopJobConfirmTool) Run(ctx context.Context, input map[string]any) (string, error) {
+	jm, err := t.base.jobs()
+	if err != nil {
+		return "", err
+	}
+	job, err := jm.Confirm(ctx, stringFromInput(input, "job_id"))
+	if err != nil {
+		return "", err
+	}
+	body, err := json.MarshalIndent(job, "", "  ")
+	return string(body), err
+}
+
+type DesktopJobCancelTool struct{ base desktopControlToolBase }
+
+func (t *DesktopJobCancelTool) Name() string { return "desktop_job_cancel" }
+func (t *DesktopJobCancelTool) Description() string {
+	return `取消持久电脑任务并停止后续下发。不能撤销已经发生的点击或输入。`
+}
+func (t *DesktopJobCancelTool) InputSchema() map[string]any {
+	return toolObjectSchema([]string{"job_id"}, map[string]any{
+		"job_id": toolStringParam(""),
+		"reason": toolStringParam("取消原因"),
+	})
+}
+func (t *DesktopJobCancelTool) Run(ctx context.Context, input map[string]any) (string, error) {
+	jm, err := t.base.jobs()
+	if err != nil {
+		return "", err
+	}
+	job, err := jm.Cancel(ctx, stringFromInput(input, "job_id"), stringFromInput(input, "reason"))
+	if err != nil {
+		return "", err
+	}
+	body, err := json.MarshalIndent(job, "", "  ")
+	return string(body), err
 }

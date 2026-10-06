@@ -16,9 +16,11 @@ type Command struct {
 	Connection string `json:"connection,omitempty"`
 	Op         string `json:"op"`
 	WindowID   string `json:"window_id,omitempty"`
-	// JobID / Observation 预留字段，后续持久任务使用。
+	// JobID 把本步记入持久任务；Observation 由执行器/任务观察版本使用。
 	JobID       string `json:"job_id,omitempty"`
 	Observation int64  `json:"observation,omitempty"`
+	// IdempotencyKey 相同且已完成的步骤不再下发，避免恢复后重复提交。
+	IdempotencyKey string `json:"idempotency_key,omitempty"`
 	// 点击：相对目标窗口左上角的坐标（逻辑像素）。指针为 nil 表示未提供。
 	X *float64 `json:"x,omitempty"`
 	Y *float64 `json:"y,omitempty"`
@@ -46,8 +48,31 @@ func (h *Hub) Dispatch(ctx context.Context, cmd Command) (Result, error) {
 	if IsWriteOp(op) && !policy.WriteEnabled {
 		return Result{}, commandError(CodeWriteDisabled, "桌面控制当前只读，点击和输入都没有授权；先打开 write_enabled")
 	}
+
+	var stepID string
+	if h.jobs != nil && strings.TrimSpace(cmd.JobID) != "" {
+		skip, cached, sid, err := h.jobs.AuthorizeDispatch(ctx, cmd)
+		if err != nil {
+			return Result{}, err
+		}
+		if skip {
+			return cached, nil
+		}
+		stepID = sid
+		jobCtx, cancel := context.WithCancel(ctx)
+		h.jobs.BindCancel(cmd.JobID, cancel)
+		defer func() {
+			h.jobs.UnbindCancel(cmd.JobID)
+			cancel()
+		}()
+		ctx = jobCtx
+	}
+
 	conn, err := h.pickConnection(cmd.Connection)
 	if err != nil {
+		if stepID != "" && h.jobs != nil {
+			h.jobs.RecordDispatch(ctx, cmd.JobID, stepID, cmd, Result{}, err)
+		}
 		return Result{}, err
 	}
 	if takeover, reason := conn.Takeover(); takeover {
@@ -55,9 +80,16 @@ func (h *Hub) Dispatch(ctx context.Context, cmd Command) (Result, error) {
 		if reason != "" {
 			message += "：" + reason
 		}
-		return Result{}, commandError(CodeTakeover, "%s", message)
+		err := commandError(CodeTakeover, "%s", message)
+		if stepID != "" && h.jobs != nil {
+			h.jobs.RecordDispatch(ctx, cmd.JobID, stepID, cmd, Result{}, err)
+		}
+		return Result{}, err
 	}
 	if err := conn.reserve(policy, h.nowOrDefault()); err != nil {
+		if stepID != "" && h.jobs != nil {
+			h.jobs.RecordDispatch(ctx, cmd.JobID, stepID, cmd, Result{}, err)
+		}
 		return Result{}, err
 	}
 
@@ -65,22 +97,38 @@ func (h *Hub) Dispatch(ctx context.Context, cmd Command) (Result, error) {
 		windows := conn.Windows(policy)
 		data, err := json.Marshal(WindowsPayload{Windows: windows})
 		if err != nil {
-			return Result{}, commandError(CodeHelper, "窗口清单序列化失败：%v", err)
+			err = commandError(CodeHelper, "窗口清单序列化失败：%v", err)
+			if stepID != "" && h.jobs != nil {
+				h.jobs.RecordDispatch(ctx, cmd.JobID, stepID, cmd, Result{}, err)
+			}
+			return Result{}, err
 		}
-		return Result{OK: true, Data: data}, nil
+		result := Result{OK: true, Data: data}
+		if stepID != "" && h.jobs != nil {
+			h.jobs.RecordDispatch(ctx, cmd.JobID, stepID, cmd, result, nil)
+		}
+		return result, nil
 	}
 
-	// 截图与写操作都绑定已授权窗口。
 	target, err := conn.resolveWindow(policy, cmd.WindowID)
 	if err != nil {
+		if stepID != "" && h.jobs != nil {
+			h.jobs.RecordDispatch(ctx, cmd.JobID, stepID, cmd, Result{}, err)
+		}
 		return Result{}, err
 	}
 	cmd.WindowID = target.ID
 	if err := validateCommandParams(op, cmd); err != nil {
+		if stepID != "" && h.jobs != nil {
+			h.jobs.RecordDispatch(ctx, cmd.JobID, stepID, cmd, Result{}, err)
+		}
 		return Result{}, err
 	}
 	timeout := time.Duration(policy.CommandTimeoutMS) * time.Millisecond
 	result, err := conn.send(ctx, op, cmd, timeout)
+	if stepID != "" && h.jobs != nil {
+		h.jobs.RecordDispatch(ctx, cmd.JobID, stepID, cmd, result, err)
+	}
 	if err != nil {
 		return Result{}, err
 	}

@@ -1,6 +1,6 @@
-# 桌面控制（阶段 1–2）
+# 桌面控制（阶段 1–3）
 
-这一档让主人通过 Diana **查看并受限操作本机桌面窗口**：列出获准应用的窗口、截取画面，并在打开写权限后点击、输入与按键。真正枚举窗口、截图与键鼠的是用户机器上的本地执行器；Diana 只下发有限指令并等回执。
+这一档让主人通过 Diana **查看并受限操作本机桌面窗口**，并支持**持久电脑任务**（暂停、恢复、等待确认、取消、预算；重启后保留）。真正枚举窗口、截图与键鼠的是用户机器上的本地执行器；Diana 只下发有限指令并等回执。
 
 它和[浏览器控制扩展](browser-control.md)、[内置浏览器](browser-builtin.md)都是两回事，不互相替代：
 
@@ -8,47 +8,57 @@
 | --- | --- | --- |
 | 对象 | 用户日常浏览器里的标签页 | 操作系统窗口 |
 | 白名单 | 站点主机名 | 应用 Bundle ID / 显示名 |
-| 工具 | `browser_ext_*`（读写分档） | `desktop_windows` / `desktop_screenshot`；写操作另需 `write_enabled` |
+| 工具 | `browser_ext_*` | `desktop_*` + `desktop_job_*` |
 | 默认 | 全关 | 全关 |
 
-**仍不做：** 持久电脑任务、确认流、WebUI 实时画面。
+**仍不做：** WebUI 实时画面与完整控制台体验（阶段 4）。
 
 ## 授权模型
 
-要真的能看到或操作一个窗口，下面每一项都必须成立：
+1. **总开关** `enabled`（默认关）。
+2. **执行器已连接**。
+3. **应用范围**：`allowed_apps` 为空时主人默认可访问全部应用；可再收窄。`denied_apps` 优先。显示名给人看；Bundle ID / `window_id` 做定位。
+4. **读写档位**：列窗口与截图只读；点击/输入/按键须 `write_enabled`。
+5. **机器人开关** `agent_desktop_control_enabled`。
+6. **身份**：仅主人；群成员工具白名单不含这些工具。
+7. **macOS 权限**：Screen Recording（截图）；Accessibility（写操作）。失败返回可解释 `permission_denied`。
 
-1. **总开关**：桌面控制策略里 `enabled` 打开（默认关）。
-2. **执行器已连接**：本机 helper 已与控制面握手。
-3. **应用范围**：`allowed_apps` 为空时，主人默认可访问全部应用窗口；填写后只保留名单内的 Bundle ID 或应用显示名。`denied_apps` 优先于白名单。显示名给人看；内部用 Bundle ID 与 `window_id` 定位。
-4. **读写档位**：列窗口与截图是只读；**点击、输入、按键**须 `write_enabled` 打开，否则返回 `write_disabled`。
-5. **按机器人开关**：`agent_desktop_control_enabled`。默认关闭，逐台打开。
-6. **身份**：这组工具只对主人开放；群成员的工具白名单里没有它们。
-7. **系统权限（macOS）**：
-   - **Screen Recording**：截图必需。
-   - **Accessibility（辅助功能）**：点击、输入、按键必需。未授权时返回可解释的 `permission_denied`，而不是静默失败。
-
-未授权应用的窗口在 `desktop_windows` 结果里**不可见**；对不可见窗口的截图或写操作会返回明确错误。人工接管开启后，**一切指令**（含只读）立即拒绝（`takeover`）。
+人工接管开启后，一切指令立即拒绝（`takeover`）。
 
 ## 工具
 
 | 工具 | 档位 | 说明 |
 | --- | --- | --- |
-| `desktop_windows` | 读 | 列出已授权应用的窗口（显示名、标题、`window_id`、`bundle_id`） |
-| `desktop_screenshot` | 读 | 截取指定窗口；图片经 `ToolResultParts` 回传模型 |
-| `desktop_click` | 写 | 相对窗口左上角坐标点击（`x`/`y`，可选 `button`） |
-| `desktop_type` | 写 | 向窗口输入文字（不要填密码/验证码/支付信息） |
-| `desktop_key` | 写 | 按键或组合键（如 `Return`、`Tab`、`cmd+c`） |
+| `desktop_windows` | 读 | 列出已授权窗口 |
+| `desktop_screenshot` | 读 | 截图；可清掉任务的「须重新观察」标记 |
+| `desktop_click` / `desktop_type` / `desktop_key` | 写 | 须 `write_enabled` |
+| `desktop_job_create` | 任务 | 创建持久任务，返回 `job_id` |
+| `desktop_job_status` | 任务 | 查询或列出 |
+| `desktop_job_pause` / `desktop_job_resume` | 任务 | 暂停 / 恢复（恢复须先截图再写） |
+| `desktop_job_wait_confirm` | 任务 | 进入等待确认 |
+| `desktop_job_confirm` | 任务 | 结束「等待确认」 |
+| `desktop_job_cancel` | 任务 | 取消并停止后续下发（不撤销已发生操作） |
 
-写操作工具在桥接可用时会登记；能否真正执行由 `write_enabled`、应用白名单与接管状态决定。
+所有操作工具可带可选 `job_id` 与 `idempotency_key`：同键已完成步骤不会再次下发。
+
+## 持久任务（阶段 3）
+
+- **状态**：`queued` → `running`；可进入 `paused` / `waiting_confirm`；终态 `succeeded` / `failed` / `cancelled`。
+- **预算**：`max_steps`、`max_duration_ms`；用尽则失败并停止下发。
+- **重启**：非终态任务接回为 `paused` 且 `needs_reobserve`；恢复后必须先 `desktop_screenshot`，再写操作。
+- **不重放**：已 `completed` 的步骤不会再次下发；`idempotency_key` 防止重复提交。
+- **取消**：立即拒绝带该 `job_id` 的后续 Dispatch，并取消在飞等待。
+
+任务记录与策略一并落盘（SQLite）。
 
 ## macOS 执行器
 
-仓库提供参考 helper：[`native/macos/desktopctl-helper.swift`](../native/macos/desktopctl-helper.swift)。编译与权限说明见同目录 `README.md`。
+见 [`native/macos/README.md`](../native/macos/README.md)。单测用假连接与 `MockAdapter`，不依赖显示器或系统权限。
 
-单元测试使用假连接与 `MockAdapter`，**不依赖真实显示器、Screen Recording 或 Accessibility**。CI 无需图形环境。
+## 协议
 
-## 与浏览器控制的协议对照
-
-帧类型同样是 `hello` / `welcome` / `command` / `result` / `takeover` / `ping`，但载荷是窗口而不是标签页。指令包括 `windows.list`、`window.screenshot`、`window.click`、`window.type`、`window.key`。协议预留 `job_id` 与 `observation`，供后续持久任务使用。
+帧：`hello` / `welcome` / `command` / `result` / `takeover` / `ping`。  
+指令：`windows.list`、`window.screenshot`、`window.click`、`window.type`、`window.key`。  
+载荷含 `job_id`、`observation`、`idempotency_key`。
 
 macOS 写入要求目标窗口当前位于前台；helper 在发送前核对窗口和进程，点击坐标必须在窗口内。键盘和鼠标事件发送到目标进程，文本输入期间切换窗口会停止后续输入。
