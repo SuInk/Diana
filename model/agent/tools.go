@@ -168,6 +168,7 @@ func NewDefaultToolRegistry(cfg Config) (*ToolRegistry, error) {
 		registry.RegisterBrowserTools(root, cfg)
 	}
 	registry.RegisterBrowserControlTools(root, cfg)
+	registry.RegisterDesktopTools(root, cfg)
 	return registry, nil
 }
 

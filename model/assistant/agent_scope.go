@@ -429,6 +429,7 @@ func (r *Runtime) agentRegistryConfig(cfg BotConfig, event MessageEvent, owner b
 		BrowserScreenshotRestricted: !owner,
 		BrowserScreenshotHosts:      cfg.AgentBrowserScreenshotAccess.WithDefaults().AllowedHosts,
 		BrowserControl:              r.browserControlFor(cfg),
+		DesktopControl: r.desktopControlFor(cfg),
 		BuiltinBrowser:              r.browserBoxFor(cfg),
 		BrowserToolsDisabled:        r.browserToolsDisabledFor(cfg),
 		BrowserSessionKey:           browserSessionKey(cfg, event),

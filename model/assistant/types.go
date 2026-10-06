@@ -913,6 +913,9 @@ type BotConfig struct {
 	// 就多一处能借到这份登录态的地方，所以逐台显式打开。全局的总开关、站点
 	// 白名单和读写档位另由 WebUI 的浏览器控制页决定，两边都开才真的能用。
 	AgentBrowserControlEnabled bool `json:"agent_browser_control_enabled,omitempty"`
+	// AgentDesktopControlEnabled 允许这台机器人使用桌面控制（desktop_windows / desktop_screenshot）。
+	// 默认关闭：操作的是主人本机窗口画面，只对主人开放，且须另开桌面控制总开关并连接执行器。
+	AgentDesktopControlEnabled bool `json:"agent_desktop_control_enabled,omitempty"`
 	// AgentBrowserBoxDisabled 关掉这台机器人对 Diana 内置常驻浏览器
 	// （model/browserbox）的使用：browser_* 那组 CDP 工具本来会接到它上面，带着
 	// 用户在里面登录过的站点。
@@ -1428,6 +1431,7 @@ type ConfigPayload struct {
 	AgentBrowserScreenshotAccess    *BrowserScreenshotAccess  `json:"agent_browser_screenshot_access,omitempty"`
 	AgentBrowserOperationAccess     *BrowserOperationAccess   `json:"agent_browser_operation_access,omitempty"`
 	AgentBrowserControlEnabled      bool                      `json:"agent_browser_control_enabled,omitempty"`
+	AgentDesktopControlEnabled      bool                      `json:"agent_desktop_control_enabled,omitempty"`
 	AgentBrowserBoxDisabled         bool                      `json:"agent_browser_box_disabled,omitempty"`
 
 	// 微信只回显绑定的是哪个号；token 只在显式索取时回传，保存时永远不从 payload 读。
@@ -2752,6 +2756,7 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		AgentBrowserScreenshotAccess:      &cfg.AgentBrowserScreenshotAccess,
 		AgentBrowserOperationAccess:       &cfg.AgentBrowserOperationAccess,
 		AgentBrowserControlEnabled:        cfg.AgentBrowserControlEnabled,
+		AgentDesktopControlEnabled:        cfg.AgentDesktopControlEnabled,
 		AgentBrowserBoxDisabled:           cfg.AgentBrowserBoxDisabled,
 
 		// 微信只回显绑定的是哪个号，token 只在显式索取时回传。
@@ -2995,6 +3000,7 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		AgentBrowserScreenshotAccess:    screenshotAccess,
 		AgentBrowserOperationAccess:     operationAccess,
 		AgentBrowserControlEnabled:      payload.AgentBrowserControlEnabled,
+		AgentDesktopControlEnabled:      payload.AgentDesktopControlEnabled,
 		AgentBrowserBoxDisabled:         payload.AgentBrowserBoxDisabled,
 	}.WithDefaults()
 	if cfg.OneBotHTTPSecret == "" {
