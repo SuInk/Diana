@@ -20,6 +20,7 @@ import (
 	"github.com/SuInk/diana/model/browserbox"
 	"github.com/SuInk/diana/model/browserctl"
 	"github.com/SuInk/diana/model/browsersource"
+	"github.com/SuInk/diana/model/desktopctl"
 	"github.com/SuInk/diana/model/llm"
 	"github.com/SuInk/diana/model/llmauth"
 	"github.com/SuInk/diana/model/updater"
@@ -48,6 +49,7 @@ const (
 	updateGitHubTokenKey = "system_update_github_token"
 	inboundRecoveryKey   = "bot_inbound_recovery_checkpoint"
 	browserControlKey    = "browser_control"
+	desktopControlKey    = "desktop_control"
 	browserBoxKey        = "browser_box"
 	browserSourceKey     = "browser_source"
 )
@@ -395,6 +397,18 @@ func (s *SQLiteStore) LoadBrowserControl(ctx context.Context) (browserctl.Docume
 // SaveBrowserControl 保存浏览器控制的策略与令牌。令牌只存哈希，见 browserctl.Token。
 func (s *SQLiteStore) SaveBrowserControl(ctx context.Context, doc browserctl.Document) error {
 	return s.saveJSON(ctx, browserControlKey, doc)
+}
+
+// LoadDesktopControl 读取桌面控制的策略与令牌。
+func (s *SQLiteStore) LoadDesktopControl(ctx context.Context) (desktopctl.Document, bool, error) {
+	var doc desktopctl.Document
+	ok, err := s.loadJSON(ctx, desktopControlKey, &doc)
+	return doc, ok, err
+}
+
+// SaveDesktopControl 保存桌面控制的策略与令牌。
+func (s *SQLiteStore) SaveDesktopControl(ctx context.Context, doc desktopctl.Document) error {
+	return s.saveJSON(ctx, desktopControlKey, doc)
 }
 
 // LoadBrowserSource 读取浏览器来源的优先级。
