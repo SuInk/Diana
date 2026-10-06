@@ -4,6 +4,7 @@
 package assistant
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
@@ -26,17 +27,18 @@ const (
 // SearchProvider is shared across robots. Read APIs return only the presence
 // of a key; APIKey and ClearAPIKey are accepted exclusively on writes.
 type SearchProvider struct {
-	ID               string `json:"id"`
-	Name             string `json:"name"`
-	Type             string `json:"type"`
-	URL              string `json:"url"`
-	Tool             string `json:"tool,omitempty"`
-	QueryParam       string `json:"query_param,omitempty"`
-	ResultsParam     string `json:"results_param,omitempty"`
-	Disabled         bool   `json:"disabled,omitempty"`
-	APIKey           string `json:"api_key,omitempty"`
-	APIKeyConfigured bool   `json:"api_key_configured,omitempty"`
-	ClearAPIKey      bool   `json:"clear_api_key,omitempty"`
+	ID               string                  `json:"id"`
+	Name             string                  `json:"name"`
+	Type             string                  `json:"type"`
+	URL              string                  `json:"url"`
+	Tool             string                  `json:"tool,omitempty"`
+	QueryParam       string                  `json:"query_param,omitempty"`
+	ResultsParam     string                  `json:"results_param,omitempty"`
+	Disabled         bool                    `json:"disabled,omitempty"`
+	APIKey           string                  `json:"api_key,omitempty"`
+	APIKeyConfigured bool                    `json:"api_key_configured,omitempty"`
+	ClearAPIKey      bool                    `json:"clear_api_key,omitempty"`
+	HTTPConfig       *agent.HTTPSearchConfig `json:"http_config,omitempty"`
 }
 
 // WebSearchAssignment stores this robot's ordered primary/fallback route.
@@ -187,7 +189,7 @@ func searchProviderCatalog(settings SettingValues) ([]SearchProvider, map[string
 }
 
 func (provider SearchProvider) agentConfig(timeout, results int) agent.WebSearchProviderConfig {
-	return agent.WebSearchProviderConfig{Name: provider.ID, Type: provider.Type, URL: provider.URL, Tool: provider.Tool, QueryParam: provider.QueryParam, ResultsParam: provider.ResultsParam, Disabled: provider.Disabled, TimeoutMS: timeout * 1000, MaxResults: results, NoEnvAPIKey: provider.ID != "tavily"}
+	return agent.WebSearchProviderConfig{Name: provider.ID, Type: provider.Type, URL: provider.URL, Tool: provider.Tool, QueryParam: provider.QueryParam, ResultsParam: provider.ResultsParam, Disabled: provider.Disabled, TimeoutMS: timeout * 1000, MaxResults: results, NoEnvAPIKey: provider.ID != "tavily", HTTPConfig: provider.HTTPConfig}
 }
 
 func defaultSearchProviderIDs(settings SettingValues, providers []SearchProvider) []string {
@@ -287,6 +289,7 @@ func (m *PluginManager) SaveSearchProvider(provider SearchProvider) (string, err
 	}
 	next := normalized.Providers[0]
 	provider.Type, provider.URL, provider.Tool, provider.QueryParam, provider.ResultsParam = next.Type, next.URL, next.Tool, next.QueryParam, next.ResultsParam
+	provider.HTTPConfig = next.HTTPConfig
 	if provider.ClearAPIKey || provider.Type == "browser" {
 		delete(keys, provider.ID)
 	} else if value := strings.TrimSpace(provider.APIKey); value != "" {
@@ -305,6 +308,35 @@ func (m *PluginManager) SaveSearchProvider(provider SearchProvider) (string, err
 	writeSearchProviderState(&state, providers, keys)
 	m.states[webSearchPluginID] = state
 	return provider.ID, nil
+}
+
+func (m *PluginManager) TestSearchProvider(ctx context.Context, provider SearchProvider, query string) agent.SearchProviderTestResult {
+	m.mu.RLock()
+	state, ok := m.states[webSearchPluginID]
+	if !ok {
+		m.mu.RUnlock()
+		return agent.SearchProviderTestResult{Error: "搜索插件不存在"}
+	}
+	_, keys, err := searchProviderCatalog(effectivePluginSettingsForGroup(state.Manifest.Settings, state.Settings, nil))
+	m.mu.RUnlock()
+	if err != nil {
+		return agent.SearchProviderTestResult{Error: err.Error()}
+	}
+	key := strings.TrimSpace(provider.APIKey)
+	if provider.ClearAPIKey {
+		key = ""
+	} else if key == "" {
+		key = keys[provider.ID]
+	}
+	if provider.ID == "" {
+		provider.ID = "draft"
+	}
+	// An explicit clear must not fall back to the canonical Tavily env key.
+	config := provider.agentConfig(30, 3)
+	if provider.ClearAPIKey {
+		config.NoEnvAPIKey = true
+	}
+	return agent.ProbeWebSearchProvider(ctx, config, query, agent.WebSearchToolOptions{APIKeys: map[string]string{provider.ID: key}})
 }
 
 func (m *PluginManager) DeleteSearchProvider(id string) error {

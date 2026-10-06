@@ -8,12 +8,37 @@
 | --- | --- | --- |
 | Exa MCP | 地址、工具名、API Key | 使用 Exa 的 query / numResults 参数；默认公共 MCP 无需密钥 |
 | Tavily API | 地址、API Key | 兼容 Tavily 搜索请求与 results 响应；需要密钥 |
+| 自定义 HTTP API | 完整接口地址、GET/POST、认证、参数名、固定 JSON 参数、结果字段映射 | 接收 JSON 响应，归一化为标题、链接、摘要；无需改成 MCP |
 | 自定义搜索 MCP | 地址、工具名、搜索词参数、结果数量参数、API Key | 使用 HTTP MCP，支持 JSON 或 SSE 响应；数量参数留空时不传 |
 | 浏览器搜索 | 搜索页面地址（可含 `{query}`）、搜索词参数 | 用服务器上的隔离 Chrome / Chromium 读取页面并提取结果链接 |
 
 自定义 MCP 例如工具 `lookup_news` 接收 `search_text` 和 `limit`，就在工具名、搜索词参数、结果数量参数三个字段分别填写这些名称。搜索服务需要鉴权时填写 API Key，MCP 请求携带 Bearer 和 x-api-key；Tavily 请求使用 Bearer。接入地址支持 HTTPS，或 localhost / 127.0.0.1 / ::1 的本机 HTTP 服务，不接受在 URL 用户信息中嵌入凭据。
 
-自定义 API 需要与所选协议兼容；此页面不将任意 JSON 接口自动转换成搜索接口。浏览器方式需要在 Diana 所在服务器安装 Chrome / Chromium，使用一次性隔离配置，不读取个人浏览器登录状态。没有可提取的结果链接、触发验证或渲染失败时，会按顺序尝试后备来源。
+Exa 公共 MCP 和浏览器搜索无需 API Key，Tavily 需要账户密钥并可使用服务商提供的免费额度，具体额度以账户为准。更换为自己的兼容地址时按该服务要求填写凭据，已有免费入口和旧密钥继续沿用。
+
+浏览器方式需要在 Diana 所在服务器安装 Chrome / Chromium，使用一次性隔离配置，不读取个人浏览器登录状态。没有可提取的结果链接、触发验证或渲染失败时，会按顺序尝试后备来源。
+
+## 自定义 HTTP API
+
+新建提供商后选择「自定义 HTTP API」，填写完整搜索接口地址。默认 POST 发送 JSON `{"query":"搜索词","count":5}`，也可选 GET，将同样参数放在 URL 查询字符串中。原地址已有查询参数会保留，搜索词和数量由运行时覆盖。「高级设置」中可以更换参数名，数量参数留空则不传。
+
+认证支持无需认证、`Authorization: Bearer <API Key>` 和自定义密钥请求头（例如 `X-Search-Token: <API Key>`）。要求请求体携带密钥的服务，可在固定 JSON 参数中写 `{"api_key":"{api_key}"}`；真实密钥仍填在 API Key 输入框，不写进普通参数存档。固定参数支持嵌套 JSON，GET 下非字符串值编码为 JSON 字符串。HTTP 接口不会自动跟随重定向，请填写最终接口地址。
+
+默认响应支持以下两种结构，链接自动识别 `url` / `link`，摘要自动识别 `snippet` / `content` / `description`：
+
+```json
+[{"title":"标题","link":"https://example.org/page","snippet":"摘要"}]
+```
+
+```json
+{"results":[{"title":"标题","url":"https://example.org/page","content":"摘要"}]}
+```
+
+其他结构可以映射，例如响应为 `{"data":{"items":[{"page":{"href":"https://example.org/page","name":"标题"},"summaries":["摘要"]}]}}`，填写列表路径 `data.items`、链接字段 `page.href`、标题字段 `page.name`、摘要字段 `summaries.0`。路径只读取字段和数组下标，不执行脚本或 JSONPath 表达式。无效链接会跳过，重复链接去重，结果数量遵守机器人上限；空结果、结构错误、非 JSON、HTTP 错误和超时继续使用后备来源。
+
+## 手动测试
+
+编辑窗口的「测试搜索」读取当前未保存草稿，可沿用已存密钥；勾选清除密钥则测试也不再使用它。测试只执行当前提供商一次，不保存、不更换机器人路由，也不触发后备搜索。结果显示耗时、HTTP 状态（浏览器方式没有该项）、解析后的结果数量和内容。修改草稿后旧测试结果会清除。
 
 ## 路由与兼容
 

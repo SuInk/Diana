@@ -11,6 +11,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/SuInk/diana/model/agent"
 )
 
 func TestSearchProviderMigrationRedactionAndRestart(t *testing.T) {
@@ -154,6 +156,52 @@ func TestRobotSearchRoutingOverridesLegacyPluginAndFallsBack(t *testing.T) {
 	runtime.SetProfiles(ProfileSet{Profiles: []BotConfig{cfg, other}})
 	if runtime.pluginOverridesForEvent(MessageEvent{ProfileID: other.ID, Kind: EventKindPrivate})[webSearchPluginID] {
 		t.Fatal("route leaked to another robot")
+	}
+}
+
+func TestHTTPSearchProviderRestartsWithMappingsAndRobotUsesSavedKey(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		if r.Header.Get("X-Search-Key") != "saved-http-key" || body["q"] != "Diana" || body["limit"] != float64(2) || body["language"] != "zh" {
+			t.Errorf("saved auth or request settings were lost: body=%v", body)
+		}
+		w.Write([]byte(`{"data":{"items":[{"href":"https://example.org/http-source","name":"Saved HTTP source","summary":"Saved mapping works"}]}}`))
+	}))
+	defer server.Close()
+	manager := NewDefaultPluginManager()
+	provider := SearchProvider{Name: "Custom HTTP", Type: "http", URL: server.URL, QueryParam: "q", ResultsParam: "limit", APIKey: "saved-http-key", HTTPConfig: &agent.HTTPSearchConfig{AuthType: "header", AuthHeader: "X-Search-Key", Params: map[string]any{"language": "zh"}, ResultsPath: "data.items", URLPath: "href", TitlePath: "name", SnippetPath: "summary"}}
+	id, err := manager.SaveSearchProvider(provider)
+	if err != nil {
+		t.Fatal(err)
+	}
+	restored := NewDefaultPluginManager()
+	restored.Restore(manager.Snapshot())
+	config, err := restored.SearchConfiguration("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	saved := config.Providers[len(config.Providers)-1]
+	if saved.ID != id || saved.HTTPConfig == nil || saved.HTTPConfig.ResultsPath != "data.items" || !saved.APIKeyConfigured || saved.APIKey != "" {
+		t.Fatalf("restored provider=%#v", saved)
+	}
+	cfg := DefaultBotConfig()
+	cfg.ID = "http-search-bot"
+	cfg.WebSearch = &WebSearchAssignment{ProviderIDs: []string{id}, MaxResults: 2, SourceRecall: boolPointer(false)}
+	runtime := NewRuntime(cfg, nil, restored, nil, nil, nil, nil)
+	_, settings, enabled := runtime.pluginWithSettingsForEvent(webSearchPluginID, MessageEvent{ProfileID: cfg.ID, Kind: EventKindPrivate})
+	if !enabled {
+		t.Fatal("explicit HTTP assignment did not enable search")
+	}
+	tools, err := NewWebSearchPlugin(nil).AgentTools(settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	output, err := tools[0].Run(context.Background(), map[string]any{"query": "Diana"})
+	if err != nil || !strings.Contains(output, "Saved mapping works") || !strings.Contains(output, "example.org/http-source") || strings.Contains(output, "saved-http-key") {
+		t.Fatalf("output=%s err=%v", output, err)
 	}
 }
 

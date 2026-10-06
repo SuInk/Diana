@@ -57,7 +57,7 @@ func (p *WebSearchPlugin) Manifest() PluginManifest {
 	return PluginManifest{
 		ID:          webSearchPluginID,
 		Name:        "联网搜索",
-		Version:     "0.3.4",
+		Version:     "0.3.5",
 		Description: "为对话提供可并行查询的实时网页搜索。来源与凭据在提供商页管理，机器人可选择首选和后备来源。默认用沙盒浏览器打开搜索引擎，返回标题、摘要和链接，由模型选择原文继续调研；也支持显式配置搜索 API。关闭本插件时，只要网页渲染插件开着，仍按搜索引擎方式提供搜索；要彻底不联网搜索，两个都关掉。",
 		Official:    true,
 		BuiltIn:     true,
