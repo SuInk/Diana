@@ -55,13 +55,10 @@ func TestDesktopToolsUnregisteredWithoutBridge(t *testing.T) {
 
 func TestDesktopToolsRegisteredWithBridge(t *testing.T) {
 	names := desktopToolNames(t, Config{WorkDir: t.TempDir(), DesktopControl: &stubDesktopBridge{ready: true}})
-	for _, want := range []string{"desktop_windows", "desktop_screenshot"} {
+	for _, want := range []string{"desktop_windows", "desktop_screenshot", "desktop_click", "desktop_type", "desktop_key"} {
 		if !names[want] {
 			t.Errorf("缺少工具 %s，实际 %v", want, names)
 		}
-	}
-	if names["desktop_click"] || names["desktop_type"] {
-		t.Fatal("阶段 1 不应登记写操作工具")
 	}
 }
 

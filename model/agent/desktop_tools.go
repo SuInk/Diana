@@ -20,7 +20,7 @@ import (
 // DesktopControlBridge 是桌面控制的下发入口，由 model/desktopctl.Hub 实现。
 //
 // 与 BrowserControlBridge / 内置浏览器都是两回事：这边操作的是操作系统窗口，
-// 不碰浏览器扩展，也不走 CDP。阶段 1 只有列窗口与截图。
+// 不碰浏览器扩展，也不走 CDP。阶段 1 只读；阶段 2 在策略打开 write_enabled 后可点击与输入。
 type DesktopControlBridge interface {
 	Ready() bool
 	Dispatch(ctx context.Context, cmd desktopctl.Command) (desktopctl.Result, error)
@@ -174,9 +174,115 @@ func (t *DesktopScreenshotTool) Run(ctx context.Context, input map[string]any) (
 	return string(body), nil
 }
 
-// RegisterDesktopTools 登记桌面控制只读工具。
+// DesktopClickTool 在已授权窗口内点击。
+type DesktopClickTool struct {
+	base desktopControlToolBase
+}
+
+func (t *DesktopClickTool) Name() string { return "desktop_click" }
+
+func (t *DesktopClickTool) Description() string {
+	return `在本机已授权应用窗口内点击。坐标相对窗口左上角，可先 desktop_screenshot 估位置。需要 WriteEnabled 与 macOS Accessibility；接管中会被拒。不要点付款、删除、系统设置等敏感控件，除非主人明确要求。`
+}
+
+func (t *DesktopClickTool) InputSchema() map[string]any {
+	return toolObjectSchema([]string{"x", "y"}, map[string]any{
+		"x":          toolNumberParam("相对窗口左上角的 X（逻辑像素）"),
+		"y":          toolNumberParam("相对窗口左上角的 Y（逻辑像素）"),
+		"button":     toolStringParam("left（默认）/ right / middle"),
+		"window_id":  toolStringParam("窗口 ID，来自 desktop_windows"),
+		"connection": toolStringParam("连着多个桌面执行器时点名"),
+	})
+}
+
+func (t *DesktopClickTool) Run(ctx context.Context, input map[string]any) (string, error) {
+	x, okX := numberFromInput(input, "x")
+	y, okY := numberFromInput(input, "y")
+	if !okX || !okY {
+		return "", errors.New("desktop_click 需要 x 与 y")
+	}
+	result, err := t.base.dispatch(ctx, desktopctl.Command{
+		Op:         desktopctl.OpWindowClick,
+		Connection: stringFromInput(input, "connection"),
+		WindowID:   stringFromInput(input, "window_id"),
+		X:          &x,
+		Y:          &y,
+		Button:     stringFromInput(input, "button"),
+	})
+	if err != nil {
+		return "", err
+	}
+	return desktopJSONOutput(result.Data)
+}
+
+// DesktopTypeTool 向已授权窗口输入文字。
+type DesktopTypeTool struct {
+	base desktopControlToolBase
+}
+
+func (t *DesktopTypeTool) Name() string { return "desktop_type" }
+
+func (t *DesktopTypeTool) Description() string {
+	return `在本机已授权应用窗口里输入文字。需要 WriteEnabled 与 Accessibility。不要输入密码、验证码或支付信息。`
+}
+
+func (t *DesktopTypeTool) InputSchema() map[string]any {
+	return toolObjectSchema([]string{"text"}, map[string]any{
+		"text":       toolStringParam(""),
+		"window_id":  toolStringParam("窗口 ID，来自 desktop_windows"),
+		"connection": toolStringParam("连着多个桌面执行器时点名"),
+	})
+}
+
+func (t *DesktopTypeTool) Run(ctx context.Context, input map[string]any) (string, error) {
+	result, err := t.base.dispatch(ctx, desktopctl.Command{
+		Op:         desktopctl.OpWindowType,
+		Connection: stringFromInput(input, "connection"),
+		WindowID:   stringFromInput(input, "window_id"),
+		Text:       stringFromInput(input, "text"),
+	})
+	if err != nil {
+		return "", err
+	}
+	return desktopJSONOutput(result.Data)
+}
+
+// DesktopKeyTool 向已授权窗口发送按键。
+type DesktopKeyTool struct {
+	base desktopControlToolBase
+}
+
+func (t *DesktopKeyTool) Name() string { return "desktop_key" }
+
+func (t *DesktopKeyTool) Description() string {
+	return `在本机已授权应用窗口里按键或组合键（如 Return、Tab、cmd+c）。需要 WriteEnabled 与 Accessibility。`
+}
+
+func (t *DesktopKeyTool) InputSchema() map[string]any {
+	return toolObjectSchema([]string{"key"}, map[string]any{
+		"key":        toolStringParam("按键名，如 Return、Tab、Escape、cmd+c"),
+		"window_id":  toolStringParam("窗口 ID，来自 desktop_windows"),
+		"connection": toolStringParam("连着多个桌面执行器时点名"),
+	})
+}
+
+func (t *DesktopKeyTool) Run(ctx context.Context, input map[string]any) (string, error) {
+	result, err := t.base.dispatch(ctx, desktopctl.Command{
+		Op:         desktopctl.OpWindowKey,
+		Connection: stringFromInput(input, "connection"),
+		WindowID:   stringFromInput(input, "window_id"),
+		Key:        stringFromInput(input, "key"),
+	})
+	if err != nil {
+		return "", err
+	}
+	return desktopJSONOutput(result.Data)
+}
+
+// RegisterDesktopTools 登记桌面控制工具（只读 + 写操作）。
 //
-// 桥为 nil 时一个都不登记：模型看不到工具。
+// 桥为 nil 时一个都不登记。写操作工具照样登记：能不能用由 desktopctl 的
+// WriteEnabled 与接管状态逐条判断。
 func (r *ToolRegistry) RegisterDesktopTools(root string, cfg Config) {
 	if cfg.DesktopControl == nil {
 		return
@@ -184,4 +290,7 @@ func (r *ToolRegistry) RegisterDesktopTools(root string, cfg Config) {
 	base := desktopControlToolBase{root: root, bridge: cfg.DesktopControl}
 	r.Register(&DesktopWindowsTool{base: base})
 	r.Register(&DesktopScreenshotTool{base: base})
+	r.Register(&DesktopClickTool{base: base})
+	r.Register(&DesktopTypeTool{base: base})
+	r.Register(&DesktopKeyTool{base: base})
 }
