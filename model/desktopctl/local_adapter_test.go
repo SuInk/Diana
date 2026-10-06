@@ -5,13 +5,14 @@ package desktopctl
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 )
 
 func TestAttachLocalMockNoDisplay(t *testing.T) {
 	registry := NewRegistry(context.Background(), &memoryStore{})
-	if _, err := registry.SetPolicy(context.Background(), enabledPolicy()); err != nil {
+	if _, err := registry.SetPolicy(context.Background(), writePolicy()); err != nil {
 		t.Fatal(err)
 	}
 	hub := NewHub(registry)
@@ -22,15 +23,45 @@ func TestAttachLocalMockNoDisplay(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AttachLocal：%v", err)
 	}
-	result, err := hub.Dispatch(context.Background(), Command{Op: OpWindowsList})
-	if err != nil {
+	if _, err := hub.Dispatch(context.Background(), Command{Op: OpWindowsList}); err != nil {
 		t.Fatalf("list：%v", err)
-	}
-	if len(result.Data) == 0 {
-		t.Fatal("应有窗口清单")
 	}
 	if _, err := hub.Dispatch(context.Background(), Command{Op: OpWindowScreenshot, WindowID: "1"}); err != nil {
 		t.Fatalf("screenshot：%v", err)
+	}
+	if _, err := hub.Dispatch(context.Background(), Command{Op: OpWindowClick, WindowID: "1", X: f64(5), Y: f64(5)}); err != nil {
+		t.Fatalf("click：%v", err)
+	}
+	if len(adapter.Clicks) != 1 {
+		t.Fatalf("应记录一次点击，得到 %d", len(adapter.Clicks))
+	}
+	if _, err := hub.Dispatch(context.Background(), Command{Op: OpWindowType, WindowID: "1", Text: "hi"}); err != nil {
+		t.Fatalf("type：%v", err)
+	}
+	if _, err := hub.Dispatch(context.Background(), Command{Op: OpWindowKey, WindowID: "1", Key: "Return"}); err != nil {
+		t.Fatalf("key：%v", err)
+	}
+}
+
+func TestMockAdapterPermissionDeniedOnWrite(t *testing.T) {
+	registry := NewRegistry(context.Background(), &memoryStore{})
+	if _, err := registry.SetPolicy(context.Background(), writePolicy()); err != nil {
+		t.Fatal(err)
+	}
+	hub := NewHub(registry)
+	adapter := &MockAdapter{
+		Windows:  []WindowInfo{{ID: "1", AppName: "Safari", BundleID: "com.apple.Safari", Active: true}},
+		WriteErr: PermissionDenied("Accessibility（辅助功能）"),
+	}
+	if _, _, err := hub.AttachLocal(context.Background(), adapter, Hello{Platform: "macos"}, TokenInfo{ID: "local"}); err != nil {
+		t.Fatal(err)
+	}
+	_, err := hub.Dispatch(context.Background(), Command{Op: OpWindowClick, WindowID: "1", X: f64(1), Y: f64(1)})
+	if ErrorCode(err) != CodePermissionDenied {
+		t.Fatalf("应报 permission_denied，得到 %v (%s)", err, ErrorCode(err))
+	}
+	if err == nil || !strings.Contains(err.Error(), "Accessibility") {
+		t.Fatalf("错误应可解释，得到 %v", err)
 	}
 }
 

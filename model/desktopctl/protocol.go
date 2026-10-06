@@ -9,7 +9,8 @@
 // 与 model/browserctl 是两回事：浏览器控制管的是用户浏览器里的标签页；桌面控制
 // 管的是操作系统窗口。两套白名单、两套工具、互不替代。
 //
-// 阶段 1 只开放只读能力（列窗口、截图）。点击、键盘、持久任务与控制台画面不在本包。
+// 阶段 1：只读（列窗口、截图）。阶段 2：在 WriteEnabled 打开后允许点击与键盘。
+// 持久任务与控制台画面仍不在本包。
 package desktopctl
 
 import (
@@ -33,13 +34,13 @@ const (
 	FrameError    = "error"
 )
 
-// 指令名。阶段 1 只有只读两条；写操作名字预留，KnownOp 认但不由工具挂出。
+// 指令名。只读两条始终可下发（总开关开着时）；写操作须 WriteEnabled。
 const (
 	OpWindowsList      = "windows.list"
 	OpWindowScreenshot = "window.screenshot"
-	// 以下为后续阶段预留，本阶段不下发。
-	OpWindowClick = "window.click"
-	OpWindowType  = "window.type"
+	OpWindowClick      = "window.click"
+	OpWindowType       = "window.type"
+	OpWindowKey        = "window.key"
 )
 
 const (
@@ -67,6 +68,7 @@ var readOnlyOps = map[string]bool{
 var writeOps = map[string]bool{
 	OpWindowClick: true,
 	OpWindowType:  true,
+	OpWindowKey:   true,
 }
 
 // KnownOp 判断指令名是否在协议内。
@@ -145,6 +147,16 @@ type ScreenshotPayload struct {
 	Data     string `json:"data"` // base64 PNG
 	// Observation 预留：后续动作用它判断现场是否过期。
 	Observation int64 `json:"observation,omitempty"`
+}
+
+// ActionResult 是点击/输入/按键的回执摘要。
+type ActionResult struct {
+	WindowID    string `json:"window_id"`
+	AppName     string `json:"app_name,omitempty"`
+	BundleID    string `json:"bundle_id,omitempty"`
+	Op          string `json:"op"`
+	OK          bool   `json:"ok"`
+	Observation int64  `json:"observation,omitempty"`
 }
 
 // ErrProtocol 表示对端发来的帧不符合协议。

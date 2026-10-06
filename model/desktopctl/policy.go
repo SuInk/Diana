@@ -17,7 +17,7 @@ const (
 //
 // Enabled 默认关闭。打开之后，AllowedApps 为空表示允许全部应用（主人默认）；
 // 非空则只允许名单内的 Bundle ID 或应用显示名。DeniedApps 优先于白名单。
-// WriteEnabled 在阶段 1 保持关闭：即使名单放开，点击与输入也不会下发。
+// WriteEnabled 默认关闭；打开后才允许点击、输入与按键。截图与列窗口不依赖它。
 type Policy struct {
 	Enabled           bool     `json:"enabled"`
 	AllowedApps       []string `json:"allowed_apps,omitempty"`

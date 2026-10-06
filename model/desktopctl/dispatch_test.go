@@ -62,6 +62,12 @@ func enabledPolicy() Policy {
 	return Policy{Enabled: true, WriteEnabled: false}.WithDefaults()
 }
 
+func writePolicy() Policy {
+	return Policy{Enabled: true, WriteEnabled: true}.WithDefaults()
+}
+
+func f64(v float64) *float64 { return &v }
+
 func newTestHub(t *testing.T, policy Policy, windows []WindowInfo) (*Hub, *Connection, *fakeConn) {
 	t.Helper()
 	registry := NewRegistry(context.Background(), &memoryStore{})
@@ -76,12 +82,18 @@ func newTestHub(t *testing.T, policy Policy, windows []WindowInfo) (*Hub, *Conne
 	}
 	png := base64.StdEncoding.EncodeToString([]byte("fake-png"))
 	conn.respond = func(frame Frame) *Frame {
-		if frame.Op == OpWindowScreenshot {
+		switch frame.Op {
+		case OpWindowScreenshot:
 			return &Frame{Type: FrameResult, ID: frame.ID, Data: rawJSON(ScreenshotPayload{
 				WindowID: "w1", Mime: "image/png", Data: png,
 			})}
+		case OpWindowClick, OpWindowType, OpWindowKey:
+			return &Frame{Type: FrameResult, ID: frame.ID, Data: rawJSON(ActionResult{
+				WindowID: "w1", Op: frame.Op, OK: true,
+			})}
+		default:
+			return &Frame{Type: FrameResult, ID: frame.ID, Data: rawJSON(map[string]any{"ok": true})}
 		}
-		return &Frame{Type: FrameResult, ID: frame.ID, Data: rawJSON(map[string]any{"ok": true})}
 	}
 	conn.deliver = c.HandleFrame
 	if windows != nil {
@@ -180,10 +192,61 @@ func TestScreenshotSucceedsForAllowedWindow(t *testing.T) {
 	}
 }
 
-func TestWriteOpsBlockedInPhase1(t *testing.T) {
-	hub, _, _ := newTestHub(t, Policy{Enabled: true, WriteEnabled: true}.WithDefaults(), nil)
-	_, err := hub.Dispatch(context.Background(), Command{Op: OpWindowClick})
-	if ErrorCode(err) != CodeUnsupportedOp {
-		t.Fatalf("阶段 1 应拒绝写操作，得到 %v (%s)", err, ErrorCode(err))
+func TestWriteOpsRequireWriteEnabled(t *testing.T) {
+	hub, _, _ := newTestHub(t, enabledPolicy(), []WindowInfo{
+		{ID: "w1", AppName: "Safari", BundleID: "com.apple.Safari", Active: true},
+	})
+	_, err := hub.Dispatch(context.Background(), Command{Op: OpWindowClick, WindowID: "w1", X: f64(10), Y: f64(20)})
+	if ErrorCode(err) != CodeWriteDisabled {
+		t.Fatalf("未开写应拒绝，得到 %v (%s)", err, ErrorCode(err))
+	}
+}
+
+func TestClickTypeKeyWhenWriteEnabled(t *testing.T) {
+	hub, _, _ := newTestHub(t, writePolicy(), []WindowInfo{
+		{ID: "w1", AppName: "Safari", BundleID: "com.apple.Safari", Active: true},
+	})
+	if _, err := hub.Dispatch(context.Background(), Command{Op: OpWindowClick, WindowID: "w1", X: f64(10), Y: f64(20)}); err != nil {
+		t.Fatalf("click：%v", err)
+	}
+	if _, err := hub.Dispatch(context.Background(), Command{Op: OpWindowType, WindowID: "w1", Text: "hello"}); err != nil {
+		t.Fatalf("type：%v", err)
+	}
+	if _, err := hub.Dispatch(context.Background(), Command{Op: OpWindowKey, WindowID: "w1", Key: "Return"}); err != nil {
+		t.Fatalf("key：%v", err)
+	}
+}
+
+func TestWriteDeniedDuringTakeover(t *testing.T) {
+	hub, conn, _ := newTestHub(t, writePolicy(), []WindowInfo{
+		{ID: "w1", AppName: "Safari", BundleID: "com.apple.Safari", Active: true},
+	})
+	conn.SetTakeover(true, "主人接管")
+	_, err := hub.Dispatch(context.Background(), Command{Op: OpWindowClick, WindowID: "w1", X: f64(1), Y: f64(1)})
+	if ErrorCode(err) != CodeTakeover {
+		t.Fatalf("接管时应拒绝写操作，得到 %v (%s)", err, ErrorCode(err))
+	}
+}
+
+func TestClickDeniedForUnauthorizedWindow(t *testing.T) {
+	hub, _, _ := newTestHub(t, Policy{
+		Enabled: true, WriteEnabled: true, AllowedApps: []string{"com.apple.Safari"},
+	}.WithDefaults(), []WindowInfo{
+		{ID: "w1", AppName: "Safari", BundleID: "com.apple.Safari"},
+		{ID: "w2", AppName: "Mail", BundleID: "com.apple.Mail"},
+	})
+	_, err := hub.Dispatch(context.Background(), Command{Op: OpWindowClick, WindowID: "w2", X: f64(1), Y: f64(1)})
+	if ErrorCode(err) != CodeWindowUnknown {
+		t.Fatalf("未授权窗口写操作应拒，得到 %v (%s)", err, ErrorCode(err))
+	}
+}
+
+func TestClickRequiresCoordinates(t *testing.T) {
+	hub, _, _ := newTestHub(t, writePolicy(), []WindowInfo{
+		{ID: "w1", AppName: "Safari", BundleID: "com.apple.Safari", Active: true},
+	})
+	_, err := hub.Dispatch(context.Background(), Command{Op: OpWindowClick, WindowID: "w1"})
+	if ErrorCode(err) != CodeBadRequest {
+		t.Fatalf("缺坐标应 bad_request，得到 %v (%s)", err, ErrorCode(err))
 	}
 }
