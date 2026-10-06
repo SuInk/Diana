@@ -87,17 +87,18 @@ type WebSearchConfig struct {
 }
 
 type WebSearchProviderConfig struct {
-	Name         string `json:"name"`
-	Type         string `json:"type"`
-	URL          string `json:"url"`
-	Tool         string `json:"tool,omitempty"`
-	APIKeyEnv    string `json:"api_key_env,omitempty"`
-	TimeoutMS    int    `json:"timeout_ms,omitempty"`
-	MaxResults   int    `json:"max_results,omitempty"`
-	Disabled     bool   `json:"disabled,omitempty"`
-	QueryParam   string `json:"query_param,omitempty"`
-	ResultsParam string `json:"results_param,omitempty"`
-	NoEnvAPIKey  bool   `json:"no_env_api_key,omitempty"`
+	Name         string            `json:"name"`
+	Type         string            `json:"type"`
+	URL          string            `json:"url"`
+	Tool         string            `json:"tool,omitempty"`
+	APIKeyEnv    string            `json:"api_key_env,omitempty"`
+	TimeoutMS    int               `json:"timeout_ms,omitempty"`
+	MaxResults   int               `json:"max_results,omitempty"`
+	Disabled     bool              `json:"disabled,omitempty"`
+	QueryParam   string            `json:"query_param,omitempty"`
+	ResultsParam string            `json:"results_param,omitempty"`
+	NoEnvAPIKey  bool              `json:"no_env_api_key,omitempty"`
+	HTTPConfig   *HTTPSearchConfig `json:"http_config,omitempty"`
 }
 
 type webSearchConfig = WebSearchConfig
@@ -575,6 +576,16 @@ func normalizeWebSearchProviders(providers []webSearchProviderConfig) ([]webSear
 			if provider.QueryParam == "" {
 				provider.QueryParam = "q"
 			}
+		case "http":
+			if provider.URL == "" {
+				return nil, fmt.Errorf("provider %q requires an HTTP search URL", provider.Name)
+			}
+			if provider.QueryParam == "" {
+				provider.QueryParam = "query"
+			}
+			if err := normalizeHTTPSearchConfig(&provider); err != nil {
+				return nil, fmt.Errorf("provider %q: %w", provider.Name, err)
+			}
 		case "tavily":
 			if provider.URL == "" {
 				provider.URL = "https://api.tavily.com/search"
@@ -606,11 +617,14 @@ func normalizeWebSearchProviders(providers []webSearchProviderConfig) ([]webSear
 		if provider.QueryParam != "" && !webSearchEnvNameRegexp.MatchString(provider.QueryParam) || provider.ResultsParam != "" && !webSearchEnvNameRegexp.MatchString(provider.ResultsParam) {
 			return nil, fmt.Errorf("provider %q has invalid argument names", provider.Name)
 		}
-		if provider.Type == "search_mcp" && provider.ResultsParam != "" && provider.QueryParam == provider.ResultsParam {
+		if (provider.Type == "search_mcp" || provider.Type == "http") && provider.ResultsParam != "" && provider.QueryParam == provider.ResultsParam {
 			return nil, fmt.Errorf("provider %q query and results argument names must differ", provider.Name)
 		}
 		if provider.APIKeyEnv != "" && !webSearchEnvNameRegexp.MatchString(provider.APIKeyEnv) {
 			return nil, fmt.Errorf("provider %q has invalid api_key_env", provider.Name)
+		}
+		if provider.Type != "http" {
+			provider.HTTPConfig = nil
 		}
 		if err := validateWebSearchURL(strings.ReplaceAll(provider.URL, SearchEngineQueryPlaceholder, "q")); err != nil {
 			return nil, fmt.Errorf("provider %q: %w", provider.Name, err)
@@ -659,6 +673,8 @@ func (t *WebSearchTool) runProvider(ctx context.Context, provider webSearchProvi
 		return t.runExaMCP(ctx, provider, query, apiKey)
 	case "tavily":
 		return t.runTavily(ctx, provider, query, apiKey)
+	case "http":
+		return t.runHTTPSearch(ctx, provider, query, apiKey)
 	case WebSearchProviderSearchEngine:
 		return t.runSearchEngine(ctx, provider, query)
 	case "browser":

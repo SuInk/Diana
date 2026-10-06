@@ -463,16 +463,36 @@ export interface WebSearchAssignment {
   reply_link_policy?: "on_request" | "always" | "never";
 }
 
+export interface HTTPSearchConfig {
+  method?: "GET" | "POST";
+  auth_type?: "none" | "bearer" | "header";
+  auth_header?: string;
+  params?: Record<string, unknown>;
+  results_path?: string;
+  url_path?: string;
+  title_path?: string;
+  snippet_path?: string;
+}
+
 export interface SearchProvider {
   id: string;
   name: string;
-  type: "exa_mcp" | "tavily" | "search_mcp" | "browser";
+  type: "exa_mcp" | "tavily" | "search_mcp" | "browser" | "http";
   url: string;
   tool?: string;
   query_param?: string;
   results_param?: string;
   disabled?: boolean;
   api_key_configured?: boolean;
+  http_config?: HTTPSearchConfig;
+}
+
+export interface SearchProviderTestResult {
+  content?: string;
+  duration_ms: number;
+  http_status?: number;
+  result_count: number;
+  error?: string;
 }
 
 export interface SearchConfiguration {
@@ -490,6 +510,10 @@ export function saveSearchProvider(provider: SearchProvider & { api_key?: string
 
 export function deleteSearchProvider(id: string): Promise<SearchConfiguration> {
   return requestJSON<SearchConfiguration>(`/api/assistant/search-providers/${encodeURIComponent(id)}`, { method: "DELETE" });
+}
+
+export function testSearchProvider(provider: SearchProvider & { api_key?: string; clear_api_key?: boolean }, query: string): Promise<SearchProviderTestResult> {
+  return requestJSON<SearchProviderTestResult>("/api/assistant/search-providers/test", { method: "POST", body: JSON.stringify({ provider, query }) });
 }
 
 export interface PluginSettingSpec {

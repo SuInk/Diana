@@ -6549,6 +6549,12 @@ a.nav-action {
 .search-provider-row .row-sub { overflow-wrap: anywhere; }
 .search-provider-icon { display: grid; place-items: center; width: 36px; height: 36px; flex-shrink: 0; border-radius: 10px; color: var(--accent); background: var(--accent-soft); }
 .search-provider-editor { gap: 16px; }
+.search-provider-test { padding-top: 16px; border-top: 1px solid var(--border); }
+.search-provider-test-input { display: flex; gap: 8px; }
+.search-provider-test-input .input { min-width: 0; flex: 1; }
+.search-provider-test-input .btn { flex-shrink: 0; }
+.search-provider-test-result { padding: 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-2); font-size: 13px; }
+.search-provider-test-result pre { margin: 10px 0 0; max-height: 220px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; }
 .search-routing-panel { container-type: inline-size; }
 .search-routing-intro { margin: 12px 0 20px; }
 .search-route-list { margin-top: 20px; display: grid; gap: 12px; }

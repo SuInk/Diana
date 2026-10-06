@@ -94,3 +94,64 @@ func TestSearchProviderAPIDoesNotReportSuccessWhenPersistenceFails(t *testing.T)
 		t.Fatalf("save=%d %s", rec.Code, rec.Body.String())
 	}
 }
+
+func TestSearchProviderDraftTestUsesStoredKeyWithoutSavingAndReturnsHTTPStatus(t *testing.T) {
+	const secret = "stored-search-key"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Search-Token") != secret {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		w.Write([]byte(`{"data":{"items":[{"href":"https://example.org/source","name":"Result","summary":"Found"}]}}`))
+	}))
+	defer server.Close()
+	manager := assistant.NewDefaultPluginManager()
+	id, err := manager.SaveSearchProvider(assistant.SearchProvider{Name: "Stored", Type: "http", URL: server.URL, APIKey: secret})
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, _ := json.Marshal(manager.Snapshot())
+	cfg := assistant.DefaultBotConfig()
+	cfg.Enabled = false
+	runtime := assistant.NewRuntime(cfg, fakeChannel{}, manager, nil, nil, nil, nil)
+	handler := NewBotHandlerWithFactory(context.Background(), runtime, func(assistant.BotConfig) assistant.Channel { return fakeChannel{} })
+	router := botTestRouter(handler)
+	draft := map[string]any{"id": id, "name": "Unsaved edit", "type": "http", "url": server.URL, "http_config": map[string]any{"auth_type": "header", "auth_header": "X-Search-Token", "results_path": "data.items", "url_path": "href", "title_path": "name", "snippet_path": "summary"}}
+	for _, clear := range []bool{false, true} {
+		draft["clear_api_key"] = clear
+		raw, _ := json.Marshal(map[string]any{"provider": draft, "query": "Diana"})
+		req := httptest.NewRequest(http.MethodPost, "/api/assistant/search-providers/test", bytes.NewReader(raw))
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		var result struct {
+			Error       string
+			Content     string
+			ResultCount int `json:"result_count"`
+			HTTPStatus  int `json:"http_status"`
+		}
+		json.Unmarshal(rec.Body.Bytes(), &result)
+		if rec.Code != http.StatusOK || strings.Contains(rec.Body.String(), secret) {
+			t.Fatalf("test=%d %s", rec.Code, rec.Body.String())
+		}
+		if !clear && (result.Error != "" || result.ResultCount != 1 || result.HTTPStatus != 200 || !strings.Contains(result.Content, "Found")) {
+			t.Fatalf("result=%+v", result)
+		}
+		if clear && result.Error == "" {
+			t.Fatal("clear-key draft used stored key")
+		}
+	}
+	after, _ := json.Marshal(manager.Snapshot())
+	if !bytes.Equal(before, after) {
+		t.Fatal("draft test mutated persisted configuration")
+	}
+	// A caller may test without a provider name or saved ID.
+	raw := `{"provider":{"type":"http","url":"` + server.URL + `","http_config":{"auth_type":"none"}},"query":"Diana"}`
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/assistant/search-providers/test", strings.NewReader(raw))
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"http_status":401`) {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}

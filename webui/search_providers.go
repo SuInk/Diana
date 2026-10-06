@@ -49,6 +49,19 @@ func (h *BotHandler) saveSearchProvider(c *gin.Context) {
 	c.JSON(http.StatusOK, config)
 }
 
+func (h *BotHandler) testSearchProvider(c *gin.Context) {
+	var payload struct {
+		Provider assistant.SearchProvider `json:"provider"`
+		Query    string                   `json:"query"`
+	}
+	if err := c.ShouldBindJSON(&payload); err != nil {
+		h.writeError(c, http.StatusBadRequest, "search_provider_test", fmt.Errorf("测试配置格式无效"), "", nil)
+		return
+	}
+	result := h.runtime.Plugins().TestSearchProvider(c.Request.Context(), payload.Provider, payload.Query)
+	c.JSON(http.StatusOK, result)
+}
+
 func (h *BotHandler) deleteSearchProvider(c *gin.Context) {
 	id := c.Param("id")
 	for _, profile := range h.profiles.Profiles().WithDefaults().Profiles {

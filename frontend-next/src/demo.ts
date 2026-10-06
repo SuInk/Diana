@@ -1057,17 +1057,24 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
 
   if (path === '/api/assistant/search-providers') {
     if (method === 'POST') {
-      if (!String(body.name ?? '').trim() || !['exa_mcp', 'tavily', 'search_mcp', 'browser'].includes(String(body.type))) return json({ error: '请填写名称并选择接入协议' }, 400);
+      if (!String(body.name ?? '').trim() || !['exa_mcp', 'tavily', 'search_mcp', 'browser', 'http'].includes(String(body.type))) return json({ error: '请填写名称并选择接入协议' }, 400);
       try { const endpoint = new URL(String(body.url)); if (endpoint.protocol !== 'https:' && !(endpoint.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(endpoint.hostname))) throw new Error(); } catch { return json({ error: '请填写 HTTPS 服务地址或本机 HTTP 地址' }, 400); }
       if (body.type === 'search_mcp' && !String(body.tool ?? '').trim()) return json({ error: '请填写 MCP 搜索工具名' }, 400);
       const id = String(body.id || `search-${Date.now()}`);
-      const provider: SearchProvider = { id, name: String(body.name), type: body.type as SearchProvider['type'], url: String(body.url), tool: String(body.tool ?? ''), query_param: String(body.query_param ?? ''), results_param: String(body.results_param ?? ''), disabled: !!body.disabled };
+      const provider: SearchProvider = { id, name: String(body.name), type: body.type as SearchProvider['type'], url: String(body.url), tool: String(body.tool ?? ''), query_param: String(body.query_param ?? ''), results_param: String(body.results_param ?? ''), disabled: !!body.disabled, http_config: body.type === 'http' ? body.http_config as SearchProvider['http_config'] : undefined };
       if (body.clear_api_key || body.type === 'browser') delete demoSearchKeys[id];
       else if (String(body.api_key ?? '').trim()) demoSearchKeys[id] = String(body.api_key).trim();
       const index = demoSearchProviders.findIndex(item => item.id === id);
       if (index >= 0) demoSearchProviders[index] = provider; else demoSearchProviders.push(provider);
     }
     return json(demoSearchConfiguration());
+  }
+  if (path === '/api/assistant/search-providers/test' && method === 'POST') {
+    const provider = body.provider as SearchProvider & { api_key?: string; clear_api_key?: boolean };
+    if (!provider?.url || !String(body.query ?? '').trim()) return json({ duration_ms: 0, result_count: 0, error: '请填写接入地址和测试搜索词' });
+    const key = provider.clear_api_key ? '' : provider.api_key?.trim() || demoSearchKeys[provider.id];
+    if ((provider.type === 'tavily' || provider.type === 'http' && provider.http_config?.auth_type !== 'none') && !key) return json({ duration_ms: 0, result_count: 0, error: '请填写 API Key' });
+    return json({ duration_ms: 186, http_status: 200, result_count: 1, content: JSON.stringify({ results: [{ title: `演示搜索：${String(body.query)}`, url: 'https://example.org/search-result', snippet: '这是 demo 模式的搜索结果，用于预览测试配置界面。' }] }, null, 2) });
   }
   if (path.startsWith('/api/assistant/search-providers/') && method === 'DELETE') {
     const id = decodeURIComponent(path.split('/').pop()!);
