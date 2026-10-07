@@ -55,7 +55,7 @@ func (r *Runtime) groupLengthNormPrompt(event MessageEvent, cfg BotConfig) strin
 	r.mu.RLock()
 	history := append([]MessageEvent(nil), r.history[sessionKey(event)]...)
 	r.mu.RUnlock()
-	norm, ok := groupMessageNorm(history, firstNonEmpty(strings.TrimSpace(cfg.BotAccount), strings.TrimSpace(event.SelfID)))
+	norm, ok := groupMessageNorm(history, firstNonEmpty(strings.TrimSpace(cfg.BotAccount), strings.TrimSpace(event.SelfID)), cfg.MarkedBotIDs)
 	if !ok {
 		return ""
 	}
@@ -72,12 +72,12 @@ type groupMessageNormStats struct {
 
 // groupMessageNorm 算群友文字消息的中位和九成分位长度（按 5 字取整），以及带换行的
 // 百分比。机器人自己的回复不算——正是它在拉长均值、多出换行；纯图片、纯表情这类
-// 没有文字的消息也不算。
-func groupMessageNorm(history []MessageEvent, botID string) (groupMessageNormStats, bool) {
+// 没有文字的消息也不算。群里别的机器人也不算，学的是真人。
+func groupMessageNorm(history []MessageEvent, botID string, markedBots []string) (groupMessageNormStats, bool) {
 	lengths := make([]int, 0, len(history))
 	newlines := 0
 	for _, event := range history {
-		if assistantHistoryEvent(event, botID) || event.crossGroupContext {
+		if assistantHistoryEvent(event, botID) || event.crossGroupContext || otherBotHistoryEvent(event, markedBots) {
 			continue
 		}
 		text := strings.TrimSpace(historyPlainText(event))
@@ -103,4 +103,19 @@ func groupMessageNorm(history []MessageEvent, botID string) (groupMessageNormSta
 		p90:            round(lengths[len(lengths)*9/10]),
 		newlinePercent: newlines * 100 / len(lengths),
 	}, true
+}
+
+// otherBotHistoryEvent 认出群里别的机器人发的消息：平台标了机器人，或者主人在配置里
+// 标记过。学群友的腔调、长度和收尾时都跳过它们，只照真人学。
+func otherBotHistoryEvent(event MessageEvent, markedBots []string) bool {
+	if event.SenderIsBot {
+		return true
+	}
+	userID := strings.TrimSpace(event.UserID)
+	for _, id := range markedBots {
+		if userID != "" && strings.TrimSpace(id) == userID {
+			return true
+		}
+	}
+	return false
 }

@@ -78,7 +78,7 @@ func TestSelfTailHabitPromptComparesWithPeers(t *testing.T) {
 // 真人自己也爱这么收尾，那是群风格，不算口癖。
 func TestSelfTailHabitFollowsPeerStyle(t *testing.T) {
 	peers := append(repeatText("笑死（逃", 8), repeatText("今天吃什么好呢", 12)...)
-	if _, ok := selfTailHabit(tailHistory(ownParenHeavy, peers), "bot"); ok {
+	if _, ok := selfTailHabit(tailHistory(ownParenHeavy, peers), "bot", nil); ok {
 		t.Fatal("tails the humans also use must not be flagged")
 	}
 }
@@ -86,10 +86,26 @@ func TestSelfTailHabitFollowsPeerStyle(t *testing.T) {
 // 偶尔一两次是调味；真人样本不够也不下结论。
 func TestSelfTailHabitNeedsHabitAndPeers(t *testing.T) {
 	peers := repeatText("今天吃什么好呢", 20)
-	if _, ok := selfTailHabit(tailHistory([]string{"一（逃", "二", "三", "四", "五", "六", "七（"}, peers), "bot"); ok {
+	if _, ok := selfTailHabit(tailHistory([]string{"一（逃", "二", "三", "四", "五", "六", "七（"}, peers), "bot", nil); ok {
 		t.Fatal("occasional tails must not be flagged")
 	}
-	if _, ok := selfTailHabit(tailHistory(ownParenHeavy, peers[:5]), "bot"); ok {
+	if _, ok := selfTailHabit(tailHistory(ownParenHeavy, peers[:5]), "bot", nil); ok {
 		t.Fatal("too few human messages must not produce a verdict")
+	}
+}
+
+// 群里别的机器人不算真人参照：它满屏「（逃」不能把 Diana 的口癖洗成群风格。
+func TestSelfTailHabitSkipsOtherBots(t *testing.T) {
+	history := tailHistory(ownParenHeavy, repeatText("今天吃什么好呢", 20))
+	for i := 0; i < 10; i++ {
+		other := peerText("笑死（逃")
+		other.UserID = "200"
+		history = append([]MessageEvent{other}, history...)
+	}
+	if _, ok := selfTailHabit(history, "bot", nil); ok {
+		t.Fatal("unmarked: the other bot counts as a peer and its tails cover Diana's habit")
+	}
+	if _, ok := selfTailHabit(history, "bot", []string{"200"}); !ok {
+		t.Fatal("a marked bot must not count as a human reference")
 	}
 }

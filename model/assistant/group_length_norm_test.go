@@ -17,11 +17,11 @@ func TestGroupMessageNormIgnoresBotAndEmptyMessages(t *testing.T) {
 		history = append(history, MessageEvent{Kind: EventKindGroup, UserID: "bot", Segments: []MessageSegment{{Type: "text", Data: map[string]string{"text": strings.Repeat("长", 300)}}}})
 	}
 	history = append(history, MessageEvent{Kind: EventKindGroup, UserID: "101", Segments: []MessageSegment{{Type: "image", Data: map[string]string{"url": "x"}}}})
-	norm, ok := groupMessageNorm(history, "bot")
+	norm, ok := groupMessageNorm(history, "bot", nil)
 	if !ok || norm.median != 20 || norm.p90 != 30 || norm.newlinePercent != 0 {
 		t.Fatalf("norm=%+v ok=%v, want 20/30 and no newlines from the 20 human messages only", norm, ok)
 	}
-	if _, ok := groupMessageNorm(history[:10], "bot"); ok {
+	if _, ok := groupMessageNorm(history[:10], "bot", nil); ok {
 		t.Fatal("too few human messages must not produce a length norm")
 	}
 }
