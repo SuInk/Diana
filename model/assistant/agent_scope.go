@@ -13,6 +13,7 @@ import (
 
 	"github.com/SuInk/diana/model/agent"
 	"github.com/SuInk/diana/model/applog"
+	"github.com/SuInk/diana/model/browserbox"
 )
 
 const agentScopeContextRadius = 1
@@ -49,6 +50,21 @@ func (r *Runtime) newAgentRegistry(ctx context.Context, cfg BotConfig, event Mes
 	if err != nil {
 		return nil, err
 	}
+	var personal *browserbox.UserBrowserSession
+	if !relationship.Owner && !agentCfg.BrowserOperationDisabled && !cfg.agentSafeMode() {
+		personal = r.personalBrowserFor(cfg, event, agentCfg.BrowserOperationHosts)
+		agentCfg.PersonalBrowser = personal
+		agentCfg.BuiltinBrowser = nil
+		agentCfg.BrowserControl = nil
+		agentCfg.BrowserCDPURL = ""
+		agentCfg.BrowserToolsDisabled = false
+	}
+	transferred := false
+	defer func() {
+		if personal != nil && !transferred {
+			_ = personal.Close()
+		}
+	}()
 	var registry *agent.ToolRegistry
 	if base != nil {
 		registry, err = base.NewView(agentCfg)
@@ -88,7 +104,18 @@ func (r *Runtime) newAgentRegistry(ctx context.Context, cfg BotConfig, event Mes
 	for _, tool := range extraTools {
 		registry.Register(tool)
 	}
+	if agentCfg.BrowserScreenshotDisabled {
+		registry.Remove("browser_screenshot")
+	}
 	allowed := r.allowedAgentToolNamesForEvent(event, relationship)
+	if allowed != nil && !agentCfg.BrowserScreenshotDisabled {
+		allowed["browser_screenshot"] = true
+	}
+	if allowed != nil && personal != nil {
+		for _, name := range []string{"browser_open", "browser_text", "browser_click", "browser_type", "browser_tabs"} {
+			allowed[name] = true
+		}
+	}
 	memberExtensions := []string{}
 	if allowed != nil && (base != nil || len(localSkills) > 0) {
 		candidates := extensionIDsOf(base)
@@ -123,6 +150,11 @@ func (r *Runtime) newAgentRegistry(ctx context.Context, cfg BotConfig, event Mes
 	registry.ApplyExtensionOverrides(mergeExtensionOverrides(overrides, groupExtensionOverrides(groupAccess)))
 	// 安全模式放在所有身份和扩展开关之后：它对主人同样生效，不能被前面任何一道放行盖掉。
 	applyAgentSafeMode(cfg, registry)
+	r.wrapScreenshotTools(registry, event)
+	if personal != nil {
+		registry.RegisterCloser(personal)
+		transferred = true
+	}
 	return registry, nil
 }
 
@@ -369,7 +401,7 @@ func (r *Runtime) allowedAgentToolNamesForEvent(event MessageEvent, relationship
 	return allowed
 }
 
-func (r *Runtime) agentRegistryConfig(cfg BotConfig, event MessageEvent, extensionManagement bool) agent.Config {
+func (r *Runtime) agentRegistryConfig(cfg BotConfig, event MessageEvent, owner bool) agent.Config {
 	// Skills 目录和 MCP 配置路径由 GlobalExtensionPaths 在首次使用时固定下来，
 	// 机器人之间不会因为各自填得不同而切到另一套扩展。
 	// 安全模式在最后收窄：它要盖过主人放宽的那些项（扩展管理跟着主人身份打开）。
@@ -378,7 +410,7 @@ func (r *Runtime) agentRegistryConfig(cfg BotConfig, event MessageEvent, extensi
 		MaxSteps:            cfg.AgentMaxSteps,
 		SkillRoots:          cfg.AgentSkillRoots,
 		MCPConfigPath:       cfg.AgentMCPConfigPath,
-		ExtensionManagement: extensionManagement,
+		ExtensionManagement: owner,
 		BuiltinExtensions:   r.agentBuiltinExtensions(event),
 		BuiltinSkills:       r.botProtocolBuiltinSkills(event),
 		ReservedSkillNames:  []string{"platform", "bot-protocol"},
@@ -386,19 +418,24 @@ func (r *Runtime) agentRegistryConfig(cfg BotConfig, event MessageEvent, extensi
 		CommandTimeoutMS:    cfg.AgentCommandTimeoutMS,
 		// 这两项以前在 agent.Config 里存在但没人赋值，于是永远是 auto，
 		// require 模式接不上。现在由机器人配置说了算。
-		CommandSandbox:             cfg.AgentCommandSandbox,
-		CommandSandboxAllowNetwork: cfg.AgentCommandSandboxAllowNetwork,
-		FileWriteEnabled:           cfg.AgentFileWriteEnabled,
-		BrowserCDPURL:              cfg.AgentBrowserCDPURL,
-		BrowserTimeoutMS:           cfg.AgentBrowserTimeoutMS,
-		BrowserControl:             r.browserControlFor(cfg),
-		BuiltinBrowser:             r.browserBoxFor(cfg),
-		BrowserToolsDisabled:       r.browserToolsDisabledFor(cfg),
-		BrowserSessionKey:          browserSessionKey(cfg, event),
+		CommandSandbox:              cfg.AgentCommandSandbox,
+		CommandSandboxAllowNetwork:  cfg.AgentCommandSandboxAllowNetwork,
+		FileWriteEnabled:            cfg.AgentFileWriteEnabled,
+		BrowserCDPURL:               cfg.AgentBrowserCDPURL,
+		BrowserTimeoutMS:            cfg.AgentBrowserTimeoutMS,
+		BrowserScreenshotDisabled:   !cfg.AgentBrowserScreenshotAccess.AllowsBrowserEvent(cfg.AgentBrowserOperationAccess, owner, event),
+		BrowserOperationDisabled:    !cfg.AgentBrowserOperationAccess.AllowsEvent(owner, event),
+		BrowserOperationHosts:       cfg.AgentBrowserOperationAccess.WithDefaults().AllowedHosts,
+		BrowserScreenshotRestricted: !owner,
+		BrowserScreenshotHosts:      cfg.AgentBrowserScreenshotAccess.WithDefaults().AllowedHosts,
+		BrowserControl:              r.browserControlFor(cfg),
+		BuiltinBrowser:              r.browserBoxFor(cfg),
+		BrowserToolsDisabled:        r.browserToolsDisabledFor(cfg),
+		BrowserSessionKey:           browserSessionKey(cfg, event),
 		// 长期保存区按机器人分目录，索引里记下是谁让存的。
 		WorkspaceBotID:   firstNonEmpty(event.ProfileID, cfg.ID),
 		WorkspaceActorID: event.UserID,
-	}, extensionManagement))
+	}, owner))
 }
 
 // browserSessionKey 让同一个对话前后几轮接着用同一个标签页，不同的群、不同的私聊各用

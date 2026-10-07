@@ -222,6 +222,7 @@ func (r *Runtime) newReplyAgentRegistry(ctx context.Context, cfg BotConfig, even
 		// filesystem, shell, browser, skills, or MCP surface behind AgentEnabled.
 		agentRegistry = agent.NewToolRegistry(pluginTools...)
 		agentRegistry.Retain(r.allowedAgentToolNamesForEvent(event, relationship))
+		r.wrapScreenshotTools(agentRegistry, event)
 	}
 	attachCapabilityRegistry(pluginTools, agentRegistry)
 	return agentRegistry, nil

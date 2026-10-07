@@ -423,19 +423,29 @@ func (r *ToolRegistry) RegisterBrowserTools(root string, cfg Config) {
 		maxChars: cfg.MaxToolOutputChars,
 		session:  browserTabs.session(cfg.BrowserSessionKey),
 		tabs:     browserTabs,
+		personal: cfg.PersonalBrowser, allowedHosts: cfg.BrowserOperationHosts,
 	}
-	r.Register(&BrowserOpenTool{base: base})
-	r.Register(&BrowserTextTool{base: base})
-	r.Register(&BrowserClickTool{base: base})
-	r.Register(&BrowserTypeTool{base: base})
-	r.Register(&BrowserScreenshotTool{base: base})
-	r.Register(&BrowserTabsTool{base: base})
-	r.Register(&BrowserScrollTool{base: base})
-	r.Register(&BrowserPressKeyTool{base: base})
-	r.Register(&BrowserNavigateTool{base: base})
-	r.Register(&BrowserSelectTool{base: base})
-	r.Register(&BrowserWaitTool{base: base})
-	r.Register(&BrowserEvalTool{base: base})
+	if !cfg.BrowserOperationDisabled {
+		r.Register(&BrowserOpenTool{base: base})
+		r.Register(&BrowserTextTool{base: base})
+		r.Register(&BrowserClickTool{base: base})
+		r.Register(&BrowserTypeTool{base: base})
+		if cfg.PersonalBrowser != nil {
+			r.Register(&PersonalBrowserTabsTool{base: base})
+		} else {
+			r.Register(&BrowserTabsTool{base: base})
+			r.Register(&BrowserScrollTool{base: base})
+			r.Register(&BrowserPressKeyTool{base: base})
+			r.Register(&BrowserNavigateTool{base: base})
+			r.Register(&BrowserSelectTool{base: base})
+			r.Register(&BrowserWaitTool{base: base})
+			r.Register(&BrowserEvalTool{base: base})
+		}
+	}
+	if !cfg.BrowserScreenshotDisabled {
+		r.Register(&BrowserScreenshotTool{base: base, restricted: cfg.BrowserScreenshotRestricted, allowedHosts: cfg.BrowserScreenshotHosts, protected: agentProtectedFiles(cfg)})
+	}
+
 }
 
 // InteractiveBrowserToolNames 是 RegisterBrowserTools 登记的全部工具，WebUI 和提示词

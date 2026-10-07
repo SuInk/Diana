@@ -744,6 +744,7 @@ func main() {
 	browserBoxHandler.SetLogStore(sqliteStore)
 	browserBoxHandler.Register(router)
 	botRuntime.SetBrowserBox(browserBoxManager)
+	botRuntime.SetUserBrowsers(browserbox.NewUserSessionPool(dataDir, func() string { return browserBoxManager.Settings().Executable }))
 	defer browserBoxManager.Stop()
 	// 浏览器来源：Diana 内置和用户自己的 Chrome 各自开关，按优先级每一轮取第一个用得上的。
 	browserSourceHandler := webui.NewBrowserSourceHandler(ctx, browserBoxManager, browserControlRegistry, browserControlHub, sqliteStore)

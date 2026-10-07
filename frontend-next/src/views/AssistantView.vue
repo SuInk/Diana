@@ -4753,6 +4753,9 @@ async function save(): Promise<void> {
     }
     const payload: BotProfileConfig = {
       ...current,
+      // 截图权限在交互式浏览器页管理，编辑其他配置时不能覆盖那里新保存的授权。
+      agent_browser_screenshot_access: creating.value ? current.agent_browser_screenshot_access : undefined,
+      agent_browser_operation_access: creating.value ? current.agent_browser_operation_access : undefined,
       forward_reply_threshold: Number(current.forward_reply_threshold) || 0,
       // 数字框清空后 v-model.number 给的是空串，后端按整数解析会整份拒收。
       model_call_quota: Math.max(0, Math.round(Number(current.model_call_quota) || 0)),

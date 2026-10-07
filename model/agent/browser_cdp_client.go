@@ -22,8 +22,9 @@ import (
 // Runtime.terminateExecution 都补不上；而新连上来的会话挂不到卡住的渲染进程上，
 // 只有这条在页面卡住之前就挂好的会话能把死循环打断。
 type cdpClient struct {
-	conn   *websocket.Conn
-	nextID atomic.Int64
+	conn               *websocket.Conn
+	nextID             atomic.Int64
+	navigationObserved atomic.Bool
 	// timeout 是浏览器超时（agent_browser_timeout_ms），也是单次调用默认最多等多久：
 	// 页面主线程被脚本卡死或者渲染进程崩了，Runtime.evaluate 永远不回，不设上限就
 	// 一直耗到 Runner 的工具总超时。
@@ -113,6 +114,10 @@ func (c *cdpClient) readLoop() {
 		}
 		if json.Unmarshal(data, &msg) != nil {
 			continue
+		}
+		switch msg.Method {
+		case "Page.frameNavigated", "Page.frameStartedNavigating", "Page.navigatedWithinDocument", "Page.frameAttached", "Page.frameDetached":
+			c.navigationObserved.Store(true)
 		}
 		if msg.ID != 0 {
 			response := cdpResponse{result: msg.Result}

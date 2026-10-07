@@ -170,7 +170,7 @@ func (b *SandboxedHeadlessBrowser) Render(ctx context.Context, rawURL string) (R
 
 // renderBrowser 先排队拿一次性浏览器的名额，再起进程。排队的时间不算进渲染超时：
 // 渲染的期限在拿到名额之后按原来剩下的时长顺延，没排队时和以前完全一样。
-func (b *SandboxedHeadlessBrowser) renderBrowser(queueCtx, ctx context.Context, rawURL string) (RenderedPage, error) {
+func (b *SandboxedHeadlessBrowser) renderBrowser(queueCtx, ctx context.Context, rawURL string, screenshot ...*[]byte) (RenderedPage, error) {
 	executable, err := findHeadlessBrowserExecutable(b.cfg.Executable)
 	if err != nil {
 		return RenderedPage{}, err
@@ -193,7 +193,7 @@ func (b *SandboxedHeadlessBrowser) renderBrowser(queueCtx, ctx context.Context, 
 	}
 	defer dirs.remove()
 
-	return b.renderObservable(ctx, executable, dirs.root, dirs.profile, dirs.cache, dirs.crash, rawURL)
+	return b.renderObservable(ctx, executable, dirs.root, dirs.profile, dirs.cache, dirs.crash, rawURL, screenshot...)
 }
 
 // renderDisplay 是一次性有头浏览器共用的那块屏：有图形会话就用现成的，Linux 容器里

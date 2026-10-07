@@ -101,10 +101,11 @@ type Manager struct {
 	store   Store
 	dataDir string
 
-	mu       sync.RWMutex
-	settings Settings
-	bots     map[string]*instance
-	watchers map[chan struct{}]struct{}
+	mu        sync.RWMutex
+	settings  Settings
+	bots      map[string]*instance
+	watchers  map[chan struct{}]struct{}
+	extraArgs []string
 	// saved 表示配置落过盘。没落过盘的才轮得到 EnableByDefault 按本机条件自动打开。
 	saved bool
 
@@ -836,6 +837,7 @@ func (m *Manager) launch(ctx context.Context, inst *instance, settings Settings,
 	}()
 	args := agent.PersistentBrowserArgs(profileDir, cacheDir, crashDir,
 		!settings.Headful, 0, settings.WindowWidth, settings.WindowHeight)
+	args = append(args, m.extraArgs...)
 	cmd := procgroup.Isolate(exec.Command(executable, args...))
 	cmd.Dir = dir
 	// TMPDIR 不能跟着 dir 走：Chrome 在 TMPDIR 下建单实例用的 Unix 套接字，路径上限

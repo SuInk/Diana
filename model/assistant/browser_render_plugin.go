@@ -37,7 +37,7 @@ func (p *SandboxedBrowserRenderPlugin) Manifest() PluginManifest {
 	return PluginManifest{
 		ID:          sandboxedBrowserPluginID,
 		Name:        "网页渲染",
-		Version:     "0.3.3",
+		Version:     "0.3.4",
 		Description: "使用 Chromium / Google Chrome，在一次性隔离配置中执行 JavaScript。默认有头运行但窗口看不见，不容易被网站当成机器人拦掉；缺少浏览器时可在依赖管理中安装。",
 		Official:    true,
 		BuiltIn:     true,
@@ -109,7 +109,12 @@ func (p *SandboxedBrowserRenderPlugin) Handle(ctx context.Context, req PluginReq
 
 // AgentTools exposes the same renderer to the Agent only while this plugin is enabled.
 func (p *SandboxedBrowserRenderPlugin) AgentTools(settings SettingValues) ([]agent.Tool, error) {
-	return []agent.Tool{agent.NewBrowserRenderTool(p.rendererFor(settings))}, nil
+	renderer := p.rendererFor(settings)
+	tools := []agent.Tool{agent.NewBrowserRenderTool(renderer)}
+	if browser, ok := renderer.(agent.PageScreenshotter); ok {
+		tools = append(tools, agent.NewWebpageScreenshotTool(browser))
+	}
+	return tools, nil
 }
 
 func extractBrowserRenderURLs(req PluginRequest) []string {

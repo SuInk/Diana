@@ -147,16 +147,18 @@ type dianaAgentConfigSnapshot struct {
 	Enabled bool `json:"enabled"`
 	// Mode 是 standard 或 safe；safe 时 SafeModeDisabled 列出被关掉的工具和操作，
 	// 模型回答「你现在能不能跑命令」时照这里说，不凭印象。
-	Mode             string   `json:"mode,omitempty"`
-	SafeModeDisabled []string `json:"safe_mode_disabled,omitempty"`
-	WorkDir          string   `json:"work_dir,omitempty"`
-	MaxSteps         int      `json:"max_steps"`
-	SkillRoots       []string `json:"skill_roots,omitempty"`
-	MCPConfigPath    string   `json:"mcp_config_path,omitempty"`
-	CommandAllowlist []string `json:"command_allowlist,omitempty"`
-	CommandTimeoutMS int      `json:"command_timeout_ms"`
-	BrowserCDPURL    string   `json:"browser_cdp_url,omitempty"`
-	BrowserTimeoutMS int      `json:"browser_timeout_ms"`
+	Mode                    string                  `json:"mode,omitempty"`
+	SafeModeDisabled        []string                `json:"safe_mode_disabled,omitempty"`
+	WorkDir                 string                  `json:"work_dir,omitempty"`
+	MaxSteps                int                     `json:"max_steps"`
+	SkillRoots              []string                `json:"skill_roots,omitempty"`
+	MCPConfigPath           string                  `json:"mcp_config_path,omitempty"`
+	CommandAllowlist        []string                `json:"command_allowlist,omitempty"`
+	CommandTimeoutMS        int                     `json:"command_timeout_ms"`
+	BrowserCDPURL           string                  `json:"browser_cdp_url,omitempty"`
+	BrowserTimeoutMS        int                     `json:"browser_timeout_ms"`
+	BrowserScreenshotAccess BrowserScreenshotAccess `json:"browser_screenshot_access"`
+	BrowserOperationAccess  BrowserOperationAccess  `json:"browser_operation_access"`
 }
 
 type dianaLLMSnapshot struct {
@@ -389,17 +391,19 @@ func dianaBotConfigFromConfig(cfg BotConfig) dianaBotConfigSnapshot {
 		MaxBotConcurrency:               cfg.MaxBotConcurrency,
 		RequestTimeoutMS:                cfg.RequestTimeout.Milliseconds(),
 		Agent: dianaAgentConfigSnapshot{
-			Enabled:          cfg.AgentEnabled,
-			Mode:             cfg.effectiveAgentMode(),
-			SafeModeDisabled: agentSafeModeDisabledList(cfg),
-			WorkDir:          AgentWorkspaceDir(),
-			MaxSteps:         cfg.AgentMaxSteps,
-			SkillRoots:       append([]string(nil), cfg.AgentSkillRoots...),
-			MCPConfigPath:    cfg.AgentMCPConfigPath,
-			CommandAllowlist: append([]string(nil), cfg.AgentCommandAllowlist...),
-			CommandTimeoutMS: cfg.AgentCommandTimeoutMS,
-			BrowserCDPURL:    secretmask.URLs(cfg.AgentBrowserCDPURL),
-			BrowserTimeoutMS: cfg.AgentBrowserTimeoutMS,
+			Enabled:                 cfg.AgentEnabled,
+			Mode:                    cfg.effectiveAgentMode(),
+			SafeModeDisabled:        agentSafeModeDisabledList(cfg),
+			WorkDir:                 AgentWorkspaceDir(),
+			MaxSteps:                cfg.AgentMaxSteps,
+			SkillRoots:              append([]string(nil), cfg.AgentSkillRoots...),
+			MCPConfigPath:           cfg.AgentMCPConfigPath,
+			CommandAllowlist:        append([]string(nil), cfg.AgentCommandAllowlist...),
+			CommandTimeoutMS:        cfg.AgentCommandTimeoutMS,
+			BrowserCDPURL:           secretmask.URLs(cfg.AgentBrowserCDPURL),
+			BrowserTimeoutMS:        cfg.AgentBrowserTimeoutMS,
+			BrowserScreenshotAccess: cfg.AgentBrowserScreenshotAccess.WithDefaults(),
+			BrowserOperationAccess:  cfg.AgentBrowserOperationAccess.WithDefaults(),
 		},
 	}
 }

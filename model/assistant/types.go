@@ -896,9 +896,11 @@ type BotConfig struct {
 	// AgentFileWriteEnabled 打开 write_file / edit_file / save_to_workspace 和
 	// manage_files 的写操作，默认关闭。
 	// 读和写是两档权限：读错文件浪费一次调用，写错文件改的是磁盘。
-	AgentFileWriteEnabled bool   `json:"agent_file_write_enabled,omitempty"`
-	AgentBrowserCDPURL    string `json:"agent_browser_cdp_url,omitempty"`
-	AgentBrowserTimeoutMS int    `json:"agent_browser_timeout_ms,omitempty"`
+	AgentFileWriteEnabled        bool                    `json:"agent_file_write_enabled,omitempty"`
+	AgentBrowserCDPURL           string                  `json:"agent_browser_cdp_url,omitempty"`
+	AgentBrowserTimeoutMS        int                     `json:"agent_browser_timeout_ms,omitempty"`
+	AgentBrowserScreenshotAccess BrowserScreenshotAccess `json:"agent_browser_screenshot_access,omitempty"`
+	AgentBrowserOperationAccess  BrowserOperationAccess  `json:"agent_browser_operation_access,omitempty"`
 	// AgentBrowserControlEnabled 允许这台机器人使用浏览器控制扩展（browser_ext_*）。
 	// 默认关闭：那组工具操作的是用户日常浏览器里的登录态，多一台机器人能用
 	// 就多一处能借到这份登录态的地方，所以逐台显式打开。全局的总开关、站点
@@ -1416,6 +1418,8 @@ type ConfigPayload struct {
 	AgentFileWriteEnabled           bool                      `json:"agent_file_write_enabled,omitempty"`
 	AgentBrowserCDPURL              string                    `json:"agent_browser_cdp_url,omitempty"`
 	AgentBrowserTimeoutMS           int                       `json:"agent_browser_timeout_ms,omitempty"`
+	AgentBrowserScreenshotAccess    *BrowserScreenshotAccess  `json:"agent_browser_screenshot_access,omitempty"`
+	AgentBrowserOperationAccess     *BrowserOperationAccess   `json:"agent_browser_operation_access,omitempty"`
 	AgentBrowserControlEnabled      bool                      `json:"agent_browser_control_enabled,omitempty"`
 	AgentBrowserBoxDisabled         bool                      `json:"agent_browser_box_disabled,omitempty"`
 
@@ -1873,7 +1877,7 @@ func (s ProfileSet) WithProfileEnabled(id string, enabled bool) (ProfileSet, boo
 // 单独开一条路而不是让界面回存整份配置：交互式浏览器的入口在扩展页，那一页没有、
 // 也不该有整份机器人配置。把整份配置读出来改一个字段再存回去，等于让这一页替所有
 // 别的字段负责——凭据、平台连接、人设，任何一处读回来是脱敏值就会被写坏。
-func (s ProfileSet) WithAgentBrowser(id, cdpURL string, timeoutMS int) (ProfileSet, bool) {
+func (s ProfileSet) WithAgentBrowser(id, cdpURL string, timeoutMS int, screenshotAccess ...BrowserScreenshotAccess) (ProfileSet, bool) {
 	id = strings.TrimSpace(id)
 	profiles := make([]BotConfig, len(s.Profiles))
 	copy(profiles, s.Profiles)
@@ -1883,9 +1887,24 @@ func (s ProfileSet) WithAgentBrowser(id, cdpURL string, timeoutMS int) (ProfileS
 		}
 		profiles[i].AgentBrowserCDPURL = strings.TrimSpace(cdpURL)
 		profiles[i].AgentBrowserTimeoutMS = timeoutMS
+		if len(screenshotAccess) > 0 {
+			profiles[i].AgentBrowserScreenshotAccess = screenshotAccess[0].WithDefaults()
+		}
 		s.Profiles = profiles
 		// WithDefaults 会把空地址和越界超时补回默认值，省得界面自己复述一遍规则。
 		return s.WithDefaults(), true
+	}
+	return s, false
+}
+
+func (s ProfileSet) WithBrowserOperationAccess(id string, access BrowserOperationAccess) (ProfileSet, bool) {
+	profiles := append([]BotConfig(nil), s.Profiles...)
+	for i := range profiles {
+		if strings.TrimSpace(profiles[i].ID) == strings.TrimSpace(id) {
+			profiles[i].AgentBrowserOperationAccess = access.WithDefaults()
+			s.Profiles = profiles
+			return s.WithDefaults(), true
+		}
 	}
 	return s, false
 }
@@ -2359,6 +2378,8 @@ func (cfg BotConfig) WithDefaults() BotConfig {
 	}
 	// 未知值按 auto 处理而不是静默关掉：配置写错不该变成「沙盒没了」。
 	cfg.AgentCommandSandbox = agent.NormalizeCommandSandboxMode(cfg.AgentCommandSandbox)
+	cfg.AgentBrowserScreenshotAccess = cfg.AgentBrowserScreenshotAccess.WithDefaults()
+	cfg.AgentBrowserOperationAccess = cfg.AgentBrowserOperationAccess.WithDefaults()
 	if cfg.AgentBrowserTimeoutMS <= 0 {
 		cfg.AgentBrowserTimeoutMS = defaults.AgentBrowserTimeoutMS
 	}
@@ -2719,6 +2740,8 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		AgentFileWriteEnabled:             cfg.AgentFileWriteEnabled,
 		AgentBrowserCDPURL:                cfg.AgentBrowserCDPURL,
 		AgentBrowserTimeoutMS:             cfg.AgentBrowserTimeoutMS,
+		AgentBrowserScreenshotAccess:      &cfg.AgentBrowserScreenshotAccess,
+		AgentBrowserOperationAccess:       &cfg.AgentBrowserOperationAccess,
 		AgentBrowserControlEnabled:        cfg.AgentBrowserControlEnabled,
 		AgentBrowserBoxDisabled:           cfg.AgentBrowserBoxDisabled,
 
@@ -2790,6 +2813,14 @@ func payloadFromProfileSet(set ProfileSet, focusID string, convert func(BotConfi
 
 // ConfigFromPayload 把前端 payload 合并旧密钥后转为内部配置。
 func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
+	operationAccess := existing.AgentBrowserOperationAccess.WithDefaults()
+	if payload.AgentBrowserOperationAccess != nil {
+		operationAccess = payload.AgentBrowserOperationAccess.WithDefaults()
+	}
+	screenshotAccess := existing.AgentBrowserScreenshotAccess.WithDefaults()
+	if payload.AgentBrowserScreenshotAccess != nil {
+		screenshotAccess = payload.AgentBrowserScreenshotAccess.WithDefaults()
+	}
 	cfg := BotConfig{
 		ConnectionProfileID:         strings.TrimSpace(payload.ConnectionProfileID),
 		ID:                          strings.TrimSpace(payload.ID),
@@ -2950,6 +2981,8 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		AgentFileWriteEnabled:           payload.AgentFileWriteEnabled,
 		AgentBrowserCDPURL:              payload.AgentBrowserCDPURL,
 		AgentBrowserTimeoutMS:           payload.AgentBrowserTimeoutMS,
+		AgentBrowserScreenshotAccess:    screenshotAccess,
+		AgentBrowserOperationAccess:     operationAccess,
 		AgentBrowserControlEnabled:      payload.AgentBrowserControlEnabled,
 		AgentBrowserBoxDisabled:         payload.AgentBrowserBoxDisabled,
 	}.WithDefaults()

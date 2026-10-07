@@ -21,24 +21,28 @@ import (
 var interactiveBrowserTools = agent.InteractiveBrowserToolNames
 
 type agentBrowserPayload struct {
-	ProfileID string `json:"profile_id"`
-	CDPURL    string `json:"cdp_url"`
-	TimeoutMS int    `json:"timeout_ms"`
+	ProfileID        string                             `json:"profile_id"`
+	CDPURL           string                             `json:"cdp_url"`
+	TimeoutMS        int                                `json:"timeout_ms"`
+	OperationAccess  *assistant.BrowserOperationAccess  `json:"operation_access,omitempty"`
+	ScreenshotAccess *assistant.BrowserScreenshotAccess `json:"screenshot_access,omitempty"`
 }
 
 func (h *BotHandler) agentBrowser(c *gin.Context) {
 	profile := c.Query("profile")
 	cfg, ok := h.profiles.Profiles().ConfigForProfile(profile)
 	if !ok {
-		c.JSON(http.StatusOK, gin.H{"tools": interactiveBrowserTools})
+		c.JSON(http.StatusOK, gin.H{"tools": interactiveBrowserTools, "screenshot_access": assistant.BrowserScreenshotAccess{}.WithDefaults(), "operation_access": assistant.BrowserOperationAccess{}.WithDefaults()})
 		return
 	}
 	cfg = cfg.WithDefaults()
 	c.JSON(http.StatusOK, gin.H{
-		"profile_id": cfg.ID,
-		"cdp_url":    cfg.AgentBrowserCDPURL,
-		"timeout_ms": cfg.AgentBrowserTimeoutMS,
-		"tools":      interactiveBrowserTools,
+		"profile_id":        cfg.ID,
+		"cdp_url":           cfg.AgentBrowserCDPURL,
+		"timeout_ms":        cfg.AgentBrowserTimeoutMS,
+		"tools":             interactiveBrowserTools,
+		"screenshot_access": cfg.AgentBrowserScreenshotAccess,
+		"operation_access":  cfg.AgentBrowserOperationAccess,
 	})
 }
 
@@ -52,10 +56,43 @@ func (h *BotHandler) setAgentBrowser(c *gin.Context) {
 		h.writeError(c, http.StatusBadRequest, "agent_browser", err, payload.ProfileID, nil)
 		return
 	}
-	next, ok := h.profiles.Profiles().WithAgentBrowser(payload.ProfileID, payload.CDPURL, payload.TimeoutMS)
+	if payload.OperationAccess != nil {
+		switch strings.ToLower(strings.TrimSpace(payload.OperationAccess.Mode)) {
+		case "", assistant.BrowserScreenshotDisabled, assistant.BrowserScreenshotOwnerOnly, assistant.BrowserScreenshotWhitelist:
+		default:
+			h.writeError(c, http.StatusBadRequest, "agent_browser", errors.New("不支持的浏览器操作权限模式"), payload.ProfileID, nil)
+			return
+		}
+		for _, host := range payload.OperationAccess.AllowedHosts {
+			if !agent.ValidBrowserScreenshotHost(host) {
+				h.writeError(c, http.StatusBadRequest, "agent_browser", errors.New("操作网站必须是精确的域名或域名:端口，不支持协议、路径或通配符"), payload.ProfileID, nil)
+				return
+			}
+		}
+	}
+	var screenshotAccess []assistant.BrowserScreenshotAccess
+	if payload.ScreenshotAccess != nil {
+		switch strings.ToLower(strings.TrimSpace(payload.ScreenshotAccess.Mode)) {
+		case "", assistant.BrowserScreenshotDisabled, assistant.BrowserScreenshotOwnerOnly, assistant.BrowserScreenshotWhitelist:
+		default:
+			h.writeError(c, http.StatusBadRequest, "agent_browser", errors.New("不支持的截图权限模式"), payload.ProfileID, nil)
+			return
+		}
+		for _, host := range payload.ScreenshotAccess.AllowedHosts {
+			if !agent.ValidBrowserScreenshotHost(host) {
+				h.writeError(c, http.StatusBadRequest, "agent_browser", errors.New("截图网站必须是精确的域名或域名:端口，不支持协议、路径或通配符"), payload.ProfileID, nil)
+				return
+			}
+		}
+		screenshotAccess = append(screenshotAccess, *payload.ScreenshotAccess)
+	}
+	next, ok := h.profiles.Profiles().WithAgentBrowser(payload.ProfileID, payload.CDPURL, payload.TimeoutMS, screenshotAccess...)
 	if !ok {
 		h.writeError(c, http.StatusNotFound, "agent_browser", fmt.Errorf("profile %q not found", payload.ProfileID), payload.ProfileID, nil)
 		return
+	}
+	if payload.OperationAccess != nil {
+		next, _ = next.WithBrowserOperationAccess(payload.ProfileID, *payload.OperationAccess)
 	}
 	current, _ := next.ConfigForProfile(payload.ProfileID)
 	if err := h.applyProfileSet(next); err != nil && !errors.Is(err, assistant.ErrBotDisabled) {
@@ -66,8 +103,8 @@ func (h *BotHandler) setAgentBrowser(c *gin.Context) {
 		h.writeError(c, http.StatusInternalServerError, "agent_browser", err, botLogTarget(current), nil)
 		return
 	}
-	recordRequestOperation(c, h.logs, "agent_browser", "交互式浏览器接入已更新", botLogTarget(current), map[string]any{"cdp_url": current.AgentBrowserCDPURL})
-	c.JSON(http.StatusOK, gin.H{"cdp_url": current.AgentBrowserCDPURL, "timeout_ms": current.AgentBrowserTimeoutMS, "tools": interactiveBrowserTools})
+	recordRequestOperation(c, h.logs, "agent_browser", "交互式浏览器配置已更新", botLogTarget(current), map[string]any{"cdp_url": current.AgentBrowserCDPURL, "screenshot_access": current.AgentBrowserScreenshotAccess, "operation_access": current.AgentBrowserOperationAccess})
+	c.JSON(http.StatusOK, gin.H{"cdp_url": current.AgentBrowserCDPURL, "timeout_ms": current.AgentBrowserTimeoutMS, "tools": interactiveBrowserTools, "screenshot_access": current.AgentBrowserScreenshotAccess, "operation_access": current.AgentBrowserOperationAccess})
 }
 
 // testAgentBrowser 探一次 CDP 端点。

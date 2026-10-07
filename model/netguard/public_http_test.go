@@ -69,3 +69,16 @@ func TestStrictValidationIgnoresPrivateFetchOptIn(t *testing.T) {
 		t.Fatal("strict validation accepted a private agent target")
 	}
 }
+
+func TestStrictDialCannotUseTrustedMediaPrivateOptIn(t *testing.T) {
+	t.Setenv(allowPrivateFetchesEnv, "true")
+	for _, address := range []string{"127.0.0.1:80", "[::1]:80", "localhost:80", "10.0.0.1:80"} {
+		connection, err := DialPublicContextStrict(context.Background(), "tcp", address)
+		if connection != nil {
+			connection.Close()
+		}
+		if err == nil {
+			t.Fatalf("strict dial connected to %s", address)
+		}
+	}
+}
