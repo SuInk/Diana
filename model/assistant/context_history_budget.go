@@ -467,6 +467,9 @@ func estimateHistoryContextEventTokens(event MessageEvent, currentTime int64, as
 		text = event.botReply
 	} else if assistantEvent {
 		text = historyPlainText(event)
+		if note, ok := replyToolTraceNote(event.ToolCalls); ok {
+			text += note.Content
+		}
 	} else {
 		text = historyPromptTextAt(event, currentTime)
 	}

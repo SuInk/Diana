@@ -509,9 +509,7 @@ type Runtime struct {
 	// recentClaimSources 记录最近几轮联网结论实际引用的来源。人设默认不罗列链接，
 	// 但有人追问「链接呢」时必须能原样给出，而不是重新搜一遍或者编一个。
 	recentClaimSources map[string][]claimSourceRecord
-	// recentToolCalls 记录最近几轮实际调用过的工具，见 tool_call_memory.go。
-	recentToolCalls  map[string][]toolCallRecord
-	contextSummaries map[string]string
+	contextSummaries   map[string]string
 	// contextSummaryMarks 记录每个会话已经被折进压缩摘要的最后一条历史时间。
 	// 存储层不会因为内存历史被压缩而删掉原文，没有水位就会出现同一批历史既以
 	// 摘要、又以完整原文进入同一个请求。
@@ -4239,14 +4237,6 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 				AtomicText: true,
 			})
 		}
-		if toolCalls := r.toolCallContext(event); toolCalls != "" {
-			volatile = append(volatile, llm.Message{
-				Role:       llm.RoleUser,
-				Content:    toolCalls,
-				Priority:   llm.MessagePriorityMemory,
-				AtomicText: true,
-			})
-		}
 		var stableCheckpoint []llm.Message
 		if summary := rawMessageWithoutImagePlaceholders(olderSummary); summary != "" {
 			const summaryPrefix = "【较早上下文压缩摘要，仅用于理解背景，不要直接回复摘要】\n"
@@ -4465,6 +4455,8 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	}
 	// 模型收尾时填了表情包关键词的话，正文发出后跟一张，见 sticker_finalize.go。
 	ctx, finalizeSticker := withFinalizeSticker(ctx)
+	// 本轮调过的工具挂到随后发出的第一条消息上，见 tool_call_memory.go。
+	ctx = withReplyToolTrace(ctx)
 	// 收尾时填了表格的话先画好，正文发出后跟一张图，见 render_finalize.go。
 	ctx, finalizeRender := withFinalizeRender(ctx)
 	reply, err = r.generateReply(ctx, replyCfg, event, relationship, messages, agentRegistry)
@@ -4846,7 +4838,7 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 		}
 		r.rememberAgentRunProgress(event, resp)
 		r.rememberClaimSources(event, resp.Sources)
-		r.rememberToolCalls(event, resp.Steps)
+		replyToolTraceFromContext(ctx).add(resp.Steps)
 		finalizeStickerFromContext(ctx).set(resp.FinalizeFields[stickerFinalizeFieldName], resp.FinalizeFields[stickerOrderFieldName])
 		text := resp.Text
 		if resp.Silent {
@@ -7297,6 +7289,9 @@ func (r *Runtime) rememberOutgoingWithMessageID(ctx context.Context, source Mess
 		event.MessageID = messageID
 	}
 	event.PushKind = subscriptionPushKindFromContext(ctx)
+	if event.PushKind == "" {
+		event.ToolCalls = replyToolTraceFromContext(ctx).take()
+	}
 	r.mu.RLock()
 	resolver, _ := r.localMedia.(LocalMediaPathResolver)
 	r.mu.RUnlock()
