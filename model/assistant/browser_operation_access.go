@@ -17,7 +17,7 @@ func (access BrowserOperationAccess) WithDefaults() BrowserOperationAccess {
 }
 
 func (access BrowserOperationAccess) Validate() error {
-	return validateBrowserAccess("操作", access.Mode, access.AllowedHosts)
+	return validateBrowserAccess("操作", access.Mode, access.AllowedUsers, access.AllowedHosts)
 }
 
 func (access BrowserOperationAccess) AllowsEvent(owner bool, event MessageEvent) bool {

@@ -115,3 +115,33 @@ func TestBrowserOperationPolicyPersistsAndUnrelatedSavesPreserveIt(t *testing.T)
 		}
 	}
 }
+
+// 残缺的「指定用户」只在 WebUI 保存时拒绝；读旧配置照常规范化，并且谁都不开放。
+func TestBrowserAccessWhitelistIncompleteOnlyRejectedOnSave(t *testing.T) {
+	for _, access := range []BrowserOperationAccess{
+		{Mode: "whitelist", AllowedHosts: []string{"example.com"}},
+		{Mode: "whitelist", AllowedUsers: []string{"member"}},
+	} {
+		if access.Validate() == nil {
+			t.Fatalf("incomplete operation whitelist accepted: %#v", access)
+		}
+		if got := access.WithDefaults(); got.Mode != BrowserAccessWhitelist {
+			t.Fatalf("legacy config rewritten: %#v", got)
+		}
+		if access.AllowsEvent(false, MessageEvent{Kind: EventKindPrivate, UserID: "member"}) {
+			t.Fatalf("incomplete whitelist granted access: %#v", access)
+		}
+	}
+	if (BrowserScreenshotAccess{Mode: "whitelist", AllowedUsers: []string{"member"}}).Validate() == nil {
+		t.Fatal("incomplete screenshot whitelist accepted")
+	}
+	complete := BrowserOperationAccess{Mode: "whitelist", AllowedUsers: []string{"member"}, AllowedHosts: []string{"example.com"}}
+	if err := complete.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	for _, mode := range []string{"", BrowserAccessDisabled, BrowserAccessOwnerOnly} {
+		if err := (BrowserOperationAccess{Mode: mode}).Validate(); err != nil {
+			t.Fatalf("mode %q: %v", mode, err)
+		}
+	}
+}
