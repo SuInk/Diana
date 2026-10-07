@@ -1153,6 +1153,27 @@
       "default": "记录较旧，约具体时间前先自然地确认一句他现在在哪个时区。"
     },
     {
+      "key": "reply.self_tail_habit",
+      "group": "reply_tail",
+      "title": "句尾口癖提醒",
+      "usage": "最近自己的回复里同一类句尾（括号尾巴、w、喵）用得太多时注入，紧挨语气锚点：点名这些尾巴，让这一条不再用。",
+      "default": "你最近 {total} 条消息里有 {count} 条用 {tails} 收尾，已经成了口癖：真人不会条条消息挂同一个尾巴。这次别用这些收尾，话说完就停在最后一个字上。",
+      "vars": [
+        {
+          "name": "total",
+          "description": "参与统计的自己的消息条数"
+        },
+        {
+          "name": "count",
+          "description": "其中用这类尾巴收尾的条数"
+        },
+        {
+          "name": "tails",
+          "description": "具体的尾巴，如「（逃」「（」"
+        }
+      ]
+    },
+    {
       "key": "reply.matched_aliases",
       "group": "reply_tail",
       "title": "本条命中的别名",
