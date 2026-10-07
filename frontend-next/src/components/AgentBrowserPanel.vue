@@ -3,13 +3,12 @@
 
 <template>
   <section class="card">
-    <header class="card-header">
-      <div class="view-title">
-        <h2>浏览器权限与外接 CDP</h2>
-        <p>{{ botScope ? '为主人和指定用户配置浏览器权限，个人登录态相互隔离' : '选择机器人后配置' }}</p>
-      </div>
-      <div class="view-actions"><button class="btn" :disabled="loading" @click="load"><RefreshCw :size="15" />刷新</button></div>
-    </header>
+    <!-- 卡片头和浏览器页其余卡片用同一套：标题、一句说明、右侧小刷新。 -->
+    <div class="card-header">
+      <h2>浏览器权限与外接 CDP</h2>
+      <span class="card-sub">{{ botScope ? '为主人和指定用户配置浏览器权限，个人登录态相互隔离' : '选择机器人后配置' }}</span>
+      <button class="btn small ghost" type="button" :disabled="loading" title="刷新" aria-label="刷新浏览器权限配置" @click="load"><RefreshCw :size="14" aria-hidden="true" /></button>
+    </div>
     <div class="card-body">
     <p v-if="loadError" role="alert" class="error-text">{{ loadError }}</p>
     <p v-if="loading">正在读取…</p>
@@ -34,12 +33,15 @@
         </div>
         <div v-if="operationAccess.mode === 'whitelist'" class="field">
           <label for="browser-operation-users">允许操作的用户</label>
-          <IdChipInput input-id="browser-operation-users" v-model="operationAccess.allowed_users" placeholder="填用户 ID 后回车" />
+          <IdChipInput input-id="browser-operation-users" v-model="operationAccess.allowed_users" placeholder="填用户 ID 后回车" :resolve-names="resolveAccountNames" />
+          <span v-if="!operationAccess.allowed_users?.length" class="hint error-text">至少填一个用户，否则只有主人能用。</span>
           <span class="hint">按本机器人所在平台的用户 ID 精确匹配，登录态按机器人、平台和用户分别保存。</span>
         </div>
         <div v-if="operationAccess.mode === 'whitelist'" class="field wide">
           <label for="browser-operation-hosts">允许操作的网站</label>
           <IdChipInput input-id="browser-operation-hosts" v-model="operationAccess.allowed_hosts" placeholder="例如 example.com，回车添加" />
+          <span v-if="invalidHosts(operationAccess).length" class="hint error-text">格式不对：{{ invalidHosts(operationAccess).join('、') }}。只填域名或域名:端口，例如 example.com。</span>
+          <span v-else-if="!operationAccess.allowed_hosts?.length" class="hint error-text">至少填一个网站，否则指定用户什么都打不开。</span>
           <span class="hint">必填精确域名，可带端口，不含子域名。业务网站、登录跳转和资源域名都需加入；不支持协议、路径或通配符，禁止内网地址。</span>
         </div>
         <div class="field">
@@ -49,12 +51,15 @@
         </div>
         <div v-if="screenshotAccess.mode === 'whitelist'" class="field">
           <label for="browser-screenshot-users">允许截图的用户</label>
-          <IdChipInput input-id="browser-screenshot-users" v-model="screenshotAccess.allowed_users" placeholder="填用户 ID 后回车" />
+          <IdChipInput input-id="browser-screenshot-users" v-model="screenshotAccess.allowed_users" placeholder="填用户 ID 后回车" :resolve-names="resolveAccountNames" />
+          <span v-if="!screenshotAccess.allowed_users?.length" class="hint error-text">至少填一个用户，否则只有主人能用。</span>
           <span class="hint">用户和网站都填好才会开放，普通用户仅限私聊；扫码登录也需授权截图。</span>
         </div>
         <div v-if="screenshotAccess.mode === 'whitelist'" class="field wide">
           <label for="browser-screenshot-hosts">允许截图的网站</label>
           <IdChipInput input-id="browser-screenshot-hosts" v-model="screenshotAccess.allowed_hosts" placeholder="例如 example.com，回车添加" />
+          <span v-if="invalidHosts(screenshotAccess).length" class="hint error-text">格式不对：{{ invalidHosts(screenshotAccess).join('、') }}。只填域名或域名:端口，例如 example.com。</span>
+          <span v-else-if="!screenshotAccess.allowed_hosts?.length" class="hint error-text">至少填一个网站，否则指定用户什么都打不开。</span>
           <span class="hint">必填。精确匹配域名（可带端口），不包含子域名；不填协议、路径或通配符。嵌入页面也必须在授权范围内。</span>
         </div>
       </div>
@@ -63,7 +68,7 @@
       <p v-if="testResult" :class="testResult.connected ? 'hint' : 'error-text'" role="status">{{ testResult.connected ? `连上了${testResult.browser ? '：' + testResult.browser : ''}` : `连不上：${testResult.error}` }}</p>
       <div class="view-actions browser-actions">
         <button class="btn" :disabled="busy" @click="test"><PlugZap :size="15" />测试连接</button>
-        <button class="btn primary" :disabled="busy" @click="save"><Save :size="15" />保存</button>
+        <button class="btn primary" :disabled="busy || !formValid" :title="formValid ? undefined : '先补全上方标红的项'" @click="save"><Save :size="15" />保存</button>
       </div>
       <p class="hint">浏览器工具：{{ tools.join('、') }}。操作和截图按上方权限分别开放。测试连接仅检测主人的 CDP，个人浏览器在首次操作时启动。</p>
     </template>
@@ -72,10 +77,10 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref, watch } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
 import { PlugZap, RefreshCw, Save } from '@lucide/vue';
 import { botScope } from '../bot-scope';
-import { getAgentBrowser, saveAgentBrowser, testAgentBrowser } from '../api';
+import { fetchAssistantUserNames, getAgentBrowser, saveAgentBrowser, testAgentBrowser } from '../api';
 import type { BrowserScreenshotAccess, BrowserOperationAccess } from '../api';
 import AppSelect from './AppSelect.vue';
 import IdChipInput from './IdChipInput.vue';
@@ -102,6 +107,26 @@ function normalizedOperationAccess(access?: BrowserOperationAccess): BrowserOper
   const normalized = normalizedScreenshotAccess(access);
   return { mode: normalized.mode, allowed_users: normalized.allowed_users, allowed_hosts: normalized.allowed_hosts };
 }
+// 和后端 ValidBrowserScreenshotHost 同一个规则：只认域名或域名:端口，带协议、路径、通配符都不行。
+function validHost(host: string): boolean {
+  const value = host.trim().toLowerCase();
+  if (!value || /[*\\\s/%?#@]/.test(value)) return false;
+  // URL 会吃掉默认端口 443，后端不会，所以两种写法都认。
+  try { const host = new URL(`https://${value}`).host; return host === value || `${host}:443` === value; } catch { return false; }
+}
+function invalidHosts(access: { allowed_hosts?: string[] }): string[] {
+  return (access.allowed_hosts ?? []).filter(host => !validHost(host));
+}
+// 指定用户模式下，用户或网站缺一样后端都会当成「谁也不开放」，保存成功却没效果，所以在这里拦住。
+function whitelistComplete(access: { mode: string; allowed_users?: string[]; allowed_hosts?: string[] }): boolean {
+  if (access.mode !== 'whitelist') return true;
+  return !!access.allowed_users?.length && !!access.allowed_hosts?.length && !invalidHosts(access).length;
+}
+const formValid = computed(() => whitelistComplete(operationAccess.value) && whitelistComplete(screenshotAccess.value));
+async function resolveAccountNames(ids: string[]): Promise<Record<string, string>> {
+  const response = await fetchAssistantUserNames(ids, botScope.value);
+  return response.names ?? {};
+}
 async function load() {
   const current = ++generation;
   const profile = botScope.value;
@@ -126,7 +151,7 @@ async function load() {
 }
 async function save() {
   const profile = botScope.value;
-  if (!profile || loadedProfile !== profile || loading.value || loadError.value || busy.value) return;
+  if (!profile || loadedProfile !== profile || loading.value || loadError.value || busy.value || !formValid.value) return;
   const current = generation;
   busy.value = true;
   try {
@@ -162,5 +187,5 @@ onMounted(load);
 </script>
 
 <style scoped>
-.browser-form{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:14px}.browser-form .wide{grid-column:1 / -1}.browser-actions{margin-top:16px;gap:8px}.error-text{color:var(--danger)}@media(max-width:600px){.browser-form{grid-template-columns:1fr}}
+.browser-form{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:14px}.browser-form .wide{grid-column:1 / -1}.browser-actions{margin-top:16px;gap:8px}.error-text{color:var(--err)}@media(max-width:600px){.browser-form{grid-template-columns:1fr}}
 </style>
