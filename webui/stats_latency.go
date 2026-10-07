@@ -55,7 +55,9 @@ func (h *StatsHandler) WithLatencyReader(reader replyLatencyReader) *StatsHandle
 // statsLatency 返回最近 1 小时 / 24 小时 / 7 天的回复耗时分位数和阶段分解。
 //
 // 和 /api/stats/ranges 一样读库而不读进程内累加器：7 天窗口必须跨重启才成立。
-// profile_id 给了就只看这台机器人。
+// profile_id 给了就只看这台机器人。window 给了就只算这一档：读样本要把这段时间的
+// 模型调用日志逐条对到回复上，7 天档连同对比的前 7 天要读两周，而界面默认看的
+// 24 小时只需要两天，一次全算会让弹窗白等。
 func (h *StatsHandler) statsLatency(c *gin.Context) {
 	if h.latency == nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "统计存储不可用"})
@@ -65,14 +67,27 @@ func (h *StatsHandler) statsLatency(c *gin.Context) {
 	if h.now != nil {
 		now = h.now()
 	}
-	longest := latencyWindows[len(latencyWindows)-1].Duration
+	windows := latencyWindows
+	if id := strings.TrimSpace(c.Query("window")); id != "" {
+		windows = nil
+		for _, window := range latencyWindows {
+			if window.ID == id {
+				windows = append(windows, window)
+			}
+		}
+		if len(windows) == 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "未知的统计窗口：" + id})
+			return
+		}
+	}
+	longest := windows[len(windows)-1].Duration
 	samples, err := h.latency.ReplyLatencySamples(c.Request.Context(), now.Add(-2*longest), now, strings.TrimSpace(c.Query("profile_id")))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "读取响应耗时失败：" + err.Error()})
 		return
 	}
-	response := LatencyResponse{Until: now.UTC(), Windows: make([]LatencyWindow, 0, len(latencyWindows))}
-	for _, window := range latencyWindows {
+	response := LatencyResponse{Until: now.UTC(), Windows: make([]LatencyWindow, 0, len(windows))}
+	for _, window := range windows {
 		since := now.Add(-window.Duration)
 		response.Windows = append(response.Windows, LatencyWindow{
 			ID:       window.ID,

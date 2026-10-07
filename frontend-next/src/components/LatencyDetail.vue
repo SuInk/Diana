@@ -113,20 +113,25 @@ const windowOptions: { id: LatencyWindowID; label: string; previous: string }[] 
 ];
 
 const selected = ref<LatencyWindowID>(props.initialWindow);
-const data = ref<StatsLatency | null>(null);
+// 每档单独请求、单独缓存：只读当前这一档要的日志，切回看过的档位不再等。弹窗关掉
+// 组件就卸了，缓存跟着清，重新打开拿的是新数。
+const cache = ref<Partial<Record<LatencyWindowID, StatsLatency>>>({});
+const data = computed(() => cache.value[selected.value] ?? null);
 const loading = ref(false);
 const error = ref("");
 
-// 切换机器人时先发的请求可能后返回，只认最后一次，免得标题是这台、数据是上一台。
+// 切换机器人或档位时先发的请求可能后返回，只认最后一次，免得标题是这台、数据是上一台。
 let requestSeq = 0;
 
 async function load(): Promise<void> {
+  const window = selected.value;
+  if (cache.value[window]) return;
   const seq = ++requestSeq;
   loading.value = true;
   error.value = "";
   try {
-    const result = await getStatsLatency(props.profileId);
-    if (seq === requestSeq) data.value = result;
+    const result = await getStatsLatency(props.profileId, window);
+    if (seq === requestSeq) cache.value = { ...cache.value, [window]: result };
   } catch (err) {
     if (seq === requestSeq) error.value = err instanceof Error ? err.message : "读取响应耗时失败";
   } finally {
@@ -135,7 +140,14 @@ async function load(): Promise<void> {
 }
 
 onMounted(load);
-watch(() => props.profileId, load);
+watch(selected, load);
+watch(
+  () => props.profileId,
+  () => {
+    cache.value = {};
+    void load();
+  }
+);
 
 const activeOption = computed(() => windowOptions.find((option) => option.id === selected.value) ?? windowOptions[1]);
 const windowLabel = computed(() => `最近 ${activeOption.value.label}`);

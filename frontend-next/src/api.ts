@@ -2712,10 +2712,16 @@ export interface StatsLatency {
   windows: LatencyWindow[];
 }
 
-/** 最近 1 小时 / 24 小时 / 7 天的回复耗时分位数和阶段分解；profileID 为空表示全部机器人。 */
-export function getStatsLatency(profileID = ""): Promise<StatsLatency> {
-  const query = profileID ? `?profile_id=${encodeURIComponent(profileID)}` : "";
-  return requestJSON<StatsLatency>(`/api/stats/latency${query}`);
+/**
+ * 回复耗时分位数和阶段分解；profileID 为空表示全部机器人。给了 window 只算这一档：
+ * 7 天档要读两周的日志，界面默认的 24 小时只需要两天，不该陪着一起等。
+ */
+export function getStatsLatency(profileID = "", window?: LatencyWindowID): Promise<StatsLatency> {
+  const params = new URLSearchParams();
+  if (profileID) params.set("profile_id", profileID);
+  if (window) params.set("window", window);
+  const query = params.toString();
+  return requestJSON<StatsLatency>(`/api/stats/latency${query ? `?${query}` : ""}`);
 }
 
 export type ActivityWindowID = "7d" | "28d";
