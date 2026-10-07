@@ -9,6 +9,7 @@
     <template v-else-if="!botScope"><p class="hint">先在顶部选一个机器人。</p></template>
     <template v-else-if="!loadError">
       <p class="note">主人使用配置的内置浏览器或 CDP。指定用户使用各自独立的浏览器，只能操作白名单网站，不会连接主人的浏览器。公开网页由「网页渲染」插件使用临时浏览器访问。</p>
+      <p v-if="untestedPlatform" class="note warn-text">{{ untestedPlatform }} 上的个人浏览器还没实测过，用户 ID 匹配和私聊判断可能有出入。目前实测过 QQ（OneBot v11）、QQ 官方机器人和 Telegram。</p>
       <div class="browser-form">
         <div class="field">
           <label for="browser-operation-access">浏览器操作权限</label>
@@ -63,7 +64,7 @@
 import { computed, onMounted, ref, watch } from 'vue';
 import { Save } from '@lucide/vue';
 import { botScope } from '../bot-scope';
-import { fetchAssistantUserNames, getAgentBrowser, saveAgentBrowser } from '../api';
+import { fetchAssistantUserNames, getAgentBrowser, getBotProfileConfig, saveAgentBrowser } from '../api';
 import type { BrowserScreenshotAccess, BrowserOperationAccess } from '../api';
 import AppSelect from './AppSelect.vue';
 import Modal from './Modal.vue';
@@ -113,6 +114,21 @@ const screenshotUsersWithoutOperation = computed(() => {
   const operators = new Set(operationAccess.value.allowed_users ?? []);
   return (screenshotAccess.value.allowed_users ?? []).filter(user => !operators.has(user));
 });
+// 个人浏览器按平台用户 ID 隔离，目前只在这几个平台上实测过。
+const testedPlatforms: Record<string, true> = { '': true, 'onebot-v11': true, 'qq-official': true, telegram: true };
+const platformNames: Record<string, string> = { dingtalk: '钉钉', feishu: '飞书', wecom: '企业微信', weixin: '微信', imessage: 'iMessage', discord: 'Discord' };
+const platform = ref('');
+const untestedPlatform = computed(() => testedPlatforms[platform.value] ? '' : (platformNames[platform.value] ?? platform.value));
+async function loadPlatform(profile: string) {
+  platform.value = '';
+  try {
+    const config = await getBotProfileConfig();
+    const profiles = config.profiles?.length ? config.profiles : [config];
+    if (profile === botScope.value) platform.value = profiles.find(item => item.id === profile)?.platform ?? '';
+  } catch {
+    // 读不到平台只是少一条提示，不影响配置权限。
+  }
+}
 const formValid = computed(() => whitelistComplete(operationAccess.value) && whitelistComplete(screenshotAccess.value));
 async function resolveAccountNames(ids: string[]): Promise<Record<string, string>> {
   const response = await fetchAssistantUserNames(ids, botScope.value);
@@ -125,6 +141,7 @@ async function load() {
   loading.value = true;
   loadError.value = '';
   try {
+    void loadPlatform(profile);
     const result = await getAgentBrowser(profile);
     if (current !== generation) return;
     cdpURL.value = result.cdp_url || '';
@@ -165,5 +182,5 @@ onMounted(load);
 </script>
 
 <style scoped>
-.browser-form{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:14px}.browser-form .wide{grid-column:1 / -1}.browser-actions{margin-top:16px;gap:8px}.note{margin:12px 0 0;font-size:13px;line-height:1.6;color:var(--muted)}.browser-form+.note{margin-top:16px}.error-text{color:var(--err)}@media(max-width:600px){.browser-form{grid-template-columns:1fr}}
+.browser-form{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:14px}.browser-form .wide{grid-column:1 / -1}.browser-actions{margin-top:16px;gap:8px}.note.warn-text{color:var(--warn)}.note{margin:12px 0 0;font-size:13px;line-height:1.6;color:var(--muted)}.browser-form+.note.warn-text{color:var(--warn)}.note{margin-top:16px}.error-text{color:var(--err)}@media(max-width:600px){.browser-form{grid-template-columns:1fr}}
 </style>
