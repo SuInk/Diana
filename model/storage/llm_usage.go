@@ -29,7 +29,18 @@ func (s *SQLiteStore) LLMUsageReport(ctx context.Context, filter applog.UsageFil
 		return report, fmt.Errorf("invalid usage window")
 	}
 	const seconds = "2006-01-02T15:04:05"
-	rows, err := s.eventReader().QueryContext(ctx, `SELECT metadata,created_at FROM app_logs WHERE created_at>=? AND created_at<? AND action='llm_usage'`, since.UTC().Format(seconds), until.UTC().Add(time.Second).Format(seconds))
+	// 筛选条件先在 SQL 里粗筛，省得把整个窗口的元数据都搬进 Go 解析；
+	// 循环里仍按原规则精确比对。json_valid 守住空串和坏 JSON：它们本就匹配不上非空条件。
+	query := `SELECT metadata,created_at FROM app_logs WHERE created_at>=? AND created_at<? AND action='llm_usage'`
+	args := []any{since.UTC().Format(seconds), until.UTC().Add(time.Second).Format(seconds)}
+	for _, condition := range []struct{ key, value string }{{"profile_id", filter.ProfileID}, {"platform", filter.Platform}, {"group_id", filter.GroupID}} {
+		if condition.value == "" {
+			continue
+		}
+		query += ` AND json_valid(metadata) AND trim(json_extract(metadata,'$.` + condition.key + `'))=?`
+		args = append(args, condition.value)
+	}
+	rows, err := s.eventReader().QueryContext(ctx, query, args...)
 	if err != nil {
 		return report, err
 	}
@@ -67,7 +78,8 @@ func (s *SQLiteStore) LLMUsageReport(ctx context.Context, filter applog.UsageFil
 		if filter.ProfileID != "" && filter.ProfileID != profile || filter.Platform != "" && filter.Platform != platform || filter.GroupID != "" && filter.GroupID != group {
 			continue
 		}
-		call := addUsageMetadata(&report.Usage, meta)
+		call := usageCall(meta)
+		addUsageCall(&report.Usage, call)
 		breakdown.Add(call)
 		if group == "" {
 			continue
@@ -82,7 +94,7 @@ func (s *SQLiteStore) LLMUsageReport(ctx context.Context, filter applog.UsageFil
 			groups[key] = accumulator
 		}
 		entry := &accumulator.entry
-		addUsageMetadata(&entry.Usage, meta)
+		addUsageCall(&entry.Usage, call)
 		accumulator.usage.Add(call)
 		purpose := str("purpose")
 		if purpose == "" {
@@ -90,7 +102,7 @@ func (s *SQLiteStore) LLMUsageReport(ctx context.Context, filter applog.UsageFil
 		}
 		usage := entry.Purposes[purpose]
 		usage.Since, usage.Until = since, until
-		addUsageMetadata(&usage, meta)
+		addUsageCall(&usage, call)
 		entry.Purposes[purpose] = usage
 		if accumulator.purposes[purpose] == nil {
 			accumulator.purposes[purpose] = &applog.UsageBreakdownAccumulator{}
@@ -121,20 +133,15 @@ func (s *SQLiteStore) LLMUsageReport(ctx context.Context, filter applog.UsageFil
 	return report, nil
 }
 
-func addUsageMetadata(usage *applog.UsageSummary, meta map[string]any) applog.UsageBreakdown {
+// usageCall 把一行元数据折算成一次调用；每行只算一次，再分别累加到总计、群和用途。
+func usageCall(meta map[string]any) applog.UsageBreakdown {
 	input, output := int64FromAny(meta["input_tokens"]), int64FromAny(meta["output_tokens"])
 	total := int64FromAny(meta["total_tokens"])
 	if total <= 0 {
 		total = input + output
 	}
-	usage.Calls++
-	usage.InputTokens += input
-	usage.OutputTokens += output
-	usage.TotalTokens += total
-	usage.CachedInputTokens += int64FromAny(meta["cached_input_tokens"])
 	var missingCalls int64
 	if missing, _ := meta["usage_missing"].(bool); missing || input == 0 && output == 0 && total == 0 {
-		usage.MissingUsageCalls++
 		missingCalls = 1
 	}
 	purpose, _ := meta["purpose"].(string)
@@ -145,6 +152,15 @@ func addUsageMetadata(usage *applog.UsageSummary, meta map[string]any) applog.Us
 		InputTokens: input, OutputTokens: output, TotalTokens: total,
 		CachedInputTokens: int64FromAny(meta["cached_input_tokens"]), MissingUsageCalls: missingCalls,
 	}
+}
+
+func addUsageCall(usage *applog.UsageSummary, call applog.UsageBreakdown) {
+	usage.Calls += call.Calls
+	usage.InputTokens += call.InputTokens
+	usage.OutputTokens += call.OutputTokens
+	usage.TotalTokens += call.TotalTokens
+	usage.CachedInputTokens += call.CachedInputTokens
+	usage.MissingUsageCalls += call.MissingUsageCalls
 }
 
 // GroupLLMUsageSince 统计某个群在窗口内的模型调用次数，供按群额度判断。
