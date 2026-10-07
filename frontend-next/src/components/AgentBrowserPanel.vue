@@ -2,19 +2,13 @@
      Licensed under the Limited Redistribution License in the repository root. -->
 
 <template>
-  <section class="card">
-    <!-- 卡片头和浏览器页其余卡片用同一套：标题、一句说明、右侧小刷新。 -->
-    <div class="card-header">
-      <h2>浏览器权限</h2>
-      <span class="card-sub">{{ botScope ? '为主人和指定用户配置浏览器权限，个人登录态相互隔离' : '选择机器人后配置' }}</span>
-      <button class="btn small ghost" type="button" :disabled="loading" title="刷新" aria-label="刷新浏览器权限配置" @click="load"><RefreshCw :size="14" aria-hidden="true" /></button>
-    </div>
-    <div class="card-body">
+  <!-- 从浏览器页「个人浏览器权限」一行弹出，和外接 CDP 的弹窗同一种做法。 -->
+  <Modal title="个人浏览器权限" wide @close="emit('close')">
     <p v-if="loadError" role="alert" class="error-text">{{ loadError }}</p>
     <p v-if="loading">正在读取…</p>
     <template v-else-if="!botScope"><p class="hint">先在顶部选一个机器人。</p></template>
     <template v-else-if="!loadError">
-      <p class="hint">主人使用配置的内置浏览器或 CDP。指定用户使用各自独立的浏览器，只能操作白名单网站，不会连接主人的浏览器。公开网页由「网页渲染」插件使用临时浏览器访问。</p>
+      <p class="note">主人使用配置的内置浏览器或 CDP。指定用户使用各自独立的浏览器，只能操作白名单网站，不会连接主人的浏览器。公开网页由「网页渲染」插件使用临时浏览器访问。</p>
       <div class="browser-form">
         <div class="field">
           <label for="browser-operation-access">浏览器操作权限</label>
@@ -53,28 +47,28 @@
           <span class="hint">必填。精确匹配域名（可带端口），不包含子域名；不填协议、路径或通配符。嵌入页面也必须在授权范围内。</span>
         </div>
       </div>
-      <p class="hint">公共网页截图通过「网页渲染」插件提供，使用独立临时浏览器，不带登录态，不受此处登录浏览器截图权限影响。</p>
-      <p v-if="screenshotAccess.mode === 'whitelist'" class="hint">截图权限与操作权限分别设置。普通用户可查看和向当前私聊发送自己的登录页面；仅授权截图不能接入主人的浏览器，也不授予本地文件工具。</p>
+      <p class="note">公共网页截图通过「网页渲染」插件提供，使用独立临时浏览器，不带登录态，不受此处登录浏览器截图权限影响。</p>
+      <p v-if="screenshotAccess.mode === 'whitelist'" class="note">截图权限与操作权限分别设置。普通用户可查看和向当前私聊发送自己的登录页面；仅授权截图不能接入主人的浏览器，也不授予本地文件工具。</p>
+      <p class="note">浏览器工具：{{ tools.join('、') }}。个人浏览器在首次操作时启动。</p>
       <div class="view-actions browser-actions">
         <button class="btn primary" :disabled="busy || !formValid" :title="formValid ? undefined : '先补全上方标红的项'" @click="save"><Save :size="15" />保存</button>
       </div>
-      <p class="hint">浏览器工具：{{ tools.join('、') }}。操作和截图按上方权限分别开放，个人浏览器在首次操作时启动。主人的外接 CDP 地址在上方「外接浏览器（CDP）」里配置。</p>
     </template>
-    </div>
-  </section>
+  </Modal>
 </template>
 
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue';
-import { RefreshCw, Save } from '@lucide/vue';
+import { Save } from '@lucide/vue';
 import { botScope } from '../bot-scope';
 import { fetchAssistantUserNames, getAgentBrowser, saveAgentBrowser } from '../api';
 import type { BrowserScreenshotAccess, BrowserOperationAccess } from '../api';
 import AppSelect from './AppSelect.vue';
+import Modal from './Modal.vue';
 import IdChipInput from './IdChipInput.vue';
 import { toastError, toastSuccess } from '../toast';
 
-const emit = defineEmits<{ saved: [] }>();
+const emit = defineEmits<{ saved: []; close: [] }>();
 // CDP 地址和超时在「外接浏览器」弹窗里改；这里只原样带回，后端保存接口要求一起提交。
 const cdpURL = ref(''), timeoutMS = ref(15000), tools = ref<string[]>([]);
 const screenshotAccess = ref<BrowserScreenshotAccess>({ mode: 'owner_only', allowed_users: [], allowed_hosts: [], allowed_groups: [] });
@@ -150,6 +144,7 @@ async function save() {
     operationAccess.value = normalizedOperationAccess(result.operation_access);
     toastSuccess('已保存，后续会话生效');
     emit('saved');
+    emit('close');
   } catch (e) {
     toastError(String(e instanceof Error ? e.message : e));
   } finally {
@@ -161,5 +156,5 @@ onMounted(load);
 </script>
 
 <style scoped>
-.browser-form{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:14px}.browser-form .wide{grid-column:1 / -1}.browser-actions{margin-top:16px;gap:8px}.error-text{color:var(--err)}@media(max-width:600px){.browser-form{grid-template-columns:1fr}}
+.browser-form{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:14px}.browser-form .wide{grid-column:1 / -1}.browser-actions{margin-top:16px;gap:8px}.note{margin:12px 0 0;font-size:13px;line-height:1.6;color:var(--muted)}.browser-form+.note{margin-top:16px}.error-text{color:var(--err)}@media(max-width:600px){.browser-form{grid-template-columns:1fr}}
 </style>
