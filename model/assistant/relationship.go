@@ -170,6 +170,7 @@ func (p RelationshipPolicy) allowedAgentToolNames() map[string]bool {
 		agent.WebSearchToolName: true,
 	}
 	allowed["browser_render"] = true
+	allowed["webpage_screenshot"] = true
 	return allowed
 }
 

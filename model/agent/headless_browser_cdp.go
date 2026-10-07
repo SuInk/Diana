@@ -444,7 +444,7 @@ func scanChromeDiagnostics(reader io.Reader, diagnostics *chromeDiagnosticBuffer
 	}
 }
 
-func (b *SandboxedHeadlessBrowser) renderObservable(ctx context.Context, executable, root, profileDir, cacheDir, crashDir, rawURL string) (RenderedPage, error) {
+func (b *SandboxedHeadlessBrowser) renderObservable(ctx context.Context, executable, root, profileDir, cacheDir, crashDir, rawURL string, screenshot ...*[]byte) (RenderedPage, error) {
 	renderStarted := time.Now()
 	process, err := launchSandboxedChrome(ctx, executable, root, profileDir, cacheDir, crashDir, b.cfg)
 	if err != nil {
@@ -469,7 +469,7 @@ func (b *SandboxedHeadlessBrowser) renderObservable(ctx context.Context, executa
 	chromedp.ListenTarget(browserCtx, func(event any) {
 		tracker.observe(event, time.Now())
 		if paused, ok := event.(*fetch.EventRequestPaused); ok {
-			handlePausedBrowserDocument(browserCtx, tracker, paused)
+			handlePausedBrowserDocument(browserCtx, tracker, paused, len(screenshot) > 0)
 		}
 	})
 
@@ -480,19 +480,25 @@ func (b *SandboxedHeadlessBrowser) renderObservable(ctx context.Context, executa
 	}
 	setupTimeout := min(b.cfg.Timeout, browserStartupTimeout)
 	setupCtx, cancelSetup := context.WithTimeout(browserCtx, setupTimeout)
+	pattern := &fetch.RequestPattern{URLPattern: "*", RequestStage: fetch.RequestStageRequest}
+	if len(screenshot) == 0 {
+		pattern.ResourceType = network.ResourceTypeDocument
+	}
 	err = chromedp.Run(setupCtx,
 		network.Enable(),
+		chromedp.ActionFunc(func(actionCtx context.Context) error {
+			if len(screenshot) > 0 {
+				return network.SetBlockedURLs([]string{"ws://*", "wss://*", "file://*"}).Do(actionCtx)
+			}
+			return nil
+		}),
 		cdppage.Enable(),
 		cdppage.SetLifecycleEventsEnabled(true),
 		chromedp.ActionFunc(func(actionCtx context.Context) error {
 			_, err := cdppage.AddScriptToEvaluateOnNewDocument(browserMutationObserverScript).Do(actionCtx)
 			return err
 		}),
-		fetch.Enable().WithPatterns([]*fetch.RequestPattern{{
-			URLPattern:   "*",
-			ResourceType: network.ResourceTypeDocument,
-			RequestStage: fetch.RequestStageRequest,
-		}}),
+		fetch.Enable().WithPatterns([]*fetch.RequestPattern{pattern}),
 		chromedp.ActionFunc(func(actionCtx context.Context) error {
 			_, _, errorText, isDownload, err := cdppage.Navigate(rawURL).Do(actionCtx)
 			if err != nil {
@@ -544,6 +550,16 @@ func (b *SandboxedHeadlessBrowser) renderObservable(ctx context.Context, executa
 		lastProbe             browserDOMProbe
 		lastDecision          renderDecision
 	)
+	finish := func(probe browserDOMProbe, decision renderDecision, stable bool, reason string) (RenderedPage, error) {
+		page, err := b.finishObservableRender(browserCtx, executable, rawURL, renderStarted, probe, decision, tracker.snapshot(), captures, stable, reason, screenshot...)
+		if len(screenshot) > 0 {
+			if blocked := tracker.snapshot().BlockedError; blocked != nil {
+				*screenshot[0] = nil
+				return RenderedPage{}, blocked
+			}
+		}
+		return page, err
+	}
 
 	for {
 		activity := tracker.snapshot()
@@ -562,12 +578,12 @@ func (b *SandboxedHeadlessBrowser) renderObservable(ctx context.Context, executa
 		}
 		now := time.Now()
 		if !now.Before(deadline) {
-			return b.finishObservableRender(browserCtx, executable, rawURL, renderStarted, lastProbe, lastDecision, activity, captures, false, "render_timeout_returning_last_non_empty_snapshot")
+			return finish(lastProbe, lastDecision, false, "render_timeout_returning_last_non_empty_snapshot")
 		}
 		select {
 		case <-ctx.Done():
 			if len(captures) > 0 {
-				return b.finishObservableRender(browserCtx, executable, rawURL, renderStarted, lastProbe, lastDecision, tracker.snapshot(), captures, false, "request_cancelled_returning_last_non_empty_snapshot")
+				return finish(lastProbe, lastDecision, false, "request_cancelled_returning_last_non_empty_snapshot")
 			}
 			// 连一张快照都没有：说清楚是超时且页面始终没给出可抓取的内容，
 			// 别只抛一句 context deadline exceeded 让人以为是网络问题。
@@ -604,12 +620,12 @@ func (b *SandboxedHeadlessBrowser) renderObservable(ctx context.Context, executa
 			}
 		}
 		if lastDecision.Complete {
-			return b.finishObservableRender(browserCtx, executable, rawURL, renderStarted, probe, lastDecision, tracker.snapshot(), captures, true, lastDecision.Reason)
+			return finish(probe, lastDecision, true, lastDecision.Reason)
 		}
 	}
 }
 
-func handlePausedBrowserDocument(ctx context.Context, tracker *browserActivityTracker, event *fetch.EventRequestPaused) {
+func handlePausedBrowserDocument(ctx context.Context, tracker *browserActivityTracker, event *fetch.EventRequestPaused, publicResources ...bool) {
 	if event == nil || event.Request == nil {
 		return
 	}
@@ -622,7 +638,15 @@ func handlePausedBrowserDocument(ctx context.Context, tracker *browserActivityTr
 			return
 		}
 		executorCtx := cdp.WithExecutor(ctx, browserContext.Target)
-		if err := validateSandboxedBrowserURL(ctx, rawURL); err != nil {
+		// Embedded data/blob assets have no network endpoint; all network resources
+		// in a public screenshot still pass the same public-address check as navigation.
+		var validateErr error
+		if len(publicResources) > 0 && publicResources[0] {
+			validateErr = validateScreenshotResource(ctx, rawURL, event.ResourceType)
+		} else {
+			validateErr = validateSandboxedBrowserURL(ctx, rawURL)
+		}
+		if err := validateErr; err != nil {
 			tracker.block(fmt.Errorf("browser redirect blocked for %q: %w", rawURL, err))
 			_ = fetch.FailRequest(requestID, network.ErrorReasonBlockedByClient).Do(executorCtx)
 			return
@@ -631,6 +655,13 @@ func handlePausedBrowserDocument(ctx context.Context, tracker *browserActivityTr
 			tracker.block(fmt.Errorf("continue browser navigation %q: %w", rawURL, err))
 		}
 	}()
+}
+
+func validateScreenshotResource(ctx context.Context, rawURL string, resourceType network.ResourceType) error {
+	if resourceType != network.ResourceTypeDocument && (strings.HasPrefix(rawURL, "data:") || strings.HasPrefix(rawURL, "blob:")) {
+		return nil
+	}
+	return validateSandboxedBrowserURL(ctx, rawURL)
 }
 
 func evaluateBrowserDOMProbe(ctx context.Context) (browserDOMProbe, error) {
@@ -670,7 +701,10 @@ func (b *SandboxedHeadlessBrowser) captureObservablePage(ctx context.Context, re
 	return page, nil
 }
 
-func (b *SandboxedHeadlessBrowser) finishObservableRender(ctx context.Context, executable, requestedURL string, started time.Time, probe browserDOMProbe, decision renderDecision, activity browserActivitySnapshot, captures []capturedBrowserPage, stable bool, reason string) (RenderedPage, error) {
+func (b *SandboxedHeadlessBrowser) finishObservableRender(ctx context.Context, executable, requestedURL string, started time.Time, probe browserDOMProbe, decision renderDecision, activity browserActivitySnapshot, captures []capturedBrowserPage, stable bool, reason string, screenshot ...*[]byte) (RenderedPage, error) {
+	if activity.BlockedError != nil {
+		return RenderedPage{}, activity.BlockedError
+	}
 	page, err := b.captureObservablePage(ctx, requestedURL)
 	if err != nil {
 		if len(captures) == 0 {
@@ -690,6 +724,27 @@ func (b *SandboxedHeadlessBrowser) finishObservableRender(ctx context.Context, e
 	page.PendingRequests = activity.PendingRequests
 	page.NavigationChain = dedupeConsecutiveStrings(activity.NavigationChain)
 	page.PreviousPages = previousPageSnapshots(captures, page.URL)
+	if len(screenshot) > 0 {
+		captureCtx, cancel := context.WithTimeout(ctx, browserCaptureTimeout)
+		defer cancel()
+		var finalURL string
+		if err := chromedp.Run(captureCtx,
+			chromedp.ActionFunc(func(actionCtx context.Context) error {
+				data, err := cdppage.CaptureScreenshot().WithFormat(cdppage.CaptureScreenshotFormatPng).WithFromSurface(true).Do(actionCtx)
+				*screenshot[0] = data
+				return err
+			}),
+			chromedp.Location(&finalURL),
+		); err != nil {
+			return RenderedPage{}, err
+		}
+		if finalURL != page.URL {
+			return RenderedPage{}, errors.New("截图期间页面发生跳转，请重试")
+		}
+		if _, err := screenshotImagePart(*screenshot[0]); err != nil {
+			return RenderedPage{}, err
+		}
+	}
 	return page, nil
 }
 

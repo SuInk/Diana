@@ -22,6 +22,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/SuInk/diana/model/llm"
+	"github.com/SuInk/diana/model/netguard"
 )
 
 const defaultScreenshotPath = ".agent-browser/screenshot.png"
@@ -50,6 +51,14 @@ type BuiltinBrowserUserTabs interface {
 	UserTab(targetID string) bool
 }
 
+// PersonalBrowserBridge can only resolve the authenticated sender's profile.
+// It never connects to the shared owner browser or an external CDP endpoint.
+type PersonalBrowserBridge interface {
+	Endpoint(context.Context) (string, error)
+	CurrentTab() string
+	SetCurrentTab(string)
+}
+
 type browserToolBase struct {
 	root     string
 	cdpURL   string
@@ -59,8 +68,10 @@ type browserToolBase struct {
 	// session 记着这个对话正在操作哪个标签页。同一个对话的前后几轮共用一份（见
 	// Config.BrowserSessionKey），不同对话各用各的：两个群同时让机器人开网页，不会
 	// 一个刚打开、另一个就把同一页跳走。
-	session *browserSession
-	tabs    *browserTabRegistry
+	session      *browserSession
+	tabs         *browserTabRegistry
+	personal     PersonalBrowserBridge
+	allowedHosts []string
 }
 
 // defaultScreenshotPath 是没指定 path 时截图落盘的位置，按对话分文件。
@@ -126,6 +137,12 @@ func (s *browserSession) lastUsedAt() time.Time {
 // 自己的浏览器，登录态留在数据目录里，比一个可能根本没开的外部调试端口有用。
 // checkURL 在机器人主动打开一个地址之前过一遍用户设的站点黑名单。
 func (b browserToolBase) checkURL(pageURL string) error {
+	if b.personal != nil {
+		if !browserScreenshotHostAllowed(pageURL, b.allowedHosts) {
+			return errors.New("网站不在个人浏览器操作白名单内")
+		}
+		return netguard.ValidatePublicURLStrict(context.Background(), pageURL)
+	}
 	if err := validateBrowserURL(pageURL); err != nil {
 		return err
 	}
@@ -145,6 +162,17 @@ func (b browserToolBase) userTab(targetID string) bool {
 }
 
 func (b browserToolBase) endpoint(ctx context.Context) (string, error) {
+	if b.personal != nil {
+		endpoint, err := b.personal.Endpoint(ctx)
+		if err != nil {
+			return "", err
+		}
+		if strings.TrimSpace(endpoint) == "" {
+			return "", errors.New("个人浏览器不可用")
+		}
+		return strings.TrimRight(endpoint, "/"), nil
+	}
+
 	if b.builtin != nil {
 		url, err := b.builtin.Endpoint(ctx)
 		if err != nil {
@@ -178,6 +206,7 @@ func (t *BrowserOpenTool) Description() string {
 func (t *BrowserOpenTool) InputSchema() map[string]any {
 	return toolObjectSchema([]string{"url"}, map[string]any{
 		"url":     toolStringParam("页面地址"),
+		"tab_id":  toolStringParam("个人浏览器标签页 ID，可通过 browser_tabs 查询"),
 		"new_tab": toolBoolParam("新标签页打开，默认沿用当前页"),
 	})
 }
@@ -191,7 +220,10 @@ func (t *BrowserOpenTool) Run(ctx context.Context, input map[string]any) (out st
 	// 越攒越多。新开的页也是先开空白页再跳转：/json/new 直接带地址的话，打不开的
 	// 网址会让那个页一直转圈，而这边没有任何超时能管到它。
 	newTab := boolFromInput(input, "new_tab", false)
-	client, err := t.base.openClient(ctx, newTab)
+	if t.base.personal != nil && t.base.personal.CurrentTab() == "" && stringFromInput(input, "tab_id") == "" {
+		newTab = true
+	}
+	client, err := t.base.openClient(ctx, newTab, stringFromInput(input, "tab_id"))
 	if err != nil {
 		return "", err
 	}
@@ -211,8 +243,8 @@ func openRecovery(newTab bool) pageRecovery {
 
 // openClient 是要跳转的工具用的 pageClient。沿用的标签页如果已经崩了，先把它换回
 // 空白页再连：反正马上要跳走，没必要为此报错让模型重试。
-func (b browserToolBase) openClient(ctx context.Context, newTab bool) (*cdpClient, error) {
-	client, err := b.pageClient(ctx, newTab)
+func (b browserToolBase) openClient(ctx context.Context, newTab bool, tabID ...string) (*cdpClient, error) {
+	client, err := b.pageClient(ctx, newTab, tabID...)
 	if err != nil || newTab {
 		return client, err
 	}
@@ -221,7 +253,7 @@ func (b browserToolBase) openClient(ctx context.Context, newTab bool) (*cdpClien
 		resetTabToBlank(resetCtx, client.wsURL)
 		cancel()
 		client.Close()
-		return b.pageClient(ctx, false)
+		return b.pageClient(ctx, false, tabID...)
 	}
 	return client, nil
 }
@@ -269,16 +301,20 @@ func (t *BrowserTextTool) RepeatableCalls() bool { return true }
 
 func (t *BrowserTextTool) InputSchema() map[string]any {
 	return toolObjectSchema(nil, map[string]any{
+		"tab_id":   toolStringParam("个人浏览器标签页 ID，可通过 browser_tabs 查询"),
 		"selector": toolStringParam("CSS 选择器，默认整页"),
 	})
 }
 
 func (t *BrowserTextTool) Run(ctx context.Context, input map[string]any) (out string, err error) {
-	client, err := t.base.pageClient(ctx, false)
+	client, err := t.base.pageClient(ctx, false, stringFromInput(input, "tab_id"))
 	if err != nil {
 		return "", err
 	}
 	defer t.base.release(client, &err)
+	if err := t.base.validatePersonalPage(ctx, client); err != nil {
+		return "", err
+	}
 	return t.base.pageSnapshot(ctx, client, stringFromInput(input, "selector"))
 }
 
@@ -296,6 +332,7 @@ func (t *BrowserClickTool) Description() string {
 
 func (t *BrowserClickTool) InputSchema() map[string]any {
 	return toolObjectSchema(nil, map[string]any{
+		"tab_id":      toolStringParam("个人浏览器标签页 ID，可通过 browser_tabs 查询"),
 		"selector":    toolStringParam("CSS 选择器"),
 		"x":           toolNumberParam("视口 CSS 像素，同截图坐标"),
 		"y":           toolNumberParam("视口 CSS 像素"),
@@ -326,11 +363,14 @@ func (t *BrowserClickTool) Run(ctx context.Context, input map[string]any) (out s
 	if clicks < 1 || clicks > 3 {
 		clicks = 1
 	}
-	client, err := t.base.pageClient(ctx, false)
+	client, err := t.base.pageClient(ctx, false, stringFromInput(input, "tab_id"))
 	if err != nil {
 		return "", err
 	}
 	defer t.base.release(client, &err)
+	if err := t.base.validatePersonalPage(ctx, client); err != nil {
+		return "", err
+	}
 	if selector != "" {
 		// 先滚到视口中间再取坐标。点击点被别的元素盖住（弹层、吸顶栏）时真实点击
 		// 会落到盖着的那个元素上，这种情况退回 el.click()，保证点到的是要点的元素。
@@ -345,7 +385,7 @@ const reachable = r.width > 0 && r.height > 0 && hit && (hit === el || el.contai
 if (!reachable) { el.click(); return {ok:true, synthetic:true}; }
 return {ok:true, x, y};
 })()`, jsString(selector))
-		raw, err := client.evaluate(ctx, expr)
+		raw, err := client.evaluate(ctx, t.base.personalExpression(expr))
 		if err != nil {
 			return "", err
 		}
@@ -363,6 +403,9 @@ return {ok:true, x, y};
 			return string(raw), nil
 		}
 		if located.Synthetic {
+			if err := t.base.validatePersonalPage(ctx, client); err != nil {
+				return "", err
+			}
 			return client.pageState(ctx, map[string]any{"clicked": selector, "synthetic": true})
 		}
 		x, y = located.X, located.Y
@@ -375,6 +418,9 @@ return {ok:true, x, y};
 	result := map[string]any{"clicked_at": map[string]float64{"x": x, "y": y}}
 	if selector != "" {
 		result["clicked"] = selector
+	}
+	if err := t.base.validatePersonalPage(ctx, client); err != nil {
+		return "", err
 	}
 	return client.pageState(ctx, result)
 }
@@ -393,6 +439,7 @@ func (t *BrowserTypeTool) Description() string {
 
 func (t *BrowserTypeTool) InputSchema() map[string]any {
 	return toolObjectSchema([]string{"text"}, map[string]any{
+		"tab_id":      toolStringParam("个人浏览器标签页 ID，可通过 browser_tabs 查询"),
 		"selector":    toolStringParam("输入框 CSS 选择器，默认当前焦点"),
 		"text":        toolStringParam(""),
 		"clear":       toolBoolParam("先清空原内容，默认 true"),
@@ -405,11 +452,14 @@ func (t *BrowserTypeTool) RepeatableCalls() bool { return true }
 func (t *BrowserTypeTool) Run(ctx context.Context, input map[string]any) (out string, err error) {
 	selector := stringFromInput(input, "selector")
 	text := rawStringFromInput(input, "text")
-	client, err := t.base.pageClient(ctx, false)
+	client, err := t.base.pageClient(ctx, false, stringFromInput(input, "tab_id"))
 	if err != nil {
 		return "", err
 	}
 	defer t.base.release(client, &err)
+	if err := t.base.validatePersonalPage(ctx, client); err != nil {
+		return "", err
+	}
 	// 聚焦和清空在页面里做，文字本身用 Input.insertText 送进去：直接改 value 的话
 	// React、Vue 这类受控输入框不认，页面上看着填了，提交出去还是空的。清空用原生
 	// setter 而不是 el.value = ""，同样是为了让框架的值追踪器看到这次变化。
@@ -438,7 +488,7 @@ if (%t) {
 }
 return {ok:true};
 })()`, jsString(selector), boolFromInput(input, "clear", true))
-	raw, err := client.evaluate(ctx, expr)
+	raw, err := client.evaluate(ctx, t.base.personalExpression(expr))
 	if err != nil {
 		return "", err
 	}
@@ -463,90 +513,214 @@ return {ok:true};
 	if selector != "" {
 		result["selector"] = selector
 	}
+	if err := t.base.validatePersonalPage(ctx, client); err != nil {
+		return "", err
+	}
 	return client.pageState(ctx, result)
 }
 
 type BrowserScreenshotTool struct {
-	base browserToolBase
-
-	mu    sync.Mutex
-	parts []llm.ContentPart
-}
-
-func (t *BrowserScreenshotTool) Name() string {
-	return "browser_screenshot"
-}
-
-func (t *BrowserScreenshotTool) Description() string {
-	return `截取当前页面可见区域，图片直接给你看并存进工作目录。图上坐标可直接给 browser_click。`
+	base         browserToolBase
+	restricted   bool
+	allowedHosts []string
+	protected    protectedFiles
+	mu           sync.Mutex
+	parts        []llm.ContentPart
 }
 
 func (t *BrowserScreenshotTool) RepeatableCalls() bool { return true }
 
-// ToolResultParts 把刚截的图交给下一轮模型。以前只回一个文件路径，模型拿到路径也
-// 看不见图，这个工具等于只对人有用。
-func (t *BrowserScreenshotTool) ToolResultParts(string) []llm.ContentPart {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	return append([]llm.ContentPart(nil), t.parts...)
-}
+func (t *BrowserScreenshotTool) Name() string { return "browser_screenshot" }
 
-func (t *BrowserScreenshotTool) setParts(parts []llm.ContentPart) {
-	t.mu.Lock()
-	t.parts = parts
-	t.mu.Unlock()
+func (t *BrowserScreenshotTool) Description() string {
+	return `截取已打开的登录浏览器页面并附加真实画面。url 必须是已打开标签页的完整地址，不会打开、点击或输入网页；公开网页请用 webpage_screenshot。多个页面时必须明确指定 url 或 tab_id。`
 }
 
 func (t *BrowserScreenshotTool) InputSchema() map[string]any {
-	return toolObjectSchema(nil, map[string]any{
-		"path": toolStringParam("相对路径，默认 " + WorkspaceBrowserDir + "/；成品放 " + WorkspaceOutputsDir + "/，别放根下"),
-	})
+	props := map[string]any{
+		"url":    toolStringParam("已打开标签页的完整 URL；非主人必填，只允许授权网站"),
+		"tab_id": toolStringParam("已知标签页 ID，用于区分相同 URL 的多个页面；不指定时必须唯一匹配"),
+	}
+	var required []string
+	if t.restricted {
+		required = []string{"url"}
+	} else {
+		props["path"] = toolStringParam("工作目录内的相对保存路径，省略时使用默认文件名")
+	}
+	return toolObjectSchema(required, props)
 }
 
-func (t *BrowserScreenshotTool) Run(ctx context.Context, input map[string]any) (out string, err error) {
-	t.setParts(nil)
+func (t *BrowserScreenshotTool) Run(ctx context.Context, input map[string]any) (string, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.parts = nil
 	outPath := stringFromInput(input, "path")
-	if outPath == "" {
-		outPath = t.base.defaultScreenshotPath()
+	if t.restricted && outPath != "" {
+		return "", errors.New("非主人不能指定截图文件路径")
 	}
-	path, err := safePath(t.base.root, outPath)
+	var path string
+	if !t.restricted {
+		if outPath == "" {
+			outPath = t.base.defaultScreenshotPath()
+		}
+		var err error
+		path, err = safePath(t.base.root, outPath)
+		if err != nil {
+			return "", err
+		}
+		if t.protected.blocked(path) {
+			return "", errors.New("截图不能覆盖受保护的配置文件")
+		}
+	}
+	requestedURL := stringFromInput(input, "url")
+	if t.restricted && !browserScreenshotHostAllowed(requestedURL, t.allowedHosts) {
+		return "", errors.New("请明确指定授权网站上已打开页面的完整 HTTP(S) URL")
+	}
+	ctx, cancel := context.WithTimeout(ctx, t.base.timeout)
+	defer cancel()
+	endpoint, err := t.base.endpoint(ctx)
 	if err != nil {
 		return "", err
 	}
-	client, err := t.base.pageClient(ctx, false)
+	targets, err := listBrowserTargets(ctx, endpoint)
 	if err != nil {
 		return "", err
 	}
-	defer t.base.release(client, &err)
+	var target browserTarget
+	if t.base.personal == nil && requestedURL == "" && stringFromInput(input, "tab_id") == "" {
+		target, err = t.base.pickTarget(ctx, endpoint, false)
+	} else {
+		filtered := []browserTarget{}
+		for _, candidate := range targets {
+			if !t.base.userTab(candidate.ID) && (t.base.personal != nil || !t.base.tabRegistry().heldByOther(candidate.ID, t.base.session)) {
+				filtered = append(filtered, candidate)
+			}
+		}
+		target, err = screenshotTarget(filtered, requestedURL, stringFromInput(input, "tab_id"))
+	}
+	if err != nil {
+		return "", err
+	}
+	if err := t.base.checkURL(target.URL); err != nil {
+		return "", err
+	}
+	client, err := newCDPClient(ctx, target.WebSocketDebuggerURL, t.base.timeout)
+	if err != nil {
+		return "", err
+	}
+	defer client.Close()
+	if err := client.call(ctx, "Page.enable", nil, nil); err != nil {
+		return "", err
+	}
+	var before screenshotFrameTree
+	if err := client.call(ctx, "Page.getFrameTree", nil, &before); err != nil {
+		return "", err
+	}
+	if before.FrameTree.Frame.URL != target.URL {
+		return "", errors.New("页面已切换，请重新指定截图页面")
+	}
+	if t.restricted && (!before.FrameTree.allowed(t.allowedHosts) || (t.base.personal != nil && !before.FrameTree.allowed(t.base.allowedHosts))) {
+		return "", errors.New("页面或嵌入页面不在截图网站授权范围内")
+	}
+	client.navigationObserved.Store(false)
 	var result struct {
 		Data string `json:"data"`
 	}
 	if err := client.call(ctx, "Page.captureScreenshot", map[string]any{"format": "png", "fromSurface": true}, &result); err != nil {
 		return "", err
 	}
+	var after screenshotFrameTree
+	if err := client.call(ctx, "Page.getFrameTree", nil, &after); err != nil {
+		return "", err
+	}
+	if client.navigationObserved.Load() || before.FrameTree.Frame.URL != after.FrameTree.Frame.URL || (t.restricted && (!after.FrameTree.allowed(t.allowedHosts) || (t.base.personal != nil && !after.FrameTree.allowed(t.base.allowedHosts)))) {
+		return "", errors.New("截图期间页面发生跳转或授权范围变化，请重试")
+	}
+	// A human may take over while the capture is in flight. Do not expose that image.
+	if currentEndpoint, err := t.base.endpoint(ctx); err != nil {
+		return "", err
+	} else if currentEndpoint != endpoint {
+		return "", errors.New("浏览器连接已变化，请重试截图")
+	}
 	data, err := base64.StdEncoding.DecodeString(result.Data)
 	if err != nil {
 		return "", err
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return "", err
-	}
-	if err := os.WriteFile(path, data, 0o600); err != nil {
-		return "", err
-	}
-	t.setParts([]llm.ContentPart{{Type: llm.ContentPartImageURL, ImageURL: "data:image/png;base64," + result.Data}})
-	body, err := json.MarshalIndent(map[string]any{
-		"path":  relPathForOutput(t.base.root, path),
-		"bytes": len(data),
-		"note":  "截图已附在这条结果里",
-	}, "", "  ")
+	part, err := screenshotImagePart(data)
 	if err != nil {
 		return "", err
 	}
-	return string(body), nil
+	body := map[string]any{"url": after.FrameTree.Frame.URL, "tab_id": target.ID, "bytes": len(data)}
+	// Members receive only these captured bytes, never access to a workspace path.
+	if !t.restricted {
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			return "", err
+		}
+		if err := os.WriteFile(path, data, 0o600); err != nil {
+			return "", err
+		}
+		body["path"] = relPathForOutput(t.base.root, path)
+	}
+	output, err := json.Marshal(body)
+	if err != nil {
+		return "", err
+	}
+	t.parts = []llm.ContentPart{part}
+	return string(output), nil
+}
+
+func (t *BrowserScreenshotTool) ToolResultParts(string) []llm.ContentPart {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return append([]llm.ContentPart(nil), t.parts...)
+}
+
+func screenshotTarget(targets []browserTarget, rawURL, tabID string) (browserTarget, error) {
+	var matches []browserTarget
+	for _, target := range targets {
+		if target.Type != "page" || target.WebSocketDebuggerURL == "" || isBlankBrowserTarget(target.URL) {
+			continue
+		}
+		if rawURL != "" && target.URL != rawURL {
+			continue
+		}
+		if tabID != "" && target.ID != tabID {
+			continue
+		}
+		matches = append(matches, target)
+	}
+	if len(matches) != 1 {
+		return browserTarget{}, errors.New("截图页面未找到或有多个匹配，请明确指定已打开页面的完整 url 和必要的 tab_id")
+	}
+	return matches[0], nil
+}
+
+type screenshotFrameTree struct {
+	FrameTree screenshotFrame `json:"frameTree"`
+}
+type screenshotFrame struct {
+	Frame struct {
+		URL string `json:"url"`
+	} `json:"frame"`
+	ChildFrames []screenshotFrame `json:"childFrames"`
+}
+
+func (frame screenshotFrame) allowed(hosts []string) bool {
+	if !browserScreenshotHostAllowed(frame.Frame.URL, hosts) {
+		return false
+	}
+	for _, child := range frame.ChildFrames {
+		if !child.allowed(hosts) {
+			return false
+		}
+	}
+	return true
 }
 
 func (b browserToolBase) pageSnapshot(ctx context.Context, client *cdpClient, selector string) (string, error) {
+	if err := b.validatePersonalPage(ctx, client); err != nil {
+		return "", err
+	}
 	selectorExpr := "null"
 	if selector != "" {
 		selectorExpr = jsString(selector)
@@ -563,21 +737,37 @@ return {
   truncated: text.length > %d
 };
 })()`, selectorExpr, b.maxChars, b.maxChars, b.maxChars)
-	raw, err := client.evaluate(ctx, expr)
+	client.navigationObserved.Store(false)
+	raw, err := client.evaluate(ctx, b.personalExpression(expr))
 	if err != nil {
 		return "", err
+	}
+	if err := b.validatePersonalPage(ctx, client); err != nil {
+		return "", err
+	}
+	if b.personal != nil && client.navigationObserved.Load() {
+		return "", errors.New("读取期间页面发生跳转，请重读授权页面")
 	}
 	return string(raw), nil
 }
 
-func (b browserToolBase) pageClient(ctx context.Context, newTab bool) (*cdpClient, error) {
+func (b browserToolBase) pageClient(ctx context.Context, newTab bool, tabID ...string) (*cdpClient, error) {
 	ctx, cancel := context.WithTimeout(ctx, b.timeout)
 	defer cancel()
 	baseURL, err := b.endpoint(ctx)
 	if err != nil {
 		return nil, err
 	}
-	target, err := b.pickTarget(ctx, baseURL, newTab)
+	var target browserTarget
+	if b.personal != nil {
+		id := ""
+		if len(tabID) > 0 {
+			id = tabID[0]
+		}
+		target, err = b.pickPersonalOrOwnerTarget(ctx, baseURL, "", newTab, id)
+	} else {
+		target, err = b.pickTarget(ctx, baseURL, newTab)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -814,4 +1004,91 @@ func firstNonEmptyString(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func (b browserToolBase) validatePersonalPage(ctx context.Context, client *cdpClient) error {
+	if b.personal == nil {
+		return nil
+	}
+	var frames screenshotFrameTree
+	if err := client.call(ctx, "Page.getFrameTree", nil, &frames); err != nil {
+		return err
+	}
+	if !frames.FrameTree.allowed(b.allowedHosts) {
+		return errors.New("页面或嵌入页面不在个人浏览器操作白名单内")
+	}
+	return nil
+}
+
+func (b browserToolBase) pickPersonalOrOwnerTarget(ctx context.Context, endpoint, pageURL string, newTab bool, tabID string) (browserTarget, error) {
+	if b.personal == nil {
+		return b.pickTarget(ctx, endpoint, newTab)
+	}
+	if newTab || (pageURL != "" && b.personal.CurrentTab() == "" && tabID == "") {
+		target, err := newBrowserTarget(ctx, endpoint, "about:blank")
+		if err == nil {
+			b.personal.SetCurrentTab(target.ID)
+		}
+		return target, err
+	}
+	if tabID == "" {
+		tabID = b.personal.CurrentTab()
+	}
+	targets, err := listBrowserTargets(ctx, endpoint)
+	if err != nil {
+		return browserTarget{}, err
+	}
+	for _, target := range targets {
+		if target.Type == "page" && target.ID == tabID && target.WebSocketDebuggerURL != "" {
+			if pageURL == "" && !browserScreenshotHostAllowed(target.URL, b.allowedHosts) {
+				return browserTarget{}, errors.New("请先打开白名单网站，或指定自己的有效标签页")
+			}
+			b.personal.SetCurrentTab(target.ID)
+			return target, nil
+		}
+	}
+	return browserTarget{}, errors.New("个人浏览器标签页不存在，请用 browser_open 打开网站或 browser_tabs 查找登录弹窗")
+}
+
+type PersonalBrowserTabsTool struct{ base browserToolBase }
+
+func (t *PersonalBrowserTabsTool) Name() string { return "browser_tabs" }
+func (t *PersonalBrowserTabsTool) Description() string {
+	return "列出本人浏览器中白名单网站的标签页，用于查找登录跳转或弹窗；返回的 tab_id 可用于打开、读取、点击、输入及截图。"
+}
+func (t *PersonalBrowserTabsTool) InputSchema() map[string]any { return toolObjectSchema(nil, nil) }
+func (t *PersonalBrowserTabsTool) Run(ctx context.Context, input map[string]any) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, t.base.timeout)
+	defer cancel()
+	endpoint, err := t.base.endpoint(ctx)
+	if err != nil {
+		return "", err
+	}
+	targets, err := listBrowserTargets(ctx, endpoint)
+	if err != nil {
+		return "", err
+	}
+	result := []map[string]string{}
+	for _, target := range targets {
+		if target.Type != "page" || !browserScreenshotHostAllowed(target.URL, t.base.allowedHosts) {
+			continue
+		}
+		result = append(result, map[string]string{"tab_id": target.ID, "url": target.URL, "title": target.Title})
+	}
+	data, err := json.Marshal(result)
+	return string(data), err
+}
+
+// Check location inside the same JavaScript evaluation, so a navigation between
+// the frame-tree check and evaluation cannot expose a different page's DOM.
+func (b browserToolBase) personalExpression(expr string) string {
+	if b.personal == nil {
+		return expr
+	}
+	hosts, _ := json.Marshal(b.allowedHosts)
+	return fmt.Sprintf(`(() => {
+ const allowed = %s;
+ if (!['http:','https:'].includes(location.protocol) || !allowed.includes(location.host.toLowerCase())) throw new Error("页面不在个人浏览器白名单内");
+ return (%s);
+ })()`, hosts, expr)
 }

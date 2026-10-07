@@ -1068,7 +1068,10 @@ func (r *Runner) systemPrompt() string {
 		// 规则参照 Codex 的 web.run：技术问题只认一手来源，顺着官网链接找到对应页面再下结论。
 		rules = append(rules, "- 问价格、套餐、额度、版本、是否支持这类事实，以官方的定价、文档、更新日志页为准：从 browser_render 返回的 links 里找到对应页面打开读，或用 find 在页内查关键词。只看了首页或搜索摘要时，没写不等于没有，不能据此断言「没有」；技术问题只认官方文档等一手来源。")
 	}
-	if hasAnyTool(InteractiveBrowserToolNames...) {
+	if hasAnyTool("webpage_screenshot", "browser_screenshot") {
+		rules = append(rules, "- 公共网页截图用 webpage_screenshot，不带登录态；browser_screenshot 只截已授权的登录页面。capture 的真实画面才是截图证据；要求发送时，用同一工具的 action=send 和本轮 image_id 发到当前会话。")
+	}
+	if hasTool("browser_eval") {
 		// 交互式浏览器只登记给主人，带着主人的登录态。主人的事需要用浏览器就直接用，
 		// 不必等他点名「用浏览器」——那条「只在明确要求时才用」把主人也挡在了外面。
 		rules = append(rules, "- 交互式浏览器（browser_open 等）是主人的常驻浏览器，带着主人的登录态。主人的请求需要登录后的页面、要在网页上操作、或 browser_render 读不到时，直接用它完成，不必等主人点名。操作顺序通常是：browser_open 打开 → browser_text 或 browser_screenshot 看清页面 → browser_click / browser_type / browser_press_key / browser_select 操作 → browser_wait 等结果；多个标签页用 browser_tabs 管理，批量提取数据用 browser_eval。截图坐标可以直接交给 browser_click 的 x/y。付款、删除、发帖、改账号设置这类不可逆操作，先说清要做什么，等主人确认再点。")
@@ -1076,6 +1079,9 @@ func (r *Runner) systemPrompt() string {
 	if hasTool("browser_handoff") {
 		// 密码和验证码不该经过聊天记录，也不该经过模型。
 		rules = append(rules, "- 碰上登录、扫码、短信或邮箱验证码、人机验证这类只能主人亲手做的一步，先在内置浏览器里把那一页打开，再用 browser_handoff 请主人接手，task 里写清楚接下来要做完什么；不要让主人把密码或验证码发到聊天里。")
+	}
+	if hasTool("browser_tabs") && !hasTool("browser_eval") {
+		rules = append(rules, "- 当前 browser_* 使用发信用户的个人隔离浏览器，仅限已授权网站。登录跳转、资源和弹窗域名也需授权，无法访问时不要绕过白名单；browser_tabs 可查本人登录弹窗，后续用 tab_id 选择。扫码登录可截取并发送当前页面；不要要求用户在聊天里发送密码或验证码。")
 	}
 	if hasTool("image") && hasAnyTool(webSearchToolName, "browser_render", "browser_open", "browser_text") {
 		rules = append(rules, "- 用户明确要求先搜索、核验网页或读取外部资料再生成/编辑图片时，必须先完成搜索和必要的网页核验，再把已确认结果整理为完整、自包含 prompt 调用 image。")

@@ -10,6 +10,7 @@ import demoBuiltinSouls from './demo-builtin-souls.json';
 import demoAgentSafeMode from './demo-agent-safe-mode.json';
 import type {
   AgentResidencyEntry,
+  AgentBrowserSettings,
   AppLogEntry,
   AssistantEventDetail,
   AssistantTask,
@@ -41,6 +42,7 @@ import type {
 } from "./api";
 
 export const demoMode = import.meta.env.VITE_DEMO_MODE === "true";
+const demoAgentBrowsers = new Map<string, AgentBrowserSettings>();
 
 const demoContextBudget = {
   context_window: 128_000,
@@ -1188,6 +1190,19 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
     const active = demoBrowserSourceOrder.find((key) => (key === "box" ? box : extension).usable) ?? "off";
     return { order: demoBrowserSourceOrder, active, box, extension };
   };
+  if (path === "/api/assistant/agent-browser") {
+    const profile = String(body.profile_id ?? url.searchParams.get("profile") ?? "");
+    const current = demoAgentBrowsers.get(profile) ?? {
+      profile_id: profile, cdp_url: "http://127.0.0.1:9222", timeout_ms: 15000,
+      tools: ["browser_open", "browser_text", "browser_click", "browser_type", "browser_screenshot", "browser_tabs"],
+      screenshot_access: { mode: "owner_only", allowed_users: [], allowed_hosts: [], allowed_groups: [] },
+      operation_access: { mode: "owner_only", allowed_users: [], allowed_hosts: [] }
+    };
+    const saved = method === "POST" ? { ...current, ...body } as AgentBrowserSettings : current;
+    demoAgentBrowsers.set(profile, saved);
+    return json(saved);
+  }
+  if (path === "/api/assistant/agent-browser/test") return json({ connected: true, browser: "Chromium（演示）" });
   if (path === "/api/browser-source" && method === "GET") return json(demoBrowserSourceState());
   if (path === "/api/browser-source" && method === "PUT") {
     if (typeof body.box_enabled === "boolean") demoBrowserBoxSettings = { ...demoBrowserBoxSettings, enabled: body.box_enabled };

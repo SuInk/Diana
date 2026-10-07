@@ -103,6 +103,16 @@ llm_runtime:
 #     - diana
 #   system_prompt: ""
 #   agent_mode: standard # standard 标准模式（全部能力）/ safe 安全模式（关掉命令、MCP、登录态浏览器等高风险能力）；不写时默认 standard，只有旧配置明确写着 agent_enabled: false 时换算成 safe
+#   # 操作默认仅主人；普通用户仅私聊，使用各自独立登录态。
+#   agent_browser_operation_access:
+#     mode: owner_only           # disabled / owner_only / whitelist
+#     allowed_users: []          # 平台用户 ID，精确匹配
+#     allowed_hosts: []          # 业务、登录及资源域名均需加入，不含子域名
+#   # 截图独立授权；普通用户还必须具备个人操作权限，不能看主人登录态。
+#   agent_browser_screenshot_access:
+#     mode: owner_only # disabled / owner_only / whitelist
+#     allowed_users: [] # whitelist 模式下填平台用户 ID；主人始终包含在内
+#     allowed_hosts: [] # 非主人必填精确域名，可带端口；不包含子域名，不支持通配符
 
 # llm:
 #   provider: openai_compatible

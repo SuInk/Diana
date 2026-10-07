@@ -11,6 +11,7 @@ import (
 	"hash/fnv"
 	"io"
 	"log"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -22,6 +23,7 @@ import (
 	"github.com/SuInk/diana/internal/secretmask"
 	"github.com/SuInk/diana/model/agent"
 	"github.com/SuInk/diana/model/applog"
+	"github.com/SuInk/diana/model/browserbox"
 	"github.com/SuInk/diana/model/browsersource"
 	"github.com/SuInk/diana/model/llm"
 
@@ -480,6 +482,7 @@ type Runtime struct {
 	browserControl            agent.BrowserControlBridge
 	browserBox                BuiltinBrowserProvider
 	browserSource             func() string
+	userBrowsers              *browserbox.UserSessionPool
 	media                     *MediaStore
 	members                   *memberCache
 	bodyAccounts              bodyAccountMembership
@@ -701,6 +704,24 @@ func (r *Runtime) browserToolsDisabledFor(cfg BotConfig) bool {
 		return false
 	}
 	return !r.browserSourceAllows(browsersource.Box)
+}
+
+// SetUserBrowsers configures persistent, sender-scoped profiles independently
+// of the owner browser's enabled state and CDP address.
+func (r *Runtime) SetUserBrowsers(pool *browserbox.UserSessionPool) {
+	r.mu.Lock()
+	r.userBrowsers = pool
+	r.mu.Unlock()
+}
+
+func (r *Runtime) personalBrowserFor(cfg BotConfig, event MessageEvent, hosts []string) *browserbox.UserBrowserSession {
+	r.mu.Lock()
+	if r.userBrowsers == nil {
+		r.userBrowsers = browserbox.NewUserSessionPool(filepath.Dir(AgentWorkspaceDir()), nil)
+	}
+	pool := r.userBrowsers
+	r.mu.Unlock()
+	return pool.NewRequest(cfg.ID, string(NormalizePlatformID(firstNonEmpty(string(event.Platform), string(cfg.Platform)))), event.UserID, hosts)
 }
 
 // browserBoxFor 交出这台机器人自己的内置浏览器。用户在「浏览器」页把它打开就算数，不再要求
@@ -1047,6 +1068,7 @@ func (r *Runtime) Stop() error {
 	cancel := r.cancel
 	inboundDone := r.inboundDone
 	memoryDone := r.memoryDone
+	userBrowsers := r.userBrowsers
 	r.cancel = nil
 	r.runCtx = nil
 	r.running = false
@@ -1075,7 +1097,9 @@ func (r *Runtime) Stop() error {
 		}
 	}
 	r.closeAgentRegistryCache()
-
+	if userBrowsers != nil {
+		userBrowsers.Stop()
+	}
 	return err
 }
 

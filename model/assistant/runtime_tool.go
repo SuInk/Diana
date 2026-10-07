@@ -192,8 +192,12 @@ func (r *Runtime) generateReplyWithAgentTools(ctx context.Context, cfg BotConfig
 			CommandTimeoutMS:           cfg.AgentCommandTimeoutMS,
 			BrowserCDPURL:              cfg.AgentBrowserCDPURL,
 			BrowserTimeoutMS:           cfg.AgentBrowserTimeoutMS,
-			BrowserControl:             r.browserControlFor(cfg),
-			BuiltinBrowser:             r.browserBoxFor(cfg),
+			// 没有发言者信息，不能假定主人身份或命中截图白名单。
+			BrowserScreenshotDisabled:   true,
+			BrowserOperationDisabled:    true,
+			BrowserScreenshotRestricted: true,
+			BrowserControl:              r.browserControlFor(cfg),
+			BuiltinBrowser:              r.browserBoxFor(cfg),
 		}
 		agentCfg = restrictAgentConfigForMode(cfg, agentCfg)
 		registry := agent.NewToolRegistry()

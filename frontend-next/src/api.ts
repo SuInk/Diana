@@ -443,6 +443,8 @@ export interface BotProfileConfig extends SendRetrySettings {
   agent_file_write_enabled?: boolean;
   agent_browser_cdp_url?: string;
   agent_browser_timeout_ms?: number;
+  agent_browser_screenshot_access?: BrowserScreenshotAccess;
+  agent_browser_operation_access?: BrowserOperationAccess;
   /** 允许这台机器人使用浏览器控制扩展（browser_ext_*）。默认关闭。 */
   agent_browser_control_enabled?: boolean;
   agent_browser_box_disabled?: boolean;
@@ -1783,12 +1785,19 @@ export function manageExtension<T = {ok: boolean}>(input: Record<string, unknown
 }
 
 /** 交互式浏览器接入：模型通过 CDP 操作一个真实浏览器，用的是那个浏览器已有的登录态。 */
-export interface AgentBrowserSettings { profile_id?: string; cdp_url?: string; timeout_ms?: number; tools: string[] }
+export interface BrowserScreenshotAccess {
+  mode: "disabled" | "owner_only" | "whitelist";
+  allowed_users?: string[];
+  allowed_hosts?: string[];
+  allowed_groups?: string[];
+}
+export type BrowserOperationAccess = Omit<BrowserScreenshotAccess, "allowed_groups">;
+export interface AgentBrowserSettings { profile_id?: string; cdp_url?: string; timeout_ms?: number; tools: string[]; screenshot_access?: BrowserScreenshotAccess; operation_access?: BrowserOperationAccess }
 export function getAgentBrowser(profile = ""): Promise<AgentBrowserSettings> {
   return requestJSON(`/api/assistant/agent-browser?profile=${encodeURIComponent(profile)}`);
 }
-export function saveAgentBrowser(profile: string, cdpURL: string, timeoutMS: number): Promise<AgentBrowserSettings> {
-  return requestJSON("/api/assistant/agent-browser", {method: "POST", body: JSON.stringify({profile_id: profile, cdp_url: cdpURL, timeout_ms: timeoutMS})});
+export function saveAgentBrowser(profile: string, cdpURL: string, timeoutMS: number, screenshotAccess?: BrowserScreenshotAccess, operationAccess?: BrowserOperationAccess): Promise<AgentBrowserSettings> {
+  return requestJSON("/api/assistant/agent-browser", {method: "POST", body: JSON.stringify({profile_id: profile, cdp_url: cdpURL, timeout_ms: timeoutMS, screenshot_access: screenshotAccess, operation_access: operationAccess})});
 }
 export type IMessageProbeResult = {
   connected: boolean;

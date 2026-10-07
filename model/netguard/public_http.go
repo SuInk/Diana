@@ -114,6 +114,11 @@ func guardedDialContext(ctx context.Context, network, address string) (net.Conn,
 	if privateFetchesAllowed() {
 		return (&net.Dialer{}).DialContext(ctx, network, address)
 	}
+	return DialPublicContextStrict(ctx, network, address)
+}
+
+// DialPublicContextStrict pins a validated public IP and ignores media-fetch opt-ins.
+func DialPublicContextStrict(ctx context.Context, network, address string) (net.Conn, error) {
 	host, port, err := net.SplitHostPort(address)
 	if err != nil {
 		return nil, err
