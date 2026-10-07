@@ -9,7 +9,7 @@ function panelHarness(api) {
   const botScope = ref("bot-a");
   const source = readFileSync(new URL("./components/AgentBrowserPanel.vue", import.meta.url), "utf8");
   const script = source.match(/<script setup lang="ts">([\s\S]*?)<\/script>/)[1];
-  const compiled = ts.transpileModule(script + "\nexport { load, save, screenshotAccess, screenshotAccessOptions, operationAccess, loadError, formValid };", {
+  const compiled = ts.transpileModule(script + "\nexport { load, save, screenshotAccess, screenshotAccessOptions, operationAccess, loadError, formValid, screenshotWithoutOperation, screenshotUsersWithoutOperation };", {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 }
   }).outputText;
   const context = vm.createContext({
@@ -124,4 +124,14 @@ test("an incomplete or malformed allowlist blocks saving instead of silently gra
   assert.equal(panel.formValid.value, true);
   await panel.save();
   assert.equal(saves, 1);
+});
+
+test("screenshot grants that the operation policy cannot honour are flagged", async () => {
+  const panel = panelHarness({ getAgentBrowser: async () => ({}) });
+  await panel.load();
+  panel.screenshotAccess.value = { mode: "whitelist", allowed_users: ["1001", "1002"], allowed_hosts: ["example.com"], allowed_groups: [] };
+  assert.equal(panel.screenshotWithoutOperation.value, true);
+  panel.operationAccess.value = { mode: "whitelist", allowed_users: ["1001"], allowed_hosts: ["example.com"] };
+  assert.equal(panel.screenshotWithoutOperation.value, false);
+  assert.deepEqual(plain(panel.screenshotUsersWithoutOperation.value), ["1002"]);
 });

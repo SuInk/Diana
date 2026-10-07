@@ -31,6 +31,8 @@
         <div class="field">
           <label for="browser-screenshot-access">登录浏览器截图权限</label>
           <AppSelect id="browser-screenshot-access" v-model="screenshotAccess.mode" :options="screenshotAccessOptions" />
+          <span v-if="screenshotWithoutOperation" class="hint warn-text">左边的操作权限没开给指定用户，这里的截图授权对他们不生效。</span>
+          <span v-else-if="screenshotUsersWithoutOperation.length" class="hint warn-text">{{ screenshotUsersWithoutOperation.join('、') }} 不在允许操作的用户里，截图对他们不生效。</span>
           <span class="hint">默认仅主人。停用对主人也生效；指定用户截图还需开启上方的个人操作权限，只能截取自己的页面。</span>
         </div>
         <div v-if="screenshotAccess.mode === 'whitelist'" class="field">
@@ -104,6 +106,13 @@ function whitelistComplete(access: { mode: string; allowed_users?: string[]; all
   if (access.mode !== 'whitelist') return true;
   return !!access.allowed_users?.length && !!access.allowed_hosts?.length && !invalidHosts(access).length;
 }
+// 后端要求普通用户截图时也有操作权限（截的是他自己的独立浏览器），只开截图不会生效。
+const screenshotWithoutOperation = computed(() => screenshotAccess.value.mode === 'whitelist' && operationAccess.value.mode !== 'whitelist');
+const screenshotUsersWithoutOperation = computed(() => {
+  if (screenshotAccess.value.mode !== 'whitelist' || operationAccess.value.mode !== 'whitelist') return [];
+  const operators = new Set(operationAccess.value.allowed_users ?? []);
+  return (screenshotAccess.value.allowed_users ?? []).filter(user => !operators.has(user));
+});
 const formValid = computed(() => whitelistComplete(operationAccess.value) && whitelistComplete(screenshotAccess.value));
 async function resolveAccountNames(ids: string[]): Promise<Record<string, string>> {
   const response = await fetchAssistantUserNames(ids, botScope.value);
