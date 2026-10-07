@@ -116,7 +116,7 @@ func TestLiveParticipationTwoRatingsReplay(t *testing.T) {
 			}
 			item.NewRel, item.NewChat = *ratings.Relevance.Directed, *ratings.ChatIn.Score
 			item.NewReason = "在跟机器人说话：" + ratings.Relevance.Reason + "；闲聊：" + ratings.ChatIn.Reason
-			item.NewAllowed, _ = prefs.ratingsAllow(ratings, true)
+			item.NewAllowed, _ = prefs.ratingsAllow(ratings)
 			if control {
 				item.NewAnswer = replayOldAnswerabilityScore(resp.Text)
 				item.NewAllowed = item.NewAllowed && replayOldAnswerabilityPasses(resp.Text, item.Levels[2])

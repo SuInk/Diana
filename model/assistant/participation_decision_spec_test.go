@@ -54,7 +54,7 @@ func TestParticipationDecisionStopSnapsToZero(t *testing.T) {
 		t.Fatalf("expected the stop level to render as 0, got %s", raw)
 	}
 	p := ParticipationPreferences{RelevanceLevel: "on", ChatLevel: "always"}
-	if allowed, _ := p.ratingsAllow(ratings, true); allowed {
+	if allowed, _ := p.ratingsAllow(ratings); allowed {
 		t.Fatalf("always still chimed in after a stop: %s", raw)
 	}
 }

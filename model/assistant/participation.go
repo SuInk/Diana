@@ -9,32 +9,6 @@ import (
 
 const defaultParticipationCooldownSeconds = 30
 
-// 机器人在热闹群里的小时发言占比一度到过 30%，冷却只能拉开两次插话的间隔，管不住总量。
-// 阈值不是拍的，是拿线上库回放出来的：取最近三天 app_logs 里 2181 条已解析的接话评分，
-// 复算出 469 次「只靠闲聊分支放行」的插话，再用当时 debug_trace 里真实的 recent_messages
-// 重跑各套参数，对照 message_events 里同一小时的真实发言占比。
-//
-//	                       拦掉/469   含插话且 >20% 的忙碌小时   这些小时的总占比
-//	旧值 最近20条 ≥35%        73 (16%)          9/33             15.1% -> 14.0%
-//	最近20条 ≥25%            156 (33%)          5/33             15.1% -> 12.5%
-//	10 分钟内 ≥25% 且机器人≥3  131 (28%)          5/33             15.1% -> 12.6%
-//
-// 后两套压忙碌小时的效果一样，差别在安静群：纯按条数的「最近 20 条」会把 20005
-// 这种一天一百来条、一来一回天然就到 40% 的小群 10 次插话全拦掉，而按时间跨度统计是
-// 0 次。所以窗口改成「最近 10 分钟」，并要求机器人自己在这 10 分钟里至少发了 3 条才
-// 算刷屏——安静群里答一两句不触发，热闹群里连说三条且占了四分之一才收手。
-//
-// participationShareWindow 仍是条数上限。实测路由上下文的 recent_messages 只有 19 到
-// 24 条（RecentContextLimit 折算后的结果），所以把它放到 30 等于「有多少用多少」，
-// 真正起筛选作用的是时间跨度。窗口取自路由已有的上下文，不额外查库；相关度分支
-// （被点名、被提问）不受影响。
-const (
-	participationShareWindow         = 30
-	participationShareSpanSeconds    = 600
-	participationShareBlockRatio     = 0.25
-	participationShareMinBotMessages = 3
-)
-
 // participationRatingsRetryReminder 是评分解析失败后重试时插在最前面的提醒。
 const participationRatingsRetryReminder = "只输出一个裸 JSON 对象：以左花括号开头、右花括号结尾，不要 Markdown 代码围栏，不要任何其他文字"
 
@@ -45,28 +19,6 @@ var promptParticipationRetrySpec = registerPrompt(PromptSpec{
 	Usage:   "评分结果解析失败、重问一次时插在最前面的提醒。第二次还解析不出来就按沉默处理。",
 	Default: participationRatingsRetryReminder,
 })
-
-// participationBotShareBlocks 判断机器人近期发言占比是否高到应当暂停闲聊插话。
-// 「总是」档位是用户明确要求的高频陪聊，不参与限流；样本为空、或机器人自己在窗口里
-// 还没说够 participationShareMinBotMessages 条时不做判断——安静群里一来一回的比例天然
-// 很高，只按比例会把正常对话也掐掉。
-//
-// 窗口里只有一个人在跟机器人说话时同样不限流。这道闸要挡的是「机器人在热闹群里占掉
-// 太多发言」，而一对一的时候没有别人被挤掉：占比高恰恰是这种对话的正常形态，两个人
-// 你一句我一句本来就该接近一半。改用时间跨度已经躲开了大部分这类误伤（见上面那段
-// 回放），但一来一回够密时仍然会撞上 25%，把顺口接的那句掐掉。
-//
-// 这一条只放开闲聊分支。真怕它和另一台机器人一对一转起来，挡住的是复读那道闸
-// （botReplyLoopAIDecision.selfRepeatDropsReply），不是发言占比。
-func participationBotShareBlocks(botMessages, totalMessages, otherSpeakers int, chatLevel string) bool {
-	if chatLevel == "always" || totalMessages <= 0 || botMessages < participationShareMinBotMessages {
-		return false
-	}
-	if otherSpeakers <= 1 {
-		return false
-	}
-	return float64(botMessages)/float64(totalMessages) >= participationShareBlockRatio
-}
 
 // Rating levels are independent. Legacy fields remain readable for saved configs;
 // CooldownSeconds only limits the chat branch.

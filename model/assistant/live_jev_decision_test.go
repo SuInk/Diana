@@ -110,7 +110,7 @@ func TestLiveJevParticipationRatings(t *testing.T) {
 				}
 				// 叫停否决只在 directed=false 时生效，点名叫停走的是回应提问那条路。
 				always := ParticipationPreferences{RelevanceLevel: "off", ChatLevel: "always"}
-				if _, chat := always.ratingsAllow(ratings, true); !*ratings.Relevance.Directed && chat {
+				if _, chat := always.ratingsAllow(ratings); !*ratings.Relevance.Directed && chat {
 					t.Errorf("always 档在叫停后仍接话 (%s)", resp.Text)
 				}
 			}
