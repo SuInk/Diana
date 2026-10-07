@@ -387,7 +387,9 @@ type StatsHandler struct {
 	events eventStatsRangeReader
 	// latency 为空时响应耗时明细接口返回 503，理由同上。
 	latency replyLatencyReader
-	now     func() time.Time
+	// activity 为空时活跃时段接口返回 503，理由同上。
+	activity inboundActivityReader
+	now      func() time.Time
 }
 
 // WithRangeReaders 注入时间窗统计要用的两个读取器：队列事件和用量日志。
@@ -411,6 +413,7 @@ func (h *StatsHandler) Register(router gin.IRouter) {
 	router.GET("/api/stats", h.stats)
 	router.GET("/api/stats/ranges", h.statsRanges)
 	router.GET("/api/stats/latency", h.statsLatency)
+	router.GET("/api/stats/activity", h.statsActivity)
 }
 
 // stats 返回运行统计和机器人状态摘要。

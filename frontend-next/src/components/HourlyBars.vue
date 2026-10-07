@@ -9,7 +9,7 @@
       <span>0</span>
     </div>
     <div class="spark-plot-main">
-      <div class="spark-bars" role="img" :aria-label="`最近 24 小时消息量，共 ${total} 条，峰值 ${maxLabel}`">
+      <div class="spark-bars" role="img" :aria-label="`最近 24 小时消息量，共 ${total} 条，峰值 ${peak}`">
         <div
           v-for="bucket in buckets"
           :key="bucket.hour_unix"
@@ -31,14 +31,16 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import type { StatsHourBucket } from "../api";
-import { formatHourLabel, formatNumber } from "../format";
+import { formatHourLabel, formatNumber, niceAxisMax } from "../format";
 
 const props = defineProps<{ buckets: StatsHourBucket[] }>();
 
-const max = computed(() => Math.max(1, ...props.buckets.map((bucket) => bucket.total)));
+const peak = computed(() => Math.max(0, ...props.buckets.map((bucket) => bucket.total)));
+// 柱高按取整后的轴上限算，刻度才和柱子对得上，也都是整数。
+const max = computed(() => niceAxisMax(peak.value));
 const total = computed(() => props.buckets.reduce((sum, bucket) => sum + bucket.total, 0));
 const maxLabel = computed(() => formatNumber(max.value));
-const midLabel = computed(() => formatNumber(Math.round(max.value / 2)));
+const midLabel = computed(() => formatNumber(max.value / 2));
 const firstLabel = computed(() => (props.buckets.length > 0 ? formatHourLabel(props.buckets[0]!.hour_unix) : ""));
 const lastLabel = computed(() =>
   props.buckets.length > 0 ? formatHourLabel(props.buckets[props.buckets.length - 1]!.hour_unix) : ""

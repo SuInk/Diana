@@ -3,7 +3,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { formatCompactNumber, formatDurationMS } from "./format.ts";
+import { formatCompactNumber, formatDurationMS, niceAxisMax } from "./format.ts";
 
 test("四位数以下照原样给，不必读成 0.97K", () => {
   assert.equal(formatCompactNumber(0), "0");
@@ -37,4 +37,16 @@ test("缺值和负数给破折号，不写成 0ms", () => {
   assert.equal(formatDurationMS(undefined), "—");
   assert.equal(formatDurationMS(null), "—");
   assert.equal(formatDurationMS(-1), "—");
+});
+
+test("坐标轴上限取到 1、2、2.5、5 档的整数，刻度是整数", () => {
+  assert.equal(niceAxisMax(82), 100);
+  assert.equal(niceAxisMax(41), 50);
+  assert.equal(niceAxisMax(100), 100);
+  assert.equal(niceAxisMax(7), 10);
+  assert.equal(niceAxisMax(3), 4);
+  assert.equal(niceAxisMax(1), 2);
+  assert.equal(niceAxisMax(0), 2);
+  assert.equal(niceAxisMax(5), 6);
+  assert.equal(niceAxisMax(1234), 2000);
 });
