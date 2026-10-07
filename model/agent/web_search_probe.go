@@ -28,7 +28,7 @@ type searchProbeTransport struct {
 
 func (transport *searchProbeTransport) RoundTrip(request *http.Request) (*http.Response, error) {
 	response, err := transport.base.RoundTrip(request)
-	if response != nil && request.Method != http.MethodDelete {
+	if response != nil {
 		transport.status.Store(int64(response.StatusCode))
 	}
 	return response, err
