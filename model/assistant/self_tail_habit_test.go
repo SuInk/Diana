@@ -29,43 +29,67 @@ func TestSelfTailKind(t *testing.T) {
 }
 
 func botText(text string) MessageEvent {
-	return MessageEvent{Kind: EventKindGroup, UserID: "bot", Segments: []MessageSegment{{Type: "text", Data: map[string]string{"text": text}}}}
+	return MessageEvent{Kind: EventKindGroup, GroupID: "g1", UserID: "bot", Segments: []MessageSegment{{Type: "text", Data: map[string]string{"text": text}}}}
 }
 
-// 只数自己的消息：群友满屏「（逃」不算机器人的口癖。
-func TestSelfTailHabitCountsOnlyOwnMessages(t *testing.T) {
+func peerText(text string) MessageEvent {
+	event := botText(text)
+	event.UserID = "100"
+	return event
+}
+
+func tailHistory(own, peers []string) []MessageEvent {
 	var history []MessageEvent
-	for i := 0; i < 10; i++ {
-		history = append(history, MessageEvent{Kind: EventKindGroup, UserID: "100", Segments: []MessageSegment{{Type: "text", Data: map[string]string{"text": "笑死（逃"}}}})
-		history = append(history, botText(fmt.Sprintf("第 %d 条正常回复", i)))
+	for _, text := range peers {
+		history = append(history, peerText(text))
 	}
-	if _, _, _, ok := selfTailHabit(history, "bot"); ok {
-		t.Fatal("human tails must not count as the bot's habit")
+	for _, text := range own {
+		history = append(history, botText(text))
 	}
+	return history
 }
 
-func TestSelfTailHabitPromptNamesTails(t *testing.T) {
+func repeatText(text string, n int) []string {
+	out := make([]string, n)
+	for i := range out {
+		out[i] = text
+	}
+	return out
+}
+
+var ownParenHeavy = []string{"一（逃", "二", "三（", "四（逃", "五", "六（目移", "七"}
+
+// 自己的尾巴比真人多得多才提醒，提示里摆出两边的数字。
+func TestSelfTailHabitPromptComparesWithPeers(t *testing.T) {
 	cfg := BotConfig{BotAccount: "bot"}.WithDefaults()
 	runtime := NewRuntime(cfg, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	event := MessageEvent{Kind: EventKindGroup, GroupID: "g1", UserID: "100", SelfID: "bot"}
-	texts := []string{"一（逃", "二", "三（", "四（逃", "五", "六（目移", "七"}
-	for i, text := range texts {
-		item := botText(text)
-		item.GroupID, item.MessageID = "g1", fmt.Sprint(i)
+	peers := append(repeatText("今天吃什么好呢", 19), "笑死（")
+	for i, item := range tailHistory(ownParenHeavy, peers) {
+		item.MessageID = fmt.Sprint(i)
 		runtime.remember(item)
 	}
 	got := runtime.selfTailHabitPrompt(event, cfg)
-	if !strings.Contains(got, "最近 7 条消息里有 4 条") || !strings.Contains(got, "「（逃」「（」「（目移」") {
+	if !strings.Contains(got, "大家最近 20 条消息里只有 1 条") || !strings.Contains(got, "你最近 7 条里却有 4 条用 「（逃」「（」「（目移」") {
 		t.Fatalf("prompt = %q", got)
 	}
-	// 只有一两次是调味，不提醒。
-	runtime2 := NewRuntime(cfg, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
-	for i, text := range []string{"一（逃", "二", "三", "四", "五", "六", "七（"} {
-		item := botText(text)
-		item.GroupID, item.MessageID = "g1", fmt.Sprint(i)
-		runtime2.remember(item)
+}
+
+// 真人自己也爱这么收尾，那是群风格，不算口癖。
+func TestSelfTailHabitFollowsPeerStyle(t *testing.T) {
+	peers := append(repeatText("笑死（逃", 8), repeatText("今天吃什么好呢", 12)...)
+	if _, ok := selfTailHabit(tailHistory(ownParenHeavy, peers), "bot"); ok {
+		t.Fatal("tails the humans also use must not be flagged")
 	}
-	if got := runtime2.selfTailHabitPrompt(event, cfg); got != "" {
-		t.Fatalf("occasional tails produced %q", got)
+}
+
+// 偶尔一两次是调味；真人样本不够也不下结论。
+func TestSelfTailHabitNeedsHabitAndPeers(t *testing.T) {
+	peers := repeatText("今天吃什么好呢", 20)
+	if _, ok := selfTailHabit(tailHistory([]string{"一（逃", "二", "三", "四", "五", "六", "七（"}, peers), "bot"); ok {
+		t.Fatal("occasional tails must not be flagged")
+	}
+	if _, ok := selfTailHabit(tailHistory(ownParenHeavy, peers[:5]), "bot"); ok {
+		t.Fatal("too few human messages must not produce a verdict")
 	}
 }

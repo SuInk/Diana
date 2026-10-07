@@ -1156,9 +1156,17 @@
       "key": "reply.self_tail_habit",
       "group": "reply_tail",
       "title": "句尾口癖提醒",
-      "usage": "最近自己的回复里同一类句尾（括号尾巴、w、喵）用得太多时注入，紧挨语气锚点：点名这些尾巴，让这一条不再用。",
-      "default": "你最近 {total} 条消息里有 {count} 条用 {tails} 收尾，已经成了口癖：真人不会条条消息挂同一个尾巴。这次别用这些收尾，话说完就停在最后一个字上。",
+      "usage": "自己最近的回复里某一类句尾（括号尾巴、w、喵）用得明显比聊天里的真人多时注入，紧挨语气锚点：摆出两边的数字和这几个尾巴，让这一条照真人的样子收尾。",
+      "default": "大家最近 {peer_total} 条消息里只有 {peer_count} 条用这种尾巴收尾，你最近 {total} 条里却有 {count} 条用 {tails} 收尾，成了口癖。照大家的样子说话：话说完就停，这次别用这些收尾。",
       "vars": [
+        {
+          "name": "peer_total",
+          "description": "参与统计的真人消息条数"
+        },
+        {
+          "name": "peer_count",
+          "description": "其中用同一类尾巴收尾的条数"
+        },
         {
           "name": "total",
           "description": "参与统计的自己的消息条数"
