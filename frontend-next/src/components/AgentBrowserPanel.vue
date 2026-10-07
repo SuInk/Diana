@@ -5,7 +5,7 @@
   <section class="card">
     <!-- 卡片头和浏览器页其余卡片用同一套：标题、一句说明、右侧小刷新。 -->
     <div class="card-header">
-      <h2>浏览器权限与外接 CDP</h2>
+      <h2>浏览器权限</h2>
       <span class="card-sub">{{ botScope ? '为主人和指定用户配置浏览器权限，个人登录态相互隔离' : '选择机器人后配置' }}</span>
       <button class="btn small ghost" type="button" :disabled="loading" title="刷新" aria-label="刷新浏览器权限配置" @click="load"><RefreshCw :size="14" aria-hidden="true" /></button>
     </div>
@@ -16,16 +16,6 @@
     <template v-else-if="!loadError">
       <p class="hint">主人使用配置的内置浏览器或 CDP。指定用户使用各自独立的浏览器，只能操作白名单网站，不会连接主人的浏览器。公开网页由「网页渲染」插件使用临时浏览器访问。</p>
       <div class="browser-form">
-        <label class="field">
-          主人的 CDP 地址
-          <input v-model.trim="cdpURL" class="input" placeholder="http://127.0.0.1:9222" />
-          <span class="hint">Chrome 带 <code>--remote-debugging-port</code> 启动后监听的地址。留空用默认的 http://127.0.0.1:9222。</span>
-        </label>
-        <label class="field">
-          超时（毫秒）
-          <input v-model.number="timeoutMS" class="input" inputmode="numeric" />
-          <span class="hint">单次页面操作等多久，上限 60000。</span>
-        </label>
         <div class="field">
           <label for="browser-operation-access">浏览器操作权限</label>
           <AppSelect id="browser-operation-access" v-model="operationAccess.mode" :options="screenshotAccessOptions" />
@@ -65,12 +55,10 @@
       </div>
       <p class="hint">公共网页截图通过「网页渲染」插件提供，使用独立临时浏览器，不带登录态，不受此处登录浏览器截图权限影响。</p>
       <p v-if="screenshotAccess.mode === 'whitelist'" class="hint">截图权限与操作权限分别设置。普通用户可查看和向当前私聊发送自己的登录页面；仅授权截图不能接入主人的浏览器，也不授予本地文件工具。</p>
-      <p v-if="testResult" :class="testResult.connected ? 'hint' : 'error-text'" role="status">{{ testResult.connected ? `连上了${testResult.browser ? '：' + testResult.browser : ''}` : `连不上：${testResult.error}` }}</p>
       <div class="view-actions browser-actions">
-        <button class="btn" :disabled="busy" @click="test"><PlugZap :size="15" />测试连接</button>
         <button class="btn primary" :disabled="busy || !formValid" :title="formValid ? undefined : '先补全上方标红的项'" @click="save"><Save :size="15" />保存</button>
       </div>
-      <p class="hint">浏览器工具：{{ tools.join('、') }}。操作和截图按上方权限分别开放。测试连接仅检测主人的 CDP，个人浏览器在首次操作时启动。</p>
+      <p class="hint">浏览器工具：{{ tools.join('、') }}。操作和截图按上方权限分别开放，个人浏览器在首次操作时启动。主人的外接 CDP 地址在上方「外接浏览器（CDP）」里配置。</p>
     </template>
     </div>
   </section>
@@ -78,15 +66,16 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue';
-import { PlugZap, RefreshCw, Save } from '@lucide/vue';
+import { RefreshCw, Save } from '@lucide/vue';
 import { botScope } from '../bot-scope';
-import { fetchAssistantUserNames, getAgentBrowser, saveAgentBrowser, testAgentBrowser } from '../api';
+import { fetchAssistantUserNames, getAgentBrowser, saveAgentBrowser } from '../api';
 import type { BrowserScreenshotAccess, BrowserOperationAccess } from '../api';
 import AppSelect from './AppSelect.vue';
 import IdChipInput from './IdChipInput.vue';
 import { toastError, toastSuccess } from '../toast';
 
 const emit = defineEmits<{ saved: [] }>();
+// CDP 地址和超时在「外接浏览器」弹窗里改；这里只原样带回，后端保存接口要求一起提交。
 const cdpURL = ref(''), timeoutMS = ref(15000), tools = ref<string[]>([]);
 const screenshotAccess = ref<BrowserScreenshotAccess>({ mode: 'owner_only', allowed_users: [], allowed_hosts: [], allowed_groups: [] });
 const operationAccess = ref<BrowserOperationAccess>({ mode: 'owner_only', allowed_users: [], allowed_hosts: [] });
@@ -96,7 +85,6 @@ const screenshotAccessOptions = [
   { value: 'whitelist', label: '指定用户' }
 ];
 const loading = ref(false), loadError = ref(''), busy = ref(false);
-const testResult = ref<{connected: boolean; browser?: string; error?: string} | null>(null);
 let generation = 0;
 let loadedProfile = '';
 function normalizedScreenshotAccess(access?: BrowserScreenshotAccess): BrowserScreenshotAccess {
@@ -133,7 +121,6 @@ async function load() {
   loadedProfile = '';
   loading.value = true;
   loadError.value = '';
-  testResult.value = null;
   try {
     const result = await getAgentBrowser(profile);
     if (current !== generation) return;
@@ -165,19 +152,6 @@ async function save() {
     emit('saved');
   } catch (e) {
     toastError(String(e instanceof Error ? e.message : e));
-  } finally {
-    busy.value = false;
-  }
-}
-async function test() {
-  const profile = botScope.value;
-  if (!profile) return;
-  busy.value = true;
-  testResult.value = null;
-  try {
-    testResult.value = await testAgentBrowser(profile, cdpURL.value);
-  } catch (e) {
-    testResult.value = {connected: false, error: String(e instanceof Error ? e.message : e)};
   } finally {
     busy.value = false;
   }

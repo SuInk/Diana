@@ -8,7 +8,7 @@
   - 登录、点按钮：Diana 内置和用户自己的 Chrome（扩展）做的是同一件事——带登录态、只有
     主人能驱动——区别只在用谁的。一行一个勾选框，可以都勾上并排优先级，排在上面的先用，
     它用不了时自动换另一个（见 model/browsersource）。外接 CDP 不参与排序：它是 browser_*
-    那组工具在内置浏览器没在用时改接的地址，所以只显示状态，设置在「更多设置」里。
+    那组工具在内置浏览器没在用时改接的地址，所以只显示状态，点「配置地址」弹窗改。
 
   四种都复用这台机器上的 Chrome/Chromium，区别在用哪份登录态、谁能驱动。
 -->
@@ -281,6 +281,7 @@
       </div>
     </div>
 
+    <ExternalCDPDialog v-if="externalCDPDialogOpen && botID" :profile="botID" @close="externalCDPDialogOpen = false" @saved="onExternalCDPSaved" />
     <Modal
       v-if="dependenciesTarget && sourceState"
       :title="`${dependenciesTarget === 'render' ? '网页渲染' : sourceMeta[dependenciesTarget].label} · 运行依赖`"
@@ -338,7 +339,7 @@
         </p>
       </div>
     </div>
-    <!-- 开箱即用：默认什么都不用配。其余的（开真窗口、扩展的令牌和网站名单、外接 CDP）
+    <!-- 开箱即用：默认什么都不用配。其余的（开真窗口、扩展的令牌和网站名单、个人浏览器权限）
          都收在这里。 -->
     <button class="btn ghost small browser-advanced-toggle" type="button" :aria-expanded="advancedOpen" @click="advancedOpen = !advancedOpen">
       <ChevronDown :size="14" :class="{ 'browser-advanced-open': advancedOpen }" aria-hidden="true" />
@@ -361,9 +362,7 @@
         </div>
       </div>
       <BrowserControlPanel v-if="sourceState?.extension.enabled || preferred === 'extension'" />
-      <div ref="externalCDPPanel">
-        <AgentBrowserPanel @saved="loadExternalCDP" />
-      </div>
+      <AgentBrowserPanel :key="permissionPanelKey" @saved="loadExternalCDP" />
     </template>
   </section>
 </template>
@@ -376,6 +375,7 @@ import { pluginForBot } from "../plugin-settings";
 import { navigate as navigateToView } from "../router";
 import { ArrowLeft, ArrowUp, ChevronDown, Globe, Lock, Maximize2, Minimize2, Plus, RotateCw, Search, UserRound, X } from "@lucide/vue";
 import AgentBrowserPanel from "../components/AgentBrowserPanel.vue";
+import ExternalCDPDialog from "../components/ExternalCDPDialog.vue";
 import AppSelect, { type AppSelectOption } from "../components/AppSelect.vue";
 import Modal from "../components/Modal.vue";
 import PluginDependencyList from "../components/PluginDependencyList.vue";
@@ -507,7 +507,9 @@ async function setRenderWindowMode(mode: string): Promise<void> {
 // 外接 CDP 地址按机器人存；默认值 127.0.0.1:9222 等于没配（和后端 defaultAgentBrowserCDPURL 一致）。
 const defaultExternalCDPURL = "http://127.0.0.1:9222";
 const agentBrowser = ref<AgentBrowserSettings | null>(null);
-const externalCDPPanel = ref<HTMLElement | null>(null);
+const externalCDPDialogOpen = ref(false);
+// 权限面板保存时会带回 CDP 地址，弹窗改完要让它重新读一次，免得拿旧地址覆盖。
+const permissionPanelKey = ref(0);
 const externalCDPConfigured = computed(() => {
   const url = agentBrowser.value?.cdp_url?.trim() ?? "";
   return url !== "" && url !== defaultExternalCDPURL;
@@ -525,10 +527,13 @@ async function loadExternalCDP(): Promise<void> {
   }
 }
 
-async function openExternalCDPSettings(): Promise<void> {
-  advancedOpen.value = true;
-  await nextTick();
-  externalCDPPanel.value?.scrollIntoView({ behavior: "smooth", block: "start" });
+function openExternalCDPSettings(): void {
+  externalCDPDialogOpen.value = true;
+}
+
+function onExternalCDPSaved(): void {
+  permissionPanelKey.value += 1;
+  void loadExternalCDP();
 }
 
 // 选中的那个：排在第一位、而且开着。都关着就是 null，页面显示「浏览器关着」。
