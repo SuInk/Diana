@@ -60,6 +60,8 @@ type lifecycleDialogueProvider struct {
 	failure    error
 	sideEffect bool
 	reply      string
+	// runtime 不为空时把生成过程当成一次工具调用登记，模拟工具写外部系统。
+	runtime *Runtime
 }
 
 func (p *lifecycleDialogueProvider) Generate(ctx context.Context, req llm.GenerateRequest) (*llm.GenerateResponse, error) {
@@ -77,6 +79,10 @@ func (p *lifecycleDialogueProvider) Generate(ctx context.Context, req llm.Genera
 	p.requests = append(p.requests, req)
 	call := len(p.requests)
 	p.mu.Unlock()
+	if p.runtime != nil {
+		p.runtime.noteDirectReplyTool(ctx, true)
+		defer p.runtime.noteDirectReplyTool(ctx, false)
+	}
 	p.started <- call
 	select {
 	case <-p.release:
@@ -123,7 +129,10 @@ func TestReplyMergeRetriesAreBoundedAndFinalDraftCoversAcceptedRequests(t *testi
 		if merged != (i < 2) {
 			t.Fatalf("round %d merge=%v", i+1, merged)
 		}
-		p.release <- struct{}{}
+		// 被接受的补充会立刻中断这一轮，只有没合进来的那轮需要放行。
+		if !merged {
+			p.release <- struct{}{}
+		}
 	}
 	select {
 	case err := <-done:
@@ -161,6 +170,9 @@ func TestReplyMergeGenerationFailuresRestoreRequest(t *testing.T) {
 			}
 			disabled := false
 			r := NewRuntime(BotConfig{BotAccount: "42", AgentEnabled: false, ErrorNotifyEnabled: &disabled, BotReplyLoopDetectionEnabled: &disabled}, &recordingChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) { return p, nil })
+			if p.sideEffect {
+				p.runtime = r
+			}
 			store := newHandoffInboundStore()
 			r.SetInboundEventStore(store)
 			root := directedGroupMessage("root", "user", "解释 stdout")
@@ -423,7 +435,7 @@ func TestReplyMergePartialDeliveryDoesNotSettleQuestion(t *testing.T) {
 	if err := r.completeHandedOffInbound(context.Background(), store, item, "worker"); err != nil {
 		t.Fatal(err)
 	}
-	p.release <- struct{}{}
+	// 补充一合进来就中断首轮，直接等重跑。
 	p.wait(t, 2)
 	p.release <- struct{}{}
 	select {

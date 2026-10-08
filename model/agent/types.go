@@ -161,6 +161,8 @@ type Request struct {
 	LoadedTools []string
 	// ToolsLoaded is called immediately, including when a later model call fails.
 	ToolsLoaded func([]string)
+	// Interjections 不为空时，每步规划前接入用户中途的补充，规划途中来了补充就重做这一步。
+	Interjections Interjections
 }
 
 type Response struct {

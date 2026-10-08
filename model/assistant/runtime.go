@@ -2196,16 +2196,19 @@ func (r *Runtime) replyAndRecordTurn(ctx context.Context, event MessageEvent, te
 		if attempt == 2 {
 			r.sealDirectReply(replyCtx)
 		}
-		attemptCtx := r.directReplyAttemptContext(replyCtx)
+		attemptCtx, attemptDone := r.beginDirectReplyAttempt(replyCtx)
 		attemptEvent := event
 		if attempt > 0 {
 			attemptEvent.replyHistoryLoaded = false
 			attemptEvent.replyHistory = nil
 		}
 		reply, err = r.replyTo(attemptCtx, attemptEvent, text)
-		if !errors.Is(err, errDirectReplySupplemented) {
+		supplemented := directReplyAttemptSupplemented(attemptCtx, err)
+		attemptDone()
+		if !supplemented {
 			break
 		}
+		err = errDirectReplySupplemented
 	}
 	if err == nil {
 		r.noteSenderTurnReplyComplete(event)
@@ -4782,13 +4785,16 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 		}
 		promptSession := r.groupPromptSession(event)
 		r.startImageFixGate(ctx, cfg, event)
+		interjections, stopInterjections := r.startDirectReplyInterjections(ctx)
 		resp, err := agentRunner.Run(agent.WithCallerIdentity(ctx, callerIdentityForEvent(cfg, event)), agent.Request{
-			Messages:    messages,
-			TraceID:     traceID,
-			Observer:    r.agentRunObserver(event),
-			LoadedTools: promptSession.loadedTools(),
-			ToolsLoaded: promptSession.rememberTools,
+			Messages:      messages,
+			TraceID:       traceID,
+			Observer:      r.agentRunObserver(event),
+			LoadedTools:   promptSession.loadedTools(),
+			ToolsLoaded:   promptSession.rememberTools,
+			Interjections: interjections,
 		})
+		stopInterjections()
 		if err != nil {
 			return "", err
 		}

@@ -340,7 +340,7 @@ func (r *Runtime) noteSenderTurnDelivery(ctx context.Context, event MessageEvent
 		}
 		if run, ok := ctx.Value(directReplyRunContextKey{}).(directReplyRunContext); ok && run.active != nil && run.active.token == run.token && turn.covered != nil {
 			for _, supplement := range run.active.supplements {
-				if supplement.Generation <= run.generation {
+				if supplement.Generation <= run.coveredGenerationLocked() {
 					turn.covered[strings.TrimSpace(supplement.Event.MessageID)] = true
 				}
 			}
