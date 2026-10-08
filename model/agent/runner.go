@@ -182,7 +182,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 	introspectionCalls := 0
 	modelTurns := 0
 	toolCalls := 0
-	// toolsDuration 是本轮实际执行工具的墙钟耗时之和。工具是逐个串行执行的，
+	// toolsDuration 是本轮实际执行工具的墙钟耗时之和（并行检索按整批墙钟算）。工具是逐个串行执行的，
 	// 加起来就是这一轮花在工具上的时间，控制台的响应耗时分解用它。
 	var toolsDuration time.Duration
 	protocolRepairs := 0
@@ -351,6 +351,55 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 				}
 				parallelDropNotice = fmt.Sprintf("\n\n注意:你在这一步并行请求了 %d 个工具调用,当前只执行了 %s,其余(%s)没有执行。请在接下来的规划步里逐个继续调用,不要认为它们已经完成。",
 					len(resp.ToolCalls), nativeCall.Name, strings.Join(dropped, "、"))
+			}
+		}
+		// 同一步里的几次只读检索并行执行，见 runner_parallel.go。
+		if nativeToolCall && len(resp.ToolCalls) > 1 && !imageTaskQueued {
+			if batch, parallel := r.parallelReadBatch(resp.ToolCalls); parallel {
+				run := batch[:min(len(batch), r.cfg.MaxSteps-toolCalls)]
+				calls := make([]llm.ToolCall, len(run))
+				for i, index := range run {
+					calls[i] = resp.ToolCalls[index]
+				}
+				batchStartedAt := time.Now()
+				reads := r.runParallelReads(ctx, req.Observer, traceID, modelTurns, toolCalls, calls)
+				toolsDuration += time.Since(batchStartedAt)
+				toolCalls += len(reads)
+				lastToolSignature = ""
+				results := map[string]parallelRead{}
+				for _, read := range reads {
+					read.record.Index = len(steps) + 1
+					steps = append(steps, read.record)
+					results[read.call.ID] = read
+				}
+				messages = append(messages, llm.Message{
+					Role:              llm.RoleAssistant,
+					Content:           lastText,
+					ToolCalls:         resp.ToolCalls,
+					ResponsesOutput:   resp.ResponsesOutput,
+					ContinuationScope: resp.ContinuationScope, AnthropicThinking: resp.AnthropicThinking, ReasoningContent: resp.ReasoningContent,
+				})
+				for _, call := range resp.ToolCalls {
+					read, executed := results[call.ID]
+					var content string
+					switch {
+					case executed:
+						modelOutput := read.output
+						if read.err == nil && call.Name == WebSearchToolName {
+							modelOutput = webSearchOutputForModel(read.output)
+						}
+						content = toolObservationMessage(call.Name, modelOutput, read.err == nil, r.cfg.MaxSteps-toolCalls)
+					case call.Name == finalizeToolName:
+						content = "本次收尾没有执行：同一步的检索结果刚返回，请先看结果，确认后再调用 agent_finalize。"
+					default:
+						content = "本次调用没有执行：本轮工具步数已用完。"
+					}
+					messages = append(messages, llm.Message{Role: llm.RoleTool, Content: content, ToolCallID: call.ID, ToolName: call.Name, ToolError: !executed || read.err != nil})
+				}
+				if guidance := parallelReadGuidance(reads, steps, r.cfg.MaxSteps-toolCalls); guidance != "" {
+					messages = append(messages, llm.Message{Role: llm.RoleSystem, Priority: llm.MessagePrioritySystem, Content: guidance})
+				}
+				continue
 			}
 		}
 		if !ok {
@@ -1050,7 +1099,7 @@ func (r *Runner) systemPrompt() string {
 	// 措辞必须把「规划轮」和「用户消息」区分开:此前只写「每轮最多调用一个
 	// 工具」,模型把「轮」理解成「用户每发一条消息」,于是每调一次工具就收口,
 	// 让用户发「继续」才肯调下一次——多步任务永远走不完。预算写成具体数字。
-	rules := []string{fmt.Sprintf("- 每个规划步只选择一个工具,看到结果后继续选下一个;这一条回复内你最多可连续调用 %d 次工具。预算没用完就不要停下来向用户要求「继续」,直接接着调用,直到任务完成或预算耗尽。", r.cfg.MaxSteps)}
+	rules := []string{fmt.Sprintf("- 互不依赖的只读检索（web_search、browser_render）可以在同一步一起发出，会并行执行，结果按你发出的顺序返回；其他工具（发消息、写入、生成、改设置等）每步只发一个，看到结果再发下一个，后一步依赖前一步结果时也要分步。agent_finalize 单独放在最后一步，不要和检索同时发。这一条回复内你最多可调用 %d 次工具（并行的每个调用各算一次）。预算没用完就不要停下来向用户要求「继续」,直接接着调用,直到任务完成或预算耗尽。", r.cfg.MaxSteps)}
 	if hasTool("read_skill") {
 		// 条件只看工具在不在,不看当前有几个 skill:按 len(Skills()) 判定会让这一行
 		// 随会话开关的 skill 出现和消失,整条系统提示词的前缀缓存跟着断。
@@ -1067,7 +1116,7 @@ func (r *Runner) systemPrompt() string {
 			"- 「当前上下文已经足够」只在答案本身就写在上下文里时成立。聊天记录里讨论过这个话题不等于其中的事实已经核实：别人的说法、你自己先前的回复和记忆摘要都只是线索，不能拿来替代检索。同样，熟悉一个项目的设计或原理，不代表你知道它此刻有哪些实现、插件、版本或生态现状——讲原理可以直接答，断言「有没有」「支不支持」「有哪些」必须先搜。",
 			"- 搜索词围绕一个信息缺口，用简短自然关键词：实体名称加定义、文档、源码、价格或所需能力。query 放一个清晰问题，queries 仅补充确有区别的查证角度；不要把完整聊天记录、用户身份或无关字段塞进搜索词；不要堆 OR、近义词和整句问话，不要无依据地混入相邻概念。用户给出的产品、模型名称和版本号原样保留，这同样适用于每个候选查询；没有证据不得改名、降版本或把别的型号价格当成目标型号价格。",
 			"- 先宽搜找到可信来源和准确实体，再读来源原文；只在确认域名确属目标官方项目后才用 site: 限定。找到相关页面后用网页工具打开、用 find 定位缺口，不要反复用 site: 去搜同一篇文章里的词。优先确认并读取官网、官方文档、官方仓库和发布记录；第三方文章用于追踪官方出处。已找到相关官方页面时不能只读转载就收尾；官方无法访问或未覆盖时才采用其他可信来源并说明限制。缺少这些证据时只说本次未确认，不能断言项目没有该能力。",
-			"- web_search 原样执行你提供的查询；不同 queries 会并行搜索，每个查询独立回退配置的搜索引擎。搜索次数不单独设限，一轮最多 "+fmt.Sprintf("%d", r.cfg.MaxSteps)+" 步、每步调一个工具，没查到就接着查；不要重复相同 query 或只机械替换一个词。",
+			"- web_search 原样执行你提供的查询；不同 queries 会并行搜索，每个查询独立回退配置的搜索引擎。搜索次数不单独设限，一轮最多 "+fmt.Sprintf("%d", r.cfg.MaxSteps)+" 次工具调用，没查到就接着查；不要重复相同 query 或只机械替换一个词。",
 			"- 工具返回 no_results、provider_error、timeout、budget_exhausted 或 insufficient_evidence 时，不要立即断言资料不存在。仍有工具预算时，根据已尝试的 query hash、结果中的新实体和未覆盖的信息缺口生成下一轮候选；结果已经有权威来源直接支持答案时立即停止搜索。",
 			"- 最终回答要附来源，并明确区分来源直接支持的事实、多来源推导的结论和仍未验证的假设。金融、新闻及其他时效性问题应优先核对官方或法定披露来源，并区分不同事件日期。",
 			"- web_search 的全部 provider 都失败（provider_error、timeout）时，如果还有浏览器工具，按下面「用浏览器搜索」的办法接着查；浏览器也没有或也失败，才在最终回复里说明这次没能联网查到。",
