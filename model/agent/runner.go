@@ -262,11 +262,21 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 		}
 		// 每个规划步都带上原生工具定义，包括结构化收尾工具。不支持原生 function
 		// calling 的供应商仍可使用兼容的 JSON 动作协议。
+		if req.Interjections != nil {
+			messages = append(messages, req.Interjections.Take()...)
+		}
 		definitions := r.turnDefinitions(imageTaskQueued)
 		markLoopCacheBreakpoint(messages, stableCacheIndex)
 		modelStartedAt := time.Now()
 		planningRequest := llm.GenerateRequest{Messages: messages, Tools: definitions}
-		resp, err := r.client.Generate(planningCtx, planningRequest)
+		resp, interjected, err := generateWithInterjections(planningCtx, req.Interjections, func(ctx context.Context) (*llm.GenerateResponse, error) {
+			return r.client.Generate(ctx, planningRequest)
+		})
+		if interjected {
+			// 这一步作废不计数，下一圈带上补充重做；已经执行的工具结果都还在。
+			cancel()
+			continue
+		}
 		if err == nil && resp != nil && len(resp.ToolCalls) == 0 {
 			err = llm.RejectionNoticeError(resp.Text)
 		}

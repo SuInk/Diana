@@ -44,6 +44,8 @@ type activeDirectReply struct {
 	cancelAttempt context.CancelCauseFunc
 	toolsRunning  int
 	cancelPending bool
+	// interjections 不为空时 Agent 正在跑，补充直接接进这一轮，见 direct_reply_interjection.go。
+	interjections *directReplyInterjections
 }
 
 type directReplyRunContextKey struct{}
@@ -53,6 +55,16 @@ type directReplyRunContext struct {
 	key        string
 	token      uint64
 	generation uint64
+	// covered 是这一版实际覆盖到的版本号：开跑时等于 generation，Agent 中途接入补充后推进。
+	covered *uint64
+}
+
+// coveredGenerationLocked 返回这一版覆盖到的版本号；调用方持有 replyInterruptMu。
+func (run directReplyRunContext) coveredGenerationLocked() uint64 {
+	if run.covered != nil {
+		return *run.covered
+	}
+	return run.generation
 }
 
 type InboundReplyMergeStore interface {
@@ -132,6 +144,8 @@ func (r *Runtime) directReplyAttemptContext(ctx context.Context) context.Context
 	r.replyInterruptMu.Lock()
 	if active := run.active; active != nil && active.token == run.token {
 		run.generation = active.generation
+		covered := active.generation
+		run.covered = &covered
 	}
 	r.replyInterruptMu.Unlock()
 	return context.WithValue(ctx, directReplyRunContextKey{}, run)
@@ -230,7 +244,7 @@ func (r *Runtime) directReplyHasNewSupplements(ctx context.Context) bool {
 	if active == nil || active.token != run.token {
 		return false
 	}
-	if active.generation > run.generation {
+	if active.generation > run.coveredGenerationLocked() {
 		return true
 	}
 	// This is the final send gate. Seal atomically with the generation check so
@@ -345,9 +359,12 @@ func (r *Runtime) mergeIntoActiveDirectReply(ctx context.Context, event MessageE
 	// Repeats share the pending answer without invalidating its generation.
 	if relation != "repeat" {
 		active.generation++
+	}
+	candidate := proactiveReplyCandidate{Event: event, Text: text, QueuedAt: time.Now(), Generation: active.generation}
+	active.supplements = append(active.supplements, candidate)
+	if relation != "repeat" && !active.interjections.offerLocked(candidate) {
 		active.interruptSupplementedAttemptLocked()
 	}
-	active.supplements = append(active.supplements, proactiveReplyCandidate{Event: event, Text: text, QueuedAt: time.Now(), Generation: active.generation})
 	rootMessageID := active.root.MessageID
 	r.replyInterruptMu.Unlock()
 	return strings.TrimSpace(rootMessageID), true

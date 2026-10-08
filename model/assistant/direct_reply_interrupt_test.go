@@ -3,6 +3,7 @@ package assistant
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -82,5 +83,74 @@ func TestDirectReplySupplementKeepsAttemptAfterSideEffect(t *testing.T) {
 	r.noteDirectReplyTool(attempt, false)
 	if attempt.Err() != nil {
 		t.Fatalf("interrupted after an external write: %v", context.Cause(attempt))
+	}
+}
+
+// Agent 正在跑时补充直接接进这一轮，不打断，也不在发送前判成落后。
+func TestDirectReplySupplementJoinsRunningAgent(t *testing.T) {
+	p := &topicTestProvider{result: `{"relation":"supplement","confidence":0.99}`}
+	r := topicTestRuntime(p)
+	root := directedGroupMessage("root", "user", "介绍下这款茶")
+	ctx, finish := r.beginDirectReply(context.Background(), root)
+	defer finish()
+	attempt, done := r.beginDirectReplyAttempt(ctx)
+	defer done()
+	interjections, stop := r.startDirectReplyInterjections(attempt)
+	defer stop()
+	follow := directedGroupMessage("follow", "user", "顺便说下价格")
+	if _, merged := r.mergeIntoActiveDirectReply(ctx, follow, follow.RawMessage); !merged {
+		t.Fatal("not merged")
+	}
+	if attempt.Err() != nil {
+		t.Fatalf("interrupted although the agent could take it: %v", context.Cause(attempt))
+	}
+	select {
+	case <-interjections.Ready():
+	default:
+		t.Fatal("agent not notified")
+	}
+	taken := interjections.Take()
+	if len(taken) != 1 || !strings.Contains(taken[0].Content, "顺便说下价格") {
+		t.Fatalf("taken = %#v", taken)
+	}
+	if r.directReplyHasNewSupplements(attempt) {
+		t.Fatal("answer judged stale after taking the supplement")
+	}
+}
+
+// Agent 没来得及取走补充就结束了，发送前照旧判成落后去整轮重写。
+func TestDirectReplyUntakenInterjectionStillStale(t *testing.T) {
+	p := &topicTestProvider{result: `{"relation":"supplement","confidence":0.99}`}
+	r := topicTestRuntime(p)
+	root := directedGroupMessage("root", "user", "介绍下这款茶")
+	ctx, finish := r.beginDirectReply(context.Background(), root)
+	defer finish()
+	attempt, done := r.beginDirectReplyAttempt(ctx)
+	defer done()
+	_, stop := r.startDirectReplyInterjections(attempt)
+	follow := directedGroupMessage("follow", "user", "顺便说下价格")
+	r.mergeIntoActiveDirectReply(ctx, follow, follow.RawMessage)
+	stop()
+	if !r.directReplyHasNewSupplements(attempt) {
+		t.Fatal("untaken supplement treated as answered")
+	}
+}
+
+// 带图片的补充要随用户消息进提示词，仍然整轮重写。
+func TestDirectReplyMediaSupplementStillInterrupts(t *testing.T) {
+	p := &topicTestProvider{result: `{"relation":"supplement","confidence":0.99}`}
+	r := topicTestRuntime(p)
+	root := directedGroupMessage("root", "user", "这茶怎么样")
+	ctx, finish := r.beginDirectReply(context.Background(), root)
+	defer finish()
+	attempt, done := r.beginDirectReplyAttempt(ctx)
+	defer done()
+	_, stop := r.startDirectReplyInterjections(attempt)
+	defer stop()
+	follow := directedGroupMessage("follow", "user", "就是这个")
+	follow.Segments = append(follow.Segments, MessageSegment{Type: "image", Data: map[string]string{"url": "https://example.com/a.png"}})
+	r.mergeIntoActiveDirectReply(ctx, follow, follow.RawMessage)
+	if !errors.Is(context.Cause(attempt), errDirectReplySupplemented) {
+		t.Fatalf("media supplement did not interrupt: %v", context.Cause(attempt))
 	}
 }

@@ -58,7 +58,7 @@
           <li><div class="flow-node"><strong>语音转写 → 路由</strong><p><code>routeMessageEvent</code>。转写暂时失败会让这一条稍后重试。</p></div></li>
           <li class="q"><div class="flow-node"><strong>确定性门禁</strong><p>12 项不调用模型的检查，见下方表格。</p></div><div class="flow-exits"><span class="flow-exit"><b>拦下</b><code>ignored_*</code></span></div></li>
           <li class="q"><div class="flow-node"><strong>直接触发？</strong><p>私聊、@、引用机器人、称呼、主人命令、可解析链接、插件命令；先要通过回复准入（主人直通 → 屏蔽 → 白名单 → 豁免 → 活跃时段 → 群等级）。</p></div><div class="flow-exits"><span class="flow-exit go"><b>否</b>主动接话评分</span></div></li>
-          <li class="q"><div class="flow-node"><strong>同一人正在生成回复？</strong><p>2 分钟内追加的消息由模型判断是重复、补充、纠正还是独立问题。</p></div><div class="flow-exits"><span class="flow-exit loop"><b>补充或纠正，置信度 ≥ 阈值</b>旧回复作废重新生成 <code>merged_into_reply</code></span></div></li>
+          <li class="q"><div class="flow-node"><strong>同一人正在生成回复？</strong><p>2 分钟内追加的消息由模型判断是重复、补充、纠正还是独立问题。</p></div><div class="flow-exits"><span class="flow-exit loop"><b>补充或纠正，置信度 ≥ 阈值</b>Agent 规划中接进本轮，否则旧回复作废重新生成 <code>merged_into_reply</code></span></div></li>
           <li class="end"><div class="flow-node"><strong>进入回复流程</strong></div></li>
         </ol>
         <p>处理出错按 5 秒起、翻倍到 5 分钟重试，最多 5 次，用尽记 <code>dropped_retries_exhausted</code>；平台明确拒收记 <code>dropped_send_rejected</code>，不再重试。</p>
@@ -137,7 +137,7 @@
           <div class="flow-branch"><h3>生成中合并</h3><ol class="flow">
             <li><div class="flow-node"><strong>同一机器人、会话和用户在 2 分钟内追加</strong><p>仅在确定走可重生成的对话路径后开放；解析、固定插件结果和本地命令不接走新问题。</p></div></li>
             <li class="q"><div class="flow-node"><strong>重复 / 补充 / 纠正 / 独立？</strong><p>置信度 ≥ 阈值（默认 75%）才合并。</p></div></li>
-            <li class="end"><div class="flow-node"><strong>重复共用答案，补充和纠正重新生成</strong><p>最多生成 3 次；最后一次生成前、开始发送或产生外部副作用时关闭窗口。回答之后再问，走新的回复。</p></div></li>
+            <li class="end"><div class="flow-node"><strong>重复共用答案，补充和纠正接进本轮或重新生成</strong><p>Agent 还在规划时，不带媒体的补充在下一步规划前接进上下文，已有工具结果保留，正在跑的那步规划作废重做；其余情况立刻中断这一版重新生成（工具运行中等它结束，已写外部系统则不中断）。最多生成 3 次；最后一次生成前、开始发送或产生外部副作用时关闭窗口。回答之后再问，走新的回复。</p></div></li>
           </ol></div>
           <div class="flow-branch"><h3>打断</h3><ol class="flow">
             <li><div class="flow-node"><strong>群里同一人又直接叫了机器人</strong></div></li>
@@ -150,7 +150,7 @@
 
       <section class="section searchable" id="reply">
         <div class="section-heading"><p class="eyebrow">02 回复流程</p><h2>决定要回之后</h2></div>
-        <p><code>replyAndRecord</code> 最多跑 3 次 <code>replyTo</code>：同一个人在生成期间补了一句、被判为补充或纠正时，旧的这版作废，带上新消息重新生成；第 3 次之前封口，不再接受合并。</p>
+        <p><code>replyAndRecord</code> 最多跑 3 次 <code>replyTo</code>：同一个人在生成期间补了一句、被判为补充或纠正时，Agent 还在规划就把补充接进这一轮继续跑；接不进去（非 Agent、带媒体、Agent 已收尾）时旧的这版作废，带上新消息重新生成；第 3 次之前封口，不再接受合并。</p>
         <ol class="flow">
           <li><div class="flow-node"><strong>准备</strong><p>当前消息图片、历史、身份脱敏、请求超时、「正在输入」（Telegram 与 OneBot 私聊）。</p></div></li>
           <li class="q"><div class="flow-node"><strong>主人命令 / 状态命令？只是可解析链接？</strong></div><div class="flow-exits"><span class="flow-exit go"><b>命令</b>直接发送，不过审核</span><span class="flow-exit go"><b>链接</b>只解析链接，按资源去重后发送</span></div></li>
@@ -312,7 +312,7 @@
           <tr><td>提及与引用标记</td><td><code>[diana-at]</code> / <code>[diana-reply]</code> 格式不对或指向不存在的消息</td><td>改写或去掉</td></tr>
           <tr><td>群不可用</td><td>已确认退群或群被禁用</td><td><code>ignored_unavailable_group</code></td></tr>
           <tr><td>暂停响应</td><td>对这个人的暂停期内</td><td><code>ignored_response_suppression</code></td></tr>
-          <tr><td>补充消息</td><td>同一轮里对方补了一句，被合并进来</td><td>这一版作废，重新生成</td></tr>
+          <tr><td>补充消息</td><td>同一轮里对方补了一句，被合并进来</td><td>Agent 规划中接进本轮；否则这一版作废，重新生成</td></tr>
           <tr><td>被新消息取代</td><td>群里同一人又直接叫了机器人；消息已被合并进别的轮次；主动接话批次已变</td><td><code>superseded_follow_up</code> / <code>superseded_reply_turn</code> / <code>superseded_proactive</code></td></tr>
           <tr><td>幂等</td><td>这一步已经发过</td><td>跳过，复用原消息 ID</td></tr>
           <tr><td>禁言 / 离线 / 退避</td><td>被禁言；连接离线；群发送退避中</td><td>禁言丢弃；离线交给队列重试；退避等待，窗口用尽后丢弃</td></tr>

@@ -4785,13 +4785,16 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 		}
 		promptSession := r.groupPromptSession(event)
 		r.startImageFixGate(ctx, cfg, event)
+		interjections, stopInterjections := r.startDirectReplyInterjections(ctx)
 		resp, err := agentRunner.Run(agent.WithCallerIdentity(ctx, callerIdentityForEvent(cfg, event)), agent.Request{
-			Messages:    messages,
-			TraceID:     traceID,
-			Observer:    r.agentRunObserver(event),
-			LoadedTools: promptSession.loadedTools(),
-			ToolsLoaded: promptSession.rememberTools,
+			Messages:      messages,
+			TraceID:       traceID,
+			Observer:      r.agentRunObserver(event),
+			LoadedTools:   promptSession.loadedTools(),
+			ToolsLoaded:   promptSession.rememberTools,
+			Interjections: interjections,
 		})
+		stopInterjections()
 		if err != nil {
 			return "", err
 		}
