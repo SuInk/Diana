@@ -8,7 +8,7 @@
   - 登录、点按钮：Diana 内置和用户自己的 Chrome（扩展）做的是同一件事——带登录态、只有
     主人能驱动——区别只在用谁的。一行一个勾选框，可以都勾上并排优先级，排在上面的先用，
     它用不了时自动换另一个（见 model/browsersource）。外接 CDP 不参与排序：它是 browser_*
-    那组工具在内置浏览器没在用时改接的地址，所以只显示状态，设置在「更多设置」里。
+    那组工具在内置浏览器没在用时改接的地址，所以只显示状态，点「配置地址」弹窗改。
 
   四种都复用这台机器上的 Chrome/Chromium，区别在用哪份登录态、谁能驱动。
 -->
@@ -65,7 +65,7 @@
 
         <div class="browser-group-title">
           <h3>登录、点按钮</h3>
-          <span>主人的登录浏览器；都勾上时排在上面的先用。个人浏览器权限在「更多设置」里单独配置</span>
+          <span>主人的登录浏览器；都勾上时排在上面的先用。个人浏览器权限在下方单独配置</span>
         </div>
         <!-- 一行一项，打勾就是启用（和「上下文」页的勾选列表同一种写法），按优先级从上往下排；
              两个都启用时才出现「优先用」，排在上面的先用，它用不了时自动换下一个。 -->
@@ -132,6 +132,22 @@
               <div class="browser-toggle-meta">
                 <span v-if="externalCDPConfigured" class="mono">{{ agentBrowser?.cdp_url }}</span>
                 <button type="button" @click="openExternalCDPSettings">{{ externalCDPConfigured ? "修改地址" : "配置地址" }}</button>
+              </div>
+            </div>
+          </div>
+          <!-- 个人浏览器权限也没有勾选框：决定主人以外的人能不能让机器人开自己的独立浏览器、截登录页。 -->
+          <div class="browser-toggle-row">
+            <span class="browser-toggle-spacer" aria-hidden="true"></span>
+            <div class="browser-toggle-copy">
+              <div class="browser-toggle-title">
+                <span class="browser-toggle-label">个人浏览器权限</span>
+                <span v-if="botID && agentBrowser" class="badge" :class="{ ok: operationAccessSummary.open }">{{ operationAccessSummary.label }}</span>
+              </div>
+              <p class="browser-toggle-desc">
+                让指定用户在私聊里用各自独立的浏览器登录、操作白名单网站，登录态互不相通，也碰不到主人的浏览器。
+              </p>
+              <div v-if="botID" class="browser-toggle-meta">
+                <button type="button" @click="permissionDialogOpen = true">配置权限</button>
               </div>
             </div>
           </div>
@@ -281,6 +297,8 @@
       </div>
     </div>
 
+    <AgentBrowserPanel v-if="permissionDialogOpen && botID" @close="permissionDialogOpen = false" @saved="loadExternalCDP" />
+    <ExternalCDPDialog v-if="externalCDPDialogOpen && botID" :profile="botID" @close="externalCDPDialogOpen = false" @saved="onExternalCDPSaved" />
     <Modal
       v-if="dependenciesTarget && sourceState"
       :title="`${dependenciesTarget === 'render' ? '网页渲染' : sourceMeta[dependenciesTarget].label} · 运行依赖`"
@@ -338,7 +356,7 @@
         </p>
       </div>
     </div>
-    <!-- 开箱即用：默认什么都不用配。其余的（开真窗口、扩展的令牌和网站名单、外接 CDP）
+    <!-- 开箱即用：默认什么都不用配。其余的（开真窗口、扩展的令牌和网站名单）
          都收在这里。 -->
     <button class="btn ghost small browser-advanced-toggle" type="button" :aria-expanded="advancedOpen" @click="advancedOpen = !advancedOpen">
       <ChevronDown :size="14" :class="{ 'browser-advanced-open': advancedOpen }" aria-hidden="true" />
@@ -361,9 +379,6 @@
         </div>
       </div>
       <BrowserControlPanel v-if="sourceState?.extension.enabled || preferred === 'extension'" />
-      <div ref="externalCDPPanel">
-        <AgentBrowserPanel @saved="loadExternalCDP" />
-      </div>
     </template>
   </section>
 </template>
@@ -376,6 +391,7 @@ import { pluginForBot } from "../plugin-settings";
 import { navigate as navigateToView } from "../router";
 import { ArrowLeft, ArrowUp, ChevronDown, Globe, Lock, Maximize2, Minimize2, Plus, RotateCw, Search, UserRound, X } from "@lucide/vue";
 import AgentBrowserPanel from "../components/AgentBrowserPanel.vue";
+import ExternalCDPDialog from "../components/ExternalCDPDialog.vue";
 import AppSelect, { type AppSelectOption } from "../components/AppSelect.vue";
 import Modal from "../components/Modal.vue";
 import PluginDependencyList from "../components/PluginDependencyList.vue";
@@ -507,7 +523,16 @@ async function setRenderWindowMode(mode: string): Promise<void> {
 // 外接 CDP 地址按机器人存；默认值 127.0.0.1:9222 等于没配（和后端 defaultAgentBrowserCDPURL 一致）。
 const defaultExternalCDPURL = "http://127.0.0.1:9222";
 const agentBrowser = ref<AgentBrowserSettings | null>(null);
-const externalCDPPanel = ref<HTMLElement | null>(null);
+const externalCDPDialogOpen = ref(false);
+const permissionDialogOpen = ref(false);
+const operationAccessSummary = computed(() => {
+  const access = agentBrowser.value?.operation_access;
+  if (access?.mode === "disabled") return { label: "已停用", open: false };
+  if (access?.mode === "whitelist" && access.allowed_users?.length && access.allowed_hosts?.length) {
+    return { label: `已开放 ${access.allowed_users.length} 人`, open: true };
+  }
+  return { label: "仅主人", open: false };
+});
 const externalCDPConfigured = computed(() => {
   const url = agentBrowser.value?.cdp_url?.trim() ?? "";
   return url !== "" && url !== defaultExternalCDPURL;
@@ -525,10 +550,12 @@ async function loadExternalCDP(): Promise<void> {
   }
 }
 
-async function openExternalCDPSettings(): Promise<void> {
-  advancedOpen.value = true;
-  await nextTick();
-  externalCDPPanel.value?.scrollIntoView({ behavior: "smooth", block: "start" });
+function openExternalCDPSettings(): void {
+  externalCDPDialogOpen.value = true;
+}
+
+function onExternalCDPSaved(): void {
+  void loadExternalCDP();
 }
 
 // 选中的那个：排在第一位、而且开着。都关着就是 null，页面显示「浏览器关着」。
