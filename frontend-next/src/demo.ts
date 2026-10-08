@@ -1137,6 +1137,15 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
     }
     return json(demoSearchConfiguration());
   }
+  if (path === '/api/assistant/search-providers/export') return json({ providers: demoSearchProviders.map(provider => ({ ...provider, api_key: demoSearchKeys[provider.id] })) });
+  if (path === '/api/assistant/search-providers/import' && method === 'POST') {
+    for (const item of (body.providers as (SearchProvider & { api_key?: string })[] | undefined) ?? []) {
+      const { api_key: key, ...provider } = item;
+      demoSearchProviders = [...demoSearchProviders.filter(existing => existing.id !== provider.id), provider];
+      if (key?.trim()) demoSearchKeys[provider.id] = key.trim();
+    }
+    return json(demoSearchConfiguration());
+  }
   if (path === '/api/assistant/search-providers/test' && method === 'POST') {
     const provider = body.provider as SearchProvider & { api_key?: string; clear_api_key?: boolean };
     if (!provider?.url || !String(body.query ?? '').trim()) return json({ duration_ms: 0, result_count: 0, error: '请填写接入地址和测试搜索词' });

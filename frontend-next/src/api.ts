@@ -518,6 +518,16 @@ export function deleteSearchProvider(id: string): Promise<SearchConfiguration> {
   return requestJSON<SearchConfiguration>(`/api/assistant/search-providers/${encodeURIComponent(id)}`, { method: "DELETE" });
 }
 
+export type SearchProviderWithKey = SearchProvider & { api_key?: string };
+
+export function exportSearchProviders(): Promise<{ providers: SearchProviderWithKey[] }> {
+  return requestJSON<{ providers: SearchProviderWithKey[] }>("/api/assistant/search-providers/export");
+}
+
+export function importSearchProviders(providers: SearchProviderWithKey[]): Promise<SearchConfiguration> {
+  return requestJSON<SearchConfiguration>("/api/assistant/search-providers/import", { method: "POST", body: JSON.stringify({ providers }) });
+}
+
 export function testSearchProvider(provider: SearchProvider & { api_key?: string; clear_api_key?: boolean }, query: string): Promise<SearchProviderTestResult> {
   return requestJSON<SearchProviderTestResult>("/api/assistant/search-providers/test", { method: "POST", body: JSON.stringify({ provider, query }) });
 }

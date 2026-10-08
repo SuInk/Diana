@@ -412,6 +412,8 @@ func (h *BotHandler) registerRoutes(router gin.IRouter, base string) {
 	router.GET(base+"/search-providers", h.searchProviders)
 	router.POST(base+"/search-providers", h.saveSearchProvider)
 	router.POST(base+"/search-providers/test", h.testSearchProvider)
+	router.GET(base+"/search-providers/export", h.exportSearchProviders)
+	router.POST(base+"/search-providers/import", h.importSearchProviders)
 	router.DELETE(base+"/search-providers/:id", h.deleteSearchProvider)
 	// 第三方（仓库安装）插件。repo/* 是静态段，gin 里与 :id 参数段共存不冲突。
 	router.POST(base+"/plugins/repo/preview", h.previewRepoPlugin)

@@ -269,23 +269,82 @@ func (m *PluginManager) SaveSearchProvider(provider SearchProvider) (string, err
 	if err != nil {
 		return "", err
 	}
+	providers, id, err := upsertSearchProvider(providers, keys, provider)
+	if err != nil {
+		return "", err
+	}
+	writeSearchProviderState(&state, providers, keys)
+	m.states[webSearchPluginID] = state
+	return id, nil
+}
+
+// ExportSearchProviders returns the catalog with stored API keys, for the
+// WebUI config export file. Callers must treat the result as a secret.
+func (m *PluginManager) ExportSearchProviders() ([]SearchProvider, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	state, ok := m.states[webSearchPluginID]
+	if !ok {
+		return nil, ErrPluginNotFound
+	}
+	providers, keys, err := searchProviderCatalog(effectivePluginSettingsForGroup(state.Manifest.Settings, state.Settings, nil))
+	if err != nil {
+		return nil, err
+	}
+	for i := range providers {
+		providers[i].APIKey = keys[providers[i].ID]
+		providers[i].APIKeyConfigured, providers[i].ClearAPIKey = false, false
+	}
+	return providers, nil
+}
+
+// ImportSearchProviders upserts exported providers by ID. Providers missing
+// from the file are kept, because robot search routes may still reference them.
+// All entries are validated before anything is written.
+func (m *PluginManager) ImportSearchProviders(imported []SearchProvider) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	state, ok := m.states[webSearchPluginID]
+	if !ok {
+		return ErrPluginNotFound
+	}
+	providers, keys, err := searchProviderCatalog(effectivePluginSettingsForGroup(state.Manifest.Settings, state.Settings, nil))
+	if err != nil {
+		return err
+	}
+	for _, provider := range imported {
+		if strings.TrimSpace(provider.ID) == "" {
+			return fmt.Errorf("导入的搜索提供商缺少 ID")
+		}
+		provider.ClearAPIKey = false
+		if providers, _, err = upsertSearchProvider(providers, keys, provider); err != nil {
+			return fmt.Errorf("搜索提供商「%s」：%w", provider.Name, err)
+		}
+	}
+	writeSearchProviderState(&state, providers, keys)
+	m.states[webSearchPluginID] = state
+	return nil
+}
+
+// upsertSearchProvider validates provider and applies it to providers/keys in place.
+func upsertSearchProvider(providers []SearchProvider, keys map[string]string, provider SearchProvider) ([]SearchProvider, string, error) {
 	if provider.ID == "" {
 		var id [8]byte
 		if _, err := rand.Read(id[:]); err != nil {
-			return "", err
+			return nil, "", err
 		}
 		provider.ID = "search-" + hex.EncodeToString(id[:])
 	}
 	if !searchProviderIDPattern.MatchString(provider.ID) {
-		return "", fmt.Errorf("搜索提供商 ID 无效")
+		return nil, "", fmt.Errorf("搜索提供商 ID 无效")
 	}
 	provider.Name = strings.TrimSpace(provider.Name)
 	if provider.Name == "" || len([]rune(provider.Name)) > 100 {
-		return "", fmt.Errorf("请填写 1–100 字的搜索提供商名称")
+		return nil, "", fmt.Errorf("请填写 1–100 字的搜索提供商名称")
 	}
 	normalized, err := agent.NormalizeWebSearchConfig(agent.WebSearchConfig{Providers: []agent.WebSearchProviderConfig{provider.agentConfig(12, 5)}})
 	if err != nil {
-		return "", err
+		return nil, "", err
 	}
 	next := normalized.Providers[0]
 	provider.Type, provider.URL, provider.Tool, provider.QueryParam, provider.ResultsParam = next.Type, next.URL, next.Tool, next.QueryParam, next.ResultsParam
@@ -301,13 +360,11 @@ func (m *PluginManager) SaveSearchProvider(provider SearchProvider) (string, err
 		providers[index] = provider
 	} else {
 		if len(providers) >= 100 {
-			return "", fmt.Errorf("搜索提供商最多配置 100 个")
+			return nil, "", fmt.Errorf("搜索提供商最多配置 100 个")
 		}
 		providers = append(providers, provider)
 	}
-	writeSearchProviderState(&state, providers, keys)
-	m.states[webSearchPluginID] = state
-	return provider.ID, nil
+	return providers, provider.ID, nil
 }
 
 func (m *PluginManager) TestSearchProvider(ctx context.Context, provider SearchProvider, query string) agent.SearchProviderTestResult {
