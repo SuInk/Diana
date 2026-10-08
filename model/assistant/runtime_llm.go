@@ -1262,7 +1262,6 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 	// 学群友的段落后面跟一段「这几类不学」，见 group_style_filter.go。
 	appendPromptSection(&tail, styleFilterPrompt(cfg, groupStyle, groupVoice))
 	appendPromptSection(&tail, r.moodToneForConfig(cfg, event.ProfileID))
-	appendPromptSection(&tail, r.selfTailHabitPrompt(event, cfg))
 	// 语气锚点必须留在最后：前面的工具规则、权限说明和拒答流程都是公文体，离生成
 	// 最近的一段最容易被模仿，这里重新把语域拉回配置的表达风格。
 	appendPromptSection(&tail, personaClosingAnchor(cfg))
