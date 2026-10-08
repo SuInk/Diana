@@ -6,6 +6,9 @@ import type { SearchProvider } from "./api";
 export const searchProviderTypes = [
   { value: "exa_mcp", label: "Exa MCP", hint: "Exa 或兼容的 MCP 服务" },
   { value: "tavily", label: "Tavily API", hint: "Tavily 或兼容的搜索 API" },
+  { value: "perplexity", label: "Perplexity Search API", hint: "Perplexity 原始网页搜索结果" },
+  { value: "tinyfish", label: "TinyFish Search API", hint: "TinyFish 结构化网页搜索" },
+  { value: "brave", label: "Brave Search API", hint: "Brave 独立索引的网页搜索" },
   { value: "http", label: "自定义 HTTP API", hint: "GET / POST JSON 接口，可映射结果字段" },
   { value: "search_mcp", label: "自定义搜索 MCP", hint: "指定搜索工具和参数名称" },
   { value: "browser", label: "浏览器搜索", hint: "用隔离浏览器读取搜索结果，需要 Chrome / Chromium" }
@@ -22,6 +25,9 @@ export function searchProviderAddress(url: string): string {
 export function searchProviderPreset(type: SearchProvider["type"]): Partial<SearchProvider> {
   if (type === "exa_mcp") return { url: "https://mcp.exa.ai/mcp?tools=web_search_exa", tool: "web_search_exa", query_param: "", results_param: "" };
   if (type === "tavily") return { url: "https://api.tavily.com/search", tool: "", query_param: "", results_param: "" };
+  if (type === "perplexity") return { url: "https://api.perplexity.ai/search", tool: "", query_param: "", results_param: "" };
+  if (type === "tinyfish") return { url: "https://api.search.tinyfish.ai", tool: "", query_param: "", results_param: "" };
+  if (type === "brave") return { url: "https://api.search.brave.com/res/v1/web/search", tool: "", query_param: "", results_param: "" };
   if (type === "browser") return { url: "https://www.google.com/search", tool: "", query_param: "q", results_param: "" };
   if (type === "http") return { url: "", tool: "", query_param: "query", results_param: "count", http_config: { method: "POST", auth_type: "none", title_path: "title" } };
   return { url: "", tool: "search", query_param: "query", results_param: "num_results" };
@@ -36,6 +42,9 @@ export function searchProviderKeyHint(provider: SearchProvider): string {
     } catch { /* Address validation happens when saving or testing. */ }
   }
   if (provider.type === "tavily") return "需要 Tavily API Key；新账号可使用服务商提供的免费额度，额度以账户为准。";
+  if (provider.type === "perplexity") return "需要 Perplexity API Key（pplx- 开头），按次计费。";
+  if (provider.type === "tinyfish") return "需要 TinyFish API Key（X-API-Key），在 agent.tinyfish.ai 控制台获取。";
+  if (provider.type === "brave") return "需要 Brave Search API 订阅令牌，免费档额度以账户为准。";
   if (provider.type === "http" && provider.http_config?.auth_type === "none") return "当前不发送认证请求头；需要在请求参数传密钥时，可在固定参数里使用 {api_key}。";
   return "按搜索服务要求填写 API Key；已存密钥留空沿用。";
 }

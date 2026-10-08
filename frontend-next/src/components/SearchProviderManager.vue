@@ -15,7 +15,7 @@
           <span class="search-provider-icon"><Globe :size="18" aria-hidden="true" /></span>
           <div class="row-main">
             <div class="row-title">{{ provider.name }} <span v-if="provider.disabled" class="badge">已停用</span></div>
-            <div class="row-sub">{{ searchProviderTypeLabel(provider.type) }} · {{ searchProviderAddress(provider.url) }}<template v-if="provider.type !== 'browser'"> · {{ provider.api_key_configured ? '已配置密钥' : provider.type === 'tavily' || provider.type === 'http' && provider.http_config?.auth_type !== 'none' ? '待配置密钥' : '密钥可选' }}</template></div>
+            <div class="row-sub">{{ searchProviderTypeLabel(provider.type) }} · {{ searchProviderAddress(provider.url) }}<template v-if="provider.type !== 'browser'"> · {{ provider.api_key_configured ? '已配置密钥' : ['tavily', 'perplexity', 'tinyfish', 'brave'].includes(provider.type) || provider.type === 'http' && provider.http_config?.auth_type !== 'none' ? '待配置密钥' : '密钥可选' }}</template></div>
             <div v-if="provider.type === 'exa_mcp' || provider.type === 'browser'" class="hint">{{ searchProviderKeyHint(provider) }}</div>
           </div>
           <div class="row-actions">
