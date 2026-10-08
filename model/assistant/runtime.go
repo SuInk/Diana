@@ -403,6 +403,7 @@ type Runtime struct {
 	feed             FeedStore
 	feedReply        feedReplyState
 	groupStyles      groupStyleState
+	likelyAI         likelyAIState
 	moodMu           sync.Mutex
 	moods            map[string]*moodState
 	pokeMu           sync.Mutex

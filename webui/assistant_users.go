@@ -4,6 +4,7 @@
 package webui
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"strconv"
@@ -261,4 +262,48 @@ func (h *BotHandler) clearAssistantUserMemories(c *gin.Context) {
 // botProfileScope 读控制台传来的机器人作用域。留空表示「全部机器人」。
 func botProfileScope(c *gin.Context) string {
 	return strings.TrimSpace(c.Query("profile"))
+}
+
+// userAIOverrideRuntime 是能写主人手动 AI 结论的运行时；走运行时而不是直接写库，
+// 学说话时用的缓存才能立刻跟上。
+type userAIOverrideRuntime interface {
+	SetUserAIOverrideForProfile(ctx context.Context, botProfileID, userID string, override assistant.UserAIOverride) (assistant.UserAIJudgment, error)
+}
+
+// setAssistantUserAI 把一个人手动定为真人或机器人；override 为空表示交回自动判断。
+func (h *BotHandler) setAssistantUserAI(c *gin.Context) {
+	scope, supplied := c.GetQuery("profile")
+	if !supplied {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "必须指定人员记录所属机器人"})
+		return
+	}
+	var payload struct {
+		Override assistant.UserAIOverride `json:"override"`
+	}
+	if err := c.ShouldBindJSON(&payload); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "请求格式无效"})
+		return
+	}
+	switch payload.Override {
+	case assistant.UserAIOverrideNone, assistant.UserAIOverrideHuman, assistant.UserAIOverrideBot:
+	default:
+		c.JSON(http.StatusBadRequest, gin.H{"error": "只能设为真人、机器人或自动判断"})
+		return
+	}
+	runtime, ok := h.runtime.(userAIOverrideRuntime)
+	if !ok {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "人员画像存储未配置"})
+		return
+	}
+	userID := strings.TrimSpace(c.Param("id"))
+	judgment, err := runtime.SetUserAIOverrideForProfile(c.Request.Context(), strings.TrimSpace(scope), userID, payload.Override)
+	if err != nil {
+		h.writeError(c, http.StatusInternalServerError, "users_ai_override", err, userID, nil)
+		return
+	}
+	recordRequestOperation(c, h.logs, "user_ai_override", "人员 AI 判断已修改", userID, map[string]any{
+		"bot_profile_id": strings.TrimSpace(scope),
+		"override":       string(payload.Override),
+	})
+	c.JSON(http.StatusOK, gin.H{"ok": true, "ai": judgment})
 }

@@ -105,7 +105,7 @@ func TestSelfTailHabitSkipsOtherBots(t *testing.T) {
 	if _, ok := selfTailHabit(history, "bot", nil); ok {
 		t.Fatal("unmarked: the other bot counts as a peer and its tails cover Diana's habit")
 	}
-	if _, ok := selfTailHabit(history, "bot", []string{"200"}); !ok {
+	if _, ok := selfTailHabit(history, "bot", func(e MessageEvent) bool { return e.UserID == "200" }); !ok {
 		t.Fatal("a marked bot must not count as a human reference")
 	}
 }

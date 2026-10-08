@@ -80,7 +80,7 @@ type selfTailHabitStats struct {
 }
 
 // selfTailHabit 比较最近自己和真人的句尾，返回自己用得明显比真人多的那一类。
-func selfTailHabit(history []MessageEvent, botID string, markedBots []string) (selfTailHabitStats, bool) {
+func selfTailHabit(history []MessageEvent, botID string, isOtherBot func(MessageEvent) bool) (selfTailHabitStats, bool) {
 	var own, peers []string
 	for i := len(history) - 1; i >= 0 && (len(own) < selfTailHabitWindow || len(peers) < selfTailHabitPeerWindow); i-- {
 		event := history[i]
@@ -91,7 +91,7 @@ func selfTailHabit(history []MessageEvent, botID string, markedBots []string) (s
 		if text == "" {
 			continue
 		}
-		if otherBotHistoryEvent(event, markedBots) {
+		if isOtherBot != nil && isOtherBot(event) {
 			continue
 		}
 		if assistantHistoryEvent(event, botID) {
@@ -157,7 +157,7 @@ func (r *Runtime) selfTailHabitPrompt(event MessageEvent, cfg BotConfig) string 
 	r.mu.RLock()
 	history := append([]MessageEvent(nil), r.history[sessionKey(event)]...)
 	r.mu.RUnlock()
-	stats, ok := selfTailHabit(history, firstNonEmpty(strings.TrimSpace(cfg.BotAccount), strings.TrimSpace(event.SelfID)), cfg.MarkedBotIDs)
+	stats, ok := selfTailHabit(history, firstNonEmpty(strings.TrimSpace(cfg.BotAccount), strings.TrimSpace(event.SelfID)), r.otherBotFilter(event, cfg))
 	if !ok {
 		return ""
 	}

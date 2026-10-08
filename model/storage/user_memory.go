@@ -269,7 +269,7 @@ func (s *SQLiteStore) ListUserMemoriesSorted(ctx context.Context, botProfileID, 
 		return nil, 0, err
 	}
 	rows, err := s.eventReader().QueryContext(ctx, `
-SELECT bot_profile_id, user_id, display_name, favorability, message_count, memories, portrait, last_seen_at, updated_at
+SELECT bot_profile_id, user_id, display_name, favorability, message_count, memories, portrait, ai_judgment, last_seen_at, updated_at
 FROM user_profiles`+where+`
 ORDER BY `+userMemoryOrderBy(sort, order)+`
 LIMIT ? OFFSET ?
@@ -283,9 +283,9 @@ LIMIT ? OFFSET ?
 		var profile assistant.UserMemoryProfile
 		var displayName sql.NullString
 		var memoriesRaw string
-		var portraitRaw sql.NullString
+		var portraitRaw, aiRaw sql.NullString
 		var lastSeenRaw, updatedRaw sql.NullString
-		if err := rows.Scan(&profile.BotProfileID, &profile.UserID, &displayName, &profile.Favorability, &profile.MessageCount, &memoriesRaw, &portraitRaw, &lastSeenRaw, &updatedRaw); err != nil {
+		if err := rows.Scan(&profile.BotProfileID, &profile.UserID, &displayName, &profile.Favorability, &profile.MessageCount, &memoriesRaw, &portraitRaw, &aiRaw, &lastSeenRaw, &updatedRaw); err != nil {
 			return nil, 0, err
 		}
 		profile.DisplayName = displayName.String
@@ -297,6 +297,7 @@ LIMIT ? OFFSET ?
 		if profile.Portrait, err = unmarshalUserPortrait(portraitRaw); err != nil {
 			return nil, 0, err
 		}
+		profile.AI = unmarshalUserAIJudgment(aiRaw)
 		profile.LastSeenAt = parseUserProfileTime(lastSeenRaw)
 		profile.UpdatedAt = parseUserProfileTime(updatedRaw)
 		profiles = append(profiles, profile)
@@ -345,7 +346,7 @@ func (s *SQLiteStore) getUserMemory(ctx context.Context, botProfileID, userID st
 	}
 	var displayName sql.NullString
 	var memoriesRaw string
-	var portraitRaw sql.NullString
+	var portraitRaw, aiRaw sql.NullString
 	var lastSeenRaw sql.NullString
 	var updatedRaw sql.NullString
 	scopeCondition, scopeArgs := userProfileScopeCondition(botProfileID)
@@ -353,12 +354,12 @@ func (s *SQLiteStore) getUserMemory(ctx context.Context, botProfileID, userID st
 		scopeCondition, scopeArgs = " AND bot_profile_id = ?", []any{botProfileID}
 	}
 	err := s.eventReader().QueryRowContext(ctx, `
-SELECT bot_profile_id, user_id, display_name, favorability, message_count, memories, portrait, last_seen_at, updated_at
+SELECT bot_profile_id, user_id, display_name, favorability, message_count, memories, portrait, ai_judgment, last_seen_at, updated_at
 FROM user_profiles
 WHERE user_id = ?`+scopeCondition+`
 ORDER BY updated_at DESC
 LIMIT 1
-`, append([]any{userID}, scopeArgs...)...).Scan(&profile.BotProfileID, &profile.UserID, &displayName, &profile.Favorability, &profile.MessageCount, &memoriesRaw, &portraitRaw, &lastSeenRaw, &updatedRaw)
+`, append([]any{userID}, scopeArgs...)...).Scan(&profile.BotProfileID, &profile.UserID, &displayName, &profile.Favorability, &profile.MessageCount, &memoriesRaw, &portraitRaw, &aiRaw, &lastSeenRaw, &updatedRaw)
 	if err == sql.ErrNoRows {
 		return assistant.UserMemoryProfile{}, false, nil
 	}
@@ -374,6 +375,7 @@ LIMIT 1
 	if profile.Portrait, err = unmarshalUserPortrait(portraitRaw); err != nil {
 		return assistant.UserMemoryProfile{}, false, err
 	}
+	profile.AI = unmarshalUserAIJudgment(aiRaw)
 	profile.LastSeenAt = parseUserProfileTime(lastSeenRaw)
 	profile.UpdatedAt = parseUserProfileTime(updatedRaw)
 	return profile, true, nil

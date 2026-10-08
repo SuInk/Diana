@@ -155,6 +155,9 @@ VALUES ('u1', '老用户', 42, 7, '[]', '', '2026-08-24T00:00:00Z')`); err != ni
 	if err := store.migrateUserProfilesToBotScope(); err != nil {
 		t.Fatal(err)
 	}
+	if err := store.addUserProfileAIJudgmentColumn(); err != nil {
+		t.Fatal(err)
+	}
 
 	owned, ok, err := store.GetUserMemory(ctx, "bot-onebot", "u1")
 	if err != nil || !ok || owned.Favorability != 42 {

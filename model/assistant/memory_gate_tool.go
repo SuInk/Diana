@@ -43,20 +43,32 @@ func memoryCandidateSchema(actions, kinds, sourceTypes, visibilities []string) m
 	)
 }
 
-// memorySubmitTool 组装一次记忆作业的提交工具。
-func memorySubmitTool(description string, maxItems int, candidate map[string]any) llm.ToolDefinition {
+// memorySubmitTool 组装一次记忆作业的提交工具。extra 是这种作业另外要的字段。
+func memorySubmitTool(description string, maxItems int, candidate map[string]any, extra map[string]any) llm.ToolDefinition {
+	properties := map[string]any{
+		"memories": map[string]any{
+			"type":        "array",
+			"description": "候选记忆列表；没有候选时提交空数组",
+			"maxItems":    maxItems,
+			"items":       candidate,
+		},
+	}
+	for name, schema := range extra {
+		properties[name] = schema
+	}
 	return llm.ToolDefinition{
 		Name:        memorySubmitToolName,
 		Description: description,
-		Parameters: toolObjectSchema([]string{"memories"}, map[string]any{
-			"memories": map[string]any{
-				"type":        "array",
-				"description": "候选记忆列表；没有候选时提交空数组",
-				"maxItems":    maxItems,
-				"items":       candidate,
-			},
-		}),
+		Parameters:  toolObjectSchema([]string{"memories"}, properties),
 	}
+}
+
+// memorySpeakerAISchema 是门控顺带给出的「发言者像不像 AI」，见 user_ai_judgment.go。
+func memorySpeakerAISchema() map[string]any {
+	return toolObjectSchema([]string{"likelihood", "reason"}, map[string]any{
+		"likelihood": toolNumberParam("当前发言者这个账号是机器人或 AI 自动发言的可能性，0 到 1", 0, 1),
+		"reason":     toolStringParam("不超过 40 字的最关键依据"),
+	})
 }
 
 func memoryGateSubmitTool() llm.ToolDefinition {
@@ -69,6 +81,7 @@ func memoryGateSubmitTool() llm.ToolDefinition {
 			[]string{string(MemorySourceExplicit), string(MemorySourceInferred)},
 			[]string{string(MemoryVisibilitySession), string(MemoryVisibilityUser)},
 		),
+		map[string]any{"speaker_ai": memorySpeakerAISchema()},
 	)
 }
 
@@ -82,6 +95,7 @@ func memorySummarySubmitTool() llm.ToolDefinition {
 			[]string{string(MemorySourceSummary)},
 			[]string{string(MemoryVisibilitySession)},
 		),
+		nil,
 	)
 }
 

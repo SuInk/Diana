@@ -92,7 +92,8 @@ const memoryGateRulesPrompt = `你是 Diana 的长期记忆门控器。消息原
 12. 群聊里有人要 Diana 在这个群别再说某个具体的词、口头禅、表情或称呼（例如「别说草了」「少加哈哈哈」），哪怕语气是调侃，也算长期交互要求，不按玩梗跳过：kind=instruction，applies_to=group，importance 不低于 0.6，content 写清是谁要求 Diana 在本群不再说什么。applies_to=group 的要求对全群生效、谁都能撤销，所以只用于「别说什么」；让 Diana 加口头禅、换语气、学某种腔调的不填 applies_to，仍只对本人生效。这类要求有时效：说了「今天」「这周」之类的期限就按它填 retention_days，没说填 0，系统默认 30 天后失效。群里任何人明确说又可以说了，就对 existing_memories 里 applies_to=group 的那条用原 key 做 forget。`
 
 const memoryGateOutputContract = `
-13. 调用 memory_submit 提交候选，字段含义以工具参数说明为准；没有候选时提交空数组。只有在不支持工具调用时，才退回输出合法 JSON 对象 {"memories":[...]}，不要 Markdown 或解释。`
+13. 调用 memory_submit 提交候选，字段含义以工具参数说明为准；没有候选时提交空数组。只有在不支持工具调用时，才退回输出合法 JSON 对象 {"memories":[...],"speaker_ai":{...}}，不要 Markdown 或解释。
+14. 不管有没有候选，都用 speaker_ai 判断当前发言者这个账号是不是机器人或 AI 自动发言，像一个老群友那样看整体：固定的人设台词和口癖、报工具或接口错误、像客服或百科一样替人总结解释、只在被叫到时才说话；也看 recent_messages 里旁人怎么对他——把他当工具使唤、吐槽他是 bot、跟他较真还是跟他闲聊。真人也会写长段、也会科普，单凭篇幅和用词不算证据。看不出来就给 0.5 以下。from_bot=true 的是 Diana 自己，不在判断范围内。`
 
 var promptMemoryGateSpec = registerPrompt(PromptSpec{
 	Key:      "memory.gate",
@@ -557,9 +558,13 @@ func (r *Runtime) processEventMemoryJobs(ctx context.Context, store StructuredMe
 	if err != nil {
 		return fmt.Errorf("memory gate llm: %w", err)
 	}
-	candidates, err := parseMemoryCandidates(raw)
+	candidates, speakerAI, err := parseMemoryGateResponse(raw)
 	if err != nil {
 		return err
+	}
+	// 一批里只有一个发言者时这份判断才说得清是谁的。
+	if memorySourcesSingleSpeaker(sources, func(source gateSource) string { return source.event.UserID }) {
+		r.observeSpeakerAI(ctx, last.event, speakerAI)
 	}
 	if len(candidates) == 0 {
 		return nil
@@ -1163,24 +1168,51 @@ func (r *Runtime) runLLMMemoryProvider(ctx context.Context, run llmProviderRunFu
 }
 
 func parseMemoryCandidates(raw string) ([]MemoryCandidate, error) {
+	candidates, _, err := parseMemoryGateResponse(raw)
+	return candidates, err
+}
+
+// memorySpeakerAI 是门控顺带给出的发言者 AI 率。
+type memorySpeakerAI struct {
+	Likelihood float64 `json:"likelihood"`
+	Reason     string  `json:"reason"`
+}
+
+// memorySourcesSingleSpeaker 判断一批来源是不是同一个人说的。
+func memorySourcesSingleSpeaker[T any](sources []T, userID func(T) string) bool {
+	if len(sources) == 0 {
+		return false
+	}
+	first := strings.TrimSpace(userID(sources[0]))
+	for _, source := range sources[1:] {
+		if strings.TrimSpace(userID(source)) != first {
+			return false
+		}
+	}
+	return first != ""
+}
+
+// parseMemoryGateResponse 解出候选记忆和可选的发言者 AI 率。
+func parseMemoryGateResponse(raw string) ([]MemoryCandidate, *memorySpeakerAI, error) {
 	raw = strings.TrimSpace(stripJSONCodeFence(raw))
 	start := strings.Index(raw, "{")
 	if start < 0 {
-		return nil, fmt.Errorf("invalid memory gate response")
+		return nil, nil, fmt.Errorf("invalid memory gate response")
 	}
 	var envelope struct {
-		Memories []MemoryCandidate `json:"memories"`
+		Memories  []MemoryCandidate `json:"memories"`
+		SpeakerAI *memorySpeakerAI  `json:"speaker_ai"`
 	}
 	// 只解第一个完整的 JSON 对象，后面的内容一概不看。模型偶尔会把两个对象首尾
 	// 相连地吐出来，按「首个 { 到末个 }」整段 Unmarshal 会整批报错；也不去合并
 	// 第二个——它多半是改口重写的同一批候选，合进来就是重复写入。
 	if err := json.NewDecoder(strings.NewReader(raw[start:])).Decode(&envelope); err != nil {
-		return nil, fmt.Errorf("decode memory gate response: %w", err)
+		return nil, nil, fmt.Errorf("decode memory gate response: %w", err)
 	}
 	if len(envelope.Memories) > 8 {
 		envelope.Memories = envelope.Memories[:8]
 	}
-	return envelope.Memories, nil
+	return envelope.Memories, envelope.SpeakerAI, nil
 }
 
 func memoryEventEligible(cfg BotConfig, event MessageEvent, text string) bool {

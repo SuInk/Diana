@@ -71,6 +71,7 @@
                 <span class="muted mono" style="font-size: 11.5px">{{ user.user_id }}</span>
                 <span v-if="!botScope" class="badge">{{ user.bot_profile_id || "旧版记录" }}</span>
                 <span class="badge" :class="favorabilityClass(user.favorability)">好感 {{ user.favorability }}</span>
+                <span v-if="user.ai?.likely" class="badge" title="不作为学说话的参照">机器人</span>
               </div>
               <p class="log-detail">
                 画像 {{ user.portrait_count ?? 0 }} 条 · 长期记忆 {{ user.structured_memory_count ?? 0 }} 条 · 消息 {{ formatNumber(user.message_count) }} 条
@@ -146,6 +147,26 @@
             最近活跃 {{ formatTime(detail.profile.last_seen_at) }}
           </span>
         </div>
+
+        <section>
+          <h3 class="detail-section-title">真人还是机器人</h3>
+          <p class="muted" style="font-size: 12.5px; margin: 0 0 8px">
+            长期记忆生成时顺带判断，攒够 3 次、AI 率到 80% 才算机器人。算作机器人的人不作为学说话的参照，不影响回不回复。
+          </p>
+          <div class="cluster" style="gap: 8px; align-items: center">
+            <select v-model="aiOverride" class="input" style="width: auto" :disabled="savingAI" aria-label="真人还是机器人" @change="saveAIOverride">
+              <option value="">自动判断</option>
+              <option value="human">真人</option>
+              <option value="bot">机器人</option>
+            </select>
+            <span class="badge">{{ detail.profile.ai?.likely ? "当前算作机器人" : "当前算作真人" }}</span>
+            <span v-if="detail.profile.ai?.observations" class="muted" style="font-size: 12.5px">
+              AI 率 {{ Math.round((detail.profile.ai.likelihood ?? 0) * 100) }}% · 判断 {{ detail.profile.ai.observations }} 次
+            </span>
+            <span v-else class="muted" style="font-size: 12.5px">还没判断过</span>
+          </div>
+          <p v-if="detail.profile.ai?.reason" class="muted" style="font-size: 12.5px; margin: 6px 0 0">最近理由：{{ detail.profile.ai.reason }}</p>
+        </section>
 
         <section>
           <h3 class="detail-section-title">人员画像（{{ detail.profile.portrait?.length ?? 0 }} 条）</h3>
@@ -322,9 +343,11 @@ import {
   listAssistantUsers,
   clearAssistantUserMemories,
   saveAssistantUser,
+  setAssistantUserAI,
   type AssistantUserDetailResponse,
   type AssistantUsersOrder,
   type AssistantUsersSort,
+  type UserAIOverride,
   type UserMemoryProfile,
   type UserPortraitTrait,
   type UserStructuredMemory
@@ -428,6 +451,27 @@ async function clearMemories(memoryID = ""): Promise<void> {
     toastError(error instanceof Error ? error.message : "清空失败");
   } finally {
     clearingMemory.value = false;
+  }
+}
+
+const aiOverride = ref<UserAIOverride>("");
+const savingAI = ref(false);
+watch(() => detail.value?.profile.ai?.override ?? "", (value) => { aiOverride.value = value; }, { immediate: true });
+
+async function saveAIOverride(): Promise<void> {
+  const profile = detail.value?.profile;
+  if (!profile || savingAI.value) return;
+  savingAI.value = true;
+  try {
+    const result = await setAssistantUserAI(profile.user_id, profile.bot_profile_id ?? "", aiOverride.value);
+    profile.ai = result.ai;
+    toastSuccess(aiOverride.value === "" ? "已交回自动判断" : aiOverride.value === "bot" ? "已标为机器人" : "已标为真人");
+    reload();
+  } catch (error) {
+    aiOverride.value = profile.ai?.override ?? "";
+    toastError(error instanceof Error ? error.message : "保存失败");
+  } finally {
+    savingAI.value = false;
   }
 }
 
