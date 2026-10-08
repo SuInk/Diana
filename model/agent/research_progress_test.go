@@ -110,6 +110,15 @@ func TestRunnerKeepsNegationAfterReadingOrWithoutSearch(t *testing.T) {
 	if progress.searchedWithoutReading() {
 		t.Fatalf("read page not detected: %#v", progress)
 	}
+
+	// 只读过一条推文：仍算没核实过。
+	progress = collectResearchProgress([]Step{
+		{Tool: WebSearchToolName, Input: map[string]any{"query": "x"}, Output: researchProgressSearchOutput},
+		{Tool: browserRenderToolName, Output: `{"url":"https://x.com/a/status/1","requested_url":"https://x.com/a/status/1","title":"Post","text":"正文"}`},
+	})
+	if !progress.searchedWithoutReading() {
+		t.Fatalf("social read should not count: %#v", progress)
+	}
 }
 
 func TestResearchNegationPatternTargetsDenials(t *testing.T) {

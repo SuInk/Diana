@@ -50,11 +50,15 @@ func collectResearchProgress(steps []Step) researchProgress {
 	}
 	var preferred, others []SourceReference
 	for _, source := range responseSources("", steps) {
-		if source.Read {
+		host := researchSourceHost(source.URL)
+		// 读了一条推文、帖子不算核实过：线上两次误否认都只读过 x.com。
+		if source.Read && host != "" && !researchLowValueHost(host) {
 			progress.read = append(progress.read, source)
 			continue
 		}
-		host := researchSourceHost(source.URL)
+		if source.Read {
+			continue
+		}
 		switch {
 		case host == "" || researchLowValueHost(host):
 		case researchFirstPartyLooking(host, source.URL):
