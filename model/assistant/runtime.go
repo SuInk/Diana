@@ -2196,16 +2196,19 @@ func (r *Runtime) replyAndRecordTurn(ctx context.Context, event MessageEvent, te
 		if attempt == 2 {
 			r.sealDirectReply(replyCtx)
 		}
-		attemptCtx := r.directReplyAttemptContext(replyCtx)
+		attemptCtx, attemptDone := r.beginDirectReplyAttempt(replyCtx)
 		attemptEvent := event
 		if attempt > 0 {
 			attemptEvent.replyHistoryLoaded = false
 			attemptEvent.replyHistory = nil
 		}
 		reply, err = r.replyTo(attemptCtx, attemptEvent, text)
-		if !errors.Is(err, errDirectReplySupplemented) {
+		supplemented := directReplyAttemptSupplemented(attemptCtx, err)
+		attemptDone()
+		if !supplemented {
 			break
 		}
+		err = errDirectReplySupplemented
 	}
 	if err == nil {
 		r.noteSenderTurnReplyComplete(event)

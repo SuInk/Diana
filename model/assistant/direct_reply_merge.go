@@ -38,6 +38,12 @@ type activeDirectReply struct {
 	accepting   bool
 	opened      bool
 	supplements []proactiveReplyCandidate
+	// cancelAttempt 打断正在生成的这一版：补充一被接受，旧版本发送前一定会被丢弃，
+	// 没必要等它把模型调用和发送前审核都跑完再重来。工具调用进行中时不打断（可能正在
+	// 写外部系统），等它回来再打断。
+	cancelAttempt context.CancelCauseFunc
+	toolsRunning  int
+	cancelPending bool
 }
 
 type directReplyRunContextKey struct{}
@@ -129,6 +135,74 @@ func (r *Runtime) directReplyAttemptContext(ctx context.Context) context.Context
 	}
 	r.replyInterruptMu.Unlock()
 	return context.WithValue(ctx, directReplyRunContextKey{}, run)
+}
+
+// beginDirectReplyAttempt 开始新一版生成。返回的 ctx 在补充被接受时以
+// errDirectReplySupplemented 为原因取消；done 在这一版结束后调用。
+func (r *Runtime) beginDirectReplyAttempt(ctx context.Context) (context.Context, func()) {
+	run, ok := ctx.Value(directReplyRunContextKey{}).(directReplyRunContext)
+	if !ok {
+		return ctx, func() {}
+	}
+	attemptCtx, cancel := context.WithCancelCause(r.directReplyAttemptContext(ctx))
+	r.replyInterruptMu.Lock()
+	active := run.active
+	if active != nil && active.token == run.token {
+		active.cancelAttempt, active.toolsRunning, active.cancelPending = cancel, 0, false
+	}
+	r.replyInterruptMu.Unlock()
+	done := func() {
+		r.replyInterruptMu.Lock()
+		if active != nil && active.token == run.token {
+			active.cancelAttempt, active.toolsRunning, active.cancelPending = nil, 0, false
+		}
+		r.replyInterruptMu.Unlock()
+		cancel(nil)
+	}
+	return attemptCtx, done
+}
+
+// directReplyAttemptSupplemented 报告这一版是不是因为接受了补充而被打断。
+func directReplyAttemptSupplemented(ctx context.Context, err error) bool {
+	return errors.Is(err, errDirectReplySupplemented) || (err != nil && errors.Is(context.Cause(ctx), errDirectReplySupplemented))
+}
+
+// interruptSupplementedAttemptLocked 在补充被接受后打断当前这一版；调用方持有 replyInterruptMu。
+func (active *activeDirectReply) interruptSupplementedAttemptLocked() {
+	if active.cancelAttempt == nil {
+		return
+	}
+	if active.toolsRunning > 0 {
+		active.cancelPending = true
+		return
+	}
+	active.cancelAttempt(errDirectReplySupplemented)
+}
+
+// noteDirectReplyTool 记录工具调用的开始和结束，供打断时避开进行中的工具。
+func (r *Runtime) noteDirectReplyTool(ctx context.Context, started bool) {
+	run, ok := ctx.Value(directReplyRunContextKey{}).(directReplyRunContext)
+	if !ok {
+		return
+	}
+	r.replyInterruptMu.Lock()
+	defer r.replyInterruptMu.Unlock()
+	active := run.active
+	if active == nil || active.token != run.token || active.cancelAttempt == nil {
+		return
+	}
+	if started {
+		active.toolsRunning++
+		return
+	}
+	active.toolsRunning = max(0, active.toolsRunning-1)
+	if active.toolsRunning == 0 && active.cancelPending {
+		active.cancelPending = false
+		// 工具已经对外写过了，这一版不能再丢，照常发出，补充交给后续轮次。
+		if !hasExternalSideEffect(ctx) {
+			active.cancelAttempt(errDirectReplySupplemented)
+		}
+	}
 }
 
 func (r *Runtime) directReplySupplements(ctx context.Context) []proactiveReplyCandidate {
@@ -271,6 +345,7 @@ func (r *Runtime) mergeIntoActiveDirectReply(ctx context.Context, event MessageE
 	// Repeats share the pending answer without invalidating its generation.
 	if relation != "repeat" {
 		active.generation++
+		active.interruptSupplementedAttemptLocked()
 	}
 	active.supplements = append(active.supplements, proactiveReplyCandidate{Event: event, Text: text, QueuedAt: time.Now(), Generation: active.generation})
 	rootMessageID := active.root.MessageID

@@ -17,6 +17,12 @@ import (
 
 func (r *Runtime) agentRunObserver(event MessageEvent) agent.RunObserver {
 	return func(ctx context.Context, runEvent agent.RunEvent) {
+		switch runEvent.Phase {
+		case agent.RunPhaseToolStarted:
+			r.noteDirectReplyTool(ctx, true)
+		case agent.RunPhaseToolCompleted:
+			r.noteDirectReplyTool(ctx, false)
+		}
 		writer := r.appLogWriter()
 		if writer == nil {
 			return
