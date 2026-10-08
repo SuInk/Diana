@@ -515,7 +515,7 @@ func (r *Runtime) runReplyAudit(ctx context.Context, event MessageEvent, input, 
 			},
 			// 同一套判据也按题摆一份：绑的是只做判断的模型时它照这张表作答，
 			// 答案回填成下面解析的那个 JSON；绑对话模型时这张表用不上。
-			Decision: replyAuditDecisionSpec(need),
+			Decision: replyAuditDecisionSpecForConfig(need, cfg),
 		})
 		if generateErr != nil {
 			return "", generateErr
