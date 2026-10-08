@@ -38,8 +38,8 @@ func TestHandoffSettlesByActualDeliveryOutcome(t *testing.T) {
 		{name: "confirmed by echo", outcomes: []error{ambiguousSendError("send_group_msg")}, echo: true, wantFirst: "superseded_follow_up", wantAttempt: 1},
 		// 没有回推，历史里查到了这条：同样算回出去。
 		{name: "confirmed by history", outcomes: []error{ambiguousSendError("send_group_msg")}, history: true, wantFirst: "superseded_follow_up", wantAttempt: 1},
-		// 重发一次仍无法确认时，已经包含在该答案里的请求也不能重新排队重发。
-		{name: "unconfirmed", outcomes: []error{ambiguousSendError("send_group_msg"), ambiguousSendError("send_group_msg")}, wantFirst: "superseded_follow_up", wantAttempt: 2},
+		// 超时后确认不了也不重发，已经包含在该答案里的请求也不能重新排队重发。
+		{name: "unconfirmed", outcomes: []error{ambiguousSendError("send_group_msg")}, wantFirst: "superseded_follow_up", wantAttempt: 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			channel := &ambiguousOutboundChannel{outcomes: tc.outcomes}
