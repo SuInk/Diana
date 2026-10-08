@@ -68,6 +68,7 @@
           >
             <component :is="navIcon(item.id)" :size="17" aria-hidden="true" />
             <span class="nav-label">{{ item.label }}</span>
+            <span v-if="item.id === 'space' && spaceUnread" class="nav-dot" aria-label="小窝有新动静"></span>
           </button>
         </div>
       </nav>
@@ -198,6 +199,7 @@ import {
   Wrench
 } from "@lucide/vue";
 import { currentView, navItemForView, navSections, navigate, type ViewID } from "./router";
+import { markSpaceSeen, refreshSpaceUnread, spaceUnread } from "./space-unread";
 import { ALL_PROFILES, botScope, reconcileBotScope, setBotScope } from "./bot-scope";
 import { scopeSwitching } from "./scope-transition";
 import AppSelect from "./components/AppSelect.vue";
@@ -541,6 +543,13 @@ function onLoginSuccess(): void {
 
 // 重连即重启：连上之后把版本、运行时长和更新提示一起对齐。
 // 机器人页可能增删配置档，离开时重新取一次，切换器的选项不至于停在旧列表上。
+// 进了小窝的任一档就算看过；离开时不清，免得刚产生的新动静被吞掉。
+watch([currentView, botScope], ([view, scope]) => {
+  if (locked.value) return;
+  if (view === "space" || view === "feed" || view === "self-notes") markSpaceSeen(scope);
+  else void refreshSpaceUnread(scope).catch(() => undefined);
+}, { immediate: true });
+
 watch(currentView, (next, previous) => {
   if (next === "groups") ensureConcreteGroupScope();
   if (previous === "bot" && next !== "bot") {

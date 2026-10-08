@@ -38,37 +38,42 @@
       </section>
 
       <section class="card">
-        <div class="card-header">
-          <div>
-            <h2>钱包</h2>
-            <span class="card-sub">账本只追加不修改，每一笔都留着</span>
-          </div>
-        </div>
         <div class="card-body stack">
           <div class="space-balance">
-            <span class="muted">余额</span>
-            <strong>{{ formatYuan(space.wallet.balance_cents) }}</strong>
+            <div>
+              <span class="muted">钱包余额</span>
+              <strong>{{ formatYuan(space.wallet.balance_cents) }}</strong>
+            </div>
+            <button v-if="!grantOpen" class="btn" type="button" @click="grantOpen = true">
+              <Plus :size="15" aria-hidden="true" />
+              记一笔
+            </button>
           </div>
 
-          <form class="space-grant" @submit.prevent="submit">
-            <select v-model="grantKind" aria-label="记账类型">
-              <option value="allowance">发零花钱</option>
-              <option value="adjust">调账</option>
-            </select>
-            <input v-model="grantAmount" type="number" step="0.01" inputmode="decimal" placeholder="金额（元）" aria-label="金额（元）" />
-            <input v-model="grantReason" type="text" maxlength="120" placeholder="备注，比如「十月零花钱」" aria-label="备注" />
-            <button class="btn" type="submit" :disabled="saving || !grantAmount">记一笔</button>
+          <form v-if="grantOpen" class="space-grant" @submit.prevent="submit">
+            <div class="segmented" role="radiogroup" aria-label="记账类型">
+              <button type="button" role="radio" :class="{ active: grantKind === 'allowance' }" :aria-checked="grantKind === 'allowance'" @click="grantKind = 'allowance'">发零花钱</button>
+              <button type="button" role="radio" :class="{ active: grantKind === 'adjust' }" :aria-checked="grantKind === 'adjust'" @click="grantKind = 'adjust'">调账</button>
+            </div>
+            <div class="space-grant-fields">
+              <input v-model="grantAmount" class="input" type="number" step="0.01" inputmode="decimal" :placeholder="grantKind === 'adjust' ? '金额，扣钱填负数' : '金额（元）'" aria-label="金额（元）" />
+              <input v-model="grantReason" class="input" type="text" maxlength="120" placeholder="备注（可选）" aria-label="备注" />
+            </div>
+            <div class="space-grant-actions">
+              <button class="btn ghost" type="button" @click="grantOpen = false">取消</button>
+              <button class="btn" type="submit" :disabled="saving || !grantAmount">确定</button>
+            </div>
           </form>
-          <span class="hint">调账可以填负数，扣到零以下会被拒绝。她花钱只能走自己的购买提议，这里不能替她记花费。</span>
 
           <EmptyState v-if="space.wallet.recent.length === 0" title="还没有账目" hint="先给她发一笔零花钱吧。">
             <template #icon><Wallet :size="20" aria-hidden="true" /></template>
           </EmptyState>
           <ul v-else class="space-ledger">
             <li v-for="entry in space.wallet.recent" :key="entry.id">
-              <span class="badge">{{ kindLabel[entry.kind] }}</span>
-              <span class="space-ledger-reason">{{ entry.reason || "（无备注）" }}</span>
-              <span class="muted" :title="formatTime(entry.created_at)">{{ formatRelative(entry.created_at) }}</span>
+              <div class="space-ledger-main">
+                <span class="space-ledger-reason">{{ entry.reason || kindLabel[entry.kind] }}</span>
+                <span class="muted" :title="formatTime(entry.created_at)">{{ kindLabel[entry.kind] }} · {{ formatRelative(entry.created_at) }}</span>
+              </div>
               <strong :class="entry.amount_cents < 0 ? 'space-out' : 'space-in'">{{ signed(entry.amount_cents) }}</strong>
             </li>
           </ul>
@@ -90,7 +95,7 @@
 
 <script setup lang="ts">
 import { onMounted, ref, watch } from "vue";
-import { RefreshCw, Wallet } from "@lucide/vue";
+import { Plus, RefreshCw, Wallet } from "@lucide/vue";
 import { getBotProfileConfig, getOwnSpace, recordOwnSpaceWallet, type OwnSpace, type WalletEntryKind } from "../api";
 import { botScope } from "../bot-scope";
 import { formatRelative, formatTime } from "../format";
@@ -116,6 +121,7 @@ const space = ref<OwnSpace | null>(null);
 const loading = ref(true);
 const saving = ref(false);
 const botName = ref("她");
+const grantOpen = ref(false);
 const grantKind = ref<"allowance" | "adjust">("allowance");
 const grantAmount = ref<number | string>("");
 const grantReason = ref("");
@@ -166,6 +172,7 @@ async function submit(): Promise<void> {
     space.value = await recordOwnSpaceWallet(botScope.value, grantKind.value, cents, grantReason.value.trim());
     grantAmount.value = "";
     grantReason.value = "";
+    grantOpen.value = false;
     toastSuccess("已记账");
   } catch (error) {
     toastError(error instanceof Error ? error.message : "操作失败");
@@ -218,18 +225,39 @@ watch(botScope, () => {
 
 .space-balance {
   display: flex;
-  align-items: baseline;
-  gap: 10px;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.space-balance > div {
+  display: grid;
+  gap: 2px;
 }
 
 .space-balance strong {
-  font-size: 28px;
+  font-size: 30px;
+  line-height: 1.1;
   font-variant-numeric: tabular-nums;
 }
 
 .space-grant {
   display: grid;
-  grid-template-columns: auto 140px minmax(0, 1fr) auto;
+  gap: 10px;
+  padding: 12px;
+  border-radius: 12px;
+  background: var(--surface-2, transparent);
+}
+
+.space-grant-fields {
+  display: grid;
+  grid-template-columns: 160px minmax(0, 1fr);
+  gap: 8px;
+}
+
+.space-grant-actions {
+  display: flex;
+  justify-content: flex-end;
   gap: 8px;
 }
 
@@ -238,14 +266,25 @@ watch(botScope, () => {
   margin: 0;
   padding: 0;
   display: grid;
-  gap: 6px;
 }
 
 .space-ledger li {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  display: flex;
   align-items: center;
-  gap: 10px;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 0;
+  border-top: 1px solid var(--border, rgba(0, 0, 0, 0.08));
+}
+
+.space-ledger-main {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.space-ledger-main .muted {
+  font-size: 12px;
 }
 
 .space-ledger-reason {
@@ -255,6 +294,7 @@ watch(botScope, () => {
 }
 
 .space-ledger strong {
+  flex: none;
   font-variant-numeric: tabular-nums;
 }
 
@@ -267,21 +307,8 @@ watch(botScope, () => {
 }
 
 @media (max-width: 640px) {
-  .space-grant {
-    grid-template-columns: 1fr 1fr;
-  }
-
-  .space-grant input[type="text"],
-  .space-grant button {
-    grid-column: 1 / -1;
-  }
-
-  .space-ledger li {
-    grid-template-columns: auto minmax(0, 1fr) auto;
-  }
-
-  .space-ledger li > .muted {
-    display: none;
+  .space-grant-fields {
+    grid-template-columns: 1fr;
   }
 }
 </style>
