@@ -310,13 +310,15 @@ func (r *Runtime) runPluginTask(rootCtx context.Context, item reservedSubagentTa
 	if item.debugTrace != nil {
 		rootCtx = context.WithValue(rootCtx, debugTraceContextKey{}, item.debugTrace)
 	}
-	sem := r.subagentSem
-	select {
-	case sem <- struct{}{}:
-		defer func() { <-sem }()
-	case <-rootCtx.Done():
-		r.removeSubagentTask(item.key, item.id)
-		return
+	if !item.task.Unthrottled {
+		sem := r.subagentSem
+		select {
+		case sem <- struct{}{}:
+			defer func() { <-sem }()
+		case <-rootCtx.Done():
+			r.removeSubagentTask(item.key, item.id)
+			return
+		}
 	}
 
 	timeout := item.task.Timeout
@@ -541,6 +543,26 @@ func (r *Runtime) updateSubagentTask(key string, id string, progress PluginTaskP
 	}
 	r.subagentTasks[key] = active
 	return shouldNotify, message
+}
+
+// cancelSessionSubagentTask 按任务号取消本会话的任务；别的会话的任务号报不存在。
+func (r *Runtime) cancelSessionSubagentTask(event MessageEvent, id string) bool {
+	prefix := sessionKey(event) + "\x00"
+	r.subagentMu.Lock()
+	defer r.subagentMu.Unlock()
+	for key, active := range r.subagentTasks {
+		if active.status.ID != id || !strings.HasPrefix(key, prefix) {
+			continue
+		}
+		if active.cancel == nil {
+			// 还在排队，没起跑：直接摘掉。
+			delete(r.subagentTasks, key)
+		} else {
+			active.cancel()
+		}
+		return true
+	}
+	return false
 }
 
 func (r *Runtime) removeSubagentTask(key string, id string) {
