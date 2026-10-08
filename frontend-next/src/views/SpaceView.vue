@@ -22,7 +22,7 @@
       <div v-if="!space.enabled" class="card space-off">
         <div class="card-body">
           <strong>小窝还没开</strong>
-          <span class="hint">到「机器人 → 人设」里打开「给她一个小窝」并保存，她才会知道自己有零花钱。账本可以先在这里记着。</span>
+          <span class="hint">到「机器人 → 人设」里打开「给她一个小窝」并保存。账本可以先在这里记着。</span>
           <button class="btn small" type="button" @click="navigate('bot')">去打开</button>
         </div>
       </div>
@@ -32,7 +32,7 @@
           <span class="space-avatar" aria-hidden="true">{{ initial(botName) }}</span>
           <div>
             <h3>{{ botName }} 的小窝</h3>
-            <span class="muted">{{ space.enabled ? "她知道自己有零花钱" : "小窝关着" }}</span>
+            <span class="muted">{{ space.enabled ? "小窝已开" : "小窝关着" }}</span>
           </div>
         </div>
       </section>
