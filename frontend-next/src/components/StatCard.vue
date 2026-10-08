@@ -21,7 +21,7 @@
       <SkeletonBlock v-if="loading" width="3ch" height="24px" inline />
       <template v-else>{{ value }}</template>
     </span>
-    <span v-if="foot || loading" class="stat-foot">
+    <span v-if="foot || loading" class="stat-foot" :title="loading ? undefined : foot">
       <span v-if="loading" class="skeleton skeleton-text" aria-hidden="true">{{ foot || label }}</span>
       <template v-else>{{ foot }}</template>
     </span>

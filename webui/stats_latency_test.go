@@ -99,3 +99,38 @@ func TestStatsLatencyWithoutReader(t *testing.T) {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusServiceUnavailable)
 	}
 }
+
+func TestStatsLatencySingleWindowReadsOnlyItsSpan(t *testing.T) {
+	now := time.Date(2026, 9, 21, 8, 0, 0, 0, time.UTC)
+	reader := &stubLatencyReader{samples: []storage.ReplyLatencySample{
+		{EventID: "recent", CompletedAt: now.Add(-10 * time.Minute), TotalMS: 2000},
+		{EventID: "yesterday", CompletedAt: now.Add(-30 * time.Hour), TotalMS: 4000},
+	}}
+	router := newLatencyRouter(reader, now)
+
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/stats/latency?window=24h", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var response LatencyResponse
+	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	// 只读 24 小时和它前一段：48 小时，而不是 7 天档要的两周。
+	if want := now.Add(-48 * time.Hour); !reader.since.Equal(want) {
+		t.Fatalf("reader asked since %s, want %s", reader.since, want)
+	}
+	if len(response.Windows) != 1 || response.Windows[0].ID != "24h" {
+		t.Fatalf("windows = %+v", response.Windows)
+	}
+	if response.Windows[0].Current.Total.Samples != 1 || response.Windows[0].Previous.Total.Samples != 1 {
+		t.Fatalf("24h current %d previous %d", response.Windows[0].Current.Total.Samples, response.Windows[0].Previous.Total.Samples)
+	}
+
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/stats/latency?window=30d", nil))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("unknown window status = %d, want 400", rec.Code)
+	}
+}

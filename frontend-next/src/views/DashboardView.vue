@@ -103,11 +103,25 @@
         <!-- 24h 消息量：与第一行统计卡共用同一套网格，和另外两张洞察卡均分，两排竖边对齐。 -->
         <section class="card dashboard-chart">
           <div class="card-header">
-            <h2>最近 24 小时消息量</h2>
-            <span v-if="stats?.last_event_at" class="badge">最近事件 {{ formatRelative(stats.last_event_at) }}</span>
+            <h2>{{ chartView === "hourly" ? "最近 24 小时消息量" : calendarCaption || "每日消息量" }}</h2>
+            <span v-if="chartView === 'hourly' && stats?.last_event_at" class="badge">最近事件 {{ formatRelative(stats.last_event_at) }}</span>
+            <div class="segmented dashboard-chart-switch" role="radiogroup" aria-label="消息量图表">
+              <button
+                v-for="option in chartViewOptions"
+                :key="option.value"
+                type="button"
+                role="radio"
+                :class="{ active: chartView === option.value }"
+                :aria-checked="chartView === option.value"
+                @click="setChartView(option.value)"
+              >
+                {{ option.label }}
+              </button>
+            </div>
           </div>
           <div class="card-body">
-            <LoadingSkeleton v-if="initialLoading" kind="chart" label="正在加载消息统计" />
+            <ActivityCalendar v-if="chartView === 'daily'" :profile-id="botScope" @caption="calendarCaption = $event" />
+            <LoadingSkeleton v-else-if="initialLoading" kind="chart" label="正在加载消息统计" />
             <HourlyBars v-else-if="stats" :buckets="hourlyBuckets" />
             <EmptyState v-else title="暂无统计数据" hint="机器人处理消息后这里会出现走势" />
           </div>
@@ -217,7 +231,7 @@
     </div>
 
     <!-- 所有卡片共用这一个明细弹窗：卡面一行只放得下一个数，分解、占比和口径说明都在这里。 -->
-    <Modal v-if="activeDetail" :title="activeDetail.title" :wide="openDetail === 'latency' || openDetail === 'usage'" @close="openDetail = null">
+    <Modal v-if="activeDetail" :title="activeDetail.title" :wide="openDetail === 'latency' || openDetail === 'usage' || openDetail === 'messages'" @close="openDetail = null">
       <div class="stack" style="gap: 14px">
         <div class="usage-detail-total">
           <span class="muted">{{ activeDetail.totalLabel }}</span>
@@ -238,6 +252,9 @@
           :initial-window="selectedRange === '1h' ? '1h' : '24h'"
           :group-label="displayGroupIdentity"
         />
+        <!-- 卡面的数只说来了多少，这里补上什么时候来：哪几个钟点热闹、哪几个钟点没人，
+             可以按群看，设免打扰或主动搭话时段时用得上。 -->
+        <ActivityHeatmap v-if="openDetail === 'messages'" :profile-id="botScope" :groups="groupOptions" />
         <TokenUsageBreakdown v-if="openDetail === 'usage'" :entries="selectedUsage?.breakdown" :range-label="rangeLabel" />
       </div>
     </Modal>
@@ -280,6 +297,8 @@ import StatCard from "../components/StatCard.vue";
 import HourlyBars from "../components/HourlyBars.vue";
 import EmptyState from "../components/EmptyState.vue";
 import Modal from "../components/Modal.vue";
+import ActivityCalendar from "../components/ActivityCalendar.vue";
+import ActivityHeatmap from "../components/ActivityHeatmap.vue";
 import LatencyDetail from "../components/LatencyDetail.vue";
 import LoadingSkeleton from "../components/LoadingSkeleton.vue";
 import SkeletonBlock from "../components/SkeletonBlock.vue";
@@ -289,13 +308,20 @@ import { cacheUsageDisplay } from "../llm-usage";
 const pending = ref(true);
 const setupNeeded = ref(false);
 const groupNames = ref<Record<string, string>>({});
+// 活跃时段按群筛选用：没名字的群也要能选，显示成群号。
+const groupOptions = ref<{ id: string; name: string }[]>([]);
 
 async function loadGroupNames(): Promise<void> {
   try {
     const response = await listBotGroups(false, botScope.value);
     groupNames.value = Object.fromEntries(response.groups.filter((group) => group.group_name).map((group) => [group.group_id, group.group_name ?? ""]));
+    groupOptions.value = response.groups.map((group) => ({
+      id: group.group_id,
+      name: group.group_name ? `${group.group_name}（${group.group_id}）` : `群 ${group.group_id}`
+    }));
   } catch {
     groupNames.value = {};
+    groupOptions.value = [];
   }
 }
 
@@ -561,6 +587,37 @@ const detailViews = computed<Record<DetailID, DetailView>>(() => {
 const activeDetail = computed<DetailView | null>(() => (openDetail.value ? detailViews.value[openDetail.value] : null));
 
 const llmUsageFoot = computed(() => `调用 ${formatNumber(selectedUsage.value?.calls ?? 0)} 次`);
+
+// 图表卡在「最近 24 小时」和「按天」之间切换：前者看此刻的走势，后者是 GitHub 式的
+// 日历，看这阵子哪天热闹。选哪个是个人习惯，记在 localStorage 里；存储不可用时退回
+// 默认，不影响切换本身。
+type ChartView = "hourly" | "daily";
+const chartViewKey = "diana.dashboard.chart-view";
+const chartViewOptions: { value: ChartView; label: string }[] = [
+  { value: "hourly", label: "24 小时" },
+  { value: "daily", label: "按天" }
+];
+
+function readChartView(): ChartView {
+  try {
+    return window.localStorage.getItem(chartViewKey) === "daily" ? "daily" : "hourly";
+  } catch {
+    return "hourly";
+  }
+}
+
+const chartView = ref<ChartView>(readChartView());
+// 按天视图和 GitHub 贡献图一样，标题本身就是汇总（「近一年 N 条消息」）。
+const calendarCaption = ref("");
+
+function setChartView(value: ChartView): void {
+  chartView.value = value;
+  try {
+    window.localStorage.setItem(chartViewKey, value);
+  } catch {
+    // 隐私模式等场景写不进去，只是下次不记得，切换照常生效。
+  }
+}
 
 const hourlyBuckets = computed<StatsHourBucket[]>(() => (stats.value ? [...stats.value.hourly] : []));
 // 进程指标可能因为权限或平台限制采集不到，那时整张卡片退回整机读数。

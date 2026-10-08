@@ -708,6 +708,52 @@ const logs: AppLogEntry[] = [
 
 // 响应耗时的演示数据：长尾明显（P99 远高于 P50），1 小时比前一段略慢、7 天比前一段快，
 // 好让趋势的红绿两种状态都看得到。有一条没有流式调用、一条是升级前的老记录，缺的阶段就缺着。
+// 群聊的作息：工作日午休和晚上热闹、凌晨几乎没人，周末整体往后挪、下午也有人。
+// 用确定的公式生成，不用随机数：演示页每次打开格子都应该长一样。选了某个群时按群号
+// 缩小并错开一点，看得出切换生效了。
+function demoActivity(groupID: string) {
+  const until = new Date();
+  const scale = groupID ? 0.25 + (Number(groupID.slice(-2)) % 4) * 0.1 : 1;
+  const weekdayCurve = [2, 1, 0, 0, 0, 0, 1, 4, 9, 12, 14, 18, 26, 20, 13, 12, 14, 16, 19, 24, 31, 36, 28, 12];
+  const weekendCurve = [9, 5, 2, 1, 0, 0, 0, 1, 3, 6, 11, 17, 21, 22, 23, 22, 20, 21, 24, 29, 34, 37, 33, 20];
+  const window = (id: "7d" | "28d", weeks: number) => {
+    const cells = Array.from({ length: 7 }, (_, day) =>
+      Array.from({ length: 24 }, (_, hour) => {
+        const base = (day >= 5 ? weekendCurve : weekdayCurve)[(hour + (groupID ? 1 : 0)) % 24];
+        const wobble = ((day * 7 + hour * 3) % 5) - 2;
+        return Math.max(0, Math.round((base + (base > 0 ? wobble : 0)) * weeks * scale));
+      })
+    );
+    return {
+      id,
+      weeks,
+      since: new Date(until.getTime() - weeks * 7 * 86_400_000).toISOString(),
+      total: cells.flat().reduce((sum, value) => sum + value, 0),
+      cells,
+      first_event_at: new Date(until.getTime() - weeks * 7 * 86_400_000 + 900_000).toISOString()
+    };
+  };
+  // 日历：实例装上约 200 天，周末更热闹，偶尔有几天没人说话。
+  const pad = (value: number) => String(value).padStart(2, "0");
+  const dateKey = (date: Date) => `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+  const days: { date: string; count: number }[] = [];
+  for (let offset = 200; offset >= 0; offset--) {
+    const date = new Date(until.getFullYear(), until.getMonth(), until.getDate() - offset);
+    const weekend = date.getDay() === 0 || date.getDay() === 6;
+    const wave = (offset * 37) % 11;
+    if (wave === 3) continue;
+    const count = Math.round((weekend ? 420 : 260) * (0.4 + wave / 10) * (1 - offset / 400) * scale);
+    if (count > 0) days.push({ date: dateKey(date), count });
+  }
+  return {
+    until: until.toISOString(),
+    today: dateKey(until),
+    utc_offset: "+08:00",
+    windows: [window("7d", 1), window("28d", 4)],
+    days
+  };
+}
+
 function demoLatency() {
   const until = new Date().toISOString();
   const dist = (samples: number, avg: number, p50: number, p90: number, p99: number, min: number, max: number) => ({
@@ -1314,6 +1360,7 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
     return json({ until, ranges });
   }
   if (path === "/api/stats/latency") return json(demoLatency());
+  if (path === "/api/stats/activity") return json(demoActivity(url.searchParams.get("group_id") ?? ""));
 
   // 授权登录：演示模式给出内置提供商的未登录状态，登录流程本身不模拟——
   // 真去打一次 OAuth 授权页在演示环境里既做不到也不该做。

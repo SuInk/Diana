@@ -2456,7 +2456,15 @@ a.nav-action {
   letter-spacing: -0.01em;
 }
 
+/* 底注只占一行：模型名这类长串换行后，这张卡会比同排的高出一截。放不下就省略，
+   全文在悬停提示里。 */
 .stat-foot {
+  display: block;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-size: 12px;
   color: var(--muted);
 }
@@ -5502,7 +5510,8 @@ a.nav-action {
   display: grid;
   grid-template-columns: repeat(6, minmax(0, 1fr));
   gap: 14px;
-  align-items: start;
+  /* 同一排的卡片拉到一样高：图表卡比运行信息、资源占用高一截时，底边不再参差。 */
+  align-items: stretch;
 }
 
 .dashboard-insights > .card {
@@ -5557,6 +5566,38 @@ a.nav-action {
   .dashboard-insights > .dashboard-chart {
     grid-column: span 2;
   }
+}
+
+/* 图表卡标题行始终一行：换行会让卡片忽高忽低，和同排卡片对不齐。窄的时候先让中间的
+   标签省略，标题和切换器不缩。 */
+.dashboard-chart .card-header {
+  min-width: 0;
+  /* 手机上 .card-header 默认允许换行，这里压过去。 */
+  flex-wrap: nowrap;
+  align-items: center;
+}
+
+.dashboard-chart .card-header h2 {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.dashboard-chart .card-header .badge {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dashboard-chart-switch {
+  flex-shrink: 0;
+  margin-left: auto;
+}
+
+/* 柱区拉到和「按天」日历一样高（月份行 + 七行格子 + 图例行），切换视图时卡片不跳。 */
+.dashboard-chart .spark-bars,
+.dashboard-chart .spark-y {
+  height: 111px;
 }
 
 .setup-callout {

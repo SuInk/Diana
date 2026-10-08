@@ -2712,10 +2712,55 @@ export interface StatsLatency {
   windows: LatencyWindow[];
 }
 
-/** 最近 1 小时 / 24 小时 / 7 天的回复耗时分位数和阶段分解；profileID 为空表示全部机器人。 */
-export function getStatsLatency(profileID = ""): Promise<StatsLatency> {
-  const query = profileID ? `?profile_id=${encodeURIComponent(profileID)}` : "";
-  return requestJSON<StatsLatency>(`/api/stats/latency${query}`);
+/**
+ * 回复耗时分位数和阶段分解；profileID 为空表示全部机器人。给了 window 只算这一档：
+ * 7 天档要读两周的日志，界面默认的 24 小时只需要两天，不该陪着一起等。
+ */
+export function getStatsLatency(profileID = "", window?: LatencyWindowID): Promise<StatsLatency> {
+  const params = new URLSearchParams();
+  if (profileID) params.set("profile_id", profileID);
+  if (window) params.set("window", window);
+  const query = params.toString();
+  return requestJSON<StatsLatency>(`/api/stats/latency${query ? `?${query}` : ""}`);
+}
+
+export type ActivityWindowID = "7d" | "28d";
+
+export interface ActivityWindow {
+  id: ActivityWindowID;
+  weeks: number;
+  since: string;
+  total: number;
+  /** cells[星期][小时]：星期从周一（0）到周日（6），小时按服务器本地时间。 */
+  cells: number[][];
+  /** 窗口里最早一条消息所在的 15 分钟；比 since 晚一大截说明实例还没跑满这个窗口。 */
+  first_event_at?: string;
+}
+
+export interface ActivityDay {
+  /** 服务器本地日期，YYYY-MM-DD。 */
+  date: string;
+  count: number;
+}
+
+export interface StatsActivity {
+  until: string;
+  /** 服务器本地的今天，YYYY-MM-DD。 */
+  today: string;
+  /** 钟点和日期所用的服务器时区，形如 +08:00。 */
+  utc_offset: string;
+  windows: ActivityWindow[];
+  /** 近一年里有消息的日子，按日期升序；没列出的过去日子就是没有消息。 */
+  days: ActivityDay[];
+}
+
+/** 收到的消息按「星期几 × 几点」的分布和近一年按天的数量；profileID、groupID 为空表示不筛选。 */
+export function getStatsActivity(profileID = "", groupID = ""): Promise<StatsActivity> {
+  const params = new URLSearchParams();
+  if (profileID) params.set("profile_id", profileID);
+  if (groupID) params.set("group_id", groupID);
+  const query = params.toString();
+  return requestJSON<StatsActivity>(`/api/stats/activity${query ? `?${query}` : ""}`);
 }
 
 export type AssistantEventRange = "1h" | "24h" | "7d" | "30d" | "all";

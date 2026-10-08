@@ -149,3 +149,16 @@ export function truncate(text: string | undefined | null, max = 80): string {
   }
   return chars.slice(0, max).join("") + "…";
 }
+
+/**
+ * 坐标轴上限取整：每档按 1、2、2.5、5 × 10ⁿ 取，上限是 ticks 档。82 条的峰值给 100（刻度
+ * 0 / 50 / 100），41 条给 50（0 / 25 / 50），而不是拿峰值本身当上限、标出 82 / 41 这种
+ * 读不顺的数。档位取整到整数，条数没有小数。
+ */
+export function niceAxisMax(max: number, ticks = 2): number {
+  if (!Number.isFinite(max) || max <= 0) return ticks;
+  const raw = max / ticks;
+  const magnitude = 10 ** Math.floor(Math.log10(raw));
+  const step = [1, 2, 2.5, 5, 10].map((factor) => factor * magnitude).find((candidate) => candidate >= raw) ?? 10 * magnitude;
+  return Math.max(ticks, Math.ceil(step) * ticks);
+}
