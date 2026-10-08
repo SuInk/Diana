@@ -322,6 +322,8 @@ export interface BotProfileConfig extends SendRetrySettings {
   bot_reply_loop_detection_enabled?: boolean;
   /** 30 分钟内对同一账号拒答满设定次数就暂停响应它；默认开。 */
   reply_refusal_suppression_enabled?: boolean;
+  /** 发送前语义去重：近期已发过同一个人答复时判断候选是否重复；默认开。 */
+  reply_semantic_dedup_enabled?: boolean;
   /** 临时响应屏蔽总开关：空转、反复拒答、私聊叫停都靠它暂停响应账号；默认开。 */
   reply_suppression_enabled?: boolean;
   /** 每次屏蔽时长的随机范围（分钟）；0 或缺省用默认 10–30。 */

@@ -1227,6 +1227,18 @@
                 </span>
               </div>
               <div class="field wide">
+                <label class="switch">
+                  <input v-model="form.reply_semantic_dedup_enabled" type="checkbox" />
+                  <span class="track" aria-hidden="true"></span>
+                  <span class="switch-label">发送前语义去重</span>
+                </label>
+                <span class="hint">
+                  这个会话里 2 分钟内已经发过答复时，发送前让模型判断新回复是不是在重复同一个人刚收到的内容：重复的主动接话不发，直接回复（私聊、@、引用）只压缩成新增的部分，不会整条丢掉。
+                  只比较发给同一个人的答复，别人的答复不算；多人同时找机器人做同样的事（比如都来生图）时互不影响。
+                  关闭后不再丢弃或改写重复回复，也不再多一次模型调用和等待；偶尔会把同一段话发两遍。
+                </span>
+              </div>
+              <div class="field wide">
                 <label for="bot-account-safety-prompt">账号安全审核规则（留空使用内置规则）</label>
                 <textarea
                   id="bot-account-safety-prompt"
@@ -4474,6 +4486,7 @@ function setForm(config: BotProfileConfig): void {
     // 可选布尔字段先归一化成具体值供开关绑定；少数安全行为默认关闭。
     owner_llm_config_enabled: config.owner_llm_config_enabled ?? true,
     bot_reply_loop_detection_enabled: config.bot_reply_loop_detection_enabled ?? true,
+    reply_semantic_dedup_enabled: config.reply_semantic_dedup_enabled ?? true,
     reply_refusal_suppression_enabled: config.reply_refusal_suppression_enabled ?? true,
     reply_suppression_enabled: config.reply_suppression_enabled ?? true,
     reply_suppression_min_minutes: config.reply_suppression_min_minutes || defaultReplySuppressionMinMinutes,

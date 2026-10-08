@@ -726,6 +726,9 @@ type BotConfig struct {
 	// ReplyRefusalSuppressionEnabled 控制「30 分钟内对同一账号拒答满 4 次就暂停响应它」。
 	// 默认开；关掉后拒答照常，只是不再因此暂停。
 	ReplyRefusalSuppressionEnabled *bool `json:"reply_refusal_suppression_enabled,omitempty"`
+	// ReplySemanticDedupEnabled 控制发送前语义去重：本会话近期已发过答复时，让模型判断
+	// 候选回复是不是实质重复。默认开；关掉后不再丢弃或改写重复回复，也不再等待它。
+	ReplySemanticDedupEnabled *bool `json:"reply_semantic_dedup_enabled,omitempty"`
 	// ReplySuppressionEnabled 是临时响应屏蔽的总开关：空转、反复拒答、私聊叫停都靠它
 	// 暂停响应一个账号。默认开；关掉后这些判断照常做（复读照样只丢那一条、叫停照样
 	// 不发这一条），只是不再暂停任何人，已经开出去的屏蔽也跟着失效。
@@ -1341,6 +1344,7 @@ type ConfigPayload struct {
 	WebSearch                      *WebSearchAssignment `json:"web_search,omitempty"`
 	BotReplyLoopDetectionEnabled   *bool                `json:"bot_reply_loop_detection_enabled,omitempty"`
 	ReplyRefusalSuppressionEnabled *bool                `json:"reply_refusal_suppression_enabled,omitempty"`
+	ReplySemanticDedupEnabled      *bool                `json:"reply_semantic_dedup_enabled,omitempty"`
 	ReplySuppressionEnabled        *bool                `json:"reply_suppression_enabled,omitempty"`
 	ReplySuppressionMinMinutes     int                  `json:"reply_suppression_min_minutes,omitempty"`
 	ReplySuppressionMaxMinutes     int                  `json:"reply_suppression_max_minutes,omitempty"`
@@ -2041,6 +2045,7 @@ func DefaultBotConfig() BotConfig {
 		LLMIdentityBodyAccounts:        boolPointer(true),
 		BotReplyLoopDetectionEnabled:   boolPointer(true),
 		ReplyRefusalSuppressionEnabled: boolPointer(true),
+		ReplySemanticDedupEnabled:      boolPointer(true),
 		ReplySuppressionEnabled:        boolPointer(true),
 		ReplySuppressionMinMinutes:     defaultReplySuppressionMinMinutes,
 		ReplySuppressionMaxMinutes:     defaultReplySuppressionMaxMinutes,
@@ -2276,6 +2281,9 @@ func (cfg BotConfig) WithDefaults() BotConfig {
 	}
 	if cfg.ReplyRefusalSuppressionEnabled == nil {
 		cfg.ReplyRefusalSuppressionEnabled = boolPointer(true)
+	}
+	if cfg.ReplySemanticDedupEnabled == nil {
+		cfg.ReplySemanticDedupEnabled = boolPointer(true)
 	}
 	if cfg.ReplySuppressionEnabled == nil {
 		cfg.ReplySuppressionEnabled = boolPointer(true)
@@ -2668,6 +2676,7 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		WebSearch:                         normalizeWebSearchAssignment(cfg.WebSearch),
 		BotReplyLoopDetectionEnabled:      copyBoolPointer(cfg.BotReplyLoopDetectionEnabled),
 		ReplyRefusalSuppressionEnabled:    copyBoolPointer(cfg.ReplyRefusalSuppressionEnabled),
+		ReplySemanticDedupEnabled:         copyBoolPointer(cfg.ReplySemanticDedupEnabled),
 		ReplySafetyMasterEnabled:          copyBoolPointer(cfg.ReplySafetyMasterEnabled),
 		ReplyAccountSafetyAuditPrompt:     strings.TrimSpace(cfg.ReplyAccountSafetyAuditPrompt),
 		NotebookSharedScopeEnabled:        copyBoolPointer(cfg.NotebookSharedScopeEnabled),
@@ -2909,6 +2918,7 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		WebSearch:                       normalizeWebSearchAssignment(firstWebSearchAssignment(payload.WebSearch, existing.WebSearch)),
 		BotReplyLoopDetectionEnabled:    copyBoolPointer(payload.BotReplyLoopDetectionEnabled),
 		ReplyRefusalSuppressionEnabled:  copyBoolPointer(payload.ReplyRefusalSuppressionEnabled),
+		ReplySemanticDedupEnabled:       copyBoolPointer(payload.ReplySemanticDedupEnabled),
 		ReplySafetyMasterEnabled:        copyBoolPointer(payload.ReplySafetyMasterEnabled),
 		ReplyAccountSafetyAuditPrompt:   strings.TrimSpace(payload.ReplyAccountSafetyAuditPrompt),
 		NotebookSharedScopeEnabled:      copyBoolPointer(payload.NotebookSharedScopeEnabled),

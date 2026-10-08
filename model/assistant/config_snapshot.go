@@ -97,6 +97,7 @@ type dianaBotConfigSnapshot struct {
 	ModelRoles                      map[string]ModelRole `json:"model_roles,omitempty"`
 	BotReplyLoopDetectionEnabled    bool                 `json:"bot_reply_loop_detection_enabled"`
 	ReplyRefusalSuppressionEnabled  bool                 `json:"reply_refusal_suppression_enabled"`
+	ReplySemanticDedupEnabled       bool                 `json:"reply_semantic_dedup_enabled"`
 	ReplySuppressionEnabled         bool                 `json:"reply_suppression_enabled"`
 	ReplySuppressionMinMinutes      int                  `json:"reply_suppression_min_minutes"`
 	ReplySuppressionMaxMinutes      int                  `json:"reply_suppression_max_minutes"`
@@ -348,6 +349,7 @@ func dianaBotConfigFromConfig(cfg BotConfig) dianaBotConfigSnapshot {
 		ModelRoles:                      normalizeModelRoles(cfg.ModelRoles),
 		BotReplyLoopDetectionEnabled:    boolValue(cfg.BotReplyLoopDetectionEnabled, true),
 		ReplyRefusalSuppressionEnabled:  boolValue(cfg.ReplyRefusalSuppressionEnabled, true),
+		ReplySemanticDedupEnabled:       boolValue(cfg.ReplySemanticDedupEnabled, true),
 		ReplySuppressionEnabled:         replySuppressionEnabled(cfg),
 		ReplySuppressionMinMinutes:      replySuppressionMinMinutes(cfg),
 		ReplySuppressionMaxMinutes:      replySuppressionMaxMinutes(cfg),

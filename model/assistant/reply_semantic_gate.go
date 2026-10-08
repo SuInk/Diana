@@ -13,6 +13,13 @@ import (
 
 const semanticReplyRetention = 2 * time.Minute
 
+// semanticReplyPerUser 是每个用户保留的最近答复数；semanticReplyTotal 给整个会话
+// 兜底，免得人多的群里窗口无限增长。
+const (
+	semanticReplyPerUser = 3
+	semanticReplyTotal   = 24
+)
+
 var errDuplicateReply = errors.New("reply contains no new content")
 
 type semanticSentReply struct {
@@ -77,9 +84,52 @@ func (g *semanticReplyGate) remember(request, reply string, userIDs ...string) {
 		item.UserID = userIDs[0]
 	}
 	g.sent = append(g.sent, item)
-	if len(g.sent) > 3 {
-		g.sent = g.sent[len(g.sent)-3:]
+	g.trim()
+}
+
+// trim 丢掉过期的答复，并让每个用户只保留自己最近几条。以前整个会话共用最近 3 条，
+// 人多时别人的答复会把某个人自己的上一条挤出去，去重反而看不到真正的重复。
+func (g *semanticReplyGate) trim() {
+	kept := make([]semanticSentReply, 0, len(g.sent))
+	perUser := map[string]int{}
+	for i := len(g.sent) - 1; i >= 0; i-- {
+		item := g.sent[i]
+		if time.Since(item.SentAt) > semanticReplyRetention || perUser[item.UserID] >= semanticReplyPerUser || len(kept) >= semanticReplyTotal {
+			continue
+		}
+		perUser[item.UserID]++
+		kept = append(kept, item)
 	}
+	for i, j := 0, len(kept)-1; i < j; i, j = i+1, j-1 {
+		kept[i], kept[j] = kept[j], kept[i]
+	}
+	g.sent = kept
+}
+
+// sentFor 返回和当前用户有关的近期答复。别人的答复不能替这个人的请求「已经回答过」，
+// 所以不交给去重模型；只在没法判断是谁时（任一边缺用户 ID）才保留。答复当时合并
+// 回答过这个人的补充消息时也算有关。
+func (g *semanticReplyGate) sentFor(userID string) []semanticSentReply {
+	var recent []semanticSentReply
+	for _, item := range g.sent {
+		if time.Since(item.SentAt) > semanticReplyRetention || !semanticReplyConcerns(item, userID) {
+			continue
+		}
+		recent = append(recent, item)
+	}
+	return recent
+}
+
+func semanticReplyConcerns(item semanticSentReply, userID string) bool {
+	if userID == "" || item.UserID == "" || item.UserID == userID {
+		return true
+	}
+	for _, supplement := range item.Supplements {
+		if supplement.UserID == userID {
+			return true
+		}
+	}
+	return false
 }
 
 func (g *semanticReplyGate) rememberRequest(request replyRequestContext, supplements []replyRequestContext, reply string) {
@@ -128,12 +178,7 @@ func (r *Runtime) deduplicateReply(ctx context.Context, event MessageEvent, inpu
 // 的请求和引用判过「有新内容」，就不该再被复读那一项整条丢掉。
 func (r *Runtime) deduplicateReplyVerdict(ctx context.Context, event MessageEvent, input, reply string, cfg BotConfig, gate *semanticReplyGate, allowDrop bool) (string, bool, error) {
 	ctx = withLLMUsageContext(ctx, event)
-	var recent []semanticSentReply
-	for _, item := range gate.sent {
-		if time.Since(item.SentAt) <= semanticReplyRetention {
-			recent = append(recent, item)
-		}
-	}
+	recent := gate.sentFor(event.UserID)
 	if len(recent) == 0 {
 		return reply, false, nil
 	}
