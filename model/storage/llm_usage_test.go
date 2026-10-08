@@ -279,3 +279,32 @@ func TestLLMUsageBreakdownSurvivesRestartAndMatchesTotals(t *testing.T) {
 		t.Fatalf("upper boundary call: %+v, %v", empty, err)
 	}
 }
+
+// 筛选下推到 SQL 后，空元数据的历史行不能让 json_extract 报错，也不能混进筛选结果。
+func TestLLMUsageReportFilterSkipsEmptyMetadata(t *testing.T) {
+	s, err := NewSQLiteStore(filepath.Join(t.TempDir(), "filter.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	ctx := context.Background()
+	since := time.Date(2026, 10, 3, 0, 0, 0, 0, time.UTC)
+	until := since.Add(time.Hour)
+	if err := s.AppendLog(ctx, applog.Entry{Action: "llm_usage", CreatedAt: since.Add(time.Minute), Metadata: map[string]any{"profile_id": " a ", "total_tokens": 7}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AppendLog(ctx, applog.Entry{Action: "llm_usage", CreatedAt: since.Add(time.Minute), Metadata: map[string]any{"total_tokens": 1}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.ExecContext(ctx, `UPDATE app_logs SET metadata='' WHERE json_extract(metadata,'$.total_tokens')=1`); err != nil {
+		t.Fatal(err)
+	}
+	all, err := s.LLMUsageReport(ctx, applog.UsageFilter{}, since, until)
+	if err != nil || all.Usage.Calls != 2 {
+		t.Fatalf("unfiltered report = %+v, %v", all.Usage, err)
+	}
+	filtered, err := s.LLMUsageReport(ctx, applog.UsageFilter{ProfileID: "a"}, since, until)
+	if err != nil || filtered.Usage.Calls != 1 || filtered.Usage.TotalTokens != 7 {
+		t.Fatalf("filtered report = %+v, %v", filtered.Usage, err)
+	}
+}
