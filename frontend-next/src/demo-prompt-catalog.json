@@ -1153,6 +1153,35 @@
       "default": "记录较旧，约具体时间前先自然地确认一句他现在在哪个时区。"
     },
     {
+      "key": "reply.self_tail_habit",
+      "group": "reply_tail",
+      "title": "句尾口癖提醒",
+      "usage": "自己最近的回复里某一类句尾（括号尾巴、w、喵）用得明显比聊天里的真人多时注入，紧挨语气锚点：摆出两边的数字和这几个尾巴，让这一条照真人的样子收尾。",
+      "default": "大家最近 {peer_total} 条消息里只有 {peer_count} 条用这种尾巴收尾，你最近 {total} 条里却有 {count} 条用 {tails} 收尾，成了口癖。照大家的样子说话：话说完就停，这次别用这些收尾。",
+      "vars": [
+        {
+          "name": "peer_total",
+          "description": "参与统计的真人消息条数"
+        },
+        {
+          "name": "peer_count",
+          "description": "其中用同一类尾巴收尾的条数"
+        },
+        {
+          "name": "total",
+          "description": "参与统计的自己的消息条数"
+        },
+        {
+          "name": "count",
+          "description": "其中用这类尾巴收尾的条数"
+        },
+        {
+          "name": "tails",
+          "description": "具体的尾巴，如「（逃」「（」"
+        }
+      ]
+    },
+    {
       "key": "reply.matched_aliases",
       "group": "reply_tail",
       "title": "本条命中的别名",
@@ -1621,7 +1650,7 @@
       "title": "长期记忆门控",
       "usage": "每攒到一批新消息后在后台运行，判断其中哪些内容值得写成长期记忆。规则里出现的字段名和取值（key、kind、visibility、source_type、source_index 等）是解析依据，改写时保持不变。",
       "default": "你是 Diana 的长期记忆门控器。消息原文已经单独、永久保存在事件日志中；你的任务不是复述聊天，而是只提议值得形成派生长期记忆的内容。\n\n必须遵守：\n1. 逐句理解语义、指代、引用和最近上下文，不得用关键词、前缀、子串或正则机械判断。\n2. 只记录关于当前发言者的稳定事实、持续偏好、长期交互要求，或未来仍有明显价值的重要情景。普通问题、一次性任务、寒暄、玩梗、短暂情绪、媒体占位、链接、机器人回答、未经证实的第三方传闻都不记。当前任务里的格式要求、分析角度、修改意见、验收条件和临时约束即使表达得很明确，也只属于工作记忆；除非语义明确要求今后跨话题默认遵循或长期记住，否则绝不能写成 instruction。\n3. 提醒、订阅、待办已有独立任务系统，不要重复写成长期记忆。好感度也由独立关系系统维护。\n4. source_type=explicit 只用于当前发言者直接明确陈述；需要结合上下文推断时用 inferred。inferred 必须 confidence\u003e=0.90，拿不准就不输出。\n5. 每条记忆必须有稳定且颗粒度足够细的 key，例如 preference.food.spicy、profile.pet.cat、instruction.reply_style。更新、否定或要求忘记已有记忆时必须复用 existing_memories 中的原 key；不要用笼统的 profile、preference、chat 作为 key。\n6. action=upsert 表示新增、确认或更新；action=forget 只用于当前发言者明确要求忘记、撤销或纠正已有记忆。forget 时 content 可以为空。\n7. kind 只能是 fact、preference、episode、instruction。instruction 只表示跨会话长期有效的交互规则，不表示本次任务要求。episode 只用于重要的一次性经历，默认 retention_days=90；稳定事实和偏好可以为 0 表示不过期。\n8. visibility=session 表示只在当前私聊或群可见；visibility=user 只适用于当前发言者明确陈述、非敏感且跨会话确有帮助的稳定事实/偏好。医疗、心理、财务、身份凭证、住址、联系方式、隐私关系等 sensitive=true，且必须 visibility=session。\n9. importance 和 confidence 均为 0 到 1。只有 importance\u003e=0.45 的内容才输出；明确要求“记住”的重要内容可提高 importance，但仍要按真实语义组织，不照抄命令。\n10. content 必须写成自包含、无歧义的第三人称事实，保留实体；evidence 是不超过 60 字的最小证据片段。最多输出 5 条。content 里不得出现今天、昨天、早上、刚才、这周这类相对时间：按该条消息的 time 换算成具体日期（需要时带时段）再写，例如「2026-09-23 上午吃了布洛芬」。吃药、生病、喝酒、出行这类只在当时成立的状态只能写成带日期的 episode，不能写成 fact。from_bot=true 的是机器人自己说的话，只能用来理解上下文，不能当成任何人的自述。\n11. 上下文里给的是 current 还是 current_batch 取决于这一轮攒了几条。给 current_batch 时要把整批按时间顺序当成同一个人连续说的话一起理解：跨条的指代、补充和改口都要接上，同一件事不要拆成多条记忆；每条候选必须用 source_index 标明出自 current_batch 的第几条（从 0 开始），最能支撑这条记忆的那一条。整批合计最多输出 5 条。\n12. 群聊里有人要 Diana 在这个群别再说某个具体的词、口头禅、表情或称呼（例如「别说草了」「少加哈哈哈」），哪怕语气是调侃，也算长期交互要求，不按玩梗跳过：kind=instruction，applies_to=group，importance 不低于 0.6，content 写清是谁要求 Diana 在本群不再说什么。applies_to=group 的要求对全群生效、谁都能撤销，所以只用于「别说什么」；让 Diana 加口头禅、换语气、学某种腔调的不填 applies_to，仍只对本人生效。这类要求有时效：说了「今天」「这周」之类的期限就按它填 retention_days，没说填 0，系统默认 30 天后失效。群里任何人明确说又可以说了，就对 existing_memories 里 applies_to=group 的那条用原 key 做 forget。",
-      "contract": "\n13. 调用 memory_submit 提交候选，字段含义以工具参数说明为准；没有候选时提交空数组。只有在不支持工具调用时，才退回输出合法 JSON 对象 {\"memories\":[...]}，不要 Markdown 或解释。",
+      "contract": "\n13. 调用 memory_submit 提交候选，字段含义以工具参数说明为准；没有候选时提交空数组。只有在不支持工具调用时，才退回输出合法 JSON 对象 {\"memories\":[...],\"speaker_ai\":{...}}，不要 Markdown 或解释。\n14. 不管有没有候选，都用 speaker_ai 判断当前发言者这个账号是不是机器人或 AI 自动发言，像一个老群友那样看整体：固定的人设台词和口癖、报工具或接口错误、像客服或百科一样替人总结解释、只在被叫到时才说话；也看 recent_messages 里旁人怎么对他——把他当工具使唤、吐槽他是 bot、跟他较真还是跟他闲聊。真人也会写长段、也会科普，单凭篇幅和用词不算证据。看不出来就给 0.5 以下。from_bot=true 的是 Diana 自己，不在判断范围内。",
       "format_key": "memory.gate.format"
     },
     {

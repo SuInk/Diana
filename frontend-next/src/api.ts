@@ -3230,7 +3230,22 @@ export interface UserMemoryProfile {
   /** 门控器写出来的长期记忆条数，和 memory_count 不是一回事。 */
   structured_memory_count?: number;
   portrait_count?: number;
+  /** 像不像机器人：长期记忆门控顺带打的分，攒够几次才算数；主人可以手动改判。 */
+  ai?: UserAIJudgment;
   last_seen_at?: string;
+  updated_at?: string;
+}
+
+export type UserAIOverride = "" | "human" | "bot";
+
+export interface UserAIJudgment {
+  /** 平滑后的 AI 率，0 到 1。 */
+  likelihood: number;
+  reason?: string;
+  observations: number;
+  override?: UserAIOverride;
+  /** 当前是否算作机器人；算作机器人的人不作为学说话的参照。 */
+  likely: boolean;
   updated_at?: string;
 }
 
@@ -3420,6 +3435,13 @@ export function clearAssistantUserMemories(userID: string, profile: string, memo
     `/api/assistant/users/${encodeURIComponent(userID)}/memories${suffix}?profile=${encodeURIComponent(profile)}`,
     { method: "DELETE" }
   );
+}
+
+/** 手动把一个人定为真人或机器人；override 留空交回自动判断。 */
+export function setAssistantUserAI(userID: string, profile: string, override: UserAIOverride): Promise<{ ok: boolean; ai: UserAIJudgment }> {
+  return requestJSON(`/api/assistant/users/${encodeURIComponent(userID)}/ai?profile=${encodeURIComponent(profile)}`, {
+    method: "PUT", body: JSON.stringify({ override })
+  });
 }
 
 export function deleteBotGroup(groupID: string, profile = ""): Promise<{ ok: boolean }> {

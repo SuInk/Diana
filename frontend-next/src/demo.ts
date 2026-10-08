@@ -37,6 +37,7 @@ import type {
   UpdateStatus,
   UserFavorabilityChange,
   RelationshipEvaluation,
+  UserAIOverride,
   UserMemoryProfile,
   WorldBookNode
 } from "./api";
@@ -428,6 +429,11 @@ const demoUsers: UserMemoryProfile[] = [
   {
     user_id: "100200888", display_name: "路人甲", favorability: -8, message_count: 96, last_seen_at: before(3000), updated_at: before(3000),
     memories: [{ text: "多次刷屏广告链接，已被设计群屏蔽", source: "group", group_id: "100200519", at: before(3000) }]
+  },
+  {
+    user_id: "100200777", display_name: "小汐", favorability: 0, message_count: 341, last_seen_at: before(5), updated_at: before(5),
+    ai: { likelihood: 0.91, reason: "只在被点名时回复，回答是百科式总结，群友吐槽它是 bot", observations: 6, likely: true, updated_at: before(5) },
+    memories: []
   }
 ];
 
@@ -2005,6 +2011,16 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
       }
     }
     return json({ nodes: demoWorldBook });
+  }
+  const userAIMatch = path.match(/^\/api\/assistant\/users\/([^/]+)\/ai$/);
+  if (userAIMatch && method === "PUT") {
+    const user = demoUsers.find((item) => item.user_id === decodeURIComponent(userAIMatch[1]));
+    if (!user) return json({ error: "人员不存在或还没有画像记录" }, 404);
+    const override = String(body.override ?? "") as UserAIOverride;
+    const current = user.ai ?? { likelihood: 0, observations: 0, likely: false };
+    const auto = current.observations >= 3 && current.likelihood >= 0.8;
+    user.ai = { ...current, override, likely: override === "bot" || (override !== "human" && auto), updated_at: new Date().toISOString() };
+    return json({ ok: true, ai: user.ai });
   }
   const userMatch = path.match(/^\/api\/assistant\/users\/([^/]+)$/);
   if (userMatch) {

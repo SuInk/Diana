@@ -55,7 +55,7 @@ func (r *Runtime) groupLengthNormPrompt(event MessageEvent, cfg BotConfig) strin
 	r.mu.RLock()
 	history := append([]MessageEvent(nil), r.history[sessionKey(event)]...)
 	r.mu.RUnlock()
-	norm, ok := groupMessageNorm(history, firstNonEmpty(strings.TrimSpace(cfg.BotAccount), strings.TrimSpace(event.SelfID)))
+	norm, ok := groupMessageNorm(history, firstNonEmpty(strings.TrimSpace(cfg.BotAccount), strings.TrimSpace(event.SelfID)), r.otherBotFilter(event, cfg))
 	if !ok {
 		return ""
 	}
@@ -72,12 +72,12 @@ type groupMessageNormStats struct {
 
 // groupMessageNorm 算群友文字消息的中位和九成分位长度（按 5 字取整），以及带换行的
 // 百分比。机器人自己的回复不算——正是它在拉长均值、多出换行；纯图片、纯表情这类
-// 没有文字的消息也不算。
-func groupMessageNorm(history []MessageEvent, botID string) (groupMessageNormStats, bool) {
+// 没有文字的消息也不算。群里别的机器人也不算，学的是真人。
+func groupMessageNorm(history []MessageEvent, botID string, isOtherBot func(MessageEvent) bool) (groupMessageNormStats, bool) {
 	lengths := make([]int, 0, len(history))
 	newlines := 0
 	for _, event := range history {
-		if assistantHistoryEvent(event, botID) || event.crossGroupContext {
+		if assistantHistoryEvent(event, botID) || event.crossGroupContext || isOtherBot != nil && isOtherBot(event) {
 			continue
 		}
 		text := strings.TrimSpace(historyPlainText(event))

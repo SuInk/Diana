@@ -180,7 +180,7 @@ func (r *Runtime) learnGroupStyle(ctx context.Context, event MessageEvent) (Grou
 	}()
 
 	cfg := r.effectiveConfigForEvent(event)
-	lines := groupStyleSampleLines(r.recentGroupMessages(ctx, event), firstNonEmpty(strings.TrimSpace(cfg.BotAccount), strings.TrimSpace(event.SelfID)))
+	lines := groupStyleSampleLines(r.recentGroupMessages(ctx, event), firstNonEmpty(strings.TrimSpace(cfg.BotAccount), strings.TrimSpace(event.SelfID)), r.otherBotFilter(event, cfg))
 	if len(lines) < groupStyleMinMessages {
 		return GroupStyle{}, ErrGroupStyleNotEnoughMessages
 	}
@@ -244,13 +244,13 @@ func (r *Runtime) recentGroupMessages(ctx context.Context, event MessageEvent) [
 	return memory
 }
 
-// groupStyleSampleLines 把群友消息整理成学习材料：去掉机器人自己的话和没有文字的消息，
+// groupStyleSampleLines 把群友消息整理成学习材料：去掉机器人自己的话、群里别的机器人和没有文字的消息，
 // 发言人换成字母——模型要学的是这个群怎么说话，不是谁是谁。
-func groupStyleSampleLines(events []MessageEvent, botID string) []string {
+func groupStyleSampleLines(events []MessageEvent, botID string, isOtherBot func(MessageEvent) bool) []string {
 	aliases := map[string]string{}
 	lines := make([]string, 0, len(events))
 	for _, event := range events {
-		if assistantHistoryEvent(event, botID) || event.crossGroupContext {
+		if assistantHistoryEvent(event, botID) || event.crossGroupContext || isOtherBot != nil && isOtherBot(event) {
 			continue
 		}
 		text := strings.Join(strings.Fields(strings.TrimSpace(historyPlainText(event))), " ")

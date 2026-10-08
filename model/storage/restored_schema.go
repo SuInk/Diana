@@ -88,6 +88,7 @@ CREATE TABLE IF NOT EXISTS user_profiles (
   message_count INTEGER NOT NULL,
   memories TEXT NOT NULL,
   portrait TEXT NOT NULL DEFAULT '',
+  ai_judgment TEXT NOT NULL DEFAULT '',
   last_seen_at TEXT,
   updated_at TEXT NOT NULL,
   PRIMARY KEY (bot_profile_id, user_id)
@@ -373,6 +374,9 @@ CREATE INDEX IF NOT EXISTS idx_repository_issue_drafts_group_status_time ON repo
 		return err
 	}
 	if err := s.backfillRecallNoticeAudits(); err != nil {
+		return err
+	}
+	if err := s.addUserProfileAIJudgmentColumn(); err != nil {
 		return err
 	}
 	return nil
