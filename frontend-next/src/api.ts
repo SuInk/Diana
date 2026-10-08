@@ -562,6 +562,9 @@ export interface PluginManifest {
 export interface PluginState {
   shared_config_source?: string;
   profile_enabled?: Record<string, boolean>;
+  /** 只在「全部机器人」视图里出现：几台机器人开着、一共几台。 */
+  enabled_profiles?: number;
+  profile_count?: number;
   manifest: PluginManifest;
   installed: boolean;
   enabled: boolean;
@@ -1773,7 +1776,7 @@ export function listPlugins(profile = ""): Promise<PluginState[]> {
   return requestJSON<PluginState[]>(`/api/assistant/plugins?profile=${encodeURIComponent(profile)}`);
 }
 
-export interface ManagedExtension { kind: "skill" | "mcp"; id: string; name: string; description?: string; source?: string; managed?: boolean; enabled: boolean; available?: boolean; members_enabled?: boolean; member_audience?: {min_role?: string; users?: string[]; groups?: string[]}; bundled?: boolean; transport?: string; tools?: string[]; resident?: boolean; keywords?: string[]; error?: string }
+export interface ManagedExtension { kind: "skill" | "mcp"; id: string; name: string; description?: string; source?: string; managed?: boolean; enabled: boolean; enabled_profiles?: number; profile_count?: number; available?: boolean; members_enabled?: boolean; member_audience?: {min_role?: string; users?: string[]; groups?: string[]}; bundled?: boolean; transport?: string; tools?: string[]; resident?: boolean; keywords?: string[]; error?: string }
 export function listManagedExtensions(profile = ""): Promise<{items: ManagedExtension[]}> {
   return requestJSON(`/api/assistant/extensions?profile=${encodeURIComponent(profile)}`);
 }

@@ -84,3 +84,66 @@ func TestBotHandlerPluginProfileIsolationPersists(t *testing.T) {
 		t.Fatal("persisted switches lost profile isolation")
 	}
 }
+
+func TestBotHandlerPluginEnabledForAllProfiles(t *testing.T) {
+	ctx := context.Background()
+	m := assistant.NewDefaultPluginManager()
+	r := assistant.NewRuntime(assistant.BotConfig{ID: "qq-a"}, fakeChannel{}, m, nil, nil, nil, nil)
+	h := NewBotHandlerWithFactory(ctx, r, nil)
+	profiles := NewMemoryBotProfileStore(r.ProfileConfig(""))
+	if err := profiles.SaveProfiles(assistant.ProfileSet{Profiles: []assistant.BotConfig{
+		{ID: "qq-a", Platform: assistant.PlatformOneBotV11},
+		{ID: "qq-b", Platform: assistant.PlatformOneBotV11},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	h.SetProfileStore(profiles)
+	router := botTestRouter(h)
+	id := assistant.ResolverPluginID
+	post := func(path, body string) {
+		t.Helper()
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, path, strings.NewReader(body)))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s: %d %s", path, rec.Code, rec.Body.String())
+		}
+	}
+	counts := func() (int, int) {
+		t.Helper()
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/assistant/plugins", nil))
+		var states []assistant.PluginState
+		if err := json.Unmarshal(rec.Body.Bytes(), &states); err != nil {
+			t.Fatal(err)
+		}
+		for _, state := range states {
+			if state.Manifest.ID == id {
+				if state.EnabledProfiles == nil || state.ProfileCount == nil {
+					t.Fatal("all-bots list missing profile counts")
+				}
+				return *state.EnabledProfiles, *state.ProfileCount
+			}
+		}
+		t.Fatal("plugin missing from list")
+		return 0, 0
+	}
+
+	post("/api/assistant/plugins/"+id+"/enabled?profile=qq-a", `{"enabled":false}`)
+	if on, total := counts(); on != 1 || total != 2 {
+		t.Fatalf("partial = %d/%d, want 1/2", on, total)
+	}
+	// 统一停用覆盖各台设置。
+	post("/api/assistant/plugins/"+id+"/enabled", `{"enabled":false}`)
+	if on, _ := counts(); on != 0 {
+		t.Fatalf("after disable all, %d still on", on)
+	}
+	// 之后单台照样能单独打开。
+	post("/api/assistant/plugins/"+id+"/enabled?profile=qq-b", `{"enabled":true}`)
+	if !m.EnabledWithOverrides(id, m.ProfileOverrides("qq-b")) || m.EnabledWithOverrides(id, m.ProfileOverrides("qq-a")) {
+		t.Fatal("single-bot switch after unified disable not honored")
+	}
+	post("/api/assistant/plugins/"+id+"/enabled", `{"enabled":true}`)
+	if on, total := counts(); on != total {
+		t.Fatalf("after enable all = %d/%d", on, total)
+	}
+}

@@ -50,9 +50,9 @@ const demoMCPPresets=[{
  ]
 }];
 
-export function extensionDemoResponse(method:string,profile:string,body:Record<string,any>){
+export function extensionDemoResponse(method:string,profile:string,body:Record<string,any>,profileIDs:string[]=[]){
  const operation=method==='GET'?'list':body.operation;
- if(operation==='list')return {items:entries.map(({content,config,...item})=>({...item,enabled:item.kind==='mcp'?(overrides[profile]?.[item.id]??item.enabled):item.enabled&&(overrides[profile]?.[item.id]??true),...(profile?{members_enabled:memberAccess[profile]?.[item.id]??false,...(residency[profile]?.[item.id]!==undefined?{resident:residency[profile][item.id]}:{}),...(memberAudience[profile]?.[item.id]?{member_audience:memberAudience[profile][item.id]}:{})}:{})}))};
+ if(operation==='list')return {items:entries.map(({content,config,...item})=>({...item,enabled:item.kind==='mcp'?(overrides[profile]?.[item.id]??item.enabled):item.enabled&&(overrides[profile]?.[item.id]??true),...(!profile&&item.kind==='skill'&&profileIDs.length?{enabled_profiles:profileIDs.filter(id=>item.enabled&&(overrides[id]?.[item.id]??true)).length,profile_count:profileIDs.length}:{}),...(profile?{members_enabled:memberAccess[profile]?.[item.id]??false,...(residency[profile]?.[item.id]!==undefined?{resident:residency[profile][item.id]}:{}),...(memberAudience[profile]?.[item.id]?{member_audience:memberAudience[profile][item.id]}:{})}:{})}))};
  if(operation==='residency'){
   const item=entries.find(i=>i.kind===body.kind&&i.name===body.name);if(!item)throw Error('扩展不存在');
   const values=residency[profile||body.profile_id]??={};
@@ -85,6 +85,7 @@ export function extensionDemoResponse(method:string,profile:string,body:Record<s
  if(operation==='reveal'){if(!item)throw Error('扩展不存在');return {url:item.config?.url||'',headers:item.config?.headers||{},env:item.config?.env||{},preset_values:item.preset_values||{},preset_secrets:{}}}
  if(operation==='test')throw Error('演示模式不连接外部 MCP，请在真实部署中测试');
  if(operation==='enabled'&&item?.kind==='mcp'&&!body.profile_id){item.enabled=body.enabled;for(const values of Object.values(overrides))delete values[item.id];return {ok:true}}
+ if(operation==='enabled'&&item?.kind==='skill'&&!body.profile_id){if(!profileIDs.length)throw Error('还没有机器人');for(const id of profileIDs)(overrides[id]??={})[item.id]=body.enabled;return {ok:true}}
  if(operation==='enabled'){if(!item||!body.profile_id)throw Error('请选择机器人');(overrides[body.profile_id]??={})[item.id]=body.enabled;return {ok:true}}
  if(operation==='members'){if(!item)throw Error('扩展不存在');if(!body.profile_id)throw Error('请选择机器人');(memberAccess[body.profile_id]??={})[item.id]=body.enabled;return {ok:true}}
  if(operation==='audience'){if(!item)throw Error('扩展不存在');if(!body.profile_id)throw Error('请选择机器人');const users=(body.audience?.users||[]).filter(Boolean),groups=(body.audience?.groups||[]).filter(Boolean);const minRole=body.audience?.min_role||'';if(minRole&&minRole!=='admin')throw Error('身份门槛只支持 admin');const store=(memberAudience[body.profile_id]??={});if(users.length||groups.length||minRole)store[item.id]={...(minRole?{min_role:minRole}:{}),users,groups};else delete store[item.id];return {ok:true}}
