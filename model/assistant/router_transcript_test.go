@@ -101,3 +101,26 @@ func TestProactiveReplyPayloadInterruptedBotFollowUp(t *testing.T) {
 		t.Fatalf("hint should stay for a direct follow-up:\n%s", got)
 	}
 }
+
+// TestPendingEarlierMessagesStopsAtChatWithOthers 来自生产：群友先回复主人聊了几句，
+// 再叫嘉然问别的事。回复别人的那条和更早的几句都是在跟主人聊，不该被点名「你还没
+// 回复」，否则嘉然会先回一段旧话题再答当前问题。
+func TestPendingEarlierMessagesStopsAtChatWithOthers(t *testing.T) {
+	text := func(s string) MessageSegment { return MessageSegment{Type: "text", Data: map[string]string{"text": s}} }
+	msg := func(id string, at int64, segments ...MessageSegment) MessageEvent {
+		return MessageEvent{Kind: EventKindGroup, GroupID: "123456", UserID: "10001", SelfID: "42", MessageID: id, Time: at, Segments: segments}
+	}
+	history := []MessageEvent{
+		msg("m1", 100, text("而且有点尬")),
+		msg("m2", 105, MessageSegment{Type: "at", Data: map[string]string{"qq": "10009"}}, text("说起来宇树不是开源了机器人模型吗")),
+		msg("m3", 110, text("嘉然，那个模型是干什么的")),
+	}
+	if got := pendingEarlierMessages(history, history[2], pendingEarlierMessagesLimit); len(got) != 0 {
+		t.Fatalf("earlier messages = %#v, want none", got)
+	}
+	// 没在跟别人说话的连发照旧点名。
+	history[1] = msg("m2", 105, text("说起来宇树不是开源了机器人模型吗"))
+	if got := pendingEarlierMessages(history, history[2], pendingEarlierMessagesLimit); len(got) != 2 {
+		t.Fatalf("earlier messages = %d, want 2", len(got))
+	}
+}

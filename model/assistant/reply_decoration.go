@@ -138,6 +138,12 @@ func pendingEarlierMessages(history []MessageEvent, event MessageEvent, limit in
 		if item.Outbound || strings.TrimSpace(item.UserID) != strings.TrimSpace(event.UserID) {
 			break
 		}
+		// 回复别人或 @ 别人的那条是在跟别人聊，再往前的也多半是同一段对话，都不是「没回
+		// 机器人的话」。以前照样点名要求一并接住，嘉然就把群友跟主人的闲聊当成冲自己说的，
+		// 先回一段旧话题再答当前问题（生产 2026-10-06，「恋爱功能删了就删了…」）。
+		if addressedToOther(item) {
+			break
+		}
 		if anchorTime > 0 && item.Time > 0 && anchorTime-item.Time > int64(pendingEarlierMessageWindow/time.Second) {
 			break
 		}
@@ -153,6 +159,15 @@ func pendingEarlierMessages(history []MessageEvent, event MessageEvent, limit in
 		picked[left], picked[right] = picked[right], picked[left]
 	}
 	return picked
+}
+
+// addressedToOther 判断这条消息是不是在回复或 @ 机器人以外的人，且没有同时 @ 机器人。
+func addressedToOther(item MessageEvent) bool {
+	addressing := addressingForEvent(item, BotConfig{})
+	if addressing.MentionsSelf || addressing.ReplyTarget == "self" {
+		return false
+	}
+	return addressing.ReplyTarget == "other" || addressing.MentionsOther
 }
 
 // pendingEarlierImageOnly 判断这条没有文字的消息是不是一条正经的图(不是表情)。
@@ -293,9 +308,9 @@ func pendingEarlierMessagesPrompt(cfg BotConfig, event MessageEvent, history []M
 	if bareWakeMention(event, currentText, botID, cfg.GroupTriggers) {
 		builder.WriteString("当前这条只是再次叫你一声,应把它理解为催你回应上一条:直接自然回答上一条的实质内容,不要另外输出“在的”“怎么了”“你喊我有什么事”等唤醒回应,也不要在回答前后重复打招呼。")
 	} else if len(earlier) == 1 {
-		builder.WriteString("这一轮把它们一起接住:先明确回应那一条,再回应当前这条,别让对方觉得前一条被跳过。")
+		builder.WriteString("这一轮把它们一起接住:先明确回应那一条,再回应当前这条,别让对方觉得前一条被跳过。如果那一条明显是在跟别人聊、不是对你说的,只当背景理解,不用专门回应。")
 	} else {
-		builder.WriteString("这一轮只发一份回复,把它们一起接住:前面几条和当前这条合起来理解,别让对方觉得有哪条被跳过。")
+		builder.WriteString("这一轮只发一份回复,把它们一起接住:前面几条和当前这条合起来理解,别让对方觉得有哪条被跳过。其中明显是在跟别人聊、不是对你说的,只当背景理解,不用专门回应。")
 	}
 	return builder.String()
 }
