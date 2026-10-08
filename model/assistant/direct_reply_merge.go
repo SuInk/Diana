@@ -367,6 +367,9 @@ func (r *Runtime) mergeIntoActiveDirectReply(ctx context.Context, event MessageE
 	}
 	rootMessageID := active.root.MessageID
 	r.replyInterruptMu.Unlock()
+	// 并进去的消息不会单独得到回复；那一轮已经跑了一阵的话先报一句进度，
+	// 不然催的人要一直等到结果出来才听到动静。
+	r.nudgeReplyProgress(event)
 	return strings.TrimSpace(rootMessageID), true
 }
 
