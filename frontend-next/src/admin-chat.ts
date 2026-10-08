@@ -109,8 +109,9 @@ export async function readAdminChatFrames(body: ReadableStream<Uint8Array>, rece
   }
 }
 
-export async function sendAdminChat(id: string, message: string, signal: AbortSignal, receive: (frame: AdminChatFrame) => void): Promise<void> {
-  const response = await chatRequest('', {method: 'POST', body: JSON.stringify({session_id: id, message}), signal});
+// model 为 [提供商 ID, 模型 ID]；留空跟随机器人的模型分配。
+export async function sendAdminChat(id: string, message: string, [providerID, model]: [string, string?], signal: AbortSignal, receive: (frame: AdminChatFrame) => void): Promise<void> {
+  const response = await chatRequest('', {method: 'POST', body: JSON.stringify({session_id: id, message, provider_id: providerID || undefined, model: model || undefined}), signal});
   if (!response.body) throw new Error('浏览器不支持流式对话');
   await readAdminChatFrames(response.body, receive);
 }

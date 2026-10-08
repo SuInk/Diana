@@ -194,3 +194,24 @@ func TestConcurrentModelSwitchPreservesBothRoles(t *testing.T) {
 		}
 	}
 }
+
+func TestAdminChatModelOverridePinsOnlyAdminChat(t *testing.T) {
+	r, _, store, event := modelSwitchTestRuntime(t)
+	base := withLLMUsagePurpose(withModelConfigEvent(context.Background(), event), "admin_chat")
+	ctx := WithAdminChatModel(base, "two", "other")
+	set := store.Profiles().WithDefaults()
+	profiles, err := r.roleBoundProfiles("admin_chat", set, "agent", r.modelRolesForContext(ctx))
+	if err != nil || len(profiles) != 1 || profiles[0].ID != "two" || profiles[0].Config.Model != "other" {
+		t.Fatalf("admin chat should use pinned model, got %+v err=%v", profiles, err)
+	}
+	if role := r.modelRolesForContext(base)["admin_chat"]; role.Model != "" {
+		t.Fatalf("override leaked into bot roles: %+v", role)
+	}
+	chat, _ := r.roleBoundProfiles("chat", set, "", r.modelRolesForContext(ctx))
+	if len(chat) == 0 || chat[0].ID != "one" {
+		t.Fatalf("chat role must keep bot routing, got %+v", chat)
+	}
+	if WithAdminChatModel(base, "", "other") != base {
+		t.Fatal("empty provider should keep bot routing")
+	}
+}

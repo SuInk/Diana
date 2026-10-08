@@ -38,7 +38,35 @@ func (r *Runtime) modelConfigForEvent(event MessageEvent) (BotConfig, error) {
 	return profile.WithDefaults(), nil
 }
 
+type adminChatModelContextKey struct{}
+
+// WithAdminChatModel pins the admin chat run to one provider model without
+// touching the bot's own model roles. Empty values keep the bot's routing.
+func WithAdminChatModel(ctx context.Context, providerID, model string) context.Context {
+	providerID, model = strings.TrimSpace(providerID), strings.TrimSpace(model)
+	if providerID == "" || model == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, adminChatModelContextKey{}, ModelRole{ProfileID: providerID, Model: model})
+}
+
 func (r *Runtime) modelRolesForContext(ctx context.Context) map[string]ModelRole {
+	roles := r.baseModelRolesForContext(ctx)
+	if ctx == nil {
+		return roles
+	}
+	if override, ok := ctx.Value(adminChatModelContextKey{}).(ModelRole); ok {
+		pinned := make(map[string]ModelRole, len(roles)+1)
+		for key, role := range roles {
+			pinned[key] = role
+		}
+		pinned["admin_chat"] = override
+		return pinned
+	}
+	return roles
+}
+
+func (r *Runtime) baseModelRolesForContext(ctx context.Context) map[string]ModelRole {
 	if ctx != nil {
 		if id, ok := ctx.Value(modelProfileContextKey{}).(string); ok && id != "" {
 			return normalizeModelRoles(r.effectiveConfigForEvent(MessageEvent{ProfileID: id}).ModelRoles)

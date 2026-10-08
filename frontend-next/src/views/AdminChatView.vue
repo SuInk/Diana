@@ -79,6 +79,8 @@
               </details>
               <label class="sr-only" for="admin-chat-profile">管理机器人</label>
               <AppSelect id="admin-chat-profile" class="chat-profile" :model-value="selectedProfile" :options="profileOptions" :disabled="busy || creating || profilesLoading" searchable search-placeholder="搜索机器人名称、平台或 ID" @update:model-value="selectProfile" />
+              <label class="sr-only" for="admin-chat-model">管理对话模型</label>
+              <AppSelect id="admin-chat-model" class="chat-profile chat-model" :model-value="selectedModel" :options="modelOptions" :disabled="busy || creating" searchable search-placeholder="搜索模型或提供商" @update:model-value="selectModel" />
               <button v-if="busy" class="chat-send" type="button" :disabled="stopping" :aria-label="stopping ? '正在停止' : '停止'" :title="stopping ? '正在停止…' : '停止'" @click="stop"><LoaderCircle v-if="stopping" :size="16" class="chat-spinner" aria-hidden="true" /><Square v-else :size="14" aria-hidden="true" /></button>
               <button v-else class="chat-send" type="submit" :disabled="!session || loading || creating || !draft.trim()" aria-label="发送" title="发送 · Enter"><ArrowUp :size="18" aria-hidden="true" /></button>
             </div>
@@ -113,7 +115,7 @@ import { botScope } from '../bot-scope';
 import AppSelect from '../components/AppSelect.vue';
 import Modal from '../components/Modal.vue';
 import SkeletonBlock from '../components/SkeletonBlock.vue';
-import { getBotProfileConfig, type BotProfileConfig } from '../api';
+import { getBotProfileConfig, getConfig, type BotProfileConfig, type LLMConfig } from '../api';
 import { askConfirm } from '../confirm';
 import { useConfigurationRefresh } from '../configuration-sync';
 import { clearAdminChat, createAdminChatSession, filterAdminChatSessions, getAdminChat, listAdminChatSessions, sendAdminChat, stopAdminChat, type AdminChatMessage, type AdminChatProgress, type AdminChatSession, type AdminChatSummary } from '../admin-chat';
@@ -137,6 +139,14 @@ const selectedProfile = ref(initialProfile()), selectedSessionID = ref(remembere
 const profiles = ref<BotProfileConfig[]>([]), profilesLoading = ref(false), profilesError = ref('');
 const profileOptions = computed(() => [{ value: '', label: '全部机器人', hint: '跨机器人查询群聊；使用默认模型和权限' }, ...profiles.value.filter(p => p.id).map(p => ({ value: p.id!, label: p.name || p.id!, hint: `${p.platform || '未知平台'} · ${p.id}`, avatar: p.avatar_url }))]);
 const selectedProfileLabel = computed(() => profileOptions.value.find(p => p.value === selectedProfile.value)?.label || selectedProfile.value);
+const modelStorageKey = 'diana:admin-chat-model', modelPairSep = '::';
+const llmChannels = ref<LLMConfig[]>([]), selectedModel = ref(readStored(modelStorageKey));
+// 只列能出文字的模型；目录没标模态的照样列出，自建网关的模型常常不带这些字段。
+const modelOptions = computed(() => [{ value: '', label: '跟随机器人', hint: '使用机器人模型分配里的设置' }, ...llmChannels.value.filter(c => c.id).flatMap(channel => {
+  const ids = new Map((channel.models ?? []).filter(m => m.id && (!m.output_modalities?.length || m.output_modalities.includes('text'))).map(m => [m.id, m.name && m.name !== m.id ? `${m.name} (${m.id})` : m.id]));
+  if (channel.model && channel.group !== 'image' && !ids.has(channel.model)) ids.set(channel.model, channel.model);
+  return [...ids].map(([id, label]) => ({ value: `${channel.id}${modelPairSep}${id}`, label, hint: channel.name || channel.provider }));
+})]);
 const sessionSearch = ref(''), filteredSessions = computed(() => filterAdminChatSessions(conversations.value, sessionSearch.value));
 const messages = ref<AdminChatMessage[]>([]), draft = ref(''), error = ref(''), copiedID = ref('');
 const loading = ref(false), creating = ref(false), sending = ref(false), stopping = ref(false), remoteRunning = ref(false);
@@ -238,6 +248,24 @@ function rememberSession(): void {
     try {
         sessionStorage.setItem(`diana:admin-chat-session:${selectedProfile.value}`, selectedSessionID.value);
     } catch { /* Browser storage is optional. */ }
+}
+function splitModel(value: string): [string, string?] {
+  const at = value.indexOf(modelPairSep);
+  return at < 0 ? [''] : [value.slice(0, at), value.slice(at + modelPairSep.length)];
+}
+function readStored(key: string): string {
+  try { return localStorage.getItem(key) || ''; } catch { return ''; }
+}
+function selectModel(value: string): void {
+  selectedModel.value = value;
+  try { if (value) localStorage.setItem(modelStorageKey, value); else localStorage.removeItem(modelStorageKey); } catch { /* 仅本机记忆，失败不影响发送 */ }
+}
+async function loadModels(): Promise<void> {
+  try {
+    llmChannels.value = (await getConfig()).profiles ?? [];
+    // 选中的模型被删了就回到跟随机器人，免得发出去才报错。
+    if (selectedModel.value && !modelOptions.value.some(o => o.value === selectedModel.value)) selectModel('');
+  } catch { llmChannels.value = []; }
 }
 async function loadProfiles(): Promise<void> {
     if (profilesLoading.value)
@@ -383,7 +411,7 @@ async function send(): Promise<void> {
     followTranscript.value = true;
     let accepted = false, failure = '';
     try {
-        await sendAdminChat(session.value.session_id, text, run.signal, frame => {
+        await sendAdminChat(session.value.session_id, text, splitModel(selectedModel.value), run.signal, frame => {
             if (frame.type === 'user') {
                 accepted = true;
                 draft.value = '';
@@ -472,8 +500,9 @@ function deactivate(): void {
     controller?.abort();
     loadController?.abort();
 }
-onActivated(() => { active = true; document.addEventListener('pointerdown', onOutsideClick); document.addEventListener('keydown', onPanelKeydown); void loadProfiles(); void load(); });
+onActivated(() => { active = true; document.addEventListener('pointerdown', onOutsideClick); document.addEventListener('keydown', onPanelKeydown); void loadProfiles(); void loadModels(); void load(); });
 useConfigurationRefresh(['bot'], loadProfiles);
+useConfigurationRefresh(['llm'], loadModels);
 onDeactivated(deactivate);
 onBeforeUnmount(deactivate);
 </script>
@@ -548,7 +577,7 @@ onBeforeUnmount(deactivate);
 .chat-composer textarea::placeholder { color: var(--muted); }
 .chat-composer textarea:disabled { opacity: .6; }
 .chat-composer-actions { display: flex; align-items: center; gap: 6px; }
-.chat-profile { min-width: 0; max-width: min(230px, calc(100% - 86px)); }
+.chat-profile { flex: 0 1 auto; width: fit-content; min-width: 0; max-width: min(230px, calc(50% - 43px)); }
 .chat-profile :deep(.app-select-trigger) { width: auto; min-height: 30px; height: 30px; gap: 6px; padding: 4px 7px; border-color: transparent; background: transparent; box-shadow: none; font-size: 11px; color: var(--muted); }
 .chat-profile :deep(.app-select-trigger:hover), .chat-profile :deep(.app-select.open .app-select-trigger) { background: var(--surface-2); color: var(--text); }
 .chat-profile :deep(.app-select-value) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
