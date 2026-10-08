@@ -66,9 +66,17 @@
         </section>
         <div class="chat-composer-area">
           <button v-if="!followTranscript && messages.length" class="chat-latest" type="button" @click="scroll(true)"><ArrowDown :size="14" aria-hidden="true" />回到最新消息</button>
-          <form class="chat-composer" @submit.prevent="send">
+          <ul v-if="sessionQueue.length" class="chat-queue" aria-label="排队中的消息">
+            <li v-for="item in sessionQueue" :key="item.id">
+              <span class="chat-queue-text" :title="item.text">{{ item.text }}</span>
+              <button class="btn ghost small" type="button" :disabled="stopping" title="停止当前任务，马上发送这条" @click="interrupt(item.id)">打断并发送</button>
+              <button class="chat-icon" type="button" aria-label="移出队列" title="移出队列" @click="dequeue(item.id)"><X :size="14" aria-hidden="true" /></button>
+            </li>
+            <li v-if="queuePaused && !busy" class="chat-queue-paused">已停止，队列暂停<button class="btn ghost small" type="button" @click="resumeQueue">继续发送</button></li>
+          </ul>
+          <form class="chat-composer" @submit.prevent="submit">
             <label class="sr-only" for="admin-chat-input">发给管理助手</label>
-            <textarea id="admin-chat-input" ref="composer" v-model="draft" rows="2" maxlength="12000" placeholder="描述问题，或交给我一个任务…" :disabled="!session || busy || loading || creating" @keydown="onKeydown" />
+            <textarea id="admin-chat-input" ref="composer" v-model="draft" rows="2" maxlength="12000" :placeholder="busy ? '继续输入，Enter 排队发送 · Esc 停止' : '描述问题，或交给我一个任务…'" :disabled="!session || loading || creating" @keydown="onKeydown" />
             <div class="chat-composer-actions">
               <details ref="addMenu" class="chat-menu" @toggle="onMenuToggle($event, 'add')" @keydown.esc.prevent.stop="closeMenus(true)">
                 <summary class="chat-icon" role="button" :aria-expanded="addOpen" aria-label="添加操作" title="添加操作"><Plus :size="18" aria-hidden="true" /></summary>
@@ -81,7 +89,8 @@
               <AppSelect id="admin-chat-profile" class="chat-profile" :model-value="selectedProfile" :options="profileOptions" :disabled="busy || creating || profilesLoading" searchable search-placeholder="搜索机器人名称、平台或 ID" @update:model-value="selectProfile" />
               <label class="sr-only" for="admin-chat-model">管理对话模型</label>
               <AppSelect id="admin-chat-model" class="chat-profile chat-model" :model-value="selectedModel" :options="modelOptions" :disabled="busy || creating" searchable search-placeholder="搜索模型或提供商" @update:model-value="selectModel" />
-              <button v-if="busy" class="chat-send" type="button" :disabled="stopping" :aria-label="stopping ? '正在停止' : '停止'" :title="stopping ? '正在停止…' : '停止'" @click="stop"><LoaderCircle v-if="stopping" :size="16" class="chat-spinner" aria-hidden="true" /><Square v-else :size="14" aria-hidden="true" /></button>
+              <button v-if="busy && draft.trim()" class="chat-icon chat-queue-add" type="submit" aria-label="排队发送" title="排队发送 · Enter"><ListPlus :size="17" aria-hidden="true" /></button>
+              <button v-if="busy" class="chat-send" type="button" :disabled="stopping" :aria-label="stopping ? '正在停止' : '停止'" :title="stopping ? '正在停止…' : '停止 · Esc'" @click="stop"><LoaderCircle v-if="stopping" :size="16" class="chat-spinner" aria-hidden="true" /><Square v-else :size="14" aria-hidden="true" /></button>
               <button v-else class="chat-send" type="submit" :disabled="!session || loading || creating || !draft.trim()" aria-label="发送" title="发送 · Enter"><ArrowUp :size="18" aria-hidden="true" /></button>
             </div>
           </form>
@@ -109,8 +118,8 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onActivated, onBeforeUnmount, onDeactivated, ref } from 'vue';
-import { Activity, ArrowDown, ArrowUp, Blocks, Check, Copy, Ellipsis, LoaderCircle, PanelLeft, Plus, RotateCcw, Search, ShieldCheck, Square, SquarePen, Trash2, TriangleAlert } from '@lucide/vue';
+import { computed, nextTick, onActivated, onBeforeUnmount, onDeactivated, ref, watch } from 'vue';
+import { Activity, ArrowDown, ArrowUp, Blocks, Check, Copy, Ellipsis, LoaderCircle, PanelLeft, Plus, RotateCcw, Search, ShieldCheck, Square, SquarePen, Trash2, TriangleAlert, ListPlus, X } from '@lucide/vue';
 import { botScope } from '../bot-scope';
 import AppSelect from '../components/AppSelect.vue';
 import Modal from '../components/Modal.vue';
@@ -400,11 +409,52 @@ function schedulePoll(): void {
     clearTimeout(timer);
     if (active && remoteRunning.value && !sending.value) timer = setTimeout(() => void load(), 1500);
 }
-async function send(): Promise<void> {
-    if (!session.value || busy.value || loading.value || session.value.profile_id !== selectedProfile.value || !draft.value.trim())
+// 运行中发的消息先排队，跑完一轮自动接着发；手动停止后暂停，免得停了又自己跑起来。
+// 队列绑定会话，切到别的会话不会把消息发错地方。
+interface QueuedMessage { id: string; sessionID: string; text: string }
+const queue = ref<QueuedMessage[]>([]), queuePaused = ref(false);
+let interrupting = false, queueSeq = 0;
+const sessionQueue = computed(() => queue.value.filter(q => q.sessionID === session.value?.session_id));
+function submit(): void {
+    const text = draft.value.trim();
+    if (!text || !session.value) return;
+    if (!busy.value) { void send(); return; }
+    queue.value.push({ id: `q${++queueSeq}`, sessionID: session.value.session_id, text });
+    draft.value = '';
+}
+function dequeue(id: string): void {
+    queue.value = queue.value.filter(q => q.id !== id);
+}
+async function interrupt(id: string): Promise<void> {
+    const item = queue.value.find(q => q.id === id);
+    if (!item) return;
+    // 放到队首，停掉当前这轮后由 drain 发出。
+    queue.value = [item, ...queue.value.filter(q => q.id !== id)];
+    queuePaused.value = false;
+    if (!busy.value) { drain(); return; }
+    interrupting = true;
+    await stop();
+}
+function resumeQueue(): void {
+    queuePaused.value = false;
+    drain();
+}
+function drain(): void {
+    if (busy.value || loading.value || queuePaused.value || !active || !session.value) return;
+    const next = sessionQueue.value[0];
+    if (!next) return;
+    dequeue(next.id);
+    void send(next.text);
+}
+watch(() => busy.value || loading.value, running => { if (!running) drain(); });
+async function send(queued?: string): Promise<void> {
+    const fromDraft = queued === undefined;
+    if (!session.value || busy.value || loading.value || session.value.profile_id !== selectedProfile.value || !(fromDraft ? draft.value.trim() : queued))
         return;
-    const text = draft.value.trim(), run = new AbortController();
+    const text = fromDraft ? draft.value.trim() : queued!, run = new AbortController();
     controller = run;
+    // 先清空：运行中输入框仍可编辑，等 user 帧再清会吃掉用户接着打的字。
+    if (fromDraft) draft.value = '';
     sending.value = true;
     error.value = '';
     progress.value = null;
@@ -414,7 +464,6 @@ async function send(): Promise<void> {
         await sendAdminChat(session.value.session_id, text, splitModel(selectedModel.value), run.signal, frame => {
             if (frame.type === 'user') {
                 accepted = true;
-                draft.value = '';
                 messages.value.push(frame.message);
             }
             if (frame.type === 'message') messages.value.push(frame.message);
@@ -425,8 +474,10 @@ async function send(): Promise<void> {
     catch (e) {
         if (!run.signal.aborted)
             failure = e instanceof Error ? e.message : String(e);
-        if (!accepted)
-            draft.value = text;
+        if (!accepted && fromDraft)
+            draft.value = draft.value.trim() ? `${text}\n${draft.value}` : text;
+        else if (!accepted && session.value)
+            queue.value.unshift({ id: `q${++queueSeq}`, sessionID: session.value.session_id, text });
     }
     finally {
         if (controller === run)
@@ -456,7 +507,9 @@ async function copyReply(message: AdminChatMessage): Promise<void> {
     }
 }
 async function stop(): Promise<void> {
-    if (!session.value) return;
+    if (!session.value || stopping.value) return;
+    queuePaused.value = !interrupting && sessionQueue.value.length > 0;
+    interrupting = false;
     stopping.value = true;
     try {
         await stopAdminChat(session.value.session_id);
@@ -486,7 +539,11 @@ async function clear(): Promise<void> {
 function onKeydown(event: KeyboardEvent): void {
     if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
         event.preventDefault();
-        void send();
+        submit();
+    } else if (event.key === 'Escape' && busy.value && !event.isComposing) {
+        event.preventDefault();
+        event.stopPropagation();
+        void stop();
     }
 }
 function deactivate(): void {
@@ -585,6 +642,12 @@ onBeforeUnmount(deactivate);
 .chat-send { display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; width: 30px; height: 30px; margin-left: auto; padding: 0; border: 0; border-radius: 50%; background: var(--text); color: var(--surface); cursor: pointer; }
 .chat-send:disabled { opacity: .25; cursor: default; }
 .chat-send:hover:not(:disabled) { opacity: .8; }
+.chat-queue { display: grid; gap: 4px; margin: 0 8px 6px; padding: 0; list-style: none; }
+.chat-queue li { display: flex; align-items: center; gap: 6px; min-width: 0; padding: 4px 6px 4px 12px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); font-size: 12px; color: var(--text-secondary); }
+.chat-queue-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-queue-paused { justify-content: space-between; color: var(--muted); }
+.chat-queue-add { margin-left: auto; }
+.chat-queue-add + .chat-send { margin-left: 0; }
 .chat-latest { position: absolute; left: 50%; bottom: calc(100% + 10px); transform: translateX(-50%); display: flex; align-items: center; gap: 6px; padding: 7px 12px; border: 1px solid var(--border); border-radius: 20px; background: var(--surface); color: var(--text-secondary); box-shadow: var(--shadow-md); font: inherit; font-size: 11px; cursor: pointer; white-space: nowrap; }
 .chat-error { color: var(--danger); font-size: 12px; }
 .chat-banner { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; padding: 10px 12px; border-radius: 8px; background: color-mix(in srgb, var(--danger) 6%, var(--surface)); }
