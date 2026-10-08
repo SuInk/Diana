@@ -137,7 +137,7 @@ const oneBotProfile: BotProfileConfig = {
   bot_account: "100000001", owner_id: "100200001", owner_login_enabled: true,
   private_admission: { mode: "disabled" },
   group_triggers: ["Diana", "diana"], disabled_groups: [], system_prompt: demoDefaultSoul,
-  debug_mode_enabled: true, bot_reply_loop_detection_enabled: true, reply_refusal_suppression_enabled: true, reply_suppression_enabled: true, prompt_inject_time: false,
+  debug_mode_enabled: true, bot_reply_loop_detection_enabled: true, reply_refusal_suppression_enabled: true, reply_semantic_dedup_enabled: true, reply_suppression_enabled: true, prompt_inject_time: false,
   proactive_reply_chance: 1, proactive_reply_threshold: 0.9, recent_context_limit: 40, max_reply_chars: 0,
   image_generation_daily_group_limit: 30, image_generation_daily_user_limit: 5,
   video_generation_daily_group_limit: 5, video_generation_daily_user_limit: 1,

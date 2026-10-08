@@ -372,3 +372,75 @@ func TestReplyAuditRunsAlongsideSemanticDedup(t *testing.T) {
 		t.Fatalf("sent=%#v", sent)
 	}
 }
+
+// 人多的群里别人的答复不能把某个人自己的上一条挤出窗口，也不能当作这个人的请求「已经答过」。
+func TestSemanticReplyWindowIsPerUser(t *testing.T) {
+	g := &semanticReplyGate{}
+	g.remember("画一只猫", "好了，给你", "alice")
+	for i := 0; i < 5; i++ {
+		g.remember("画一只狗", "好了，给你", "bob")
+	}
+	if got := g.sentFor("alice"); len(got) != 1 || got[0].Request != "画一只猫" {
+		t.Fatalf("alice window=%#v", got)
+	}
+	for _, item := range g.sentFor("bob") {
+		if item.UserID != "bob" {
+			t.Fatalf("bob window leaked %#v", item)
+		}
+	}
+	if got := g.sentFor("bob"); len(got) != semanticReplyPerUser {
+		t.Fatalf("bob kept %d, want %d", len(got), semanticReplyPerUser)
+	}
+	if got := g.sentFor("carol"); len(got) != 0 {
+		t.Fatalf("carol saw other users' replies: %#v", got)
+	}
+	// 缺用户 ID 时判断不了是不是同一个人，保持原来的行为。
+	if got := g.sentFor(""); len(got) != 1+semanticReplyPerUser {
+		t.Fatalf("unknown user window=%d", len(got))
+	}
+	g.remember("旧问题", "旧回复")
+	if got := g.sentFor("carol"); len(got) != 1 {
+		t.Fatalf("unattributed reply should stay visible: %#v", got)
+	}
+}
+
+func TestSemanticReplyWindowIncludesAnsweredSupplements(t *testing.T) {
+	g := &semanticReplyGate{}
+	g.rememberRequest(replyRequestContext{UserID: "alice", Text: "a"}, []replyRequestContext{{UserID: "bob", Text: "补充"}}, "合并回答")
+	if got := g.sentFor("bob"); len(got) != 1 {
+		t.Fatalf("supplement author should see the merged reply: %#v", got)
+	}
+}
+
+// 多人先后请求相似回复时，别人的答复不进去重依据，也就不会被判成「已经说过」。
+func TestSemanticReplyRuntimeIgnoresOtherUsers(t *testing.T) {
+	p := &semanticGateProvider{result: `{"action":"drop","confidence":0.99}`}
+	r := topicTestRuntime(p)
+	first := proactiveGroupMessage("first", "alice", "画一只猫")
+	if _, err := r.replyAndRecord(context.Background(), first, first.RawMessage, "replied"); err != nil {
+		t.Fatal(err)
+	}
+	second := proactiveGroupMessage("second", "bob", "画一只狗")
+	outcome, err := r.replyAndRecord(context.Background(), second, second.RawMessage, "replied")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome != "replied" || len(r.channel.(*recordingChannel).sentSnapshot()) != 2 || len(p.requests) != 0 {
+		t.Fatalf("outcome=%s dedup calls=%d", outcome, len(p.requests))
+	}
+}
+
+func TestSemanticReplyDedupSwitchOff(t *testing.T) {
+	p := &semanticGateProvider{result: `{"action":"drop","confidence":0.99}`}
+	r := NewRuntime(BotConfig{BotAccount: "42", ReplySemanticDedupEnabled: boolPointer(false)}, &recordingChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) { return p, nil })
+	for _, id := range []string{"first", "second"} {
+		event := proactiveGroupMessage(id, "u", "同一个问题")
+		outcome, err := r.replyAndRecord(context.Background(), event, event.RawMessage, "replied")
+		if err != nil || outcome != "replied" {
+			t.Fatalf("%s: outcome=%s err=%v", id, outcome, err)
+		}
+	}
+	if len(p.requests) != 0 || len(r.channel.(*recordingChannel).sentSnapshot()) != 2 {
+		t.Fatalf("dedup ran with the switch off: calls=%d", len(p.requests))
+	}
+}

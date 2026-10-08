@@ -4557,7 +4557,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	var speculativeAudit chan preparedReplyAudit
 	dedupKept := false
 	// Tool results and disclosure deliveries must not be hidden as repeated prose.
-	if !hasExternalSideEffect(ctx) && !hasFactualPluginResponse(pluginResponses) && !controlIntent.RefuseCurrent && !controlIntent.SuppressCurrentUser {
+	if boolValue(cfg.ReplySemanticDedupEnabled, true) && !hasExternalSideEffect(ctx) && !hasFactualPluginResponse(pluginResponses) && !controlIntent.RefuseCurrent && !controlIntent.SuppressCurrentUser {
 		var release func()
 		semanticGate, release, err = r.lockSemanticReply(ctx, event)
 		if err != nil {
