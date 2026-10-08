@@ -63,8 +63,8 @@ func TestRunnerNudgesReadingAndBouncesUnreadNegation(t *testing.T) {
 	if strings.Contains(first, `"providers"`) || strings.Contains(first, `"budget"`) {
 		t.Fatalf("diagnostics should be stripped from the model view:\n%s", first)
 	}
-	if strings.Contains(first, "再换关键词多半") {
-		t.Fatal("should not nudge after a single search")
+	if !strings.Contains(first, "browser_render") {
+		t.Fatalf("should nudge reading right after the first search:\n%s", first)
 	}
 
 	second := requestContent(client.requests[2])
@@ -82,7 +82,7 @@ func TestRunnerNudgesReadingAndBouncesUnreadNegation(t *testing.T) {
 	}
 
 	repair := requestContent(client.requests[3])
-	if !strings.Contains(repair, "没读过任何页面，草稿却下了否定结论") || !strings.Contains(repair, "ai.google.dev") {
+	if !strings.Contains(repair, "读过的页面不足两个（社交帖子不算），草稿却下了否定结论") || !strings.Contains(repair, "ai.google.dev") {
 		t.Fatalf("negation repair missing:\n%s", repair)
 	}
 }
@@ -106,6 +106,14 @@ func TestRunnerKeepsNegationAfterReadingOrWithoutSearch(t *testing.T) {
 	progress := collectResearchProgress([]Step{
 		{Tool: WebSearchToolName, Input: map[string]any{"query": "x"}, Output: researchProgressSearchOutput},
 		{Tool: browserRenderToolName, Output: `{"url":"https://ai.google.dev/x","requested_url":"https://ai.google.dev/x","title":"Doc","text":"正文"}`},
+	})
+	if !progress.searchedWithoutReading() {
+		t.Fatalf("one page should not be enough to deny: %#v", progress)
+	}
+	progress = collectResearchProgress([]Step{
+		{Tool: WebSearchToolName, Input: map[string]any{"query": "x"}, Output: researchProgressSearchOutput},
+		{Tool: browserRenderToolName, Output: `{"url":"https://ai.google.dev/x","requested_url":"https://ai.google.dev/x","title":"Doc","text":"正文"}`},
+		{Tool: browserRenderToolName, Output: `{"url":"https://deepmind.google/y","requested_url":"https://deepmind.google/y","title":"Doc","text":"正文"}`},
 	})
 	if progress.searchedWithoutReading() {
 		t.Fatalf("read page not detected: %#v", progress)

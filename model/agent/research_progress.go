@@ -19,7 +19,9 @@ import (
 // 这里改成按本轮实际进度说话：搜了哪些词、读过哪些页，连搜却没读时直接点出候选链接；
 // 没读过任何页面就下否定结论的收尾打回一次。只看工具记录，不额外调模型。
 const (
-	researchSearchesBeforeNudge = 2
+	researchSearchesBeforeNudge = 1
+	// 否定结论至少要有两个独立页面撑着，只读一页容易被过期或无关页面带偏。
+	researchReadsBeforeNegation = 2
 	researchCandidateLimit      = 5
 )
 
@@ -75,7 +77,7 @@ func collectResearchProgress(steps []Step) researchProgress {
 }
 
 func (p researchProgress) searchedWithoutReading() bool {
-	return len(p.searches) > 0 && len(p.read) == 0
+	return len(p.searches) > 0 && len(p.read) < researchReadsBeforeNegation
 }
 
 // note 是附在检索类工具结果后面的进度；本轮还没搜过时返回空串。
@@ -98,13 +100,16 @@ func (p researchProgress) note() string {
 		fmt.Fprintf(&builder, "\n已经搜了 %d 次还没读页面，再换关键词多半还是同一批摘要。下一步先从下面挑与问题最相关的一手来源，用 browser_render 打开正文：\n", len(p.searches))
 		builder.WriteString(p.candidateList())
 		builder.WriteString("\n名称和用户说法不完全一致的官方页（别名、改名、型号写法不同）也要打开核对，不能因为名字没对上就当作不存在。")
+	} else if len(p.read) == 1 && len(p.candidates) > 0 {
+		builder.WriteString("\n只读了一个页面，下结论前再打开一个独立来源交叉核对，优先官方页：\n")
+		builder.WriteString(p.candidateList())
 	}
 	return builder.String()
 }
 
 // negationRepair 是「没读过页面就否认」时打回的说明。
 func (p researchProgress) negationRepair() string {
-	text := "你这一轮只看了搜索摘要、没读过任何页面，草稿却下了否定结论。搜索没命中不等于不存在，名称对不上也可能是别名或新名字。"
+	text := "你这一轮读过的页面不足两个（社交帖子不算），草稿却下了否定结论。搜索没命中不等于不存在，名称对不上也可能是别名或新名字。"
 	if len(p.candidates) > 0 {
 		text += "先用 browser_render 打开下面最相关的候选核对：\n" + p.candidateList() + "\n"
 	} else {
