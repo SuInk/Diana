@@ -118,3 +118,16 @@ func TestCodingHeartbeatReportsProgressAndStall(t *testing.T) {
 		t.Fatalf("没有卡住提示: %s", sent[1])
 	}
 }
+
+// 定时查询、后台任务等没有入站轮次的运行不报进度。
+func TestReplyProgressOnlyForLiveTurns(t *testing.T) {
+	runtime := &Runtime{}
+	called := 0
+	inner := func(context.Context, agent.RunEvent) { called++ }
+	observer, stop := runtime.startReplyProgress(context.Background(), MessageEvent{}, inner)
+	defer stop()
+	observer(context.Background(), agent.RunEvent{Phase: agent.RunPhaseStarted})
+	if called != 1 {
+		t.Fatalf("原观察者被调用 %d 次", called)
+	}
+}

@@ -35,6 +35,11 @@ type replyProgress struct {
 
 // startReplyProgress 返回要挂到 Runner 上的观察者（包着原观察者）和停止函数。
 func (r *Runtime) startReplyProgress(ctx context.Context, event MessageEvent, inner agent.RunObserver) (agent.RunObserver, func()) {
+	// 只报实时回复：定时查询、订阅、后台任务也走 generateReply，它们没人在等这一句，
+	// 中途插一条「还在弄」只会打扰订阅的会话。
+	if outboundTurnFromContext(ctx) == nil {
+		return inner, func() {}
+	}
 	progress := &replyProgress{started: time.Now(), counts: map[string]int{}, done: make(chan struct{})}
 	send := func(text string) {
 		if err := r.sendOutgoing(ctx, event, routeOutgoingToEvent(event, OutgoingMessage{Text: text})); err != nil {
