@@ -1093,7 +1093,7 @@ func (r *Runner) systemPrompt() string {
 		rules = append(rules, "- 需要读取或渲染网页时优先使用 browser_render；普通页面在一次性沙盒浏览器中运行，GitHub Release 地址优先读取官方 API，不使用用户浏览器登录态。查询 GitHub 最新版本时读取 /owner/repo/releases/latest；核验用户给出的版本时读取 /owner/repo/releases/tag/<tag>，不能以精确 site: 搜索为空替代核验。浏览器失败不等于站点拦截，更不等于版本不存在；来源查询时间与发布时间必须分开。")
 		// 10-01 问 DimAgent 价格：只读了英文首页，首页没列价格就答「没有付费套餐」。
 		// 规则参照 Codex 的 web.run：技术问题只认一手来源，顺着官网链接找到对应页面再下结论。
-		rules = append(rules, "- 问价格、套餐、额度、版本、是否支持这类事实，以官方的定价、文档、更新日志页为准：从 browser_render 返回的 links 里找到对应页面打开读，或用 find 在页内查关键词。只看了首页或搜索摘要时，没写不等于没有，不能据此断言「没有」；技术问题只认官方文档等一手来源。")
+		rules = append(rules, "- 问价格、套餐、额度、版本、是否支持这类事实，以官方的定价、文档、更新日志页为准：从 browser_render 返回的 links 里找到对应页面打开读，或用 find 在页内查关键词；要比对几个来源时用 urls 一次并行打开。只看了首页或搜索摘要时，没写不等于没有，不能据此断言「没有」；技术问题只认官方文档等一手来源。")
 	}
 	if hasAnyTool("webpage_screenshot", "browser_screenshot") {
 		rules = append(rules, "- 公共网页截图用 webpage_screenshot，不带登录态；browser_screenshot 只截已授权的登录页面。capture 的真实画面才是截图证据；要求发送时，用同一工具的 action=send 和本轮 image_id 发到当前会话。")

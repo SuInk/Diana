@@ -34,11 +34,15 @@ func researchRunMetadataFromOutput(tool, output string, runErr error) map[string
 		if runErr != nil {
 			return map[string]any{"status": "render_error"}
 		}
-		var page browserRenderPayload
-		if json.Unmarshal([]byte(output), &page) != nil {
+		pages := browserRenderPages(output)
+		if len(pages) == 0 {
 			return map[string]any{"status": "invalid_result"}
 		}
-		return map[string]any{"source_stage": browserPayloadSourceStage(page), "truncated": page.Truncated}
+		truncated := false
+		for _, page := range pages {
+			truncated = truncated || page.Truncated
+		}
+		return map[string]any{"source_stage": browserPagesSourceStage(pages), "truncated": truncated, "pages": len(pages)}
 	}
 	if tool != WebSearchToolName {
 		return nil

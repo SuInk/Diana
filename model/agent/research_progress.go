@@ -97,7 +97,7 @@ func (p researchProgress) note() string {
 		fmt.Fprintf(&builder, "已读页面 %d 个（%s）。", len(urls), strings.Join(urls, "；"))
 	}
 	if len(p.searches) >= researchSearchesBeforeNudge && len(p.read) == 0 && len(p.candidates) > 0 {
-		fmt.Fprintf(&builder, "\n已经搜了 %d 次还没读页面，再换关键词多半还是同一批摘要。下一步先从下面挑与问题最相关的一手来源，用 browser_render 打开正文：\n", len(p.searches))
+		fmt.Fprintf(&builder, "\n已经搜了 %d 次还没读页面，再换关键词多半还是同一批摘要。下一步从下面挑 2～3 个与问题最相关的一手来源，用 browser_render 的 url + urls 一次并行打开正文：\n", len(p.searches))
 		builder.WriteString(p.candidateList())
 		builder.WriteString("\n名称和用户说法不完全一致的官方页（别名、改名、型号写法不同）也要打开核对，不能因为名字没对上就当作不存在。")
 	} else if len(p.read) == 1 && len(p.candidates) > 0 {
@@ -111,7 +111,7 @@ func (p researchProgress) note() string {
 func (p researchProgress) negationRepair() string {
 	text := "你这一轮读过的页面不足两个（社交帖子不算），草稿却下了否定结论。搜索没命中不等于不存在，名称对不上也可能是别名或新名字。"
 	if len(p.candidates) > 0 {
-		text += "先用 browser_render 打开下面最相关的候选核对：\n" + p.candidateList() + "\n"
+		text += "先用 browser_render 的 url + urls 一次并行打开下面最相关的几个候选核对：\n" + p.candidateList() + "\n"
 	} else {
 		text += "先换用官方名称或官网入口找到原始页面并读取。"
 	}
