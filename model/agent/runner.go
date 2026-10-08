@@ -186,6 +186,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 	// 加起来就是这一轮花在工具上的时间，控制台的响应耗时分解用它。
 	var toolsDuration time.Duration
 	protocolRepairs := 0
+	negationRepaired := false
 	// silentContentRepaired 保证「静默却带正文」只打回一次，见 action.Silent 分支。
 	silentContentRepaired := false
 	lastToolSignature := ""
@@ -456,6 +457,14 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 				}
 				continue
 			}
+			// 只看过搜索摘要就否认对方说的东西：打回一次去读页面，见 research_progress.go。
+			if progress := collectResearchProgress(steps); !negationRepaired && toolCalls < r.cfg.MaxSteps && progress.searchedWithoutReading() && researchNegationPattern.MatchString(action.Content) {
+				negationRepaired = true
+				emitProtocolRepair(ctx, req.Observer, traceID, modelTurns, toolCalls, r.cfg.MaxSteps, "negation_without_reading")
+				messages = appendAssistantEcho(messages, lastText)
+				messages = append(messages, llm.Message{Role: llm.RoleUser, Content: progress.negationRepair()})
+				continue
+			}
 			return finish(action.Content, "final"), nil
 		}
 		if action.Action != "tool" {
@@ -664,7 +673,11 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 			}
 		}
 		// 把上一轮 assistant JSON 和工具输出一起回填，模型据此决定下一步或 final。
-		observationText := toolObservationMessage(action.Tool, output, err == nil, r.cfg.MaxSteps-toolCalls) + parallelDropNotice
+		modelOutput := output
+		if err == nil && action.Tool == WebSearchToolName {
+			modelOutput = webSearchOutputForModel(output)
+		}
+		observationText := toolObservationMessage(action.Tool, modelOutput, err == nil, r.cfg.MaxSteps-toolCalls) + parallelDropNotice
 		observation := llm.Message{Role: llm.RoleUser, Content: observationText}
 		if err == nil {
 			if rich, ok := tool.(ToolResultPartsTool); ok {
@@ -713,6 +726,10 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 			if guidance := researchObservationGuidance(action.Tool, rawOutput, r.cfg.MaxSteps-toolCalls); guidance != "" {
 				if output != rawOutput {
 					guidance += " 本轮工具输出另外被截断，未显示的部分不能作证据。"
+				}
+				// 进度放在最后：每步都变，模型最先读到的是自己查到哪了。
+				if note := collectResearchProgress(steps).note(); note != "" {
+					guidance += "\n\n" + note
 				}
 				messages = append(messages, llm.Message{Role: llm.RoleSystem, Priority: llm.MessagePrioritySystem, Content: guidance})
 			}
