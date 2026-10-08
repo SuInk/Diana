@@ -358,6 +358,9 @@ CREATE INDEX IF NOT EXISTS idx_repository_issue_drafts_group_status_time ON repo
 	if err := s.migrateSelfNotes(); err != nil {
 		return err
 	}
+	if err := s.migrateWallet(); err != nil {
+		return err
+	}
 	if err := s.migrateFeed(); err != nil {
 		return err
 	}

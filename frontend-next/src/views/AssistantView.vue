@@ -1519,8 +1519,27 @@
           <section class="card">
             <div class="card-header">
               <div>
+                <h2>小窝</h2>
+                <span class="card-sub">属于她自己的空间：零花钱、愿望单和房间</span>
+              </div>
+            </div>
+            <div class="card-body form-grid">
+              <div class="field wide">
+                <label class="switch">
+                  <input v-model="form.own_space_enabled" type="checkbox" />
+                  <span class="track" aria-hidden="true"></span>
+                  <span class="switch-label">给她一个小窝</span>
+                </label>
+                <span class="hint">开启后，侧边栏「小窝」里可以给她发零花钱、看她的账本。全是虚拟账本，不接任何真实支付；想买东西时要你点头。默认关闭，保存配置后生效。</span>
+              </div>
+            </div>
+          </section>
+
+          <section class="card">
+            <div class="card-header">
+              <div>
                 <h2>动态</h2>
-                <span class="card-sub">它在「动态」页发的动态和日记，以及评论区的互动</span>
+                <span class="card-sub">它在「小窝 → 动态」里发的动态和日记，以及评论区的互动</span>
               </div>
             </div>
             <div class="card-body form-grid">
@@ -4529,6 +4548,7 @@ function setForm(config: BotProfileConfig): void {
     cross_platform_memory_enabled: config.cross_platform_memory_enabled ?? false,
     world_book_enabled: config.world_book_enabled ?? true,
     self_note_enabled: config.self_note_enabled ?? false,
+    own_space_enabled: config.own_space_enabled ?? false,
     feed_auto_reply_enabled: config.feed_auto_reply_enabled ?? false,
     mood_enabled: config.mood_enabled ?? false,
     poke_reply_enabled: config.poke_reply_enabled ?? false,

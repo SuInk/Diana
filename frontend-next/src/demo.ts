@@ -809,6 +809,15 @@ function demoLatency() {
   };
 }
 
+const demoWallet: import("./api").OwnSpace["wallet"] = {
+  balance_cents: 6_100,
+  recent: [
+    { id: "w3", kind: "spend", amount_cents: -3_900, balance_after_cents: 6_100, reason: "买了那本一直想要的画集", created_at: new Date(Date.now() - 2 * 86_400_000).toISOString() },
+    { id: "w2", kind: "adjust", amount_cents: -1_000, balance_after_cents: 10_000, reason: "上个月多发了，扣回来", actor_name: "控制台", created_at: new Date(Date.now() - 6 * 86_400_000).toISOString() },
+    { id: "w1", kind: "allowance", amount_cents: 11_000, balance_after_cents: 11_000, reason: "十月零花钱", actor_name: "控制台", created_at: new Date(Date.now() - 7 * 86_400_000).toISOString() }
+  ]
+};
+
 const demoFeed: import("./api").FeedPost[] = [
   {
     id: "feed-1", profile_id: "bot-onebot", kind: "diary", title: "下雨天的整理日",
@@ -2061,6 +2070,13 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
   }
   if (path.startsWith("/api/assistant/notebook") && method === "POST") {
     return json({ error: "演示模式不写入笔记本；正式部署里这里会新增、修订或作废笔记。" }, 403);
+  }
+
+  if (path === "/api/assistant/own-space" && method === "GET") {
+    return json({ enabled: true, wallet: demoWallet });
+  }
+  if (path.startsWith("/api/assistant/own-space/") && method !== "GET") {
+    return json({ error: "演示模式不记账；正式部署里这里会给她发零花钱或调账。" }, 403);
   }
 
   if (path === "/api/assistant/feed" && method === "GET") {

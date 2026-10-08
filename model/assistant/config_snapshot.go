@@ -124,6 +124,7 @@ type dianaBotConfigSnapshot struct {
 	CrossPlatformMemoryEnabled   bool                      `json:"cross_platform_memory_enabled"`
 	WorldBookEnabled             bool                      `json:"world_book_enabled"`
 	SelfNoteEnabled              bool                      `json:"self_note_enabled"`
+	OwnSpaceEnabled              bool                      `json:"own_space_enabled"`
 	MoodEnabled                  bool                      `json:"mood_enabled"`
 	PokeReplyEnabled             bool                      `json:"poke_reply_enabled"`
 	ExpressionLearningEnabled    bool                      `json:"expression_learning_enabled"`
@@ -375,6 +376,7 @@ func dianaBotConfigFromConfig(cfg BotConfig) dianaBotConfigSnapshot {
 		CrossPlatformMemoryEnabled:      boolValue(cfg.CrossPlatformMemoryEnabled, false),
 		WorldBookEnabled:                boolValue(cfg.WorldBookEnabled, true),
 		SelfNoteEnabled:                 boolValue(cfg.SelfNoteEnabled, false),
+		OwnSpaceEnabled:                 boolValue(cfg.OwnSpaceEnabled, false),
 		MoodEnabled:                     boolValue(cfg.MoodEnabled, false),
 		PokeReplyEnabled:                boolValue(cfg.PokeReplyEnabled, false),
 		ExpressionLearningEnabled:       boolValue(cfg.ExpressionLearningEnabled, false),

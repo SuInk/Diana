@@ -416,6 +416,8 @@ export interface BotProfileConfig extends SendRetrySettings {
   world_book_enabled?: boolean;
   /** 允许机器人自己写自述（自我认知），只进提示词尾部、改不动人设和权限；缺省关闭。 */
   self_note_enabled?: boolean;
+  /** 小窝：零花钱钱包、愿望单和房间，全是虚拟账本；缺省关闭。 */
+  own_space_enabled?: boolean;
   feed_auto_reply_enabled?: boolean;
   /** 情绪系统：随相处涨落、随时间回落的心情，只影响语气；缺省关闭。 */
   mood_enabled?: boolean;
@@ -4419,4 +4421,38 @@ export function getGroupTokenUsage(profile: string, hours: number): Promise<Grou
   const params = new URLSearchParams({ hours: String(hours) });
   if (profile) params.set("profile", profile);
   return requestJSON(`/api/assistant/llm-usage?${params}`);
+}
+
+// 小窝：机器人自己的零花钱账本。金额一律以分为单位。
+export type WalletEntryKind = "allowance" | "adjust" | "spend" | "refund";
+
+export interface WalletEntry {
+  id: string;
+  kind: WalletEntryKind;
+  amount_cents: number;
+  balance_after_cents: number;
+  reason?: string;
+  actor_name?: string;
+  created_at: string;
+}
+
+export interface OwnSpace {
+  /** 小窝开没开。关着时账本照样能读，只是她用不了。 */
+  enabled: boolean;
+  wallet: { balance_cents: number; recent: WalletEntry[] };
+}
+
+function ownSpaceQuery(profile: string): string {
+  return profile ? `?profile=${encodeURIComponent(profile)}` : "";
+}
+
+export async function getOwnSpace(profile: string): Promise<OwnSpace> {
+  return requestJSON<OwnSpace>(`/api/assistant/own-space${ownSpaceQuery(profile)}`);
+}
+
+export async function recordOwnSpaceWallet(profile: string, kind: "allowance" | "adjust", amountCents: number, reason: string): Promise<OwnSpace> {
+  return requestJSON<OwnSpace>(`/api/assistant/own-space/wallet${ownSpaceQuery(profile)}`, {
+    method: "POST",
+    body: JSON.stringify({ kind, amount_cents: amountCents, reason })
+  });
 }

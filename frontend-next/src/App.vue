@@ -192,6 +192,7 @@ import {
   SunMoon,
   Tag,
   BookUser,
+  House,
   Newspaper,
   Users,
   Wrench
@@ -229,7 +230,7 @@ const MemoryView = defineAsyncComponent(() => import("./views/MemoryView.vue"));
 const SettingsView = defineAsyncComponent(() => import("./views/SettingsView.vue"));
 const BrowserBoxView = defineAsyncComponent(() => import("./views/BrowserBoxView.vue"));
 const WorkspaceView = defineAsyncComponent(() => import("./views/WorkspaceView.vue"));
-const FeedView = defineAsyncComponent(() => import("./views/FeedView.vue"));
+const OwnSpaceView = defineAsyncComponent(() => import("./views/OwnSpaceView.vue"));
 
 const VIEW_CACHE_LIMIT = 16;
 
@@ -245,7 +246,8 @@ const viewComponents: Record<ViewID, Component> = {
   groups: GroupsView,
   users: MemoryView,
   notebook: MemoryView,
-  feed: FeedView,
+  feed: OwnSpaceView,
+  space: OwnSpaceView,
   browser: BrowserBoxView,
   workspace: WorkspaceView,
   logs: RecordsView,
@@ -343,6 +345,7 @@ const viewTitles: Record<ViewID, string> = {
   users: "记忆",
   notebook: "记忆",
   feed: "动态",
+  space: "小窝",
   logs: "运行记录",
   favorability: "运行记录",
   settings: "设置"
@@ -454,6 +457,7 @@ function navIcon(id: ViewID): Component {
     groups: Users,
     users: BookUser,
     feed: Newspaper,
+    space: House,
     browser: Globe,
     workspace: FolderOpen,
     logs: FileClock,
