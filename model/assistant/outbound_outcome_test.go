@@ -378,7 +378,7 @@ func TestAmbiguousSendConfirmedByHistoryIsNotResent(t *testing.T) {
 	}
 }
 
-func TestAmbiguousSendAbsentFromEchoAndHistoryResendsOnce(t *testing.T) {
+func TestAmbiguousSendAbsentFromEchoAndHistoryIsNotResent(t *testing.T) {
 	logs := captureStdLog(t)
 	channel := &ambiguousOutboundChannel{
 		outcomes: []error{ambiguousSendError("send_group_msg"), nil},
@@ -387,41 +387,17 @@ func TestAmbiguousSendAbsentFromEchoAndHistoryResendsOnce(t *testing.T) {
 	runtime := newAmbiguousOutcomeRuntime(t, channel)
 	ctx := withOutboundDeliveryPolicy(context.Background(), recoveringOutboundDeliveryPolicy())
 
-	result, err := runtime.sendOutgoingWithResult(ctx, groupOutcomeEvent(), OutgoingMessage{Text: "这一句没发出去"})
-	if err != nil {
-		t.Fatalf("sendOutgoingWithResult() error = %v", err)
-	}
-	if got := channel.sentCount(); got != 2 {
-		t.Fatalf("send attempts = %d, want exactly one resend", got)
-	}
-	if got := apiMessageID(result); got != "60002" {
-		t.Fatalf("outbound message id = %q, want the resend's id", got)
-	}
-	if !strings.Contains(logs.String(), "确认未送达，重发一次") {
-		t.Fatalf("stdout log missing resend notice:\n%s", logs.String())
-	}
-}
-
-// 重发那一次又是结果不明、确认后仍然没有，就此放下，不再进指数退避链。
-func TestAmbiguousResendStillAbsentIsDroppedWithoutBackoff(t *testing.T) {
-	logs := captureStdLog(t)
-	channel := &ambiguousOutboundChannel{
-		outcomes: []error{ambiguousSendError("send_group_msg"), ambiguousSendError("send_group_msg"), nil},
-	}
-	runtime := newAmbiguousOutcomeRuntime(t, channel)
-	ctx := withOutboundDeliveryPolicy(context.Background(), recoveringOutboundDeliveryPolicy())
-
-	_, err := runtime.sendOutgoingWithResult(ctx, groupOutcomeEvent(), OutgoingMessage{Text: "两次都不明"})
+	_, err := runtime.sendOutgoingWithResult(ctx, groupOutcomeEvent(), OutgoingMessage{Text: "回推和历史里都没有"})
 	if !errors.Is(err, errOutboundOutcomeUnconfirmed) || !errors.Is(err, errOutboundDeliveryDropped) {
 		t.Fatalf("error = %v, want unconfirmed + dropped", err)
 	}
-	if got := channel.sentCount(); got != 2 {
-		t.Fatalf("send attempts = %d, want the original plus exactly one resend", got)
+	if got := channel.sentCount(); got != 1 {
+		t.Fatalf("send attempts = %d, want 1 (timeouts are never resent)", got)
 	}
-	if got := channel.historyCallCount(); got != 2 {
-		t.Fatalf("history lookups = %d, want one per ambiguous outcome", got)
+	if got := channel.historyCallCount(); got != 1 {
+		t.Fatalf("history lookups = %d, want 1", got)
 	}
-	if !strings.Contains(logs.String(), "重发后仍未确认送达，不再重发") {
+	if !strings.Contains(logs.String(), "未找到送达记录，超时不重发") {
 		t.Fatalf("stdout log missing give-up notice:\n%s", logs.String())
 	}
 }
@@ -979,8 +955,8 @@ func TestAmbiguousConfirmationExtendsInboundLease(t *testing.T) {
 	if _, err := runtime.sendOutgoingWithResult(ctx, groupOutcomeEvent(), OutgoingMessage{Text: "续租"}); err != nil {
 		t.Fatalf("sendOutgoingWithResult() error = %v", err)
 	}
-	// 一次在发送开始时，一次在进入确认时。
-	if len(extendedTo) != 2 || time.Until(extendedTo[1]) < oneBotMediaActionTimeout {
+	// 一次在发送开始时，一次在进入确认时；确认不再带重发，只需撑过等回推和查历史。
+	if len(extendedTo) != 2 || time.Until(extendedTo[1]) < 50*time.Second {
 		t.Fatalf("lease extensions = %v", extendedTo)
 	}
 }

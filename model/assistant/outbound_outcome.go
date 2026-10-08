@@ -705,70 +705,60 @@ func (r *Runtime) observeOutboundEcho(event MessageEvent) {
 
 var errOutboundOutcomeUnconfirmed = errors.New("diana: outbound outcome could not be confirmed")
 
-// confirmOutboundOutcome 包住一次发送：结果不明时先确认、不直接重发。
+// confirmOutboundOutcome 包住一次发送：结果不明（写出去之后超时、断线）时只确认，
+// 不重发。
 //
 //  1. 等最多两分钟机器人自己这条消息的回推；
 //  2. 没等到就翻最近 50 条历史找这条；
-//  3. 两边都说没有才重发一次。这次重发如果又是结果不明，同样先确认（两次发送
-//     任何一次的回推都算数），还是没有就放下这条，不再进指数退避。
+//  3. 找到了就补上 message_id；找不到也不重发，这条就此放下。
 //
-// 实测的三连发：接入端每次上传图片都超过 30 秒，每次其实都发出去了，Diana 却
-// 每次都当失败——30 秒超时加第一次退避 60~72 秒、再 30 秒超时加第二次退避
-// 120~144 秒，同一张图发了三遍。所以结果不明的发送一旦进了这里，就再也不回到
-// 退避链上；只有确定没发出去的失败（重发时接入端明确报错）才交给外层退避。
+// OneBot 没有幂等键，接入端可能已经发出去、只是回执慢了，这时重发就是群里的重复
+// 消息。NoneBot、Koishi 的 OneBot 适配器也都是超时直接报错、不重发。实测过的
+// 三连发：接入端每次上传图片都超过 30 秒，每次其实都发出去了，Diana 却每次都当
+// 失败重发，同一张图发了三遍；后来改成「确认没有才重发一次」，可「回推和历史里
+// 都没有」同样证明不了没发。
 //
-// 回推和历史都拿不到结论（历史接口也报错）时同样不重发：宁可少一条，也不再
-// 刷一遍屏。返回的错误带着 DeliveryDropped，上层不会把整条回复重新生成一遍。
+// 只有确定没发出去的失败（请求没写出去、接入端明确报错）才交给外层退避重发。
+// 放下时返回的错误带着 DeliveryDropped，上层不会把整条回复重新生成一遍。
 //
 // 没有指纹的发送（上传群文件、转发暂存）认不出回推，照旧按确定失败处理。
 func (r *Runtime) confirmOutboundOutcome(ctx context.Context, event MessageEvent, action string, call func(context.Context) (map[string]any, error)) (map[string]any, error) {
 	fingerprint, confirmable := outboundConfirmFingerprintFromContext(ctx)
 	since := r.outboundEchoes.clock()
 	result, err := call(ctx)
-	for resent := false; ; resent = true {
-		if err == nil {
-			r.outboundEchoes.claim(event, apiMessageID(result))
-			return result, nil
-		}
-		if !errors.Is(err, ErrOutboundOutcomeUnknown) || !confirmable || ctx.Err() != nil {
-			return result, err
-		}
-		r.logOutboundOutcome(event, action, applog.LevelInfo, "outbound_outcome_unknown", "发送结果不明（超时），等待回执确认", err.Error(), nil)
-		// 确认加上可能的一次重发最坏要好几分钟，入站租约只有 10 分钟、生成回复已经
-		// 用掉一截。租约到期会被另一个 worker 领走重新生成再发一遍，正是这里要防的
-		// 重复，所以按这一轮确认和重发的上限把租约往后推。
-		echoWait, historyTimeout := r.outboundEchoes.timings()
-		extendInboundLease(ctx, echoWait+historyTimeout+oneBotMediaActionTimeout+time.Minute)
-		messageID, source, confirmErr := r.confirmOutboundDelivered(ctx, event, fingerprint, since)
-		if messageID != "" {
-			r.logOutboundOutcome(event, action, applog.LevelInfo, "outbound_outcome_confirmed", "已确认送达（"+source+"）", "", map[string]any{"outbound_message_id": messageID, "confirmed_by": source})
-			return map[string]any{"message_id": messageID}, nil
-		}
-		if confirmErr != nil && ctx.Err() != nil {
-			return nil, err
-		}
-		if confirmErr != nil || resent {
-			message, detail := "发送结果无法确认，不再重发", err.Error()
-			if confirmErr != nil {
-				detail = confirmErr.Error()
-			} else {
-				message = "重发后仍未确认送达，不再重发"
-			}
-			r.logOutboundOutcome(event, action, applog.LevelError, "outbound_outcome_unconfirmed", message, detail, nil)
-			cause := fmt.Errorf("%w: %v", errOutboundOutcomeUnconfirmed, err)
-			if confirmErr != nil {
-				cause = fmt.Errorf("%w: %v (confirmation failed: %v)", errOutboundOutcomeUnconfirmed, err, confirmErr)
-			}
-			return nil, &outboundSendError{
-				GroupID:            strings.TrimSpace(event.GroupID),
-				Cause:              cause,
-				DeliveryDropped:    true,
-				OutcomeUnconfirmed: true,
-			}
-		}
-		r.logOutboundOutcome(event, action, applog.LevelInfo, "outbound_outcome_resend", "确认未送达，重发一次", err.Error(), nil)
-		// since 不重置：第一次那条的回推晚到，也照样算送达。
-		result, err = call(ctx)
+	if err == nil {
+		r.outboundEchoes.claim(event, apiMessageID(result))
+		return result, nil
+	}
+	if !errors.Is(err, ErrOutboundOutcomeUnknown) || !confirmable || ctx.Err() != nil {
+		return result, err
+	}
+	r.logOutboundOutcome(event, action, applog.LevelInfo, "outbound_outcome_unknown", "发送结果不明（超时），等待回执确认", err.Error(), nil)
+	// 确认最坏要好几分钟，入站租约只有 10 分钟、生成回复已经用掉一截。租约到期会
+	// 被另一个 worker 领走重新生成再发一遍，正是这里要防的重复，所以按确认的上限
+	// 把租约往后推。
+	echoWait, historyTimeout := r.outboundEchoes.timings()
+	extendInboundLease(ctx, echoWait+historyTimeout+time.Minute)
+	messageID, source, confirmErr := r.confirmOutboundDelivered(ctx, event, fingerprint, since)
+	if messageID != "" {
+		r.logOutboundOutcome(event, action, applog.LevelInfo, "outbound_outcome_confirmed", "已确认送达（"+source+"）", "", map[string]any{"outbound_message_id": messageID, "confirmed_by": source})
+		return map[string]any{"message_id": messageID}, nil
+	}
+	if confirmErr != nil && ctx.Err() != nil {
+		return nil, err
+	}
+	message, detail := "未找到送达记录，超时不重发", err.Error()
+	cause := fmt.Errorf("%w: %v", errOutboundOutcomeUnconfirmed, err)
+	if confirmErr != nil {
+		message, detail = "发送结果无法确认，超时不重发", confirmErr.Error()
+		cause = fmt.Errorf("%w: %v (confirmation failed: %v)", errOutboundOutcomeUnconfirmed, err, confirmErr)
+	}
+	r.logOutboundOutcome(event, action, applog.LevelError, "outbound_outcome_unconfirmed", message, detail, nil)
+	return nil, &outboundSendError{
+		GroupID:            strings.TrimSpace(event.GroupID),
+		Cause:              cause,
+		DeliveryDropped:    true,
+		OutcomeUnconfirmed: true,
 	}
 }
 
