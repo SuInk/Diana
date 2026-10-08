@@ -200,7 +200,7 @@ func ratingPasses(score float64, level string) bool {
 	}
 	return score > 0 && score >= threshold
 }
-func (p ParticipationPreferences) ratingsAllow(v participationRatings, cooldown bool) (bool, bool) {
+func (p ParticipationPreferences) ratingsAllow(v participationRatings) (bool, bool) {
 	if v.Relevance.Directed == nil || v.ChatIn.Score == nil {
 		return false, false
 	}
@@ -210,7 +210,7 @@ func (p ParticipationPreferences) ratingsAllow(v participationRatings, cooldown 
 		return false, false
 	}
 	related := r == "on" && *v.Relevance.Directed
-	chat := ratingPasses(*v.ChatIn.Score, c) && cooldown
+	chat := ratingPasses(*v.ChatIn.Score, c)
 	return related || chat, !related && chat
 }
 

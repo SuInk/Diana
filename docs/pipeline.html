@@ -110,7 +110,7 @@
           <li class="q"><div class="flow-node"><strong>directed = false 且 chat_in = 0？</strong><p>表示对方在叫停或正在机械循环。</p></div><div class="flow-exits"><span class="flow-exit"><b>是</b>沉默，「完全不限制」档也不越过</span></div></li>
           <li class="q"><div class="flow-node"><strong>回应提问开着且 directed = true？</strong></div><div class="flow-exits"><span class="flow-exit go"><b>是</b>放行 <code>replied_proactive</code></span></div></li>
           <li class="q"><div class="flow-node"><strong>闲聊分达到档位门槛，且冷却已过？</strong><p>冷却默认 30 秒，闲聊回复真正发出去后才开始计时。</p></div><div class="flow-exits"><span class="flow-exit"><b>否</b><code>ignored</code></span></div></li>
-          <li class="q"><div class="flow-node"><strong>机器人发言占比过高？</strong><p>10 分钟内机器人消息占 25% 以上、至少 3 条，且不止一个人在聊。</p></div><div class="flow-exits"><span class="flow-exit"><b>是，且不是「完全不限制」档</b>沉默</span></div></li>
+          <li class="q"><div class="flow-node"><strong>闲聊频率超额？</strong><p>估这批消息值得插话的概率，本群近一小时实际插话数按档位比例贴近预计需求，概率低于动态阈值就不插。</p></div><div class="flow-exits"><span class="flow-exit"><b>是，且不是「完全不限制」档</b>沉默</span></div></li>
           <li class="end"><div class="flow-node"><strong>放行</strong><p><code>replied_proactive</code>，进入回复流程。</p></div></li>
         </ol>
         <div class="table-wrap"><table><thead><tr><th>档位</th><th>界面名称</th><th>闲聊分门槛</th></tr></thead><tbody>
@@ -120,7 +120,7 @@
           <tr><td><code>medium</code></td><td>适度参与</td><td>≥ 0.50</td></tr>
           <tr><td><code>high</code></td><td>积极参与</td><td>≥ 0.30</td></tr>
           <tr><td><code>extreme</code></td><td>频繁参与</td><td>≥ 0.10（最松）</td></tr>
-          <tr><td><code>always</code></td><td>完全不限制</td><td>不看分数，仍受冷却和发言占比限制</td></tr>
+          <tr><td><code>always</code></td><td>完全不限制</td><td>不看分数，不受频率控制，仍受冷却限制</td></tr>
         </tbody></table></div>
         <p>「是不是在跟机器人说话」不打分：给 0–1 的分数，模型会在 0.45 和 0.55 之间摇摆，同一类消息这次回下次不回。模型出错时一律沉默——以前超时会退回关键词规则（扫到问号就当公开提问），判错的方向是「本来不该说话却开口」。评分细节写在 <code>proactive_reply_route</code> 日志里；档位、打分口径和补充判据见仓库的 <a href="https://github.com/SuInk/Diana/blob/main/docs/participation.md">发言偏好</a>，判断模型的接入见 <a href="https://github.com/SuInk/Diana/blob/main/docs/decision-models.md">判断模型（Jev）</a>。</p>
       </section>

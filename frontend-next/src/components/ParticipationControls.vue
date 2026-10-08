@@ -31,7 +31,7 @@ const settings = [
       { value: "low", label: "偶尔接话", hint: "比较适合参与时才接一句。" },
       { value: "medium", label: "适度参与", hint: "有合适的话就自然加入。" },
       { value: "high", label: "积极参与", hint: "更容易参与分享和闲聊。" },
-      { value: "always", label: "完全不限制", hint: "不设闲聊评分门槛，仍受冷却和发言占比限制，不是每条必回。" },
+      { value: "always", label: "完全不限制", hint: "不设闲聊评分门槛和频率控制，仍受冷却限制，不是每条必回。" },
     ]),
   },
 ];

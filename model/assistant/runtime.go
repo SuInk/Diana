@@ -507,6 +507,7 @@ type Runtime struct {
 	semanticIndexOnce   sync.Once
 	embedTexts          func(ctx context.Context, cfg llm.ProviderConfig, texts []string) ([][]float32, error)
 	chatInLastReplyAt   map[string]time.Time
+	chatInGates         map[string]*chatInGate
 	// recentClaimSources 记录最近几轮联网结论实际引用的来源。人设默认不罗列链接，
 	// 但有人追问「链接呢」时必须能原样给出，而不是重新搜一遍或者编一个。
 	recentClaimSources map[string][]claimSourceRecord
@@ -2438,8 +2439,9 @@ func (r *Runtime) replyAndRecordTurn(ctx context.Context, event MessageEvent, te
 	r.setError("")
 	r.record(record)
 	if event.chatInReply {
-		// 这条闲聊插话确实发出去了，现在才开始算本群的插话冷却。
+		// 这条闲聊插话确实发出去了，现在才开始算本群的插话冷却和动态门控的实际次数。
 		r.markChatInReplied(event)
+		r.recordChatInGateReply(event, time.Now())
 	}
 	r.enqueueRelationshipEvaluation(event, text)
 	return successOutcome, nil
@@ -2917,17 +2919,20 @@ func (r *Runtime) routeProactiveReplyBatch(ctx context.Context, candidates []pro
 			}
 		}
 		allowed, chatReply := false, false
+		_, chatLevel := chatIn.Participation.ratingLevels()
+		var gate chatInGateDecision
 		cooldownAllowed := r.chatInCooldownAllows(event, chatIn.Cooldown)
 		if parseErr == nil {
-			allowed, chatReply = chatIn.Participation.ratingsAllow(ratings, cooldownAllowed)
-		}
-		// 闲聊分支还要看机器人最近说了多少：占比过高时只留下相关度分支。
-		_, chatLevel := chatIn.Participation.ratingLevels()
-		botMessages, totalMessages := proactiveReplyBotShare(payload.RecentMessages, participationShareWindow, participationShareSpanSeconds)
-		otherSpeakers := proactiveReplyOtherSpeakers(payload.RecentMessages, participationShareWindow, participationShareSpanSeconds)
-		shareBlocked := chatReply && participationBotShareBlocks(botMessages, totalMessages, otherSpeakers, chatLevel)
-		if shareBlocked {
-			allowed, chatReply = false, false
+			allowed, chatReply = chatIn.Participation.ratingsAllow(ratings)
+			if chatReply && !cooldownAllowed {
+				allowed, chatReply = false, false
+			}
+			// 闲聊分支再过动态门控：按本群近一小时的插话需求和档位比例决定这次能不能插。
+			// 「在跟机器人说话」那一支不经过这里。
+			gate = r.chatInGateCheck(event, payload, chatLevel, time.Now())
+			if chatReply && !gate.Allowed {
+				allowed, chatReply = false, false
+			}
 		}
 		event.proactiveReply, event.chatInReply = allowed, chatReply
 		// 相关度分支放行的回复在正文里可能既没有 @ 也没有名字，空转判断本来看不见
@@ -2945,9 +2950,7 @@ func (r *Runtime) routeProactiveReplyBatch(ctx context.Context, candidates []pro
 			if !cooldownAllowed {
 				event.routingReason += "；闲聊冷却中，回应提问仍独立判断"
 			}
-			if shareBlocked {
-				event.routingReason += "；机器人近期发言占比过高，暂不插话"
-			}
+			event.routingReason += "；闲聊门控：" + gate.reason()
 		}
 		r.recordParticipationRatings(ctx, event, ratings, parseErr == nil, allowed, retried, cfg, raw)
 		return event, text, []proactiveReplyCandidate{{Event: event, Text: text}}, allowed
@@ -2971,54 +2974,6 @@ func (r *Runtime) routeProactiveReplyBatch(ctx context.Context, candidates []pro
 	event.routingReason = proactiveReplyDecisionReason(decision, parsed, decisionAllowed, cooldownAllowed, true, allowed, false, cfg, chatIn)
 	r.recordProactiveReplyRouteDecision(ctx, event, decision, parsed, decisionAllowed, true, allowed, cfg, raw)
 	return event, text, turn, allowed
-}
-
-// proactiveReplyBotShare 统计路由上下文里最近一段时间内机器人自己发了几条。
-// recent_messages 是按时间倒序拼的，所以取前 window 条就是最近的那一段；再按
-// age_seconds 只留下 spanSeconds 以内的，占比才反映「此刻的节奏」而不是几小时前的旧账。
-// spanSeconds <= 0 表示不限时间跨度；缺 age_seconds 的条目按刚发生处理。
-func proactiveReplyBotShare(messages []proactiveReplyHistoryItem, window int, spanSeconds int64) (int, int) {
-	if window > 0 && len(messages) > window {
-		messages = messages[:window]
-	}
-	bot, total := 0, 0
-	for _, item := range messages {
-		if spanSeconds > 0 && item.AgeSeconds != nil && *item.AgeSeconds > spanSeconds {
-			continue
-		}
-		total++
-		if item.IsBot {
-			bot++
-		}
-	}
-	return bot, total
-}
-
-// proactiveReplyOtherSpeakers 数窗口里除机器人以外有几个不同的人开过口。只有一个时
-// 这段对话是一对一，发言占比高是常态，不该按刷屏处理。缺 user_id 的条目（历史里少数
-// 拿不到账号的消息）按「又一个人」算：宁可多算一个让限流照常生效，也不要因为字段缺失
-// 把热闹群误判成一对一。
-func proactiveReplyOtherSpeakers(messages []proactiveReplyHistoryItem, window int, spanSeconds int64) int {
-	if window > 0 && len(messages) > window {
-		messages = messages[:window]
-	}
-	speakers := map[string]struct{}{}
-	unknown := 0
-	for _, item := range messages {
-		if spanSeconds > 0 && item.AgeSeconds != nil && *item.AgeSeconds > spanSeconds {
-			continue
-		}
-		if item.IsBot {
-			continue
-		}
-		userID := strings.TrimSpace(item.UserID)
-		if userID == "" {
-			unknown++
-			continue
-		}
-		speakers[userID] = struct{}{}
-	}
-	return len(speakers) + unknown
 }
 
 // chatInCooldownAllows 判断本群距上次闲聊插话是否已过冷却。

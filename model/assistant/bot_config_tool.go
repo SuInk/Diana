@@ -36,7 +36,7 @@ func (*dianaBotConfigTool) InputSchema() map[string]any {
 		"section":                      toolEnumParam("默认 settings：接话和欢迎设置，可局部 update；其他部分仅主人 get 脱敏诊断。", "settings", "all", "bot", "llm", "skills", "runtime", "paths"),
 		"desire_level":                 toolEnumParam("回复欲望；off 关主动插话，明确请求仍回复。", "off", "low", "medium", "high", "max"),
 		"relevance_level":              toolEnumParam("on：明确跟机器人说话时回应。", "on", "off"),
-		"chat_level":                   toolEnumParam("闲聊档位，受冷却限制；机器人近期发言过多时暂停，always 除外。", "off", "minimal", "low", "medium", "high", "always"),
+		"chat_level":                   toolEnumParam("闲聊档位，按本群近一小时的插话需求动态控制频率，受冷却限制；always 不限频率。", "off", "minimal", "low", "medium", "high", "always"),
 		"cooldown_seconds":             toolIntParam("主动闲聊冷却秒数，0 关闭。", 0, 3600),
 		"minimum_reply_member_level":   toolIntParam("最低回复成员等级，仅 OneBot 群。", 0, maximumReplyMemberLevel),
 		"welcome_enabled":              toolBoolParam("内置入群欢迎开关；重复开启仅更新配置，不创建事件任务。"),
