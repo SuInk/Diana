@@ -593,6 +593,18 @@ func normalizeWebSearchProviders(providers []webSearchProviderConfig) ([]webSear
 			if provider.APIKeyEnv == "" && !provider.NoEnvAPIKey {
 				provider.APIKeyEnv = "TAVILY_API_KEY"
 			}
+		case "perplexity":
+			if provider.URL == "" {
+				provider.URL = "https://api.perplexity.ai/search"
+			}
+		case "tinyfish":
+			if provider.URL == "" {
+				provider.URL = "https://api.search.tinyfish.ai"
+			}
+		case "brave":
+			if provider.URL == "" {
+				provider.URL = "https://api.search.brave.com/res/v1/web/search"
+			}
 		case WebSearchProviderSearchEngine:
 			// Tool 是引擎名（google、bing……），URL 默认取引擎自己的搜索地址；
 			// 自定义引擎的 URL 是带 {query} 的搜索地址模板。
@@ -673,6 +685,12 @@ func (t *WebSearchTool) runProvider(ctx context.Context, provider webSearchProvi
 		return t.runExaMCP(ctx, provider, query, apiKey)
 	case "tavily":
 		return t.runTavily(ctx, provider, query, apiKey)
+	case "perplexity":
+		return t.runPerplexity(ctx, provider, query, apiKey)
+	case "tinyfish":
+		return t.runTinyFish(ctx, provider, query, apiKey)
+	case "brave":
+		return t.runBrave(ctx, provider, query, apiKey)
 	case "http":
 		return t.runHTTPSearch(ctx, provider, query, apiKey)
 	case WebSearchProviderSearchEngine:
@@ -979,6 +997,155 @@ func (t *WebSearchTool) runTavily(ctx context.Context, provider webSearchProvide
 		return "", err
 	}
 	return string(formatted), nil
+}
+
+// searchAPIHit 是 Perplexity、Brave 结果统一成的 Tavily 形状，下游按同一套字段解析。
+type searchAPIHit struct {
+	Title         string `json:"title"`
+	URL           string `json:"url"`
+	Content       string `json:"content"`
+	PublishedDate string `json:"published_date,omitempty"`
+}
+
+func (t *WebSearchTool) doSearchAPI(req *http.Request, label string, out any) error {
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("User-Agent", "github.com/SuInk/diana/0.1")
+	resp, err := t.httpClient().Do(req)
+	if err != nil {
+		return fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+	raw, err := readWebSearchBody(resp.Body)
+	if err != nil {
+		return err
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("remote service returned HTTP %d", resp.StatusCode)
+	}
+	if err := json.Unmarshal(raw, out); err != nil {
+		return fmt.Errorf("invalid %s response: %w", label, err)
+	}
+	return nil
+}
+
+func formatSearchAPIHits(label string, hits []searchAPIHit) (string, error) {
+	if len(hits) == 0 {
+		return "", fmt.Errorf("%s returned no search results: %w", label, errWebSearchNoResults)
+	}
+	formatted, err := json.MarshalIndent(map[string]any{"results": hits}, "", "  ")
+	if err != nil {
+		return "", err
+	}
+	return string(formatted), nil
+}
+
+func (t *WebSearchTool) runPerplexity(ctx context.Context, provider webSearchProviderConfig, query, apiKey string) (string, error) {
+	if apiKey == "" {
+		return "", errors.New("Perplexity API key is missing")
+	}
+	body, err := json.Marshal(map[string]any{"query": query, "max_results": provider.MaxResults})
+	if err != nil {
+		return "", err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, provider.URL, bytes.NewReader(body))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+	req.Header.Set("Content-Type", "application/json")
+	var result struct {
+		Results []struct {
+			Title   string `json:"title"`
+			URL     string `json:"url"`
+			Snippet string `json:"snippet"`
+			Date    string `json:"date"`
+		} `json:"results"`
+	}
+	if err := t.doSearchAPI(req, "Perplexity", &result); err != nil {
+		return "", err
+	}
+	hits := make([]searchAPIHit, 0, len(result.Results))
+	for _, item := range result.Results {
+		hits = append(hits, searchAPIHit{Title: item.Title, URL: item.URL, Content: item.Snippet, PublishedDate: item.Date})
+	}
+	return formatSearchAPIHits("Perplexity", hits)
+}
+
+// TinyFish 没有条数参数，一页固定约 10 条，本地截到 MaxResults。
+func (t *WebSearchTool) runTinyFish(ctx context.Context, provider webSearchProviderConfig, query, apiKey string) (string, error) {
+	if apiKey == "" {
+		return "", errors.New("TinyFish API key is missing")
+	}
+	endpoint, err := url.Parse(provider.URL)
+	if err != nil {
+		return "", err
+	}
+	values := endpoint.Query()
+	values.Set("query", query)
+	endpoint.RawQuery = values.Encode()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("X-API-Key", apiKey)
+	var result struct {
+		Results []struct {
+			Title   string `json:"title"`
+			URL     string `json:"url"`
+			Snippet string `json:"snippet"`
+		} `json:"results"`
+	}
+	if err := t.doSearchAPI(req, "TinyFish", &result); err != nil {
+		return "", err
+	}
+	hits := make([]searchAPIHit, 0, len(result.Results))
+	for _, item := range result.Results {
+		if len(hits) == provider.MaxResults {
+			break
+		}
+		hits = append(hits, searchAPIHit{Title: item.Title, URL: item.URL, Content: item.Snippet})
+	}
+	return formatSearchAPIHits("TinyFish", hits)
+}
+
+// Brave 用 <strong> 标出命中词，原样交给模型只是噪音。
+var braveHighlight = strings.NewReplacer("<strong>", "", "</strong>", "")
+
+func (t *WebSearchTool) runBrave(ctx context.Context, provider webSearchProviderConfig, query, apiKey string) (string, error) {
+	if apiKey == "" {
+		return "", errors.New("Brave Search API key is missing")
+	}
+	endpoint, err := url.Parse(provider.URL)
+	if err != nil {
+		return "", err
+	}
+	values := endpoint.Query()
+	values.Set("q", query)
+	values.Set("count", fmt.Sprint(provider.MaxResults))
+	endpoint.RawQuery = values.Encode()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("X-Subscription-Token", apiKey)
+	var result struct {
+		Web struct {
+			Results []struct {
+				Title       string `json:"title"`
+				URL         string `json:"url"`
+				Description string `json:"description"`
+				PageAge     string `json:"page_age"`
+			} `json:"results"`
+		} `json:"web"`
+	}
+	if err := t.doSearchAPI(req, "Brave Search", &result); err != nil {
+		return "", err
+	}
+	hits := make([]searchAPIHit, 0, len(result.Web.Results))
+	for _, item := range result.Web.Results {
+		hits = append(hits, searchAPIHit{Title: item.Title, URL: item.URL, Content: braveHighlight.Replace(item.Description), PublishedDate: item.PageAge})
+	}
+	return formatSearchAPIHits("Brave Search", hits)
 }
 
 func (t *WebSearchTool) formatExplorationResult(result webSearchResult) (string, error) {

@@ -1111,7 +1111,7 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
 
   if (path === '/api/assistant/search-providers') {
     if (method === 'POST') {
-      if (!String(body.name ?? '').trim() || !['exa_mcp', 'tavily', 'search_mcp', 'browser', 'http'].includes(String(body.type))) return json({ error: '请填写名称并选择接入协议' }, 400);
+      if (!String(body.name ?? '').trim() || !['exa_mcp', 'tavily', 'perplexity', 'tinyfish', 'brave', 'search_mcp', 'browser', 'http'].includes(String(body.type))) return json({ error: '请填写名称并选择接入协议' }, 400);
       try { const endpoint = new URL(String(body.url)); if (endpoint.protocol !== 'https:' && !(endpoint.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(endpoint.hostname))) throw new Error(); } catch { return json({ error: '请填写 HTTPS 服务地址或本机 HTTP 地址' }, 400); }
       if (body.type === 'search_mcp' && !String(body.tool ?? '').trim()) return json({ error: '请填写 MCP 搜索工具名' }, 400);
       const id = String(body.id || `search-${Date.now()}`);
@@ -1127,7 +1127,7 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
     const provider = body.provider as SearchProvider & { api_key?: string; clear_api_key?: boolean };
     if (!provider?.url || !String(body.query ?? '').trim()) return json({ duration_ms: 0, result_count: 0, error: '请填写接入地址和测试搜索词' });
     const key = provider.clear_api_key ? '' : provider.api_key?.trim() || demoSearchKeys[provider.id];
-    if ((provider.type === 'tavily' || provider.type === 'http' && provider.http_config?.auth_type !== 'none') && !key) return json({ duration_ms: 0, result_count: 0, error: '请填写 API Key' });
+    if ((['tavily', 'perplexity', 'tinyfish', 'brave'].includes(provider.type) || provider.type === 'http' && provider.http_config?.auth_type !== 'none') && !key) return json({ duration_ms: 0, result_count: 0, error: '请填写 API Key' });
     return json({ duration_ms: 186, http_status: 200, result_count: 1, content: JSON.stringify({ results: [{ title: `演示搜索：${String(body.query)}`, url: 'https://example.org/search-result', snippet: '这是 demo 模式的搜索结果，用于预览测试配置界面。' }] }, null, 2) });
   }
   if (path.startsWith('/api/assistant/search-providers/') && method === 'DELETE') {
