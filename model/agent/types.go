@@ -151,6 +151,9 @@ type Config struct {
 	// CoreTools 是每一步都带完整定义的工具；其余工具按需加载，见 deferred_tools.go。
 	// 留空时全部工具都带完整定义。
 	CoreTools []string
+	// ToolResultReminder 非空时，工具跑完后的那一步规划在请求末尾临时带上这段提醒，
+	// 不写进上下文：离生成位置最近，多步之后也不会叠加。
+	ToolResultReminder string
 }
 
 type Request struct {
