@@ -65,7 +65,9 @@ func proactiveReplyTranscript(payload proactiveReplyPayload) string {
 		current += fmt.Sprintf("（引用 %s：%s）", firstNonEmpty(who, "某人"), truncateRunes(strings.Join(strings.Fields(quoted), " "), 80))
 	}
 	lines = append(lines, "【当前消息】[刚刚] "+current)
-	if payload.LastBotAddressedCurrentSender {
+	// 机器人之后有别人插进来时不写这条：评分判据里「紧接着它刚才的话」要求中间没有别人，
+	// 这条提示会让模型跳过中间那几句，把「你复现了」这种问别人的话认成在问机器人。
+	if payload.LastBotAddressedCurrentSender && !payload.OthersSpokeAfterLastBot {
 		lines = append(lines, "（"+botName+"最近一条发言是冲着当前发送者说的）")
 	}
 	if notebook := strings.TrimSpace(payload.NotebookContext); notebook != "" {
