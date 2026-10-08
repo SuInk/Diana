@@ -1830,7 +1830,10 @@
                      「让机器人执行指令」表现为它只用嘴回你，看不出是没开。 -->
                 <div class="field wide">
                   <label for="agent-allow">命令白名单（逗号分隔，* 表示全部）</label>
-                  <input id="agent-allow" v-model="allowlistDraft" class="input" placeholder="留空 = 不开放命令执行" />
+                  <div class="input-group">
+                    <input id="agent-allow" v-model="allowlistDraft" class="input" placeholder="留空 = 不开放命令执行" />
+                    <button class="btn small ghost" type="button" @click="applyNodeExecution">允许 Node.js 执行</button>
+                  </div>
                   <span class="hint" :class="{ danger: commandAllowlistIsWildcard }">
                     <template v-if="!commandAllowlistEnabled">
                       当前为空：命令执行整体关闭，机器人拿不到这个工具。要开放就填具体命令，例如 <code>uptime,free,df</code>。
@@ -2321,6 +2324,7 @@ import {
   type AgentSafeModeCategory
 } from "../agent-mode";
 import { toastError, toastSuccess } from "../toast";
+import { allowNodeExecution } from "../node-execution-preset";
 import { channelAccountUnhealthy, channelOperational, channelStatusHint, channelStatusLabel } from "../channel-status";
 
 const form = ref<BotProfileConfig | null>(null);
@@ -2453,6 +2457,12 @@ const bridgeTokenDraft = ref("");
 const triggersDraft = ref("");
 const welcomeTemplatesDraft = ref("");
 const allowlistDraft = ref("");
+
+// 只并入 node，其它命令、* 和文件写入、网络设置原样保留；保存配置后才生效。
+function applyNodeExecution(): void {
+  allowlistDraft.value = allowNodeExecution(allowlistDraft.value);
+  toastSuccess("已允许 Node.js 执行，点「保存配置」后生效");
+}
 
 // 白名单为空 = 命令执行整体关闭，这一点要在界面上直接说出来，见模板里的说明。
 const commandAllowlistEntries = computed(() => splitList(allowlistDraft.value));
