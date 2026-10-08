@@ -56,43 +56,21 @@ func (h *BotHandler) setAgentBrowser(c *gin.Context) {
 		h.writeError(c, http.StatusBadRequest, "agent_browser", err, payload.ProfileID, nil)
 		return
 	}
+	var err error
 	if payload.OperationAccess != nil {
-		switch strings.ToLower(strings.TrimSpace(payload.OperationAccess.Mode)) {
-		case "", assistant.BrowserScreenshotDisabled, assistant.BrowserScreenshotOwnerOnly, assistant.BrowserScreenshotWhitelist:
-		default:
-			h.writeError(c, http.StatusBadRequest, "agent_browser", errors.New("不支持的浏览器操作权限模式"), payload.ProfileID, nil)
-			return
-		}
-		for _, host := range payload.OperationAccess.AllowedHosts {
-			if !agent.ValidBrowserScreenshotHost(host) {
-				h.writeError(c, http.StatusBadRequest, "agent_browser", errors.New("操作网站必须是精确的域名或域名:端口，不支持协议、路径或通配符"), payload.ProfileID, nil)
-				return
-			}
-		}
+		err = payload.OperationAccess.Validate()
 	}
-	var screenshotAccess []assistant.BrowserScreenshotAccess
-	if payload.ScreenshotAccess != nil {
-		switch strings.ToLower(strings.TrimSpace(payload.ScreenshotAccess.Mode)) {
-		case "", assistant.BrowserScreenshotDisabled, assistant.BrowserScreenshotOwnerOnly, assistant.BrowserScreenshotWhitelist:
-		default:
-			h.writeError(c, http.StatusBadRequest, "agent_browser", errors.New("不支持的截图权限模式"), payload.ProfileID, nil)
-			return
-		}
-		for _, host := range payload.ScreenshotAccess.AllowedHosts {
-			if !agent.ValidBrowserScreenshotHost(host) {
-				h.writeError(c, http.StatusBadRequest, "agent_browser", errors.New("截图网站必须是精确的域名或域名:端口，不支持协议、路径或通配符"), payload.ProfileID, nil)
-				return
-			}
-		}
-		screenshotAccess = append(screenshotAccess, *payload.ScreenshotAccess)
+	if err == nil && payload.ScreenshotAccess != nil {
+		err = payload.ScreenshotAccess.Validate()
 	}
-	next, ok := h.profiles.Profiles().WithAgentBrowser(payload.ProfileID, payload.CDPURL, payload.TimeoutMS, screenshotAccess...)
+	if err != nil {
+		h.writeError(c, http.StatusBadRequest, "agent_browser", err, payload.ProfileID, nil)
+		return
+	}
+	next, ok := h.profiles.Profiles().WithAgentBrowser(payload.ProfileID, payload.CDPURL, payload.TimeoutMS, payload.ScreenshotAccess, payload.OperationAccess)
 	if !ok {
 		h.writeError(c, http.StatusNotFound, "agent_browser", fmt.Errorf("profile %q not found", payload.ProfileID), payload.ProfileID, nil)
 		return
-	}
-	if payload.OperationAccess != nil {
-		next, _ = next.WithBrowserOperationAccess(payload.ProfileID, *payload.OperationAccess)
 	}
 	current, _ := next.ConfigForProfile(payload.ProfileID)
 	if err := h.applyProfileSet(next); err != nil && !errors.Is(err, assistant.ErrBotDisabled) {

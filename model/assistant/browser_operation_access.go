@@ -16,10 +16,14 @@ func (access BrowserOperationAccess) WithDefaults() BrowserOperationAccess {
 	return BrowserOperationAccess{Mode: normalized.Mode, AllowedUsers: normalized.AllowedUsers, AllowedHosts: normalized.AllowedHosts}
 }
 
+func (access BrowserOperationAccess) Validate() error {
+	return validateBrowserAccess("操作", access.Mode, access.AllowedUsers, access.AllowedHosts)
+}
+
 func (access BrowserOperationAccess) AllowsEvent(owner bool, event MessageEvent) bool {
 	access = access.WithDefaults()
 	if owner {
-		return access.Mode != BrowserScreenshotDisabled
+		return access.Mode != BrowserAccessDisabled
 	}
 	if event.Kind != EventKindPrivate || event.GroupID != "" {
 		return false

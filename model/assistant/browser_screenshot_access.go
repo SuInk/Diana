@@ -4,6 +4,7 @@
 package assistant
 
 import (
+	"errors"
 	"strings"
 
 	"github.com/SuInk/diana/model/agent"
@@ -17,11 +18,46 @@ type BrowserScreenshotAccess struct {
 	AllowedGroups []string `json:"allowed_groups,omitempty"`
 }
 
+// 截图和操作权限共用同一组模式。
 const (
-	BrowserScreenshotDisabled  = "disabled"
-	BrowserScreenshotOwnerOnly = "owner_only"
-	BrowserScreenshotWhitelist = "whitelist"
+	BrowserAccessDisabled  = "disabled"
+	BrowserAccessOwnerOnly = "owner_only"
+	BrowserAccessWhitelist = "whitelist"
+
+	BrowserScreenshotDisabled  = BrowserAccessDisabled
+	BrowserScreenshotOwnerOnly = BrowserAccessOwnerOnly
+	BrowserScreenshotWhitelist = BrowserAccessWhitelist
 )
+
+// validateBrowserAccess 只在 WebUI 保存时调用：拒绝未知模式、非精确域名，以及
+// 缺用户或缺网站的「指定用户」配置。WithDefaults 和读配置不走这里，已有的残缺旧配置
+// 仍能启动，按 Allows 的规则谁都不开放。label 区分「截图」「操作」两套设置的报错文案。
+func validateBrowserAccess(label, mode string, users, hosts []string) error {
+	mode = strings.ToLower(strings.TrimSpace(mode))
+	switch mode {
+	case "", BrowserAccessDisabled, BrowserAccessOwnerOnly, BrowserAccessWhitelist:
+	default:
+		return errors.New("不支持的" + label + "权限模式")
+	}
+	for _, host := range hosts {
+		if !agent.ValidBrowserScreenshotHost(host) {
+			return errors.New(label + "网站必须是精确的域名或域名:端口，不支持协议、路径或通配符")
+		}
+	}
+	if mode == BrowserAccessWhitelist {
+		if len(cleanStrings(users)) == 0 {
+			return errors.New(label + "权限选了指定用户，至少填一个用户")
+		}
+		if len(cleanStrings(hosts)) == 0 {
+			return errors.New(label + "权限选了指定用户，至少填一个网站")
+		}
+	}
+	return nil
+}
+
+func (access BrowserScreenshotAccess) Validate() error {
+	return validateBrowserAccess("截图", access.Mode, access.AllowedUsers, access.AllowedHosts)
+}
 
 func (access BrowserScreenshotAccess) WithDefaults() BrowserScreenshotAccess {
 	access.Mode = strings.ToLower(strings.TrimSpace(access.Mode))

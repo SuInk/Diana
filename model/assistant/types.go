@@ -1877,7 +1877,7 @@ func (s ProfileSet) WithProfileEnabled(id string, enabled bool) (ProfileSet, boo
 // 单独开一条路而不是让界面回存整份配置：交互式浏览器的入口在扩展页，那一页没有、
 // 也不该有整份机器人配置。把整份配置读出来改一个字段再存回去，等于让这一页替所有
 // 别的字段负责——凭据、平台连接、人设，任何一处读回来是脱敏值就会被写坏。
-func (s ProfileSet) WithAgentBrowser(id, cdpURL string, timeoutMS int, screenshotAccess ...BrowserScreenshotAccess) (ProfileSet, bool) {
+func (s ProfileSet) WithAgentBrowser(id, cdpURL string, timeoutMS int, screenshotAccess *BrowserScreenshotAccess, operationAccess *BrowserOperationAccess) (ProfileSet, bool) {
 	id = strings.TrimSpace(id)
 	profiles := make([]BotConfig, len(s.Profiles))
 	copy(profiles, s.Profiles)
@@ -1887,24 +1887,16 @@ func (s ProfileSet) WithAgentBrowser(id, cdpURL string, timeoutMS int, screensho
 		}
 		profiles[i].AgentBrowserCDPURL = strings.TrimSpace(cdpURL)
 		profiles[i].AgentBrowserTimeoutMS = timeoutMS
-		if len(screenshotAccess) > 0 {
-			profiles[i].AgentBrowserScreenshotAccess = screenshotAccess[0].WithDefaults()
+		// nil 表示界面没提交这一项，保留原值。
+		if screenshotAccess != nil {
+			profiles[i].AgentBrowserScreenshotAccess = screenshotAccess.WithDefaults()
+		}
+		if operationAccess != nil {
+			profiles[i].AgentBrowserOperationAccess = operationAccess.WithDefaults()
 		}
 		s.Profiles = profiles
 		// WithDefaults 会把空地址和越界超时补回默认值，省得界面自己复述一遍规则。
 		return s.WithDefaults(), true
-	}
-	return s, false
-}
-
-func (s ProfileSet) WithBrowserOperationAccess(id string, access BrowserOperationAccess) (ProfileSet, bool) {
-	profiles := append([]BotConfig(nil), s.Profiles...)
-	for i := range profiles {
-		if strings.TrimSpace(profiles[i].ID) == strings.TrimSpace(id) {
-			profiles[i].AgentBrowserOperationAccess = access.WithDefaults()
-			s.Profiles = profiles
-			return s.WithDefaults(), true
-		}
 	}
 	return s, false
 }

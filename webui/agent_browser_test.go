@@ -154,7 +154,16 @@ func TestAgentBrowserOperationAllowlistPersistsAndValidates(t *testing.T) {
 		`{"profile_id":"bot-a","operation_access":{"mode":"all"}}`,
 		`{"profile_id":"bot-a","operation_access":{"mode":"whitelist","allowed_hosts":["*.example.com"]}}`,
 		`{"profile_id":"bot-a","operation_access":{"mode":"whitelist","allowed_hosts":["https://example.com"]}}`,
+		// 指定用户但缺用户或缺网站：保存了也谁都不开放，界面直接拒绝。
+		`{"profile_id":"bot-a","operation_access":{"mode":"whitelist","allowed_hosts":["example.com"]}}`,
+		`{"profile_id":"bot-a","operation_access":{"mode":"whitelist","allowed_users":["member"," "],"allowed_hosts":[" "]}}`,
+		`{"profile_id":"bot-a","screenshot_access":{"mode":"whitelist","allowed_users":["member"]}}`,
+		`{"profile_id":"bot-a","screenshot_access":{"mode":"whitelist","allowed_users":[""],"allowed_hosts":["example.com"]}}`,
 	} {
 		post(body, http.StatusBadRequest)
+	}
+	saved, _ = h.profiles.Profiles().ConfigForProfile("bot-a")
+	if !reflect.DeepEqual(saved.AgentBrowserOperationAccess, want) {
+		t.Fatal("rejected save changed operation policy")
 	}
 }
