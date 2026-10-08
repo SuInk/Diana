@@ -19,7 +19,7 @@ import (
 func runProgress(p *replyProgress, sink *progressSink) chan struct{} {
 	exited := make(chan struct{})
 	go func() {
-		p.loop(context.Background(), sink.send, 20*time.Millisecond, 20*time.Millisecond, 2)
+		p.loop(context.Background(), sink.send, 20*time.Millisecond, 20*time.Millisecond, 40*time.Millisecond)
 		close(exited)
 	}()
 	return exited
@@ -42,7 +42,7 @@ func (s *progressSink) snapshot() []string {
 	return append([]string(nil), s.sent...)
 }
 
-// 跑久了报做到哪，次数封顶；收尾后一条都不再发。
+// 跑久了一直报做到哪，不封次数；收尾后一条都不再发。
 func TestReplyProgressReportsLongRunsAndStops(t *testing.T) {
 	progress := &replyProgress{started: time.Now(), counts: map[string]int{}, done: make(chan struct{})}
 	sink := &progressSink{}
@@ -51,10 +51,13 @@ func TestReplyProgressReportsLongRunsAndStops(t *testing.T) {
 	progress.observe(agent.RunEvent{Phase: agent.RunPhaseToolCompleted, Tool: "web_search"})
 	progress.observe(agent.RunEvent{Phase: agent.RunPhaseToolCompleted, Tool: "browser_render", ToolInput: map[string]any{"urls": []any{"https://a.example", "https://b.example"}}})
 	progress.observe(agent.RunEvent{Phase: agent.RunPhaseToolStarted, Tool: "browser_render"})
+	waitForCondition(t, 2*time.Second, func() bool { return len(sink.snapshot()) >= 4 })
+	progress.observe(agent.RunEvent{Phase: agent.RunPhaseCompleted})
 	<-exited
 	sent := sink.snapshot()
-	if len(sent) != 2 {
-		t.Fatalf("发了 %d 条，want 上限 2: %q", len(sent), sent)
+	time.Sleep(100 * time.Millisecond)
+	if after := sink.snapshot(); len(after) != len(sent) {
+		t.Fatalf("收尾后还在报: %q", after[len(sent):])
 	}
 	for _, want := range []string{"搜了 2 次", "读了 2 个网页", "现在在读网页"} {
 		if !strings.Contains(sent[0], want) {

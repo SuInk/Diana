@@ -16,11 +16,12 @@ import (
 
 // 一轮回复连着搜索、读网页、生图时可能跑一两分钟，期间群里只看得到「正在输入」，
 // 甚至什么都看不到，分不清机器人是在干活还是挂了。跑过一阵还没收尾，就报一句
-// 做到哪了；次数有上限，回复一出来就停。
+// 做到哪了，一直报到回复出来为止：中途断了声，人照样以为挂了。间隔逐次翻倍，
+// 封顶 replyProgressMaxEvery，长调研也不至于刷屏。
 var (
-	replyProgressFirst = 40 * time.Second
-	replyProgressEvery = 90 * time.Second
-	replyProgressMax   = 3
+	replyProgressFirst    = 40 * time.Second
+	replyProgressEvery    = 90 * time.Second
+	replyProgressMaxEvery = 5 * time.Minute
 	// replyProgressNudgeAfter：回复开跑没多久就又被 @，多半只是补个 @，不用急着报。
 	replyProgressNudgeAfter = 10 * time.Second
 )
@@ -59,10 +60,10 @@ func (r *Runtime) startReplyProgress(ctx context.Context, event MessageEvent, in
 			typing.resume()
 		}
 	}
-	first, every, limit := replyProgressFirst, replyProgressEvery, replyProgressMax
+	first, every, maxEvery := replyProgressFirst, replyProgressEvery, replyProgressMaxEvery
 	go func() {
 		defer recoverGoroutinePanic("reply.progress")
-		progress.loop(ctx, send, first, every, limit)
+		progress.loop(ctx, send, first, every, maxEvery)
 	}()
 	observer := func(ctx context.Context, runEvent agent.RunEvent) {
 		progress.observe(runEvent)
@@ -167,11 +168,11 @@ func (p *replyProgress) observe(event agent.RunEvent) {
 	}
 }
 
-func (p *replyProgress) loop(ctx context.Context, send func(string), first, every time.Duration, limit int) {
+func (p *replyProgress) loop(ctx context.Context, send func(string), first, every, maxEvery time.Duration) {
 	timer := time.NewTimer(first)
 	defer timer.Stop()
 	force := false
-	for sent := 0; sent < limit; {
+	for {
 		select {
 		case <-ctx.Done():
 			return
@@ -181,6 +182,7 @@ func (p *replyProgress) loop(ctx context.Context, send func(string), first, ever
 			force = true
 		case <-timer.C:
 			timer.Reset(every)
+			every = min(every*2, maxEvery)
 		}
 		text, ok := p.render(time.Now(), force)
 		force = false
@@ -194,7 +196,6 @@ func (p *replyProgress) loop(ctx context.Context, send func(string), first, ever
 		default:
 		}
 		send(text)
-		sent++
 	}
 }
 
