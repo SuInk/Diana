@@ -1472,22 +1472,14 @@
             @world-book="nodes => { worldBookNodes = nodes; }"
           />
 
-          <!-- 自述：只读加删除。写入只有它自己能做，人代笔想加的应该写进 SOUL.md。
-               两边的写权限正好相反，所以数据分开，只在界面上挨着放。 -->
-          <section class="card self-notes-card">
+          <!-- 自述只在这里开关；写下的条目在「小窝 → 自述」里看和删。 -->
+          <section class="card">
             <div class="card-header">
               <div>
                 <h2>自述</h2>
-                <span class="card-sub">它自己记下的关于自己的观察，跨群生效；人只能看和删</span>
+                <span class="card-sub">它自己记下的关于自己的观察，跨群生效</span>
               </div>
-              <div v-if="form.self_note_enabled" class="cluster">
-                <button class="btn small" type="button" :disabled="selfNotesBusy" @click="reloadSelfNotes">
-                  <RefreshCw :size="14" aria-hidden="true" />刷新
-                </button>
-                <button class="btn small danger" type="button" :disabled="selfNotesBusy || !selfNotes.length" @click="clearSelfNotes">
-                  <Trash2 :size="14" aria-hidden="true" />清空
-                </button>
-              </div>
+              <button v-if="form.self_note_enabled" class="btn small" type="button" @click="navigate('self-notes')">查看自述</button>
             </div>
             <div class="card-body form-grid">
               <div class="field wide">
@@ -1496,23 +1488,27 @@
                   <span class="track" aria-hidden="true"></span>
                   <span class="switch-label">允许它写自述</span>
                 </label>
-                <span class="hint">它会把自己注意到的说话习惯、偏好和毛病记成一条条自述，每轮带在请求尾部。自述改不动 SOUL.md、权限和安全边界；最多 24 条，每条 120 字，主人可以在对话里让它列出、删除或清空。默认关闭，保存配置后生效。</span>
+                <span class="hint">它会把自己注意到的说话习惯、偏好和毛病记成一条条自述，每轮带在请求尾部。自述改不动 SOUL.md、权限和安全边界；最多 24 条，每条 120 字。写下的条目在「小窝 → 自述」里查看、删除或清空。默认关闭，保存配置后生效。</span>
               </div>
-              <div v-if="form.self_note_enabled && !selfNotes.length" class="field wide">
-                <span class="hint">还没有写过自述。它在相处中注意到关于自己的事时会自己记一条。</span>
+            </div>
+          </section>
+
+          <section class="card">
+            <div class="card-header">
+              <div>
+                <h2>小窝</h2>
+                <span class="card-sub">属于她自己的空间：零花钱、愿望单和房间</span>
               </div>
-              <ul v-else-if="form.self_note_enabled" class="self-note-list field wide">
-                <li v-for="note in selfNotes" :key="note.id" class="self-note-item">
-                  <div class="self-note-main">
-                    <span class="self-note-topic">{{ note.topic }}</span>
-                    <span class="self-note-content">{{ note.content }}</span>
-                  </div>
-                  <small class="muted self-note-source">{{ selfNoteSource(note) }}</small>
-                  <button class="btn small danger" type="button" :disabled="selfNotesBusy" aria-label="删除这条自述" @click="removeSelfNote(note.id)">
-                    <X :size="14" aria-hidden="true" />
-                  </button>
-                </li>
-              </ul>
+            </div>
+            <div class="card-body form-grid">
+              <div class="field wide">
+                <label class="switch">
+                  <input v-model="form.own_space_enabled" type="checkbox" />
+                  <span class="track" aria-hidden="true"></span>
+                  <span class="switch-label">给她一个小窝</span>
+                </label>
+                <span class="hint">开启后，侧边栏「小窝」里可以给她发零花钱、看她的账本。全是虚拟账本，不接任何真实支付；想买东西时要你点头。默认关闭，保存配置后生效。</span>
+              </div>
             </div>
           </section>
 
@@ -1520,7 +1516,7 @@
             <div class="card-header">
               <div>
                 <h2>动态</h2>
-                <span class="card-sub">它在「动态」页发的动态和日记，以及评论区的互动</span>
+                <span class="card-sub">它在「小窝 → 动态」里发的动态和日记，以及评论区的互动</span>
               </div>
             </div>
             <div class="card-body form-grid">
@@ -2237,18 +2233,13 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch, type Ref } 
 import LoadingSkeleton from "../components/LoadingSkeleton.vue";
 import SkeletonBlock from "../components/SkeletonBlock.vue";
 import { ArrowLeft, Bot, ChevronDown, ChevronRight, Copy, Download, Eye, EyeOff, GitBranch, GripVertical, History, Image, Layers, MessageSquare, Pencil, Plus, Power, PowerOff, RefreshCw, RotateCcw, Save, ScanLine, Search, Settings2, Shuffle, SlidersHorizontal, Sparkles, Trash2, Upload, Waypoints, X } from "@lucide/vue";
-import { formatClock } from "../format";
 import { sendRetryFields, sendRetryPayload, sendRetryValidationError } from "../send-retry-settings";
 import { botImageGenerationLimitsPayload, botVideoGenerationLimitsPayload } from "../media-generation-quota";
 import {
   deleteBotProfile,
   generatePersona,
-  listSelfNotes,
   exportPromptFile,
   importPromptFile,
-  deleteSelfNote,
-  purgeSelfNotes,
-  type SelfNote,
   getConfig,
   getBotProfileConfig,
   getBotPlatforms,
@@ -2966,73 +2957,6 @@ const mentionUserModeOptions: AppSelectOption[] = [
   { value: "auto", label: "让模型自己决定" }
 ];
 
-
-// ── 自述 ────────────────────────────────────────────────────────────────────
-// 只读加删除。写入只有机器人自己能做，人代笔想加的内容属于品格或人设正文。
-const selfNotes = ref<SelfNote[]>([]);
-const selfNotesBusy = ref(false);
-
-async function reloadSelfNotes(): Promise<void> {
-  if (!form.value?.self_note_enabled) {
-    selfNotes.value = [];
-    return;
-  }
-  selfNotesBusy.value = true;
-  try {
-    selfNotes.value = (await listSelfNotes(form.value?.id ?? "")).notes ?? [];
-  } catch {
-    // 自述读不出来不该挡住整个机器人页：它是旁支信息，配置本身不受影响。
-    selfNotes.value = [];
-  } finally {
-    selfNotesBusy.value = false;
-  }
-}
-
-async function removeSelfNote(id: string): Promise<void> {
-  selfNotesBusy.value = true;
-  try {
-    selfNotes.value = (await deleteSelfNote(form.value?.id ?? "", id)).notes ?? [];
-    toastSuccess("已删除这条自述");
-  } catch (error) {
-    toastError(error instanceof Error ? error.message : "删除失败");
-  } finally {
-    selfNotesBusy.value = false;
-  }
-}
-
-async function clearSelfNotes(): Promise<void> {
-  if (!window.confirm("清空这台机器人写下的全部自述？删掉之后它要重新观察才会再记。")) return;
-  selfNotesBusy.value = true;
-  try {
-    selfNotes.value = (await purgeSelfNotes(form.value?.id ?? "")).notes ?? [];
-    toastSuccess("自述已清空");
-  } catch (error) {
-    toastError(error instanceof Error ? error.message : "清空失败");
-  } finally {
-    selfNotesBusy.value = false;
-  }
-}
-
-// selfNoteSource 说明这条是在哪、谁在场时记下的。自述跨群生效，来源是主人事后
-// 判断「这句话是谁哄着它写的」的唯一线索。
-function selfNoteSource(note: SelfNote): string {
-  const parts: string[] = [];
-  if (note.source_group_id) parts.push(`群 ${note.source_group_id}`);
-  else parts.push("私聊");
-  if (note.source_user_name || note.source_user_id) parts.push(note.source_user_name || note.source_user_id || "");
-  if (note.created_at) parts.push(formatClock(note.created_at));
-  return parts.filter(Boolean).join(" · ");
-}
-
-// 换一台机器人、或者刚打开编辑页时重新拉自述：它按机器人隔离，上一台的列表留在
-// 屏幕上会让人以为这台也写过。
-watch(
-  () => [form.value?.id, form.value?.self_note_enabled] as const,
-  () => {
-    void reloadSelfNotes();
-  },
-  { immediate: true }
-);
 
 function downloadJSONFile(fileName: string, content: string): void {
   const url = URL.createObjectURL(new Blob([content], { type: "application/json" }));
@@ -4529,6 +4453,7 @@ function setForm(config: BotProfileConfig): void {
     cross_platform_memory_enabled: config.cross_platform_memory_enabled ?? false,
     world_book_enabled: config.world_book_enabled ?? true,
     self_note_enabled: config.self_note_enabled ?? false,
+    own_space_enabled: config.own_space_enabled ?? false,
     feed_auto_reply_enabled: config.feed_auto_reply_enabled ?? false,
     mood_enabled: config.mood_enabled ?? false,
     poke_reply_enabled: config.poke_reply_enabled ?? false,

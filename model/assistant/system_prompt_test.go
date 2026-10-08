@@ -46,10 +46,10 @@ func TestDefaultSystemPromptCarriesNoFormattingRules(t *testing.T) {
 	}
 }
 
-// 兜底的 SOUL.md 按 Diana 的写法：讲理由的几章，外加少数硬线。这条测试钉住结构
-// 齐全、长度在写得下理由的区间里，而且没有滑回一句话。
+// 兜底的 SOUL.md 只写她是谁、怎么说话和几条硬线；名字由配置注入，不写进正文。
+// 这条测试钉住结构齐全，长度没有滑回一句话，也没有重新长回讲道理的长文。
 func TestDefaultSystemPromptTeachesHowToSpeak(t *testing.T) {
-	for _, section := range []string{"# Diana", "## 概述", "## 核心价值", "## 真的有用", "## 正派", "的本性", "## 结语"} {
+	for _, section := range []string{"# Diana", "## 基本情况", "## 她是谁", "## 怎么说话", "## 不做的事"} {
 		if !strings.Contains(defaultSystemPrompt, section) {
 			t.Fatalf("default SOUL.md should carry the %q section: %q", section, defaultSystemPrompt)
 		}
@@ -64,8 +64,8 @@ func TestDefaultSystemPromptTeachesHowToSpeak(t *testing.T) {
 			t.Fatalf("default SOUL.md should not hard-code %q", conflict)
 		}
 	}
-	if runes := len([]rune(defaultSystemPrompt)); runes < 1000 || runes > personaPromptMaxRunes {
-		t.Fatalf("default SOUL.md should stay between 1000 and %d runes, got %d", personaPromptMaxRunes, runes)
+	if runes := len([]rune(defaultSystemPrompt)); runes < 500 || runes > 2500 {
+		t.Fatalf("default SOUL.md should stay between 500 and 2500 runes, got %d", runes)
 	}
 }
 

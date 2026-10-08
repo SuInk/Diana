@@ -72,6 +72,16 @@ var promptGroupOwnerDistinctionSpec = registerPrompt(PromptSpec{
 	Default: promptGroupOwnerDistinction,
 })
 
+// 名字取机器人配置上的「名称」，内置人设不再各写一遍，改了名字人设跟着变。
+var promptBotNameSpec = registerPrompt(PromptSpec{
+	Key:     "reply.bot_name",
+	Group:   PromptGroupReplyRules,
+	Title:   "机器人名字",
+	Usage:   "机器人配置填了名称时紧跟在人设后面注入，告诉模型自己叫什么。",
+	Default: "你的名字是「{name}」。",
+	Vars:    []PromptVar{{Name: "name", Description: "机器人配置里的名称"}},
+})
+
 // 别名列表夹在两句中间，合成一段模板，管理员看到的是完整的一句话。
 var promptAliasSpec = registerPrompt(PromptSpec{
 	Key:     "reply.aliases",

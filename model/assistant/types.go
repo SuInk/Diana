@@ -843,6 +843,10 @@ type BotConfig struct {
 	// 让机器人改写关于自己的描述是行为变化，不该在升级后突然发生。开着时它写的
 	// 条目只进提示词尾部的自述层，改不动人设正文，也改不动任何权限。
 	SelfNoteEnabled *bool `json:"self_note_enabled,omitempty"`
+	// OwnSpaceEnabled 控制这台机器人有没有「小窝」：零花钱钱包、愿望单和房间。
+	// 默认关闭，理由同自述——升级后她不该突然多出一个会花钱的账本。全是虚拟
+	// 账本，不接任何真实支付；设计见 docs/wallet.md。
+	OwnSpaceEnabled *bool `json:"own_space_enabled,omitempty"`
 	// FeedAutoReplyEnabled 控制主人在动态页评论后，机器人要不要自动回一句。默认关闭：
 	// 每条评论都会触发一次模型调用，升级后不该突然开始花钱。回复不带工具，只是照
 	// 人设写一两句话存进评论串；另有每天条数上限和单条动态的冷却。
@@ -1393,6 +1397,7 @@ type ConfigPayload struct {
 	CrossPlatformMemoryEnabled      *bool                     `json:"cross_platform_memory_enabled,omitempty"`
 	WorldBookEnabled                *bool                     `json:"world_book_enabled,omitempty"`
 	SelfNoteEnabled                 *bool                     `json:"self_note_enabled,omitempty"`
+	OwnSpaceEnabled                 *bool                     `json:"own_space_enabled,omitempty"`
 	FeedAutoReplyEnabled            *bool                     `json:"feed_auto_reply_enabled,omitempty"`
 	MoodEnabled                     *bool                     `json:"mood_enabled,omitempty"`
 	PokeReplyEnabled                *bool                     `json:"poke_reply_enabled,omitempty"`
@@ -2066,6 +2071,7 @@ func DefaultBotConfig() BotConfig {
 		CrossPlatformMemoryEnabled:  boolPointer(false),
 		WorldBookEnabled:            boolPointer(true),
 		SelfNoteEnabled:             boolPointer(false),
+		OwnSpaceEnabled:             boolPointer(false),
 		FeedAutoReplyEnabled:        boolPointer(false),
 		MoodEnabled:                 boolPointer(false),
 		PokeReplyEnabled:            boolPointer(false),
@@ -2324,6 +2330,9 @@ func (cfg BotConfig) WithDefaults() BotConfig {
 	}
 	if cfg.SelfNoteEnabled == nil {
 		cfg.SelfNoteEnabled = boolPointer(false)
+	}
+	if cfg.OwnSpaceEnabled == nil {
+		cfg.OwnSpaceEnabled = boolPointer(false)
 	}
 	if cfg.FeedAutoReplyEnabled == nil {
 		cfg.FeedAutoReplyEnabled = boolPointer(false)
@@ -2712,6 +2721,7 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		CrossPlatformMemoryEnabled:        copyBoolPointer(cfg.CrossPlatformMemoryEnabled),
 		WorldBookEnabled:                  copyBoolPointer(cfg.WorldBookEnabled),
 		SelfNoteEnabled:                   copyBoolPointer(cfg.SelfNoteEnabled),
+		OwnSpaceEnabled:                   copyBoolPointer(cfg.OwnSpaceEnabled),
 		FeedAutoReplyEnabled:              copyBoolPointer(cfg.FeedAutoReplyEnabled),
 		MoodEnabled:                       copyBoolPointer(cfg.MoodEnabled),
 		PokeReplyEnabled:                  copyBoolPointer(cfg.PokeReplyEnabled),
@@ -2954,6 +2964,7 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		CrossPlatformMemoryEnabled:      copyBoolPointer(payload.CrossPlatformMemoryEnabled),
 		WorldBookEnabled:                copyBoolPointer(payload.WorldBookEnabled),
 		SelfNoteEnabled:                 copyBoolPointer(payload.SelfNoteEnabled),
+		OwnSpaceEnabled:                 copyBoolPointer(payload.OwnSpaceEnabled),
 		FeedAutoReplyEnabled:            copyBoolPointer(payload.FeedAutoReplyEnabled),
 		MoodEnabled:                     copyBoolPointer(payload.MoodEnabled),
 		PokeReplyEnabled:                copyBoolPointer(payload.PokeReplyEnabled),
