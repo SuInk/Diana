@@ -4,30 +4,34 @@
 package assistant
 
 import (
+	"context"
 	"fmt"
 	"strings"
-	"time"
+	"sync"
 
 	"github.com/SuInk/diana/model/agent"
+	"github.com/SuInk/diana/model/llm"
 )
 
 // 下一轮的上下文里只有机器人上一条回复的正文，看不到它当时调用过哪些工具。线上 09-15：
 // 群友问 iOS 更新的 iCloud 协议，机器人 20:06 确实调了 web_search，回复开头还写着「这次
 // 我老老实实联网搜过了」；20:21 被追问「搜索了吗」，它顺着回答「没搜，凭记忆答的」。
-// 这里把每轮实际调用过的工具和关键参数记下来，下一轮作为运行时事实注入。
+//
+// 起初把调用记录放在内存里按会话注入，10-06 又出了同样的事：16:01 搜过，16:04 进程重启，
+// 16:05 被问「你搜索了吗」时记录已经没了。所以现在把记录挂在回复本身上——随出站消息
+// 落库，渲染历史时紧跟在那条回复后面。重启不丢，也不会被同群别人的调用挤掉，回复
+// 滚出历史窗口时记录一起走。
 const (
-	recentToolCallLimit = 8
-	recentToolCallTTL   = 30 * time.Minute
-	toolCallContextHint = "【你前几轮实际调用过的工具，运行时记录，按时间倒序】\n" +
-		"有人问「搜了吗」「查过没」「用工具了吗」时照这份记录如实回答：记录里有就说查过、查的是什么；" +
-		"记录里没有才说没查。不要因为对方质疑就改口认错，也不要声称调用过记录里没有的工具。没人问时不要主动复述这份记录。\n"
+	replyToolTraceLimit      = 8
+	replyToolTraceNotePrefix = "【运行时记录，不是你说过的话】你发上面这条回复前实际调用过："
+	replyToolTraceNoteSuffix = "有人问「搜了吗」「查过没」时照这份记录如实回答，不要因为对方质疑就改口说没查，也不要声称调用过记录里没有的工具；没人问时不要复述。"
 )
 
-type toolCallRecord struct {
-	Tool    string
-	Summary string
-	Failed  bool
-	At      time.Time
+// ReplyToolCall 是一条回复发出前实际执行过的工具调用，随出站消息落库。
+type ReplyToolCall struct {
+	Tool    string `json:"tool"`
+	Summary string `json:"summary,omitempty"`
+	Failed  bool   `json:"failed,omitempty"`
 }
 
 // toolCallMemoryIgnored 是不值得记的内部工具：它们不是「去查了什么」。
@@ -37,94 +41,98 @@ var toolCallMemoryIgnored = map[string]bool{
 	"tools_execute":  true,
 }
 
-// rememberToolCalls 记下本轮实际执行过的工具调用，跳过的调用不算。
-func (r *Runtime) rememberToolCalls(event MessageEvent, steps []agent.Step) {
-	if r == nil || len(steps) == 0 {
+// replyToolTrace 在一次回复生成期间收集工具调用，交给随后发出的第一条消息。
+type replyToolTrace struct {
+	mu    sync.Mutex
+	calls []ReplyToolCall
+}
+
+type replyToolTraceKey struct{}
+
+func withReplyToolTrace(ctx context.Context) context.Context {
+	return context.WithValue(ctx, replyToolTraceKey{}, &replyToolTrace{})
+}
+
+func replyToolTraceFromContext(ctx context.Context) *replyToolTrace {
+	if ctx == nil {
+		return nil
+	}
+	trace, _ := ctx.Value(replyToolTraceKey{}).(*replyToolTrace)
+	return trace
+}
+
+// add 记下实际执行过的工具调用，跳过的调用不算。生成失败重来时两次的调用都是真的，所以累加。
+func (t *replyToolTrace) add(steps []agent.Step) {
+	if t == nil {
 		return
 	}
-	now := r.clock()
-	fresh := make([]toolCallRecord, 0, len(steps))
-	for index := len(steps) - 1; index >= 0; index-- {
-		step := steps[index]
+	calls := replyToolCalls(steps)
+	if len(calls) == 0 {
+		return
+	}
+	t.mu.Lock()
+	t.calls = append(t.calls, calls...)
+	t.mu.Unlock()
+}
+
+// take 取走记录：一轮拆成多条发送时只挂在第一条上。
+func (t *replyToolTrace) take() []ReplyToolCall {
+	if t == nil {
+		return nil
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	calls := t.calls
+	t.calls = nil
+	if len(calls) > replyToolTraceLimit {
+		calls = calls[len(calls)-replyToolTraceLimit:]
+	}
+	return calls
+}
+
+func replyToolCalls(steps []agent.Step) []ReplyToolCall {
+	calls := make([]ReplyToolCall, 0, len(steps))
+	for _, step := range steps {
 		tool := strings.TrimSpace(step.Tool)
 		if tool == "" || step.Skipped || toolCallMemoryIgnored[tool] {
 			continue
 		}
-		fresh = append(fresh, toolCallRecord{
+		calls = append(calls, ReplyToolCall{
 			Tool:    tool,
 			Summary: toolCallInputSummary(step.Input),
 			Failed:  strings.TrimSpace(step.Error) != "",
-			At:      now,
 		})
 	}
-	if len(fresh) == 0 {
-		return
-	}
-	session := sessionKey(event)
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.recentToolCalls == nil {
-		r.recentToolCalls = map[string][]toolCallRecord{}
-	}
-	r.recentToolCalls[session] = pruneToolCallRecords(append(fresh, r.recentToolCalls[session]...), now)
+	return calls
 }
 
-// toolCallContext 生成注入下一轮的工具调用记录；没有记录时返回空串。
-func (r *Runtime) toolCallContext(event MessageEvent) string {
-	if r == nil {
-		return ""
+// replyToolTraceNote 是渲染在机器人回复后面的那条记录；没有调用时返回 false。
+func replyToolTraceNote(calls []ReplyToolCall) (llm.Message, bool) {
+	if len(calls) == 0 {
+		return llm.Message{}, false
 	}
-	session := sessionKey(event)
-	now := r.clock()
-	r.mu.Lock()
-	records := pruneToolCallRecords(r.recentToolCalls[session], now)
-	if len(records) == 0 {
-		delete(r.recentToolCalls, session)
-	} else if r.recentToolCalls != nil {
-		r.recentToolCalls[session] = records
-	}
-	r.mu.Unlock()
-	if len(records) == 0 {
-		return ""
-	}
-	var builder strings.Builder
-	builder.WriteString(toolCallContextHint)
-	for _, record := range records {
-		builder.WriteString("- ")
-		builder.WriteString(record.At.Format("15:04"))
-		builder.WriteString(" ")
-		builder.WriteString(record.Tool)
-		if record.Summary != "" {
-			builder.WriteString("「")
-			builder.WriteString(record.Summary)
-			builder.WriteString("」")
+	items := make([]string, 0, len(calls))
+	for _, call := range calls {
+		item := call.Tool
+		if call.Summary != "" {
+			item += "「" + call.Summary + "」"
 		}
-		if record.Failed {
-			builder.WriteString("（调用失败）")
+		if call.Failed {
+			item += "（调用失败）"
 		}
-		builder.WriteString("\n")
+		items = append(items, item)
 	}
-	return strings.TrimRight(builder.String(), "\n")
-}
-
-func pruneToolCallRecords(records []toolCallRecord, now time.Time) []toolCallRecord {
-	out := make([]toolCallRecord, 0, min(len(records), recentToolCallLimit))
-	for _, record := range records {
-		if !record.At.IsZero() && now.Sub(record.At) > recentToolCallTTL {
-			continue
-		}
-		out = append(out, record)
-		if len(out) >= recentToolCallLimit {
-			break
-		}
-	}
-	return out
+	return llm.Message{
+		Role:     llm.RoleUser,
+		Content:  replyToolTraceNotePrefix + strings.Join(items, "；") + "。" + replyToolTraceNoteSuffix,
+		Priority: llm.MessagePriorityHistory,
+	}, true
 }
 
 // toolCallInputSummary 只取能说明「查了什么」的那几个参数，不把整份入参塞进上下文。
 func toolCallInputSummary(input map[string]any) string {
 	parts := make([]string, 0, 3)
-	for _, key := range []string{"query", "url", "action", "operation", "message_ids", "keyword", "user_id"} {
+	for _, key := range []string{"query", "queries", "url", "action", "operation", "message_ids", "keyword", "user_id"} {
 		value, ok := input[key]
 		if !ok {
 			continue
@@ -151,6 +159,8 @@ func toolCallInputValue(value any) string {
 			items = append(items, fmt.Sprint(item))
 		}
 		return strings.Join(items, ",")
+	case []string:
+		return strings.Join(typed, ",")
 	case nil:
 		return ""
 	default:

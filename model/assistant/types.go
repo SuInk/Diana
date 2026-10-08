@@ -229,6 +229,9 @@ type MessageEvent struct {
 	// SemanticSourceMessageIDs preserves every historical source selected for a
 	// cross-message reference, in the order the model should consume them.
 	SemanticSourceMessageIDs []string `json:"semantic_source_message_ids,omitempty"`
+	// ToolCalls 只在机器人自己的回复上有值：发这条之前实际调用过的工具，渲染历史时
+	// 紧跟在回复后面，见 tool_call_memory.go。
+	ToolCalls []ReplyToolCall `json:"tool_calls,omitempty"`
 	// botReply is an in-memory compatibility marker for assistant history entries.
 	// Persisted outgoing events still use the regular message fields above.
 	botReply      string
