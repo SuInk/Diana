@@ -4735,6 +4735,9 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 			BrowserToolsDisabled:       r.browserToolsDisabledFor(cfg),
 			CoreTools:                  replyAgentCoreTools,
 		}
+		if event.Kind == EventKindGroup {
+			agentCfg.ToolResultReminder = cfg.PromptOverrides.text(promptReplyToolResultBrevitySpec)
+		}
 		agentCfg = restrictAgentConfigForMode(cfg, withOwnerAgentLimits(agentCfg, relationship.Owner))
 		registry := preparedRegistry
 		ownsRegistry := false

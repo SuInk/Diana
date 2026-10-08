@@ -196,4 +196,12 @@ const defaultForwardReplyThreshold = 240
 
 const replyDepthClosingAnchor = "输出前只检查这次究竟问了什么：没有明确要详细说明时，先用一小段给核心答案，通常一两句话，不加攻略式标题、备选方案、小提醒或收尾邀请；多天行程先只说每天的主要安排，不自动细分到每个时段。问如何检查就回答检查，不自作主张补上修改或删除操作。明确要求详细步骤、完整攻略或对比时才展开，仍须覆盖已经给出的条件和必要风险。答案足够回应这一问就停，不为了展示懂得多而补充。"
 
+// replyToolResultBrevityRule 只在群聊、工具跑完后的那一步规划末尾临时带上。原有的篇幅规则
+// 和收尾提醒排在工具结果前面，模型拿到搜索、能力检索的结果后照单全收：线上 TG 群带工具的
+// 回复中位 114 字，不带工具 54 字。生产 gemini 回放 15 条，中位 116→75 字，盲评漏答 0 对 5。
+// 不要加「没查到就如实说」之类的话：gemini 会把它当成还得再查一次，多跑一步工具。
+const replyToolResultBrevityRule = "【写最终回复前】上面的工具结果只是素材，不是要转述的内容。只写回答这一问真正需要的那一两点：不复述查到的背景、来历、备选方案和注意事项；对方没要详细就不分条列点，也不加收尾的俏皮话或邀请。群聊里通常一两句、几十个字就够。"
+
+var promptReplyToolResultBrevitySpec = styleSpec("tool_result_brevity", "工具结果后：只挑要点", "群聊里工具跑完后的那一步临时接在请求末尾，不进上下文：工具结果只是素材，只写这一问需要的一两点。", replyToolResultBrevityRule)
+
 var promptReplyDepthAnchorSpec = styleSpec("depth_anchor", "收尾：只答问到的", "每轮放在尾部最后、紧跟人设收尾提醒：输出前检查这次究竟问了什么，别展开成攻略。", replyDepthClosingAnchor)

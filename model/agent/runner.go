@@ -268,7 +268,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 		definitions := r.turnDefinitions(imageTaskQueued)
 		markLoopCacheBreakpoint(messages, stableCacheIndex)
 		modelStartedAt := time.Now()
-		planningRequest := llm.GenerateRequest{Messages: messages, Tools: definitions}
+		planningRequest := llm.GenerateRequest{Messages: withToolResultReminder(messages, r.cfg.ToolResultReminder), Tools: definitions}
 		resp, interjected, err := generateWithInterjections(planningCtx, req.Interjections, func(ctx context.Context) (*llm.GenerateResponse, error) {
 			return r.client.Generate(ctx, planningRequest)
 		})
@@ -1560,6 +1560,22 @@ func appendToolRepair(messages []llm.Message, resp *llm.GenerateResponse, text, 
 	messages = append(messages, llm.Message{Role: llm.RoleAssistant, Content: text, ToolCalls: resp.ToolCalls, ResponsesOutput: resp.ResponsesOutput, ContinuationScope: resp.ContinuationScope, AnthropicThinking: resp.AnthropicThinking, ReasoningContent: resp.ReasoningContent})
 	for _, call := range resp.ToolCalls {
 		messages = append(messages, llm.Message{Role: llm.RoleTool, ToolName: call.Name, ToolCallID: call.ID, ToolError: true, Content: "本次调用未执行：" + reason})
+	}
+	return messages
+}
+
+// withToolResultReminder 在上一步刚执行过工具时把提醒接在请求末尾，返回新切片，不改动 messages。
+func withToolResultReminder(messages []llm.Message, reminder string) []llm.Message {
+	if strings.TrimSpace(reminder) == "" {
+		return messages
+	}
+	for i := len(messages) - 1; i >= 0; i-- {
+		switch messages[i].Role {
+		case llm.RoleTool:
+			return append(messages[:len(messages):len(messages)], llm.Message{Role: llm.RoleUser, Content: reminder})
+		case llm.RoleAssistant:
+			return messages
+		}
 	}
 	return messages
 }
