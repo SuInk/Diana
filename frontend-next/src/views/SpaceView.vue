@@ -212,6 +212,10 @@ watch(botScope, () => {
   border-top: 1px solid var(--border, rgba(0, 0, 0, 0.08));
 }
 
+.space-ledger li:first-child {
+  border-top: none;
+}
+
 .space-ledger-main {
   display: grid;
   gap: 2px;

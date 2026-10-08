@@ -40,14 +40,13 @@
 
     <section v-else class="card">
       <div class="card-body">
-        <ul class="self-note-list">
-          <li v-for="note in notes" :key="note.id" class="self-note-item">
-            <div class="self-note-main">
-              <span class="self-note-topic">{{ note.topic }}</span>
-              <span class="self-note-content">{{ note.content }}</span>
+        <ul class="self-note-rows">
+          <li v-for="note in notes" :key="note.id">
+            <div class="self-note-row-main">
+              <span>{{ note.content }}</span>
+              <span class="muted">{{ note.topic }} · {{ source(note) }}</span>
             </div>
-            <small class="muted self-note-source">{{ source(note) }}</small>
-            <button class="btn small danger" type="button" :disabled="busy" aria-label="删除这条自述" @click="remove(note.id)">
+            <button class="btn small ghost" type="button" :disabled="busy" aria-label="删除这条自述" @click="remove(note.id)">
               <X :size="14" aria-hidden="true" />
             </button>
           </li>
@@ -123,5 +122,37 @@ watch(botScope, () => void reload());
   flex-wrap: wrap;
   align-items: center;
   gap: 8px 12px;
+}
+
+/* 和钱包档的账目同一种行：正文在上，类别和来源一行小字在下，分隔线隔开。 */
+.self-note-rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+}
+
+.self-note-rows li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 0;
+  border-top: 1px solid var(--border, rgba(0, 0, 0, 0.08));
+}
+
+.self-note-rows li:first-child,
+.self-note-rows li:first-child {
+  border-top: none;
+}
+
+.self-note-row-main {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.self-note-row-main .muted {
+  font-size: 12px;
 }
 </style>
