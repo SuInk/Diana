@@ -80,12 +80,12 @@
         v-for="plugin in visiblePlugins"
         :key="plugin.manifest.id"
         class="plugin-card"
-        :class="{ off: plugin.manifest.id !== 'official.web-search' && plugin.installed && !pluginEnabled(plugin), uninstalled: !plugin.installed }"
+        :class="{ off: plugin.installed && !pluginEnabled(plugin), uninstalled: !plugin.installed }"
       >
         <div class="plugin-card-head">
           <h2 class="plugin-card-name">{{ pluginDisplayName(plugin) }}</h2>
           <label
-            v-if="plugin.installed && (botScope || plugin.profile_count) && plugin.manifest.id !== 'official.web-search'"
+            v-if="plugin.installed && (botScope || plugin.profile_count)"
             class="switch"
             :title="pluginSwitchTitle(plugin)"
           >
@@ -100,7 +100,6 @@
         </div>
 
         <div class="cluster plugin-card-badges">
-          <span v-if="plugin.manifest.id === 'official.web-search'" class="badge accent">统一配置</span>
           <span v-if="pluginPartial(plugin)" class="badge" title="各台机器人单独设过，开关不一致">{{ plugin.enabled_profiles }}/{{ plugin.profile_count }} 台启用</span>
           <!-- 官方 + 内置目前是全部插件的共同属性，逐张重复没有信息量；
                只在例外时标注，第三方插件出现后这里才会有内容。 -->
@@ -191,7 +190,7 @@
                 @click="openSettings(plugin)"
               >
                 <SlidersHorizontal :size="14" aria-hidden="true" />
-                {{ plugin.manifest.id === 'official.web-search' ? '配置搜索' : '设置' }}
+                设置
               </button>
               <!-- 更新与安装同一套确认流程：重新预览权限、重新勾风险，不静默升级 -->
               <button
@@ -787,6 +786,7 @@ import { botScope } from "../bot-scope";
 import { extensionLayout, setExtensionLayout } from "../extension-layout";
 import { pluginForBot } from "../plugin-settings";
 
+const webSearchPluginID = "official.web-search";
 const plugins = ref<PluginState[]>([]);
 const loading = ref(true);
 const loadError = ref("");
@@ -1165,7 +1165,8 @@ async function reload(): Promise<void> {
   try {
     const states = await listPlugins();
     if (requestID !== reloadID || scope !== botScope.value) return;
-    plugins.value = states.map(plugin => pluginForBot(plugin, scope));
+    // 联网搜索的开关和参数在机器人配置里、来源在提供商页，不再作为插件列出。
+    plugins.value = states.filter(plugin => plugin.manifest.id !== webSearchPluginID).map(plugin => pluginForBot(plugin, scope));
     const requestedSettings = viewQuery().get("settings");
     if (!settingsTarget.value && requestedSettings) {
       const target = plugins.value.find((plugin) => plugin.manifest.id === requestedSettings && plugin.installed);
@@ -1353,10 +1354,6 @@ async function confirmRepoInstall(): Promise<void> {
 }
 
 function openSettings(plugin: PluginState): void {
-  if (plugin.manifest.id === 'official.web-search') {
-    navigate('provider', { section: 'search' });
-    return;
-  }
   if (plugin.manifest.id === repositoryPublishPluginID) {
     plugin = plugins.value.find((candidate) => candidate.manifest.id === repositoryWatchPluginID) ?? plugin;
   }

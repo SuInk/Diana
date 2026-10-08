@@ -659,7 +659,7 @@
               <div class="group-plugin-row-head">
                 <div class="row-main">
                   <div class="row-title">{{ plugin.manifest.name }}</div>
-                  <div class="row-sub">{{ plugin.manifest.id === 'official.web-search' ? '来源与启用状态沿用机器人配置' : `全局：${plugin.enabled ? '已启用' : '已停用'}` }}</div>
+                  <div class="row-sub">全局：{{ plugin.enabled ? '已启用' : '已停用' }}</div>
                 </div>
                 <div class="segmented">
                   <button type="button" :class="{ active: overrideOf(plugin.manifest.id) === undefined }" @click="setOverride(plugin.manifest.id, undefined)">
@@ -825,6 +825,7 @@ async function removeGroup(): Promise<void> {
 }
 // 群等级只有 OneBot v11 有；按当前激活的机器人平台决定要不要显示这一项。
 const supportsGroupLevel = ref(true);
+const webSearchPluginID = "official.web-search";
 const plugins = ref<PluginState[]>([]);
 const extensions = ref<ManagedExtension[]>([]);
 const extensionTiers = [
@@ -1141,7 +1142,7 @@ function overrideCount(group: BotGroupConfig): number {
   return new Set([
     ...Object.keys(group.plugin_overrides ?? {}),
     ...Object.keys(group.plugin_setting_overrides ?? {})
-  ]).size;
+  ].filter(id => id !== webSearchPluginID)).size;
 }
 
 function blockedUserCount(group: BotGroupConfig): number {
@@ -1175,7 +1176,8 @@ async function load(showFeedback = false): Promise<void> {
     ]);
     groups.value = response.groups;
     personaLibrary.value = personaList?.personas ?? [];
-    plugins.value = response.plugins;
+    // 联网搜索只在机器人配置里设，群里不再单独覆盖。
+    plugins.value = response.plugins.filter(plugin => plugin.manifest.id !== webSearchPluginID);
     extensions.value = extensionList?.items ?? [];
     liveAvailable.value = response.live_available;
     syncWarning.value = response.warning ?? "";
@@ -1282,6 +1284,9 @@ function openEditor(group: BotGroupConfig, groupName = ""): void {
   const config = JSON.parse(JSON.stringify(groupConfigOf(group))) as BotGroupConfig;
   if (!config.participation && groupReplyDesireValue(config)) config.participation = participationFromConfig(config);
   config.plugin_setting_overrides ??= {};
+  // 旧版存过的群级联网搜索覆盖已不生效，打开编辑时顺手清掉，保存后就不留存档。
+  if (config.plugin_overrides) delete config.plugin_overrides[webSearchPluginID];
+  delete config.plugin_setting_overrides[webSearchPluginID];
   config.response_mode ??= "";
   withUnsetSendRetryCleared(config);
   editing.value = config;

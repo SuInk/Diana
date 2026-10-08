@@ -230,21 +230,27 @@ func TestWebSearchAssignmentRoundTripAndOldClients(t *testing.T) {
 	}
 }
 
-func TestSearchCatalogCannotBeOverriddenByGroupSettings(t *testing.T) {
+func TestWebSearchIgnoresGroupOverrides(t *testing.T) {
 	manager := NewDefaultPluginManager()
 	overrides := PluginSettingOverrides{webSearchPluginID: {searchProvidersSetting: `[{"id":"injected","api_key":"secret"}]`, searchProviderOrderSetting: `["injected"]`, webSearchSettingMaxResults: 3}}
-	if _, err := manager.ValidateGroupSettingOverrides(overrides); err == nil {
-		t.Fatal("group catalog override accepted")
+	validated, err := manager.ValidateGroupSettingOverrides(overrides)
+	if err != nil || validated[webSearchPluginID] != nil {
+		t.Fatalf("group search override kept: %v %v", validated, err)
 	}
-	sanitized := manager.SanitizeGroupSettingOverrides(overrides)
-	if _, ok := sanitized[webSearchPluginID][searchProvidersSetting]; ok {
-		t.Fatal("catalog exposed in group settings")
+	if manager.SanitizeGroupSettingOverrides(overrides)[webSearchPluginID] != nil {
+		t.Fatal("group search override exposed")
 	}
-	if _, ok := sanitized[webSearchPluginID][searchProviderOrderSetting]; ok {
-		t.Fatal("route exposed in group settings")
+	cfg := DefaultBotConfig()
+	cfg.ID = "bot"
+	cfg.WebSearch = &WebSearchAssignment{ProviderIDs: []string{"exa"}}
+	runtime := NewRuntime(cfg, nil, manager, nil, nil, nil, nil)
+	runtime.SetGroupConfigStore(&stubGroupConfigStore{configs: map[string]GroupConfig{"10001": {GroupID: "10001", PluginOverrides: map[string]bool{webSearchPluginID: false}, PluginSettingOverrides: overrides}}})
+	event := MessageEvent{ProfileID: cfg.ID, Kind: EventKindGroup, GroupID: "10001"}
+	if !runtime.pluginOverridesForEvent(event)[webSearchPluginID] {
+		t.Fatal("legacy group switch still disables search")
 	}
-	if SettingValues(sanitized[webSearchPluginID]).Int(webSearchSettingMaxResults, 0) != 3 {
-		t.Fatal("legitimate group option lost")
+	if _, ok := runtime.pluginSettingOverridesForEvent(event)[webSearchPluginID][webSearchSettingMaxResults]; ok {
+		t.Fatal("legacy group settings still applied")
 	}
 }
 

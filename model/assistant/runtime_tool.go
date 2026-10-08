@@ -60,7 +60,8 @@ func (r *Runtime) pluginOverridesForEvent(event MessageEvent) map[string]bool {
 	}
 	for id, enabled := range groupCfg.PluginOverrides {
 		id = strings.TrimSpace(id)
-		if id == "" {
+		// 联网搜索只按机器人配置，群里存过的旧开关不再生效。
+		if id == "" || id == webSearchPluginID {
 			continue
 		}
 		out[id] = enabled
@@ -103,7 +104,7 @@ func (r *Runtime) pluginSettingOverridesForEvent(event MessageEvent) PluginSetti
 	}
 	for id, values := range groupCfg.PluginSettingOverrides {
 		id = strings.TrimSpace(id)
-		if id == "" || id == pluginSettingsProfileKey || len(values) == 0 {
+		if id == "" || id == pluginSettingsProfileKey || id == webSearchPluginID || len(values) == 0 {
 			continue
 		}
 		copied := clonePluginValues(out[id])

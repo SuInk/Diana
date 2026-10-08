@@ -90,7 +90,7 @@
           <span v-else class="group-plugin-setting-inherited">全局：{{ displayValue(spec) }}</span>
         </div>
       </div>
-      <p v-if="hasSecrets" class="group-plugin-secret-note">{{ plugin.manifest.id === 'official.web-search' ? '搜索地址与凭据在「提供商」页统一管理，来源沿用机器人配置。' : '凭据类参数沿用全局插件设置。' }}</p>
+      <p v-if="hasSecrets" class="group-plugin-secret-note">凭据类参数沿用全局插件设置。</p>
       <p v-if="hasGlobalOnly" class="group-plugin-secret-note">地址、端口这类程序级参数只能在插件页全局设置，不能按群覆盖。</p>
     </div>
   </div>
@@ -110,7 +110,7 @@ const props = defineProps<{
 }>();
 const emit = defineEmits<{ "update:modelValue": [Record<string, unknown>] }>();
 
-const settings = computed(() => (props.plugin.manifest.settings ?? []).filter((spec) => !spec.secret && !spec.global_only && (props.plugin.manifest.id !== 'official.web-search' || ['max_results', 'provider_timeout_seconds', 'total_timeout_seconds', 'claim_source_recall', 'reply_link_policy'].includes(spec.key))));
+const settings = computed(() => (props.plugin.manifest.settings ?? []).filter((spec) => !spec.secret && !spec.global_only));
 const hasSecrets = computed(() => (props.plugin.manifest.settings ?? []).some((spec) => spec.secret));
 const hasGlobalOnly = computed(() => (props.plugin.manifest.settings ?? []).some((spec) => spec.global_only));
 const overrideCount = computed(() => Object.keys(props.modelValue ?? {}).length);

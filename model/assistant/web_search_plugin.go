@@ -13,6 +13,10 @@ import (
 	"github.com/SuInk/diana/model/agent"
 )
 
+// WebSearchPluginID 是联网搜索的存储载体：提供商、凭据和路由仍存在它的设置里，
+// 但它不再出现在插件页，开关由机器人配置的 WebSearchAssignment 决定。
+const WebSearchPluginID = webSearchPluginID
+
 const (
 	webSearchPluginID = "official.web-search"
 
@@ -57,8 +61,8 @@ func (p *WebSearchPlugin) Manifest() PluginManifest {
 	return PluginManifest{
 		ID:          webSearchPluginID,
 		Name:        "联网搜索",
-		Version:     "0.3.5",
-		Description: "为对话提供可并行查询的实时网页搜索。来源与凭据在提供商页管理，机器人可选择首选和后备来源。默认用沙盒浏览器打开搜索引擎，返回标题、摘要和链接，由模型选择原文继续调研；也支持显式配置搜索 API。关闭本插件时，只要网页渲染插件开着，仍按搜索引擎方式提供搜索；要彻底不联网搜索，两个都关掉。",
+		Version:     "0.3.6",
+		Description: "为对话提供可并行查询的实时网页搜索。来源与凭据在提供商页管理，开关、首选与后备来源、结果上限和链接策略在机器人配置的联网搜索里设置。",
 		Official:    true,
 		BuiltIn:     true,
 		Permissions: []string{"network:http", "llm:tool"},
