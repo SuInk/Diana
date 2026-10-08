@@ -248,6 +248,7 @@ const viewComponents: Record<ViewID, Component> = {
   notebook: MemoryView,
   feed: OwnSpaceView,
   space: OwnSpaceView,
+  "self-notes": OwnSpaceView,
   browser: BrowserBoxView,
   workspace: WorkspaceView,
   logs: RecordsView,
@@ -346,6 +347,7 @@ const viewTitles: Record<ViewID, string> = {
   notebook: "记忆",
   feed: "动态",
   space: "小窝",
+  "self-notes": "自述",
   logs: "运行记录",
   favorability: "运行记录",
   settings: "设置"

@@ -16,6 +16,7 @@ export type ViewID =
   | "notebook"
   | "feed"
   | "space"
+  | "self-notes"
   | "plugins"
   | "browser"
   | "workspace"
@@ -59,7 +60,7 @@ export const navItems: NavItem[] = [
   { id: "groups", label: "群管理", hint: "群管理员自助配置", group: "setup" },
   { id: "admin-chat", label: "管理对话", hint: "安装扩展与排查问题", group: "operate" },
   { id: "users", label: "记忆", hint: "机器人记住的人和事", group: "operate", covers: ["notebook"] },
-  { id: "space", label: "小窝", hint: "她自己的空间：零花钱、动态和日记", group: "operate", covers: ["feed"] },
+  { id: "space", label: "小窝", hint: "她自己的空间：零花钱、自述、动态和日记", group: "operate", covers: ["self-notes", "feed"] },
   { id: "tasks", label: "任务", hint: "提醒、周期查询与仓库订阅", group: "operate" },
   { id: "browser", label: "浏览器", hint: "Diana 内置浏览器：看画面、自己上手", group: "operate" },
   { id: "workspace", label: "文件", hint: "Agent 工作区里的文件：按分区浏览、预览、下载与删除", group: "operate" },
@@ -92,7 +93,7 @@ export function navSections(): { group?: NavGroup; items: NavItem[] }[] {
   return sections;
 }
 
-const validViews = new Set<ViewID>(["dashboard", "admin-chat", "events", "tasks", "setup", "provider", "bot", "groups", "users", "notebook", "feed", "space", "plugins", "browser", "workspace", "logs", "favorability", "settings"]);
+const validViews = new Set<ViewID>(["dashboard", "admin-chat", "events", "tasks", "setup", "provider", "bot", "groups", "users", "notebook", "feed", "space", "self-notes", "plugins", "browser", "workspace", "logs", "favorability", "settings"]);
 
 // 首页：地址栏里是根路径，也是所有认不出来的地址的落点。
 const homeView: ViewID = "dashboard";

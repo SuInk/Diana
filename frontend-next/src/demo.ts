@@ -809,6 +809,11 @@ function demoLatency() {
   };
 }
 
+const demoSelfNotes: import("./api").SelfNote[] = [
+  { id: "sn1", topic: "说话方式", content: "我老把话说太长，先给结论再补理由", source_group_id: "10001", source_user_name: "阿狸", version: 1, status: "active", created_at: new Date(Date.now() - 9 * 86_400_000).toISOString(), updated_at: new Date(Date.now() - 9 * 86_400_000).toISOString() },
+  { id: "sn2", topic: "喜好", content: "聊到画集和手账就会停不下来", source_user_name: "主人", version: 1, status: "active", created_at: new Date(Date.now() - 3 * 86_400_000).toISOString(), updated_at: new Date(Date.now() - 3 * 86_400_000).toISOString() }
+];
+
 const demoWallet: import("./api").OwnSpace["wallet"] = {
   balance_cents: 6_100,
   recent: [
@@ -2072,6 +2077,12 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
     return json({ error: "演示模式不写入笔记本；正式部署里这里会新增、修订或作废笔记。" }, 403);
   }
 
+  if (path === "/api/assistant/self-notes" && method === "GET") {
+    return json({ enabled: true, notes: demoSelfNotes });
+  }
+  if (path.startsWith("/api/assistant/self-notes/") && method !== "GET") {
+    return json({ error: "演示模式不删除自述；正式部署里这里会删掉一条或清空全部。" }, 403);
+  }
   if (path === "/api/assistant/own-space" && method === "GET") {
     return json({ enabled: true, wallet: demoWallet });
   }
