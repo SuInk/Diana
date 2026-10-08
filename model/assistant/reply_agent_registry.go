@@ -198,6 +198,11 @@ func (r *Runtime) newReplyAgentRegistry(ctx context.Context, cfg BotConfig, even
 		); subscription != nil {
 			extraTools = append(extraTools, subscription)
 		}
+		// 装包只挂给主人：它会从 npm 注册表拉代码进工作区。安全模式下不构造，
+		// 没开文件写入时装了也写不出脚本来用，一并不挂。
+		if relationship.Owner && !cfg.agentSafeMode() && cfg.AgentFileWriteEnabled {
+			extraTools = append(extraTools, newDianaInstallPackageTool(r, event, cfg))
+		}
 		// 编码代理只挂给主人：它能在白名单仓库里不受限地跑命令和改代码，
 		// 不走 Agent 的命令白名单沙盒。allowedAgentToolNames 不收录它，这里
 		// 再按身份筛一次，两道闸都在。

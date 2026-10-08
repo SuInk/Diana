@@ -185,6 +185,7 @@ func safeModeRegistryForEvent(t *testing.T, mode string, event MessageEvent, rem
 		newDianaOneBotRequestsTool(runtime, event),
 		newDianaLLMConfigTool(runtime, event),
 		newDianaCodingTool(runtime, event, codingSettings(nil)),
+		newDianaInstallPackageTool(runtime, event, cfg),
 		newDianaGitHubTool(runtime, event, nil, nil),
 		newDianaEventTriggerTool(runtime, event),
 		newDianaMCPMediaTool(runtime, event),
@@ -263,7 +264,7 @@ func TestSafeModeDisablesEveryRuleForOwner(t *testing.T) {
 // 标准模式和以前完全一样：高风险工具照常挂上，没有任何停用登记。
 func TestStandardModeKeepsFullAgentSurface(t *testing.T) {
 	registry := safeModeTestRegistry(t, AgentModeStandard)
-	for _, name := range []string{"run_command", "write_file", "edit_file", dianaSaveToWorkspaceToolName, dianaCrossSessionToolName, dianaCodingToolName, "install_skill", "mcp_install"} {
+	for _, name := range []string{"run_command", "write_file", "edit_file", dianaSaveToWorkspaceToolName, dianaCrossSessionToolName, dianaCodingToolName, dianaInstallPackageToolName, "install_skill", "mcp_install"} {
 		if _, ok := registry.Get(name); !ok {
 			t.Fatalf("标准模式下 %s 没有挂上", name)
 		}

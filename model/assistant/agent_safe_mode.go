@@ -190,6 +190,7 @@ var AgentSafeModeRules = []AgentSafeModeRule{
 
 	// 安装和运行第三方代码：装进来的东西带着本进程的全部权限跑。
 	{Category: safeModeCategoryThirdParty, Tool: "install_skill", Reason: "从外部来源安装 Skill"},
+	{Category: safeModeCategoryThirdParty, Tool: dianaInstallPackageToolName, Reason: "从 npm 拉第三方代码装进工作区"},
 	{Category: safeModeCategoryThirdParty, Tool: "uninstall_skill", Reason: "卸载 Skill 属于扩展管理，和安装同一档"},
 	{Category: safeModeCategoryThirdParty, Tool: "mcp_install", Reason: "安装 MCP 服务就是在本机装一个第三方程序"},
 	{Category: safeModeCategoryThirdParty, Tool: "mcp_uninstall", Reason: "MCP 服务管理，和安装同一档"},
