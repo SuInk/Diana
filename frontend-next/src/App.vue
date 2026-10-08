@@ -348,7 +348,7 @@ const viewTitles: Record<ViewID, string> = {
   users: "记忆",
   notebook: "记忆",
   feed: "动态",
-  space: "小窝",
+  space: "钱包",
   "self-notes": "自述",
   logs: "运行记录",
   favorability: "运行记录",

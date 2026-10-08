@@ -5,8 +5,8 @@
   <div>
     <header class="view-header">
       <div class="view-title">
-        <h2>小窝</h2>
-        <p>她自己的空间：零花钱、想要的东西和房间里的物件。全是虚拟账本，不接任何真实支付；她想买东西时要你点头。</p>
+        <h2>钱包</h2>
+        <p>她的零花钱账本。全是虚拟数字，不接任何真实支付；以后她想买东西时要你点头。</p>
       </div>
       <div class="view-actions">
         <button class="btn ghost" type="button" :disabled="loading" @click="reload">
@@ -26,16 +26,6 @@
           <button class="btn small" type="button" @click="navigate('bot')">去打开</button>
         </div>
       </div>
-
-      <section class="card space-door">
-        <div class="card-body">
-          <span class="space-avatar" aria-hidden="true">{{ initial(botName) }}</span>
-          <div>
-            <h3>{{ botName }} 的小窝</h3>
-            <span class="muted">{{ space.enabled ? "小窝已开" : "小窝关着" }}</span>
-          </div>
-        </div>
-      </section>
 
       <section class="card">
         <div class="card-body stack">
@@ -80,15 +70,6 @@
         </div>
       </section>
 
-      <section v-for="block in upcoming" :key="block.title" class="card">
-        <div class="card-header">
-          <div>
-            <h2>{{ block.title }}</h2>
-            <span class="card-sub">{{ block.sub }}</span>
-          </div>
-          <span class="badge">即将推出</span>
-        </div>
-      </section>
     </div>
   </div>
 </template>
@@ -96,7 +77,7 @@
 <script setup lang="ts">
 import { onMounted, ref, watch } from "vue";
 import { Plus, RefreshCw, Wallet } from "@lucide/vue";
-import { getBotProfileConfig, getOwnSpace, recordOwnSpaceWallet, type OwnSpace, type WalletEntryKind } from "../api";
+import { getOwnSpace, recordOwnSpaceWallet, type OwnSpace, type WalletEntryKind } from "../api";
 import { botScope } from "../bot-scope";
 import { formatRelative, formatTime } from "../format";
 import { navigate } from "../router";
@@ -111,24 +92,14 @@ const kindLabel: Record<WalletEntryKind, string> = {
   refund: "退回"
 };
 
-const upcoming = [
-  { title: "待审批", sub: "她想买的东西，你点头才算买下" },
-  { title: "愿望单", sub: "她自己记下的想要的东西和估价" },
-  { title: "房间", sub: "她买下的、你送她的物件" }
-];
 
 const space = ref<OwnSpace | null>(null);
 const loading = ref(true);
 const saving = ref(false);
-const botName = ref("她");
 const grantOpen = ref(false);
 const grantKind = ref<"allowance" | "adjust">("allowance");
 const grantAmount = ref<number | string>("");
 const grantReason = ref("");
-
-function initial(name: string): string {
-  return Array.from(name.trim())[0]?.toUpperCase() ?? "?";
-}
 
 function formatYuan(cents: number): string {
   return `¥${(cents / 100).toFixed(2)}`;
@@ -136,17 +107,6 @@ function formatYuan(cents: number): string {
 
 function signed(cents: number): string {
   return `${cents < 0 ? "−" : "+"}${formatYuan(Math.abs(cents))}`;
-}
-
-async function loadName(): Promise<void> {
-  try {
-    const config = await getBotProfileConfig();
-    const profiles = config.profiles?.length ? config.profiles : [config];
-    const current = profiles.find((profile) => profile.id === botScope.value) ?? profiles[0];
-    botName.value = current?.name || current?.id || "她";
-  } catch {
-    // 拿不到名字就叫「她」，不该因此让整页加载失败。
-  }
 }
 
 async function reload(): Promise<void> {
@@ -182,12 +142,10 @@ async function submit(): Promise<void> {
 }
 
 onMounted(() => {
-  void loadName();
   void reload();
 });
 
 watch(botScope, () => {
-  void loadName();
   void reload();
 });
 </script>
@@ -198,29 +156,6 @@ watch(botScope, () => {
   flex-wrap: wrap;
   align-items: center;
   gap: 8px 12px;
-}
-
-.space-door .card-body {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-}
-
-.space-door h3 {
-  margin: 0 0 2px;
-}
-
-.space-avatar {
-  display: grid;
-  place-items: center;
-  width: 48px;
-  height: 48px;
-  flex: none;
-  border-radius: 50%;
-  background: var(--accent-soft, var(--surface-2));
-  color: var(--accent, inherit);
-  font-size: 20px;
-  font-weight: 600;
 }
 
 .space-balance {
