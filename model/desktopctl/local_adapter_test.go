@@ -6,6 +6,7 @@ package desktopctl
 import (
 	"context"
 	"testing"
+	"time"
 )
 
 func TestAttachLocalMockNoDisplay(t *testing.T) {
@@ -30,5 +31,27 @@ func TestAttachLocalMockNoDisplay(t *testing.T) {
 	}
 	if _, err := hub.Dispatch(context.Background(), Command{Op: OpWindowScreenshot, WindowID: "1"}); err != nil {
 		t.Fatalf("screenshot：%v", err)
+	}
+}
+
+type panicAdapter struct{ MockAdapter }
+
+func (*panicAdapter) Screenshot(context.Context, string) (ScreenshotPayload, error) {
+	panic("adapter failure")
+}
+func TestLocalAdapterPanicReturnsError(t *testing.T) {
+	result := make(chan Frame, 1)
+	conn := &LocalConn{Adapter: &panicAdapter{}}
+	conn.SetDeliver(func(f Frame) { result <- f })
+	if err := conn.Send(Frame{Type: FrameCommand, ID: "panic-command", Op: OpWindowScreenshot}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case reply := <-result:
+		if reply.Type != FrameResult || reply.ID != "panic-command" || reply.Code != CodeHelper {
+			t.Fatalf("unexpected reply: %+v", reply)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("panic must return an error instead of leaving the command pending")
 	}
 }
