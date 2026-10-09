@@ -45,7 +45,7 @@ func TestDeepsleepFutureJokeUsesSendConfidence(t *testing.T) {
 		t.Fatal("audit must run once")
 	}
 	prompt := provider.requests[0].Messages[0].Content
-	for _, expected := range []string{"send_confidence", "过去的自述与未来的假设或调侃", "唯一含义", "发送决定由运行时按阈值执行"} {
+	for _, expected := range []string{"send_confidence", "旧版本兼容字段", "不再参与发送决定"} {
 		if !strings.Contains(prompt, expected) {
 			t.Fatalf("missing audit contract: %s", expected)
 		}
