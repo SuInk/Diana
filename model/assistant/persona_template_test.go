@@ -108,7 +108,7 @@ func TestDefaultPersonaUsesNameThroughout(t *testing.T) {
 }
 
 func TestEveryBuiltinPersonaUsesNameVariable(t *testing.T) {
-	wantNames := []string{"默认喵", "真人感", "猫娘", "助手", "女友", "男友"}
+	wantNames := []string{"内置默认", "真人感", "猫娘", "助手", "女友", "男友"}
 	personas := BuiltinPersonas()
 	if len(personas) != len(wantNames) {
 		t.Fatal("unexpected builtin catalog size")

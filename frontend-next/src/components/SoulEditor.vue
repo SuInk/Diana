@@ -69,7 +69,7 @@
           <span class="soul-document-state">
             <template v-if="activePersona">
               <Check :size="13" aria-hidden="true" />
-              与「{{ activePersona.name }}」一致{{ activePersona.builtin ? "（内置）" : "" }}
+              与 {{ activePersona.name }} 一致{{ activePersona.builtin ? "（内置）" : "" }}
             </template>
             <template v-else-if="modelValue.trim()">自己写的，还没存进人设库</template>
             <template v-else>空着：保存后按内置的默认人设跑</template>
@@ -197,7 +197,7 @@ async function apply(persona: Persona): Promise<void> {
   // 正文是自己写的、库里又没有这一份时，替换前问一句：撤销只能退一步。
   if (props.modelValue.trim() && !activePersona.value) {
     const ok = await askConfirm({
-      title: `换成「${persona.name}」？`,
+      title: `换成 ${persona.name}？`,
       message: "当前正文还没存进人设库。换掉之后可以点「撤销」退回一次。",
       confirmLabel: "换"
     });

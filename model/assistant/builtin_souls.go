@@ -23,7 +23,7 @@ var builtinSoulOrder = []struct {
 	file string
 	name string
 }{
-	{"builtin:default", "default.md", "默认喵"},
+	{"builtin:default", "default.md", "内置默认"},
 	{"builtin:human", "human.md", "真人感"},
 	{"builtin:catgirl", "catgirl.md", "猫娘"},
 	{"builtin:assistant", "assistant.md", "助手"},
