@@ -210,7 +210,7 @@
       },
       {
         "category": "act_as_owner",
-        "tool": "desktop_job_confirm",
+        "tool": "desktop_job_finish",
         "reason": "管理主人本机桌面持久任务"
       },
       {
