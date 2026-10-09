@@ -145,7 +145,7 @@ func TestParsePersonaMarkdown(t *testing.T) {
 		t.Fatal(err)
 	}
 	persona := document.Personas[0]
-	if persona.Name != "真人感" || !strings.HasPrefix(persona.SystemPrompt, "# 真人感") {
+	if persona.Name != "{{name}}" || !strings.HasPrefix(persona.SystemPrompt, "# {{name}}") {
 		t.Fatalf("persona = %#v", persona)
 	}
 	untitled, err := ParsePersonaMarkdown([]byte("她说话很短。"), "短句")

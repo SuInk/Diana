@@ -106,3 +106,23 @@ func TestDefaultPersonaUsesNameThroughout(t *testing.T) {
 		t.Fatal("default persona should follow the configured identity")
 	}
 }
+
+func TestEveryBuiltinPersonaUsesNameVariable(t *testing.T) {
+	wantNames := []string{"默认喵", "真人感", "猫娘", "助手", "女友", "男友"}
+	personas := BuiltinPersonas()
+	if len(personas) != len(wantNames) {
+		t.Fatal("unexpected builtin catalog size")
+	}
+	for i, persona := range personas {
+		if persona.Name != wantNames[i] {
+			t.Fatalf("unexpected label: %q", persona.Name)
+		}
+		if !strings.HasPrefix(persona.SystemPrompt, "# {{name}}\n") {
+			t.Fatalf("%s missing name token", persona.Name)
+		}
+		cfg := BotConfig{Name: "星河", SystemPrompt: persona.SystemPrompt}
+		if !strings.HasPrefix(cfg.personaPrompt(), "# 星河\n") {
+			t.Fatalf("%s did not resolve configured name", persona.Name)
+		}
+	}
+}
