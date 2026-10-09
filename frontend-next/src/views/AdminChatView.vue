@@ -451,6 +451,7 @@ async function send(queued?: string): Promise<void> {
     const fromDraft = queued === undefined;
     if (!session.value || busy.value || loading.value || session.value.profile_id !== selectedProfile.value || !(fromDraft ? draft.value.trim() : queued))
         return;
+    const sessionID = session.value.session_id;
     const text = fromDraft ? draft.value.trim() : queued!, run = new AbortController();
     controller = run;
     // 先清空：运行中输入框仍可编辑，等 user 帧再清会吃掉用户接着打的字。
@@ -461,7 +462,7 @@ async function send(queued?: string): Promise<void> {
     followTranscript.value = true;
     let accepted = false, failure = '';
     try {
-        await sendAdminChat(session.value.session_id, text, splitModel(selectedModel.value), run.signal, frame => {
+        await sendAdminChat(sessionID, text, splitModel(selectedModel.value), run.signal, frame => {
             if (frame.type === 'user') {
                 accepted = true;
                 messages.value.push(frame.message);
@@ -472,12 +473,14 @@ async function send(queued?: string): Promise<void> {
         });
     }
     catch (e) {
+        // 失败时暂停队列，避免空闲监听立即重发；已接收的消息只刷新结果，不重复执行。
+        queuePaused.value = true;
         if (!run.signal.aborted)
             failure = e instanceof Error ? e.message : String(e);
         if (!accepted && fromDraft)
             draft.value = draft.value.trim() ? `${text}\n${draft.value}` : text;
-        else if (!accepted && session.value)
-            queue.value.unshift({ id: `q${++queueSeq}`, sessionID: session.value.session_id, text });
+        else if (!accepted)
+            queue.value.unshift({ id: `q${++queueSeq}`, sessionID, text });
     }
     finally {
         if (controller === run)
