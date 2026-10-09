@@ -308,8 +308,9 @@ func (r *ToolRegistry) RegisterDesktopTools(root string, cfg Config) {
 	r.Register(&DesktopJobPauseTool{base: base})
 	r.Register(&DesktopJobResumeTool{base: base})
 	r.Register(&DesktopJobWaitConfirmTool{base: base})
-	r.Register(&DesktopJobConfirmTool{base: base})
+	// Confirmation is performed only through authenticated human control-panel actions.
 	r.Register(&DesktopJobCancelTool{base: base})
+	r.Register(&DesktopJobFinishTool{base: base})
 }
 
 func (b desktopControlToolBase) jobs() (*desktopctl.JobManager, error) {
@@ -464,21 +465,39 @@ func (t *DesktopJobWaitConfirmTool) Run(ctx context.Context, input map[string]an
 	return string(body), err
 }
 
-type DesktopJobConfirmTool struct{ base desktopControlToolBase }
+// DesktopJobFinishTool records a verified outcome; it never performs input.
+type DesktopJobFinishTool struct{ base desktopControlToolBase }
 
-func (t *DesktopJobConfirmTool) Name() string { return "desktop_job_confirm" }
-func (t *DesktopJobConfirmTool) Description() string {
-	return `确认等待中的电脑任务（例如提交前）。确认后须重新观察再继续写操作。`
+func (t *DesktopJobFinishTool) Name() string { return "desktop_job_finish" }
+func (t *DesktopJobFinishTool) Description() string {
+	return "核实任务结果后标记完成或失败。等待主人确认时不要标记成功；失败时填写原因。"
 }
-func (t *DesktopJobConfirmTool) InputSchema() map[string]any {
-	return toolObjectSchema([]string{"job_id"}, map[string]any{"job_id": toolStringParam("")})
+func (t *DesktopJobFinishTool) InputSchema() map[string]any {
+	return toolObjectSchema([]string{"job_id", "status"}, map[string]any{
+		"job_id": toolStringParam("任务 ID"),
+		"status": map[string]any{"type": "string", "enum": []string{"succeeded", "failed"}},
+		"note":   toolStringParam("结果或失败原因"),
+	})
 }
-func (t *DesktopJobConfirmTool) Run(ctx context.Context, input map[string]any) (string, error) {
+func (t *DesktopJobFinishTool) Run(ctx context.Context, input map[string]any) (string, error) {
 	jm, err := t.base.jobs()
 	if err != nil {
 		return "", err
 	}
-	job, err := jm.Confirm(ctx, stringFromInput(input, "job_id"))
+	id := stringFromInput(input, "job_id")
+	var job desktopctl.Job
+	switch stringFromInput(input, "status") {
+	case "succeeded":
+		current, ok := jm.Get(id)
+		if !ok || current.Status != desktopctl.JobRunning {
+			return "", errors.New("只能完成执行中的任务")
+		}
+		job, err = jm.Succeed(ctx, id, stringFromInput(input, "note"))
+	case "failed":
+		job, err = jm.Fail(ctx, id, stringFromInput(input, "note"))
+	default:
+		return "", errors.New("status 必须是 succeeded 或 failed")
+	}
 	if err != nil {
 		return "", err
 	}

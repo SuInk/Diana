@@ -4465,3 +4465,32 @@ export async function recordOwnSpaceWallet(profile: string, kind: "allowance" | 
     body: JSON.stringify({ kind, amount_cents: amountCents, reason })
   });
 }
+
+export interface DesktopPolicy {
+  enabled: boolean;
+  write_enabled: boolean;
+  allowed_apps?: string[];
+  denied_apps?: string[];
+  command_timeout_ms?: number;
+  commands_per_minute?: number;
+}
+export interface DesktopJob {
+  id: string;
+  goal: string;
+  status: string;
+  wait_reason?: string;
+  error?: string;
+  budget: { steps_used: number; max_steps: number };
+}
+export interface DesktopStatus {
+  policy: DesktopPolicy;
+  ready: boolean;
+  helper_configured: boolean;
+  detail: string;
+  connections: { id: string; takeover: boolean }[];
+}
+export const getDesktopStatus = () => requestJSON<DesktopStatus>("/api/desktop-control/status");
+export const getDesktopJobs = () => requestJSON<{jobs: DesktopJob[]}>("/api/desktop-control/jobs");
+export const saveDesktopPolicy = (policy: DesktopPolicy) => requestJSON("/api/desktop-control/policy", {method: "PUT", body: JSON.stringify(policy)});
+export const setDesktopTakeover = (active: boolean) => requestJSON("/api/desktop-control/takeover", {method: "POST", body: JSON.stringify({active})});
+export const controlDesktopJob = (id: string, action: "pause" | "resume" | "confirm" | "cancel") => requestJSON(`/api/desktop-control/jobs/${encodeURIComponent(id)}/${action}`, {method: "POST"});

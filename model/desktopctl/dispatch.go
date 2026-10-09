@@ -13,9 +13,10 @@ import (
 
 // Command 是一条待下发的指令。
 type Command struct {
-	Connection string `json:"connection,omitempty"`
-	Op         string `json:"op"`
-	WindowID   string `json:"window_id,omitempty"`
+	Connection       string `json:"connection,omitempty"`
+	Op               string `json:"op"`
+	WindowID         string `json:"window_id,omitempty"`
+	ExpectedBundleID string `json:"expected_bundle_id,omitempty"`
 	// JobID 把本步记入持久任务；Observation 由执行器/任务观察版本使用。
 	JobID       string `json:"job_id,omitempty"`
 	Observation int64  `json:"observation,omitempty"`
@@ -60,9 +61,9 @@ func (h *Hub) Dispatch(ctx context.Context, cmd Command) (Result, error) {
 		}
 		stepID = sid
 		jobCtx, cancel := context.WithCancel(ctx)
-		h.jobs.BindCancel(cmd.JobID, cancel)
+		h.jobs.BindCancel(cmd.JobID, stepID, cancel)
 		defer func() {
-			h.jobs.UnbindCancel(cmd.JobID)
+			h.jobs.UnbindCancel(cmd.JobID, stepID)
 			cancel()
 		}()
 		ctx = jobCtx
@@ -93,6 +94,17 @@ func (h *Hub) Dispatch(ctx context.Context, cmd Command) (Result, error) {
 		return Result{}, err
 	}
 
+	if refresher, ok := conn.conn.(interface{ Refresh(context.Context) error }); ok {
+		refreshCtx, cancel := context.WithTimeout(ctx, time.Duration(policy.CommandTimeoutMS)*time.Millisecond)
+		err := refresher.Refresh(refreshCtx)
+		cancel()
+		if err != nil {
+			if stepID != "" && h.jobs != nil {
+				h.jobs.RecordDispatch(ctx, cmd.JobID, stepID, cmd, Result{}, err)
+			}
+			return Result{}, err
+		}
+	}
 	if op == OpWindowsList {
 		windows := conn.Windows(policy)
 		data, err := json.Marshal(WindowsPayload{Windows: windows})
@@ -118,6 +130,7 @@ func (h *Hub) Dispatch(ctx context.Context, cmd Command) (Result, error) {
 		return Result{}, err
 	}
 	cmd.WindowID = target.ID
+	cmd.ExpectedBundleID = target.BundleID
 	if err := validateCommandParams(op, cmd); err != nil {
 		if stepID != "" && h.jobs != nil {
 			h.jobs.RecordDispatch(ctx, cmd.JobID, stepID, cmd, Result{}, err)
@@ -210,6 +223,14 @@ func (c *Connection) reserve(policy Policy, now time.Time) error {
 }
 
 func (c *Connection) send(ctx context.Context, op string, cmd Command, timeout time.Duration) (Result, error) {
+	if timeout <= 0 {
+		timeout = DefaultCommandTimeoutMS * time.Millisecond
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	if err := ctx.Err(); err != nil {
+		return Result{}, err
+	}
 	params := rawJSON(cmd)
 	if params == nil {
 		return Result{}, commandError(CodeBadRequest, "指令参数无法序列化")
@@ -218,6 +239,10 @@ func (c *Connection) send(ctx context.Context, op string, cmd Command, timeout t
 	if c.closed {
 		c.mu.Unlock()
 		return Result{}, commandError(CodeNotConnected, "桌面控制连接已断开")
+	}
+	if c.takeover {
+		c.mu.Unlock()
+		return Result{}, commandError(CodeTakeover, "用户正在人工接管桌面")
 	}
 	c.seq++
 	id := fmt.Sprintf("%s-%d", c.id, c.seq)
@@ -231,12 +256,17 @@ func (c *Connection) send(ctx context.Context, op string, cmd Command, timeout t
 		c.mu.Unlock()
 	}
 	frame := Frame{Type: FrameCommand, ID: id, Op: op, Params: params, JobID: cmd.JobID, Observation: cmd.Observation}
-	if err := c.conn.Send(frame); err != nil {
+	var sendErr error
+	if sender, ok := c.conn.(interface {
+		SendContext(context.Context, Frame) error
+	}); ok {
+		sendErr = sender.SendContext(ctx, frame)
+	} else {
+		sendErr = c.conn.Send(frame)
+	}
+	if err := sendErr; err != nil {
 		forget()
 		return Result{}, commandError(CodeNotConnected, "指令没能发给执行器：%v", err)
-	}
-	if timeout <= 0 {
-		timeout = DefaultCommandTimeoutMS * time.Millisecond
 	}
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()

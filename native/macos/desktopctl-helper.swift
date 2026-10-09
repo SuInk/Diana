@@ -1,9 +1,9 @@
 // Copyright (c) 2025-now SuInk.
 // Licensed under the Limited Redistribution License in the repository root.
 //
-// 桌面控制阶段 1–2 参考 helper：list / screenshot / click / type / key。
+// Diana 本机桌面 helper：list / screenshot / click / type / key。
 // 截图需要 Screen Recording；写操作需要 Accessibility。
-// Linux CI 不编译；仅作 macOS 本机参考实现。
+// 由 macOS CI 编译，并随 macOS 完整包分发。
 
 import AppKit
 import ApplicationServices
@@ -79,9 +79,10 @@ func screenshotWindow(id: String) async -> (Data?, String?) {
         }
         let filter = SCContentFilter(desktopIndependentWindow: window)
         let config = SCStreamConfiguration()
-        config.width = max(1, Int(window.frame.width * CGFloat(filter.pointPixelScale)))
-        config.height = max(1, Int(window.frame.height * CGFloat(filter.pointPixelScale)))
+        config.width = max(1, Int(window.frame.width))
+        config.height = max(1, Int(window.frame.height))
         config.showsCursor = false
+        config.ignoreShadowsSingleWindow = true
         let image = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
         let rep = NSBitmapImageRep(cgImage: image)
         guard let data = rep.representation(using: .png, properties: [:]) else {
@@ -94,7 +95,7 @@ func screenshotWindow(id: String) async -> (Data?, String?) {
 }
 
 func requireAccessibility() -> String? {
-    let trusted = AXIsProcessTrustedWithOptions([kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary)
+    let trusted = AXIsProcessTrusted()
     if trusted { return nil }
     return "permission_denied: Accessibility（辅助功能）未授权。请在系统设置 → 隐私与安全性 → 辅助功能中允许本 helper，然后完全退出并重启。"
 }
@@ -240,7 +241,14 @@ func fail(_ message: String) -> Never {
     exit(1)
 }
 
+if args.count > 2, let expected = ProcessInfo.processInfo.environment["DIANA_TARGET_BUNDLE"], !expected.isEmpty {
+    guard listWindows().contains(where: { $0.id == args[2] && $0.bundle_id == expected }) else {
+        fail("window_unknown: 目标窗口所属应用已变化")
+    }
+}
 switch args[1] {
+case "permissions":
+    print("{\"screen_recording\":\(CGPreflightScreenCaptureAccess()),\"accessibility\":\(AXIsProcessTrusted())}")
 case "list":
     let enc = JSONEncoder()
     enc.outputFormatting = [.prettyPrinted, .sortedKeys]
@@ -268,7 +276,7 @@ case "click":
     print("{\"ok\":true,\"op\":\"window.click\"}")
 case "type":
     guard args.count >= 4 else { fail("type requires window_id text") }
-    let text = args[3...].joined(separator: " ")
+    let text = args[3] == "--stdin" ? String(data: FileHandle.standardInput.readDataToEndOfFile(), encoding: .utf8) ?? "" : args[3...].joined(separator: " ")
     if let err = typeText(id: args[2], text: text) { fail(err) }
     print("{\"ok\":true,\"op\":\"window.type\"}")
 case "key":

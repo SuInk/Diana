@@ -735,6 +735,23 @@ func main() {
 	desktopControlHub.SetJobManager(desktopControlJobs)
 	botRuntime.SetDesktopControl(desktopControlHub)
 	defer desktopControlHub.CloseAll()
+	desktopHelperPath := strings.TrimSpace(os.Getenv("DIANA_DESKTOP_HELPER"))
+	if desktopHelperPath == "" {
+		if executable, err := os.Executable(); err == nil {
+			candidate := filepath.Join(filepath.Dir(executable), "desktopctl-helper")
+			if info, err := os.Stat(candidate); err == nil && info.Mode().IsRegular() {
+				desktopHelperPath = candidate
+			}
+		}
+	}
+	desktopLocal := desktopctl.NewLocalService(desktopControlHub, desktopHelperPath)
+	go func() {
+		defer recoverGoroutinePanic("desktopctl.local-service")
+		desktopLocal.Run(ctx)
+	}()
+	defer desktopLocal.Close()
+	webui.NewDesktopControlHandler(desktopControlRegistry, desktopControlHub, desktopLocal, desktopControlJobs).Register(router)
+
 	// 内置浏览器：Diana 自己那个常驻 Chrome，profile 落在数据目录里，
 	// 用户在 WebUI 里能看画面、能直接操作。默认关着，开了才会有进程。
 	browserBoxManager := browserbox.New(ctx, sqliteStore, dataDir)

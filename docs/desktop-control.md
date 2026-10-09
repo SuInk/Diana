@@ -11,7 +11,7 @@
 | 工具 | `browser_ext_*` | `desktop_*` + `desktop_job_*` |
 | 默认 | 全关 | 全关 |
 
-**仍不做：** WebUI 实时画面与完整控制台体验（阶段 4）。
+WebUI 的“设置 → 桌面控制”提供权限与任务管理；当前没有实时画面流。
 
 ## 授权模型
 
@@ -36,7 +36,8 @@
 | `desktop_job_status` | 任务 | 查询或列出 |
 | `desktop_job_pause` / `desktop_job_resume` | 任务 | 暂停 / 恢复（恢复须先截图再写） |
 | `desktop_job_wait_confirm` | 任务 | 进入等待确认 |
-| `desktop_job_confirm` | 任务 | 结束「等待确认」 |
+| 控制台“确认继续” | 人工操作 | 结束「等待确认」，不向模型注册确认工具 |
+| `desktop_job_finish` | 任务 | 核实结果后结束为成功或失败 |
 | `desktop_job_cancel` | 任务 | 取消并停止后续下发（不撤销已发生操作） |
 
 所有操作工具可带可选 `job_id` 与 `idempotency_key`：同键已完成步骤不会再次下发。
@@ -62,3 +63,9 @@
 载荷含 `job_id`、`observation`、`idempotency_key`。
 
 macOS 写入要求目标窗口当前位于前台；helper 在发送前核对窗口和进程，点击坐标必须在窗口内。键盘和鼠标事件发送到目标进程，文本输入期间切换窗口会停止后续输入。
+
+## 本机连接
+
+macOS 完整包包含 helper，Diana 自动从主程序同目录发现它。源码部署可用 `DIANA_DESKTOP_HELPER` 指定绝对路径。服务定期恢复连接，每次操作前重新枚举窗口并复核应用范围；窗口 ID 被其他应用复用时不会沿用旧授权。文本经标准输入传递。取消、超时、人工接管或修改权限会中断仍在执行的 helper；已经发生的操作不能回滚。同一任务只允许一条在途指令。
+
+HTTP 管理接口位于 `/api/desktop-control`，沿用控制台会话认证。启用和输入权限均默认关闭。系统授权需要用户在 macOS 系统设置中完成。

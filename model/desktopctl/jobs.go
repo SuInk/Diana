@@ -115,36 +115,46 @@ type JobStore interface {
 
 // JobManager 保管持久任务，并在下发前核对状态与预算。
 type JobManager struct {
-	store JobStore
-	now   func() time.Time
+	store   JobStore
+	loadErr error
+	now     func() time.Time
 
 	mu   sync.Mutex
 	jobs map[string]*Job
 	// cancelFns 让 Cancel 能打断正在等待回执的下发。
-	cancelFns map[string]context.CancelFunc
+	cancelFns   map[string]context.CancelFunc
+	cancelSteps map[string]string
 }
 
-// NewJobManager 从存储加载任务。读失败时按空表启动。
+// NewJobManager 从存储加载任务。读失败时拒绝保存，避免覆盖未读取的任务。
 func NewJobManager(ctx context.Context, store JobStore) *JobManager {
 	m := &JobManager{
-		store:     store,
-		now:       time.Now,
-		jobs:      map[string]*Job{},
-		cancelFns: map[string]context.CancelFunc{},
+		store:       store,
+		now:         time.Now,
+		jobs:        map[string]*Job{},
+		cancelFns:   map[string]context.CancelFunc{},
+		cancelSteps: map[string]string{},
 	}
 	if store == nil {
 		return m
 	}
 	jobs, err := store.LoadDesktopJobs(ctx)
 	if err != nil {
+		m.loadErr = err
 		return m
 	}
 	for i := range jobs {
 		job := jobs[i]
 		job = job.clone()
+		for i := range job.Steps {
+			if job.Steps[i].Status == StepDispatched {
+				job.Steps[i].Status = StepFailed
+				job.Steps[i].Error = "重启时结果未确认，须重新观察；同一幂等键禁止重放"
+			}
+		}
 		// 重启接回：非终态任务先标成 paused，并要求重新观察，避免盲目重放下一步。
 		if !job.Terminal() && job.Status != JobQueued {
-			if job.Status == JobRunning || job.Status == JobWaitingConfirm {
+			if job.Status == JobRunning {
 				job.Status = JobPaused
 				job.WaitReason = "进程重启后接回，已暂停；恢复前须重新观察桌面"
 			}
@@ -266,6 +276,9 @@ func (m *JobManager) Start(ctx context.Context, id string) (Job, error) {
 // Pause 暂停任务：之后不再下发。
 func (m *JobManager) Pause(ctx context.Context, id, reason string) (Job, error) {
 	return m.updateStatus(ctx, id, func(job *Job) error {
+		if job.Status == JobWaitingConfirm {
+			return commandError(CodeJobConflict, "等待确认的任务只能确认或取消")
+		}
 		if job.Terminal() {
 			return commandError(CodeJobConflict, "任务 %s 已结束（%s）", job.ID, job.Status)
 		}
@@ -335,6 +348,14 @@ func (m *JobManager) Cancel(ctx context.Context, id, reason string) (Job, error)
 // Succeed / Fail 结束任务。
 func (m *JobManager) Succeed(ctx context.Context, id, note string) (Job, error) {
 	return m.updateStatus(ctx, id, func(job *Job) error {
+		if job.Status != JobRunning {
+			return commandError(CodeJobConflict, "只能完成执行中的任务")
+		}
+		for _, step := range job.Steps {
+			if step.Status == StepDispatched {
+				return commandError(CodeJobConflict, "仍有指令等待回执")
+			}
+		}
 		if job.Terminal() {
 			return commandError(CodeJobConflict, "任务 %s 已经是 %s", job.ID, job.Status)
 		}
@@ -373,11 +394,13 @@ func (m *JobManager) updateStatus(ctx context.Context, id string, fn func(*Job) 
 	if !ok {
 		return Job{}, commandError(CodeJobNotFound, "桌面任务 %s 不存在", id)
 	}
+	before := job.clone()
 	if err := fn(job); err != nil {
 		return Job{}, err
 	}
 	job.UpdatedAt = m.now()
 	if err := m.persistLocked(ctx); err != nil {
+		*job = before
 		return Job{}, err
 	}
 	return job.clone(), nil
@@ -391,26 +414,34 @@ func (m *JobManager) abortInFlightLocked(id string) {
 }
 
 // BindCancel 在下发期间登记可取消的 context。
-func (m *JobManager) BindCancel(jobID string, cancel context.CancelFunc) {
+func (m *JobManager) BindCancel(jobID, stepID string, cancel context.CancelFunc) {
 	if m == nil || jobID == "" || cancel == nil {
 		return
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if job, ok := m.jobs[jobID]; !ok || job.Status != JobRunning {
+		cancel()
+		return
+	}
 	if old, ok := m.cancelFns[jobID]; ok {
 		old()
 	}
 	m.cancelFns[jobID] = cancel
+	m.cancelSteps[jobID] = stepID
 }
 
 // UnbindCancel 下发结束后解除。
-func (m *JobManager) UnbindCancel(jobID string) {
+func (m *JobManager) UnbindCancel(jobID, stepID string) {
 	if m == nil || jobID == "" {
 		return
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	delete(m.cancelFns, jobID)
+	if m.cancelSteps[jobID] == stepID {
+		delete(m.cancelFns, jobID)
+		delete(m.cancelSteps, jobID)
+	}
 }
 
 // AuthorizeDispatch 在真正下发前核对任务状态、预算与「须重新观察」。
@@ -458,7 +489,19 @@ func (m *JobManager) AuthorizeDispatch(ctx context.Context, cmd Command) (skip b
 		}
 	}
 	if err := m.checkBudgetLocked(job); err != nil {
+		if saveErr := m.persistLocked(ctx); saveErr != nil {
+			*job = before
+			return false, Result{}, "", saveErr
+		}
 		return false, Result{}, "", err
+	}
+	if _, busy := m.cancelFns[job.ID]; busy {
+		return false, Result{}, "", commandError(CodeJobBlocked, "上一条指令仍在结束处理中")
+	}
+	for _, step := range job.Steps {
+		if step.Status == StepDispatched {
+			return false, Result{}, "", commandError(CodeJobBlocked, "当前步骤尚未完成，请等待回执或核实现场")
+		}
 	}
 	// 写操作在 NeedsReobserve 时必须先做一次截图观察。
 	if IsWriteOp(cmd.Op) && job.NeedsReobserve {
@@ -544,6 +587,9 @@ func (m *JobManager) RecordDispatch(ctx context.Context, jobID, stepID string, c
 }
 
 func (m *JobManager) persistLocked(ctx context.Context) error {
+	if m.loadErr != nil {
+		return fmt.Errorf("读取持久任务失败，拒绝覆盖: %w", m.loadErr)
+	}
 	if m.store == nil {
 		return nil
 	}

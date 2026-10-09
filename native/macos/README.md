@@ -1,10 +1,10 @@
 # macOS 原生辅助
 
-本目录放仅在 macOS 本机编译/运行的参考实现。Linux CI 不编译这里的 Swift。
+本目录包含 macOS 原生辅助程序。桌面 helper 由 macOS CI 编译为通用二进制，随 macOS 完整包分发。
 
-## `desktopctl-helper.swift`（桌面控制 · 阶段 1–2）
+## `desktopctl-helper.swift`（本机桌面控制）
 
-本机桌面执行器的参考实现：枚举窗口、截图、点击、输入与按键。
+本机桌面执行器：枚举窗口、截图、点击、输入与按键。
 
 ### 系统权限
 
@@ -22,6 +22,7 @@ swiftc -O -o desktopctl-helper desktopctl-helper.swift
 ### 用法
 
 ```bash
+./desktopctl-helper permissions # 仅检查权限，不触发授权弹窗
 ./desktopctl-helper list
 ./desktopctl-helper screenshot <window_id>
 ./desktopctl-helper click <window_id> <x> <y> [left|right|middle]
@@ -33,7 +34,9 @@ Go 单测使用假连接（`desktopctl.MockAdapter`），不调用本 helper。
 
 ### 与 Diana 的关系
 
-Helper 通过桌面控制协议连到 Diana（见 `docs/desktop-control.md`）。打开策略总开关、按需打开 `write_enabled`、连接 helper，并在机器人配置打开 `agent_desktop_control_enabled` 后，主人才会看到桌面工具。
+Diana 自动查找主程序同目录下的 `desktopctl-helper`；源码部署也可设置 `DIANA_DESKTOP_HELPER` 为编译产物的绝对路径。重启服务，在“设置 → 桌面控制”启用总开关、按需允许输入，并在机器人配置打开 `agent_desktop_control_enabled`。Diana 通过本机子进程调用 helper，不开放远程执行端口；文本通过标准输入传递，不进入命令行参数。
+
+控制台支持应用范围、人工接管和任务暂停、恢复、确认、取消。取消或超时会终止仍在运行的 helper，但不能撤销已经发送的输入。系统权限不足时返回说明，不自动申请或授予权限。Docker 中不支持操作宿主 macOS 桌面。
 
 ## `diana_pdf_vision.swift`
 

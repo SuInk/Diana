@@ -230,7 +230,7 @@ var AgentSafeModeRules = []AgentSafeModeRule{
 	{Category: safeModeCategoryActAsOwner, Tool: "desktop_job_pause", Reason: "管理主人本机桌面持久任务"},
 	{Category: safeModeCategoryActAsOwner, Tool: "desktop_job_resume", Reason: "管理主人本机桌面持久任务"},
 	{Category: safeModeCategoryActAsOwner, Tool: "desktop_job_wait_confirm", Reason: "管理主人本机桌面持久任务"},
-	{Category: safeModeCategoryActAsOwner, Tool: "desktop_job_confirm", Reason: "管理主人本机桌面持久任务"},
+	{Category: safeModeCategoryActAsOwner, Tool: "desktop_job_finish", Reason: "管理主人本机桌面持久任务"},
 	{Category: safeModeCategoryActAsOwner, Tool: "desktop_job_cancel", Reason: "管理主人本机桌面持久任务"},
 	{Category: safeModeCategoryActAsOwner, Tool: dianaGitHubToolName, Field: "operation",
 		Operations: []string{"create", "update", "comment", "review", "close", "reopen", "star", "approve"},

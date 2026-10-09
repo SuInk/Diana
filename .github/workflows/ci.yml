@@ -161,6 +161,25 @@ jobs:
           path: frontend-next/dist
           if-no-files-found: error
 
+  desktop-helper:
+    name: Build macOS desktop helper
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile both architectures
+        run: |
+          mkdir -p release/desktop
+          swiftc -O -target arm64-apple-macos14.0 -o release/desktop/helper-arm64 native/macos/desktopctl-helper.swift
+          swiftc -O -target x86_64-apple-macos14.0 -o release/desktop/helper-amd64 native/macos/desktopctl-helper.swift
+          lipo -create release/desktop/helper-arm64 release/desktop/helper-amd64 -output release/desktop/desktopctl-helper
+          codesign --force --sign - --identifier com.suink.diana.desktop-helper release/desktop/desktopctl-helper
+          release/desktop/desktopctl-helper permissions
+      - uses: actions/upload-artifact@v4
+        with:
+          name: desktop-helper-macos
+          path: release/desktop/desktopctl-helper
+          if-no-files-found: error
+
   build:
     name: Build WebUI
     runs-on: ubuntu-latest
@@ -171,6 +190,7 @@ jobs:
     needs:
       - build-version
       - frontend-next
+      - desktop-helper
     strategy:
       fail-fast: false
       matrix:
@@ -208,6 +228,13 @@ jobs:
           name: frontend-next-dist
           path: release/frontend-next-dist
 
+      - name: Download desktop helper
+        if: matrix.goos == 'darwin'
+        uses: actions/download-artifact@v4
+        with:
+          name: desktop-helper-macos
+          path: release/desktop
+
       - name: Build
         env:
           BUILD_VERSION: ${{ needs.build-version.outputs.value }}
@@ -235,6 +262,10 @@ jobs:
           # the first package that introduces the stable runtime name.
           cp "${package_dir}/${runtime_name}" "${package_dir}/${binary_name}"
           cp -R release/frontend-next-dist/. "${package_dir}/frontend-next/dist/"
+          if [ "${{ matrix.goos }}" = darwin ]; then
+            cp release/desktop/desktopctl-helper "${package_dir}/desktopctl-helper"
+            chmod +x "${package_dir}/desktopctl-helper"
+          fi
           # 自带官方 gitea-mcp：校验和对不上就在这里失败，不会发出去。MCP 预设按
           # 主程序旁边的位置拉起它，所以必须和 diana-webui 放在同一层。
           scripts/fetch-gitea-mcp.sh "${{ matrix.goos }}" "${{ matrix.goarch }}" "${package_dir}"

@@ -51,6 +51,8 @@ if [[ "$OUTPUT" == *.app ]]; then
 		-framework AppKit -framework PDFKit -framework Vision \
 		"$ROOT/native/macos/diana_pdf_vision.swift" -o "$PDF_HELPER"
 	codesign --force --sign - --identifier "$IDENTIFIER.pdf-vision" "$PDF_HELPER"
+	xcrun swiftc -O -o "$TEMP_APP/Contents/MacOS/desktopctl-helper" "$ROOT/native/macos/desktopctl-helper.swift"
+	codesign --force --sign - --identifier "$IDENTIFIER.desktop-helper" "$TEMP_APP/Contents/MacOS/desktopctl-helper"
 	codesign --force --deep --sign - --identifier "$IDENTIFIER" \
 		--requirements "=designated => identifier \"$IDENTIFIER\"" "$TEMP_APP"
 	codesign --verify --deep --strict "$TEMP_APP"

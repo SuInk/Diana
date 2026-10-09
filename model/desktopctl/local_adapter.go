@@ -25,9 +25,11 @@ type Adapter interface {
 type LocalConn struct {
 	Adapter Adapter
 
-	mu      sync.Mutex
-	deliver func(Frame)
-	closed  bool
+	mu       sync.Mutex
+	deliver  func(Frame)
+	closed   bool
+	takeover bool
+	active   map[string]context.CancelFunc
 }
 
 // SetDeliver 由握手后的 Connection.HandleFrame 注入。
@@ -37,23 +39,66 @@ func (l *LocalConn) SetDeliver(fn func(Frame)) {
 	l.mu.Unlock()
 }
 
-func (l *LocalConn) Send(frame Frame) error {
+func (l *LocalConn) Send(frame Frame) error { return l.SendContext(context.Background(), frame) }
+func (l *LocalConn) SendContext(ctx context.Context, frame Frame) error {
 	l.mu.Lock()
-	deliver := l.deliver
-	adapter := l.Adapter
-	closed := l.closed
-	l.mu.Unlock()
-	if closed {
+	if l.closed {
+		l.mu.Unlock()
 		return commandError(CodeNotConnected, "本地桌面连接已关闭")
 	}
-	if frame.Type != FrameCommand {
+	if frame.Type == FrameTakeover {
+		var payload TakeoverPayload
+		if err := json.Unmarshal(frame.Data, &payload); err != nil {
+			l.mu.Unlock()
+			return err
+		}
+		l.takeover = payload.Active
+		for _, cancel := range l.active {
+			cancel()
+		}
+		l.mu.Unlock()
 		return nil
 	}
-	go func() { defer recoverLocalCommand(); l.handleCommand(frame, adapter, deliver) }()
+	if frame.Type != FrameCommand {
+		l.mu.Unlock()
+		return nil
+	}
+	if l.takeover {
+		l.mu.Unlock()
+		return commandError(CodeTakeover, "用户正在人工接管桌面")
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	if l.active == nil {
+		l.active = map[string]context.CancelFunc{}
+	}
+	l.active[frame.ID] = cancel
+	adapter, deliver := l.Adapter, l.deliver
+	l.mu.Unlock()
+	go func() {
+		defer recoverLocalCommand()
+		defer func() { cancel(); l.mu.Lock(); delete(l.active, frame.ID); l.mu.Unlock() }()
+		l.handleCommand(ctx, frame, adapter, deliver)
+	}()
+	return nil
+}
+func (l *LocalConn) Refresh(ctx context.Context) error {
+	windows, err := l.Adapter.ListWindows(ctx)
+	if err != nil {
+		return err
+	}
+	l.mu.Lock()
+	deliver, closed := l.deliver, l.closed
+	l.mu.Unlock()
+	if closed {
+		return commandError(CodeNotConnected, "本地连接已关闭")
+	}
+	if deliver != nil {
+		deliver(Frame{Type: FrameWindows, Data: rawJSON(WindowsPayload{Windows: windows})})
+	}
 	return nil
 }
 
-func (l *LocalConn) handleCommand(frame Frame, adapter Adapter, deliver func(Frame)) {
+func (l *LocalConn) handleCommand(ctx context.Context, frame Frame, adapter Adapter, deliver func(Frame)) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			safego.Report("desktopctl.adapter", recovered)
@@ -66,7 +111,6 @@ func (l *LocalConn) handleCommand(frame Frame, adapter Adapter, deliver func(Fra
 		return
 	}
 	reply := Frame{Type: FrameResult, ID: frame.ID}
-	ctx := context.Background()
 	var cmd Command
 	_ = json.Unmarshal(frame.Params, &cmd)
 
@@ -81,7 +125,13 @@ func (l *LocalConn) handleCommand(frame Frame, adapter Adapter, deliver func(Fra
 
 	switch frame.Op {
 	case OpWindowScreenshot:
-		payload, err := adapter.Screenshot(ctx, strings.TrimSpace(cmd.WindowID))
+		var payload ScreenshotPayload
+		var err error
+		if process, ok := adapter.(*ProcessAdapter); ok {
+			payload, err = process.screenshot(ctx, strings.TrimSpace(cmd.WindowID), cmd.ExpectedBundleID)
+		} else {
+			payload, err = adapter.Screenshot(ctx, strings.TrimSpace(cmd.WindowID))
+		}
 		if err != nil {
 			fail(err)
 			return
@@ -121,6 +171,9 @@ func (l *LocalConn) handleCommand(frame Frame, adapter Adapter, deliver func(Fra
 func (l *LocalConn) Close() error {
 	l.mu.Lock()
 	l.closed = true
+	for _, cancel := range l.active {
+		cancel()
+	}
 	l.mu.Unlock()
 	return nil
 }

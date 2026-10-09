@@ -577,6 +577,9 @@ func (u *ReleasePackageUpdater) Download(ctx context.Context, release ReleasePac
 	} else {
 		optionalNames = append(optionalNames, "gitea-mcp")
 	}
+	if runtime.GOOS == "darwin" {
+		optionalNames = append(optionalNames, "desktopctl-helper")
+	}
 	for _, name := range optionalNames {
 		if regularFileExists(filepath.Join(packageRoot, name)) {
 			plan.OptionalFiles = append(plan.OptionalFiles, releaseApplyFile{
