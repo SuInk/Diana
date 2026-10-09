@@ -910,6 +910,9 @@ let residencyListed = false;
 // 预填好，切过去就能看到授权边界长什么样。
 let demoBrowserBoxSettings: BrowserBoxSettings = { enabled: true, headful: true };
 let demoBrowserSourceOrder: ("box" | "extension")[] = ["box", "extension"];
+let demoDesktopPolicy = { enabled: true, write_enabled: false, allowed_apps: ["com.apple.TextEdit"], denied_apps: [] as string[] };
+let demoDesktopTakeover = false;
+let demoDesktopJobs = [{ id: "desktop-demo", goal: "整理本机文本草稿", status: "waiting_confirm", wait_reason: "草稿已整理，等待主人检查后继续。", budget: { steps_used: 3, max_steps: 20 } }];
 let demoBrowserControlPolicy = {
   enabled: false,
   allowed_origins: ["chrome-extension://abcdefghijklmnopabcdefghijklmnop"],
@@ -1308,6 +1311,16 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
   }
   // 浏览器控制：演示里给一条已连接的扩展和一把令牌，否则这一页全是空状态，
   // 看不出授权边界长什么样。写操作在演示里始终关着。
+  if (path === "/api/desktop-control/status") return json({ policy: demoDesktopPolicy, ready: demoDesktopPolicy.enabled && !demoDesktopTakeover, helper_configured: true, detail: "演示环境不连接真实桌面", connections: demoDesktopPolicy.enabled ? [{id:"local-demo", takeover:demoDesktopTakeover}] : [] });
+  if (path === "/api/desktop-control/jobs") return json({ jobs: demoDesktopJobs });
+  if (path === "/api/desktop-control/policy" && method === "PUT") { demoDesktopPolicy = { ...demoDesktopPolicy, ...(body as unknown as typeof demoDesktopPolicy) }; return json({ policy: demoDesktopPolicy }); }
+  if (path === "/api/desktop-control/takeover" && method === "POST") { demoDesktopTakeover = Boolean(body.active); return json({active:demoDesktopTakeover}); }
+  if (path.startsWith("/api/desktop-control/jobs/") && method === "POST") {
+    const action = path.split("/").pop() || "";
+    const next: Record<string,string> = {pause:"paused", resume:"running", confirm:"running", cancel:"cancelled"};
+    if (next[action]) demoDesktopJobs = demoDesktopJobs.map(j => ({...j,status:next[action],wait_reason:""}));
+    return json({job:demoDesktopJobs[0]});
+  }
   if (path === "/api/browser-control/status" && method === "GET")
     return json({
       policy: demoBrowserControlPolicy,

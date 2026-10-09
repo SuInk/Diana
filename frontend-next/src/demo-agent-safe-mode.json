@@ -160,6 +160,66 @@
       },
       {
         "category": "act_as_owner",
+        "tool": "desktop_windows",
+        "reason": "读取主人本机桌面窗口清单"
+      },
+      {
+        "category": "act_as_owner",
+        "tool": "desktop_screenshot",
+        "reason": "读取主人本机桌面窗口截图"
+      },
+      {
+        "category": "act_as_owner",
+        "tool": "desktop_click",
+        "reason": "操作主人本机桌面（点击）"
+      },
+      {
+        "category": "act_as_owner",
+        "tool": "desktop_type",
+        "reason": "操作主人本机桌面（输入）"
+      },
+      {
+        "category": "act_as_owner",
+        "tool": "desktop_key",
+        "reason": "操作主人本机桌面（按键）"
+      },
+      {
+        "category": "act_as_owner",
+        "tool": "desktop_job_create",
+        "reason": "管理主人本机桌面持久任务"
+      },
+      {
+        "category": "act_as_owner",
+        "tool": "desktop_job_status",
+        "reason": "管理主人本机桌面持久任务"
+      },
+      {
+        "category": "act_as_owner",
+        "tool": "desktop_job_pause",
+        "reason": "管理主人本机桌面持久任务"
+      },
+      {
+        "category": "act_as_owner",
+        "tool": "desktop_job_resume",
+        "reason": "管理主人本机桌面持久任务"
+      },
+      {
+        "category": "act_as_owner",
+        "tool": "desktop_job_wait_confirm",
+        "reason": "管理主人本机桌面持久任务"
+      },
+      {
+        "category": "act_as_owner",
+        "tool": "desktop_job_finish",
+        "reason": "管理主人本机桌面持久任务"
+      },
+      {
+        "category": "act_as_owner",
+        "tool": "desktop_job_cancel",
+        "reason": "管理主人本机桌面持久任务"
+      },
+      {
+        "category": "act_as_owner",
         "tool": "github",
         "field": "operation",
         "operations": [

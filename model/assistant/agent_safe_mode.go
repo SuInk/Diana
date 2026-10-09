@@ -220,6 +220,18 @@ var AgentSafeModeRules = []AgentSafeModeRule{
 	{Category: safeModeCategoryActAsOwner, Tool: "browser_ext_open", Reason: "操作主人自己的浏览器（浏览器控制扩展）"},
 	{Category: safeModeCategoryActAsOwner, Tool: "browser_ext_click", Reason: "操作主人自己的浏览器（浏览器控制扩展）"},
 	{Category: safeModeCategoryActAsOwner, Tool: "browser_ext_type", Reason: "操作主人自己的浏览器（浏览器控制扩展）"},
+	{Category: safeModeCategoryActAsOwner, Tool: "desktop_windows", Reason: "读取主人本机桌面窗口清单"},
+	{Category: safeModeCategoryActAsOwner, Tool: "desktop_screenshot", Reason: "读取主人本机桌面窗口截图"},
+	{Category: safeModeCategoryActAsOwner, Tool: "desktop_click", Reason: "操作主人本机桌面（点击）"},
+	{Category: safeModeCategoryActAsOwner, Tool: "desktop_type", Reason: "操作主人本机桌面（输入）"},
+	{Category: safeModeCategoryActAsOwner, Tool: "desktop_key", Reason: "操作主人本机桌面（按键）"},
+	{Category: safeModeCategoryActAsOwner, Tool: "desktop_job_create", Reason: "管理主人本机桌面持久任务"},
+	{Category: safeModeCategoryActAsOwner, Tool: "desktop_job_status", Reason: "管理主人本机桌面持久任务"},
+	{Category: safeModeCategoryActAsOwner, Tool: "desktop_job_pause", Reason: "管理主人本机桌面持久任务"},
+	{Category: safeModeCategoryActAsOwner, Tool: "desktop_job_resume", Reason: "管理主人本机桌面持久任务"},
+	{Category: safeModeCategoryActAsOwner, Tool: "desktop_job_wait_confirm", Reason: "管理主人本机桌面持久任务"},
+	{Category: safeModeCategoryActAsOwner, Tool: "desktop_job_finish", Reason: "管理主人本机桌面持久任务"},
+	{Category: safeModeCategoryActAsOwner, Tool: "desktop_job_cancel", Reason: "管理主人本机桌面持久任务"},
 	{Category: safeModeCategoryActAsOwner, Tool: dianaGitHubToolName, Field: "operation",
 		Operations: []string{"create", "update", "comment", "review", "close", "reopen", "star", "approve"},
 		Reason:     "以主人配置的 GitHub 身份写入仓库；读仓库、搜 Issue 照常"},
@@ -278,6 +290,7 @@ func restrictAgentConfigForMode(cfg BotConfig, agentCfg agent.Config) agent.Conf
 	agentCfg.CommandAllowlist = nil
 	agentCfg.FileWriteEnabled = false
 	agentCfg.BrowserControl = nil
+	agentCfg.DesktopControl = nil
 	agentCfg.BuiltinBrowser = nil
 	agentCfg.BrowserToolsDisabled = true
 	agentCfg.ExtensionManagement = false

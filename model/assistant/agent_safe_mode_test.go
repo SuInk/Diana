@@ -291,7 +291,7 @@ func TestSafeModeAgentConfigDropsRiskyCapabilitiesButKeepsLimits(t *testing.T) {
 		t.Fatal("安全模式下交互式浏览器工具仍会登记")
 	}
 	owner := runtime.agentRegistryConfig(safe, MessageEvent{}, true)
-	if len(owner.CommandAllowlist) != 0 || owner.FileWriteEnabled || owner.BuiltinBrowser != nil || owner.BrowserControl != nil || owner.ExtensionManagement {
+	if len(owner.CommandAllowlist) != 0 || owner.FileWriteEnabled || owner.BuiltinBrowser != nil || owner.BrowserControl != nil || owner.DesktopControl != nil || owner.ExtensionManagement {
 		t.Fatalf("安全模式下主人的 Agent 配置仍带高风险能力: %+v", owner)
 	}
 	if owner.MaxSteps != agent.MaxAllowedSteps {

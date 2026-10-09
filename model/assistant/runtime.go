@@ -481,6 +481,7 @@ type Runtime struct {
 	eventListener             EventListener
 	privateMessageInterceptor PrivateMessageInterceptor
 	browserControl            agent.BrowserControlBridge
+	desktopControl            agent.DesktopControlBridge
 	browserBox                BuiltinBrowserProvider
 	browserSource             func() string
 	userBrowsers              *browserbox.UserSessionPool
@@ -662,6 +663,13 @@ func (r *Runtime) SetBrowserControl(bridge agent.BrowserControlBridge) {
 	r.mu.Unlock()
 }
 
+// SetDesktopControl 注入桌面控制执行器的控制面。没注入时 desktop_* 工具不登记。
+func (r *Runtime) SetDesktopControl(bridge agent.DesktopControlBridge) {
+	r.mu.Lock()
+	r.desktopControl = bridge
+	r.mu.Unlock()
+}
+
 // BuiltinBrowserProvider 按机器人交出内置浏览器，由 model/browserbox.Manager 实现。
 // 每台机器人各有一份登录态，A 机器人拿到的句柄碰不到 B 机器人的浏览器。
 type BuiltinBrowserProvider interface {
@@ -755,6 +763,16 @@ func (r *Runtime) browserControlFor(cfg BotConfig) agent.BrowserControlBridge {
 	}
 	r.mu.RLock()
 	bridge := r.browserControl
+	r.mu.RUnlock()
+	return bridge
+}
+
+func (r *Runtime) desktopControlFor(cfg BotConfig) agent.DesktopControlBridge {
+	if cfg.agentSafeMode() || !cfg.AgentDesktopControlEnabled {
+		return nil
+	}
+	r.mu.RLock()
+	bridge := r.desktopControl
 	r.mu.RUnlock()
 	return bridge
 }
@@ -4786,6 +4804,7 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 			BrowserCDPURL:              cfg.AgentBrowserCDPURL,
 			BrowserTimeoutMS:           cfg.AgentBrowserTimeoutMS,
 			BrowserControl:             r.browserControlFor(cfg),
+			DesktopControl:             r.desktopControlFor(cfg),
 			BuiltinBrowser:             r.browserBoxFor(cfg),
 			BrowserToolsDisabled:       r.browserToolsDisabledFor(cfg),
 			CoreTools:                  replyAgentCoreTools,

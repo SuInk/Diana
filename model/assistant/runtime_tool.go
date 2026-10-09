@@ -198,6 +198,7 @@ func (r *Runtime) generateReplyWithAgentTools(ctx context.Context, cfg BotConfig
 			BrowserOperationDisabled:    true,
 			BrowserScreenshotRestricted: true,
 			BrowserControl:              r.browserControlFor(cfg),
+			DesktopControl:              r.desktopControlFor(cfg),
 			BuiltinBrowser:              r.browserBoxFor(cfg),
 		}
 		agentCfg = restrictAgentConfigForMode(cfg, agentCfg)

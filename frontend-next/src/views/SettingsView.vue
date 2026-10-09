@@ -38,6 +38,7 @@
           <p class="settings-page-desc">{{ activePageMeta.hint }}</p>
         </header>
 
+      <DesktopControlSettings v-if="activePage === 'desktop'" />
       <div v-show="activePage === 'security'" class="settings-section-body">
           <!-- 访问安全 -->
           <section class="card">
@@ -492,6 +493,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import AppSelect, { type AppSelectOption } from "../components/AppSelect.vue";
+import DesktopControlSettings from "../components/DesktopControlSettings.vue";
 import EmptyState from "../components/EmptyState.vue";
 import LoadingSkeleton from "../components/LoadingSkeleton.vue";
 import SkeletonBlock from "../components/SkeletonBlock.vue";
@@ -536,6 +538,7 @@ import { toastError, toastSuccess } from "../toast";
 // 侧栏菜单按「改的是谁的」分组：账号与安全决定谁能进来，系统是这台服务本身，
 // 个性化只影响当前浏览器。正文一次只显示选中的一项。
 const settingsPages = [
+  { key: "desktop", label: "桌面控制", hint: "连接本机 macOS 桌面，管理操作权限与电脑任务。", icon: MonitorSmartphone },
   { key: "security", label: "访问安全", hint: "谁能打开这个控制台：管理账号与密码保护。", icon: ShieldCheck },
   { key: "sessions", label: "登录会话", hint: "机器人发来异常登录提醒时，在这里把对应设备踢下线。", icon: MonitorSmartphone },
   { key: "storage", label: "存储空间", hint: "这台机器的磁盘还剩多少，以及 Diana 的数据目录被哪类文件占掉了。", icon: PieChart },
@@ -551,7 +554,7 @@ const settingsGroups = (
   [
     { label: "个性化", keys: ["theme"] },
     { label: "账号与安全", keys: ["security", "sessions"] },
-    { label: "系统", keys: ["storage", "cache", "media", "update", "status"] }
+    { label: "系统", keys: ["storage", "cache", "media", "desktop", "update", "status"] }
   ] as const
 ).map((group) => ({
   label: group.label,

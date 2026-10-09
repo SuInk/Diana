@@ -315,7 +315,7 @@ backup_dir="$install_dir/.installer/backups/$timestamp"
 mkdir -p "$backup_dir/runtime" "$backup_dir/data"
 
 had_previous=false
-for item in "$binary_name" "$compat_binary_name" run.sh uninstall.sh frontend-next gitea-mcp gitea-mcp.LICENSE; do
+for item in "$binary_name" "$compat_binary_name" run.sh uninstall.sh frontend-next gitea-mcp gitea-mcp.LICENSE desktopctl-helper; do
   if [ -e "$install_dir/$item" ]; then
     had_previous=true
     mv "$install_dir/$item" "$backup_dir/runtime/$item"
@@ -426,7 +426,7 @@ assemble_macos_app() {
   fi
   # 自带的 gitea-mcp 按「主程序旁边」被找到，bundle 里也得放一份，
   # 否则从 .app 启动时 MCP 预设只能退回 PATH，多半找不到。
-  for bundled in gitea-mcp gitea-mcp.LICENSE; do
+  for bundled in gitea-mcp gitea-mcp.LICENSE desktopctl-helper; do
     if [ -f "$install_dir/$bundled" ]; then
       cp -f "$install_dir/$bundled" "$macos_app_dir/Contents/MacOS/$bundled"
     fi
@@ -864,7 +864,7 @@ EOF
 restore_previous() {
   [ "$had_previous" = "true" ] || return 0
   stop_service
-  for item in "$binary_name" "$compat_binary_name" run.sh uninstall.sh frontend-next gitea-mcp gitea-mcp.LICENSE; do
+  for item in "$binary_name" "$compat_binary_name" run.sh uninstall.sh frontend-next gitea-mcp gitea-mcp.LICENSE desktopctl-helper; do
     if [ -e "$backup_dir/runtime/$item" ]; then
       rm -rf -- "$install_dir/$item"
       mv "$backup_dir/runtime/$item" "$install_dir/$item"
