@@ -143,3 +143,38 @@ func TestParallelReadsRespectStepBudget(t *testing.T) {
 		t.Fatalf("over-budget call must be reported: %+v", results)
 	}
 }
+
+func TestParallelReadsRespectDeferredContracts(t *testing.T) {
+	for _, kind := range []string{"unloaded", "invalid", "valid"} {
+		t.Run(kind, func(t *testing.T) {
+			search := &schemaDispatchTool{countingTool: countingTool{name: WebSearchToolName}, schema: toolObjectSchema([]string{"query"}, map[string]any{"query": toolStringParam("query")})}
+			render := &schemaDispatchTool{countingTool: countingTool{name: browserRenderToolName}, schema: toolObjectSchema([]string{"url"}, map[string]any{"url": toolStringParam("url")})}
+			client := &dispatchTestClient{}
+			if kind != "unloaded" {
+				client.replies = append(client.replies, loadReply(true, search.Name()), loadReply(true, render.Name()))
+			}
+			query := any("news")
+			if kind == "invalid" {
+				query = 123
+			}
+			client.replies = append(client.replies, &llm.GenerateResponse{ToolCalls: []llm.ToolCall{
+				{ID: "search", Name: search.Name(), Arguments: map[string]any{"query": query}},
+				{ID: "render", Name: render.Name(), Arguments: map[string]any{"url": "https://example.com"}},
+			}})
+			runner, err := NewRunner(client, Config{MaxSteps: 5, CoreTools: []string{"common"}}, NewToolRegistry(&countingTool{name: "common"}, search, render))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := runner.Run(context.Background(), Request{Messages: []llm.Message{{Role: llm.RoleUser, Content: "research"}}}); err != nil {
+				t.Fatal(err)
+			}
+			want := 0
+			if kind == "valid" {
+				want = 1
+			}
+			if search.calls != want || render.calls != want {
+				t.Fatalf("%s: search=%d render=%d want each %d", kind, search.calls, render.calls, want)
+			}
+		})
+	}
+}

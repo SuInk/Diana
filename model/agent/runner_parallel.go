@@ -50,6 +50,13 @@ func (r *Runner) parallelReadBatch(calls []llm.ToolCall) ([]int, bool) {
 		if !ok || r.registry.OperationDisabledError(call.Name, call.Arguments) != nil || explicitUserRequestKind(tool, call.Arguments) != "" {
 			return nil, false
 		}
+		// 先检查已加载的契约；不能在这里自动加载后立即执行，模型尚未看到契约。
+		// 不满足条件时退回普通路径，由 dispatch 返回加载提示或参数错误。
+		if r.loader != nil && !r.loader.core[call.Name] {
+			if _, err := r.loader.resolveLoaded(llmAction{Action: "tool", Tool: call.Name, Input: cloneToolInput(call.Arguments)}); err != nil {
+				return nil, false
+			}
+		}
 		indices = append(indices, index)
 	}
 	return indices, len(indices) >= 2
@@ -60,7 +67,7 @@ func (r *Runner) runParallelReads(ctx context.Context, observer RunObserver, tra
 	var wg sync.WaitGroup
 	for index, call := range calls {
 		tool, _ := r.registry.Get(call.Name)
-		input := call.Arguments
+		input := cloneToolInput(call.Arguments)
 		if typed, ok := tool.(ToolInputSchema); ok {
 			input = coerceToolInputArrays(typed.InputSchema(), input)
 		}
