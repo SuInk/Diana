@@ -185,6 +185,41 @@
       },
       {
         "category": "act_as_owner",
+        "tool": "desktop_job_create",
+        "reason": "管理主人本机桌面持久任务"
+      },
+      {
+        "category": "act_as_owner",
+        "tool": "desktop_job_status",
+        "reason": "管理主人本机桌面持久任务"
+      },
+      {
+        "category": "act_as_owner",
+        "tool": "desktop_job_pause",
+        "reason": "管理主人本机桌面持久任务"
+      },
+      {
+        "category": "act_as_owner",
+        "tool": "desktop_job_resume",
+        "reason": "管理主人本机桌面持久任务"
+      },
+      {
+        "category": "act_as_owner",
+        "tool": "desktop_job_wait_confirm",
+        "reason": "管理主人本机桌面持久任务"
+      },
+      {
+        "category": "act_as_owner",
+        "tool": "desktop_job_confirm",
+        "reason": "管理主人本机桌面持久任务"
+      },
+      {
+        "category": "act_as_owner",
+        "tool": "desktop_job_cancel",
+        "reason": "管理主人本机桌面持久任务"
+      },
+      {
+        "category": "act_as_owner",
         "tool": "github",
         "field": "operation",
         "operations": [
