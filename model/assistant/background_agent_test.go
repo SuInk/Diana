@@ -73,9 +73,12 @@ func TestBackgroundAgentStopsAtRoundLimit(t *testing.T) {
 	if _, err := tool.Run(context.Background(), map[string]any{"operation": "start", "goal": "查不完的事", "max_rounds": 2}); err != nil {
 		t.Fatal(err)
 	}
-	waitForCondition(t, 2*time.Second, func() bool { return strings.Contains(lastText(channel), "✅") })
+	waitForCondition(t, 2*time.Second, func() bool { return strings.Contains(lastText(channel), "尚未完成") })
 	if !strings.Contains(lastText(channel), "还在查") {
 		t.Fatalf("最后一轮的结果没交出来: %q", lastText(channel))
+	}
+	if states := runtime.backgroundAgentsFor(event); len(states) != 1 || states[0].Phase != "exhausted" {
+		t.Fatalf("states = %+v", states)
 	}
 }
 
@@ -148,5 +151,33 @@ func TestParseBackgroundAgentOutput(t *testing.T) {
 		if got, _ := parseBackgroundAgentOutput(input); got != want {
 			t.Fatalf("%q => %q", input, got)
 		}
+	}
+}
+
+func TestBackgroundAgentConcurrentStartHonorsLimit(t *testing.T) {
+	runtime, _, event := backgroundTestRuntime()
+	release := make(chan struct{})
+	defer close(release)
+	ready := make(chan struct{})
+	results := make(chan error, 20)
+	for range 20 {
+		go func() {
+			<-ready
+			_, err := runtime.startBackgroundAgent(context.Background(), event, "并发请求", 1, func(context.Context, backgroundAgentState) (string, error) {
+				<-release
+				return "【完成】结束", nil
+			})
+			results <- err
+		}()
+	}
+	close(ready)
+	started := 0
+	for range 20 {
+		if <-results == nil {
+			started++
+		}
+	}
+	if started != backgroundAgentPerSession {
+		t.Fatalf("started %d, want %d", started, backgroundAgentPerSession)
 	}
 }

@@ -566,6 +566,7 @@ type Runtime struct {
 	subagentTasks       map[string]activeSubagentTask
 	subagentRecent      map[string]SubagentTaskStatus
 	// backgroundAgents 是后台长任务每轮的记录，status 查询用；归 subagentMu 管。
+	backgroundStartMu   sync.Mutex
 	backgroundAgents    map[string]*backgroundAgentState
 	subagentSem         chan struct{}
 	subagentLLMSem      chan struct{}

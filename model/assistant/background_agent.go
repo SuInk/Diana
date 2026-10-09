@@ -68,6 +68,9 @@ func (r *Runtime) startBackgroundAgent(ctx context.Context, event MessageEvent, 
 	if maxRounds <= 0 || maxRounds > backgroundAgentMaxRounds {
 		maxRounds = backgroundAgentMaxRounds
 	}
+	// 会话限额检查和登记必须串行；预留插件任务本身也会获取 subagentMu。
+	r.backgroundStartMu.Lock()
+	defer r.backgroundStartMu.Unlock()
 	session := sessionKey(event)
 	now := time.Now()
 	r.subagentMu.Lock()
@@ -129,8 +132,11 @@ func (r *Runtime) runBackgroundAgent(ctx context.Context, state *backgroundAgent
 			return PluginTaskResult{}, fmt.Errorf("第 %d 轮出错：%w", round, err)
 		}
 		kind, body := parseBackgroundAgentOutput(output)
-		if kind == backgroundAgentDoneTag || round == state.MaxRounds {
+		if kind == backgroundAgentDoneTag {
 			return PluginTaskResult{Reply: r.finishBackgroundAgent(state, "completed", body)}, nil
+		}
+		if round == state.MaxRounds {
+			return PluginTaskResult{Reply: r.finishBackgroundAgent(state, "exhausted", body)}, nil
 		}
 		note := truncateRunes(body, backgroundAgentNoteRunes)
 		r.updateBackgroundAgent(state, func(s *backgroundAgentState) { s.Notes = append(s.Notes, note) })
@@ -153,6 +159,8 @@ func (r *Runtime) finishBackgroundAgent(state *backgroundAgentState, phase, resu
 	})
 	elapsed := formatCodingDuration(time.Since(snapshot.StartedAt))
 	switch {
+	case phase == "exhausted":
+		return fmt.Sprintf("⏸ 后台任务 %s 已到 %d 轮上限，尚未完成（%s）。\n最后进度：%s", snapshot.ID, snapshot.MaxRounds, elapsed, strings.TrimSpace(result))
 	case phase == "cancelled":
 		text := fmt.Sprintf("⏹ 后台任务 %s 已停止（%s，做了 %d 轮）。", snapshot.ID, elapsed, len(snapshot.Notes))
 		if len(snapshot.Notes) > 0 {
@@ -213,7 +221,7 @@ func (r *Runtime) backgroundAgentsFor(event MessageEvent) []backgroundAgentState
 
 func backgroundAgentFinished(phase string) bool {
 	switch phase {
-	case "completed", "failed", "cancelled":
+	case "completed", "failed", "cancelled", "exhausted":
 		return true
 	}
 	return false
