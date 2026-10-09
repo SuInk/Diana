@@ -36,9 +36,11 @@ var (
 type Registry struct {
 	store Store
 
-	mu     sync.RWMutex
-	policy Policy
-	tokens map[string]Token
+	persistMu     sync.Mutex
+	emergencyStop bool
+	mu            sync.RWMutex
+	policy        Policy
+	tokens        map[string]Token
 }
 
 // NewRegistry 创建注册表。store 为 nil 或读失败时按「全关」空状态启动。
@@ -52,6 +54,7 @@ func NewRegistry(ctx context.Context, store Store) *Registry {
 		return r
 	}
 	r.policy = doc.Policy.WithDefaults()
+	r.emergencyStop = doc.EmergencyStop
 	for _, token := range doc.Tokens {
 		token.TokenHash = strings.TrimSpace(token.TokenHash)
 		if token.TokenHash == "" {
@@ -218,8 +221,10 @@ func (r *Registry) persist(ctx context.Context) error {
 	if r == nil || r.store == nil {
 		return nil
 	}
+	r.persistMu.Lock()
+	defer r.persistMu.Unlock()
 	r.mu.RLock()
-	doc := Document{Policy: r.policy.clone(), Tokens: make([]Token, 0, len(r.tokens))}
+	doc := Document{EmergencyStop: r.emergencyStop, Policy: r.policy.clone(), Tokens: make([]Token, 0, len(r.tokens))}
 	for tokenHash, token := range r.tokens {
 		token.TokenHash = tokenHash
 		doc.Tokens = append(doc.Tokens, token)
@@ -245,5 +250,37 @@ func validateTokenName(name string) error {
 			return ErrTokenNameInvalid
 		}
 	}
+	return nil
+}
+
+func (r *Registry) EmergencyStop() bool {
+	if r == nil {
+		return true
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.emergencyStop
+}
+
+// A failed save must never release a stop, including the in-memory stop.
+func (r *Registry) setEmergencyStop(ctx context.Context, active bool) error {
+	r.persistMu.Lock()
+	defer r.persistMu.Unlock()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if active {
+		r.emergencyStop = true
+	}
+	doc := Document{Policy: r.policy.clone(), EmergencyStop: active}
+	for _, token := range r.tokens {
+		doc.Tokens = append(doc.Tokens, token)
+	}
+	if r.store != nil {
+		if err := r.store.SaveDesktopControl(ctx, doc); err != nil {
+			r.emergencyStop = true
+			return err
+		}
+	}
+	r.emergencyStop = active
 	return nil
 }

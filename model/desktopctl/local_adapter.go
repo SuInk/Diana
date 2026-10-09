@@ -10,6 +10,7 @@ import (
 	"github.com/SuInk/diana/internal/safego"
 	"strings"
 	"sync"
+	"time"
 )
 
 // Adapter 是同机执行面。单元测试用假实现；macOS 可包一层 helper 子进程。
@@ -57,6 +58,11 @@ func (l *LocalConn) SendContext(ctx context.Context, frame Frame) error {
 			cancel()
 		}
 		l.mu.Unlock()
+		if p, ok := l.Adapter.(*ProcessAdapter); ok {
+			invalidateCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			p.Invalidate(invalidateCtx)
+			cancel()
+		}
 		return nil
 	}
 	if frame.Type != FrameCommand {
@@ -140,6 +146,34 @@ func (l *LocalConn) handleCommand(ctx context.Context, frame Frame, adapter Adap
 			payload.Mime = "image/png"
 		}
 		reply.Data = rawJSON(payload)
+	case OpWindowElements:
+		extended, ok := adapter.(interface {
+			Elements(context.Context, Command) (ElementsPayload, error)
+		})
+		if !ok {
+			fail(commandError(CodeUnsupportedOp, "执行器不支持元素读取"))
+			return
+		}
+		payload, err := extended.Elements(ctx, cmd)
+		if err != nil {
+			fail(err)
+			return
+		}
+		reply.Data = rawJSON(payload)
+	case OpWindowScroll:
+		extended, ok := adapter.(interface {
+			Scroll(context.Context, Command) (ActionResult, error)
+		})
+		if !ok {
+			fail(commandError(CodeUnsupportedOp, "执行器不支持滚动"))
+			return
+		}
+		payload, err := extended.Scroll(ctx, cmd)
+		if err != nil {
+			fail(err)
+			return
+		}
+		reply.Data = rawJSON(payload)
 	case OpWindowClick:
 		payload, err := adapter.Click(ctx, cmd)
 		if err != nil {
@@ -175,6 +209,11 @@ func (l *LocalConn) Close() error {
 		cancel()
 	}
 	l.mu.Unlock()
+	if p, ok := l.Adapter.(*ProcessAdapter); ok {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		p.Invalidate(ctx)
+	}
 	return nil
 }
 

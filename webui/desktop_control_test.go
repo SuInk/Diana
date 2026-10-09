@@ -33,7 +33,7 @@ func TestDesktopControlRequiresLoginAndHumanConfirmation(t *testing.T) {
 		router.ServeHTTP(rec, req)
 		return rec
 	}
-	for _, tc := range []struct{ method, path string }{{"GET", "status"}, {"GET", "jobs"}, {"PUT", "policy"}, {"POST", "takeover"}, {"POST", "jobs/test/confirm"}} {
+	for _, tc := range []struct{ method, path string }{{"GET", "status"}, {"GET", "jobs"}, {"PUT", "policy"}, {"POST", "takeover"}, {"POST", "jobs/test/confirm"}, {"POST", "actions/test/confirm"}} {
 		if rec := request(tc.method, "/api/desktop-control/"+tc.path, "{}", ""); rec.Code != http.StatusUnauthorized {
 			t.Fatalf("%s: %d", tc.path, rec.Code)
 		}

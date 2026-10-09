@@ -165,6 +165,7 @@ func typeText(id: String, text: String) -> String? {
         guard foregroundTargetPID(id: id) == targetPID else {
             return "takeover: 前台窗口已改变，停止输入"
         }
+        if let err = requireNonSecureFocus(id: id) { return err }
         let utf16 = Array(String(scalar).utf16)
         guard let down = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: true),
               let up = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: false) else {
@@ -230,6 +231,110 @@ func pressKey(id: String, key: String) -> String? {
     return nil
 }
 
+
+func axValue(_ element: AXUIElement, _ name: String) -> CFTypeRef? {
+    var value: CFTypeRef?
+    guard AXUIElementCopyAttributeValue(element, name as CFString, &value) == .success else { return nil }
+    return value
+}
+func axBounds(_ element: AXUIElement) -> CGRect? {
+    guard let position = axValue(element, kAXPositionAttribute), CFGetTypeID(position) == AXValueGetTypeID(),
+          let size = axValue(element, kAXSizeAttribute), CFGetTypeID(size) == AXValueGetTypeID() else { return nil }
+    var point = CGPoint.zero; var extent = CGSize.zero
+    guard AXValueGetValue(position as! AXValue, .cgPoint, &point),
+          AXValueGetValue(size as! AXValue, .cgSize, &extent) else { return nil }
+    return CGRect(origin: point, size: extent)
+}
+func targetAXWindow(id: String) -> AXUIElement? {
+    guard let wid = UInt32(id), let bounds = windowBounds(id: id),
+          let info = CGWindowListCopyWindowInfo(.optionIncludingWindow, wid) as? [[String: Any]],
+          let pid = info.first?[kCGWindowOwnerPID as String] as? pid_t else { return nil }
+    let app = AXUIElementCreateApplication(pid)
+    AXUIElementSetMessagingTimeout(app, 1)
+    guard let windows = axValue(app, kAXWindowsAttribute) as? [AXUIElement] else { return nil }
+    // Never guess between two overlapping windows in the same application.
+    let matches = windows.filter { element in
+        guard let rect = axBounds(element) else { return false }
+        return abs(rect.minX-bounds.minX)<1 && abs(rect.minY-bounds.minY)<1 && abs(rect.width-bounds.width)<1 && abs(rect.height-bounds.height)<1
+    }
+    return matches.count == 1 ? matches[0] : nil
+}
+struct AccessibleElement: Codable, Equatable {
+    let id: String
+    let role: String
+    let label: String
+    let value: String
+    let x: Double
+    let y: Double
+    let width: Double
+    let height: Double
+    let enabled: Bool
+}
+func readElements(id: String) -> ([AccessibleElement], [String: AXUIElement], Bool, String?) {
+    if let err = requireAccessibility() { return ([], [:], false, err) }
+    guard let root = targetAXWindow(id: id), let bounds = windowBounds(id: id) else {
+        return ([], [:], false, "window_unknown: 无法唯一匹配窗口的辅助功能元素")
+    }
+    var rows: [AccessibleElement] = []; var refs: [String: AXUIElement] = [:]
+    var truncated = false; var visited = 0
+    func visit(_ node: AXUIElement, _ path: String, _ depth: Int) {
+        guard visited < 500, depth <= 16 else { truncated = true; return }
+        visited += 1
+        let role = axValue(node, kAXRoleAttribute) as? String ?? ""
+        let subrole = axValue(node, kAXSubroleAttribute) as? String ?? ""
+        // Do not read secure values or descend into secure controls.
+        if role == "AXSecureTextField" || subrole == "AXSecureTextField" { return }
+        if let rect = axBounds(node), !rect.isEmpty, bounds.contains(rect) {
+            let label = axValue(node, kAXTitleAttribute) as? String ?? axValue(node, kAXDescriptionAttribute) as? String ?? ""
+            let value = axValue(node, kAXValueAttribute) as? String ?? ""
+            rows.append(AccessibleElement(id: path, role: role, label: String(label.prefix(256)), value: String(value.prefix(512)), x: Double(rect.minX-bounds.minX), y: Double(rect.minY-bounds.minY), width: Double(rect.width), height: Double(rect.height), enabled: axValue(node, kAXEnabledAttribute) as? Bool ?? false))
+            refs[path] = node
+        }
+        let children = axValue(node, kAXChildrenAttribute) as? [AXUIElement] ?? []
+        for (index, child) in children.prefix(500).enumerated() { visit(child, path + "." + String(index), depth+1) }
+        if children.count > 500 { truncated = true }
+    }
+    visit(root, "0", 0)
+    return (rows, refs, truncated, nil)
+}
+func requireNonSecureFocus(id: String) -> String? {
+    guard let pid = foregroundTargetPID(id: id) else { return "window_unknown: 目标窗口不在前台" }
+    let app = AXUIElementCreateApplication(pid)
+    guard let raw = axValue(app, kAXFocusedUIElementAttribute), CFGetTypeID(raw) == AXUIElementGetTypeID() else {
+        return "permission_denied: 无法核实焦点控件，请人工接管"
+    }
+    let focused = raw as! AXUIElement
+    if (axValue(focused, kAXSubroleAttribute) as? String) == "AXSecureTextField" || (axValue(focused, kAXRoleAttribute) as? String) == "AXSecureTextField" {
+        return "permission_denied: 安全输入框需要人工接管"
+    }
+    return nil
+}
+func clickElement(id: String, elementID: String, expected: AccessibleElement) -> String? {
+    guard foregroundTargetPID(id: id) != nil else { return "window_unknown: 目标窗口不在前台" }
+    let (rows, refs, _, error) = readElements(id: id)
+    if let error = error { return error }
+    guard let row = rows.first(where: { $0.id == elementID && $0.enabled }), let element = refs[elementID] else {
+        return "stale_observation: 元素不可用，请重新读取"
+    }
+    guard row == expected else { return "stale_observation: 目标元素已经变化，请重新读取" }
+    var actions: CFArray?
+    if AXUIElementCopyActionNames(element, &actions) == .success, let names = actions as? [String], names.contains(kAXPressAction) {
+        guard foregroundTargetPID(id: id) != nil else { return "takeover: 前台窗口已改变" }
+        return AXUIElementPerformAction(element, kAXPressAction as CFString) == .success ? nil : "helper_error: 元素点击失败，请核实现场"
+    }
+    return clickWindow(id: id, x: row.x+row.width/2, y: row.y+row.height/2, button: "left")
+}
+func scrollWindow(id: String, x: Double, y: Double, dx: Int32, dy: Int32) -> String? {
+    if let err = requireAccessibility() { return err }
+    guard let pid = foregroundTargetPID(id: id), let bounds = windowBounds(id: id) else { return "window_unknown: 目标窗口不在前台" }
+    guard x.isFinite, y.isFinite, x >= 0, y >= 0, x < Double(bounds.width), y < Double(bounds.height),
+          dx >= -1000, dx <= 1000, dy >= -1000, dy <= 1000, dx != 0 || dy != 0 else { return "bad_request: 滚动位置或距离无效" }
+    guard let event = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 2, wheel1: -dy, wheel2: -dx, wheel3: 0) else { return "helper_error: 无法创建滚动事件" }
+    event.location = CGPoint(x: bounds.minX+CGFloat(x), y: bounds.minY+CGFloat(y))
+    event.postToPid(pid)
+    return nil
+}
+
 let args = CommandLine.arguments
 if args.count < 2 {
     fputs("usage: desktopctl-helper list | screenshot <id> | click <id> <x> <y> [button] | type <id> <text> | key <id> <key>\n", stderr)
@@ -268,6 +373,21 @@ case "screenshot":
         exit(0)
     }
     dispatchMain()
+case "elements":
+    guard args.count >= 3 else { fail("bad_request: elements requires window_id") }
+    let (rows, _, truncated, error) = readElements(id: args[2])
+    if let error = error { fail(error) }
+    struct Payload: Codable { let window_id: String; let elements: [AccessibleElement]; let truncated: Bool }
+    FileHandle.standardOutput.write(try! JSONEncoder().encode(Payload(window_id: args[2], elements: rows, truncated: truncated)))
+case "element-click":
+    guard args.count >= 4 else { fail("bad_request: element-click requires window_id element_id") }
+    guard let expected = try? JSONDecoder().decode(AccessibleElement.self, from: FileHandle.standardInput.readDataToEndOfFile()) else { fail("bad_request: element-click requires expected element JSON on stdin") }
+    if let err = clickElement(id: args[2], elementID: args[3], expected: expected) { fail(err) }
+    print("{\"ok\":true,\"op\":\"window.click\"}")
+case "scroll":
+    guard args.count >= 7, let x = Double(args[3]), let y = Double(args[4]), let dx = Int32(args[5]), let dy = Int32(args[6]) else { fail("bad_request: scroll requires window_id x y delta_x delta_y") }
+    if let err = scrollWindow(id: args[2], x: x, y: y, dx: dx, dy: dy) { fail(err) }
+    print("{\"ok\":true,\"op\":\"window.scroll\"}")
 case "click":
     guard args.count >= 5 else { fail("click requires window_id x y") }
     let button = args.count >= 6 ? args[5] : "left"
@@ -277,10 +397,12 @@ case "click":
 case "type":
     guard args.count >= 4 else { fail("type requires window_id text") }
     let text = args[3] == "--stdin" ? String(data: FileHandle.standardInput.readDataToEndOfFile(), encoding: .utf8) ?? "" : args[3...].joined(separator: " ")
+    if let err = requireNonSecureFocus(id: args[2]) { fail(err) }
     if let err = typeText(id: args[2], text: text) { fail(err) }
     print("{\"ok\":true,\"op\":\"window.type\"}")
 case "key":
     guard args.count >= 4 else { fail("key requires window_id key") }
+    if let err = requireNonSecureFocus(id: args[2]) { fail(err) }
     if let err = pressKey(id: args[2], key: args[3]) { fail(err) }
     print("{\"ok\":true,\"op\":\"window.key\"}")
 default:

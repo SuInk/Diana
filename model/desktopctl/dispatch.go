@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 )
@@ -30,7 +31,10 @@ type Command struct {
 	// Text 用于 window.type。
 	Text string `json:"text,omitempty"`
 	// Key 用于 window.key，例如 Return、Tab、cmd+c。
-	Key string `json:"key,omitempty"`
+	Key       string `json:"key,omitempty"`
+	ElementID string `json:"element_id,omitempty"`
+	DeltaX    int    `json:"delta_x,omitempty"`
+	DeltaY    int    `json:"delta_y,omitempty"`
 }
 
 // Dispatch 核对授权边界后下发指令并等回执。
@@ -38,11 +42,15 @@ func (h *Hub) Dispatch(ctx context.Context, cmd Command) (Result, error) {
 	if h == nil {
 		return Result{}, commandError(CodeDisabled, "桌面控制不可用")
 	}
+	if h.registry.EmergencyStop() {
+		return Result{}, commandError(CodeTakeover, "人工接管中，请在控制台结束接管")
+	}
 	policy := h.Policy()
 	if !policy.Enabled {
 		return Result{}, commandError(CodeDisabled, "桌面控制未启用；先打开总开关并连接执行器")
 	}
 	op := strings.TrimSpace(cmd.Op)
+	cmd.Op = op
 	if !KnownOp(op) {
 		return Result{}, commandError(CodeUnsupportedOp, "不支持的桌面控制指令：%s", op)
 	}
@@ -177,16 +185,32 @@ func (c *Connection) resolveWindow(policy Policy, windowID string) (WindowInfo, 
 func validateCommandParams(op string, cmd Command) error {
 	switch op {
 	case OpWindowClick:
+		if cmd.ElementID != "" {
+			if cmd.Button != "" && strings.ToLower(strings.TrimSpace(cmd.Button)) != "left" {
+				return commandError(CodeBadRequest, "元素点击只支持左键；右键请用坐标")
+			}
+			if cmd.Observation <= 0 {
+				return commandError(CodeBadRequest, "元素点击需要 observation")
+			}
+			break
+		}
 		if cmd.X == nil || cmd.Y == nil {
 			return commandError(CodeBadRequest, "window.click 需要 x 与 y（相对窗口左上角）")
 		}
-		if *cmd.X < 0 || *cmd.Y < 0 {
+		if math.IsNaN(*cmd.X) || math.IsNaN(*cmd.Y) || math.IsInf(*cmd.X, 0) || math.IsInf(*cmd.Y, 0) || *cmd.X < 0 || *cmd.Y < 0 {
 			return commandError(CodeBadRequest, "window.click 的坐标不能为负")
 		}
 		switch strings.ToLower(strings.TrimSpace(cmd.Button)) {
 		case "", "left", "right", "middle":
 		default:
 			return commandError(CodeBadRequest, "window.click 的 button 只支持 left/right/middle")
+		}
+	case OpWindowScroll:
+		if cmd.X == nil || cmd.Y == nil || math.IsNaN(*cmd.X) || math.IsNaN(*cmd.Y) || math.IsInf(*cmd.X, 0) || math.IsInf(*cmd.Y, 0) || *cmd.X < 0 || *cmd.Y < 0 {
+			return commandError(CodeBadRequest, "滚动需要窗口内有限坐标 x/y")
+		}
+		if cmd.DeltaX < -1000 || cmd.DeltaX > 1000 || cmd.DeltaY < -1000 || cmd.DeltaY > 1000 || (cmd.DeltaX == 0 && cmd.DeltaY == 0) {
+			return commandError(CodeBadRequest, "滚动每轴须在 -1000 到 1000 像素内，且不能全为零")
 		}
 	case OpWindowType:
 		if cmd.Text == "" {

@@ -6,6 +6,7 @@ package desktopctl
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -483,6 +484,9 @@ func (m *JobManager) AuthorizeDispatch(ctx context.Context, cmd Command) (skip b
 				continue
 			}
 			if step.Status == StepCompleted {
+				if cmd.Op == OpWindowScreenshot || cmd.Op == OpWindowElements {
+					return false, Result{}, "", commandError(CodeJobBlocked, "观察内容不长期保存，请用新的幂等键重新观察")
+				}
 				return true, Result{OK: true, Data: append(json.RawMessage(nil), step.Result...)}, step.ID, nil
 			}
 			return false, Result{}, "", commandError(CodeJobBlocked, "同一幂等键已有下发记录，结果未确认，不得重复执行")
@@ -515,7 +519,7 @@ func (m *JobManager) AuthorizeDispatch(ctx context.Context, cmd Command) (skip b
 		ID:                newStepID(),
 		Op:                cmd.Op,
 		WindowID:          cmd.WindowID,
-		Params:            rawJSON(cmd),
+		Params:            auditCommand(cmd),
 		Status:            StepDispatched,
 		ObservationBefore: job.LastObservation,
 		IdempotencyKey:    strings.TrimSpace(cmd.IdempotencyKey),
@@ -570,13 +574,31 @@ func (m *JobManager) RecordDispatch(ctx context.Context, jobID, stepID string, c
 			job.Steps[i].Error = dispatchErr.Error()
 		} else {
 			job.Steps[i].Status = StepCompleted
-			job.Steps[i].Result = append(json.RawMessage(nil), result.Data...)
+			job.Steps[i].Result = auditResult(cmd.Op, result.Data)
 			job.Steps[i].CompletedAt = m.now()
-			if cmd.Op == OpWindowScreenshot {
+			if cmd.Op == OpWindowScreenshot || cmd.Op == OpWindowElements {
 				job.LastObservation++
+				var observation struct {
+					Observation int64 `json:"observation"`
+				}
+				_ = json.Unmarshal(result.Data, &observation)
+				if observation.Observation > 0 {
+					job.LastObservation = observation.Observation
+				}
 				job.Steps[i].ObservationAfter = job.LastObservation
 				job.NeedsReobserve = false
 			} else if result.OK {
+				if IsWriteOp(cmd.Op) {
+					var action ActionResult
+					if json.Unmarshal(result.Data, &action) == nil {
+						if action.Observation > 0 {
+							job.LastObservation = action.Observation
+						}
+						if action.VerificationError != "" {
+							job.NeedsReobserve = true
+						}
+					}
+				}
 				job.Steps[i].ObservationAfter = job.LastObservation
 			}
 		}
@@ -608,4 +630,38 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+// Durable audit retains command/evidence fingerprints, not screenshots or typed text.
+func auditCommand(c Command) json.RawMessage {
+	var fields map[string]any
+	_ = json.Unmarshal(rawJSON(c), &fields)
+	if c.Text != "" {
+		delete(fields, "text")
+		fields["text_sha256"] = fmt.Sprintf("%x", sha256.Sum256([]byte(c.Text)))
+		fields["text_bytes"] = len(c.Text)
+	}
+	return rawJSON(fields)
+}
+func auditResult(op string, data json.RawMessage) json.RawMessage {
+	var fields map[string]any
+	if json.Unmarshal(data, &fields) != nil {
+		return append(json.RawMessage(nil), data...)
+	}
+	redact := func(v map[string]any) {
+		if image, ok := v["data"].(string); ok && image != "" {
+			v["image_sha256"] = fmt.Sprintf("%x", sha256.Sum256([]byte(image)))
+			delete(v, "data")
+		}
+	}
+	if op == OpWindowScreenshot {
+		redact(fields)
+	}
+	if evidence, ok := fields["evidence"].(map[string]any); ok {
+		redact(evidence)
+	}
+	if op == OpWindowElements {
+		delete(fields, "elements")
+	}
+	return rawJSON(fields)
 }

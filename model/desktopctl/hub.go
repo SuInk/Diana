@@ -4,6 +4,7 @@
 package desktopctl
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -78,9 +79,10 @@ type Hub struct {
 	jobs     *JobManager
 	now      func() time.Time
 
-	mu    sync.RWMutex
-	conns map[string]*Connection
-	seq   uint64
+	stopMu sync.Mutex
+	mu     sync.RWMutex
+	conns  map[string]*Connection
+	seq    uint64
 }
 
 // NewHub 创建控制面。
@@ -150,6 +152,8 @@ func (h *Hub) Register(conn Conn, hello Hello, token TokenInfo) (*Connection, We
 	if !policy.Enabled {
 		return nil, Welcome{}, commandError(CodeDisabled, "桌面控制未启用")
 	}
+	h.stopMu.Lock()
+	defer h.stopMu.Unlock()
 	hello.Token = ""
 	now := h.now()
 	h.mu.Lock()
@@ -164,6 +168,7 @@ func (h *Hub) Register(conn Conn, hello Hello, token TokenInfo) (*Connection, We
 		created:  now,
 		lastSeen: now,
 		pending:  map[string]chan Result{},
+		takeover: h.registry.EmergencyStop(),
 	}
 	h.conns[id] = c
 	stale := make([]*Connection, 0, 1)
@@ -243,7 +248,7 @@ func (c *Connection) HandleFrame(frame Frame) {
 		if len(frame.Data) == 0 || json.Unmarshal(frame.Data, &payload) != nil {
 			return
 		}
-		c.setTakeover(payload.Active, payload.Reason)
+		_ = c.hub.SetTakeover(context.Background(), payload.Active, payload.Reason)
 	case FramePing:
 		_ = c.conn.Send(Frame{Type: FramePong})
 	case FramePong:
@@ -303,8 +308,7 @@ func (c *Connection) SetTakeover(active bool, reason string) {
 	if c == nil {
 		return
 	}
-	c.setTakeover(active, reason)
-	_ = c.conn.Send(Frame{Type: FrameTakeover, Data: rawJSON(TakeoverPayload{Active: active, Reason: reason})})
+	_ = c.hub.SetTakeover(context.Background(), active, reason)
 }
 
 // Takeover 返回当前接管状态。
@@ -407,7 +411,7 @@ func (h *Hub) CloseAll() {
 
 // Ready 表示现在能不能操作桌面。
 func (h *Hub) Ready() bool {
-	if h == nil || h.registry == nil || !h.registry.Policy().Enabled {
+	if h == nil || h.registry == nil || h.registry.EmergencyStop() || !h.registry.Policy().Enabled {
 		return false
 	}
 	h.mu.RLock()
@@ -453,4 +457,31 @@ func (h *Hub) pickConnection(id string) (*Connection, error) {
 	sort.Strings(ids)
 	return nil, commandError(CodeBadRequest,
 		"有 %d 个桌面控制连接，请用 connection 参数点名其中一个：%s", len(ids), strings.Join(ids, ", "))
+}
+
+// SetTakeover persists a machine-wide stop independently of connection lifetime.
+func (h *Hub) SetTakeover(ctx context.Context, active bool, reason string) error {
+	h.stopMu.Lock()
+	defer h.stopMu.Unlock()
+	h.mu.RLock()
+	conns := make([]*Connection, 0, len(h.conns))
+	for _, c := range h.conns {
+		conns = append(conns, c)
+	}
+	h.mu.RUnlock()
+	apply := func(stop bool) {
+		for _, c := range conns {
+			c.setTakeover(stop, reason)
+			_ = c.conn.Send(Frame{Type: FrameTakeover, Data: rawJSON(TakeoverPayload{Active: stop, Reason: reason})})
+		}
+	}
+	// Cancel in-flight input before waiting for persistence.
+	if active {
+		apply(true)
+	}
+	err := h.registry.setEmergencyStop(ctx, active)
+	if !active {
+		apply(h.registry.EmergencyStop())
+	}
+	return err
 }

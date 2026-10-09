@@ -21,8 +21,9 @@ type Token struct {
 
 // Document 是桌面控制的持久化状态。
 type Document struct {
-	Policy Policy  `json:"policy"`
-	Tokens []Token `json:"tokens,omitempty"`
+	EmergencyStop bool    `json:"emergency_stop"`
+	Policy        Policy  `json:"policy"`
+	Tokens        []Token `json:"tokens,omitempty"`
 }
 
 // Store 持久化桌面控制状态。为 nil 时 Registry 只留在内存。
