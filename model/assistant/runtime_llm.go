@@ -1025,7 +1025,7 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 	}
 	// SOUL.md 排在整条系统提示词的最前面，不加任何包装：她是谁、在乎什么、为什么，
 	// 后面所有规则都在它的框架里读。
-	builder.WriteString(cfg.SystemPrompt)
+	builder.WriteString(cfg.personaPrompt())
 	if name := strings.TrimSpace(cfg.Name); name != "" {
 		appendPromptSection(&builder, cfg.promptf(promptBotNameSpec, map[string]string{"name": name}))
 	}

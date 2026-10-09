@@ -53,7 +53,7 @@ func (r *Runtime) stickerPersonaFitStore() StickerPersonaFitStore {
 // stickerPersonaKey 是人设全文加标注版本的指纹：人设一改、或者看图方式变了（动图改成
 // 多帧分镜），旧的判断自然作废。
 func stickerPersonaKey(cfg BotConfig) string {
-	sum := sha256.Sum256([]byte(strings.TrimSpace(cfg.SystemPrompt) + "\x00" + stickerAnnotationVersion))
+	sum := sha256.Sum256([]byte(strings.TrimSpace(cfg.personaPrompt()) + "\x00" + stickerAnnotationVersion))
 	return hex.EncodeToString(sum[:8])
 }
 

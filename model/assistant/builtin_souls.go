@@ -46,9 +46,14 @@ func BuiltinPersonas() []Persona {
 	personas := make([]Persona, 0, len(builtinSoulOrder))
 	for _, item := range builtinSoulOrder {
 		text := mustBuiltinSoul(item.file)
+		name := SoulTitle(text)
+		// 人设库的展示名不随运行时的机器人名称变化。
+		if item.id == "builtin:default" {
+			name = "Diana"
+		}
 		personas = append(personas, Persona{
 			ID:           item.id,
-			Name:         SoulTitle(text),
+			Name:         name,
 			SystemPrompt: text,
 			Builtin:      true,
 		})

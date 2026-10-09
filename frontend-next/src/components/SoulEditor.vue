@@ -87,6 +87,7 @@
           aria-label="SOUL.md 正文"
           @input="emit('update:modelValue', ($event.target as HTMLTextAreaElement).value)"
         ></textarea>
+        <p class="hint">名字可以写成 <code v-pre>{{name}}</code>，运行时替换为配置里的“机器人名称”，改名后自动跟随。</p>
         <p v-if="length > SOUL_MAX_CHARS" class="hint err-text">超过 {{ SOUL_MAX_CHARS }} 字存不进人设库，也会挤占工具规则和聊天记录的上下文。</p>
         <p v-else-if="length > SOUL_WARN_CHARS" class="hint warn-text">写得越长，模型越抓不住重点。能用一句理由讲清的，就别列三条规则。</p>
 
@@ -137,8 +138,8 @@ const props = withDefaults(
   }>(),
   {
     fallbackName: "",
-    subtitle: "她是谁、在乎什么、怎么说话。整份原样放在系统提示词最前面，群可以单独覆盖。",
-    placeholder: "# 名字\n\n## 概述\n\n她是谁，我们希望她成为什么样的存在……",
+    subtitle: "她是谁、在乎什么、怎么说话。替换名字变量后放在系统提示词最前面，群可以单独覆盖。",
+    placeholder: "# {{name}}\n\n## 概述\n\n她是谁，我们希望她成为什么样的存在……",
     inputId: "soul-md",
     generatable: true
   }
