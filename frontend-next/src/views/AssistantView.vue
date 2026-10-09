@@ -1116,11 +1116,6 @@
                 </datalist>
                 <span class="hint">每天的次数在这个时区的零点重置，留空跟随「运行」里的机器人时区。只有想让次数按别的时区重置时才填。</span>
               </div>
-              <div class="field">
-                <label for="bot-sample">回复抽样率（%）</label>
-                <input id="bot-sample" v-model.number="form.reply_sample_percent" class="input" type="number" min="0" max="100" step="1" inputmode="numeric" placeholder="留空不抽样" />
-                <span class="hint">群里没 @、没引用、没叫名字的消息，只有这个比例交给模型判断要不要接话，没抽中的一次调用都不花。被点名的照常回复，主人不受限。群配置里填了就以群为准。</span>
-              </div>
             </div>
           </section>
 
@@ -4753,7 +4748,6 @@ async function save(): Promise<void> {
       ...botImageGenerationLimitsPayload(current),
       ...botVideoGenerationLimitsPayload(current),
       timezone: (current.timezone ?? "").trim(),
-      reply_sample_percent: Math.min(100, Math.max(0, Math.round(Number(current.reply_sample_percent) || 0))),
       forward_reply_chunk_threshold: Number(current.forward_reply_chunk_threshold) || 0,
       reply_merge_confidence_percent: Number(current.reply_merge_confidence_percent) || 0,
       ...sendRetryPayload(current),
