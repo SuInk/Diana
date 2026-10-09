@@ -2854,6 +2854,7 @@ func (r *Runtime) routeProactiveReplyBatch(ctx context.Context, candidates []pro
 		}
 		payload.Candidates = append(payload.Candidates, item)
 	}
+	payload.fillMentionNames()
 	payloadJSON, err := json.Marshal(payload)
 	if err != nil {
 		event.routingReason = "主动回复判断上下文编码失败，已保持沉默：" + err.Error()
@@ -3115,25 +3116,31 @@ func proactiveReplyRouteTimeout(cfg BotConfig) time.Duration {
 }
 
 type proactiveReplyPayload struct {
-	Addressing                    messageAddressing                `json:"addressing"`
-	CurrentText                   string                           `json:"current_text"`
-	CurrentSender                 string                           `json:"current_sender,omitempty"`
-	CurrentImages                 int                              `json:"current_images"`
-	BotAccount                    string                           `json:"bot_account,omitempty"`
-	BotAliases                    []string                         `json:"bot_aliases,omitempty"`
-	QuotedText                    string                           `json:"quoted_text,omitempty"`
-	QuotedSender                  string                           `json:"quoted_sender,omitempty"`
-	QuotedImages                  int                              `json:"quoted_images,omitempty"`
-	QuotedIsBot                   bool                             `json:"quoted_is_bot"`
-	ContextGapSeconds             *int64                           `json:"context_gap_seconds,omitempty"`
-	LastBotMessage                *proactiveReplyHistoryItem       `json:"last_bot_message,omitempty"`
-	LastBotAddressedCurrentSender bool                             `json:"last_bot_addressed_current_sender"`
-	MessagesAfterLastBot          *int                             `json:"messages_after_last_bot,omitempty"`
-	RecentImageCount              int                              `json:"recent_image_count"`
-	RecentMessages                []proactiveReplyHistoryItem      `json:"recent_messages,omitempty"`
-	Candidates                    []proactiveReplyCandidatePayload `json:"candidates,omitempty"`
-	AvailableReplyTools           []string                         `json:"available_reply_tools,omitempty"`
-	NotebookContext               string                           `json:"notebook_context,omitempty"`
+	Addressing                    messageAddressing          `json:"addressing"`
+	CurrentText                   string                     `json:"current_text"`
+	CurrentSender                 string                     `json:"current_sender,omitempty"`
+	CurrentImages                 int                        `json:"current_images"`
+	BotAccount                    string                     `json:"bot_account,omitempty"`
+	BotAliases                    []string                   `json:"bot_aliases,omitempty"`
+	QuotedText                    string                     `json:"quoted_text,omitempty"`
+	QuotedSender                  string                     `json:"quoted_sender,omitempty"`
+	QuotedImages                  int                        `json:"quoted_images,omitempty"`
+	QuotedIsBot                   bool                       `json:"quoted_is_bot"`
+	ContextGapSeconds             *int64                     `json:"context_gap_seconds,omitempty"`
+	LastBotMessage                *proactiveReplyHistoryItem `json:"last_bot_message,omitempty"`
+	LastBotAddressedCurrentSender bool                       `json:"last_bot_addressed_current_sender"`
+	MessagesAfterLastBot          *int                       `json:"messages_after_last_bot,omitempty"`
+	// OthersSpokeAfterLastBot 表示机器人最近一条发言之后，有当前发送者以外的人说过话。
+	// 只给接话评分的对话稿用：这时「机器人最近一条是冲着当前发送者说的」那条提示不再
+	// 成立为「紧接着它的话」，不能再写给模型。
+	OthersSpokeAfterLastBot bool `json:"-"`
+	// MentionNames 是会话历史里的账号→昵称，用来给 @ 别人的提及补名，见 fillMentionNames。
+	MentionNames        map[string]string                `json:"-"`
+	RecentImageCount    int                              `json:"recent_image_count"`
+	RecentMessages      []proactiveReplyHistoryItem      `json:"recent_messages,omitempty"`
+	Candidates          []proactiveReplyCandidatePayload `json:"candidates,omitempty"`
+	AvailableReplyTools []string                         `json:"available_reply_tools,omitempty"`
+	NotebookContext     string                           `json:"notebook_context,omitempty"`
 }
 
 type proactiveReplyCandidatePayload struct {
@@ -3247,10 +3254,51 @@ func (r *Runtime) proactiveReplyPayload(event MessageEvent, text string) proacti
 			messagesAfterLastBot := len(payload.RecentMessages)
 			payload.MessagesAfterLastBot = &messagesAfterLastBot
 			payload.LastBotAddressedCurrentSender = proactiveReplyBotMessageAddressesUser(item, history, event.UserID)
+			for _, later := range payload.RecentMessages {
+				if later.UserID != strings.TrimSpace(event.UserID) {
+					payload.OthersSpokeAfterLastBot = true
+					break
+				}
+			}
 		}
 		payload.RecentMessages = append(payload.RecentMessages, historyItem)
 	}
+	payload.MentionNames = mentionNamesFromHistory(history)
+	payload.fillMentionNames()
 	return payload
+}
+
+func mentionNamesFromHistory(history []MessageEvent) map[string]string {
+	names := make(map[string]string, len(history))
+	for _, item := range history {
+		userID, name := strings.TrimSpace(item.UserID), strings.TrimSpace(item.SenderName)
+		if userID != "" && name != "" && name != userID {
+			names[userID] = name
+		}
+	}
+	return names
+}
+
+// fillMentionNames 给 @ 别人的提及补上昵称。平台的 at 段只带账号，对话稿里以前一律
+// 写成「@别人」，正文里的账号又被隐私代理换成了占位符，模型看不出被 @ 的是谁，会把
+// 「@远野 你觉得呢」读成在问机器人（生产回放 2026-10-07）。被 @ 的人多半刚在同一会话
+// 说过话，从这段历史里取昵称即可；取不到照旧写「别人」。
+func (payload *proactiveReplyPayload) fillMentionNames() {
+	fill := func(addressing *messageAddressing) {
+		for i := range addressing.Mentions {
+			mention := &addressing.Mentions[i]
+			if mention.Target == "other" && strings.TrimSpace(mention.Username) == "" {
+				mention.Username = payload.MentionNames[strings.TrimSpace(mention.UserID)]
+			}
+		}
+	}
+	fill(&payload.Addressing)
+	for i := range payload.RecentMessages {
+		fill(&payload.RecentMessages[i].Addressing)
+	}
+	for i := range payload.Candidates {
+		fill(&payload.Candidates[i].Addressing)
+	}
 }
 
 func (r *Runtime) proactiveReplyPayloadWithContext(ctx context.Context, event MessageEvent, text string) proactiveReplyPayload {
