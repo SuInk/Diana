@@ -597,8 +597,11 @@ type Runtime struct {
 	errorNoticeFreshWindow time.Duration
 	replyBatchMu           sync.Mutex
 	// replyTurns 记「同一个人刚问过」，让紧接着的第二条被当成追问接住而不是重答一遍。
-	replyTurnMu        sync.Mutex
-	replyTurns         map[string]replyTurnRecord
+	replyTurnMu sync.Mutex
+	replyTurns  map[string]replyTurnRecord
+	// replyProgresses 按发送者记还在跑的回复，见 reply_progress.go。
+	replyProgressMu    sync.Mutex
+	replyProgresses    map[string]map[*replyProgress]struct{}
 	replyBatches       map[string]*replyBatchGate
 	unavailableGroupMu sync.RWMutex
 	botMuteMu          sync.RWMutex
@@ -4143,7 +4146,16 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		}
 		// 「刚答过同一个人」跟当前消息同级，不跟着历史让位：它约束的是这一轮怎么说，
 		// 被预算挤掉就等于没写——而它要防的恰恰是把上一轮内容重说一遍。
-		if hasPreviousTurn {
+		if note := r.runningReplyNote(event); note != "" {
+			// 前一轮还在跑（长调查可能好几分钟，早出了连续消息的时间窗）：
+			// 这一轮该报进度，不该把那个问题自己再答一遍。
+			volatile = append(volatile, llm.Message{
+				Role:       llm.RoleUser,
+				Content:    runningReplyContext(note),
+				Priority:   llm.MessagePriorityPlugin,
+				AtomicText: true,
+			})
+		} else if hasPreviousTurn {
 			volatile = append(volatile, llm.Message{
 				Role:       llm.RoleUser,
 				Content:    consecutiveReplyContext(previousTurn),
@@ -4837,15 +4849,17 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 		promptSession := r.groupPromptSession(event)
 		r.startImageFixGate(ctx, cfg, event)
 		interjections, stopInterjections := r.startDirectReplyInterjections(ctx)
+		observer, stopProgress := r.startReplyProgress(ctx, event, r.agentRunObserver(event))
 		resp, err := agentRunner.Run(agent.WithCallerIdentity(ctx, callerIdentityForEvent(cfg, event)), agent.Request{
 			Messages:      messages,
 			TraceID:       traceID,
-			Observer:      r.agentRunObserver(event),
+			Observer:      observer,
 			LoadedTools:   promptSession.loadedTools(),
 			ToolsLoaded:   promptSession.rememberTools,
 			Interjections: interjections,
 		})
 		stopInterjections()
+		stopProgress()
 		if err != nil {
 			return "", err
 		}

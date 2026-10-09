@@ -896,6 +896,15 @@ func (r *Runtime) watchCodingJob(job CodingJob, cmd *exec.Cmd, approvalTimeout t
 		}(job)
 	}
 
+	heartbeatCtx, stopHeartbeat := context.WithCancel(rootCtx)
+	defer stopHeartbeat()
+	go func(job CodingJob) {
+		defer recoverGoroutinePanic("coding.heartbeat")
+		runCodingHeartbeat(heartbeatCtx, job, func(ctx context.Context, text string) error {
+			return r.sendSubscriberNotice(ctx, job.Target.event(), text)
+		})
+	}(job)
+
 	deadline := job.Deadline
 	if deadline.IsZero() {
 		deadline = job.StartedAt.Add(defaultCodingMaxRuntimeMinutes * time.Minute)
@@ -934,6 +943,7 @@ func (r *Runtime) watchCodingJob(job CodingJob, cmd *exec.Cmd, approvalTimeout t
 			}
 		}
 	}
+	stopHeartbeat()
 	r.finalizeCodingJob(rootCtx, job, timedOut, false)
 }
 
