@@ -56,7 +56,7 @@ func TestBuiltinPersonasAreSoulDocuments(t *testing.T) {
 		t.Fatalf("default builtin must come first and match the fallback: %#v", personas[0].ID)
 	}
 	for _, persona := range personas {
-		if !persona.Builtin || persona.Name == "" || !strings.HasPrefix(persona.SystemPrompt, "# "+persona.Name) {
+		if !persona.Builtin || persona.Name == "" || !strings.HasPrefix((BotConfig{Name: persona.Name, SystemPrompt: persona.SystemPrompt}).personaPrompt(), "# "+persona.Name) {
 			t.Fatalf("builtin %s is not a titled SOUL.md", persona.ID)
 		}
 		if runes := len([]rune(persona.SystemPrompt)); runes > personaPromptMaxRunes {

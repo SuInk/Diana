@@ -95,3 +95,14 @@ func TestPersonaTemplateGroupOverrideAndLibraryPreserveToken(t *testing.T) {
 		t.Fatalf("library changed template: %+v", result)
 	}
 }
+
+func TestDefaultPersonaUsesNameThroughout(t *testing.T) {
+	cfg := BotConfig{Name: "星河", SystemPrompt: defaultSystemPrompt}
+	if !strings.HasPrefix(defaultSystemPrompt, "# {{name}}") || !strings.Contains(defaultSystemPrompt, "社会情况：{{name}}") {
+		t.Fatal("default persona should retain name tokens")
+	}
+	prompt := cfg.personaPrompt()
+	if !strings.Contains(prompt, "社会情况：星河") || strings.Contains(prompt, "Diana") || strings.Contains(prompt, "{{name}}") {
+		t.Fatal("default persona should follow the configured identity")
+	}
+}
