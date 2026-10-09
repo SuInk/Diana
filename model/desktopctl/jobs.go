@@ -431,6 +431,7 @@ func (m *JobManager) AuthorizeDispatch(ctx context.Context, cmd Command) (skip b
 	if job.Terminal() {
 		return false, Result{}, "", commandError(CodeJobBlocked, "任务已结束（%s），不再下发", job.Status)
 	}
+	before := job.clone()
 	switch job.Status {
 	case JobPaused:
 		return false, Result{}, "", commandError(CodeJobBlocked, "任务已暂停：%s", firstNonEmpty(job.WaitReason, "请先 resume"))
@@ -445,15 +446,19 @@ func (m *JobManager) AuthorizeDispatch(ctx context.Context, cmd Command) (skip b
 	default:
 		return false, Result{}, "", commandError(CodeJobBlocked, "任务状态 %s 不允许下发", job.Status)
 	}
-	if err := m.checkBudgetLocked(job); err != nil {
-		return false, Result{}, "", err
-	}
 	if key := strings.TrimSpace(cmd.IdempotencyKey); key != "" {
 		for _, step := range job.Steps {
-			if step.IdempotencyKey == key && step.Status == StepCompleted {
+			if step.IdempotencyKey != key {
+				continue
+			}
+			if step.Status == StepCompleted {
 				return true, Result{OK: true, Data: append(json.RawMessage(nil), step.Result...)}, step.ID, nil
 			}
+			return false, Result{}, "", commandError(CodeJobBlocked, "同一幂等键已有下发记录，结果未确认，不得重复执行")
 		}
+	}
+	if err := m.checkBudgetLocked(job); err != nil {
+		return false, Result{}, "", err
 	}
 	// 写操作在 NeedsReobserve 时必须先做一次截图观察。
 	if IsWriteOp(cmd.Op) && job.NeedsReobserve {
@@ -473,8 +478,13 @@ func (m *JobManager) AuthorizeDispatch(ctx context.Context, cmd Command) (skip b
 		IdempotencyKey:    strings.TrimSpace(cmd.IdempotencyKey),
 	}
 	job.Steps = append(job.Steps, step)
+	// 下发前在同一把锁下占用预算并落盘，失败回执也不退回已经尝试的步数。
+	job.Budget.StepsUsed++
 	job.UpdatedAt = m.now()
-	_ = m.persistLocked(context.Background())
+	if err := m.persistLocked(ctx); err != nil {
+		*job = before
+		return false, Result{}, "", fmt.Errorf("保存桌面任务下发记录失败: %w", err)
+	}
 	return false, Result{}, step.ID, nil
 }
 
@@ -519,7 +529,6 @@ func (m *JobManager) RecordDispatch(ctx context.Context, jobID, stepID string, c
 			job.Steps[i].Status = StepCompleted
 			job.Steps[i].Result = append(json.RawMessage(nil), result.Data...)
 			job.Steps[i].CompletedAt = m.now()
-			job.Budget.StepsUsed++
 			if cmd.Op == OpWindowScreenshot {
 				job.LastObservation++
 				job.Steps[i].ObservationAfter = job.LastObservation

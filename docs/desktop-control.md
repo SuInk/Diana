@@ -44,7 +44,7 @@
 ## 持久任务（阶段 3）
 
 - **状态**：`queued` → `running`；可进入 `paused` / `waiting_confirm`；终态 `succeeded` / `failed` / `cancelled`。
-- **预算**：`max_steps`、`max_duration_ms`；用尽则失败并停止下发。
+- **预算**：`max_steps`、`max_duration_ms`；下发前在锁内预占步数并持久化，保存失败则回滚并拒绝下发。已授权的尝试即占一步，失败回执不退还，成功回执不重复计数；用尽则停止下发。已有下发记录但结果未确认的幂等键不会重复执行，需要先人工核实。
 - **重启**：非终态任务接回为 `paused` 且 `needs_reobserve`；恢复后必须先 `desktop_screenshot`，再写操作。
 - **不重放**：已 `completed` 的步骤不会再次下发；`idempotency_key` 防止重复提交。
 - **取消**：立即拒绝带该 `job_id` 的后续 Dispatch，并取消在飞等待。
