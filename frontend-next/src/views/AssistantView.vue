@@ -4565,10 +4565,8 @@ function splitList(raw: string): string[] {
     .filter((item) => item !== "");
 }
 
-// 生成 SOUL.md 时告诉模型角色叫什么：用群内触发名，不是 form.name——后者是控制台
-// 用来区分多个机器人的标签（「主群助手」「客服机器人」），拿它当角色名，写出来的人设
-// 会自称「主群助手」。触发名正在编辑时以输入框里的为准，还没填过就退回控制台标签。
-const personaDisplayName = computed(() => splitList(triggersDraft.value)[0] || form.value?.group_triggers?.[0]?.trim() || form.value?.name || "");
+// 人设变量取配置里的机器人名称，不取触发别名。
+const personaDisplayName = computed(() => form.value?.name?.trim() || "");
 
 function openPersonaComposer(): void {
   personaComposerOpen.value = true;

@@ -144,7 +144,7 @@ var promptWelcomeGeneratorSpec = registerPrompt(PromptSpec{
 func (r *Runtime) generateWelcomeWithLLM(ctx context.Context, cfg BotConfig, event MessageEvent) (string, error) {
 	ctx = withLLMUsagePurpose(withLLMUsageContext(ctx, event), PurposeWelcomeGenerator)
 	systemPrompt := strings.TrimSpace(cfg.prompt(promptWelcomeGeneratorSpec))
-	if persona := strings.TrimSpace(cfg.SystemPrompt); persona != "" {
+	if persona := strings.TrimSpace(cfg.personaPrompt()); persona != "" {
 		systemPrompt += "\n\n机器人当前人设：\n" + persona
 	}
 	messages := []llm.Message{

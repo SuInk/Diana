@@ -74,7 +74,7 @@ func (r *Runtime) ResidentContextForGroup(ctx context.Context, profileID, groupI
 	window := r.promptContextWindowTokens(event, cfg)
 	snapshot := ResidentContextSnapshot{ProfileID: profileID, GroupID: groupID, ContextWindow: window, Note: residentContextNote}
 
-	persona := strings.TrimSpace(cfg.SystemPrompt)
+	persona := strings.TrimSpace(cfg.personaPrompt())
 	// head 里除人设之外的部分就是那几千字固定规则。registry 传 nil 表示「按全部
 	// 工具都注册」算，所以这里是上限：实际注入哪几条随当轮注册的工具增减。
 	head, _ := r.systemPromptPartsWithRelationshipAndAgentTools(event, nil, false, RelationshipPolicy{}, cfg.AgentEnabled, nil)

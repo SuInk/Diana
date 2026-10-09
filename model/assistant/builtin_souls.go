@@ -21,13 +21,14 @@ var builtinSoulFiles embed.FS
 var builtinSoulOrder = []struct {
 	id   string
 	file string
+	name string
 }{
-	{"builtin:default", "default.md"},
-	{"builtin:human", "human.md"},
-	{"builtin:catgirl", "catgirl.md"},
-	{"builtin:assistant", "assistant.md"},
-	{"builtin:girlfriend", "girlfriend.md"},
-	{"builtin:boyfriend", "boyfriend.md"},
+	{"builtin:default", "default.md", "内置默认"},
+	{"builtin:human", "human.md", "真人感"},
+	{"builtin:catgirl", "catgirl.md", "猫娘"},
+	{"builtin:assistant", "assistant.md", "助手"},
+	{"builtin:girlfriend", "girlfriend.md", "女友"},
+	{"builtin:boyfriend", "boyfriend.md", "男友"},
 }
 
 // defaultSystemPrompt 是没配置任何人设时的兜底 SOUL.md。
@@ -48,7 +49,7 @@ func BuiltinPersonas() []Persona {
 		text := mustBuiltinSoul(item.file)
 		personas = append(personas, Persona{
 			ID:           item.id,
-			Name:         SoulTitle(text),
+			Name:         item.name,
 			SystemPrompt: text,
 			Builtin:      true,
 		})

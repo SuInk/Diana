@@ -671,7 +671,7 @@ type BotConfig struct {
 	WelcomeMode               WelcomeMode      `json:"welcome_mode,omitempty"`
 	WelcomeTemplates          []string         `json:"welcome_templates,omitempty"`
 	WelcomeLLMCooldownSeconds int              `json:"welcome_llm_cooldown_seconds,omitempty"`
-	// SystemPrompt 是这台机器人的 SOUL.md：她是谁、在乎什么、怎么说话。整份原样
+	// SystemPrompt 是这台机器人的 SOUL.md：她是谁、在乎什么、怎么说话。展开 {{name}} 后
 	// 放在系统提示词最前面。JSON 键名沿用 system_prompt，存量配置不用迁移。
 	SystemPrompt string       `json:"system_prompt,omitempty"`
 	ResponseMode ResponseMode `json:"response_mode,omitempty"`

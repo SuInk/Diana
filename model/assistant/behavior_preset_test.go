@@ -140,7 +140,7 @@ func TestUserFacingPersonaCarriesStylePromptAndClosingAnchor(t *testing.T) {
 		t.Fatalf("persona was not prepended: %#v", messages)
 	}
 	persona := messages[0].Content
-	for _, want := range []string{base.SystemPrompt, replyPresentationPrompt(true), personaClosingAnchor()} {
+	for _, want := range []string{strings.ReplaceAll(base.SystemPrompt, "{{name}}", base.Name), replyPresentationPrompt(true), personaClosingAnchor()} {
 		if !strings.Contains(persona, want) {
 			t.Fatalf("persona missing %q: %q", want, persona)
 		}

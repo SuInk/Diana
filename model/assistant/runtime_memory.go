@@ -52,7 +52,7 @@ func (r *Runtime) withUserFacingPersona(event MessageEvent, messages []llm.Messa
 	limits := chatSplitLimitsForEvent(cfg, event)
 	// 心情这条旁路也要带上：主链路蔫着、旁路却活蹦乱跳，一台机器人像两个人。
 	groupVoice := r.groupLengthNormPrompt(event, cfg)
-	persona := strings.TrimSpace(cfg.SystemPrompt + "\n" + replyPresentationPrompt(!limits.SingleMessage, cfg) + "\n" + replyLineBreakPrompt(cfg) + "\n" + replyLineSplitPrompt(limits) + "\n" + groupVoice + "\n" + styleFilterPrompt(cfg, groupVoice) + "\n" + r.moodToneForConfig(cfg, event.ProfileID) + "\n" + personaClosingAnchor(cfg))
+	persona := strings.TrimSpace(cfg.personaPrompt() + "\n" + replyPresentationPrompt(!limits.SingleMessage, cfg) + "\n" + replyLineBreakPrompt(cfg) + "\n" + replyLineSplitPrompt(limits) + "\n" + groupVoice + "\n" + styleFilterPrompt(cfg, groupVoice) + "\n" + r.moodToneForConfig(cfg, event.ProfileID) + "\n" + personaClosingAnchor(cfg))
 	if persona == "" {
 		return messages
 	}

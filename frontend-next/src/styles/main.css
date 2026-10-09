@@ -853,13 +853,13 @@ code {
   border-top: 1px solid var(--border);
 }
 
-/* 音视频插槽的参数：跟在路由下面，和说明对齐 */
+/* 模型用途参数：跟在列表下面，与列表和说明左侧对齐。 */
 .model-role-params {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
   gap: 8px 12px;
   align-items: end;
-  margin: 10px 44px 0 94px;
+  margin: 10px 0 0;
 }
 
 .model-role-params .field {
