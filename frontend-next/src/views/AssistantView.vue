@@ -1216,8 +1216,8 @@
                 </label>
                 <span class="hint">
                   开启后，这台机器人所有主动和直接回复都会做一次统一发送前审核；关闭后都不做，群配置可单独覆盖。
-                  一次审核同时给出账号安全置信度并判断是否属于明确拒答；主动回复还会额外使用其中的表达质量结论。只有安全置信度低于 10% 时才会拦下不发——
-                  拿不准一律放行，避免机器人在沾边话题上无故闭嘴；高置信拒答仅在发送成功后累计。表达质量分数不会拦下直接回复。
+                  一次审核同时给出账号安全置信度并判断是否属于明确拒答。只有安全置信度低于 10% 时才会拦下不发——
+                  拿不准一律放行，避免机器人在沾边话题上无故闭嘴；高置信拒答仅在发送成功后累计。发送前不再做准确度或答非所问拦截。
                   开启时，被 @ 或私聊的直接回复也各多一次快模型往返，回复会慢一点。
                 </span>
               </div>
@@ -1242,7 +1242,7 @@
                   rows="5"
                   placeholder="例如：只拦截可能导致当前平台账号处罚的明确内容；新闻事实中性转述放行。"
                 ></textarea>
-                <span class="hint">填写后替代内置账号风险范围，只影响账号安全结论，不改变准确度、拒答和防循环审核。</span>
+                <span class="hint">填写后替代内置账号风险范围，只影响账号安全结论，不改变拒答和防循环审核。</span>
               </div>
               <div class="field wide participation-prompts">
                 <div class="participation-prompt-part">
@@ -2302,8 +2302,6 @@ import PromptOverridesEditor from "../components/PromptOverridesEditor.vue";
 const auditPromptKeys = ["audit.quality", "audit.safety_rules_wrapper", "audit.quality_closing"];
 const auditDecisionPromptKeys = [
   "audit.decision.send_confidence",
-  "audit.decision.accuracy_issue",
-  "audit.decision.accuracy_issue.options",
   "audit.decision.account_safe",
   "audit.decision.account_risk",
   "audit.decision.account_risk.options",

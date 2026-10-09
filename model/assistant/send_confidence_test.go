@@ -94,10 +94,13 @@ func TestAccuracyIssueCategoryDecidesSending(t *testing.T) {
 	}
 }
 
-func TestReplyAuditPromptDefinesAccuracyCategories(t *testing.T) {
-	for _, want := range []string{"accuracy_issue", "wording", "不拦截", "contradiction", "off_topic", "truncated", "harmful_advice", `"accuracy_issue":"none"`} {
-		if !strings.Contains(proactiveReplyQualityPrompt, want) {
-			t.Fatalf("audit prompt missing %q", want)
+func TestReplyAuditPromptOmitsAccuracyAudit(t *testing.T) {
+	for _, unwanted := range []string{"是否答非所问", "accuracy_issue", "明确矛盾", "被截断"} {
+		if strings.Contains(proactiveReplyQualityPrompt, unwanted) {
+			t.Fatalf("accuracy audit still present: %q", unwanted)
 		}
+	}
+	if !strings.Contains(proactiveReplyQualityPrompt, "不做准确度或答非所问审核") {
+		t.Fatal("prompt does not document removed accuracy audit")
 	}
 }

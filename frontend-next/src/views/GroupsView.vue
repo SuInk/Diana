@@ -520,7 +520,7 @@
             :options="groupAccountSafetyOptions"
             @update:model-value="(value) => { if (editing) editing.reply_account_safety_audit_enabled = value === '' ? undefined : value === 'on'; }"
           />
-          <span class="hint">关闭后，本群主动插话和直接回复都不做账号安全审核；准确度审核和防机器人循环不受影响。</span>
+          <span class="hint">关闭后，本群主动插话和直接回复都不做账号安全审核；防机器人循环不受影响；发送前不再做准确度或答非所问拦截。</span>
         </div>
         <div class="field wide">
           <label for="group-account-safety-prompt">本群账号安全审核规则（留空跟随机器人）</label>

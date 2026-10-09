@@ -3068,7 +3068,7 @@ func proactiveReplyDecisionReason(decision proactiveReplyDecision, parsed, decis
 	}
 	switch {
 	case allowed && routePromoted:
-		return fmt.Sprintf("已确认消息在要求回应，交由正式回复与发送前准确度审核处理：%s（%s）", detail, metrics)
+		return fmt.Sprintf("已确认消息在要求回应，交由正式回复与发送前安全审核处理：%s（%s）", detail, metrics)
 	case allowed:
 		return fmt.Sprintf("主动回复判断允许回复：%s（%s）", detail, metrics)
 	case decisionAllowed && !cooldownAllowed:
@@ -3489,7 +3489,7 @@ func promoteRequestedResponse(decision *proactiveReplyDecision, event MessageEve
 	if decision.TargetMessageID != "" {
 		decision.TurnMessageIDs = []string{decision.TargetMessageID}
 	}
-	decision.Reason = "明确请求交由正式回复与发送前准确度审核处理"
+	decision.Reason = "明确请求交由正式回复与发送前安全审核处理"
 	if originalReason != "" {
 		decision.Reason += "；Intent Recognition 原判断：" + originalReason
 	}

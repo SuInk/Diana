@@ -17,7 +17,6 @@ func TestReplyAuditDecisionSpecRoundTrips(t *testing.T) {
 	answers := map[string]llm.DecisionAnswer{
 		// Score 是档位下标（0 起），不是最终分值：这里选最高档。
 		"send_confidence":        {Kind: llm.DecisionScore, Score: 2, Confidence: 0.9},
-		"accuracy_issue":         {Kind: llm.DecisionChoice, Choice: "wording", Confidence: 0.8},
 		"account_safe":           {Kind: llm.DecisionScore, Score: 0, Confidence: 0.9},
 		"account_risk":           {Kind: llm.DecisionChoice, Choice: "politics", Confidence: 0.91},
 		"count_refusal":          {Kind: llm.DecisionNoul, Noul: 0.93},
@@ -35,8 +34,8 @@ func TestReplyAuditDecisionSpecRoundTrips(t *testing.T) {
 	if !ok {
 		t.Fatalf("审核解析器读不回去：%s", rendered)
 	}
-	if decision.Confidence < 0.95 || decision.AccuracyIssue != "wording" {
-		t.Fatalf("准确性没对上：%#v", decision)
+	if decision.Confidence < 0.95 || decision.AccuracyIssue != "" {
+		t.Fatalf("准确度审核不应再参与：%#v", decision)
 	}
 	if decision.AccountSafeScore > 0.1 || decision.AccountRisk != "politics" {
 		t.Fatalf("账号安全没对上：%#v", decision)
@@ -51,7 +50,7 @@ func TestReplyAuditDecisionSpecRoundTrips(t *testing.T) {
 		t.Fatalf("收尾没对上：%#v", decision)
 	}
 	// 每道题都要带上理由，上层日志和事件详情里「为什么没发」不能是空的。
-	if decision.Reason == "" || decision.AccountRiskReason == "" || decision.ReplyLoopReason == "" || decision.ClosingReason == "" {
+	if decision.AccountRiskReason == "" || decision.ReplyLoopReason == "" || decision.ClosingReason == "" {
 		t.Fatalf("理由缺失：%#v", decision)
 	}
 }
