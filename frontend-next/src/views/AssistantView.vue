@@ -1249,6 +1249,18 @@
                 ></textarea>
                 <span class="hint">填写后替代内置账号风险范围，只影响账号安全结论，不改变准确度、拒答和防循环审核。</span>
               </div>
+              <div class="field wide participation-prompts">
+                <div class="participation-prompt-part">
+                  <span class="participation-prompt-title">审核提示词</span>
+                  <span class="hint">审核用的是普通对话模型时，按这段检查要不要发。</span>
+                  <PromptSectionsEditor name="发送前审核提示词" title-prefix="发送前审核 · " :keys="auditPromptKeys" :model-value="form.prompt_overrides" @update:model-value="value => { if (form) form.prompt_overrides = value; }" />
+                </div>
+                <div class="participation-prompt-part">
+                  <span class="participation-prompt-title">判断表</span>
+                  <span class="hint">审核用的是只做判断的模型时，不看上面那段，而是逐题回答这张表：每题一段说明，是非题再写清什么算「是」、什么算「否」。</span>
+                  <PromptSectionsEditor name="发送前审核判断表" title-prefix="审核判断 · " :keys="auditDecisionPromptKeys" :model-value="form.prompt_overrides" @update:model-value="value => { if (form) form.prompt_overrides = value; }" />
+                </div>
+              </div>
               <div class="field wide">
                 <label for="bot-refusal-strategy">拒答话术</label>
                 <AppSelect
@@ -2287,6 +2299,37 @@ import ParticipationControls from "../components/ParticipationControls.vue";
 import BotMarkerList from "../components/BotMarkerList.vue";
 import AgentResidencyPanel from "../components/AgentResidencyPanel.vue";
 import PromptOverridesEditor from "../components/PromptOverridesEditor.vue";
+
+// 发送前审核的提示词和判断表，放在行为页「安全与审核」里，各合成一个框改。
+const auditPromptKeys = ["audit.quality", "audit.safety_rules_wrapper", "audit.quality_closing"];
+const auditDecisionPromptKeys = [
+  "audit.decision.send_confidence",
+  "audit.decision.accuracy_issue",
+  "audit.decision.accuracy_issue.options",
+  "audit.decision.account_safe",
+  "audit.decision.account_risk",
+  "audit.decision.account_risk.options",
+  "audit.decision.count_refusal",
+  "audit.decision.count_refusal.true",
+  "audit.decision.count_refusal.false",
+  "audit.decision.reply_loop_meaningless",
+  "audit.decision.reply_loop_meaningless.true",
+  "audit.decision.reply_loop_meaningless.false",
+  "audit.decision.reply_loop_self_repeat",
+  "audit.decision.reply_loop_self_repeat.true",
+  "audit.decision.reply_loop_self_repeat.false",
+  "audit.decision.reply_loop_purposeless",
+  "audit.decision.reply_loop_purposeless.true",
+  "audit.decision.reply_loop_purposeless.false",
+  "audit.decision.conversation_closing",
+  "audit.decision.conversation_closing.true",
+  "audit.decision.conversation_closing.false",
+  "audit.decision.stop_requested",
+  "audit.decision.stop_requested.true",
+  "audit.decision.stop_requested.false",
+  "audit.decision.exchange_novelty",
+  "audit.decision.exchange_purpose"
+];
 import PromptSectionsEditor from "../components/PromptSectionsEditor.vue";
 import ParticipationPromptPreview from "../components/ParticipationPromptPreview.vue";
 import { participationFromConfig, type ParticipationPreferences } from "../participation";
