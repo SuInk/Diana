@@ -1113,6 +1113,10 @@ func (h *BotHandler) listPlugins(c *gin.Context) {
 	profiles := h.pluginProfileIDs()
 	visible := make([]assistant.PluginState, 0, len(states))
 	for _, state := range states {
+		// 联网搜索在机器人配置和提供商页统一管理，不参与插件列表与群级覆盖。
+		if state.Manifest.ID == assistant.WebSearchPluginID {
+			continue
+		}
 		if profileID == "" {
 			enabled, total := 0, len(profiles)
 			for _, id := range profiles {

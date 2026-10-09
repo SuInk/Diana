@@ -184,3 +184,23 @@ func TestGroupAdminVerificationAndCodeUseSelectedBot(t *testing.T) {
 		t.Fatalf("wrong scope: status=%d a=%v b=%v body=%s", rec.Code, a.actions, b.actions, rec.Body.String())
 	}
 }
+
+func TestPluginListOmitsWebSearch(t *testing.T) {
+	m := assistant.NewDefaultPluginManager()
+	r := assistant.NewRuntime(assistant.BotConfig{ID: "a"}, fakeChannel{}, m, nil, nil, nil, nil)
+	router := botTestRouter(NewBotHandler(context.Background(), r))
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/assistant/plugins", nil))
+	var states []assistant.PluginState
+	if err := json.Unmarshal(rec.Body.Bytes(), &states); err != nil || len(states) == 0 {
+		t.Fatalf("list failed: %s", rec.Body.String())
+	}
+	for _, state := range states {
+		if state.Manifest.ID == assistant.WebSearchPluginID {
+			t.Fatal("web search should be managed outside the plugin page")
+		}
+	}
+	if _, ok := m.Get(assistant.WebSearchPluginID); !ok {
+		t.Fatal("web search storage must stay installed")
+	}
+}

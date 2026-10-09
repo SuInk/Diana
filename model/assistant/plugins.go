@@ -632,12 +632,9 @@ func (m *PluginManager) ValidateGroupSettingOverrides(overrides PluginSettingOve
 		if !ok {
 			return nil, fmt.Errorf("%w: %s", ErrPluginNotFound, id)
 		}
+		// 联网搜索只在机器人配置里设，群里不再覆盖；旧存档带过来的直接丢弃。
 		if id == webSearchPluginID {
-			for _, key := range []string{searchProvidersSetting, searchProviderKeysSetting, searchProviderOrderSetting} {
-				if _, exists := values[key]; exists {
-					return nil, fmt.Errorf("搜索提供商和路由不能在群参数中覆盖")
-				}
-			}
+			continue
 		}
 		normalized, err := normalizeGroupPluginSettings(plugin.Manifest().Settings, values)
 		if err != nil {
@@ -668,12 +665,10 @@ func (m *PluginManager) SanitizeGroupSettingOverrides(overrides PluginSettingOve
 		if !ok {
 			continue
 		}
-		sanitized := sanitizeGroupPluginSettings(plugin.Manifest().Settings, values)
 		if id == webSearchPluginID {
-			delete(sanitized, searchProvidersSetting)
-			delete(sanitized, searchProviderKeysSetting)
-			delete(sanitized, searchProviderOrderSetting)
+			continue
 		}
+		sanitized := sanitizeGroupPluginSettings(plugin.Manifest().Settings, values)
 		if len(sanitized) > 0 {
 			out[id] = sanitized
 		}
