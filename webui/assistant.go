@@ -1110,11 +1110,31 @@ func (h *BotHandler) listPlugins(c *gin.Context) {
 		return
 	}
 	states := h.runtime.Plugins().ListVisibleForProfile(profileID)
+	profiles := h.pluginProfileIDs()
 	visible := make([]assistant.PluginState, 0, len(states))
 	for _, state := range states {
+		if profileID == "" {
+			enabled, total := 0, len(profiles)
+			for _, id := range profiles {
+				if state.ForProfile(id).Enabled {
+					enabled++
+				}
+			}
+			state.EnabledProfiles, state.ProfileCount = &enabled, &total
+		}
 		visible = append(visible, h.withRepoSource(state))
 	}
 	c.JSON(http.StatusOK, assistant.RedactStates(visible))
+}
+
+func (h *BotHandler) pluginProfileIDs() []string {
+	ids := []string{}
+	for _, profile := range h.profiles.Profiles().Profiles {
+		if id := strings.TrimSpace(profile.ID); id != "" {
+			ids = append(ids, id)
+		}
+	}
+	return ids
 }
 
 func (h *BotHandler) pluginProfileScope(c *gin.Context) (string, bool) {
@@ -1123,11 +1143,8 @@ func (h *BotHandler) pluginProfileScope(c *gin.Context) (string, bool) {
 		if c.Param("id") == "" {
 			return "", true
 		}
-		if !strings.HasSuffix(c.Request.URL.Path, "/enabled") {
-			return "", true
-		}
-		c.JSON(http.StatusBadRequest, gin.H{"error": "请选择要切换插件启用状态的机器人"})
-		return "", false
+		// 不带机器人的开关请求是「所有机器人统一启用/停用」，由 setPluginEnabled 逐台写。
+		return "", true
 	}
 	for _, profile := range h.profiles.Profiles().Profiles {
 		if profile.ID == profileID {
@@ -1221,7 +1238,28 @@ func (h *BotHandler) setPluginEnabled(c *gin.Context) {
 		h.writeError(c, http.StatusBadRequest, "plugin_enabled", err, c.Param("id"), map[string]any{"plugin_id": c.Param("id")})
 		return
 	}
-	state, err := h.runtime.Plugins().SetEnabledForProfile(c.Param("id"), profileID, payload.Enabled)
+	var state assistant.PluginState
+	var err error
+	if profileID != "" {
+		state, err = h.runtime.Plugins().SetEnabledForProfile(c.Param("id"), profileID, payload.Enabled)
+	} else {
+		// 所有机器人统一：给现有每台写一条显式开关，覆盖它们各自的设置；之后单台
+		// 再改，照样按那台自己的来。
+		profiles := h.pluginProfileIDs()
+		if len(profiles) == 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "还没有机器人，先添加一台再切换插件"})
+			return
+		}
+		for i, id := range profiles {
+			if state, err = h.runtime.Plugins().SetEnabledForProfile(c.Param("id"), id, payload.Enabled); err != nil {
+				// 中途失败时前面几台已经改了，照样落盘，别让内存和文件对不上。
+				if i > 0 {
+					h.persistState()
+				}
+				break
+			}
+		}
+	}
 	if err != nil {
 		h.writePluginError(c, "plugin_enabled", err, c.Param("id"))
 		return

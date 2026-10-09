@@ -51,6 +51,10 @@ type ExtensionState struct {
 	Installed   bool          `json:"installed"`
 	Enabled     bool          `json:"enabled"`
 	Available   *bool         `json:"available,omitempty"`
+	// EnabledProfiles/ProfileCount 只在「全部机器人」视图里给 skill 返回：几台开着、
+	// 一共几台，界面据此区分全开、部分开和全关。
+	EnabledProfiles *int `json:"enabled_profiles,omitempty"`
+	ProfileCount    *int `json:"profile_count,omitempty"`
 	// MembersEnabled 只在按机器人读取目录时返回：nil 表示这类扩展没有成员开关。
 	MembersEnabled *bool `json:"members_enabled,omitempty"`
 	// Resident 是这台机器人给这个扩展配的常驻档位：nil 表示跟随默认档。

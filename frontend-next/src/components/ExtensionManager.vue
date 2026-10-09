@@ -2,7 +2,7 @@
   <section class="extension-manager">
     <!-- 工具条和插件页共用 .plugins-view-header 那几条：控件同高、不换行。 -->
     <header class="view-header plugins-view-header">
-      <div class="view-title"><h2>{{ kind === 'skill' ? 'Skills' : 'MCP' }}</h2><p>配置全局共享 · {{ botScope ? '启用状态与权限仅影响当前机器人' : kind === 'mcp' ? '这里的开关是所有机器人的默认，选择机器人后可单独调整' : '选择机器人后调整启用状态' }}</p></div>
+      <div class="view-title"><h2>{{ kind === 'skill' ? 'Skills' : 'MCP' }}</h2><p>配置全局共享 · {{ botScope ? '启用状态与权限仅影响当前机器人' : kind === 'mcp' ? '这里的开关是所有机器人的默认，选择机器人后可单独调整' : '这里的开关统一所有机器人，选择机器人后可单独调整' }}</p></div>
       <div class="view-actions">
         <div class="plugin-search">
           <Search :size="14" aria-hidden="true" />
@@ -26,18 +26,19 @@
     <p v-if="loading">正在读取扩展…</p>
     <!-- 版式跟插件页走：同一套卡片，扫一眼就知道这三处（插件 / Skills / MCP）是一类东西。 -->
     <div v-else class="extension-list" :class="layout === 'rows' ? 'plugin-rows' : 'plugin-tiles'">
-      <article v-for="item in visibleItems" :key="item.id" class="plugin-card" :class="{off: (botScope || kind==='mcp') && !item.enabled}">
+      <article v-for="item in visibleItems" :key="item.id" class="plugin-card" :class="{off: hasSwitch(item) && !switchOn(item)}">
         <div class="plugin-card-head">
           <h2 class="plugin-card-name" :title="item.name">{{ item.name }}</h2>
           <!-- 卡片上始终只有一个开关，管什么跟着顶部选的范围走：选了机器人是「这台用不用」，
-               全部机器人时（只有 MCP）是全局默认。给谁用、限定哪些人都在设置里。 -->
-          <label v-if="botScope || kind==='mcp'" class="switch" :title="item.available===false ? '全局停用，先在设置里打开「服务可用」' : !botScope ? (item.enabled ? '所有机器人默认启用，点击统一停用' : '所有机器人默认停用，点击统一启用') : item.enabled ? '点击停用' : '点击启用'">
-            <input type="checkbox" :checked="item.enabled" :disabled="busy === item.id || item.available===false" @change="toggleEnabled(item)" />
+               全部机器人时 MCP 是全局默认，Skill 是「每台都开着才算开」。给谁用、限定哪些人都在设置里。 -->
+          <label v-if="hasSwitch(item)" class="switch" :title="switchTitle(item)">
+            <input type="checkbox" :checked="switchOn(item)" :disabled="busy === item.id || item.available===false" @change="toggleEnabled(item,$event)" />
             <span class="track" aria-hidden="true"></span>
           </label>
         </div>
         <div class="cluster plugin-card-badges">
           <span v-if="item.available===false" class="badge warn">全局停用</span>
+          <span v-if="partial(item)" class="badge" title="各台机器人单独设过，开关不一致">{{ item.enabled_profiles }}/{{ item.profile_count }} 台启用</span>
           <span v-if="botScope && item.enabled" class="badge">{{ tierLabel(item) }}</span>
           <span v-if="botScope && item.enabled && audienceSummary(item)" class="badge">{{ audienceSummary(item) }}</span>
           <span v-if="!item.managed" class="badge">只读</span>
@@ -246,8 +247,8 @@ function startPreset(value:MCPPreset,event?:Event){if(event)(event.target as HTM
 // 还没配的内置预设：列表里照样占一行，装上之后这一行就变成真正的那条服务。
 const pendingPresets=computed(()=>props.kind==='mcp'?presets.value.filter(entry=>!entry.hidden&&!entry.installed&&!items.value.some(item=>item.name===entry.preset.name)):[]);
 const searchedItems=computed(()=>items.value.filter(item=>matches(`${item.name} ${item.description||''} ${item.source||''}`)));
-const enabledCount=computed(()=>searchedItems.value.filter(item=>item.enabled).length);
-const visibleItems=computed(()=>status.value==='all'?searchedItems.value:searchedItems.value.filter(item=>item.enabled===(status.value==='on')));
+const enabledCount=computed(()=>searchedItems.value.filter(switchOn).length);
+const visibleItems=computed(()=>status.value==='all'?searchedItems.value:searchedItems.value.filter(item=>switchOn(item)===(status.value==='on')));
 // 还没配凭据的预设既不算启用也不算停用，只在「全部」里出现。
 const visiblePresets=computed(()=>status.value!=='all'?[]:pendingPresets.value.filter(entry=>matches(`${entry.preset.title} ${entry.preset.name} ${entry.preset.summary}`)));
 const statusFilters=computed(()=>[
@@ -273,11 +274,21 @@ type ExtensionState=typeof extensionStates[number]['value'];
 const openTiers=extensionStates.filter(state=>state.value!=='off');
 const tierLabel=(item:ManagedExtension)=>extensionStates.find(state=>state.value===currentState(item))?.label||'';
 // 开关只管启用与否：成员档和名单原样留着，关掉再打开还是原来那一档。
-async function toggleEnabled(item:ManagedExtension){const profile=botScope.value;if(!profile&&props.kind!=='mcp')return;
- // 全局这一下会把每台机器人单独的开关都清掉，统一跟随，所以先问一句。
- if(!profile&&!await askConfirm({title:`所有机器人${item.enabled?'停用':'启用'} ${item.name}？`,message:`每台机器人单独设过的开关都会被覆盖，统一${item.enabled?'停用':'启用'}。之后在某台机器人上单独${item.enabled?'打开':'关掉'}，那台照样按它自己的来。`,confirmLabel:item.enabled?'全部停用':'全部启用'}))return;
+// 全部机器人视图下 Skill 没有全局默认，开关显示的是「每台都开着」；部分开着算关，点一下统一启用。
+const allScopeSkill=()=>!botScope.value&&props.kind==='skill';
+const switchOn=(item:ManagedExtension)=>allScopeSkill()?(item.profile_count??0)>0&&item.enabled_profiles===item.profile_count:item.enabled;
+const partial=(item:ManagedExtension)=>allScopeSkill()&&(item.enabled_profiles??0)>0&&(item.enabled_profiles??0)<(item.profile_count??0);
+const hasSwitch=(item:ManagedExtension)=>!!botScope.value||props.kind==='mcp'||(item.profile_count??0)>0;
+function switchTitle(item:ManagedExtension){if(item.available===false)return '全局停用，先在设置里打开「服务可用」';if(botScope.value)return item.enabled?'点击停用':'点击启用';
+ if(props.kind==='mcp')return item.enabled?'所有机器人默认启用，点击统一停用':'所有机器人默认停用，点击统一启用';
+ return switchOn(item)?'所有机器人都已启用，点击统一停用':partial(item)?`${item.enabled_profiles}/${item.profile_count} 台启用，点击统一启用`:'所有机器人都已停用，点击统一启用'}
+async function toggleEnabled(item:ManagedExtension,event?:Event){const profile=botScope.value;if(!hasSwitch(item))return;const next=!switchOn(item);
+ // 全局这一下会把每台机器人单独的开关都覆盖掉，所以先问一句。
+ if(!profile&&!await askConfirm({title:`所有机器人${next?'启用':'停用'} ${item.name}？`,message:`每台机器人单独设过的开关都会被覆盖，统一${next?'启用':'停用'}。之后在某台机器人上单独${next?'关掉':'打开'}，那台照样按它自己的来。`,confirmLabel:next?'全部启用':'全部停用'})){
+  // 原生勾选框点下去就翻了，状态没变 Vue 不会重绘，得手动拨回去。
+  if(event?.target instanceof HTMLInputElement)event.target.checked=!next;return}
  busy.value=item.id;
- try{const result=await manageExtension<{warning?:string}>({operation:'enabled',kind:props.kind,name:item.name,profile_id:profile||undefined,enabled:!item.enabled});if(result?.warning)toastError(result.warning);await load()}
+ try{const result=await manageExtension<{warning?:string}>({operation:'enabled',kind:props.kind,name:item.name,profile_id:profile||undefined,enabled:next});if(result?.warning)toastError(result.warning);await load()}
  catch(e){toastError(String(e instanceof Error?e.message:e));await load()}finally{busy.value=''}}
 const currentState=(item:ManagedExtension):ExtensionState=>!item.enabled?'off':!item.members_enabled?'owner':item.member_audience?.min_role==='admin'?'admins':'members';
 const isOpenTier=(item:ManagedExtension)=>{const state=currentState(item);return state==='members'||state==='admins'};

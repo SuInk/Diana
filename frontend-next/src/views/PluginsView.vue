@@ -10,7 +10,7 @@
   <div v-show="extensionTab === 'plugins'" class="plugins-view">
     <header class="view-header plugins-view-header">
       <div class="view-title">
-        <p>{{ botScope ? "插件开关按机器人独立，配置全局共享" : "共享插件配置" }}</p>
+        <p>{{ botScope ? "插件开关按机器人独立，配置全局共享" : "共享插件配置 · 这里的开关统一所有机器人，选择机器人后可单独调整" }}</p>
       </div>
       <div class="view-actions">
         <div class="plugin-search">
@@ -85,15 +85,15 @@
         <div class="plugin-card-head">
           <h2 class="plugin-card-name">{{ pluginDisplayName(plugin) }}</h2>
           <label
-            v-if="plugin.installed && botScope && plugin.manifest.id !== 'official.web-search'"
+            v-if="plugin.installed && (botScope || plugin.profile_count) && plugin.manifest.id !== 'official.web-search'"
             class="switch"
-            :title="pluginEnabled(plugin) ? '点击停用' : '点击启用'"
+            :title="pluginSwitchTitle(plugin)"
           >
             <input
               type="checkbox"
               :checked="pluginEnabled(plugin)"
               :disabled="busyID === plugin.manifest.id"
-              @change="toggleEnabled(plugin)"
+              @change="toggleEnabled(plugin, $event)"
             />
             <span class="track" aria-hidden="true"></span>
           </label>
@@ -101,6 +101,7 @@
 
         <div class="cluster plugin-card-badges">
           <span v-if="plugin.manifest.id === 'official.web-search'" class="badge accent">统一配置</span>
+          <span v-if="pluginPartial(plugin)" class="badge" title="各台机器人单独设过，开关不一致">{{ plugin.enabled_profiles }}/{{ plugin.profile_count }} 台启用</span>
           <!-- 官方 + 内置目前是全部插件的共同属性，逐张重复没有信息量；
                只在例外时标注，第三方插件出现后这里才会有内容。 -->
           <span v-if="!plugin.manifest.official" class="badge warn">第三方</span>
@@ -1180,17 +1181,30 @@ async function reload(): Promise<void> {
   }
 }
 
-async function toggleEnabled(plugin: PluginState): Promise<void> {
+async function toggleEnabled(plugin: PluginState, event?: Event): Promise<void> {
   const scope = botScope.value;
   const togglePublish = plugin.manifest.id === repositoryWatchPluginID && repositoryPublishTarget.value?.installed;
-  busyID.value = plugin.manifest.id;
   const nextEnabled = !pluginEnabled(plugin);
+  const name = pluginDisplayName(plugin);
+  // 全部机器人时这一下会覆盖每台单独设过的开关，和 MCP、Skills 一样先问一句。
+  if (!scope && !await askConfirm({
+    title: `所有机器人${nextEnabled ? "启用" : "停用"} ${name}？`,
+    message: `每台机器人单独设过的开关都会被覆盖，统一${nextEnabled ? "启用" : "停用"}。之后在某台机器人上单独${nextEnabled ? "关掉" : "打开"}，那台照样按它自己的来。`,
+    confirmLabel: nextEnabled ? "全部启用" : "全部停用"
+  })) {
+    // 原生勾选框点下去就翻了，状态没变 Vue 不会重绘，得手动拨回去。
+    if (event?.target instanceof HTMLInputElement) event.target.checked = !nextEnabled;
+    return;
+  }
+  busyID.value = plugin.manifest.id;
   try {
     upsert(await setPluginEnabled(plugin.manifest.id, nextEnabled, scope), scope);
     if (togglePublish) {
       upsert(await setPluginEnabled(repositoryPublishPluginID, nextEnabled, scope), scope);
     }
-    toastSuccess(nextEnabled ? `已启用 ${pluginDisplayName(plugin)}` : `已停用 ${pluginDisplayName(plugin)}`);
+    // 统一切换后要重新拿各台的计数，单台响应里没有。
+    if (!scope) await reload();
+    toastSuccess(nextEnabled ? `已${scope ? "" : "为所有机器人"}启用 ${name}` : `已${scope ? "" : "为所有机器人"}停用 ${name}`);
   } catch (error) {
     toastError(error instanceof Error ? error.message : "操作失败");
     await reload();
@@ -1406,9 +1420,31 @@ const visiblePlugins = computed(() => {
   });
 });
 
+// 全部机器人视图下没有全局开关可看：每台都开着才算开，部分开着算关，点一下统一启用。
+function pluginOn(plugin: PluginState | undefined): boolean {
+  if (!plugin) return false;
+  if (!botScope.value && plugin.profile_count !== undefined) {
+    return plugin.profile_count > 0 && plugin.enabled_profiles === plugin.profile_count;
+  }
+  return plugin.enabled;
+}
+
 function pluginEnabled(plugin: PluginState): boolean {
-  if (plugin.manifest.id !== repositoryWatchPluginID) return plugin.enabled;
-  return plugin.enabled || repositoryPublishTarget.value?.enabled === true;
+  if (plugin.manifest.id !== repositoryWatchPluginID) return pluginOn(plugin);
+  return pluginOn(plugin) || pluginOn(repositoryPublishTarget.value ?? undefined);
+}
+
+function pluginPartial(plugin: PluginState): boolean {
+  if (botScope.value || !plugin.installed || plugin.manifest.id === "official.web-search") return false;
+  const on = plugin.enabled_profiles ?? 0;
+  return on > 0 && on < (plugin.profile_count ?? 0) && !pluginEnabled(plugin);
+}
+
+function pluginSwitchTitle(plugin: PluginState): string {
+  if (botScope.value) return pluginEnabled(plugin) ? "点击停用" : "点击启用";
+  if (pluginEnabled(plugin)) return "所有机器人都已启用，点击统一停用";
+  if (pluginPartial(plugin)) return `${plugin.enabled_profiles}/${plugin.profile_count} 台启用，点击统一启用`;
+  return "所有机器人都已停用，点击统一启用";
 }
 
 function pluginDisplayName(plugin: PluginState): string {

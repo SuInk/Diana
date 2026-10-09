@@ -172,6 +172,10 @@ type PluginState struct {
 	// SecretsConfigured 只在脱敏后的响应里出现，标记哪些凭据已经配置过。
 	// 明文永远不出现在读接口里。
 	SecretsConfigured map[string]bool `json:"secrets_configured,omitempty"`
+	// EnabledProfiles/ProfileCount 只在「全部机器人」视图的列表里出现：有几台机器人
+	// 开着它、一共几台。界面据此区分全开、部分开和全关。
+	EnabledProfiles *int `json:"enabled_profiles,omitempty"`
+	ProfileCount    *int `json:"profile_count,omitempty"`
 }
 
 // ForProfile selects this robot's enabled state; settings are always shared.

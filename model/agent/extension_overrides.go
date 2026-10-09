@@ -240,6 +240,11 @@ func clearExtensionOverride(root, profile, id string) error {
 }
 
 func saveExtensionOverride(root, profile, id string, enabled bool) error {
+	return saveExtensionOverrideForProfiles(root, []string{profile}, id, enabled)
+}
+
+// saveExtensionOverrideForProfiles 一次写多台机器人，整批落一次盘，不会写到一半。
+func saveExtensionOverrideForProfiles(root string, profiles []string, id string, enabled bool) error {
 	lock := extensionPathLock(extensionOverridePath(root))
 	lock.Lock()
 	defer lock.Unlock()
@@ -247,10 +252,12 @@ func saveExtensionOverride(root, profile, id string, enabled bool) error {
 	if err != nil {
 		return err
 	}
-	if values[profile] == nil {
-		values[profile] = map[string]bool{}
+	for _, profile := range profiles {
+		if values[profile] == nil {
+			values[profile] = map[string]bool{}
+		}
+		values[profile][id] = enabled
 	}
-	values[profile][id] = enabled
 	data, err := json.MarshalIndent(values, "", "  ")
 	if err != nil {
 		return err

@@ -5,6 +5,7 @@ import (
 	"github.com/SuInk/diana/model/agent"
 	"github.com/gin-gonic/gin"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -24,6 +25,13 @@ func (h *BotHandler) extensions(c *gin.Context) {
 		if err := c.ShouldBindJSON(&req); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "扩展请求格式错误或过大"})
 			return
+		}
+	}
+	if req.ProfileID == "" && h.profiles != nil {
+		for _, profile := range h.profiles.Profiles().Profiles {
+			if id := strings.TrimSpace(profile.ID); id != "" {
+				req.ProfileIDs = append(req.ProfileIDs, id)
+			}
 		}
 	}
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 45*time.Second)

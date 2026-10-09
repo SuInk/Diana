@@ -177,7 +177,9 @@ function demoPluginForProfile(plugin: PluginState, profile: string): PluginState
     secrets[spec.key] = Boolean(settings[spec.key]);
     delete settings[spec.key];
   }
-  return { ...plugin, enabled: plugin.profile_enabled?.[profile] ?? plugin.enabled, settings, secrets_configured: secrets };
+  const ids = (assistantConfig.profiles ?? []).map((item) => item.id!).filter(Boolean);
+  const counts = profile ? {} : { enabled_profiles: ids.filter((id) => plugin.profile_enabled?.[id] ?? plugin.enabled).length, profile_count: ids.length };
+  return { ...plugin, ...counts, enabled: plugin.profile_enabled?.[profile] ?? plugin.enabled, settings, secrets_configured: secrets };
 }
 
 let plugins: PluginState[] = [
@@ -1579,7 +1581,7 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
     return json({ items: residencyEntries, listed: residencyListed });
   }
   if (path === "/api/assistant/extensions") {
-    try { return json(extensionDemoResponse(method,url.searchParams.get('profile')||'',body)); }
+    try { return json(extensionDemoResponse(method,url.searchParams.get('profile')||'',body,(assistantConfig.profiles??[]).map(item=>item.id!).filter(Boolean))); }
     catch(error) { return json({error:error instanceof Error?error.message:String(error)},400); }
   }
   if (path === "/api/assistant/plugins") {
@@ -1723,13 +1725,13 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
   if (pluginMatch) {
     const plugin = plugins.find((item) => item.manifest.id === decodeURIComponent(pluginMatch[1]));
     if (!plugin) return json({ error: "演示插件不存在" }, 404);
-    if (pluginMatch[2] === "enabled" && !url.searchParams.get("profile")) return json({ error: "请选择具体机器人" }, 400);
     if (body.inherit) return json({ error: "插件配置不再支持继承" }, 400);
     if (pluginMatch[2] === "install") plugin.installed = true;
     if (pluginMatch[2] === "uninstall") { plugin.installed = false; plugin.enabled = false; delete plugin.repo_source; }
     if (pluginMatch[2] === "enabled") {
       const profile = url.searchParams.get("profile") ?? "";
-      plugin.profile_enabled = { ...plugin.profile_enabled, [profile]: Boolean(body.enabled) };
+      const targets = profile ? [profile] : (assistantConfig.profiles ?? []).map((item) => item.id!).filter(Boolean);
+      plugin.profile_enabled = { ...plugin.profile_enabled, ...Object.fromEntries(targets.map((id) => [id, Boolean(body.enabled)])) };
     }
     const profile = url.searchParams.get("profile") ?? "";
     if (pluginMatch[2] === "settings") {

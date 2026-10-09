@@ -20,15 +20,18 @@ func sortedKeys(values map[string]string) []string {
 }
 
 type ExtensionAdminRequest struct {
-	Operation string         `json:"operation"`
-	Kind      string         `json:"kind"`
-	Name      string         `json:"name"`
-	ProfileID string         `json:"profile_id,omitempty"`
-	Enabled   bool           `json:"enabled"`
-	Content   string         `json:"content,omitempty"`
-	SourceURL string         `json:"source_url,omitempty"`
-	Replace   bool           `json:"replace,omitempty"`
-	Config    map[string]any `json:"config,omitempty"`
+	Operation string `json:"operation"`
+	Kind      string `json:"kind"`
+	Name      string `json:"name"`
+	ProfileID string `json:"profile_id,omitempty"`
+	// ProfileIDs 是调用方（WebUI）补上的现有机器人列表，只在不带 ProfileID 时用：
+	// list 据此给 skill 算「几台开着」，enabled 据此给每台统一写开关。不从请求体读。
+	ProfileIDs []string       `json:"-"`
+	Enabled    bool           `json:"enabled"`
+	Content    string         `json:"content,omitempty"`
+	SourceURL  string         `json:"source_url,omitempty"`
+	Replace    bool           `json:"replace,omitempty"`
+	Config     map[string]any `json:"config,omitempty"`
 	// Preset/Transport/Values 让 save 和 verify 按内置模板拼出 Config，拼完之后和
 	// 手填的配置走同一条路。Action 目前只有 presets 用：list（默认）/ hide / show。
 	Action    string            `json:"action,omitempty"`
@@ -97,6 +100,10 @@ func AdministerExtensions(ctx context.Context, cfg Config, req ExtensionAdminReq
 		if err != nil {
 			return nil, err
 		}
+		all, err := loadExtensionOverrides(m.cfg.WorkDir)
+		if err != nil {
+			return nil, err
+		}
 		for i := range states {
 			available := states[i].Enabled
 			if states[i].Kind == ExtensionKindMCP {
@@ -109,6 +116,15 @@ func AdministerExtensions(ctx context.Context, cfg Config, req ExtensionAdminReq
 				states[i].Enabled = states[i].Enabled && enabled
 			}
 			states[i].Available = &available
+			if req.ProfileID == "" && states[i].Kind == ExtensionKindSkill && len(req.ProfileIDs) > 0 {
+				on, total := 0, len(req.ProfileIDs)
+				for _, profile := range req.ProfileIDs {
+					if enabled, ok := all[profile][states[i].ID]; available && (!ok || enabled) {
+						on++
+					}
+				}
+				states[i].EnabledProfiles, states[i].ProfileCount = &on, &total
+			}
 			if req.ProfileID != "" {
 				states[i].Resident = ResidentOverride(overrides, states[i].ID)
 			}
@@ -155,7 +171,7 @@ func AdministerExtensions(ctx context.Context, cfg Config, req ExtensionAdminReq
 		if req.ProfileID == "" && ExtensionKind(req.Kind) == ExtensionKindMCP {
 			return nil, setMCPBotDefault(m.cfg, req.Name, req.Enabled)
 		}
-		if req.ProfileID == "" {
+		if req.ProfileID == "" && ExtensionKind(req.Kind) != ExtensionKindSkill {
 			return nil, fmt.Errorf("请选择机器人后调整启用状态")
 		}
 		found := false
@@ -166,6 +182,14 @@ func AdministerExtensions(ctx context.Context, cfg Config, req ExtensionAdminReq
 		}
 		if !found {
 			return nil, fmt.Errorf("扩展不存在")
+		}
+		if req.ProfileID == "" {
+			// Skill 没有全局默认开关可写：所有机器人统一就是给现有每台写一条显式开关，
+			// 覆盖各自的设置；之后单台再改，照样按那台自己的来。
+			if len(req.ProfileIDs) == 0 {
+				return nil, fmt.Errorf("还没有机器人，先添加一台再调整启用状态")
+			}
+			return nil, saveExtensionOverrideForProfiles(m.cfg.WorkDir, req.ProfileIDs, req.Kind+":"+req.Name, req.Enabled)
 		}
 		if err := saveExtensionOverride(m.cfg.WorkDir, req.ProfileID, req.Kind+":"+req.Name, req.Enabled); err != nil {
 			return nil, err
