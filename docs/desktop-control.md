@@ -50,3 +50,5 @@
 ## 与浏览器控制的协议对照
 
 帧类型同样是 `hello` / `welcome` / `command` / `result` / `takeover` / `ping`，但载荷是窗口而不是标签页。指令包括 `windows.list`、`window.screenshot`、`window.click`、`window.type`、`window.key`。协议预留 `job_id` 与 `observation`，供后续持久任务使用。
+
+macOS 写入要求目标窗口当前位于前台；helper 在发送前核对窗口和进程，点击坐标必须在窗口内。键盘和鼠标事件发送到目标进程，文本输入期间切换窗口会停止后续输入。
