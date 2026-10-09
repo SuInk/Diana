@@ -227,8 +227,8 @@ func TestRuntimeReplyToBotTriggersReplyDirectly(t *testing.T) {
 	if !runtime.shouldConsiderProactiveReply(plain, plainText) || !runtime.shouldHandleProactiveReply(context.Background(), plain, plainText) {
 		t.Fatal("公开提问应当通过语义路由")
 	}
-	if len(provider.request.Messages) == 0 || !strings.Contains(provider.request.Messages[0].Content, "需要搜索或调用工具，都不影响 directed") || !strings.Contains(provider.request.Messages[0].Content, "发送前安全与对话状态审核") {
-		t.Fatalf("router prompt missing updated audit guard: %#v", provider.request.Messages)
+	if len(provider.request.Messages) == 0 || !strings.Contains(provider.request.Messages[0].Content, "需要搜索或调用工具，都不影响 directed") || !strings.Contains(provider.request.Messages[0].Content, "事实准确性由正式 Agent 和工具调用处理") {
+		t.Fatalf("router prompt missing updated accuracy routing note: %#v", provider.request.Messages)
 	}
 }
 
