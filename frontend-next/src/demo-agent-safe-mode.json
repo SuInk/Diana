@@ -180,6 +180,16 @@
       },
       {
         "category": "act_as_owner",
+        "tool": "desktop_elements",
+        "reason": "读取主人本机窗口元素"
+      },
+      {
+        "category": "act_as_owner",
+        "tool": "desktop_scroll",
+        "reason": "滚动主人本机窗口"
+      },
+      {
+        "category": "act_as_owner",
         "tool": "desktop_key",
         "reason": "操作主人本机桌面（按键）"
       },

@@ -41,6 +41,8 @@ const (
 	OpWindowClick      = "window.click"
 	OpWindowType       = "window.type"
 	OpWindowKey        = "window.key"
+	OpWindowElements   = "window.elements"
+	OpWindowScroll     = "window.scroll"
 )
 
 const (
@@ -58,17 +60,20 @@ const (
 	CodePermissionDenied = "permission_denied"
 	CodeHelper           = "helper_error"
 	CodeBadRequest       = "bad_request"
+	CodeStaleObservation = "stale_observation"
 )
 
 var readOnlyOps = map[string]bool{
 	OpWindowsList:      true,
 	OpWindowScreenshot: true,
+	OpWindowElements:   true,
 }
 
 var writeOps = map[string]bool{
-	OpWindowClick: true,
-	OpWindowType:  true,
-	OpWindowKey:   true,
+	OpWindowClick:  true,
+	OpWindowType:   true,
+	OpWindowKey:    true,
+	OpWindowScroll: true,
 }
 
 // KnownOp 判断指令名是否在协议内。
@@ -145,18 +150,22 @@ type ScreenshotPayload struct {
 	Title    string `json:"title,omitempty"`
 	Mime     string `json:"mime,omitempty"`
 	Data     string `json:"data"` // base64 PNG
-	// Observation 预留：后续动作用它判断现场是否过期。
+	// Observation 绑定到窗口画面；本机写操作必须传回该版本。
 	Observation int64 `json:"observation,omitempty"`
 }
 
 // ActionResult 是点击/输入/按键的回执摘要。
 type ActionResult struct {
-	WindowID    string `json:"window_id"`
-	AppName     string `json:"app_name,omitempty"`
-	BundleID    string `json:"bundle_id,omitempty"`
-	Op          string `json:"op"`
-	OK          bool   `json:"ok"`
-	Observation int64  `json:"observation,omitempty"`
+	// OK only means input was dispatched, not that the user goal succeeded.
+	NeedsVerification bool               `json:"needs_verification"`
+	Evidence          *ScreenshotPayload `json:"evidence,omitempty"`
+	VerificationError string             `json:"verification_error,omitempty"`
+	WindowID          string             `json:"window_id"`
+	AppName           string             `json:"app_name,omitempty"`
+	BundleID          string             `json:"bundle_id,omitempty"`
+	Op                string             `json:"op"`
+	OK                bool               `json:"ok"`
+	Observation       int64              `json:"observation,omitempty"`
 }
 
 // ErrProtocol 表示对端发来的帧不符合协议。
@@ -188,4 +197,27 @@ func rawJSON(value any) json.RawMessage {
 		return nil
 	}
 	return body
+}
+
+// Element IDs are scoped to one observation, not reusable selectors.
+type Element struct {
+	ID      string  `json:"id"`
+	Role    string  `json:"role"`
+	Label   string  `json:"label"`
+	Value   string  `json:"value"`
+	X       float64 `json:"x"`
+	Y       float64 `json:"y"`
+	Width   float64 `json:"width"`
+	Height  float64 `json:"height"`
+	Enabled bool    `json:"enabled"`
+}
+type ElementsPayload struct {
+	WindowID    string    `json:"window_id"`
+	Observation int64     `json:"observation"`
+	Elements    []Element `json:"elements"`
+	Truncated   bool      `json:"truncated"`
+}
+type Permissions struct {
+	ScreenRecording bool `json:"screen_recording"`
+	Accessibility   bool `json:"accessibility"`
 }

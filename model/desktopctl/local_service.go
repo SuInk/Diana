@@ -91,3 +91,10 @@ func (s *LocalService) Sync(ctx context.Context) {
 	s.connection = c
 	s.lastError = ""
 }
+
+func (s *LocalService) Process() *ProcessAdapter {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	p, _ := s.adapter.(*ProcessAdapter)
+	return p
+}

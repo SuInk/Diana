@@ -224,6 +224,8 @@ var AgentSafeModeRules = []AgentSafeModeRule{
 	{Category: safeModeCategoryActAsOwner, Tool: "desktop_screenshot", Reason: "读取主人本机桌面窗口截图"},
 	{Category: safeModeCategoryActAsOwner, Tool: "desktop_click", Reason: "操作主人本机桌面（点击）"},
 	{Category: safeModeCategoryActAsOwner, Tool: "desktop_type", Reason: "操作主人本机桌面（输入）"},
+	{Category: safeModeCategoryActAsOwner, Tool: "desktop_elements", Reason: "读取主人本机窗口元素"},
+	{Category: safeModeCategoryActAsOwner, Tool: "desktop_scroll", Reason: "滚动主人本机窗口"},
 	{Category: safeModeCategoryActAsOwner, Tool: "desktop_key", Reason: "操作主人本机桌面（按键）"},
 	{Category: safeModeCategoryActAsOwner, Tool: "desktop_job_create", Reason: "管理主人本机桌面持久任务"},
 	{Category: safeModeCategoryActAsOwner, Tool: "desktop_job_status", Reason: "管理主人本机桌面持久任务"},
