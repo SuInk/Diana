@@ -16,6 +16,7 @@ import (
 // reaskProvider 模拟一次慢调查：先调一次工具，然后卡住直到放行才交结果。
 // 同一个人追问「在吗」的那一轮直接回一句，并记下它看到的提示词。
 type reaskProvider struct {
+	t           *testing.T
 	mu          sync.Mutex
 	relation    string
 	release     chan struct{}
@@ -25,8 +26,13 @@ type reaskProvider struct {
 func (p *reaskProvider) Generate(ctx context.Context, req llm.GenerateRequest) (*llm.GenerateResponse, error) {
 	body := requestText(req)
 	last := ""
-	if n := len(req.Messages); n > 0 {
-		last = req.Messages[n-1].Content
+	// 回复风格提示可能追加在工具结果之后，按最近的业务消息识别测试阶段。
+	for i := len(req.Messages) - 1; i >= 0; i-- {
+		content := req.Messages[i].Content
+		if strings.Contains(content, "chat_history 执行成功") || strings.Contains(content, "@42 在吗") || strings.Contains(content, "@42 查一下") {
+			last = content
+			break
+		}
 	}
 	finalize := func(text string) (*llm.GenerateResponse, error) {
 		return &llm.GenerateResponse{ToolCalls: []llm.ToolCall{{ID: "final", Name: "agent_finalize", Arguments: map[string]any{"content": text}}}}, nil
@@ -53,13 +59,14 @@ func (p *reaskProvider) Generate(ctx context.Context, req llm.GenerateRequest) (
 	case strings.Contains(last, "@42 查一下"):
 		return &llm.GenerateResponse{ToolCalls: []llm.ToolCall{{ID: "t1", Name: "chat_history", Arguments: map[string]any{}}}}, nil
 	}
+	p.t.Errorf("unexpected research request: last=%q", last)
 	return finalize("意外的请求")
 }
 
 func runReask(t *testing.T, relation string, waitProgress bool) (*reaskProvider, []string) {
 	t.Helper()
 	disabled := false
-	provider := &reaskProvider{relation: relation, release: make(chan struct{})}
+	provider := &reaskProvider{t: t, relation: relation, release: make(chan struct{})}
 	channel := &recordingChannel{}
 	runtime := NewRuntime(BotConfig{BotAccount: "42", AgentEnabled: true, BotReplyLoopDetectionEnabled: &disabled}.WithDefaults(),
 		channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) { return provider, nil })
