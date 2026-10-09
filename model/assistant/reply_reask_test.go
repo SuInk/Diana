@@ -63,7 +63,7 @@ func (p *reaskProvider) Generate(ctx context.Context, req llm.GenerateRequest) (
 	return finalize("意外的请求")
 }
 
-func runReask(t *testing.T, relation string, waitProgress bool) (*reaskProvider, []string) {
+func runReask(t *testing.T, relation string) (*reaskProvider, []string) {
 	t.Helper()
 	disabled := false
 	provider := &reaskProvider{t: t, relation: relation, release: make(chan struct{})}
@@ -75,23 +75,15 @@ func runReask(t *testing.T, relation string, waitProgress bool) (*reaskProvider,
 		defer close(done)
 		_ = runtime.HandleEvent(withOutboundTurn(context.Background(), "turn-1"), directedGroupMessage("20001", "10001", "查一下某发布会是不是真的"))
 	}()
-	if waitProgress {
-		waitForCondition(t, 5*time.Second, func() bool { return len(channel.sentSnapshot()) > 0 })
-	} else {
-		waitForCondition(t, 5*time.Second, func() bool {
-			return runtime.earlierReplyProgress(MessageEvent{Kind: EventKindGroup, GroupID: "123456", UserID: "10001"}) != nil
-		})
-		time.Sleep(100 * time.Millisecond)
-	}
+	waitForCondition(t, 5*time.Second, func() bool {
+		p := runtime.earlierReplyProgress(MessageEvent{Kind: EventKindGroup, GroupID: "123456", UserID: "10001"})
+		return p != nil && strings.Contains(p.detail(), "用了 1 次其他工具")
+	})
 	_ = runtime.HandleEvent(withOutboundTurn(context.Background(), "turn-2"), directedGroupMessage("20002", "10001", "在吗"))
-	// 并进去的那条要当场报进度；单独成轮的那条要先回出来——都不能等到结果出来。
-	want := map[bool]int{false: 1, true: 2}[waitProgress]
-	deadline := time.Now().Add(5 * time.Second)
-	for len(channel.sentSnapshot()) < want {
-		if time.Now().After(deadline) {
-			t.Fatalf("追问后没有及时出声: %#v", channel.sentSnapshot())
-		}
-		time.Sleep(10 * time.Millisecond)
+	if relation == "independent" {
+		waitForCondition(t, 5*time.Second, func() bool { return len(channel.sentSnapshot()) > 0 })
+	} else if sent := channel.sentSnapshot(); len(sent) != 0 {
+		t.Fatalf("merged reask sent progress: %+v", sent)
 	}
 	close(provider.release)
 	<-done
@@ -102,7 +94,7 @@ func runReask(t *testing.T, relation string, waitProgress bool) (*reaskProvider,
 		}
 		return out
 	}
-	deadline = time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(5 * time.Second)
 	for !strings.Contains(strings.Join(texts(), "\n"), "调查结果") {
 		if time.Now().After(deadline) {
 			t.Fatalf("调查结果没发出来: %q", texts())
@@ -113,51 +105,24 @@ func runReask(t *testing.T, relation string, waitProgress bool) (*reaskProvider,
 	return provider, texts()
 }
 
-func withReaskTiming(t *testing.T, first time.Duration) {
-	t.Helper()
-	oldFirst, oldEvery, oldNudge := replyProgressFirst, replyProgressEvery, replyProgressNudgeAfter
-	replyProgressFirst, replyProgressEvery, replyProgressNudgeAfter = first, first, 0
-	t.Cleanup(func() { replyProgressFirst, replyProgressEvery, replyProgressNudgeAfter = oldFirst, oldEvery, oldNudge })
-}
-
-// 长调查还没开口，同一个人又 @ 一次被判成重复：并进同一轮，但要当场报一句进度。
-func TestReaskMergedIntoLongReplyGetsProgressNow(t *testing.T) {
-	withReaskTiming(t, time.Hour)
-	_, texts := runReask(t, "repeat", false)
-	if len(texts) != 2 || !strings.HasPrefix(texts[0], "⏳ 还在弄") || texts[1] != "调查结果：确有其事" {
+// 重复追问合并后只等待最终结果，不再额外发送固定进度。
+func TestReaskMergedIntoLongReplyStaysSilent(t *testing.T) {
+	_, texts := runReask(t, "repeat")
+	if len(texts) != 1 || texts[0] != "调查结果：确有其事" {
 		t.Fatalf("sent = %q", texts)
 	}
 }
 
-// 进度已经发过、这一轮不再接受合并时，追问单独成轮：提示词要说前一轮还在跑，
-// 让它只报进度，不能再说「马上就会发出去」「合并回复」。
-func TestReaskAfterProgressIsToldEarlierReplyStillRunning(t *testing.T) {
-	for _, relation := range []string{"repeat", "independent"} {
-		t.Run(relation, func(t *testing.T) {
-			withReaskTiming(t, 200*time.Millisecond)
-			provider, texts := runReask(t, relation, true)
-			if !strings.HasPrefix(texts[0], "⏳ 还在弄") || strings.Join(withoutProgress(texts), "|") != "还在查|调查结果：确有其事" {
-				t.Fatalf("sent = %q", texts)
-			}
-			provider.mu.Lock()
-			prompt := provider.reaskPrompt
-			provider.mu.Unlock()
-			if !strings.Contains(prompt, "上一条消息你还在处理") || !strings.Contains(prompt, "用了 1 次其他工具") || !strings.Contains(prompt, "不要自己回答那个问题") {
-				t.Fatalf("追问那一轮没被告知前一轮还在跑: %s", prompt)
-			}
-			if strings.Contains(prompt, "马上就会发出去") {
-				t.Fatal("追问那一轮还在被告知「马上就会发出去」")
-			}
-		})
+// 独立追问仍知道前一轮在执行，不重复发起调查。
+func TestIndependentReaskKnowsEarlierReplyStillRunning(t *testing.T) {
+	provider, texts := runReask(t, "independent")
+	if strings.Join(texts, "|") != "还在查|调查结果：确有其事" {
+		t.Fatalf("sent = %q", texts)
 	}
-}
-
-func withoutProgress(texts []string) []string {
-	out := []string{}
-	for _, text := range texts {
-		if !strings.HasPrefix(text, "⏳") {
-			out = append(out, text)
-		}
+	provider.mu.Lock()
+	prompt := provider.reaskPrompt
+	provider.mu.Unlock()
+	if !strings.Contains(prompt, "上一条消息你还在处理") || !strings.Contains(prompt, "不要自己回答那个问题") {
+		t.Fatal("missing running-reply context")
 	}
-	return out
 }
