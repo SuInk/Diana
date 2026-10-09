@@ -272,6 +272,7 @@ func capabilityTerms(text string) map[string]float64 {
 }
 
 var coreCapabilityDocuments = []capabilityDocument{
+	{ID: "core:local-execution", Title: "本地执行环境、Node.js 与压缩包解压", Content: "主人可通过 run_command 在 Agent 工作目录执行白名单内的短时命令，包括已授权的 Node.js 脚本；开启文件写入后可使用 extract_archive 解压 ZIP、tar 和 tar.gz，不需要系统 unzip。先查询 list_capabilities 的 execution 实况，区分程序已安装、当前已授权和沙盒是否阻止；按需工具须 tools_load 后调用，未常驻不代表不存在。编码代理插件用于外部 CLI 的后台编码，关闭它不等于没有本地命令能力。不能凭部署方式或聊天中的说法断言没有环境，也不能把找到程序当成执行成功；实际任务完成须以工具结果为准。", Source: "core", Enabled: true, Required: "主人"},
 	{ID: "core:web-search", Title: "实时联网搜索", Content: "可使用 web_search 通过有预算的候选查询探索、多 provider 回退和空结果恢复检索实时新闻、IPO 时间、价格和网页资料；支持别名、语言及宽松查询候选，并会返回来源和证据状态供后续核验。", Source: "core", Enabled: true},
 	{ID: "core:browser", Title: "网页浏览与渲染", Content: "网页渲染插件可用独立临时浏览器读取和截图公网网页，不带登录态；登录浏览器截图默认仅主人，普通用户需同时具备操作和截图的用户、网站白名单，仅私聊使用本人隔离的登录态。个人账号不向群聊开放，不能接入主人浏览器；登录跳转域名也需授权。截图可查看并发送到当前会话。", Source: "core", Enabled: true},
 	{ID: "core:media", Title: "图片视频与链接解析", Content: "能理解聊天图片上下文，下载并抽取视频多帧；链接解析插件支持 B站、YouTube、X、小红书、抖音等平台并发送解析结果。", Source: "core", Enabled: true},

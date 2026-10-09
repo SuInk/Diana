@@ -145,6 +145,7 @@ func NewDefaultToolRegistry(cfg Config) (*ToolRegistry, error) {
 	// 写入是单独一档：读错文件浪费一次调用，写错文件改的是磁盘。
 	if cfg.FileWriteEnabled {
 		registry.Register(&WriteFileTool{root: root, maxBytes: cfg.FileWriteMaxBytes, protected: protected, keep: newKeepScope(cfg)})
+		registry.Register(&ExtractArchiveTool{root: root, protected: protected})
 		registry.Register(&EditFileTool{root: root, maxBytes: cfg.FileWriteMaxBytes, protected: protected, keep: newKeepScope(cfg)})
 	}
 	// stat 只读，跟读工具同级；挪动、复制、删除、建目录跟 write_file 一样要「允许写入
@@ -244,7 +245,9 @@ func (r *ToolRegistry) NewView(cfg Config) (*ToolRegistry, error) {
 		tools := newLiveSkillTools(registry.Skills)
 		registry.Register(tools.Read)
 	}
-	registry.Register(NewExtensionsListTool(registry.extensions, cfg.ExtensionManagement))
+	list := NewExtensionsListTool(registry.extensions, cfg.ExtensionManagement)
+	list.SetExecutionRegistry(registry)
+	registry.Register(list)
 	return registry, nil
 }
 
@@ -1205,6 +1208,17 @@ func readCommandOutput(file *os.File, maxBytes int, complete bool) (string, bool
 // commandFor 按沙盒模式决定这条命令怎么起。require 模式下没有可用沙盒就直接拒绝，
 // 不能退回裸执行——那正是这个模式要防的事。
 func (t *RunCommandTool) commandFor(ctx context.Context, command string, args []string) (*exec.Cmd, string, error) {
+	if command != "" {
+		var err error
+		if strings.ContainsAny(command, `/\\`) {
+			command, err = exec.LookPath(command)
+		} else {
+			command, err = t.resolveCommand(command)
+		}
+		if err != nil {
+			return nil, "", err
+		}
+	}
 	mode := normalizeCommandSandboxMode(t.sandboxMode)
 	if mode == CommandSandboxOff {
 		return procgroup.CommandContext(ctx, command, args...), "", nil
@@ -1235,7 +1249,7 @@ func (t *RunCommandTool) sandboxSecrets() []string {
 // 白名单里有 env、printenv 时这些就是令牌原文——沙箱挡的是文件，挡不住继承下来的
 // 环境变量。白名单里的命令是给模型查东西用的，不需要主人的凭据。
 func (t *RunCommandTool) commandEnvironment() []string {
-	return commandEnvironmentFor(os.Environ(), t.mcpConfigPath)
+	return withExecutionSearchPath(commandEnvironmentFor(os.Environ(), t.mcpConfigPath))
 }
 
 func commandEnvironmentFor(environ []string, mcpConfigPath string) []string {

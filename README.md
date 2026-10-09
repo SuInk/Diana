@@ -130,6 +130,8 @@ docker compose -f docker-compose.yml -f docker-compose.update.yml pull && docker
 
 **slim 轻量镜像（基础版）：** 同一仓库同时发布 `-slim` 变体（如 `ghcr.io/suink/diana:latest-slim`、`ghcr.io/suink/diana:v0.8.131-slim`）：不预装 Chromium、Noto CJK 字体、ffmpeg、yt-dlp 与 tesseract，体积约为完整版的四分之一（拉取 156 MB / 落盘 662 MB，完整版 619 MB / 2.14 GB），适合不需要网页渲染、媒体下载和 OCR 的部署。安装脚本会问你要哪一种，选择写进部署目录的 `.env`（`DIANA_IMAGE=`），以后 `docker compose pull` 自动跟着走；已部署的想切换，在终端里重跑安装脚本，或直接改 `.env` 里那一行再 `docker compose pull && docker compose up -d`（没有这个文件就新建，Compose 会自动读取）。内置浏览器这一档在 slim 上会明确报「找不到浏览器」并给出安装命令，不会悄悄失效。之后想用网页渲染，在宿主机执行 `docker exec -u root <容器名> sh -c 'apt-get update && apt-get install -y chromium fonts-noto-cjk'` 即可（WebUI 依赖管理里点一键安装会因进程非 root 失败，报错会直接附上这条命令）。注意容器重建后需重新安装，数据在挂出的 `data/` 里不受影响。
 
+**Node.js 与工作区工具：** full/slim Docker 镜像均包含 Node.js/npm。内置 Agent 的 `run_command` 独立于编码代理插件；在机器人配置的命令白名单旁点「允许 Node.js 执行」，保存后只增加并去重 `node`，保留其它命令、`*` 和原有文件写入、网络设置。按钮不负责安装，实际是否安装以能力查询为准；创建脚本需允许文件写入，`npm` 和 shell 需另行明确配置。ZIP/tar/tar.gz 解压使用专用 `extract_archive`，由文件写入开关授权并限制在工作区，无需安装 `bash`、`tar` 或 `unzip`。详见[内置命令执行与 Node.js](docs/coding-agents.md#内置命令执行与-nodejs)。
+
 **手动下载：** 从 [Releases](https://github.com/SuInk/Diana/releases) 下载你平台的**完整包**（`.tar.gz` / `.zip`，含后端、编译好的 WebUI 和启动脚本），校验 `SHA256SUMS` 并解压后运行 `run.sh` / `run.bat`。无需单独部署 WebUI 或安装 Node.js。Release 不再单独提供裸二进制；自定义部署可从完整包提取程序和前端资源。
 
 **更新通道：** 在 WebUI 版本面板选择 `Release`（默认，仅正式版）、`Beta`（测试版、候选版和正式版）或 `Canary`（另含每次合并到 main 自动构建的版本）。设置持久保存，检查更新、自动下载与安装均使用所选通道；切回 Release 不会自动降级。版本命名、Docker 标签与发布步骤见 [更新通道说明](docs/update-channels.md)。

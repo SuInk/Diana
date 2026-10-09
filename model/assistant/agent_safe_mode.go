@@ -246,6 +246,7 @@ var AgentSafeModeRules = []AgentSafeModeRule{
 	// 落在 keep/ 下）走的是同一组工具，一并关掉；读长期区照常。
 	{Category: safeModeCategoryFileWrite, Tool: "write_file", Reason: "写入工作区文件"},
 	{Category: safeModeCategoryFileWrite, Tool: "edit_file", Reason: "修改工作区文件"},
+	{Category: safeModeCategoryFileWrite, Tool: "extract_archive", Reason: "解压文件到工作区"},
 	{Category: safeModeCategoryFileWrite, Tool: dianaSaveToWorkspaceToolName, Reason: "把文件存进工作区"},
 	{Category: safeModeCategoryFileWrite, Tool: agent.ManageFilesToolName, Field: "action",
 		Operations: []string{"move", "copy", "delete", "mkdir"},

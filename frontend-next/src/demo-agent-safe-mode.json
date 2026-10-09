@@ -223,6 +223,11 @@
       },
       {
         "category": "file_write",
+        "tool": "extract_archive",
+        "reason": "解压文件到工作区"
+      },
+      {
+        "category": "file_write",
         "tool": "save_to_workspace",
         "reason": "把文件存进工作区"
       },

@@ -119,7 +119,9 @@ func NewExtensionManager(ctx context.Context, cfg Config, registry *ToolRegistry
 
 	skillTools := newLiveSkillTools(manager.Skills)
 	registry.Register(skillTools.Read)
-	registry.Register(NewExtensionsListTool(manager, cfg.ExtensionManagement))
+	list := NewExtensionsListTool(manager, cfg.ExtensionManagement)
+	list.SetExecutionRegistry(registry)
+	registry.Register(list)
 	if cfg.ExtensionManagement {
 		registry.Register(&SkillsInstallTool{manager: manager})
 		registry.Register(&SkillsUninstallTool{manager: manager})
@@ -300,6 +302,7 @@ func (m *ExtensionManager) Close() error {
 type ExtensionsListTool struct {
 	catalog           ExtensionCatalog
 	managementEnabled bool
+	executionRegistry *ToolRegistry
 }
 
 func NewExtensionsListTool(catalog ExtensionCatalog, managementEnabled bool) *ExtensionsListTool {
@@ -314,14 +317,19 @@ func (t *ExtensionsListTool) Name() string { return extensionsListToolName }
 func (t *ExtensionsListTool) Introspection(map[string]any) bool { return true }
 
 func (t *ExtensionsListTool) Description() string {
-	return `列出 Diana 的能力目录：内置插件、本地 Skills、MCP 服务及其启用状态和工具名。Skill 正文用 read_skill 读。`
+	return `列出 Diana 的能力目录：内置插件、本地 Skills、MCP 服务及其启用状态和工具名，以及当前请求的命令执行、文件写入、解压权限和 node/npm/tar/unzip 运行环境。Skill 正文用 read_skill 读。`
+}
+
+// SetExecutionRegistry binds diagnostics to the request's final permission view.
+func (t *ExtensionsListTool) SetExecutionRegistry(registry *ToolRegistry) {
+	t.executionRegistry = registry
 }
 
 func (t *ExtensionsListTool) InputSchema() map[string]any {
-	return toolEmptySchema()
+	return toolObjectSchema(nil, map[string]any{"execution": toolBoolParam("包含当前请求的命令、文件写入、解压权限和运行环境诊断，可选")})
 }
 
-func (t *ExtensionsListTool) Run(context.Context, map[string]any) (string, error) {
+func (t *ExtensionsListTool) Run(ctx context.Context, input map[string]any) (string, error) {
 	var extensions []ExtensionState
 	if t != nil && t.catalog != nil {
 		extensions = t.catalog.Extensions()
@@ -331,6 +339,9 @@ func (t *ExtensionsListTool) Run(context.Context, map[string]any) (string, error
 		"management_enabled": t != nil && t.managementEnabled,
 	}
 	if t != nil {
+		if boolFromInput(input, "execution", true) {
+			payload["execution"] = executionEnvironment(ctx, t.executionRegistry)
+		}
 		if manager, ok := t.catalog.(*ExtensionManager); ok {
 			if warnings := manager.Warnings(); len(warnings) > 0 {
 				payload["warnings"] = warnings
