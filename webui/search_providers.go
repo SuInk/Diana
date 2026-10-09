@@ -49,6 +49,42 @@ func (h *BotHandler) saveSearchProvider(c *gin.Context) {
 	c.JSON(http.StatusOK, config)
 }
 
+// exportSearchProviders 返回含密钥的搜索提供商，供「提供商」页导出文件使用。
+func (h *BotHandler) exportSearchProviders(c *gin.Context) {
+	providers, err := h.runtime.Plugins().ExportSearchProviders()
+	if err != nil {
+		h.writeError(c, http.StatusInternalServerError, "search_providers_export", err, "", nil)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"providers": providers})
+}
+
+// importSearchProviders 按 ID 覆盖导入文件里的搜索提供商，文件外的保持不动。
+func (h *BotHandler) importSearchProviders(c *gin.Context) {
+	var payload struct {
+		Providers []assistant.SearchProvider `json:"providers"`
+	}
+	if err := c.ShouldBindJSON(&payload); err != nil {
+		h.writeError(c, http.StatusBadRequest, "search_providers_import", fmt.Errorf("导入文件格式无效"), "", nil)
+		return
+	}
+	if err := h.runtime.Plugins().ImportSearchProviders(payload.Providers); err != nil {
+		h.writeError(c, http.StatusBadRequest, "search_providers_import", err, "", nil)
+		return
+	}
+	if err := h.persistState(); err != nil {
+		h.writeError(c, http.StatusInternalServerError, "search_providers_import", fmt.Errorf("搜索提供商持久化失败：%w", err), "", nil)
+		return
+	}
+	recordRequestOperation(c, h.logs, "search_providers_import", "搜索提供商已导入", "", map[string]any{"count": len(payload.Providers)})
+	config, err := h.runtime.Plugins().SearchConfiguration("")
+	if err != nil {
+		h.writeError(c, http.StatusInternalServerError, "search_providers", err, "", nil)
+		return
+	}
+	c.JSON(http.StatusOK, config)
+}
+
 func (h *BotHandler) testSearchProvider(c *gin.Context) {
 	var payload struct {
 		Provider assistant.SearchProvider `json:"provider"`

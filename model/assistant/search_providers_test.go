@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -274,5 +275,34 @@ func TestSearchProviderCatalogPreservesBrowserEngineDefaults(t *testing.T) {
 	overrides := runtime.pluginSettingOverridesForEvent(event)
 	if !searchDisabledByOverride(overrides) {
 		t.Fatal("disabled search could be re-enabled by browser fallback")
+	}
+}
+
+func TestSearchProviderExportImportRoundTrip(t *testing.T) {
+	source := NewDefaultPluginManager()
+	id, err := source.SaveSearchProvider(SearchProvider{Name: "Private MCP", Type: "search_mcp", URL: "https://private.example/mcp", Tool: "lookup", APIKey: "custom-secret"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	exported, err := source.ExportSearchProviders()
+	if err != nil || !slices.ContainsFunc(exported, func(p SearchProvider) bool { return p.ID == id && p.APIKey == "custom-secret" }) {
+		t.Fatalf("export=%#v err=%v", exported, err)
+	}
+
+	target := NewDefaultPluginManager()
+	keep, _ := target.SaveSearchProvider(SearchProvider{Name: "Local only", Type: "tavily", URL: "https://api.tavily.com/search", APIKey: "keep-secret"})
+	bad := append(slices.Clone(exported), SearchProvider{ID: "broken", Name: "", Type: "tavily"})
+	if err := target.ImportSearchProviders(bad); err == nil {
+		t.Fatal("invalid import accepted")
+	}
+	if config, _ := target.SearchConfiguration(""); slices.ContainsFunc(config.Providers, func(p SearchProvider) bool { return p.ID == id }) {
+		t.Fatal("failed import wrote partial providers")
+	}
+	if err := target.ImportSearchProviders(exported); err != nil {
+		t.Fatal(err)
+	}
+	after, _ := target.ExportSearchProviders()
+	if !slices.ContainsFunc(after, func(p SearchProvider) bool { return p.ID == id && p.APIKey == "custom-secret" }) || !slices.ContainsFunc(after, func(p SearchProvider) bool { return p.ID == keep && p.APIKey == "keep-secret" }) {
+		t.Fatalf("after import=%#v", after)
 	}
 }

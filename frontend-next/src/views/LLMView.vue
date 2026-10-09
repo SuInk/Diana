@@ -7,7 +7,7 @@
       <div class="view-title">
         <p>管理模型与搜索提供商的接入和凭据，再到机器人配置中按用途分配</p>
       </div>
-      <div v-if="providerTab === 'model'" class="view-actions">
+      <div class="view-actions">
         <button class="btn" type="button" :disabled="!profileSet" @click="exportProfiles">
           <Download :size="15" aria-hidden="true" />
           导出
@@ -17,7 +17,7 @@
           导入
         </button>
         <input ref="importInput" type="file" accept="application/json" style="display: none" @change="importProfiles" />
-        <button class="btn primary" type="button" @click="startCreate">
+        <button v-if="providerTab === 'model'" class="btn primary" type="button" @click="startCreate">
           <Plus :size="15" aria-hidden="true" />
           新建配置
         </button>
@@ -97,7 +97,7 @@
 
     </div>
 
-    <div v-if="providerTab === 'search'" id="provider-panel-search" role="tabpanel" aria-labelledby="provider-tab-search"><SearchProviderManager /></div>
+    <div v-if="providerTab === 'search'" id="provider-panel-search" role="tabpanel" aria-labelledby="provider-tab-search"><SearchProviderManager :key="searchProvidersVersion" /></div>
 
     <!-- 单配置连通测试弹窗 -->
     <Modal v-if="testTarget" :title="`测试 · ${testTarget.name || testTarget.model}`" @close="testTarget = null">
@@ -422,6 +422,9 @@ import {
   cloneConfigProfile,
   deleteConfigProfile,
   exportConfig,
+  exportSearchProviders,
+  importSearchProviders,
+  type SearchProviderWithKey,
   reorderConfigProfiles,
   getConfig,
   importConfigProfiles,
@@ -543,6 +546,8 @@ function clearInvalid(field: LLMErrorField): void {
   }
 }
 const importInput = ref<HTMLInputElement | null>(null);
+// 导入搜索提供商后递增，让搜索标签页重新加载列表。
+const searchProvidersVersion = ref(0);
 
 const testMessage = ref("");
 const testTarget = ref<LLMConfig | null>(null);
@@ -1134,7 +1139,9 @@ async function runTest(): Promise<void> {
 
 async function exportProfiles(): Promise<void> {
   try {
-    const data = await exportConfig();
+    const [llm, search] = await Promise.all([exportConfig(), exportSearchProviders()]);
+    // 同一份文件带上搜索提供商；旧版导入只认 profiles，多出的字段会被忽略。
+    const data = { ...llm, search_providers: search.providers };
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement("a");
@@ -1161,11 +1168,20 @@ async function importProfiles(event: Event): Promise<void> {
   }
   try {
     const text = await file.text();
-    const parsed = JSON.parse(text) as LLMConfig;
-    profileSet.value = await importConfigProfiles({
-      profiles: parsed.profiles
-    });
-    toastSuccess("配置已导入");
+    const parsed = JSON.parse(text) as Partial<LLMConfig> & { search_providers?: SearchProviderWithKey[] };
+    const searchProviders = Array.isArray(parsed.search_providers) ? parsed.search_providers : null;
+    if (!Array.isArray(parsed.profiles) && !searchProviders) {
+      throw new Error("导入失败：文件里没有提供商配置");
+    }
+    // 旧导出文件只有 profiles，照旧只导入模型提供商。
+    if (Array.isArray(parsed.profiles)) {
+      profileSet.value = await importConfigProfiles({ profiles: parsed.profiles });
+    }
+    if (searchProviders) {
+      await importSearchProviders(searchProviders);
+      searchProvidersVersion.value++;
+    }
+    toastSuccess(searchProviders ? `配置已导入（含 ${searchProviders.length} 个搜索提供商）` : "配置已导入");
   } catch (error) {
     toastError(error instanceof Error ? error.message : "导入失败：文件格式不正确");
   }
