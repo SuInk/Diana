@@ -33,6 +33,11 @@
       },
       {
         "category": "third_party",
+        "tool": "install_package",
+        "reason": "从 npm 拉第三方代码装进工作区"
+      },
+      {
+        "category": "third_party",
         "tool": "uninstall_skill",
         "reason": "卸载 Skill 属于扩展管理，和安装同一档"
       },
