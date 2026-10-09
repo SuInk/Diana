@@ -99,10 +99,28 @@ func requireAccessibility() -> String? {
     return "permission_denied: Accessibility（辅助功能）未授权。请在系统设置 → 隐私与安全性 → 辅助功能中允许本 helper，然后完全退出并重启。"
 }
 
+// 写入只能指向当前最前的应用窗口；不猜测后台窗口，也不向全局前台发键盘事件。
+func foregroundTargetPID(id: String) -> pid_t? {
+    guard let wanted = UInt32(id),
+          let front = NSWorkspace.shared.frontmostApplication,
+          let info = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]],
+          let window = info.first(where: { ($0[kCGWindowLayer as String] as? Int) == 0 }),
+          let number = window[kCGWindowNumber as String] as? UInt32,
+          let pid = window[kCGWindowOwnerPID as String] as? pid_t,
+          number == wanted, pid == front.processIdentifier else { return nil }
+    return pid
+}
+
 func clickWindow(id: String, x: Double, y: Double, button: String) -> String? {
     if let err = requireAccessibility() { return err }
+    guard let targetPID = foregroundTargetPID(id: id) else {
+        return "window_unknown: 目标窗口不是当前前台窗口，请先手动切换到该窗口"
+    }
     guard let bounds = windowBounds(id: id) else {
         return "window_unknown: 找不到窗口 \(id)"
+    }
+    guard x.isFinite, y.isFinite, x >= 0, y >= 0, x < Double(bounds.width), y < Double(bounds.height) else {
+        return "bad_request: 点击坐标必须位于目标窗口内"
     }
     // 窗口 bounds 为屏幕坐标（原点在左上）；相对坐标转全局。
     let global = CGPoint(x: bounds.origin.x + CGFloat(x), y: bounds.origin.y + CGFloat(y))
@@ -128,19 +146,24 @@ func clickWindow(id: String, x: Double, y: Double, button: String) -> String? {
           let up = CGEvent(mouseEventSource: nil, mouseType: upType, mouseCursorPosition: global, mouseButton: mouseButton) else {
         return "helper_error: 无法创建鼠标事件"
     }
-    move.post(tap: .cghidEventTap)
-    down.post(tap: .cghidEventTap)
-    up.post(tap: .cghidEventTap)
+    move.postToPid(targetPID)
+    down.postToPid(targetPID)
+    up.postToPid(targetPID)
     return nil
 }
 
 func typeText(id: String, text: String) -> String? {
     if let err = requireAccessibility() { return err }
-    _ = id // 阶段 2：假定调用方已把目标窗口置于前台；后续可加 activate。
+    guard let targetPID = foregroundTargetPID(id: id) else {
+        return "window_unknown: 目标窗口不是当前前台窗口，请先手动切换到该窗口"
+    }
     guard let source = CGEventSource(stateID: .hidSystemState) else {
         return "helper_error: 无法创建事件源"
     }
     for scalar in text.unicodeScalars {
+        guard foregroundTargetPID(id: id) == targetPID else {
+            return "takeover: 前台窗口已改变，停止输入"
+        }
         let utf16 = Array(String(scalar).utf16)
         guard let down = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: true),
               let up = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: false) else {
@@ -150,8 +173,8 @@ func typeText(id: String, text: String) -> String? {
             down.keyboardSetUnicodeString(stringLength: utf16.count, unicodeString: buf.baseAddress)
             up.keyboardSetUnicodeString(stringLength: utf16.count, unicodeString: buf.baseAddress)
         }
-        down.post(tap: .cghidEventTap)
-        up.post(tap: .cghidEventTap)
+        down.postToPid(targetPID)
+        up.postToPid(targetPID)
     }
     return nil
 }
@@ -188,7 +211,9 @@ func keyCode(for name: String) -> (CGKeyCode, CGEventFlags)? {
 
 func pressKey(id: String, key: String) -> String? {
     if let err = requireAccessibility() { return err }
-    _ = id
+    guard let targetPID = foregroundTargetPID(id: id) else {
+        return "window_unknown: 目标窗口不是当前前台窗口，请先手动切换到该窗口"
+    }
     guard let (code, flags) = keyCode(for: key) else {
         return "bad_request: 不支持的按键 \(key)"
     }
@@ -199,8 +224,8 @@ func pressKey(id: String, key: String) -> String? {
     }
     down.flags = flags
     up.flags = flags
-    down.post(tap: .cghidEventTap)
-    up.post(tap: .cghidEventTap)
+    down.postToPid(targetPID)
+    up.postToPid(targetPID)
     return nil
 }
 

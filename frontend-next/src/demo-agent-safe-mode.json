@@ -165,6 +165,21 @@
       },
       {
         "category": "act_as_owner",
+        "tool": "desktop_click",
+        "reason": "操作主人本机桌面（点击）"
+      },
+      {
+        "category": "act_as_owner",
+        "tool": "desktop_type",
+        "reason": "操作主人本机桌面（输入）"
+      },
+      {
+        "category": "act_as_owner",
+        "tool": "desktop_key",
+        "reason": "操作主人本机桌面（按键）"
+      },
+      {
+        "category": "act_as_owner",
         "tool": "github",
         "field": "operation",
         "operations": [
