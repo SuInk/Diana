@@ -448,8 +448,29 @@ func (s *SQLiteStore) SaveBrowserSource(ctx context.Context, doc browsersource.S
 // LoadBrowserBox 读取内置浏览器的配置。
 func (s *SQLiteStore) LoadBrowserBox(ctx context.Context) (browserbox.Document, bool, error) {
 	var doc browserbox.Document
-	ok, err := s.loadJSON(ctx, browserBoxKey, &doc)
-	return doc, ok, err
+	defer s.observeStorage(ctx, "loadBrowserBox", "read")()
+	var raw string
+	err := s.eventReader().QueryRowContext(ctx, `SELECT value FROM app_state WHERE key = ?`, browserBoxKey).Scan(&raw)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return doc, false, nil
+		}
+		return doc, false, err
+	}
+	if err := json.Unmarshal([]byte(raw), &doc); err != nil {
+		return doc, false, fmt.Errorf("decode %s: %w", browserBoxKey, err)
+	}
+	// 旧版本没有保存 headful 字段。保留显式 false，同时让旧配置按项目约定
+	// 迁移到有头浏览器，避免 WebUI 看似正常但搜索实际跑在无头 Chrome。
+	var envelope struct {
+		Settings map[string]json.RawMessage `json:"settings"`
+	}
+	if err := json.Unmarshal([]byte(raw), &envelope); err == nil {
+		if _, exists := envelope.Settings["headful"]; !exists {
+			doc.Settings.Headful = true
+		}
+	}
+	return doc, true, nil
 }
 
 // SaveBrowserBox 保存内置浏览器的配置。登录态不在这里，它在 profile 目录里。

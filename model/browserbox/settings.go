@@ -36,10 +36,9 @@ const (
 type Settings struct {
 	// Enabled 决定进程起不起。关掉会当场结束进程，模型那一侧的 CDP 地址也随之消失。
 	Enabled bool `json:"enabled"`
-	// Headful 决定要不要开一个真窗口。默认无头，这是唯一能在容器里跑起来的模式，
-	// 而且无头不影响实时画面——画面走的是 CDP 的 screencast，不是截屏。
-	// 写成「有头」而不是「无头」是因为零值必须是能用的那一档：容器里默认
-	// headless=false 的话，用户一打开开关就撞上「没有显示器」。
+	// Headful 决定要不要开一个真窗口。桌面安装默认有头；容器或无显示器的
+	// 部署可以显式保存 false。无头不影响实时画面——画面走的是 CDP 的
+	// screencast，不是截屏。
 	Headful bool `json:"headful,omitempty"`
 	// WindowWidth/WindowHeight 是渲染尺寸。
 	WindowWidth  int `json:"window_width,omitempty"`
