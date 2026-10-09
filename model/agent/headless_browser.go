@@ -935,12 +935,14 @@ func (t *BrowserRenderTool) Name() string { return "browser_render" }
 
 func (t *BrowserRenderTool) Description() string {
 	return `用一次性沙箱浏览器读取公网网页，不带用户登录态。技术、项目能力、价格或版本调研，在搜索定位到出处后用本工具核对一手原文，不能只靠搜索摘要收尾。返回正文和页面上的链接（links），要看站内别的页面就从 links 里取真实网址再打开，不要猜网址。` +
-		`正文截断或只有目录时，填 find 在整页定位关键段落，不能把目录标题当实现依据。GitHub Release 地址改读官方 API 的版本与发布时间。`
+		`正文截断或只有目录时，填 find 在整页定位关键段落，不能把目录标题当实现依据。GitHub Release 地址改读官方 API 的版本与发布时间。` +
+		`要核对几个候选来源时，把 url 填最相关的一个、其余填进 urls 一次并行打开（最多 3 个），不要一页一页地读。`
 }
 
 func (t *BrowserRenderTool) InputSchema() map[string]any {
 	return toolObjectSchema([]string{"url"}, map[string]any{
 		"url":  toolStringParam("公网页面地址"),
+		"urls": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "同时打开的其他页面地址，和 url 合计最多 3 个"},
 		"find": toolStringParam("在整页正文里查找的关键词，多个用 | 隔开，如 pricing|价格|套餐"),
 	})
 }
@@ -950,13 +952,16 @@ func (t *BrowserRenderTool) Run(ctx context.Context, input map[string]any) (stri
 	if strings.TrimSpace(rawURL) == "" {
 		return "", errors.New(`browser_render 缺少必填 url。请重新调用，arguments 形如 {"url":"完整的 HTTP(S) 网址","find":"可选页内关键词"}。不要只发工具名，也不要把 url 放进 input 子对象；搜索时使用已编码关键词的搜索引擎网址，读来源时照抄来源 URL。`)
 	}
-	page, err := t.renderer.Render(ctx, rawURL)
-	if err != nil {
-		return "", err
-	}
 	budget := ToolOutputBudget(ctx)
 	if budget <= 0 {
 		budget = DefaultMaxToolOutputChars
+	}
+	if urls := browserRenderURLs(input); len(urls) > 1 {
+		return t.runBatch(ctx, urls, stringFromInput(input, "find"), budget)
+	}
+	page, err := t.renderer.Render(ctx, rawURL)
+	if err != nil {
+		return "", err
 	}
 	return browserRenderOutputWithBudget(page, stringFromInput(input, "find"), budget)
 }

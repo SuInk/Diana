@@ -70,12 +70,13 @@ func responseSources(answer string, steps []Step) []SourceReference {
 				add(SourceReference{URL: url})
 			}
 		case browserRenderToolName:
-			var page browserRenderPayload
-			if json.Unmarshal([]byte(step.Output), &page) != nil || (page.Text == "" && len(page.FindMatches) == 0) {
-				continue
+			for _, page := range browserRenderPages(step.Output) {
+				if page.Text == "" && len(page.FindMatches) == 0 {
+					continue
+				}
+				add(SourceReference{URL: page.RequestedURL, Title: page.Title, Read: true})
+				add(SourceReference{URL: page.URL, Title: page.Title, Read: true})
 			}
-			add(SourceReference{URL: page.RequestedURL, Title: page.Title, Read: true})
-			add(SourceReference{URL: page.URL, Title: page.Title, Read: true})
 		}
 	}
 	for _, url := range extractCitationURLs(answer) {

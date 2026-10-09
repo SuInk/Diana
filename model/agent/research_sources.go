@@ -53,11 +53,11 @@ func researchObservationGuidance(tool, rawOutput string, remaining int) string {
 			guidance = "本次找到的是候选来源，搜索停止原因只描述检索进度。对当前状态或有争议的事实，核对原始来源的主体、发布或修订日期和正文覆盖的条件；摘要、转载和查询时间不能代替这些证据。来源之间日期或条件冲突时，不能只选一条摘要收尾。仍有缺口时读取相关原始页面或调整查询，尤其区分事件已发生与特定对象、地点或渠道可用；已有来源直接支持所问条件时即可结束。"
 		}
 	case "browser_render":
-		var page browserRenderPayload
-		if json.Unmarshal([]byte(rawOutput), &page) != nil {
+		pages := browserRenderPages(rawOutput)
+		if len(pages) == 0 {
 			guidance = "依据实际可见的页面内容判断；页面读取成功本身不表示所问事实成立。"
 		} else {
-			switch browserPayloadSourceStage(page) {
+			switch browserPagesSourceStage(pages) {
 			case sourceStagePageEmpty:
 				guidance = "没有读到页面正文，标题或空页面不能确认或否定所问事实。根据错误、跳转和来源地址选择其他原始来源。"
 			case sourceStagePagePartial:
@@ -73,6 +73,23 @@ func researchObservationGuidance(tool, rawOutput string, remaining int) string {
 		return guidance + " 工具预算已耗尽，按已有证据回答，明确仍未确认的部分，不要承诺继续查询。"
 	}
 	return guidance + " 保留来源的产品名称和范围限定；‘尚未提供’不能改写成‘正在分批提供’，某子产品可用也不能扩写为全部渠道可用。需要核对时直接调用工具；信息足够时调用 agent_finalize。"
+}
+
+// browserPagesSourceStage 取一批页面里读得最完整的一页，批量里有页面打不开不影响其他页。
+func browserPagesSourceStage(pages []browserRenderPayload) string {
+	best := sourceStagePageEmpty
+	for _, page := range pages {
+		switch stage := browserPayloadSourceStage(page); stage {
+		case sourceStagePageEmpty:
+		case sourceStagePagePartial:
+			if best == sourceStagePageEmpty {
+				best = stage
+			}
+		default:
+			return stage
+		}
+	}
+	return best
 }
 
 func browserPayloadSourceStage(page browserRenderPayload) string {
