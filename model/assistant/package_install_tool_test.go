@@ -6,6 +6,7 @@ package assistant
 import (
 	"context"
 	"errors"
+	"github.com/SuInk/diana/model/agent"
 	"strings"
 	"testing"
 )
@@ -20,7 +21,7 @@ func TestInstallPackageNotifiesBeforeInstalling(t *testing.T) {
 		notice = text
 		return true
 	}
-	tool.install = func(_ context.Context, _, _ string, packages []string) (string, error) {
+	tool.install = func(_ context.Context, _ agent.Config, packages []string) (string, error) {
 		order = append(order, "install:"+strings.Join(packages, ","))
 		return "added 2 packages", nil
 	}
@@ -47,7 +48,7 @@ func TestInstallPackageRejectsUnsafeSpecs(t *testing.T) {
 		called := false
 		tool := &dianaInstallPackageTool{root: t.TempDir()}
 		tool.notify = func(context.Context, string) bool { called = true; return true }
-		tool.install = func(context.Context, string, string, []string) (string, error) { called = true; return "", nil }
+		tool.install = func(context.Context, agent.Config, []string) (string, error) { called = true; return "", nil }
 		if _, err := tool.Run(context.Background(), map[string]any{"packages": []any{spec}}); err == nil {
 			t.Fatalf("%q 应被拒绝", spec)
 		}
@@ -60,7 +61,7 @@ func TestInstallPackageRejectsUnsafeSpecs(t *testing.T) {
 func TestInstallPackageReportsFailure(t *testing.T) {
 	tool := &dianaInstallPackageTool{root: t.TempDir()}
 	tool.notify = func(context.Context, string) bool { return true }
-	tool.install = func(context.Context, string, string, []string) (string, error) {
+	tool.install = func(context.Context, agent.Config, []string) (string, error) {
 		return "E404 not found", errors.New("npm install 失败")
 	}
 	out, err := tool.Run(context.Background(), map[string]any{"packages": []any{"no-such-pkg"}})

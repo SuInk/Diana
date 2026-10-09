@@ -22,14 +22,14 @@ type dianaInstallPackageTool struct {
 	runtime *Runtime
 	event   MessageEvent
 	root    string
-	mcp     string
+	config  agent.Config
 	// install 和 notify 留给测试替换。
-	install func(ctx context.Context, root, mcpConfigPath string, packages []string) (string, error)
+	install func(ctx context.Context, cfg agent.Config, packages []string) (string, error)
 	notify  func(ctx context.Context, text string) bool
 }
 
 func newDianaInstallPackageTool(runtime *Runtime, event MessageEvent, cfg BotConfig) *dianaInstallPackageTool {
-	tool := &dianaInstallPackageTool{runtime: runtime, event: event, root: AgentWorkspaceDir(), mcp: cfg.AgentMCPConfigPath, install: agent.InstallNPMPackages}
+	tool := &dianaInstallPackageTool{runtime: runtime, event: event, root: AgentWorkspaceDir(), config: runtime.agentRegistryConfig(cfg, event, true), install: agent.InstallNPMPackages}
 	tool.notify = tool.announce
 	return tool
 }
@@ -60,9 +60,9 @@ func (t *dianaInstallPackageTool) Run(ctx context.Context, input map[string]any)
 	if reason := strings.TrimSpace(inputString(input, "reason")); reason != "" {
 		notice += "\n用途：" + truncateRunes(reason, 80)
 	}
-	notice += "\n装到工作区 node_modules，不影响系统环境。"
+	notice += "\n安装目录为工作区 node_modules，执行遵循机器人的命令沙盒与网络设置。"
 	notified := t.notify(ctx, notice)
-	output, err := t.install(ctx, t.root, t.mcp, packages)
+	output, err := t.install(ctx, t.config, packages)
 	result := map[string]any{
 		"packages":     packages,
 		"installed_to": agent.NPMModulesDir(t.root),

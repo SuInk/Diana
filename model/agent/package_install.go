@@ -13,8 +13,6 @@ import (
 	"regexp"
 	"strings"
 	"time"
-
-	"github.com/SuInk/diana/internal/procgroup"
 )
 
 const (
@@ -54,7 +52,8 @@ func ValidateNPMPackages(packages []string) ([]string, error) {
 
 // InstallNPMPackages 把包装进工作区根目录的 node_modules：工作区里任何脚本都能
 // 直接 require，不碰全局目录，也不需要 root。环境变量走和 run_command 相同的凭据过滤。
-func InstallNPMPackages(ctx context.Context, root, mcpConfigPath string, packages []string) (string, error) {
+func InstallNPMPackages(ctx context.Context, cfg Config, packages []string) (string, error) {
+	root, mcpConfigPath := cfg.WorkDir, cfg.MCPConfigPath
 	packages, err := ValidateNPMPackages(packages)
 	if err != nil {
 		return "", err
@@ -69,12 +68,17 @@ func InstallNPMPackages(ctx context.Context, root, mcpConfigPath string, package
 	}
 	runCtx, cancel := context.WithTimeout(ctx, packageInstallTimeout)
 	defer cancel()
-	args := append([]string{"install", "--prefix", root, "--no-audit", "--no-fund", "--no-save", "--loglevel=error", "--"}, packages...)
-	cmd := procgroup.CommandContext(runCtx, npm, args...)
+	cmd, err := packageInstallCommand(runCtx, cfg, npm, packages, detectCommandSandbox())
+	if err != nil {
+		return "", err
+	}
 	cmd.Dir = root
 	cmd.Env = env
-	output, runErr := cmd.CombinedOutput()
-	text := truncateRunes(strings.TrimSpace(string(output)), packageInstallOutput)
+	var output cappedBuffer
+	output.limit = packageInstallOutput
+	cmd.Stdout, cmd.Stderr = &output, &output
+	runErr := cmd.Run()
+	text := strings.TrimSpace(output.String())
 	if runCtx.Err() == context.DeadlineExceeded {
 		return text, fmt.Errorf("安装超过 %s 未完成，已终止", packageInstallTimeout)
 	}
@@ -102,4 +106,12 @@ func lookPathIn(name string, env []string) (string, error) {
 		}
 	}
 	return exec.LookPath(name)
+}
+
+// 与 run_command 共用沙盒，require 不得降级，网络沿用机器人配置。
+func packageInstallCommand(ctx context.Context, cfg Config, npm string, packages []string, sandbox commandSandbox) (*exec.Cmd, error) {
+	runner := &RunCommandTool{root: cfg.WorkDir, mcpConfigPath: cfg.MCPConfigPath, sandboxMode: cfg.CommandSandbox, sandboxNetwork: cfg.CommandSandboxAllowNetwork, sandbox: sandbox}
+	args := append([]string{"install", "--prefix", cfg.WorkDir, "--cache", filepath.Join(cfg.WorkDir, ".npm-cache"), "--no-audit", "--no-fund", "--no-save", "--loglevel=error", "--"}, packages...)
+	cmd, _, err := runner.commandFor(ctx, npm, args)
+	return cmd, err
 }
