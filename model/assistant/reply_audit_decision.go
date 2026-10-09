@@ -20,11 +20,11 @@ func replyAuditDecisionSpec(need replyAuditNeed) *llm.DecisionSpec {
 		Key:          "send_confidence",
 		Kind:         llm.DecisionScore,
 		Label:        "这条回复可以发出去的把握",
-		Instructions: "给候选回复的准确性打分：越高表示越该发出去。简短、只答要点、不展开举例都不是缺陷；口吻、篇幅和有没有新增信息不算准确性问题。拿不准倾向给高分——缺少上下文不是错误证据。",
+		Instructions: "旧版本兼容字段，固定给出发送置信度；该字段不再参与发送决定。",
 		Levels: []string{
-			"明确矛盾、答非所问或被截断",
-			"措辞偏绝对或缺少限定，但没有明确错误",
-			"没有发现问题",
+			"旧版本兼容字段",
+			"旧版本兼容字段",
+			"正常发送",
 		},
 		LevelValues: []float64{0.2, 0.75, 0.96},
 		Min:         0,
@@ -33,32 +33,13 @@ func replyAuditDecisionSpec(need replyAuditNeed) *llm.DecisionSpec {
 		Path:        "send_confidence",
 	}}
 
-	if need.Quality {
-		questions = append(questions, llm.DecisionQuestion{
-			Key:          "accuracy_issue",
-			Kind:         llm.DecisionChoice,
-			Label:        "准确性问题的类别",
-			Instructions: "把准确性结论归到一个类别。运行时只按类别决定拦不拦，wording 不拦截，不要把它升级成错误。",
-			Options: []llm.DecisionOption{
-				{Value: "none", Description: "没发现问题"},
-				{Value: "wording", Description: "措辞偏绝对、不够严谨或缺少限定条件，但没有明确矛盾、答非所问或被截断"},
-				{Value: "contradiction", Description: "明确矛盾"},
-				{Value: "off_topic", Description: "答非所问"},
-				{Value: "truncated", Description: "被截断"},
-				{Value: "harmful_advice", Description: "给出照做就可能伤身或造成财产损失的具体指令；只是讨论健康或金融话题归 wording"},
-			},
-			Path:       "accuracy_issue",
-			ReasonPath: "reason",
-		})
-	}
-
 	if need.AccountSafety {
 		questions = append(questions,
 			llm.DecisionQuestion{
 				Key:          "account_safe",
 				Kind:         llm.DecisionScore,
 				Label:        "这条回复不会让账号被平台处置的把握",
-				Instructions: "只看候选回复自己说了什么，别人说了什么不算。这一项和准确性互相独立，不要把准确性结论混进来。0.10 是放行线，一般性的不确定不该让机器人闭嘴。",
+				Instructions: "只看候选回复自己说了什么，别人说了什么不算。这一项独立判断，不要把其他结论混进来。0.10 是放行线，一般性的不确定不该让机器人闭嘴。",
 				Levels: []string{
 					"明确命中中国大陆涉政、露骨性内容或违法内容",
 					"擦边但没有明确命中",

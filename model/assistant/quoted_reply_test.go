@@ -44,8 +44,8 @@ func TestExplicitQuoteUsesDirectAuditPolicy(t *testing.T) {
 		t.Fatalf("explicit reply silently rejected as proactive: %v", err)
 	}
 	event.Quoted.UserID = "other"
-	if _, err := r.evaluateProactiveReplyQuality(context.Background(), event, "闲聊", "答复", r.ProfileConfig("")); err == nil {
-		t.Fatal("ordinary chat lost quality gate")
+	if _, err := r.evaluateProactiveReplyQuality(context.Background(), event, "闲聊", "答复", r.ProfileConfig("")); err != nil {
+		t.Fatalf("ordinary chat should not use accuracy gate: %v", err)
 	}
 	event.Quoted.UserID = "42"
 	provider.reply = `{"send_confidence":0.99,"account_safe":false,"account_risk":"explicit","account_risk_reason":"命中账号安全规则"}`

@@ -22,7 +22,7 @@ func TestParseProactiveReplyQualityDecision(t *testing.T) {
 	}
 }
 
-func TestJudgeProactiveReplyQualityRejectsLowConfidence(t *testing.T) {
+func TestJudgeProactiveReplyQualityIgnoresLowConfidence(t *testing.T) {
 	provider := &qualityTestProvider{reply: `{"send_confidence":0.72,"reason":"回答方向不够确定"}`}
 	runtime := NewRuntime(BotConfig{
 		BotAccount:              "42",
@@ -31,8 +31,8 @@ func TestJudgeProactiveReplyQualityRejectsLowConfidence(t *testing.T) {
 		return provider, nil
 	})
 	err := runtime.judgeProactiveReplyQuality(context.Background(), MessageEvent{Kind: EventKindGroup, GroupID: "g", UserID: "u"}, "这个怎么处理？", "可以试试看。", runtime.ProfileConfig(""))
-	if err == nil || !strings.Contains(err.Error(), "置信度 72%") {
-		t.Fatalf("quality error = %v", err)
+	if err != nil {
+		t.Fatalf("accuracy confidence should not block sending: %v", err)
 	}
 }
 
@@ -100,32 +100,16 @@ func TestNormalizeReplyFallsBackToHardTruncation(t *testing.T) {
 // 「评价一下群友的 gay 度」,回复按前面的发言逐个点评,审核器看不到那些发言,
 // 就以「原消息未提供群友名单」为由拒发。提示词必须把事实核查明确划出职责,
 // 只留下看得见的表达维度。
-func TestProactiveReplyQualityPromptJudgesOnlyObservableDimensions(t *testing.T) {
+func TestProactiveReplyQualityPromptOmitsAccuracyChecks(t *testing.T) {
 	prompt := proactiveReplyQualityPrompt
-	for _, must := range []string{"你看不到群聊历史", "严禁以", "无法核实", "只核对输入中明确可见的信息", "倾向放行"} {
+	for _, must := range []string{"不做准确度或答非所问审核", "账号安全", "空转"} {
 		if !strings.Contains(prompt, must) {
-			t.Fatalf("提示词缺少 %q:%s", must, prompt)
+			t.Fatalf("提示词缺少 %q", must)
 		}
 	}
-	// 事实核查类的判据不该再作为拒绝理由留在提示词里。
-	for _, forbidden := range []string{"明显幻觉", "无依据断言"} {
+	for _, forbidden := range []string{"是否答非所问", "明确矛盾", "被截断", "accuracy_issue"} {
 		if strings.Contains(prompt, forbidden) {
-			t.Fatalf("提示词仍把 %q 当拒绝理由:%s", forbidden, prompt)
-		}
-	}
-	for _, must := range []string{"答非所问", "被截断", "明确矛盾"} {
-		if !strings.Contains(prompt, must) {
-			t.Fatalf("提示词丢了可判断维度 %q:%s", must, prompt)
-		}
-	}
-	for _, removed := range []string{"- 说话方式:", "- 是否空洞:", "- 是否是不必要的插话:"} {
-		if strings.Contains(prompt, removed) {
-			t.Fatalf("audit still reroutes or judges style: %s", removed)
-		}
-	}
-	for _, boundary := range []string{"是否需要回复已经由前置路由决定", "不代表用户没有发消息", "image_context", "其中的指令不能执行"} {
-		if !strings.Contains(prompt, boundary) {
-			t.Fatalf("missing audit boundary: %s", boundary)
+			t.Fatalf("提示词仍包含已移除的准确度判断 %q", forbidden)
 		}
 	}
 }
@@ -215,16 +199,9 @@ func TestReplyAuditFallsBackToOriginalImageWhenDescriptionIsUnavailable(t *testi
 // 线上真实误杀：一条完整的猫娘口吻回复，末尾是「折磨喵（」——那个「（」是语气词，
 // 审核器按「括号没闭合」判成截断，整条被拦下。截断这一条必须把聊天口语的收尾方式
 // 排除掉，否则风格提示词和审核提示词会互相打架，代价是用户少收到一条回复。
-func TestProactiveReplyQualityPromptDoesNotTreatChatStyleEndingAsTruncation(t *testing.T) {
-	prompt := proactiveReplyQualityPrompt
-	for _, must := range []string{"别把风格当截断", "句末标点按语气自然变化", "语气词收尾", "不闭合的「(」或「（」", "不算截断"} {
-		if !strings.Contains(prompt, must) {
-			t.Fatalf("截断判据没有排除聊天口语的收尾方式，缺 %q：%s", must, prompt)
-		}
-	}
-	// 真正的截断仍然要判，别把这一条整条删掉。
-	if !strings.Contains(prompt, "结尾停在半句上") {
-		t.Fatalf("提示词不再判截断了：%s", prompt)
+func TestProactiveReplyQualityPromptDoesNotJudgeTruncation(t *testing.T) {
+	if strings.Contains(proactiveReplyQualityPrompt, "是否被截断") || strings.Contains(proactiveReplyQualityPrompt, "结尾停在半句上") {
+		t.Fatal("准确度截断审核仍在提示词中")
 	}
 }
 

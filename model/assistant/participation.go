@@ -261,7 +261,7 @@ var promptParticipationRelevanceFalseSpec = registerPrompt(PromptSpec{
 	Default: participationRelevanceFalse,
 })
 
-const participationRelevanceNote = `上下文不足、需要搜索或调用工具，都不影响 directed，事实准确性由发送前准确度审核处理；不把别人对其他人的问题冒认成对机器人的请求。` + replyAfterAnswerRule
+const participationRelevanceNote = `上下文不足、需要搜索或调用工具，都不影响 directed，事实准确性由正式 Agent 和工具调用处理；不把别人对其他人的问题冒认成对机器人的请求。` + replyAfterAnswerRule
 
 var promptParticipationRelevanceNoteSpec = registerPrompt(PromptSpec{
 	Key:     "routing.participation.relevance_note",
