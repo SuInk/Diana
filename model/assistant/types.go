@@ -811,9 +811,6 @@ type BotConfig struct {
 	// 每日次数的日界线、「明天八点」的换算都按它。留空读 TZ 环境变量，再用本机时区；
 	// 本机是裸 UTC（Docker 默认）时按北京时间，见 BotConfig.Location。
 	Timezone string `json:"timezone,omitempty"`
-	// ReplySamplePercent 是这台机器人的每群回复抽样率默认值（1–100）：没 @、没引用
-	// 机器人、没叫名字的群消息，只有这个比例会交给模型判断要不要接话。0 表示不抽样。
-	ReplySamplePercent int `json:"reply_sample_percent,omitempty"`
 
 	// MaxContextTokens 限定这个机器人单次请求最多用掉多少上下文 token。
 	// 0 表示不额外限制，跟随提供商配置档的窗口。它只能收紧不能放宽：配置档说
@@ -1144,12 +1141,10 @@ type GroupConfig struct {
 	ImageGenerationDailyGroupLimit *int64 `json:"image_generation_daily_group_limit,omitempty"`
 	// VideoGenerationDailyGroupLimit 是这个群每天能生成视频的次数，三态同上。
 	VideoGenerationDailyGroupLimit *int64 `json:"video_generation_daily_group_limit,omitempty"`
-	// ReplySamplePercent 是这个群的回复抽样率（1–100），留空跟随机器人。
-	ReplySamplePercent       int   `json:"reply_sample_percent,omitempty"`
-	MaxContextTokens         int64 `json:"max_context_tokens,omitempty"`
-	RecentHistoryTokenBudget int64 `json:"recent_history_token_budget,omitempty"`
-	RecentContextLimit       int   `json:"recent_context_limit,omitempty"`
-	MaxReplyChars            int   `json:"max_reply_chars,omitempty"`
+	MaxContextTokens               int64  `json:"max_context_tokens,omitempty"`
+	RecentHistoryTokenBudget       int64  `json:"recent_history_token_budget,omitempty"`
+	RecentContextLimit             int    `json:"recent_context_limit,omitempty"`
+	MaxReplyChars                  int    `json:"max_reply_chars,omitempty"`
 	// 分条和合并转发的四个阈值加一个开关。群和群的说话节奏不一样：一个技术群
 	// 里长回复整条读更省事，一个闲聊群里同样长度得拆开发才不像播报。
 	// 自然分条的 nil 必须保留，发送时才跟随所属机器人的当前值。

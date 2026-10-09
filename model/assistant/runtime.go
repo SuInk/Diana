@@ -546,9 +546,7 @@ type Runtime struct {
 	// groupQuota 缓存按群额度的用量读数，避免每条消息都去扫一遍用量日志。
 	groupQuota groupModelQuotaCache
 	// mediaQuota 管生图这类按天限次的预占，见 media_generation_quota.go。
-	mediaQuota mediaGenerationQuota
-	// replySampleRoll 给回复抽样掷一次 [0,100) 的点数；为 nil 时用 math/rand，测试里替换。
-	replySampleRoll     func() int
+	mediaQuota          mediaGenerationQuota
 	seqGapActive        atomic.Int32
 	historyBackfillBusy atomic.Bool
 	historyFetchMu      sync.Mutex
@@ -2047,12 +2045,6 @@ func (r *Runtime) routeMessageEvent(ctx context.Context, event MessageEvent) (Me
 	considerProactive, proactiveSkipReason := false, ""
 	if !handled {
 		considerProactive, proactiveSkipReason = r.proactiveReplyConsideration(event, text)
-		// 回复抽样同样挡在路由模型之前：没抽中的消息一次模型调用都不花。
-		if considerProactive {
-			if reason, skip := r.groupReplySampleSkips(event); skip {
-				considerProactive, proactiveSkipReason = false, reason
-			}
-		}
 	}
 	proactiveCandidates := append([]proactiveReplyCandidate(nil), event.backlogProactive...)
 	if considerProactive {

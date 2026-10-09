@@ -96,12 +96,12 @@ func TestGroupQuotaCachesReading(t *testing.T) {
 	}
 }
 
-// 群配置归一化不能把额度和抽样率抹掉。
+// 群配置归一化不能把额度抹掉。
 func TestGroupQuotaSurvivesNormalization(t *testing.T) {
-	cfg := GroupConfig{GroupID: "20001", BotProfileID: "qq", ModelCallQuota: 400, ReplySamplePercent: 30}
+	cfg := GroupConfig{GroupID: "20001", BotProfileID: "qq", ModelCallQuota: 400}
 	normalized := cfg.WithDefaults("20001", BotConfig{ID: "qq"})
-	if normalized.ModelCallQuota != 400 || normalized.ReplySamplePercent != 30 {
-		t.Fatalf("归一化之后额度 = %d，抽样率 = %d", normalized.ModelCallQuota, normalized.ReplySamplePercent)
+	if normalized.ModelCallQuota != 400 {
+		t.Fatalf("归一化之后额度 = %d", normalized.ModelCallQuota)
 	}
 }
 

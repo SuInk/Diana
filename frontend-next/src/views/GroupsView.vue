@@ -416,11 +416,6 @@
           <label for="group-video-limit">本群每天视频次数</label>
           <input id="group-video-limit" v-model.number="editing.video_generation_daily_group_limit" class="input" type="number" min="1" step="1" inputmode="numeric" placeholder="没填跟随机器人" />
         </div>
-        <div class="field">
-          <label for="group-sample">回复抽样率（%）</label>
-          <input id="group-sample" v-model.number="editing.reply_sample_percent" class="input" type="number" min="0" max="100" step="1" inputmode="numeric" placeholder="留空跟随机器人" />
-          <span class="hint">没 @、没引用、没叫名字的消息，只有这个比例交给模型判断要不要接话，没抽中的一次调用都不花。被点名的照常回复。</span>
-        </div>
         <div v-if="editingQuota" class="field wide quota-usage">
           <div class="cluster" style="justify-content: space-between; gap: 8px">
             <span class="muted">{{ quotaWindowLabel }}已用</span>
@@ -432,8 +427,8 @@
           <span class="hint">{{ editingQuota.detail }}</span>
         </div>
         <p class="hint field wide">
-          两项留空都跟随机器人配置，两边都没填就是不限额、不抽样。额度用满之后这个群暂停一切花 token 的环节，消息照常进历史和长期记忆，
-          窗口滚过去自动恢复，不需要手动解除。主人不受额度和抽样限制。
+          额度留空跟随机器人配置，两边都没填就是不限额。额度用满之后这个群暂停一切花 token 的环节，消息照常进历史和长期记忆，
+          窗口滚过去自动恢复，不需要手动解除。主人不受额度限制。
         </p>
         <div class="field">
           <label for="group-history-budget">回复历史 token 预算</label>
@@ -1596,7 +1591,6 @@ async function saveEditing(): Promise<void> {
       model_call_quota: Math.max(0, Math.round(Number(current.model_call_quota) || 0)),
       ...groupImageGenerationLimitsPayload(current),
       ...groupVideoGenerationLimitsPayload(current),
-      reply_sample_percent: Math.min(100, Math.max(0, Math.round(Number(current.reply_sample_percent) || 0))),
       forward_reply_chunk_threshold: forwardModeOf(current) === "custom" ? optionalForwardThreshold(current.forward_reply_chunk_threshold) : undefined,
       forward_reply_enabled: forwardModeOf(current) === "custom" ? true : current.forward_reply_enabled,
       reply_merge_confidence_percent: Number(current.reply_merge_confidence_percent) || 0,
