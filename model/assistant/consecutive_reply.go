@@ -135,7 +135,7 @@ func consecutiveReplyContext(previous replyTurnRecord) string {
 // runningReplyContext 写给「同一个人前一条还没回完」的那一轮。
 func runningReplyContext(note string) string {
 	return "【同一个人的上一条还在处理】\n这个人上一条消息你还在处理，" + note + "，做完会由那一轮把结果发出去。" +
-		"\n这条如果是在催、问你在不在、怎么不说话，或者把同一个问题再问一遍：只简短回一句还在弄、做到哪了，不要自己回答那个问题，也不要重新去查。" +
+		"\n这条如果是在催、问你在不在、怎么不说话，或者把同一个问题再问一遍：根据实际进度简短回答，不要自己回答那个问题，也不要重新去查。" +
 		"这条如果是另一件事，照常回答它。"
 }
 

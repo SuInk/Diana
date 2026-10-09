@@ -6,7 +6,6 @@ package assistant
 import (
 	"context"
 	"fmt"
-	"log"
 	"strings"
 	"sync"
 	"time"
@@ -14,18 +13,7 @@ import (
 	"github.com/SuInk/diana/model/agent"
 )
 
-// 一轮回复连着搜索、读网页、生图时可能跑一两分钟，期间群里只看得到「正在输入」，
-// 甚至什么都看不到，分不清机器人是在干活还是挂了。跑过一阵还没收尾，就报一句
-// 做到哪了，一直报到回复出来为止：中途断了声，人照样以为挂了。间隔逐次翻倍，
-// 封顶 replyProgressMaxEvery，长调研也不至于刷屏。
-var (
-	replyProgressFirst    = 40 * time.Second
-	replyProgressEvery    = 90 * time.Second
-	replyProgressMaxEvery = 5 * time.Minute
-	// replyProgressNudgeAfter：回复开跑没多久就又被 @，多半只是补个 @，不用急着报。
-	replyProgressNudgeAfter = 10 * time.Second
-)
-
+// 记录正在执行的回复，供独立追问读取上下文；不主动发送聊天进度。
 type replyProgress struct {
 	mu      sync.Mutex
 	started time.Time
@@ -34,37 +22,17 @@ type replyProgress struct {
 	running string
 	// messageID 是这一轮在回答的消息；同一个人后面的消息靠它区分「前一轮」和自己。
 	messageID string
-	nudge     chan struct{}
-	done      chan struct{}
-	once      sync.Once
 }
 
 // startReplyProgress 返回要挂到 Runner 上的观察者（包着原观察者）和停止函数。
 func (r *Runtime) startReplyProgress(ctx context.Context, event MessageEvent, inner agent.RunObserver) (agent.RunObserver, func()) {
-	// 只报实时回复：定时查询、订阅、后台任务也走 generateReply，它们没人在等这一句，
-	// 中途插一条「还在弄」只会打扰订阅的会话。
+	// 只跟踪实时回复，后台任务不参与同一发送者的追问上下文。
 	if outboundTurnFromContext(ctx) == nil {
 		return inner, func() {}
 	}
-	progress := &replyProgress{started: time.Now(), counts: map[string]int{}, messageID: strings.TrimSpace(event.MessageID), nudge: make(chan struct{}, 1), done: make(chan struct{})}
+	progress := &replyProgress{started: time.Now(), counts: map[string]int{}, messageID: strings.TrimSpace(event.MessageID)}
 	key := consecutiveReplyKey(event)
 	r.registerReplyProgress(key, progress)
-	send := func(text string) {
-		if err := r.sendOutgoing(ctx, event, routeOutgoingToEvent(event, OutgoingMessage{Text: text})); err != nil {
-			log.Printf("diana reply progress not sent: %v", err)
-			return
-		}
-		// 话已经出去了，这一轮不能再被合并重来，否则进度会重复发。
-		r.sealDirectReply(ctx)
-		if typing := typingIndicatorFromContext(ctx); typing != nil {
-			typing.resume()
-		}
-	}
-	first, every, maxEvery := replyProgressFirst, replyProgressEvery, replyProgressMaxEvery
-	go func() {
-		defer recoverGoroutinePanic("reply.progress")
-		progress.loop(ctx, send, first, every, maxEvery)
-	}()
 	observer := func(ctx context.Context, runEvent agent.RunEvent) {
 		progress.observe(runEvent)
 		if inner != nil {
@@ -72,16 +40,10 @@ func (r *Runtime) startReplyProgress(ctx context.Context, event MessageEvent, in
 		}
 	}
 	return observer, func() {
-		progress.stop()
 		r.unregisterReplyProgress(key, progress)
 	}
 }
 
-func (p *replyProgress) stop() { p.once.Do(func() { close(p.done) }) }
-
-// 同一个人在长回复跑着的时候又来 @，多半是以为机器人没理他。新消息并进这一轮时
-// 当场报一句进度；单独成轮时把进度交给那一轮的提示词，让它说「还在弄」而不是
-// 把问题自己重答一遍，见 runningReplyContext。
 func (r *Runtime) registerReplyProgress(key string, progress *replyProgress) {
 	if key == "" {
 		return
@@ -127,18 +89,6 @@ func (r *Runtime) earlierReplyProgress(event MessageEvent) *replyProgress {
 	return found
 }
 
-// nudgeReplyProgress 在新消息并进还没回完的那一轮时，让那一轮马上报一次进度。
-func (r *Runtime) nudgeReplyProgress(event MessageEvent) {
-	progress := r.earlierReplyProgress(event)
-	if progress == nil || time.Since(progress.started) < replyProgressNudgeAfter {
-		return
-	}
-	select {
-	case progress.nudge <- struct{}{}:
-	default:
-	}
-}
-
 // runningReplyNote 描述同一个人前一轮做到哪了；没有在跑的就返回空。
 func (r *Runtime) runningReplyNote(event MessageEvent) string {
 	progress := r.earlierReplyProgress(event)
@@ -163,50 +113,7 @@ func (p *replyProgress) observe(event agent.RunEvent) {
 		if event.Tool == "browser_render" {
 			p.pages += max(1, len(stringsFromAny(event.ToolInput["urls"])))
 		}
-	case agent.RunPhaseCompleted, agent.RunPhaseFailed:
-		p.once.Do(func() { close(p.done) })
 	}
-}
-
-func (p *replyProgress) loop(ctx context.Context, send func(string), first, every, maxEvery time.Duration) {
-	timer := time.NewTimer(first)
-	defer timer.Stop()
-	force := false
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-p.done:
-			return
-		case <-p.nudge:
-			force = true
-		case <-timer.C:
-			timer.Reset(every)
-			every = min(every*2, maxEvery)
-		}
-		text, ok := p.render(time.Now(), force)
-		force = false
-		if !ok {
-			continue
-		}
-		// 计时器和收尾可能同时到：收尾了就别再报「还在弄」。
-		select {
-		case <-p.done:
-			return
-		default:
-		}
-		send(text)
-	}
-}
-
-// render 到点时只在真的调过或正在调工具时出声：光是模型想得慢，报了也没有内容。
-// 有人催（force）时没内容也报，至少让人知道还在跑。
-func (p *replyProgress) render(now time.Time, force bool) (string, bool) {
-	detail := p.detail()
-	if detail == "" && !force {
-		return "", false
-	}
-	return fmt.Sprintf("⏳ 还在弄，已经 %d 秒", int(now.Sub(p.started).Seconds())) + detail + "，弄好马上回。", true
 }
 
 // describe 给提示词用：同样的内容，不带客套。

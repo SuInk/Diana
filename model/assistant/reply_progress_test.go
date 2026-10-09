@@ -15,73 +15,35 @@ import (
 	"github.com/SuInk/diana/model/agent"
 )
 
-// runProgress 用缩短的节奏跑 loop，返回在 loop 退出时关闭的通道。
-func runProgress(p *replyProgress, sink *progressSink) chan struct{} {
-	exited := make(chan struct{})
-	go func() {
-		p.loop(context.Background(), sink.send, 20*time.Millisecond, 20*time.Millisecond, 40*time.Millisecond)
-		close(exited)
-	}()
-	return exited
-}
-
-type progressSink struct {
-	mu   sync.Mutex
-	sent []string
-}
-
-func (s *progressSink) send(text string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.sent = append(s.sent, text)
-}
-
-func (s *progressSink) snapshot() []string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return append([]string(nil), s.sent...)
-}
-
-// 跑久了一直报做到哪，不封次数；收尾后一条都不再发。
-func TestReplyProgressReportsLongRunsAndStops(t *testing.T) {
-	progress := &replyProgress{started: time.Now(), counts: map[string]int{}, done: make(chan struct{})}
-	sink := &progressSink{}
-	exited := runProgress(progress, sink)
-	progress.observe(agent.RunEvent{Phase: agent.RunPhaseToolCompleted, Tool: "web_search"})
-	progress.observe(agent.RunEvent{Phase: agent.RunPhaseToolCompleted, Tool: "web_search"})
-	progress.observe(agent.RunEvent{Phase: agent.RunPhaseToolCompleted, Tool: "browser_render", ToolInput: map[string]any{"urls": []any{"https://a.example", "https://b.example"}}})
-	progress.observe(agent.RunEvent{Phase: agent.RunPhaseToolStarted, Tool: "browser_render"})
-	waitForCondition(t, 2*time.Second, func() bool { return len(sink.snapshot()) >= 4 })
-	progress.observe(agent.RunEvent{Phase: agent.RunPhaseCompleted})
-	<-exited
-	sent := sink.snapshot()
-	time.Sleep(100 * time.Millisecond)
-	if after := sink.snapshot(); len(after) != len(sent) {
-		t.Fatalf("收尾后还在报: %q", after[len(sent):])
+func TestReplyProgressTracksToolsWithoutSending(t *testing.T) {
+	channel := &recordingChannel{}
+	runtime := NewRuntime(BotConfig{}, channel, NewPluginManager(), nil, nil, nil, nil)
+	event := MessageEvent{Kind: EventKindGroup, GroupID: "group", UserID: "owner", MessageID: "first"}
+	calls := 0
+	observer, stop := runtime.startReplyProgress(withOutboundTurn(context.Background(), "turn"), event, func(context.Context, agent.RunEvent) { calls++ })
+	defer stop()
+	progress := runtime.earlierReplyProgress(MessageEvent{Kind: EventKindGroup, GroupID: "group", UserID: "owner", MessageID: "next"})
+	if progress == nil {
+		t.Fatal("missing running-reply context")
 	}
-	for _, want := range []string{"搜了 2 次", "读了 2 个网页", "现在在读网页"} {
-		if !strings.Contains(sent[0], want) {
-			t.Fatalf("进度缺 %q: %s", want, sent[0])
+	observer(context.Background(), agent.RunEvent{Phase: agent.RunPhaseToolCompleted, Tool: "web_search"})
+	observer(context.Background(), agent.RunEvent{Phase: agent.RunPhaseToolCompleted, Tool: "browser_render", ToolInput: map[string]any{"urls": []string{"https://a.example", "https://b.example"}}})
+	observer(context.Background(), agent.RunEvent{Phase: agent.RunPhaseToolStarted, Tool: "browser_render"})
+	for _, want := range []string{"搜了 1 次", "读了 2 个网页", "现在在读网页"} {
+		if !strings.Contains(progress.describe(time.Now()), want) {
+			t.Fatal("missing", want)
 		}
 	}
-}
-
-func TestReplyProgressSilentForQuickOrToolFreeRuns(t *testing.T) {
-	// 很快收尾：一条都不发。
-	quick := &replyProgress{started: time.Now(), counts: map[string]int{}, done: make(chan struct{})}
-	sink := &progressSink{}
-	quickExited := runProgress(quick, sink)
-	quick.observe(agent.RunEvent{Phase: agent.RunPhaseToolCompleted, Tool: "web_search"})
-	quick.observe(agent.RunEvent{Phase: agent.RunPhaseCompleted})
-	// 没调工具：模型只是想得慢，报了也没内容。
-	idle := &replyProgress{started: time.Now(), counts: map[string]int{}, done: make(chan struct{})}
-	idleExited := runProgress(idle, sink)
-	time.Sleep(80 * time.Millisecond)
-	idle.stop()
-	<-quickExited
-	<-idleExited
-	if sent := sink.snapshot(); len(sent) != 0 {
-		t.Fatalf("不该发进度: %q", sent)
+	observer(context.Background(), agent.RunEvent{Phase: agent.RunPhaseCompleted})
+	if calls != 4 {
+		t.Fatal("inner observer lost events")
+	}
+	if sent := channel.sentSnapshot(); len(sent) != 0 {
+		t.Fatalf("unexpected progress messages: %+v", sent)
+	}
+	stop()
+	if runtime.earlierReplyProgress(MessageEvent{Kind: EventKindGroup, GroupID: "group", UserID: "owner", MessageID: "next"}) != nil {
+		t.Fatal("tracker not removed")
 	}
 }
 
