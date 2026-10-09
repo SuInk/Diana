@@ -9,6 +9,8 @@ import (
 	"encoding/json"
 	"strings"
 	"sync"
+
+	"github.com/SuInk/diana/internal/safego"
 )
 
 // Adapter 是同机执行面：列窗口与截图。单元测试用假实现；macOS 可包一层 helper 子进程。
@@ -46,11 +48,22 @@ func (l *LocalConn) Send(frame Frame) error {
 	if frame.Type != FrameCommand {
 		return nil
 	}
-	go l.handleCommand(frame, adapter, deliver)
+	go func() {
+		defer recoverLocalCommand()
+		l.handleCommand(frame, adapter, deliver)
+	}()
 	return nil
 }
 
 func (l *LocalConn) handleCommand(frame Frame, adapter Adapter, deliver func(Frame)) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			safego.Report("desktopctl.adapter", recovered)
+			if deliver != nil {
+				deliver(Frame{Type: FrameResult, ID: frame.ID, Code: CodeHelper, Error: "本地桌面适配器执行失败"})
+			}
+		}
+	}()
 	if deliver == nil || adapter == nil {
 		return
 	}
@@ -159,3 +172,5 @@ func (m *MockAdapter) Screenshot(_ context.Context, windowID string) (Screenshot
 		Data:     base64.StdEncoding.EncodeToString(png),
 	}, nil
 }
+
+func recoverLocalCommand() { safego.Report("desktopctl.command", recover()) }
