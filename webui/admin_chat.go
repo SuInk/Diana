@@ -134,6 +134,9 @@ func (h *BotHandler) runAdminChat(c *gin.Context) {
 	var payload struct {
 		SessionID string `json:"session_id"`
 		Message   string `json:"message"`
+		// ProviderID/Model 只覆盖这一轮管理对话的模型，留空跟随机器人。
+		ProviderID string `json:"provider_id"`
+		Model      string `json:"model"`
 	}
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 64<<10)
 	if err := c.ShouldBindJSON(&payload); err != nil {
@@ -150,7 +153,7 @@ func (h *BotHandler) runAdminChat(c *gin.Context) {
 		writeError(c, http.StatusNotFound, errors.New("对话不存在，请刷新页面"))
 		return
 	}
-	ctx, cancel := context.WithTimeout(c.Request.Context(), 5*time.Minute)
+	ctx, cancel := context.WithTimeout(assistant.WithAdminChatModel(c.Request.Context(), payload.ProviderID, payload.Model), 5*time.Minute)
 	defer cancel()
 	s.mu.Lock()
 	if s.running {
