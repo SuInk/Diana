@@ -186,7 +186,6 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 	// 加起来就是这一轮花在工具上的时间，控制台的响应耗时分解用它。
 	var toolsDuration time.Duration
 	protocolRepairs := 0
-	negationRepaired := false
 	// silentContentRepaired 保证「静默却带正文」只打回一次，见 action.Silent 分支。
 	silentContentRepaired := false
 	lastToolSignature := ""
@@ -504,14 +503,6 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 					finishReason = "protocol_repair_exhausted"
 					break
 				}
-				continue
-			}
-			// 只看过搜索摘要就否认对方说的东西：打回一次去读页面，见 research_progress.go。
-			if progress := collectResearchProgress(steps); !negationRepaired && toolCalls < r.cfg.MaxSteps && progress.searchedWithoutReading() && researchNegationPattern.MatchString(action.Content) {
-				negationRepaired = true
-				emitProtocolRepair(ctx, req.Observer, traceID, modelTurns, toolCalls, r.cfg.MaxSteps, "negation_without_reading")
-				messages = appendAssistantEcho(messages, lastText)
-				messages = append(messages, llm.Message{Role: llm.RoleUser, Content: progress.negationRepair()})
 				continue
 			}
 			return finish(action.Content, "final"), nil

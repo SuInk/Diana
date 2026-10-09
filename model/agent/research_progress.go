@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
-	"regexp"
 	"strings"
 )
 
@@ -17,16 +16,8 @@ import (
 // 那段话每步一模一样，模型看惯了就不看。
 //
 // 这里改成按本轮实际进度说话：搜了哪些词、读过哪些页，连搜却没读时直接点出候选链接；
-// 没读过任何页面就下否定结论的收尾打回一次。只看工具记录，不额外调模型。
-const (
-	researchSearchesBeforeNudge = 1
-	// 否定结论至少要有两个独立页面撑着，只读一页容易被过期或无关页面带偏。
-	researchReadsBeforeNegation = 2
-	researchCandidateLimit      = 5
-)
-
-// researchNegationPattern 认的是「否认对方说的东西」这类结论，不是回答细节里的任意否定。
-var researchNegationPattern = regexp.MustCompile(`不存在|根本没有|并没有|压根没有|没有(?:叫|这个|这款|这种|这样的|发布|推出|上线)|(?:还)?没(?:有)?(?:发布|推出|上线)|未(?:发布|推出|上线)|没(?:查|搜|找)到|找不到|查无|子虚乌有|是假的|忽悠|看串|搞错了|记错了|编的`)
+// 只展示检索进度和候选，不按页面数量或结论措辞拦截收尾。
+const researchCandidateLimit = 5
 
 // researchLowValueHosts 是社交平台和视频站：作为线索可以，作为一手来源不该排在前面。
 var researchLowValueHosts = []string{
@@ -53,12 +44,9 @@ func collectResearchProgress(steps []Step) researchProgress {
 	var preferred, others []SourceReference
 	for _, source := range responseSources("", steps) {
 		host := researchSourceHost(source.URL)
-		// 读了一条推文、帖子不算核实过：线上两次误否认都只读过 x.com。
-		if source.Read && host != "" && !researchLowValueHost(host) {
-			progress.read = append(progress.read, source)
-			continue
-		}
+		// 已读记录反映实际读取行为，不代表来源已被证实可靠。
 		if source.Read {
+			progress.read = append(progress.read, source)
 			continue
 		}
 		switch {
@@ -74,10 +62,6 @@ func collectResearchProgress(steps []Step) researchProgress {
 		progress.candidates = progress.candidates[:researchCandidateLimit]
 	}
 	return progress
-}
-
-func (p researchProgress) searchedWithoutReading() bool {
-	return len(p.searches) > 0 && len(p.read) < researchReadsBeforeNegation
 }
 
 // note 是附在检索类工具结果后面的进度；本轮还没搜过时返回空串。
@@ -96,26 +80,15 @@ func (p researchProgress) note() string {
 		}
 		fmt.Fprintf(&builder, "已读页面 %d 个（%s）。", len(urls), strings.Join(urls, "；"))
 	}
-	if len(p.searches) >= researchSearchesBeforeNudge && len(p.read) == 0 && len(p.candidates) > 0 {
-		fmt.Fprintf(&builder, "\n已经搜了 %d 次还没读页面，再换关键词多半还是同一批摘要。下一步从下面挑 2～3 个与问题最相关的一手来源，用 browser_render 的 url + urls 一次并行打开正文：\n", len(p.searches))
+	if len(p.read) == 0 && len(p.candidates) > 0 {
+		fmt.Fprintf(&builder, "\n已经搜了 %d 次还没读页面，再换关键词多半还是同一批摘要。可从下面选择与问题相关的原始资料核对；互不依赖的页面可用 browser_render 的 url + urls 并行读取：\n", len(p.searches))
 		builder.WriteString(p.candidateList())
 		builder.WriteString("\n名称和用户说法不完全一致的官方页（别名、改名、型号写法不同）也要打开核对，不能因为名字没对上就当作不存在。")
-	} else if len(p.read) == 1 && len(p.candidates) > 0 {
-		builder.WriteString("\n只读了一个页面，下结论前再打开一个独立来源交叉核对，优先官方页：\n")
+	} else if len(p.candidates) > 0 {
+		builder.WriteString("\n若证据仍不足，可按需读取以下候选；已有充分依据即可回答，不必凑页面数量：\n")
 		builder.WriteString(p.candidateList())
 	}
 	return builder.String()
-}
-
-// negationRepair 是「没读过页面就否认」时打回的说明。
-func (p researchProgress) negationRepair() string {
-	text := "你这一轮读过的页面不足两个（社交帖子不算），草稿却下了否定结论。搜索没命中不等于不存在，名称对不上也可能是别名或新名字。"
-	if len(p.candidates) > 0 {
-		text += "先用 browser_render 的 url + urls 一次并行打开下面最相关的几个候选核对：\n" + p.candidateList() + "\n"
-	} else {
-		text += "先换用官方名称或官网入口找到原始页面并读取。"
-	}
-	return text + "读过之后再调用 agent_finalize；确实读不到或原文没有提到，就如实说「没查实」以及查了什么，不要说成「没有」「不存在」。"
 }
 
 func (p researchProgress) candidateList() string {

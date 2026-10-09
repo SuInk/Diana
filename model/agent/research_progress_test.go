@@ -36,13 +36,12 @@ func requestContent(req llm.GenerateRequest) string {
 }
 
 // 线上 10-07：连搜几次一页没读，最后回「官方根本没有」。
-func TestRunnerNudgesReadingAndBouncesUnreadNegation(t *testing.T) {
+func TestRunnerNudgesReadingWithoutBlockingFinalAnswer(t *testing.T) {
 	tool := &recordingSearchTool{output: researchProgressSearchOutput}
 	client := &scriptedClient{responses: []string{
 		`{"action":"tool","tool":"web_search","input":{"query":"gemini-image-2.1"}}`,
 		`{"action":"tool","tool":"web_search","input":{"queries":["\"gemini-image-2.1\"","gemini image 2.1 release"]}}`,
 		`{"action":"final","content":"查了一圈，Google 官方根本没有叫 gemini-image-2.1 的模型"}`,
-		`{"action":"final","content":"没查实：搜到了 Nano Banana 2.1 的官方文档页，但这次没读到发布日期"}`,
 	}}
 	runner, err := NewRunner(client, Config{MaxSteps: 8, ProtocolRepairLimit: 3}, NewToolRegistry(tool))
 	if err != nil {
@@ -52,7 +51,7 @@ func TestRunnerNudgesReadingAndBouncesUnreadNegation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasPrefix(resp.Text, "没查实") || len(client.requests) != 4 {
+	if !strings.Contains(resp.Text, "官方根本没有") || len(client.requests) != 3 {
 		t.Fatalf("text=%q requests=%d", resp.Text, len(client.requests))
 	}
 
@@ -81,10 +80,6 @@ func TestRunnerNudgesReadingAndBouncesUnreadNegation(t *testing.T) {
 		t.Fatalf("social hosts should not be suggested:\n%s", nudge)
 	}
 
-	repair := requestContent(client.requests[3])
-	if !strings.Contains(repair, "读过的页面不足两个（社交帖子不算），草稿却下了否定结论") || !strings.Contains(repair, "ai.google.dev") {
-		t.Fatalf("negation repair missing:\n%s", repair)
-	}
 }
 
 func TestRunnerKeepsNegationAfterReadingOrWithoutSearch(t *testing.T) {
@@ -102,42 +97,20 @@ func TestRunnerKeepsNegationAfterReadingOrWithoutSearch(t *testing.T) {
 		t.Fatalf("text=%q requests=%d", resp.Text, len(client.requests))
 	}
 
-	// 读过页面：否定有依据，不打回。
-	progress := collectResearchProgress([]Step{
-		{Tool: WebSearchToolName, Input: map[string]any{"query": "x"}, Output: researchProgressSearchOutput},
-		{Tool: browserRenderToolName, Output: `{"url":"https://ai.google.dev/x","requested_url":"https://ai.google.dev/x","title":"Doc","text":"正文"}`},
-	})
-	if !progress.searchedWithoutReading() {
-		t.Fatalf("one page should not be enough to deny: %#v", progress)
-	}
-	progress = collectResearchProgress([]Step{
-		{Tool: WebSearchToolName, Input: map[string]any{"query": "x"}, Output: researchProgressSearchOutput},
-		{Tool: browserRenderToolName, Output: `{"url":"https://ai.google.dev/x","requested_url":"https://ai.google.dev/x","title":"Doc","text":"正文"}`},
-		{Tool: browserRenderToolName, Output: `{"url":"https://deepmind.google/y","requested_url":"https://deepmind.google/y","title":"Doc","text":"正文"}`},
-	})
-	if progress.searchedWithoutReading() {
-		t.Fatalf("read page not detected: %#v", progress)
-	}
-
-	// 只读过一条推文：仍算没核实过。
-	progress = collectResearchProgress([]Step{
-		{Tool: WebSearchToolName, Input: map[string]any{"query": "x"}, Output: researchProgressSearchOutput},
-		{Tool: browserRenderToolName, Output: `{"url":"https://x.com/a/status/1","requested_url":"https://x.com/a/status/1","title":"Post","text":"正文"}`},
-	})
-	if !progress.searchedWithoutReading() {
-		t.Fatalf("social read should not count: %#v", progress)
-	}
 }
 
-func TestResearchNegationPatternTargetsDenials(t *testing.T) {
-	for _, text := range []string{"Google 官方根本没有这个模型", "目前还没发布", "没搜到相关消息", "你大概看串了"} {
-		if !researchNegationPattern.MatchString(text) {
-			t.Errorf("should match %q", text)
+func TestResearchProgressRecordsReadsWithoutMinimum(t *testing.T) {
+	for _, url := range []string{"https://ai.google.dev/x", "https://x.com/a/status/1"} {
+		progress := collectResearchProgress([]Step{
+			{Tool: WebSearchToolName, Input: map[string]any{"query": "x"}, Output: researchProgressSearchOutput},
+			{Tool: browserRenderToolName, Output: `{"url":"` + url + `","text":"正文"}`},
+		})
+		note := progress.note()
+		if len(progress.read) != 1 || !strings.Contains(note, url) {
+			t.Fatalf("actual read missing: %s", note)
 		}
-	}
-	for _, text := range []string{"Nano Banana 2.1 是 10 月 7 日发布的", "价格是每张 0.04 美元"} {
-		if researchNegationPattern.MatchString(text) {
-			t.Errorf("should not match %q", text)
+		if strings.Contains(note, "下结论前再打开") || !strings.Contains(note, "不必凑页面数量") {
+			t.Fatalf("unexpected page quota: %s", note)
 		}
 	}
 }

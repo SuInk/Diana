@@ -46,7 +46,7 @@ func TestBrowserRenderOpensSeveralURLsInParallel(t *testing.T) {
 		{Tool: WebSearchToolName, Input: map[string]any{"query": "x"}, Output: researchProgressSearchOutput},
 		{Tool: browserRenderToolName, Output: output},
 	}
-	if progress := collectResearchProgress(steps); progress.searchedWithoutReading() || len(progress.read) < 2 {
+	if progress := collectResearchProgress(steps); len(progress.read) != 2 {
 		t.Fatalf("batch reads should count separately: %#v", progress)
 	}
 	if guidance := researchObservationGuidance(browserRenderToolName, output, 3); !strings.Contains(guidance, "已读到页面正文") {
