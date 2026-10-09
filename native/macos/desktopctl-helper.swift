@@ -8,6 +8,7 @@
 import AppKit
 import CoreGraphics
 import Foundation
+import ScreenCaptureKit
 
 struct WindowRecord: Codable {
     let id: String
@@ -47,23 +48,33 @@ func listWindows() -> [WindowRecord] {
     return out
 }
 
-func screenshotWindow(id: String) -> (Data?, String?) {
+@available(macOS 14.0, *)
+func screenshotWindow(id: String) async -> (Data?, String?) {
     guard let wid = UInt32(id) else {
         return (nil, "bad_request: invalid window id")
     }
-    guard let image = CGWindowListCreateImage(
-        .null,
-        .optionIncludingWindow,
-        wid,
-        [.boundsIgnoreFraming, .bestResolution]
-    ) else {
-        return (nil, "permission_denied: Screen Recording 未授权，或窗口不可截取。请在系统设置 → 隐私与安全性 → 屏幕录制中允许本 helper，然后重启。")
+    guard CGPreflightScreenCaptureAccess() else {
+        return (nil, "permission_denied: 请在系统设置 → 隐私与安全性 → 屏幕录制中允许本 helper，然后重启。")
     }
-    let rep = NSBitmapImageRep(cgImage: image)
-    guard let data = rep.representation(using: .png, properties: [:]) else {
-        return (nil, "helper_error: png encode failed")
+    do {
+        let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+        guard let window = content.windows.first(where: { $0.windowID == wid }) else {
+            return (nil, "window_unknown: window is not available")
+        }
+        let filter = SCContentFilter(desktopIndependentWindow: window)
+        let config = SCStreamConfiguration()
+        config.width = max(1, Int(window.frame.width * CGFloat(filter.pointPixelScale)))
+        config.height = max(1, Int(window.frame.height * CGFloat(filter.pointPixelScale)))
+        config.showsCursor = false
+        let image = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
+        let rep = NSBitmapImageRep(cgImage: image)
+        guard let data = rep.representation(using: .png, properties: [:]) else {
+            return (nil, "helper_error: png encode failed")
+        }
+        return (data, nil)
+    } catch {
+        return (nil, "helper_error: screenshot failed: \(error.localizedDescription)")
     }
-    return (data, nil)
 }
 
 let args = CommandLine.arguments
@@ -83,12 +94,17 @@ case "screenshot":
         fputs("screenshot requires window_id\n", stderr)
         exit(2)
     }
-    let (data, err) = screenshotWindow(id: args[2])
-    if let err = err {
-        fputs(err + "\n", stderr)
+    guard #available(macOS 14.0, *) else {
+        fputs("unsupported: screenshot requires macOS 14 or later\n", stderr)
         exit(1)
     }
-    FileHandle.standardOutput.write(data!)
+    Task {
+        let (data, err) = await screenshotWindow(id: args[2])
+        if let err = err { fputs(err + "\n", stderr); exit(1) }
+        FileHandle.standardOutput.write(data!)
+        exit(0)
+    }
+    dispatchMain()
 default:
     fputs("unknown command\n", stderr)
     exit(2)
