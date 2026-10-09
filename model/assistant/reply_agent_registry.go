@@ -203,6 +203,11 @@ func (r *Runtime) newReplyAgentRegistry(ctx context.Context, cfg BotConfig, even
 		if relationship.Owner && !cfg.agentSafeMode() && cfg.AgentFileWriteEnabled {
 			extraTools = append(extraTools, newDianaInstallPackageTool(r, event, cfg))
 		}
+		// 后台长任务只挂给主人：一个任务最多跑几轮完整 Agent，花的是主人的额度。
+		// 任务自己的每一轮里不再挂，免得任务套任务。
+		if relationship.Owner && !isBackgroundAgentRun(ctx) {
+			extraTools = append(extraTools, newDianaBackgroundTaskTool(r, event))
+		}
 		// 编码代理只挂给主人：它能在白名单仓库里不受限地跑命令和改代码，
 		// 不走 Agent 的命令白名单沙盒。allowedAgentToolNames 不收录它，这里
 		// 再按身份筛一次，两道闸都在。

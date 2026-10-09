@@ -301,7 +301,10 @@ type PluginTask struct {
 	Validate       func(context.Context) error
 	StartedMessage string
 	Timeout        time.Duration
-	Run            func(context.Context, PluginTaskServices) (PluginTaskResult, error)
+	// Unthrottled 的任务不占子任务并发槽：后台长任务一跑几十分钟，占着槽生图、
+	// OCR 就全得排队。它每一轮自己去抢主回复的并发槽，不会无上限地并发。
+	Unthrottled bool
+	Run         func(context.Context, PluginTaskServices) (PluginTaskResult, error)
 	// Finish 在任务离开运行时时调用一次，不论跑完、失败、被顶替，还是预约后根本
 	// 没跑起来（取消预约、关停时还在排队）。任务占着的外部资源（如每日生图次数的
 	// 预占）靠它归还，不能只指望 Run 走到结尾。
