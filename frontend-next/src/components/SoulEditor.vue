@@ -139,7 +139,7 @@ const props = withDefaults(
   {
     fallbackName: "",
     subtitle: "她是谁、在乎什么、怎么说话。替换名字变量后放在系统提示词最前面，群可以单独覆盖。",
-    placeholder: "# {{name}}\n\n## 概述\n\n她是谁，我们希望她成为什么样的存在……",
+    placeholder: "# 风格名称\n\n## 概述\n\n她是谁，我们希望她成为什么样的存在……",
     inputId: "soul-md",
     generatable: true
   }

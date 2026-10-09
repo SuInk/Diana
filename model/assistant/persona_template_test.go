@@ -98,7 +98,7 @@ func TestPersonaTemplateGroupOverrideAndLibraryPreserveToken(t *testing.T) {
 
 func TestDefaultPersonaUsesNameThroughout(t *testing.T) {
 	cfg := BotConfig{Name: "星河", SystemPrompt: defaultSystemPrompt}
-	if !strings.HasPrefix(defaultSystemPrompt, "# {{name}}") || !strings.Contains(defaultSystemPrompt, "社会情况：{{name}}") {
+	if !strings.HasPrefix(defaultSystemPrompt, "# 内置默认") || !strings.Contains(defaultSystemPrompt, "社会情况：{{name}}") {
 		t.Fatal("default persona should retain name tokens")
 	}
 	prompt := cfg.personaPrompt()
@@ -117,11 +117,11 @@ func TestEveryBuiltinPersonaUsesNameVariable(t *testing.T) {
 		if persona.Name != wantNames[i] {
 			t.Fatalf("unexpected label: %q", persona.Name)
 		}
-		if !strings.HasPrefix(persona.SystemPrompt, "# {{name}}\n") {
+		if !strings.HasPrefix(persona.SystemPrompt, "# "+wantNames[i]+"\n") || !strings.Contains(persona.SystemPrompt, "名字：{{name}}") {
 			t.Fatalf("%s missing name token", persona.Name)
 		}
 		cfg := BotConfig{Name: "星河", SystemPrompt: persona.SystemPrompt}
-		if !strings.HasPrefix(cfg.personaPrompt(), "# 星河\n") {
+		if !strings.HasPrefix(cfg.personaPrompt(), "# "+wantNames[i]+"\n") || !strings.Contains(cfg.personaPrompt(), "名字：星河") {
 			t.Fatalf("%s did not resolve configured name", persona.Name)
 		}
 	}

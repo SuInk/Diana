@@ -204,7 +204,7 @@ func TestPersonaGenerateSystemPromptForbidsRuntimeOwnedRules(t *testing.T) {
 
 func TestPersonaGeneratePromptUsesGivenName(t *testing.T) {
 	prompt := personaGenerateUserPrompt("一个爱吐槽的技术群管理员", "嘉然", "", "")
-	if !strings.Contains(prompt, "「嘉然」") || !strings.Contains(prompt, "一级标题") || !strings.Contains(prompt, "{{name}}") {
+	if !strings.Contains(prompt, "「嘉然」") || !strings.Contains(prompt, "一级标题使用风格名称") || !strings.Contains(prompt, "{{name}}") {
 		t.Fatalf("用户提示词没要求用给定的名字：%s", prompt)
 	}
 	if got := personaGenerateUserPrompt("一个爱吐槽的技术群管理员", "", "", ""); strings.Contains(got, "一级标题") {

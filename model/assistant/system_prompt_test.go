@@ -49,7 +49,7 @@ func TestDefaultSystemPromptCarriesNoFormattingRules(t *testing.T) {
 // 兜底的 SOUL.md 只写她是谁、怎么说话和几条硬线；名字用变量引用配置。
 // 这条测试钉住结构齐全，长度没有滑回一句话，也没有重新长回讲道理的长文。
 func TestDefaultSystemPromptTeachesHowToSpeak(t *testing.T) {
-	for _, section := range []string{"# {{name}}", "## 基本情况", "## 她是谁", "## 怎么说话", "## 不做的事"} {
+	for _, section := range []string{"# 内置默认", "## 基本情况", "## 她是谁", "## 怎么说话", "## 不做的事"} {
 		if !strings.Contains(defaultSystemPrompt, section) {
 			t.Fatalf("default SOUL.md should carry the %q section: %q", section, defaultSystemPrompt)
 		}
