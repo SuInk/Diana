@@ -21,7 +21,7 @@ var updateUnsupportedReasons = []struct {
 	prefix string
 	text   string
 }{
-	{"deployment explicitly disabled package replacement", "当前部署通过 DIANA_RELEASE_UPDATE_ENABLED 关闭了自更新。"},
+	{"deployment explicitly disabled package replacement", "当前部署通过 config.yaml 的 update.release_enabled 关闭了自更新。"},
 	{"unsupported operating system", "当前操作系统没有对应的 Release 包，只能手动部署。"},
 	{"running executable", "正在运行的可执行文件不是 Release 包里的那个（可能是自行构建或改过名），自更新无法确认要替换谁。"},
 	{"frontend directory is outside the package root", "前端目录不在可执行文件所在目录之内，自更新无法整包替换；请用官方 Release 包或安装脚本部署。"},

@@ -150,11 +150,11 @@ func sameDirectory(t *testing.T, a, b string) bool {
 }
 
 // TestCLIWorksWithoutConfigFile Docker 默认没有 config.yaml，服务按内置默认值
-// 运行；命令行也得照常工作，日志位置取 DIANA_LOG_PATH。
+// 运行；命令行也得照常工作，日志位置使用容器内置默认值。
 func TestCLIWorksWithoutConfigFile(t *testing.T) {
 	root := t.TempDir()
 	t.Chdir(root)
-	t.Setenv(configPathEnv, "")
+	t.Setenv("DIANA_CONFIG", "")
 	logPath := filepath.Join(root, "data", "logs", "diana.log")
 	if err := os.MkdirAll(filepath.Dir(logPath), 0o700); err != nil {
 		t.Fatal(err)
@@ -162,7 +162,7 @@ func TestCLIWorksWithoutConfigFile(t *testing.T) {
 	if err := os.WriteFile(logPath, []byte("hello from diana\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv(logPathEnv, logPath)
+	t.Setenv("DIANA_DEPLOYMENT", "docker")
 
 	config, path, err := loadCLIConfig(nil)
 	if err != nil || path != "" || config.Storage.LogPath != logPath {

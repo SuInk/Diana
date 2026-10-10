@@ -3,27 +3,43 @@
 
 #Requires -Version 5.1
 
-$ErrorActionPreference = "Stop"
-
-$repository = if ($env:DIANA_REPOSITORY) { $env:DIANA_REPOSITORY } else { "SuInk/Diana" }
-$installDir = if ($env:DIANA_INSTALL_DIR) { $env:DIANA_INSTALL_DIR } else { Join-Path $env:LOCALAPPDATA "Diana" }
-$version = if ($env:DIANA_VERSION) { $env:DIANA_VERSION } else { "latest" }
-$port = if ($env:DIANA_PORT) { [int]$env:DIANA_PORT } else { 18080 }
-# 默认只绑回环:WebUI 是带管理权限的控制台,装完就对外敞开不是合理默认。
-# 要从别的机器访问就显式设 DIANA_HOST=0.0.0.0(或某张网卡的地址)。
-$hostExplicit = [bool]$env:DIANA_HOST
-$bindHost = if ($env:DIANA_HOST) { $env:DIANA_HOST } else { "127.0.0.1" }
-# DIANA_CONFIG_FILE 指向一份 YAML 片段,内容原样并进生成的 config.yaml。
-$extraConfigFile = $env:DIANA_CONFIG_FILE
-if ($extraConfigFile -and -not (Test-Path $extraConfigFile)) {
-    throw "DIANA_CONFIG_FILE does not exist: $extraConfigFile"
-}
-# 这些配置在装的时候填好比装完再进 WebUI 改一遍省事,尤其是无人值守部署。
-# 键名沿用环境变量的写法只是为了让调用方式不变,实际写进的是 config.yaml。
-$optionalSections = @(
-    @{ Section = "storage"; Keys = @{ "DIANA_LOCAL_MEDIA_BASE_URL" = "local_media_base_url" } },
-    @{ Section = "llm"; Keys = [ordered]@{ "LLM_API_KEY" = "api_key"; "LLM_BASE_URL" = "base_url"; "LLM_MODEL" = "model"; "LLM_API_FORMAT" = "api_format"; "LLM_IMAGE_MODEL" = "image_model" } }
+param(
+    [string]$InstallDir = "",
+    [string]$Version = "latest",
+    [string]$Repository = "SuInk/Diana",
+    [string]$BindHost = "127.0.0.1",
+    [ValidateRange(1, 65535)][int]$Port = 18080,
+    [string]$ConfigFile = "",
+    [switch]$NoStart,
+    [switch]$Yes
 )
+
+$ErrorActionPreference = "Stop"
+$hostExplicit = $PSBoundParameters.ContainsKey("BindHost")
+$portExplicit = $PSBoundParameters.ContainsKey("Port")
+$extraConfigFile = $ConfigFile
+if ($extraConfigFile) {
+    $extraConfigFile = (Resolve-Path -LiteralPath $extraConfigFile).Path
+}
+if (-not $InstallDir) {
+    $InstallDir = Join-Path $env:LOCALAPPDATA "Diana"
+    if (-not $Yes -and [Environment]::UserInteractive -and -not [Console]::IsInputRedirected) {
+        Write-Host "1) Current user (recommended, no administrator privileges)"
+        Write-Host "2) Custom directory (protected locations require administrator privileges)"
+        $choice = Read-Host "Installation [1]"
+        switch ($choice) {
+            "" {}
+            "1" {}
+            "2" {
+                $InstallDir = Read-Host "Installation directory"
+                if (-not [IO.Path]::IsPathRooted($InstallDir)) { throw "An absolute directory is required." }
+            }
+            default { throw "Invalid installation choice." }
+        }
+    }
+}
+$InstallDir = [IO.Path]::GetFullPath($InstallDir)
+$startAfterInstall = -not $NoStart
 
 # 绑定地址不是回环时,健康检查要打到真正在听的地址;0.0.0.0 是通配符,
 # 本机仍从回环探测。
@@ -35,25 +51,6 @@ $healthHost = if ($bindHost -in @("", "0.0.0.0", "::", "*")) { "127.0.0.1" } els
 function ConvertTo-DianaYamlScalar {
     param([string]$Value)
     return "'" + ($Value -replace "'", "''") + "'"
-}
-
-# Get-DianaOptionalConfigLines 生成可选配置段。一个都没传的段整段不写。
-function Get-DianaOptionalConfigLines {
-    $lines = @()
-    foreach ($group in $optionalSections) {
-        $written = $false
-        foreach ($key in $group.Keys.Keys) {
-            $value = [Environment]::GetEnvironmentVariable($key)
-            if (-not $value) { continue }
-            if (-not $written) { $lines += "$($group.Section):"; $written = $true }
-            $lines += "  $($group.Keys[$key]): $(ConvertTo-DianaYamlScalar $value)"
-        }
-    }
-    if ($extraConfigFile) {
-        # 原样并入:这段由部署者自己写,内容必须是合法 YAML 顶层段。
-        $lines += Get-Content $extraConfigFile
-    }
-    return $lines
 }
 
 # Set-DianaYamlValue 改写指定顶层段下的一个键,段内没有就追加到段末。
@@ -113,12 +110,14 @@ function Get-DianaYamlValue {
             if ($raw.StartsWith("'") -and $raw.EndsWith("'") -and $raw.Length -ge 2) {
                 return $raw.Substring(1, $raw.Length - 2) -replace "''", "'"
             }
+            if ($raw.StartsWith('"') -and $raw.EndsWith('"') -and $raw.Length -ge 2) {
+                return $raw.Substring(1, $raw.Length - 2)
+            }
             return $raw
         }
     }
     return ""
 }
-$startAfterInstall = $env:DIANA_START_AFTER_INSTALL -ne "false"
 
 function Get-DianaDownload {
     param([string]$Uri, [string]$OutFile, [string]$Label)
@@ -253,8 +252,8 @@ try {
     $generatedPassword = $null
     $passwordCleared = $false
     if (-not (Test-Path $configFile)) {
-        $username = if ($env:DIANA_ADMIN_USERNAME) { $env:DIANA_ADMIN_USERNAME } else { "diana#$(New-DianaRandomHex 8)" }
-        $generatedPassword = if ($env:DIANA_ADMIN_PASSWORD) { $env:DIANA_ADMIN_PASSWORD } else { New-DianaRandomHex 16 }
+        $username = "diana#$(New-DianaRandomHex 8)"
+        $generatedPassword = New-DianaRandomHex 16
         $configLines = @(
             "# Diana 配置。基础设施段每次启动生效;bot / llm 段只在数据库为空时播种一次,",
             "# 之后以 WebUI 里的配置为准。完整字段见仓库里的 config.example.yaml。",
@@ -269,8 +268,14 @@ try {
             "  username: $(ConvertTo-DianaYamlScalar $username)",
             "  password: $(ConvertTo-DianaYamlScalar $generatedPassword)  # 只用于首次启动创建管理员,启动成功后安装脚本会删掉这一行"
         )
-        $configLines += Get-DianaOptionalConfigLines
         [IO.File]::WriteAllLines($configFile, $configLines, (New-Object System.Text.UTF8Encoding($false)))
+        if ($extraConfigFile) {
+            Copy-Item -LiteralPath $extraConfigFile -Destination $configFile -Force
+            $generatedPassword = ""
+            $username = ""
+            if ($hostExplicit) { Set-DianaYamlValue $configFile "server" "host" $bindHost }
+            if ($portExplicit) { Set-DianaYamlValue $configFile "server" "port" ([string]$port) }
+        }
     } else {
         # 重装时显式传的绑定地址要生效,否则「改成 0.0.0.0 再跑一遍安装」不起作用。
         if ($hostExplicit) {
@@ -283,15 +288,30 @@ try {
                 Write-Host "==> Configuration -> bind address set to $bindHost (restart Diana to apply)"
             }
         }
-        if ($env:DIANA_PORT) { Set-DianaYamlValue -Path $configFile -Section "server" -Key "port" -Value ([string]$port) }
+        if ($portExplicit) { Set-DianaYamlValue -Path $configFile -Section "server" -Key "port" -Value ([string]$port) }
         # admin 段不碰:它只在数据库还没有管理员时播种一次,重装时账号以数据库为准,
         # 改这里既不生效,还会让结尾打印一个登不上的用户名。
     }
+    $configuredHost = Get-DianaYamlValue $configFile "server" "host"
+    $configuredPort = Get-DianaYamlValue $configFile "server" "port"
+    if ($configuredHost) { $bindHost = $configuredHost }
+    if ($configuredPort) { $port = [int]$configuredPort }
+    $healthHost = if ($bindHost -in @("", "0.0.0.0", "::", "*")) { "127.0.0.1" } elseif ($bindHost -like "*:*") { "[$bindHost]" } else { $bindHost }
     Set-Content -Encoding ASCII -Path (Join-Path $installDir ".installed-version") -Value $version
 
     $commandDir = Join-Path $env:LOCALAPPDATA "Microsoft\WindowsApps"
     $commandShim = Join-Path $commandDir "diana.cmd"
-    if ((Test-Path $commandDir) -and (Test-Path (Join-Path $installDir "uninstall.ps1"))) {
+    if (Test-Path (Join-Path $installDir "uninstall.ps1")) {
+        New-Item -ItemType Directory -Force -Path $commandDir | Out-Null
+        # 写入用户级 PATH，同时更新当前 PowerShell；不需要管理员权限。
+        $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
+        if (@($userPath -split ';') -notcontains $commandDir) {
+            $updatedPath = if ($userPath) { "$($userPath.TrimEnd(';'));$commandDir" } else { $commandDir }
+            [Environment]::SetEnvironmentVariable("Path", $updatedPath, "User")
+        }
+        if (@($env:Path -split ';') -notcontains $commandDir) {
+            $env:Path = "$commandDir;$env:Path"
+        }
         "@echo off`r`n`"$installDir\$binaryName`" %*" | Set-Content -Encoding ASCII $commandShim
     }
 
@@ -307,8 +327,6 @@ try {
             throw "Port $port is already used by PID $owners; Diana did not start a second instance."
         }
 
-        # 唯一需要传给进程的环境变量:配置文件在哪。其余配置都在 config.yaml 里。
-        [Environment]::SetEnvironmentVariable("DIANA_CONFIG", $configFile, "Process")
         $executablePath = Join-Path $installDir $binaryName
         $process = Start-Process -FilePath $executablePath -WorkingDirectory $installDir -WindowStyle Hidden -PassThru
         Set-Content -Encoding ASCII -Path (Join-Path $installDir ".diana.pid") -Value $process.Id
@@ -373,7 +391,7 @@ try {
         if ($bindHost -in @("127.0.0.1", "localhost", "::1")) {
             # 只绑回环是「装完打不开」的头号原因。默认不改,但要让人知道开关在哪。
             Write-Host "Access:    local only (bound to $bindHost)."
-            Write-Host "           To reach it from another machine, reinstall with DIANA_HOST=0.0.0.0,"
+            Write-Host "           To reach it from another machine, reinstall with -BindHost 0.0.0.0,"
             Write-Host "           or set server.host in $configFile and restart."
             Write-Host "           The console has admin rights: keep it behind a firewall or a"
             Write-Host "           reverse proxy with TLS rather than exposing it to the internet."

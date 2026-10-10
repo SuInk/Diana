@@ -36,15 +36,19 @@
 
 ```sh
 # Linux / macOS
-curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.sh | sudo sh
+curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.sh | sh
 ```
 
-推荐使用 sudo 固定安装到 `/opt/diana`，并创建 `/usr/local/bin/diana`。没有 sudo 权限时，去掉 sudo 运行；安装器会询问是否改为仅安装给当前用户，也可显式传入 `DIANA_INSTALL_SCOPE=user`。
+默认无需管理员权限，安装到 `~/.local/share/diana`，创建 `~/.local/bin/diana` 并自动配置用户 PATH；重新打开终端后生效。可用 `--dir PATH` 指定可写目录。仅系统安装（`sudo sh -s -- --scope system`）或受保护目录需要管理员权限。旧 `/opt/diana` 安装请显式指定原目录升级，迁移前先停服务并保留配置和数据库。
 
 ```powershell
 # Windows PowerShell
 irm https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.ps1 | iex
 ```
+
+Windows 默认安装到 `%LOCALAPPDATA%\Diana`，自动设置当前用户 PATH，无需管理员权限。
+
+安装选项现在使用交互选择或命令行参数（无交互加 `--yes` / `-Yes`）；旧安装环境变量不再读取。应用配置路径用 `--config PATH` 指定，原 YAML 文件和数据库继续使用。
 
 Docker Compose（预构建镜像，无需 clone 仓库）。首次在部署目录执行：
 
@@ -85,22 +89,22 @@ docker compose -f docker-compose.yml -f docker-compose.update.yml pull && docker
 就这些。没回复？事件中心会告诉你原因；`diana doctor` 能检查服务健康。
 
 > [!TIP]
-> **装在服务器上？** 默认只监听本机，要从别的机器打开控制台，安装时带上 `DIANA_HOST`：
+> **装在服务器上？** 默认只监听本机，要从别的机器打开控制台，安装时带上 `--host`（Windows：`-BindHost`）：
 >
 > ```sh
-> curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.sh | sudo env DIANA_HOST=0.0.0.0 sh
+> curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.sh | sh -s -- --host 0.0.0.0
 > ```
 >
 > ```powershell
-> $env:DIANA_HOST="0.0.0.0"; irm https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.ps1 | iex
+> & ([scriptblock]::Create((irm https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.ps1))) -BindHost 0.0.0.0
 > ```
 >
-> 装过了也不要紧，两条路任选：带着 `DIANA_HOST` 重跑一遍安装命令（顺带升级一次），或者直接把配置文件里 `server.host` 改成 `0.0.0.0` 再重启。
+> 装过了也不要紧，两条路任选：带着 `--host`（Windows：`-BindHost`） 重跑一遍安装命令（顺带升级一次），或者直接把配置文件里 `server.host` 改成 `0.0.0.0` 再重启。
 >
-> 先编辑配置（系统级安装的配置文件归 root，需要 sudo）：
+> 先编辑配置（默认用户安装无需 sudo；旧系统安装若权限不足才使用 sudo）：
 >
 > ```sh
-> sudo vim "$(diana config path)"
+> vim "$(diana config path)"
 > ```
 >
 > ```powershell

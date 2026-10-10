@@ -5,25 +5,82 @@
 
 set -eu
 
-repo="${DIANA_REPOSITORY:-SuInk/Diana}"
-install_scope="${DIANA_INSTALL_SCOPE:-auto}"
-install_dir="${DIANA_INSTALL_DIR:-}"
-version="${DIANA_VERSION:-latest}"
-port="${DIANA_PORT:-18080}"
-# 默认只绑回环:WebUI 是带管理权限的控制台,装完就对公网敞开不是合理默认。
-# 要从别的机器访问就显式设 DIANA_HOST=0.0.0.0(或某张网卡的地址)。
-host="${DIANA_HOST:-}"
+repo="SuInk/Diana"
+install_scope=auto
+install_dir=""
+version=latest
+port=18080
+port_explicit=false
+host=127.0.0.1
 host_explicit=false
-[ -n "$host" ] && host_explicit=true
-[ -n "$host" ] || host='127.0.0.1'
-# DIANA_CONFIG_FILE 指向一份 YAML 片段,内容原样并进生成的 config.yaml。
-# 安装器不可能把所有可选配置都做成参数,给一个统一入口。
-extra_config_file="${DIANA_CONFIG_FILE:-}"
-start_after_install="${DIANA_START_AFTER_INSTALL:-true}"
+extra_config_file=""
+start_after_install=true
+interactive=true
+
+usage() {
+  cat <<'USAGE'
+Usage: sh install.sh [options]
+  --dir PATH          Installation directory (default: current user's directory)
+  --scope user|system Installation scope (default: user)
+  --version VERSION   Release version (default: latest)
+  --host HOST         Listen address written to config.yaml
+  --port PORT         Listen port written to config.yaml
+  --config-file PATH  Initial YAML configuration (new installations only)
+  --repository OWNER/REPO  Release repository
+  --no-start          Install without starting the service
+  --yes               Use defaults without prompting
+  --help              Show this help
+For a piped installer: curl -fsSL <installer-url> | sh -s -- --dir PATH --yes
+USAGE
+}
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --dir|--scope|--version|--host|--port|--config-file|--repository)
+      [ "$#" -ge 2 ] && [ -n "$2" ] || { printf 'Missing value for %s\n' "$1" >&2; exit 1; }
+      case "$1" in
+        --dir) install_dir=$2; interactive=false ;;
+        --scope) install_scope=$2; interactive=false ;;
+        --version) version=$2 ;;
+        --host) host=$2; host_explicit=true ;;
+        --port) port=$2; port_explicit=true ;;
+        --config-file) extra_config_file=$2 ;;
+        --repository) repo=$2 ;;
+      esac
+      shift 2 ;;
+    --no-start) start_after_install=false; shift ;;
+    --yes) interactive=false; shift ;;
+    --help|-h) usage; exit 0 ;;
+    *) printf 'Unknown option: %s\n' "$1" >&2; usage >&2; exit 1 ;;
+  esac
+done
+
+# 管道安装也可通过控制终端选择；无人值守用 --yes 或显式 --dir/--scope。
+if [ "$interactive" = true ] && [ -e /dev/tty ] && ( : </dev/tty ) 2>/dev/null; then
+  if [ -f /opt/diana/.installed-version ]; then
+    printf 'Existing installation: /opt/diana. Update it? [Y/n] ' >/dev/tty
+    IFS= read -r answer </dev/tty || answer=""
+    case "$answer" in
+      ""|y|Y|yes|YES) install_dir=/opt/diana ;;
+      *) printf '%s\n' 'Stop the old service and migrate its data before selecting a different directory with --dir.' >&2; exit 1 ;;
+    esac
+  else
+    printf '%s\n' '1) Current user (recommended, no administrator privileges)' '2) Custom directory' '3) System installation (requires administrator privileges)' >/dev/tty
+    printf 'Installation [1]: ' >/dev/tty
+    IFS= read -r answer </dev/tty || answer=""
+    case "$answer" in
+      ""|1) install_scope=user ;;
+      2) printf 'Installation directory (absolute path): ' >/dev/tty
+         IFS= read -r install_dir </dev/tty
+         case "$install_dir" in /*) ;; *) printf 'An absolute directory is required.\n' >&2; exit 1 ;; esac ;;
+      3) install_scope=system ;;
+      *) printf 'Invalid installation choice.\n' >&2; exit 1 ;;
+    esac
+  fi
+fi
 
 case "$install_scope" in
   auto|system|user) ;;
-  *) printf 'Diana installer: DIANA_INSTALL_SCOPE must be auto, system, or user\n' >&2; exit 1 ;;
+  *) printf 'Diana installer: --scope must be auto, system, or user\n' >&2; exit 1 ;;
 esac
 
 if [ "$install_scope" = "user" ] && [ "$(id -u)" -eq 0 ] && [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != "root" ]; then
@@ -31,48 +88,34 @@ if [ "$install_scope" = "user" ] && [ "$(id -u)" -eq 0 ] && [ -n "${SUDO_USER:-}
   exit 1
 fi
 
-tty_available=false
-if [ -e /dev/tty ] && ( : </dev/tty ) 2>/dev/null; then
-  tty_available=true
+# 默认安装给当前用户；已有安装保留服务作用域，避免遗留系统服务与用户服务同时启动。
+if [ "$install_scope" = "auto" ] && [ -n "$install_dir" ] && [ -f "$install_dir/.install-scope" ]; then
+  previous_scope=$(cat "$install_dir/.install-scope")
+  case "$previous_scope" in system|user) install_scope=$previous_scope ;; esac
 fi
-
-if [ -z "$install_dir" ]; then
+# 显式 system（或兼容旧 sudo 命令）使用系统目录。
+if [ "$install_scope" = "auto" ]; then
   if [ "$(id -u)" -eq 0 ]; then
     install_scope=system
-    install_dir=/opt/diana
-  elif [ "$install_scope" = "system" ]; then
-    printf '%s\n' 'Diana recommends a fixed system installation in /opt/diana.' >&2
-    printf '%s\n' 'Run the installer again with sudo, or set DIANA_INSTALL_SCOPE=user.' >&2
-    exit 1
-  elif [ "$install_scope" = "user" ]; then
-    install_dir="$HOME/.local/share/diana"
-  elif [ "$tty_available" = "true" ]; then
-    printf '%s\n' 'Diana recommends a fixed system installation in /opt/diana.' >/dev/tty
-    printf '%s\n' 'Re-run this command with sudo for the recommended installation.' >/dev/tty
-    printf 'Install only for the current user instead? [y/N] ' >/dev/tty
-    IFS= read -r install_answer </dev/tty || install_answer=""
-    case "$install_answer" in
-      y|Y|yes|YES)
-        install_scope=user
-        install_dir="$HOME/.local/share/diana"
-        ;;
-      *)
-        printf '%s\n' 'Cancelled. Re-run with sudo for the recommended system installation.' >&2
-        exit 1
-        ;;
-    esac
   else
-    printf '%s\n' 'Diana recommends a fixed system installation in /opt/diana.' >&2
-    printf '%s\n' 'Re-run with sudo, or set DIANA_INSTALL_SCOPE=user for a user-only installation.' >&2
-    exit 1
+    install_scope=user
   fi
-elif [ "$install_scope" = "auto" ]; then
-  install_scope=custom
 fi
-
 if [ "$install_scope" = "system" ] && [ "$(id -u)" -ne 0 ]; then
-  printf '%s\n' 'Diana system installation requires sudo.' >&2
+  printf '%s\n' 'System installation requires sudo. Omit --scope system for a user installation.' >&2
   exit 1
+fi
+if [ -z "$install_dir" ]; then
+  if [ "$install_scope" = "system" ]; then
+    install_dir=/opt/diana
+  else
+    # 不静默新建第二套数据库；历史系统安装需要明确选择原地升级或迁移。
+    if [ -f /opt/diana/.installed-version ]; then
+      printf '%s\n' 'Existing Diana installation found in /opt/diana. To upgrade in place, pass --dir /opt/diana (existing system installs require sudo). To migrate, stop the old service and copy its configuration and data before explicitly selecting the new directory.' >&2
+      exit 1
+    fi
+    install_dir="$HOME/.local/share/diana"
+  fi
 fi
 
 fail() {
@@ -97,19 +140,29 @@ need_command() {
 }
 
 case "$install_dir" in
-  ""|"/") fail "DIANA_INSTALL_DIR must be a dedicated directory" ;;
+  ""|"/"|"$HOME") fail "--dir must be a dedicated directory" ;;
 esac
 
 case "$port" in
-  *[!0-9]*|"") fail "DIANA_PORT must be a number" ;;
+  *[!0-9]*|"") fail "--port must be a number" ;;
 esac
 
 case "$host" in
-  *[!0-9A-Za-z.:_-]*) fail "DIANA_HOST must be a host name or IP address" ;;
+  *[!0-9A-Za-z.:_-]*) fail "--host must be a host name or IP address" ;;
 esac
 
 if [ -n "$extra_config_file" ] && [ ! -f "$extra_config_file" ]; then
-  fail "DIANA_CONFIG_FILE does not exist: $extra_config_file"
+  fail "--config-file does not exist: $extra_config_file"
+fi
+
+# 在下载和修改现有安装之前检查目标权限。
+if ! mkdir -p "$install_dir"; then
+  fail "cannot create $install_dir; choose a writable --dir or use administrator privileges for this location"
+fi
+install_dir=$(CDPATH= cd -- "$install_dir" && pwd)
+[ -w "$install_dir" ] || fail "installation directory is not writable: $install_dir"
+if [ -e "$install_dir/config.yaml" ] && { [ ! -r "$install_dir/config.yaml" ] || [ ! -w "$install_dir/config.yaml" ]; }; then
+  fail "config.yaml is not readable/writable; repair its ownership or rerun with administrator privileges for this existing installation"
 fi
 
 need_command curl
@@ -347,10 +400,19 @@ service_control_granted=false
 # 用户的第一条 diana 命令就是 command not found——检测到缺失就把 export 幂等
 # 追加进按 $SHELL 选择的 rc，重跑安装不重复追加，写不进去再退回提示。
 ensure_command_dir_on_path() {
-  case ":${PATH:-}:" in *":$command_dir:"*) return 0 ;; esac
   path_marker='# added by Diana installer'
   case "${SHELL:-}" in
-    */zsh)  rc_file="$HOME/.zshrc" ;;
+    */fish)
+      rc_file="$HOME/.config/fish/conf.d/diana.fish"
+      mkdir -p "$(dirname "$rc_file")"
+      if printf 'fish_add_path "$HOME/.local/bin"\n' >"$rc_file"; then
+        command_path_hint="added $command_dir to fish PATH — restart your shell."
+      else
+        command_path_hint="add $command_dir to PATH to run diana directly."
+      fi
+      return 0
+      ;;
+    */zsh)  rc_file="${ZDOTDIR:-$HOME}/.zshrc" ;;
     */bash) rc_file="$HOME/.bashrc" ;;
     *)      rc_file="$HOME/.profile" ;;
   esac
@@ -366,7 +428,7 @@ ensure_command_dir_on_path() {
 }
 
 if [ -f "$install_dir/uninstall.sh" ]; then
-  # 系统安装提供所有登录用户都能找到的稳定命令；无权限模式才落在当前用户目录。
+  # 显式系统安装使用全局命令入口；默认使用当前用户的命令目录。
   if [ "$install_scope" = "system" ]; then
     command_dir="/usr/local/bin"
   else
@@ -449,43 +511,13 @@ sign_macos_app() {
 
 # 这些项在装的时候就填好比装完再进 WebUI 改一遍省事,尤其是无人值守部署。
 # 只写调用方真的传了的项:没传就不落进 config.yaml,让应用用自己的默认。
-# 键名沿用环境变量的写法只是为了让调用方式不变,实际写进的是 YAML。
-optional_llm_keys='LLM_API_KEY LLM_BASE_URL LLM_MODEL LLM_API_FORMAT LLM_IMAGE_MODEL'
-optional_storage_keys='DIANA_LOCAL_MEDIA_BASE_URL'
-
-# yaml_quote 把值包成单引号 YAML 标量,内部单引号按 YAML 规则翻倍。
+# YAML 标量统一单引号转义。
 yaml_quote() {
   printf "'%s'" "$(printf '%s' "$1" | sed "s/'/''/g")"
 }
 
-# yaml_key 把 LLM_API_KEY 这类环境变量名转成 config.yaml 里的字段名。
-yaml_key() {
-  case $1 in
-    LLM_*) printf '%s' "$(printf '%s' "${1#LLM_}" | tr 'A-Z' 'a-z')" ;;
-    DIANA_LOCAL_MEDIA_BASE_URL) printf 'local_media_base_url' ;;
-    *) printf '%s' "$(printf '%s' "$1" | tr 'A-Z' 'a-z')" ;;
-  esac
-}
-
-# append_optional_section 把一组可选项写成一个 YAML 段,一个都没传就整段不写。
-append_optional_section() {
-  target=$1
-  section=$2
-  shift 2
-  written=false
-  for key in "$@"; do
-    value=$(printenv "$key" 2>/dev/null || true)
-    [ -n "$value" ] || continue
-    if [ "$written" = "false" ]; then
-      printf '%s:\n' "$section" >>"$target"
-      written=true
-    fi
-    printf '  %s: %s\n' "$(yaml_key "$key")" "$(yaml_quote "$value")" >>"$target"
-  done
-}
-
 # set_yaml_value 改写指定顶层段下的一个键,段内没有就追加到段末。重装时用得上:
-# 用户带着新的 DIANA_HOST 重跑安装,不该因为 config.yaml 已存在就被忽略。
+# 用户带着新的 --host 重跑安装,不该因为 config.yaml 已存在就被忽略。
 set_yaml_value() {
   target=$1
   section=$2
@@ -542,6 +574,7 @@ read_yaml_value() {
       sub("^[[:space:]]+" key ":[[:space:]]*", "", line)
       gsub(/^'"'"'|'"'"'$/, "", line)
       gsub(/'"''"'/, "'"'"'", line)
+      if (line ~ /^".*"$/) { line = substr(line, 2, length(line) - 2) }
       print line
       exit
     }
@@ -555,8 +588,8 @@ password_cleared=false
 admin_password_note='  # 密码不存在这里,只以哈希存在数据库中。忘记密码:执行 diana passwd 重置。'
 config_file="$install_dir/config.yaml"
 if [ ! -f "$config_file" ]; then
-  username="${DIANA_ADMIN_USERNAME:-diana#$(random_hex 8)}"
-  generated_password="${DIANA_ADMIN_PASSWORD:-}"
+  username="diana#$(random_hex 8)"
+  generated_password=""
   if [ -z "$generated_password" ]; then
     generated_password=$(random_hex 16)
   fi
@@ -579,12 +612,13 @@ admin:
   username: $(yaml_quote "$username")
   password: $(yaml_quote "$generated_password")  # 只用于首次启动创建管理员,启动成功后安装脚本会删掉这一行
 EOF
-  append_optional_section "$config_file" storage $optional_storage_keys
-  append_optional_section "$config_file" llm $optional_llm_keys
   if [ -n "$extra_config_file" ]; then
-    # 原样并入:这段由部署者自己写,内容必须是合法 YAML 顶层段。
-    printf '\n' >>"$config_file"
-    cat "$extra_config_file" >>"$config_file"
+    # 用户提供完整的初始配置；不拼接重复的 YAML 顶层键。
+    cp "$extra_config_file" "$config_file"
+    generated_password=""
+    username=""
+    if [ "$host_explicit" = true ]; then set_yaml_value "$config_file" server host "$host"; fi
+    if [ "$port_explicit" = true ]; then set_yaml_value "$config_file" server port "$port"; fi
   fi
   chmod 600 "$config_file"
 else
@@ -593,7 +627,7 @@ else
   if [ "$host_explicit" = "true" ]; then
     set_yaml_value "$config_file" server host "$host"
     # 绑定地址是进程启动时读的:默认路径后面会重启服务,改动立刻生效;
-    # 但 DIANA_START_AFTER_INSTALL=false 时不重启,得说清楚还没生效,
+    # 但 --no-start 时不重启,得说清楚还没生效,
     # 否则改完发现连不上会以为是配置没写进去。
     if [ "$start_after_install" = "true" ]; then
       info "Configuration → bind address set to $host"
@@ -601,12 +635,30 @@ else
       info "Configuration → bind address set to $host (restart Diana to apply)"
     fi
   fi
-  if [ -n "${DIANA_PORT:-}" ]; then
+  if [ "$port_explicit" = true ]; then
     set_yaml_value "$config_file" server port "$port"
   fi
   # admin 段不碰:它只在数据库还没有管理员时播种一次,重装时账号以数据库为准,
   # 改这里既不生效,还会让结尾打印一个登不上的用户名。
   chmod 600 "$config_file"
+fi
+
+# 健康检查使用最终 YAML 的监听配置，包括重装保留的值。
+configured_host=$(read_yaml_value "$config_file" server host)
+configured_port=$(read_yaml_value "$config_file" server port)
+[ -z "$configured_host" ] || host=$configured_host
+[ -z "$configured_port" ] || port=$configured_port
+
+# 旧安装升级为 .app 后，同步安装器管理的前端路径；保留自定义前端。
+if [ "$os" = "darwin" ]; then
+  existing_frontend=$(read_yaml_value "$config_file" server frontend_dist)
+  case "$existing_frontend" in
+    "$install_dir/frontend-next/dist"|"frontend-next/dist"|"./frontend-next/dist")
+      set_yaml_value "$config_file" server frontend_dist "$macos_app_dir/Contents/MacOS/frontend-next/dist"
+      chmod 600 "$config_file"
+      info "Configuration → migrated packaged frontend into Diana.app"
+      ;;
+  esac
 fi
 
 if [ "$os" = "darwin" ]; then
@@ -616,7 +668,6 @@ if [ "$os" = "darwin" ]; then
 #!/bin/sh
 set -eu
 install_root=\$(CDPATH= cd -- "\$(dirname -- "\$0")" && pwd)
-export DIANA_CONFIG="\$install_root/config.yaml"
 app_dir="\$install_root/Diana.app"
 app_binary="\$app_dir/Contents/MacOS/$binary_name"
 if [ -x "\$app_binary" ]; then
@@ -628,8 +679,9 @@ if [ -x "\$app_binary" ]; then
         "\$app_dir" >/dev/null 2>&1 || true
     fi
   fi
-  exec "\$app_binary"
+  exec "\$app_binary" --config "\$install_root/config.yaml"
 fi
+cd "\$install_root"
 exec "\$install_root/run.sh"
 EOF
 else
@@ -637,7 +689,7 @@ else
 #!/bin/sh
 set -eu
 install_root=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-export DIANA_CONFIG="$install_root/config.yaml"
+cd "$install_root"
 exec "$install_root/run.sh"
 EOF
 fi
@@ -936,7 +988,7 @@ if [ "$start_after_install" = "true" ]; then
       # 装在服务器上却只绑回环,是「装完打不开」的头号原因。默认不改,
       # 但必须让人知道开关在哪,而不是自己去翻 config.yaml。
       printf 'Access:    local only (bound to %s).\n' "$host"
-      printf '           To reach it from another machine, reinstall with DIANA_HOST=0.0.0.0,\n'
+      printf '           To reach it from another machine, reinstall with --host 0.0.0.0,\n'
       printf '           or set server.host in %s/config.yaml and restart.\n' "$install_dir"
       printf '           The console has admin rights: keep it behind a firewall, security\n'
       printf '           group or reverse proxy with TLS rather than exposing it to the internet.\n'

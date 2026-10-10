@@ -82,11 +82,8 @@ COPY --chmod=0755 scripts/docker/entrypoint.sh /usr/local/bin/diana-entrypoint
 COPY --chmod=0755 scripts/docker/diana-cli.sh /usr/local/bin/diana
 # DIANA_DEPLOYMENT 让控制台按 Docker 部署处理更新：只提示新版本，不在容器里下载和
 # 替换程序（/app 只读，重建容器也会丢），升级靠拉新镜像。日志写进数据目录，
-# DIANA_LOG_PATH 只在 config.yaml 没写 storage.log_path 时生效。配置文件不写死
-# 路径：放在 /app/data/config.yaml 即可（可选，没有就走安装向导）；旧部署挂在
-# /app/config.yaml 的仍然优先。
-ENV DIANA_DEPLOYMENT=docker \
-    DIANA_LOG_PATH=/app/data/logs/diana.log
+# 部署标识用于更新策略与容器默认日志目录；应用配置通过 YAML 管理。
+ENV DIANA_DEPLOYMENT=docker
 
 # 完整版运行时：预装 Chromium（网页读取/截图）、Noto CJK 字体、ffmpeg、
 # yt-dlp 与 tesseract 及中英语言包（图片文字识别插件的本地离线后端）。

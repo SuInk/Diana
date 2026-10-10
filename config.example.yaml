@@ -1,7 +1,7 @@
 # Copyright (c) 2025-now SuInk.
 # Licensed under the Limited Redistribution License in the repository root.
 #
-# 复制为 config.yaml 使用。进程按 --config、DIANA_CONFIG、工作目录、可执行文件
+# 复制为 config.yaml 使用。进程按 --config、工作目录、可执行文件
 # 同级目录的顺序查找；一个都没有就全部走内置默认值，直接打开 WebUI 走安装向导。
 # 本文件不支持热加载：修改 YAML 后需要重启服务，仍遵循下面的数据库优先规则。
 #

@@ -82,7 +82,7 @@ mkdir -p "$ROOT/data" "$ROOT/logs"
 
 # 应用配置走 config.yaml。本地开发第一次跑的时候生成一份指向仓库目录的默认
 # 配置；已经存在就原样用，不覆盖开发者自己改过的内容。
-CONFIG_FILE="${DIANA_CONFIG:-$ROOT/config.yaml}"
+CONFIG_FILE="$ROOT/config.yaml"
 if [[ ! -f "$CONFIG_FILE" ]]; then
 	cat >"$CONFIG_FILE" <<EOF
 # 本地开发用配置，由 scripts/start-local-mac.sh 首次运行时生成。
@@ -102,7 +102,6 @@ EOF
 	chmod 600 "$CONFIG_FILE"
 	echo "generated $CONFIG_FILE"
 fi
-export DIANA_CONFIG="$CONFIG_FILE"
 
 cd "$ROOT"
 executables=()
@@ -115,7 +114,7 @@ executables+=(
 )
 for executable in "${executables[@]}"; do
 	if [[ -x "$executable" ]]; then
-		exec "$executable"
+		exec "$executable" --config "$CONFIG_FILE"
 	fi
 done
 
