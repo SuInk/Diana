@@ -508,7 +508,6 @@ type Runtime struct {
 	semanticIndexOnce   sync.Once
 	embedTexts          func(ctx context.Context, cfg llm.ProviderConfig, texts []string) ([][]float32, error)
 	chatInLastReplyAt   map[string]time.Time
-	chatInGates         map[string]*chatInGate
 	// recentClaimSources 记录最近几轮联网结论实际引用的来源。人设默认不罗列链接，
 	// 但有人追问「链接呢」时必须能原样给出，而不是重新搜一遍或者编一个。
 	recentClaimSources map[string][]claimSourceRecord
@@ -2458,9 +2457,8 @@ func (r *Runtime) replyAndRecordTurn(ctx context.Context, event MessageEvent, te
 	r.setError("")
 	r.record(record)
 	if event.chatInReply {
-		// 这条闲聊插话确实发出去了，现在才开始算本群的插话冷却和动态门控的实际次数。
+		// 这条闲聊插话确实发出去了，现在才开始算本群的插话冷却。
 		r.markChatInReplied(event)
-		r.recordChatInGateReply(event, time.Now())
 	}
 	r.enqueueRelationshipEvaluation(event, text)
 	return successOutcome, nil
@@ -2939,18 +2937,10 @@ func (r *Runtime) routeProactiveReplyBatch(ctx context.Context, candidates []pro
 			}
 		}
 		allowed, chatReply := false, false
-		_, chatLevel := chatIn.Participation.ratingLevels()
-		var gate chatInGateDecision
 		cooldownAllowed := r.chatInCooldownAllows(event, chatIn.Cooldown)
 		if parseErr == nil {
 			allowed, chatReply = chatIn.Participation.ratingsAllow(ratings)
 			if chatReply && !cooldownAllowed {
-				allowed, chatReply = false, false
-			}
-			// 闲聊分支再过动态门控：按本群近一小时的插话需求和档位比例决定这次能不能插。
-			// 「在跟机器人说话」那一支不经过这里。
-			gate = r.chatInGateCheck(event, payload, chatLevel, time.Now())
-			if chatReply && !gate.Allowed {
 				allowed, chatReply = false, false
 			}
 		}
@@ -2970,7 +2960,6 @@ func (r *Runtime) routeProactiveReplyBatch(ctx context.Context, candidates []pro
 			if !cooldownAllowed {
 				event.routingReason += "；闲聊冷却中，回应提问仍独立判断"
 			}
-			event.routingReason += "；闲聊门控：" + gate.reason()
 		}
 		r.recordParticipationRatings(ctx, event, ratings, parseErr == nil, allowed, retried, cfg, raw)
 		return event, text, []proactiveReplyCandidate{{Event: event, Text: text}}, allowed
