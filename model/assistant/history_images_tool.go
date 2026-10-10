@@ -29,8 +29,9 @@ type dianaHistoryImagesTool struct {
 	currentDescribed bool
 	imageMode        ImageInputMode
 
-	mu          sync.Mutex
-	resultParts []llm.ContentPart
+	mu           sync.Mutex
+	resultParts  []llm.ContentPart
+	pdfPageTexts map[string]string
 }
 
 type historyImageSelector struct {
@@ -86,16 +87,19 @@ func (t *dianaHistoryImagesTool) Name() string {
 
 func (t *dianaHistoryImagesTool) Description() string {
 	if t.describesOnly() {
-		return `读取历史消息里图片/视频关键帧的文字描述和文件正文。你看不到原图；消息已带描述就不必调用。相关消息一次传齐。`
+		return `读取历史消息里图片/视频关键帧的文字描述和文件正文。你看不到原图；消息已带描述就不必调用。PDF 用 pdf_page/page_offset 逐页续读；每次指定一个文件。相关消息一次传齐。`
 	}
 	if t.asksVision() {
-		return `让视觉模型看历史消息里的原图/视频关键帧并回答 question，只返回文字。摘要够用时别调；认小字、数数、比较画面、认人或核对摘要时用。历史消息里的文件也用它读正文。相关消息一次传齐。`
+		return `让视觉模型看历史消息里的原图/视频关键帧并回答 question，只返回文字。摘要够用时别调；认小字、数数、比较画面、认人或核对摘要时用。历史消息里的文件也用它读正文；PDF 长文档用 pdf_page/page_offset 逐页续读，不能把截断当成全文。相关消息一次传齐。`
 	}
-	return `把历史消息里的原图/视频关键帧作为附件交给下一轮模型。摘要够用时别调；认小字、比较画面、核对视频细节时用，相关消息一次传齐。单张失效会跳过。历史消息里的文件也用它读正文。`
+	return `把历史消息里的原图/视频关键帧作为附件交给下一轮模型。摘要够用时别调；认小字、比较画面、核对视频细节时用，相关消息一次传齐。单张失效会跳过。历史消息里的文件也用它读正文；PDF 长文档用 pdf_page/page_offset 逐页续读，不能把截断当成全文。`
 }
 
 func (t *dianaHistoryImagesTool) InputSchema() map[string]any {
 	properties := map[string]any{
+		"file_index":    toolIntParam("配合 pdf_page 选择消息内的文件序号，默认 1", 1, 1000),
+		"pdf_page":      toolIntParam("读取 PDF 指定页，从 1 起；长文档从第 1 页开始，按返回的 next_page 继续", 1, 100000),
+		"page_offset":   toolIntParam("页内字符偏移，从 0 起；同一页未读完时用返回的 next_offset 续读", 0, 100000000),
 		"message_id":    toolStringParam("单条消息 ID，不接受路径或 URL"),
 		"media_indexes": map[string]any{"type": "array", "description": "配合 message_id：画面序号，从 1 起，省略为全部", "items": map[string]any{"type": "integer", "minimum": 1}},
 		"message_ids":   toolStringArrayParam("多条消息 ID；三种都省略时用当前引用"),
@@ -119,9 +123,24 @@ func (t *dianaHistoryImagesTool) Run(ctx context.Context, input map[string]any) 
 		return "", fmt.Errorf("diana history images: runtime is not configured")
 	}
 	t.setResultParts(nil)
+	if input["pdf_page"] != nil {
+		for _, key := range []string{"pdf_page", "page_offset", "file_index"} {
+			if value, exists := input[key]; exists {
+				n, err := groupToolInteger(value)
+				if err != nil || n < 0 || (key != "page_offset" && n == 0) {
+					return "", fmt.Errorf("%s 不是有效的整数", key)
+				}
+			}
+		}
+	} else if input["page_offset"] != nil || input["file_index"] != nil {
+		return "", fmt.Errorf("page_offset/file_index 必须与 pdf_page 一起使用")
+	}
 	selectors, err := historyImageSelectors(input, t.event, t.currentDescribed)
 	if err != nil {
 		return "", err
+	}
+	if input["pdf_page"] != nil && len(selectors) != 1 {
+		return "", fmt.Errorf("PDF 分页每次只指定一条消息，再用 file_index 选择文件")
 	}
 	detail := normalizeHistoryImageDetail(configToolString(input, "detail"))
 	result := dianaHistoryImagesResult{Media: make([]dianaHistoryImageStatus, 0)}
@@ -156,6 +175,9 @@ func (t *dianaHistoryImagesTool) Run(ctx context.Context, input map[string]any) 
 		}
 		result.Text = append(result.Text, historicalAudioDescriptions(textSegments)...)
 		files = append(files, historyFileSources(selector.MessageID, source)...)
+		if input["pdf_page"] != nil {
+			continue
+		}
 		images := historicalToolImageRefs(source)
 		if len(images) == 0 && len(historicalNonImageMediaDescriptions(textSegments)) == 0 {
 			// 「发张图，接着问这是什么」那句文字本身不带图，图在它问的那条媒体消息里。
@@ -265,7 +287,7 @@ func (t *dianaHistoryImagesTool) Run(ctx context.Context, input map[string]any) 
 		t.runtime.enqueueHistoryImageDescriptionsNow(source)
 	}
 
-	result.Text = append(result.Text, t.historyFileTexts(ctx, files)...)
+	result.Text = append(result.Text, t.historyFileTexts(ctx, files, input)...)
 	if result.Loaded == 0 && len(result.Text) == 0 {
 		return "", fmt.Errorf("历史媒体读取失败：请求的媒体均不可用（%s）", historyImageFailureSummary(result.Media))
 	}
@@ -348,9 +370,26 @@ func historyFileSources(messageID string, event MessageEvent) []historyFileSourc
 // 解析插件只看当前消息和引用消息，历史里的文件以前只回文件名加「正文尚未解析」，
 // 模型翻到了也读不了。这里按插件的开关和设置走同一套下载与解析，一次调用里的
 // 文件共用一轮的字数预算，不会因为读了几条历史就挤掉对话上下文。
-func (t *dianaHistoryImagesTool) historyFileTexts(ctx context.Context, files []historyFileSource) []string {
+func (t *dianaHistoryImagesTool) historyFileTexts(ctx context.Context, files []historyFileSource, options ...map[string]any) []string {
 	if len(files) == 0 {
 		return nil
+	}
+	if len(options) > 0 && options[0]["pdf_page"] != nil {
+		index := 1
+		if options[0]["file_index"] != nil {
+			index = intFromAny(options[0]["file_index"])
+		}
+		selected := make([]historyFileSource, 0, 1)
+		for _, file := range files {
+			if file.index == index {
+				selected = append(selected, file)
+				break
+			}
+		}
+		if len(selected) == 0 {
+			return []string{fmt.Sprintf("没有找到文件序号 %d", index)}
+		}
+		files = selected
 	}
 	var parser *FileParserPlugin
 	var settings SettingValues
@@ -395,6 +434,23 @@ func (t *dianaHistoryImagesTool) historyFileTexts(ctx context.Context, files []h
 			continue
 		}
 		parsed++
+		if len(options) > 0 && options[0]["pdf_page"] != nil {
+			fileIndex := 1
+			if options[0]["file_index"] != nil {
+				fileIndex = intFromAny(options[0]["file_index"])
+			}
+			if file.index != fileIndex {
+				continue
+			}
+			page := intFromAny(options[0]["pdf_page"])
+			offset := intFromAny(options[0]["page_offset"])
+			body, err := t.readPDFPage(ctx, parser, channel, *ref, maxBytes, page, offset)
+			if err != nil {
+				body = "读取 PDF 页失败：" + err.Error()
+			}
+			lines = append(lines, fmt.Sprintf("message_id=%s 文件%d\n%s", file.messageID, file.index, body))
+			continue
+		}
 		result := parser.parseRef(ctx, channel, *ref, maxBytes, maxChars)
 		body := result.Context
 		if result.ScannedPDF != nil {
