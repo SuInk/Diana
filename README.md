@@ -74,7 +74,7 @@ docker compose -f docker-compose.yml -f docker-compose.update.yml pull && docker
 
 如果 Apple Silicon / ARM64 拉取旧镜像时报 `no matching manifest for linux/arm64/v8`，可临时在 `docker-compose.yml` 的 `services.diana` 下添加 `platform: linux/amd64`（需要 amd64 模拟支持，性能及浏览器兼容性可能受影响），原生 ARM64 镜像发布后删除此项；也可使用上方安装脚本原生部署。构建配置修改不会自动更新线上已有镜像。
 
-**② 登录控制台。** 打开 `http://127.0.0.1:18080`。管理员账号密码在刚才的终端输出里，只显示这一次，请当场保存（Docker 方式用 `docker logs diana` 查看）。密码只以哈希形式存在数据库里，不会留在 `config.yaml`；忘了就用下文的 `diana passwd` 重置。
+**② 登录控制台。** 在部署机器上打开 `http://127.0.0.1:18080`；从其他设备访问时，将 `127.0.0.1` 换成部署机器的 IP 或域名。Docker 请使用宿主机地址和 Compose 映射的端口，以安装脚本输出为准；容器日志中的监听地址不是宿主机访问地址。首次创建的管理员账号密码会显示在终端里，请当场保存（Docker 一键脚本会等待启动并展示，也可用 `docker logs diana` 查看首次启动日志）。复用已有 `data/` 时沿用原账号密码，不会重新生成；数据库仅保存密码哈希，容器重建后日志中可能已没有首次凭据。安装器不会把密码留在 `config.yaml`；忘了就用下文的 `diana passwd` 流程重置。
 
 **③ 配置。** 控制台里依次完成三件事：
 
@@ -126,7 +126,7 @@ docker compose -f docker-compose.yml -f docker-compose.update.yml pull && docker
 <details>
 <summary>Docker 细节 / 手动下载 / 源码构建</summary>
 
-**Docker：** 镜像预装 Chromium 与 Noto CJK 中文字体，网页渲染和中文截图无需在容器内临时安装浏览器。启动时加载上方的 seccomp 配置，为 Chromium 沙箱开放所需的命名空间调用；无需 `--privileged`、`SYS_ADMIN` 或关闭浏览器沙箱。已有容器需按新启动参数重建。详见[浏览器依赖与容器配置](docs/browser-rendering.md)。镜像随每个版本发布（`ghcr.io/suink/diana:latest` 及版本号 tag）。OneBot 客户端（推荐 SnowLuma）连 `ws://<宿主机>:18080/onebot/v11/ws`。想预置配置（无人值守部署），把改好的 `config.yaml` 放到 `data/config.yaml`。从克隆的仓库本地构建时执行 `docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build`。普通部署需在宿主机拉新镜像并重建容器；启用上方的 Docker 更新助手后，版本面板也可发起更新。只需挂载 `data/` 一个目录，需要持久化的都在里面：数据库、运行日志（`data/logs/diana.log`）、可选的 `config.yaml`、插件、技能、MCP 配置、浏览器和编码 CLI 登录态、`ytb_cookies.txt` 及升级备份；容器启动时自动把它交给容器内的运行用户（UID 10001）。换了镜像版本后第一次启动，会在迁移数据库之前把它备份到 `data/.diana-updates/backups/`（3 天内最多 3 份）。旧部署挂在 `/app/config.yaml` 的配置仍然优先生效；想改放 `data/config.yaml`，要同时删掉旧 Compose 里的 `DIANA_CONFIG` 一行。旧配置里的 `log_path: logs/diana.log` 改成 `data/logs/diana.log`（或删掉这行）后，旧的 `logs/` 挂载就可以去掉。容器里同样有 `diana` 命令，在宿主机执行 `docker exec diana diana status`（第一个 `diana` 是容器名）即可，`logs`、`doctor`、`config check` 等子命令同理；`docker exec` 默认是 root，`diana` 命令会自动降权到服务用户（UID 10001）再执行。
+**Docker：** 镜像预装 Chromium 与 Noto CJK 中文字体，网页渲染和中文截图无需在容器内临时安装浏览器。启动时加载上方的 seccomp 配置，为 Chromium 沙箱开放所需的命名空间调用；无需 `--privileged`、`SYS_ADMIN` 或关闭浏览器沙箱。已有容器需按新启动参数重建。详见[浏览器依赖与容器配置](docs/browser-rendering.md)。镜像随每个版本发布（`ghcr.io/suink/diana:latest` 及版本号 tag）。OneBot 客户端（推荐 SnowLuma）连 `ws://<宿主机>:18080/onebot/v11/ws`。想预置配置（无人值守部署），把改好的 `config.yaml` 放到 `data/config.yaml`，并将 `server.host` 设为 `0.0.0.0`（容器内只监听 `127.0.0.1` 会导致宿主机端口映射无法访问）。从克隆的仓库本地构建时执行 `docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build`。普通部署需在宿主机拉新镜像并重建容器；启用上方的 Docker 更新助手后，版本面板也可发起更新。只需挂载 `data/` 一个目录，需要持久化的都在里面：数据库、运行日志（`data/logs/diana.log`）、可选的 `config.yaml`、插件、技能、MCP 配置、浏览器和编码 CLI 登录态、`ytb_cookies.txt` 及升级备份；容器启动时自动把它交给容器内的运行用户（UID 10001）。换了镜像版本后第一次启动，会在迁移数据库之前把它备份到 `data/.diana-updates/backups/`（3 天内最多 3 份）。旧部署挂在 `/app/config.yaml` 的配置仍然优先生效；想改放 `data/config.yaml`，要同时删掉旧 Compose 里的 `DIANA_CONFIG` 一行。旧配置里的 `log_path: logs/diana.log` 改成 `data/logs/diana.log`（或删掉这行）后，旧的 `logs/` 挂载就可以去掉。容器里同样有 `diana` 命令，在宿主机执行 `docker exec diana diana status`（第一个 `diana` 是容器名）即可，`logs`、`doctor`、`config check` 等子命令同理；`docker exec` 默认是 root，`diana` 命令会自动降权到服务用户（UID 10001）再执行。
 
 **slim 轻量镜像（基础版）：** 同一仓库同时发布 `-slim` 变体（如 `ghcr.io/suink/diana:latest-slim`、`ghcr.io/suink/diana:v0.8.131-slim`）：不预装 Chromium、Noto CJK 字体、ffmpeg、yt-dlp 与 tesseract，体积约为完整版的四分之一（拉取 156 MB / 落盘 662 MB，完整版 619 MB / 2.14 GB），适合不需要网页渲染、媒体下载和 OCR 的部署。安装脚本会问你要哪一种，选择写进部署目录的 `.env`（`DIANA_IMAGE=`），以后 `docker compose pull` 自动跟着走；已部署的想切换，在终端里重跑安装脚本，或直接改 `.env` 里那一行再 `docker compose pull && docker compose up -d`（没有这个文件就新建，Compose 会自动读取）。内置浏览器这一档在 slim 上会明确报「找不到浏览器」并给出安装命令，不会悄悄失效。之后想用网页渲染，在宿主机执行 `docker exec -u root <容器名> sh -c 'apt-get update && apt-get install -y chromium fonts-noto-cjk'` 即可（WebUI 依赖管理里点一键安装会因进程非 root 失败，报错会直接附上这条命令）。注意容器重建后需重新安装，数据在挂出的 `data/` 里不受影响。
 
@@ -240,7 +240,9 @@ docker compose start diana
 
 **升级**：重跑一遍安装命令，或直接在控制台里点升级。两条路都会先备份数据、校验新版本，健康检查不过自动回滚。Docker 部署则是拉新镜像重建容器。
 
-**卸载**：`diana uninstall` 移除服务和程序、保留数据（重装即可恢复）；`diana uninstall --purge` 连数据一起删，不可恢复，会二次确认。
+**卸载原生安装**：`diana uninstall` 只移除当前命令所属安装目录的服务和程序，保留配置、数据库、日志和安装备份（重装即可恢复）；`diana uninstall --purge` 连该目录的数据一起删，不可恢复，会二次确认。其他安装目录和 Docker 容器不受影响。从用户安装迁移到 `/opt/diana` 时，旧用户目录可能仍保留程序和数据；卸载器会提示检测到的其他默认安装目录，需要分别处理。
+
+**卸载 Docker 部署**：在该部署的 Compose 目录运行 `docker compose -f docker-compose.yml down`，停止并移除容器和项目网络；宿主机上的 `data/`、配置文件和镜像仍保留。如部署启用了 `docker-compose.update.yml` 更新助手（当前一键安装默认启用），使用 `docker compose -f docker-compose.yml -f docker-compose.update.yml down`，同时移除更新助手。原生卸载命令不会停止 Docker；只卸载原生版后，Docker 版仍可能在 `18080` 提供控制台。删除数据库属于永久清理，先确认备份和实际挂载路径，不要直接删除不确定归属的目录。
 
 ## 配置去哪改
 
