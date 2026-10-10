@@ -17,6 +17,7 @@ Usage: ./uninstall.sh [--purge] [--yes]
 Stops Diana and removes its installed runtime and service registration.
 Configuration, data, logs, and installer backups are preserved by default.
 Use --purge to remove the entire installation directory.
+Only this installation is removed; other installations and Docker containers are unaffected.
 EOF
       exit 0
       ;;
@@ -50,6 +51,17 @@ if [ "$service_user" != "$(id -un)" ]; then
   fi
   [ -n "$service_home" ] || service_home=$HOME
 fi
+
+printf 'Uninstall target: %s\n' "$install_dir"
+printf '%s\n' 'This removes only this native installation. Docker containers, images, and bind-mounted data are not removed.'
+for other_install in /opt/diana "$service_home/.local/share/diana"; do
+  [ "$other_install" != "$install_dir" ] || continue
+  if [ -f "$other_install/.installed-version" ] || [ -f "$other_install/diana-webui" ]; then
+    printf 'Other Diana installation remains: %s (program and data are untouched)\n' "$other_install"
+  elif [ -f "$other_install/config.yaml" ]; then
+    printf 'Other Diana configuration/data remains: %s\n' "$other_install"
+  fi
+done
 
 if [ "$assume_yes" != true ]; then
   if [ "$purge" = true ]; then
@@ -122,7 +134,7 @@ if [ "$purge" = true ]; then
     exit 1
   fi
   rm -rf -- "$install_dir"
-  printf 'Diana and its data were removed from %s\n' "$install_dir"
+  printf 'This Diana installation and its data were removed from %s\n' "$install_dir"
   exit 0
 fi
 
@@ -140,4 +152,4 @@ rm -f -- "$install_dir/.install-scope" "$install_dir/.service-user" "$install_di
 # Remove this script last. POSIX systems keep the opened script readable until exit.
 rm -f -- "$install_dir/uninstall.sh"
 rmdir "$install_dir" >/dev/null 2>&1 || true
-printf 'Diana was removed. Configuration and data remain in %s\n' "$install_dir"
+printf 'This Diana installation was removed. Configuration and data remain in %s\n' "$install_dir"

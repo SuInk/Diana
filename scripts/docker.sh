@@ -146,8 +146,47 @@ fi
 docker compose "$@" config --quiet
 docker compose "$@" pull
 docker compose "$@" up -d
-printf '\n%s\n' 'Diana 已启动。默认控制台：http://localhost:18080' \
-  '查看账号密码：docker compose -f docker-compose.yml logs diana'
+printf '\n%s\n' '正在等待 Diana 启动…'
+container=$(docker compose "$@" ps -q diana)
+[ -n "$container" ] || fail '没有找到运行中的 Diana 容器，请运行 docker compose -f docker-compose.yml logs diana 排查。'
+started=$(docker inspect --format '{{.State.StartedAt}}' "$container")
+attempt=0
+while :; do
+  # 只读本次进程的日志，避免重启后把旧的初始密码误当作当前密码。
+  logs=$(docker compose "$@" logs --no-color --no-log-prefix --since "$started" diana)
+  if printf '%s\n' "$logs" | grep -q 'webui listening on '; then
+    break
+  fi
+  attempt=$((attempt + 1))
+  [ "$attempt" -lt 60 ] || fail '等待启动超时。请运行 docker compose -f docker-compose.yml logs diana 查看原因。'
+  sleep 1
+done
+printf '\n%s\n' 'Diana 已启动。'
+# 从 Compose 查询实际映射，不能假定用户仍使用默认的宿主机端口。
+bindings=$(docker compose "$@" port diana 18080 2>/dev/null || true)
+if [ -n "$bindings" ]; then
+  printf '%s\n' "$bindings" | while IFS= read -r binding; do
+    case "$binding" in
+      0.0.0.0:* | '[::]:'*)
+        port=${binding##*:}
+        printf 'Docker 宿主机本机访问：http://localhost:%s\n其他设备访问：http://<Docker 宿主机 IP 或域名>:%s\n' "$port" "$port"
+        ;;
+      *) printf '控制台映射地址：http://%s\n' "$binding" ;;
+    esac
+  done
+else
+  printf '%s\n' '未找到容器 18080 端口映射；请按 docker-compose.yml 中的网络配置和实际宿主机端口访问。'
+fi
+printf '%s\n' 'localhost 仅适用于 Docker 宿主机本机；使用远程 Docker 时，请使用远程宿主机地址。'
+credentials=$(printf '%s\n' "$logs" | sed -n '/^Diana administrator credentials (shown once)$/,/^$/p')
+if [ -n "$credentials" ]; then
+  printf '\n%s\n%s\n' '首次创建的管理员账号与密码（请妥善保存；若已修改，请使用修改后的密码）：' "$credentials"
+else
+  printf '\n%s\n' '本次未生成初始账号密码。已有 data 数据会沿用原账号密码，重建容器不会重置。'
+  printf '%s\n' "$logs" | sed -n '/管理员账号：/p'
+  printf '%s\n' '请使用原密码或首次安装时保存的凭据；数据库仅保存密码哈希，无法显示原密码。'
+fi
+printf '\n%s\n' '查看启动日志：docker compose -f docker-compose.yml logs diana'
 if [ "$self_update" = 1 ]; then
   printf '%s\n' 'Docker 自更新助手已启用；可在版本面板手动更新，或开启「自动安装并重启」。'
   printf '%s\n' '以后在此目录更新：docker compose -f docker-compose.yml -f docker-compose.update.yml pull && docker compose -f docker-compose.yml -f docker-compose.update.yml up -d'

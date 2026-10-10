@@ -671,8 +671,12 @@ func main() {
 		_, _ = fmt.Fprintf(os.Stderr, "\nDiana administrator credentials (shown once)\n  username: %s\n", bootstrap.Username)
 		if bootstrap.GeneratedPassword != "" {
 			_, _ = fmt.Fprintf(os.Stderr, "  password: %s\n", bootstrap.GeneratedPassword)
+		} else {
+			_, _ = fmt.Fprintln(os.Stderr, "  password: 使用 config.yaml 中的 admin.password")
 		}
 		_, _ = fmt.Fprintln(os.Stderr)
+	} else {
+		log.Printf("管理员账号：%s；沿用已有密码（数据库仅保存密码哈希，无法显示原密码）。", bootstrap.Username)
 	}
 	// 反向 ws 客户端可能只填裸地址（如 ws://host:18080，没有 /onebot/v11/ws
 	// 后缀）。带 OneBot 握手特征的升级请求不论路径都直接交给 oneBotServer，
@@ -805,7 +809,7 @@ func main() {
 	router.POST("/onebot/v11/http", gin.WrapH(oneBotHTTPServer))
 	router.NoRoute(spaHandler(http.Dir(frontendDistDir(appCfg.Server.FrontendDist))))
 
-	log.Printf("webui listening on http://%s:%s", displayHost(host), port)
+	log.Printf("webui listening on http://%s (监听地址；Docker 请使用宿主机地址和映射端口访问)", listener.Addr())
 	logStartupDone()
 	server := &http.Server{
 		Handler:           router,
