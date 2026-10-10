@@ -7,7 +7,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/SuInk/diana/model/llm"
 )
@@ -230,28 +229,48 @@ func TestParticipationLevelBoundaries(t *testing.T) {
 		t.Fatal("off/always/invalid mismatch")
 	}
 }
+func TestParticipationRoutingWithoutHourlyQuota(t *testing.T) {
+	for _, level := range []string{"minimal", "low", "medium", "high", "always"} {
+		t.Run(level, func(t *testing.T) {
+			provider := &capturingLLMProvider{reply: `{"relevance":{"directed":false,"reason":"群内闲聊"},"chat_in":{"score":0.9,"reason":"适合接话"}}`}
+			r := NewRuntime(BotConfig{Participation: &ParticipationPreferences{RelevanceLevel: "off", ChatLevel: level, CooldownSeconds: 0}}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) { return provider, nil })
+			event := MessageEvent{Kind: EventKindGroup, GroupID: "g", UserID: "u", MessageID: "m", RawMessage: "接着聊"}
+			// 关闭冷却后，已发送的闲聊数不能产生隐藏配额。
+			for i := 0; i < 30; i++ {
+				_, _, _, allowed := r.routeProactiveReplyBatch(context.Background(), []proactiveReplyCandidate{{Event: event, Text: event.RawMessage}})
+				if !allowed {
+					t.Fatalf("qualifying chat blocked after %d replies", i)
+				}
+				r.markChatInReplied(event)
+			}
+		})
+	}
+}
+
 func TestParticipationRatingsRouting(t *testing.T) {
 	provider := &capturingLLMProvider{}
 	r := NewRuntime(BotConfig{Participation: &ParticipationPreferences{RelevanceLevel: "medium", ChatLevel: "high", CooldownSeconds: 30}}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) { return provider, nil })
 	event := MessageEvent{Kind: EventKindGroup, GroupID: "g", UserID: "u", MessageID: "m", RawMessage: "接着聊"}
-	// 这里只测评分门槛：先让本群近一小时攒够一批低概率需求，动态门控的阈值落到很低，不挡闲聊分支。
-	gate := &chatInGate{}
-	for i := 0; i < chatInGateMinScores+5; i++ {
-		gate.scores = append(gate.scores, chatInGateScore{at: time.Now().Add(-time.Duration(chatInGateMinScores+5-i) * time.Minute), probability: 0.01})
-	}
-	r.chatInGates = map[string]*chatInGate{chatInCooldownKey(event): gate}
+	// 新会话、没有历史需求或插话配额，达到档位评分就应放行。
 	for _, tc := range []struct {
 		directed bool
 		chat     float64
 		want     bool
 	}{{true, 0.1, true}, {false, 0.3, true}, {false, 0.29, false}, {false, 0, false}} {
 		provider.reply = fmt.Sprintf(`{"relevance":{"directed":%t,"reason":"相关度"},"chat_in":{"score":%.2f,"reason":"闲聊"}}`, tc.directed, tc.chat)
-		_, _, _, got := r.routeProactiveReplyBatch(context.Background(), []proactiveReplyCandidate{{Event: event, Text: event.RawMessage}})
+		routed, _, _, got := r.routeProactiveReplyBatch(context.Background(), []proactiveReplyCandidate{{Event: event, Text: event.RawMessage}})
+		if strings.Contains(routed.routingReason, "插话概率") || strings.Contains(routed.routingReason, "闲聊门控") {
+			t.Fatalf("obsolete probability gate in reason: %s", routed.routingReason)
+		}
 		if got != tc.want {
 			t.Fatalf("%+v got %v", tc, got)
 		}
 	}
 	r.markChatInReplied(event)
+	provider.reply = `{"relevance":{"directed":false,"reason":"群内闲聊"},"chat_in":{"score":0.9,"reason":"适合接话"}}`
+	if _, _, _, allowed := r.routeProactiveReplyBatch(context.Background(), []proactiveReplyCandidate{{Event: event}}); allowed {
+		t.Fatal("chat score bypassed configured cooldown")
+	}
 	provider.reply = `{"relevance":{"directed":true,"reason":"直接接话"},"chat_in":{"score":0.1,"reason":"不适合闲聊"}}`
 	_, _, _, got := r.routeProactiveReplyBatch(context.Background(), []proactiveReplyCandidate{{Event: event}})
 	if !got {
