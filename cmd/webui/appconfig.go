@@ -110,18 +110,10 @@ type llmRuntimeConfig struct {
 	OutputTokenMax int64 `yaml:"output_token_max"`
 }
 
-// configPathEnv 是唯一保留的环境变量：它不是配置，是指向配置文件的引导指针。
-// 容器里挂载路径各不相同，总得有个办法告诉进程去哪找 config.yaml。
-const configPathEnv = "DIANA_CONFIG"
-
-// logPathEnv 在 config.yaml 没写 storage.log_path 时提供日志文件位置。
-// Docker 镜像用它把日志写进挂出来的 /app/data/logs，否则日志只在容器标准输出里，
-// 重建容器就没了。
-const logPathEnv = "DIANA_LOG_PATH"
-
-func (cfg *appConfig) applyEnvironmentDefaults() {
-	if strings.TrimSpace(cfg.Storage.LogPath) == "" {
-		cfg.Storage.LogPath = strings.TrimSpace(os.Getenv(logPathEnv))
+// 官方容器默认把日志写入持久化数据目录；显式 YAML 路径仍然优先。
+func (cfg *appConfig) applyDeploymentDefaults() {
+	if strings.TrimSpace(cfg.Storage.LogPath) == "" && dockerDeployment() {
+		cfg.Storage.LogPath, _ = filepath.Abs(filepath.Join("data", "logs", "diana.log"))
 	}
 }
 
@@ -132,7 +124,7 @@ const defaultConfigFileName = "config.yaml"
 // Docker 部署只挂 /app/data 一个目录，配置文件放进去就能被找到。
 var dataDirConfigPath = filepath.Join("data", defaultConfigFileName)
 
-// resolveConfigPath 按 --config、DIANA_CONFIG、工作目录、可执行文件目录、
+// resolveConfigPath 按 --config、工作目录、可执行文件目录、
 // 默认数据目录的顺序找配置文件。命令入口经常是 /usr/local/bin 或 ~/.local/bin
 // 下的符号链接，所以还要检查链接指向的真实安装目录。数据目录排在最后，旧部署
 // 放在工作目录或程序旁的 config.yaml 仍然优先。返回空字符串表示哪里都没有，
@@ -140,9 +132,6 @@ var dataDirConfigPath = filepath.Join("data", defaultConfigFileName)
 func resolveConfigPath(args []string) string {
 	if explicit := configPathFromArgs(args); explicit != "" {
 		return explicit
-	}
-	if fromEnv := strings.TrimSpace(os.Getenv(configPathEnv)); fromEnv != "" {
-		return fromEnv
 	}
 	if _, err := os.Stat(defaultConfigFileName); err == nil {
 		return defaultConfigFileName
@@ -191,14 +180,14 @@ func configPathFromArgs(args []string) string {
 func loadAppConfig(path string) (appConfig, error) {
 	cfg := appConfig{path: path}
 	if strings.TrimSpace(path) == "" {
-		cfg.applyEnvironmentDefaults()
+		cfg.applyDeploymentDefaults()
 		return cfg, nil
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			cfg.path = ""
-			cfg.applyEnvironmentDefaults()
+			cfg.applyDeploymentDefaults()
 			return cfg, nil
 		}
 		return cfg, fmt.Errorf("read config %s: %w", path, err)
@@ -220,7 +209,7 @@ func loadAppConfig(path string) (appConfig, error) {
 		return cfg, fmt.Errorf("storage download_cache_max_mb must be between 0 and 1048576")
 	}
 	cfg.path = path
-	cfg.applyEnvironmentDefaults()
+	cfg.applyDeploymentDefaults()
 	return cfg, nil
 }
 

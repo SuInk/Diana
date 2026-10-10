@@ -122,7 +122,7 @@ func runConfigCommand(args []string, output io.Writer) error {
 	switch subcommand {
 	case "path":
 		if path == "" {
-			return fmt.Errorf("no config.yaml is in use; Diana runs on built-in defaults (create data/config.yaml or set %s to add one)", configPathEnv)
+			return fmt.Errorf("no config.yaml is in use; Diana runs on built-in defaults (create data/config.yaml or pass --config to add one)")
 		}
 		_, err = fmt.Fprintln(output, path)
 		return err

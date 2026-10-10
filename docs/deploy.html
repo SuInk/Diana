@@ -27,7 +27,7 @@
           <button type="button" role="tab" aria-selected="false" data-tab="windows">Windows</button>
         </div>
         <div class="tab-panel" role="tabpanel" data-panel="unix">
-          <pre><code>curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.sh | sudo sh</code></pre>
+          <pre><code>curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.sh | sh</code></pre>
           <p>支持 Linux amd64/arm64、macOS Intel/Apple Silicon。Linux 优先安装为 <code>systemd --user</code> 服务，macOS 安装为 LaunchAgent；环境不支持服务管理器时退回后台进程。</p>
         </div>
         <div class="tab-panel" role="tabpanel" data-panel="windows" hidden>
@@ -43,24 +43,21 @@
       </section>
 
       <section class="section searchable" id="installer-options">
-        <div class="section-heading"><p class="eyebrow">参数</p><h2>通过环境变量控制安装</h2></div>
-        <div class="table-wrap"><table><thead><tr><th>变量</th><th>默认值</th><th>用途</th></tr></thead><tbody>
-          <tr><td><code>DIANA_INSTALL_SCOPE</code></td><td><code>auto</code></td><td>Unix 默认推荐使用 sudo 安装到 <code>/opt/diana</code>；设为 <code>user</code> 时安装到当前用户目录。</td></tr>
-          <tr><td><code>DIANA_INSTALL_DIR</code></td><td>系统安装：<code>/opt/diana</code><br />用户安装：<code>~/.local/share/diana</code><br />Windows：<code>%LOCALAPPDATA%\Diana</code></td><td>显式指定程序、数据、日志和备份目录。</td></tr>
-          <tr><td><code>DIANA_VERSION</code></td><td><code>latest</code></td><td>指定 <code>v0.4.2</code> 形式的版本；默认解析最新稳定版。</td></tr>
-          <tr><td><code>DIANA_PORT</code></td><td><code>18080</code></td><td>首次安装写入 <code>config.yaml</code> 的 WebUI 端口。</td></tr>
-          <tr><td><code>DIANA_ADMIN_USERNAME</code></td><td><code>diana#admin</code></td><td>首次安装的管理员用户名。</td></tr>
-          <tr><td><code>DIANA_ADMIN_PASSWORD</code></td><td>随机 32 位十六进制</td><td>首次安装的管理员密码。</td></tr>
-          <tr><td><code>DIANA_START_AFTER_INSTALL</code></td><td><code>true</code></td><td>设为 <code>false</code> 时只安装和校验，不启动。</td></tr>
+        <h2>安装选项</h2>
+        <p>交互选择安装方式，也可传命令行参数用于无人值守安装。应用设置统一通过 config.yaml 和 WebUI 管理，不使用配置环境变量。</p>
+        <div class="table-wrap"><table><thead><tr><th>Unix / Windows</th><th>用途</th></tr></thead><tbody>
+<tr><td><code>--dir PATH / -InstallDir PATH</code></td><td>安装目录，默认当前用户目录；受保护目录才需要管理员权限。</td></tr>
+<tr><td><code>--scope user|system</code></td><td>Unix 安装范围；默认 user，system 需要 sudo。</td></tr>
+<tr><td><code>--version VERSION / -Version VERSION</code></td><td>Release 版本，默认 latest。</td></tr>
+<tr><td><code>--host HOST / -BindHost HOST</code></td><td>写入 YAML 的监听地址，默认 127.0.0.1。</td></tr>
+<tr><td><code>--port PORT / -Port PORT</code></td><td>监听端口，默认 18080。</td></tr>
+<tr><td><code>--config-file PATH / -ConfigFile PATH</code></td><td>新安装的初始 YAML 文件；已有配置不覆盖。</td></tr>
+<tr><td><code>--no-start / -NoStart</code></td><td>仅安装，不启动。</td></tr>
+<tr><td><code>--yes / -Yes</code></td><td>跳过交互，使用默认值。</td></tr>
         </tbody></table></div>
-        <pre><code># 安装固定版本到自定义目录
-curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.sh | \
-  sudo env \
-  DIANA_VERSION=v0.4.2 \
-  DIANA_INSTALL_DIR=/opt/diana-user \
-  DIANA_PORT=18081 \
-  sh</code></pre>
-        <div class="callout warn"><strong>关于管道变量</strong><p>使用 sudo 时，变量要通过 <code>sudo env</code> 传给安装脚本。没有 sudo 权限时可显式使用 <code>DIANA_INSTALL_SCOPE=user sh</code> 安装给当前用户。</p></div>
+        <pre><code>curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.sh | sh -s -- --dir "$HOME/Applications/Diana" --port 18081 --yes</code></pre>
+        <pre><code>&amp; ([scriptblock]::Create((irm https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.ps1))) -InstallDir "$env:LOCALAPPDATA\Diana" -Port 18081 -Yes</code></pre>
+        <p>自动配置用户 PATH。旧系统安装保留原作用域，仍可能需要 sudo；迁移到其他目录前先停服务并保留配置和数据。</p>
       </section>
 
       <section class="section searchable" id="manual-release">

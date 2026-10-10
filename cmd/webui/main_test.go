@@ -240,12 +240,14 @@ func TestLoadAppConfigTreatsMissingFileAsDefaults(t *testing.T) {
 	}
 }
 
-// TestLoadAppConfigLogPathFromEnvironment Docker 镜像靠 DIANA_LOG_PATH 把日志
+// TestLoadAppConfigContainerLogDefaults Docker 镜像默认把日志
 // 写进挂出来的目录；config.yaml 里写了 log_path 时以配置为准。
-func TestLoadAppConfigLogPathFromEnvironment(t *testing.T) {
-	t.Setenv(logPathEnv, "/app/data/logs/diana.log")
+func TestLoadAppConfigContainerLogDefaults(t *testing.T) {
+	t.Chdir(t.TempDir())
+	t.Setenv("DIANA_DEPLOYMENT", "docker")
+	expectedLog, _ := filepath.Abs(filepath.Join("data", "logs", "diana.log"))
 	cfg, err := loadAppConfig(filepath.Join(t.TempDir(), "absent.yaml"))
-	if err != nil || cfg.Storage.LogPath != "/app/data/logs/diana.log" {
+	if err != nil || cfg.Storage.LogPath != expectedLog {
 		t.Fatalf("missing config: log path = %q, err = %v", cfg.Storage.LogPath, err)
 	}
 	path := filepath.Join(t.TempDir(), "config.yaml")
@@ -260,7 +262,7 @@ func TestLoadAppConfigLogPathFromEnvironment(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg, err = loadAppConfig(path)
-	if err != nil || cfg.Storage.LogPath != "/app/data/logs/diana.log" {
+	if err != nil || cfg.Storage.LogPath != expectedLog {
 		t.Fatalf("unset in config: log path = %q, err = %v", cfg.Storage.LogPath, err)
 	}
 }
@@ -295,17 +297,16 @@ func TestLoadAppConfigIgnoresRetiredNapCatSection(t *testing.T) {
 	}
 }
 
-// TestResolveConfigPathPrefersExplicitFlag 固定查找顺序：--config 高于
-// DIANA_CONFIG，两者都没有才看约定位置。
+// 显式参数优先，否则按约定位置查找；旧环境变量不再覆盖配置。
 func TestResolveConfigPathPrefersExplicitFlag(t *testing.T) {
-	t.Setenv(configPathEnv, "/from/env.yaml")
+	t.Setenv("DIANA_CONFIG", "/from/env.yaml")
 	if got := resolveConfigPath([]string{"--config", "/from/flag.yaml"}); got != "/from/flag.yaml" {
 		t.Fatalf("path = %q", got)
 	}
 	if got := resolveConfigPath([]string{"--config=/from/equals.yaml"}); got != "/from/equals.yaml" {
 		t.Fatalf("path = %q", got)
 	}
-	if got := resolveConfigPath(nil); got != "/from/env.yaml" {
+	if got := resolveConfigPath(nil); got == "/from/env.yaml" {
 		t.Fatalf("path = %q", got)
 	}
 }
@@ -313,7 +314,7 @@ func TestResolveConfigPathPrefersExplicitFlag(t *testing.T) {
 // TestResolveConfigPathFallsBackToDataDir Docker 只挂 /app/data：配置文件放在
 // data/config.yaml 也要能找到，但工作目录里的 config.yaml（旧部署的挂载位置）优先。
 func TestResolveConfigPathFallsBackToDataDir(t *testing.T) {
-	t.Setenv(configPathEnv, "")
+	t.Setenv("DIANA_CONFIG", "")
 	t.Chdir(t.TempDir())
 	if got := resolveConfigPath(nil); got != "" {
 		t.Fatalf("empty directory: path = %q", got)

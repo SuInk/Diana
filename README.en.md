@@ -36,15 +36,19 @@ It's built for people who want to run their own bot:
 
 ```sh
 # Linux / macOS
-curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.sh | sudo sh
+curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.sh | sh
 ```
 
-The recommended sudo installation uses the fixed `/opt/diana` directory and creates `/usr/local/bin/diana`. Without sudo access, run the command without sudo; the installer asks before falling back to a current-user installation, or set `DIANA_INSTALL_SCOPE=user` explicitly.
+By default, no administrator privileges are needed: Diana installs to `~/.local/share/diana`, creates `~/.local/bin/diana`, and configures your user PATH for new terminals. Set `--dir PATH` to choose a writable directory. Only system installations (`sudo sh -s -- --scope system`) or protected locations need elevated permissions. For an existing `/opt/diana` installation, explicitly select that directory to upgrade; stop the old service and preserve its configuration and database before migrating.
 
 ```powershell
 # Windows PowerShell
 irm https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.ps1 | iex
 ```
+
+Windows installs to `%LOCALAPPDATA%\Diana` and configures the current user PATH without administrator privileges.
+
+Installation options now use interactive choices or command-line arguments (`--yes` / `-Yes` for unattended use); legacy installer environment variables are no longer read. Select application configuration with `--config PATH`; existing YAML files and databases remain usable.
 
 Docker Compose (prebuilt image; no clone required). Run once in your deployment directory:
 
@@ -85,22 +89,22 @@ If an older image fails on Apple Silicon / ARM64 with `no matching manifest for 
 That's it. No reply? The event center tells you why; `diana doctor` checks service health.
 
 > [!TIP]
-> **Installing on a server?** Diana only listens on localhost by default. To reach the console from another machine, set `DIANA_HOST` at install time:
+> **Installing on a server?** Diana only listens on localhost by default. To reach the console from another machine, set `--host` (`-BindHost` on Windows) at install time:
 >
 > ```sh
-> curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.sh | sudo env DIANA_HOST=0.0.0.0 sh
+> curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.sh | sh -s -- --host 0.0.0.0
 > ```
 >
 > ```powershell
-> $env:DIANA_HOST="0.0.0.0"; irm https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.ps1 | iex
+> & ([scriptblock]::Create((irm https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.ps1))) -BindHost 0.0.0.0
 > ```
 >
-> Already installed? Two options: re-run the install command with `DIANA_HOST` (which also upgrades you), or edit the config file to set `server.host` to `0.0.0.0` and restart.
+> Already installed? Two options: re-run the install command with `--host` (`-BindHost` on Windows) (which also upgrades you), or edit the config file to set `server.host` to `0.0.0.0` and restart.
 >
-> First edit the config (a system install's config file is owned by root, hence sudo):
+> First edit the config (no sudo for a user install; older system installs may require it):
 >
 > ```sh
-> sudo vim "$(diana config path)"
+> vim "$(diana config path)"
 > ```
 >
 > ```powershell

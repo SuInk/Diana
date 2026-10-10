@@ -259,7 +259,7 @@ func main() {
 	if appCfg.path != "" {
 		log.Printf("config loaded from %s", appCfg.path)
 	} else {
-		log.Printf("no config file found; using built-in defaults (set %s or pass --config)", configPathEnv)
+		log.Print("no config file found; using built-in defaults (pass --config to select a file)")
 	}
 	port := stringOr(appCfg.Server.Port, "18080")
 	host := strings.TrimSpace(appCfg.Server.Host)

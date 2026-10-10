@@ -109,6 +109,15 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Installer regression checks
+        run: |
+          sh -n scripts/install.sh
+          python3 scripts/test_install.py
+
+      - name: PowerShell installer checks
+        shell: pwsh
+        run: ./scripts/test_install.ps1
+
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
@@ -545,7 +554,7 @@ jobs:
             echo "**一键安装（Linux / macOS）**"
             echo
             echo '```sh'
-            echo 'curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.sh | sudo sh'
+            echo 'curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.sh | sh'
             echo '```'
             echo
             echo "**一键安装（Windows PowerShell）**"
