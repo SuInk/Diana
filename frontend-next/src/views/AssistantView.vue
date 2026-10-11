@@ -1483,9 +1483,9 @@
             <div class="card-header">
               <div>
                 <h2>回复口吻</h2>
-                <span class="card-sub">Diana 查事实，MaiBot 负责最后怎么说</span>
+                <span class="card-sub">单独控制最后怎么说，不改变回答内容</span>
               </div>
-              <span class="badge" :class="form.reply_composer === 'maibot' ? 'accent' : ''">{{ form.reply_composer === "maibot" ? "MaiBot" : "跟随 SOUL.md" }}</span>
+              <span class="badge" :class="form.reply_composer === 'maibot' ? 'accent' : ''">{{ form.reply_composer === "maibot" ? "已启用" : "跟随 SOUL.md" }}</span>
             </div>
             <div class="card-body form-grid">
               <div class="field wide">
@@ -1493,20 +1493,20 @@
                   :model-value="form.reply_composer === 'maibot'"
                   @update:model-value="value => { if (form) form.reply_composer = value ? 'maibot' : undefined; }"
                 >
-                  使用 MaiBot 回复风格
+                  单独设置回复口吻
                 </AppSwitch>
-                <span class="hint">Diana 先完成内容判断和工具调用，再把真实聊天、当前回复目标和内容草稿交给 MaiBot 原版 replyer 生成最终说法。不会启用 MaiBot 规划器；已学到的本群说话风格仍会一起生效。</span>
+                <span class="hint">Diana 先完成内容判断和工具调用，再根据下面的口吻整理最终说法。它不会改动事实、结论和必要细节，已学到的本群说话风格仍会一起生效。</span>
               </div>
               <div v-if="form.reply_composer === 'maibot'" class="field wide">
-                <label for="bot-maibot-reply-style">表达偏好</label>
+                <label for="bot-reply-style">回复口吻</label>
                 <textarea
-                  id="bot-maibot-reply-style"
+                  id="bot-reply-style"
                   v-model="form.maibot_reply_style"
                   class="textarea"
                   rows="3"
-                  placeholder="留空使用 MaiBot 默认的简短、随意表达"
+                  placeholder="例如：说得简短一点，像群聊里的自然接话；少用句号，不写括号笑声"
                 ></textarea>
-                <span class="hint">只写“怎么说”，不在这里重复身份和人设。默认让日常短回复不以句号收尾，也不会模仿历史里的“（笑”括号笑声；技术说明、代码、网址、路径和引用仍保留必要标点。</span>
+                <span class="hint">直接写你希望它怎么说，不用重复身份和人设。留空时使用简短、随意的默认口吻；技术说明、代码、网址、路径和引用仍保留必要标点。</span>
               </div>
             </div>
           </section>
