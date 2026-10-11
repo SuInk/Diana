@@ -284,6 +284,8 @@ export interface BotProfileConfig extends SendRetrySettings {
   /** 谁能问出项目开源地址：owner 仅主人（默认）、everyone 所有人。 */
   repository_disclosure?: "owner" | "everyone";
   mention_user_mode?: "on" | "off" | "auto";
+  /** 自动配图发送顺序：before 先发表情（默认）、after 后发表情、auto 由模型决定；不改变是否配图。 */
+  sticker_reply_order?: "before" | "after" | "auto";
   markdown_to_plain?: boolean;
   error_notify_enabled?: boolean;
   /** 机器人在群里被禁言时暂停回复（只记上下文）；缺省开启。 */

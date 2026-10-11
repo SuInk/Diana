@@ -643,6 +643,8 @@ type ChannelStatus struct {
 type EventHandler func(context.Context, MessageEvent) error
 
 type BotConfig struct {
+	StickerReplyOrder StickerReplyOrder `json:"sticker_reply_order,omitempty"`
+
 	ConnectionProfileID         string           `json:"connection_profile_id,omitempty"`
 	ReplyMergeConfidencePercent int              `json:"reply_merge_confidence_percent,omitempty"`
 	ID                          string           `json:"id,omitempty"`
@@ -1274,6 +1276,8 @@ type GroupConfigSet struct {
 }
 
 type ConfigPayload struct {
+	StickerReplyOrder StickerReplyOrder `json:"sticker_reply_order,omitempty"`
+
 	ConnectionProfileID         string          `json:"connection_profile_id,omitempty"`
 	ReplyMergeConfidencePercent int             `json:"reply_merge_confidence_percent,omitempty"`
 	ID                          string          `json:"id,omitempty"`
@@ -2035,6 +2039,7 @@ func (s ProfileSet) WithDefaults() ProfileSet {
 func DefaultBotConfig() BotConfig {
 	// 默认不开启机器人，避免首次启动服务就暴露 OneBot 连接面。
 	return BotConfig{
+		StickerReplyOrder:       StickerReplyOrderBefore,
 		Name:                    DefaultProfileName,
 		Platform:                DefaultPlatform,
 		Enabled:                 false,
@@ -2143,6 +2148,7 @@ func DefaultBotConfig() BotConfig {
 
 // WithDefaults 补齐 OneBot v11 机器人配置默认值。
 func (cfg BotConfig) WithDefaults() BotConfig {
+	cfg.StickerReplyOrder = normalizeStickerReplyOrder(cfg.StickerReplyOrder)
 	cfg.ReplyMergeConfidencePercent = normalizeReplyMergeConfidencePercent(cfg.ReplyMergeConfidencePercent)
 	cfg.Participation = copyParticipation(cfg.Participation)
 	defaults := DefaultBotConfig()
@@ -2627,6 +2633,7 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 	cfg = cfg.WithDefaults()
 	// token 只返回 configured 标志，不把保存的密钥明文暴露给普通配置接口。
 	return ConfigPayload{
+		StickerReplyOrder:           cfg.StickerReplyOrder,
 		ConnectionProfileID:         cfg.ConnectionProfileID,
 		ID:                          cfg.ID,
 		Name:                        cfg.Name,
@@ -2881,6 +2888,7 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		screenshotAccess = payload.AgentBrowserScreenshotAccess.WithDefaults()
 	}
 	cfg := BotConfig{
+		StickerReplyOrder:           payload.StickerReplyOrder,
 		ConnectionProfileID:         strings.TrimSpace(payload.ConnectionProfileID),
 		ID:                          strings.TrimSpace(payload.ID),
 		Name:                        payload.Name,

@@ -143,6 +143,7 @@ const oneBotProfile: BotProfileConfig = {
   reply_composer: "maibot", maibot_reply_style: "", reply_tone_default: FALLBACK_REPLY_TONE,
   debug_mode_enabled: true, bot_reply_loop_detection_enabled: true, reply_refusal_suppression_enabled: true, reply_semantic_dedup_enabled: true, reply_suppression_enabled: true, prompt_inject_time: false,
   proactive_reply_chance: 1, proactive_reply_threshold: 0.9, recent_context_limit: 40, max_reply_chars: 0,
+  sticker_reply_order: "before",
   image_generation_daily_group_limit: 30, image_generation_daily_user_limit: 5,
   video_generation_daily_group_limit: 5, video_generation_daily_user_limit: 1,
   cross_group_memory_enabled: true, world_book_enabled: true, mood_enabled: true, poke_reply_enabled: true, expression_learning_enabled: true, style_filter_enabled: true, dict_segment_enabled: true, semantic_search_enabled: false, agent_enabled: true, agent_mode: "standard", agent_max_steps: 20,
@@ -1527,7 +1528,8 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
   if (path === "/api/assistant/config/defaults" && method === "GET") return json({
     platform: url.searchParams.get("platform") || "onebot-v11", enabled: true, owner_login_enabled: true,
     onebot_transport: "reverse_ws", onebot_reverse_ws_endpoint: "ws://127.0.0.1:18080/onebot/v11/ws",
-    group_triggers: ["Diana", "diana"], private_admission: { mode: "disabled" }, request_timeout_ms: 60000, model_request_timeout_ms: 0, agent_enabled: true, agent_mode: "standard"
+    group_triggers: ["Diana", "diana"], private_admission: { mode: "disabled" }, request_timeout_ms: 60000, model_request_timeout_ms: 0, agent_enabled: true, agent_mode: "standard",
+    sticker_reply_order: "before"
   });
   if (path === "/api/assistant/config" && method === "GET") return json(assistantConfig);
   // 演示站不连腾讯：给一张占位码，第二轮轮询就当作已在手机上确认。
