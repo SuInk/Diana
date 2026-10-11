@@ -5,8 +5,13 @@
   <!-- ToastHost 放在分支外：登录页也会 toast（验证码发送失败、配对过期等），
        挂在 app-shell 里的话锁定状态下根本没挂载，那些提示会全部石沉大海。 -->
   <ToastHost />
+  <div v-if="booting" class="startup-loading" role="status" aria-live="polite">
+    <BrandLogo class="startup-logo" />
+    <span class="startup-spinner" aria-hidden="true" />
+    <p>正在连接 Diana…</p>
+  </div>
   <BackendDownView
-    v-if="!booting && backendDown"
+    v-else-if="backendDown"
     :message="backendDownDetail"
     :retrying="backendRetrying"
     :retry-in-seconds="backendRetryDelay"
@@ -141,7 +146,7 @@
       </header>
 
       <main class="app-content">
-        <section v-if="currentView !== 'admin-chat'" class="scope-context" aria-label="当前平台与机器人">
+        <section v-if="scopeReady && currentView !== 'admin-chat'" class="scope-context" aria-label="当前平台与机器人">
           <div class="scope-identity">
             <span class="badge">{{ scopePlatform }}</span>
             <strong>{{ scopeProfile?.name || (botScope ? "未命名机器人" : "全部机器人") }}</strong>
@@ -151,7 +156,11 @@
           <span v-if="scopeSwitching" class="scope-loading-label" role="status">正在切换…</span>
           <div v-if="scopeSwitching" class="scope-progress" role="progressbar" aria-label="正在加载当前机器人数据"><span /></div>
         </section>
-        <div :aria-busy="scopeSwitching" :inert="scopeSwitching" :class="{ 'scope-content-pending': scopeSwitching }">
+        <div v-if="!scopeReady" class="startup-loading startup-content" role="status" aria-live="polite">
+          <span class="startup-spinner" aria-hidden="true" />
+          <p>正在加载机器人配置…</p>
+        </div>
+        <div v-else :aria-busy="scopeSwitching" :inert="scopeSwitching" :class="{ 'scope-content-pending': scopeSwitching }">
           <KeepAlive :key="botScope" :max="VIEW_CACHE_LIMIT">
             <component :is="activeView" :key="currentView" />
           </KeepAlive>
@@ -312,6 +321,19 @@ let versionBeforeOutage = "";
 // 鉴权状态未知时两边都不渲染：抢先把主界面铺出来会让它的接口拿一串 401，
 // 那些报错会以 toast 的形式留在随后切出来的登录页上。
 const booting = ref(true);
+const scopeReady = ref(false);
+let sessionGeneration = 0;
+let navigationGeneration = 0;
+let updateStartTimer = 0;
+function sessionActive(generation: number): boolean {
+  return generation === sessionGeneration && !locked.value;
+}
+function invalidateSession(): void {
+  sessionGeneration++;
+  scopeReady.value = false;
+  window.clearTimeout(updateStartTimer);
+  window.clearInterval(updateIndicatorTimer);
+}
 const versionOpen = ref(false);
 const systemVersion = ref<SystemVersion | null>(null);
 // 版本号还没加载出来时返回空串，由模板隐藏入口，不显示占位文案。
@@ -367,17 +389,23 @@ const scopeAccount = computed(() => {
   return channel?.self_id || scopeProfile.value?.bot_account;
 });
 
-async function loadBotProfiles(): Promise<void> {
+async function loadBotProfiles(required = false): Promise<void> {
+  if (locked.value || booting.value) return;
+  const generation = sessionGeneration;
   try {
-    const config = await getBotProfileConfig();
+    const config = await getBotProfileConfig(false, required ? 10_000 : 0);
+    if (!sessionActive(generation)) return;
     botProfiles.value = config.profiles?.length ? config.profiles : [config];
     reconcileBotScope(botProfiles.value);
     if (botProfiles.value.length === 1 && botProfiles.value[0]?.id && botScope.value === ALL_PROFILES) {
       setBotScope(botProfiles.value[0].id);
     }
     ensureConcreteGroupScope();
-  } catch {
-    // 取不到配置档时切换器不显示，不影响其它功能。
+    if (required) scopeReady.value = true;
+  } catch (error) {
+    if (required && sessionActive(generation)) {
+      showBackendDown(error instanceof Error ? error.message : "无法加载机器人配置");
+    }
   }
 }
 
@@ -482,52 +510,48 @@ function go(view: ViewID): void {
 const UPDATE_INDICATOR_INTERVAL_MS = 30 * 60 * 1000;
 let updateIndicatorTimer = 0;
 
-async function refreshRuntimeVersion(): Promise<void> {
-  const [healthResult, versionResult] = await Promise.all([
-    getHealth().catch(() => null),
-    getSystemVersion(true).catch(() => null)
-  ]);
-  if (healthResult) health.value = healthResult;
-  if (versionResult) systemVersion.value = versionResult;
+function refreshRuntimeVersion(): void {
+  const generation = sessionGeneration;
+  void getHealth().then((result) => {
+    if (sessionActive(generation)) health.value = result;
+  }).catch(() => undefined);
+  void getSystemVersion(true).then((result) => {
+    if (sessionActive(generation)) systemVersion.value = result;
+  }).catch(() => undefined);
 }
 
 async function refreshUpdateIndicator(): Promise<void> {
+  const generation = sessionGeneration;
+  if (locked.value || booting.value || backendDown.value) return;
   try {
     const result = await checkForUpdate();
-    releaseUpdateAvailable.value = result.update_available;
+    if (sessionActive(generation)) releaseUpdateAvailable.value = result.update_available;
   } catch {
-    // 静默检查只负责黄色提示点，网络异常不打扰控制台操作。
+    // 更新提示失败不打扰当前操作。
   }
 }
 
-// bootApp 在鉴权通过（或未开启鉴权）后加载应用数据。
-async function bootApp(): Promise<void> {
+function bootApp(): void {
+  invalidateSession();
+  const generation = sessionGeneration;
+  const initialNavigation = navigationGeneration;
   startEventStream();
-  const [healthResult, versionResult, config] = await Promise.all([
-    getHealth().catch(() => null),
-    getSystemVersion().catch(() => null),
-    getConfig().catch(() => null),
-    loadBotProfiles()
-  ]);
-  health.value = healthResult;
-  systemVersion.value = versionResult;
-  window.setTimeout(() => {
-    void refreshUpdateIndicator();
-  }, 2500);
-  // 小黄点原来只在启动后查一次：页面挂一天，期间发了新版本也不会亮。
-  // 30 分钟对齐后端 updateCheckInterval 与 Release 缓存，不会额外打 GitHub。
-  window.clearInterval(updateIndicatorTimer);
-  updateIndicatorTimer = window.setInterval(() => {
-    void refreshUpdateIndicator();
-  }, UPDATE_INDICATOR_INTERVAL_MS);
-  // 首次访问且 LLM 未配置时自动进入向导；之后只在总览顶部保留一条引导。
-  if (config && !config.api_key_configured && !window.localStorage.getItem(SETUP_DISMISS_KEY)) {
-    navigate("setup");
-    window.localStorage.setItem(SETUP_DISMISS_KEY, "1");
-  }
+  refreshRuntimeVersion();
+  void loadBotProfiles(true);
+  void getConfig().then((config) => {
+    if (!sessionActive(generation) || initialNavigation !== navigationGeneration) return;
+    if (!config.api_key_configured && !window.localStorage.getItem(SETUP_DISMISS_KEY)) {
+      navigate("setup");
+      window.localStorage.setItem(SETUP_DISMISS_KEY, "1");
+    }
+  }).catch(() => undefined);
+  updateStartTimer = window.setTimeout(() => void refreshUpdateIndicator(), 2500);
+  updateIndicatorTimer = window.setInterval(() => void refreshUpdateIndicator(), UPDATE_INDICATOR_INTERVAL_MS);
 }
 
 async function doLogout(): Promise<void> {
+  locked.value = true;
+  invalidateSession();
   try {
     await logout();
   } finally {
@@ -538,33 +562,37 @@ async function doLogout(): Promise<void> {
 
 function onLoginSuccess(): void {
   locked.value = false;
-  void bootApp();
+  booting.value = false;
+  bootApp();
 }
 
 // 重连即重启：连上之后把版本、运行时长和更新提示一起对齐。
 // 机器人页可能增删配置档，离开时重新取一次，切换器的选项不至于停在旧列表上。
 // 进了小窝的任一档就算看过；离开时不清，免得刚产生的新动静被吞掉。
-watch([currentView, botScope], ([view, scope]) => {
-  if (locked.value) return;
+watch([currentView, botScope, scopeReady, locked, backendDown], ([view, scope]) => {
+  if (booting.value || locked.value || backendDown.value || !scopeReady.value) return;
   if (view === "space" || view === "feed" || view === "self-notes") markSpaceSeen(scope);
   else void refreshSpaceUnread(scope).catch(() => undefined);
 }, { immediate: true });
 
 watch(currentView, (next, previous) => {
+  navigationGeneration++;
+  if (booting.value || locked.value || !scopeReady.value) return;
   if (next === "groups") ensureConcreteGroupScope();
   if (previous === "bot" && next !== "bot") {
     void loadBotProfiles();
   }
-});
+}, { flush: "sync" });
 
 watch(() => stream.connected, (connected, previous) => {
-  if (connected && previous === false && !locked.value && !booting.value) {
+  if (connected && previous === false && !locked.value && !booting.value && !backendDown.value && scopeReady.value) {
     void refreshRuntimeVersion();
     void refreshUpdateIndicator();
   }
 });
 
 function showBackendDown(detail: string): void {
+  invalidateSession();
   backendDownDetail.value = detail;
   backendDown.value = true;
   backendRetrying.value = false;
@@ -588,7 +616,9 @@ function scheduleBackendRetry(): void {
 // 后端要是关了一整天，不该让页面一直高频重试。
 async function retryBackend(): Promise<void> {
   window.clearTimeout(backendRetryTimer);
+  if (backendRetrying.value) return;
   backendRetrying.value = true;
+  const outageVersion = versionBeforeOutage;
   const reachable = await probeAuthStatus();
   backendRetrying.value = false;
   if (reachable) {
@@ -597,8 +627,13 @@ async function retryBackend(): Promise<void> {
     backendUpdating.value = false;
     clearUpdateInstalling();
     // 版本变了就说清楚刚才那下是升级重启，而不是让人以为服务出过问题。
-    const now = systemVersion.value?.version_label ?? "";
-    if (versionBeforeOutage && now && now !== versionBeforeOutage) {
+    const generation = sessionGeneration;
+    const recoveredVersion = !locked.value && outageVersion
+      ? await getSystemVersion(true).catch(() => null) : null;
+    if (!sessionActive(generation)) return;
+    const now = recoveredVersion?.version_label ?? "";
+    if (recoveredVersion) systemVersion.value = recoveredVersion;
+    if (outageVersion && now && now !== outageVersion) {
       toastSuccess(`后端已更新到 ${now}，正在重新载入界面…`);
       versionBeforeOutage = "";
       // 后端换了版本，这个页面跑的却还是更新前那份 JS。前端产物的文件名带内容
@@ -635,14 +670,18 @@ async function retryBackend(): Promise<void> {
 // probeAuthStatus 问一次登录态：连得上就顺手把界面切到该去的地方，返回 false 表示
 // 后端还是够不着。
 async function probeAuthStatus(): Promise<boolean> {
+  const generation = sessionGeneration;
   try {
     const auth = await getAuthStatus();
+    if (generation !== sessionGeneration) return true;
     locked.value = auth.auth_required && !auth.authenticated;
+    booting.value = false;
     if (!locked.value) {
-      await bootApp();
+      bootApp();
     }
     return true;
   } catch (err) {
+    if (generation !== sessionGeneration) return true;
     backendDownDetail.value = err instanceof Error ? err.message : "连不上 Diana 后端服务";
     return false;
   }
@@ -653,6 +692,10 @@ onMounted(async () => {
   // 会话失效时任意接口的 401 会广播这个事件，统一切回登录界面。
   window.addEventListener("diana:unauthorized", () => {
     locked.value = true;
+    booting.value = false;
+    backendDown.value = false;
+    window.clearTimeout(backendRetryTimer);
+    invalidateSession();
   });
   window.addEventListener("diana:open-version", () => {
     versionOpen.value = true;
@@ -667,13 +710,17 @@ onMounted(async () => {
 });
 
 onBeforeUnmount(() => {
+  invalidateSession();
   sidebarMedia.removeEventListener("change", syncSidebarMode);
   window.clearInterval(updateIndicatorTimer);
   window.clearTimeout(backendRetryTimer);
 });
-useConfigurationRefresh(["bot"], loadBotProfiles);
+useConfigurationRefresh(["bot"], () => loadBotProfiles());
 useConfigurationRefresh(["bot", "llm"], async () => {
-  pushStatusSnapshot(await getBotStatus());
+  if (locked.value || booting.value || !scopeReady.value) return;
+  const generation = sessionGeneration;
+  const status = await getBotStatus();
+  if (sessionActive(generation)) pushStatusSnapshot(status);
 });
 
 </script>

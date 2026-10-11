@@ -8,9 +8,28 @@
     <link rel="icon" type="image/svg+xml" href="%BASE_URL%favicon.svg?v=brand-3" />
     <meta name="theme-color" content="#faf7f8" />
     <title>Diana 控制台</title>
+    <style>
+      .startup-loading { min-height: 100vh; min-height: 100dvh; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; box-sizing: border-box; padding: 24px; background: var(--bg, #f7f4f5); color: var(--text-secondary, #574d55); font: 14px/1.6 system-ui, sans-serif; }
+      .startup-loading p { margin: 0; }
+      .startup-logo { width: 104px; height: auto; }
+      .startup-brand { font-size: 28px; font-weight: 600; letter-spacing: 2px; }
+      .startup-content { min-height: 50vh; }
+      .startup-spinner { width: 24px; height: 24px; border: 2px solid var(--border, #dfd7dd); border-top-color: var(--accent, #b14e75); border-radius: 50%; animation: startup-spin .8s linear infinite; }
+      @keyframes startup-spin { to { transform: rotate(360deg); } }
+      @media (prefers-color-scheme: dark) { .startup-loading { background: var(--bg, #16131a); color: var(--text-secondary, #c4bac2); } }
+      @media (prefers-reduced-motion: reduce) { .startup-spinner { animation: none; } }
+      body { margin: 0; }
+    </style>
   </head>
   <body>
-    <div id="app"></div>
+    <div id="app">
+      <div class="startup-loading" role="status" aria-live="polite">
+        <span class="startup-brand">Diana</span>
+        <span class="startup-spinner" aria-hidden="true"></span>
+        <p>正在载入控制台…</p>
+        <noscript>请启用 JavaScript 后使用 Diana 控制台。</noscript>
+      </div>
+    </div>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>
