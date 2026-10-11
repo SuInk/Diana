@@ -389,10 +389,8 @@ func (c *TelegramChannel) SendWithResult(ctx context.Context, msg OutgoingMessag
 		if params2 := telegramEntityParams(entities); len(params2) > 0 {
 			params["entities"] = params2
 		}
-		if replyID := strings.TrimSpace(msg.ReplyMessageID); replyID != "" {
-			params["reply_to_message_id"] = replyID
-			// 被回复的消息可能已删除，这时仍然把消息发出去。
-			params["allow_sending_without_reply"] = true
+		if reply := telegramReplyParameters(msg.ReplyMessageID); reply != nil {
+			params["reply_parameters"] = reply
 		}
 		result, err := c.CallAPI(ctx, "sendMessage", params)
 		if err != nil {
@@ -413,7 +411,7 @@ func (c *TelegramChannel) SendWithResult(ctx context.Context, msg OutgoingMessag
 		keep(result)
 	}
 	for _, video := range msg.VideoURLs {
-		result, err := c.sendMedia(ctx, chatID, msg.MessageThreadID, "sendVideo", "video", video)
+		result, err := c.sendMedia(ctx, chatID, msg.MessageThreadID, "sendVideo", "video", video, msg.ReplyMessageID)
 		if err != nil {
 			return nil, err
 		}
@@ -481,6 +479,35 @@ func (c *TelegramChannel) SendChatAction(ctx context.Context, msg OutgoingMessag
 	return err
 }
 
+func telegramReplyParameters(messageID string) map[string]any {
+	messageID = strings.TrimSpace(messageID)
+	for _, ch := range messageID {
+		if ch < '0' || ch > '9' {
+			return nil
+		}
+	}
+	parsed, err := strconv.ParseInt(messageID, 10, 64)
+	if err != nil || parsed <= 0 {
+		return nil
+	}
+	return map[string]any{"message_id": parsed, "allow_sending_without_reply": true}
+}
+
+func writeTelegramReplyParameters(writer *multipart.Writer, replyIDs ...string) error {
+	if len(replyIDs) == 0 {
+		return nil
+	}
+	reply := telegramReplyParameters(replyIDs[0])
+	if reply == nil {
+		return nil
+	}
+	encoded, err := json.Marshal(reply)
+	if err != nil {
+		return err
+	}
+	return writer.WriteField("reply_parameters", string(encoded))
+}
+
 // sendMedia 发送单个媒体。远程 URL 直接交给 Telegram 去拉，本地文件走
 // multipart 上传——Telegram 拉不到我们本机的 /media/resolver 地址。
 func (c *TelegramChannel) sendMedia(ctx context.Context, chatID, threadID, method, field, source string, replyIDs ...string) (map[string]any, error) {
@@ -491,9 +518,10 @@ func (c *TelegramChannel) sendMedia(ctx context.Context, chatID, threadID, metho
 	path := telegramLocalPath(source)
 	if path == "" {
 		params := map[string]any{"chat_id": chatID, field: source}
-		if len(replyIDs) > 0 && strings.TrimSpace(replyIDs[0]) != "" {
-			params["reply_to_message_id"] = strings.TrimSpace(replyIDs[0])
-			params["allow_sending_without_reply"] = true
+		if len(replyIDs) > 0 {
+			if reply := telegramReplyParameters(replyIDs[0]); reply != nil {
+				params["reply_parameters"] = reply
+			}
 		}
 		if threadID = strings.TrimSpace(threadID); threadID != "" {
 			params["message_thread_id"] = threadID
@@ -536,13 +564,8 @@ func (c *TelegramChannel) uploadMedia(ctx context.Context, method, chatID, threa
 
 	body := &bytes.Buffer{}
 	writer := multipart.NewWriter(body)
-	if len(replyIDs) > 0 && strings.TrimSpace(replyIDs[0]) != "" {
-		if err := writer.WriteField("reply_to_message_id", strings.TrimSpace(replyIDs[0])); err != nil {
-			return nil, err
-		}
-		if err := writer.WriteField("allow_sending_without_reply", "true"); err != nil {
-			return nil, err
-		}
+	if err := writeTelegramReplyParameters(writer, replyIDs...); err != nil {
+		return nil, err
 	}
 	if err := writer.WriteField("chat_id", chatID); err != nil {
 		return nil, err

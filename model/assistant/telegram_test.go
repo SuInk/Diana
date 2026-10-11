@@ -75,6 +75,15 @@ func newFakeTelegramAPI(t *testing.T, replies map[string]any) *fakeTelegramAPI {
 		params := map[string]any{}
 		if r.Header.Get("Content-Type") == "application/json" {
 			_ = json.NewDecoder(r.Body).Decode(&params)
+		} else if strings.HasPrefix(r.Header.Get("Content-Type"), "multipart/form-data") {
+			if err := r.ParseMultipartForm(1 << 20); err != nil {
+				t.Error(err)
+				return
+			}
+			defer r.MultipartForm.RemoveAll()
+			for k, v := range r.MultipartForm.Value {
+				params[k] = v[0]
+			}
 		}
 		api.mu.Lock()
 		api.calls = append(api.calls, telegramCall{Method: method, Params: params})
@@ -222,11 +231,49 @@ func TestTelegramReplyAllowsMissingTarget(t *testing.T) {
 		t.Fatalf("发送失败：%v", err)
 	}
 	params := api.callsOf("sendMessage")[0].Params
-	if params["reply_to_message_id"] != "42" {
-		t.Fatalf("reply_to_message_id 错误：%v", params["reply_to_message_id"])
+	if got := telegramTestReplyID(t, params); got != "42" {
+		t.Fatalf("reply id = %q", got)
 	}
-	if params["allow_sending_without_reply"] != true {
-		t.Fatal("被回复消息不存在时应仍然发送")
+}
+
+func telegramTestReplyID(t *testing.T, params map[string]any) string {
+	t.Helper()
+	for _, key := range []string{"reply_to_message_id", "allow_sending_without_reply"} {
+		if _, ok := params[key]; ok {
+			t.Errorf("legacy field %s present", key)
+		}
+	}
+	value, exists := params["reply_parameters"]
+	if !exists {
+		return ""
+	}
+	if text, ok := value.(string); ok {
+		if err := json.Unmarshal([]byte(text), &value); err != nil {
+			t.Errorf("invalid reply JSON: %v", err)
+			return ""
+		}
+	}
+	reply, ok := value.(map[string]any)
+	if !ok {
+		t.Errorf("reply_parameters must be object: %#v", value)
+		return ""
+	}
+	id, ok := reply["message_id"].(float64)
+	if !ok || id <= 0 || id != float64(int64(id)) || reply["allow_sending_without_reply"] != true || len(reply) != 2 {
+		t.Errorf("bad reply_parameters: %#v", reply)
+		return ""
+	}
+	return fmt.Sprintf("%.0f", id)
+}
+
+func TestTelegramVideoPreservesReplyTarget(t *testing.T) {
+	api := newFakeTelegramAPI(t, nil)
+	if err := api.channel().Send(context.Background(), OutgoingMessage{GroupID: "-10001", ReplyMessageID: "7", VideoURLs: []string{"https://example.com/video.mp4"}}); err != nil {
+		t.Fatal(err)
+	}
+	p := api.callsOf("sendVideo")[0].Params
+	if telegramTestReplyID(t, p) != "7" {
+		t.Fatalf("video lost reply: %#v", p)
 	}
 }
 
@@ -1130,5 +1177,52 @@ func TestTelegramOmitsEntitiesWithoutMentions(t *testing.T) {
 	calls := api.callsOf("sendMessage")
 	if _, has := calls[0].Params["entities"]; has {
 		t.Fatalf("不该出现 entities：%#v", calls[0].Params)
+	}
+}
+
+func TestTelegramReplyParametersAcrossTransports(t *testing.T) {
+	for _, local := range []bool{false, true} {
+		for _, reply := range []string{"7", "", "0", "-7", "im_unknown", "7oops", "9223372036854775808"} {
+			t.Run(fmt.Sprintf("local=%v/reply=%s", local, reply), func(t *testing.T) {
+				api := newFakeTelegramAPI(t, map[string]any{"sendMediaGroup": []map[string]any{{"message_id": 11}, {"message_id": 12}}})
+				source := "https://example.com/media.jpg"
+				if local {
+					source = filepath.Join(t.TempDir(), "media.jpg")
+					if err := os.WriteFile(source, tinyJPEGBytes(t), 0600); err != nil {
+						t.Fatal(err)
+					}
+				}
+				ch := api.channel()
+				msg := OutgoingMessage{GroupID: "-10001", MessageThreadID: "3", ReplyMessageID: reply, Text: "text", ImageURLs: []string{source}, VideoURLs: []string{source}, AudioURLs: []string{source}, Segments: []MessageSegment{{Type: "file", Data: map[string]string{"file": source}}}}
+				if err := ch.Send(context.Background(), msg); err != nil {
+					t.Fatal(err)
+				}
+				for _, media := range []struct{ method, field string }{{"sendAnimation", "animation"}, {"sendSticker", "sticker"}} {
+					if _, err := ch.sendMedia(context.Background(), msg.GroupID, msg.MessageThreadID, media.method, media.field, source, reply); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if err := ch.Send(context.Background(), OutgoingMessage{GroupID: msg.GroupID, MessageThreadID: msg.MessageThreadID, ReplyMessageID: reply, ImageAlbum: true, ImageURLs: []string{source, source}}); err != nil {
+					t.Fatal(err)
+				}
+				for _, method := range []string{"sendMessage", "sendPhoto", "sendVideo", "sendAudio", "sendDocument", "sendAnimation", "sendSticker", "sendMediaGroup"} {
+					calls := api.callsOf(method)
+					if len(calls) != 1 {
+						t.Fatalf("%s calls=%#v", method, calls)
+					}
+					p := calls[0].Params
+					want := ""
+					if reply == "7" {
+						want = "7"
+					}
+					if got := telegramTestReplyID(t, p); got != want {
+						t.Errorf("%s reply=%s want=%s", method, got, want)
+					}
+					if p["chat_id"] != "-10001" || p["message_thread_id"] != "3" {
+						t.Errorf("routing changed: %#v", p)
+					}
+				}
+			})
+		}
 	}
 }

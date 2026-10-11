@@ -64,7 +64,14 @@ func TestTelegramImageRouting(t *testing.T) {
 					return
 				}
 				defer r.MultipartForm.RemoveAll()
-				for key, want := range map[string]string{"chat_id": "-100", "message_thread_id": "7", "reply_to_message_id": "9", "allow_sending_without_reply": "true"} {
+				params := map[string]any{}
+				for k, v := range r.MultipartForm.Value {
+					params[k] = v[0]
+				}
+				if got := telegramTestReplyID(t, params); got != "9" {
+					t.Errorf("reply=%q", got)
+				}
+				for key, want := range map[string]string{"chat_id": "-100", "message_thread_id": "7"} {
 					if got := r.FormValue(key); got != want {
 						t.Errorf("%s = %q, want %q", key, got, want)
 					}
@@ -111,7 +118,7 @@ func TestTelegramRemoteImageRouting(t *testing.T) {
 				t.Fatal(err)
 			}
 			calls := api.callsOf(tc.method)
-			if len(calls) != 1 || calls[0].Params[tc.field] != tc.source || calls[0].Params["reply_to_message_id"] != "2" {
+			if len(calls) != 1 || calls[0].Params[tc.field] != tc.source || telegramTestReplyID(t, calls[0].Params) != "2" {
 				t.Fatalf("calls = %#v", calls)
 			}
 		})
