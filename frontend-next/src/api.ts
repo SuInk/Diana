@@ -1989,11 +1989,14 @@ export function testMusicConnections(
 export function testResolverCredentials(
   settings: Record<string, unknown>,
   clearSecrets: string[] = [],
-  profileID = ""
+  profileID = "",
+  options: { credentialKey?: string; signal?: AbortSignal } = {}
 ): Promise<{ credentials: CredentialCheck[] }> {
-  return requestJSON<{ credentials: CredentialCheck[] }>(`/api/assistant/plugins/resolver/test?profile=${encodeURIComponent(profileID)}`, {
+  const filter = options.credentialKey ? `&credential_key=${encodeURIComponent(options.credentialKey)}` : "";
+  return requestJSON<{ credentials: CredentialCheck[] }>(`/api/assistant/plugins/resolver/test?profile=${encodeURIComponent(profileID)}${filter}`, {
     method: "POST",
-    body: JSON.stringify({ settings, clear_secrets: clearSecrets })
+    body: JSON.stringify({ settings, clear_secrets: clearSecrets }),
+    signal: options.signal
   });
 }
 

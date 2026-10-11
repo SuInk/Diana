@@ -27,17 +27,40 @@ var (
 	xiaohongshuNicknameRegex = regexp.MustCompile(`"userInfo":\{[^{}]*?"nickname":"([^"]*)"`)
 )
 
-// TestCredentials 逐个实测链接解析的登录凭据。请求头和真实解析走同一套拼法
-// （SESSDATA 补字段名、Cookie 清洗、抖音的 uifid 头），测出来好就是解析时真的好。
+// TestCredentials 检查平台账号登录状态及 yt-dlp Cookie 文件格式，不保证完整链接解析成功。
 func (p *ResolverPlugin) TestCredentials(ctx context.Context, settings SettingValues) []CredentialCheck {
+	return p.TestCredentialsForKey(ctx, settings, "")
+}
+
+func IsResolverCredentialKey(key string) bool {
+	switch key {
+	case resolverSettingBiliSessdata, resolverSettingDouyinCookie, resolverSettingXHSCookie, resolverSettingYTDLPCookies:
+		return true
+	default:
+		return false
+	}
+}
+
+// TestCredentialsForKey 只执行指定凭据的检查；空 key 保留全量检测。
+func (p *ResolverPlugin) TestCredentialsForKey(ctx context.Context, settings SettingValues, key string) []CredentialCheck {
 	creds := resolverCredentialsFromSettings(settings)
 	ctx = withResolverCredentials(ctx, creds)
-	return []CredentialCheck{
-		p.checkBilibiliSessdata(ctx, creds.BiliSessdata),
-		p.checkDouyinCookie(ctx),
-		p.checkXiaohongshuCookie(ctx),
-		checkYTDLPCookieFile(creds.YTDLPCookies),
+	probes := []struct {
+		key   string
+		check func() CredentialCheck
+	}{
+		{resolverSettingBiliSessdata, func() CredentialCheck { return p.checkBilibiliSessdata(ctx, creds.BiliSessdata) }},
+		{resolverSettingDouyinCookie, func() CredentialCheck { return p.checkDouyinCookie(ctx) }},
+		{resolverSettingXHSCookie, func() CredentialCheck { return p.checkXiaohongshuCookie(ctx) }},
+		{resolverSettingYTDLPCookies, func() CredentialCheck { return checkYTDLPCookieFile(creds.YTDLPCookies) }},
 	}
+	checks := make([]CredentialCheck, 0, len(probes))
+	for _, probe := range probes {
+		if key == "" || key == probe.key {
+			checks = append(checks, probe.check())
+		}
+	}
+	return checks
 }
 
 func (p *ResolverPlugin) checkBilibiliSessdata(ctx context.Context, sessdata string) CredentialCheck {
@@ -51,21 +74,24 @@ func (p *ResolverPlugin) checkBilibiliSessdata(ctx context.Context, sessdata str
 	headers["Cookie"] = "SESSDATA=" + sessdata
 	status, body, err := fetchCredentialProbe(ctx, p.credentialClient, bilibiliNavURL, headers)
 	var payload struct {
-		Code    int    `json:"code"`
+		Code    *int   `json:"code"`
 		Message string `json:"message"`
 		Data    struct {
-			IsLogin   bool   `json:"isLogin"`
+			IsLogin   *bool  `json:"isLogin"`
 			Uname     string `json:"uname"`
 			VIPStatus int    `json:"vipStatus"`
 		} `json:"data"`
 	}
-	if err != nil || json.Unmarshal([]byte(body), &payload) != nil {
+	if err != nil || status < 200 || status >= 300 || json.Unmarshal([]byte(body), &payload) != nil {
 		return credentialProbeFailed(result, "B 站", status, err)
 	}
-	if !payload.Data.IsLogin {
+	if payload.Code != nil && (*payload.Code == -101 || (*payload.Code == 0 && payload.Data.IsLogin != nil && !*payload.Data.IsLogin)) {
 		result.State = CredentialInvalid
-		result.Message = withCredentialHint("B 站说这份 SESSDATA 没有登录（"+firstNonEmpty(payload.Message, fmt.Sprint(payload.Code))+"），需要重新复制。", pastedCookieNameHint(sessdata, "SESSDATA"))
+		result.Message = withCredentialHint("B 站说这份 SESSDATA 没有登录（"+firstNonEmpty(payload.Message, fmt.Sprint(*payload.Code))+"），需要重新复制。", pastedCookieNameHint(sessdata, "SESSDATA"))
 		return result
+	}
+	if payload.Code == nil || *payload.Code != 0 || payload.Data.IsLogin == nil || !*payload.Data.IsLogin {
+		return credentialProbeFailed(result, "B 站", status, nil)
 	}
 	result.State = CredentialValid
 	result.Account = payload.Data.Uname
@@ -93,13 +119,16 @@ func (p *ResolverPlugin) checkDouyinCookie(ctx context.Context) CredentialCheck 
 			Description string `json:"description"`
 		} `json:"data"`
 	}
-	if err != nil || json.Unmarshal([]byte(body), &payload) != nil {
+	if err != nil || status < 200 || status >= 300 || json.Unmarshal([]byte(body), &payload) != nil {
 		return credentialProbeFailed(result, "抖音", status, err)
 	}
-	if payload.Data.UserID == 0 {
+	if payload.Data.ErrorCode == 13 {
 		result.State = CredentialInvalid
 		result.Message = "抖音说这份 Cookie 没有登录（" + firstNonEmpty(payload.Data.Description, payload.Message) + "），需要重新复制；Cookie 里应当有 sessionid。"
 		return result
+	}
+	if payload.Message != "success" || payload.Data.ErrorCode != 0 || payload.Data.UserID <= 0 {
+		return credentialProbeFailed(result, "抖音", status, nil)
 	}
 	result.State = CredentialValid
 	result.Account = payload.Data.ScreenName
@@ -176,7 +205,10 @@ func credentialProbeFailed(result CredentialCheck, platform string, status int, 
 		result.Message = platform + "账号接口请求失败，暂时判断不了凭据好坏：" + err.Error()
 	case status == http.StatusForbidden || status == http.StatusTooManyRequests:
 		result.Message = fmt.Sprintf("%s账号接口拒绝了请求（HTTP %d），可能是风控，暂时判断不了凭据好坏。", platform, status)
+	case status < 200 || status >= 300:
+		result.Message = fmt.Sprintf("%s账号接口请求失败（HTTP %d），暂时判断不了凭据好坏。", platform, status)
 	default:
+		result.State = CredentialUnverified
 		result.Message = fmt.Sprintf("%s账号接口返回了看不懂的内容（HTTP %d），暂时判断不了凭据好坏。", platform, status)
 	}
 	return result

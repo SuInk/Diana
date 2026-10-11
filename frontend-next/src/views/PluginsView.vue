@@ -236,7 +236,7 @@
     <Modal
       v-if="settingsTarget"
       :title="isGitHubSettings ? 'GitHub 仓库 · 设置' : `${settingsTarget.manifest.name} · 设置`"
-      :wide="settingsTarget.manifest.id === repositoryWatchPluginID || settingsTarget.manifest.id === repositoryPublishPluginID || settingsTarget.manifest.id === rssWatchPluginID || settingsTarget.manifest.id === musicPluginID || settingsTarget.manifest.id === stickerPluginID"
+      :wide="isResolverSettings || settingsTarget.manifest.id === repositoryWatchPluginID || settingsTarget.manifest.id === repositoryPublishPluginID || settingsTarget.manifest.id === rssWatchPluginID || settingsTarget.manifest.id === musicPluginID || settingsTarget.manifest.id === stickerPluginID"
       :fixed-height="isStickerSettings"
       @close="closeSettings"
     >
@@ -381,7 +381,71 @@
           <PluginSettingField v-for="spec in musicGeneralSpecs" :key="spec.key" :spec="spec" :form="settingsForm" />
         </div>
       </template>
-      <div v-if="!isGitHubSettings && !isMusicSettings && !(isStickerSettings && stickerSettingsTab === 'library')" class="stack plugin-settings-form">
+      <template v-if="isResolverSettings">
+        <div class="stack plugin-settings-form">
+          <PluginSettingField v-for="spec in resolverGroups.platforms" :key="spec.key" :spec="spec" :form="settingsForm" />
+        </div>
+        <div class="plugin-settings-section-head plugin-settings-subsection">
+          <h3>平台登录凭据</h3>
+          <p>每次打开设置，会自动访问对应平台账号接口检测已配置的 Cookie 一次；修改后离开输入框也会检测。已配置时留空沿用，点击清除后保存才删除。</p>
+        </div>
+        <div class="resolver-credentials">
+          <section v-for="platform in resolverGroups.credentials" :key="platform.key" class="music-platform-card resolver-credential" :aria-label="`${platform.label}登录凭据`">
+            <div class="music-platform-head">
+              <div>
+                <h4>{{ platform.label }}</h4>
+                <span v-if="!resolverPlatformEnabled(platform.platform)" class="hint">解析已关闭，可提前配置</span>
+              </div>
+              <span class="badge">{{ resolverCredentialSource(resolverInput(platform.key)) }}</span>
+            </div>
+            <PluginSettingField
+              :spec="platform.spec" :form="settingsForm"
+              :clearing="clearSecrets.includes(platform.key)"
+              :secret-configured="secretConfigured(platform.key)"
+              :secret-placeholder="secretPlaceholder(platform.key)"
+              @toggle-clear="toggleClearSecret" @blur="onResolverBlur"
+            />
+            <p v-if="String(settingsForm[platform.key] ?? '').trim() && !clearSecrets.includes(platform.key)" class="hint resolver-draft-hint">检测未保存的输入，保存后才生效。</p>
+            <div class="resolver-check-row">
+              <div class="resolver-check-status" role="status" aria-live="polite">
+                <span class="badge" :class="resolverBadgeClass(platform.key)">{{ clearSecrets.includes(platform.key) ? '待清除，保存后生效' : resolverCheckLabel(resolverChecks.states[platform.key]) }}</span>
+                <p v-if="resolverCheckMessage(platform.key)">{{ resolverCheckMessage(platform.key) }}</p>
+              </div>
+              <button class="btn small" type="button" :data-resolver-test="platform.key" :disabled="!resolverCanTest(platform.key)" @click="resolverChecks.test(platform.key)">
+                <RefreshCw :size="14" :class="{ spin: resolverChecks.states[platform.key].phase === 'checking' }" aria-hidden="true" />
+                {{ resolverChecks.states[platform.key].phase === 'checking' ? '正在检测' : '重新检测' }}
+              </button>
+            </div>
+          </section>
+        </div>
+        <div class="plugin-settings-section-head plugin-settings-subsection">
+          <h3>媒体与发送</h3>
+          <p>控制媒体下载、发送方式、数量与清晰度。</p>
+        </div>
+        <div class="stack plugin-settings-form">
+          <template v-for="spec in resolverGroups.media" :key="spec.key">
+            <PlatformLevelRulesField v-if="spec.type === 'platform_level_rules'" :spec="spec" :model-value="settingsForm[spec.key]" @update:model-value="settingsForm[spec.key] = $event" />
+            <PluginSettingField v-else :spec="spec" :form="settingsForm" />
+          </template>
+        </div>
+        <details class="plugin-settings-section-head plugin-settings-subsection plugin-settings-collapsible resolver-advanced">
+          <summary><h3>高级抓取设置</h3><ChevronDown class="plugin-settings-chevron" :size="15" aria-hidden="true" /></summary>
+          <div class="stack plugin-settings-form">
+            <template v-for="spec in resolverGroups.advanced" :key="spec.key">
+              <PluginSettingField :spec="spec" :form="settingsForm" :clearing="clearSecrets.includes(spec.key)" :secret-configured="secretConfigured(spec.key)" :secret-placeholder="secretPlaceholder(spec.key)" @toggle-clear="toggleClearSecret" />
+              <div v-if="spec.key === 'ytdlp_cookies_path'" class="resolver-check-row resolver-file-check">
+                <div class="resolver-check-status" role="status" aria-live="polite">
+                  <span class="hint">{{ resolverCredentialSource(resolverInput('ytdlp_cookies_path')) }} · 仅检查 Netscape 文件格式，不验证登录状态。</span>
+                  <span class="badge" :class="resolverBadgeClass('ytdlp_cookies_path')">{{ resolverCheckLabel(resolverChecks.states.ytdlp_cookies_path, true) }}</span>
+                  <p v-if="resolverCheckMessage('ytdlp_cookies_path')">{{ resolverCheckMessage('ytdlp_cookies_path') }}</p>
+                </div>
+                <button class="btn small" type="button" :disabled="!resolverCanTest('ytdlp_cookies_path')" @click="resolverChecks.test('ytdlp_cookies_path')">检查文件格式</button>
+              </div>
+            </template>
+          </div>
+        </details>
+      </template>
+      <div v-if="!isGitHubSettings && !isMusicSettings && !isResolverSettings && !(isStickerSettings && stickerSettingsTab === 'library')" class="stack plugin-settings-form">
         <template v-for="spec in visibleSettingsSpecs" :key="spec.key">
           <PlatformLevelRulesField
             v-if="spec.type === 'platform_level_rules'"
@@ -400,27 +464,6 @@
           />
         </template>
       </div>
-      <section v-if="isResolverSettings" class="credential-check">
-        <div class="credential-check-head">
-          <div>
-            <h4>登录凭据自检</h4>
-            <span class="hint">用各平台的账号接口实测，框里还没保存的输入也会一起测。</span>
-          </div>
-          <button class="btn small" type="button" :disabled="testingResolver" @click="testResolverSettings">
-            <RefreshCw :size="14" :class="{ spin: testingResolver }" aria-hidden="true" />
-            {{ testingResolver ? "正在测试" : "测试登录凭据" }}
-          </button>
-        </div>
-        <ul v-if="resolverChecks.length" class="credential-check-list">
-          <li v-for="check in resolverChecks" :key="check.key">
-            <div class="credential-check-row">
-              <strong>{{ check.label }}</strong>
-              <span class="badge" :class="credentialBadgeClass(check.state)">{{ credentialStateLabel(check) }}</span>
-            </div>
-            <p v-if="check.state !== 'unconfigured'">{{ check.message }}</p>
-          </li>
-        </ul>
-      </section>
       <RepositoryWatchManager
         v-if="isGitHubSettings && githubSettingsTab === 'repositories'"
         :default-profile-id="botScope"
@@ -467,11 +510,11 @@
         :prepare-access="saveSettingsForSubscription"
       />
       <template #footer>
-        <button class="btn ghost small plugin-settings-reset" type="button" :disabled="settingsBusy" @click="resetSettings">
+        <button class="btn ghost small plugin-settings-reset" type="button" data-settings-action :disabled="settingsBusy" @click="resetSettings">
           恢复默认
         </button>
-        <button class="btn" type="button" :disabled="settingsBusy" @click="closeSettings">取消</button>
-        <button class="btn primary" type="button" :disabled="settingsBusy" @click="saveSettings">保存</button>
+        <button class="btn" type="button" data-settings-action :disabled="settingsBusy" @click="closeSettings">取消</button>
+        <button class="btn primary" type="button" data-settings-action :disabled="settingsBusy" @click="saveSettings">保存</button>
       </template>
     </Modal>
 
@@ -729,7 +772,7 @@
 
 <script setup lang="ts">
 import { useConfigurationRefresh } from "../configuration-sync";
-import { computed, onActivated, onMounted, ref, watch } from "vue";
+import { computed, onActivated, onDeactivated, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import ExtensionManager from "../components/ExtensionManager.vue";
 const extensionTabs = [{value:'plugins' as const,label:'插件'},{value:'skill' as const,label:'Skills'},{value:'mcp' as const,label:'MCP'}];
 type ExtensionTab = typeof extensionTabs[number]['value'];
@@ -785,6 +828,7 @@ import { navigate, viewQuery } from "../router";
 import { botScope } from "../bot-scope";
 import { extensionLayout, setExtensionLayout } from "../extension-layout";
 import { pluginForBot } from "../plugin-settings";
+import { createResolverCredentialChecks, groupResolverSettings, resolverCredentialSource, resolverCheckLabel, type ResolverCredentialKey } from "../resolver-credentials";
 
 const webSearchPluginID = "official.web-search";
 const plugins = ref<PluginState[]>([]);
@@ -960,8 +1004,44 @@ async function testMusicSettings(): Promise<void> {
 }
 
 const isResolverSettings = computed(() => settingsTarget.value?.manifest.id === resolverPluginID);
-const testingResolver = ref(false);
-const resolverChecks = ref<CredentialCheck[]>([]);
+const resolverGroups = computed(() => groupResolverSettings(settingsSpecs.value));
+function resolverInput(key: ResolverCredentialKey) {
+  const file = key === "ytdlp_cookies_path";
+  return {
+    value: String(settingsForm.value[key] ?? ""),
+    configured: file ? false : secretConfigured(key),
+    clearing: clearSecrets.value.includes(key),
+    savedValue: file ? String(settingsTarget.value?.settings?.[key] ?? "") : undefined,
+  };
+}
+const resolverChecks = createResolverCredentialChecks({
+  input: resolverInput,
+  request: async (key, signal) => {
+    const response = await testResolverCredentials(buildSettingsPayload(), [...clearSecrets.value], "", { credentialKey: key, signal });
+    return response.credentials.find((check) => check.key === key);
+  },
+});
+function resolverPlatformEnabled(platform: string): boolean {
+  return Array.isArray(settingsForm.value.enabled_platforms) && settingsForm.value.enabled_platforms.includes(platform);
+}
+function resolverCanTest(key: ResolverCredentialKey): boolean {
+  const input = resolverInput(key);
+  return !input.clearing && resolverChecks.states[key].phase !== "checking" && Boolean(input.value.trim() || input.configured);
+}
+function resolverBadgeClass(key: ResolverCredentialKey): string {
+  const status = resolverChecks.states[key];
+  return status.phase === "failed" ? "warn" : status.check ? credentialBadgeClass(status.check.state) : "";
+}
+function resolverCheckMessage(key: ResolverCredentialKey): string {
+  const status = resolverChecks.states[key];
+  return status.error ?? status.check?.message ?? "";
+}
+function onResolverBlur(key: string, event: FocusEvent): void {
+  const next = event.relatedTarget;
+  // 操作按钮会先让输入失焦；清除、关闭和保存不能顺带发出检测请求。
+  if (next instanceof Element && (next.closest('[data-secret-clear], [data-settings-action], .modal-header button') || next.closest(`[data-resolver-test="${key}"]`))) return;
+  void resolverChecks.test(key as ResolverCredentialKey, "blur");
+}
 
 const credentialBadgeClasses: Record<CredentialState, string> = {
   valid: "ok",
@@ -1047,22 +1127,6 @@ async function testOneGitHubCredential(input: CredentialTestInput): Promise<Cred
   return response.credentials.find((item) => item.key === key);
 }
 
-async function testResolverSettings(): Promise<void> {
-  testingResolver.value = true;
-  try {
-    const response = await testResolverCredentials(buildSettingsPayload(), clearSecrets.value);
-    resolverChecks.value = response.credentials;
-    const invalid = response.credentials.filter((item) => item.state === "invalid");
-    const valid = response.credentials.filter((item) => item.state === "valid");
-    if (invalid.length > 0) toastError(`${invalid.map((item) => item.label).join("、")} 未登录或已失效`);
-    else if (valid.length > 0) toastSuccess(`${valid.length} 项凭据登录有效`);
-    else toastSuccess("测试完成，没有可实测的已填凭据");
-  } catch (error) {
-    toastError(error instanceof Error ? error.message : "凭据测试失败");
-  } finally {
-    testingResolver.value = false;
-  }
-}
 const repositoryPublishStarSpec = computed(() => repositoryPublishSpecs.value.find((spec) => spec.key === "github_star_enabled"));
 const repositoryPublishTimeoutSpec = computed(() => repositoryPublishSpecs.value.find((spec) => spec.key === "timeout_seconds"));
 const issueEnabledRepositories = computed(() => String(repositoryPublishForm.value.allowed_repositories ?? "").split(/[,;；\n\r]/).map((item) => item.trim()).filter(Boolean));
@@ -1375,10 +1439,15 @@ function openSettings(plugin: PluginState): void {
   credentialTokenDrafts.value = {};
   settingsTarget.value = plugin;
   musicTestResults.value = {};
-  resolverChecks.value = [];
+  resolverChecks.open();
   githubSettingsTab.value = "config";
   stickerSettingsTab.value = "config";
   openedSnapshot.value = settingsSnapshot();
+  if (isResolverSettings.value) {
+    for (const { key } of resolverGroups.value.credentials) {
+      if (resolverInput(key).configured) void resolverChecks.test(key);
+    }
+  }
   if (isGitHubSettings.value) void loadJoinedGroups();
 }
 
@@ -1530,6 +1599,7 @@ function settingsDirty(): boolean {
 }
 
 function discardSettings(): void {
+  resolverChecks.close();
   settingsTarget.value = null;
   settingsForm.value = {};
   repositoryPublishForm.value = {};
@@ -1544,6 +1614,8 @@ function discardSettings(): void {
 async function closeSettings(): Promise<void> {
   // 保存进行中关掉弹窗会让人以为改动没生效，也会把「保存到一半」的状态藏起来。
   if (settingsBusy.value) return;
+  resolverChecks.close();
+  const target = settingsTarget.value;
   if (settingsDirty()) {
     const confirmed = await askConfirm({
       title: "放弃未保存的改动？",
@@ -1551,12 +1623,15 @@ async function closeSettings(): Promise<void> {
       confirmLabel: "放弃改动",
       danger: true,
     });
-    if (!confirmed) return;
+    if (settingsTarget.value !== target) return;
+    if (!confirmed) { resolverChecks.open(); return; }
   }
   discardSettings();
 }
 
 async function resetSettings(): Promise<void> {
+  resolverChecks.close();
+  const target = settingsTarget.value;
   // 「恢复默认」会连凭据列表和仓库绑定一起清空，这是不可逆的，必须先问一句。
   const confirmed = await askConfirm({
     title: "恢复默认设置？",
@@ -1566,6 +1641,8 @@ async function resetSettings(): Promise<void> {
     confirmLabel: "恢复默认",
     danger: true,
   });
+  if (settingsTarget.value !== target) return;
+  resolverChecks.open();
   if (!confirmed) return;
   const form: Record<string, any> = {};
   for (const spec of settingsSpecs.value) {
@@ -1770,18 +1847,21 @@ async function installDependency(dependency: ResolverDependency): Promise<void> 
 }
 
 watch(botScope, () => {
-  settingsTarget.value = null;
+  discardSettings();
   permissionsTarget.value = null;
   dependenciesTarget.value = null;
   exceptionsTarget.value = null;
   plugins.value = [];
   void reload();
-});
+}, { flush: "sync" });
+onDeactivated(() => resolverChecks.close());
+onBeforeUnmount(() => resolverChecks.dispose());
 
 // 页面被 KeepAlive 缓存：从群管理改完群的插件设置切回来时，提示要跟着更新。
 // 首次挂载时 reload 已经取过一次，这里跳过首次激活。
 let activatedOnce = false;
 onActivated(() => {
+  if (isResolverSettings.value) resolverChecks.open();
   if (!activatedOnce) {
     activatedOnce = true;
     return;
