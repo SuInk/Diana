@@ -112,6 +112,10 @@ export async function resolverDemoTestResponse(
     delay = Math.max(delay, fixture?.[2] === "slow" ? 2500 : fixture?.[2] === "fast" ? 100 : 650);
     const result: CredentialCheck = { ...item, configured: true, state: "unverified", message: "演示模式不会检测真实凭据。请使用合成输入 demo-valid、demo-invalid、demo-unverified 或 demo-error；请勿填写真实 Cookie。" };
     const file = item.key === "ytdlp_cookies_path";
+    if (file && !fixture) {
+      result.file_format_checked = false;
+      result.message = "演示模式不会读取真实文件，未执行文件格式检查。请使用 demo-valid、demo-invalid 或 demo-unverified 合成输入。";
+    }
     switch (fixture?.[1]) {
       case "valid":
         result.state = file ? "unverified" : "valid";

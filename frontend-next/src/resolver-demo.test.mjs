@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { mergeResolverDemoSettings, resolverDemoManifest, resolverDemoTestResponse } from "./resolver-demo.ts";
+import { resolverCheckLabel } from "./resolver-credentials.ts";
 
 const keys = ["bili_sessdata", "douyin_cookie", "xhs_cookie", "ytdlp_cookies_path"];
 async function checks(saved = {}, payload = {}, selected = []) {
@@ -92,6 +93,20 @@ test("yt-dlp simulated readable Netscape file never claims a verified login", as
   assert.equal(check.state, "unverified");
   assert.equal(check.account, undefined);
   assert.match(check.message, /Netscape/);
+});
+
+test("an unread demo file is not reported as format-checked, while unverified Netscape results remain compatible", async () => {
+  const [unread] = await checks({}, { settings: { ytdlp_cookies_path: "/synthetic/cookies.txt" } }, ["ytdlp_cookies_path"]);
+  assert.equal(unread.state, "unverified");
+  assert.equal(unread.file_format_checked, false);
+  assert.match(unread.message, /未执行文件格式检查/);
+  assert.equal(resolverCheckLabel({ phase: "done", check: { ...unread, message: "arbitrary message" } }, true), "未执行文件检查");
+  for (const scenario of ["valid", "unverified"]) {
+    const [checked] = await checks({}, { settings: { ytdlp_cookies_path: `demo-${scenario}:fast` } }, ["ytdlp_cookies_path"]);
+    assert.equal(checked.state, "unverified");
+    assert.equal(checked.file_format_checked, undefined);
+    assert.equal(resolverCheckLabel({ phase: "done", check: checked }, true), "文件格式正常");
+  }
 });
 
 test("synthetic slow responses can complete out of order and abort without altering saved settings", async () => {

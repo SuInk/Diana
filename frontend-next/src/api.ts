@@ -1962,6 +1962,7 @@ export interface CredentialCheck {
   state: CredentialState;
   account?: string;
   message: string;
+  file_format_checked?: boolean;
 }
 
 export interface MusicConnectionStatus {

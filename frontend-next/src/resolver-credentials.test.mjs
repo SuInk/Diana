@@ -115,6 +115,36 @@ test("close/reopen, scope switch, deactivation and disposal ignore transports th
   }
 });
 
+test("pause preserves settled results and isolates late success, failure and finally after resume", async () => {
+  for (const reject of [false, true]) {
+    const { inputs, calls, checks } = fixture();
+    const completed = checks.test("douyin_cookie");
+    await tick();
+    calls[0].resolve(result("douyin_cookie"));
+    await completed;
+    inputs[key].value = "synthetic-draft";
+    const old = checks.test(key, "blur");
+    await tick();
+    checks.pause();
+    assert.equal(calls[1].signal.aborted, true);
+    assert.equal(checks.states.douyin_cookie.phase, "done");
+    await checks.test(key);
+    assert.equal(calls.length, 2);
+    checks.resume();
+    const current = checks.test(key, "blur");
+    await tick();
+    reject ? calls[1].reject(new Error("stale failure")) : calls[1].resolve(result(key, "invalid"));
+    await old;
+    assert.equal(checks.states[key].phase, "checking");
+    assert.equal(checks.test(key), current);
+    calls[2].resolve(result(key));
+    await current;
+    assert.equal(checks.states[key].check.state, "valid");
+    assert.equal(checks.states.douyin_cookie.check.state, "valid");
+    checks.dispose();
+  }
+});
+
 test("cancellation before request dispatch makes no network request", async () => {
   const { inputs, calls, checks } = fixture();
   inputs[key].value = "synthetic-draft";

@@ -25,6 +25,7 @@ function editor() {
   const target = ref(null), form = ref({}), clears = ref([]);
   const context = vm.createContext({
     Error, Element: class Element { constructor(selector) { this.selector = selector; } closest(selectors) { return selectors.split(", ").includes(this.selector); } },
+    document: new EventTarget(), window: new EventTarget(), settingsPointerTarget: null,
     settingsTarget: target, settingsForm: form, clearSecrets: clears,
     settingsSpecs: computed(() => target.value?.manifest.settings ?? []),
     repositoryPublishSpecs: ref([]), repositoryPublishTarget: ref(null), repositoryPublishForm: ref({}),
@@ -43,7 +44,7 @@ function editor() {
   context.settingsBusy = computed(() => context.savingSettings.value || context.savingSubscription.value);
   for (const name of ["secretConfigured", "resolverInput"]) runFunction(name, context);
   context.resolverChecks = createResolverCredentialChecks({ input: context.resolverInput, request: (key, signal) => new Promise((resolve, reject) => checks.push({ key, signal, resolve, reject })) });
-  for (const name of ["settingsSnapshot", "settingsDirty", "openSettings", "toggleClearSecret", "discardSettings", "closeSettings", "resetSettings", "buildSettingsPayload", "persistSettings", "saveSettings", "onResolverBlur"]) runFunction(name, context);
+  for (const name of ["settingsSnapshot", "settingsDirty", "openSettings", "toggleClearSecret", "discardSettings", "closeSettings", "resetSettings", "buildSettingsPayload", "persistSettings", "saveSettings", "clearSettingsPointerTarget", "onSettingsPointerDown", "onResolverBlur"]) runFunction(name, context);
   context.openSettings(plugin);
   return { context, checks, saves, notices, plugin };
 }
@@ -92,6 +93,26 @@ test("each real opening checks configured cookies once, even with platforms disa
   c.resolverChecks.dispose();
 });
 
+test("clearing another credential preserves both pending checks and completed results", async () => {
+  const { context: c, checks } = editor();
+  const pending = c.resolverChecks.test(key);
+  await tick();
+  c.toggleClearSecret("xhs_cookie");
+  assert.equal(checks[0].signal.aborted, false);
+  assert.equal(c.resolverChecks.states[key].phase, "checking");
+  assert.equal(c.resolverChecks.test(key), pending);
+  checks[0].resolve(result);
+  await pending;
+  c.toggleClearSecret("xhs_cookie");
+  assert.equal(c.resolverChecks.states[key].phase, "done");
+  assert.equal(c.resolverChecks.states[key].check.state, "valid");
+  c.settingsForm.value.enabled_platforms = [];
+  assert.equal(c.resolverChecks.states[key].phase, "done");
+  c.toggleClearSecret(key);
+  assert.equal(c.resolverChecks.states[key].phase, "pending");
+  c.resolverChecks.dispose();
+});
+
 test("controller resume after a cancelled close does not start another automatic round", async () => {
   const { context: c, checks } = editor();
   await tick();
@@ -103,6 +124,57 @@ test("controller resume after a cancelled close does not start another automatic
   assert.equal(checks[0].signal.aborted, true);
   assert.equal(checks.length, 1);
   c.resolverChecks.dispose();
+});
+
+test("cancelled close and reset preserve completed checks and untouched draft blur eligibility", async () => {
+  for (const action of ["closeSettings", "resetSettings"]) {
+    const { context: c, checks } = editor();
+    const completed = c.resolverChecks.test(key);
+    await tick();
+    checks[0].resolve(result);
+    await completed;
+    c.settingsForm.value.xhs_cookie = "synthetic-unchecked-draft";
+    c.askConfirm = async () => false;
+    await c[action]();
+    assert.equal(c.resolverChecks.states[key].phase, "done");
+    assert.equal(c.resolverChecks.states[key].check.state, "valid");
+    assert.equal(c.settingsForm.value.xhs_cookie, "synthetic-unchecked-draft");
+    c.onResolverBlur("xhs_cookie", { relatedTarget: null });
+    const pending = c.resolverChecks.test("xhs_cookie");
+    await tick();
+    assert.deepEqual(checks.map(check => check.key), [key, "xhs_cookie"]);
+    checks[1].resolve({ ...result, key: "xhs_cookie" });
+    await pending;
+    c.resolverChecks.dispose();
+  }
+});
+
+test("cancelled confirmations abort in-flight probes and allow one resumed draft blur", async () => {
+  for (const action of ["closeSettings", "resetSettings"]) {
+    const { context: c, checks } = editor();
+    c.settingsForm.value[key] = "synthetic-draft";
+    const old = c.resolverChecks.test(key, "blur");
+    await tick();
+    let answer;
+    c.askConfirm = () => new Promise(resolve => { answer = resolve; });
+    const confirming = c[action]();
+    assert.equal(checks[0].signal.aborted, true);
+    await c.resolverChecks.test(key, "blur");
+    assert.equal(checks.length, 1);
+    answer(false);
+    await confirming;
+    const resumed = c.resolverChecks.test(key, "blur");
+    await tick();
+    assert.equal(checks.length, 2);
+    checks[0].resolve({ ...result, state: "invalid" });
+    await old;
+    assert.equal(c.resolverChecks.states[key].phase, "checking");
+    checks[1].resolve(result);
+    await resumed;
+    await c.resolverChecks.test(key, "blur");
+    assert.equal(checks.length, 2);
+    c.resolverChecks.dispose();
+  }
 });
 
 test("actual settings handlers keep failed save draft and close/abort only after successful save", async () => {
@@ -200,6 +272,32 @@ test("blur does not test before destructive or manual actions, but ordinary blur
   checks[0].resolve(result);
   await request;
   c.resolverChecks.dispose();
+});
+
+test("pointer capture suppresses Safari null-target blur only until pointer release or cancellation", async () => {
+  assert.match(source, /@pointerdown="onSettingsPointerDown"/);
+  const modal = readFileSync(new URL("./components/Modal.vue", import.meta.url), "utf8");
+  assert.match(modal, /@pointerdown\.capture="emit\('pointerdown', \$event\)"/);
+  for (const end of ["pointerup", "pointercancel", "window-blur"]) {
+    for (const selector of ["[data-secret-clear]", "[data-settings-action]", ".modal-header button", `[data-resolver-test="${key}"]`]) {
+      const { context: c, checks } = editor();
+      c.settingsForm.value[key] = "synthetic-draft";
+      c.onSettingsPointerDown({ target: new c.Element(selector) });
+      c.onResolverBlur(key, { relatedTarget: null });
+      await tick();
+      assert.equal(checks.length, 0, `${selector}: blur before click dispatched a request`);
+      if (end === "window-blur") c.window.dispatchEvent(new Event("blur"));
+      else c.document.dispatchEvent(new Event(end));
+      assert.equal(c.settingsPointerTarget, null);
+      c.onResolverBlur(key, { relatedTarget: null });
+      const pending = c.resolverChecks.test(key);
+      await tick();
+      assert.equal(checks.length, 1, `${end}: stale target suppressed ordinary blur`);
+      checks[0].resolve(result);
+      await pending;
+      c.resolverChecks.dispose();
+    }
+  }
 });
 
 test("actual scope watcher and KeepAlive/unmount hooks synchronously abort pending checks", async () => {

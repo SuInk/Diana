@@ -60,10 +60,23 @@ export function createResolverCredentialChecks(options: {
   }
 
   const unwatch = resolverCredentialKeys.map((key) => watch(
-    () => { const input = options.input(key); return [input.value, input.clearing, input.configured] as const; },
+    [() => options.input(key).value, () => options.input(key).clearing, () => options.input(key).configured],
     () => { edited.add(key); invalidate(key); },
     { flush: "sync" },
   ));
+
+  function pause() {
+    active = false;
+    generation++;
+    for (const key of requests.keys()) {
+      invalidate(key);
+      attempted.delete(key);
+    }
+  }
+
+  function resume() {
+    active = true;
+  }
 
   function close() {
     active = false;
@@ -110,7 +123,7 @@ export function createResolverCredentialChecks(options: {
     return promise;
   }
 
-  return { states, open, close, test, reset: open, dispose() { close(); unwatch.forEach((stop) => stop()); } };
+  return { states, open, close, pause, resume, test, reset: open, dispose() { close(); unwatch.forEach((stop) => stop()); } };
 }
 
 export function resolverCredentialSource(input: ResolverCredentialInput): string {
@@ -126,6 +139,7 @@ export function resolverCheckLabel(status: ResolverCredentialStatus, file = fals
   if (status.phase === "pending") return "待检测";
   const check = status.check;
   if (!check) return "尚未检测";
+  if (file && check.file_format_checked === false) return "未执行文件检查";
   if (file) return check.state === "unconfigured" ? "未配置文件" : check.state === "error" ? "文件检查失败" : check.state === "invalid" ? "文件格式异常" : "文件格式正常";
   switch (check.state) {
     case "valid": return check.account ? `已登录 · ${check.account}` : "已登录";

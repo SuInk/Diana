@@ -238,6 +238,7 @@
       :title="isGitHubSettings ? 'GitHub 仓库 · 设置' : `${settingsTarget.manifest.name} · 设置`"
       :wide="isResolverSettings || settingsTarget.manifest.id === repositoryWatchPluginID || settingsTarget.manifest.id === repositoryPublishPluginID || settingsTarget.manifest.id === rssWatchPluginID || settingsTarget.manifest.id === musicPluginID || settingsTarget.manifest.id === stickerPluginID"
       :fixed-height="isStickerSettings"
+      @pointerdown="onSettingsPointerDown"
       @close="closeSettings"
     >
       <p class="hint">设置和凭据全局共享；保存或恢复默认会影响使用此插件的所有机器人。</p>
@@ -1036,8 +1037,24 @@ function resolverCheckMessage(key: ResolverCredentialKey): string {
   const status = resolverChecks.states[key];
   return status.error ?? status.check?.message ?? "";
 }
+let settingsPointerTarget: Element | null = null;
+function clearSettingsPointerTarget(): void {
+  settingsPointerTarget = null;
+  document.removeEventListener("pointerup", clearSettingsPointerTarget, true);
+  document.removeEventListener("pointercancel", clearSettingsPointerTarget, true);
+  window.removeEventListener("blur", clearSettingsPointerTarget);
+}
+function onSettingsPointerDown(event: PointerEvent): void {
+  clearSettingsPointerTarget();
+  if (!isResolverSettings.value || !(event.target instanceof Element)) return;
+  settingsPointerTarget = event.target;
+  // 捕获实际点击目标，兼容 Safari 点击按钮时 blur.relatedTarget 为 null。
+  document.addEventListener("pointerup", clearSettingsPointerTarget, true);
+  document.addEventListener("pointercancel", clearSettingsPointerTarget, true);
+  window.addEventListener("blur", clearSettingsPointerTarget);
+}
 function onResolverBlur(key: string, event: FocusEvent): void {
-  const next = event.relatedTarget;
+  const next = settingsPointerTarget ?? event.relatedTarget;
   // 操作按钮会先让输入失焦；清除、关闭和保存不能顺带发出检测请求。
   if (next instanceof Element && (next.closest('[data-secret-clear], [data-settings-action], .modal-header button') || next.closest(`[data-resolver-test="${key}"]`))) return;
   void resolverChecks.test(key as ResolverCredentialKey, "blur");
@@ -1599,6 +1616,7 @@ function settingsDirty(): boolean {
 }
 
 function discardSettings(): void {
+  clearSettingsPointerTarget();
   resolverChecks.close();
   settingsTarget.value = null;
   settingsForm.value = {};
@@ -1614,7 +1632,8 @@ function discardSettings(): void {
 async function closeSettings(): Promise<void> {
   // 保存进行中关掉弹窗会让人以为改动没生效，也会把「保存到一半」的状态藏起来。
   if (settingsBusy.value) return;
-  resolverChecks.close();
+  clearSettingsPointerTarget();
+  resolverChecks.pause();
   const target = settingsTarget.value;
   if (settingsDirty()) {
     const confirmed = await askConfirm({
@@ -1624,13 +1643,14 @@ async function closeSettings(): Promise<void> {
       danger: true,
     });
     if (settingsTarget.value !== target) return;
-    if (!confirmed) { resolverChecks.open(); return; }
+    if (!confirmed) { resolverChecks.resume(); return; }
   }
   discardSettings();
 }
 
 async function resetSettings(): Promise<void> {
-  resolverChecks.close();
+  clearSettingsPointerTarget();
+  resolverChecks.pause();
   const target = settingsTarget.value;
   // 「恢复默认」会连凭据列表和仓库绑定一起清空，这是不可逆的，必须先问一句。
   const confirmed = await askConfirm({
@@ -1642,8 +1662,8 @@ async function resetSettings(): Promise<void> {
     danger: true,
   });
   if (settingsTarget.value !== target) return;
+  if (!confirmed) { resolverChecks.resume(); return; }
   resolverChecks.open();
-  if (!confirmed) return;
   const form: Record<string, any> = {};
   for (const spec of settingsSpecs.value) {
     form[spec.key] = spec.default;
@@ -1854,8 +1874,8 @@ watch(botScope, () => {
   plugins.value = [];
   void reload();
 }, { flush: "sync" });
-onDeactivated(() => resolverChecks.close());
-onBeforeUnmount(() => resolverChecks.dispose());
+onDeactivated(() => { clearSettingsPointerTarget(); resolverChecks.close(); });
+onBeforeUnmount(() => { clearSettingsPointerTarget(); resolverChecks.dispose(); });
 
 // 页面被 KeepAlive 缓存：从群管理改完群的插件设置切回来时，提示要跟着更新。
 // 首次挂载时 reload 已经取过一次，这里跳过首次激活。
