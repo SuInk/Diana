@@ -33,10 +33,11 @@ type typingIndicatorContextKey struct{}
 // 零值不可用，nil 可以安全调用所有方法：平台不支持或开关关掉时直接返回 nil，
 // 调用方不必到处判空。
 type typingIndicator struct {
-	channel     ChatActionChannel
-	message     OutgoingMessage
-	interval    time.Duration
-	callTimeout time.Duration
+	channel       ChatActionChannel
+	message       OutgoingMessage
+	interval      time.Duration
+	callTimeout   time.Duration
+	retryInterval time.Duration
 	// 连续失败上限，0 表示永不放弃。
 	maxFailures int
 
@@ -71,13 +72,14 @@ func (r *Runtime) startTypingIndicator(ctx context.Context, event MessageEvent, 
 		return nil
 	}
 	indicator := &typingIndicator{
-		channel:     channel,
-		message:     routeOutgoingToEvent(event, OutgoingMessage{GroupID: event.GroupID, UserID: event.UserID, MessageThreadID: event.MessageThreadID}),
-		interval:    interval,
-		callTimeout: typingCallTimeout,
-		maxFailures: maxFailures,
-		kick:        make(chan struct{}, 1),
-		done:        make(chan struct{}),
+		channel:       channel,
+		message:       routeOutgoingToEvent(event, OutgoingMessage{GroupID: event.GroupID, UserID: event.UserID, MessageThreadID: event.MessageThreadID}),
+		interval:      interval,
+		callTimeout:   typingCallTimeout,
+		maxFailures:   maxFailures,
+		retryInterval: 2500 * time.Millisecond,
+		kick:          make(chan struct{}, 1),
+		done:          make(chan struct{}),
 	}
 	go func() {
 		defer recoverGoroutinePanic("typing_indicator.go:startTypingIndicator")
@@ -111,7 +113,8 @@ func (t *typingIndicator) run(ctx context.Context) {
 			timer.Reset(t.interval)
 			continue
 		}
-		switch t.refresh(ctx) {
+		result := t.refresh(ctx)
+		switch result {
 		case typingRefreshOK:
 			failures = 0
 		case typingRefreshAborted:
@@ -122,8 +125,16 @@ func (t *typingIndicator) run(ctx context.Context) {
 				return
 			}
 		}
-		timer.Reset(t.interval)
+		timer.Reset(t.retryDelay(result))
 	}
+}
+
+func (t *typingIndicator) retryDelay(result typingRefreshResult) time.Duration {
+	// 正常续刷加快时，仍保留 OneBot 原有的瞬时故障容忍时间。
+	if result == typingRefreshFailed && t.maxFailures > 0 {
+		return max(t.interval, t.retryInterval)
+	}
+	return t.interval
 }
 
 type typingRefreshResult int
