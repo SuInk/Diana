@@ -180,7 +180,7 @@ type PluginState struct {
 
 // ForProfile selects this robot's enabled state; settings are always shared.
 func (s PluginState) ForProfile(profileID string) PluginState {
-	if !s.Manifest.Internal {
+	if !s.Manifest.Internal && s.Manifest.ID != webSearchPluginID {
 		if enabled, ok := s.ProfileEnabled[strings.TrimSpace(profileID)]; ok && strings.TrimSpace(profileID) != "" {
 			s.Enabled = enabled
 		}
@@ -196,7 +196,7 @@ func (m *PluginManager) ProfileOverrides(profileID string) map[string]bool {
 	defer m.mu.RUnlock()
 	out := map[string]bool{}
 	for id, state := range m.states {
-		if enabled, ok := state.ProfileEnabled[strings.TrimSpace(profileID)]; ok && strings.TrimSpace(profileID) != "" && !state.Manifest.Internal {
+		if enabled, ok := state.ProfileEnabled[strings.TrimSpace(profileID)]; ok && strings.TrimSpace(profileID) != "" && !state.Manifest.Internal && id != webSearchPluginID {
 			out[id] = enabled
 		}
 	}
@@ -473,7 +473,7 @@ func (m *PluginManager) ShouldHandleWithOverrides(event MessageEvent, text strin
 		state := m.states[id]
 		enabled := state.Enabled
 		if override, ok := overrides[id]; ok {
-			enabled = override
+			enabled = override && (id != webSearchPluginID || state.Enabled)
 		}
 		trigger, ok := plugin.(DirectTriggerPlugin)
 		if state.Installed && enabled && ok {
@@ -556,7 +556,7 @@ func (m *PluginManager) EnabledWithOverrides(id string, overrides map[string]boo
 		return true
 	}
 	if enabled, overridden := overrides[id]; overridden {
-		return enabled
+		return enabled && (id != webSearchPluginID || state.Enabled)
 	}
 	return state.Enabled
 }
@@ -605,7 +605,7 @@ func (m *PluginManager) PluginWithSettingsForGroup(id string, enabledOverrides m
 	state := m.states[id]
 	enabled := state.Enabled
 	if override, present := enabledOverrides[id]; present {
-		enabled = override
+		enabled = override && (id != webSearchPluginID || state.Enabled)
 	}
 	if !ok || !state.Installed || !enabled {
 		return nil, nil, false
@@ -635,7 +635,7 @@ func (m *PluginManager) ValidateGroupSettingOverrides(overrides PluginSettingOve
 		if !ok {
 			return nil, fmt.Errorf("%w: %s", ErrPluginNotFound, id)
 		}
-		// 联网搜索只在机器人配置里设，群里不再覆盖；旧存档带过来的直接丢弃。
+		// 联网搜索只在全局配置里设，群里不再覆盖；旧存档带过来的直接丢弃。
 		if id == webSearchPluginID {
 			continue
 		}
@@ -685,12 +685,11 @@ func (m *PluginManager) SanitizeGroupSettingOverrides(overrides PluginSettingOve
 // PersistedPluginState 是落库的插件状态，只保存用户改得动的部分。
 //
 // Manifest 由代码声明，启动时按当前版本重建，存一份旧的只会在排查时误导。
-// 全局启用开关同理：WebUI 上的开关一律按机器人来，全局开关既看不到也改不了，
-// 插件的开关都在 ProfileEnabled 里。
+// 普通插件按机器人保存开关；联网搜索使用独立的全局开关。
 type PersistedPluginState struct {
 	Installed bool `json:"installed"`
-	// Enabled 只在升级前的老数据里出现：那时每个插件都存了全局开关，迁移要用它。
-	// 新快照不再写，为空表示按插件自己声明的默认值起步。
+	// Enabled 保存联网搜索全局开关，也兼容升级前普通插件的迁移数据。
+	// 普通插件的新快照不再写，为空表示按插件自己声明的默认值起步。
 	Enabled               *bool                     `json:"enabled,omitempty"`
 	ProfileEnabled        map[string]bool           `json:"profile_enabled,omitempty"`
 	ProfileSettings       map[string]map[string]any `json:"profile_settings,omitempty"`
@@ -704,9 +703,18 @@ type PersistedPluginState struct {
 func (m *PluginManager) Snapshot() map[string]PersistedPluginState {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
+	return m.snapshotLocked()
+}
+
+func (m *PluginManager) snapshotLocked() map[string]PersistedPluginState {
 	out := make(map[string]PersistedPluginState, len(m.states))
 	for id, state := range m.states {
+		var enabled *bool
+		if id == webSearchPluginID {
+			enabled = boolPointer(state.Enabled)
+		}
 		out[id] = PersistedPluginState{
+			Enabled:               enabled,
 			Installed:             state.Installed,
 			ProfileEnabled:        maps.Clone(state.ProfileEnabled),
 			ProfileSettings:       cloneProfileSettings(state.ProfileSettings),
@@ -731,7 +739,7 @@ func (m *PluginManager) Restore(states map[string]PersistedPluginState) {
 		current.Enabled = !current.Manifest.DefaultDisabled
 		if saved, ok := states[id]; ok {
 			current.Installed = saved.Installed
-			if saved.Enabled != nil && !saved.ProfileConfigMigrated {
+			if saved.Enabled != nil && (!saved.ProfileConfigMigrated || id == webSearchPluginID) {
 				// 升级前的数据里，全局开关就是各机器人开关的来源，迁移之前要留着。
 				current.Enabled = *saved.Enabled
 			}
@@ -1055,7 +1063,7 @@ func (m *PluginManager) CanAskAgent(id string, enabledOverrides map[string]bool,
 	state := m.states[id]
 	enabled := state.Enabled
 	if override, overridden := enabledOverrides[id]; overridden {
-		enabled = override
+		enabled = override && (id != webSearchPluginID || state.Enabled)
 	}
 	manifest := withBuiltinPlatformSupport(plugin.Manifest())
 	settings := scopedPluginSettings(state, settingOverrides)
@@ -1087,7 +1095,7 @@ func (m *PluginManager) RunWithGroupOverrides(ctx context.Context, req PluginReq
 		state := m.states[id]
 		enabled := state.Enabled
 		if override, ok := enabledOverrides[id]; ok {
-			enabled = override
+			enabled = override && (id != webSearchPluginID || state.Enabled)
 		}
 		if state.Installed && enabled && pluginSupportsPlatform(state.Manifest, req.Event.Platform) {
 			plugins = append(plugins, runnable{
@@ -1160,7 +1168,7 @@ func (m *PluginManager) RunOneWithGroupOverrides(ctx context.Context, id string,
 	state := m.states[id]
 	enabled := state.Enabled
 	if override, overridden := enabledOverrides[id]; overridden {
-		enabled = override
+		enabled = override && (id != webSearchPluginID || state.Enabled)
 	}
 	settings := scopedPluginSettings(state, settingOverrides)
 	m.mu.RUnlock()
@@ -1205,7 +1213,7 @@ func (m *PluginManager) AgentToolsForPlatformWithGroupOverrides(platform string,
 		state := m.states[id]
 		enabled := state.Enabled
 		if override, ok := enabledOverrides[id]; ok {
-			enabled = override
+			enabled = override && (id != webSearchPluginID || state.Enabled)
 		}
 		if !state.Installed || !enabled || !pluginSupportsPlatform(state.Manifest, platform) {
 			continue
@@ -1259,9 +1267,6 @@ func (m *PluginManager) AgentToolsForPlatformWithGroupOverrides(platform string,
 		}
 		appendTools(item.id, provided)
 	}
-	if !seen[agent.WebSearchToolName] && seen[sandboxedBrowserToolName] && !searchDisabledByOverride(settingOverrides) {
-		appendTools(webSearchPluginID, m.searchEngineFallbackTools(settingOverrides))
-	}
 
 	m.mu.RLock()
 	legacyProviders := make([]AgentToolProviderPlugin, 0)
@@ -1273,7 +1278,7 @@ func (m *PluginManager) AgentToolsForPlatformWithGroupOverrides(platform string,
 		state := m.states[id]
 		enabled := state.Enabled
 		if override, overridden := enabledOverrides[id]; overridden {
-			enabled = override
+			enabled = override && (id != webSearchPluginID || state.Enabled)
 		}
 		if state.Installed && enabled && pluginSupportsPlatform(state.Manifest, platform) {
 			legacyProviders = append(legacyProviders, provider)
@@ -1311,7 +1316,7 @@ func (m *PluginManager) AgentToolOwners(platform string, enabledOverrides map[st
 		m.mu.RUnlock()
 		enabled := state.Enabled
 		if override, ok := enabledOverrides[id]; ok {
-			enabled = override
+			enabled = override && (id != webSearchPluginID || state.Enabled)
 		}
 		if !state.Installed || !enabled || !pluginSupportsPlatform(state.Manifest, platform) {
 			continue
@@ -1340,13 +1345,6 @@ func (m *PluginManager) AgentToolOwners(platform string, enabledOverrides map[st
 		}
 		if len(names) > 0 {
 			owners[id] = names
-		}
-	}
-	// 和 AgentToolsForPlatformWithGroupOverrides 的兜底保持一致：联网搜索关着、网页渲染
-	// 开着时，web_search 仍然算联网搜索插件带来的。
-	if len(owners[webSearchPluginID]) == 0 && slices.Contains(owners[sandboxedBrowserPluginID], sandboxedBrowserToolName) && !searchDisabledByOverride(settingOverrides) {
-		if tools := m.searchEngineFallbackTools(settingOverrides); len(tools) > 0 {
-			owners[webSearchPluginID] = []string{agent.WebSearchToolName}
 		}
 	}
 	return owners
@@ -1407,7 +1405,7 @@ func (m *PluginManager) ObserveEventWithOverrides(ctx context.Context, event Mes
 		observer, ok := plugin.(EventObserverPlugin)
 		enabled := state.Enabled
 		if override, exists := overrides[id]; exists && !state.Manifest.Internal {
-			enabled = override
+			enabled = override && (id != webSearchPluginID || state.Enabled)
 		}
 		if state.Installed && (enabled || state.Manifest.Internal) && ok {
 			observers = append(observers, observerEntry{id: id, observer: observer})
@@ -2257,33 +2255,4 @@ func extractHTMLTitle(html string) string {
 // compactWhitespace 压缩文本中的连续空白。
 func compactWhitespace(text string) string {
 	return strings.Join(strings.Fields(text), " ")
-}
-
-// searchEngineFallbackTools 在联网搜索插件关着、网页渲染开着时，按搜索引擎方式补一个 web_search。
-//
-// 以前这种组合下只剩系统提示词里一句「用 browser_render 打开 Google 搜」，要不要查全凭
-// 模型自觉：09-24 主人为了改走搜索引擎关掉插件之后，「帮我搜索……」零工具直接作答的
-// 情况成批出现，而插件开着的 09-08～09-23 几乎每条都查了。关插件本来就不等于不许搜，
-// 那句提示词照样叫模型去搜——不如把这条路做成同一个常驻的 web_search，来源
-// 校验才认得出它。沿用插件自己的设置（引擎顺序、自定义地址、结果上限），只把方式换成
-// 搜索引擎。要彻底不联网搜索，两个插件都关掉。
-func (m *PluginManager) searchEngineFallbackTools(settingOverrides PluginSettingOverrides) []agent.Tool {
-	m.mu.RLock()
-	plugin, _ := m.catalog[webSearchPluginID].(*WebSearchPlugin)
-	state, installed := m.states[webSearchPluginID]
-	m.mu.RUnlock()
-	if plugin == nil || !installed || !state.Installed {
-		return nil
-	}
-	settings := SettingValues{}
-	for key, value := range scopedPluginSettings(state, settingOverrides) {
-		settings[key] = value
-	}
-	settings[webSearchSettingMode] = webSearchModeEngine
-	tools, err := plugin.AgentTools(settings)
-	if err != nil {
-		log.Printf("diana: search engine fallback: %v", err)
-		return nil
-	}
-	return tools
 }

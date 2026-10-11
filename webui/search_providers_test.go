@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -60,18 +61,16 @@ func TestSearchProviderAPIManagesKeysAndProtectsBindings(t *testing.T) {
 	if rec.Code != http.StatusOK || config.Providers[len(config.Providers)-1].APIKeyConfigured {
 		t.Fatal("clear key failed")
 	}
-	if rec = request(http.MethodDelete, "/api/assistant/search-providers/browser", nil); rec.Code != http.StatusConflict {
+	if rec = request(http.MethodDelete, "/api/assistant/search-providers/browser", nil); rec.Code != http.StatusOK {
 		t.Fatalf("bound delete=%d", rec.Code)
 	}
 	if rec = request(http.MethodDelete, "/api/assistant/search-providers/"+saved.ID, nil); rec.Code != http.StatusOK {
 		t.Fatalf("custom delete=%d %s", rec.Code, rec.Body.String())
 	}
-	if rec = request(http.MethodGet, "/api/assistant/search-providers?profile=unknown", nil); rec.Code != http.StatusNotFound {
+	if rec = request(http.MethodGet, "/api/assistant/search-providers?profile=unknown", nil); rec.Code != http.StatusOK {
 		t.Fatalf("unknown profile=%d", rec.Code)
 	}
-	if err := handler.validateSearchAssignment(&assistant.WebSearchAssignment{ProviderIDs: []string{saved.ID}}); err == nil {
-		t.Fatal("deleted provider accepted")
-	}
+
 }
 
 func TestSearchProviderAPIDoesNotReportSuccessWhenPersistenceFails(t *testing.T) {
@@ -153,5 +152,41 @@ func TestSearchProviderDraftTestUsesStoredKeyWithoutSavingAndReturnsHTTPStatus(t
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"http_status":401`) {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestGlobalSearchAssignmentAPIAndPersistenceRollback(t *testing.T) {
+	m := assistant.NewDefaultPluginManager()
+	runtime := assistant.NewRuntime(assistant.DefaultBotConfig(), fakeChannel{}, m, nil, nil, nil, nil)
+	h := NewBotHandlerWithFactory(context.Background(), runtime, func(assistant.BotConfig) assistant.Channel { return fakeChannel{} })
+	router := botTestRouter(h)
+	request := func(method, body string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(method, "/api/assistant/search-assignment?profile=unknown", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		return rec
+	}
+	if rec := request(http.MethodGet, ""); rec.Code != http.StatusOK {
+		t.Fatalf("get=%d %s", rec.Code, rec.Body.String())
+	}
+	if rec := request(http.MethodPut, `{"provider_ids":["browser"],"disabled":true,"max_results":7}`); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"provider_ids":["browser"]`) {
+		t.Fatalf("put=%d %s", rec.Code, rec.Body.String())
+	}
+	if rec := request(http.MethodPut, `{"provider_ids":[]}`); rec.Code != http.StatusBadRequest {
+		t.Fatalf("empty=%d", rec.Code)
+	}
+	before := m.Snapshot()
+	db, err := storage.NewSQLiteStore(filepath.Join(t.TempDir(), "assignment.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.SetSQLiteStore(db)
+	db.Close()
+	if rec := request(http.MethodPut, `{"provider_ids":["exa"],"max_results":3}`); rec.Code != http.StatusInternalServerError {
+		t.Fatalf("failed persist=%d %s", rec.Code, rec.Body.String())
+	}
+	if !reflect.DeepEqual(before, m.Snapshot()) {
+		t.Fatal("failed persistence changed global runtime")
 	}
 }

@@ -41,7 +41,7 @@ func TestMidStreamFailoverStreamsFromBackup(t *testing.T) {
 	}
 }
 
-// 所有候选都在读流时失败，最多各流一次，然后照旧退回非流式后备链兜底，不会绕圈。
+// 所有候选限流时各尝试一次，不能重新跑非流式链。
 func TestMidStreamFailoverIsBoundedByCandidates(t *testing.T) {
 	primary := &streamRejectionRegistryAdapter{events: midStreamLimitedEvents(), response: "非流式兜底"}
 	backup := &streamRejectionRegistryAdapter{events: midStreamLimitedEvents(), response: "非流式兜底"}
@@ -50,10 +50,7 @@ func TestMidStreamFailoverIsBoundedByCandidates(t *testing.T) {
 	response, err := (&streamingLLMProvider{provider: provider}).Generate(context.Background(), llm.GenerateRequest{
 		Messages: []llm.Message{{Role: llm.RoleUser, Content: "你好"}},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if response == nil || response.Text != "非流式兜底" {
+	if err == nil || response != nil || primary.generateCalls != 0 || backup.generateCalls != 0 {
 		t.Fatalf("response = %#v", response)
 	}
 	if primary.streamCalls != 1 || backup.streamCalls != 1 {
@@ -61,9 +58,8 @@ func TestMidStreamFailoverIsBoundedByCandidates(t *testing.T) {
 	}
 }
 
-// 不能切后备的读流错误（流半路断了这类）多半是流式通道本身的毛病，照旧在同一个
-// 候选上退回非流式，不换模型。
-func TestMidStreamNonFailoverErrorStillRetriesSameCandidate(t *testing.T) {
+// 未向 observer 提交文本时，读流中断可以有限重试后切换候选。
+func TestMidStreamUncommittedFailureRetriesThenSwitches(t *testing.T) {
 	primary := &streamRejectionRegistryAdapter{
 		events:   []llm.ChatEvent{{Type: llm.ChatEventTextDelta, Text: "半"}},
 		response: "主模型非流式",
@@ -77,10 +73,10 @@ func TestMidStreamNonFailoverErrorStillRetriesSameCandidate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if response == nil || response.Text != "主模型非流式" {
+	if response == nil || response.Text != "不应该用到" {
 		t.Fatalf("response = %#v", response)
 	}
-	if backup.streamCalls != 0 || backup.generateCalls != 0 {
+	if primary.streamCalls != 2 || primary.generateCalls != 0 || backup.streamCalls != 1 || backup.generateCalls != 0 {
 		t.Fatalf("不该切后备：backup stream=%d generate=%d", backup.streamCalls, backup.generateCalls)
 	}
 }

@@ -296,7 +296,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 		modelTurns++
 		modelDuration := time.Since(modelStartedAt)
 		if err != nil {
-			if planningExpired && ctx.Err() == nil {
+			if planningExpired && ctx.Err() == nil && !errors.Is(err, llm.ErrOutputCommitted) {
 				finishReason = "finalization_reserved"
 				messages = append(messages, llm.Message{
 					Role:    llm.RoleUser,

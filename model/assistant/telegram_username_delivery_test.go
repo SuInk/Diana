@@ -93,8 +93,11 @@ func TestTelegramDraftWithholdsUnresolvedIdentityAliases(t *testing.T) {
 		"[diana-at:" + alias + "0] hello",
 		"hello im_user_unknown",
 		"hello [diana-at:" + alias[:len(alias)-1],
+		"hello [diana-at:",
 	} {
-		draft.ObserveTextDelta(ctx, text)
+		if draft.ObserveTextDelta(ctx, text) {
+			t.Fatal("withheld updates must not commit the stream")
+		}
 		if calls := api.callsOf("sendMessageDraft"); len(calls) != 0 {
 			t.Fatalf("unresolved alias reached draft API: %#v", calls)
 		}

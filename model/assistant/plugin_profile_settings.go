@@ -50,6 +50,9 @@ func cloneProfileSettings(profiles map[string]map[string]any) map[string]map[str
 }
 
 func scopedPluginSettings(state PluginState, overrides PluginSettingOverrides) SettingValues {
+	if state.Manifest.ID == webSearchPluginID {
+		return effectivePluginSettingsForGroup(state.Manifest.Settings, state.Settings, nil)
+	}
 	profile, _ := overrides[pluginSettingsProfileKey]["profile_id"].(string)
 	state = state.ForProfile(profile)
 	return effectivePluginSettingsForGroup(state.Manifest.Settings, state.Settings, overrides[state.Manifest.ID])
@@ -80,6 +83,14 @@ func (m *PluginManager) MigrateProfileConfigurations(profiles []BotConfig) bool 
 	defer m.mu.Unlock()
 	changed := false
 	for id, state := range m.states {
+		if id == webSearchPluginID {
+			if !state.SharedConfigMigrated || !state.ProfileConfigMigrated {
+				state.SharedConfigMigrated, state.ProfileConfigMigrated = true, true
+				m.states[id] = state
+				changed = true
+			}
+			continue
+		}
 		if state.ProfileConfigMigrated && !state.SharedConfigMigrated {
 			// Keep old per-robot values as a backup. Pick a whole configuration,
 			// never combine credentials belonging to different accounts.

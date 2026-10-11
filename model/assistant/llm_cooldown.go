@@ -4,8 +4,6 @@
 package assistant
 
 import (
-	"context"
-	"errors"
 	"fmt"
 	"log"
 	"regexp"
@@ -17,12 +15,7 @@ import (
 	"github.com/SuInk/diana/model/llm"
 )
 
-// 候选冷却的几档时长。
-//
-// 降级 provider 是每次调用临时建的，它记不住「上一次这个候选刚被限流」，于是每次
-// 调用都从第一个候选开始撞：线上一个配置档连续 3 天回「All accounts limited」，
-// 就白撞了 1100 次、每次还多等一轮重试。冷却表挂在 Runtime 上跨请求保留，挑候选时
-// 把冷却中的挪到最后。
+// 候选健康状态跨请求保留；冷却期跳过，全部冷却时只探测最早恢复的一档。
 const (
 	// llmCooldownDefault 是额度、限流、鉴权这类失败没给等待时间时的冷却。
 	llmCooldownDefault = 60 * time.Second
@@ -47,6 +40,8 @@ type llmCooldownTable struct {
 
 type llmCooldownEntry struct {
 	until       time.Time
+	retainUntil time.Time
+	failures    int
 	lastSkipLog time.Time
 }
 
@@ -61,6 +56,32 @@ func (t *llmCooldownTable) clock() time.Time {
 		return t.now()
 	}
 	return time.Now()
+}
+
+type llmCandidateHealth struct {
+	remaining time.Duration
+	failures  int
+}
+
+func (t *llmCooldownTable) snapshot(profiles []llm.Profile) []llmCandidateHealth {
+	health := make([]llmCandidateHealth, len(profiles))
+	if t == nil {
+		return health
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	now := t.clock()
+	for index, profile := range profiles {
+		entry := t.entries[llmCooldownKey(profile)]
+		if entry == nil || !entry.retainUntil.After(now) {
+			continue
+		}
+		health[index] = llmCandidateHealth{
+			remaining: max(0, entry.until.Sub(now)),
+			failures:  entry.failures,
+		}
+	}
+	return health
 }
 
 // remaining 返回候选还要冷却多久，不在冷却中返回 0。
@@ -97,18 +118,26 @@ func (t *llmCooldownTable) markFailure(profile llm.Profile, err error) (time.Dur
 	if t.entries == nil {
 		t.entries = map[string]*llmCooldownEntry{}
 	}
-	// 顺手清掉过期的，表的大小始终跟配置档数量同级。
+	// 冷却结束仍保留失败次数；长期未访问的状态才被清理。
 	for key, entry := range t.entries {
-		if !entry.until.After(now) {
+		if !entry.retainUntil.After(now) {
 			delete(t.entries, key)
 		}
 	}
 	key := llmCooldownKey(profile)
-	entry, cooling := t.entries[key]
-	if !cooling {
+	entry := t.entries[key]
+	cooling := entry != nil && entry.until.After(now)
+	if entry == nil {
 		entry = &llmCooldownEntry{}
 		t.entries[key] = entry
 	}
+	entry.failures++
+	if llmRetryAfterHint(err) <= 0 {
+		for n := 1; n < entry.failures && duration < llmCooldownMax; n++ {
+			duration = min(duration*2, llmCooldownMax)
+		}
+	}
+	entry.retainUntil = now.Add(24 * time.Hour)
 	if until := now.Add(duration); until.After(entry.until) {
 		entry.until = until
 	}
@@ -126,9 +155,7 @@ func (t *llmCooldownTable) clear(profile llm.Profile) {
 	delete(t.entries, llmCooldownKey(profile))
 }
 
-// order 给出这一轮的尝试顺序：从 start 开始按原顺序轮一圈，冷却中的候选挪到最后，
-// 彼此仍保持原顺序。冷却只调整先后、不剔除候选：全都在冷却时就是原顺序，不能让
-// 冷却把整条链路直接判死；只有一个候选时它也照常被调用。
+// order 在原排序后过滤冷却候选；全部冷却时保留最早恢复的一档。
 func (t *llmCooldownTable) order(group string, count int, start int, profileAt func(int) llm.Profile) []int {
 	ready := make([]int, 0, count)
 	var cooling []int
@@ -138,10 +165,15 @@ func (t *llmCooldownTable) order(group string, count int, start int, profileAt f
 	if start < 0 || start >= count {
 		start = 0
 	}
+	profiles := make([]llm.Profile, count)
+	for index := range profiles {
+		profiles[index] = profileAt(index)
+	}
+	health := t.snapshot(profiles)
 	for offset := 0; offset < count; offset++ {
 		index := (start + offset) % count
-		if t != nil && count > 1 {
-			if t.remaining(profileAt(index)) > 0 {
+		if count > 1 {
+			if health[index].remaining > 0 {
 				cooling = append(cooling, index)
 				continue
 			}
@@ -156,7 +188,16 @@ func (t *llmCooldownTable) order(group string, count int, start int, profileAt f
 			}
 		}
 	}
-	return append(ready, cooling...)
+	if len(ready) > 0 {
+		return ready
+	}
+	earliest := cooling[0]
+	for _, index := range cooling[1:] {
+		if health[index].remaining < health[earliest].remaining {
+			earliest = index
+		}
+	}
+	return []int{earliest}
 }
 
 // skipLogDue 判断这次跳过要不要写日志，同一个候选按 llmCooldownSkipLogInterval 节流。
@@ -203,76 +244,14 @@ func noteLLMCandidateFailure(cooldowns *llmCooldownTable, group string, profile 
 // 时长或上游提示的时长；普通 5xx、连接被拒给很短的冷却。内容拦截、上下文超限、
 // 空输出、单次超时这些跟请求本身有关，不冷却——换一句话它可能就好了。
 func llmCooldownDuration(err error) time.Duration {
-	if err == nil {
-		return 0
-	}
-	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-		return 0
-	}
-	if errors.Is(err, llm.ErrUnverifiedRejection) || errors.Is(err, llm.ErrDecisionRequired) {
-		return 0
-	}
-	if errors.Is(err, errContentPolicyRejection) || isContentPolicyRejection(err) {
-		return 0
-	}
-	if errors.Is(err, llm.ErrCompletionEmpty) || errors.Is(err, llm.ErrCompletionHasNoText) || errors.Is(err, llm.ErrCompletionTruncatedNoText) {
-		return 0
-	}
-	if llm.IsContextOverflowError(err) {
-		return 0
-	}
-	fallback := time.Duration(0)
-	switch {
-	case isRateLimitedLLMError(err), isCredentialRejectedLLMError(err), isModelUnavailableLLMError(err):
-		fallback = llmCooldownDefault
-	case isUpstreamUnavailableLLMError(err):
-		fallback = llmCooldownTransient
-	default:
+	fallback := llmErrorPolicy(err).cooldown
+	if fallback == 0 {
 		return 0
 	}
 	if hint := llmRetryAfterHint(err); hint > 0 {
 		return min(hint, llmCooldownMax)
 	}
 	return fallback
-}
-
-// isRateLimitedLLMError 认出额度、账号池耗尽、限流这类失败。它们短时间内原地重试
-// 没有意义，应当直接切下一个候选。
-func isRateLimitedLLMError(err error) bool {
-	if err == nil {
-		return false
-	}
-	return containsAnyMarker(strings.ToLower(err.Error()), []string{
-		"429", "too many requests",
-		"rate limit", "rate_limit", "ratelimit", "rate-limited", "rate limited",
-		"quota", "insufficient_quota", "resource_exhausted", "resource exhausted",
-		"accounts limited", "account limited", "accounts are limited", "usage limit",
-		"余额不足", "额度", "限流", "请求过于频繁",
-	})
-}
-
-// isCredentialRejectedLLMError 认出密钥失效、未授权这类失败，改配置之前每次都一样。
-func isCredentialRejectedLLMError(err error) bool {
-	if err == nil {
-		return false
-	}
-	return containsAnyMarker(strings.ToLower(err.Error()), []string{
-		"401", "unauthorized", "invalid api key", "invalid_api_key", "incorrect api key",
-		"authentication_error", "未授权",
-	})
-}
-
-// isUpstreamUnavailableLLMError 认出上游 5xx、连接被拒这类偶发失败。超时不算：
-// 大请求撞上单次超时不代表下一个小请求也会超时。
-func isUpstreamUnavailableLLMError(err error) bool {
-	if err == nil {
-		return false
-	}
-	return containsAnyMarker(strings.ToLower(err.Error()), []string{
-		"500 internal server error", "error 500,", "502", "503",
-		"bad gateway", "service unavailable",
-		"connection refused", "connection reset",
-	})
 }
 
 // llmRetryAfterTextPattern 匹配各家写在错误正文里的等待提示：

@@ -61,7 +61,7 @@ func rejectionNoticeStream() []llm.ChatEvent {
 // 非流式路径遇到同一段文案是会切的，流式必须和它一致。
 func TestStreamedRejectionFailsOverToBackup(t *testing.T) {
 	primary := &streamRejectionRegistryAdapter{events: rejectionNoticeStream()}
-	backup := &streamRejectionRegistryAdapter{response: "备用回复"}
+	backup := &streamRejectionRegistryAdapter{events: streamedReplyEvents("备用回复")}
 	provider := streamRejectionProvider(t, primary, backup)
 
 	response, err := (&streamingLLMProvider{provider: provider}).Generate(context.Background(), llm.GenerateRequest{
@@ -73,8 +73,8 @@ func TestStreamedRejectionFailsOverToBackup(t *testing.T) {
 	if response == nil || response.Text != "备用回复" {
 		t.Fatalf("response = %#v", response)
 	}
-	if backup.generateCalls != 1 {
-		t.Fatalf("后备应当被调用一次，实际 %d", backup.generateCalls)
+	if backup.streamCalls != 1 || backup.generateCalls != 0 {
+		t.Fatalf("后备应当被调用一次，实际 %d", backup.streamCalls)
 	}
 	// 刚被拦的候选不能从头再打一遍：拦截是按关键词判的，换成非流式照样被拦，
 	// 只会白白多等一次、多花一次额度。
