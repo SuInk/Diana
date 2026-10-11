@@ -12,7 +12,7 @@ func TestMaiBotStyleUsesOnePassPromptWithoutTakingParticipation(t *testing.T) {
 	runtime := NewRuntime(cfg, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	head, tail := runtime.systemPromptPartsWithRelationshipAndAgentTools(MessageEvent{Kind: EventKindGroup}, nil, false, RelationshipPolicy{}, false, nil)
 	joined := head + "\n" + tail
-	for _, required := range []string{"保留完整身份", maibotreply.DefaultReplyStyle, "最好一次对一个话题进行回复", maiBotCleanVocabulary, maiBotTrailingPeriodPreference} {
+	for _, required := range []string{"保留完整身份", maibotreply.DefaultReplyStyle, "最好一次对一个话题进行回复", maiBotCleanVocabulary, maiBotNoParentheticalLaugh, maiBotTrailingPeriodPreference} {
 		if !strings.Contains(joined, required) {
 			t.Fatalf("prompt lost %q", required)
 		}
