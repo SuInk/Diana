@@ -12,11 +12,9 @@ import (
 )
 
 const (
-	// 平台不会一直显示「正在输入」，过了自己的窗口就自动清掉，所以要在过期前
-	// 反复刷新。刷新间隔按平台窗口取：Telegram 的 chat action 约 5 秒，QQ 没有
-	// 公开时长，取更保守的间隔，代价只有几秒一次扩展调用。
+	// Telegram 的 chat action 约 5 秒过期；QQ 未公开时长，缩短续刷间隔以减少显示空隙。
 	telegramTypingRenewInterval = 4 * time.Second
-	oneBotTypingRenewInterval   = 2500 * time.Millisecond
+	oneBotTypingRenewInterval   = 500 * time.Millisecond
 	// 单次刷新的超时。状态刷新和消息发送、取历史挤在同一条连接上，没有上限时
 	// 一次慢调用就能把刷新拖过平台的过期窗口，界面上就是「正在输入」一闪一闪。
 	typingCallTimeout = 2 * time.Second
@@ -35,10 +33,11 @@ type typingIndicatorContextKey struct{}
 // 零值不可用，nil 可以安全调用所有方法：平台不支持或开关关掉时直接返回 nil，
 // 调用方不必到处判空。
 type typingIndicator struct {
-	channel     ChatActionChannel
-	message     OutgoingMessage
-	interval    time.Duration
-	callTimeout time.Duration
+	channel       ChatActionChannel
+	message       OutgoingMessage
+	interval      time.Duration
+	callTimeout   time.Duration
+	retryInterval time.Duration
 	// 连续失败上限，0 表示永不放弃。
 	maxFailures int
 
@@ -73,13 +72,14 @@ func (r *Runtime) startTypingIndicator(ctx context.Context, event MessageEvent, 
 		return nil
 	}
 	indicator := &typingIndicator{
-		channel:     channel,
-		message:     routeOutgoingToEvent(event, OutgoingMessage{GroupID: event.GroupID, UserID: event.UserID, MessageThreadID: event.MessageThreadID}),
-		interval:    interval,
-		callTimeout: typingCallTimeout,
-		maxFailures: maxFailures,
-		kick:        make(chan struct{}, 1),
-		done:        make(chan struct{}),
+		channel:       channel,
+		message:       routeOutgoingToEvent(event, OutgoingMessage{GroupID: event.GroupID, UserID: event.UserID, MessageThreadID: event.MessageThreadID}),
+		interval:      interval,
+		callTimeout:   typingCallTimeout,
+		maxFailures:   maxFailures,
+		retryInterval: 2500 * time.Millisecond,
+		kick:          make(chan struct{}, 1),
+		done:          make(chan struct{}),
 	}
 	go func() {
 		defer recoverGoroutinePanic("typing_indicator.go:startTypingIndicator")
@@ -113,7 +113,8 @@ func (t *typingIndicator) run(ctx context.Context) {
 			timer.Reset(t.interval)
 			continue
 		}
-		switch t.refresh(ctx) {
+		result := t.refresh(ctx)
+		switch result {
 		case typingRefreshOK:
 			failures = 0
 		case typingRefreshAborted:
@@ -124,8 +125,16 @@ func (t *typingIndicator) run(ctx context.Context) {
 				return
 			}
 		}
-		timer.Reset(t.interval)
+		timer.Reset(t.retryDelay(result))
 	}
+}
+
+func (t *typingIndicator) retryDelay(result typingRefreshResult) time.Duration {
+	// 正常续刷加快时，仍保留 OneBot 原有的瞬时故障容忍时间。
+	if result == typingRefreshFailed && t.maxFailures > 0 {
+		return max(t.interval, t.retryInterval)
+	}
+	return t.interval
 }
 
 type typingRefreshResult int
