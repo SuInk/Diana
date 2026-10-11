@@ -145,14 +145,19 @@ func (r *Runtime) maybeSendPluginFollowUp(ctx context.Context, event MessageEven
 	if !resp.FollowUp {
 		return
 	}
+	typingIndicatorFromContext(ctx).pause()
 	// 可选模型跟评遵守追问发送闸门，不能继承插件事实投递的豁免。
 	ctx = withReplyTriggerGate(ctx)
 	ctx = r.withFileParserVideoLimit(ctx, event)
 	// 跟评有自己的时间预算：解析慢一点就把整条回复链路的超时吃光，
 	// 跟着上游 ctx 一起被取消的话，跟评会毫无规律地时有时无。
-	timeout := r.effectiveConfigForEvent(event).WithDefaults().RequestTimeout
-	ctx, cancel := detachFollowUpContext(ctx, timeout)
+	cfg := r.effectiveConfigForEvent(event).WithDefaults()
+	ctx, cancel := detachFollowUpContext(ctx, cfg.RequestTimeout)
 	defer cancel()
+	// 先静音：跟评可能为空，主回复发完后不应再闪一下「正在输入」。
+	typing := r.startTypingIndicatorMuted(ctx, event, cfg)
+	defer typing.stop()
+	ctx = withTypingIndicator(ctx, typing)
 
 	// 历史可能在发送之前就缓存过，这里强制重读，否则看不到自己刚发的那条。
 	source := event
@@ -163,6 +168,7 @@ func (r *Runtime) maybeSendPluginFollowUp(ctx context.Context, event MessageEven
 	if comment == "" {
 		return
 	}
+	typing.resume()
 	if err := r.sendFollowUp(ctx, followUpKindPlugin, event, comment); err != nil {
 		r.recordFollowUpFailure(ctx, followUpKindPlugin, source, "send", err)
 	}

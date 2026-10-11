@@ -277,14 +277,7 @@ func (s *OneBotReverseServer) CallAPI(ctx context.Context, action string, params
 		"params": params,
 		"echo":   echo,
 	}
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	s.writeMu.Lock()
-	_ = conn.SetWriteDeadline(time.Now().Add(oneBotWriteTimeout))
-	err := conn.WriteJSON(req)
-	s.writeMu.Unlock()
-	if err != nil {
+	if err := writeOneBotJSON(ctx, conn, &s.writeMu, req); err != nil {
 		return nil, err
 	}
 	// 写出去之后才超时或断线，结果不明，见 oneBotAwaitResponse。
