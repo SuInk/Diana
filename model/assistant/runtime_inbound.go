@@ -95,6 +95,20 @@ func (r *Runtime) HandleEvent(ctx context.Context, event MessageEvent) error {
 	if event.Kind != EventKindGroup && event.Kind != EventKindPrivate {
 		return nil
 	}
+	if event.Edited {
+		// Known edits update the current message revision and stop here. Running
+		// governance, pairing, plugins, direct-address tracking, or sender-turn
+		// registration again would treat one transport message as a second user
+		// action. If the original was never seen, continue through the ordinary
+		// path so admission and every first-message side effect still apply once.
+		known, err := r.refreshKnownInboundMessageEdit(event)
+		if err != nil {
+			return err
+		}
+		if known {
+			return nil
+		}
+	}
 	if r.members != nil {
 		r.members.Observe(event)
 	}
@@ -157,6 +171,37 @@ func (r *Runtime) HandleEvent(ctx context.Context, event MessageEvent) error {
 		return nil
 	}
 	return r.startReplyWorker(ctx, prepared, text, outcome)
+}
+
+func (r *Runtime) refreshKnownInboundMessageEdit(event MessageEvent) (bool, error) {
+	r.mu.RLock()
+	store, _ := r.inboundStore.(InboundMessageEditStore)
+	r.mu.RUnlock()
+	if store == nil {
+		return false, nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	result, err := store.RefreshInboundMessageEdit(ctx, sessionKey(event), event, r.inboundPriority(event))
+	cancel()
+	if err != nil {
+		return false, err
+	}
+	if !result.Found {
+		return false, nil
+	}
+	if result.Applied {
+		current := result.Event
+		if strings.TrimSpace(current.MessageID) == "" {
+			current = event
+		}
+		current.EditRefreshOnly = true
+		current.durableSession = strings.TrimSpace(result.Session)
+		current = r.refreshRememberedMessageEdit(current, result.Session)
+		// Keep semantic lookup ordered behind any earlier embedding job for the
+		// original revision. Edited short/empty text is queued as an invalidation.
+		r.enqueueSemanticIndexForSession(current, result.Session)
+	}
+	return true, nil
 }
 
 // bindInboundEventIdentity restores Diana's internal routing identity when a

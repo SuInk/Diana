@@ -203,10 +203,28 @@ type MessageEvent struct {
 	// GroupName 是收到这条消息时平台给出的群名称。OneBot 可以随时用
 	// get_group_list 问到群名，Telegram、钉钉这些没有「列出我加入的群」的平台
 	// 只能靠消息自带的标题；控制台的群管理页要靠它显示名字而不是一串 ID。
-	GroupName        string           `json:"group_name,omitempty"`
-	MessageThreadID  string           `json:"message_thread_id,omitempty"`
-	MessageID        string           `json:"message_id,omitempty"`
-	MessageSeq       string           `json:"message_seq,omitempty"`
+	GroupName       string `json:"group_name,omitempty"`
+	MessageThreadID string `json:"message_thread_id,omitempty"`
+	MessageID       string `json:"message_id,omitempty"`
+	MessageSeq      string `json:"message_seq,omitempty"`
+	// Edited marks a platform edit of an existing message. Time remains the
+	// original send time; EditTime is the platform-provided revision time.
+	Edited   bool  `json:"edited,omitempty"`
+	EditTime int64 `json:"edit_time,omitempty"`
+	// TelegramUpdateID uniquely identifies a Telegram update. edit_date has only
+	// second precision, so this breaks ties between edits delivered in the same
+	// active update stream. It is not the primary clock: Telegram may randomize
+	// the next ID after a week without updates.
+	TelegramUpdateID int64 `json:"telegram_update_id,omitempty"`
+	// EditRefreshOnly distinguishes an edit that replaced a message Diana had
+	// already cached from an edit received as the first visible revision. The
+	// former updates indexes without triggering a new embedding; the latter
+	// follows the ordinary first-message pipeline.
+	EditRefreshOnly bool `json:"edit_refresh_only,omitempty"`
+	// durableSession is set by a claimed queue item when its row still lives in
+	// a legacy namespace. It is runtime-only routing state and never leaves the
+	// process in transport payloads.
+	durableSession   string
 	MessageType      string           `json:"message_type,omitempty"`
 	RawMessage       string           `json:"raw_message,omitempty"`
 	Segments         []MessageSegment `json:"segments,omitempty"`
@@ -324,8 +342,11 @@ type OutgoingMessage struct {
 	MessageThreadID string
 	UserID          string
 	Text            string
-	Segments        []MessageSegment
-	ImageURLs       []string
+	// LiteralText keeps cached user-authored text from being interpreted as
+	// Diana reply/mention controls or Telegram Markdown during disclosure.
+	LiteralText bool
+	Segments    []MessageSegment
+	ImageURLs   []string
 	// ImageLabels 与 ImageURLs 一一对应，给控制台的事件记录标出每张图是什么
 	// （比如哪个表情包）；不发给平台。
 	ImageLabels          []string

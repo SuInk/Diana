@@ -78,7 +78,9 @@ func (p *MessageHistoryPlugin) RecallDisclosureResponse(ctx context.Context, cha
 	p.mu.RLock()
 	memoryRecalls := append([]MessageEvent(nil), p.recalls[event.GroupID]...)
 	p.mu.RUnlock()
-	recalls := mergeRecallRecords(recallRecordsForGroup(recallEvents, event.GroupID), memoryRecalls)
+	persistedRecalls := recallEventsForScope(recallRecordsForGroup(recallEvents, event.GroupID), event)
+	memoryRecalls = recallEventsForScope(memoryRecalls, event)
+	recalls := mergeRecallRecords(persistedRecalls, memoryRecalls)
 	referenceTime := recallReferenceTime(event.Time, recalls)
 	recalls = recentRecallRecords(recalls, referenceTime, recallDefaultWindow)
 	if len(recalls) == 0 {
@@ -348,11 +350,12 @@ func formatRecallRecords(recalls []MessageEvent, referenceTime int64) string {
 		location = profileLocation(recalls[0].ProfileID)
 	}
 	blocks = append(blocks, strings.Join([]string{
-		"最近24小时群撤回消息时间线（结构化事实，仅包含该时间窗口；按撤回时间从旧到新）：",
+		"最近24小时群撤回消息时间线（结构化事实，仅包含该时间窗口；按记录时间从旧到新）：",
 		"时间窗口=" + formatRecallTime(windowStart, location) + " 至 " + formatRecallTime(referenceTime, location),
 		fmt.Sprintf("记录总数=%d", len(recalls)),
 		"回复要求=根据当前用户的问题直接生成最终回复，不得猜测，也不要声称看不到撤回内容。",
-		"字段顺序=序号|撤回时间|原消息发送时间|原消息ID|原消息发送者|被@对象|执行撤回者|执行者身份|结论",
+		"字段顺序=序号|记录时间|原消息发送时间|原消息ID|原消息发送者|被@对象|执行撤回者|执行者身份|结论",
+		"时间语义=实时平台通知的记录时间是撤回时间；Telegram 按需探测的记录时间只是发现消息已不可访问的时间，实际删除时间未知。",
 		"每条数据的下一行“原消息完整内容=”保存对应原文；字段名只声明一次以避免重复消耗上下文。",
 		"图片说明=优先使用已缓存的图片内容描述；标记为附件的图片按附件编号与下方多模态图片从1开始一一对应，必须查看对应图片后再描述。",
 	}, "\n"))
@@ -467,6 +470,9 @@ func formatRecallIdentity(name, id string) string {
 }
 
 func recallConclusionText(record MessageEvent) string {
+	if strings.EqualFold(strings.TrimSpace(record.OperatorRole), telegramRecallProbeOperatorRole) {
+		return "Telegram 按需探测确认消息在查询时已不可访问；实际删除时间、操作者和原因均未知"
+	}
 	if strings.EqualFold(strings.TrimSpace(record.OperatorRole), historyBackfillOperatorRole) {
 		return "断线回补确认消息已撤回；实际撤回时间和操作者无法从历史接口恢复"
 	}
@@ -489,6 +495,9 @@ func recallConclusionText(record MessageEvent) string {
 }
 
 func recallOperatorRoleText(record MessageEvent) string {
+	if strings.EqualFold(strings.TrimSpace(record.OperatorRole), telegramRecallProbeOperatorRole) {
+		return "Telegram 按需探测（操作者未知）"
+	}
 	if strings.EqualFold(strings.TrimSpace(record.OperatorRole), historyBackfillOperatorRole) {
 		return "断线回补（操作者未知）"
 	}
@@ -657,6 +666,43 @@ func recallRecordsForGroup(events []MessageEvent, groupID string) []MessageEvent
 	return out
 }
 
+// recallEventsForScope keeps recall records owned by one concrete bot binding.
+// Telegram message IDs are shared by every bot in the same chat, so group ID
+// alone is not an identity boundary when multiple profiles join that chat.
+func recallEventsForScope(events []MessageEvent, current MessageEvent) []MessageEvent {
+	out := make([]MessageEvent, 0, len(events))
+	for _, event := range events {
+		if sameRecallScope(current, event) {
+			out = append(out, event)
+		}
+	}
+	return out
+}
+
+func sameRecallScope(current, record MessageEvent) bool {
+	if strings.TrimSpace(current.GroupID) != strings.TrimSpace(record.GroupID) {
+		return false
+	}
+	currentPlatform, recordPlatform := strings.TrimSpace(current.Platform), strings.TrimSpace(record.Platform)
+	if NormalizePlatformID(currentPlatform) == PlatformTelegram || NormalizePlatformID(recordPlatform) == PlatformTelegram {
+		return NormalizePlatformID(currentPlatform) == PlatformTelegram &&
+			NormalizePlatformID(recordPlatform) == PlatformTelegram &&
+			strings.TrimSpace(current.ProfileID) != "" &&
+			strings.TrimSpace(current.ProfileID) == strings.TrimSpace(record.ProfileID) &&
+			strings.TrimSpace(current.SelfID) != "" &&
+			strings.TrimSpace(current.SelfID) == strings.TrimSpace(record.SelfID)
+	}
+	if currentPlatform != "" && recordPlatform != "" && NormalizePlatformID(currentPlatform) != NormalizePlatformID(recordPlatform) {
+		return false
+	}
+	currentProfile, recordProfile := strings.TrimSpace(current.ProfileID), strings.TrimSpace(record.ProfileID)
+	if currentProfile != "" && recordProfile != "" && currentProfile != recordProfile {
+		return false
+	}
+	currentSelf, recordSelf := strings.TrimSpace(current.SelfID), strings.TrimSpace(record.SelfID)
+	return currentSelf == "" || recordSelf == "" || currentSelf == recordSelf
+}
+
 func mergeRecallRecords(groups ...[]MessageEvent) []MessageEvent {
 	merged := make([]MessageEvent, 0)
 	indexes := map[string]int{}
@@ -675,9 +721,6 @@ func mergeRecallRecords(groups ...[]MessageEvent) []MessageEvent {
 }
 
 func recallReferenceTime(currentTime int64, recalls []MessageEvent) int64 {
-	if currentTime > 0 {
-		return currentTime
-	}
 	for _, record := range recalls {
 		if record.Time > currentTime {
 			currentTime = record.Time
@@ -709,6 +752,9 @@ func recentRecallRecords(recalls []MessageEvent, referenceTime int64, window tim
 
 func recallRecordKey(event MessageEvent) string {
 	if messageID := strings.TrimSpace(event.MessageID); messageID != "" {
+		// RecallDisclosureResponse filters every input list to one bot scope before
+		// merging. Keeping the legacy key here also deduplicates old OneBot rows
+		// that predate ProfileID/SelfID fields against their in-memory copy.
 		return event.GroupID + "|" + messageID
 	}
 	return fmt.Sprintf("%s|%s|%d|%s", event.GroupID, event.UserID, event.Time, strings.TrimSpace(event.RawMessage))
@@ -773,8 +819,9 @@ func (s *recallDisclosureSink) add(response PluginResponse) {
 	s.responses = append(s.responses, response)
 }
 
-// drain 取走已收集的响应。同一轮里模型可能多次调用工具，这里只保留第一次：撤回
-// 记录在一轮内不会变，重复投递会把同一张转发卡片发好几遍。
+// drain 取走已收集的响应。同一轮里模型可能多次调用工具，这里只保留最后一次：
+// Telegram 主动探测可能在后一次调用里新增记录，而每次响应都包含当时窗口内的
+// 全部已知记录。保留最新快照既避免重复投递，也不会丢掉后续发现的原文。
 func (s *recallDisclosureSink) drain() []PluginResponse {
 	if s == nil {
 		return nil
@@ -784,7 +831,7 @@ func (s *recallDisclosureSink) drain() []PluginResponse {
 	responses := s.responses
 	s.responses = nil
 	if len(responses) > 1 {
-		responses = responses[:1]
+		responses = responses[len(responses)-1:]
 	}
 	return responses
 }

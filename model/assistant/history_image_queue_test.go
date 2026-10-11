@@ -19,6 +19,7 @@ func bigInlineImageEvent(t *testing.T) MessageEvent {
 			{Type: "text", Data: map[string]string{"text": "看这张"}},
 			{Type: "image", Data: map[string]string{
 				imageContentSHA256Key: strings.Repeat("ab", 32),
+				"file_unique_id":      "stable-telegram-image",
 				"cached_file":         "/var/lib/diana/media/abc.png",
 				"file":                payload,
 				"url":                 payload,
@@ -73,6 +74,9 @@ func TestStrippedSegmentKeepsHashAndSource(t *testing.T) {
 	}
 	if source := firstImageSource(stripped); source != "/var/lib/diana/media/abc.png" {
 		t.Fatalf("削完定位不到图片：%q", source)
+	}
+	if got := stripped.Data["file_unique_id"]; got != "stable-telegram-image" {
+		t.Fatalf("削完丢了平台稳定图片标识：%q", got)
 	}
 	for _, key := range []string{"file", "url"} {
 		if strings.Contains(stripped.Data[key], "base64") {

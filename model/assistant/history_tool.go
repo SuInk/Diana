@@ -65,12 +65,22 @@ type dianaChatHistoryResult struct {
 	Limited           bool                   `json:"limited,omitempty"`
 	// NextFromTime 在时间段没读完时给出续读起点，让模型能一段段读完再总结。
 	NextFromTime int64 `json:"next_from_time,omitempty"`
+	// TelegramRecallProbe explains the bounded active check used because the
+	// ordinary Bot API does not push deletion updates for normal group chats.
+	TelegramRecallProbe *telegramRecallProbeSummary `json:"telegram_recall_probe,omitempty"`
 }
 
 type dianaChatHistoryItem struct {
 	MessageID               string                 `json:"message_id,omitempty"`
 	Time                    int64                  `json:"event_time,omitempty"`
 	LocalTime               string                 `json:"local_time,omitempty"`
+	OriginalTime            int64                  `json:"original_event_time,omitempty"`
+	OriginalLocalTime       string                 `json:"original_local_time,omitempty"`
+	DiscoveredAt            int64                  `json:"discovered_at,omitempty"`
+	DiscoveredLocalTime     string                 `json:"discovered_local_time,omitempty"`
+	TimeSemantics           string                 `json:"time_semantics,omitempty"`
+	OperatorRole            string                 `json:"operator_role,omitempty"`
+	Status                  string                 `json:"status,omitempty"`
 	Sender                  string                 `json:"sender"`
 	TextTruncated           bool                   `json:"text_truncated,omitempty"`
 	MediaDetailsOmitted     bool                   `json:"media_details_omitted,omitempty"`
@@ -117,22 +127,54 @@ func (t *dianaChatHistoryTool) recalls(ctx context.Context, input map[string]any
 	if !ok {
 		return dianaChatHistoryResult{}, fmt.Errorf("消息历史插件未启用，无法读取撤回记录")
 	}
+	platform := t.runtime.currentPlatform(t.event)
+	disclosureEvent := t.event
+	disclosureEvent.Platform = firstNonEmpty(disclosureEvent.Platform, platform)
+	var telegramProbe *telegramRecallProbeSummary
+	if platform == PlatformTelegram {
+		// Older queued/manual events may omit binding fields even though a single
+		// configured profile identifies them unambiguously. Resolve the scope once
+		// and use it for probing, persistence, and disclosure filtering.
+		t.event.Platform = PlatformTelegram
+		t.event.ProfileID = firstNonEmpty(strings.TrimSpace(t.event.ProfileID), t.runtime.eventProfileID(t.event))
+		t.event.SelfID = firstNonEmpty(strings.TrimSpace(t.event.SelfID), t.runtime.botSelfAccount(t.event))
+		if strings.TrimSpace(t.event.ContextNamespace) == "" {
+			t.event.ContextNamespace = t.event.ProfileID
+		}
+		disclosureEvent = t.event
+		probe := t.probeTelegramRecalls(ctx, input)
+		telegramProbe = &probe
+	}
 	t.runtime.mu.RLock()
 	channel := t.runtime.channel
 	t.runtime.mu.RUnlock()
+	// Telegram identities already come from the cached event. The plugin's
+	// optional channel lookup is a OneBot get_group_member_info call and must not
+	// be sent to Telegram (or accidentally routed to OneBot in MultiChannel).
+	if platform == PlatformTelegram {
+		channel = nil
+	}
 	response, recalls, referenceTime := plugin.RecallDisclosureResponse(
-		ctx, channel, t.event, t.runtime.contextHistory(t.event), t.runtime.recallHistory(t.event))
+		ctx, channel, disclosureEvent, t.runtime.contextHistory(disclosureEvent), t.runtime.recallHistory(disclosureEvent))
 	if response == nil {
 		return dianaChatHistoryResult{}, fmt.Errorf("撤回记录只在群聊中可用")
+	}
+	if telegramProbe != nil {
+		telegramProbe.KnownRecallCount = len(recalls)
 	}
 	// 交回本轮，由回复阶段沿用原有的转发卡片与自动撤回投递。
 	t.recallSink.add(*response)
 	if len(recalls) == 0 {
+		message := "最近 24 小时没有记录到群消息撤回。"
+		if telegramProbe != nil {
+			message = telegramRecallProbeMessage(*telegramProbe)
+		}
 		return dianaChatHistoryResult{
-			OK:      true,
-			Action:  "recalls",
-			Message: "最近 24 小时没有记录到群消息撤回。",
-			Items:   []dianaChatHistoryItem{},
+			OK:                  true,
+			Action:              "recalls",
+			Message:             message,
+			Items:               []dianaChatHistoryItem{},
+			TelegramRecallProbe: telegramProbe,
 		}, nil
 	}
 	// 线上：一天里攒了 40 条撤回，工具按时间升序给出，输出预算从尾部裁，
@@ -149,20 +191,35 @@ func (t *dianaChatHistoryTool) recalls(ctx context.Context, input map[string]any
 	}
 	items := t.items(ctx, t.runtime.enrichRecallImageDescriptions(ctx, t.event, newestFirst))
 	message := fmt.Sprintf("已读取本群最近 24 小时的 %d 条撤回记录，最新的在前。", len(items))
+	if telegramProbe != nil {
+		message = fmt.Sprintf("已读取本群最近 24 小时的 %d 条消息不可访问记录，最新的在前。", len(items))
+		message = telegramRecallProbeMessage(*telegramProbe) + " " + message
+	}
 	if total > len(items) {
 		message += fmt.Sprintf("另有 %d 条更早的没有列出，需要时把 limit 调大再查一次。", total-len(items))
 	}
-	message += "你只需要围绕它们写一句说明，不要逐条复述，也要讲清这些消息已被撤回。"
-	if normalizeRecallReplyMode(t.runtime.effectiveConfigForEvent(t.event).RecallReplyMode) == RecallReplyModeOriginalForward {
-		message += "原文将在本轮回复时另行以合并转发卡片发出。"
+	recallReplyMode := normalizeRecallReplyMode(t.runtime.effectiveConfigForEvent(t.event).RecallReplyMode)
+	if platform == PlatformTelegram {
+		message += "这些记录只证明消息在探测时已不可访问。"
+		if recallReplyMode == RecallReplyModeOriginalForward {
+			message += "完整缓存原文和可用媒体会在本轮以普通 Telegram 消息另行发出；最终回复只需简短说明，并明确实际删除时间、操作者和原因未知。"
+		} else {
+			message += "当前配置只发送模型摘要；请在最终回复中引用或概述 items 里的缓存内容，并明确实际删除时间、操作者和原因未知。"
+		}
+	} else {
+		message += "你只需要围绕它们写一句说明，不要逐条复述，也要讲清这些消息已被撤回。"
+		if recallReplyMode == RecallReplyModeOriginalForward {
+			message += "原文将在本轮回复时另行以合并转发卡片发出。"
+		}
 	}
 	return dianaChatHistoryResult{
-		OK:      true,
-		Action:  "recalls",
-		Message: message,
-		Window:  chatHistoryWindowLabel(referenceTime-int64(recallDefaultWindow/time.Second), referenceTime, profileLocation(t.event.ProfileID)),
-		Items:   items,
-		Total:   total,
+		OK:                  true,
+		Action:              "recalls",
+		Message:             message,
+		Window:              chatHistoryWindowLabel(referenceTime-int64(recallDefaultWindow/time.Second), referenceTime, profileLocation(t.event.ProfileID)),
+		Items:               items,
+		Total:               total,
+		TelegramRecallProbe: telegramProbe,
 	}, nil
 }
 
@@ -817,6 +874,17 @@ func chatHistoryItem(event MessageEvent, configs ...BotConfig) dianaChatHistoryI
 	}
 	if event.Time > 0 {
 		item.LocalTime = time.Unix(event.Time, 0).In(profileLocation(event.ProfileID)).Format("2006-01-02 15:04:05 -07:00")
+	}
+	item.OperatorRole = strings.TrimSpace(event.OperatorRole)
+	if event.OriginalTime > 0 {
+		item.OriginalTime = event.OriginalTime
+		item.OriginalLocalTime = time.Unix(event.OriginalTime, 0).In(profileLocation(event.ProfileID)).Format("2006-01-02 15:04:05 -07:00")
+	}
+	if strings.EqualFold(item.OperatorRole, telegramRecallProbeOperatorRole) {
+		item.DiscoveredAt = event.Time
+		item.DiscoveredLocalTime = item.LocalTime
+		item.TimeSemantics = "event_time_is_probe_discovery_time"
+		item.Status = "unavailable_at_probe"
 	}
 	item.TextTruncated = item.Text != strings.TrimSpace(historyToolEventText(event))
 	for _, segment := range event.Segments {

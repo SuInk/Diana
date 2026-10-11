@@ -8,7 +8,6 @@ import (
 	"database/sql"
 	"encoding/binary"
 	"encoding/json"
-	"errors"
 	"math"
 	"sort"
 	"strings"
@@ -98,18 +97,37 @@ func (s *SQLiteStore) SaveMessageEventVector(ctx context.Context, session string
 	if session == "" || messageID == "" || model == "" || len(vector) == 0 {
 		return nil
 	}
-	var id string
-	err := s.eventReader().QueryRowContext(ctx, `SELECT id FROM message_events WHERE session = ? AND message_id = ? ORDER BY created_at DESC LIMIT 1`,
-		session, messageID).Scan(&id)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil
-		}
-		return err
-	}
-	_, err = s.db.ExecContext(ctx, `INSERT INTO `+messageHistoryVectorTable+` (id, model, vector) VALUES (?, ?, ?)
+	// The revision predicate and vector write are one SQLite statement. If an
+	// older embedding finishes after a known edit, it cannot recreate the stale
+	// vector; if it wins first, the edit transaction's delete runs afterward.
+	_, err := s.db.ExecContext(ctx, `INSERT INTO `+messageHistoryVectorTable+` (id, model, vector)
+SELECT id, ?, ?
+FROM message_events
+WHERE session = ? AND message_id = ?
+  AND COALESCE(json_extract(payload, '$.edit_refresh_only'), 0) = 0
+ORDER BY created_at DESC
+LIMIT 1
 ON CONFLICT(id) DO UPDATE SET model=excluded.model, vector=excluded.vector`,
-		id, model, encodeMessageVector(vector))
+		model, encodeMessageVector(vector), session, messageID)
+	return err
+}
+
+// DeleteMessageEventVector removes every vector attached to the current
+// session/message identity. Edits enqueue this on the same worker as vector
+// writes, so an older embedding that was already in flight cannot recreate a
+// stale vector after the edit has invalidated it.
+func (s *SQLiteStore) DeleteMessageEventVector(ctx context.Context, session, messageID string) error {
+	defer s.observeStorage(ctx, "DeleteMessageEventVector", "write")()
+	if s == nil || s.db == nil || !s.historyVectors {
+		return nil
+	}
+	session = strings.TrimSpace(session)
+	messageID = strings.TrimSpace(messageID)
+	if session == "" || messageID == "" {
+		return nil
+	}
+	_, err := s.db.ExecContext(ctx, `DELETE FROM `+messageHistoryVectorTable+`
+WHERE id IN (SELECT id FROM message_events WHERE session = ? AND message_id = ?)`, session, messageID)
 	return err
 }
 
@@ -129,7 +147,13 @@ func (s *SQLiteStore) SearchMessageEventsByVector(ctx context.Context, query ass
 		return nil, nil
 	}
 	limit := normalizeMessageHistoryLimit(query.Limit)
-	where := `v.model = ? AND e.kind != ? AND e.event_time BETWEEN ? AND ?`
+	// A known edit marks its row before the best-effort physical vector delete.
+	// Filtering the row here closes the commit/crash and delete-failure windows:
+	// an old vector can remain on disk temporarily, but it cannot be recalled.
+	where := `v.model = ?
+AND e.kind != ?
+AND COALESCE(json_extract(e.payload, '$.edit_refresh_only'), 0) = 0
+AND e.event_time BETWEEN ? AND ?`
 	args := []any{query.Model, string(assistant.EventKindNotice), query.FromTime, query.ThroughTime}
 	if query.CrossSession {
 		where += ` AND e.session LIKE ? ESCAPE '\'`

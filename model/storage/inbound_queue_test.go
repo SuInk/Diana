@@ -5,6 +5,7 @@ package storage
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"reflect"
@@ -110,6 +111,658 @@ func TestInboundQueueDeduplicatesAcrossContextNamespaces(t *testing.T) {
 	}
 	if inboundRows != 1 || historyRows != 1 {
 		t.Fatalf("deduplicated rows inbound=%d history=%d", inboundRows, historyRows)
+	}
+}
+
+func TestInboundQueueEditRefreshesPendingHistoryAndPayload(t *testing.T) {
+	ctx := context.Background()
+	store := openInboundTestStore(t, filepath.Join(t.TempDir(), "pending-edit.db"))
+	defer func() { _ = store.Close() }()
+
+	original := telegramInboundTestEvent("message-edit-pending", "before edit", 100)
+	id, inserted, err := store.EnqueueInboundEvent(ctx, "group:1", original)
+	if err != nil || !inserted {
+		t.Fatalf("enqueue original id=%q inserted=%v err=%v", id, inserted, err)
+	}
+
+	edited := telegramInboundTestEvent("message-edit-pending", "after edit", 100)
+	edited.Edited = true
+	edited.EditTime = 150
+	editedID, inserted, err := store.EnqueueInboundEvent(ctx, "group:1", edited)
+	if err != nil || inserted || editedID != id {
+		t.Fatalf("enqueue edit id=%q inserted=%v err=%v, want existing id=%q", editedID, inserted, err, id)
+	}
+	if count := pendingInboundCount(t, store); count != 1 {
+		t.Fatalf("pending count=%d, want 1", count)
+	}
+
+	history, ok, err := store.FindMessageEvent(ctx, "group:1", original.MessageID)
+	if err != nil || !ok {
+		t.Fatalf("find edited history ok=%v err=%v", ok, err)
+	}
+	assertEditedInboundEvent(t, history, "after edit", 150)
+
+	item, ok, err := store.ClaimNextInboundEvent(ctx, "worker-edit", time.Now().Add(time.Minute))
+	if err != nil || !ok {
+		t.Fatalf("claim edited pending event ok=%v err=%v", ok, err)
+	}
+	if item.ID != id {
+		t.Fatalf("claimed id=%q, want %q", item.ID, id)
+	}
+	assertEditedInboundEvent(t, item.Event, "after edit", 150)
+}
+
+func TestInboundQueueEditRefreshesCompletedHistoryWithoutReopening(t *testing.T) {
+	ctx := context.Background()
+	store := openInboundTestStore(t, filepath.Join(t.TempDir(), "completed-edit.db"))
+	defer func() { _ = store.Close() }()
+
+	original := telegramInboundTestEvent("message-edit-done", "before edit", 200)
+	id, inserted, err := store.EnqueueInboundEvent(ctx, "group:1", original)
+	if err != nil || !inserted {
+		t.Fatalf("enqueue original id=%q inserted=%v err=%v", id, inserted, err)
+	}
+	item, ok, err := store.ClaimNextInboundEvent(ctx, "worker-done", time.Now().Add(time.Minute))
+	if err != nil || !ok || item.ID != id {
+		t.Fatalf("claim original item=%#v ok=%v err=%v", item, ok, err)
+	}
+	if err := store.CompleteInboundEvent(ctx, id, "worker-done", "handled"); err != nil {
+		t.Fatal(err)
+	}
+
+	edited := telegramInboundTestEvent("message-edit-done", "after completion", 200)
+	edited.Edited = true
+	edited.EditTime = 260
+	editedID, inserted, err := store.EnqueueInboundEvent(ctx, "group:1", edited)
+	if err != nil || inserted || editedID != id {
+		t.Fatalf("enqueue completed edit id=%q inserted=%v err=%v, want existing id=%q", editedID, inserted, err, id)
+	}
+	if count := pendingInboundCount(t, store); count != 0 {
+		t.Fatalf("completed edit reopened queue: pending count=%d", count)
+	}
+	if next, ok, err := store.ClaimNextInboundEvent(ctx, "worker-next", time.Now().Add(time.Minute)); err != nil || ok {
+		t.Fatalf("completed edit became claimable: item=%#v ok=%v err=%v", next, ok, err)
+	}
+
+	history, ok, err := store.FindMessageEvent(ctx, "group:1", original.MessageID)
+	if err != nil || !ok {
+		t.Fatalf("find edited history ok=%v err=%v", ok, err)
+	}
+	assertEditedInboundEvent(t, history, "after completion", 260)
+
+	var status, outcome, queuePayload string
+	var attempts int
+	if err := store.db.QueryRowContext(ctx, `SELECT status, outcome, attempts, payload FROM inbound_events WHERE id = ?`, id).Scan(&status, &outcome, &attempts, &queuePayload); err != nil {
+		t.Fatal(err)
+	}
+	if status != inboundStatusDone || outcome != "handled" || attempts != 1 {
+		t.Fatalf("completed queue state changed: status=%q outcome=%q attempts=%d", status, outcome, attempts)
+	}
+	var queued assistant.MessageEvent
+	if err := json.Unmarshal([]byte(queuePayload), &queued); err != nil {
+		t.Fatal(err)
+	}
+	if queued.Edited || queued.RawMessage != "before edit" {
+		t.Fatalf("completed queue payload changed after history-only edit: %+v", queued)
+	}
+}
+
+func TestInboundQueueAcceptsEditAsFirstSeenMessage(t *testing.T) {
+	ctx := context.Background()
+	store := openInboundTestStore(t, filepath.Join(t.TempDir(), "first-seen-edit.db"))
+	defer func() { _ = store.Close() }()
+
+	edited := telegramInboundTestEvent("message-first-seen-edit", "first seen after edit", 300)
+	edited.Edited = true
+	edited.EditTime = 350
+	id, inserted, err := store.EnqueueInboundEvent(ctx, "group:1", edited)
+	if err != nil || !inserted {
+		t.Fatalf("first-seen edit id=%q inserted=%v err=%v", id, inserted, err)
+	}
+	if count := pendingInboundCount(t, store); count != 1 {
+		t.Fatalf("pending count=%d, want 1", count)
+	}
+
+	item, ok, err := store.ClaimNextInboundEvent(ctx, "worker-first-seen", time.Now().Add(time.Minute))
+	if err != nil || !ok || item.ID != id {
+		t.Fatalf("claim first-seen edit item=%#v ok=%v err=%v", item, ok, err)
+	}
+	assertEditedInboundEvent(t, item.Event, "first seen after edit", 350)
+}
+
+func TestAppendMessageEventCannotRestoreClaimedSnapshotAfterEdit(t *testing.T) {
+	ctx := context.Background()
+	store := openInboundTestStore(t, filepath.Join(t.TempDir(), "processing-edit.db"))
+	defer func() { _ = store.Close() }()
+
+	session := "group:1"
+	original := telegramInboundTestEvent("message-edit-processing", "worker snapshot", 400)
+	id, inserted, err := store.EnqueueInboundEvent(ctx, session, original)
+	if err != nil || !inserted {
+		t.Fatalf("enqueue original id=%q inserted=%v err=%v", id, inserted, err)
+	}
+	claimed, ok, err := store.ClaimNextInboundEvent(ctx, "worker-processing", time.Now().Add(time.Minute))
+	if err != nil || !ok || claimed.ID != id {
+		t.Fatalf("claim original item=%#v ok=%v err=%v", claimed, ok, err)
+	}
+
+	edited := telegramInboundTestEvent(original.MessageID, "current edited text", original.Time)
+	edited.Edited = true
+	edited.EditTime = 450
+	refresh, err := store.RefreshInboundMessageEdit(ctx, session, edited)
+	if err != nil || !refresh.Found || !refresh.Applied || refresh.EventID != id {
+		t.Fatalf("refresh edit=%+v err=%v", refresh, err)
+	}
+	// 模拟已经持有旧 processing 快照的 worker 完成预处理后再次记历史。
+	if err := store.AppendMessageEvent(ctx, session, claimed.Event); err != nil {
+		t.Fatal(err)
+	}
+
+	history, found, err := store.FindMessageEvent(ctx, session, original.MessageID)
+	if err != nil || !found {
+		t.Fatalf("find history found=%v err=%v", found, err)
+	}
+	assertEditedInboundEvent(t, history, "current edited text", 450)
+
+	var status, queuePayload string
+	if err := store.db.QueryRowContext(ctx, `SELECT status, payload FROM inbound_events WHERE id = ?`, id).Scan(&status, &queuePayload); err != nil {
+		t.Fatal(err)
+	}
+	var queued assistant.MessageEvent
+	if err := json.Unmarshal([]byte(queuePayload), &queued); err != nil {
+		t.Fatal(err)
+	}
+	if status != inboundStatusProcessing || queued.Edited || queued.RawMessage != "worker snapshot" {
+		t.Fatalf("processing snapshot changed after edit: status=%q event=%+v", status, queued)
+	}
+}
+
+func TestInboundQueueOrdersEditedRevisionsByEditTime(t *testing.T) {
+	ctx := context.Background()
+	store := openInboundTestStore(t, filepath.Join(t.TempDir(), "edit-order.db"))
+	defer func() { _ = store.Close() }()
+
+	session := "group:1"
+	original := telegramInboundTestEvent("message-edit-order", "original", 500)
+	if _, inserted, err := store.EnqueueInboundEvent(ctx, session, original); err != nil || !inserted {
+		t.Fatalf("enqueue original inserted=%v err=%v", inserted, err)
+	}
+
+	edit := func(text string, editTime int64) assistant.MessageEvent {
+		event := telegramInboundTestEvent(original.MessageID, text, original.Time)
+		event.Edited = true
+		event.EditTime = editTime
+		return event
+	}
+	latest := edit("newer revision", 560)
+	refresh, err := store.RefreshInboundMessageEdit(ctx, session, latest)
+	if err != nil || !refresh.Found || !refresh.Applied {
+		t.Fatalf("apply latest refresh=%+v err=%v", refresh, err)
+	}
+	stale := edit("stale revision", 559)
+	refresh, err = store.RefreshInboundMessageEdit(ctx, session, stale)
+	if err != nil || !refresh.Found || refresh.Applied {
+		t.Fatalf("stale refresh=%+v err=%v, want found but ignored", refresh, err)
+	}
+	history, found, err := store.FindMessageEvent(ctx, session, original.MessageID)
+	if err != nil || !found {
+		t.Fatalf("find after stale edit found=%v err=%v", found, err)
+	}
+	assertEditedInboundEvent(t, history, "newer revision", 560)
+
+	// Telegram 的 edit_date 只有秒级精度，同一秒后到的 revision 仍要覆盖。
+	sameSecond := edit("same-second later arrival", 560)
+	refresh, err = store.RefreshInboundMessageEdit(ctx, session, sameSecond)
+	if err != nil || !refresh.Found || !refresh.Applied {
+		t.Fatalf("same-second refresh=%+v err=%v, want applied", refresh, err)
+	}
+	history, found, err = store.FindMessageEvent(ctx, session, original.MessageID)
+	if err != nil || !found {
+		t.Fatalf("find same-second edit found=%v err=%v", found, err)
+	}
+	assertEditedInboundEvent(t, history, "same-second later arrival", 560)
+}
+
+func TestInboundQueueOrdersSameSecondEditsByTelegramUpdateID(t *testing.T) {
+	ctx := context.Background()
+	store := openInboundTestStore(t, filepath.Join(t.TempDir(), "edit-update-order.db"))
+	defer func() { _ = store.Close() }()
+
+	session := "group:1"
+	original := telegramInboundTestEvent("message-edit-update-order", "original", 500)
+	if _, inserted, err := store.EnqueueInboundEvent(ctx, session, original); err != nil || !inserted {
+		t.Fatalf("enqueue original inserted=%v err=%v", inserted, err)
+	}
+	edit := func(text string, updateID int64) assistant.MessageEvent {
+		event := telegramInboundTestEvent(original.MessageID, text, original.Time)
+		event.Edited = true
+		event.EditTime = 560
+		event.TelegramUpdateID = updateID
+		return event
+	}
+
+	first := edit("first same-second revision", 100)
+	firstRefresh, err := store.RefreshInboundMessageEdit(ctx, session, first)
+	if err != nil || !firstRefresh.Applied {
+		t.Fatalf("apply first edit refresh=%+v err=%v", firstRefresh, err)
+	}
+	// Inbound redelivery of the same update is a duplicate, while the worker that
+	// claimed that exact durable revision may still append its derived fields.
+	if refresh, err := store.RefreshInboundMessageEdit(ctx, session, first); err != nil || !refresh.Found || refresh.Applied {
+		t.Fatalf("same update retry refresh=%+v err=%v, want ignored", refresh, err)
+	}
+	workerRevision := firstRefresh.Event
+	workerRevision.SenderName = "enriched sender"
+	if durable, written, err := store.AppendMessageEventRevision(ctx, session, workerRevision); err != nil || !written || durable.SenderName != workerRevision.SenderName {
+		t.Fatalf("same revision worker append durable=%+v written=%v err=%v", durable, written, err)
+	}
+	latest := edit("latest same-second revision", 101)
+	if refresh, err := store.RefreshInboundMessageEdit(ctx, session, latest); err != nil || !refresh.Applied {
+		t.Fatalf("apply latest edit refresh=%+v err=%v", refresh, err)
+	}
+	stale := edit("stale same-second revision", 100)
+	if refresh, err := store.RefreshInboundMessageEdit(ctx, session, stale); err != nil || !refresh.Found || refresh.Applied {
+		t.Fatalf("stale same-second refresh=%+v err=%v, want found but ignored", refresh, err)
+	}
+
+	current, found, err := store.FindMessageEvent(ctx, session, original.MessageID)
+	if err != nil || !found {
+		t.Fatalf("find latest same-second edit found=%v err=%v", found, err)
+	}
+	if current.RawMessage != latest.RawMessage || current.TelegramUpdateID != latest.TelegramUpdateID {
+		t.Fatalf("current revision=%+v, want update_id=%d text=%q", current, latest.TelegramUpdateID, latest.RawMessage)
+	}
+
+	// A worker that claimed either the original payload or an older edit before
+	// update 101 arrived must receive the durable revision instead of overwriting it.
+	for _, workerSnapshot := range []assistant.MessageEvent{stale, original} {
+		durable, written, err := store.AppendMessageEventRevision(ctx, session, workerSnapshot)
+		if err != nil {
+			t.Fatalf("append worker snapshot update_id=%d: %v", workerSnapshot.TelegramUpdateID, err)
+		}
+		if written {
+			t.Fatalf("stale worker snapshot update_id=%d overwrote the durable edit", workerSnapshot.TelegramUpdateID)
+		}
+		if durable.RawMessage != latest.RawMessage || durable.TelegramUpdateID != latest.TelegramUpdateID {
+			t.Fatalf("durable revision=%+v, want update_id=%d text=%q", durable, latest.TelegramUpdateID, latest.RawMessage)
+		}
+	}
+}
+
+func TestInboundQueueEditTimeOutranksTelegramUpdateIDAcrossSeconds(t *testing.T) {
+	operations := []struct {
+		name  string
+		apply func(context.Context, *SQLiteStore, string, assistant.MessageEvent) (assistant.MessageEvent, bool, error)
+	}{
+		{
+			name: "inbound refresh",
+			apply: func(ctx context.Context, store *SQLiteStore, session string, event assistant.MessageEvent) (assistant.MessageEvent, bool, error) {
+				refresh, err := store.RefreshInboundMessageEdit(ctx, session, event)
+				return refresh.Event, refresh.Applied, err
+			},
+		},
+		{
+			name: "worker append",
+			apply: func(ctx context.Context, store *SQLiteStore, session string, event assistant.MessageEvent) (assistant.MessageEvent, bool, error) {
+				return store.AppendMessageEventRevision(ctx, session, event)
+			},
+		},
+	}
+	cases := []struct {
+		name       string
+		editTime   int64
+		updateID   int64
+		wantApply  bool
+		wantText   string
+		wantTime   int64
+		wantUpdate int64
+	}{
+		{
+			name:       "older edit with higher update id is stale",
+			editTime:   749,
+			updateID:   999,
+			wantText:   "current revision",
+			wantTime:   750,
+			wantUpdate: 500,
+		},
+		{
+			name:       "newer edit with lower update id wins",
+			editTime:   751,
+			updateID:   1,
+			wantApply:  true,
+			wantText:   "candidate revision",
+			wantTime:   751,
+			wantUpdate: 1,
+		},
+	}
+
+	for _, operation := range operations {
+		for _, test := range cases {
+			t.Run(operation.name+"/"+test.name, func(t *testing.T) {
+				ctx := context.Background()
+				store := openInboundTestStore(t, filepath.Join(t.TempDir(), "edit-time-order.db"))
+				defer func() { _ = store.Close() }()
+
+				session := "group:1"
+				original := telegramInboundTestEvent("message-edit-time-order", "original", 700)
+				if _, inserted, err := store.EnqueueInboundEvent(ctx, session, original); err != nil || !inserted {
+					t.Fatalf("enqueue original inserted=%v err=%v", inserted, err)
+				}
+				current := telegramInboundTestEvent(original.MessageID, "current revision", original.Time)
+				current.Edited = true
+				current.EditTime = 750
+				current.TelegramUpdateID = 500
+				if refresh, err := store.RefreshInboundMessageEdit(ctx, session, current); err != nil || !refresh.Applied {
+					t.Fatalf("apply current edit refresh=%+v err=%v", refresh, err)
+				}
+
+				candidate := telegramInboundTestEvent(original.MessageID, "candidate revision", original.Time)
+				candidate.Edited = true
+				candidate.EditTime = test.editTime
+				candidate.TelegramUpdateID = test.updateID
+				got, applied, err := operation.apply(ctx, store, session, candidate)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if applied != test.wantApply {
+					t.Fatalf("applied=%v, want %v; revision=%+v", applied, test.wantApply, got)
+				}
+				if got.RawMessage != test.wantText || got.EditTime != test.wantTime || got.TelegramUpdateID != test.wantUpdate {
+					t.Fatalf("revision=%+v, want text=%q edit_time=%d update_id=%d", got, test.wantText, test.wantTime, test.wantUpdate)
+				}
+			})
+		}
+	}
+}
+
+func TestInboundQueueSameEditedUpdateRetryKeepsFirstSeenSemantics(t *testing.T) {
+	ctx := context.Background()
+	store := openInboundTestStore(t, filepath.Join(t.TempDir(), "first-seen-edit-retry.db"))
+	defer func() { _ = store.Close() }()
+
+	session := "group:1"
+	firstSeen := telegramInboundTestEvent("first-seen-edit-retry", "first visible revision", 600)
+	firstSeen.Edited = true
+	firstSeen.EditTime = 650
+	firstSeen.TelegramUpdateID = 200
+	if _, inserted, err := store.EnqueueInboundEvent(ctx, session, firstSeen); err != nil || !inserted {
+		t.Fatalf("enqueue first-seen edit inserted=%v err=%v", inserted, err)
+	}
+	refresh, err := store.RefreshInboundMessageEdit(ctx, session, firstSeen)
+	if err != nil || !refresh.Found || refresh.Applied {
+		t.Fatalf("retry refresh=%+v err=%v, want known duplicate without apply", refresh, err)
+	}
+	if refresh.Event.EditRefreshOnly {
+		t.Fatalf("same update retry changed first-seen edit semantics: %+v", refresh.Event)
+	}
+	current, found, err := store.FindMessageEvent(ctx, session, firstSeen.MessageID)
+	if err != nil || !found {
+		t.Fatalf("find first-seen edit found=%v err=%v", found, err)
+	}
+	if current.EditRefreshOnly || current.TelegramUpdateID != firstSeen.TelegramUpdateID {
+		t.Fatalf("stored first-seen edit changed after retry: %+v", current)
+	}
+}
+
+func TestInboundQueueRejectsSameSecondLegacyEditAfterNumberedRevision(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		apply func(context.Context, *SQLiteStore, string, assistant.MessageEvent) (assistant.MessageEvent, bool, error)
+	}{
+		{
+			name: "inbound refresh",
+			apply: func(ctx context.Context, store *SQLiteStore, session string, stale assistant.MessageEvent) (assistant.MessageEvent, bool, error) {
+				refresh, err := store.RefreshInboundMessageEdit(ctx, session, stale)
+				return refresh.Event, refresh.Applied, err
+			},
+		},
+		{
+			name: "worker append",
+			apply: func(ctx context.Context, store *SQLiteStore, session string, stale assistant.MessageEvent) (assistant.MessageEvent, bool, error) {
+				return store.AppendMessageEventRevision(ctx, session, stale)
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := context.Background()
+			store := openInboundTestStore(t, filepath.Join(t.TempDir(), "legacy-edit-order.db"))
+			defer func() { _ = store.Close() }()
+
+			session := "group:1"
+			original := telegramInboundTestEvent("legacy-edit-order", "original", 700)
+			if _, inserted, err := store.EnqueueInboundEvent(ctx, session, original); err != nil || !inserted {
+				t.Fatalf("enqueue original inserted=%v err=%v", inserted, err)
+			}
+			latest := telegramInboundTestEvent(original.MessageID, "numbered current revision", original.Time)
+			latest.Edited = true
+			latest.EditTime = 750
+			latest.TelegramUpdateID = 301
+			if refresh, err := store.RefreshInboundMessageEdit(ctx, session, latest); err != nil || !refresh.Applied {
+				t.Fatalf("apply numbered edit refresh=%+v err=%v", refresh, err)
+			}
+
+			stale := telegramInboundTestEvent(original.MessageID, "legacy same-second revision", original.Time)
+			stale.Edited = true
+			stale.EditTime = latest.EditTime
+			current, applied, err := test.apply(ctx, store, session, stale)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if applied {
+				t.Fatal("same-second edit without update_id overwrote a numbered Telegram revision")
+			}
+			if current.RawMessage != latest.RawMessage || current.TelegramUpdateID != latest.TelegramUpdateID {
+				t.Fatalf("current revision=%+v, want update_id=%d text=%q", current, latest.TelegramUpdateID, latest.RawMessage)
+			}
+		})
+	}
+}
+
+func TestInboundQueueEditPreservesSearchExtraOnlyForSameMedia(t *testing.T) {
+	ctx := context.Background()
+	store := openInboundTestStore(t, filepath.Join(t.TempDir(), "edit-media.db"))
+	defer func() { _ = store.Close() }()
+
+	session := "group:1"
+	mediaEvent := func(text, uniqueID, fileID string, editTime int64, derived bool) assistant.MessageEvent {
+		event := telegramInboundTestEvent("message-edit-media", text, 600)
+		event.Segments = []assistant.MessageSegment{{Type: "text", Data: map[string]string{"text": text}}}
+		if uniqueID != "" {
+			data := map[string]string{"file_unique_id": uniqueID, "file_id": fileID}
+			if derived {
+				data["cached_file"] = "/cache/old-photo.jpg"
+				data["summary"] = "旧的图片摘要"
+				data["description"] = "旧的视觉描述"
+			}
+			event.Segments = append(event.Segments, assistant.MessageSegment{Type: "image", Data: data})
+		}
+		if editTime > 0 {
+			event.Edited = true
+			event.EditTime = editTime
+		}
+		return event
+	}
+	original := mediaEvent("旧 caption", "photo-unique-a", "photo-file-a", 0, true)
+	id, inserted, err := store.EnqueueInboundEvent(ctx, session, original)
+	if err != nil || !inserted {
+		t.Fatalf("enqueue media id=%q inserted=%v err=%v", id, inserted, err)
+	}
+	if err := store.SaveMessageSearchExtra(ctx, session, original.MessageID, "穿红围巾的橘猫"); err != nil {
+		t.Fatal(err)
+	}
+	searchExtra := func() string {
+		t.Helper()
+		var extra string
+		if err := store.db.QueryRowContext(ctx, `SELECT COALESCE(search_extra, '') FROM message_events WHERE id = ?`, id).Scan(&extra); err != nil {
+			t.Fatal(err)
+		}
+		return extra
+	}
+
+	// file_id 会轮换，旧 payload 还带 cached_file/summary/description；稳定的
+	// file_unique_id 相同就仍是同一张图，caption 编辑应保留视觉检索文本。
+	captionEdit := mediaEvent("新 caption", "photo-unique-a", "photo-file-a-rotated", 650, false)
+	if refresh, err := store.RefreshInboundMessageEdit(ctx, session, captionEdit); err != nil || !refresh.Applied {
+		t.Fatalf("caption edit refresh=%+v err=%v", refresh, err)
+	}
+	if got := searchExtra(); got != "穿红围巾的橘猫" {
+		t.Fatalf("same-media caption edit search_extra=%q", got)
+	}
+
+	replaced := mediaEvent("换图", "photo-unique-b", "photo-file-b", 651, false)
+	if refresh, err := store.RefreshInboundMessageEdit(ctx, session, replaced); err != nil || !refresh.Applied {
+		t.Fatalf("replacement edit refresh=%+v err=%v", refresh, err)
+	}
+	if got := searchExtra(); got != "" {
+		t.Fatalf("replaced media kept stale search_extra=%q", got)
+	}
+
+	if err := store.SaveMessageSearchExtra(ctx, session, original.MessageID, "蓝色海边的新图片"); err != nil {
+		t.Fatal(err)
+	}
+	removed := mediaEvent("图片已删除", "", "", 652, false)
+	if refresh, err := store.RefreshInboundMessageEdit(ctx, session, removed); err != nil || !refresh.Applied {
+		t.Fatalf("media removal refresh=%+v err=%v", refresh, err)
+	}
+	if got := searchExtra(); got != "" {
+		t.Fatalf("removed media kept stale search_extra=%q", got)
+	}
+}
+
+func TestInboundQueueEditPreservesVoiceTranscriptOnlyForSameTelegramMedia(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		mime     string
+		fileName string
+	}{
+		{name: "voice", mime: "audio/ogg", fileName: "voice.oga"},
+		{name: "audio", mime: "audio/mpeg", fileName: "track.mp3"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := context.Background()
+			store := openInboundTestStore(t, filepath.Join(t.TempDir(), "edit-audio.db"))
+			defer func() { _ = store.Close() }()
+
+			session := "group:1"
+			mediaEvent := func(text, uniqueID, fileID string, editTime int64, derived bool) assistant.MessageEvent {
+				event := telegramInboundTestEvent("message-edit-audio-"+test.name, text, 625)
+				event.Segments = []assistant.MessageSegment{
+					{Type: "text", Data: map[string]string{"text": text}},
+					{Type: "record", Data: map[string]string{
+						"file_unique_id": uniqueID,
+						"file_id":        fileID,
+						"name":           test.fileName,
+						"mime":           test.mime,
+					}},
+				}
+				if derived {
+					data := event.Segments[1].Data
+					data["transcript"] = "今晚八点开会"
+					data["audio_sha256"] = "audio-hash-a"
+					data["stt_backend"] = "openai-compatible"
+					data["stt_model"] = "whisper-large-v3"
+				}
+				if editTime > 0 {
+					event.Edited = true
+					event.EditTime = editTime
+				}
+				return event
+			}
+			findRecord := func() assistant.MessageSegment {
+				t.Helper()
+				event, found, err := store.FindMessageEvent(ctx, session, "message-edit-audio-"+test.name)
+				if err != nil || !found {
+					t.Fatalf("find edited audio history found=%v err=%v", found, err)
+				}
+				for _, segment := range event.Segments {
+					if segment.Type == "record" {
+						return segment
+					}
+				}
+				t.Fatal("edited audio history has no record segment")
+				return assistant.MessageSegment{}
+			}
+
+			original := mediaEvent("旧 caption", "audio-unique-a", "audio-file-a", 0, true)
+			if _, inserted, err := store.EnqueueInboundEvent(ctx, session, original); err != nil || !inserted {
+				t.Fatalf("enqueue original inserted=%v err=%v", inserted, err)
+			}
+
+			captionEdit := mediaEvent("新 caption", "audio-unique-a", "audio-file-a-rotated", 675, false)
+			if refresh, err := store.RefreshInboundMessageEdit(ctx, session, captionEdit); err != nil || !refresh.Applied {
+				t.Fatalf("caption edit refresh=%+v err=%v", refresh, err)
+			}
+			preserved := findRecord().Data
+			for key, want := range map[string]string{
+				"transcript":   "今晚八点开会",
+				"audio_sha256": "audio-hash-a",
+				"stt_backend":  "openai-compatible",
+				"stt_model":    "whisper-large-v3",
+			} {
+				if got := preserved[key]; got != want {
+					t.Errorf("same-media caption edit %s=%q, want %q", key, got, want)
+				}
+			}
+
+			replaced := mediaEvent("换音频", "audio-unique-b", "audio-file-b", 676, false)
+			if refresh, err := store.RefreshInboundMessageEdit(ctx, session, replaced); err != nil || !refresh.Applied {
+				t.Fatalf("replacement edit refresh=%+v err=%v", refresh, err)
+			}
+			cleared := findRecord().Data
+			for _, key := range []string{"transcript", "audio_sha256", "stt_backend", "stt_model"} {
+				if got := strings.TrimSpace(cleared[key]); got != "" {
+					t.Errorf("replaced media kept stale %s=%q", key, got)
+				}
+			}
+		})
+	}
+}
+
+func TestInboundQueueEditUpdatesLegacyNamespaceRowInPlace(t *testing.T) {
+	ctx := context.Background()
+	store := openInboundTestStore(t, filepath.Join(t.TempDir(), "legacy-edit.db"))
+	defer func() { _ = store.Close() }()
+
+	legacySession := "group:group-1"
+	currentSession := "profile-current:group:group-1"
+	original := telegramInboundTestEvent("message-legacy-edit", "legacy text", 700)
+	original.GroupID = "group-1"
+	original.UserID = "user-1"
+	id, inserted, err := store.EnqueueInboundEvent(ctx, legacySession, original)
+	if err != nil || !inserted {
+		t.Fatalf("enqueue legacy id=%q inserted=%v err=%v", id, inserted, err)
+	}
+
+	edited := telegramInboundTestEvent(original.MessageID, "current namespace edit", original.Time)
+	edited.GroupID = original.GroupID
+	edited.UserID = original.UserID
+	edited.ProfileID = "profile-current"
+	edited.ContextNamespace = "profile-current"
+	edited.Edited = true
+	edited.EditTime = 750
+	refresh, err := store.RefreshInboundMessageEdit(ctx, currentSession, edited)
+	if err != nil || !refresh.Found || !refresh.Applied || refresh.EventID != id || refresh.Session != legacySession {
+		t.Fatalf("legacy refresh=%+v err=%v, want id=%q session=%q", refresh, err, id, legacySession)
+	}
+
+	var historyRows, inboundRows int
+	var storedSession string
+	if err := store.db.QueryRowContext(ctx, `SELECT COUNT(*), MIN(session) FROM message_events WHERE message_id = ?`, original.MessageID).Scan(&historyRows, &storedSession); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM inbound_events WHERE message_id = ?`, original.MessageID).Scan(&inboundRows); err != nil {
+		t.Fatal(err)
+	}
+	if historyRows != 1 || inboundRows != 1 || storedSession != legacySession {
+		t.Fatalf("edit duplicated legacy row: history=%d inbound=%d session=%q", historyRows, inboundRows, storedSession)
+	}
+	history, found, err := store.FindMessageEvent(ctx, legacySession, original.MessageID)
+	if err != nil || !found {
+		t.Fatalf("find legacy history found=%v err=%v", found, err)
+	}
+	assertEditedInboundEvent(t, history, "current namespace edit", 750)
+	if _, found, err := store.FindMessageEvent(ctx, currentSession, original.MessageID); err != nil || found {
+		t.Fatalf("edit created current namespace row found=%v err=%v", found, err)
 	}
 }
 
@@ -539,6 +1192,23 @@ func inboundTestEvent(messageID string, text string, eventTime int64) assistant.
 			Type: "text",
 			Data: map[string]string{"text": text},
 		}},
+	}
+}
+
+func telegramInboundTestEvent(messageID string, text string, eventTime int64) assistant.MessageEvent {
+	event := inboundTestEvent(messageID, text, eventTime)
+	event.Platform = assistant.PlatformTelegram
+	event.SelfID = "telegram-bot"
+	return event
+}
+
+func assertEditedInboundEvent(t *testing.T, event assistant.MessageEvent, wantText string, wantEditTime int64) {
+	t.Helper()
+	if !event.Edited || event.EditTime != wantEditTime {
+		t.Fatalf("edited event flags=%v/%d, want true/%d: %+v", event.Edited, event.EditTime, wantEditTime, event)
+	}
+	if event.RawMessage != wantText || assistant.PlainText(event.Segments) != wantText {
+		t.Fatalf("edited event text raw=%q plain=%q, want %q", event.RawMessage, assistant.PlainText(event.Segments), wantText)
 	}
 }
 

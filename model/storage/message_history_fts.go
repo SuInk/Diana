@@ -205,3 +205,23 @@ func (s *SQLiteStore) indexMessageHistoryRow(id, sender, userID, text, extra str
 	_, _ = s.db.Exec(`INSERT INTO `+messageHistoryFTSTable+`(rowid, search_text) VALUES (?, ?)`,
 		rowID, messageHistoryIndexTokens(sender, userID, text, extra))
 }
+
+// indexMessageHistoryRowTx updates the FTS row inside the caller's write
+// transaction. Revision-checked asynchronous writes must keep the media check,
+// search_extra update and FTS update atomic; otherwise a concurrent edit can
+// interleave and leave stale description tokens searchable.
+func (s *SQLiteStore) indexMessageHistoryRowTx(tx *sql.Tx, id, sender, userID, text, extra string) error {
+	if !s.historyFTS {
+		return nil
+	}
+	var rowID int64
+	if err := tx.QueryRow(`SELECT rowid FROM message_events WHERE id = ?`, id).Scan(&rowID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM `+messageHistoryFTSTable+` WHERE rowid = ?`, rowID); err != nil {
+		return err
+	}
+	_, err := tx.Exec(`INSERT INTO `+messageHistoryFTSTable+`(rowid, search_text) VALUES (?, ?)`,
+		rowID, messageHistoryIndexTokens(sender, userID, text, extra))
+	return err
+}

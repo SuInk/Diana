@@ -98,6 +98,40 @@ func TestMessageHistoryFTSTracksWrites(t *testing.T) {
 	}
 }
 
+func TestMessageHistoryFTSTracksTelegramEdit(t *testing.T) {
+	ctx := context.Background()
+	store := ftsStore(t)
+	session := "telegram-main:group:one"
+
+	original := telegramInboundTestEvent("telegram-edit-fts", "cobaltlegacytoken", 40)
+	if _, inserted, err := store.EnqueueInboundEvent(ctx, session, original); err != nil || !inserted {
+		t.Fatalf("enqueue original inserted=%v err=%v", inserted, err)
+	}
+	edited := telegramInboundTestEvent(original.MessageID, "magentaeditedtoken", original.Time)
+	edited.Edited = true
+	edited.EditTime = 45
+	if refresh, err := store.RefreshInboundMessageEdit(ctx, session, edited); err != nil || !refresh.Found || !refresh.Applied {
+		t.Fatalf("refresh edit=%+v err=%v", refresh, err)
+	}
+
+	search := func(term string) ([]assistant.MessageEvent, int) {
+		t.Helper()
+		events, total, err := store.SearchMessageEvents(ctx, assistant.MessageHistorySearchQuery{
+			Session: session, Text: term, Terms: []string{term}, FromTime: 0, ThroughTime: 100, Limit: 20,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return events, total
+	}
+	if events, total := search("cobaltlegacytoken"); total != 0 || len(events) != 0 {
+		t.Fatalf("old edit text remains searchable: total=%d events=%#v", total, events)
+	}
+	if events, total := search("magentaeditedtoken"); total != 1 || len(events) != 1 || events[0].MessageID != original.MessageID || !events[0].Edited {
+		t.Fatalf("new edit text missing from search: total=%d events=%#v", total, events)
+	}
+}
+
 // 长词走索引、短词走 LIKE，两边的结果要取并集——中文 2 字词太常见，丢了召回会明显变差。
 func TestMessageHistorySearchKeepsShortTermRecall(t *testing.T) {
 	ctx := context.Background()

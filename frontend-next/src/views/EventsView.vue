@@ -157,7 +157,8 @@
                 <span v-if="event.platform" class="badge">{{ platformLabel(event.platform) }}</span>
                 <span class="badge">{{ eventKindLabel(event.kind) }}</span>
                 <span class="badge" :class="decisionClass(event)">{{ decisionLabel(event) }}</span>
-                <span v-if="event.recalls?.length" class="badge warn">已撤回</span>
+                <span v-if="event.edited" class="badge" :title="event.edit_time ? `编辑于 ${formatTime(event.edit_time)}` : '消息已编辑'">已编辑</span>
+                <span v-if="event.recalls?.length" class="badge warn">{{ eventHasTelegramProbeRecall(event) ? "已不可访问" : "已撤回" }}</span>
                 <span class="event-sender" :title="senderTitle(event)">
                   <img
                     v-if="event.sender_avatar_url && !failedAvatars[event.id]"
@@ -181,7 +182,7 @@
               </div>
 
               <div v-if="isRecallEvent(event)" class="event-recall-summary">
-                <strong>撤回记录</strong>
+                <strong>{{ event.operator_role === "telegram_recall_probe" ? "消息可用性探测记录" : "撤回记录" }}</strong>
                 <p>{{ recallActorText(event) }}</p>
                 <span v-if="event.original_time" class="muted">原消息发送于 {{ formatClock(event.original_time) }}</span>
               </div>
@@ -283,9 +284,9 @@
                 </div>
               </div>
               <div v-for="recall in event.recalls ?? []" :key="recall.message_id" class="event-recall-summary">
-                <strong>{{ isMessageRecall(event, recall) ? "消息已撤回" : "回复已撤回" }}</strong>
+                <strong>{{ recallHeadline(event, recall) }}</strong>
                 <p>{{ isMessageRecall(event, recall) ? messageRecallText(event, recall) : replyRecallText(event, recall) }}</p>
-                <span class="muted">撤回于 {{ formatClock(recall.at) }}</span>
+                <span class="muted">{{ recall.operator_role === "telegram_recall_probe" ? "探测发现于" : "撤回于" }} {{ formatClock(recall.at) }}</span>
               </div>
               <div v-if="event.subtasks?.length" class="event-subtasks">
                 <strong>触发的后台任务</strong>
@@ -634,7 +635,7 @@ import {
   type AssistantEventsResponse,
   type AssistantContextBudgetLayer
 } from "../api";
-import { formatClock, formatNumber } from "../format";
+import { formatClock, formatNumber, formatTime } from "../format";
 import { askConfirm } from "../confirm";
 import { displayMessageText, displayChatIdentity } from "../message-display";
 import { currentView, navigate } from "../router";
@@ -917,6 +918,10 @@ function isRecallEvent(event: AssistantEventDetail): boolean {
   return event.sub_type === "group_recall" || event.sub_type === "friend_recall";
 }
 
+function eventHasTelegramProbeRecall(event: AssistantEventDetail): boolean {
+  return Boolean(event.recalls?.some((recall) => recall.operator_role === "telegram_recall_probe"));
+}
+
 // 身份取值现在是平台无关的 group_*（后端 GroupRole）。老库里的事件仍存着各平台
 // 的原始说法，所以两套键都要认，否则历史记录会退化成显示英文原文。
 const groupRoleLabels: Record<string, string> = {
@@ -935,7 +940,8 @@ function recallRoleLabel(role?: string): string {
   const labels: Record<string, string> = {
     ...groupRoleLabels,
     bot: "机器人",
-    history_backfill: "断线回补"
+    history_backfill: "断线回补",
+    telegram_recall_probe: "Telegram 按需探测"
   };
   return labels[key] ?? key;
 }
@@ -1000,6 +1006,7 @@ function replyRecallText(event: AssistantEventDetail, recall: AssistantEventReca
   const position = outbound.length > 1 && outbound.includes(recall.message_id)
     ? `（共 ${outbound.length} 条消息中的第 ${outbound.indexOf(recall.message_id) + 1} 条）`
     : "";
+  if (recall.operator_role === "telegram_recall_probe") return `Telegram 按需探测确认这条回复当前已不可访问${position}；实际删除时间、操作者和原因未知`;
   if (recall.operator_role === "history_backfill") return `断线回补确认这条回复已撤回${position}，平台历史接口未提供实际操作者`;
   if (recall.self_recall) return `机器人自己撤回了这条回复${position}`;
   const identity = [recall.operator_name?.trim(), recall.operator_id].filter(Boolean).join(" · ") || "未知操作者";
@@ -1012,7 +1019,13 @@ function isMessageRecall(event: AssistantEventDetail, recall: AssistantEventReca
   return Boolean(event.message_id) && recall.message_id === event.message_id;
 }
 
+function recallHeadline(event: AssistantEventDetail, recall: AssistantEventRecall): string {
+  const target = isMessageRecall(event, recall) ? "消息" : "回复";
+  return recall.operator_role === "telegram_recall_probe" ? `${target}已不可访问` : `${target}已撤回`;
+}
+
 function messageRecallText(event: AssistantEventDetail, recall: AssistantEventRecall): string {
+  if (recall.operator_role === "telegram_recall_probe") return "Telegram 按需探测确认这条消息当前已不可访问；实际删除时间、操作者和原因未知";
   if (recall.operator_role === "history_backfill") return "断线回补确认这条消息已撤回，平台历史接口未提供实际操作者";
   if (recall.self_recall) return "发送者撤回了这条消息";
   const identity = [recall.operator_name?.trim(), recall.operator_id].filter(Boolean).join(" · ") || "未知操作者";
@@ -1021,6 +1034,7 @@ function messageRecallText(event: AssistantEventDetail, recall: AssistantEventRe
 }
 
 function recallActorText(event: AssistantEventDetail): string {
+  if (event.operator_role === "telegram_recall_probe") return "Telegram 按需探测确认消息当前已不可访问；实际删除时间、操作者和原因未知";
   if (event.operator_role === "history_backfill") return "断线回补确认消息已撤回，平台历史接口未提供实际操作者";
   const selfRecall = event.operator_id && event.operator_id === event.user_id;
   const name = event.operator_name?.trim() || (selfRecall ? event.sender_name?.trim() : "");

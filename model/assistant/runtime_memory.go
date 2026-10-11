@@ -288,7 +288,7 @@ func (r *Runtime) recallHistory(event MessageEvent) []MessageEvent {
 		log.Printf("diana recall history load failed: %v", err)
 		return nil
 	}
-	return events
+	return recallEventsForScope(events, event)
 }
 
 func (r *Runtime) enrichRecallNotice(ctx context.Context, event MessageEvent) MessageEvent {

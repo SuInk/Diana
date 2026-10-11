@@ -257,6 +257,24 @@ type InboundEventStore interface {
 	ListHistorySessions(ctx context.Context) ([]HistorySession, error)
 }
 
+// InboundMessageEditRefresh describes an edit that matched an already known
+// inbound message. Session is the durable row's actual session, which may be a
+// legacy unnamespaced key even when the live event now carries a bot namespace.
+type InboundMessageEditRefresh struct {
+	EventID string
+	Session string
+	Event   MessageEvent
+	Found   bool
+	Applied bool
+}
+
+// InboundMessageEditStore is an optional durable-ingest capability. It only
+// refreshes an existing message and never inserts a missing edit: first-seen
+// edits must still pass the ordinary admission, governance, and enqueue path.
+type InboundMessageEditStore interface {
+	RefreshInboundMessageEdit(ctx context.Context, session string, event MessageEvent, priority ...int) (InboundMessageEditRefresh, error)
+}
+
 // InboundSupersessionStore 把「这条消息已经并进别的回复轮」的标记交给最后那道
 // 发送闸门。标记由合并/连发交接写入（MarkInboundHandoff）：被并进去的那条
 // 自己的任务如果还是走到了发送，就在这里拦下，别把同一个问题答两遍。
@@ -762,6 +780,7 @@ func nextInboundPollDelay(current time.Duration) time.Duration {
 }
 
 func (r *Runtime) processInboundQueueItem(ctx context.Context, item InboundQueueItem) (string, error) {
+	item.Event.durableSession = strings.TrimSpace(item.Session)
 	// 断线回补里没排上回复名额的消息在这里就收住，只补进上下文历史。它们不能走下面的
 	// 语音转写、图片处理、插件观察、消息中继和回复：回补设条数上限防的就是
 	// 一批积压消息同时开出一堆媒体任务，这些消息要是也走完整流程，上限等于没设。
@@ -1953,21 +1972,52 @@ func (r *Runtime) recoverGroupRecallFromHistory(ctx context.Context, candidate M
 	if candidate.UserID != "" && original.UserID != "" && candidate.UserID != original.UserID {
 		return false, nil
 	}
+	return r.recordRecoveredGroupRecall(ctx, candidate, original)
+}
+
+// recordRecoveredGroupRecall turns a cached original into the same notice used
+// by live recall events. Telegram's on-demand probe reuses the event builder and
+// duplicate check below, but records outside the inbound pipeline because a
+// probe result is not a newly received platform event.
+func (r *Runtime) recordRecoveredGroupRecall(ctx context.Context, candidate, original MessageEvent) (bool, error) {
+	if original.Kind != EventKindGroup || strings.TrimSpace(original.GroupID) == "" ||
+		strings.TrimSpace(original.MessageID) == "" || !recallEventHasContent(original) {
+		return false, nil
+	}
+	recorded, err := r.groupRecallAlreadyRecorded(ctx, candidate, original)
+	if err != nil || recorded {
+		return recorded, err
+	}
+	recall := buildRecoveredGroupRecallEvent(candidate, original)
+	if err := r.HandleEvent(ctx, recall); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func (r *Runtime) groupRecallAlreadyRecorded(ctx context.Context, candidate, original MessageEvent) (bool, error) {
+	r.mu.RLock()
+	store := r.messageStore
+	r.mu.RUnlock()
 	if recallStore, ok := store.(GroupRecallHistoryStore); ok {
 		listCtx, listCancel := context.WithTimeout(ctx, 2*time.Second)
-		recalls, listErr := recallStore.ListGroupRecallEvents(listCtx, candidate.GroupID)
+		recalls, listErr := recallStore.ListGroupRecallEvents(listCtx, original.GroupID)
 		listCancel()
 		if listErr != nil {
 			return false, listErr
 		}
 		for _, recall := range recalls {
-			if recall.MessageID == candidate.MessageID {
-				return true, nil
+			if recall.MessageID != original.MessageID || !sameRecallScope(candidate, recall) {
+				continue
 			}
+			return true, nil
 		}
 	}
+	return false, nil
+}
 
-	recall := MessageEvent{
+func buildRecoveredGroupRecallEvent(candidate, original MessageEvent) MessageEvent {
+	return MessageEvent{
 		Platform:         firstNonEmpty(candidate.Platform, original.Platform),
 		ProfileID:        firstNonEmpty(candidate.ProfileID, original.ProfileID),
 		ContextNamespace: firstNonEmpty(candidate.ContextNamespace, original.ContextNamespace),
@@ -1977,7 +2027,7 @@ func (r *Runtime) recoverGroupRecallFromHistory(ctx context.Context, candidate M
 		OriginalTime:     original.Time,
 		SelfID:           firstNonEmpty(candidate.SelfID, original.SelfID),
 		UserID:           firstNonEmpty(original.UserID, candidate.UserID),
-		OperatorRole:     historyBackfillOperatorRole,
+		OperatorRole:     firstNonEmpty(candidate.OperatorRole, historyBackfillOperatorRole),
 		GroupID:          original.GroupID,
 		MessageID:        original.MessageID,
 		MessageSeq:       firstNonEmpty(original.MessageSeq, candidate.MessageSeq),
@@ -1991,10 +2041,6 @@ func (r *Runtime) recoverGroupRecallFromHistory(ctx context.Context, candidate M
 		SenderTitle:      original.SenderTitle,
 		Quoted:           original.Quoted,
 	}
-	if err := r.HandleEvent(ctx, recall); err != nil {
-		return false, err
-	}
-	return true, nil
 }
 
 // historyRetryBackoff 给出第 failures 次连续失败后的重试间隔；超过次数上限时 retry 为 false。

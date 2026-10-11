@@ -25,19 +25,30 @@ const (
 	maxMessageHistoryLimit = 4096
 )
 
+var _ assistant.MessageSearchExtraRevisionStore = (*SQLiteStore)(nil)
+var _ assistant.MessageHistoryRevisionStore = (*SQLiteStore)(nil)
+
 // AppendMessageEvent persists an inbound message event for later context recovery.
 func (s *SQLiteStore) AppendMessageEvent(ctx context.Context, session string, event assistant.MessageEvent) error {
+	_, _, err := s.AppendMessageEventRevision(ctx, session, event)
+	return err
+}
+
+// AppendMessageEventRevision persists event and returns the revision that is
+// current after the guarded upsert. written=false means a newer edit was
+// already durable and rejected this worker's older snapshot.
+func (s *SQLiteStore) AppendMessageEventRevision(ctx context.Context, session string, event assistant.MessageEvent) (assistant.MessageEvent, bool, error) {
 	defer s.observeStorage(ctx, "AppendMessageEvent", "write")()
 	if s == nil || s.db == nil {
-		return nil
+		return event, false, nil
 	}
 	session = strings.TrimSpace(session)
 	if session == "" {
-		return nil
+		return event, false, nil
 	}
 	payload, err := json.Marshal(event)
 	if err != nil {
-		return err
+		return assistant.MessageEvent{}, false, err
 	}
 	id := persistedMessageID(session, event)
 	eventTime := event.Time
@@ -48,7 +59,13 @@ func (s *SQLiteStore) AppendMessageEvent(ctx context.Context, session string, ev
 	if text == "" {
 		text = strings.TrimSpace(event.RawMessage)
 	}
-	_, err = s.db.ExecContext(ctx, `
+	tx, err := s.beginWriteTx(ctx, "AppendMessageEvent")
+	if err != nil {
+		return assistant.MessageEvent{}, false, fmt.Errorf("begin message history append: %w", err)
+	}
+	defer observeTransaction("AppendMessageEvent")()
+	defer func() { _ = tx.Rollback() }()
+	writeResult, err := tx.ExecContext(ctx, `
 INSERT INTO message_events (id, session, kind, profile_id, group_id, user_id, message_id, sender_name, event_time, text, payload, created_at, context_generation)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
   COALESCE((SELECT CASE WHEN ? < reset_at THEN -1 ELSE generation END FROM session_contexts WHERE session = ?), 0))
@@ -59,21 +76,91 @@ ON CONFLICT(id) DO UPDATE SET
   user_id=excluded.user_id,
   message_id=excluded.message_id,
   sender_name=excluded.sender_name,
-  event_time=excluded.event_time,
+  event_time=CASE
+    WHEN COALESCE(json_extract(excluded.payload, '$.edited'), 0) = 1 THEN message_events.event_time
+    ELSE excluded.event_time
+  END,
   text=excluded.text,
   payload=excluded.payload,
-  created_at=excluded.created_at
+  created_at=CASE
+    WHEN COALESCE(json_extract(excluded.payload, '$.edited'), 0) = 1 THEN message_events.created_at
+    ELSE excluded.created_at
+  END
+WHERE
+  (
+    COALESCE(json_extract(excluded.payload, '$.edited'), 0) = 0
+    AND COALESCE(json_extract(message_events.payload, '$.edited'), 0) = 0
+  )
+  OR
+  (
+    COALESCE(json_extract(excluded.payload, '$.edited'), 0) = 1
+    AND (
+      COALESCE(json_extract(message_events.payload, '$.edited'), 0) = 0
+      OR (
+        COALESCE(json_extract(excluded.payload, '$.telegram_update_id'), 0) > 0
+        AND COALESCE(json_extract(message_events.payload, '$.telegram_update_id'), 0) > 0
+        AND json_extract(excluded.payload, '$.telegram_update_id') = json_extract(message_events.payload, '$.telegram_update_id')
+      )
+      OR (
+        COALESCE(json_extract(excluded.payload, '$.edit_time'), 0) > 0
+        AND COALESCE(json_extract(message_events.payload, '$.edit_time'), 0) = 0
+      )
+      OR (
+        COALESCE(json_extract(excluded.payload, '$.edit_time'), 0) > 0
+        AND COALESCE(json_extract(message_events.payload, '$.edit_time'), 0) > 0
+        AND json_extract(excluded.payload, '$.edit_time') > json_extract(message_events.payload, '$.edit_time')
+      )
+      OR (
+        COALESCE(json_extract(excluded.payload, '$.edit_time'), 0) = COALESCE(json_extract(message_events.payload, '$.edit_time'), 0)
+        AND (
+          COALESCE(json_extract(message_events.payload, '$.telegram_update_id'), 0) = 0
+          OR (
+            COALESCE(json_extract(excluded.payload, '$.telegram_update_id'), 0) > 0
+            AND COALESCE(json_extract(message_events.payload, '$.telegram_update_id'), 0) > 0
+            AND json_extract(excluded.payload, '$.telegram_update_id') >= json_extract(message_events.payload, '$.telegram_update_id')
+          )
+        )
+      )
+    )
+  )
 `, id, session, string(event.Kind), strings.TrimSpace(event.ProfileID), event.GroupID, event.UserID, event.MessageID, event.SenderName, eventTime, text, string(payload), time.Now().UTC().Format(time.RFC3339Nano), eventTime, session)
 	if err != nil {
-		return err
+		return assistant.MessageEvent{}, false, err
+	}
+	written, err := writeResult.RowsAffected()
+	if err != nil {
+		return assistant.MessageEvent{}, false, err
+	}
+	if written == 0 {
+		// An already claimed worker can finish preprocessing an older snapshot
+		// after a Telegram edit has updated the row. Keep the current payload and
+		// every derived index on the newer revision.
+		var currentPayload string
+		if err := tx.QueryRowContext(ctx, `SELECT payload FROM message_events WHERE id = ?`, id).Scan(&currentPayload); err != nil {
+			return assistant.MessageEvent{}, false, fmt.Errorf("load current message revision: %w", err)
+		}
+		var current assistant.MessageEvent
+		if err := json.Unmarshal([]byte(currentPayload), &current); err != nil {
+			return assistant.MessageEvent{}, false, fmt.Errorf("decode current message revision: %w", err)
+		}
+		return current, false, nil
 	}
 	// 检索 token 要在 Go 侧切分，触发器做不到，所以写入后同步一次索引。
 	// 同一条消息重复入库时 search_extra 保持原值（图片描述是后到的，不能被覆盖掉）。
-	s.indexMessageHistoryRow(id, event.SenderName, event.UserID, text, s.messageSearchExtra(ctx, id))
-	if err := s.indexStickerAssets(ctx, session, event); err != nil {
-		return fmt.Errorf("index sticker assets: %w", err)
+	var extra sql.NullString
+	if err := tx.QueryRowContext(ctx, `SELECT search_extra FROM message_events WHERE id = ?`, id).Scan(&extra); err != nil {
+		return assistant.MessageEvent{}, false, fmt.Errorf("load message search extra: %w", err)
 	}
-	return nil
+	if err := s.indexMessageHistoryRowTx(tx, id, event.SenderName, event.UserID, text, strings.TrimSpace(extra.String)); err != nil {
+		return assistant.MessageEvent{}, false, fmt.Errorf("index message history: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return assistant.MessageEvent{}, false, fmt.Errorf("commit message history append: %w", err)
+	}
+	if err := s.indexStickerAssets(ctx, session, event); err != nil {
+		return assistant.MessageEvent{}, false, fmt.Errorf("index sticker assets: %w", err)
+	}
+	return event, true, nil
 }
 
 // messageSearchExtra 读取某条消息已有的检索附加文本。
@@ -123,6 +210,69 @@ LIMIT 1
 	}
 	s.indexMessageHistoryRow(id, sender.String, userID.String, text.String, extra)
 	return nil
+}
+
+// SaveMessageSearchExtraIfMediaCurrent is the revision-aware form used by
+// background image-description jobs. The media comparison and write share one
+// transaction, so an edit cannot replace/remove the image between the check and
+// the search_extra update. The current payload is returned for semantic indexing
+// because its caption may have changed while the image stayed the same.
+func (s *SQLiteStore) SaveMessageSearchExtraIfMediaCurrent(ctx context.Context, session string, expected assistant.MessageEvent, extra string) (assistant.MessageEvent, bool, error) {
+	defer s.observeStorage(ctx, "SaveMessageSearchExtraIfMediaCurrent", "write")()
+	if s == nil || s.db == nil {
+		return assistant.MessageEvent{}, false, nil
+	}
+	session = strings.TrimSpace(session)
+	messageID := strings.TrimSpace(expected.MessageID)
+	extra = strings.TrimSpace(extra)
+	expectedRevision := assistant.MessageSearchMediaRevision(expected)
+	if session == "" || messageID == "" || extra == "" || expectedRevision == "" {
+		return assistant.MessageEvent{}, false, nil
+	}
+	tx, err := s.beginWriteTx(ctx, "SaveMessageSearchExtraIfMediaCurrent")
+	if err != nil {
+		return assistant.MessageEvent{}, false, fmt.Errorf("begin message search extra update: %w", err)
+	}
+	defer observeTransaction("SaveMessageSearchExtraIfMediaCurrent")()
+	defer func() { _ = tx.Rollback() }()
+
+	var (
+		id      string
+		sender  sql.NullString
+		userID  sql.NullString
+		text    sql.NullString
+		payload string
+	)
+	err = tx.QueryRowContext(ctx, `
+SELECT id, sender_name, user_id, text, payload
+FROM message_events
+WHERE session = ? AND message_id = ?
+ORDER BY event_time DESC, created_at DESC
+LIMIT 1
+`, session, messageID).Scan(&id, &sender, &userID, &text, &payload)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return assistant.MessageEvent{}, false, nil
+		}
+		return assistant.MessageEvent{}, false, fmt.Errorf("load message for revision-aware search extra: %w", err)
+	}
+	var current assistant.MessageEvent
+	if err := json.Unmarshal([]byte(payload), &current); err != nil {
+		return assistant.MessageEvent{}, false, fmt.Errorf("decode message for revision-aware search extra: %w", err)
+	}
+	if assistant.MessageSearchMediaRevision(current) != expectedRevision {
+		return current, false, nil
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE message_events SET search_extra = ? WHERE id = ?`, extra, id); err != nil {
+		return assistant.MessageEvent{}, false, fmt.Errorf("save revision-aware message search extra: %w", err)
+	}
+	if err := s.indexMessageHistoryRowTx(tx, id, sender.String, userID.String, text.String, extra); err != nil {
+		return assistant.MessageEvent{}, false, fmt.Errorf("index revision-aware message search extra: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return assistant.MessageEvent{}, false, fmt.Errorf("commit revision-aware message search extra: %w", err)
+	}
+	return current, true, nil
 }
 
 // ListRecentMessageEvents returns recent message events in chronological order.

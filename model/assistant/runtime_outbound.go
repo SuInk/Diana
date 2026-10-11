@@ -70,7 +70,7 @@ func (r *Runtime) deliverChunks(ctx context.Context, event MessageEvent, chunks 
 		if strings.TrimSpace(chunk) == "" {
 			continue
 		}
-		msg := OutgoingMessage{Text: chunk}
+		msg := OutgoingMessage{Text: chunk, LiteralText: decoration.LiteralText}
 		if event.Kind == EventKindGroup {
 			msg.GroupID = event.GroupID
 			// 语音必须保持为独立 record 段；普通回复仍让第一条带 reply 元数据。
@@ -99,14 +99,14 @@ func (r *Runtime) deliverChunks(ctx context.Context, event MessageEvent, chunks 
 			typingIndicatorFromContext(ctx).resume()
 			select {
 			case <-ctx.Done():
-				return nil, ctx.Err()
+				return messageIDs, ctx.Err()
 			case <-time.After(interval):
 			}
 			sendCtx = withContinuousOutboundDelivery(ctx)
 		}
 		result, err := r.sendOutgoingWithResult(sendCtx, event, msg)
 		if err != nil {
-			return nil, err
+			return messageIDs, err
 		}
 		if messageID := apiMessageID(result); messageID != "" {
 			messageIDs = append(messageIDs, messageID)
@@ -130,9 +130,11 @@ func (r *Runtime) sendOutgoingWithResult(ctx context.Context, event MessageEvent
 		return nil, audioErr
 	}
 	msg = r.resolveOutgoingLocalImages(msg)
-	msg = r.applyOutgoingReplyMarker(ctx, event, msg)
-	msg = r.normalizeOutgoingMentions(event, msg)
-	msg = r.resolveOutgoingMentionNames(event, msg)
+	if !msg.LiteralText {
+		msg = r.applyOutgoingReplyMarker(ctx, event, msg)
+		msg = r.normalizeOutgoingMentions(event, msg)
+		msg = r.resolveOutgoingMentionNames(event, msg)
+	}
 	if blockedErr := r.blockedGroupSendError(event); blockedErr != nil {
 		return nil, blockedErr
 	}

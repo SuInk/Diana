@@ -6,6 +6,7 @@ package storage
 import (
 	"context"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/SuInk/diana/model/assistant"
@@ -174,5 +175,104 @@ func TestSearchMessageEventsMatchesImageDescriptionSearchExtra(t *testing.T) {
 	// 不存在的消息不建新行，也不报错。
 	if err := store.SaveMessageSearchExtra(ctx, session, "missing", "无主描述"); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestSaveMessageSearchExtraIfMediaCurrentRejectsReplacedOrRemovedImage(t *testing.T) {
+	ctx := context.Background()
+	store, err := NewSQLiteStore(filepath.Join(t.TempDir(), "history-media-revision.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+
+	session := "onebot-main:group:one"
+	hashA := strings.Repeat("a", 64)
+	hashB := strings.Repeat("b", 64)
+	imageEvent := func(messageID, caption, hash string) assistant.MessageEvent {
+		segments := []assistant.MessageSegment{{Type: "text", Data: map[string]string{"text": caption}}}
+		if hash != "" {
+			segments = append(segments, assistant.MessageSegment{Type: "image", Data: map[string]string{
+				"content_sha256": hash,
+				"file_id":        "platform-file-" + hash[:1],
+			}})
+		}
+		return assistant.MessageEvent{
+			Kind: assistant.EventKindGroup, Time: 10, GroupID: "one", UserID: "Alice",
+			MessageID: messageID, SenderName: "Alice", Segments: segments,
+		}
+	}
+
+	for _, test := range []struct {
+		name    string
+		current assistant.MessageEvent
+	}{
+		{name: "replaced", current: imageEvent("replace", "换图后的正文", hashB)},
+		{name: "removed", current: imageEvent("remove", "删图后的正文", "")},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			original := imageEvent(test.current.MessageID, "旧正文", hashA)
+			if err := store.AppendMessageEvent(ctx, session, original); err != nil {
+				t.Fatal(err)
+			}
+			test.current.Edited = true
+			if err := store.AppendMessageEvent(ctx, session, test.current); err != nil {
+				t.Fatal(err)
+			}
+			_, saved, err := store.SaveMessageSearchExtraIfMediaCurrent(ctx, session, original, "绝不能写回的旧图描述")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if saved {
+				t.Fatal("媒体已变化，旧描述仍被接受")
+			}
+			query := assistant.MessageHistorySearchQuery{Session: session, Text: "绝不能写回", FromTime: 0, ThroughTime: 100, Limit: 20}
+			if events, total, err := store.SearchMessageEvents(ctx, query); err != nil || total != 0 || len(events) != 0 {
+				t.Fatalf("stale description remained searchable: events=%#v total=%d err=%v", events, total, err)
+			}
+		})
+	}
+}
+
+func TestSaveMessageSearchExtraIfMediaCurrentUsesCurrentCaption(t *testing.T) {
+	ctx := context.Background()
+	store, err := NewSQLiteStore(filepath.Join(t.TempDir(), "history-same-media.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+
+	session := "onebot-main:group:one"
+	hash := strings.Repeat("c", 64)
+	original := assistant.MessageEvent{
+		Kind: assistant.EventKindGroup, Time: 10, GroupID: "one", UserID: "Alice", MessageID: "same-image", SenderName: "Alice",
+		Segments: []assistant.MessageSegment{
+			{Type: "text", Data: map[string]string{"text": "旧说明"}},
+			{Type: "image", Data: map[string]string{"content_sha256": hash, "file_id": "old-file-id"}},
+		},
+	}
+	if err := store.AppendMessageEvent(ctx, session, original); err != nil {
+		t.Fatal(err)
+	}
+	current := original
+	current.Edited = true
+	current.Segments = []assistant.MessageSegment{
+		{Type: "text", Data: map[string]string{"text": "编辑后的当前说明"}},
+		{Type: "image", Data: map[string]string{"content_sha256": hash, "file_id": "renewed-file-id"}},
+	}
+	if err := store.AppendMessageEvent(ctx, session, current); err != nil {
+		t.Fatal(err)
+	}
+	returned, saved, err := store.SaveMessageSearchExtraIfMediaCurrent(ctx, session, original, "同一张图片的异步描述")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !saved || assistant.PlainText(returned.Segments) != "编辑后的当前说明" {
+		t.Fatalf("save=%v current=%#v", saved, returned)
+	}
+	query := assistant.MessageHistorySearchQuery{Session: session, Text: "异步描述", FromTime: 0, ThroughTime: 100, Limit: 20}
+	events, total, err := store.SearchMessageEvents(ctx, query)
+	if err != nil || total != 1 || len(events) != 1 || assistant.PlainText(events[0].Segments) != "编辑后的当前说明" {
+		t.Fatalf("current media search: events=%#v total=%d err=%v", events, total, err)
 	}
 }

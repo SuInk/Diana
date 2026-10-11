@@ -105,6 +105,14 @@ type MessageHistoryStore interface {
 	ListRecentMessageEvents(ctx context.Context, session string, limit int) ([]MessageEvent, error)
 }
 
+// MessageHistoryRevisionStore is an optional append capability that returns the
+// revision which remains durable. A worker restored with an older processing
+// snapshot can then align memory and derived indexes with an edit persisted
+// before the restart.
+type MessageHistoryRevisionStore interface {
+	AppendMessageEventRevision(ctx context.Context, session string, event MessageEvent) (current MessageEvent, written bool, err error)
+}
+
 type NoticeAuditStore interface {
 	RecordNoticeEvent(ctx context.Context, session string, event MessageEvent) error
 }
@@ -430,9 +438,13 @@ type Runtime struct {
 	wholeMuteSnapshots wholeMuteSnapshotStore
 	// telegramOwnerIDs 记主人配成 @用户名时见过的数字 ID（键是机器人 ID），私聊通知要用。
 	telegramOwnerIDs sync.Map
-	buildInfo        BuildInfo
-	releaseStatus    ReleaseStatusProvider
-	reminders        ReminderStore
+	// telegramRecallProbes serializes active deletion checks per bot account and
+	// remembers recent results/rate limits so repeated queries do not hammer the
+	// Bot API. It owns its own lock; Runtime.mu must not be held while acquiring it.
+	telegramRecallProbes telegramRecallProbeRegistry
+	buildInfo            BuildInfo
+	releaseStatus        ReleaseStatusProvider
+	reminders            ReminderStore
 	// reminderWake 叫醒提醒调度循环重算下一次唤醒时间，见 runReminderLoop。
 	reminderWake     chan struct{}
 	reminderWakeOnce sync.Once
@@ -500,6 +512,10 @@ type Runtime struct {
 	relationshipEvalSem chan struct{}
 	relationshipEvalWG  sync.WaitGroup
 	history             map[string][]MessageEvent
+	// latestMessageEdits keeps the current Telegram revision long enough to
+	// stop an already claimed worker from putting its older snapshot back into
+	// the in-memory timeline after the edit has been persisted.
+	latestMessageEdits  map[string]messageEditRevision
 	groupPromptSessions map[string]*groupPromptSession
 	groupPromptHistory  map[string]groupPromptHistoryBuffer
 	semanticRefCache    map[string]SemanticReferenceCacheRecord
@@ -4638,10 +4654,8 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		reply = r.persistentVoiceReply(ctx, event, reply)
 	}
 	if nested := nestedForwardPluginResponse(pluginResponses); nested != nil {
-		var sentMessageIDs []string
 		err := r.withReplySuppressionOutboundGate(sendBaseCtx, event, func(sendCtx context.Context) error {
-			var sendErr error
-			sentMessageIDs, sendErr = r.sendNestedForwardPluginResponse(sendCtx, event, *nested, reply, cfg)
+			_, sendErr := r.sendNestedForwardPluginResponseWithCleanup(sendCtx, event, *nested, reply, cfg, recallReplyAutoDeleteDelay(cfg))
 			if sendErr != nil {
 				return sendErr
 			}
@@ -4650,9 +4664,6 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		})
 		if err != nil {
 			return "", err
-		}
-		if recallReplyShouldAutoDelete(cfg, pluginResponses) {
-			r.scheduleMessageDeletes(event, sentMessageIDs, recallReplyAutoDeleteDelay(cfg))
 		}
 		imageAnnouncements.startPending()
 		return strings.Join(splitEventChatReply(reply, cfg, event), "\n"), nil
@@ -7173,6 +7184,9 @@ type outboundDecoration struct {
 	ReplyToCurrent bool
 	// MentionAlways 让 @ 不受「群聊 @ 发送者」开关约束，只用于主动通知。
 	MentionAlways bool
+	// LiteralText 表示正文是缓存的用户原文，不能把其中碰巧出现的 Diana 控制标记
+	// 或 Markdown 当成新的发送指令。
+	LiteralText bool
 }
 
 // mentionEnabled 判断本次投递该不该挂 @。
@@ -7426,11 +7440,17 @@ func outgoingSegmentsForHistory(msg OutgoingMessage) []MessageSegment {
 	if msg.ImagesFirst {
 		segments = appendHistoryImageSegments(segments, msg.ImageURLs)
 	}
-	for _, segment := range TextToOneBotSegments(msg.Text) {
-		if segment.Type == "text" && strings.TrimSpace(segment.Data["text"]) == "" {
-			continue
+	if msg.LiteralText {
+		if msg.Text != "" {
+			segments = append(segments, MessageSegment{Type: "text", Data: map[string]string{"text": msg.Text}})
 		}
-		segments = append(segments, segment)
+	} else {
+		for _, segment := range TextToOneBotSegments(msg.Text) {
+			if segment.Type == "text" && strings.TrimSpace(segment.Data["text"]) == "" {
+				continue
+			}
+			segments = append(segments, segment)
+		}
 	}
 	if !msg.ImagesFirst {
 		segments = appendHistoryImageSegments(segments, msg.ImageURLs)
@@ -7836,6 +7856,9 @@ func (r *Runtime) handleNotice(ctx context.Context, event MessageEvent) error {
 // remember 记录当前会话的最近上下文。
 func (r *Runtime) remember(event MessageEvent) {
 	event = withoutReplyRuntimeState(event)
+	r.mu.Lock()
+	event = r.currentMessageRevisionLocked(event, time.Now())
+	r.mu.Unlock()
 	session := sessionKey(event)
 	// Group context lives for a token-budget epoch, not just RecentContextLimit
 	// messages. Keep enough raw events even when there is no durable store.
@@ -7846,21 +7869,38 @@ func (r *Runtime) remember(event MessageEvent) {
 	}
 	var compressed []MessageEvent
 	r.mu.Lock()
+	event = r.currentMessageRevisionLocked(event, time.Now())
+	session = sessionKey(event)
 	history := r.history[session]
+	replacedInPlace := false
 	if event.MessageID != "" {
 		for i := range history {
 			if history[i].MessageID == event.MessageID {
+				// A worker may have claimed the original payload just before an edit
+				// refreshed durable history. Never let that older snapshot overwrite
+				// or reorder the current revision in memory.
+				if messageEventRevisionOlder(event, history[i]) {
+					r.mu.Unlock()
+					return
+				}
 				// 平台回显自己发出的消息时不知道它是订阅推送，别让回显把标记冲掉。
 				// 只认回显（本地记的出站都带 Outbound）：本地重记的一条自己说了算。
 				if event.PushKind == "" && !event.Outbound {
 					event.PushKind = history[i].PushKind
+				}
+				if event.Edited || history[i].Edited {
+					history[i] = event
+					replacedInPlace = true
+					break
 				}
 				history = append(history[:i], history[i+1:]...)
 				break
 			}
 		}
 	}
-	history = append(history, event)
+	if !replacedInPlace {
+		history = append(history, event)
+	}
 	cfg := r.effectiveConfigForEventLocked(event)
 	limit := cfg.RecentContextLimit
 	if limit <= 0 {
@@ -7892,7 +7932,9 @@ func (r *Runtime) remember(event MessageEvent) {
 		replaced := false
 		for index := range buffer.Events {
 			if event.MessageID != "" && buffer.Events[index].MessageID == event.MessageID {
-				buffer.Events[index] = event
+				if !messageEventRevisionOlder(event, buffer.Events[index]) {
+					buffer.Events[index] = event
+				}
 				replaced = true
 				break
 			}
@@ -7929,21 +7971,46 @@ func (r *Runtime) rememberReply(event MessageEvent, reply string) {
 
 func (r *Runtime) persistMessageEvent(event MessageEvent) {
 	event = withoutReplyRuntimeState(event)
+	r.mu.Lock()
+	event = r.currentMessageRevisionLocked(event, time.Now())
+	r.mu.Unlock()
 	r.mu.RLock()
 	store := r.messageStore
 	r.mu.RUnlock()
 	if store == nil {
 		return
 	}
+	storeSession := messageStoreSession(event)
 	ctx, cancel := context.WithTimeout(context.Background(), auditPersistTimeout)
 	defer cancel()
-	if err := store.AppendMessageEvent(ctx, sessionKey(event), event); err != nil {
+	var err error
+	if revisionStore, ok := store.(MessageHistoryRevisionStore); ok {
+		var current MessageEvent
+		current, _, err = revisionStore.AppendMessageEventRevision(ctx, storeSession, event)
+		if strings.TrimSpace(current.MessageID) != "" {
+			event = current
+		}
+	} else {
+		err = store.AppendMessageEvent(ctx, storeSession, event)
+	}
+	if err != nil {
 		log.Printf("diana message history persist failed: %v", err)
 		return
 	}
+	event.durableSession = storeSession
+	// An edit can commit while AppendMessageEvent is updating its derived FTS
+	// row. Re-read the runtime revision before scheduling asynchronous work so a
+	// worker that started with the original payload cannot queue a stale vector
+	// after the edit's tombstone.
+	r.mu.Lock()
+	event = r.currentMessageRevisionLocked(event, time.Now())
+	r.mu.Unlock()
+	if event.Edited {
+		event = r.refreshRememberedMessageEdit(event, storeSession)
+	}
 	r.pruneStickerLibrary(ctx, store, event)
 	// 语义检索开着的话,落库后把消息投给后台向量化。非阻塞,失败只丢这一条。
-	r.enqueueSemanticIndex(event)
+	r.enqueueSemanticIndexForSession(event, storeSession)
 }
 
 func withoutReplyRuntimeState(event MessageEvent) MessageEvent {

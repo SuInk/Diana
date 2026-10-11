@@ -189,10 +189,26 @@ func (c *TelegramChannel) pollLoop(ctx context.Context) {
 			}
 			continue
 		}
-		backoff = time.Second
 		c.setStatus(true, c.Status().SelfID, "")
+		batchOK := true
 		for _, update := range updates {
-			c.dispatch(ctx, update)
+			if err := c.dispatch(ctx, update); err != nil {
+				batchOK = false
+				log.Printf("telegram: handle update failed: update_id=%d err=%v", update.UpdateID, err)
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(backoff):
+				}
+				if backoff < 30*time.Second {
+					backoff *= 2
+				}
+				break
+			}
+			c.acknowledgeUpdate(update.UpdateID)
+		}
+		if batchOK {
+			backoff = time.Second
 		}
 	}
 }
@@ -221,20 +237,20 @@ func (c *TelegramChannel) fetchUpdates(ctx context.Context) ([]telegramUpdate, e
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	for _, update := range updates {
-		if update.UpdateID >= offset {
-			offset = update.UpdateID + 1
-		}
-	}
-	c.mu.Lock()
-	c.offset = offset
-	c.mu.Unlock()
 	return updates, nil
 }
 
-func (c *TelegramChannel) dispatch(ctx context.Context, update telegramUpdate) {
+func (c *TelegramChannel) acknowledgeUpdate(updateID int64) {
+	c.mu.Lock()
+	if updateID >= c.offset {
+		c.offset = updateID + 1
+	}
+	c.mu.Unlock()
+}
+
+func (c *TelegramChannel) dispatch(ctx context.Context, update telegramUpdate) error {
 	if ctx.Err() != nil {
-		return
+		return ctx.Err()
 	}
 	c.observeMemberUpdate(update.ChatMember, false)
 	c.observeMemberUpdate(update.MyChatMember, true)
@@ -253,27 +269,30 @@ func (c *TelegramChannel) dispatch(ctx context.Context, update telegramUpdate) {
 		handler := c.handler
 		c.mu.RUnlock()
 		if handler == nil {
-			return
+			return nil
 		}
 		if event := telegramReactionToEvent(update.MessageReaction, c.Status().SelfID); event.Kind != "" {
 			if err := handler(ctx, event); err != nil {
 				log.Printf("telegram: handle reaction failed: update_id=%d chat_id=%s message_id=%s err=%v", update.UpdateID, event.GroupID, event.MessageID, err)
 			}
 		}
-		return
+		return nil
 	}
 	message := update.Message
+	edited := false
 	if message == nil {
 		message = update.EditedMessage
+		edited = message != nil
 	}
 	if message == nil {
 		message = update.ChannelPost
 	}
 	if message == nil {
 		message = update.EditedChannelPost
+		edited = message != nil
 	}
 	if message == nil {
-		return
+		return nil
 	}
 	c.observeMemberMessage(message)
 	c.mu.RLock()
@@ -282,16 +301,30 @@ func (c *TelegramChannel) dispatch(ctx context.Context, update telegramUpdate) {
 	c.mu.RUnlock()
 	selfID := c.Status().SelfID
 	if handler == nil {
-		return
+		return nil
 	}
 	event := telegramMessageToEvent(message, selfID, username)
 	if event.Kind == "" {
-		return
+		return nil
+	}
+	if edited {
+		event.Edited = true
+		event.EditTime = message.EditDate
+		event.TelegramUpdateID = update.UpdateID
 	}
 	event = c.resolveIncomingMedia(ctx, event, message)
 	if err := handler(ctx, event); err != nil {
+		if edited {
+			// An edit is itself the durable revision update. Keep its update_id
+			// unacknowledged when storage fails so Telegram can redeliver it.
+			return fmt.Errorf("handle edited chat %s message %s: %w", event.GroupID, event.MessageID, err)
+		}
+		// Ordinary messages already use Diana's durable inbound queue. Preserve
+		// the established at-most-once transport behavior for paths that may
+		// have performed external side effects before returning an error.
 		log.Printf("telegram: handle update failed: update_id=%d chat_id=%s message_id=%s err=%v", update.UpdateID, event.GroupID, event.MessageID, err)
 	}
+	return nil
 }
 
 // Send 把统一的出站消息翻译成 Bot API 调用。
@@ -307,7 +340,7 @@ func (c *TelegramChannel) Send(ctx context.Context, msg OutgoingMessage) error {
 // 于是别人「引用 Diana 刚说的那句话」时按 ID 回查必然落空——Diana 完全看不到自己
 // 被引用了什么。
 func (c *TelegramChannel) SendWithResult(ctx context.Context, msg OutgoingMessage) (map[string]any, error) {
-	if strings.Contains(msg.Text, "[CQ:record") {
+	if !msg.LiteralText && strings.Contains(msg.Text, "[CQ:record") {
 		return nil, fmt.Errorf("telegram: 未转换的 CQ 音频消息，拒绝按文本发送")
 	}
 	chatID := strings.TrimSpace(msg.GroupID)
@@ -330,14 +363,18 @@ func (c *TelegramChannel) SendWithResult(ctx context.Context, msg OutgoingMessag
 	}
 
 	if text := strings.TrimSpace(msg.Text); text != "" {
-		// 提及标记在这里落地成 Telegram 自己的形式：正文写「@昵称」，另外附一条
-		// text_mention entity 指向用户 id。这是 Telegram 给「没有 username 的人」
-		// 准备的提及方式——显示成可点击的名字，对方有通知，不依赖 username。
-		text, mentions := renderDianaMentions(text, msg.MentionNames)
-		// Markdown 走 entities 而不是 parse_mode：正文保持纯文本，格式挂在偏移量上，
-		// 因此不需要转义——模型随口写个句号或减号也不会让整条消息以 400 被拒。
-		// 上游按平台决定要不要保留 Markdown；到这里还带标记就说明要渲染。
-		text, entities := telegramRichText(text, mentions)
+		var entities []telegramEntitySpec
+		if !msg.LiteralText {
+			// 提及标记在这里落地成 Telegram 自己的形式：正文写「@昵称」，另外附一条
+			// text_mention entity 指向用户 id。这是 Telegram 给「没有 username 的人」
+			// 准备的提及方式——显示成可点击的名字，对方有通知，不依赖 username。
+			rendered, mentions := renderDianaMentions(text, msg.MentionNames)
+			text = rendered
+			// Markdown 走 entities 而不是 parse_mode：正文保持纯文本，格式挂在偏移量上，
+			// 因此不需要转义——模型随口写个句号或减号也不会让整条消息以 400 被拒。
+			// 上游按平台决定要不要保留 Markdown；到这里还带标记就说明要渲染。
+			text, entities = telegramRichText(text, mentions)
+		}
 		if utf16Length(text) > telegramTextLimit {
 			return nil, fmt.Errorf("telegram: 文本超过单条消息上限，请降低回复字符上限或允许分条")
 		}
@@ -365,7 +402,11 @@ func (c *TelegramChannel) SendWithResult(ctx context.Context, msg OutgoingMessag
 	}
 
 	for _, image := range msg.ImageURLs {
-		result, err := c.sendMedia(ctx, chatID, msg.MessageThreadID, "sendPhoto", "photo", image)
+		method, field, err := telegramImageMethod(image)
+		if err != nil {
+			return nil, err
+		}
+		result, err := c.sendMedia(ctx, chatID, msg.MessageThreadID, method, field, image, msg.ReplyMessageID)
 		if err != nil {
 			return nil, err
 		}
@@ -559,6 +600,22 @@ func (c *TelegramChannel) CallAPI(ctx context.Context, action string, params map
 	return out, nil
 }
 
+// telegramAPIError keeps the Bot API status machine-readable. Callers such as
+// the recall probe must distinguish a missing message from throttling or a
+// permission error; flattening every response into a string makes that unsafe.
+type telegramAPIError struct {
+	Code              int
+	Description       string
+	RetryAfterSeconds int
+}
+
+func (e *telegramAPIError) Error() string {
+	if e == nil {
+		return "telegram: unknown API error"
+	}
+	return fmt.Sprintf("telegram: %s (code %d)", e.Description, e.Code)
+}
+
 func (c *TelegramChannel) callRaw(ctx context.Context, action string, params map[string]any) (json.RawMessage, error) {
 	action = strings.TrimSpace(action)
 	if action == "" {
@@ -612,12 +669,19 @@ func (c *TelegramChannel) do(req *http.Request) (json.RawMessage, error) {
 		Result      json.RawMessage `json:"result"`
 		Description string          `json:"description"`
 		ErrorCode   int             `json:"error_code"`
+		Parameters  struct {
+			RetryAfter int `json:"retry_after"`
+		} `json:"parameters"`
 	}
 	if err := json.Unmarshal(body, &envelope); err != nil {
 		return nil, fmt.Errorf("telegram: bad response (%d): %s", resp.StatusCode, strings.TrimSpace(string(body)))
 	}
 	if !envelope.OK {
-		return nil, fmt.Errorf("telegram: %s (code %d)", envelope.Description, envelope.ErrorCode)
+		return nil, &telegramAPIError{
+			Code:              envelope.ErrorCode,
+			Description:       envelope.Description,
+			RetryAfterSeconds: envelope.Parameters.RetryAfter,
+		}
 	}
 	return envelope.Result, nil
 }
@@ -700,6 +764,7 @@ type telegramMessage struct {
 	MessageID       int64            `json:"message_id"`
 	MessageThreadID int64            `json:"message_thread_id,omitempty"`
 	Date            int64            `json:"date"`
+	EditDate        int64            `json:"edit_date,omitempty"`
 	Text            string           `json:"text"`
 	Caption         string           `json:"caption"`
 	From            *telegramUser    `json:"from"`

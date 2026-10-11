@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -155,6 +156,131 @@ func TestTelegramForwardPluginUsesNativeAPI(t *testing.T) {
 		if call.Method != "sendMessage" && call.Method != "sendPhoto" && call.Method != "sendVideo" {
 			t.Fatalf("unexpected protocol call: %s", call.Method)
 		}
+	}
+}
+
+func TestTelegramNestedRecallSendsFullCachedTextAndMedia(t *testing.T) {
+	api := newFakeTelegramAPI(t, map[string]any{
+		"sendMessage": map[string]any{"message_id": 201},
+		"sendPhoto":   map[string]any{"message_id": 202},
+	})
+	r := NewRuntime(BotConfig{}, NewMultiChannel([]ChannelBinding{{
+		ProfileID: "tg",
+		Platform:  PlatformTelegram,
+		Channel:   api.channel(),
+	}}), NewPluginManager(), nil, nil, nil, nil)
+	event := MessageEvent{
+		Kind:      EventKindGroup,
+		ProfileID: "tg",
+		Platform:  PlatformTelegram,
+		GroupID:   "-100200400",
+		UserID:    "42",
+	}
+
+	const controlMarkers = "[diana-reply:123] [diana-at:10002] [CQ:record,file=/not-a-real-file.mp3] **原样保留**"
+	longOriginal := controlMarkers + strings.Repeat("这是必须完整送达的缓存原文。", 40)
+	if len([]rune(longOriginal)) <= 420 {
+		t.Fatal("test fixture must exceed the chat-history item preview limit")
+	}
+	imagePath := filepath.Join(t.TempDir(), "recalled.jpg")
+	if err := os.WriteFile(imagePath, tinyJPEGBytes(t), 0600); err != nil {
+		t.Fatal(err)
+	}
+	response := PluginResponse{NestedForward: true, ForwardMessages: []OutgoingMessage{
+		{
+			Text:        longOriginal,
+			ForwardName: "Alice",
+			ForwardUIN:  "10001",
+			ForwardTime: 1_700_000_000,
+		},
+		{
+			Segments: []MessageSegment{{Type: "image", Data: map[string]string{
+				"cached_file": imagePath,
+				"cached_mime": "image/jpeg",
+			}}},
+			ForwardName: "Bob",
+			ForwardUIN:  "10002",
+			ForwardTime: 1_700_000_060,
+		},
+	}}
+
+	messageIDs, err := r.sendNestedForwardPluginResponse(context.Background(), event, response, "最近发现两条缓存消息已不可访问。", r.ProfileConfig("tg"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(messageIDs) != 4 {
+		t.Fatalf("message IDs = %#v, want summary + 2 headers/originals + photo", messageIDs)
+	}
+
+	textCalls := api.callsOf("sendMessage")
+	if len(textCalls) != 3 {
+		t.Fatalf("sendMessage calls = %#v", textCalls)
+	}
+	var deliveredText strings.Builder
+	for _, call := range textCalls {
+		deliveredText.WriteString(call.Params["text"].(string))
+		deliveredText.WriteByte('\n')
+	}
+	gotText := deliveredText.String()
+	if !strings.Contains(gotText, longOriginal) {
+		t.Fatalf("full cached original was not delivered: got %d runes, want original %d runes", len([]rune(gotText)), len([]rune(longOriginal)))
+	}
+	if !strings.Contains(gotText, controlMarkers) {
+		t.Fatalf("cached control markers were interpreted instead of sent literally: %q", gotText)
+	}
+	for _, call := range textCalls[1:] {
+		if _, ok := call.Params["entities"]; ok {
+			t.Fatalf("cached original unexpectedly produced Telegram entities: %#v", call.Params)
+		}
+		if _, ok := call.Params["reply_to_message_id"]; ok {
+			t.Fatalf("cached reply marker unexpectedly produced a Telegram reply: %#v", call.Params)
+		}
+	}
+	for _, want := range []string{"【缓存原文 · Alice · ", "【缓存原文 · Bob · "} {
+		if !strings.Contains(gotText, want) {
+			t.Fatalf("missing cached-source header %q in %q", want, gotText)
+		}
+	}
+	if photos := api.callsOf("sendPhoto"); len(photos) != 1 {
+		t.Fatalf("sendPhoto calls = %#v", photos)
+	}
+}
+
+func TestLiteralOutgoingTextStaysLiteralInHistoryAndConfirmation(t *testing.T) {
+	const original = "[diana-reply:123] [diana-at:10002] [CQ:at,qq=10003] [CQ:record,file=/not-a-real-file.mp3] **原样保留**"
+	msg := OutgoingMessage{Text: original, LiteralText: true}
+
+	transport := buildOutgoingSegments(msg)
+	if len(transport) != 1 || transport[0]["type"] != "text" {
+		t.Fatalf("literal transport segments = %#v", transport)
+	}
+	transportData, _ := transport[0]["data"].(map[string]string)
+	if transportData["text"] != original {
+		t.Fatalf("literal transport text = %q", transportData["text"])
+	}
+
+	historySegments := outgoingSegmentsForHistory(msg)
+	if len(historySegments) != 1 || historySegments[0].Type != "text" || historySegments[0].Data["text"] != original {
+		t.Fatalf("literal history segments = %#v", historySegments)
+	}
+	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	history := runtime.outgoingHistoryEvent(MessageEvent{
+		Kind:      EventKindGroup,
+		Platform:  PlatformTelegram,
+		ProfileID: "tg",
+		GroupID:   "-100200400",
+		SelfID:    "99",
+	}, msg)
+	if history.RawMessage != original || len(history.Segments) != 1 || history.Segments[0].Type != "text" {
+		t.Fatalf("literal outgoing history = %#v", history)
+	}
+
+	fingerprint, ok := outboundConfirmFingerprintFromContext(outboundMessageContext(context.Background(), msg))
+	if !ok || len(fingerprint.pieces) != 1 || fingerprint.pieces[0] != newOutboundShape(original, nil) {
+		t.Fatalf("literal confirmation fingerprint = %#v", fingerprint)
+	}
+	if outgoingMessageFingerprint(msg) == outgoingMessageFingerprint(OutgoingMessage{Text: original}) {
+		t.Fatal("literal and interpreted sends share an idempotency fingerprint")
 	}
 }
 

@@ -224,6 +224,7 @@ func outgoingMessageFingerprint(msg OutgoingMessage) string {
 		"group=" + msg.GroupID,
 		"user=" + msg.UserID,
 		"text=" + msg.Text,
+		"literal_text=" + strconv.FormatBool(msg.LiteralText),
 		"reply=" + msg.ReplyMessageID,
 		"mention=" + msg.MentionUserID,
 		"images=" + strings.Join(msg.ImageURLs, "|"),
