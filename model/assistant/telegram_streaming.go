@@ -5,6 +5,7 @@ package assistant
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -106,15 +107,15 @@ func truncateTelegramDraft(text string, entities []telegramEntitySpec) (string, 
 	return text[:end], kept
 }
 
-func (d *telegramReplyDraft) ObserveTextDelta(ctx context.Context, text string) {
+func (d *telegramReplyDraft) ObserveTextDelta(ctx context.Context, text string) bool {
 	if d == nil || d.channel == nil || ctx.Err() != nil {
-		return
+		return false
 	}
 	text, _ = consumeReplyControlIntent(text)
 	text = strings.TrimSpace(text)
 	// Hold an incomplete metadata prefix until it can be stripped safely.
 	if text == "" || strings.HasPrefix(replySingleMarker, text) || strings.HasPrefix(replyAutoMarker, text) || strings.HasPrefix(replyLinesPreserveMarker, text) || strings.HasPrefix(replyLinesCompactMarker, text) {
-		return
+		return false
 	}
 	// Draft observers see accumulated provider text before the full response is restored.
 	// Resolve against that provider's mapping before truncation or mention cleanup.
@@ -122,12 +123,12 @@ func (d *telegramReplyDraft) ObserveTextDelta(ctx context.Context, text string) 
 		text = scope.restoreText(text)
 	}
 	if strings.Contains(text, identityAliasPrefix) {
-		return
+		return false
 	}
 	if start := strings.LastIndex(text, "["); start >= 0 {
 		pending := text[start:]
 		if strings.HasPrefix(dianaMentionMarkerPrefix, pending) || (strings.HasPrefix(pending, dianaMentionMarkerPrefix) && !strings.Contains(pending, "]")) {
-			return
+			return false
 		}
 	}
 	runes := []rune(text)
@@ -142,7 +143,7 @@ func (d *telegramReplyDraft) ObserveTextDelta(ctx context.Context, text string) 
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if d.disabled || text == d.lastText || (!d.lastSent.IsZero() && time.Since(d.lastSent) < telegramDraftUpdateInterval) {
-		return
+		return false
 	}
 	msg := d.message
 	msg.Text = text
@@ -153,8 +154,12 @@ func (d *telegramReplyDraft) ObserveTextDelta(ctx context.Context, text string) 
 		// Drafts are best effort. A Bot API server that has not implemented
 		// sendMessageDraft must not make the final reply fail.
 		d.disabled = true
-		return
+		// A definite Bot API rejection did not publish a preview. Transport
+		// failures may happen after delivery, so do not restart generation.
+		var apiErr *telegramAPIError
+		return !errors.As(err, &apiErr) || apiErr.Code < 400 || apiErr.Code >= 500
 	}
 	d.lastText = text
 	d.lastSent = time.Now()
+	return true
 }

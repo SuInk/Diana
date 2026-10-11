@@ -6,6 +6,7 @@ package assistant
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -98,7 +99,7 @@ func TestSearchProviderValidationAndClearKey(t *testing.T) {
 	}
 }
 
-func TestRobotSearchRoutingOverridesLegacyPluginAndFallsBack(t *testing.T) {
+func TestGlobalSearchRoutingIgnoresLegacyRobotAndFallsBack(t *testing.T) {
 	var called []string
 	primary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		called = append(called, "primary")
@@ -127,12 +128,15 @@ func TestRobotSearchRoutingOverridesLegacyPluginAndFallsBack(t *testing.T) {
 	cfg := DefaultBotConfig()
 	cfg.ID = "search-bot"
 	cfg.Enabled = true
-	cfg.WebSearch = &WebSearchAssignment{ProviderIDs: []string{a, b}, MaxResults: 3, SourceRecall: boolPointer(false)}
+	if err := manager.SaveSearchAssignment(WebSearchAssignment{ProviderIDs: []string{a, b}, MaxResults: 3, SourceRecall: boolPointer(false)}, nil); err != nil {
+		t.Fatal(err)
+	}
+	cfg.WebSearch = &WebSearchAssignment{ProviderIDs: []string{"missing"}, Disabled: true}
 	runtime := NewRuntime(cfg, nil, manager, nil, nil, nil, nil)
 	event := MessageEvent{ProfileID: cfg.ID, Kind: EventKindPrivate}
 	overrides := runtime.pluginOverridesForEvent(event)
-	if !overrides[webSearchPluginID] {
-		t.Fatal("explicit assignment failed to enable legacy-disabled plugin")
+	if _, ok := overrides[webSearchPluginID]; ok {
+		t.Fatal("legacy robot switch still applied")
 	}
 	_, settings, enabled := runtime.pluginWithSettingsForEvent(webSearchPluginID, event)
 	if !enabled || settings.Bool(webSearchSettingSourceRecall, true) || settings.Int(webSearchSettingMaxResults, 0) != 3 {
@@ -148,15 +152,16 @@ func TestRobotSearchRoutingOverridesLegacyPluginAndFallsBack(t *testing.T) {
 	}
 	cfg.WebSearch.Disabled = true
 	runtime.SetProfiles(ProfileSet{Profiles: []BotConfig{cfg}})
-	if runtime.pluginOverridesForEvent(event)[webSearchPluginID] {
-		t.Fatal("disabled assignment did not disable search")
+	if _, _, enabled := runtime.pluginWithSettingsForEvent(webSearchPluginID, event); !enabled {
+		t.Fatal("legacy disabled assignment affected global search")
 	}
 	// Another robot without an explicit assignment retains the existing plugin switch.
 	other := DefaultBotConfig()
 	other.ID = "other"
+	other.Enabled = true
 	runtime.SetProfiles(ProfileSet{Profiles: []BotConfig{cfg, other}})
-	if runtime.pluginOverridesForEvent(MessageEvent{ProfileID: other.ID, Kind: EventKindPrivate})[webSearchPluginID] {
-		t.Fatal("route leaked to another robot")
+	if _, settings, enabled := runtime.pluginWithSettingsForEvent(webSearchPluginID, MessageEvent{ProfileID: other.ID, Kind: EventKindPrivate}); !enabled || settings.Int(webSearchSettingMaxResults, 0) != 3 {
+		t.Fatal("global route not shared")
 	}
 }
 
@@ -190,7 +195,9 @@ func TestHTTPSearchProviderRestartsWithMappingsAndRobotUsesSavedKey(t *testing.T
 	}
 	cfg := DefaultBotConfig()
 	cfg.ID = "http-search-bot"
-	cfg.WebSearch = &WebSearchAssignment{ProviderIDs: []string{id}, MaxResults: 2, SourceRecall: boolPointer(false)}
+	if err := restored.SaveSearchAssignment(WebSearchAssignment{ProviderIDs: []string{id}, MaxResults: 2, SourceRecall: boolPointer(false)}, nil); err != nil {
+		t.Fatal(err)
+	}
 	runtime := NewRuntime(cfg, nil, restored, nil, nil, nil, nil)
 	_, settings, enabled := runtime.pluginWithSettingsForEvent(webSearchPluginID, MessageEvent{ProfileID: cfg.ID, Kind: EventKindPrivate})
 	if !enabled {
@@ -223,7 +230,7 @@ func TestWebSearchAssignmentRoundTripAndOldClients(t *testing.T) {
 	if !reflect.DeepEqual(legacy.WebSearch, original.WebSearch) {
 		t.Fatal("omitted assignment reset old client config")
 	}
-	for _, assignment := range []*WebSearchAssignment{{ProviderIDs: nil}, {ProviderIDs: []string{"exa", "exa"}}, {ProviderIDs: []string{"exa"}, MaxResults: 11}} {
+	for _, assignment := range []*WebSearchAssignment{{ProviderIDs: []string{}}, {ProviderIDs: []string{"exa", "exa"}}, {ProviderIDs: []string{"exa"}, MaxResults: 11}} {
 		if assignment.Validate() == nil {
 			t.Fatal("invalid search assignment accepted")
 		}
@@ -246,7 +253,7 @@ func TestWebSearchIgnoresGroupOverrides(t *testing.T) {
 	runtime := NewRuntime(cfg, nil, manager, nil, nil, nil, nil)
 	runtime.SetGroupConfigStore(&stubGroupConfigStore{configs: map[string]GroupConfig{"10001": {GroupID: "10001", PluginOverrides: map[string]bool{webSearchPluginID: false}, PluginSettingOverrides: overrides}}})
 	event := MessageEvent{ProfileID: cfg.ID, Kind: EventKindGroup, GroupID: "10001"}
-	if !runtime.pluginOverridesForEvent(event)[webSearchPluginID] {
+	if !manager.EnabledWithOverrides(webSearchPluginID, runtime.pluginOverridesForEvent(event)) {
 		t.Fatal("legacy group switch still disables search")
 	}
 	if _, ok := runtime.pluginSettingOverridesForEvent(event)[webSearchPluginID][webSearchSettingMaxResults]; ok {
@@ -279,8 +286,8 @@ func TestSearchProviderCatalogPreservesBrowserEngineDefaults(t *testing.T) {
 	runtime := NewRuntime(BotConfig{ID: "bot", WebSearch: &WebSearchAssignment{Disabled: true, ProviderIDs: []string{"engine-google"}}}, nil, manager, nil, nil, nil, nil)
 	event := MessageEvent{ProfileID: "bot", Kind: EventKindPrivate}
 	overrides := runtime.pluginSettingOverridesForEvent(event)
-	if !searchDisabledByOverride(overrides) {
-		t.Fatal("disabled search could be re-enabled by browser fallback")
+	if _, ok := overrides[webSearchPluginID]; ok {
+		t.Fatal("legacy search assignment applied")
 	}
 }
 
@@ -310,5 +317,75 @@ func TestSearchProviderExportImportRoundTrip(t *testing.T) {
 	after, _ := target.ExportSearchProviders()
 	if !slices.ContainsFunc(after, func(p SearchProvider) bool { return p.ID == id && p.APIKey == "custom-secret" }) || !slices.ContainsFunc(after, func(p SearchProvider) bool { return p.ID == keep && p.APIKey == "keep-secret" }) {
 		t.Fatalf("after import=%#v", after)
+	}
+}
+
+func TestGlobalSearchAssignmentAtomicPersistenceAndReferences(t *testing.T) {
+	m := NewDefaultPluginManager()
+	before := m.Snapshot()
+	failure := errors.New("disk unavailable")
+	err := m.SaveSearchAssignment(WebSearchAssignment{Disabled: true, ProviderIDs: []string{"browser"}, MaxResults: 8}, func(snapshot map[string]PersistedPluginState) error {
+		state := snapshot[webSearchPluginID]
+		if state.Enabled == nil || *state.Enabled || state.Settings[webSearchSettingMaxResults] != 8 {
+			t.Fatal("non-atomic persisted assignment")
+		}
+		return failure
+	})
+	if !errors.Is(err, failure) || !reflect.DeepEqual(before, m.Snapshot()) {
+		t.Fatal("failed save mutated runtime")
+	}
+	if err := m.SaveSearchAssignment(WebSearchAssignment{ProviderIDs: []string{"browser"}}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.DeleteSearchProvider("browser"); err == nil {
+		t.Fatal("deleted referenced provider")
+	}
+	if _, err := m.SaveSearchProvider(SearchProvider{ID: "browser", Name: "Browser", Type: "browser", URL: "https://www.google.com/search", Disabled: true}); err == nil {
+		t.Fatal("disabled active referenced provider")
+	}
+	if err := m.ImportSearchProviders([]SearchProvider{{ID: "browser", Name: "Browser", Type: "browser", URL: "https://www.google.com/search", Disabled: true}}); err == nil {
+		t.Fatal("import disabled active provider")
+	}
+	if err := m.SaveSearchAssignment(WebSearchAssignment{Disabled: true, ProviderIDs: []string{"browser"}}, nil); err != nil {
+		t.Fatal(err)
+	}
+	restored := NewDefaultPluginManager()
+	restored.Restore(m.Snapshot())
+	restored.MigrateProfileConfigurations([]BotConfig{{ID: "bot"}})
+	config, _ := restored.SearchConfiguration("bot")
+	if !config.DefaultAssignment.Disabled || !reflect.DeepEqual(config.DefaultAssignment.ProviderIDs, []string{"browser"}) {
+		t.Fatalf("lost disabled route: %+v", config)
+	}
+	if err := restored.SaveSearchAssignment(WebSearchAssignment{Disabled: true, ProviderIDs: []string{"stale-provider"}}, nil); err != nil {
+		t.Fatalf("cannot disable stale route: %v", err)
+	}
+	if err := restored.SaveSearchAssignment(WebSearchAssignment{ProviderIDs: []string{"stale-provider"}}, nil); err == nil {
+		t.Fatal("enabled stale route")
+	}
+}
+
+func TestGlobalSearchMigrationPreservesSettingsAndExplicitEmptyRoute(t *testing.T) {
+	for _, migrated := range []bool{false, true} {
+		m := NewDefaultPluginManager()
+		m.Restore(map[string]PersistedPluginState{webSearchPluginID: {Installed: true, Enabled: boolPointer(true), ProfileConfigMigrated: migrated, Settings: map[string]any{searchProviderOrderSetting: "[]", webSearchSettingMaxResults: 7}, ProfileEnabled: map[string]bool{"bot": false}, ProfileSettings: map[string]map[string]any{"bot": {searchProviderOrderSetting: `["browser"]`, webSearchSettingMaxResults: 2}}}})
+		m.MigrateProfileConfigurations([]BotConfig{{ID: "bot"}})
+		state := m.Snapshot()[webSearchPluginID]
+		if state.Settings[searchProviderOrderSetting] != "[]" || SettingValues(state.Settings).Int(webSearchSettingMaxResults, 0) != 7 || len(state.ProfileSettings) != 1 {
+			t.Fatalf("global or backup overwritten: %+v", state)
+		}
+		tools, err := m.AgentToolsWithOverrides(m.ProfileOverrides("bot"))
+		if err != nil || hasAgentToolNamed(tools, agent.WebSearchToolName) {
+			t.Fatal("empty route bypassed")
+		}
+		if err := m.SaveSearchAssignment(WebSearchAssignment{ProviderIDs: []string{}}, nil); err == nil {
+			t.Fatal("enabled empty assignment accepted")
+		}
+		if err := m.SaveSearchAssignment(WebSearchAssignment{}, nil); err != nil {
+			t.Fatal(err)
+		}
+		tools, err = m.AgentToolsWithOverrides(m.ProfileOverrides("bot"))
+		if err != nil || !hasAgentToolNamed(tools, agent.WebSearchToolName) {
+			t.Fatal("missing route lost legacy defaults")
+		}
 	}
 }

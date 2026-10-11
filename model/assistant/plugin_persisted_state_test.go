@@ -9,9 +9,8 @@ import (
 	"testing"
 )
 
-// 插件开关在 WebUI 上一律按机器人来，全局开关既看不到也改不了。它却还在库里留着一份值，
-// 排查时看到「enabled=false」会以为插件是关的，其实那个机器人的开关是开的。
-// 现在落库只存用户改得动的部分：全局开关不再写，manifest 由代码声明不落库。
+// 普通插件开关按机器人保存，不再写看不见的全局开关；联网搜索有独立的全局入口，
+// 必须保留全局开关。manifest 由代码声明，不落库。
 func TestPersistedPluginStateDropsInvisibleGlobalSwitch(t *testing.T) {
 	m := NewDefaultPluginManager()
 	if _, err := m.SetEnabledForProfile(statusCommandPluginID, "qq", true); err != nil {
@@ -29,7 +28,11 @@ func TestPersistedPluginStateDropsInvisibleGlobalSwitch(t *testing.T) {
 		if _, ok := record["manifest"]; ok {
 			t.Fatalf("%s 落库时还带着 manifest", id)
 		}
-		if _, ok := record["enabled"]; ok {
+		if id == webSearchPluginID {
+			if _, ok := record["enabled"].(bool); !ok {
+				t.Fatal("联网搜索没有保存全局开关")
+			}
+		} else if _, ok := record["enabled"]; ok {
 			t.Fatalf("%s 落库时还带着看不见的全局开关", id)
 		}
 	}

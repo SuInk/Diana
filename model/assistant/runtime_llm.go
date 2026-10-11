@@ -6,7 +6,6 @@ package assistant
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log"
 	"path/filepath"
@@ -405,6 +404,12 @@ func (r *Runtime) wrapLLMProviderForContext(ctx context.Context, provider LLMPro
 }
 
 func (r *Runtime) runRawLLMProviderForGroup(ctx context.Context, group string, run llmProviderRunFunc) (string, error) {
+	if timeout := r.configForContext(ctx).ModelRequestTimeout; timeout > 0 {
+		next := run
+		run = func(provider LLMProvider) (string, error) {
+			return next(&modelRequestTimeoutLLMProvider{provider: provider, timeout: timeout})
+		}
+	}
 	roles := r.modelRolesForContext(ctx)
 	r.mu.RLock()
 	cfgFactory := r.llmCfgFactory
@@ -628,6 +633,12 @@ func (r *Runtime) runLLMRouterProviderWithRetry(ctx context.Context, retryTransi
 	run = r.withDebugTraceRun(ctx, run)
 	run = r.withPromptCacheProbeRun(ctx, run)
 	run = r.withLLMUsageAccountingRun(ctx, run)
+	if timeout := r.configForContext(ctx).ModelRequestTimeout; timeout > 0 {
+		next := run
+		run = func(provider LLMProvider) (string, error) {
+			return next(&modelRequestTimeoutLLMProvider{provider: provider, timeout: timeout})
+		}
+	}
 	r.mu.RLock()
 	cfgFactory := r.llmCfgFactory
 	factory := r.llmFactory
@@ -762,84 +773,11 @@ func (r *Runtime) runLLMProviderWithFailover(ctx context.Context, store LLMProfi
 }
 
 func shouldFailoverLLMError(err error) bool {
-	if err == nil {
-		return false
-	}
-	if errors.Is(err, llm.ErrUnverifiedRejection) {
-		return true
-	}
-	// 绑到只做判断的模型、而这个用途要的是文本，属于能力不匹配，不是上游故障——
-	// 正好是降级链该接手的情况。不降级的话，把 intent 整组绑到判断模型就会让所有
-	// 没备判断题表的判定用途（语义承接、发送前审核、记忆抽取…）整条失败，而不是
-	// 退到下一档对话模型。
-	if errors.Is(err, llm.ErrDecisionRequired) {
-		return true
-	}
-	if errors.Is(err, errContentPolicyRejection) || isContentPolicyRejection(err) {
-		return false
-	}
-	if isModelUnavailableLLMError(err) {
-		return true
-	}
-	if errors.Is(err, llm.ErrCompletionHasNoText) {
-		return false
-	}
-	if errors.Is(err, llm.ErrCompletionTruncatedNoText) {
-		return true
-	}
-	if errors.Is(err, llm.ErrCompletionEmpty) {
-		return true
-	}
-	if shouldRetryTransientLLMError(err) {
-		return true
-	}
-	text := strings.ToLower(err.Error())
-	for _, marker := range []string{
-		"401", "403", "429",
-		"unauthorized", "forbidden", "too many requests",
-		"api key", "apikey", "authentication", "auth",
-		"permission", "permission_error",
-		"quota", "insufficient_quota", "billing", "credit",
-		"rate limit", "rate_limit",
-		"未授权", "无权限", "额度", "限流", "失效", "无效",
-	} {
-		if strings.Contains(text, marker) {
-			return true
-		}
-	}
-	return false
+	return llmErrorPolicy(err).failover
 }
 
 func shouldRetryTransientLLMError(err error) bool {
-	if err == nil {
-		return false
-	}
-	if errors.Is(err, errContentPolicyRejection) || isContentPolicyRejection(err) {
-		return false
-	}
-	if errors.Is(err, llm.ErrCompletionHasNoText) || errors.Is(err, llm.ErrCompletionTruncatedNoText) {
-		return false
-	}
-	if errors.Is(err, llm.ErrCompletionEmpty) {
-		return true
-	}
-	if errors.Is(err, context.DeadlineExceeded) {
-		return true
-	}
-	text := strings.ToLower(err.Error())
-	for _, marker := range []string{
-		"502", "503", "504",
-		"bad gateway", "service unavailable", "gateway timeout",
-		"cloudflare",
-		"context deadline exceeded", "client.timeout exceeded", "timeout awaiting response headers",
-		"eof", "connection reset", "connection refused", "connection aborted",
-		"unexpected end of file", "server closed idle connection",
-	} {
-		if strings.Contains(text, marker) {
-			return true
-		}
-	}
-	return false
+	return llmErrorPolicy(err).retry
 }
 
 // systemPrompt 组合系统提示词和插件上下文。

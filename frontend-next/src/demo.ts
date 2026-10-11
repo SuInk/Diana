@@ -147,7 +147,7 @@ const oneBotProfile: BotProfileConfig = {
   image_generation_daily_group_limit: 30, image_generation_daily_user_limit: 5,
   video_generation_daily_group_limit: 5, video_generation_daily_user_limit: 1,
   cross_group_memory_enabled: true, world_book_enabled: true, mood_enabled: true, poke_reply_enabled: true, expression_learning_enabled: true, style_filter_enabled: true, dict_segment_enabled: true, semantic_search_enabled: false, agent_enabled: true, agent_mode: "standard", agent_max_steps: 20,
-  max_bot_concurrency: 4, request_timeout_ms: 60_000,
+  max_bot_concurrency: 4, request_timeout_ms: 60_000, model_request_timeout_ms: 0,
   model_roles: {
     chat: { profile_id: "llm-chat", model: "gpt-6-sol" }, vision: { profile_id: "llm-vision", model: "gpt-6-sol" },
     intent: { profile_id: "llm-intent", model: "gpt-5.6-terra" }, image: { profile_id: "llm-image", model: "gpt-image-2.5-sunburst" }
@@ -170,8 +170,9 @@ let demoSearchProviders: SearchProvider[] = [
   ...[{id:'google',url:'https://www.google.com/search',param:'q'}, {id:'bing',url:'https://www.bing.com/search',param:'q'}, {id:'duckduckgo',url:'https://duckduckgo.com/',param:'q'}, {id:'baidu',url:'https://www.baidu.com/s',param:'wd'}].map(engine => ({id:`engine-${engine.id}`,name:engine.id,type:'browser' as const,url:engine.url,tool:engine.id,query_param:engine.param})),
 ];
 const demoSearchKeys: Record<string, string> = { tavily: 'demo-secret' };
+let demoSearchAssignment: SearchConfiguration['default_assignment'] | undefined;
 function demoSearchConfiguration(): SearchConfiguration {
-  return { providers: demoSearchProviders.map(provider => ({ ...provider, api_key_configured: !!demoSearchKeys[provider.id] })), default_assignment: { provider_ids: demoSearchProviders.filter(provider => provider.id.startsWith('engine-') && !provider.disabled).map(provider => provider.id), max_results: 5, provider_timeout_seconds: 25, total_timeout_seconds: 90, source_recall: true, reply_link_policy: 'on_request' } };
+  return { providers: demoSearchProviders.map(provider => ({ ...provider, api_key_configured: !!demoSearchKeys[provider.id] })), default_assignment: demoSearchAssignment ?? { provider_ids: demoSearchProviders.filter(provider => provider.id.startsWith('engine-') && !provider.disabled).map(provider => provider.id), max_results: 5, provider_timeout_seconds: 25, total_timeout_seconds: 90, source_recall: true, reply_link_policy: 'on_request' } };
 }
 
 
@@ -188,7 +189,7 @@ function demoPluginForProfile(plugin: PluginState, profile: string): PluginState
 }
 
 let plugins: PluginState[] = [
-  { manifest: { id: 'official.web-search', name: '联网搜索', version: '0.3.4', description: '为对话提供实时联网搜索。搜索来源与凭据在提供商页管理，机器人在模型与搜索页选择首选和后备来源。', official: true, built_in: true, permissions: ['network:http', 'llm:tool'], settings: [{ key: 'max_results', label: '每次结果上限', type: 'number', default: 5 }] }, installed: true, enabled: true },
+  { manifest: { id: 'official.web-search', name: '联网搜索', version: '0.3.4', description: '为对话提供实时联网搜索。搜索开关、来源与凭据在提供商页全局管理，所有机器人共用。', official: true, built_in: true, permissions: ['network:http', 'llm:tool'], settings: [{ key: 'max_results', label: '每次结果上限', type: 'number', default: 5 }] }, installed: true, enabled: true },
   { manifest: { id: "official.file-parser", name: "文件解析", version: "0.3.0", description: "解析 PDF、图片和文本附件，把结构化内容交给模型。", official: true, built_in: true, permissions: ["文件解析", "消息读取"] }, installed: true, enabled: true },
   { manifest: resolverDemoManifest, installed: true, enabled: true },
   {
@@ -1133,6 +1134,21 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
     return json(demoHistoryMediaPolicy);
   }
 
+  if (path === '/api/assistant/search-assignment') {
+    if (method === 'PUT') {
+      const ids = body.provider_ids;
+      if (!Array.isArray(ids) || ids.length > 16 || ids.some(id => typeof id !== 'string' || !demoSearchProviders.some(provider => provider.id === id)) || new Set(ids).size !== ids.length) return json({ error: '请选择有效且不重复的搜索提供商' }, 400);
+      if (!body.disabled && !ids.length) return json({ error: '启用联网搜索需要选择一个首选提供商' }, 400);
+      for (const [key, min, max] of [['max_results', 1, 10], ['provider_timeout_seconds', 2, 30], ['total_timeout_seconds', 5, 90]] as const) {
+        const value = body[key];
+        if (value !== undefined && value !== 0 && (typeof value !== 'number' || !Number.isInteger(value) || value < min || value > max)) return json({ error: '搜索参数超出允许范围' }, 400);
+      }
+      if (body.reply_link_policy && !['on_request', 'always', 'never'].includes(String(body.reply_link_policy))) return json({ error: '回复链接策略无效' }, 400);
+      demoSearchAssignment = { provider_ids: [...ids], disabled: !!body.disabled, max_results: Number(body.max_results) || 5, provider_timeout_seconds: Number(body.provider_timeout_seconds) || 12, total_timeout_seconds: Number(body.total_timeout_seconds) || 35, source_recall: body.source_recall !== false, reply_link_policy: (body.reply_link_policy || 'on_request') as SearchConfiguration['default_assignment']['reply_link_policy'] };
+    }
+    return json(demoSearchConfiguration().default_assignment);
+  }
+
   if (path === '/api/assistant/search-providers') {
     if (method === 'POST') {
       if (!String(body.name ?? '').trim() || !['exa_mcp', 'tavily', 'perplexity', 'tinyfish', 'brave', 'search_mcp', 'browser', 'http'].includes(String(body.type))) return json({ error: '请填写名称并选择接入协议' }, 400);
@@ -1165,7 +1181,7 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
   }
   if (path.startsWith('/api/assistant/search-providers/') && method === 'DELETE') {
     const id = decodeURIComponent(path.split('/').pop()!);
-    if (assistantConfig.profiles?.some(profile => profile.web_search?.provider_ids.includes(id))) return json({ error: '机器人仍在使用此搜索提供商，请先更换搜索来源' }, 409);
+    if (demoSearchAssignment?.provider_ids.includes(id)) return json({ error: '全局搜索仍引用此提供商，请先更换搜索来源' }, 409);
     demoSearchProviders = demoSearchProviders.filter(provider => provider.id !== id);
     delete demoSearchKeys[id];
     return json(demoSearchConfiguration());
@@ -1512,7 +1528,7 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
   if (path === "/api/assistant/config/defaults" && method === "GET") return json({
     platform: url.searchParams.get("platform") || "onebot-v11", enabled: true, owner_login_enabled: true,
     onebot_transport: "reverse_ws", onebot_reverse_ws_endpoint: "ws://127.0.0.1:18080/onebot/v11/ws",
-    group_triggers: ["Diana", "diana"], private_admission: { mode: "disabled" }, request_timeout_ms: 60000, agent_enabled: true, agent_mode: "standard",
+    group_triggers: ["Diana", "diana"], private_admission: { mode: "disabled" }, request_timeout_ms: 60000, model_request_timeout_ms: 0, agent_enabled: true, agent_mode: "standard",
     sticker_reply_order: "before"
   });
   if (path === "/api/assistant/config" && method === "GET") return json(assistantConfig);

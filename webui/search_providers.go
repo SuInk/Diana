@@ -6,18 +6,13 @@ package webui
 import (
 	"fmt"
 	"net/http"
-	"slices"
 
 	"github.com/SuInk/diana/model/assistant"
 	"github.com/gin-gonic/gin"
 )
 
 func (h *BotHandler) searchProviders(c *gin.Context) {
-	profileID, ok := h.pluginProfileScope(c)
-	if !ok {
-		return
-	}
-	config, err := h.runtime.Plugins().SearchConfiguration(profileID)
+	config, err := h.runtime.Plugins().SearchConfiguration("")
 	if err != nil {
 		h.writeError(c, http.StatusBadRequest, "search_providers", err, "", nil)
 		return
@@ -100,12 +95,6 @@ func (h *BotHandler) testSearchProvider(c *gin.Context) {
 
 func (h *BotHandler) deleteSearchProvider(c *gin.Context) {
 	id := c.Param("id")
-	for _, profile := range h.profiles.Profiles().WithDefaults().Profiles {
-		if profile.WebSearch != nil && slices.Contains(profile.WebSearch.ProviderIDs, id) {
-			h.writeError(c, http.StatusConflict, "search_provider_delete", fmt.Errorf("机器人「%s」仍在使用此搜索提供商，请先更换搜索来源", profile.Name), id, nil)
-			return
-		}
-	}
 	if err := h.runtime.Plugins().DeleteSearchProvider(id); err != nil {
 		h.writeError(c, http.StatusBadRequest, "search_provider_delete", err, id, nil)
 		return
@@ -123,18 +112,36 @@ func (h *BotHandler) deleteSearchProvider(c *gin.Context) {
 	c.JSON(http.StatusOK, config)
 }
 
-func (h *BotHandler) validateSearchAssignment(value *assistant.WebSearchAssignment) error {
-	if value == nil || value.Disabled {
-		return nil
-	}
+func (h *BotHandler) searchAssignment(c *gin.Context) {
 	config, err := h.runtime.Plugins().SearchConfiguration("")
 	if err != nil {
-		return err
+		h.writeError(c, http.StatusBadRequest, "search_assignment", err, "", nil)
+		return
 	}
-	for _, id := range value.ProviderIDs {
-		if !slices.ContainsFunc(config.Providers, func(provider assistant.SearchProvider) bool { return provider.ID == id && !provider.Disabled }) {
-			return fmt.Errorf("搜索提供商 %s 不存在或已停用，请重新选择", id)
+	c.JSON(http.StatusOK, config.DefaultAssignment)
+}
+
+func (h *BotHandler) saveSearchAssignment(c *gin.Context) {
+	var value assistant.WebSearchAssignment
+	if err := c.ShouldBindJSON(&value); err != nil {
+		h.writeError(c, http.StatusBadRequest, "search_assignment_save", err, "", nil)
+		return
+	}
+	status := http.StatusBadRequest
+	err := h.runtime.Plugins().SaveSearchAssignment(value, func(states map[string]assistant.PersistedPluginState) error {
+		if h.sqlite == nil {
+			return nil
 		}
+		if err := h.sqlite.SavePluginStates(h.ctx, states); err != nil {
+			status = http.StatusInternalServerError
+			return fmt.Errorf("全局搜索配置持久化失败：%w", err)
+		}
+		return nil
+	})
+	if err != nil {
+		h.writeError(c, status, "search_assignment_save", err, "", nil)
+		return
 	}
-	return nil
+	recordRequestOperation(c, h.logs, "search_assignment_save", "全局搜索配置已保存", "", nil)
+	h.searchAssignment(c)
 }

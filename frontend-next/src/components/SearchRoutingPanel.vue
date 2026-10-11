@@ -3,8 +3,8 @@
 
 <template>
   <div class="search-routing-panel">
-    <div class="model-purpose-heading"><div><h3>联网搜索</h3><span class="badge">主备回退</span></div><button class="btn small" type="button" @click="navigate('provider', { section: 'search' })"><Settings2 :size="14" aria-hidden="true" />管理提供商</button></div>
-    <p class="hint search-routing-intro">选择这台机器人使用的搜索来源。地址和密钥在「提供商」页统一管理，插件无需重复配置。</p>
+    <div class="model-purpose-heading"><div><h3>全局联网搜索</h3><span class="badge">主备回退</span></div></div>
+    <p class="hint search-routing-intro">所有机器人共用此处的开关、搜索来源与参数。地址和密钥在下方管理；旧机器人搜索覆盖不再生效。</p>
     <p v-if="loading && !config" class="muted">正在加载搜索来源…</p>
     <div v-if="error" class="operation-error" role="alert">{{ error }}<button class="btn small" type="button" @click="load">重试</button></div>
     <template v-if="config">
@@ -37,24 +37,23 @@
           </div>
         </AppDisclosure>
       </template>
-      <p class="hint search-routing-save-hint">修改后点击页面「保存配置」，仅影响当前机器人。</p>
+      <p class="hint search-routing-save-hint">修改后点击「保存全局搜索」才会生效，影响所有机器人。</p>
     </template>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
-import { ChevronDown, ChevronUp, Plus, Settings2, Trash2 } from "@lucide/vue";
+import { computed, onMounted, ref } from "vue";
+import { ChevronDown, ChevronUp, Plus, Trash2 } from "@lucide/vue";
 import { getSearchProviders, type SearchConfiguration, type WebSearchAssignment } from "../api";
 import { useConfigurationRefresh } from "../configuration-sync";
-import { navigate } from "../router";
 import { searchProviderTypeLabel } from "../search-providers";
 import AppDisclosure from "./AppDisclosure.vue";
 import AppNumberInput from "./AppNumberInput.vue";
 import AppSelect from "./AppSelect.vue";
 import AppSwitch from "./AppSwitch.vue";
 
-const props = defineProps<{ modelValue?: WebSearchAssignment; profileId?: string }>();
+const props = defineProps<{ modelValue: WebSearchAssignment }>();
 const emit = defineEmits<{ 'update:modelValue': [WebSearchAssignment] }>();
 const config = ref<SearchConfiguration | null>(null);
 const loading = ref(false);
@@ -79,14 +78,14 @@ const linkPolicies = [{ value: "on_request", label: "跟随人设，追问再给
 async function load(): Promise<void> {
   const version = ++loadVersion;
   loading.value = true;
-  try { const result = await getSearchProviders(props.profileId); if (version === loadVersion) { config.value = result; error.value = ""; } }
+  try { const result = await getSearchProviders(); if (version === loadVersion) { config.value = result; error.value = ""; } }
   catch (err) { if (version === loadVersion) error.value = err instanceof Error ? err.message : "搜索来源加载失败"; }
   finally { if (version === loadVersion) loading.value = false; }
 }
 function patch(value: Partial<WebSearchAssignment>): void { emit('update:modelValue', { ...draft.value, ...value, provider_ids: [...(value.provider_ids ?? draft.value.provider_ids)] }); }
 function setEnabled(enabled: boolean): void {
   const ids = draft.value.provider_ids.length ? draft.value.provider_ids : (config.value?.providers ?? []).filter(provider => !provider.disabled).slice(0, 1).map(provider => provider.id);
-  patch({ disabled: !enabled, provider_ids: ids });
+  patch({ disabled: !enabled, provider_ids: enabled ? ids : draft.value.provider_ids });
 }
 function optionsFor(index: number) {
   const current = draft.value.provider_ids[index];
@@ -106,6 +105,6 @@ function setProvider(index: number, id: string): void { const ids = [...draft.va
 function add(): void { const provider = unusedProviders.value[0]; if (provider) patch({ provider_ids: [...draft.value.provider_ids, provider.id] }); }
 function remove(index: number): void { patch({ provider_ids: draft.value.provider_ids.filter((_, current) => current !== index) }); }
 function move(index: number, offset: number): void { const ids = [...draft.value.provider_ids]; const to = index + offset; if (to < 0 || to >= ids.length) return; [ids[index], ids[to]] = [ids[to], ids[index]]; patch({ provider_ids: ids }); }
-watch(() => props.profileId, () => { config.value = null; void load(); }, { immediate: true });
+onMounted(load);
 useConfigurationRefresh(["search"], load);
 </script>

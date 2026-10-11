@@ -307,6 +307,45 @@ func TestRuntimePrepareDirectBotFollowupRoutesImmediately(t *testing.T) {
 	}
 }
 
+func TestOrdinaryReplyHasNoRequestTimeoutDeadline(t *testing.T) {
+	for _, cancelParent := range []bool{false, true} {
+		t.Run(fmt.Sprint("cancel=", cancelParent), func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			calls := 0
+			provider := modelTimeoutTestProvider{run: func(attempt context.Context, _ llm.GenerateRequest) (*llm.GenerateResponse, error) {
+				calls++
+				if deadline, ok := attempt.Deadline(); ok {
+					t.Fatalf("unexpected total deadline: %v", deadline)
+				}
+				if cancelParent {
+					cancel()
+					<-attempt.Done()
+					return nil, attempt.Err()
+				}
+				select {
+				case <-attempt.Done():
+					return nil, attempt.Err()
+				case <-time.After(30 * time.Millisecond):
+				}
+				return nil, errors.New("test model finished without total deadline")
+			}}
+			runtime := NewRuntime(BotConfig{RequestTimeout: time.Millisecond}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) { return provider, nil })
+			_, err := runtime.replyTo(ctx, MessageEvent{Kind: EventKindPrivate, UserID: "10001", MessageID: "timeout-test", RawMessage: "你好"}, "你好")
+			if calls == 0 {
+				t.Fatal("model was not called")
+			}
+			if cancelParent {
+				if !errors.Is(err, context.Canceled) {
+					t.Fatalf("lost parent cancellation: %v", err)
+				}
+			} else if err == nil || !strings.Contains(err.Error(), "test model finished without total deadline") {
+				t.Fatalf("unexpected model result: %v", err)
+			}
+		})
+	}
+}
+
 func TestRuntimeDoesNotOverrideModelSilenceForDirectedFollowup(t *testing.T) {
 	provider := &capturingLLMProvider{reply: `{"should_reply":false,"confidence":0.99,"category":"none","target_message_id":"","turn_message_ids":[],"directed_at_bot":true,"answerable":false,"requests_response":true,"blocker":"no_capability","reason":"群成员实时人数属于不可访问的群内数据"}`}
 	runtime := NewRuntime(BotConfig{

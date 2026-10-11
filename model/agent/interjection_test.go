@@ -5,6 +5,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -60,6 +61,18 @@ func (c *interjectedClient) Generate(ctx context.Context, req llm.GenerateReques
 		return nil, ctx.Err()
 	}
 	return &llm.GenerateResponse{Text: `{"action":"final","content":"带上价格的回答"}`}, nil
+}
+
+func TestInterjectionDoesNotDiscardCommittedOutputError(t *testing.T) {
+	q := &queuedInterjections{ready: make(chan struct{}, 1)}
+	_, interjected, err := generateWithInterjections(context.Background(), q, func(ctx context.Context) (*llm.GenerateResponse, error) {
+		q.push("补充")
+		<-ctx.Done()
+		return nil, errors.Join(llm.ErrOutputCommitted, ctx.Err())
+	})
+	if interjected || !errors.Is(err, llm.ErrOutputCommitted) || !errors.Is(err, context.Canceled) {
+		t.Fatalf("interjected=%v err=%v", interjected, err)
+	}
 }
 
 func TestRunnerRedoesPlanningStepWithInterjection(t *testing.T) {

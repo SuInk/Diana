@@ -12,6 +12,10 @@ import (
 	"net/http/httptest"
 	"testing"
 	"time"
+
+	"github.com/anthropics/anthropic-sdk-go"
+	"github.com/openai/openai-go/v3"
+	"google.golang.org/genai"
 )
 
 // 上游用 Retry-After 头说明要等多久时，错误里要带出来，供降级链决定冷却多久。
@@ -45,5 +49,23 @@ func TestRetryAfterHintWithoutHeader(t *testing.T) {
 	}
 	if got := RetryAfterHint(&MediaAPIError{StatusCode: 429, RetryAfter: 3 * time.Second}); got != 3*time.Second {
 		t.Fatalf("MediaAPIError 的 RetryAfter 应当带出来，实际 %s", got)
+	}
+}
+
+func TestErrorStatusCodePrefersStructuredErrors(t *testing.T) {
+	for _, tc := range []struct {
+		err  error
+		want int
+	}{
+		{&openAIRequestError{statusCode: 400, detail: "HTTP 503 quota 429"}, 400},
+		{&openai.Error{StatusCode: 500}, 500}, {&anthropic.Error{StatusCode: 529}, 529},
+		{genai.APIError{Code: 429}, 429}, {&genai.APIError{Code: 403}, 403},
+		{&MediaAPIError{StatusCode: 401}, 401},
+		{errors.New("HTTP 500"), 500}, {errors.New("Error 529, overloaded"), 529},
+		{errors.New("request-id-429503"), 0}, {errors.New("model-500"), 0},
+	} {
+		if got := ErrorStatusCode(fmt.Errorf("wrapper: %w", tc.err)); got != tc.want {
+			t.Fatalf("%v status=%d want=%d", tc.err, got, tc.want)
+		}
 	}
 }

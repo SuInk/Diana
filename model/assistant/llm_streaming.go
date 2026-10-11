@@ -43,7 +43,8 @@ type ttftCollectorKey struct{}
 type textDeltaObserverKey struct{}
 
 type textDeltaObserver interface {
-	ObserveTextDelta(ctx context.Context, text string)
+	// Returns true if text was sent, or delivery cannot be ruled out.
+	ObserveTextDelta(ctx context.Context, text string) bool
 }
 
 func withTextDeltaObserver(ctx context.Context, observer textDeltaObserver) context.Context {
@@ -107,99 +108,79 @@ type streamingLLMProvider struct {
 	provider LLMProvider
 }
 
+type streamingRequestKey struct{}
+
+func streamingRequested(ctx context.Context) bool {
+	enabled, _ := ctx.Value(streamingRequestKey{}).(bool)
+	return enabled
+}
+
 func (p *streamingLLMProvider) Generate(ctx context.Context, req llm.GenerateRequest) (*llm.GenerateResponse, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	switch provider := p.provider.(type) {
+	case *registryFailoverLLMProvider, *profileFailoverLLMProvider, *modelRequestTimeoutLLMProvider:
+		return p.provider.Generate(context.WithValue(ctx, streamingRequestKey{}, true), req)
+	case *transientRetryLLMProvider:
+		streaming := &streamingLLMProvider{provider: provider.provider}
+		if timeout, _ := ctx.Value(modelRequestTimeoutKey{}).(time.Duration); provider.disableRetry && timeout <= 0 {
+			return streaming.Generate(ctx, req)
+		}
+		return generateWithTransientRetry(ctx, streaming, req, !provider.disableRetry)
+	}
 	streamer, ok := p.provider.(streamingLLMClient)
 	if !ok {
 		return p.provider.Generate(ctx, req)
 	}
-	for skipped := 0; ; skipped++ {
-		events, err := streamer.Stream(ctx, req)
-		if errors.Is(err, llm.ErrUnverifiedRejection) || isContentPolicyRejection(err) {
-			return nil, err
-		}
-		if err != nil || events == nil {
-			// Providers without a working streaming endpoint can still use Generate.
+	streamCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	events, err := streamer.Stream(streamCtx, req)
+	if err != nil {
+		if streamUnsupported(err) {
 			return p.provider.Generate(ctx, req)
 		}
-		response, err := accumulateChatEvents(ctx, events)
-		if errors.Is(err, llm.ErrUnverifiedRejection) || isContentPolicyRejection(err) {
-			return p.retryAfterStreamedRejection(ctx, req, err)
-		}
-		if err != nil {
-			if p.skipFailedStreamCandidate(err, skipped) {
-				continue
-			}
-			return p.provider.Generate(ctx, req)
-		}
-		if response != nil && len(response.ToolCalls) == 0 {
-			if notice := llm.RejectionNoticeError(response.Text); notice != nil {
-				return p.retryAfterStreamedRejection(ctx, req, notice)
-			}
-		}
-		if recorder, ok := p.provider.(streamSuccessRecorder); ok {
-			recorder.streamSucceeded()
-		}
-		return response, nil
+		return nil, err
 	}
+	if events == nil {
+		return nil, errors.New("diana: llm provider returned a nil stream")
+	}
+	return accumulateChatEvents(ctx, events)
 }
 
-// streamSuccessRecorder 由后备 provider 实现：流式正文完整读完才算这个候选调用
-// 成功，这时解除它的冷却。
-type streamSuccessRecorder interface {
-	streamSucceeded()
+func (p *streamingLLMProvider) ManagesAttemptTimeout() bool {
+	manager, ok := p.provider.(llmAttemptTimeoutManager)
+	return ok && manager.ManagesAttemptTimeout()
 }
 
-// skipFailedStreamCandidate 处理「流打开了，上游错误却在读流时才到」。
-//
-// Gemini 这类 SDK 是边读边发请求的：限流 503 不在打开流时报，而是作为流里第一个
-// 事件出来，打开时的后备切换因此看不到它。以前这里一律退回非流式 Generate，从同一个
-// 候选重跑整条后备链：刚限流的候选再打一遍、拿到同样的 503，后面的候选也只能走
-// 非流式。能切后备的错误改成把当前候选往后挪一位、在下一个候选上继续流式。
-//
-// 最多挪 候选数-1 次，全挪完仍失败就照旧退回非流式，交给它的整条后备链兜底；
-// 不能切后备的错误（流半路断开、空输出这类）也照旧退回，那种多半是流式通道本身的
-// 毛病，非流式能救回来。
-func (p *streamingLLMProvider) skipFailedStreamCandidate(cause error, skipped int) bool {
-	if !shouldFailoverLLMError(cause) {
+func streamUnsupported(err error) bool {
+	if err == nil || errors.Is(err, errLLMOutputCommitted) {
 		return false
 	}
-	skipper, ok := p.provider.(rejectedCandidateSkipper)
-	if !ok || skipped+1 >= skipper.candidateCount() {
+	switch llm.ErrorStatusCode(err) {
+	case 0, 400, 404, 405, 422, 501:
+	default:
 		return false
 	}
-	return skipper.skipRejectedCandidate(cause)
+	return containsAnyMarker(strings.ToLower(err.Error()), []string{"streaming is not supported", "streaming not supported", "streaming unsupported", "does not support streaming", "stream is not supported"})
 }
 
-// rejectedCandidateSkipper 由后备 provider 实现：流已经正常打开、正文却是拦截或
-// 读流时才报错时，让它把刚才那个候选往后挪一位。
-type rejectedCandidateSkipper interface {
-	skipRejectedCandidate(cause error) bool
-	candidateCount() int
-}
-
-// retryAfterStreamedRejection 处理「流正常打开、正文却是上游拦截文案」。
-//
-// 后备切换只发生在打开流那一刻：429、502 这类打开时就失败的错误会切到下一个候选，
-// 可流一旦打开，候选就定下了。上游把拦截文案当成正常正文流回来时，这一层认出拦截
-// 只能原样报错——于是非流式路径会切后备、流式路径却不会，同一句话开不开流式结果
-// 不一样。这里把能切后备的拦截交回后备 provider，跳过刚被拦的候选再来一次，免得
-// 从同一个候选开始、白白再被拦一遍。
-//
-// 不能切后备的照旧原样返回：内容策略拦截和 Gemini 结构化拦截码是有意设计成不换
-// 模型重发的，判断复用 shouldFailoverLLMError，和非流式路径同一个口径。
-func (p *streamingLLMProvider) retryAfterStreamedRejection(ctx context.Context, req llm.GenerateRequest, cause error) (*llm.GenerateResponse, error) {
-	if !shouldFailoverLLMError(cause) {
-		return nil, cause
+func healthFailureCause(err error) error {
+	var committed committedLLMError
+	if errors.As(err, &committed) {
+		return committed.cause
 	}
-	skipper, ok := p.provider.(rejectedCandidateSkipper)
-	if !ok || !skipper.skipRejectedCandidate(cause) {
-		return nil, cause
-	}
-	return p.provider.Generate(ctx, req)
+	return err
 }
 
 // accumulateChatEvents 把事件流攒成一个完整响应，顺便记下首 token 时刻。
-func accumulateChatEvents(ctx context.Context, events <-chan llm.ChatEvent) (*llm.GenerateResponse, error) {
+func accumulateChatEvents(ctx context.Context, events <-chan llm.ChatEvent) (response *llm.GenerateResponse, err error) {
+	committed := false
+	defer func() {
+		if err != nil && committed {
+			err = committedLLMError{cause: err}
+		}
+	}()
 	collector := ttftCollectorFromContext(ctx)
 	observer := textDeltaObserverFromContext(ctx)
 	var text strings.Builder
@@ -210,7 +191,18 @@ func accumulateChatEvents(ctx context.Context, events <-chan llm.ChatEvent) (*ll
 	completed := false
 	streamErr := ""
 	var streamCause error
-	for event := range events {
+readLoop:
+	for {
+		var event llm.ChatEvent
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case next, ok := <-events:
+			if !ok {
+				break readLoop
+			}
+			event = next
+		}
 		switch event.Type {
 		case llm.ChatEventTextDelta:
 			event.Text = visible.Push(event.Text)
@@ -220,7 +212,7 @@ func accumulateChatEvents(ctx context.Context, events <-chan llm.ChatEvent) (*ll
 			collector.observeDelta(time.Now())
 			text.WriteString(event.Text)
 			if observer != nil {
-				observer.ObserveTextDelta(ctx, text.String())
+				committed = observer.ObserveTextDelta(ctx, text.String()) || committed
 			}
 		case llm.ChatEventReasoning:
 			// Reasoning never enters visible text. Private replay state arrives on done.
@@ -240,6 +232,13 @@ func accumulateChatEvents(ctx context.Context, events <-chan llm.ChatEvent) (*ll
 		case llm.ChatEventError:
 			streamErr = event.Error
 			streamCause = event.ErrorCause
+			if streamErr == "" && streamCause != nil {
+				streamErr = streamCause.Error()
+			}
+			if streamErr == "" {
+				streamErr = "unknown stream error"
+			}
+			break readLoop
 		}
 	}
 	if err := ctx.Err(); err != nil {
@@ -252,9 +251,14 @@ func accumulateChatEvents(ctx context.Context, events <-chan llm.ChatEvent) (*ll
 		return nil, &streamingFailedError{reason: streamErr, cause: streamCause}
 	}
 	// A completed reasoning-only stream is not a usable assistant response.
-	// Report it as a failure so Generate can retry through the normal provider path.
+	// Keep the candidate retry budget; never restart the non-streaming chain.
 	if strings.TrimSpace(text.String()) == "" && len(toolCalls) == 0 {
-		return nil, &streamingFailedError{reason: "output is empty (no text or tool calls)"}
+		return nil, &streamingFailedError{reason: "output is empty (no text or tool calls)", cause: llm.ErrCompletionEmpty}
+	}
+	if len(toolCalls) == 0 {
+		if notice := llm.RejectionNoticeError(text.String()); notice != nil {
+			return nil, notice
+		}
 	}
 	return &llm.GenerateResponse{
 		Provider: metadata.Provider, Model: metadata.Model,

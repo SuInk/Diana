@@ -4,12 +4,22 @@ import { test } from "node:test";
 import vm from "node:vm";
 import ts from "typescript";
 import { parse } from "@vue/compiler-sfc";
+import { modelRequestTimeoutMilliseconds } from "./configuration-sync.ts";
 import { effectiveModelInfo, mergeModelMetadata } from "./model-metadata.ts";
+import { FALLBACK_REPLY_TONE, replyToneOverride } from "./reply-tone.ts";
 
 const source = readFileSync(new URL("./views/AssistantView.vue", import.meta.url), "utf8");
 const script = parse(source).descriptor.scriptSetup.content;
 const ast = ts.createSourceFile("view.ts", script, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
 function loadFunction(name, context) {
+  if (name === "save") {
+    context.modelRequestTimeoutMilliseconds = modelRequestTimeoutMilliseconds;
+    context.modelRequestTimeoutDraft ??= { value: 0 };
+    context.replyToneOverride = replyToneOverride;
+    context.replyToneDraft ??= { value: FALLBACK_REPLY_TONE };
+    context.replyToneDefault ??= { value: FALLBACK_REPLY_TONE };
+    context.page ??= { value: "edit" };
+  }
   const fn = ast.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === name);
   assert.ok(fn, `missing ${name}`);
   vm.runInContext(ts.transpileModule(fn.getText(ast), { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, context);
@@ -295,6 +305,37 @@ test("changing provider or promoting a channel preserves balancing settings", ()
   assert.equal(roleForm.value.chat.routing_strategy, "weighted");
   assert.equal(roleForm.value.chat.fallbacks[0].disabled, true);
   assert.equal(roleForm.value.chat.fallbacks[0].routing_strategy, undefined);
+});
+
+test("timeout saves keep newer drafts, failed edits and a different bot intact", async () => {
+  for (const outcome of ["success", "newer", "failure", "switch"]) {
+    let complete;
+    let payload;
+    const errors = [];
+    const context = vm.createContext({
+      connectionConflict: { value: undefined }, form: { value: { id: "bot-a", platform: "telegram", request_timeout_ms: 180000 } },
+      roleForm: { value: {} }, visibleModelRoleRows: [], orderedRoleKeys: Object.keys,
+      modelRequestTimeoutDraft: { value: 1.25 }, editorTab: { value: "model" }, selectedModelRole: { value: "chat" },
+      sendRetryValidationError: () => "", sendRetryPayload: () => ({}),
+      botImageGenerationLimitsPayload: () => ({}), botVideoGenerationLimitsPayload: () => ({}),
+      isOneBotPlatform: { value: false }, busy: { value: false }, creating: { value: false }, page: { value: "edit" },
+      tokenDrafts: {}, triggersDraft: { value: "" }, welcomeTemplatesDraft: { value: "" }, allowlistDraft: { value: "" }, splitList: () => [],
+      defaultRecallReplyAutoDeleteDelaySeconds: 60, admissionMode: { value: "disabled" }, privateAdmissionMode: { value: "disabled" }, privateAllowedUsers: { value: [] },
+      toastError: error => errors.push(error), toastSuccess() {}, profileSet: { value: {} }, residencyPanel: { value: null }, saveMediaBaseURLIfChanged: async () => {},
+      saveBotProfileConfig: value => { payload = value; return new Promise((resolve, reject) => { complete = () => outcome === "failure" ? reject(new Error("failed")) : resolve(value); }); }
+    });
+    context.applyConfig = saved => { context.form.value = saved; context.modelRequestTimeoutDraft.value = saved.model_request_timeout_ms / 1000; };
+    const pending = loadFunction("save", context)();
+    assert.equal(payload.model_request_timeout_ms, 1250);
+    assert.equal(payload.request_timeout_ms, 180000);
+    if (outcome === "newer") context.modelRequestTimeoutDraft.value = 8;
+    if (outcome === "switch") { context.form.value = { id: "bot-b" }; context.modelRequestTimeoutDraft.value = 9; }
+    complete();
+    await pending;
+    assert.equal(context.modelRequestTimeoutDraft.value, outcome === "newer" ? 8 : outcome === "switch" ? 9 : 1.25);
+    assert.equal(context.form.value.id, outcome === "switch" ? "bot-b" : "bot-a");
+    assert.equal(errors.length, outcome === "failure" ? 1 : 0);
+  }
 });
 
 test("all-disabled model routes are rejected and their purpose is opened", async () => {

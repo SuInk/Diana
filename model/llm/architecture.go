@@ -396,7 +396,7 @@ func (a clientAdapter) Stream(ctx context.Context, model ModelDefinition, req Ch
 		defer recoverChatStreamPanic(ctx, out, "adapter")
 		response, err := a.Generate(ctx, model, req)
 		if err != nil {
-			out <- ChatEvent{Type: ChatEventError, Error: err.Error()}
+			sendChatEvent(ctx, out, ChatEvent{Type: ChatEventError, Error: err.Error(), ErrorCause: err})
 			return
 		}
 		if response.Text != "" {
@@ -538,6 +538,32 @@ func (r *ProviderRegistry) PublicProvider(id string) (ProviderDefinition, bool) 
 type RegistryClient struct {
 	Registry  *ProviderRegistry
 	Selection AgentModelConfig
+}
+
+// ManagesAttemptTimeout preserves the selected client's activity-aware budget.
+func (c RegistryClient) ManagesAttemptTimeout() bool {
+	if c.Registry == nil {
+		return false
+	}
+	r := c.Registry
+	r.mu.RLock()
+	model, modelOK := r.models[strings.TrimSpace(c.Selection.ModelID)]
+	provider, providerOK := r.providers[strings.TrimSpace(c.Selection.ProviderID)]
+	adapter := withClientOptions(r.adapters[strings.TrimSpace(c.Selection.ProviderID)], r.clientOptions)
+	r.mu.RUnlock()
+	if !modelOK || !providerOK || !provider.Enabled || model.ProviderID != provider.ID {
+		return false
+	}
+	var target any = adapter
+	if legacy, ok := adapter.(clientAdapter); ok {
+		client, err := legacy.newClient(model)
+		if err != nil {
+			return false
+		}
+		target = client
+	}
+	manager, ok := target.(interface{ ManagesAttemptTimeout() bool })
+	return ok && manager.ManagesAttemptTimeout()
 }
 
 func (c RegistryClient) Stream(ctx context.Context, req GenerateRequest) (<-chan ChatEvent, error) {

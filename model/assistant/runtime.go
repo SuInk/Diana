@@ -3876,8 +3876,8 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	event = r.loadDeferredCrossGroupContext(event)
 	replyHistory := r.promptContextHistory(event, cfg)
 	ctx = r.withReplyIdentityPrivacyContext(ctx, event, replyHistory)
-	// 每条消息单独限时，防止慢模型/插件占住并发槽太久。
-	ctx, cancel := context.WithTimeout(ctx, cfg.RequestTimeout)
+	// 普通聊天不加整轮 deadline；父取消和每次模型请求的限时仍然有效。
+	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	typing := r.startTypingIndicator(ctx, event, cfg)
 	// 放进 ctx 是为了让发送链路能自己调节：发出一条就静音，还有下一条再点亮。
