@@ -268,6 +268,12 @@ export interface BotProfileConfig extends SendRetrySettings {
   welcome_llm_cooldown_seconds?: number;
   /** 这台机器人的 SOUL.md：她是谁、在乎什么、怎么说话。整份原样放在系统提示词最前面。 */
   system_prompt?: string;
+  /** 是否在内容与工具处理完成后单独整理最终回复口吻。 */
+  reply_composer?: "maibot";
+  /** 可选回复口吻；留空使用内置默认。 */
+  maibot_reply_style?: string;
+  /** 后端当前实际使用的内置回复口吻，只读，供编辑器展示和恢复。 */
+  reply_tone_default?: string;
   response_mode?: "quiet" | "assistant" | "standard" | "active" | "super_active" | "custom";
   /** 记录完整模型上下文、工具参数和调用结果；默认关闭。 */
   debug_mode_enabled?: boolean;
@@ -3526,6 +3532,32 @@ export function savePersona(persona: Persona | Omit<Persona, "id">): Promise<Per
     method: "POST",
     body: JSON.stringify({ persona })
   });
+}
+
+/** 回复口吻库里的具名模板。builtin 项编译在后端里，只读。 */
+export interface ReplyTonePreset {
+  id: string;
+  name: string;
+  text: string;
+  builtin?: boolean;
+  updated_at?: string;
+}
+
+export interface ReplyToneListResponse {
+  presets: ReplyTonePreset[];
+  limit: number;
+}
+
+export function listReplyTones(): Promise<ReplyToneListResponse> {
+  return requestJSON<ReplyToneListResponse>("/api/assistant/reply-tones");
+}
+
+export function saveReplyTone(preset: ReplyTonePreset | Omit<ReplyTonePreset, "id">): Promise<{ preset: ReplyTonePreset; presets: ReplyTonePreset[] }> {
+  return requestJSON("/api/assistant/reply-tones", { method: "POST", body: JSON.stringify({ preset }) });
+}
+
+export function deleteReplyTone(id: string): Promise<{ presets: ReplyTonePreset[] }> {
+  return requestJSON("/api/assistant/reply-tones/delete", { method: "POST", body: JSON.stringify({ id }) });
 }
 
 export interface PersonaImportResult {

@@ -31,6 +31,20 @@ func TestPurposeBindingOverridesItsGroup(t *testing.T) {
 	}
 }
 
+func TestReplyToneCanUseItsOwnModel(t *testing.T) {
+	roles := normalizeModelRoles(map[string]ModelRole{
+		"chat":           bindingRole("content-model"),
+		PurposeReplyTone: bindingRole("wording-model"),
+	})
+	if ModelBindingGroupOf(PurposeReplyTone) != "chat" {
+		t.Fatalf("reply tone group = %q", ModelBindingGroupOf(PurposeReplyTone))
+	}
+	role, ok := modelRoleFor(roles, PurposeReplyTone, llm.GroupChat)
+	if !ok || role.Model != "wording-model" {
+		t.Fatalf("reply tone role=%#v ok=%v", role, ok)
+	}
+}
+
 // 本次调用的分组要压过用途表。最典型的是 reply：平时走对话分组，这一轮带图时
 // 调用点会切到 vision，静态表里写死的 chat 不能把它盖回去。
 func TestCallSiteGroupBeatsThePurposeTable(t *testing.T) {
@@ -76,7 +90,7 @@ func TestGroupLookupWithoutPurposeKeepsOldBehaviour(t *testing.T) {
 	}
 }
 
-// 17 个用途每个都要能当绑定键；分组键也要在。少一个就意味着那个用途没法单独配。
+// 每个用途都要能当绑定键；分组键也要在。少一个就意味着那个用途没法单独配。
 func TestEveryPurposeIsBindable(t *testing.T) {
 	keys := ModelBindingKeys()
 	seen := map[string]bool{}

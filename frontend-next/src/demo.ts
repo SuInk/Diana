@@ -7,6 +7,7 @@ import { mergeResolverDemoSettings, resolverDemoManifest, resolverDemoTestRespon
 // 和后端登记表逐字相同的提示词目录，由 webui/demo_prompt_catalog_test.go 生成并校验。
 import demoPromptCatalogData from './demo-prompt-catalog.json';
 import demoBuiltinSouls from './demo-builtin-souls.json';
+import { FALLBACK_REPLY_TONE } from './reply-tone';
 // 安全模式目录由后端规则表生成（见 webui/agent_mode_test.go），演示站照原样返回。
 import demoAgentSafeMode from './demo-agent-safe-mode.json';
 import type {
@@ -19,6 +20,7 @@ import type {
   BrowserControlToken,
   LLMConfig,
   Persona,
+  ReplyTonePreset,
   PromptCatalog,
   LLMUsageBreakdown,
   LLMUsageCounters,
@@ -138,6 +140,7 @@ const oneBotProfile: BotProfileConfig = {
   bot_account: "100000001", owner_id: "100200001", owner_login_enabled: true,
   private_admission: { mode: "disabled" },
   group_triggers: ["Diana", "diana"], disabled_groups: [], system_prompt: demoDefaultSoul,
+  reply_composer: "maibot", maibot_reply_style: "", reply_tone_default: FALLBACK_REPLY_TONE,
   debug_mode_enabled: true, bot_reply_loop_detection_enabled: true, reply_refusal_suppression_enabled: true, reply_semantic_dedup_enabled: true, reply_suppression_enabled: true, prompt_inject_time: false,
   proactive_reply_chance: 1, proactive_reply_threshold: 0.9, recent_context_limit: 40, max_reply_chars: 0,
   image_generation_daily_group_limit: 30, image_generation_daily_user_limit: 5,
@@ -385,6 +388,11 @@ const demoAccountNames: Record<string, string> = { "100200001": "阿墨", "88002
 const demoPersonas: Array<{ id: string; name: string; system_prompt: string; builtin?: boolean; updated_at?: string }> = [
   ...demoBuiltinSouls,
   { id: "persona-3", name: "值班助理", updated_at: before(26 * 60), system_prompt: "# 值班助理\n\n## 概述\n\n它在工作群里协助排查问题。我们希望它先给结论再给依据，因为值班的人没空读长文。\n\n## 正派\n\n没把握就说没把握：值班时一句含糊的「应该没事」比沉默更危险。" }
+];
+
+const demoReplyTones: ReplyTonePreset[] = [
+  { id: "builtin:default", name: "自然简短", text: FALLBACK_REPLY_TONE, builtin: true },
+  { id: "reply-tone-1", name: "群聊短句", text: "说话简短自然，像群聊里顺手接话。日常回复少分点，最后一句通常不用句号。", updated_at: before(90) }
 ];
 
 // 世界书的演示数据：一条常驻骨架加一条触发式细节，让树形和两种注入方式都看得到。
@@ -1936,6 +1944,23 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
     const index = demoPersonas.findIndex((item) => item.id === String(body.id ?? ""));
     if (index >= 0) demoPersonas.splice(index, 1);
     return json({ personas: demoPersonas });
+  }
+  if (path === "/api/assistant/reply-tones" && method === "GET") {
+    return json({ presets: demoReplyTones, limit: 50 });
+  }
+  if (path === "/api/assistant/reply-tones" && method === "POST") {
+    const preset = { ...(body.preset as ReplyTonePreset) };
+    if (String(preset.id ?? "").startsWith("builtin:")) return json({ error: "内置回复口吻只读" }, 400);
+    const index = demoReplyTones.findIndex(item => item.id === preset.id);
+    const saved = { ...preset, id: preset.id || `reply-tone-${demoReplyTones.length + 1}`, updated_at: new Date().toISOString() };
+    if (index >= 0) demoReplyTones[index] = saved;
+    else demoReplyTones.push(saved);
+    return json({ preset: saved, presets: demoReplyTones });
+  }
+  if (path === "/api/assistant/reply-tones/delete") {
+    const index = demoReplyTones.findIndex(item => item.id === String(body.id ?? "") && !item.builtin);
+    if (index >= 0) demoReplyTones.splice(index, 1);
+    return json({ presets: demoReplyTones });
   }
   if (path === "/api/assistant/personas/import-card") {
     // 演示模式只解 JSON 卡；PNG 卡要真实后端的块扫描。

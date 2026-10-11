@@ -1036,7 +1036,7 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 	appendPromptSection(&builder, replyLineBreakPrompt(cfg))
 	// 实时时钟不再拼进人设提示词：它每秒都不同，会让这段最长的 system 提示词永远
 	// 无法命中供应商的前缀缓存。改由 runtimeClockPrompt 作为尾部独立 system 消息注入。
-	if boolValue(cfg.PromptChineseSlangHint, true) {
+	if cfg.ReplyComposer != "maibot" && boolValue(cfg.PromptChineseSlangHint, true) {
 		appendPromptSection(&builder, cfg.prompt(promptChineseSlangSpec))
 	}
 	// 群聊场景说明（被点名 / 主动接话）逐轮切换，在下面的 tail 里注入；head 只留
