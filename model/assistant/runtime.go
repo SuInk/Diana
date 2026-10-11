@@ -6988,6 +6988,7 @@ func routeOutgoingToEvent(event MessageEvent, msg OutgoingMessage) OutgoingMessa
 // 一段可见文字，所以在这里按 id 查一次昵称。查的是本会话内存里的近期消息加当前
 // 这条事件，不落库查询：发送路径上多一次 IO 不值得，查不到的 id 退回显示 @<id>。
 func (r *Runtime) resolveOutgoingMentionNames(event MessageEvent, msg OutgoingMessage) OutgoingMessage {
+	msg.MentionUsernames = nil
 	ids := mentionedIDsInText(msg.Text)
 	if len(ids) == 0 {
 		return msg
@@ -6995,6 +6996,15 @@ func (r *Runtime) resolveOutgoingMentionNames(event MessageEvent, msg OutgoingMe
 	r.mu.RLock()
 	history := append([]MessageEvent(nil), r.history[sessionKey(event)]...)
 	r.mu.RUnlock()
+	if NormalizePlatformID(event.Platform) == PlatformTelegram {
+		usernames := resolveTelegramMentionUsernames(event, history)
+		msg.MentionUsernames = make(map[string]string, len(ids))
+		for _, id := range ids {
+			if username := usernames[id]; username != "" {
+				msg.MentionUsernames[id] = username
+			}
+		}
+	}
 	names := messageParticipantDisplayNames(append(history, event)...)
 	// 调用方可能已经填过（比如入群欢迎现查的新人昵称），合并进来，不覆盖。
 	resolved := make(map[string]string, len(ids)+len(msg.MentionNames))

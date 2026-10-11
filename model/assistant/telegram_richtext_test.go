@@ -4,6 +4,8 @@
 package assistant
 
 import (
+	"reflect"
+	"sort"
 	"strings"
 	"testing"
 	"unicode/utf16"
@@ -293,6 +295,292 @@ func TestTelegramRichTextRendersTaskList(t *testing.T) {
 	}
 	if strings.Contains(text, "[") {
 		t.Fatalf("方括号没清干净：%q", text)
+	}
+}
+
+// Keep the legacy Markdown cases as a parity baseline for the production renderer.
+func TestTelegramOutgoingLegacyMarkdownParity(t *testing.T) {
+	cases := []struct{ name, source string }{
+		{"bold and italic", "这是**重点**也有 *侧重* 的话"},
+		{"UTF16 offsets", "🎉🎉 **重点** 收尾"},
+		{"code block", "看这段：\n```go\nname := *ptr\nvalue := a_b_c\n```\n就这样"},
+		{"inline code", "执行 `go test ./...` 就好"},
+		{"link", "详见[发布说明](https://example.com/rel)最后一段"},
+		{"mention alignment", "**重点**看 [diana-at:10002] 说的"},
+		{"heading", "## 今日小结\n正文在这里"},
+		{"bullets and quote", "- 第一条\n- 第二条\n> 引用一句"},
+		{"non-markup symbols", "面积是 a*b*c，变量叫 user_name_id"},
+		{"plain text", "今天天气不错，出去走走吧"},
+		{"table", "看这个：\n| 平台 | 状态 |\n|------|------|\n| 钉钉 | 待办 |"},
+		{"ordinary pipes", "今天 | 明天 | 后天"},
+		{"task list", "- [x] 写转换器\n- [ ] 改适配器"},
+		{"nested list", "- 第一层\n  - 第二层\n    - 第三层"},
+	}
+	canonical := func(entities []telegramEntitySpec) []telegramEntitySpec {
+		result := append([]telegramEntitySpec(nil), entities...)
+		sort.Slice(result, func(i, j int) bool {
+			if result[i].Offset != result[j].Offset {
+				return result[i].Offset < result[j].Offset
+			}
+			return result[i].Type < result[j].Type
+		})
+		return result
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			names := map[string]string{"10002": "轩诺"}
+			rendered, mentions := renderDianaMentions(tc.source, names)
+			wantText, wantEntities := telegramRichText(rendered, mentions)
+			text, entities := renderTelegramOutgoingText(tc.source, names, nil)
+			if text != wantText || !reflect.DeepEqual(canonical(entities), canonical(wantEntities)) {
+				t.Fatalf("production = %q %#v; legacy = %q %#v", text, entities, wantText, wantEntities)
+			}
+		})
+	}
+	// The new entry point resolves Diana markers rather than exposing the legacy
+	// Markdown-only stage, but a following non-link must still remain literal.
+	text, entities := renderTelegramOutgoingText("[diana-at:10002](不是链接)", nil, nil)
+	if text != "@10002(不是链接)" || len(entities) != 1 || entities[0].Type != "text_mention" {
+		t.Fatalf("Diana marker followed by non-link = %q %#v", text, entities)
+	}
+}
+
+func TestTelegramOutgoingMentions(t *testing.T) {
+	for _, tc := range []struct {
+		name, source, username, display, kind string
+	}{
+		{"username", "[diana-at:10002]", "some_user_name", "@some_user_name", "mention"},
+		{"short trusted username", "[diana-at:10002]", "a", "@a", "mention"},
+		{"numeric trusted username", "[diana-at:10002]", "2_a", "@2_a", "mention"},
+		{"all numeric trusted username", "[diana-at:10002]", "12345", "@12345", "mention"},
+		{"case preserved", "[diana-at:10002]", "Some_User", "@Some_User", "mention"},
+		{"max length", "[diana-at:10002]", strings.Repeat("a", 32), "@" + strings.Repeat("a", 32), "mention"},
+		{"too long", "[diana-at:10002]", strings.Repeat("a", 33), "@小😀_*[名]", "text_mention"},
+		{"whitespace", "[diana-at:10002]", " handle ", "@小😀_*[名]", "text_mention"},
+		{"nickname", "[diana-at:10002]", "", "@小😀_*[名]", "text_mention"},
+		{"invalid username", "[diana-at:10002]", "bad.name", "@小😀_*[名]", "text_mention"},
+		{"unicode username", "[diana-at:10002]", "全角", "@小😀_*[名]", "text_mention"},
+		{"at username", "[diana-at:10002]", "@handle", "@小😀_*[名]", "text_mention"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			text, entities := renderTelegramOutgoingText(tc.source, map[string]string{"10002": "小😀_*[名]"}, map[string]string{"10002": tc.username})
+			entity, ok := findEntity(entities, tc.kind)
+			if text != tc.display || len(entities) != 1 || !ok || entityAt(t, text, entity) != tc.display {
+				t.Fatalf("text=%q entities=%#v", text, entities)
+			}
+			if tc.kind == "text_mention" && entity.URL != "diana-mention:10002" {
+				t.Fatalf("mention target=%q", entity.URL)
+			}
+		})
+	}
+	text, entities := renderTelegramOutgoingText("[diana-at:10003]", nil, nil)
+	if text != "@10003" || len(entities) != 1 || entityAt(t, text, entities[0]) != text {
+		t.Fatalf("ID fallback text=%q entities=%#v", text, entities)
+	}
+}
+
+func TestTelegramOutgoingMentionPositions(t *testing.T) {
+	for _, tc := range []struct{ source, want, bold string }{
+		{"🎉 **[diana-at:10002]**[diana-at:10002] [diana-at:10003]", "🎉 @a_b_c@a_b_c @小😀", "@a_b_c"},
+		{"**前[diana-at:10002]后**", "前@a_b_c后", "前@a_b_c后"},
+		{"**[diana-at:10002]尾**", "@a_b_c尾", "@a_b_c尾"},
+		{"**头[diana-at:10002]**", "头@a_b_c", "头@a_b_c"},
+		{"# [diana-at:10002]\n- [diana-at:10003]", "@a_b_c\n• @小😀", "@a_b_c"},
+		{"# **[diana-at:10002]** 标题\n- [x] [diana-at:10003]", "@a_b_c 标题\n☑ @小😀", "@a_b_c 标题"},
+		{"`x_*` **[diana-at:10002]**", "x_* @a_b_c", "@a_b_c"},
+	} {
+		t.Run(tc.source, func(t *testing.T) {
+			text, entities := renderTelegramOutgoingText(tc.source, map[string]string{"10003": "小😀"}, map[string]string{"10002": "a_b_c"})
+			if text != tc.want {
+				t.Fatalf("text=%q want=%q", text, tc.want)
+			}
+			foundBold, mentions := false, 0
+			for _, entity := range entities {
+				body := entityAt(t, text, entity)
+				switch entity.Type {
+				case "bold":
+					foundBold = foundBold || body == tc.bold
+				case "mention", "text_mention":
+					mentions++
+					if body != "@a_b_c" && body != "@小😀" {
+						t.Fatalf("misaligned entity=%#v body=%q", entity, body)
+					}
+				}
+			}
+			if !foundBold || mentions != strings.Count(tc.source, "[diana-at:") {
+				t.Fatalf("entities=%#v", entities)
+			}
+		})
+	}
+}
+
+func TestTelegramOutgoingCodeMarkersStayLiteral(t *testing.T) {
+	literal := "[diana-at:10002] **literal**"
+	for _, tc := range []struct{ source, kind string }{
+		{"`" + literal + "`", "code"},
+		{"``" + literal + "`x``", "code"},
+		{"```text\n" + literal + "\n```", "pre"},
+		{"~~~text\n" + literal + "\n~~~", "pre"},
+		{"```text\n" + literal, "pre"},
+		{"~~~text\n" + literal, "pre"},
+		{"````text\n```\n" + literal + "\n````", "pre"},
+	} {
+		t.Run(tc.source, func(t *testing.T) {
+			text, entities := renderTelegramOutgoingText("[diana-at:10003]\n"+tc.source, nil, map[string]string{"10002": "some_user", "10003": "other_user"})
+			code, ok := findEntity(entities, tc.kind)
+			if !ok || !strings.Contains(entityAt(t, text, code), literal) {
+				t.Fatalf("text=%q entities=%#v", text, entities)
+			}
+			mentions := 0
+			for _, entity := range entities {
+				if entity.Type == "mention" || entity.Type == "text_mention" {
+					mentions++
+					if entityAt(t, text, entity) != "@other_user" {
+						t.Fatalf("code marker became mention: %#v", entity)
+					}
+				}
+			}
+			if mentions != 1 {
+				t.Fatalf("entities=%#v", entities)
+			}
+		})
+	}
+}
+
+func TestTelegramOutgoingMentionLinkPriority(t *testing.T) {
+	for _, source := range []string{
+		"[[diana-at:10002]](https://example.com)",
+		"[前 **[diana-at:10002]** 后](https://example.com)",
+	} {
+		text, entities := renderTelegramOutgoingText(source+" [网址](https://example.org)", nil, map[string]string{"10002": "some_user"})
+		mention, ok := findEntity(entities, "mention")
+		if !ok || entityAt(t, text, mention) != "@some_user" {
+			t.Fatalf("text=%q entities=%#v", text, entities)
+		}
+		for _, entity := range entities {
+			if entity.Type == "text_link" && entityAt(t, text, entity) != "网址" {
+				t.Fatalf("conflicting link=%#v", entity)
+			}
+		}
+	}
+}
+
+func TestTelegramOutgoingLinkTargetsRestoreOpaqueText(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		target   string
+		username string
+		wantURL  string
+		wantText string
+		kind     string
+	}{
+		{"username", "[diana-at:10002]", "alice_name", "https://example.com/@alice_name", "个人页 @alice_name", "mention"},
+		{"fallback", "[diana-at:10002]", "", "https://example.com/@Alice", "个人页 @Alice", "text_mention"},
+		{"repeated", "[diana-at:10002]/[diana-at:10002]", "alice_name", "https://example.com/@alice_name/@alice_name", "个人页 @alice_name", "mention"},
+		{"code", "`[diana-at:10002]`", "alice_name", "https://example.com/[diana-at:10002]", "个人页 @alice_name", "mention"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			source := "[个人页](https://example.com/" + tc.target + ") [diana-at:10002]"
+			text, entities := renderTelegramOutgoingText(source, map[string]string{"10002": "Alice"}, map[string]string{"10002": tc.username})
+			link, ok := findEntity(entities, "text_link")
+			if text != tc.wantText || !ok || link.URL != tc.wantURL || entityAt(t, text, link) != "个人页" {
+				t.Fatalf("text=%q entities=%#v wantURL=%q", text, entities, tc.wantURL)
+			}
+			mention, ok := findEntity(entities, tc.kind)
+			if len(entities) != 2 || !ok || entityAt(t, text, mention) != strings.TrimPrefix(tc.wantText, "个人页 ") {
+				t.Fatalf("unexpected visible entities: %#v", entities)
+			}
+			for _, param := range telegramEntityParams(entities) {
+				if param["type"] == "text_link" && param["url"] != tc.wantURL {
+					t.Fatalf("serialized link=%#v", param)
+				}
+			}
+		})
+	}
+}
+
+func TestTelegramOutgoingMentionTables(t *testing.T) {
+	source := "| 用户 | x |\n|---|---|\n| **[diana-at:10002]** | y |\n| [diana-at:10003] | z |\n\n| 常规 | 表 |\n|---|---|\n| 内容 | 好 |"
+	text, entities := renderTelegramOutgoingText(source, map[string]string{"10003": "小😀"}, map[string]string{"10002": "some_long_user"})
+	lines := strings.Split(text, "\n")
+	for _, index := range []int{2, 3} {
+		if displayWidth(lines[index]) != displayWidth(lines[0]) {
+			t.Fatalf("unaligned visible table: %q", text)
+		}
+	}
+	for _, kind := range []string{"mention", "text_mention", "bold", "pre"} {
+		entity, ok := findEntity(entities, kind)
+		if !ok {
+			t.Fatalf("missing %s: %#v", kind, entities)
+		}
+		body := entityAt(t, text, entity)
+		if kind == "pre" && (!strings.Contains(body, "常规") || strings.Contains(body, "@")) {
+			t.Fatalf("table pre=%q", body)
+		}
+		if kind == "bold" && body != "@some_long_user" {
+			t.Fatalf("bold=%q", body)
+		}
+	}
+}
+
+func TestTelegramOutgoingOrdinaryCodeTableWidths(t *testing.T) {
+	for _, value := range []string{"x", "汉字😀", "[diana-at:10002]", "a|b", strings.Repeat("long", 10)} {
+		source := "| 用户 | x |\n|---|---|\n| `" + value + "` | y |"
+		text, entities := renderTelegramOutgoingText(source, nil, map[string]string{"10002": "some_user"})
+		want := renderTableBlock([][]string{{"用户", "x"}, {value, "y"}})
+		if text != want || len(entities) != 1 || entities[0].Type != "pre" || entityAt(t, text, entities[0]) != want {
+			t.Fatalf("text=%q want=%q entities=%#v", text, want, entities)
+		}
+	}
+}
+
+func TestTelegramSpanReplacementBoundaries(t *testing.T) {
+	buffer := &telegramSpanBuffer{
+		text: "😀LtokenR!",
+		entities: []telegramEntitySpec{
+			{Type: "bold", Offset: 3, Length: 5},
+			{Type: "italic", Offset: 2, Length: 6},
+			{Type: "strikethrough", Offset: 3, Length: 6},
+			{Type: "underline", Offset: 2, Length: 7},
+			{Type: "before", Offset: 0, Length: 3},
+			{Type: "after", Offset: 8, Length: 2},
+			{Type: "left_partial", Offset: 2, Length: 3},
+			{Type: "right_partial", Offset: 5, Length: 4},
+			{Type: "inside", Offset: 4, Length: 2},
+		},
+	}
+	buffer.replace(len("😀L"), len("😀Ltoken"), "@小😀")
+	want := map[string]string{"bold": "@小😀", "italic": "L@小😀", "strikethrough": "@小😀R", "underline": "L@小😀R", "before": "😀L", "after": "R!"}
+	if len(buffer.entities) != len(want) || buffer.text != "😀L@小😀R!" {
+		t.Fatalf("text=%q entities=%#v", buffer.text, buffer.entities)
+	}
+	for _, entity := range buffer.entities {
+		if got := entityAt(t, buffer.text, entity); got != want[entity.Type] {
+			t.Fatalf("entity=%#v got=%q want=%q", entity, got, want[entity.Type])
+		}
+	}
+}
+
+func TestTelegramOutgoingDoesNotSupportTGUserLinks(t *testing.T) {
+	source := "[Alice](tg://user?id=10002)"
+	text, entities := renderTelegramOutgoingText(source, nil, nil)
+	if text != source || len(entities) != 0 {
+		t.Fatalf("text=%q entities=%#v", text, entities)
+	}
+}
+
+func TestTelegramOutgoingOpaqueCollisions(t *testing.T) {
+	name := "**x** _y_ [z](https://example.com) [diana-at:10003] \x000\x00 \x01 T0X0"
+	source := "\x000\x00 \x01 T0X0 `code` [diana-at:10002] [diana-at:10002]"
+	text, entities := renderTelegramOutgoingText(source, map[string]string{"10002": name}, nil)
+	want := "\x000\x00 \x01 T0X0 code @" + name + " @" + name
+	if text != want {
+		t.Fatalf("text=%q want=%q", text, want)
+	}
+	for _, entity := range entities {
+		if entity.Type == "text_mention" && entityAt(t, text, entity) != "@"+name {
+			t.Fatalf("entity=%#v", entity)
+		}
 	}
 }
 

@@ -271,7 +271,7 @@ func (r *Runtime) protectedReplyPartError(cfg BotConfig, event MessageEvent, par
 			return fmt.Errorf("%w: protected code: %s", errReplyCompression, issue)
 		}
 		codeRunes += replyCompressionRunes(normalizeReply(block, 0, markdownToPlainForConfig(cfg)))
-		rendered, _ := telegramRichText(normalizeReply(block, 0, markdownToPlainForConfig(cfg)), nil)
+		rendered, _ := renderTelegramOutgoingText(normalizeReply(block, 0, markdownToPlainForConfig(cfg)), nil, nil)
 		codeUnits += utf16Length(rendered)
 	}
 	if event.replyDeliveryMode == replyDeliverySingle {

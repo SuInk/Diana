@@ -17,6 +17,8 @@ func telegramMentionTargets(text string, entities []telegramEntity, selfID, botU
 				continue
 			}
 			m.UserID = strconv.FormatInt(e.User.ID, 10)
+			m.Username = e.User.Username
+			m.UsernameKnown = true
 			if selfID != "" {
 				m.Target = "other"
 				if m.UserID == selfID {
