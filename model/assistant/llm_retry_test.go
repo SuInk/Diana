@@ -15,6 +15,191 @@ import (
 	"github.com/SuInk/diana/model/llm"
 )
 
+type modelTimeoutTestProvider struct {
+	run func(context.Context, llm.GenerateRequest) (*llm.GenerateResponse, error)
+}
+
+func (p modelTimeoutTestProvider) Generate(ctx context.Context, req llm.GenerateRequest) (*llm.GenerateResponse, error) {
+	return p.run(ctx, req)
+}
+
+func (modelTimeoutTestProvider) ManagesAttemptTimeout() bool { return true }
+
+func TestModelRequestTimeoutHardCap(t *testing.T) {
+	for _, committed := range []bool{false, true} {
+		t.Run(fmt.Sprint("committed=", committed), func(t *testing.T) {
+			calls := 0
+			provider := modelTimeoutTestProvider{run: func(ctx context.Context, _ llm.GenerateRequest) (*llm.GenerateResponse, error) {
+				calls++
+				<-ctx.Done()
+				if committed {
+					return nil, committedLLMError{cause: ctx.Err()}
+				}
+				return nil, ctx.Err()
+			}}
+			ctx := context.WithValue(context.Background(), modelRequestTimeoutKey{}, 20*time.Millisecond)
+			_, err := generateWithTransientRetryPolicy(ctx, provider, llm.GenerateRequest{}, true, time.Second, 3, time.Second)
+			if !errors.Is(err, errModelRequestTimeout) || calls != 1 || errors.Is(err, errLLMOutputCommitted) != committed {
+				t.Fatalf("calls=%d err=%v", calls, err)
+			}
+			if policy := llmErrorPolicy(err); policy.retry || policy.cooldown != 0 || policy.failover == committed {
+				t.Fatalf("policy=%+v", policy)
+			}
+		})
+	}
+}
+
+func TestModelRequestTimeoutCommittedStopsFailover(t *testing.T) {
+	calls := map[string]int{}
+	profiles := []llm.Profile{{ID: "a", Config: llm.ProviderConfig{Model: "a"}}, {ID: "b", Config: llm.ProviderConfig{Model: "b"}}}
+	provider, err := newProfileFailoverLLMProvider(profiles, func(cfg llm.ProviderConfig) (LLMProvider, error) {
+		return modelTimeoutTestProvider{run: func(ctx context.Context, _ llm.GenerateRequest) (*llm.GenerateResponse, error) {
+			calls[cfg.Model]++
+			<-ctx.Done()
+			return nil, committedLLMError{cause: ctx.Err()}
+		}}, nil
+	}, true, nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider.cooldowns = &llmCooldownTable{}
+	ctx := context.WithValue(context.Background(), modelRequestTimeoutKey{}, 20*time.Millisecond)
+	_, err = provider.Generate(ctx, llm.GenerateRequest{})
+	if !errors.Is(err, errLLMOutputCommitted) || !errors.Is(err, errModelRequestTimeout) || calls["a"] != 1 || calls["b"] != 0 {
+		t.Fatalf("calls=%v err=%v", calls, err)
+	}
+	for _, health := range provider.cooldowns.snapshot(profiles) {
+		if health.failures != 0 {
+			t.Fatalf("health=%+v", health)
+		}
+	}
+}
+
+func TestModelRequestTimeoutParentCancellationWins(t *testing.T) {
+	for _, deadline := range []bool{false, true} {
+		t.Run(fmt.Sprint("deadline=", deadline), func(t *testing.T) {
+			parent, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			want := context.Canceled
+			if deadline {
+				parent, cancel = context.WithTimeout(parent, 15*time.Millisecond)
+				defer cancel()
+				want = context.DeadlineExceeded
+			}
+			provider := modelTimeoutTestProvider{run: func(ctx context.Context, _ llm.GenerateRequest) (*llm.GenerateResponse, error) {
+				if !deadline {
+					cancel()
+				}
+				<-ctx.Done()
+				return nil, ctx.Err()
+			}}
+			ctx := context.WithValue(parent, modelRequestTimeoutKey{}, time.Second)
+			_, err := generateWithTransientRetryPolicy(ctx, provider, llm.GenerateRequest{}, true, 0, 3, 0)
+			if !errors.Is(err, want) || errors.Is(err, errModelRequestTimeout) {
+				t.Fatalf("err=%v want=%v", err, want)
+			}
+		})
+	}
+}
+
+func TestModelRequestTimeoutRenewsOnRetryAndShrink(t *testing.T) {
+	for _, shrink := range []bool{false, true} {
+		t.Run(fmt.Sprint("shrink=", shrink), func(t *testing.T) {
+			calls := 0
+			provider := modelTimeoutTestProvider{run: func(ctx context.Context, _ llm.GenerateRequest) (*llm.GenerateResponse, error) {
+				calls++
+				deadline, ok := ctx.Deadline()
+				if !ok || time.Until(deadline) < 150*time.Millisecond {
+					t.Fatalf("attempt %d deadline=%v", calls, deadline)
+				}
+				select {
+				case <-ctx.Done():
+					return nil, ctx.Err()
+				case <-time.After(110 * time.Millisecond):
+				}
+				if calls == 1 {
+					if shrink {
+						return nil, errors.New("maximum context length exceeded")
+					}
+					return nil, errors.New("502 bad gateway")
+				}
+				return &llm.GenerateResponse{Text: "ok"}, nil
+			}}
+			ctx := context.WithValue(context.Background(), modelRequestTimeoutKey{}, 200*time.Millisecond)
+			resp, err := generateWithTransientRetryPolicy(ctx, provider, llm.GenerateRequest{MaxContextTokens: 65536}, true, 0, 1, 0)
+			if err != nil || resp == nil || calls != 2 {
+				t.Fatalf("calls=%d resp=%+v err=%v", calls, resp, err)
+			}
+		})
+	}
+}
+
+func TestModelRequestTimeoutRouterFailover(t *testing.T) {
+	for _, retry := range []bool{false, true} {
+		t.Run(fmt.Sprint("retry=", retry), func(t *testing.T) {
+			calls := map[string]int{}
+			set := llm.ProfileSet{Profiles: []llm.Profile{{ID: "first", Group: llm.GroupIntent, Config: llm.ProviderConfig{Model: "first"}}, {ID: "backup", Group: llm.GroupIntent, Config: llm.ProviderConfig{Model: "backup"}}}}
+			r := NewRuntime(BotConfig{ModelRequestTimeout: 20 * time.Millisecond}, nilChannel{}, NewPluginManager(), &stubLLMProfileStore{set: set}, nil, nil, nil)
+			r.SetLLMProviderConfigFactory(func(cfg llm.ProviderConfig) (LLMProvider, error) {
+				return modelTimeoutTestProvider{run: func(ctx context.Context, _ llm.GenerateRequest) (*llm.GenerateResponse, error) {
+					calls[cfg.Model]++
+					if cfg.Model == "first" {
+						<-ctx.Done()
+						return nil, ctx.Err()
+					}
+					return &llm.GenerateResponse{Text: "ok"}, nil
+				}}, nil
+			})
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			text, err := r.runLLMRouterProviderWithRetry(ctx, retry, func(provider LLMProvider) (string, error) {
+				resp, err := provider.Generate(ctx, llm.GenerateRequest{})
+				if err != nil {
+					return "", err
+				}
+				return resp.Text, nil
+			})
+			if err != nil || text != "ok" || calls["first"] != 1 || calls["backup"] != 1 {
+				t.Fatalf("text=%s calls=%v err=%v", text, calls, err)
+			}
+			for _, health := range r.llmCooldowns.snapshot(set.Profiles) {
+				if health.failures != 0 {
+					t.Fatalf("health=%+v", health)
+				}
+			}
+		})
+	}
+	// Once callers without a profile store still need a per-attempt boundary.
+	r := NewRuntime(BotConfig{ModelRequestTimeout: 20 * time.Millisecond}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+		return modelTimeoutTestProvider{run: func(ctx context.Context, _ llm.GenerateRequest) (*llm.GenerateResponse, error) {
+			<-ctx.Done()
+			return nil, ctx.Err()
+		}}, nil
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	_, err := r.runLLMRouterProviderOnce(ctx, func(provider LLMProvider) (string, error) {
+		_, err := provider.Generate(ctx, llm.GenerateRequest{})
+		return "", err
+	})
+	if !errors.Is(err, errModelRequestTimeout) {
+		t.Fatalf("one-shot factory bypassed cap: %v", err)
+	}
+}
+
+func TestModelRequestTimeoutZeroAddsNoDeadline(t *testing.T) {
+	provider := modelTimeoutTestProvider{run: func(ctx context.Context, _ llm.GenerateRequest) (*llm.GenerateResponse, error) {
+		if deadline, ok := ctx.Deadline(); ok {
+			t.Fatalf("unexpected deadline=%v", deadline)
+		}
+		return &llm.GenerateResponse{Text: "ok"}, nil
+	}}
+	ctx := context.WithValue(context.Background(), modelRequestTimeoutKey{}, time.Duration(0))
+	if _, err := generateWithTransientRetryPolicy(ctx, provider, llm.GenerateRequest{}, true, time.Second, 1, 0); err != nil {
+		t.Fatal(err)
+	}
+}
+
 type retryPreservationTool struct {
 	calls int
 }
@@ -84,7 +269,7 @@ func (a *retryRegistryAdapter) Generate(context.Context, llm.ModelDefinition, ll
 }
 
 func (a *retryRegistryAdapter) Stream(context.Context, llm.ModelDefinition, llm.ChatRequest) (<-chan llm.ChatEvent, error) {
-	return nil, fmt.Errorf("unexpected stream call")
+	return nil, fmt.Errorf("streaming is not supported")
 }
 
 func newRetryTestRegistry(t *testing.T, adapter llm.LLMAdapter) (*llm.ProviderRegistry, llm.ProfileSet) {
@@ -594,6 +779,37 @@ func (p *retryPreservationProvider) Generate(_ context.Context, req llm.Generate
 	}
 }
 
+func (p *retryPreservationProvider) Stream(ctx context.Context, req llm.GenerateRequest) (<-chan llm.ChatEvent, error) {
+	response, err := p.Generate(ctx, req)
+	events := make(chan llm.ChatEvent, 2)
+	if err != nil {
+		events <- llm.ChatEvent{Type: llm.ChatEventError, Error: err.Error(), ErrorCause: err}
+	} else {
+		events <- textDelta(response.Text)
+		events <- llm.ChatEvent{Type: llm.ChatEventDone}
+	}
+	close(events)
+	return events, nil
+}
+
+func TestAgentStreamingRetryPreservesCompletedToolResults(t *testing.T) {
+	provider := &retryPreservationProvider{}
+	client := &transientRetryLLMProvider{provider: &streamingLLMProvider{provider: provider}}
+	tool := &retryPreservationTool{}
+	runner, err := agent.NewRunner(client, agent.Config{WorkDir: t.TempDir(), MaxSteps: 3}, agent.NewToolRegistry(tool))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runner.Close()
+	response, err := runner.Run(context.Background(), agent.Request{Messages: []llm.Message{{Role: llm.RoleUser, Content: "请检索后回答"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.Text != "根据已取得的证据完成回答" || tool.calls != 1 || provider.calls != 3 || !provider.sawEvidence {
+		t.Fatalf("response=%+v toolCalls=%d provider=%+v", response, tool.calls, provider)
+	}
+}
+
 func TestAgentTransientRetryPreservesCompletedToolResults(t *testing.T) {
 	store := &stubLLMProfileStore{set: llm.ProfileSet{
 		Profiles: []llm.Profile{{
@@ -837,5 +1053,30 @@ func TestShrinkContextForRetryJumpsToReportedWindow(t *testing.T) {
 	again, ok := shrinkContextForRetry(next, err)
 	if !ok || again.MaxContextTokens != 8192 {
 		t.Fatalf("second shrink = %d, %t; want 8192", again.MaxContextTokens, ok)
+	}
+}
+
+func TestUnifiedLLMFailurePolicy(t *testing.T) {
+	for _, tc := range []struct {
+		text            string
+		retry, failover bool
+		cooldown        time.Duration
+	}{
+		{"HTTP 500", true, true, llmCooldownTransient}, {"HTTP 529", true, true, llmCooldownTransient},
+		{"HTTP 504", true, true, llmCooldownTransient}, {"HTTP 401", false, true, llmCooldownDefault},
+		{"HTTP 403", false, true, llmCooldownDefault}, {"HTTP 429", false, true, llmCooldownDefault},
+		{"HTTP 402: insufficient credits", false, true, llmCooldownDefault},
+		{"HTTP 402: Payment Required", false, true, llmCooldownDefault},
+		{"HTTP 400: invalid credit parameter", false, false, 0},
+		{"request id abc500529429", false, false, 0}, {"model-503", false, false, 0},
+		{"HTTP 400: bad parameter, request id 503", false, false, 0},
+		{"context canceled", false, false, 0}, {"content_policy_violation HTTP 403", false, false, 0},
+	} {
+		t.Run(tc.text, func(t *testing.T) {
+			err := errors.New(tc.text)
+			if shouldRetryTransientLLMError(err) != tc.retry || shouldFailoverLLMError(err) != tc.failover || llmCooldownDuration(err) != tc.cooldown {
+				t.Fatalf("policy=%+v", llmErrorPolicy(err))
+			}
+		})
 	}
 }

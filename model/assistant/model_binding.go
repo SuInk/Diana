@@ -16,8 +16,11 @@ import (
 // provider 配置只该回答「我是谁、我能提供哪些模型」，用哪个模型是调用方的事。所以
 // 用途在这里升级成一等概念：每个用途都能单独绑定，绑不到就用它所属分组的绑定。
 const (
-	PurposeMediaParse            = "media_parse"
-	PurposeReply                 = "reply"
+	PurposeMediaParse = "media_parse"
+	PurposeReply      = "reply"
+	// PurposeReplyTone 只负责把已经完整的草稿整理成最终口吻，因此可以单独绑定
+	// 一个更快、更便宜的文字模型。
+	PurposeReplyTone             = "reply_tone"
 	PurposeSubagent              = "subagent"
 	PurposeSubtask               = "subtask"
 	PurposeReplyIntentRouter     = "reply_intent_router"
@@ -69,6 +72,7 @@ const (
 var llmPurposeGroup = map[string]string{
 	PurposeMediaParse: llm.GroupVision,
 	PurposeReply:      llm.GroupChat,
+	PurposeReplyTone:  llm.GroupChat,
 	PurposeSubagent:   llm.GroupChat,
 	PurposeSubtask:    llm.GroupChat,
 

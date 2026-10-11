@@ -4,7 +4,7 @@
 <template>
   <section class="card search-provider-manager">
     <div class="card-header">
-      <div><h2>搜索提供商</h2><span class="card-sub">统一管理接入地址和凭据，机器人按用途选择首选与后备来源。</span></div>
+      <div><h2>搜索提供商</h2><span class="card-sub">统一管理接入地址和凭据，在上方为所有机器人选择首选与后备来源。</span></div>
       <button class="btn small primary" type="button" @click="openEditor()"><Plus :size="14" aria-hidden="true" />新建搜索提供商</button>
     </div>
     <div class="card-body stack">
@@ -24,7 +24,7 @@
           </div>
         </div>
       </div>
-      <p v-else-if="!loading && !error" class="muted">还没有搜索提供商。新建后可在机器人「模型与搜索」中分配。</p>
+      <p v-else-if="!loading && !error" class="muted">还没有搜索提供商。新建后可在上方「全局搜索配置」中分配。</p>
       <p class="hint">已有 Exa、Tavily 的地址和密钥自动沿用。自定义来源支持 HTTP API、搜索 MCP 和浏览器搜索，无需在插件里重复配置。</p>
     </div>
   </section>

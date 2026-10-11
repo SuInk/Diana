@@ -16,7 +16,28 @@ import (
 )
 
 type transientRetryLLMProvider struct {
+	provider     LLMProvider
+	disableRetry bool
+}
+
+var errModelRequestTimeout = errors.New("diana: single model request timeout")
+
+type modelRequestTimeoutKey struct{}
+
+type modelRequestTimeoutLLMProvider struct {
 	provider LLMProvider
+	timeout  time.Duration
+}
+
+func (p *modelRequestTimeoutLLMProvider) innerLLMProvider() LLMProvider { return p.provider }
+
+func (p *modelRequestTimeoutLLMProvider) Generate(ctx context.Context, req llm.GenerateRequest) (*llm.GenerateResponse, error) {
+	ctx = context.WithValue(ctx, modelRequestTimeoutKey{}, p.timeout)
+	provider := p.provider
+	if streamingRequested(ctx) {
+		provider = &streamingLLMProvider{provider: provider}
+	}
+	return provider.Generate(ctx, req)
 }
 
 type llmAttemptTimeoutManager interface {
@@ -24,10 +45,10 @@ type llmAttemptTimeoutManager interface {
 }
 
 func withTransientLLMRetry(provider LLMProvider, enabled bool) LLMProvider {
-	if provider == nil || !enabled {
+	if provider == nil {
 		return provider
 	}
-	return &transientRetryLLMProvider{provider: provider}
+	return &transientRetryLLMProvider{provider: provider, disableRetry: !enabled}
 }
 
 // registryLLMProvider keeps Registry-backed calls on the same retry policy as
@@ -71,7 +92,10 @@ func unwrapTransientLLMRetry(provider LLMProvider) LLMProvider {
 }
 
 func (p *transientRetryLLMProvider) Generate(ctx context.Context, req llm.GenerateRequest) (*llm.GenerateResponse, error) {
-	return generateWithTransientRetry(ctx, p.provider, req, true)
+	if timeout, _ := ctx.Value(modelRequestTimeoutKey{}).(time.Duration); p.disableRetry && timeout <= 0 {
+		return p.provider.Generate(ctx, req)
+	}
+	return generateWithTransientRetry(ctx, p.provider, req, !p.disableRetry)
 }
 
 func generateWithTransientRetry(ctx context.Context, provider LLMProvider, req llm.GenerateRequest, enabled bool) (*llm.GenerateResponse, error) {
@@ -103,13 +127,31 @@ func generateWithTransientRetryPolicy(ctx context.Context, provider LLMProvider,
 	// 重试额度也用掉。
 	shrinkAttempts := 0
 	for attempt := 0; ; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		attemptCtx := ctx
 		cancel := func() {}
 		if attemptTimeout > 0 {
 			attemptCtx, cancel = context.WithTimeout(ctx, attemptTimeout)
 		}
-		resp, err := provider.Generate(attemptCtx, req)
+		hardCtx := attemptCtx
+		hardCancel := func() {}
+		if hardTimeout, _ := ctx.Value(modelRequestTimeoutKey{}).(time.Duration); hardTimeout > 0 {
+			hardCtx, hardCancel = context.WithTimeoutCause(attemptCtx, hardTimeout, errModelRequestTimeout)
+		}
+		resp, err := provider.Generate(hardCtx, req)
+		hardExpired := errors.Is(context.Cause(hardCtx), errModelRequestTimeout)
+		hardCancel()
 		cancel()
+		if hardExpired && ctx.Err() == nil {
+			if errors.Is(err, errLLMOutputCommitted) {
+				err = committedLLMError{cause: errModelRequestTimeout}
+			} else {
+				err = errModelRequestTimeout
+			}
+			resp = nil
+		}
 		if err == nil && resp != nil && len(resp.ToolCalls) == 0 {
 			err = llm.RejectionNoticeError(resp.Text)
 			if err != nil {
@@ -117,6 +159,12 @@ func generateWithTransientRetryPolicy(ctx context.Context, provider LLMProvider,
 			}
 		}
 		err = classifyLLMError(err)
+		if errors.Is(err, errLLMOutputCommitted) {
+			return nil, err
+		}
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, ctxErr
+		}
 		// 上下文窗口在目录没给出时是按模型名推断的，推断偏大就会被供应商判为
 		// 超限。这类错误重发原请求没有意义，收缩预算再试一次才有：逐次减半，
 		// 直到落回保守窗口为止。
@@ -179,7 +227,7 @@ func shouldFailoverWithoutSameProfileRetry(err error) bool {
 	// 多打一个请求、多等一两秒；直接交给降级链切下一个候选。只有一个候选时也不必
 	// 原地重试。它们常以 503 的形式出现（「Error 503 ... All accounts limited」），
 	// 所以得在瞬时重试之前先拦下。
-	if isRateLimitedLLMError(err) {
+	if policy := llmErrorPolicy(err); policy.failover && !policy.retry {
 		return true
 	}
 	text := strings.ToLower(err.Error())
@@ -270,9 +318,6 @@ type registryFailoverLLMProvider struct {
 	// cooldowns 是 Runtime 上跨请求保留的冷却表；provider 自己每次调用都新建，
 	// 记不住上一次谁刚被限流。
 	cooldowns *llmCooldownTable
-	// skipped 记这一次调用里流式读到一半被判失败、已经跳过的候选，后面再挑候选时
-	// 排到最后，免得冷却不到它（比如拦截文案不冷却）时又从它开始。
-	skipped map[int]bool
 }
 
 func newRegistryFailoverLLMProvider(registry *llm.ProviderRegistry, profiles []llm.Profile, retryTransient bool, wrapGroupError bool) (*registryFailoverLLMProvider, error) {
@@ -315,7 +360,10 @@ func (p *registryFailoverLLMProvider) Generate(ctx context.Context, req llm.Gene
 			return nil, ctxErr
 		}
 		candidate := p.candidates[index]
-		client := llm.RegistryClient{Registry: p.registry, Selection: candidate.selection}
+		var client LLMProvider = llm.RegistryClient{Registry: p.registry, Selection: candidate.selection}
+		if streamingRequested(ctx) {
+			client = &streamingLLMProvider{provider: client}
+		}
 		resp, err := generateWithTransientRetryTimeout(ctx, client, candidateReasoningRequest(req, candidate.profile), p.retryTransient, candidate.profile.Config.Timeout)
 		if err == nil {
 			p.current = index
@@ -324,13 +372,17 @@ func (p *registryFailoverLLMProvider) Generate(ctx context.Context, req llm.Gene
 		}
 		failover := shouldFailoverLLMError(err)
 		lastErr = annotateLLMProviderAttempt(err, candidate.profile, req)
+		if errors.Is(err, errLLMOutputCommitted) {
+			noteLLMCandidateFailure(p.cooldowns, p.group, candidate.profile, healthFailureCause(err))
+			return nil, lastErr
+		}
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return nil, ctxErr
 		}
+		noteLLMCandidateFailure(p.cooldowns, p.group, candidate.profile, healthFailureCause(err))
 		if !failover {
 			return nil, lastErr
 		}
-		noteLLMCandidateFailure(p.cooldowns, p.group, candidate.profile, err)
 		if position+1 < len(order) {
 			next := p.candidates[order[position+1]]
 			logLLMFailover(p.group, false, candidate.profile, next.profile, lastErr)
@@ -343,131 +395,8 @@ func (p *registryFailoverLLMProvider) Generate(ctx context.Context, req llm.Gene
 	return nil, lastErr
 }
 
-// skipRejectedCandidate 把当前候选往后挪一位，返回是否还有别的候选可切。它服务于
-// 流式路径：流在当前候选上正常打开，正文却是拦截或读流时才报错，这时 current
-// 正指着那个候选。
-func (p *registryFailoverLLMProvider) skipRejectedCandidate(cause error) bool {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	if len(p.candidates) < 2 {
-		return false
-	}
-	skippedIndex := p.current
-	from := p.candidates[skippedIndex]
-	noteLLMCandidateFailure(p.cooldowns, p.group, from.profile, cause)
-	if p.skipped == nil {
-		p.skipped = map[int]bool{}
-	}
-	p.skipped[skippedIndex] = true
-	p.current = (skippedIndex + 1) % len(p.candidates)
-	to := p.candidates[p.attemptOrder(p.current)[0]]
-	annotated := annotateLLMProviderAttempt(cause, from.profile, llm.GenerateRequest{})
-	logLLMFailover(p.group, true, from.profile, to.profile, annotated)
-	p.reportFailover(from.profile, to.profile, true, annotated)
-	return true
-}
-
-func (p *registryFailoverLLMProvider) candidateCount() int {
-	return len(p.candidates)
-}
-
-// streamSucceeded 由 streamingLLMProvider 在流式正文完整读完后调用。流打开不算
-// 成功（Gemini 的限流是作为流里第一个事件出来的），读完才能解除冷却。
-func (p *registryFailoverLLMProvider) streamSucceeded() {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	if p.current >= 0 && p.current < len(p.candidates) {
-		p.cooldowns.clear(p.candidates[p.current].profile)
-	}
-}
-
-// attemptOrder 给出从 start 起的尝试顺序：冷却中的挪到后面，这次调用里已经跳过的
-// 再排到最后。调用方持有 p.mu。
 func (p *registryFailoverLLMProvider) attemptOrder(start int) []int {
-	order := p.cooldowns.order(p.group, len(p.candidates), start, func(index int) llm.Profile {
-		return p.candidates[index].profile
-	})
-	if len(p.skipped) == 0 {
-		return order
-	}
-	fresh := make([]int, 0, len(order))
-	var skipped []int
-	for _, index := range order {
-		if p.skipped[index] {
-			skipped = append(skipped, index)
-			continue
-		}
-		fresh = append(fresh, index)
-	}
-	return append(fresh, skipped...)
-}
-
-// Stream preserves the registry streaming path while applying ordered
-// provider failover to failures that happen before a stream is established.
-// Errors emitted after the channel starts are handled by streamingLLMProvider:
-// it discards the buffered failed stream, then either streams again from the
-// next candidate (via skipRejectedCandidate) or retries through Generate, which
-// keeps partial output from leaking or being duplicated.
-func (p *registryFailoverLLMProvider) Stream(ctx context.Context, req llm.GenerateRequest) (<-chan llm.ChatEvent, error) {
-	ctx = withLLMEventReporter(ctx, p.report)
-	p.mu.Lock()
-	order := p.attemptOrder(p.current)
-	p.mu.Unlock()
-
-	var lastErr error
-	for position, index := range order {
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			return nil, ctxErr
-		}
-		candidate := p.candidates[index]
-		client := llm.RegistryClient{Registry: p.registry, Selection: candidate.selection}
-		var events <-chan llm.ChatEvent
-		var err error
-		attempts := 1
-		if p.retryTransient {
-			attempts += llmTransientMaxRetries
-		}
-		for attempt := 0; attempt < attempts; attempt++ {
-			events, err = client.Stream(ctx, candidateReasoningRequest(req, candidate.profile))
-			if err == nil && events != nil {
-				break
-			}
-			if err == nil {
-				err = fmt.Errorf("diana: llm provider returned a nil stream")
-			}
-			if attempt+1 >= attempts || !shouldFailoverLLMError(err) || shouldFailoverWithoutSameProfileRetry(err) {
-				break
-			}
-			timer := time.NewTimer(llmTransientRetryDelay)
-			select {
-			case <-ctx.Done():
-				timer.Stop()
-				return nil, ctx.Err()
-			case <-timer.C:
-			}
-		}
-		if err == nil && events != nil {
-			p.mu.Lock()
-			p.current = index
-			p.mu.Unlock()
-			return events, nil
-		}
-		failover := shouldFailoverLLMError(err)
-		lastErr = annotateLLMProviderAttempt(err, candidate.profile, req)
-		if !failover {
-			return nil, lastErr
-		}
-		noteLLMCandidateFailure(p.cooldowns, p.group, candidate.profile, err)
-		if position+1 < len(order) {
-			next := p.candidates[order[position+1]]
-			logLLMFailover(p.group, true, candidate.profile, next.profile, lastErr)
-			p.reportFailover(candidate.profile, next.profile, true, lastErr)
-		}
-	}
-	if p.wrapGroupError && len(p.candidates) > 1 {
-		return nil, fmt.Errorf("diana: llm streams in group %q are unavailable: %w", p.group, lastErr)
-	}
-	return nil, lastErr
+	return p.cooldowns.order(p.group, len(p.candidates), start, func(index int) llm.Profile { return p.candidates[index].profile })
 }
 
 // reportFailover 把一次切档交给运行时写进运行日志。
@@ -530,6 +459,9 @@ func (p *profileFailoverLLMProvider) Generate(ctx context.Context, req llm.Gener
 		client, err := p.client(index)
 		if err == nil {
 			var resp *llm.GenerateResponse
+			if streamingRequested(ctx) {
+				client = &streamingLLMProvider{provider: client}
+			}
 			resp, err = generateWithTransientRetryTimeout(ctx, client, req, p.retryTransient, p.profiles[index].Config.Timeout)
 			if err == nil {
 				p.current = index
@@ -545,13 +477,17 @@ func (p *profileFailoverLLMProvider) Generate(ctx context.Context, req llm.Gener
 		rawErr := err
 		err = annotateLLMProviderAttempt(err, p.profiles[index], req)
 		lastErr = err
+		if errors.Is(err, errLLMOutputCommitted) {
+			noteLLMCandidateFailure(p.cooldowns, p.group, p.profiles[index], healthFailureCause(rawErr))
+			return nil, err
+		}
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return nil, ctxErr
 		}
+		noteLLMCandidateFailure(p.cooldowns, p.group, p.profiles[index], healthFailureCause(rawErr))
 		if !failover {
 			return nil, err
 		}
-		noteLLMCandidateFailure(p.cooldowns, p.group, p.profiles[index], rawErr)
 		// 这条路径以前连终端日志都没有：换了档、用的是备用模型，哪里都看不出来。
 		if position+1 < len(order) {
 			from, to := p.profiles[index], p.profiles[order[position+1]]

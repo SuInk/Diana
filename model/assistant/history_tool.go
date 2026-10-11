@@ -1159,7 +1159,7 @@ func (t *dianaChatHistoryTool) idNotice() string {
 	if t == nil || t.runtime == nil {
 		return chatHistoryIDNotice
 	}
-	if replyReferenceMode(t.runtime.effectiveConfigForEvent(t.event)) == ReplyDecorationOff {
+	if replyReferenceMode(t.runtime.effectiveConfigForEvent(t.event)) != ReplyDecorationAuto {
 		return chatHistoryIDNotice
 	}
 	return chatHistoryIDNotice + " " + chatHistoryQuoteNotice

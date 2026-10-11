@@ -232,7 +232,7 @@ func TestTelegramNestedRecallSendsFullCachedTextAndMedia(t *testing.T) {
 		if _, ok := call.Params["entities"]; ok {
 			t.Fatalf("cached original unexpectedly produced Telegram entities: %#v", call.Params)
 		}
-		if _, ok := call.Params["reply_to_message_id"]; ok {
+		if _, ok := call.Params["reply_parameters"]; ok {
 			t.Fatalf("cached reply marker unexpectedly produced a Telegram reply: %#v", call.Params)
 		}
 	}

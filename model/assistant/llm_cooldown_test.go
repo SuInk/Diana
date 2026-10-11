@@ -6,6 +6,7 @@ package assistant
 import (
 	"context"
 	"errors"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -392,4 +393,171 @@ func TestReportLLMFailoverShowsProfileNames(t *testing.T) {
 	if entries[1].Metadata["from"] != "p1" || entries[1].Metadata["to"] != "p1" || entries[1].Metadata["to_model"] != "gpt-5.6-terra" {
 		t.Fatalf("metadata = %#v", entries[1].Metadata)
 	}
+}
+
+func TestLLMCooldownSnapshotUsesOneClockAndExpiresFailures(t *testing.T) {
+	now := time.Unix(100, 0)
+	calls := 0
+	table := &llmCooldownTable{now: func() time.Time { calls++; return now }}
+	profiles := []llm.Profile{{ID: "a"}, {ID: "b"}}
+	for _, profile := range profiles {
+		table.markFailure(profile, errors.New("HTTP 500"))
+	}
+	calls = 0
+	health := table.snapshot(profiles)
+	if calls != 1 || health[0] != health[1] || health[0].failures != 1 || health[0].remaining != llmCooldownTransient {
+		t.Fatalf("calls=%d health=%+v", calls, health)
+	}
+	now = now.Add(24 * time.Hour)
+	for _, state := range table.snapshot(profiles) {
+		if state != (llmCandidateHealth{}) {
+			t.Fatalf("expired health=%+v", state)
+		}
+	}
+	if len(table.entries) != 2 {
+		t.Fatal("expired entries must not need physical cleanup")
+	}
+	if got := (*llmCooldownTable)(nil).snapshot(profiles); len(got) != 2 || got[0] != (llmCandidateHealth{}) {
+		t.Fatalf("nil snapshot=%+v", got)
+	}
+}
+
+func TestLLMCooldownConcurrentSnapshots(t *testing.T) {
+	profiles := []llm.Profile{{ID: "a"}, {ID: "b"}}
+	table := &llmCooldownTable{}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for range 200 {
+			for _, profile := range profiles {
+				table.markFailure(profile, errors.New("HTTP 500"))
+				table.clear(profile)
+			}
+		}
+	}()
+	for range 200 {
+		health := table.snapshot(profiles)
+		for _, state := range health {
+			if state.failures < 0 || state.remaining < 0 || (state.failures == 0 && state.remaining > 0) {
+				t.Fatalf("inconsistent health=%+v", health)
+			}
+		}
+		if got := table.order("chat", len(profiles), 0, func(i int) llm.Profile { return profiles[i] }); len(got) == 0 {
+			t.Fatal("no probe selected")
+		}
+	}
+	<-done
+}
+
+func TestLLMCooldownBackoffRetentionAndRecovery(t *testing.T) {
+	now := time.Unix(100, 0)
+	table := &llmCooldownTable{now: func() time.Time { return now }}
+	profile := llm.Profile{ID: "a", Config: llm.ProviderConfig{Model: "m"}}
+	for n := 0; n < 12; n++ {
+		duration, _ := table.markFailure(profile, errors.New("HTTP 500"))
+		want := min(llmCooldownTransient*time.Duration(1<<n), llmCooldownMax)
+		if duration != want {
+			t.Fatalf("n=%d duration=%s want=%s", n, duration, want)
+		}
+		now = now.Add(duration + time.Second)
+	}
+	duration, _ := table.markFailure(profile, errors.New("HTTP 429 retry after 3s"))
+	if duration != 3*time.Second {
+		t.Fatal(duration)
+	}
+	table.clear(profile)
+	duration, _ = table.markFailure(profile, errors.New("HTTP 500"))
+	if duration != llmCooldownTransient {
+		t.Fatal(duration)
+	}
+	now = now.Add(25 * time.Hour)
+	duration, _ = table.markFailure(profile, errors.New("HTTP 500"))
+	if duration != llmCooldownTransient {
+		t.Fatal(duration)
+	}
+}
+
+func TestLLMCooldownFiltersAndProbesOnlyEarliest(t *testing.T) {
+	now := time.Unix(100, 0)
+	table := &llmCooldownTable{now: func() time.Time { return now }}
+	profiles := []llm.Profile{{ID: "a", Config: llm.ProviderConfig{Model: "m"}}, {ID: "b", Config: llm.ProviderConfig{Model: "m"}}, {ID: "a", Config: llm.ProviderConfig{Model: "other"}}}
+	at := func(i int) llm.Profile { return profiles[i] }
+	table.markFailure(profiles[0], errors.New("HTTP 429 retry after 60s"))
+	table.markFailure(profiles[1], errors.New("HTTP 429 retry after 20s"))
+	order := table.order("chat", 3, 0, at)
+	if len(order) != 1 || order[0] != 2 {
+		t.Fatal(order)
+	}
+	table.markFailure(profiles[2], errors.New("HTTP 429 retry after 40s"))
+	order = table.order("chat", 3, 0, at)
+	if len(order) != 1 || order[0] != 1 {
+		t.Fatal(order)
+	}
+}
+
+func TestLastStreamCandidateStillRecordsHealth(t *testing.T) {
+	table := &llmCooldownTable{}
+	adapter := &cooldownRegistryAdapter{streamEvents: midStreamLimitedEvents()}
+	provider := cooldownProviderFactory(t, table, adapter)()
+	if _, err := (&streamingLLMProvider{provider: provider}).Generate(context.Background(), cooldownRequest()); err == nil {
+		t.Fatal("expected error")
+	}
+	if table.remaining(llm.Profile{ID: "primary", Config: llm.ProviderConfig{Model: "primary-model"}}) <= 0 {
+		t.Fatal("last candidate failure was not recorded")
+	}
+	if adapter.streamCalls != 1 || adapter.generateCalls != 0 {
+		t.Fatalf("adapter=%+v", adapter)
+	}
+}
+
+// 只使用显式测试环境变量，不读取配置文件；两轮最多各一次真实生成。
+func TestLiveFallbackRecoversAndSkipsCoolingPrimary(t *testing.T) {
+	if os.Getenv("DIANA_LIVE_LLM") != "1" || strings.TrimSpace(os.Getenv("DIANA_TEST_LLM_API_KEY")) == "" || strings.TrimSpace(os.Getenv("DIANA_TEST_LLM_MODEL")) == "" {
+		t.Skip("requires DIANA_LIVE_LLM=1, DIANA_TEST_LLM_API_KEY and an explicit current DIANA_TEST_LLM_MODEL")
+	}
+	// liveLLMClient 支持文件配置；本测试刻意只走已提供的环境变量。
+	t.Setenv("DIANA_TEST_LLM_CONFIG", "")
+	client := &liveFallbackBudgetProvider{provider: liveLLMClient(t)}
+	primary := &countingFailLLMProvider{err: errors.New("HTTP 429: injected local rate limit")}
+	table := &llmCooldownTable{}
+	profiles := []llm.Profile{{ID: "injected-primary", Config: llm.ProviderConfig{Model: "injected"}}, {ID: "live-backup", Config: llm.ProviderConfig{Model: os.Getenv("DIANA_TEST_LLM_MODEL")}}}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	for range 2 {
+		// 每轮重新构建路由，确保第二轮跳过主档来自共享冷却，而非 current 游标。
+		provider, err := newProfileFailoverLLMProvider(profiles, func(config llm.ProviderConfig) (LLMProvider, error) {
+			if config.Model == "injected" {
+				return primary, nil
+			}
+			return client, nil
+		}, false, nil, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		provider.cooldowns = table
+		response, err := provider.Generate(ctx, llm.GenerateRequest{Messages: []llm.Message{{Role: llm.RoleUser, Content: "Reply with exactly OK."}}, MaxOutputTokens: 64})
+		if err != nil {
+			t.Fatal("live backup failed (upstream error omitted to avoid exposing endpoint details)")
+		}
+		if response == nil || strings.TrimSpace(response.Text) == "" {
+			t.Fatal("live backup returned no text")
+		}
+	}
+	if primary.calls != 1 || table.remaining(profiles[0]) <= 0 || table.remaining(profiles[1]) != 0 {
+		t.Fatalf("unexpected health state: primary calls=%d", primary.calls)
+	}
+}
+
+// 上下文收缩等独立重试也不能突破真实调用预算。
+type liveFallbackBudgetProvider struct {
+	provider LLMProvider
+	calls    int
+}
+
+func (p *liveFallbackBudgetProvider) Generate(ctx context.Context, req llm.GenerateRequest) (*llm.GenerateResponse, error) {
+	if p.calls >= 2 {
+		return nil, errors.New("live fallback request budget exhausted")
+	}
+	p.calls++
+	return p.provider.Generate(ctx, req)
 }

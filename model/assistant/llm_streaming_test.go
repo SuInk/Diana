@@ -7,7 +7,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -78,52 +83,37 @@ func TestStreamingAccumulatesCompleteResponse(t *testing.T) {
 	}
 }
 
-// TestStreamingFallsBackOnError 起流失败、流中报错，都要退回非流式。
-//
-// 流式只为一个诊断指标，不该决定回复发不发得出去。
-func TestStreamingFallsBackOnError(t *testing.T) {
-	t.Run("起流就失败", func(t *testing.T) {
-		stub := &stubStreamer{streamErr: errors.New("no stream"), generateOut: "兜底回复"}
-		response, err := (&streamingLLMProvider{provider: stub}).Generate(context.Background(), llm.GenerateRequest{})
-		if err != nil || response.Text != "兜底回复" {
-			t.Fatalf("没有退回非流式：%v %#v", err, response)
-		}
-	})
-	t.Run("流中报错", func(t *testing.T) {
-		stub := &stubStreamer{
-			events:      []llm.ChatEvent{textDelta("半"), {Type: llm.ChatEventError, Error: "boom"}},
-			generateOut: "兜底回复",
-		}
-		response, err := (&streamingLLMProvider{provider: stub}).Generate(context.Background(), llm.GenerateRequest{})
-		if err != nil {
-			t.Fatal(err)
-		}
-		if response.Text != "兜底回复" {
-			t.Fatalf("流中报错后没有退回非流式，拿到半截文本 %q", response.Text)
-		}
-	})
-}
-
-func TestStreamingFallsBackOnEmptyOutput(t *testing.T) {
+func TestStreamingOnlyFallsBackForExplicitUnsupported(t *testing.T) {
 	for _, tc := range []struct {
-		name   string
-		events []llm.ChatEvent
+		message  string
+		fallback bool
 	}{
-		{"empty", []llm.ChatEvent{{Type: llm.ChatEventDone}}},
-		{"reasoning_only", []llm.ChatEvent{{Type: llm.ChatEventReasoning, Reasoning: "calling a tool"}, {Type: llm.ChatEventUsage, Usage: &llm.Usage{OutputTokens: 32}}, {Type: llm.ChatEventDone}}},
-		{"whitespace", []llm.ChatEvent{textDelta(" \n\t"), {Type: llm.ChatEventDone}}},
+		{"streaming is not supported", true},
+		{"HTTP 401: streaming is not supported", false},
+		{"HTTP 429: streaming is not supported", false},
+		{"HTTP 500", false}, {"no stream", false},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			stub := &stubStreamer{events: tc.events, generateOut: "fallback"}
+		t.Run(tc.message, func(t *testing.T) {
+			stub := &stubStreamer{streamErr: errors.New(tc.message), generateOut: "fallback"}
 			response, err := (&streamingLLMProvider{provider: stub}).Generate(context.Background(), llm.GenerateRequest{})
-			if err != nil || !stub.generated || response == nil || response.Text != "fallback" {
-				t.Fatalf("empty stream did not fall back: response=%+v error=%v generated=%v", response, err, stub.generated)
+			if stub.generated != tc.fallback || (err == nil) != tc.fallback || (response != nil) != tc.fallback {
+				t.Fatalf("response=%+v error=%v generated=%v", response, err, stub.generated)
 			}
 		})
 	}
-	stub := &stubStreamer{events: []llm.ChatEvent{{Type: llm.ChatEventDone}}, generateErr: errors.New("provider output is empty")}
-	if _, err := (&streamingLLMProvider{provider: stub}).Generate(context.Background(), llm.GenerateRequest{}); !errors.Is(err, stub.generateErr) {
-		t.Fatalf("fallback failure was swallowed: %v", err)
+}
+
+func TestStreamingEmptyOutputDoesNotRestartNonStreaming(t *testing.T) {
+	for _, events := range [][]llm.ChatEvent{
+		{{Type: llm.ChatEventDone}},
+		{{Type: llm.ChatEventReasoning, Reasoning: "thinking"}, {Type: llm.ChatEventDone}},
+		{textDelta(" \n\t"), {Type: llm.ChatEventDone}},
+	} {
+		stub := &stubStreamer{events: events, generateOut: "fallback"}
+		response, err := (&streamingLLMProvider{provider: stub}).Generate(context.Background(), llm.GenerateRequest{})
+		if !errors.Is(err, llm.ErrCompletionEmpty) || response != nil || stub.generated {
+			t.Fatalf("response=%+v err=%v generated=%v", response, err, stub.generated)
+		}
 	}
 }
 
@@ -265,10 +255,292 @@ func TestStreamingPreservesPrivateContinuationState(t *testing.T) {
 	}
 }
 
-func TestStreamingRetriesTruncatedVisibleOutput(t *testing.T) {
+func TestStreamingTruncationDoesNotRestartNonStreaming(t *testing.T) {
 	stub := &stubStreamer{events: []llm.ChatEvent{textDelta("partial")}, generateOut: "complete"}
 	response, err := (&streamingLLMProvider{provider: stub}).Generate(context.Background(), llm.GenerateRequest{})
-	if err != nil || response.Text != "complete" || !stub.generated {
+	if err == nil || response != nil || stub.generated {
 		t.Fatalf("response=%+v err=%v", response, err)
+	}
+}
+
+type recordingDeltaObserver struct{ texts []string }
+
+func (o *recordingDeltaObserver) ObserveTextDelta(_ context.Context, text string) bool {
+	o.texts = append(o.texts, text)
+	return true
+}
+
+func TestCommittedStreamStopsEveryOuterRetry(t *testing.T) {
+	for _, cause := range []error{errors.New("HTTP 500"), errors.New("HTTP 529"), llm.ErrUnverifiedRejection, errors.New("maximum context length exceeded"), context.DeadlineExceeded} {
+		primary := &streamRejectionRegistryAdapter{events: []llm.ChatEvent{textDelta("partial"), {Type: llm.ChatEventError, Error: cause.Error(), ErrorCause: cause}}}
+		backup := &streamRejectionRegistryAdapter{events: streamedReplyEvents("backup")}
+		provider := streamRejectionProvider(t, primary, backup)
+		observer := &recordingDeltaObserver{}
+		ctx := withTextDeltaObserver(context.Background(), observer)
+		response, err := generateWithTransientRetryPolicy(ctx, &streamingLLMProvider{provider: provider}, llm.GenerateRequest{}, true, 0, 3, 0)
+		if response != nil || !errors.Is(err, errLLMOutputCommitted) || !errors.Is(err, cause) || shouldFailoverLLMError(err) || shouldRetryTransientLLMError(err) || !llmUnusableForRewrite(err) {
+			t.Fatalf("cause=%v response=%+v err=%v", cause, response, err)
+		}
+		if primary.streamCalls != 1 || primary.generateCalls != 0 || backup.streamCalls != 0 || backup.generateCalls != 0 || len(observer.texts) != 1 {
+			t.Fatalf("requests primary=%+v backup=%+v observer=%+v", primary, backup, observer)
+		}
+	}
+}
+
+func TestProfileStreamingUsesCandidateLocalBudget(t *testing.T) {
+	profiles := []llm.Profile{{ID: "primary", Config: llm.ProviderConfig{Model: "primary"}}, {ID: "backup", Config: llm.ProviderConfig{Model: "backup"}}}
+	primary := &stubStreamer{streamErr: errors.New("HTTP 401")}
+	backup := &stubStreamer{events: streamedReplyEvents("backup")}
+	provider, err := newProfileFailoverLLMProvider(profiles, func(cfg llm.ProviderConfig) (LLMProvider, error) {
+		if cfg.Model == "primary" {
+			return primary, nil
+		}
+		return backup, nil
+	}, true, nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := (&streamingLLMProvider{provider: provider}).Generate(context.Background(), llm.GenerateRequest{})
+	if err != nil || response.Text != "backup" || primary.generated || backup.generated {
+		t.Fatalf("response=%+v err=%v", response, err)
+	}
+}
+
+func TestStreamCandidateAttemptsResetForEachGenerate(t *testing.T) {
+	primary := &streamRejectionRegistryAdapter{events: midStreamLimitedEvents()}
+	backup := &streamRejectionRegistryAdapter{events: midStreamLimitedEvents()}
+	provider := streamRejectionProvider(t, primary, backup)
+	for range 2 {
+		if _, err := (&streamingLLMProvider{provider: provider}).Generate(context.Background(), llm.GenerateRequest{}); err == nil {
+			t.Fatal("expected error")
+		}
+	}
+	if primary.streamCalls != 2 || backup.streamCalls != 2 || primary.generateCalls != 0 || backup.generateCalls != 0 {
+		t.Fatalf("primary=%+v backup=%+v", primary, backup)
+	}
+}
+
+type failingDraftChannel struct{ err error }
+
+func (c failingDraftChannel) SendTextDraft(context.Context, OutgoingMessage, int64) error {
+	return c.err
+}
+
+func TestDraftCommitFeedbackControlsFailover(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		text      string
+		draft     *telegramReplyDraft
+		committed bool
+	}{
+		{"nil", "partial", nil, false},
+		{"disabled", "partial", &telegramReplyDraft{channel: failingDraftChannel{}, disabled: true}, false},
+		{"blank", " \n", &telegramReplyDraft{channel: failingDraftChannel{}}, false},
+		{"metadata", replySingleMarker[:5], &telegramReplyDraft{channel: failingDraftChannel{}}, false},
+		{"rejected", "partial", &telegramReplyDraft{channel: failingDraftChannel{err: &telegramAPIError{Code: 400}}}, false},
+		{"sent", "partial", &telegramReplyDraft{channel: failingDraftChannel{}}, true},
+		{"uncertain", "partial", &telegramReplyDraft{channel: failingDraftChannel{err: errors.New("connection reset")}}, true},
+		{"server-error", "partial", &telegramReplyDraft{channel: failingDraftChannel{err: &telegramAPIError{Code: 500}}}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			primary := &streamRejectionRegistryAdapter{events: []llm.ChatEvent{textDelta(tc.text), {Type: llm.ChatEventError, Error: "HTTP 401"}}}
+			backup := &streamRejectionRegistryAdapter{events: streamedReplyEvents("backup")}
+			ctx := withTextDeltaObserver(context.Background(), tc.draft)
+			response, err := (&streamingLLMProvider{provider: streamRejectionProvider(t, primary, backup)}).Generate(ctx, llm.GenerateRequest{})
+			if tc.committed {
+				if !errors.Is(err, llm.ErrOutputCommitted) || backup.streamCalls != 0 {
+					t.Fatalf("response=%+v err=%v backup=%d", response, err, backup.streamCalls)
+				}
+			} else if err != nil || response == nil || response.Text != "backup" || backup.streamCalls != 1 {
+				t.Fatalf("response=%+v err=%v backup=%d", response, err, backup.streamCalls)
+			}
+		})
+	}
+}
+
+func TestRegistryNativeStreamEmptyRetriesAndFailsOver(t *testing.T) {
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n")
+	}))
+	defer server.Close()
+	profiles := []llm.Profile{{ID: "primary", Config: llm.ProviderConfig{Provider: llm.ProviderOpenAICompatible, APIFormat: llm.APIFormatChatCompletions, BaseURL: server.URL, APIKey: "test", Model: "primary"}}, {ID: "backup", Config: llm.ProviderConfig{Model: "backup"}}}
+	registry, _, err := llm.NewProviderRegistryFromProfiles(llm.ProfileSet{Profiles: profiles})
+	if err != nil {
+		t.Fatal(err)
+	}
+	backup := &streamRejectionRegistryAdapter{events: streamedReplyEvents("backup")}
+	if err := registry.RegisterProvider(llm.ProviderDefinition{ID: "backup", Protocol: llm.ProtocolOpenAIResponses, Enabled: true}, backup); err != nil {
+		t.Fatal(err)
+	}
+	provider, err := newRegistryFailoverLLMProvider(registry, profiles, true, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := (&streamingLLMProvider{provider: provider}).Generate(context.Background(), llm.GenerateRequest{Messages: []llm.Message{{Role: llm.RoleUser, Content: "hello"}}})
+	if err != nil || response == nil || response.Text != "backup" || calls.Load() != int32(llmTransientMaxRetries+1) || backup.streamCalls != 1 {
+		t.Fatalf("response=%+v err=%v calls=%d backup=%d", response, err, calls.Load(), backup.streamCalls)
+	}
+}
+
+func TestRegistryCompatibilityStreamDecisionFailsOver(t *testing.T) {
+	profiles := []llm.Profile{{ID: "primary", Config: llm.ProviderConfig{Provider: llm.ProviderTypeSafe, APIKey: "test", Model: "jev-latest"}}, {ID: "backup", Config: llm.ProviderConfig{Model: "backup"}}}
+	registry, selection, err := llm.NewProviderRegistryFromProfiles(llm.ProfileSet{Profiles: profiles})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = (&streamingLLMProvider{provider: llm.RegistryClient{Registry: registry, Selection: selection}}).Generate(context.Background(), llm.GenerateRequest{})
+	if !errors.Is(err, llm.ErrDecisionRequired) {
+		t.Fatalf("cause lost: %v", err)
+	}
+	backup := &streamRejectionRegistryAdapter{events: streamedReplyEvents("backup")}
+	if err := registry.RegisterProvider(llm.ProviderDefinition{ID: "backup", Protocol: llm.ProtocolOpenAIResponses, Enabled: true}, backup); err != nil {
+		t.Fatal(err)
+	}
+	provider, err := newRegistryFailoverLLMProvider(registry, profiles, true, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := (&streamingLLMProvider{provider: provider}).Generate(context.Background(), llm.GenerateRequest{})
+	if err != nil || response == nil || response.Text != "backup" || backup.streamCalls != 1 {
+		t.Fatalf("response=%+v err=%v", response, err)
+	}
+}
+
+func TestRegistryActivityAwareStreamSurvivesAttemptDeadline(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		for range 6 {
+			fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"x\"}}]}\n\n")
+			w.(http.Flusher).Flush()
+			select {
+			case <-r.Context().Done():
+				return
+			case <-time.After(30 * time.Millisecond):
+			}
+		}
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer server.Close()
+	registry, selection, err := llm.NewProviderRegistryFromProfiles(llm.NewProfileSet(llm.ProviderConfig{Provider: llm.ProviderOpenAICompatible, APIFormat: llm.APIFormatChatCompletions, BaseURL: server.URL, APIKey: "test", Model: "test", Timeout: time.Second}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := llm.RegistryClient{Registry: registry, Selection: selection}
+	if !client.ManagesAttemptTimeout() {
+		t.Fatal("registry lost timeout ownership")
+	}
+	provider := &streamingLLMProvider{provider: client}
+	response, err := generateWithTransientRetryPolicy(context.Background(), provider, llm.GenerateRequest{Messages: []llm.Message{{Role: llm.RoleUser, Content: "hello"}}}, false, 50*time.Millisecond, 0, 0)
+	if err != nil || response == nil || response.Text != "xxxxxx" {
+		t.Fatalf("response=%+v err=%v", response, err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Millisecond)
+	defer cancel()
+	_, err = generateWithTransientRetryPolicy(ctx, provider, llm.GenerateRequest{Messages: []llm.Message{{Role: llm.RoleUser, Content: "hello"}}}, false, 50*time.Millisecond, 0, 0)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("caller deadline lost: %v", err)
+	}
+}
+
+func TestModelRequestTimeoutHTTPHeartbeatFailover(t *testing.T) {
+	for _, registered := range []bool{false, true} {
+		for _, streaming := range []bool{false, true} {
+			t.Run(fmt.Sprintf("registry=%v/stream=%v", registered, streaming), func(t *testing.T) {
+				var mu sync.Mutex
+				calls := map[string]int{}
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					var request struct {
+						Model  string `json:"model"`
+						Stream bool   `json:"stream"`
+					}
+					if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+						t.Error(err)
+						return
+					}
+					mu.Lock()
+					calls[request.Model]++
+					mu.Unlock()
+					if request.Stream {
+						w.Header().Set("Content-Type", "text/event-stream")
+						if request.Model == "third" {
+							fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\ndata: [DONE]\n\n")
+							return
+						}
+					} else {
+						w.Header().Set("Content-Type", "application/json")
+						if request.Model == "third" {
+							fmt.Fprint(w, `{"choices":[{"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}`)
+							return
+						}
+					}
+					for {
+						if request.Stream {
+							fmt.Fprint(w, ": heartbeat\n\n")
+						} else {
+							fmt.Fprint(w, " ")
+						}
+						w.(http.Flusher).Flush()
+						select {
+						case <-r.Context().Done():
+							return
+						case <-time.After(5 * time.Millisecond):
+						}
+					}
+				}))
+				defer server.Close()
+				set := llm.ProfileSet{}
+				for _, name := range []string{"first", "second", "third"} {
+					set.Profiles = append(set.Profiles, llm.Profile{ID: name, Group: llm.GroupChat, Config: llm.ProviderConfig{Provider: llm.ProviderOpenAICompatible, APIFormat: llm.APIFormatChatCompletions, BaseURL: server.URL, APIKey: "test", Model: name, Timeout: time.Second}})
+				}
+				runtime := NewRuntime(BotConfig{ModelRequestTimeout: 60 * time.Millisecond}, nilChannel{}, NewPluginManager(), &stubLLMProfileStore{set: set}, nil, nil, nil)
+				if registered {
+					registry, _, err := llm.NewProviderRegistryFromProfiles(set)
+					if err != nil {
+						t.Fatal(err)
+					}
+					runtime.SetLLMProviderRegistry(registry)
+				} else {
+					runtime.SetLLMProviderConfigFactory(func(cfg llm.ProviderConfig) (LLMProvider, error) { return llm.NewClient(cfg) })
+				}
+				parent, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+				defer cancel()
+				text, err := runtime.runRawLLMProviderForGroup(parent, llm.GroupChat, func(provider LLMProvider) (string, error) {
+					if streaming {
+						provider = &streamingLLMProvider{provider: provider}
+					}
+					resp, err := provider.Generate(parent, llm.GenerateRequest{Messages: []llm.Message{{Role: llm.RoleUser, Content: "hello"}}})
+					if err != nil {
+						return "", err
+					}
+					return resp.Text, nil
+				})
+				if err != nil || text != "ok" {
+					t.Fatalf("text=%q err=%v", text, err)
+				}
+				mu.Lock()
+				defer mu.Unlock()
+				for _, profile := range set.Profiles {
+					if calls[profile.Config.Model] != 1 {
+						t.Fatalf("calls=%v", calls)
+					}
+				}
+				for _, health := range runtime.llmCooldowns.snapshot(set.Profiles) {
+					if health.failures != 0 || health.remaining != 0 {
+						t.Fatalf("unexpected health penalty=%+v", health)
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestStreamCancellationDoesNotWaitForChannelClose(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := accumulateChatEvents(ctx, make(chan llm.ChatEvent)); !errors.Is(err, context.Canceled) {
+		t.Fatal(err)
 	}
 }

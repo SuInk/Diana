@@ -37,6 +37,7 @@ const (
 	botSeedProfileKey     = "bot_seed_profile"
 	llmSeedProfileKey     = "llm_seed_profile"
 	botPersonasKey        = "bot_personas"
+	botReplyTonesKey      = "bot_reply_tones"
 	botWorldBookKey       = "bot_world_book"
 	botGroupConfigKey     = "bot_group_configs"
 	pluginStateKey        = "plugin_states"
@@ -312,6 +313,18 @@ func (s *SQLiteStore) LoadBotPersonas(ctx context.Context) (assistant.PersonaSet
 // SaveBotPersonas 保存人设库。
 func (s *SQLiteStore) SaveBotPersonas(ctx context.Context, set assistant.PersonaSet) error {
 	return s.saveJSON(ctx, botPersonasKey, set)
+}
+
+// LoadBotReplyTones reads the named final-wording preference library.
+func (s *SQLiteStore) LoadBotReplyTones(ctx context.Context) (assistant.ReplyToneSet, bool, error) {
+	var set assistant.ReplyToneSet
+	ok, err := s.loadJSON(ctx, botReplyTonesKey, &set)
+	return set, ok, err
+}
+
+// SaveBotReplyTones saves the named final-wording preference library.
+func (s *SQLiteStore) SaveBotReplyTones(ctx context.Context, set assistant.ReplyToneSet) error {
+	return s.saveJSON(ctx, botReplyTonesKey, set)
 }
 
 // LoadWorldBook 读取世界书（世界观设定库）。

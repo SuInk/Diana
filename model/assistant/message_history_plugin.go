@@ -318,6 +318,7 @@ func quotedMessageFromHistory(event MessageEvent) *QuotedMessage {
 		UserID:                   event.UserID,
 		GroupID:                  event.GroupID,
 		SenderName:               event.SenderName,
+		SenderMentionUsername:    event.SenderMentionUsername,
 		RawMessage:               event.RawMessage,
 		Segments:                 event.Segments,
 		SemanticSourceMessageID:  event.SemanticSourceMessageID,

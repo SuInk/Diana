@@ -8,11 +8,76 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/SuInk/diana/model/llm"
 )
 
 var errContentPolicyRejection = errors.New("llm content policy rejection")
+
+// A committed preview must never be followed by a second model response.
+var errLLMOutputCommitted = llm.ErrOutputCommitted
+
+type committedLLMError struct{ cause error }
+
+func (e committedLLMError) Error() string        { return e.cause.Error() }
+func (e committedLLMError) Unwrap() error        { return e.cause }
+func (e committedLLMError) Is(target error) bool { return target == errLLMOutputCommitted }
+
+type llmFailurePolicy struct {
+	retry, failover bool
+	cooldown        time.Duration
+}
+
+func llmErrorPolicy(err error) llmFailurePolicy {
+	if err == nil || errors.Is(err, errLLMOutputCommitted) || errors.Is(err, context.Canceled) {
+		return llmFailurePolicy{}
+	}
+	if errors.Is(err, errModelRequestTimeout) || errors.Is(err, llm.ErrUnverifiedRejection) || errors.Is(err, llm.ErrDecisionRequired) {
+		return llmFailurePolicy{failover: true}
+	}
+	if errors.Is(err, errContentPolicyRejection) || isContentPolicyRejection(err) || llm.IsContextOverflowError(err) || errors.Is(err, llm.ErrCompletionHasNoText) {
+		return llmFailurePolicy{}
+	}
+	if errors.Is(err, llm.ErrCompletionTruncatedNoText) {
+		return llmFailurePolicy{failover: true}
+	}
+	if errors.Is(err, llm.ErrCompletionEmpty) {
+		return llmFailurePolicy{retry: true, failover: true}
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return llmFailurePolicy{retry: true, failover: true}
+	}
+	status := llm.ErrorStatusCode(err)
+	text := strings.ToLower(err.Error())
+	// Gateways sometimes report exhausted account pools as 503.
+	if status == 402 || status == 429 || (status == 0 || status >= 500) && containsAnyMarker(text, []string{"rate limit", "rate_limit", "ratelimit", "rate-limited", "rate limited", "quota", "resource_exhausted", "resource exhausted", "accounts limited", "account limited", "accounts are limited", "usage limit", "billing", "credit", "余额不足", "额度", "限流", "请求过于频繁"}) {
+		return llmFailurePolicy{failover: true, cooldown: llmCooldownDefault}
+	}
+	if status == 401 || status == 403 {
+		return llmFailurePolicy{failover: true, cooldown: llmCooldownDefault}
+	}
+	if isModelUnavailableLLMError(err) {
+		return llmFailurePolicy{failover: true, cooldown: llmCooldownDefault}
+	}
+	switch status {
+	case 500, 502, 503, 504, 529:
+		return llmFailurePolicy{retry: true, failover: true, cooldown: llmCooldownTransient}
+	}
+	if status != 0 {
+		return llmFailurePolicy{}
+	}
+	if containsAnyMarker(text, []string{"unauthorized", "forbidden", "invalid api key", "invalid_api_key", "incorrect api key", "authentication", "permission_error", "未授权", "无权限"}) {
+		return llmFailurePolicy{failover: true, cooldown: llmCooldownDefault}
+	}
+	if containsAnyMarker(text, []string{"context deadline exceeded", "client.timeout exceeded", "timeout awaiting response headers", "response header timeout", "response body idle timeout", "stream idle timeout"}) {
+		return llmFailurePolicy{retry: true, failover: true}
+	}
+	if containsAnyMarker(text, []string{"bad gateway", "service unavailable", "gateway timeout", "cloudflare", "eof", "connection reset", "connection refused", "connection aborted", "unexpected end of file", "server closed idle connection", "stream ended before completion"}) {
+		return llmFailurePolicy{retry: true, failover: true, cooldown: llmCooldownTransient}
+	}
+	return llmFailurePolicy{}
+}
 
 type contentPolicyRejectionError struct {
 	cause error

@@ -12,7 +12,7 @@ import (
 	"github.com/SuInk/diana/model/llm"
 )
 
-// GroupPromptSession contains only group-public history and tool names. Never
+// GroupPromptSession contains only group-public history, its summary and tool names. Never
 // persist retrieved memories, private thread state, credentials or tool objects.
 // The archive remains authoritative for edits, deletions and context resets.
 type GroupPromptSession struct {
@@ -23,21 +23,41 @@ type GroupPromptSession struct {
 	History     []GroupPromptHistoryEntry `json:"history,omitempty"`
 }
 
-func (s *groupPromptSession) rememberCheckpoint(checkpoint string) string {
-	checkpoint = strings.TrimSpace(checkpoint)
-	if s == nil {
-		return checkpoint
+// promptContextSummary reads the source at assembly time, not the earlier routing
+// snapshot. Taking the session lock before reading prevents an older request from
+// publishing its checkpoint after a newer one. Store I/O never holds r.mu.
+func (r *Runtime) promptContextSummary(event MessageEvent, sessionThread string, budget int64) (string, bool) {
+	s := r.groupPromptSession(event)
+	r.mu.RLock()
+	if s != nil {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if s.invalidated {
+			r.mu.RUnlock()
+			return "", false
+		}
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.invalidated {
-		return checkpoint
+	var summary string
+	if r.structuredMemory == nil && strings.TrimSpace(sessionThread) == "" {
+		var present bool
+		summary, present = r.contextSummaries[sessionKey(event)]
+		if !present && s != nil {
+			summary = s.data.Checkpoint
+		}
 	}
-	if checkpoint != "" && s.data.Checkpoint != checkpoint {
-		s.data.Checkpoint = checkpoint
+	summary, recompressed := r.fitOlderSummaryToBudget(rawMessageWithoutImagePlaceholders(summary), budget)
+	changed := s != nil && s.data.Checkpoint != summary
+	if changed {
+		s.data.Checkpoint = summary
+	}
+	r.mu.RUnlock()
+	if changed {
 		s.saveLocked()
+		if s.invalidated {
+			return "", false
+		}
 	}
-	return s.data.Checkpoint
+	return summary, recompressed
 }
 
 type GroupPromptHistoryEntry struct {

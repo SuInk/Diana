@@ -41,7 +41,7 @@ func generateWithInterjections(ctx context.Context, interjections Interjections,
 		}
 	}()
 	resp, err := generate(stepCtx)
-	if err != nil && ctx.Err() == nil && errors.Is(context.Cause(stepCtx), errInterjected) {
+	if err != nil && !errors.Is(err, llm.ErrOutputCommitted) && ctx.Err() == nil && errors.Is(context.Cause(stepCtx), errInterjected) {
 		return nil, true, nil
 	}
 	return resp, false, err

@@ -4,11 +4,23 @@ import { test } from "node:test";
 import vm from "node:vm";
 import ts from "typescript";
 import { parse } from "@vue/compiler-sfc";
+import { modelRequestTimeoutSeconds } from "./configuration-sync.ts";
 
 const source = readFileSync(new URL("./views/AssistantView.vue", import.meta.url), "utf8");
+test("model scheduling explains health timing and boundaries without an extra switch", () => {
+  const disclosure = source.match(/<AppDisclosure :id="`model-description-\$\{role.key\}`"[\s\S]*?<\/AppDisclosure>/)?.[0];
+  assert.ok(disclosure);
+  for (const text of ["700 毫秒重试 1 次", "首次冷却 10 秒", "首次冷却 1 分钟", "单次冷却最多 30 分钟", "有效 Retry-After 优先", "只提前探测最早恢复的一个", "只有一个候选时仍允许调用", "不读取或推算剩余额度", "已完成的工具操作不会因切换重复执行"]) {
+    assert.ok(disclosure.includes(text), text);
+  }
+  assert.ok(disclosure.includes('v-if="!isMediaRole(role.key) && role.key !== \'image\'"'));
+  assert.doesNotMatch(disclosure, /<AppSwitch/);
+});
+
 const ast = ts.createSourceFile("view.ts", parse(source).descriptor.scriptSetup.content, ts.ScriptTarget.Latest, true);
 function editorContext(roles) {
   const context = vm.createContext({
+    isMediaRole: role => ["tts", "stt", "video"].includes(role),
     defaultFollowChatRoles: ["vision", "intent", "image"],
     roleForm: { value: roles }, modelRouteEditor: { value: null }, modelRouteEditorError: { value: "" },
     modelRouteSearch: { value: "" }, modelRouteStatusFilter: { value: "all" },
@@ -18,7 +30,7 @@ function editorContext(roles) {
     profileCanRouteRoleModel: (_, __, model) => model === "m1" || model === "m2",
     modelOptionsFor: (_, route) => [{ value: route.profile_id === "p2" ? "m2" : "m1" }]
   });
-  for (const name of ["roleSnapshot", "modelRoleRoutes", "modelRouteIsStandby", "modelRouteProviderLabel", "filteredModelRoutes", "clearModelRouteFilters", "openModelRouteEditor", "setModelRouteEditorChannel", "setModelRouteEditorModel", "applyModelRouteEditor"]) {
+  for (const name of ["effectiveModelRoutingStrategy", "roleSnapshot", "modelRoleRoutes", "modelRouteIsStandby", "modelRouteProviderLabel", "filteredModelRoutes", "clearModelRouteFilters", "openModelRouteEditor", "setModelRouteEditorChannel", "setModelRouteEditorModel", "applyModelRouteEditor"]) {
     const fn = ast.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === name);
     assert.ok(fn, name);
     vm.runInContext(ts.transpileModule(fn.getText(ast), { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, context);
@@ -107,7 +119,91 @@ test("model filters retain original indices and distinguish disabled and standby
   assert.equal(context.filteredModelRoutes("chat")[0].index, 2);
   context.modelRouteStatusFilter.value = "disabled";
   assert.equal(context.filteredModelRoutes("chat")[0].index, 1);
-  roles.chat.routing_strategy = undefined;
+  roles.chat.routing_strategy = "failover";
   context.modelRouteStatusFilter.value = "standby";
   assert.equal(context.filteredModelRoutes("chat").length, 2);
+});
+
+test("timeout refresh preserves edits and reads the currently edited bot only", () => {
+  const context = editorContext({ chat: { model: "m1" } });
+  Object.assign(context, {
+    form: { value: { id: "bot-a", model_request_timeout_ms: 10000 } },
+    modelRequestTimeoutDraft: { value: 10 }, savedModelRequestTimeoutMS: { value: 10000 },
+    modelRequestTimeoutSeconds,
+    savedRoleSnapshot: { value: context.roleSnapshot({ chat: { model: "m1" } }) }
+  });
+  const fn = ast.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === "syncModelRequestTimeoutWhileEditing");
+  vm.runInContext(ts.transpileModule(fn.getText(ast), { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, context);
+  const update = milliseconds => context.syncModelRequestTimeoutWhileEditing({ id: "bot-b", model_request_timeout_ms: 90000, profiles: [{ id: "bot-a", model_request_timeout_ms: milliseconds, model_roles: { chat: { model: "m1" } } }] });
+  update(20000);
+  assert.equal(context.modelRequestTimeoutDraft.value, 20);
+  context.modelRequestTimeoutDraft.value = 35;
+  update(25000);
+  assert.equal(context.modelRequestTimeoutDraft.value, 35);
+  assert.equal(context.savedModelRequestTimeoutMS.value, 25000);
+  context.modelRequestTimeoutDraft.value = "";
+  update(30000);
+  assert.equal(context.modelRequestTimeoutDraft.value, "");
+});
+
+test("timeout stays in the bot draft across purpose changes and resets on cancel or bot switch", () => {
+  assert.match(source, /v-if="role.key === 'chat'"[\s\S]*?id="bot-model-request-timeout" v-model.number="modelRequestTimeoutDraft"/);
+  assert.match(source, /function setForm\(config[\s\S]*?modelRequestTimeoutDraft.value = modelRequestTimeoutSeconds\(config.model_request_timeout_ms\)/);
+  assert.match(source, /function leaveEditor\([\s\S]*?setForm\(current\)/);
+  assert.match(source, /function editProfile\([\s\S]*?setForm\(profile\)/);
+  assert.match(source, /model_request_timeout_ms: modelRequestTimeoutMS/);
+  assert.match(source, /latestTimeoutDraft !== submittedTimeoutDraft/);
+  assert.match(source, /form.value !== current \|\| page.value !== "edit"/);
+  const help = source.match(/<span id="bot-model-request-timeout-hint"[\s\S]*?<\/span>/)?.[0];
+  for (const text of ["0 表示不额外限制", "包含流式接收", "提供商更短的超时", "调用方取消", "已发送或提交", "独立图片生成"]) assert.ok(help.includes(text));
+  assert.doesNotMatch(help, /整轮总|整轮预算|180 秒/);
+});
+
+function schedulingContext(roles) {
+  const context = editorContext(roles);
+  Object.assign(context, { GitBranch: null, RotateCcw: null, SlidersHorizontal: null,
+    isMediaRole: role => ["tts", "stt", "video"].includes(role),
+    orderedRoleKeys: Object.keys, savedRoleSnapshot: { value: "" }, modelRolesChangedElsewhere: { value: false } });
+  const declaration = ast.statements.find(node => ts.isVariableStatement(node) && node.declarationList.declarations.some(item => item.name.getText(ast) === "modelRoutingStrategies"));
+  vm.runInContext(ts.transpileModule(declaration.getText(ast), { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, context);
+  for (const name of ["modelRoutingStrategiesFor", "setRoleRoutingStrategy", "setRoleForm", "modelRoutingDescription"]) {
+    const fn = ast.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === name);
+    vm.runInContext(ts.transpileModule(fn.getText(ast), { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, context);
+  }
+  return context;
+}
+
+test("smart is the effective default and explicit failover round-trips", () => {
+  const context = schedulingContext({ chat: { model: "m1" } });
+  assert.deepEqual(Array.from(context.modelRoutingStrategiesFor("chat"), option => option.value), ["smart", "failover", "round_robin", "weighted"]);
+  context.setRoleForm({ chat: { model: "m1" } });
+  assert.equal(context.roleForm.value.chat.routing_strategy, undefined);
+  assert.equal(context.effectiveModelRoutingStrategy("chat"), "smart");
+  context.roleForm.value.chat.routing_strategy = "";
+  assert.equal(context.effectiveModelRoutingStrategy("chat"), "smart");
+  context.setRoleRoutingStrategy("chat", "smart");
+  assert.equal(context.roleForm.value.chat.routing_strategy, "smart");
+  context.setRoleForm(JSON.parse(JSON.stringify(context.roleForm.value)));
+  assert.equal(context.roleForm.value.chat.routing_strategy, "smart");
+  context.setRoleRoutingStrategy("chat", "failover");
+  context.setRoleForm(JSON.parse(JSON.stringify(context.roleForm.value)));
+  assert.equal(context.roleForm.value.chat.routing_strategy, "failover");
+  assert.equal(context.effectiveModelRoutingStrategy("chat"), "failover");
+  context.setRoleRoutingStrategy("vision", "smart");
+  assert.equal(context.roleForm.value.vision.routing_strategy, undefined);
+  assert.equal(context.roleForm.value.vision.follow_chat, true);
+});
+
+test("unsupported media has no smart option and smart retains explicit standby", () => {
+  const context = schedulingContext({ chat: { model: "m1", routing_strategy: "smart", fallbacks: [{ model: "m2" }, { model: "m2", standby: true }] }, image: { model: "m1" } });
+  for (const role of ["image", "tts", "stt", "video"]) assert.equal(context.modelRoutingStrategiesFor(role).some(option => option.value === "smart"), false);
+  context.setRoleRoutingStrategy("image", "smart");
+  assert.equal(context.roleForm.value.image.routing_strategy, undefined);
+  for (const role of ["image", "tts", "stt", "video"]) assert.equal(context.effectiveModelRoutingStrategy(role), "failover");
+  assert.equal(context.modelRouteIsStandby("chat", 1), false);
+  assert.equal(context.modelRouteIsStandby("chat", 2), true);
+  assert.match(context.modelRoutingDescription("chat"), /同分/);
+  assert.match(source, /v-if="roleForm\[role.key\]\?\.routing_strategy === 'weighted'"/);
+  assert.doesNotMatch(source, /SearchRoutingPanel|model-purpose-search|current.web_search/);
+  assert.match(source, /const payload[\s\S]*?\.\.\.current|const saved[\s\S]*?\.\.\.current|\.\.\.current,/);
 });

@@ -2,9 +2,86 @@ package assistant
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
+	"time"
 )
+
+func TestTelegramPersistedHistoryReply(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		mode   ReplyDecorationMode
+		target string
+		want   string
+		alias  bool
+	}{
+		{"history", ReplyDecorationAuto, "7", "7", false},
+		{"alias", ReplyDecorationAuto, "7", "7", true},
+		{"current", ReplyDecorationAuto, "9", "9", false},
+		{"unknown", ReplyDecorationAuto, "99", "", false},
+		{"cross-group", ReplyDecorationAuto, "8", "", false},
+		{"on", ReplyDecorationOn, "7", "9", false},
+		{"off", ReplyDecorationOff, "7", "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			api := newFakeTelegramAPI(t, nil)
+			runtime := NewRuntime(BotConfig{Platform: PlatformTelegram, ReplyReferenceMode: tc.mode}, api.channel(), NewPluginManager(), nil, nil, nil, nil)
+			store := newSemanticTimelineStore()
+			event := MessageEvent{Platform: PlatformTelegram, Kind: EventKindGroup, GroupID: "-10001", UserID: "10001", MessageID: "9", MessageThreadID: "3", Time: time.Now().Unix()}
+			old := event
+			old.MessageID = "7"
+			old.Time -= 3 * 86400
+			old.RawMessage = "历史线索"
+			old.Segments = []MessageSegment{{Type: "text", Data: map[string]string{"text": "历史线索"}}}
+			if err := store.AppendMessageEvent(ctx, sessionKey(old), old); err != nil {
+				t.Fatal(err)
+			}
+			other := old
+			other.GroupID = "-10002"
+			other.MessageID = "8"
+			if err := store.AppendMessageEvent(ctx, sessionKey(other), other); err != nil {
+				t.Fatal(err)
+			}
+			runtime.SetMessageHistoryStore(store)
+			raw, err := newDianaChatHistoryTool(runtime, event).Run(ctx, map[string]any{"operation": "search", "query": "历史线索", "all_time": true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var result dianaChatHistoryResult
+			if err = json.Unmarshal([]byte(raw), &result); err != nil {
+				t.Fatal(err)
+			}
+			if len(result.Items) != 1 || result.Items[0].MessageID != "7" {
+				t.Fatalf("history: %s", raw)
+			}
+			if len(runtime.history[sessionKey(event)]) != 0 {
+				t.Fatal("history unexpectedly warmed runtime memory")
+			}
+			target := tc.target
+			if tc.alias {
+				scope := newIdentityPrivacyScope()
+				target = scope.registerMessageID(result.Items[0].MessageID)
+				ctx = withIdentityPrivacyScope(ctx, scope)
+			}
+			_, err = runtime.sendOutgoingWithResult(ctx, event, OutgoingMessage{GroupID: event.GroupID, ReplyMessageID: event.MessageID, Text: fmt.Sprintf("[diana-reply:%s]就是这条", target)})
+			if err != nil {
+				t.Fatal(err)
+			}
+			calls := api.callsOf("sendMessage")
+			if len(calls) != 1 {
+				t.Fatalf("calls: %#v", calls)
+			}
+			p := calls[0].Params
+			got := telegramTestReplyID(t, p)
+			if got != tc.want || p["text"] != "就是这条" || p["chat_id"] != event.GroupID || p["message_thread_id"] != "3" {
+				t.Fatalf("params: %#v; want target %q", p, tc.want)
+			}
+		})
+	}
+}
 
 func TestOutgoingReplyControlModesAndInvalidTargets(t *testing.T) {
 	for _, tc := range []struct {
@@ -153,5 +230,49 @@ func TestOutgoingNormalizesQQOfficialReplyMarkerVariants(t *testing.T) {
 	residue := "这句话里 [diana-reply:" + qqOfficialProbeID + "] 混了个引用标记"
 	if got := dropResidualDianaReplyMarkers(residue); got != "这句话里 混了个引用标记" {
 		t.Fatalf("residue survived: %q", got)
+	}
+}
+
+type failingReplyLookupStore struct {
+	*semanticTimelineStore
+	err error
+}
+
+func (s *failingReplyLookupStore) FindMessageEvent(context.Context, string, string) (MessageEvent, bool, error) {
+	return MessageEvent{}, false, s.err
+}
+
+func TestOutgoingReplyDiscardDiagnostics(t *testing.T) {
+	for _, tc := range []struct {
+		name, target, reason string
+		err                  error
+	}{
+		{"invalid", "bad", "invalid_target", nil},
+		{"missing", "7", "history_not_found", nil},
+		{"store error", "7", "storage_error", fmt.Errorf("secret body must not leak")},
+		{"timeout", "7", "storage_timeout_or_canceled", context.DeadlineExceeded},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			runtime := NewRuntime(BotConfig{ReplyReferenceMode: ReplyDecorationAuto}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+			runtime.SetMessageHistoryStore(&failingReplyLookupStore{newSemanticTimelineStore(), tc.err})
+			logs := &captureAppLogs{}
+			runtime.SetAppLogWriter(logs)
+			event := MessageEvent{Platform: PlatformTelegram, Kind: EventKindGroup, GroupID: "-10001", MessageID: "9"}
+			msg := runtime.applyOutgoingReplyMarker(context.Background(), event, OutgoingMessage{Text: "[diana-reply:" + tc.target + "]private-test-body"})
+			if msg.Text != "private-test-body" || msg.ReplyMessageID != "" {
+				t.Fatalf("message=%#v", msg)
+			}
+			entries := logs.entriesSnapshot()
+			if len(entries) != 1 || entries[0].Action != "outgoing_reply_discarded" || entries[0].Metadata["reason"] != tc.reason {
+				t.Fatalf("logs=%#v", entries)
+			}
+			encoded, _ := json.Marshal(entries)
+			if strings.Contains(string(encoded), "secret") || strings.Contains(string(encoded), "private-test-body") {
+				t.Fatal("diagnostic leaked content")
+			}
+			if got := runtime.lookupQuotedMessage(context.Background(), event, "7"); got != nil {
+				t.Fatal("legacy lookup must still swallow errors")
+			}
+		})
 	}
 }

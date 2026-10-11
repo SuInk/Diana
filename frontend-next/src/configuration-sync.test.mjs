@@ -4,7 +4,7 @@ import { test } from "node:test";
 import vm from "node:vm";
 import ts from "typescript";
 import { effectScope, nextTick } from "vue";
-import { configurationKindForMutation, notifyConfigurationChanged, useConfigurationRefresh } from "./configuration-sync.ts";
+import { maximumModelRequestTimeoutMS, maximumModelRequestTimeoutSeconds, modelRequestTimeoutMilliseconds, modelRequestTimeoutSeconds, configurationKindForMutation, notifyConfigurationChanged, useConfigurationRefresh } from "./configuration-sync.ts";
 import { describeServerFailure } from "./gateway-error.ts";
 
 const flush = async () => { await nextTick(); await new Promise(resolve => setImmediate(resolve)); };
@@ -85,12 +85,61 @@ test("cached page subscriptions refresh after changes, serialize updates, and st
 test("search provider writes refresh search lists and encode custom IDs", async () => {
   const calls = [];
   const { api, changes } = apiHarness(async (url, init) => { calls.push([url, init.method]); return response({ providers: [], default_assignment: { provider_ids: [] } }); });
-  await api.getSearchProviders('bot & test');
+  await api.getSearchProviders();
   await api.saveSearchProvider({ id: '', name: 'Custom', type: 'search_mcp', url: 'https://example.org/mcp', tool: 'lookup' });
   await api.testSearchProvider({ id: '', name: 'Draft', type: 'http', url: 'https://example.org/search' }, 'Diana');
   await api.deleteSearchProvider('custom & test');
   assert.deepEqual(changes, ['search', 'search']);
-  assert.equal(calls[0][0], '/api/assistant/search-providers?profile=bot%20%26%20test');
+  assert.equal(calls[0][0], '/api/assistant/search-providers');
   assert.equal(calls[2][0], '/api/assistant/search-providers/test');
   assert.equal(calls[3][0], '/api/assistant/search-providers/custom%20%26%20test');
+});
+
+test("global search uses bare assignment contract and only successful PUT notifies", async () => {
+  const calls = [];
+  const assignment = { provider_ids: ["browser"], disabled: true };
+  const { api, changes } = apiHarness(async (url, init) => { calls.push([url, init.method, init.body]); return response(assignment, calls.length === 3 ? 400 : 200); });
+  assert.equal(JSON.stringify(await api.getSearchAssignment()), JSON.stringify(assignment));
+  assert.equal(JSON.stringify(await api.saveSearchAssignment(assignment)), JSON.stringify(assignment));
+  await assert.rejects(api.saveSearchAssignment(assignment));
+  assert.deepEqual(calls[1], ["/api/assistant/search-assignment", "PUT", JSON.stringify(assignment)]);
+  assert.deepEqual(changes, ["search"]);
+});
+
+test("model attempt timeout uses seconds without changing the independent legacy timeout", async () => {
+  assert.equal(modelRequestTimeoutSeconds(), 0);
+  for (const milliseconds of [0, 1, 1001, 45000, maximumModelRequestTimeoutMS]) {
+    assert.equal(modelRequestTimeoutMilliseconds(modelRequestTimeoutSeconds(milliseconds)), milliseconds);
+  }
+  assert.equal(modelRequestTimeoutMilliseconds(""), 0);
+  assert.equal(modelRequestTimeoutMilliseconds("1.001"), 1001);
+  for (const value of [-1, Infinity, NaN, "bad", 0.0001, 1.00001, maximumModelRequestTimeoutSeconds + 1]) {
+    assert.throws(() => modelRequestTimeoutMilliseconds(value), /单次模型请求超时/);
+  }
+  const stored = new Map();
+  const { api, changes } = apiHarness(async (_url, init) => {
+    const payload = JSON.parse(init.body);
+    stored.set(payload.id, payload);
+    return response(payload);
+  });
+  for (const [id, seconds] of [["bot-a", 45], ["bot-b", 0]]) {
+    const saved = await api.saveBotProfileConfig({ id, model_request_timeout_ms: modelRequestTimeoutMilliseconds(seconds), request_timeout_ms: 180000 });
+    assert.equal(modelRequestTimeoutSeconds(saved.model_request_timeout_ms), seconds);
+    assert.equal(saved.request_timeout_ms, 180000);
+  }
+  assert.equal(stored.get("bot-a").model_request_timeout_ms, 45000);
+  assert.equal(stored.get("bot-b").model_request_timeout_ms, 0);
+  assert.deepEqual(changes, ["bot", "bot"]);
+});
+
+test("bot save preserves legacy search fields without enforcing obsolete routing validation", async () => {
+  let payload;
+  const legacy = { provider_ids: [], max_results: 99, disabled: false };
+  const { api } = apiHarness(async (_url, init) => { payload = JSON.parse(init.body); return response(payload); });
+  const saved = await api.saveBotProfileConfig({ id: "bot-a", name: "changed", web_search: legacy });
+  assert.deepEqual(payload.web_search, legacy);
+  assert.equal(JSON.stringify(saved.web_search), JSON.stringify(legacy));
+  const source = readFileSync(new URL("./views/AssistantView.vue", import.meta.url), "utf8");
+  assert.doesNotMatch(source, /current.web_search|SearchRoutingPanel|model-purpose-search/);
+  assert.match(source, /\.\.\.current,/);
 });

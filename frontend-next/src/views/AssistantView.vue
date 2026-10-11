@@ -600,15 +600,15 @@
           <!-- 模型分配 -->
           <section class="card">
             <div class="card-header">
-              <h2>模型与搜索</h2>
-              <span class="card-sub">按用途分配模型与搜索来源；接入地址和凭据在「提供商」页管理</span>
+              <h2>模型</h2>
+              <span class="card-sub">按用途分配模型来源；接入地址和凭据在「提供商」页管理</span>
             </div>
             <div class="card-body model-allocation-workspace">
               <p v-if="modelRolesChangedElsewhere" class="hint warn-text">
                 模型分配刚在别处改过，通常是在聊天里让机器人自己换的。你在这一档也有未保存的修改，所以没有自动替换；直接保存会把那次改动覆盖掉。
                 <button type="button" class="btn ghost small" @click="adoptIncomingModelRoles">载入最新</button>
               </p>
-              <nav class="model-purpose-nav" aria-label="模型与搜索用途" role="tablist">
+              <nav class="model-purpose-nav" aria-label="模型用途" role="tablist">
                 <span class="model-purpose-caption">用途</span>
                 <button
                   v-for="role in visibleModelRoleRows"
@@ -631,7 +631,6 @@
                   </span>
                   <small>{{ modelPurposeSummary(role.key) }}</small>
                 </button>
-                <button id="model-purpose-search" type="button" role="tab" class="model-purpose-tab" :class="{ active: selectedModelRole === 'search' }" :aria-selected="selectedModelRole === 'search'" aria-controls="model-purpose-panel-search" :tabindex="selectedModelRole === 'search' ? 0 : -1" @click="selectedModelRole = 'search'" @keydown="onModelPurposeKeydown('search', $event)"><span><Search :size="16" aria-hidden="true" />联网搜索<ChevronRight v-if="selectedModelRole === 'search'" :size="13" aria-hidden="true" /></span><small>{{ form.web_search?.disabled ? '已关闭' : '来源与后备' }}</small></button>
                 <p class="model-purpose-foot">切换用途会保留未保存的修改。保存后仅影响当前机器人。</p>
               </nav>
               <div class="model-allocation-panels">
@@ -660,7 +659,7 @@
                     </div>
                     <div v-if="roleForm[role.key] && !modelRoleInherited(role.key)" class="model-routing-control">
                       <label :for="`model-strategy-${role.key}`">调度方式</label>
-                      <AppSelect :id="`model-strategy-${role.key}`" :model-value="roleForm[role.key]?.routing_strategy || ''" :options="modelRoutingStrategies" @update:model-value="(value) => setRoleRoutingStrategy(role.key, value)" />
+                      <AppSelect :id="`model-strategy-${role.key}`" :model-value="effectiveModelRoutingStrategy(role.key)" :options="modelRoutingStrategiesFor(role.key)" @update:model-value="(value) => setRoleRoutingStrategy(role.key, value)" />
                     </div>
                     <span v-if="!modelRoleInherited(role.key)" class="model-routing-toolbar-hint">{{ modelRoutingDescription(role.key) }}</span>
                   </div>
@@ -697,7 +696,7 @@
                               <span class="model-route-provider"><Layers v-if="item.route.group" :size="12" aria-hidden="true" />{{ modelRouteProviderLabel(item.route) }}</span>
                               <button class="model-route-model-name mono" type="button" :title="item.route.model" @click="openModelRouteEditor(role.key, item.index)">{{ item.route.model || '请选择模型' }}</button>
                             </td>
-                            <td class="model-route-kind-cell"><span class="badge" :class="modelRouteIsStandby(role.key, item.index) ? '' : 'accent'">{{ modelRouteIsStandby(role.key, item.index) ? '后备' : roleForm[role.key]?.routing_strategy ? '参与调度' : '主模型' }}</span></td>
+                            <td class="model-route-kind-cell"><span class="badge" :class="modelRouteIsStandby(role.key, item.index) ? '' : 'accent'">{{ modelRouteIsStandby(role.key, item.index) ? '后备' : effectiveModelRoutingStrategy(role.key) !== 'failover' ? '参与调度' : '主模型' }}</span></td>
                             <td v-if="roleForm[role.key]?.routing_strategy === 'weighted'" class="model-route-weight-cell">
                               <span v-if="modelRouteIsStandby(role.key, item.index)" class="muted">—</span>
                               <AppNumberInput v-else :model-value="item.route.weight || 1" :min="1" :max="1000" :label="`${role.label}模型 ${item.index + 1} 权重`" :disabled="item.route.disabled" compact @update:model-value="(value) => setRoleRouteWeight(role.key, item.index, value)" />
@@ -709,7 +708,7 @@
                         </tbody>
                       </table>
                     </div>
-                    <p v-if="roleForm[role.key]?.routing_strategy" class="hint model-routing-hint">后备模型仅在参与渠道均失败时使用。<template v-if="roleForm[role.key]?.routing_strategy === 'weighted'">分组中的每个兼容渠道使用该行权重；</template>一次调用中的后续请求沿用当前渠道。</p>
+                    <p v-if="effectiveModelRoutingStrategy(role.key) !== 'failover'" class="hint model-routing-hint">后备模型仅在参与渠道均失败时使用。<template v-if="roleForm[role.key]?.routing_strategy === 'weighted'">分组中的每个兼容渠道使用该行权重；</template>一次调用中的后续请求沿用当前渠道。</p>
                   </template>
                 <div v-if="isMediaRole(role.key) && roleForm[role.key]" class="model-role-params">
                   <label v-for="field in mediaParamFields[role.key]" :key="field.key" class="field">
@@ -741,6 +740,13 @@
                     />
                   </label>
                 </div>
+                <div v-if="role.key === 'chat'" class="model-role-params model-request-timeout">
+                  <div class="field">
+                    <label for="bot-model-request-timeout">单次模型请求超时（秒）</label>
+                    <input id="bot-model-request-timeout" v-model.number="modelRequestTimeoutDraft" class="input" type="number" min="0" :max="maximumModelRequestTimeoutSeconds" step="0.001" inputmode="decimal" aria-describedby="bot-model-request-timeout-hint" />
+                    <span id="bot-model-request-timeout-hint" class="hint">0 表示不额外限制；若提供商也未设超时，可能一直等待，建议配置正数。正数是每次模型请求的最长时间，包含流式接收；重试或切换候选重新计时。调用方取消、独立任务自身期限或提供商更短的超时仍可提前终止，不保证所有候选都能轮到。已发送或提交的输出不会因超时重新生成或切换模型。此设置由当前机器人共用模型调用链的对话与理解用途共享，不限制整段工具执行，也不覆盖独立图片生成、语音和视频任务。</span>
+                  </div>
+                </div>
                 <!-- 图片交付方式：对话模型怎么看图，所以跟着对话这一档。 -->
                 <div v-if="role.key === 'chat'" class="model-role-params">
                   <label class="field">
@@ -752,9 +758,21 @@
                     />
                   </label>
                 </div>
-                  <AppDisclosure :id="`model-description-${role.key}`" class="model-purpose-description" title="用途与调度说明"><p>{{ role.description }}</p><p>主备切换按列表顺序尝试；轮询和加权轮询先尝试选中的渠道，再尝试其余参与渠道，最后尝试后备模型。拖动顺序编号或聚焦后按 ↑ ↓ 调整顺序。</p></AppDisclosure>
+                  <p v-if="!isMediaRole(role.key) && role.key !== 'image'" class="hint">自动避障：故障候选会暂时冷却，有可用备用时自动切换；各模式按自己的策略选择候选。具体时间见下方说明。</p>
+                  <AppDisclosure :id="`model-description-${role.key}`" class="model-purpose-description" title="用途与调度说明">
+                    <p>{{ role.description }}</p>
+                    <p>主备切换按列表顺序尝试；轮询和加权轮询先尝试选中的渠道，再尝试其余参与渠道，最后尝试后备模型。拖动顺序编号或聚焦后按 ↑ ↓ 调整顺序。</p>
+                    <template v-if="!isMediaRole(role.key) && role.key !== 'image'">
+                      <p><strong>智能切换（默认）：</strong>可用常规候选按未过期的连续健康故障次数升序选择，同分保留配置顺序；后备仍放在常规候选之后。不读取剩余额度，不计算成功率。</p>
+                      <p><strong>自动避障，无需开关。</strong>只使用你已配置并启用的模型，不会自动添加备用。健康状态按提供商配置档与模型分别记录；有可用候选时跳过冷却中的候选，冷却不是让当前请求原地等待。</p>
+                      <p><strong>重试与冷却：</strong>普通 500、502、503、504、529 或连接故障，在允许重试且预算足够时，默认等待 700 毫秒重试 1 次，仍失败再切换，首次冷却 10 秒。限流、额度耗尽、鉴权失败或模型不可用直接切换，首次冷却 1 分钟。单次上游超时和空输出不计健康冷却；整次请求取消或截止后立即停止。</p>
+                      <p><strong>连续失败翻倍：</strong>临时故障为 10 秒 → 20 秒 → 40 秒 → 1 分 20 秒 → 2 分 40 秒 → 5 分 20 秒 → 10 分 40 秒 → 21 分 20 秒 → 30 分钟；限流等故障为 1 → 2 → 4 → 8 → 16 → 30 分钟。以上为同类故障连续发生时的示例，失败次数跨故障类别累计。有效 Retry-After 优先，不额外翻倍，单次冷却最多 30 分钟。</p>
+                      <p><strong>恢复与例外：</strong>冷却到期后重新参与调度，不会后台定时探测；调用成功立即清除失败计数。全部候选都在冷却时只提前探测最早恢复的一个；只有一个候选时仍允许调用。失败记录保留 24 小时，过期即按零次参与智能排序，重启后重置；24 小时不是冷却时长。智能模式下冷却到期不保证立即回切：未清零的故障计数可能让原主模型排在健康候选之后，直到成功或记录过期。</p>
+                      <p><strong>流式边界：</strong>可见预览已发送或无法排除已发送后，不再重试、切模型或重新生成收尾回答，避免拼接两份答案。候选耗尽不会重跑非流式整链；已完成的工具操作不会因切换重复执行。</p>
+                      <p><strong>能力边界：</strong>只根据健康故障记录调度，不读取或推算剩余额度，不按余额排序。有可用候选就跳过冷却候选，全冷却只探测一个。</p>
+                    </template>
+                  </AppDisclosure>
                 </div>
-                <div v-show="selectedModelRole === 'search'" id="model-purpose-panel-search" role="tabpanel" aria-labelledby="model-purpose-search" class="model-role-block"><SearchRoutingPanel :profile-id="form.id" v-model="form.web_search" /></div>
               </div>
             </div>
           </section>
@@ -782,7 +800,7 @@
                 <AppSwitch v-model="form.llm_streaming_enabled">流式调用模型（默认开启）</AppSwitch>
                 <span class="hint">
                   默认使用流式接收正文、思考和工具调用；思考不会作为聊天正文发送，工具参数完整后才会执行。
-                  可统计首 token 时延（TTFT），Telegram 私聊支持回复预览。供应商不支持流式或请求失败时会尝试普通调用。
+                  可统计首 token 时延（TTFT），Telegram 私聊支持回复预览。仅当供应商明确不支持流式时才会尝试普通调用；其他失败按当前调度策略重试或切换。
                 </span>
               </div>
               <div class="field">
@@ -986,6 +1004,16 @@
                   @update:model-value="(value) => { if (form) form.mention_user_mode = value as 'on' | 'off' | 'auto'; }"
                 />
                 <span class="hint">默认「让模型自己决定」：群里还有别人在说话时才 @，一对一接话时不带。</span>
+              </div>
+              <div class="field">
+                <label for="bot-sticker-reply-order">表情发送顺序</label>
+                <AppSelect
+                  id="bot-sticker-reply-order"
+                  :model-value="form.sticker_reply_order ?? 'before'"
+                  :options="stickerReplyOrderOptions"
+                  @update:model-value="(value) => { if (form) form.sticker_reply_order = value as 'before' | 'after' | 'auto'; }"
+                />
+                <span class="hint">仅控制自动配图与最终正文的发送顺序，不改变是否配图；Telegram 流式草稿可能提前显示。先发表情时仅短暂等待选图和审核，准备超时或预算不足会跳过配图，优先发送正文；已开始投递则按平台正常发送及确认流程等待，不保证固定耗时。</span>
               </div>
               <div class="field">
                 <label for="bot-reply-merge-confidence">合并回复置信度阈值（%）</label>
@@ -1478,6 +1506,30 @@
             @generate="openPersonaComposer"
             @world-book="nodes => { worldBookNodes = nodes; }"
           />
+
+          <section class="card">
+            <div class="card-header">
+              <div>
+                <h2>回复口吻</h2>
+                <span class="card-sub">单独控制最后怎么说，不改变回答内容</span>
+              </div>
+              <span class="badge" :class="form.reply_composer === 'maibot' ? 'accent' : ''">{{ form.reply_composer === "maibot" ? "已启用" : "跟随 SOUL.md" }}</span>
+            </div>
+            <div class="card-body form-grid">
+              <div class="field wide">
+                <AppSwitch
+                  :model-value="form.reply_composer === 'maibot'"
+                  @update:model-value="value => { if (form) form.reply_composer = value ? 'maibot' : undefined; }"
+                >
+                  单独设置回复口吻
+                </AppSwitch>
+                <span class="hint">Diana 先完成内容判断和工具调用，再根据下面的口吻整理最终说法。它不会改动事实、结论和必要细节，已学到的本群说话风格仍会一起生效。使用的模型在「模型与搜索 → 回复口吻」里单独选择。</span>
+              </div>
+              <div v-if="form.reply_composer === 'maibot'" class="field wide">
+                <ReplyToneEditor v-model="replyToneDraft" />
+              </div>
+            </div>
+          </section>
 
           <!-- 自述只在这里开关；写下的条目在「小窝 → 自述」里看和删。 -->
           <section class="card">
@@ -2163,7 +2215,7 @@
         <p class="muted">选择提供商和模型，并设置它在当前用途中的调度方式。</p>
         <div class="field"><label for="model-route-editor-provider">提供商 / 分组</label><AppSelect id="model-route-editor-provider" :model-value="routeSelectionValue(modelRouteEditor.draft)" :options="channelOptionsFor(modelRouteEditor.role).filter((option) => option.value !== FOLLOW_CHAT && option.value !== FOLLOW_VISION)" searchable search-placeholder="搜索提供商或分组" placeholder="选择提供商 / 分组" @update:model-value="setModelRouteEditorChannel" /></div>
         <div class="field"><label for="model-route-editor-model">模型</label><AppSelect id="model-route-editor-model" :model-value="modelRouteEditor.draft.model" :options="modelOptionsFor(modelRouteEditor.role, modelRouteEditor.draft)" searchable search-placeholder="搜索模型" placeholder="选择模型" @update:model-value="setModelRouteEditorModel" /></div>
-        <div v-if="roleForm[modelRouteEditor.role]?.routing_strategy && modelRouteEditor.index > 0" class="field"><AppSwitch v-model="modelRouteEditor.draft.standby">仅作后备</AppSwitch><span class="hint">关闭时参与负载均衡；开启后只在参与渠道全部失败时使用。</span></div>
+        <div v-if="effectiveModelRoutingStrategy(modelRouteEditor.role) !== 'failover' && modelRouteEditor.index > 0" class="field"><AppSwitch v-model="modelRouteEditor.draft.standby">仅作后备</AppSwitch><span class="hint">关闭时参与当前策略调度；开启后只在参与渠道全部失败时使用。</span></div>
         <div v-if="roleForm[modelRouteEditor.role]?.routing_strategy === 'weighted' && !modelRouteEditor.draft.standby" class="field"><label for="model-route-editor-weight">调度权重</label><AppNumberInput id="model-route-editor-weight" v-model="modelRouteEditor.draft.weight" :min="1" :max="1000" label="调度权重" :disabled="modelRouteEditor.draft.disabled" /><span class="hint">权重越大，分配到的请求越多，范围 1–1000。</span></div>
         <div class="field"><AppSwitch :model-value="!modelRouteEditor.draft.disabled" @update:model-value="(value) => { if (modelRouteEditor) modelRouteEditor.draft.disabled = !value || undefined; }">启用模型</AppSwitch></div>
         <p v-if="modelRouteEditorError" class="warn-text" role="alert">{{ modelRouteEditorError }}</p>
@@ -2237,7 +2289,7 @@ import { navigate, viewQuery } from "../router";
 import { botScope } from "../bot-scope";
 import { copyBotConfiguration } from "../bot-config-copy";
 import { findWebSocketConnectionConflict } from "../bot-connection-conflicts";
-import { useConfigurationRefresh } from "../configuration-sync";
+import { maximumModelRequestTimeoutSeconds, modelRequestTimeoutMilliseconds, modelRequestTimeoutSeconds, useConfigurationRefresh } from "../configuration-sync";
 import { mergeModelMetadata, effectiveModelInfo } from "../model-metadata";
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch, type Ref } from "vue";
 import LoadingSkeleton from "../components/LoadingSkeleton.vue";
@@ -2292,7 +2344,6 @@ import AppSelect, { type AppSelectOption } from "../components/AppSelect.vue";
 import AppNumberInput from "../components/AppNumberInput.vue";
 import AppSwitch from "../components/AppSwitch.vue";
 import AppDisclosure from "../components/AppDisclosure.vue";
-import SearchRoutingPanel from "../components/SearchRoutingPanel.vue";
 import ParticipationControls from "../components/ParticipationControls.vue";
 import BotMarkerList from "../components/BotMarkerList.vue";
 import AgentResidencyPanel from "../components/AgentResidencyPanel.vue";
@@ -2330,6 +2381,7 @@ import PromptSectionsEditor from "../components/PromptSectionsEditor.vue";
 import ParticipationPromptPreview from "../components/ParticipationPromptPreview.vue";
 import { participationFromConfig, type ParticipationPreferences } from "../participation";
 import SoulEditor from "../components/SoulEditor.vue";
+import ReplyToneEditor from "../components/ReplyToneEditor.vue";
 import EmptyState from "../components/EmptyState.vue";
 import IdChipInput from "../components/IdChipInput.vue";
 import MessageRelayManager from "../components/MessageRelayManager.vue";
@@ -2353,14 +2405,19 @@ import {
 import { toastError, toastSuccess } from "../toast";
 import { allowNodeExecution } from "../node-execution-preset";
 import { channelAccountUnhealthy, channelOperational, channelStatusHint, channelStatusLabel } from "../channel-status";
+import { effectiveReplyTone, FALLBACK_REPLY_TONE, normalizeReplyTone, replyToneOverride } from "../reply-tone";
 
 const form = ref<BotProfileConfig | null>(null);
+const modelRequestTimeoutDraft = ref<number | string>(0);
+const savedModelRequestTimeoutMS = ref(0);
 
 const loading = ref(true);
 const personaComposerOpen = ref(false);
 const personaDraft = ref("");
 const personaDraftInput = ref<HTMLTextAreaElement | null>(null);
 const personaBusy = ref(false);
+const replyToneDraft = ref("");
+const replyToneDefault = ref(FALLBACK_REPLY_TONE);
 // 保留生成前的那一版，生成结果不合适可以一键退回，不用自己 Ctrl+Z。
 const soulEditor = ref<InstanceType<typeof SoulEditor> | null>(null);
 const promptOverridesOpen = ref(false);
@@ -2910,7 +2967,7 @@ async function copyCallbackURL(): Promise<void> {
 // 保持一致，免得读代码时对不上。
 const editorTabs = [
   { key: "access", label: "接入" },
-  { key: "model", label: "模型与搜索" },
+  { key: "model", label: "模型" },
   { key: "persona", label: "人设" },
   { key: "behavior", label: "行为" },
   { key: "context", label: "上下文" },
@@ -2978,6 +3035,12 @@ const refusalStrategyOptions: AppSelectOption[] = [
   { value: "rewrite", label: "尽量改写", hint: "优先绕开，实在不行才模糊拒答" },
   { value: "explain", label: "说明原因", hint: "把不能答的原因直接讲清楚" },
   { value: "vague", label: "模糊拒答", hint: "一律带过，任何情况都不交代原因" }
+];
+
+const stickerReplyOrderOptions: AppSelectOption[] = [
+  { value: "before", label: "先发表情（默认）" },
+  { value: "after", label: "后发表情" },
+  { value: "auto", label: "让模型决定" }
 ];
 
 const replyReferenceModeOptions: AppSelectOption[] = [
@@ -3434,7 +3497,7 @@ function onMessageRelaysSaved(config: BotProfileConfig): void {
 // 细分用途：要写文字的旁路调用，从「意图识别」里拆出来——那一档能绑只做判断的模型，
 // 这些绑上去只会每次先失败一次再降级。再按时机分两档：回复辅助在回复发出前同步跑，
 // 要快；后台生成在回复之外异步跑，慢一点没关系。
-const purposeRoleKeys = ["reply_assist", "background"] as const;
+const purposeRoleKeys = ["reply_tone", "reply_assist", "background"] as const;
 
 // 音视频插槽：不配就没有这项能力，不跟随对话——对话模型接不了这些接口。
 const mediaRoleKeys = ["tts", "stt", "video"] as const;
@@ -3444,7 +3507,7 @@ type RoleKey = "chat" | "vision" | "intent" | "image" | "media_parse" | (typeof 
 type RoleRoute = { profile_id?: string; group?: string; model: string; provider_id?: string; model_id?: string; follow_chat?: boolean; weight?: number; disabled?: boolean; standby?: boolean };
 // params 只在音视频插槽的主路由上有，后备沿用同一份。
 // reasoning_effort 同样只在主路由上有，后备沿用；空表示跟随提供商配置。
-type RoleAssignment = RoleRoute & { routing_strategy?: "round_robin" | "weighted"; fallbacks?: RoleRoute[]; params?: Record<string, string>; reasoning_effort?: string };
+type RoleAssignment = RoleRoute & { routing_strategy?: "smart" | "failover" | "round_robin" | "weighted"; fallbacks?: RoleRoute[]; params?: Record<string, string>; reasoning_effort?: string };
 type ModelRoleRow = { key: RoleKey; label: string; sublabel?: string; description: string };
 const modelRoleRows: ModelRoleRow[] = [
   {
@@ -3481,6 +3544,12 @@ const imageRoleRow: ModelRoleRow = {
 };
 // 回复辅助留空时沿用后台生成（它就是从那一档拆出来的），后台生成留空时跟随对话。
 const purposeRoleRows: ModelRoleRow[] = [
+  {
+    key: "reply_tone",
+    label: "回复口吻",
+    sublabel: "最终表达",
+    description: "内容和工具调用完成后，把完整草稿整理成最终聊天口吻。不指定时跟随对话；单独指定时适合使用响应快、成本低的文字模型。"
+  },
   {
     key: "background",
     label: "后台生成",
@@ -3630,7 +3699,7 @@ function roleModelPlaceholder(role: RoleKey): string {
 }
 
 // 所有用途都在侧栏中，右侧只展开当前选择的用途。
-const selectedModelRole = ref<RoleKey | 'search'>("chat");
+const selectedModelRole = ref<RoleKey>("chat");
 const modelRouteSearch = ref("");
 const modelRouteStatusFilter = ref("all");
 const modelRouteStatusOptions = [
@@ -3643,10 +3712,23 @@ const modelRouteEditor = ref<{ role: RoleKey; index: number; adding: boolean; dr
 const modelRouteEditorError = ref("");
 watch(selectedModelRole, clearModelRouteFilters);
 const modelRoutingStrategies = [
-  { value: "", label: "主备切换", hint: "失败时按顺序切换", icon: GitBranch },
+  { value: "smart", label: "智能切换", hint: "健康故障较少的渠道优先", icon: GitBranch },
+  { value: "failover", label: "主备切换", hint: "失败时按顺序切换", icon: GitBranch },
   { value: "round_robin", label: "轮询", hint: "请求依次均匀分配", icon: RotateCcw },
   { value: "weighted", label: "加权轮询", hint: "按渠道权重分配", icon: SlidersHorizontal }
 ];
+
+function modelRoutingStrategiesFor(role: RoleKey): AppSelectOption[] {
+  return role === "image" || isMediaRole(role) ? modelRoutingStrategies.filter(option => option.value !== "smart") : modelRoutingStrategies;
+}
+
+function effectiveModelRoutingStrategy(role: RoleKey): NonNullable<RoleAssignment["routing_strategy"]> {
+  const assignment = roleForm.value[role];
+  if (assignment?.follow_chat && role !== "chat") return effectiveModelRoutingStrategy("chat");
+  const strategy = assignment?.routing_strategy?.trim();
+  if (strategy === "failover" || strategy === "round_robin" || strategy === "weighted") return strategy;
+  return role === "image" || isMediaRole(role) ? "failover" : "smart";
+}
 
 function clearModelRouteFilters(): void {
   modelRouteSearch.value = "";
@@ -3681,7 +3763,7 @@ function modelRoleRoutes(role: RoleKey): { route: RoleRoute; index: number }[] {
 
 function modelRouteIsStandby(role: RoleKey, index: number): boolean {
   const assignment = roleForm.value[role];
-  return index > 0 && (!assignment?.routing_strategy || !!assignment.fallbacks?.[index - 1]?.standby);
+  return index > 0 && (effectiveModelRoutingStrategy(role) === "failover" || !!assignment?.fallbacks?.[index - 1]?.standby);
 }
 
 function modelRoleRouteSummary(role: RoleKey): string {
@@ -3691,8 +3773,8 @@ function modelRoleRouteSummary(role: RoleKey): string {
 }
 
 function modelRoutingDescription(role: RoleKey): string {
-  const strategy = roleForm.value[role]?.routing_strategy;
-  return strategy === "weighted" ? "权重越大，分配请求越多" : strategy === "round_robin" ? "在参与渠道间均匀分配请求" : "主模型失败后，按顺序尝试后备";
+  const strategy = effectiveModelRoutingStrategy(role);
+  return strategy === "smart" ? "健康故障较少的渠道优先，同分按配置顺序" : strategy === "weighted" ? "权重越大，分配请求越多" : strategy === "round_robin" ? "在参与渠道间均匀分配请求" : "主模型失败后，按顺序尝试后备";
 }
 
 function modelRouteProviderLabel(route: RoleRoute): string {
@@ -3786,7 +3868,7 @@ function modelPurposeLabel(role: RoleKey): string {
 }
 
 function modelPurposeIcon(role: RoleKey) {
-  return { chat: MessageSquare, vision: Eye, media_parse: ScanLine, intent: Waypoints, image: Image, background: Layers, reply_assist: MessageSquare, tts: MessageSquare, stt: MessageSquare, video: Image }[role];
+  return { chat: MessageSquare, vision: Eye, media_parse: ScanLine, intent: Waypoints, image: Image, background: Layers, reply_tone: MessageSquare, reply_assist: MessageSquare, tts: MessageSquare, stt: MessageSquare, video: Image }[role];
 }
 
 function modelPurposeSummary(role: RoleKey): string {
@@ -3796,8 +3878,8 @@ function modelPurposeSummary(role: RoleKey): string {
   return assignment.model || "请选择模型";
 }
 
-async function onModelPurposeKeydown(role: RoleKey | 'search', event: KeyboardEvent): Promise<void> {
-  const rows: (RoleKey | 'search')[] = [...visibleModelRoleRows.map(row => row.key), 'search'];
+async function onModelPurposeKeydown(role: RoleKey, event: KeyboardEvent): Promise<void> {
+  const rows = visibleModelRoleRows.map(row => row.key);
   const index = rows.indexOf(role);
   const delta = event.key === "ArrowDown" || event.key === "ArrowRight" ? 1 : event.key === "ArrowUp" || event.key === "ArrowLeft" ? -1 : 0;
   const target = event.key === "Home" ? 0 : event.key === "End" ? rows.length - 1 : delta ? (index + delta + rows.length) % rows.length : -1;
@@ -3811,7 +3893,8 @@ async function onModelPurposeKeydown(role: RoleKey | 'search', event: KeyboardEv
 function setRoleRoutingStrategy(role: RoleKey, value: string): void {
   const assignment = roleForm.value[role];
   if (!assignment || assignment.follow_chat) return;
-  assignment.routing_strategy = value === "round_robin" || value === "weighted" ? value : undefined;
+  if (!modelRoutingStrategiesFor(role).some(option => option.value === value)) return;
+  assignment.routing_strategy = value === "smart" || value === "failover" || value === "round_robin" || value === "weighted" ? value : undefined;
 }
 
 function setRoleRouteWeight(role: RoleKey, index: number, value: number): void {
@@ -4071,7 +4154,7 @@ function channelOptionsFor(role: RoleKey): AppSelectOption[] {
   if (isPurposeRole(role)) {
     base.push({ value: UNSPECIFIED, label: `不指定，跟随${purposeRoleFallbackLabel(role)}`, hint: "不单独绑定，换模型时跟着一起换" });
   }
-  if (role !== "chat" && !isMediaRole(role)) {
+  if (role !== "chat" && role !== "reply_tone" && !isMediaRole(role)) {
     base.push({
       value: FOLLOW_CHAT,
       label: "跟随对话",
@@ -4449,6 +4532,10 @@ function setRoleModel(role: RoleKey, value: string): void {
 }
 
 function setForm(config: BotProfileConfig): void {
+  savedModelRequestTimeoutMS.value = config.model_request_timeout_ms ?? 0;
+  modelRequestTimeoutDraft.value = modelRequestTimeoutSeconds(config.model_request_timeout_ms);
+  replyToneDefault.value = normalizeReplyTone(config.reply_tone_default) || FALLBACK_REPLY_TONE;
+  replyToneDraft.value = effectiveReplyTone(config.maibot_reply_style, replyToneDefault.value);
   form.value = {
     ...config,
     participation: participationFromConfig(config),
@@ -4485,6 +4572,7 @@ function setForm(config: BotProfileConfig): void {
     model_disclosure: config.model_disclosure ?? "owner",
     repository_disclosure: config.repository_disclosure ?? "owner",
     mention_user_mode: config.mention_user_mode ?? "auto",
+    sticker_reply_order: config.sticker_reply_order ?? "before",
     markdown_to_plain: config.markdown_to_plain ?? !platformSupportsRichText(config.platform),
     error_notify_enabled: config.error_notify_enabled ?? true,
     muted_reply_pause_enabled: config.muted_reply_pause_enabled ?? true,
@@ -4614,12 +4702,6 @@ async function save(): Promise<void> {
   if (!current) {
     return;
   }
-  if (current.web_search && !current.web_search.disabled && !current.web_search.provider_ids.length) {
-    editorTab.value = 'model';
-    selectedModelRole.value = 'search';
-    toastError('联网搜索需要选择一个首选提供商');
-    return;
-  }
   if (!current.connection_profile_id && (!current.platform || current.platform === "onebot-v11") && current.onebot_transport !== "http" && !validWebSocketURL(current.onebot_transport === "forward_ws" ? current.onebot_ws_endpoint || "" : current.onebot_reverse_ws_endpoint)) {
     toastError("请填写有效的 ws:// 或 wss:// 连接地址");
     return;
@@ -4649,6 +4731,16 @@ async function save(): Promise<void> {
     toastError(`回复保留时间请输入 1 到 ${maximumRecallReplyAutoDeleteDelaySeconds} 秒之间的整数`);
     return;
   }
+  let modelRequestTimeoutMS: number;
+  try {
+    modelRequestTimeoutMS = modelRequestTimeoutMilliseconds(modelRequestTimeoutDraft.value);
+  } catch (error) {
+    editorTab.value = "model";
+    selectedModelRole.value = "chat";
+    toastError(error instanceof Error ? error.message : "单次模型请求超时无效");
+    return;
+  }
+  const submittedTimeoutDraft = modelRequestTimeoutDraft.value;
   const sendRetryError = sendRetryValidationError(current);
   if (sendRetryError) {
     toastError(sendRetryError);
@@ -4735,6 +4827,10 @@ async function save(): Promise<void> {
     }
     const payload: BotProfileConfig = {
       ...current,
+      model_request_timeout_ms: modelRequestTimeoutMS,
+      maibot_reply_style: replyToneOverride(replyToneDraft.value, replyToneDefault.value),
+      // 只读默认值由后端回传，不写进机器人自己的配置。
+      reply_tone_default: undefined,
       // 截图权限在交互式浏览器页管理，编辑其他配置时不能覆盖那里新保存的授权。
       agent_browser_screenshot_access: creating.value ? current.agent_browser_screenshot_access : undefined,
       agent_browser_operation_access: creating.value ? current.agent_browser_operation_access : undefined,
@@ -4773,7 +4869,14 @@ async function save(): Promise<void> {
       model_roles: modelRoles
     };
     const saved = await (creating.value ? createBotProfileConfig(payload) : saveBotProfileConfig(payload));
+    if (form.value !== current || page.value !== "edit") {
+      profileSet.value = saved;
+      toastSuccess("机器人配置已保存");
+      return;
+    }
+    const latestTimeoutDraft = modelRequestTimeoutDraft.value;
     applyConfig(saved);
+    if (latestTimeoutDraft !== submittedTimeoutDraft) modelRequestTimeoutDraft.value = latestTimeoutDraft;
     creating.value = false;
     // 档位走自己的接口，但用户看到的是同一个保存按钮：配置存好之后立刻补上，
     // 失败了单独报，不能把「机器人配置已保存」这句也一起吞掉。
@@ -4957,8 +5060,21 @@ useConfigurationRefresh(["bot"], async () => {
     setForm(config);
     return;
   }
+  syncModelRequestTimeoutWhileEditing(config);
   syncModelRolesWhileEditing(config);
 });
+
+function syncModelRequestTimeoutWhileEditing(config: BotProfileConfig): void {
+  const editing = form.value?.id;
+  if (!editing) return;
+  const latest = config.id === editing ? config : (config.profiles ?? []).find((profile) => profile.id === editing);
+  if (!latest) return;
+  if (modelRequestTimeoutDraft.value === modelRequestTimeoutSeconds(savedModelRequestTimeoutMS.value)) {
+    modelRequestTimeoutDraft.value = modelRequestTimeoutSeconds(latest.model_request_timeout_ms);
+    form.value!.model_request_timeout_ms = latest.model_request_timeout_ms;
+  }
+  savedModelRequestTimeoutMS.value = latest.model_request_timeout_ms ?? 0;
+}
 
 // 编辑页开着的时候不能拿服务端那份覆盖整个草稿，但模型分配这一档得跟上：主人
 // 多半就是刚在聊天里让机器人换完模型，再回到这一页看结果，页面停在旧值等于告诉

@@ -11,9 +11,9 @@ import (
 )
 
 const (
-	// Telegram 的 chat action 约 5 秒过期；QQ 未公开时长，使用较保守的刷新间隔。
+	// Telegram 的 chat action 约 5 秒过期；QQ 未公开时长，缩短续刷间隔以减少显示空隙。
 	telegramTypingRenewInterval = 4 * time.Second
-	oneBotTypingRenewInterval   = 2500 * time.Millisecond
+	oneBotTypingRenewInterval   = 500 * time.Millisecond
 	// 单次刷新的超时。状态刷新和消息发送、取历史挤在同一条连接上，没有上限时
 	// 一次慢调用就能把刷新拖过平台的过期窗口，界面上就是「正在输入」一闪一闪。
 	typingCallTimeout = 2 * time.Second
@@ -21,7 +21,7 @@ const (
 	// 接入端偶发的 uid 查不到、重连瞬间的调用失败，都会让整轮输入状态提前停掉：
 	// 用户看到的就是「正在输入」没了、回复却还没出来。
 	oneBotTypingMaxFailures = 3
-	// 连续失败达到上限后进入冷却，冷却结束只给一次试探机会（见 recordFailure）。
+	// 连续失败达到上限后进入冷却，冷却结束只给一次试探机会。
 	typingFailureCooldown = 15 * time.Second
 )
 
@@ -35,8 +35,9 @@ type typingIndicator struct {
 	interval    time.Duration
 	callTimeout time.Duration
 	// 连续错误达到阈值后低频重试，不把临时故障误认为永久不支持。
-	maxFailures   int
-	retryInterval time.Duration
+	maxFailures      int
+	retryInterval    time.Duration
+	cooldownInterval time.Duration
 
 	mu           sync.Mutex
 	muted        bool
@@ -82,14 +83,15 @@ func (r *Runtime) startTypingIndicatorState(ctx context.Context, event MessageEv
 		return nil
 	}
 	indicator := &typingIndicator{
-		channel:     channel,
-		message:     routeOutgoingToEvent(event, OutgoingMessage{GroupID: event.GroupID, UserID: event.UserID, MessageThreadID: event.MessageThreadID}),
-		interval:    interval,
-		callTimeout: typingCallTimeout,
-		maxFailures: maxFailures,
-		muted:       muted,
-		kick:        make(chan struct{}, 1),
-		done:        make(chan struct{}),
+		channel:       channel,
+		message:       routeOutgoingToEvent(event, OutgoingMessage{GroupID: event.GroupID, UserID: event.UserID, MessageThreadID: event.MessageThreadID}),
+		interval:      interval,
+		callTimeout:   typingCallTimeout,
+		maxFailures:   maxFailures,
+		retryInterval: 2500 * time.Millisecond,
+		muted:         muted,
+		kick:          make(chan struct{}, 1),
+		done:          make(chan struct{}),
 	}
 	go func() {
 		defer recoverGoroutinePanic("typing_indicator.go:startTypingIndicator")
@@ -165,9 +167,10 @@ func (t *typingIndicator) run(ctx context.Context) {
 				// 忙连接不代表不支持，也不代表成功，保留之前的失败计数。
 			default:
 				failures++
+				t.next = time.Now().Add(t.retryDelay(typingRefreshFailed))
 			}
 			if t.maxFailures > 0 && failures >= t.maxFailures {
-				retry := t.retryInterval
+				retry := t.cooldownInterval
 				if retry <= 0 {
 					retry = typingFailureCooldown
 				}
@@ -179,6 +182,20 @@ func (t *typingIndicator) run(ctx context.Context) {
 		}
 		t.mu.Unlock()
 	}
+}
+
+type typingRefreshResult int
+
+const (
+	typingRefreshOK typingRefreshResult = iota
+	typingRefreshFailed
+)
+
+func (t *typingIndicator) retryDelay(result typingRefreshResult) time.Duration {
+	if result == typingRefreshFailed && t.maxFailures > 0 {
+		return max(t.interval, t.retryInterval)
+	}
+	return t.interval
 }
 
 // pause 与刷新注册共用锁，取消尚未完成的请求；已送达平台的状态无法撤回。

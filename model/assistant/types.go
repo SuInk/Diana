@@ -177,19 +177,21 @@ type MessageEvent struct {
 	ManualRetry bool `json:"manual_retry,omitempty"`
 	// SenderUsername is the platform-authenticated sender handle, not a display
 	// name or a handle found in message text, mentions or forwarded content.
-	SenderUsername   string           `json:"sender_username,omitempty"`
-	MentionTargets   []MessageMention `json:"mention_targets,omitempty"`
-	UserIDType       string           `json:"user_id_type,omitempty"`
-	PlatformScope    string           `json:"platform_scope,omitempty"`
-	GuildID          string           `json:"guild_id,omitempty"`
-	Platform         string           `json:"platform,omitempty"`
-	ProfileID        string           `json:"profile_id,omitempty"`
-	ContextNamespace string           `json:"context_namespace,omitempty"`
-	Kind             EventKind        `json:"kind"`
-	SubType          string           `json:"sub_type,omitempty"`
-	Time             int64            `json:"time,omitempty"`
-	OriginalTime     int64            `json:"original_time,omitempty"`
-	SelfID           string           `json:"self_id,omitempty"`
+	SenderUsername string `json:"sender_username,omitempty"`
+	// SenderMentionUsername 仅用于展示提及，不能用于认证；nil 表示未知，空串表示已知没有用户名。
+	SenderMentionUsername *string          `json:"sender_mention_username,omitempty"`
+	MentionTargets        []MessageMention `json:"mention_targets,omitempty"`
+	UserIDType            string           `json:"user_id_type,omitempty"`
+	PlatformScope         string           `json:"platform_scope,omitempty"`
+	GuildID               string           `json:"guild_id,omitempty"`
+	Platform              string           `json:"platform,omitempty"`
+	ProfileID             string           `json:"profile_id,omitempty"`
+	ContextNamespace      string           `json:"context_namespace,omitempty"`
+	Kind                  EventKind        `json:"kind"`
+	SubType               string           `json:"sub_type,omitempty"`
+	Time                  int64            `json:"time,omitempty"`
+	OriginalTime          int64            `json:"original_time,omitempty"`
+	SelfID                string           `json:"self_id,omitempty"`
 	// SelfUsername 是本机器人在平台上的用户名（Telegram 的 @xxx）。消息文本里
 	// 出现的是它而不是数字 ID，路由判断得靠它才认得出「这是在叫我」。
 	SelfUsername string `json:"self_username,omitempty"`
@@ -322,10 +324,12 @@ type ExternalEvent struct {
 }
 
 type QuotedMessage struct {
-	MessageID                string           `json:"message_id,omitempty"`
-	UserID                   string           `json:"user_id,omitempty"`
-	GroupID                  string           `json:"group_id,omitempty"`
-	SenderName               string           `json:"sender_name,omitempty"`
+	MessageID  string `json:"message_id,omitempty"`
+	UserID     string `json:"user_id,omitempty"`
+	GroupID    string `json:"group_id,omitempty"`
+	SenderName string `json:"sender_name,omitempty"`
+	// SenderMentionUsername follows MessageEvent's display-only, unknown/absent semantics.
+	SenderMentionUsername    *string          `json:"sender_mention_username,omitempty"`
 	RawMessage               string           `json:"raw_message,omitempty"`
 	Segments                 []MessageSegment `json:"segments,omitempty"`
 	Semantic                 bool             `json:"semantic,omitempty"`
@@ -365,9 +369,11 @@ type OutgoingMessage struct {
 	// 显示不出来；查不到的 id 退回显示 @<id>。OneBot 的 at 段有它就带上 name，
 	// 接入端缓存里还没有的新成员才不会被渲染成 @QQ号。
 	MentionNames map[string]string
-	ForwardName  string
-	ForwardUIN   string
-	ForwardTime  int64
+	// MentionUsernames 是按用户 ID 索引的 Telegram 展示用户名，不含 @，不能用于认证。
+	MentionUsernames map[string]string
+	ForwardName      string
+	ForwardUIN       string
+	ForwardTime      int64
 	// TempSessionGroupID 让私聊走 QQ 的临时会话：OneBot 的 send_private_msg 带上
 	// group_id 才能发给不是好友、但同在这个群里的人。只在确认不是好友时才填——
 	// 对好友也走临时会话会把消息塞进另一个对话框。
@@ -637,6 +643,8 @@ type ChannelStatus struct {
 type EventHandler func(context.Context, MessageEvent) error
 
 type BotConfig struct {
+	StickerReplyOrder StickerReplyOrder `json:"sticker_reply_order,omitempty"`
+
 	ConnectionProfileID         string           `json:"connection_profile_id,omitempty"`
 	ReplyMergeConfidencePercent int              `json:"reply_merge_confidence_percent,omitempty"`
 	ID                          string           `json:"id,omitempty"`
@@ -694,9 +702,11 @@ type BotConfig struct {
 	WelcomeLLMCooldownSeconds int              `json:"welcome_llm_cooldown_seconds,omitempty"`
 	// SystemPrompt 是这台机器人的 SOUL.md：她是谁、在乎什么、怎么说话。展开 {{name}} 后
 	// 放在系统提示词最前面。JSON 键名沿用 system_prompt，存量配置不用迁移。
-	SystemPrompt string       `json:"system_prompt,omitempty"`
-	ResponseMode ResponseMode `json:"response_mode,omitempty"`
-	ReplyStyle   ReplyStyle   `json:"reply_style,omitempty"`
+	SystemPrompt     string       `json:"system_prompt,omitempty"`
+	ReplyComposer    string       `json:"reply_composer,omitempty"`
+	MaiBotReplyStyle string       `json:"maibot_reply_style,omitempty"`
+	ResponseMode     ResponseMode `json:"response_mode,omitempty"`
+	ReplyStyle       ReplyStyle   `json:"reply_style,omitempty"`
 	// 下面几项是 SOUL.md 之前的人设字段，只在读旧配置时出现：WithDefaults 把它们
 	// 并进 SystemPrompt 后清空，见 persona_legacy.go。
 	Soul                     *PersonaSoul `json:"soul,omitempty"`
@@ -903,6 +913,7 @@ type BotConfig struct {
 	ReplyRules                 []ReplyRule               `json:"reply_rules,omitempty"`
 	MaxBotConcurrency          int                       `json:"max_bot_concurrency,omitempty"`
 	RequestTimeout             time.Duration             `json:"request_timeout,omitempty"`
+	ModelRequestTimeout        time.Duration             `json:"model_request_timeout,omitempty"`
 	// AgentEnabled 是旧的「启用 Agent」开关，现在只在迁移时读：加载配置时按它换算出
 	// AgentMode，之后恒为 true（见 migrateAgentMode）。AgentEnabled=false 的旧非 Agent
 	// 路径还留在代码里，界面上已经走不到，待后续移除。
@@ -978,7 +989,7 @@ type ModelRole struct {
 	// 不单独带，和 Params 一样沿用主路由这一份：想让意图识别不思考，换到后备
 	// 模型时也该不思考。
 	ReasoningEffort string `json:"reasoning_effort,omitempty"`
-	// 空策略沿用历史主备顺序；权重只用于加权轮询，停用的路由不发请求。
+	// 空策略默认智能；独立图片和音视频默认主备。failover 显式选择主备。
 	RoutingStrategy string `json:"routing_strategy,omitempty"`
 	Weight          int    `json:"weight,omitempty"`
 	Disabled        bool   `json:"disabled,omitempty"`
@@ -996,6 +1007,9 @@ func normalizeModelRoles(roles map[string]ModelRole) map[string]ModelRole {
 			role.FollowChat = false
 		}
 		role = normalizeModelRole(role)
+		if !role.FollowChat {
+			role.RoutingStrategy = effectiveModelRoutingStrategy(role.RoutingStrategy, key)
+		}
 		// 可绑定的键从 4 个扩到「5 个分组 + 17 个用途」，见 model_binding.go。
 		if isModelBindingKey(key) && modelRoleConfigured(role) {
 			out[key] = role
@@ -1036,7 +1050,7 @@ func normalizeModelRole(role ModelRole) ModelRole {
 	role.Params = normalizeModelRoleParams(role.Params)
 	role.ReasoningEffort = llm.NormalizeReasoningEffortSetting(role.ReasoningEffort)
 	switch strings.TrimSpace(role.RoutingStrategy) {
-	case "round_robin", "weighted":
+	case "smart", "failover", "round_robin", "weighted":
 		role.RoutingStrategy = strings.TrimSpace(role.RoutingStrategy)
 	default:
 		role.RoutingStrategy = ""
@@ -1262,6 +1276,8 @@ type GroupConfigSet struct {
 }
 
 type ConfigPayload struct {
+	StickerReplyOrder StickerReplyOrder `json:"sticker_reply_order,omitempty"`
+
 	ConnectionProfileID         string          `json:"connection_profile_id,omitempty"`
 	ReplyMergeConfidencePercent int             `json:"reply_merge_confidence_percent,omitempty"`
 	ID                          string          `json:"id,omitempty"`
@@ -1335,6 +1351,9 @@ type ConfigPayload struct {
 	WelcomeTemplates               []string             `json:"welcome_templates,omitempty"`
 	WelcomeLLMCooldownSeconds      int                  `json:"welcome_llm_cooldown_seconds,omitempty"`
 	SystemPrompt                   string               `json:"system_prompt,omitempty"`
+	ReplyComposer                  string               `json:"reply_composer,omitempty"`
+	MaiBotReplyStyle               string               `json:"maibot_reply_style,omitempty"`
+	ReplyToneDefault               string               `json:"reply_tone_default,omitempty"`
 	ResponseMode                   ResponseMode         `json:"response_mode,omitempty"`
 	ReplyStyle                     ReplyStyle           `json:"reply_style,omitempty"`
 	DebugModeEnabled               *bool                `json:"debug_mode_enabled,omitempty"`
@@ -1437,6 +1456,7 @@ type ConfigPayload struct {
 	ReplyRules                      []ReplyRule               `json:"reply_rules,omitempty"`
 	MaxBotConcurrency               int                       `json:"max_bot_concurrency,omitempty"`
 	RequestTimeoutMS                int64                     `json:"request_timeout_ms,omitempty"`
+	ModelRequestTimeoutMS           int64                     `json:"model_request_timeout_ms,omitempty"`
 	AgentEnabled                    bool                      `json:"agent_enabled,omitempty"`
 	AgentMode                       string                    `json:"agent_mode,omitempty"`
 	AgentMaxSteps                   int                       `json:"agent_max_steps,omitempty"`
@@ -2019,6 +2039,7 @@ func (s ProfileSet) WithDefaults() ProfileSet {
 func DefaultBotConfig() BotConfig {
 	// 默认不开启机器人，避免首次启动服务就暴露 OneBot 连接面。
 	return BotConfig{
+		StickerReplyOrder:       StickerReplyOrderBefore,
 		Name:                    DefaultProfileName,
 		Platform:                DefaultPlatform,
 		Enabled:                 false,
@@ -2127,6 +2148,7 @@ func DefaultBotConfig() BotConfig {
 
 // WithDefaults 补齐 OneBot v11 机器人配置默认值。
 func (cfg BotConfig) WithDefaults() BotConfig {
+	cfg.StickerReplyOrder = normalizeStickerReplyOrder(cfg.StickerReplyOrder)
 	cfg.ReplyMergeConfidencePercent = normalizeReplyMergeConfidencePercent(cfg.ReplyMergeConfidencePercent)
 	cfg.Participation = copyParticipation(cfg.Participation)
 	defaults := DefaultBotConfig()
@@ -2161,6 +2183,10 @@ func (cfg BotConfig) WithDefaults() BotConfig {
 	} else {
 		cfg.SystemPrompt = strings.TrimSpace(cfg.SystemPrompt)
 	}
+	if cfg.ReplyComposer != "maibot" {
+		cfg.ReplyComposer = ""
+	}
+	cfg.MaiBotReplyStyle = strings.TrimSpace(cfg.MaiBotReplyStyle)
 	if hasResponseMode {
 		cfg.ResponseMode = cfg.ResponseMode.Normalized()
 	} else {
@@ -2440,8 +2466,8 @@ func (cfg BotConfig) WithDefaults() BotConfig {
 
 // Validate 校验 OneBot v11 机器人配置是否可运行。
 func (cfg BotConfig) Validate() error {
-	if err := cfg.WebSearch.Validate(); err != nil {
-		return err
+	if cfg.ModelRequestTimeout < 0 {
+		return fmt.Errorf("单次模型请求超时必须为非负数且不超过 %d 毫秒", int64((1<<63-1)/time.Millisecond))
 	}
 	if len(cfg.WelcomeTemplates) > 50 {
 		return fmt.Errorf("欢迎词模板最多 50 条")
@@ -2607,6 +2633,7 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 	cfg = cfg.WithDefaults()
 	// token 只返回 configured 标志，不把保存的密钥明文暴露给普通配置接口。
 	return ConfigPayload{
+		StickerReplyOrder:           cfg.StickerReplyOrder,
 		ConnectionProfileID:         cfg.ConnectionProfileID,
 		ID:                          cfg.ID,
 		Name:                        cfg.Name,
@@ -2668,6 +2695,9 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		WelcomeTemplates:                  append([]string(nil), cfg.WelcomeTemplates...),
 		WelcomeLLMCooldownSeconds:         cfg.WelcomeLLMCooldownSeconds,
 		SystemPrompt:                      cfg.SystemPrompt,
+		ReplyComposer:                     cfg.ReplyComposer,
+		MaiBotReplyStyle:                  cfg.MaiBotReplyStyle,
+		ReplyToneDefault:                  DefaultReplyTone,
 		ResponseMode:                      cfg.ResponseMode,
 		ReplyStyle:                        cfg.ReplyStyle,
 		DebugModeEnabled:                  copyBoolPointer(cfg.DebugModeEnabled),
@@ -2762,6 +2792,7 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		ReplyRules:                        append([]ReplyRule(nil), cfg.ReplyRules...),
 		MaxBotConcurrency:                 cfg.MaxBotConcurrency,
 		RequestTimeoutMS:                  cfg.RequestTimeout.Milliseconds(),
+		ModelRequestTimeoutMS:             cfg.ModelRequestTimeout.Milliseconds(),
 		AgentEnabled:                      cfg.AgentEnabled,
 		AgentMode:                         cfg.AgentMode,
 		AgentMaxSteps:                     cfg.AgentMaxSteps,
@@ -2857,6 +2888,7 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		screenshotAccess = payload.AgentBrowserScreenshotAccess.WithDefaults()
 	}
 	cfg := BotConfig{
+		StickerReplyOrder:           payload.StickerReplyOrder,
 		ConnectionProfileID:         strings.TrimSpace(payload.ConnectionProfileID),
 		ID:                          strings.TrimSpace(payload.ID),
 		Name:                        payload.Name,
@@ -2912,6 +2944,8 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		WelcomeTemplates:                append([]string(nil), payload.WelcomeTemplates...),
 		WelcomeLLMCooldownSeconds:       payload.WelcomeLLMCooldownSeconds,
 		SystemPrompt:                    payload.SystemPrompt,
+		ReplyComposer:                   payload.ReplyComposer,
+		MaiBotReplyStyle:                payload.MaiBotReplyStyle,
 		ResponseMode:                    payload.ResponseMode,
 		ReplyStyle:                      payload.ReplyStyle,
 		DebugModeEnabled:                copyBoolPointer(payload.DebugModeEnabled),
@@ -3006,6 +3040,7 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		ReplyRules:                      append([]ReplyRule(nil), payload.ReplyRules...),
 		MaxBotConcurrency:               payload.MaxBotConcurrency,
 		RequestTimeout:                  time.Duration(payload.RequestTimeoutMS) * time.Millisecond,
+		ModelRequestTimeout:             modelRequestTimeoutFromMilliseconds(payload.ModelRequestTimeoutMS),
 		AgentEnabled:                    payload.AgentEnabled,
 		AgentMode:                       agentModeFromPayload(payload, existing),
 		AgentMaxSteps:                   payload.AgentMaxSteps,
@@ -3086,6 +3121,14 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 	}
 	// 界面保存出来的配置一律是迁移过的：Agent 恒开，模式二选一。
 	return migrateAgentMode(cfg)
+}
+
+// Invalid millisecond values stay invalid through WithDefaults and are rejected by Validate.
+func modelRequestTimeoutFromMilliseconds(milliseconds int64) time.Duration {
+	if milliseconds < 0 || milliseconds > int64((1<<63-1)/time.Millisecond) {
+		return -1
+	}
+	return time.Duration(milliseconds) * time.Millisecond
 }
 
 // agentModeFromPayload 决定保存时用哪个模式。请求里写了就用请求的；没写时，编辑已有

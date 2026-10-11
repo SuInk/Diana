@@ -56,6 +56,9 @@ var promptErrorNoticeSpec = registerPrompt(PromptSpec{
 // 用不了还去调改写，只会等满超时再退回原文，白白把一条本该立刻发出的提示拖慢十秒。
 // 供应商拒绝单次请求不算用不了——那条路径一直就是靠改写说话的。
 func llmUnusableForRewrite(cause error) bool {
+	if errors.Is(cause, errLLMOutputCommitted) {
+		return true
+	}
 	if errors.Is(cause, llm.ErrUnverifiedRejection) {
 		return false
 	}

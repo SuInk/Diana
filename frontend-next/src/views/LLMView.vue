@@ -5,7 +5,7 @@
   <div class="provider-view">
     <header class="view-header">
       <div class="view-title">
-        <p>管理模型与搜索提供商的接入和凭据，再到机器人配置中按用途分配</p>
+        <p>管理模型与搜索提供商的接入和凭据；模型按机器人分配，联网搜索统一全局配置</p>
       </div>
       <div class="view-actions">
         <button class="btn" type="button" :disabled="!profileSet" @click="exportProfiles">
@@ -97,7 +97,18 @@
 
     </div>
 
-    <div v-if="providerTab === 'search'" id="provider-panel-search" role="tabpanel" aria-labelledby="provider-tab-search"><SearchProviderManager :key="searchProvidersVersion" /></div>
+    <div v-if="providerTab === 'search'" id="provider-panel-search" role="tabpanel" aria-labelledby="provider-tab-search" class="stack">
+      <section class="card">
+        <div class="card-header"><h2>全局搜索配置</h2><span v-if="searchAssignmentDirty" class="badge">未保存</span></div>
+        <div class="card-body stack">
+          <p v-if="searchAssignmentLoading && !searchAssignment" class="muted">正在加载全局搜索配置…</p>
+          <div v-if="searchAssignmentError" class="operation-error" role="alert">{{ searchAssignmentError }}<button v-if="!searchAssignment" class="btn small" type="button" @click="loadSearchAssignment">重试</button></div>
+          <SearchRoutingPanel v-if="searchAssignment" v-model="searchAssignment" />
+          <div class="cluster"><button class="btn primary" type="button" :disabled="!searchAssignment || searchAssignmentSaving || !searchAssignmentDirty" @click="saveGlobalSearch"><Save :size="15" aria-hidden="true" />{{ searchAssignmentSaving ? '保存中…' : '保存全局搜索' }}</button></div>
+        </div>
+      </section>
+      <SearchProviderManager :key="searchProvidersVersion" />
+    </div>
 
     <!-- 单配置连通测试弹窗 -->
     <Modal v-if="testTarget" :title="`测试 · ${testTarget.name || testTarget.model}`" @close="testTarget = null">
@@ -413,6 +424,8 @@ import { useConfigurationRefresh } from "../configuration-sync";
 import { computed, onActivated, onMounted, ref, watch } from "vue";
 import { viewQuery } from "../router";
 import SearchProviderManager from "../components/SearchProviderManager.vue";
+import SearchRoutingPanel from "../components/SearchRoutingPanel.vue";
+import { getSearchAssignment, saveSearchAssignment, type WebSearchAssignment } from "../api";
 import ModelCatalogEditor from "../components/ModelCatalogEditor.vue";
 import { syncModelMetadata } from "../model-metadata";
 import LoadingSkeleton from "../components/LoadingSkeleton.vue";
@@ -456,6 +469,54 @@ import {
 
 const providerTab = ref<'model' | 'search'>(viewQuery().get('section') === 'search' ? 'search' : 'model');
 onActivated(() => { if (viewQuery().get('section') === 'search') providerTab.value = 'search'; });
+const searchAssignment = ref<WebSearchAssignment | null>(null);
+const searchAssignmentBaseline = ref("");
+const searchAssignmentLoading = ref(false);
+const searchAssignmentSaving = ref(false);
+const searchAssignmentError = ref("");
+const searchAssignmentDirty = computed(() => !!searchAssignment.value && JSON.stringify(searchAssignment.value) !== searchAssignmentBaseline.value);
+
+async function loadSearchAssignment(): Promise<void> {
+  if (searchAssignmentLoading.value || searchAssignmentSaving.value || searchAssignmentDirty.value) return;
+  searchAssignmentLoading.value = true;
+  try {
+    const value = await getSearchAssignment();
+    if (!searchAssignmentDirty.value && !searchAssignmentSaving.value) {
+      searchAssignment.value = value;
+      searchAssignmentBaseline.value = JSON.stringify(value);
+      searchAssignmentError.value = "";
+    }
+  } catch (error) {
+    searchAssignmentError.value = error instanceof Error ? error.message : "全局搜索配置加载失败";
+  } finally {
+    searchAssignmentLoading.value = false;
+  }
+}
+
+async function saveGlobalSearch(): Promise<void> {
+  if (!searchAssignment.value || searchAssignmentSaving.value) return;
+  const submitted = JSON.stringify(searchAssignment.value);
+  const value = JSON.parse(submitted) as WebSearchAssignment;
+  if (!value.disabled && !value.provider_ids.length) {
+    searchAssignmentError.value = "启用联网搜索需要选择一个首选提供商";
+    return;
+  }
+  searchAssignmentSaving.value = true;
+  searchAssignmentError.value = "";
+  try {
+    const saved = await saveSearchAssignment(value);
+    searchAssignmentBaseline.value = JSON.stringify(saved);
+    if (JSON.stringify(searchAssignment.value) === submitted) searchAssignment.value = saved;
+    toastSuccess("全局搜索配置已保存，对所有机器人生效");
+  } catch (error) {
+    searchAssignmentError.value = error instanceof Error ? error.message : "全局搜索配置保存失败";
+    toastError(searchAssignmentError.value);
+  } finally {
+    searchAssignmentSaving.value = false;
+  }
+}
+watch(providerTab, tab => { if (tab === 'search') void loadSearchAssignment(); }, { immediate: true });
+useConfigurationRefresh(["search"], loadSearchAssignment);
 
 interface LLMFormState {
   max_concurrency: string;

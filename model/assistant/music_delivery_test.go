@@ -85,7 +85,7 @@ func TestTelegramMusicUploadsLocalMediaInsteadOfCQOrInternalURL(t *testing.T) {
 				return
 			}
 			defer req.MultipartForm.RemoveAll()
-			if req.FormValue("chat_id") != "-1001" || req.FormValue("message_thread_id") != "7" || req.FormValue("reply_to_message_id") != "9" {
+			if req.FormValue("chat_id") != "-1001" || req.FormValue("message_thread_id") != "7" || telegramTestReplyID(t, map[string]any{"reply_parameters": req.FormValue("reply_parameters")}) != "9" {
 				t.Error("lost routing")
 			}
 			f, _, err := req.FormFile("audio")

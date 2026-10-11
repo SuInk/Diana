@@ -276,7 +276,7 @@ func decodeChatCompletionEvents(ctx context.Context, reader io.Reader, req Gener
 		calls = append(calls, ToolCall{ID: tool.id, Name: nativeToolName(tool.name, req.Tools), Arguments: args})
 	}
 	if !visible && len(calls) == 0 {
-		return fmt.Errorf("llm: chat stream output is empty (no text or tool calls)")
+		return fmt.Errorf("llm: chat stream output is empty (no text or tool calls): %w", ErrCompletionEmpty)
 	}
 	for _, call := range calls {
 		if !emit(ChatEvent{Type: ChatEventToolCall, ToolCall: &call}) {

@@ -7,12 +7,81 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/SuInk/diana/model/llm"
 )
+
+func TestModelRequestTimeoutConfigRoundTrip(t *testing.T) {
+	for _, milliseconds := range []int64{0, 1250, int64((1<<63 - 1) / time.Millisecond)} {
+		cfg := ConfigFromPayload(ConfigPayload{ModelRequestTimeoutMS: milliseconds, RequestTimeoutMS: 45000}, BotConfig{}).WithDefaults()
+		if err := cfg.Validate(); err != nil {
+			t.Fatal(err)
+		}
+		if cfg.ModelRequestTimeout.Milliseconds() != milliseconds || cfg.RequestTimeout != 45*time.Second {
+			t.Fatalf("cfg timeout=%v total=%v", cfg.ModelRequestTimeout, cfg.RequestTimeout)
+		}
+		payload := PayloadFromConfig(cfg)
+		if payload.ModelRequestTimeoutMS != milliseconds {
+			t.Fatalf("payload=%d", payload.ModelRequestTimeoutMS)
+		}
+		data, err := json.Marshal(NewProfileSet(cfg))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var restored ProfileSet
+		if err := json.Unmarshal(data, &restored); err != nil {
+			t.Fatal(err)
+		}
+		if restored.Profiles[0].ModelRequestTimeout != cfg.ModelRequestTimeout {
+			t.Fatal("profile persistence lost timeout")
+		}
+	}
+	for _, milliseconds := range []int64{-1, -9223372036854775808, int64((1<<63-1)/time.Millisecond) + 1, 9223372036854775807, 18446744073710} {
+		cfg := ConfigFromPayload(ConfigPayload{ModelRequestTimeoutMS: milliseconds}, BotConfig{}).WithDefaults()
+		if err := cfg.Validate(); err == nil {
+			t.Fatalf("accepted invalid milliseconds=%d", milliseconds)
+		}
+	}
+	if DefaultBotConfig().WithDefaults().ModelRequestTimeout != 0 {
+		t.Fatal("new timeout must default to zero")
+	}
+}
+
+func TestModelRequestTimeoutBotScope(t *testing.T) {
+	r := NewRuntime(BotConfig{ID: "a", ModelRequestTimeout: time.Second}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	r.SetProfiles(ProfileSet{Profiles: []BotConfig{{ID: "a", ModelRequestTimeout: time.Second}, {ID: "b", ModelRequestTimeout: 2 * time.Second}}})
+	r.llmFactory = func() (LLMProvider, error) {
+		return modelTimeoutTestProvider{run: func(ctx context.Context, _ llm.GenerateRequest) (*llm.GenerateResponse, error) {
+			deadline, ok := ctx.Deadline()
+			if !ok {
+				t.Fatal("missing model deadline")
+			}
+			return &llm.GenerateResponse{Text: fmt.Sprint(time.Until(deadline).Round(time.Second))}, nil
+		}}, nil
+	}
+	for _, id := range []string{"a", "b"} {
+		ctx := withModelConfigEvent(context.Background(), MessageEvent{ProfileID: id})
+		got, err := r.runRawLLMProviderForGroup(ctx, llm.GroupChat, func(provider LLMProvider) (string, error) {
+			resp, err := provider.Generate(context.Background(), llm.GenerateRequest{})
+			if err != nil {
+				return "", err
+			}
+			return resp.Text, nil
+		})
+		want := "1s"
+		if id == "b" {
+			want = "2s"
+		}
+		if err != nil || got != want {
+			t.Fatalf("bot=%s got=%s err=%v", id, got, err)
+		}
+	}
+}
 
 func routingTestRuntime(t *testing.T, role ModelRole) (*Runtime, map[string]*retryRegistryAdapter, llm.ProfileSet) {
 	t.Helper()
@@ -41,6 +110,7 @@ func TestModelRoutingActualProviderRuns(t *testing.T) {
 		want     []string
 	}{
 		{"", []string{"a", "a", "a", "a"}},
+		{"smart", []string{"a", "a", "a", "a"}},
 		{"round_robin", []string{"a", "b", "a", "b"}},
 		{"weighted", []string{"a", "a", "b", "a", "a", "a", "b", "a"}},
 	} {
@@ -243,6 +313,152 @@ func TestModelRoutingMediaInspectionAndParameters(t *testing.T) {
 	}
 }
 
+func TestModelRoutingSmartHealthAndRetention(t *testing.T) {
+	role := ModelRole{ProfileID: "a", Model: "m", RoutingStrategy: "smart", Fallbacks: []ModelRole{
+		{ProfileID: "c", Model: "m", Standby: true}, {ProfileID: "b", Model: "m"}, {ProfileID: "d", Model: "m", Disabled: true},
+	}}
+	r, _, set := routingTestRuntime(t, role)
+	roles := map[string]ModelRole{"chat": role}
+	now := time.Unix(100, 0)
+	r.llmCooldowns.now = func() time.Time { return now }
+	check := func(want ...string) {
+		t.Helper()
+		profiles, err := r.scheduledRoleProfiles(context.Background(), PurposeReply, set, llm.GroupChat, roles)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got []string
+		for _, profile := range profiles {
+			got = append(got, profile.ID)
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("got=%v want=%v", got, want)
+		}
+		if len(r.modelRouteSchedules) != 0 {
+			t.Fatal("smart consumed round-robin state")
+		}
+	}
+	check("a", "b", "c")
+	r.llmCooldowns.markFailure(set.Profiles[0], errors.New("HTTP 500"))
+	check("b", "a", "c")
+	now = now.Add(time.Minute)
+	check("b", "a", "c")
+	static, err := r.roleBoundProfiles(PurposeReply, set, llm.GroupChat, roles)
+	if err != nil || static[0].ID != "a" {
+		t.Fatalf("static profiles=%v err=%v", static, err)
+	}
+	r.llmCooldowns.clear(set.Profiles[0])
+	check("a", "b", "c")
+	r.llmCooldowns.markFailure(set.Profiles[0], errors.New("HTTP 500"))
+	now = now.Add(24 * time.Hour)
+	check("a", "b", "c")
+	if len(r.llmCooldowns.entries) != 1 {
+		t.Fatal("test must retain expired entry physically")
+	}
+}
+
+func TestModelRoutingSmartGroupRanksFailureCountsStably(t *testing.T) {
+	r, _, set := routingTestRuntime(t, ModelRole{ProfileID: "a", Model: "m"})
+	now := time.Unix(100, 0)
+	r.llmCooldowns.now = func() time.Time { return now }
+	for index, failures := range []int{2, 1, 1, 0} {
+		for range failures {
+			r.llmCooldowns.markFailure(set.Profiles[index], errors.New("HTTP 500"))
+		}
+	}
+	now = now.Add(time.Minute)
+	profiles, err := r.scheduledRoleProfiles(context.Background(), PurposeReply, set, llm.GroupChat, map[string]ModelRole{"chat": {Group: "pool", Model: "m", RoutingStrategy: "smart"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, profile := range profiles {
+		got = append(got, profile.ID)
+	}
+	if !reflect.DeepEqual(got, []string{"d", "b", "c", "a"}) {
+		t.Fatalf("smart group=%v", got)
+	}
+}
+
+func TestModelRoutingAllStrategiesShareHealthAvoidance(t *testing.T) {
+	for _, strategy := range []string{"", "smart", "failover", "round_robin", "weighted"} {
+		t.Run(strategy, func(t *testing.T) {
+			role := ModelRole{ProfileID: "a", Model: "m", RoutingStrategy: strategy, Fallbacks: []ModelRole{{ProfileID: "b", Model: "m"}, {ProfileID: "c", Model: "m", Standby: true}}}
+			r, _, set := routingTestRuntime(t, role)
+			r.llmCooldowns.markFailure(set.Profiles[0], errors.New("HTTP 429 retry after 60s"))
+			r.llmCooldowns.markFailure(set.Profiles[1], errors.New("HTTP 429 retry after 40s"))
+			run := func(want string) {
+				t.Helper()
+				got, err := r.runRawLLMProviderForGroup(context.Background(), llm.GroupChat, func(provider LLMProvider) (string, error) {
+					response, err := provider.Generate(context.Background(), llm.GenerateRequest{})
+					return response.Text, err
+				})
+				if err != nil || got != want {
+					t.Fatalf("got=%q err=%v want=%q", got, err, want)
+				}
+			}
+			run("c")
+			r.llmCooldowns.markFailure(set.Profiles[2], errors.New("HTTP 429 retry after 20s"))
+			run("c")
+		})
+	}
+}
+
+func TestModelRoutingSmartNormalizationAndUnsupportedMedia(t *testing.T) {
+	role := ModelRole{ProfileID: "a", Model: "m", RoutingStrategy: "smart", Fallbacks: []ModelRole{{ProfileID: "b", Model: "m"}}}
+	for _, strategy := range []string{"", "smart", "failover", "round_robin", "weighted", "unknown"} {
+		input := role
+		input.RoutingStrategy = " " + strategy + " "
+		normalized := normalizeModelRole(input)
+		want := strategy
+		if want == "unknown" {
+			want = ""
+		}
+		if normalized.RoutingStrategy != want {
+			t.Fatalf("strategy=%q got=%q", strategy, normalized.RoutingStrategy)
+		}
+		body, err := json.Marshal(normalized)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var output ModelRole
+		if err := json.Unmarshal(body, &output); err != nil || !reflect.DeepEqual(normalized, normalizeModelRole(output)) {
+			t.Fatalf("round trip=%+v err=%v", output, err)
+		}
+	}
+	for _, slot := range []string{llm.GroupImage, mediaSlotTTS, mediaSlotSTT, mediaSlotVideo} {
+		t.Run(slot, func(t *testing.T) {
+			roles := normalizeModelRoles(map[string]ModelRole{"chat": role, slot: role, "vision": role})
+			if roles[slot].RoutingStrategy != "failover" || roles["vision"].RoutingStrategy != "smart" {
+				t.Fatalf("roles=%+v", roles)
+			}
+			for _, inherited := range []bool{false, true} {
+				r, _, set := routingTestRuntime(t, role)
+				roles = map[string]ModelRole{"chat": role, slot: role}
+				if inherited {
+					roles[slot] = ModelRole{FollowChat: true}
+				}
+				r.llmCooldowns.markFailure(set.Profiles[0], errors.New("HTTP 500"))
+				for range 2 {
+					profiles, err := r.scheduledRoleProfiles(context.Background(), slot, set, slot, roles)
+					if err != nil || len(profiles) != 2 || profiles[0].ID != "a" {
+						t.Fatalf("inherited=%v profiles=%v err=%v", inherited, profiles, err)
+					}
+				}
+				if len(r.modelRouteSchedules) != 0 {
+					t.Fatal("unsupported smart entered weighted scheduling")
+				}
+			}
+		})
+	}
+	r, _, set := routingTestRuntime(t, role)
+	r.llmCooldowns.markFailure(set.Profiles[0], errors.New("HTTP 500"))
+	profiles, err := r.scheduledRoleProfiles(context.Background(), PurposeMediaParse, set, llm.GroupVision, map[string]ModelRole{"chat": role, "vision": {FollowChat: true}})
+	if err != nil || profiles[0].ID != "b" {
+		t.Fatalf("vision inherited smart: %v %v", profiles, err)
+	}
+}
+
 func TestModelRoutingRegistryBackgroundMemory(t *testing.T) {
 	role := ModelRole{ProfileID: "a", Model: "m", RoutingStrategy: "round_robin", Fallbacks: []ModelRole{{ProfileID: "b", Model: "m"}}}
 	r, _, _ := routingTestRuntime(t, role)
@@ -261,6 +477,49 @@ func TestModelRoutingRegistryBackgroundMemory(t *testing.T) {
 		})
 		if err != nil || got != want {
 			t.Fatalf("memory=%s err=%v want=%s", got, err, want)
+		}
+	}
+}
+
+func TestModelRoutingDefaultSmartAndExplicitFailover(t *testing.T) {
+	for _, strategy := range []string{"", "smart", "failover", " smart ", "unknown"} {
+		t.Run(strategy, func(t *testing.T) {
+			role := ModelRole{ProfileID: "a", Model: "m", RoutingStrategy: strategy, Fallbacks: []ModelRole{{ProfileID: "c", Model: "m", Standby: true}, {ProfileID: "b", Model: "m"}}}
+			r, _, set := routingTestRuntime(t, role)
+			now := time.Unix(100, 0)
+			r.llmCooldowns.now = func() time.Time { return now }
+			r.llmCooldowns.markFailure(set.Profiles[0], errors.New("HTTP 500"))
+			now = now.Add(time.Minute)
+			for _, normalized := range []bool{false, true} {
+				roles := map[string]ModelRole{"chat": role, "vision": {FollowChat: true}}
+				if normalized {
+					roles = normalizeModelRoles(roles)
+				}
+				profiles, err := r.scheduledRoleProfiles(context.Background(), PurposeMediaParse, set, llm.GroupVision, roles)
+				want := "b"
+				if strategy == "failover" {
+					want = "a"
+				}
+				if err != nil || len(profiles) != 3 || profiles[0].ID != want {
+					t.Fatalf("normalized=%v profiles=%v err=%v", normalized, profiles, err)
+				}
+				if normalized {
+					if roles["vision"].RoutingStrategy != "" || roles["chat"].Fallbacks[0].RoutingStrategy != "" {
+						t.Fatalf("inherited/fallback strategy persisted: %+v", roles)
+					}
+				}
+			}
+		})
+	}
+	for _, key := range []string{"chat", "vision", "intent", llm.GroupImage, mediaSlotTTS, mediaSlotSTT, mediaSlotVideo} {
+		role := ModelRole{ProfileID: "a", Model: "m"}
+		normalized := normalizeModelRoles(map[string]ModelRole{key: role})[key]
+		want := "smart"
+		if !supportsSmartModelRouting(key) {
+			want = "failover"
+		}
+		if normalized.RoutingStrategy != want || effectiveModelRoutingStrategy("", key) != want {
+			t.Fatalf("key=%s normalized=%+v", key, normalized)
 		}
 	}
 }

@@ -268,6 +268,12 @@ export interface BotProfileConfig extends SendRetrySettings {
   welcome_llm_cooldown_seconds?: number;
   /** 这台机器人的 SOUL.md：她是谁、在乎什么、怎么说话。整份原样放在系统提示词最前面。 */
   system_prompt?: string;
+  /** 是否在内容与工具处理完成后单独整理最终回复口吻。 */
+  reply_composer?: "maibot";
+  /** 可选回复口吻；留空使用内置默认。 */
+  maibot_reply_style?: string;
+  /** 后端当前实际使用的内置回复口吻，只读，供编辑器展示和恢复。 */
+  reply_tone_default?: string;
   response_mode?: "quiet" | "assistant" | "standard" | "active" | "super_active" | "custom";
   /** 记录完整模型上下文、工具参数和调用结果；默认关闭。 */
   debug_mode_enabled?: boolean;
@@ -278,6 +284,8 @@ export interface BotProfileConfig extends SendRetrySettings {
   /** 谁能问出项目开源地址：owner 仅主人（默认）、everyone 所有人。 */
   repository_disclosure?: "owner" | "everyone";
   mention_user_mode?: "on" | "off" | "auto";
+  /** 自动配图发送顺序：before 先发表情（默认）、after 后发表情、auto 由模型决定；不改变是否配图。 */
+  sticker_reply_order?: "before" | "after" | "auto";
   markdown_to_plain?: boolean;
   error_notify_enabled?: boolean;
   /** 机器人在群里被禁言时暂停回复（只记上下文）；缺省开启。 */
@@ -308,7 +316,7 @@ export interface BotProfileConfig extends SendRetrySettings {
     model: string;
     provider_id?: string;
     model_id?: string;
-    routing_strategy?: "round_robin" | "weighted";
+    routing_strategy?: "smart" | "failover" | "round_robin" | "weighted";
     weight?: number;
     disabled?: boolean;
     standby?: boolean;
@@ -431,6 +439,8 @@ export interface BotProfileConfig extends SendRetrySettings {
   semantic_search_enabled?: boolean;
   max_bot_concurrency?: number;
   request_timeout_ms?: number;
+  /** 单次模型请求（含流式接收）的硬上限；0 或缺省不额外限制，独立于整轮超时。 */
+  model_request_timeout_ms?: number;
   /** 旧的「启用 Agent」开关，后端迁移后恒为 true，只为兼容保留。 */
   agent_enabled?: boolean;
   /** standard 标准模式（全部能力）/ safe 安全模式（关掉高风险能力，主人也一样）。新建默认 standard，safe 只在主人选择时开启。 */
@@ -504,8 +514,16 @@ export interface SearchConfiguration {
   default_assignment: WebSearchAssignment;
 }
 
-export function getSearchProviders(profile = ""): Promise<SearchConfiguration> {
-  return requestJSON<SearchConfiguration>(`/api/assistant/search-providers?profile=${encodeURIComponent(profile)}`);
+export function getSearchProviders(): Promise<SearchConfiguration> {
+  return requestJSON<SearchConfiguration>("/api/assistant/search-providers");
+}
+
+export function getSearchAssignment(): Promise<WebSearchAssignment> {
+  return requestJSON<WebSearchAssignment>("/api/assistant/search-assignment");
+}
+
+export function saveSearchAssignment(assignment: WebSearchAssignment): Promise<WebSearchAssignment> {
+  return requestJSON<WebSearchAssignment>("/api/assistant/search-assignment", { method: "PUT", body: JSON.stringify(assignment) });
 }
 
 export function saveSearchProvider(provider: SearchProvider & { api_key?: string; clear_api_key?: boolean }): Promise<SearchConfiguration> {
@@ -3526,6 +3544,32 @@ export function savePersona(persona: Persona | Omit<Persona, "id">): Promise<Per
     method: "POST",
     body: JSON.stringify({ persona })
   });
+}
+
+/** 回复口吻库里的具名模板。builtin 项编译在后端里，只读。 */
+export interface ReplyTonePreset {
+  id: string;
+  name: string;
+  text: string;
+  builtin?: boolean;
+  updated_at?: string;
+}
+
+export interface ReplyToneListResponse {
+  presets: ReplyTonePreset[];
+  limit: number;
+}
+
+export function listReplyTones(): Promise<ReplyToneListResponse> {
+  return requestJSON<ReplyToneListResponse>("/api/assistant/reply-tones");
+}
+
+export function saveReplyTone(preset: ReplyTonePreset | Omit<ReplyTonePreset, "id">): Promise<{ preset: ReplyTonePreset; presets: ReplyTonePreset[] }> {
+  return requestJSON("/api/assistant/reply-tones", { method: "POST", body: JSON.stringify({ preset }) });
+}
+
+export function deleteReplyTone(id: string): Promise<{ presets: ReplyTonePreset[] }> {
+  return requestJSON("/api/assistant/reply-tones/delete", { method: "POST", body: JSON.stringify({ id }) });
 }
 
 export interface PersonaImportResult {
