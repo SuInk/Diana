@@ -4252,6 +4252,68 @@ a.nav-action {
   margin-top: 14px;
 }
 
+.resolver-credentials {
+  display: grid;
+  gap: 12px;
+}
+
+.resolver-credential .badge,
+.resolver-check-status {
+  overflow-wrap: anywhere;
+}
+
+.resolver-check-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.resolver-check-row > .btn {
+  flex-shrink: 0;
+}
+
+.resolver-check-status {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  min-width: 0;
+}
+
+.resolver-check-status .badge {
+  white-space: normal;
+}
+
+.resolver-check-status p {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--text-secondary);
+}
+
+.resolver-draft-hint {
+  margin: 0;
+}
+
+.resolver-advanced > .plugin-settings-form {
+  margin-top: 14px;
+}
+
+.resolver-file-check {
+  margin-top: -8px;
+}
+
+@media (max-width: 540px) {
+  .resolver-check-row {
+    flex-direction: column;
+  }
+
+  .resolver-check-row > .btn {
+    align-self: flex-start;
+  }
+}
+
 .credential-check {
   margin-top: 16px;
   padding: 16px;

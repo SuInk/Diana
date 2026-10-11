@@ -1286,8 +1286,22 @@ export interface AuthStatus {
   username?: string;
 }
 
+async function startupRequestJSON<T>(url: string, timeoutMs: number): Promise<T> {
+  if (!timeoutMs) return requestJSON<T>(url);
+  const controller = new AbortController();
+  const timer = window.setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await requestJSON<T>(url, { signal: controller.signal });
+  } catch (error) {
+    if (controller.signal.aborted) throw new ApiError("连接 Diana 后端超时，请稍后重试", "offline");
+    throw error;
+  } finally {
+    window.clearTimeout(timer);
+  }
+}
+
 export function getAuthStatus(): Promise<AuthStatus> {
-  return requestJSON<AuthStatus>("/api/auth/status");
+  return startupRequestJSON<AuthStatus>("/api/auth/status", 10_000);
 }
 
 export function login(username: string, password: string): Promise<{ ok: boolean }> {
@@ -1565,9 +1579,9 @@ export function testProviderModel(providerId: string, modelId: string, message: 
 
 // includeSecrets 只在配置页显式点「查看」时才带上：常规拉取不需要把 token
 // 一起搬到前端，但主人本来就有权改这些凭据，要看时得能看到。
-export function getBotProfileConfig(includeSecrets = false): Promise<BotProfileConfig> {
+export function getBotProfileConfig(includeSecrets = false, timeoutMs = 0): Promise<BotProfileConfig> {
   const suffix = includeSecrets ? "?include_secrets=true" : "";
-  return requestJSON<BotProfileConfig>(`/api/assistant/config${suffix}`);
+  return startupRequestJSON<BotProfileConfig>(`/api/assistant/config${suffix}`, timeoutMs);
 }
 
 export function getBotPlatforms(): Promise<{ platforms: BotPlatform[] }> {
@@ -1962,6 +1976,7 @@ export interface CredentialCheck {
   state: CredentialState;
   account?: string;
   message: string;
+  file_format_checked?: boolean;
 }
 
 export interface MusicConnectionStatus {
@@ -1989,11 +2004,14 @@ export function testMusicConnections(
 export function testResolverCredentials(
   settings: Record<string, unknown>,
   clearSecrets: string[] = [],
-  profileID = ""
+  profileID = "",
+  options: { credentialKey?: string; signal?: AbortSignal } = {}
 ): Promise<{ credentials: CredentialCheck[] }> {
-  return requestJSON<{ credentials: CredentialCheck[] }>(`/api/assistant/plugins/resolver/test?profile=${encodeURIComponent(profileID)}`, {
+  const filter = options.credentialKey ? `&credential_key=${encodeURIComponent(options.credentialKey)}` : "";
+  return requestJSON<{ credentials: CredentialCheck[] }>(`/api/assistant/plugins/resolver/test?profile=${encodeURIComponent(profileID)}${filter}`, {
     method: "POST",
-    body: JSON.stringify({ settings, clear_secrets: clearSecrets })
+    body: JSON.stringify({ settings, clear_secrets: clearSecrets }),
+    signal: options.signal
   });
 }
 

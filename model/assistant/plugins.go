@@ -1698,7 +1698,7 @@ func (p *ResolverPlugin) Manifest() PluginManifest {
 			{
 				Key:         resolverSettingEnabledPlatforms,
 				Label:       "启用平台",
-				Description: "勾选的平台会解析链接并进入模型上下文；不勾选则全部停用，默认全部启用。",
+				Description: "勾选的平台会解析链接并进入模型上下文，默认全部启用。关闭平台只停止解析，不清除登录凭据；凭据可提前配置并独立检测。",
 				Type:        PluginSettingTypeMultiSelect,
 				Default:     resolverPlatformKeys(),
 				Options:     resolverPlatformOptions(),
@@ -1735,7 +1735,7 @@ func (p *ResolverPlugin) Manifest() PluginManifest {
 			{
 				Key:         resolverSettingBiliSessdata,
 				Label:       "B 站 SESSDATA",
-				Description: "所有机器人共用的 B 站 SESSDATA。留空不使用登录凭据。",
+				Description: "所有机器人共用的 B 站 SESSDATA，只填值。已配置时留空沿用，点击清除后保存才删除。",
 				Type:        PluginSettingTypeString,
 				Default:     "",
 				Secret:      true,
@@ -1743,7 +1743,7 @@ func (p *ResolverPlugin) Manifest() PluginManifest {
 			{
 				Key:         resolverSettingDouyinCookie,
 				Label:       "抖音 Cookie",
-				Description: "所有机器人共用的抖音 Cookie。不配置时无法解析需要登录的内容。",
+				Description: "所有机器人共用的抖音 Cookie。已配置时留空沿用，点击清除后保存才删除；不配置时无法解析需要登录的内容。",
 				Type:        PluginSettingTypeString,
 				Default:     "",
 				Secret:      true,
@@ -1751,7 +1751,7 @@ func (p *ResolverPlugin) Manifest() PluginManifest {
 			{
 				Key:         resolverSettingXHSCookie,
 				Label:       "小红书 Cookie",
-				Description: "所有机器人共用的小红书 Cookie。不配置时无法解析需要登录的内容。",
+				Description: "所有机器人共用的小红书 Cookie。已配置时留空沿用，点击清除后保存才删除；不配置时无法解析需要登录的内容。",
 				Type:        PluginSettingTypeString,
 				Default:     "",
 				Secret:      true,
@@ -1759,7 +1759,7 @@ func (p *ResolverPlugin) Manifest() PluginManifest {
 			{
 				Key:         resolverSettingYTDLPCookies,
 				Label:       "yt-dlp Cookie 文件路径",
-				Description: "共享的 Netscape 格式 Cookie 文件路径。",
+				Description: "共享的 Netscape 格式 Cookie 文件路径。检测只检查文件可读性与格式，不代表已登录。",
 				Type:        PluginSettingTypeString,
 				Default:     "",
 			},

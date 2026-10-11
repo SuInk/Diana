@@ -1319,16 +1319,26 @@ func (h *BotHandler) testMusicConnections(c *gin.Context) {
 }
 
 func (h *BotHandler) testResolverCredentials(c *gin.Context) {
+	credentialKey := ""
+	if keys, supplied := c.Request.URL.Query()["credential_key"]; supplied {
+		if len(keys) != 1 || !assistant.IsResolverCredentialKey(keys[0]) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "credential_key 必须是 bili_sessdata、douyin_cookie、xhs_cookie 或 ytdlp_cookies_path"})
+			return
+		}
+		credentialKey = keys[0]
+	}
 	plugin, settings, ok := h.pluginTestSettings(c, assistant.ResolverPluginID, "plugin_resolver_test")
 	if !ok {
 		return
 	}
-	resolver, ok := plugin.(*assistant.ResolverPlugin)
+	resolver, ok := plugin.(interface {
+		TestCredentialsForKey(context.Context, assistant.SettingValues, string) []assistant.CredentialCheck
+	})
 	if !ok {
 		h.writeError(c, http.StatusInternalServerError, "plugin_resolver_test", errors.New("resolver plugin has unexpected implementation"), assistant.ResolverPluginID, nil)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"credentials": resolver.TestCredentials(c.Request.Context(), settings)})
+	c.JSON(http.StatusOK, gin.H{"credentials": resolver.TestCredentialsForKey(c.Request.Context(), settings, credentialKey)})
 }
 
 // testGitHubCredentials 检测每条 GitHub 凭据实际登录的账号。凭据存在订阅插件里；默认
