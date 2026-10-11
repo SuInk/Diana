@@ -164,6 +164,12 @@ func (s *SQLiteStore) RecordNoticeEvent(ctx context.Context, session string, eve
 		return fmt.Errorf("encode notice event: %w", err)
 	}
 	now := time.Now().UTC().UnixNano()
+	outcome := "notice_" + strings.TrimSpace(event.SubType)
+	reason := "已记录平台通知"
+	if strings.EqualFold(strings.TrimSpace(event.OperatorRole), "telegram_recall_probe") {
+		outcome = "telegram_message_unavailable"
+		reason = "Telegram 按需探测发现消息当前已不可访问"
+	}
 	_, err = s.db.ExecContext(ctx, `
 INSERT INTO inbound_events (
   id, session, kind, profile_id, group_id, user_id, message_id, event_time, payload,
@@ -179,7 +185,7 @@ ON CONFLICT(id) DO UPDATE SET
   updated_at = excluded.updated_at,
   completed_at = excluded.completed_at
 `, id, session, string(event.Kind), strings.TrimSpace(event.ProfileID), event.GroupID, event.UserID, event.MessageID, event.Time, string(payload),
-		inboundStatusDone, now, "notice_"+strings.TrimSpace(event.SubType), "notice", "已记录平台通知", now, now, now)
+		inboundStatusDone, now, outcome, "notice", reason, now, now, now)
 	if err != nil {
 		return fmt.Errorf("record notice event: %w", err)
 	}

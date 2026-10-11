@@ -323,11 +323,18 @@ func buildOutgoingSegments(msg OutgoingMessage) []map[string]any {
 		segments = appendOutgoingImageSegments(segments, msg.ImageURLs)
 	}
 	if msg.Text != "" {
-		for _, segment := range sendableOneBotSegments(TextToOneBotSegments(msg.Text)) {
+		if msg.LiteralText {
 			segments = append(segments, map[string]any{
-				"type": segment.Type,
-				"data": segment.Data,
+				"type": "text",
+				"data": map[string]string{"text": msg.Text},
 			})
+		} else {
+			for _, segment := range sendableOneBotSegments(TextToOneBotSegments(msg.Text)) {
+				segments = append(segments, map[string]any{
+					"type": segment.Type,
+					"data": segment.Data,
+				})
+			}
 		}
 	}
 	if !msg.ImagesFirst {

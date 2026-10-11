@@ -51,6 +51,108 @@ func (s *recallPersistenceStore) ListGroupRecallEvents(_ context.Context, groupI
 	return out, nil
 }
 
+func TestRecallHistoryKeepsTelegramBotScopesSeparate(t *testing.T) {
+	store := newRecallPersistenceStore()
+	store.events["group:-100123"] = []MessageEvent{
+		{
+			Platform: PlatformTelegram, ProfileID: "telegram-a", SelfID: "9000",
+			Kind: EventKindNotice, SubType: "group_recall", Time: 101,
+			GroupID: "-100123", UserID: "user-a", MessageID: "same-id", RawMessage: "A 看到的撤回",
+		},
+		{
+			Platform: PlatformTelegram, ProfileID: "telegram-b", SelfID: "9000",
+			Kind: EventKindNotice, SubType: "group_recall", Time: 102,
+			GroupID: "-100123", UserID: "user-b", MessageID: "same-id", RawMessage: "其他 ProfileID 的撤回不能泄漏",
+		},
+		{
+			Platform: PlatformTelegram, ProfileID: "telegram-a", SelfID: "9001",
+			Kind: EventKindNotice, SubType: "group_recall", Time: 103,
+			GroupID: "-100123", UserID: "user-c", MessageID: "same-id", RawMessage: "其他 SelfID 的撤回不能泄漏",
+		},
+	}
+	runtime := NewRuntime(BotConfig{ID: "telegram-a", Platform: PlatformTelegram, BotAccount: "9000"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	runtime.SetMessageHistoryStore(store)
+	current := MessageEvent{
+		Platform: PlatformTelegram, ProfileID: "telegram-a", SelfID: "9000",
+		Kind: EventKindGroup, Time: 200, GroupID: "-100123", UserID: "requester",
+	}
+
+	recalls := runtime.recallHistory(current)
+	if len(recalls) != 1 || recalls[0].RawMessage != "A 看到的撤回" {
+		t.Fatalf("scoped recalls = %#v", recalls)
+	}
+	plugin := NewMessageHistoryPlugin()
+	plugin.Observe(context.Background(), store.events["group:-100123"][0])
+	plugin.Observe(context.Background(), store.events["group:-100123"][1])
+	plugin.Observe(context.Background(), store.events["group:-100123"][2])
+	response, disclosed, _ := plugin.RecallDisclosureResponse(
+		context.Background(), nil, current, nil, store.events["group:-100123"],
+	)
+	if response == nil || len(disclosed) != 1 || strings.Contains(response.Context, "不能泄漏") {
+		t.Fatalf("disclosure leaked another Telegram bot: response=%#v recalls=%#v", response, disclosed)
+	}
+}
+
+func TestRecallHistoryKeepsLegacyOneBotRecordsWithoutBotIdentity(t *testing.T) {
+	store := newRecallPersistenceStore()
+	store.events["group:123"] = []MessageEvent{{
+		Kind: EventKindNotice, SubType: "group_recall", Time: 101,
+		GroupID: "123", UserID: "20002", MessageID: "legacy-recall", RawMessage: "旧版未写机器人身份的撤回",
+	}}
+	runtime := NewRuntime(BotConfig{ID: "onebot-a", Platform: PlatformOneBotV11, BotAccount: "42"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	runtime.SetMessageHistoryStore(store)
+	current := MessageEvent{
+		Platform: PlatformOneBotV11, ProfileID: "onebot-a", SelfID: "42",
+		Kind: EventKindGroup, Time: 200, GroupID: "123", UserID: "requester",
+	}
+
+	recalls := runtime.recallHistory(current)
+	if len(recalls) != 1 || recalls[0].MessageID != "legacy-recall" {
+		t.Fatalf("legacy OneBot recall was filtered out: %#v", recalls)
+	}
+	response, disclosed, _ := NewMessageHistoryPlugin().RecallDisclosureResponse(
+		context.Background(), nil, current, nil, recalls,
+	)
+	if response == nil || len(disclosed) != 1 || !strings.Contains(response.Context, "旧版未写机器人身份的撤回") {
+		t.Fatalf("legacy OneBot disclosure = %#v recalls=%#v", response, disclosed)
+	}
+}
+
+func TestTelegramRecallDisclosureRestoresPersistedNoticeItemsAfterRestart(t *testing.T) {
+	store := newRecallPersistenceStore()
+	store.events["group:-100123"] = []MessageEvent{{
+		Platform: PlatformTelegram, ProfileID: "telegram-a", SelfID: "9000",
+		Kind: EventKindNotice, SubType: "group_recall", Time: 1_700_000_100,
+		OriginalTime: 1_700_000_000, GroupID: "-100123", UserID: "user-a",
+		MessageID: "persisted-recall", RawMessage: "重启后仍能交给模型的缓存原文",
+		Segments:   []MessageSegment{{Type: "text", Data: map[string]string{"text": "重启后仍能交给模型的缓存原文"}}},
+		SenderName: "Alice", OperatorRole: telegramRecallProbeOperatorRole,
+	}}
+	runtime := NewRuntime(BotConfig{
+		ID: "telegram-a", Platform: PlatformTelegram, BotAccount: "9000",
+		RecallReplyMode: RecallReplyModeLLMSummary,
+	}, nilChannel{}, NewPluginManager(NewMessageHistoryPlugin()), nil, nil, nil, nil)
+	runtime.SetMessageHistoryStore(store)
+	current := MessageEvent{
+		Platform: PlatformTelegram, ProfileID: "telegram-a", ContextNamespace: "telegram-a", SelfID: "9000",
+		Kind: EventKindGroup, Time: 1_700_000_110, GroupID: "-100123", UserID: "requester", MessageID: "99",
+	}
+	sink := &recallDisclosureSink{}
+
+	result, err := newDianaChatHistoryTool(runtime, current).withRecallSink(sink).recalls(context.Background(), map[string]any{"limit": 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Items) != 1 || result.Items[0].Text != "重启后仍能交给模型的缓存原文" ||
+		result.Items[0].Status != "unavailable_at_probe" || result.Items[0].OriginalTime != 1_700_000_000 {
+		t.Fatalf("persisted recall items = %#v", result.Items)
+	}
+	disclosures := applyRecallReplyMode(sink.drain(), RecallReplyModeLLMSummary)
+	if len(disclosures) != 1 || len(disclosures[0].ForwardMessages) != 0 || !strings.Contains(disclosures[0].Context, "重启后仍能交给模型的缓存原文") {
+		t.Fatalf("summary-only persisted disclosure = %#v", disclosures)
+	}
+}
+
 func TestRuntimePersistsRecallIndependentlyAndPluginRestoresIt(t *testing.T) {
 	store := newRecallPersistenceStore()
 	runtime := NewRuntime(BotConfig{DisabledGroups: []string{"123"}}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)

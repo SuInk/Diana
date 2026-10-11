@@ -31,7 +31,7 @@ var outgoingCQRecord = regexp.MustCompile(`\[CQ:record(?:,[^\]]*)?\]`)
 // Only resolve files already registered by the media sharer. Never let a model
 // supply an arbitrary local path through a CQ string and upload it to Telegram.
 func (r *Runtime) prepareTelegramAudio(msg OutgoingMessage) (OutgoingMessage, error) {
-	if NormalizePlatformID(msg.Platform) != PlatformTelegram {
+	if NormalizePlatformID(msg.Platform) != PlatformTelegram || msg.LiteralText {
 		return msg, nil
 	}
 	r.mu.RLock()

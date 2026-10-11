@@ -430,9 +430,13 @@ type Runtime struct {
 	wholeMuteSnapshots wholeMuteSnapshotStore
 	// telegramOwnerIDs 记主人配成 @用户名时见过的数字 ID（键是机器人 ID），私聊通知要用。
 	telegramOwnerIDs sync.Map
-	buildInfo        BuildInfo
-	releaseStatus    ReleaseStatusProvider
-	reminders        ReminderStore
+	// telegramRecallProbes serializes active deletion checks per bot account and
+	// remembers recent results/rate limits so repeated queries do not hammer the
+	// Bot API. It owns its own lock; Runtime.mu must not be held while acquiring it.
+	telegramRecallProbes telegramRecallProbeRegistry
+	buildInfo            BuildInfo
+	releaseStatus        ReleaseStatusProvider
+	reminders            ReminderStore
 	// reminderWake 叫醒提醒调度循环重算下一次唤醒时间，见 runReminderLoop。
 	reminderWake     chan struct{}
 	reminderWakeOnce sync.Once
@@ -4638,10 +4642,8 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		reply = r.persistentVoiceReply(ctx, event, reply)
 	}
 	if nested := nestedForwardPluginResponse(pluginResponses); nested != nil {
-		var sentMessageIDs []string
 		err := r.withReplySuppressionOutboundGate(sendBaseCtx, event, func(sendCtx context.Context) error {
-			var sendErr error
-			sentMessageIDs, sendErr = r.sendNestedForwardPluginResponse(sendCtx, event, *nested, reply, cfg)
+			_, sendErr := r.sendNestedForwardPluginResponseWithCleanup(sendCtx, event, *nested, reply, cfg, recallReplyAutoDeleteDelay(cfg))
 			if sendErr != nil {
 				return sendErr
 			}
@@ -4650,9 +4652,6 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		})
 		if err != nil {
 			return "", err
-		}
-		if recallReplyShouldAutoDelete(cfg, pluginResponses) {
-			r.scheduleMessageDeletes(event, sentMessageIDs, recallReplyAutoDeleteDelay(cfg))
 		}
 		imageAnnouncements.startPending()
 		return strings.Join(splitEventChatReply(reply, cfg, event), "\n"), nil
@@ -7173,6 +7172,9 @@ type outboundDecoration struct {
 	ReplyToCurrent bool
 	// MentionAlways 让 @ 不受「群聊 @ 发送者」开关约束，只用于主动通知。
 	MentionAlways bool
+	// LiteralText 表示正文是缓存的用户原文，不能把其中碰巧出现的 Diana 控制标记
+	// 或 Markdown 当成新的发送指令。
+	LiteralText bool
 }
 
 // mentionEnabled 判断本次投递该不该挂 @。
@@ -7426,11 +7428,17 @@ func outgoingSegmentsForHistory(msg OutgoingMessage) []MessageSegment {
 	if msg.ImagesFirst {
 		segments = appendHistoryImageSegments(segments, msg.ImageURLs)
 	}
-	for _, segment := range TextToOneBotSegments(msg.Text) {
-		if segment.Type == "text" && strings.TrimSpace(segment.Data["text"]) == "" {
-			continue
+	if msg.LiteralText {
+		if msg.Text != "" {
+			segments = append(segments, MessageSegment{Type: "text", Data: map[string]string{"text": msg.Text}})
 		}
-		segments = append(segments, segment)
+	} else {
+		for _, segment := range TextToOneBotSegments(msg.Text) {
+			if segment.Type == "text" && strings.TrimSpace(segment.Data["text"]) == "" {
+				continue
+			}
+			segments = append(segments, segment)
+		}
 	}
 	if !msg.ImagesFirst {
 		segments = appendHistoryImageSegments(segments, msg.ImageURLs)

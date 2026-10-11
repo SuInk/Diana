@@ -591,9 +591,14 @@ func (r *Runtime) sendNestedForwardPluginResponse(ctx context.Context, event Mes
 	if routeErr != nil {
 		return nil, routeErr
 	}
+	if platform == PlatformTelegram {
+		event.Platform = platform
+		return r.sendNativeRecallMessages(ctx, event, resp.ForwardMessages, summary)
+	}
 	if !IsOneBotPlatform(platform) {
-		// These platforms already fall back to the summary; skip unsupported
-		// forward attempts while preserving message IDs for scheduled cleanup.
+		// Other native platforms have not been validated against Telegram's
+		// cached media representation. Preserve their existing summary-only
+		// fallback until each platform has an equivalent, tested renderer.
 		return r.sendWithMessageIDs(ctx, event, strings.TrimSpace(summary))
 	}
 	if r.channel == nil {
@@ -642,6 +647,129 @@ func (r *Runtime) sendNestedForwardPluginResponse(ctx context.Context, event Mes
 	return []string{messageID}, nil
 }
 
+// sendNestedForwardPluginResponseWithCleanup keeps cleanup tied to the send
+// attempt instead of only the all-success path. Native transports can deliver
+// the summary and some originals before a later media call fails; those
+// acknowledged messages still need to honor the disclosure auto-delete policy.
+func (r *Runtime) sendNestedForwardPluginResponseWithCleanup(ctx context.Context, event MessageEvent, resp PluginResponse, summary string, cfg BotConfig, cleanupDelay time.Duration) ([]string, error) {
+	messageIDs, err := r.sendNestedForwardPluginResponse(ctx, event, resp, summary, cfg)
+	if recallReplyShouldAutoDelete(cfg, []PluginResponse{resp}) {
+		r.scheduleMessageDeletes(event, messageIDs, cleanupDelay)
+	}
+	return messageIDs, err
+}
+
+// sendNativeRecallMessages renders the merged-forward payload on platforms that
+// do not support OneBot forged forwards. The model summary remains the first
+// message, followed by every cached original through the platform's ordinary
+// text and media send paths. Keeping media as one outbound call per item also
+// gives us every platform message ID, so recall-reply cleanup can remove the
+// complete disclosure instead of leaving photos or files behind.
+func (r *Runtime) sendNativeRecallMessages(ctx context.Context, event MessageEvent, messages []OutgoingMessage, summary string) ([]string, error) {
+	releaseBatch := r.lockReplyBatch(event)
+	defer releaseBatch()
+
+	summary, summaryEvent := prepareReplyDelivery(strings.TrimSpace(summary), event)
+	cfg := r.effectiveConfigForEvent(summaryEvent)
+	messageIDs, err := r.deliverChunks(ctx, summaryEvent, splitEventChatReply(summary, cfg, summaryEvent), cfg, outboundDecoration{
+		MentionUserID:  event.UserID,
+		ReplyToCurrent: true,
+	})
+	if err != nil {
+		return messageIDs, err
+	}
+
+	sendCtx := withContinuousOutboundDelivery(ctx)
+	for _, original := range messages {
+		text, images, videos, audios, files := nativeRecallMessageParts(original)
+		body := nativeRecallMessageHeader(original, profileLocation(event.ProfileID))
+		if text != "" {
+			body += "\n" + text
+		}
+		textIDs, sendErr := r.deliverChunks(sendCtx, event, chunkTextByLength(body, notificationChunkSize), cfg, outboundDecoration{LiteralText: true})
+		messageIDs = append(messageIDs, textIDs...)
+		if sendErr != nil {
+			return messageIDs, sendErr
+		}
+
+		for _, image := range images {
+			result, mediaErr := r.sendOutgoingWithResult(sendCtx, event, OutgoingMessage{ImageURLs: []string{image}})
+			if mediaErr != nil {
+				return messageIDs, mediaErr
+			}
+			if messageID := apiMessageID(result); messageID != "" {
+				messageIDs = append(messageIDs, messageID)
+			}
+		}
+		for _, video := range videos {
+			result, mediaErr := r.sendOutgoingWithResult(sendCtx, event, OutgoingMessage{VideoURLs: []string{video}})
+			if mediaErr != nil {
+				return messageIDs, mediaErr
+			}
+			if messageID := apiMessageID(result); messageID != "" {
+				messageIDs = append(messageIDs, messageID)
+			}
+		}
+		for _, audio := range audios {
+			result, mediaErr := r.sendOutgoingWithResult(sendCtx, event, OutgoingMessage{AudioURLs: []string{audio}})
+			if mediaErr != nil {
+				return messageIDs, mediaErr
+			}
+			if messageID := apiMessageID(result); messageID != "" {
+				messageIDs = append(messageIDs, messageID)
+			}
+		}
+		for _, file := range files {
+			result, mediaErr := r.sendOutgoingWithResult(sendCtx, event, OutgoingMessage{Segments: []MessageSegment{file}})
+			if mediaErr != nil {
+				return messageIDs, mediaErr
+			}
+			if messageID := apiMessageID(result); messageID != "" {
+				messageIDs = append(messageIDs, messageID)
+			}
+		}
+	}
+	return messageIDs, nil
+}
+
+func nativeRecallMessageHeader(msg OutgoingMessage, location *time.Location) string {
+	sender := firstNonEmpty(strings.TrimSpace(msg.ForwardName), strings.TrimSpace(msg.ForwardUIN), "未知用户")
+	when := "时间未知"
+	if msg.ForwardTime > 0 {
+		when = time.Unix(msg.ForwardTime, 0).In(location).Format("2006-01-02 15:04:05 -07:00")
+	}
+	return fmt.Sprintf("【缓存原文 · %s · %s】", sender, when)
+}
+
+func nativeRecallMessageParts(msg OutgoingMessage) (text string, images, videos, audios []string, files []MessageSegment) {
+	text = strings.TrimSpace(msg.Text)
+	if text == "" {
+		text = strings.TrimSpace(PlainText(msg.Segments))
+	}
+	images = append(images, msg.ImageURLs...)
+	videos = append(videos, msg.VideoURLs...)
+	audios = append(audios, msg.AudioURLs...)
+	for _, segment := range msg.Segments {
+		source := firstNonEmpty(segment.Data["cached_file"], segment.Data["url"], segment.Data["file"], segment.Data["file_id"])
+		if source == "" {
+			continue
+		}
+		switch strings.ToLower(strings.TrimSpace(segment.Type)) {
+		case "image":
+			images = append(images, source)
+		case "video":
+			videos = append(videos, source)
+		case "record":
+			audios = append(audios, source)
+		case "file":
+			data := cloneSegmentData(segment.Data)
+			data["file"] = source
+			files = append(files, MessageSegment{Type: "file", Data: data})
+		}
+	}
+	return text, dedupeStrings(images), dedupeStrings(videos), dedupeStrings(audios), files
+}
+
 func (r *Runtime) scheduleMessageDeletes(event MessageEvent, messageIDs []string, delay time.Duration) {
 	messageIDs = dedupeStrings(messageIDs)
 	if len(messageIDs) == 0 {
@@ -657,7 +785,16 @@ func (r *Runtime) scheduleMessageDeletes(event MessageEvent, messageIDs []string
 		<-timer.C
 		for _, messageID := range messageIDs {
 			callCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-			_, err := r.callOneBotAPIForEvent(callCtx, event, "delete_msg", map[string]any{"message_id": oneBotIDParam(messageID)})
+			platform, routeErr := r.outboundPlatformForEvent(event)
+			if routeErr == nil {
+				event.Platform = platform
+			}
+			var err error
+			if routeErr != nil {
+				err = routeErr
+			} else {
+				_, err = r.deletePlatformMessage(callCtx, event, messageID)
+			}
 			cancel()
 			r.recordRecallReplyDelete(event, messageID, delay, err)
 		}

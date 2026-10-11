@@ -5,6 +5,7 @@ package assistant
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -151,15 +152,15 @@ func TestRecallReplyAutoDeleteHonorsGroupPolicy(t *testing.T) {
 	}
 }
 
-func TestRecallDisclosureSinkKeepsOneResponsePerTurn(t *testing.T) {
+func TestRecallDisclosureSinkKeepsLatestResponsePerTurn(t *testing.T) {
 	// 模型可能在一轮里多次调用 recalls；转发卡片只能发一次，否则同一批撤回记录会
-	// 被重复投递。
+	// 被重复投递。后一次响应包含最新的完整快照，因此应覆盖前一次。
 	sink := &recallDisclosureSink{}
 	sink.add(PluginResponse{Handled: true, RecallDisclosure: true, Reply: "first"})
 	sink.add(PluginResponse{Handled: true, RecallDisclosure: true, Reply: "second"})
 
 	drained := sink.drain()
-	if len(drained) != 1 || drained[0].Reply != "first" {
+	if len(drained) != 1 || drained[0].Reply != "second" {
 		t.Fatalf("drained = %#v", drained)
 	}
 	if again := sink.drain(); len(again) != 0 {
@@ -258,6 +259,174 @@ func TestRuntimeDeletesRecallReplyThroughSourceProfile(t *testing.T) {
 	}
 }
 
+func TestRuntimeDeletesEveryTelegramRecallDisclosureMessage(t *testing.T) {
+	channel := newTelegramRecallDeleteChannel()
+	runtime := NewRuntime(BotConfig{}, NewMultiChannel([]ChannelBinding{{
+		ProfileID: "telegram-main",
+		Platform:  PlatformTelegram,
+		Channel:   channel,
+	}}), NewPluginManager(), nil, nil, nil, nil)
+	event := MessageEvent{
+		Kind:      EventKindGroup,
+		ProfileID: "telegram-main",
+		Platform:  PlatformTelegram,
+		GroupID:   "-100200400",
+		UserID:    "42",
+	}
+	longOriginal := strings.Repeat("需要完整清理的缓存原文。", 40)
+	if len([]rune(longOriginal)) <= 420 {
+		t.Fatal("test fixture must exceed the chat-history item preview limit")
+	}
+	response := PluginResponse{NestedForward: true, ForwardMessages: []OutgoingMessage{
+		{Text: longOriginal, ForwardName: "Alice", ForwardTime: 1_700_000_000},
+		{
+			Segments:    []MessageSegment{{Type: "image", Data: map[string]string{"url": "https://example.com/recalled.jpg"}}},
+			ForwardName: "Bob",
+			ForwardTime: 1_700_000_060,
+		},
+	}}
+
+	messageIDs, err := runtime.sendNestedForwardPluginResponse(context.Background(), event, response, "撤回记录摘要", runtime.ProfileConfig("telegram-main"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(messageIDs) != 4 {
+		t.Fatalf("message IDs = %#v, want summary + long original + media header + photo", messageIDs)
+	}
+	runtime.scheduleMessageDeletes(event, messageIDs, 0)
+
+	for index, wantID := range messageIDs {
+		select {
+		case deleted := <-channel.deleted:
+			if deleted.ChatID != event.GroupID || stringifyID(deleted.MessageID) != wantID {
+				t.Fatalf("deleteMessage[%d] = %#v, want chat=%s message=%s", index, deleted, event.GroupID, wantID)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("deleteMessage[%d] was not called", index)
+		}
+	}
+
+	sent := channel.sentSnapshot()
+	if len(sent) != 4 || !strings.Contains(sent[1].Text, longOriginal) || len(sent[3].ImageURLs) != 1 {
+		t.Fatalf("Telegram disclosure delivery = %#v", sent)
+	}
+}
+
+func TestRuntimeDeletesPartialTelegramDisclosureAfterMediaFailure(t *testing.T) {
+	enabled := true
+	channel := newTelegramRecallDeleteChannel()
+	channel.failMedia = errors.New("forced Telegram media failure")
+	cfg := BotConfig{
+		ID:                           "telegram-main",
+		Platform:                     PlatformTelegram,
+		SendRetryAttempts:            1,
+		RecallReplyAutoDeleteEnabled: &enabled,
+		RecallReplyTTLSeconds:        60,
+	}.WithDefaults()
+	runtime := NewRuntime(cfg, NewMultiChannel([]ChannelBinding{{
+		ProfileID: "telegram-main",
+		Platform:  PlatformTelegram,
+		Channel:   channel,
+	}}), NewPluginManager(), nil, nil, nil, nil)
+	event := MessageEvent{
+		Kind:      EventKindGroup,
+		ProfileID: "telegram-main",
+		Platform:  PlatformTelegram,
+		GroupID:   "-100200400",
+		UserID:    "42",
+	}
+	response := PluginResponse{
+		NestedForward:    true,
+		RecallDisclosure: true,
+		ForwardMessages: []OutgoingMessage{{
+			Text:        "媒体失败前已经发出的完整缓存原文",
+			ImageURLs:   []string{"https://example.com/fails.jpg"},
+			ForwardName: "Alice",
+			ForwardTime: 1_700_000_000,
+		}},
+	}
+
+	messageIDs, err := runtime.sendNestedForwardPluginResponseWithCleanup(context.Background(), event, response, "撤回记录摘要", cfg, 0)
+	if err == nil || !strings.Contains(err.Error(), channel.failMedia.Error()) {
+		t.Fatalf("partial send error = %v", err)
+	}
+	if len(messageIDs) != 2 {
+		t.Fatalf("partial message IDs = %#v, want successful summary and cached text", messageIDs)
+	}
+	for index, wantID := range messageIDs {
+		select {
+		case deleted := <-channel.deleted:
+			if deleted.ChatID != event.GroupID || stringifyID(deleted.MessageID) != wantID {
+				t.Fatalf("deleteMessage[%d] = %#v, want chat=%s message=%s", index, deleted, event.GroupID, wantID)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("successful partial delivery %s was not cleaned up", wantID)
+		}
+	}
+	select {
+	case deleted := <-channel.deleted:
+		t.Fatalf("failed media produced an unexpected cleanup target: %#v", deleted)
+	case <-time.After(20 * time.Millisecond):
+	}
+}
+
+func TestRuntimeDeletesSuccessfulTelegramChunksAfterLaterChunkFailure(t *testing.T) {
+	enabled := true
+	channel := newTelegramRecallDeleteChannel()
+	channel.failSendAt = 3 // summary succeeds, first original chunk succeeds, second chunk fails
+	channel.failSend = errors.New("forced Telegram text chunk failure")
+	cfg := BotConfig{
+		ID:                           "telegram-main",
+		Platform:                     PlatformTelegram,
+		SendRetryAttempts:            1,
+		SendChunkIntervalMS:          1,
+		RecallReplyAutoDeleteEnabled: &enabled,
+		RecallReplyTTLSeconds:        60,
+	}.WithDefaults()
+	runtime := NewRuntime(cfg, NewMultiChannel([]ChannelBinding{{
+		ProfileID: "telegram-main",
+		Platform:  PlatformTelegram,
+		Channel:   channel,
+	}}), NewPluginManager(), nil, nil, nil, nil)
+	event := MessageEvent{
+		Kind:      EventKindGroup,
+		ProfileID: "telegram-main",
+		Platform:  PlatformTelegram,
+		GroupID:   "-100200400",
+		UserID:    "42",
+	}
+	response := PluginResponse{
+		NestedForward:    true,
+		RecallDisclosure: true,
+		ForwardMessages: []OutgoingMessage{{
+			Text:        strings.Repeat("分块发送的缓存原文。", 260),
+			ForwardName: "Alice",
+			ForwardTime: 1_700_000_000,
+		}},
+	}
+
+	messageIDs, err := runtime.sendNestedForwardPluginResponseWithCleanup(context.Background(), event, response, "撤回记录摘要", cfg, 0)
+	if err == nil || !strings.Contains(err.Error(), channel.failSend.Error()) {
+		t.Fatalf("chunked partial send error = %v", err)
+	}
+	if len(messageIDs) != 2 {
+		t.Fatalf("partial chunk message IDs = %#v, want summary and first original chunk", messageIDs)
+	}
+	for index, wantID := range messageIDs {
+		select {
+		case deleted := <-channel.deleted:
+			if deleted.ChatID != event.GroupID || stringifyID(deleted.MessageID) != wantID {
+				t.Fatalf("deleteMessage[%d] = %#v, want chat=%s message=%s", index, deleted, event.GroupID, wantID)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("successful chunk %s was not cleaned up", wantID)
+		}
+	}
+	if sent := channel.sentSnapshot(); len(sent) != 2 || utf16Length(sent[1].Text) > telegramTextLimit {
+		t.Fatalf("successful partial chunks = %#v", sent)
+	}
+}
+
 func TestRuntimeCollectsForwardMessageID(t *testing.T) {
 	channel := newRecallDeleteChannel()
 	runtime := NewRuntime(BotConfig{BotAccount: "42", DirectReplyChunkSize: 10, ForwardReplyThreshold: 5}, channel, NewPluginManager(), nil, nil, nil, nil)
@@ -312,6 +481,64 @@ func (c *recallDeleteChannel) Status() ChannelStatus {
 }
 func (c *recallDeleteChannel) Close() error { return nil }
 
+type telegramRecallDeleteCall struct {
+	ChatID    string
+	MessageID any
+}
+
+type telegramRecallDeleteChannel struct {
+	mu         sync.Mutex
+	nextID     int64
+	sent       []OutgoingMessage
+	deleted    chan telegramRecallDeleteCall
+	failMedia  error
+	failSendAt int
+	failSend   error
+	sendCalls  int
+}
+
+func newTelegramRecallDeleteChannel() *telegramRecallDeleteChannel {
+	return &telegramRecallDeleteChannel{nextID: 300, deleted: make(chan telegramRecallDeleteCall, 8)}
+}
+
+func (c *telegramRecallDeleteChannel) Connect(context.Context, EventHandler) error { return nil }
+func (c *telegramRecallDeleteChannel) Send(ctx context.Context, msg OutgoingMessage) error {
+	_, err := c.SendWithResult(ctx, msg)
+	return err
+}
+func (c *telegramRecallDeleteChannel) SendWithResult(_ context.Context, msg OutgoingMessage) (map[string]any, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.sendCalls++
+	if c.failSendAt > 0 && c.sendCalls == c.failSendAt {
+		return nil, c.failSend
+	}
+	if c.failMedia != nil && (len(msg.ImageURLs) > 0 || len(msg.VideoURLs) > 0 || len(msg.AudioURLs) > 0 || len(msg.Segments) > 0) {
+		return nil, c.failMedia
+	}
+	c.nextID++
+	c.sent = append(c.sent, msg)
+	return map[string]any{"message_id": c.nextID}, nil
+}
+func (c *telegramRecallDeleteChannel) CallAPI(_ context.Context, action string, params map[string]any) (map[string]any, error) {
+	if action == "deleteMessage" {
+		c.deleted <- telegramRecallDeleteCall{
+			ChatID:    strings.TrimSpace(stringifyID(params["chat_id"])),
+			MessageID: params["message_id"],
+		}
+	}
+	return map[string]any{}, nil
+}
+func (c *telegramRecallDeleteChannel) Status() ChannelStatus {
+	return ChannelStatus{Connected: true, Platform: PlatformTelegram, SelfID: "99"}
+}
+func (c *telegramRecallDeleteChannel) Close() error { return nil }
+func (c *telegramRecallDeleteChannel) sentSnapshot() []OutgoingMessage {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]OutgoingMessage(nil), c.sent...)
+}
+
 func TestChatHistoryRecallsOperationFeedsForwardCardBackIntoTheTurn(t *testing.T) {
 	history := NewMessageHistoryPlugin()
 	history.Observe(context.Background(), MessageEvent{
@@ -339,6 +566,30 @@ func TestChatHistoryRecallsOperationFeedsForwardCardBackIntoTheTurn(t *testing.T
 	drained := sink.drain()
 	if len(drained) != 1 || !drained[0].RecallDisclosure || len(drained[0].ForwardMessages) == 0 {
 		t.Fatalf("sink = %#v", drained)
+	}
+}
+
+func TestRecallDisclosureSinkKeepsLatestCompleteResponse(t *testing.T) {
+	sink := &recallDisclosureSink{}
+	sink.add(PluginResponse{
+		RecallDisclosure: true,
+		ForwardMessages:  []OutgoingMessage{{Text: "第一次已知原文"}},
+	})
+	sink.add(PluginResponse{
+		RecallDisclosure: true,
+		ForwardMessages: []OutgoingMessage{
+			{Text: "第一次已知原文"},
+			{Text: "第二次探测新发现的原文"},
+		},
+	})
+
+	drained := sink.drain()
+	if len(drained) != 1 || len(drained[0].ForwardMessages) != 2 ||
+		drained[0].ForwardMessages[1].Text != "第二次探测新发现的原文" {
+		t.Fatalf("sink kept a stale recall snapshot: %#v", drained)
+	}
+	if again := sink.drain(); len(again) != 0 {
+		t.Fatalf("drained sink retained responses: %#v", again)
 	}
 }
 

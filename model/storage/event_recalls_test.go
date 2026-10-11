@@ -131,3 +131,41 @@ func TestListInboundEventDetailsAttachesSelfRecallToOriginalMessage(t *testing.T
 		t.Fatalf("notice recalls = %#v, want none", notice.Recalls)
 	}
 }
+
+func TestTelegramRecallProbeNoticeUsesUnavailableAuditOutcome(t *testing.T) {
+	ctx := context.Background()
+	store, err := NewSQLiteStore(filepath.Join(t.TempDir(), "telegram-recall-probe-audit.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+
+	now := time.Now().Truncate(time.Second)
+	recall := assistant.MessageEvent{
+		Platform: assistant.PlatformTelegram, ProfileID: "telegram-profile", SelfID: "9000",
+		Kind: assistant.EventKindNotice, SubType: "group_recall", Time: now.Unix(),
+		OriginalTime: now.Add(-time.Minute).Unix(), GroupID: "-100123", UserID: "user-1",
+		MessageID: "321", RawMessage: "探测发现不可访问的原文", OperatorRole: "telegram_recall_probe",
+	}
+	if err := store.RecordNoticeEvent(ctx, "telegram-profile:group:-100123", recall); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.AppendMessageEvent(ctx, "telegram-profile:group:-100123", recall); err != nil {
+		t.Fatal(err)
+	}
+
+	page, err := store.ListInboundEventDetails(ctx, InboundEventQuery{
+		Since: now.Add(-time.Hour), Limit: 10, Result: InboundEventResultNotice,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Events) != 1 {
+		t.Fatalf("events = %#v", page.Events)
+	}
+	got := page.Events[0]
+	if got.Outcome != "telegram_message_unavailable" || got.Decision != "notice" ||
+		got.Reason != "Telegram 按需探测发现消息当前已不可访问" || got.OperatorRole != "telegram_recall_probe" {
+		t.Fatalf("audit event = %#v", got)
+	}
+}

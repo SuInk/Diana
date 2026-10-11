@@ -129,39 +129,3 @@ func TestTelegramImageRejectsNonFiles(t *testing.T) {
 		}
 	}
 }
-
-func TestTelegramRecallsReportsUnsupported(t *testing.T) {
-	for _, platform := range []string{"", PlatformTelegram} {
-		runtime := NewRuntime(BotConfig{Platform: PlatformTelegram}, nilChannel{}, NewPluginManager(NewMessageHistoryPlugin()), nil, nil, nil, nil)
-		event := MessageEvent{Kind: EventKindGroup, GroupID: "-100", Platform: platform}
-		sink := &recallDisclosureSink{}
-		_, err := newDianaChatHistoryTool(runtime, event).withRecallSink(sink).Run(context.Background(), map[string]any{"operation": "recalls"})
-		if err == nil || !strings.Contains(err.Error(), "不提供") || !strings.Contains(err.Error(), "不代表没有消息被撤回") {
-			t.Fatalf("err = %v", err)
-		}
-		if len(sink.drain()) != 0 {
-			t.Fatal("unsupported recalls must not enqueue disclosure")
-		}
-	}
-}
-
-func TestTelegramRecallLimitationDoesNotHideCachedMessages(t *testing.T) {
-	runtime := NewRuntime(BotConfig{Platform: PlatformTelegram}, nilChannel{}, NewPluginManager(NewMessageHistoryPlugin()), nil, nil, nil, nil)
-	cached := chatHistoryTextEvent(100, "alice", "Alice", "saved-message", "删除之前已经收到的原文")
-	cached.Platform = PlatformTelegram
-	runtime.remember(cached)
-	event := MessageEvent{Kind: EventKindGroup, Platform: PlatformTelegram, GroupID: cached.GroupID, Time: 110}
-	tool := newDianaChatHistoryTool(runtime, event)
-	if _, err := tool.Run(context.Background(), map[string]any{"operation": "recalls"}); err == nil || !strings.Contains(err.Error(), "recent/range") {
-		t.Fatalf("missing cache guidance: %v", err)
-	}
-	for _, operation := range []string{"recent", "around", "search"} {
-		raw, err := tool.Run(context.Background(), map[string]any{"operation": operation, "message_id": cached.MessageID, "query": "原文", "all_time": true})
-		if err != nil {
-			t.Fatalf("%s: %v", operation, err)
-		}
-		if !strings.Contains(raw, "删除之前已经收到的原文") {
-			t.Fatalf("%s lost cached text: %s", operation, raw)
-		}
-	}
-}
