@@ -3534,6 +3534,32 @@ export function savePersona(persona: Persona | Omit<Persona, "id">): Promise<Per
   });
 }
 
+/** 回复口吻库里的具名模板。builtin 项编译在后端里，只读。 */
+export interface ReplyTonePreset {
+  id: string;
+  name: string;
+  text: string;
+  builtin?: boolean;
+  updated_at?: string;
+}
+
+export interface ReplyToneListResponse {
+  presets: ReplyTonePreset[];
+  limit: number;
+}
+
+export function listReplyTones(): Promise<ReplyToneListResponse> {
+  return requestJSON<ReplyToneListResponse>("/api/assistant/reply-tones");
+}
+
+export function saveReplyTone(preset: ReplyTonePreset | Omit<ReplyTonePreset, "id">): Promise<{ preset: ReplyTonePreset; presets: ReplyTonePreset[] }> {
+  return requestJSON("/api/assistant/reply-tones", { method: "POST", body: JSON.stringify({ preset }) });
+}
+
+export function deleteReplyTone(id: string): Promise<{ presets: ReplyTonePreset[] }> {
+  return requestJSON("/api/assistant/reply-tones/delete", { method: "POST", body: JSON.stringify({ id }) });
+}
+
 export interface PersonaImportResult {
   personas: Persona[];
   imported: number;

@@ -113,7 +113,7 @@ func (r *Runtime) composeMaiBotReply(ctx context.Context, cfg BotConfig, event M
 	}
 
 	request := r.maiBotReplyerMessages(cfg, event, messages, body)
-	callCtx := withLLMUsagePurpose(ctx, PurposeReply)
+	callCtx := withLLMUsagePurpose(ctx, PurposeReplyTone)
 	rendered, err := r.runLLMProviderForGroup(callCtx, llm.GroupChat, func(client LLMProvider) (string, error) {
 		response, err := client.Generate(callCtx, llm.GenerateRequest{Messages: request})
 		if err != nil {

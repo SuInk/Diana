@@ -1495,35 +1495,10 @@
                 >
                   单独设置回复口吻
                 </AppSwitch>
-                <span class="hint">Diana 先完成内容判断和工具调用，再根据下面的口吻整理最终说法。它不会改动事实、结论和必要细节，已学到的本群说话风格仍会一起生效。</span>
+                <span class="hint">Diana 先完成内容判断和工具调用，再根据下面的口吻整理最终说法。它不会改动事实、结论和必要细节，已学到的本群说话风格仍会一起生效。使用的模型在「模型与搜索 → 回复口吻」里单独选择。</span>
               </div>
               <div v-if="form.reply_composer === 'maibot'" class="field wide">
-                <div class="reply-tone-toolbar">
-                  <label for="bot-reply-style">回复口吻</label>
-                  <div class="reply-tone-actions">
-                    <button class="btn small ghost" type="button" @click="exportReplyTone">
-                      <Download :size="14" aria-hidden="true" />
-                      导出
-                    </button>
-                    <button class="btn small ghost" type="button" @click="replyToneFileInput?.click()">
-                      <Upload :size="14" aria-hidden="true" />
-                      导入
-                    </button>
-                    <button class="btn small ghost" type="button" :disabled="!replyToneCustomized" @click="restoreReplyTone">
-                      <RotateCcw :size="14" aria-hidden="true" />
-                      恢复内置
-                    </button>
-                    <input ref="replyToneFileInput" type="file" accept=".txt,.md,text/plain,text/markdown" hidden @change="importReplyTone" />
-                  </div>
-                </div>
-                <textarea
-                  id="bot-reply-style"
-                  v-model="replyToneDraft"
-                  class="textarea"
-                  rows="8"
-                  spellcheck="false"
-                ></textarea>
-                <span class="hint">{{ replyToneCustomized ? "这台机器人使用修改后的口吻，保存配置后生效。" : "当前显示完整内置口吻；直接修改，或导入一份 .txt / .md 文件。" }}</span>
+                <ReplyToneEditor v-model="replyToneDraft" />
               </div>
             </div>
           </section>
@@ -2379,6 +2354,7 @@ import PromptSectionsEditor from "../components/PromptSectionsEditor.vue";
 import ParticipationPromptPreview from "../components/ParticipationPromptPreview.vue";
 import { participationFromConfig, type ParticipationPreferences } from "../participation";
 import SoulEditor from "../components/SoulEditor.vue";
+import ReplyToneEditor from "../components/ReplyToneEditor.vue";
 import EmptyState from "../components/EmptyState.vue";
 import IdChipInput from "../components/IdChipInput.vue";
 import MessageRelayManager from "../components/MessageRelayManager.vue";
@@ -2413,8 +2389,6 @@ const personaDraftInput = ref<HTMLTextAreaElement | null>(null);
 const personaBusy = ref(false);
 const replyToneDraft = ref("");
 const replyToneDefault = ref(FALLBACK_REPLY_TONE);
-const replyToneFileInput = ref<HTMLInputElement | null>(null);
-const replyToneCustomized = computed(() => replyToneOverride(replyToneDraft.value, replyToneDefault.value) !== "");
 // 保留生成前的那一版，生成结果不合适可以一键退回，不用自己 Ctrl+Z。
 const soulEditor = ref<InstanceType<typeof SoulEditor> | null>(null);
 const promptOverridesOpen = ref(false);
@@ -3488,7 +3462,7 @@ function onMessageRelaysSaved(config: BotProfileConfig): void {
 // 细分用途：要写文字的旁路调用，从「意图识别」里拆出来——那一档能绑只做判断的模型，
 // 这些绑上去只会每次先失败一次再降级。再按时机分两档：回复辅助在回复发出前同步跑，
 // 要快；后台生成在回复之外异步跑，慢一点没关系。
-const purposeRoleKeys = ["reply_assist", "background"] as const;
+const purposeRoleKeys = ["reply_tone", "reply_assist", "background"] as const;
 
 // 音视频插槽：不配就没有这项能力，不跟随对话——对话模型接不了这些接口。
 const mediaRoleKeys = ["tts", "stt", "video"] as const;
@@ -3535,6 +3509,12 @@ const imageRoleRow: ModelRoleRow = {
 };
 // 回复辅助留空时沿用后台生成（它就是从那一档拆出来的），后台生成留空时跟随对话。
 const purposeRoleRows: ModelRoleRow[] = [
+  {
+    key: "reply_tone",
+    label: "回复口吻",
+    sublabel: "最终表达",
+    description: "内容和工具调用完成后，把完整草稿整理成最终聊天口吻。不指定时跟随对话；单独指定时适合使用响应快、成本低的文字模型。"
+  },
   {
     key: "background",
     label: "后台生成",
@@ -3840,7 +3820,7 @@ function modelPurposeLabel(role: RoleKey): string {
 }
 
 function modelPurposeIcon(role: RoleKey) {
-  return { chat: MessageSquare, vision: Eye, media_parse: ScanLine, intent: Waypoints, image: Image, background: Layers, reply_assist: MessageSquare, tts: MessageSquare, stt: MessageSquare, video: Image }[role];
+  return { chat: MessageSquare, vision: Eye, media_parse: ScanLine, intent: Waypoints, image: Image, background: Layers, reply_tone: MessageSquare, reply_assist: MessageSquare, tts: MessageSquare, stt: MessageSquare, video: Image }[role];
 }
 
 function modelPurposeSummary(role: RoleKey): string {
@@ -4125,7 +4105,7 @@ function channelOptionsFor(role: RoleKey): AppSelectOption[] {
   if (isPurposeRole(role)) {
     base.push({ value: UNSPECIFIED, label: `不指定，跟随${purposeRoleFallbackLabel(role)}`, hint: "不单独绑定，换模型时跟着一起换" });
   }
-  if (role !== "chat" && !isMediaRole(role)) {
+  if (role !== "chat" && role !== "reply_tone" && !isMediaRole(role)) {
     base.push({
       value: FOLLOW_CHAT,
       label: "跟随对话",
@@ -4617,39 +4597,6 @@ function splitList(raw: string): string[] {
     .split(/[,，]/)
     .map((item) => item.trim())
     .filter((item) => item !== "");
-}
-
-function exportReplyTone(): void {
-  const text = normalizeReplyTone(replyToneDraft.value) || replyToneDefault.value;
-  const url = URL.createObjectURL(new Blob([`${text}\n`], { type: "text/plain;charset=utf-8" }));
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = `diana-reply-tone-${new Date().toISOString().slice(0, 10)}.txt`;
-  link.click();
-  URL.revokeObjectURL(url);
-}
-
-async function importReplyTone(event: Event): Promise<void> {
-  const input = event.target as HTMLInputElement;
-  const file = input.files?.[0];
-  input.value = "";
-  if (!file) return;
-  try {
-    const text = normalizeReplyTone(await file.text());
-    if (!text) {
-      toastError("导入文件里没有回复口吻");
-      return;
-    }
-    replyToneDraft.value = text;
-    toastSuccess(`已导入「${file.name}」，保存配置后生效`);
-  } catch (error) {
-    toastError(error instanceof Error ? error.message : "导入失败");
-  }
-}
-
-function restoreReplyTone(): void {
-  replyToneDraft.value = replyToneDefault.value;
-  toastSuccess("已恢复内置口吻，保存配置后生效");
 }
 
 // 人设变量取配置里的机器人名称，不取触发别名。

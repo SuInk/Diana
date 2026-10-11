@@ -6637,16 +6637,16 @@ a.nav-action {
 .bot-editor .card-header > :last-child:not(:first-child):not(.card-sub) { margin-left: auto; }
 .bot-editor .card-header .card-sub { display: block; margin-top: 2px; }
 
-.reply-tone-toolbar,
-.reply-tone-actions {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 8px;
+.reply-tone-editor {
+  display: grid;
+  gap: 12px;
 }
 
-.reply-tone-toolbar { justify-content: space-between; }
-.reply-tone-toolbar > label { margin: 0; }
+.reply-tone-document textarea {
+  min-height: 210px;
+  font-family: var(--font-mono);
+  line-height: 1.65;
+}
 
 /* 收起的卡片只剩标题栏，底下也要留白，否则副标题贴着卡片边。 */
 .bot-editor .card > .card-header:last-child { padding-bottom: 16px; }

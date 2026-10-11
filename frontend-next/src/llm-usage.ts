@@ -8,6 +8,7 @@ export type UsageDimension = "purpose" | "model";
 
 const purposeLabels: Record<string, string> = {
   reply: "聊天回复",
+  reply_tone: "回复口吻整理",
   subagent: "后台子任务",
   subtask: "子任务",
   proactive_reply_router: "主动回复判断",
