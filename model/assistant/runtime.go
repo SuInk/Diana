@@ -7775,13 +7775,8 @@ func (r *Runtime) sendForwardNodesWithResult(ctx context.Context, event MessageE
 	// 合并转发的回推只有一个 forward 段，按它认。
 	sendCtx := withOutboundConfirmFingerprint(ctx, outboundFingerprintForForward())
 	result, err := r.executeOutboundCall(sendCtx, event, action, func(callCtx context.Context) (map[string]any, error) {
-		typing := typingIndicatorFromContext(callCtx)
-		typing.pause()
-		result, err := r.callOneBotAPIForEvent(callCtx, event, action, params)
-		if err != nil {
-			typing.resume()
-		}
-		return result, err
+		typingIndicatorFromContext(callCtx).pause()
+		return r.callOneBotAPIForEvent(callCtx, event, action, params)
 	})
 	if err != nil {
 		if errors.Is(err, errOutboundOutcomeUnconfirmed) {

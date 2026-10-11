@@ -215,28 +215,24 @@ func (t *dianaCodingTool) submit(ctx context.Context, cfg codingAgentConfig, inp
 // 沉默。受理消息只在进程真起来之后由这里发，看不到它就是没派。发不出去不影响任务，
 // 退回让模型自己报任务号。
 func (t *dianaCodingTool) announceCodingJob(ctx context.Context, text string) bool {
+	defer typingIndicatorFromContext(ctx).resume()
 	if err := t.runtime.sendOutgoing(ctx, t.event, routeOutgoingToEvent(t.event, OutgoingMessage{Text: text})); err != nil {
 		log.Printf("diana coding accept card not sent: %v", err)
 		return false
 	}
 	// 话已经出去了：这一轮不能再被合并重来，否则重新生成时会把受理消息再发一遍。
 	t.runtime.sealDirectReply(ctx)
-	if typing := typingIndicatorFromContext(ctx); typing != nil {
-		typing.resume()
-	}
 	return true
 }
 
 // postCodingResultBody 在这一轮里把结果全文发出去，走和汇报全文一样的合并转发。
 func (t *dianaCodingTool) postCodingResultBody(ctx context.Context, body string) bool {
+	defer typingIndicatorFromContext(ctx).resume()
 	if err := t.runtime.deliverCodingReportBody(ctx, t.event, body); err != nil {
 		log.Printf("diana coding result body not posted: %v", err)
 		return false
 	}
 	t.runtime.sealDirectReply(ctx)
-	if typing := typingIndicatorFromContext(ctx); typing != nil {
-		typing.resume()
-	}
 	return true
 }
 

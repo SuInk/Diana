@@ -135,15 +135,12 @@ func (t *dianaInterimMessageTool) Run(ctx context.Context, input map[string]any)
 	if text == "" {
 		return "", fmt.Errorf("text 不能为空")
 	}
+	defer typingIndicatorFromContext(ctx).resume()
 	if err := t.runtime.sendOutgoing(ctx, t.event, routeOutgoingToEvent(t.event, OutgoingMessage{Text: text})); err != nil {
 		return "", fmt.Errorf("发送失败: %w", err)
 	}
 	// 话已经出去了：这一轮不能再被合并重来，否则重新生成时会把这句再说一遍。
 	t.runtime.sealDirectReply(ctx)
-	// 发送会暂停「正在输入」；后面还要接着干活，把它重新点亮。
-	if typing := typingIndicatorFromContext(ctx); typing != nil {
-		typing.resume()
-	}
 	ledger.mu.Lock()
 	ledger.sent = append(ledger.sent, text)
 	remaining := interimMessageMaxPerTurn - len(ledger.sent)

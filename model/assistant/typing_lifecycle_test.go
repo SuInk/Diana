@@ -330,18 +330,83 @@ func TestTypingLifecyclePluginFollowUpOwnsIndicator(t *testing.T) {
 
 func TestTypingLifecycleFinalSendFailureStaysPaused(t *testing.T) {
 	withFastSendTiming(t)
-	channel := &typingLifecycleChannel{}
-	indicator := newLifecycleTypingIndicator(t, channel)
-	channel.transport = func(context.Context) error { return errors.New("unsupported forward node content") }
-	runtime := NewRuntime(BotConfig{}, channel, NewPluginManager(), nil, nil, nil, nil)
-	event := MessageEvent{Kind: EventKindPrivate, Platform: PlatformOneBotV11, UserID: "10001"}
-	ctx := withTypingIndicator(t.Context(), indicator)
-	if _, err := runtime.sendOutgoingWithResult(ctx, event, OutgoingMessage{Text: "x"}); err == nil {
-		t.Fatal("expected send failure")
+	for _, forward := range []bool{false, true} {
+		for _, message := range []string{"unsupported forward node content", "请先添加对方为好友"} {
+			name := "ordinary/" + message
+			if forward {
+				name = "forward/" + message
+			}
+			t.Run(name, func(t *testing.T) {
+				channel := &typingLifecycleChannel{transport: func(context.Context) error { return errors.New(message) }}
+				indicator := newLifecycleTypingIndicator(t, channel)
+				runtime := NewRuntime(BotConfig{}, channel, NewPluginManager(), nil, nil, nil, nil)
+				event := MessageEvent{Kind: EventKindPrivate, Platform: PlatformOneBotV11, UserID: "10001"}
+				ctx := withTypingIndicator(t.Context(), indicator)
+				var err error
+				if forward {
+					_, err = runtime.sendForwardReplyWithResult(ctx, event, "转发内容", runtime.effectiveConfigForEvent(event))
+				} else {
+					_, err = runtime.sendOutgoingWithResult(ctx, event, OutgoingMessage{Text: "x"})
+				}
+				if err == nil {
+					t.Fatal("expected send failure")
+				}
+				indicator.mu.Lock()
+				muted := indicator.muted
+				indicator.mu.Unlock()
+				if !muted {
+					t.Fatal("final send failure did not pause typing")
+				}
+				before := typingLifecycleCount(channel)
+				time.Sleep(60 * time.Millisecond)
+				if got := typingLifecycleCount(channel); got != before {
+					t.Fatalf("typing relit after final send failure: %d -> %d", before, got)
+				}
+			})
+		}
 	}
-	before := typingLifecycleCount(channel)
-	time.Sleep(60 * time.Millisecond)
-	if got := typingLifecycleCount(channel); got != before {
-		t.Fatalf("typing relit after final send failure: %d -> %d", before, got)
+}
+
+func TestTypingLifecycleInterimFailureResumes(t *testing.T) {
+	withFastSendTiming(t)
+	for _, name := range []string{"say", "install", "coding_notice", "coding_body"} {
+		t.Run(name, func(t *testing.T) {
+			channel := &typingLifecycleChannel{transport: func(context.Context) error { return errors.New("请先添加对方为好友") }}
+			indicator := newLifecycleTypingIndicator(t, channel)
+			runtime := NewRuntime(BotConfig{}, channel, NewPluginManager(), nil, nil, nil, nil)
+			event := MessageEvent{Kind: EventKindPrivate, Platform: PlatformOneBotV11, UserID: "10001"}
+			ctx := withTypingIndicator(t.Context(), indicator)
+			switch name {
+			case "say":
+				ctx = context.WithValue(ctx, interimMessageContextKey{}, &interimMessageLedger{})
+				tool := &dianaInterimMessageTool{runtime: runtime, event: event}
+				if _, err := tool.Run(ctx, map[string]any{"text": "稍等"}); err == nil {
+					t.Fatal("expected send failure")
+				}
+			case "install":
+				tool := &dianaInstallPackageTool{runtime: runtime, event: event}
+				if tool.announce(ctx, "稍等") {
+					t.Fatal("expected send failure")
+				}
+			case "coding_notice":
+				tool := &dianaCodingTool{runtime: runtime, event: event}
+				if tool.announceCodingJob(ctx, "稍等") {
+					t.Fatal("expected send failure")
+				}
+			case "coding_body":
+				tool := &dianaCodingTool{runtime: runtime, event: event}
+				if tool.postCodingResultBody(ctx, "结果") {
+					t.Fatal("expected send failure")
+				}
+			}
+			indicator.mu.Lock()
+			muted := indicator.muted
+			indicator.mu.Unlock()
+			if muted {
+				t.Fatal("interim failure left continuing generation muted")
+			}
+			before := typingLifecycleCount(channel)
+			waitForCondition(t, time.Second, func() bool { return typingLifecycleCount(channel) > before })
+		})
 	}
 }

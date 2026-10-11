@@ -94,7 +94,7 @@ func (c *scriptedTypingChannel) SendChatAction(ctx context.Context, _ OutgoingMe
 
 func TestTypingIndicatorCooldownAndRecovery(t *testing.T) {
 	c := &scriptedTypingChannel{started: make(chan context.Context, 10), result: make(chan error, 10)}
-	indicator := &typingIndicator{channel: c, interval: 20 * time.Millisecond, maxFailures: 3, retryInterval: 200 * time.Millisecond, kick: make(chan struct{}, 1), done: make(chan struct{})}
+	indicator := &typingIndicator{channel: c, interval: 20 * time.Millisecond, maxFailures: 3, cooldownInterval: 200 * time.Millisecond, kick: make(chan struct{}, 1), done: make(chan struct{})}
 	go indicator.run(context.Background())
 	defer func() { indicator.stop(); c.result <- nil }()
 	next := func() {
@@ -145,7 +145,7 @@ func TestTypingIndicatorCooldownAndRecovery(t *testing.T) {
 
 func TestTypingIndicatorSerialAndStaleResult(t *testing.T) {
 	c := &scriptedTypingChannel{started: make(chan context.Context, 10), result: make(chan error, 10)}
-	indicator := &typingIndicator{channel: c, interval: 200 * time.Millisecond, callTimeout: 20 * time.Millisecond, maxFailures: 1, retryInterval: time.Hour, kick: make(chan struct{}, 1), done: make(chan struct{})}
+	indicator := &typingIndicator{channel: c, interval: 200 * time.Millisecond, callTimeout: 20 * time.Millisecond, maxFailures: 1, cooldownInterval: time.Hour, kick: make(chan struct{}, 1), done: make(chan struct{})}
 	go indicator.run(context.Background())
 	defer func() { indicator.stop(); c.result <- nil }()
 	select {
@@ -196,4 +196,31 @@ func TestTypingIndicatorMutedStartWaitsForResume(t *testing.T) {
 	}
 	indicator.resume()
 	nextTypingCall(t, c)
+}
+
+func TestTypingIndicatorDefaultCooldownIndependentOfRetryDelay(t *testing.T) {
+	c := &scriptedTypingChannel{started: make(chan context.Context, 1), result: make(chan error, 1)}
+	indicator := &typingIndicator{channel: c, interval: oneBotTypingRenewInterval, retryInterval: 2500 * time.Millisecond, maxFailures: 1, kick: make(chan struct{}, 1), done: make(chan struct{})}
+	go indicator.run(t.Context())
+	defer func() { indicator.stop(); c.result <- nil }()
+	select {
+	case <-c.started:
+	case <-time.After(time.Second):
+		t.Fatal("typing did not start")
+	}
+	c.result <- errors.New("temporary")
+	waitForCondition(t, time.Second, func() bool {
+		indicator.mu.Lock()
+		defer indicator.mu.Unlock()
+		return !indicator.cooldown.IsZero()
+	})
+	indicator.mu.Lock()
+	remaining := time.Until(indicator.cooldown)
+	indicator.mu.Unlock()
+	if remaining < 14*time.Second || remaining > 15*time.Second {
+		t.Fatalf("cooldown remaining = %v, want default 15s rather than ordinary retry 2.5s", remaining)
+	}
+	if oneBotTypingRenewInterval != 500*time.Millisecond {
+		t.Fatal("QQ renewal interval changed")
+	}
 }
