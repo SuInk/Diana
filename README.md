@@ -159,6 +159,8 @@ go build -o dist/diana-webui ./cmd/webui
 
 Telegram 主人账号支持数字 ID、用户名和 `@用户名`，按平台真实发送者信息核验，参见[Telegram 主人账号](docs/telegram-owner.md)。
 
+Telegram 的图片/表情包发送格式及群消息撤回限制，参见[Telegram 媒体与撤回说明](docs/telegram-media.md)。已收到并保存的消息可查本地历史，但普通群消息删除不会通过 Bot API 通知机器人，因此无法自动识别哪条消息被撤回。
+
 启用的机器人配置会同时在线，回复始终回到消息来的那个通道。
 
 | 平台 | 要准备的凭据 | 连接方向 |

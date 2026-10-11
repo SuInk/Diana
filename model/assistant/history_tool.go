@@ -113,6 +113,9 @@ func (t *dianaChatHistoryTool) recalls(ctx context.Context, input map[string]any
 	if t.event.Kind != EventKindGroup || strings.TrimSpace(t.event.GroupID) == "" {
 		return dianaChatHistoryResult{}, fmt.Errorf("撤回记录只在群聊中可用")
 	}
+	if t.runtime.currentPlatform(t.event) == PlatformTelegram {
+		return dianaChatHistoryResult{}, fmt.Errorf("Telegram Bot API 不提供普通群聊/超级群的消息删除通知，无法自动识别哪些消息被撤回；这不代表没有消息被撤回，也不代表已缓存的原文不可读。请用 recent/range 查看相关时段的本地历史、search 按关键词查找，或 around 按 message_id 读取已缓存原文；没有用户提供的线索时先询问大致时间、发送者或内容，不要把普通历史消息猜成撤回消息。机器人未收到或未保存的内容无法补回。deleted_business_messages 仅适用于关联的 Business 账号")
+	}
 	plugin, ok := t.runtime.messageHistoryPlugin()
 	if !ok {
 		return dianaChatHistoryResult{}, fmt.Errorf("消息历史插件未启用，无法读取撤回记录")

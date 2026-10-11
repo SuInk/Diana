@@ -365,7 +365,11 @@ func (c *TelegramChannel) SendWithResult(ctx context.Context, msg OutgoingMessag
 	}
 
 	for _, image := range msg.ImageURLs {
-		result, err := c.sendMedia(ctx, chatID, msg.MessageThreadID, "sendPhoto", "photo", image)
+		method, field, err := telegramImageMethod(image)
+		if err != nil {
+			return nil, err
+		}
+		result, err := c.sendMedia(ctx, chatID, msg.MessageThreadID, method, field, image, msg.ReplyMessageID)
 		if err != nil {
 			return nil, err
 		}
