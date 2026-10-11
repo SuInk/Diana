@@ -4659,7 +4659,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		stickerQuery, stickerFirst := finalizeSticker.take()
 		stickerFirst = stickerReplyBefore(cfg.StickerReplyOrder, stickerFirst)
 		if stickerAllowed && stickerFirst {
-			r.sendFinalizeSticker(sendCtx, event, stickerQuery)
+			r.sendFinalizeStickerBeforeReply(sendCtx, event, stickerQuery)
 			stickerQuery = ""
 		}
 		if err := sendCtx.Err(); err != nil {

@@ -11,8 +11,9 @@ test("automatic sticker order stays beside reply controls with explicit options 
   assert.match(section, /:options="stickerReplyOrderOptions"/);
   assert.match(section, /form\.sticker_reply_order = value as 'before' \| 'after' \| 'auto'/);
   assert.ok(section.indexOf('id="bot-sticker-reply-order"') > section.indexOf('id="bot-mention-user-mode"'));
-  assert.match(section, /仅控制自动配图与正文的发送顺序，不改变是否配图/);
-  assert.match(section, /正文会等待选图和审核完成/);
+  assert.match(section, /仅控制自动配图与最终正文的发送顺序，不改变是否配图/);
+  assert.match(section, /Telegram 流式草稿可能提前显示/);
+  assert.match(section, /超时或预算不足会跳过配图，优先发送正文/);
   const options = source.match(/const stickerReplyOrderOptions: AppSelectOption\[\] = (\[[\s\S]*?\]);/);
   assert.ok(options);
   assert.deepEqual(JSON.parse(JSON.stringify(vm.runInNewContext(options[1]))), [

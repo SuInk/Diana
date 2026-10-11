@@ -10,7 +10,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/SuInk/diana/model/llm"
 )
@@ -20,6 +22,7 @@ type stickerFinalizeLLMProvider struct {
 	capturingLLMProvider
 	sticker        string
 	personaVerdict string
+	personaCheck   func(context.Context) error
 	silent         bool
 	order          string
 	sawField       bool
@@ -29,6 +32,11 @@ type stickerFinalizeLLMProvider struct {
 func (p *stickerFinalizeLLMProvider) Generate(ctx context.Context, req llm.GenerateRequest) (*llm.GenerateResponse, error) {
 	for _, message := range req.Messages {
 		if strings.Contains(message.Content, "合不合你的人设") {
+			if p.personaCheck != nil {
+				if err := p.personaCheck(ctx); err != nil {
+					return nil, err
+				}
+			}
 			return &llm.GenerateResponse{Text: p.personaVerdict}, nil
 		}
 	}
@@ -391,7 +399,7 @@ func TestStickerReplyOrderProfilePrompt(t *testing.T) {
 		}
 		prompt := rt.systemPromptWithRelationshipAndAgent(event, nil, false, RelationshipPolicy{}, true)
 		if cfg.StickerReplyOrder == StickerReplyOrderAuto {
-			if strings.Contains(prompt, "表情包顺序已固定为") || !strings.Contains(prompt, "对别人这句话的反应") {
+			if strings.Contains(prompt, "表情包顺序已固定为") || !strings.Contains(prompt, "对别人这句话的反应") || !strings.Contains(prompt, stickerReplyOrderPrompt(StickerReplyOrderAuto)) {
 				t.Fatal("auto guidance changed")
 			}
 		} else if !strings.Contains(prompt, stickerReplyOrderPrompt(cfg.StickerReplyOrder)) {
@@ -447,6 +455,219 @@ func TestReplyFinalizeStickerUnavailableDoesNotBlockText(t *testing.T) {
 			})
 		}
 	}
+}
+
+func TestReplyFinalizeStickerBeforeBudget(t *testing.T) {
+	withFastSendTiming(t)
+	path := filepath.Join(t.TempDir(), "shock.gif")
+	body := []byte("shock-sticker")
+	if err := os.WriteFile(path, body, 0600); err != nil {
+		t.Fatal(err)
+	}
+	for _, scenario := range []string{"child_timeout", "reserved_deadline", "insufficient_budget", "parent_cancel"} {
+		t.Run(scenario, func(t *testing.T) {
+			timeout := 20 * time.Second
+			if scenario == "reserved_deadline" {
+				timeout = stickerReplySendReserve + time.Second
+			} else if scenario == "insufficient_budget" {
+				timeout = stickerReplySendReserve
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), timeout)
+			defer cancel()
+			channel := &recordingChannel{}
+			var checked atomic.Bool
+			provider := &stickerFinalizeLLMProvider{capturingLLMProvider: capturingLLMProvider{reply: "真的假的，你居然一次过了"}, sticker: "震惊 瞪眼", order: "after"}
+			provider.personaCheck = func(checkCtx context.Context) error {
+				checked.Store(true)
+				deadline, ok := checkCtx.Deadline()
+				parentDeadline, _ := ctx.Deadline()
+				if !ok || time.Until(deadline) > stickerBeforeReplyTimeout || parentDeadline.Sub(deadline) < stickerReplySendReserve {
+					t.Errorf("invalid sticker deadline: %v parent: %v", deadline, parentDeadline)
+				}
+				if scenario == "parent_cancel" {
+					cancel()
+				}
+				<-checkCtx.Done()
+				return checkCtx.Err()
+			}
+			rt := NewRuntime(BotConfig{AgentEnabled: true, StickerReplyOrder: StickerReplyOrderBefore}.WithDefaults(), channel, NewDefaultPluginManager(), nil, nil, nil, func() (LLMProvider, error) { return provider, nil })
+			event := MessageEvent{Kind: EventKindPrivate, UserID: "10001", MessageID: "budget", RawMessage: "我驾照一次过了"}
+			rt.SetMessageHistoryStore(&stickerHistoryStore{events: map[string][]MessageEvent{sessionKey(event): {{Kind: EventKindPrivate, UserID: "10001", MessageID: "s", Time: 1, Segments: []MessageSegment{{Type: "image", Data: map[string]string{"summary": "[震惊]", "cached_file": path, imageContentSHA256Key: imageBytesSHA256(body)}}}}}}})
+			_, err := rt.replyTo(ctx, event, event.RawMessage)
+			if checked.Load() != (scenario != "insufficient_budget") {
+				t.Fatalf("persona checked = %v", checked.Load())
+			}
+			sent := channel.sentSnapshot()
+			if scenario == "parent_cancel" {
+				if !errors.Is(err, context.Canceled) || len(sent) != 0 {
+					t.Fatalf("parent cancellation: err=%v sent=%#v", err, sent)
+				}
+				return
+			}
+			if err != nil || ctx.Err() != nil || len(sent) != 1 || sent[0].Text == "" || sentStickerPath(sent[0]) != "" {
+				t.Fatalf("text should survive optional sticker timeout: err=%v parent=%v sent=%#v", err, ctx.Err(), sent)
+			}
+		})
+	}
+}
+
+func TestReplyFinalizeStickerPreparationDoesNotHoldText(t *testing.T) {
+	withFastSendTiming(t)
+	path := filepath.Join(t.TempDir(), "shock.gif")
+	body := []byte("shock-sticker")
+	if err := os.WriteFile(path, body, 0600); err != nil {
+		t.Fatal(err)
+	}
+	for _, scenario := range []string{"ignores_cancel", "parent_cancel", "panic"} {
+		t.Run(scenario, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), stickerReplySendReserve+time.Second)
+			defer cancel()
+			entered, release, exited := make(chan struct{}), make(chan struct{}), make(chan struct{})
+			defer close(release)
+			channel := &recordingChannel{}
+			provider := &stickerFinalizeLLMProvider{capturingLLMProvider: capturingLLMProvider{reply: "真的假的，你居然一次过了"}, sticker: "震惊", personaVerdict: "会"}
+			provider.personaCheck = func(context.Context) error {
+				defer close(exited)
+				close(entered)
+				if scenario == "panic" {
+					panic("sticker preparation test")
+				}
+				<-release // 故意不理会 context，模拟不合作的审核客户端。
+				return nil
+			}
+			rt := NewRuntime(BotConfig{AgentEnabled: true}.WithDefaults(), channel, NewDefaultPluginManager(), nil, nil, nil, func() (LLMProvider, error) { return provider, nil })
+			event := MessageEvent{Kind: EventKindPrivate, UserID: "10001", MessageID: "blocked", RawMessage: "我驾照一次过了"}
+			rt.SetMessageHistoryStore(&stickerHistoryStore{events: map[string][]MessageEvent{sessionKey(event): {{Kind: EventKindPrivate, UserID: "10001", MessageID: "s", Time: 1, Segments: []MessageSegment{{Type: "image", Data: map[string]string{"summary": "[震惊]", "cached_file": path, imageContentSHA256Key: imageBytesSHA256(body)}}}}}}})
+			done := make(chan error, 1)
+			go func() {
+				_, err := rt.replyTo(ctx, event, event.RawMessage)
+				done <- err
+			}()
+			select {
+			case <-entered:
+			case <-time.After(3 * time.Second):
+				t.Fatal("preparation did not start")
+			}
+			if scenario == "parent_cancel" {
+				cancel()
+			}
+			select {
+			case err := <-done:
+				if scenario == "parent_cancel" {
+					if !errors.Is(err, context.Canceled) {
+						t.Fatalf("cancel error = %v", err)
+					}
+				} else if err != nil || ctx.Err() != nil {
+					t.Fatalf("reply should finish with live parent: %v / %v", err, ctx.Err())
+				}
+			case <-time.After(3 * time.Second):
+				t.Fatal("preparation blocked reply")
+			}
+			want := 1
+			if scenario == "parent_cancel" {
+				want = 0
+			}
+			if sent := channel.sentSnapshot(); len(sent) != want || (want == 1 && (sent[0].Text == "" || sentStickerPath(sent[0]) != "")) {
+				t.Fatalf("sent before releasing worker = %#v", sent)
+			}
+			if scenario != "panic" {
+				release <- struct{}{}
+			}
+			<-exited
+			if sent := channel.sentSnapshot(); len(sent) != want {
+				t.Fatalf("late preparation sent an extra message: %#v", sent)
+			}
+		})
+	}
+}
+
+func TestStickerDeliverPreservesUncertainQuota(t *testing.T) {
+	withFastSendTiming(t)
+	path := filepath.Join(t.TempDir(), "sticker.gif")
+	if err := os.WriteFile(path, []byte("sticker"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	for _, sendErr := range []error{ErrOutboundOutcomeUnknown, errOutboundOutcomeUnconfirmed, errors.New("definite failure")} {
+		t.Run(sendErr.Error(), func(t *testing.T) {
+			channel := &stickerDeliveryBoundaryChannel{sendErr: sendErr}
+			rt := NewRuntime(BotConfig{}.WithDefaults(), channel, NewDefaultPluginManager(), nil, nil, nil, nil)
+			tool := newDianaStickerTool(rt, MessageEvent{Kind: EventKindPrivate, UserID: "10001"}, nil)
+			ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+			defer cancel()
+			if _, err := tool.deliver(ctx, stickerCandidate{Path: path}); err == nil {
+				t.Fatal("delivery error lost")
+			}
+			wantReserved := sendErr == ErrOutboundOutcomeUnknown || sendErr == errOutboundOutcomeUnconfirmed
+			if reserved := tool.sendLimitReason(time.Now()) != ""; reserved != wantReserved {
+				t.Fatalf("reserved=%v want=%v", reserved, wantReserved)
+			}
+		})
+	}
+}
+
+func TestStickerPreparationDeadlineDoesNotCancelDelivery(t *testing.T) {
+	withFastSendTiming(t)
+	path := filepath.Join(t.TempDir(), "shock.gif")
+	body := []byte("shock-sticker")
+	if err := os.WriteFile(path, body, 0600); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), stickerReplySendReserve+time.Second)
+	defer cancel()
+	var preparationDeadline time.Time
+	channel := &stickerDeliveryBoundaryChannel{}
+	channel.onSticker = func(sendCtx context.Context) error {
+		deadline, _ := sendCtx.Deadline()
+		parentDeadline, _ := ctx.Deadline()
+		if !deadline.Equal(parentDeadline) {
+			t.Errorf("delivery deadline=%v want parent=%v", deadline, parentDeadline)
+		}
+		timer := time.NewTimer(time.Until(preparationDeadline) + 30*time.Millisecond)
+		defer timer.Stop()
+		select {
+		case <-timer.C:
+			return sendCtx.Err()
+		case <-sendCtx.Done():
+			return sendCtx.Err()
+		}
+	}
+	provider := &stickerFinalizeLLMProvider{capturingLLMProvider: capturingLLMProvider{reply: "真的假的，你居然一次过了"}, sticker: "震惊", personaVerdict: "会"}
+	provider.personaCheck = func(checkCtx context.Context) error {
+		preparationDeadline, _ = checkCtx.Deadline()
+		return nil
+	}
+	rt := NewRuntime(BotConfig{AgentEnabled: true}.WithDefaults(), channel, NewDefaultPluginManager(), nil, nil, nil, func() (LLMProvider, error) { return provider, nil })
+	event := MessageEvent{Kind: EventKindPrivate, UserID: "10001", MessageID: "delivery-budget", RawMessage: "我驾照一次过了"}
+	rt.SetMessageHistoryStore(&stickerHistoryStore{events: map[string][]MessageEvent{sessionKey(event): {{Kind: EventKindPrivate, UserID: "10001", MessageID: "s", Time: 1, Segments: []MessageSegment{{Type: "image", Data: map[string]string{"summary": "[震惊]", "cached_file": path, imageContentSHA256Key: imageBytesSHA256(body)}}}}}}})
+	if _, err := rt.replyTo(ctx, event, event.RawMessage); err != nil {
+		t.Fatal(err)
+	}
+	if sent := channel.sentSnapshot(); len(sent) != 2 || sentStickerPath(sent[0]) == "" || sent[1].Text == "" {
+		t.Fatalf("delivery must finish before text: %#v", sent)
+	}
+}
+
+type stickerDeliveryBoundaryChannel struct {
+	recordingChannel
+	sendErr   error
+	onSticker func(context.Context) error
+}
+
+func (c *stickerDeliveryBoundaryChannel) SendWithResult(ctx context.Context, msg OutgoingMessage) (map[string]any, error) {
+	if sentStickerPath(msg) != "" {
+		if c.sendErr != nil {
+			return nil, c.sendErr
+		}
+		if c.onSticker != nil {
+			if err := c.onSticker(ctx); err != nil {
+				return nil, err
+			}
+		}
+	}
+	if err := c.recordingChannel.Send(ctx, msg); err != nil {
+		return nil, err
+	}
+	return map[string]any{"message_id": "sent"}, nil
 }
 
 type stickerFailChannel struct {

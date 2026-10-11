@@ -10,6 +10,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -212,7 +213,7 @@ func (t *dianaStickerTool) Run(ctx context.Context, input map[string]any) (strin
 }
 
 // deliver 发出一张选好的表情包：校验缓存文件、占发送名额、发送、记账。到了发送上限时
-// 返回给 Agent 的说明（不是错误），发送失败会退回名额。
+// 返回给 Agent 的说明（不是错误）；确定失败退回名额，已提交但结果未知则保留名额。
 func (t *dianaStickerTool) deliver(ctx context.Context, selected stickerCandidate) (string, error) {
 	if _, err := os.Stat(selected.Path); err != nil {
 		return "", fmt.Errorf("表情包缓存文件不可用: %w", err)
@@ -225,7 +226,9 @@ func (t *dianaStickerTool) deliver(ctx context.Context, selected stickerCandidat
 		return reason, nil
 	}
 	if err := t.runtime.sendOutgoing(ctx, t.event, routeOutgoingToEvent(t.event, stickerOutgoingMessage(t.runtime.currentPlatform(t.event), selected))); err != nil {
-		release()
+		if !errors.Is(err, ErrOutboundOutcomeUnknown) && !errors.Is(err, errOutboundOutcomeUnconfirmed) {
+			release()
+		}
 		return "", fmt.Errorf("发送表情包失败: %w", err)
 	}
 	t.recordSent(ctx, selected)
@@ -255,17 +258,31 @@ func stickerOutgoingMessage(platform string, selected stickerCandidate) Outgoing
 // sendBestMatch 按收尾时模型填的关键词直接配一张：只在有关键词命中时发，随机补位的
 // 候选不发——这时没有模型再看一眼，宁可不发也别配错。发了返回 true。
 func (t *dianaStickerTool) sendBestMatch(ctx context.Context, query string) (bool, error) {
+	candidate, err := t.prepareBestMatch(ctx, query)
+	if err != nil || candidate == nil {
+		return false, err
+	}
+	reason, err := t.deliver(ctx, *candidate)
+	return err == nil && reason == "", err
+}
+
+// prepareBestMatch 只选图和审核，不发送，也不占用发送额度。
+func (t *dianaStickerTool) prepareBestMatch(ctx context.Context, query string) (*stickerCandidate, error) {
 	query = strings.TrimSpace(query)
-	if query == "" || t.sendLimitReason(time.Now()) != "" {
-		return false, nil
+	if ctx.Err() != nil || query == "" || t.sendLimitReason(time.Now()) != "" {
+		return nil, ctx.Err()
 	}
 	candidates, err := t.candidates(ctx, query)
 	if err != nil {
-		return false, err
+		return nil, err
 	}
-	// 命中的前几张依次过人设这一关，第一张合适的发出去；都不合适就不发。
+	// 命中的前几张依次过人设这一关，返回第一张合适的。
+
 	picked, matched := selectStickerCandidates(candidates, stickerPersonaAttempts, time.Now().Unix(), secureRandomIndex)
 	for _, candidate := range picked[:matched] {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		// 还没按当前方式标注过的（多是以前只看了第一帧的 GIF），发之前先当场重看一遍，
 		// 重看后关键词对不上就换下一张：线上就有第一帧像睡觉、整段不是的动图被当成晚安图发出去。
 		if candidate.FromAssets && !candidate.Tagged && t.runtime.stickerTagStore() != nil {
@@ -276,10 +293,12 @@ func (t *dianaStickerTool) sendBestMatch(ctx context.Context, query string) (boo
 		if fit, _ := t.fitsPersona(ctx, candidate); !fit {
 			continue
 		}
-		reason, err := t.deliver(ctx, candidate)
-		return err == nil && reason == "", err
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		return &candidate, nil
 	}
-	return false, nil
+	return nil, ctx.Err()
 }
 
 // annotateNow 当场给一张候选重做表情包标注（动图按多帧分镜看），更新候选并存下标签。

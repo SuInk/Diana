@@ -8,6 +8,7 @@ import (
 	"log"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/SuInk/diana/model/agent"
 )
@@ -55,7 +56,7 @@ func stickerReplyBefore(order StickerReplyOrder, modelBefore bool) bool {
 func stickerReplyOrderPrompt(order StickerReplyOrder) string {
 	switch normalizeStickerReplyOrder(order) {
 	case StickerReplyOrderAuto:
-		return ""
+		return "表情包顺序当前为 auto：有正文时由你根据当下聊天自主选择 sticker_order 的 before 或 after。是否配图和纯图回复仍由你判断。"
 	case StickerReplyOrderAfter:
 		return "表情包顺序已固定为 after：有正文时先发正文再发表情包，优先于自主选择顺序的指导；sticker_order 填 after。是否配图和纯图回复仍由你判断。"
 	default:
@@ -123,6 +124,68 @@ func (f *finalizeSticker) take() (string, bool) {
 	query, before := f.query, f.before
 	f.query, f.before = "", false
 	return query, before
+}
+
+const (
+	stickerBeforeReplyTimeout = 3 * time.Second
+	stickerReplySendReserve   = 5 * time.Second
+)
+
+// 前置配图只短暂等待准备；预留预算是进入投递前的判断，不保证平台投递耗时。
+func (r *Runtime) sendFinalizeStickerBeforeReply(ctx context.Context, event MessageEvent, query string) {
+	if ctx.Err() != nil || strings.TrimSpace(query) == "" {
+		return
+	}
+	deadline := time.Now().Add(stickerBeforeReplyTimeout)
+	if parentDeadline, ok := ctx.Deadline(); ok {
+		latest := parentDeadline.Add(-stickerReplySendReserve)
+		if !latest.After(time.Now()) {
+			return
+		}
+		if latest.Before(deadline) {
+			deadline = latest
+		}
+	}
+	stickerCtx, cancel := context.WithDeadline(ctx, deadline)
+	defer cancel()
+	_, settings, enabled := r.pluginWithSettingsForEvent(stickerPluginID, event)
+	if !enabled {
+		return
+	}
+	tool := newDianaStickerTool(r, event, settings)
+	type preparation struct {
+		candidate *stickerCandidate
+		err       error
+	}
+	ready := make(chan preparation, 1)
+	go func() {
+		defer close(ready)
+		defer recoverGoroutinePanic("sticker.prepareBeforeReply")
+		candidate, err := tool.prepareBestMatch(stickerCtx, query)
+		ready <- preparation{candidate: candidate, err: err}
+	}()
+	select {
+	case <-ctx.Done():
+		return
+	case <-stickerCtx.Done():
+		return
+	case result, ok := <-ready:
+		if !ok || ctx.Err() != nil || stickerCtx.Err() != nil || !time.Now().Before(deadline) {
+			return
+		}
+		if result.err != nil {
+			log.Printf("diana finalize sticker prepare failed: message_id=%s err=%v", event.MessageID, result.err)
+			return
+		}
+		if result.candidate == nil {
+			return
+		}
+		// 只有持有发送门锁的调用方可以发送；超时后 worker 的结果只能丢弃。
+		// 投递沿用父上下文与平台确认语义，准备 deadline 不撤回已经开始的发送。
+		if _, err := tool.deliver(ctx, *result.candidate); err != nil {
+			log.Printf("diana finalize sticker failed: message_id=%s err=%v", event.MessageID, err)
+		}
+	}
 }
 
 // sendFinalizeSticker 按关键词配一张表情包，发送顺序由调用方决定。

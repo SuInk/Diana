@@ -995,7 +995,7 @@
                   :options="stickerReplyOrderOptions"
                   @update:model-value="(value) => { if (form) form.sticker_reply_order = value as 'before' | 'after' | 'auto'; }"
                 />
-                <span class="hint">仅控制自动配图与正文的发送顺序，不改变是否配图。先发表情时，正文会等待选图和审核完成。</span>
+                <span class="hint">仅控制自动配图与最终正文的发送顺序，不改变是否配图；Telegram 流式草稿可能提前显示。先发表情时仅短暂等待选图和审核，准备超时或预算不足会跳过配图，优先发送正文；已开始投递则按平台正常发送及确认流程等待，不保证固定耗时。</span>
               </div>
               <div class="field">
                 <label for="bot-reply-merge-confidence">合并回复置信度阈值（%）</label>
