@@ -1159,6 +1159,9 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 	// 表情包的规则进 head：插件开关按群生效，同一个群里对所有人逐字相同。
 	if agentEnabled && hasTool(dianaStickerToolName) {
 		builder.WriteString("\n" + cfg.prompt(promptToolStickerSpec))
+		if rule := stickerReplyOrderPrompt(cfg.StickerReplyOrder); rule != "" {
+			builder.WriteString("\n" + rule)
+		}
 	}
 	if agentEnabled && hasTool("capabilities") {
 		builder.WriteString("\n" + cfg.prompt(promptToolCapabilitiesSpec))

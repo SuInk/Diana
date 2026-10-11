@@ -4490,7 +4490,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	if draft := r.telegramReplyDraft(event, replyCfg); draft != nil {
 		ctx = withTextDeltaObserver(ctx, draft)
 	}
-	// 模型收尾时填了表情包关键词的话，正文发出后跟一张，见 sticker_finalize.go。
+	// 模型收尾时填了表情包关键词的话，按配置顺序配一张，见 sticker_finalize.go。
 	ctx, finalizeSticker := withFinalizeSticker(ctx)
 	// 本轮调过的工具挂到随后发出的第一条消息上，见 tool_call_memory.go。
 	ctx = withReplyToolTrace(ctx)
@@ -4670,12 +4670,16 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	}
 	var sentMessageIDs []string
 	err = r.withReplySuppressionOutboundGate(sendBaseCtx, event, func(sendCtx context.Context) error {
-		// 表情包和文字谁先发由模型按真人习惯选（sticker_order）：对别人的反应先甩图，给自己这段话收尾后甩图。
+		// 固定配置优先；auto 才沿用模型的 sticker_order（缺省为 after）。
 		stickerAllowed := !controlIntent.RefuseCurrent && !controlIntent.SuppressCurrentUser
 		stickerQuery, stickerFirst := finalizeSticker.take()
+		stickerFirst = stickerReplyBefore(cfg.StickerReplyOrder, stickerFirst)
 		if stickerAllowed && stickerFirst {
 			r.sendFinalizeSticker(sendCtx, event, stickerQuery)
 			stickerQuery = ""
+		}
+		if err := sendCtx.Err(); err != nil {
+			return err
 		}
 		var sendErr error
 		sentMessageIDs, sendErr = r.sendGeneratedReplyWithMessageIDs(sendCtx, event, reply)
