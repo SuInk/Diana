@@ -184,7 +184,15 @@ func (r *telegramOutgoingRenderer) markdown(text string) (string, []telegramEnti
 			buffer.entities = append(buffer.entities, entity)
 		}
 	}
-	return buffer.text, compatibleTelegramEntities(buffer.entities)
+	// Opaque content may invalidate a URL that passed validation before restoration.
+	kept := buffer.entities[:0]
+	for _, entity := range buffer.entities {
+		if entity.Type == "text_link" && normalizedHTTPURL(entity.URL) == "" {
+			continue
+		}
+		kept = append(kept, entity)
+	}
+	return buffer.text, compatibleTelegramEntities(kept)
 }
 
 func (r *telegramOutgoingRenderer) table(rows [][]string) string {

@@ -499,6 +499,43 @@ func TestTelegramOutgoingLinkTargetsRestoreOpaqueText(t *testing.T) {
 	}
 }
 
+func TestTelegramOutgoingLinkTargetsValidateRestoredURL(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		target string
+	}{
+		{"nickname", "[diana-at:10002]"},
+		{"code", "`Alice%ZZ`"},
+		{"multiple", "[diana-at:10002]/`suffix`"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			source := "😀 [主页](https://example.com/" + tc.target + ") [正常](https://example.com/ok) **[diana-at:10002]**"
+			text, entities := renderTelegramOutgoingText(source, map[string]string{"10002": "Alice%ZZ"}, nil)
+			if text != "😀 主页 正常 @Alice%ZZ" {
+				t.Fatalf("text=%q", text)
+			}
+			links := 0
+			for _, entity := range entities {
+				if entity.Type == "text_link" {
+					links++
+					if normalizedHTTPURL(entity.URL) == "" || entity.URL != "https://example.com/ok" || entityAt(t, text, entity) != "正常" {
+						t.Fatalf("invalid restored link: %#v", entity)
+					}
+				}
+			}
+			if links != 1 {
+				t.Fatalf("links=%d entities=%#v", links, entities)
+			}
+			for _, kind := range []string{"bold", "text_mention"} {
+				entity, ok := findEntity(entities, kind)
+				if !ok || entityAt(t, text, entity) != "@Alice%ZZ" {
+					t.Fatalf("lost %s: %#v", kind, entities)
+				}
+			}
+		})
+	}
+}
+
 func TestTelegramOutgoingMentionTables(t *testing.T) {
 	source := "| 用户 | x |\n|---|---|\n| **[diana-at:10002]** | y |\n| [diana-at:10003] | z |\n\n| 常规 | 表 |\n|---|---|\n| 内容 | 好 |"
 	text, entities := renderTelegramOutgoingText(source, map[string]string{"10003": "小😀"}, map[string]string{"10002": "some_long_user"})

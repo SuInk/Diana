@@ -116,6 +116,20 @@ func (d *telegramReplyDraft) ObserveTextDelta(ctx context.Context, text string) 
 	if text == "" || strings.HasPrefix(replySingleMarker, text) || strings.HasPrefix(replyAutoMarker, text) || strings.HasPrefix(replyLinesPreserveMarker, text) || strings.HasPrefix(replyLinesCompactMarker, text) {
 		return
 	}
+	// Draft observers see accumulated provider text before the full response is restored.
+	// Resolve against that provider's mapping before truncation or mention cleanup.
+	if scope := identityPrivacyScopeFromContext(ctx); scope != nil {
+		text = scope.restoreText(text)
+	}
+	if strings.Contains(text, identityAliasPrefix) {
+		return
+	}
+	if start := strings.LastIndex(text, "["); start >= 0 {
+		pending := text[start:]
+		if strings.HasPrefix(dianaMentionMarkerPrefix, pending) || (strings.HasPrefix(pending, dianaMentionMarkerPrefix) && !strings.Contains(pending, "]")) {
+			return
+		}
+	}
 	runes := []rune(text)
 	limit := d.maxRunes
 	if limit <= 0 {

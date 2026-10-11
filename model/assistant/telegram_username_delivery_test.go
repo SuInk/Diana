@@ -9,6 +9,8 @@ import (
 	"testing"
 	"unicode/utf16"
 	"unicode/utf8"
+
+	"github.com/SuInk/diana/model/llm"
 )
 
 func TestTelegramDraftResolvesUsernameOnEveryUpdate(t *testing.T) {
@@ -34,6 +36,89 @@ func TestTelegramDraftResolvesUsernameOnEveryUpdate(t *testing.T) {
 		if calls[i].Params["parse_mode"] != nil {
 			t.Fatalf("unexpected parse_mode: %#v", calls[i].Params)
 		}
+	}
+}
+
+func TestTelegramDraftRestoresIdentityAliasesFromProviderScope(t *testing.T) {
+	for _, username := range []string{"alice_name", ""} {
+		t.Run("username="+username, func(t *testing.T) {
+			api := newFakeTelegramAPI(t, nil)
+			event := MessageEvent{Platform: PlatformTelegram, Kind: EventKindPrivate, UserID: "10002", SenderName: "Alice", SenderUsername: username}
+			r := &Runtime{channel: api.channel()}
+			draft := r.telegramReplyDraft(event, BotConfig{})
+			scope := newIdentityPrivacyScopeWithSalt("telegram-draft-test")
+			alias := scope.register("10002", "user")
+			marker := "[diana-at:" + alias + "]"
+			// Every incomplete marker is observed before the completed mention.
+			events := make([]llm.ChatEvent, 0, len(marker)+2)
+			for _, char := range marker[:len(marker)-1] {
+				events = append(events, textDelta(string(char)))
+			}
+			events = append(events, textDelta("] hello"), llm.ChatEvent{Type: llm.ChatEventDone})
+			provider := &identityPrivacyProvider{scope: scope, provider: &streamingLLMProvider{provider: &stubStreamer{events: events}}}
+			// The caller has no privacy scope: the provider must pass its own complete mapping down.
+			ctx := withTextDeltaObserver(context.Background(), draft)
+			response, err := provider.Generate(ctx, llm.GenerateRequest{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if response.Text != "[diana-at:10002] hello" {
+				t.Fatalf("final response = %q", response.Text)
+			}
+			calls := api.callsOf("sendMessageDraft")
+			want, kind := "@Alice hello", "text_mention"
+			if username != "" {
+				want, kind = "@"+username+" hello", "mention"
+			}
+			if len(calls) != 1 || calls[0].Params["text"] != want {
+				t.Fatalf("draft calls = %#v, want %q", calls, want)
+			}
+			entities, _ := calls[0].Params["entities"].([]any)
+			if len(entities) != 1 || entities[0].(map[string]any)["type"] != kind {
+				t.Fatalf("draft entities = %#v", entities)
+			}
+		})
+	}
+}
+
+func TestTelegramDraftWithholdsUnresolvedIdentityAliases(t *testing.T) {
+	api := newFakeTelegramAPI(t, nil)
+	event := MessageEvent{Platform: PlatformTelegram, Kind: EventKindPrivate, UserID: "10002", SenderUsername: "alice_name"}
+	r := &Runtime{channel: api.channel()}
+	draft := r.telegramReplyDraft(event, BotConfig{})
+	scope := newIdentityPrivacyScopeWithSalt("telegram-draft-test")
+	alias := scope.register("10002", "user")
+	ctx := withIdentityPrivacyScope(context.Background(), scope)
+	for _, text := range []string{
+		"[diana-at:" + alias + "0] hello",
+		"hello im_user_unknown",
+		"hello [diana-at:" + alias[:len(alias)-1],
+	} {
+		draft.ObserveTextDelta(ctx, text)
+		if calls := api.callsOf("sendMessageDraft"); len(calls) != 0 {
+			t.Fatalf("unresolved alias reached draft API: %#v", calls)
+		}
+	}
+	draft.ObserveTextDelta(ctx, "[diana-at:"+alias+"] hello")
+	if calls := api.callsOf("sendMessageDraft"); len(calls) != 1 || calls[0].Params["text"] != "@alice_name hello" {
+		t.Fatalf("resolved update did not recover: %#v", calls)
+	}
+	if draft.disabled {
+		t.Fatal("withheld updates must not disable streaming")
+	}
+}
+
+func TestTelegramDraftRestoresAliasesBeforeRuneBudget(t *testing.T) {
+	api := newFakeTelegramAPI(t, nil)
+	event := MessageEvent{Platform: PlatformTelegram, Kind: EventKindPrivate, UserID: "10002", SenderUsername: "alice_name"}
+	r := &Runtime{channel: api.channel()}
+	scope := newIdentityPrivacyScopeWithSalt("telegram-draft-test")
+	alias := scope.register("10002", "user")
+	wantSource := "[diana-at:10002] hello"
+	draft := r.telegramReplyDraft(event, BotConfig{MaxReplyChars: len([]rune(wantSource))})
+	draft.ObserveTextDelta(withIdentityPrivacyScope(context.Background(), scope), "[diana-at:"+alias+"] hello")
+	if calls := api.callsOf("sendMessageDraft"); len(calls) != 1 || calls[0].Params["text"] != "@alice_name hello" {
+		t.Fatalf("alias was truncated before restoration: %#v", calls)
 	}
 }
 
