@@ -36,6 +36,9 @@ func TestMaiBotStyleLivesInIsolatedReplyerRequest(t *testing.T) {
 		if !strings.Contains(request[0].Content, required) {
 			t.Fatalf("replyer prompt lost %q", required)
 		}
+		if strings.Count(request[0].Content, required) != 1 {
+			t.Fatalf("replyer prompt contains %q more than once", required)
+		}
 	}
 	all := ""
 	for _, message := range request {
@@ -102,6 +105,9 @@ func TestMaiBotStyleConfigRoundTripAndCustomStyle(t *testing.T) {
 	got := ConfigFromPayload(payload, BotConfig{}).WithDefaults()
 	if got.ReplyComposer != "maibot" || got.MaiBotReplyStyle != cfg.MaiBotReplyStyle {
 		t.Fatalf("round trip lost MaiBot config: %#v", got)
+	}
+	if payload.ReplyToneDefault != DefaultReplyTone {
+		t.Fatalf("payload default tone=%q", payload.ReplyToneDefault)
 	}
 	if maiBotStyle(got) != cfg.MaiBotReplyStyle || maiBotStyle(BotConfig{}) != maibotreply.DefaultReplyStyle {
 		t.Fatal("custom or default style was not selected")

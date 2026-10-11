@@ -1339,6 +1339,7 @@ type ConfigPayload struct {
 	SystemPrompt                   string               `json:"system_prompt,omitempty"`
 	ReplyComposer                  string               `json:"reply_composer,omitempty"`
 	MaiBotReplyStyle               string               `json:"maibot_reply_style,omitempty"`
+	ReplyToneDefault               string               `json:"reply_tone_default,omitempty"`
 	ResponseMode                   ResponseMode         `json:"response_mode,omitempty"`
 	ReplyStyle                     ReplyStyle           `json:"reply_style,omitempty"`
 	DebugModeEnabled               *bool                `json:"debug_mode_enabled,omitempty"`
@@ -2678,6 +2679,7 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		SystemPrompt:                      cfg.SystemPrompt,
 		ReplyComposer:                     cfg.ReplyComposer,
 		MaiBotReplyStyle:                  cfg.MaiBotReplyStyle,
+		ReplyToneDefault:                  DefaultReplyTone,
 		ResponseMode:                      cfg.ResponseMode,
 		ReplyStyle:                        cfg.ReplyStyle,
 		DebugModeEnabled:                  copyBoolPointer(cfg.DebugModeEnabled),

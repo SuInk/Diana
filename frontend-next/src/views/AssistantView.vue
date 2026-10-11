@@ -1498,15 +1498,32 @@
                 <span class="hint">Diana 先完成内容判断和工具调用，再根据下面的口吻整理最终说法。它不会改动事实、结论和必要细节，已学到的本群说话风格仍会一起生效。</span>
               </div>
               <div v-if="form.reply_composer === 'maibot'" class="field wide">
-                <label for="bot-reply-style">回复口吻</label>
+                <div class="reply-tone-toolbar">
+                  <label for="bot-reply-style">回复口吻</label>
+                  <div class="reply-tone-actions">
+                    <button class="btn small ghost" type="button" @click="exportReplyTone">
+                      <Download :size="14" aria-hidden="true" />
+                      导出
+                    </button>
+                    <button class="btn small ghost" type="button" @click="replyToneFileInput?.click()">
+                      <Upload :size="14" aria-hidden="true" />
+                      导入
+                    </button>
+                    <button class="btn small ghost" type="button" :disabled="!replyToneCustomized" @click="restoreReplyTone">
+                      <RotateCcw :size="14" aria-hidden="true" />
+                      恢复内置
+                    </button>
+                    <input ref="replyToneFileInput" type="file" accept=".txt,.md,text/plain,text/markdown" hidden @change="importReplyTone" />
+                  </div>
+                </div>
                 <textarea
                   id="bot-reply-style"
-                  v-model="form.maibot_reply_style"
+                  v-model="replyToneDraft"
                   class="textarea"
-                  rows="3"
-                  placeholder="例如：说得简短一点，像群聊里的自然接话；少用句号，不写括号笑声"
+                  rows="8"
+                  spellcheck="false"
                 ></textarea>
-                <span class="hint">直接写你希望它怎么说，不用重复身份和人设。留空时使用简短、随意的默认口吻；技术说明、代码、网址、路径和引用仍保留必要标点。</span>
+                <span class="hint">{{ replyToneCustomized ? "这台机器人使用修改后的口吻，保存配置后生效。" : "当前显示完整内置口吻；直接修改，或导入一份 .txt / .md 文件。" }}</span>
               </div>
             </div>
           </section>
@@ -2385,6 +2402,7 @@ import {
 import { toastError, toastSuccess } from "../toast";
 import { allowNodeExecution } from "../node-execution-preset";
 import { channelAccountUnhealthy, channelOperational, channelStatusHint, channelStatusLabel } from "../channel-status";
+import { effectiveReplyTone, FALLBACK_REPLY_TONE, normalizeReplyTone, replyToneOverride } from "../reply-tone";
 
 const form = ref<BotProfileConfig | null>(null);
 
@@ -2393,6 +2411,10 @@ const personaComposerOpen = ref(false);
 const personaDraft = ref("");
 const personaDraftInput = ref<HTMLTextAreaElement | null>(null);
 const personaBusy = ref(false);
+const replyToneDraft = ref("");
+const replyToneDefault = ref(FALLBACK_REPLY_TONE);
+const replyToneFileInput = ref<HTMLInputElement | null>(null);
+const replyToneCustomized = computed(() => replyToneOverride(replyToneDraft.value, replyToneDefault.value) !== "");
 // 保留生成前的那一版，生成结果不合适可以一键退回，不用自己 Ctrl+Z。
 const soulEditor = ref<InstanceType<typeof SoulEditor> | null>(null);
 const promptOverridesOpen = ref(false);
@@ -4481,6 +4503,8 @@ function setRoleModel(role: RoleKey, value: string): void {
 }
 
 function setForm(config: BotProfileConfig): void {
+  replyToneDefault.value = normalizeReplyTone(config.reply_tone_default) || FALLBACK_REPLY_TONE;
+  replyToneDraft.value = effectiveReplyTone(config.maibot_reply_style, replyToneDefault.value);
   form.value = {
     ...config,
     participation: participationFromConfig(config),
@@ -4593,6 +4617,39 @@ function splitList(raw: string): string[] {
     .split(/[,，]/)
     .map((item) => item.trim())
     .filter((item) => item !== "");
+}
+
+function exportReplyTone(): void {
+  const text = normalizeReplyTone(replyToneDraft.value) || replyToneDefault.value;
+  const url = URL.createObjectURL(new Blob([`${text}\n`], { type: "text/plain;charset=utf-8" }));
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `diana-reply-tone-${new Date().toISOString().slice(0, 10)}.txt`;
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
+async function importReplyTone(event: Event): Promise<void> {
+  const input = event.target as HTMLInputElement;
+  const file = input.files?.[0];
+  input.value = "";
+  if (!file) return;
+  try {
+    const text = normalizeReplyTone(await file.text());
+    if (!text) {
+      toastError("导入文件里没有回复口吻");
+      return;
+    }
+    replyToneDraft.value = text;
+    toastSuccess(`已导入「${file.name}」，保存配置后生效`);
+  } catch (error) {
+    toastError(error instanceof Error ? error.message : "导入失败");
+  }
+}
+
+function restoreReplyTone(): void {
+  replyToneDraft.value = replyToneDefault.value;
+  toastSuccess("已恢复内置口吻，保存配置后生效");
 }
 
 // 人设变量取配置里的机器人名称，不取触发别名。
@@ -4767,6 +4824,9 @@ async function save(): Promise<void> {
     }
     const payload: BotProfileConfig = {
       ...current,
+      maibot_reply_style: replyToneOverride(replyToneDraft.value, replyToneDefault.value),
+      // 只读默认值由后端回传，不写进机器人自己的配置。
+      reply_tone_default: undefined,
       // 截图权限在交互式浏览器页管理，编辑其他配置时不能覆盖那里新保存的授权。
       agent_browser_screenshot_access: creating.value ? current.agent_browser_screenshot_access : undefined,
       agent_browser_operation_access: creating.value ? current.agent_browser_operation_access : undefined,

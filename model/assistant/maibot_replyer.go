@@ -79,8 +79,12 @@ func (r *Runtime) maiBotReplyerMessages(cfg BotConfig, event MessageEvent, sourc
 		Reference:         reference,
 		TemporaryStyle:    r.groupStylePrompt(event, cfg),
 	})
-	composed[0].Content = joinPromptSections(composed[0].Content, maiBotCleanVocabulary, maiBotNoParentheticalLaugh, maiBotTrailingPeriodPreference)
-
+	// Keep the unchanged default in its original prompt positions so merely
+	// exposing it in WebUI does not alter reply behavior. Once the owner edits
+	// the complete tone, that custom text replaces all four built-in lines.
+	if strings.TrimSpace(cfg.MaiBotReplyStyle) == "" {
+		composed[0].Content = joinPromptSections(composed[0].Content, maiBotCleanVocabulary, maiBotNoParentheticalLaugh, maiBotTrailingPeriodPreference)
+	}
 	out := make([]llm.Message, 0, len(composed))
 	for index, message := range composed {
 		if index > 0 && index <= len(history) {

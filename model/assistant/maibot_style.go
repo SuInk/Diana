@@ -19,6 +19,11 @@ const maiBotReferenceBoundary = `【回复信息参考】是 Diana 已完成内�
 
 const maiBotReplyerOutput = `请注意不要输出多余内容(包括不必要的前后缀，冒号，括号，表情包，@等 )，只输出发言内容就好。`
 
+// DefaultReplyTone is the complete built-in wording style shown in WebUI.
+// Keeping every editable style rule in one value makes the editor truthful:
+// exporting this text and importing it again produces the same prompt.
+const DefaultReplyTone = maibotreply.DefaultReplyStyle + "\n" + maiBotCleanVocabulary + "\n" + maiBotNoParentheticalLaugh + "\n" + maiBotTrailingPeriodPreference
+
 func maiBotStyle(cfg BotConfig) string {
 	if style := strings.TrimSpace(cfg.MaiBotReplyStyle); style != "" {
 		return style

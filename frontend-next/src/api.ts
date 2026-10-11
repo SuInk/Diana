@@ -272,6 +272,8 @@ export interface BotProfileConfig extends SendRetrySettings {
   reply_composer?: "maibot";
   /** 可选回复口吻；留空使用内置默认。 */
   maibot_reply_style?: string;
+  /** 后端当前实际使用的内置回复口吻，只读，供编辑器展示和恢复。 */
+  reply_tone_default?: string;
   response_mode?: "quiet" | "assistant" | "standard" | "active" | "super_active" | "custom";
   /** 记录完整模型上下文、工具参数和调用结果；默认关闭。 */
   debug_mode_enabled?: boolean;
