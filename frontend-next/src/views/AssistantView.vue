@@ -1479,6 +1479,38 @@
             @world-book="nodes => { worldBookNodes = nodes; }"
           />
 
+          <section class="card">
+            <div class="card-header">
+              <div>
+                <h2>回复口吻</h2>
+                <span class="card-sub">内容、工具和语气在同一次回复里完成</span>
+              </div>
+              <span class="badge" :class="form.reply_composer === 'maibot' ? 'accent' : ''">{{ form.reply_composer === "maibot" ? "MaiBot" : "跟随 SOUL.md" }}</span>
+            </div>
+            <div class="card-body form-grid">
+              <div class="field wide">
+                <AppSwitch
+                  :model-value="form.reply_composer === 'maibot'"
+                  @update:model-value="value => { if (form) form.reply_composer = value ? 'maibot' : undefined; }"
+                >
+                  使用 MaiBot 回复风格
+                </AppSwitch>
+                <span class="hint">SOUL.md、工具结果和 MaiBot 表达风格会在同一次回复生成中生效；不会启用 MaiBot 规划器，也不会追加改写调用。已学到的本群说话风格仍会一起生效。</span>
+              </div>
+              <div v-if="form.reply_composer === 'maibot'" class="field wide">
+                <label for="bot-maibot-reply-style">表达偏好</label>
+                <textarea
+                  id="bot-maibot-reply-style"
+                  v-model="form.maibot_reply_style"
+                  class="textarea"
+                  rows="3"
+                  placeholder="留空使用 MaiBot 默认的简短、随意表达"
+                ></textarea>
+                <span class="hint">只写“怎么说”，不在这里重复身份和人设。默认让日常短回复不以句号收尾；技术说明、代码、网址、路径和引用仍保留必要标点。</span>
+              </div>
+            </div>
+          </section>
+
           <!-- 自述只在这里开关；写下的条目在「小窝 → 自述」里看和删。 -->
           <section class="card">
             <div class="card-header">

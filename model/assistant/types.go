@@ -694,9 +694,11 @@ type BotConfig struct {
 	WelcomeLLMCooldownSeconds int              `json:"welcome_llm_cooldown_seconds,omitempty"`
 	// SystemPrompt 是这台机器人的 SOUL.md：她是谁、在乎什么、怎么说话。展开 {{name}} 后
 	// 放在系统提示词最前面。JSON 键名沿用 system_prompt，存量配置不用迁移。
-	SystemPrompt string       `json:"system_prompt,omitempty"`
-	ResponseMode ResponseMode `json:"response_mode,omitempty"`
-	ReplyStyle   ReplyStyle   `json:"reply_style,omitempty"`
+	SystemPrompt     string       `json:"system_prompt,omitempty"`
+	ReplyComposer    string       `json:"reply_composer,omitempty"`
+	MaiBotReplyStyle string       `json:"maibot_reply_style,omitempty"`
+	ResponseMode     ResponseMode `json:"response_mode,omitempty"`
+	ReplyStyle       ReplyStyle   `json:"reply_style,omitempty"`
 	// 下面几项是 SOUL.md 之前的人设字段，只在读旧配置时出现：WithDefaults 把它们
 	// 并进 SystemPrompt 后清空，见 persona_legacy.go。
 	Soul                     *PersonaSoul `json:"soul,omitempty"`
@@ -1335,6 +1337,8 @@ type ConfigPayload struct {
 	WelcomeTemplates               []string             `json:"welcome_templates,omitempty"`
 	WelcomeLLMCooldownSeconds      int                  `json:"welcome_llm_cooldown_seconds,omitempty"`
 	SystemPrompt                   string               `json:"system_prompt,omitempty"`
+	ReplyComposer                  string               `json:"reply_composer,omitempty"`
+	MaiBotReplyStyle               string               `json:"maibot_reply_style,omitempty"`
 	ResponseMode                   ResponseMode         `json:"response_mode,omitempty"`
 	ReplyStyle                     ReplyStyle           `json:"reply_style,omitempty"`
 	DebugModeEnabled               *bool                `json:"debug_mode_enabled,omitempty"`
@@ -2161,6 +2165,10 @@ func (cfg BotConfig) WithDefaults() BotConfig {
 	} else {
 		cfg.SystemPrompt = strings.TrimSpace(cfg.SystemPrompt)
 	}
+	if cfg.ReplyComposer != "maibot" {
+		cfg.ReplyComposer = ""
+	}
+	cfg.MaiBotReplyStyle = strings.TrimSpace(cfg.MaiBotReplyStyle)
 	if hasResponseMode {
 		cfg.ResponseMode = cfg.ResponseMode.Normalized()
 	} else {
@@ -2668,6 +2676,8 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		WelcomeTemplates:                  append([]string(nil), cfg.WelcomeTemplates...),
 		WelcomeLLMCooldownSeconds:         cfg.WelcomeLLMCooldownSeconds,
 		SystemPrompt:                      cfg.SystemPrompt,
+		ReplyComposer:                     cfg.ReplyComposer,
+		MaiBotReplyStyle:                  cfg.MaiBotReplyStyle,
 		ResponseMode:                      cfg.ResponseMode,
 		ReplyStyle:                        cfg.ReplyStyle,
 		DebugModeEnabled:                  copyBoolPointer(cfg.DebugModeEnabled),
@@ -2912,6 +2922,8 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		WelcomeTemplates:                append([]string(nil), payload.WelcomeTemplates...),
 		WelcomeLLMCooldownSeconds:       payload.WelcomeLLMCooldownSeconds,
 		SystemPrompt:                    payload.SystemPrompt,
+		ReplyComposer:                   payload.ReplyComposer,
+		MaiBotReplyStyle:                payload.MaiBotReplyStyle,
 		ResponseMode:                    payload.ResponseMode,
 		ReplyStyle:                      payload.ReplyStyle,
 		DebugModeEnabled:                copyBoolPointer(payload.DebugModeEnabled),

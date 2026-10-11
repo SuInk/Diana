@@ -268,6 +268,10 @@ export interface BotProfileConfig extends SendRetrySettings {
   welcome_llm_cooldown_seconds?: number;
   /** 这台机器人的 SOUL.md：她是谁、在乎什么、怎么说话。整份原样放在系统提示词最前面。 */
   system_prompt?: string;
+  /** 在原有内容与工具生成中使用 MaiBot 表达风格，不增加二次改写。 */
+  reply_composer?: "maibot";
+  /** MaiBot 的可选表达偏好；留空使用内置默认。 */
+  maibot_reply_style?: string;
   response_mode?: "quiet" | "assistant" | "standard" | "active" | "super_active" | "custom";
   /** 记录完整模型上下文、工具参数和调用结果；默认关闭。 */
   debug_mode_enabled?: boolean;

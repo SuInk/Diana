@@ -1036,7 +1036,9 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 	appendPromptSection(&builder, replyLineBreakPrompt(cfg))
 	// 实时时钟不再拼进人设提示词：它每秒都不同，会让这段最长的 system 提示词永远
 	// 无法命中供应商的前缀缓存。改由 runtimeClockPrompt 作为尾部独立 system 消息注入。
-	if boolValue(cfg.PromptChineseSlangHint, true) {
+	if cfg.ReplyComposer == "maibot" {
+		appendPromptSection(&builder, maiBotStylePrompt(event, cfg))
+	} else if boolValue(cfg.PromptChineseSlangHint, true) {
 		appendPromptSection(&builder, cfg.prompt(promptChineseSlangSpec))
 	}
 	// 群聊场景说明（被点名 / 主动接话）逐轮切换，在下面的 tail 里注入；head 只留
@@ -1268,6 +1270,9 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 	// 语气锚点必须留在最后：前面的工具规则、权限说明和拒答流程都是公文体，离生成
 	// 最近的一段最容易被模仿，这里重新把语域拉回配置的表达风格。
 	appendPromptSection(&tail, personaClosingAnchor(cfg))
+	if cfg.ReplyComposer == "maibot" {
+		appendPromptSection(&tail, maiBotStyleClosingAnchor(cfg))
+	}
 	return builder.String(), strings.TrimSpace(tail.String())
 }
 
