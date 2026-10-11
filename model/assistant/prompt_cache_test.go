@@ -118,6 +118,36 @@ func TestPromptCacheProbeIgnoresExpectedTailChurn(t *testing.T) {
 	}
 }
 
+func TestReplyPresentationChangesOnlyPromptTail(t *testing.T) {
+	cfg := BotConfig{}.WithDefaults()
+	r := NewRuntime(cfg, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	event := MessageEvent{Kind: EventKindGroup, GroupID: "group-a", UserID: "alice", RawMessage: "test"}
+	policy := RelationshipPolicyFor(UserMemoryProfile{}, "owner", "alice")
+	var previous promptCachePayloadObservation
+	for index, mode := range []replyDeliveryMode{replyDeliveryAuto, replyDeliverySingle} {
+		event.replyDeliveryMode = mode
+		head, tail := r.systemPromptPartsWithRelationshipAndAgentTools(event, nil, false, policy, true, nil)
+		presentation := replyPresentationPrompt(!chatSplitLimitsForEvent(cfg, event).SingleMessage, cfg)
+		if presentation == "" || !strings.Contains(tail, presentation) || strings.Contains(head, presentation) {
+			t.Fatalf("mode %s presentation must appear only in tail", mode)
+		}
+		request := llm.GenerateRequest{Messages: []llm.Message{
+			{Role: llm.RoleSystem, Content: head},
+			{Role: llm.RoleUser, Content: "stable history", CacheBreakpoint: true},
+			{Role: llm.RoleSystem, Content: tail},
+			{Role: llm.RoleUser, Content: "current input"},
+		}}
+		current := observePromptCachePayload(request)
+		if index > 0 {
+			divergence := comparePromptCachePayload(previous, current)
+			if divergence.Clean() || !divergence.Expected(previous) {
+				t.Fatalf("delivery change must differ only after history: %#v", divergence)
+			}
+		}
+		previous = current
+	}
+}
+
 func TestAgentVideoHistoryLineCarriesCachedFrameDescriptions(t *testing.T) {
 	event := MessageEvent{
 		Time:       1000,
