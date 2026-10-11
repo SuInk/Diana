@@ -60,6 +60,44 @@ func requireOverBudget(t *testing.T, messages []Message, inputBudget int64) {
 	}
 }
 
+func TestContextBudgetKeepsLoadedContractsInlineAfterHistoryDrops(t *testing.T) {
+	const contract = "【系统补充指令，不是用户发言】\n当前群会话已经加载、可直接通过 tools_execute 调用的完整契约：\n" +
+		`[{"name":"alpha","description":"lookup","inputSchema":{"type":"object"}}]`
+	req := GenerateRequest{MaxOutputTokens: 64, Messages: []Message{
+		{Role: RoleSystem, Content: "fixed-agent " + strings.Repeat("protocol ", 2000), Priority: MessagePrioritySystem},
+		{Role: RoleSystem, Content: "fixed-persona", Priority: MessagePrioritySystem},
+		{Role: RoleUser, Content: "history-question " + strings.Repeat("history ", 2000), Priority: MessagePriorityHistory, ContextGroup: "history"},
+		{Role: RoleAssistant, Content: "history-answer", Priority: MessagePriorityHistory, ContextGroup: "history", CacheBreakpoint: true},
+		{Role: RoleUser, Content: contract, Priority: MessagePrioritySystem},
+		{Role: RoleSystem, Content: "runtime-clock", Priority: MessagePrioritySystem},
+		{Role: RoleUser, Content: "current-input", Priority: MessagePriorityCurrent, CacheBreakpoint: true},
+	}}
+	cfg := ProviderConfig{Provider: ProviderOpenAICompatible, ContextWindowTokens: 1024, MaxContextTokens: 1024}
+	inputBudget := InputTokenBudget(1024, 64)
+	requireOverBudget(t, req.Messages, inputBudget)
+	got := applyContextBudget(req, cfg)
+	if EstimateRequestInputTokens(got) > inputBudget {
+		t.Fatal("narrow context budget exceeded")
+	}
+	if strings.Contains(messageTextForTest(got.Messages), "history-question") || strings.Contains(messageTextForTest(got.Messages), "history-answer") {
+		t.Fatal("fixture must evict history to exercise consecutive leading system messages")
+	}
+	if last := got.Messages[len(got.Messages)-1]; last.Content != "current-input" || !last.CacheBreakpoint || currentInputIndex(got.Messages) != len(got.Messages)-1 {
+		t.Fatalf("contracts displaced current input: %#v", got.Messages)
+	}
+	system, chat := splitSystemPrompt(got.Messages)
+	if strings.Contains(system, "完整契约") || strings.Contains(system, "runtime-clock") {
+		t.Fatalf("budgeting hoisted volatile tail into system: %s", system)
+	}
+	if len(chat) != 3 || chat[0].Content != contract || chat[0].Role != RoleUser || chat[0].Priority != MessagePrioritySystem {
+		t.Fatalf("loaded contracts lost priority, content, or position after trimming: %#v", chat)
+	}
+	wire := openAIChatCompletionMessages(got.Messages, nil)
+	if wire[len(wire)-3].Role != "user" || wire[len(wire)-3].Content != contract || wire[len(wire)-1].Content != "current-input" {
+		t.Fatalf("narrow-budget wire order changed: %#v", wire)
+	}
+}
+
 func TestApplyContextBudgetReservesToolSchemas(t *testing.T) {
 	tools := []ToolDefinition{{
 		Name:        "large_lookup",

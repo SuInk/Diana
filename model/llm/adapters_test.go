@@ -1604,6 +1604,86 @@ func TestTrailingSystemMessagesStayInPlace(t *testing.T) {
 	}
 }
 
+func TestLoadedContractsStayAfterStablePrefixOnWire(t *testing.T) {
+	for _, shape := range []string{"history", "no_history", "current_only"} {
+		t.Run(shape, func(t *testing.T) {
+			messages := []Message{{Role: RoleSystem, Content: "fixed-agent", Priority: MessagePrioritySystem}}
+			wantSystem := "fixed-agent"
+			if shape != "current_only" {
+				messages = append(messages, Message{Role: RoleSystem, Content: "fixed-persona", Priority: MessagePrioritySystem})
+				wantSystem += "\n\nfixed-persona"
+			}
+			if shape == "history" {
+				messages = append(messages,
+					Message{Role: RoleUser, Content: "history-question"},
+					Message{Role: RoleAssistant, Content: "history-answer", CacheBreakpoint: true})
+			}
+			messages = append(messages,
+				Message{Role: RoleUser, Content: inlineSystemPromptPrefix + "loaded-contract-alpha", Priority: MessagePrioritySystem},
+				Message{Role: RoleSystem, Content: "runtime-clock", Priority: MessagePrioritySystem},
+				Message{Role: RoleUser, Content: "current-input", Priority: MessagePriorityCurrent, CacheBreakpoint: true})
+			original, _ := json.Marshal(messages)
+			system, chat := splitSystemPrompt(messages)
+			if system != wantSystem {
+				t.Fatalf("contracts were hoisted into system: %q", system)
+			}
+			for name, convert := range map[string]func([]Message) any{
+				"anthropic":        func(input []Message) any { _, chat := splitSystemPrompt(input); return anthropicMessages(chat, nil) },
+				"gemini":           func(input []Message) any { _, chat := splitSystemPrompt(input); return geminiContents(chat, nil) },
+				"responses":        func(input []Message) any { _, chat := splitSystemPrompt(input); return openAIResponsesInput(chat, nil) },
+				"chat_completions": func(input []Message) any { return openAIChatCompletionMessages(input, nil) },
+			} {
+				t.Run(name, func(t *testing.T) {
+					wire, err := json.Marshal(convert(messages))
+					if err != nil {
+						t.Fatal(err)
+					}
+					wantOrder := []string{"loaded-contract-alpha", "runtime-clock", "current-input"}
+					if shape == "history" {
+						wantOrder = append([]string{"history-question", "history-answer"}, wantOrder...)
+					}
+					previous := -1
+					for _, marker := range wantOrder {
+						index := strings.Index(string(wire), marker)
+						if index <= previous {
+							t.Fatalf("wire order lost at %q: %s", marker, wire)
+						}
+						previous = index
+					}
+					if strings.Count(string(wire), strings.TrimSpace(inlineSystemPromptPrefix)) != 2 {
+						t.Fatalf("contract/clock inline markers missing or duplicated: %s", wire)
+					}
+					changed := append([]Message(nil), messages...)
+					changed[len(changed)-3].Content = inlineSystemPromptPrefix + "loaded-contract-beta"
+					next, err := json.Marshal(convert(changed))
+					if err != nil {
+						t.Fatal(err)
+					}
+					beforeTail := strings.Index(string(wire), "loaded-contract-alpha")
+					afterTail := strings.Index(string(next), "loaded-contract-beta")
+					if beforeTail < 0 || afterTail < 0 || string(wire[:beforeTail]) != string(next[:afterTail]) {
+						t.Fatal("changing contracts invalidated stable wire prefix")
+					}
+				})
+			}
+			converted := anthropicMessages(chat, nil)
+			if shape == "history" {
+				if control := converted[1].Content[0].GetCacheControl(); control == nil || control.Type != "ephemeral" {
+					t.Fatal("stable history cache breakpoint lost on wire")
+				}
+			}
+			tail := converted[len(converted)-3]
+			control := tail.Content[0].GetCacheControl()
+			if tail.Role != anthropic.MessageParamRoleUser || (control != nil && control.Type == "ephemeral") {
+				t.Fatalf("contract must be an uncached user tail: %#v", tail)
+			}
+			if after, _ := json.Marshal(messages); string(after) != string(original) {
+				t.Fatal("adapters mutated caller messages")
+			}
+		})
+	}
+}
+
 func TestStrictToolSchemaRewritesOptionalArguments(t *testing.T) {
 	plain := map[string]any{
 		"type": "object",

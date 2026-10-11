@@ -4118,7 +4118,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	}
 	// 请求按「稳定前缀在前、逐条消息变化的内容在后」排列：
 	//
-	//   system 头部 → 较早摘要 → 历史 → [缓存断点] → 逐消息上下文 → 同轮补充
+	//   system 头部 → 历史 → [缓存断点] → 逐消息上下文（含最新摘要）→ 同轮补充
 	//   → system 尾部（发言者）→ 时钟 → 装饰 → 当前消息
 	//
 	// 记忆检索、笔记本命中、指代解析、插件事实这些块每条消息都不一样，以前排在
@@ -4152,9 +4152,6 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		// 便签填上：被裁掉的历史不该只剩离散事实点，叙事线索也要有人接。两者互斥，
 		// 没有存储层的部署仍然走旧的流水摘要。
 		sessionThread = contextPreload.sessionThread
-		if sessionThread != "" {
-			olderSummary = ""
-		}
 		if memoryContext := contextPreload.memoryContext; memoryContext != "" {
 			volatile = append(volatile, llm.Message{
 				Role:     llm.RoleUser,
@@ -4274,28 +4271,16 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 				AtomicText: true,
 			})
 		}
-		var stableCheckpoint []llm.Message
-		if summary := rawMessageWithoutImagePlaceholders(olderSummary); summary != "" {
-			const summaryPrefix = "【较早上下文压缩摘要，仅用于理解背景，不要直接回复摘要】\n"
-			summaryBudget := contextShareBudget(r.promptContextWindowTokens(event, cfg), compressedSummaryTokenShare) - llm.EstimateTextTokens(summaryPrefix)
-			summary, summaryRecompressed = r.fitOlderSummaryToBudget(summary, summaryBudget)
-			if promptSession := r.groupPromptSession(event); promptSession != nil {
-				summary = promptSession.rememberCheckpoint(summary)
-			}
-			if summary != "" {
-				stableCheckpoint = append(stableCheckpoint, llm.Message{
-					Role:    llm.RoleUser,
-					Content: summaryPrefix + summary,
-					// 摘要已经压到目标配额，请求预算层不要再从中间截断它。
-					Priority:   llm.MessagePrioritySummary,
-					AtomicText: true,
-				})
-			}
-		} else if promptSession := r.groupPromptSession(event); promptSession != nil {
-			const summaryPrefix = "【较早上下文压缩摘要，仅用于理解背景，不要直接回复摘要】\n"
-			if summary := promptSession.rememberCheckpoint(""); summary != "" {
-				stableCheckpoint = append(stableCheckpoint, llm.Message{Role: llm.RoleUser, Content: summaryPrefix + summary, Priority: llm.MessagePrioritySummary, AtomicText: true})
-			}
+		const summaryPrefix = "【较早上下文压缩摘要，仅用于理解背景，不要直接回复摘要】\n"
+		summaryBudget := contextShareBudget(r.promptContextWindowTokens(event, cfg), compressedSummaryTokenShare) - llm.EstimateTextTokens(summaryPrefix)
+		olderSummary, summaryRecompressed = r.promptContextSummary(event, sessionThread, summaryBudget)
+		if olderSummary != "" {
+			volatile = append(volatile, llm.Message{
+				Role:       llm.RoleUser,
+				Content:    summaryPrefix + olderSummary,
+				Priority:   llm.MessagePrioritySummary,
+				AtomicText: true,
+			})
 		}
 		turnCandidates := r.replyTurnCandidates(ctx)
 		turnMessageIDs := make(map[string]bool, len(turnCandidates))
@@ -4312,7 +4297,6 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			r.supersedeDependencyImageTurns(ctx, event, images)
 		}
 		stableHistory, crossGroupTail := r.stableGroupHistory(ctx, event, cfg, replyHistory, directAgentDecision, turnMessageIDs)
-		messages = append(messages, stableCheckpoint...)
 		messages = append(messages, stableHistory...)
 		volatile = append(volatile, crossGroupTail...)
 		// 历史到此结束：这是本轮请求里最后一段逐轮稳定的内容，缓存断点打在这里。
@@ -4787,6 +4771,12 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 	if _, initialized := identityPrivacyStateFromContext(ctx); !initialized {
 		ctx = r.withIdentityPrivacyContext(ctx, event, r.contextHistory(event))
 	}
+	// MaiBot mode keeps Diana's content/tool pass private, then exposes only the
+	// final replyer output to streaming drafts.
+	replyerCtx := ctx
+	if cfg.ReplyComposer == "maibot" {
+		ctx = context.WithValue(ctx, textDeltaObserverKey{}, struct{}{})
+	}
 	if cfg.AgentEnabled && relationship.allowsAgentTools() {
 		// A tool can add images after the first planning turn. Route every Agent
 		// model call from its actual message content so that a text-only planner can
@@ -4894,7 +4884,10 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 			text = resp.SilentContent
 		}
 		text = r.applyFinalizeRender(ctx, event, text, resp.FinalizeFields[renderFinalizeFieldName])
-		return r.prepareGeneratedReply(ctx, cfg, text, event)
+		if cfg.ReplyComposer == "maibot" {
+			text = r.composeMaiBotReply(replyerCtx, cfg, event, messages, text)
+		}
+		return r.prepareGeneratedReply(replyerCtx, cfg, text, event)
 	}
 	if mode := imageTextModeFromContext(ctx); mode != nil {
 		messages = mode.replaceImageParts(ctx, messages)
@@ -4916,7 +4909,10 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 	if err != nil {
 		return "", err
 	}
-	return r.prepareGeneratedReply(ctx, cfg, raw, event)
+	if cfg.ReplyComposer == "maibot" {
+		raw = r.composeMaiBotReply(replyerCtx, cfg, event, messages, raw)
+	}
+	return r.prepareGeneratedReply(replyerCtx, cfg, raw, event)
 }
 
 type runtimeAgentLLMProvider struct {

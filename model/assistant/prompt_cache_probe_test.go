@@ -146,6 +146,33 @@ func TestPromptCacheProbeKeysByPurposeAndToolSet(t *testing.T) {
 	}
 }
 
+func TestPromptCacheProbeKeysByBotScope(t *testing.T) {
+	event := MessageEvent{Kind: EventKindGroup, Platform: PlatformOneBotV11, ProfileID: "profile-a", SelfID: "bot-a", ContextNamespace: "scope-a", GroupID: "group-a", UserID: "alice"}
+	key := promptCacheProbeKey(event, "reply", "tools")
+	for _, tc := range []struct {
+		name string
+		edit func(*MessageEvent)
+	}{
+		{"platform", func(e *MessageEvent) { e.Platform = "telegram" }},
+		{"profile", func(e *MessageEvent) { e.ProfileID = "profile-b" }},
+		{"self", func(e *MessageEvent) { e.SelfID = "bot-b" }},
+		{"namespace", func(e *MessageEvent) { e.ContextNamespace = "scope-b" }},
+		{"group", func(e *MessageEvent) { e.GroupID = "group-b" }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			other := event
+			tc.edit(&other)
+			if key == promptCacheProbeKey(other, "reply", "tools") {
+				t.Fatal("different scopes share a probe baseline")
+			}
+		})
+	}
+	event.UserID = "bob"
+	if key != promptCacheProbeKey(event, "reply", "tools") {
+		t.Fatal("sender switch must reuse the group probe baseline")
+	}
+}
+
 // 群数量没有上限，跟踪表必须有天花板，否则常驻内存会一直涨。
 func TestPromptCacheProbeStoreIsBounded(t *testing.T) {
 	store := &promptCacheProbeStore{}
