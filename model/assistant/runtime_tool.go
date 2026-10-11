@@ -48,19 +48,13 @@ func (r *Runtime) pluginOverridesForEvent(event MessageEvent) map[string]bool {
 		return allPluginsDisabled(r.plugins)
 	}
 	out := r.plugins.ProfileOverrides(profileID)
-	if assignment := r.ProfileConfig(profileID).WebSearch; assignment != nil {
-		if out == nil {
-			out = map[string]bool{}
-		}
-		out[webSearchPluginID] = !assignment.Disabled
-	}
 	groupCfg, ok := r.groupConfigForEvent(event)
 	if !ok || len(groupCfg.PluginOverrides) == 0 {
 		return out
 	}
 	for id, enabled := range groupCfg.PluginOverrides {
 		id = strings.TrimSpace(id)
-		// 联网搜索只按机器人配置，群里存过的旧开关不再生效。
+		// 联网搜索只按全局配置，群里存过的旧开关不再生效。
 		if id == "" || id == webSearchPluginID {
 			continue
 		}
@@ -86,7 +80,7 @@ func (r *Runtime) pluginWithSettingsForEvent(id string, event MessageEvent) (Plu
 	)
 }
 
-// webSearchPluginSettings 读取本次事件生效的联网搜索插件设置，支持按群覆盖。
+// webSearchPluginSettings 读取全局联网搜索设置。
 func (r *Runtime) webSearchPluginSettings(event MessageEvent) (SettingValues, bool) {
 	_, settings, enabled := r.pluginWithSettingsForEvent(webSearchPluginID, event)
 	return settings, enabled
@@ -95,9 +89,6 @@ func (r *Runtime) webSearchPluginSettings(event MessageEvent) (SettingValues, bo
 func (r *Runtime) pluginSettingOverridesForEvent(event MessageEvent) PluginSettingOverrides {
 	profileID := r.eventProfileID(event)
 	out := PluginSettingOverrides{pluginSettingsProfileKey: map[string]any{"profile_id": profileID}}
-	if assignment := r.ProfileConfig(profileID).WebSearch; assignment != nil {
-		out[webSearchPluginID] = assignment.settings()
-	}
 	groupCfg, ok := r.groupConfigForEvent(event)
 	if !ok || len(groupCfg.PluginSettingOverrides) == 0 {
 		return out

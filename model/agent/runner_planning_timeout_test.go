@@ -5,6 +5,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -26,6 +27,9 @@ func (c *planningTimeoutClient) Generate(ctx context.Context, req llm.GenerateRe
 		case "client-timeout":
 			// 模型客户端自己的首包超时：包着 DeadlineExceeded，但规划期限还远没到。
 			return nil, fmt.Errorf("等待模型响应头超时: %w", context.DeadlineExceeded)
+		case "committed-planning-expired":
+			<-ctx.Done()
+			return nil, errors.Join(llm.ErrOutputCommitted, ctx.Err())
 		case "planning-expired":
 			<-ctx.Done()
 			return nil, ctx.Err()
@@ -53,6 +57,20 @@ func TestRunnerClientTimeoutIsNotReportedAsPlanningBudget(t *testing.T) {
 				t.Fatalf("model was told the planning budget ran out: %q", msg.Content)
 			}
 		}
+	}
+}
+
+func TestRunnerCommittedPlanningDeadlineDoesNotGenerateAgain(t *testing.T) {
+	client := &planningTimeoutClient{mode: "committed-planning-expired"}
+	runner, err := NewRunner(client, Config{WorkDir: t.TempDir(), MaxSteps: 3}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+	defer cancel()
+	_, err = runner.Run(ctx, Request{Messages: []llm.Message{{Role: llm.RoleUser, Content: "查一下"}}})
+	if !errors.Is(err, llm.ErrOutputCommitted) || !errors.Is(err, context.DeadlineExceeded) || len(client.requests) != 1 {
+		t.Fatalf("requests=%d err=%v", len(client.requests), err)
 	}
 }
 

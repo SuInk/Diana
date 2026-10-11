@@ -6,10 +6,33 @@ package assistant
 import (
 	"context"
 	"encoding/json"
+	"sort"
 	"strings"
 
 	"github.com/SuInk/diana/model/llm"
 )
+
+func supportsSmartModelRouting(key string) bool {
+	switch strings.ToLower(strings.TrimSpace(key)) {
+	case llm.GroupImage, llm.GroupTTS, llm.GroupSTT, llm.GroupVideo:
+		return false
+	default:
+		return true
+	}
+}
+
+func effectiveModelRoutingStrategy(strategy string, keys ...string) string {
+	switch strategy = strings.TrimSpace(strategy); strategy {
+	case "failover", "round_robin", "weighted":
+		return strategy
+	}
+	for _, key := range keys {
+		if !supportsSmartModelRouting(key) {
+			return "failover"
+		}
+	}
+	return "smart"
+}
 
 type modelRouteSchedule struct {
 	signature string
@@ -41,7 +64,11 @@ func (r *Runtime) scheduledRoleProfiles(ctx context.Context, purpose string, set
 		return profiles, err
 	}
 	role, ok := modelRoleFor(roles, purpose, group)
-	if !ok || (role.RoutingStrategy != "round_robin" && role.RoutingStrategy != "weighted") {
+	if !ok {
+		return profiles, nil
+	}
+	strategy := effectiveModelRoutingStrategy(role.RoutingStrategy, purpose, group)
+	if strategy == "failover" {
 		return profiles, nil
 	}
 	type allocation struct {
@@ -75,6 +102,26 @@ func (r *Runtime) scheduledRoleProfiles(ctx context.Context, purpose string, set
 			weights = append(weights, allocation.weight)
 		}
 	}
+	if strategy == "smart" {
+		health := r.llmCooldowns.snapshot(profiles)
+		byKey := make(map[string]llmCandidateHealth, len(profiles))
+		for index, profile := range profiles {
+			byKey[modelRouteProfileKey(profile)] = health[index]
+		}
+		less := func(a, b llm.Profile) bool {
+			left, right := byKey[modelRouteProfileKey(a)], byKey[modelRouteProfileKey(b)]
+			if (left.remaining > 0) != (right.remaining > 0) {
+				return left.remaining == 0
+			}
+			if left.remaining > 0 {
+				return false
+			}
+			return left.failures < right.failures
+		}
+		sort.SliceStable(pool, func(i, j int) bool { return less(pool[i], pool[j]) })
+		sort.SliceStable(standby, func(i, j int) bool { return less(standby[i], standby[j]) })
+		return append(pool, standby...), nil
+	}
 	if len(pool) < 2 {
 		return append(pool, standby...), nil
 	}
@@ -98,7 +145,7 @@ func (r *Runtime) scheduledRoleProfiles(ctx context.Context, purpose string, set
 		signature.WriteString(modelRouteProfileKey(profile))
 		signature.WriteByte('\n')
 	}
-	selected := r.nextModelRoute(key, signature.String(), role.RoutingStrategy, weights)
+	selected := r.nextModelRoute(key, signature.String(), strategy, weights)
 	ordered := make([]llm.Profile, 0, len(profiles))
 	ordered = append(ordered, pool[selected])
 	for offset := 1; offset < len(pool); offset++ {

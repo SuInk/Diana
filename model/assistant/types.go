@@ -911,6 +911,7 @@ type BotConfig struct {
 	ReplyRules                 []ReplyRule               `json:"reply_rules,omitempty"`
 	MaxBotConcurrency          int                       `json:"max_bot_concurrency,omitempty"`
 	RequestTimeout             time.Duration             `json:"request_timeout,omitempty"`
+	ModelRequestTimeout        time.Duration             `json:"model_request_timeout,omitempty"`
 	// AgentEnabled 是旧的「启用 Agent」开关，现在只在迁移时读：加载配置时按它换算出
 	// AgentMode，之后恒为 true（见 migrateAgentMode）。AgentEnabled=false 的旧非 Agent
 	// 路径还留在代码里，界面上已经走不到，待后续移除。
@@ -986,7 +987,7 @@ type ModelRole struct {
 	// 不单独带，和 Params 一样沿用主路由这一份：想让意图识别不思考，换到后备
 	// 模型时也该不思考。
 	ReasoningEffort string `json:"reasoning_effort,omitempty"`
-	// 空策略沿用历史主备顺序；权重只用于加权轮询，停用的路由不发请求。
+	// 空策略默认智能；独立图片和音视频默认主备。failover 显式选择主备。
 	RoutingStrategy string `json:"routing_strategy,omitempty"`
 	Weight          int    `json:"weight,omitempty"`
 	Disabled        bool   `json:"disabled,omitempty"`
@@ -1004,6 +1005,9 @@ func normalizeModelRoles(roles map[string]ModelRole) map[string]ModelRole {
 			role.FollowChat = false
 		}
 		role = normalizeModelRole(role)
+		if !role.FollowChat {
+			role.RoutingStrategy = effectiveModelRoutingStrategy(role.RoutingStrategy, key)
+		}
 		// 可绑定的键从 4 个扩到「5 个分组 + 17 个用途」，见 model_binding.go。
 		if isModelBindingKey(key) && modelRoleConfigured(role) {
 			out[key] = role
@@ -1044,7 +1048,7 @@ func normalizeModelRole(role ModelRole) ModelRole {
 	role.Params = normalizeModelRoleParams(role.Params)
 	role.ReasoningEffort = llm.NormalizeReasoningEffortSetting(role.ReasoningEffort)
 	switch strings.TrimSpace(role.RoutingStrategy) {
-	case "round_robin", "weighted":
+	case "smart", "failover", "round_robin", "weighted":
 		role.RoutingStrategy = strings.TrimSpace(role.RoutingStrategy)
 	default:
 		role.RoutingStrategy = ""
@@ -1448,6 +1452,7 @@ type ConfigPayload struct {
 	ReplyRules                      []ReplyRule               `json:"reply_rules,omitempty"`
 	MaxBotConcurrency               int                       `json:"max_bot_concurrency,omitempty"`
 	RequestTimeoutMS                int64                     `json:"request_timeout_ms,omitempty"`
+	ModelRequestTimeoutMS           int64                     `json:"model_request_timeout_ms,omitempty"`
 	AgentEnabled                    bool                      `json:"agent_enabled,omitempty"`
 	AgentMode                       string                    `json:"agent_mode,omitempty"`
 	AgentMaxSteps                   int                       `json:"agent_max_steps,omitempty"`
@@ -2455,8 +2460,8 @@ func (cfg BotConfig) WithDefaults() BotConfig {
 
 // Validate 校验 OneBot v11 机器人配置是否可运行。
 func (cfg BotConfig) Validate() error {
-	if err := cfg.WebSearch.Validate(); err != nil {
-		return err
+	if cfg.ModelRequestTimeout < 0 {
+		return fmt.Errorf("单次模型请求超时必须为非负数且不超过 %d 毫秒", int64((1<<63-1)/time.Millisecond))
 	}
 	if len(cfg.WelcomeTemplates) > 50 {
 		return fmt.Errorf("欢迎词模板最多 50 条")
@@ -2780,6 +2785,7 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		ReplyRules:                        append([]ReplyRule(nil), cfg.ReplyRules...),
 		MaxBotConcurrency:                 cfg.MaxBotConcurrency,
 		RequestTimeoutMS:                  cfg.RequestTimeout.Milliseconds(),
+		ModelRequestTimeoutMS:             cfg.ModelRequestTimeout.Milliseconds(),
 		AgentEnabled:                      cfg.AgentEnabled,
 		AgentMode:                         cfg.AgentMode,
 		AgentMaxSteps:                     cfg.AgentMaxSteps,
@@ -3026,6 +3032,7 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		ReplyRules:                      append([]ReplyRule(nil), payload.ReplyRules...),
 		MaxBotConcurrency:               payload.MaxBotConcurrency,
 		RequestTimeout:                  time.Duration(payload.RequestTimeoutMS) * time.Millisecond,
+		ModelRequestTimeout:             modelRequestTimeoutFromMilliseconds(payload.ModelRequestTimeoutMS),
 		AgentEnabled:                    payload.AgentEnabled,
 		AgentMode:                       agentModeFromPayload(payload, existing),
 		AgentMaxSteps:                   payload.AgentMaxSteps,
@@ -3106,6 +3113,14 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 	}
 	// 界面保存出来的配置一律是迁移过的：Agent 恒开，模式二选一。
 	return migrateAgentMode(cfg)
+}
+
+// Invalid millisecond values stay invalid through WithDefaults and are rejected by Validate.
+func modelRequestTimeoutFromMilliseconds(milliseconds int64) time.Duration {
+	if milliseconds < 0 || milliseconds > int64((1<<63-1)/time.Millisecond) {
+		return -1
+	}
+	return time.Duration(milliseconds) * time.Millisecond
 }
 
 // agentModeFromPayload 决定保存时用哪个模式。请求里写了就用请求的；没写时，编辑已有

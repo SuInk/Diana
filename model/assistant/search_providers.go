@@ -41,8 +41,8 @@ type SearchProvider struct {
 	HTTPConfig       *agent.HTTPSearchConfig `json:"http_config,omitempty"`
 }
 
-// WebSearchAssignment stores this robot's ordered primary/fallback route.
-// A nil assignment keeps the existing plugin configuration effective.
+// WebSearchAssignment stores the global ordered primary/fallback route.
+// A nil ProviderIDs preserves the legacy search_mode defaults.
 type WebSearchAssignment struct {
 	ProviderIDs            []string `json:"provider_ids"`
 	Disabled               bool     `json:"disabled,omitempty"`
@@ -74,7 +74,7 @@ func normalizeWebSearchAssignment(value *WebSearchAssignment) *WebSearchAssignme
 		return nil
 	}
 	out := *value
-	out.ProviderIDs = append([]string{}, value.ProviderIDs...)
+	out.ProviderIDs = slices.Clone(value.ProviderIDs)
 	for i := range out.ProviderIDs {
 		out.ProviderIDs[i] = strings.TrimSpace(out.ProviderIDs[i])
 	}
@@ -86,7 +86,7 @@ func (value *WebSearchAssignment) Validate() error {
 	if value == nil {
 		return nil
 	}
-	if !value.Disabled && len(value.ProviderIDs) == 0 {
+	if !value.Disabled && value.ProviderIDs != nil && len(value.ProviderIDs) == 0 {
 		return fmt.Errorf("联网搜索需要选择一个首选提供商")
 	}
 	if len(value.ProviderIDs) > 16 {
@@ -116,12 +116,11 @@ func (value *WebSearchAssignment) Validate() error {
 }
 
 func (value *WebSearchAssignment) settings() map[string]any {
-	idsToWrite := value.ProviderIDs
-	if value.Disabled {
-		idsToWrite = []string{}
+	settings := map[string]any{}
+	if value.ProviderIDs != nil {
+		ids, _ := json.Marshal(value.ProviderIDs)
+		settings[searchProviderOrderSetting] = string(ids)
 	}
-	ids, _ := json.Marshal(idsToWrite)
-	settings := map[string]any{searchProviderOrderSetting: string(ids)}
 	if value.MaxResults != 0 {
 		settings[webSearchSettingMaxResults] = value.MaxResults
 	}
@@ -231,7 +230,7 @@ func orderedSearchProviders(settings SettingValues) ([]agent.WebSearchProviderCo
 	return providers, keys, nil
 }
 
-func (m *PluginManager) SearchConfiguration(profileID string) (SearchConfiguration, error) {
+func (m *PluginManager) SearchConfiguration(_ string) (SearchConfiguration, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	state, ok := m.states[webSearchPluginID]
@@ -243,7 +242,7 @@ func (m *PluginManager) SearchConfiguration(profileID string) (SearchConfigurati
 	if err != nil {
 		return SearchConfiguration{}, err
 	}
-	assignment := WebSearchAssignment{ProviderIDs: []string{}, Disabled: !state.ForProfile(profileID).Enabled, MaxResults: settings.Int(webSearchSettingMaxResults, 5), ProviderTimeoutSeconds: settings.Int(webSearchSettingProviderTimeout, 12), TotalTimeoutSeconds: settings.Int(webSearchSettingTotalTimeout, 35), SourceRecall: boolPointer(settings.Bool(webSearchSettingSourceRecall, true)), ReplyLinkPolicy: settings.String(webSearchSettingLinkPolicy, replyLinkPolicyOnRequest)}
+	assignment := WebSearchAssignment{ProviderIDs: []string{}, Disabled: !state.Enabled, MaxResults: settings.Int(webSearchSettingMaxResults, 5), ProviderTimeoutSeconds: settings.Int(webSearchSettingProviderTimeout, 12), TotalTimeoutSeconds: settings.Int(webSearchSettingTotalTimeout, 35), SourceRecall: boolPointer(settings.Bool(webSearchSettingSourceRecall, true)), ReplyLinkPolicy: settings.String(webSearchSettingLinkPolicy, replyLinkPolicyOnRequest)}
 	for i := range providers {
 		providers[i].APIKey = ""
 		providers[i].ClearAPIKey = false
@@ -251,9 +250,6 @@ func (m *PluginManager) SearchConfiguration(profileID string) (SearchConfigurati
 
 	}
 	assignment.ProviderIDs = defaultSearchProviderIDs(settings, providers)
-	if len(assignment.ProviderIDs) == 0 {
-		assignment.Disabled = true
-	}
 	return SearchConfiguration{Providers: providers, DefaultAssignment: assignment}, nil
 }
 
@@ -269,8 +265,12 @@ func (m *PluginManager) SaveSearchProvider(provider SearchProvider) (string, err
 	if err != nil {
 		return "", err
 	}
+	settings = searchReferenceSettings(settings, providers)
 	providers, id, err := upsertSearchProvider(providers, keys, provider)
 	if err != nil {
+		return "", err
+	}
+	if err := validateGlobalSearchReferences(state, settings, providers, false); err != nil {
 		return "", err
 	}
 	writeSearchProviderState(&state, providers, keys)
@@ -299,7 +299,7 @@ func (m *PluginManager) ExportSearchProviders() ([]SearchProvider, error) {
 }
 
 // ImportSearchProviders upserts exported providers by ID. Providers missing
-// from the file are kept, because robot search routes may still reference them.
+// from the file are kept, because the global search route may still reference them.
 // All entries are validated before anything is written.
 func (m *PluginManager) ImportSearchProviders(imported []SearchProvider) error {
 	m.mu.Lock()
@@ -312,6 +312,7 @@ func (m *PluginManager) ImportSearchProviders(imported []SearchProvider) error {
 	if err != nil {
 		return err
 	}
+	referenceSettings := searchReferenceSettings(effectivePluginSettingsForGroup(state.Manifest.Settings, state.Settings, nil), providers)
 	for _, provider := range imported {
 		if strings.TrimSpace(provider.ID) == "" {
 			return fmt.Errorf("导入的搜索提供商缺少 ID")
@@ -320,6 +321,9 @@ func (m *PluginManager) ImportSearchProviders(imported []SearchProvider) error {
 		if providers, _, err = upsertSearchProvider(providers, keys, provider); err != nil {
 			return fmt.Errorf("搜索提供商「%s」：%w", provider.Name, err)
 		}
+	}
+	if err := validateGlobalSearchReferences(state, referenceSettings, providers, false); err != nil {
+		return err
 	}
 	writeSearchProviderState(&state, providers, keys)
 	m.states[webSearchPluginID] = state
@@ -411,6 +415,10 @@ func (m *PluginManager) DeleteSearchProvider(id string) error {
 	if index < 0 {
 		return fmt.Errorf("搜索提供商不存在")
 	}
+	settings := effectivePluginSettingsForGroup(state.Manifest.Settings, state.Settings, nil)
+	if slices.Contains(defaultSearchProviderIDs(settings, providers), id) {
+		return fmt.Errorf("全局搜索仍在使用此搜索提供商，请先更换搜索来源")
+	}
 	providers = slices.Delete(providers, index, index+1)
 	delete(keys, id)
 	writeSearchProviderState(&state, providers, keys)
@@ -433,12 +441,68 @@ func writeSearchProviderState(state *PluginState, providers []SearchProvider, ke
 	delete(state.Settings, webSearchSettingTavilyAPIKey)
 }
 
-func searchDisabledByOverride(overrides map[string]map[string]any) bool {
-	settings := overrides[webSearchPluginID]
-	raw, ok := settings[searchProviderOrderSetting].(string)
-	if !ok {
-		return false
+// SaveSearchAssignment persists one complete state before publishing it to runtime.
+// persist runs under the manager lock and must not call back into the manager.
+func (m *PluginManager) SaveSearchAssignment(value WebSearchAssignment, persist func(map[string]PersistedPluginState) error) error {
+	value = *normalizeWebSearchAssignment(&value)
+	if err := value.Validate(); err != nil {
+		return err
 	}
-	var ids []string
-	return json.Unmarshal([]byte(raw), &ids) == nil && len(ids) == 0
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	state, ok := m.states[webSearchPluginID]
+	if !ok {
+		return ErrPluginNotFound
+	}
+	state.Settings = clonePluginValues(state.Settings)
+	if state.Settings == nil {
+		state.Settings = map[string]any{}
+	}
+	delete(state.Settings, searchProviderOrderSetting)
+	for key, setting := range value.settings() {
+		state.Settings[key] = setting
+	}
+	state.Enabled = !value.Disabled
+	settings := effectivePluginSettingsForGroup(state.Manifest.Settings, state.Settings, nil)
+	providers, _, err := searchProviderCatalog(settings)
+	if err != nil {
+		return err
+	}
+	if state.Enabled {
+		if err := validateGlobalSearchReferences(state, settings, providers, true); err != nil {
+			return err
+		}
+	}
+	if persist != nil {
+		snapshot := m.snapshotLocked()
+		saved := snapshot[webSearchPluginID]
+		saved.Enabled, saved.Settings = boolPointer(state.Enabled), clonePluginValues(state.Settings)
+		snapshot[webSearchPluginID] = saved
+		if err := persist(snapshot); err != nil {
+			return err
+		}
+	}
+	m.states[webSearchPluginID] = state
+	return nil
+}
+
+func validateGlobalSearchReferences(state PluginState, settings SettingValues, providers []SearchProvider, requireNonempty bool) error {
+	ids := defaultSearchProviderIDs(settings, providers)
+	if state.Enabled && requireNonempty && len(ids) == 0 {
+		return fmt.Errorf("联网搜索需要选择一个首选提供商")
+	}
+	for _, id := range ids {
+		index := slices.IndexFunc(providers, func(provider SearchProvider) bool { return provider.ID == id })
+		if index < 0 || state.Enabled && providers[index].Disabled {
+			return fmt.Errorf("全局搜索提供商 %s 不存在或已停用，请先更换搜索来源", id)
+		}
+	}
+	return nil
+}
+
+func searchReferenceSettings(settings SettingValues, providers []SearchProvider) SettingValues {
+	out := SettingValues(clonePluginValues(settings))
+	raw, _ := json.Marshal(defaultSearchProviderIDs(settings, providers))
+	out[searchProviderOrderSetting] = string(raw)
+	return out
 }

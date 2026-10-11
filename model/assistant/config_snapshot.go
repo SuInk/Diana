@@ -142,6 +142,7 @@ type dianaBotConfigSnapshot struct {
 	ReplyRules                   []ReplyRule               `json:"reply_rules,omitempty"`
 	MaxBotConcurrency            int                       `json:"max_bot_concurrency"`
 	RequestTimeoutMS             int64                     `json:"request_timeout_ms"`
+	ModelRequestTimeoutMS        int64                     `json:"model_request_timeout_ms"`
 	Agent                        dianaAgentConfigSnapshot  `json:"agent"`
 }
 
@@ -394,6 +395,7 @@ func dianaBotConfigFromConfig(cfg BotConfig) dianaBotConfigSnapshot {
 		ReplyRules:                      append([]ReplyRule(nil), cfg.ReplyRules...),
 		MaxBotConcurrency:               cfg.MaxBotConcurrency,
 		RequestTimeoutMS:                cfg.RequestTimeout.Milliseconds(),
+		ModelRequestTimeoutMS:           cfg.ModelRequestTimeout.Milliseconds(),
 		Agent: dianaAgentConfigSnapshot{
 			Enabled:                 cfg.AgentEnabled,
 			Mode:                    cfg.effectiveAgentMode(),

@@ -16,6 +16,31 @@ func (a registryAdapter) Stream(context.Context, ModelDefinition, ChatRequest) (
 	return nil, errors.New("unused")
 }
 
+func TestRegistryClientForwardsAttemptTimeoutOwnership(t *testing.T) {
+	for _, tc := range []struct {
+		format APIFormat
+		want   bool
+	}{{APIFormatChatCompletions, true}, {APIFormatResponses, false}} {
+		t.Run(string(tc.format), func(t *testing.T) {
+			registry, selection, err := NewProviderRegistryFromProfiles(NewProfileSet(ProviderConfig{Provider: ProviderOpenAICompatible, APIFormat: tc.format, APIKey: "test", Model: "test"}))
+			if err != nil {
+				t.Fatal(err)
+			}
+			client := RegistryClient{Registry: registry, Selection: selection}
+			if client.ManagesAttemptTimeout() != tc.want {
+				t.Fatalf("timeout ownership want %v", tc.want)
+			}
+			client.Selection.ModelID = "missing"
+			if client.ManagesAttemptTimeout() {
+				t.Fatal("invalid selection manages timeout")
+			}
+		})
+	}
+	if (RegistryClient{}).ManagesAttemptTimeout() {
+		t.Fatal("nil registry manages timeout")
+	}
+}
+
 func TestProviderRegistryRoutesSelectionAndHidesAPIKey(t *testing.T) {
 	r := NewProviderRegistry()
 	if err := r.RegisterProvider(ProviderDefinition{ID: "p1", Name: "test", Protocol: ProtocolOpenAICompletions, APIKey: "secret", Enabled: true}, registryAdapter{response: ChatResponse{Text: "ok"}}); err != nil {

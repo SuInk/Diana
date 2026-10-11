@@ -410,6 +410,8 @@ func (h *BotHandler) registerRoutes(router gin.IRouter, base string) {
 	router.POST(base+"/plugins/:id/uninstall", h.uninstallPlugin)
 	router.POST(base+"/plugins/:id/enabled", h.setPluginEnabled)
 	router.POST(base+"/plugins/:id/settings", h.updatePluginSettings)
+	router.GET(base+"/search-assignment", h.searchAssignment)
+	router.PUT(base+"/search-assignment", h.saveSearchAssignment)
 	router.GET(base+"/search-providers", h.searchProviders)
 	router.POST(base+"/search-providers", h.saveSearchProvider)
 	router.POST(base+"/search-providers/test", h.testSearchProvider)
@@ -541,10 +543,6 @@ func (h *BotHandler) saveProfile(c *gin.Context, create bool) {
 		return
 	}
 	if err := cfg.Validate(); err != nil {
-		h.writeError(c, http.StatusBadRequest, "config_save", err, botLogTarget(cfg), botLogMetadata(cfg))
-		return
-	}
-	if err := h.validateSearchAssignment(cfg.WebSearch); err != nil {
 		h.writeError(c, http.StatusBadRequest, "config_save", err, botLogTarget(cfg), botLogMetadata(cfg))
 		return
 	}

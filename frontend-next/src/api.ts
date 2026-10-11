@@ -314,7 +314,7 @@ export interface BotProfileConfig extends SendRetrySettings {
     model: string;
     provider_id?: string;
     model_id?: string;
-    routing_strategy?: "round_robin" | "weighted";
+    routing_strategy?: "smart" | "failover" | "round_robin" | "weighted";
     weight?: number;
     disabled?: boolean;
     standby?: boolean;
@@ -437,6 +437,8 @@ export interface BotProfileConfig extends SendRetrySettings {
   semantic_search_enabled?: boolean;
   max_bot_concurrency?: number;
   request_timeout_ms?: number;
+  /** 单次模型请求（含流式接收）的硬上限；0 或缺省不额外限制，独立于整轮超时。 */
+  model_request_timeout_ms?: number;
   /** 旧的「启用 Agent」开关，后端迁移后恒为 true，只为兼容保留。 */
   agent_enabled?: boolean;
   /** standard 标准模式（全部能力）/ safe 安全模式（关掉高风险能力，主人也一样）。新建默认 standard，safe 只在主人选择时开启。 */
@@ -510,8 +512,16 @@ export interface SearchConfiguration {
   default_assignment: WebSearchAssignment;
 }
 
-export function getSearchProviders(profile = ""): Promise<SearchConfiguration> {
-  return requestJSON<SearchConfiguration>(`/api/assistant/search-providers?profile=${encodeURIComponent(profile)}`);
+export function getSearchProviders(): Promise<SearchConfiguration> {
+  return requestJSON<SearchConfiguration>("/api/assistant/search-providers");
+}
+
+export function getSearchAssignment(): Promise<WebSearchAssignment> {
+  return requestJSON<WebSearchAssignment>("/api/assistant/search-assignment");
+}
+
+export function saveSearchAssignment(assignment: WebSearchAssignment): Promise<WebSearchAssignment> {
+  return requestJSON<WebSearchAssignment>("/api/assistant/search-assignment", { method: "PUT", body: JSON.stringify(assignment) });
 }
 
 export function saveSearchProvider(provider: SearchProvider & { api_key?: string; clear_api_key?: boolean }): Promise<SearchConfiguration> {
