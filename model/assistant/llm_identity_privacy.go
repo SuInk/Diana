@@ -315,7 +315,7 @@ func (p *identityPrivacyProvider) Generate(ctx context.Context, req llm.Generate
 		return p.provider.Generate(ctx, req)
 	}
 	protected := p.scope.protectRequest(req)
-	response, err := p.provider.Generate(ctx, protected)
+	response, err := p.provider.Generate(withIdentityPrivacyScope(ctx, p.scope), protected)
 	if err != nil || response == nil {
 		return response, err
 	}

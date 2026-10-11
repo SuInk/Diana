@@ -365,15 +365,9 @@ func (c *TelegramChannel) SendWithResult(ctx context.Context, msg OutgoingMessag
 	if text := strings.TrimSpace(msg.Text); text != "" {
 		var entities []telegramEntitySpec
 		if !msg.LiteralText {
-			// 提及标记在这里落地成 Telegram 自己的形式：正文写「@昵称」，另外附一条
-			// text_mention entity 指向用户 id。这是 Telegram 给「没有 username 的人」
-			// 准备的提及方式——显示成可点击的名字，对方有通知，不依赖 username。
-			rendered, mentions := renderDianaMentions(text, msg.MentionNames)
-			text = rendered
-			// Markdown 走 entities 而不是 parse_mode：正文保持纯文本，格式挂在偏移量上，
-			// 因此不需要转义——模型随口写个句号或减号也不会让整条消息以 400 被拒。
-			// 上游按平台决定要不要保留 Markdown；到这里还带标记就说明要渲染。
-			text, entities = telegramRichText(text, mentions)
+			// 有可信用户名时用 @username，否则以昵称和用户 ID 提及；Markdown 和
+			// 提及共用 UTF-16 实体坐标，不依赖 parse_mode 或把昵称当成格式解析。
+			text, entities = renderTelegramOutgoingText(text, msg.MentionNames, msg.MentionUsernames)
 		}
 		if utf16Length(text) > telegramTextLimit {
 			return nil, fmt.Errorf("telegram: 文本超过单条消息上限，请降低回复字符上限或允许分条")
@@ -446,8 +440,11 @@ func (c *TelegramChannel) SendTextDraft(ctx context.Context, msg OutgoingMessage
 	if chatID == "" || text == "" || strings.TrimSpace(msg.GroupID) != "" {
 		return nil
 	}
-	text, mentions := renderDianaMentions(text, msg.MentionNames)
-	text, entities := telegramRichText(text, mentions)
+	text, entities := renderTelegramOutgoingText(text, msg.MentionNames, msg.MentionUsernames)
+	text, entities = truncateTelegramDraft(text, entities)
+	if strings.TrimSpace(text) == "" {
+		return nil
+	}
 	params := map[string]any{
 		"chat_id":  chatID,
 		"draft_id": draftID,
@@ -1055,6 +1052,10 @@ func telegramMessageToEvent(msg *telegramMessage, selfID, botUsername string) Me
 		if msg.SenderChat == nil && !msg.From.IsBot {
 			event.SenderUsername = msg.From.Username
 		}
+		if msg.SenderChat == nil && msg.From.ID > 0 {
+			username := msg.From.Username
+			event.SenderMentionUsername = &username
+		}
 	}
 
 	// 私聊天然是对机器人说的；群里靠 @提及 判断。
@@ -1308,6 +1309,10 @@ func telegramQuotedMessage(reply *telegramMessage) *QuotedMessage {
 	}
 	if reply.From != nil {
 		quoted.UserID = strconv.FormatInt(reply.From.ID, 10)
+		if reply.SenderChat == nil && reply.From.ID > 0 {
+			username := reply.From.Username
+			quoted.SenderMentionUsername = &username
+		}
 	}
 	if reply.Chat != nil && reply.Chat.Type != "private" {
 		quoted.GroupID = strconv.FormatInt(reply.Chat.ID, 10)

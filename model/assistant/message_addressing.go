@@ -9,7 +9,9 @@ import (
 type MessageMention struct {
 	UserID   string `json:"user_id,omitempty"`
 	Username string `json:"username,omitempty"`
-	Target   string `json:"target"`
+	// UsernameKnown distinguishes a missing observation from an explicitly absent username.
+	UsernameKnown bool   `json:"username_known,omitempty"`
+	Target        string `json:"target"`
 }
 
 type messageAddressing struct {

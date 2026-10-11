@@ -60,6 +60,10 @@ func listIndentDepth(indent string) int {
 // Telegram 没有表格 entity，原样发出去就是一行行竖线和减号。等宽块是唯一还能让列
 // 对齐的表达：把单元格按列宽补齐，再交给调用方登记成 pre。emit 返回顶位用的占位符。
 func convertMarkdownTables(text string, emit func(body string) string) string {
+	return convertMarkdownTableRows(text, func(rows [][]string) string { return emit(renderTableBlock(rows)) })
+}
+
+func convertMarkdownTableRows(text string, emit func(rows [][]string) string) string {
 	if !strings.Contains(text, "|") {
 		return text
 	}
@@ -77,7 +81,7 @@ func convertMarkdownTables(text string, emit func(body string) string) string {
 			rows = append(rows, splitTableRow(lines[cursor]))
 			cursor++
 		}
-		out = append(out, emit(renderTableBlock(rows)))
+		out = append(out, emit(rows))
 		index = cursor - 1
 	}
 	return strings.Join(out, "\n")

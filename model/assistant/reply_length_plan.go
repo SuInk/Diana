@@ -15,8 +15,7 @@ func (r *Runtime) replyPartLimitIssue(cfg BotConfig, event MessageEvent, part st
 	}
 	if NormalizePlatformID(event.Platform) == PlatformTelegram {
 		message := r.resolveOutgoingMentionNames(event, OutgoingMessage{Text: part})
-		value, mentions := renderDianaMentions(part, message.MentionNames)
-		value, _ = telegramRichText(value, mentions)
+		value, _ := renderTelegramOutgoingText(part, message.MentionNames, message.MentionUsernames)
 		if length := utf16Length(value); length > telegramTextLimit {
 			return fmt.Sprintf("渲染后为 %d 个 UTF-16 码元，超过 Telegram 单条 %d 上限", length, telegramTextLimit)
 		}
