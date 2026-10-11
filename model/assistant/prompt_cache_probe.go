@@ -277,7 +277,7 @@ func promptCacheProbeKey(event MessageEvent, purpose string, toolsHash string) s
 	if purpose == "" {
 		purpose = "unknown"
 	}
-	return sessionKey(event) + "|" + purpose + "|" + toolsHash
+	return groupPromptSessionKey(event) + "|" + purpose + "|" + toolsHash
 }
 
 // withPromptCacheProbeRun 把探针接进 provider 装饰链。

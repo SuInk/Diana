@@ -69,8 +69,21 @@ func TestRunnerRestoresDiscoveredToolsOnNewRun(t *testing.T) {
 	if string(previous) != string(next) {
 		t.Fatal("restoring a tool rewrote provider definitions")
 	}
-	if system := secondClient.requests[0].Messages[0].Content; !strings.Contains(system, `"name":"rare"`) {
-		t.Fatalf("restored schema missing from stable prompt: %s", system)
+	messages := secondClient.requests[0].Messages
+	if strings.Contains(messages[0].Content, `"name":"rare"`) {
+		t.Fatal("restored schema leaked into stable prompt")
+	}
+	found := false
+	for _, message := range messages[1 : len(messages)-1] {
+		if strings.Contains(message.Content, `"name":"rare"`) && strings.Contains(message.Content, `"inputSchema":`) {
+			found = true
+			if message.Role != llm.RoleUser || message.Priority != llm.MessagePrioritySystem {
+				t.Fatalf("restored contract must stay inline and retain system budget priority: %#v", message)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("restored schema missing from volatile tail")
 	}
 }
 

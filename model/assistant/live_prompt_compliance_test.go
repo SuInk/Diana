@@ -76,6 +76,9 @@ func liveLLMClientWithHeaders(t *testing.T, headers map[string]string) llm.LLMCl
 		Timeout:  90 * time.Second,
 		Headers:  headers,
 	}
+	if provider := strings.TrimSpace(os.Getenv("DIANA_TEST_LLM_PROVIDER")); provider != "" {
+		config.Provider = llm.Provider(provider)
+	}
 	if raw := strings.TrimSpace(os.Getenv("DIANA_TEST_MAX_CONTEXT_TOKENS")); raw != "" {
 		limit, parseErr := strconv.ParseInt(raw, 10, 64)
 		if parseErr != nil || limit <= 0 {
