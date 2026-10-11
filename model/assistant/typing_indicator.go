@@ -12,11 +12,9 @@ import (
 )
 
 const (
-	// 平台不会一直显示「正在输入」，过了自己的窗口就自动清掉，所以要在过期前
-	// 反复刷新。刷新间隔按平台窗口取：Telegram 的 chat action 约 5 秒，QQ 没有
-	// 公开时长，取更保守的间隔，代价只有几秒一次扩展调用。
+	// Telegram 的 chat action 约 5 秒过期；QQ 未公开时长，缩短续刷间隔以减少显示空隙。
 	telegramTypingRenewInterval = 4 * time.Second
-	oneBotTypingRenewInterval   = 2500 * time.Millisecond
+	oneBotTypingRenewInterval   = 500 * time.Millisecond
 	// 单次刷新的超时。状态刷新和消息发送、取历史挤在同一条连接上，没有上限时
 	// 一次慢调用就能把刷新拖过平台的过期窗口，界面上就是「正在输入」一闪一闪。
 	typingCallTimeout = 2 * time.Second
