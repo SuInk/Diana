@@ -1483,7 +1483,7 @@
             <div class="card-header">
               <div>
                 <h2>回复口吻</h2>
-                <span class="card-sub">内容、工具和语气在同一次回复里完成</span>
+                <span class="card-sub">Diana 查事实，MaiBot 负责最后怎么说</span>
               </div>
               <span class="badge" :class="form.reply_composer === 'maibot' ? 'accent' : ''">{{ form.reply_composer === "maibot" ? "MaiBot" : "跟随 SOUL.md" }}</span>
             </div>
@@ -1495,7 +1495,7 @@
                 >
                   使用 MaiBot 回复风格
                 </AppSwitch>
-                <span class="hint">SOUL.md、工具结果和 MaiBot 表达风格会在同一次回复生成中生效；不会启用 MaiBot 规划器，也不会追加改写调用。已学到的本群说话风格仍会一起生效。</span>
+                <span class="hint">Diana 先完成内容判断和工具调用，再把真实聊天、当前回复目标和内容草稿交给 MaiBot 原版 replyer 生成最终说法。不会启用 MaiBot 规划器；已学到的本群说话风格仍会一起生效。</span>
               </div>
               <div v-if="form.reply_composer === 'maibot'" class="field wide">
                 <label for="bot-maibot-reply-style">表达偏好</label>

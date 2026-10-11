@@ -4771,6 +4771,12 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 	if _, initialized := identityPrivacyStateFromContext(ctx); !initialized {
 		ctx = r.withIdentityPrivacyContext(ctx, event, r.contextHistory(event))
 	}
+	// MaiBot mode keeps Diana's content/tool pass private, then exposes only the
+	// final replyer output to streaming drafts.
+	replyerCtx := ctx
+	if cfg.ReplyComposer == "maibot" {
+		ctx = context.WithValue(ctx, textDeltaObserverKey{}, struct{}{})
+	}
 	if cfg.AgentEnabled && relationship.allowsAgentTools() {
 		// A tool can add images after the first planning turn. Route every Agent
 		// model call from its actual message content so that a text-only planner can
@@ -4878,7 +4884,10 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 			text = resp.SilentContent
 		}
 		text = r.applyFinalizeRender(ctx, event, text, resp.FinalizeFields[renderFinalizeFieldName])
-		return r.prepareGeneratedReply(ctx, cfg, text, event)
+		if cfg.ReplyComposer == "maibot" {
+			text = r.composeMaiBotReply(replyerCtx, cfg, event, messages, text)
+		}
+		return r.prepareGeneratedReply(replyerCtx, cfg, text, event)
 	}
 	if mode := imageTextModeFromContext(ctx); mode != nil {
 		messages = mode.replaceImageParts(ctx, messages)
@@ -4900,7 +4909,10 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 	if err != nil {
 		return "", err
 	}
-	return r.prepareGeneratedReply(ctx, cfg, raw, event)
+	if cfg.ReplyComposer == "maibot" {
+		raw = r.composeMaiBotReply(replyerCtx, cfg, event, messages, raw)
+	}
+	return r.prepareGeneratedReply(replyerCtx, cfg, raw, event)
 }
 
 type runtimeAgentLLMProvider struct {
