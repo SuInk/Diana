@@ -157,6 +157,7 @@
                 <span v-if="event.platform" class="badge">{{ platformLabel(event.platform) }}</span>
                 <span class="badge">{{ eventKindLabel(event.kind) }}</span>
                 <span class="badge" :class="decisionClass(event)">{{ decisionLabel(event) }}</span>
+                <span v-if="event.edited" class="badge" :title="event.edit_time ? `编辑于 ${formatTime(event.edit_time)}` : '消息已编辑'">已编辑</span>
                 <span v-if="event.recalls?.length" class="badge warn">{{ eventHasTelegramProbeRecall(event) ? "已不可访问" : "已撤回" }}</span>
                 <span class="event-sender" :title="senderTitle(event)">
                   <img
@@ -634,7 +635,7 @@ import {
   type AssistantEventsResponse,
   type AssistantContextBudgetLayer
 } from "../api";
-import { formatClock, formatNumber } from "../format";
+import { formatClock, formatNumber, formatTime } from "../format";
 import { askConfirm } from "../confirm";
 import { displayMessageText, displayChatIdentity } from "../message-display";
 import { currentView, navigate } from "../router";

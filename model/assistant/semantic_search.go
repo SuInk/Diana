@@ -44,6 +44,17 @@ type semanticIndexItem struct {
 	session   string
 	messageID string
 	text      string
+	// invalidate is ordered on the same queue as vector writes. An edited
+	// message must delete the previous vector only after every older embedding
+	// job has finished, otherwise that older job can write the stale vector back.
+	invalidate bool
+}
+
+// messageHistoryVectorDeleteStore is an optional extension implemented by the
+// durable vector store. Keeping it separate preserves compatibility with small
+// in-memory MessageHistoryVectorStore implementations.
+type messageHistoryVectorDeleteStore interface {
+	DeleteMessageEventVector(ctx context.Context, session, messageID string) error
 }
 
 func (r *Runtime) semanticSearchActive(cfg BotConfig) bool {
@@ -79,32 +90,57 @@ func (r *Runtime) messageVectorStore() MessageHistoryVectorStore {
 	return vectorStore
 }
 
-// enqueueSemanticIndex 把一条已落库的消息投给后台向量化。非阻塞:队列满了
-// 直接丢弃,绝不让消息处理路径等 embedding。
+// enqueueSemanticIndex 把一条已落库的消息投给后台向量化。普通消息在队列满时
+// 直接丢弃；编辑不能丢 tombstone，因此会等待队列接收。
 func (r *Runtime) enqueueSemanticIndex(event MessageEvent) {
+	r.enqueueSemanticIndexForSession(event, sessionKey(event))
+}
+
+// enqueueSemanticIndexForSession lets durable edit handling use the session of
+// the row it actually refreshed. That matters for legacy rows whose stored
+// session predates ContextNamespace: invalidating the live session would leave
+// an older in-flight vector able to recreate the legacy row's stale embedding.
+func (r *Runtime) enqueueSemanticIndexForSession(event MessageEvent, session string) {
 	// 戳一戳没有可检索的内容，正文只是一句固定的「戳了戳某某」。
 	if strings.TrimSpace(event.MessageID) == "" || event.Kind == EventKindNotice || isPokeHistoryEvent(event) {
 		return
 	}
-	if !r.semanticSearchActive(r.effectiveConfigForEvent(event)) || r.messageVectorStore() == nil {
+	session = strings.TrimSpace(session)
+	if session == "" {
+		session = sessionKey(event)
+	}
+	store := r.messageVectorStore()
+	if store == nil {
 		return
 	}
-	// 彻底休眠的群不算向量：消息照样落库，只是语义检索搜不到这段。
-	if r.groupDormant(event) {
+	item := semanticIndexItem{
+		session:    session,
+		messageID:  event.MessageID,
+		invalidate: event.Edited && event.EditRefreshOnly,
+	}
+	active := r.semanticSearchActive(r.effectiveConfigForEvent(event))
+	// 已知编辑只刷新历史和词面索引，不触发新的模型调用。语义侧只排一个
+	// tombstone；无论新正文长短，都不会为这次 edit 再请求 embedding。
+	if !item.invalidate && active && !r.groupDormant(event) && !r.statusCommandActive(event, PlainText(event.Segments)) {
+		// 纯图片消息的正文是空的，只有图片描述能代表它。描述是后台异步生成的：
+		// 第一次入库时通常还没有，等描述落库后 refreshMessageImageSearchText 会把
+		// 这条消息重新排一次索引，那时才真正进向量库。
+		lookupCtx, cancel := context.WithTimeout(context.Background(), semanticIndexDescriptionTimeout)
+		text := semanticIndexText(lookupCtx, r, event)
+		cancel()
+		if len([]rune(text)) >= semanticMinTextRunes {
+			item.text = text
+		}
+	}
+	// 普通短消息从来没有向量，不必排队。已知消息的编辑无论新正文长短
+	// 都必须排 tombstone，清掉旧版本已经生成的向量。
+	if item.text == "" && !item.invalidate {
 		return
 	}
-	// #diana 口令没有可检索的内容，不值得为它算一次向量。
-	if r.statusCommandActive(event, PlainText(event.Segments)) {
-		return
-	}
-	// 纯图片消息的正文是空的，只有图片描述能代表它。描述是后台异步生成的：
-	// 第一次入库时通常还没有，等描述落库后 refreshMessageImageSearchText 会把
-	// 这条消息重新排一次索引，那时才真正进向量库。
-	lookupCtx, cancel := context.WithTimeout(context.Background(), semanticIndexDescriptionTimeout)
-	text := semanticIndexText(lookupCtx, r, event)
-	cancel()
-	if len([]rune(text)) < semanticMinTextRunes {
-		return
+	if item.invalidate {
+		if _, ok := store.(messageHistoryVectorDeleteStore); !ok && item.text == "" {
+			return
+		}
 	}
 	r.semanticIndexOnce.Do(func() {
 		r.semanticIndexQueue = make(chan semanticIndexItem, semanticIndexQueueSize)
@@ -113,8 +149,14 @@ func (r *Runtime) enqueueSemanticIndex(event MessageEvent) {
 			r.runSemanticIndexer()
 		}()
 	})
+	if item.invalidate {
+		// 编辑不能像普通消息一样在队列满时丢弃。等出一个位置，才能保证它排在
+		// 所有已接收的旧向量任务之后，最终状态一定对应最新正文。
+		r.semanticIndexQueue <- item
+		return
+	}
 	select {
-	case r.semanticIndexQueue <- semanticIndexItem{session: sessionKey(event), messageID: event.MessageID, text: text}:
+	case r.semanticIndexQueue <- item:
 	default:
 	}
 }
@@ -146,7 +188,11 @@ func (r *Runtime) runSemanticIndexer() {
 	}
 	for {
 		select {
-		case item := <-r.semanticIndexQueue:
+		case item, ok := <-r.semanticIndexQueue:
+			if !ok {
+				flush()
+				return
+			}
 			batch = append(batch, item)
 			if len(batch) >= semanticIndexBatchSize {
 				flush()
@@ -159,37 +205,59 @@ func (r *Runtime) runSemanticIndexer() {
 }
 
 func (r *Runtime) flushSemanticIndexBatch(batch []semanticIndexItem) {
-	cfg, ok := r.embeddingProviderConfig()
-	if !ok {
-		return
-	}
 	store := r.messageVectorStore()
 	if store == nil {
 		return
 	}
-	texts := make([]string, len(batch))
+	cfg, hasConfig := r.embeddingProviderConfig()
+	texts := make([]string, 0, len(batch))
+	textIndexes := make([]int, 0, len(batch))
 	for index, item := range batch {
-		texts[index] = item.text
+		if item.text == "" {
+			continue
+		}
+		texts = append(texts, item.text)
+		textIndexes = append(textIndexes, index)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), semanticIndexTimeout)
+
+	vectorsByItem := make(map[int][]float32, len(texts))
+	if hasConfig && len(texts) > 0 {
+		embedCtx, cancel := context.WithTimeout(context.Background(), semanticIndexTimeout)
+		embedCtx = withLLMUsagePurpose(embedCtx, "semantic_index")
+		vectors, err := r.embedTextsFunc()(embedCtx, cfg, texts)
+		cancel()
+		if err != nil {
+			log.Printf("semantic index embed failed (%d items dropped): %v", len(texts), err)
+			r.recordBackgroundFailure("semantic_index_failed", "语义检索的向量生成失败，这批消息以后按语义搜不到", "", err,
+				map[string]any{"dropped": len(texts), "model": cfg.Model})
+		} else if len(vectors) == len(texts) {
+			for index, vector := range vectors {
+				vectorsByItem[textIndexes[index]] = vector
+			}
+		}
+	}
+
+	// embedding 可能吃满自己的超时，删除旧向量不能复用那个已取消的 ctx。
+	// 按原始队列顺序执行 save/delete/save，才能让同批里的编辑覆盖旧任务。
+	writeCtx, cancel := context.WithTimeout(context.Background(), semanticIndexTimeout)
 	defer cancel()
-	ctx = withLLMUsagePurpose(ctx, "semantic_index")
-	vectors, err := r.embedTextsFunc()(ctx, cfg, texts)
-	if err != nil {
-		log.Printf("semantic index embed failed (%d items dropped): %v", len(batch), err)
-		r.recordBackgroundFailure("semantic_index_failed", "语义检索的向量生成失败，这批消息以后按语义搜不到", "", err,
-			map[string]any{"dropped": len(batch), "model": cfg.Model})
-		return
-	}
-	if len(vectors) != len(batch) {
-		return
-	}
+	deleteStore, _ := store.(messageHistoryVectorDeleteStore)
 	for index, item := range batch {
-		if err := store.SaveMessageEventVector(ctx, item.session, item.messageID, cfg.Model, vectors[index]); err != nil {
+		if item.invalidate && deleteStore != nil {
+			if err := deleteStore.DeleteMessageEventVector(writeCtx, item.session, item.messageID); err != nil {
+				log.Printf("semantic index invalidate failed: %v", err)
+				r.recordBackgroundFailure("semantic_index_failed", "语义检索的旧向量删除失败", "semantic_index_delete_failed", err,
+					map[string]any{"message_id": item.messageID})
+			}
+		}
+		vector, ok := vectorsByItem[index]
+		if !ok {
+			continue
+		}
+		if err := store.SaveMessageEventVector(writeCtx, item.session, item.messageID, cfg.Model, vector); err != nil {
 			log.Printf("semantic index save failed: %v", err)
-			r.recordBackgroundFailure("semantic_index_failed", "语义检索的向量写入失败，这批消息以后按语义搜不到", "semantic_index_save_failed", err,
-				map[string]any{"dropped": len(batch) - index, "model": cfg.Model})
-			return
+			r.recordBackgroundFailure("semantic_index_failed", "语义检索的向量写入失败，这条消息以后按语义搜不到", "semantic_index_save_failed", err,
+				map[string]any{"message_id": item.messageID, "model": cfg.Model})
 		}
 	}
 }

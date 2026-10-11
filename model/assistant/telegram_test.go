@@ -565,17 +565,18 @@ func TestTelegramIgnoresUnknownChatType(t *testing.T) {
 	}
 }
 
-// getUpdates 的 offset 必须推进，否则同一条消息会被反复投递。
-func TestTelegramAdvancesUpdateOffset(t *testing.T) {
+// 编辑更新要在 handler 成功后才推进 offset；否则这次唯一的新 revision
+// 还没写进持久层就会被 Telegram 永久确认掉。
+func TestTelegramAcknowledgesEditedUpdateOffsetAfterDispatch(t *testing.T) {
 	api := newFakeTelegramAPI(t, map[string]any{
 		"getUpdates": []map[string]any{
-			{"update_id": 100, "message": map[string]any{
-				"message_id": 1, "text": "a",
+			{"update_id": 100, "edited_message": map[string]any{
+				"message_id": 1, "date": 10, "edit_date": 20, "text": "a",
 				"chat": map[string]any{"id": 5, "type": "private"},
 				"from": map[string]any{"id": 5},
 			}},
-			{"update_id": 101, "message": map[string]any{
-				"message_id": 2, "text": "b",
+			{"update_id": 101, "edited_message": map[string]any{
+				"message_id": 2, "date": 11, "edit_date": 21, "text": "b",
 				"chat": map[string]any{"id": 5, "type": "private"},
 				"from": map[string]any{"id": 5},
 			}},
@@ -583,8 +584,13 @@ func TestTelegramAdvancesUpdateOffset(t *testing.T) {
 	})
 	ch := api.channel()
 
-	if _, err := ch.fetchUpdates(context.Background()); err != nil {
+	updates, err := ch.fetchUpdates(context.Background())
+	if err != nil {
 		t.Fatalf("首次拉取失败：%v", err)
+	}
+	ch.handler = func(context.Context, MessageEvent) error { return errors.New("database busy") }
+	if err := ch.dispatch(context.Background(), updates[0]); err == nil {
+		t.Fatal("handler 失败应保留更新待重试")
 	}
 	if _, err := ch.fetchUpdates(context.Background()); err != nil {
 		t.Fatalf("二次拉取失败：%v", err)
@@ -597,8 +603,78 @@ func TestTelegramAdvancesUpdateOffset(t *testing.T) {
 	if _, ok := calls[0].Params["offset"]; ok {
 		t.Fatal("首次拉取不该带 offset")
 	}
-	if got := calls[1].Params["offset"]; got != float64(102) {
-		t.Fatalf("offset 应推进到 102，实际 %v", got)
+	if _, ok := calls[1].Params["offset"]; ok {
+		t.Fatal("失败的 update 不该推进 offset")
+	}
+
+	ch.handler = func(context.Context, MessageEvent) error { return nil }
+	for _, update := range updates {
+		if err := ch.dispatch(context.Background(), update); err != nil {
+			t.Fatalf("成功重试失败：%v", err)
+		}
+		ch.acknowledgeUpdate(update.UpdateID)
+	}
+	if _, err := ch.fetchUpdates(context.Background()); err != nil {
+		t.Fatalf("三次拉取失败：%v", err)
+	}
+	calls = api.callsOf("getUpdates")
+	if got := calls[2].Params["offset"]; got != float64(102) {
+		t.Fatalf("成功处理后 offset 应推进到 102，实际 %v", got)
+	}
+}
+
+func TestTelegramDispatchAcknowledgesNonEditedHandlerFailures(t *testing.T) {
+	tests := []struct {
+		name   string
+		update telegramUpdate
+	}{
+		{
+			name: "ordinary message",
+			update: telegramUpdate{UpdateID: 200, Message: &telegramMessage{
+				MessageID: 1,
+				Date:      10,
+				Text:      "ordinary",
+				Chat:      &telegramChat{ID: 5, Type: "private"},
+				From:      &telegramUser{ID: 5},
+			}},
+		},
+		{
+			name: "reaction notice",
+			update: telegramUpdate{UpdateID: 201, MessageReaction: &telegramReaction{
+				Chat:      &telegramChat{ID: -1005, Type: "supergroup"},
+				MessageID: 2,
+				User:      &telegramUser{ID: 5},
+				Date:      11,
+				NewReaction: []telegramReactionType{{
+					Type:  "emoji",
+					Emoji: "👍",
+				}},
+			}},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ch := NewTelegramChannel(TelegramConfig{})
+			calls := 0
+			ch.handler = func(context.Context, MessageEvent) error {
+				calls++
+				return errors.New("downstream rejected event")
+			}
+			if err := ch.dispatch(context.Background(), tt.update); err != nil {
+				t.Fatalf("non-edited handler failure should not retain Telegram update: %v", err)
+			}
+			if calls != 1 {
+				t.Fatalf("handler calls=%d, want 1", calls)
+			}
+			ch.acknowledgeUpdate(tt.update.UpdateID)
+			ch.mu.RLock()
+			offset := ch.offset
+			ch.mu.RUnlock()
+			if offset != tt.update.UpdateID+1 {
+				t.Fatalf("offset=%d, want %d", offset, tt.update.UpdateID+1)
+			}
+		})
 	}
 }
 
@@ -628,6 +704,94 @@ func TestTelegramDispatchesUpdatesToHandler(t *testing.T) {
 	}
 	if len(got) != 1 || got[0].RawMessage != "hello" || got[0].UserID != "77" {
 		t.Fatalf("事件投递错误：%+v", got)
+	}
+}
+
+func TestTelegramDispatchMarksEditedMessages(t *testing.T) {
+	tests := []struct {
+		name       string
+		raw        string
+		wantKind   EventKind
+		wantGroup  string
+		wantUser   string
+		wantText   string
+		wantTime   int64
+		wantEditAt int64
+		wantUpdate int64
+	}{
+		{
+			name: "edited private message",
+			raw: `{
+				"update_id": 1,
+				"edited_message": {
+					"message_id": 9,
+					"date": 100,
+					"edit_date": 150,
+					"text": "edited private text",
+					"chat": {"id": 77, "type": "private"},
+					"from": {"id": 77, "first_name": "A"}
+				}
+			}`,
+			wantKind:   EventKindPrivate,
+			wantUser:   "77",
+			wantText:   "edited private text",
+			wantTime:   100,
+			wantEditAt: 150,
+			wantUpdate: 1,
+		},
+		{
+			name: "edited channel post",
+			raw: `{
+				"update_id": 2,
+				"edited_channel_post": {
+					"message_id": 10,
+					"date": 200,
+					"edit_date": 275,
+					"text": "edited channel text",
+					"chat": {"id": -10077, "type": "channel", "title": "updates"}
+				}
+			}`,
+			wantKind:   EventKindGroup,
+			wantGroup:  "-10077",
+			wantText:   "edited channel text",
+			wantTime:   200,
+			wantEditAt: 275,
+			wantUpdate: 2,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var update telegramUpdate
+			if err := json.Unmarshal([]byte(tt.raw), &update); err != nil {
+				t.Fatal(err)
+			}
+			ch := NewTelegramChannel(TelegramConfig{})
+			var got []MessageEvent
+			ch.handler = func(_ context.Context, event MessageEvent) error {
+				got = append(got, event)
+				return nil
+			}
+
+			ch.dispatch(context.Background(), update)
+
+			if len(got) != 1 {
+				t.Fatalf("编辑更新投递了 %d 条事件，期望 1 条：%+v", len(got), got)
+			}
+			event := got[0]
+			if !event.Edited || event.EditTime != tt.wantEditAt {
+				t.Fatalf("编辑标记错误：Edited=%v EditTime=%d，期望 true/%d", event.Edited, event.EditTime, tt.wantEditAt)
+			}
+			if event.TelegramUpdateID != tt.wantUpdate {
+				t.Fatalf("TelegramUpdateID=%d，期望 %d", event.TelegramUpdateID, tt.wantUpdate)
+			}
+			if event.Time != tt.wantTime {
+				t.Fatalf("原始发送时间被编辑时间覆盖：Time=%d，期望 %d", event.Time, tt.wantTime)
+			}
+			if event.Kind != tt.wantKind || event.GroupID != tt.wantGroup || event.UserID != tt.wantUser || event.RawMessage != tt.wantText {
+				t.Fatalf("编辑消息映射错误：%+v", event)
+			}
+		})
 	}
 }
 

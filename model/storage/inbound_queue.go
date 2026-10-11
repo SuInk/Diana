@@ -23,6 +23,8 @@ const (
 	inboundStatusDone       = "done"
 )
 
+var _ assistant.InboundMessageEditStore = (*SQLiteStore)(nil)
+
 // EnqueueInboundEvent atomically records message history and makes a new event
 // available to the durable worker queue. Existing history rows remain
 // deduplicated so pre-queue chat history is never replayed after an upgrade.
@@ -65,21 +67,35 @@ func (s *SQLiteStore) EnqueueInboundEvent(ctx context.Context, session string, e
 	defer observeTransaction("EnqueueInboundEvent")()
 	defer func() { _ = tx.Rollback() }()
 
-	if existingID, found, findErr := findDuplicateInboundHistory(ctx, tx, event); findErr != nil {
+	if duplicate, found, findErr := findDuplicateInboundHistory(ctx, tx, event); findErr != nil {
 		return "", false, findErr
 	} else if found {
-		if _, err := tx.ExecContext(ctx, `
+		editApplied := false
+		currentEvent := event
+		if event.Edited && editedInboundSupersedes(event, duplicate.Event) {
+			currentEvent, payload, text, err = prepareEditedInboundRevision(event, duplicate.Event)
+			if err != nil {
+				return "", false, err
+			}
+			editApplied, err = s.refreshEditedInboundTx(ctx, tx, duplicate, currentEvent, string(payload), text, priority, now)
+			if err != nil {
+				return "", false, err
+			}
+		} else if _, err := tx.ExecContext(ctx, `
 UPDATE inbound_events
 SET priority = CASE WHEN priority < ? THEN ? ELSE priority END,
     updated_at = ?
 WHERE id = ? AND status = ?
-		`, priority, priority, now.UnixNano(), existingID, inboundStatusPending); err != nil {
+			`, priority, priority, now.UnixNano(), duplicate.ID, inboundStatusPending); err != nil {
 			return "", false, fmt.Errorf("refresh duplicate inbound priority: %w", err)
 		}
 		if err := tx.Commit(); err != nil {
 			return "", false, fmt.Errorf("commit duplicate inbound event: %w", err)
 		}
-		return existingID, false, nil
+		if editApplied {
+			s.refreshEditedMessageIndexes(ctx, duplicate.ID, duplicate.Session, currentEvent)
+		}
+		return duplicate.ID, false, nil
 	}
 
 	createdAt := now.Format(time.RFC3339Nano)
@@ -192,13 +208,19 @@ ON CONFLICT(id) DO UPDATE SET
 	return nil
 }
 
-func findDuplicateInboundHistory(ctx context.Context, tx *sql.Tx, event assistant.MessageEvent) (string, bool, error) {
+type duplicateInboundHistory struct {
+	ID      string
+	Session string
+	Event   assistant.MessageEvent
+}
+
+func findDuplicateInboundHistory(ctx context.Context, tx *sql.Tx, event assistant.MessageEvent) (duplicateInboundHistory, bool, error) {
 	messageID := strings.TrimSpace(event.MessageID)
 	if messageID == "" {
-		return "", false, nil
+		return duplicateInboundHistory{}, false, nil
 	}
 	rows, err := tx.QueryContext(ctx, `
-SELECT id, payload
+SELECT id, session, payload
 FROM message_events
 WHERE message_id = ?
   AND kind = ?
@@ -207,24 +229,261 @@ WHERE message_id = ?
 ORDER BY event_time DESC, created_at DESC, id DESC
 `, messageID, string(event.Kind), strings.TrimSpace(event.GroupID), strings.TrimSpace(event.UserID))
 	if err != nil {
-		return "", false, fmt.Errorf("find duplicate inbound history: %w", err)
+		return duplicateInboundHistory{}, false, fmt.Errorf("find duplicate inbound history: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 	for rows.Next() {
-		var id, payload string
-		if err := rows.Scan(&id, &payload); err != nil {
-			return "", false, fmt.Errorf("scan duplicate inbound history: %w", err)
+		var duplicate duplicateInboundHistory
+		var payload string
+		if err := rows.Scan(&duplicate.ID, &duplicate.Session, &payload); err != nil {
+			return duplicateInboundHistory{}, false, fmt.Errorf("scan duplicate inbound history: %w", err)
 		}
-		var stored assistant.MessageEvent
-		if json.Unmarshal([]byte(payload), &stored) != nil || !sameInboundTransport(event, stored) {
+		if json.Unmarshal([]byte(payload), &duplicate.Event) != nil || !sameInboundTransport(event, duplicate.Event) {
 			continue
 		}
-		return id, true, nil
+		return duplicate, true, nil
 	}
 	if err := rows.Err(); err != nil {
-		return "", false, fmt.Errorf("iterate duplicate inbound history: %w", err)
+		return duplicateInboundHistory{}, false, fmt.Errorf("iterate duplicate inbound history: %w", err)
 	}
-	return "", false, nil
+	return duplicateInboundHistory{}, false, nil
+}
+
+// RefreshInboundMessageEdit updates an already known message revision without
+// creating another reply turn. A missing original is reported as Found=false so
+// the caller can feed the edit through the ordinary first-seen message path.
+func (s *SQLiteStore) RefreshInboundMessageEdit(ctx context.Context, session string, event assistant.MessageEvent, priorities ...int) (assistant.InboundMessageEditRefresh, error) {
+	defer s.observeStorage(ctx, "RefreshInboundMessageEdit", "write")()
+	if s == nil || s.db == nil {
+		return assistant.InboundMessageEditRefresh{}, errors.New("refresh inbound message edit: sqlite store is not configured")
+	}
+	session = strings.TrimSpace(session)
+	if session == "" || !event.Edited || strings.TrimSpace(event.MessageID) == "" {
+		return assistant.InboundMessageEditRefresh{}, nil
+	}
+	now := time.Now().UTC()
+	if event.Time <= 0 {
+		event.Time = now.Unix()
+	}
+	var err error
+	event, err = s.persistInboundVoiceBlobs(ctx, event)
+	if err != nil {
+		return assistant.InboundMessageEditRefresh{}, err
+	}
+	payload, err := json.Marshal(event)
+	if err != nil {
+		return assistant.InboundMessageEditRefresh{}, fmt.Errorf("encode inbound message edit: %w", err)
+	}
+	text := strings.TrimSpace(assistant.PlainText(event.Segments))
+	if text == "" {
+		text = strings.TrimSpace(event.RawMessage)
+	}
+	tx, err := s.beginWriteTx(ctx, "RefreshInboundMessageEdit")
+	if err != nil {
+		return assistant.InboundMessageEditRefresh{}, fmt.Errorf("begin inbound message edit: %w", err)
+	}
+	defer observeTransaction("RefreshInboundMessageEdit")()
+	defer func() { _ = tx.Rollback() }()
+	duplicate, found, err := findDuplicateInboundHistory(ctx, tx, event)
+	if err != nil || !found {
+		return assistant.InboundMessageEditRefresh{}, err
+	}
+	result := assistant.InboundMessageEditRefresh{EventID: duplicate.ID, Session: duplicate.Session, Event: duplicate.Event, Found: true}
+	applied := false
+	if editedInboundSupersedes(event, duplicate.Event) {
+		event, payload, text, err = prepareEditedInboundRevision(event, duplicate.Event)
+		if err != nil {
+			return result, err
+		}
+		applied, err = s.refreshEditedInboundTx(ctx, tx, duplicate, event, string(payload), text, inboundPriorityValue(priorities), now)
+		if err != nil {
+			return result, err
+		}
+		result.Event = event
+	}
+	if err := tx.Commit(); err != nil {
+		return result, fmt.Errorf("commit inbound message edit: %w", err)
+	}
+	if applied {
+		s.refreshEditedMessageIndexes(ctx, duplicate.ID, duplicate.Session, event)
+	}
+	result.Applied = applied
+	return result, nil
+}
+
+func prepareEditedInboundRevision(event, stored assistant.MessageEvent) (assistant.MessageEvent, []byte, string, error) {
+	event.EditRefreshOnly = true
+	event = mergeEditedMediaDerivedFields(event, stored)
+	payload, err := json.Marshal(event)
+	if err != nil {
+		return assistant.MessageEvent{}, nil, "", fmt.Errorf("encode inbound message edit: %w", err)
+	}
+	text := strings.TrimSpace(assistant.PlainText(event.Segments))
+	if text == "" {
+		text = strings.TrimSpace(event.RawMessage)
+	}
+	return event, payload, text, nil
+}
+
+var editedMediaDerivedKeys = []string{
+	"cached_file",
+	"cached_mime",
+	"content_sha256",
+	"cached_description",
+	"cached_description_source",
+	"cached_description_failure",
+	"transcript",
+	"audio_sha256",
+	"cached_blob_sha256",
+	"stt_backend",
+	"stt_model",
+	"stt_error_code",
+}
+
+// mergeEditedMediaDerivedFields keeps work already derived from an unchanged
+// attachment. Telegram edit updates carry fresh transport metadata but do not
+// contain Diana's cached path, image hash, visual description, or transcript.
+// Replacing the attachment changes its stable identity and therefore copies
+// nothing from the previous revision.
+func mergeEditedMediaDerivedFields(event, stored assistant.MessageEvent) assistant.MessageEvent {
+	event.Segments = mergeEditedMediaSegments(event.Segments, stored.Segments)
+	if event.Quoted != nil && stored.Quoted != nil {
+		quoted := *event.Quoted
+		quoted.Segments = mergeEditedMediaSegments(quoted.Segments, stored.Quoted.Segments)
+		event.Quoted = &quoted
+	}
+	return event
+}
+
+func mergeEditedMediaSegments(incoming, stored []assistant.MessageSegment) []assistant.MessageSegment {
+	incoming = append([]assistant.MessageSegment(nil), incoming...)
+	used := make([]bool, len(stored))
+	for incomingIndex := range incoming {
+		identity := editedMediaIdentity(incoming[incomingIndex])
+		if identity == "" {
+			continue
+		}
+		for storedIndex := range stored {
+			if used[storedIndex] || stored[storedIndex].Type != incoming[incomingIndex].Type || editedMediaIdentity(stored[storedIndex]) != identity {
+				continue
+			}
+			used[storedIndex] = true
+			data := make(map[string]string, len(incoming[incomingIndex].Data)+len(editedMediaDerivedKeys))
+			for key, value := range incoming[incomingIndex].Data {
+				data[key] = value
+			}
+			for _, key := range editedMediaDerivedKeys {
+				if strings.TrimSpace(data[key]) == "" && strings.TrimSpace(stored[storedIndex].Data[key]) != "" {
+					data[key] = stored[storedIndex].Data[key]
+				}
+			}
+			incoming[incomingIndex].Data = data
+			break
+		}
+	}
+	return incoming
+}
+
+func editedMediaIdentity(segment assistant.MessageSegment) string {
+	switch segment.Type {
+	case "image", "video", "record", "file":
+	default:
+		return ""
+	}
+	for _, key := range []string{
+		"sticker_unique_id", "file_unique_id",
+		"content_sha256", "audio_sha256", "cached_blob_sha256",
+		"sticker_file_id", "file_id",
+	} {
+		if value := strings.TrimSpace(segment.Data[key]); value != "" {
+			return key + ":" + value
+		}
+	}
+	return ""
+}
+
+func editedInboundSupersedes(incoming, stored assistant.MessageEvent) bool {
+	if !incoming.Edited {
+		return false
+	}
+	if !stored.Edited {
+		return true
+	}
+	// A repeated update ID is the same transport update, even if it is delivered
+	// again after a commit-before-ack crash.
+	if incoming.TelegramUpdateID > 0 && stored.TelegramUpdateID > 0 {
+		if incoming.TelegramUpdateID == stored.TelegramUpdateID {
+			return false
+		}
+	}
+	// edit_date is the primary revision clock. update_id normally increases, but
+	// Telegram may randomize it after a week without updates.
+	if incoming.EditTime > 0 && stored.EditTime > 0 && incoming.EditTime != stored.EditTime {
+		return incoming.EditTime > stored.EditTime
+	}
+	if incoming.EditTime > 0 && stored.EditTime == 0 {
+		return true
+	}
+	if incoming.EditTime == 0 && stored.EditTime > 0 {
+		return false
+	}
+	if incoming.TelegramUpdateID > 0 && stored.TelegramUpdateID > 0 {
+		return incoming.TelegramUpdateID > stored.TelegramUpdateID
+	}
+	// Once a durable revision has a Telegram update ID, an older snapshot from
+	// before this field existed cannot establish an order against it.
+	if stored.TelegramUpdateID > 0 {
+		return false
+	}
+	// Compatible gateways can omit both ordering fields. In that case arrival
+	// order is the only revision order available.
+	return true
+}
+
+func (s *SQLiteStore) refreshEditedInboundTx(ctx context.Context, tx *sql.Tx, duplicate duplicateInboundHistory, event assistant.MessageEvent, payload, text string, priority int, now time.Time) (bool, error) {
+	mediaChanged := assistant.MessageSearchMediaRevision(event) != assistant.MessageSearchMediaRevision(duplicate.Event)
+	if _, err := tx.ExecContext(ctx, `
+UPDATE message_events
+SET kind = ?, profile_id = ?, group_id = ?, user_id = ?, message_id = ?, sender_name = ?,
+    text = ?, payload = ?, search_extra = CASE WHEN ? THEN NULL ELSE search_extra END
+WHERE id = ?
+`, string(event.Kind), strings.TrimSpace(event.ProfileID), event.GroupID, event.UserID, event.MessageID,
+		event.SenderName, text, payload, mediaChanged, duplicate.ID); err != nil {
+		return false, fmt.Errorf("refresh edited message history: %w", err)
+	}
+	// Pending work has not taken a processing snapshot yet, so let it consume the
+	// current revision. Processing/done rows keep the payload that produced their
+	// audit result and are never reopened by an edit.
+	if _, err := tx.ExecContext(ctx, `
+UPDATE inbound_events
+SET profile_id = CASE WHEN TRIM(COALESCE(profile_id, '')) = '' THEN ? ELSE profile_id END,
+    priority = CASE WHEN status = ? AND priority < ? THEN ? ELSE priority END,
+    payload = CASE WHEN status = ? THEN ? ELSE payload END,
+    updated_at = CASE WHEN status = ? THEN ? ELSE updated_at END
+WHERE id = ?
+`, strings.TrimSpace(event.ProfileID), inboundStatusPending, priority, priority, inboundStatusPending, payload,
+		inboundStatusPending, now.UnixNano(), duplicate.ID); err != nil {
+		return false, fmt.Errorf("refresh edited inbound payload: %w", err)
+	}
+	var extra sql.NullString
+	if err := tx.QueryRowContext(ctx, `SELECT search_extra FROM message_events WHERE id = ?`, duplicate.ID).Scan(&extra); err != nil {
+		return false, fmt.Errorf("load edited message search extra: %w", err)
+	}
+	if err := s.indexMessageHistoryRowTx(tx, duplicate.ID, event.SenderName, event.UserID, text, strings.TrimSpace(extra.String)); err != nil {
+		return false, fmt.Errorf("index edited message history: %w", err)
+	}
+	return true, nil
+}
+
+func (s *SQLiteStore) refreshEditedMessageIndexes(ctx context.Context, id, session string, event assistant.MessageEvent) {
+	if s.historyVectors {
+		_, _ = s.db.ExecContext(ctx, `DELETE FROM `+messageHistoryVectorTable+` WHERE id = ?`, id)
+	}
+	if err := s.indexStickerAssets(ctx, session, event); err != nil {
+		// The message row is already committed. Sticker indexing is a derived cache
+		// and must not turn a successful edit into a transport retry.
+		return
+	}
 }
 
 func sameInboundTransport(current, stored assistant.MessageEvent) bool {

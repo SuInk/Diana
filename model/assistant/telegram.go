@@ -189,10 +189,26 @@ func (c *TelegramChannel) pollLoop(ctx context.Context) {
 			}
 			continue
 		}
-		backoff = time.Second
 		c.setStatus(true, c.Status().SelfID, "")
+		batchOK := true
 		for _, update := range updates {
-			c.dispatch(ctx, update)
+			if err := c.dispatch(ctx, update); err != nil {
+				batchOK = false
+				log.Printf("telegram: handle update failed: update_id=%d err=%v", update.UpdateID, err)
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(backoff):
+				}
+				if backoff < 30*time.Second {
+					backoff *= 2
+				}
+				break
+			}
+			c.acknowledgeUpdate(update.UpdateID)
+		}
+		if batchOK {
+			backoff = time.Second
 		}
 	}
 }
@@ -221,20 +237,20 @@ func (c *TelegramChannel) fetchUpdates(ctx context.Context) ([]telegramUpdate, e
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	for _, update := range updates {
-		if update.UpdateID >= offset {
-			offset = update.UpdateID + 1
-		}
-	}
-	c.mu.Lock()
-	c.offset = offset
-	c.mu.Unlock()
 	return updates, nil
 }
 
-func (c *TelegramChannel) dispatch(ctx context.Context, update telegramUpdate) {
+func (c *TelegramChannel) acknowledgeUpdate(updateID int64) {
+	c.mu.Lock()
+	if updateID >= c.offset {
+		c.offset = updateID + 1
+	}
+	c.mu.Unlock()
+}
+
+func (c *TelegramChannel) dispatch(ctx context.Context, update telegramUpdate) error {
 	if ctx.Err() != nil {
-		return
+		return ctx.Err()
 	}
 	c.observeMemberUpdate(update.ChatMember, false)
 	c.observeMemberUpdate(update.MyChatMember, true)
@@ -253,27 +269,30 @@ func (c *TelegramChannel) dispatch(ctx context.Context, update telegramUpdate) {
 		handler := c.handler
 		c.mu.RUnlock()
 		if handler == nil {
-			return
+			return nil
 		}
 		if event := telegramReactionToEvent(update.MessageReaction, c.Status().SelfID); event.Kind != "" {
 			if err := handler(ctx, event); err != nil {
 				log.Printf("telegram: handle reaction failed: update_id=%d chat_id=%s message_id=%s err=%v", update.UpdateID, event.GroupID, event.MessageID, err)
 			}
 		}
-		return
+		return nil
 	}
 	message := update.Message
+	edited := false
 	if message == nil {
 		message = update.EditedMessage
+		edited = message != nil
 	}
 	if message == nil {
 		message = update.ChannelPost
 	}
 	if message == nil {
 		message = update.EditedChannelPost
+		edited = message != nil
 	}
 	if message == nil {
-		return
+		return nil
 	}
 	c.observeMemberMessage(message)
 	c.mu.RLock()
@@ -282,16 +301,30 @@ func (c *TelegramChannel) dispatch(ctx context.Context, update telegramUpdate) {
 	c.mu.RUnlock()
 	selfID := c.Status().SelfID
 	if handler == nil {
-		return
+		return nil
 	}
 	event := telegramMessageToEvent(message, selfID, username)
 	if event.Kind == "" {
-		return
+		return nil
+	}
+	if edited {
+		event.Edited = true
+		event.EditTime = message.EditDate
+		event.TelegramUpdateID = update.UpdateID
 	}
 	event = c.resolveIncomingMedia(ctx, event, message)
 	if err := handler(ctx, event); err != nil {
+		if edited {
+			// An edit is itself the durable revision update. Keep its update_id
+			// unacknowledged when storage fails so Telegram can redeliver it.
+			return fmt.Errorf("handle edited chat %s message %s: %w", event.GroupID, event.MessageID, err)
+		}
+		// Ordinary messages already use Diana's durable inbound queue. Preserve
+		// the established at-most-once transport behavior for paths that may
+		// have performed external side effects before returning an error.
 		log.Printf("telegram: handle update failed: update_id=%d chat_id=%s message_id=%s err=%v", update.UpdateID, event.GroupID, event.MessageID, err)
 	}
+	return nil
 }
 
 // Send 把统一的出站消息翻译成 Bot API 调用。
@@ -731,6 +764,7 @@ type telegramMessage struct {
 	MessageID       int64            `json:"message_id"`
 	MessageThreadID int64            `json:"message_thread_id,omitempty"`
 	Date            int64            `json:"date"`
+	EditDate        int64            `json:"edit_date,omitempty"`
 	Text            string           `json:"text"`
 	Caption         string           `json:"caption"`
 	From            *telegramUser    `json:"from"`

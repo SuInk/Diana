@@ -18,6 +18,17 @@ type searchExtraTestStore struct {
 	extras map[string]string
 }
 
+type rejectingRevisionSearchExtraStore struct {
+	*searchExtraTestStore
+	current MessageEvent
+	calls   int
+}
+
+func (s *rejectingRevisionSearchExtraStore) SaveMessageSearchExtraIfMediaCurrent(_ context.Context, _ string, _ MessageEvent, _ string) (MessageEvent, bool, error) {
+	s.calls++
+	return s.current, false, nil
+}
+
 func newSearchExtraTestStore() *searchExtraTestStore {
 	return &searchExtraTestStore{recallImageTestStore: newRecallImageTestStore(), extras: map[string]string{}}
 }
@@ -91,6 +102,93 @@ func TestMessageImageDescriptionTextReadsCache(t *testing.T) {
 		Segments: []MessageSegment{{Type: "text", Data: map[string]string{"text": "只有文字"}}}}
 	if got := semanticIndexText(context.Background(), runtime, bare); got != "只有文字" {
 		t.Fatalf("plain semantic text = %q", got)
+	}
+}
+
+func TestMessageSearchMediaRevisionTracksImagesOnly(t *testing.T) {
+	hashA := strings.Repeat("a", 64)
+	hashB := strings.Repeat("b", 64)
+	event := MessageEvent{
+		Segments: []MessageSegment{
+			{Type: "text", Data: map[string]string{"text": "原说明"}},
+			{Type: "image", Data: map[string]string{
+				imageContentSHA256Key:           hashA,
+				"file_unique_id":                "stable-telegram-image",
+				"file_id":                       "volatile-file-id",
+				recallImageDescriptionKey:       "旧描述",
+				recallImageDescriptionSourceKey: "vision",
+			}},
+		},
+	}
+	original := MessageSearchMediaRevision(event)
+	if original == "" {
+		t.Fatal("有图片的消息应有媒体版本")
+	}
+	textEdited := cloneRecallEvents([]MessageEvent{event})[0]
+	textEdited.Segments[0].Data["text"] = "编辑后的说明"
+	textEdited.Segments[1].Data["file_id"] = "renewed-file-id"
+	textEdited.Segments[1].Data[recallImageDescriptionKey] = "新描述"
+	if got := MessageSearchMediaRevision(textEdited); got != original {
+		t.Fatalf("同一内容哈希的图片不应因正文或派生字段变化而换版本: %q != %q", got, original)
+	}
+	withQuotedImage := cloneRecallEvents([]MessageEvent{event})[0]
+	withQuotedImage.Quoted = &QuotedMessage{
+		MessageID: "quoted-image",
+		Segments: []MessageSegment{{Type: "image", Data: map[string]string{
+			"file_unique_id": "quoted-stable-image",
+		}}},
+	}
+	if got := MessageSearchMediaRevision(withQuotedImage); got != original {
+		t.Fatalf("引用图片不应改变当前消息的媒体版本: %q != %q", got, original)
+	}
+	// 后台任务拿到的是已下载、带哈希的轻量副本；caption edit 可能还是只带
+	// Telegram file_unique_id 的 raw payload。稳定平台 ID 相同就仍是同一张图。
+	queued := historyImageDescriptionQueueEvent(event)
+	rawEdit := MessageEvent{Segments: []MessageSegment{
+		{Type: "text", Data: map[string]string{"text": "raw caption edit"}},
+		{Type: "image", Data: map[string]string{"file_unique_id": "stable-telegram-image", "file_id": "new-file-id"}},
+	}}
+	if got, want := MessageSearchMediaRevision(queued), MessageSearchMediaRevision(rawEdit); got != want {
+		t.Fatalf("同一 Telegram 图片的 enriched/raw 版本不一致: %q != %q", got, want)
+	}
+	replaced := cloneRecallEvents([]MessageEvent{event})[0]
+	replaced.Segments[1].Data[imageContentSHA256Key] = hashB
+	replaced.Segments[1].Data["file_unique_id"] = "replacement-telegram-image"
+	if got := MessageSearchMediaRevision(replaced); got == original {
+		t.Fatal("替换图片后媒体版本没有变化")
+	}
+	removed := event
+	removed.Segments = removed.Segments[:1]
+	if got := MessageSearchMediaRevision(removed); got != "" {
+		t.Fatalf("移除图片后的媒体版本应为空，实际 %q", got)
+	}
+}
+
+// 旧图片任务完成时，如果持久化消息已换图或删图，条件写入会拒绝它；调用方
+// 不能再退回旧接口，也不能继续用旧事件重排语义索引。
+func TestRefreshMessageImageSearchTextStopsWhenMediaRevisionIsStale(t *testing.T) {
+	hash := strings.Repeat("a", 64)
+	base := newSearchExtraTestStore()
+	store := &rejectingRevisionSearchExtraStore{searchExtraTestStore: base}
+	runtime := NewRuntime(BotConfig{BotAccount: "bot"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	runtime.SetMessageHistoryStore(store)
+	if err := store.SaveImageDescription(context.Background(), ImageDescriptionRecord{
+		ContentSHA256: hash,
+		Description:   "不应写回的旧图片描述",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	event := MessageEvent{
+		Kind: EventKindGroup, GroupID: "group-1", UserID: "user-1", MessageID: "edited-image",
+		Segments: []MessageSegment{{Type: "image", Data: map[string]string{imageContentSHA256Key: hash}}},
+	}
+
+	runtime.refreshMessageImageSearchText(context.Background(), event)
+	if store.calls != 1 {
+		t.Fatalf("revision-aware save calls = %d, want 1", store.calls)
+	}
+	if got := store.extra(sessionKey(event), event.MessageID); got != "" {
+		t.Fatalf("stale description fell back to unguarded save: %q", got)
 	}
 }
 

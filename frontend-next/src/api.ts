@@ -2824,6 +2824,10 @@ export interface AssistantEventDetail extends BotEvent {
   sender_level_label?: string;
   sub_type?: string;
   original_time?: string;
+  /** 平台已编辑这条消息；事件时间仍是原始发送时间。 */
+  edited?: boolean;
+  /** 平台提供的最近编辑时间。 */
+  edit_time?: string;
   operator_id?: string;
   operator_name?: string;
   operator_role?: string;

@@ -5,6 +5,8 @@ package assistant
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"log"
 	"sort"
@@ -15,6 +17,14 @@ import (
 
 	"github.com/SuInk/diana/model/llm"
 )
+
+// MessageSearchExtraRevisionStore conditionally writes an asynchronously
+// generated image description only while the durable message still refers to
+// the same images. It returns the current durable revision so semantic indexing
+// never uses a stale caption after an image-only job finishes.
+type MessageSearchExtraRevisionStore interface {
+	SaveMessageSearchExtraIfMediaCurrent(ctx context.Context, session string, expected MessageEvent, extra string) (current MessageEvent, saved bool, err error)
+}
 
 const (
 	recallImageDescriptionKey         = "cached_description"
@@ -315,14 +325,94 @@ func (r *Runtime) refreshMessageImageSearchText(ctx context.Context, event Messa
 		return
 	}
 	r.mu.RLock()
-	store, _ := r.messageStore.(MessageSearchExtraStore)
+	messageStore := r.messageStore
 	r.mu.RUnlock()
-	if store != nil {
-		if err := store.SaveMessageSearchExtra(ctx, sessionKey(event), event.MessageID, descriptions); err != nil {
+	indexEvent := event
+	storeSession := messageStoreSession(event)
+	if store, ok := messageStore.(MessageSearchExtraRevisionStore); ok {
+		current, saved, err := store.SaveMessageSearchExtraIfMediaCurrent(ctx, storeSession, event, descriptions)
+		if err != nil {
+			log.Printf("diana history image search text update failed: message_id=%s err=%v", event.MessageID, err)
+			return
+		}
+		if !saved {
+			return
+		}
+		indexEvent = current
+	} else if store, ok := messageStore.(MessageSearchExtraStore); ok {
+		if err := store.SaveMessageSearchExtra(ctx, storeSession, event.MessageID, descriptions); err != nil {
 			log.Printf("diana history image search text update failed: message_id=%s err=%v", event.MessageID, err)
 		}
 	}
-	r.enqueueSemanticIndex(event)
+	r.enqueueSemanticIndexForSession(indexEvent, storeSession)
+}
+
+// MessageSearchMediaRevision returns a stable identity for the still images
+// whose descriptions contribute to this message row's search_extra. Quoted
+// media is indexed under its own message ID by historyImageDescriptionEvents.
+// Captions and derived cache fields do not participate, so a text-only edit can
+// still accept an in-flight description; replacing/removing an image changes it.
+func MessageSearchMediaRevision(event MessageEvent) string {
+	hash := sha256.New()
+	images := 0
+	appendSegments := func(scope string, segments []MessageSegment) {
+		ordinal := 0
+		for _, segment := range segments {
+			if !recallStillImageSegment(segment) {
+				continue
+			}
+			ordinal++
+			images++
+			identity := messageSearchImageIdentity(segment)
+			_, _ = fmt.Fprintf(hash, "%s\x00%d\x00%d:%s\x00", scope, ordinal, len(identity), identity)
+		}
+	}
+	appendSegments("message", event.Segments)
+	if images == 0 {
+		return ""
+	}
+	return hex.EncodeToString(hash.Sum(nil))
+}
+
+func messageSearchImageIdentity(segment MessageSegment) string {
+	// Telegram's stable unique ID survives a caption edit even when the new raw
+	// update has not been downloaded and enriched with content_sha256 yet.
+	for _, key := range []string{"sticker_unique_id", "file_unique_id"} {
+		if value := strings.TrimSpace(segment.Data[key]); value != "" {
+			return key + ":" + value
+		}
+	}
+	if value := strings.ToLower(strings.TrimSpace(segment.Data[imageContentSHA256Key])); validSHA256(value) {
+		return imageContentSHA256Key + ":" + value
+	}
+	for _, key := range []string{
+		"sha256", "md5",
+		"file_id", "sticker_file_id", "url", "image_url", "src",
+		"download_url", "file_url", "cached_file", "sourcePath", "source_path",
+		"filePath", "file_path", "path", "file",
+	} {
+		if value := strings.TrimSpace(segment.Data[key]); value != "" {
+			return key + ":" + value
+		}
+	}
+	// An unusual adapter may provide none of the standard identity fields. Keep
+	// the comparison deterministic and conservative: any metadata change then
+	// rejects the stale write rather than guessing that two images are equal.
+	keys := make([]string, 0, len(segment.Data))
+	for key := range segment.Data {
+		switch key {
+		case recallImageDescriptionKey, recallImageDescriptionSourceKey, recallImageFailureKey, recallImageAttachmentIndexKey:
+			continue
+		}
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	var identity strings.Builder
+	for _, key := range keys {
+		value := segment.Data[key]
+		_, _ = fmt.Fprintf(&identity, "%d:%s=%d:%s\x00", len(key), key, len(value), value)
+	}
+	return identity.String()
 }
 
 // messageImageDescriptionText 汇总一条消息里所有图片的描述，供检索使用。

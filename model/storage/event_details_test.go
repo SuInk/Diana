@@ -1132,3 +1132,77 @@ VALUES ('payload-name', 'group:20001', 'group', '20001', '30001', 'message-1', ?
 		t.Fatalf("events = %#v, want payload sender name", page.Events)
 	}
 }
+
+func TestListInboundEventDetailsExposesCurrentEditedRevision(t *testing.T) {
+	ctx := context.Background()
+	store, err := NewSQLiteStore(filepath.Join(t.TempDir(), "event-edited-revision.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+
+	sentAt := time.Now().Add(-5 * time.Minute).Truncate(time.Second)
+	editAt := sentAt.Add(3 * time.Minute)
+	original := assistant.MessageEvent{
+		Platform: assistant.PlatformTelegram, Kind: assistant.EventKindGroup,
+		GroupID: "20001", UserID: "30001", MessageID: "message-edited", Time: sentAt.Unix(),
+		RawMessage: "初稿正文",
+		Segments:   []assistant.MessageSegment{{Type: "text", Data: map[string]string{"text": "初稿正文"}}},
+	}
+	edited := original
+	edited.Edited = true
+	edited.EditTime = editAt.Unix()
+	edited.RawMessage = "修改后正文"
+	edited.Segments = []assistant.MessageSegment{{Type: "text", Data: map[string]string{"text": "修改后正文"}}}
+	originalPayload, err := json.Marshal(original)
+	if err != nil {
+		t.Fatal(err)
+	}
+	editedPayload, err := json.Marshal(edited)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.ExecContext(ctx, `
+INSERT INTO message_events (id, session, kind, group_id, user_id, message_id, event_time, text, payload, created_at)
+VALUES ('edited-detail', 'group:20001', 'group', '20001', '30001', 'message-edited', ?, '修改后正文', ?, ?)
+`, sentAt.Unix(), string(editedPayload), sentAt.Format(time.RFC3339Nano)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.ExecContext(ctx, `
+INSERT INTO inbound_events (
+  id, session, kind, group_id, user_id, message_id, event_time, payload, priority,
+  status, attempts, available_at, outcome, created_at, updated_at, completed_at
+)
+VALUES ('edited-detail', 'group:20001', 'group', '20001', '30001', 'message-edited', ?, ?, 0,
+  'done', 1, ?, 'handled', ?, ?, ?)
+`, sentAt.Unix(), string(originalPayload), sentAt.UnixNano(), sentAt.UnixNano(), sentAt.UnixNano(), sentAt.UnixNano()); err != nil {
+		t.Fatal(err)
+	}
+
+	page, err := store.ListInboundEventDetails(ctx, InboundEventQuery{Since: sentAt.Add(-time.Minute), Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Events) != 1 {
+		t.Fatalf("events = %#v, want one edited event", page.Events)
+	}
+	got := page.Events[0]
+	if !got.Edited || got.EditTime == nil || !got.EditTime.Equal(editAt) {
+		t.Fatalf("edited metadata = Edited:%v EditTime:%v, want true/%s", got.Edited, got.EditTime, editAt)
+	}
+	if got.Text != "修改后正文" {
+		t.Fatalf("text = %q, want current edited revision", got.Text)
+	}
+	if !got.At.Equal(sentAt) {
+		t.Fatalf("event time = %s, want original send time %s", got.At, sentAt)
+	}
+	for _, term := range []string{"初稿正文", "修改后正文"} {
+		searched, err := store.ListInboundEventDetails(ctx, InboundEventQuery{Since: sentAt.Add(-time.Minute), Limit: 10, Search: term})
+		if err != nil {
+			t.Fatalf("search %q: %v", term, err)
+		}
+		if len(searched.Events) != 1 || searched.Events[0].ID != got.ID {
+			t.Fatalf("search %q events = %#v, want edited event", term, searched.Events)
+		}
+	}
+}

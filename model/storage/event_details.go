@@ -35,6 +35,8 @@ type InboundEventDetail struct {
 	SenderLevelLabel  string     `json:"sender_level_label,omitempty"`
 	SubType           string     `json:"sub_type,omitempty"`
 	OriginalTime      *time.Time `json:"original_time,omitempty"`
+	Edited            bool       `json:"edited,omitempty"`
+	EditTime          *time.Time `json:"edit_time,omitempty"`
 	OperatorID        string     `json:"operator_id,omitempty"`
 	OperatorName      string     `json:"operator_name,omitempty"`
 	OperatorRole      string     `json:"operator_role,omitempty"`
@@ -288,14 +290,23 @@ func (s *SQLiteStore) ListInboundEventDetails(ctx context.Context, query Inbound
 		groupCondition += " AND i.profile_id = ?"
 		scopeArgs = append(scopeArgs, profileID)
 	}
-	// 搜索同样要作用在计数和列表两处。payload 是完整事件的 JSON，正文和发送者
-	// 昵称都在里面；回复内容单独存在 reply_text 列，两个都要看。
+	// 搜索同样要作用在计数和列表两处。inbound_events.payload 是实际处理过的
+	// 快照，message_events.payload 是编辑后的当前版本；两份都搜，既能按新正文
+	// 找到事件，也保留审计旧版本的入口。回复内容单独存在 reply_text 列。
 	// LIKE 里的 % 和 _ 是通配符，用户搜这两个字符时得转义，否则「100%」会变成
 	// 匹配任意内容。
 	if search := strings.TrimSpace(query.Search); search != "" {
 		pattern := "%" + escapeSQLiteLike(search) + "%"
-		groupCondition += ` AND (i.payload LIKE ? ESCAPE '\' OR COALESCE(i.reply_text, '') LIKE ? ESCAPE '\' OR COALESCE(i.message_id, '') LIKE ? ESCAPE '\')`
-		scopeArgs = append(scopeArgs, pattern, pattern, pattern)
+		groupCondition += ` AND (
+  i.payload LIKE ? ESCAPE '\'
+  OR EXISTS (
+    SELECT 1 FROM message_events AS current_message
+    WHERE current_message.id = i.id AND current_message.payload LIKE ? ESCAPE '\'
+  )
+  OR COALESCE(i.reply_text, '') LIKE ? ESCAPE '\'
+  OR COALESCE(i.message_id, '') LIKE ? ESCAPE '\'
+)`
+		scopeArgs = append(scopeArgs, pattern, pattern, pattern, pattern)
 	}
 
 	if !query.Lightweight {
@@ -435,6 +446,11 @@ LIMIT ? OFFSET ?
 			if source.OriginalTime > 0 {
 				originalAt := time.Unix(source.OriginalTime, 0).UTC()
 				item.OriginalTime = &originalAt
+			}
+			item.Edited = source.Edited
+			if source.EditTime > 0 {
+				editAt := time.Unix(source.EditTime, 0).UTC()
+				item.EditTime = &editAt
 			}
 			segments := inboundEventDisplaySegments(source, item.Text)
 			item.Images = inboundEventImages(segments)

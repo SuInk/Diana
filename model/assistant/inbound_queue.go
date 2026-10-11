@@ -257,6 +257,24 @@ type InboundEventStore interface {
 	ListHistorySessions(ctx context.Context) ([]HistorySession, error)
 }
 
+// InboundMessageEditRefresh describes an edit that matched an already known
+// inbound message. Session is the durable row's actual session, which may be a
+// legacy unnamespaced key even when the live event now carries a bot namespace.
+type InboundMessageEditRefresh struct {
+	EventID string
+	Session string
+	Event   MessageEvent
+	Found   bool
+	Applied bool
+}
+
+// InboundMessageEditStore is an optional durable-ingest capability. It only
+// refreshes an existing message and never inserts a missing edit: first-seen
+// edits must still pass the ordinary admission, governance, and enqueue path.
+type InboundMessageEditStore interface {
+	RefreshInboundMessageEdit(ctx context.Context, session string, event MessageEvent, priority ...int) (InboundMessageEditRefresh, error)
+}
+
 // InboundSupersessionStore 把「这条消息已经并进别的回复轮」的标记交给最后那道
 // 发送闸门。标记由合并/连发交接写入（MarkInboundHandoff）：被并进去的那条
 // 自己的任务如果还是走到了发送，就在这里拦下，别把同一个问题答两遍。
@@ -762,6 +780,7 @@ func nextInboundPollDelay(current time.Duration) time.Duration {
 }
 
 func (r *Runtime) processInboundQueueItem(ctx context.Context, item InboundQueueItem) (string, error) {
+	item.Event.durableSession = strings.TrimSpace(item.Session)
 	// 断线回补里没排上回复名额的消息在这里就收住，只补进上下文历史。它们不能走下面的
 	// 语音转写、图片处理、插件观察、消息中继和回复：回补设条数上限防的就是
 	// 一批积压消息同时开出一堆媒体任务，这些消息要是也走完整流程，上限等于没设。

@@ -14,6 +14,14 @@
 
 接口约束：[sendPhoto](https://core.telegram.org/bots/api#sendphoto)、[sendAnimation](https://core.telegram.org/bots/api#sendanimation)、[sendSticker](https://core.telegram.org/bots/api#sendsticker)。
 
+## 消息编辑
+
+Telegram 通过 `edited_message` 和 `edited_channel_post` 下发机器人可见消息的编辑结果。Diana 会用 `message_id` 找到已经缓存的原消息，以编辑后的正文和媒体替换当前版本，并记录 Bot API 提供的 `edit_date`；事件记录会显示“已编辑”，悬停可以查看编辑时间。消息原始发送时间保持不变。
+
+如果原消息仍在等待处理，队列会改用最新版本；如果已经开始处理或已经完成，只更新缓存和事件列表，不重跑插件、模型或回复，也不会改变原处理结果。已经发送的回复、工具或插件产生的外部效果，以及此前抽取的摘要和长期记忆不会因编辑自动回滚。Diana 第一次看到的就是编辑事件时，会把该版本作为一条新收到的消息正常处理。重复或乱序到达的旧编辑不会覆盖已经保存的新版本。
+
+Diana 保存的是当前版本，不另外展示逐次编辑历史。只有机器人原本有权接收的消息才会产生编辑更新；离线期间错过、隐私模式下不可见或超出 Telegram 更新保留范围的编辑，无法仅凭本地原消息推断出来。
+
 ## 群消息撤回
 
 Telegram Bot API 的普通群和超级群消息更新没有删除通知。即使机器人是管理员，也不能通过增加轮询事件类型来实时监听群成员删除消息。

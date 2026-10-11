@@ -31,6 +31,10 @@ import "strings"
 // 内联 base64 会出现在 file / url / src 这些键上，一概不留。
 var queuedImageSegmentKeys = []string{
 	imageContentSHA256Key,
+	// Stable platform identity lets a completed Telegram job match a later raw
+	// caption edit that has the same image but has not been downloaded again.
+	"file_unique_id",
+	"sticker_unique_id",
 	"cached_file",
 	"sourcePath",
 	"source_path",
