@@ -11,7 +11,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 )
 
 // hostRewriteTransport 把发往各平台的请求改投到本地桩，原来的主机名放进
@@ -142,6 +144,128 @@ func TestResolverCredentialCheckDoesNotBlameCookieForBlockedRequests(t *testing.
 	}
 }
 
+func TestResolverCredentialCheckFiltersBeforeRequests(t *testing.T) {
+	var mu sync.Mutex
+	var hosts []string
+	plugin := newCredentialTestResolver(t, func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		hosts = append(hosts, r.Header.Get("X-Test-Host"))
+		mu.Unlock()
+		_, _ = w.Write([]byte(`{}`))
+	})
+	settings := SettingValues{
+		resolverSettingBiliSessdata:     "bili-test",
+		resolverSettingDouyinCookie:     "sessionid=douyin-test",
+		resolverSettingXHSCookie:        "web_session=xhs-test",
+		resolverSettingYTDLPCookies:     filepath.Join(t.TempDir(), "missing"),
+		resolverSettingEnabledPlatforms: []string{},
+	}
+	cases := []struct{ key, host string }{
+		{resolverSettingBiliSessdata, "api.bilibili.com"},
+		{resolverSettingDouyinCookie, "www.douyin.com"},
+		{resolverSettingXHSCookie, "www.xiaohongshu.com"},
+		{resolverSettingYTDLPCookies, ""},
+		{"not-a-credential", ""},
+		{"", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.key, func(t *testing.T) {
+			mu.Lock()
+			hosts = nil
+			mu.Unlock()
+			checks := plugin.TestCredentialsForKey(context.Background(), settings, tc.key)
+			mu.Lock()
+			defer mu.Unlock()
+			switch tc.key {
+			case "":
+				if len(checks) != 4 || len(hosts) != 3 {
+					t.Fatalf("full checks=%v hosts=%v", checks, hosts)
+				}
+			case "not-a-credential":
+				if len(checks) != 0 || len(hosts) != 0 {
+					t.Fatalf("unknown key ran checks=%v hosts=%v", checks, hosts)
+				}
+			default:
+				if len(checks) != 1 || checks[0].Key != tc.key || !checks[0].Configured {
+					t.Fatalf("filtered checks=%v", checks)
+				}
+				if tc.host == "" && len(hosts) != 0 || tc.host != "" && (len(hosts) != 1 || hosts[0] != tc.host) {
+					t.Fatalf("unexpected requests: %v, want only %q", hosts, tc.host)
+				}
+			}
+		})
+	}
+}
+
+func TestResolverCredentialCheckUnconfiguredDoesNotRequest(t *testing.T) {
+	plugin := newCredentialTestResolver(t, func(http.ResponseWriter, *http.Request) {
+		t.Error("unconfigured credential made a request")
+	})
+	for _, key := range []string{"", resolverSettingBiliSessdata, resolverSettingDouyinCookie, resolverSettingXHSCookie, resolverSettingYTDLPCookies} {
+		checks := plugin.TestCredentialsForKey(context.Background(), nil, key)
+		for _, check := range checks {
+			if check.Configured || check.State != CredentialUnconfigured {
+				t.Fatalf("unconfigured check=%v", check)
+			}
+		}
+	}
+}
+
+func TestResolverCredentialCheckResponseClassification(t *testing.T) {
+	cases := []struct {
+		name, key, body, state string
+		status                 int
+	}{
+		{"bili logged out flag", resolverSettingBiliSessdata, `{"code":0,"data":{"isLogin":false}}`, CredentialInvalid, 200},
+		{"bili logged out code", resolverSettingBiliSessdata, `{"code":-101}`, CredentialInvalid, 200},
+		{"bili missing login", resolverSettingBiliSessdata, `{"code":0,"data":{}}`, CredentialUnverified, 200},
+		{"bili risk control", resolverSettingBiliSessdata, `{"code":-352,"data":{"isLogin":false}}`, CredentialUnverified, 200},
+		{"douyin empty", resolverSettingDouyinCookie, `{}`, CredentialUnverified, 200},
+		{"douyin missing user", resolverSettingDouyinCookie, `{"message":"success","data":{}}`, CredentialUnverified, 200},
+		{"douyin risk control", resolverSettingDouyinCookie, `{"message":"error","data":{"error_code":1105}}`, CredentialUnverified, 200},
+		{"xhs challenge", resolverSettingXHSCookie, `<html>challenge</html>`, CredentialUnverified, 200},
+		{"malformed JSON", resolverSettingBiliSessdata, `<html>challenge</html>`, CredentialUnverified, 200},
+	}
+	for _, key := range []string{resolverSettingBiliSessdata, resolverSettingDouyinCookie, resolverSettingXHSCookie} {
+		for _, status := range []int{403, 429, 500} {
+			cases = append(cases, struct {
+				name, key, body, state string
+				status                 int
+			}{key + http.StatusText(status), key, `{"code":-101,"data":{"isLogin":false,"error_code":13,"user_id":0},"user":{"loggedIn":false}}`, CredentialError, status})
+		}
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			plugin := newCredentialTestResolver(t, func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(tc.status)
+				_, _ = w.Write([]byte(tc.body))
+			})
+			checks := plugin.TestCredentialsForKey(context.Background(), SettingValues{tc.key: "test-value"}, tc.key)
+			if len(checks) != 1 || checks[0].State != tc.state {
+				t.Fatalf("checks=%v, want %s", checks, tc.state)
+			}
+		})
+	}
+}
+
+func TestResolverCredentialCheckDeadlineIsRequestError(t *testing.T) {
+	plugin := newCredentialTestResolver(t, func(http.ResponseWriter, *http.Request) {
+		t.Error("expired request should not reach server")
+	})
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancel()
+	checks := plugin.TestCredentials(ctx, SettingValues{
+		resolverSettingBiliSessdata: "bili-test",
+		resolverSettingDouyinCookie: "sessionid=douyin-test",
+		resolverSettingXHSCookie:    "web_session=xhs-test",
+	})
+	for _, check := range checks[:3] {
+		if check.State != CredentialError || !strings.Contains(check.Message, "deadline exceeded") {
+			t.Fatalf("deadline check=%v", check)
+		}
+	}
+}
+
 func TestYTDLPCookieFileCheck(t *testing.T) {
 	dir := t.TempDir()
 	netscape := filepath.Join(dir, "cookies.txt")
@@ -152,11 +276,26 @@ func TestYTDLPCookieFileCheck(t *testing.T) {
 	if err := os.WriteFile(jsonExport, []byte(`[{"name":"SID","value":"v"}]`), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	for name, content := range map[string]string{
+		"empty":       "",
+		"header-only": "# Netscape HTTP Cookie File\n",
+		"httponly":    "#HttpOnly_.example.com\tTRUE\t/\tTRUE\t0\tsession\ttest\n",
+		"short-row":   ".example.com\tTRUE\t/\tTRUE\t0\tsession\n",
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
 	cases := map[string]string{
-		netscape:                      CredentialUnverified,
-		jsonExport:                    CredentialInvalid,
-		filepath.Join(dir, "missing"): CredentialInvalid,
-		dir:                           CredentialInvalid,
+		"":                                CredentialUnconfigured,
+		filepath.Join(dir, "empty"):       CredentialInvalid,
+		filepath.Join(dir, "header-only"): CredentialUnverified,
+		filepath.Join(dir, "httponly"):    CredentialUnverified,
+		filepath.Join(dir, "short-row"):   CredentialInvalid,
+		netscape:                          CredentialUnverified,
+		jsonExport:                        CredentialInvalid,
+		filepath.Join(dir, "missing"):     CredentialInvalid,
+		dir:                               CredentialInvalid,
 	}
 	for path, want := range cases {
 		if got := checkYTDLPCookieFile(path); got.State != want {

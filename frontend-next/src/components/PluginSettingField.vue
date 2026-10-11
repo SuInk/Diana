@@ -17,7 +17,10 @@ const props = defineProps<{
   fieldID?: string;
 }>();
 
-const emit = defineEmits<{ (event: "toggle-clear", key: string): void }>();
+const emit = defineEmits<{
+  (event: "toggle-clear", key: string): void;
+  (event: "blur", key: string, focusEvent: FocusEvent): void;
+}>();
 
 const controlID = computed(() => props.fieldID ?? `setting-${props.spec.key}`);
 const labelID = computed(() => `${controlID.value}-label`);
@@ -111,12 +114,14 @@ function toggleMultiSelect(option: string, event: Event): void {
           autocomplete="off"
           :disabled="clearing"
           :placeholder="secretPlaceholder"
+          @blur="emit('blur', spec.key, $event)"
         />
         <button
           v-if="secretConfigured"
           class="btn small"
           type="button"
           :aria-pressed="clearing ? 'true' : 'false'"
+          data-secret-clear
           @click="emit('toggle-clear', spec.key)"
         >
           {{ clearing ? "取消清除" : "清除" }}

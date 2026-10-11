@@ -6,7 +6,7 @@
     <!-- 遮罩不再关闭弹窗：这些弹窗里几乎都是表单，误点一下外面就丢掉一屏输入。
          关闭仍然有右上角按钮和 Esc 两条明确的路径。 -->
     <div class="modal-backdrop">
-      <div ref="modalRef" class="modal" :class="{ wide, 'fixed-height': fixedHeight }" role="dialog" aria-modal="true" :aria-label="title">
+      <div ref="modalRef" class="modal" :class="{ wide, 'fixed-height': fixedHeight }" role="dialog" aria-modal="true" :aria-label="title" @pointerdown.capture="emit('pointerdown', $event)">
         <header class="modal-header">
           <h2>{{ title }}</h2>
           <button class="btn ghost icon-only small" type="button" aria-label="关闭" @click="emit('close')">
@@ -30,7 +30,7 @@ import { X } from "@lucide/vue";
 import { lockBodyScroll, releaseBodyScroll } from "../scrollLock";
 
 const props = defineProps<{ title: string; wide?: boolean; fixedHeight?: boolean; initialFocus?: string }>();
-const emit = defineEmits<{ close: [] }>();
+const emit = defineEmits<{ close: []; pointerdown: [event: PointerEvent] }>();
 const modalRef = ref<HTMLElement | null>(null);
 let previousFocus: HTMLElement | null = null;
 

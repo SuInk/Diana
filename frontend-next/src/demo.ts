@@ -3,6 +3,7 @@
 
 import { extensionDemoResponse } from './extension-demo';
 import { adminChatDemoResponse } from './admin-chat-demo';
+import { mergeResolverDemoSettings, resolverDemoManifest, resolverDemoTestResponse } from './resolver-demo';
 // 和后端登记表逐字相同的提示词目录，由 webui/demo_prompt_catalog_test.go 生成并校验。
 import demoPromptCatalogData from './demo-prompt-catalog.json';
 import demoBuiltinSouls from './demo-builtin-souls.json';
@@ -185,13 +186,7 @@ function demoPluginForProfile(plugin: PluginState, profile: string): PluginState
 let plugins: PluginState[] = [
   { manifest: { id: 'official.web-search', name: '联网搜索', version: '0.3.4', description: '为对话提供实时联网搜索。搜索来源与凭据在提供商页管理，机器人在模型与搜索页选择首选和后备来源。', official: true, built_in: true, permissions: ['network:http', 'llm:tool'], settings: [{ key: 'max_results', label: '每次结果上限', type: 'number', default: 5 }] }, installed: true, enabled: true },
   { manifest: { id: "official.file-parser", name: "文件解析", version: "0.3.0", description: "解析 PDF、图片和文本附件，把结构化内容交给模型。", official: true, built_in: true, permissions: ["文件解析", "消息读取"] }, installed: true, enabled: true },
-  { manifest: { id: "official.nonebot-plugin-resolver-go", name: "链接解析", version: "0.3.0", description: "解析社交媒体链接，支持合并转发图片和限定大小的视频。", official: true, built_in: true, permissions: ["网络请求", "消息发送"],
-      settings: [
-        { key: "bili_sessdata", label: "B 站 SESSDATA", type: "string", default: "", secret: true, description: "所有机器人共用的 B 站 SESSDATA。留空不使用登录凭据。" },
-        { key: "douyin_cookie", label: "抖音 Cookie", type: "string", default: "", secret: true, description: "所有机器人共用的抖音 Cookie。不配置时无法解析需要登录的内容。" },
-        { key: "xhs_cookie", label: "小红书 Cookie", type: "string", default: "", secret: true, description: "所有机器人共用的小红书 Cookie。不配置时无法解析需要登录的内容。" },
-        { key: "ytdlp_cookies_path", label: "yt-dlp Cookie 文件路径", type: "string", default: "", description: "共享的 Netscape 格式 Cookie 文件路径。" }
-      ] }, installed: true, enabled: true },
+  { manifest: resolverDemoManifest, installed: true, enabled: true },
   {
     manifest: {
       id: "official.music", name: "音乐增强", version: "0.2.1", description: "群里分享的音乐链接直接下成一条语音发出来；开启点歌后，模型也能按用户要求搜歌并发送。网易云、QQ 音乐并列，一家放不出来自动换下一家。仅 OneBot v11 支持语音。", official: true, built_in: true, permissions: ["模型工具", "网络请求", "文件写入", "消息发送"],
@@ -1685,20 +1680,8 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
     return json(demoPluginForProfile(plugin, ""));
   }
   if (path === "/api/assistant/plugins/resolver/test" && method === "POST") {
-    return json({
-      credentials: [
-        { key: "bili_sessdata", label: "B 站 SESSDATA", configured: true, state: "valid", account: "演示账号", message: "已登录，大会员" },
-        { key: "douyin_cookie", label: "抖音 Cookie", configured: false, state: "unconfigured", message: "未填写" },
-        {
-          key: "xhs_cookie",
-          label: "小红书 Cookie",
-          configured: true,
-          state: "invalid",
-          message: "小红书说这份 Cookie 没有登录，需要重新复制。Cookie 里没有 web_session：请从开发者工具 Network 面板任意请求的 Cookie 请求头整段复制，document.cookie 拿不到它。"
-        },
-        { key: "ytdlp_cookies_path", label: "yt-dlp Cookie 文件", configured: true, state: "unverified", message: "文件可读，是 Netscape 格式；是否仍在登录状态要等 yt-dlp 实际下载时才知道。" }
-      ]
-    });
+    const plugin = plugins.find(item => item.manifest.id === resolverDemoManifest.id);
+    return resolverDemoTestResponse(plugin?.settings ?? {}, body, url.searchParams.getAll("credential_key"), init?.signal ?? (input instanceof Request ? input.signal : undefined));
   }
   if (path === "/api/assistant/plugins/github/credentials/test" && method === "POST") {
     let listed: Array<{ id: string; name?: string; auth?: string }> = [];
@@ -1750,7 +1733,9 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
     }
     const profile = url.searchParams.get("profile") ?? "";
     if (pluginMatch[2] === "settings") {
-      {
+      if (plugin.manifest.id === resolverDemoManifest.id) {
+        plugin.settings = mergeResolverDemoSettings(plugin.settings ?? {}, body, "save");
+      } else {
         const previous = plugin.settings ?? {};
         const next = { ...((body.settings as Record<string, unknown>) ?? {}) };
         const cleared = new Set((body.clear_secrets as string[]) ?? []);
