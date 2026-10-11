@@ -6069,27 +6069,35 @@ func (r *Runtime) applyQuotedMessage(event MessageEvent, quoted *QuotedMessage) 
 }
 
 func (r *Runtime) lookupQuotedMessage(ctx context.Context, event MessageEvent, messageID string) *QuotedMessage {
+	quoted, _ := r.lookupQuotedMessageWithError(ctx, event, messageID)
+	return quoted
+}
+
+func (r *Runtime) lookupQuotedMessageWithError(ctx context.Context, event MessageEvent, messageID string) (*QuotedMessage, error) {
 	r.mu.RLock()
 	for i := len(r.history[sessionKey(event)]) - 1; i >= 0; i-- {
 		item := r.history[sessionKey(event)][i]
 		if item.MessageID == messageID {
 			r.mu.RUnlock()
-			return quotedMessageFromHistory(item)
+			return quotedMessageFromHistory(item), nil
 		}
 	}
 	store := r.messageStore
 	r.mu.RUnlock()
 	lookup, ok := store.(MessageEventLookupStore)
 	if !ok {
-		return nil
+		return nil, nil
 	}
 	loadCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
 	record, found, err := lookup.FindMessageEvent(loadCtx, sessionKey(event), messageID)
-	if err != nil || !found {
-		return nil
+	if err != nil {
+		return nil, err
 	}
-	return quotedMessageFromHistory(record)
+	if !found {
+		return nil, nil
+	}
+	return quotedMessageFromHistory(record), nil
 }
 
 func (r *Runtime) recordReplyReferenceError(ctx context.Context, event MessageEvent, messageID string, err error) {
@@ -6957,15 +6965,41 @@ func (r *Runtime) applyOutgoingReplyMarker(ctx context.Context, event MessageEve
 	// 平台感知：QQ 官方的 ROBOT1.0_/REFIDX_ 不是纯数字，数字校验会把模型自发
 	// 写的标记消费后丢弃。目标存在性由下面的历史回查把关。
 	if !replyMarkerIDAcceptable(event.Platform, id) {
+		r.recordOutgoingReplyDiscard(ctx, event, "invalid_target")
 		return msg
 	}
 	// 指向当前这条消息时不必再查一次：它一定存在，而历史查询可能因为存储未接入或
 	// 消息尚未落库而落空，auto 档下会让模型自己写的引用悄悄失效。
-	if id != strings.TrimSpace(event.MessageID) && r.lookupQuotedMessage(ctx, event, id) == nil {
-		return msg
+	if id != strings.TrimSpace(event.MessageID) {
+		quoted, err := r.lookupQuotedMessageWithError(ctx, event, id)
+		if err != nil {
+			reason := "storage_error"
+			if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+				reason = "storage_timeout_or_canceled"
+			}
+			r.recordOutgoingReplyDiscard(ctx, event, reason)
+			return msg
+		}
+		if quoted == nil {
+			r.recordOutgoingReplyDiscard(ctx, event, "history_not_found")
+			return msg
+		}
 	}
+
 	msg.ReplyMessageID = id
 	return msg
+}
+
+func (r *Runtime) recordOutgoingReplyDiscard(ctx context.Context, event MessageEvent, reason string) {
+	writer := r.appLogWriter()
+	if writer == nil {
+		return
+	}
+	_ = writer.AppendLog(ctx, applog.Entry{
+		Kind: applog.KindOperation, Level: applog.LevelInfo,
+		Action: "outgoing_reply_discarded", Message: "出站引用目标未采用，正文照常发送",
+		Metadata: map[string]any{"reason": reason, "platform": NormalizePlatformID(event.Platform)},
+	})
 }
 
 func routeOutgoingToEvent(event MessageEvent, msg OutgoingMessage) OutgoingMessage {

@@ -67,9 +67,8 @@ func (c *TelegramChannel) sendPhotoAlbum(ctx context.Context, msg OutgoingMessag
 	if msg.MessageThreadID != "" {
 		fields["message_thread_id"] = msg.MessageThreadID
 	}
-	if msg.ReplyMessageID != "" {
-		fields["reply_to_message_id"] = msg.ReplyMessageID
-		fields["allow_sending_without_reply"] = "true"
+	if err := writeTelegramReplyParameters(writer, msg.ReplyMessageID); err != nil {
+		return nil, err
 	}
 	for name, value := range fields {
 		if err := writer.WriteField(name, value); err != nil {
