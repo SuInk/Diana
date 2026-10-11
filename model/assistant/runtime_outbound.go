@@ -70,6 +70,7 @@ func (r *Runtime) deliverChunks(ctx context.Context, event MessageEvent, chunks 
 		if strings.TrimSpace(chunk) == "" {
 			continue
 		}
+		typingIndicatorFromContext(ctx).resume()
 		msg := OutgoingMessage{Text: chunk, LiteralText: decoration.LiteralText}
 		if event.Kind == EventKindGroup {
 			msg.GroupID = event.GroupID
@@ -229,9 +230,6 @@ func (r *Runtime) sendOutgoingWithResult(ctx context.Context, event MessageEvent
 	if !r.rememberTelegramPhotoResults(ctx, event, msg, result) {
 		r.rememberOutgoingWithMessageID(ctx, event, msg, messageID)
 	}
-	// 回复已经发出去了，「正在输入」到此为止：平台自己会清掉状态，这一轮剩下的
-	// 后处理期间不该再刷新，不然最后一条回复之后还会再闪几次。
-	typingIndicatorFromContext(ctx).pause()
 	return result, nil
 }
 

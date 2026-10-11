@@ -516,15 +516,7 @@ func (c *OneBotChannel) CallAPI(ctx context.Context, action string, params map[s
 		"params": params,
 		"echo":   echo,
 	}
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	c.writeMu.Lock()
-	_ = conn.SetWriteDeadline(time.Now().Add(oneBotWriteTimeout))
-	err := conn.WriteJSON(req)
-	c.writeMu.Unlock()
-	if err != nil {
-		// 没写出去就是确定失败，可以放心重试。
+	if err := writeOneBotJSON(ctx, conn, &c.writeMu, req); err != nil {
 		return nil, err
 	}
 	// 写出去之后再超时，接入端可能已经执行了：交给调用方去确认，不能直接重发。

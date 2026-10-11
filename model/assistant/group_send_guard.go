@@ -346,6 +346,8 @@ func (r *Runtime) executeOutboundCall(
 		if alternativeOutboundDelivery(ctx) && !continuousOutboundDelivery(ctx) {
 			return nil, wrapped
 		}
+		// 确定还会重试，退避等待期间重新点亮；最终失败时保持暂停。
+		typingIndicatorFromContext(ctx).resume()
 	}
 }
 
@@ -360,6 +362,7 @@ func retryOutboundPayloadRejection(ctx context.Context, call func(context.Contex
 		if !isOutboundPayloadRejection(err) || attempt >= outboundPayloadMaxAttempts {
 			return result, err
 		}
+		typingIndicatorFromContext(ctx).resume()
 		if err := waitForOutboundRetry(ctx, time.Duration(attempt)*sendRetryBackoff); err != nil {
 			return nil, err
 		}

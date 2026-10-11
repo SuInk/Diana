@@ -124,8 +124,8 @@ func TestTypingIndicatorSurvivesTransientFailure(t *testing.T) {
 	waitForCalls(t, channel, oneBotTypingMaxFailures+5)
 }
 
-// 接入端根本没有 set_input_status 时，连续失败到上限就收手，不再一直空转。
-func TestTypingIndicatorStopsAfterRepeatedFailures(t *testing.T) {
+// 接入端没有 set_input_status 时，连续失败后低频退让，不再一直空转。
+func TestTypingIndicatorBacksOffAfterRepeatedFailures(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	channel := &fakeChatActionChannel{err: errors.New("unsupported action")}
@@ -134,7 +134,7 @@ func TestTypingIndicatorStopsAfterRepeatedFailures(t *testing.T) {
 	waitForCalls(t, channel, oneBotTypingMaxFailures)
 	time.Sleep(30 * time.Millisecond)
 	if got := channel.callCount(); got != oneBotTypingMaxFailures {
-		t.Fatalf("expected %d attempts before giving up, got %d", oneBotTypingMaxFailures, got)
+		t.Fatalf("expected %d attempts before cooldown, got %d", oneBotTypingMaxFailures, got)
 	}
 }
 

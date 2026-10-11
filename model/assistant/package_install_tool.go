@@ -91,14 +91,12 @@ func (t *dianaInstallPackageTool) announce(ctx context.Context, text string) boo
 	if t.runtime == nil {
 		return false
 	}
+	defer typingIndicatorFromContext(ctx).resume()
 	if err := t.runtime.sendOutgoing(ctx, t.event, routeOutgoingToEvent(t.event, OutgoingMessage{Text: text})); err != nil {
 		log.Printf("diana install notice not sent: %v", err)
 		return false
 	}
 	// 话已经出去了，这一轮不能再被合并重来，否则提醒会重复发。
 	t.runtime.sealDirectReply(ctx)
-	if typing := typingIndicatorFromContext(ctx); typing != nil {
-		typing.resume()
-	}
 	return true
 }

@@ -4765,6 +4765,7 @@ func (r *Runtime) deliverResolverResponse(ctx context.Context, event MessageEven
 }
 
 func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event MessageEvent, relationship RelationshipPolicy, messages []llm.Message, preparedRegistry *agent.ToolRegistry, extraTools ...agent.Tool) (string, error) {
+	typingIndicatorFromContext(ctx).resume()
 	// generateReply 也被订阅、动态页和事件触发等后台入口直接调用；这些入口
 	// 没有入站 worker 的上下文，必须在这里按事件恢复 profile 和用量归属。
 	ctx = withLLMUsageContext(ctx, event)
@@ -7170,6 +7171,9 @@ func (r *Runtime) sendDecorated(ctx context.Context, event MessageEvent, reply s
 	reply, event = prepareReplyDelivery(reply, event)
 	cfg := r.effectiveConfigForEvent(event)
 	chunks := splitEventChatReply(reply, cfg, event)
+	if strings.TrimSpace(reply) != "" {
+		typingIndicatorFromContext(ctx).resume()
+	}
 	releaseBatch := r.lockReplyBatch(event)
 	defer releaseBatch()
 
@@ -7343,6 +7347,7 @@ func (r *Runtime) sendChannelPayloadWithRetry(ctx context.Context, msg OutgoingM
 			return nil, fmt.Errorf("diana: channel is not configured")
 		}
 		var result map[string]any
+		typingIndicatorFromContext(ctx).pause()
 		if resultChannel, ok := channel.(ResultChannel); ok {
 			result, lastErr = resultChannel.SendWithResult(ctx, msg)
 		} else {
@@ -7358,6 +7363,10 @@ func (r *Runtime) sendChannelPayloadWithRetry(ctx context.Context, msg OutgoingM
 		}
 		if ctx.Err() != nil {
 			return nil, lastErr
+		}
+		// 只有确实还会重试时才重新点亮，最终失败保持暂停。
+		if attempt+1 < attempts {
+			typingIndicatorFromContext(ctx).resume()
 		}
 	}
 	return nil, fmt.Errorf("diana: send failed after %d attempts: %w", attempts, lastErr)
@@ -7766,6 +7775,7 @@ func (r *Runtime) sendForwardNodesWithResult(ctx context.Context, event MessageE
 	// 合并转发的回推只有一个 forward 段，按它认。
 	sendCtx := withOutboundConfirmFingerprint(ctx, outboundFingerprintForForward())
 	result, err := r.executeOutboundCall(sendCtx, event, action, func(callCtx context.Context) (map[string]any, error) {
+		typingIndicatorFromContext(callCtx).pause()
 		return r.callOneBotAPIForEvent(callCtx, event, action, params)
 	})
 	if err != nil {
