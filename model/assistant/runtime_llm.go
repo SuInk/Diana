@@ -1033,11 +1033,10 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 	if agentEnabled && registry != nil && hasTool(dianaRemoteImageToolName) {
 		appendPromptSection(&builder, cfg.prompt(promptSelfAvatarSpec))
 	}
-	appendPromptSection(&builder, replyPresentationPrompt(!chatSplitLimitsForEvent(cfg, event).SingleMessage, cfg))
 	appendPromptSection(&builder, replyLineBreakPrompt(cfg))
 	// 实时时钟不再拼进人设提示词：它每秒都不同，会让这段最长的 system 提示词永远
 	// 无法命中供应商的前缀缓存。改由 runtimeClockPrompt 作为尾部独立 system 消息注入。
-	if boolValue(cfg.PromptChineseSlangHint, true) {
+	if cfg.ReplyComposer != "maibot" && boolValue(cfg.PromptChineseSlangHint, true) {
 		appendPromptSection(&builder, cfg.prompt(promptChineseSlangSpec))
 	}
 	// 群聊场景说明（被点名 / 主动接话）逐轮切换，在下面的 tail 里注入；head 只留
@@ -1230,6 +1229,7 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 	}
 	// 换行分条的说明在闲聊插话那一轮不出现（那一轮只认显式分条标记），所以也随轮次变，
 	// 跟着进 tail；条件和发送层一致，不变。
+	appendPromptSection(&tail, replyPresentationPrompt(!chatSplitLimitsForEvent(cfg, event).SingleMessage, cfg))
 	appendPromptSection(&tail, replyLineSplitPrompt(chatSplitLimitsForEvent(cfg, event)))
 	if eventCarriesImages(event) {
 		// 逐条消息变化，压到尾部，别把前面几千 token 的稳定规则挤出前缀缓存。

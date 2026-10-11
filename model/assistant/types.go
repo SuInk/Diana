@@ -177,19 +177,21 @@ type MessageEvent struct {
 	ManualRetry bool `json:"manual_retry,omitempty"`
 	// SenderUsername is the platform-authenticated sender handle, not a display
 	// name or a handle found in message text, mentions or forwarded content.
-	SenderUsername   string           `json:"sender_username,omitempty"`
-	MentionTargets   []MessageMention `json:"mention_targets,omitempty"`
-	UserIDType       string           `json:"user_id_type,omitempty"`
-	PlatformScope    string           `json:"platform_scope,omitempty"`
-	GuildID          string           `json:"guild_id,omitempty"`
-	Platform         string           `json:"platform,omitempty"`
-	ProfileID        string           `json:"profile_id,omitempty"`
-	ContextNamespace string           `json:"context_namespace,omitempty"`
-	Kind             EventKind        `json:"kind"`
-	SubType          string           `json:"sub_type,omitempty"`
-	Time             int64            `json:"time,omitempty"`
-	OriginalTime     int64            `json:"original_time,omitempty"`
-	SelfID           string           `json:"self_id,omitempty"`
+	SenderUsername string `json:"sender_username,omitempty"`
+	// SenderMentionUsername 仅用于展示提及，不能用于认证；nil 表示未知，空串表示已知没有用户名。
+	SenderMentionUsername *string          `json:"sender_mention_username,omitempty"`
+	MentionTargets        []MessageMention `json:"mention_targets,omitempty"`
+	UserIDType            string           `json:"user_id_type,omitempty"`
+	PlatformScope         string           `json:"platform_scope,omitempty"`
+	GuildID               string           `json:"guild_id,omitempty"`
+	Platform              string           `json:"platform,omitempty"`
+	ProfileID             string           `json:"profile_id,omitempty"`
+	ContextNamespace      string           `json:"context_namespace,omitempty"`
+	Kind                  EventKind        `json:"kind"`
+	SubType               string           `json:"sub_type,omitempty"`
+	Time                  int64            `json:"time,omitempty"`
+	OriginalTime          int64            `json:"original_time,omitempty"`
+	SelfID                string           `json:"self_id,omitempty"`
 	// SelfUsername 是本机器人在平台上的用户名（Telegram 的 @xxx）。消息文本里
 	// 出现的是它而不是数字 ID，路由判断得靠它才认得出「这是在叫我」。
 	SelfUsername string `json:"self_username,omitempty"`
@@ -322,10 +324,12 @@ type ExternalEvent struct {
 }
 
 type QuotedMessage struct {
-	MessageID                string           `json:"message_id,omitempty"`
-	UserID                   string           `json:"user_id,omitempty"`
-	GroupID                  string           `json:"group_id,omitempty"`
-	SenderName               string           `json:"sender_name,omitempty"`
+	MessageID  string `json:"message_id,omitempty"`
+	UserID     string `json:"user_id,omitempty"`
+	GroupID    string `json:"group_id,omitempty"`
+	SenderName string `json:"sender_name,omitempty"`
+	// SenderMentionUsername follows MessageEvent's display-only, unknown/absent semantics.
+	SenderMentionUsername    *string          `json:"sender_mention_username,omitempty"`
 	RawMessage               string           `json:"raw_message,omitempty"`
 	Segments                 []MessageSegment `json:"segments,omitempty"`
 	Semantic                 bool             `json:"semantic,omitempty"`
@@ -365,9 +369,11 @@ type OutgoingMessage struct {
 	// 显示不出来；查不到的 id 退回显示 @<id>。OneBot 的 at 段有它就带上 name，
 	// 接入端缓存里还没有的新成员才不会被渲染成 @QQ号。
 	MentionNames map[string]string
-	ForwardName  string
-	ForwardUIN   string
-	ForwardTime  int64
+	// MentionUsernames 是按用户 ID 索引的 Telegram 展示用户名，不含 @，不能用于认证。
+	MentionUsernames map[string]string
+	ForwardName      string
+	ForwardUIN       string
+	ForwardTime      int64
 	// TempSessionGroupID 让私聊走 QQ 的临时会话：OneBot 的 send_private_msg 带上
 	// group_id 才能发给不是好友、但同在这个群里的人。只在确认不是好友时才填——
 	// 对好友也走临时会话会把消息塞进另一个对话框。
@@ -696,9 +702,11 @@ type BotConfig struct {
 	WelcomeLLMCooldownSeconds int              `json:"welcome_llm_cooldown_seconds,omitempty"`
 	// SystemPrompt 是这台机器人的 SOUL.md：她是谁、在乎什么、怎么说话。展开 {{name}} 后
 	// 放在系统提示词最前面。JSON 键名沿用 system_prompt，存量配置不用迁移。
-	SystemPrompt string       `json:"system_prompt,omitempty"`
-	ResponseMode ResponseMode `json:"response_mode,omitempty"`
-	ReplyStyle   ReplyStyle   `json:"reply_style,omitempty"`
+	SystemPrompt     string       `json:"system_prompt,omitempty"`
+	ReplyComposer    string       `json:"reply_composer,omitempty"`
+	MaiBotReplyStyle string       `json:"maibot_reply_style,omitempty"`
+	ResponseMode     ResponseMode `json:"response_mode,omitempty"`
+	ReplyStyle       ReplyStyle   `json:"reply_style,omitempty"`
 	// 下面几项是 SOUL.md 之前的人设字段，只在读旧配置时出现：WithDefaults 把它们
 	// 并进 SystemPrompt 后清空，见 persona_legacy.go。
 	Soul                     *PersonaSoul `json:"soul,omitempty"`
@@ -1339,6 +1347,9 @@ type ConfigPayload struct {
 	WelcomeTemplates               []string             `json:"welcome_templates,omitempty"`
 	WelcomeLLMCooldownSeconds      int                  `json:"welcome_llm_cooldown_seconds,omitempty"`
 	SystemPrompt                   string               `json:"system_prompt,omitempty"`
+	ReplyComposer                  string               `json:"reply_composer,omitempty"`
+	MaiBotReplyStyle               string               `json:"maibot_reply_style,omitempty"`
+	ReplyToneDefault               string               `json:"reply_tone_default,omitempty"`
 	ResponseMode                   ResponseMode         `json:"response_mode,omitempty"`
 	ReplyStyle                     ReplyStyle           `json:"reply_style,omitempty"`
 	DebugModeEnabled               *bool                `json:"debug_mode_enabled,omitempty"`
@@ -2167,6 +2178,10 @@ func (cfg BotConfig) WithDefaults() BotConfig {
 	} else {
 		cfg.SystemPrompt = strings.TrimSpace(cfg.SystemPrompt)
 	}
+	if cfg.ReplyComposer != "maibot" {
+		cfg.ReplyComposer = ""
+	}
+	cfg.MaiBotReplyStyle = strings.TrimSpace(cfg.MaiBotReplyStyle)
 	if hasResponseMode {
 		cfg.ResponseMode = cfg.ResponseMode.Normalized()
 	} else {
@@ -2675,6 +2690,9 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		WelcomeTemplates:                  append([]string(nil), cfg.WelcomeTemplates...),
 		WelcomeLLMCooldownSeconds:         cfg.WelcomeLLMCooldownSeconds,
 		SystemPrompt:                      cfg.SystemPrompt,
+		ReplyComposer:                     cfg.ReplyComposer,
+		MaiBotReplyStyle:                  cfg.MaiBotReplyStyle,
+		ReplyToneDefault:                  DefaultReplyTone,
 		ResponseMode:                      cfg.ResponseMode,
 		ReplyStyle:                        cfg.ReplyStyle,
 		DebugModeEnabled:                  copyBoolPointer(cfg.DebugModeEnabled),
@@ -2920,6 +2938,8 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		WelcomeTemplates:                append([]string(nil), payload.WelcomeTemplates...),
 		WelcomeLLMCooldownSeconds:       payload.WelcomeLLMCooldownSeconds,
 		SystemPrompt:                    payload.SystemPrompt,
+		ReplyComposer:                   payload.ReplyComposer,
+		MaiBotReplyStyle:                payload.MaiBotReplyStyle,
 		ResponseMode:                    payload.ResponseMode,
 		ReplyStyle:                      payload.ReplyStyle,
 		DebugModeEnabled:                copyBoolPointer(payload.DebugModeEnabled),

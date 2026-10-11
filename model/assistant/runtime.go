@@ -4118,7 +4118,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	}
 	// 请求按「稳定前缀在前、逐条消息变化的内容在后」排列：
 	//
-	//   system 头部 → 较早摘要 → 历史 → [缓存断点] → 逐消息上下文 → 同轮补充
+	//   system 头部 → 历史 → [缓存断点] → 逐消息上下文（含最新摘要）→ 同轮补充
 	//   → system 尾部（发言者）→ 时钟 → 装饰 → 当前消息
 	//
 	// 记忆检索、笔记本命中、指代解析、插件事实这些块每条消息都不一样，以前排在
@@ -4152,9 +4152,6 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		// 便签填上：被裁掉的历史不该只剩离散事实点，叙事线索也要有人接。两者互斥，
 		// 没有存储层的部署仍然走旧的流水摘要。
 		sessionThread = contextPreload.sessionThread
-		if sessionThread != "" {
-			olderSummary = ""
-		}
 		if memoryContext := contextPreload.memoryContext; memoryContext != "" {
 			volatile = append(volatile, llm.Message{
 				Role:     llm.RoleUser,
@@ -4274,28 +4271,16 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 				AtomicText: true,
 			})
 		}
-		var stableCheckpoint []llm.Message
-		if summary := rawMessageWithoutImagePlaceholders(olderSummary); summary != "" {
-			const summaryPrefix = "【较早上下文压缩摘要，仅用于理解背景，不要直接回复摘要】\n"
-			summaryBudget := contextShareBudget(r.promptContextWindowTokens(event, cfg), compressedSummaryTokenShare) - llm.EstimateTextTokens(summaryPrefix)
-			summary, summaryRecompressed = r.fitOlderSummaryToBudget(summary, summaryBudget)
-			if promptSession := r.groupPromptSession(event); promptSession != nil {
-				summary = promptSession.rememberCheckpoint(summary)
-			}
-			if summary != "" {
-				stableCheckpoint = append(stableCheckpoint, llm.Message{
-					Role:    llm.RoleUser,
-					Content: summaryPrefix + summary,
-					// 摘要已经压到目标配额，请求预算层不要再从中间截断它。
-					Priority:   llm.MessagePrioritySummary,
-					AtomicText: true,
-				})
-			}
-		} else if promptSession := r.groupPromptSession(event); promptSession != nil {
-			const summaryPrefix = "【较早上下文压缩摘要，仅用于理解背景，不要直接回复摘要】\n"
-			if summary := promptSession.rememberCheckpoint(""); summary != "" {
-				stableCheckpoint = append(stableCheckpoint, llm.Message{Role: llm.RoleUser, Content: summaryPrefix + summary, Priority: llm.MessagePrioritySummary, AtomicText: true})
-			}
+		const summaryPrefix = "【较早上下文压缩摘要，仅用于理解背景，不要直接回复摘要】\n"
+		summaryBudget := contextShareBudget(r.promptContextWindowTokens(event, cfg), compressedSummaryTokenShare) - llm.EstimateTextTokens(summaryPrefix)
+		olderSummary, summaryRecompressed = r.promptContextSummary(event, sessionThread, summaryBudget)
+		if olderSummary != "" {
+			volatile = append(volatile, llm.Message{
+				Role:       llm.RoleUser,
+				Content:    summaryPrefix + olderSummary,
+				Priority:   llm.MessagePrioritySummary,
+				AtomicText: true,
+			})
 		}
 		turnCandidates := r.replyTurnCandidates(ctx)
 		turnMessageIDs := make(map[string]bool, len(turnCandidates))
@@ -4312,7 +4297,6 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			r.supersedeDependencyImageTurns(ctx, event, images)
 		}
 		stableHistory, crossGroupTail := r.stableGroupHistory(ctx, event, cfg, replyHistory, directAgentDecision, turnMessageIDs)
-		messages = append(messages, stableCheckpoint...)
 		messages = append(messages, stableHistory...)
 		volatile = append(volatile, crossGroupTail...)
 		// 历史到此结束：这是本轮请求里最后一段逐轮稳定的内容，缓存断点打在这里。
@@ -4791,6 +4775,12 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 	if _, initialized := identityPrivacyStateFromContext(ctx); !initialized {
 		ctx = r.withIdentityPrivacyContext(ctx, event, r.contextHistory(event))
 	}
+	// MaiBot mode keeps Diana's content/tool pass private, then exposes only the
+	// final replyer output to streaming drafts.
+	replyerCtx := ctx
+	if cfg.ReplyComposer == "maibot" {
+		ctx = context.WithValue(ctx, textDeltaObserverKey{}, struct{}{})
+	}
 	if cfg.AgentEnabled && relationship.allowsAgentTools() {
 		// A tool can add images after the first planning turn. Route every Agent
 		// model call from its actual message content so that a text-only planner can
@@ -4898,7 +4888,10 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 			text = resp.SilentContent
 		}
 		text = r.applyFinalizeRender(ctx, event, text, resp.FinalizeFields[renderFinalizeFieldName])
-		return r.prepareGeneratedReply(ctx, cfg, text, event)
+		if cfg.ReplyComposer == "maibot" {
+			text = r.composeMaiBotReply(replyerCtx, cfg, event, messages, text)
+		}
+		return r.prepareGeneratedReply(replyerCtx, cfg, text, event)
 	}
 	if mode := imageTextModeFromContext(ctx); mode != nil {
 		messages = mode.replaceImageParts(ctx, messages)
@@ -4920,7 +4913,10 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 	if err != nil {
 		return "", err
 	}
-	return r.prepareGeneratedReply(ctx, cfg, raw, event)
+	if cfg.ReplyComposer == "maibot" {
+		raw = r.composeMaiBotReply(replyerCtx, cfg, event, messages, raw)
+	}
+	return r.prepareGeneratedReply(replyerCtx, cfg, raw, event)
 }
 
 type runtimeAgentLLMProvider struct {
@@ -6073,27 +6069,35 @@ func (r *Runtime) applyQuotedMessage(event MessageEvent, quoted *QuotedMessage) 
 }
 
 func (r *Runtime) lookupQuotedMessage(ctx context.Context, event MessageEvent, messageID string) *QuotedMessage {
+	quoted, _ := r.lookupQuotedMessageWithError(ctx, event, messageID)
+	return quoted
+}
+
+func (r *Runtime) lookupQuotedMessageWithError(ctx context.Context, event MessageEvent, messageID string) (*QuotedMessage, error) {
 	r.mu.RLock()
 	for i := len(r.history[sessionKey(event)]) - 1; i >= 0; i-- {
 		item := r.history[sessionKey(event)][i]
 		if item.MessageID == messageID {
 			r.mu.RUnlock()
-			return quotedMessageFromHistory(item)
+			return quotedMessageFromHistory(item), nil
 		}
 	}
 	store := r.messageStore
 	r.mu.RUnlock()
 	lookup, ok := store.(MessageEventLookupStore)
 	if !ok {
-		return nil
+		return nil, nil
 	}
 	loadCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
 	record, found, err := lookup.FindMessageEvent(loadCtx, sessionKey(event), messageID)
-	if err != nil || !found {
-		return nil
+	if err != nil {
+		return nil, err
 	}
-	return quotedMessageFromHistory(record)
+	if !found {
+		return nil, nil
+	}
+	return quotedMessageFromHistory(record), nil
 }
 
 func (r *Runtime) recordReplyReferenceError(ctx context.Context, event MessageEvent, messageID string, err error) {
@@ -6961,15 +6965,41 @@ func (r *Runtime) applyOutgoingReplyMarker(ctx context.Context, event MessageEve
 	// 平台感知：QQ 官方的 ROBOT1.0_/REFIDX_ 不是纯数字，数字校验会把模型自发
 	// 写的标记消费后丢弃。目标存在性由下面的历史回查把关。
 	if !replyMarkerIDAcceptable(event.Platform, id) {
+		r.recordOutgoingReplyDiscard(ctx, event, "invalid_target")
 		return msg
 	}
 	// 指向当前这条消息时不必再查一次：它一定存在，而历史查询可能因为存储未接入或
 	// 消息尚未落库而落空，auto 档下会让模型自己写的引用悄悄失效。
-	if id != strings.TrimSpace(event.MessageID) && r.lookupQuotedMessage(ctx, event, id) == nil {
-		return msg
+	if id != strings.TrimSpace(event.MessageID) {
+		quoted, err := r.lookupQuotedMessageWithError(ctx, event, id)
+		if err != nil {
+			reason := "storage_error"
+			if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+				reason = "storage_timeout_or_canceled"
+			}
+			r.recordOutgoingReplyDiscard(ctx, event, reason)
+			return msg
+		}
+		if quoted == nil {
+			r.recordOutgoingReplyDiscard(ctx, event, "history_not_found")
+			return msg
+		}
 	}
+
 	msg.ReplyMessageID = id
 	return msg
+}
+
+func (r *Runtime) recordOutgoingReplyDiscard(ctx context.Context, event MessageEvent, reason string) {
+	writer := r.appLogWriter()
+	if writer == nil {
+		return
+	}
+	_ = writer.AppendLog(ctx, applog.Entry{
+		Kind: applog.KindOperation, Level: applog.LevelInfo,
+		Action: "outgoing_reply_discarded", Message: "出站引用目标未采用，正文照常发送",
+		Metadata: map[string]any{"reason": reason, "platform": NormalizePlatformID(event.Platform)},
+	})
 }
 
 func routeOutgoingToEvent(event MessageEvent, msg OutgoingMessage) OutgoingMessage {
@@ -6996,6 +7026,7 @@ func routeOutgoingToEvent(event MessageEvent, msg OutgoingMessage) OutgoingMessa
 // 一段可见文字，所以在这里按 id 查一次昵称。查的是本会话内存里的近期消息加当前
 // 这条事件，不落库查询：发送路径上多一次 IO 不值得，查不到的 id 退回显示 @<id>。
 func (r *Runtime) resolveOutgoingMentionNames(event MessageEvent, msg OutgoingMessage) OutgoingMessage {
+	msg.MentionUsernames = nil
 	ids := mentionedIDsInText(msg.Text)
 	if len(ids) == 0 {
 		return msg
@@ -7003,6 +7034,15 @@ func (r *Runtime) resolveOutgoingMentionNames(event MessageEvent, msg OutgoingMe
 	r.mu.RLock()
 	history := append([]MessageEvent(nil), r.history[sessionKey(event)]...)
 	r.mu.RUnlock()
+	if NormalizePlatformID(event.Platform) == PlatformTelegram {
+		usernames := resolveTelegramMentionUsernames(event, history)
+		msg.MentionUsernames = make(map[string]string, len(ids))
+		for _, id := range ids {
+			if username := usernames[id]; username != "" {
+				msg.MentionUsernames[id] = username
+			}
+		}
+	}
 	names := messageParticipantDisplayNames(append(history, event)...)
 	// 调用方可能已经填过（比如入群欢迎现查的新人昵称），合并进来，不覆盖。
 	resolved := make(map[string]string, len(ids)+len(msg.MentionNames))

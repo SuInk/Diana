@@ -1489,6 +1489,30 @@
             @world-book="nodes => { worldBookNodes = nodes; }"
           />
 
+          <section class="card">
+            <div class="card-header">
+              <div>
+                <h2>回复口吻</h2>
+                <span class="card-sub">单独控制最后怎么说，不改变回答内容</span>
+              </div>
+              <span class="badge" :class="form.reply_composer === 'maibot' ? 'accent' : ''">{{ form.reply_composer === "maibot" ? "已启用" : "跟随 SOUL.md" }}</span>
+            </div>
+            <div class="card-body form-grid">
+              <div class="field wide">
+                <AppSwitch
+                  :model-value="form.reply_composer === 'maibot'"
+                  @update:model-value="value => { if (form) form.reply_composer = value ? 'maibot' : undefined; }"
+                >
+                  单独设置回复口吻
+                </AppSwitch>
+                <span class="hint">Diana 先完成内容判断和工具调用，再根据下面的口吻整理最终说法。它不会改动事实、结论和必要细节，已学到的本群说话风格仍会一起生效。使用的模型在「模型与搜索 → 回复口吻」里单独选择。</span>
+              </div>
+              <div v-if="form.reply_composer === 'maibot'" class="field wide">
+                <ReplyToneEditor v-model="replyToneDraft" />
+              </div>
+            </div>
+          </section>
+
           <!-- 自述只在这里开关；写下的条目在「小窝 → 自述」里看和删。 -->
           <section class="card">
             <div class="card-header">
@@ -2340,6 +2364,7 @@ import PromptSectionsEditor from "../components/PromptSectionsEditor.vue";
 import ParticipationPromptPreview from "../components/ParticipationPromptPreview.vue";
 import { participationFromConfig, type ParticipationPreferences } from "../participation";
 import SoulEditor from "../components/SoulEditor.vue";
+import ReplyToneEditor from "../components/ReplyToneEditor.vue";
 import EmptyState from "../components/EmptyState.vue";
 import IdChipInput from "../components/IdChipInput.vue";
 import MessageRelayManager from "../components/MessageRelayManager.vue";
@@ -2363,6 +2388,7 @@ import {
 import { toastError, toastSuccess } from "../toast";
 import { allowNodeExecution } from "../node-execution-preset";
 import { channelAccountUnhealthy, channelOperational, channelStatusHint, channelStatusLabel } from "../channel-status";
+import { effectiveReplyTone, FALLBACK_REPLY_TONE, normalizeReplyTone, replyToneOverride } from "../reply-tone";
 
 const form = ref<BotProfileConfig | null>(null);
 
@@ -2371,6 +2397,8 @@ const personaComposerOpen = ref(false);
 const personaDraft = ref("");
 const personaDraftInput = ref<HTMLTextAreaElement | null>(null);
 const personaBusy = ref(false);
+const replyToneDraft = ref("");
+const replyToneDefault = ref(FALLBACK_REPLY_TONE);
 // 保留生成前的那一版，生成结果不合适可以一键退回，不用自己 Ctrl+Z。
 const soulEditor = ref<InstanceType<typeof SoulEditor> | null>(null);
 const promptOverridesOpen = ref(false);
@@ -3450,7 +3478,7 @@ function onMessageRelaysSaved(config: BotProfileConfig): void {
 // 细分用途：要写文字的旁路调用，从「意图识别」里拆出来——那一档能绑只做判断的模型，
 // 这些绑上去只会每次先失败一次再降级。再按时机分两档：回复辅助在回复发出前同步跑，
 // 要快；后台生成在回复之外异步跑，慢一点没关系。
-const purposeRoleKeys = ["reply_assist", "background"] as const;
+const purposeRoleKeys = ["reply_tone", "reply_assist", "background"] as const;
 
 // 音视频插槽：不配就没有这项能力，不跟随对话——对话模型接不了这些接口。
 const mediaRoleKeys = ["tts", "stt", "video"] as const;
@@ -3497,6 +3525,12 @@ const imageRoleRow: ModelRoleRow = {
 };
 // 回复辅助留空时沿用后台生成（它就是从那一档拆出来的），后台生成留空时跟随对话。
 const purposeRoleRows: ModelRoleRow[] = [
+  {
+    key: "reply_tone",
+    label: "回复口吻",
+    sublabel: "最终表达",
+    description: "内容和工具调用完成后，把完整草稿整理成最终聊天口吻。不指定时跟随对话；单独指定时适合使用响应快、成本低的文字模型。"
+  },
   {
     key: "background",
     label: "后台生成",
@@ -3802,7 +3836,7 @@ function modelPurposeLabel(role: RoleKey): string {
 }
 
 function modelPurposeIcon(role: RoleKey) {
-  return { chat: MessageSquare, vision: Eye, media_parse: ScanLine, intent: Waypoints, image: Image, background: Layers, reply_assist: MessageSquare, tts: MessageSquare, stt: MessageSquare, video: Image }[role];
+  return { chat: MessageSquare, vision: Eye, media_parse: ScanLine, intent: Waypoints, image: Image, background: Layers, reply_tone: MessageSquare, reply_assist: MessageSquare, tts: MessageSquare, stt: MessageSquare, video: Image }[role];
 }
 
 function modelPurposeSummary(role: RoleKey): string {
@@ -4087,7 +4121,7 @@ function channelOptionsFor(role: RoleKey): AppSelectOption[] {
   if (isPurposeRole(role)) {
     base.push({ value: UNSPECIFIED, label: `不指定，跟随${purposeRoleFallbackLabel(role)}`, hint: "不单独绑定，换模型时跟着一起换" });
   }
-  if (role !== "chat" && !isMediaRole(role)) {
+  if (role !== "chat" && role !== "reply_tone" && !isMediaRole(role)) {
     base.push({
       value: FOLLOW_CHAT,
       label: "跟随对话",
@@ -4465,6 +4499,8 @@ function setRoleModel(role: RoleKey, value: string): void {
 }
 
 function setForm(config: BotProfileConfig): void {
+  replyToneDefault.value = normalizeReplyTone(config.reply_tone_default) || FALLBACK_REPLY_TONE;
+  replyToneDraft.value = effectiveReplyTone(config.maibot_reply_style, replyToneDefault.value);
   form.value = {
     ...config,
     participation: participationFromConfig(config),
@@ -4752,6 +4788,9 @@ async function save(): Promise<void> {
     }
     const payload: BotProfileConfig = {
       ...current,
+      maibot_reply_style: replyToneOverride(replyToneDraft.value, replyToneDefault.value),
+      // 只读默认值由后端回传，不写进机器人自己的配置。
+      reply_tone_default: undefined,
       // 截图权限在交互式浏览器页管理，编辑其他配置时不能覆盖那里新保存的授权。
       agent_browser_screenshot_access: creating.value ? current.agent_browser_screenshot_access : undefined,
       agent_browser_operation_access: creating.value ? current.agent_browser_operation_access : undefined,

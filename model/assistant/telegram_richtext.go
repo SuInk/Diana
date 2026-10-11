@@ -188,10 +188,8 @@ func (b *telegramSpanBuffer) applyInline(pattern *regexp.Regexp, openLen, closeL
 		}
 		body := b.text[bounds[2]:bounds[3]]
 		offset := utf16Length(b.text[:bounds[0]])
-		b.text = b.text[:bounds[0]] + body + b.text[bounds[1]:]
-		// 左右标记各删掉一段，后面的内容整体前移。
-		b.entities = shiftEntitiesAfter(b.entities, offset, -openLen)
-		b.entities = shiftEntitiesAfter(b.entities, offset+utf16Length(body), -closeLen)
+		b.replace(bounds[1]-closeLen, bounds[1], "")
+		b.replace(bounds[0], bounds[0]+openLen, "")
 		spec := build(body)
 		spec.Offset = offset
 		spec.Length = utf16Length(body)
@@ -217,9 +215,8 @@ func (b *telegramSpanBuffer) applyWrapped(pattern *regexp.Regexp, build func(str
 		body := b.text[bounds[4]:bounds[5]]
 		trail := b.text[bounds[6]:bounds[7]]
 		offset := utf16Length(b.text[:bounds[0]]) + utf16Length(lead)
-		b.text = b.text[:bounds[0]] + lead + body + trail + b.text[bounds[1]:]
-		b.entities = shiftEntitiesAfter(b.entities, offset, -1)
-		b.entities = shiftEntitiesAfter(b.entities, offset+utf16Length(body), -1)
+		b.replace(bounds[5], bounds[5]+1, "")
+		b.replace(bounds[4]-1, bounds[4], "")
 		spec := build(body)
 		spec.Offset = offset
 		spec.Length = utf16Length(body)
@@ -233,24 +230,26 @@ func (b *telegramSpanBuffer) applyWrapped(pattern *regexp.Regexp, build func(str
 
 // applyLink 把 [文字](链接) 收成一条 text_link，正文只留文字。
 func (b *telegramSpanBuffer) applyLink(pattern *regexp.Regexp) {
-	for {
-		bounds := pattern.FindStringSubmatchIndex(b.text)
+	for search := 0; search < len(b.text); {
+		bounds := pattern.FindStringSubmatchIndex(b.text[search:])
 		if bounds == nil {
 			return
+		}
+		for index := range bounds {
+			bounds[index] += search
 		}
 		label := b.text[bounds[2]:bounds[3]]
 		target := b.text[bounds[4]:bounds[5]]
 		// Diana 自己的标记不是链接：[diana-at:10002] 后面正好跟着括号时会被这条
 		// 规则拆掉方括号，出站就认不出提及了。
 		if dianaMarkerLabelPattern.MatchString(label) || normalizedHTTPURL(target) == "" {
-			b.text = b.text[:bounds[0]] + "\x01" + b.text[bounds[0]+1:]
+			search = bounds[1]
 			continue
 		}
 		offset := utf16Length(b.text[:bounds[0]])
-		b.text = b.text[:bounds[0]] + label + b.text[bounds[1]:]
-		removed := utf16Length("["+label+"]("+target+")") - utf16Length(label)
-		b.entities = shiftEntitiesAfter(b.entities, offset, -1)
-		b.entities = shiftEntitiesAfter(b.entities, offset+utf16Length(label), -(removed - 1))
+		b.replace(bounds[3], bounds[1], "")
+		b.replace(bounds[0], bounds[2], "")
+		search = bounds[0] + len(label)
 		b.entities = append(b.entities, telegramEntitySpec{
 			Type:   "text_link",
 			Offset: offset,
@@ -261,7 +260,34 @@ func (b *telegramSpanBuffer) applyLink(pattern *regexp.Regexp) {
 }
 
 func (b *telegramSpanBuffer) result() (string, []telegramEntitySpec) {
-	return strings.ReplaceAll(b.text, "\x01", "["), b.entities
+	return b.text, b.entities
+}
+
+// replace uses byte bounds for slicing and UTF-16 bounds for entities. Entities
+// containing the entire replacement keep both equal boundaries; partial overlaps
+// cannot be mapped unambiguously and are discarded.
+func (b *telegramSpanBuffer) replace(start, end int, replacement string) {
+	from := utf16Length(b.text[:start])
+	to := from + utf16Length(b.text[start:end])
+	delta := utf16Length(replacement) - (to - from)
+	kept := b.entities[:0]
+	for _, entity := range b.entities {
+		entityEnd := entity.Offset + entity.Length
+		switch {
+		case entityEnd <= from:
+		case entity.Offset >= to:
+			entity.Offset += delta
+		case entity.Offset <= from && entityEnd >= to:
+			entity.Length += delta
+		default:
+			continue
+		}
+		if entity.Length > 0 {
+			kept = append(kept, entity)
+		}
+	}
+	b.entities = kept
+	b.text = b.text[:start] + replacement + b.text[end:]
 }
 
 // shiftEntitiesAfter 把起点在 offset 之后的区间整体平移 delta；跨越 offset 的

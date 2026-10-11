@@ -282,3 +282,13 @@ func TestOutgoingMarkerQuotesHistoryMessage(t *testing.T) {
 		t.Fatalf("missing target = %#v", missing)
 	}
 }
+
+func TestHistoryToolQuoteNoticeOnlyInAutoMode(t *testing.T) {
+	for _, mode := range []ReplyDecorationMode{ReplyDecorationAuto, ReplyDecorationOn, ReplyDecorationOff} {
+		runtime := NewRuntime(BotConfig{ReplyReferenceMode: mode}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+		got := newDianaChatHistoryTool(runtime, MessageEvent{Kind: EventKindGroup, GroupID: "10001"}).idNotice()
+		if !strings.Contains(got, chatHistoryIDNotice) || strings.Contains(got, chatHistoryQuoteNotice) != (mode == ReplyDecorationAuto) {
+			t.Fatalf("mode=%s notice=%q", mode, got)
+		}
+	}
+}

@@ -40,7 +40,7 @@ func TestSplitChatReplyCodeFenceRendersAsPre(t *testing.T) {
 		if !strings.Contains(part, "```") {
 			continue
 		}
-		text, entities := telegramRichText(part, nil)
+		text, entities := renderTelegramOutgoingText(part, nil, nil)
 		if strings.Contains(text, "`") {
 			t.Fatalf("反引号漏进正文：%q", text)
 		}
@@ -77,6 +77,29 @@ func TestPlainTextBlankLineCollapseDoesNotChangeCode(t *testing.T) {
 	parts := splitEventChatReply(reply, BotConfig{Platform: PlatformOneBotV11}.WithDefaults(), MessageEvent{Kind: EventKindGroup})
 	if len(parts) != 1 || strings.Contains(parts[0], "说明\n\n```") || !strings.Contains(parts[0], "}\n\nfunc b") {
 		t.Fatalf("plain-text code layout = %#v", parts)
+	}
+}
+
+func TestTelegramProtectedCodeBudgetUsesOutgoingRenderer(t *testing.T) {
+	r := &Runtime{}
+	cfg := BotConfig{Platform: PlatformTelegram, MarkdownToPlain: boolPointer(false)}
+	event := MessageEvent{Platform: PlatformTelegram, replyDeliveryMode: replyDeliverySingle}
+	block := "```c#\n" + strings.Repeat("x", 2046) + "\n```"
+	part := block + "\n" + block
+	if issue := r.replyPartLimitIssue(cfg, event, block); issue != "" {
+		t.Fatalf("单个代码块应当放得下：%s", issue)
+	}
+	if err := r.protectedReplyPartError(cfg, event, part); err == nil {
+		t.Fatal("两块代码的实际渲染长度超限，不能继续尝试压缩周围正文")
+	}
+	parts, changed := r.splitProtectedCodeParts(cfg, event, []string{part})
+	if !changed || len(parts) < 2 {
+		t.Fatalf("代码块未拆分：changed=%v parts=%d", changed, len(parts))
+	}
+	for i, piece := range parts {
+		if issue := r.replyPartLimitIssue(cfg, event, piece); issue != "" {
+			t.Fatalf("第 %d 条仍超限：%s", i+1, issue)
+		}
 	}
 }
 

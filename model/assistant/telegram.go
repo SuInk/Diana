@@ -365,15 +365,9 @@ func (c *TelegramChannel) SendWithResult(ctx context.Context, msg OutgoingMessag
 	if text := strings.TrimSpace(msg.Text); text != "" {
 		var entities []telegramEntitySpec
 		if !msg.LiteralText {
-			// 提及标记在这里落地成 Telegram 自己的形式：正文写「@昵称」，另外附一条
-			// text_mention entity 指向用户 id。这是 Telegram 给「没有 username 的人」
-			// 准备的提及方式——显示成可点击的名字，对方有通知，不依赖 username。
-			rendered, mentions := renderDianaMentions(text, msg.MentionNames)
-			text = rendered
-			// Markdown 走 entities 而不是 parse_mode：正文保持纯文本，格式挂在偏移量上，
-			// 因此不需要转义——模型随口写个句号或减号也不会让整条消息以 400 被拒。
-			// 上游按平台决定要不要保留 Markdown；到这里还带标记就说明要渲染。
-			text, entities = telegramRichText(text, mentions)
+			// 有可信用户名时用 @username，否则以昵称和用户 ID 提及；Markdown 和
+			// 提及共用 UTF-16 实体坐标，不依赖 parse_mode 或把昵称当成格式解析。
+			text, entities = renderTelegramOutgoingText(text, msg.MentionNames, msg.MentionUsernames)
 		}
 		if utf16Length(text) > telegramTextLimit {
 			return nil, fmt.Errorf("telegram: 文本超过单条消息上限，请降低回复字符上限或允许分条")
@@ -389,10 +383,8 @@ func (c *TelegramChannel) SendWithResult(ctx context.Context, msg OutgoingMessag
 		if params2 := telegramEntityParams(entities); len(params2) > 0 {
 			params["entities"] = params2
 		}
-		if replyID := strings.TrimSpace(msg.ReplyMessageID); replyID != "" {
-			params["reply_to_message_id"] = replyID
-			// 被回复的消息可能已删除，这时仍然把消息发出去。
-			params["allow_sending_without_reply"] = true
+		if reply := telegramReplyParameters(msg.ReplyMessageID); reply != nil {
+			params["reply_parameters"] = reply
 		}
 		result, err := c.CallAPI(ctx, "sendMessage", params)
 		if err != nil {
@@ -413,7 +405,7 @@ func (c *TelegramChannel) SendWithResult(ctx context.Context, msg OutgoingMessag
 		keep(result)
 	}
 	for _, video := range msg.VideoURLs {
-		result, err := c.sendMedia(ctx, chatID, msg.MessageThreadID, "sendVideo", "video", video)
+		result, err := c.sendMedia(ctx, chatID, msg.MessageThreadID, "sendVideo", "video", video, msg.ReplyMessageID)
 		if err != nil {
 			return nil, err
 		}
@@ -448,8 +440,11 @@ func (c *TelegramChannel) SendTextDraft(ctx context.Context, msg OutgoingMessage
 	if chatID == "" || text == "" || strings.TrimSpace(msg.GroupID) != "" {
 		return nil
 	}
-	text, mentions := renderDianaMentions(text, msg.MentionNames)
-	text, entities := telegramRichText(text, mentions)
+	text, entities := renderTelegramOutgoingText(text, msg.MentionNames, msg.MentionUsernames)
+	text, entities = truncateTelegramDraft(text, entities)
+	if strings.TrimSpace(text) == "" {
+		return nil
+	}
 	params := map[string]any{
 		"chat_id":  chatID,
 		"draft_id": draftID,
@@ -481,6 +476,35 @@ func (c *TelegramChannel) SendChatAction(ctx context.Context, msg OutgoingMessag
 	return err
 }
 
+func telegramReplyParameters(messageID string) map[string]any {
+	messageID = strings.TrimSpace(messageID)
+	for _, ch := range messageID {
+		if ch < '0' || ch > '9' {
+			return nil
+		}
+	}
+	parsed, err := strconv.ParseInt(messageID, 10, 64)
+	if err != nil || parsed <= 0 {
+		return nil
+	}
+	return map[string]any{"message_id": parsed, "allow_sending_without_reply": true}
+}
+
+func writeTelegramReplyParameters(writer *multipart.Writer, replyIDs ...string) error {
+	if len(replyIDs) == 0 {
+		return nil
+	}
+	reply := telegramReplyParameters(replyIDs[0])
+	if reply == nil {
+		return nil
+	}
+	encoded, err := json.Marshal(reply)
+	if err != nil {
+		return err
+	}
+	return writer.WriteField("reply_parameters", string(encoded))
+}
+
 // sendMedia 发送单个媒体。远程 URL 直接交给 Telegram 去拉，本地文件走
 // multipart 上传——Telegram 拉不到我们本机的 /media/resolver 地址。
 func (c *TelegramChannel) sendMedia(ctx context.Context, chatID, threadID, method, field, source string, replyIDs ...string) (map[string]any, error) {
@@ -491,9 +515,10 @@ func (c *TelegramChannel) sendMedia(ctx context.Context, chatID, threadID, metho
 	path := telegramLocalPath(source)
 	if path == "" {
 		params := map[string]any{"chat_id": chatID, field: source}
-		if len(replyIDs) > 0 && strings.TrimSpace(replyIDs[0]) != "" {
-			params["reply_to_message_id"] = strings.TrimSpace(replyIDs[0])
-			params["allow_sending_without_reply"] = true
+		if len(replyIDs) > 0 {
+			if reply := telegramReplyParameters(replyIDs[0]); reply != nil {
+				params["reply_parameters"] = reply
+			}
 		}
 		if threadID = strings.TrimSpace(threadID); threadID != "" {
 			params["message_thread_id"] = threadID
@@ -536,13 +561,8 @@ func (c *TelegramChannel) uploadMedia(ctx context.Context, method, chatID, threa
 
 	body := &bytes.Buffer{}
 	writer := multipart.NewWriter(body)
-	if len(replyIDs) > 0 && strings.TrimSpace(replyIDs[0]) != "" {
-		if err := writer.WriteField("reply_to_message_id", strings.TrimSpace(replyIDs[0])); err != nil {
-			return nil, err
-		}
-		if err := writer.WriteField("allow_sending_without_reply", "true"); err != nil {
-			return nil, err
-		}
+	if err := writeTelegramReplyParameters(writer, replyIDs...); err != nil {
+		return nil, err
 	}
 	if err := writer.WriteField("chat_id", chatID); err != nil {
 		return nil, err
@@ -1032,6 +1052,10 @@ func telegramMessageToEvent(msg *telegramMessage, selfID, botUsername string) Me
 		if msg.SenderChat == nil && !msg.From.IsBot {
 			event.SenderUsername = msg.From.Username
 		}
+		if msg.SenderChat == nil && msg.From.ID > 0 {
+			username := msg.From.Username
+			event.SenderMentionUsername = &username
+		}
 	}
 
 	// 私聊天然是对机器人说的；群里靠 @提及 判断。
@@ -1285,6 +1309,10 @@ func telegramQuotedMessage(reply *telegramMessage) *QuotedMessage {
 	}
 	if reply.From != nil {
 		quoted.UserID = strconv.FormatInt(reply.From.ID, 10)
+		if reply.SenderChat == nil && reply.From.ID > 0 {
+			username := reply.From.Username
+			quoted.SenderMentionUsername = &username
+		}
 	}
 	if reply.Chat != nil && reply.Chat.Type != "private" {
 		quoted.GroupID = strconv.FormatInt(reply.Chat.ID, 10)

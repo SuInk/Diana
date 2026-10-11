@@ -90,7 +90,7 @@ func TestReplayTelegramReplyMarkerIncident(t *testing.T) {
 				t.Fatal("no Telegram sendMessage call")
 			}
 			params := calls[0].Params
-			replyID, _ := params["reply_to_message_id"].(string)
+			replyID := telegramTestReplyID(t, params)
 			text, _ := params["text"].(string)
 			leaked := strings.Contains(text, badAlias)
 			if replyID != tc.wantReply || leaked {
@@ -99,7 +99,7 @@ func TestReplayTelegramReplyMarkerIncident(t *testing.T) {
 			if strings.Contains(text, replyMarkerPrefix) {
 				t.Fatal("reply marker was not consumed")
 			}
-			t.Logf("known_alias=%v parsed=%v parsed_id=%q reply_to_message_id=%q leaked=%v text=%q",
+			t.Logf("known_alias=%v parsed=%v parsed_id=%q reply_parameters.message_id=%q leaked=%v text=%q",
 				tc.known, parsed, parsedID, replyID, leaked, text)
 		})
 	}
