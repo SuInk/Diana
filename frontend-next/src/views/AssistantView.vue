@@ -1114,8 +1114,8 @@
               </div>
               <div class="field">
                 <label for="bot-daily-limit-tz">生图、视频次数 · 重置时区</label>
-                <AppSelect id="bot-daily-limit-tz" :model-value="form.daily_limit_timezone ?? ''" @update:model-value="form.daily_limit_timezone = $event" :options="timezoneOptions(form.daily_limit_timezone, '跟随机器人时区')" searchable search-placeholder="搜索 UTC 偏移" />
-                <span class="hint">每天的次数在这个时区的零点重置，留空跟随「运行」里的机器人时区。只有想让次数按别的时区重置时才填。</span>
+                <AppSelect id="bot-daily-limit-tz" :model-value="form.daily_limit_timezone ?? ''" @update:model-value="form.daily_limit_timezone = $event" :options="timezoneOptions(form.daily_limit_timezone, '跟随机器人时区')" searchable search-placeholder="搜索城市、地区或 UTC 偏移" />
+                <span class="hint">每天的次数在所选时区的本地零点重置。地区时区自动遵循夏令时，切换日可能是 23 或 25 小时；固定 UTC 偏移全年不变。留空跟随「运行」里的机器人时区。</span>
               </div>
               <div class="field wide">
                 <div class="form-grid">
@@ -2061,8 +2061,8 @@
               </div>
               <div class="field">
                 <label for="bot-timezone">机器人时区</label>
-                <AppSelect id="bot-timezone" :model-value="form.timezone ?? ''" @update:model-value="form.timezone = $event" :options="timezoneOptions(form.timezone, '跟随系统默认')" searchable search-placeholder="搜索 UTC 偏移" />
-                <span class="hint">选择固定 UTC 偏移（不随夏令时变化）；已有地区时区保留原规则。告诉模型的当前时间、回复时段、每日次数的零点、「明天八点」的换算和聊天记录上的时间都按它。留空时先看 TZ 环境变量，再用服务器本地时区；服务器是 UTC（Docker 默认）时按 UTC+8。</span>
+                <AppSelect id="bot-timezone" :model-value="form.timezone ?? ''" @update:model-value="form.timezone = $event" :options="timezoneOptions(form.timezone, '跟随系统默认')" searchable search-placeholder="搜索城市、地区或 UTC 偏移" />
+                <span class="hint">地区时区会按日期自动切换夏令时，所示 UTC 偏移是当前值；固定 UTC 偏移全年不变。告诉模型的当前时间、回复时段、每日次数的零点、「明天八点」的换算和聊天记录上的时间都按它。留空时先看 TZ 环境变量，再用服务器本地时区；服务器是 UTC（Docker 默认）时按 UTC+8。</span>
               </div>
               <div class="field">
                 <label for="bot-concurrency">全局并发数</label>
