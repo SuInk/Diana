@@ -808,6 +808,12 @@ func (r *Runtime) clock() time.Time {
 	return time.Now()
 }
 
+// ModelHealthSnapshot 返回近期发生过健康故障的模型候选。状态只在当前进程内
+// 保留，重启后自然清空，和实际调度使用的是同一张冷却表。
+func (r *Runtime) ModelHealthSnapshot() ModelHealthSnapshot {
+	return r.llmCooldowns.publicSnapshot()
+}
+
 // SetReplySuppressionStore loads restart-safe temporary response restrictions.
 func (r *Runtime) SetReplySuppressionStore(ctx context.Context, store ReplySuppressionStore) error {
 	return r.loadReplySuppressions(ctx, store, time.Now())

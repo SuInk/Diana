@@ -74,6 +74,19 @@ export interface GenerateResponse {
   };
 }
 
+export interface ModelCandidateHealth {
+  profile_id: string;
+  model: string;
+  failure_count: number;
+  last_failure_at: string;
+  cooldown_until?: string;
+}
+
+export interface ModelHealthSnapshot {
+  checked_at: string;
+  candidates: ModelCandidateHealth[];
+}
+
 export interface ImageGenerateResponse {
   provider: Provider;
   model?: string;
@@ -1602,6 +1615,10 @@ export function testProviderModel(providerId: string, modelId: string, message: 
 export function getBotProfileConfig(includeSecrets = false, timeoutMs = 0): Promise<BotProfileConfig> {
   const suffix = includeSecrets ? "?include_secrets=true" : "";
   return startupRequestJSON<BotProfileConfig>(`/api/assistant/config${suffix}`, timeoutMs);
+}
+
+export function getModelHealth(): Promise<ModelHealthSnapshot> {
+  return requestJSON<ModelHealthSnapshot>("/api/assistant/model-health");
 }
 
 export function getBotPlatforms(): Promise<{ platforms: BotPlatform[] }> {

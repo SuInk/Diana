@@ -67,6 +67,10 @@ type residentContextRuntime interface {
 	ResidentContextForGroup(ctx context.Context, profileID, groupID string) assistant.ResidentContextSnapshot
 }
 
+type modelHealthRuntime interface {
+	ModelHealthSnapshot() assistant.ModelHealthSnapshot
+}
+
 type repositoryWatchRuntime interface {
 	CreateRepositoryWatch(context.Context, assistant.RepositoryWatchCreateInput) (assistant.Reminder, error)
 	UpdateRepositoryWatch(context.Context, string, string, assistant.RepositoryWatchUpdateInput) (assistant.Reminder, error)
@@ -318,6 +322,7 @@ func (h *BotHandler) Register(router gin.IRouter) {
 
 func (h *BotHandler) registerRoutes(router gin.IRouter, base string) {
 	router.GET(base+"/config", h.getConfig)
+	router.GET(base+"/model-health", h.modelHealth)
 	router.GET(base+"/config/defaults", h.newProfileDefaults)
 	router.GET(base+"/prompts", h.promptCatalog)
 	router.POST(base+"/prompts/export", h.exportPromptFile)
@@ -437,6 +442,15 @@ func (h *BotHandler) registerRoutes(router gin.IRouter, base string) {
 	router.POST(base+"/group-admin/verify", h.verifyGroupAdminChallenge)
 	router.GET(base+"/group-admin/config", h.getGroupAdminConfig)
 	router.POST(base+"/group-admin/config", h.saveGroupAdminConfig)
+}
+
+func (h *BotHandler) modelHealth(c *gin.Context) {
+	runtime, ok := h.runtime.(modelHealthRuntime)
+	if !ok {
+		c.JSON(http.StatusOK, assistant.ModelHealthSnapshot{CheckedAt: time.Now(), Candidates: []assistant.ModelCandidateHealth{}})
+		return
+	}
+	c.JSON(http.StatusOK, runtime.ModelHealthSnapshot())
 }
 
 // platforms 返回可用于创建机器人配置的平台及协议适配器。

@@ -73,6 +73,23 @@ func TestBotHandlerConfigKeepsTokenHidden(t *testing.T) {
 	}
 }
 
+func TestBotHandlerModelHealth(t *testing.T) {
+	runtime := assistant.NewRuntime(assistant.DefaultBotConfig(), fakeChannel{}, assistant.NewDefaultPluginManager(), nil, nil, nil, nil)
+	handler := NewBotHandlerWithFactory(context.Background(), runtime, func(assistant.BotConfig) assistant.Channel { return fakeChannel{} })
+	recorder := httptest.NewRecorder()
+	botTestRouter(handler).ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/assistant/model-health", nil))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", recorder.Code, recorder.Body.String())
+	}
+	var payload assistant.ModelHealthSnapshot
+	if err := json.NewDecoder(recorder.Body).Decode(&payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.CheckedAt.IsZero() || payload.Candidates == nil {
+		t.Fatalf("payload = %#v", payload)
+	}
+}
+
 // TestBotHandlerPluginInstallAndEnable 验证对应功能场景。
 func TestBotHandlerPluginInstallAndEnable(t *testing.T) {
 	runtime := assistant.NewRuntime(assistant.DefaultBotConfig(), fakeChannel{}, assistant.NewDefaultPluginManager(), nil, nil, nil, nil)

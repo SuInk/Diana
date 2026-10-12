@@ -17,6 +17,14 @@ test("model scheduling explains health timing and boundaries without an extra sw
   assert.doesNotMatch(disclosure, /<AppSwitch/);
 });
 
+test("model route table exposes live cooling and degraded health states", () => {
+  assert.match(source, /getModelHealth/);
+  assert.match(source, /冷却中/);
+  assert.match(source, /已降权/);
+  assert.match(source, /10_000/);
+  assert.match(source, /model-health-badge/);
+});
+
 const ast = ts.createSourceFile("view.ts", parse(source).descriptor.scriptSetup.content, ts.ScriptTarget.Latest, true);
 function editorContext(roles) {
   const context = vm.createContext({
