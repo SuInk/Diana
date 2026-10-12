@@ -1151,7 +1151,7 @@
                   <div class="field">
                     <label for="bot-video-cooldown">视频冷却（秒）</label>
                     <input id="bot-video-cooldown" v-model.number="form.video_generation_cooldown_seconds" class="input" type="number" min="0" max="86400" step="1" placeholder="0 不冷却" />
-                    <span class="hint">每人独立、跨群和私聊共享，与生图分开。接口受理后计时，受理后的失败仍占用；提交被拒不占用。处理中不能重复发起，主人不受限。0 关闭，最多 86400 秒。</span>
+                    <span class="hint">每人独立、跨群和私聊共享，与生图分开。任务结束后计时，受理后的失败仍占用；提交被拒不占用。处理中不能重复发起，主人不受限。0 关闭，最多 86400 秒。</span>
                   </div>
                 </div>
               </div>
