@@ -92,6 +92,42 @@ func TestOpenAIResponsesInputMapsImageParts(t *testing.T) {
 	}
 }
 
+func TestOpenAIInputsCanonicalizeJPEGIntegrityTrailer(t *testing.T) {
+	_, dataURL, canonicalURL := jpegDataURLWithIntegrityTrailer(t)
+	message := Message{Role: RoleUser, Parts: []ContentPart{{
+		Type:     ContentPartImageURL,
+		ImageURL: dataURL,
+	}}}
+
+	chatContent, ok := openAIChatCompletionContent(message).([]openAIChatCompletionContentPart)
+	if !ok || len(chatContent) != 1 || chatContent[0].ImageURL == nil {
+		t.Fatalf("chat content = %#v", chatContent)
+	}
+	if got := chatContent[0].ImageURL.URL; got != canonicalURL {
+		t.Fatal("Chat Completions retained the JPEG integrity trailer")
+	}
+
+	responsesInput := openAIResponsesInput([]Message{message}, nil)
+	if len(responsesInput) != 1 {
+		t.Fatalf("Responses input len = %d, want 1", len(responsesInput))
+	}
+	data, err := json.Marshal(responsesInput[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wire struct {
+		Content []struct {
+			ImageURL string `json:"image_url"`
+		} `json:"content"`
+	}
+	if err := json.Unmarshal(data, &wire); err != nil {
+		t.Fatal(err)
+	}
+	if len(wire.Content) != 1 || wire.Content[0].ImageURL != canonicalURL {
+		t.Fatal("Responses retained the JPEG integrity trailer")
+	}
+}
+
 func TestAudioPartsReachMultimodalProviderPayloads(t *testing.T) {
 	message := Message{Role: RoleUser, Content: "判断语气", Parts: []ContentPart{
 		{Type: ContentPartText, Text: "判断语气"},

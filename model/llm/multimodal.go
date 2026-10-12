@@ -4,7 +4,9 @@
 package llm
 
 import (
+	"bytes"
 	"encoding/base64"
+	"image/jpeg"
 	"mime"
 	"net/url"
 	"path"
@@ -73,11 +75,21 @@ func dataImageInput(value string) (imageInput, bool) {
 	if !ok {
 		return imageInput{}, false
 	}
+	data = canonicalModelImageBytes(data)
 	return imageInput{
 		MediaType:   mediaType,
 		Data:        data,
 		EncodedData: base64.StdEncoding.EncodeToString(data),
 	}, true
+}
+
+func canonicalModelImageURL(value string) string {
+	value = strings.TrimSpace(value)
+	input, ok := dataImageInput(value)
+	if !ok || input.EncodedData == "" {
+		return value
+	}
+	return "data:" + input.MediaType + ";base64," + input.EncodedData
 }
 
 func decodeBase64Image(value string) ([]byte, bool) {
@@ -102,6 +114,91 @@ func decodeBase64Image(value string) ([]byte, bool) {
 		}
 	}
 	return nil, false
+}
+
+// canonicalModelImageBytes removes bytes after a complete JPEG stream before the image is
+// submitted to a provider. Some chat platforms preserve proprietary integrity trailers after
+// JPEG's EOI marker. Desktop decoders commonly ignore those trailers, while stricter multimodal
+// APIs reject the entire otherwise-readable image. The caller decoded a fresh data URL buffer, so
+// slicing it here never changes the cached original or its content hash.
+func canonicalModelImageBytes(data []byte) []byte {
+	end, ok := jpegStreamEnd(data)
+	if !ok || end == len(data) {
+		return data
+	}
+	// Only repair a stream whose JPEG header remains readable at the parsed boundary. If marker
+	// parsing found a false boundary in malformed input, preserve the original for the provider to
+	// reject instead of silently changing it.
+	if _, err := jpeg.DecodeConfig(bytes.NewReader(data[:end])); err != nil {
+		return data
+	}
+	return data[:end]
+}
+
+// jpegStreamEnd returns the byte immediately after the structural EOI marker. It walks marker
+// segments instead of searching for the last FF D9 pair: metadata and arbitrary trailer bytes may
+// contain the same pair, and entropy-coded scan data has its own byte-stuffing rules.
+func jpegStreamEnd(data []byte) (int, bool) {
+	if len(data) < 4 || data[0] != 0xff || data[1] != 0xd8 {
+		return 0, false
+	}
+
+	position := 2
+	inScan := false
+	for position < len(data) {
+		if inScan && data[position] != 0xff {
+			position++
+			continue
+		}
+		if data[position] != 0xff {
+			return 0, false
+		}
+
+		// FF fill bytes may appear before a marker.
+		for position < len(data) && data[position] == 0xff {
+			position++
+		}
+		if position >= len(data) {
+			return 0, false
+		}
+		marker := data[position]
+		position++
+
+		if marker == 0x00 { // Stuffed FF inside entropy-coded scan data.
+			if !inScan {
+				return 0, false
+			}
+			continue
+		}
+		if marker == 0xd9 { // EOI
+			return position, true
+		}
+		if marker == 0xd8 { // A second SOI cannot occur inside one JPEG stream.
+			return 0, false
+		}
+		if marker >= 0xd0 && marker <= 0xd7 { // Restart marker inside scan data.
+			if !inScan {
+				return 0, false
+			}
+			continue
+		}
+		if marker == 0x01 { // TEM is the only other standalone marker.
+			continue
+		}
+
+		resumeScan := inScan && marker == 0xdc // DNL may appear inside scan data.
+		inScan = false
+		if position+2 > len(data) {
+			return 0, false
+		}
+		segmentLength := int(data[position])<<8 | int(data[position+1])
+		if segmentLength < 2 || position+segmentLength > len(data) {
+			return 0, false
+		}
+		position += segmentLength
+		inScan = marker == 0xda || resumeScan // SOS starts entropy-coded scan data.
+	}
+	return 0, false
 }
 
 func imageMediaTypeFromPath(filePath string) string {

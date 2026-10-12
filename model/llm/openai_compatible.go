@@ -990,7 +990,7 @@ func openAIChatCompletionContent(message Message) any {
 				parts = append(parts, openAIChatCompletionContentPart{Type: "text", Text: text})
 			}
 		case ContentPartImageURL:
-			if imageURL := strings.TrimSpace(part.ImageURL); imageURL != "" {
+			if imageURL := canonicalModelImageURL(part.ImageURL); imageURL != "" {
 				detail := strings.ToLower(strings.TrimSpace(part.Detail))
 				if detail != "low" && detail != "high" {
 					detail = "auto"
@@ -2438,7 +2438,7 @@ func openAIResponseContent(msg Message) responses.ResponseInputMessageContentLis
 			hasText = true
 			content = append(content, responses.ResponseInputContentParamOfInputText(text))
 		case ContentPartImageURL:
-			imageURL := strings.TrimSpace(part.ImageURL)
+			imageURL := canonicalModelImageURL(part.ImageURL)
 			if imageURL == "" {
 				continue
 			}
