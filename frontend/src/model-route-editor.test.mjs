@@ -132,6 +132,27 @@ test("model filters retain original indices and distinguish disabled and standby
   assert.equal(context.filteredModelRoutes("chat").length, 2);
 });
 
+test("the recent-failure filter lists routes that failed, not routes that are merely unconfigured", () => {
+  const roles = { chat: { profile_id: "p1", model: "m1", fallbacks: [{ profile_id: "missing", model: "m1" }, { profile_id: "p2", model: "" }, { profile_id: "p2", model: "m2" }] } };
+  const context = editorContext(roles);
+  Object.assign(context, {
+    modelHealth: { value: { checked_at: "", candidates: [{ profile_id: "p2", model: "m2", failure_count: 2, last_failure_at: "2026-01-01T00:00:00Z" }] } },
+    modelHealthReceivedAt: { value: 0 },
+    selectedRoleProfiles: (_, route) => ["p1", "p2"].includes(route.profile_id) ? [{ id: route.profile_id }] : []
+  });
+  for (const name of ["modelHealthNow", "modelRouteCandidateHealth", "modelRouteHealth"]) {
+    const fn = ast.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === name);
+    assert.ok(fn, name);
+    vm.runInContext(ts.transpileModule(fn.getText(ast), { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, context);
+  }
+  assert.equal(context.modelRouteHealth("chat", roles.chat.fallbacks[0]).label, "未就绪");
+  assert.equal(context.modelRouteHealth("chat", roles.chat.fallbacks[1]).label, "未就绪");
+  context.modelRouteStatusFilter.value = "degraded";
+  assert.deepEqual(Array.from(context.filteredModelRoutes("chat"), item => item.index), [3]);
+  context.modelRouteStatusFilter.value = "cooling";
+  assert.equal(context.filteredModelRoutes("chat").length, 0);
+});
+
 test("timeout refresh preserves edits and reads the currently edited bot only", () => {
   const context = editorContext({ chat: { model: "m1" } });
   Object.assign(context, {

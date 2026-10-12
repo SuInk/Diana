@@ -10,6 +10,8 @@ import (
 	"image"
 	"image/color"
 	"image/jpeg"
+	"net/url"
+	"strings"
 	"testing"
 )
 
@@ -52,6 +54,45 @@ func TestDataImageInputTrimsJPEGIntegrityTrailer(t *testing.T) {
 	}
 	if got := canonicalModelImageURL(dataURL); got != canonicalURL {
 		t.Fatal("OpenAI-compatible image URL was not rebuilt from the canonical JPEG")
+	}
+}
+
+// Clean images are the common case and run through this path on every request and retry, so the
+// URL must come back as the very same string instead of a decoded and re-encoded copy.
+func TestCanonicalModelImageURLLeavesCleanImagesUntouched(t *testing.T) {
+	canonical, _, canonicalURL := jpegDataURLWithIntegrityTrailer(t)
+	png := []byte{0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x01}
+	for name, value := range map[string]string{
+		"clean jpeg":          canonicalURL,
+		"unpadded clean jpeg": "data:image/jpeg;base64," + base64.RawStdEncoding.EncodeToString(canonical),
+		"png":                 "data:image/png;base64," + base64.StdEncoding.EncodeToString(png),
+		"unpadded png":        "data:image/png;base64," + base64.RawStdEncoding.EncodeToString(png),
+		"remote":              "https://example.com/a.jpg",
+	} {
+		if got := canonicalModelImageURL(value); got != value {
+			t.Errorf("%s: URL was rewritten", name)
+		}
+	}
+}
+
+func TestCanonicalModelImageURLTrimsTrailerInAnyEncoding(t *testing.T) {
+	canonical, dataURL, canonicalURL := jpegDataURLWithIntegrityTrailer(t)
+	_, payload, _ := strings.Cut(dataURL, ",")
+	withTrailer, err := base64.StdEncoding.DecodeString(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(withTrailer) <= len(canonical) {
+		t.Fatal("test JPEG has no trailer")
+	}
+	for name, value := range map[string]string{
+		"url-safe": "data:image/jpeg;base64," + base64.RawURLEncoding.EncodeToString(withTrailer),
+		"escaped":  "data:image/jpeg;base64," + url.QueryEscape(payload),
+		"wrapped":  "data:image/jpeg;base64,\n" + payload,
+	} {
+		if got := canonicalModelImageURL(value); got != canonicalURL {
+			t.Errorf("%s: JPEG trailer was not trimmed", name)
+		}
 	}
 }
 

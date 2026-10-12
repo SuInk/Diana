@@ -3818,7 +3818,7 @@ function modelRouteCandidateHealth(role: RoleKey, route: RoleRoute): ModelCandid
 function modelRouteHealth(role: RoleKey, route: RoleRoute): ModelRouteHealth {
   if (route.disabled) return { label: "已停用", className: "", title: "这条路由已停用，不参与调度。", cooling: false, degraded: false };
   const profiles = selectedRoleProfiles(role, route);
-  if (!profiles.length || !route.model) return { label: "未就绪", className: "warn", title: "没有找到可用于这条路由的提供商或模型。", cooling: false, degraded: true };
+  if (!profiles.length || !route.model) return { label: "未就绪", className: "warn", title: "没有找到可用于这条路由的提供商或模型。", cooling: false, degraded: false };
   const health = modelRouteCandidateHealth(role, route);
   const now = modelHealthNow();
   const cooling = health.filter((candidate) => candidate.cooldown_until && Date.parse(candidate.cooldown_until) > now);

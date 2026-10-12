@@ -44,34 +44,7 @@ func imageInputFromURL(value string) (imageInput, bool) {
 }
 
 func dataImageInput(value string) (imageInput, bool) {
-	rest, ok := strings.CutPrefix(value, "data:")
-	if !ok {
-		return imageInput{}, false
-	}
-	header, payload, ok := strings.Cut(rest, ",")
-	if !ok {
-		return imageInput{}, false
-	}
-	headerParts := strings.Split(header, ";")
-	mediaType := strings.ToLower(strings.TrimSpace(headerParts[0]))
-	if !strings.HasPrefix(mediaType, "image/") {
-		return imageInput{}, false
-	}
-	base64Encoded := false
-	for _, part := range headerParts[1:] {
-		if strings.EqualFold(strings.TrimSpace(part), "base64") {
-			base64Encoded = true
-			break
-		}
-	}
-	if !base64Encoded {
-		return imageInput{}, false
-	}
-	unescaped, err := url.PathUnescape(payload)
-	if err != nil {
-		return imageInput{}, false
-	}
-	data, ok := decodeBase64Image(unescaped)
+	mediaType, data, ok := decodeDataImageURL(value)
 	if !ok {
 		return imageInput{}, false
 	}
@@ -83,13 +56,69 @@ func dataImageInput(value string) (imageInput, bool) {
 	}, true
 }
 
+func decodeDataImageURL(value string) (string, []byte, bool) {
+	rest, ok := strings.CutPrefix(value, "data:")
+	if !ok {
+		return "", nil, false
+	}
+	header, payload, ok := strings.Cut(rest, ",")
+	if !ok {
+		return "", nil, false
+	}
+	headerParts := strings.Split(header, ";")
+	mediaType := strings.ToLower(strings.TrimSpace(headerParts[0]))
+	if !strings.HasPrefix(mediaType, "image/") {
+		return "", nil, false
+	}
+	base64Encoded := false
+	for _, part := range headerParts[1:] {
+		if strings.EqualFold(strings.TrimSpace(part), "base64") {
+			base64Encoded = true
+			break
+		}
+	}
+	if !base64Encoded {
+		return "", nil, false
+	}
+	unescaped, err := url.PathUnescape(payload)
+	if err != nil {
+		return "", nil, false
+	}
+	data, ok := decodeBase64Image(unescaped)
+	if !ok {
+		return "", nil, false
+	}
+	return mediaType, data, true
+}
+
+// canonicalModelImageURL rebuilds a data URL only when canonicalModelImageBytes actually removed
+// a trailer. Every other image is returned untouched: this runs for each image of each request
+// and retry, so clean images must not pay for a decode and re-encode round trip.
 func canonicalModelImageURL(value string) string {
 	value = strings.TrimSpace(value)
-	input, ok := dataImageInput(value)
-	if !ok || input.EncodedData == "" {
+	if !dataURLMayHoldJPEG(value) {
 		return value
 	}
-	return "data:" + input.MediaType + ";base64," + input.EncodedData
+	mediaType, data, ok := decodeDataImageURL(value)
+	if !ok {
+		return value
+	}
+	canonical := canonicalModelImageBytes(data)
+	if len(canonical) == len(data) {
+		return value
+	}
+	return "data:" + mediaType + ";base64," + base64.StdEncoding.EncodeToString(canonical)
+}
+
+// dataURLMayHoldJPEG reports whether a data URL payload could decode to bytes starting with
+// JPEG's FF D8. Those always encode to a leading "/" ("_" in the URL-safe alphabet); "%" and
+// whitespace are kept as possible because the payload may be escaped or wrapped.
+func dataURLMayHoldJPEG(value string) bool {
+	if !strings.HasPrefix(value, "data:") {
+		return false
+	}
+	_, payload, ok := strings.Cut(value, ",")
+	return ok && payload != "" && strings.IndexByte("/_% \t\r\n", payload[0]) >= 0
 }
 
 func decodeBase64Image(value string) ([]byte, bool) {
