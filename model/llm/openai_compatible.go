@@ -1155,6 +1155,11 @@ func newTextHTTPClient(base *http.Client, cfg ProviderConfig) *http.Client {
 	if cfg.Timeout > 0 {
 		client.Timeout = cfg.Timeout
 	}
+	transport := client.Transport
+	if transport == nil {
+		transport = http.DefaultTransport
+	}
+	client.Transport = openAISSETransport{base: transport}
 	return &client
 }
 
