@@ -144,3 +144,35 @@ func TestContextSummaryLabelCarriesOffset(t *testing.T) {
 		t.Fatalf("带偏移的标签解析不回来：%q -> %q, %d", header, start, count)
 	}
 }
+
+func TestFixedUTCOffsetLocations(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		offset int
+	}{
+		{"UTC+8", 8 * 3600}, {"UTC-5", -5 * 3600}, {"UTC+5:30", 19800},
+		{"UTC+5:45", 20700}, {"UTC-3:30", -12600}, {"UTC+14", 14 * 3600}, {"UTC-12", -12 * 3600},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			location := loadBotLocation(tc.name)
+			if location == nil {
+				t.Fatal("offset not parsed")
+			}
+			for _, month := range []time.Month{time.January, time.July} {
+				_, offset := time.Date(2026, month, 1, 0, 0, 0, 0, location).Zone()
+				if offset != tc.offset {
+					t.Fatalf("offset = %d, want %d", offset, tc.offset)
+				}
+			}
+			cfg := ConfigFromPayload(PayloadFromConfig(BotConfig{Timezone: tc.name}), BotConfig{})
+			if cfg.Location().String() != tc.name || DailyLimitLocation(cfg).String() != tc.name {
+				t.Fatal("saved offset not used")
+			}
+		})
+	}
+	for _, invalid := range []string{"UTC+", "UTC+15", "UTC-13", "UTC+14:15", "UTC+1:60", "UTC+1:5", "UTC++1", "UTC+1:00:00"} {
+		if loadBotLocation(invalid) != nil {
+			t.Errorf("accepted invalid offset %q", invalid)
+		}
+	}
+}

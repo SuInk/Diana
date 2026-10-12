@@ -49,6 +49,19 @@ type MediaGenerationUsageStore interface {
 	AddMediaGeneration(ctx context.Context, key MediaGenerationKey, count int64) error
 }
 
+// MediaGenerationCooldownStore 读取上次计费/成功时间，跨自然日保留冷却。
+type MediaGenerationCooldownStore interface {
+	MediaGenerationLastUsed(context.Context, MediaGenerationKey) (time.Time, error)
+}
+
+func mediaGenerationCooldown(bot BotConfig, kind MediaGenerationKind) time.Duration {
+	seconds := bot.ImageGenerationCooldownSeconds
+	if kind == MediaGenerationVideo {
+		seconds = bot.VideoGenerationCooldownSeconds
+	}
+	return time.Duration(min(max(seconds, 0), 86400)) * time.Second
+}
+
 // EffectiveMediaGenerationLimits 算出一个群实际生效的每日上限，0 表示不限。
 // 每群上限：群里设了（含 0 = 本群不限）以群为准，没设跟随机器人；每人上限只看机器人。
 func EffectiveMediaGenerationLimits(bot BotConfig, group GroupConfig, kind MediaGenerationKind) (groupLimit, userLimit int64) {
@@ -90,7 +103,9 @@ func mediaGenerationKindLabel(kind MediaGenerationKind) string {
 
 // mediaGenerationQuotaError 是超限的结论，带着能原样念给用户的那句话。
 type mediaGenerationQuotaError struct {
-	Kind MediaGenerationKind
+	RetryAfter time.Duration
+	Pending    bool
+	Kind       MediaGenerationKind
 	// Group 为 true 是本群的上限，否则是这个人的上限。
 	Group     bool
 	Used      int64
@@ -107,6 +122,12 @@ func (e *mediaGenerationQuotaError) Notice() string {
 		who = "本群"
 	}
 	label := mediaGenerationKindLabel(e.Kind)
+	if e.Pending {
+		return fmt.Sprintf("你已有%s任务正在处理，请等待完成后再试", label)
+	}
+	if e.RetryAfter > 0 {
+		return fmt.Sprintf("你的%s仍在冷却，请在 %d 秒后再试", label, (e.RetryAfter+time.Second-1)/time.Second)
+	}
 	if e.Used >= e.Limit {
 		return fmt.Sprintf("今天%s的%s次数已用完（%d/%d），明天再来", who, label, min(e.Used, e.Limit), e.Limit)
 	}
@@ -166,6 +187,7 @@ func (r *Runtime) reserveMediaGeneration(ctx context.Context, event MessageEvent
 	}
 	groupCfg, _ := r.groupConfigForEvent(event)
 	groupLimit, userLimit := EffectiveMediaGenerationLimits(botCfg, groupCfg, kind)
+	cooldown := mediaGenerationCooldown(botCfg, kind)
 	now := r.clock()
 	key := MediaGenerationKey{
 		ProfileID: strings.TrimSpace(r.eventProfileID(event)),
@@ -182,13 +204,14 @@ func (r *Runtime) reserveMediaGeneration(ctx context.Context, event MessageEvent
 	}
 	if key.UserID == "" {
 		userLimit = 0
+		cooldown = 0
 	}
 	q := &r.mediaQuota
 	reservation := &mediaGenerationReservation{
 		quota: q, store: r.mediaGenerationStore(), key: key,
 		amount: int64(amount), expires: now.Add(mediaGenerationReservationTTL),
 	}
-	if groupLimit <= 0 && userLimit <= 0 {
+	if groupLimit <= 0 && userLimit <= 0 && cooldown <= 0 {
 		return reservation, nil
 	}
 	for {
@@ -200,11 +223,33 @@ func (r *Runtime) reserveMediaGeneration(ctx context.Context, event MessageEvent
 		q.mu.Unlock()
 		readCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 		counts, err := reservation.store.MediaGenerationCounts(readCtx, key)
+		var lastUsed time.Time
+		var cooldownErr error
+		if cooldown > 0 {
+			if store, ok := reservation.store.(MediaGenerationCooldownStore); ok {
+				lastUsed, cooldownErr = store.MediaGenerationLastUsed(readCtx, key)
+			} else {
+				lastUsed, cooldownErr = q.memory.MediaGenerationLastUsed(readCtx, key)
+			}
+		}
 		cancel()
 		q.mu.Lock()
-		if err == nil && q.commits != seen {
+		if q.commits != seen {
 			q.mu.Unlock()
 			continue
+		}
+		if cooldown > 0 {
+			if cooldownErr != nil {
+				log.Printf("diana media cooldown: read failed: %v", cooldownErr)
+			}
+			if q.userPendingLocked(key, now) {
+				q.mu.Unlock()
+				return nil, &mediaGenerationQuotaError{Kind: kind, Pending: true}
+			}
+			if remaining := lastUsed.Add(cooldown).Sub(now); !lastUsed.IsZero() && remaining > 0 {
+				q.mu.Unlock()
+				return nil, &mediaGenerationQuotaError{Kind: kind, RetryAfter: remaining}
+			}
 		}
 		if err != nil {
 			log.Printf("diana media quota: 读取%s次数失败，本次放行：%v", mediaGenerationKindLabel(kind), err)
@@ -227,6 +272,21 @@ func (r *Runtime) reserveMediaGeneration(ctx context.Context, event MessageEvent
 		q.mu.Unlock()
 		return reservation, nil
 	}
+}
+
+// userPendingLocked 不按自然日分割：跨午夜也不能绕过进行中的任务。
+func (q *mediaGenerationQuota) userPendingLocked(key MediaGenerationKey, now time.Time) bool {
+	for res := range q.pending {
+		if !now.Before(res.expires) {
+			delete(q.pending, res)
+			continue
+		}
+		other := res.key
+		if other.ProfileID == key.ProfileID && other.Platform == key.Platform && other.Kind == key.Kind && other.UserID == key.UserID {
+			return true
+		}
+	}
+	return false
 }
 
 // pendingLocked 统计同一天、同一种类里还在途的预占，顺手清掉过期的。
@@ -265,6 +325,10 @@ func (res *mediaGenerationReservation) commit(ctx context.Context, produced int)
 				log.Printf("diana media quota: 记录%s次数失败：%v", mediaGenerationKindLabel(res.key.Kind), err)
 			}
 			cancel()
+			// 没实现冷却持久化接口的嵌入式存储使用内存退路。
+			if _, ok := res.store.(MediaGenerationCooldownStore); !ok {
+				_ = res.quota.memory.AddMediaGeneration(ctx, res.key, count)
+			}
 		}
 		if !res.tracked {
 			return
@@ -285,8 +349,9 @@ func (res *mediaGenerationReservation) release() {
 }
 
 type memoryMediaGenerationUsage struct {
-	mu     sync.Mutex
-	counts map[MediaGenerationKey]int64
+	mu       sync.Mutex
+	counts   map[MediaGenerationKey]int64
+	lastUsed map[MediaGenerationKey]time.Time
 }
 
 func (m *memoryMediaGenerationUsage) MediaGenerationCounts(_ context.Context, key MediaGenerationKey) (MediaGenerationCounts, error) {
@@ -305,6 +370,15 @@ func (m *memoryMediaGenerationUsage) MediaGenerationCounts(_ context.Context, ke
 func (m *memoryMediaGenerationUsage) AddMediaGeneration(_ context.Context, key MediaGenerationKey, count int64) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if count <= 0 {
+		return nil
+	}
+	if m.lastUsed == nil {
+		m.lastUsed = map[MediaGenerationKey]time.Time{}
+	}
+	cooldownKey := key
+	cooldownKey.Day, cooldownKey.GroupID = "", ""
+	m.lastUsed[cooldownKey] = time.Now()
 	if m.counts == nil {
 		m.counts = map[MediaGenerationKey]int64{}
 	}
@@ -315,4 +389,11 @@ func (m *memoryMediaGenerationUsage) AddMediaGeneration(_ context.Context, key M
 		m.counts[MediaGenerationKey{ProfileID: key.ProfileID, Platform: key.Platform, Kind: key.Kind, Day: key.Day, UserID: key.UserID}] += count
 	}
 	return nil
+}
+
+func (m *memoryMediaGenerationUsage) MediaGenerationLastUsed(_ context.Context, key MediaGenerationKey) (time.Time, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	key.Day, key.GroupID = "", ""
+	return m.lastUsed[key], nil
 }

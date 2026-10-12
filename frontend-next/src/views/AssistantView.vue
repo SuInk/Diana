@@ -1113,36 +1113,47 @@
                 <span class="hint">每个群单独计，一个群刷满不会把别的群一起饿死；群配置里填了就以群为准。这个群名下的每次模型调用都算，含路由判断和工具步，不只是最终那句回复。主人不受限。</span>
               </div>
               <div class="field">
-                <label for="bot-image-group-limit">生图次数 · 每群每天</label>
-                <input id="bot-image-group-limit" v-model.number="form.image_generation_daily_group_limit" class="input" type="number" min="0" step="1" inputmode="numeric" placeholder="留空不限" />
-                <span class="hint">每个群每天最多成功生成几次图片，改图也算一次，逐张改几张算几次；失败、被拒不算。群配置里填了就以群为准。</span>
-              </div>
-              <div class="field">
-                <label for="bot-image-user-limit">生图次数 · 每人每天</label>
-                <input id="bot-image-user-limit" v-model.number="form.image_generation_daily_user_limit" class="input" type="number" min="0" step="1" inputmode="numeric" placeholder="留空不限" />
-                <span class="hint">每个人每天最多成功生成几次，跨群和私聊合计。用完后机器人会如实告诉对方今天的次数已用完。主人不受限，也不占别人的次数。</span>
-              </div>
-              <div class="field">
-                <label for="bot-video-group-limit">视频次数 · 每群每天</label>
-                <input id="bot-video-group-limit" v-model.number="form.video_generation_daily_group_limit" class="input" type="number" min="0" step="1" inputmode="numeric" placeholder="留空不限" />
-                <span class="hint">每个群每天最多生成几段视频。任务一旦被视频接口受理就算一次，之后渲染失败、超时也算（那时已经在计费）；提交时就被拒的不算。群配置里填了就以群为准。</span>
-              </div>
-              <div class="field">
-                <label for="bot-video-user-limit">视频次数 · 每人每天</label>
-                <input id="bot-video-user-limit" v-model.number="form.video_generation_daily_user_limit" class="input" type="number" min="0" step="1" inputmode="numeric" placeholder="留空不限" />
-                <span class="hint">每个人每天最多生成几段视频，跨群和私聊合计，和生图分开计数。主人不受限，也不占别人的次数。</span>
-              </div>
-              <div class="field">
                 <label for="bot-daily-limit-tz">生图、视频次数 · 重置时区</label>
-                <input id="bot-daily-limit-tz" v-model="form.daily_limit_timezone" class="input" list="bot-daily-limit-timezones" placeholder="留空跟随机器人时区" />
-                <datalist id="bot-daily-limit-timezones">
-                  <option value="Asia/Shanghai"></option>
-                  <option value="Asia/Hong_Kong"></option>
-                  <option value="Asia/Taipei"></option>
-                  <option value="Asia/Tokyo"></option>
-                  <option value="UTC"></option>
-                </datalist>
+                <AppSelect id="bot-daily-limit-tz" :model-value="form.daily_limit_timezone ?? ''" @update:model-value="form.daily_limit_timezone = $event" :options="timezoneOptions(form.daily_limit_timezone, '跟随机器人时区')" searchable search-placeholder="搜索 UTC 偏移" />
                 <span class="hint">每天的次数在这个时区的零点重置，留空跟随「运行」里的机器人时区。只有想让次数按别的时区重置时才填。</span>
+              </div>
+              <div class="field wide">
+                <div class="form-grid">
+                  <div class="field">
+                    <label for="bot-image-group-limit">生图次数 · 每群每天</label>
+                    <input id="bot-image-group-limit" v-model.number="form.image_generation_daily_group_limit" class="input" type="number" min="0" step="1" inputmode="numeric" placeholder="留空不限" />
+                    <span class="hint">每个群每天最多成功生成几次图片，改图也算一次，逐张改几张算几次；失败、被拒不算。群配置里填了就以群为准。</span>
+                  </div>
+                  <div class="field">
+                    <label for="bot-image-user-limit">生图次数 · 每人每天</label>
+                    <input id="bot-image-user-limit" v-model.number="form.image_generation_daily_user_limit" class="input" type="number" min="0" step="1" inputmode="numeric" placeholder="留空不限" />
+                    <span class="hint">每个人每天最多成功生成几次，跨群和私聊合计。用完后机器人会如实告诉对方今天的次数已用完。主人不受限，也不占别人的次数。</span>
+                  </div>
+                  <div class="field">
+                    <label for="bot-image-cooldown">生图冷却（秒）</label>
+                    <input id="bot-image-cooldown" v-model.number="form.image_generation_cooldown_seconds" class="input" type="number" min="0" max="86400" step="1" placeholder="0 不冷却" />
+                    <span class="hint">每人独立、跨群和私聊共享；生图或改图成功后计时，失败不占用。处理中不能重复发起，主人不受限。0 关闭，最多 86400 秒。</span>
+                  </div>
+                </div>
+              </div>
+              <div class="field wide">
+                <div class="form-grid">
+                  <div class="field">
+                    <label for="bot-video-group-limit">视频次数 · 每群每天</label>
+                    <input id="bot-video-group-limit" v-model.number="form.video_generation_daily_group_limit" class="input" type="number" min="0" step="1" inputmode="numeric" placeholder="留空不限" />
+                    <span class="hint">每个群每天最多生成几段视频。任务一旦被视频接口受理就算一次，之后渲染失败、超时也算（那时已经在计费）；提交时就被拒的不算。群配置里填了就以群为准。</span>
+                  </div>
+                  <div class="field">
+                    <label for="bot-video-user-limit">视频次数 · 每人每天</label>
+                    <input id="bot-video-user-limit" v-model.number="form.video_generation_daily_user_limit" class="input" type="number" min="0" step="1" inputmode="numeric" placeholder="留空不限" />
+                    <span class="hint">每个人每天最多生成几段视频，跨群和私聊合计，和生图分开计数。主人不受限，也不占别人的次数。</span>
+                  </div>
+                  <div class="field">
+                    <label for="bot-video-cooldown">视频冷却（秒）</label>
+                    <input id="bot-video-cooldown" v-model.number="form.video_generation_cooldown_seconds" class="input" type="number" min="0" max="86400" step="1" placeholder="0 不冷却" />
+                    <span class="hint">每人独立、跨群和私聊共享，与生图分开。接口受理后计时，受理后的失败仍占用；提交被拒不占用。处理中不能重复发起，主人不受限。0 关闭，最多 86400 秒。</span>
+                  </div>
+                </div>
               </div>
             </div>
           </section>
@@ -2050,15 +2061,8 @@
               </div>
               <div class="field">
                 <label for="bot-timezone">机器人时区</label>
-                <input id="bot-timezone" v-model="form.timezone" class="input" list="bot-timezones" placeholder="留空读 TZ 环境变量，再用本机时区" />
-                <datalist id="bot-timezones">
-                  <option value="Asia/Shanghai"></option>
-                  <option value="Asia/Hong_Kong"></option>
-                  <option value="Asia/Taipei"></option>
-                  <option value="Asia/Tokyo"></option>
-                  <option value="UTC"></option>
-                </datalist>
-                <span class="hint">IANA 时区名。告诉模型的当前时间、回复时段、每日次数的零点、「明天八点」的换算和聊天记录上的时间都按它。留空时先看 TZ 环境变量，再用服务器本地时区；服务器是 UTC（Docker 默认）时按 Asia/Shanghai。</span>
+                <AppSelect id="bot-timezone" :model-value="form.timezone ?? ''" @update:model-value="form.timezone = $event" :options="timezoneOptions(form.timezone, '跟随系统默认')" searchable search-placeholder="搜索 UTC 偏移" />
+                <span class="hint">选择固定 UTC 偏移（不随夏令时变化）；已有地区时区保留原规则。告诉模型的当前时间、回复时段、每日次数的零点、「明天八点」的换算和聊天记录上的时间都按它。留空时先看 TZ 环境变量，再用服务器本地时区；服务器是 UTC（Docker 默认）时按 UTC+8。</span>
               </div>
               <div class="field">
                 <label for="bot-concurrency">全局并发数</label>
@@ -2296,7 +2300,8 @@ import LoadingSkeleton from "../components/LoadingSkeleton.vue";
 import SkeletonBlock from "../components/SkeletonBlock.vue";
 import { ArrowLeft, Bot, ChevronDown, ChevronRight, Copy, Download, Eye, EyeOff, GitBranch, GripVertical, History, Image, Layers, MessageSquare, Pencil, Plus, Power, PowerOff, RefreshCw, RotateCcw, Save, ScanLine, Search, Settings2, Shuffle, SlidersHorizontal, Sparkles, Trash2, Upload, Waypoints, X } from "@lucide/vue";
 import { sendRetryFields, sendRetryPayload, sendRetryValidationError } from "../send-retry-settings";
-import { botImageGenerationLimitsPayload, botVideoGenerationLimitsPayload } from "../media-generation-quota";
+import { timezoneOptions } from "../timezone-options";
+import { botImageGenerationLimitsPayload, botVideoGenerationLimitsPayload, mediaGenerationCooldownPayload } from "../media-generation-quota";
 import {
   deleteBotProfile,
   generatePersona,
@@ -4839,6 +4844,7 @@ async function save(): Promise<void> {
       model_call_quota: Math.max(0, Math.round(Number(current.model_call_quota) || 0)),
       ...botImageGenerationLimitsPayload(current),
       ...botVideoGenerationLimitsPayload(current),
+      ...mediaGenerationCooldownPayload(current),
       timezone: (current.timezone ?? "").trim(),
       forward_reply_chunk_threshold: Number(current.forward_reply_chunk_threshold) || 0,
       reply_merge_confidence_percent: Number(current.reply_merge_confidence_percent) || 0,

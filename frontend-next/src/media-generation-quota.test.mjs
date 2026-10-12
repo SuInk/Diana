@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import {
   botImageGenerationLimitsPayload,
+  mediaGenerationCooldownPayload,
   botVideoGenerationLimitsPayload,
   dailyLimitValue,
   groupDailyLimitMode,
@@ -68,7 +69,8 @@ test("AssistantView renders and saves the daily image limits and reset timezone"
   for (const field of ["image_generation_daily_group_limit", "image_generation_daily_user_limit"]) {
     assert.match(source, new RegExp(`v-model.number="form\\.${field}"[^>]+min="0"`));
   }
-  assert.match(source, /v-model="form\.daily_limit_timezone"/);
+  assert.match(source, /<AppSelect id="bot-daily-limit-tz"[^>]+:model-value="form\.daily_limit_timezone \?\? ''"/);
+  assert.match(source, /@update:model-value="form\.daily_limit_timezone = \$event"/);
   assert.match(source, /\.\.\.botImageGenerationLimitsPayload\(current\)/);
 });
 
@@ -127,4 +129,9 @@ test("AssistantView and GroupsView render and save the video limits", async () =
   const demo = await readFile(new URL("./demo.ts", import.meta.url), "utf8");
   assert.match(demo, /video_generation_daily_group_limit: 5, video_generation_daily_user_limit: 1/);
   assert.match(demo, /image_generation_daily_group_limit: 50, video_generation_daily_group_limit: 0/);
+});
+
+test("cooldowns normalize cleared values and clamp to one day", () => {
+ assert.deepEqual(mediaGenerationCooldownPayload({image_generation_cooldown_seconds: "", video_generation_cooldown_seconds: 999999}), {image_generation_cooldown_seconds: 0, video_generation_cooldown_seconds: 86400});
+ assert.deepEqual(mediaGenerationCooldownPayload({image_generation_cooldown_seconds: "60", video_generation_cooldown_seconds: -1}), {image_generation_cooldown_seconds: 60, video_generation_cooldown_seconds: 0});
 });

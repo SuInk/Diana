@@ -137,3 +137,12 @@ func TestGroupQuotaUnsetEverywhereSkipsLookup(t *testing.T) {
 		t.Fatalf("两边都没填不该去查用量，实际查了 %d 次", usage.calls)
 	}
 }
+
+func TestSavedModelQuotaActuallyBlocksExhaustedGroup(t *testing.T) {
+	cfg := ConfigFromPayload(PayloadFromConfig(BotConfig{ID: "qq", OwnerID: "10001", ModelCallQuota: 2}), BotConfig{})
+	runtime, event := quotaRuntimeWith(t, &stubGroupUsageLog{usedCalls: 2}, cfg,
+		GroupConfig{GroupID: "20001", BotProfileID: "qq", Enabled: true})
+	if verdict := runtime.groupModelQuotaExceeded(context.Background(), event); !verdict.Exceeded || verdict.Calls != 2 {
+		t.Fatalf("saved quota did not block exhausted group: %#v", verdict)
+	}
+}
