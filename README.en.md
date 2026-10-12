@@ -140,7 +140,7 @@ That's it. No reply? The event center tells you why; `diana doctor` checks servi
 
 ```sh
 git clone https://github.com/SuInk/Diana.git && cd Diana
-cd frontend-next && npm ci && npm run build && cd ..
+cd frontend && npm ci && npm run build && cd ..
 go build -o dist/diana-webui ./cmd/webui
 ./dist/diana-webui
 ```
@@ -237,7 +237,7 @@ More detail (session management, exempted paths, agent command allowlist) in the
 
 ## Contributing
 
-Backend in Go (Gin + SQLite), frontend in Vue 3 + TypeScript (`frontend-next/`). Full dev environment locally:
+Backend in Go (Gin + SQLite), frontend in Vue 3 + TypeScript (`frontend/`). Full dev environment locally:
 
 ```sh
 make dev        # backend :18080 + Vite frontend :5173, hot reload

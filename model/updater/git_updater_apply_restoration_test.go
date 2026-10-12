@@ -255,7 +255,7 @@ func TestApplyUpdateScriptBuildsFrontendNextAndRemovesBackups(t *testing.T) {
 	script := filepath.Join(repositoryRoot, "scripts", "apply-update.sh")
 	fixtureRoot := t.TempDir()
 	sourceRoot := filepath.Join(fixtureRoot, "source")
-	frontendBin := filepath.Join(sourceRoot, "frontend-next", "node_modules", ".bin")
+	frontendBin := filepath.Join(sourceRoot, "frontend", "node_modules", ".bin")
 	binDir := filepath.Join(fixtureRoot, "bin")
 	executable := filepath.Join(fixtureRoot, "application", "diana-webui")
 	frontend := filepath.Join(fixtureRoot, "web", "dist")
@@ -265,7 +265,7 @@ func TestApplyUpdateScriptBuildsFrontendNextAndRemovesBackups(t *testing.T) {
 		}
 	}
 	restoredGitRun(t, sourceRoot, "init")
-	if err := os.WriteFile(filepath.Join(sourceRoot, "frontend-next", "package-lock.json"), []byte("{}"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(sourceRoot, "frontend", "package-lock.json"), []byte("{}"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(executable, []byte("old-binary"), 0o700); err != nil {

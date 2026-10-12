@@ -13,8 +13,8 @@ import (
 	"testing"
 )
 
-// 跨语言一致性只能从 Go 这边钉。前端的测试跑在 Docker 的 frontend-next 构建阶段里，
-// 那一层只 COPY 了 frontend-next/ 一个目录，读不到 model/assistant 下的 .go；同样的
+// 跨语言一致性只能从 Go 这边钉。前端的测试跑在 Docker 的 frontend 构建阶段里，
+// 那一层只 COPY 了 frontend/ 一个目录，读不到 model/assistant 下的 .go；同样的
 // 断言写在 .test.mjs 里本机全绿、进了镜像必红（npm 的 prebuild 会跑 npm test）。
 // Go 测试跑在完整仓库上，两边的源码都读得到，所以对照放在这边。
 
@@ -52,14 +52,14 @@ func readRepoFile(t *testing.T, rel string) string {
 
 var participationThresholdEntryPattern = regexp.MustCompile(`(?m)^\s*(\w+)\s*:\s*(null|[0-9.]+)\s*,?\s*$`)
 
-// frontendParticipationThresholds 解析 frontend-next/src/participation.ts 里的
+// frontendParticipationThresholds 解析 frontend/src/participation.ts 里的
 // participationLevelThresholds，返回档位到门槛的映射；null 用 nil 表示。
 func frontendParticipationThresholds(t *testing.T, source string) map[string]*float64 {
 	t.Helper()
 	const marker = "export const participationLevelThresholds"
 	start := strings.Index(source, marker)
 	if start < 0 {
-		t.Fatalf("frontend-next/src/participation.ts 里应当有 %s", marker)
+		t.Fatalf("frontend/src/participation.ts 里应当有 %s", marker)
 	}
 	open := strings.Index(source[start:], "{")
 	if open < 0 {
@@ -100,7 +100,7 @@ func TestFrontendParticipationThresholdsMatchRatingPasses(t *testing.T) {
 			t.Fatalf("%q 不是后端认的档位，这份档位清单本身过期了", level)
 		}
 	}
-	frontend := frontendParticipationThresholds(t, readRepoFile(t, "frontend-next/src/participation.ts"))
+	frontend := frontendParticipationThresholds(t, readRepoFile(t, "frontend/src/participation.ts"))
 
 	for _, level := range levels {
 		threshold, ok := frontend[level]

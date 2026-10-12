@@ -98,10 +98,10 @@ docker compose logs -f diana</code></pre>
         <pre><code>git clone https://github.com/SuInk/Diana.git
 cd Diana
 go mod download
-cd frontend-next &amp;&amp; npm ci &amp;&amp; npm run build &amp;&amp; cd ..
+cd frontend &amp;&amp; npm ci &amp;&amp; npm run build &amp;&amp; cd ..
 mkdir -p dist
 go build -trimpath -o dist/diana-webui ./cmd/webui
-FRONTEND_DIST=frontend-next/dist ./dist/diana-webui</code></pre>
+FRONTEND_DIST=frontend/dist ./dist/diana-webui</code></pre>
       </section>
 
       <section class="section searchable" id="first-run">

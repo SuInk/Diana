@@ -51,7 +51,7 @@
 ```sh
 go test ./webui ./model/assistant -run '^TestAdminChat' -count=1
 go test -race ./webui ./model/assistant -run '^TestAdminChat' -count=1
-cd frontend-next
+cd frontend
 npm run build
 ```
 

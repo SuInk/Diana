@@ -185,7 +185,7 @@ func TestAgentDefaultsCarrySafeModeCatalog(t *testing.T) {
 //
 //	DIANA_UPDATE_DEMO_CATALOG=1 go test ./webui -run TestDemoAgentSafeModeCatalogInSync
 func TestDemoAgentSafeModeCatalogInSync(t *testing.T) {
-	path := filepath.Join("..", "frontend-next", "src", "demo-agent-safe-mode.json")
+	path := filepath.Join("..", "frontend", "src", "demo-agent-safe-mode.json")
 	want, err := json.MarshalIndent(assistant.AgentSafeModeCatalog(), "", "  ")
 	if err != nil {
 		t.Fatal(err)

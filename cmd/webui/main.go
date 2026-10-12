@@ -954,8 +954,10 @@ func setupLogging(logPath string) (io.Writer, func(), func()) {
 // frontendDistDir 查找生产前端静态文件目录。
 func frontendDistDir(custom string) string {
 	// 同时兼容源码目录运行、打包后从二进制旁边运行、以及测试工作目录切换。
-	// 旧版 frontend 已停用，不再静默回退，避免误把过时控制台部署到生产环境。
+	// 源码目录是 frontend/；发布包和已安装实例仍使用 frontend-next/dist，两种布局都要认。
 	candidates := []string{
+		"frontend/dist",
+		"../../frontend/dist",
 		"frontend-next/dist",
 		"../../frontend-next/dist",
 	}

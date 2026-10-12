@@ -90,5 +90,5 @@
 - `model/assistant/souls/*.md`、`builtin_souls.go`：内置人设
 - `model/assistant/persona_legacy.go`：旧字段并入
 - `model/assistant/persona_library.go`、`persona_document.go`：人设库和导入格式
-- `frontend-next/src/components/SoulEditor.vue`：编辑器和人设库
+- `frontend/src/components/SoulEditor.vue`：编辑器和人设库
 - `webui/llm_persona.go`：「AI 写」，照同一套写法生成

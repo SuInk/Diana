@@ -54,16 +54,16 @@ backend:
 	$(GO) run ./cmd/webui
 
 frontend:
-	cd frontend-next && $(NPM) run dev -- --host $(FRONTEND_HOST) --port $(FRONTEND_PORT) --strictPort
+	cd frontend && $(NPM) run dev -- --host $(FRONTEND_HOST) --port $(FRONTEND_PORT) --strictPort
 
 frontend-next: frontend
 
 deps:
 	$(GO) mod download
-	cd frontend-next && $(NPM) ci
+	cd frontend && $(NPM) ci
 
 deps-next:
-	cd frontend-next && $(NPM) install
+	cd frontend && $(NPM) install
 
 fmt:
 	$(GO) fmt ./...
@@ -81,7 +81,7 @@ test-go:
 	$(GO) test ./...
 
 test-web:
-	cd frontend-next && $(NPM) run build
+	cd frontend && $(NPM) run build
 
 build: build-web build-go
 
@@ -94,26 +94,26 @@ build-local-mac:
 
 install-local-mac-app: build-web
 	GO="$(GO)" ./scripts/build-local-mac.sh "$(HOME)/Applications/Diana.app"
-	$(NODE) -e "const fs=require('fs'); const src='$(CURDIR)/frontend-next/dist'; const dst='$(HOME)/Library/Application Support/diana/frontend-next/dist'; fs.rmSync(dst,{recursive:true,force:true}); fs.mkdirSync(require('path').dirname(dst),{recursive:true}); fs.cpSync(src,dst,{recursive:true})"
+	$(NODE) -e "const fs=require('fs'); const src='$(CURDIR)/frontend/dist'; const dst='$(HOME)/Library/Application Support/diana/frontend-next/dist'; fs.rmSync(dst,{recursive:true,force:true}); fs.mkdirSync(require('path').dirname(dst),{recursive:true}); fs.cpSync(src,dst,{recursive:true})"
 
 start-local-mac:
 	./scripts/start-local-mac.sh
 
 build-web:
-	cd frontend-next && $(NPM) run build
+	cd frontend && $(NPM) run build
 
 build-web-next: build-web
 
 run: build-web
-	FRONTEND_DIST=frontend-next/dist $(GO) run ./cmd/webui
+	FRONTEND_DIST=frontend/dist $(GO) run ./cmd/webui
 
 run-next: run
 
 preview:
-	cd frontend-next && $(NPM) run preview -- --host $(FRONTEND_HOST)
+	cd frontend && $(NPM) run preview -- --host $(FRONTEND_HOST)
 
 clean:
-	$(NODE) -e "const fs=require('fs'); for (const p of ['dist','frontend-next/dist']) fs.rmSync(p,{recursive:true,force:true})"
+	$(NODE) -e "const fs=require('fs'); for (const p of ['dist','frontend/dist','frontend-next/dist']) fs.rmSync(p,{recursive:true,force:true})"
 
 docker-build:
 	$(DOCKER) build -t diana:local .

@@ -4,10 +4,10 @@
 # Licensed under the Limited Redistribution License in the repository root.
 
 FROM --platform=$BUILDPLATFORM node:22-alpine AS frontend-next
-WORKDIR /src/frontend-next
-COPY frontend-next/package*.json ./
+WORKDIR /src/frontend
+COPY frontend/package*.json ./
 RUN npm ci
-COPY frontend-next/ ./
+COPY frontend/ ./
 RUN npm run build
 
 FROM --platform=$BUILDPLATFORM golang:1.26.6-alpine AS backend
@@ -106,7 +106,7 @@ COPY --from=yt-dlp /out/yt-dlp /usr/local/bin/yt-dlp
 # glibc Linux 裸机部署则会自动改用 Chrome for Testing 无 root 下载。
 FROM runtime-base AS runtime-slim
 COPY --from=backend /out/diana-webui /app/diana-webui
-COPY --from=frontend-next /src/frontend-next/dist /app/frontend-next/dist
+COPY --from=frontend-next /src/frontend/dist /app/frontend-next/dist
 # 浏览器控制扩展的源码。容器用户没有仓库检出，WebUI 的「下载扩展」就是从这里打包。
 COPY packaging/browser-control-extension /app/browser-control-extension
 EXPOSE 18080
@@ -114,7 +114,7 @@ ENTRYPOINT ["/usr/bin/tini", "-s", "--", "/usr/local/bin/diana-entrypoint", "/ap
 
 FROM runtime-full AS runtime
 COPY --from=backend /out/diana-webui /app/diana-webui
-COPY --from=frontend-next /src/frontend-next/dist /app/frontend-next/dist
+COPY --from=frontend-next /src/frontend/dist /app/frontend-next/dist
 COPY packaging/browser-control-extension /app/browser-control-extension
 EXPOSE 18080
 ENTRYPOINT ["/usr/bin/tini", "-s", "--", "/usr/local/bin/diana-entrypoint", "/app/diana-webui"]

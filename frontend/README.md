@@ -1,4 +1,4 @@
-# frontend-next — 新版 WebUI
+# frontend — 新版 WebUI
 
 Diana 当前唯一受支持的 Vue + TypeScript 控制台。
 
@@ -14,7 +14,7 @@ Diana 当前唯一受支持的 Vue + TypeScript 控制台。
 ## 开发
 
 ```sh
-cd frontend-next
+cd frontend
 npm install        # 首次
 npm run dev        # http://127.0.0.1:5174，/api 和 /onebot 代理到 127.0.0.1:18080
 ```
@@ -24,14 +24,14 @@ npm run dev        # http://127.0.0.1:5174，/api 和 /onebot 代理到 127.0.0.
 ```sh
 make deps-next
 make backend        # 终端 1：Go 后端
-make frontend-next  # 终端 2：Vite 前端
+make frontend  # 终端 2：Vite 前端
 ```
 
 ## 生产构建与切换
 
 ```sh
-cd frontend-next && npm run build && cd ..
-FRONTEND_DIST=frontend-next/dist ./dist/diana-webui
+cd frontend && npm run build && cd ..
+FRONTEND_DIST=frontend/dist ./dist/diana-webui
 ```
 
 或：
@@ -40,7 +40,7 @@ FRONTEND_DIST=frontend-next/dist ./dist/diana-webui
 make run-next
 ```
 
-不设置 `FRONTEND_DIST` 时，后端会自动使用 `frontend-next/dist`。
+不设置 `FRONTEND_DIST` 时，后端会自动使用 `frontend/dist`。
 
 ## 依赖的新后端接口
 

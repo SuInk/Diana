@@ -8,7 +8,7 @@ ROOT="${DIANA_UPDATE_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 TARGET_COMMIT="${DIANA_UPDATE_TARGET_COMMIT:-$(git -C "$ROOT" rev-parse HEAD)}"
 BUILD_VERSION="${DIANA_BUILD_VERSION:-}"
 RUNNING_EXECUTABLE="${DIANA_RUNNING_EXECUTABLE:-}"
-FRONTEND_TARGET="${FRONTEND_DIST:-$ROOT/frontend-next/dist}"
+FRONTEND_TARGET="${FRONTEND_DIST:-$ROOT/frontend/dist}"
 GO_BIN="${GO:-go}"
 NPM_BIN="${NPM:-npm}"
 
@@ -16,7 +16,7 @@ if ! git -C "$ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
 	echo "Update root is not a Git checkout: $ROOT" >&2
 	exit 1
 fi
-if [[ ! -f "$ROOT/frontend-next/package-lock.json" ]]; then
+if [[ ! -f "$ROOT/frontend/package-lock.json" ]]; then
 	echo "frontend-next lockfile is missing from update root." >&2
 	exit 1
 fi
@@ -62,7 +62,7 @@ trap cleanup EXIT
 
 echo "Installing frontend-next dependencies..."
 (
-	cd "$ROOT/frontend-next"
+	cd "$ROOT/frontend"
 	"$NPM_BIN" ci
 	./node_modules/.bin/vue-tsc -b
 	./node_modules/.bin/vite build --outDir "$STAGED_FRONTEND" --emptyOutDir

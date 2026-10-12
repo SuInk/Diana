@@ -146,7 +146,7 @@ docker compose -f docker-compose.yml -f docker-compose.update.yml pull && docker
 
 ```sh
 git clone https://github.com/SuInk/Diana.git && cd Diana
-cd frontend-next && npm ci && npm run build && cd ..
+cd frontend && npm ci && npm run build && cd ..
 go build -o dist/diana-webui ./cmd/webui
 ./dist/diana-webui
 ```
@@ -273,7 +273,7 @@ docker compose start diana
 
 ## 参与开发
 
-后端 Go（Gin + SQLite），前端 Vue 3 + TypeScript（`frontend-next/`）。本机起全套开发环境：
+后端 Go（Gin + SQLite），前端 Vue 3 + TypeScript（`frontend/`）。本机起全套开发环境：
 
 ```sh
 make dev        # 后端 :18080 + Vite 前端 :5173，热更新
