@@ -675,6 +675,9 @@
                         <input v-model="modelRouteSearch" class="input" :aria-label="`搜索${modelPurposeLabel(role.key)}模型`" placeholder="搜索模型或提供商" />
                       </div>
                       <AppSelect :id="`model-status-filter-${role.key}`" v-model="modelRouteStatusFilter" :options="modelRouteStatusOptions" />
+                      <button class="btn icon-only small ghost" type="button" title="刷新运行状态" aria-label="刷新模型运行状态" :disabled="modelHealthLoading" @click="loadModelHealth">
+                        <RefreshCw :size="14" :class="{ spinning: modelHealthLoading }" aria-hidden="true" />
+                      </button>
                     </div>
                     <div class="model-route-table-wrap">
                       <table class="model-route-table" :aria-label="`${modelPurposeLabel(role.key)}模型列表`">
@@ -696,7 +699,10 @@
                               <span class="model-route-provider"><Layers v-if="item.route.group" :size="12" aria-hidden="true" />{{ modelRouteProviderLabel(item.route) }}</span>
                               <button class="model-route-model-name mono" type="button" :title="item.route.model" @click="openModelRouteEditor(role.key, item.index)">{{ item.route.model || '请选择模型' }}</button>
                             </td>
-                            <td class="model-route-kind-cell"><span class="badge" :class="modelRouteIsStandby(role.key, item.index) ? '' : 'accent'">{{ modelRouteIsStandby(role.key, item.index) ? '后备' : effectiveModelRoutingStrategy(role.key) !== 'failover' ? '参与调度' : '主模型' }}</span></td>
+                            <td class="model-route-kind-cell">
+                              <span class="badge" :class="modelRouteIsStandby(role.key, item.index) ? '' : 'accent'">{{ modelRouteIsStandby(role.key, item.index) ? '后备' : effectiveModelRoutingStrategy(role.key) !== 'failover' ? '参与调度' : '主模型' }}</span>
+                              <span class="badge model-health-badge" :class="modelRouteHealth(role.key, item.route).className" :title="modelRouteHealth(role.key, item.route).title">{{ modelRouteHealth(role.key, item.route).label }}</span>
+                            </td>
                             <td v-if="roleForm[role.key]?.routing_strategy === 'weighted'" class="model-route-weight-cell">
                               <span v-if="modelRouteIsStandby(role.key, item.index)" class="muted">—</span>
                               <AppNumberInput v-else :model-value="item.route.weight || 1" :min="1" :max="1000" :label="`${role.label}模型 ${item.index + 1} 权重`" :disabled="item.route.disabled" compact @update:model-value="(value) => setRoleRouteWeight(role.key, item.index, value)" />
@@ -2309,6 +2315,7 @@ import {
   importPromptFile,
   getConfig,
   getBotProfileConfig,
+  getModelHealth,
   getBotPlatforms,
   listLLMModels,
   saveBotProfileConfig,
@@ -2320,6 +2327,8 @@ import {
   type MessageRelayPair,
   type LLMConfig,
   type LLMModelInfo,
+  type ModelCandidateHealth,
+  type ModelHealthSnapshot,
   type BotProfileConfig,
   type BotChannelStatus,
   type BotPlatform,
@@ -3711,7 +3720,9 @@ const modelRouteStatusOptions = [
   { value: "all", label: "全部状态" },
   { value: "enabled", label: "已启用" },
   { value: "disabled", label: "已停用" },
-  { value: "standby", label: "后备模型" }
+  { value: "standby", label: "后备模型" },
+  { value: "cooling", label: "冷却中" },
+  { value: "degraded", label: "近期失败" }
 ];
 const modelRouteEditor = ref<{ role: RoleKey; index: number; adding: boolean; draft: RoleRoute; baseline: string } | null>(null);
 const modelRouteEditorError = ref("");
@@ -3788,12 +3799,74 @@ function modelRouteProviderLabel(route: RoleRoute): string {
   return provider ? provider.name || llmProviderLabel(provider.provider) : route.profile_id || "尚未选择提供商";
 }
 
+type ModelRouteHealth = { label: string; className: "ok" | "warn" | "err" | ""; title: string; cooling: boolean; degraded: boolean };
+const modelHealth = ref<ModelHealthSnapshot>({ checked_at: "", candidates: [] });
+const modelHealthReceivedAt = ref(0);
+const modelHealthLoading = ref(false);
+let modelHealthTimer: number | undefined;
+
+function modelHealthNow(): number {
+  const checkedAt = Date.parse(modelHealth.value.checked_at);
+  return Number.isFinite(checkedAt) && modelHealthReceivedAt.value ? checkedAt + Math.max(0, Date.now() - modelHealthReceivedAt.value) : Date.now();
+}
+
+function modelRouteCandidateHealth(role: RoleKey, route: RoleRoute): ModelCandidateHealth[] {
+  const profileIDs = new Set(selectedRoleProfiles(role, route).map((profile) => profile.id).filter((id): id is string => !!id));
+  return modelHealth.value.candidates.filter((candidate) => profileIDs.has(candidate.profile_id) && candidate.model === route.model);
+}
+
+function modelRouteHealth(role: RoleKey, route: RoleRoute): ModelRouteHealth {
+  if (route.disabled) return { label: "已停用", className: "", title: "这条路由已停用，不参与调度。", cooling: false, degraded: false };
+  const profiles = selectedRoleProfiles(role, route);
+  if (!profiles.length || !route.model) return { label: "未就绪", className: "warn", title: "没有找到可用于这条路由的提供商或模型。", cooling: false, degraded: true };
+  const health = modelRouteCandidateHealth(role, route);
+  const now = modelHealthNow();
+  const cooling = health.filter((candidate) => candidate.cooldown_until && Date.parse(candidate.cooldown_until) > now);
+  const coolingIDs = new Set(cooling.map((candidate) => candidate.profile_id));
+  const allCooling = profiles.every((profile) => !!profile.id && coolingIDs.has(profile.id));
+  const failures = health.reduce((total, candidate) => total + candidate.failure_count, 0);
+  const details = health.map((candidate) => {
+    const provider = llmChannels.value.find((channel) => channel.id === candidate.profile_id);
+    const name = provider?.name || candidate.profile_id;
+    const until = candidate.cooldown_until && Date.parse(candidate.cooldown_until) > now ? `，冷却至 ${new Date(candidate.cooldown_until).toLocaleTimeString()}` : "";
+    return `${name}：近期失败 ${candidate.failure_count} 次${until}`;
+  });
+  if (cooling.length) {
+    const label = allCooling ? "冷却中" : `${cooling.length} 个冷却`;
+    const summary = allCooling ? "存在其他可用候选时，这条路由当前不会参与调度。" : "组内冷却候选会被跳过，其余候选仍可参与调度。";
+    return { label, className: allCooling ? "err" : "warn", title: [summary, ...details].join("\n"), cooling: true, degraded: false };
+  }
+  if (failures > 0) {
+    const smart = effectiveModelRoutingStrategy(role) === "smart";
+    return { label: smart ? "已降权" : "近期失败", className: "warn", title: [smart ? "冷却已结束，但智能调度会优先选择失败次数更少的候选。" : "冷却已结束，候选已重新参与调度。", ...details].join("\n"), cooling: false, degraded: true };
+  }
+  return { label: "正常", className: "ok", title: "当前进程内没有保留这条路由的近期健康故障。", cooling: false, degraded: false };
+}
+
+async function loadModelHealth(): Promise<void> {
+  if (modelHealthLoading.value) return;
+  modelHealthLoading.value = true;
+  try {
+    modelHealth.value = await getModelHealth();
+    modelHealthReceivedAt.value = Date.now();
+  } catch {
+    // 运行状态是辅助信息，暂时读不到时保留上一次结果，不打断配置编辑。
+  } finally {
+    modelHealthLoading.value = false;
+  }
+}
+
 function filteredModelRoutes(role: RoleKey): { route: RoleRoute; index: number }[] {
   const term = modelRouteSearch.value.trim().toLowerCase();
   return modelRoleRoutes(role).filter(({ route, index }) => {
     if (term && !`${route.model} ${modelRouteProviderLabel(route)}`.toLowerCase().includes(term)) return false;
     const status = modelRouteStatusFilter.value;
-    return status === "disabled" ? !!route.disabled : status === "enabled" ? !route.disabled : status === "standby" ? modelRouteIsStandby(role, index) : true;
+    if (status === "disabled") return !!route.disabled;
+    if (status === "enabled") return !route.disabled;
+    if (status === "standby") return modelRouteIsStandby(role, index);
+    if (status !== "cooling" && status !== "degraded") return true;
+    const health = modelRouteHealth(role, route);
+    return status === "cooling" ? health.cooling : status === "degraded" ? health.degraded : true;
   });
 }
 
@@ -5007,6 +5080,7 @@ async function copyEndpoint(): Promise<void> {
 onBeforeUnmount(() => {
   headerResizeObserver?.disconnect();
   headerResizeObserver = null;
+  if (modelHealthTimer !== undefined) window.clearInterval(modelHealthTimer);
 });
 
 async function load(): Promise<void> {
@@ -5014,13 +5088,14 @@ async function load(): Promise<void> {
   // 世界书单独拉，不放进下面那组 Promise.all：它只是素材库，慢一点或者读不出来都
   // 不该拖住机器人配置本身的加载。人设库由 SoulEditor 自己拉。
   void loadWorldBook();
-  const [platformResult, botConfig, llmConfig] = await Promise.all([
+  const [platformResult, botConfig, llmConfig, health] = await Promise.all([
     getBotPlatforms().catch(() => ({ platforms: [] as BotPlatform[] })),
     getBotProfileConfig().catch((error: unknown) => {
       toastError(error instanceof Error ? error.message : "加载配置失败");
       return null;
     }),
-    getConfig().catch(() => null)
+    getConfig().catch(() => null),
+    getModelHealth().catch(() => null)
   ]);
   platforms.value = platformResult.platforms.length
     ? platformResult.platforms
@@ -5030,6 +5105,10 @@ async function load(): Promise<void> {
   }
   const channels = llmConfig?.profiles ?? [];
   llmChannels.value = channels;
+  if (health) {
+    modelHealth.value = health;
+    modelHealthReceivedAt.value = Date.now();
+  }
   // 模型清单由提供商配置页维护。机器人页只用已保存结果，不再为每个提供商
   // 自动发一次远程模型请求；账号多时这曾是页面打开后最大的网络开销。
   loading.value = false;
@@ -5040,6 +5119,13 @@ onMounted(() => {
   void loadAgentSafeModeCatalog();
   void load().then(openRequestedTab);
   void loadMediaBaseURL();
+  modelHealthTimer = window.setInterval(() => {
+    if (page.value === "edit" && editorTab.value === "model") void loadModelHealth();
+  }, 10_000);
+});
+
+watch(editorTab, (tab) => {
+  if (tab === "model") void loadModelHealth();
 });
 
 // 别处（运行记录里的上下文构成）跳过来时带着 ?tab=context：那边看到工具占了多少，

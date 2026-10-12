@@ -589,7 +589,7 @@ code {
   width: 46px;
 }
 .model-route-kind-col {
-  width: 78px;
+  width: 96px;
 }
 .model-route-weight-col {
   width: 112px;
@@ -646,6 +646,11 @@ code {
   padding: 3px 6px;
   font-size: 10px;
   white-space: nowrap;
+}
+.model-route-kind-cell .model-health-badge {
+  display: flex;
+  width: fit-content;
+  margin-top: 5px;
 }
 .model-route-actions {
   white-space: nowrap;

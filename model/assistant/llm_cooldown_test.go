@@ -114,6 +114,35 @@ func TestLLMCooldownSkipsLimitedCandidateAcrossCalls(t *testing.T) {
 	}
 }
 
+func TestLLMCooldownPublicSnapshotReportsCoolingAndRetainedFailures(t *testing.T) {
+	now := time.Date(2026, 10, 12, 14, 0, 0, 0, time.UTC)
+	table := &llmCooldownTable{now: func() time.Time { return now }}
+	profile := llm.Profile{ID: "limited", Config: llm.ProviderConfig{Model: "chat-model"}}
+	table.markFailure(profile, errors.New("429 Too Many Requests: quota exceeded"))
+
+	snapshot := table.publicSnapshot()
+	if !snapshot.CheckedAt.Equal(now) || len(snapshot.Candidates) != 1 {
+		t.Fatalf("snapshot = %#v", snapshot)
+	}
+	health := snapshot.Candidates[0]
+	if health.ProfileID != "limited" || health.Model != "chat-model" || health.FailureCount != 1 || !health.LastFailure.Equal(now) {
+		t.Fatalf("health = %#v", health)
+	}
+	if health.CooldownUntil == nil || !health.CooldownUntil.After(now) {
+		t.Fatalf("cooldown_until = %v", health.CooldownUntil)
+	}
+
+	now = now.Add(llmCooldownDefault + time.Second)
+	health = table.publicSnapshot().Candidates[0]
+	if health.CooldownUntil != nil || health.FailureCount != 1 {
+		t.Fatalf("冷却到期后应保留失败次数但不再报告冷却：%#v", health)
+	}
+	table.clear(profile)
+	if got := table.publicSnapshot().Candidates; len(got) != 0 {
+		t.Fatalf("成功后应清除公开健康状态：%#v", got)
+	}
+}
+
 // 冷却到期后先探一次：上游恢复了就重新用它，而不是被「Wait 311000s」锁三天。
 func TestLLMCooldownExpiresAndProbesAgain(t *testing.T) {
 	now := time.Date(2026, 9, 27, 12, 0, 0, 0, time.UTC)

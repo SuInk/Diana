@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -42,7 +43,24 @@ type llmCooldownEntry struct {
 	until       time.Time
 	retainUntil time.Time
 	failures    int
+	lastFailure time.Time
 	lastSkipLog time.Time
+}
+
+// ModelCandidateHealth 是控制台可读的单个模型候选运行时健康状态。只返回近期
+// 失败过的候选；不在列表里的候选按健康状态处理。
+type ModelCandidateHealth struct {
+	ProfileID     string     `json:"profile_id"`
+	Model         string     `json:"model"`
+	FailureCount  int        `json:"failure_count"`
+	LastFailure   time.Time  `json:"last_failure_at"`
+	CooldownUntil *time.Time `json:"cooldown_until,omitempty"`
+}
+
+// ModelHealthSnapshot 带上服务端取样时间，前端可据此判断 cooldown_until 是否仍有效。
+type ModelHealthSnapshot struct {
+	CheckedAt  time.Time              `json:"checked_at"`
+	Candidates []ModelCandidateHealth `json:"candidates"`
 }
 
 // llmCooldownKey 按配置档 ID 加模型区分候选：同一个配置档下挂好几个模型时，一个
@@ -82,6 +100,46 @@ func (t *llmCooldownTable) snapshot(profiles []llm.Profile) []llmCandidateHealth
 		}
 	}
 	return health
+}
+
+func (t *llmCooldownTable) publicSnapshot() ModelHealthSnapshot {
+	now := time.Now()
+	result := ModelHealthSnapshot{CheckedAt: now, Candidates: []ModelCandidateHealth{}}
+	if t == nil {
+		return result
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	now = t.clock()
+	result.CheckedAt = now
+	for key, entry := range t.entries {
+		if !entry.retainUntil.After(now) {
+			delete(t.entries, key)
+			continue
+		}
+		profileID, model, ok := strings.Cut(key, "\x00")
+		if !ok {
+			continue
+		}
+		item := ModelCandidateHealth{
+			ProfileID:    profileID,
+			Model:        model,
+			FailureCount: entry.failures,
+			LastFailure:  entry.lastFailure,
+		}
+		if entry.until.After(now) {
+			until := entry.until
+			item.CooldownUntil = &until
+		}
+		result.Candidates = append(result.Candidates, item)
+	}
+	sort.Slice(result.Candidates, func(i, j int) bool {
+		if result.Candidates[i].ProfileID != result.Candidates[j].ProfileID {
+			return result.Candidates[i].ProfileID < result.Candidates[j].ProfileID
+		}
+		return result.Candidates[i].Model < result.Candidates[j].Model
+	})
+	return result
 }
 
 // remaining 返回候选还要冷却多久，不在冷却中返回 0。
@@ -132,6 +190,7 @@ func (t *llmCooldownTable) markFailure(profile llm.Profile, err error) (time.Dur
 		t.entries[key] = entry
 	}
 	entry.failures++
+	entry.lastFailure = now
 	if llmRetryAfterHint(err) <= 0 {
 		for n := 1; n < entry.failures && duration < llmCooldownMax; n++ {
 			duration = min(duration*2, llmCooldownMax)
