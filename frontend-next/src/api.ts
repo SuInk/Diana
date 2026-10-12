@@ -398,6 +398,8 @@ export interface BotProfileConfig extends SendRetrySettings {
   max_context_tokens?: number;
   recent_history_token_budget?: number;
   /** 滚动 5 小时窗口里的模型调用次数上限；留空或 0 表示不限。 */
+  image_generation_cooldown_seconds?: number;
+  video_generation_cooldown_seconds?: number;
   model_call_quota?: number;
   /** 每个群每天能成功生图（含改图）的次数；群配置可覆盖。留空或 0 表示不限，主人不受限。 */
   image_generation_daily_group_limit?: number;

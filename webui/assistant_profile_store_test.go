@@ -4,7 +4,11 @@
 package webui
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"testing"
 
@@ -187,5 +191,114 @@ func TestSavedProfilesDoNotAdoptHistoricalIDs(t *testing.T) {
 	}
 	if aliases := store.LegacyProfileAliases(); len(aliases) != 0 {
 		t.Fatalf("存过配置集的库不该收集旧号：%v", aliases)
+	}
+}
+
+// 覆盖浏览器实际使用的 JSON → ConfigPayload → BotConfig → 数据库 → GET 链路。
+func TestBehaviorQuotaConfigPersistsThroughAPI(t *testing.T) {
+	for _, platform := range []string{assistant.PlatformOneBotV11, assistant.PlatformTelegram, assistant.PlatformQQOfficial} {
+		t.Run(platform, func(t *testing.T) {
+
+			path := filepath.Join(t.TempDir(), "app.db")
+			seed := assistant.DefaultBotConfig()
+			seed.Platform = platform
+			seed.Enabled = false
+			store, db := restartBotProfileStore(t, path, seed)
+			runtime := assistant.NewRuntime(seed, fakeChannel{}, assistant.NewDefaultPluginManager(), nil, nil, nil, nil)
+			handler := NewBotHandlerWithFactory(context.Background(), runtime, func(assistant.BotConfig) assistant.Channel { return fakeChannel{} })
+			handler.SetProfileStore(store)
+			router := botTestRouter(handler)
+			fields := map[string]any{
+				"model_call_quota":                   float64(400),
+				"image_generation_cooldown_seconds":  float64(60),
+				"video_generation_cooldown_seconds":  float64(120),
+				"image_generation_daily_group_limit": float64(20),
+				"image_generation_daily_user_limit":  float64(5),
+				"video_generation_daily_group_limit": float64(10),
+				"video_generation_daily_user_limit":  float64(2),
+				"daily_limit_timezone":               "Asia/Shanghai",
+				"timezone":                           "America/New_York",
+			}
+			request := func(method string, body map[string]any) map[string]any {
+				t.Helper()
+				data, err := json.Marshal(body)
+				if err != nil {
+					t.Fatal(err)
+				}
+				rec := httptest.NewRecorder()
+				router.ServeHTTP(rec, httptest.NewRequest(method, "/api/assistant/config", bytes.NewReader(data)))
+				if rec.Code != http.StatusOK {
+					t.Fatalf("%s status=%d: %s", method, rec.Code, rec.Body.String())
+				}
+				var result map[string]any
+				if err := json.Unmarshal(rec.Body.Bytes(), &result); err != nil {
+					t.Fatal(err)
+				}
+				return result
+			}
+			assertFields := func(got map[string]any) {
+				t.Helper()
+				for key, want := range fields {
+					value := got[key]
+					// 零值允许被 omitempty 省略。
+					if value == nil && (want == float64(0) || want == "") {
+						continue
+					}
+					if value != want {
+						t.Errorf("%s = %v, want %v", key, value, want)
+					}
+				}
+			}
+			assertRuntime := func() {
+				t.Helper()
+				cfg := runtime.ProfileConfig(onlyProfile(t, store).ID)
+				if got := assistant.EffectiveGroupModelQuota(cfg, assistant.GroupConfig{}); got != 400 {
+					t.Errorf("runtime model quota = %d", got)
+				}
+				for _, tc := range []struct {
+					kind        assistant.MediaGenerationKind
+					group, user int64
+				}{
+					{assistant.MediaGenerationImage, 20, 5}, {assistant.MediaGenerationVideo, 10, 2},
+				} {
+					group, user := assistant.EffectiveMediaGenerationLimits(cfg, assistant.GroupConfig{}, tc.kind)
+					if group != tc.group || user != tc.user {
+						t.Errorf("runtime %s limits = %d/%d", tc.kind, group, user)
+					}
+				}
+				if cfg.Location().String() != "America/New_York" || assistant.DailyLimitLocation(cfg).String() != "Asia/Shanghai" {
+					t.Errorf("runtime timezones = %s/%s", cfg.Location(), assistant.DailyLimitLocation(cfg))
+				}
+			}
+
+			payload := request(http.MethodGet, nil)
+			for key, value := range fields {
+				payload[key] = value
+			}
+			assertFields(request(http.MethodPost, payload))
+			assertRuntime()
+			// 修改相邻设置并再次保存，不得将已有额度重置。
+			payload = request(http.MethodGet, nil)
+			payload["name"] = "updated behavior"
+			assertFields(request(http.MethodPost, payload))
+			if err := db.Close(); err != nil {
+				t.Fatal(err)
+			}
+			reopened, _ := restartBotProfileStore(t, path, seed)
+			handler.SetProfileStore(reopened)
+			assertFields(request(http.MethodGet, nil))
+			// 显式清零恢复不限，空时区恢复默认；重读后仍应保持。
+			payload = request(http.MethodGet, nil)
+			for key := range fields {
+				fields[key] = float64(0)
+				if key == "daily_limit_timezone" || key == "timezone" {
+					fields[key] = ""
+				}
+				payload[key] = fields[key]
+			}
+			assertFields(request(http.MethodPost, payload))
+			assertFields(request(http.MethodGet, nil))
+
+		})
 	}
 }

@@ -643,6 +643,10 @@ type ChannelStatus struct {
 type EventHandler func(context.Context, MessageEvent) error
 
 type BotConfig struct {
+	// 媒体冷却按用户跨群/私聊计算，0 关闭，最长一天。
+	ImageGenerationCooldownSeconds int `json:"image_generation_cooldown_seconds,omitempty"`
+	VideoGenerationCooldownSeconds int `json:"video_generation_cooldown_seconds,omitempty"`
+
 	StickerReplyOrder StickerReplyOrder `json:"sticker_reply_order,omitempty"`
 
 	ConnectionProfileID         string           `json:"connection_profile_id,omitempty"`
@@ -1276,6 +1280,20 @@ type GroupConfigSet struct {
 }
 
 type ConfigPayload struct {
+	// 媒体冷却按用户跨群/私聊计算，0 关闭，最长一天。
+	ImageGenerationCooldownSeconds int `json:"image_generation_cooldown_seconds,omitempty"`
+	VideoGenerationCooldownSeconds int `json:"video_generation_cooldown_seconds,omitempty"`
+
+	// 行为额度必须贯通 WebUI 读写，不能只存在于运行时 BotConfig。
+	ModelCallQuota                 int64  `json:"model_call_quota,omitempty"`
+	ImageGenerationDailyGroupLimit int64  `json:"image_generation_daily_group_limit,omitempty"`
+	ImageGenerationDailyUserLimit  int64  `json:"image_generation_daily_user_limit,omitempty"`
+	VideoGenerationDailyGroupLimit int64  `json:"video_generation_daily_group_limit,omitempty"`
+	VideoGenerationDailyUserLimit  int64  `json:"video_generation_daily_user_limit,omitempty"`
+	DailyLimitTimezone             string `json:"daily_limit_timezone,omitempty"`
+
+	Timezone string `json:"timezone,omitempty"`
+
 	StickerReplyOrder StickerReplyOrder `json:"sticker_reply_order,omitempty"`
 
 	ConnectionProfileID         string          `json:"connection_profile_id,omitempty"`
@@ -2148,6 +2166,8 @@ func DefaultBotConfig() BotConfig {
 
 // WithDefaults 补齐 OneBot v11 机器人配置默认值。
 func (cfg BotConfig) WithDefaults() BotConfig {
+	cfg.ImageGenerationCooldownSeconds = min(max(cfg.ImageGenerationCooldownSeconds, 0), 86400)
+	cfg.VideoGenerationCooldownSeconds = min(max(cfg.VideoGenerationCooldownSeconds, 0), 86400)
 	cfg.StickerReplyOrder = normalizeStickerReplyOrder(cfg.StickerReplyOrder)
 	cfg.ReplyMergeConfidencePercent = normalizeReplyMergeConfidencePercent(cfg.ReplyMergeConfidencePercent)
 	cfg.Participation = copyParticipation(cfg.Participation)
@@ -2633,6 +2653,17 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 	cfg = cfg.WithDefaults()
 	// token 只返回 configured 标志，不把保存的密钥明文暴露给普通配置接口。
 	return ConfigPayload{
+		ImageGenerationCooldownSeconds: cfg.ImageGenerationCooldownSeconds,
+		VideoGenerationCooldownSeconds: cfg.VideoGenerationCooldownSeconds,
+		ModelCallQuota:                 cfg.ModelCallQuota,
+		ImageGenerationDailyGroupLimit: cfg.ImageGenerationDailyGroupLimit,
+		ImageGenerationDailyUserLimit:  cfg.ImageGenerationDailyUserLimit,
+		VideoGenerationDailyGroupLimit: cfg.VideoGenerationDailyGroupLimit,
+		VideoGenerationDailyUserLimit:  cfg.VideoGenerationDailyUserLimit,
+		DailyLimitTimezone:             cfg.DailyLimitTimezone,
+
+		Timezone: cfg.Timezone,
+
 		StickerReplyOrder:           cfg.StickerReplyOrder,
 		ConnectionProfileID:         cfg.ConnectionProfileID,
 		ID:                          cfg.ID,
@@ -2888,6 +2919,17 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		screenshotAccess = payload.AgentBrowserScreenshotAccess.WithDefaults()
 	}
 	cfg := BotConfig{
+		ImageGenerationCooldownSeconds: payload.ImageGenerationCooldownSeconds,
+		VideoGenerationCooldownSeconds: payload.VideoGenerationCooldownSeconds,
+		ModelCallQuota:                 payload.ModelCallQuota,
+		ImageGenerationDailyGroupLimit: payload.ImageGenerationDailyGroupLimit,
+		ImageGenerationDailyUserLimit:  payload.ImageGenerationDailyUserLimit,
+		VideoGenerationDailyGroupLimit: payload.VideoGenerationDailyGroupLimit,
+		VideoGenerationDailyUserLimit:  payload.VideoGenerationDailyUserLimit,
+		DailyLimitTimezone:             payload.DailyLimitTimezone,
+
+		Timezone: payload.Timezone,
+
 		StickerReplyOrder:           payload.StickerReplyOrder,
 		ConnectionProfileID:         strings.TrimSpace(payload.ConnectionProfileID),
 		ID:                          strings.TrimSpace(payload.ID),

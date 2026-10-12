@@ -153,3 +153,45 @@ func TestMediaGenerationUsagePrunesOncePerDay(t *testing.T) {
 		t.Fatalf("清理应当走 day 索引：%s", plan)
 	}
 }
+
+func TestMediaCooldownSurvivesRestartAndDayChange(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "cooldown.db")
+	store, err := NewSQLiteStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := assistant.MediaGenerationKey{ProfileID: "qq", Platform: "onebot-v11", Kind: assistant.MediaGenerationImage, Day: "2026-10-12", GroupID: "group1", UserID: "user1"}
+	if err := store.AddMediaGeneration(context.Background(), key, 1); err != nil {
+		t.Fatal(err)
+	}
+	before, err := store.MediaGenerationLastUsed(context.Background(), key)
+	if err != nil || before.IsZero() {
+		t.Fatalf("last used=%v, err=%v", before, err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	store, err = NewSQLiteStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	key.Day, key.GroupID = "2026-10-13", "group2"
+	after, err := store.MediaGenerationLastUsed(context.Background(), key)
+	if err != nil || !after.Equal(before) {
+		t.Fatalf("last used changed after restart/day change: %v, %v", after, err)
+	}
+	for _, change := range []func(*assistant.MediaGenerationKey){
+		func(k *assistant.MediaGenerationKey) { k.UserID = "user2" },
+		func(k *assistant.MediaGenerationKey) { k.ProfileID = "other-bot" },
+		func(k *assistant.MediaGenerationKey) { k.Platform = "telegram" },
+		func(k *assistant.MediaGenerationKey) { k.Kind = assistant.MediaGenerationVideo },
+	} {
+		other := key
+		change(&other)
+		last, err := store.MediaGenerationLastUsed(context.Background(), other)
+		if err != nil || !last.IsZero() {
+			t.Fatalf("unrelated scope shared cooldown: %v, %v", last, err)
+		}
+	}
+}

@@ -8,6 +8,8 @@ export function dailyLimitValue(value: unknown): number {
 export type GroupDailyLimitField = "image_generation_daily_group_limit" | "video_generation_daily_group_limit";
 
 export interface MediaGenerationLimits {
+  image_generation_cooldown_seconds?: number | string;
+  video_generation_cooldown_seconds?: number | string;
   image_generation_daily_group_limit?: number | string | null;
   image_generation_daily_user_limit?: number | string;
   video_generation_daily_group_limit?: number | string | null;
@@ -83,4 +85,11 @@ export function groupImageGenerationLimitsPayload(current: MediaGenerationLimits
 
 export function groupVideoGenerationLimitsPayload(current: MediaGenerationLimits): { video_generation_daily_group_limit?: number } {
   return { video_generation_daily_group_limit: groupDailyLimitValue(current.video_generation_daily_group_limit) };
+}
+
+export function mediaGenerationCooldownPayload(current: MediaGenerationLimits) {
+  return {
+    image_generation_cooldown_seconds: Math.min(86400, dailyLimitValue(current.image_generation_cooldown_seconds)),
+    video_generation_cooldown_seconds: Math.min(86400, dailyLimitValue(current.video_generation_cooldown_seconds))
+  };
 }

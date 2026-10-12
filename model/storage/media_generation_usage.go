@@ -27,6 +27,7 @@ CREATE TABLE IF NOT EXISTS media_generation_usage (
   updated_at INTEGER NOT NULL,
   PRIMARY KEY (profile_id, platform, kind, day, scope, subject_id)
 );
+CREATE INDEX IF NOT EXISTS idx_media_generation_usage_cooldown ON media_generation_usage(profile_id, platform, kind, scope, subject_id, updated_at);
 CREATE INDEX IF NOT EXISTS idx_media_generation_usage_day ON media_generation_usage(day);
 `
 
@@ -134,3 +135,17 @@ func (s *SQLiteStore) pruneMediaGenerationUsage(ctx context.Context, today strin
 }
 
 var _ assistant.MediaGenerationUsageStore = (*SQLiteStore)(nil)
+
+// 不限制 day：午夜换日或调整时区不能清除尚未结束的冷却。
+func (s *SQLiteStore) MediaGenerationLastUsed(ctx context.Context, key assistant.MediaGenerationKey) (time.Time, error) {
+	var timestamp int64
+	err := s.eventReader().QueryRowContext(ctx, `SELECT COALESCE(MAX(updated_at), 0) FROM media_generation_usage
+ WHERE profile_id = ? AND platform = ? AND kind = ? AND scope = ? AND subject_id = ?`,
+		key.ProfileID, key.Platform, string(key.Kind), mediaGenerationScopeUser, strings.TrimSpace(key.UserID)).Scan(&timestamp)
+	if err != nil || timestamp == 0 {
+		return time.Time{}, err
+	}
+	return time.Unix(timestamp, 0), nil
+}
+
+var _ assistant.MediaGenerationCooldownStore = (*SQLiteStore)(nil)

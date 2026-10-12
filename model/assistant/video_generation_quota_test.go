@@ -123,21 +123,25 @@ func TestVideoToolExemptsOwner(t *testing.T) {
 
 // 任务受理后渲染失败照样花了钱，按一次记账；提交时就被拒的没建任务，不记。
 func TestVideoToolCountsAcceptedFailuresButNotRejectedSubmits(t *testing.T) {
-	failed := videoQuotaRuntime(t, videoQuotaServer(t, "fail", nil).URL, BotConfig{VideoGenerationDailyGroupLimit: 1})
-	if result := runVideoTool(t, failed, "20002", "fail-1"); !result.OK {
-		t.Fatalf("first = %#v", result)
-	}
-	waitVideoTasks(t, failed)
-	if result := runVideoTool(t, failed, "20003", "fail-2"); !result.QuotaExceeded {
-		t.Fatalf("受理后失败也应当算一次：%#v", result)
-	}
-
-	rejected := videoQuotaRuntime(t, videoQuotaServer(t, "reject", nil).URL, BotConfig{VideoGenerationDailyGroupLimit: 1})
-	for index := range 2 {
-		if result := runVideoTool(t, rejected, "20002", "reject-"+string(rune('a'+index))); !result.OK || result.QuotaExceeded {
-			t.Fatalf("提交被拒不该占次数，第 %d 次：%#v", index+1, result)
+	for _, cfg := range []BotConfig{{VideoGenerationDailyGroupLimit: 1}, {VideoGenerationCooldownSeconds: 60}} {
+		cfg = ConfigFromPayload(PayloadFromConfig(cfg), BotConfig{})
+		failed := videoQuotaRuntime(t, videoQuotaServer(t, "fail", nil).URL, cfg)
+		if result := runVideoTool(t, failed, "20002", "fail-1"); !result.OK {
+			t.Fatalf("first = %#v", result)
 		}
-		waitVideoTasks(t, rejected)
+		waitVideoTasks(t, failed)
+		if result := runVideoTool(t, failed, "20002", "fail-2"); !result.QuotaExceeded {
+			t.Fatalf("受理后失败也应当算一次：%#v", result)
+		}
+
+		rejected := videoQuotaRuntime(t, videoQuotaServer(t, "reject", nil).URL, cfg)
+		for index := range 2 {
+			if result := runVideoTool(t, rejected, "20002", "reject-"+string(rune('a'+index))); !result.OK || result.QuotaExceeded {
+				t.Fatalf("提交被拒不该占次数，第 %d 次：%#v", index+1, result)
+			}
+			waitVideoTasks(t, rejected)
+		}
+
 	}
 }
 

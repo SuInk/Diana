@@ -5,6 +5,7 @@ package assistant
 
 import (
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -20,7 +21,7 @@ var botLocationCache sync.Map // IANA 名 → *time.Location；LoadLocation 每�
 // systemLocation 是本机时区，测试里换掉它来模拟容器里的裸 UTC。
 var systemLocation = func() *time.Location { return time.Local }
 
-// loadBotLocation 解析 IANA 时区名，解析不了返回 nil。结果按名字缓存。
+// loadBotLocation 解析固定 UTC 偏移或 IANA 时区名，解析不了返回 nil。结果按名字缓存。
 func loadBotLocation(name string) *time.Location {
 	name = strings.TrimPrefix(strings.TrimSpace(name), ":")
 	if name == "" {
@@ -28,6 +29,45 @@ func loadBotLocation(name string) *time.Location {
 	}
 	if cached, ok := botLocationCache.Load(name); ok {
 		return cached.(*time.Location)
+	}
+	if strings.HasPrefix(name, "UTC+") || strings.HasPrefix(name, "UTC-") {
+		parts := strings.Split(name[4:], ":")
+		if len(parts) > 2 || len(parts[0]) < 1 || len(parts[0]) > 2 {
+			return nil
+		}
+		digits := func(s string) bool {
+			for _, c := range s {
+				if c < '0' || c > '9' {
+					return false
+				}
+			}
+			return true
+		}
+		if !digits(parts[0]) {
+			return nil
+		}
+		hours, _ := strconv.Atoi(parts[0])
+		minutes := 0
+		if len(parts) == 2 {
+			if len(parts[1]) != 2 || !digits(parts[1]) {
+				return nil
+			}
+			minutes, _ = strconv.Atoi(parts[1])
+		}
+		offset := hours*60 + minutes
+		limit := 14 * 60
+		if name[3] == '-' {
+			limit = 12 * 60
+		}
+		if minutes >= 60 || offset > limit {
+			return nil
+		}
+		if name[3] == '-' {
+			offset = -offset
+		}
+		location := time.FixedZone(name, offset*60)
+		botLocationCache.Store(name, location)
+		return location
 	}
 	location, err := time.LoadLocation(name)
 	if err != nil {

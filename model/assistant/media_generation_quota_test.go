@@ -273,66 +273,80 @@ func TestMediaQuotaNoticeForPartialRemainder(t *testing.T) {
 // 走工具的完整路径：成功一张记一次，接口失败不记，用完之后工具如实返回超限，
 // 而不是报一个模型会去重试的错误。
 func TestImageToolCountsOnlySuccessfulGenerations(t *testing.T) {
-	var fail atomic.Bool
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/media" {
-			writeTestPNG(w)
-			return
-		}
-		if fail.Load() {
-			http.Error(w, `{"error":{"message":"upstream down"}}`, http.StatusBadRequest)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"data":[{"b64_json":"cXVvdGEtaW1hZ2U="}]}`))
-	}))
-	defer server.Close()
-	store := &stubLLMProfileStore{set: llm.NewProfileSet(llm.ProviderConfig{
-		Provider:   llm.ProviderOpenAICompatible,
-		APIKey:     "secret",
-		BaseURL:    server.URL + "/v1",
-		Model:      "gpt-test",
-		ImageModel: "gpt-image-2",
-	})}
-	channel := &recordingChannel{apiResponses: map[string]map[string]any{
-		"get_group_info": {"group_id": "20001", "group_name": "测试群"},
-	}}
-	runtime := NewRuntime(BotConfig{ID: "qq", OwnerID: "10001", ImageGenerationDailyGroupLimit: 1}, channel, NewPluginManager(), store, nil, nil, nil)
-	runtime.SetMediaStore(mediaStore(t))
-	runtime.SetLocalMediaSharer(&recordingLocalMediaSharer{url: server.URL + "/media"})
-	event := MessageEvent{Kind: EventKindGroup, ProfileID: "qq", GroupID: "20001", UserID: "20002", MessageID: "quota-1"}
-	policy := RelationshipPolicyFor(UserMemoryProfile{Favorability: 20, MessageCount: 10}, "10001", event.UserID)
-	run := func(messageID, prompt string) dianaImageToolResult {
-		t.Helper()
-		event.MessageID = messageID
-		raw, err := newDianaImageTool(runtime, event, policy).Run(context.Background(), map[string]any{"operation": "generate", "prompt": prompt})
-		if err != nil {
-			t.Fatal(err)
-		}
-		var result dianaImageToolResult
-		if err := json.Unmarshal([]byte(raw), &result); err != nil {
-			t.Fatalf("result = %q: %v", raw, err)
-		}
-		waitForCondition(t, 3*time.Second, func() bool { return runtime.activeSubagentTaskCount() == 0 })
-		return result
-	}
+	for _, tc := range []struct {
+		name   string
+		config BotConfig
+		notice string
+	}{
+		{"quota", BotConfig{ImageGenerationDailyGroupLimit: 1}, "今天本群的生图次数已用完（1/1），明天再来"},
+		{"cooldown", BotConfig{ImageGenerationCooldownSeconds: 60}, "仍在冷却"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var fail atomic.Bool
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/media" {
+					writeTestPNG(w)
+					return
+				}
+				if fail.Load() {
+					http.Error(w, `{"error":{"message":"upstream down"}}`, http.StatusBadRequest)
+					return
+				}
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"data":[{"b64_json":"cXVvdGEtaW1hZ2U="}]}`))
+			}))
+			defer server.Close()
+			store := &stubLLMProfileStore{set: llm.NewProfileSet(llm.ProviderConfig{
+				Provider:   llm.ProviderOpenAICompatible,
+				APIKey:     "secret",
+				BaseURL:    server.URL + "/v1",
+				Model:      "gpt-test",
+				ImageModel: "gpt-image-2",
+			})}
+			channel := &recordingChannel{apiResponses: map[string]map[string]any{
+				"get_group_info": {"group_id": "20001", "group_name": "测试群"},
+			}}
+			tc.config.ID, tc.config.OwnerID = "qq", "10001"
+			cfg := ConfigFromPayload(PayloadFromConfig(tc.config), BotConfig{})
+			runtime := NewRuntime(cfg, channel, NewPluginManager(), store, nil, nil, nil)
+			runtime.SetMediaStore(mediaStore(t))
+			runtime.SetLocalMediaSharer(&recordingLocalMediaSharer{url: server.URL + "/media"})
+			event := MessageEvent{Kind: EventKindGroup, ProfileID: "qq", GroupID: "20001", UserID: "20002", MessageID: "quota-1"}
+			policy := RelationshipPolicyFor(UserMemoryProfile{Favorability: 20, MessageCount: 10}, "10001", event.UserID)
+			run := func(messageID, prompt string) dianaImageToolResult {
+				t.Helper()
+				event.MessageID = messageID
+				raw, err := newDianaImageTool(runtime, event, policy).Run(context.Background(), map[string]any{"operation": "generate", "prompt": prompt})
+				if err != nil {
+					t.Fatal(err)
+				}
+				var result dianaImageToolResult
+				if err := json.Unmarshal([]byte(raw), &result); err != nil {
+					t.Fatalf("result = %q: %v", raw, err)
+				}
+				waitForCondition(t, 3*time.Second, func() bool { return runtime.activeSubagentTaskCount() == 0 })
+				return result
+			}
 
-	fail.Store(true)
-	if result := run("quota-fail", "一只猫"); !result.OK || result.QuotaExceeded {
-		t.Fatalf("失败那次照常受理：%#v", result)
-	}
-	fail.Store(false)
-	if result := run("quota-ok", "一只狗"); !result.OK || result.QuotaExceeded {
-		t.Fatalf("失败的那次不该占掉次数：%#v", result)
-	}
-	result := run("quota-over", "一只鸟")
-	if result.OK || !result.QuotaExceeded {
-		t.Fatalf("成功一次之后应当用完：%#v", result)
-	}
-	for _, want := range []string{"今天本群的生图次数已用完（1/1），明天再来", "不要再调用 image", "变相出图"} {
-		if !strings.Contains(result.Notice, want) {
-			t.Fatalf("notice 缺少 %q：%q", want, result.Notice)
-		}
+			fail.Store(true)
+			if result := run("quota-fail", "一只猫"); !result.OK || result.QuotaExceeded {
+				t.Fatalf("失败那次照常受理：%#v", result)
+			}
+			fail.Store(false)
+			if result := run("quota-ok", "一只狗"); !result.OK || result.QuotaExceeded {
+				t.Fatalf("失败的那次不该占掉次数：%#v", result)
+			}
+			result := run("quota-over", "一只鸟")
+			if result.OK || !result.QuotaExceeded {
+				t.Fatalf("成功一次之后应当用完：%#v", result)
+			}
+			for _, want := range []string{tc.notice, "不要再调用 image", "变相出图"} {
+				if !strings.Contains(result.Notice, want) {
+					t.Fatalf("notice 缺少 %q：%q", want, result.Notice)
+				}
+			}
+
+		})
 	}
 }
 
@@ -598,4 +612,170 @@ func imageQuotaToolRuntime(t *testing.T, serverURL string, groupLimit int64) (*R
 	runtime.SetLocalMediaSharer(&recordingLocalMediaSharer{url: serverURL + "/media"})
 	event := MessageEvent{Kind: EventKindGroup, ProfileID: "qq", GroupID: "20001", UserID: "20002", MessageID: "quota-reuse"}
 	return runtime, event, RelationshipPolicyFor(UserMemoryProfile{Favorability: 20, MessageCount: 10}, "10001", event.UserID)
+}
+
+// 配额必须经过 WebUI 的读写转换后仍能拦住第二次生成，而不只是 JSON 中有值。
+func TestSavedMediaQuotaActuallyEnforcesLimits(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		field string
+		kind  MediaGenerationKind
+	}{
+		{"image_group", "image_generation_daily_group_limit", MediaGenerationImage},
+		{"image_user", "image_generation_daily_user_limit", MediaGenerationImage},
+		{"video_group", "video_generation_daily_group_limit", MediaGenerationVideo},
+		{"video_user", "video_generation_daily_user_limit", MediaGenerationVideo},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var payload ConfigPayload
+			if err := json.Unmarshal([]byte(fmt.Sprintf(`{"%s":1,"timezone":"America/New_York"}`, tc.field)), &payload); err != nil {
+				t.Fatal(err)
+			}
+			cfg := ConfigFromPayload(PayloadFromConfig(ConfigFromPayload(payload, BotConfig{})), BotConfig{})
+			if got := DailyLimitLocation(cfg).String(); got != "America/New_York" {
+				t.Fatalf("daily reset timezone = %s", got)
+			}
+			runtime, event := mediaQuotaRuntime(t, cfg, GroupConfig{})
+			reserve := func() error {
+				reservation, err := runtime.reserveMediaGeneration(context.Background(), event, tc.kind, 1)
+				if err == nil {
+					reservation.commit(context.Background(), 1)
+				}
+				return err
+			}
+			if err := reserve(); err != nil {
+				t.Fatalf("first generation rejected: %v", err)
+			}
+			if strings.HasSuffix(tc.name, "user") {
+				event.GroupID = "another-group" // 每人额度必须跨群生效。
+			} else {
+				event.UserID = "another-user" // 每群额度必须跨用户生效。
+			}
+			quotaErrorOf(t, reserve())
+		})
+	}
+}
+
+func TestMediaCooldownLifecycle(t *testing.T) {
+	for _, kind := range []MediaGenerationKind{MediaGenerationImage, MediaGenerationVideo} {
+		t.Run(string(kind), func(t *testing.T) {
+			cfg := ConfigFromPayload(PayloadFromConfig(BotConfig{ImageGenerationCooldownSeconds: 60, VideoGenerationCooldownSeconds: 60}), BotConfig{})
+			runtime, event := mediaQuotaRuntime(t, cfg, GroupConfig{})
+			ctx := context.Background()
+			first, err := runtime.reserveMediaGeneration(ctx, event, kind, 1)
+			if err != nil {
+				t.Fatal(err)
+			}
+			otherGroup := event
+			otherGroup.GroupID = "another-group"
+			if _, err := runtime.reserveMediaGeneration(ctx, otherGroup, kind, 1); !quotaErrorOf(t, err).Pending {
+				t.Fatal("concurrent request not blocked")
+			}
+			first.release() // 失败不启动冷却。
+			second, err := runtime.reserveMediaGeneration(ctx, event, kind, 1)
+			if err != nil {
+				t.Fatal(err)
+			}
+			second.commit(ctx, 1)
+			if _, err := runtime.reserveMediaGeneration(ctx, otherGroup, kind, 1); quotaErrorOf(t, err).RetryAfter <= 0 {
+				t.Fatal("cooldown did not start")
+			}
+			private := event
+			private.Kind, private.GroupID = EventKindPrivate, ""
+			if _, err := runtime.reserveMediaGeneration(ctx, private, kind, 1); quotaErrorOf(t, err).RetryAfter <= 0 {
+				t.Fatal("private request bypassed cooldown")
+			}
+			otherUser := event
+			otherUser.UserID = "another-user"
+			res, err := runtime.reserveMediaGeneration(ctx, otherUser, kind, 1)
+			if err != nil {
+				t.Fatalf("different user blocked: %v", err)
+			}
+			res.release()
+			owner := event
+			owner.UserID = "10001"
+			res, err = runtime.reserveMediaGeneration(ctx, owner, kind, 1)
+			if err != nil {
+				t.Fatalf("owner blocked: %v", err)
+			}
+			res.release()
+			otherKind := MediaGenerationVideo
+			if kind == otherKind {
+				otherKind = MediaGenerationImage
+			}
+			res, err = runtime.reserveMediaGeneration(ctx, event, otherKind, 1)
+			if err != nil {
+				t.Fatalf("different media blocked: %v", err)
+			}
+			res.release()
+			future := time.Now().Add(61 * time.Second)
+			runtime.now = func() time.Time { return future }
+			res, err = runtime.reserveMediaGeneration(ctx, event, kind, 1)
+			if err != nil {
+				t.Fatalf("cooldown failed to expire: %v", err)
+			}
+			res.release()
+		})
+	}
+}
+
+func TestMediaCooldownConcurrentReservations(t *testing.T) {
+	runtime, event := mediaQuotaRuntime(t, BotConfig{ImageGenerationCooldownSeconds: 60}, GroupConfig{})
+	var accepted atomic.Int32
+	var pending atomic.Int32
+	var wg sync.WaitGroup
+	for range 20 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, err := runtime.reserveMediaGeneration(context.Background(), event, MediaGenerationImage, 1)
+			if err == nil {
+				accepted.Add(1)
+				return
+			}
+			var restriction *mediaGenerationQuotaError
+			if errors.As(err, &restriction) && restriction.Pending {
+				pending.Add(1)
+			}
+		}()
+	}
+	wg.Wait()
+	if accepted.Load() != 1 || pending.Load() != 19 {
+		t.Fatalf("accepted=%d, blocked=%d", accepted.Load(), pending.Load())
+	}
+}
+
+// 显式开启时，用当前生产模型验证限制提示不会被说成已开始生成。
+func TestLiveMediaCooldownNotice(t *testing.T) {
+	client := liveLLMClient(t)
+	for _, kind := range []MediaGenerationKind{MediaGenerationImage, MediaGenerationVideo} {
+		t.Run(string(kind), func(t *testing.T) {
+			runtime, event := mediaQuotaRuntime(t, BotConfig{ImageGenerationCooldownSeconds: 60, VideoGenerationCooldownSeconds: 60}, GroupConfig{})
+			reservation, err := runtime.reserveMediaGeneration(context.Background(), event, kind, 1)
+			if err != nil {
+				t.Fatal(err)
+			}
+			reservation.commit(context.Background(), 1)
+			_, err = runtime.reserveMediaGeneration(context.Background(), event, kind, 1)
+			restriction := quotaErrorOf(t, err)
+			notice := imageQuotaExceededInstruction(restriction)
+			if kind == MediaGenerationVideo {
+				notice = videoQuotaExceededInstruction(restriction)
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+			defer cancel()
+			response, err := client.Generate(ctx, llm.GenerateRequest{Messages: []llm.Message{
+				{Role: llm.RoleSystem, Content: defaultSystemPrompt},
+				{Role: llm.RoleUser, Content: "再帮我生成一份刚才的" + mediaGenerationKindLabel(kind)},
+				{Role: llm.RoleSystem, Content: notice},
+			}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Logf("%s reply: %s", kind, response.Text)
+			if len(response.ToolCalls) != 0 || (!strings.Contains(response.Text, "冷却") && !strings.Contains(response.Text, "秒")) {
+				t.Fatalf("did not explain cooldown: %s", response.Text)
+			}
+		})
+	}
 }
