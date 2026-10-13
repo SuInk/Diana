@@ -39,7 +39,14 @@
 curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.sh | sh
 ```
 
-默认无需管理员权限，安装到 `~/.local/share/diana`，创建 `~/.local/bin/diana` 并自动配置用户 PATH；重新打开终端后生效。可用 `--dir PATH` 指定可写目录。仅系统安装（`sudo sh -s -- --scope system`）或受保护目录需要管理员权限。旧 `/opt/diana` 安装请显式指定原目录升级，迁移前先停服务并保留配置和数据库。
+默认无需管理员权限，安装到 `~/.local/share/diana`，创建 `~/.local/bin/diana` 并自动配置用户 PATH；重新打开终端后生效。可用 `--dir PATH` 指定可写目录。
+
+**一台机器只装一个 Diana。** 已有 `/opt/diana`（旧版或 `sudo` 装的）时，直接重跑上面同一条命令即可：脚本发现它后会原地升级，并自动用 `sudo` 重跑自己（会提示输入密码，没有 `sudo` 时打印可复制的命令），不会另装用户目录那一套。想手动指定：`curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.sh | sudo sh -s -- --dir /opt/diana --yes`。
+
+- 个人电脑：用户安装即可，服务绑定当前用户，换用户登录会被当成另一台机器。
+- 服务器或多人共用：用系统安装（`… | sudo sh -s -- --scope system`），服务以发起安装的用户身份运行，不随登录会话停止。
+- Linux 用户安装是 `systemctl --user` 服务：脚本会尝试 `loginctl enable-linger`，开不了会提示你执行 `sudo loginctl enable-linger $USER`，否则注销后服务会停、开机不会自启。
+- 其他用户目录里已有安装时，脚本会警告（两个实例会抢同一端口、数据库分家），请升级那一份或先迁移。
 
 ```powershell
 # Windows PowerShell
@@ -101,7 +108,7 @@ docker compose -f docker-compose.yml -f docker-compose.update.yml pull && docker
 >
 > 装过了也不要紧，两条路任选：带着 `--host`（Windows：`-BindHost`） 重跑一遍安装命令（顺带升级一次），或者直接把配置文件里 `server.host` 改成 `0.0.0.0` 再重启。
 >
-> 先编辑配置（默认用户安装无需 sudo；旧系统安装若权限不足才使用 sudo）：
+> 先编辑配置（用户安装无需 sudo；`/opt/diana` 系统安装的配置文件若权限不足才使用 sudo）：
 >
 > ```sh
 > vim "$(diana config path)"

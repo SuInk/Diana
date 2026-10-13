@@ -39,7 +39,14 @@ It's built for people who want to run their own bot:
 curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.sh | sh
 ```
 
-By default, no administrator privileges are needed: Diana installs to `~/.local/share/diana`, creates `~/.local/bin/diana`, and configures your user PATH for new terminals. Set `--dir PATH` to choose a writable directory. Only system installations (`sudo sh -s -- --scope system`) or protected locations need elevated permissions. For an existing `/opt/diana` installation, explicitly select that directory to upgrade; stop the old service and preserve its configuration and database before migrating.
+By default, no administrator privileges are needed: Diana installs to `~/.local/share/diana`, creates `~/.local/bin/diana`, and configures your user PATH for new terminals. Use `--dir PATH` to choose a writable directory.
+
+**One Diana per machine.** If `/opt/diana` already exists (an older or `sudo` install), just rerun the same command: the installer upgrades it in place and reruns itself with `sudo` (you'll be asked for a password; without `sudo` it prints a copyable command) instead of creating a second per-user install. To do it by hand: `curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.sh | sudo sh -s -- --dir /opt/diana --yes`.
+
+- Personal machine: a user install is fine; the service belongs to the current user, so another login is treated as another machine.
+- Server or shared machine: use a system install (`… | sudo sh -s -- --scope system`); the service runs as the installing user and survives logout.
+- On Linux a user install is a `systemctl --user` service: the installer tries `loginctl enable-linger` and, if that is refused, tells you to run `sudo loginctl enable-linger $USER`; otherwise the service stops at logout and does not start at boot.
+- If another user's directory already holds an installation, the installer warns (two instances fight for the port and split the database); upgrade that one or migrate it first.
 
 ```powershell
 # Windows PowerShell
@@ -101,7 +108,7 @@ That's it. No reply? The event center tells you why; `diana doctor` checks servi
 >
 > Already installed? Two options: re-run the install command with `--host` (`-BindHost` on Windows) (which also upgrades you), or edit the config file to set `server.host` to `0.0.0.0` and restart.
 >
-> First edit the config (no sudo for a user install; older system installs may require it):
+> First edit the config (no sudo for a user install; a `/opt/diana` system install may require it):
 >
 > ```sh
 > vim "$(diana config path)"

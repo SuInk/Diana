@@ -51,13 +51,13 @@ class InstallerTests(unittest.TestCase):
                 ('auto', '501', '', 'user', True),
                 ('user', '501', '', 'user', True),
                 ('auto', '501', str(root / 'custom space'), 'user', True),
-                ('system', '501', '', '', False),
+                ('system', '501', '', 'system', True),
                 ('system', '0', '', 'system', True),
                 ('auto', '0', '', 'system', True),
             ]:
                 with self.subTest(scope=scope, uid=uid, target=target):
                     result = self.run_shell(
-                        'id() { echo "$TEST_UID"; };\n' + selection +
+                        'need_elevation=false\nid() { echo "$TEST_UID"; };\n' + selection +
                         '\nprintf "%s\\n%s" "$install_scope" "$install_dir"',
                         root, install_scope=scope, install_dir=target, TEST_UID=uid)
                     self.assertEqual(result.returncode == 0, succeeds, result.stderr)
@@ -68,9 +68,17 @@ class InstallerTests(unittest.TestCase):
                             root / ('system' if expected == 'system' else '.local/share/diana')))
             (root / 'system').mkdir()
             (root / 'system/.installed-version').touch()
+            # 已有系统安装且没指定目录：沿用它并标记需要提权，而不是另装一套。
+            result = self.run_shell(
+                'id() { echo 501; };\n' + selection +
+                '\nprintf "%s\\n%s\\n%s" "$install_scope" "$install_dir" "$need_elevation"',
+                root, install_scope='auto', install_dir='')
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout.splitlines(), ['system', str(root / 'system'), 'true'])
+            # 显式 --scope user 与已有系统安装冲突，仍然拦住。
             result = self.run_shell(
                 'id() { echo 501; };\n' + selection,
-                root, install_scope='auto', install_dir='')
+                root, install_scope='user', install_dir='')
             self.assertNotEqual(result.returncode, 0)
             self.assertIn('Existing Diana installation', result.stderr)
 
@@ -84,9 +92,8 @@ class InstallerTests(unittest.TestCase):
                     'id() { echo "$TEST_UID"; };\n' + selection +
                     '\nprintf "%s" "$install_scope"',
                     root, install_scope='auto', install_dir=str(root), TEST_UID=uid)
-                self.assertEqual(result.returncode == 0, uid == '0')
-                if uid == '0':
-                    self.assertEqual(result.stdout, 'system')
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout, 'system')
 
     def test_persistent_path_is_idempotent(self):
         setup = section('ensure_command_dir_on_path() {', '\nif [ -f "$install_dir/uninstall.sh" ]')

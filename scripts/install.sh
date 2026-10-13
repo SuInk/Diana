@@ -16,12 +16,14 @@ host_explicit=false
 extra_config_file=""
 start_after_install=true
 interactive=true
+need_elevation=false
+linger_hint=""
 
 usage() {
   cat <<'USAGE'
 Usage: sh install.sh [options]
   --dir PATH          Installation directory (default: current user's directory)
-  --scope user|system Installation scope (default: user)
+  --scope user|system Installation scope (default: user; an existing /opt/diana install is upgraded in place via sudo)
   --version VERSION   Release version (default: latest)
   --host HOST         Listen address written to config.yaml
   --port PORT         Listen port written to config.yaml
@@ -93,6 +95,15 @@ if [ "$install_scope" = "auto" ] && [ -n "$install_dir" ] && [ -f "$install_dir/
   previous_scope=$(cat "$install_dir/.install-scope")
   case "$previous_scope" in system|user) install_scope=$previous_scope ;; esac
 fi
+if [ "$install_scope" = "auto" ] && [ "$install_dir" = "/opt/diana" ]; then
+  install_scope=system
+fi
+# 一台机器只跑一个 Diana：没指定目录时，已有 /opt/diana 就原地升级它，不另装用户目录那一套。
+# 显式 --scope user 是用户明确要分开装，仍然拦住。
+if [ "$install_scope" = "auto" ] && [ -z "$install_dir" ] && [ -f /opt/diana/.installed-version ]; then
+  install_scope=system
+  install_dir=/opt/diana
+fi
 # 显式 system（或兼容旧 sudo 命令）使用系统目录。
 if [ "$install_scope" = "auto" ]; then
   if [ "$(id -u)" -eq 0 ]; then
@@ -101,17 +112,17 @@ if [ "$install_scope" = "auto" ]; then
     install_scope=user
   fi
 fi
+# 需要 root 时不让用户重敲命令：下面 fail() 定义之后由 elevate_with_sudo 自己用 sudo 重跑。
 if [ "$install_scope" = "system" ] && [ "$(id -u)" -ne 0 ]; then
-  printf '%s\n' 'System installation requires sudo. Omit --scope system for a user installation.' >&2
-  exit 1
+  need_elevation=true
 fi
 if [ -z "$install_dir" ]; then
   if [ "$install_scope" = "system" ]; then
     install_dir=/opt/diana
   else
-    # 不静默新建第二套数据库；历史系统安装需要明确选择原地升级或迁移。
+    # 不静默新建第二套数据库；显式选了用户安装，却已有系统安装时才会走到这里。
     if [ -f /opt/diana/.installed-version ]; then
-      printf '%s\n' 'Existing Diana installation found in /opt/diana. To upgrade in place, pass --dir /opt/diana (existing system installs require sudo). To migrate, stop the old service and copy its configuration and data before explicitly selecting the new directory.' >&2
+      printf '%s\n' 'Existing Diana installation found in /opt/diana; a second user installation would fight it for the port and split the database. Drop --scope user to upgrade it in place (the installer will ask for sudo), or stop the old service and copy its configuration and data before choosing a new directory with --dir.' >&2
       exit 1
     fi
     install_dir="$HOME/.local/share/diana"
@@ -143,6 +154,63 @@ case "$install_dir" in
   ""|"/"|"$HOME") fail "--dir must be a dedicated directory" ;;
 esac
 
+# 非 root 却要装系统级（/opt/diana）：自己用 sudo 重跑一遍，参数原样带上。
+# 管道安装时 $0 不是脚本文件，先把同一份安装器下载到临时目录再交给 sudo。
+elevate_with_sudo() {
+  manual_cmd="curl -fsSL https://raw.githubusercontent.com/$repo/main/scripts/install.sh | sudo sh -s -- --dir $install_dir --yes"
+  set -- --dir "$install_dir" --scope system --yes
+  [ "$version" = latest ] || set -- "$@" --version "$version"
+  [ "$host_explicit" != true ] || set -- "$@" --host "$host"
+  [ "$port_explicit" != true ] || set -- "$@" --port "$port"
+  [ -z "$extra_config_file" ] || set -- "$@" --config-file "$extra_config_file"
+  [ "$repo" = "SuInk/Diana" ] || set -- "$@" --repository "$repo"
+  [ "$start_after_install" = true ] || set -- "$@" --no-start
+  if ! command -v sudo >/dev/null 2>&1; then
+    printf 'Diana installer: %s needs administrator privileges and sudo was not found. Rerun as root:\n  %s\n' "$install_dir" "$manual_cmd" >&2
+    exit 1
+  fi
+  info "$install_dir needs administrator privileges; rerunning the installer with sudo"
+  sudo_cmd="sudo"
+  if ! { [ -e /dev/tty ] && ( : </dev/tty ) 2>/dev/null; }; then
+    sudo_cmd="sudo -n"
+  fi
+  self=$0
+  case "$self" in
+    */*) [ -f "$self" ] && [ -r "$self" ] || self="" ;;
+    *) self="" ;;
+  esac
+  tmp_installer=""
+  if [ -z "$self" ]; then
+    need_command curl
+    tmp_installer=$(mktemp -d "${TMPDIR:-/tmp}/diana-install.XXXXXX") || fail "cannot create a temporary directory"
+    download "Downloading installer" "https://raw.githubusercontent.com/$repo/main/scripts/install.sh" "$tmp_installer/install.sh"
+    self="$tmp_installer/install.sh"
+  fi
+  rc=0
+  $sudo_cmd sh "$self" "$@" || rc=$?
+  [ -z "$tmp_installer" ] || rm -rf -- "$tmp_installer"
+  if [ "$rc" -ne 0 ]; then
+    printf 'Diana installer: the sudo run failed. You can run it by hand:\n  %s\n' "$manual_cmd" >&2
+  fi
+  exit "$rc"
+}
+
+if [ "$need_elevation" = true ]; then
+  elevate_with_sudo "$@"
+fi
+
+# 同一台机器只该有一个 Diana。别的用户目录里已有安装时我们无权升级它，只能提醒：
+# 两个实例默认抢同一个端口，数据库也会分家。
+warn_other_installations() {
+  for candidate in /opt/diana "$HOME/.local/share/diana" /home/*/.local/share/diana /Users/*/.local/share/diana /root/.local/share/diana; do
+    [ -f "$candidate/.installed-version" ] || continue
+    [ "$candidate" != "$install_dir" ] || continue
+    printf 'Warning: another Diana installation exists at %s.\n' "$candidate" >&2
+    printf '         Two instances on one machine fight for the port and split the database;\n' >&2
+    printf '         upgrade that one (--dir %s) or stop and migrate it first.\n' "$candidate" >&2
+  done
+}
+
 case "$port" in
   *[!0-9]*|"") fail "--port must be a number" ;;
 esac
@@ -161,6 +229,7 @@ if ! mkdir -p "$install_dir"; then
 fi
 install_dir=$(CDPATH= cd -- "$install_dir" && pwd)
 [ -w "$install_dir" ] || fail "installation directory is not writable: $install_dir"
+warn_other_installations
 if [ -e "$install_dir/config.yaml" ] && { [ ! -r "$install_dir/config.yaml" ] || [ ! -w "$install_dir/config.yaml" ]; }; then
   fail "config.yaml is not readable/writable; repair its ownership or rerun with administrator privileges for this existing installation"
 fi
@@ -872,6 +941,12 @@ EOF
     systemctl --user daemon-reload
     systemctl --user enable --now diana.service >/dev/null
     systemctl --user restart diana.service
+    # 没有 linger，用户注销后服务会停、开机也不会自启。能自己开就开，开不了就提示。
+    if command -v loginctl >/dev/null 2>&1 && [ "$(loginctl show-user "$(id -un)" -p Linger --value 2>/dev/null || true)" != "yes" ]; then
+      if ! loginctl enable-linger "$(id -un)" >/dev/null 2>&1; then
+        linger_hint="sudo loginctl enable-linger $(id -un)"
+      fi
+    fi
     service_kind="systemd user service"
     return
   fi
@@ -980,6 +1055,10 @@ if [ "$start_after_install" = "true" ]; then
     printf 'Warning: Diana is healthy, but backup cleanup failed: %s\n' "$backup_dir/runtime" >&2
   fi
   printf 'Service: %s\n' "$service_kind"
+  if [ -n "$linger_hint" ]; then
+    printf 'Autostart: the service stops when you log out and will not start at boot until you run:\n'
+    printf '             %s\n' "$linger_hint"
+  fi
   if [ "$service_control_granted" = true ]; then
     printf 'Control:   %s may run `diana restart` without a password (/etc/sudoers.d/diana).\n' "$service_user"
   fi
