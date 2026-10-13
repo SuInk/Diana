@@ -27,7 +27,7 @@
 <script setup lang="ts">
 import { nextTick, onBeforeUnmount, onMounted, ref } from "vue";
 import { X } from "@lucide/vue";
-import { lockBodyScroll, releaseBodyScroll } from "../scrollLock";
+import { lockBodyScroll, releaseBodyScroll } from "../lib/scrollLock";
 
 const props = defineProps<{ title: string; wide?: boolean; fixedHeight?: boolean; initialFocus?: string }>();
 const emit = defineEmits<{ close: []; pointerdown: [event: PointerEvent] }>();

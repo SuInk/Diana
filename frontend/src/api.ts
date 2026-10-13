@@ -1,11 +1,11 @@
 // Copyright (c) 2025-now SuInk.
 // Licensed under the Limited Redistribution License in the repository root.
 
-import { trackScopeRequest } from "./scope-transition";
-import { configurationKindForMutation, notifyConfigurationChanged } from "./configuration-sync";
-import { describeServerFailure } from "./gateway-error";
-import type { SendRetrySettings } from "./send-retry-settings";
-import type { AgentSafeModeCategory } from "./agent-mode";
+import { trackScopeRequest } from "./lib/scope-transition";
+import { configurationKindForMutation, notifyConfigurationChanged } from "./lib/configuration-sync";
+import { describeServerFailure } from "./lib/gateway-error";
+import type { SendRetrySettings } from "./lib/send-retry-settings";
+import type { AgentSafeModeCategory } from "./lib/agent-mode";
 
 export type Provider = "openai_compatible" | "gemini" | "anthropic" | "typesafe";
 
@@ -174,7 +174,7 @@ export interface MessageRelayPair {
 export interface BotProfileConfig extends SendRetrySettings {
   connection_profile_id?: string;
   marked_bot_ids?: string[];
-  participation?: import("./participation").ParticipationPreferences;
+  participation?: import("./lib/participation").ParticipationPreferences;
   id?: string;
   name?: string;
   platform?: string;
@@ -716,7 +716,7 @@ export interface GroupGovernance {
 
 export interface BotGroupConfig extends SendRetrySettings {
   marked_bot_ids?: string[];
-  participation?: import("./participation").ParticipationPreferences;
+  participation?: import("./lib/participation").ParticipationPreferences;
   bot_profile_id?: string;
   group_id: string;
   enabled: boolean;

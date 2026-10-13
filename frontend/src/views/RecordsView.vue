@@ -39,7 +39,7 @@
 import { computed, provide, ref } from "vue";
 import { Activity, FileClock, Heart } from "@lucide/vue";
 import { currentView, navigate, type ViewID } from "../router";
-import { recordsActionsHost } from "../records-actions";
+import { recordsActionsHost } from "../lib/records-actions";
 import EventsView from "./EventsView.vue";
 import LogsView from "./LogsView.vue";
 import FavorabilityView from "./FavorabilityView.vue";

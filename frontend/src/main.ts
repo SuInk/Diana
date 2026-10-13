@@ -3,13 +3,13 @@
 
 import { createApp } from "vue";
 import App from "./App.vue";
-import { setupTheme } from "./theme";
+import { setupTheme } from "./lib/theme";
 import { setupRouter } from "./router";
 import "./styles/main.css";
 
 async function bootstrap(): Promise<void> {
   if (import.meta.env.VITE_DEMO_MODE === "true") {
-    const { installDemoMode } = await import("./demo");
+    const { installDemoMode } = await import("./demo/demo");
     installDemoMode();
   }
   setupTheme();

@@ -166,12 +166,12 @@
 import { computed, onMounted, ref, watch } from 'vue';
 import { ExternalLink, KeyRound, LayoutGrid, Plus, RefreshCw, RotateCcw, Rows3, Search, Settings2, Trash2, Save, PlugZap } from '@lucide/vue';
 import Modal from './Modal.vue';
-import { botScope } from '../bot-scope';
-import { extensionLayout, setExtensionLayout } from '../extension-layout';
+import { botScope } from '../lib/bot-scope';
+import { extensionLayout, setExtensionLayout } from '../lib/extension-layout';
 import { fetchAssistantUserNames, listMCPPresets, listManagedExtensions, manageExtension, type MCPPreset, type ManagedExtension } from '../api';
 import IdChipInput from './IdChipInput.vue';
-import { askConfirm } from '../confirm';
-import { toastError, toastSuccess } from '../toast';
+import { askConfirm } from '../lib/confirm';
+import { toastError, toastSuccess } from '../lib/toast';
 
 const props=defineProps<{kind:'skill'|'mcp'}>();
 // 搜索、状态筛选、排列方式都照插件页那一套；排列方式是同一份设置，翻标签不会变。

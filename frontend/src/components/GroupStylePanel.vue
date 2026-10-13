@@ -2,8 +2,8 @@
 import { computed, ref, useId, watch } from "vue";
 import { RefreshCw, RotateCcw, Save } from "@lucide/vue";
 import { getGroupStyle, relearnGroupStyle, saveGroupStyle, setGroupStyleEnabled, type GroupStyleResponse } from "../api";
-import { askConfirm } from "../confirm";
-import { toastError, toastSuccess } from "../toast";
+import { askConfirm } from "../lib/confirm";
+import { toastError, toastSuccess } from "../lib/toast";
 
 // 本群说话风格：模型读群聊写的一段「这个群怎么说话」，回复时带上。这段不是群配置，
 // 是运行时学到的东西，所以自己加载、自己保存，不跟着群配置的「保存」走。

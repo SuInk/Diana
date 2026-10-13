@@ -467,7 +467,7 @@
 </template>
 
 <script setup lang="ts">
-import { useConfigurationRefresh } from "../configuration-sync";
+import { useConfigurationRefresh } from "../lib/configuration-sync";
 import { computed, onMounted, ref, watch } from "vue";
 import LoadingSkeleton from "../components/LoadingSkeleton.vue";
 import SkeletonBlock from "../components/SkeletonBlock.vue";
@@ -487,9 +487,9 @@ import {
   type Provider,
   type BotProfileConfig
 } from "../api";
-import { stream } from "../stream";
+import { stream } from "../lib/stream";
 import { navigate } from "../router";
-import { toastError, toastSuccess } from "../toast";
+import { toastError, toastSuccess } from "../lib/toast";
 import AccountNameHint from "../components/AccountNameHint.vue";
 import AppSelect, { type AppSelectOption } from "../components/AppSelect.vue";
 import WeixinLoginPanel from "../components/WeixinLoginPanel.vue";
@@ -501,7 +501,7 @@ import {
   llmServicePresets,
   presetsForProvider,
   type LLMErrorField
-} from "../llm-presets";
+} from "../lib/llm-presets";
 
 const step = ref(0);
 const loading = ref(true);

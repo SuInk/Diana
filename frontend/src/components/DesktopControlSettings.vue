@@ -72,7 +72,7 @@
 import { RefreshCw, Save, Hand, Check } from "@lucide/vue";
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { confirmDesktopAction, controlDesktopJob, getDesktopJobs, getDesktopStatus, saveDesktopPolicy, setDesktopTakeover, type DesktopJob, type DesktopPolicy, type DesktopStatus } from "../api";
-import { toastSuccess } from "../toast";
+import { toastSuccess } from "../lib/toast";
 const status = ref<DesktopStatus | null>(null);
 const policy = ref<DesktopPolicy>({ enabled: false, write_enabled: false });
 const allowed = ref("");

@@ -19,7 +19,7 @@ import (
 //
 //	DIANA_UPDATE_DEMO_CATALOG=1 go test ./webui -run TestDemoPromptCatalogInSync
 func TestDemoPromptCatalogInSync(t *testing.T) {
-	path := filepath.Join("..", "frontend", "src", "demo-prompt-catalog.json")
+	path := filepath.Join("..", "frontend", "src", "demo", "demo-prompt-catalog.json")
 	want, err := json.MarshalIndent(map[string]any{
 		"groups":    assistant.PromptGroups(),
 		"prompts":   assistant.PromptSpecs(),
@@ -50,7 +50,7 @@ func TestDemoPromptCatalogInSync(t *testing.T) {
 //
 //	DIANA_UPDATE_DEMO_CATALOG=1 go test ./webui -run TestDemoBuiltinSoulsInSync
 func TestDemoBuiltinSoulsInSync(t *testing.T) {
-	path := filepath.Join("..", "frontend", "src", "demo-builtin-souls.json")
+	path := filepath.Join("..", "frontend", "src", "demo", "demo-builtin-souls.json")
 	type demoSoul struct {
 		ID           string `json:"id"`
 		Name         string `json:"name"`

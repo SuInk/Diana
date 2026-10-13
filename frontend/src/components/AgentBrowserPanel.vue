@@ -63,13 +63,13 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue';
 import { Save } from '@lucide/vue';
-import { botScope } from '../bot-scope';
+import { botScope } from '../lib/bot-scope';
 import { fetchAssistantUserNames, getAgentBrowser, getBotProfileConfig, saveAgentBrowser } from '../api';
 import type { BrowserScreenshotAccess, BrowserOperationAccess } from '../api';
 import AppSelect from './AppSelect.vue';
 import Modal from './Modal.vue';
 import IdChipInput from './IdChipInput.vue';
-import { toastError, toastSuccess } from '../toast';
+import { toastError, toastSuccess } from '../lib/toast';
 
 const emit = defineEmits<{ saved: []; close: [] }>();
 // CDP 地址和超时在「外接浏览器」弹窗里改；这里只原样带回，后端保存接口要求一起提交。

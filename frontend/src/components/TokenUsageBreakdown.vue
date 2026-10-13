@@ -65,8 +65,8 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
 import type { LLMUsageBreakdown } from "../api";
-import { formatNumber } from "../format";
-import { cacheUsageDisplay, cacheUtilization, groupLLMUsage, usageShare, type UsageDimension } from "../llm-usage";
+import { formatNumber } from "../lib/format";
+import { cacheUsageDisplay, cacheUtilization, groupLLMUsage, usageShare, type UsageDimension } from "../lib/llm-usage";
 
 const props = defineProps<{ entries?: readonly LLMUsageBreakdown[]; rangeLabel: string }>();
 const dimension = ref<UsageDimension>("purpose");

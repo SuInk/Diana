@@ -529,11 +529,11 @@ import {
   type UpdateCheckResponse,
   type UpdateStatus
 } from "../api";
-import { askConfirm } from "../confirm";
-import { accentOptions, theme } from "../theme";
-import { formatBytes, formatNumber, formatTime, formatUptime } from "../format";
-import { storageCategorySegments, storageDirectories, storageDiskSegments, storageDiskTotal, storageShareLabel, storageWidth } from "../storage-usage";
-import { toastError, toastSuccess } from "../toast";
+import { askConfirm } from "../lib/confirm";
+import { accentOptions, theme } from "../lib/theme";
+import { formatBytes, formatNumber, formatTime, formatUptime } from "../lib/format";
+import { storageCategorySegments, storageDirectories, storageDiskSegments, storageDiskTotal, storageShareLabel, storageWidth } from "../lib/storage-usage";
+import { toastError, toastSuccess } from "../lib/toast";
 
 // 侧栏菜单按「改的是谁的」分组：账号与安全决定谁能进来，系统是这台服务本身，
 // 个性化只影响当前浏览器。正文一次只显示选中的一项。

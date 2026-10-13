@@ -31,7 +31,7 @@ import { onMounted, ref } from 'vue';
 import { PlugZap, Save } from '@lucide/vue';
 import { getAgentBrowser, saveAgentBrowser, testAgentBrowser } from '../api';
 import Modal from './Modal.vue';
-import { toastError, toastSuccess } from '../toast';
+import { toastError, toastSuccess } from '../lib/toast';
 
 const props = defineProps<{ profile: string }>();
 const emit = defineEmits<{ close: []; saved: [] }>();

@@ -97,7 +97,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from "vue";
 import { getStatsLatency, type LatencyDistribution, type LatencyWindowID, type ReplyLatencySample, type StatsLatency } from "../api";
-import { formatDurationMS, formatNumber, formatRelative, formatTime } from "../format";
+import { formatDurationMS, formatNumber, formatRelative, formatTime } from "../lib/format";
 import LoadingSkeleton from "./LoadingSkeleton.vue";
 
 const props = defineProps<{

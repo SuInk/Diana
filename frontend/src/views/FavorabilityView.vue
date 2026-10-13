@@ -191,11 +191,11 @@ import {
   type RelationshipEvaluationStatus,
   type RelationshipEvaluationsQuery
 } from "../api";
-import { botScope } from "../bot-scope";
-import { formatTime } from "../format";
+import { botScope } from "../lib/bot-scope";
+import { formatTime } from "../lib/format";
 import { navigate, viewQuery } from "../router";
-import { recordsActionsHost } from "../records-actions";
-import { toastError } from "../toast";
+import { recordsActionsHost } from "../lib/records-actions";
+import { toastError } from "../lib/toast";
 import EmptyState from "../components/EmptyState.vue";
 import LoadingSkeleton from "../components/LoadingSkeleton.vue";
 import Modal from "../components/Modal.vue";

@@ -772,7 +772,7 @@
 </style>
 
 <script setup lang="ts">
-import { useConfigurationRefresh } from "../configuration-sync";
+import { useConfigurationRefresh } from "../lib/configuration-sync";
 import { computed, onActivated, onDeactivated, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import ExtensionManager from "../components/ExtensionManager.vue";
 const extensionTabs = [{value:'plugins' as const,label:'插件'},{value:'skill' as const,label:'Skills'},{value:'mcp' as const,label:'MCP'}];
@@ -809,8 +809,8 @@ import {
   type CredentialCheck,
   type CredentialState
 } from "../api";
-import { askConfirm } from "../confirm";
-import { toastError, toastSuccess } from "../toast";
+import { askConfirm } from "../lib/confirm";
+import { toastError, toastSuccess } from "../lib/toast";
 import EmptyState from "../components/EmptyState.vue";
 import LoadingSkeleton from "../components/LoadingSkeleton.vue";
 import SkeletonBlock from "../components/SkeletonBlock.vue";
@@ -826,10 +826,10 @@ import VRChatStatusPanel from "../components/VRChatStatusPanel.vue";
 import RSSWatchManager from "../components/RSSWatchManager.vue";
 import PluginDependencyList from "../components/PluginDependencyList.vue";
 import { navigate, viewQuery } from "../router";
-import { botScope } from "../bot-scope";
-import { extensionLayout, setExtensionLayout } from "../extension-layout";
-import { pluginForBot } from "../plugin-settings";
-import { createResolverCredentialChecks, groupResolverSettings, resolverCredentialSource, resolverCheckLabel, type ResolverCredentialKey } from "../resolver-credentials";
+import { botScope } from "../lib/bot-scope";
+import { extensionLayout, setExtensionLayout } from "../lib/extension-layout";
+import { pluginForBot } from "../lib/plugin-settings";
+import { createResolverCredentialChecks, groupResolverSettings, resolverCredentialSource, resolverCheckLabel, type ResolverCredentialKey } from "../lib/resolver-credentials";
 
 const webSearchPluginID = "official.web-search";
 const plugins = ref<PluginState[]>([]);

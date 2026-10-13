@@ -52,14 +52,14 @@ func readRepoFile(t *testing.T, rel string) string {
 
 var participationThresholdEntryPattern = regexp.MustCompile(`(?m)^\s*(\w+)\s*:\s*(null|[0-9.]+)\s*,?\s*$`)
 
-// frontendParticipationThresholds 解析 frontend/src/participation.ts 里的
+// frontendParticipationThresholds 解析 frontend/src/lib/participation.ts 里的
 // participationLevelThresholds，返回档位到门槛的映射；null 用 nil 表示。
 func frontendParticipationThresholds(t *testing.T, source string) map[string]*float64 {
 	t.Helper()
 	const marker = "export const participationLevelThresholds"
 	start := strings.Index(source, marker)
 	if start < 0 {
-		t.Fatalf("frontend/src/participation.ts 里应当有 %s", marker)
+		t.Fatalf("frontend/src/lib/participation.ts 里应当有 %s", marker)
 	}
 	open := strings.Index(source[start:], "{")
 	if open < 0 {
@@ -100,7 +100,7 @@ func TestFrontendParticipationThresholdsMatchRatingPasses(t *testing.T) {
 			t.Fatalf("%q 不是后端认的档位，这份档位清单本身过期了", level)
 		}
 	}
-	frontend := frontendParticipationThresholds(t, readRepoFile(t, "frontend/src/participation.ts"))
+	frontend := frontendParticipationThresholds(t, readRepoFile(t, "frontend/src/lib/participation.ts"))
 
 	for _, level := range levels {
 		threshold, ok := frontend[level]

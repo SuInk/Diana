@@ -53,8 +53,8 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import { getStatsActivity, type StatsActivity } from "../api";
-import { activityLevel, activityLevelColor, activityTimezoneNote, buildActivityCalendar } from "../activity";
-import { formatNumber } from "../format";
+import { activityLevel, activityLevelColor, activityTimezoneNote, buildActivityCalendar } from "../lib/activity";
+import { formatNumber } from "../lib/format";
 import LoadingSkeleton from "./LoadingSkeleton.vue";
 
 const props = defineProps<{ profileId: string }>();

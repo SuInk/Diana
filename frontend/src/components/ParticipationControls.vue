@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, useId } from "vue";
 import AppSelect from "./AppSelect.vue";
-import { defaultParticipationCooldownSeconds, participationLevelLabel, participationPreset, participationPresetName, proactiveCriteriaMaxLength, type ParticipationPreferences } from "../participation";
+import { defaultParticipationCooldownSeconds, participationLevelLabel, participationPreset, participationPresetName, proactiveCriteriaMaxLength, type ParticipationPreferences } from "../lib/participation";
 
 // criteriaOptional：机器人页已经能直接改内置判据，补充判据只在留有旧值时露出来，
 // 让人看得见、清得掉——藏起来的旧值照样拼进评分提示词。

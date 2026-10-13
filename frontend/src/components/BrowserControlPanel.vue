@@ -196,9 +196,9 @@ import {
   type BrowserControlPolicy,
   type BrowserControlToken
 } from "../api";
-import { askConfirm } from "../confirm";
-import { formatTime } from "../format";
-import { toastError, toastSuccess } from "../toast";
+import { askConfirm } from "../lib/confirm";
+import { formatTime } from "../lib/format";
+import { toastError, toastSuccess } from "../lib/toast";
 
 const browserPolicy = ref<BrowserControlPolicy>({ enabled: false, write_enabled: false, command_timeout_ms: 20000, commands_per_minute: 60 });
 const browserTokens = ref<BrowserControlToken[]>([]);

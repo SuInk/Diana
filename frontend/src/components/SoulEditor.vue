@@ -115,9 +115,9 @@
 import { computed, nextTick, onMounted, ref } from "vue";
 import { BookOpen, Check, Download, Plus, Sparkles, Trash2, Undo2, Upload, X } from "@lucide/vue";
 import { deletePersona, importCharacterCard, importPersonaSource, listPersonas, savePersona, type Persona, type WorldBookNode } from "../api";
-import { askConfirm } from "../confirm";
-import { toastError, toastSuccess } from "../toast";
-import { matchingPersona, soulFileName, soulLength, soulTitle, SOUL_MAX_CHARS, SOUL_WARN_CHARS, unusedPersonaName } from "../soul-library";
+import { askConfirm } from "../lib/confirm";
+import { toastError, toastSuccess } from "../lib/toast";
+import { matchingPersona, soulFileName, soulLength, soulTitle, SOUL_MAX_CHARS, SOUL_WARN_CHARS, unusedPersonaName } from "../lib/soul-library";
 
 // SOUL.md 编辑器：左边人设库，右边正文。
 //

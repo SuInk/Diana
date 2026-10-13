@@ -10,7 +10,7 @@
 <script setup lang="ts">
 import { onBeforeUnmount, ref, watch } from "vue";
 import { fetchAssistantUserNames, listBotGroups } from "../api";
-import { subscriptionPlatformLabel } from "../rss-display";
+import { subscriptionPlatformLabel } from "../lib/rss-display";
 
 const props = defineProps<{ platform?: string; profileId?: string; profileName?: string; groupId?: string; userId?: string }>();
 const name = ref("");

@@ -4,7 +4,7 @@
 
 提示词不跟着人设走：人设就是一份 [SOUL.md](soul-md.md)，只回答「她是谁」。换人设不会动提示词覆盖，改提示词也不会改人设。
 
-演示站没有后端，提示词目录是 `frontend/src/demo-prompt-catalog.json`，和登记表逐字相同，由 `webui/demo_prompt_catalog_test.go` 生成并校验（登记表一变测试就失败，按提示重新生成）。
+演示站没有后端，提示词目录是 `frontend/src/demo/demo-prompt-catalog.json`，和登记表逐字相同，由 `webui/demo_prompt_catalog_test.go` 生成并校验（登记表一变测试就失败，按提示重新生成）。
 
 ## 导出和导入：一份 YAML
 

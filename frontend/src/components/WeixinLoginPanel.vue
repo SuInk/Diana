@@ -8,8 +8,8 @@
 import { onBeforeUnmount, ref } from "vue";
 import { LogOut, QrCode, RefreshCw } from "@lucide/vue";
 import { logoutWeixin, pollWeixinLogin, startWeixinLogin, type BotProfileConfig, type WeixinLoginStatus } from "../api";
-import { askConfirm } from "../confirm";
-import { toastError, toastSuccess } from "../toast";
+import { askConfirm } from "../lib/confirm";
+import { toastError, toastSuccess } from "../lib/toast";
 
 const props = defineProps<{
   /** 已保存的机器人 ID；新建还没保存时为空，扫码要挂在一台存好的机器人上。 */

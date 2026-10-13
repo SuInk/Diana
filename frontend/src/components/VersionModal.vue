@@ -302,10 +302,10 @@ import {
   type UpdatePolicy,
   type UpdateStatus
 } from "../api";
-import { toastError, toastSuccess } from "../toast";
-import { askConfirm } from "../confirm";
-import { channelSwitchConfirm, latestRollbackReleaseTags, releaseAllowedOnChannel, type UpdateChannel } from "../release-channel";
-import { markUpdateInstalling } from "../backendState";
+import { toastError, toastSuccess } from "../lib/toast";
+import { askConfirm } from "../lib/confirm";
+import { channelSwitchConfirm, latestRollbackReleaseTags, releaseAllowedOnChannel, type UpdateChannel } from "../lib/release-channel";
+import { markUpdateInstalling } from "../lib/backendState";
 
 const emit = defineEmits<{ close: []; checked: [available: boolean]; versionChanged: [version: SystemVersion] }>();
 
