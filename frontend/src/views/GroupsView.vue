@@ -690,13 +690,13 @@
 </template>
 
 <script setup lang="ts">
-import { useConfigurationRefresh } from "../configuration-sync";
+import { useConfigurationRefresh } from "../lib/configuration-sync";
 import { computed, onMounted, ref, watch } from "vue";
 import GroupTokenUsage from "../components/GroupTokenUsage.vue";
 import LoadingSkeleton from "../components/LoadingSkeleton.vue";
 import SkeletonBlock from "../components/SkeletonBlock.vue";
-import { askConfirm } from "../confirm";
-import { botScope } from "../bot-scope";
+import { askConfirm } from "../lib/confirm";
+import { botScope } from "../lib/bot-scope";
 import { Plus, RefreshCw, Save, Search, Share2, SlidersHorizontal, Trash2, Users, WifiOff } from "@lucide/vue";
 import {
   type ConnectionPeer,
@@ -727,18 +727,18 @@ import GroupPluginSettings from "../components/GroupPluginSettings.vue";
 import AppSelect, { type AppSelectOption } from "../components/AppSelect.vue";
 import ParticipationControls from "../components/ParticipationControls.vue";
 import BotMarkerList from "../components/BotMarkerList.vue";
-import { participationFromConfig, participationLevelLabel, participationPresetName, type ParticipationPreferences } from "../participation";
+import { participationFromConfig, participationLevelLabel, participationPresetName, type ParticipationPreferences } from "../lib/participation";
 import Modal from "../components/Modal.vue";
 import ReplyGateForm from "../components/ReplyGateForm.vue";
 import GroupGovernanceForm from "../components/GroupGovernanceForm.vue";
-import { sendRetryFields, sendRetryPayload, sendRetryValidationError, withUnsetSendRetryCleared, type SendRetryField, type SendRetrySettings } from "../send-retry-settings";
+import { sendRetryFields, sendRetryPayload, sendRetryValidationError, withUnsetSendRetryCleared, type SendRetryField, type SendRetrySettings } from "../lib/send-retry-settings";
 import {
   groupDailyLimitMode,
   groupImageGenerationLimitsPayload,
   groupVideoGenerationLimitsPayload,
   setGroupDailyLimitMode,
   type GroupDailyLimitField
-} from "../media-generation-quota";
+} from "../lib/media-generation-quota";
 
 // 群里留空的项跟随所属机器人（后端不再把机器人的值抄进群配置），占位符和「跟随机器人」
 // 选项里写出机器人现在的值，免得用户以为留空就是没有。
@@ -798,7 +798,7 @@ const groupWelcomeModeOptions: AppSelectOption[] = [
   { value: "template", label: "口吻模板池" },
   { value: "llm", label: "按人设实时生成" }
 ];
-import { toastError, toastSuccess } from "../toast";
+import { toastError, toastSuccess } from "../lib/toast";
 import GroupStylePanel from "../components/GroupStylePanel.vue";
 
 const groups = ref<BotGroupSummary[]>([]);

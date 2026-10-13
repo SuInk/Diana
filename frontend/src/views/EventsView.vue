@@ -592,7 +592,7 @@
 
 <script setup lang="ts">
 import { computed, inject, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref, watch } from "vue";
-import { botScope } from "../bot-scope";
+import { botScope } from "../lib/bot-scope";
 import type { Component } from "vue";
 import {
   Activity,
@@ -635,13 +635,13 @@ import {
   type AssistantEventsResponse,
   type AssistantContextBudgetLayer
 } from "../api";
-import { formatClock, formatNumber, formatTime } from "../format";
-import { askConfirm } from "../confirm";
-import { displayMessageText, displayChatIdentity } from "../message-display";
+import { formatClock, formatNumber, formatTime } from "../lib/format";
+import { askConfirm } from "../lib/confirm";
+import { displayMessageText, displayChatIdentity } from "../lib/message-display";
 import { currentView, navigate } from "../router";
-import { recordsActionsHost } from "../records-actions";
-import { stream, type BotEvent } from "../stream";
-import { toastError, toastSuccess } from "../toast";
+import { recordsActionsHost } from "../lib/records-actions";
+import { stream, type BotEvent } from "../lib/stream";
+import { toastError, toastSuccess } from "../lib/toast";
 import EmptyState from "../components/EmptyState.vue";
 import Modal from "../components/Modal.vue";
 import SkeletonBlock from "../components/SkeletonBlock.vue";

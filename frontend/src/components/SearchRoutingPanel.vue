@@ -46,8 +46,8 @@
 import { computed, onMounted, ref } from "vue";
 import { ChevronDown, ChevronUp, Plus, Trash2 } from "@lucide/vue";
 import { getSearchProviders, type SearchConfiguration, type WebSearchAssignment } from "../api";
-import { useConfigurationRefresh } from "../configuration-sync";
-import { searchProviderTypeLabel } from "../search-providers";
+import { useConfigurationRefresh } from "../lib/configuration-sync";
+import { searchProviderTypeLabel } from "../lib/search-providers";
 import AppDisclosure from "./AppDisclosure.vue";
 import AppNumberInput from "./AppNumberInput.vue";
 import AppSelect from "./AppSelect.vue";

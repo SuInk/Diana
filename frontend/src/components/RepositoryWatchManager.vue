@@ -236,8 +236,8 @@ import {
   type RepositoryWatchPullEvent,
   type RepositoryWatchReleaseKind
 } from "../api";
-import { askConfirm } from "../confirm";
-import { toastError, toastSuccess } from "../toast";
+import { askConfirm } from "../lib/confirm";
+import { toastError, toastSuccess } from "../lib/toast";
 import SubscriptionDestination from "./SubscriptionDestination.vue";
 import SubscriptionTargetsEditor from "./SubscriptionTargetsEditor.vue";
 import AccountNameHint from "./AccountNameHint.vue";

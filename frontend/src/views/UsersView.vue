@@ -335,7 +335,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from "vue";
-import { botScope } from "../bot-scope";
+import { botScope } from "../lib/bot-scope";
 import { navigate, viewQuery } from "../router";
 import { ChevronDown, ChevronRight, ChevronUp, Pencil, RefreshCw, Save, Trash2 } from "@lucide/vue";
 import {
@@ -352,8 +352,8 @@ import {
   type UserPortraitTrait,
   type UserStructuredMemory
 } from "../api";
-import { formatNumber, formatRelative, formatTime } from "../format";
-import { toastError, toastSuccess } from "../toast";
+import { formatNumber, formatRelative, formatTime } from "../lib/format";
+import { toastError, toastSuccess } from "../lib/toast";
 import EmptyState from "../components/EmptyState.vue";
 import LoadingSkeleton from "../components/LoadingSkeleton.vue";
 import SkeletonBlock from "../components/SkeletonBlock.vue";

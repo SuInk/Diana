@@ -125,8 +125,8 @@
 import { computed, ref, watch } from "vue";
 import { ExternalLink, LoaderCircle, Pencil, Plus, RefreshCw, Trash2, UserCheck } from "@lucide/vue";
 import type { CredentialCheck } from "../api";
-import { askConfirm } from "../confirm";
-import { toastError } from "../toast";
+import { askConfirm } from "../lib/confirm";
+import { toastError } from "../lib/toast";
 
 export interface CredentialTestInput {
   key: string;

@@ -80,8 +80,8 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from "vue";
 import { getStatsActivity, type ActivityWindowID, type StatsActivity } from "../api";
-import { activityLevel, activityLevelColor, activityTimezoneNote } from "../activity";
-import { formatNumber, formatTime } from "../format";
+import { activityLevel, activityLevelColor, activityTimezoneNote } from "../lib/activity";
+import { formatNumber, formatTime } from "../lib/format";
 import LoadingSkeleton from "./LoadingSkeleton.vue";
 
 const props = defineProps<{

@@ -279,9 +279,9 @@ import {
   type WorkspaceListing,
   type WorkspaceOverview
 } from "../api";
-import { askConfirm } from "../confirm";
-import { formatBytes, formatNumber, formatRelative, formatTime } from "../format";
-import { toastError, toastSuccess } from "../toast";
+import { askConfirm } from "../lib/confirm";
+import { formatBytes, formatNumber, formatRelative, formatTime } from "../lib/format";
+import { toastError, toastSuccess } from "../lib/toast";
 import {
   sortWorkspaceAreas,
   workspaceAreaTarget,
@@ -292,7 +292,7 @@ import {
   workspaceProtectedLabel,
   workspaceQuotaPercent,
   type WorkspacePreviewKind
-} from "../workspace-files";
+} from "../lib/workspace-files";
 
 // 文本预览只取开头一段：日志、克隆下来的大文件整份塞进 <pre> 会把页面卡住。
 const TEXT_PREVIEW_LIMIT = 256 * 1024;

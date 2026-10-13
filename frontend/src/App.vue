@@ -179,7 +179,7 @@
 </template>
 
 <script setup lang="ts">
-import { useConfigurationRefresh } from "./configuration-sync";
+import { useConfigurationRefresh } from "./lib/configuration-sync";
 import { computed, defineAsyncComponent, KeepAlive, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import type { Component } from "vue";
 import {
@@ -208,20 +208,20 @@ import {
   Wrench
 } from "@lucide/vue";
 import { currentView, navItemForView, navSections, navigate, type ViewID } from "./router";
-import { markSpaceSeen, refreshSpaceUnread, spaceUnread } from "./space-unread";
-import { ALL_PROFILES, botScope, reconcileBotScope, setBotScope } from "./bot-scope";
-import { scopeSwitching } from "./scope-transition";
+import { markSpaceSeen, refreshSpaceUnread, spaceUnread } from "./lib/space-unread";
+import { ALL_PROFILES, botScope, reconcileBotScope, setBotScope } from "./lib/bot-scope";
+import { scopeSwitching } from "./lib/scope-transition";
 import AppSelect from "./components/AppSelect.vue";
-import { startEventStream, stream, pushStatusSnapshot } from "./stream";
-import { theme } from "./theme";
-import { formatUptime } from "./format";
+import { startEventStream, stream, pushStatusSnapshot } from "./lib/stream";
+import { theme } from "./lib/theme";
+import { formatUptime } from "./lib/format";
 import { checkForUpdate, getBotStatus, getAuthStatus, getBotProfileConfig, getConfig, getHealth, getSystemVersion, logout, type BotProfileConfig, type HealthResponse, type SystemVersion } from "./api";
 import ToastHost from "./components/ToastHost.vue";
 import ConfirmHost from "./components/ConfirmHost.vue";
-import { toastSuccess } from "./toast";
-import { channelAccountUnhealthy } from "./channel-status";
+import { toastSuccess } from "./lib/toast";
+import { channelAccountUnhealthy } from "./lib/channel-status";
 import VersionModal from "./components/VersionModal.vue";
-import { autoReloadAllowed, clearUpdateInstalling, markAutoReloaded, updateInstallingRecently } from "./backendState";
+import { autoReloadAllowed, clearUpdateInstalling, markAutoReloaded, updateInstallingRecently } from "./lib/backendState";
 import BackendDownView from "./views/BackendDownView.vue";
 import LoginView from "./views/LoginView.vue";
 import DashboardView from "./views/DashboardView.vue";

@@ -61,7 +61,7 @@
 import { computed, nextTick, ref, watch } from "vue";
 import { Check, Pencil, Plus, Trash2, X } from "@lucide/vue";
 import type { LLMModelInfo } from "../api";
-import { applyModelMetadataDraft, createModelMetadataDraft, modelCapabilitySummary, type ModelMetadataDraft } from "../model-metadata";
+import { applyModelMetadataDraft, createModelMetadataDraft, modelCapabilitySummary, type ModelMetadataDraft } from "../lib/model-metadata";
 import AppSwitch from "./AppSwitch.vue";
 
 const props = defineProps<{ modelValue: LLMModelInfo[]; disabled?: boolean; providerWindow?: number }>();

@@ -87,7 +87,7 @@ import {
   login,
   pollOwnerLoginPairing
 } from "../api";
-import { toastError, toastSuccess } from "../toast";
+import { toastError, toastSuccess } from "../lib/toast";
 import BrandLogo from "../components/BrandLogo.vue";
 
 const emit = defineEmits<{ success: []; unreachable: [detail: string] }>();

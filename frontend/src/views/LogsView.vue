@@ -65,10 +65,10 @@
 import { computed, inject, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref, watch } from "vue";
 import { RefreshCw } from "@lucide/vue";
 import { listAppLogs, type AppLogEntry, type AppLogKind } from "../api";
-import { formatTime } from "../format";
-import { displayChatIdentity } from "../message-display";
-import { toastError } from "../toast";
-import { recordsActionsHost } from "../records-actions";
+import { formatTime } from "../lib/format";
+import { displayChatIdentity } from "../lib/message-display";
+import { toastError } from "../lib/toast";
+import { recordsActionsHost } from "../lib/records-actions";
 import { viewQuery } from "../router";
 import EmptyState from "../components/EmptyState.vue";
 import LoadingSkeleton from "../components/LoadingSkeleton.vue";

@@ -120,14 +120,14 @@
 <script setup lang="ts">
 import { computed, nextTick, onActivated, onBeforeUnmount, onDeactivated, ref, watch } from 'vue';
 import { Activity, ArrowDown, ArrowUp, Blocks, Check, Copy, Ellipsis, LoaderCircle, PanelLeft, Plus, RotateCcw, Search, ShieldCheck, Square, SquarePen, Trash2, TriangleAlert, ListPlus, X } from '@lucide/vue';
-import { botScope } from '../bot-scope';
+import { botScope } from '../lib/bot-scope';
 import AppSelect from '../components/AppSelect.vue';
 import Modal from '../components/Modal.vue';
 import SkeletonBlock from '../components/SkeletonBlock.vue';
 import { getBotProfileConfig, getConfig, type BotProfileConfig, type LLMConfig } from '../api';
-import { askConfirm } from '../confirm';
-import { useConfigurationRefresh } from '../configuration-sync';
-import { clearAdminChat, createAdminChatSession, filterAdminChatSessions, getAdminChat, listAdminChatSessions, sendAdminChat, stopAdminChat, type AdminChatMessage, type AdminChatProgress, type AdminChatSession, type AdminChatSummary } from '../admin-chat';
+import { askConfirm } from '../lib/confirm';
+import { useConfigurationRefresh } from '../lib/configuration-sync';
+import { clearAdminChat, createAdminChatSession, filterAdminChatSessions, getAdminChat, listAdminChatSessions, sendAdminChat, stopAdminChat, type AdminChatMessage, type AdminChatProgress, type AdminChatSession, type AdminChatSummary } from '../lib/admin-chat';
 const session = ref<AdminChatSession | null>(null), conversations = ref<AdminChatSummary[]>([]);
 const profileStorageKey = 'diana:admin-chat-profile';
 function initialProfile(): string {

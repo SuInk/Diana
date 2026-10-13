@@ -84,11 +84,11 @@
 import { onMounted, ref } from "vue";
 import { CircleX, LoaderCircle, Pencil, Plus, Trash2 } from "@lucide/vue";
 import { cancelRSSWatch, createRSSWatch, deleteRSSWatch, getAssistantTasks, getBotProfileConfig, updateRSSWatch, type AssistantTask, type AssistantTaskStatus, type BotProfileConfig, type RSSWatchSource } from "../api";
-import { askConfirm } from "../confirm";
-import { toastError, toastSuccess } from "../toast";
+import { askConfirm } from "../lib/confirm";
+import { toastError, toastSuccess } from "../lib/toast";
 import SubscriptionTargetsEditor from "./SubscriptionTargetsEditor.vue";
 import SubscriptionDestination from "./SubscriptionDestination.vue";
-import { rssSourceLabel } from "../rss-display";
+import { rssSourceLabel } from "../lib/rss-display";
 
 const props = defineProps<{ prepareAccess?: () => Promise<void>; defaultProfileId?: string }>();
 const minimumIntervalSeconds = 5 * 60;

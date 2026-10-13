@@ -173,7 +173,7 @@
 </template>
 
 <script setup lang="ts">
-import { useConfigurationRefresh } from "../configuration-sync";
+import { useConfigurationRefresh } from "../lib/configuration-sync";
 import { computed, onMounted, reactive, ref, watch } from "vue";
 import { ChevronRight, Plus, RefreshCw } from "@lucide/vue";
 import {
@@ -189,10 +189,10 @@ import {
   type NotebookKind,
   type NotebookKindOption
 } from "../api";
-import { formatRelative, formatTime } from "../format";
-import { botScope } from "../bot-scope";
-import { askConfirm } from "../confirm";
-import { toastError, toastSuccess } from "../toast";
+import { formatRelative, formatTime } from "../lib/format";
+import { botScope } from "../lib/bot-scope";
+import { askConfirm } from "../lib/confirm";
+import { toastError, toastSuccess } from "../lib/toast";
 import AppSelect from "../components/AppSelect.vue";
 import EmptyState from "../components/EmptyState.vue";
 import LoadingSkeleton from "../components/LoadingSkeleton.vue";

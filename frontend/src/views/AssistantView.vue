@@ -2296,18 +2296,18 @@
 
 <script setup lang="ts">
 import { navigate, viewQuery } from "../router";
-import { botScope } from "../bot-scope";
-import { copyBotConfiguration } from "../bot-config-copy";
-import { findWebSocketConnectionConflict } from "../bot-connection-conflicts";
-import { maximumModelRequestTimeoutSeconds, modelRequestTimeoutMilliseconds, modelRequestTimeoutSeconds, useConfigurationRefresh } from "../configuration-sync";
-import { mergeModelMetadata, effectiveModelInfo } from "../model-metadata";
+import { botScope } from "../lib/bot-scope";
+import { copyBotConfiguration } from "../lib/bot-config-copy";
+import { findWebSocketConnectionConflict } from "../lib/bot-connection-conflicts";
+import { maximumModelRequestTimeoutSeconds, modelRequestTimeoutMilliseconds, modelRequestTimeoutSeconds, useConfigurationRefresh } from "../lib/configuration-sync";
+import { mergeModelMetadata, effectiveModelInfo } from "../lib/model-metadata";
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch, type Ref } from "vue";
 import LoadingSkeleton from "../components/LoadingSkeleton.vue";
 import SkeletonBlock from "../components/SkeletonBlock.vue";
 import { ArrowLeft, Bot, ChevronDown, ChevronRight, Copy, Download, Eye, EyeOff, GitBranch, GripVertical, History, Image, Layers, MessageSquare, Pencil, Plus, Power, PowerOff, RefreshCw, RotateCcw, Save, ScanLine, Search, Settings2, Shuffle, SlidersHorizontal, Sparkles, Trash2, Upload, Waypoints, X } from "@lucide/vue";
-import { sendRetryFields, sendRetryPayload, sendRetryValidationError } from "../send-retry-settings";
-import { timezoneOptions } from "../timezone-options";
-import { botImageGenerationLimitsPayload, botVideoGenerationLimitsPayload, mediaGenerationCooldownPayload } from "../media-generation-quota";
+import { sendRetryFields, sendRetryPayload, sendRetryValidationError } from "../lib/send-retry-settings";
+import { timezoneOptions } from "../lib/timezone-options";
+import { botImageGenerationLimitsPayload, botVideoGenerationLimitsPayload, mediaGenerationCooldownPayload } from "../lib/media-generation-quota";
 import {
   deleteBotProfile,
   generatePersona,
@@ -2393,7 +2393,7 @@ const auditDecisionPromptKeys = [
 ];
 import PromptSectionsEditor from "../components/PromptSectionsEditor.vue";
 import ParticipationPromptPreview from "../components/ParticipationPromptPreview.vue";
-import { participationFromConfig, type ParticipationPreferences } from "../participation";
+import { participationFromConfig, type ParticipationPreferences } from "../lib/participation";
 import SoulEditor from "../components/SoulEditor.vue";
 import ReplyToneEditor from "../components/ReplyToneEditor.vue";
 import EmptyState from "../components/EmptyState.vue";
@@ -2403,8 +2403,8 @@ import Modal from "../components/Modal.vue";
 import ReplyGateForm from "../components/ReplyGateForm.vue";
 import SecretField from "../components/SecretField.vue";
 import WeixinLoginPanel from "../components/WeixinLoginPanel.vue";
-import { pushStatusSnapshot, stream } from "../stream";
-import { askConfirm } from "../confirm";
+import { pushStatusSnapshot, stream } from "../lib/stream";
+import { askConfirm } from "../lib/confirm";
 import {
   agentModeLabel,
   agentModeOptions,
@@ -2415,11 +2415,11 @@ import {
   type AgentMode,
   type AgentModeImpact,
   type AgentSafeModeCategory
-} from "../agent-mode";
-import { toastError, toastSuccess } from "../toast";
-import { allowNodeExecution } from "../node-execution-preset";
-import { channelAccountUnhealthy, channelOperational, channelStatusHint, channelStatusLabel } from "../channel-status";
-import { effectiveReplyTone, FALLBACK_REPLY_TONE, normalizeReplyTone, replyToneOverride } from "../reply-tone";
+} from "../lib/agent-mode";
+import { toastError, toastSuccess } from "../lib/toast";
+import { allowNodeExecution } from "../lib/node-execution-preset";
+import { channelAccountUnhealthy, channelOperational, channelStatusHint, channelStatusLabel } from "../lib/channel-status";
+import { effectiveReplyTone, FALLBACK_REPLY_TONE, normalizeReplyTone, replyToneOverride } from "../lib/reply-tone";
 
 const form = ref<BotProfileConfig | null>(null);
 const modelRequestTimeoutDraft = ref<number | string>(0);

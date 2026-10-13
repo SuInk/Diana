@@ -31,8 +31,8 @@
 
 <script setup lang="ts">
 import { computed } from "vue";
-import { formatBytes } from "../format";
-import type { StorageSegment } from "../storage-usage";
+import { formatBytes } from "../lib/format";
+import type { StorageSegment } from "../lib/storage-usage";
 
 const props = defineProps<{
   segments: StorageSegment[];

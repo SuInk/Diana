@@ -20,7 +20,7 @@
 
 <script setup lang="ts">
 import Modal from "./Modal.vue";
-import { confirmState, settleConfirm } from "../confirm";
+import { confirmState, settleConfirm } from "../lib/confirm";
 </script>
 
 <style scoped>

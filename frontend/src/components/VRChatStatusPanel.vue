@@ -68,7 +68,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { getVRChatStatus, type VRChatStatus } from "../api";
-import { formatRelative, truncate } from "../format";
+import { formatRelative, truncate } from "../lib/format";
 
 const status = ref<VRChatStatus | null>(null);
 const error = ref("");

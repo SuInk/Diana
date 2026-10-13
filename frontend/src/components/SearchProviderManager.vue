@@ -85,10 +85,10 @@
 import { onMounted, ref, watch } from "vue";
 import { FlaskConical, Globe, Pencil, Plus, Save, Trash2 } from "@lucide/vue";
 import { deleteSearchProvider, getSearchProviders, saveSearchProvider, testSearchProvider, type SearchProvider, type SearchProviderTestResult } from "../api";
-import { changeSearchProviderType, parseSearchParams, searchProviderAddress, searchProviderKeyHint, searchProviderPreset, searchProviderTypeLabel, searchProviderTypes } from "../search-providers";
-import { useConfigurationRefresh } from "../configuration-sync";
-import { askConfirm } from "../confirm";
-import { toastError, toastSuccess } from "../toast";
+import { changeSearchProviderType, parseSearchParams, searchProviderAddress, searchProviderKeyHint, searchProviderPreset, searchProviderTypeLabel, searchProviderTypes } from "../lib/search-providers";
+import { useConfigurationRefresh } from "../lib/configuration-sync";
+import { askConfirm } from "../lib/confirm";
+import { toastError, toastSuccess } from "../lib/toast";
 import AppSelect from "./AppSelect.vue";
 import AppSwitch from "./AppSwitch.vue";
 import Modal from "./Modal.vue";

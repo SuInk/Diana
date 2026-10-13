@@ -54,9 +54,9 @@
 import { computed, nextTick, onMounted, ref } from "vue";
 import { Check, Download, Plus, Trash2, Undo2, Upload, X } from "@lucide/vue";
 import { deleteReplyTone, listReplyTones, saveReplyTone, type ReplyTonePreset } from "../api";
-import { askConfirm } from "../confirm";
-import { normalizeReplyTone } from "../reply-tone";
-import { toastError, toastSuccess } from "../toast";
+import { askConfirm } from "../lib/confirm";
+import { normalizeReplyTone } from "../lib/reply-tone";
+import { toastError, toastSuccess } from "../lib/toast";
 
 const props = defineProps<{ modelValue: string }>();
 const emit = defineEmits<{ "update:modelValue": [value: string] }>();

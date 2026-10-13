@@ -223,7 +223,7 @@
 
 <script setup lang="ts">
 import { computed, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref, watch } from "vue";
-import { botScope, matchesBotScope } from "../bot-scope";
+import { botScope, matchesBotScope } from "../lib/bot-scope";
 import {
   Bell,
   CalendarClock,
@@ -257,16 +257,16 @@ import {
   type AssistantTaskStatus,
   type SubagentTask
 } from "../api";
-import { formatClock, formatNumber, formatTime } from "../format";
+import { formatClock, formatNumber, formatTime } from "../lib/format";
 import { navigate } from "../router";
-import { askConfirm } from "../confirm";
-import { toastError, toastSuccess } from "../toast";
+import { askConfirm } from "../lib/confirm";
+import { toastError, toastSuccess } from "../lib/toast";
 import EmptyState from "../components/EmptyState.vue";
 import LoadingSkeleton from "../components/LoadingSkeleton.vue";
 import SkeletonBlock from "../components/SkeletonBlock.vue";
 import StatCard from "../components/StatCard.vue";
 import SubscriptionDestination from "../components/SubscriptionDestination.vue";
-import { rssSources, rssSourceLabel } from "../rss-display";
+import { rssSources, rssSourceLabel } from "../lib/rss-display";
 
 type KindFilter = "all" | AssistantTaskKind;
 type StatusFilter = "all" | AssistantTaskStatus;

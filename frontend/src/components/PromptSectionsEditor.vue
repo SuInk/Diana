@@ -28,7 +28,7 @@ import {
   withPromptSections,
   withoutPromptOverrides,
   type PromptSection
-} from "../prompt-overrides";
+} from "../lib/prompt-overrides";
 
 // 几段内置提示词合在一个框里改：每段前面一行【小标题】，输入时按小标题拆回各段存，
 // 和「内置提示词」页读写同一份覆盖。小标题坏了就不写回，框下面说哪里不对。

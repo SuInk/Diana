@@ -78,10 +78,10 @@
 import { onMounted, ref, watch } from "vue";
 import { Plus, RefreshCw, Wallet } from "@lucide/vue";
 import { getOwnSpace, recordOwnSpaceWallet, type OwnSpace, type WalletEntryKind } from "../api";
-import { botScope } from "../bot-scope";
-import { formatRelative, formatTime } from "../format";
+import { botScope } from "../lib/bot-scope";
+import { formatRelative, formatTime } from "../lib/format";
 import { navigate } from "../router";
-import { toastError, toastSuccess } from "../toast";
+import { toastError, toastSuccess } from "../lib/toast";
 import EmptyState from "../components/EmptyState.vue";
 import LoadingSkeleton from "../components/LoadingSkeleton.vue";
 

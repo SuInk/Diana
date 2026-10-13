@@ -109,8 +109,8 @@
 import { nextTick, reactive, ref } from "vue";
 import { CircleAlert, CircleCheck, CircleDot, ExternalLink, LoaderCircle, Send, X } from "@lucide/vue";
 import { createRepositoryIssue, type RepositoryIssueCreateResult } from "../api";
-import { askConfirm } from "../confirm";
-import { toastError, toastSuccess } from "../toast";
+import { askConfirm } from "../lib/confirm";
+import { toastError, toastSuccess } from "../lib/toast";
 
 const props = defineProps<{
   profileId?: string;

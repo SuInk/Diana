@@ -2,7 +2,7 @@
 import { computed, onMounted, ref, useId } from "vue";
 import { ChevronDown, ChevronRight, RotateCcw } from "@lucide/vue";
 import { getPromptCatalog, type PromptCatalog, type PromptSpec } from "../api";
-import { customizedPromptCount, isPromptCustomized, isPromptFormatCustomized, missingPromptVars, promptFormatValue, promptOverrideValue, withoutPromptCustomization, withPromptFormat, withPromptOverride } from "../prompt-overrides";
+import { customizedPromptCount, isPromptCustomized, isPromptFormatCustomized, missingPromptVars, promptFormatValue, promptOverrideValue, withoutPromptCustomization, withPromptFormat, withPromptOverride } from "../lib/prompt-overrides";
 
 // 覆盖表只存改过的正文：输入框里显示的是「当前生效的正文」，和默认值一样就从表里删掉，
 // 不把默认值抄进配置——那样以后内置文案更新了，这台机器人还停在旧版上。

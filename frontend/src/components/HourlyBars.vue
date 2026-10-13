@@ -31,7 +31,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import type { StatsHourBucket } from "../api";
-import { formatHourLabel, formatNumber, niceAxisMax } from "../format";
+import { formatHourLabel, formatNumber, niceAxisMax } from "../lib/format";
 
 const props = defineProps<{ buckets: StatsHourBucket[] }>();
 

@@ -420,14 +420,14 @@
 </template>
 
 <script setup lang="ts">
-import { useConfigurationRefresh } from "../configuration-sync";
+import { useConfigurationRefresh } from "../lib/configuration-sync";
 import { computed, onActivated, onMounted, ref, watch } from "vue";
 import { viewQuery } from "../router";
 import SearchProviderManager from "../components/SearchProviderManager.vue";
 import SearchRoutingPanel from "../components/SearchRoutingPanel.vue";
 import { getSearchAssignment, saveSearchAssignment, type WebSearchAssignment } from "../api";
 import ModelCatalogEditor from "../components/ModelCatalogEditor.vue";
-import { syncModelMetadata } from "../model-metadata";
+import { syncModelMetadata } from "../lib/model-metadata";
 import LoadingSkeleton from "../components/LoadingSkeleton.vue";
 import LLMOAuthPicker from "../components/LLMOAuthPicker.vue";
 import { ChevronDown, ChevronUp, CircleCheck, Copy, Download, Eye, EyeOff, Image as ImageIcon, Pencil, Plus, RefreshCw, Save, Send, Trash2, Upload } from "@lucide/vue";
@@ -450,13 +450,13 @@ import {
   type Provider,
   type LLMOAuthStatus
 } from "../api";
-import { askConfirm } from "../confirm";
-import { toastError, toastSuccess } from "../toast";
+import { askConfirm } from "../lib/confirm";
+import { toastError, toastSuccess } from "../lib/toast";
 import Modal from "../components/Modal.vue";
 import AppSelect from "../components/AppSelect.vue";
 import type { AppSelectOption } from "../components/AppSelect.vue";
 import EmptyState from "../components/EmptyState.vue";
-import { describeLLMTestError, randomTestModel, testModelIDs } from "../llm-test";
+import { describeLLMTestError, randomTestModel, testModelIDs } from "../lib/llm-test";
 import {
   defaultPresetForProvider,
   detectLLMService,
@@ -465,7 +465,7 @@ import {
   llmServicePresets,
   presetsForProvider,
   type LLMErrorField
-} from "../llm-presets";
+} from "../lib/llm-presets";
 
 const providerTab = ref<'model' | 'search'>(viewQuery().get('section') === 'search' ? 'search' : 'model');
 onActivated(() => { if (viewQuery().get('section') === 'search') providerTab.value = 'search'; });

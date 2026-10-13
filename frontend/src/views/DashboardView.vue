@@ -262,7 +262,7 @@
 </template>
 
 <script setup lang="ts">
-import { useConfigurationRefresh } from "../configuration-sync";
+import { useConfigurationRefresh } from "../lib/configuration-sync";
 import { computed, onMounted, ref, watch } from "vue";
 import {
   Activity,
@@ -287,12 +287,12 @@ import {
   type StatsRanges,
   type LLMUsageBreakdown
 } from "../api";
-import { pushStatsSnapshot, pushStatusSnapshot, scopedStats, stream, type BotEvent } from "../stream";
+import { pushStatsSnapshot, pushStatusSnapshot, scopedStats, stream, type BotEvent } from "../lib/stream";
 import { navigate } from "../router";
-import { botScope, matchesBotScope } from "../bot-scope";
-import { formatBytes, formatClock, formatCompactNumber, formatNumber, formatRelative, formatUptime, truncate } from "../format";
-import { displayMessageText, displayChatIdentity } from "../message-display";
-import { toastError } from "../toast";
+import { botScope, matchesBotScope } from "../lib/bot-scope";
+import { formatBytes, formatClock, formatCompactNumber, formatNumber, formatRelative, formatUptime, truncate } from "../lib/format";
+import { displayMessageText, displayChatIdentity } from "../lib/message-display";
+import { toastError } from "../lib/toast";
 import StatCard from "../components/StatCard.vue";
 import HourlyBars from "../components/HourlyBars.vue";
 import EmptyState from "../components/EmptyState.vue";
@@ -303,7 +303,7 @@ import LatencyDetail from "../components/LatencyDetail.vue";
 import LoadingSkeleton from "../components/LoadingSkeleton.vue";
 import SkeletonBlock from "../components/SkeletonBlock.vue";
 import TokenUsageBreakdown from "../components/TokenUsageBreakdown.vue";
-import { cacheUsageDisplay } from "../llm-usage";
+import { cacheUsageDisplay } from "../lib/llm-usage";
 
 const pending = ref(true);
 const setupNeeded = ref(false);

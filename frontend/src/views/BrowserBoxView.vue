@@ -385,9 +385,9 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onActivated, onBeforeUnmount, onDeactivated, onMounted, reactive, ref } from "vue";
-import { botScope } from "../bot-scope";
-import { formatTime } from "../format";
-import { pluginForBot } from "../plugin-settings";
+import { botScope } from "../lib/bot-scope";
+import { formatTime } from "../lib/format";
+import { pluginForBot } from "../lib/plugin-settings";
 import { navigate as navigateToView } from "../router";
 import { ArrowLeft, ArrowUp, ChevronDown, Globe, Lock, Maximize2, Minimize2, Plus, RotateCw, Search, UserRound, X } from "@lucide/vue";
 import AgentBrowserPanel from "../components/AgentBrowserPanel.vue";
@@ -426,8 +426,8 @@ import {
   updatePluginSettings,
   type PluginState
 } from "../api";
-import { toastError, toastSuccess } from "../toast";
-import { askConfirm } from "../confirm";
+import { toastError, toastSuccess } from "../lib/toast";
+import { askConfirm } from "../lib/confirm";
 
 /** 一帧画面的元数据。width/height 是页面的 CSS 尺寸，点击坐标按它换算。 */
 interface LiveFrameMeta {

@@ -60,10 +60,10 @@
 import { onMounted, ref, watch } from "vue";
 import { NotebookPen, RefreshCw, Trash2, X } from "@lucide/vue";
 import { deleteSelfNote, listSelfNotes, purgeSelfNotes, type SelfNote } from "../api";
-import { botScope } from "../bot-scope";
-import { formatClock } from "../format";
+import { botScope } from "../lib/bot-scope";
+import { formatClock } from "../lib/format";
 import { navigate } from "../router";
-import { toastError, toastSuccess } from "../toast";
+import { toastError, toastSuccess } from "../lib/toast";
 import EmptyState from "../components/EmptyState.vue";
 import LoadingSkeleton from "../components/LoadingSkeleton.vue";
 

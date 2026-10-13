@@ -163,9 +163,9 @@ import { ChevronLeft, ChevronRight, ImageOff, Trash2, X } from "@lucide/vue";
 import AppSelect, { type AppSelectOption } from "./AppSelect.vue";
 import EmptyState from "./EmptyState.vue";
 import SkeletonBlock from "./SkeletonBlock.vue";
-import { askConfirm } from "../confirm";
-import { demoStickerImage } from "../demo-sticker-image";
-import { toastError, toastSuccess } from "../toast";
+import { askConfirm } from "../lib/confirm";
+import { demoStickerImage } from "../demo/demo-sticker-image";
+import { toastError, toastSuccess } from "../lib/toast";
 import {
   cleanupStickers,
   deleteSticker,

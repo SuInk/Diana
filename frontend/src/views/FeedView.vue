@@ -193,11 +193,11 @@ import {
   type FeedKind,
   type FeedPost
 } from "../api";
-import { demoFeedImage } from "../demo-sticker-image";
-import { formatRelative, formatTime } from "../format";
-import { botScope } from "../bot-scope";
-import { askConfirm } from "../confirm";
-import { toastError, toastSuccess } from "../toast";
+import { demoFeedImage } from "../demo/demo-sticker-image";
+import { formatRelative, formatTime } from "../lib/format";
+import { botScope } from "../lib/bot-scope";
+import { askConfirm } from "../lib/confirm";
+import { toastError, toastSuccess } from "../lib/toast";
 import EmptyState from "../components/EmptyState.vue";
 import LoadingSkeleton from "../components/LoadingSkeleton.vue";
 import Modal from "../components/Modal.vue";

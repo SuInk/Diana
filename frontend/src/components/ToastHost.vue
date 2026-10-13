@@ -17,5 +17,5 @@
 
 <script setup lang="ts">
 import { CheckCircle2, Sparkles, TriangleAlert, X } from "@lucide/vue";
-import { dismiss, toastState } from "../toast";
+import { dismiss, toastState } from "../lib/toast";
 </script>
