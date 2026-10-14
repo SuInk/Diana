@@ -132,3 +132,20 @@ func TestWebSearchRecencyReachesEngineURL(t *testing.T) {
 		t.Fatalf("recency not applied: %v", requested)
 	}
 }
+
+func TestSpeculativeQueryGetsEntityOnlyCompanion(t *testing.T) {
+	candidates, err := webSearchCandidates(map[string]any{"query": "Gemini 4 release date Google"}, 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(candidates) != 2 || candidates[1].Query != "Gemini 4 Google" || candidates[1].Strategy != "entity_only" {
+		t.Fatalf("candidates = %+v", candidates)
+	}
+	plain, _ := webSearchCandidates(map[string]any{"query": "Gemini 4 Google"}, 4)
+	if len(plain) != 1 {
+		t.Fatalf("plain query expanded: %+v", plain)
+	}
+	if got := stripSpeculativeSearchTerms("什么时候出"); got != "" {
+		t.Fatalf("empty remainder kept: %q", got)
+	}
+}

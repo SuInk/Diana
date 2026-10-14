@@ -144,6 +144,14 @@ func webSearchCandidates(input map[string]any, limit int) ([]webSearchQueryCandi
 		}
 		appendCandidate(query, strategy)
 	}
+	// 线上三轮回放：flash-low 问「Gemini 4」时一大半只搜一次「Gemini 4 release date」，
+	// 前排全是发布前的爆料，它就答「还没影」；提示词里要求补一条只写名称的检索词，它
+	// 一次都没照做。这里在工具侧补上：改的是发出去的检索词，不评判答案。
+	for _, query := range supplied {
+		if stripped := stripSpeculativeSearchTerms(query); stripped != "" {
+			appendCandidate(stripped, "entity_only")
+		}
+	}
 	if len(candidates) == 0 {
 		return nil, errors.New("query is empty after privacy filtering")
 	}
@@ -178,6 +186,24 @@ func webSearchSiteFilter(raw any) string {
 		sites = append(sites, "site:"+host)
 	}
 	return strings.Join(sites, " OR ")
+}
+
+// speculativeSearchTerms 是会把结果带向「什么时候出、传闻、爆料」的词。只写名称的
+// 检索词更容易排到官方发布页。单独的 release、launch 不算：「Diana release」多半是
+// 在找更新日志。
+var speculativeSearchTerms = regexp.MustCompile(`(?i)\b(release\s+date|launch\s+date|when\s+will|rumou?rs?|leaks?|leaked|expected|upcoming)\b|发布时间|发布日期|什么时候出|何时发布|何时推出|上线时间|爆料|传闻|泄露|预计`)
+
+// stripSpeculativeSearchTerms 去掉 query 里偏预测的词，返回只剩实体名的检索词；没有
+// 这类词、或去掉后什么都不剩时返回空。
+func stripSpeculativeSearchTerms(query string) string {
+	if !speculativeSearchTerms.MatchString(query) {
+		return ""
+	}
+	stripped := normalizeWebSearchQuery(speculativeSearchTerms.ReplaceAllString(query, " "))
+	if len([]rune(stripped)) < 2 {
+		return ""
+	}
+	return stripped
 }
 
 func normalizeWebSearchQuery(query string) string {
