@@ -5,7 +5,6 @@
   <div>
     <header class="view-header">
       <div class="view-title">
-        <h2>人员</h2>
         <p>机器人记住的人员画像、长期记忆与好感度</p>
       </div>
       <div class="view-actions">

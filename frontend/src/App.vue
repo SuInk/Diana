@@ -49,14 +49,21 @@
         </div>
       </div>
 
-      <div v-if="scopeOptions.length > 1" class="bot-scope">
+      <div v-if="scopeOptions.length > 0" class="bot-scope">
         <AppSelect
           id="app-bot-scope"
           :model-value="botScope"
           :options="scopeOptions"
           aria-label="当前机器人"
-          @update:model-value="setBotScope"
-        />
+          @update:model-value="requestBotScope"
+        >
+          <template #footer>
+            <button type="button" class="app-select-item" @click="requestBotCreate">
+              <Plus :size="14" aria-hidden="true" />
+              <span class="app-select-item-label"><span class="app-select-item-text">添加机器人</span></span>
+            </button>
+          </template>
+        </AppSelect>
       </div>
 
       <nav class="nav-sections" aria-label="主导航">
@@ -73,12 +80,24 @@
           >
             <component :is="navIcon(item.id)" :size="17" aria-hidden="true" />
             <span class="nav-label">{{ item.label }}</span>
-            <span v-if="item.id === 'space' && spaceUnread" class="nav-dot" aria-label="小窝有新动静"></span>
+            <span v-if="item.id === 'users' && spaceUnread" class="nav-dot" aria-label="小窝有新动静"></span>
           </button>
         </div>
       </nav>
 
       <div class="nav-footer">
+        <button
+          v-for="item in footerNavItems"
+          :key="item.id"
+          class="nav-action"
+          :class="{ active: isActiveNav(item.id) }"
+          type="button"
+          :title="item.hint"
+          @click="go(item.id)"
+        >
+          <component :is="navIcon(item.id)" :size="16" aria-hidden="true" />
+          <span class="nav-label">{{ item.label }}</span>
+        </button>
         <button class="nav-action" type="button" :title="themeToggleLabel" @click="cycleTheme">
           <component :is="themeIcon" :size="16" aria-hidden="true" />
           <span class="nav-label">{{ themeModeLabel }}</span>
@@ -123,6 +142,18 @@
         </span>
         <span v-if="health" class="topbar-uptime mono">已运行 {{ formatUptime(health.uptime_seconds) }}</span>
         <div class="topbar-actions">
+        <!-- 管理对话是随时可能要用的求助入口（装扩展、排查问题），做成全局入口，不占侧栏。 -->
+        <button
+          class="btn ghost small icon-only topbar-chat"
+          :class="{ active: currentView === 'admin-chat' }"
+          type="button"
+          title="管理对话：安装扩展与排查问题"
+          aria-label="管理对话"
+          :aria-pressed="currentView === 'admin-chat'"
+          @click="go('admin-chat')"
+        >
+          <MessageCircle :size="16" aria-hidden="true" />
+        </button>
         <a
           class="btn ghost small icon-only topbar-repo"
           :href="repositoryURL"
@@ -162,7 +193,7 @@
         </div>
         <div v-else :aria-busy="scopeSwitching" :inert="scopeSwitching" :class="{ 'scope-content-pending': scopeSwitching }">
           <KeepAlive :key="botScope" :max="VIEW_CACHE_LIMIT">
-            <component :is="activeView" :key="currentView" />
+            <component :is="activeView" :key="viewKey" />
           </KeepAlive>
         </div>
       </main>
@@ -190,12 +221,12 @@ import {
   FileClock,
   Heart,
   FolderOpen,
-  Globe,
   LayoutGrid,
   MessageCircle,
   LogOut,
   PanelLeftClose,
   PanelLeftOpen,
+  Plus,
   PlugZap,
   Moon,
   Sun,
@@ -207,9 +238,9 @@ import {
   Users,
   Wrench
 } from "@lucide/vue";
-import { currentView, navItemForView, navSections, navigate, type ViewID } from "./router";
+import { currentView, navItemForView, navItems, navSections, navigate, type ViewID } from "./router";
 import { markSpaceSeen, refreshSpaceUnread, spaceUnread } from "./lib/space-unread";
-import { ALL_PROFILES, botScope, reconcileBotScope, setBotScope } from "./lib/bot-scope";
+import { ALL_PROFILES, botCreateRequested, botScope, reconcileBotScope, requestBotScope, setBotScope } from "./lib/bot-scope";
 import { scopeSwitching } from "./lib/scope-transition";
 import AppSelect from "./components/AppSelect.vue";
 import { startEventStream, stream, pushStatusSnapshot } from "./lib/stream";
@@ -239,9 +270,7 @@ const PluginsView = defineAsyncComponent(() => import("./views/PluginsView.vue")
 const GroupsView = defineAsyncComponent(() => import("./views/GroupsView.vue"));
 const MemoryView = defineAsyncComponent(() => import("./views/MemoryView.vue"));
 const SettingsView = defineAsyncComponent(() => import("./views/SettingsView.vue"));
-const BrowserBoxView = defineAsyncComponent(() => import("./views/BrowserBoxView.vue"));
 const WorkspaceView = defineAsyncComponent(() => import("./views/WorkspaceView.vue"));
-const OwnSpaceView = defineAsyncComponent(() => import("./views/OwnSpaceView.vue"));
 
 const VIEW_CACHE_LIMIT = 16;
 
@@ -257,10 +286,10 @@ const viewComponents: Record<ViewID, Component> = {
   groups: GroupsView,
   users: MemoryView,
   notebook: MemoryView,
-  feed: OwnSpaceView,
-  space: OwnSpaceView,
-  "self-notes": OwnSpaceView,
-  browser: BrowserBoxView,
+  feed: MemoryView,
+  space: MemoryView,
+  "self-notes": MemoryView,
+  browser: PluginsView,
   workspace: WorkspaceView,
   logs: RecordsView,
   favorability: RecordsView,
@@ -358,7 +387,7 @@ const SETUP_DISMISS_KEY = "dqb-next:setup-seen";
 const viewTitles: Record<ViewID, string> = {
   dashboard: "总览",
   "admin-chat": "管理对话",
-  browser: "浏览器",
+  browser: "扩展",
   workspace: "文件",
   events: "运行记录",
   tasks: "提醒与订阅",
@@ -367,11 +396,11 @@ const viewTitles: Record<ViewID, string> = {
   bot: "机器人",
   plugins: "扩展",
   groups: "群管理",
-  users: "记忆",
-  notebook: "记忆",
-  feed: "动态",
-  space: "钱包",
-  "self-notes": "自述",
+  users: "档案",
+  notebook: "档案",
+  feed: "档案",
+  space: "档案",
+  "self-notes": "档案",
   logs: "运行记录",
   favorability: "运行记录",
   settings: "设置"
@@ -409,14 +438,14 @@ async function loadBotProfiles(required = false): Promise<void> {
   }
 }
 
-// 只有真的有多台机器人时才显示切换器：单机器人部署没有可切的东西，多一个下拉
-// 只是噪声。
+// 有机器人就显示切换器：单机器人部署没有可切的，但菜单底部的「添加机器人」
+// 是加第二台的入口。「全部机器人」只在真有多台时才有意义。
 const scopeOptions = computed(() => {
-  if (botProfiles.value.length < 2) {
+  if (!botProfiles.value.some((profile) => profile.id)) {
     return [];
   }
   return [
-    ...(currentView.value === "groups" ? [] : [{ value: ALL_PROFILES, label: "全部机器人" }]),
+    ...(currentView.value === "groups" || botProfiles.value.length < 2 ? [] : [{ value: ALL_PROFILES, label: "全部机器人" }]),
     ...botProfiles.value
       .filter((profile) => profile.id)
       .map((profile) => ({ value: profile.id ?? "", label: profile.name || profile.platform || "未命名机器人", hint: profile.platform }))
@@ -429,16 +458,20 @@ function ensureConcreteGroupScope(): void {
   if (first) setBotScope(first);
 }
 const sections = computed(() => navSections());
+const footerNavItems = navItems.filter((item) => item.footer);
 
 const viewTitle = computed(() => viewTitles[currentView.value]);
 
-// 日志之于「记录」、笔记本之于「记忆」都是页内的一档，停在那一档时侧边栏要继续
+// 日志之于「记录」、笔记本之于「档案」都是页内的一档，停在那一档时侧边栏要继续
 // 亮着它所属的那一项，别让人以为自己掉出了导航。归属关系写在 navItems 的 covers
 // 里，这里不再逐个视图硬编码。
 function isActiveNav(id: ViewID): boolean {
   return navItemForView(currentView.value) === id;
 }
 const activeView = computed(() => viewComponents[currentView.value] ?? DashboardView);
+// 浏览器是扩展页里的一档，但有自己的地址。两个地址共用同一个缓存实例，
+// 否则切到浏览器档会重新挂一份扩展页，插件列表白加载一遍，另外几档的状态也对不上。
+const viewKey = computed(() => (currentView.value === "browser" ? "plugins" : currentView.value));
 
 const botSummary = computed(() => {
   const status = stream.status;
@@ -490,7 +523,6 @@ function navIcon(id: ViewID): Component {
     users: BookUser,
     feed: Newspaper,
     space: House,
-    browser: Globe,
     workspace: FolderOpen,
     logs: FileClock,
     favorability: Heart,
@@ -502,6 +534,11 @@ function navIcon(id: ViewID): Component {
 function go(view: ViewID): void {
   navigate(view);
   drawerOpen.value = false;
+}
+
+function requestBotCreate(): void {
+  botCreateRequested.value = true;
+  go("bot");
 }
 
 // 版本号只在进程重启时会变，而 SSE 断开重连正是那个信号：升级完成、手动重启、

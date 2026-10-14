@@ -14,7 +14,6 @@
   <section class="stack">
     <div class="card">
       <div class="card-header">
-        <h2>文件</h2>
         <span class="card-sub">Agent 工作区里的文件：各分区的占用和清理规则，点一块进去逐层浏览、预览、下载；删除的先进回收站</span>
       </div>
       <div class="card-body stack">

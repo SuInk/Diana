@@ -16,7 +16,6 @@
   <section class="stack">
     <div class="card">
       <div class="card-header">
-        <h2>浏览器</h2>
         <span class="card-sub">机器人用到的浏览器都在这里，全都复用这台机器上的 Chrome，区别在用哪份登录态</span>
       </div>
       <div class="card-body stack">

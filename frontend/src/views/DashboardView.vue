@@ -142,18 +142,6 @@
               <SkeletonBlock v-if="initialLoading" width="48px" height="18px" />
               <span v-else class="info-value">{{ stats ? `${stats.bot.plugins_enabled} / ${stats.bot.plugins_total}` : "—" }}</span>
             </div>
-            <div class="info-row">
-              <span class="muted info-label">实时</span>
-              <span
-                class="info-value"
-                :class="stream.connected ? 'text-ok' : 'text-err'"
-                :title="
-                  stream.connected
-                    ? '服务器实时推送（SSE）通道正常，页面数据会自动刷新'
-                    : '实时推送已断开，正在重连；期间页面数据可能不是最新'
-                "
-              >{{ stream.connected ? "已连接" : "重连中…" }}</span>
-            </div>
             <div v-if="status?.last_error" class="info-row">
               <span class="muted info-label">错误</span>
               <span class="info-value text-err" :title="status.last_error">{{ status.last_error }}</span>

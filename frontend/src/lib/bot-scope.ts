@@ -27,6 +27,10 @@ function readStored(): string {
 
 export const botScope = ref<string>(readStored());
 
+// 侧栏选择器里的「添加机器人」：机器人页可能已经缓存着，路由不变时收不到信号，
+// 所以用一个标志位传过去，机器人页看到就打开选平台的弹窗，处理完清掉。
+export const botCreateRequested = ref(false);
+
 export function setBotScope(profileID: string): void {
   const next = (profileID ?? "").trim();
   if (botScope.value === next) {
@@ -43,6 +47,21 @@ export function setBotScope(profileID: string): void {
   } catch {
     // 存不下就只在本次会话里生效，不该因此中断切换。
   }
+}
+
+// 切换作用域会把各页的缓存整个换掉，正在编辑的机器人配置也随之丢弃。有未保存
+// 修改的页面在这里登记一个守卫，用户切换前先问一句；返回 false 就不切。
+let leaveGuard: (() => Promise<boolean>) | null = null;
+
+export function setScopeLeaveGuard(guard: (() => Promise<boolean>) | null): void {
+  leaveGuard = guard;
+}
+
+/** 用户主动切换作用域：先过守卫。删掉机器人后的自动纠正仍直接走 setBotScope。 */
+export async function requestBotScope(profileID: string): Promise<void> {
+  if ((profileID ?? "").trim() === botScope.value) return;
+  if (leaveGuard && !(await leaveGuard())) return;
+  setBotScope(profileID);
 }
 
 // reconcileBotScope 在配置档列表变化后校正作用域：选中的机器人被删掉时退回「全部」，

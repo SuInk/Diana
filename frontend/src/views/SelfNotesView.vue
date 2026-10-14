@@ -9,11 +9,10 @@
   <div>
     <header class="view-header">
       <div class="view-title">
-        <h2>自述</h2>
         <p>她自己记下的关于自己的观察：说话习惯、偏好和毛病，跨群生效。人只能看和删，写只有她自己能写。</p>
       </div>
       <div class="view-actions">
-        <button class="btn ghost" type="button" :disabled="busy" @click="reload">
+        <button class="btn" type="button" :disabled="busy" @click="reload">
           <RefreshCw :size="15" aria-hidden="true" />
           刷新
         </button>

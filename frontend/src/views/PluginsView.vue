@@ -4,10 +4,13 @@
 <template>
   <div class="extensions-view">
     <div class="segmented extension-tabs" role="tablist" aria-label="扩展类型">
-      <button v-for="tab in extensionTabs" :key="tab.value" type="button" role="tab" :aria-selected="extensionTab === tab.value" :class="{active:extensionTab === tab.value}" @click="changeExtensionTab(tab.value)">{{ tab.label }}</button>
+      <button v-for="tab in extensionTabs" :key="tab.value" type="button" role="tab" :aria-selected="activeTab === tab.value" :class="{active:activeTab === tab.value}" @click="changeExtensionTab(tab.value)">{{ tab.label }}</button>
     </div>
-    <ExtensionManager v-if="extensionTab === 'skill' || extensionTab === 'mcp'" ref="extensionManager" :key="extensionTab" :kind="extensionTab" />
-  <div v-show="extensionTab === 'plugins'" class="plugins-view">
+    <!-- 浏览器也是给机器人加的能力（网页渲染本身就是插件），放在扩展里当一档；
+         它有自己的地址 /browser，旧书签照样能用。 -->
+    <BrowserBoxView v-if="showBrowser" />
+    <ExtensionManager v-if="!showBrowser && (extensionTab === 'skill' || extensionTab === 'mcp')" ref="extensionManager" :key="extensionTab" :kind="extensionTab" />
+  <div v-show="activeTab === 'plugins'" class="plugins-view">
     <header class="view-header plugins-view-header">
       <div class="view-title">
         <p>{{ botScope ? "插件开关按机器人独立，配置全局共享" : "共享插件配置 · 这里的开关统一所有机器人，选择机器人后可单独调整" }}</p>
@@ -773,17 +776,23 @@
 
 <script setup lang="ts">
 import { useConfigurationRefresh } from "../lib/configuration-sync";
-import { computed, onActivated, onDeactivated, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, defineAsyncComponent, onActivated, onDeactivated, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import ExtensionManager from "../components/ExtensionManager.vue";
-const extensionTabs = [{value:'plugins' as const,label:'插件'},{value:'skill' as const,label:'Skills'},{value:'mcp' as const,label:'MCP'}];
+const extensionTabs = [{value:'plugins' as const,label:'插件'},{value:'skill' as const,label:'Skills'},{value:'mcp' as const,label:'MCP'},{value:'browser' as const,label:'浏览器'}];
 type ExtensionTab = typeof extensionTabs[number]['value'];
-const extensionTab = ref<ExtensionTab>('plugins');
+const BrowserBoxView = defineAsyncComponent(() => import("./BrowserBoxView.vue"));
+// 浏览器这一档直接读路由；其余三档没有各自的地址，记在本地。
+const extensionTab = ref<Exclude<ExtensionTab, 'browser'>>('plugins');
+const showBrowser = computed(() => currentView.value === 'browser');
+const activeTab = computed<ExtensionTab>(() => showBrowser.value ? 'browser' : extensionTab.value);
 const extensionManager = ref<InstanceType<typeof ExtensionManager> | null>(null);
 async function changeExtensionTab(value:ExtensionTab) {
-  if (value === extensionTab.value) return;
+  if (value === activeTab.value) return;
   if (extensionManager.value && !await extensionManager.value.prepareLeave()) return;
   if (settingsTarget.value) { await closeSettings(); if (settingsTarget.value) return; }
+  if (value === 'browser') { navigate('browser'); return; }
   extensionTab.value=value;
+  if (showBrowser.value) navigate('plugins');
 }
 import { ArrowRight, ChevronDown, Download, LayoutGrid, RefreshCw, Rows3, Search, SlidersHorizontal } from "@lucide/vue";
 import {
@@ -825,7 +834,7 @@ import StickerLibrary from "../components/StickerLibrary.vue";
 import VRChatStatusPanel from "../components/VRChatStatusPanel.vue";
 import RSSWatchManager from "../components/RSSWatchManager.vue";
 import PluginDependencyList from "../components/PluginDependencyList.vue";
-import { navigate, viewQuery } from "../router";
+import { currentView, navigate, viewQuery } from "../router";
 import { botScope } from "../lib/bot-scope";
 import { extensionLayout, setExtensionLayout } from "../lib/extension-layout";
 import { pluginForBot } from "../lib/plugin-settings";

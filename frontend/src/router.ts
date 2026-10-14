@@ -48,6 +48,8 @@ export interface NavItem {
   // covers 列出这一项还代表哪些视图。合并成一页多档之后，档位仍是各自的路由
   // 地址，侧边栏得知道停在哪个地址时该亮哪一项，否则用户会以为自己掉出了导航。
   covers?: ViewID[];
+  // footer 的条目不进主列表，放在侧边栏底部，和主题、版本这些控制台自身的东西在一起。
+  footer?: boolean;
 }
 
 // 顺序按「装机器人时的实际操作顺序」排：先看总览，再配模型、机器人、扩展和各个群，
@@ -56,16 +58,13 @@ export const navItems: NavItem[] = [
   { id: "dashboard", label: "总览", hint: "运行状态与实时事件" },
   { id: "provider", label: "提供商", hint: "提供商接入、凭据与模型分组", group: "setup" },
   { id: "bot", label: "机器人", hint: "OneBot v11 接入与行为", group: "setup" },
-  { id: "plugins", label: "扩展", hint: "插件、Skills 与 MCP", group: "setup" },
+  { id: "plugins", label: "扩展", hint: "插件、Skills、MCP 与浏览器", group: "setup", covers: ["browser"] },
   { id: "groups", label: "群管理", hint: "群管理员自助配置", group: "setup" },
-  { id: "admin-chat", label: "管理对话", hint: "安装扩展与排查问题", group: "operate" },
-  { id: "users", label: "记忆", hint: "机器人记住的人和事", group: "operate", covers: ["notebook"] },
-  { id: "space", label: "小窝", hint: "她自己的空间：零花钱、自述、动态和日记", group: "operate", covers: ["self-notes", "feed"] },
+  { id: "users", label: "档案", hint: "机器人记住的人和事，以及她自己的：零花钱、自述、动态和日记", group: "operate", covers: ["notebook", "space", "self-notes", "feed"] },
   { id: "tasks", label: "任务", hint: "提醒、周期查询与仓库订阅", group: "operate" },
-  { id: "browser", label: "浏览器", hint: "Diana 内置浏览器：看画面、自己上手", group: "operate" },
   { id: "workspace", label: "文件", hint: "Agent 工作区里的文件：按分区浏览、预览、下载与删除", group: "operate" },
   { id: "events", label: "记录", hint: "消息处理、回复决策、运行日志与好感与画像", group: "operate", covers: ["logs", "favorability"] },
-  { id: "settings", label: "设置", hint: "主题与系统更新" }
+  { id: "settings", label: "设置", hint: "主题与系统更新", footer: true }
 ];
 
 // navItemCovers 判断某个视图该由哪一个侧边栏条目代表。
@@ -83,6 +82,7 @@ export function navItemForView(view: ViewID): ViewID | undefined {
 export function navSections(): { group?: NavGroup; items: NavItem[] }[] {
   const sections: { group?: NavGroup; items: NavItem[] }[] = [];
   for (const item of navItems) {
+    if (item.footer) continue;
     const last = sections[sections.length - 1];
     if (last && last.group?.id === item.group) {
       last.items.push(item);

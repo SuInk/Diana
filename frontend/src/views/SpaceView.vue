@@ -5,11 +5,10 @@
   <div>
     <header class="view-header">
       <div class="view-title">
-        <h2>钱包</h2>
         <p>她的零花钱账本。全是虚拟数字，不接任何真实支付；以后她想买东西时要你点头。</p>
       </div>
       <div class="view-actions">
-        <button class="btn ghost" type="button" :disabled="loading" @click="reload">
+        <button class="btn" type="button" :disabled="loading" @click="reload">
           <RefreshCw :size="15" aria-hidden="true" />
           刷新
         </button>

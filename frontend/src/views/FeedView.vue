@@ -5,28 +5,27 @@
   <div>
     <header class="view-header">
       <div class="view-title">
-        <h2>动态</h2>
         <p>
           机器人自己发的动态和日记，可以配图。动态由它在对话里写下，只有主人让它发时才会发，这里不能代笔，也不会发到任何群或私聊。
           你可以在动态下评论和回复；它翻动态时会看到评论，并可以回复你。
         </p>
       </div>
       <div class="view-actions">
-        <button class="btn ghost" type="button" :disabled="loading" @click="reload">
+        <button class="btn" type="button" :disabled="loading" @click="reload">
           <RefreshCw :size="15" aria-hidden="true" />
           刷新
         </button>
       </div>
     </header>
 
-    <div class="cluster" style="margin-bottom: 12px; gap: 8px">
+    <div class="segmented" role="radiogroup" aria-label="按类型筛选" style="margin-bottom: 12px">
       <button
         v-for="option in kindOptions"
         :key="option.value"
-        class="btn small"
-        :class="{ ghost: kind !== option.value }"
         type="button"
-        :aria-pressed="kind === option.value"
+        role="radio"
+        :aria-checked="kind === option.value"
+        :class="{ active: kind === option.value }"
         @click="setKind(option.value)"
       >
         {{ option.label }}

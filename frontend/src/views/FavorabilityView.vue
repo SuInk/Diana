@@ -17,7 +17,6 @@
 
     <header class="view-header">
       <div class="view-title">
-        <h2>好感与画像</h2>
         <p>后台每一次好感度与画像评估的结果</p>
       </div>
     </header>

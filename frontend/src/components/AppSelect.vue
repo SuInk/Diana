@@ -45,6 +45,10 @@
           </span>
         </button>
         </template>
+        <!-- 菜单底部的动作项（比如「添加机器人」），不是可选的值；点了先收起菜单。 -->
+        <div v-if="$slots.footer" class="app-select-footer" @click="close">
+          <slot name="footer" />
+        </div>
       </div>
     </Teleport>
   </div>
@@ -250,6 +254,16 @@ onBeforeUnmount(() => {
   font: inherit;
   font-size: 12px;
   outline: none;
+}
+
+.app-select-footer {
+  margin-top: 4px;
+  padding-top: 4px;
+  border-top: 1px solid var(--border);
+}
+
+.app-select-footer > :deep(button) {
+  width: 100%;
 }
 
 .app-select-group {

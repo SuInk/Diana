@@ -2007,6 +2007,17 @@ code {
   color: var(--text);
 }
 
+/* 底部的「设置」是导航项，停在那一页时和主列表一样亮起来。 */
+.nav-action.active {
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+  font-weight: 600;
+}
+
+:root[data-theme="dark"] .nav-action.active {
+  color: var(--accent);
+}
+
 /* 人设生成器与「自定义注入文案」折叠区 */
 .field-head {
   display: flex;
@@ -2155,6 +2166,11 @@ a.nav-action {
 }
 
 /* 顶栏 GitHub 入口：只留图标，和退出登录并排，用同一套 btn ghost small 外观。 */
+.topbar-chat.active {
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+}
+
 .topbar-repo {
   flex: none;
   text-decoration: none;
@@ -2178,7 +2194,14 @@ a.nav-action {
   color: var(--text);
 }
 
-/* h2 是顺栏给不了的子页面标题（日志、Skills、上下文……）。 */
+/* 说明文字长的页面（动态、笔记本）以前会独占一行，把动作按钮挤到下一行。
+   给它一个可收缩的基准宽度，说明自己折行，按钮留在同一行右侧。 */
+.view-header .view-title {
+  flex: 1 1 240px;
+  min-width: 0;
+}
+
+/* h2 只留给顶栏和页签都给不了的标题（正在编辑的机器人名）；页签已经写着的子页不再重复。 */
 .view-header .view-title h2 {
   margin: 0;
   font-size: 20px;

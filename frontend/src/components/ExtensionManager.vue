@@ -2,7 +2,7 @@
   <section class="extension-manager">
     <!-- 工具条和插件页共用 .plugins-view-header 那几条：控件同高、不换行。 -->
     <header class="view-header plugins-view-header">
-      <div class="view-title"><h2>{{ kind === 'skill' ? 'Skills' : 'MCP' }}</h2><p>配置全局共享 · {{ botScope ? '启用状态与权限仅影响当前机器人' : kind === 'mcp' ? '这里的开关是所有机器人的默认，选择机器人后可单独调整' : '这里的开关统一所有机器人，选择机器人后可单独调整' }}</p></div>
+      <div class="view-title"><p>配置全局共享 · {{ botScope ? '启用状态与权限仅影响当前机器人' : kind === 'mcp' ? '这里的开关是所有机器人的默认，选择机器人后可单独调整' : '这里的开关统一所有机器人，选择机器人后可单独调整' }}</p></div>
       <div class="view-actions">
         <div class="plugin-search">
           <Search :size="14" aria-hidden="true" />

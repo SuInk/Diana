@@ -5,7 +5,7 @@
   <div ref="viewRoot" class="assistant-view">
     <header ref="viewHeader" class="view-header">
       <div class="view-title">
-        <button v-if="page === 'edit'" class="btn ghost back-link" type="button" @click="leaveEditor">
+        <button v-if="page === 'edit'" class="btn ghost back-link" type="button" @click="backToList">
           <ArrowLeft :size="16" aria-hidden="true" />
           机器人列表
         </button>
@@ -2296,7 +2296,7 @@
 
 <script setup lang="ts">
 import { navigate, viewQuery } from "../router";
-import { botScope } from "../lib/bot-scope";
+import { botCreateRequested, botScope, setScopeLeaveGuard } from "../lib/bot-scope";
 import { copyBotConfiguration } from "../lib/bot-config-copy";
 import { findWebSocketConnectionConflict } from "../lib/bot-connection-conflicts";
 import { maximumModelRequestTimeoutSeconds, modelRequestTimeoutMilliseconds, modelRequestTimeoutSeconds, useConfigurationRefresh } from "../lib/configuration-sync";
@@ -4703,6 +4703,7 @@ function setForm(config: BotProfileConfig): void {
   // 换一个配置档就得重新索取，别把上一档的明文状态带过来。
   tokenRevealed.value = emptyRevealState();
   setRoleForm(config.model_roles);
+  markEditorClean();
 }
 
 function applyConfig(config: BotProfileConfig): void {
@@ -5001,6 +5002,62 @@ async function editProfile(profile: BotProfileConfig): Promise<void> {
   page.value = "edit";
 }
 
+// 未保存修改的判断：保存时会读的那些状态拼成一份快照，载入表单时记下基准，之后
+// 和当前值比。不逐个字段维护脏标记，字段再多也不会漏掉新加的开关。基准等一个
+// tick 再取，表单载入后组件会做一轮归一化，那不算用户改的。
+function editorSnapshot(): string {
+  return JSON.stringify([
+    form.value,
+    roleForm.value,
+    triggersDraft.value,
+    welcomeTemplatesDraft.value,
+    allowlistDraft.value,
+    privateAllowedUsers.value,
+    Object.values(tokenDrafts).map((draft) => draft.value),
+    modelRequestTimeoutDraft.value,
+    replyToneDraft.value
+  ]);
+}
+// 媒体回源基址是全局设置，异步单独加载，不进快照；和加载时的值比，规则同保存。
+const mediaBaseURLDirty = computed(() => {
+  const loaded = mediaBaseURLLoaded.value;
+  return !!loaded && mediaBaseURLDraft.value.trim().replace(/\/+$/, "") !== loaded.base_url;
+});
+const editorBaseline = ref("");
+function markEditorClean(): void {
+  void nextTick(() => {
+    editorBaseline.value = editorSnapshot();
+  });
+}
+const editorDirty = computed(() => page.value === "edit" && ((editorBaseline.value !== "" && editorSnapshot() !== editorBaseline.value) || mediaBaseURLDirty.value));
+
+async function confirmDiscardChanges(): Promise<boolean> {
+  if (!editorDirty.value) return true;
+  return askConfirm({
+    title: "放弃未保存的修改？",
+    message: `「${form.value?.name || "新机器人"}」还有没保存的修改，离开后会丢失。`,
+    confirmLabel: "放弃修改",
+    danger: true
+  });
+}
+
+async function backToList(): Promise<void> {
+  if (await confirmDiscardChanges()) leaveEditor();
+}
+
+// 切换机器人、关闭或刷新页面都会丢掉表单，有修改时先问。
+setScopeLeaveGuard(confirmDiscardChanges);
+function warnBeforeUnload(event: BeforeUnloadEvent): void {
+  if (!editorDirty.value) return;
+  event.preventDefault();
+  event.returnValue = "";
+}
+window.addEventListener("beforeunload", warnBeforeUnload);
+onBeforeUnmount(() => {
+  setScopeLeaveGuard(null);
+  window.removeEventListener("beforeunload", warnBeforeUnload);
+});
+
 function leaveEditor(): void {
   // 放弃未保存的修改：按表单里这台机器人的 ID 找回列表里保存过的配置。
   const current = profiles.value.find((profile) => profile.id === form.value?.id);
@@ -5117,27 +5174,48 @@ async function load(): Promise<void> {
 onMounted(() => {
   trackHeaderHeight();
   void loadAgentSafeModeCatalog();
-  void load().then(openRequestedTab);
+  void load().then(openScopedProfile);
   void loadMediaBaseURL();
   modelHealthTimer = window.setInterval(() => {
     if (page.value === "edit" && editorTab.value === "model") void loadModelHealth();
   }, 10_000);
 });
 
+// 侧栏选择器里点了「添加机器人」：回到列表并打开选平台的弹窗。有未保存的修改
+// 时和「返回列表」一样先确认。
+watch(
+  botCreateRequested,
+  async (requested) => {
+    if (!requested) return;
+    botCreateRequested.value = false;
+    if (page.value === "edit") {
+      if (!(await confirmDiscardChanges())) return;
+      leaveEditor();
+    }
+    platformPickerOpen.value = true;
+  },
+  { immediate: true }
+);
+
 watch(editorTab, (tab) => {
   if (tab === "model") void loadModelHealth();
 });
 
+// 侧栏已经选了一台机器人，就直接进它的配置，不用在列表里再点一次同一台；
+// 选「全部机器人」时停在列表，新建、复制、删除和消息互通这些跨机器人的事在那里做。
+// 切换作用域会整页重新挂载，所以只在挂载时判断一次，返回按钮照样能回列表。
+//
 // 别处（运行记录里的上下文构成）跳过来时带着 ?tab=context：那边看到工具占了多少，
-// 这边才是改它的地方。跳过来要落在正确的机器人上，所以按顶栏的作用域挑；没选作用域
-// 又只有一台时就是它，再多就停在列表让人自己点。
-function openRequestedTab(): void {
+// 这边才是改它的地方。没选作用域又只有一台时就是它，再多就停在列表让人自己点。
+function openScopedProfile(): void {
+  if (platformPickerOpen.value) return;
   const requested = viewQuery().get("tab") as EditorTab | null;
-  if (!requested || !editorTabs.some((tab) => tab.key === requested)) return;
-  const target = profiles.value.find((profile) => profile.id === botScope.value) ?? (profiles.value.length === 1 ? profiles.value[0] : undefined);
+  const validTab = requested && editorTabs.some((tab) => tab.key === requested) ? requested : null;
+  const scoped = profiles.value.find((profile) => profile.id === botScope.value);
+  const target = scoped ?? (validTab && profiles.value.length === 1 ? profiles.value[0] : undefined);
   if (!target) return;
   void editProfile(target).then(() => {
-    editorTab.value = requested;
+    if (validTab) editorTab.value = validTab;
   });
 }
 useConfigurationRefresh(["llm"], async () => {

@@ -21,7 +21,7 @@ function appHarness(overrides = {}) {
     getConfig: async () => ({ api_key_configured: true }), checkForUpdate: async () => ({}),
     ...overrides
   };
-  const router = { currentView, navigate: view => { currentView.value = view; }, navSections: () => [], navItemForView: v => v };
+  const router = { currentView, navigate: view => { currentView.value = view; }, navItems: [], navSections: () => [], navItemForView: v => v };
   const scope = vue.effectScope();
   const context = vm.createContext({ exports: {}, console, window: {
     matchMedia: () => ({ matches: false, addEventListener() {}, removeEventListener() {} }),
