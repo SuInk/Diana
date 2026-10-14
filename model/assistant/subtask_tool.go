@@ -6,6 +6,7 @@ package assistant
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -297,12 +298,12 @@ func (t *dianaSubtaskTool) runBatchTask(ctx context.Context, task subtaskRequest
 }
 
 func subtaskStatus(err error) string {
-	switch err {
-	case nil:
+	switch {
+	case err == nil:
 		return "completed"
-	case context.DeadlineExceeded:
+	case errors.Is(err, context.DeadlineExceeded):
 		return "timed_out"
-	case context.Canceled:
+	case errors.Is(err, context.Canceled):
 		return "cancelled"
 	default:
 		return "failed"
@@ -374,10 +375,6 @@ func (r *Runtime) runSubtask(ctx context.Context, cfg BotConfig, group, question
 func (r *Runtime) runSearchSubtask(ctx context.Context, event MessageEvent, task subtaskRequest) (*agent.Response, error) {
 	ctx = withLLMUsageContext(ctx, event)
 	ctx = withLLMUsagePurpose(ctx, "subtask")
-	if err := r.acquireSubtaskSlot(ctx); err != nil {
-		return nil, err
-	}
-	defer r.releaseSubtaskSlot()
 	searchTool, err := r.subtaskWebSearchTool(event)
 	if err != nil {
 		return nil, err
@@ -386,7 +383,7 @@ func (r *Runtime) runSearchSubtask(ctx context.Context, event MessageEvent, task
 	botCfg := r.effectiveConfigForEvent(event).WithDefaults()
 	cfg := agent.Config{WorkDir: AgentWorkspaceDir(), MaxSteps: botCfg.AgentMaxSteps, MaxToolOutputChars: agent.DefaultMaxToolOutputChars,
 		ToolTimeoutMS: int(time.Minute / time.Millisecond), FinalizationReserveMS: agent.DefaultFinalizationReserveMS, CoreTools: []string{agent.WebSearchToolName}}
-	runner, err := agent.NewRunner(newRuntimeAgentLLMProvider(r, ctx), cfg, registry)
+	runner, err := agent.NewRunner(slottedAgentLLMProvider{newRuntimeAgentLLMProvider(r, ctx)}, cfg, registry)
 	if err != nil {
 		_ = registry.Close()
 		return nil, err
@@ -424,6 +421,20 @@ func (r *Runtime) subtaskWebSearchTool(event MessageEvent) (agent.Tool, error) {
 		}
 	}
 	return nil, fmt.Errorf("diana subtask: web_search 当前不可用")
+}
+
+// slottedAgentLLMProvider 只在每次模型调用期间占用全局子调用槽位。search Worker
+// 的整个循环可能跑到 searchSubtaskTimeout，搜索和读页时一直占着会饿死其他子调用。
+type slottedAgentLLMProvider struct {
+	*runtimeAgentLLMProvider
+}
+
+func (p slottedAgentLLMProvider) Generate(ctx context.Context, req llm.GenerateRequest) (*llm.GenerateResponse, error) {
+	if err := p.runtime.acquireSubtaskSlot(ctx); err != nil {
+		return nil, err
+	}
+	defer p.runtime.releaseSubtaskSlot()
+	return p.runtimeAgentLLMProvider.Generate(ctx, req)
 }
 
 func (r *Runtime) acquireSubtaskSlot(ctx context.Context) error {

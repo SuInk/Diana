@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -370,5 +371,18 @@ func TestSubtaskBatchRejectsDuplicateIDsWithoutCallingProvider(t *testing.T) {
 	}
 	if len(provider.requests) != 0 {
 		t.Fatalf("invalid batch reached provider: %d calls", len(provider.requests))
+	}
+}
+
+func TestSubtaskStatusUnwrapsContextErrors(t *testing.T) {
+	cases := map[string]error{
+		"timed_out": fmt.Errorf("agent run: %w", context.DeadlineExceeded),
+		"cancelled": fmt.Errorf("agent run: %w", context.Canceled),
+		"failed":    errors.New("boom"),
+	}
+	for want, err := range cases {
+		if got := subtaskStatus(err); got != want {
+			t.Fatalf("subtaskStatus(%v) = %q, want %q", err, got, want)
+		}
 	}
 }
