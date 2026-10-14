@@ -462,6 +462,7 @@ fi
 
 command_dir=""
 command_path_hint=""
+command_source_cmd=""
 service_control_granted=false
 
 # 用户级安装的 ~/.local/bin 不一定在 PATH 里（root 的 .profile 没有那段，zsh 或
@@ -475,7 +476,8 @@ ensure_command_dir_on_path() {
       rc_file="$HOME/.config/fish/conf.d/diana.fish"
       mkdir -p "$(dirname "$rc_file")"
       if printf 'fish_add_path "$HOME/.local/bin"\n' >"$rc_file"; then
-        command_path_hint="added $command_dir to fish PATH — restart your shell."
+        command_path_hint="added $command_dir to fish PATH — takes effect in new terminals."
+        command_source_cmd="source $rc_file"
       else
         command_path_hint="add $command_dir to PATH to run diana directly."
       fi
@@ -486,11 +488,13 @@ ensure_command_dir_on_path() {
     *)      rc_file="$HOME/.profile" ;;
   esac
   if [ -f "$rc_file" ] && grep -Fq "$path_marker" "$rc_file" 2>/dev/null; then
-    command_path_hint="restart your shell (or run \`. $rc_file\`) to use \`diana\` directly."
+    command_path_hint="already configured in $rc_file — takes effect in new terminals."
+    command_source_cmd=". $rc_file"
     return 0
   fi
   if printf '\nexport PATH="$HOME/.local/bin:$PATH" %s\n' "$path_marker" >>"$rc_file" 2>/dev/null; then
-    command_path_hint="added $command_dir to PATH in $rc_file — restart your shell (or run \`. $rc_file\`) to use \`diana\` directly."
+    command_path_hint="added $command_dir to PATH in $rc_file — takes effect in new terminals."
+    command_source_cmd=". $rc_file"
   else
     command_path_hint="add $command_dir to PATH to run \`diana\` directly."
   fi
@@ -1093,6 +1097,10 @@ if [ -n "$command_dir" ]; then
   printf 'Command:   %s\n' "$command_dir/diana"
   if [ -n "$command_path_hint" ]; then
     printf 'PATH:      %s\n' "$command_path_hint"
+    if [ -n "$command_source_cmd" ]; then
+      printf '           To use it in this terminal now, paste:  %s\n' "$command_source_cmd"
+    fi
+    printf '           Or call it by full path (works anywhere, e.g. ssh or cron):  %s/diana status\n' "$command_dir"
   fi
 fi
 printf 'Backup:    %s\n' "$backup_dir"
