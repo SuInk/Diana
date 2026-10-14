@@ -599,6 +599,44 @@ SELECT EXISTS (
 	return exists == 1, nil
 }
 
+// InboundSessionNewerEvents 取同一会话里在这条之后到达的消息，不管处理到哪一步，
+// 按到达先后最多 limit 条。解不开的载荷跳过，不让一条坏数据拦住整次判断。
+func (s *SQLiteStore) InboundSessionNewerEvents(ctx context.Context, item assistant.InboundQueueItem, limit int) ([]assistant.MessageEvent, error) {
+	defer s.observeStorage(ctx, "InboundSessionNewerEvents", "read")()
+	if s == nil || s.db == nil {
+		return nil, errors.New("list newer inbound events: sqlite store is not configured")
+	}
+	if strings.TrimSpace(item.Session) == "" || limit <= 0 {
+		return nil, nil
+	}
+	rows, err := s.eventReader().QueryContext(ctx, `
+SELECT payload FROM inbound_events
+WHERE session = ? AND id != ?
+  AND (event_time > ? OR (event_time = ? AND created_at > ?))
+ORDER BY event_time, created_at
+LIMIT ?
+`, item.Session, item.ID, item.Event.Time, item.Event.Time, item.EnqueuedAt.UnixNano(), limit)
+	if err != nil {
+		return nil, fmt.Errorf("list newer inbound events: %w", err)
+	}
+	defer rows.Close()
+	var out []assistant.MessageEvent
+	for rows.Next() {
+		var payload string
+		if err := rows.Scan(&payload); err != nil {
+			return nil, fmt.Errorf("list newer inbound events: %w", err)
+		}
+		var event assistant.MessageEvent
+		if json.Unmarshal([]byte(payload), &event) == nil {
+			out = append(out, event)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list newer inbound events: %w", err)
+	}
+	return out, nil
+}
+
 func inboundPriorityValue(values []int) int {
 	if len(values) == 0 || values[0] < 0 {
 		return assistant.InboundPriorityNormal

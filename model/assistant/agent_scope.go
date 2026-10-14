@@ -150,6 +150,7 @@ func (r *Runtime) newAgentRegistry(ctx context.Context, cfg BotConfig, event Mes
 	registry.ApplyExtensionOverrides(mergeExtensionOverrides(overrides, groupExtensionOverrides(groupAccess)))
 	// 安全模式放在所有身份和扩展开关之后：它对主人同样生效，不能被前面任何一道放行盖掉。
 	applyAgentSafeMode(cfg, registry)
+	applyUndirectedTurnLimits(event, registry)
 	r.wrapScreenshotTools(registry, event)
 	if personal != nil {
 		registry.RegisterCloser(personal)

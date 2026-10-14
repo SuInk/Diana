@@ -315,6 +315,8 @@ func DescribeEventOutcome(outcome string) (decision string, reason string, handl
 		return "not_replied", "消息只有视频内容，当前没有可直接回答的文字或图片请求", false
 	case "ignored_foreign_command":
 		return "not_replied", "消息是斜杠指令，没有指向本机器人，也不是本机器人内置的指令，按发给群里其他机器人处理，不进入答复流程", false
+	case "ignored_other_bot_addressed":
+		return "not_replied", "消息 @了或回复了群里别的机器人，没有指向本机器人，不进入答复流程", false
 	case "ignored_reply_damping":
 		// 回复欲望衰减已删除，只为还能读懂历史事件。
 		return "not_replied", "近期回复该账号过于频繁，已降低回复欲望，这条不再回复", false
@@ -2005,6 +2007,7 @@ func (r *Runtime) routeMessageEvent(ctx context.Context, event MessageEvent) (Me
 	// 队列积压：消息已经 remember 进历史、做过表达学习，这里补上长期记忆和用户画像，登记进
 	// 积压包后就收住，跳过后面所有花模型 token 的环节，由同会话后面那条一起接话。
 	// 判断和登记挨在一起：判断时后面那条还在排队，登记完它才可能来取，积压包不会落空。
+	queueItem := event.backlogProbe
 	if event.backlogProbe != nil && r.inboundBacklogShouldHandOver(ctx, *event.backlogProbe, now) {
 		r.enqueueEventMemory(event, memoryEventText(event))
 		if profile, stored := r.updateUserMemory(event, 0); stored {
@@ -2064,6 +2067,11 @@ func (r *Runtime) routeMessageEvent(ctx context.Context, event MessageEvent) (Me
 		r.record(r.decisionEventRecord(event, text, "ignored_foreign_command"))
 		return finishWithoutReply("ignored_foreign_command")
 	}
+	if r.addressedToOtherBot(event, text) {
+		r.updateUserMemory(event, 0)
+		r.record(r.decisionEventRecord(event, text, "ignored_other_bot_addressed"))
+		return finishWithoutReply("ignored_other_bot_addressed")
+	}
 	if r.requiresTelegramBotMentionJudgment(event) {
 		if !r.markedBotMessageAddressesSelf(ctx, event, text) {
 			event.routingReason = "发送者已识别或手动标记为机器人，未确认在向本机接话，已自动抑制"
@@ -2115,6 +2123,12 @@ func (r *Runtime) routeMessageEvent(ctx context.Context, event MessageEvent) (Me
 		if allowed && proactiveReplyCoveredByTrigger(routed) && r.recentTriggeredDeliveryFor(routed) {
 			allowed = false
 			routed.routingReason = triggeredDeliverySkipReason
+		}
+		if allowed {
+			if taken, reason := r.answeredElsewhere(ctx, routed, queueItem); taken {
+				allowed = false
+				routed.routingReason = reason
+			}
 		}
 		if allowed {
 			event, text, handled = routed, routedText, true
