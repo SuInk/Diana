@@ -234,7 +234,7 @@ func TestResolverPluginExtractsURLFromRawMessage(t *testing.T) {
 		return ""
 	}
 	resp, err := plugin.Handle(context.Background(), PluginRequest{
-		Event: MessageEvent{RawMessage: "分享 https://github.com/SuInk/Diana"},
+		Event: MessageEvent{RawMessage: "分享 https://example.com/post/1"},
 	})
 	if err != nil {
 		t.Fatalf("Handle() error = %v", err)

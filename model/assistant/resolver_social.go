@@ -152,7 +152,7 @@ func (p *ResolverPlugin) resolveSocialMediaFresh(ctx context.Context, req Plugin
 		return resolverSocialResult{}
 	}
 	platform, label := platformKeyAndLabel(parsed.Hostname())
-	if !platformSupportsMedia(platform) {
+	if !platformParsesNatively(platform) {
 		// 只能抓标题的平台走通用元数据路径，不进媒体分发。
 		return resolverSocialResult{}
 	}
@@ -166,6 +166,12 @@ func (p *ResolverPlugin) resolveSocialMediaFresh(ctx context.Context, req Plugin
 		result = p.resolveXiaohongshuMedia(ctx, req, raw, maxImages)
 	case "x":
 		result = p.resolveTwitterMedia(ctx, req, raw)
+	case "github":
+		result = p.resolveGitHubMedia(ctx, req, raw)
+	case "weibo":
+		result = p.resolveWeiboMedia(ctx, req, raw, maxImages)
+	case "heybox":
+		result = p.resolveHeyboxMedia(ctx, req, raw, maxImages)
 	case "youtube":
 		result = p.resolveYTDLPMedia(ctx, req, raw, label)
 	default:
@@ -226,6 +232,18 @@ func resolverResourceKeyFromURL(platform, raw string) string {
 	case "youtube":
 		if id := youtubeVideoID(raw); id != "" {
 			return "youtube:" + id
+		}
+	case "weibo":
+		if id := weiboStatusID(raw); id != "" {
+			return "weibo:" + id
+		}
+	case "heybox":
+		if id := heyboxLinkID(raw); id != "" {
+			return "heybox:" + id
+		}
+	case "github":
+		if target, ok := parseGitHubURL(raw); ok {
+			return target.resourceKey()
 		}
 	}
 	return ""

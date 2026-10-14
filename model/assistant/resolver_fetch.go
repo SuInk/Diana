@@ -73,6 +73,12 @@ func (p *ResolverPlugin) fetchPageMetaFresh(ctx context.Context, raw string, opt
 	httpCtx, cancel := context.WithTimeout(ctx, opts.httpTimeout)
 	meta, ok := fetchPageMetaDirect(httpCtx, p.client, raw, opts.userAgent)
 	cancel()
+	if ok && looksLikeShellPage(meta.Title) {
+		// 空壳页的标题不是内容：丢掉它，让后面的浏览器渲染兜底接手，
+		// 没开渲染时也不会把「小黑盒 - 玩家高能聚集地」当成帖子标题发出去。
+		meta = pageMeta{FinalURL: meta.FinalURL}
+		ok = false
+	}
 
 	if !ok && opts.browserRender && p.browserFetch != nil {
 		if page, err := p.browserFetch(ctx, opts.browserCDPURL, raw); err == nil {
@@ -194,6 +200,20 @@ func looksLikeBlockedPage(text string) bool {
 	lower := strings.ToLower(text)
 	for _, marker := range blockedPageMarkers {
 		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+// 站点对匿名请求返回的固定空壳/访客页标题：小黑盒的 SPA 空壳、微博的访客系统。
+var shellPageTitles = []string{"小黑盒 - 玩家高能聚集地", "sina visitor system"}
+
+// looksLikeShellPage 判断标题是不是站点的固定空壳标题，而不是具体内容。
+func looksLikeShellPage(title string) bool {
+	title = strings.ToLower(strings.TrimSpace(title))
+	for _, shell := range shellPageTitles {
+		if title == shell {
 			return true
 		}
 	}

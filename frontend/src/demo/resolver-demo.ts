@@ -9,14 +9,15 @@ const platformOptions = [
   { value: "x", label: "X / Twitter（可下载媒体）" },
   { value: "xiaohongshu", label: "小红书（可下载媒体）" },
   { value: "zhihu", label: "知乎（仅标题）" },
-  { value: "weibo", label: "微博（仅标题）" },
+  { value: "weibo", label: "微博（可下载媒体）" },
   { value: "douyin", label: "抖音（可下载媒体）" },
-  { value: "github", label: "GitHub（仅标题）" }
+  { value: "heybox", label: "小黑盒（可下载媒体）" },
+  { value: "github", label: "GitHub（解析正文）" }
 ];
 
 export const resolverDemoManifest: PluginManifest & { can_ask_agent: boolean } = {
-  id: "official.nonebot-plugin-resolver-go", name: "链接解析", version: "0.3.8",
-  description: "官方内置 Go 社交媒体解析器，可提取并发送 B 站、YouTube、X、小红书和抖音的图片或视频，并展开 X 站内长文正文。",
+  id: "official.nonebot-plugin-resolver-go", name: "链接解析", version: "0.3.9",
+  description: "官方内置 Go 社交媒体解析器，可提取并发送 B 站、YouTube、X、小红书、抖音、微博和小黑盒的图片或视频，展开 X 站内长文正文，并读取 GitHub 仓库、Issue 和 PR 的正文摘要，并解析微博和小黑盒帖子的图文与视频。",
   official: true, built_in: true, can_ask_agent: true,
   permissions: ["network:http", "message:read", "message:write", "filesystem:temp", "process:media"],
   settings: [

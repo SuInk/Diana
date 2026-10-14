@@ -1555,8 +1555,8 @@ func (p *ResolverPlugin) Manifest() PluginManifest {
 	return PluginManifest{
 		ID:          resolverPluginID,
 		Name:        "链接解析",
-		Version:     "0.3.8",
-		Description: "官方内置 Go 社交媒体解析器，可提取并发送 B 站、YouTube、X、小红书和抖音的图片或视频，并展开 X 站内长文正文。",
+		Version:     "0.3.9",
+		Description: "官方内置 Go 社交媒体解析器，可提取并发送 B 站、YouTube、X、小红书、抖音、微博和小黑盒的图片或视频，展开 X 站内长文正文，并读取 GitHub 仓库、Issue 和 PR 的正文摘要，并解析微博和小黑盒帖子的图文与视频。",
 		Official:    true,
 		BuiltIn:     true,
 		CanAskAgent: true,
@@ -1907,9 +1907,9 @@ func (p *ResolverPlugin) Handle(ctx context.Context, req PluginRequest) (*Plugin
 			}
 			continue
 		}
-		// X 主页和 X 站内长文都是纯文字结果，关掉媒体下载也应该照常解析；
+		// X 主页、X 站内长文和 GitHub 都是纯文字结果，关掉媒体下载也应该照常解析；
 		// 长文页对游客返回 404，落到通用抓取只会得到一句「未能获取网页内容」。
-		if downloadMedia || (opts.fetchTitle && (twitterProfileHandle(raw) != "" || twitterArticleID(raw) != "")) {
+		if downloadMedia || (opts.fetchTitle && (twitterProfileHandle(raw) != "" || twitterArticleID(raw) != "" || isGitHubURL(raw))) {
 			if media := p.resolveSocialMedia(mediaCtx, req, raw, maxImages, opts.cacheTTL); media.Suppressed {
 				continue
 			} else if media.Handled {
@@ -2177,15 +2177,20 @@ var resolverPlatforms = []struct {
 	label string
 	hosts []string
 	media bool
+	// text 表示平台有只产出文字的原生解析（GitHub 走公开 API 取仓库/Issue/PR 正文），
+	// 不下载媒体，但比只抓标题多得多。
+	text bool
 }{
-	{"bilibili", "Bilibili", []string{"bilibili.com", "b23.tv"}, true},
-	{"youtube", "YouTube", []string{"youtube.com", "youtu.be"}, true},
-	{"x", "X / Twitter", []string{"x.com", "twitter.com"}, true},
-	{"xiaohongshu", "小红书", xiaohongshuHosts, true},
-	{"zhihu", "知乎", []string{"zhihu.com"}, false},
-	{"weibo", "微博", []string{"weibo.com", "weibo.cn"}, false},
-	{"douyin", "抖音", []string{"douyin.com"}, true},
-	{"github", "GitHub", []string{"github.com"}, false},
+	{"bilibili", "Bilibili", []string{"bilibili.com", "b23.tv"}, true, false},
+	{"youtube", "YouTube", []string{"youtube.com", "youtu.be"}, true, false},
+	{"x", "X / Twitter", []string{"x.com", "twitter.com"}, true, false},
+	{"xiaohongshu", "小红书", xiaohongshuHosts, true, false},
+	{"zhihu", "知乎", []string{"zhihu.com"}, false, false},
+	{"weibo", "微博", []string{"weibo.com", "weibo.cn"}, true, false},
+	{"douyin", "抖音", []string{"douyin.com"}, true, false},
+	// 小黑盒公开页是 SPA 空壳，帖子走带签名的 link/tree 接口（见 resolver_heybox.go）。
+	{"heybox", "小黑盒", []string{"xiaoheihe.cn"}, true, false},
+	{"github", "GitHub", []string{"github.com"}, false, true},
 }
 
 // platformSupportsMedia 判断平台是否有真正的媒体提取分支。
@@ -2194,6 +2199,17 @@ func platformSupportsMedia(key string) bool {
 	for _, platform := range resolverPlatforms {
 		if platform.key == key {
 			return platform.media
+		}
+	}
+	return false
+}
+
+// platformParsesNatively 判断平台是否有原生解析分支（媒体或纯文字），
+// resolveSocialMedia 的分发以此为准。
+func platformParsesNatively(key string) bool {
+	for _, platform := range resolverPlatforms {
+		if platform.key == key {
+			return platform.media || platform.text
 		}
 	}
 	return false
@@ -2233,6 +2249,8 @@ func resolverPlatformOptions() []PluginSettingOption {
 		label := platform.label
 		if platform.media {
 			label += "（可下载媒体）"
+		} else if platform.text {
+			label += "（解析正文）"
 		} else {
 			label += "（仅标题）"
 		}
