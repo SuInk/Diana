@@ -21,12 +21,14 @@ const (
 	maximumWebSearchMaxQueries       = 8
 	maximumWebSearchMaxProviderCalls = 16
 	maximumWebSearchQueryRunes       = 512
+	maximumWebSearchDomains          = 4
 )
 
 var (
 	errWebSearchNoResults = errors.New("web search returned no results")
 
 	webSearchSecretPattern = regexp.MustCompile(`(?i)(?:\bsk-[a-z0-9_-]{12,}\b|\b(?:api[_-]?key|access[_-]?token|token|password)\s*[:=]\s*\S+)`)
+	webSearchDomainPattern = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$`)
 	webSearchEmailPattern  = regexp.MustCompile(`(?i)\b[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,}\b`)
 	webSearchPhonePattern  = regexp.MustCompile(`\b(?:\+?86[- ]?)?1[3-9][0-9]{9}\b`)
 	webSearchPrivateHost   = regexp.MustCompile(`(?i)\b(?:localhost|(?:[a-z0-9-]+\.)+(?:internal|local)|10(?:\.[0-9]{1,3}){3}|192\.168(?:\.[0-9]{1,3}){2}|172\.(?:1[6-9]|2[0-9]|3[01])(?:\.[0-9]{1,3}){2})\b`)
@@ -112,8 +114,12 @@ func webSearchCandidates(input map[string]any, limit int) ([]webSearchQueryCandi
 
 	candidates := make([]webSearchQueryCandidate, 0, limit)
 	seen := map[string]bool{}
+	siteFilter := webSearchSiteFilter(input["domains"])
 	appendCandidate := func(query, strategy string) {
 		query = sanitizeExternalSearchQuery(normalizeWebSearchQuery(query))
+		if query != "" && siteFilter != "" {
+			query += " " + siteFilter
+		}
 		if query == "" || len(candidates) >= limit {
 			return
 		}
@@ -142,6 +148,36 @@ func webSearchCandidates(input map[string]any, limit int) ([]webSearchQueryCandi
 		return nil, errors.New("query is empty after privacy filtering")
 	}
 	return candidates, nil
+}
+
+// webSearchSiteFilter 把模型给的 domains 转成搜索引擎通用的 site: 运算符，对应
+// Codex web.run 的 domains 过滤。只收裸域名：路径、协议和空格都丢掉，不让这个
+// 字段变成夹带任意查询词的旁路。
+func webSearchSiteFilter(raw any) string {
+	var values []string
+	switch v := raw.(type) {
+	case []string:
+		values = v
+	case []any:
+		for _, item := range v {
+			if s, ok := item.(string); ok {
+				values = append(values, s)
+			}
+		}
+	}
+	var sites []string
+	seen := map[string]bool{}
+	for _, value := range values {
+		host := strings.ToLower(strings.TrimSpace(value))
+		host = strings.TrimPrefix(strings.TrimPrefix(host, "https://"), "http://")
+		host, _, _ = strings.Cut(host, "/")
+		if !webSearchDomainPattern.MatchString(host) || webSearchPrivateHost.MatchString(host) || seen[host] || len(sites) >= maximumWebSearchDomains {
+			continue
+		}
+		seen[host] = true
+		sites = append(sites, "site:"+host)
+	}
+	return strings.Join(sites, " OR ")
 }
 
 func normalizeWebSearchQuery(query string) string {

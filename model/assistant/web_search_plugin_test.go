@@ -10,7 +10,9 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"sort"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/SuInk/diana/model/agent"
@@ -120,9 +122,12 @@ func TestRuntimeWithoutSearchPluginRegistersNoSearchTool(t *testing.T) {
 }
 
 func TestWebSearchPluginSearchEngineMode(t *testing.T) {
+	var mu sync.Mutex
 	var rendered []string
 	plugin := &WebSearchPlugin{renderer: agent.PageRendererFunc(func(_ context.Context, rawURL string) (agent.RenderedPage, error) {
+		mu.Lock()
 		rendered = append(rendered, rawURL)
+		mu.Unlock()
 		return agent.RenderedPage{URL: rawURL, Title: "结果", Text: "摘要", Links: []agent.RenderedLink{{URL: "https://example.com/a", Text: "结果一"}}}, nil
 	})}
 	tools, err := plugin.AgentTools(SettingValues{
@@ -136,7 +141,9 @@ func TestWebSearchPluginSearchEngineMode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(rendered) != 1 || !strings.HasPrefix(rendered[0], "https://www.bing.com/search?") {
+	// 两个引擎分两路并行查，结果合并去重。
+	sort.Strings(rendered)
+	if len(rendered) != 2 || !strings.HasPrefix(rendered[0], "https://www.baidu.com/s?") || !strings.HasPrefix(rendered[1], "https://www.bing.com/search?") {
 		t.Fatalf("rendered = %v", rendered)
 	}
 	if !strings.Contains(output, `"provider": "bing"`) || !strings.Contains(output, "https://example.com/a") {
@@ -147,10 +154,13 @@ func TestWebSearchPluginSearchEngineMode(t *testing.T) {
 	}
 }
 
-func TestWebSearchPluginCustomSearchEngineKeepsOrder(t *testing.T) {
+func TestWebSearchPluginCustomSearchEngineRunsAlongsideBuiltin(t *testing.T) {
+	var mu sync.Mutex
 	var rendered []string
 	plugin := &WebSearchPlugin{renderer: agent.PageRendererFunc(func(_ context.Context, rawURL string) (agent.RenderedPage, error) {
+		mu.Lock()
 		rendered = append(rendered, rawURL)
+		mu.Unlock()
 		if strings.HasPrefix(rawURL, "https://search.example.com/") {
 			return agent.RenderedPage{URL: rawURL, Title: "没有结果", Text: "没有结果"}, nil
 		}
@@ -171,6 +181,7 @@ func TestWebSearchPluginCustomSearchEngineKeepsOrder(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []string{"https://search.example.com/s?q=a+b%26c&lang=zh", "https://www.bing.com/search?q=a+b%26c"}
+	sort.Strings(rendered)
 	if strings.Join(rendered, " ") != strings.Join(want, " ") {
 		t.Fatalf("rendered = %v", rendered)
 	}
