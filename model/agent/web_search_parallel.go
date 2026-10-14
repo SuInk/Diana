@@ -32,6 +32,7 @@ func (t *WebSearchTool) Run(ctx context.Context, input map[string]any) (string, 
 	if err != nil {
 		return "", err
 	}
+	ctx = withWebSearchRecency(ctx, intFromInput(input, "recency", 0))
 	providers := t.providers
 	if len(providers) == 0 {
 		if providers, err = t.loadProviders(); err != nil {

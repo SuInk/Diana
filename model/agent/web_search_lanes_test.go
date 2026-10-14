@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // 线上 10-14：Google 前排全是 Gemini 4 的旧爆料，拿到结果就停，Bing 没查，
@@ -86,5 +87,48 @@ func TestWebSearchDomainsBecomeSiteFilter(t *testing.T) {
 	}
 	if got := candidates[0].Query; got != "Gemini 4 site:blog.google OR site:ai.google.dev" {
 		t.Fatalf("query = %q", got)
+	}
+}
+
+func TestSearchEngineRecencyFilters(t *testing.T) {
+	now := time.Unix(1_760_000_000, 0)
+	cases := map[string]struct {
+		days int
+		want string
+	}{
+		"google":     {7, "tbs=qdr%3Aw"},
+		"bing":       {30, "filters=ex1%3A%22ez3%22"},
+		"duckduckgo": {1, "df=d"},
+		"baidu":      {3, "gpc=stf%3D1759740800%2C1760000000%7Cstftype%3D1"},
+	}
+	for engine, c := range cases {
+		got := applySearchEngineRecency(engine, searchEngines[engine].searchURL+"?q=x", c.days, now)
+		if !strings.Contains(got, c.want) {
+			t.Errorf("%s: %s missing %s", engine, got, c.want)
+		}
+	}
+	if got := applySearchEngineRecency("custom", "https://s.example/?q=x", 7, now); got != "https://s.example/?q=x" {
+		t.Fatalf("custom engine changed: %s", got)
+	}
+	if got := applySearchEngineRecency("google", "https://www.google.com/search?q=x", 0, now); strings.Contains(got, "tbs") {
+		t.Fatalf("zero recency filtered: %s", got)
+	}
+}
+
+func TestWebSearchRecencyReachesEngineURL(t *testing.T) {
+	var mu sync.Mutex
+	var requested []string
+	renderer := PageRendererFunc(func(_ context.Context, raw string) (RenderedPage, error) {
+		mu.Lock()
+		requested = append(requested, raw)
+		mu.Unlock()
+		return RenderedPage{URL: raw, Title: "Search", Text: "r", Links: []RenderedLink{{URL: "https://example.com/a", Text: "A"}}}, nil
+	})
+	tool := searchEngineTestTool(t, renderer, "google")
+	if _, err := tool.Run(context.Background(), map[string]any{"query": "Gemini 4", "recency": float64(30)}); err != nil {
+		t.Fatal(err)
+	}
+	if len(requested) != 1 || !strings.Contains(requested[0], "tbs=qdr%3Am") {
+		t.Fatalf("recency not applied: %v", requested)
 	}
 }

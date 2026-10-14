@@ -124,6 +124,7 @@ func (t *WebSearchTool) runSearchEngine(ctx context.Context, provider webSearchP
 	if err != nil {
 		return "", err
 	}
+	target = applySearchEngineRecency(provider.Tool, target, webSearchRecency(ctx), time.Now())
 
 	page, err := renderer.Render(ctx, target)
 	if err != nil {
