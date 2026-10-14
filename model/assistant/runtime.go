@@ -314,7 +314,7 @@ func DescribeEventOutcome(outcome string) (decision string, reason string, handl
 	case "ignored_video":
 		return "not_replied", "消息只有视频内容，当前没有可直接回答的文字或图片请求", false
 	case "ignored_foreign_command":
-		return "not_replied", "消息是斜杠指令，但不是本机器人内置的指令，按发给群里其他机器人处理，不做回复判断", false
+		return "not_replied", "消息是斜杠指令，没有指向本机器人，也不是本机器人内置的指令，按发给群里其他机器人处理，不进入答复流程", false
 	case "ignored_reply_damping":
 		// 回复欲望衰减已删除，只为还能读懂历史事件。
 		return "not_replied", "近期回复该账号过于频繁，已降低回复欲望，这条不再回复", false

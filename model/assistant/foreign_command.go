@@ -17,10 +17,11 @@ func looksLikeSlashCommand(text string) bool {
 // foreignCommand 报告这条群消息是不是一条明显的斜杠指令、却不是这台机器人内置的：
 // 插件指令、链接解析、状态卡片和主人命令都不认它。这种消息是发给群里别的机器人的
 // （/ai、/查谱、/tarot@xxx），意图识别看不出指令归谁，曾把别的机器人的 /ai off
-// 当成给自己的、真关掉了本群接话。所以不交给模型判断，带 @本机也一样不回。
+// 当成给自己的、真关掉了本群接话。所以这类消息不进答复流程，也不交给模型判断。
+// @本机、回复本机或 /命令@本机 的（平台都会标成 ToMe）是在叫自己，照常进答复流程。
 // 私聊里没有别的机器人，不拦。
 func (r *Runtime) foreignCommand(event MessageEvent, text string) bool {
-	if event.Kind != EventKindGroup {
+	if event.Kind != EventKindGroup || event.ToMe {
 		return false
 	}
 	candidates := r.burstCommandTexts(event, firstNonEmpty(strings.TrimSpace(text), directedInboundText(event)))

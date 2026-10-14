@@ -28,16 +28,11 @@ func TestLooksLikeSlashCommand(t *testing.T) {
 	}
 }
 
-func TestForeignSlashCommandIsIgnoredEvenWhenMentioned(t *testing.T) {
+func TestForeignSlashCommandSkipsReplyFlow(t *testing.T) {
 	runtime := NewRuntime(BotConfig{BotAccount: "10000"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	for _, event := range []MessageEvent{
 		{Kind: EventKindGroup, GroupID: "20001", UserID: "10001", MessageID: "30001", RawMessage: "/ai off",
 			Segments: []MessageSegment{{Type: "text", Data: map[string]string{"text": "/ai off"}}}},
-		{Kind: EventKindGroup, GroupID: "20001", UserID: "10001", MessageID: "30002", SelfID: "10000", ToMe: true, RawMessage: "[CQ:at,qq=10000] /查谱",
-			Segments: []MessageSegment{
-				{Type: "at", Data: map[string]string{"qq": "10000"}},
-				{Type: "text", Data: map[string]string{"text": " /查谱"}},
-			}},
 	} {
 		_, _, handled, outcome := runtime.prepareMessageEvent(context.Background(), event)
 		if handled || outcome != "ignored_foreign_command" {
@@ -53,5 +48,8 @@ func TestForeignCommandLeavesOrdinaryAndPrivateMessages(t *testing.T) {
 	}
 	if runtime.foreignCommand(MessageEvent{Kind: EventKindGroup, GroupID: "20001", UserID: "10001"}, "/Users/x/main.go 报错了") {
 		t.Fatal("path treated as command")
+	}
+	if runtime.foreignCommand(MessageEvent{Kind: EventKindGroup, GroupID: "20001", UserID: "10001", SelfID: "10000", ToMe: true}, "/查谱") {
+		t.Fatal("command addressed to this bot treated as foreign")
 	}
 }
