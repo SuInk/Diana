@@ -13,7 +13,7 @@ func TestLooksLikeSlashCommand(t *testing.T) {
 		"/草 yjx":                   true,
 		"/tarot@linverseHelperBot": true,
 		"  /status@Shio0721_bot\n": true,
-		"/Users/x/main.go 报错了":     false,
+		"/etc/hosts 报错了":           false,
 		"/ 你好":                     false,
 		"// ==UserScript==":        false,
 		"ai off":                   false,
@@ -46,7 +46,7 @@ func TestForeignCommandLeavesOrdinaryAndPrivateMessages(t *testing.T) {
 	if runtime.foreignCommand(MessageEvent{Kind: EventKindPrivate, UserID: "10001"}, "/start") {
 		t.Fatal("private slash command treated as foreign")
 	}
-	if runtime.foreignCommand(MessageEvent{Kind: EventKindGroup, GroupID: "20001", UserID: "10001"}, "/Users/x/main.go 报错了") {
+	if runtime.foreignCommand(MessageEvent{Kind: EventKindGroup, GroupID: "20001", UserID: "10001"}, "/etc/hosts 报错了") {
 		t.Fatal("path treated as command")
 	}
 	if runtime.foreignCommand(MessageEvent{Kind: EventKindGroup, GroupID: "20001", UserID: "10001", SelfID: "10000", ToMe: true}, "/查谱") {

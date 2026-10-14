@@ -6,7 +6,7 @@ import (
 )
 
 // slashCommandHead 认「/命令词」开头的消息：斜杠后紧跟字母、数字、下划线或汉字，可带
-// Telegram 式的 @机器人名，之后是空白或结尾。「/Users/x 报错了」这种路径、「/ 你好」
+// Telegram 式的 @机器人名，之后是空白或结尾。「/etc/hosts 报错了」这种路径、「/ 你好」
 // 这种斜杠后带空格的都不算。
 var slashCommandHead = regexp.MustCompile(`^/[\p{L}\p{N}_]+(@[\w.]+)?(\s|$)`)
 
