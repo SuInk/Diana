@@ -941,7 +941,7 @@ func (t *BrowserRenderTool) Description() string {
 
 func (t *BrowserRenderTool) InputSchema() map[string]any {
 	return toolObjectSchema([]string{"url"}, map[string]any{
-		"url":  toolStringParam("公网页面地址"),
+		"url":  toolStringParam("公网页面地址，或搜索结果的 ref 编号"),
 		"urls": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "同时打开的其他页面地址，和 url 合计最多 3 个"},
 		"find": toolStringParam("在整页正文里查找的关键词，多个用 | 隔开，如 pricing|价格|套餐"),
 	})

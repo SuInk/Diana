@@ -369,7 +369,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 					calls[i] = resp.ToolCalls[index]
 				}
 				batchStartedAt := time.Now()
-				reads := r.runParallelReads(ctx, req.Observer, traceID, modelTurns, toolCalls, calls)
+				reads := r.runParallelReads(ctx, req.Observer, traceID, modelTurns, toolCalls, calls, steps)
 				toolsDuration += time.Since(batchStartedAt)
 				toolCalls += len(reads)
 				lastToolSignature = ""
@@ -533,6 +533,9 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 		// through the ordinary Runner guards and result handling below.
 		var dispatchErr error
 		action, dispatchErr = r.loader.dispatch(action)
+		if dispatchErr == nil {
+			action.Input = resolveSearchRefs(action.Tool, action.Input, steps)
+		}
 		if dispatchErr != nil {
 			protocolRepairs++
 			reason := dispatchErr.Error()

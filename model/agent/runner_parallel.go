@@ -62,7 +62,7 @@ func (r *Runner) parallelReadBatch(calls []llm.ToolCall) ([]int, bool) {
 	return indices, len(indices) >= 2
 }
 
-func (r *Runner) runParallelReads(ctx context.Context, observer RunObserver, traceID string, modelTurn, firstCall int, calls []llm.ToolCall) []parallelRead {
+func (r *Runner) runParallelReads(ctx context.Context, observer RunObserver, traceID string, modelTurn, firstCall int, calls []llm.ToolCall, steps []Step) []parallelRead {
 	reads := make([]parallelRead, len(calls))
 	var wg sync.WaitGroup
 	for index, call := range calls {
@@ -71,7 +71,7 @@ func (r *Runner) runParallelReads(ctx context.Context, observer RunObserver, tra
 		if typed, ok := tool.(ToolInputSchema); ok {
 			input = coerceToolInputArrays(typed.InputSchema(), input)
 		}
-		input = minimalToolInput(call.Name, input)
+		input = resolveSearchRefs(call.Name, minimalToolInput(call.Name, input), steps)
 		reads[index] = parallelRead{call: call, tool: tool, action: llmAction{Action: "tool", Tool: call.Name, Input: input}}
 		wg.Add(1)
 		go func(read *parallelRead, ordinal int) {

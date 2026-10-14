@@ -9,6 +9,8 @@ import (
 
 // WebSearchHit is a discovery result, not proof that its page was read.
 type WebSearchHit struct {
+	// Ref 是这条候选的短编号，browser_render 可以用它代替 URL，见 searchRef。
+	Ref         string `json:"ref,omitempty"`
 	Title       string `json:"title,omitempty"`
 	URL         string `json:"url"`
 	Snippet     string `json:"snippet,omitempty"`
