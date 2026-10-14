@@ -504,6 +504,17 @@ func sameInboundTransport(current, stored assistant.MessageEvent) bool {
 // preserving FIFO order within each priority. Expired processing leases are
 // eligible for recovery by another worker.
 func (s *SQLiteStore) ClaimNextInboundEvent(ctx context.Context, leaseOwner string, leaseUntil time.Time, limits ...assistant.InboundConcurrency) (assistant.InboundQueueItem, bool, error) {
+	return s.claimNextInboundEvent(ctx, leaseOwner, leaseUntil, assistant.InboundClaimOptions{Concurrency: inboundConcurrencyValue(limits)}, false)
+}
+
+// ClaimNextReadyInboundEvent limits the atomic claim to rows owned by a bot
+// whose transport is currently ready. The ordinary claim method stays
+// unfiltered for compatibility with maintenance callers and custom stores.
+func (s *SQLiteStore) ClaimNextReadyInboundEvent(ctx context.Context, leaseOwner string, leaseUntil time.Time, options assistant.InboundClaimOptions) (assistant.InboundQueueItem, bool, error) {
+	return s.claimNextInboundEvent(ctx, leaseOwner, leaseUntil, options, true)
+}
+
+func (s *SQLiteStore) claimNextInboundEvent(ctx context.Context, leaseOwner string, leaseUntil time.Time, options assistant.InboundClaimOptions, filterReadyProfiles bool) (assistant.InboundQueueItem, bool, error) {
 	defer s.observeStorage(ctx, "ClaimNextInboundEvent", "write")()
 	if s == nil || s.db == nil {
 		return assistant.InboundQueueItem{}, false, errors.New("claim inbound event: sqlite store is not configured")
@@ -516,17 +527,22 @@ func (s *SQLiteStore) ClaimNextInboundEvent(ctx context.Context, leaseOwner stri
 	if leaseUntil.IsZero() || !leaseUntil.After(now) {
 		return assistant.InboundQueueItem{}, false, errors.New("claim inbound event: lease must expire in the future")
 	}
-	concurrency := inboundConcurrencyValue(limits)
+	claim := inboundClaimOptionsValue(options)
+	readinessSQL, readinessArgs := "1 = 1", []any(nil)
+	if filterReadyProfiles {
+		readinessSQL, readinessArgs = inboundReadinessPredicate(claim)
+	}
 
 	var item assistant.InboundQueueItem
 	var payload string
 	var enqueuedAt int64
-	err := s.db.QueryRowContext(ctx, `
+	query := fmt.Sprintf(`
 WITH candidate AS (
   SELECT queued.id
   FROM inbound_events AS queued
   WHERE ((queued.status = ? AND queued.available_at <= ?)
      OR (queued.status = ? AND queued.lease_until IS NOT NULL AND queued.lease_until <= ?))
+    AND (%s)
     AND (
       SELECT COUNT(*)
       FROM inbound_events AS active
@@ -554,9 +570,13 @@ UPDATE inbound_events
 	    updated_at = ?
 WHERE id = (SELECT id FROM candidate)
 RETURNING id, session, payload, attempts, priority, created_at
-`, inboundStatusPending, now.UnixNano(), inboundStatusProcessing, now.UnixNano(), inboundStatusProcessing, now.UnixNano(),
-		string(assistant.EventKindGroup), concurrency.Group, concurrency.Private,
-		inboundStatusProcessing, leaseOwner, leaseUntil.UTC().UnixNano(), now.UnixNano()).Scan(
+`, readinessSQL)
+	args := []any{inboundStatusPending, now.UnixNano(), inboundStatusProcessing, now.UnixNano()}
+	args = append(args, readinessArgs...)
+	args = append(args, inboundStatusProcessing, now.UnixNano(),
+		string(assistant.EventKindGroup), claim.Concurrency.Group, claim.Concurrency.Private,
+		inboundStatusProcessing, leaseOwner, leaseUntil.UTC().UnixNano(), now.UnixNano())
+	err := s.db.QueryRowContext(ctx, query, args...).Scan(
 		&item.ID, &item.Session, &payload, &item.Attempts, &item.Priority, &enqueuedAt,
 	)
 	if err != nil {
@@ -608,18 +628,51 @@ func inboundPriorityValue(values []int) int {
 
 // inboundConcurrencyValue 归一化调用方给的并发上限。没给或给了非正数时退回 1：
 // 认领查询按会话串行是最保守的行为，绝不能因为配置缺失变成无上限。
+func inboundClaimOptionsValue(claim assistant.InboundClaimOptions) assistant.InboundClaimOptions {
+	if claim.Concurrency.Group <= 0 {
+		claim.Concurrency.Group = 1
+	}
+	if claim.Concurrency.Private <= 0 {
+		claim.Concurrency.Private = 1
+	}
+	return claim
+}
+
 func inboundConcurrencyValue(values []assistant.InboundConcurrency) assistant.InboundConcurrency {
-	limits := assistant.InboundConcurrency{}
+	concurrency := assistant.InboundConcurrency{}
 	if len(values) > 0 {
-		limits = values[0]
+		concurrency = values[0]
 	}
-	if limits.Group <= 0 {
-		limits.Group = 1
+	return inboundClaimOptionsValue(assistant.InboundClaimOptions{Concurrency: concurrency}).Concurrency
+}
+
+func inboundReadinessPredicate(claim assistant.InboundClaimOptions) (string, []any) {
+	profileExpr := "COALESCE(NULLIF(TRIM(queued.profile_id), ''), CASE WHEN json_valid(queued.payload) THEN json_extract(queued.payload, '$.profile_id') END, '')"
+	seen := map[string]bool{}
+	profiles := make([]string, 0, len(claim.ProfileIDs))
+	for _, profileID := range claim.ProfileIDs {
+		profileID = strings.TrimSpace(profileID)
+		if profileID == "" || seen[profileID] {
+			continue
+		}
+		seen[profileID] = true
+		profiles = append(profiles, profileID)
 	}
-	if limits.Private <= 0 {
-		limits.Private = 1
+	parts := make([]string, 0, 2)
+	args := make([]any, 0, len(profiles))
+	if len(profiles) > 0 {
+		parts = append(parts, profileExpr+" IN ("+strings.TrimRight(strings.Repeat("?,", len(profiles)), ",")+")")
+		for _, profileID := range profiles {
+			args = append(args, profileID)
+		}
 	}
-	return limits
+	if claim.AllowUnscoped {
+		parts = append(parts, profileExpr+" = ''")
+	}
+	if len(parts) == 0 {
+		return "0 = 1", nil
+	}
+	return strings.Join(parts, " OR "), args
 }
 
 // CompleteInboundEvent marks a leased event terminal without deleting its

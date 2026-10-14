@@ -640,6 +640,53 @@ func TestRuntimeInboundStatusUsesOneBotChannelInMultiChannel(t *testing.T) {
 	}
 }
 
+func TestInboundWorkerDoesNotLetOfflineOneBotBlockHealthySibling(t *testing.T) {
+	onebot := &multiChannelProbe{status: ChannelStatus{Connected: false}}
+	qqOfficial := &multiChannelProbe{status: ChannelStatus{Connected: true}}
+	runtime := NewRuntime(BotConfig{ID: "qq-official", Platform: PlatformQQOfficial, Enabled: true}, NewMultiChannel([]ChannelBinding{
+		{ProfileID: "onebot", Platform: PlatformOneBotV11, Channel: onebot},
+		{ProfileID: "qq-official", Platform: PlatformQQOfficial, Channel: qqOfficial},
+	}), NewPluginManager(), nil, nil, nil, nil)
+	runtime.mu.Lock()
+	runtime.profileConfigs = map[string]BotConfig{
+		"onebot":      {ID: "onebot", Platform: PlatformOneBotV11, Enabled: true},
+		"qq-official": {ID: "qq-official", Platform: PlatformQQOfficial, Enabled: true},
+	}
+	runtime.profileOrder = []string{"onebot", "qq-official"}
+	runtime.mu.Unlock()
+
+	store := newMemoryInboundEventStore()
+	offline := MessageEvent{Kind: EventKindGroup, ProfileID: "onebot", Platform: PlatformOneBotV11, GroupID: "1", UserID: "user", MessageID: "offline", Time: time.Now().Unix(), BackfillHistoryOnly: true}
+	healthy := MessageEvent{Kind: EventKindGroup, ProfileID: "qq-official", Platform: PlatformQQOfficial, GroupID: "2", UserID: "user", MessageID: "healthy", Time: time.Now().Unix(), BackfillHistoryOnly: true}
+	offlineID, _, err := store.EnqueueInboundEvent(context.Background(), sessionKey(offline), offline)
+	if err != nil {
+		t.Fatal(err)
+	}
+	healthyID, _, err := store.EnqueueInboundEvent(context.Background(), sessionKey(healthy), healthy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime.SetInboundEventStore(store)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		runtime.runInboundWorker(ctx, "profile-isolation-test", store)
+	}()
+	runtime.wakeInboundWorkers()
+	waitForCondition(t, 3*time.Second, func() bool { return store.isDone(healthyID) })
+	cancel()
+	<-done
+
+	if store.isDone(offlineID) {
+		t.Fatal("offline OneBot event was processed while its transport was unavailable")
+	}
+	if count, _ := store.PendingInboundCount(context.Background()); count != 1 {
+		t.Fatalf("pending count = %d, want only the offline OneBot event", count)
+	}
+}
+
 func hasAppLogAction(entries []applog.Entry, action string) bool {
 	return countAppLogAction(entries, action) > 0
 }
@@ -1046,22 +1093,42 @@ func (s *memoryInboundEventStore) EnqueueInboundEvent(_ context.Context, session
 }
 
 func (s *memoryInboundEventStore) ClaimNextInboundEvent(_ context.Context, leaseOwner string, _ time.Time, limits ...InboundConcurrency) (InboundQueueItem, bool, error) {
+	options := InboundClaimOptions{}
+	if len(limits) > 0 {
+		options.Concurrency = limits[0]
+	}
+	return s.claimNextInboundEvent(leaseOwner, options, false)
+}
+
+func (s *memoryInboundEventStore) ClaimNextReadyInboundEvent(_ context.Context, leaseOwner string, _ time.Time, options InboundClaimOptions) (InboundQueueItem, bool, error) {
+	return s.claimNextInboundEvent(leaseOwner, options, true)
+}
+
+func (s *memoryInboundEventStore) claimNextInboundEvent(leaseOwner string, options InboundClaimOptions, filterReadyProfiles bool) (InboundQueueItem, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	concurrency := InboundConcurrency{Group: 1, Private: 1}
-	if len(limits) > 0 {
-		if limits[0].Group > 0 {
-			concurrency.Group = limits[0].Group
-		}
-		if limits[0].Private > 0 {
-			concurrency.Private = limits[0].Private
-		}
+	if options.Concurrency.Group > 0 {
+		concurrency.Group = options.Concurrency.Group
+	}
+	if options.Concurrency.Private > 0 {
+		concurrency.Private = options.Concurrency.Private
 	}
 	selectedID := ""
 	for _, id := range s.order {
 		record := s.records[id]
 		if record.state != "pending" {
 			continue
+		}
+		if filterReadyProfiles {
+			profileID := strings.TrimSpace(record.item.Event.ProfileID)
+			eligible := profileID == "" && options.AllowUnscoped
+			for _, readyProfileID := range options.ProfileIDs {
+				eligible = eligible || profileID == strings.TrimSpace(readyProfileID)
+			}
+			if !eligible {
+				continue
+			}
 		}
 		limit := concurrency.Private
 		if record.item.Event.Kind == EventKindGroup {

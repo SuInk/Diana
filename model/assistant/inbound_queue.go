@@ -116,6 +116,16 @@ type InboundConcurrency struct {
 	Private int
 }
 
+// InboundClaimOptions limits one queue claim to transports that can currently
+// deliver the result. ProfileIDs is deliberately part of the storage query:
+// claiming an offline bot's row and putting it back would spend an attempt and
+// can starve healthy sibling bots behind it.
+type InboundClaimOptions struct {
+	Concurrency   InboundConcurrency
+	ProfileIDs    []string
+	AllowUnscoped bool
+}
+
 // inboundConcurrencyForConfig 把配置翻译成队列认识的形状。
 // inboundConcurrency 是共用入站队列的并发上限，取各台启用机器人里最大的设置。
 func (r *Runtime) inboundConcurrency() InboundConcurrency {
@@ -255,6 +265,13 @@ type InboundEventStore interface {
 	PendingInboundCount(ctx context.Context) (int, error)
 	GroupHistoryWatermark(ctx context.Context, groupID string) (int64, bool, error)
 	ListHistorySessions(ctx context.Context) ([]HistorySession, error)
+}
+
+// ProfileReadyInboundEventStore lets the built-in durable queue skip rows that
+// belong to offline bots without breaking third-party InboundEventStore
+// implementations. Stores without this capability keep the legacy claim path.
+type ProfileReadyInboundEventStore interface {
+	ClaimNextReadyInboundEvent(ctx context.Context, leaseOwner string, leaseUntil time.Time, options InboundClaimOptions) (InboundQueueItem, bool, error)
 }
 
 // InboundMessageEditRefresh describes an edit that matched an already known
@@ -691,16 +708,24 @@ func (r *Runtime) runInboundWorker(ctx context.Context, leaseOwner string, store
 			}
 		}
 		claimed := false
-		if !r.inboundProcessingReady() {
+		claimOptions, ready := r.inboundClaimOptions()
+		if !ready {
 			delay = nextInboundPollDelay(delay)
 			timer.Reset(delay)
 			continue
 		}
-		for r.inboundProcessingReady() {
+		for ready {
 			claimCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 			// 每轮重读配置：改并发不该要重启。
 			leaseUntil := time.Now().Add(inboundLeaseDuration)
-			item, ok, err := store.ClaimNextInboundEvent(claimCtx, leaseOwner, leaseUntil, r.inboundConcurrency())
+			var item InboundQueueItem
+			var ok bool
+			var err error
+			if readyStore, supported := store.(ProfileReadyInboundEventStore); supported {
+				item, ok, err = readyStore.ClaimNextReadyInboundEvent(claimCtx, leaseOwner, leaseUntil, claimOptions)
+			} else {
+				item, ok, err = store.ClaimNextInboundEvent(claimCtx, leaseOwner, leaseUntil, claimOptions.Concurrency)
+			}
 			cancel()
 			if err != nil {
 				if ctx.Err() == nil {
@@ -758,6 +783,7 @@ func (r *Runtime) runInboundWorker(ctx context.Context, leaseOwner string, store
 			if ctx.Err() != nil {
 				return
 			}
+			claimOptions, ready = r.inboundClaimOptions()
 		}
 		// 领到过就回到最短间隔：刚忙完的时候后面往往还有；一直空手才慢慢拉长。
 		if claimed {
@@ -1314,11 +1340,69 @@ func (r *Runtime) inboundReplayCutoffAt(now time.Time) time.Time {
 	return cutoff
 }
 
-func (r *Runtime) inboundProcessingReady() bool {
+func (r *Runtime) inboundClaimOptions() (InboundClaimOptions, bool) {
 	r.inboundReadyMu.RLock()
-	ready := r.inboundReady
+	oneBotReady := r.inboundReady
 	r.inboundReadyMu.RUnlock()
-	return ready && channelEffectivelyOnline(r.channelStatus())
+
+	r.mu.RLock()
+	channel := r.channel
+	enabled := r.enabledProfilesLocked()
+	r.mu.RUnlock()
+	options := InboundClaimOptions{Concurrency: r.inboundConcurrency()}
+	if channel == nil {
+		return options, false
+	}
+	var statuses []ChannelStatus
+	if provider, ok := channel.(interface{ ChannelStatuses() []ChannelStatus }); ok {
+		statuses = provider.ChannelStatuses()
+	} else {
+		statuses = []ChannelStatus{channel.Status()}
+	}
+	seen := map[string]bool{}
+	for _, status := range statuses {
+		profileID := strings.TrimSpace(status.ProfileID)
+		platform := NormalizePlatformID(status.Platform)
+		if len(enabled) == 1 {
+			if profileID == "" {
+				profileID = enabled[0].ID
+			}
+			if platform == "" {
+				platform = NormalizePlatformID(enabled[0].Platform)
+			}
+		}
+		ready := channelEffectivelyOnline(status)
+		if IsOneBotPlatform(platform) {
+			ready = ready && oneBotReady
+			if ready {
+				// Rows created before profiles were introduced belong to the
+				// legacy OneBot transport and may not carry profile_id.
+				options.AllowUnscoped = true
+			}
+		}
+		if !ready {
+			continue
+		}
+		if len(enabled) == 1 {
+			// With only one configured bot, old rows without profile_id are
+			// unambiguous regardless of platform.
+			options.AllowUnscoped = true
+		}
+		if profileID == "" {
+			options.AllowUnscoped = true
+			continue
+		}
+		if !seen[profileID] {
+			seen[profileID] = true
+			options.ProfileIDs = append(options.ProfileIDs, profileID)
+		}
+	}
+	return options, len(options.ProfileIDs) > 0 || options.AllowUnscoped
+}
+
+func (r *Runtime) inboundProcessingReady() bool {
+	_, ready := r.inboundClaimOptions()
+	return ready
 }
 
 func (r *Runtime) wakeInboundWorkers() {

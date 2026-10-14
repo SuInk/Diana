@@ -1053,6 +1053,44 @@ func TestInboundQueuePrioritizesTriggeredEvents(t *testing.T) {
 	}
 }
 
+func TestInboundQueueClaimsOnlyReadyProfiles(t *testing.T) {
+	ctx := context.Background()
+	store := openInboundTestStore(t, filepath.Join(t.TempDir(), "ready-profiles.db"))
+	defer func() { _ = store.Close() }()
+
+	offline := inboundTestEvent("offline-onebot", "higher priority but offline", 1)
+	offline.ProfileID = "onebot"
+	offline.Platform = assistant.PlatformOneBotV11
+	if _, inserted, err := store.EnqueueInboundEvent(ctx, "group:onebot", offline, assistant.InboundPriorityTriggered); err != nil || !inserted {
+		t.Fatalf("enqueue offline inserted=%v err=%v", inserted, err)
+	}
+	healthy := inboundTestEvent("healthy-qq", "ready sibling", 2)
+	healthy.ProfileID = "qq-official"
+	healthy.Platform = assistant.PlatformQQOfficial
+	if _, inserted, err := store.EnqueueInboundEvent(ctx, "group:qq", healthy, assistant.InboundPriorityNormal); err != nil || !inserted {
+		t.Fatalf("enqueue healthy inserted=%v err=%v", inserted, err)
+	}
+	// Older rows may only carry the profile in their JSON payload. Readiness
+	// filtering must still route those rows to the right bot.
+	if _, err := store.db.ExecContext(ctx, `UPDATE inbound_events SET profile_id = '' WHERE message_id = ?`, healthy.MessageID); err != nil {
+		t.Fatal(err)
+	}
+
+	options := assistant.InboundClaimOptions{ProfileIDs: []string{"qq-official"}}
+	item, ok, err := store.ClaimNextReadyInboundEvent(ctx, "qq-worker", time.Now().Add(time.Minute), options)
+	if err != nil || !ok || item.Event.MessageID != "healthy-qq" {
+		t.Fatalf("ready claim=%#v ok=%v err=%v", item, ok, err)
+	}
+	if _, ok, err := store.ClaimNextReadyInboundEvent(ctx, "qq-worker-2", time.Now().Add(time.Minute), options); err != nil || ok {
+		t.Fatalf("offline sibling became claimable: ok=%v err=%v", ok, err)
+	}
+	onebotOptions := assistant.InboundClaimOptions{ProfileIDs: []string{"onebot"}}
+	item, ok, err = store.ClaimNextReadyInboundEvent(ctx, "onebot-worker", time.Now().Add(time.Minute), onebotOptions)
+	if err != nil || !ok || item.Event.MessageID != "offline-onebot" {
+		t.Fatalf("onebot claim=%#v ok=%v err=%v", item, ok, err)
+	}
+}
+
 func TestInboundQueueAllowsThreeGroupTasksButKeepsPrivateSerial(t *testing.T) {
 	ctx := context.Background()
 	store := openInboundTestStore(t, filepath.Join(t.TempDir(), "bounded-concurrency.db"))
