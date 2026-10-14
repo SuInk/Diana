@@ -313,6 +313,8 @@ func DescribeEventOutcome(outcome string) (decision string, reason string, handl
 		return "not_replied", "主动回复生成后未通过准确度审核，已保持沉默", false
 	case "ignored_video":
 		return "not_replied", "消息只有视频内容，当前没有可直接回答的文字或图片请求", false
+	case "ignored_foreign_command":
+		return "not_replied", "消息是斜杠指令，但不是本机器人内置的指令，按发给群里其他机器人处理，不做回复判断", false
 	case "ignored_reply_damping":
 		// 回复欲望衰减已删除，只为还能读懂历史事件。
 		return "not_replied", "近期回复该账号过于频繁，已降低回复欲望，这条不再回复", false
@@ -2056,6 +2058,11 @@ func (r *Runtime) routeMessageEvent(ctx context.Context, event MessageEvent) (Me
 		r.updateUserMemory(event, 0)
 		r.record(r.decisionEventRecord(event, text, "ignored_video"))
 		return finishWithoutReply("ignored_video")
+	}
+	if r.foreignCommand(event, text) {
+		r.updateUserMemory(event, 0)
+		r.record(r.decisionEventRecord(event, text, "ignored_foreign_command"))
+		return finishWithoutReply("ignored_foreign_command")
 	}
 	if r.requiresTelegramBotMentionJudgment(event) {
 		if !r.markedBotMessageAddressesSelf(ctx, event, text) {
