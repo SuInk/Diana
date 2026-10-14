@@ -461,6 +461,10 @@ export interface BotProfileConfig extends SendRetrySettings {
   /** standard 标准模式（全部能力）/ safe 安全模式（关掉高风险能力，主人也一样）。新建默认 standard，safe 只在主人选择时开启。 */
   agent_mode?: string;
   agent_max_steps?: number;
+  /** 单轮最多创建的搜索/分析子任务数。 */
+  subtask_max_tasks?: number;
+  /** 同一批子任务的最大并发数；仍受服务端全局并发限制。 */
+  subtask_max_concurrency?: number;
   agent_command_allowlist?: string[];
   agent_command_timeout_ms?: number;
   /** auto / require / off；留空即 auto。 */
@@ -4195,6 +4199,8 @@ export interface AgentRecommendedDefaults {
   agent_file_write_enabled: boolean;
   agent_command_sandbox: string;
   agent_max_steps: number;
+  subtask_max_tasks: number;
+  subtask_max_concurrency: number;
   agent_command_timeout_ms: number;
   /** 安全模式关掉的能力，按类别排好；界面的说明和确认框照它生成。 */
   agent_safe_mode?: AgentSafeModeCategory[];

@@ -154,6 +154,8 @@ type dianaAgentConfigSnapshot struct {
 	SafeModeDisabled        []string                `json:"safe_mode_disabled,omitempty"`
 	WorkDir                 string                  `json:"work_dir,omitempty"`
 	MaxSteps                int                     `json:"max_steps"`
+	SubtaskMaxTasks         int                     `json:"subtask_max_tasks"`
+	SubtaskMaxConcurrency   int                     `json:"subtask_max_concurrency"`
 	SkillRoots              []string                `json:"skill_roots,omitempty"`
 	MCPConfigPath           string                  `json:"mcp_config_path,omitempty"`
 	CommandAllowlist        []string                `json:"command_allowlist,omitempty"`
@@ -402,6 +404,8 @@ func dianaBotConfigFromConfig(cfg BotConfig) dianaBotConfigSnapshot {
 			SafeModeDisabled:        agentSafeModeDisabledList(cfg),
 			WorkDir:                 AgentWorkspaceDir(),
 			MaxSteps:                cfg.AgentMaxSteps,
+			SubtaskMaxTasks:         cfg.SubtaskMaxTasks,
+			SubtaskMaxConcurrency:   cfg.SubtaskMaxConcurrency,
 			SkillRoots:              append([]string(nil), cfg.AgentSkillRoots...),
 			MCPConfigPath:           cfg.AgentMCPConfigPath,
 			CommandAllowlist:        append([]string(nil), cfg.AgentCommandAllowlist...),

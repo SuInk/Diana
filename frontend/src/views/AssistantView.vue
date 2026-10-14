@@ -1893,6 +1893,17 @@
                 <label for="agent-steps">最大工具步数（1–32，默认 20；只管群成员，主人对话固定 32）</label>
                 <input id="agent-steps" v-model.number="form.agent_max_steps" class="input" type="number" inputmode="numeric" min="1" max="32" />
               </div>
+              <div class="field">
+                <label for="subtask-max-tasks">单轮最多子任务数（≤16）</label>
+                <input id="subtask-max-tasks" v-model.number="form.subtask_max_tasks" class="input" type="number" min="1" max="16" />
+              </div>
+              <div class="field">
+                <label for="subtask-max-concurrency">子任务最大并发（≤4）</label>
+                <input id="subtask-max-concurrency" v-model.number="form.subtask_max_concurrency" class="input" type="number" min="1" max="4" />
+              </div>
+              <div class="field wide">
+                <span class="hint">搜索与分析子任务按机器人分别限制。任务调用可以主动降低并发，但不能突破这里的配置；实际执行仍受服务端全局并发限制。</span>
+              </div>
               <div v-if="agentMode !== 'standard'" class="field wide">
                 <span class="hint">命令白名单、文件写入、浏览器和命令沙盒这些设置在安全模式下不起作用，切回标准模式后按原来的值生效。</span>
               </div>
@@ -2579,6 +2590,8 @@ async function applyAgentDefaults(): Promise<void> {
     form.value.agent_file_write_enabled = defaults.agent_file_write_enabled;
     form.value.agent_command_sandbox = defaults.agent_command_sandbox;
     form.value.agent_max_steps = defaults.agent_max_steps;
+    form.value.subtask_max_tasks = defaults.subtask_max_tasks;
+    form.value.subtask_max_concurrency = defaults.subtask_max_concurrency;
     form.value.agent_command_timeout_ms = defaults.agent_command_timeout_ms;
     toastSuccess("已填入推荐默认值，点「保存配置」后生效");
   } catch (err) {

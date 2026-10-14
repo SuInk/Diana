@@ -926,6 +926,8 @@ type BotConfig struct {
 	// 里的高风险能力，主人也一样）。新建机器人默认 standard，safe 只在主人选择时开启。
 	AgentMode             string   `json:"agent_mode,omitempty"`
 	AgentMaxSteps         int      `json:"agent_max_steps,omitempty"`
+	SubtaskMaxTasks       int      `json:"subtask_max_tasks,omitempty"`
+	SubtaskMaxConcurrency int      `json:"subtask_max_concurrency,omitempty"`
 	AgentSkillRoots       []string `json:"agent_skill_roots,omitempty"`
 	AgentMCPConfigPath    string   `json:"agent_mcp_config_path,omitempty"`
 	AgentCommandAllowlist []string `json:"agent_command_allowlist,omitempty"`
@@ -1478,6 +1480,8 @@ type ConfigPayload struct {
 	AgentEnabled                    bool                      `json:"agent_enabled,omitempty"`
 	AgentMode                       string                    `json:"agent_mode,omitempty"`
 	AgentMaxSteps                   int                       `json:"agent_max_steps,omitempty"`
+	SubtaskMaxTasks                 int                       `json:"subtask_max_tasks,omitempty"`
+	SubtaskMaxConcurrency           int                       `json:"subtask_max_concurrency,omitempty"`
 	AgentSkillRoots                 []string                  `json:"agent_skill_roots,omitempty"`
 	AgentMCPConfigPath              string                    `json:"agent_mcp_config_path,omitempty"`
 	AgentCommandAllowlist           []string                  `json:"agent_command_allowlist,omitempty"`
@@ -2146,9 +2150,11 @@ func DefaultBotConfig() BotConfig {
 		AgentEnabled:                true,
 		// 新建的机器人默认标准模式，安全模式由主人在设置里明确选择。
 		// 存量机器人不受影响，它们的模式由 migrateAgentMode 按旧开关换算。
-		AgentMode:       AgentModeStandard,
-		AgentMaxSteps:   agent.DefaultMaxSteps,
-		AgentSkillRoots: []string{},
+		AgentMode:             AgentModeStandard,
+		AgentMaxSteps:         agent.DefaultMaxSteps,
+		SubtaskMaxTasks:       defaultSubtaskMaxTasks,
+		SubtaskMaxConcurrency: defaultSubtaskMaxConcurrency,
+		AgentSkillRoots:       []string{},
 		// 新建配置直接带上一组只读诊断命令，装完就能用。
 		//
 		// 只影响新建：WithDefaults 对白名单只做清洗、不回填，对写入开关根本不碰，
@@ -2447,6 +2453,18 @@ func (cfg BotConfig) WithDefaults() BotConfig {
 	if cfg.AgentMaxSteps > agent.MaxAllowedSteps {
 		// Agent 步数硬上限防止模型陷入长循环工具调用。
 		cfg.AgentMaxSteps = agent.MaxAllowedSteps
+	}
+	if cfg.SubtaskMaxTasks <= 0 {
+		cfg.SubtaskMaxTasks = defaults.SubtaskMaxTasks
+	}
+	if cfg.SubtaskMaxTasks > maximumSubtaskMaxTasks {
+		cfg.SubtaskMaxTasks = maximumSubtaskMaxTasks
+	}
+	if cfg.SubtaskMaxConcurrency <= 0 {
+		cfg.SubtaskMaxConcurrency = defaults.SubtaskMaxConcurrency
+	}
+	if cfg.SubtaskMaxConcurrency > maximumSubtaskMaxConcurrency {
+		cfg.SubtaskMaxConcurrency = maximumSubtaskMaxConcurrency
 	}
 	if cfg.AgentCommandTimeoutMS <= 0 {
 		cfg.AgentCommandTimeoutMS = defaults.AgentCommandTimeoutMS
@@ -2827,6 +2845,8 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		AgentEnabled:                      cfg.AgentEnabled,
 		AgentMode:                         cfg.AgentMode,
 		AgentMaxSteps:                     cfg.AgentMaxSteps,
+		SubtaskMaxTasks:                   cfg.SubtaskMaxTasks,
+		SubtaskMaxConcurrency:             cfg.SubtaskMaxConcurrency,
 		AgentSkillRoots:                   append([]string(nil), cfg.AgentSkillRoots...),
 		AgentMCPConfigPath:                cfg.AgentMCPConfigPath,
 		AgentCommandAllowlist:             append([]string(nil), cfg.AgentCommandAllowlist...),
@@ -3086,6 +3106,8 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		AgentEnabled:                    payload.AgentEnabled,
 		AgentMode:                       agentModeFromPayload(payload, existing),
 		AgentMaxSteps:                   payload.AgentMaxSteps,
+		SubtaskMaxTasks:                 payload.SubtaskMaxTasks,
+		SubtaskMaxConcurrency:           payload.SubtaskMaxConcurrency,
 		AgentSkillRoots:                 append([]string(nil), payload.AgentSkillRoots...),
 		AgentMCPConfigPath:              payload.AgentMCPConfigPath,
 		AgentCommandAllowlist:           append([]string(nil), payload.AgentCommandAllowlist...),
