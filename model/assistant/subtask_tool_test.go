@@ -292,6 +292,9 @@ func (p *subtaskSearchProbeProvider) Generate(_ context.Context, req llm.Generat
 	if call == 1 {
 		return &llm.GenerateResponse{ToolCalls: []llm.ToolCall{{ID: "search-1", Name: agent.WebSearchToolName, Arguments: map[string]any{"query": "official source"}}}}, nil
 	}
+	if call == 2 {
+		return &llm.GenerateResponse{ToolCalls: []llm.ToolCall{{ID: "read-1", Name: "browser_render", Arguments: map[string]any{"url": "https://example.com/source"}}}}, nil
+	}
 	return &llm.GenerateResponse{Text: "已核验：https://example.com/source"}, nil
 }
 
@@ -314,11 +317,12 @@ func (*subtaskSearchFixturePlugin) Handle(context.Context, PluginRequest) (*Plug
 func (*subtaskSearchFixturePlugin) AgentTools(SettingValues) ([]agent.Tool, error) {
 	return []agent.Tool{
 		subtaskSearchFixtureTool{name: agent.WebSearchToolName},
+		subtaskSearchFixtureTool{name: "browser_render"},
 		subtaskSearchFixtureTool{name: "forbidden_write"},
 	}, nil
 }
 
-func TestSearchSubtaskOnlyExposesWebSearch(t *testing.T) {
+func TestSearchSubtaskOnlyExposesReadOnlyResearchTools(t *testing.T) {
 	provider := &subtaskSearchProbeProvider{}
 	runtime := NewRuntime(BotConfig{BotAccount: "42", MaxBotConcurrency: 2}.WithDefaults(), nilChannel{}, NewPluginManager(&subtaskSearchFixturePlugin{}), nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
@@ -342,19 +346,20 @@ func TestSearchSubtaskOnlyExposesWebSearch(t *testing.T) {
 	provider.mu.Lock()
 	requests := append([]llm.GenerateRequest(nil), provider.requests...)
 	provider.mu.Unlock()
-	if len(requests) < 2 {
-		t.Fatalf("provider requests = %d, want search plus synthesis", len(requests))
+	if len(requests) < 3 {
+		t.Fatalf("provider requests = %d, want search, page read and synthesis", len(requests))
 	}
 	for _, definition := range requests[0].Tools {
 		if definition.Name == "forbidden_write" {
 			t.Fatalf("search worker received forbidden tool: %#v", requests[0].Tools)
 		}
 	}
-	foundSearch := false
+	foundSearch, foundBrowser := false, false
 	for _, definition := range requests[0].Tools {
 		foundSearch = foundSearch || definition.Name == agent.WebSearchToolName
+		foundBrowser = foundBrowser || definition.Name == "browser_render"
 	}
-	if !foundSearch {
+	if !foundSearch || !foundBrowser {
 		t.Fatalf("search worker tools = %#v", requests[0].Tools)
 	}
 }
@@ -384,5 +389,25 @@ func TestSubtaskStatusUnwrapsContextErrors(t *testing.T) {
 		if got := subtaskStatus(err); got != want {
 			t.Fatalf("subtaskStatus(%v) = %q, want %q", err, got, want)
 		}
+	}
+}
+
+func TestSearchSubtaskEvidenceKeepsResultsForPartialOutput(t *testing.T) {
+	evidence := &subtaskSearchEvidence{}
+	if got := evidence.partialOutput(); got != "" {
+		t.Fatalf("empty evidence should produce no output, got %q", got)
+	}
+	ctx := context.Background()
+	evidence.observe(ctx, agent.RunEvent{Phase: agent.RunPhaseToolCompleted, Tool: agent.WebSearchToolName, ToolOutput: "第一批结果"})
+	evidence.observe(ctx, agent.RunEvent{Phase: agent.RunPhaseToolCompleted, Tool: "browser_render", ToolOutput: "正文证据"})
+	evidence.observe(ctx, agent.RunEvent{Phase: agent.RunPhaseToolCompleted, Tool: agent.WebSearchToolName, Error: "boom", ToolOutput: "失败的输出"})
+	evidence.observe(ctx, agent.RunEvent{Phase: agent.RunPhaseToolCompleted, Tool: "other", ToolOutput: "别的工具"})
+	evidence.observe(ctx, agent.RunEvent{Phase: agent.RunPhaseFailed, ModelTurn: 3, ToolsExecuted: 2})
+	got := evidence.partialOutput()
+	if !strings.Contains(got, "第一批结果") || !strings.Contains(got, "正文证据") || strings.Contains(got, "失败的输出") || strings.Contains(got, "别的工具") {
+		t.Fatalf("partial output = %q", got)
+	}
+	if evidence.modelTurns != 3 || evidence.toolCalls != 2 {
+		t.Fatalf("usage counters = %d/%d", evidence.modelTurns, evidence.toolCalls)
 	}
 }
