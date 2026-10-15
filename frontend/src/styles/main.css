@@ -6762,3 +6762,8 @@ a.nav-action {
   .search-routing-panel .model-purpose-heading { flex-wrap: wrap; gap: 12px; }
   .search-routing-options .form-grid { grid-template-columns: minmax(0, 1fr); }
 }
+
+/* Credential health, independent of editor focus or parsing enablement. */
+.row-item.resolver-status-ok { border-color: var(--ok); background: var(--ok-soft); }
+.row-item.resolver-status-err { border-color: var(--err); background: var(--err-soft); }
+.row-item.resolver-status-warn { border-color: var(--warn); }

@@ -5,7 +5,7 @@ import vm from "node:vm";
 import ts from "typescript";
 import { parse } from "@vue/compiler-sfc";
 import { computed, ref, watch } from "vue";
-import { createResolverCredentialChecks, groupResolverSettings } from "./resolver-credentials.ts";
+import { createResolverCredentialChecks, groupResolverSettings, resolverCheckLabel } from "./resolver-credentials.ts";
 
 const source = readFileSync(new URL("../views/PluginsView.vue", import.meta.url), "utf8");
 const script = parse(source).descriptor.scriptSetup.content;
@@ -24,7 +24,7 @@ function editor() {
   const notices = [];
   const target = ref(null), form = ref({}), clears = ref([]);
   const context = vm.createContext({
-    Error, Element: class Element { constructor(selector) { this.selector = selector; } closest(selectors) { return selectors.split(", ").includes(this.selector); } },
+    resolverCheckLabel, Error, Element: class Element { constructor(selector) { this.selector = selector; } closest(selectors) { return selectors.split(", ").includes(this.selector); } },
     document: new EventTarget(), window: new EventTarget(), settingsPointerTarget: null,
     settingsTarget: target, settingsForm: form, clearSecrets: clears,
     editingResolverPlatform: ref(""), resolverCookieEditor: ref(null),
@@ -43,7 +43,7 @@ function editor() {
   context.resolverGroups = computed(() => groupResolverSettings(context.settingsSpecs.value));
   context.activeSettingsForm = computed(() => form.value);
   context.settingsBusy = computed(() => context.savingSettings.value || context.savingSubscription.value);
-  for (const name of ["secretConfigured", "resolverInput", "toggleResolverPlatform"]) runFunction(name, context);
+  for (const name of ["secretConfigured", "resolverInput", "toggleResolverPlatform", "resolverRowStatus"]) runFunction(name, context);
   context.resolverChecks = createResolverCredentialChecks({ input: context.resolverInput, request: (key, signal) => new Promise((resolve, reject) => checks.push({ key, signal, resolve, reject })) });
   for (const name of ["settingsSnapshot", "settingsDirty", "openSettings", "toggleClearSecret", "discardSettings", "closeSettings", "resetSettings", "buildSettingsPayload", "persistSettings", "saveSettings", "clearSettingsPointerTarget", "onSettingsPointerDown", "onResolverBlur"]) runFunction(name, context);
   context.openSettings(plugin);
@@ -388,5 +388,23 @@ test("platform checkbox changes only parsing selection and preserves credential 
   c.toggleResolverPlatform("bilibili", { target: { checked: true } });
   assert.deepEqual([...c.settingsForm.value.enabled_platforms], ["bilibili"]);
   assert.equal(c.clearSecrets.value.length, 0);
+  c.resolverChecks.dispose();
+});
+
+
+test("credential row colors reflect health and never keep success on an untested draft", () => {
+  const { context: c } = editor();
+  const state = c.resolverChecks.states[key];
+  for (const [status, color] of [["valid", "ok"], ["invalid", "err"], ["error", "err"], ["unverified", "warn"]]) {
+    state.phase = "done";
+    state.check = { ...result, state: status };
+    assert.equal(c.resolverRowStatus(key).color, color);
+  }
+  state.phase = "failed";
+  assert.equal(c.resolverRowStatus(key).color, "err");
+  state.phase = "checking";
+  assert.equal(c.resolverRowStatus(key).color, "warn");
+  state.phase = "pending";
+  assert.equal(c.resolverRowStatus(key).color, "");
   c.resolverChecks.dispose();
 });

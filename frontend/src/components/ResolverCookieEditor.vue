@@ -13,15 +13,16 @@ const original = ref("");
 const loaded = ref(false);
 const dirty = computed(() => content.value !== original.value);
 const sites = computed(() => cookieSites(content.value));
-const loginState = ref<"valid" | "invalid" | "unknown" | "checking" | "">("");
+const loginState = ref<"valid" | "invalid" | "unknown" | "error" | "checking" | "">("");
 const youtubeStatus = computed(() => {
  if (loginState.value === "checking") return { label: "检测中…", color: "warn" };
  if (loginState.value === "valid") return { label: "登录有效", color: "ok" };
  if (loginState.value === "invalid") return { label: "登录失效", color: "err" };
+ if (loginState.value === "error") return { label: "检测失败", color: "err" };
  if (loginState.value === "unknown") return { label: "无法确认", color: "warn" };
- if (dirty.value) return { label: "待保存 / 待检测", color: "warn" };
- if (!hasYouTube.value) return { label: props.path ? "文件待检查" : "未配置", color: props.path ? "warn" : "" };
- return { label: "待检测", color: "warn" };
+ if (dirty.value) return { label: "待保存 / 待检测", color: "" };
+ if (!hasYouTube.value) return { label: props.path ? "文件待检查" : "未配置", color: "" };
+ return { label: "待检测", color: "" };
 });
 watch(content, () => { loginState.value = ""; message.value = ""; }, { flush: "sync" });
 const hasYouTube = computed(() => sites.value.some((site) => site.youtube));
@@ -72,7 +73,7 @@ async function testLogin() {
   loginState.value = result.state;
   const label = { valid: "登录有效", invalid: "登录无效", unknown: "无法确认" }[result.state];
   message.value = `${label}：${result.message}`;
- } catch (error) { if (!disposed) { loginState.value = "unknown"; message.value = error instanceof Error ? error.message : "检测失败，无法确认登录状态"; } }
+ } catch (error) { if (!disposed) { loginState.value = "error"; message.value = error instanceof Error ? error.message : "检测失败，无法确认登录状态"; } }
  finally { if (!disposed) busy.value = false; }
 }
 defineExpose({ saveDraft, hasUnsavedChanges: () => dirty.value, isBusy: () => busy.value });
@@ -80,7 +81,7 @@ defineExpose({ saveDraft, hasUnsavedChanges: () => dirty.value, isBusy: () => bu
 
 <template>
  <section class="cookie-manager" aria-label="YouTube Cookie">
-  <div class="row-item cookie-header" :class="{ selected: editing }">
+  <div class="row-item cookie-header" :class="`resolver-status-${youtubeStatus.color || 'neutral'}`">
    <slot name="platform"><strong>YouTube</strong></slot>
    <span class="badge" :class="youtubeStatus.color" role="status">{{ youtubeStatus.label }}</span>
    <div class="cookie-actions">

@@ -400,7 +400,7 @@
               </template>
             </ResolverCookieEditor>
             <section v-else class="resolver-platform-row"  :aria-label="platform.name">
-              <div class="row-item resolver-platform-head" :class="{ selected: editingResolverPlatform === platform.value }">
+              <div class="row-item resolver-platform-head" :class="platform.credential ? `resolver-status-${resolverRowStatus(platform.credential.key).color || 'neutral'}` : ''">
                 <label class="resolver-platform-name">
                   <input type="checkbox" :checked="resolverPlatformEnabled(platform.value)" :disabled="savingSettings" @change="toggleResolverPlatform(platform.value, $event)" />
                   <span>{{ platform.name }}<small v-if="!resolverPlatformEnabled(platform.value)">解析已关闭</small></span>
@@ -430,7 +430,7 @@
             </section>
           </template>
         </div>
-        <p class="hint resolver-status-legend"><span class="badge ok">登录有效</span><span class="badge err">登录失效</span><span class="badge warn">待检测 / 无法确认</span><span class="badge">未配置 / 公开解析</span></p>
+        <p class="hint resolver-status-legend"><span class="badge ok">登录有效</span><span class="badge err">失效 / 检测失败</span><span class="badge warn">检测中 / 无法确认</span><span class="badge">未配置 / 未检测 / 公开解析</span></p>
         </section>
         <section class="plugin-settings-section-head plugin-settings-subsection">
           <h3>媒体与发送</h3>
@@ -1039,7 +1039,15 @@ function resolverRowStatus(key: ResolverCredentialKey): { label: string; color: 
   if (input.clearing) return { label: "待清除", color: "warn" };
   if (!input.value.trim() && !input.configured) return { label: "未配置", color: "" };
   const state = resolverChecks.states[key];
-  return { label: resolverCheckLabel(state), color: state.phase === "checking" || state.phase === "pending" || state.phase === "idle" ? "warn" : resolverBadgeClass(key) };
+  let color = "";
+  if (state.phase === "checking") color = "warn";
+  else if (state.phase === "failed") color = "err";
+  else if (state.phase === "done") {
+    if (state.check?.state === "valid") color = "ok";
+    else if (state.check?.state === "invalid" || state.check?.state === "error") color = "err";
+    else if (state.check?.state === "unverified") color = "warn";
+  }
+  return { label: resolverCheckLabel(state), color };
 }
 function resolverInput(key: ResolverCredentialKey) {
   const file = key === "ytdlp_cookies_path";
