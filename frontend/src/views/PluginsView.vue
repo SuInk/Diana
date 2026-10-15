@@ -388,32 +388,29 @@
       <template v-if="isResolverSettings">
         <section class="resolver-platform-section">
           <h3>解析平台与 Cookie</h3>
-          <p class="hint">勾选启用，右侧编辑与检测；公开解析无需单独配置 Cookie。改动统一保存。</p>
+          <p class="hint">点击名称启停，右侧铅笔编辑 Cookie；圆点表示凭据状态。改动统一保存。</p>
         <div class="resolver-platform-list">
           <template v-for="platform in resolverPlatformRows" :key="platform.value">
-            <ResolverCookieEditor v-if="platform.value === 'youtube'" :ref="setResolverCookieEditor" :path="String(settingsForm.ytdlp_cookies_path || '')" :disabled="savingSettings" @saved="settingsForm.ytdlp_cookies_path = $event">
+            <ResolverCookieEditor v-if="platform.value === 'youtube'" :ref="setResolverCookieEditor" :path="String(settingsForm.ytdlp_cookies_path || '')" :disabled="savingSettings" :enabled="resolverPlatformEnabled(platform.value)" @saved="settingsForm.ytdlp_cookies_path = $event">
               <template #platform>
                 <label class="resolver-platform-name">
                   <input type="checkbox" :checked="resolverPlatformEnabled(platform.value)" :disabled="savingSettings" @change="toggleResolverPlatform(platform.value, $event)" />
-                  <span>{{ platform.name }}<small v-if="!resolverPlatformEnabled(platform.value)">解析已关闭</small></span>
+                  <span class="resolver-checkmark" aria-hidden="true">{{ resolverPlatformEnabled(platform.value) ? "✓" : "○" }}</span><span>{{ platform.name }}</span>
                 </label>
               </template>
             </ResolverCookieEditor>
             <section v-else class="resolver-platform-row"  :aria-label="platform.name">
-              <div class="row-item resolver-platform-head" :class="platform.credential ? `resolver-status-${resolverRowStatus(platform.credential.key).color || 'neutral'}` : ''">
+              <div class="model-chip resolver-chip" :class="[platform.credential ? `resolver-status-${resolverRowStatus(platform.credential.key).color || 'neutral'}` : '', { 'is-enabled': resolverPlatformEnabled(platform.value) }]">
                 <label class="resolver-platform-name">
                   <input type="checkbox" :checked="resolverPlatformEnabled(platform.value)" :disabled="savingSettings" @change="toggleResolverPlatform(platform.value, $event)" />
-                  <span>{{ platform.name }}<small v-if="!resolverPlatformEnabled(platform.value)">解析已关闭</small></span>
+                  <span class="resolver-checkmark" aria-hidden="true">{{ resolverPlatformEnabled(platform.value) ? "✓" : "○" }}</span><span>{{ platform.name }}</span>
                 </label>
                 <template v-if="platform.credential">
-                  <span class="badge" :class="resolverRowStatus(platform.credential.key).color" role="status">{{ resolverRowStatus(platform.credential.key).label }}</span>
-                  <div class="resolver-platform-actions">
-                    <button class="btn small" type="button" :data-resolver-test="platform.credential.key" :disabled="savingSettings || !resolverCanTest(platform.credential.key)" @click="resolverChecks.test(platform.credential.key)">{{ resolverChecks.states[platform.credential.key].phase === 'checking' ? '检测中…' : '检测' }}</button>
-                    <button class="btn small" type="button" data-settings-action :disabled="savingSettings"  aria-haspopup="dialog" @click="editingResolverPlatform = platform.value">编辑</button>
-                  </div>
+                  <span class="resolver-health-dot" :class="resolverRowStatus(platform.credential.key).color" :title="resolverRowStatus(platform.credential.key).label" :aria-label="resolverRowStatus(platform.credential.key).label" role="status"></span>
+                  <button class="resolver-chip-edit" type="button" data-settings-action :disabled="savingSettings" :aria-label="`编辑 ${platform.name} Cookie`" title="编辑 Cookie" aria-haspopup="dialog" @click="editingResolverPlatform = platform.value"><Pencil :size="13" aria-hidden="true" /></button>
                 </template>
                 <template v-else>
-                  <span class="badge resolver-public-status" title="无需单独配置 Cookie">公开解析</span>
+                  <span class="resolver-health-dot" title="公开解析，无需单独配置 Cookie" aria-label="公开解析，无需单独配置 Cookie" role="status"></span>
 
                 </template>
               </div>
@@ -797,7 +794,7 @@ async function changeExtensionTab(value:ExtensionTab) {
   extensionTab.value=value;
   if (showBrowser.value) navigate('plugins');
 }
-import { ArrowRight, ChevronDown, Download, LayoutGrid, RefreshCw, Rows3, Search, SlidersHorizontal } from "@lucide/vue";
+import { ArrowRight, ChevronDown, Download, LayoutGrid, Pencil, RefreshCw, Rows3, Search, SlidersHorizontal } from "@lucide/vue";
 import {
   installPlugin,
   installRepoPlugin,
@@ -1957,22 +1954,12 @@ useConfigurationRefresh(["bot"], reload);
 
 <style scoped>
 .resolver-platform-section { width:100%; }
-.resolver-platform-list { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,300px),1fr)); gap:8px 16px; align-items:start; }
-.resolver-platform-section > .hint { margin:6px 0 8px; }
-
-.resolver-platform-row { min-width:0; }
-.resolver-platform-head { display:grid; grid-template-columns:minmax(0,1fr) auto auto; align-items:center; gap:8px; padding:10px; margin:0; min-height:54px; }
-.resolver-platform-name { display:flex; align-items:center; gap:7px; cursor:pointer; font-weight:600; font-size:12px; }
-.resolver-platform-name input { width:16px; height:16px; accent-color:var(--accent); }
-.resolver-platform-name small { display:block; font-weight:400; opacity:.6; font-size:11px; }
-.resolver-public-status { grid-column:3; }
-.resolver-platform-actions .btn { padding:4px 7px; font-size:11px; }
-.resolver-platform-actions { display:flex; justify-content:flex-end; gap:6px; font-size:11px; }
-.resolver-platform-editor { padding:16px; margin-top:12px; border-radius:10px; background:var(--bg); }
+.resolver-platform-list { display:flex; flex-wrap:wrap; gap:8px; align-items:flex-start; }
+.resolver-platform-section > .hint { margin:6px 0 12px; }
+.resolver-platform-row { min-width:0; max-width:100%; }
+.resolver-platform-name { display:inline-flex; align-items:center; gap:6px; cursor:pointer; font-weight:500; font-size:13px; position:relative; }
+.resolver-platform-name input { position:absolute; width:1px; height:1px; opacity:0; }
+.resolver-platform-name:focus-within { outline:2px solid var(--accent); outline-offset:3px; border-radius:4px; }
+.resolver-checkmark { width:12px; text-align:center; }
 .resolver-status-legend { display:flex; gap:8px; flex-wrap:wrap; margin-top:10px; }
-@media(max-width:560px) {
- .resolver-platform-head { grid-template-columns:1fr auto; gap:10px; }
- .resolver-public-status { grid-column:2; }
- .resolver-platform-actions { grid-column:2; }
-}
 </style>

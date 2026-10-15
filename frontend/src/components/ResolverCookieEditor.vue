@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onBeforeUnmount } from "vue";
 import { readResolverCookieFile, saveResolverCookieFile, checkResolverCookieFile, testResolverCookieLogin } from "../api";
+import { Pencil } from "@lucide/vue";
 import Modal from "./Modal.vue";
 import { cookieSites } from "../lib/cookie-sites";
-const props = defineProps<{ path: string; disabled?: boolean }>();
+const props = defineProps<{ path: string; disabled?: boolean; enabled?: boolean }>();
 const emit = defineEmits<{ (event: "saved", path: string): void }>();
 const editing = ref(false);
 const busy = ref(false);
@@ -81,13 +82,10 @@ defineExpose({ saveDraft, hasUnsavedChanges: () => dirty.value, isBusy: () => bu
 
 <template>
  <section class="cookie-manager" aria-label="YouTube Cookie">
-  <div class="row-item cookie-header" :class="`resolver-status-${youtubeStatus.color || 'neutral'}`">
+  <div class="model-chip resolver-chip" :class="[`resolver-status-${youtubeStatus.color || 'neutral'}`, { 'is-enabled': enabled }]">
    <slot name="platform"><strong>YouTube</strong></slot>
-   <span class="badge" :class="youtubeStatus.color" role="status">{{ youtubeStatus.label }}</span>
-   <div class="cookie-actions">
-    <button class="btn small" type="button" :disabled="busy || disabled || !hasYouTube" @click="testLogin">{{ loginState === 'checking' ? '检测中…' : '检测' }}</button>
-    <button class="btn small" type="button" :disabled="busy || disabled" aria-haspopup="dialog" @click="edit">编辑</button>
-   </div>
+   <span class="resolver-health-dot" :class="youtubeStatus.color" :title="youtubeStatus.label" :aria-label="youtubeStatus.label" role="status"></span>
+   <button class="resolver-chip-edit" type="button" :disabled="busy || disabled" aria-label="编辑 YouTube Cookie" title="编辑 Cookie" aria-haspopup="dialog" @click="edit"><Pencil :size="13" aria-hidden="true" /></button>
   </div>
   <Modal v-if="editing" title="YouTube · Cookie 文件" initial-focus="#resolver-cookie-content" @close="!busy && (editing = false)">
   <div class="cookie-editor">
@@ -110,18 +108,11 @@ defineExpose({ saveDraft, hasUnsavedChanges: () => dirty.value, isBusy: () => bu
    <button class="btn primary" type="button" :disabled="busy" @click="editing = false">完成</button>
   </template>
   </Modal>
-  <p v-if="message && !editing" class="hint" role="status">{{ message }}</p>
+
  </section>
 </template>
 <style scoped>
-.cookie-manager { min-width:0; }
-.cookie-header { display:grid; grid-template-columns:minmax(0,1fr) auto auto; align-items:center; gap:8px; padding:10px; margin:0; min-height:54px; }
-.cookie-actions { display:flex; justify-content:flex-end; gap:6px; }
-.cookie-actions .btn { padding:4px 7px; font-size:11px; }
-.cookie-editor { display:grid; gap:12px; padding:0; border-radius:10px; background:var(--bg); }
+.cookie-manager { min-width:0; max-width:100%; }
+.cookie-editor { display:grid; gap:12px; }
 .cookie-editor p { margin:0; }
-@media(max-width:560px) {
- .cookie-header { grid-template-columns:1fr auto; gap:10px; }
- .cookie-actions { grid-column:2; }
-}
 </style>
