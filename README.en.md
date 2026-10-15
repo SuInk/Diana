@@ -49,7 +49,7 @@ irm https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.ps1 | iex
 curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/docker.sh | sh
 ```
 
-The native installer needs no administrator privileges. **To upgrade, rerun the same command**; if you installed with sudo before, the script picks up that installation automatically. Server setups, start-at-boot, Docker image choices and more are in the [installation guide](docs/install.en.md).
+The native installer needs no administrator privileges. **To upgrade, rerun the same command**; if you installed with sudo before, the script picks up that installation automatically. More install options are in the [deployment guide](https://suink.github.io/Diana/en/deploy.html).
 
 **② Log in to the console.** Open `http://127.0.0.1:18080`. The admin username and password are in the terminal output and shown only once, so save them right away (for Docker, check `docker logs diana`). The password is stored only as a hash in the database, not in `config.yaml`; if you forget it, reset it with `diana passwd` (see below).
 
@@ -62,7 +62,7 @@ The native installer needs no administrator privileges. **To upgrade, rerun the 
 That's it. No reply? The event center tells you why; `diana doctor` checks service health.
 
 > [!TIP]
-> **Can't open the console from another computer?** By default only this machine can connect. Rerun the install command with `-s -- --host 0.0.0.0` appended (Windows: `-BindHost 0.0.0.0`); see the [installation guide](docs/install.en.md#reaching-the-console-from-another-machine). Once exposed, put an HTTPS reverse proxy in front; don't leave the console open on the public internet.
+> **Can't open the console from another computer?** By default only this machine can connect. Rerun the install command with `-s -- --host 0.0.0.0` appended (Windows: `-BindHost 0.0.0.0`); see the [deployment guide](https://suink.github.io/Diana/en/deploy.html). Once exposed, put an HTTPS reverse proxy in front; don't leave the console open on the public internet.
 
 <details>
 <summary>Docker details / manual download / building from source</summary>

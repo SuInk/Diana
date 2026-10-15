@@ -49,7 +49,7 @@ irm https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.ps1 | iex
 curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/docker.sh | sh
 ```
 
-原生安装不需要管理员权限。**升级也是重跑同一条命令**；以前用 sudo 装过的，脚本会自动接着用原来的安装。服务器部署、开机自启、Docker 版本选择等细节见[安装文档](docs/install.md)。
+原生安装不需要管理员权限。**升级也是重跑同一条命令**；以前用 sudo 装过的，脚本会自动接着用原来的安装。更多安装方式见[部署文档](https://suink.github.io/Diana/deploy.html)。
 
 **② 登录控制台。** 浏览器打开 `http://127.0.0.1:18080`（从别的设备访问就换成这台机器的 IP）。管理员账号密码在安装结束时显示在终端里，**只显示一次，请当场保存**；Docker 可用 `docker logs diana` 查看。忘了密码运行 `diana passwd` 重置。
 
@@ -62,7 +62,7 @@ curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/docker.sh 
 就这些。没回复？事件中心会告诉你原因；`diana doctor` 能检查服务健康。
 
 > [!TIP]
-> **从别的电脑打不开控制台？** 默认只允许本机访问。安装命令后面加 `-s -- --host 0.0.0.0`（Windows：`-BindHost 0.0.0.0`）重跑一遍即可，详见[安装文档](docs/install.md#从其他机器访问控制台)。开放后请套 HTTPS 反向代理，别把控制台直接暴露在公网。
+> **从别的电脑打不开控制台？** 默认只允许本机访问。安装命令后面加 `-s -- --host 0.0.0.0`（Windows：`-BindHost 0.0.0.0`）重跑一遍即可，详见[部署文档](https://suink.github.io/Diana/deploy.html)。开放后请套 HTTPS 反向代理，别把控制台直接暴露在公网。
 
 <details>
 <summary>Docker 细节 / 手动下载 / 源码构建</summary>
