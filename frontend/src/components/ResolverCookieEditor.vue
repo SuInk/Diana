@@ -4,7 +4,7 @@ import { readResolverCookieFile, saveResolverCookieFile, checkResolverCookieFile
 import { cookieSites } from "../lib/cookie-sites";
 const props = defineProps<{ path: string; disabled?: boolean }>();
 const emit = defineEmits<{ (event: "saved", path: string): void }>();
-const editing = ref(false);
+const cookieInput = ref<HTMLTextAreaElement | null>(null);
 const busy = ref(false);
 const content = ref("");
 const message = ref("");
@@ -38,7 +38,7 @@ async function load() {
 }
 async function edit() {
  if (!loaded.value) await load();
- if (loaded.value) editing.value = true;
+ if (loaded.value) cookieInput.value?.focus();
 }
 async function saveDraft(): Promise<boolean> {
  if (!dirty.value) return false;
@@ -84,13 +84,13 @@ defineExpose({ saveDraft, hasUnsavedChanges: () => dirty.value, isBusy: () => bu
    <span class="badge" :class="youtubeStatus.color" role="status">{{ youtubeStatus.label }}</span>
    <div class="cookie-actions">
     <button class="btn small" type="button" :disabled="busy || disabled || !hasYouTube" @click="testLogin">{{ loginState === 'checking' ? '检测中…' : '检测' }}</button>
-    <button class="btn small" type="button" :disabled="busy || disabled" :aria-expanded="editing" @click="editing ? editing = false : edit()">{{ editing ? "收起" : "编辑" }}</button>
+    <button class="btn small" type="button" :disabled="busy || disabled" @click="edit">编辑</button>
    </div>
   </div>
-  <div v-if="editing" class="cookie-editor">
+  <div class="cookie-editor">
    <label for="resolver-cookie-content">Cookie 内容</label>
    <p class="hint">粘贴 Netscape 格式 Cookie，随底部「保存」生效。此文件由 yt-dlp 共用，可包含多个网站。</p>
-   <textarea id="resolver-cookie-content" v-model="content" class="input plugin-setting-textarea" rows="6" spellcheck="false" autocomplete="off" autocapitalize="off" :disabled="busy || disabled" placeholder="# Netscape HTTP Cookie File"></textarea>
+   <textarea ref="cookieInput" id="resolver-cookie-content" v-model="content" class="input plugin-setting-textarea" rows="6" spellcheck="false" autocomplete="off" autocapitalize="off" :disabled="busy || disabled" placeholder="# Netscape HTTP Cookie File"></textarea>
    <div class="actions">
     <button class="btn small" type="button" :disabled="busy || disabled || !content.trim()" @click="check(false)">检查格式</button>
     <button class="btn small" type="button" :disabled="busy || disabled || !content.trim()" @click="check(true)">格式化</button>

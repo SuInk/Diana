@@ -410,7 +410,7 @@
                   <span class="badge" :class="resolverRowStatus(platform.credential.key).color" role="status">{{ resolverRowStatus(platform.credential.key).label }}</span>
                   <div class="resolver-platform-actions">
                     <button class="btn small" type="button" :data-resolver-test="platform.credential.key" :disabled="savingSettings || !resolverCanTest(platform.credential.key)" @click="resolverChecks.test(platform.credential.key)">{{ resolverChecks.states[platform.credential.key].phase === 'checking' ? '检测中…' : '检测' }}</button>
-                    <button class="btn small" type="button" data-settings-action :disabled="savingSettings" :aria-expanded="editingResolverPlatform === platform.value" @click="editingResolverPlatform = editingResolverPlatform === platform.value ? '' : platform.value">{{ editingResolverPlatform === platform.value ? '收起' : '编辑' }}</button>
+                    <button class="btn small" type="button" data-settings-action :disabled="savingSettings" @click="focusResolverCredential(platform.credential.key)">编辑</button>
                   </div>
                 </template>
                 <template v-else>
@@ -418,7 +418,7 @@
                   <span class="hint resolver-platform-actions">无需单独配置 Cookie</span>
                 </template>
               </div>
-              <div v-if="platform.credential && editingResolverPlatform === platform.value" class="resolver-platform-editor">
+              <div v-if="platform.credential" class="resolver-platform-editor">
                 <PluginSettingField :spec="platform.credential.spec" :form="settingsForm" :clearing="clearSecrets.includes(platform.credential.key)" :secret-configured="secretConfigured(platform.credential.key)" :secret-placeholder="secretPlaceholder(platform.credential.key)" @toggle-clear="toggleClearSecret" @blur="onResolverBlur" />
                 <p v-if="String(settingsForm[platform.credential.key] || '').trim()" class="hint">当前为未保存草稿，检测通过后仍需点击底部保存。</p>
                 <p v-if="resolverCheckMessage(platform.credential.key)" class="hint" role="status">{{ resolverCheckMessage(platform.credential.key) }}</p>
@@ -427,8 +427,8 @@
           </template>
         </div>
         <p class="hint resolver-status-legend"><span class="badge ok">登录有效</span><span class="badge err">登录失效</span><span class="badge warn">待检测 / 无法确认</span><span class="badge">未配置 / 公开解析</span></p>
-        <details class="plugin-settings-section-head plugin-settings-subsection plugin-settings-collapsible">
-          <summary><h3>媒体与发送</h3><ChevronDown :size="15" /></summary>
+        <section class="plugin-settings-section-head plugin-settings-subsection">
+          <h3>媒体与发送</h3>
           <p>控制媒体下载、发送方式、数量与清晰度。</p>
         <div class="stack plugin-settings-form">
           <template v-for="spec in resolverGroups.media" :key="spec.key">
@@ -436,16 +436,16 @@
             <PluginSettingField v-else :spec="spec" :form="settingsForm" />
           </template>
         </div>
-        </details>
-        <details class="plugin-settings-section-head plugin-settings-subsection plugin-settings-collapsible resolver-advanced">
-          <summary><h3>高级抓取设置</h3><ChevronDown class="plugin-settings-chevron" :size="15" aria-hidden="true" /></summary>
+        </section>
+        <section class="plugin-settings-section-head plugin-settings-subsection resolver-advanced">
+          <h3>高级抓取设置</h3>
           <div class="stack plugin-settings-form">
             <template v-for="spec in resolverGroups.advanced" :key="spec.key">
               <PluginSettingField v-if="spec.key === 'ytdlp_cookies_path'" :spec="{ ...spec, label: '外部 Cookie 文件路径（可选）', description: '由 WebUI 管理 Cookie 时无需填写。' }" :form="settingsForm" />
               <PluginSettingField v-else :spec="spec" :form="settingsForm" :clearing="clearSecrets.includes(spec.key)" :secret-configured="secretConfigured(spec.key)" :secret-placeholder="secretPlaceholder(spec.key)" @toggle-clear="toggleClearSecret" />
             </template>
           </div>
-        </details>
+        </section>
       </template>
       <div v-if="!isGitHubSettings && !isMusicSettings && !isResolverSettings && !(isStickerSettings && stickerSettingsTab === 'library')" class="stack plugin-settings-form">
         <template v-for="spec in visibleSettingsSpecs" :key="spec.key">
@@ -1015,7 +1015,9 @@ async function testMusicSettings(): Promise<void> {
 
 const isResolverSettings = computed(() => settingsTarget.value?.manifest.id === resolverPluginID);
 const resolverGroups = computed(() => groupResolverSettings(settingsSpecs.value));
-const editingResolverPlatform = ref("");
+function focusResolverCredential(key: string) {
+  document.getElementById(`setting-${key}`)?.focus();
+}
 const resolverPlatformRows = computed(() => (resolverGroups.value.platforms[0]?.options ?? []).map(option => ({
   ...option,
   name: option.label.replace("（可下载媒体）", ""),
@@ -1475,7 +1477,6 @@ function openSettings(plugin: PluginState): void {
     form[spec.key] = Array.isArray(value) ? [...value] : value;
   }
   settingsForm.value = form;
-  editingResolverPlatform.value = "";
   const publishForm: Record<string, any> = {};
   const publish = plugins.value.find((candidate) => candidate.manifest.id === repositoryPublishPluginID);
   for (const spec of publish?.manifest.settings ?? []) {
