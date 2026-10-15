@@ -61,3 +61,13 @@ test("custom metadata accepts explicit capabilities and rejects invalid or dupli
   assert.throws(() => applyModelMetadataDraft({ ...draft, id: "invalid id" }, []), /完整模型/);
   assert.throws(() => applyModelMetadataDraft({ ...draft, output: [] }, []), /输出能力/);
 });
+
+test("disabled models remain disabled through sync and metadata edits", () => {
+ const stored = [{id:"off",disabled:true},{id:"missing-off",disabled:true},{id:"on"}];
+ const synced = syncModelMetadata([{id:"off",name:"renamed"},{id:"on"}], stored);
+ assert.equal(synced.find(m=>m.id==="off").disabled,true);
+ assert.equal(synced.find(m=>m.id==="missing-off").disabled,true);
+ assert.equal(mergeModelMetadata({id:"off"},stored[0]).disabled,true);
+ const edited = applyModelMetadataDraft(createModelMetadataDraft(stored[0]),stored,"off");
+ assert.equal(edited[0].disabled,true);
+});

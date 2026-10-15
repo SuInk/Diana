@@ -48,6 +48,7 @@ func buildDefaultUserAgent() string {
 }
 
 type ModelInfo struct {
+	Disabled            bool     `json:"disabled,omitempty"`
 	ID                  string   `json:"id"`
 	Name                string   `json:"name,omitempty"`
 	Object              string   `json:"object,omitempty"`

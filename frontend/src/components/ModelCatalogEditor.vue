@@ -10,11 +10,8 @@
       <button class="btn" type="button" :disabled="disabled" @click="start()"><Plus :size="14" aria-hidden="true" />自定义模型</button>
     </div>
 
-    <section v-if="draft" class="model-metadata-panel" aria-label="模型设置">
-      <div class="model-metadata-heading">
-        <div><strong>{{ editingID ? '编辑模型' : '自定义模型' }}</strong><p class="hint">设置应用到当前草稿，保存提供商配置后生效。</p></div>
-        <button class="btn icon-only ghost" type="button" aria-label="取消模型编辑" @click="cancel"><X :size="16" aria-hidden="true" /></button>
-      </div>
+    <Modal v-if="draft" :title="editingID ? '编辑模型' : '自定义模型'" :initial-focus="editingID ? '#model-metadata-context' : '#model-metadata-id'" @close="cancel">
+      <p class="hint">设置应用到当前草稿，保存提供商配置后生效。</p>
       <div class="model-metadata-fields">
         <div class="field">
           <label for="model-metadata-id">模型 ID</label>
@@ -43,15 +40,17 @@
         </div>
       </div>
       <p v-if="error" class="model-metadata-error" role="alert">{{ error }}</p>
-      <div class="model-metadata-footer"><button class="btn ghost" type="button" @click="cancel">取消编辑</button><button class="btn primary" type="button" @click="apply"><Check :size="14" aria-hidden="true" />应用模型设置</button></div>
-    </section>
+      <template #footer><button class="btn ghost" type="button" @click="cancel">取消编辑</button><button class="btn primary" type="button" @click="apply"><Check :size="14" aria-hidden="true" />应用模型设置</button></template>
+    </Modal>
 
     <div v-if="modelValue.length" class="model-catalog-list" aria-label="模型列表">
-      <div v-for="model in modelValue" :key="model.id" class="model-catalog-row" :class="{ selected: editingID === model.id }">
-        <button class="model-catalog-details" type="button" :disabled="disabled || Boolean(draft)" :aria-label="`编辑模型 ${model.id}`" @click="start(model)">
-          <span class="model-catalog-copy"><span class="model-catalog-id">{{ model.id }}</span><span class="hint">{{ summary(model) }}</span></span><Pencil :size="14" aria-hidden="true" />
-        </button>
-        <button class="btn icon-only ghost" type="button" :disabled="disabled || Boolean(draft)" :aria-label="`移除模型 ${model.id}`" @click="remove(model.id)"><Trash2 :size="14" aria-hidden="true" /></button>
+      <div v-for="model in modelValue" :key="model.id" class="model-chip model-catalog-chip" @click="toggleChip($event, model)">
+        <label class="model-catalog-label" :title="`${model.id} · ${summary(model)}`">
+          <input type="checkbox" :checked="!model.disabled" :disabled="disabled || Boolean(draft)" :aria-label="`启用模型 ${model.id}`" @change="setEnabled(model, ($event.target as HTMLInputElement).checked)" />
+          <span class="model-catalog-id">{{ model.name || model.id }}</span>
+        </label>
+        <button class="model-chip-remove" type="button" :disabled="disabled || Boolean(draft)" :aria-label="`编辑模型 ${model.id}`" title="编辑模型" @click="start(model)"><Pencil :size="13" aria-hidden="true" /></button>
+        <button class="model-chip-remove" type="button" :disabled="disabled || Boolean(draft)" :aria-label="`移除模型 ${model.id}`" title="删除模型" @click="remove(model.id)"><Trash2 :size="13" aria-hidden="true" /></button>
       </div>
     </div>
   </div>
@@ -59,9 +58,10 @@
 
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from "vue";
-import { Check, Pencil, Plus, Trash2, X } from "@lucide/vue";
+import { Check, Pencil, Plus, Trash2 } from "@lucide/vue";
 import type { LLMModelInfo } from "../api";
 import { applyModelMetadataDraft, createModelMetadataDraft, modelCapabilitySummary, type ModelMetadataDraft } from "../lib/model-metadata";
+import Modal from "./Modal.vue";
 import AppSwitch from "./AppSwitch.vue";
 
 const props = defineProps<{ modelValue: LLMModelInfo[]; disabled?: boolean; providerWindow?: number }>();
@@ -118,6 +118,14 @@ function addIDs() {
   emit("update:modelValue", [...props.modelValue, ...ids.filter(id => !props.modelValue.some(model => model.id === id)).map(id => ({ id, custom: true }))]);
   quickIDs.value = "";
 }
+function setEnabled(model: LLMModelInfo, enabled: boolean) {
+  if (props.disabled || draft.value) return;
+  emit("update:modelValue", props.modelValue.map(item => item.id === model.id ? { ...item, disabled: !enabled || undefined } : item));
+}
+function toggleChip(event: MouseEvent, model: LLMModelInfo) {
+  if (!(event.target instanceof Element) || event.target.closest("label, input, button")) return;
+  setEnabled(model, Boolean(model.disabled));
+}
 function remove(id: string) { emit("update:modelValue", props.modelValue.filter(model => model.id !== id)); }
 </script>
 
@@ -126,16 +134,12 @@ function remove(id: string) { emit("update:modelValue", props.modelValue.filter(
 .model-catalog-tools { display: flex; gap: 10px; align-items: center; }
 .model-catalog-tools > .input-group { flex: 1; min-width: 0; }
 .model-catalog-tools > .btn { flex: none; }
-.model-catalog-list { max-height: 264px; overflow: auto; border: 1px solid var(--border); border-radius: 12px; }
-.model-catalog-row { display: flex; align-items: center; gap: 8px; padding: 6px 10px 6px 0; }
-.model-catalog-row + .model-catalog-row { border-top: 1px solid var(--border); }
-.model-catalog-row:hover, .model-catalog-row.selected { background: var(--surface-2); }
-.model-catalog-details { display: flex; flex: 1; gap: 12px; align-items: center; min-width: 0; padding: 7px 14px; border: 0; background: transparent; color: var(--text); text-align: left; font: inherit; cursor: pointer; }
-.model-catalog-details > svg { flex: none; color: var(--muted); }
-.model-catalog-copy { display: grid; gap: 4px; flex: 1; min-width: 0; }
-.model-catalog-id { overflow-wrap: anywhere; font-size: 13px; font-weight: 600; }
-.model-catalog-details:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: 8px; }
-.model-catalog-details:disabled { cursor: default; }
+.model-catalog-list { display:flex; flex-wrap:wrap; gap:8px; max-height:264px; overflow:auto; padding:4px; scrollbar-width:thin; }
+.model-catalog-chip { gap:6px; padding:5px 8px; min-height:32px; font-size:13px; cursor:pointer; border-color:var(--border-strong); }
+.model-catalog-label { display:inline-flex; align-items:center; gap:6px; min-width:0; cursor:pointer; }
+.model-catalog-label input { flex:0 0 15px; width:15px; height:15px; margin:0; accent-color:var(--err); cursor:pointer; }
+.model-catalog-id { overflow-wrap:anywhere; }
+.model-catalog-chip button:disabled { opacity:.4; cursor:default; }
 .model-metadata-panel { display: grid; gap: 10px; padding: 16px; border: 1px solid var(--border-strong); border-radius: 12px; background: var(--surface-2); }
 .model-metadata-heading { display: flex; align-items: start; justify-content: space-between; gap: 12px; }
 .model-metadata-heading strong { font-size: 14px; }

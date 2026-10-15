@@ -103,6 +103,7 @@ export interface ImageGenerateResponse {
 }
 
 export interface LLMModelInfo {
+  disabled?: boolean;
   id: string;
   name?: string;
   object?: string;

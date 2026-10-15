@@ -496,7 +496,7 @@ func NewProviderRegistryFromProfiles(set ProfileSet) (*ProviderRegistry, AgentMo
 		}
 		seen := map[string]bool{}
 		for _, modelID := range modelIDs {
-			if seen[modelID] {
+			if seen[modelID] || !cfg.ModelEnabled(modelID) {
 				continue
 			}
 			seen[modelID] = true
@@ -516,7 +516,7 @@ func NewProviderRegistryFromProfiles(set ProfileSet) (*ProviderRegistry, AgentMo
 	}
 	if active.ProviderID == "" {
 		for _, profile := range set.Profiles {
-			if profile.ID == firstProfileID && profile.Config.Model != "" {
+			if profile.ID == firstProfileID && profile.Config.Model != "" && profile.Config.ModelEnabled(profile.Config.Model) {
 				active = AgentModelConfig{ProviderID: profile.ID, ModelID: profile.ID + ":" + profile.Config.Model}
 				break
 			}

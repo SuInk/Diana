@@ -4217,7 +4217,7 @@ function profileModels(profile: LLMConfig): LLMModelInfo[] {
       models.set(id, { ...current, output_modalities: ["image"] });
     }
   }
-  return [...models.values()];
+  return [...models.values()].filter(model => !model.disabled);
 }
 
 function modelCompatibility(model: LLMModelInfo, role: RoleKey): ModelCompatibility {

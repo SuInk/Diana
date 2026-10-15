@@ -24,6 +24,16 @@ const (
 	ContextWindowSourceFallback ContextWindowSource = "fallback"
 )
 
+// ModelEnabled keeps legacy or manually specified IDs usable unless explicitly disabled.
+func (cfg ProviderConfig) ModelEnabled(model string) bool {
+	for _, info := range cfg.Models {
+		if strings.TrimSpace(info.ID) == strings.TrimSpace(model) {
+			return !info.Disabled
+		}
+	}
+	return true
+}
+
 // ModelInfoFor 返回同步下来的模型清单里某个模型的条目。模型名在聚合网关上常带
 // 供应商命名空间（openai/gpt-4o），所以精确匹配不中时再按去掉命名空间比一次。
 func (cfg ProviderConfig) ModelInfoFor(model string) (ModelInfo, bool) {

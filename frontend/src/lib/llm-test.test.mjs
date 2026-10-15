@@ -72,3 +72,8 @@ test("api.ts 补过去向说明的 5xx 不会和测试框的说明叠两遍", ()
   assert.equal((message.match(/运行记录/g) ?? []).length, 1, message);
   assert.match(message, /后端出错（HTTP 502）。这段响应来自反向代理或网关（x）/);
 });
+
+test("connection testing excludes disabled models including the provider default", () => {
+ assert.deepEqual(testModelIDs({model:"off",models:[{id:"off",disabled:true},{id:"on"}]}),["on"]);
+ assert.equal(randomTestModel({model:"off",models:[{id:"off",disabled:true}]}),"");
+});

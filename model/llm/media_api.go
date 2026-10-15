@@ -174,6 +174,9 @@ type mediaHTTP struct {
 }
 
 func newMediaHTTP(cfg ProviderConfig, defaultBaseURL string, opts []ClientOption) (*mediaHTTP, error) {
+	if !cfg.ModelEnabled(cfg.Model) {
+		return nil, fmt.Errorf("llm: model %q is disabled", cfg.Model)
+	}
 	cfg = cfg.WithDefaults()
 	RegisterProviderSecrets(cfg)
 	if strings.TrimSpace(cfg.APIKey) == "" && strings.TrimSpace(cfg.OAuthProvider) == "" {

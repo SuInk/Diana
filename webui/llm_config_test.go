@@ -987,3 +987,21 @@ func TestLLMConfigHandlerMaxOutputTokensOmittedKeepsValue(t *testing.T) {
 		t.Fatalf("explicit 0 kept the stored limit %d", got)
 	}
 }
+
+func TestLLMConfigSaveKeepsDisabledModelsAndChoosesEnabledDefault(t *testing.T) {
+	store := NewMemoryLLMProfileStore(llm.ProviderConfig{Provider: llm.ProviderOpenAICompatible, APIKey: "existing-key", BaseURL: "https://saved.example/v1", Model: "off"})
+	router := testRouter(NewLLMConfigHandler(store))
+	body := []byte(`{"id":"` + store.Profiles().Profiles[0].ID + `","provider":"openai_compatible","base_url":"https://saved.example/v1","models":[{"id":"off","disabled":true},{"id":"on"}]}`)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/llm/config", bytes.NewReader(body)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	saved := store.Current()
+	if saved.Model != "on" || len(saved.Models) != 2 || !saved.Models[0].Disabled {
+		t.Fatalf("saved config=%+v", saved)
+	}
+	if !payloadFromConfig(saved).Models[0].Disabled {
+		t.Fatal("disabled flag lost in response")
+	}
+}

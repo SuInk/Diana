@@ -19,6 +19,7 @@ export function mergeModelMetadata(preferred: LLMModelInfo, fallback?: LLMModelI
   return effectiveModelInfo({
     ...fallback,
     ...preferred,
+    disabled: fallback?.disabled ?? preferred.disabled,
     custom: preferred.custom || fallback?.custom || undefined,
     context_window_override: preferred.context_window_override ?? fallback?.context_window_override,
     capabilities_override: preferred.capabilities_override ?? fallback?.capabilities_override,
@@ -36,12 +37,13 @@ export function syncModelMetadata(synced: LLMModelInfo[], stored: LLMModelInfo[]
     result.set(model.id, {
       ...model,
       custom: saved?.custom,
+      disabled: saved?.disabled,
       context_window_override: saved?.context_window_override,
       capabilities_override: saved?.capabilities_override
     });
   }
   for (const model of stored) {
-    if (!result.has(model.id) && (model.custom || model.context_window_override || model.capabilities_override)) {
+    if (!result.has(model.id) && (model.disabled || model.custom || model.context_window_override || model.capabilities_override)) {
       result.set(model.id, { ...model });
     }
   }

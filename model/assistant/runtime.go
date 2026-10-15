@@ -5724,7 +5724,7 @@ func profileSupportsRoleModel(profile llm.Profile, modelID string) (supported bo
 	}
 	for _, model := range profile.Config.Models {
 		if strings.TrimSpace(model.ID) == modelID {
-			return true, true
+			return !model.Disabled, true
 		}
 	}
 	return false, true

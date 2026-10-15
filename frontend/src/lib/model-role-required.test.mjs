@@ -355,3 +355,12 @@ test("all-disabled model routes are rejected and their purpose is opened", async
   assert.equal(errors[0], "intent至少需要启用一个模型");
   assert.equal(selectedModelRole.value, "intent");
 });
+
+test("model refresh retains disabled entries and selectors exclude disabled defaults", () => {
+ const context = vm.createContext({ mergeModelMetadata });
+ for(const name of ["normalizedModalities","mergeModelInfo","profileModels","mergeModelLists"]) loadFunction(name,context);
+ const merged = context.mergeModelLists([{id:"off"},{id:"on"}],[{id:"off",disabled:true}]);
+ assert.equal(merged.find(model=>model.id==="off").disabled,true);
+ const selectable = context.profileModels({model:"off",image_model:"off",models:merged});
+ assert.deepEqual(Array.from(selectable,model=>model.id),["on"]);
+});

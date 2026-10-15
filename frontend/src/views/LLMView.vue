@@ -297,7 +297,7 @@
           <div class="model-sync-row">
             <div class="model-sync-copy">
               <span class="model-sync-title">模型列表</span>
-              <span v-if="modelOptions.length > 0" class="hint">{{ modelOptions.length }} 个模型，点击任意模型可编辑上下文和能力。手动设置会在同步后保留。</span>
+              <span v-if="modelOptions.length > 0" class="hint">{{ modelOptions.length }} 个模型，勾选启用，右侧编辑或删除。手动设置会在同步后保留。</span>
               <span v-else class="hint">从服务同步模型列表，也可手动添加中转或自建模型 ID。</span>
             </div>
             <span class="cluster" style="gap: 8px">
@@ -931,10 +931,10 @@ const contextWindowBindings = computed(() =>
 // 兜底指向一个这套配置里根本没有的模型。现在跟着列表走，选不出不一致的状态。
 function resolvedDefaultModel(): string {
   const current = form.value.model.trim();
-  if (current !== "" && modelOptions.value.some((model) => model.id === current)) {
+  if (current !== "" && modelOptions.value.some((model) => model.id === current && !model.disabled)) {
     return current;
   }
-  return modelOptions.value[0]?.id ?? current;
+  return modelOptions.value.find(model => !model.disabled)?.id ?? modelOptions.value[0]?.id ?? current;
 }
 
 function blankHeaderRow(): HeaderRow {
@@ -1052,8 +1052,12 @@ async function save(): Promise<void> {
         : saved.profiles?.find((profile) => profile.id && !knownIDs.has(profile.id))) ??
       saved.profiles?.[0] ??
       saved;
-    openTest(savedProfile);
-    toastSuccess("配置已保存，请完成连通测试");
+    if (testModelIDs(savedProfile).length) {
+      openTest(savedProfile);
+      toastSuccess("配置已保存，请完成连通测试");
+    } else {
+      toastSuccess("配置已保存，当前模型均未启用");
+    }
   } catch (error) {
     toastError(error instanceof Error ? error.message : "保存失败");
   } finally {

@@ -355,6 +355,12 @@ func (h *LLMConfigHandler) saveConfig(c *gin.Context) {
 			return
 		}
 		cfg.Model = strings.TrimSpace(cfg.Models[0].ID)
+		for _, model := range cfg.Models {
+			if !model.Disabled && strings.TrimSpace(model.ID) != "" {
+				cfg.Model = strings.TrimSpace(model.ID)
+				break
+			}
+		}
 	}
 
 	next := upsertProfileSet(set, payload, cfg)

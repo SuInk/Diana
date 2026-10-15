@@ -736,6 +736,9 @@ func llmProfilesInGroup(set llm.ProfileSet, group string) []llm.Profile {
 		}
 		profile.Group = llm.NormalizeProfileGroup(profile.Group)
 		profile.Config = profile.Config.WithDefaults()
+		if !profile.Config.ModelEnabled(profile.Config.Model) {
+			continue
+		}
 		profiles = append(profiles, profile)
 	}
 	return profiles

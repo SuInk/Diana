@@ -9,7 +9,7 @@ export function testModelIDs(profile: LLMConfig): string[] {
   const models: string[] = [];
   for (const id of [profile.model ?? "", ...(profile.models ?? []).map((model) => model.id)]) {
     const value = id.trim();
-    if (!value || seen.has(value)) continue;
+    if (!value || seen.has(value) || profile.models?.some(model => model.id === value && model.disabled)) continue;
     seen.add(value);
     models.push(value);
   }
