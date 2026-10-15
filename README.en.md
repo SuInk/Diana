@@ -13,6 +13,8 @@
 
 [Website & Docs](https://suink.github.io/Diana/) · [Live Demo](https://suink.github.io/Diana/demo/) · [Latest Release](https://github.com/SuInk/Diana/releases/latest) · [中文](./README.md)
 
+[![QQ Group](https://img.shields.io/badge/QQ%20Group-Join-12B7F5?logo=qq&logoColor=white)](https://qm.qq.com/q/4o6zEBs4h2)
+
 </div>
 
 <br />
