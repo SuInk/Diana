@@ -515,9 +515,6 @@ code {
   color: var(--muted);
   font-size: 11px;
 }
-.model-recovery-policy {
-  margin: -4px 0 16px;
-}
 .model-recovery-grid {
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
   margin-top: 12px;
@@ -533,7 +530,7 @@ code {
   gap: 12px;
   margin-top: 12px;
 }
-.model-recovery-policy > .hint {
+.model-recovery-policy .card-body > .hint {
   display: block;
   margin-top: 10px;
 }

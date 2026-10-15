@@ -95,6 +95,7 @@ type dianaBotConfigSnapshot struct {
 	PromptImageOnlyConfigured       bool                 `json:"prompt_image_only_text_configured"`
 	PromptWakeOnlyConfigured        bool                 `json:"prompt_wake_only_text_configured"`
 	ModelRoles                      map[string]ModelRole `json:"model_roles,omitempty"`
+	ModelRecoveryPolicy             *ModelRecoveryPolicy `json:"model_recovery_policy,omitempty"`
 	BotReplyLoopDetectionEnabled    bool                 `json:"bot_reply_loop_detection_enabled"`
 	ReplyRefusalSuppressionEnabled  bool                 `json:"reply_refusal_suppression_enabled"`
 	ReplySemanticDedupEnabled       bool                 `json:"reply_semantic_dedup_enabled"`
@@ -351,6 +352,7 @@ func dianaBotConfigFromConfig(cfg BotConfig) dianaBotConfigSnapshot {
 		PromptImageOnlyConfigured:       cfg.PromptOverrides.isCustomized(promptImageOnlySpec),
 		PromptWakeOnlyConfigured:        cfg.PromptOverrides.isCustomized(promptWakeOnlySpec),
 		ModelRoles:                      normalizeModelRoles(cfg.ModelRoles),
+		ModelRecoveryPolicy:             normalizeModelRecoveryPolicy(cfg.ModelRecoveryPolicy),
 		BotReplyLoopDetectionEnabled:    boolValue(cfg.BotReplyLoopDetectionEnabled, true),
 		ReplyRefusalSuppressionEnabled:  boolValue(cfg.ReplyRefusalSuppressionEnabled, true),
 		ReplySemanticDedupEnabled:       boolValue(cfg.ReplySemanticDedupEnabled, true),

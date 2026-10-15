@@ -663,25 +663,6 @@
                     </div>
                     <span v-if="!modelRoleInherited(role.key)" class="model-routing-toolbar-hint">{{ modelRoutingDescription(role.key) }}</span>
                   </div>
-                  <AppDisclosure
-                    v-if="!isMediaRole(role.key) && role.key !== 'image' && roleForm[role.key] && !modelRoleInherited(role.key)"
-                    :id="`model-recovery-policy-${role.key}`"
-                    class="model-recovery-policy"
-                    :title="modelRecoveryIsCustom(role.key) ? '自动恢复规则 · 自定义' : '自动恢复规则 · 默认'"
-                  >
-                    <div class="form-grid model-recovery-grid">
-                      <label class="field"><span>瞬时错误重试次数</span><AppNumberInput :model-value="modelRecoveryPolicy(role.key).transient_retries" :min="0" :max="3" :label="`${role.label}瞬时错误重试次数`" @update:model-value="(value) => setModelRecoveryPolicyField(role.key, 'transient_retries', value)" /><span class="hint">普通 5xx 和连接故障在切换模型前重试 0–3 次。</span></label>
-                      <label class="field"><span>重试间隔（毫秒）</span><AppNumberInput :model-value="modelRecoveryPolicy(role.key).retry_delay_milliseconds" :min="0" :max="10000" :label="`${role.label}重试间隔`" @update:model-value="(value) => setModelRecoveryPolicyField(role.key, 'retry_delay_milliseconds', value)" /></label>
-                      <label class="field"><span>瞬时错误首次冷却（秒）</span><AppNumberInput :model-value="modelRecoveryPolicy(role.key).transient_cooldown_seconds" :min="0" :max="3600" :label="`${role.label}瞬时错误首次冷却`" @update:model-value="(value) => setModelRecoveryPolicyField(role.key, 'transient_cooldown_seconds', value)" /></label>
-                      <label class="field"><span>限流/鉴权首次冷却（秒）</span><AppNumberInput :model-value="modelRecoveryPolicy(role.key).status_cooldown_seconds" :min="0" :max="86400" :label="`${role.label}限流鉴权首次冷却`" @update:model-value="(value) => setModelRecoveryPolicyField(role.key, 'status_cooldown_seconds', value)" /></label>
-                      <label class="field"><span>单次冷却上限（秒）</span><AppNumberInput :model-value="modelRecoveryPolicy(role.key).max_cooldown_seconds" :min="1" :max="86400" :label="`${role.label}单次冷却上限`" @update:model-value="(value) => setModelRecoveryPolicyField(role.key, 'max_cooldown_seconds', value)" /></label>
-                    </div>
-                    <div class="model-recovery-actions">
-                      <AppSwitch :model-value="modelRecoveryPolicy(role.key).respect_retry_after" @update:model-value="(value) => setModelRecoveryPolicyField(role.key, 'respect_retry_after', value)">优先采用上游 Retry-After</AppSwitch>
-                      <button v-if="modelRecoveryIsCustom(role.key)" class="btn small ghost" type="button" @click="resetModelRecoveryPolicy(role.key)">恢复默认规则</button>
-                    </div>
-                    <p class="hint">连续失败仍按指数退避，冷却不在当前请求中等待；修改后点击页面「保存配置」生效。</p>
-                  </AppDisclosure>
                   <div v-if="modelRoleInherited(role.key)" class="model-inherited-state">
                     <GitBranch :size="22" aria-hidden="true" />
                     <div><strong>{{ modelRoleSource(role.key) === FOLLOW_VISION ? '沿用视觉理解的模型配置' : modelRoleSource(role.key) === UNSPECIFIED ? `跟随${purposeRoleFallbackLabel(role.key)}的模型配置` : '沿用对话的模型配置' }}</strong><p>模型、调度方式和后备路由随来源一起更新。</p></div>
@@ -864,6 +845,31 @@
                 <AppSwitch v-model="form.owner_llm_config_enabled">允许主人在聊天中修改提供商和模型</AppSwitch>
                 <span class="hint">仅主人账号可修改，保存前会校验目标模型是否可用。</span>
               </div>
+            </div>
+          </section>
+
+          <!-- 自动恢复是机器人级通用规则，放在模型页最下面，避免每个用途重复展示。 -->
+          <section class="card model-recovery-policy">
+            <div class="card-header">
+              <div>
+                <h2>自动恢复规则</h2>
+                <span class="card-sub">所有文本模型用途共用；图片、语音和视频生成保持各自的任务策略</span>
+              </div>
+              <span class="badge" :class="modelRecoveryIsCustom() ? 'accent' : ''">{{ modelRecoveryIsCustom() ? '自定义' : '默认' }}</span>
+            </div>
+            <div class="card-body">
+              <div class="form-grid model-recovery-grid">
+                <label class="field"><span>瞬时错误重试次数</span><AppNumberInput :model-value="modelRecoveryPolicy().transient_retries" :min="0" :max="3" label="瞬时错误重试次数" @update:model-value="(value) => setModelRecoveryPolicyField('transient_retries', value)" /><span class="hint">普通 5xx 和连接故障在切换模型前重试 0–3 次。</span></label>
+                <label class="field"><span>重试间隔（毫秒）</span><AppNumberInput :model-value="modelRecoveryPolicy().retry_delay_milliseconds" :min="0" :max="10000" label="重试间隔" @update:model-value="(value) => setModelRecoveryPolicyField('retry_delay_milliseconds', value)" /></label>
+                <label class="field"><span>瞬时错误首次冷却（秒）</span><AppNumberInput :model-value="modelRecoveryPolicy().transient_cooldown_seconds" :min="0" :max="3600" label="瞬时错误首次冷却" @update:model-value="(value) => setModelRecoveryPolicyField('transient_cooldown_seconds', value)" /></label>
+                <label class="field"><span>限流/鉴权首次冷却（秒）</span><AppNumberInput :model-value="modelRecoveryPolicy().status_cooldown_seconds" :min="0" :max="86400" label="限流鉴权首次冷却" @update:model-value="(value) => setModelRecoveryPolicyField('status_cooldown_seconds', value)" /></label>
+                <label class="field"><span>单次冷却上限（秒）</span><AppNumberInput :model-value="modelRecoveryPolicy().max_cooldown_seconds" :min="1" :max="86400" label="单次冷却上限" @update:model-value="(value) => setModelRecoveryPolicyField('max_cooldown_seconds', value)" /></label>
+              </div>
+              <div class="model-recovery-actions">
+                <AppSwitch :model-value="modelRecoveryPolicy().respect_retry_after" @update:model-value="(value) => setModelRecoveryPolicyField('respect_retry_after', value)">优先采用上游 Retry-After</AppSwitch>
+                <button v-if="modelRecoveryIsCustom()" class="btn small ghost" type="button" @click="resetModelRecoveryPolicy">恢复默认规则</button>
+              </div>
+              <p class="hint">连续失败仍按指数退避，冷却不在当前请求中等待；修改后点击页面「保存配置」生效。</p>
             </div>
           </section>
         </div>
@@ -3555,7 +3561,7 @@ type RoleKey = "chat" | "vision" | "intent" | "image" | "media_parse" | (typeof 
 type RoleRoute = { profile_id?: string; group?: string; model: string; provider_id?: string; model_id?: string; follow_chat?: boolean; weight?: number; disabled?: boolean; standby?: boolean };
 // params 只在音视频插槽的主路由上有，后备沿用同一份。
 // reasoning_effort 同样只在主路由上有，后备沿用；空表示跟随提供商配置。
-type RoleAssignment = RoleRoute & { routing_strategy?: "smart" | "failover" | "round_robin" | "weighted"; recovery_policy?: ModelRecoveryPolicy; fallbacks?: RoleRoute[]; params?: Record<string, string>; reasoning_effort?: string };
+type RoleAssignment = RoleRoute & { routing_strategy?: "smart" | "failover" | "round_robin" | "weighted"; fallbacks?: RoleRoute[]; params?: Record<string, string>; reasoning_effort?: string };
 type ModelRoleRow = { key: RoleKey; label: string; sublabel?: string; description: string };
 const modelRoleRows: ModelRoleRow[] = [
   {
@@ -3777,23 +3783,21 @@ const defaultModelRecoveryPolicy: ModelRecoveryPolicy = {
   respect_retry_after: true
 };
 
-function modelRecoveryPolicy(role: RoleKey): ModelRecoveryPolicy {
-  return roleForm.value[role]?.recovery_policy ?? defaultModelRecoveryPolicy;
+function modelRecoveryPolicy(): ModelRecoveryPolicy {
+  return form.value?.model_recovery_policy ?? defaultModelRecoveryPolicy;
 }
 
-function modelRecoveryIsCustom(role: RoleKey): boolean {
-  return !!roleForm.value[role]?.recovery_policy;
+function modelRecoveryIsCustom(): boolean {
+  return !!form.value?.model_recovery_policy;
 }
 
-function setModelRecoveryPolicyField<K extends keyof ModelRecoveryPolicy>(role: RoleKey, key: K, value: ModelRecoveryPolicy[K]): void {
-  const assignment = roleForm.value[role];
-  if (!assignment || assignment.follow_chat) return;
-  assignment.recovery_policy = { ...modelRecoveryPolicy(role), [key]: value };
+function setModelRecoveryPolicyField<K extends keyof ModelRecoveryPolicy>(key: K, value: ModelRecoveryPolicy[K]): void {
+  if (!form.value) return;
+  form.value.model_recovery_policy = { ...modelRecoveryPolicy(), [key]: value };
 }
 
-function resetModelRecoveryPolicy(role: RoleKey): void {
-  const assignment = roleForm.value[role];
-  if (assignment) delete assignment.recovery_policy;
+function resetModelRecoveryPolicy(): void {
+  if (form.value) delete form.value.model_recovery_policy;
 }
 
 function modelRoutingStrategiesFor(role: RoleKey): AppSelectOption[] {
@@ -4013,7 +4017,7 @@ function applyModelRouteEditor(): void {
   const current = roleForm.value[editor.role];
   if (editor.index === 0) {
     route.standby = undefined;
-    roleForm.value[editor.role] = { ...route, params: current?.params, reasoning_effort: current?.reasoning_effort, routing_strategy: current?.follow_chat ? undefined : current?.routing_strategy, recovery_policy: current?.follow_chat ? undefined : current?.recovery_policy, fallbacks: current?.follow_chat ? undefined : current?.fallbacks };
+    roleForm.value[editor.role] = { ...route, params: current?.params, reasoning_effort: current?.reasoning_effort, routing_strategy: current?.follow_chat ? undefined : current?.routing_strategy, fallbacks: current?.follow_chat ? undefined : current?.fallbacks };
   } else if (current && !current.follow_chat) {
     current.fallbacks ??= [];
     if (editor.adding) current.fallbacks.push(route);
@@ -4090,7 +4094,7 @@ function roleSnapshot(roles: Record<string, RoleAssignment | undefined> | undefi
       .sort()
       .map((key) => {
         const role = roles?.[key];
-        return role ? [key, role.routing_strategy ?? "", role.recovery_policy ?? null, route(role), (role.fallbacks ?? []).map(route), params(role), role.reasoning_effort ?? ""] : [key];
+        return role ? [key, role.routing_strategy ?? "", route(role), (role.fallbacks ?? []).map(route), params(role), role.reasoning_effort ?? ""] : [key];
       })
   );
 }
@@ -4121,7 +4125,6 @@ function setRoleForm(source: BotProfileConfig["model_roles"]): void {
       model_id: role.model_id,
       follow_chat: role.follow_chat,
       routing_strategy: role.routing_strategy,
-      recovery_policy: role.recovery_policy ? { ...role.recovery_policy } : undefined,
       weight: role.weight,
       disabled: role.disabled,
       standby: role.standby,
@@ -4494,7 +4497,7 @@ function setRoleChannel(role: RoleKey, value: string): void {
   const params = current?.params;
   // 思考强度是这个用途的设置，不跟某家提供商绑定，换提供商时保留。
   const reasoning_effort = current?.reasoning_effort;
-  const routing = current?.follow_chat ? {} : { routing_strategy: current?.routing_strategy, recovery_policy: current?.recovery_policy, weight: current?.weight, disabled: current?.disabled };
+  const routing = current?.follow_chat ? {} : { routing_strategy: current?.routing_strategy, weight: current?.weight, disabled: current?.disabled };
   if (value.startsWith(GROUP_PREFIX)) {
     roleForm.value[role] = { ...routing, params, reasoning_effort, group: value.slice(GROUP_PREFIX.length), model, fallbacks };
   } else {
@@ -4532,13 +4535,13 @@ function moveRoleRoute(role: RoleKey, from: number, to: number): void {
   if (!assignment || assignment.follow_chat) return;
   // params 和思考强度属于这个用途而不是某一条路由，换主路由时留在原地，
   // 不能跟着原来的主路由一起挪进后备。
-  const { fallbacks = [], params, reasoning_effort, routing_strategy, recovery_policy, ...primary } = assignment;
+  const { fallbacks = [], params, reasoning_effort, routing_strategy, ...primary } = assignment;
   const routes: RoleRoute[] = [primary, ...fallbacks];
   if (from === to || from < 0 || to < 0 || from >= routes.length || to >= routes.length) return;
   const [moved] = routes.splice(from, 1);
   routes.splice(to, 0, moved);
   const [first, ...rest] = routes;
-  roleForm.value[role] = { ...first, standby: undefined, routing_strategy, recovery_policy, fallbacks: rest, params, reasoning_effort };
+  roleForm.value[role] = { ...first, standby: undefined, routing_strategy, fallbacks: rest, params, reasoning_effort };
 }
 
 function routeDragClasses(role: RoleKey, index: number): Record<string, boolean> {
@@ -4974,7 +4977,6 @@ async function save(): Promise<void> {
         provider_id: role.provider_id,
         model_id: role.model_id,
         routing_strategy: role.routing_strategy,
-        recovery_policy: role.recovery_policy,
         weight: role.weight,
         disabled: role.disabled,
         fallbacks: role.fallbacks?.map((fallback) => ({ ...fallback, model: fallback.model.trim() })),

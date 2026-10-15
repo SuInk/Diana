@@ -745,9 +745,10 @@ type BotConfig struct {
 	AutoImageDescription *bool `json:"auto_image_description,omitempty"`
 	AutoVideoPreprocess  *bool `json:"auto_video_preprocess,omitempty"`
 	// ImageInputMode 决定主回复模型怎么看图，见 image_input_mode.go。
-	ImageInputMode ImageInputMode       `json:"image_input_mode,omitempty"`
-	ModelRoles     map[string]ModelRole `json:"model_roles,omitempty"`
-	WebSearch      *WebSearchAssignment `json:"web_search,omitempty"`
+	ImageInputMode      ImageInputMode       `json:"image_input_mode,omitempty"`
+	ModelRoles          map[string]ModelRole `json:"model_roles,omitempty"`
+	ModelRecoveryPolicy *ModelRecoveryPolicy `json:"model_recovery_policy,omitempty"`
+	WebSearch           *WebSearchAssignment `json:"web_search,omitempty"`
 	// PrivateClosingGrace 是私聊里「对方在收尾」时仍然照常回答的轮数。
 	// 第一声再见就闭嘴不像人：正常人会接一两句「拜拜」再停。到这个数之后，
 	// 候选回复只是又一句告别时就不再发出去。明确要求停止不受它约束，当场生效。
@@ -997,16 +998,16 @@ type ModelRole struct {
 	ReasoningEffort string `json:"reasoning_effort,omitempty"`
 	// 空策略默认智能；独立图片和音视频默认主备。failover 显式选择主备。
 	RoutingStrategy string `json:"routing_strategy,omitempty"`
-	// RecoveryPolicy 覆盖这个用途的瞬时重试与健康冷却规则。nil 保持内置默认值；
-	// 后备路由沿用主路由的规则，避免同一用途切换模型后行为突然变化。
+	// RecoveryPolicy 只用于读取短暂存在过的用途级旧配置。WithDefaults 会把第一份
+	// 旧值迁移到机器人级 ModelRecoveryPolicy，并从用途路由中移除。
 	RecoveryPolicy *ModelRecoveryPolicy `json:"recovery_policy,omitempty"`
 	Weight         int                  `json:"weight,omitempty"`
 	Disabled       bool                 `json:"disabled,omitempty"`
 	Standby        bool                 `json:"standby,omitempty"`
 }
 
-// ModelRecoveryPolicy 是一个模型用途的自动避障规则。字段不用指针：只要用户选择
-// 自定义，界面就保存一份完整规则，因此 0 可以明确表示“不重试”或“不冷却”。
+// ModelRecoveryPolicy 是一台机器人的通用模型自动避障规则。字段不用指针：只要
+// 用户选择自定义，界面就保存一份完整规则，因此 0 可以明确表示“不重试”或“不冷却”。
 type ModelRecoveryPolicy struct {
 	TransientRetries         int  `json:"transient_retries"`
 	RetryDelayMilliseconds   int  `json:"retry_delay_milliseconds"`
@@ -1120,6 +1121,23 @@ func normalizeModelRecoveryPolicy(policy *ModelRecoveryPolicy) *ModelRecoveryPol
 	normalized.StatusCooldownSeconds = min(max(normalized.StatusCooldownSeconds, 0), 86_400)
 	normalized.MaxCooldownSeconds = min(max(normalized.MaxCooldownSeconds, 1), 86_400)
 	return &normalized
+}
+
+func normalizeModelRecoveryConfig(policy *ModelRecoveryPolicy, roles map[string]ModelRole) (*ModelRecoveryPolicy, map[string]ModelRole) {
+	roles = normalizeModelRoles(roles)
+	if policy == nil {
+		for _, key := range append([]string{"chat"}, ModelBindingKeys()...) {
+			if legacy := roles[key].RecoveryPolicy; legacy != nil {
+				policy = legacy
+				break
+			}
+		}
+	}
+	for key, role := range roles {
+		role.RecoveryPolicy = nil
+		roles[key] = role
+	}
+	return normalizeModelRecoveryPolicy(policy), roles
 }
 
 func normalizeModelRoleParams(params map[string]string) map[string]string {
@@ -1432,6 +1450,7 @@ type ConfigPayload struct {
 	AutoVideoPreprocess            *bool                `json:"auto_video_preprocess,omitempty"`
 	ImageInputMode                 ImageInputMode       `json:"image_input_mode,omitempty"`
 	ModelRoles                     map[string]ModelRole `json:"model_roles,omitempty"`
+	ModelRecoveryPolicy            *ModelRecoveryPolicy `json:"model_recovery_policy,omitempty"`
 	WebSearch                      *WebSearchAssignment `json:"web_search,omitempty"`
 	BotReplyLoopDetectionEnabled   *bool                `json:"bot_reply_loop_detection_enabled,omitempty"`
 	ReplyRefusalSuppressionEnabled *bool                `json:"reply_refusal_suppression_enabled,omitempty"`
@@ -2526,7 +2545,7 @@ func (cfg BotConfig) WithDefaults() BotConfig {
 	cfg.DisabledGroups = cleanStrings(cfg.DisabledGroups)
 	cfg.MarkedBotIDs = cleanStrings(append([]string(nil), cfg.MarkedBotIDs...))
 	cfg.ReplyRules = normalizeReplyRules(cfg.ReplyRules)
-	cfg.ModelRoles = normalizeModelRoles(cfg.ModelRoles)
+	cfg.ModelRecoveryPolicy, cfg.ModelRoles = normalizeModelRecoveryConfig(cfg.ModelRecoveryPolicy, cfg.ModelRoles)
 	cfg.WebSearch = normalizeWebSearchAssignment(cfg.WebSearch)
 	return cfg
 }
@@ -2810,6 +2829,7 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		AutoVideoPreprocess:               copyBoolPointer(cfg.AutoVideoPreprocess),
 		ImageInputMode:                    cfg.ImageInputMode,
 		ModelRoles:                        normalizeModelRoles(cfg.ModelRoles),
+		ModelRecoveryPolicy:               normalizeModelRecoveryPolicy(cfg.ModelRecoveryPolicy),
 		WebSearch:                         normalizeWebSearchAssignment(cfg.WebSearch),
 		BotReplyLoopDetectionEnabled:      copyBoolPointer(cfg.BotReplyLoopDetectionEnabled),
 		ReplyRefusalSuppressionEnabled:    copyBoolPointer(cfg.ReplyRefusalSuppressionEnabled),
@@ -3071,6 +3091,7 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		AutoVideoPreprocess:             copyBoolPointer(firstNonNilBoolPointer(payload.AutoVideoPreprocess, existing.AutoVideoPreprocess)),
 		ImageInputMode:                  ImageInputMode(firstNonEmpty(string(payload.ImageInputMode), string(existing.ImageInputMode))),
 		ModelRoles:                      normalizeModelRoles(payload.ModelRoles),
+		ModelRecoveryPolicy:             normalizeModelRecoveryPolicy(payload.ModelRecoveryPolicy),
 		WebSearch:                       normalizeWebSearchAssignment(firstWebSearchAssignment(payload.WebSearch, existing.WebSearch)),
 		BotReplyLoopDetectionEnabled:    copyBoolPointer(payload.BotReplyLoopDetectionEnabled),
 		ReplyRefusalSuppressionEnabled:  copyBoolPointer(payload.ReplyRefusalSuppressionEnabled),

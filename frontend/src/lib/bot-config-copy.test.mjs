@@ -5,19 +5,22 @@ import { copyBotConfiguration } from "./bot-config-copy.ts";
 const defaults = { platform: "onebot-v11", enabled: true, onebot_transport: "reverse_ws", onebot_reverse_ws_endpoint: "ws://localhost/onebot/v11/ws" };
 
 test("copy keeps behavior and nested model/persona drafts independent", () => {
-  const source = { ...defaults, id: "source", name: "助手", enabled: false, owner_id: "42", system_prompt: "persona", group_triggers: ["助手"], private_admission: { mode: "whitelist", allowed_users: ["42"] }, model_roles: { chat: { profile_id: "provider", model: "chat", fallbacks: [{ profile_id: "backup", model: "small" }] } }, custom_persona: { system_prompt: "custom" }, telegram_suppress_bot_messages: false };
+  const source = { ...defaults, id: "source", name: "助手", enabled: false, owner_id: "42", system_prompt: "persona", group_triggers: ["助手"], private_admission: { mode: "whitelist", allowed_users: ["42"] }, model_roles: { chat: { profile_id: "provider", model: "chat", fallbacks: [{ profile_id: "backup", model: "small" }] } }, model_recovery_policy: { transient_retries: 0, retry_delay_milliseconds: 0, transient_cooldown_seconds: 3, status_cooldown_seconds: 30, max_cooldown_seconds: 120, respect_retry_after: false }, custom_persona: { system_prompt: "custom" }, telegram_suppress_bot_messages: false };
   const draft = copyBotConfiguration(source, defaults);
   assert.equal(draft.name, "助手 副本");
   assert.equal(draft.owner_id, "42");
   assert.equal(draft.system_prompt, source.system_prompt);
   assert.deepEqual(draft.model_roles, source.model_roles);
+  assert.deepEqual(draft.model_recovery_policy, source.model_recovery_policy);
   assert.deepEqual(draft.private_admission, source.private_admission);
   assert.equal(draft.telegram_suppress_bot_messages, false);
   draft.group_triggers.push("new");
   draft.model_roles.chat.fallbacks[0].model = "edited";
+  draft.model_recovery_policy.transient_retries = 2;
   draft.custom_persona.system_prompt = "edited";
   assert.deepEqual(source.group_triggers, ["助手"]);
   assert.equal(source.model_roles.chat.fallbacks[0].model, "small");
+  assert.equal(source.model_recovery_policy.transient_retries, 0);
   assert.equal(source.custom_persona.system_prompt, "custom");
 });
 

@@ -83,7 +83,7 @@ func TestModelRequestTimeoutBotScope(t *testing.T) {
 	}
 }
 
-func TestModelRecoveryPolicyUsesPurposeRole(t *testing.T) {
+func TestModelRecoveryPolicyUsesBotConfig(t *testing.T) {
 	configured := &ModelRecoveryPolicy{
 		TransientRetries:         0,
 		RetryDelayMilliseconds:   125,
@@ -92,8 +92,8 @@ func TestModelRecoveryPolicyUsesPurposeRole(t *testing.T) {
 		MaxCooldownSeconds:       300,
 		RespectRetryAfter:        false,
 	}
-	r := NewRuntime(BotConfig{ID: "bot", ModelRoles: map[string]ModelRole{
-		"chat": {ProfileID: "a", Model: "m", RecoveryPolicy: configured},
+	r := NewRuntime(BotConfig{ID: "bot", ModelRecoveryPolicy: configured, ModelRoles: map[string]ModelRole{
+		"chat": {ProfileID: "a", Model: "m"},
 	}}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	policy := r.modelRecoveryPolicyForContext(context.Background(), llm.GroupChat)
 	if policy.transientRetries != 0 || policy.retryDelay != 125*time.Millisecond || policy.transientCooldown != 3*time.Second || policy.statusCooldown != 45*time.Second || policy.maxCooldown != 5*time.Minute || policy.respectRetryAfter {
@@ -296,12 +296,9 @@ func TestModelRoutingLegacyAndBackgroundMemoryRuns(t *testing.T) {
 }
 
 func TestModelRoutingConfigRoundTripAndNormalization(t *testing.T) {
-	role := normalizeModelRole(ModelRole{ProfileID: " a ", Model: " m ", RoutingStrategy: " weighted ", RecoveryPolicy: &ModelRecoveryPolicy{TransientRetries: 9, RetryDelayMilliseconds: -1, TransientCooldownSeconds: 7, StatusCooldownSeconds: 8, MaxCooldownSeconds: 0}, Weight: 2000, Disabled: true, Fallbacks: []ModelRole{{ProfileID: "b", Model: "m", Weight: 2, Standby: true, RoutingStrategy: "round_robin", RecoveryPolicy: &ModelRecoveryPolicy{TransientRetries: 2}}}})
+	role := normalizeModelRole(ModelRole{ProfileID: " a ", Model: " m ", RoutingStrategy: " weighted ", Weight: 2000, Disabled: true, Fallbacks: []ModelRole{{ProfileID: "b", Model: "m", Weight: 2, Standby: true, RoutingStrategy: "round_robin"}}})
 	if role.Weight != 1000 || role.RoutingStrategy != "weighted" || role.Fallbacks[0].RoutingStrategy != "" || role.Fallbacks[0].RecoveryPolicy != nil {
 		t.Fatalf("normalized role=%+v", role)
-	}
-	if policy := role.RecoveryPolicy; policy == nil || policy.TransientRetries != 3 || policy.RetryDelayMilliseconds != 0 || policy.MaxCooldownSeconds != 1 {
-		t.Fatalf("normalized recovery policy=%+v", policy)
 	}
 	data, err := json.Marshal(role)
 	if err != nil {
@@ -313,6 +310,19 @@ func TestModelRoutingConfigRoundTripAndNormalization(t *testing.T) {
 	}
 	if got := normalizeModelRole(ModelRole{FollowChat: true, RoutingStrategy: "weighted", Weight: 4, Disabled: true}); !reflect.DeepEqual(got, ModelRole{FollowChat: true}) {
 		t.Fatalf("inherited role retains stale settings: %+v", got)
+	}
+	legacy := BotConfig{ModelRoles: map[string]ModelRole{
+		"chat": {ProfileID: "a", Model: "m", RecoveryPolicy: &ModelRecoveryPolicy{TransientRetries: 9, RetryDelayMilliseconds: -1, TransientCooldownSeconds: 7, StatusCooldownSeconds: 8, MaxCooldownSeconds: 0}},
+	}}.WithDefaults()
+	if policy := legacy.ModelRecoveryPolicy; policy == nil || policy.TransientRetries != 3 || policy.RetryDelayMilliseconds != 0 || policy.MaxCooldownSeconds != 1 {
+		t.Fatalf("normalized recovery policy=%+v", policy)
+	}
+	if legacy.ModelRoles["chat"].RecoveryPolicy != nil {
+		t.Fatalf("legacy purpose policy was not removed: %+v", legacy.ModelRoles["chat"])
+	}
+	restoredConfig := ConfigFromPayload(PayloadFromConfig(legacy), BotConfig{}).WithDefaults()
+	if !reflect.DeepEqual(restoredConfig.ModelRecoveryPolicy, legacy.ModelRecoveryPolicy) {
+		t.Fatalf("recovery policy round trip=%+v want=%+v", restoredConfig.ModelRecoveryPolicy, legacy.ModelRecoveryPolicy)
 	}
 }
 
