@@ -399,7 +399,7 @@
                 </label>
               </template>
             </ResolverCookieEditor>
-            <section v-else class="resolver-platform-row" :aria-label="platform.name">
+            <section v-else class="resolver-platform-row" :class="{ 'is-editing': editingResolverPlatform === platform.value }" :aria-label="platform.name">
               <div class="resolver-platform-head">
                 <label class="resolver-platform-name">
                   <input type="checkbox" :checked="resolverPlatformEnabled(platform.value)" :disabled="savingSettings" @change="toggleResolverPlatform(platform.value, $event)" />
@@ -414,7 +414,7 @@
                 </template>
                 <template v-else>
                   <span class="badge resolver-public-status" title="无需单独配置 Cookie">公开解析</span>
-                  <span class="resolver-platform-actions" aria-hidden="true"></span>
+
                 </template>
               </div>
               <div v-if="platform.credential && editingResolverPlatform === platform.value" class="resolver-platform-editor">
@@ -1943,20 +1943,24 @@ useConfigurationRefresh(["bot"], reload);
 </script>
 
 <style scoped>
-.resolver-platform-section { width:100%; max-width:520px; }
-.resolver-platform-list { display:grid; }
+.resolver-platform-section { width:100%; }
+.resolver-platform-list { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,300px),1fr)); gap:8px 16px; align-items:start; }
+.resolver-platform-row.is-editing, .resolver-platform-list :deep(.cookie-manager:has(.cookie-editor)) { grid-column:1 / -1; }
 .resolver-platform-section > .hint { margin:6px 0 8px; }
 
 .resolver-platform-row { padding:10px 0; border-bottom:1px solid var(--border); }
-.resolver-platform-head { display:grid; grid-template-columns:minmax(130px,1fr) auto 112px; align-items:center; gap:10px; }
-.resolver-platform-name { display:flex; align-items:center; gap:10px; cursor:pointer; font-weight:600; }
+.resolver-platform-head { display:grid; grid-template-columns:minmax(0,1fr) auto auto; align-items:center; gap:10px; }
+.resolver-platform-name { display:flex; align-items:center; gap:7px; cursor:pointer; font-weight:600; font-size:12px; }
 .resolver-platform-name input { width:16px; height:16px; accent-color:var(--accent); }
 .resolver-platform-name small { display:block; font-weight:400; opacity:.6; font-size:11px; }
+.resolver-public-status { grid-column:3; }
+.resolver-platform-actions .btn { padding:4px 7px; font-size:11px; }
 .resolver-platform-actions { display:flex; justify-content:flex-end; gap:6px; font-size:11px; }
 .resolver-platform-editor { padding:16px; margin-top:12px; border-radius:10px; background:var(--bg); }
 .resolver-status-legend { display:flex; gap:8px; flex-wrap:wrap; margin-top:10px; }
 @media(max-width:560px) {
  .resolver-platform-head { grid-template-columns:1fr auto; gap:10px; }
+ .resolver-public-status { grid-column:2; }
  .resolver-platform-actions { grid-column:2; }
 }
 </style>
