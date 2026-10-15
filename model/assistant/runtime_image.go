@@ -498,8 +498,10 @@ func (r *Runtime) generateImageWithFailover(ctx context.Context, req llm.ImageGe
 		request.Model = cfg.ImageModelWithDefault()
 		started := time.Now()
 		resp, err := llm.GenerateImage(ctx, cfg, request, r.llmClientOptionsFor(cfg)...)
+		duration := time.Since(started)
+		r.recordImageDebugTrace(ctx, cfg, "image_generate", map[string]any{"model": request.Model, "prompt": request.Prompt, "size": request.Size, "n": request.N}, resp, err, duration)
 		if err == nil {
-			r.recordImageUsage(ctx, cfg, resp, "image_generate", time.Since(started))
+			r.recordImageUsage(ctx, cfg, resp, "image_generate", duration)
 			return resp, cfg, nil
 		}
 		lastErr = err
@@ -521,8 +523,10 @@ func (r *Runtime) editImageWithFailover(ctx context.Context, req llm.ImageEditRe
 		request.Model = cfg.ImageModelWithDefault()
 		started := time.Now()
 		resp, err := llm.EditImage(ctx, cfg, request, r.llmClientOptionsFor(cfg)...)
+		duration := time.Since(started)
+		r.recordImageDebugTrace(ctx, cfg, "image_edit", map[string]any{"model": request.Model, "prompt": request.Prompt, "size": request.Size, "n": request.N, "image_count": len(request.Images)}, resp, err, duration)
 		if err == nil {
-			r.recordImageUsage(ctx, cfg, resp, "image_edit", time.Since(started))
+			r.recordImageUsage(ctx, cfg, resp, "image_edit", duration)
 			return resp, cfg, nil
 		}
 		lastErr = err

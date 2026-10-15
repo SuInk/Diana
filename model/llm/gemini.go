@@ -170,8 +170,17 @@ func (c *geminiClient) Stream(ctx context.Context, req GenerateRequest) (streamE
 	contents := geminiContents(messages, req.Tools)
 	out := make(chan ChatEvent, 4)
 	go func() {
+		ctx := ctx
 		defer close(out)
 		defer recoverChatStreamPanic(ctx, out, "gemini")
+		// genai v1.61 的 sendStreamRequest 会在返回迭代器时取消自己创建的
+		// timeout context。提前建立同等或更短的 deadline，让超时覆盖完整读流，
+		// SDK 就不再创建那个过早取消的子 context。
+		if c.cfg.Timeout > 0 {
+			var cancel context.CancelFunc
+			ctx, cancel = context.WithTimeout(ctx, c.cfg.Timeout)
+			defer cancel()
+		}
 		var last Usage
 		finished, emitted := false, false
 		for response, err := range c.streamWithReasoningBackoff(ctx, req.Model, contents, config) {

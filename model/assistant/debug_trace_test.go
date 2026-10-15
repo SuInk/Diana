@@ -5,8 +5,14 @@ package assistant
 
 import (
 	"context"
+	"encoding/base64"
+	"errors"
+	"fmt"
+	"github.com/SuInk/diana/model/agent"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/SuInk/diana/model/applog"
 	"github.com/SuInk/diana/model/llm"
@@ -104,5 +110,141 @@ func TestLLMProviderIdentitySeesThroughDecorators(t *testing.T) {
 	}
 	if identity.ModelID != "chat-backup" || identity.Provider != string(llm.ProviderOpenAICompatible) {
 		t.Fatalf("identity = %#v", identity)
+	}
+}
+
+func TestSubtaskDebugTraceIsolation(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		logs := &captureAppLogs{}
+		rt := NewRuntime(BotConfig{DebugModeEnabled: boolPointer(enabled)}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+		rt.SetAppLogWriter(logs)
+		parent := rt.withDebugTraceContext(context.Background(), MessageEvent{MessageID: "msg", Kind: EventKindGroup})
+		var wg sync.WaitGroup
+		for _, id := range []string{"first", "second"} {
+			wg.Add(1)
+			go func(id string) {
+				defer wg.Done()
+				ctx := withSubtaskDebugTrace(parent, id)
+				run := rt.withDebugTraceRun(ctx, func(provider LLMProvider) (string, error) {
+					_, err := provider.Generate(ctx, llm.GenerateRequest{Messages: []llm.Message{{Role: llm.RoleUser, Content: id}}})
+					return "", err
+				})
+				if _, err := run(&capturingLLMProvider{reply: id}); err != nil {
+					t.Error(err)
+				}
+				rt.recordSubtaskDebugEvent(ctx, agent.RunEvent{Phase: agent.RunPhaseToolCompleted, Tool: "web_search", ToolInput: map[string]any{"query": id}, ToolOutput: id})
+			}(id)
+		}
+		wg.Wait()
+		rt.recordDebugTrace(debugTraceFromContext(parent), "parent", map[string]any{"phase": "parent"})
+		entries := logs.entriesSnapshot()
+		if !enabled {
+			if len(entries) != 0 {
+				t.Fatal("debug disabled but recorded")
+			}
+			continue
+		}
+		if len(entries) != 6 {
+			t.Fatalf("entries = %#v", entries)
+		}
+		sequences := map[int64]bool{}
+		counts := map[string]int{}
+		for _, entry := range entries {
+			seq := entry.Metadata["sequence"].(int64)
+			if sequences[seq] {
+				t.Fatal("duplicate sequence")
+			}
+			sequences[seq] = true
+			id, _ := entry.Metadata["subtask_id"].(string)
+			if id != "" {
+				counts[id]++
+			}
+			if entry.Metadata["phase"] == "parent" && id != "" {
+				t.Fatal("child identity leaked to parent")
+			}
+		}
+		if counts["first"] != 2 || counts["second"] != 2 {
+			t.Fatalf("counts = %#v", counts)
+		}
+	}
+}
+
+func TestImageDebugTraceTaskAndRedaction(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		logs := &captureAppLogs{}
+		runtime := NewRuntime(BotConfig{DebugModeEnabled: boolPointer(enabled)}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+		runtime.SetAppLogWriter(logs)
+		ctx := runtime.withDebugTraceContext(context.Background(), MessageEvent{MessageID: "image-message"})
+		ctx = withSubtaskDebugTrace(ctx, "image-task")
+		request := map[string]any{"prompt": "画一只猫", "image_count": 1}
+		response := &llm.ImageGenerateResponse{Model: "image-model", Images: []string{"data:image/png;base64,private-image"}}
+		runtime.recordImageDebugTrace(ctx, llm.ProviderConfig{}, "image_edit", request, response, nil, 25*time.Millisecond)
+		runtime.recordImageDebugTrace(ctx, llm.ProviderConfig{}, "image_generate", request, nil, errors.New("upstream failed"), time.Millisecond)
+		entries := logs.entriesSnapshot()
+		if !enabled {
+			if len(entries) != 0 {
+				t.Fatal(entries)
+			}
+			continue
+		}
+		if len(entries) != 3 {
+			t.Fatal(entries)
+		}
+		for _, entry := range entries[1:] {
+			if entry.Metadata["subtask_id"] != "image-task" || entry.Target != "image-message" {
+				t.Fatalf("wrong scope: %#v", entry)
+			}
+			if strings.Contains(fmt.Sprint(entry.Metadata), "private-image") {
+				t.Fatal("image payload leaked")
+			}
+		}
+		if entries[1].Metadata["duration_ms"] != int64(25) || entries[2].Metadata["error"] != "upstream failed" {
+			t.Fatal(entries)
+		}
+	}
+}
+
+func TestImageTaskPreservesDebugTraceAcrossBackgroundContext(t *testing.T) {
+	server := newOAuthRuntimeServer(t)
+	runtime := newOAuthOptionsRuntime(t, oauthRuntimeProfile(server.URL), &oauthRuntimeResolver{token: "test-token"})
+	logs := &captureAppLogs{}
+	runtime.SetAppLogWriter(logs)
+	event := MessageEvent{Kind: EventKindGroup, GroupID: "image-group", MessageID: "image-event"}
+	ctx := context.WithValue(context.Background(), debugTraceContextKey{}, &debugTraceState{event: event})
+	done := make(chan error, 1)
+	task := PluginTask{Kind: "image", Name: "图片生成", Run: func(ctx context.Context, _ PluginTaskServices) (PluginTaskResult, error) {
+		_, _, err := runtime.generateImageWithFailover(ctx, llm.ImageGenerateRequest{Prompt: "a cat"})
+		if err == nil {
+			source := "data:image/png;base64," + base64.StdEncoding.EncodeToString([]byte("\x89PNG\r\n\x1a\n0123456789"))
+			_, _, err = runtime.editImageWithFailover(ctx, llm.ImageEditRequest{Prompt: "make it blue", Images: []string{source}})
+		}
+		done <- err
+		return PluginTaskResult{Delivered: true}, err
+	}}
+	reservation := runtime.reservePluginTasksForTurn(ctx, event, []PluginTask{task})
+	if len(reservation.reserved) != 1 {
+		t.Fatal(reservation)
+	}
+	runtime.startPluginTaskReservation(reservation)
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("image task did not finish")
+	}
+	count := 0
+	for _, entry := range logs.entriesSnapshot() {
+		if entry.Action != "debug_trace" {
+			continue
+		}
+		count++
+		if entry.Metadata["subtask_id"] != reservation.reserved[0].id || entry.Target != event.MessageID {
+			t.Fatalf("wrong trace association: %#v", entry)
+		}
+	}
+	if count != 2 {
+		t.Fatalf("got %d image traces, want generation and edit", count)
 	}
 }

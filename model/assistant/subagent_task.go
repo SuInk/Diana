@@ -109,9 +109,6 @@ func (r *Runtime) launchPluginTasks(ctx context.Context, event MessageEvent, tas
 		r.cancelPluginTaskReservation(reservation)
 		return "", true, err
 	}
-	for index := range reservation.reserved {
-		reservation.reserved[index].debugTrace = debugTraceFromContext(ctx)
-	}
 	r.startPluginTaskReservation(reservation)
 	return reservation.ack, true, nil
 }
@@ -181,7 +178,7 @@ func (r *Runtime) reservePluginTasksForTurn(ctx context.Context, event MessageEv
 			UpdatedAt: now,
 		}
 		r.subagentTasks[key] = activeSubagentTask{status: status, supersedeKey: supersedeKey}
-		reserved = append(reserved, reservedSubagentTask{id: id, key: key, task: task, event: event, eventID: turnID})
+		reserved = append(reserved, reservedSubagentTask{id: id, key: key, task: task, event: event, eventID: turnID, debugTrace: debugTraceFromContext(ctx)})
 	}
 	r.subagentMu.Unlock()
 
@@ -309,6 +306,7 @@ func (r *Runtime) runPluginTask(rootCtx context.Context, item reservedSubagentTa
 	rootCtx = withPromptOverrides(rootCtx, r.effectiveConfigForEvent(item.event).PromptOverrides)
 	if item.debugTrace != nil {
 		rootCtx = context.WithValue(rootCtx, debugTraceContextKey{}, item.debugTrace)
+		rootCtx = withSubtaskDebugTrace(rootCtx, item.id)
 	}
 	if !item.task.Unthrottled {
 		sem := r.subagentSem

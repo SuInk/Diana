@@ -284,7 +284,10 @@ type subtaskSearchProbeProvider struct {
 	requests []llm.GenerateRequest
 }
 
-func (p *subtaskSearchProbeProvider) Generate(_ context.Context, req llm.GenerateRequest) (*llm.GenerateResponse, error) {
+func (p *subtaskSearchProbeProvider) Generate(ctx context.Context, req llm.GenerateRequest) (*llm.GenerateResponse, error) {
+	if observer := textDeltaObserverFromContext(ctx); observer != nil {
+		observer.ObserveTextDelta(ctx, "internal research")
+	}
 	p.mu.Lock()
 	p.requests = append(p.requests, req)
 	call := len(p.requests)
@@ -324,17 +327,22 @@ func (*subtaskSearchFixturePlugin) AgentTools(SettingValues) ([]agent.Tool, erro
 
 func TestSearchSubtaskOnlyExposesReadOnlyResearchTools(t *testing.T) {
 	provider := &subtaskSearchProbeProvider{}
-	runtime := NewRuntime(BotConfig{BotAccount: "42", MaxBotConcurrency: 2}.WithDefaults(), nilChannel{}, NewPluginManager(&subtaskSearchFixturePlugin{}), nil, nil, nil, func() (LLMProvider, error) {
+	runtime := NewRuntime(BotConfig{BotAccount: "42", MaxBotConcurrency: 2, SystemPrompt: "PRIVATE_PERSONA_SENTINEL"}.WithDefaults(), nilChannel{}, NewPluginManager(&subtaskSearchFixturePlugin{}), nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
 	})
 	tool := newDianaSubtaskTool(runtime, MessageEvent{Kind: EventKindGroup, GroupID: "g1", UserID: "u1"})
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+	observer := &recordingDeltaObserver{}
+	ctx = withTextDeltaObserver(ctx, observer)
 	out, err := tool.Run(ctx, map[string]any{"tasks": []any{
 		map[string]any{"id": "official", "mode": "search", "objective": "查找官方资料", "queries": []any{"official source"}, "source_policy": "primary"},
 	}})
 	if err != nil {
 		t.Fatal(err)
+	}
+	if len(observer.texts) != 0 || textDeltaObserverFromContext(ctx) != observer {
+		t.Fatal("worker leaked streaming text or changed parent observer")
 	}
 	var batch subtaskBatchResult
 	if err := json.Unmarshal([]byte(out), &batch); err != nil {
@@ -349,9 +357,19 @@ func TestSearchSubtaskOnlyExposesReadOnlyResearchTools(t *testing.T) {
 	if len(requests) < 3 {
 		t.Fatalf("provider requests = %d, want search, page read and synthesis", len(requests))
 	}
+	if len(requests[0].Messages) == 0 || !strings.Contains(requests[0].Messages[0].Content, searchSubtaskSystemPrompt) {
+		t.Fatal("worker did not use its dedicated system prompt")
+	}
 	for _, definition := range requests[0].Tools {
 		if definition.Name == "forbidden_write" {
 			t.Fatalf("search worker received forbidden tool: %#v", requests[0].Tools)
+		}
+	}
+	for _, request := range requests {
+		for _, message := range request.Messages {
+			if strings.Contains(message.Content, "PRIVATE_PERSONA_SENTINEL") || strings.Contains(message.Content, "你是 Diana 的内置 Agent") {
+				t.Fatal("worker inherited chat persona")
+			}
 		}
 	}
 	foundSearch, foundBrowser := false, false
@@ -409,5 +427,58 @@ func TestSearchSubtaskEvidenceKeepsResultsForPartialOutput(t *testing.T) {
 	}
 	if evidence.modelTurns != 3 || evidence.toolCalls != 2 {
 		t.Fatalf("usage counters = %d/%d", evidence.modelTurns, evidence.toolCalls)
+	}
+}
+
+func TestSubtaskPersistsInEventTaskList(t *testing.T) {
+	for _, legacy := range []bool{false, true} {
+		t.Run(fmt.Sprint(legacy), func(t *testing.T) {
+			rt, _ := subtaskRuntime("分析结果")
+			store := &recordingSubtaskStore{}
+			rt.SetMessageHistoryStore(store)
+			tool := newDianaSubtaskTool(rt, MessageEvent{})
+			ctx := withOutboundTurn(context.Background(), "event-research")
+			input := map[string]any{"tasks": []any{map[string]any{"id": "same", "mode": "analyze", "objective": "核对材料", "material": "材料"}}}
+			if legacy {
+				input = map[string]any{"question": "核对材料", "material": "材料"}
+			}
+			for i := 0; i < 2; i++ {
+				if _, err := tool.Run(ctx, input); err != nil {
+					t.Fatal(err)
+				}
+			}
+			records := store.snapshot()
+			if len(records) != 6 {
+				t.Fatalf("records = %#v", records)
+			}
+			for i, record := range records {
+				if record.EventID != "event-research" || record.Kind != "subtask" {
+					t.Fatalf("wrong event/task: %#v", record)
+				}
+				if record.Phase != []string{"queued", "running", "completed"}[i%3] {
+					t.Fatalf("phase = %s", record.Phase)
+				}
+				if i%3 == 2 && record.FinishedAt == nil {
+					t.Fatal("missing finish time")
+				}
+			}
+			if records[0].TaskID == records[3].TaskID {
+				t.Fatal("repeated calls overwrite tasks")
+			}
+		})
+	}
+}
+
+func TestSubtaskPersistsQueuedCancellation(t *testing.T) {
+	rt, _ := subtaskRuntime("unused")
+	store := &recordingSubtaskStore{}
+	rt.SetMessageHistoryStore(store)
+	tool := newDianaSubtaskTool(rt, MessageEvent{})
+	ctx, cancel := context.WithCancel(withOutboundTurn(context.Background(), "cancelled-event"))
+	cancel()
+	results := tool.runBatch(ctx, []subtaskRequest{{ID: "one", Mode: subtaskModeAnalyze, Objective: "取消测试"}}, 0)
+	records := store.snapshot()
+	if len(records) != 2 || records[1].Phase != "cancelled" || records[1].FinishedAt == nil || results[0].Status != "cancelled" {
+		t.Fatalf("records=%#v results=%#v", records, results)
 	}
 }

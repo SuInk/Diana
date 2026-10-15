@@ -81,6 +81,8 @@ func DefaultCommandAllowlist() []string {
 }
 
 type Config struct {
+	// SystemPrompt 为专用子代理替换通用角色提示词；空值保留默认行为。仅由可信调用方设置。
+	SystemPrompt       string
 	WorkDir            string
 	MaxSteps           int
 	MaxToolOutputChars int

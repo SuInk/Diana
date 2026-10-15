@@ -248,7 +248,13 @@
               </div>
 
               <div v-if="event.decision === 'replied' || event.handled" class="event-detail-reply">
-                <strong>回复结果</strong>
+                <div class="event-reply-heading">
+                  <strong>回复结果</strong>
+                  <span v-if="event.delivery_stage && deliverySettled(event)" class="event-delivery-inline" :class="deliveryClass(event)">
+                    <component :is="deliveryIcon(event)" :size="14" aria-hidden="true" />
+                    <span>{{ deliveryLabel(event.delivery_stage) }}</span>
+                  </span>
+                </div>
                 <p>{{ replyResultText(event) }}</p>
                 <p v-if="deliverySummary(event)" class="muted">{{ deliverySummary(event) }}</p>
                 <div v-if="event.delivery?.media?.length" class="event-image-grid" aria-label="机器人发出的图片">
@@ -299,10 +305,61 @@
                     <span class="muted mono">{{ task.task_id }}</span>
                     <p v-if="task.error" class="event-error">{{ task.error }}</p>
                     <p v-else-if="task.detail" class="muted">{{ task.detail }}</p>
+                    <div v-if="task.kind === 'subtask' || task.kind === 'image'" class="subtask-debug-action">
+                      <button class="event-debug-toggle" type="button" :disabled="traceLoading[event.id]" :aria-expanded="!!subtaskTraceOpen[task.task_id]" @click="toggleSubtaskTrace(event, task)">
+                        <span>调试信息</span>
+                        <LoaderCircle v-if="traceLoading[event.id]" :size="14" class="spin" aria-hidden="true" />
+                        <ChevronDown v-else :size="14" :class="{ 'trace-chevron-open': subtaskTraceOpen[task.task_id] }" aria-hidden="true" />
+
+                      </button>
+                    </div>
+                    <div v-if="subtaskTraceOpen[task.task_id]" class="debug-trace-panel subtask-debug-panel">
+                      <div v-if="traceLoading[event.id]" class="debug-trace-empty muted">正在读取调试记录</div>
+                      <div v-else-if="!subtaskTraceSteps(event.id, task.task_id).length" class="debug-trace-empty muted">{{ traceEmptyReason[event.id] || "此子任务暂无调试记录。需在任务执行前开启调试记录；旧记录无法补回。" }}</div>
+                  <ol v-else class="debug-trace-list">
+                    <li v-for="(step, index) in subtaskTraceSteps(event.id, task.task_id)" :key="step.id" class="debug-trace-step">
+                      <div class="debug-step-header">
+                        <span class="debug-step-index mono">{{ index + 1 }}</span>
+                        <strong>{{ tracePhaseLabel(step) }}</strong>
+                        <span class="muted mono">{{ formatClock(step.created_at) }}</span>
+                        <span v-if="traceDuration(step)" class="muted">{{ traceDuration(step) }}</span>
+                      </div>
+                      <p v-if="traceSummary(step)" class="debug-step-summary">{{ traceSummary(step) }}</p>
+                      <div v-if="step.action === 'cross_group_context' && traceJSON(step, 'selected_messages')" class="debug-payload">
+                        <span>补入历史的消息</span>
+                        <pre>{{ traceJSON(step, "selected_messages") }}</pre>
+                      </div>
+                      <div v-if="traceJSON(step, 'request')" class="debug-payload">
+                        <span>模型请求上下文</span>
+                        <pre>{{ traceJSON(step, "request") }}</pre>
+                      </div>
+                      <div v-if="traceJSON(step, 'response')" class="debug-payload">
+                        <span>模型响应</span>
+                        <pre>{{ traceJSON(step, "response") }}</pre>
+                      </div>
+                      <div v-if="traceJSON(step, 'available_tools')" class="debug-payload">
+                        <span>可用工具</span>
+                        <pre>{{ traceJSON(step, "available_tools") }}</pre>
+                      </div>
+                      <div v-if="traceJSON(step, 'tool_input')" class="debug-payload">
+                        <span>工具参数</span>
+                        <pre>{{ traceJSON(step, "tool_input") }}</pre>
+                      </div>
+                      <div v-if="traceText(step, 'tool_output')" class="debug-payload">
+                        <span>工具结果</span>
+                        <pre>{{ traceText(step, "tool_output") }}</pre>
+                      </div>
+                      <div v-if="traceText(step, 'error')" class="debug-payload err">
+                        <span>错误</span>
+                        <pre>{{ traceText(step, "error") }}</pre>
+                      </div>
+                    </li>
+                  </ol>
+                    </div>
                   </li>
                 </ul>
               </div>
-              <div v-if="event.delivery_stage" class="event-delivery" :class="[deliveryClass(event), { quiet: deliverySettled(event) }]">
+              <div v-if="event.delivery_stage && !(deliverySettled(event) && (event.decision === 'replied' || event.handled))" class="event-delivery" :class="[deliveryClass(event), { quiet: deliverySettled(event) }]">
                 <component :is="deliveryIcon(event)" :size="deliverySettled(event) ? 14 : 16" aria-hidden="true" />
                 <div>
                   <strong>{{ deliveryLabel(event.delivery_stage) }}</strong>
@@ -341,11 +398,11 @@
                   <RotateCcw v-else :size="14" aria-hidden="true" />
                   重试
                 </button>
-                <button class="btn event-debug-toggle" type="button" :disabled="traceLoading[event.id]" @click="toggleTrace(event)">
+                <button class="event-debug-toggle" type="button" :disabled="traceLoading[event.id]" :aria-expanded="!!traceOpen[event.id]" @click="toggleTrace(event)">
+                  <span>调试信息</span>
                   <LoaderCircle v-if="traceLoading[event.id]" :size="14" class="spin" aria-hidden="true" />
-                  <Bug v-else :size="14" aria-hidden="true" />
-                  {{ traceOpen[event.id] ? "收起调用链" : "查看模型上下文与调用链" }}
-                  <ChevronDown :size="14" :class="{ 'trace-chevron-open': traceOpen[event.id] }" aria-hidden="true" />
+                  <ChevronDown v-else :size="14" :class="{ 'trace-chevron-open': traceOpen[event.id] }" aria-hidden="true" />
+
                 </button>
 
                 <div v-if="traceOpen[event.id]" class="debug-trace-panel">
@@ -596,7 +653,6 @@ import { botScope } from "../lib/bot-scope";
 import type { Component } from "vue";
 import {
   Activity,
-  Bug,
   CheckCircle2,
   ChevronDown,
   ChevronRight,
@@ -728,6 +784,7 @@ function formatMemoryScore(value: number): string {
 const memoriesOpen = ref<Record<string, boolean>>({});
 const temporaryMemoriesOpen = ref<Record<string, boolean>>({});
 const traceOpen = ref<Record<string, boolean>>({});
+const subtaskTraceOpen = ref<Record<string, boolean>>({});
 const traceLoading = ref<Record<string, boolean>>({});
 const traceLoaded = ref<Record<string, boolean>>({});
 const traceSteps = ref<Record<string, AppLogEntry[]>>({});
@@ -1063,6 +1120,7 @@ async function load(reset: boolean): Promise<void> {
     summaryLoading.value = true;
     traceLoaded.value = {};
     traceOpen.value = {};
+    subtaskTraceOpen.value = {};
   } else {
     loadingMore.value = true;
   }
@@ -1445,6 +1503,12 @@ function subtaskPhaseLabel(task: AssistantEventSubtask): string {
       return "已完成";
     case "failed":
       return "失败";
+    case "partial":
+      return "部分完成";
+    case "cancelled":
+      return "已取消";
+    case "timed_out":
+      return "已超时";
     default:
       return task.phase || "进行中";
   }
@@ -1570,6 +1634,16 @@ function memoryPeek(memories: AssistantEventMemory[]): string {
   if (titles.length === 0) return "";
   const shown = titles.slice(0, 3).join("、");
   return titles.length > 3 ? `${shown} 等` : shown;
+}
+
+function subtaskTraceSteps(eventID: string, taskID: string): AppLogEntry[] {
+  return (traceSteps.value[eventID] ?? []).filter((step) => traceMetadata(step).subtask_id === taskID);
+}
+
+async function toggleSubtaskTrace(event: AssistantEventDetail, task: AssistantEventSubtask): Promise<void> {
+  const open = !subtaskTraceOpen.value[task.task_id];
+  subtaskTraceOpen.value = { ...subtaskTraceOpen.value, [task.task_id]: open };
+  if (open) await fetchTrace(event);
 }
 
 async function toggleTrace(event: AssistantEventDetail): Promise<void> {
@@ -1716,7 +1790,7 @@ async function refreshSettledEvent(record: BotEvent): Promise<void> {
     if (index < 0) continue;
     const previous = events.value[index];
     events.value[index] = { ...item, memories: item.memories ?? previous.memories, temporary_memories: item.temporary_memories ?? previous.temporary_memories };
-    if (traceOpen.value[item.id]) {
+    if (traceOpen.value[item.id] || events.value[index].subtasks?.some((task) => subtaskTraceOpen.value[task.task_id])) {
       void fetchTrace(events.value[index], false);
     } else {
       traceLoaded.value = { ...traceLoaded.value, [item.id]: false };
@@ -2163,6 +2237,16 @@ onBeforeUnmount(() => {
 }
 
 .event-detail-meta,
+.event-detail-reply {
+  margin-top: 14px;
+  padding-left: 14px;
+  border-left: 3px solid var(--accent);
+}
+
+.event-detail-reply > p {
+  line-height: 1.65;
+}
+
 .event-technical {
   display: flex;
   align-items: center;
@@ -2241,7 +2325,7 @@ onBeforeUnmount(() => {
 }
 
 .event-debug-trace {
-  margin-top: 14px;
+  margin-top: 4px;
 }
 
 .event-retry {
@@ -2251,11 +2335,42 @@ onBeforeUnmount(() => {
 }
 
 .event-debug-toggle {
-  min-height: 34px;
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 30px;
+  padding: 4px 0;
+  border: 0;
+  border-top: 1px solid var(--border);
+  border-radius: 0;
+  text-align: left;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
   font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
 }
 
-.event-debug-toggle svg:last-child {
+.event-debug-toggle:hover:not(:disabled) {
+  background: var(--surface);
+  color: var(--text);
+}
+
+.event-debug-toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.event-debug-toggle:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
+.event-debug-toggle svg {
+  flex-shrink: 0;
   transition: transform 160ms ease;
 }
 
@@ -2264,8 +2379,7 @@ onBeforeUnmount(() => {
 }
 
 .debug-trace-panel {
-  margin-top: 14px;
-  border-top: 1px solid var(--border);
+  margin-top: 4px;
 }
 
 .debug-trace-empty {
@@ -2663,6 +2777,23 @@ onBeforeUnmount(() => {
   background: var(--surface-2);
 }
 
+.event-reply-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+}
+
+.event-delivery-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.event-delivery-inline.ok > svg { color: var(--ok); }
+
 .event-delivery {
   display: grid;
   grid-template-columns: 18px minmax(0, 1fr);
@@ -2677,19 +2808,19 @@ onBeforeUnmount(() => {
 
 .event-subtasks {
   margin-top: 10px;
-  padding: 10px 12px;
+  padding: 8px 12px;
   border: 1px solid var(--border);
   border-radius: 6px;
 }
 
 .event-subtasks > strong {
   display: block;
-  margin-bottom: 6px;
+  margin-bottom: 4px;
   font-size: 12px;
   color: var(--muted);
 }
 
-.event-subtasks ul {
+.event-subtasks > ul {
   margin: 0;
   padding: 0;
   list-style: none;
@@ -2697,15 +2828,15 @@ onBeforeUnmount(() => {
   gap: 6px;
 }
 
-.event-subtasks li {
+.event-subtasks > ul > li {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
+  gap: 4px 8px;
   font-size: 13px;
 }
 
-.event-subtasks li p {
+.event-subtasks > ul > li > p {
   flex-basis: 100%;
   margin: 0;
   font-size: 12px;
@@ -2713,6 +2844,15 @@ onBeforeUnmount(() => {
 
 .subtask-name {
   font-weight: 500;
+}
+
+.subtask-debug-action {
+  flex-basis: 100%;
+}
+
+.subtask-debug-panel {
+  flex-basis: 100%;
+  min-width: 0;
 }
 
 .event-delivery.quiet {
@@ -2761,14 +2901,10 @@ onBeforeUnmount(() => {
   line-height: 1.55;
 }
 
-.event-detail-reply {
-  margin-top: 14px;
-  padding-left: 14px;
-  border-left: 3px solid var(--accent);
-}
+
 
 .event-technical {
-  margin-top: 14px;
+  margin-top: 8px;
   font-size: 11px;
 }
 

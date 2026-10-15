@@ -10,7 +10,7 @@
 - 删除 claims 账本、结算字段、事实出口门控及终稿复核。实际来源只记录发现、已读、引用状态，不拦截答案。
 - 当前轮增加通用联网提醒，防止长聊天历史、人设和玩笑覆盖用户实际请求；没有按产品名称、版本号或测试题硬编码行为。
 
-公开依据：[Codex WebSearchAction 协议](https://github.com/openai/codex/blob/afb436df8b70bb5bc57b86d9a3e829968988cd21/codex-rs/protocol/src/models.rs)、[托管工具声明](https://github.com/openai/codex/blob/afb436df8b70bb5bc57b86d9a3e829968988cd21/codex-rs/core/src/tools/hosted_spec.rs)。10% 联网判断阈值是 Diana 的策略，不能声称它来自公开 Codex CLI 提示词。
+公开依据：[Codex WebSearchAction 协议](https://github.com/openai/codex/blob/afb436df8b70bb5bc57b86d9a3e829968988cd21/codex-rs/protocol/src/models.rs)、[托管工具声明](https://github.com/openai/codex/blob/afb436df8b70bb5bc57b86d9a3e829968988cd21/codex-rs/core/src/tools/hosted_spec.rs)。Diana 的联网判断策略为：只要信息可能变化、记忆可能出错或存在任何不确定性，就先搜索核实；这属于 Diana 自身策略，不能声称它来自公开 Codex CLI 提示词。
 
 ## 实测方法
 

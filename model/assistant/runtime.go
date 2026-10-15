@@ -9333,7 +9333,7 @@ const replyIntentToolsPrompt = `同时为普通回复选择本轮上下文和工
 19. context_message_ids 只能填写 recent_messages 中真实存在的 message_id。保留所有可能帮助理解当前指代、话题延续、约束或用户意图的消息；只删除确定无关的旁支聊天，不要为了追求数量少而丢上下文。
 20. 当前消息的直接引用和语义指向会由运行时强制保留，不必依靠关键词。older_summary_available=true 且当前问题确实延续更早话题时，keep_older_summary=true；独立新问题则为 false。
 21. 工具参数应保持最小且符合工具说明。搜索只需要工具根据当前信息缺口整理出的 query，不要把聊天记录、工具目录或系统说明塞进搜索词。
-22. available_tools 中存在 web_search 时，凡回答依赖外部事实、信息可能随时间变化、模型不能可靠确认，或适合参考公开评价，都应保留该工具。具体商品、品牌、餐饮、作品的口碑、味道、规格、价格、现状和“好不好/怎么样/值得买吗”等问题属于搜索场景；不要把它们误判成无需工具的主观闲聊。纯创作、寒暄，或完全可由当前消息和已保留上下文回答的问题才不需要搜索。
+22. available_tools 中存在 web_search 时，只要事实有可能变化、记忆有可能出错或存在任何不确定性，就必须保留该工具供 Agent 先搜索再回答；回答依赖外部事实或适合参考公开评价时，也必须保留。具体商品、品牌、餐饮、作品的口碑、味道、规格、价格、现状和“好不好/怎么样/值得买吗”等问题属于搜索场景；不要把它们误判成无需工具的主观闲聊。
 23. tools、context_message_ids、keep_older_summary 三个字段必须始终给出，即使它们为空或为 false。`
 
 var promptReplyIntentToolsSpec = registerPrompt(PromptSpec{

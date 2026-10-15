@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 const geminiPartialChunk = `data: {"candidates":[{"content":{"role":"model","parts":[{"text":"你好"}]}}]}` + "\n\n"
@@ -91,5 +92,44 @@ func TestGeminiStreamCancelDoesNotLogError(t *testing.T) {
 	}
 	if strings.Contains(logs.String(), "Error ") {
 		t.Fatalf("cancellation logged as error: %q", logs.String())
+	}
+}
+
+func TestGeminiStreamTimeoutCoversBodyConsumption(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte(geminiPartialChunk))
+		w.(http.Flusher).Flush()
+		select {
+		case <-r.Context().Done():
+			return
+		case <-time.After(30 * time.Millisecond):
+		}
+		_, _ = w.Write([]byte(`data: {"candidates":[{"content":{"role":"model","parts":[{"text":"世界"}]},"finishReason":"STOP"}]}` + "\n\n"))
+	}))
+	defer server.Close()
+	client, err := newGeminiClient(ProviderConfig{APIKey: "test-key", BaseURL: server.URL, Model: "gemini-test", Timeout: time.Second}, server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	events, err := client.Stream(context.Background(), GenerateRequest{Messages: []Message{{Role: RoleUser, Content: "hello"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var text string
+	var done bool
+	for event := range events {
+		if event.Type == ChatEventError {
+			t.Fatalf("stream failed before body completed: %s", event.Error)
+		}
+		if event.Type == ChatEventTextDelta {
+			text += event.Text
+		}
+		if event.Type == ChatEventDone {
+			done = true
+		}
+	}
+	if !done || text != "你好世界" {
+		t.Fatalf("done=%v text=%q", done, text)
 	}
 }

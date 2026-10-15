@@ -30,6 +30,14 @@ type Tool interface {
 	Run(ctx context.Context, input map[string]any) (string, error)
 }
 
+// ToolTimeout lets a multi-step tool declare its execution budget.
+// Zero disables the tool-wide deadline; parent cancellation/deadlines still apply.
+// Positive budgets also preserve the finalization reserve.
+type ToolTimeout interface {
+	Tool
+	Timeout() time.Duration
+}
+
 // IntrospectionTool 由工具自己声明「这次调用只是打听 Diana 自己」。声明了就不占
 // MaxSteps，改走自省配额（见 runner.go 的 maxIntrospectionCallsPerAgentRun）。
 //

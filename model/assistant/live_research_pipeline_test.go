@@ -350,3 +350,70 @@ func judgeLiveResearchAnswer(t *testing.T, client llm.LLMClient, question string
 		}
 	}
 }
+
+// 生产模型、插件配置下的独立核验回放；不连接消息发送通道。
+func TestLiveSearchSubtaskProduction(t *testing.T) {
+	if os.Getenv("DIANA_LIVE_SUBTASK") != "1" {
+		t.Skip("requires production subtask replay config")
+	}
+	client := liveLLMClient(t)
+	var cfg BotConfig
+	if err := json.Unmarshal([]byte(os.Getenv("DIANA_LIVE_BOT_CONFIG_JSON")), &cfg); err != nil {
+		t.Fatal("invalid bot config")
+	}
+	var states map[string]PersistedPluginState
+	if err := json.Unmarshal([]byte(os.Getenv("DIANA_LIVE_PLUGIN_STATES_JSON")), &states); err != nil || len(states) == 0 {
+		t.Fatal("missing production plugin config")
+	}
+	plugins := NewPluginManager(NewWebSearchPlugin(nil), NewSandboxedBrowserRenderPlugin())
+	plugins.Restore(states)
+	cfg.ModelRoles = nil
+	rt := NewRuntime(cfg.WithDefaults(), &recordingChannel{}, plugins, nil, nil, nil, func() (LLMProvider, error) { return client, nil })
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	event := MessageEvent{ProfileID: cfg.ID, Platform: cfg.Platform, Kind: EventKindGroup, GroupID: "subtask-replay", UserID: "replay"}
+	parent := os.Getenv("DIANA_LIVE_SUBTASK_PARENT") == "1"
+	var resp *agent.Response
+	var err error
+	if parent {
+		registry := agent.NewToolRegistry(newDianaSubtaskTool(rt, event))
+		runner, createErr := agent.NewRunner(newRuntimeAgentLLMProvider(rt, ctx), agent.Config{MaxSteps: 8, CoreTools: []string{dianaSubtaskToolName}}, registry)
+		if createErr != nil {
+			t.Fatal(createErr)
+		}
+		defer runner.Close()
+		resp, err = runner.Run(ctx, agent.Request{Messages: []llm.Message{
+			{Role: llm.RoleSystem, Content: rt.systemPrompt(event, nil)},
+			{Role: llm.RoleAssistant, Content: "假的啦，又是营销号造谣。"},
+			{Role: llm.RoleUser, Content: "张雪峰死了"},
+		}})
+	} else {
+		resp, err = rt.runSearchSubtask(ctx, event, subtaskRequest{ID: "verify", Mode: subtaskModeSearch, Objective: "核实教育博主张雪峰是否已经去世，区分事件日期与报道日期。", SourcePolicy: "balanced"}, nil)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	search, read, delegated := 0, 0, false
+	for _, step := range resp.Steps {
+		t.Logf("tool=%s input=%v error=%s", step.Tool, step.Input, step.Error)
+		if step.Tool == dianaSubtaskToolName && step.Error == "" {
+			delegated = true
+			t.Logf("worker=%s", step.Output)
+		}
+		if step.Error == "" && step.Tool == agent.WebSearchToolName {
+			search++
+		}
+		if step.Error == "" && step.Tool == "browser_render" {
+			read++
+			t.Logf("page=%s", truncateRunes(step.Output, 12000))
+		}
+	}
+	t.Logf("model=%s answer=%s", resp.Model, resp.Text)
+	if resp.Text == "" || (!parent && (search == 0 || read == 0)) || (parent && !delegated) {
+		t.Fatal("research did not complete search, reading and synthesis")
+	}
+	// 本案例用于检测已知错误结论；不把只含“去世”字样视为核验通过。
+	if !parent && (strings.Contains(resp.Text, "假的") || strings.Contains(resp.Text, "均未报道") || strings.Contains(resp.Text, "均未刊发")) {
+		t.Fatal("repeated unsupported denial; inspect captured evidence")
+	}
+}

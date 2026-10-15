@@ -20,6 +20,8 @@ type debugTraceContextKey struct{}
 type debugTraceState struct {
 	event    MessageEvent
 	sequence atomic.Int64
+	parent   *debugTraceState
+	taskID   string
 }
 
 func (r *Runtime) withDebugTraceContext(ctx context.Context, event MessageEvent) context.Context {
@@ -43,6 +45,15 @@ func debugTraceFromContext(ctx context.Context) *debugTraceState {
 	}
 	state, _ := ctx.Value(debugTraceContextKey{}).(*debugTraceState)
 	return state
+}
+
+// 子任务共享消息的序号，在每条调试记录上标记独立任务 ID。
+func withSubtaskDebugTrace(ctx context.Context, taskID string) context.Context {
+	parent := debugTraceFromContext(ctx)
+	if parent == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, debugTraceContextKey{}, &debugTraceState{event: parent.event, parent: parent, taskID: taskID})
 }
 
 func (r *Runtime) withDebugTraceRun(ctx context.Context, run llmProviderRunFunc) llmProviderRunFunc {
@@ -117,7 +128,11 @@ func (r *Runtime) recordDebugTrace(state *debugTraceState, message string, metad
 	if state == nil {
 		return
 	}
-	r.writeDebugTrace(state, state.sequence.Add(1), message, metadata)
+	root := state
+	for root.parent != nil {
+		root = root.parent
+	}
+	r.writeDebugTrace(state, root.sequence.Add(1), message, metadata)
 }
 
 func (r *Runtime) writeDebugTrace(state *debugTraceState, sequence int64, message string, metadata map[string]any) {
@@ -126,6 +141,9 @@ func (r *Runtime) writeDebugTrace(state *debugTraceState, sequence int64, messag
 		return
 	}
 	metadata["sequence"] = sequence
+	if state.taskID != "" {
+		metadata["subtask_id"] = state.taskID
+	}
 	metadata["platform"] = state.event.Platform
 	metadata["profile_id"] = state.event.ProfileID
 	metadata["kind"] = state.event.Kind
@@ -232,4 +250,25 @@ func llmCallPurpose(ctx context.Context) string {
 		return purpose
 	}
 	return llmUnlabeledPurpose
+}
+
+// 图片接口不经过文本模型装饰器，单独记录参数与结果摘要，避免写入图片二进制或签名链接。
+func (r *Runtime) recordImageDebugTrace(ctx context.Context, cfg llm.ProviderConfig, purpose string, request map[string]any, response *llm.ImageGenerateResponse, err error, duration time.Duration) {
+	state := debugTraceFromContext(ctx)
+	if state == nil {
+		return
+	}
+	metadata := map[string]any{
+		"phase": "model_request", "purpose": purpose, "provider": cfg.Provider,
+		"model": cfg.ImageModelWithDefault(), "request": request, "duration_ms": duration.Milliseconds(),
+	}
+	if response != nil {
+		metadata["response"] = map[string]any{"image_count": len(response.Images), "model": response.Model, "usage": response.Usage}
+	}
+	message := "图片模型请求完成"
+	if err != nil {
+		metadata["error"] = err.Error()
+		message = "图片模型请求失败"
+	}
+	r.recordDebugTrace(state, message, metadata)
 }
