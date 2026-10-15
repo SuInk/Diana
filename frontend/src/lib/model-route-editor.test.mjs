@@ -25,6 +25,14 @@ test("model route table exposes live cooling and degraded health states", () => 
   assert.match(source, /model-health-badge/);
 });
 
+test("model recovery rules are editable and unhealthy routes can be restored immediately", () => {
+  for (const text of ["自动恢复规则", "瞬时错误重试次数", "重试间隔（毫秒）", "瞬时错误首次冷却（秒）", "限流/鉴权首次冷却（秒）", "单次冷却上限（秒）", "优先采用上游 Retry-After", "恢复默认规则", "立即恢复：清除故障与冷却记录"]) {
+    assert.ok(source.includes(text), text);
+  }
+  assert.match(source, /resetModelHealth\(profileIDs, route\.model\)/);
+  assert.match(source, /recovery_policy: role\.recovery_policy/);
+});
+
 const ast = ts.createSourceFile("view.ts", parse(source).descriptor.scriptSetup.content, ts.ScriptTarget.Latest, true);
 function editorContext(roles) {
   const context = vm.createContext({
@@ -62,7 +70,8 @@ test("route editor cancellation keeps primary, fallbacks and follow mode unchang
 });
 
 test("editing a primary preserves its scheduling strategy and fallback metadata", () => {
-  const roles = { chat: { profile_id: "p1", model: "m1", weight: 3, routing_strategy: "weighted", fallbacks: [{ profile_id: "p2", model: "m2", weight: 2, disabled: true, standby: true }] } };
+  const recovery_policy = { transient_retries: 0, retry_delay_milliseconds: 0, transient_cooldown_seconds: 3, status_cooldown_seconds: 30, max_cooldown_seconds: 120, respect_retry_after: false };
+  const roles = { chat: { profile_id: "p1", model: "m1", weight: 3, routing_strategy: "weighted", recovery_policy, fallbacks: [{ profile_id: "p2", model: "m2", weight: 2, disabled: true, standby: true }] } };
   const context = editorContext(roles);
   context.openModelRouteEditor("chat", 0);
   context.setModelRouteEditorChannel("p2");
@@ -71,6 +80,7 @@ test("editing a primary preserves its scheduling strategy and fallback metadata"
   assert.equal(roles.chat.model, "m2");
   assert.equal(roles.chat.weight, 1000);
   assert.equal(roles.chat.routing_strategy, "weighted");
+  assert.deepEqual(roles.chat.recovery_policy, recovery_policy);
   assert.equal(roles.chat.fallbacks[0].standby, true);
   assert.equal(roles.chat.fallbacks[0].disabled, true);
   assert.equal(context.modelRouteEditor.value, null);

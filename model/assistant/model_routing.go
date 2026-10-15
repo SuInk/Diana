@@ -34,6 +34,15 @@ func effectiveModelRoutingStrategy(strategy string, keys ...string) string {
 	return "smart"
 }
 
+func (r *Runtime) modelRecoveryPolicyForContext(ctx context.Context, group string) llmRecoveryPolicy {
+	roles := r.modelRolesForContext(ctx)
+	role, ok := modelRoleFor(roles, llmUsagePurposeFromContext(ctx), group)
+	if !ok {
+		return defaultLLMRecoveryPolicy()
+	}
+	return effectiveLLMRecoveryPolicy(role.RecoveryPolicy)
+}
+
 type modelRouteSchedule struct {
 	signature string
 	next      uint64

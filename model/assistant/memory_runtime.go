@@ -1045,6 +1045,7 @@ func (r *Runtime) runLLMMemoryProvider(ctx context.Context, run llmProviderRunFu
 				}
 				provider.report = r.reportLLMEvent
 				provider.cooldowns = &r.llmCooldowns
+				provider.recoveryPolicy = r.modelRecoveryPolicyForContext(ctx, llm.GroupBackground)
 				return run(provider)
 			}
 		}
@@ -1063,6 +1064,7 @@ func (r *Runtime) runLLMMemoryProvider(ctx context.Context, run llmProviderRunFu
 				if provider, err := newRegistryFailoverLLMProvider(registry, profiles, true, len(profiles) > 1); err == nil {
 					provider.report = r.reportLLMEvent
 					provider.cooldowns = &r.llmCooldowns
+					provider.recoveryPolicy = r.modelRecoveryPolicyForContext(ctx, llm.GroupBackground)
 					return run(provider)
 				}
 			}
@@ -1075,6 +1077,7 @@ func (r *Runtime) runLLMMemoryProvider(ctx context.Context, run llmProviderRunFu
 			if provider, err := newRegistryFailoverLLMProvider(registry, profiles, true, len(profiles) > 1); err == nil {
 				provider.report = r.reportLLMEvent
 				provider.cooldowns = &r.llmCooldowns
+				provider.recoveryPolicy = r.modelRecoveryPolicyForContext(ctx, llm.GroupBackground)
 				return run(provider)
 			}
 		}
@@ -1088,6 +1091,7 @@ func (r *Runtime) runLLMMemoryProvider(ctx context.Context, run llmProviderRunFu
 				if provider, err := newRegistryFailoverLLMProvider(registry, profiles, true, len(profiles) > 1); err == nil {
 					provider.report = r.reportLLMEvent
 					provider.cooldowns = &r.llmCooldowns
+					provider.recoveryPolicy = r.modelRecoveryPolicyForContext(ctx, llm.GroupBackground)
 					return run(provider)
 				}
 			}
@@ -1096,6 +1100,7 @@ func (r *Runtime) runLLMMemoryProvider(ctx context.Context, run llmProviderRunFu
 			if provider, err := newRegistryFailoverLLMProvider(registry, profiles, true, len(profiles) > 1); err == nil {
 				provider.report = r.reportLLMEvent
 				provider.cooldowns = &r.llmCooldowns
+				provider.recoveryPolicy = r.modelRecoveryPolicyForContext(ctx, llm.GroupBackground)
 				return run(provider)
 			}
 		}

@@ -31,6 +31,41 @@ const (
 	llmCooldownSkipLogInterval = 10 * time.Minute
 )
 
+type llmRecoveryPolicy struct {
+	transientRetries  int
+	retryDelay        time.Duration
+	transientCooldown time.Duration
+	statusCooldown    time.Duration
+	maxCooldown       time.Duration
+	respectRetryAfter bool
+}
+
+func defaultLLMRecoveryPolicy() llmRecoveryPolicy {
+	return llmRecoveryPolicy{
+		transientRetries:  llmTransientMaxRetries,
+		retryDelay:        llmTransientRetryDelay,
+		transientCooldown: llmCooldownTransient,
+		statusCooldown:    llmCooldownDefault,
+		maxCooldown:       llmCooldownMax,
+		respectRetryAfter: true,
+	}
+}
+
+func effectiveLLMRecoveryPolicy(policy *ModelRecoveryPolicy) llmRecoveryPolicy {
+	if policy == nil {
+		return defaultLLMRecoveryPolicy()
+	}
+	normalized := normalizeModelRecoveryPolicy(policy)
+	return llmRecoveryPolicy{
+		transientRetries:  normalized.TransientRetries,
+		retryDelay:        time.Duration(normalized.RetryDelayMilliseconds) * time.Millisecond,
+		transientCooldown: time.Duration(normalized.TransientCooldownSeconds) * time.Second,
+		statusCooldown:    time.Duration(normalized.StatusCooldownSeconds) * time.Second,
+		maxCooldown:       time.Duration(normalized.MaxCooldownSeconds) * time.Second,
+		respectRetryAfter: normalized.RespectRetryAfter,
+	}
+}
+
 // llmCooldownTable 记每个候选（配置档 + 模型）冷却到什么时候。零值可用，nil 时
 // 所有方法都退化成「没有冷却」，直接构造 provider 的测试不用管它。
 type llmCooldownTable struct {
@@ -163,10 +198,14 @@ func (t *llmCooldownTable) remaining(profile llm.Profile) time.Duration {
 // 已经在冷却中又失败（所有候选都冷却、只好硬试）只顺延截止时间，不算新进入，
 // 调用方据此决定要不要打日志。时长为 0 表示这类失败不该冷却。
 func (t *llmCooldownTable) markFailure(profile llm.Profile, err error) (time.Duration, bool) {
+	return t.markFailureWithPolicy(profile, err, defaultLLMRecoveryPolicy())
+}
+
+func (t *llmCooldownTable) markFailureWithPolicy(profile llm.Profile, err error, policy llmRecoveryPolicy) (time.Duration, bool) {
 	if t == nil {
 		return 0, false
 	}
-	duration := llmCooldownDuration(err)
+	duration := llmCooldownDurationWithPolicy(err, policy)
 	if duration <= 0 {
 		return 0, false
 	}
@@ -191,9 +230,9 @@ func (t *llmCooldownTable) markFailure(profile llm.Profile, err error) (time.Dur
 	}
 	entry.failures++
 	entry.lastFailure = now
-	if llmRetryAfterHint(err) <= 0 {
-		for n := 1; n < entry.failures && duration < llmCooldownMax; n++ {
-			duration = min(duration*2, llmCooldownMax)
+	if !policy.respectRetryAfter || llmRetryAfterHint(err) <= 0 {
+		for n := 1; n < entry.failures && duration < policy.maxCooldown; n++ {
+			duration = min(duration*2, policy.maxCooldown)
 		}
 	}
 	entry.retainUntil = now.Add(24 * time.Hour)
@@ -212,6 +251,36 @@ func (t *llmCooldownTable) clear(profile llm.Profile) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	delete(t.entries, llmCooldownKey(profile))
+}
+
+func (t *llmCooldownTable) clearMatching(profileIDs []string, model string) int {
+	if t == nil {
+		return 0
+	}
+	allowed := make(map[string]struct{}, len(profileIDs))
+	for _, id := range profileIDs {
+		if id = strings.TrimSpace(id); id != "" {
+			allowed[id] = struct{}{}
+		}
+	}
+	model = strings.TrimSpace(model)
+	if len(allowed) == 0 || model == "" {
+		return 0
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	removed := 0
+	for key := range t.entries {
+		profileID, candidateModel, ok := strings.Cut(key, "\x00")
+		if !ok || candidateModel != model {
+			continue
+		}
+		if _, ok := allowed[profileID]; ok {
+			delete(t.entries, key)
+			removed++
+		}
+	}
+	return removed
 }
 
 // order 在原排序后过滤冷却候选；全部冷却时保留最早恢复的一档。
@@ -283,8 +352,12 @@ func (t *llmCooldownTable) skipLogDue(profile llm.Profile) (time.Duration, bool)
 }
 
 // noteLLMCandidateFailure 给失败的候选记冷却，新进入冷却时打一行说明冷却多久。
-func noteLLMCandidateFailure(cooldowns *llmCooldownTable, group string, profile llm.Profile, err error) {
-	duration, fresh := cooldowns.markFailure(profile, err)
+func noteLLMCandidateFailure(cooldowns *llmCooldownTable, group string, profile llm.Profile, err error, policies ...llmRecoveryPolicy) {
+	policy := defaultLLMRecoveryPolicy()
+	if len(policies) > 0 {
+		policy = policies[0]
+	}
+	duration, fresh := cooldowns.markFailureWithPolicy(profile, err, policy)
 	if duration <= 0 || !fresh {
 		return
 	}
@@ -303,14 +376,28 @@ func noteLLMCandidateFailure(cooldowns *llmCooldownTable, group string, profile 
 // 时长或上游提示的时长；普通 5xx、连接被拒给很短的冷却。内容拦截、上下文超限、
 // 空输出、单次超时这些跟请求本身有关，不冷却——换一句话它可能就好了。
 func llmCooldownDuration(err error) time.Duration {
+	return llmCooldownDurationWithPolicy(err, defaultLLMRecoveryPolicy())
+}
+
+func llmCooldownDurationWithPolicy(err error, policy llmRecoveryPolicy) time.Duration {
 	fallback := llmErrorPolicy(err).cooldown
 	if fallback == 0 {
 		return 0
 	}
-	if hint := llmRetryAfterHint(err); hint > 0 {
-		return min(hint, llmCooldownMax)
+	if fallback == llmCooldownTransient {
+		fallback = policy.transientCooldown
+	} else {
+		fallback = policy.statusCooldown
 	}
-	return fallback
+	if fallback <= 0 {
+		return 0
+	}
+	if policy.respectRetryAfter {
+		if hint := llmRetryAfterHint(err); hint > 0 {
+			return min(hint, policy.maxCooldown)
+		}
+	}
+	return min(fallback, policy.maxCooldown)
 }
 
 // llmRetryAfterTextPattern 匹配各家写在错误正文里的等待提示：

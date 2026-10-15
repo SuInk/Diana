@@ -294,6 +294,7 @@ type profileFailoverLLMProvider struct {
 	current        int
 	report         llmEventReporter
 	cooldowns      *llmCooldownTable
+	recoveryPolicy llmRecoveryPolicy
 	clients        []LLMProvider
 	clientErrors   []error
 	clientLoaded   []bool
@@ -317,7 +318,8 @@ type registryFailoverLLMProvider struct {
 	report         llmEventReporter
 	// cooldowns 是 Runtime 上跨请求保留的冷却表；provider 自己每次调用都新建，
 	// 记不住上一次谁刚被限流。
-	cooldowns *llmCooldownTable
+	cooldowns      *llmCooldownTable
+	recoveryPolicy llmRecoveryPolicy
 }
 
 func newRegistryFailoverLLMProvider(registry *llm.ProviderRegistry, profiles []llm.Profile, retryTransient bool, wrapGroupError bool) (*registryFailoverLLMProvider, error) {
@@ -345,6 +347,7 @@ func newRegistryFailoverLLMProvider(registry *llm.ProviderRegistry, profiles []l
 		retryTransient: retryTransient,
 		wrapGroupError: wrapGroupError,
 		group:          llm.NormalizeProfileGroup(candidates[0].profile.Group),
+		recoveryPolicy: defaultLLMRecoveryPolicy(),
 	}, nil
 }
 
@@ -364,7 +367,7 @@ func (p *registryFailoverLLMProvider) Generate(ctx context.Context, req llm.Gene
 		if streamingRequested(ctx) {
 			client = &streamingLLMProvider{provider: client}
 		}
-		resp, err := generateWithTransientRetryTimeout(ctx, client, candidateReasoningRequest(req, candidate.profile), p.retryTransient, candidate.profile.Config.Timeout)
+		resp, err := generateWithTransientRetryPolicy(ctx, client, candidateReasoningRequest(req, candidate.profile), p.retryTransient, candidate.profile.Config.Timeout, p.recoveryPolicy.transientRetries, p.recoveryPolicy.retryDelay)
 		if err == nil {
 			p.current = index
 			p.cooldowns.clear(candidate.profile)
@@ -373,13 +376,13 @@ func (p *registryFailoverLLMProvider) Generate(ctx context.Context, req llm.Gene
 		failover := shouldFailoverLLMError(err)
 		lastErr = annotateLLMProviderAttempt(err, candidate.profile, req)
 		if errors.Is(err, errLLMOutputCommitted) {
-			noteLLMCandidateFailure(p.cooldowns, p.group, candidate.profile, healthFailureCause(err))
+			noteLLMCandidateFailure(p.cooldowns, p.group, candidate.profile, healthFailureCause(err), p.recoveryPolicy)
 			return nil, lastErr
 		}
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return nil, ctxErr
 		}
-		noteLLMCandidateFailure(p.cooldowns, p.group, candidate.profile, healthFailureCause(err))
+		noteLLMCandidateFailure(p.cooldowns, p.group, candidate.profile, healthFailureCause(err), p.recoveryPolicy)
 		if !failover {
 			return nil, lastErr
 		}
@@ -440,6 +443,7 @@ func newProfileFailoverLLMProvider(
 		clients:        make([]LLMProvider, len(profiles)),
 		clientErrors:   make([]error, len(profiles)),
 		clientLoaded:   make([]bool, len(profiles)),
+		recoveryPolicy: defaultLLMRecoveryPolicy(),
 	}, nil
 }
 
@@ -462,7 +466,7 @@ func (p *profileFailoverLLMProvider) Generate(ctx context.Context, req llm.Gener
 			if streamingRequested(ctx) {
 				client = &streamingLLMProvider{provider: client}
 			}
-			resp, err = generateWithTransientRetryTimeout(ctx, client, req, p.retryTransient, p.profiles[index].Config.Timeout)
+			resp, err = generateWithTransientRetryPolicy(ctx, client, req, p.retryTransient, p.profiles[index].Config.Timeout, p.recoveryPolicy.transientRetries, p.recoveryPolicy.retryDelay)
 			if err == nil {
 				p.current = index
 				p.cooldowns.clear(p.profiles[index])
@@ -478,13 +482,13 @@ func (p *profileFailoverLLMProvider) Generate(ctx context.Context, req llm.Gener
 		err = annotateLLMProviderAttempt(err, p.profiles[index], req)
 		lastErr = err
 		if errors.Is(err, errLLMOutputCommitted) {
-			noteLLMCandidateFailure(p.cooldowns, p.group, p.profiles[index], healthFailureCause(rawErr))
+			noteLLMCandidateFailure(p.cooldowns, p.group, p.profiles[index], healthFailureCause(rawErr), p.recoveryPolicy)
 			return nil, err
 		}
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return nil, ctxErr
 		}
-		noteLLMCandidateFailure(p.cooldowns, p.group, p.profiles[index], healthFailureCause(rawErr))
+		noteLLMCandidateFailure(p.cooldowns, p.group, p.profiles[index], healthFailureCause(rawErr), p.recoveryPolicy)
 		if !failover {
 			return nil, err
 		}

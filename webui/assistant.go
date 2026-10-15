@@ -71,6 +71,10 @@ type modelHealthRuntime interface {
 	ModelHealthSnapshot() assistant.ModelHealthSnapshot
 }
 
+type modelHealthResetRuntime interface {
+	ResetModelHealth(profileIDs []string, model string) int
+}
+
 type repositoryWatchRuntime interface {
 	CreateRepositoryWatch(context.Context, assistant.RepositoryWatchCreateInput) (assistant.Reminder, error)
 	UpdateRepositoryWatch(context.Context, string, string, assistant.RepositoryWatchUpdateInput) (assistant.Reminder, error)
@@ -323,6 +327,7 @@ func (h *BotHandler) Register(router gin.IRouter) {
 func (h *BotHandler) registerRoutes(router gin.IRouter, base string) {
 	router.GET(base+"/config", h.getConfig)
 	router.GET(base+"/model-health", h.modelHealth)
+	router.POST(base+"/model-health/reset", h.resetModelHealth)
 	router.GET(base+"/config/defaults", h.newProfileDefaults)
 	router.GET(base+"/prompts", h.promptCatalog)
 	router.POST(base+"/prompts/export", h.exportPromptFile)
@@ -451,6 +456,49 @@ func (h *BotHandler) modelHealth(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, runtime.ModelHealthSnapshot())
+}
+
+type resetModelHealthRequest struct {
+	ProfileIDs []string `json:"profile_ids"`
+	Model      string   `json:"model"`
+}
+
+func (h *BotHandler) resetModelHealth(c *gin.Context) {
+	var payload resetModelHealthRequest
+	if err := c.ShouldBindJSON(&payload); err != nil {
+		h.writeError(c, http.StatusBadRequest, "model_health_reset", err, "", nil)
+		return
+	}
+	payload.Model = strings.TrimSpace(payload.Model)
+	profileIDs := make([]string, 0, len(payload.ProfileIDs))
+	seen := map[string]struct{}{}
+	for _, id := range payload.ProfileIDs {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		profileIDs = append(profileIDs, id)
+	}
+	if payload.Model == "" || len(profileIDs) == 0 {
+		h.writeError(c, http.StatusBadRequest, "model_health_reset", errors.New("请选择要恢复的提供商和模型"), payload.Model, nil)
+		return
+	}
+	runtime, ok := h.runtime.(modelHealthResetRuntime)
+	if !ok {
+		h.writeError(c, http.StatusServiceUnavailable, "model_health_reset", errors.New("模型运行状态暂不可用"), payload.Model, nil)
+		return
+	}
+	cleared := runtime.ResetModelHealth(profileIDs, payload.Model)
+	recordRequestOperation(c, h.logs, "model_health_reset", "模型候选已恢复", payload.Model, map[string]any{"profile_ids": profileIDs, "cleared": cleared})
+	health := assistant.ModelHealthSnapshot{CheckedAt: time.Now(), Candidates: []assistant.ModelCandidateHealth{}}
+	if snapshot, ok := h.runtime.(modelHealthRuntime); ok {
+		health = snapshot.ModelHealthSnapshot()
+	}
+	c.JSON(http.StatusOK, gin.H{"cleared": cleared, "health": health})
 }
 
 // platforms 返回可用于创建机器人配置的平台及协议适配器。

@@ -663,6 +663,25 @@
                     </div>
                     <span v-if="!modelRoleInherited(role.key)" class="model-routing-toolbar-hint">{{ modelRoutingDescription(role.key) }}</span>
                   </div>
+                  <AppDisclosure
+                    v-if="!isMediaRole(role.key) && role.key !== 'image' && roleForm[role.key] && !modelRoleInherited(role.key)"
+                    :id="`model-recovery-policy-${role.key}`"
+                    class="model-recovery-policy"
+                    :title="modelRecoveryIsCustom(role.key) ? '自动恢复规则 · 自定义' : '自动恢复规则 · 默认'"
+                  >
+                    <div class="form-grid model-recovery-grid">
+                      <label class="field"><span>瞬时错误重试次数</span><AppNumberInput :model-value="modelRecoveryPolicy(role.key).transient_retries" :min="0" :max="3" :label="`${role.label}瞬时错误重试次数`" @update:model-value="(value) => setModelRecoveryPolicyField(role.key, 'transient_retries', value)" /><span class="hint">普通 5xx 和连接故障在切换模型前重试 0–3 次。</span></label>
+                      <label class="field"><span>重试间隔（毫秒）</span><AppNumberInput :model-value="modelRecoveryPolicy(role.key).retry_delay_milliseconds" :min="0" :max="10000" :label="`${role.label}重试间隔`" @update:model-value="(value) => setModelRecoveryPolicyField(role.key, 'retry_delay_milliseconds', value)" /></label>
+                      <label class="field"><span>瞬时错误首次冷却（秒）</span><AppNumberInput :model-value="modelRecoveryPolicy(role.key).transient_cooldown_seconds" :min="0" :max="3600" :label="`${role.label}瞬时错误首次冷却`" @update:model-value="(value) => setModelRecoveryPolicyField(role.key, 'transient_cooldown_seconds', value)" /></label>
+                      <label class="field"><span>限流/鉴权首次冷却（秒）</span><AppNumberInput :model-value="modelRecoveryPolicy(role.key).status_cooldown_seconds" :min="0" :max="86400" :label="`${role.label}限流鉴权首次冷却`" @update:model-value="(value) => setModelRecoveryPolicyField(role.key, 'status_cooldown_seconds', value)" /></label>
+                      <label class="field"><span>单次冷却上限（秒）</span><AppNumberInput :model-value="modelRecoveryPolicy(role.key).max_cooldown_seconds" :min="1" :max="86400" :label="`${role.label}单次冷却上限`" @update:model-value="(value) => setModelRecoveryPolicyField(role.key, 'max_cooldown_seconds', value)" /></label>
+                    </div>
+                    <div class="model-recovery-actions">
+                      <AppSwitch :model-value="modelRecoveryPolicy(role.key).respect_retry_after" @update:model-value="(value) => setModelRecoveryPolicyField(role.key, 'respect_retry_after', value)">优先采用上游 Retry-After</AppSwitch>
+                      <button v-if="modelRecoveryIsCustom(role.key)" class="btn small ghost" type="button" @click="resetModelRecoveryPolicy(role.key)">恢复默认规则</button>
+                    </div>
+                    <p class="hint">连续失败仍按指数退避，冷却不在当前请求中等待；修改后点击页面「保存配置」生效。</p>
+                  </AppDisclosure>
                   <div v-if="modelRoleInherited(role.key)" class="model-inherited-state">
                     <GitBranch :size="22" aria-hidden="true" />
                     <div><strong>{{ modelRoleSource(role.key) === FOLLOW_VISION ? '沿用视觉理解的模型配置' : modelRoleSource(role.key) === UNSPECIFIED ? `跟随${purposeRoleFallbackLabel(role.key)}的模型配置` : '沿用对话的模型配置' }}</strong><p>模型、调度方式和后备路由随来源一起更新。</p></div>
@@ -708,7 +727,7 @@
                               <AppNumberInput v-else :model-value="item.route.weight || 1" :min="1" :max="1000" :label="`${role.label}模型 ${item.index + 1} 权重`" :disabled="item.route.disabled" compact @update:model-value="(value) => setRoleRouteWeight(role.key, item.index, value)" />
                             </td>
                             <td class="model-route-enable-cell"><AppSwitch :model-value="!item.route.disabled" :aria-label="`${role.label}模型 ${item.index + 1} 启用`" compact @update:model-value="(value) => setRoleRouteDisabled(role.key, item.index, !value)" /></td>
-                            <td class="model-route-actions"><button class="btn icon-only small ghost" type="button" :aria-label="`编辑${role.label}模型 ${item.index + 1}`" title="编辑模型" @click="openModelRouteEditor(role.key, item.index)"><Pencil :size="14" aria-hidden="true" /></button><button v-if="item.index > 0" class="btn icon-only small ghost" type="button" :aria-label="`删除${role.label}模型 ${item.index + 1}`" title="删除模型" @click="removeRoleFallback(role.key, item.index - 1)"><Trash2 :size="14" aria-hidden="true" /></button></td>
+                            <td class="model-route-actions"><button v-if="modelRouteCanRecover(role.key, item.route)" class="btn icon-only small ghost" type="button" :aria-label="`立即恢复${role.label}模型 ${item.index + 1}`" title="立即恢复：清除故障与冷却记录" :disabled="modelHealthLoading" @click="recoverModelRoute(role.key, item.route)"><RotateCcw :size="14" aria-hidden="true" /></button><button class="btn icon-only small ghost" type="button" :aria-label="`编辑${role.label}模型 ${item.index + 1}`" title="编辑模型" @click="openModelRouteEditor(role.key, item.index)"><Pencil :size="14" aria-hidden="true" /></button><button v-if="item.index > 0" class="btn icon-only small ghost" type="button" :aria-label="`删除${role.label}模型 ${item.index + 1}`" title="删除模型" @click="removeRoleFallback(role.key, item.index - 1)"><Trash2 :size="14" aria-hidden="true" /></button></td>
                           </tr>
                           <tr v-if="!filteredModelRoutes(role.key).length"><td :colspan="roleForm[role.key]?.routing_strategy === 'weighted' ? 6 : 5" class="model-list-empty">{{ modelRoleRoutes(role.key).length ? '没有匹配的模型' : '还没有配置模型，点击「添加模型」开始。' }}<button v-if="modelRoleRoutes(role.key).length" class="btn ghost small" type="button" @click="clearModelRouteFilters">清除筛选</button></td></tr>
                         </tbody>
@@ -2327,6 +2346,7 @@ import {
   getConfig,
   getBotProfileConfig,
   getModelHealth,
+  resetModelHealth,
   getBotPlatforms,
   listLLMModels,
   saveBotProfileConfig,
@@ -2340,6 +2360,7 @@ import {
   type LLMModelInfo,
   type ModelCandidateHealth,
   type ModelHealthSnapshot,
+  type ModelRecoveryPolicy,
   type BotProfileConfig,
   type BotChannelStatus,
   type BotPlatform,
@@ -3534,7 +3555,7 @@ type RoleKey = "chat" | "vision" | "intent" | "image" | "media_parse" | (typeof 
 type RoleRoute = { profile_id?: string; group?: string; model: string; provider_id?: string; model_id?: string; follow_chat?: boolean; weight?: number; disabled?: boolean; standby?: boolean };
 // params 只在音视频插槽的主路由上有，后备沿用同一份。
 // reasoning_effort 同样只在主路由上有，后备沿用；空表示跟随提供商配置。
-type RoleAssignment = RoleRoute & { routing_strategy?: "smart" | "failover" | "round_robin" | "weighted"; fallbacks?: RoleRoute[]; params?: Record<string, string>; reasoning_effort?: string };
+type RoleAssignment = RoleRoute & { routing_strategy?: "smart" | "failover" | "round_robin" | "weighted"; recovery_policy?: ModelRecoveryPolicy; fallbacks?: RoleRoute[]; params?: Record<string, string>; reasoning_effort?: string };
 type ModelRoleRow = { key: RoleKey; label: string; sublabel?: string; description: string };
 const modelRoleRows: ModelRoleRow[] = [
   {
@@ -3747,6 +3768,34 @@ const modelRoutingStrategies = [
   { value: "weighted", label: "加权轮询", hint: "按渠道权重分配", icon: SlidersHorizontal }
 ];
 
+const defaultModelRecoveryPolicy: ModelRecoveryPolicy = {
+  transient_retries: 1,
+  retry_delay_milliseconds: 700,
+  transient_cooldown_seconds: 10,
+  status_cooldown_seconds: 60,
+  max_cooldown_seconds: 1800,
+  respect_retry_after: true
+};
+
+function modelRecoveryPolicy(role: RoleKey): ModelRecoveryPolicy {
+  return roleForm.value[role]?.recovery_policy ?? defaultModelRecoveryPolicy;
+}
+
+function modelRecoveryIsCustom(role: RoleKey): boolean {
+  return !!roleForm.value[role]?.recovery_policy;
+}
+
+function setModelRecoveryPolicyField<K extends keyof ModelRecoveryPolicy>(role: RoleKey, key: K, value: ModelRecoveryPolicy[K]): void {
+  const assignment = roleForm.value[role];
+  if (!assignment || assignment.follow_chat) return;
+  assignment.recovery_policy = { ...modelRecoveryPolicy(role), [key]: value };
+}
+
+function resetModelRecoveryPolicy(role: RoleKey): void {
+  const assignment = roleForm.value[role];
+  if (assignment) delete assignment.recovery_policy;
+}
+
 function modelRoutingStrategiesFor(role: RoleKey): AppSelectOption[] {
   return role === "image" || isMediaRole(role) ? modelRoutingStrategies.filter(option => option.value !== "smart") : modelRoutingStrategies;
 }
@@ -3856,6 +3905,26 @@ function modelRouteHealth(role: RoleKey, route: RoleRoute): ModelRouteHealth {
   return { label: "正常", className: "ok", title: "当前进程内没有保留这条路由的近期健康故障。", cooling: false, degraded: false };
 }
 
+function modelRouteCanRecover(role: RoleKey, route: RoleRoute): boolean {
+  return !route.disabled && modelRouteCandidateHealth(role, route).length > 0;
+}
+
+async function recoverModelRoute(role: RoleKey, route: RoleRoute): Promise<void> {
+  const profileIDs = selectedRoleProfiles(role, route).map((profile) => profile.id).filter((id): id is string => !!id);
+  if (!profileIDs.length || !route.model || modelHealthLoading.value) return;
+  modelHealthLoading.value = true;
+  try {
+    const result = await resetModelHealth(profileIDs, route.model);
+    modelHealth.value = result.health;
+    modelHealthReceivedAt.value = Date.now();
+    toastSuccess(result.cleared > 0 ? "已清除故障记录，模型会在下次请求重新参与调度" : "当前没有需要清除的故障记录");
+  } catch (error) {
+    toastError(error instanceof Error ? error.message : "恢复模型失败");
+  } finally {
+    modelHealthLoading.value = false;
+  }
+}
+
 async function loadModelHealth(): Promise<void> {
   if (modelHealthLoading.value) return;
   modelHealthLoading.value = true;
@@ -3944,7 +4013,7 @@ function applyModelRouteEditor(): void {
   const current = roleForm.value[editor.role];
   if (editor.index === 0) {
     route.standby = undefined;
-    roleForm.value[editor.role] = { ...route, params: current?.params, reasoning_effort: current?.reasoning_effort, routing_strategy: current?.follow_chat ? undefined : current?.routing_strategy, fallbacks: current?.follow_chat ? undefined : current?.fallbacks };
+    roleForm.value[editor.role] = { ...route, params: current?.params, reasoning_effort: current?.reasoning_effort, routing_strategy: current?.follow_chat ? undefined : current?.routing_strategy, recovery_policy: current?.follow_chat ? undefined : current?.recovery_policy, fallbacks: current?.follow_chat ? undefined : current?.fallbacks };
   } else if (current && !current.follow_chat) {
     current.fallbacks ??= [];
     if (editor.adding) current.fallbacks.push(route);
@@ -4021,7 +4090,7 @@ function roleSnapshot(roles: Record<string, RoleAssignment | undefined> | undefi
       .sort()
       .map((key) => {
         const role = roles?.[key];
-        return role ? [key, role.routing_strategy ?? "", route(role), (role.fallbacks ?? []).map(route), params(role), role.reasoning_effort ?? ""] : [key];
+        return role ? [key, role.routing_strategy ?? "", role.recovery_policy ?? null, route(role), (role.fallbacks ?? []).map(route), params(role), role.reasoning_effort ?? ""] : [key];
       })
   );
 }
@@ -4052,6 +4121,7 @@ function setRoleForm(source: BotProfileConfig["model_roles"]): void {
       model_id: role.model_id,
       follow_chat: role.follow_chat,
       routing_strategy: role.routing_strategy,
+      recovery_policy: role.recovery_policy ? { ...role.recovery_policy } : undefined,
       weight: role.weight,
       disabled: role.disabled,
       standby: role.standby,
@@ -4424,7 +4494,7 @@ function setRoleChannel(role: RoleKey, value: string): void {
   const params = current?.params;
   // 思考强度是这个用途的设置，不跟某家提供商绑定，换提供商时保留。
   const reasoning_effort = current?.reasoning_effort;
-  const routing = current?.follow_chat ? {} : { routing_strategy: current?.routing_strategy, weight: current?.weight, disabled: current?.disabled };
+  const routing = current?.follow_chat ? {} : { routing_strategy: current?.routing_strategy, recovery_policy: current?.recovery_policy, weight: current?.weight, disabled: current?.disabled };
   if (value.startsWith(GROUP_PREFIX)) {
     roleForm.value[role] = { ...routing, params, reasoning_effort, group: value.slice(GROUP_PREFIX.length), model, fallbacks };
   } else {
@@ -4462,13 +4532,13 @@ function moveRoleRoute(role: RoleKey, from: number, to: number): void {
   if (!assignment || assignment.follow_chat) return;
   // params 和思考强度属于这个用途而不是某一条路由，换主路由时留在原地，
   // 不能跟着原来的主路由一起挪进后备。
-  const { fallbacks = [], params, reasoning_effort, routing_strategy, ...primary } = assignment;
+  const { fallbacks = [], params, reasoning_effort, routing_strategy, recovery_policy, ...primary } = assignment;
   const routes: RoleRoute[] = [primary, ...fallbacks];
   if (from === to || from < 0 || to < 0 || from >= routes.length || to >= routes.length) return;
   const [moved] = routes.splice(from, 1);
   routes.splice(to, 0, moved);
   const [first, ...rest] = routes;
-  roleForm.value[role] = { ...first, standby: undefined, routing_strategy, fallbacks: rest, params, reasoning_effort };
+  roleForm.value[role] = { ...first, standby: undefined, routing_strategy, recovery_policy, fallbacks: rest, params, reasoning_effort };
 }
 
 function routeDragClasses(role: RoleKey, index: number): Record<string, boolean> {
@@ -4904,6 +4974,7 @@ async function save(): Promise<void> {
         provider_id: role.provider_id,
         model_id: role.model_id,
         routing_strategy: role.routing_strategy,
+        recovery_policy: role.recovery_policy,
         weight: role.weight,
         disabled: role.disabled,
         fallbacks: role.fallbacks?.map((fallback) => ({ ...fallback, model: fallback.model.trim() })),

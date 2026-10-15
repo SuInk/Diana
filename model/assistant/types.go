@@ -997,9 +997,23 @@ type ModelRole struct {
 	ReasoningEffort string `json:"reasoning_effort,omitempty"`
 	// 空策略默认智能；独立图片和音视频默认主备。failover 显式选择主备。
 	RoutingStrategy string `json:"routing_strategy,omitempty"`
-	Weight          int    `json:"weight,omitempty"`
-	Disabled        bool   `json:"disabled,omitempty"`
-	Standby         bool   `json:"standby,omitempty"`
+	// RecoveryPolicy 覆盖这个用途的瞬时重试与健康冷却规则。nil 保持内置默认值；
+	// 后备路由沿用主路由的规则，避免同一用途切换模型后行为突然变化。
+	RecoveryPolicy *ModelRecoveryPolicy `json:"recovery_policy,omitempty"`
+	Weight         int                  `json:"weight,omitempty"`
+	Disabled       bool                 `json:"disabled,omitempty"`
+	Standby        bool                 `json:"standby,omitempty"`
+}
+
+// ModelRecoveryPolicy 是一个模型用途的自动避障规则。字段不用指针：只要用户选择
+// 自定义，界面就保存一份完整规则，因此 0 可以明确表示“不重试”或“不冷却”。
+type ModelRecoveryPolicy struct {
+	TransientRetries         int  `json:"transient_retries"`
+	RetryDelayMilliseconds   int  `json:"retry_delay_milliseconds"`
+	TransientCooldownSeconds int  `json:"transient_cooldown_seconds"`
+	StatusCooldownSeconds    int  `json:"status_cooldown_seconds"`
+	MaxCooldownSeconds       int  `json:"max_cooldown_seconds"`
+	RespectRetryAfter        bool `json:"respect_retry_after"`
 }
 
 func normalizeModelRoles(roles map[string]ModelRole) map[string]ModelRole {
@@ -1055,6 +1069,7 @@ func normalizeModelRole(role ModelRole) ModelRole {
 	role.ModelID = strings.TrimSpace(role.ModelID)
 	role.Params = normalizeModelRoleParams(role.Params)
 	role.ReasoningEffort = llm.NormalizeReasoningEffortSetting(role.ReasoningEffort)
+	role.RecoveryPolicy = normalizeModelRecoveryPolicy(role.RecoveryPolicy)
 	switch strings.TrimSpace(role.RoutingStrategy) {
 	case "smart", "failover", "round_robin", "weighted":
 		role.RoutingStrategy = strings.TrimSpace(role.RoutingStrategy)
@@ -1083,6 +1098,7 @@ func normalizeModelRole(role ModelRole) ModelRole {
 		fallback.Fallbacks = nil
 		fallback.Params = nil
 		fallback.ReasoningEffort = ""
+		fallback.RecoveryPolicy = nil
 		fallback.RoutingStrategy = ""
 		fallback = normalizeModelRole(fallback)
 		if modelRoleConfigured(fallback) {
@@ -1091,6 +1107,19 @@ func normalizeModelRole(role ModelRole) ModelRole {
 	}
 	role.Fallbacks = fallbacks
 	return role
+}
+
+func normalizeModelRecoveryPolicy(policy *ModelRecoveryPolicy) *ModelRecoveryPolicy {
+	if policy == nil {
+		return nil
+	}
+	normalized := *policy
+	normalized.TransientRetries = min(max(normalized.TransientRetries, 0), 3)
+	normalized.RetryDelayMilliseconds = min(max(normalized.RetryDelayMilliseconds, 0), 10_000)
+	normalized.TransientCooldownSeconds = min(max(normalized.TransientCooldownSeconds, 0), 3_600)
+	normalized.StatusCooldownSeconds = min(max(normalized.StatusCooldownSeconds, 0), 86_400)
+	normalized.MaxCooldownSeconds = min(max(normalized.MaxCooldownSeconds, 1), 86_400)
+	return &normalized
 }
 
 func normalizeModelRoleParams(params map[string]string) map[string]string {

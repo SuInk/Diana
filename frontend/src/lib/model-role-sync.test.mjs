@@ -86,6 +86,7 @@ test("model assignments keep the page's own order whatever order they arrive in"
 test("balancing edits survive incoming model updates and explicit adoption loads every setting", () => {
   for (const mutate of [
     role => { role.routing_strategy = "weighted"; },
+    role => { role.recovery_policy = { transient_retries: 0, retry_delay_milliseconds: 0, transient_cooldown_seconds: 4, status_cooldown_seconds: 40, max_cooldown_seconds: 400, respect_retry_after: false }; },
     role => { role.weight = 3; },
     role => { role.disabled = true; },
     role => { role.fallbacks[0].standby = true; },

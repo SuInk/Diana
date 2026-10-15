@@ -458,6 +458,7 @@ func (r *Runtime) runRawLLMProviderForGroup(ctx context.Context, group string, r
 			}
 			provider.report = r.reportLLMEvent
 			provider.cooldowns = &r.llmCooldowns
+			provider.recoveryPolicy = r.modelRecoveryPolicyForContext(ctx, group)
 			return run(provider)
 		}
 	}
@@ -483,6 +484,7 @@ func (r *Runtime) runRawLLMProviderForGroup(ctx context.Context, group string, r
 			}
 			provider.report = r.reportLLMEvent
 			provider.cooldowns = &r.llmCooldowns
+			provider.recoveryPolicy = r.modelRecoveryPolicyForContext(ctx, group)
 			return run(provider)
 		}
 		// 没有角色绑定就按本次调用的分组取候选，组内顺序即降级顺序。
@@ -499,6 +501,7 @@ func (r *Runtime) runRawLLMProviderForGroup(ctx context.Context, group string, r
 			}
 			provider.report = r.reportLLMEvent
 			provider.cooldowns = &r.llmCooldowns
+			provider.recoveryPolicy = r.modelRecoveryPolicyForContext(ctx, group)
 			return run(provider)
 		}
 		return r.runLLMProviderWithFailover(ctx, store, cfgFactory, run)
@@ -676,6 +679,7 @@ func (r *Runtime) runLLMRouterProviderWithRetry(ctx context.Context, retryTransi
 			if err == nil {
 				provider.report = r.reportLLMEvent
 				provider.cooldowns = &r.llmCooldowns
+				provider.recoveryPolicy = r.modelRecoveryPolicyForContext(ctx, group)
 				return run(provider)
 			}
 			// 注册表里没有能对上的模型时不硬顶，退回下面按单条选择的老路。
@@ -747,6 +751,7 @@ func (r *Runtime) runLLMProviderProfileAttempts(ctx context.Context, profiles []
 	}
 	provider.report = r.reportLLMEvent
 	provider.cooldowns = &r.llmCooldowns
+	provider.recoveryPolicy = r.modelRecoveryPolicyForContext(ctx, profiles[0].Group)
 	return run(provider)
 }
 
@@ -771,6 +776,7 @@ func (r *Runtime) runLLMProviderWithFailover(ctx context.Context, store LLMProfi
 	}
 	provider.report = r.reportLLMEvent
 	provider.cooldowns = &r.llmCooldowns
+	provider.recoveryPolicy = r.modelRecoveryPolicyForContext(ctx, llm.GroupChat)
 	return run(provider)
 }
 

@@ -90,6 +90,35 @@ func TestBotHandlerModelHealth(t *testing.T) {
 	}
 }
 
+func TestBotHandlerResetsModelHealth(t *testing.T) {
+	runtime := assistant.NewRuntime(assistant.DefaultBotConfig(), fakeChannel{}, assistant.NewDefaultPluginManager(), nil, nil, nil, nil)
+	handler := NewBotHandlerWithFactory(context.Background(), runtime, func(assistant.BotConfig) assistant.Channel { return fakeChannel{} })
+	router := botTestRouter(handler)
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/api/assistant/model-health/reset", strings.NewReader(`{"profile_ids":["provider-a","provider-a"],"model":"chat-model"}`))
+	request.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", recorder.Code, recorder.Body.String())
+	}
+	var payload struct {
+		Cleared int                           `json:"cleared"`
+		Health  assistant.ModelHealthSnapshot `json:"health"`
+	}
+	if err := json.NewDecoder(recorder.Body).Decode(&payload); err != nil || payload.Cleared != 0 || payload.Health.CheckedAt.IsZero() {
+		t.Fatalf("payload=%+v err=%v", payload, err)
+	}
+
+	recorder = httptest.NewRecorder()
+	request = httptest.NewRequest(http.MethodPost, "/api/assistant/model-health/reset", strings.NewReader(`{"profile_ids":[],"model":""}`))
+	request.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("invalid reset status = %d, body = %s", recorder.Code, recorder.Body.String())
+	}
+}
+
 // TestBotHandlerPluginInstallAndEnable 验证对应功能场景。
 func TestBotHandlerPluginInstallAndEnable(t *testing.T) {
 	runtime := assistant.NewRuntime(assistant.DefaultBotConfig(), fakeChannel{}, assistant.NewDefaultPluginManager(), nil, nil, nil, nil)

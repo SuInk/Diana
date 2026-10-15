@@ -814,6 +814,12 @@ func (r *Runtime) ModelHealthSnapshot() ModelHealthSnapshot {
 	return r.llmCooldowns.publicSnapshot()
 }
 
+// ResetModelHealth 立即清除指定候选的运行时故障和冷却记录。配置不变；下一次请求
+// 会把它当作健康候选重新参与调度，若上游仍失败则按当前恢复规则重新进入冷却。
+func (r *Runtime) ResetModelHealth(profileIDs []string, model string) int {
+	return r.llmCooldowns.clearMatching(profileIDs, model)
+}
+
 // SetReplySuppressionStore loads restart-safe temporary response restrictions.
 func (r *Runtime) SetReplySuppressionStore(ctx context.Context, store ReplySuppressionStore) error {
 	return r.loadReplySuppressions(ctx, store, time.Now())

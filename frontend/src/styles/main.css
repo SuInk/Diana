@@ -515,6 +515,28 @@ code {
   color: var(--muted);
   font-size: 11px;
 }
+.model-recovery-policy {
+  margin: -4px 0 16px;
+}
+.model-recovery-grid {
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  margin-top: 12px;
+}
+.model-recovery-grid .field {
+  align-content: start;
+}
+.model-recovery-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 12px;
+}
+.model-recovery-policy > .hint {
+  display: block;
+  margin-top: 10px;
+}
 .model-list-toolbar {
   display: flex;
   align-items: center;

@@ -143,6 +143,44 @@ func TestLLMCooldownPublicSnapshotReportsCoolingAndRetainedFailures(t *testing.T
 	}
 }
 
+func TestLLMCustomRecoveryPolicyAndManualReset(t *testing.T) {
+	now := time.Date(2026, 10, 15, 15, 0, 0, 0, time.UTC)
+	table := &llmCooldownTable{now: func() time.Time { return now }}
+	policy := llmRecoveryPolicy{
+		transientRetries:  0,
+		retryDelay:        0,
+		transientCooldown: 3 * time.Second,
+		statusCooldown:    4 * time.Second,
+		maxCooldown:       5 * time.Second,
+		respectRetryAfter: false,
+	}
+	transient := llm.Profile{ID: "provider-a", Config: llm.ProviderConfig{Model: "shared-model"}}
+	limited := llm.Profile{ID: "provider-b", Config: llm.ProviderConfig{Model: "shared-model"}}
+
+	if duration, _ := table.markFailureWithPolicy(transient, errors.New("HTTP 503 service unavailable"), policy); duration != 3*time.Second {
+		t.Fatalf("transient cooldown = %s", duration)
+	}
+	if duration, _ := table.markFailureWithPolicy(limited, errors.New("HTTP 429 retry after 60s"), policy); duration != 4*time.Second {
+		t.Fatalf("status cooldown ignored custom Retry-After policy: %s", duration)
+	}
+	if cleared := table.clearMatching([]string{"provider-a"}, "shared-model"); cleared != 1 {
+		t.Fatalf("cleared = %d", cleared)
+	}
+	if table.remaining(transient) != 0 || table.remaining(limited) <= 0 {
+		t.Fatalf("manual reset affected wrong candidates: transient=%s limited=%s", table.remaining(transient), table.remaining(limited))
+	}
+
+	adapter := &cooldownRegistryAdapter{generateErrs: []error{errors.New("HTTP 503 service unavailable"), nil}, response: "recovered"}
+	provider := cooldownProviderFactory(t, &llmCooldownTable{}, adapter)()
+	provider.recoveryPolicy = policy
+	if _, err := provider.Generate(context.Background(), cooldownRequest()); err == nil {
+		t.Fatal("custom zero-retry policy should return the first transient failure")
+	}
+	if adapter.generateCalls != 1 {
+		t.Fatalf("zero-retry policy calls = %d", adapter.generateCalls)
+	}
+}
+
 // 冷却到期后先探一次：上游恢复了就重新用它，而不是被「Wait 311000s」锁三天。
 func TestLLMCooldownExpiresAndProbesAgain(t *testing.T) {
 	now := time.Date(2026, 9, 27, 12, 0, 0, 0, time.UTC)

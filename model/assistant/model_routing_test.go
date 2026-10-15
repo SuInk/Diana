@@ -83,6 +83,24 @@ func TestModelRequestTimeoutBotScope(t *testing.T) {
 	}
 }
 
+func TestModelRecoveryPolicyUsesPurposeRole(t *testing.T) {
+	configured := &ModelRecoveryPolicy{
+		TransientRetries:         0,
+		RetryDelayMilliseconds:   125,
+		TransientCooldownSeconds: 3,
+		StatusCooldownSeconds:    45,
+		MaxCooldownSeconds:       300,
+		RespectRetryAfter:        false,
+	}
+	r := NewRuntime(BotConfig{ID: "bot", ModelRoles: map[string]ModelRole{
+		"chat": {ProfileID: "a", Model: "m", RecoveryPolicy: configured},
+	}}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	policy := r.modelRecoveryPolicyForContext(context.Background(), llm.GroupChat)
+	if policy.transientRetries != 0 || policy.retryDelay != 125*time.Millisecond || policy.transientCooldown != 3*time.Second || policy.statusCooldown != 45*time.Second || policy.maxCooldown != 5*time.Minute || policy.respectRetryAfter {
+		t.Fatalf("policy = %#v", policy)
+	}
+}
+
 func routingTestRuntime(t *testing.T, role ModelRole) (*Runtime, map[string]*retryRegistryAdapter, llm.ProfileSet) {
 	t.Helper()
 	registry := llm.NewProviderRegistry()
@@ -278,9 +296,12 @@ func TestModelRoutingLegacyAndBackgroundMemoryRuns(t *testing.T) {
 }
 
 func TestModelRoutingConfigRoundTripAndNormalization(t *testing.T) {
-	role := normalizeModelRole(ModelRole{ProfileID: " a ", Model: " m ", RoutingStrategy: " weighted ", Weight: 2000, Disabled: true, Fallbacks: []ModelRole{{ProfileID: "b", Model: "m", Weight: 2, Standby: true, RoutingStrategy: "round_robin"}}})
-	if role.Weight != 1000 || role.RoutingStrategy != "weighted" || role.Fallbacks[0].RoutingStrategy != "" {
+	role := normalizeModelRole(ModelRole{ProfileID: " a ", Model: " m ", RoutingStrategy: " weighted ", RecoveryPolicy: &ModelRecoveryPolicy{TransientRetries: 9, RetryDelayMilliseconds: -1, TransientCooldownSeconds: 7, StatusCooldownSeconds: 8, MaxCooldownSeconds: 0}, Weight: 2000, Disabled: true, Fallbacks: []ModelRole{{ProfileID: "b", Model: "m", Weight: 2, Standby: true, RoutingStrategy: "round_robin", RecoveryPolicy: &ModelRecoveryPolicy{TransientRetries: 2}}}})
+	if role.Weight != 1000 || role.RoutingStrategy != "weighted" || role.Fallbacks[0].RoutingStrategy != "" || role.Fallbacks[0].RecoveryPolicy != nil {
 		t.Fatalf("normalized role=%+v", role)
+	}
+	if policy := role.RecoveryPolicy; policy == nil || policy.TransientRetries != 3 || policy.RetryDelayMilliseconds != 0 || policy.MaxCooldownSeconds != 1 {
+		t.Fatalf("normalized recovery policy=%+v", policy)
 	}
 	data, err := json.Marshal(role)
 	if err != nil {

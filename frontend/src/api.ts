@@ -87,6 +87,15 @@ export interface ModelHealthSnapshot {
   candidates: ModelCandidateHealth[];
 }
 
+export interface ModelRecoveryPolicy {
+  transient_retries: number;
+  retry_delay_milliseconds: number;
+  transient_cooldown_seconds: number;
+  status_cooldown_seconds: number;
+  max_cooldown_seconds: number;
+  respect_retry_after: boolean;
+}
+
 export interface ImageGenerateResponse {
   provider: Provider;
   model?: string;
@@ -333,6 +342,7 @@ export interface BotProfileConfig extends SendRetrySettings {
     weight?: number;
     disabled?: boolean;
     standby?: boolean;
+    recovery_policy?: ModelRecoveryPolicy;
     fallbacks?: Array<{ profile_id?: string; group?: string; model: string; provider_id?: string; model_id?: string; weight?: number; disabled?: boolean; standby?: boolean }>;
     /** 音视频插槽（tts/stt/video）的参数：音色、格式、语速、语言、分辨率等。 */
     params?: Record<string, string>;
@@ -1623,6 +1633,13 @@ export function getBotProfileConfig(includeSecrets = false, timeoutMs = 0): Prom
 
 export function getModelHealth(): Promise<ModelHealthSnapshot> {
   return requestJSON<ModelHealthSnapshot>("/api/assistant/model-health");
+}
+
+export function resetModelHealth(profileIDs: string[], model: string): Promise<{ cleared: number; health: ModelHealthSnapshot }> {
+  return requestJSON<{ cleared: number; health: ModelHealthSnapshot }>("/api/assistant/model-health/reset", {
+    method: "POST",
+    body: JSON.stringify({ profile_ids: profileIDs, model })
+  });
 }
 
 export function getBotPlatforms(): Promise<{ platforms: BotPlatform[] }> {
