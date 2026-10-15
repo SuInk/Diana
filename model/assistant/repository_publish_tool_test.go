@@ -1020,33 +1020,31 @@ func TestRepositoryPublishDescriptionKeepsPublicReadsOpen(t *testing.T) {
 	}
 }
 
-// 「按用户」的授权只在私聊生效：同一个人在私聊里能写，进了没放开的群就不能写，
-// 也不该在群里看见这个仓库。个人授权不跨场景带进群，群里的事由群的配置说了算。
-func TestRepositoryPublishUserScopedAccessStaysOutOfGroups(t *testing.T) {
-	settings := SettingValues{
-		repositoryPublishSettingAllowlist:    "SuInk/Diana",
-		repositoryPublishSettingManagerUsers: "manager-user = SuInk/Diana",
+func TestRepositoryPublishUserManagerAccessAcrossChats(t *testing.T) {
+	settings := SettingValues{repositoryPublishSettingAllowlist: "SuInk/Diana", repositoryPublishSettingManagerUsers: "manager-user = SuInk/Diana"}
+	for _, kind := range []EventKind{EventKindPrivate, EventKindGroup} {
+		event := MessageEvent{Kind: kind, GroupID: "10497", UserID: "manager-user"}
+		direct, draft, code, message := repositoryPublishAccessForEvent(event, "SuInk/Diana", false, settings, nil)
+		if !direct || !draft || code != "" {
+			t.Fatalf("manager denied: %v %v %s %s", direct, draft, code, message)
+		}
+		if got := repositoryPublishEventRepositories(event, false, settings); len(got) != 1 {
+			t.Fatalf("repositories=%v", got)
+		}
+		if !repositoryPublishEventHasAccess(event, settings) {
+			t.Fatal("manager hidden from tool entry")
+		}
+		if ok, code, _ := repositoryPublishEventCanApprove(event, "SuInk/Diana", false, settings, nil); !ok || code != "" {
+			t.Fatal("manager cannot approve")
+		}
+		if _, _, code, _ := repositoryPublishAccessForEvent(event, "acme/other", false, settings, nil); code == "" {
+			t.Fatal("unrelated repository allowed")
+		}
 	}
-	private := MessageEvent{Kind: EventKindPrivate, UserID: "manager-user"}
-	if direct, _, code, message := repositoryPublishAccessForEvent(private, "SuInk/Diana", false, settings, nil); code != "" || !direct {
-		t.Fatalf("按用户授权在私聊里被拒：direct=%v code=%q message=%q", direct, code, message)
-	}
-	if got := repositoryPublishEventRepositories(private, false, settings); len(got) != 1 || got[0] != "SuInk/Diana" {
-		t.Fatalf("私聊可操作仓库清单 = %#v", got)
-	}
-
-	group := MessageEvent{Kind: EventKindGroup, GroupID: "10497", UserID: "manager-user"}
-	direct, draft, code, message := repositoryPublishAccessForEvent(group, "SuInk/Diana", false, settings, nil)
-	if direct || draft || code != "permission_denied" {
-		t.Fatalf("按用户授权被带进了群：direct=%v draft=%v code=%q", direct, draft, code)
-	}
-	// 拒绝要说清是「按用户的授权只在私聊生效」，而不是「你没有权限」——这两件事修法不同。
-	if !strings.Contains(message, "只在私聊生效") {
-		t.Fatalf("拒绝提示没有说明按用户授权的适用范围：%q", message)
-	}
-	// 描述里那份「本会话有写入授权的仓库」清单同样不能把它列出来。
-	if got := repositoryPublishEventRepositories(group, false, settings); len(got) != 0 {
-		t.Fatalf("群里仍然列出了按用户授权的仓库 = %#v", got)
+	event := MessageEvent{Kind: EventKindGroup, GroupID: "10497", UserID: "drafter"}
+	settings[repositoryPublishSettingDraftUsers] = "drafter = SuInk/Diana"
+	if direct, draft, _, _ := repositoryPublishAccessForEvent(event, "SuInk/Diana", false, settings, nil); direct || draft {
+		t.Fatal("standalone drafter grant escaped private scope")
 	}
 }
 
@@ -1115,8 +1113,7 @@ func TestRepositoryIssueFailureMessageNamesTheCredential(t *testing.T) {
 	}
 }
 
-// 群草稿的审批人由群自己指定：私聊里的个人管理员权限带不进群，群审批人也不能
-// 绕过草稿直接写。这两条合起来才是「私聊就是私聊，群里的事群说了算」。
+// 个人管理人员与按群审批人都须通过确认码；群审批人的权限仍受本群草稿范围限制。
 func TestRepositoryIssueGroupApproverScope(t *testing.T) {
 	github := newRepositoryPublishTestGitHub()
 	server := httptest.NewServer(http.HandlerFunc(github.handler))
@@ -1131,7 +1128,7 @@ func TestRepositoryIssueGroupApproverScope(t *testing.T) {
 		repositoryPublishSettingAllowlist:      "acme/demo",
 		repositoryPublishSettingGroupAccess:    "group-1 = acme/demo",
 		repositoryPublishSettingApproverGroups: "group-1 = approver",
-		// 这个人在私聊里是管理员，但不是 group-1 的审批人。
+		// 个人管理人员无需额外加入 group-1 的审批人名单。
 		repositoryPublishSettingManagerUsers: "manager = acme/demo",
 		repositoryPublishSettingUserTokens:   string(tokens),
 		repositoryPublishSettingTimeout:      5,
@@ -1149,12 +1146,12 @@ func TestRepositoryIssueGroupApproverScope(t *testing.T) {
 		t.Fatalf("draft=%#v", draft)
 	}
 
-	// 私聊里的管理员在群里既不是审批人，也不该被放行。
+	// 个人管理人员有群内审批权限，但没有确认码仍不得写入。
 	denied := runRepositoryPublishToolOnce(t, inGroup("manager", "同意"), map[string]any{
 		"operation": "approve", "draft_id": draft.Draft.ID,
 	})
-	if denied.OK || denied.FailureCode != "permission_denied" || github.count(http.MethodPost) != 0 {
-		t.Fatalf("私聊管理员在群里批了草稿：%#v posts=%d", denied, github.count(http.MethodPost))
+	if denied.OK || denied.FailureCode != "explicit_approval_required" || github.count(http.MethodPost) != 0 {
+		t.Fatalf("管理人员绕过了确认码：%#v posts=%d", denied, github.count(http.MethodPost))
 	}
 
 	// 群审批人不能绕过草稿直接写：他发起的写操作同样只落成草稿。
@@ -1261,5 +1258,40 @@ func TestRepositoryStarRequiresEnabledOwnerAndFreshConfirmation(t *testing.T) {
 	repeated := runRepositoryPublishToolOnce(t, tool, approve)
 	if !repeated.Idempotent || starCalls.Load() != 1 {
 		t.Fatalf("repeat=%+v calls=%d", repeated, starCalls.Load())
+	}
+}
+
+func TestRepositoryGroupPersonalManagerWriteRequiresConfirmation(t *testing.T) {
+	github := newRepositoryPublishTestGitHub()
+	server := httptest.NewServer(http.HandlerFunc(github.handler))
+	defer server.Close()
+	runtime := NewRuntime(BotConfig{OwnerID: "owner"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	settings := SettingValues{
+		repositoryPublishSettingAllowlist:    "acme/demo",
+		repositoryPublishSettingManagerUsers: "manager = acme/demo",
+		repositoryPublishSettingUserTokens:   `{"manager":"` + repositoryPublishTestToken + `"}`,
+		repositoryPublishSettingTimeout:      5,
+	}
+	tool := newDianaGitHubTool(runtime, MessageEvent{Kind: EventKindGroup, GroupID: "unlisted-group", UserID: "manager", RawMessage: "create issue"}, newRepositoryPublishPlugin(server.Client(), server.URL), settings)
+	draft := runRepositoryPublishToolOnce(t, tool, map[string]any{"operation": "create", "repository": "acme/demo", "title": "group manager write", "body": "test"})
+	if !draft.OK || draft.Outcome != "draft_pending" || draft.Draft == nil || github.count(http.MethodPost) != 0 {
+		t.Fatalf("draft=%#v", draft)
+	}
+	approve := map[string]any{"operation": "approve", "draft_id": draft.Draft.ID}
+	withoutCode := runRepositoryPublishToolOnce(t, tool, approve)
+	if withoutCode.Outcome == "created" || github.count(http.MethodPost) != 0 {
+		t.Fatal("write bypassed confirmation")
+	}
+	tool.event.RawMessage = "确认 " + repositoryIssueConfirmationCode(draft.Draft.ID)
+	result := runRepositoryPublishToolOnce(t, tool, approve)
+	if !result.OK || result.Outcome != "created" || github.count(http.MethodPost) != 1 {
+		t.Fatalf("confirmed=%#v", result)
+	}
+	delete(settings, repositoryPublishSettingUserTokens)
+	if code, _ := tool.validateWriteAccess("acme/demo", false); code != "user_token_required" {
+		t.Fatalf("missing token accepted: %s", code)
+	}
+	if code, _ := tool.validateWriteAccess("acme/other", false); code != "repository_not_allowed" {
+		t.Fatalf("allowlist ignored: %s", code)
 	}
 }

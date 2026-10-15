@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 )
 
@@ -221,5 +222,104 @@ func TestRepositoryReadPublicRepoInGroupNeedsNoPersonalToken(t *testing.T) {
 	})
 	if denied.OK || denied.FailureCode != "user_token_required" {
 		t.Fatalf("私聊里的已授权用户应按本人 Token 归因：%#v", denied)
+	}
+}
+
+func TestRepositoryReadPrivateRepoGroupManagers(t *testing.T) {
+	cases := []struct {
+		name     string
+		settings SettingValues
+		role     GroupRole
+		failure  string
+	}{
+		{"personal manager", SettingValues{repositoryPublishSettingManagerUsers: "reader = acme/private-repo", repositoryPublishSettingUserAuth: `{"reader":"inherit"}`}, "", ""},
+		{"legacy manager", SettingValues{repositoryPublishSettingUserAccess: "reader = acme/private-repo", repositoryPublishSettingUserAuth: `{"reader":"inherit"}`}, "", ""},
+		{"missing personal token", SettingValues{repositoryPublishSettingManagerUsers: "reader = acme/private-repo"}, "", "user_token_required"},
+		{"group manager", SettingValues{repositoryPublishSettingManagerGroups: "group-1 = acme/private-repo"}, "", ""},
+		{"group role allowed", SettingValues{repositoryPublishSettingManagerGroups: "group-1 = acme/private-repo#group_admin"}, GroupRoleAdmin, ""},
+		{"group role denied", SettingValues{repositoryPublishSettingManagerGroups: "group-1 = acme/private-repo#group_admin"}, GroupRoleMember, "permission_denied"},
+		{"group role unknown", SettingValues{repositoryPublishSettingManagerGroups: "group-1 = acme/private-repo#group_admin"}, "", "permission_denied"},
+		{"unrelated repository", SettingValues{repositoryPublishSettingManagerUsers: "reader = acme/other"}, GroupRoleAdmin, "permission_denied"},
+		{"unrelated group", SettingValues{repositoryPublishSettingManagerGroups: "group-2 = acme/private-repo"}, GroupRoleAdmin, "permission_denied"},
+		{"platform admin only", SettingValues{}, GroupRoleAdmin, "permission_denied"},
+		{"code reader only", SettingValues{repositoryPublishSettingCodeUsers: "reader = acme/private-repo"}, "", "permission_denied"},
+		{"drafter only", SettingValues{repositoryPublishSettingDraftUsers: "reader = acme/private-repo"}, "", "permission_denied"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			github := &repositoryReadACLTestGitHub{}
+			server := httptest.NewServer(http.HandlerFunc(github.handler))
+			defer server.Close()
+			tc.settings[repositoryPublishSettingToken] = repositoryPublishTestToken
+			tc.settings[repositoryPublishSettingTimeout] = 5
+			tool := repositoryReadACLTool(server, "reader", tc.settings)
+			tool.event.Kind = EventKindGroup
+			tool.event.GroupID = "group-1"
+			tool.event.SenderRole = string(tc.role)
+			result := runRepositoryReadACL(t, tool, "acme/private-repo")
+			if result.FailureCode != tc.failure || result.OK != (tc.failure == "") {
+				t.Fatalf("unexpected group read result: %#v", result)
+			}
+			if tc.failure != "" && github.count(func(req string) bool { return strings.Contains(req, "/contents/") }) != 0 {
+				t.Fatal("denied read requested private contents")
+			}
+		})
+	}
+}
+
+// Every repository-scoped read must pass the same ACL before fetching its resource.
+func TestRepositoryPrivateGroupReadOperationMatrix(t *testing.T) {
+	for _, operation := range []string{"repo", "search", "get", "pull_files", "read_file"} {
+		for _, authorized := range []bool{false, true} {
+			name := operation + "/denied"
+			if authorized {
+				name = operation + "/allowed"
+			}
+			t.Run(name, func(t *testing.T) {
+				var requestCount atomic.Int32
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					requestCount.Add(1)
+					if r.URL.Path == "/repos/acme/private-repo" {
+						_ = json.NewEncoder(w).Encode(map[string]any{"private": true, "full_name": "acme/private-repo", "html_url": "https://github.com/acme/private-repo"})
+						return
+					}
+					// A distinct downstream failure proves the read passed the ACL;
+					// resource parsing is exercised by each operation's existing tests.
+					http.NotFound(w, r)
+				}))
+				defer server.Close()
+				settings := SettingValues{repositoryPublishSettingToken: repositoryPublishTestToken, repositoryPublishSettingTimeout: 5}
+				if authorized {
+					settings[repositoryPublishSettingManagerUsers] = "reader = acme/private-repo"
+					settings[repositoryPublishSettingUserAuth] = `{"reader":"inherit"}`
+				}
+				tool := repositoryReadACLTool(server, "reader", settings)
+				tool.event.Kind, tool.event.GroupID = EventKindGroup, "group-1"
+				result := runRepositoryPublishToolOnce(t, tool, map[string]any{
+					"operation": operation, "repository": "acme/private-repo", "query": "bug", "number": 1, "path": "README.md",
+				})
+				requests := requestCount.Load()
+				if authorized {
+					if requests < 2 || result.FailureCode == "permission_denied" || result.FailureCode == "user_token_required" {
+						t.Fatalf("authorized read did not reach resource: requests=%d result=%#v", requests, result)
+					}
+				} else if requests != 1 || result.FailureCode != "permission_denied" {
+					t.Fatalf("unauthorized read escaped ACL: requests=%d result=%#v", requests, result)
+				}
+			})
+		}
+	}
+}
+
+func TestRepositoryReadOnlyOperationClassification(t *testing.T) {
+	for _, op := range []string{"repo", "repo_search", "search", "get", "pull_files", "read_file"} {
+		if !repositoryIssueReadOnlyOperation(op) {
+			t.Errorf("read %q classified as mutation", op)
+		}
+	}
+	for _, op := range []string{"create", "update", "comment", "review", "close", "reopen", "approve", "cancel_draft"} {
+		if repositoryIssueReadOnlyOperation(op) {
+			t.Errorf("mutation %q classified as read", op)
+		}
 	}
 }

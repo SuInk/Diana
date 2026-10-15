@@ -124,7 +124,7 @@
           <span class="hint">开启后，此仓库允许通过机器人操作 Issue：管理人员可直接创建和管理，草稿人只能提交草稿、由管理人员确认写入。</span>
           <template v-if="form.issue_enabled">
             <div class="issue-role-block">
-              <div class="issue-role-head"><span id="watch-managers-title">管理人员</span><span class="hint">可直接创建、更新、评论、关闭 Issue，也负责确认草稿。按用户授权的人，私聊和群聊都生效；按群授权可以再限定生效的群身份。</span></div>
+              <div class="issue-role-head"><span id="watch-managers-title">管理人员</span><span class="hint">管理人员可以读取该仓库的私有信息，群聊读取结果会展示在当前群。按用户管理授权在私聊和群聊均可读写；写入仍需确认码。按群授权仍遵守配置的群身份要求。</span></div>
               <div class="target-list" role="group" aria-labelledby="watch-managers-title">
                 <div v-for="(member, index) in form.issue_managers" :key="`manager-${index}`" class="target-row">
                   <AppSelect v-model="member.destination" :options="accessSubjectOptions" :aria-label="`管理人员授权对象`" />
@@ -311,8 +311,8 @@ const form = ref(emptyForm());
 const profileOptions = computed(() => profiles.value.map((profile) => ({ value: profile.id ?? "", label: profile.name || profile.platform || profile.id || "未命名机器人", hint: profile.platform })).filter((option) => option.value));
 const selectedProfile = computed(() => profiles.value.find((profile) => profile.id === form.value.profile_id));
 const groupOptions = computed(() => selectedProfile.value?.platform === "telegram" ? [] : joinedGroups.value.filter((group) => group.joined).map((group) => ({ value: group.group_id, label: group.group_name || `群 ${group.group_id}`, hint: group.group_name ? group.group_id : undefined })));
-// 这一栏选的是「这条授权发给谁」，不是消息往哪发：按用户授权跟着人走，私聊和群聊
-// 都生效，所以不能沿用通知对象那套「私聊 / 群聊」的说法。存储值保持不变。
+// 这一栏区分授权对象：按用户的管理授权允许跨会话读写，写入仍需确认码。
+// 按群授权另受群身份要求约束，存储值保持不变。
 const accessSubjectOptions = [{ value: "private", label: "按用户" }, { value: "group", label: "按群" }];
 // 按群授权要求发言人在群里是什么身份。说的是聊天平台给的身份（群主 / 群管理员 /
 // 群成员），和上面那个「管理人员」是两回事：后者是这份名单本身。机器人主人不受此限。

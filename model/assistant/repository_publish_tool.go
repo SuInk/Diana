@@ -342,7 +342,7 @@ func (t *dianaGitHubTool) Name() string {
 // 续读参数由结果 message 给出，确认码流程写在 user_confirmed_write 和草稿结果的
 // message 里，「被拒绝时把 message 原样转达」在 repositoryIssueResult.fail 里。
 func (t *dianaGitHubTool) Description() string {
-	description := `找仓库、搜索和管理 GitHub Issues，并读取、评论和 review Pull Request；具体做什么由 operation 决定。
+	description := `找仓库、搜索和管理 GitHub Issues，并读取、评论和 review Pull Request；具体做什么由 operation 决定。授权管理人员对该仓库的读写权限在私聊和群聊均生效；写入仍需白名单、有效凭据和确认码。单独源码读取授权仅限私聊，群聊结果会展示在当前群。
 推荐仓库用 repo_search/repo 查 star 和推送时间，不靠网页搜索。读代码和 diff 用 pull_files/commit_files/compare_files/read_file/list_files，链接按 /pull、/commit、/compare、/blob、/tree 对应，不用网页渲染。review 前先 pull_files；review 只评论，不批准不合并。update/close/reopen 仅 Issue，改前先 get。`
 	if t == nil || t.runtime == nil {
 		return description
@@ -493,10 +493,10 @@ func (t *dianaGitHubTool) Run(ctx context.Context, input map[string]any) (string
 			return t.finish(ctx, result.fail(apiErr.Code, t.failureMessage(apiErr.Code)))
 		}
 		if apiErr == nil && visibility == repositoryVisibilityPrivate && !owner {
-			code, message := t.validatePrivateReadAccess(repository)
+			code, message := t.validatePrivateReadAccess(ctx, repository)
 			// 授权名单里写的可能还是旧名。
 			if code != "" && redirectedFrom != "" {
-				if previousCode, _ := t.validatePrivateReadAccess(redirectedFrom); previousCode == "" {
+				if previousCode, _ := t.validatePrivateReadAccess(ctx, redirectedFrom); previousCode == "" {
 					code, message = "", ""
 				}
 			}
@@ -604,11 +604,8 @@ func normalizeRepositoryIssueOperation(operation, state string) string {
 	return ""
 }
 
-// repositoryPublishUserScopedAllowed 判定「按用户」的那几项授权在本次事件里算不算数。
-//
-// 以前按用户的授权跟着人走，私聊和群聊都生效：一个人在私聊里被放行之后，他进了任何
-// 群都把这份权限带进去，群里发生什么，群自己说了不算。现在两边分开——群聊只认「按群」
-// 那几项，私聊只认「按用户」那几项，谁也不越界到对面。
+// repositoryPublishUserScopedAllowed limits standalone drafter grants to private chats.
+// Manager grants are matched separately and apply in both private and group chats.
 func repositoryPublishUserScopedAllowed(event MessageEvent, access map[string]map[string]bool, repositoryKey string) bool {
 	if event.Kind == EventKindGroup {
 		return false
@@ -642,11 +639,11 @@ func repositoryPublishAccessForEvent(event MessageEvent, repository string, owne
 	groupManager := inGroup && managerGroups[groupID][key]
 	groupDrafter := inGroup && draftGroups[groupID][key]
 
-	// 按用户的授权只在私聊算数，见 repositoryPublishUserScopedAllowed。
-	userManager := repositoryPublishUserScopedAllowed(event, managerUsers, key)
-	userDrafter := repositoryPublishUserScopedAllowed(event, draftUsers, key)
+	// 个人管理授权跨会话生效；单独的草稿提交授权仍限私聊。
+	userManager := managerUsers[userID][key]
+	userDrafter := userManager || repositoryPublishUserScopedAllowed(event, draftUsers, key)
 	// 记下「这个人确实有按用户的授权，只是在群里不算数」，拒绝时好说清差在哪。
-	userGrantPrivateOnly := inGroup && (managerUsers[userID][key] || draftUsers[userID][key])
+	userGrantPrivateOnly := inGroup && !userManager && draftUsers[userID][key]
 
 	// 身份要求只有真的写了后缀才去查身份：绝大多数部署一条都没有，不该为了「万一
 	// 要判」给每次调用多打一次群成员查询。
@@ -681,7 +678,7 @@ func repositoryPublishAccessForEvent(event MessageEvent, repository string, owne
 	if !directAllowed && !draftAllowed {
 		// 「你有授权，但那是按用户的、只在私聊算数」是最容易撞上也最容易修的一种，先说它。
 		if userGrantPrivateOnly {
-			return false, false, "permission_denied", "你对该仓库有按用户的授权，但按用户的授权只在私聊生效，不会带进群。" +
+			return false, false, "permission_denied", "你对该仓库只有按用户的草稿提交授权，这项授权仅在私聊生效。" +
 				"请在私聊里操作；要在本群操作，让主人把这个群加进该仓库的按群授权，或把你加进本群的「群聊草稿审批人」。"
 		}
 		if blocked != repositoryAccessRoleAllMembers {
@@ -742,7 +739,7 @@ func repositoryPublishEffectiveGroupRoles(settings SettingValues) (repositoryAcc
 // 没告诉我们身份。后者要写明，否则群主自己被拒会以为是配置错了。
 func repositoryPublishGroupRoleDeniedMessage(requirement repositoryAccessRole, role GroupRole) string {
 	const tail = "（这里说的是你在群里的身份，不是 Diana 的「Issue 管理人员」名单。" +
-		"想在本群单独放行某个人，让主人把他加进「群聊草稿审批人（按群）」——按用户的授权只在私聊生效，放行不到群里。）"
+		"想在本群单独放行某个人，让主人把他加进「群聊草稿审批人（按群）」；也可配置该仓库的按用户管理授权。）"
 	if label := GroupRoleLabel(role); label != "" {
 		return "本群对该仓库的授权只对" + requirement.label() + "生效，你当前的群身份是" + label + "，已拒绝。" + tail
 	}
@@ -947,9 +944,8 @@ func (t *dianaGitHubTool) validateWriteAccess(repository string, owner bool) (st
 		}
 		userID := strings.TrimSpace(t.event.UserID)
 		key := strings.ToLower(repository)
-		// 按用户的管理员权限只在私聊算数，群里要么整个群被放开，要么是本群指定的
-		// 草稿审批人在推动一份已经过确认码的草稿。
-		userDirect := repositoryPublishUserScopedAllowed(t.event, managerUsers, key)
+		// 个人管理授权跨会话生效；按群授权和本群审批人提供其他授权路径。
+		userDirect := managerUsers[userID][key]
 		groupDirect := t.event.Kind == EventKindGroup && managerGroups[strings.TrimSpace(t.event.GroupID)][key]
 		groupApprover := false
 		if !userDirect && !groupDirect && t.event.Kind == EventKindGroup {
@@ -1021,7 +1017,6 @@ func (t *dianaGitHubTool) repositoryVisibility(ctx context.Context, repository s
 // #565）：这类用户已被显式授予该仓库的操作权，读操作也应归因到本人，而不是用共享
 // 公共凭据代替。未在任何用户名单里的用户不受此约束。返回非空 code 即拒绝。
 func (t *dianaGitHubTool) validateReadCredential(repository string) (string, string) {
-	userID := strings.TrimSpace(t.event.UserID)
 	key := strings.ToLower(repository)
 	legacyUsers, err := repositoryPublishUserAccess(t.settings.String(repositoryPublishSettingUserAccess, ""))
 	if err != nil {
@@ -1036,12 +1031,16 @@ func (t *dianaGitHubTool) validateReadCredential(repository string) (string, str
 		return "invalid_repository_access", "Issue 授权配置无效。"
 	}
 	groupDirect := t.event.Kind == EventKindGroup && managerGroups[strings.TrimSpace(t.event.GroupID)][key]
-	// 归因要求跟着「这次事件里他到底算不算被授权的人」走。按用户的授权只在私聊生效，
-	// 所以同一个人在群里就是个普通成员：读公开仓库照常走公共凭据，不能再拿本人 Token
-	// 来卡他——没配 Token 的话，那会把一次本来人人都能做的公开仓库读取挡掉。
+	// 可见性探测前保持公开读取兼容：群内不强制个人 Token。探测确认私有后，
+	// 按用户放行的管理人员由 validateGroupPrivateReadAccess 补做个人凭据校验。
 	if !repositoryPublishUserScopedAllowed(t.event, managerUsers, key) || groupDirect {
 		return "", ""
 	}
+	return t.validatePersonalReadCredential()
+}
+
+func (t *dianaGitHubTool) validatePersonalReadCredential() (string, string) {
+	userID := strings.TrimSpace(t.event.UserID)
 	tokens, err := repositoryPublishUserTokens(t.settings.String(repositoryPublishSettingUserTokens, ""))
 	if err != nil {
 		return "invalid_user_tokens", "用户 GitHub Token 配置无效。"
@@ -1065,12 +1064,10 @@ func (t *dianaGitHubTool) validateReadCredential(repository string) (string, str
 // 授权来源按宽口径取并集：「私有仓库源码读取授权」+ Issue 管理人员（含「用户仓库
 // 授权」回落）——这两拨人都已被后台显式授予该仓库的操作权，读代码不该比写 Issue
 // 更严。返回非空 code 即拒绝，提示里只说授权路径，不泄露仓库内容。
-func (t *dianaGitHubTool) validatePrivateReadAccess(repository string) (string, string) {
+func (t *dianaGitHubTool) validatePrivateReadAccess(ctx context.Context, repository string) (string, string) {
 	key := strings.ToLower(repository)
-	// 源码读取只有「按用户」一份名单，没有按群的对应项，所以这里直接按会话类型挡：
-	// 群聊里除主人外谁都读不到私有仓库源码。要放开就得先有一份按群的名单。
 	if t.event.Kind == EventKindGroup {
-		return "permission_denied", "群聊里不能读取私有仓库源码，私有仓库源码读取授权只在私聊生效；请与机器人私聊后再读。"
+		return t.validateGroupPrivateReadAccess(ctx, repository)
 	}
 	userID := strings.TrimSpace(t.event.UserID)
 	codeUsers, err := repositoryPublishUserAccess(t.settings.String(repositoryPublishSettingCodeUsers, ""))
@@ -1088,7 +1085,37 @@ func (t *dianaGitHubTool) validatePrivateReadAccess(repository string) (string, 
 	if managerUsers[userID][key] {
 		return "", ""
 	}
-	return "permission_denied", "该仓库是私有仓库，仅机器人主人和「私有仓库源码读取授权」名单内的用户可以读取代码；当前用户不在授权名单。"
+	return "permission_denied", "该仓库是私有仓库，仅机器人主人、该仓库的授权管理人员及私聊中的源码读取授权用户可以读取；当前用户不在授权名单。"
+}
+
+// 群聊私有读取只放行该仓库的管理人员；单独源码授权、草稿提交者和
+// 群管理员身份本身均不授予此权限。管理人员的写入另受白名单和确认码校验。
+func (t *dianaGitHubTool) validateGroupPrivateReadAccess(ctx context.Context, repository string) (string, string) {
+	key := strings.ToLower(repository)
+	legacyUsers, err := repositoryPublishUserAccess(t.settings.String(repositoryPublishSettingUserAccess, ""))
+	if err != nil {
+		return "invalid_repository_access", "用户仓库授权配置无效。"
+	}
+	managerUsers, managerGroups, _, _, err := repositoryPublishEffectiveAccess(t.settings, legacyUsers, map[string]map[string]bool{})
+	if err != nil {
+		return "invalid_repository_access", "Issue 授权配置无效。"
+	}
+	groupID := strings.TrimSpace(t.event.GroupID)
+	if managerGroups[groupID][key] {
+		roles, _, err := repositoryPublishEffectiveGroupRoles(t.settings)
+		if err != nil {
+			return "invalid_repository_access", "Issue 授权配置无效。"
+		}
+		requirement := roles.requirement(groupID, key)
+		if requirement == repositoryAccessRoleAllMembers || requirement.satisfiedBy(resolvedGroupRole(t.groupRoleResolver(ctx))) {
+			return "", ""
+		}
+	}
+	if managerUsers[strings.TrimSpace(t.event.UserID)][key] {
+		// 与私聊中的个人管理授权使用同一凭据要求，不影响群内公开仓库读取。
+		return t.validatePersonalReadCredential()
+	}
+	return "permission_denied", "群聊中查看私有仓库需要该仓库的管理人员授权；群管理员身份或草稿提交权限不能代替仓库授权。"
 }
 
 // effectiveGlobalToken 返回实际会用到的公共 Token：优先发布插件自己的那份，为空时
@@ -1124,11 +1151,11 @@ func repositoryPublishValidateEventAccess(event MessageEvent, repository string,
 		return "invalid_group_repository_access", "群聊仓库授权配置无效，请按每行“群ID = owner/repo, owner/repo”填写。"
 	}
 	repositoryKey := strings.ToLower(repository)
-	_, _, draftUsers, draftGroups, effectiveErr := repositoryPublishEffectiveAccess(settings, userAccess, groupAccess)
+	managerUsers, _, draftUsers, draftGroups, effectiveErr := repositoryPublishEffectiveAccess(settings, userAccess, groupAccess)
 	if effectiveErr != nil {
 		return "invalid_repository_access", "Issue 授权配置无效。"
 	}
-	userAllowed := repositoryPublishUserScopedAllowed(event, draftUsers, repositoryKey)
+	userAllowed := managerUsers[strings.TrimSpace(event.UserID)][repositoryKey] || repositoryPublishUserScopedAllowed(event, draftUsers, repositoryKey)
 	groupAllowed := event.Kind == EventKindGroup && draftGroups[strings.TrimSpace(event.GroupID)][repositoryKey]
 	if !userAllowed && !groupAllowed {
 		return "permission_denied", "当前用户或所在群聊未获授权操作该 GitHub 仓库。"
@@ -1163,15 +1190,17 @@ func repositoryPublishEventHasAccess(event MessageEvent, settings SettingValues)
 	if err != nil {
 		return false
 	}
-	_, managers, _, drafts, err := repositoryPublishEffectiveAccess(settings, map[string]map[string]bool{}, legacy)
-	return err == nil && (len(managers[strings.TrimSpace(event.GroupID)]) > 0 || len(drafts[strings.TrimSpace(event.GroupID)]) > 0)
+	legacyUsers, userErr := repositoryPublishUserAccess(settings.String(repositoryPublishSettingUserAccess, ""))
+	if userErr != nil {
+		return false
+	}
+	users, managers, _, drafts, err := repositoryPublishEffectiveAccess(settings, legacyUsers, legacy)
+	return err == nil && (len(users[strings.TrimSpace(event.UserID)]) > 0 || len(managers[strings.TrimSpace(event.GroupID)]) > 0 || len(drafts[strings.TrimSpace(event.GroupID)]) > 0)
 }
 
 // repositoryPublishGroupApprovers 解析「群 ID = 用户 ID, 用户 ID」。
 //
-// 按用户的那几项只在私聊生效（见 repositoryPublishUserScopedAllowed），否则一个人在
-// 私聊里拿到的权限会被他带进任何一个群。但群草稿本来就需要「群里有人拍板」——所以
-// 审批人按群配：群 ID 是谁的群，谁说了算，这仍然是群自己的配置，不是个人跨场景带权限。
+// Group approvers supplement repository managers within this group draft scope.
 func repositoryPublishGroupApprovers(raw string) (map[string]map[string]bool, error) {
 	approvers := map[string]map[string]bool{}
 	for _, line := range strings.FieldsFunc(raw, func(char rune) bool { return char == '\n' || char == '\r' || char == ';' || char == '；' }) {
@@ -1215,7 +1244,7 @@ func repositoryPublishEventCanApprove(event MessageEvent, repository string, own
 		return false, "invalid_group_approver_access", "群聊草稿审批人配置无效，请按每行“群 ID = 用户 ID, 用户 ID”填写。"
 	}
 	if !approvers[strings.TrimSpace(event.GroupID)][strings.TrimSpace(event.UserID)] {
-		return false, "permission_denied", "当前用户不是本群的草稿审批人。群聊草稿由「群聊草稿审批人（按群）」名单里的人审批，私聊里的个人授权不带进群。"
+		return false, "permission_denied", "当前用户不是本群的草稿审批人。群聊草稿可由该仓库的授权管理人员或本群草稿审批人审批。"
 	}
 	return true, "", ""
 }
@@ -1338,7 +1367,7 @@ func repositoryPublishEventRepositories(event MessageEvent, owner bool, settings
 	granted := make([]string, 0, len(names))
 	for _, repository := range names {
 		key := strings.ToLower(repository)
-		reachable := repositoryPublishUserScopedAllowed(event, managerUsers, key) ||
+		reachable := managerUsers[strings.TrimSpace(event.UserID)][key] ||
 			repositoryPublishUserScopedAllowed(event, draftUsers, key)
 		if !reachable && event.Kind == EventKindGroup {
 			reachable = managerGroups[groupID][key] || draftGroups[groupID][key]
@@ -3448,7 +3477,7 @@ func (t *dianaGitHubTool) personalCredentialApplies(repository string) bool {
 	if err != nil {
 		return false
 	}
-	if repositoryPublishUserScopedAllowed(t.event, managerUsers, key) {
+	if managerUsers[strings.TrimSpace(t.event.UserID)][key] {
 		return true
 	}
 	if t.event.Kind != EventKindGroup {
