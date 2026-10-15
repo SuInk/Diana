@@ -3539,6 +3539,9 @@ func TestRuntimeResolverOnlySendsAndRecordsWithoutLLM(t *testing.T) {
 		return "/tmp/diana-test-video.mp4"
 	}
 	manager := NewPluginManager(plugin)
+	if _, err := manager.UpdateSettings(resolverPluginID, map[string]any{resolverSettingFollowUpComment: false}); err != nil {
+		t.Fatalf("UpdateSettings() error = %v", err)
+	}
 	channel := &recordingChannel{}
 	logs := &captureAppLogs{}
 	var llmCalls atomic.Int32
@@ -3635,6 +3638,9 @@ func TestRuntimeResolverPrivateLinkSkipsLLM(t *testing.T) {
 		return "/tmp/diana-test-private-video.mp4"
 	}
 	manager := NewPluginManager(plugin)
+	if _, err := manager.UpdateSettings(resolverPluginID, map[string]any{resolverSettingFollowUpComment: false}); err != nil {
+		t.Fatalf("UpdateSettings() error = %v", err)
+	}
 	channel := &recordingChannel{}
 	var llmCalls atomic.Int32
 	runtime := NewRuntime(BotConfig{PrivateAdmission: PrivateAdmission{Mode: PrivateAdmissionAll}, BotAccount: "42"}, channel, manager, nil, nil, nil, func() (LLMProvider, error) {
@@ -3698,6 +3704,9 @@ func TestRuntimeResolverMentionedGroupLinkSkipsLLM(t *testing.T) {
 		return "/tmp/diana-test-mentioned-video.mp4"
 	}
 	manager := NewPluginManager(plugin)
+	if _, err := manager.UpdateSettings(resolverPluginID, map[string]any{resolverSettingFollowUpComment: false}); err != nil {
+		t.Fatalf("UpdateSettings() error = %v", err)
+	}
 	channel := &recordingChannel{}
 	var llmCalls atomic.Int32
 	runtime := NewRuntime(BotConfig{GroupTriggers: []string{"Diana"}, BotAccount: "42"}, channel, manager, nil, nil, nil, func() (LLMProvider, error) {
