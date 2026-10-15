@@ -368,6 +368,8 @@ export interface BotProfileConfig extends SendRetrySettings {
   reply_account_safety_audit_master_enabled?: boolean;
   /** 自定义账号风险范围；留空使用内置规则。 */
   reply_account_safety_audit_prompt?: string;
+  /** 后端当前实际使用的内置账号风险范围，只读，供编辑器展示。 */
+  reply_account_safety_audit_default?: string;
   /** 笔记本是否跨群共用一本；默认按会话隔离。 */
   notebook_shared_scope_enabled?: boolean;
   /** 提示词增强开关；缺省等价于开启。 */

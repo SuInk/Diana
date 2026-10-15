@@ -256,6 +256,16 @@ func TestReplyAuditParsesDedicatedAccountRiskReason(t *testing.T) {
 	}
 }
 
+func TestDefaultReplyAccountSafetyAuditPromptMatchesRuntimePrompt(t *testing.T) {
+	if !strings.Contains(proactiveReplyQualityPromptBody, DefaultReplyAccountSafetyAuditPrompt) {
+		t.Fatal("displayed default account safety rules differ from the runtime prompt")
+	}
+	payload := PayloadFromConfig(BotConfig{})
+	if payload.ReplyAccountSafetyAuditDefault != DefaultReplyAccountSafetyAuditPrompt {
+		t.Fatalf("payload default account safety rules = %q", payload.ReplyAccountSafetyAuditDefault)
+	}
+}
+
 func TestReplyAuditParsesHighConfidenceRefusal(t *testing.T) {
 	decision, ok := parseProactiveReplyQualityDecision(`{"send_confidence":0.97,"account_safe":true,"count_refusal":true,"refusal_confidence":0.94,"refusal_reason":"明确拒绝当前请求"}`)
 	if !ok {

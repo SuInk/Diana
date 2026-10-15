@@ -1275,15 +1275,14 @@
                 </span>
               </div>
               <div class="field wide">
-                <label for="bot-account-safety-prompt">账号安全审核规则（留空使用内置规则）</label>
+                <label for="bot-account-safety-prompt">账号安全审核规则</label>
                 <textarea
                   id="bot-account-safety-prompt"
-                  v-model="form.reply_account_safety_audit_prompt"
+                  v-model="accountSafetyRulesDraft"
                   class="textarea"
-                  rows="5"
-                  placeholder="例如：只拦截可能导致当前平台账号处罚的明确内容；新闻事实中性转述放行。"
+                  rows="14"
                 ></textarea>
-                <span class="hint">填写后替代内置账号风险范围，只影响账号安全结论，不改变拒答和防循环审核。</span>
+                <span class="hint">当前显示实际生效的内置规则；修改后作为自定义范围保存。恢复成内置原文会继续跟随系统默认。只影响账号安全结论，不改变拒答和防循环审核。</span>
               </div>
               <div class="field wide participation-prompts">
                 <div class="participation-prompt-part">
@@ -2430,6 +2429,7 @@ import { toastError, toastSuccess } from "../lib/toast";
 import { allowNodeExecution } from "../lib/node-execution-preset";
 import { channelAccountUnhealthy, channelOperational, channelStatusHint, channelStatusLabel } from "../lib/channel-status";
 import { effectiveReplyTone, FALLBACK_REPLY_TONE, normalizeReplyTone, replyToneOverride } from "../lib/reply-tone";
+import { accountSafetyRulesOverride, effectiveAccountSafetyRules, FALLBACK_ACCOUNT_SAFETY_RULES, normalizeAccountSafetyRules } from "../lib/account-safety-rules";
 
 const form = ref<BotProfileConfig | null>(null);
 const modelRequestTimeoutDraft = ref<number | string>(0);
@@ -2442,6 +2442,8 @@ const personaDraftInput = ref<HTMLTextAreaElement | null>(null);
 const personaBusy = ref(false);
 const replyToneDraft = ref("");
 const replyToneDefault = ref(FALLBACK_REPLY_TONE);
+const accountSafetyRulesDraft = ref("");
+const accountSafetyRulesDefault = ref(FALLBACK_ACCOUNT_SAFETY_RULES);
 // 保留生成前的那一版，生成结果不合适可以一键退回，不用自己 Ctrl+Z。
 const soulEditor = ref<InstanceType<typeof SoulEditor> | null>(null);
 const promptOverridesOpen = ref(false);
@@ -4672,6 +4674,8 @@ function setForm(config: BotProfileConfig): void {
   modelRequestTimeoutDraft.value = modelRequestTimeoutSeconds(config.model_request_timeout_ms);
   replyToneDefault.value = normalizeReplyTone(config.reply_tone_default) || FALLBACK_REPLY_TONE;
   replyToneDraft.value = effectiveReplyTone(config.maibot_reply_style, replyToneDefault.value);
+  accountSafetyRulesDefault.value = normalizeAccountSafetyRules(config.reply_account_safety_audit_default) || FALLBACK_ACCOUNT_SAFETY_RULES;
+  accountSafetyRulesDraft.value = effectiveAccountSafetyRules(config.reply_account_safety_audit_prompt, accountSafetyRulesDefault.value);
   form.value = {
     ...config,
     participation: participationFromConfig(config),
@@ -4965,8 +4969,10 @@ async function save(): Promise<void> {
       ...current,
       model_request_timeout_ms: modelRequestTimeoutMS,
       maibot_reply_style: replyToneOverride(replyToneDraft.value, replyToneDefault.value),
+      reply_account_safety_audit_prompt: accountSafetyRulesOverride(accountSafetyRulesDraft.value, accountSafetyRulesDefault.value),
       // 只读默认值由后端回传，不写进机器人自己的配置。
       reply_tone_default: undefined,
+      reply_account_safety_audit_default: undefined,
       // 截图权限在交互式浏览器页管理，编辑其他配置时不能覆盖那里新保存的授权。
       agent_browser_screenshot_access: creating.value ? current.agent_browser_screenshot_access : undefined,
       agent_browser_operation_access: creating.value ? current.agent_browser_operation_access : undefined,
@@ -5072,7 +5078,8 @@ function editorSnapshot(): string {
     privateAllowedUsers.value,
     Object.values(tokenDrafts).map((draft) => draft.value),
     modelRequestTimeoutDraft.value,
-    replyToneDraft.value
+    replyToneDraft.value,
+    accountSafetyRulesDraft.value
   ]);
 }
 // 媒体回源基址是全局设置，异步单独加载，不进快照；和加载时的值比，规则同保存。

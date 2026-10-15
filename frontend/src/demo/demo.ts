@@ -8,6 +8,7 @@ import { mergeResolverDemoSettings, resolverDemoManifest, resolverDemoTestRespon
 import demoPromptCatalogData from './demo-prompt-catalog.json';
 import demoBuiltinSouls from './demo-builtin-souls.json';
 import { FALLBACK_REPLY_TONE } from '../lib/reply-tone';
+import { FALLBACK_ACCOUNT_SAFETY_RULES } from '../lib/account-safety-rules';
 // 安全模式目录由后端规则表生成（见 webui/agent_mode_test.go），演示站照原样返回。
 import demoAgentSafeMode from './demo-agent-safe-mode.json';
 import type {
@@ -142,6 +143,7 @@ const oneBotProfile: BotProfileConfig = {
   group_triggers: ["Diana", "diana"], disabled_groups: [], system_prompt: demoDefaultSoul,
   reply_composer: "maibot", maibot_reply_style: "", reply_tone_default: FALLBACK_REPLY_TONE,
   debug_mode_enabled: true, bot_reply_loop_detection_enabled: true, reply_refusal_suppression_enabled: true, reply_semantic_dedup_enabled: true, reply_suppression_enabled: true, prompt_inject_time: false,
+  reply_account_safety_audit_default: FALLBACK_ACCOUNT_SAFETY_RULES,
   proactive_reply_chance: 1, proactive_reply_threshold: 0.9, recent_context_limit: 40, max_reply_chars: 0,
   sticker_reply_order: "before",
   image_generation_daily_group_limit: 30, image_generation_daily_user_limit: 5,
