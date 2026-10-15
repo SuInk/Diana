@@ -390,7 +390,7 @@
           <div class="resolver-platform-heading"><h3>解析平台与 Cookie</h3>
           <button class="btn small" type="button" data-settings-action :disabled="savingSettings || resolverTesting" @click="testAllResolverCredentials">{{ resolverTesting ? "检测中…" : "一键检测" }}</button>
           </div>
-          <p class="hint">点击名称启停，右侧铅笔编辑 Cookie；圆点表示凭据状态。改动统一保存。</p>
+          <p class="hint">点击胶囊启停，右侧铅笔编辑 Cookie；圆点表示凭据状态。改动统一保存。</p>
           <p class="hint">打开设置自动检测已配置凭据；一键检测可重新检查，公开解析平台无需登录检测。</p>
         <div class="resolver-platform-list">
           <template v-for="platform in resolverPlatformRows" :key="platform.value">
@@ -403,7 +403,7 @@
               </template>
             </ResolverCookieEditor>
             <section v-else class="resolver-platform-row"  :aria-label="platform.name">
-              <div class="model-chip resolver-chip" :class="[platform.credential ? `resolver-status-${resolverRowStatus(platform.credential.key).color || 'neutral'}` : '', { 'is-enabled': resolverPlatformEnabled(platform.value) }]">
+              <div class="model-chip resolver-chip" @click="toggleResolverChip" :class="[platform.credential ? `resolver-status-${resolverRowStatus(platform.credential.key).color || 'neutral'}` : '', { 'is-enabled': resolverPlatformEnabled(platform.value) }]">
                 <label class="resolver-platform-name">
                   <input type="checkbox" :checked="resolverPlatformEnabled(platform.value)" :disabled="savingSettings" @change="toggleResolverPlatform(platform.value, $event)" />
                   <span class="resolver-checkmark" aria-hidden="true">{{ resolverPlatformEnabled(platform.value) ? "✓" : "○" }}</span><span>{{ platform.name }}</span>
@@ -841,7 +841,7 @@ import { currentView, navigate, viewQuery } from "../router";
 import { botScope } from "../lib/bot-scope";
 import { extensionLayout, setExtensionLayout } from "../lib/extension-layout";
 import { pluginForBot } from "../lib/plugin-settings";
-import { createResolverCredentialChecks, groupResolverSettings, resolverCheckLabel, type ResolverCredentialKey } from "../lib/resolver-credentials";
+import { toggleResolverChip, createResolverCredentialChecks, groupResolverSettings, resolverCheckLabel, type ResolverCredentialKey } from "../lib/resolver-credentials";
 
 const webSearchPluginID = "official.web-search";
 const plugins = ref<PluginState[]>([]);

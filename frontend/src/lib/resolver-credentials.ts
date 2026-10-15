@@ -1,6 +1,15 @@
 import { reactive, watch } from "vue";
 import type { CredentialCheck, PluginSettingSpec } from "../api";
 
+export function toggleResolverChip(event: MouseEvent): void {
+  const target = event.target;
+  // Labels already activate their checkbox. Keep editing independent of enablement.
+  if (!(target instanceof Element) || target.closest("button, label, input")) return;
+  const chip = event.currentTarget;
+  if (!(chip instanceof Element)) return;
+  chip.querySelector<HTMLInputElement>('input[type="checkbox"]:not(:disabled)')?.click();
+}
+
 export const resolverPlatforms = [
   { key: "bili_sessdata", platform: "bilibili", label: "B 站" },
   { key: "douyin_cookie", platform: "douyin", label: "抖音" },
