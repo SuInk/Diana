@@ -602,10 +602,7 @@ func (r *Runtime) replyAuditNeed(event MessageEvent, input string, cfg BotConfig
 //
 // 审核失败按放行处理：模型不可用时让机器人集体哑火，比偶尔漏放一条更糟。主动
 // 插话是例外——那条路径本来就以「拿不准就别说」为准，失败即沉默。
-// preparedReplyAudit 是一次审核的模型结论，还没有产生任何副作用。拆开「调用模型」和
-// 「应用结论」是为了让审核能和语义去重同时跑：两者输入基本相同却是串行的，线上各占
-// 几秒。去重没有改动回复时直接用提前拿到的结论，改写了再按新回复补审一次；空转计数、
-// 私聊收尾这些副作用始终只对最终发出去的那一版执行一次。
+// preparedReplyAudit 保存审核结论；应用结论时统一执行计数和收尾等副作用。
 type preparedReplyAudit struct {
 	reply    string
 	input    string
@@ -613,10 +610,6 @@ type preparedReplyAudit struct {
 	need     replyAuditNeed
 	decision proactiveReplyQualityDecision
 	err      error
-	// newContentConfirmed 表示发送前语义去重已经高置信判定这条有新内容（keep）。
-	// 去重拿着对方这次的请求和引用判断，审核里的「复读自己」只比机器人自己最近
-	// 几条；两者冲突时听去重的，这条不按复读丢、也不计空转。
-	newContentConfirmed bool
 }
 
 func (r *Runtime) auditReplyBeforeSend(ctx context.Context, event MessageEvent, input, reply string, cfg BotConfig, proactive bool) (replyControlIntent, error) {
@@ -658,9 +651,6 @@ func (r *Runtime) applyReplyAudit(ctx context.Context, event MessageEvent, cfg B
 		return replyControlIntent{}, nil
 	}
 	need, decision := prepared.need, prepared.decision
-	if prepared.newContentConfirmed {
-		decision.ReplyLoopSelfRepeat = false
-	}
 	if err := prepared.err; err != nil {
 		if need.Quality {
 			return replyControlIntent{}, &proactiveReplyQualityRejectedError{reason: fmt.Sprintf("主动回复答案审核失败，已保持沉默：%v", err)}

@@ -267,7 +267,7 @@ func DescribeEventOutcome(outcome string) (decision string, reason string, handl
 		return "replied", "群聊主动回复路由判断这条消息值得回答", true
 	case "merged_into_reply":
 		return "not_replied", "消息已并入同一用户正在生成的回复，不再单独回答", false
-	case "ignored_duplicate_reply":
+	case "ignored_duplicate_reply": // 兼容历史事件展示；运行时不再产生该结果。
 		return "not_replied", "发送前语义检查确认内容已在近期成功发送，本轮无新增内容", false
 	case "error_replied":
 		return "replied", "生成回复时发生错误，机器人已发送错误说明", true
@@ -464,8 +464,6 @@ type Runtime struct {
 	llmReuseEpoch         uint64
 	rssJudgments          sharedResultCache[rssJudgeDecision]
 	replyInterruptMu      sync.Mutex
-	semanticReplyMu       sync.Mutex
-	semanticReplies       map[string]*semanticReplyGate
 	recalledInbound       map[string]time.Time
 	latestDirectedInbound map[string]directedInboundMark
 	directReplySeq        uint64
@@ -2261,11 +2259,6 @@ func (r *Runtime) replyAndRecordTurn(ctx context.Context, event MessageEvent, te
 	// 只写「处理异常」会让人以为什么都没发。
 	record.Delivery = outboundTurnFromContext(replyCtx).delivery()
 	if err != nil {
-		if errors.Is(err, errDuplicateReply) {
-			setEventRecordOutcome(&record, "ignored_duplicate_reply")
-			r.record(record)
-			return "ignored_duplicate_reply", nil
-		}
 		if errors.Is(err, errChatInReplyDeclined) {
 			setEventRecordOutcome(&record, "ignored_no_natural_reply")
 			r.record(record)
@@ -4585,46 +4578,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	}
 	// 回复疲劳只管正常生成的回复；插件直发的内容（链接解析之类）是对方要的东西，不走这一项。
 	ctx = withReplyFatigueAudit(ctx)
-	var semanticGate *semanticReplyGate
-	var speculativeAudit chan preparedReplyAudit
-	dedupKept := false
-	// Tool results and disclosure deliveries must not be hidden as repeated prose.
-	if boolValue(cfg.ReplySemanticDedupEnabled, true) && !hasExternalSideEffect(ctx) && !hasFactualPluginResponse(pluginResponses) && !controlIntent.RefuseCurrent && !controlIntent.SuppressCurrentUser {
-		var release func()
-		semanticGate, release, err = r.lockSemanticReply(ctx, event)
-		if err != nil {
-			return "", err
-		}
-		defer release()
-		// 审核和去重同时开始：去重多数时候原样放行，这时审核结论可以直接用。
-		// 去重判定不发时提前返回，这时还没用上的审核调用一起取消。
-		auditCtx, cancelAudit := context.WithCancel(ctx)
-		defer cancelAudit()
-		speculativeAudit = make(chan preparedReplyAudit, 1)
-		go func(candidate string) {
-			defer recoverGoroutinePanic("runtime.speculativeReplyAudit")
-			speculativeAudit <- r.prepareReplyAudit(auditCtx, event, cleanText, candidate, cfg, proactiveTriggered)
-		}(reply)
-		// 允许静默丢弃只给主动接话：那里沉默本来就是默认行为，少一句重复的插话
-		// 没有代价。直接触发不一样——私聊、@ 本机和引用机器人消息的更正都是对方
-		// 点着名在说话，这时候一个字不发，对方看到的就是装死。去重仍然跑，重复
-		// 内容照样被压成只讲新增的那部分，只是不再允许压成零。
-		reply, dedupKept, err = r.deduplicateReplyVerdict(ctx, event, cleanText, reply, cfg, semanticGate, proactiveTriggered)
-		if err != nil {
-			return "", err
-		}
-	}
-	semanticText := reply
-	// 主动回复走完整审核（表达质量 + 账号安全）；直接回复不以表达质量拦截，账号安全
-	// 开关启用时仍是一票否决。两者的区别在 replyAuditNeed 里按 proactiveTriggered 决定。
-	var prepared preparedReplyAudit
-	if speculativeAudit != nil {
-		prepared = <-speculativeAudit
-	}
-	if speculativeAudit == nil || prepared.reply != reply {
-		prepared = r.prepareReplyAudit(ctx, event, cleanText, reply, cfg, proactiveTriggered)
-	}
-	prepared.newContentConfirmed = dedupKept
+	prepared := r.prepareReplyAudit(ctx, event, cleanText, reply, cfg, proactiveTriggered)
 	// 叫停可能是这条还在生成时到的：发送前再看一眼窗口，在路上的接话回复不发。
 	if err := r.groupStopDropsReply(event, proactiveTriggered, time.Now()); err != nil {
 		return "", err
@@ -4693,13 +4647,6 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	})
 	if err != nil {
 		return "", err
-	}
-	if semanticGate != nil {
-		_, acknowledged, _ := r.deliveryEvidence(event, sentMessageIDs)
-		if acknowledged {
-			supplements := r.pendingReplyRequestContexts(r.replyTurnCandidates(ctx), event)
-			semanticGate.rememberRequest(requestContextForReply(event, cleanText), supplements, semanticText)
-		}
 	}
 	imageAnnouncements.startPending()
 	if recallReplyShouldAutoDelete(cfg, pluginResponses) {

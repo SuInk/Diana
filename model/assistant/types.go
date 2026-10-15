@@ -762,8 +762,7 @@ type BotConfig struct {
 	// ReplyRefusalSuppressionEnabled 控制「30 分钟内对同一账号拒答满 4 次就暂停响应它」。
 	// 默认开；关掉后拒答照常，只是不再因此暂停。
 	ReplyRefusalSuppressionEnabled *bool `json:"reply_refusal_suppression_enabled,omitempty"`
-	// ReplySemanticDedupEnabled 控制发送前语义去重：本会话近期已发过答复时，让模型判断
-	// 候选回复是不是实质重复。默认开；关掉后不再丢弃或改写重复回复，也不再等待它。
+	// ReplySemanticDedupEnabled 仅兼容旧配置，运行时不再执行发送前语义去重。
 	ReplySemanticDedupEnabled *bool `json:"reply_semantic_dedup_enabled,omitempty"`
 	// ReplySuppressionEnabled 是临时响应屏蔽的总开关：空转、反复拒答、私聊叫停都靠它
 	// 暂停响应一个账号。默认开；关掉后这些判断照常做（复读照样只丢那一条、叫停照样

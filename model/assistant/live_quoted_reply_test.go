@@ -2,7 +2,6 @@ package assistant
 
 import (
 	"context"
-	"encoding/json"
 	"strings"
 	"testing"
 
@@ -11,7 +10,7 @@ import (
 
 func TestLiveQuotedReplyContext(t *testing.T) {
 	client := liveLLMClient(t)
-	for _, mode := range []string{"original_quote_correction", "accepted_quote_repeat", "quoted_restatement"} {
+	for _, mode := range []string{"original_quote_correction", "accepted_quote_repeat"} {
 		t.Run(mode, func(t *testing.T) {
 			for sample := 0; sample < 2; sample++ {
 				p := &liveTopicProbe{LLMProvider: client, t: t}
@@ -25,25 +24,10 @@ func TestLiveQuotedReplyContext(t *testing.T) {
 					follow = directedGroupMessage("continue", "user", "就按刚才的新参数继续算")
 					want = "repeat"
 				}
-				if mode == "quoted_restatement" {
-					follow.Quoted.RawMessage = "请完整重复一次"
-					gate, release, _ := r.lockSemanticReply(context.Background(), follow)
-					gate.rememberRequest(requestContextForReply(root, ""), nil, "45W工作一小时耗电0.045度")
-					got, err := r.deduplicateReply(context.Background(), follow, "", "45W工作一小时耗电0.045度", BotConfig{}, gate, true)
-					release()
-					t.Logf("FINAL_REPLY=%q ERROR=%v", got, err)
-					var decision struct {
-						Action string `json:"action"`
-					}
-					if json.Unmarshal([]byte(stripJSONCodeFence(p.raw)), &decision) != nil || decision.Action != "keep" || err != nil || got == "" {
-						t.Errorf("sample %d: repeated request not kept", sample+1)
-					}
-				} else {
-					got := r.classifyDirectReplyTopic(context.Background(), root, prior, follow, follow.RawMessage)
-					t.Logf("FINAL_RELATION=%s", got)
-					if got != want {
-						t.Errorf("sample %d relation=%s want=%s", sample+1, got, want)
-					}
+				got := r.classifyDirectReplyTopic(context.Background(), root, prior, follow, follow.RawMessage)
+				t.Logf("FINAL_RELATION=%s", got)
+				if got != want {
+					t.Errorf("sample %d relation=%s want=%s", sample+1, got, want)
 				}
 			}
 		})

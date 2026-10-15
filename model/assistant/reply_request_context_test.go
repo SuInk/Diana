@@ -58,43 +58,6 @@ func TestReplyRequestDistinguishesUnavailableAndInferredQuotes(t *testing.T) {
 	}
 }
 
-func TestSemanticGateRetainsCurrentPendingAndSentQuotes(t *testing.T) {
-	p := &semanticGateProvider{result: `{"action":"keep","confidence":0.99}`}
-	r := topicTestRuntime(p)
-	root := quotedPowerEvent("root", "45")
-	ctx, finish := r.beginDirectReply(context.Background(), root)
-	defer finish()
-	prior := quotedPowerEvent("prior", "80")
-	r.replyInterruptMu.Lock()
-	r.activeDirectReplies[directReplyMergeKey(root)].supplements = []proactiveReplyCandidate{{Event: prior}}
-	r.replyInterruptMu.Unlock()
-	g, release, _ := r.lockSemanticReply(ctx, root)
-	defer release()
-	g.rememberRequest(requestContextForReply(root, ""), replyRequestContexts([]proactiveReplyCandidate{{Event: prior}}), "按80W计算")
-	current := directedGroupMessage("current", "user", "")
-	current.Quoted = &QuotedMessage{MessageID: "repeat", UserID: "user", RawMessage: "请完整重复一次"}
-	if _, err := r.deduplicateReply(ctx, current, "", "按80W计算", BotConfig{}, g, true); err != nil {
-		t.Fatal(err)
-	}
-	if len(p.requests) != 1 {
-		t.Fatal("missing gate call")
-	}
-	var payload struct {
-		Current replyRequestContext   `json:"current_request_context"`
-		Prior   []replyRequestContext `json:"accepted_supplement_requests"`
-		Sent    []semanticSentReply   `json:"recent_sent"`
-	}
-	if err := json.Unmarshal([]byte(p.requests[0].Messages[1].Content), &payload); err != nil {
-		t.Fatal(err)
-	}
-	if payload.Current.Quoted["text"] != "请完整重复一次" || len(payload.Prior) != 1 || payload.Prior[0].Quoted["text"] != "按80W算吧" {
-		t.Fatalf("current context lost: %+v", payload)
-	}
-	if len(payload.Sent) != 1 || payload.Sent[0].RequestContext.Quoted["text"] != "按45W算吧" || payload.Sent[0].Supplements[0].Quoted["text"] != "按80W算吧" {
-		t.Fatalf("sent context lost: %+v", payload)
-	}
-}
-
 type quotedCorrectionProvider struct {
 	base *directReplyMergeProvider
 	t    *testing.T
@@ -126,7 +89,7 @@ func (p *quotedCorrectionProvider) Generate(ctx context.Context, req llm.Generat
 	return resp, err
 }
 
-func TestQuotedCorrectionRegeneratesAndRecordsEffectiveRequest(t *testing.T) {
+func TestQuotedCorrectionRegeneratesWithEffectiveRequest(t *testing.T) {
 	base := &directReplyMergeProvider{firstStarted: make(chan struct{}), releaseFirst: make(chan struct{})}
 	provider := &quotedCorrectionProvider{base: base, t: t}
 	r := topicTestRuntime(provider)
@@ -159,10 +122,5 @@ func TestQuotedCorrectionRegeneratesAndRecordsEffectiveRequest(t *testing.T) {
 	}
 	if sent := r.channel.(*recordingChannel).sentSnapshot(); len(sent) != 1 || sent[0].Text != "按80W计算，一小时耗电0.08度" {
 		t.Fatalf("stale reply sent: %+v", sent)
-	}
-	g, release, _ := r.lockSemanticReply(context.Background(), root)
-	defer release()
-	if len(g.sent) != 1 || len(g.sent[0].Supplements) != 1 || g.sent[0].Supplements[0].Quoted["text"] != "按80W算吧" {
-		t.Fatalf("success record lost correction: %+v", g.sent)
 	}
 }

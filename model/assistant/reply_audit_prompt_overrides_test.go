@@ -18,7 +18,6 @@ func TestAuditPromptDefaultsAreUnchanged(t *testing.T) {
 	}{
 		{"quality", cfg.prompt(promptReplyQualitySpec), proactiveReplyQualityPrompt},
 		{"compression", cfg.prompt(promptReplyCompressionSpec), replyCompressionPrompt},
-		{"semantic", cfg.prompt(promptReplySemanticDedupSpec), semanticReplyPrompt},
 		{"pause", cfg.prompt(promptReplyPauseHintSpec), replyPauseHintPrompt},
 	} {
 		if tc.got != tc.want {
@@ -79,25 +78,6 @@ func (p *auditOverrideProvider) sawSystem(want string) bool {
 		}
 	}
 	return false
-}
-
-func TestSemanticDedupOverrideReachesModelWithContract(t *testing.T) {
-	p := &auditOverrideProvider{text: `{"action":"keep","confidence":0.99}`}
-	r := topicTestRuntime(p)
-	event := directedGroupMessage("m", "u", "新的问题")
-	g, release, err := r.lockSemanticReply(context.Background(), event)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer release()
-	g.remember("原问题", "原有说明")
-	cfg := BotConfig{PromptOverrides: PromptOverrides{promptReplySemanticDedupSpec.Key: "自定义去重正文"}}
-	if _, err := r.deduplicateReply(context.Background(), event, "新的问题", "候选", cfg, g, true); err != nil {
-		t.Fatal(err)
-	}
-	if !p.sawSystem("自定义去重正文" + semanticReplyContract) {
-		t.Fatalf("去重调用没有用上覆盖正文加锁定格式：%q", p.systems)
-	}
 }
 
 func TestNoticeAndPauseHintOverridesReachModel(t *testing.T) {

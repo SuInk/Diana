@@ -54,10 +54,9 @@ const (
 	// 下面几个以前只是调用点里的字面量，没进这张表：界面上指不了，也没法单独绑，
 	// 实际跟着「本次调用的分组」跑。它们问的都要写出成段文字（RSS 那个还要写出
 	// 发给用户的通知正文），归后台生成或回复辅助。
-	PurposeRSSWatchJudge      = "rss_watch_judge"
-	PurposeDirectReplyTopic   = "direct_reply_topic"
-	PurposeReplySemanticDedup = "reply_semantic_dedup"
-	PurposeSemanticTextRef    = "semantic_text_reference"
+	PurposeRSSWatchJudge    = "rss_watch_judge"
+	PurposeDirectReplyTopic = "direct_reply_topic"
+	PurposeSemanticTextRef  = "semantic_text_reference"
 	// 下面两个也是写给用户看的话，以前不在表里：旁路调用查不到归属就按意图识别
 	// 取模型，意图识别绑了只做判断的模型时，它们每次都先失败一次再降级。
 	PurposePokeReply        = "poke_reply"
@@ -90,7 +89,6 @@ var llmPurposeGroup = map[string]string{
 	PurposeSemanticReference:       llm.GroupReplyAssist,
 	PurposeSemanticTextRef:         llm.GroupReplyAssist,
 	PurposeDirectReplyTopic:        llm.GroupReplyAssist,
-	PurposeReplySemanticDedup:      llm.GroupReplyAssist,
 	PurposeContextSummary:          llm.GroupReplyAssist,
 	PurposeForwardContentSafety:    llm.GroupReplyAssist,
 	PurposeReplyAccountSafety:      llm.GroupReplyAssist,

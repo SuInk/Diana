@@ -97,7 +97,7 @@ func TestReplyAssistInheritsBackgroundWhenUnset(t *testing.T) {
 		"background": {ProfileID: "gemini", Model: "gemini-flash"},
 		"chat":       {ProfileID: "terra", Model: "gpt-terra"},
 	}
-	for _, purpose := range []string{PurposeContextSummary, PurposeReplySemanticDedup, PurposeErrorNotice, PurposeReplyIntentRouter} {
+	for _, purpose := range []string{PurposeContextSummary, PurposeErrorNotice, PurposeReplyIntentRouter} {
 		role, ok := modelRoleFor(roles, purpose, llm.GroupReplyAssist)
 		if !ok || role.Model != "gemini-flash" {
 			t.Fatalf("%s 没单独配回复辅助时该沿用后台生成：%#v", purpose, role)
