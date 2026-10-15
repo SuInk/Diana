@@ -1990,6 +1990,7 @@ useConfigurationRefresh(["bot"], reload);
 <style scoped>
 .resolver-platform-section { width:100%; }
 .resolver-platform-heading { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+.resolver-platform-heading .btn:focus-visible { outline-color:var(--text-secondary); outline-offset:2px; }
 .resolver-platform-list { display:flex; flex-wrap:wrap; gap:8px; align-items:flex-start; }
 .resolver-platform-section > .hint { margin:6px 0 12px; }
 .resolver-platform-row { min-width:0; max-width:100%; }
