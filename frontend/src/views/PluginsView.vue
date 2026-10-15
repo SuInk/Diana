@@ -1973,7 +1973,7 @@ useConfigurationRefresh(["bot"], reload);
 .resolver-platform-section > .hint { margin:6px 0 12px; }
 .resolver-platform-row { min-width:0; max-width:100%; }
 .resolver-platform-name { display:inline-flex; align-items:center; gap:6px; cursor:pointer; font-weight:500; font-size:13px; position:relative; }
-.resolver-platform-name input { width:15px; height:15px; margin:0; flex:0 0 15px; accent-color:var(--text-secondary); cursor:pointer; }
+.resolver-platform-name input { width:15px; height:15px; margin:0; flex:0 0 15px; accent-color:var(--err); cursor:pointer; }
 .resolver-platform-name input:focus-visible { outline:2px solid var(--text-secondary); outline-offset:3px; }
 .resolver-status-legend { display:flex; gap:8px; flex-wrap:wrap; margin-top:10px; }
 </style>
