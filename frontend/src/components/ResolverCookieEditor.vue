@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, onBeforeUnmount } from "vue";
+import YTDLPSupportedSites from "./YTDLPSupportedSites.vue";
 import { readResolverCookieFile, saveResolverCookieFile, checkResolverCookieFile, testResolverCookieLogin } from "../api";
 const props = defineProps<{ path: string }>();
 const emit = defineEmits<{ (event: "saved", path: string): void }>();
@@ -54,16 +55,17 @@ function cancel() { editing.value = false; content.value = ""; message.value = "
 
 <template>
  <div class="field">
-  <span>YouTube / yt-dlp Cookie</span>
-  <span class="hint">供 YouTube 等 yt-dlp 支持的网站使用。粘贴 Netscape 格式 Cookie，文件由 WebUI 维护。</span>
+  <span>yt-dlp Cookie（多站点通用）</span>
+  <span class="hint">同一文件可保存多个网站的 Cookie，yt-dlp 按域名使用。粘贴 Netscape 格式内容，由 WebUI 维护。</span>
+  <YTDLPSupportedSites />
   <button v-if="!editing" class="btn small" type="button" :disabled="busy" @click="edit">{{ busy ? "读取中…" : "编辑 Cookie" }}</button>
   <template v-else>
    <label for="resolver-cookie-content">Cookie 文件内容</label>
    <textarea id="resolver-cookie-content" v-model="content" @input="message = ''" class="input plugin-setting-textarea" rows="10" spellcheck="false" autocomplete="off" autocapitalize="off" :disabled="busy" placeholder="# Netscape HTTP Cookie File"></textarea>
    <span class="hint">仅检查文件格式，不代表登录有效。点击下方按钮会立即保存；取消不修改文件。</span>
-   <span class="hint">「检测登录有效性」会将草稿中适用于 YouTube 的 Cookie 发送到 YouTube，使用已保存的解析代理，不会保存或修改 Cookie 文件。</span>
+   <span class="hint">在线登录检测目前支持 YouTube。「检测 YouTube 登录」会将草稿中适用于 YouTube 的 Cookie 发送到 YouTube，使用已保存的解析代理，不会保存或修改 Cookie 文件。</span>
    <div class="actions">
-    <button class="btn" type="button" :disabled="busy || !content.trim()" @click="testLogin">检测登录有效性</button>
+    <button class="btn" type="button" :disabled="busy || !content.trim()" @click="testLogin">检测 YouTube 登录</button>
     <button class="btn" type="button" :disabled="busy || !content.trim()" @click="check(false)">检查格式</button>
     <button class="btn" type="button" :disabled="busy || !content.trim()" @click="check(true)">格式化</button>
     <button class="btn primary" type="button" :disabled="busy || !content.trim()" @click="save">保存并启用 Cookie</button>
