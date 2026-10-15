@@ -390,7 +390,7 @@
           <div class="resolver-platform-heading"><h3>解析平台与 Cookie</h3>
           <button class="btn small" type="button" data-settings-action :disabled="savingSettings || resolverTesting" @click="testAllResolverCredentials">{{ resolverTesting ? "检测中…" : "一键检测" }}</button>
           </div>
-          <p class="hint">点击名称启停，右侧铅笔编辑平台设置；圆点表示凭据状态。改动统一保存。</p>
+          <p class="hint">点击名称启停，右侧铅笔编辑 Cookie；圆点表示凭据状态。改动统一保存。</p>
           <p class="hint">打开设置自动检测已配置凭据；一键检测可重新检查，公开解析平台无需登录检测。</p>
         <div class="resolver-platform-list">
           <template v-for="platform in resolverPlatformRows" :key="platform.value">
@@ -414,20 +414,8 @@
                 </template>
                 <template v-else>
                   <span class="resolver-health-dot" title="公开解析，无需单独配置 Cookie" aria-label="公开解析，无需单独配置 Cookie" role="status"></span>
-                  <button class="resolver-chip-edit" type="button" data-settings-action :disabled="savingSettings" :aria-label="`编辑 ${platform.name} 设置`" title="编辑平台设置" aria-haspopup="dialog" @click="editingResolverPlatform = platform.value"><Pencil :size="13" aria-hidden="true" /></button>
                 </template>
               </div>
-              <Modal v-if="!platform.credential && editingResolverPlatform === platform.value" :title="`${platform.name} · 平台设置`" :initial-focus="`#resolver-enabled-${platform.value}`" @pointerdown="onSettingsPointerDown" @close="editingResolverPlatform = ''">
-                <label>
-                  <input :id="`resolver-enabled-${platform.value}`" type="checkbox" :checked="resolverPlatformEnabled(platform.value)" :disabled="savingSettings" @change="toggleResolverPlatform(platform.value, $event)" />
-                  启用解析
-                </label>
-                <p class="hint">{{ resolverPublicPlatformDescription(platform.value) }}</p>
-                <p class="hint">此平台使用公开解析，无需填写 Cookie。完成后点击底部「保存」统一生效。</p>
-                <template #footer>
-                  <button class="btn primary" type="button" data-settings-action @click="editingResolverPlatform = ''">完成</button>
-                </template>
-              </Modal>
               <Modal v-if="platform.credential && editingResolverPlatform === platform.value" :title="`${platform.name} · Cookie`" :initial-focus="`#setting-${platform.credential.key}`" @pointerdown="onSettingsPointerDown" @close="editingResolverPlatform = ''">
                 <p class="hint">完成后回到设置，点击底部「保存」统一生效。</p>
                 <PluginSettingField :spec="platform.credential.spec" :form="settingsForm" :clearing="clearSecrets.includes(platform.credential.key)" :secret-configured="secretConfigured(platform.credential.key)" :secret-placeholder="secretPlaceholder(platform.credential.key)" @toggle-clear="toggleClearSecret" @blur="onResolverBlur" />
@@ -1042,16 +1030,6 @@ async function testAllResolverCredentials(): Promise<void> {
     ...resolverGroups.value.credentials.map(({ key }) => resolverChecks.test(key)),
     resolverCookieEditor.value?.testLogin(),
   ]);
-}
-function resolverPublicPlatformDescription(platform: string): string {
-  const descriptions: Record<string, string> = {
-    x: "通过公开解析服务获取推文及媒体。",
-    zhihu: "获取知乎链接标题。",
-    weibo: "通过公开接口获取微博内容及媒体。",
-    heybox: "通过公开接口获取小黑盒帖子及媒体。",
-    github: "通过 GitHub 公开接口解析链接正文。",
-  };
-  return descriptions[platform] ?? "解析此平台的公开链接。";
 }
 const resolverPlatformRows = computed(() => (resolverGroups.value.platforms[0]?.options ?? []).map(option => ({
   ...option,
