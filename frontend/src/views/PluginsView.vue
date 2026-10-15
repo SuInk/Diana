@@ -436,15 +436,8 @@
           <summary><h3>高级抓取设置</h3><ChevronDown class="plugin-settings-chevron" :size="15" aria-hidden="true" /></summary>
           <div class="stack plugin-settings-form">
             <template v-for="spec in resolverGroups.advanced" :key="spec.key">
-              <PluginSettingField :spec="spec" :form="settingsForm" :clearing="clearSecrets.includes(spec.key)" :secret-configured="secretConfigured(spec.key)" :secret-placeholder="secretPlaceholder(spec.key)" @toggle-clear="toggleClearSecret" />
-              <div v-if="spec.key === 'ytdlp_cookies_path'" class="resolver-check-row resolver-file-check">
-                <div class="resolver-check-status" role="status" aria-live="polite">
-                  <span class="hint">{{ resolverCredentialSource(resolverInput('ytdlp_cookies_path')) }} · 仅检查 Netscape 文件格式，不验证登录状态。</span>
-                  <span class="badge" :class="resolverBadgeClass('ytdlp_cookies_path')">{{ resolverCheckLabel(resolverChecks.states.ytdlp_cookies_path, true) }}</span>
-                  <p v-if="resolverCheckMessage('ytdlp_cookies_path')">{{ resolverCheckMessage('ytdlp_cookies_path') }}</p>
-                </div>
-                <button class="btn small" type="button" :disabled="!resolverCanTest('ytdlp_cookies_path')" @click="resolverChecks.test('ytdlp_cookies_path')">检查文件格式</button>
-              </div>
+              <ResolverCookieEditor v-if="spec.key === 'ytdlp_cookies_path'" :path="String(settingsForm[spec.key] || '')" @saved="settingsForm[spec.key] = $event" />
+              <PluginSettingField v-else :spec="spec" :form="settingsForm" :clearing="clearSecrets.includes(spec.key)" :secret-configured="secretConfigured(spec.key)" :secret-placeholder="secretPlaceholder(spec.key)" @toggle-clear="toggleClearSecret" />
             </template>
           </div>
         </details>
@@ -825,6 +818,7 @@ import LoadingSkeleton from "../components/LoadingSkeleton.vue";
 import SkeletonBlock from "../components/SkeletonBlock.vue";
 import AppSelect from "../components/AppSelect.vue";
 import PluginSettingField from "../components/PluginSettingField.vue";
+import ResolverCookieEditor from "../components/ResolverCookieEditor.vue";
 import PlatformLevelRulesField from "../components/PlatformLevelRulesField.vue";
 import Modal from "../components/Modal.vue";
 import RepositoryIssueDraftList from "../components/RepositoryIssueDraftList.vue";

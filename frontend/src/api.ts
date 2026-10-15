@@ -4615,3 +4615,10 @@ export const setDesktopTakeover = (active: boolean) => requestJSON("/api/desktop
 export const controlDesktopJob = (id: string, action: "pause" | "resume" | "confirm" | "cancel") => requestJSON(`/api/desktop-control/jobs/${encodeURIComponent(id)}/${action}`, {method: "POST"});
 
 export const confirmDesktopAction = (id: string) => requestJSON(`/api/desktop-control/actions/${encodeURIComponent(id)}/confirm`, {method:"POST"});
+
+export function readResolverCookieFile(): Promise<{ content: string; configured: boolean }> {
+ return requestJSON("/api/assistant/plugins/resolver/cookie-file/read", { method: "POST", body: "{}" });
+}
+export function saveResolverCookieFile(content: string): Promise<{ path: string }> {
+ return requestJSON("/api/assistant/plugins/resolver/cookie-file", { method: "POST", body: JSON.stringify({ content }) });
+}
