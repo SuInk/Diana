@@ -107,3 +107,40 @@ func TestSanitizeReplyPauseHintRejectsSystemVoice(t *testing.T) {
 		})
 	}
 }
+
+// 线上被「复读自己」记过数的，大多是真人在正常追问、机器人答得有点重复。复读是机器人
+// 自己的毛病：对真人只丢那一条，记满三次也不暂停对方；对已标记的机器人照旧累计，
+// 互道晚安停不下来的那种循环仍然拦得住。
+func TestSelfRepeatSuppressesOnlyBots(t *testing.T) {
+	selfRepeat := proactiveReplyQualityDecision{Confidence: 0.9, ReplyLoopSelfRepeat: true, ReplyLoopConfidence: 0.95, ReplyLoopSelfRepeatConfidence: 0.95, ReplyLoopPurposelessConfidence: 0.95}
+	for _, tc := range []struct {
+		name       string
+		marked     []string
+		wantPaused bool
+	}{
+		{"human", nil, false},
+		{"marked_bot", []string{"20002"}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := densityTestRuntime(BotConfig{MarkedBotIDs: tc.marked}, nil)
+			now := time.Now()
+			var last MessageEvent
+			for i := 0; i < defaultBotReplyLoopThreshold; i++ {
+				last = botReplyLoopEvent(r, tc.name, "20002", i, now.Add(time.Duration(i-defaultBotReplyLoopThreshold)*time.Minute), 10*time.Second, "晚安")
+				err := r.applyReplyLoopVerdict(context.Background(), last, botReplyLoopCandidate{TriggerKind: "quote"}, selfRepeat, true)
+				if tc.wantPaused && i == defaultBotReplyLoopThreshold-1 {
+					if !errors.Is(err, errReplyLoopDetected) {
+						t.Fatalf("第 %d 次复读应当触发暂停，err=%v", i+1, err)
+					}
+					continue
+				}
+				if !errors.Is(err, errReplySelfRepeatDropped) {
+					t.Fatalf("第 %d 次复读应当只丢这一条，err=%v", i+1, err)
+				}
+			}
+			if _, paused := r.activeReplySuppression(last, time.Now()); paused != tc.wantPaused {
+				t.Fatalf("暂停 = %v，want %v", paused, tc.wantPaused)
+			}
+		})
+	}
+}
