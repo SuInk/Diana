@@ -1389,40 +1389,6 @@
             </div>
           </section>
 
-          <!-- 账号隐私：发给模型的账号、群号和消息 ID 要不要换成别名。 -->
-          <section class="card">
-            <div class="card-header">
-              <div>
-                <h2>账号隐私</h2>
-              </div>
-              <span class="badge" :class="form.llm_identity_masking_enabled ? 'accent' : ''">{{ form.llm_identity_masking_enabled ? "已启用" : "已关闭" }}</span>
-            </div>
-            <div class="card-body form-grid">
-              <div class="field wide">
-                <label class="switch">
-                  <input v-model="form.llm_identity_masking_enabled" type="checkbox" />
-                  <span class="track" aria-hidden="true"></span>
-                  <span class="switch-label">对模型隐藏账号 ID（默认开启）</span>
-                </label>
-                <span class="hint">
-                  开启时，账号、群号和消息 ID 在发给模型前换成 im_user_xxx 这类别名，模型调用工具或发消息时再自动换回真实 ID。
-                  关闭后模型直接看到真实 ID，适合需要让模型按原始账号查人、对账的场景。
-                </span>
-              </div>
-              <div class="field wide">
-                <label class="switch">
-                  <input v-model="form.llm_identity_body_account_mapping_enabled" type="checkbox" :disabled="!form.llm_identity_masking_enabled" />
-                  <span class="track" aria-hidden="true"></span>
-                  <span class="switch-label">正文里的账号也换成别名（默认开启）</span>
-                </label>
-                <span class="hint">
-                  有人在消息里直接写 QQ 号时，先向平台核实是不是本群成员，是就换成同一个别名，模型能认出是谁、也能拿去查；订单号、手机号等其他数字原样保留。
-                  关闭后正文里没在聊天记录中出现过的号码按原样发给模型。只在上面的隐私开关打开时生效。
-                </span>
-              </div>
-            </div>
-          </section>
-
           <!-- 出错与重试：发送失败怎么重试、出错时要不要在聊天里说一声。 -->
           <section class="card">
             <div class="card-header">
@@ -1796,6 +1762,40 @@
                 </label>
                 <span class="hint">关闭后保留媒体索引和已有缓存；普通图片不再后台调用模型，视频不再预下载或抽帧。主动读取、引用分析及工具调用仍可按需解析；远程媒体过期后可能无法读取。</span>
                 <span class="hint">图片描述、视频帧描述和模型 OCR 用的是<a href="#" @click.prevent="editorTab = 'model'">「模型」标签</a>里「模型分配」的「媒体解析」。文本文件提取和本地 OCR 不消耗模型额度。</span>
+              </div>
+            </div>
+          </section>
+
+          <!-- 账号隐私：发给模型的上下文中，账号、群号和消息 ID 要不要换成别名。 -->
+          <section class="card">
+            <div class="card-header">
+              <div>
+                <h2>账号隐私</h2>
+              </div>
+              <span class="badge" :class="form.llm_identity_masking_enabled ? 'accent' : ''">{{ form.llm_identity_masking_enabled ? "已启用" : "已关闭" }}</span>
+            </div>
+            <div class="card-body form-grid">
+              <div class="field wide">
+                <label class="switch">
+                  <input v-model="form.llm_identity_masking_enabled" type="checkbox" />
+                  <span class="track" aria-hidden="true"></span>
+                  <span class="switch-label">对模型隐藏账号 ID（默认开启）</span>
+                </label>
+                <span class="hint">
+                  开启时，账号、群号和消息 ID 在发给模型前换成 im_user_xxx 这类别名，模型调用工具或发消息时再自动换回真实 ID。
+                  关闭后模型直接看到真实 ID，适合需要让模型按原始账号查人、对账的场景。
+                </span>
+              </div>
+              <div class="field wide">
+                <label class="switch">
+                  <input v-model="form.llm_identity_body_account_mapping_enabled" type="checkbox" :disabled="!form.llm_identity_masking_enabled" />
+                  <span class="track" aria-hidden="true"></span>
+                  <span class="switch-label">正文里的账号也换成别名（默认开启）</span>
+                </label>
+                <span class="hint">
+                  有人在消息里直接写 QQ 号时，先向平台核实是不是本群成员，是就换成同一个别名，模型能认出是谁、也能拿去查；订单号、手机号等其他数字原样保留。
+                  关闭后正文里没在聊天记录中出现过的号码按原样发给模型。只在上面的隐私开关打开时生效。
+                </span>
               </div>
             </div>
           </section>
