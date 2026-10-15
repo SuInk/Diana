@@ -774,16 +774,6 @@
             </div>
           </section>
 
-          <section class="card">
-            <div class="card-header"><h2>媒体预处理</h2></div>
-            <div class="card-body stack">
-              <AppSwitch v-model="form.auto_image_description">自动生成图片描述</AppSwitch>
-              <AppSwitch v-model="form.auto_video_preprocess">自动下载视频并提取关键帧</AppSwitch>
-              <p class="muted">关闭后保留媒体索引和已有缓存；普通图片不再后台调用模型，视频不再预下载或抽帧。主动读取、引用分析及工具调用仍可按需解析；远程媒体过期后可能无法读取。</p>
-              <p class="muted">图片描述、视频帧描述和模型 OCR 用的是「模型分配」里的「媒体解析」。文本文件提取和本地 OCR 不消耗模型额度。</p>
-            </div>
-          </section>
-
           <!-- 模型调用 -->
           <section class="card">
             <div class="card-header">
@@ -1255,7 +1245,7 @@
                   <span class="switch-label">自动下载视频并提取关键帧</span>
                 </label>
                 <span class="hint">关闭后保留媒体索引和已有缓存；普通图片不再后台调用模型，视频不再预下载或抽帧。主动读取、引用分析及工具调用仍可按需解析；远程媒体过期后可能无法读取。</span>
-                <span class="hint">图片描述、视频帧描述和模型 OCR 用的是<a href="#" @click.prevent="editorTab = 'model'">「模型」标签</a>里「模型分配」的「视觉理解」。文本文件提取和本地 OCR 不消耗模型额度。</span>
+                <span class="hint">图片描述、视频帧描述和模型 OCR 用的是<a href="#" @click.prevent="editorTab = 'model'">「模型」标签</a>里「模型分配」的「媒体解析」。文本文件提取和本地 OCR 不消耗模型额度。</span>
               </div>
             </div>
           </section>

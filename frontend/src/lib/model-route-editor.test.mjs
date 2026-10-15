@@ -7,6 +7,13 @@ import { parse } from "@vue/compiler-sfc";
 import { modelRequestTimeoutSeconds } from "./configuration-sync.ts";
 
 const source = readFileSync(new URL("../views/AssistantView.vue", import.meta.url), "utf8");
+test("media preprocessing lives only in behavior settings", () => {
+  assert.equal(source.match(/<h2>媒体预处理<\/h2>/g)?.length, 1);
+  assert.ok(source.indexOf("<h2>媒体预处理</h2>") > source.indexOf("editorTab === 'behavior'"));
+  assert.ok(source.indexOf("<h2>媒体预处理</h2>") < source.indexOf("editorTab === 'persona'"));
+  assert.match(source, /「模型分配」的「媒体解析」/);
+});
+
 test("model scheduling keeps purpose help concise and points to shared recovery settings", () => {
   const disclosure = source.match(/<AppDisclosure :id="`model-description-\$\{role.key\}`"[\s\S]*?<\/AppDisclosure>/)?.[0];
   assert.ok(disclosure);
