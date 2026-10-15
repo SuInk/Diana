@@ -92,6 +92,7 @@ type repositoryWatchCreatePayload struct {
 	WatchIssues          bool                           `json:"watch_issues"`
 	WatchReleases        bool                           `json:"watch_releases"`
 	ReleaseKinds         []string                       `json:"watch_release_kinds,omitempty"`
+	BlockedUsers         []string                       `json:"blocked_users"`
 	WatchStars           bool                           `json:"watch_stars"`
 	StarNotifyMode       string                         `json:"star_notify_mode,omitempty"`
 	StarNotifyThreshold  int                            `json:"star_notify_threshold,omitempty"`
@@ -125,6 +126,7 @@ type repositoryWatchUpdatePayload struct {
 	WatchIssues          *bool                          `json:"watch_issues,omitempty"`
 	WatchReleases        *bool                          `json:"watch_releases,omitempty"`
 	ReleaseKinds         []string                       `json:"watch_release_kinds,omitempty"`
+	BlockedUsers         []string                       `json:"blocked_users"`
 	WatchStars           *bool                          `json:"watch_stars,omitempty"`
 	StarNotifyMode       *string                        `json:"star_notify_mode,omitempty"`
 	StarNotifyThreshold  *int                           `json:"star_notify_threshold,omitempty"`
@@ -207,6 +209,7 @@ type botTaskPayload struct {
 	WatchIssues           bool     `json:"watch_issues,omitempty"`
 	WatchReleases         bool     `json:"watch_releases,omitempty"`
 	ReleaseKinds          []string `json:"watch_release_kinds"`
+	BlockedUsers          []string `json:"blocked_users"`
 	WatchStars            bool     `json:"watch_stars,omitempty"`
 	StarNotifyMode        string   `json:"star_notify_mode,omitempty"`
 	StarNotifyThreshold   int      `json:"star_notify_threshold,omitempty"`
@@ -513,6 +516,7 @@ func (h *BotHandler) createRepositoryWatch(c *gin.Context) {
 		WatchIssues: payload.WatchIssues, WatchReleases: payload.WatchReleases, WatchStars: payload.WatchStars,
 		WatchPullRequestEvents: payload.PullRequestEvents, WatchIssueEvents: payload.IssueEvents,
 		WatchReleaseKinds: payload.ReleaseKinds,
+		BlockedUsers:      payload.BlockedUsers,
 		StarNotifyMode:    payload.StarNotifyMode, StarNotifyThreshold: payload.StarNotifyThreshold, StarNotifyMilestones: payload.StarNotifyMilestones,
 		DisplayName: payload.DisplayName, Mask: payload.Mask,
 		Platform: profile.Platform, ProfileID: profile.ID, OwnerID: "webui:" + strings.TrimSpace(profile.ID), UserID: userID, GroupID: groupID,
@@ -551,6 +555,7 @@ func (h *BotHandler) updateRepositoryWatch(c *gin.Context) {
 		WatchIssues: payload.WatchIssues, WatchReleases: payload.WatchReleases, WatchStars: payload.WatchStars,
 		WatchPullRequestEvents: payload.PullRequestEvents, WatchIssueEvents: payload.IssueEvents,
 		WatchReleaseKinds: payload.ReleaseKinds,
+		BlockedUsers:      payload.BlockedUsers,
 		StarNotifyMode:    payload.StarNotifyMode, StarNotifyThreshold: payload.StarNotifyThreshold, StarNotifyMilestones: payload.StarNotifyMilestones,
 		DisplayName: payload.DisplayName, Mask: payload.Mask,
 	}
@@ -955,6 +960,7 @@ func botTaskPayloadFromReminder(item assistant.Reminder) botTaskPayload {
 		PullRequestEvents: assistant.EffectiveRepositoryWatchPullRequestEvents(item.WatchPullRequestEvents),
 		IssueEvents:       assistant.EffectiveRepositoryWatchIssueEvents(item.WatchIssueEvents),
 		ReleaseKinds:      assistant.EffectiveRepositoryWatchReleaseKinds(item.WatchReleaseKinds),
+		BlockedUsers:      append([]string{}, item.BlockedUsers...),
 		StarNotifyMode:    item.StarNotifyMode, StarNotifyThreshold: item.StarNotifyThreshold, StarNotifyMilestones: append([]int(nil), item.StarNotifyMilestones...),
 		LastCommitSHA: item.LastCommitSHA, LastPullRequestCursor: item.LastPullRequestCursor,
 		LastIssueCursor: item.LastIssueCursor, LastReleaseTag: item.LastReleaseTag, LastStarCount: item.LastStarCount, LastNotifiedStarCount: item.LastNotifiedStarCount,

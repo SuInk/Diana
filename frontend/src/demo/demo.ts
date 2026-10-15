@@ -1711,6 +1711,11 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
     const plugin = plugins.find(item => item.manifest.id === resolverDemoManifest.id);
     return resolverDemoTestResponse(plugin?.settings ?? {}, body, url.searchParams.getAll("credential_key"), init?.signal ?? (input instanceof Request ? input.signal : undefined));
   }
+  if (path === "/api/assistant/plugins/github/user" && method === "GET") {
+    const login = url.searchParams.get("login") ?? "";
+    const names: Record<string, string> = { suink: "SuInk", "dependabot[bot]": "Dependabot" };
+    return json({ user: { login, name: names[login] ?? "" } });
+  }
   if (path === "/api/assistant/plugins/github/credentials/test" && method === "POST") {
     let listed: Array<{ id: string; name?: string; auth?: string }> = [];
     try {

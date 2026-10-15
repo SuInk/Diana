@@ -10,6 +10,9 @@ import (
 )
 
 type repositoryReleaseRecord struct {
+	Author struct {
+		Login string `json:"login"`
+	} `json:"author"`
 	ID          int64     `json:"id"`
 	Tag         string    `json:"tag_name"`
 	Name        string    `json:"name"`
@@ -103,7 +106,7 @@ func (p *RepositoryWatchPlugin) fetchReleases(ctx context.Context, repository st
 		}
 		// 和 PR / Issue 的种类过滤一样：游标跟着所有已发布版本走，种类只决定报不报。
 		// 否则关掉预发布的订阅一旦重新打开，会把中间攒下的 rc 版一次性全补推出来。
-		if selection.wants(selection.ReleaseKinds, releaseKind(item)) {
+		if !repositoryWatchUserBlocked(selection.BlockedUsers, item.Author.Login) && selection.wants(selection.ReleaseKinds, releaseKind(item)) {
 			result = append(result, repositoryWatchRelease{Tag: item.Tag, Name: item.Name, Body: truncateRunes(strings.TrimSpace(item.Body), 4000), URL: item.HTMLURL, PublishedAt: item.PublishedAt, Prerelease: item.Prerelease})
 		}
 		if releaseCursorAfter(item.PublishedAt, item.ID, next.ReleasePublishedAt, next.ReleaseID) {

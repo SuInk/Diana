@@ -471,6 +471,7 @@ type Reminder struct {
 	WatchReleases          bool     `json:"watch_releases,omitempty"`
 	// WatchReleaseKinds 同理：nil 是未配置的旧记录，按全选兼容，所以不能 omitempty。
 	WatchReleaseKinds      []string  `json:"watch_release_kinds"`
+	BlockedUsers           []string  `json:"blocked_users"`
 	WatchStars             bool      `json:"watch_stars,omitempty"`
 	StarNotifyMode         string    `json:"star_notify_mode,omitempty"`
 	StarNotifyThreshold    int       `json:"star_notify_threshold,omitempty"`

@@ -185,6 +185,7 @@ type RepositoryWatchCreateInput struct {
 	WatchIssues            bool
 	WatchReleases          bool
 	WatchReleaseKinds      []string
+	BlockedUsers           []string
 	WatchStars             bool
 	StarNotifyMode         string
 	StarNotifyThreshold    int
@@ -213,6 +214,7 @@ type RepositoryWatchUpdateInput struct {
 	WatchIssues            *bool
 	WatchReleases          *bool
 	WatchReleaseKinds      []string
+	BlockedUsers           []string
 	WatchStars             *bool
 	StarNotifyMode         *string
 	StarNotifyThreshold    *int
@@ -297,8 +299,13 @@ func (r *Runtime) CreateRepositoryWatch(ctx context.Context, input RepositoryWat
 	if err != nil {
 		return Reminder{}, err
 	}
+	blockedUsers, err := normalizeRepositoryWatchBlockedUsers(input.BlockedUsers)
+	if err != nil {
+		return Reminder{}, err
+	}
 	selection := repositoryWatchSelection{
-		Commits: input.WatchCommits, PullRequests: input.WatchPullRequests, Issues: input.WatchIssues,
+		BlockedUsers: blockedUsers,
+		Commits:      input.WatchCommits, PullRequests: input.WatchPullRequests, Issues: input.WatchIssues,
 		Releases: input.WatchReleases, Stars: input.WatchStars,
 		PullRequestEvents: pullEvents, IssueEvents: issueEvents, ReleaseKinds: releaseKinds,
 	}
@@ -420,6 +427,9 @@ func (r *Runtime) UpdateRepositoryWatch(ctx context.Context, ownerID, id string,
 	if input.WatchReleases != nil {
 		values["watch_releases"] = *input.WatchReleases
 	}
+	if input.BlockedUsers != nil {
+		values["blocked_users"] = input.BlockedUsers
+	}
 	if input.WatchReleaseKinds != nil {
 		values["watch_release_kinds"] = input.WatchReleaseKinds
 	}
@@ -525,6 +535,7 @@ func (r *Runtime) addRepositoryWatch(event MessageEvent, ownerID, repository, br
 		WatchIssues:             selection.Issues,
 		WatchReleases:           selection.Releases,
 		WatchReleaseKinds:       cloneRepositoryWatchEvents(selection.ReleaseKinds),
+		BlockedUsers:            append([]string{}, selection.BlockedUsers...),
 		WatchStars:              selection.Stars,
 		StarNotifyMode:          starNotifyMode,
 		StarNotifyThreshold:     starNotifyThreshold,
@@ -648,6 +659,7 @@ func (r *Runtime) updateRepositoryWatch(ownerID, id string, input map[string]any
 		PullRequestEvents: cloneRepositoryWatchEvents(current.WatchPullRequestEvents),
 		IssueEvents:       cloneRepositoryWatchEvents(current.WatchIssueEvents),
 		ReleaseKinds:      cloneRepositoryWatchEvents(current.WatchReleaseKinds),
+		BlockedUsers:      append([]string{}, current.BlockedUsers...),
 	}
 	if value, present := input["watch_commits"].(bool); present {
 		selection.Commits = value
@@ -693,6 +705,17 @@ func (r *Runtime) updateRepositoryWatch(ownerID, id string, input map[string]any
 			return Reminder{}, parseErr
 		}
 		selection.ReleaseKinds = parsed
+	}
+	if value, present := input["blocked_users"]; present {
+		raw, ok := value.([]string)
+		if !ok {
+			return Reminder{}, fmt.Errorf("通知屏蔽用户格式无效")
+		}
+		parsed, err := normalizeRepositoryWatchBlockedUsers(raw)
+		if err != nil {
+			return Reminder{}, err
+		}
+		selection.BlockedUsers = parsed
 	}
 	if value, present := input["watch_stars"].(bool); present {
 		selection.Stars = value
@@ -809,6 +832,7 @@ func (r *Runtime) updateRepositoryWatch(ownerID, id string, input map[string]any
 		item.WatchIssueEvents = cloneRepositoryWatchEvents(selection.IssueEvents)
 		item.WatchIssues = selection.Issues
 		item.WatchReleases = selection.Releases
+		item.BlockedUsers = append([]string{}, selection.BlockedUsers...)
 		item.WatchReleaseKinds = cloneRepositoryWatchEvents(selection.ReleaseKinds)
 		item.WatchStars = selection.Stars
 		if starConfigProvided {

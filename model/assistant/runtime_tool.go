@@ -1452,7 +1452,7 @@ func (r *Runtime) runClaimedRepositoryWatch(ctx context.Context, item Reminder) 
 			// 加每个 PR 一次 files——这正是当初把 diff 整个摘掉的原因。
 			Diff:              r.plugins.CanAskAgent(repositoryWatchPluginID, r.pluginOverridesForEvent(source), r.pluginSettingOverridesForEvent(source)),
 			PullRequestEvents: item.WatchPullRequestEvents, IssueEvents: item.WatchIssueEvents,
-			ReleaseKinds: item.WatchReleaseKinds,
+			ReleaseKinds: item.WatchReleaseKinds, BlockedUsers: item.BlockedUsers,
 		},
 		settings,
 	)
@@ -1490,6 +1490,7 @@ func applyRepositoryStarNotifyThreshold(item Reminder, change repositoryWatchCha
 	if threshold <= 0 {
 		threshold, lastNotified = 1, item.LastStarCount
 	}
+	lastNotified += change.blockedStarCount
 	change.Snapshot.StarNotifiedCount, change.Snapshot.HasStarNotifiedCount = lastNotified, true
 	if change.Stars != nil && change.Stars.Current > change.Snapshot.StarCount {
 		change.Snapshot.StarCount = change.Stars.Current

@@ -72,6 +72,12 @@
               <label class="check-item"><input v-model="form.watch_releases" type="checkbox" />Release</label>
               <label class="check-item"><input v-model="form.watch_stars" type="checkbox" />Star</label>
             </div>
+            <div class="field repository-watch-star-field">
+              <label for="watch-blocked-users">屏蔽用户的通知</label>
+              <input id="watch-blocked-users" v-model="form.blocked_users_text" class="input" type="text" placeholder="GitHub 用户名或主页链接，多个用逗号分隔" @blur="form.blocked_users_text = githubUserLogins(form.blocked_users_text).join(', ')" />
+              <GitHubUserNameHint :value="form.blocked_users_text" />
+              <span class="hint">仅影响本条订阅。自动识别用户名、@用户名或主页链接，不区分大小写。按 Issue / PR 创建者、Commit 作者、Release 发布者和 Star 操作者屏蔽；无法识别 GitHub 账号的提交仍会通知。清空恢复接收，不补发已跳过的动态。</span>
+            </div>
             <div v-if="form.watch_pull_requests" class="field repository-watch-star-field">
               <label id="watch-pull-events-title">PR 通知哪些动态</label>
               <div class="repository-watch-scopes" role="group" aria-labelledby="watch-pull-events-title">
@@ -241,6 +247,8 @@ import { toastError, toastSuccess } from "../lib/toast";
 import SubscriptionDestination from "./SubscriptionDestination.vue";
 import SubscriptionTargetsEditor from "./SubscriptionTargetsEditor.vue";
 import AccountNameHint from "./AccountNameHint.vue";
+import GitHubUserNameHint from "./GitHubUserNameHint.vue";
+import { githubUserLogins } from "../lib/github-user-input";
 import AppSelect from "./AppSelect.vue";
 
 const props = defineProps<{
@@ -296,7 +304,7 @@ const maskOptions = [
   { value: "always", label: "总是打码" },
   { value: "never", label: "不打码" }
 ];
-const emptyForm = () => ({ repository: "", branch: "", display_name: "", mask: "auto" as "auto" | "always" | "never", interval_seconds: defaultIntervalSeconds.value, watch_commits: true, watch_pull_requests: true, watch_issues: true, watch_releases: true, watch_stars: true, pull_request_events: allPullEventKinds(), issue_events: allIssueEventKinds(), release_kinds: allReleaseKinds(), star_notify_mode: "growth" as "growth" | "milestone", star_notify_threshold: 1, star_milestones_text: "", issue_enabled: false, profile_id: "", notification_enabled: true, notification_targets: [] as IssueMember[], issue_managers: [] as IssueMember[], issue_drafters: [] as IssueMember[] });
+const emptyForm = () => ({ blocked_users_text: "", repository: "", branch: "", display_name: "", mask: "auto" as "auto" | "always" | "never", interval_seconds: defaultIntervalSeconds.value, watch_commits: true, watch_pull_requests: true, watch_issues: true, watch_releases: true, watch_stars: true, pull_request_events: allPullEventKinds(), issue_events: allIssueEventKinds(), release_kinds: allReleaseKinds(), star_notify_mode: "growth" as "growth" | "milestone", star_notify_threshold: 1, star_milestones_text: "", issue_enabled: false, profile_id: "", notification_enabled: true, notification_targets: [] as IssueMember[], issue_managers: [] as IssueMember[], issue_drafters: [] as IssueMember[] });
 const watches = ref<AssistantTask[]>([]);
 const profiles = ref<BotProfileConfig[]>([]);
 const joinedGroups = ref<BotGroupSummary[]>([]);
@@ -491,7 +499,7 @@ function startEdit(task: AssistantTask): void {
   editingTask.value = task;
   const repository = task.repository ?? "";
   const legacyTarget = task.group_id ? [{ profile_id: task.profile_id, destination: "group" as const, group_id: task.group_id }] : task.user_id ? [{ profile_id: task.profile_id, destination: "private" as const, user_id: task.user_id }] : [];
-  form.value = { repository, branch: task.repository_branch ?? "", display_name: task.repository_display_name ?? "", mask: task.repository_mask || "auto", interval_seconds: task.interval_seconds || defaultIntervalSeconds.value, watch_commits: task.watch_commits === true, watch_pull_requests: task.watch_pull_requests === true, watch_issues: task.watch_issues === true, watch_releases: task.watch_releases === true, watch_stars: task.watch_stars === true, pull_request_events: [...(task.watch_pull_request_events ?? allPullEventKinds())], issue_events: [...(task.watch_issue_events ?? allIssueEventKinds())], release_kinds: [...(task.watch_release_kinds ?? allReleaseKinds())], star_notify_mode: task.star_notify_mode || "growth", star_notify_threshold: task.star_notify_threshold || 1, star_milestones_text: (task.star_notify_milestones ?? []).join(", "), issue_enabled: repositoryIssueEnabled(repository), profile_id: task.profile_id ?? "", notification_enabled: task.notification_enabled !== false, notification_targets: (task.notification_targets?.length ? task.notification_targets.map((target) => ({ profile_id: target.profile_id || task.profile_id, destination: target.destination, group_id: target.group_id, user_id: target.user_id })) : legacyTarget), issue_managers: issueMembersFrom(props.managerUserAccess || props.userAccess, props.managerGroupAccess, repository), issue_drafters: issueMembersFrom(props.draftUserAccess, props.draftGroupAccess || props.groupAccess, repository) };
+  form.value = { blocked_users_text: (task.blocked_users ?? []).join(", "), repository, branch: task.repository_branch ?? "", display_name: task.repository_display_name ?? "", mask: task.repository_mask || "auto", interval_seconds: task.interval_seconds || defaultIntervalSeconds.value, watch_commits: task.watch_commits === true, watch_pull_requests: task.watch_pull_requests === true, watch_issues: task.watch_issues === true, watch_releases: task.watch_releases === true, watch_stars: task.watch_stars === true, pull_request_events: [...(task.watch_pull_request_events ?? allPullEventKinds())], issue_events: [...(task.watch_issue_events ?? allIssueEventKinds())], release_kinds: [...(task.watch_release_kinds ?? allReleaseKinds())], star_notify_mode: task.star_notify_mode || "growth", star_notify_threshold: task.star_notify_threshold || 1, star_milestones_text: (task.star_notify_milestones ?? []).join(", "), issue_enabled: repositoryIssueEnabled(repository), profile_id: task.profile_id ?? "", notification_enabled: task.notification_enabled !== false, notification_targets: (task.notification_targets?.length ? task.notification_targets.map((target) => ({ profile_id: target.profile_id || task.profile_id, destination: target.destination, group_id: target.group_id, user_id: target.user_id })) : legacyTarget), issue_managers: issueMembersFrom(props.managerUserAccess || props.userAccess, props.managerGroupAccess, repository), issue_drafters: issueMembersFrom(props.draftUserAccess, props.draftGroupAccess || props.groupAccess, repository) };
   editing.value = true;
   markEditorClean();
 }
@@ -521,7 +529,7 @@ async function saveEditor(): Promise<boolean> {
   if (saving.value) return false;
   saving.value = true;
   try {
-    const common = { repository: form.value.repository, branch: form.value.branch, repository_display_name: form.value.display_name, repository_mask: form.value.mask, interval_seconds: form.value.interval_seconds, watch_commits: form.value.watch_commits, watch_pull_requests: form.value.watch_pull_requests, watch_issues: form.value.watch_issues, watch_releases: form.value.watch_releases, watch_stars: form.value.watch_stars, watch_pull_request_events: [...form.value.pull_request_events], watch_issue_events: [...form.value.issue_events], watch_release_kinds: [...form.value.release_kinds], star_notify_mode: form.value.star_notify_mode, star_notify_threshold: form.value.star_notify_threshold, star_notify_milestones: starMilestones };
+    const common = { blocked_users: githubUserLogins(form.value.blocked_users_text), repository: form.value.repository, branch: form.value.branch, repository_display_name: form.value.display_name, repository_mask: form.value.mask, interval_seconds: form.value.interval_seconds, watch_commits: form.value.watch_commits, watch_pull_requests: form.value.watch_pull_requests, watch_issues: form.value.watch_issues, watch_releases: form.value.watch_releases, watch_stars: form.value.watch_stars, watch_pull_request_events: [...form.value.pull_request_events], watch_issue_events: [...form.value.issue_events], watch_release_kinds: [...form.value.release_kinds], star_notify_mode: form.value.star_notify_mode, star_notify_threshold: form.value.star_notify_threshold, star_notify_milestones: starMilestones };
     const delivery = { profile_id: form.value.profile_id, notification_enabled: form.value.notification_enabled, notification_targets: form.value.notification_enabled ? form.value.notification_targets : [] };
     const repository = repositoryKey(form.value.repository);
     const enabledRepositories = [...(props.issueEnabledRepositories ?? [])].filter((item) => repositoryKey(item).toLowerCase() !== repository.toLowerCase());

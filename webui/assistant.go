@@ -436,6 +436,7 @@ func (h *BotHandler) registerRoutes(router gin.IRouter, base string) {
 	router.GET(base+"/plugins/vrchat/status", h.vrchatStatus)
 	router.POST(base+"/plugins/resolver/test", h.testResolverCredentials)
 	router.POST(base+"/plugins/github/credentials/test", h.testGitHubCredentials)
+	router.GET(base+"/plugins/github/user", h.lookupGitHubUser)
 	router.POST(base+"/plugins/coding-agent/setup", h.codingAgentSetup)
 	router.POST(base+"/plugins/repository-publish/issues", h.createRepositoryIssue)
 	router.GET(base+"/plugins/repository-publish/drafts", h.listRepositoryIssueDrafts)
@@ -1617,4 +1618,19 @@ func botLogTarget(cfg assistant.BotConfig) string {
 		}
 	}
 	return ""
+}
+
+func (h *BotHandler) lookupGitHubUser(c *gin.Context) {
+	profileID, ok := h.pluginProfileScope(c)
+	if !ok {
+		return
+	}
+	plugin, settings, found := h.runtime.Plugins().PluginForConfiguration(assistant.RepositoryWatchPluginID, profileID)
+	watch, valid := plugin.(*assistant.RepositoryWatchPlugin)
+	if !found || !valid {
+		c.JSON(http.StatusOK, gin.H{})
+		return
+	}
+	user := watch.LookupUser(c.Request.Context(), c.Query("login"), settings)
+	c.JSON(http.StatusOK, gin.H{"user": user})
 }

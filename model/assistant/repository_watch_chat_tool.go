@@ -97,6 +97,7 @@ func (*dianaRepositoryWatchTool) InputSchema() map[string]any {
 			"commits", "pull_requests", "issues", "releases", "stars"),
 		"pull_request_events": toolEnumArrayParam("只收的 PR 动态；省略全选，[] 全不选", repositoryWatchPullEventKinds...),
 		"issue_events":        toolEnumArrayParam("只收的 Issue 动态；省略全选，[] 全不选", repositoryWatchIssueEventKinds...),
+		"blocked_users":       toolStringArrayParam("屏蔽通知的 GitHub 用户名，适用于本订阅所有类型；update 省略不改，[] 清空，不影响查询和管理权限"),
 		"release_kinds":       toolEnumArrayParam("只收的版本类型；省略全选，[] 全不选", repositoryWatchReleaseKindList...),
 	})
 }
@@ -110,6 +111,7 @@ type dianaRepositoryWatchView struct {
 	PullRequestEvents []string `json:"pull_request_events"`
 	IssueEvents       []string `json:"issue_events"`
 	ReleaseKinds      []string `json:"release_kinds"`
+	BlockedUsers      []string `json:"blocked_users"`
 	Status            string   `json:"status"`
 	LastError         string   `json:"last_error,omitempty"`
 	NextRunAt         string   `json:"next_run_at,omitempty"`
@@ -144,6 +146,7 @@ func repositoryWatchViewForTool(item Reminder) dianaRepositoryWatchView {
 		PullRequestEvents: EffectiveRepositoryWatchPullRequestEvents(item.WatchPullRequestEvents),
 		IssueEvents:       EffectiveRepositoryWatchIssueEvents(item.WatchIssueEvents),
 		ReleaseKinds:      EffectiveRepositoryWatchReleaseKinds(item.WatchReleaseKinds),
+		BlockedUsers:      append([]string{}, item.BlockedUsers...),
 	}
 	if !item.TriggerAt.IsZero() {
 		view.NextRunAt = item.TriggerAt.Format(time.RFC3339)
@@ -230,8 +233,12 @@ func (t *dianaRepositoryWatchTool) Run(ctx context.Context, input map[string]any
 		if err != nil {
 			return "", err
 		}
+		blockedUsers, err := repositoryWatchBlockedUsersFromTool(input)
+		if err != nil {
+			return "", err
+		}
 		item, err := t.runtime.CreateRepositoryWatch(ctx, RepositoryWatchCreateInput{
-			Repository: repository, Branch: configToolString(input, "branch"), Interval: interval,
+			Repository: repository, Branch: configToolString(input, "branch"), Interval: interval, BlockedUsers: blockedUsers,
 			WatchCommits: selection.Commits, WatchPullRequests: selection.PullRequests,
 			WatchIssues: selection.Issues, WatchReleases: selection.Releases, WatchStars: selection.Stars,
 			WatchPullRequestEvents: pullEvents, WatchIssueEvents: issueEvents, WatchReleaseKinds: releaseKinds,
@@ -417,6 +424,13 @@ func repositoryWatchUpdateFromTool(input map[string]any, current Reminder) (Repo
 		}
 		update.WatchReleaseKinds = append([]string{}, kinds...)
 	}
+	if _, present := input["blocked_users"]; present {
+		users, err := repositoryWatchBlockedUsersFromTool(input)
+		if err != nil {
+			return RepositoryWatchUpdateInput{}, err
+		}
+		update.BlockedUsers = append([]string{}, users...)
+	}
 	return update, nil
 }
 
@@ -433,4 +447,16 @@ func marshalRepositoryWatchToolResult(result dianaRepositoryWatchResult) (string
 // WebUI 配的投递目标）的订阅时带 _elsewhere，见 taskCanonicalOperation。
 func (t *dianaRepositoryWatchTool) CanonicalOperation(input map[string]any) string {
 	return t.runtime.taskCanonicalOperation(t.event, input, "list")
+}
+
+func repositoryWatchBlockedUsersFromTool(input map[string]any) ([]string, error) {
+	raw, present := input["blocked_users"]
+	if !present {
+		return nil, nil
+	}
+	users, err := toolStringValues(raw)
+	if err != nil {
+		return nil, fmt.Errorf("blocked_users 必须是用户名数组")
+	}
+	return normalizeRepositoryWatchBlockedUsers(users)
 }

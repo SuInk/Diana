@@ -166,6 +166,7 @@ type repositoryWatchStarState struct {
 }
 
 type repositoryWatchSelection struct {
+	BlockedUsers []string
 	Commits      bool
 	PullRequests bool
 	Issues       bool
@@ -191,15 +192,16 @@ func (s repositoryWatchSelection) wants(kinds []string, status string) bool {
 }
 
 type repositoryWatchChange struct {
-	Repository   string                       `json:"repository"`
-	Description  string                       `json:"description,omitempty"`
-	Branch       string                       `json:"branch,omitempty"`
-	Commits      []repositoryWatchCommit      `json:"commits,omitempty"`
-	CommitDiff   *repositoryWatchDiff         `json:"commit_diff,omitempty"`
-	PullRequests []repositoryWatchPullRequest `json:"pull_requests,omitempty"`
-	Issues       []repositoryWatchIssue       `json:"issues,omitempty"`
-	Releases     []repositoryWatchRelease     `json:"releases,omitempty"`
-	Stars        *repositoryWatchStarChange   `json:"stars,omitempty"`
+	blockedStarCount int
+	Repository       string                       `json:"repository"`
+	Description      string                       `json:"description,omitempty"`
+	Branch           string                       `json:"branch,omitempty"`
+	Commits          []repositoryWatchCommit      `json:"commits,omitempty"`
+	CommitDiff       *repositoryWatchDiff         `json:"commit_diff,omitempty"`
+	PullRequests     []repositoryWatchPullRequest `json:"pull_requests,omitempty"`
+	Issues           []repositoryWatchIssue       `json:"issues,omitempty"`
+	Releases         []repositoryWatchRelease     `json:"releases,omitempty"`
+	Stars            *repositoryWatchStarChange   `json:"stars,omitempty"`
 	// Private 是这一轮顺带读到的仓库可见性，没读就是 nil。
 	Private   *bool `json:"-"`
 	Truncated bool  `json:"commits_truncated,omitempty"`
@@ -333,7 +335,7 @@ func (p *RepositoryWatchPlugin) Manifest() PluginManifest {
 	return PluginManifest{
 		ID:            repositoryWatchPluginID,
 		Name:          "仓库订阅",
-		Version:       "0.2.10",
+		Version:       "0.2.11",
 		Description:   "在 WebUI 监控公开或私有 GitHub 仓库的 Commit、PR、Issue、Release 与 Star；检测到动态后生成事实摘要并通知指定群聊或私聊对象。私有仓库的推送默认打码：不写仓库路径、账号名和链接，可为每个订阅设置显示名。",
 		Official:      true,
 		BuiltIn:       true,
@@ -532,7 +534,7 @@ func (p *RepositoryWatchPlugin) checkSelected(ctx context.Context, repository, b
 	change := repositoryWatchChange{Repository: repository, Branch: branch, Snapshot: repositoryWatchSnapshot{CheckedAt: p.clock(), previous: &cursor, repository: repository, branch: branch, selection: selection}}
 	var errs []error
 	if selection.Commits {
-		commits, snapshot, truncated, err := p.fetchCommits(ctx, repository, branch, cursor.CommitSHA, settings)
+		commits, snapshot, truncated, err := p.fetchCommits(ctx, repository, branch, cursor.CommitSHA, settings, selection.BlockedUsers...)
 		if err != nil {
 			errs = append(errs, err)
 		} else {
@@ -587,6 +589,22 @@ func (p *RepositoryWatchPlugin) checkSelected(ctx context.Context, repository, b
 			change.Snapshot.StarEventAt = state.EventAt
 		}
 	}
+	if change.Stars != nil && len(selection.BlockedUsers) > 0 {
+		kept := make([]repositoryWatchStargazer, 0, len(change.Stars.AddedUsers))
+		for _, user := range change.Stars.AddedUsers {
+			if repositoryWatchUserBlocked(selection.BlockedUsers, user.Login) {
+				change.blockedStarCount++
+				continue
+			}
+			kept = append(kept, user)
+		}
+		change.Snapshot.StarCount = max(change.Snapshot.StarCount, change.Stars.Current)
+		change.Stars.AddedUsers = kept
+		change.Stars.Delta = len(kept)
+		if len(kept) == 0 {
+			change.Stars = nil
+		}
+	}
 	if len(errs) > 0 {
 		return repositoryWatchChange{}, errors.Join(errs...)
 	}
@@ -595,7 +613,7 @@ func (p *RepositoryWatchPlugin) checkSelected(ctx context.Context, repository, b
 	}
 	// diff 拉取放在最后，且只在这一轮有人要读时才做：拉失败不影响这条动态本身，
 	// 通知照发，跟评退化成只看事实清单。
-	if selection.Diff && len(change.Commits) > 0 && strings.TrimSpace(cursor.CommitSHA) != "" && strings.TrimSpace(change.Snapshot.CommitSHA) != "" {
+	if selection.Diff && len(selection.BlockedUsers) == 0 && len(change.Commits) > 0 && strings.TrimSpace(cursor.CommitSHA) != "" && strings.TrimSpace(change.Snapshot.CommitSHA) != "" {
 		diff, err := p.fetchCommitDiff(ctx, repository, cursor.CommitSHA, change.Snapshot.CommitSHA, settings)
 		if err != nil {
 			diff, err = p.fetchSingleCommitDiff(ctx, repository, change.Snapshot.CommitSHA, settings)
@@ -690,7 +708,7 @@ func repositoryWatchDiffFiles(payload []repositoryWatchDiffFilePayload, limit in
 	return files, len(payload) > limit
 }
 
-func (p *RepositoryWatchPlugin) fetchCommits(ctx context.Context, repository, branch, cursor string, settings SettingValues) ([]repositoryWatchCommit, string, bool, error) {
+func (p *RepositoryWatchPlugin) fetchCommits(ctx context.Context, repository, branch, cursor string, settings SettingValues, blockedUsers ...string) ([]repositoryWatchCommit, string, bool, error) {
 	query := url.Values{"per_page": {strconv.Itoa(repositoryWatchPageSize)}}
 	if strings.TrimSpace(branch) != "" {
 		query.Set("sha", strings.TrimSpace(branch))
@@ -734,6 +752,9 @@ func (p *RepositoryWatchPlugin) fetchCommits(ctx context.Context, repository, br
 	for _, item := range payload {
 		if item.SHA == cursor {
 			break
+		}
+		if item.Author != nil && repositoryWatchUserBlocked(blockedUsers, item.Author.Login) {
+			continue
 		}
 		newCommitCount++
 		if len(commits) >= limit {
@@ -833,7 +854,7 @@ func (p *RepositoryWatchPlugin) fetchPullRequests(ctx context.Context, repositor
 			status = "opened"
 			occurredAt = item.CreatedAt
 		}
-		if !selection.wants(selection.PullRequestEvents, status) {
+		if repositoryWatchUserBlocked(selection.BlockedUsers, item.User.Login) || !selection.wants(selection.PullRequestEvents, status) {
 			// 这类动态没订阅：连提交列表都不用拉。被跳过的合并 PR 也就不再替它带来的
 			// 提交挡枪了——真想少看那些提交，把 Commit 一起关掉。
 			continue
@@ -843,14 +864,14 @@ func (p *RepositoryWatchPlugin) fetchPullRequests(ctx context.Context, repositor
 		if status == "updated" {
 			since = repositoryWatchPullCursorTime(cursor)
 		}
-		commits, omittedCommits, rewrittenCommits, allSHAs, err := p.fetchPullRequestCommits(ctx, repository, item.Number, since, limit, settings)
+		commits, omittedCommits, rewrittenCommits, allSHAs, err := p.fetchPullRequestCommits(ctx, repository, item.Number, since, limit, settings, selection.BlockedUsers...)
 		if err != nil {
 			return nil, "", nil, err
 		}
 		commitSHAs[item.Number] = allSHAs
 		var files []repositoryWatchDiffFile
 		filesTruncated := false
-		if selection.Diff {
+		if selection.Diff && len(selection.BlockedUsers) == 0 {
 			// 拉不到就算了：PR 条目本身照常播报，跟评少一份参考资料而已。
 			if fetched, truncated, fileErr := p.fetchPullRequestFiles(ctx, repository, item.Number, settings); fileErr == nil {
 				files, filesTruncated = fetched, truncated
@@ -971,7 +992,7 @@ func (p *RepositoryWatchPlugin) fetchPullRequestCommitSHAs(ctx context.Context, 
 // 单独计数，不混进新增列表，免得一次变基看上去像一批新改动。
 // 返回值里的 allSHAs 是这个 PR 的全部提交 SHA。合并提交折叠（foldMergedPullRequestCommits）
 // 要的就是这份名单，而它和这里解析的是同一个响应——分开再请求一次纯属白发。
-func (p *RepositoryWatchPlugin) fetchPullRequestCommits(ctx context.Context, repository string, number int, since time.Time, limit int, settings SettingValues) (fresh []repositoryWatchPullCommit, omitted, rewritten int, allSHAs map[string]bool, err error) {
+func (p *RepositoryWatchPlugin) fetchPullRequestCommits(ctx context.Context, repository string, number int, since time.Time, limit int, settings SettingValues, blockedUsers ...string) (fresh []repositoryWatchPullCommit, omitted, rewritten int, allSHAs map[string]bool, err error) {
 	if limit <= 0 {
 		limit = repositoryWatchDefaultLimit
 	}
@@ -1000,6 +1021,9 @@ func (p *RepositoryWatchPlugin) fetchPullRequestCommits(ctx context.Context, rep
 	for _, item := range payload {
 		if sha := strings.ToLower(strings.TrimSpace(item.SHA)); sha != "" {
 			allSHAs[sha] = true
+		}
+		if repositoryWatchUserBlocked(blockedUsers, item.Author.Login) {
+			continue
 		}
 		committedAt := item.Commit.Committer.Date
 		if !since.IsZero() && !committedAt.IsZero() && !committedAt.After(since) {
@@ -1147,7 +1171,7 @@ func (p *RepositoryWatchPlugin) fetchIssues(ctx context.Context, repository, cur
 		case item.CreatedAt.Equal(item.UpdatedAt):
 			status = "opened"
 		}
-		if !selection.wants(selection.IssueEvents, status) {
+		if repositoryWatchUserBlocked(selection.BlockedUsers, item.User.Login) || !selection.wants(selection.IssueEvents, status) {
 			continue
 		}
 		closedAt := time.Time{}

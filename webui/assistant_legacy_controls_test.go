@@ -373,7 +373,7 @@ func TestTaskListCarriesRepositoryWatchStarSettings(t *testing.T) {
 		ID: "watch", Kind: assistant.ReminderKindRepositoryWatch, OwnerID: "webui:bot",
 		Repository: "acme/demo", RepositoryBranch: "main", IntervalSeconds: 60, CreatedAt: now,
 		WatchCommits: true, WatchPullRequests: true, WatchIssues: true, WatchReleases: true, WatchStars: true,
-		StarNotifyMode: "milestone", StarNotifyThreshold: 5, StarNotifyMilestones: []int{100, 500, 1000},
+		StarNotifyMode: "milestone", StarNotifyThreshold: 5, StarNotifyMilestones: []int{100, 500, 1000}, BlockedUsers: []string{"alice", "dependabot[bot]"},
 		LastIssueCursor: "2026-08-13T00:00:00Z#7", NotificationEnabled: true,
 	}
 	if err := store.SaveReminders(context.Background(), []assistant.Reminder{item}); err != nil {
@@ -399,6 +399,9 @@ func TestTaskListCarriesRepositoryWatchStarSettings(t *testing.T) {
 	if got.StarNotifyMode != "milestone" || got.StarNotifyThreshold != 5 || !slices.Equal(got.StarNotifyMilestones, []int{100, 500, 1000}) {
 		t.Fatalf("star settings were dropped: mode=%q threshold=%d milestones=%v", got.StarNotifyMode, got.StarNotifyThreshold, got.StarNotifyMilestones)
 	}
+	if !slices.Equal(got.BlockedUsers, []string{"alice", "dependabot[bot]"}) {
+		t.Fatalf("blocked users lost during persistence or response: %v", got.BlockedUsers)
+	}
 	if !got.WatchIssues || got.LastIssueCursor != "2026-08-13T00:00:00Z#7" {
 		t.Fatalf("issue fields were dropped: %#v", got)
 	}
@@ -416,12 +419,15 @@ func TestRepositoryWatchCreateForwardsSelectedEventKinds(t *testing.T) {
 	recorder := performJSONRequest(router, http.MethodPost, "/api/assistant/tasks/repository-watches", fmt.Sprintf(`{
 		"repository":"acme/demo","profile_id":%q,"destination":"group","group_id":"123456",
 		"watch_pull_requests":true,"watch_issues":true,
-		"watch_pull_request_events":["opened","merged"],"watch_issue_events":["opened"]
+		"watch_pull_request_events":["opened","merged"],"watch_issue_events":["opened"],"blocked_users":["alice"]
 	}`, profiles.Profiles().Profiles[0].ID))
 	if recorder.Code != http.StatusCreated {
 		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
 	input := runtime.createInput
+	if !slices.Equal(input.BlockedUsers, []string{"alice"}) {
+		t.Fatalf("blocked users missing from create request: %v", input.BlockedUsers)
+	}
 	if !slices.Equal(input.WatchPullRequestEvents, []string{"opened", "merged"}) || !slices.Equal(input.WatchIssueEvents, []string{"opened"}) {
 		t.Fatalf("event kinds were dropped: pull=%v issue=%v", input.WatchPullRequestEvents, input.WatchIssueEvents)
 	}
