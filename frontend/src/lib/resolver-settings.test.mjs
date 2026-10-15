@@ -27,6 +27,7 @@ function editor() {
     Error, Element: class Element { constructor(selector) { this.selector = selector; } closest(selectors) { return selectors.split(", ").includes(this.selector); } },
     document: new EventTarget(), window: new EventTarget(), settingsPointerTarget: null,
     settingsTarget: target, settingsForm: form, clearSecrets: clears,
+    addedResolverCredentials: ref([]), resolverCookieEditor: ref(null),
     settingsSpecs: computed(() => target.value?.manifest.settings ?? []),
     repositoryPublishSpecs: ref([]), repositoryPublishTarget: ref(null), repositoryPublishForm: ref({}),
     isGitHubSettings: ref(false), repositoryWatchRef: ref(null), rssWatchRef: ref(null), credentialEditor: ref(null),
@@ -346,4 +347,32 @@ test("resolver API preserves all-item compatibility, encodes selection and forwa
   assert.equal(calls[1].url, `/api/assistant/plugins/resolver/test?profile=synthetic%20bot&credential_key=${key}`);
   assert.equal(calls[1].init.signal, controller.signal);
   assert.deepEqual(JSON.parse(calls[1].init.body), { settings: { [key]: "synthetic-draft" }, clear_secrets: ["douyin_cookie"] });
+});
+
+
+test("cookie draft prevents silent close and failed cookie save keeps all settings open", async () => {
+  const { context: c, saves, notices } = editor();
+  c.resolverCookieEditor.value = { hasUnsavedChanges: () => true, saveDraft: async () => { throw new Error("invalid cookie format"); } };
+  assert.equal(c.settingsDirty(), true);
+  await c.saveSettings();
+  assert.equal(saves.length, 0);
+  assert.ok(c.settingsTarget.value);
+  assert.match(notices.at(-1)[1], /invalid cookie format/);
+  c.resolverChecks.dispose();
+});
+
+test("unified save includes managed path and reports partial settings failure accurately", async () => {
+  const { context: c, saves, notices, plugin } = editor();
+  plugin.manifest.settings.push({ key: "ytdlp_cookies_path", type: "string", default: "" });
+  c.openSettings(plugin);
+  c.resolverCookieEditor.value = { hasUnsavedChanges: () => true, saveDraft: async () => { c.settingsForm.value.ytdlp_cookies_path = "/preview/resolver-cookies.txt"; return true; } };
+  const pending = c.saveSettings();
+  await tick();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(saves[0].settings.ytdlp_cookies_path, "/preview/resolver-cookies.txt");
+  saves[0].reject(new Error("offline"));
+  await pending;
+  assert.match(notices.at(-1)[1], /Cookie 文件已保存，但其他设置未保存/);
+  assert.ok(c.settingsTarget.value);
+  c.resolverChecks.dispose();
 });

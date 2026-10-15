@@ -1,35 +1,45 @@
 <script setup lang="ts">
-import { ref, computed, onBeforeUnmount } from "vue";
+import { ref, computed, onMounted, onBeforeUnmount } from "vue";
 import { readResolverCookieFile, saveResolverCookieFile, checkResolverCookieFile, testResolverCookieLogin } from "../api";
 import { cookieSites } from "../lib/cookie-sites";
-const props = defineProps<{ path: string }>();
+const props = defineProps<{ path: string; disabled?: boolean }>();
 const emit = defineEmits<{ (event: "saved", path: string): void }>();
 const editing = ref(false);
 const busy = ref(false);
 const content = ref("");
 const message = ref("");
+const original = ref("");
+const loaded = ref(false);
+const dirty = computed(() => content.value !== original.value);
 const sites = computed(() => cookieSites(content.value));
 const hasYouTube = computed(() => sites.value.some((site) => site.youtube));
 let disposed = false;
 onBeforeUnmount(() => { disposed = true; content.value = ""; });
-async function edit() {
+onMounted(() => { void load(); });
+async function load() {
  busy.value = true; message.value = "";
  try {
   const result = await readResolverCookieFile();
   if (disposed) return;
-  content.value = result.content; editing.value = true;
+  content.value = result.content; original.value = result.content; loaded.value = true;
  } catch (error) { if (!disposed) message.value = error instanceof Error ? error.message : "读取失败"; }
  finally { if (!disposed) busy.value = false; }
 }
-async function save() {
+async function edit() {
+ if (!loaded.value) await load();
+ if (loaded.value) editing.value = true;
+}
+async function saveDraft(): Promise<boolean> {
+ if (!dirty.value) return false;
  busy.value = true; message.value = "";
  try {
   const result = await saveResolverCookieFile(content.value);
-  if (disposed) return;
+  if (disposed) throw new Error("编辑器已关闭");
   emit("saved", result.path);
-  content.value = ""; editing.value = false;
-  message.value = "Cookie 已保存并启用，所有机器人共用。";
- } catch (error) { if (!disposed) message.value = error instanceof Error ? error.message : "保存失败"; }
+  original.value = content.value;
+  message.value = "Cookie 已保存。";
+  return true;
+ } catch (error) { if (!disposed) message.value = error instanceof Error ? error.message : "保存失败"; throw error; }
  finally { if (!disposed) busy.value = false; }
 }
 async function check(format: boolean) {
@@ -52,40 +62,41 @@ async function testLogin() {
  } catch (error) { if (!disposed) message.value = error instanceof Error ? error.message : "检测失败，无法确认登录状态"; }
  finally { if (!disposed) busy.value = false; }
 }
-function cancel() { editing.value = false; content.value = ""; message.value = ""; }
+defineExpose({ saveDraft, hasUnsavedChanges: () => dirty.value, isBusy: () => busy.value });
 </script>
 
 <template>
- <div class="field">
-  <span>yt-dlp Cookie（多站点通用）</span>
-  <span class="hint">粘贴 Netscape 格式 Cookie，由 WebUI 维护；只显示文件中已添加的网站。</span>
-  <button v-if="!editing" class="btn small" type="button" :disabled="busy" @click="edit">{{ busy ? "读取中…" : "编辑 Cookie" }}</button>
-  <template v-else>
-   <label for="resolver-cookie-content">Cookie 文件内容</label>
-   <textarea id="resolver-cookie-content" v-model="content" @input="message = ''" class="input plugin-setting-textarea" rows="10" spellcheck="false" autocomplete="off" autocapitalize="off" :disabled="busy" placeholder="# Netscape HTTP Cookie File"></textarea>
-   <div v-if="sites.length" class="stack" aria-label="已添加的 Cookie 网站">
-    <span>已添加 {{ sites.length }} 个域名</span>
-    <div v-for="site in sites" :key="site.domain" class="hint">
-     <strong>{{ site.domain }}</strong> · {{ site.count }} 条<span v-if="site.expired"> · {{ site.expired }} 条已过期</span>
-     · {{ site.youtube ? "支持 YouTube 登录检测" : "支持格式检查，尚无在线登录检测" }}
-    </div>
+ <section class="cookie-manager" aria-label="Cookie 文件">
+  <div class="cookie-header">
+   <div><strong>Cookie 文件</strong><p class="hint">供 yt-dlp 使用 · {{ sites.length ? `${sites.length} 个域名` : '尚未添加' }}<span v-if="dirty"> · 待保存</span></p></div>
+   <button class="btn small" type="button" :disabled="busy || disabled" @click="editing ? editing = false : edit()">{{ busy ? "处理中…" : editing ? "收起编辑" : sites.length ? "编辑文件" : "粘贴 Cookie" }}</button>
+  </div>
+  <div v-if="sites.length" aria-label="已添加的 Cookie 网站">
+   <div v-for="site in sites" :key="site.domain" class="cookie-site">
+    <strong>{{ site.domain }}</strong><span class="hint">{{ site.count }} 条<span v-if="site.expired"> · {{ site.expired }} 条已过期</span></span>
+    <span class="badge">{{ dirty ? '待保存' : '已配置' }}</span>
+    <button v-if="site.youtube" class="btn small" type="button" :disabled="busy || disabled" @click="testLogin">检测登录</button>
    </div>
-   <span v-else class="hint">尚未识别到 Cookie 网站，粘贴后自动显示。</span>
-   <span class="hint">仅检查文件格式，不代表登录有效。点击下方按钮会立即保存；取消不修改文件。</span>
-   <span v-if="hasYouTube" class="hint">「检测 YouTube 登录」会将草稿中适用于 YouTube 的 Cookie 发送到 YouTube，使用已保存的解析代理，不会保存或修改 Cookie 文件。</span>
+  </div>
+  <template v-if="editing">
+   <label class="hint" for="resolver-cookie-content">粘贴 Netscape 格式内容，随底部「保存」一起生效。</label>
+   <textarea id="resolver-cookie-content" v-model="content" @input="message = ''" class="input plugin-setting-textarea" rows="6" spellcheck="false" autocomplete="off" autocapitalize="off" :disabled="busy || disabled" placeholder="# Netscape HTTP Cookie File"></textarea>
    <div class="actions">
-    <button v-if="hasYouTube" class="btn" type="button" :disabled="busy || !content.trim()" @click="testLogin">检测 YouTube 登录</button>
-    <button class="btn" type="button" :disabled="busy || !content.trim()" @click="check(false)">检查格式</button>
-    <button class="btn" type="button" :disabled="busy || !content.trim()" @click="check(true)">格式化</button>
-    <button class="btn primary" type="button" :disabled="busy || !content.trim()" @click="save">保存并启用 Cookie</button>
-    <button class="btn" type="button" :disabled="busy" @click="cancel">取消</button>
+    <button class="btn small" type="button" :disabled="busy || disabled || !content.trim()" @click="check(false)">检查格式</button>
+    <button class="btn small" type="button" :disabled="busy || disabled || !content.trim()" @click="check(true)">格式化</button>
    </div>
   </template>
-  <span v-if="message" class="hint" role="status">{{ message }}</span>
-  <details v-if="!editing">
-   <summary>使用已有 Cookie 文件</summary>
-   <span class="hint">自定义路径需保存插件设置后生效。编辑器只编辑 WebUI 托管文件，不读取或覆盖外部文件。</span>
-   <input class="input" type="text" aria-label="已有 Cookie 文件路径" :value="props.path" @input="emit('saved', ($event.target as HTMLInputElement).value)" />
-  </details>
- </div>
+  <p v-if="hasYouTube" class="hint">检测登录会向 YouTube 发送相应 Cookie，使用已保存的解析代理。</p>
+  <p v-if="sites.length || editing" class="hint">格式正确不代表登录有效。B 站、抖音、小红书的登录检测使用上方单独配置的凭据。</p>
+  <p v-if="props.path && !props.path.endsWith('/resolver-cookies.txt')" class="hint">当前使用外部文件；保存编辑内容后将改用 WebUI 托管文件。</p>
+  <p v-if="message" class="hint" role="status">{{ message }}</p>
+ </section>
 </template>
+<style scoped>
+.cookie-manager { display:grid; gap:12px; padding:14px 0; }
+.cookie-header,.cookie-site { display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
+.cookie-header { justify-content:space-between; }
+.cookie-header p { margin:4px 0 0; }
+.cookie-site { padding:10px 0; border-bottom:1px solid var(--border); }
+.cookie-site strong { margin-right:auto; }
+</style>

@@ -386,22 +386,24 @@
         </div>
       </template>
       <template v-if="isResolverSettings">
-        <div class="stack plugin-settings-form">
+        <details class="plugin-settings-collapsible">
+          <summary><h3>解析平台</h3><ChevronDown :size="15" /></summary>
+          <div class="stack plugin-settings-form">
           <PluginSettingField v-for="spec in resolverGroups.platforms" :key="spec.key" :spec="spec" :form="settingsForm" />
-        </div>
+          </div>
+        </details>
         <div class="plugin-settings-section-head plugin-settings-subsection">
-          <h3>平台登录凭据</h3>
-          <p>每次打开设置，会自动访问对应平台账号接口检测已配置的 Cookie 一次；修改后离开输入框也会检测。已配置时留空沿用，点击清除后保存才删除。</p>
+          <h3>网站凭据</h3>
+          <p>只展示已添加的凭据。展开编辑，所有改动统一在底部保存。</p>
         </div>
         <div class="resolver-credentials">
-          <section v-for="platform in resolverGroups.credentials" :key="platform.key" class="music-platform-card resolver-credential" :aria-label="`${platform.label}登录凭据`">
-            <div class="music-platform-head">
-              <div>
-                <h4>{{ platform.label }}</h4>
-                <span v-if="!resolverPlatformEnabled(platform.platform)" class="hint">解析已关闭，可提前配置</span>
-              </div>
-              <span class="badge">{{ resolverCredentialSource(resolverInput(platform.key)) }}</span>
-            </div>
+          <details v-for="platform in visibleResolverCredentials" :key="platform.key" :open="addedResolverCredentials.includes(platform.key)" class="resolver-credential resolver-compact" :aria-label="`${platform.label}登录凭据`">
+            <summary class="resolver-compact-head">
+              <strong>{{ platform.label }}</strong>
+              <span class="hint">{{ clearSecrets.includes(platform.key) ? '待清除' : String(settingsForm[platform.key] || '').trim() ? '待保存' : secretConfigured(platform.key) ? '已配置' : '待填写' }}</span>
+              <span v-if="secretConfigured(platform.key)" class="badge" :class="resolverBadgeClass(platform.key)">{{ resolverCheckLabel(resolverChecks.states[platform.key]) }}</span>
+              <ChevronDown :size="15" />
+            </summary>
             <PluginSettingField
               :spec="platform.spec" :form="settingsForm"
               :clearing="clearSecrets.includes(platform.key)"
@@ -420,23 +422,30 @@
                 {{ resolverChecks.states[platform.key].phase === 'checking' ? '正在检测' : '重新检测' }}
               </button>
             </div>
-          </section>
+          </details>
         </div>
-        <div class="plugin-settings-section-head plugin-settings-subsection">
-          <h3>媒体与发送</h3>
+        <div v-if="availableResolverCredentials.length" class="actions">
+          <select class="input" aria-label="添加网站凭据" :value="''" @change="addResolverCredential($event)">
+            <option value="" disabled>＋ 添加网站凭据</option>
+            <option v-for="platform in availableResolverCredentials" :key="platform.key" :value="platform.key">{{ platform.label }}</option>
+          </select>
+        </div>
+        <ResolverCookieEditor ref="resolverCookieEditor" :path="String(settingsForm.ytdlp_cookies_path || '')" :disabled="savingSettings" @saved="settingsForm.ytdlp_cookies_path = $event" />
+        <details class="plugin-settings-section-head plugin-settings-subsection plugin-settings-collapsible">
+          <summary><h3>媒体与发送</h3><ChevronDown :size="15" /></summary>
           <p>控制媒体下载、发送方式、数量与清晰度。</p>
-        </div>
         <div class="stack plugin-settings-form">
           <template v-for="spec in resolverGroups.media" :key="spec.key">
             <PlatformLevelRulesField v-if="spec.type === 'platform_level_rules'" :spec="spec" :model-value="settingsForm[spec.key]" @update:model-value="settingsForm[spec.key] = $event" />
             <PluginSettingField v-else :spec="spec" :form="settingsForm" />
           </template>
         </div>
+        </details>
         <details class="plugin-settings-section-head plugin-settings-subsection plugin-settings-collapsible resolver-advanced">
           <summary><h3>高级抓取设置</h3><ChevronDown class="plugin-settings-chevron" :size="15" aria-hidden="true" /></summary>
           <div class="stack plugin-settings-form">
             <template v-for="spec in resolverGroups.advanced" :key="spec.key">
-              <ResolverCookieEditor v-if="spec.key === 'ytdlp_cookies_path'" :path="String(settingsForm[spec.key] || '')" @saved="settingsForm[spec.key] = $event" />
+              <PluginSettingField v-if="spec.key === 'ytdlp_cookies_path'" :spec="{ ...spec, label: '外部 Cookie 文件路径（可选）', description: '由 WebUI 管理 Cookie 时无需填写。' }" :form="settingsForm" />
               <PluginSettingField v-else :spec="spec" :form="settingsForm" :clearing="clearSecrets.includes(spec.key)" :secret-configured="secretConfigured(spec.key)" :secret-placeholder="secretPlaceholder(spec.key)" @toggle-clear="toggleClearSecret" />
             </template>
           </div>
@@ -934,7 +943,8 @@ const savingSettings = ref(false);
 // 订阅编辑器的提交分两步：先经 prepareAccess 存插件设置，再存订阅。savingSettings 只罩住第一步，
 // 第二步期间也得锁住底部按钮，否则能重复点保存或中途关掉弹窗。
 const savingSubscription = ref(false);
-const settingsBusy = computed(() => savingSettings.value || savingSubscription.value);
+const resolverCookieEditor = ref<InstanceType<typeof ResolverCookieEditor> | null>(null);
+const settingsBusy = computed(() => savingSettings.value || savingSubscription.value || !!resolverCookieEditor.value?.isBusy());
 const openedSnapshot = ref("");
 const githubSettingsTab = ref<"config" | "repositories" | "records">("config");
 const joinedGroups = ref<BotGroupSummary[]>([]);
@@ -1009,6 +1019,14 @@ async function testMusicSettings(): Promise<void> {
 
 const isResolverSettings = computed(() => settingsTarget.value?.manifest.id === resolverPluginID);
 const resolverGroups = computed(() => groupResolverSettings(settingsSpecs.value));
+const addedResolverCredentials = ref<string[]>([]);
+const visibleResolverCredentials = computed(() => resolverGroups.value.credentials.filter(p => secretConfigured(p.key) || addedResolverCredentials.value.includes(p.key) || String(settingsForm.value[p.key] || '').trim()));
+const availableResolverCredentials = computed(() => resolverGroups.value.credentials.filter(p => !visibleResolverCredentials.value.some(v => v.key === p.key)));
+function addResolverCredential(event: Event) {
+ const select = event.target as HTMLSelectElement;
+ if (select.value) addedResolverCredentials.value.push(select.value);
+ select.value = '';
+}
 function resolverInput(key: ResolverCredentialKey) {
   const file = key === "ytdlp_cookies_path";
   return {
@@ -1448,6 +1466,7 @@ function openSettings(plugin: PluginState): void {
     form[spec.key] = Array.isArray(value) ? [...value] : value;
   }
   settingsForm.value = form;
+  addedResolverCredentials.value = [];
   const publishForm: Record<string, any> = {};
   const publish = plugins.value.find((candidate) => candidate.manifest.id === repositoryPublishPluginID);
   for (const spec of publish?.manifest.settings ?? []) {
@@ -1609,6 +1628,7 @@ function settingsSnapshot(): string {
 }
 
 function settingsDirty(): boolean {
+  if (resolverCookieEditor.value?.hasUnsavedChanges()) return true;
   if (Object.keys(credentialTokenDrafts.value).length > 0) return true;
   if (clearSecrets.value.length > 0) return true;
   // 仓库编辑器的改动不在 settingsForm 里，漏掉它就会从弹窗右上角静默关掉一整屏配置。
@@ -1743,6 +1763,7 @@ async function persistSettings(closeAfterSave: boolean): Promise<void> {
   const scope = botScope.value;
   const github = isGitHubSettings.value;
   try {
+    const cookieSaved = resolverCookieEditor.value ? await resolverCookieEditor.value.saveDraft() : false;
     const publishPayload = github && repositoryPublishTarget.value ? buildSettingsPayload(repositoryPublishSpecs.value, repositoryPublishForm.value) : null;
     const sharedToken = String(settingsForm.value.github_token ?? "").trim();
     if (publishPayload && sharedToken) publishPayload.github_token = sharedToken;
@@ -1760,7 +1781,13 @@ async function persistSettings(closeAfterSave: boolean): Promise<void> {
       }
       payload.github_credential_ids = configured.size ? JSON.stringify([...configured]) : "";
     }
-    const updated = await updatePluginSettings(target.manifest.id, payload, [...clearSecrets.value]);
+    let updated;
+    try {
+      updated = await updatePluginSettings(target.manifest.id, payload, [...clearSecrets.value]);
+    } catch (error) {
+      if (cookieSaved) throw new Error(`Cookie 文件已保存，但其他设置未保存：${error instanceof Error ? error.message : '请求失败'}。请重试保存。`);
+      throw error;
+    }
     upsert(updated, scope);
     if (publishPayload) {
       let publishUpdated;
@@ -1905,3 +1932,11 @@ onMounted(() => {
 useConfigurationRefresh(["bot"], reload);
 
 </script>
+
+<style scoped>
+.resolver-compact { border-bottom:1px solid var(--border); padding:10px 0; }
+.resolver-compact-head { display:flex; align-items:center; gap:12px; cursor:pointer; list-style:none; padding:4px 0; }
+.resolver-compact-head strong { margin-right:auto; }
+.resolver-compact-head::-webkit-details-marker { display:none; }
+.resolver-compact[open] .resolver-compact-head { margin-bottom:12px; }
+</style>
