@@ -7,10 +7,10 @@ import { parse } from "@vue/compiler-sfc";
 import { modelRequestTimeoutSeconds } from "./configuration-sync.ts";
 
 const source = readFileSync(new URL("../views/AssistantView.vue", import.meta.url), "utf8");
-test("media preprocessing lives only in behavior settings", () => {
+test("media preprocessing lives only in context settings", () => {
   assert.equal(source.match(/<h2>媒体预处理<\/h2>/g)?.length, 1);
-  assert.ok(source.indexOf("<h2>媒体预处理</h2>") > source.indexOf("editorTab === 'behavior'"));
-  assert.ok(source.indexOf("<h2>媒体预处理</h2>") < source.indexOf("editorTab === 'persona'"));
+  assert.ok(source.indexOf("<h2>媒体预处理</h2>") > source.indexOf("editorTab === 'context'"));
+  assert.ok(source.indexOf("<h2>媒体预处理</h2>") < source.indexOf("editorTab === 'advanced'"));
   assert.match(source, /「模型分配」的「媒体解析」/);
 });
 

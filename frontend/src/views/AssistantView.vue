@@ -1224,34 +1224,6 @@
             </div>
           </section>
 
-          <!-- 媒体预处理：收到图片、视频时后台做不做。用哪个模型在「模型」页。 -->
-          <section class="card">
-            <div class="card-header">
-              <div>
-                <h2>媒体预处理</h2>
-                <span class="card-sub">收到图片和视频时先在后台读一遍</span>
-              </div>
-            </div>
-            <div class="card-body form-grid">
-              <div class="field wide">
-                <label class="switch">
-                  <input v-model="form.auto_image_description" type="checkbox" />
-                  <span class="track" aria-hidden="true"></span>
-                  <span class="switch-label">自动生成图片描述</span>
-                </label>
-              </div>
-              <div class="field wide">
-                <label class="switch">
-                  <input v-model="form.auto_video_preprocess" type="checkbox" />
-                  <span class="track" aria-hidden="true"></span>
-                  <span class="switch-label">自动下载视频并提取关键帧</span>
-                </label>
-                <span class="hint">关闭后保留媒体索引和已有缓存；普通图片不再后台调用模型，视频不再预下载或抽帧。主动读取、引用分析及工具调用仍可按需解析；远程媒体过期后可能无法读取。</span>
-                <span class="hint">图片描述、视频帧描述和模型 OCR 用的是<a href="#" @click.prevent="editorTab = 'model'">「模型」标签</a>里「模型分配」的「媒体解析」。文本文件提取和本地 OCR 不消耗模型额度。</span>
-              </div>
-            </div>
-          </section>
-
           <!-- 安全：发出去之前审一遍，别和其他机器人没完没了，看过的撤回内容跟着撤。 -->
           <section class="card">
             <div class="card-header">
@@ -1799,6 +1771,35 @@
               </div>
             </div>
           </section>
+
+          <!-- 媒体预处理：决定图片、视频如何转成可供上下文使用的文字。用哪个模型在「模型」页。 -->
+          <section class="card">
+            <div class="card-header">
+              <div>
+                <h2>媒体预处理</h2>
+                <span class="card-sub">收到图片和视频时先在后台读一遍</span>
+              </div>
+            </div>
+            <div class="card-body form-grid">
+              <div class="field wide">
+                <label class="switch">
+                  <input v-model="form.auto_image_description" type="checkbox" />
+                  <span class="track" aria-hidden="true"></span>
+                  <span class="switch-label">自动生成图片描述</span>
+                </label>
+              </div>
+              <div class="field wide">
+                <label class="switch">
+                  <input v-model="form.auto_video_preprocess" type="checkbox" />
+                  <span class="track" aria-hidden="true"></span>
+                  <span class="switch-label">自动下载视频并提取关键帧</span>
+                </label>
+                <span class="hint">关闭后保留媒体索引和已有缓存；普通图片不再后台调用模型，视频不再预下载或抽帧。主动读取、引用分析及工具调用仍可按需解析；远程媒体过期后可能无法读取。</span>
+                <span class="hint">图片描述、视频帧描述和模型 OCR 用的是<a href="#" @click.prevent="editorTab = 'model'">「模型」标签</a>里「模型分配」的「媒体解析」。文本文件提取和本地 OCR 不消耗模型额度。</span>
+              </div>
+            </div>
+          </section>
+
           <section class="card">
             <div class="card-body">
               <AgentResidencyPanel ref="residencyPanel" :profile="form.id || ''" />
