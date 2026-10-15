@@ -3,6 +3,7 @@ import { ref, computed, watch, onMounted, onBeforeUnmount } from "vue";
 import { readResolverCookieFile, saveResolverCookieFile, checkResolverCookieFile, testResolverCookieLogin } from "../api";
 import { Pencil } from "@lucide/vue";
 import Modal from "./Modal.vue";
+import { toggleResolverChip } from "../lib/resolver-credentials";
 import { cookieSites } from "../lib/cookie-sites";
 const props = defineProps<{ path: string; disabled?: boolean; enabled?: boolean }>();
 const emit = defineEmits<{ (event: "saved", path: string): void }>();
@@ -83,7 +84,7 @@ defineExpose({ saveDraft, testLogin, hasUnsavedChanges: () => dirty.value, isBus
 
 <template>
  <section class="cookie-manager" aria-label="YouTube Cookie">
-  <div class="model-chip resolver-chip" :class="[`resolver-status-${youtubeStatus.color || 'neutral'}`, { 'is-enabled': enabled }]">
+  <div class="model-chip resolver-chip" @click="toggleResolverChip" :class="[`resolver-status-${youtubeStatus.color || 'neutral'}`, { 'is-enabled': enabled }]">
    <slot name="platform"><strong>YouTube</strong></slot>
    <span class="resolver-health-dot" :class="youtubeStatus.color" :title="youtubeStatus.label" :aria-label="youtubeStatus.label" role="status"></span>
    <button class="resolver-chip-edit" type="button" :disabled="busy || disabled" aria-label="编辑 YouTube Cookie" title="编辑 Cookie" aria-haspopup="dialog" @click="edit"><Pencil :size="13" aria-hidden="true" /></button>
