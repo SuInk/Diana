@@ -100,3 +100,26 @@ func TestRestrictedCDPScreenshotIntegration(t *testing.T) {
 	}
 	t.Logf("captured explicit CDP page: %s", output)
 }
+
+// 10-15「发下标普500的k线」：搜到行情页后说「没接行情插件发不了」，没想到可以截图。
+func TestSystemPromptTreatsChartRequestsAsScreenshots(t *testing.T) {
+	registry := NewToolRegistry()
+	without, err := NewRunner(&scriptedClient{}, Config{WorkDir: t.TempDir()}, registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(without.systemPrompt(), "K 线") {
+		t.Fatal("chart screenshot rule should only appear when webpage_screenshot is registered")
+	}
+	registry.Register(NewWebpageScreenshotTool(NewSandboxedHeadlessBrowser(SandboxedBrowserConfig{})))
+	with, err := NewRunner(&scriptedClient{}, Config{WorkDir: t.TempDir()}, registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prompt := with.systemPrompt()
+	for _, want := range []string{"K 线、走势图", "别因为没有专门的行情或绘图插件就说发不了"} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("system prompt missing %q", want)
+		}
+	}
+}

@@ -1148,6 +1148,11 @@ func (r *Runner) systemPrompt() string {
 	}
 	if hasAnyTool("webpage_screenshot", "browser_screenshot") {
 		rules = append(rules, "- 公共网页截图用 webpage_screenshot，不带登录态；browser_screenshot 只截已授权的登录页面。capture 的真实画面才是截图证据；要求发送时，用同一工具的 action=send 和本轮 image_id 发到当前会话。")
+		// 10-15「发下标普500的k线」：搜到 Yahoo 行情页后直接说「没接行情插件发不了」，
+		// 用户提示「找个网页截图」才去截。K 线、走势图这类请求没被认成截图任务。
+		if hasTool("webpage_screenshot") {
+			rules = append(rules, "- 要发 K 线、走势图、行情、天气图、某个网站的样子这类网页上看得到的画面时，就是截图任务：知道网址直接用 webpage_screenshot 截，不知道先搜到页面再截，截到后发出去。别因为没有专门的行情或绘图插件就说发不了。")
+		}
 	}
 	if hasTool("browser_eval") {
 		// 交互式浏览器只登记给主人，带着主人的登录态。主人的事需要用浏览器就直接用，
@@ -1213,7 +1218,7 @@ func (r *Runner) systemPrompt() string {
 	}
 	if loader := r.loader; loader != nil {
 		// 常驻工具的说明已经在请求的工具定义里，这里不再重复列一遍。
-		sections = append(sections, "按需加载的工具（没有随请求带完整定义；需要时先调用 "+ToolsLoadToolName+" 取得完整描述和 inputSchema，再通过 tools_execute 的 name/input 调用；目录名称不是可直接调用的 function）：\n"+loader.catalog())
+		sections = append(sections, "按需加载的工具（没有随请求带完整定义；需要时先调用 "+ToolsLoadToolName+" 取得完整描述和 inputSchema，再通过 tools_execute 的 name/input 调用；目录名称不是可直接调用的 function。说「做不到」「没这个功能」之前先看这份目录，有能做到的工具就加载来用）：\n"+loader.catalog())
 	} else {
 		sections = append(sections, "可用工具（完整说明和参数以请求中的工具定义为准）：\n"+r.registry.SystemPromptCatalog())
 	}
