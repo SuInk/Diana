@@ -6,6 +6,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -143,5 +144,28 @@ func TestBrowserRenderTruncationProvidesFindRecovery(t *testing.T) {
 	found, err := browserRenderOutputWithBudget(page, "sandbox", 1500)
 	if err != nil || !strings.Contains(found, "sandbox execution") {
 		t.Fatalf("find cannot recover omitted passage: %s %v", found, err)
+	}
+}
+
+func TestParseRenderedPageListsDownloadableImages(t *testing.T) {
+	html := `<html><head><title>SPY</title><meta property="og:image" content="/og.png"></head><body><main>
+<p>S&P 500 daily chart</p>
+<img src="/pixel.gif" width="1" height="1">
+<img src="/icon.svg" alt="logo">
+<img src="placeholder.gif" data-src="https://charts.example.com/chart.png?t=SPY" alt="SPY daily">
+<img src="/og.png">
+<div hidden><img src="/hidden.png"></div>
+</main></body></html>`
+	page, err := parseRenderedPage([]byte(html), "https://example.com/quote/SPY", 1000, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []RenderedImage{{URL: "https://example.com/og.png"}, {URL: "https://charts.example.com/chart.png?t=SPY", Alt: "SPY daily"}}
+	if !reflect.DeepEqual(page.Images, want) {
+		t.Fatalf("images = %#v", page.Images)
+	}
+	out, err := browserRenderOutput(page, "")
+	if err != nil || !strings.Contains(out, `"images"`) {
+		t.Fatalf("browser_render output should carry images: %v %s", err, out)
 	}
 }
