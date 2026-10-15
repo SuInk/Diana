@@ -341,6 +341,13 @@ if args.count < 2 {
     exit(2)
 }
 
+// ScreenCaptureKit 依赖 AppKit 完成 WindowServer 会话初始化。命令行进程只调用
+// CGWindowListCopyWindowInfo 时看不出问题，但第一次用 SCScreenshotManager 会在
+// Core Graphics 的 did_initialize 断言处直接退出（状态 134）。创建一个不显示在
+// Dock 里的 NSApplication 即可完成初始化，不激活应用，也不改变当前前台窗口。
+let helperApplication = NSApplication.shared
+helperApplication.setActivationPolicy(.prohibited)
+
 func fail(_ message: String) -> Never {
     fputs(message + "\n", stderr)
     exit(1)
