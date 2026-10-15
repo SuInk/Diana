@@ -297,7 +297,8 @@ document.querySelectorAll("[data-tab]").forEach((button) => {
   button.addEventListener("click", () => {
     const group = button.closest("[data-tabs-root]");
     group.querySelectorAll("[data-tab]").forEach((item) => item.setAttribute("aria-selected", String(item === button)));
-    group.querySelectorAll("[data-panel]").forEach((panel) => { panel.hidden = panel.dataset.panel !== button.dataset.tab; });
+    // 面板与标签栏平级，不在 data-tabs-root 里，要从共同的父元素找。
+    group.parentElement.querySelectorAll("[data-panel]").forEach((panel) => { panel.hidden = panel.dataset.panel !== button.dataset.tab; });
   });
 });
 

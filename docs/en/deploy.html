@@ -27,6 +27,7 @@
         <div class="tabs install-tabs" data-tabs-root role="tablist" aria-label="Operating system">
           <button type="button" role="tab" aria-selected="true" data-tab="unix">Linux / macOS</button>
           <button type="button" role="tab" aria-selected="false" data-tab="windows">Windows</button>
+          <button type="button" role="tab" aria-selected="false" data-tab="docker">Docker</button>
         </div>
         <div class="tab-panel" role="tabpanel" data-panel="unix">
           <pre><code>curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.sh | sh</code></pre>
@@ -35,6 +36,10 @@
         <div class="tab-panel" role="tabpanel" data-panel="windows" hidden>
           <pre><code>irm https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.ps1 | iex</code></pre>
           <p>Supports Windows amd64. The script downloads the zip with PowerShell, verifies SHA-256, backs up the previous version and starts it in the background.</p>
+        </div>
+        <div class="tab-panel" role="tabpanel" data-panel="docker" hidden>
+          <pre><code>curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/docker.sh | sh</code></pre>
+          <p>Run it in the directory where you want the data. The script pulls the prebuilt image, writes the Compose files and starts Diana; to upgrade, rerun it in the same directory. Image variants, the updater and data mounts are covered under <a href="#docker">Container deployment</a>.</p>
         </div>
         <ol class="steps compact">
           <li><span>1</span><div><h3>Detect the platform</h3><p>Picks the right full archive for your OS and CPU, and refuses platforms it does not support.</p></div></li>
@@ -66,10 +71,11 @@
         <div class="section-heading"><p class="eyebrow">Alternative</p><h2>Install a full release archive by hand</h2></div>
         <p>For offline environments or where changes need manual approval, download the full archive matching your platform: the <code>.tar.gz</code> or <code>.zip</code> plus <code>SHA256SUMS</code> from the same release. It includes the backend, prebuilt WebUI and launch scripts, with no separate WebUI deployment or Node.js installation needed. Releases no longer provide standalone binaries; custom deployments can extract the executable and frontend assets from the full package.</p>
         <pre><code># macOS Apple Silicon example
-shasum -a 256 diana-webui-darwin-arm64.tar.gz
-tar -xzf diana-webui-darwin-arm64.tar.gz
-cd diana-webui-darwin-arm64
+shasum -a 256 diana-macos-arm64.tar.gz
+tar -xzf diana-macos-arm64.tar.gz
+cd diana-macos-arm64
 ./run.sh</code></pre>
+        <div class="callout"><strong>First migration from an older release</strong><p>Full archives now use the <code>diana-&lt;os&gt;-&lt;arch&gt;</code> naming scheme. Older consoles that only recognize <code>diana-webui-…</code> archives cannot self-update directly; rerun the one-click installer above or install a full package manually the first time. New installers still accept legacy archive names.</p></div>
       </section>
 
       <section class="section searchable" id="docker">
@@ -79,6 +85,7 @@ cd diana-webui-darwin-arm64
         <pre><code>curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/docker.sh | sh</code></pre>
         <p>For updates, run in the same deployment directory:</p>
         <pre><code>docker compose pull &amp;&amp; docker compose up -d</code></pre>
+        <p>The installer can select the full or slim image and records that choice in the deployment directory's <code>.env</code>. See <a href="../update-channels">Update channels</a> for rolling tags and updater boundaries, and <a href="../browser-rendering">Browser dependencies and containers</a> for the browser and CJK-font differences.</p>
         <p>To build from the repository instead, or to run a QQ client alongside it (SnowLuma recommended), use compose:</p>
         <pre><code>git clone https://github.com/SuInk/Diana.git
 cd Diana
@@ -118,6 +125,6 @@ FRONTEND_DIST=frontend/dist ./dist/diana-webui</code></pre>
       <div data-docs-footer></div>
     </main></div>
     <script src="../icons.js?v=20260847"></script>
-    <script src="../app.js?v=20260926" defer></script>
+    <script src="../app.js?v=20261015" defer></script>
   </body>
 </html>

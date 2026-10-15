@@ -66,33 +66,6 @@ curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/docker.sh 
 > [!TIP]
 > **从别的电脑打不开控制台？** 默认只允许本机访问。安装命令后面加 `-s -- --host 0.0.0.0`（Windows：`-BindHost 0.0.0.0`）重跑一遍即可，详见[部署文档](https://suink.github.io/Diana/deploy.html)。开放后请套 HTTPS 反向代理，别把控制台直接暴露在公网。
 
-<details>
-<summary>Docker 细节 / 手动下载 / 源码构建</summary>
-
-**Docker：** 镜像预装 Chromium 与 Noto CJK 中文字体，网页渲染和中文截图无需在容器内临时安装浏览器。启动时加载上方的 seccomp 配置，为 Chromium 沙箱开放所需的命名空间调用；无需 `--privileged`、`SYS_ADMIN` 或关闭浏览器沙箱。已有容器需按新启动参数重建。详见[浏览器依赖与容器配置](docs/browser-rendering.md)。镜像随每个版本发布（`ghcr.io/suink/diana:latest` 及版本号 tag）。OneBot 客户端（推荐 SnowLuma）连 `ws://<宿主机>:18080/onebot/v11/ws`。想预置配置（无人值守部署），把改好的 `config.yaml` 放到 `data/config.yaml`，并将 `server.host` 设为 `0.0.0.0`（容器内只监听 `127.0.0.1` 会导致宿主机端口映射无法访问）。从克隆的仓库本地构建时执行 `docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build`。普通部署需在宿主机拉新镜像并重建容器；启用上方的 Docker 更新助手后，版本面板也可发起更新。只需挂载 `data/` 一个目录，需要持久化的都在里面：数据库、运行日志（`data/logs/diana.log`）、可选的 `config.yaml`、插件、技能、MCP 配置、浏览器和编码 CLI 登录态、`ytb_cookies.txt` 及升级备份；容器启动时自动把它交给容器内的运行用户（UID 10001）。换了镜像版本后第一次启动，会在迁移数据库之前把它备份到 `data/.diana-updates/backups/`（3 天内最多 3 份）。旧部署挂在 `/app/config.yaml` 的配置仍然优先生效；想改放 `data/config.yaml`，须移除旧的 `/app/config.yaml` 文件挂载。`DIANA_CONFIG` 已不再读取，可删除旧 Compose 中的这一环境变量；若启动命令显式带有 `--config`，还须将路径改为 `/app/data/config.yaml`，或移除该参数以使用自动查找。旧配置里的 `log_path: logs/diana.log` 改成 `data/logs/diana.log`（或删掉这行）后，旧的 `logs/` 挂载就可以去掉。容器里同样有 `diana` 命令，在宿主机执行 `docker exec diana diana status`（第一个 `diana` 是容器名）即可，`logs`、`doctor`、`config check` 等子命令同理；`docker exec` 默认是 root，`diana` 命令会自动降权到服务用户（UID 10001）再执行。
-
-**slim 轻量镜像（基础版）：** 同一仓库同时发布 `-slim` 变体（如 `ghcr.io/suink/diana:latest-slim`、`ghcr.io/suink/diana:v0.8.131-slim`）：不预装 Chromium、Noto CJK 字体、ffmpeg、yt-dlp 与 tesseract，体积约为完整版的四分之一（拉取 156 MB / 落盘 662 MB，完整版 619 MB / 2.14 GB），适合不需要网页渲染、媒体下载和 OCR 的部署。安装脚本会问你要哪一种，选择写进部署目录的 `.env`（`DIANA_IMAGE=`），以后 `docker compose pull` 自动跟着走；已部署的想切换，在终端里重跑安装脚本，或直接改 `.env` 里那一行再 `docker compose pull && docker compose up -d`（没有这个文件就新建，Compose 会自动读取）。内置浏览器这一档在 slim 上会明确报「找不到浏览器」并给出安装命令，不会悄悄失效。之后想用网页渲染，在宿主机执行 `docker exec -u root <容器名> sh -c 'apt-get update && apt-get install -y chromium fonts-noto-cjk'` 即可（WebUI 依赖管理里点一键安装会因进程非 root 失败，报错会直接附上这条命令）。注意容器重建后需重新安装，数据在挂出的 `data/` 里不受影响。
-
-**Node.js 与工作区工具：** full/slim Docker 镜像均包含 Node.js/npm。内置 Agent 的 `run_command` 独立于编码代理插件；在机器人配置的命令白名单旁点「允许 Node.js 执行」，保存后只增加并去重 `node`，保留其它命令、`*` 和原有文件写入、网络设置。按钮不负责安装，实际是否安装以能力查询为准；创建脚本需允许文件写入，`npm` 和 shell 需另行明确配置。ZIP/tar/tar.gz 解压使用专用 `extract_archive`，由文件写入开关授权并限制在工作区，无需安装 `bash`、`tar` 或 `unzip`。详见[内置命令执行与 Node.js](docs/coding-agents.md#内置命令执行与-nodejs)。
-
-**手动下载：** 从 [Releases](https://github.com/SuInk/Diana/releases) 下载你平台的**完整包**（`.tar.gz` / `.zip`，含后端、编译好的 WebUI 和启动脚本），校验 `SHA256SUMS` 并解压后运行 `run.sh` / `run.bat`。无需单独部署 WebUI 或安装 Node.js。Release 不再单独提供裸二进制；自定义部署可从完整包提取程序和前端资源。
-
-**更新通道：** 在 WebUI 版本面板选择 `Release`（默认，仅正式版）、`Beta`（测试版、候选版和正式版）或 `Canary`（另含每次合并到 main 自动构建的版本）。设置持久保存，检查更新、自动下载与安装均使用所选通道；切回 Release 不会自动降级。版本命名、Docker 标签与发布步骤见 [更新通道说明](docs/update-channels.md)。
-
-**包名迁移：** 新完整包统一命名为 `diana-<系统>-<架构>.tar.gz`（Windows 为 `.zip`），例如 `diana-macos-arm64.tar.gz`。仍只识别 `diana-webui-…` 包名的旧版控制台不能直接自更新到新包名版本，首次需重跑上方一键安装命令或手动安装完整包；新版安装器和自更新器仍兼容旧包名。包内可执行文件保持 `diana-webui` / `diana-webui.exe`，已有服务配置不必改名。
-
-**从源码：** 需要 Go 1.26+ 与 Node.js 22。
-
-```sh
-git clone https://github.com/SuInk/Diana.git && cd Diana
-cd frontend && npm ci && npm run build && cd ..
-go build -o dist/diana-webui ./cmd/webui
-./dist/diana-webui
-```
-
-更多部署形态（systemd、交叉编译、无人值守预置配置）见[部署文档](https://suink.github.io/Diana/deploy.html)。
-
-</details>
 
 ## 支持的平台
 

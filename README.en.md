@@ -66,27 +66,6 @@ That's it. No reply? The event center tells you why; `diana doctor` checks servi
 > [!TIP]
 > **Can't open the console from another computer?** By default only this machine can connect. Rerun the install command with `-s -- --host 0.0.0.0` appended (Windows: `-BindHost 0.0.0.0`); see the [deployment guide](https://suink.github.io/Diana/en/deploy.html). Once exposed, put an HTTPS reverse proxy in front; don't leave the console open on the public internet.
 
-<details>
-<summary>Docker details / manual download / building from source</summary>
-
-**Docker:** Chromium and Noto CJK fonts are preinstalled. Load the supplied seccomp profile as shown above to allow Chromium to create its browser sandbox; privileged mode, SYS_ADMIN and disabling the browser sandbox are not required. Recreate existing containers with the new option. An image is published with every release (`ghcr.io/suink/diana:latest` plus version tags), alongside a slim variant (`ghcr.io/suink/diana:latest-slim`) without Chromium, CJK fonts, ffmpeg, yt-dlp and tesseract. To switch an existing deployment, change `DIANA_IMAGE=` in the deployment directory's `.env` and run `docker compose pull && docker compose up -d`. OneBot clients (SnowLuma recommended) connect to `ws://<docker-host>:18080/onebot/v11/ws`. To pre-seed configuration (unattended deployments), put your `config.yaml` at `data/config.yaml`. For source builds from a cloned repository, run `docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build`. Ordinary deployments upgrade by pulling the new image and recreating the container; with the optional Docker updater enabled, the console can request that operation. Only `data/` needs to be mounted; everything that must persist lives there: the database, the runtime log (`data/logs/diana.log`), the optional `config.yaml`, plugins, skills, MCP configuration, browser and coding-CLI logins, `ytb_cookies.txt` and update backups. On start the container hands it to its runtime user (UID 10001). The first start on a new image version backs up the database to `data/.diana-updates/backups/` before migrating it (at most 3 within 3 days). A config file already mounted at `/app/config.yaml` still takes precedence; to move it to `data/config.yaml`, also delete the `DIANA_CONFIG` line from an old Compose file. Once an old config's `log_path: logs/diana.log` is changed to `data/logs/diana.log` (or removed), the old `logs/` mount can be dropped. The `diana` command is available inside the container too: run `docker exec diana diana status` on the host (the first `diana` is the container name), and likewise for `logs`, `doctor`, `config check` and the other subcommands. `docker exec` defaults to root; the `diana` command drops to the service user (UID 10001) before running.
-
-**Manual download:** grab the **full package** for your platform (`.tar.gz` / `.zip`, includes the backend, prebuilt WebUI and launch scripts) from [Releases](https://github.com/SuInk/Diana/releases), verify `SHA256SUMS`, extract it, then run `run.sh` / `run.bat`. No separate WebUI deployment or Node.js installation is needed. Releases no longer provide standalone binaries; for custom deployments, extract the executable and frontend assets from the full package.
-
-**Package name migration:** new archives use `diana-<os>-<arch>.tar.gz` (`.zip` on Windows), for example `diana-macos-arm64.tar.gz`. Older consoles that only recognize `diana-webui-…` archives cannot self-update directly to the renamed packages. For the first upgrade, rerun the one-click installer above or manually install a full package. The new installer and updater still accept legacy archive names. Executables inside packages remain `diana-webui` / `diana-webui.exe`, so existing service configuration does not need renaming.
-
-**From source:** requires Go 1.26+ and Node.js 22.
-
-```sh
-git clone https://github.com/SuInk/Diana.git && cd Diana
-cd frontend && npm ci && npm run build && cd ..
-go build -o dist/diana-webui ./cmd/webui
-./dist/diana-webui
-```
-
-More deployment options (systemd, cross-compiling, unattended pre-seeded config) are covered in the [deployment docs](https://suink.github.io/Diana/deploy.html).
-
-</details>
 
 ## Supported platforms
 
