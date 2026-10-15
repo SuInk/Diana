@@ -398,7 +398,7 @@
               <template #platform>
                 <label class="resolver-platform-name">
                   <input type="checkbox" :checked="resolverPlatformEnabled(platform.value)" :disabled="savingSettings" @change="toggleResolverPlatform(platform.value, $event)" />
-                  <span class="resolver-checkmark" aria-hidden="true">{{ resolverPlatformEnabled(platform.value) ? "✓" : "○" }}</span><span>{{ platform.name }}</span>
+                  <span>{{ platform.name }}</span>
                 </label>
               </template>
             </ResolverCookieEditor>
@@ -406,7 +406,7 @@
               <div class="model-chip resolver-chip" @click="toggleResolverChip" :class="[platform.credential ? `resolver-status-${resolverRowStatus(platform.credential.key).color || 'neutral'}` : '', { 'is-enabled': resolverPlatformEnabled(platform.value) }]">
                 <label class="resolver-platform-name">
                   <input type="checkbox" :checked="resolverPlatformEnabled(platform.value)" :disabled="savingSettings" @change="toggleResolverPlatform(platform.value, $event)" />
-                  <span class="resolver-checkmark" aria-hidden="true">{{ resolverPlatformEnabled(platform.value) ? "✓" : "○" }}</span><span>{{ platform.name }}</span>
+                  <span>{{ platform.name }}</span>
                 </label>
                 <template v-if="platform.credential">
                   <span class="resolver-health-dot" :class="resolverRowStatus(platform.credential.key).color" :title="resolverRowStatus(platform.credential.key).label" :aria-label="resolverRowStatus(platform.credential.key).label" role="status"></span>
@@ -1973,8 +1973,7 @@ useConfigurationRefresh(["bot"], reload);
 .resolver-platform-section > .hint { margin:6px 0 12px; }
 .resolver-platform-row { min-width:0; max-width:100%; }
 .resolver-platform-name { display:inline-flex; align-items:center; gap:6px; cursor:pointer; font-weight:500; font-size:13px; position:relative; }
-.resolver-platform-name input { position:absolute; width:1px; height:1px; opacity:0; }
-.resolver-platform-name:has(input:focus-visible) { outline:2px solid var(--accent); outline-offset:3px; border-radius:4px; }
-.resolver-checkmark { width:12px; text-align:center; }
+.resolver-platform-name input { width:15px; height:15px; margin:0; flex:0 0 15px; accent-color:var(--text-secondary); cursor:pointer; }
+.resolver-platform-name input:focus-visible { outline:2px solid var(--text-secondary); outline-offset:3px; }
 .resolver-status-legend { display:flex; gap:8px; flex-wrap:wrap; margin-top:10px; }
 </style>
