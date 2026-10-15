@@ -1995,7 +1995,7 @@ useConfigurationRefresh(["bot"], reload);
 .resolver-platform-row { min-width:0; max-width:100%; }
 .resolver-platform-name { display:inline-flex; align-items:center; gap:6px; cursor:pointer; font-weight:500; font-size:13px; position:relative; }
 .resolver-platform-name input { position:absolute; width:1px; height:1px; opacity:0; }
-.resolver-platform-name:focus-within { outline:2px solid var(--accent); outline-offset:3px; border-radius:4px; }
+.resolver-platform-name:has(input:focus-visible) { outline:2px solid var(--accent); outline-offset:3px; border-radius:4px; }
 .resolver-checkmark { width:12px; text-align:center; }
 .resolver-status-legend { display:flex; gap:8px; flex-wrap:wrap; margin-top:10px; }
 </style>
