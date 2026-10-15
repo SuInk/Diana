@@ -6768,7 +6768,8 @@ a.nav-action {
 .resolver-chip.resolver-status-ok { border-color:var(--ok); background:var(--ok-soft); }
 .resolver-chip.resolver-status-err { border-color:var(--err); background:var(--err-soft); }
 .resolver-chip.resolver-status-warn { border-color:var(--warn); }
-.resolver-chip:not(.is-enabled) { opacity:.45; }
+.resolver-chip:not(.is-enabled) { opacity:.65; filter:grayscale(1); background:var(--border); border-color:var(--border); color:var(--muted); }
+.resolver-chip:not(.is-enabled) .resolver-health-dot { background:var(--muted); }
 .resolver-chip.is-enabled { opacity:1; color:var(--text); }
 .resolver-health-dot { display:inline-block; width:7px; height:7px; flex:0 0 7px; border-radius:50%; background:var(--text-secondary); }
 .resolver-health-dot.ok { background:var(--ok); }
