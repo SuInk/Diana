@@ -680,7 +680,7 @@ func (r *Runtime) blockedGroupSendError(event MessageEvent) error {
 	}
 	return &outboundSendError{
 		GroupID:          groupID,
-		Cause:            fmt.Errorf("diana: sending to group %s is disabled: %s", groupID, reason),
+		Cause:            fmt.Errorf("%w: sending to group %s is disabled: %s", ErrDeliveryTargetDisabled, groupID, reason),
 		GroupUnavailable: true,
 	}
 }

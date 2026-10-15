@@ -1468,6 +1468,11 @@ func (r *Runtime) runClaimedRepositoryWatch(ctx context.Context, item Reminder) 
 	if err := r.storeRepositoryWatchProgress(item.ID, change.Snapshot, message, reference); err != nil {
 		return startedAt, repositoryWatchStageFailure(repositoryWatchFailureStageState, err)
 	}
+	// storeRepositoryWatchProgress 已经把这一轮正文落盘；把本地副本也对齐，下面的
+	// 扇出才能逐个记住成功目标。否则第二个目标失败时，下一轮会把第一个目标再发一遍。
+	item.PendingDelivery = message
+	item.PendingDeliveryReference = reference
+	item.PendingDeliveredTargets = nil
 	if err := r.sendRepositoryWatchChange(ctx, item, message, &change); err != nil {
 		return startedAt, repositoryWatchStageFailure(repositoryWatchFailureStageDelivery, err)
 	}
@@ -1542,10 +1547,18 @@ func (r *Runtime) sendRepositoryWatchChange(ctx context.Context, item Reminder, 
 	ctx = withSubscriptionPush(ctx, subscriptionPushRepositoryWatch)
 	anchors := decodeRepositoryWatchAnchors(item.WatchAnchorsJSON)
 	added := map[string]string{}
+	completed := make(map[string]bool, len(item.PendingDeliveredTargets))
+	for _, key := range item.PendingDeliveredTargets {
+		completed[key] = true
+	}
+	trackPending := strings.TrimSpace(item.PendingDelivery) != "" && strings.TrimSpace(item.PendingDelivery) == strings.TrimSpace(message)
 	var firstErr error
 	for _, target := range repositoryWatchDeliveryTargets(item) {
 		text := message
 		targetKey := messageEventDeliveryKey(target)
+		if trackPending && completed[targetKey] {
+			continue
+		}
 		if change != nil {
 			if replyID := repositoryWatchAnchorReplyID(anchors, targetKey, *change); replyID != "" {
 				// 借用回复标记通道:sendOutgoing 的标记解析会把它转成引用元数据。
@@ -1567,6 +1580,24 @@ func (r *Runtime) sendRepositoryWatchChange(ctx context.Context, item Reminder, 
 			for key, id := range repositoryWatchAnchorEntries(targetKey, *change, messageIDs[0]) {
 				added[key] = id
 			}
+		}
+		if trackPending {
+			_, err := r.mutateRepositoryWatch(item.OwnerID, item.ID, func(saved *Reminder) error {
+				for _, delivered := range saved.PendingDeliveredTargets {
+					if delivered == targetKey {
+						return nil
+					}
+				}
+				saved.PendingDeliveredTargets = append(saved.PendingDeliveredTargets, targetKey)
+				return nil
+			})
+			if err != nil {
+				if firstErr == nil {
+					firstErr = err
+				}
+				continue
+			}
+			completed[targetKey] = true
 		}
 	}
 	if len(added) > 0 {
@@ -2125,6 +2156,7 @@ func (r *Runtime) storeRepositoryWatchProgress(id string, snapshot repositoryWat
 		}
 		item.PendingDelivery = strings.TrimSpace(pending)
 		item.PendingDeliveryReference = strings.TrimSpace(reference)
+		item.PendingDeliveredTargets = nil
 		if item.PendingDelivery != "" {
 			item.PendingSince = time.Now()
 		} else {
@@ -2173,6 +2205,7 @@ func (r *Runtime) finishRecurringReminder(id string, startedAt time.Time, runErr
 			resetRecurringFailureStateAfterSuccess(&items[index])
 			items[index].PendingDelivery = ""
 			items[index].PendingDeliveryReference = ""
+			items[index].PendingDeliveredTargets = nil
 			items[index].PendingSince = time.Time{}
 			items[index].TriggerAt = nextRecurringTrigger(items[index], startedAt, time.Now())
 		}
