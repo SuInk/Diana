@@ -31,6 +31,30 @@ func TestSystemPromptStatesPerReplyToolBudget(t *testing.T) {
 	}
 }
 
+func TestSystemPromptExplicitlyTriggersParallelSubtasks(t *testing.T) {
+	runner, err := NewRunner(&scriptedClient{}, Config{MaxSteps: 8}, NewToolRegistry(
+		&countingTool{name: "web_search"},
+		&countingTool{name: "subtask"},
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+	prompt := runner.systemPrompt()
+	for _, want := range []string{"两个及以上互不依赖", "一次调用 subtask", "tasks", "mode=search", "不要由主 Agent 按方向连续串行调用 web_search"} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("subtask trigger rule missing %q: %s", want, prompt)
+		}
+	}
+
+	withoutSubtask, err := NewRunner(&scriptedClient{}, Config{MaxSteps: 8}, NewToolRegistry(&countingTool{name: "web_search"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prompt := withoutSubtask.systemPrompt(); strings.Contains(prompt, "一次调用 subtask") {
+		t.Fatalf("subtask trigger rule leaked into a registry without the tool: %s", prompt)
+	}
+}
+
 type parallelToolClient struct {
 	requests []llm.GenerateRequest
 }

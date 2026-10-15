@@ -1102,6 +1102,9 @@ func (r *Runner) systemPrompt() string {
 	// 工具」,模型把「轮」理解成「用户每发一条消息」,于是每调一次工具就收口,
 	// 让用户发「继续」才肯调下一次——多步任务永远走不完。预算写成具体数字。
 	rules := []string{fmt.Sprintf("- 互不依赖的只读检索（web_search、browser_render）可以在同一步一起发出，会并行执行，结果按你发出的顺序返回；其他工具（发消息、写入、生成、改设置等）每步只发一个，看到结果再发下一个，后一步依赖前一步结果时也要分步。agent_finalize 单独放在最后一步，不要和检索同时发。这一条回复内你最多可调用 %d 次工具（并行的每个调用各算一次）。预算没用完就不要停下来向用户要求「继续」,直接接着调用,直到任务完成或预算耗尽。", r.cfg.MaxSteps)}
+	if hasTool("subtask") {
+		rules = append(rules, "- 调研包含两个及以上互不依赖、可分别核实的信息方向时，优先一次调用 subtask，把各方向作为 tasks 批量提交并用 mode=search 并行调查，再综合 Worker 结果；不要由主 Agent 按方向连续串行调用 web_search。只有单一信息缺口、后一步依赖前一步结果，或任务必须使用 subtask 没有的权限与上下文时，才留在主 Agent 里直接查。")
+	}
 	if hasTool("read_skill") {
 		// 条件只看工具在不在,不看当前有几个 skill:按 len(Skills()) 判定会让这一行
 		// 随会话开关的 skill 出现和消失,整条系统提示词的前缀缓存跟着断。
