@@ -70,6 +70,8 @@ type rssWatchItem struct {
 	Author      string    `json:"author,omitempty"`
 	Content     string    `json:"content,omitempty"`
 	PublishedAt time.Time `json:"published_at,omitempty"`
+	// Images 是条目自带的配图地址，只给推送时附图用，不进判断提示词。
+	Images []string `json:"-"`
 }
 
 type parsedFeed struct {
@@ -88,7 +90,7 @@ func (p *RSSWatchPlugin) Manifest() PluginManifest {
 	return PluginManifest{
 		ID:            rssWatchPluginID,
 		Name:          "RSS 订阅",
-		Version:       "0.2.4",
+		Version:       "0.2.5",
 		Description:   "订阅 RSS/Atom 或指定 X (Twitter) 用户，一条订阅可以同时盯多个账号或 Feed 并共用一套规则；发现新内容后由 LLM 判断是否需要通知，并生成实际回复。",
 		Official:      true,
 		BuiltIn:       true,
@@ -382,7 +384,7 @@ func looksLikeJSONDocument(body []byte) bool {
 }
 
 // twitterStatusesResponse 是 FxTwitter /2/profile/{handle}/statuses 的响应。
-// 只取订阅判断真正用得上的字段，其余（互动数、媒体、引用等）忽略。
+// 只取订阅判断和推送附图用得上的字段，其余（互动数、引用等）忽略。
 type twitterStatusesResponse struct {
 	Code    int `json:"code"`
 	Results []struct {
@@ -399,6 +401,11 @@ type twitterStatusesResponse struct {
 			Name       string `json:"name"`
 			ScreenName string `json:"screen_name"`
 		} `json:"author"`
+		Media struct {
+			Photos []struct {
+				URL string `json:"url"`
+			} `json:"photos"`
+		} `json:"media"`
 	} `json:"results"`
 }
 
@@ -449,6 +456,12 @@ func parseTwitterStatusesFeed(body []byte) (parsedFeed, error) {
 		if handle := strings.TrimSpace(entry.Author.ScreenName); handle != "" && author == "" {
 			author = "@" + handle
 		}
+		var images []string
+		for _, photo := range entry.Media.Photos {
+			if photoURL := strings.TrimSpace(photo.URL); photoURL != "" {
+				images = append(images, photoURL)
+			}
+		}
 		feed.Items = append(feed.Items, rssWatchItem{
 			ID:          id,
 			Title:       truncateRunes(text, 120),
@@ -456,6 +469,7 @@ func parseTwitterStatusesFeed(body []byte) (parsedFeed, error) {
 			Author:      author,
 			Content:     text,
 			PublishedAt: published,
+			Images:      images,
 		})
 	}
 	return feed, nil

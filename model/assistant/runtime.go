@@ -8403,7 +8403,7 @@ func (r *Runtime) checkRSSWatchSource(ctx context.Context, item Reminder, source
 	if reply == "" {
 		return "", fmt.Errorf("RSS 判断器要求通知，但回复内容为空")
 	}
-	return rssWatchNoticeHeader(*source, change.FeedName) + "\n" + reply, nil
+	return rssWatchNoticeHeader(*source, change.FeedName) + "\n" + reply + rssWatchReplyImages(reply, change.Items), nil
 }
 
 // rssWatchNoticeHeader 拼通知抬头：这条推送是哪个平台、哪个号来的。
