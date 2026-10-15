@@ -38,6 +38,31 @@ func TestResolverCookieFileEditor(t *testing.T) {
 	if rec.Code != 200 || strings.Contains(rec.Body.String(), "test-cookie-secret") {
 		t.Fatal(rec.Code, rec.Body.String())
 	}
+	// Draft checks expose only counts and never activate or overwrite a file.
+	check := call("/check", map[string]any{"content": content})
+	if check.Code != 200 || strings.Contains(check.Body.String(), "test-cookie-secret") || !strings.Contains(check.Body.String(), `"youtube_count":1`) {
+		t.Fatal(check.Code, check.Body.String())
+	}
+	draft := "\ufeff\r\n# HTTP Cookie File\r\n\r\n#HttpOnly_.youtube.com\tTRUE\t/\tTRUE\t1\tSID\t  keep spaces  \r\n.youtube.com.evil.example\tFALSE\t/\tFALSE\t0\tother\tvalue\r\n"
+	formatted := call("/check", map[string]any{"content": draft, "format": true})
+	var result struct {
+		Content string `json:"content"`
+		Count   int    `json:"count"`
+		YouTube int    `json:"youtube_count"`
+		Expired int    `json:"expired_count"`
+	}
+	if formatted.Code != 200 || json.Unmarshal(formatted.Body.Bytes(), &result) != nil {
+		t.Fatal(formatted.Code, formatted.Body.String())
+	}
+	if result.Count != 2 || result.YouTube != 1 || result.Expired != 1 || !strings.Contains(result.Content, "#HttpOnly_.youtube.com\tTRUE\t/\tTRUE\t1\tSID\t  keep spaces  \n") || !strings.HasPrefix(result.Content, "# Netscape HTTP Cookie File\n") {
+		t.Fatalf("unexpected draft result: count=%d youtube=%d expired=%d", result.Count, result.YouTube, result.Expired)
+	}
+	if again := formatResolverCookies(result.Content); again != result.Content {
+		t.Fatal("formatting is not idempotent")
+	}
+	if bad := call("/check", map[string]any{"content": "SID=secret", "format": true}); bad.Code != 400 {
+		t.Fatal("guessed missing Netscape metadata")
+	}
 	path, _ := handler.resolverCookieFilePath()
 	info, err := os.Stat(path)
 	if err != nil {

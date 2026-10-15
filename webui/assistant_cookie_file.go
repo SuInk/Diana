@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/SuInk/diana/model/assistant"
 	"github.com/SuInk/diana/model/storage"
@@ -162,4 +163,67 @@ func (h *BotHandler) saveResolverCookieFile(c *gin.Context) {
 	h.persistState()
 	recordRequestOperation(c, h.logs, "resolver_cookie_file", "已更新托管 Cookie 文件", assistant.ResolverPluginID, nil)
 	c.JSON(200, gin.H{"path": path})
+}
+
+// Checking and formatting are draft operations: neither writes a file nor changes settings.
+func (h *BotHandler) checkResolverCookieFile(c *gin.Context) {
+	c.Header("Cache-Control", "no-store")
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 2*resolverCookieFileLimit)
+	var payload struct {
+		Content string `json:"content"`
+		Format  bool   `json:"format"`
+	}
+	if err := c.ShouldBindJSON(&payload); err != nil || len(payload.Content) > resolverCookieFileLimit {
+		c.JSON(400, gin.H{"error": "Cookie 请求无效或超过 1 MiB"})
+		return
+	}
+	content := payload.Content
+	if payload.Format {
+		content = formatResolverCookies(content)
+	}
+	if err := validateResolverCookieContent(content); err != nil {
+		c.JSON(400, gin.H{"error": err.Error()})
+		return
+	}
+	count, youtube, expired := 0, 0, 0
+	now := time.Now().Unix()
+	for _, line := range strings.Split(content, "\n") {
+		line = strings.TrimSuffix(line, "\r")
+		if strings.TrimSpace(line) == "" || strings.HasPrefix(line, "#") && !strings.HasPrefix(line, "#HttpOnly_") {
+			continue
+		}
+		fields := strings.Split(strings.TrimPrefix(line, "#HttpOnly_"), "\t")
+		count++
+		domain := strings.TrimPrefix(strings.ToLower(fields[0]), ".")
+		if domain == "youtube.com" || strings.HasSuffix(domain, ".youtube.com") {
+			youtube++
+		}
+		expiry, _ := strconv.ParseUint(fields[4], 10, 64)
+		if expiry > 0 && expiry <= uint64(now) {
+			expired++
+		}
+	}
+	result := gin.H{"count": count, "youtube_count": youtube, "expired_count": expired}
+	if payload.Format {
+		result["content"] = content
+	}
+	c.JSON(200, result)
+}
+
+// Normalize only file framing. Cookie values, tabs and HttpOnly entries are untouched.
+func formatResolverCookies(content string) string {
+	content = strings.TrimPrefix(content, "\ufeff")
+	content = strings.ReplaceAll(strings.ReplaceAll(content, "\r\n", "\n"), "\r", "\n")
+	lines := strings.Split(content, "\n")
+	var out []string
+	for _, line := range lines {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		if len(out) == 0 && (line == "# HTTP Cookie File" || line == "# Netscape HTTP Cookie File") {
+			line = "# Netscape HTTP Cookie File"
+		}
+		out = append(out, line)
+	}
+	return strings.Join(out, "\n") + "\n"
 }

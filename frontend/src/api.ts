@@ -4622,3 +4622,7 @@ export function readResolverCookieFile(): Promise<{ content: string; configured:
 export function saveResolverCookieFile(content: string): Promise<{ path: string }> {
  return requestJSON("/api/assistant/plugins/resolver/cookie-file", { method: "POST", body: JSON.stringify({ content }) });
 }
+
+export function checkResolverCookieFile(content: string, format = false): Promise<{ count: number; youtube_count: number; expired_count: number; content?: string }> {
+ return requestJSON("/api/assistant/plugins/resolver/cookie-file/check", { method: "POST", body: JSON.stringify({ content, format }) });
+}
