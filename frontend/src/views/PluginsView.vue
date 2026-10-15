@@ -410,7 +410,7 @@
                   <span class="badge" :class="resolverRowStatus(platform.credential.key).color" role="status">{{ resolverRowStatus(platform.credential.key).label }}</span>
                   <div class="resolver-platform-actions">
                     <button class="btn small" type="button" :data-resolver-test="platform.credential.key" :disabled="savingSettings || !resolverCanTest(platform.credential.key)" @click="resolverChecks.test(platform.credential.key)">{{ resolverChecks.states[platform.credential.key].phase === 'checking' ? '检测中…' : '检测' }}</button>
-                    <button class="btn small" type="button" data-settings-action :disabled="savingSettings" @click="focusResolverCredential(platform.credential.key)">编辑</button>
+                    <button class="btn small" type="button" data-settings-action :disabled="savingSettings"  :aria-expanded="editingResolverPlatform === platform.value" @click="editingResolverPlatform = editingResolverPlatform === platform.value ? '' : platform.value">{{ editingResolverPlatform === platform.value ? '收起' : '编辑' }}</button>
                   </div>
                 </template>
                 <template v-else>
@@ -418,7 +418,7 @@
                   <span class="hint resolver-platform-actions">无需单独配置 Cookie</span>
                 </template>
               </div>
-              <div v-if="platform.credential" class="resolver-platform-editor">
+              <div v-if="platform.credential && editingResolverPlatform === platform.value" class="resolver-platform-editor">
                 <PluginSettingField :spec="platform.credential.spec" :form="settingsForm" :clearing="clearSecrets.includes(platform.credential.key)" :secret-configured="secretConfigured(platform.credential.key)" :secret-placeholder="secretPlaceholder(platform.credential.key)" @toggle-clear="toggleClearSecret" @blur="onResolverBlur" />
                 <p v-if="String(settingsForm[platform.credential.key] || '').trim()" class="hint">当前为未保存草稿，检测通过后仍需点击底部保存。</p>
                 <p v-if="resolverCheckMessage(platform.credential.key)" class="hint" role="status">{{ resolverCheckMessage(platform.credential.key) }}</p>
@@ -1015,9 +1015,7 @@ async function testMusicSettings(): Promise<void> {
 
 const isResolverSettings = computed(() => settingsTarget.value?.manifest.id === resolverPluginID);
 const resolverGroups = computed(() => groupResolverSettings(settingsSpecs.value));
-function focusResolverCredential(key: string) {
-  document.getElementById(`setting-${key}`)?.focus();
-}
+const editingResolverPlatform = ref("");
 const resolverPlatformRows = computed(() => (resolverGroups.value.platforms[0]?.options ?? []).map(option => ({
   ...option,
   name: option.label.replace("（可下载媒体）", ""),
@@ -1477,6 +1475,7 @@ function openSettings(plugin: PluginState): void {
     form[spec.key] = Array.isArray(value) ? [...value] : value;
   }
   settingsForm.value = form;
+  editingResolverPlatform.value = "";
   const publishForm: Record<string, any> = {};
   const publish = plugins.value.find((candidate) => candidate.manifest.id === repositoryPublishPluginID);
   for (const spec of publish?.manifest.settings ?? []) {
