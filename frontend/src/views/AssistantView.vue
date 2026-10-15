@@ -930,6 +930,14 @@
             </div>
             <div class="card-body form-grid">
               <div class="field">
+                <label class="switch">
+                  <input v-model="form.markdown_to_plain" type="checkbox" />
+                  <span class="track" aria-hidden="true"></span>
+                  <span class="switch-label">Markdown 转纯文本</span>
+                </label>
+                <span class="hint">{{ richTextPlatform ? "当前平台能渲染 Markdown，默认保留标记；开启后改为发送纯文本。" : "当前平台只发纯文本，Markdown 标记会以字面量出现，所以默认转成纯文本。" }}</span>
+              </div>
+              <div class="field">
                 <label for="bot-maxinput">单次输入上限（字符）</label>
                 <input id="bot-maxinput" v-model.number="form.max_input_chars" class="input" inputmode="numeric" />
               </div>
@@ -1031,14 +1039,6 @@
                 <label for="bot-reply-merge-confidence">合并回复置信度阈值（%）</label>
                 <input id="bot-reply-merge-confidence" v-model.number="form.reply_merge_confidence_percent" class="input" type="number" min="1" max="100" step="1" inputmode="numeric" placeholder="75" />
                 <span class="hint">同一用户的补充、纠正或重复消息达到此置信度时，并入正在生成的回复。越低越容易合并；留空默认 75%。独立问题和无法确定的消息不会合并。</span>
-              </div>
-              <div class="field">
-                <label class="switch">
-                  <input v-model="form.markdown_to_plain" type="checkbox" />
-                  <span class="track" aria-hidden="true"></span>
-                  <span class="switch-label">Markdown 转纯文本</span>
-                </label>
-                <span class="hint">{{ richTextPlatform ? "当前平台能渲染 Markdown，默认保留标记；开启后改为发送纯文本。" : "当前平台只发纯文本，Markdown 标记会以字面量出现，所以默认转成纯文本。" }}</span>
               </div>
             </div>
           </section>
