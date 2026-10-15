@@ -816,12 +816,76 @@ func (r *Runtime) burstChatMessage(event MessageEvent, text string) bool {
 	if r.statusCommandActive(event, text) {
 		return false
 	}
+	if r.repositoryApprovalCodePending(event, text) {
+		return false
+	}
 	for _, candidate := range r.burstCommandTexts(event, text) {
 		if r.shouldHandleResolver(event, candidate) || r.shouldHandlePlugin(event, candidate) {
 			return false
 		}
 	}
 	return !r.wouldHandleOwnerCommand(event, text)
+}
+
+// repositoryApprovalCodePending 判断消息里是否带着本会话一份待确认的 GitHub 草稿码。
+//
+// 草稿确认不是文本插件指令，也不是主人命令，而是模型工具根据用户原样回复的六位码
+// 执行。若把两条连续确认码当成普通聊天合并，后一轮只可能调用一次工具，前一份草稿
+// 就会永远停在 pending。这里只把已存在、未过期、属于当前机器人的确认码排除出连发
+// 合并；不执行写操作，也不靠任意六位字符串猜用户意图。
+func (r *Runtime) repositoryApprovalCodePending(event MessageEvent, text string) bool {
+	text = strings.ToLower(strings.TrimSpace(text))
+	if !containsStandaloneHexCode(text, repositoryIssueConfirmationCodeLength) || r == nil || r.plugins == nil {
+		return false
+	}
+	r.plugins.mu.RLock()
+	plugin, _ := r.plugins.catalog[repositoryPublishPluginID].(*RepositoryPublishPlugin)
+	r.plugins.mu.RUnlock()
+	if plugin == nil {
+		return false
+	}
+	scope := strings.TrimSpace(event.GroupID)
+	if event.Kind != EventKindGroup {
+		if strings.TrimSpace(event.UserID) == "" {
+			return false
+		}
+		scope = "private:" + strings.TrimSpace(event.UserID)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	drafts, err := plugin.listDrafts(ctx, scope, "pending")
+	if err != nil {
+		return false
+	}
+	now := time.Now()
+	for _, draft := range drafts {
+		if draft.Expired(now) || !r.sameProfileAsEvent(draft.ProfileID, event) {
+			continue
+		}
+		if containsStandaloneCode(text, strings.ToLower(draftConfirmationCode(draft))) {
+			return true
+		}
+	}
+	return false
+}
+
+func containsStandaloneHexCode(text string, length int) bool {
+	if length <= 0 {
+		return false
+	}
+	run := 0
+	for index := 0; index <= len(text); index++ {
+		hex := index < len(text) && ((text[index] >= '0' && text[index] <= '9') || (text[index] >= 'a' && text[index] <= 'f'))
+		if hex {
+			run++
+			continue
+		}
+		if run == length {
+			return true
+		}
+		run = 0
+	}
+	return false
 }
 
 // burstCommandTexts 是判断「是不是指令」时要看的几种写法，去重。

@@ -104,6 +104,43 @@ func TestSenderBurstNeverAbsorbsOwnerCommands(t *testing.T) {
 	}
 }
 
+// 两份 GitHub 草稿的确认码即使紧挨着发，也必须各自进入一轮工具调用；把第一条并到
+// 第二条会让模型只处理其中一份，留下一个永远 pending 的草稿。
+func TestSenderBurstNeverMergesRepositoryApprovalCodes(t *testing.T) {
+	provider := &burstReplyProvider{}
+	plugin := NewRepositoryPublishPlugin(nil)
+	disabled := false
+	runtime := NewRuntime(BotConfig{BotAccount: "42", BotReplyLoopDetectionEnabled: &disabled},
+		&recordingChannel{}, NewPluginManager(plugin), nil, nil, nil, func() (LLMProvider, error) { return provider, nil })
+	for _, code := range []string{"a1b2c3", "d4e5f6"} {
+		if _, err := plugin.saveDraft(context.Background(), repositoryIssueDraft{
+			GroupID: "123456", Repository: "acme/demo", ConfirmationCode: code,
+		}); err != nil {
+			t.Fatalf("save draft %s: %v", code, err)
+		}
+	}
+	first := directedGroupMessage("20224", "10001", "a1b2c3")
+	second := directedGroupMessage("20225", "10001", "d4e5f6")
+	first.Time, second.Time = 1_800_000_000, 1_800_000_002
+	arriveTogether(runtime, first, second)
+
+	if !runtime.repositoryApprovalCodePending(first, "a1b2c3") || !runtime.repositoryApprovalCodePending(second, "d4e5f6") {
+		t.Fatal("both pending draft codes should be recognised")
+	}
+	if runtime.burstChatMessage(first, "a1b2c3") || runtime.burstChatMessage(second, "d4e5f6") {
+		t.Fatal("approval codes must not enter chat burst merging")
+	}
+	if runtime.repositoryApprovalCodePending(first, "xa1b2c3z") || runtime.repositoryApprovalCodePending(first, "123456") {
+		t.Fatal("an unknown or embedded hex sequence must remain ordinary chat")
+	}
+	if carry := runtime.claimCarryOver(context.Background(), second, runtime.contextHistory(second)); len(carry) != 0 {
+		t.Fatalf("later approval unexpectedly absorbed %d earlier message(s)", len(carry))
+	}
+	if _, taken := runtime.senderTurnSupersededBy(first); taken {
+		t.Fatal("the first approval was taken over by the second")
+	}
+}
+
 // sideEffectProvider 在图那一轮的生成里标记「已经写到外部系统」，文字那一轮按测试的
 // 安排卡住或出错。
 type sideEffectProvider struct {
