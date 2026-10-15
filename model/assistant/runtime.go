@@ -7222,10 +7222,9 @@ func (r *Runtime) sendNotification(ctx context.Context, event MessageEvent, text
 }
 
 func (r *Runtime) sendNotificationWithIDs(ctx context.Context, event MessageEvent, text string) ([]string, error) {
-	// 和 sendSubscriberNotice 同一个道理：停用的机器人没有出站通道，发过去只会
-	// 变成一次注定失败的投递。
-	if r.profileDisabled(event.ProfileID) {
-		return nil, fmt.Errorf("%w: %s", ErrDeliveryTargetDisabled, strings.TrimSpace(event.ProfileID))
+	// 和 sendSubscriberNotice 同一个道理：停用的机器人或群都不是可投递目标。
+	if err := r.deliveryTargetDisabledError(event); err != nil {
+		return nil, err
 	}
 	// 订阅推送是主动找人，知道订阅者是谁就 @ 上：这条动态是他订的，不点名的话
 	// 群里刷过去就错过了。目标是纯群（没有记订阅人）时 MentionUserID 为空，自然不 @。
@@ -8812,6 +8811,44 @@ func (r *Runtime) isSelfMessage(event MessageEvent) bool {
 func (r *Runtime) isGroupDisabled(botProfileID, groupID string) bool {
 	disabled, _ := r.groupDisabledMode(botProfileID, groupID)
 	return disabled
+}
+
+// snapshotGroupDisabledChecker 复制机器人配置和群存储引用，返回一个不再获取 Runtime.mu
+// 的判定器。提醒调度持有 reminderMu 扫描任务时用它，避免和配置更新形成锁顺序反转。
+func (r *Runtime) snapshotGroupDisabledChecker() func(string, string) bool {
+	r.mu.RLock()
+	profiles := make(map[string]BotConfig, len(r.profileConfigs))
+	for id, profile := range r.profileConfigs {
+		profile.DisabledGroups = append([]string(nil), profile.DisabledGroups...)
+		profiles[id] = profile
+	}
+	store := r.groupConfigs
+	r.mu.RUnlock()
+
+	return func(profileID, groupID string) bool {
+		profileID, groupID = strings.TrimSpace(profileID), strings.TrimSpace(groupID)
+		cfg, ok := profiles[profileID]
+		if !ok && len(profiles) == 1 {
+			for _, only := range profiles {
+				cfg, ok = only, true
+			}
+		}
+		if !ok {
+			cfg = DefaultBotConfig()
+		}
+		cfg = cfg.WithDefaults()
+		disabled := !cfg.GroupAdmission.NewGroupEnabled()
+		if store != nil {
+			if groupCfg, exists := store.ConfigForGroup(profileID, groupID); exists {
+				groupCfg = groupCfg.WithDefaults(groupID, cfg)
+				disabled = !groupCfg.Enabled
+			}
+		}
+		if slices.Contains(cfg.DisabledGroups, groupID) {
+			disabled = true
+		}
+		return disabled
+	}
 }
 
 // groupDisabledMode 返回群是否停用以及停用档位。档位先看群配置里的覆盖，没填就

@@ -18,6 +18,20 @@ func runtimeWithDisabledProfile(t *testing.T, disabled string) *Runtime {
 	return runtime
 }
 
+func runtimeWithDisabledGroup(t *testing.T, groupID string) *Runtime {
+	t.Helper()
+	base := BotConfig{ID: "qq-bot", Enabled: true}
+	groups := &testWritableGroupConfigStore{}
+	if _, err := groups.SaveGroupConfig(GroupConfig{
+		BotProfileID: "qq-bot", GroupID: groupID, Enabled: false, EnabledSet: true,
+	}, base); err != nil {
+		t.Fatal(err)
+	}
+	runtime := NewRuntime(base, &recordingChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	runtime.SetGroupConfigStore(groups)
+	return runtime
+}
+
 // 停用的机器人没有出站通道，往它的会话投递注定失败。这种失败要能和「上游抖了一下」
 // 分开：前者重试多少次都不会好，后者才该重试。
 func TestSubscriberNoticeReportsDisabledProfile(t *testing.T) {
@@ -41,6 +55,26 @@ func TestNotificationSenderReportsDisabledProfile(t *testing.T) {
 	}
 }
 
+func TestSubscriberNoticeReportsDisabledGroup(t *testing.T) {
+	runtime := runtimeWithDisabledGroup(t, "20005")
+	err := runtime.sendSubscriberNotice(context.Background(), MessageEvent{
+		ProfileID: "qq-bot", Kind: EventKindGroup, GroupID: "20005",
+	}, "新推文")
+	if !errors.Is(err, ErrDeliveryTargetDisabled) {
+		t.Fatalf("err = %v，应当是可跳过的「群已停用」", err)
+	}
+}
+
+func TestNotificationSenderReportsDisabledGroup(t *testing.T) {
+	runtime := runtimeWithDisabledGroup(t, "20005")
+	_, err := runtime.sendNotificationWithIDs(context.Background(), MessageEvent{
+		ProfileID: "qq-bot", Kind: EventKindGroup, GroupID: "20005",
+	}, "仓库有新提交")
+	if !errors.Is(err, ErrDeliveryTargetDisabled) {
+		t.Fatalf("err = %v，应当是可跳过的「群已停用」", err)
+	}
+}
+
 // 一条订阅同时投 QQ 群和 Telegram 群、其中一台停用时：停用那份跳过，整条订阅
 // 不该被判成失败——线上就是这个形态，连续失败 6 次还在每 15 分钟重试。
 func TestRSSFanoutSkipsDisabledTargetWithoutFailing(t *testing.T) {
@@ -55,6 +89,33 @@ func TestRSSFanoutSkipsDisabledTargetWithoutFailing(t *testing.T) {
 	err := runtime.sendRSSWatchTargets(context.Background(), item, "新推文")
 	if errors.Is(err, ErrDeliveryTargetDisabled) {
 		t.Fatalf("停用目标不该把整条订阅判成失败：%v", err)
+	}
+}
+
+func TestRSSFanoutSkipsDisabledGroupWithoutFailing(t *testing.T) {
+	channel := &recordingChannel{}
+	base := BotConfig{ID: "qq-bot", Enabled: true}
+	groups := &testWritableGroupConfigStore{}
+	if _, err := groups.SaveGroupConfig(GroupConfig{
+		BotProfileID: "qq-bot", GroupID: "20005", Enabled: false, EnabledSet: true,
+	}, base); err != nil {
+		t.Fatal(err)
+	}
+	runtime := NewRuntime(base, channel, NewPluginManager(), nil, nil, nil, nil)
+	runtime.SetGroupConfigStore(groups)
+	item := Reminder{
+		ID: "watch-1", OwnerID: "owner", ProfileID: "qq-bot", Kind: ReminderKindRSSWatch,
+		NotificationTargetsJSON: encodeReminderDeliveryTargets([]ReminderDeliveryTarget{
+			{ProfileID: "qq-bot", Platform: PlatformOneBotV11, GroupID: "20005"},
+			{ProfileID: "qq-bot", Platform: PlatformOneBotV11, GroupID: "20006"},
+		}),
+	}
+	if err := runtime.sendRSSWatchTargets(context.Background(), item, "新推文"); err != nil {
+		t.Fatal(err)
+	}
+	sent := channel.sentSnapshot()
+	if len(sent) != 1 || sent[0].GroupID != "20006" {
+		t.Fatalf("sent = %+v，应该只投递到仍启用的群", sent)
 	}
 }
 

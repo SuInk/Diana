@@ -144,7 +144,7 @@
                 <span class="mono">{{ group.group_id }}</span>
               </div>
             </div>
-            <label class="switch" :title="group.enabled ? '在本群启用' : '在本群停用'">
+            <label class="switch" :title="group.enabled ? '本群允许回复、主动发送和任务' : '本群已暂停回复、主动发送和任务'">
               <input
                 type="checkbox"
                 :checked="group.enabled"
@@ -191,7 +191,7 @@
             {{ group.system_prompt ? truncate(group.system_prompt, 68) : group.configured ? "沿用全局人设与默认行为。" : "尚未设置群级覆盖，当前跟随全局配置。" }}
           </p>
           <div class="group-card-foot">
-            <span class="muted">{{ group.enabled ? "机器人已启用" : disabledModeFor(group) === "observe" ? "已停用 · 静默旁观" : "已停用 · 彻底关闭" }}</span>
+            <span class="muted">{{ group.enabled ? "发送与任务已启用" : disabledModeFor(group) === "observe" ? "发送与任务已暂停 · 静默旁观" : "发送与任务已暂停 · 彻底关闭" }}</span>
             <div class="cluster" style="gap: 8px">
               <button v-if="group.configured" class="btn small ghost" type="button" title="删除群配置" aria-label="删除群配置" :disabled="deleting" @click="pendingDelete = group">
                 <Trash2 :size="14" aria-hidden="true" />

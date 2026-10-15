@@ -55,6 +55,91 @@ func TestClaimDueRemindersWithNextSkipsUnclaimable(t *testing.T) {
 	}
 }
 
+func TestClaimDueRemindersWithNextPausesDisabledGroupTasks(t *testing.T) {
+	now := time.Now()
+	store := &stubReminderStore{items: []Reminder{
+		{ID: "disabled-group", Kind: ReminderKindQuery, ProfileID: "bot", OwnerID: "owner", GroupID: "off", UserID: "member", Message: "生成早报", TriggerAt: now.Add(-time.Second), IntervalSeconds: 86400},
+		{ID: "enabled-group", Kind: ReminderKindMessage, ProfileID: "bot", OwnerID: "owner", GroupID: "on", UserID: "member", Message: "开会", TriggerAt: now.Add(-time.Second)},
+	}}
+	base := BotConfig{ID: "bot", Enabled: true}
+	groups := &testWritableGroupConfigStore{}
+	if _, err := groups.SaveGroupConfig(GroupConfig{
+		BotProfileID: "bot", GroupID: "off", Enabled: false, EnabledSet: true,
+	}, base); err != nil {
+		t.Fatal(err)
+	}
+	runtime := NewRuntime(base, nilChannel{}, NewPluginManager(), nil, store, nil, nil)
+	runtime.SetGroupConfigStore(groups)
+
+	due, _ := runtime.claimDueRemindersWithNext(now)
+	if len(due) != 1 || due[0].ID != "enabled-group" {
+		t.Fatalf("due = %+v，停用群的任务不应被认领", due)
+	}
+	if !store.items[0].LastRunAt.IsZero() || store.items[0].ConsecutiveFailures != 0 {
+		t.Fatalf("停用群任务状态被错误修改：%+v", store.items[0])
+	}
+}
+
+func TestClaimDueRemindersWithNextPausesSubscriptionWhenAllTargetsDisabled(t *testing.T) {
+	now := time.Now()
+	store := &stubReminderStore{items: []Reminder{
+		{
+			ID: "all-off", Kind: ReminderKindRSSWatch, ProfileID: "bot", OwnerID: "owner",
+			FeedURL: "https://example.test/feed", TriggerAt: now.Add(-time.Second), IntervalSeconds: 900,
+			NotificationTargetsJSON: encodeReminderDeliveryTargets([]ReminderDeliveryTarget{
+				{ProfileID: "bot", GroupID: "off-1"}, {ProfileID: "bot", GroupID: "off-2"},
+			}),
+		},
+		{
+			ID: "one-on", Kind: ReminderKindRSSWatch, ProfileID: "bot", OwnerID: "owner",
+			FeedURL: "https://example.test/other", TriggerAt: now.Add(-time.Second), IntervalSeconds: 900,
+			NotificationTargetsJSON: encodeReminderDeliveryTargets([]ReminderDeliveryTarget{
+				{ProfileID: "bot", GroupID: "off-1"}, {ProfileID: "bot", GroupID: "on"},
+			}),
+		},
+	}}
+	base := BotConfig{ID: "bot", Enabled: true}
+	groups := &testWritableGroupConfigStore{}
+	for _, groupID := range []string{"off-1", "off-2"} {
+		if _, err := groups.SaveGroupConfig(GroupConfig{
+			BotProfileID: "bot", GroupID: groupID, Enabled: false, EnabledSet: true,
+		}, base); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runtime := NewRuntime(base, nilChannel{}, NewPluginManager(), nil, store, nil, nil)
+	runtime.SetGroupConfigStore(groups)
+
+	due, _ := runtime.claimDueRemindersWithNext(now)
+	if len(due) != 1 || due[0].ID != "one-on" {
+		t.Fatalf("due = %+v，全部目标停用的订阅应暂停，仍有启用目标的订阅应运行", due)
+	}
+}
+
+func TestExecuteClaimedReminderStopsWhenGroupWasDisabledAfterClaim(t *testing.T) {
+	now := time.Now()
+	item := Reminder{
+		ID: "claimed", Kind: ReminderKindQuery, ProfileID: "bot", OwnerID: "owner",
+		GroupID: "off", UserID: "member", Message: "生成早报", TriggerAt: now.Add(-time.Second), IntervalSeconds: 86400,
+	}
+	store := &stubReminderStore{items: []Reminder{item}}
+	base := BotConfig{ID: "bot", Enabled: true}
+	groups := &testWritableGroupConfigStore{}
+	runtime := NewRuntime(base, &recordingChannel{}, NewPluginManager(), nil, store, nil, nil)
+	runtime.SetGroupConfigStore(groups)
+	if _, err := groups.SaveGroupConfig(GroupConfig{
+		BotProfileID: "bot", GroupID: "off", Enabled: false, EnabledSet: true,
+	}, base); err != nil {
+		t.Fatal(err)
+	}
+
+	runtime.executeClaimedReminder(context.Background(), item)
+	got := store.items[0]
+	if !got.LastRunAt.IsZero() || got.PendingDelivery != "" || got.ConsecutiveFailures != 0 {
+		t.Fatalf("停用发生在认领后仍修改了任务状态：%+v", got)
+	}
+}
+
 // 新建的提醒不用等轮询：保存时叫醒循环，睡到它的到期时间就发。
 func TestReminderLoopWakesOnSaveAndFiresOnTime(t *testing.T) {
 	store := &stubReminderStore{}

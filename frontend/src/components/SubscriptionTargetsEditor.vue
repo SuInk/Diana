@@ -41,14 +41,13 @@ function groupOptions(profile?: string) {
   if (!profile) return [];
   return (groupsByProfile[profile] ?? []).filter(g => g.joined).map(g => ({ value: g.group_id, label: g.group_name ? `${g.group_name}（${g.group_id}）` : g.group_id }));
 }
-// groupNotice 提醒目标群的状态和推送不一致的地方。推送只在整台机器人停用时拦截，
-// 群关着、或者群里单独关了这个插件，推送照样发到群里：不说一句，看起来像是
-// 「群关了就不会收到」。
+// groupNotice 提醒订阅目标当前会不会投递。群发送开关关闭后订阅也暂停；
+// 单独关插件只限制群内对话调用，不改变已配好的后台订阅。
 function groupNotice(target: RepositoryWatchTarget): string {
   if (target.destination !== 'group' || !target.profile_id || !target.group_id) return '';
   const group = (groupsByProfile[target.profile_id] ?? []).find(g => g.group_id === target.group_id);
   if (!group) return '';
-  if (!group.enabled) return '这个群已关闭，机器人不在群里回复，但订阅推送仍会发到这里。';
+  if (!group.enabled) return '这个群的发送开关已关闭，该目标的订阅推送已暂停。';
   if ((props.pluginIds ?? []).some(id => group.plugin_overrides?.[id] === false)) return '这个群单独关了本插件，群里对话用不了它，但订阅推送仍会发到这里。';
   return '';
 }

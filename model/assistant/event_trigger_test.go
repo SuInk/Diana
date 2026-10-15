@@ -67,6 +67,36 @@ func TestEventTriggerMatchesOnlyFreshEventsAfterCreation(t *testing.T) {
 	}
 }
 
+func TestClaimEventTriggersPausesTaskCreatedInDisabledGroup(t *testing.T) {
+	now := time.Now()
+	item := eventTriggerFixture(t, EventTrigger{
+		Event: eventTriggerEventMessage, UserIDs: []string{"30003"}, Action: eventTriggerActionMessage,
+		DeliverTo: eventTriggerDeliverOrigin, WatchAnywhere: true, ExpiresAt: now.Add(time.Hour),
+	}, now.Add(-time.Minute))
+	item.ProfileID = "bot"
+	item.GroupID = "off"
+	item.UserID = "owner"
+	store := &stubReminderStore{items: []Reminder{item}}
+	base := BotConfig{ID: "bot", Enabled: true}
+	groups := &testWritableGroupConfigStore{}
+	if _, err := groups.SaveGroupConfig(GroupConfig{
+		BotProfileID: "bot", GroupID: "off", Enabled: false, EnabledSet: true,
+	}, base); err != nil {
+		t.Fatal(err)
+	}
+	runtime := NewRuntime(base, nilChannel{}, NewPluginManager(), nil, store, nil, nil)
+	runtime.SetGroupConfigStore(groups)
+	event := MessageEvent{ProfileID: "bot", Kind: EventKindGroup, GroupID: "on", UserID: "30003", MessageID: "msg-1", Time: now.Unix()}
+
+	if claimed := runtime.claimEventTriggers(event, "来了", true, now); len(claimed) != 0 {
+		t.Fatalf("claimed = %+v，停用群创建的事件任务不应被点燃", claimed)
+	}
+	spec, ok := EventTriggerSpec(store.items[0])
+	if !ok || spec.FireCount != 0 || !store.items[0].LastRunAt.IsZero() {
+		t.Fatalf("停用群事件任务被错误记账：item=%+v spec=%+v", store.items[0], spec)
+	}
+}
+
 func TestEventTriggerKeywordPatternAndCooldown(t *testing.T) {
 	now := time.Now()
 	spec := EventTrigger{

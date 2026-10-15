@@ -290,6 +290,7 @@ func (r *Runtime) dispatchEventTriggers(ctx context.Context, event MessageEvent,
 func (r *Runtime) claimEventTriggers(event MessageEvent, text string, eventSessionSendable bool, now time.Time) []Reminder {
 	disabledProfiles := r.disabledProfileSet()
 	safeModeHolds := r.safeModeTaskFilter()
+	groupDisabled := r.snapshotGroupDisabledChecker()
 	r.reminderMu.Lock()
 	defer r.reminderMu.Unlock()
 	items := r.reminders.Reminders()
@@ -297,6 +298,12 @@ func (r *Runtime) claimEventTriggers(event MessageEvent, text string, eventSessi
 	for index := range items {
 		item := &items[index]
 		if !reminderIsEventTrigger(*item) || disabledProfiles[strings.TrimSpace(item.ProfileID)] {
+			continue
+		}
+		// 事件触发也是创建它的群的任务。群发送开关关闭后不点燃、
+		// 不记触发次数，重新开启后再继续匹配新事件。
+		source := reminderSourceEvent(*item)
+		if source.Kind == EventKindGroup && groupDisabled(source.ProfileID, source.GroupID) {
 			continue
 		}
 		spec, ok := decodeEventTrigger(item.EventTriggerJSON)

@@ -532,13 +532,29 @@ func nestedForwardPluginResponse(responses []PluginResponse) *PluginResponse {
 //
 // 走通知的分条而不是聊天的：这类推送是一条完整的事实——提醒原文、订阅摘要、
 // 「本次发送失败，将在 X 自动重试」——按句子拆开就成了半句一条，读的人得自己拼。
-// ErrDeliveryTargetDisabled 表示这个投递目标属于一台已停用的机器人。
+// ErrDeliveryTargetDisabled 表示这个主动投递目标已被配置停用：整台机器人停用，
+// 或目标群在这台机器人下停用。
 //
 // 它不是故障，是配置状态：停用是长期的，重试多少次都不会好。分出来单独一个错误
 // 是为了让上层的扇出能跳过这个目标而不是把整条订阅判成失败——一条订阅同时投 QQ
 // 群和 Telegram 群时，停用 Telegram 那台不该让 QQ 那份跟着反复重试、攒够次数还
 // 给主人发一条失败告警。
-var ErrDeliveryTargetDisabled = errors.New("diana: delivery target belongs to a disabled bot profile")
+var ErrDeliveryTargetDisabled = errors.New("diana: delivery target is disabled")
+
+// deliveryTargetDisabledError 把主动投递和聊天入口放在同一条群开关边界上。聊天消息
+// 在 admitsGroupScope 里拦；提醒、订阅和后台任务没有入站消息，必须在统一发送出口再判。
+// 私聊没有群开关，只受机器人档案开关影响。
+func (r *Runtime) deliveryTargetDisabledError(event MessageEvent) error {
+	profileID := strings.TrimSpace(event.ProfileID)
+	if r.profileDisabled(profileID) {
+		return fmt.Errorf("%w: bot profile %s", ErrDeliveryTargetDisabled, profileID)
+	}
+	groupID := strings.TrimSpace(event.GroupID)
+	if event.Kind == EventKindGroup && groupID != "" && r.isGroupDisabled(profileID, groupID) {
+		return fmt.Errorf("%w: group %s for bot profile %s", ErrDeliveryTargetDisabled, groupID, profileID)
+	}
+	return nil
+}
 
 // recordResolverForwardFallback 把「合并转发发不出去、改成逐条发」写进运行日志。
 // 这是群里突然刷屏的唯一来由，只打到终端的话在界面上根本查不到。
@@ -576,8 +592,8 @@ func (r *Runtime) recordResolverForwardFallback(ctx context.Context, event Messa
 func (r *Runtime) sendSubscriberNotice(ctx context.Context, event MessageEvent, text string) error {
 	// 所有「到点了主动找人」的投递都从这里过，判断放在这一个路口：RSS、仓库订阅、
 	// 定时查询、一次性提醒、编码任务回报、失败告警，谁都不用各自记得检查一遍。
-	if r.profileDisabled(event.ProfileID) {
-		return fmt.Errorf("%w: %s", ErrDeliveryTargetDisabled, strings.TrimSpace(event.ProfileID))
+	if err := r.deliveryTargetDisabledError(event); err != nil {
+		return err
 	}
 	_, err := r.deliverNotice(ctx, event, text)
 	return err
@@ -1036,6 +1052,18 @@ func (r *Runtime) claimDueReminders(now time.Time) []Reminder {
 	return due
 }
 
+// reminderTaskDeliveryDisabled 报告一条任务当前是否没有任何可投递目标。普通提醒只有
+// 来源会话一个目标；RSS/仓库订阅可能扇出到多个目标，只有全部停用才暂停整条
+// 任务，仍有启用目标时继续运行并在发送出口逐个跳过停用目标。
+func (r *Runtime) reminderTaskDeliveryDisabled(item Reminder) bool {
+	for _, target := range repositoryWatchDeliveryTargets(item) {
+		if r.deliveryTargetDisabledError(target) == nil {
+			return false
+		}
+	}
+	return true
+}
+
 // claimDueRemindersWithNext 认领到期任务，同时算出没到期的任务里最早的到期时间。
 // 两件事在同一遍扫描、用同一套过滤条件里做：停用的机器人、安全模式停发、正在跑的
 // 任务既不认领也不算进下一次唤醒，否则它们「已到期却认领不了」会让调度循环空转。
@@ -1047,6 +1075,7 @@ func (r *Runtime) claimDueRemindersWithNext(now time.Time) ([]Reminder, time.Tim
 	// 先取停用名单再上 reminderMu：两把锁不嵌套，就不会和别处的加锁顺序冲突。
 	disabledProfiles := r.disabledProfileSet()
 	safeModeHolds := r.safeModeTaskFilter()
+	groupDisabled := r.snapshotGroupDisabledChecker()
 	r.reminderMu.Lock()
 	defer r.reminderMu.Unlock()
 	items := r.reminders.Reminders()
@@ -1068,6 +1097,21 @@ func (r *Runtime) claimDueRemindersWithNext(now time.Time) ([]Reminder, time.Tim
 		// 失败一次，再把失败通知推给主人——关掉的那台反而比开着时更吵。这里连认领都
 		// 不认领，所以既不会请求 GitHub，也不会产生失败告警；重新启用后按原周期继续。
 		if disabledProfiles[strings.TrimSpace(item.ProfileID)] {
+			continue
+		}
+		// 群发送开关关闭时任务也一起暂停：不抓取、不生成内容、不消耗模型，
+		// 也不把「管理员主动关闭」记成发送失败。多目标订阅只有所有目标都停用才停任务。
+		targets := repositoryWatchDeliveryTargets(item)
+		allDisabled := len(targets) > 0
+		for _, target := range targets {
+			profileDisabled := disabledProfiles[strings.TrimSpace(target.ProfileID)]
+			groupTargetDisabled := target.Kind == EventKindGroup && groupDisabled(target.ProfileID, target.GroupID)
+			if !profileDisabled && !groupTargetDisabled {
+				allDisabled = false
+				break
+			}
+		}
+		if allDisabled {
 			continue
 		}
 		if !reminderIsRecurring(item) && !item.LastRunAt.IsZero() {
@@ -1139,7 +1183,7 @@ func (r *Runtime) rescheduleInterruptedReminder(id string, startedAt time.Time) 
 func (r *Runtime) executeClaimedReminder(ctx context.Context, item Reminder) {
 	defer r.releaseClaimedReminder(item.ID)
 	// 认领之后到执行之间模式可能刚切过去：再判一次，停发的任务什么都不写。
-	if r.safeModeHoldsTask(item) {
+	if r.safeModeHoldsTask(item) || r.reminderTaskDeliveryDisabled(item) {
 		return
 	}
 	// 启动时第一轮调度跑在聊天客户端连上之前（反向 WebSocket 尤其如此）。这里发出的
@@ -1212,6 +1256,9 @@ func (r *Runtime) executeClaimedReminder(ctx context.Context, item Reminder) {
 		if r.deferNotReadyReminder(item, err) {
 			return
 		}
+		if errors.Is(err, ErrDeliveryTargetDisabled) {
+			return
+		}
 		updated, finishErr := r.finishRecurringReminder(item.ID, startedAt, err)
 		if finishErr != nil {
 			r.setError(finishErr.Error())
@@ -1251,6 +1298,11 @@ func (r *Runtime) executeClaimedReminder(ctx context.Context, item Reminder) {
 		return
 	}
 	if r.deferNotReadyReminder(item, err) {
+		return
+	}
+	// 任务执行期间群或机器人被停用：保留任务和已生成的待投递内容，重新启用后再接上，
+	// 不把配置变更计作发送失败，也不额外发失败告警。
+	if errors.Is(err, ErrDeliveryTargetDisabled) {
 		return
 	}
 	if err != nil {
