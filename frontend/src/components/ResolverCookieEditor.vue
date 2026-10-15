@@ -106,8 +106,8 @@ defineExpose({ saveDraft, hasUnsavedChanges: () => dirty.value, isBusy: () => bu
 </template>
 <style scoped>
 .cookie-manager { padding:10px 0; border-bottom:1px solid var(--border); }
-.cookie-header { display:grid; grid-template-columns:minmax(130px,1fr) auto 150px; align-items:center; gap:16px; }
-.cookie-actions { display:flex; justify-content:flex-end; gap:8px; }
+.cookie-header { display:grid; grid-template-columns:minmax(130px,1fr) auto 112px; align-items:center; gap:10px; }
+.cookie-actions { display:flex; justify-content:flex-end; gap:6px; }
 .cookie-editor { display:grid; gap:12px; padding:16px; margin-top:12px; border-radius:10px; background:var(--bg); }
 .cookie-editor p { margin:0; }
 @media(max-width:560px) {

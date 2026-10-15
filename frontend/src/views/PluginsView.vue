@@ -386,10 +386,9 @@
         </div>
       </template>
       <template v-if="isResolverSettings">
-        <div class="plugin-settings-section-head">
-          <h3>解析平台与 Cookie</h3>
-          <p>勾选启用解析，在同一行编辑或检测 Cookie。关闭解析不会清除凭据；改动统一在底部保存。</p>
-        </div>
+        <details open class="plugin-settings-collapsible resolver-platform-section">
+          <summary><h3>解析平台与 Cookie</h3><ChevronDown class="plugin-settings-chevron" :size="15" aria-hidden="true" /></summary>
+          <p class="hint">勾选启用，右侧编辑与检测；公开解析无需单独配置 Cookie。改动统一保存。</p>
         <div class="resolver-platform-list">
           <template v-for="platform in resolverPlatformRows" :key="platform.value">
             <ResolverCookieEditor v-if="platform.value === 'youtube'" :ref="setResolverCookieEditor" :path="String(settingsForm.ytdlp_cookies_path || '')" :disabled="savingSettings" @saved="settingsForm.ytdlp_cookies_path = $event">
@@ -414,8 +413,8 @@
                   </div>
                 </template>
                 <template v-else>
-                  <span class="badge">公开解析</span>
-                  <span class="hint resolver-platform-actions">无需单独配置 Cookie</span>
+                  <span class="badge resolver-public-status" title="无需单独配置 Cookie">公开解析</span>
+                  <span class="resolver-platform-actions" aria-hidden="true"></span>
                 </template>
               </div>
               <div v-if="platform.credential && editingResolverPlatform === platform.value" class="resolver-platform-editor">
@@ -427,6 +426,7 @@
           </template>
         </div>
         <p class="hint resolver-status-legend"><span class="badge ok">登录有效</span><span class="badge err">登录失效</span><span class="badge warn">待检测 / 无法确认</span><span class="badge">未配置 / 公开解析</span></p>
+        </details>
         <section class="plugin-settings-section-head plugin-settings-subsection">
           <h3>媒体与发送</h3>
           <p>控制媒体下载、发送方式、数量与清晰度。</p>
@@ -1943,15 +1943,18 @@ useConfigurationRefresh(["bot"], reload);
 </script>
 
 <style scoped>
+.resolver-platform-section { width:100%; max-width:520px; }
 .resolver-platform-list { display:grid; }
+.resolver-platform-section > .hint { margin:6px 0 8px; }
+
 .resolver-platform-row { padding:10px 0; border-bottom:1px solid var(--border); }
-.resolver-platform-head { display:grid; grid-template-columns:minmax(130px,1fr) auto 150px; align-items:center; gap:16px; }
+.resolver-platform-head { display:grid; grid-template-columns:minmax(130px,1fr) auto 112px; align-items:center; gap:10px; }
 .resolver-platform-name { display:flex; align-items:center; gap:10px; cursor:pointer; font-weight:600; }
 .resolver-platform-name input { width:16px; height:16px; accent-color:var(--accent); }
 .resolver-platform-name small { display:block; font-weight:400; opacity:.6; font-size:11px; }
-.resolver-platform-actions { display:flex; justify-content:flex-end; gap:8px; font-size:11px; }
+.resolver-platform-actions { display:flex; justify-content:flex-end; gap:6px; font-size:11px; }
 .resolver-platform-editor { padding:16px; margin-top:12px; border-radius:10px; background:var(--bg); }
-.resolver-status-legend { display:flex; gap:8px; flex-wrap:wrap; margin-top:16px; }
+.resolver-status-legend { display:flex; gap:8px; flex-wrap:wrap; margin-top:10px; }
 @media(max-width:560px) {
  .resolver-platform-head { grid-template-columns:1fr auto; gap:10px; }
  .resolver-platform-actions { grid-column:2; }
