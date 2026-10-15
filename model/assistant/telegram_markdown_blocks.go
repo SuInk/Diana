@@ -59,8 +59,17 @@ func listIndentDepth(indent string) int {
 //
 // Telegram 没有表格 entity，原样发出去就是一行行竖线和减号。等宽块是唯一还能让列
 // 对齐的表达：把单元格按列宽补齐，再交给调用方登记成 pre。emit 返回顶位用的占位符。
-func convertMarkdownTables(text string, emit func(body string) string) string {
-	return convertMarkdownTableRows(text, func(rows [][]string) string { return emit(renderTableBlock(rows)) })
+func convertMarkdownTables(text string, emit func(body string) string, formatCell ...func(string) string) string {
+	return convertMarkdownTableRows(text, func(rows [][]string) string {
+		if len(formatCell) > 0 {
+			for _, row := range rows {
+				for column, cell := range row {
+					row[column] = formatCell[0](cell)
+				}
+			}
+		}
+		return emit(renderTableBlock(rows))
+	})
 }
 
 func convertMarkdownTableRows(text string, emit func(rows [][]string) string) string {
@@ -177,4 +186,40 @@ func isWideRune(r rune) bool {
 		return true
 	}
 	return false
+}
+
+// preserveMarkdownTableLines 将已确认表格及其边界的真实换行转成排版标记。
+// 普通聊天的真实换行仍按原协议收拢，但表格不能被拼成「|. |」。
+func preserveMarkdownTableLines(text string) string {
+	lines := strings.Split(text, "\n")
+	protected := make([]bool, len(lines))
+	inFence := false
+	for i := 0; i < len(lines); i++ {
+		if strings.HasPrefix(strings.TrimSpace(lines[i]), "```") {
+			inFence = !inFence
+			continue
+		}
+		if inFence || !isTableRow(lines[i]) || i+1 >= len(lines) || !tgTableSeparator.MatchString(lines[i+1]) {
+			continue
+		}
+		protected[i], protected[i+1] = true, true
+		i += 2
+		for i < len(lines) && isTableRow(lines[i]) {
+			protected[i] = true
+			i++
+		}
+		i--
+	}
+	var out strings.Builder
+	for i, line := range lines {
+		if i > 0 {
+			if protected[i-1] || protected[i] {
+				out.WriteString(notificationLineMarker)
+			} else {
+				out.WriteByte('\n')
+			}
+		}
+		out.WriteString(line)
+	}
+	return out.String()
 }

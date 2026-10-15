@@ -176,3 +176,29 @@ func TestOneBotCallUsesTheValidatedChannelSnapshot(t *testing.T) {
 		t.Fatal("channel changed between platform validation and API dispatch")
 	}
 }
+
+func TestTelegramDeliversRawMultilineTable(t *testing.T) {
+	api := newFakeTelegramAPI(t, map[string]any{"sendMessage": map[string]any{"message_id": 1}})
+	rt := NewRuntime(BotConfig{Platform: PlatformTelegram}, api.channel(), NewPluginManager(), nil, nil, nil, nil)
+	event := MessageEvent{Platform: PlatformTelegram, Kind: EventKindGroup, GroupID: "-100123"}
+	source := "最近的统计：\n| 排名 | 用户 | 发言次数 |\n| --- | --- | --- |\n| 1 | 用户甲 | 450 |\n| 2 | 用户乙 | 320 |\n以上是统计结果"
+	chunks := splitChatReply(source, chatSplitLimits{})
+	if len(chunks) != 1 || chunks[0] != source {
+		t.Fatalf("table layout was flattened: %q", chunks)
+	}
+	if _, err := rt.sendDecorated(context.Background(), event, source, outboundDecoration{}); err != nil {
+		t.Fatal(err)
+	}
+	calls := api.callsOf("sendMessage")
+	if len(calls) != 1 {
+		t.Fatalf("wrong number of messages: %v", calls)
+	}
+	text, _ := calls[0].Params["text"].(string)
+	if strings.Contains(text, "|") || strings.Contains(text, notificationLineMarker) || !strings.Contains(text, "用户甲") {
+		t.Fatalf("table not rendered: %q", text)
+	}
+	entities, _ := calls[0].Params["entities"].([]any)
+	if len(entities) != 1 || entities[0].(map[string]any)["type"] != "pre" {
+		t.Fatalf("missing table entity: %v", entities)
+	}
+}

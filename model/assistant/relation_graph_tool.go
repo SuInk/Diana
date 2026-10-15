@@ -5,7 +5,6 @@ package assistant
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -160,9 +159,7 @@ func (t *dianaGroupRelationsTool) Run(ctx context.Context, input map[string]any)
 		return marshalRelationsResult(result), nil
 	}
 
-	// 内联成 data URI 发出去：出站会把它转成 base64://，不用落盘，也就不用管清理。
-	image := "data:image/png;base64," + base64.StdEncoding.EncodeToString(png)
-	if err := t.runtime.sendOutgoing(ctx, t.event, routeOutgoingToEvent(t.event, OutgoingMessage{ImageURLs: []string{image}})); err != nil {
+	if err := t.runtime.sendPNGImage(ctx, t.event, png); err != nil {
 		return "", fmt.Errorf("发送关系图失败：%w", err)
 	}
 	result := dianaGroupRelationsResult{

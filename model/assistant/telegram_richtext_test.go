@@ -630,3 +630,32 @@ func TestTelegramRichTextMarksNestedListDepth(t *testing.T) {
 		}
 	}
 }
+
+func TestTelegramTableInlineFormattingKeepsValidEntities(t *testing.T) {
+	source := "前言\n| **命令** | 说明 |\n| --- | --- |\n| `very_long_command` | [文档](https://example.com) |\n| `中😀` | ~~旧版~~ |\n\n**结束** `tail`"
+	text, entities := telegramRichText(source, nil)
+	want := renderTableBlock([][]string{{"命令", "说明"}, {"very_long_command", "文档"}, {"中😀", "旧版"}})
+	pre, ok := findEntity(entities, "pre")
+	if !ok || entityAt(t, text, pre) != want {
+		t.Fatalf("table text/entity mismatch: %q %#v; want %q", text, entities, want)
+	}
+	if strings.ContainsAny(text, "\x00`*~") {
+		t.Fatalf("internal markers leaked: %q", text)
+	}
+	for _, entity := range entities {
+		body := entityAt(t, text, entity)
+		switch entity.Type {
+		case "pre":
+		case "bold":
+			if body != "结束" {
+				t.Fatalf("wrong bold span: %q", body)
+			}
+		case "code":
+			if body != "tail" {
+				t.Fatalf("code entity nested in table: %q", body)
+			}
+		default:
+			t.Fatalf("unexpected entity: %#v", entity)
+		}
+	}
+}

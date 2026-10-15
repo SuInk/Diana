@@ -155,3 +155,32 @@ func TestFileDeliveryToolAllowedForNonOwners(t *testing.T) {
 		t.Fatalf("file delivery plugin should be registered and enabled by default: %+v", state)
 	}
 }
+
+func TestFileDeliveryResolvesTelegramTransportWithoutEventPlatform(t *testing.T) {
+	for _, multi := range []bool{false, true} {
+		t.Run(map[bool]string{false: "direct", true: "multi"}[multi], func(t *testing.T) {
+			r, uploads := newFileDeliveryTestRuntime(t)
+			event := MessageEvent{Kind: EventKindGroup, GroupID: "-100123", MessageThreadID: "77"}
+			if multi {
+				r.channel = NewMultiChannel([]ChannelBinding{{ProfileID: "tg", Platform: PlatformTelegram, Channel: r.channel}})
+				event.ProfileID = "tg"
+			}
+			tool := newDianaFileDeliveryTool(r, event, SettingValues{}, RelationshipPolicy{})
+			const content = "# 中文文件\n\n完整内容 😀\n"
+			raw, err := tool.Run(context.Background(), map[string]any{"filename": "说明.md", "content": content, "preview": false})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if result := decodeFileDeliveryResult(t, raw); !result.OK {
+				t.Fatalf("delivery failed: %+v", result)
+			}
+			if len(*uploads) != 1 {
+				t.Fatalf("expected one upload: %+v", *uploads)
+			}
+			got := (*uploads)[0]
+			if got.method != "sendDocument" || got.filename != "说明.md" || got.body != content || got.chat != event.GroupID || got.topic != "77" {
+				t.Fatalf("wrong upload: %+v", got)
+			}
+		})
+	}
+}

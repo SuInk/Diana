@@ -125,9 +125,7 @@ func (t *dianaRenderTool) Run(ctx context.Context, input map[string]any) (string
 		return t.fail(ctx, format, "渲染失败："+firstLineOf(err.Error()), err.Error())
 	}
 
-	// 内联成 data URI 发出去：出站会把它转成 base64://，不用落盘，也就不用管清理。
-	image := "data:image/png;base64," + base64.StdEncoding.EncodeToString(trimRenderScreenshot(shot))
-	if err := t.runtime.sendOutgoing(ctx, t.event, routeOutgoingToEvent(t.event, OutgoingMessage{ImageURLs: []string{image}})); err != nil {
+	if err := t.runtime.sendPNGImage(ctx, t.event, trimRenderScreenshot(shot)); err != nil {
 		return "", fmt.Errorf("发送图片失败：%w", err)
 	}
 	result := dianaRenderResult{OK: true, Message: "图片已经发到会话里了。", Format: format}
@@ -165,9 +163,19 @@ func (r *Runtime) renderContentPNG(ctx context.Context, event MessageEvent, form
 	return trimRenderScreenshot(shot), nil
 }
 
-// sendPNGImage 先落盘成临时文件再投递：Telegram 侧 data URL 只会被当成普通
-// 字符串塞进 JSON，真实 Bot API 不收，必须走 multipart 本地文件上传。
+// sendPNGImage 按实际通道投递：Telegram 使用临时文件 multipart 上传，
+// 其他通道继续使用内联图片。
 func (r *Runtime) sendPNGImage(ctx context.Context, event MessageEvent, png []byte) error {
+	platform, err := r.outboundPlatformForEvent(event)
+	if err != nil {
+		return err
+	}
+	event.Platform = platform
+	if platform != PlatformTelegram {
+		image := "data:image/png;base64," + base64.StdEncoding.EncodeToString(png)
+		return r.sendOutgoing(ctx, event, OutgoingMessage{ImageURLs: []string{image}})
+	}
+	// Telegram 不接受 data URI / base64://，必须以文件 multipart 上传。
 	dir, err := os.MkdirTemp("", "diana-render-image-*")
 	if err != nil {
 		return err

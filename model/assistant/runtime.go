@@ -8923,10 +8923,12 @@ const (
 // model output. Literal CR/LF is not a layout instruction: another chat bubble
 // must use [diana-msg], and a line break inside that bubble must use
 // [diana-line]. Folding raw newlines makes violations deterministic instead of
-// reviving the old heuristic splitter.
+// reviving the old heuristic splitter. Recognized Markdown tables retain their
+// structural line breaks so normalization does not destroy their columns.
 func normalizeExplicitReplyLayout(text string) string {
 	text = normalizeLegacyLayoutMarkers(text)
 	text = strings.ReplaceAll(strings.ReplaceAll(text, "\r\n", "\n"), "\r", "\n")
+	text = preserveMarkdownTableLines(text)
 	lines := strings.Split(text, "\n")
 	kept := make([]string, 0, len(lines))
 	for _, line := range lines {
@@ -9002,7 +9004,7 @@ func splitReply(reply string, chunkSize int) []string {
 // splitChatReply 是聊天发言的分条：把一条回复切成几次发言。
 //
 // 模型输出不允许用真实换行表达布局。消息边界只认 [diana-msg]，同一消息内的
-// 排版换行只认 [diana-line]；真实 CR/LF 一律折叠成软空格。
+// 排版换行使用 [diana-line]；表格保留结构换行，其余真实 CR/LF 按软分隔收拢。
 //
 // 聊天配置不再限制条数或单条长度；是否收进合并转发由独立阈值决定。
 // splitChatReply 把回复切成实际要发的几条，每条去掉句号（见 chat_periods.go）和行尾的

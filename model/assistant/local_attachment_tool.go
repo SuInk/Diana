@@ -255,7 +255,11 @@ func (t *dianaLocalAttachmentTool) sendSVGImage(ctx context.Context, data []byte
 // sendFileAttachment 把内存里的数据作为原文件附件发到当前会话。先写成私有
 // 临时快照再上传，发送过程中数据不会再被外部改动。
 func (r *Runtime) sendFileAttachment(ctx context.Context, event MessageEvent, name string, data []byte) error {
-	platform := NormalizePlatformID(event.Platform)
+	platform, err := r.outboundPlatformForEvent(event)
+	if err != nil {
+		return err
+	}
+	event.Platform = platform
 	if platform != PlatformTelegram && !IsOneBotPlatform(platform) {
 		return fmt.Errorf("file attachment sending is unavailable for this platform")
 	}

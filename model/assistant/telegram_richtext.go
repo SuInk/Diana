@@ -86,16 +86,18 @@ func telegramRichText(text string, mentions []dianaMentionSpan) (string, []teleg
 		blocks = append(blocks, codeBlock{body: strings.TrimRight(parts[2], "\n"), language: parts[1]})
 		return placeholder(len(blocks) - 1)
 	})
+	// 表格单元格先独立转成纯文本，再计算列宽。pre 内不能嵌套 code entity，
+	// 也不能把行内代码的占位符带进表格，否则还原后列宽和 entity 长度都会错。
+	text = convertMarkdownTables(text, func(body string) string {
+		blocks = append(blocks, codeBlock{body: body})
+		return placeholder(len(blocks) - 1)
+	}, func(cell string) string {
+		plain, _ := telegramRichText(cell, nil)
+		return plain
+	})
 	text = tgInlineCode.ReplaceAllStringFunc(text, func(match string) string {
 		parts := tgInlineCode.FindStringSubmatch(match)
 		blocks = append(blocks, codeBlock{body: parts[1], inline: true})
-		return placeholder(len(blocks) - 1)
-	})
-
-	// 表格也当成等宽块：Telegram 没有表格 entity，原样发出去就是一片竖线和减号。
-	// 放在内联代码之后，这样代码块里的竖线不会被误认成表格。
-	text = convertMarkdownTables(text, func(body string) string {
-		blocks = append(blocks, codeBlock{body: body})
 		return placeholder(len(blocks) - 1)
 	})
 
