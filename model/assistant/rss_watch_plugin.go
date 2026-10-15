@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -384,7 +385,7 @@ func looksLikeJSONDocument(body []byte) bool {
 }
 
 // twitterStatusesResponse 是 FxTwitter /2/profile/{handle}/statuses 的响应。
-// 只取订阅判断和推送附图用得上的字段，其余（互动数、引用等）忽略。
+// 只取订阅判断和推送附图用得上的字段；引用只展开一层。
 type twitterStatusesResponse struct {
 	Code    int `json:"code"`
 	Results []struct {
@@ -401,12 +402,24 @@ type twitterStatusesResponse struct {
 			Name       string `json:"name"`
 			ScreenName string `json:"screen_name"`
 		} `json:"author"`
-		Media struct {
-			Photos []struct {
-				URL string `json:"url"`
-			} `json:"photos"`
-		} `json:"media"`
+		Media twitterStatusMedia `json:"media"`
+		Quote *struct {
+			URL     string          `json:"url"`
+			Text    string          `json:"text"`
+			RawText json.RawMessage `json:"raw_text"`
+			Author  struct {
+				Name       string `json:"name"`
+				ScreenName string `json:"screen_name"`
+			} `json:"author"`
+			Media twitterStatusMedia `json:"media"`
+		} `json:"quote"`
 	} `json:"results"`
+}
+
+type twitterStatusMedia struct {
+	Photos []struct {
+		URL string `json:"url"`
+	} `json:"photos"`
 }
 
 // twitterRawTextValue 兼容 raw_text 的两种形态：纯字符串，或带 facets 的对象。
@@ -456,8 +469,26 @@ func parseTwitterStatusesFeed(body []byte) (parsedFeed, error) {
 		if handle := strings.TrimSpace(entry.Author.ScreenName); handle != "" && author == "" {
 			author = "@" + handle
 		}
+		// FxTwitter places ordinary reposts at the top level (with reposted_by
+		// metadata). Quoted tweets instead carry their own text and media.
+		photos := slices.Clone(entry.Media.Photos)
+		if quote := entry.Quote; quote != nil {
+			quoteText := strings.TrimSpace(quote.Text)
+			if quoteText == "" {
+				quoteText = twitterRawTextValue(quote.RawText)
+			}
+			quoteLink := strings.TrimSpace(quote.URL)
+			if quoteText != "" || quoteLink != "" {
+				quoteAuthor := strings.TrimSpace(quote.Author.Name)
+				if handle := strings.TrimSpace(quote.Author.ScreenName); handle != "" {
+					quoteAuthor = "@" + handle
+				}
+				text += "\n\n引用推文 " + quoteAuthor + "\n" + quoteText + "\n" + quoteLink
+				photos = append(photos, quote.Media.Photos...)
+			}
+		}
 		var images []string
-		for _, photo := range entry.Media.Photos {
+		for _, photo := range photos {
 			if photoURL := strings.TrimSpace(photo.URL); photoURL != "" {
 				images = append(images, photoURL)
 			}

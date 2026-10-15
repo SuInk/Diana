@@ -194,3 +194,36 @@ func TestRSSWatchTelegramImageFailureKeepsTextAndReportsError(t *testing.T) {
 		t.Fatalf("text delivery = %#v", sent)
 	}
 }
+
+func TestRSSWatchRepostsAndQuotesKeepPhotos(t *testing.T) {
+	body := []byte(`{"code":200,"results":[
+  {"id":"11111111","url":"https://x.com/original/status/11111111","text":"Original visual","reposted_by":{"screen_name":"subscriber"},"media":{"photos":[{"url":"https://pbs.twimg.com/media/repost.jpg"}]}},
+  {"id":"22222222","url":"https://x.com/commenter/status/22222222","text":"Look at this","quote":{"url":"https://x.com/artist/status/33333333","raw_text":{"text":"Quoted visual"},"author":{"screen_name":"artist"},"media":{"photos":[{"url":"https://pbs.twimg.com/media/quote.jpg"}]},"quote":{"text":"Nested","media":{"photos":[{"url":"https://pbs.twimg.com/media/nested.jpg"}]}}}},
+  {"id":"44444444","text":"Own and quoted photos","media":{"photos":[{"url":"https://pbs.twimg.com/media/own.jpg"}]},"quote":{"url":"https://x.com/artist/status/55555555","text":"Quoted photos","media":{"photos":[{"url":"https://pbs.twimg.com/media/own.jpg"},{"url":"https://pbs.twimg.com/media/quote.jpg"},{"url":"https://pbs.twimg.com/media/extra.jpg"}]}}},
+  {"id":"66666666","text":"Unavailable quote","quote":null}
+ ]}`)
+	feed, err := parseTwitterStatusesFeed(body)
+	if err != nil || len(feed.Items) != 4 {
+		t.Fatalf("feed=%#v err=%v", feed, err)
+	}
+	if got := rssWatchReplyImages("https://x.com/original/status/11111111", feed.Items); !strings.Contains(got, "repost.jpg") || strings.Contains(got, "quote.jpg") {
+		t.Fatal(got)
+	}
+	quoted := feed.Items[1]
+	if !strings.Contains(quoted.Content, "引用推文 @artist\nQuoted visual\nhttps://x.com/artist/status/33333333") || strings.Contains(quoted.Content, "Nested") {
+		t.Fatal(quoted.Content)
+	}
+	if len(quoted.Images) != 1 || !strings.Contains(quoted.Images[0], "quote.jpg") {
+		t.Fatal(quoted.Images)
+	}
+	if got := rssWatchReplyImages("https://x.com/artist/status/33333333", feed.Items); !strings.Contains(got, "quote.jpg") || strings.Contains(got, "repost.jpg") {
+		t.Fatal(got)
+	}
+	got := rssWatchReplyImages("single item", feed.Items[2:3])
+	if strings.Count(got, "[CQ:image") != 2 || !strings.Contains(got, "own.jpg") || !strings.Contains(got, "quote.jpg") || strings.Contains(got, "extra.jpg") {
+		t.Fatal(got)
+	}
+	if len(feed.Items[3].Images) != 0 {
+		t.Fatal(feed.Items[3].Images)
+	}
+}
