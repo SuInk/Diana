@@ -1574,7 +1574,7 @@ func (p *ResolverPlugin) Manifest() PluginManifest {
 				Label:       "发送后自然点评",
 				Description: "解析结果发出后，让机器人按全局回复风格自然回应；关闭后只发解析结果。",
 				Type:        PluginSettingTypeBool,
-				Default:     false,
+				Default:     true,
 			},
 			{
 				Key:         resolverSettingDownloadMedia,
@@ -1957,7 +1957,7 @@ func (p *ResolverPlugin) Handle(ctx context.Context, req PluginRequest) (*Plugin
 		// Context 前缀是给模型的来源标签，发到群里不该出现「链接解析结果：」这种机器腔。
 		response.Reply = strings.Join(parts, "\n")
 	}
-	response.FollowUp = req.Settings.Bool(resolverSettingFollowUpComment, false)
+	response.FollowUp = req.Settings.Bool(resolverSettingFollowUpComment, true)
 	return response, nil
 }
 
