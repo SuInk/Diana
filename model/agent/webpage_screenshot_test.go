@@ -101,25 +101,34 @@ func TestRestrictedCDPScreenshotIntegration(t *testing.T) {
 	t.Logf("captured explicit CDP page: %s", output)
 }
 
-// 10-15「发下标普500的k线」：搜到行情页后说「没接行情插件发不了」，没想到可以截图。
-func TestSystemPromptTreatsChartRequestsAsScreenshots(t *testing.T) {
-	registry := NewToolRegistry()
-	without, err := NewRunner(&scriptedClient{}, Config{WorkDir: t.TempDir()}, registry)
-	if err != nil {
-		t.Fatal(err)
+// 10-15「发下标普500的k线」：搜到行情页后说「没接行情插件发不了」。有 remote_image 时
+// 先找直链下载原图，只有截图工具时才按截图处理。
+func TestSystemPromptRoutesChartRequests(t *testing.T) {
+	prompt := func(tools ...Tool) string {
+		registry := NewToolRegistry()
+		for _, tool := range tools {
+			registry.Register(tool)
+		}
+		runner, err := NewRunner(&scriptedClient{}, Config{WorkDir: t.TempDir()}, registry)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return runner.systemPrompt()
 	}
-	if strings.Contains(without.systemPrompt(), "K 线") {
-		t.Fatal("chart screenshot rule should only appear when webpage_screenshot is registered")
+	if strings.Contains(prompt(), "K 线") {
+		t.Fatal("chart rule should only appear when an image tool is registered")
 	}
-	registry.Register(NewWebpageScreenshotTool(NewSandboxedHeadlessBrowser(SandboxedBrowserConfig{})))
-	with, err := NewRunner(&scriptedClient{}, Config{WorkDir: t.TempDir()}, registry)
-	if err != nil {
-		t.Fatal(err)
+	screenshot := NewWebpageScreenshotTool(NewSandboxedHeadlessBrowser(SandboxedBrowserConfig{}))
+	if got := prompt(screenshot); !strings.Contains(got, "就是截图任务") || strings.Contains(got, "remote_image 的 view") {
+		t.Fatal("screenshot-only prompt should treat charts as screenshots")
 	}
-	prompt := with.systemPrompt()
-	for _, want := range []string{"K 线、走势图", "别因为没有专门的行情或绘图插件就说发不了"} {
-		if !strings.Contains(prompt, want) {
+	got := prompt(screenshot, &countingTool{name: "remote_image"})
+	for _, want := range []string{"remote_image 的 view 下载", "browser_render 返回的 images", "finviz.com/chart.ashx", "确实拿不到直链再用 webpage_screenshot"} {
+		if !strings.Contains(got, want) {
 			t.Fatalf("system prompt missing %q", want)
 		}
+	}
+	if strings.Contains(got, "就是截图任务") {
+		t.Fatal("with remote_image the prompt should prefer direct download over screenshots")
 	}
 }

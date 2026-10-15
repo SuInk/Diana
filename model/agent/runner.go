@@ -1151,11 +1151,14 @@ func (r *Runner) systemPrompt() string {
 	}
 	if hasAnyTool("webpage_screenshot", "browser_screenshot") {
 		rules = append(rules, "- 公共网页截图用 webpage_screenshot，不带登录态；browser_screenshot 只截已授权的登录页面。capture 的真实画面才是截图证据；要求发送时，用同一工具的 action=send 和本轮 image_id 发到当前会话。")
-		// 10-15「发下标普500的k线」：搜到 Yahoo 行情页后直接说「没接行情插件发不了」，
-		// 用户提示「找个网页截图」才去截。K 线、走势图这类请求没被认成截图任务。
-		if hasTool("webpage_screenshot") {
-			rules = append(rules, "- 要发 K 线、走势图、行情、天气图、某个网站的样子这类网页上看得到的画面时，就是截图任务：知道网址直接用 webpage_screenshot 截，不知道先搜到页面再截，截到后发出去。别因为没有专门的行情或绘图插件就说发不了。")
-		}
+	}
+	// 10-15「发下标普500的k线」：搜到 Yahoo 行情页后直接说「没接行情插件发不了」。
+	// 网上现有的图优先下载原图发送，截图只是拿不到直链时的退路。
+	switch {
+	case hasTool("remote_image"):
+		rules = append(rules, "- 要发网上现有的图（K 线、走势图、照片、海报这类）时，下载原图发送：找到图片直链 → remote_image 的 view 下载并确认画面 → send 发出。直链从 browser_render 返回的 images 里找；美股和 ETF 的 K 线可以直接用 finviz 图表直链 https://finviz.com/chart.ashx?t=代码&p=d（标普500 用 SPY，周线 p=w）。确实拿不到直链再用 webpage_screenshot 截图。别因为没有专门的行情或绘图插件就说发不了。")
+	case hasTool("webpage_screenshot"):
+		rules = append(rules, "- 要发 K 线、走势图、行情、某个网站的样子这类网页上看得到的画面时，就是截图任务：知道网址直接用 webpage_screenshot 截，不知道先搜到页面再截，截到后发出去。别因为没有专门的行情或绘图插件就说发不了。")
 	}
 	if hasTool("browser_eval") {
 		// 交互式浏览器只登记给主人，带着主人的登录态。主人的事需要用浏览器就直接用，

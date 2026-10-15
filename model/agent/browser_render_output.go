@@ -65,8 +65,10 @@ func browserRenderOutputWithBudget(page RenderedPage, find string, budget int) (
 		if len([]rune(string(data))) <= budget {
 			return string(data), nil
 		}
-		// 先去掉低优先级链接和元数据，保留正文及 find 真正命中的段落。
-		if len(payload.Links) > 5 {
+		// 先去掉低优先级图片、链接和元数据，保留正文及 find 真正命中的段落。
+		if len(payload.Images) > 3 {
+			payload.Images = payload.Images[:len(payload.Images)-1]
+		} else if len(payload.Links) > 5 {
 			payload.Links = payload.Links[:len(payload.Links)-1]
 		} else if payload.Description != "" {
 			payload.Description = ""

@@ -60,6 +60,9 @@ type RenderedPage struct {
 	// Links 是页面上可见的链接。不直接序列化：搜索引擎后端从结果页里取结果用全量，
 	// browser_render 交给模型时挑一部分编进输出，见 browser_render_output.go。
 	Links []RenderedLink `json:"-"`
+	// Images 是页面上可以直接下载的图片地址：og:image 和正文里的 <img>。用户要发网上的图时，
+	// 模型从这里拿直链交给 remote_image，不必退回截图。
+	Images []RenderedImage `json:"images,omitempty"`
 	// FullText 是截断前的正文，给 browser_render 的 find 在整页里查找。
 	FullText string `json:"-"`
 }
@@ -72,6 +75,15 @@ type RenderedLink struct {
 }
 
 const maxRenderedPageLinks = 300
+
+// RenderedImage 是页面上的一张图：绝对地址和 alt 文字。
+type RenderedImage struct {
+	URL string `json:"url"`
+	Alt string `json:"alt,omitempty"`
+}
+
+// maxRenderedPageImages 限制交给模型的图片数，图标、头像和装饰图多了只会占上下文。
+const maxRenderedPageImages = 12
 
 // maxRenderedFullTextChars 是留给 find 的整页正文上限，够覆盖文档页和定价页。
 const maxRenderedFullTextChars = 200000
@@ -633,7 +645,51 @@ func parseRenderedPage(data []byte, requestedURL string, maxChars int, truncated
 		return RenderedPage{}, errors.New("headless browser rendered an empty page")
 	}
 	page.Links = renderedPageLinks(document, requestedURL)
+	page.Images = renderedPageImages(document, requestedURL)
 	return page, nil
+}
+
+// renderedPageImages 先放 og:image（通常是这一页的主图），再按出现顺序放正文里的 <img>。
+// 懒加载的图片 src 往往是占位符，真实地址在 data-src 里。明确标了小尺寸的是图标或
+// 统计像素，SVG 多是图标且发不出去，一并跳过。
+func renderedPageImages(document *html.Node, base string) []RenderedImage {
+	var images []RenderedImage
+	seen := map[string]bool{}
+	add := func(raw, alt string) {
+		resolved := resolveRenderedPageURL(base, strings.TrimSpace(raw))
+		if resolved == "" || seen[resolved] || len(images) >= maxRenderedPageImages {
+			return
+		}
+		if path := strings.ToLower(resolved); strings.Contains(path, ".svg") {
+			return
+		}
+		seen[resolved] = true
+		images = append(images, RenderedImage{URL: resolved, Alt: truncateText(normalizeRenderedText(alt), 120)})
+	}
+	add(metaContent(document, "property", "og:image"), metaContent(document, "property", "og:image:alt"))
+	var walk func(*html.Node)
+	walk = func(node *html.Node) {
+		if node == nil || len(images) >= maxRenderedPageImages || nodeIsHidden(node) {
+			return
+		}
+		if node.Type == html.ElementNode && strings.EqualFold(node.Data, "img") {
+			if renderedImageTooSmall(nodeAttr(node, "width")) || renderedImageTooSmall(nodeAttr(node, "height")) {
+				return
+			}
+			add(firstNonEmptyString(nodeAttr(node, "data-src"), nodeAttr(node, "src")), nodeAttr(node, "alt"))
+			return
+		}
+		for child := node.FirstChild; child != nil; child = child.NextSibling {
+			walk(child)
+		}
+	}
+	walk(document)
+	return images
+}
+
+func renderedImageTooSmall(value string) bool {
+	size, err := strconv.Atoi(strings.TrimSuffix(strings.TrimSpace(value), "px"))
+	return err == nil && size < 64
 }
 
 func renderedPageLinks(document *html.Node, base string) []RenderedLink {
