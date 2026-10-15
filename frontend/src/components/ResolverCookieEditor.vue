@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onBeforeUnmount } from "vue";
 import { readResolverCookieFile, saveResolverCookieFile, checkResolverCookieFile, testResolverCookieLogin } from "../api";
+import Modal from "./Modal.vue";
 import { cookieSites } from "../lib/cookie-sites";
 const props = defineProps<{ path: string; disabled?: boolean }>();
 const emit = defineEmits<{ (event: "saved", path: string): void }>();
@@ -79,17 +80,18 @@ defineExpose({ saveDraft, hasUnsavedChanges: () => dirty.value, isBusy: () => bu
 
 <template>
  <section class="cookie-manager" aria-label="YouTube Cookie">
-  <div class="cookie-header">
+  <div class="row-item cookie-header" :class="{ selected: editing }">
    <slot name="platform"><strong>YouTube</strong></slot>
    <span class="badge" :class="youtubeStatus.color" role="status">{{ youtubeStatus.label }}</span>
    <div class="cookie-actions">
     <button class="btn small" type="button" :disabled="busy || disabled || !hasYouTube" @click="testLogin">{{ loginState === 'checking' ? '检测中…' : '检测' }}</button>
-    <button class="btn small" type="button" :disabled="busy || disabled" :aria-expanded="editing" @click="editing ? editing = false : edit()">{{ editing ? "收起" : "编辑" }}</button>
+    <button class="btn small" type="button" :disabled="busy || disabled" aria-haspopup="dialog" @click="edit">编辑</button>
    </div>
   </div>
-  <div v-if="editing" class="cookie-editor">
+  <Modal v-if="editing" title="YouTube · Cookie 文件" initial-focus="#resolver-cookie-content" @close="!busy && (editing = false)">
+  <div class="cookie-editor">
    <label for="resolver-cookie-content">Cookie 内容</label>
-   <p class="hint">粘贴 Netscape 格式 Cookie，随底部「保存」生效。此文件由 yt-dlp 共用，可包含多个网站。</p>
+   <p class="hint">粘贴 Netscape 格式 Cookie。完成后回到设置，点击底部「保存」统一生效。此文件由 yt-dlp 共用，可包含多个网站。</p>
    <textarea id="resolver-cookie-content" v-model="content" class="input plugin-setting-textarea" rows="6" spellcheck="false" autocomplete="off" autocapitalize="off" :disabled="busy || disabled" placeholder="# Netscape HTTP Cookie File"></textarea>
    <div class="actions">
     <button class="btn small" type="button" :disabled="busy || disabled || !content.trim()" @click="check(false)">检查格式</button>
@@ -102,14 +104,20 @@ defineExpose({ saveDraft, hasUnsavedChanges: () => dirty.value, isBusy: () => bu
    <p v-if="props.path && !props.path.endsWith('/resolver-cookies.txt')" class="hint">当前使用外部文件；保存编辑内容后将改用托管文件。此编辑器不读取外部文件。</p>
   </div>
   <p v-if="message" class="hint" role="status">{{ message }}</p>
+  <template #footer>
+   <button class="btn" type="button" :disabled="busy || !hasYouTube" @click="testLogin">检测登录</button>
+   <button class="btn primary" type="button" :disabled="busy" @click="editing = false">完成</button>
+  </template>
+  </Modal>
+  <p v-if="message && !editing" class="hint" role="status">{{ message }}</p>
  </section>
 </template>
 <style scoped>
-.cookie-manager { padding:10px 0; border-bottom:1px solid var(--border); }
-.cookie-header { display:grid; grid-template-columns:minmax(0,1fr) auto auto; align-items:center; gap:10px; }
+.cookie-manager { min-width:0; }
+.cookie-header { display:grid; grid-template-columns:minmax(0,1fr) auto auto; align-items:center; gap:8px; padding:10px; margin:0; min-height:54px; }
 .cookie-actions { display:flex; justify-content:flex-end; gap:6px; }
 .cookie-actions .btn { padding:4px 7px; font-size:11px; }
-.cookie-editor { display:grid; gap:12px; padding:16px; margin-top:12px; border-radius:10px; background:var(--bg); }
+.cookie-editor { display:grid; gap:12px; padding:0; border-radius:10px; background:var(--bg); }
 .cookie-editor p { margin:0; }
 @media(max-width:560px) {
  .cookie-header { grid-template-columns:1fr auto; gap:10px; }

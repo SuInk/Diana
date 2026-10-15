@@ -399,8 +399,8 @@
                 </label>
               </template>
             </ResolverCookieEditor>
-            <section v-else class="resolver-platform-row" :class="{ 'is-editing': editingResolverPlatform === platform.value }" :aria-label="platform.name">
-              <div class="resolver-platform-head">
+            <section v-else class="resolver-platform-row"  :aria-label="platform.name">
+              <div class="row-item resolver-platform-head" :class="{ selected: editingResolverPlatform === platform.value }">
                 <label class="resolver-platform-name">
                   <input type="checkbox" :checked="resolverPlatformEnabled(platform.value)" :disabled="savingSettings" @change="toggleResolverPlatform(platform.value, $event)" />
                   <span>{{ platform.name }}<small v-if="!resolverPlatformEnabled(platform.value)">解析已关闭</small></span>
@@ -409,7 +409,7 @@
                   <span class="badge" :class="resolverRowStatus(platform.credential.key).color" role="status">{{ resolverRowStatus(platform.credential.key).label }}</span>
                   <div class="resolver-platform-actions">
                     <button class="btn small" type="button" :data-resolver-test="platform.credential.key" :disabled="savingSettings || !resolverCanTest(platform.credential.key)" @click="resolverChecks.test(platform.credential.key)">{{ resolverChecks.states[platform.credential.key].phase === 'checking' ? '检测中…' : '检测' }}</button>
-                    <button class="btn small" type="button" data-settings-action :disabled="savingSettings"  :aria-expanded="editingResolverPlatform === platform.value" @click="editingResolverPlatform = editingResolverPlatform === platform.value ? '' : platform.value">{{ editingResolverPlatform === platform.value ? '收起' : '编辑' }}</button>
+                    <button class="btn small" type="button" data-settings-action :disabled="savingSettings"  aria-haspopup="dialog" @click="editingResolverPlatform = platform.value">编辑</button>
                   </div>
                 </template>
                 <template v-else>
@@ -417,11 +417,16 @@
 
                 </template>
               </div>
-              <div v-if="platform.credential && editingResolverPlatform === platform.value" class="resolver-platform-editor">
+              <Modal v-if="platform.credential && editingResolverPlatform === platform.value" :title="`${platform.name} · Cookie`" :initial-focus="`#setting-${platform.credential.key}`" @pointerdown="onSettingsPointerDown" @close="editingResolverPlatform = ''">
+                <p class="hint">完成后回到设置，点击底部「保存」统一生效。</p>
                 <PluginSettingField :spec="platform.credential.spec" :form="settingsForm" :clearing="clearSecrets.includes(platform.credential.key)" :secret-configured="secretConfigured(platform.credential.key)" :secret-placeholder="secretPlaceholder(platform.credential.key)" @toggle-clear="toggleClearSecret" @blur="onResolverBlur" />
                 <p v-if="String(settingsForm[platform.credential.key] || '').trim()" class="hint">当前为未保存草稿，检测通过后仍需点击底部保存。</p>
                 <p v-if="resolverCheckMessage(platform.credential.key)" class="hint" role="status">{{ resolverCheckMessage(platform.credential.key) }}</p>
-              </div>
+                <template #footer>
+                  <button class="btn" type="button" :data-resolver-test="platform.credential.key" :disabled="!resolverCanTest(platform.credential.key)" @click="resolverChecks.test(platform.credential.key)">检测登录</button>
+                  <button class="btn primary" type="button" data-settings-action @click="editingResolverPlatform = ''">完成</button>
+                </template>
+              </Modal>
             </section>
           </template>
         </div>
@@ -1945,11 +1950,10 @@ useConfigurationRefresh(["bot"], reload);
 <style scoped>
 .resolver-platform-section { width:100%; }
 .resolver-platform-list { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,300px),1fr)); gap:8px 16px; align-items:start; }
-.resolver-platform-row.is-editing, .resolver-platform-list :deep(.cookie-manager:has(.cookie-editor)) { grid-column:1 / -1; }
 .resolver-platform-section > .hint { margin:6px 0 8px; }
 
-.resolver-platform-row { padding:10px 0; border-bottom:1px solid var(--border); }
-.resolver-platform-head { display:grid; grid-template-columns:minmax(0,1fr) auto auto; align-items:center; gap:10px; }
+.resolver-platform-row { min-width:0; }
+.resolver-platform-head { display:grid; grid-template-columns:minmax(0,1fr) auto auto; align-items:center; gap:8px; padding:10px; margin:0; min-height:54px; }
 .resolver-platform-name { display:flex; align-items:center; gap:7px; cursor:pointer; font-weight:600; font-size:12px; }
 .resolver-platform-name input { width:16px; height:16px; accent-color:var(--accent); }
 .resolver-platform-name small { display:block; font-weight:400; opacity:.6; font-size:11px; }
