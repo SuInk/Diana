@@ -102,6 +102,73 @@ func TestAssistantEventsEndpointReturnsDurableDecisionReasons(t *testing.T) {
 	}
 }
 
+func TestAssistantEventsEndpointReturnsTelegramSenderAvatarProxy(t *testing.T) {
+	store, err := storage.NewSQLiteStore(filepath.Join(t.TempDir(), "assistant-events-telegram-avatar.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+
+	event := assistant.MessageEvent{
+		Platform:   assistant.PlatformTelegram,
+		ProfileID:  "tg",
+		Kind:       assistant.EventKindGroup,
+		GroupID:    "-1001",
+		UserID:     "12345",
+		MessageID:  "telegram-avatar-event",
+		SenderName: "Telegram 用户",
+		Time:       time.Now().Unix(),
+		RawMessage: "头像测试",
+	}
+	if _, inserted, err := store.EnqueueInboundEvent(context.Background(), "group:-1001", event); err != nil || !inserted {
+		t.Fatalf("enqueue inserted=%v err=%v", inserted, err)
+	}
+
+	pngBody := []byte{0x89, 'P', 'N', 'G', 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4}
+	runtime := &memberAvatarStubRuntime{avatar: assistant.GroupAvatar{Data: pngBody, ContentType: "image/png"}, found: true}
+	telegram := assistant.DefaultBotConfig()
+	telegram.ID = "tg"
+	telegram.Platform = assistant.PlatformTelegram
+	handler := &BotHandler{sqlite: store, runtime: runtime, profiles: NewMemoryBotProfileStore(telegram)}
+
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.GET("/api/assistant/events", handler.listEvents)
+	handler.registerAvatarRoutes(router)
+
+	listRecorder := httptest.NewRecorder()
+	router.ServeHTTP(listRecorder, httptest.NewRequest(http.MethodGet, "/api/assistant/events?range=24h", nil))
+	if listRecorder.Code != http.StatusOK {
+		t.Fatalf("list status=%d body=%s", listRecorder.Code, listRecorder.Body.String())
+	}
+	var response assistantEventsResponse
+	if err := json.Unmarshal(listRecorder.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if len(response.Events) != 1 {
+		t.Fatalf("events=%+v", response.Events)
+	}
+	avatarURL := response.Events[0].SenderAvatarURL
+	if avatarURL != "/api/assistant/avatars/member/12345?bot_profile_id=tg" {
+		t.Fatalf("sender avatar URL=%q", avatarURL)
+	}
+	if strings.Contains(avatarURL, "api.telegram.org") || strings.Contains(avatarURL, "bot-token") {
+		t.Fatalf("sender avatar URL leaked Telegram credentials: %q", avatarURL)
+	}
+
+	avatarRecorder := httptest.NewRecorder()
+	router.ServeHTTP(avatarRecorder, httptest.NewRequest(http.MethodGet, avatarURL, nil))
+	if avatarRecorder.Code != http.StatusOK || avatarRecorder.Header().Get("Content-Type") != "image/png" {
+		t.Fatalf("avatar status=%d type=%q body=%q", avatarRecorder.Code, avatarRecorder.Header().Get("Content-Type"), avatarRecorder.Body.String())
+	}
+	if !bytes.Equal(avatarRecorder.Body.Bytes(), pngBody) {
+		t.Fatal("avatar body differs from Telegram channel response")
+	}
+	if runtime.gotProfile != "tg" || runtime.gotUser != "12345" {
+		t.Fatalf("profile=%q user=%q", runtime.gotProfile, runtime.gotUser)
+	}
+}
+
 func TestAssistantEventImageEndpointServesCachedImageWithoutLeakingSource(t *testing.T) {
 	store, err := storage.NewSQLiteStore(filepath.Join(t.TempDir(), "assistant-event-image.db"))
 	if err != nil {

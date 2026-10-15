@@ -91,18 +91,60 @@ func (h *BotHandler) fetchAvatar(ctx context.Context, kind, profileID, id string
 	if remote := h.remoteAvatarURL(kind, profileID, id); remote != "" {
 		return h.avatarStore().fetchRemoteAvatar(ctx, remote, previous)
 	}
-	if kind != avatarKindGroup {
+	var avatar assistant.GroupAvatar
+	var found bool
+	switch kind {
+	case avatarKindGroup:
+		provider, ok := h.runtime.(groupAvatarRuntime)
+		if !ok {
+			return nil, errUnexpectedAvatarStatus
+		}
+		avatar, found = provider.GroupAvatarForProfile(ctx, profileID, id)
+	case avatarKindMember:
+		provider, ok := h.runtime.(memberAvatarRuntime)
+		if !ok {
+			return nil, errUnexpectedAvatarStatus
+		}
+		avatar, found = provider.MemberAvatarForProfile(ctx, profileID, id)
+	default:
 		return nil, errUnexpectedAvatarStatus
 	}
-	provider, ok := h.runtime.(groupAvatarRuntime)
-	if !ok {
-		return nil, errUnexpectedAvatarStatus
-	}
-	avatar, found := provider.GroupAvatarForProfile(ctx, profileID, id)
 	if !found || len(avatar.Data) == 0 || !strings.HasPrefix(avatar.ContentType, "image/") {
 		return nil, errUnexpectedAvatarStatus
 	}
 	return &avatarEntry{sha: avatarContentSHA(avatar.Data), contentType: avatar.ContentType, body: avatar.Data}, nil
+}
+
+// withConsoleProfileAvatars 给配置响应补上后台可直接显示的机器人头像地址。
+// 地址只指向本机代理；Telegram Bot Token 始终留在服务端。运行态暂时还没有
+// self_id 时退回已记住的 bot_account，连接建立后下一次刷新会换成实时账号。
+func (h *BotHandler) withConsoleProfileAvatars(payload assistant.ConfigPayload) assistant.ConfigPayload {
+	selfIDs := map[string]string{}
+	if h != nil && h.runtime != nil {
+		status := h.runtime.Status()
+		for _, channel := range status.Channels {
+			if profileID := strings.TrimSpace(channel.ProfileID); profileID != "" {
+				selfIDs[profileID] = strings.TrimSpace(channel.SelfID)
+			}
+		}
+		if len(payload.Profiles) == 1 && selfIDs[payload.Profiles[0].ID] == "" {
+			selfIDs[payload.Profiles[0].ID] = strings.TrimSpace(status.Channel.SelfID)
+		}
+	}
+	enrich := func(profile *assistant.ConfigPayload) {
+		if profile == nil || strings.TrimSpace(profile.AvatarURL) != "" {
+			return
+		}
+		account := firstNonEmptyWebUI(selfIDs[strings.TrimSpace(profile.ID)], strings.TrimSpace(profile.BotAccount))
+		if account != "" {
+			profile.AvatarURL = h.consoleAvatarURL(avatarKindMember, profile.ID, account)
+		}
+	}
+	for index := range payload.Profiles {
+		enrich(&payload.Profiles[index])
+	}
+	enrich(&payload)
+	return payload
 }
 
 // remoteAvatarURL 给出可以直接下载的头像地址，没有就返回空串。

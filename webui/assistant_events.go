@@ -26,8 +26,8 @@ type assistantEventDetail struct {
 	storage.InboundEventDetail
 	Handled   bool   `json:"handled"`
 	GroupName string `json:"group_name,omitempty"`
-	// SenderAvatarURL 是发送者的公开头像地址，只有 QQ 系有；其余平台留空，控制台
-	// 退回首字母占位。
+	// SenderAvatarURL 是发送者头像的本机代理地址：公开头像可由后端转发，
+	// Telegram 等平台则由对应通道取回图片，浏览器不会接触平台凭据。
 	SenderAvatarURL string `json:"sender_avatar_url,omitempty"`
 }
 

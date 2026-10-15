@@ -14,6 +14,21 @@ type MemberAvatarChannel interface {
 	MemberAvatar(context.Context, string) (GroupAvatar, error)
 }
 
+// MemberAvatarForProfile 找到指定机器人对应的通道，取一个账号的头像。
+// Telegram 的文件下载地址带 Bot Token，WebUI 只能通过运行时拿到图片字节，
+// 不能把上游地址直接交给浏览器。
+func (r *Runtime) MemberAvatarForProfile(ctx context.Context, profileID, userID string) (GroupAvatar, bool) {
+	provider, ok := channelFor[MemberAvatarChannel](r, profileID)
+	if !ok {
+		return GroupAvatar{}, false
+	}
+	avatar, err := provider.MemberAvatar(ctx, userID)
+	if err != nil || len(avatar.Data) == 0 || !strings.HasPrefix(avatar.ContentType, "image/") {
+		return GroupAvatar{}, false
+	}
+	return avatar, true
+}
+
 func (c *TelegramChannel) MemberAvatar(ctx context.Context, userID string) (GroupAvatar, error) {
 	id, err := strconv.ParseInt(strings.TrimSpace(userID), 10, 64)
 	if err != nil || id <= 0 {

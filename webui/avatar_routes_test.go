@@ -4,6 +4,7 @@
 package webui
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -80,6 +81,82 @@ func TestAvatarEndpointRejectsUnknownKindAndMissingAvatar(t *testing.T) {
 		router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
 		if rec.Code != http.StatusNotFound {
 			t.Fatalf("%s: status = %d", path, rec.Code)
+		}
+	}
+}
+
+type memberAvatarStubRuntime struct {
+	BotRuntime
+	avatar     assistant.GroupAvatar
+	found      bool
+	gotProfile string
+	gotUser    string
+}
+
+func (r *memberAvatarStubRuntime) Status() assistant.RuntimeStatus { return assistant.RuntimeStatus{} }
+
+func (r *memberAvatarStubRuntime) CallOneBotAPI(context.Context, string, map[string]any) (map[string]any, error) {
+	return map[string]any{"data": []any{}}, nil
+}
+
+func (r *memberAvatarStubRuntime) MemberAvatarForProfile(_ context.Context, profileID, userID string) (assistant.GroupAvatar, bool) {
+	r.gotProfile = profileID
+	r.gotUser = userID
+	return r.avatar, r.found
+}
+
+func TestAvatarEndpointServesTelegramMemberAvatar(t *testing.T) {
+	png := []byte{0x89, 'P', 'N', 'G', 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4}
+	runtime := &memberAvatarStubRuntime{avatar: assistant.GroupAvatar{Data: png, ContentType: "image/png"}, found: true}
+	router, _ := newAvatarEndpointRouter(runtime)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/assistant/avatars/member/12345?bot_profile_id=tg", nil))
+	if rec.Code != http.StatusOK || rec.Body.Len() != len(png) {
+		t.Fatalf("status=%d body=%d", rec.Code, rec.Body.Len())
+	}
+	if runtime.gotProfile != "tg" || runtime.gotUser != "12345" {
+		t.Fatalf("profile=%q user=%q", runtime.gotProfile, runtime.gotUser)
+	}
+	if strings.Contains(rec.Body.String(), "bot-token") {
+		t.Fatal("response leaked Telegram credentials")
+	}
+}
+
+type profileAvatarStatusRuntime struct {
+	BotRuntime
+	status assistant.RuntimeStatus
+}
+
+func (r *profileAvatarStatusRuntime) Status() assistant.RuntimeStatus { return r.status }
+
+func TestConfigPayloadGetsLocalTelegramAvatarURL(t *testing.T) {
+	runtime := &profileAvatarStatusRuntime{status: assistant.RuntimeStatus{Channels: []assistant.ChannelStatus{{ProfileID: "tg", Platform: assistant.PlatformTelegram, SelfID: "12345"}}}}
+	handler := &BotHandler{runtime: runtime}
+	payload := assistant.ConfigPayload{
+		ID:       "tg",
+		Platform: assistant.PlatformTelegram,
+		Profiles: []assistant.ConfigPayload{
+			{ID: "qq", Platform: assistant.PlatformOneBotV11, BotAccount: "10001"},
+			{ID: "custom", Platform: assistant.PlatformTelegram, BotAccount: "22222", AvatarURL: "/custom-avatar.png"},
+			{ID: "tg", Platform: assistant.PlatformTelegram},
+		},
+	}
+	got := handler.withConsoleProfileAvatars(payload)
+	if got.AvatarURL != "/api/assistant/avatars/member/12345?bot_profile_id=tg" {
+		t.Fatalf("focused avatar URL = %q", got.AvatarURL)
+	}
+	if got.Profiles[0].AvatarURL != "/api/assistant/avatars/member/10001?bot_profile_id=qq" {
+		t.Fatalf("OneBot avatar URL = %q", got.Profiles[0].AvatarURL)
+	}
+	if got.Profiles[1].AvatarURL != "/custom-avatar.png" {
+		t.Fatalf("configured avatar URL was replaced: %q", got.Profiles[1].AvatarURL)
+	}
+	if got.Profiles[2].AvatarURL != "/api/assistant/avatars/member/12345?bot_profile_id=tg" {
+		t.Fatalf("Telegram avatar URL = %q", got.Profiles[2].AvatarURL)
+	}
+	for _, avatarURL := range []string{got.AvatarURL, got.Profiles[0].AvatarURL, got.Profiles[1].AvatarURL, got.Profiles[2].AvatarURL} {
+		if strings.Contains(avatarURL, "api.telegram.org") || strings.Contains(avatarURL, "bot-token") {
+			t.Fatalf("avatar URL leaked upstream credentials: %q", avatarURL)
 		}
 	}
 }
