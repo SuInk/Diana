@@ -81,6 +81,25 @@ func TestParticipationWillingnessReachesBothModels(t *testing.T) {
 	}
 }
 
+func TestForeignCommandRuleReachesEveryRouter(t *testing.T) {
+	const custom = "未点名本机的外部指令必须静默；普通群聊继续判断。"
+	overrides := PromptOverrides{
+		promptParticipationForeignCommandSpec.Key: custom,
+		promptRouterForeignCommandSpec.Key:        custom,
+	}
+	for name, text := range map[string]string{
+		"评分模型":    participationScorePromptWith(overrides),
+		"判断模型相关度": participationDecisionSpec(overrides).Questions[0].Instructions,
+		"判断模型闲聊":  participationDecisionSpec(overrides).Questions[1].Instructions,
+		"旧版对话路由":  proactiveReplyRouterSystemPrompt("", BotConfig{PromptOverrides: overrides}),
+		"旧版判断路由":  proactiveReplyDecisionSpec(nil, overrides).Questions[0].Instructions,
+	} {
+		if !strings.Contains(text, custom) {
+			t.Fatalf("%s 没有收到外部指令规则：%s", name, text)
+		}
+	}
+}
+
 func TestProactiveReplyDecisionSpecRendersParsableDecision(t *testing.T) {
 	candidates := []proactiveReplyCandidate{
 		{Event: MessageEvent{MessageID: "101"}, Text: "有人知道这个报错吗"},

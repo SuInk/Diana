@@ -221,6 +221,7 @@ false：` + overrides.text(promptParticipationRelevanceFalseSpec) + `
 ` + overrides.text(promptParticipationChatInIntroSpec) + `
 ` + participationWillingnessPrompt(overrides) + `
 ` + overrides.text(promptParticipationChatInNoteSpec) + `
+` + overrides.text(promptParticipationForeignCommandSpec) + `
 ` + overrides.text(promptParticipationSharedNoteSpec) + `
 ` + overrides.text(promptParticipationFormatSpec)
 }
@@ -339,6 +340,16 @@ var promptParticipationChatInNoteSpec = registerPrompt(PromptSpec{
 	Title:   "接话评分 · 闲聊打分口径",
 	Usage:   "没人找机器人时「插一句是否自然」怎么打分：什么该压低、刻度怎么用。哪些情形愿意接写在「什么情况下愿意接话」，档位阈值由程序固定，这段只调口径。评分模型和判断模型共用这段。",
 	Default: participationChatInNote,
+})
+
+const participationForeignCommand = `明显的其他机器人指令（例如 /ai off、/查谱、#签到、.r、!help）如果没有 @、引用、回复或点名本机器人，就不是发给本机器人的请求：relevance.directed 填 false，chat_in.score 记 0.00。不要因为本机器人也能执行相似操作而冒认。明确指向本机器人时不套用此条。普通的自然语言群聊，即使 @ 或回复了别人，也不是“其他机器人指令”，仍按上下文判断 chat_in，可以自然评价。`
+
+var promptParticipationForeignCommandSpec = registerPrompt(PromptSpec{
+	Key:     "routing.participation.foreign_command",
+	Group:   PromptGroupRouting,
+	Title:   "接话评分 · 其他机器人指令",
+	Usage:   "两项评分共用：没有指向本机的其他机器人指令记为不相关且闲聊分为零；普通群聊仍交给模型判断。改动时保留 relevance.directed=false 和 chat_in.score=0.00，确保所有闲聊档位都保持静默。",
+	Default: participationForeignCommand,
 })
 
 const participationSharedNote = `用户明确要求停止、嫌它吵或多嘴、同一消息重复投递且同一内容已经回答，或正在机械循环时，directed 填 false、chat_in 记 0.00。答案发出后用户再次提问、反驳或质疑属于新的请求，不能仅因话题或问法相同就套用“同一内容已经回答”。普通情绪和短句不自动低分，短不等于没内容。
