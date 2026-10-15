@@ -1224,34 +1224,6 @@
             </div>
           </section>
 
-          <!-- 媒体预处理：收到图片、视频时后台做不做。用哪个模型在「模型」页。 -->
-          <section class="card">
-            <div class="card-header">
-              <div>
-                <h2>媒体预处理</h2>
-                <span class="card-sub">收到图片和视频时先在后台读一遍</span>
-              </div>
-            </div>
-            <div class="card-body form-grid">
-              <div class="field wide">
-                <label class="switch">
-                  <input v-model="form.auto_image_description" type="checkbox" />
-                  <span class="track" aria-hidden="true"></span>
-                  <span class="switch-label">自动生成图片描述</span>
-                </label>
-              </div>
-              <div class="field wide">
-                <label class="switch">
-                  <input v-model="form.auto_video_preprocess" type="checkbox" />
-                  <span class="track" aria-hidden="true"></span>
-                  <span class="switch-label">自动下载视频并提取关键帧</span>
-                </label>
-                <span class="hint">关闭后保留媒体索引和已有缓存；普通图片不再后台调用模型，视频不再预下载或抽帧。主动读取、引用分析及工具调用仍可按需解析；远程媒体过期后可能无法读取。</span>
-                <span class="hint">图片描述、视频帧描述和模型 OCR 用的是<a href="#" @click.prevent="editorTab = 'model'">「模型」标签</a>里「模型分配」的「媒体解析」。文本文件提取和本地 OCR 不消耗模型额度。</span>
-              </div>
-            </div>
-          </section>
-
           <!-- 安全：发出去之前审一遍，别和其他机器人没完没了，看过的撤回内容跟着撤。 -->
           <section class="card">
             <div class="card-header">
@@ -1275,15 +1247,14 @@
                 </span>
               </div>
               <div class="field wide">
-                <label for="bot-account-safety-prompt">账号安全审核规则（留空使用内置规则）</label>
+                <label for="bot-account-safety-prompt">账号安全审核规则</label>
                 <textarea
                   id="bot-account-safety-prompt"
-                  v-model="form.reply_account_safety_audit_prompt"
+                  v-model="accountSafetyRulesDraft"
                   class="textarea"
-                  rows="5"
-                  placeholder="例如：只拦截可能导致当前平台账号处罚的明确内容；新闻事实中性转述放行。"
+                  rows="14"
                 ></textarea>
-                <span class="hint">填写后替代内置账号风险范围，只影响账号安全结论，不改变拒答和防循环审核。</span>
+                <span class="hint">当前显示实际生效的内置规则；修改后作为自定义范围保存。恢复成内置原文会继续跟随系统默认。只影响账号安全结论，不改变拒答和防循环审核。</span>
               </div>
               <div class="field wide participation-prompts">
                 <div class="participation-prompt-part">
@@ -1414,40 +1385,6 @@
                   inputmode="numeric"
                 />
                 <span class="hint">可设置 1–{{ maximumRecallReplyAutoDeleteDelaySeconds }} 秒。</span>
-              </div>
-            </div>
-          </section>
-
-          <!-- 账号隐私：发给模型的账号、群号和消息 ID 要不要换成别名。 -->
-          <section class="card">
-            <div class="card-header">
-              <div>
-                <h2>账号隐私</h2>
-              </div>
-              <span class="badge" :class="form.llm_identity_masking_enabled ? 'accent' : ''">{{ form.llm_identity_masking_enabled ? "已启用" : "已关闭" }}</span>
-            </div>
-            <div class="card-body form-grid">
-              <div class="field wide">
-                <label class="switch">
-                  <input v-model="form.llm_identity_masking_enabled" type="checkbox" />
-                  <span class="track" aria-hidden="true"></span>
-                  <span class="switch-label">对模型隐藏账号 ID（默认开启）</span>
-                </label>
-                <span class="hint">
-                  开启时，账号、群号和消息 ID 在发给模型前换成 im_user_xxx 这类别名，模型调用工具或发消息时再自动换回真实 ID。
-                  关闭后模型直接看到真实 ID，适合需要让模型按原始账号查人、对账的场景。
-                </span>
-              </div>
-              <div class="field wide">
-                <label class="switch">
-                  <input v-model="form.llm_identity_body_account_mapping_enabled" type="checkbox" :disabled="!form.llm_identity_masking_enabled" />
-                  <span class="track" aria-hidden="true"></span>
-                  <span class="switch-label">正文里的账号也换成别名（默认开启）</span>
-                </label>
-                <span class="hint">
-                  有人在消息里直接写 QQ 号时，先向平台核实是不是本群成员，是就换成同一个别名，模型能认出是谁、也能拿去查；订单号、手机号等其他数字原样保留。
-                  关闭后正文里没在聊天记录中出现过的号码按原样发给模型。只在上面的隐私开关打开时生效。
-                </span>
               </div>
             </div>
           </section>
@@ -1800,6 +1737,69 @@
               </div>
             </div>
           </section>
+
+          <!-- 媒体预处理：决定图片、视频如何转成可供上下文使用的文字。用哪个模型在「模型」页。 -->
+          <section class="card">
+            <div class="card-header">
+              <div>
+                <h2>媒体预处理</h2>
+                <span class="card-sub">收到图片和视频时先在后台读一遍</span>
+              </div>
+            </div>
+            <div class="card-body form-grid">
+              <div class="field wide">
+                <label class="switch">
+                  <input v-model="form.auto_image_description" type="checkbox" />
+                  <span class="track" aria-hidden="true"></span>
+                  <span class="switch-label">自动生成图片描述</span>
+                </label>
+              </div>
+              <div class="field wide">
+                <label class="switch">
+                  <input v-model="form.auto_video_preprocess" type="checkbox" />
+                  <span class="track" aria-hidden="true"></span>
+                  <span class="switch-label">自动下载视频并提取关键帧</span>
+                </label>
+                <span class="hint">关闭后保留媒体索引和已有缓存；普通图片不再后台调用模型，视频不再预下载或抽帧。主动读取、引用分析及工具调用仍可按需解析；远程媒体过期后可能无法读取。</span>
+                <span class="hint">图片描述、视频帧描述和模型 OCR 用的是<a href="#" @click.prevent="editorTab = 'model'">「模型」标签</a>里「模型分配」的「媒体解析」。文本文件提取和本地 OCR 不消耗模型额度。</span>
+              </div>
+            </div>
+          </section>
+
+          <!-- 账号隐私：发给模型的上下文中，账号、群号和消息 ID 要不要换成别名。 -->
+          <section class="card">
+            <div class="card-header">
+              <div>
+                <h2>账号隐私</h2>
+              </div>
+              <span class="badge" :class="form.llm_identity_masking_enabled ? 'accent' : ''">{{ form.llm_identity_masking_enabled ? "已启用" : "已关闭" }}</span>
+            </div>
+            <div class="card-body form-grid">
+              <div class="field wide">
+                <label class="switch">
+                  <input v-model="form.llm_identity_masking_enabled" type="checkbox" />
+                  <span class="track" aria-hidden="true"></span>
+                  <span class="switch-label">对模型隐藏账号 ID（默认开启）</span>
+                </label>
+                <span class="hint">
+                  开启时，账号、群号和消息 ID 在发给模型前换成 im_user_xxx 这类别名，模型调用工具或发消息时再自动换回真实 ID。
+                  关闭后模型直接看到真实 ID，适合需要让模型按原始账号查人、对账的场景。
+                </span>
+              </div>
+              <div class="field wide">
+                <label class="switch">
+                  <input v-model="form.llm_identity_body_account_mapping_enabled" type="checkbox" :disabled="!form.llm_identity_masking_enabled" />
+                  <span class="track" aria-hidden="true"></span>
+                  <span class="switch-label">正文里的账号也换成别名（默认开启）</span>
+                </label>
+                <span class="hint">
+                  有人在消息里直接写 QQ 号时，先向平台核实是不是本群成员，是就换成同一个别名，模型能认出是谁、也能拿去查；订单号、手机号等其他数字原样保留。
+                  关闭后正文里没在聊天记录中出现过的号码按原样发给模型。只在上面的隐私开关打开时生效。
+                </span>
+              </div>
+            </div>
+          </section>
+
           <section class="card">
             <div class="card-body">
               <AgentResidencyPanel ref="residencyPanel" :profile="form.id || ''" />
@@ -2430,6 +2430,7 @@ import { toastError, toastSuccess } from "../lib/toast";
 import { allowNodeExecution } from "../lib/node-execution-preset";
 import { channelAccountUnhealthy, channelOperational, channelStatusHint, channelStatusLabel } from "../lib/channel-status";
 import { effectiveReplyTone, FALLBACK_REPLY_TONE, normalizeReplyTone, replyToneOverride } from "../lib/reply-tone";
+import { accountSafetyRulesOverride, effectiveAccountSafetyRules, FALLBACK_ACCOUNT_SAFETY_RULES, normalizeAccountSafetyRules } from "../lib/account-safety-rules";
 
 const form = ref<BotProfileConfig | null>(null);
 const modelRequestTimeoutDraft = ref<number | string>(0);
@@ -2442,6 +2443,8 @@ const personaDraftInput = ref<HTMLTextAreaElement | null>(null);
 const personaBusy = ref(false);
 const replyToneDraft = ref("");
 const replyToneDefault = ref(FALLBACK_REPLY_TONE);
+const accountSafetyRulesDraft = ref("");
+const accountSafetyRulesDefault = ref(FALLBACK_ACCOUNT_SAFETY_RULES);
 // 保留生成前的那一版，生成结果不合适可以一键退回，不用自己 Ctrl+Z。
 const soulEditor = ref<InstanceType<typeof SoulEditor> | null>(null);
 const promptOverridesOpen = ref(false);
@@ -4672,6 +4675,8 @@ function setForm(config: BotProfileConfig): void {
   modelRequestTimeoutDraft.value = modelRequestTimeoutSeconds(config.model_request_timeout_ms);
   replyToneDefault.value = normalizeReplyTone(config.reply_tone_default) || FALLBACK_REPLY_TONE;
   replyToneDraft.value = effectiveReplyTone(config.maibot_reply_style, replyToneDefault.value);
+  accountSafetyRulesDefault.value = normalizeAccountSafetyRules(config.reply_account_safety_audit_default) || FALLBACK_ACCOUNT_SAFETY_RULES;
+  accountSafetyRulesDraft.value = effectiveAccountSafetyRules(config.reply_account_safety_audit_prompt, accountSafetyRulesDefault.value);
   form.value = {
     ...config,
     participation: participationFromConfig(config),
@@ -4965,8 +4970,10 @@ async function save(): Promise<void> {
       ...current,
       model_request_timeout_ms: modelRequestTimeoutMS,
       maibot_reply_style: replyToneOverride(replyToneDraft.value, replyToneDefault.value),
+      reply_account_safety_audit_prompt: accountSafetyRulesOverride(accountSafetyRulesDraft.value, accountSafetyRulesDefault.value),
       // 只读默认值由后端回传，不写进机器人自己的配置。
       reply_tone_default: undefined,
+      reply_account_safety_audit_default: undefined,
       // 截图权限在交互式浏览器页管理，编辑其他配置时不能覆盖那里新保存的授权。
       agent_browser_screenshot_access: creating.value ? current.agent_browser_screenshot_access : undefined,
       agent_browser_operation_access: creating.value ? current.agent_browser_operation_access : undefined,
@@ -5072,7 +5079,8 @@ function editorSnapshot(): string {
     privateAllowedUsers.value,
     Object.values(tokenDrafts).map((draft) => draft.value),
     modelRequestTimeoutDraft.value,
-    replyToneDraft.value
+    replyToneDraft.value,
+    accountSafetyRulesDraft.value
   ]);
 }
 // 媒体回源基址是全局设置，异步单独加载，不进快照；和加载时的值比，规则同保存。

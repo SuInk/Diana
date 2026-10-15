@@ -8,6 +8,7 @@ import { parse } from "@vue/compiler-sfc";
 import { modelRequestTimeoutMilliseconds } from "./configuration-sync.ts";
 import { effectiveModelInfo, mergeModelMetadata } from "./model-metadata.ts";
 import { FALLBACK_REPLY_TONE, replyToneOverride } from "./reply-tone.ts";
+import { accountSafetyRulesOverride, FALLBACK_ACCOUNT_SAFETY_RULES } from "./account-safety-rules.ts";
 
 const source = readFileSync(new URL("../views/AssistantView.vue", import.meta.url), "utf8");
 const script = parse(source).descriptor.scriptSetup.content;
@@ -19,6 +20,9 @@ function loadFunction(name, context) {
     context.replyToneOverride = replyToneOverride;
     context.replyToneDraft ??= { value: FALLBACK_REPLY_TONE };
     context.replyToneDefault ??= { value: FALLBACK_REPLY_TONE };
+    context.accountSafetyRulesOverride = accountSafetyRulesOverride;
+    context.accountSafetyRulesDraft ??= { value: FALLBACK_ACCOUNT_SAFETY_RULES };
+    context.accountSafetyRulesDefault ??= { value: FALLBACK_ACCOUNT_SAFETY_RULES };
     context.page ??= { value: "edit" };
   }
   const fn = ast.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === name);

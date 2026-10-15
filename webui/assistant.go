@@ -55,6 +55,12 @@ type groupAvatarRuntime interface {
 	GroupAvatarForProfile(ctx context.Context, profileID, groupID string) (assistant.GroupAvatar, bool)
 }
 
+// memberAvatarRuntime 让控制台通过机器人自己的通道读取成员或机器人头像。
+// Telegram 的头像下载地址包含 Bot Token，所以和群头像一样只传图片字节。
+type memberAvatarRuntime interface {
+	MemberAvatarForProfile(ctx context.Context, profileID, userID string) (assistant.GroupAvatar, bool)
+}
+
 // contextBudgetRuntime 让事件页拿到按群算好的上下文预算分配。做成可选接口而不是
 // 塞进 BotRuntime：它只服务一个页面，测试里的假运行时不必为此实现一个空方法。
 type contextBudgetRuntime interface {
@@ -435,6 +441,10 @@ func (h *BotHandler) registerRoutes(router gin.IRouter, base string) {
 	router.POST(base+"/plugins/music/test", h.testMusicConnections)
 	router.GET(base+"/plugins/vrchat/status", h.vrchatStatus)
 	router.POST(base+"/plugins/resolver/test", h.testResolverCredentials)
+	router.POST(base+"/plugins/resolver/cookie-file/read", h.readResolverCookieFile)
+	router.POST(base+"/plugins/resolver/cookie-file/check", h.checkResolverCookieFile)
+	router.POST(base+"/plugins/resolver/cookie-file/login", h.testResolverCookieLogin)
+	router.POST(base+"/plugins/resolver/cookie-file", h.saveResolverCookieFile)
 	router.POST(base+"/plugins/github/credentials/test", h.testGitHubCredentials)
 	router.GET(base+"/plugins/github/user", h.lookupGitHubUser)
 	router.POST(base+"/plugins/coding-agent/setup", h.codingAgentSetup)
@@ -512,10 +522,12 @@ func (h *BotHandler) platforms(c *gin.Context) {
 // include_secrets=true 再要一次,和 LLM API Key 那套保持一致。
 func (h *BotHandler) getConfig(c *gin.Context) {
 	if queryBool(c.Query("include_secrets")) {
-		c.JSON(http.StatusOK, assistant.PayloadFromProfileSetWithSecrets(h.profiles.Profiles(), botProfileScope(c)))
+		payload := assistant.PayloadFromProfileSetWithSecrets(h.profiles.Profiles(), botProfileScope(c))
+		c.JSON(http.StatusOK, h.withConsoleProfileAvatars(payload))
 		return
 	}
-	c.JSON(http.StatusOK, assistant.PayloadFromProfileSet(h.profiles.Profiles(), botProfileScope(c)))
+	payload := assistant.PayloadFromProfileSet(h.profiles.Profiles(), botProfileScope(c))
+	c.JSON(http.StatusOK, h.withConsoleProfileAvatars(payload))
 }
 
 // newProfileDefaults returns a fresh draft, never an existing profile or its secrets.

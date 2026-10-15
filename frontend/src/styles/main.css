@@ -2342,6 +2342,8 @@ a.nav-action {
 }
 
 .modal-body {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
   padding: 18px 20px;
   overflow-y: auto;
   /* 滚到顶/底后不要把滚动继续传给背景页面。 */
@@ -6759,3 +6761,20 @@ a.nav-action {
   .search-routing-panel .model-purpose-heading { flex-wrap: wrap; gap: 12px; }
   .search-routing-options .form-grid { grid-template-columns: minmax(0, 1fr); }
 }
+
+/* Credential health, independent of editor focus or parsing enablement. */
+.resolver-chip { gap:8px; padding:5px 10px; min-height:32px; margin:0; border-radius:999px; }
+.resolver-chip.is-enabled { border-color:var(--border-strong); }
+.resolver-chip.resolver-status-ok { border-color:var(--ok); background:var(--ok-soft); }
+.resolver-chip.resolver-status-err { border-color:var(--err); background:var(--err-soft); }
+.resolver-chip.resolver-status-warn { border-color:var(--warn); }
+.resolver-chip:not(.is-enabled) { opacity:.45; }
+.resolver-chip.is-enabled { opacity:1; color:var(--text); }
+.resolver-health-dot { display:inline-block; width:7px; height:7px; flex:0 0 7px; border-radius:50%; background:var(--text-secondary); }
+.resolver-health-dot.ok { background:var(--ok); }
+.resolver-health-dot.err { background:var(--err); }
+.resolver-health-dot.warn { background:var(--warn); }
+.resolver-chip-edit { display:inline-flex; align-items:center; justify-content:center; width:24px; height:24px; padding:0; border:0; border-radius:50%; color:inherit; background:transparent; cursor:pointer; }
+.resolver-chip-edit:hover { background:var(--surface-2); }
+.resolver-chip-edit:focus-visible { outline:2px solid var(--accent); }
+.resolver-chip-edit:disabled { opacity:.4; cursor:default; }

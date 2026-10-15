@@ -1462,6 +1462,7 @@ type ConfigPayload struct {
 	ReplyRefusalThreshold          int                  `json:"reply_refusal_threshold,omitempty"`
 	ReplySafetyMasterEnabled       *bool                `json:"reply_account_safety_audit_master_enabled,omitempty"`
 	ReplyAccountSafetyAuditPrompt  string               `json:"reply_account_safety_audit_prompt,omitempty"`
+	ReplyAccountSafetyAuditDefault string               `json:"reply_account_safety_audit_default,omitempty"`
 	// NotebookSharedScopeEnabled 让笔记本跟随机器人：群聊私聊共用一本，新条目写进
 	// 这台机器人的全局作用域，所有会话都能查到。默认打开——笔记本记的是这台机器人
 	// 学到的梗和规矩，不是某个群的私产；关掉才按会话隔离。
@@ -2836,6 +2837,7 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		ReplySemanticDedupEnabled:         copyBoolPointer(cfg.ReplySemanticDedupEnabled),
 		ReplySafetyMasterEnabled:          copyBoolPointer(cfg.ReplySafetyMasterEnabled),
 		ReplyAccountSafetyAuditPrompt:     strings.TrimSpace(cfg.ReplyAccountSafetyAuditPrompt),
+		ReplyAccountSafetyAuditDefault:    DefaultReplyAccountSafetyAuditPrompt,
 		NotebookSharedScopeEnabled:        copyBoolPointer(cfg.NotebookSharedScopeEnabled),
 		ProactiveReplyExtraCriteria:       cfg.ProactiveReplyExtraCriteria,
 		PromptOverrides:                   normalizePromptOverrides(cfg.PromptOverrides),

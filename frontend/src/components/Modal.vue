@@ -36,6 +36,8 @@ let previousFocus: HTMLElement | null = null;
 
 function onKeydown(event: KeyboardEvent): void {
   if (event.key === "Escape") {
+    const dialogs = document.querySelectorAll('.modal[aria-modal="true"]');
+    if (dialogs[dialogs.length - 1] !== modalRef.value) return;
     emit("close");
   }
 }

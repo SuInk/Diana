@@ -1,6 +1,7 @@
 package assistant
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -113,6 +114,23 @@ func TestTelegramAvatarUsesBytesAndLargestPhotoWithoutTokenURLs(t *testing.T) {
 	photos := api.callsOf("getUserProfilePhotos")
 	if len(photos) != 1 || stringFromAny(photos[0].Params["user_id"]) != "22222" {
 		t.Fatal("wrong profile photo target")
+	}
+}
+
+func TestRuntimeMemberAvatarForProfileUsesTelegramChannel(t *testing.T) {
+	png := []byte{0x89, 'P', 'N', 'G', 0x0d, 0x0a, 0x1a, 0x0a}
+	api := newFakeTelegramAPI(t, map[string]any{
+		"getUserProfilePhotos":    map[string]any{"photos": [][]any{{map[string]any{"file_id": "bot-avatar", "width": 320, "height": 320}}}},
+		"getFile":                 map[string]any{"file_path": "photos/bot.png"},
+		"download:photos/bot.png": png,
+	})
+	runtime := NewRuntime(BotConfig{ID: "tg", Platform: PlatformTelegram}, api.channel(), NewPluginManager(), nil, nil, nil, nil)
+	avatar, ok := runtime.MemberAvatarForProfile(context.Background(), "tg", "12345")
+	if !ok || avatar.ContentType != "image/png" || !bytes.Equal(avatar.Data, png) {
+		t.Fatalf("avatar=%+v ok=%v", avatar, ok)
+	}
+	if calls := api.callsOf("getUserProfilePhotos"); len(calls) != 1 || stringFromAny(calls[0].Params["user_id"]) != "12345" {
+		t.Fatalf("wrong profile photo request: %+v", calls)
 	}
 }
 

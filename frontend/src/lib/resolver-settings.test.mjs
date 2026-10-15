@@ -5,7 +5,7 @@ import vm from "node:vm";
 import ts from "typescript";
 import { parse } from "@vue/compiler-sfc";
 import { computed, ref, watch } from "vue";
-import { createResolverCredentialChecks, groupResolverSettings } from "./resolver-credentials.ts";
+import { createResolverCredentialChecks, groupResolverSettings, resolverCheckLabel } from "./resolver-credentials.ts";
 
 const source = readFileSync(new URL("../views/PluginsView.vue", import.meta.url), "utf8");
 const script = parse(source).descriptor.scriptSetup.content;
@@ -24,9 +24,10 @@ function editor() {
   const notices = [];
   const target = ref(null), form = ref({}), clears = ref([]);
   const context = vm.createContext({
-    Error, Element: class Element { constructor(selector) { this.selector = selector; } closest(selectors) { return selectors.split(", ").includes(this.selector); } },
+    resolverCheckLabel, Error, Element: class Element { constructor(selector) { this.selector = selector; } closest(selectors) { return selectors.split(", ").includes(this.selector); } },
     document: new EventTarget(), window: new EventTarget(), settingsPointerTarget: null,
     settingsTarget: target, settingsForm: form, clearSecrets: clears,
+    editingResolverPlatform: ref(""), resolverCookieEditor: ref(null),
     settingsSpecs: computed(() => target.value?.manifest.settings ?? []),
     repositoryPublishSpecs: ref([]), repositoryPublishTarget: ref(null), repositoryPublishForm: ref({}),
     isGitHubSettings: ref(false), repositoryWatchRef: ref(null), rssWatchRef: ref(null), credentialEditor: ref(null),
@@ -42,7 +43,7 @@ function editor() {
   context.resolverGroups = computed(() => groupResolverSettings(context.settingsSpecs.value));
   context.activeSettingsForm = computed(() => form.value);
   context.settingsBusy = computed(() => context.savingSettings.value || context.savingSubscription.value);
-  for (const name of ["secretConfigured", "resolverInput"]) runFunction(name, context);
+  for (const name of ["secretConfigured", "resolverInput", "toggleResolverPlatform", "resolverRowStatus"]) runFunction(name, context);
   context.resolverChecks = createResolverCredentialChecks({ input: context.resolverInput, request: (key, signal) => new Promise((resolve, reject) => checks.push({ key, signal, resolve, reject })) });
   for (const name of ["settingsSnapshot", "settingsDirty", "openSettings", "toggleClearSecret", "discardSettings", "closeSettings", "resetSettings", "buildSettingsPayload", "persistSettings", "saveSettings", "clearSettingsPointerTarget", "onSettingsPointerDown", "onResolverBlur"]) runFunction(name, context);
   context.openSettings(plugin);
@@ -50,6 +51,47 @@ function editor() {
 }
 const tick = () => Promise.resolve();
 const result = { key, state: "valid", configured: true, label: "B站", message: "synthetic success" };
+
+test("bulk detection includes YouTube and reuses an automatic native check already in flight", async () => {
+  const { context: c, checks, saves } = editor();
+  runFunction("testAllResolverCredentials", c);
+  let youtubeChecks = 0;
+  c.resolverCookieEditor.value = { testLogin: async () => { youtubeChecks++; }, hasUnsavedChanges: () => false };
+  const pending = c.testAllResolverCredentials();
+  await tick();
+  assert.equal(checks.length, 1);
+  assert.equal(youtubeChecks, 1);
+  checks[0].resolve(result);
+  await pending;
+  const again = c.testAllResolverCredentials();
+  await tick();
+  assert.equal(checks.length, 2);
+  checks[1].resolve(result);
+  await again;
+  assert.equal(saves.length, 0);
+  assert.equal(c.settingsDirty(), false);
+  c.resolverChecks.dispose();
+});
+
+test("YouTube detection skips empty content and overlapping requests", async () => {
+  const component = parse(readFileSync(new URL("../components/ResolverCookieEditor.vue", import.meta.url), "utf8")).descriptor.scriptSetup.content;
+  const componentAST = ts.createSourceFile("cookie.ts", component, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  let requests = 0, finish;
+  const c = vm.createContext({ disposed: false, busy: ref(false), loaded: ref(true), hasYouTube: ref(false), props: {}, content: ref("synthetic"), loginState: ref(""), message: ref(""),
+    testResolverCookieLogin: () => { requests++; return new Promise(resolve => { finish = resolve; }); } });
+  runFunction("testLogin", c, componentAST);
+  await c.testLogin();
+  assert.equal(requests, 0);
+  c.hasYouTube.value = true;
+  const pending = c.testLogin();
+  await c.testLogin();
+  assert.equal(requests, 1);
+  assert.equal(c.loginState.value, "checking");
+  finish({ state: "valid", message: "synthetic" });
+  await pending;
+  assert.equal(c.loginState.value, "valid");
+  assert.equal(c.busy.value, false);
+});
 
 test("each real opening checks configured cookies once, even with platforms disabled, but skips empty credentials and files", async () => {
   const { context: c, checks, plugin: initial } = editor();
@@ -346,4 +388,64 @@ test("resolver API preserves all-item compatibility, encodes selection and forwa
   assert.equal(calls[1].url, `/api/assistant/plugins/resolver/test?profile=synthetic%20bot&credential_key=${key}`);
   assert.equal(calls[1].init.signal, controller.signal);
   assert.deepEqual(JSON.parse(calls[1].init.body), { settings: { [key]: "synthetic-draft" }, clear_secrets: ["douyin_cookie"] });
+});
+
+
+test("cookie draft prevents silent close and failed cookie save keeps all settings open", async () => {
+  const { context: c, saves, notices } = editor();
+  c.resolverCookieEditor.value = { hasUnsavedChanges: () => true, saveDraft: async () => { throw new Error("invalid cookie format"); } };
+  assert.equal(c.settingsDirty(), true);
+  await c.saveSettings();
+  assert.equal(saves.length, 0);
+  assert.ok(c.settingsTarget.value);
+  assert.match(notices.at(-1)[1], /invalid cookie format/);
+  c.resolverChecks.dispose();
+});
+
+test("unified save includes managed path and reports partial settings failure accurately", async () => {
+  const { context: c, saves, notices, plugin } = editor();
+  plugin.manifest.settings.push({ key: "ytdlp_cookies_path", type: "string", default: "" });
+  c.openSettings(plugin);
+  c.resolverCookieEditor.value = { hasUnsavedChanges: () => true, saveDraft: async () => { c.settingsForm.value.ytdlp_cookies_path = "/preview/resolver-cookies.txt"; return true; } };
+  const pending = c.saveSettings();
+  await tick();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(saves[0].settings.ytdlp_cookies_path, "/preview/resolver-cookies.txt");
+  saves[0].reject(new Error("offline"));
+  await pending;
+  assert.match(notices.at(-1)[1], /Cookie 文件已保存，但其他设置未保存/);
+  assert.ok(c.settingsTarget.value);
+  c.resolverChecks.dispose();
+});
+
+
+test("platform checkbox changes only parsing selection and preserves credential drafts", () => {
+  const { context: c } = editor();
+  c.settingsForm.value.bili_sessdata = "synthetic-draft";
+  c.toggleResolverPlatform("bilibili", { target: { checked: false } });
+  assert.deepEqual([...c.settingsForm.value.enabled_platforms], []);
+  assert.equal(c.settingsForm.value.bili_sessdata, "synthetic-draft");
+  c.toggleResolverPlatform("bilibili", { target: { checked: true } });
+  c.toggleResolverPlatform("bilibili", { target: { checked: true } });
+  assert.deepEqual([...c.settingsForm.value.enabled_platforms], ["bilibili"]);
+  assert.equal(c.clearSecrets.value.length, 0);
+  c.resolverChecks.dispose();
+});
+
+
+test("credential row colors reflect health and never keep success on an untested draft", () => {
+  const { context: c } = editor();
+  const state = c.resolverChecks.states[key];
+  for (const [status, color] of [["valid", "ok"], ["invalid", "err"], ["error", "err"], ["unverified", "warn"]]) {
+    state.phase = "done";
+    state.check = { ...result, state: status };
+    assert.equal(c.resolverRowStatus(key).color, color);
+  }
+  state.phase = "failed";
+  assert.equal(c.resolverRowStatus(key).color, "err");
+  state.phase = "checking";
+  assert.equal(c.resolverRowStatus(key).color, "warn");
+  state.phase = "pending";
+  assert.equal(c.resolverRowStatus(key).color, "");
+  c.resolverChecks.dispose();
 });

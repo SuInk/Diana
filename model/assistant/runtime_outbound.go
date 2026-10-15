@@ -72,6 +72,9 @@ func (r *Runtime) deliverChunks(ctx context.Context, event MessageEvent, chunks 
 		}
 		typingIndicatorFromContext(ctx).resume()
 		msg := OutgoingMessage{Text: chunk, LiteralText: decoration.LiteralText}
+		if subscriptionPushKindFromContext(ctx) == subscriptionPushRSSWatch && !msg.LiteralText {
+			msg = rssWatchOutgoingImages(msg)
+		}
 		if event.Kind == EventKindGroup {
 			msg.GroupID = event.GroupID
 			// 语音必须保持为独立 record 段；普通回复仍让第一条带 reply 元数据。

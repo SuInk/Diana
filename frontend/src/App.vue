@@ -448,7 +448,7 @@ const scopeOptions = computed(() => {
     ...(currentView.value === "groups" || botProfiles.value.length < 2 ? [] : [{ value: ALL_PROFILES, label: "全部机器人" }]),
     ...botProfiles.value
       .filter((profile) => profile.id)
-      .map((profile) => ({ value: profile.id ?? "", label: profile.name || profile.platform || "未命名机器人", hint: profile.platform }))
+      .map((profile) => ({ value: profile.id ?? "", label: profile.name || profile.platform || "未命名机器人", hint: profile.platform, avatar: profile.avatar_url }))
   ];
 });
 
