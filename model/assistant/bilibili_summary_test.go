@@ -28,6 +28,14 @@ func TestSignBilibiliWBIMatchesKnownWebExample(t *testing.T) {
 	}
 }
 
+func TestBilibiliViewUsesWBIEndpoint(t *testing.T) {
+	got := bilibiliViewAPIURL(" BV1gkpq6SEDC ")
+	want := "https://api.bilibili.com/x/web-interface/wbi/view?bvid=BV1gkpq6SEDC"
+	if got != want {
+		t.Fatalf("view URL = %q, want %q", got, want)
+	}
+}
+
 func TestSelectedBilibiliCIDUsesRequestedPage(t *testing.T) {
 	var view bilibiliViewResponse
 	view.Data.CID = 10

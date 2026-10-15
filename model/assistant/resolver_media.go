@@ -558,13 +558,17 @@ func fetchBilibiliView(ctx context.Context, raw string) (bilibiliViewResponse, b
 	if bvid == "" {
 		return bilibiliViewResponse{}, false
 	}
-	apiURL := "https://api.bilibili.com/x/web-interface/view?bvid=" + url.QueryEscape(bvid)
+	apiURL := bilibiliViewAPIURL(bvid)
 	var resp bilibiliViewResponse
 	if !fetchBilibiliJSON(ctx, apiURL, pageURL, &resp) || resp.Code != 0 {
 		log.Printf("resolver bilibili view failed: code=%d message=%s", resp.Code, resp.Message)
 		return bilibiliViewResponse{}, false
 	}
 	return resp, true
+}
+
+func bilibiliViewAPIURL(bvid string) string {
+	return "https://api.bilibili.com/x/web-interface/wbi/view?bvid=" + url.QueryEscape(strings.TrimSpace(bvid))
 }
 
 func fetchBilibiliPlayURL(ctx context.Context, bvid string, cid int64) (bilibiliPlayURLResponse, bool) {
