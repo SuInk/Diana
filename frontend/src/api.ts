@@ -4626,3 +4626,7 @@ export function saveResolverCookieFile(content: string): Promise<{ path: string 
 export function checkResolverCookieFile(content: string, format = false): Promise<{ count: number; youtube_count: number; expired_count: number; content?: string }> {
  return requestJSON("/api/assistant/plugins/resolver/cookie-file/check", { method: "POST", body: JSON.stringify({ content, format }) });
 }
+
+export function testResolverCookieLogin(content: string): Promise<{ state: "valid" | "invalid" | "unknown"; message: string }> {
+ return requestJSON("/api/assistant/plugins/resolver/cookie-file/login", { method: "POST", body: JSON.stringify({ content }) });
+}

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, onBeforeUnmount } from "vue";
-import { readResolverCookieFile, saveResolverCookieFile, checkResolverCookieFile } from "../api";
+import { readResolverCookieFile, saveResolverCookieFile, checkResolverCookieFile, testResolverCookieLogin } from "../api";
 const props = defineProps<{ path: string }>();
 const emit = defineEmits<{ (event: "saved", path: string): void }>();
 const editing = ref(false);
@@ -39,6 +39,16 @@ async function check(format: boolean) {
  } catch (error) { if (!disposed) message.value = error instanceof Error ? error.message : "检查失败"; }
  finally { if (!disposed) busy.value = false; }
 }
+async function testLogin() {
+ busy.value = true; message.value = "正在连接 YouTube 检测登录状态…";
+ try {
+  const result = await testResolverCookieLogin(content.value);
+  if (disposed) return;
+  const label = { valid: "登录有效", invalid: "登录无效", unknown: "无法确认" }[result.state];
+  message.value = `${label}：${result.message}`;
+ } catch (error) { if (!disposed) message.value = error instanceof Error ? error.message : "检测失败，无法确认登录状态"; }
+ finally { if (!disposed) busy.value = false; }
+}
 function cancel() { editing.value = false; content.value = ""; message.value = ""; }
 </script>
 
@@ -51,7 +61,9 @@ function cancel() { editing.value = false; content.value = ""; message.value = "
    <label for="resolver-cookie-content">Cookie 文件内容</label>
    <textarea id="resolver-cookie-content" v-model="content" @input="message = ''" class="input plugin-setting-textarea" rows="10" spellcheck="false" autocomplete="off" autocapitalize="off" :disabled="busy" placeholder="# Netscape HTTP Cookie File"></textarea>
    <span class="hint">仅检查文件格式，不代表登录有效。点击下方按钮会立即保存；取消不修改文件。</span>
+   <span class="hint">「检测登录有效性」会将草稿中适用于 YouTube 的 Cookie 发送到 YouTube，使用已保存的解析代理，不会保存或修改 Cookie 文件。</span>
    <div class="actions">
+    <button class="btn" type="button" :disabled="busy || !content.trim()" @click="testLogin">检测登录有效性</button>
     <button class="btn" type="button" :disabled="busy || !content.trim()" @click="check(false)">检查格式</button>
     <button class="btn" type="button" :disabled="busy || !content.trim()" @click="check(true)">格式化</button>
     <button class="btn primary" type="button" :disabled="busy || !content.trim()" @click="save">保存并启用 Cookie</button>

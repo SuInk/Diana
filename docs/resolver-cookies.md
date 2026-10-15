@@ -25,3 +25,17 @@ Cookie 保存在数据库同目录的 `resolver-cookies.txt`，与其他数据�
 的值、制表符和 HttpOnly 标记。格式化结果只留在草稿中，确认后点击保存才生效。
 不自动把 `Cookie: name=value` 请求头或 JSON 猜测转换为 Netscape 文件，因为它们可能缺少
 域名、路径或有效期信息。格式检查和过期统计都不代表 YouTube 登录验证通过。
+
+## 在线登录有效性检测
+
+「检测登录有效性」将当前草稿里符合域名、路径和有效期要求的 Cookie 发送到固定的
+YouTube 页面，通过页面 `ytcfg` 的 `LOGGED_IN` 布尔值判断是否登录；HTTP 200 本身不算
+验证成功。该信号也被 [yt-dlp 的 YouTube 实现](https://github.com/yt-dlp/yt-dlp/blob/master/yt_dlp/extractor/youtube/_base.py) 使用。
+
+- 登录有效：YouTube 明确返回已登录；不保证会员、地区、年龄限制等视频都能下载。
+- 登录无效：YouTube 明确返回未登录，或没有适用于检测页面的未过期 Cookie。
+- 无法确认：网络、代理、限流、风控、跳转、页面变化或无法解析响应。
+
+检测使用已保存的解析代理，最多等待 20 秒；没有配置代理时直连。只发送适用于
+`www.youtube.com/feed/library` 的 Cookie，不发送其他站点 Cookie，不跟随跳转，不下载视频，
+不使用服务器的其他登录凭据，也不保存草稿或回写服务端返回的 Cookie。
