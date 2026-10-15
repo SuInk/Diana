@@ -27,7 +27,7 @@ function editor() {
     Error, Element: class Element { constructor(selector) { this.selector = selector; } closest(selectors) { return selectors.split(", ").includes(this.selector); } },
     document: new EventTarget(), window: new EventTarget(), settingsPointerTarget: null,
     settingsTarget: target, settingsForm: form, clearSecrets: clears,
-    addedResolverCredentials: ref([]), resolverCookieEditor: ref(null),
+    editingResolverPlatform: ref(""), resolverCookieEditor: ref(null),
     settingsSpecs: computed(() => target.value?.manifest.settings ?? []),
     repositoryPublishSpecs: ref([]), repositoryPublishTarget: ref(null), repositoryPublishForm: ref({}),
     isGitHubSettings: ref(false), repositoryWatchRef: ref(null), rssWatchRef: ref(null), credentialEditor: ref(null),
@@ -43,7 +43,7 @@ function editor() {
   context.resolverGroups = computed(() => groupResolverSettings(context.settingsSpecs.value));
   context.activeSettingsForm = computed(() => form.value);
   context.settingsBusy = computed(() => context.savingSettings.value || context.savingSubscription.value);
-  for (const name of ["secretConfigured", "resolverInput"]) runFunction(name, context);
+  for (const name of ["secretConfigured", "resolverInput", "toggleResolverPlatform"]) runFunction(name, context);
   context.resolverChecks = createResolverCredentialChecks({ input: context.resolverInput, request: (key, signal) => new Promise((resolve, reject) => checks.push({ key, signal, resolve, reject })) });
   for (const name of ["settingsSnapshot", "settingsDirty", "openSettings", "toggleClearSecret", "discardSettings", "closeSettings", "resetSettings", "buildSettingsPayload", "persistSettings", "saveSettings", "clearSettingsPointerTarget", "onSettingsPointerDown", "onResolverBlur"]) runFunction(name, context);
   context.openSettings(plugin);
@@ -374,5 +374,19 @@ test("unified save includes managed path and reports partial settings failure ac
   await pending;
   assert.match(notices.at(-1)[1], /Cookie 文件已保存，但其他设置未保存/);
   assert.ok(c.settingsTarget.value);
+  c.resolverChecks.dispose();
+});
+
+
+test("platform checkbox changes only parsing selection and preserves credential drafts", () => {
+  const { context: c } = editor();
+  c.settingsForm.value.bili_sessdata = "synthetic-draft";
+  c.toggleResolverPlatform("bilibili", { target: { checked: false } });
+  assert.deepEqual([...c.settingsForm.value.enabled_platforms], []);
+  assert.equal(c.settingsForm.value.bili_sessdata, "synthetic-draft");
+  c.toggleResolverPlatform("bilibili", { target: { checked: true } });
+  c.toggleResolverPlatform("bilibili", { target: { checked: true } });
+  assert.deepEqual([...c.settingsForm.value.enabled_platforms], ["bilibili"]);
+  assert.equal(c.clearSecrets.value.length, 0);
   c.resolverChecks.dispose();
 });

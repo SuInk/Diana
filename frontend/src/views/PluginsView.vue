@@ -386,51 +386,47 @@
         </div>
       </template>
       <template v-if="isResolverSettings">
-        <details class="plugin-settings-collapsible">
-          <summary><h3>解析平台</h3><ChevronDown :size="15" /></summary>
-          <div class="stack plugin-settings-form">
-          <PluginSettingField v-for="spec in resolverGroups.platforms" :key="spec.key" :spec="spec" :form="settingsForm" />
-          </div>
-        </details>
-        <div class="plugin-settings-section-head plugin-settings-subsection">
-          <h3>网站凭据</h3>
-          <p>只展示已添加的凭据。展开编辑，所有改动统一在底部保存。</p>
+        <div class="plugin-settings-section-head">
+          <h3>解析平台与 Cookie</h3>
+          <p>勾选启用解析，在同一行编辑或检测 Cookie。关闭解析不会清除凭据；改动统一在底部保存。</p>
         </div>
-        <div class="resolver-credentials">
-          <details v-for="platform in visibleResolverCredentials" :key="platform.key" :open="addedResolverCredentials.includes(platform.key)" class="resolver-credential resolver-compact" :aria-label="`${platform.label}登录凭据`">
-            <summary class="resolver-compact-head">
-              <strong>{{ platform.label }}</strong>
-              <span class="hint">{{ clearSecrets.includes(platform.key) ? '待清除' : String(settingsForm[platform.key] || '').trim() ? '待保存' : secretConfigured(platform.key) ? '已配置' : '待填写' }}</span>
-              <span v-if="secretConfigured(platform.key)" class="badge" :class="resolverBadgeClass(platform.key)">{{ resolverCheckLabel(resolverChecks.states[platform.key]) }}</span>
-              <ChevronDown :size="15" />
-            </summary>
-            <PluginSettingField
-              :spec="platform.spec" :form="settingsForm"
-              :clearing="clearSecrets.includes(platform.key)"
-              :secret-configured="secretConfigured(platform.key)"
-              :secret-placeholder="secretPlaceholder(platform.key)"
-              @toggle-clear="toggleClearSecret" @blur="onResolverBlur"
-            />
-            <p v-if="String(settingsForm[platform.key] ?? '').trim() && !clearSecrets.includes(platform.key)" class="hint resolver-draft-hint">检测未保存的输入，保存后才生效。</p>
-            <div class="resolver-check-row">
-              <div class="resolver-check-status" role="status" aria-live="polite">
-                <span class="badge" :class="resolverBadgeClass(platform.key)">{{ clearSecrets.includes(platform.key) ? '待清除，保存后生效' : resolverCheckLabel(resolverChecks.states[platform.key]) }}</span>
-                <p v-if="resolverCheckMessage(platform.key)">{{ resolverCheckMessage(platform.key) }}</p>
+        <div class="resolver-platform-list">
+          <template v-for="platform in resolverPlatformRows" :key="platform.value">
+            <ResolverCookieEditor v-if="platform.value === 'youtube'" :ref="setResolverCookieEditor" :path="String(settingsForm.ytdlp_cookies_path || '')" :disabled="savingSettings" @saved="settingsForm.ytdlp_cookies_path = $event">
+              <template #platform>
+                <label class="resolver-platform-name">
+                  <input type="checkbox" :checked="resolverPlatformEnabled(platform.value)" :disabled="savingSettings" @change="toggleResolverPlatform(platform.value, $event)" />
+                  <span>{{ platform.name }}<small v-if="!resolverPlatformEnabled(platform.value)">解析已关闭</small></span>
+                </label>
+              </template>
+            </ResolverCookieEditor>
+            <section v-else class="resolver-platform-row" :aria-label="platform.name">
+              <div class="resolver-platform-head">
+                <label class="resolver-platform-name">
+                  <input type="checkbox" :checked="resolverPlatformEnabled(platform.value)" :disabled="savingSettings" @change="toggleResolverPlatform(platform.value, $event)" />
+                  <span>{{ platform.name }}<small v-if="!resolverPlatformEnabled(platform.value)">解析已关闭</small></span>
+                </label>
+                <template v-if="platform.credential">
+                  <span class="badge" :class="resolverRowStatus(platform.credential.key).color" role="status">{{ resolverRowStatus(platform.credential.key).label }}</span>
+                  <div class="resolver-platform-actions">
+                    <button class="btn small" type="button" :data-resolver-test="platform.credential.key" :disabled="savingSettings || !resolverCanTest(platform.credential.key)" @click="resolverChecks.test(platform.credential.key)">{{ resolverChecks.states[platform.credential.key].phase === 'checking' ? '检测中…' : '检测' }}</button>
+                    <button class="btn small" type="button" data-settings-action :disabled="savingSettings" :aria-expanded="editingResolverPlatform === platform.value" @click="editingResolverPlatform = editingResolverPlatform === platform.value ? '' : platform.value">{{ editingResolverPlatform === platform.value ? '收起' : '编辑' }}</button>
+                  </div>
+                </template>
+                <template v-else>
+                  <span class="badge">公开解析</span>
+                  <span class="hint resolver-platform-actions">无需单独配置 Cookie</span>
+                </template>
               </div>
-              <button class="btn small" type="button" :data-resolver-test="platform.key" :disabled="!resolverCanTest(platform.key)" @click="resolverChecks.test(platform.key)">
-                <RefreshCw :size="14" :class="{ spin: resolverChecks.states[platform.key].phase === 'checking' }" aria-hidden="true" />
-                {{ resolverChecks.states[platform.key].phase === 'checking' ? '正在检测' : '重新检测' }}
-              </button>
-            </div>
-          </details>
+              <div v-if="platform.credential && editingResolverPlatform === platform.value" class="resolver-platform-editor">
+                <PluginSettingField :spec="platform.credential.spec" :form="settingsForm" :clearing="clearSecrets.includes(platform.credential.key)" :secret-configured="secretConfigured(platform.credential.key)" :secret-placeholder="secretPlaceholder(platform.credential.key)" @toggle-clear="toggleClearSecret" @blur="onResolverBlur" />
+                <p v-if="String(settingsForm[platform.credential.key] || '').trim()" class="hint">当前为未保存草稿，检测通过后仍需点击底部保存。</p>
+                <p v-if="resolverCheckMessage(platform.credential.key)" class="hint" role="status">{{ resolverCheckMessage(platform.credential.key) }}</p>
+              </div>
+            </section>
+          </template>
         </div>
-        <div v-if="availableResolverCredentials.length" class="actions">
-          <select class="input" aria-label="添加网站凭据" :value="''" @change="addResolverCredential($event)">
-            <option value="" disabled>＋ 添加网站凭据</option>
-            <option v-for="platform in availableResolverCredentials" :key="platform.key" :value="platform.key">{{ platform.label }}</option>
-          </select>
-        </div>
-        <ResolverCookieEditor ref="resolverCookieEditor" :path="String(settingsForm.ytdlp_cookies_path || '')" :disabled="savingSettings" @saved="settingsForm.ytdlp_cookies_path = $event" />
+        <p class="hint resolver-status-legend"><span class="badge ok">登录有效</span><span class="badge err">登录失效</span><span class="badge warn">待检测 / 无法确认</span><span class="badge">未配置 / 公开解析</span></p>
         <details class="plugin-settings-section-head plugin-settings-subsection plugin-settings-collapsible">
           <summary><h3>媒体与发送</h3><ChevronDown :size="15" /></summary>
           <p>控制媒体下载、发送方式、数量与清晰度。</p>
@@ -841,7 +837,7 @@ import { currentView, navigate, viewQuery } from "../router";
 import { botScope } from "../lib/bot-scope";
 import { extensionLayout, setExtensionLayout } from "../lib/extension-layout";
 import { pluginForBot } from "../lib/plugin-settings";
-import { createResolverCredentialChecks, groupResolverSettings, resolverCredentialSource, resolverCheckLabel, type ResolverCredentialKey } from "../lib/resolver-credentials";
+import { createResolverCredentialChecks, groupResolverSettings, resolverCheckLabel, type ResolverCredentialKey } from "../lib/resolver-credentials";
 
 const webSearchPluginID = "official.web-search";
 const plugins = ref<PluginState[]>([]);
@@ -1019,13 +1015,26 @@ async function testMusicSettings(): Promise<void> {
 
 const isResolverSettings = computed(() => settingsTarget.value?.manifest.id === resolverPluginID);
 const resolverGroups = computed(() => groupResolverSettings(settingsSpecs.value));
-const addedResolverCredentials = ref<string[]>([]);
-const visibleResolverCredentials = computed(() => resolverGroups.value.credentials.filter(p => secretConfigured(p.key) || addedResolverCredentials.value.includes(p.key) || String(settingsForm.value[p.key] || '').trim()));
-const availableResolverCredentials = computed(() => resolverGroups.value.credentials.filter(p => !visibleResolverCredentials.value.some(v => v.key === p.key)));
-function addResolverCredential(event: Event) {
- const select = event.target as HTMLSelectElement;
- if (select.value) addedResolverCredentials.value.push(select.value);
- select.value = '';
+const editingResolverPlatform = ref("");
+const resolverPlatformRows = computed(() => (resolverGroups.value.platforms[0]?.options ?? []).map(option => ({
+  ...option,
+  name: option.label.replace("（可下载媒体）", ""),
+  credential: resolverGroups.value.credentials.find(item => item.platform === option.value),
+})));
+function setResolverCookieEditor(instance: unknown) {
+  resolverCookieEditor.value = instance as InstanceType<typeof ResolverCookieEditor> | null;
+}
+function toggleResolverPlatform(platform: string, event: Event) {
+  const values: string[] = Array.isArray(settingsForm.value.enabled_platforms) ? [...settingsForm.value.enabled_platforms] : [];
+  const enabled = (event.target as HTMLInputElement).checked;
+  settingsForm.value.enabled_platforms = enabled ? [...new Set([...values, platform])] : values.filter(value => value !== platform);
+}
+function resolverRowStatus(key: ResolverCredentialKey): { label: string; color: string } {
+  const input = resolverInput(key);
+  if (input.clearing) return { label: "待清除", color: "warn" };
+  if (!input.value.trim() && !input.configured) return { label: "未配置", color: "" };
+  const state = resolverChecks.states[key];
+  return { label: resolverCheckLabel(state), color: state.phase === "checking" || state.phase === "pending" || state.phase === "idle" ? "warn" : resolverBadgeClass(key) };
 }
 function resolverInput(key: ResolverCredentialKey) {
   const file = key === "ytdlp_cookies_path";
@@ -1466,7 +1475,7 @@ function openSettings(plugin: PluginState): void {
     form[spec.key] = Array.isArray(value) ? [...value] : value;
   }
   settingsForm.value = form;
-  addedResolverCredentials.value = [];
+  editingResolverPlatform.value = "";
   const publishForm: Record<string, any> = {};
   const publish = plugins.value.find((candidate) => candidate.manifest.id === repositoryPublishPluginID);
   for (const spec of publish?.manifest.settings ?? []) {
@@ -1934,9 +1943,17 @@ useConfigurationRefresh(["bot"], reload);
 </script>
 
 <style scoped>
-.resolver-compact { border-bottom:1px solid var(--border); padding:10px 0; }
-.resolver-compact-head { display:flex; align-items:center; gap:12px; cursor:pointer; list-style:none; padding:4px 0; }
-.resolver-compact-head strong { margin-right:auto; }
-.resolver-compact-head::-webkit-details-marker { display:none; }
-.resolver-compact[open] .resolver-compact-head { margin-bottom:12px; }
+.resolver-platform-list { display:grid; }
+.resolver-platform-row { padding:10px 0; border-bottom:1px solid var(--border); }
+.resolver-platform-head { display:grid; grid-template-columns:minmax(130px,1fr) auto 150px; align-items:center; gap:16px; }
+.resolver-platform-name { display:flex; align-items:center; gap:10px; cursor:pointer; font-weight:600; }
+.resolver-platform-name input { width:16px; height:16px; accent-color:var(--accent); }
+.resolver-platform-name small { display:block; font-weight:400; opacity:.6; font-size:11px; }
+.resolver-platform-actions { display:flex; justify-content:flex-end; gap:8px; font-size:11px; }
+.resolver-platform-editor { padding:16px; margin-top:12px; border-radius:10px; background:var(--bg); }
+.resolver-status-legend { display:flex; gap:8px; flex-wrap:wrap; margin-top:16px; }
+@media(max-width:560px) {
+ .resolver-platform-head { grid-template-columns:1fr auto; gap:10px; }
+ .resolver-platform-actions { grid-column:2; }
+}
 </style>
