@@ -1086,6 +1086,58 @@ func TestTelegramMapsNewChatMemberToNotice(t *testing.T) {
 	}
 }
 
+func TestTelegramMapsPinnedMessageServiceUpdateToNotice(t *testing.T) {
+	msg := &telegramMessage{
+		MessageID: 900, Date: 1_800_000_100,
+		Chat: &telegramChat{ID: -100777, Type: "supergroup", Title: "测试群"},
+		From: &telegramUser{ID: 7, FirstName: "管理员"},
+		PinnedMessage: &telegramMessage{
+			MessageID: 77, Date: 1_800_000_000, Text: "今晚八点开会",
+			From: &telegramUser{ID: 42, FirstName: "Alice"},
+			Chat: &telegramChat{ID: -100777, Type: "supergroup", Title: "测试群"},
+		},
+	}
+	event := telegramMessageToEvent(msg, "8888", "diana_bot")
+	if event.Kind != EventKindNotice || event.SubType != telegramPinnedMessageNoticeSubType || event.GroupID != "-100777" {
+		t.Fatalf("event = %#v", event)
+	}
+	if event.MessageID != "900" || event.OperatorID != "7" || event.UserID != "42" {
+		t.Fatalf("notice identities = %#v", event)
+	}
+	if event.Quoted == nil || event.Quoted.MessageID != "77" || event.Quoted.RawMessage != "今晚八点开会" {
+		t.Fatalf("pinned message = %#v", event.Quoted)
+	}
+	data := noticeSegmentData(event)
+	if data["pinned_message_id"] != "77" || data["operator_id"] != "7" {
+		t.Fatalf("notice data = %#v", data)
+	}
+}
+
+func TestTelegramPinnedMessageNoticeIsPersistedWithoutReply(t *testing.T) {
+	store := newSemanticTimelineStore()
+	channel := &recordingChannel{}
+	runtime := NewRuntime(BotConfig{Platform: PlatformTelegram, BotAccount: "8888"}, channel, NewDefaultPluginManager(), nil, nil, nil, nil)
+	runtime.SetMessageHistoryStore(store)
+	event := telegramMessageToEvent(&telegramMessage{
+		MessageID: 901, Date: 1_800_000_101,
+		Chat: &telegramChat{ID: -100777, Type: "supergroup"},
+		From: &telegramUser{ID: 8888, IsBot: true, FirstName: "Diana"},
+		PinnedMessage: &telegramMessage{
+			MessageID: 78, Text: "机器人自己的置顶", From: &telegramUser{ID: 8888, IsBot: true, FirstName: "Diana"},
+		},
+	}, "8888", "diana_bot")
+	if err := runtime.HandleEvent(context.Background(), event); err != nil {
+		t.Fatal(err)
+	}
+	stored, found, err := store.FindMessageEvent(context.Background(), messageStoreSession(event), "901")
+	if err != nil || !found || stored.SubType != telegramPinnedMessageNoticeSubType || stored.Quoted == nil || stored.Quoted.GroupID != "-100777" {
+		t.Fatalf("stored=%#v found=%v err=%v", stored, found, err)
+	}
+	if sent := channel.sentSnapshot(); len(sent) != 0 {
+		t.Fatalf("pin notice must not trigger a reply: %#v", sent)
+	}
+}
+
 func TestTelegramDisplayNameFallsBackToUsername(t *testing.T) {
 	if got := telegramDisplayName(&telegramUser{Username: "nick"}); got != "nick" {
 		t.Fatalf("无姓名时应回落 username，实际 %q", got)

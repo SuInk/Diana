@@ -753,6 +753,8 @@ func (c *TelegramChannel) Close() error {
 
 // —— Bot API 数据结构（只保留用得到的字段） ——
 
+const telegramPinnedMessageNoticeSubType = "group_pin"
+
 type telegramUpdate struct {
 	ChatMember        *telegramMemberUpdate `json:"chat_member,omitempty"`
 	MyChatMember      *telegramMemberUpdate `json:"my_chat_member,omitempty"`
@@ -792,6 +794,7 @@ type telegramMessage struct {
 	Chat            *telegramChat    `json:"chat"`
 	NewChatMembers  []telegramUser   `json:"new_chat_members,omitempty"`
 	LeftChatMember  *telegramUser    `json:"left_chat_member,omitempty"`
+	PinnedMessage   *telegramMessage `json:"pinned_message,omitempty"`
 	ReplyTo         *telegramMessage `json:"reply_to_message"`
 	Entities        []telegramEntity `json:"entities"`
 	CaptionEntities []telegramEntity `json:"caption_entities"`
@@ -854,6 +857,67 @@ type telegramFile struct {
 	FileSize     int64  `json:"file_size,omitempty"`
 }
 
+type telegramPinnedMessageView struct {
+	MessageID       string   `json:"message_id"`
+	MessageThreadID string   `json:"message_thread_id,omitempty"`
+	EventTime       int64    `json:"event_time,omitempty"`
+	SenderUserID    string   `json:"sender_user_id,omitempty"`
+	Sender          string   `json:"sender,omitempty"`
+	Text            string   `json:"text,omitempty"`
+	ContentTypes    []string `json:"content_types,omitempty"`
+}
+
+// telegramPinnedMessageFromChat 把 getChat 返回的当前置顶收敛成工具需要的稳定字段。
+// Bot API 只给当前 pinned_message，没有历史列表；没有置顶时返回 nil。
+func telegramPinnedMessageFromChat(data map[string]any) (*telegramPinnedMessageView, error) {
+	fields := data
+	if nested, ok := data["result"].(map[string]any); ok {
+		fields = nested
+	}
+	raw, exists := fields["pinned_message"]
+	if !exists || raw == nil {
+		return nil, nil
+	}
+	encoded, err := json.Marshal(raw)
+	if err != nil {
+		return nil, fmt.Errorf("telegram: encode pinned message: %w", err)
+	}
+	var message telegramMessage
+	if err := json.Unmarshal(encoded, &message); err != nil {
+		return nil, fmt.Errorf("telegram: decode pinned message: %w", err)
+	}
+	if message.MessageID <= 0 {
+		return nil, fmt.Errorf("telegram: pinned message has no valid message id")
+	}
+	view := &telegramPinnedMessageView{
+		MessageID:       strconv.FormatInt(message.MessageID, 10),
+		MessageThreadID: telegramOptionalID(message.MessageThreadID),
+		EventTime:       message.Date,
+		Text:            firstNonEmpty(strings.TrimSpace(message.Text), strings.TrimSpace(message.Caption)),
+	}
+	if message.From != nil {
+		view.SenderUserID = strconv.FormatInt(message.From.ID, 10)
+		view.Sender = telegramDisplayName(message.From)
+	} else if message.SenderChat != nil {
+		view.SenderUserID = strconv.FormatInt(message.SenderChat.ID, 10)
+		view.Sender = strings.TrimSpace(message.SenderChat.Title)
+	}
+	addType := func(kind string, present bool) {
+		if present {
+			view.ContentTypes = append(view.ContentTypes, kind)
+		}
+	}
+	addType("text", view.Text != "")
+	addType("image", len(message.Photo) > 0)
+	addType("video", message.Video != nil)
+	addType("animation", message.Animation != nil)
+	addType("sticker", message.Sticker != nil)
+	addType("audio", message.Audio != nil)
+	addType("voice", message.Voice != nil)
+	addType("file", message.Document != nil)
+	return view, nil
+}
+
 // telegramMessageToEvent 把 Bot API 消息映射成统一事件。
 //
 // 语义对照：
@@ -898,6 +962,33 @@ func telegramReactionToEvent(reaction *telegramReaction, selfID string) MessageE
 func telegramMessageToEvent(msg *telegramMessage, selfID, botUsername string) MessageEvent {
 	if msg == nil || msg.Chat == nil {
 		return MessageEvent{}
+	}
+	// Telegram 把新置顶作为一条服务消息推送。它不是聊天正文，不应触发自动回复；
+	// 映射成 notice 后仍会进入插件观察和通知审计，供上层追踪置顶变更。
+	if msg.PinnedMessage != nil && msg.PinnedMessage.MessageID != 0 && msg.Chat.Type != "private" {
+		pinned := telegramQuotedMessage(msg.PinnedMessage)
+		if pinned != nil && strings.TrimSpace(pinned.GroupID) == "" {
+			pinned.GroupID = strconv.FormatInt(msg.Chat.ID, 10)
+		}
+		pinnedID := strconv.FormatInt(msg.PinnedMessage.MessageID, 10)
+		data := map[string]string{"notice_type": telegramPinnedMessageNoticeSubType, "pinned_message_id": pinnedID}
+		operatorID := ""
+		if msg.From != nil {
+			operatorID = strconv.FormatInt(msg.From.ID, 10)
+			data["operator_id"] = operatorID
+		}
+		userID, senderName := "", ""
+		if msg.PinnedMessage.From != nil {
+			userID = strconv.FormatInt(msg.PinnedMessage.From.ID, 10)
+			senderName = telegramDisplayName(msg.PinnedMessage.From)
+		}
+		return MessageEvent{
+			Kind: EventKindNotice, SubType: telegramPinnedMessageNoticeSubType,
+			Time: msg.Date, SelfID: selfID, MessageID: strconv.FormatInt(msg.MessageID, 10), MessageType: "notice",
+			GroupID: strconv.FormatInt(msg.Chat.ID, 10), GroupName: strings.TrimSpace(msg.Chat.Title),
+			UserID: userID, OperatorID: operatorID, SenderName: senderName, Quoted: pinned,
+			RawMessage: "[群置顶消息已更新]", Segments: []MessageSegment{{Type: "notice", Data: data}},
+		}
 	}
 	// 入群通知：Telegram 把它作为带 new_chat_members 的普通消息下发，
 	// 不映射的话欢迎语在 Telegram 上永远不会触发。

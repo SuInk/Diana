@@ -35,7 +35,8 @@ var platformWriteOperationSupport = map[string]map[string]bool{
 	},
 	PlatformTelegram: {
 		platformOpRecall: true, platformOpMute: true, platformOpUnmute: true, platformOpKick: true,
-		platformOpEssenceSet: true, platformOpEssenceUnset: true,
+		platformOpAnnounceList: true,
+		platformOpEssenceSet:   true, platformOpEssenceUnset: true,
 		platformOpSetTitle: true,
 		platformOpMuteAll:  true, platformOpUnmuteAll: true,
 		platformOpRecallMessages: true,

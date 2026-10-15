@@ -110,8 +110,8 @@ func (p *PlatformInterfacePlugin) Manifest() PluginManifest {
 	return PluginManifest{
 		ID:          platformInterfacePluginID,
 		Name:        "平台接口",
-		Version:     "0.1.2",
-		Description: "官方内置的跨平台群操作能力：读取群资料与成员，撤回机器人自己发出的消息；主人、群主和群管理员可在机器人具备管理员身份时禁言、解禁、踢人，发删群公告、设精华、改名片和头衔、开关全员禁言、撤回成员消息。支持 OneBot v11 与 Telegram，平台做不到的操作会明确说明。",
+		Version:     "0.1.3",
+		Description: "官方内置的跨平台群操作能力：读取群资料、成员与公告（Telegram 为当前置顶），撤回机器人自己发出的消息；主人、群主和群管理员可在机器人具备管理员身份时禁言、解禁、踢人，发删群公告、设精华、改名片和头衔、开关全员禁言、撤回成员消息。支持 OneBot v11 与 Telegram，平台做不到的操作会明确说明。",
 		Official:    true,
 		BuiltIn:     true,
 		Permissions: []string{"platform:group:read", "platform:group:moderate:owner"},
@@ -157,14 +157,13 @@ func (t *dianaPlatformTool) Description() string {
 }
 
 func (t *dianaPlatformTool) InputSchema() map[string]any {
-	operations := []string{platformOpGroupInfo, platformOpMemberInfo, platformOpMemberList, platformOpRecall}
+	operations := []string{platformOpGroupInfo, platformOpMemberInfo, platformOpMemberList, platformOpAnnounceList, platformOpRecall}
 	properties := map[string]any{
 		"message_id": toolStringParam("recall：我自己发的消息 ID，取自历史，勿编；默认最近一条"),
 		"group_id":   toolStringParam("目标群 ID，默认当前群"),
 		"user_id":    toolStringParam("目标账号，取自 @、引用或成员查询，勿按昵称猜；默认引用消息发送者"),
 	}
 	if t.moderator {
-		operations = append(operations, platformOpAnnounceList)
 		operations = append(operations, platformModerationOperations...)
 		properties["message_id"] = toolStringParam("目标消息 ID，取自历史，勿编；recall 默认我最近一条，其余默认被引用消息")
 		properties["duration"] = toolIntParam("mute：禁言秒数，超平台上限按上限", 1, telegramMaxMuteSeconds)
@@ -284,15 +283,39 @@ func (t *dianaPlatformTool) runRead(ctx context.Context, input map[string]any, o
 		if groupID == "" {
 			return "", fmt.Errorf("announce_list 需要群 ID：请在群里调用或指定 group_id")
 		}
-		if !platformSupportsOperation(t.runtime.currentPlatform(t.event), operation) {
+		platform := t.runtime.currentPlatform(t.event)
+		if !platformSupportsOperation(platform, operation) {
 			err := fmt.Errorf("当前平台没有群公告，暂不支持此操作")
 			t.runtime.recordPlatformInterfaceOperation(t.event, operation, access, owner, "", err)
 			return "", err
 		}
-		data, err := t.runtime.callOneBotAPIForEvent(callCtx, t.event, "_get_group_notice", map[string]any{"group_id": oneBotIDParam(groupID)})
+		var data map[string]any
+		var err error
+		if NormalizePlatformID(platform) == PlatformTelegram {
+			data, err = t.runtime.callPlatformAPIForEvent(callCtx, t.event, "getChat", map[string]any{"chat_id": groupID})
+		} else {
+			data, err = t.runtime.callOneBotAPIForEvent(callCtx, t.event, "_get_group_notice", map[string]any{"group_id": oneBotIDParam(groupID)})
+		}
 		if err != nil {
 			t.runtime.recordPlatformInterfaceOperation(t.event, operation, access, owner, "", err)
 			return "", err
+		}
+		if NormalizePlatformID(platform) == PlatformTelegram {
+			pinned, parseErr := telegramPinnedMessageFromChat(data)
+			if parseErr != nil {
+				t.runtime.recordPlatformInterfaceOperation(t.event, operation, access, owner, "", parseErr)
+				return "", parseErr
+			}
+			payload := map[string]any{
+				"group_id": groupID,
+				"data":     pinned,
+				"message":  "Telegram Bot API 只提供当前最新置顶，不提供历史置顶列表。",
+			}
+			if pinned == nil {
+				payload["message"] = "当前没有置顶消息；Telegram Bot API 不提供历史置顶列表。"
+			}
+			t.runtime.recordPlatformInterfaceOperation(t.event, operation, access, owner, "", nil)
+			return t.marshal(operation, access, payload)
 		}
 		t.runtime.recordPlatformInterfaceOperation(t.event, operation, access, owner, "", nil)
 		return t.marshal(operation, access, map[string]any{"group_id": groupID, "data": data})

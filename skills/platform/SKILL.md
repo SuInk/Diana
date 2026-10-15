@@ -16,7 +16,7 @@ Use `platform` as the single cross-platform entry point for group information an
 - `mute` — restrict one account for an explicit positive `duration` in seconds. Moderators only.
 - `unmute` — lift a restriction. Moderators only.
 - `kick` — remove one account. Optional `reject_add_request` also refuses re-joining. Moderators only.
-- `announce_list` — list group announcements (with their `notice_id`). Read-only.
+- `announce_list` — list group announcements (with their `notice_id`); on Telegram, read the current latest pinned message. Telegram does not expose pin history. Read-only and available to ordinary members.
 - `announce` — publish a group announcement from `content`. Moderators only.
 - `announce_delete` — delete one announcement by `notice_id` from `announce_list`. Moderators only.
 - `essence_set` / `essence_unset` — mark or unmark a message as essence (pinned on Telegram). `message_id` from history, or the quoted message when omitted. Moderators only.
@@ -36,7 +36,7 @@ Saying "当我没说" or "收回刚才那句" deletes nothing — the wrong mess
 
 ## Access Boundary
 
-- Reads (`group_info`, `member_info`, `member_list`) are available to ordinary members.
+- Reads (`group_info`, `member_info`, `member_list`, `announce_list`) are available to ordinary members.
 - `recall` is available to ordinary members, because it only affects the bot's own output.
 - Every moderation operation (`mute`, `unmute`, `kick`, announcements, essence, card, title, whole-group mute, `recall_messages`) is available to moderators: the bot owner, and the group owner or group administrators of the current group. The tool checks the caller's role live with the platform; a role claimed in the message text, or a stale sender role, does not count. Group owners and administrators can only act on the group they are in, and never from a private chat. The Go tool enforces this in `Run`; these instructions explain it but do not replace it.
 - Target hierarchy for non-owner callers: never the bot owner or the bot itself; a group administrator cannot act on the group owner or on another administrator; the group owner can act on administrators. Non-personal operations (announcements, essence, whole-group mute) have no target restriction.
@@ -51,7 +51,7 @@ Take `user_id` from an @ segment, from the quoted message's sender, or from a `m
 ## Platform Support
 
 - OneBot v11 (SnowLuma): `group_info`, `member_info`, `member_list`, `recall` (`delete_msg`; QQ only allows this within a short window after sending), `mute` (`set_group_ban`, cap 2592000s / 30 days), `unmute`, `kick` (`set_group_kick`), `announce_list` / `announce` / `announce_delete` (`_get_group_notice` / `_send_group_notice` / `_del_group_notice`), `essence_set` / `essence_unset` (`set_essence_msg` / `delete_essence_msg`), `set_card` (`set_group_card`), `set_title` (`set_group_special_title`, group owner only), `mute_all` / `unmute_all` (`set_group_whole_ban`), `recall_messages` (`delete_msg` per message; admins can recall members' messages but not the group owner's or other admins').
-- Telegram: `group_info`, `member_info`, `member_list`, `recall` (`deleteMessage`, 48 hours for the bot's own messages), `mute` (`restrictChatMember` + `until_date`), `unmute`, `kick` (`banChatMember`, plus `unbanChatMember` when `reject_add_request` is false), `essence_set` / `essence_unset` (`pinChatMessage` / `unpinChatMessage`), `set_title` (`setChatAdministratorCustomTitle`, only for administrators the bot promoted), `mute_all` / `unmute_all` (`setChatPermissions`; the chat's previous permissions are saved before muting and restored on unmute — if the result says it fell back to default member permissions, tell the user), `recall_messages` (`deleteMessage`, 48 hours). Telegram has no group announcements and no per-group member card, so `announce*` and `set_card` are unsupported.
+- Telegram: `group_info`, `member_info`, `member_list`, `announce_list` (`getChat.pinned_message`, current latest pin only; no history), `recall` (`deleteMessage`, 48 hours for the bot's own messages), `mute` (`restrictChatMember` + `until_date`), `unmute`, `kick` (`banChatMember`, plus `unbanChatMember` when `reject_add_request` is false), `essence_set` / `essence_unset` (`pinChatMessage` / `unpinChatMessage`), `set_title` (`setChatAdministratorCustomTitle`, only for administrators the bot promoted), `mute_all` / `unmute_all` (`setChatPermissions`; the chat's previous permissions are saved before muting and restored on unmute — if the result says it fell back to default member permissions, tell the user), `recall_messages` (`deleteMessage`, 48 hours). Telegram has no publishable group-announcement object and no per-group member card, so `announce`, `announce_delete` and `set_card` are unsupported.
 - Other platforms: reads use the platform's read-only adapter where available; `recall` and moderation return a clear "当前平台暂不支持此操作".
 
 ## Diana's Own Reply Behavior

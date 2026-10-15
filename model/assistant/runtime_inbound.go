@@ -58,7 +58,7 @@ func (r *Runtime) HandleEvent(ctx context.Context, event MessageEvent) error {
 		r.recordInboundSelfEcho(event)
 		return nil
 	}
-	if !isRecallNotice(event) && r.isSelfMessage(event) {
+	if !isRecallNotice(event) && event.SubType != telegramPinnedMessageNoticeSubType && r.isSelfMessage(event) {
 		r.observeOutboundEcho(event)
 		r.observeSelfMessage(ctx, event)
 		return nil
@@ -82,7 +82,7 @@ func (r *Runtime) HandleEvent(ctx context.Context, event MessageEvent) error {
 		if r.plugins != nil {
 			event = r.plugins.ObserveEventWithOverrides(ctx, event, r.pluginOverridesForEvent(event))
 		}
-		if isRecallNotice(event) {
+		if isRecallNotice(event) || event.SubType == telegramPinnedMessageNoticeSubType {
 			r.persistMessageEvent(event)
 			r.recordNoticeEvent(event)
 		}

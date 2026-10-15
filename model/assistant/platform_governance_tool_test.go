@@ -5,6 +5,7 @@ package assistant
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"sync"
@@ -111,6 +112,46 @@ func TestPlatformToolGovernanceOnTelegram(t *testing.T) {
 	}
 }
 
+func TestPlatformToolReadsCurrentTelegramPinnedMessage(t *testing.T) {
+	tool, _, channel := governanceToolFor(t, PlatformTelegram, "member")
+	channel.apiResponses["getChat"] = map[string]any{
+		"id": int64(-100123),
+		"pinned_message": map[string]any{
+			"message_id": int64(77), "message_thread_id": int64(9), "date": int64(1_800_000_000),
+			"text": "今晚八点开会", "from": map[string]any{"id": int64(555), "first_name": "Alice"},
+		},
+	}
+	out, err := tool.Run(context.Background(), map[string]any{"operation": platformOpAnnounceList})
+	if err != nil {
+		t.Fatalf("announce_list error = %v", err)
+	}
+	var result struct {
+		Data    *telegramPinnedMessageView `json:"data"`
+		Message string                     `json:"message"`
+	}
+	if err := json.Unmarshal([]byte(out), &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.Data == nil || result.Data.MessageID != "77" || result.Data.MessageThreadID != "9" || result.Data.Text != "今晚八点开会" || result.Data.SenderUserID != "555" {
+		t.Fatalf("result = %s", out)
+	}
+	if !strings.Contains(result.Message, "不提供历史") {
+		t.Fatalf("missing Telegram limitation: %s", out)
+	}
+	if calls := recordedCallsByAction(channel.callsSnapshot(), "getChat"); len(calls) != 1 || fmt.Sprint(calls[0].params["chat_id"]) != "123" {
+		t.Fatalf("getChat calls = %#v", calls)
+	}
+}
+
+func TestPlatformToolReportsNoTelegramPinnedMessage(t *testing.T) {
+	tool, _, channel := governanceToolFor(t, PlatformTelegram, "member")
+	channel.apiResponses["getChat"] = map[string]any{"id": int64(-100123)}
+	out, err := tool.Run(context.Background(), map[string]any{"operation": platformOpAnnounceList})
+	if err != nil || !strings.Contains(out, "当前没有置顶消息") || !strings.Contains(out, `"data":null`) {
+		t.Fatalf("out=%s err=%v", out, err)
+	}
+}
+
 func TestPlatformToolGovernanceRefusesNonOwnerAndNonAdminBot(t *testing.T) {
 	// 普通成员：平台实时查到的是 member，哪怕事件里自称 admin 也不作数。
 	channel := newRoleTestChannel(map[string]string{"10000": "admin"})
@@ -171,6 +212,7 @@ var expectedPlatformWriteOperations = map[string][]string{
 	// 没有群公告、没有群名片；精华对应置顶，头衔对应管理员自定义头衔。
 	PlatformTelegram: {
 		platformOpRecall, platformOpMute, platformOpUnmute, platformOpKick,
+		platformOpAnnounceList,
 		platformOpEssenceSet, platformOpEssenceUnset, platformOpSetTitle,
 		platformOpMuteAll, platformOpUnmuteAll, platformOpRecallMessages,
 	},
