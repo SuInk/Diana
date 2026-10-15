@@ -4630,7 +4630,3 @@ export function checkResolverCookieFile(content: string, format = false): Promis
 export function testResolverCookieLogin(content: string): Promise<{ state: "valid" | "invalid" | "unknown"; message: string }> {
  return requestJSON("/api/assistant/plugins/resolver/cookie-file/login", { method: "POST", body: JSON.stringify({ content }) });
 }
-
-export function listYTDLPSupportedSites(): Promise<{ extractors: string[] }> {
- return requestJSON("/api/assistant/plugins/resolver/supported-sites");
-}
