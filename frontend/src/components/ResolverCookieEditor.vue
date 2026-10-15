@@ -29,7 +29,7 @@ watch(content, () => { loginState.value = ""; message.value = ""; }, { flush: "s
 const hasYouTube = computed(() => sites.value.some((site) => site.youtube));
 let disposed = false;
 onBeforeUnmount(() => { disposed = true; content.value = ""; });
-onMounted(() => { void load(); });
+onMounted(async () => { await load(); if (!disposed) await testLogin(); });
 async function load() {
  busy.value = true; message.value = "";
  try {
@@ -41,7 +41,7 @@ async function load() {
 }
 async function edit() {
  if (!loaded.value) await load();
- if (loaded.value) editing.value = true;
+ if (loaded.value) { editing.value = true; void testLogin(); }
 }
 async function saveDraft(): Promise<boolean> {
  if (!dirty.value) return false;
@@ -67,6 +67,7 @@ async function check(format: boolean) {
  finally { if (!disposed) busy.value = false; }
 }
 async function testLogin() {
+ if (disposed || busy.value || !loaded.value || !hasYouTube.value || props.disabled) return;
  busy.value = true; loginState.value = "checking"; message.value = "正在连接 YouTube 检测登录状态…";
  try {
   const result = await testResolverCookieLogin(content.value);
@@ -77,7 +78,7 @@ async function testLogin() {
  } catch (error) { if (!disposed) { loginState.value = "error"; message.value = error instanceof Error ? error.message : "检测失败，无法确认登录状态"; } }
  finally { if (!disposed) busy.value = false; }
 }
-defineExpose({ saveDraft, hasUnsavedChanges: () => dirty.value, isBusy: () => busy.value });
+defineExpose({ saveDraft, testLogin, hasUnsavedChanges: () => dirty.value, isBusy: () => busy.value });
 </script>
 
 <template>

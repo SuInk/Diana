@@ -387,8 +387,11 @@
       </template>
       <template v-if="isResolverSettings">
         <section class="resolver-platform-section">
-          <h3>解析平台与 Cookie</h3>
+          <div class="resolver-platform-heading"><h3>解析平台与 Cookie</h3>
+          <button class="btn small" type="button" data-settings-action :disabled="savingSettings || resolverTesting" @click="testAllResolverCredentials">{{ resolverTesting ? "检测中…" : "一键检测" }}</button>
+          </div>
           <p class="hint">点击名称启停，右侧铅笔编辑平台设置；圆点表示凭据状态。改动统一保存。</p>
+          <p class="hint">打开设置自动检测已配置凭据；一键检测可重新检查，公开解析平台无需登录检测。</p>
         <div class="resolver-platform-list">
           <template v-for="platform in resolverPlatformRows" :key="platform.value">
             <ResolverCookieEditor v-if="platform.value === 'youtube'" :ref="setResolverCookieEditor" :path="String(settingsForm.ytdlp_cookies_path || '')" :disabled="savingSettings" :enabled="resolverPlatformEnabled(platform.value)" @saved="settingsForm.ytdlp_cookies_path = $event">
@@ -1029,6 +1032,17 @@ async function testMusicSettings(): Promise<void> {
 const isResolverSettings = computed(() => settingsTarget.value?.manifest.id === resolverPluginID);
 const resolverGroups = computed(() => groupResolverSettings(settingsSpecs.value));
 const editingResolverPlatform = ref("");
+watch(editingResolverPlatform, platform => {
+  const credential = resolverGroups.value.credentials.find(item => item.platform === platform);
+  if (credential) void resolverChecks.test(credential.key);
+});
+const resolverTesting = computed(() => resolverGroups.value.credentials.some(({ key }) => resolverChecks.states[key].phase === "checking") || Boolean(resolverCookieEditor.value?.isBusy()));
+async function testAllResolverCredentials(): Promise<void> {
+  await Promise.all([
+    ...resolverGroups.value.credentials.map(({ key }) => resolverChecks.test(key)),
+    resolverCookieEditor.value?.testLogin(),
+  ]);
+}
 function resolverPublicPlatformDescription(platform: string): string {
   const descriptions: Record<string, string> = {
     x: "通过公开解析服务获取推文及媒体。",
@@ -1975,6 +1989,7 @@ useConfigurationRefresh(["bot"], reload);
 
 <style scoped>
 .resolver-platform-section { width:100%; }
+.resolver-platform-heading { display:flex; align-items:center; justify-content:space-between; gap:12px; }
 .resolver-platform-list { display:flex; flex-wrap:wrap; gap:8px; align-items:flex-start; }
 .resolver-platform-section > .hint { margin:6px 0 12px; }
 .resolver-platform-row { min-width:0; max-width:100%; }

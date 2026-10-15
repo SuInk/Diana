@@ -52,6 +52,47 @@ function editor() {
 const tick = () => Promise.resolve();
 const result = { key, state: "valid", configured: true, label: "B站", message: "synthetic success" };
 
+test("bulk detection includes YouTube and reuses an automatic native check already in flight", async () => {
+  const { context: c, checks, saves } = editor();
+  runFunction("testAllResolverCredentials", c);
+  let youtubeChecks = 0;
+  c.resolverCookieEditor.value = { testLogin: async () => { youtubeChecks++; }, hasUnsavedChanges: () => false };
+  const pending = c.testAllResolverCredentials();
+  await tick();
+  assert.equal(checks.length, 1);
+  assert.equal(youtubeChecks, 1);
+  checks[0].resolve(result);
+  await pending;
+  const again = c.testAllResolverCredentials();
+  await tick();
+  assert.equal(checks.length, 2);
+  checks[1].resolve(result);
+  await again;
+  assert.equal(saves.length, 0);
+  assert.equal(c.settingsDirty(), false);
+  c.resolverChecks.dispose();
+});
+
+test("YouTube detection skips empty content and overlapping requests", async () => {
+  const component = parse(readFileSync(new URL("../components/ResolverCookieEditor.vue", import.meta.url), "utf8")).descriptor.scriptSetup.content;
+  const componentAST = ts.createSourceFile("cookie.ts", component, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  let requests = 0, finish;
+  const c = vm.createContext({ disposed: false, busy: ref(false), loaded: ref(true), hasYouTube: ref(false), props: {}, content: ref("synthetic"), loginState: ref(""), message: ref(""),
+    testResolverCookieLogin: () => { requests++; return new Promise(resolve => { finish = resolve; }); } });
+  runFunction("testLogin", c, componentAST);
+  await c.testLogin();
+  assert.equal(requests, 0);
+  c.hasYouTube.value = true;
+  const pending = c.testLogin();
+  await c.testLogin();
+  assert.equal(requests, 1);
+  assert.equal(c.loginState.value, "checking");
+  finish({ state: "valid", message: "synthetic" });
+  await pending;
+  assert.equal(c.loginState.value, "valid");
+  assert.equal(c.busy.value, false);
+});
+
 test("each real opening checks configured cookies once, even with platforms disabled, but skips empty credentials and files", async () => {
   const { context: c, checks, plugin: initial } = editor();
   c.discardSettings();
