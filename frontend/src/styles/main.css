@@ -6767,10 +6767,14 @@ a.nav-action {
 
 /* Credential health, independent of editor focus or parsing enablement. */
 .resolver-chip { gap:8px; padding:5px 10px; min-height:32px; margin:0; border-radius:999px; }
-.resolver-chip.is-enabled { border-color:var(--border); }
+.resolver-chip.is-enabled { border-color:var(--border-strong); }
 .resolver-chip.resolver-status-ok { border-color:var(--ok); background:var(--ok-soft); }
 .resolver-chip.resolver-status-err { border-color:var(--err); background:var(--err-soft); }
 .resolver-chip.resolver-status-warn { border-color:var(--warn); }
+.resolver-chip:not(.is-enabled) { background:transparent; border-color:var(--border); color:var(--muted); }
+.resolver-chip:not(.is-enabled) .resolver-platform-name { font-weight:400; }
+.resolver-chip.is-enabled { color:var(--text); }
+.resolver-chip.is-enabled .resolver-platform-name { font-weight:600; }
 .resolver-health-dot { display:inline-block; width:7px; height:7px; flex:0 0 7px; border-radius:50%; background:var(--text-secondary); }
 .resolver-health-dot.ok { background:var(--ok); }
 .resolver-health-dot.err { background:var(--err); }
