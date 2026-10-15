@@ -7,11 +7,14 @@ import { parse } from "@vue/compiler-sfc";
 import { modelRequestTimeoutSeconds } from "./configuration-sync.ts";
 
 const source = readFileSync(new URL("../views/AssistantView.vue", import.meta.url), "utf8");
-test("model scheduling explains health timing and boundaries without an extra switch", () => {
+test("model scheduling keeps purpose help concise and points to shared recovery settings", () => {
   const disclosure = source.match(/<AppDisclosure :id="`model-description-\$\{role.key\}`"[\s\S]*?<\/AppDisclosure>/)?.[0];
   assert.ok(disclosure);
-  for (const text of ["700 毫秒重试 1 次", "首次冷却 10 秒", "首次冷却 1 分钟", "单次冷却最多 30 分钟", "有效 Retry-After 优先", "只提前探测最早恢复的一个", "只有一个候选时仍允许调用", "不读取或推算剩余额度", "已完成的工具操作不会因切换重复执行"]) {
+  for (const text of ["拖动模型即可调整调用顺序", "调用失败时会自动重试或切换", "冷却规则在页面底部统一设置"]) {
     assert.ok(disclosure.includes(text), text);
+  }
+  for (const detail of ["700 毫秒重试 1 次", "连续失败翻倍", "流式边界", "能力边界"]) {
+    assert.ok(!disclosure.includes(detail), detail);
   }
   assert.ok(disclosure.includes('v-if="!isMediaRole(role.key) && role.key !== \'image\'"'));
   assert.doesNotMatch(disclosure, /<AppSwitch/);
