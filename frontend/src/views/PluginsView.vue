@@ -386,8 +386,8 @@
         </div>
       </template>
       <template v-if="isResolverSettings">
-        <details open class="plugin-settings-collapsible resolver-platform-section">
-          <summary><h3>解析平台与 Cookie</h3><ChevronDown class="plugin-settings-chevron" :size="15" aria-hidden="true" /></summary>
+        <section class="resolver-platform-section">
+          <h3>解析平台与 Cookie</h3>
           <p class="hint">勾选启用，右侧编辑与检测；公开解析无需单独配置 Cookie。改动统一保存。</p>
         <div class="resolver-platform-list">
           <template v-for="platform in resolverPlatformRows" :key="platform.value">
@@ -426,7 +426,7 @@
           </template>
         </div>
         <p class="hint resolver-status-legend"><span class="badge ok">登录有效</span><span class="badge err">登录失效</span><span class="badge warn">待检测 / 无法确认</span><span class="badge">未配置 / 公开解析</span></p>
-        </details>
+        </section>
         <section class="plugin-settings-section-head plugin-settings-subsection">
           <h3>媒体与发送</h3>
           <p>控制媒体下载、发送方式、数量与清晰度。</p>
