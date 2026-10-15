@@ -3,7 +3,7 @@
 
 <template>
   <div class="app-number-input" :class="{ compact, 'is-disabled': disabled }">
-    <button type="button" :aria-label="`${label || '数值'}减少`" :disabled="disabled || numericValue <= min" @click="adjust(-step)"><Minus :size="13" aria-hidden="true" /></button>
+    <button v-if="showControls" type="button" :aria-label="`${label || '数值'}减少`" :disabled="disabled || numericValue <= min" @click="adjust(-step)"><Minus :size="13" aria-hidden="true" /></button>
     <input
       :id="id"
       type="text"
@@ -20,7 +20,7 @@
       @blur="commit"
       @keydown="onKeydown"
     />
-    <button type="button" :aria-label="`${label || '数值'}增加`" :disabled="disabled || numericValue >= max" @click="adjust(step)"><Plus :size="13" aria-hidden="true" /></button>
+    <button v-if="showControls" type="button" :aria-label="`${label || '数值'}增加`" :disabled="disabled || numericValue >= max" @click="adjust(step)"><Plus :size="13" aria-hidden="true" /></button>
   </div>
 </template>
 
@@ -37,7 +37,8 @@ const props = withDefaults(defineProps<{
   label?: string;
   disabled?: boolean;
   compact?: boolean;
-}>(), { min: 0, max: Number.MAX_SAFE_INTEGER, step: 1 });
+  showControls?: boolean;
+}>(), { min: 0, max: Number.MAX_SAFE_INTEGER, step: 1, showControls: true });
 const emit = defineEmits<{ "update:modelValue": [number] }>();
 
 function bounded(value: number): number {

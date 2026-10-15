@@ -34,6 +34,7 @@ test("model recovery rules are editable and unhealthy routes can be restored imm
   }
   assert.match(source, /resetModelHealth\(profileIDs, route\.model\)/);
   assert.match(source, /model_recovery_policy/);
+  assert.equal(source.match(/:show-controls="false"/g)?.length, 5);
   assert.ok(source.indexOf("<h2>自动恢复规则</h2>") > source.indexOf("<h2>聊天内模型管理</h2>"));
   assert.ok(source.indexOf("<h2>自动恢复规则</h2>") < source.indexOf("editorTab === 'behavior'"));
 });
