@@ -271,8 +271,10 @@
           <span class="hint">只在本群停用时起作用。</span>
         </div>
         <div class="field wide">
-          <label for="group-triggers">本群触发词（逗号分隔，留空跟随机器人）</label>
+          <label for="group-triggers">本群触发词（留空跟随机器人）</label>
           <input id="group-triggers" v-model="triggersDraft" class="input" :placeholder="inheritedPlaceholder(inheritedBot?.group_triggers)" />
+          <span class="hint">支持空格、逗号、顿号、分号分隔；完整短语用双引号包住，例如 “Hey Diana”。</span>
+          <span v-if="parseTriggerWords(triggersDraft).length" class="hint">已识别 {{ parseTriggerWords(triggersDraft).length }} 个触发词：{{ parseTriggerWords(triggersDraft).join(" · ") }}</span>
         </div>
         <div class="field wide">
           <label for="group-trigger-mode">本群触发词匹配（留空用全局）</label>
@@ -690,6 +692,7 @@
 </template>
 
 <script setup lang="ts">
+import { parseTriggerWords, formatTriggerWords } from "../lib/trigger-words";
 import { useConfigurationRefresh } from "../lib/configuration-sync";
 import { computed, onMounted, ref, watch } from "vue";
 import GroupTokenUsage from "../components/GroupTokenUsage.vue";
@@ -1286,7 +1289,7 @@ function openEditor(group: BotGroupConfig, groupName = ""): void {
   withUnsetSendRetryCleared(config);
   editing.value = config;
   editingGroupName.value = groupName;
-  triggersDraft.value = (group.group_triggers ?? []).join(",");
+  triggersDraft.value = formatTriggerWords(group.group_triggers ?? []);
   welcomeTemplatesDraft.value = (config.welcome_templates ?? []).join("\n");
 }
 
@@ -1599,10 +1602,7 @@ async function saveEditing(): Promise<void> {
       recent_context_limit: followNumber(current.recent_context_limit),
       max_context_tokens: followNumber(current.max_context_tokens),
       max_reply_chars: followNumber(current.max_reply_chars),
-      group_triggers: triggersDraft.value
-        .split(/[,，]/)
-        .map((item) => item.trim())
-        .filter((item) => item !== ""),
+      group_triggers: parseTriggerWords(triggersDraft.value),
       welcome_templates: welcomeTemplatesDraft.value
         .split("\n")
         .map((item) => item.trim())

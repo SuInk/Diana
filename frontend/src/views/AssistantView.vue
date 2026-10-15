@@ -866,8 +866,10 @@
             </div>
             <div class="card-body form-grid">
               <div class="field wide">
-                <label for="bot-triggers">群聊触发词（逗号分隔）</label>
-                <input id="bot-triggers" v-model="triggersDraft" class="input" placeholder="Diana,diana" />
+                <label for="bot-triggers">群聊触发词</label>
+                <input id="bot-triggers" v-model="triggersDraft" class="input" placeholder="miku, Diana 嘉然 然然" />
+                <span class="hint">支持空格、逗号、顿号、分号分隔；完整短语用双引号包住，例如 “Hey Diana”。</span>
+                <span v-if="parseTriggerWords(triggersDraft).length" class="hint">已识别 {{ parseTriggerWords(triggersDraft).length }} 个触发词：{{ parseTriggerWords(triggersDraft).join(" · ") }}</span>
                 <span class="hint">群聊中 @ 机器人或消息里出现触发词会触发；已准入的私聊会触发。</span>
               </div>
               <div class="field wide">
@@ -2312,6 +2314,7 @@
 </template>
 
 <script setup lang="ts">
+import { parseTriggerWords, formatTriggerWords } from "../lib/trigger-words";
 import { navigate, viewQuery } from "../router";
 import { botCreateRequested, botScope, setScopeLeaveGuard } from "../lib/bot-scope";
 import { copyBotConfiguration } from "../lib/bot-config-copy";
@@ -4760,7 +4763,7 @@ function setForm(config: BotProfileConfig): void {
     prompt_inject_group_sender: config.prompt_inject_group_sender ?? true,
     prompt_chinese_slang_hint: config.prompt_chinese_slang_hint ?? true
   };
-  triggersDraft.value = (config.group_triggers ?? []).join(",");
+  triggersDraft.value = formatTriggerWords(config.group_triggers ?? []);
   welcomeTemplatesDraft.value = (config.welcome_templates ?? []).join("\n");
   allowlistDraft.value = (config.agent_command_allowlist ?? []).join(",");
   privateAllowedUsers.value = [...(config.private_admission?.allowed_users ?? [])];
@@ -4993,7 +4996,7 @@ async function save(): Promise<void> {
       typing_delay_per_char_ms: Number(current.typing_delay_per_char_ms) || 0,
       imessage_poll_seconds: Math.max(0, Math.round(Number(current.imessage_poll_seconds) || 0)),
       ...secrets,
-      group_triggers: splitList(triggersDraft.value),
+      group_triggers: parseTriggerWords(triggersDraft.value),
       welcome_templates: welcomeTemplatesDraft.value
         .split("\n")
         .map((item) => item.trim())
