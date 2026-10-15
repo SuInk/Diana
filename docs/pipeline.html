@@ -276,15 +276,14 @@
 
       <section class="section searchable" id="review">
         <div class="section-heading"><p class="eyebrow">05 发送前审核</p><h2>发出去之前的检查</h2></div>
-        <p>回复生成出来之后、真正发出去之前，还有一串检查可以丢弃、改写或推迟它。其中只有一次是专门的审核模型调用，其余是程序检查和语义去重。</p>
+        <p>回复生成出来之后、真正发出去之前，还有一串检查可以丢弃、改写或推迟它。其中只有一次是专门的审核模型调用，其余是程序检查。</p>
         <ol class="flow">
           <li class="q"><div class="flow-node"><strong>带了依赖图，模型却说看不到图？</strong></div><div class="flow-exits"><span class="flow-exit loop"><b>是，且还没产生外部副作用</b>改用图片描述重新生成一次</span></div></li>
           <li class="q"><div class="flow-node"><strong>模型选择沉默？</strong></div><div class="flow-exits"><span class="flow-exit"><b>可以沉默</b><code>ignored_model_silent</code></span><span class="flow-exit go"><b>已有副作用 / 插件事实结果 / 出图排队</b>不许沉默，按空回复兜底</span></div></li>
           <li class="q"><div class="flow-node"><strong>闲聊回复为空或被标记拒答？</strong></div><div class="flow-exits"><span class="flow-exit"><b>是</b><code>ignored_no_natural_reply</code></span></div></li>
           <li class="q"><div class="flow-node"><strong>暂停响应 / 拒答标记？</strong><p><code>[[DIANA_IGNORE_CURRENT_USER_30M]]</code> / <code>[[DIANA_REFUSE_CURRENT]]</code></p></div><div class="flow-exits"><span class="flow-exit"><b>暂停且正文为空</b>发一句人设内提示后沉默</span><span class="flow-exit go"><b>拒答且正文为空</b>换成固定拒答文本</span></div></li>
           <li class="q"><div class="flow-node"><strong>和本轮 say 说过的某句相同？</strong></div><div class="flow-exits"><span class="flow-exit"><b>是</b>不发第二次</span></div></li>
-          <li><div class="flow-node"><strong>并行：语义去重 + 审核模型</strong><p>两者输入基本相同，同时开始省几秒；去重改写了回复时，审核按新文本补审一次。</p></div></li>
-          <li class="q"><div class="flow-node"><strong>语义去重</strong><p>只和发给同一个人的回复比，别人的回复不算；该会话 2 分钟内给这个人发过回复才运行，机器人配置里的「发送前语义去重」可关；置信度低于 0.9、出错或超时一律放行。</p></div><div class="flow-exits"><span class="flow-exit"><b>drop，且是主动回复</b><code>ignored_duplicate_reply</code></span><span class="flow-exit go"><b>drop，直接回复</b>照常发（被点名不能装死）</span><span class="flow-exit loop"><b>rewrite</b>改写后重新整理格式</span></div></li>
+          <li><div class="flow-node"><strong>审核模型</strong><p>对最终候选回复执行一次审核，不再另行调用语义去重模型丢弃或改写正文。</p></div></li>
           <li class="q"><div class="flow-node"><strong>应用审核结论</strong><p>见下一节。</p></div><div class="flow-exits"><span class="flow-exit"><b>拦下</b>对应的 <code>ignored_*</code> 或公开提示</span></div></li>
           <li class="q"><div class="flow-node"><strong>群里 10 分钟内有人叫停，且这是主动回复？</strong></div><div class="flow-exits"><span class="flow-exit"><b>是</b><code>ignored_stop_requested</code></span></div></li>
           <li class="end"><div class="flow-node"><strong>进入发送</strong><p>每条消息再过发送时守卫。</p></div></li>
@@ -303,7 +302,7 @@
           <li class="q"><div class="flow-node"><strong>表达质量（只对主动回复）</strong><p>自相矛盾、答非所问、被截断、有害建议，或 <code>send_confidence</code> 低于 <code>proactive_reply_threshold</code>。</p></div><div class="flow-exits"><span class="flow-exit"><b>不过关</b><code>ignored_proactive_reply_quality</code></span></div></li>
           <li class="end"><div class="flow-node"><strong>放行</strong><p>判为拒答（置信度 ≥ 0.90）的照常发，30 分钟内累计 4 次拒答后暂停响应。</p></div></li>
         </ol>
-        <p>顺序是有意的：对方都说「别回了」，再纠结这条够不够准确没有意义，所以收尾排最前。质量门槛只给主动回复——被点名在说话却因为一个打分沉默，对方看到的就是装死。插件直接给出的回复也过同一次审核，但不做语义去重。</p>
+        <p>顺序是有意的：对方都说「别回了」，再纠结这条够不够准确没有意义，所以收尾排最前。质量门槛只给主动回复——被点名在说话却因为一个打分沉默，对方看到的就是装死。插件直接给出的回复也过同一次审核。</p>
         <h3>发送时守卫</h3>
         <div class="table-wrap"><table><thead><tr><th>守卫</th><th>条件</th><th>结果</th></tr></thead><tbody>
           <tr><td>凭据打码</td><td>文本里出现已登记的凭据</td><td>替换成打码后的文本</td></tr>
