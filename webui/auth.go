@@ -554,7 +554,9 @@ func hashToken(token string) string {
 // authExemptPath 判断请求路径是否豁免鉴权。
 func authExemptPath(path string) bool {
 	switch {
-	case path == "/api/auth/status",
+	case path == "/api/auth/apps/pair",
+		path == "/api/auth/apps/pair/status",
+		path == "/api/auth/status",
 		path == "/api/auth/login",
 		path == "/api/auth/owner/status",
 		path == "/api/auth/owner/pair",

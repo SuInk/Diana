@@ -719,7 +719,18 @@ func main() {
 	ownerLoginHandler := webui.NewOwnerLoginHandler(authManager, botRuntime)
 	ownerLoginHandler.SetLogStore(sqliteStore)
 	ownerLoginHandler.Register(router)
-	botRuntime.SetPrivateMessageInterceptor(ownerLoginHandler.ConsumePrivateMessage)
+	trustedApps, err := webui.LoadTrustedLoginApps(strings.TrimSpace(os.Getenv("DIANA_TRUSTED_LOGIN_APPS_FILE")))
+	if err != nil {
+		log.Fatalf("加载受信应用登录配置失败：%v", err)
+	}
+	trustedLoginHandler, err := webui.NewTrustedLoginHandler(ownerLoginHandler, trustedApps)
+	if err != nil {
+		log.Fatalf("初始化受信应用登录失败：%v", err)
+	}
+	trustedLoginHandler.Register(router)
+	botRuntime.SetPrivateMessageInterceptor(func(ctx context.Context, event assistant.MessageEvent, text string) bool {
+		return trustedLoginHandler.ConsumePrivateMessage(ctx, event, text) || ownerLoginHandler.ConsumePrivateMessage(ctx, event, text)
+	})
 	webui.NewChannelCallbackHandler().Register(router)
 	// 浏览器控制扩展：/api/browser-control 下的管理接口走会话鉴权，
 	// /browser-control/v1/socket 由令牌加来源白名单自行鉴权。默认全关，
