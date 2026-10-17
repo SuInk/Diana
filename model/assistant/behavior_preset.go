@@ -84,6 +84,11 @@ func clearChatInFineTuning(cfg *BotConfig) {
 // (╹◡╹) 这类字符拼的表情，模型不会认为它管得着 😂。
 const replyEmojiRule = "不要在回复里使用 emoji（😂🤣👍✨ 这类彩色表情符号），一个都不要，包括用来表达情绪反应或缓和语气的场合。需要表达情绪就用文字说。"
 
+// replyUnclosedBracketRule 同样对所有风格生效。线上 3 天里约 7% 的回复是「正文（再接
+// 一段话」只开不合的写法，群友这么写，模型就跟着学。扮演风格的动作描写写的是闭合
+// 括号，不受影响；行尾单独一个「（」的语气用法也不在这条里。
+const replyUnclosedBracketRule = "不要用只开不合的「（」接一段补充的话，例如「这叫声控开关（摔一个来一个，百试百灵」；要补充就另起一句或把括号写完整，也不要照抄聊天记录里这种写法。"
+
 // replyBlankLineRule 同样对所有风格生效，而且是这套换行协议的唯一出处。
 //
 // 真实 CR/LF 不再承载输出布局语义：气泡边界和气泡内换行分别使用两个不会混淆的
@@ -143,6 +148,7 @@ var (
 	promptReplyConversationalIntentSpec = styleSpec("conversational_intent", "聊天还是求助", "每轮注入：先分清对方在聊天还是求助，闲聊不自动给建议、不追问。", replyConversationalIntentRule)
 	promptReplyCompactPacingSpec        = styleSpec("compact_pacing", "聊天节奏", "每轮注入：尽量少发几条，按自然停顿分条。", replyCompactPacingRule)
 	promptReplyEmojiSpec                = styleSpec("emoji", "不用 emoji", "每轮注入：回复里不用彩色 emoji。", replyEmojiRule)
+	promptReplyUnclosedBracketSpec      = styleSpec("unclosed_bracket", "不写半截括号", "每轮注入：不用只开不合的「（」接一段话。", replyUnclosedBracketRule)
 	promptReplyBlankLineSpec            = styleSpec("blank_line", "换行协议", "每轮都注入：不许真实换行，另起消息和消息内换行各用哪个标记。"+replyMarkerUsage, replyBlankLineRule)
 	promptReplySegmentationSpec         = styleSpec("segmentation", "自然分条", "开启自然分条时每轮注入：按意群决定在哪里另起一条。"+replyMarkerUsage, replySegmentationRule)
 	promptReplySegmentationOffSpec      = styleSpec("segmentation_off", "关闭多条发送", "关闭自然分条时替代上一条：默认只发一条。"+replyMarkerUsage, replySegmentationMarkerOnlyRule)
@@ -169,6 +175,7 @@ func replyPresentationPrompt(naturalSplit bool, configs ...BotConfig) string {
 		overrides.text(promptReplyConversationalIntentSpec),
 		overrides.text(promptReplyCompactPacingSpec),
 		overrides.text(promptReplyEmojiSpec),
+		overrides.text(promptReplyUnclosedBracketSpec),
 		overrides.text(promptReplyBlankLineSpec),
 		segmentation,
 		overrides.text(promptReplyDocumentDeliverySpec),

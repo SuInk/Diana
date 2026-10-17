@@ -707,9 +707,11 @@ type BotConfig struct {
 	WelcomeLLMCooldownSeconds int              `json:"welcome_llm_cooldown_seconds,omitempty"`
 	// SystemPrompt 是这台机器人的 SOUL.md：她是谁、在乎什么、怎么说话。展开 {{name}} 后
 	// 放在系统提示词最前面。JSON 键名沿用 system_prompt，存量配置不用迁移。
-	SystemPrompt     string       `json:"system_prompt,omitempty"`
-	ReplyComposer    string       `json:"reply_composer,omitempty"`
-	MaiBotReplyStyle string       `json:"maibot_reply_style,omitempty"`
+	SystemPrompt     string `json:"system_prompt,omitempty"`
+	ReplyComposer    string `json:"reply_composer,omitempty"`
+	MaiBotReplyStyle string `json:"maibot_reply_style,omitempty"`
+	// ReplyFilterRules 是主人写的正则，命中的内容在发送前从回复里删掉，见 reply_filter.go。
+	ReplyFilterRules []string     `json:"reply_filter_rules,omitempty"`
 	ResponseMode     ResponseMode `json:"response_mode,omitempty"`
 	ReplyStyle       ReplyStyle   `json:"reply_style,omitempty"`
 	// 下面几项是 SOUL.md 之前的人设字段，只在读旧配置时出现：WithDefaults 把它们
@@ -1420,6 +1422,7 @@ type ConfigPayload struct {
 	SystemPrompt                   string               `json:"system_prompt,omitempty"`
 	ReplyComposer                  string               `json:"reply_composer,omitempty"`
 	MaiBotReplyStyle               string               `json:"maibot_reply_style,omitempty"`
+	ReplyFilterRules               []string             `json:"reply_filter_rules,omitempty"`
 	ReplyToneDefault               string               `json:"reply_tone_default,omitempty"`
 	ResponseMode                   ResponseMode         `json:"response_mode,omitempty"`
 	ReplyStyle                     ReplyStyle           `json:"reply_style,omitempty"`
@@ -2262,6 +2265,7 @@ func (cfg BotConfig) WithDefaults() BotConfig {
 		cfg.ReplyComposer = ""
 	}
 	cfg.MaiBotReplyStyle = strings.TrimSpace(cfg.MaiBotReplyStyle)
+	cfg.ReplyFilterRules = cleanStrings(append([]string(nil), cfg.ReplyFilterRules...))
 	if hasResponseMode {
 		cfg.ResponseMode = cfg.ResponseMode.Normalized()
 	} else {
@@ -2573,6 +2577,9 @@ func (cfg BotConfig) Validate() error {
 	if err := validatePromptOverrides(cfg.PromptOverrides); err != nil {
 		return err
 	}
+	if err := validateReplyFilterRules(cleanStrings(cfg.ReplyFilterRules)); err != nil {
+		return err
+	}
 	if cfg.OneBotTransport == "" {
 		cfg.OneBotTransport = OneBotTransportReverseWS
 	}
@@ -2795,6 +2802,7 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		SystemPrompt:                      cfg.SystemPrompt,
 		ReplyComposer:                     cfg.ReplyComposer,
 		MaiBotReplyStyle:                  cfg.MaiBotReplyStyle,
+		ReplyFilterRules:                  append([]string(nil), cfg.ReplyFilterRules...),
 		ReplyToneDefault:                  DefaultReplyTone,
 		ResponseMode:                      cfg.ResponseMode,
 		ReplyStyle:                        cfg.ReplyStyle,
@@ -3059,6 +3067,7 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		SystemPrompt:                    payload.SystemPrompt,
 		ReplyComposer:                   payload.ReplyComposer,
 		MaiBotReplyStyle:                payload.MaiBotReplyStyle,
+		ReplyFilterRules:                append([]string(nil), payload.ReplyFilterRules...),
 		ResponseMode:                    payload.ResponseMode,
 		ReplyStyle:                      payload.ReplyStyle,
 		DebugModeEnabled:                copyBoolPointer(payload.DebugModeEnabled),

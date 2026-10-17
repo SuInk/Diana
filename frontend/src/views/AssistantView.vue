@@ -1478,6 +1478,18 @@
               <div v-if="form.reply_composer === 'maibot'" class="field wide">
                 <ReplyToneEditor v-model="replyToneDraft" />
               </div>
+              <div class="field wide">
+                <label for="bot-reply-filters">回复过滤正则</label>
+                <textarea
+                  id="bot-reply-filters"
+                  v-model="replyFilterRulesDraft"
+                  class="textarea mono"
+                  rows="3"
+                  spellcheck="false"
+                  placeholder="每行一条正则，例如 （[^）]*$ 删掉行尾没闭合的括号和后面那段话"
+                ></textarea>
+                <span class="hint">发送前把命中的内容从回复里删掉，每行按单独一行匹配（^ $ 对应行首行尾），不开「单独设置回复口吻」也生效。整条回复被删光时这一轮不发送。提示词管不住的口癖可以在这里兜底。</span>
+              </div>
             </div>
           </section>
 
@@ -2567,6 +2579,7 @@ const tokenDraft = ref("");
 const bridgeTokenDraft = ref("");
 const triggersDraft = ref("");
 const welcomeTemplatesDraft = ref("");
+const replyFilterRulesDraft = ref("");
 const allowlistDraft = ref("");
 
 // 只并入 node，其它命令、* 和文件写入、网络设置原样保留；保存配置后才生效。
@@ -4757,6 +4770,7 @@ function setForm(config: BotProfileConfig): void {
   };
   triggersDraft.value = formatTriggerWords(config.group_triggers ?? []);
   welcomeTemplatesDraft.value = (config.welcome_templates ?? []).join("\n");
+  replyFilterRulesDraft.value = (config.reply_filter_rules ?? []).join("\n");
   allowlistDraft.value = (config.agent_command_allowlist ?? []).join(",");
   privateAllowedUsers.value = [...(config.private_admission?.allowed_users ?? [])];
   for (const draft of Object.values(tokenDrafts)) {
@@ -4995,6 +5009,10 @@ async function save(): Promise<void> {
         .split("\n")
         .map((item) => item.trim())
         .filter((item) => item !== ""),
+      reply_filter_rules: replyFilterRulesDraft.value
+        .split("\n")
+        .map((item) => item.trim())
+        .filter((item) => item !== ""),
       welcome_llm_cooldown_seconds: Number(current.welcome_llm_cooldown_seconds) || 0,
       // 清空的输入框是空字符串，后端的整数字段读不了；0 表示用默认值。
       reply_suppression_min_minutes: Math.trunc(Number(current.reply_suppression_min_minutes)) || 0,
@@ -5075,6 +5093,7 @@ function editorSnapshot(): string {
     roleForm.value,
     triggersDraft.value,
     welcomeTemplatesDraft.value,
+    replyFilterRulesDraft.value,
     allowlistDraft.value,
     privateAllowedUsers.value,
     Object.values(tokenDrafts).map((draft) => draft.value),

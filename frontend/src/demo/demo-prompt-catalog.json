@@ -867,6 +867,13 @@
       "default": "不要在回复里使用 emoji（😂🤣👍✨ 这类彩色表情符号），一个都不要，包括用来表达情绪反应或缓和语气的场合。需要表达情绪就用文字说。"
     },
     {
+      "key": "reply.style.unclosed_bracket",
+      "group": "reply_style",
+      "title": "不写半截括号",
+      "usage": "每轮注入：不用只开不合的「（」接一段话。",
+      "default": "不要用只开不合的「（」接一段补充的话，例如「这叫声控开关（摔一个来一个，百试百灵」；要补充就另起一句或把括号写完整，也不要照抄聊天记录里这种写法。"
+    },
+    {
       "key": "reply.style.blank_line",
       "group": "reply_style",
       "title": "换行协议",

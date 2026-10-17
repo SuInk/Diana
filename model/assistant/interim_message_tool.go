@@ -131,7 +131,9 @@ func (t *dianaInterimMessageTool) Run(ctx context.Context, input map[string]any)
 	}
 	ledger.mu.Unlock()
 
-	text = strings.TrimSpace(stripChatPeriods(normalizeReply(text, 0, markdownToPlainForConfig(t.runtime.effectiveConfigForEvent(t.event)))))
+	cfg := t.runtime.effectiveConfigForEvent(t.event)
+	text = applyReplyFilters(cfg.ReplyFilterRules, text)
+	text = strings.TrimSpace(stripChatPeriods(normalizeReply(text, 0, markdownToPlainForConfig(cfg))))
 	if text == "" {
 		return "", fmt.Errorf("text 不能为空")
 	}

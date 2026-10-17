@@ -111,6 +111,13 @@ func (r *Runtime) prepareGeneratedReply(ctx context.Context, cfg BotConfig, repl
 		event = events[0]
 	}
 	event.Platform = firstNonEmpty(event.Platform, cfg.Platform)
+	if len(cfg.ReplyFilterRules) > 0 {
+		filtered := applyReplyFilters(cfg.ReplyFilterRules, body)
+		if filtered == "" && strings.TrimSpace(body) != "" {
+			return "", newModelSilentFinishError("回复被自定义过滤规则整段删光，本轮不发送")
+		}
+		body = filtered
+	}
 	if intent.DeliveryMode == "" {
 		intent.DeliveryMode = event.replyDeliveryMode
 	}

@@ -297,6 +297,8 @@ export interface BotProfileConfig extends SendRetrySettings {
   maibot_reply_style?: string;
   /** 后端当前实际使用的内置回复口吻，只读，供编辑器展示和恢复。 */
   reply_tone_default?: string;
+  /** 回复过滤正则，每条命中的内容在发送前从回复里删掉。 */
+  reply_filter_rules?: string[];
   response_mode?: "quiet" | "assistant" | "standard" | "active" | "super_active" | "custom";
   /** 记录完整模型上下文、工具参数和调用结果；默认关闭。 */
   debug_mode_enabled?: boolean;
