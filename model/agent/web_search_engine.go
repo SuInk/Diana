@@ -32,7 +32,8 @@ const (
 
 // DefaultSearchEngines 是搜索引擎模式的默认顺序。Google 结果最好但最容易弹验证，
 // 被拦了就按顺序换下一家。
-var DefaultSearchEngines = []string{"google", "bing", "duckduckgo", "baidu"}
+// 百度不再默认启用：结果多为站内跳转，常被安全验证拦下。手动配置的 baidu 仍可识别。
+var DefaultSearchEngines = []string{"google", "bing", "duckduckgo"}
 
 // errWebSearchBlocked 表示搜索引擎返回了人机验证页。同一次搜索里换关键词也还是会被拦，
 // 所以这一家在本次调用里直接跳过。
@@ -118,7 +119,7 @@ type searchEngineResult struct {
 func (t *WebSearchTool) runSearchEngine(ctx context.Context, provider webSearchProviderConfig, query string) (string, error) {
 	renderer := t.renderer
 	if renderer == nil {
-		renderer = NewSandboxedHeadlessBrowser(SandboxedBrowserConfig{Window: BrowserWindowHidden})
+		renderer = NewSandboxedHeadlessBrowser(SandboxedBrowserConfig{Window: BrowserWindowHidden, ReuseProcess: true})
 	}
 	target, engine, err := searchEngineRequestURL(provider, query)
 	if err != nil {
@@ -206,7 +207,9 @@ func searchEngineResults(engine searchEngine, links []RenderedLink, limit int) [
 		if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Hostname() == "" {
 			continue
 		}
-		if searchEngineOwnHost(engine, parsed) {
+		// Bing 的页脚帮助/生成式搜索说明不是查询结果，不能抢先结束后备搜索。
+		bingHelp := parsed.Hostname() == "support.microsoft.com" && (strings.Contains(parsed.Path, "d18fc815-ac37-4723-bc67-9229ce3eb6a3") || strings.Contains(parsed.Path, "82d20721-2d6f-4012-a13d-d1910ccf203f"))
+		if searchEngineOwnHost(engine, parsed) || (engine.searchURL == searchEngines["bing"].searchURL && bingHelp) {
 			continue
 		}
 		title := firstRenderedLine(link.Text)

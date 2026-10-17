@@ -65,7 +65,7 @@ func ProbeWebSearchProvider(ctx context.Context, provider WebSearchProviderConfi
 	client.Transport = transport
 	renderer := options.Renderer
 	if renderer == nil && (provider.Type == "browser" || provider.Type == WebSearchProviderSearchEngine) {
-		renderer = NewSandboxedHeadlessBrowser(SandboxedBrowserConfig{Window: BrowserWindowHidden})
+		renderer = NewSandboxedHeadlessBrowser(SandboxedBrowserConfig{Window: BrowserWindowHidden, ReuseProcess: true})
 	}
 	tool := &WebSearchTool{client: &client, renderer: renderer}
 	testCtx, cancel := context.WithTimeout(ctx, time.Duration(provider.TimeoutMS)*time.Millisecond)

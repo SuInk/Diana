@@ -33,6 +33,8 @@ const (
 	webSearchSettingTotalTimeout    = "total_timeout_seconds"
 	webSearchSettingSourceRecall    = "claim_source_recall"
 	webSearchSettingLinkPolicy      = "reply_link_policy"
+	// webSearchSettingSourcePriority 决定 API 来源和浏览器来源谁先试，同类内按列表顺序。
+	webSearchSettingSourcePriority = "search_source_priority"
 
 	webSearchModeAPI    = "api"
 	webSearchModeEngine = "search_engine"
@@ -70,6 +72,7 @@ func (p *WebSearchPlugin) Manifest() PluginManifest {
 			{Key: searchProvidersSetting, Label: "搜索提供商存档", Type: PluginSettingTypeText, Default: ""},
 			{Key: searchProviderKeysSetting, Label: "搜索提供商凭据", Type: PluginSettingTypeText, Default: "", Secret: true},
 			{Key: searchProviderOrderSetting, Label: "搜索路由", Type: PluginSettingTypeText, Default: ""},
+			{Key: webSearchSettingSourcePriority, Label: "搜索来源优先级", Type: PluginSettingTypeText, Default: ""},
 			{
 				Key:   webSearchSettingMode,
 				Label: "搜索方式",
@@ -85,7 +88,7 @@ func (p *WebSearchPlugin) Manifest() PluginManifest {
 			{
 				Key:   webSearchSettingEngines,
 				Label: "搜索引擎顺序",
-				Description: "搜索引擎方式下按顺序尝试，逗号或换行分隔，前一家被人机验证拦下或没有结果时换下一家。内置 google、bing、duckduckgo、baidu；" +
+				Description: "搜索引擎方式下按顺序尝试，逗号或换行分隔，前一家被人机验证拦下或没有结果时换下一家。内置 google、bing、duckduckgo；" +
 					"也可以直接写自定义搜索地址，用 {query} 代表查询词，例如 https://search.example.com/search?q={query}，和内置引擎一起排序。",
 				Type:    PluginSettingTypeString,
 				Default: strings.Join(agent.DefaultSearchEngines, ","),
@@ -249,7 +252,7 @@ func (p *WebSearchPlugin) AgentTools(settings SettingValues) ([]agent.Tool, erro
 		totalTimeout = max(totalTimeout, minSearchEngineTotalTimeout)
 		renderer = p.renderer
 		if renderer == nil {
-			renderer = agent.NewSandboxedHeadlessBrowser(agent.SandboxedBrowserConfig{Window: agent.BrowserWindowHidden})
+			renderer = agent.NewSandboxedHeadlessBrowser(agent.SandboxedBrowserConfig{Window: agent.BrowserWindowHidden, ReuseProcess: true})
 		}
 	} else {
 		if settings.Bool(webSearchSettingExaEnabled, true) {
@@ -284,7 +287,7 @@ func (p *WebSearchPlugin) AgentTools(settings SettingValues) ([]agent.Tool, erro
 	if renderer == nil {
 		renderer = p.renderer
 		if renderer == nil {
-			renderer = agent.NewSandboxedHeadlessBrowser(agent.SandboxedBrowserConfig{Window: agent.BrowserWindowHidden})
+			renderer = agent.NewSandboxedHeadlessBrowser(agent.SandboxedBrowserConfig{Window: agent.BrowserWindowHidden, ReuseProcess: true})
 		}
 	}
 

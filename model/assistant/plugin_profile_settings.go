@@ -51,7 +51,15 @@ func cloneProfileSettings(profiles map[string]map[string]any) map[string]map[str
 
 func scopedPluginSettings(state PluginState, overrides PluginSettingOverrides) SettingValues {
 	if state.Manifest.ID == webSearchPluginID {
-		return effectivePluginSettingsForGroup(state.Manifest.Settings, state.Settings, nil)
+		// 群级搜索覆盖早已停用；这里只会是 Runtime 注入的机器人单独配置。
+		// 只认路由和参数，提供商目录与凭据始终取全局。
+		settings := webSearchStateSettings(state)
+		for _, key := range webSearchOverrideKeys {
+			if value, ok := overrides[webSearchPluginID][key]; ok {
+				settings[key] = value
+			}
+		}
+		return settings
 	}
 	profile, _ := overrides[pluginSettingsProfileKey]["profile_id"].(string)
 	state = state.ForProfile(profile)

@@ -48,13 +48,20 @@ func (r *Runtime) pluginOverridesForEvent(event MessageEvent) map[string]bool {
 		return allPluginsDisabled(r.plugins)
 	}
 	out := r.plugins.ProfileOverrides(profileID)
+	// 联网搜索按机器人开关；没保存过的机器人沿用升级前的全局开关。
+	if search := r.webSearchOverride(profileID); search != nil {
+		if out == nil {
+			out = map[string]bool{}
+		}
+		out[webSearchPluginID] = !search.Disabled
+	}
 	groupCfg, ok := r.groupConfigForEvent(event)
 	if !ok || len(groupCfg.PluginOverrides) == 0 {
 		return out
 	}
 	for id, enabled := range groupCfg.PluginOverrides {
 		id = strings.TrimSpace(id)
-		// 联网搜索只按全局配置，群里存过的旧开关不再生效。
+		// 联网搜索按机器人配置，群里存过的旧开关不再生效。
 		if id == "" || id == webSearchPluginID {
 			continue
 		}
@@ -80,7 +87,15 @@ func (r *Runtime) pluginWithSettingsForEvent(id string, event MessageEvent) (Plu
 	)
 }
 
-// webSearchPluginSettings 读取全局联网搜索设置。
+// webSearchOverride 返回机器人的搜索配置；nil 表示还没保存过，沿用升级前的全局值。
+func (r *Runtime) webSearchOverride(profileID string) *WebSearchAssignment {
+	if r == nil {
+		return nil
+	}
+	return r.ProfileConfig(profileID).WebSearchOverride
+}
+
+// webSearchPluginSettings 读取这次事件生效的联网搜索设置：旧全局值叠加机器人配置。
 func (r *Runtime) webSearchPluginSettings(event MessageEvent) (SettingValues, bool) {
 	_, settings, enabled := r.pluginWithSettingsForEvent(webSearchPluginID, event)
 	return settings, enabled
@@ -89,6 +104,9 @@ func (r *Runtime) webSearchPluginSettings(event MessageEvent) (SettingValues, bo
 func (r *Runtime) pluginSettingOverridesForEvent(event MessageEvent) PluginSettingOverrides {
 	profileID := r.eventProfileID(event)
 	out := PluginSettingOverrides{pluginSettingsProfileKey: map[string]any{"profile_id": profileID}}
+	if search := r.webSearchOverride(profileID); search != nil {
+		out[webSearchPluginID] = search.settings()
+	}
 	groupCfg, ok := r.groupConfigForEvent(event)
 	if !ok || len(groupCfg.PluginSettingOverrides) == 0 {
 		return out

@@ -473,7 +473,7 @@ func (m *PluginManager) ShouldHandleWithOverrides(event MessageEvent, text strin
 		state := m.states[id]
 		enabled := state.Enabled
 		if override, ok := overrides[id]; ok {
-			enabled = override && (id != webSearchPluginID || state.Enabled)
+			enabled = override
 		}
 		trigger, ok := plugin.(DirectTriggerPlugin)
 		if state.Installed && enabled && ok {
@@ -556,7 +556,7 @@ func (m *PluginManager) EnabledWithOverrides(id string, overrides map[string]boo
 		return true
 	}
 	if enabled, overridden := overrides[id]; overridden {
-		return enabled && (id != webSearchPluginID || state.Enabled)
+		return enabled
 	}
 	return state.Enabled
 }
@@ -605,7 +605,7 @@ func (m *PluginManager) PluginWithSettingsForGroup(id string, enabledOverrides m
 	state := m.states[id]
 	enabled := state.Enabled
 	if override, present := enabledOverrides[id]; present {
-		enabled = override && (id != webSearchPluginID || state.Enabled)
+		enabled = override
 	}
 	if !ok || !state.Installed || !enabled {
 		return nil, nil, false
@@ -1063,7 +1063,7 @@ func (m *PluginManager) CanAskAgent(id string, enabledOverrides map[string]bool,
 	state := m.states[id]
 	enabled := state.Enabled
 	if override, overridden := enabledOverrides[id]; overridden {
-		enabled = override && (id != webSearchPluginID || state.Enabled)
+		enabled = override
 	}
 	manifest := withBuiltinPlatformSupport(plugin.Manifest())
 	settings := scopedPluginSettings(state, settingOverrides)
@@ -1095,7 +1095,7 @@ func (m *PluginManager) RunWithGroupOverrides(ctx context.Context, req PluginReq
 		state := m.states[id]
 		enabled := state.Enabled
 		if override, ok := enabledOverrides[id]; ok {
-			enabled = override && (id != webSearchPluginID || state.Enabled)
+			enabled = override
 		}
 		if state.Installed && enabled && pluginSupportsPlatform(state.Manifest, req.Event.Platform) {
 			plugins = append(plugins, runnable{
@@ -1168,7 +1168,7 @@ func (m *PluginManager) RunOneWithGroupOverrides(ctx context.Context, id string,
 	state := m.states[id]
 	enabled := state.Enabled
 	if override, overridden := enabledOverrides[id]; overridden {
-		enabled = override && (id != webSearchPluginID || state.Enabled)
+		enabled = override
 	}
 	settings := scopedPluginSettings(state, settingOverrides)
 	m.mu.RUnlock()
@@ -1213,7 +1213,7 @@ func (m *PluginManager) AgentToolsForPlatformWithGroupOverrides(platform string,
 		state := m.states[id]
 		enabled := state.Enabled
 		if override, ok := enabledOverrides[id]; ok {
-			enabled = override && (id != webSearchPluginID || state.Enabled)
+			enabled = override
 		}
 		if !state.Installed || !enabled || !pluginSupportsPlatform(state.Manifest, platform) {
 			continue
@@ -1278,7 +1278,7 @@ func (m *PluginManager) AgentToolsForPlatformWithGroupOverrides(platform string,
 		state := m.states[id]
 		enabled := state.Enabled
 		if override, overridden := enabledOverrides[id]; overridden {
-			enabled = override && (id != webSearchPluginID || state.Enabled)
+			enabled = override
 		}
 		if state.Installed && enabled && pluginSupportsPlatform(state.Manifest, platform) {
 			legacyProviders = append(legacyProviders, provider)
@@ -1316,7 +1316,7 @@ func (m *PluginManager) AgentToolOwners(platform string, enabledOverrides map[st
 		m.mu.RUnlock()
 		enabled := state.Enabled
 		if override, ok := enabledOverrides[id]; ok {
-			enabled = override && (id != webSearchPluginID || state.Enabled)
+			enabled = override
 		}
 		if !state.Installed || !enabled || !pluginSupportsPlatform(state.Manifest, platform) {
 			continue
@@ -1405,7 +1405,7 @@ func (m *PluginManager) ObserveEventWithOverrides(ctx context.Context, event Mes
 		observer, ok := plugin.(EventObserverPlugin)
 		enabled := state.Enabled
 		if override, exists := overrides[id]; exists && !state.Manifest.Internal {
-			enabled = override && (id != webSearchPluginID || state.Enabled)
+			enabled = override
 		}
 		if state.Installed && (enabled || state.Manifest.Internal) && ok {
 			observers = append(observers, observerEntry{id: id, observer: observer})

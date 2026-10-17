@@ -205,8 +205,8 @@ func TestRuntimeModelToolReadsRegistryFailoverSelection(t *testing.T) {
 	}
 }
 
-// 默认只对主人报模型：普通成员拿到的是「别说」，主人拿到的是「去查」，两段都
-// 随发言者变化，只能进 tail。早期的 none 档已并入 owner：主人始终能看。
+// 默认向所有人公开模型；仅主人模式的规则随发言者变化，放进 tail。
+// 早期的 none 档已并入 owner：主人始终能看。
 func TestModelDisclosureGatesPromptBySpeaker(t *testing.T) {
 	event := MessageEvent{Kind: EventKindGroup, GroupID: "g1", UserID: "1"}
 	registry := agent.NewToolRegistry(newDianaRuntimeModelTool(nil))
@@ -218,9 +218,12 @@ func TestModelDisclosureGatesPromptBySpeaker(t *testing.T) {
 		wantHide   bool
 		wantInTail bool
 	}{
-		{"", false, true, false, true, true},
-		{"", true, true, true, false, true},
-		{"", false, false, false, true, true},
+		{ModelDisclosureOwner, false, true, false, true, true},
+		{"", false, true, true, false, false},
+		{ModelDisclosureOwner, true, true, true, false, true},
+		{"", true, true, true, false, false},
+		{ModelDisclosureOwner, false, false, false, true, true},
+		{"", false, false, false, false, false},
 		{"", true, false, false, false, false},
 		{"none", true, true, true, false, true},
 		{ModelDisclosureEveryone, false, true, true, false, false},
@@ -249,7 +252,8 @@ func TestModelDisclosedTo(t *testing.T) {
 		want  bool
 	}{
 		{"", true, true},
-		{"", false, false},
+		{"", false, true},
+		{ModelDisclosureOwner, false, false},
 		{"bogus", false, false},
 		{"none", true, true},
 		{"none", false, false},

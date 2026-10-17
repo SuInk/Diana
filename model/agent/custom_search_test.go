@@ -140,3 +140,25 @@ func TestCustomSearchMCPRedactsCredentialEchoedInRemoteErrors(t *testing.T) {
 		t.Fatalf("error not captured: %s %v", output, err)
 	}
 }
+
+func TestBrowserSearchRecognizesBuiltinEngineAddress(t *testing.T) {
+	var requested []string
+	renderer := PageRendererFunc(func(_ context.Context, raw string) (RenderedPage, error) {
+		requested = append(requested, raw)
+		return RenderedPage{URL: raw, Title: "Search", Text: "r", Links: []RenderedLink{{URL: "https://example.org/diana", Text: "Diana"}}}, nil
+	})
+	// 界面新建的浏览器来源只有地址和参数名，没有引擎名。
+	tool, err := NewWebSearchTool(WebSearchToolOptions{Config: WebSearchConfig{Providers: []WebSearchProviderConfig{{Name: "google", Type: "browser", URL: "https://www.google.com/search", QueryParam: "q", MaxResults: 3}}}, Renderer: renderer})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tool.Run(context.Background(), map[string]any{"query": "Diana", "recency": float64(30)}); err != nil {
+		t.Fatal(err)
+	}
+	if len(requested) != 1 || !strings.Contains(requested[0], "q=Diana") || !strings.Contains(requested[0], "tbs=qdr%3Am") {
+		t.Fatalf("builtin engine not recognized: %v", requested)
+	}
+	if knownBrowserSearchEngine("https://www.google.com/search", "query") != "" || knownBrowserSearchEngine("https://www.baidu.com/s", "wd") != "baidu" {
+		t.Fatal("engine detection must match both address and query parameter")
+	}
+}

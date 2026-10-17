@@ -263,11 +263,15 @@ func TestWebSearchIgnoresGroupOverrides(t *testing.T) {
 
 func TestSearchProviderCatalogPreservesBrowserEngineDefaults(t *testing.T) {
 	manager := NewDefaultPluginManager()
+	// 已存搜索方式的实例保留主分支兼容逻辑：Exa 优先，后备为浏览器引擎。
+	legacy := manager.states[webSearchPluginID]
+	legacy.Settings = map[string]any{webSearchSettingMode: webSearchModeEngine}
+	manager.states[webSearchPluginID] = legacy
 	config, err := manager.SearchConfiguration("")
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"exa", "engine-google", "engine-bing", "engine-duckduckgo", "engine-baidu"}
+	want := []string{"exa", "engine-google", "engine-bing", "engine-duckduckgo"}
 	if !reflect.DeepEqual(config.DefaultAssignment.ProviderIDs, want) {
 		t.Fatalf("default=%v", config.DefaultAssignment.ProviderIDs)
 	}
@@ -280,7 +284,7 @@ func TestSearchProviderCatalogPreservesBrowserEngineDefaults(t *testing.T) {
 	}
 	state, _ := manager.Get(webSearchPluginID)
 	providers, _, err := orderedSearchProviders(effectivePluginSettingsForGroup(state.Manifest.Settings, state.Settings, nil))
-	if err != nil || len(providers) != 5 || providers[0].Name != "exa" || providers[4].QueryParam != "wd" {
+	if err != nil || len(providers) != 4 || providers[0].Name != "exa" || providers[3].Name != "engine-duckduckgo" {
 		t.Fatalf("providers=%v err=%v", providers, err)
 	}
 	runtime := NewRuntime(BotConfig{ID: "bot", WebSearch: &WebSearchAssignment{Disabled: true, ProviderIDs: []string{"engine-google"}}}, nil, manager, nil, nil, nil, nil)
@@ -337,14 +341,9 @@ func TestGlobalSearchAssignmentAtomicPersistenceAndReferences(t *testing.T) {
 	if err := m.SaveSearchAssignment(WebSearchAssignment{ProviderIDs: []string{"browser"}}, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := m.DeleteSearchProvider("browser"); err == nil {
-		t.Fatal("deleted referenced provider")
-	}
-	if _, err := m.SaveSearchProvider(SearchProvider{ID: "browser", Name: "Browser", Type: "browser", URL: "https://www.google.com/search", Disabled: true}); err == nil {
-		t.Fatal("disabled active referenced provider")
-	}
-	if err := m.ImportSearchProviders([]SearchProvider{{ID: "browser", Name: "Browser", Type: "browser", URL: "https://www.google.com/search", Disabled: true}}); err == nil {
-		t.Fatal("import disabled active provider")
+	// 停用被路由引用的来源是允许的，运行时会跳过；删除由 WebUI 按机器人检查。
+	if _, err := m.SaveSearchProvider(SearchProvider{ID: "browser", Name: "Browser", Type: "browser", URL: "https://www.google.com/search", Disabled: true}); err != nil {
+		t.Fatalf("disable referenced provider: %v", err)
 	}
 	if err := m.SaveSearchAssignment(WebSearchAssignment{Disabled: true, ProviderIDs: []string{"browser"}}, nil); err != nil {
 		t.Fatal(err)
@@ -387,5 +386,190 @@ func TestGlobalSearchMigrationPreservesSettingsAndExplicitEmptyRoute(t *testing.
 		if err != nil || !hasAgentToolNamed(tools, agent.WebSearchToolName) {
 			t.Fatal("missing route lost legacy defaults")
 		}
+	}
+}
+
+func TestRobotSearchConfigReplacesRouteAndSwitch(t *testing.T) {
+	manager := NewDefaultPluginManager()
+	a, err := manager.SaveSearchProvider(SearchProvider{Name: "Global", Type: "tavily", URL: "https://global.example/search", APIKey: "global-key"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := manager.SaveSearchProvider(SearchProvider{Name: "Robot", Type: "tavily", URL: "https://robot.example/search", APIKey: "robot-key"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.SaveSearchAssignment(WebSearchAssignment{ProviderIDs: []string{a}, MaxResults: 3}, nil); err != nil {
+		t.Fatal(err)
+	}
+	custom := DefaultBotConfig()
+	custom.ID, custom.Enabled = "custom", true
+	custom.WebSearchOverride = &WebSearchAssignment{ProviderIDs: []string{b}, MaxResults: 7, ReplyLinkPolicy: replyLinkPolicyAlways}
+	follower := DefaultBotConfig()
+	follower.ID, follower.Enabled = "follower", true
+	runtime := NewRuntime(custom, nil, manager, nil, nil, nil, nil)
+	runtime.SetProfiles(ProfileSet{Profiles: []BotConfig{custom, follower}})
+
+	route := func(profileID string) ([]string, SettingValues, bool) {
+		_, settings, enabled := runtime.pluginWithSettingsForEvent(webSearchPluginID, MessageEvent{ProfileID: profileID, Kind: EventKindPrivate})
+		if !enabled {
+			return nil, settings, false
+		}
+		providers, keys, err := orderedSearchProviders(settings)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var ids []string
+		for _, provider := range providers {
+			ids = append(ids, provider.Name+"="+keys[provider.Name])
+		}
+		return ids, settings, true
+	}
+	if ids, settings, enabled := route(custom.ID); !enabled || !reflect.DeepEqual(ids, []string{b + "=robot-key"}) || settings.Int(webSearchSettingMaxResults, 0) != 7 || settings.String(webSearchSettingLinkPolicy, "") != replyLinkPolicyAlways {
+		t.Fatalf("robot override not applied: ids=%v settings=%v enabled=%v", ids, settings, enabled)
+	}
+	if ids, settings, enabled := route(follower.ID); !enabled || !reflect.DeepEqual(ids, []string{a + "=global-key"}) || settings.Int(webSearchSettingMaxResults, 0) != 3 {
+		t.Fatalf("follower lost global route: ids=%v settings=%v", ids, settings)
+	}
+
+	custom.WebSearchOverride.Disabled = true
+	runtime.SetProfiles(ProfileSet{Profiles: []BotConfig{custom, follower}})
+	if _, _, enabled := route(custom.ID); enabled {
+		t.Fatal("robot could not turn search off")
+	}
+	if _, _, enabled := route(follower.ID); !enabled {
+		t.Fatal("one robot's switch leaked to another")
+	}
+
+	// 全局配置已取消：旧全局开关只影响还没保存过搜索配置的机器人。
+	custom.WebSearchOverride.Disabled = false
+	runtime.SetProfiles(ProfileSet{Profiles: []BotConfig{custom, follower}})
+	if err := manager.SaveSearchAssignment(WebSearchAssignment{Disabled: true, ProviderIDs: []string{a}}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, enabled := route(custom.ID); !enabled {
+		t.Fatal("legacy global switch still gates a robot with its own config")
+	}
+	if _, _, enabled := route(follower.ID); enabled {
+		t.Fatal("unsaved robot ignored the legacy switch")
+	}
+}
+
+func TestRobotSearchSourcePriorityGroupsAPIAndBrowser(t *testing.T) {
+	manager := NewDefaultPluginManager()
+	api, err := manager.SaveSearchProvider(SearchProvider{Name: "API", Type: "tavily", URL: "https://api.example/search", APIKey: "k"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings := effectivePluginSettingsForGroup(manager.states[webSearchPluginID].Manifest.Settings, manager.states[webSearchPluginID].Settings, nil)
+	order := func(priority string) []string {
+		values := SettingValues(clonePluginValues(settings))
+		for key, value := range (&WebSearchAssignment{ProviderIDs: []string{"engine-google", api, "exa"}, SourcePriority: priority}).settings() {
+			values[key] = value
+		}
+		providers, _, err := orderedSearchProviders(values)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var ids []string
+		for _, provider := range providers {
+			ids = append(ids, provider.Name)
+		}
+		return ids
+	}
+	if got := order(""); !reflect.DeepEqual(got, []string{"engine-google", api, "exa"}) {
+		t.Fatalf("list order=%v", got)
+	}
+	if got := order(searchSourcePriorityAPI); !reflect.DeepEqual(got, []string{api, "exa", "engine-google"}) {
+		t.Fatalf("api first=%v", got)
+	}
+	if got := order(searchSourcePriorityBrowser); !reflect.DeepEqual(got, []string{"engine-google", api, "exa"}) {
+		t.Fatalf("browser first=%v", got)
+	}
+	if err := (&WebSearchAssignment{ProviderIDs: []string{"exa"}, SourcePriority: "random"}).Validate(); err == nil {
+		t.Fatal("invalid priority accepted")
+	}
+}
+
+func TestRobotSearchOverrideOnlyCarriesRouteSettings(t *testing.T) {
+	manager := NewDefaultPluginManager()
+	state := manager.states[webSearchPluginID]
+	settings := scopedPluginSettings(state, PluginSettingOverrides{webSearchPluginID: {searchProvidersSetting: `[{"id":"injected"}]`, searchProviderKeysSetting: `{"injected":"secret"}`, webSearchSettingMaxResults: 4}})
+	if settings.String(searchProvidersSetting, "") != "" || settings.String(searchProviderKeysSetting, "") != "" || settings.Int(webSearchSettingMaxResults, 0) != 4 {
+		t.Fatalf("override touched catalog or credentials: %v", settings)
+	}
+}
+
+func TestRobotSearchOverrideRoundTripsAndValidates(t *testing.T) {
+	cfg := DefaultBotConfig()
+	cfg.WebSearchOverride = &WebSearchAssignment{ProviderIDs: []string{"exa"}, MaxResults: 4}
+	payload := PayloadFromConfig(cfg)
+	if payload.WebSearchOverride == nil || payload.WebSearchOverride.MaxResults != 4 {
+		t.Fatalf("payload lost override: %#v", payload.WebSearchOverride)
+	}
+	payload.WebSearchOverride = nil
+	if restored := ConfigFromPayload(payload, cfg); restored.WebSearchOverride != nil {
+		t.Fatal("clearing override did not return to the global route")
+	}
+	cfg.WebSearchOverride = &WebSearchAssignment{ProviderIDs: []string{}}
+	if err := cfg.WithDefaults().Validate(); err == nil {
+		t.Fatal("enabled override without providers accepted")
+	}
+}
+
+func TestFreshInstallSearchDefaultsToBrowsersThenExaAndSurvivesFirstSave(t *testing.T) {
+	manager := NewDefaultPluginManager()
+	config, err := manager.SearchConfiguration("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.DefaultAssignment.Disabled || !reflect.DeepEqual(config.DefaultAssignment.ProviderIDs, freshSearchProviderIDs) || config.DefaultAssignment.SourcePriority != searchSourcePriorityBrowser {
+		t.Fatalf("fresh default=%+v", config.DefaultAssignment)
+	}
+	for _, provider := range config.Providers {
+		if provider.ID == "browser" {
+			t.Fatal("fresh install lists the duplicate generic browser source")
+		}
+	}
+	route := func() []string {
+		providers, _, err := orderedSearchProviders(webSearchStateSettings(manager.states[webSearchPluginID]))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var ids []string
+		for _, provider := range providers {
+			ids = append(ids, provider.Name)
+		}
+		return ids
+	}
+	if got := route(); !reflect.DeepEqual(got, freshSearchProviderIDs) {
+		t.Fatalf("fresh route=%v", got)
+	}
+	// 第一次新建提供商后，默认路由要原样保留，不能退回只有浏览器。
+	if _, err := manager.SaveSearchProvider(SearchProvider{Name: "Brave", Type: "brave", URL: "https://api.search.brave.com/res/v1/web/search", APIKey: "k"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := route(); !reflect.DeepEqual(got, freshSearchProviderIDs) {
+		t.Fatalf("route after first save=%v", got)
+	}
+	restored := NewDefaultPluginManager()
+	restored.Restore(manager.Snapshot())
+	config, _ = restored.SearchConfiguration("")
+	if !reflect.DeepEqual(config.DefaultAssignment.ProviderIDs, freshSearchProviderIDs) || config.DefaultAssignment.SourcePriority != searchSourcePriorityBrowser {
+		t.Fatalf("restored default=%+v", config.DefaultAssignment)
+	}
+	for _, provider := range config.Providers {
+		if provider.ID == "browser" {
+			t.Fatal("generic browser source reappeared after save")
+		}
+	}
+
+	// 升级用户只要存过任何搜索设置，就不算全新部署。
+	legacy := NewDefaultPluginManager()
+	state := legacy.states[webSearchPluginID]
+	state.Settings = map[string]any{webSearchSettingMode: webSearchModeAPI}
+	legacy.states[webSearchPluginID] = state
+	if config, _ := legacy.SearchConfiguration(""); !reflect.DeepEqual(config.DefaultAssignment.ProviderIDs, []string{"exa", "tavily"}) {
+		t.Fatalf("legacy api route changed: %v", config.DefaultAssignment.ProviderIDs)
 	}
 }

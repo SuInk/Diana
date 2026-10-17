@@ -136,6 +136,9 @@ type SandboxedBrowserConfig struct {
 	StabilityWindow   time.Duration
 	NetworkIdleWindow time.Duration
 	PollInterval      time.Duration
+	// ReuseProcess 让渲染复用一个常驻浏览器进程，每次在隐身上下文里打开页面，
+	// 省掉每次启动 Chrome 的时间。只给搜索结果页用；起不来时退回一次性浏览器。
+	ReuseProcess bool
 }
 
 // SandboxedHeadlessBrowser starts a fresh Chrome/Chromium profile for every render.
@@ -197,6 +200,12 @@ func (b *SandboxedHeadlessBrowser) renderBrowser(queueCtx, ctx context.Context, 
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithDeadline(queueCtx, deadline.Add(time.Since(queued)))
 		defer cancel()
+	}
+
+	if b.cfg.ReuseProcess && len(screenshot) == 0 {
+		if page, ok, err := b.renderOnWarmBrowser(ctx, executable, rawURL); ok {
+			return page, err
+		}
 	}
 
 	dirs, err := newBrowserSandboxDirs("diana-headless-browser-")

@@ -61,7 +61,7 @@ func TestSearchProviderAPIManagesKeysAndProtectsBindings(t *testing.T) {
 	if rec.Code != http.StatusOK || config.Providers[len(config.Providers)-1].APIKeyConfigured {
 		t.Fatal("clear key failed")
 	}
-	if rec = request(http.MethodDelete, "/api/assistant/search-providers/browser", nil); rec.Code != http.StatusOK {
+	if rec = request(http.MethodDelete, "/api/assistant/search-providers/tavily", nil); rec.Code != http.StatusOK {
 		t.Fatalf("bound delete=%d", rec.Code)
 	}
 	if rec = request(http.MethodDelete, "/api/assistant/search-providers/"+saved.ID, nil); rec.Code != http.StatusOK {
@@ -188,5 +188,51 @@ func TestGlobalSearchAssignmentAPIAndPersistenceRollback(t *testing.T) {
 	}
 	if !reflect.DeepEqual(before, m.Snapshot()) {
 		t.Fatal("failed persistence changed global runtime")
+	}
+}
+
+func TestRobotSearchOverrideAPIValidatesAndProtectsProviders(t *testing.T) {
+	cfg := assistant.DefaultBotConfig()
+	cfg.Enabled = false
+	runtime := assistant.NewRuntime(cfg, fakeChannel{}, assistant.NewDefaultPluginManager(), nil, nil, nil, nil)
+	handler := NewBotHandlerWithFactory(context.Background(), runtime, func(assistant.BotConfig) assistant.Channel { return fakeChannel{} })
+	router := botTestRouter(handler)
+	request := func(method, path string, body any) *httptest.ResponseRecorder {
+		t.Helper()
+		raw, _ := json.Marshal(body)
+		req := httptest.NewRequest(method, path, bytes.NewReader(raw))
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		return rec
+	}
+	rec := request(http.MethodPost, "/api/assistant/search-providers", map[string]any{"name": "Robot only", "type": "browser", "url": "https://www.bing.com/search", "query_param": "q"})
+	var config assistant.SearchConfiguration
+	if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &config) != nil {
+		t.Fatalf("save provider=%d %s", rec.Code, rec.Body.String())
+	}
+	id := config.Providers[len(config.Providers)-1].ID
+	current := handler.profiles.Profiles().Profiles[0]
+	payload := assistant.PayloadFromConfig(current)
+	payload.WebSearchOverride = &assistant.WebSearchAssignment{ProviderIDs: []string{"missing"}}
+	if rec = request(http.MethodPost, "/api/assistant/config", payload); rec.Code != http.StatusBadRequest {
+		t.Fatalf("missing provider accepted: %d %s", rec.Code, rec.Body.String())
+	}
+	payload.WebSearchOverride = &assistant.WebSearchAssignment{ProviderIDs: []string{id}, MaxResults: 4}
+	if rec = request(http.MethodPost, "/api/assistant/config", payload); rec.Code != http.StatusOK {
+		t.Fatalf("save override=%d %s", rec.Code, rec.Body.String())
+	}
+	if saved, _ := handler.profiles.Profiles().ConfigForProfile(current.ID); saved.WebSearchOverride == nil || saved.WebSearchOverride.MaxResults != 4 {
+		t.Fatalf("override not stored: %#v", saved.WebSearchOverride)
+	}
+	if rec = request(http.MethodDelete, "/api/assistant/search-providers/"+id, nil); rec.Code != http.StatusConflict {
+		t.Fatalf("referenced provider deleted: %d %s", rec.Code, rec.Body.String())
+	}
+	payload.WebSearchOverride = nil
+	if rec = request(http.MethodPost, "/api/assistant/config", payload); rec.Code != http.StatusOK {
+		t.Fatalf("follow global=%d %s", rec.Code, rec.Body.String())
+	}
+	if rec = request(http.MethodDelete, "/api/assistant/search-providers/"+id, nil); rec.Code != http.StatusOK {
+		t.Fatalf("delete after follow global=%d %s", rec.Code, rec.Body.String())
 	}
 }

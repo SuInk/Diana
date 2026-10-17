@@ -181,7 +181,7 @@ func (t *WebSearchTool) Run(ctx context.Context, input map[string]any) (string, 
 }
 
 // webSearchProviderLanes 把免费搜索引擎按顺序交错分成两条并行通道（默认是
-// Google+DuckDuckGo 与 Bing+百度），每条通道内部仍按原顺序回退。单个引擎常把
+// Google+DuckDuckGo 与 Bing），每条通道内部仍按原顺序回退。单个引擎常把
 // 旧爆料排在前面，另一家拿到结果就停的话，新发布的官方页面根本进不了候选。
 // 配置里有付费 API 时保持单通道：交错会改变用户排好的优先级，还会多花钱。
 func webSearchProviderLanes(providers []WebSearchProviderConfig) [][]WebSearchProviderConfig {

@@ -17,9 +17,10 @@ const (
 	ModelDisclosureEveryone ModelDisclosure = "everyone"
 )
 
-// normalizeModelDisclosure 没写或写错都按 owner 处理：默认收紧，想公开得显式打开。
+// normalizeModelDisclosure 未设置时默认对所有人公开；显式 owner 和无效值仍按仅主人处理。
 func normalizeModelDisclosure(mode ModelDisclosure) ModelDisclosure {
-	if ModelDisclosure(strings.ToLower(strings.TrimSpace(string(mode)))) == ModelDisclosureEveryone {
+	normalized := ModelDisclosure(strings.ToLower(strings.TrimSpace(string(mode))))
+	if normalized == "" || normalized == ModelDisclosureEveryone {
 		return ModelDisclosureEveryone
 	}
 	return ModelDisclosureOwner

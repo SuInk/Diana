@@ -752,6 +752,9 @@ type BotConfig struct {
 	ModelRoles          map[string]ModelRole `json:"model_roles,omitempty"`
 	ModelRecoveryPolicy *ModelRecoveryPolicy `json:"model_recovery_policy,omitempty"`
 	WebSearch           *WebSearchAssignment `json:"web_search,omitempty"`
+	// WebSearchOverride 是这台机器人单独的搜索路由与参数，nil 表示跟随全局。
+	// 历史 web_search 字段已失效，用新字段避免旧存档在升级后突然生效。
+	WebSearchOverride *WebSearchAssignment `json:"web_search_override,omitempty"`
 	// PrivateClosingGrace 是私聊里「对方在收尾」时仍然照常回答的轮数。
 	// 第一声再见就闭嘴不像人：正常人会接一两句「拜拜」再停。到这个数之后，
 	// 候选回复只是又一句告别时就不再发出去。明确要求停止不受它约束，当场生效。
@@ -1455,6 +1458,7 @@ type ConfigPayload struct {
 	ModelRoles                     map[string]ModelRole `json:"model_roles,omitempty"`
 	ModelRecoveryPolicy            *ModelRecoveryPolicy `json:"model_recovery_policy,omitempty"`
 	WebSearch                      *WebSearchAssignment `json:"web_search,omitempty"`
+	WebSearchOverride              *WebSearchAssignment `json:"web_search_override,omitempty"`
 	BotReplyLoopDetectionEnabled   *bool                `json:"bot_reply_loop_detection_enabled,omitempty"`
 	ReplyRefusalSuppressionEnabled *bool                `json:"reply_refusal_suppression_enabled,omitempty"`
 	ReplySemanticDedupEnabled      *bool                `json:"reply_semantic_dedup_enabled,omitempty"`
@@ -2552,6 +2556,7 @@ func (cfg BotConfig) WithDefaults() BotConfig {
 	cfg.ReplyRules = normalizeReplyRules(cfg.ReplyRules)
 	cfg.ModelRecoveryPolicy, cfg.ModelRoles = normalizeModelRecoveryConfig(cfg.ModelRecoveryPolicy, cfg.ModelRoles)
 	cfg.WebSearch = normalizeWebSearchAssignment(cfg.WebSearch)
+	cfg.WebSearchOverride = normalizeWebSearchAssignment(cfg.WebSearchOverride)
 	return cfg
 }
 
@@ -2559,6 +2564,9 @@ func (cfg BotConfig) WithDefaults() BotConfig {
 func (cfg BotConfig) Validate() error {
 	if cfg.ModelRequestTimeout < 0 {
 		return fmt.Errorf("单次模型请求超时必须为非负数且不超过 %d 毫秒", int64((1<<63-1)/time.Millisecond))
+	}
+	if err := cfg.WebSearchOverride.Validate(); err != nil {
+		return err
 	}
 	if len(cfg.WelcomeTemplates) > 50 {
 		return fmt.Errorf("欢迎词模板最多 50 条")
@@ -2840,6 +2848,7 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		ModelRoles:                        normalizeModelRoles(cfg.ModelRoles),
 		ModelRecoveryPolicy:               normalizeModelRecoveryPolicy(cfg.ModelRecoveryPolicy),
 		WebSearch:                         normalizeWebSearchAssignment(cfg.WebSearch),
+		WebSearchOverride:                 normalizeWebSearchAssignment(cfg.WebSearchOverride),
 		BotReplyLoopDetectionEnabled:      copyBoolPointer(cfg.BotReplyLoopDetectionEnabled),
 		ReplyRefusalSuppressionEnabled:    copyBoolPointer(cfg.ReplyRefusalSuppressionEnabled),
 		ReplySemanticDedupEnabled:         copyBoolPointer(cfg.ReplySemanticDedupEnabled),
@@ -3104,6 +3113,7 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		ModelRoles:                      normalizeModelRoles(payload.ModelRoles),
 		ModelRecoveryPolicy:             normalizeModelRecoveryPolicy(payload.ModelRecoveryPolicy),
 		WebSearch:                       normalizeWebSearchAssignment(firstWebSearchAssignment(payload.WebSearch, existing.WebSearch)),
+		WebSearchOverride:               normalizeWebSearchAssignment(payload.WebSearchOverride),
 		BotReplyLoopDetectionEnabled:    copyBoolPointer(payload.BotReplyLoopDetectionEnabled),
 		ReplyRefusalSuppressionEnabled:  copyBoolPointer(payload.ReplyRefusalSuppressionEnabled),
 		ReplySemanticDedupEnabled:       copyBoolPointer(payload.ReplySemanticDedupEnabled),

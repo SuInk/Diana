@@ -623,6 +623,10 @@ func (h *BotHandler) saveProfile(c *gin.Context, create bool) {
 		h.writeError(c, http.StatusBadRequest, "config_save", err, botLogTarget(cfg), botLogMetadata(cfg))
 		return
 	}
+	if err := h.validateSearchOverride(cfg.WebSearchOverride); err != nil {
+		h.writeError(c, http.StatusBadRequest, "config_save", err, botLogTarget(cfg), botLogMetadata(cfg))
+		return
+	}
 
 	next, savedID := upsertBotProfileSet(set, payload, cfg)
 	current, ok := next.ConfigForProfile(savedID)

@@ -4,30 +4,52 @@
 <template>
   <section class="card search-provider-manager">
     <div class="card-header">
-      <div><h2>搜索提供商</h2><span class="card-sub">统一管理接入地址和凭据，在上方为所有机器人选择首选与后备来源。</span></div>
-      <button class="btn small primary" type="button" @click="openEditor()"><Plus :size="14" aria-hidden="true" />新建搜索提供商</button>
+      <div><h2>搜索提供商</h2><span class="card-sub">统一管理接入地址和凭据；每台机器人在机器人页「联网搜索」中选择来源和优先级。</span></div>
+      <button class="btn small primary" type="button" @click="picking = true"><Plus :size="14" aria-hidden="true" />新建搜索提供商</button>
     </div>
     <div class="card-body stack">
       <p v-if="loading" class="muted">正在加载搜索提供商…</p>
       <div v-if="error" class="operation-error" role="alert">{{ error }}<button class="btn small" type="button" @click="load">重试</button></div>
-      <div v-if="providers.length" class="row-list">
-        <div v-for="provider in providers" :key="provider.id" class="row-item search-provider-row">
+      <div v-for="section in providerSections" :key="section.key" class="stack search-provider-section">
+        <div class="group-header"><span>{{ section.label }}</span><span class="muted" style="font-size: 12px">{{ section.items.length }} 个 · {{ section.hint }}</span></div>
+      <div class="row-list">
+        <div v-for="provider in section.items" :key="provider.id" class="row-item search-provider-row" :class="{ disabled: provider.disabled }">
+          <input class="search-provider-toggle" type="checkbox" :checked="!provider.disabled" :disabled="busy || toggling === provider.id" :aria-label="`启用搜索提供商 ${provider.name}`" @change="setEnabled(provider, ($event.target as HTMLInputElement).checked)" />
           <span class="search-provider-icon"><Globe :size="18" aria-hidden="true" /></span>
           <div class="row-main">
             <div class="row-title">{{ provider.name }} <span v-if="provider.disabled" class="badge">已停用</span></div>
-            <div class="row-sub">{{ searchProviderTypeLabel(provider.type) }} · {{ searchProviderAddress(provider.url) }}<template v-if="provider.type !== 'browser'"> · {{ provider.api_key_configured ? '已配置密钥' : ['tavily', 'perplexity', 'tinyfish', 'brave'].includes(provider.type) || provider.type === 'http' && provider.http_config?.auth_type !== 'none' ? '待配置密钥' : '密钥可选' }}</template></div>
-            <div v-if="provider.type === 'exa_mcp' || provider.type === 'browser'" class="hint">{{ searchProviderKeyHint(provider) }}</div>
+            <div class="row-sub">{{ searchProviderTypeLabel(provider.type) }} · {{ searchProviderAddress(provider.url) }}<template v-if="searchProviderKeyStatus(provider)"> · <span :class="{ 'warn-text': searchProviderKeyStatus(provider) === '待配置密钥' }">{{ searchProviderKeyStatus(provider) }}</span></template></div>
+            <div v-if="rowTests[provider.id]" class="row-sub search-provider-row-test" aria-live="polite">
+              <span :class="{ 'warn-text': rowTestFailed(provider.id) }">{{ rowTestSummary(provider.id) }}</span>
+            </div>
           </div>
           <div class="row-actions">
+            <button class="btn icon-only small ghost" type="button" :aria-label="`测试搜索提供商 ${provider.name}`" title="用「Diana」测试一次搜索" :disabled="rowTests[provider.id] === 'running'" @click="testRow(provider)"><Send :size="15" aria-hidden="true" /></button>
             <button class="btn icon-only small ghost" type="button" :aria-label="`编辑搜索提供商 ${provider.name}`" @click="openEditor(provider)"><Pencil :size="15" aria-hidden="true" /></button>
+            <button class="btn icon-only small ghost" type="button" :aria-label="`克隆搜索提供商 ${provider.name}`" title="克隆（不复制密钥）" @click="cloneProvider(provider)"><Copy :size="15" aria-hidden="true" /></button>
             <button class="btn icon-only small ghost danger" type="button" :aria-label="`删除搜索提供商 ${provider.name}`" :disabled="busy" @click="remove(provider)"><Trash2 :size="15" aria-hidden="true" /></button>
           </div>
         </div>
       </div>
-      <p v-else-if="!loading && !error" class="muted">还没有搜索提供商。新建后可在上方「全局搜索配置」中分配。</p>
-      <p class="hint">已有 Exa、Tavily 的地址和密钥自动沿用。自定义来源支持 HTTP API、搜索 MCP 和浏览器搜索，无需在插件里重复配置。</p>
+      </div>
+      <p v-if="!providers.length && !loading && !error" class="muted">还没有搜索提供商。新建后在机器人页「联网搜索」中选用。</p>
+      <p class="hint">勾选框直接启停，测试按钮用已保存的配置搜索一次。已有 Exa、Tavily 的地址和密钥自动沿用；自定义来源支持 HTTP API、搜索 MCP 和浏览器搜索。</p>
     </div>
   </section>
+
+  <Modal v-if="picking" title="选择搜索服务" @close="picking = false">
+    <div class="stack">
+    <template v-for="group in templateGroups" :key="group.label">
+    <div class="group-header"><span>{{ group.label }}</span></div>
+    <div class="search-template-grid">
+      <button v-for="template in group.items" :key="template.id" class="search-template" type="button" @click="startFromTemplate(template)">
+        <strong>{{ template.label }}</strong><span class="hint">{{ template.hint }}</span>
+      </button>
+    </div>
+    </template>
+    <p class="hint">地址和参数会按所选服务自动填写，之后仍可修改。</p>
+    </div>
+  </Modal>
 
   <Modal v-if="editor" :title="editor.id ? '编辑搜索提供商' : '新建搜索提供商'" initial-focus="#search-provider-name" @close="closeEditor">
     <div class="stack search-provider-editor">
@@ -82,10 +104,10 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref, watch } from "vue";
-import { FlaskConical, Globe, Pencil, Plus, Save, Trash2 } from "@lucide/vue";
-import { deleteSearchProvider, getSearchProviders, saveSearchProvider, testSearchProvider, type SearchProvider, type SearchProviderTestResult } from "../api";
-import { changeSearchProviderType, parseSearchParams, searchProviderAddress, searchProviderKeyHint, searchProviderPreset, searchProviderTypeLabel, searchProviderTypes } from "../lib/search-providers";
+import { computed, onMounted, ref, watch } from "vue";
+import { Copy, FlaskConical, Globe, Pencil, Plus, Save, Send, Trash2 } from "@lucide/vue";
+import { deleteSearchProvider, getSearchProviders, saveSearchProvider, testSearchProvider, type SearchProvider, type SearchProviderTestResult, type WebSearchAssignment } from "../api";
+import { changeSearchProviderType, parseSearchParams, searchProviderAddress, searchProviderFromTemplate, searchProviderKeyHint, searchProviderKeyStatus, searchProviderTemplates, searchProviderTypeLabel, searchProviderTypes, type SearchProviderTemplate } from "../lib/search-providers";
 import { useConfigurationRefresh } from "../lib/configuration-sync";
 import { askConfirm } from "../lib/confirm";
 import { toastError, toastSuccess } from "../lib/toast";
@@ -96,6 +118,17 @@ import SecretField from "./SecretField.vue";
 import AppDisclosure from "./AppDisclosure.vue";
 
 const providers = ref<SearchProvider[]>([]);
+const providerSections = computed(() => [
+  { key: "api", label: "API 搜索", hint: "调用搜索服务接口，速度快、结果结构化", items: providers.value.filter(provider => provider.type !== "browser") },
+  { key: "browser", label: "浏览器搜索", hint: "隔离 Chrome 打开搜索页提取结果，无需密钥", items: providers.value.filter(provider => provider.type === "browser") },
+].filter(section => section.items.length));
+const picking = ref(false);
+const templateGroups = [
+  { label: "API 搜索", items: searchProviderTemplates.filter(template => template.provider.type !== "browser") },
+  { label: "浏览器搜索", items: searchProviderTemplates.filter(template => template.provider.type === "browser") },
+];
+const toggling = ref("");
+const rowTests = ref<Record<string, SearchProviderTestResult | "running">>({});
 const loading = ref(true);
 const error = ref("");
 const busy = ref(false);
@@ -112,12 +145,44 @@ const httpAuthTypes = [{ value: "none", label: "无需认证" }, { value: "beare
 
 async function load(): Promise<void> {
   loading.value = true;
-  try { providers.value = (await getSearchProviders()).providers; error.value = ""; }
+  try { applyConfiguration(await getSearchProviders()); error.value = ""; }
   catch (err) { error.value = err instanceof Error ? err.message : "搜索提供商加载失败"; }
   finally { loading.value = false; }
 }
-function openEditor(provider?: SearchProvider): void {
-  const draft: SearchProvider = provider ? JSON.parse(JSON.stringify(provider)) : { id: "", name: "", type: "exa_mcp", url: "", ...searchProviderPreset("exa_mcp") };
+function applyConfiguration(config: { providers: SearchProvider[]; default_assignment: WebSearchAssignment }): void {
+  providers.value = config.providers;
+}
+function startFromTemplate(template: SearchProviderTemplate): void {
+  picking.value = false;
+  openEditor(searchProviderFromTemplate(template));
+}
+function cloneProvider(provider: SearchProvider): void {
+  openEditor({ ...JSON.parse(JSON.stringify(provider)), id: "", name: `${provider.name} 副本`.slice(0, 100), api_key_configured: false });
+}
+// 行内启停直接保存；停用后正在使用它的机器人会跳过它、按后备继续。
+async function setEnabled(provider: SearchProvider, enabled: boolean): Promise<void> {
+  toggling.value = provider.id;
+  try { applyConfiguration(await saveSearchProvider({ ...provider, disabled: !enabled, api_key: "", clear_api_key: false })); toastSuccess(enabled ? `已启用「${provider.name}」` : `已停用「${provider.name}」`); }
+  catch (err) { toastError(err instanceof Error ? err.message : "保存失败"); await load(); }
+  finally { toggling.value = ""; }
+}
+async function testRow(provider: SearchProvider): Promise<void> {
+  rowTests.value = { ...rowTests.value, [provider.id]: "running" };
+  let result: SearchProviderTestResult;
+  try { result = await testSearchProvider({ ...provider, api_key: "", clear_api_key: false }, "Diana"); }
+  catch (err) { result = { duration_ms: 0, result_count: 0, error: err instanceof Error ? err.message : "测试失败" }; }
+  rowTests.value = { ...rowTests.value, [provider.id]: result };
+}
+function rowTestFailed(id: string): boolean { const result = rowTests.value[id]; return typeof result === "object" && !!result.error; }
+function rowTestSummary(id: string): string {
+  const result = rowTests.value[id];
+  if (!result) return "";
+  if (result === "running") return "正在测试…";
+  const status = result.http_status ? ` · HTTP ${result.http_status}` : "";
+  return result.error ? `测试失败 · ${result.duration_ms} ms${status} · ${result.error}` : `测试成功 · ${result.result_count} 个结果 · ${result.duration_ms} ms${status}`;
+}
+function openEditor(provider: SearchProvider): void {
+  const draft: SearchProvider = JSON.parse(JSON.stringify(provider));
   if (draft.type === "http") draft.http_config = { method: "POST", auth_type: "none", ...draft.http_config };
   editor.value = { ...draft, api_key: "", clear_api_key: false, params_text: draft.http_config?.params ? JSON.stringify(draft.http_config.params, null, 2) : "" };
   editorError.value = "";
@@ -153,14 +218,14 @@ async function test(): Promise<void> {
 async function save(): Promise<void> {
   if (!editor.value) return;
   busy.value = true;
-  try { providers.value = (await saveSearchProvider(editorPayload())).providers; editor.value = null; toastSuccess("搜索提供商已保存"); }
+  try { const saved = editorPayload(); applyConfiguration(await saveSearchProvider(saved)); delete rowTests.value[saved.id]; editor.value = null; toastSuccess("搜索提供商已保存"); }
   catch (err) { editorError.value = err instanceof Error ? err.message : "保存失败"; }
   finally { busy.value = false; }
 }
 async function remove(provider: SearchProvider): Promise<void> {
   if (!await askConfirm({ title: "删除搜索提供商", message: `删除「${provider.name}」及其凭据？仍被机器人使用的来源需要先更换。`, confirmLabel: "删除", danger: true })) return;
   busy.value = true;
-  try { providers.value = (await deleteSearchProvider(provider.id)).providers; toastSuccess("搜索提供商已删除"); }
+  try { applyConfiguration(await deleteSearchProvider(provider.id)); toastSuccess("搜索提供商已删除"); }
   catch (err) { toastError(err instanceof Error ? err.message : "删除失败"); }
   finally { busy.value = false; }
 }

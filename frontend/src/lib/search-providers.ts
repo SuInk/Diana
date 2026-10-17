@@ -14,6 +14,41 @@ export const searchProviderTypes = [
   { value: "browser", label: "浏览器搜索", hint: "用隔离浏览器读取搜索结果，需要 Chrome / Chromium" }
 ];
 
+export interface SearchProviderTemplate {
+  id: string;
+  label: string;
+  hint: string;
+  provider: Partial<SearchProvider> & { name: string; type: SearchProvider["type"] };
+}
+
+// 新建时先选服务，地址、工具名和参数名一次填好；选「自定义」才需要手填接入细节。
+export const searchProviderTemplates: SearchProviderTemplate[] = [
+  { id: "exa", label: "Exa", hint: "公共 MCP，无需密钥", provider: { name: "Exa", type: "exa_mcp", ...searchProviderPreset("exa_mcp") } },
+  { id: "tavily", label: "Tavily", hint: "需要 API Key，有免费额度", provider: { name: "Tavily", type: "tavily", ...searchProviderPreset("tavily") } },
+  { id: "brave", label: "Brave Search", hint: "需要订阅令牌，独立索引", provider: { name: "Brave Search", type: "brave", ...searchProviderPreset("brave") } },
+  { id: "perplexity", label: "Perplexity", hint: "需要 API Key，按次计费", provider: { name: "Perplexity", type: "perplexity", ...searchProviderPreset("perplexity") } },
+  { id: "tinyfish", label: "TinyFish", hint: "需要 API Key，结构化结果", provider: { name: "TinyFish", type: "tinyfish", ...searchProviderPreset("tinyfish") } },
+  { id: "browser-google", label: "Google（浏览器）", hint: "隔离 Chrome 读取，无需密钥", provider: { name: "Google", type: "browser", url: "https://www.google.com/search", tool: "google", query_param: "q", results_param: "" } },
+  { id: "browser-bing", label: "Bing（浏览器）", hint: "隔离 Chrome 读取，无需密钥", provider: { name: "Bing", type: "browser", url: "https://www.bing.com/search", tool: "bing", query_param: "q", results_param: "" } },
+  { id: "http", label: "自定义 HTTP API", hint: "JSON 接口，可映射字段", provider: { name: "", type: "http", ...searchProviderPreset("http") } },
+  { id: "search_mcp", label: "自定义搜索 MCP", hint: "指定工具与参数名", provider: { name: "", type: "search_mcp", ...searchProviderPreset("search_mcp") } },
+];
+
+export function searchProviderFromTemplate(template: SearchProviderTemplate): SearchProvider {
+  return { id: "", url: "", ...JSON.parse(JSON.stringify(template.provider)) };
+}
+
+export function searchProviderNeedsKey(provider: SearchProvider): boolean {
+  return ["tavily", "perplexity", "tinyfish", "brave"].includes(provider.type) || provider.type === "http" && (provider.http_config?.auth_type ?? "none") !== "none";
+}
+
+// 列表与路由面板共用的密钥状态；浏览器方式没有密钥，返回空串。
+export function searchProviderKeyStatus(provider: SearchProvider): string {
+  if (provider.type === "browser") return "";
+  if (provider.api_key_configured) return "已配置密钥";
+  return searchProviderNeedsKey(provider) ? "待配置密钥" : "密钥可选";
+}
+
 export function searchProviderTypeLabel(type: string): string {
   return searchProviderTypes.find(option => option.value === type)?.label ?? type;
 }

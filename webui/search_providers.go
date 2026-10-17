@@ -6,6 +6,7 @@ package webui
 import (
 	"fmt"
 	"net/http"
+	"slices"
 
 	"github.com/SuInk/diana/model/assistant"
 	"github.com/gin-gonic/gin"
@@ -95,6 +96,10 @@ func (h *BotHandler) testSearchProvider(c *gin.Context) {
 
 func (h *BotHandler) deleteSearchProvider(c *gin.Context) {
 	id := c.Param("id")
+	if name := h.searchProviderUser(id); name != "" {
+		h.writeError(c, http.StatusConflict, "search_provider_delete", fmt.Errorf("机器人「%s」的联网搜索仍在使用此提供商，请先在机器人页更换来源", name), id, nil)
+		return
+	}
 	if err := h.runtime.Plugins().DeleteSearchProvider(id); err != nil {
 		h.writeError(c, http.StatusBadRequest, "search_provider_delete", err, id, nil)
 		return
@@ -144,4 +149,41 @@ func (h *BotHandler) saveSearchAssignment(c *gin.Context) {
 	}
 	recordRequestOperation(c, h.logs, "search_assignment_save", "全局搜索配置已保存", "", nil)
 	h.searchAssignment(c)
+}
+
+// validateSearchOverride 校验机器人单独搜索配置引用的提供商都存在且已启用。
+// 关闭搜索时保留已选来源，不要求它们仍可用。
+func (h *BotHandler) validateSearchOverride(value *assistant.WebSearchAssignment) error {
+	if value == nil || value.Disabled || h.runtime == nil {
+		return nil
+	}
+	config, err := h.runtime.Plugins().SearchConfiguration("")
+	if err != nil {
+		return err
+	}
+	for _, id := range value.ProviderIDs {
+		if !slices.ContainsFunc(config.Providers, func(provider assistant.SearchProvider) bool { return provider.ID == id && !provider.Disabled }) {
+			return fmt.Errorf("搜索提供商 %s 不存在或已停用，请重新选择", id)
+		}
+	}
+	return nil
+}
+
+// searchProviderUser 返回仍在使用该提供商的机器人名；没保存过搜索配置的机器人
+// 按升级前的全局路由算。
+func (h *BotHandler) searchProviderUser(id string) string {
+	var defaults []string
+	if config, err := h.runtime.Plugins().SearchConfiguration(""); err == nil {
+		defaults = config.DefaultAssignment.ProviderIDs
+	}
+	for _, profile := range h.profiles.Profiles().Profiles {
+		ids := defaults
+		if profile.WebSearchOverride != nil {
+			ids = profile.WebSearchOverride.ProviderIDs
+		}
+		if slices.Contains(ids, id) {
+			return firstNonEmptyString(profile.Name, profile.ID)
+		}
+	}
+	return ""
 }

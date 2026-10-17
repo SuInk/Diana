@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+	"time"
 	"unicode"
 	"unicode/utf8"
 )
@@ -22,7 +23,13 @@ const (
 	maximumWebSearchMaxProviderCalls = 16
 	maximumWebSearchQueryRunes       = 512
 	maximumWebSearchDomains          = 4
+	// 生产上 Exa p90 约 3 秒、结果页提前收尾后的 Google p90 约 4 秒：等过这条线
+	// 还没结果，多半是卡住或会被拦，提前起下一个来源比干等划算。
+	webSearchMaxInFlight = 2
 )
+
+// webSearchHedgeDelay 是变量只为测试能调短。
+var webSearchHedgeDelay = 4 * time.Second
 
 var (
 	errWebSearchNoResults = errors.New("web search returned no results")

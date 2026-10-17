@@ -205,3 +205,14 @@ func TestSearchEngineResultsUnwrapAndDeduplicateTranslationLinks(t *testing.T) {
 		}
 	}
 }
+
+func TestBingSearchResultsSkipSearchHelpButKeepProductDocumentation(t *testing.T) {
+	results := searchEngineResults(searchEngines["bing"], []RenderedLink{
+		{Text: "了解更多", URL: "https://support.microsoft.com/topic/how-bing-delivers-search-results-d18fc815-ac37-4723-bc67-9229ce3eb6a3?"},
+		{Text: "帮助", URL: "https://support.microsoft.com/topic/82d20721-2d6f-4012-a13d-d1910ccf203f"},
+		{Text: "Windows support", URL: "https://support.microsoft.com/windows"},
+	}, 5)
+	if len(results) != 1 || results[0].Title != "Windows support" {
+		t.Fatalf("unexpected results: %+v", results)
+	}
+}

@@ -273,17 +273,20 @@ func TestWebSearchPluginCustomSearchEngineRunsAlongsideBuiltin(t *testing.T) {
 	}
 }
 
-func TestDisabledWebSearchCannotFallBackWhenBrowserIsOn(t *testing.T) {
+func TestRobotSearchSwitchDecidesOverLegacyGlobal(t *testing.T) {
 	manager := NewDefaultPluginManager()
 	if err := manager.SaveSearchAssignment(WebSearchAssignment{Disabled: true, ProviderIDs: []string{"browser"}}, nil); err != nil {
 		t.Fatal(err)
 	}
-	for _, overrides := range []map[string]bool{nil, {webSearchPluginID: true}, {webSearchPluginID: false}} {
-		tools, err := manager.AgentToolsWithOverrides(overrides)
-		if err != nil || hasAgentToolNamed(tools, agent.WebSearchToolName) {
-			t.Fatalf("disabled global search bypassed: %v", err)
+	for _, tc := range []struct {
+		overrides map[string]bool
+		want      bool
+	}{{nil, false}, {map[string]bool{webSearchPluginID: true}, true}, {map[string]bool{webSearchPluginID: false}, false}} {
+		tools, err := manager.AgentToolsWithOverrides(tc.overrides)
+		if err != nil || hasAgentToolNamed(tools, agent.WebSearchToolName) != tc.want {
+			t.Fatalf("overrides=%v want=%v err=%v", tc.overrides, tc.want, err)
 		}
-		if owners := manager.AgentToolOwners("", overrides, nil); len(owners[webSearchPluginID]) != 0 {
+		if owners := manager.AgentToolOwners("", tc.overrides, nil); (len(owners[webSearchPluginID]) != 0) != tc.want {
 			t.Fatalf("owners=%v", owners)
 		}
 	}

@@ -41,7 +41,8 @@ type SearchProvider struct {
 	HTTPConfig       *agent.HTTPSearchConfig `json:"http_config,omitempty"`
 }
 
-// WebSearchAssignment stores the global ordered primary/fallback route.
+// WebSearchAssignment stores an ordered primary/fallback route, either the
+// global one or a robot's own override.
 // A nil ProviderIDs preserves the legacy search_mode defaults.
 type WebSearchAssignment struct {
 	ProviderIDs            []string `json:"provider_ids"`
@@ -51,7 +52,14 @@ type WebSearchAssignment struct {
 	TotalTimeoutSeconds    int      `json:"total_timeout_seconds,omitempty"`
 	SourceRecall           *bool    `json:"source_recall,omitempty"`
 	ReplyLinkPolicy        string   `json:"reply_link_policy,omitempty"`
+	// SourcePriority 为 api 或 browser 时先试该类来源，留空按列表顺序。
+	SourcePriority string `json:"source_priority,omitempty"`
 }
+
+const (
+	searchSourcePriorityAPI     = "api"
+	searchSourcePriorityBrowser = "browser"
+)
 
 type SearchConfiguration struct {
 	Providers         []SearchProvider    `json:"providers"`
@@ -109,11 +117,62 @@ func (value *WebSearchAssignment) Validate() error {
 			return fmt.Errorf("%s应在 %d–%d 之间", limit.label, limit.min, limit.max)
 		}
 	}
+	if value.SourcePriority != "" && value.SourcePriority != searchSourcePriorityAPI && value.SourcePriority != searchSourcePriorityBrowser {
+		return fmt.Errorf("搜索来源优先级无效")
+	}
 	if value.ReplyLinkPolicy != "" && !slices.Contains([]string{replyLinkPolicyOnRequest, replyLinkPolicyAlways, replyLinkPolicyNever}, value.ReplyLinkPolicy) {
 		return fmt.Errorf("回复链接策略无效")
 	}
 	return nil
 }
+
+// 首次部署什么都没填时，默认先试三个浏览器引擎，最后用免密钥的 Exa 公共 MCP 兜底：
+// 只靠浏览器的话，服务器没装 Chrome 就一次也搜不到。
+var freshSearchProviderIDs = []string{"engine-google", "engine-bing", "engine-duckduckgo", "exa"}
+
+// webSearchFreshKeys 只要存过其中任何一项，就说明不是全新部署，按已有配置走。
+var webSearchFreshKeys = []string{searchProvidersSetting, searchProviderOrderSetting, webSearchSettingMode, webSearchSettingEngines, webSearchSettingExaEnabled, webSearchSettingExaURL, webSearchSettingExaAPIKey, webSearchSettingTavilyEnabled, webSearchSettingTavilyURL, webSearchSettingTavilyAPIKey, webSearchSettingSourcePriority}
+
+const webSearchFreshInstallMarker = "__fresh_search_install__"
+
+func freshSearchInstall(raw map[string]any) bool {
+	for _, key := range webSearchFreshKeys {
+		if _, ok := raw[key]; ok {
+			return false
+		}
+	}
+	return true
+}
+
+// webSearchStateSettings 读取联网搜索的有效设置，全新部署时补上首装默认路由。
+func webSearchStateSettings(state PluginState) SettingValues {
+	settings := effectivePluginSettingsForGroup(state.Manifest.Settings, state.Settings, nil)
+	if freshSearchInstall(state.Settings) {
+		ids, _ := json.Marshal(freshSearchProviderIDs)
+		settings[searchProviderOrderSetting] = string(ids)
+		settings[webSearchSettingSourcePriority] = searchSourcePriorityBrowser
+		settings[webSearchFreshInstallMarker] = true
+	}
+	return settings
+}
+
+// materializeFreshSearchDefaults 在第一次保存任何搜索配置前把首装默认值写进存档，
+// 否则存下提供商目录后就不再算全新部署，默认路由会悄悄退回只有浏览器。
+func materializeFreshSearchDefaults(state *PluginState) {
+	if !freshSearchInstall(state.Settings) {
+		return
+	}
+	state.Settings = clonePluginValues(state.Settings)
+	if state.Settings == nil {
+		state.Settings = map[string]any{}
+	}
+	ids, _ := json.Marshal(freshSearchProviderIDs)
+	state.Settings[searchProviderOrderSetting] = string(ids)
+	state.Settings[webSearchSettingSourcePriority] = searchSourcePriorityBrowser
+}
+
+// webSearchOverrideKeys 是机器人单独配置可以覆盖的全局搜索设置。
+var webSearchOverrideKeys = []string{searchProviderOrderSetting, webSearchSettingMaxResults, webSearchSettingProviderTimeout, webSearchSettingTotalTimeout, webSearchSettingSourceRecall, webSearchSettingLinkPolicy, webSearchSettingSourcePriority}
 
 func (value *WebSearchAssignment) settings() map[string]any {
 	settings := map[string]any{}
@@ -136,6 +195,8 @@ func (value *WebSearchAssignment) settings() map[string]any {
 	if value.ReplyLinkPolicy != "" {
 		settings[webSearchSettingLinkPolicy] = value.ReplyLinkPolicy
 	}
+	// 总是写入，机器人选「按列表顺序」时也要盖住旧值。
+	settings[webSearchSettingSourcePriority] = value.SourcePriority
 	return settings
 }
 
@@ -143,7 +204,11 @@ func searchProviderCatalog(settings SettingValues) ([]SearchProvider, map[string
 	providers := []SearchProvider{
 		{ID: "exa", Name: "Exa", Type: "exa_mcp", URL: settings.String(webSearchSettingExaURL, defaultExaSearchURL), Tool: "web_search_exa", Disabled: !settings.Bool(webSearchSettingExaEnabled, true)},
 		{ID: "tavily", Name: "Tavily", Type: "tavily", URL: settings.String(webSearchSettingTavilyURL, defaultTavilySearchURL), Disabled: !settings.Bool(webSearchSettingTavilyEnabled, true)},
-		{ID: "browser", Name: "浏览器搜索", Type: "browser", URL: "https://www.google.com/search", QueryParam: "q"},
+	}
+	// 通用「浏览器搜索」和下面的 Google 引擎是同一个地址，只为兼容旧存档里的引用保留；
+	// 全新部署没有旧引用，不再列出，免得看起来重复。
+	if settings[webSearchFreshInstallMarker] != true {
+		providers = append(providers, SearchProvider{ID: "browser", Name: "浏览器搜索", Type: "browser", URL: "https://www.google.com/search", QueryParam: "q"})
 	}
 	if strings.TrimSpace(settings.String(searchProvidersSetting, "")) == "" && settings.String(webSearchSettingMode, webSearchModeEngine) == webSearchModeEngine {
 		for _, engine := range webSearchEngineOrder(settings.String(webSearchSettingEngines, "")) {
@@ -233,6 +298,18 @@ func orderedSearchProviders(settings SettingValues) ([]agent.WebSearchProviderCo
 			}
 		}
 	}
+	if priority := settings.String(webSearchSettingSourcePriority, ""); priority != "" {
+		first := priority == searchSourcePriorityBrowser
+		slices.SortStableFunc(providers, func(a, b agent.WebSearchProviderConfig) int {
+			rank := func(p agent.WebSearchProviderConfig) int {
+				if (p.Type == "browser") == first {
+					return 0
+				}
+				return 1
+			}
+			return rank(a) - rank(b)
+		})
+	}
 	return providers, keys, nil
 }
 
@@ -243,12 +320,12 @@ func (m *PluginManager) SearchConfiguration(_ string) (SearchConfiguration, erro
 	if !ok {
 		return SearchConfiguration{}, ErrPluginNotFound
 	}
-	settings := effectivePluginSettingsForGroup(state.Manifest.Settings, state.Settings, nil)
+	settings := webSearchStateSettings(state)
 	providers, keys, err := searchProviderCatalog(settings)
 	if err != nil {
 		return SearchConfiguration{}, err
 	}
-	assignment := WebSearchAssignment{ProviderIDs: []string{}, Disabled: !state.Enabled, MaxResults: settings.Int(webSearchSettingMaxResults, 5), ProviderTimeoutSeconds: settings.Int(webSearchSettingProviderTimeout, 12), TotalTimeoutSeconds: settings.Int(webSearchSettingTotalTimeout, 35), SourceRecall: boolPointer(settings.Bool(webSearchSettingSourceRecall, true)), ReplyLinkPolicy: settings.String(webSearchSettingLinkPolicy, replyLinkPolicyOnRequest)}
+	assignment := WebSearchAssignment{ProviderIDs: []string{}, Disabled: !state.Enabled, MaxResults: settings.Int(webSearchSettingMaxResults, 5), ProviderTimeoutSeconds: settings.Int(webSearchSettingProviderTimeout, 12), TotalTimeoutSeconds: settings.Int(webSearchSettingTotalTimeout, 35), SourceRecall: boolPointer(settings.Bool(webSearchSettingSourceRecall, true)), ReplyLinkPolicy: settings.String(webSearchSettingLinkPolicy, replyLinkPolicyOnRequest), SourcePriority: settings.String(webSearchSettingSourcePriority, "")}
 	for i := range providers {
 		providers[i].APIKey = ""
 		providers[i].ClearAPIKey = false
@@ -266,19 +343,17 @@ func (m *PluginManager) SaveSearchProvider(provider SearchProvider) (string, err
 	if !ok {
 		return "", ErrPluginNotFound
 	}
-	settings := effectivePluginSettingsForGroup(state.Manifest.Settings, state.Settings, nil)
+	settings := webSearchStateSettings(state)
 	providers, keys, err := searchProviderCatalog(settings)
 	if err != nil {
 		return "", err
 	}
-	settings = searchReferenceSettings(settings, providers)
+	// 停用正在被机器人使用的来源是允许的：运行时跳过停用来源，按后备继续。
 	providers, id, err := upsertSearchProvider(providers, keys, provider)
 	if err != nil {
 		return "", err
 	}
-	if err := validateGlobalSearchReferences(state, settings, providers, false); err != nil {
-		return "", err
-	}
+	materializeFreshSearchDefaults(&state)
 	writeSearchProviderState(&state, providers, keys)
 	m.states[webSearchPluginID] = state
 	return id, nil
@@ -293,7 +368,7 @@ func (m *PluginManager) ExportSearchProviders() ([]SearchProvider, error) {
 	if !ok {
 		return nil, ErrPluginNotFound
 	}
-	providers, keys, err := searchProviderCatalog(effectivePluginSettingsForGroup(state.Manifest.Settings, state.Settings, nil))
+	providers, keys, err := searchProviderCatalog(webSearchStateSettings(state))
 	if err != nil {
 		return nil, err
 	}
@@ -314,11 +389,10 @@ func (m *PluginManager) ImportSearchProviders(imported []SearchProvider) error {
 	if !ok {
 		return ErrPluginNotFound
 	}
-	providers, keys, err := searchProviderCatalog(effectivePluginSettingsForGroup(state.Manifest.Settings, state.Settings, nil))
+	providers, keys, err := searchProviderCatalog(webSearchStateSettings(state))
 	if err != nil {
 		return err
 	}
-	referenceSettings := searchReferenceSettings(effectivePluginSettingsForGroup(state.Manifest.Settings, state.Settings, nil), providers)
 	for _, provider := range imported {
 		if strings.TrimSpace(provider.ID) == "" {
 			return fmt.Errorf("导入的搜索提供商缺少 ID")
@@ -328,9 +402,7 @@ func (m *PluginManager) ImportSearchProviders(imported []SearchProvider) error {
 			return fmt.Errorf("搜索提供商「%s」：%w", provider.Name, err)
 		}
 	}
-	if err := validateGlobalSearchReferences(state, referenceSettings, providers, false); err != nil {
-		return err
-	}
+	materializeFreshSearchDefaults(&state)
 	writeSearchProviderState(&state, providers, keys)
 	m.states[webSearchPluginID] = state
 	return nil
@@ -384,7 +456,7 @@ func (m *PluginManager) TestSearchProvider(ctx context.Context, provider SearchP
 		m.mu.RUnlock()
 		return agent.SearchProviderTestResult{Error: "搜索插件不存在"}
 	}
-	_, keys, err := searchProviderCatalog(effectivePluginSettingsForGroup(state.Manifest.Settings, state.Settings, nil))
+	_, keys, err := searchProviderCatalog(webSearchStateSettings(state))
 	m.mu.RUnlock()
 	if err != nil {
 		return agent.SearchProviderTestResult{Error: err.Error()}
@@ -413,7 +485,7 @@ func (m *PluginManager) DeleteSearchProvider(id string) error {
 	if !ok {
 		return ErrPluginNotFound
 	}
-	providers, keys, err := searchProviderCatalog(effectivePluginSettingsForGroup(state.Manifest.Settings, state.Settings, nil))
+	providers, keys, err := searchProviderCatalog(webSearchStateSettings(state))
 	if err != nil {
 		return err
 	}
@@ -421,12 +493,10 @@ func (m *PluginManager) DeleteSearchProvider(id string) error {
 	if index < 0 {
 		return fmt.Errorf("搜索提供商不存在")
 	}
-	settings := effectivePluginSettingsForGroup(state.Manifest.Settings, state.Settings, nil)
-	if slices.Contains(defaultSearchProviderIDs(settings, providers), id) {
-		return fmt.Errorf("全局搜索仍在使用此搜索提供商，请先更换搜索来源")
-	}
+	// 哪台机器人在用由调用方按机器人配置检查；这里只维护目录。
 	providers = slices.Delete(providers, index, index+1)
 	delete(keys, id)
+	materializeFreshSearchDefaults(&state)
 	writeSearchProviderState(&state, providers, keys)
 	m.states[webSearchPluginID] = state
 	return nil
@@ -469,7 +539,7 @@ func (m *PluginManager) SaveSearchAssignment(value WebSearchAssignment, persist 
 		state.Settings[key] = setting
 	}
 	state.Enabled = !value.Disabled
-	settings := effectivePluginSettingsForGroup(state.Manifest.Settings, state.Settings, nil)
+	settings := webSearchStateSettings(state)
 	providers, _, err := searchProviderCatalog(settings)
 	if err != nil {
 		return err
@@ -504,11 +574,4 @@ func validateGlobalSearchReferences(state PluginState, settings SettingValues, p
 		}
 	}
 	return nil
-}
-
-func searchReferenceSettings(settings SettingValues, providers []SearchProvider) SettingValues {
-	out := SettingValues(clonePluginValues(settings))
-	raw, _ := json.Marshal(defaultSearchProviderIDs(settings, providers))
-	out[searchProviderOrderSetting] = string(raw)
-	return out
 }

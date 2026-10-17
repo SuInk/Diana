@@ -278,36 +278,88 @@ func (t *WebSearchTool) runSearchQuery(ctx context.Context, input map[string]any
 		candidate.Status = "attempted"
 		result.Budget.QueriesUsed++
 		candidateOutcome := "no_results"
-		for providerIndex, provider := range providers {
-			if !providerUsable[providerIndex] {
+		// 对冲请求：当前来源 webSearchHedgeDelay 内没有结果，就并行启动下一个来源，
+		// 谁先拿到结果用谁，其余取消。同时最多 webSearchMaxInFlight 个，避免一次
+		// 搜索开出一排浏览器。失败的来源按原顺序立刻补位。
+		type providerRun struct {
+			index     int
+			content   string
+			err       error
+			ctxErr    error
+			startedAt time.Time
+		}
+		runs := make(chan providerRun, len(providers))
+		running := map[int]context.CancelFunc{}
+		nextProvider := 0
+		launch := func() {
+			for nextProvider < len(providers) && runCtx.Err() == nil {
+				providerIndex := nextProvider
+				nextProvider++
+				if !providerUsable[providerIndex] {
+					continue
+				}
+				if result.Budget.ProviderCalls >= maxProviderCalls {
+					budgetExhausted = true
+					return
+				}
+				provider := providers[providerIndex]
+				result.Budget.ProviderCalls++
+				state := &result.Providers[providerIndex]
+				state.Status = "attempted"
+				state.Attempts++
+				providerCtx, providerCancel := context.WithTimeout(runCtx, time.Duration(provider.TimeoutMS)*time.Millisecond)
+				running[providerIndex] = providerCancel
+				startedAt := time.Now()
+				go func() {
+					run := providerRun{index: providerIndex, startedAt: startedAt, err: errors.New("search provider panicked")}
+					defer func() {
+						run.ctxErr = providerCtx.Err()
+						runs <- run
+					}()
+					defer recoverGoroutinePanic("web_search_hedge")
+					run.content, run.err = t.runProvider(providerCtx, provider, candidate.Query, providerKeys[providerIndex])
+				}()
+				return
+			}
+		}
+		cancelRunning := func() {
+			for index, cancel := range running {
+				cancel()
+				delete(running, index)
+			}
+		}
+		launch()
+		hedge := time.NewTimer(webSearchHedgeDelay)
+		found := false
+		// 来源的 ctx 挂在 runCtx 下，总超时一到它们会立刻带着超时错误返回，照常记录。
+		for len(running) > 0 {
+			var run providerRun
+			select {
+			case run = <-runs:
+			case <-hedge.C:
+				if len(running) < webSearchMaxInFlight {
+					launch()
+				}
+				hedge.Reset(webSearchHedgeDelay)
 				continue
 			}
-			if result.Budget.ProviderCalls >= maxProviderCalls {
-				budgetExhausted = true
-				break
-			}
-			result.Budget.ProviderCalls++
+			running[run.index]()
+			delete(running, run.index)
+			providerIndex, provider := run.index, providers[run.index]
 			state := &result.Providers[providerIndex]
-			state.Status = "attempted"
-			state.Attempts++
-			providerTimeout := time.Duration(provider.TimeoutMS) * time.Millisecond
-			providerCtx, providerCancel := context.WithTimeout(runCtx, providerTimeout)
-			startedAt := time.Now()
-			content, providerErr := t.runProvider(providerCtx, provider, candidate.Query, providerKeys[providerIndex])
-			providerCtxErr := providerCtx.Err()
-			providerCancel()
 			attempt := webSearchAttempt{
 				Provider:   provider.Name,
 				Type:       provider.Type,
 				QueryIndex: queryIndex,
 				QueryHash:  candidate.Hash,
-				DurationMS: time.Since(startedAt).Milliseconds(),
+				DurationMS: time.Since(run.startedAt).Milliseconds(),
 			}
+			content, providerErr := run.content, run.err
 			if providerErr == nil && strings.TrimSpace(content) == "" {
 				providerErr = errWebSearchNoResults
 			}
 			if providerErr != nil {
-				outcome := classifyWebSearchError(providerErr, providerCtxErr, runCtx.Err())
+				outcome := classifyWebSearchError(providerErr, run.ctxErr, runCtx.Err())
 				attempt.Status = outcome
 				attempt.ErrorCode = outcome
 				attempt.Error = safeWebSearchError(providerErr, providerKeys[providerIndex])
@@ -323,6 +375,10 @@ func (t *WebSearchTool) runSearchQuery(ctx context.Context, input map[string]any
 				anyTimeout = anyTimeout || outcome == "timeout"
 				if runCtx.Err() != nil {
 					break
+				}
+				if len(running) < webSearchMaxInFlight {
+					launch()
+					hedge.Reset(webSearchHedgeDelay)
 				}
 				continue
 			}
@@ -340,6 +396,10 @@ func (t *WebSearchTool) runSearchQuery(ctx context.Context, input map[string]any
 					bestContent = content
 					bestQueryIndex = queryIndex
 					bestProviderIndex = providerIndex
+				}
+				if len(running) < webSearchMaxInFlight {
+					launch()
+					hedge.Reset(webSearchHedgeDelay)
 				}
 				continue
 			}
@@ -359,6 +419,12 @@ func (t *WebSearchTool) runSearchQuery(ctx context.Context, input map[string]any
 			if len(result.Results) == 0 {
 				result.Content = content
 			}
+			found = true
+			break
+		}
+		hedge.Stop()
+		cancelRunning()
+		if found {
 			markWebSearchRemainder(result.Queries, result.Providers, queryIndex, "candidate_sources_found")
 			return t.formatExplorationResult(result)
 		}

@@ -19,10 +19,10 @@ const (
 	RepositoryDisclosureEveryone RepositoryDisclosure = "everyone"
 )
 
-// normalizeRepositoryDisclosure 没写或写错都按 owner 处理：和模型披露一样默认收紧，
-// 想公开得显式打开。
+// normalizeRepositoryDisclosure 未设置时默认对所有人公开；显式 owner 和无效值仍按仅主人处理。
 func normalizeRepositoryDisclosure(mode RepositoryDisclosure) RepositoryDisclosure {
-	if RepositoryDisclosure(strings.ToLower(strings.TrimSpace(string(mode)))) == RepositoryDisclosureEveryone {
+	normalized := RepositoryDisclosure(strings.ToLower(strings.TrimSpace(string(mode))))
+	if normalized == "" || normalized == RepositoryDisclosureEveryone {
 		return RepositoryDisclosureEveryone
 	}
 	return RepositoryDisclosureOwner

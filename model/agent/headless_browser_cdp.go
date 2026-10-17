@@ -464,7 +464,12 @@ func (b *SandboxedHeadlessBrowser) renderObservable(ctx context.Context, executa
 	}
 	browserCtx, cancelBrowser := chromedp.NewContext(allocatorCtx, contextOptions...)
 	defer cancelBrowser()
+	return b.observeRender(ctx, browserCtx, process.diagnostics.String, executable, rawURL, renderStarted, screenshot...)
+}
 
+// observeRender 在已经连上的页面里导航并观察到可以收尾。一次性浏览器和搜索复用的
+// 常驻浏览器共用这一段，只是页面从哪来不同。
+func (b *SandboxedHeadlessBrowser) observeRender(ctx, browserCtx context.Context, diagnostics func() string, executable, rawURL string, renderStarted time.Time, screenshot ...*[]byte) (RenderedPage, error) {
 	tracker := newBrowserActivityTracker(rawURL, time.Now())
 	chromedp.ListenTarget(browserCtx, func(event any) {
 		tracker.observe(event, time.Now())
@@ -484,7 +489,7 @@ func (b *SandboxedHeadlessBrowser) renderObservable(ctx context.Context, executa
 	if len(screenshot) == 0 {
 		pattern.ResourceType = network.ResourceTypeDocument
 	}
-	err = chromedp.Run(setupCtx,
+	err := chromedp.Run(setupCtx,
 		network.Enable(),
 		chromedp.ActionFunc(func(actionCtx context.Context) error {
 			if len(screenshot) > 0 {
@@ -524,7 +529,7 @@ func (b *SandboxedHeadlessBrowser) renderObservable(ctx context.Context, executa
 		if setupTimedOut && ctx.Err() == nil {
 			return RenderedPage{}, &browserTimeoutError{message: fmt.Sprintf("渲染 %s 超时：%s 内页面没有响应，已停止加载。这个网址可能打不开或响应太慢，换个地址或稍后再试", rawURL, setupTimeout)}
 		}
-		return RenderedPage{}, fmt.Errorf("headless browser CDP setup failed: %w: %s", err, compactBrowserError(process.diagnostics.String()))
+		return RenderedPage{}, fmt.Errorf("headless browser CDP setup failed: %w: %s", err, compactBrowserError(diagnostics()))
 	}
 
 	observationStarted := time.Now()

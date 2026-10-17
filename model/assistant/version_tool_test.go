@@ -242,7 +242,7 @@ func TestRepositoryDisclosedTo(t *testing.T) {
 		owner bool
 		want  bool
 	}{
-		{"", false, false},
+		{"", false, true},
 		{"", true, true},
 		{RepositoryDisclosureOwner, false, false},
 		{RepositoryDisclosureEveryone, false, true},
@@ -256,7 +256,7 @@ func TestRepositoryDisclosedTo(t *testing.T) {
 	}
 }
 
-// 默认收紧：普通成员拿到的是「不给地址」那份规则，主人和全公开时照旧。
+// 默认向所有人公开地址；仅主人模式下对普通成员隐藏地址。
 func TestSystemPromptVersionRuleFollowsRepositoryDisclosure(t *testing.T) {
 	cases := []struct {
 		name  string
@@ -264,7 +264,8 @@ func TestSystemPromptVersionRuleFollowsRepositoryDisclosure(t *testing.T) {
 		owner bool
 		want  string
 	}{
-		{"默认对成员收紧", "", false, promptToolVersionNoRepository},
+		{"默认对成员公开", "", false, promptToolVersion},
+		{"仅主人时对成员收紧", RepositoryDisclosureOwner, false, promptToolVersionNoRepository},
 		{"主人照旧", "", true, promptToolVersion},
 		{"全公开", RepositoryDisclosureEveryone, false, promptToolVersion},
 	}

@@ -168,13 +168,12 @@ let assistantConfig: BotProfileConfig = { ...oneBotProfile, profiles: [oneBotPro
 let demoSearchProviders: SearchProvider[] = [
   { id: 'exa', name: 'Exa', type: 'exa_mcp', url: 'https://mcp.exa.ai/mcp?tools=web_search_exa', tool: 'web_search_exa' },
   { id: 'tavily', name: 'Tavily', type: 'tavily', url: 'https://api.tavily.com/search', api_key_configured: true },
-  { id: 'browser', name: '浏览器搜索', type: 'browser', url: 'https://www.google.com/search', query_param: 'q' },
-  ...[{id:'google',url:'https://www.google.com/search',param:'q'}, {id:'bing',url:'https://www.bing.com/search',param:'q'}, {id:'duckduckgo',url:'https://duckduckgo.com/',param:'q'}, {id:'baidu',url:'https://www.baidu.com/s',param:'wd'}].map(engine => ({id:`engine-${engine.id}`,name:engine.id,type:'browser' as const,url:engine.url,tool:engine.id,query_param:engine.param})),
+  ...[{id:'google',url:'https://www.google.com/search',param:'q'}, {id:'bing',url:'https://www.bing.com/search',param:'q'}, {id:'duckduckgo',url:'https://duckduckgo.com/',param:'q'}].map(engine => ({id:`engine-${engine.id}`,name:engine.id,type:'browser' as const,url:engine.url,tool:engine.id,query_param:engine.param})),
 ];
 const demoSearchKeys: Record<string, string> = { tavily: 'demo-secret' };
 let demoSearchAssignment: SearchConfiguration['default_assignment'] | undefined;
 function demoSearchConfiguration(): SearchConfiguration {
-  return { providers: demoSearchProviders.map(provider => ({ ...provider, api_key_configured: !!demoSearchKeys[provider.id] })), default_assignment: demoSearchAssignment ?? { provider_ids: demoSearchProviders.filter(provider => (provider.id === 'exa' || provider.id.startsWith('engine-')) && !provider.disabled).map(provider => provider.id), max_results: 5, provider_timeout_seconds: 25, total_timeout_seconds: 90, source_recall: true, reply_link_policy: 'on_request' } };
+  return { providers: demoSearchProviders.map(provider => ({ ...provider, api_key_configured: !!demoSearchKeys[provider.id] })), default_assignment: demoSearchAssignment ?? { provider_ids: [...demoSearchProviders.filter(provider => provider.id.startsWith('engine-') && !provider.disabled).map(provider => provider.id), 'exa'], source_priority: 'browser', max_results: 5, provider_timeout_seconds: 25, total_timeout_seconds: 90, source_recall: true, reply_link_policy: 'on_request' } };
 }
 
 
@@ -191,7 +190,7 @@ function demoPluginForProfile(plugin: PluginState, profile: string): PluginState
 }
 
 let plugins: PluginState[] = [
-  { manifest: { id: 'official.web-search', name: '联网搜索', version: '0.3.4', description: '为对话提供实时联网搜索。搜索开关、来源与凭据在提供商页全局管理，所有机器人共用。', official: true, built_in: true, permissions: ['network:http', 'llm:tool'], settings: [{ key: 'max_results', label: '每次结果上限', type: 'number', default: 5 }] }, installed: true, enabled: true },
+  { manifest: { id: 'official.web-search', name: '联网搜索', version: '0.3.4', description: '为对话提供实时联网搜索。搜索服务在提供商页统一管理，开关与来源按机器人配置。', official: true, built_in: true, permissions: ['network:http', 'llm:tool'], settings: [{ key: 'max_results', label: '每次结果上限', type: 'number', default: 5 }] }, installed: true, enabled: true },
   { manifest: { id: "official.file-parser", name: "文件解析", version: "0.3.0", description: "解析 PDF、图片和文本附件，把结构化内容交给模型。", official: true, built_in: true, permissions: ["文件解析", "消息读取"] }, installed: true, enabled: true },
   { manifest: resolverDemoManifest, installed: true, enabled: true },
   {
@@ -1149,7 +1148,7 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
         if (value !== undefined && value !== 0 && (typeof value !== 'number' || !Number.isInteger(value) || value < min || value > max)) return json({ error: '搜索参数超出允许范围' }, 400);
       }
       if (body.reply_link_policy && !['on_request', 'always', 'never'].includes(String(body.reply_link_policy))) return json({ error: '回复链接策略无效' }, 400);
-      demoSearchAssignment = { provider_ids: [...ids], disabled: !!body.disabled, max_results: Number(body.max_results) || 5, provider_timeout_seconds: Number(body.provider_timeout_seconds) || 12, total_timeout_seconds: Number(body.total_timeout_seconds) || 35, source_recall: body.source_recall !== false, reply_link_policy: (body.reply_link_policy || 'on_request') as SearchConfiguration['default_assignment']['reply_link_policy'] };
+      demoSearchAssignment = { provider_ids: [...ids], disabled: !!body.disabled, max_results: Number(body.max_results) || 5, provider_timeout_seconds: Number(body.provider_timeout_seconds) || 12, total_timeout_seconds: Number(body.total_timeout_seconds) || 35, source_recall: body.source_recall !== false, reply_link_policy: (body.reply_link_policy || 'on_request') as SearchConfiguration['default_assignment']['reply_link_policy'], ...(body.source_priority === 'api' || body.source_priority === 'browser' ? { source_priority: body.source_priority } : {}) };
     }
     return json(demoSearchConfiguration().default_assignment);
   }

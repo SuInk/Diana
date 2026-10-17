@@ -140,6 +140,7 @@ test("bot save preserves legacy search fields without enforcing obsolete routing
   assert.deepEqual(payload.web_search, legacy);
   assert.equal(JSON.stringify(saved.web_search), JSON.stringify(legacy));
   const source = readFileSync(new URL("../views/AssistantView.vue", import.meta.url), "utf8");
-  assert.doesNotMatch(source, /current.web_search|SearchRoutingPanel|model-purpose-search/);
+  assert.doesNotMatch(source, /current\.web_search(?!_override)|form\.web_search(?!_override)|model-purpose-search/);
+  assert.match(source, /<SearchRoutingPanel :model-value="form\.web_search_override"/);
   assert.match(source, /\.\.\.current,/);
 });

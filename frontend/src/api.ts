@@ -304,9 +304,9 @@ export interface BotProfileConfig extends SendRetrySettings {
   debug_mode_enabled?: boolean;
   /** 回复行为个性化：on 每条都带、off 从不带、auto 交给模型自己判断；缺省等价于 on。 */
   reply_reference_mode?: "on" | "off" | "auto";
-  /** 谁能问出机器人所用的模型：owner 仅主人（默认）、everyone 所有人。主人始终能看和改。 */
+  /** 谁能问出机器人所用的模型：owner 仅主人、everyone 所有人（默认）。主人始终能看和改。 */
   model_disclosure?: "owner" | "everyone";
-  /** 谁能问出项目开源地址：owner 仅主人（默认）、everyone 所有人。 */
+  /** 谁能问出项目开源地址：owner 仅主人、everyone 所有人（默认）。 */
   repository_disclosure?: "owner" | "everyone";
   mention_user_mode?: "on" | "off" | "auto";
   /** 自动配图发送顺序：before 先发表情（默认）、after 后发表情、auto 由模型决定；不改变是否配图。 */
@@ -334,6 +334,8 @@ export interface BotProfileConfig extends SendRetrySettings {
   auto_video_preprocess?: boolean;
   image_input_mode?: ImageInputMode;
   web_search?: WebSearchAssignment;
+  /** 这台机器人的搜索开关、来源顺序与参数；未保存过时沿用升级前的全局值。 */
+  web_search_override?: WebSearchAssignment;
   model_roles?: Record<string, {
 	 follow_chat?: boolean;
     profile_id?: string;
@@ -509,6 +511,7 @@ export interface WebSearchAssignment {
   total_timeout_seconds?: number;
   source_recall?: boolean;
   reply_link_policy?: "on_request" | "always" | "never";
+  source_priority?: "api" | "browser";
 }
 
 export interface HTTPSearchConfig {

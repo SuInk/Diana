@@ -774,6 +774,17 @@
             </div>
           </section>
 
+          <!-- 联网搜索：每台机器人自己的开关、来源顺序与参数。提供商本身在「提供商」页统一管理。 -->
+          <section class="card">
+            <div class="card-header">
+              <h2>联网搜索</h2>
+              <span class="badge" :class="form.web_search_override?.disabled ? '' : 'accent'">{{ searchSummary }}</span>
+            </div>
+            <div class="card-body stack">
+              <SearchRoutingPanel :model-value="form.web_search_override" @update:model-value="(value) => { if (form) form.web_search_override = value; }" />
+            </div>
+          </section>
+
           <!-- 模型调用 -->
           <section class="card">
             <div class="card-header">
@@ -794,21 +805,21 @@
                 <label for="bot-model-disclosure">谁能问出所用模型</label>
                 <AppSelect
                   id="bot-model-disclosure"
-                  :model-value="form.model_disclosure ?? 'owner'"
+                  :model-value="form.model_disclosure ?? 'everyone'"
                   :options="disclosureOptions"
                   @update:model-value="(value) => { if (form) form.model_disclosure = value as 'owner' | 'everyone'; }"
                 />
-                <span class="hint">默认只对主人如实回答模型 ID 和供应商，主人也始终能在聊天里查看和切换模型；其他人问起时机器人会含糊带过，也不会凭训练记忆自报家门。</span>
+                <span class="hint">默认对所有人如实回答模型 ID 和供应商；切换模型仍仅限主人。选择「仅主人」后，其他人问起时机器人会含糊带过，也不会凭训练记忆自报家门。</span>
               </div>
               <div class="field">
                 <label for="bot-repository-disclosure">谁能问出项目地址</label>
                 <AppSelect
                   id="bot-repository-disclosure"
-                  :model-value="form.repository_disclosure ?? 'owner'"
+                  :model-value="form.repository_disclosure ?? 'everyone'"
                   :options="disclosureOptions"
                   @update:model-value="(value) => { if (form) form.repository_disclosure = value as 'owner' | 'everyone'; }"
                 />
-                <span class="hint">默认只对主人报开源仓库地址；其他人问「你源码在哪」时机器人会带过去，不给链接也不会编一个。地址本身是公开的，但知道地址就知道去哪看默认提示词和全部工具实现。</span>
+                <span class="hint">默认对所有人提供开源仓库地址。选择「仅主人」后，其他人问「你源码在哪」时机器人会带过去，不给链接也不会编一个。仓库中包含默认提示词和全部工具实现。</span>
               </div>
             </div>
           </section>
@@ -2375,6 +2386,7 @@ import {
   testIMessageServer,
   type IMessageProbeResult
 } from "../api";
+import SearchRoutingPanel from "../components/SearchRoutingPanel.vue";
 import AccountNameHint from "../components/AccountNameHint.vue";
 import AppSelect, { type AppSelectOption } from "../components/AppSelect.vue";
 import AppNumberInput from "../components/AppNumberInput.vue";
@@ -3742,7 +3754,12 @@ function roleModelPlaceholder(role: RoleKey): string {
 
 // 所有用途都在侧栏中，右侧只展开当前选择的用途。
 const selectedModelRole = ref<RoleKey>("chat");
-const modelRouteSearch = ref("");
+const searchSummary = computed(() => {
+  const value = form.value?.web_search_override;
+  if (!value) return "默认配置";
+  if (value.disabled) return "已关闭";
+  return value.source_priority === "browser" ? "浏览器优先" : value.source_priority === "api" ? "API 优先" : "按列表顺序";
+});const modelRouteSearch = ref("");
 const modelRouteStatusFilter = ref("all");
 const modelRouteStatusOptions = [
   { value: "all", label: "全部状态" },
@@ -4722,8 +4739,8 @@ function setForm(config: BotProfileConfig): void {
     agent_browser_control_enabled: config.agent_browser_control_enabled ?? false,
     agent_browser_box_disabled: config.agent_browser_box_disabled ?? false,
     reply_reference_mode: config.reply_reference_mode ?? "auto",
-    model_disclosure: config.model_disclosure ?? "owner",
-    repository_disclosure: config.repository_disclosure ?? "owner",
+    model_disclosure: config.model_disclosure ?? "everyone",
+    repository_disclosure: config.repository_disclosure ?? "everyone",
     mention_user_mode: config.mention_user_mode ?? "auto",
     sticker_reply_order: config.sticker_reply_order ?? "before",
     markdown_to_plain: config.markdown_to_plain ?? !platformSupportsRichText(config.platform),
