@@ -15,7 +15,7 @@ const (
 
 // rssWatchReplyImages keeps photos out of the judge prompt and attaches only
 // unambiguously cited items. A single-item batch needs no explicit citation.
-func rssWatchReplyImages(reply string, items []rssWatchItem) string {
+func rssWatchMatchedItems(reply string, items []rssWatchItem) []rssWatchItem {
 	replyLinks := rssWatchContentLinks(reply)
 	owners := make(map[string]int)
 	for _, item := range items {
@@ -40,6 +40,14 @@ func rssWatchReplyImages(reply string, items []rssWatchItem) string {
 			hits = append(hits, item)
 		}
 	}
+	return hits
+}
+
+func rssWatchReplyImages(reply string, items []rssWatchItem) string {
+	return rssWatchItemsImages(rssWatchMatchedItems(reply, items))
+}
+
+func rssWatchItemsImages(hits []rssWatchItem) string {
 	seen := make(map[string]bool)
 	var out strings.Builder
 	total := 0
@@ -114,6 +122,36 @@ func rssWatchOutgoingImages(msg OutgoingMessage) OutgoingMessage {
 		msg.ImageURLs = append(msg.ImageURLs, raw)
 		return ""
 	})
+	msg.Text = rssWatchVideoTagPattern.ReplaceAllStringFunc(msg.Text, func(tag string) string {
+		segments := TextToOneBotSegments(tag)
+		if len(segments) != 1 || segments[0].Type != "video" {
+			return tag
+		}
+		raw := segments[0].Data["file"]
+		if !rssWatchVideoAllowed(raw) {
+			return tag
+		}
+		msg.VideoURLs = append(msg.VideoURLs, raw)
+		return ""
+	})
 	msg.Text = strings.TrimSpace(msg.Text)
 	return msg
+}
+
+// Feed text is untrusted and must never become executable CQ message segments.
+func rssWatchUnfilteredText(item rssWatchItem) string {
+	text := strings.TrimSpace(item.Content)
+	title := strings.TrimSpace(item.Title)
+	if text == "" {
+		text = title
+	} else if title != "" && !strings.HasPrefix(text, title) {
+		text = title + "\n" + text
+	}
+	if link := strings.TrimSpace(item.Link); link != "" && !strings.Contains(text, link) {
+		text += "\n" + link
+	}
+	if strings.TrimSpace(text) == "" {
+		text = item.ID
+	}
+	return strings.ReplaceAll(strings.TrimSpace(text), "[CQ:", "［CQ:")
 }

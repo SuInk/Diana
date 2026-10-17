@@ -4,9 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
+	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestRSSWatchTwitterFeedKeepsPhotoURLs(t *testing.T) {
@@ -226,4 +231,126 @@ func TestRSSWatchRepostsAndQuotesKeepPhotos(t *testing.T) {
 	if len(feed.Items[3].Images) != 0 {
 		t.Fatal(feed.Items[3].Images)
 	}
+}
+
+// Exercise the real fetch/cache boundary: parser-only tests miss JSON data loss.
+func TestRSSWatchCachedFeedKeepsPhotosOutOfJudgePayload(t *testing.T) {
+	const body = `{"code":200,"results":[{"id":"2111110176485052665","url":"https://x.com/animecorner_ac/status/2111110176485052665","text":"New visual","media":{"photos":[{"url":"https://pbs.twimg.com/media/A.jpg"},{"url":"https://pbs.twimg.com/media/B.png"}]}}]}`
+	want := []string{"https://pbs.twimg.com/media/A.jpg", "https://pbs.twimg.com/media/B.png"}
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(body))
+	}))
+	defer server.Close()
+	p := NewRSSWatchPlugin(server.Client())
+	for _, phase := range []string{"fresh", "cached"} {
+		t.Run(phase, func(t *testing.T) {
+			change, err := p.check(context.Background(), server.URL, "older", time.Time{}, SettingValues{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(change.Items) != 1 || !slices.Equal(change.Items[0].Images, want) {
+				t.Fatalf("cached feed lost photos: %#v", change.Items)
+			}
+			payload, err := json.Marshal(change)
+			if err != nil {
+				t.Fatal(err)
+			}
+			withoutImages := change
+			withoutImages.Items = append([]rssWatchItem(nil), change.Items...)
+			withoutImages.Items[0].Images = nil
+			baseline, err := json.Marshal(withoutImages)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(payload) != string(baseline) || strings.Contains(string(payload), "pbs.twimg.com") {
+				t.Fatalf("photos leaked into judge payload: %s", payload)
+			}
+			reply := "New visual " + change.Items[0].Link
+			outgoing := rssWatchOutgoingImages(OutgoingMessage{Text: reply + rssWatchReplyImages(reply, change.Items)})
+			if outgoing.Text != reply || !slices.Equal(outgoing.ImageURLs, want) {
+				t.Fatalf("outgoing message = %#v", outgoing)
+			}
+			// A subscriber must not mutate another subscriber's cached image list.
+			change.Items[0].Images[0] = "mutated"
+		})
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("fetches = %d, want 1", calls.Load())
+	}
+}
+
+// Opt in to verify the actual FxTwitter feed and public photo endpoints.
+func TestLiveRSSWatchTwitterPhotoDelivery(t *testing.T) {
+	if os.Getenv("DIANA_LIVE_RSS") != "1" {
+		t.Skip("set DIANA_LIVE_RSS=1 to verify the real Twitter feed and photos")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	feedURL, err := twitterFeedURL("animecorner_ac")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := NewRSSWatchPlugin(nil)
+	first, err := p.check(ctx, feedURL, "", time.Time{}, SettingValues{rssWatchSettingItemLimit: 30})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := p.check(ctx, feedURL, "", time.Time{}, SettingValues{rssWatchSettingItemLimit: 30})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range first.Items {
+		if len(item.Images) < 2 {
+			continue
+		}
+		var cached *rssWatchItem
+		for i := range second.Items {
+			if second.Items[i].ID == item.ID {
+				cached = &second.Items[i]
+				break
+			}
+		}
+		if cached == nil || !slices.Equal(item.Images, cached.Images) {
+			t.Fatalf("real tweet %s lost cached photos", item.Link)
+		}
+		payload, err := json.Marshal(second)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, raw := range item.Images {
+			if strings.Contains(string(payload), raw) {
+				t.Fatal("photo leaked into judgment JSON")
+			}
+		}
+		outgoing := rssWatchOutgoingImages(OutgoingMessage{Text: item.Link + rssWatchReplyImages(item.Link, second.Items)})
+		want := item.Images[:min(len(item.Images), rssWatchMaxImagesPerItem)]
+		if !slices.Equal(outgoing.ImageURLs, want) {
+			t.Fatalf("outgoing images=%v want=%v", outgoing.ImageURLs, want)
+		}
+		for _, raw := range outgoing.ImageURLs {
+			req, err := http.NewRequestWithContext(ctx, http.MethodGet, raw, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			req.Header.Set("Range", "bytes=0-511")
+			resp, err := p.client.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			resp.Body.Close()
+			if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusPartialContent {
+				t.Fatalf("photo HTTP status: %d", resp.StatusCode)
+			}
+			if !strings.HasPrefix(resp.Header.Get("Content-Type"), "image/") {
+				t.Fatalf("photo content type: %s", resp.Header.Get("Content-Type"))
+			}
+			t.Logf("photo accessible: %s (%d, %s)", raw, resp.StatusCode, resp.Header.Get("Content-Type"))
+		}
+		t.Logf("real tweet: %s; first/cached photos=%d; outbound photos=%d", item.Link, len(item.Images), len(outgoing.ImageURLs))
+		return
+	}
+	t.Fatalf("live feed returned %d entries without a multi-photo tweet; cannot verify multi-photo delivery", len(first.Items))
 }

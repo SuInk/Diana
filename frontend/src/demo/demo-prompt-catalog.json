@@ -392,7 +392,7 @@
       "group": "reply_tools",
       "title": "RSS 与 Twitter 订阅",
       "usage": "RSS 订阅可用时注入：通知条件写进 judge_prompt，多来源合成一条。",
-      "default": "用户要求持续订阅 RSS/Atom、关注指定 Twitter/X 用户，或只在新条目符合条件时通知时，调用 subscription 并传 kind=rss，judge_prompt 里写清通知条件和回复要求。要盯的人或 Feed 有好几个而条件相同时，用 twitter_handles/feed_urls 建一条多来源订阅，不要一人建一条。"
+      "default": "用户要求持续订阅 RSS/Atom、关注指定 Twitter/X 用户，或只在新条目符合条件时通知时，调用 subscription 并传 kind=rss，用户要全部推送时将 judge_prompt 留空；需要筛选时才写通知条件和回复要求。要盯的人或 Feed 有好几个而条件相同时，用 twitter_handles/feed_urls 建一条多来源订阅，不要一人建一条。"
     },
     {
       "key": "reply.tool.event_trigger",

@@ -30,7 +30,8 @@ import (
 const (
 	rssWatchPluginID = "official.rss-watch"
 
-	rssWatchSettingTimeout = "timeout_seconds"
+	rssWatchSettingTimeout    = "timeout_seconds"
+	rssWatchSettingVideoMaxMB = "video_max_mb"
 	// rssWatchDefaultTimeoutSeconds 和仓库订阅的默认超时同一个理由：订阅是后台任务，
 	// 等久一点没有代价，等不到才有——超时到了这一轮就整个失败，重试要等下一个周期。
 	rssWatchDefaultTimeoutSeconds = 90
@@ -49,7 +50,7 @@ var twitterHandlePattern = regexp.MustCompile(`^[A-Za-z0-9_]{1,15}$`)
 
 type RSSWatchPlugin struct {
 	client *http.Client
-	feeds  sharedResultCache[parsedFeed]
+	feeds  sharedResultCache[rssFeedCache]
 }
 
 type rssWatchSnapshot struct {
@@ -72,12 +73,50 @@ type rssWatchItem struct {
 	Content     string    `json:"content,omitempty"`
 	PublishedAt time.Time `json:"published_at,omitempty"`
 	// Images 是条目自带的配图地址，只给推送时附图用，不进判断提示词。
-	Images []string `json:"-"`
+	Images []string        `json:"-"`
+	Videos []rssWatchVideo `json:"-"`
 }
 
 type parsedFeed struct {
 	Title string
 	Items []rssWatchItem
+}
+
+// Cache serialization includes photos, while rssWatchItem deliberately excludes
+// them from the judge payload (and therefore the judgment cache key).
+type rssFeedCache struct {
+	Title string
+	Items []rssFeedCacheItem
+}
+
+type rssFeedCacheItem struct {
+	rssWatchItem
+	Images []string        `json:"images,omitempty"`
+	Videos []rssWatchVideo `json:"videos,omitempty"`
+}
+
+func cacheRSSFeed(feed parsedFeed) rssFeedCache {
+	cached := rssFeedCache{Title: feed.Title}
+	if feed.Items != nil {
+		cached.Items = make([]rssFeedCacheItem, len(feed.Items))
+		for i, item := range feed.Items {
+			cached.Items[i] = rssFeedCacheItem{rssWatchItem: item, Images: item.Images, Videos: item.Videos}
+		}
+	}
+	return cached
+}
+
+func (cached rssFeedCache) parsed() parsedFeed {
+	feed := parsedFeed{Title: cached.Title}
+	if cached.Items != nil {
+		feed.Items = make([]rssWatchItem, len(cached.Items))
+		for i, item := range cached.Items {
+			feed.Items[i] = item.rssWatchItem
+			feed.Items[i].Images = item.Images
+			feed.Items[i].Videos = item.Videos
+		}
+	}
+	return feed
 }
 
 func NewRSSWatchPlugin(client *http.Client) *RSSWatchPlugin {
@@ -91,13 +130,14 @@ func (p *RSSWatchPlugin) Manifest() PluginManifest {
 	return PluginManifest{
 		ID:            rssWatchPluginID,
 		Name:          "RSS 订阅",
-		Version:       "0.2.6",
-		Description:   "订阅 RSS/Atom 或指定 X (Twitter) 用户，一条订阅可以同时盯多个账号或 Feed 并共用一套规则；发现新内容后由 LLM 判断是否需要通知，并生成实际回复。",
+		Version:       "0.2.9",
+		Description:   "订阅 RSS/Atom 或指定 X (Twitter) 用户，一条订阅可以同时盯多个账号或 Feed 并共用一套规则；规则留空时直接推送全部新条目；填写规则后由 LLM 筛选并生成回复。",
 		Official:      true,
 		BuiltIn:       true,
 		ReportsErrors: true,
 		Permissions:   []string{"network:https", "task:persistent", "message:send", "llm:generate"},
 		Settings: []PluginSettingSpec{
+			{Key: rssWatchSettingVideoMaxMB, Label: "视频大小上限", Description: "推特视频超过此大小、读取失败或超时时只附封面；每条推文最多一个视频，每次通知最多两个。", Type: PluginSettingTypeNumber, Default: defaultVideoMaxMB, Min: settingRange(1), Max: settingRange(2000), Step: 1, Unit: "MiB"},
 			{
 				Key:         rssWatchSettingTimeout,
 				Label:       "抓取超时",
@@ -190,6 +230,11 @@ func (p *RSSWatchPlugin) snapshot(ctx context.Context, feedURL string, settings 
 }
 
 func (p *RSSWatchPlugin) check(ctx context.Context, feedURL, cursor string, publishedAt time.Time, settings SettingValues) (rssWatchChange, error) {
+	return p.checkWithItemLimit(ctx, feedURL, cursor, publishedAt, settings, max(1, min(30, settings.Int(rssWatchSettingItemLimit, 12))))
+}
+
+// A zero limit is used only by unfiltered subscriptions; judge input stays capped.
+func (p *RSSWatchPlugin) checkWithItemLimit(ctx context.Context, feedURL, cursor string, publishedAt time.Time, settings SettingValues, limit int) (rssWatchChange, error) {
 	feed, err := p.fetch(ctx, feedURL, settings)
 	if err != nil {
 		return rssWatchChange{}, err
@@ -223,14 +268,7 @@ func (p *RSSWatchPlugin) check(ctx context.Context, feedURL, cursor string, publ
 			}
 		}
 	}
-	limit := settings.Int(rssWatchSettingItemLimit, 12)
-	if limit < 1 {
-		limit = 1
-	}
-	if limit > 30 {
-		limit = 30
-	}
-	if len(change.Items) > limit {
+	if limit > 0 && len(change.Items) > limit {
 		change.Items = change.Items[:limit]
 	}
 	for left, right := 0, len(change.Items)-1; left < right; left, right = left+1, right-1 {
@@ -291,13 +329,18 @@ func (p *RSSWatchPlugin) fetch(ctx context.Context, feedURL string, settings Set
 		options = map[string]any{}
 	}
 	delete(options, rssWatchSettingItemLimit)
+	delete(options, rssWatchSettingVideoMaxMB)
 	options[rssWatchSettingTimeout] = max(5, settings.Int(rssWatchSettingTimeout, 20))
 	key := sharedResultKey([]any{"rss-feed-v1", url, options})
 	// A mutable cookie jar has no stable credential fingerprint.
 	if p.client.Jar != nil {
 		key = ""
 	}
-	return p.feeds.load(ctx, key, 30*time.Second, 60*time.Second, nil, func(loadCtx context.Context) (parsedFeed, error) { return p.fetchFresh(loadCtx, url, settings) })
+	cached, err := p.feeds.load(ctx, key, 30*time.Second, 60*time.Second, nil, func(loadCtx context.Context) (rssFeedCache, error) {
+		feed, err := p.fetchFresh(loadCtx, url, settings)
+		return cacheRSSFeed(feed), err
+	})
+	return cached.parsed(), err
 }
 
 // fetchFresh 抓一次 Feed。订阅地址里常带着私有令牌（Gitea、RSSHub 的 ?key=、
@@ -416,7 +459,13 @@ type twitterStatusesResponse struct {
 	} `json:"results"`
 }
 
+type rssWatchVideo struct {
+	URL          string `json:"url"`
+	ThumbnailURL string `json:"thumbnail_url"`
+}
+
 type twitterStatusMedia struct {
+	Videos []rssWatchVideo `json:"videos"`
 	Photos []struct {
 		URL string `json:"url"`
 	} `json:"photos"`
@@ -472,6 +521,7 @@ func parseTwitterStatusesFeed(body []byte) (parsedFeed, error) {
 		// FxTwitter places ordinary reposts at the top level (with reposted_by
 		// metadata). Quoted tweets instead carry their own text and media.
 		photos := slices.Clone(entry.Media.Photos)
+		videos := slices.Clone(entry.Media.Videos)
 		if quote := entry.Quote; quote != nil {
 			quoteText := strings.TrimSpace(quote.Text)
 			if quoteText == "" {
@@ -485,6 +535,7 @@ func parseTwitterStatusesFeed(body []byte) (parsedFeed, error) {
 				}
 				text += "\n\n引用推文 " + quoteAuthor + "\n" + quoteText + "\n" + quoteLink
 				photos = append(photos, quote.Media.Photos...)
+				videos = append(videos, quote.Media.Videos...)
 			}
 		}
 		var images []string
@@ -501,6 +552,7 @@ func parseTwitterStatusesFeed(body []byte) (parsedFeed, error) {
 			Content:     text,
 			PublishedAt: published,
 			Images:      images,
+			Videos:      videos,
 		})
 	}
 	return feed, nil
