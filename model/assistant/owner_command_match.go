@@ -78,6 +78,7 @@ var ownerCommands = []ownerCommand{
 	{exact: "删除表情包", run: runOwnerStickerRemove},
 	{exact: "移除表情包", run: runOwnerStickerRemove},
 	{exact: "表情包 删除", run: runOwnerStickerRemove},
+	{exact: "/remove", run: runOwnerStickerRemove},
 	{exact: "清空上下文", run: runOwnerContextReset},
 	{exact: "清除上下文", run: runOwnerContextReset},
 	{exact: "帮助", run: runOwnerHelp},
@@ -93,7 +94,7 @@ func runOwnerContextReset(r *Runtime, event MessageEvent, _ string) string {
 }
 
 func runOwnerHelp(*Runtime, MessageEvent, string) string {
-	return "可用命令：lllm 列表、lllm 当前、lllm 切换 <名称>、群 列表、群 禁用 <群号>、群 启用 <群号>、响应限制 列表、响应限制 解除 <账号>、提醒 添加 <时长> <内容>、提醒 列表、提醒 取消 <ID>、提醒 删除 <ID>、订阅 添加 <周期> <查询内容>、订阅 列表、订阅 取消 <ID>、订阅 删除 <ID>、删除表情包（回复那张表情包发送）、清空上下文。也可以直接说：1 分钟后提醒我睡觉，或者每 1 分钟查询某件事并通知我。"
+	return "可用命令：lllm 列表、lllm 当前、lllm 切换 <名称>、群 列表、群 禁用 <群号>、群 启用 <群号>、响应限制 列表、响应限制 解除 <账号>、提醒 添加 <时长> <内容>、提醒 列表、提醒 取消 <ID>、提醒 删除 <ID>、订阅 添加 <周期> <查询内容>、订阅 列表、订阅 取消 <ID>、订阅 删除 <ID>、删除表情包 或 /remove（回复那张表情包发送）、清空上下文。也可以直接说：1 分钟后提醒我睡觉，或者每 1 分钟查询某件事并通知我。"
 }
 
 // handleOwnerCommand 边认边执行主人命令，text 是 cleanInput 之后的文本。

@@ -19,7 +19,7 @@ type StickerAssetRemover interface {
 // stickerRemoveReadTimeout 是引用的图没有本地缓存、要现下载来算哈希时的等待上限。
 const stickerRemoveReadTimeout = 15 * time.Second
 
-// runOwnerStickerRemove 处理「删除表情包」：主人回复一条带表情包的消息发这句，
+// runOwnerStickerRemove 处理「删除表情包」（也认 /remove）：主人回复一条带表情包的消息发这句，
 // 就把引用里的图移出这个机器人的表情包库，并拉黑，之后再有人发同一张也不收。
 // 认图靠内容哈希，所以回复别人发的原图和回复机器人发出去的那张都行。
 func runOwnerStickerRemove(r *Runtime, event MessageEvent, _ string) string {

@@ -53,6 +53,9 @@ func TestOwnerStickerRemoveDeletesQuotedSticker(t *testing.T) {
 	if len(store.calls) != 1 || store.calls[0] != "bot/"+hash {
 		t.Fatalf("calls=%v", store.calls)
 	}
+	if reply, handled := runtime.handleOwnerCommand(event, "/remove"); !handled || !strings.Contains(reply, "不在表情包库") {
+		t.Fatalf("/remove reply=%q handled=%v", reply, handled)
+	}
 }
 
 func TestOwnerStickerRemoveReportsImageOutsideLibrary(t *testing.T) {
