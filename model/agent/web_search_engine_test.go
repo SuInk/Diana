@@ -206,6 +206,52 @@ func TestSearchEngineResultsUnwrapAndDeduplicateTranslationLinks(t *testing.T) {
 	}
 }
 
+func TestSearchEngineModeLetsRendererStopOnceResultsAppear(t *testing.T) {
+	var readyKey func(RenderedPage) string
+	renderer := PageRendererFunc(func(ctx context.Context, rawURL string) (RenderedPage, error) {
+		readyKey, _ = ctx.Value(renderReadyKeyContextKey{}).(func(RenderedPage) string)
+		return RenderedPage{URL: rawURL, Links: []RenderedLink{{URL: "https://example.com/a", Text: "结果 A"}}}, nil
+	})
+	if _, err := searchEngineTestTool(t, renderer, "google").Run(context.Background(), map[string]any{"query": "diana"}); err != nil {
+		t.Fatal(err)
+	}
+	if readyKey == nil {
+		t.Fatal("结果页渲染要带上提前收尾的判定，否则每次都等满 8 秒")
+	}
+	loading := RenderedPage{URL: "https://www.google.com/search?q=diana", Title: "diana - Google 搜索", Text: "正在加载"}
+	if key := readyKey(loading); key != "" {
+		t.Fatalf("还没有结果时不该收尾: %q", key)
+	}
+	one := loading
+	one.Links = []RenderedLink{{URL: "https://example.com/a", Text: "结果 A"}}
+	if key := readyKey(one); key != "" {
+		t.Fatalf("只露出一条结果时多半还没填完，不该收尾: %q", key)
+	}
+	partial := loading
+	partial.Links = append(append([]RenderedLink{}, one.Links...), RenderedLink{URL: "https://example.com/b", Text: "结果 B"})
+	full := loading
+	full.Links = append(append([]RenderedLink{}, partial.Links...), RenderedLink{URL: "https://example.com/c", Text: "结果 C"})
+	if readyKey(partial) == "" || readyKey(partial) == readyKey(full) {
+		t.Fatalf("key 要随结果列表变化，渲染器才能等结果填完: partial=%q full=%q", readyKey(partial), readyKey(full))
+	}
+	blocked := RenderedPage{URL: "https://www.google.com/sorry/index?continue=x", Title: "Google", Text: "unusual traffic"}
+	if readyKey(blocked) == "" {
+		t.Fatal("验证页认出来就该收尾，不必等满观察期")
+	}
+}
+
+func TestSearchEngineResultsSkipBingBoilerplateLinks(t *testing.T) {
+	links := []RenderedLink{
+		{URL: "https://support.microsoft.com/topic/how-bing-delivers-search-results-d18fc815-ac37-4723-bc67-9229ce3eb6a3", Text: "了解 Bing 如何提供搜索结果"},
+		{URL: "https://support.microsoft.com/topic/82d20721-2d6f-4012-a13d-d1910ccf203f", Text: "隐私声明"},
+		{URL: "https://support.microsoft.com/en-us/topic/windows-11-version-24h2-update-history-0929c747", Text: "Windows 11 更新历史"},
+	}
+	results := searchEngineResults(searchEngines["bing"], links, 10)
+	if len(results) != 1 || !strings.Contains(results[0].URL, "windows-11") {
+		t.Fatalf("页脚说明链接不是结果，正常的微软支持页要留着: %+v", results)
+	}
+}
+
 func TestBingSearchResultsSkipSearchHelpButKeepProductDocumentation(t *testing.T) {
 	results := searchEngineResults(searchEngines["bing"], []RenderedLink{
 		{Text: "了解更多", URL: "https://support.microsoft.com/topic/how-bing-delivers-search-results-d18fc815-ac37-4723-bc67-9229ce3eb6a3?"},

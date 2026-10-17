@@ -622,3 +622,59 @@ func TestHiddenWindowArgsSkipStartupWindow(t *testing.T) {
 		t.Fatalf("无头不该去找屏幕：%q %v", window, env)
 	}
 }
+
+func TestEarlyRenderReadinessWaitsForStableReadyKey(t *testing.T) {
+	ready := newEarlyRenderReadiness(WithRenderReadyKey(context.Background(), func(page RenderedPage) string { return page.Text }))
+	started := time.Unix(1_700_000_000, 0)
+	activity := browserActivitySnapshot{LastNavigation: started}
+	probe := browserDOMProbe{URL: "https://example.com", Title: "结果", TextLength: 10}
+	window := 900 * time.Millisecond
+	captures := 0
+	frame := ""
+	capture := func() (RenderedPage, error) {
+		captures++
+		return RenderedPage{Text: frame}, nil
+	}
+	step := func(at time.Duration, signature, text string) bool {
+		probe.SemanticSignature, frame = signature, text
+		return ready.observe(started.Add(at), probe, activity, window, capture)
+	}
+
+	if step(0, "s0", "") || step(250*time.Millisecond, "s1", "a") {
+		t.Fatal("key 为空或刚出现时不该收尾")
+	}
+	if step(1000*time.Millisecond, "s2", "a,b") {
+		t.Fatal("结果列表还在变，要重新计时")
+	}
+	if step(1500*time.Millisecond, "s3", "a,b") {
+		t.Fatal("key 没变但还没稳满窗口")
+	}
+	beforeIdle := captures
+	if !step(1900*time.Millisecond, "s3", "a,b") {
+		t.Fatal("key 稳满窗口就该收尾")
+	}
+	if captures != beforeIdle {
+		t.Fatalf("页面内容没变时不该重抓快照: captures %d -> %d", beforeIdle, captures)
+	}
+
+	activity.LastNavigation = started.Add(2 * time.Second)
+	if step(2*time.Second, "s3", "a,b") || step(2500*time.Millisecond, "s3", "a,b") {
+		t.Fatal("跳转之后要重新计时")
+	}
+	if !step(2900*time.Millisecond, "s3", "a,b") {
+		t.Fatal("跳转后稳满窗口应当收尾")
+	}
+}
+
+func TestEarlyRenderReadinessIsOffWithoutReadyKey(t *testing.T) {
+	ready := newEarlyRenderReadiness(context.Background())
+	if ready != nil {
+		t.Fatal("没给 ready key 时普通网页照旧走通用规则")
+	}
+	if ready.observe(time.Now(), browserDOMProbe{Title: "x", SemanticSignature: "x"}, browserActivitySnapshot{}, 0, func() (RenderedPage, error) {
+		t.Fatal("不该抓快照")
+		return RenderedPage{}, nil
+	}) {
+		t.Fatal("nil readiness 不该收尾")
+	}
+}

@@ -46,6 +46,8 @@ type searchEngine struct {
 	ownHosts []string
 	// blockedMarkers 出现在最终地址或正文里，说明落到了人机验证页。
 	blockedMarkers []string
+	// boilerplateLinks 是不在自己域名下、但每页都有的说明链接（地址前缀），不是结果。
+	boilerplateLinks []string
 }
 
 var searchEngines = map[string]searchEngine{
@@ -60,6 +62,12 @@ var searchEngines = map[string]searchEngine{
 		queryParam:     "q",
 		ownHosts:       []string{"bing.com", "bing.net", "go.microsoft.com", "microsofttranslator.com"},
 		blockedMarkers: []string{"/challenge", "verify you are human", "请解决以下难题"},
+		// 结果页页脚的「Bing 如何提供搜索结果」和隐私说明。不去掉的话每次 Bing 搜索的
+		// 结果里都有它，也会让结果页在真正的结果出来之前就被当成已经有结果。
+		boilerplateLinks: []string{
+			"https://support.microsoft.com/topic/how-bing-delivers-search-results-",
+			"https://support.microsoft.com/topic/82d20721-2d6f-4012-a13d-d1910ccf203f",
+		},
 	},
 	// html.duckduckgo.com 每次都弹验证，用普通入口。
 	"duckduckgo": {
@@ -127,7 +135,28 @@ func (t *WebSearchTool) runSearchEngine(ctx context.Context, provider webSearchP
 	}
 	target = applySearchEngineRecency(provider.Tool, target, webSearchRecency(ctx), time.Now())
 
-	page, err := renderer.Render(ctx, target)
+	// 结果页上解析出的结果列表稳住了、或者已经认出是验证页，就不用再等页面加载完。
+	// 只有一条结果时不算：那多半是结果还没填进来、页面框架上先露出的一条链接，真的
+	// 只有一条结果的页面照旧按通用规则等完。
+	readyKey := func(page RenderedPage) string {
+		results := searchEngineResults(engine, page.Links, provider.MaxResults)
+		need := 2
+		if provider.MaxResults == 1 {
+			need = 1
+		}
+		if len(results) < need {
+			if len(results) == 0 && searchEnginePageBlocked(engine, page, false) {
+				return "blocked"
+			}
+			return ""
+		}
+		urls := make([]string, len(results))
+		for i, result := range results {
+			urls[i] = result.URL
+		}
+		return strings.Join(urls, "\n")
+	}
+	page, err := renderer.Render(WithRenderReadyKey(ctx, readyKey), target)
 	if err != nil {
 		return "", err
 	}
@@ -209,7 +238,7 @@ func searchEngineResults(engine searchEngine, links []RenderedLink, limit int) [
 		}
 		// Bing 的页脚帮助/生成式搜索说明不是查询结果，不能抢先结束后备搜索。
 		bingHelp := parsed.Hostname() == "support.microsoft.com" && (strings.Contains(parsed.Path, "d18fc815-ac37-4723-bc67-9229ce3eb6a3") || strings.Contains(parsed.Path, "82d20721-2d6f-4012-a13d-d1910ccf203f"))
-		if searchEngineOwnHost(engine, parsed) || (engine.searchURL == searchEngines["bing"].searchURL && bingHelp) {
+		if searchEngineOwnHost(engine, parsed) || searchEngineBoilerplateLink(engine, target) || (engine.searchURL == searchEngines["bing"].searchURL && bingHelp) {
 			continue
 		}
 		title := firstRenderedLine(link.Text)
@@ -281,6 +310,15 @@ func searchEngineOwnHost(engine searchEngine, parsed *url.URL) bool {
 	host := strings.ToLower(parsed.Hostname())
 	for _, own := range engine.ownHosts {
 		if host == own || strings.HasSuffix(host, "."+own) {
+			return true
+		}
+	}
+	return false
+}
+
+func searchEngineBoilerplateLink(engine searchEngine, target string) bool {
+	for _, prefix := range engine.boilerplateLinks {
+		if strings.HasPrefix(target, prefix) {
 			return true
 		}
 	}

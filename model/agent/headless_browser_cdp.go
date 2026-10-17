@@ -534,6 +534,7 @@ func (b *SandboxedHeadlessBrowser) observeRender(ctx, browserCtx context.Context
 
 	observationStarted := time.Now()
 	readiness := newRenderReadiness(observationStarted)
+	earlyReady := newEarlyRenderReadiness(ctx)
 	hardDeadline := renderStarted.Add(time.Duration(MaxAllowedBrowserTimeoutMS) * time.Millisecond)
 	deadline := renderStarted.Add(b.cfg.Timeout)
 	if deadline.After(hardDeadline) {
@@ -626,6 +627,9 @@ func (b *SandboxedHeadlessBrowser) observeRender(ctx, browserCtx context.Context
 		}
 		if lastDecision.Complete {
 			return finish(probe, lastDecision, true, lastDecision.Reason)
+		}
+		if earlyReady.observe(time.Now(), probe, activity, b.cfg.StabilityWindow, func() (RenderedPage, error) { return b.captureObservablePage(browserCtx, rawURL) }) {
+			return finish(probe, lastDecision, true, "ready_key_stable")
 		}
 	}
 }

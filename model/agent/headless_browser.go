@@ -108,6 +108,67 @@ func (f PageRendererFunc) Render(ctx context.Context, rawURL string) (RenderedPa
 	return f(ctx, rawURL)
 }
 
+// renderReadyKeyContextKey 带着这一次渲染的提前收尾判定，见 WithRenderReadyKey。
+type renderReadyKeyContextKey struct{}
+
+// WithRenderReadyKey 让这一次渲染在页面要的东西已经齐了、并且稳住时提前收尾，不再等
+// 文档 complete、网络静默和最短观察期。普通网页要等这些是怕拿到半成品；搜索结果页
+// 不一样：Google 的结果页一直挂在 interactive、网络也一直有零星请求，按通用规则每次
+// 都要等满 8 秒，可结果在页面出来后一两秒就齐了。
+//
+// key 从当时的快照里取出调用方关心的部分（比如结果链接列表），取不出来返回空串。
+// 同一个 key 保持一个稳定窗口（cfg.StabilityWindow）不变、期间也没有新的跳转才收尾：
+// Bing 会先出一两条结果再把剩下的填进来，只看「有结果」会拿到半成品。
+func WithRenderReadyKey(ctx context.Context, key func(RenderedPage) string) context.Context {
+	if key == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, renderReadyKeyContextKey{}, key)
+}
+
+// earlyRenderReadiness 跟着每一拍的探针看 ready key 有没有稳住。页面内容没变的那一拍
+// 沿用上次的 key，不重抓快照。
+type earlyRenderReadiness struct {
+	key        func(RenderedPage) string
+	signature  string
+	navigation time.Time
+	current    string
+	since      time.Time
+}
+
+func newEarlyRenderReadiness(ctx context.Context) *earlyRenderReadiness {
+	key, _ := ctx.Value(renderReadyKeyContextKey{}).(func(RenderedPage) string)
+	if key == nil {
+		return nil
+	}
+	return &earlyRenderReadiness{key: key}
+}
+
+// observe 返回这一拍能不能收尾；capture 只在页面内容变了、需要新快照时调用。
+func (r *earlyRenderReadiness) observe(now time.Time, probe browserDOMProbe, activity browserActivitySnapshot, window time.Duration, capture func() (RenderedPage, error)) bool {
+	if r == nil {
+		return false
+	}
+	if !activity.LastNavigation.Equal(r.navigation) || !probe.meaningful() || probe.SemanticSignature == "" {
+		r.navigation, r.signature, r.current = activity.LastNavigation, "", ""
+		if !probe.meaningful() || probe.SemanticSignature == "" {
+			return false
+		}
+	}
+	if probe.SemanticSignature != r.signature {
+		page, err := capture()
+		if err != nil {
+			r.signature, r.current = "", ""
+			return false
+		}
+		r.signature = probe.SemanticSignature
+		if key := r.key(page); key != r.current {
+			r.current, r.since = key, now
+		}
+	}
+	return r.current != "" && now.Sub(r.since) >= window
+}
+
 // BrowserWindow 决定一次性浏览器开不开窗口。
 type BrowserWindow string
 
