@@ -263,6 +263,10 @@ func upsertProfileConfig(set assistant.ProfileSet, cfg assistant.BotConfig) (ass
 		if cfg.AvatarURL == "" {
 			cfg.AvatarURL = current.AvatarURL
 		}
+		// 推出来的头像地址只在读配置时现算，存下来会在换账号后指错人。
+		if isDerivedProfileAvatarURL(cfg.AvatarURL) {
+			cfg.AvatarURL = ""
+		}
 		set.Profiles[i] = cfg.WithDefaults()
 		return set.WithDefaults(), nil
 	}

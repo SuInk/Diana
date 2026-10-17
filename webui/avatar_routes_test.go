@@ -160,3 +160,46 @@ func TestConfigPayloadGetsLocalTelegramAvatarURL(t *testing.T) {
 		}
 	}
 }
+
+// 旧版前端把推出来的 QQ 头像地址存回了 Telegram 机器人的配置，后台一直显示别人的
+// 头像。这类地址要按当前账号重新算。
+func TestConfigPayloadReplacesStaleDerivedAvatarURL(t *testing.T) {
+	runtime := &profileAvatarStatusRuntime{status: assistant.RuntimeStatus{Channels: []assistant.ChannelStatus{{ProfileID: "tg", Platform: assistant.PlatformTelegram, SelfID: "12345"}}}}
+	handler := &BotHandler{runtime: runtime}
+	payload := assistant.ConfigPayload{
+		ID: "tg",
+		Profiles: []assistant.ConfigPayload{
+			{ID: "tg", Platform: assistant.PlatformTelegram, BotAccount: "54321", AvatarURL: assistant.OneBotMemberAvatarURL("31295")},
+			{ID: "qq", Platform: assistant.PlatformOneBotV11, BotAccount: "10001", AvatarURL: assistant.OneBotMemberAvatarURL("31295")},
+			{ID: "old", Platform: assistant.PlatformTelegram, AvatarURL: "/api/assistant/avatars/member/777?bot_profile_id=old"},
+		},
+	}
+	got := handler.withConsoleProfileAvatars(payload)
+	if got.Profiles[0].AvatarURL != "/api/assistant/avatars/member/12345?bot_profile_id=tg" {
+		t.Fatalf("Telegram avatar URL = %q", got.Profiles[0].AvatarURL)
+	}
+	if got.Profiles[1].AvatarURL != "/api/assistant/avatars/member/10001?bot_profile_id=qq" {
+		t.Fatalf("OneBot avatar URL = %q", got.Profiles[1].AvatarURL)
+	}
+	if got.Profiles[2].AvatarURL != "" {
+		t.Fatalf("avatar without account should fall back to placeholder, got %q", got.Profiles[2].AvatarURL)
+	}
+}
+
+func TestUpsertProfileConfigDropsDerivedAvatarURL(t *testing.T) {
+	set := assistant.ProfileSet{Profiles: []assistant.BotConfig{{ID: "tg", Platform: assistant.PlatformTelegram, AvatarURL: assistant.OneBotMemberAvatarURL("31295")}}}
+	next, err := upsertProfileConfig(set, assistant.BotConfig{ID: "tg", AvatarURL: "/api/assistant/avatars/member/12345?bot_profile_id=tg"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if next.Profiles[0].AvatarURL != "" {
+		t.Fatalf("derived avatar URL persisted: %q", next.Profiles[0].AvatarURL)
+	}
+	next, err = upsertProfileConfig(set, assistant.BotConfig{ID: "tg", AvatarURL: "https://example.com/me.png"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if next.Profiles[0].AvatarURL != "https://example.com/me.png" {
+		t.Fatalf("custom avatar URL dropped: %q", next.Profiles[0].AvatarURL)
+	}
+}

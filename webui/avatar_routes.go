@@ -132,12 +132,17 @@ func (h *BotHandler) withConsoleProfileAvatars(payload assistant.ConfigPayload) 
 		}
 	}
 	enrich := func(profile *assistant.ConfigPayload) {
-		if profile == nil || strings.TrimSpace(profile.AvatarURL) != "" {
+		if profile == nil {
+			return
+		}
+		if stored := strings.TrimSpace(profile.AvatarURL); stored != "" && !isDerivedProfileAvatarURL(stored) {
 			return
 		}
 		account := firstNonEmptyWebUI(selfIDs[strings.TrimSpace(profile.ID)], strings.TrimSpace(profile.BotAccount))
 		if account != "" {
 			profile.AvatarURL = h.consoleAvatarURL(avatarKindMember, profile.ID, account)
+		} else {
+			profile.AvatarURL = ""
 		}
 	}
 	for index := range payload.Profiles {
@@ -145,6 +150,23 @@ func (h *BotHandler) withConsoleProfileAvatars(payload assistant.ConfigPayload) 
 	}
 	enrich(&payload)
 	return payload
+}
+
+// isDerivedProfileAvatarURL 判断机器人头像地址是不是系统按账号推出来的（QQ 头像
+// 或本机头像代理），而不是管理员自己填的。旧版前端会把推出来的地址原样存回配置，
+// 换了账号或平台后它就指向别人：Telegram 机器人一直显示某个 QQ 号的头像。
+// 这类地址每次都按当前账号重新算，不当真。
+func isDerivedProfileAvatarURL(raw string) bool {
+	raw = strings.TrimSpace(raw)
+	if strings.HasPrefix(raw, "/api/assistant/avatars/") {
+		return true
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return false
+	}
+	host := strings.ToLower(parsed.Hostname())
+	return host == "qlogo.cn" || strings.HasSuffix(host, ".qlogo.cn")
 }
 
 // remoteAvatarURL 给出可以直接下载的头像地址，没有就返回空串。
