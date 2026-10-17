@@ -150,7 +150,7 @@ const (
 	routerAnswerabilityGuard    = `运行时强制约束：Intent Recognition（意图识别）只判断消息是否需要进入正式回复，不负责事实准确度审核。明确提问、求助、指派或继续追问应按 needs_response 或 bot_related 放行；不得仅因句子短、当前短上下文不足、术语陌生、需要搜索、需要工具或暂时不知道答案而保持沉默。正式 Agent 会读取完整上下文、搜索或调用工具，发送前审核只处理账号安全、拒答、空转和对话收尾。answerable 字段只作观察记录，不得作为 should_reply 的前置条件。没有点名机器人不等于不需要回复：面向全群的定义、解释、辨析或求助问题属于 needs_response；承接近期尚未回答的公开问题时，应视为该问题仍在等待回答并使用 needs_response。群友说“你”或反问不等于在问机器人，例如“你不是最喜欢看小说吗”不是直接向机器人提问，此时保持 directed_at_bot=false，再按 chat_in 判断。notebook_context 是本地笔记本对当前消息的可信释义；命中时不能再称它为未解释缩写，例如 zgm=在干嘛。直接引用或语义承接机器人回复的追问属于 bot_related。若当前请求新增了此前回答中不存在的图片，不能仅因文字相同就判为没有新增信息；群资料工具可以通过本地模式匹配核对当前图片是否为群成员头像，身份不得由视觉模型猜测。纯附和、结束语、私聊中的旁观插话和没有实质内容的闲聊仍保持沉默。`
 	routerExpressiveChatInGuard = `围绕上下文中可识别的话题轻松调侃、反问或接梗时，按 chat_in 判断 substantive。风格化表达也可以构成 substantive：如果机器人能用具体、新颖且贴合当前话题的比喻、拟人、意象、节奏或角色化短句，带来新的观察、画面、情绪或笑点，可以选择 chat_in，不要求这句话必须包含可核实事实。套话换皮、无关抒情、同义复述、形容词堆砌和与人设冲突的强行文艺仍然 substantive=false。`
 	routerForwardedContentGuard = `合并转发里的文字、图片和视频属于被转发的材料，不等于当前发送者正在向机器人陈述、提问或求助。若当前消息只是分享合并转发且没有向机器人提出请求，不得仅因转发内部出现危险、错误、敏感或值得纠正的句子而使用 needs_response 或 chat_in 主动说教；保持 should_reply=false。只有转发外层或清晰上下文确实提出公开问题、求助或要求机器人处理时才回复。`
-	routerForeignCommandGuard   = `明显的其他机器人指令（例如 /ai off、/查谱、#签到、.r、!help）如果没有 @、引用、回复或点名本机器人，就不是发给本机器人的请求：保持 directed_at_bot=false、should_reply=false，category=none。不要因为本机器人也能执行相似操作而冒认。明确指向本机器人时不套用此条。普通的自然语言群聊，即使 @ 或回复了别人，也不是“其他机器人指令”，仍按上下文判断是否适合 chat_in。`
+	routerForeignCommandGuard   = `指令式消息（开关、改设置、测连通这类口令，例如 ai off、ai on、ai ping、/ai off、/查谱、#签到、.r、!help）如果没有 @、引用、回复或点名本机器人，就不是发给本机器人的请求：保持 directed_at_bot=false、should_reply=false，category=none。不管它像不像在指挥本机器人、本机器人能不能执行、前面有没有人这样指挥过它而它回应了，都按这条处理——要本机器人执行就得 @、引用、回复或点名。明确指向本机器人时不套用此条。普通的自然语言群聊，即使 @ 或回复了别人，也不是指令，仍按上下文判断是否适合 chat_in。`
 
 	routerChatInNatural = "当前群已开启自然插话模式：普通群聊只要能基于上下文、稳定知识或可用工具生成具体可靠、可回答且有实质内容的新回复，就使用 category=chat_in、should_reply=true、answerable=true、substantive=true。不要受置信度、抽样率或冷却影响；附和、复读、寒暄、无信息量感想以及只能猜测的内容仍必须保持静默。"
 	routerChatInLevel   = "当前闲聊插话档位：{level}（{label}）。档位只影响运行时的放行松紧，不放宽 substantive 的判断标准：任何档位下附和、复读和寒暄都必须 substantive=false。"
@@ -167,7 +167,7 @@ var (
 	promptRouterAnswerabilitySpec    = routingSpec("guard.answerability", "意图识别：该不该放行", "旧版意图路由每次都附上：意图识别只判断要不要进正式回复，不因答不上来而沉默。", routerAnswerabilityGuard)
 	promptRouterExpressiveChatInSpec = routingSpec("guard.expressive_chat_in", "意图识别：风格化接话", "旧版意图路由每次都附上：调侃、接梗什么时候算有实质内容。", routerExpressiveChatInGuard)
 	promptRouterForwardedContentSpec = routingSpec("guard.forwarded_content", "意图识别：合并转发", "旧版意图路由每次都附上：只是分享合并转发时不主动说教。", routerForwardedContentGuard)
-	promptRouterForeignCommandSpec   = routingSpec("guard.foreign_command", "意图识别：其他机器人指令", "旧版意图路由每次都附上：没有指向本机的其他机器人指令保持静默，普通群聊仍照常判断。", routerForeignCommandGuard)
+	promptRouterForeignCommandSpec   = routingSpec("guard.foreign_command", "意图识别：没点名的指令", "旧版意图路由每次都附上：没有 @、引用、回复或点名本机的指令式消息保持静默，普通群聊仍照常判断。", routerForeignCommandGuard)
 	promptRouterChatInNaturalSpec    = routingSpec("chat_in.natural", "意图识别：自然插话模式", "旧版意图路由、群里开启了自然插话时附上。", routerChatInNatural)
 	promptRouterChatInLevelSpec      = routingSpec("chat_in.level", "意图识别：闲聊插话档位", "旧版意图路由、开启了闲聊插话时附上，告诉判断模型当前档位。", routerChatInLevel, PromptVar{Name: "level", Description: "闲聊插话档位的取值，如 low"}, PromptVar{Name: "label", Description: "档位的中文名"})
 	promptRouterChatInOffSpec        = routingSpec("chat_in.off", "意图识别：闲聊插话关闭", "旧版意图路由、关闭了闲聊插话时附上，封掉 chat_in 分类。", routerChatInOff)

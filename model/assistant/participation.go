@@ -342,13 +342,13 @@ var promptParticipationChatInNoteSpec = registerPrompt(PromptSpec{
 	Default: participationChatInNote,
 })
 
-const participationForeignCommand = `明显的其他机器人指令（例如 /ai off、/查谱、#签到、.r、!help）如果没有 @、引用、回复或点名本机器人，就不是发给本机器人的请求：relevance.directed 填 false，chat_in.score 记 0.00。不要因为本机器人也能执行相似操作而冒认。明确指向本机器人时不套用此条。普通的自然语言群聊，即使 @ 或回复了别人，也不是“其他机器人指令”，仍按上下文判断 chat_in，可以自然评价。`
+const participationForeignCommand = `指令式消息（开关、改设置、测连通这类口令，例如 ai off、ai on、ai ping、/ai off、/查谱、#签到、.r、!help）如果没有 @、引用、回复或点名本机器人，就不是发给本机器人的请求：relevance.directed 填 false，chat_in.score 记 0.00。不管它像不像在指挥本机器人、本机器人能不能执行、前面有没有人这样指挥过它而它回应了，都按这条处理——要本机器人执行就得 @ 或点名。明确指向本机器人时不套用此条。普通的自然语言群聊，即使 @ 或回复了别人，也不是指令，仍按上下文判断 chat_in，可以自然评价。`
 
 var promptParticipationForeignCommandSpec = registerPrompt(PromptSpec{
 	Key:     "routing.participation.foreign_command",
 	Group:   PromptGroupRouting,
-	Title:   "接话评分 · 其他机器人指令",
-	Usage:   "两项评分共用：没有指向本机的其他机器人指令记为不相关且闲聊分为零；普通群聊仍交给模型判断。改动时保留 relevance.directed=false 和 chat_in.score=0.00，确保所有闲聊档位都保持静默。",
+	Title:   "接话评分 · 没点名的指令",
+	Usage:   "两项评分共用：没有 @、引用或点名本机的指令式消息（包括看起来就是在指挥本机的）记为不相关且闲聊分为零；普通群聊仍交给模型判断。改动时保留 relevance.directed=false 和 chat_in.score=0.00，确保所有闲聊档位都保持静默。",
 	Default: participationForeignCommand,
 })
 
