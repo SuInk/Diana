@@ -65,7 +65,7 @@ func (r *Runtime) removeQuotedStickers(ctx context.Context, event MessageEvent) 
 	return result, nil
 }
 
-// runOwnerStickerRemove 是主人的固定指令「删除表情包」：回复那张表情包发这句，直接执行，
+// runOwnerStickerRemove 是主人的内置指令 /remove：回复那张表情包发这句，直接执行，
 // 不过模型。别的说法交给 Agent 的 sticker_remove 工具去理解。
 func runOwnerStickerRemove(r *Runtime, event MessageEvent, _ string) string {
 	result, err := r.removeQuotedStickers(context.Background(), event)
@@ -73,7 +73,7 @@ func runOwnerStickerRemove(r *Runtime, event MessageEvent, _ string) string {
 	case errors.Is(err, errStickerRemoveNoStore):
 		return err.Error() + "。"
 	case errors.Is(err, errStickerRemoveNoQuote):
-		return "请回复要删除的那张表情包，再发「删除表情包」。"
+		return "请回复要删除的那张表情包，再发 /remove。"
 	case err != nil:
 		log.Printf("diana owner sticker remove failed: %v", err)
 		return "删除表情包失败，请稍后重试或检查服务日志。"

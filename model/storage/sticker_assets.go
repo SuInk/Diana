@@ -904,5 +904,5 @@ ON CONFLICT(profile_id, content_sha256) DO NOTHING`, profileID, hash, time.Now()
 	return int(removed), nil
 }
 
-// 主人的「删除表情包」命令靠类型断言拿到这个能力，接口签名一变就静默失效，这里钉住。
+// 主人的 /remove 指令和 sticker_remove 工具靠类型断言拿到这个能力，接口签名一变就静默失效，这里钉住。
 var _ assistant.StickerAssetRemover = (*SQLiteStore)(nil)

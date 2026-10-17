@@ -11,8 +11,8 @@ import (
 
 const dianaStickerRemoveToolName = "sticker_remove"
 
-// dianaStickerRemoveTool 让主人用任意说法删表情包：「这张别用了」「/remove」都由模型
-// 理解后来调，不用一条条写死口令。固定说法「删除表情包」仍是内置指令，不过模型。
+// dianaStickerRemoveTool 让主人用任意说法删表情包：「这张别用了」之类由模型理解后来调，
+// 不用一条条写死口令。/remove 是内置指令，不过模型。
 // 只给主人注册，Run 里再按事件核一次，不靠提示词把关。
 type dianaStickerRemoveTool struct {
 	runtime *Runtime

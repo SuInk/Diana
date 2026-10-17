@@ -43,10 +43,10 @@ func TestOwnerStickerRemoveDeletesQuotedSticker(t *testing.T) {
 		// 没有 content_sha256，也没有本地缓存：得现读图算哈希，结果要和入库时一致。
 		Segments: []MessageSegment{{Type: "image", Data: map[string]string{"sub_type": "1", "url": "base64://" + base64.StdEncoding.EncodeToString(body)}}},
 	}}
-	if !runtime.wouldHandleOwnerCommand(event, "删除表情包") {
+	if !runtime.wouldHandleOwnerCommand(event, "/remove") {
 		t.Fatal("command not recognized")
 	}
-	reply, handled := runtime.handleOwnerCommand(event, "删除表情包")
+	reply, handled := runtime.handleOwnerCommand(event, "/remove")
 	if !handled || !strings.Contains(reply, "移除 1 张") {
 		t.Fatalf("reply=%q handled=%v", reply, handled)
 	}
@@ -61,7 +61,7 @@ func TestOwnerStickerRemoveReportsImageOutsideLibrary(t *testing.T) {
 	event := MessageEvent{Kind: EventKindGroup, ProfileID: "bot", GroupID: "20001", UserID: "10001", Quoted: &QuotedMessage{
 		Segments: []MessageSegment{{Type: "image", Data: map[string]string{imageContentSHA256Key: hash}}},
 	}}
-	reply, handled := runtime.handleOwnerCommand(event, "表情包 删除")
+	reply, handled := runtime.handleOwnerCommand(event, "/remove")
 	if !handled || !strings.Contains(reply, "不在表情包库") {
 		t.Fatalf("reply=%q handled=%v", reply, handled)
 	}
@@ -73,7 +73,7 @@ func TestOwnerStickerRemoveReportsImageOutsideLibrary(t *testing.T) {
 func TestOwnerStickerRemoveNeedsQuotedImage(t *testing.T) {
 	runtime, store := newStickerRemoveRuntime(t)
 	event := MessageEvent{Kind: EventKindGroup, ProfileID: "bot", GroupID: "20001", UserID: "10001"}
-	reply, handled := runtime.handleOwnerCommand(event, "移除表情包")
+	reply, handled := runtime.handleOwnerCommand(event, "/remove")
 	if !handled || !strings.Contains(reply, "请回复") {
 		t.Fatalf("reply=%q handled=%v", reply, handled)
 	}
@@ -85,8 +85,12 @@ func TestOwnerStickerRemoveNeedsQuotedImage(t *testing.T) {
 func TestStickerRemoveIgnoredForNonOwner(t *testing.T) {
 	runtime, _ := newStickerRemoveRuntime(t)
 	event := MessageEvent{Kind: EventKindGroup, ProfileID: "bot", GroupID: "20001", UserID: "30001"}
-	if _, handled := runtime.handleOwnerCommand(event, "删除表情包"); handled {
+	if _, handled := runtime.handleOwnerCommand(event, "/remove"); handled {
 		t.Fatal("non-owner handled")
+	}
+	event.UserID = "10001"
+	if _, handled := runtime.handleOwnerCommand(event, "删除表情包"); handled {
+		t.Fatal("中文说法应交给模型，不是内置指令")
 	}
 }
 
