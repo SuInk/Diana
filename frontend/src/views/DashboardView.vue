@@ -588,9 +588,9 @@ const chartViewOptions: { value: ChartView; label: string }[] = [
 
 function readChartView(): ChartView {
   try {
-    return window.localStorage.getItem(chartViewKey) === "daily" ? "daily" : "hourly";
+    return window.localStorage.getItem(chartViewKey) === "hourly" ? "hourly" : "daily";
   } catch {
-    return "hourly";
+    return "daily";
   }
 }
 
