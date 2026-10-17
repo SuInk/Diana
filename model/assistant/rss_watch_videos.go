@@ -88,3 +88,25 @@ func (p *RSSWatchPlugin) videoWithinLimit(ctx context.Context, raw string, maxBy
 	n, err := io.Copy(io.Discard, io.LimitReader(resp.Body, maxBytes+1))
 	return err == nil && n > 0 && n <= maxBytes
 }
+
+// OneBot implementations can require video to be the sole message segment.
+// Split before delivery so each fragment is sent and acknowledged separately.
+func rssWatchMediaChunks(chunks []string) []string {
+	var out []string
+	for _, chunk := range chunks {
+		var videos []string
+		text := rssWatchVideoTagPattern.ReplaceAllStringFunc(chunk, func(tag string) string {
+			segments := TextToOneBotSegments(tag)
+			if len(segments) != 1 || !rssWatchVideoAllowed(segments[0].Data["file"]) {
+				return tag
+			}
+			videos = append(videos, tag)
+			return ""
+		})
+		if strings.TrimSpace(text) != "" {
+			out = append(out, strings.TrimSpace(text))
+		}
+		out = append(out, videos...)
+	}
+	return out
+}

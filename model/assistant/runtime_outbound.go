@@ -64,6 +64,9 @@ func (r *Runtime) deliveryEvidence(event MessageEvent, messageIDs []string) ([]s
 }
 
 func (r *Runtime) deliverChunks(ctx context.Context, event MessageEvent, chunks []string, cfg BotConfig, decoration outboundDecoration) ([]string, error) {
+	if subscriptionPushKindFromContext(ctx) == subscriptionPushRSSWatch && !decoration.LiteralText {
+		chunks = rssWatchMediaChunks(chunks)
+	}
 	sentChunks := 0
 	messageIDs := make([]string, 0, len(chunks))
 	for _, chunk := range chunks {

@@ -145,7 +145,7 @@ func TestLiveRSSWatchTwitterVideoDelivery(t *testing.T) {
 		}
 		t.Logf("tweet=%s video=%s; normal videos=%d; oversized videos=%d covers=%d", item.Link, delivered.VideoURLs[0], len(delivered.VideoURLs), len(covered.VideoURLs), len(covered.ImageURLs))
 		if path := os.Getenv("DIANA_LIVE_RSS_OUTPUT"); path != "" {
-			b, err := json.Marshal(map[string]string{"normal": normal, "fallback": fallback})
+			b, err := json.Marshal(map[string][]string{"normal": rssWatchMediaChunks([]string{normal}), "fallback": rssWatchMediaChunks([]string{fallback})})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -170,6 +170,9 @@ func TestRSSWatchVideoNoticeDelivery(t *testing.T) {
 			}
 			found := false
 			for _, msg := range channel.sentSnapshot() {
+				if len(msg.VideoURLs) > 0 && (msg.Text != "" || len(msg.ImageURLs) > 0 || len(msg.VideoURLs) != 1) {
+					t.Fatalf("video must be isolated: %+v", msg)
+				}
 				for _, raw := range msg.VideoURLs {
 					found = found || raw == "https://video.twimg.com/a.mp4"
 				}
