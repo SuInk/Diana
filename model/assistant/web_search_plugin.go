@@ -73,7 +73,7 @@ func (p *WebSearchPlugin) Manifest() PluginManifest {
 			{
 				Key:   webSearchSettingMode,
 				Label: "搜索方式",
-				Description: "API 搜索调用 Exa / Tavily，快、结果带摘要；搜索引擎用「网页渲染」的一次性沙盒浏览器打开 Google、Bing 等的结果页，不需要 API Key，" +
+				Description: "API 搜索调用 Exa / Tavily，快、结果带摘要；搜索引擎方式先问 Exa（启用时），没结果再用「网页渲染」的一次性沙盒浏览器打开 Google、Bing 等的结果页，不需要 API Key，" +
 					"但每次要起浏览器、慢一些，遇到人机验证会自动换下一家。两种方式对模型都是同一个 web_search 工具。",
 				Type:    PluginSettingTypeSelect,
 				Default: webSearchModeEngine,
@@ -216,6 +216,21 @@ func (p *WebSearchPlugin) AgentTools(settings SettingValues) ([]agent.Tool, erro
 			}
 		}
 	} else if strings.TrimSpace(settings.String(webSearchSettingMode, webSearchModeEngine)) == webSearchModeEngine {
+		// 没排过顺序时 Exa 打头：生产上 Exa 单次 p50 约 2 秒，浏览器引擎要 10 秒上下。
+		// Exa 出错或没结果才开浏览器，按引擎顺序往下换。排过顺序的走上面那支，不受影响。
+		if settings.Bool(webSearchSettingExaEnabled, true) {
+			providers = append(providers, agent.WebSearchProviderConfig{
+				Name:       "exa",
+				Type:       "exa_mcp",
+				URL:        settings.String(webSearchSettingExaURL, defaultExaSearchURL),
+				Tool:       "web_search_exa",
+				TimeoutMS:  providerTimeout,
+				MaxResults: maxResults,
+			})
+			if key := strings.TrimSpace(settings.String(webSearchSettingExaAPIKey, "")); key != "" {
+				apiKeys["exa"] = key
+			}
+		}
 		// 单源超时不沿用 API 那档：起一次浏览器加渲染就要十来秒，12 秒会把能用的引擎也掐掉。
 		for index, engine := range webSearchEngineOrder(settings.String(webSearchSettingEngines, "")) {
 			provider := agent.WebSearchProviderConfig{

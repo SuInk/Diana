@@ -199,6 +199,12 @@ func defaultSearchProviderIDs(settings SettingValues, providers []SearchProvider
 		}
 	}
 	engineMode := settings.String(webSearchSettingMode, webSearchModeEngine) == webSearchModeEngine
+	// 搜索引擎方式也是 Exa 打头，和 SearchConfiguration 里实际的默认顺序一致。
+	if engineMode {
+		if index := slices.IndexFunc(providers, func(provider SearchProvider) bool { return provider.ID == "exa" }); index >= 0 && !providers[index].Disabled {
+			ids = append(ids, "exa")
+		}
+	}
 	for _, provider := range providers {
 		if !provider.Disabled && ((engineMode && strings.HasPrefix(provider.ID, "engine-")) || (!engineMode && (provider.ID == "exa" || provider.ID == "tavily"))) {
 			ids = append(ids, provider.ID)

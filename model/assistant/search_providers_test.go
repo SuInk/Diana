@@ -267,7 +267,7 @@ func TestSearchProviderCatalogPreservesBrowserEngineDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"engine-google", "engine-bing", "engine-duckduckgo", "engine-baidu"}
+	want := []string{"exa", "engine-google", "engine-bing", "engine-duckduckgo", "engine-baidu"}
 	if !reflect.DeepEqual(config.DefaultAssignment.ProviderIDs, want) {
 		t.Fatalf("default=%v", config.DefaultAssignment.ProviderIDs)
 	}
@@ -280,7 +280,7 @@ func TestSearchProviderCatalogPreservesBrowserEngineDefaults(t *testing.T) {
 	}
 	state, _ := manager.Get(webSearchPluginID)
 	providers, _, err := orderedSearchProviders(effectivePluginSettingsForGroup(state.Manifest.Settings, state.Settings, nil))
-	if err != nil || len(providers) != 4 || providers[3].QueryParam != "wd" {
+	if err != nil || len(providers) != 5 || providers[0].Name != "exa" || providers[4].QueryParam != "wd" {
 		t.Fatalf("providers=%v err=%v", providers, err)
 	}
 	runtime := NewRuntime(BotConfig{ID: "bot", WebSearch: &WebSearchAssignment{Disabled: true, ProviderIDs: []string{"engine-google"}}}, nil, manager, nil, nil, nil, nil)

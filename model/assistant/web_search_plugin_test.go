@@ -131,8 +131,9 @@ func TestWebSearchPluginSearchEngineMode(t *testing.T) {
 		return agent.RenderedPage{URL: rawURL, Title: "结果", Text: "摘要", Links: []agent.RenderedLink{{URL: "https://example.com/a", Text: "结果一"}}}, nil
 	})}
 	tools, err := plugin.AgentTools(SettingValues{
-		webSearchSettingMode:    webSearchModeEngine,
-		webSearchSettingEngines: "Bing，unknown, bing, baidu",
+		webSearchSettingMode:       webSearchModeEngine,
+		webSearchSettingEngines:    "Bing，unknown, bing, baidu",
+		webSearchSettingExaEnabled: false,
 	})
 	if err != nil || len(tools) != 1 || tools[0].Name() != agent.WebSearchToolName {
 		t.Fatalf("tools=%#v err=%v", tools, err)
@@ -154,6 +155,87 @@ func TestWebSearchPluginSearchEngineMode(t *testing.T) {
 	}
 }
 
+// fakeExaMCP 是一个最小的 Exa MCP 服务：available=false 时整个服务 503。
+func fakeExaMCP(t *testing.T, available bool) *httptest.Server {
+	t.Helper()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !available {
+			http.Error(w, "unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		if r.Method == http.MethodDelete {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		var request struct {
+			Method string `json:"method"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		writeEvent := func(payload string) {
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = fmt.Fprintf(w, "event: message\ndata: %s\n\n", payload)
+		}
+		switch request.Method {
+		case "initialize":
+			w.Header().Set("Mcp-Session-Id", "test-session")
+			writeEvent(`{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-03-26","capabilities":{"tools":{}}}}`)
+		case "notifications/initialized":
+			w.WriteHeader(http.StatusAccepted)
+		case "tools/call":
+			writeEvent(`{"jsonrpc":"2.0","id":2,"result":{"content":[{"type":"text","text":"Title: Exa 结果\nURL: https://example.net/exa\nText: 摘要"}],"isError":false}}`)
+		default:
+			http.Error(w, "unknown method", http.StatusBadRequest)
+		}
+	}))
+	t.Cleanup(server.Close)
+	return server
+}
+
+func TestWebSearchPluginSearchEngineModeAsksExaFirst(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		exaAvailable bool
+		wantProvider string
+		wantRendered int
+	}{
+		{name: "exa answers", exaAvailable: true, wantProvider: `"provider": "exa"`, wantRendered: 0},
+		{name: "exa down falls back to engines", exaAvailable: false, wantProvider: `"provider": "bing"`, wantRendered: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var mu sync.Mutex
+			var rendered []string
+			plugin := &WebSearchPlugin{renderer: agent.PageRendererFunc(func(_ context.Context, rawURL string) (agent.RenderedPage, error) {
+				mu.Lock()
+				rendered = append(rendered, rawURL)
+				mu.Unlock()
+				return agent.RenderedPage{URL: rawURL, Title: "结果", Text: "摘要", Links: []agent.RenderedLink{{URL: "https://example.com/a", Text: "结果一"}}}, nil
+			})}
+			tools, err := plugin.AgentTools(SettingValues{
+				webSearchSettingMode:    webSearchModeEngine,
+				webSearchSettingEngines: "bing,baidu",
+				webSearchSettingExaURL:  fakeExaMCP(t, tc.exaAvailable).URL,
+			})
+			if err != nil || len(tools) != 1 {
+				t.Fatalf("tools=%#v err=%v", tools, err)
+			}
+			output, err := tools[0].Run(context.Background(), map[string]any{"query": "测试"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(output, tc.wantProvider) {
+				t.Fatalf("output = %s", output)
+			}
+			// Exa 有结果就不开浏览器；Exa 挂了才按引擎顺序往下换，第一家有结果就停。
+			if len(rendered) != tc.wantRendered {
+				t.Fatalf("rendered = %v", rendered)
+			}
+		})
+	}
+}
+
 func TestWebSearchPluginCustomSearchEngineRunsAlongsideBuiltin(t *testing.T) {
 	var mu sync.Mutex
 	var rendered []string
@@ -170,8 +252,9 @@ func TestWebSearchPluginCustomSearchEngineRunsAlongsideBuiltin(t *testing.T) {
 		}}, nil
 	})}
 	tools, err := plugin.AgentTools(SettingValues{
-		webSearchSettingMode:    webSearchModeEngine,
-		webSearchSettingEngines: "https://search.example.com/s?q={query}&lang=zh\nbing\nhttp://evil.example/?q={query}",
+		webSearchSettingMode:       webSearchModeEngine,
+		webSearchSettingEngines:    "https://search.example.com/s?q={query}&lang=zh\nbing\nhttp://evil.example/?q={query}",
+		webSearchSettingExaEnabled: false,
 	})
 	if err != nil || len(tools) != 1 {
 		t.Fatalf("tools=%#v err=%v", tools, err)

@@ -174,7 +174,7 @@ let demoSearchProviders: SearchProvider[] = [
 const demoSearchKeys: Record<string, string> = { tavily: 'demo-secret' };
 let demoSearchAssignment: SearchConfiguration['default_assignment'] | undefined;
 function demoSearchConfiguration(): SearchConfiguration {
-  return { providers: demoSearchProviders.map(provider => ({ ...provider, api_key_configured: !!demoSearchKeys[provider.id] })), default_assignment: demoSearchAssignment ?? { provider_ids: demoSearchProviders.filter(provider => provider.id.startsWith('engine-') && !provider.disabled).map(provider => provider.id), max_results: 5, provider_timeout_seconds: 25, total_timeout_seconds: 90, source_recall: true, reply_link_policy: 'on_request' } };
+  return { providers: demoSearchProviders.map(provider => ({ ...provider, api_key_configured: !!demoSearchKeys[provider.id] })), default_assignment: demoSearchAssignment ?? { provider_ids: demoSearchProviders.filter(provider => (provider.id === 'exa' || provider.id.startsWith('engine-')) && !provider.disabled).map(provider => provider.id), max_results: 5, provider_timeout_seconds: 25, total_timeout_seconds: 90, source_recall: true, reply_link_policy: 'on_request' } };
 }
 
 

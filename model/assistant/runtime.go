@@ -4485,6 +4485,9 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	ctx = withReplyToolTrace(ctx)
 	// 收尾时填了表格的话先画好，正文发出后跟一张图，见 render_finalize.go。
 	ctx, finalizeRender := withFinalizeRender(ctx)
+	// maibot 回复器的语气改写和发送前审核并行，见 reply_tone_parallel.go。
+	ctx, deferredTone := withDeferredReplyTone(ctx)
+	defer deferredTone.stop()
 	reply, err = r.generateReply(ctx, replyCfg, event, relationship, messages, agentRegistry)
 	if err == nil && dependencyIndex >= 0 && dependency.pixels && VisionDescriptionRefused(reply) && !hasExternalSideEffect(ctx) {
 		// 附了原图，模型却回「没收到图片」：这条视觉链路送不进图（模型不支持、网关把
@@ -4578,6 +4581,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	}
 	// 回复疲劳只管正常生成的回复；插件直发的内容（链接解析之类）是对方要的东西，不走这一项。
 	ctx = withReplyFatigueAudit(ctx)
+	// maibot 的语气改写此时在后台跑着，审核拿草稿同时进行，放行后再换上改写稿。
 	prepared := r.prepareReplyAudit(ctx, event, cleanText, reply, cfg, proactiveTriggered)
 	// 叫停可能是这条还在生成时到的：发送前再看一眼窗口，在路上的接话回复不发。
 	if err := r.groupStopDropsReply(event, proactiveTriggered, time.Now()); err != nil {
@@ -4586,6 +4590,10 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	auditIntent, err := r.applyReplyAudit(ctx, event, cfg, prepared)
 	if err != nil {
 		return "", err
+	}
+	reply = adoptDeferredTone(ctx, deferredTone, event, reply)
+	if repeatsInterimMessage(ctx, reply) {
+		return "", newModelSilentFinishError("收尾和中途说过的话重复")
 	}
 	if !prepared.skip && prepared.need.AccountSafety && prepared.err == nil && prepared.reply == reply {
 		sendBaseCtx = withReplyAccountSafetyAudited(sendBaseCtx, reply)
@@ -4848,10 +4856,7 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 			text = resp.SilentContent
 		}
 		text = r.applyFinalizeRender(ctx, event, text, resp.FinalizeFields[renderFinalizeFieldName])
-		if cfg.ReplyComposer == "maibot" {
-			text = r.composeMaiBotReply(replyerCtx, cfg, event, messages, text)
-		}
-		return r.prepareGeneratedReply(replyerCtx, cfg, text, event)
+		return r.composeAndPrepareReply(replyerCtx, cfg, event, messages, text)
 	}
 	if mode := imageTextModeFromContext(ctx); mode != nil {
 		messages = mode.replaceImageParts(ctx, messages)
@@ -4873,10 +4878,7 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 	if err != nil {
 		return "", err
 	}
-	if cfg.ReplyComposer == "maibot" {
-		raw = r.composeMaiBotReply(replyerCtx, cfg, event, messages, raw)
-	}
-	return r.prepareGeneratedReply(replyerCtx, cfg, raw, event)
+	return r.composeAndPrepareReply(replyerCtx, cfg, event, messages, raw)
 }
 
 type runtimeAgentLLMProvider struct {
