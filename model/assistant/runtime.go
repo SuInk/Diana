@@ -302,6 +302,7 @@ func DescribeEventOutcome(outcome string) (decision string, reason string, handl
 	case "ignored_stop_requested":
 		return "not_replied", "发送前审核认定对方明确要求不要再回复，这条回复没有发送，并已按响应限制暂停接话", false
 	case "ignored_self_repeat":
+		// 「复读自己」判定已删除，这里只为显示旧事件。
 		return "not_replied", "发送前审核认定这条回复只是把机器人自己刚说过的话换个说法又说一遍，没有发送；只跳过这一条，对方下一条带来新内容时照常回答", false
 	case "ignored_ai_reply_loop":
 		return "not_replied", "发送前审核认定这一来一回已在空转（双方都只在应付没有内容，或和被标记的机器人没有目的地来回），为避免继续接茬而没有发送", false
@@ -2300,13 +2301,6 @@ func (r *Runtime) replyAndRecordTurn(ctx context.Context, event MessageEvent, te
 			record.Error = ""
 			r.record(record)
 			return "ignored_conversation_closed", nil
-		}
-		if errors.Is(err, errReplySelfRepeatDropped) {
-			// 这条候选只是把机器人自己说过的话又说了一遍：不发，也不牵连后面的消息。
-			setEventRecordOutcome(&record, "ignored_self_repeat")
-			record.Error = ""
-			r.record(record)
-			return "ignored_self_repeat", nil
 		}
 		if errors.Is(err, errReplyLoopDetected) {
 			// 发送前审核认定在空转且累计到阈值：这条不发，暂停已同时生效。

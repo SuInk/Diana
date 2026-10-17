@@ -93,17 +93,6 @@ func replyAuditDecisionSpec(need replyAuditNeed) *llm.DecisionSpec {
 				ConfidencePath: "reply_loop_confidence",
 				ReasonPath:     "reply_loop_reason",
 			},
-			llm.DecisionQuestion{
-				Key:            "reply_loop_self_repeat",
-				Kind:           llm.DecisionNoul,
-				Label:          "机器人自己是不是在复读",
-				Instructions:   "结合当前请求及引用，比较候选整体与机器人近期答复。部分重复交给语义去重编辑器，不能因此丢掉整条回答。判的是意思不是字，但要明显在原地打转才算，拿不准一律判否。" + replyAfterAnswerRule,
-				TrueCriteria:   "候选整体只是换措辞重复近期答复，没有任何新增回答、纠正或必要澄清：反复道别、反复催睡、反复答应同一件事、反复说同一个结论",
-				FalseCriteria:  "给出了前面没有的信息、步骤、原因、数字或新的提议，哪怕用词高度重合；连续回答同一个问题、补充细节；实际回应上一条答案的追问、反驳或纠正，给出新解释或必要更正；保留用户要求重述或重新解释所需的内容；仅其中一句玩笑或结尾重复；同类的话只说过一两次。只重复上一条无效玩笑或空话不算重答。拿不准判否",
-				Path:           "reply_loop_self_repeat",
-				ConfidencePath: "reply_loop_self_repeat_confidence",
-				ReasonPath:     "reply_loop_reason",
-			},
 		)
 		if need.Density != nil {
 			questions = append(questions, llm.DecisionQuestion{

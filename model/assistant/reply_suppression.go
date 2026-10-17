@@ -39,10 +39,6 @@ var errReplySuppressedBeforeSend = errors.New("diana: reply suppressed before se
 // 这条回复因此不发出去，暂停也从这一刻起生效。
 var errReplyLoopDetected = errors.New("chatbot: reply loop detected before send")
 
-// errReplySelfRepeatDropped 表示这条候选回复只是把机器人自己说过的话又说了一遍。
-// 只丢这一条，不开降欲望也不暂停：对方下一条要是带来了新东西，照常回答。
-var errReplySelfRepeatDropped = errors.New("chatbot: candidate reply repeats the bot's own recent replies")
-
 type replySuppressionSendGuardKey struct{}
 
 type replySuppressionOutboundGateKey struct{}
@@ -103,46 +99,23 @@ type botReplyLoopAIDecision struct {
 	MeaninglessLoop bool `json:"meaningless_loop"`
 	// PurposelessLoop 是「回得很密、而且这一连串来回没有明确任务」：漫无目的地互相接戏、
 	// 续剧情、斗嘴。下棋报步、解题、一起做事且在推进的不算。
-	PurposelessLoop bool `json:"purposeless_loop"`
-	// SelfRepeat 只看机器人自己最近几条回复：这一条是不是把它们又说了一遍。
-	//
-	// 另外三项都要先对发送者或这一来一回下判断——对方是不是 AI、对方这条有没有内容、
-	// 这串来回密不密。机器人和另一台机器人互道晚安时这三项全落空：对方的话像真人，
-	// 每条都有内容，密度也说不上异常，可机器人自己已经把同一句「晚安、被窝、明天那页」
-	// 换着说了七遍。判据换成只看自己说过什么，那七遍才藏不住。
-	//
-	// 字面统计做不了这件事：2026-09-20 那段循环用字符二元组 Dice、内容字重合、新词率
-	// 三种度量回放 5 天 2959 条发言，都和正常对话分不开——重复的是「又道了一次别」这个
-	// 语义动作，措辞每条都新，而群里大量连续答同一个技术问题的发言在字面上比它还重复。
-	SelfRepeat bool    `json:"self_repeat"`
-	Confidence float64 `json:"confidence"`
-	Reason     string  `json:"reason"`
-	// selfRepeatCounts 决定「在复读自己」算不算一次空转、要不要累计到暂停对方。
-	// 只有对方被管理员标记为机器人时才算：互道晚安七遍的
-	// 那种循环，暂停的是另一台机器人。对方是真人时，复读是机器人自己的毛病，只丢
-	// 这一条回复（selfRepeatDropsReply），不该连坐对方——线上被记过的真人里，大多
-	// 是正常追问时机器人答得有点重复。
-	selfRepeatCounts bool
+	PurposelessLoop bool    `json:"purposeless_loop"`
+	Confidence      float64 `json:"confidence"`
+	Reason          string  `json:"reason"`
 }
 
-// counts 决定这次结论算不算一次空转。只有「没内容」「没目的」或（对方是机器人时）
-// 「在复读自己」才算。「没目的」只在对方被标记为机器人时才会问（见 replyAuditNeed），所以
-// 实际上也只对机器人计数。
+// counts 决定这次结论算不算一次空转。只有「没内容」「没目的」才算。「没目的」只在
+// 对方被标记为机器人时才会问（见 replyAuditNeed），所以实际上也只对机器人计数。
 //
 // 以前还让审核判「对方是不是自动应答的 AI」，只记录不计数；线上 7 天一次都没判出来，
 // 连刷了上百条晚安的那台 AI 也没有，已经删掉。认机器人只看管理员标记。
+// 「机器人在复读自己」那项也删了：它按全群最近几条回复比，换个人问同一件事、
+// 连续发图都会被当成复读整条吞掉。
 func (decision botReplyLoopAIDecision) counts() bool {
-	if !decision.MeaninglessLoop && !decision.PurposelessLoop && !(decision.SelfRepeat && decision.selfRepeatCounts) {
+	if !decision.MeaninglessLoop && !decision.PurposelessLoop {
 		return false
 	}
 	return decision.confident()
-}
-
-// selfRepeatDropsReply 报告这条候选回复是不是该就地丢掉：判到复读自己就不发这一条，
-// 不牵连这个账号后面的消息——「在复读自己」说的只是候选回复这一条，下一条要是带来
-// 了新东西，本来就该照常回答。
-func (decision botReplyLoopAIDecision) selfRepeatDropsReply() bool {
-	return decision.SelfRepeat && decision.confident()
 }
 
 func (decision botReplyLoopAIDecision) confident() bool {
@@ -602,9 +575,9 @@ func (r *Runtime) recordBotReplyLoopClassification(ctx context.Context, event Me
 		Metadata: map[string]any{
 			"group_id": event.GroupID, "user_id": event.UserID, "trigger_kind": candidate.TriggerKind,
 			"meaningless_loop": decision.MeaninglessLoop,
-			"purposeless_loop": decision.PurposelessLoop, "self_repeat": decision.SelfRepeat,
-			"confidence": decision.Confidence,
-			"reason":     decision.Reason, "counted": decision.counts(), "hit_count": hitCount,
+			"purposeless_loop": decision.PurposelessLoop,
+			"confidence":       decision.Confidence,
+			"reason":           decision.Reason, "counted": decision.counts(), "hit_count": hitCount,
 			"threshold": threshold, "window_minutes": int(botReplyLoopWindow / time.Minute),
 			"suppression_allowed": suppressionAllowed,
 		},

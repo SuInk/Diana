@@ -1065,8 +1065,7 @@ func TestReplyRefusalSuppressionCanBeTurnedOff(t *testing.T) {
 	}
 }
 
-// 临时响应屏蔽可以整体关掉：空转、拒答、叫停都不再暂停人，已有的屏蔽也不拦；
-// 复读照样只丢那一条。
+// 临时响应屏蔽可以整体关掉：空转、拒答、叫停都不再暂停人，已有的屏蔽也不拦。
 func TestReplySuppressionMasterSwitchOff(t *testing.T) {
 	disabled := false
 	r := densityTestRuntime(BotConfig{ReplySuppressionEnabled: &disabled, MarkedBotIDs: []string{"20002"}}, nil)
@@ -1078,12 +1077,12 @@ func TestReplySuppressionMasterSwitchOff(t *testing.T) {
 	if _, blocked := r.activeReplySuppression(event, time.Now()); blocked {
 		t.Fatal("总开关关着，已有的屏蔽也不该拦")
 	}
-	selfRepeat := proactiveReplyQualityDecision{Confidence: 0.9, ReplyLoopSelfRepeat: true, ReplyLoopConfidence: 0.95, ReplyLoopSelfRepeatConfidence: 0.95}
+	loop := proactiveReplyQualityDecision{Confidence: 0.9, ReplyLoopMeaningless: true, ReplyLoopConfidence: 0.95}
 	now := time.Now()
 	for i := 0; i < defaultBotReplyLoopThreshold+1; i++ {
 		event := botReplyLoopEvent(r, "off", "20002", i, now.Add(time.Duration(i-5)*time.Minute), 10*time.Second, "晚安")
-		if err := r.applyReplyLoopVerdict(context.Background(), event, botReplyLoopCandidate{TriggerKind: "quote"}, selfRepeat, true); !errors.Is(err, errReplySelfRepeatDropped) {
-			t.Fatalf("第 %d 次：总开关关着时复读只丢这一条，err=%v", i+1, err)
+		if err := r.applyReplyLoopVerdict(context.Background(), event, botReplyLoopCandidate{TriggerKind: "quote"}, loop, true); err != nil {
+			t.Fatalf("第 %d 次：总开关关着时空转不拦回复，err=%v", i+1, err)
 		}
 	}
 }
