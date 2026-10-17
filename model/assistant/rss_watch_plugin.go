@@ -49,7 +49,7 @@ var twitterHandlePattern = regexp.MustCompile(`^[A-Za-z0-9_]{1,15}$`)
 
 type RSSWatchPlugin struct {
 	client *http.Client
-	feeds  sharedResultCache[parsedFeed]
+	feeds  sharedResultCache[rssFeedCache]
 }
 
 type rssWatchSnapshot struct {
@@ -80,6 +80,41 @@ type parsedFeed struct {
 	Items []rssWatchItem
 }
 
+// Cache serialization includes photos, while rssWatchItem deliberately excludes
+// them from the judge payload (and therefore the judgment cache key).
+type rssFeedCache struct {
+	Title string
+	Items []rssFeedCacheItem
+}
+
+type rssFeedCacheItem struct {
+	rssWatchItem
+	Images []string `json:"images,omitempty"`
+}
+
+func cacheRSSFeed(feed parsedFeed) rssFeedCache {
+	cached := rssFeedCache{Title: feed.Title}
+	if feed.Items != nil {
+		cached.Items = make([]rssFeedCacheItem, len(feed.Items))
+		for i, item := range feed.Items {
+			cached.Items[i] = rssFeedCacheItem{rssWatchItem: item, Images: item.Images}
+		}
+	}
+	return cached
+}
+
+func (cached rssFeedCache) parsed() parsedFeed {
+	feed := parsedFeed{Title: cached.Title}
+	if cached.Items != nil {
+		feed.Items = make([]rssWatchItem, len(cached.Items))
+		for i, item := range cached.Items {
+			feed.Items[i] = item.rssWatchItem
+			feed.Items[i].Images = item.Images
+		}
+	}
+	return feed
+}
+
 func NewRSSWatchPlugin(client *http.Client) *RSSWatchPlugin {
 	if client == nil {
 		client = netguard.NewPublicHTTPClient(20 * time.Second)
@@ -91,7 +126,7 @@ func (p *RSSWatchPlugin) Manifest() PluginManifest {
 	return PluginManifest{
 		ID:            rssWatchPluginID,
 		Name:          "RSS 订阅",
-		Version:       "0.2.6",
+		Version:       "0.2.7",
 		Description:   "订阅 RSS/Atom 或指定 X (Twitter) 用户，一条订阅可以同时盯多个账号或 Feed 并共用一套规则；发现新内容后由 LLM 判断是否需要通知，并生成实际回复。",
 		Official:      true,
 		BuiltIn:       true,
@@ -297,7 +332,11 @@ func (p *RSSWatchPlugin) fetch(ctx context.Context, feedURL string, settings Set
 	if p.client.Jar != nil {
 		key = ""
 	}
-	return p.feeds.load(ctx, key, 30*time.Second, 60*time.Second, nil, func(loadCtx context.Context) (parsedFeed, error) { return p.fetchFresh(loadCtx, url, settings) })
+	cached, err := p.feeds.load(ctx, key, 30*time.Second, 60*time.Second, nil, func(loadCtx context.Context) (rssFeedCache, error) {
+		feed, err := p.fetchFresh(loadCtx, url, settings)
+		return cacheRSSFeed(feed), err
+	})
+	return cached.parsed(), err
 }
 
 // fetchFresh 抓一次 Feed。订阅地址里常带着私有令牌（Gitea、RSSHub 的 ?key=、

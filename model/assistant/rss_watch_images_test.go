@@ -4,9 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
+	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestRSSWatchTwitterFeedKeepsPhotoURLs(t *testing.T) {
@@ -225,5 +230,54 @@ func TestRSSWatchRepostsAndQuotesKeepPhotos(t *testing.T) {
 	}
 	if len(feed.Items[3].Images) != 0 {
 		t.Fatal(feed.Items[3].Images)
+	}
+}
+
+// Exercise the real fetch/cache boundary: parser-only tests miss JSON data loss.
+func TestRSSWatchCachedFeedKeepsPhotosOutOfJudgePayload(t *testing.T) {
+	const body = `{"code":200,"results":[{"id":"2111110176485052665","url":"https://x.com/animecorner_ac/status/2111110176485052665","text":"New visual","media":{"photos":[{"url":"https://pbs.twimg.com/media/A.jpg"},{"url":"https://pbs.twimg.com/media/B.png"}]}}]}`
+	want := []string{"https://pbs.twimg.com/media/A.jpg", "https://pbs.twimg.com/media/B.png"}
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(body))
+	}))
+	defer server.Close()
+	p := NewRSSWatchPlugin(server.Client())
+	for _, phase := range []string{"fresh", "cached"} {
+		t.Run(phase, func(t *testing.T) {
+			change, err := p.check(context.Background(), server.URL, "older", time.Time{}, SettingValues{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(change.Items) != 1 || !slices.Equal(change.Items[0].Images, want) {
+				t.Fatalf("cached feed lost photos: %#v", change.Items)
+			}
+			payload, err := json.Marshal(change)
+			if err != nil {
+				t.Fatal(err)
+			}
+			withoutImages := change
+			withoutImages.Items = append([]rssWatchItem(nil), change.Items...)
+			withoutImages.Items[0].Images = nil
+			baseline, err := json.Marshal(withoutImages)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(payload) != string(baseline) || strings.Contains(string(payload), "pbs.twimg.com") {
+				t.Fatalf("photos leaked into judge payload: %s", payload)
+			}
+			reply := "New visual " + change.Items[0].Link
+			outgoing := rssWatchOutgoingImages(OutgoingMessage{Text: reply + rssWatchReplyImages(reply, change.Items)})
+			if outgoing.Text != reply || !slices.Equal(outgoing.ImageURLs, want) {
+				t.Fatalf("outgoing message = %#v", outgoing)
+			}
+			// A subscriber must not mutate another subscriber's cached image list.
+			change.Items[0].Images[0] = "mutated"
+		})
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("fetches = %d, want 1", calls.Load())
 	}
 }
