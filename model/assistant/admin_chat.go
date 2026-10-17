@@ -24,32 +24,29 @@ func (r *Runtime) RunAdminChat(ctx context.Context, profileID string, req agent.
 		}
 	}
 	cfg := r.profileConfig(profileID).WithDefaults()
-	event := MessageEvent{ProfileID: cfg.ID, Platform: cfg.Platform, MessageID: req.TraceID}
+	// 发言人记成主人：llm_config、bot_markers 这类主人工具在执行时还会再核一次身份。
+	// 不带群号也不标私聊，发消息的工具下面全部摘掉，不会因此发到主人私聊里。
+	event := MessageEvent{ProfileID: cfg.ID, Platform: cfg.Platform, MessageID: req.TraceID, UserID: strings.TrimSpace(cfg.OwnerID)}
 	ctx = withModelConfigEvent(ctx, event)
 	ctx = withLLMUsagePurpose(withLLMUsageContext(ctx, event), "admin_chat")
+	ctx = context.WithValue(ctx, adminChatRunKey{}, true)
 	adminCfg := r.agentRegistryConfig(cfg, event, true)
-	// The control-plane conversation has its own instructions and never borrows
-	// platform-message send tools or the bot's social persona.
 	adminCfg.BuiltinSkills = nil
-	base, err := r.agentExtensionBase(ctx, adminCfg, !cfg.agentSafeMode())
-	if err != nil {
-		return nil, err
-	}
-	var registry *agent.ToolRegistry
-	if base != nil {
-		registry, err = base.NewView(adminCfg)
-	} else {
-		registry, err = agent.NewDefaultToolRegistry(adminCfg)
-		if err == nil && cfg.agentSafeMode() {
-			registry.RegisterScopedSkills(nil, safeModeLocalSkills(adminCfg), adminCfg.ReservedSkillNames)
-		}
-	}
+	adminCfg.CoreTools = adminChatCoreTools
+	// 工具面和主人私聊走同一套装配（插件工具、llm_usage、llm_config、github、notebook 等），以前这里
+	// 自己拼了一份只有文件、浏览器和扩展管理的注册表，问到别的就只能说「没有这个工具」。
+	// 管理会话不挂 Agent 开关：机器人关了 Agent，管理员照样要能排查。
+	registryCfg := cfg
+	registryCfg.AgentEnabled = true
+	registry, err := r.newReplyAgentRegistry(ctx, registryCfg, event, adminChatRelationship(), nil)
 	if err != nil {
 		return nil, err
 	}
 	defer registry.Close()
-	if err := r.registerRepoPluginBundles(ctx, registry, adminCfg, event); err != nil {
-		return nil, err
+	// 管理会话没有对应的群或私聊：往会话里发消息、读「当前会话」、到点往会话里投递的
+	// 工具在这里要么发错地方，要么只能失败，一律摘掉。
+	for _, name := range adminChatSessionBoundTools {
+		registry.Remove(name)
 	}
 	configTool := newDianaBotConfigTool(r, event)
 	configTool.admin = true
@@ -76,6 +73,45 @@ func (r *Runtime) RunAdminChat(ctx context.Context, profileID string, req agent.
 		return nil, err
 	}
 	return runner.Run(ctx, req)
+}
+
+// adminChatRunKey 标记「这是 WebUI 管理会话」：注册表不带机器人的平台协议 Skill。
+type adminChatRunKey struct{}
+
+func isAdminChatRun(ctx context.Context) bool {
+	value, _ := ctx.Value(adminChatRunKey{}).(bool)
+	return value
+}
+
+// 管理会话只有登录过的 WebUI 管理员进得来，按主人算。
+func adminChatRelationship() RelationshipPolicy {
+	return RelationshipPolicy{Owner: true, AllowImageGeneration: true, AllowImageEditing: true, AllowDocumentOCR: true, AllowPersonalSchedule: true}
+}
+
+// adminChatCoreTools 是管理会话每一步都带完整定义的工具：原来那份注册表里的诊断、
+// 文件、命令和扩展管理照旧常驻，后来补齐的插件工具和 Diana 工具按需加载。
+// WebUI 按会话记着已加载的工具（Request.LoadedTools），下一轮不用再加载。
+var adminChatCoreTools = []string{
+	"admin_diagnostics", "admin_group_history", "bot_config", "runtime_model",
+	agent.WebSearchToolName, "list_capabilities", "capabilities", "read_skill",
+	"install_skill", "uninstall_skill", "mcp_install", "mcp_uninstall", "mcp_set_enabled",
+	"run_command", "read_file", "list_files", "find_files", "grep", "write_file", "edit_file",
+	"manage_files", "extract_archive", "llm_usage", "llm_config", "host_stats", "version",
+}
+
+// adminChatSessionBoundTools 依赖「当前群或私聊」：发消息、读本会话记录或附件、
+// 按发言人记事、到点往本会话投递。管理会话没有这样的会话。群聊原文改用
+// admin_group_history 查。
+var adminChatSessionBoundTools = []string{
+	dianaInterimMessageToolName, dianaCrossSessionToolName, dianaPokeToolName,
+	dianaPlatformToolName, dianaChatHistoryToolName, dianaHistoryImagesToolName,
+	"telegram_images", "send_attachment", dianaFileDeliveryToolName, dianaRenderMediaToolName,
+	dianaStickerToolName, dianaThreadStateToolName, dianaSelfNoteToolName,
+	dianaBrowserHandoffToolName, "relationship", dianaMemoryToolName,
+	// 出图的结果要随回复发进会话，WebUI 这边只收文字，生成了也看不到。
+	dianaImageToolName, dianaVideoToolName, dianaRenderToolName, dianaGroupRelationsToolName,
+	"reminder", dianaEventTriggerToolName, dianaSubscriptionToolName, dianaBackgroundTaskToolName,
+	replyBlockToolName,
 }
 
 const AdminChatSystemPrompt = `你是 Diana WebUI 的管理助手。当前用户已通过 WebUI 管理员登录，可以管理 Diana 全部机器人、安装 Skills、配置 MCP 和排查问题。

@@ -28,6 +28,10 @@ type agentReplyScope struct {
 
 func (r *Runtime) newAgentRegistry(ctx context.Context, cfg BotConfig, event MessageEvent, relationship RelationshipPolicy, extraTools ...agent.Tool) (*agent.ToolRegistry, error) {
 	agentCfg := r.agentRegistryConfig(cfg, event, relationship.Owner)
+	if isAdminChatRun(ctx) {
+		// 管理会话有自己的说明，不带机器人收发平台消息的协议 Skill。
+		agentCfg.BuiltinSkills = nil
+	}
 	overrides, err := agent.LoadExtensionOverrides(AgentWorkspaceDir(), event.ProfileID)
 	if err != nil {
 		return nil, err
