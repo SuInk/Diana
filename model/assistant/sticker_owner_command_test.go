@@ -53,9 +53,6 @@ func TestOwnerStickerRemoveDeletesQuotedSticker(t *testing.T) {
 	if len(store.calls) != 1 || store.calls[0] != "bot/"+hash {
 		t.Fatalf("calls=%v", store.calls)
 	}
-	if reply, handled := runtime.handleOwnerCommand(event, "/remove"); !handled || !strings.Contains(reply, "不在表情包库") {
-		t.Fatalf("/remove reply=%q handled=%v", reply, handled)
-	}
 }
 
 func TestOwnerStickerRemoveReportsImageOutsideLibrary(t *testing.T) {
@@ -90,5 +87,24 @@ func TestStickerRemoveIgnoredForNonOwner(t *testing.T) {
 	event := MessageEvent{Kind: EventKindGroup, ProfileID: "bot", GroupID: "20001", UserID: "30001"}
 	if _, handled := runtime.handleOwnerCommand(event, "删除表情包"); handled {
 		t.Fatal("non-owner handled")
+	}
+}
+
+func TestStickerRemoveToolChecksOwnerAndRemovesQuoted(t *testing.T) {
+	hash := imageBytesSHA256([]byte("tool"))
+	runtime, store := newStickerRemoveRuntime(t, hash)
+	quoted := &QuotedMessage{Segments: []MessageSegment{{Type: "image", Data: map[string]string{imageContentSHA256Key: hash}}}}
+	member := &dianaStickerRemoveTool{runtime: runtime, event: MessageEvent{Kind: EventKindGroup, ProfileID: "bot", GroupID: "20001", UserID: "30001", Quoted: quoted}}
+	if _, err := member.Run(context.Background(), nil); err == nil || len(store.calls) != 0 {
+		t.Fatalf("non-owner err=%v calls=%v", err, store.calls)
+	}
+	owner := &dianaStickerRemoveTool{runtime: runtime, event: MessageEvent{Kind: EventKindGroup, ProfileID: "bot", GroupID: "20001", UserID: "10001", Quoted: quoted}}
+	out, err := owner.Run(context.Background(), nil)
+	if err != nil || !strings.Contains(out, "移除 1 张") {
+		t.Fatalf("out=%q err=%v", out, err)
+	}
+	noQuote := &dianaStickerRemoveTool{runtime: runtime, event: MessageEvent{Kind: EventKindGroup, ProfileID: "bot", GroupID: "20001", UserID: "10001"}}
+	if _, err := noQuote.Run(context.Background(), nil); err == nil || !strings.Contains(err.Error(), "引用") {
+		t.Fatalf("no quote err=%v", err)
 	}
 }

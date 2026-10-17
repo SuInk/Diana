@@ -356,6 +356,11 @@
       },
       {
         "category": "self_modify",
+        "tool": "sticker_remove",
+        "reason": "删除表情包并拉黑"
+      },
+      {
+        "category": "self_modify",
         "tool": "llm_config",
         "field": "operation",
         "operations": [

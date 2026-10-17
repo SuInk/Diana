@@ -100,6 +100,7 @@ func (r *Runtime) newAgentRegistry(ctx context.Context, cfg BotConfig, event Mes
 		registry.Register(newDianaBotConfigTool(r, event))
 		registry.Register(&dianaUsageTool{runtime: r, event: event})
 		registry.Register(&dianaBotMarkersTool{runtime: r, event: event})
+		registry.Register(&dianaStickerRemoveTool{runtime: r, event: event})
 		registry.Register(newDianaExtensionAccessTool(r, event))
 	}
 	// 所有人都要能用：它的用途就是核实「我是主人」这类声称，只给主人用等于没用。
