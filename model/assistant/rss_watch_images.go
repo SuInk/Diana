@@ -15,7 +15,7 @@ const (
 
 // rssWatchReplyImages keeps photos out of the judge prompt and attaches only
 // unambiguously cited items. A single-item batch needs no explicit citation.
-func rssWatchReplyImages(reply string, items []rssWatchItem) string {
+func rssWatchMatchedItems(reply string, items []rssWatchItem) []rssWatchItem {
 	replyLinks := rssWatchContentLinks(reply)
 	owners := make(map[string]int)
 	for _, item := range items {
@@ -40,6 +40,14 @@ func rssWatchReplyImages(reply string, items []rssWatchItem) string {
 			hits = append(hits, item)
 		}
 	}
+	return hits
+}
+
+func rssWatchReplyImages(reply string, items []rssWatchItem) string {
+	return rssWatchItemsImages(rssWatchMatchedItems(reply, items))
+}
+
+func rssWatchItemsImages(hits []rssWatchItem) string {
 	seen := make(map[string]bool)
 	var out strings.Builder
 	total := 0
@@ -112,6 +120,18 @@ func rssWatchOutgoingImages(msg OutgoingMessage) OutgoingMessage {
 			return tag
 		}
 		msg.ImageURLs = append(msg.ImageURLs, raw)
+		return ""
+	})
+	msg.Text = rssWatchVideoTagPattern.ReplaceAllStringFunc(msg.Text, func(tag string) string {
+		segments := TextToOneBotSegments(tag)
+		if len(segments) != 1 || segments[0].Type != "video" {
+			return tag
+		}
+		raw := segments[0].Data["file"]
+		if !rssWatchVideoAllowed(raw) {
+			return tag
+		}
+		msg.VideoURLs = append(msg.VideoURLs, raw)
 		return ""
 	})
 	msg.Text = strings.TrimSpace(msg.Text)

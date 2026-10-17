@@ -30,7 +30,8 @@ import (
 const (
 	rssWatchPluginID = "official.rss-watch"
 
-	rssWatchSettingTimeout = "timeout_seconds"
+	rssWatchSettingTimeout    = "timeout_seconds"
+	rssWatchSettingVideoMaxMB = "video_max_mb"
 	// rssWatchDefaultTimeoutSeconds 和仓库订阅的默认超时同一个理由：订阅是后台任务，
 	// 等久一点没有代价，等不到才有——超时到了这一轮就整个失败，重试要等下一个周期。
 	rssWatchDefaultTimeoutSeconds = 90
@@ -72,7 +73,8 @@ type rssWatchItem struct {
 	Content     string    `json:"content,omitempty"`
 	PublishedAt time.Time `json:"published_at,omitempty"`
 	// Images 是条目自带的配图地址，只给推送时附图用，不进判断提示词。
-	Images []string `json:"-"`
+	Images []string        `json:"-"`
+	Videos []rssWatchVideo `json:"-"`
 }
 
 type parsedFeed struct {
@@ -89,7 +91,8 @@ type rssFeedCache struct {
 
 type rssFeedCacheItem struct {
 	rssWatchItem
-	Images []string `json:"images,omitempty"`
+	Images []string        `json:"images,omitempty"`
+	Videos []rssWatchVideo `json:"videos,omitempty"`
 }
 
 func cacheRSSFeed(feed parsedFeed) rssFeedCache {
@@ -97,7 +100,7 @@ func cacheRSSFeed(feed parsedFeed) rssFeedCache {
 	if feed.Items != nil {
 		cached.Items = make([]rssFeedCacheItem, len(feed.Items))
 		for i, item := range feed.Items {
-			cached.Items[i] = rssFeedCacheItem{rssWatchItem: item, Images: item.Images}
+			cached.Items[i] = rssFeedCacheItem{rssWatchItem: item, Images: item.Images, Videos: item.Videos}
 		}
 	}
 	return cached
@@ -110,6 +113,7 @@ func (cached rssFeedCache) parsed() parsedFeed {
 		for i, item := range cached.Items {
 			feed.Items[i] = item.rssWatchItem
 			feed.Items[i].Images = item.Images
+			feed.Items[i].Videos = item.Videos
 		}
 	}
 	return feed
@@ -126,13 +130,14 @@ func (p *RSSWatchPlugin) Manifest() PluginManifest {
 	return PluginManifest{
 		ID:            rssWatchPluginID,
 		Name:          "RSS 订阅",
-		Version:       "0.2.7",
+		Version:       "0.2.8",
 		Description:   "订阅 RSS/Atom 或指定 X (Twitter) 用户，一条订阅可以同时盯多个账号或 Feed 并共用一套规则；发现新内容后由 LLM 判断是否需要通知，并生成实际回复。",
 		Official:      true,
 		BuiltIn:       true,
 		ReportsErrors: true,
 		Permissions:   []string{"network:https", "task:persistent", "message:send", "llm:generate"},
 		Settings: []PluginSettingSpec{
+			{Key: rssWatchSettingVideoMaxMB, Label: "视频大小上限", Description: "推特视频超过此大小、读取失败或超时时只附封面；每条推文最多一个视频，每次通知最多两个。", Type: PluginSettingTypeNumber, Default: defaultVideoMaxMB, Min: settingRange(1), Max: settingRange(2000), Step: 1, Unit: "MiB"},
 			{
 				Key:         rssWatchSettingTimeout,
 				Label:       "抓取超时",
@@ -326,6 +331,7 @@ func (p *RSSWatchPlugin) fetch(ctx context.Context, feedURL string, settings Set
 		options = map[string]any{}
 	}
 	delete(options, rssWatchSettingItemLimit)
+	delete(options, rssWatchSettingVideoMaxMB)
 	options[rssWatchSettingTimeout] = max(5, settings.Int(rssWatchSettingTimeout, 20))
 	key := sharedResultKey([]any{"rss-feed-v1", url, options})
 	// A mutable cookie jar has no stable credential fingerprint.
@@ -455,7 +461,13 @@ type twitterStatusesResponse struct {
 	} `json:"results"`
 }
 
+type rssWatchVideo struct {
+	URL          string `json:"url"`
+	ThumbnailURL string `json:"thumbnail_url"`
+}
+
 type twitterStatusMedia struct {
+	Videos []rssWatchVideo `json:"videos"`
 	Photos []struct {
 		URL string `json:"url"`
 	} `json:"photos"`
@@ -511,6 +523,7 @@ func parseTwitterStatusesFeed(body []byte) (parsedFeed, error) {
 		// FxTwitter places ordinary reposts at the top level (with reposted_by
 		// metadata). Quoted tweets instead carry their own text and media.
 		photos := slices.Clone(entry.Media.Photos)
+		videos := slices.Clone(entry.Media.Videos)
 		if quote := entry.Quote; quote != nil {
 			quoteText := strings.TrimSpace(quote.Text)
 			if quoteText == "" {
@@ -524,6 +537,7 @@ func parseTwitterStatusesFeed(body []byte) (parsedFeed, error) {
 				}
 				text += "\n\n引用推文 " + quoteAuthor + "\n" + quoteText + "\n" + quoteLink
 				photos = append(photos, quote.Media.Photos...)
+				videos = append(videos, quote.Media.Videos...)
 			}
 		}
 		var images []string
@@ -540,6 +554,7 @@ func parseTwitterStatusesFeed(body []byte) (parsedFeed, error) {
 			Content:     text,
 			PublishedAt: published,
 			Images:      images,
+			Videos:      videos,
 		})
 	}
 	return feed, nil
