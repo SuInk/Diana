@@ -137,3 +137,21 @@ func rssWatchOutgoingImages(msg OutgoingMessage) OutgoingMessage {
 	msg.Text = strings.TrimSpace(msg.Text)
 	return msg
 }
+
+// Feed text is untrusted and must never become executable CQ message segments.
+func rssWatchUnfilteredText(item rssWatchItem) string {
+	text := strings.TrimSpace(item.Content)
+	title := strings.TrimSpace(item.Title)
+	if text == "" {
+		text = title
+	} else if title != "" && !strings.HasPrefix(text, title) {
+		text = title + "\n" + text
+	}
+	if link := strings.TrimSpace(item.Link); link != "" && !strings.Contains(text, link) {
+		text += "\n" + link
+	}
+	if strings.TrimSpace(text) == "" {
+		text = item.ID
+	}
+	return strings.ReplaceAll(strings.TrimSpace(text), "[CQ:", "［CQ:")
+}

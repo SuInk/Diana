@@ -8387,7 +8387,12 @@ func (r *Runtime) runClaimedRSSWatch(ctx context.Context, item Reminder) (time.T
 // checkRSSWatchSource 检查单个来源，返回这个来源要发的通知段落（不通知就是空）。
 // 游标只在判断成功后推进：判断失败还推进的话，这批新条目就再也没人看了。
 func (r *Runtime) checkRSSWatchSource(ctx context.Context, item Reminder, source *ReminderFeedSource, plugin *RSSWatchPlugin, settings SettingValues) (string, error) {
-	change, err := plugin.check(ctx, source.FeedURL, source.LastItemID, source.LastPublishedAt, settings)
+	unfiltered := strings.TrimSpace(item.FeedJudgePrompt) == ""
+	limit := max(1, min(30, settings.Int(rssWatchSettingItemLimit, 12)))
+	if unfiltered {
+		limit = 0
+	}
+	change, err := plugin.checkWithItemLimit(ctx, source.FeedURL, source.LastItemID, source.LastPublishedAt, settings, limit)
 	if err != nil {
 		return "", err
 	}
@@ -8405,6 +8410,17 @@ func (r *Runtime) checkRSSWatchSource(ctx context.Context, item Reminder, source
 	if len(change.Items) == 0 {
 		advance()
 		return "", nil
+	}
+	if unfiltered {
+		mediaCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		defer cancel()
+		notices := make([]string, 0, len(change.Items))
+		for _, entry := range change.Items {
+			notices = append(notices, rssWatchUnfilteredText(entry)+plugin.replyMedia(mediaCtx, entry.Link, []rssWatchItem{entry}, settings))
+		}
+		advance()
+		header := strings.ReplaceAll(rssWatchNoticeHeader(*source, change.FeedName), "[CQ:", "［CQ:")
+		return header + "\n" + strings.Join(notices, "\n\n"), nil
 	}
 	decision, err := r.judgeRSSWatch(ctx, item, change)
 	if err != nil {

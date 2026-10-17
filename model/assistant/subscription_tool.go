@@ -162,7 +162,7 @@ func subscriptionKindFields() map[string]any {
 		"twitter_handles": toolStringArrayParam("rss：多个 X 用户名，同一条件合成一条订阅；与 feed_urls 合计最多 " + itoa(maximumRSSWatchSources) + " 个"),
 		"feed_url":        toolStringParam("rss：单个 RSS/Atom 地址"),
 		"feed_urls":       toolStringArrayParam("rss：多个 RSS/Atom 地址，共用 judge_prompt"),
-		"judge_prompt":    toolStringParam("rss：什么新条目值得通知、通知说什么，最多 " + itoa(maximumRSSJudgeRunes) + " 字"),
+		"judge_prompt":    toolStringParam("rss：可选；留空推送全部新条目，填写则说明通知条件和回复要求，最多 " + itoa(maximumRSSJudgeRunes) + " 字"),
 		"repository":      toolStringParam("github：owner/repo 或仓库链接；create 必填"),
 		"branch":          toolStringParam("github：分支，留空为默认分支"),
 		"watch": toolEnumArrayParam("github：监控类型；create 省略为全部，update 省略不改",

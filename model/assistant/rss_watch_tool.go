@@ -97,7 +97,7 @@ func (*dianaRSSWatchTool) Name() string { return "rss" }
 // 本工具只作为 subscription 的 kind=rss 后端，描述和 schema 不直接发给模型；
 // 模型看到的说明在 subscriptionKindFields。「同一条件的多个来源建一条订阅」见那里。
 func (*dianaRSSWatchTool) Description() string {
-	return `管理 RSS/Atom 或 X 用户订阅：新条目按 judge_prompt 判断，符合才通知。多个来源条件相同时建一条订阅。普通周期查询用 schedule。`
+	return `管理 RSS/Atom 或 X 用户订阅：judge_prompt 留空时直接推送全部新条目，填写时按规则筛选。多个来源条件相同时建一条订阅。普通周期查询用 schedule。`
 }
 
 func (*dianaRSSWatchTool) InputSchema() map[string]any {
@@ -109,7 +109,7 @@ func (*dianaRSSWatchTool) InputSchema() map[string]any {
 		"feed_url":        toolStringParam("单个 RSS/Atom 地址"),
 		"feed_urls":       toolStringArrayParam("多个 RSS/Atom 地址，共用 judge_prompt"),
 		"interval":        toolStringParam("检查间隔，最短 " + formatDurationUnits(minimumRSSWatchInterval) + "，默认 " + formatDurationUnits(defaultRSSWatchInterval)),
-		"judge_prompt":    toolStringParam("什么新条目值得通知、通知说什么，最多 " + itoa(maximumRSSJudgeRunes) + " 字"),
+		"judge_prompt":    toolStringParam("可选；留空直接推送全部新条目，填写则说明通知条件和回复要求，最多 " + itoa(maximumRSSJudgeRunes) + " 字"),
 		"id":              toolStringParam("订阅 ID，可用 list 查"),
 	})
 }
@@ -311,9 +311,6 @@ func (r *Runtime) CreateRSSWatch(ctx context.Context, input RSSWatchCreateInput)
 		return Reminder{}, fmt.Errorf("RSS 检查周期必须在 %s 到 %s 之间", formatDurationUnits(minimumRSSWatchInterval), formatDurationUnits(maximumScheduleInterval))
 	}
 	judge := strings.TrimSpace(input.JudgePrompt)
-	if judge == "" {
-		return Reminder{}, fmt.Errorf("judge_prompt 不能为空，请说明什么情况下回复以及回复内容要求")
-	}
 	if len([]rune(judge)) > maximumRSSJudgeRunes {
 		return Reminder{}, fmt.Errorf("judge_prompt 不能超过 %d 个字符", maximumRSSJudgeRunes)
 	}
@@ -508,8 +505,8 @@ func (r *Runtime) UpdateRSSWatch(ctx context.Context, owner, id string, input RS
 	judge := current.FeedJudgePrompt
 	if input.JudgePrompt != nil {
 		judge = strings.TrimSpace(*input.JudgePrompt)
-		if judge == "" || len([]rune(judge)) > maximumRSSJudgeRunes {
-			return Reminder{}, fmt.Errorf("judge_prompt 必须为 1-%d 个字符", maximumRSSJudgeRunes)
+		if len([]rune(judge)) > maximumRSSJudgeRunes {
+			return Reminder{}, fmt.Errorf("judge_prompt 不能超过 %d 个字符", maximumRSSJudgeRunes)
 		}
 	}
 	interval := time.Duration(current.IntervalSeconds) * time.Second

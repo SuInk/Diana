@@ -260,7 +260,7 @@ const (
 
 	promptTaskReminder = "用户要求过一段时间提醒一次时，调用 reminder 并传 delay；用户说今天、明天、后天、几号、几点这类时间点时传 date 和 time（例如 date=tomorrow、time=22:00，date=28、time=09:00），由系统按自然日换算，不要自己算日期，也不要换算成 delay；26、27、28 号各提醒一次就用 items 建三条。工具返回里有换算后的具体日期，回复时照它复述。取消或删除单项提醒也用它。"
 	promptTaskSchedule = "用户要求每隔一段时间自动查询、搜索并通知，或要求每天、每周固定时间重复提醒时，调用 subscription 并传 kind=schedule：interval 是重复间隔，单位 s、m（分钟）、h、d、w、mo（月）、y（每天 1d、每周 1w、每月 1mo、每年 1y；m 是分钟，月写 mo），固定时间点传 time（例如每天 8 点 time=08:00），从某天开始就再加 date，也可以直接传 at（RFC3339）；每周一三五传 interval=1w、weekdays=[mon,wed,fri]，工作日传 weekdays=mon~fri；每月 1 号和 15 号传 interval=1mo、month_days=[1,15]，每月最后一天传 month_days=[-1]；每月第一个周一传 weekday=mon、week=1，最后一个周五传 weekday=fri、week=-1；用了这些规则时 at 只定从哪周/哪月开始和几点，一条订阅就能覆盖，不要拆成多条；不要只建一次性提醒再让用户下次重说；取消或删除单项周期查询也用它。RSS、Atom 和 Twitter 用户更新监控要改传 kind=rss。"
-	promptTaskRSS      = "用户要求持续订阅 RSS/Atom、关注指定 Twitter/X 用户，或只在新条目符合条件时通知时，调用 subscription 并传 kind=rss，judge_prompt 里写清通知条件和回复要求。要盯的人或 Feed 有好几个而条件相同时，用 twitter_handles/feed_urls 建一条多来源订阅，不要一人建一条。"
+	promptTaskRSS      = "用户要求持续订阅 RSS/Atom、关注指定 Twitter/X 用户，或只在新条目符合条件时通知时，调用 subscription 并传 kind=rss，用户要全部推送时将 judge_prompt 留空；需要筛选时才写通知条件和回复要求。要盯的人或 Feed 有好几个而条件相同时，用 twitter_handles/feed_urls 建一条多来源订阅，不要一人建一条。"
 	// 事件触发和提醒最容易混：「明天提醒他」是时间，「他下次说话时提醒他」是事件。
 	promptTaskEventTrigger = "用户明确要求新增事件任务——某人下次说话或上线时提醒他、有人提到某个词时回应、有人进群时执行额外操作——调用 event_trigger，不要口头答应。开启、关闭或修改内置入群欢迎走 bot_config，不创建欢迎任务。机器人看不到在线状态，「上线」按他第一次说话算。只提醒一句用 action=message，需要查资料或随机应变用 action=agent；要把消息告诉设置的人而不是当场回复时传 deliver_to=origin。"
 	promptTaskList         = "查询当前用户的全部提醒和订阅时，必须调用 tasks；只看订阅、不看一次性提醒时，用 subscription 的 operation=list 不传 kind，一次列出全部种类。"
