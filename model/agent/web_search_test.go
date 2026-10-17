@@ -500,3 +500,13 @@ func TestWebSearchReturnsDiscoveryWithoutReadingArbitrarySources(t *testing.T) {
 		t.Fatalf("discovery lost: %s", raw)
 	}
 }
+
+func TestWebSearchPolicyDowngradesSnippetOnlyThirdPartyClaims(t *testing.T) {
+	for name, text := range map[string]string{"turn": webSearchTurnPolicy, "decision": webSearchDecisionPolicy} {
+		for _, want := range []string{"没读过", "没查实", "第一人称体验", "不用管"} {
+			if !strings.Contains(text, want) {
+				t.Fatalf("%s policy missing %q", name, want)
+			}
+		}
+	}
+}
