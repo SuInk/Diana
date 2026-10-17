@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -96,8 +97,19 @@ func describedCount(store *recallImageTestStore, hashes []string) int {
 
 // 线上那次的主因：排队时间被算进了识图超时。前台忙得比超时还久，图也不该超时。
 func TestHistoryImageDescriptionTimeoutExcludesQueueWait(t *testing.T) {
-	provider := &queueVisionProvider{}
-	runtime, store := newQueueTestRuntime(t, provider, 200*time.Millisecond, time.Hour)
+	// Check the timer's start directly instead of requiring a model call to
+	// finish within 200ms under race instrumentation and machine contention.
+	const timeout = time.Hour
+	var releasedAt atomic.Int64
+	provider := &queueVisionProvider{behave: func(ctx context.Context, _ int) error {
+		deadline, ok := ctx.Deadline()
+		released := releasedAt.Load()
+		if !ok || released == 0 || deadline.Add(-timeout).Before(time.Unix(0, released)) {
+			return fmt.Errorf("description timeout started before foreground work finished")
+		}
+		return nil
+	}}
+	runtime, store := newQueueTestRuntime(t, provider, timeout, time.Hour)
 	event, hashes := multiImageEvent(t, "waits-long", 1)
 
 	runtime.incActive(1)
@@ -106,8 +118,9 @@ func TestHistoryImageDescriptionTimeoutExcludesQueueWait(t *testing.T) {
 	if calls, _ := provider.snapshot(); calls != 0 {
 		t.Fatalf("background description ran while a reply was active: calls=%d", calls)
 	}
+	releasedAt.Store(time.Now().UnixNano())
 	runtime.incActive(-1)
-	waitForCondition(t, 2*time.Second, func() bool { return describedCount(store, hashes) == 1 })
+	waitForCondition(t, 5*time.Second, func() bool { return describedCount(store, hashes) == 1 })
 }
 
 // 一条消息的全部图（含每一帧）都要描述，而且一张一张来，不因为排在后面就超时。
