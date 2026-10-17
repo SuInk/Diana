@@ -6983,8 +6983,9 @@ func routeOutgoingToEvent(event MessageEvent, msg OutgoingMessage) OutgoingMessa
 // resolveOutgoingMentionNames 给正文里的 [diana-at:ID] 标记配上显示用的昵称。
 //
 // 标记里只有 id——昵称会改、会重名，不能当标识。但 Telegram 的 text_mention 需要
-// 一段可见文字，所以在这里按 id 查一次昵称。查的是本会话内存里的近期消息加当前
-// 这条事件，不落库查询：发送路径上多一次 IO 不值得，查不到的 id 退回显示 @<id>。
+// 一段可见文字，所以在这里按 id 查一次昵称。先查本会话内存里的近期消息加当前
+// 这条事件；Telegram 群里还查不到用户名的，再问通道（见 fillTelegramMentionsFromDirectory），
+// 都查不到才退回显示 @<id>。
 func (r *Runtime) resolveOutgoingMentionNames(event MessageEvent, msg OutgoingMessage) OutgoingMessage {
 	msg.MentionUsernames = nil
 	ids := mentionedIDsInText(msg.Text)
@@ -7017,11 +7018,61 @@ func (r *Runtime) resolveOutgoingMentionNames(event MessageEvent, msg OutgoingMe
 			resolved[id] = name
 		}
 	}
+	if NormalizePlatformID(event.Platform) == PlatformTelegram && event.GroupID != "" {
+		r.fillTelegramMentionsFromDirectory(event, unseenTelegramSenders(ids, append(history, event)), resolved, msg.MentionUsernames)
+	}
 	if len(resolved) == 0 {
 		return msg
 	}
 	msg.MentionNames = resolved
 	return msg
+}
+
+// unseenTelegramSenders 挑出近期消息里没出现过的发送者。Telegram 每条消息都带着
+// 发送者当时的 username，见过却没有用户名，说明对方本来就没设，不必再去现查。
+func unseenTelegramSenders(ids []string, events []MessageEvent) []string {
+	seen := make(map[string]bool, len(events))
+	for _, event := range events {
+		if !event.Outbound {
+			seen[strings.TrimSpace(event.UserID)] = true
+		}
+	}
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if !seen[id] {
+			out = append(out, id)
+		}
+	}
+	return out
+}
+
+// fillTelegramMentionsFromDirectory 给近期消息里查不到的 Telegram 提及，向通道要
+// 昵称和用户名。有用户名就渲染成 @username（对方能收到提醒，读的人也认得），
+// 没有用户名至少用昵称，不再把数字 ID 甩到群里。
+func (r *Runtime) fillTelegramMentionsFromDirectory(event MessageEvent, ids []string, names, usernames map[string]string) {
+	var directory mentionIdentityChannel
+	for _, id := range ids {
+		if usernames[id] != "" {
+			continue
+		}
+		if directory == nil {
+			provider, ok := eventChannelFor[mentionIdentityChannel](r, event)
+			if !ok {
+				return
+			}
+			directory = provider
+		}
+		name, username, ok := directory.MentionIdentity(context.Background(), event.GroupID, id)
+		if !ok {
+			continue
+		}
+		if username = normalizeTelegramMentionUsername(username); username != "" && usernames != nil {
+			usernames[id] = username
+		}
+		if names[id] == "" && strings.TrimSpace(name) != "" {
+			names[id] = strings.TrimSpace(name)
+		}
+	}
 }
 
 // normalizeOutgoingMentions 先把写歪的提及标记扶正，再丢掉 id 不可用的那些，见
