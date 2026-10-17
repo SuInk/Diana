@@ -130,8 +130,8 @@ func (p *RSSWatchPlugin) Manifest() PluginManifest {
 	return PluginManifest{
 		ID:            rssWatchPluginID,
 		Name:          "RSS 订阅",
-		Version:       "0.2.8",
-		Description:   "订阅 RSS/Atom 或指定 X (Twitter) 用户，一条订阅可以同时盯多个账号或 Feed 并共用一套规则；发现新内容后由 LLM 判断是否需要通知，并生成实际回复。",
+		Version:       "0.2.9",
+		Description:   "订阅 RSS/Atom 或指定 X (Twitter) 用户，一条订阅可以同时盯多个账号或 Feed 并共用一套规则；规则留空时直接推送全部新条目；填写规则后由 LLM 筛选并生成回复。",
 		Official:      true,
 		BuiltIn:       true,
 		ReportsErrors: true,
@@ -230,6 +230,11 @@ func (p *RSSWatchPlugin) snapshot(ctx context.Context, feedURL string, settings 
 }
 
 func (p *RSSWatchPlugin) check(ctx context.Context, feedURL, cursor string, publishedAt time.Time, settings SettingValues) (rssWatchChange, error) {
+	return p.checkWithItemLimit(ctx, feedURL, cursor, publishedAt, settings, max(1, min(30, settings.Int(rssWatchSettingItemLimit, 12))))
+}
+
+// A zero limit is used only by unfiltered subscriptions; judge input stays capped.
+func (p *RSSWatchPlugin) checkWithItemLimit(ctx context.Context, feedURL, cursor string, publishedAt time.Time, settings SettingValues, limit int) (rssWatchChange, error) {
 	feed, err := p.fetch(ctx, feedURL, settings)
 	if err != nil {
 		return rssWatchChange{}, err
@@ -263,14 +268,7 @@ func (p *RSSWatchPlugin) check(ctx context.Context, feedURL, cursor string, publ
 			}
 		}
 	}
-	limit := settings.Int(rssWatchSettingItemLimit, 12)
-	if limit < 1 {
-		limit = 1
-	}
-	if limit > 30 {
-		limit = 30
-	}
-	if len(change.Items) > limit {
+	if limit > 0 && len(change.Items) > limit {
 		change.Items = change.Items[:limit]
 	}
 	for left, right := 0, len(change.Items)-1; left < right; left, right = left+1, right-1 {

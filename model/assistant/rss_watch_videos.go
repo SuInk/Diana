@@ -43,9 +43,12 @@ func (p *RSSWatchPlugin) replyMedia(ctx context.Context, reply string, items []r
 			checked++
 			if p.videoWithinLimit(ctx, raw, maxBytes) {
 				videos.WriteString("\n[CQ:video,file=" + escapeCQParameter(raw) + "]")
-			} else if rssWatchImageAllowed(video.ThumbnailURL) {
+			} else {
 				// An oversized video item sends only its cover, including quoted-photo posts.
-				hits[i].Images = []string{video.ThumbnailURL}
+				hits[i].Images = nil
+				if rssWatchImageAllowed(video.ThumbnailURL) {
+					hits[i].Images = []string{video.ThumbnailURL}
+				}
 			}
 			break
 		}

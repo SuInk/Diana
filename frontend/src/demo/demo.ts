@@ -2229,7 +2229,12 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
     const task = tasks.find((item) => item.id === taskID) ?? tasks[0];
     if (method === "DELETE") { tasks = tasks.filter((item) => item.id !== taskID); return json({}); }
     if (path.endsWith("/cancel")) task.status = "cancelled";
-    else if (method === "PUT") Object.assign(task, body);
+    else if (method === "PUT") {
+      Object.assign(task, body);
+      if (path.includes("/rss-watches/") && "judge_prompt" in body) {
+        task.feed_judge_prompt = String(body.judge_prompt ?? "");
+      }
+    }
     return json(task);
   }
 

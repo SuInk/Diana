@@ -183,3 +183,19 @@ func TestRSSWatchVideoNoticeDelivery(t *testing.T) {
 		})
 	}
 }
+
+func TestRSSWatchVideoFallbackWithoutCover(t *testing.T) {
+	p := NewRSSWatchPlugin(&http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: 503, Body: io.NopCloser(strings.NewReader(""))}, nil
+	})})
+	for _, cover := range []string{"", "https://example.com/cover.jpg", "https://pbs.twimg.com/cover.jpg"} {
+		item := rssWatchItem{Images: []string{"https://pbs.twimg.com/quoted.jpg"}, Videos: []rssWatchVideo{{URL: "https://video.twimg.com/a.mp4", ThumbnailURL: cover}}}
+		tags := p.replyMedia(context.Background(), "notice", []rssWatchItem{item}, SettingValues{})
+		if strings.Contains(tags, "quoted.jpg") || strings.Contains(tags, "CQ:video") {
+			t.Fatalf("fallback leaked media: %s", tags)
+		}
+		if rssWatchImageAllowed(cover) != strings.Contains(tags, "CQ:image") {
+			t.Fatalf("unexpected cover: %s", tags)
+		}
+	}
+}

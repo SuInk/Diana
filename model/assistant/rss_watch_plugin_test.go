@@ -422,3 +422,71 @@ func TestUpdateRSSWatchKeepsCursorsOfKeptSources(t *testing.T) {
 		t.Fatalf("message=%q", updated.Message)
 	}
 }
+
+func TestRSSWatchRulesCanBeEmptyOrCleared(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, rssTestBody(rssTestItem("base", "Initial", "old", "")))
+	}))
+	defer server.Close()
+	store := &stubReminderStore{}
+	runtime := NewRuntime(BotConfig{}, &recordingChannel{}, NewPluginManager(NewRSSWatchPlugin(server.Client())), nil, store, nil, nil)
+	item, err := runtime.CreateRSSWatch(context.Background(), RSSWatchCreateInput{FeedURL: server.URL, UserID: "owner", OwnerID: "owner"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if item.FeedJudgePrompt != "" || item.LastFeedItemID != "base" {
+		t.Fatalf("item=%+v", item)
+	}
+	rule := "Only trailers"
+	item, err = runtime.UpdateRSSWatch(context.Background(), "owner", item.ID, RSSWatchUpdateInput{JudgePrompt: &rule})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if item.FeedJudgePrompt != rule {
+		t.Fatal("rule not saved")
+	}
+	empty := "  "
+	item, err = runtime.UpdateRSSWatch(context.Background(), "owner", item.ID, RSSWatchUpdateInput{JudgePrompt: &empty})
+	if err != nil || item.FeedJudgePrompt != "" || item.LastFeedItemID != "base" {
+		t.Fatalf("clear=%+v err=%v", item, err)
+	}
+}
+
+func TestRSSWatchWithoutRulesSendsAllNewItemsWithoutLLM(t *testing.T) {
+	var items []string
+	for i := 35; i >= 0; i-- {
+		items = append(items, rssTestItem(fmt.Sprint(i), fmt.Sprintf("Title %02d", i), fmt.Sprintf("Body %02d [CQ:at,qq=all]", i), ""))
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, rssTestBody(items...)) }))
+	defer server.Close()
+	plugin := NewRSSWatchPlugin(server.Client())
+	modelCalls := 0
+	runtime := NewRuntime(BotConfig{}, &recordingChannel{}, NewPluginManager(plugin), nil, nil, nil, func() (LLMProvider, error) { modelCalls++; return nil, errors.New("must not call LLM") })
+	source := ReminderFeedSource{FeedURL: server.URL, LastItemID: "0"}
+	notice, err := runtime.checkRSSWatchSource(context.Background(), Reminder{}, &source, plugin, SettingValues{rssWatchSettingItemLimit: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if modelCalls != 0 || source.LastItemID != "35" {
+		t.Fatalf("calls=%d source=%+v", modelCalls, source)
+	}
+	last := -1
+	for i := 1; i <= 35; i++ {
+		pos := strings.Index(notice, fmt.Sprintf("Body %02d", i))
+		if pos < 0 || pos <= last {
+			t.Fatalf("item %d missing or out of order", i)
+		}
+		last = pos
+	}
+	if strings.Contains(notice, "Body 00") || strings.Contains(notice, "[CQ:at") {
+		t.Fatal("old item or executable CQ leaked")
+	}
+	again, err := runtime.checkRSSWatchSource(context.Background(), Reminder{}, &source, plugin, nil)
+	if err != nil || again != "" {
+		t.Fatalf("duplicate delivery: %q %v", again, err)
+	}
+	filtered, err := plugin.check(context.Background(), server.URL, "0", time.Time{}, SettingValues{rssWatchSettingItemLimit: 1})
+	if err != nil || len(filtered.Items) != 1 {
+		t.Fatalf("judge limit changed: %+v %v", filtered, err)
+	}
+}
