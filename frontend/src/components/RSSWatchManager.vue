@@ -54,7 +54,11 @@
           <span v-else class="hint">由模型判断新条目，仅在符合条件时通知。</span>
         </div>
         <template v-if="form.delivery_mode === 'llm'">
-          <div class="field wide"><label for="rss-watch-judge-model">判断模型</label><AppSelect id="rss-watch-judge-model" v-model="form.judge_model_id" :options="modelOptions" aria-label="判断模型" /></div>
+          <div class="field wide">
+            <label for="rss-watch-judge-model">判断模型</label>
+            <input id="rss-watch-judge-model" v-model.trim="form.judge_model_id" class="input" type="text" list="rss-watch-model-options" autocomplete="off" spellcheck="false" placeholder="留空跟随对话；也可输入模型档 ID" aria-label="判断模型" />
+            <span class="hint">留空跟随对话；可输入模型档 ID，或从候选项选择。旧订阅里的 ID 会原样保留。</span>
+          </div>
           <div class="field wide">
             <label for="rss-watch-media">判断范围</label>
             <AppSelect id="rss-watch-media" v-model="form.media_mode" :options="mediaModeOptions" aria-label="判断范围" />
@@ -72,8 +76,11 @@
           <span class="hint">留空直接发送原文，不调用回复模型。填写后按要求处理标题和正文，保留原文链接与媒体；生成失败会保留进度重试。</span>
         </div>
         <div v-if="form.reply_prompt.trim()" class="field wide">
-          <label for="rss-watch-translation-model">回复模型</label><AppSelect id="rss-watch-translation-model" v-model="form.translation_model_id" :options="modelOptions" aria-label="回复模型" />
+          <label for="rss-watch-translation-model">回复模型</label>
+          <input id="rss-watch-translation-model" v-model.trim="form.translation_model_id" class="input" type="text" list="rss-watch-model-options" autocomplete="off" spellcheck="false" placeholder="留空跟随对话；也可输入模型档 ID" aria-label="回复模型" />
+          <span class="hint">留空跟随对话；可输入模型档 ID，或从候选项选择。旧订阅里的 ID 会原样保留。</span>
         </div>
+        <datalist id="rss-watch-model-options"><option v-for="model in modelSuggestions" :key="model.value" :value="model.value" :label="model.label"></option></datalist>
         <div class="field">
           <label for="rss-watch-interval">检查周期</label>
           <div class="input-group"><input id="rss-watch-interval" v-model.number="form.interval_seconds" class="input" type="number" :min="minimumIntervalSeconds" :max="maximumIntervalSeconds" step="60" /><span class="repository-watch-unit">秒</span></div>
@@ -130,7 +137,7 @@ const deliveryModeOptions = [{ value: "all", label: "全部推送" }, { value: "
 const emptyForm = () => ({ notification_targets: [] as import("../api").RepositoryWatchTarget[], source: "twitter" as "twitter" | "rss", twitter_handles: [""], feed_urls: [""], reply_prompt: "", judge_model_id: "", translation_model_id: "", media_mode: "text", media_failure: "retry", delivery_mode: "all", judge_prompt: "", interval_seconds: defaultIntervalSeconds, profile_id: "" });
 const watches = ref<AssistantTask[]>([]);
 const configuredModels = ref<import("../api").LLMConfig[]>([]);
-const modelOptions = computed(() => [{ value: "", label: "跟随对话" }, ...configuredModels.value.filter(p => p.id).map(p => ({ value: p.id!, label: `${p.name || p.model} · ${p.model}` })), ...[form.value.judge_model_id, form.value.translation_model_id].filter((id, index, all) => id && all.indexOf(id) === index && !configuredModels.value.some(p => p.id === id)).map(id => ({ value: id, label: `配置已不可用：${id}` }))]);
+const modelSuggestions = computed(() => configuredModels.value.filter(p => p.id).map(p => ({ value: p.id!, label: `${p.name || p.model} · ${p.model}` })));
 const profiles = ref<BotProfileConfig[]>([]);
 const loading = ref(false), saving = ref(false), busyID = ref(""), editing = ref(false);
 const editingTask = ref<AssistantTask | null>(null);

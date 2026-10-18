@@ -25,6 +25,15 @@ test("subscription settings list every robot and only use the selected robot as 
   }
 });
 
+test("RSS model fields preserve legacy IDs while offering configured model suggestions", async () => {
+  const source = await readFile(new URL("../components/RSSWatchManager.vue", import.meta.url), "utf8");
+  assert.match(source, /id="rss-watch-judge-model"[^>]+type="text"[^>]+list="rss-watch-model-options"/);
+  assert.match(source, /id="rss-watch-translation-model"[^>]+type="text"[^>]+list="rss-watch-model-options"/);
+  assert.match(source, /旧订阅里的 ID 会原样保留/);
+  assert.match(source, /<datalist id="rss-watch-model-options">/);
+  assert.doesNotMatch(source, /:options="modelOptions"/);
+});
+
 
 test("switching robots changes enabled state without replacing shared settings or secret flags", () => {
   const state = { manifest: { id: "official.rss-watch" }, enabled: true, profile_enabled: { qq: false, tg: true }, settings: { timeout_seconds: 45 }, secrets_configured: { token: true } };
