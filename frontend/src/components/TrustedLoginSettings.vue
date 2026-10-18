@@ -1,12 +1,12 @@
 <template>
   <div class="stack trusted-login-settings">
     <section class="card">
-      <div class="card-header"><div><h2>应用登录</h2><span class="card-sub">允许其他应用通过 Diana 私聊确认身份。只有指定机器人的主人可以确认登录。</span></div></div>
+      <div class="card-header"><div><h2>第三方授权</h2><span class="card-sub">允许其他应用通过 Diana 私聊确认身份。只有指定机器人的主人可以确认登录。</span></div></div>
       <div class="card-body stack">
-        <LoadingSkeleton v-if="loading" kind="form" :count="2" label="正在加载应用登录设置" />
+        <LoadingSkeleton v-if="loading" kind="form" :count="2" label="正在加载第三方授权设置" />
         <div v-else-if="error" class="operation-error" role="alert">{{ error }} <button class="btn small" @click="load">重试</button></div>
         <template v-else-if="settings">
-          <AppSwitch :model-value="settings.enabled" :disabled="busy" @update:model-value="toggle">允许应用登录</AppSwitch>
+          <AppSwitch :model-value="settings.enabled" :disabled="busy" @update:model-value="toggle">允许第三方授权</AppSwitch>
           <p class="hint">关闭后停止新的登录确认，已登录的会话需要在对应应用中退出或撤销。</p>
         </template>
       </div>
@@ -14,7 +14,7 @@
     <section v-if="settings && !error" class="card">
       <div class="card-header"><h2>已接入的应用</h2><button class="btn small primary" :disabled="busy || !settings.enabled" @click="openEditor()"><Plus :size="14" />添加应用</button></div>
       <div class="card-body stack">
-        <p v-if="!settings.enabled" class="muted">应用登录已关闭。开启后可以添加应用，现有配置会保留。</p>
+        <p v-if="!settings.enabled" class="muted">第三方授权已关闭。开启后可以添加应用，现有配置会保留。</p>
         <div v-if="settings.apps.length" class="row-list">
           <div v-for="app in settings.apps" :key="app.id" class="row-item">
             <div class="row-main"><div class="row-title">{{ app.name }} <span class="badge" :class="settings.enabled && !app.disabled ? 'ok' : ''">{{ !settings.enabled ? '总开关已关闭' : app.disabled ? '已停用' : '已启用' }}</span></div>
@@ -77,7 +77,7 @@ const profileReason=(id:string)=>!id ? '' : settings.value?.profiles.find(p=>p.i
 const appName=(id:string)=>settings.value?.apps.find(a=>a.id===id)?.name || id;
 async function load(){loading.value=true;error.value='';try{settings.value=await getTrustedLoginSettings();}catch(e){error.value=e instanceof Error?e.message:'加载失败';}finally{loading.value=false;}}
 async function action(task:()=>Promise<void>){if(busy.value)return;busy.value=true;try{await task();}catch(e){toastError(e instanceof Error?e.message:'操作失败');}finally{busy.value=false;}}
-async function toggle(enabled:boolean){if(!enabled && !(await askConfirm({title:'关闭应用登录',message:'停止所有应用的新登录确认，并使待确认请求失效。已登录的会话需要在对应应用中撤销。',confirmLabel:'关闭',danger:true})))return;await action(async()=>{await setTrustedLoginEnabled(enabled);await load();});}
+async function toggle(enabled:boolean){if(!enabled && !(await askConfirm({title:'关闭第三方授权',message:'停止所有应用的新登录确认，并使待确认请求失效。已登录的会话需要在对应应用中撤销。',confirmLabel:'关闭',danger:true})))return;await action(async()=>{await setTrustedLoginEnabled(enabled);await load();});}
 function openEditor(app?:TrustedLoginApp){creating.value=!app;editor.value=app?{id:app.id,name:app.name,profile_id:app.profile_id,disabled:app.disabled}:{id:'',name:'',profile_id:'',disabled:false};}
 function closeEditor(){if(!busy.value)editor.value=null;}
 function showSecret(value:{id:string;secret:string}){issued.value=value;savedSecret.value=false;reveal.value=false;editor.value=null;}

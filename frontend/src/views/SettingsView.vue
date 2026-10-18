@@ -550,7 +550,7 @@ import { toastError, toastSuccess } from "../lib/toast";
 const settingsPages = [
   { key: "desktop", label: "桌面控制", hint: "连接本机 macOS 桌面，管理操作权限与电脑任务。", icon: MonitorSmartphone },
   { key: "security", label: "访问安全", hint: "谁能打开这个控制台：管理账号与密码保护。", icon: ShieldCheck },
-  { key: "app-login", label: "应用登录", hint: "管理通过 Diana 私聊确认身份的受信应用。", icon: KeyRound },
+  { key: "app-login", label: "第三方授权", hint: "管理通过 Diana 私聊确认身份的受信应用。", icon: KeyRound },
   { key: "sessions", label: "登录会话", hint: "机器人发来异常登录提醒时，在这里把对应设备踢下线。", icon: MonitorSmartphone },
   { key: "storage", label: "存储空间", hint: "这台机器的磁盘还剩多少，以及 Diana 的数据目录被哪类文件占掉了。", icon: PieChart },
   { key: "cache", label: "下载缓存", hint: "控制下载的媒体缓存按闲置天数或容量清理。", icon: HardDriveDownload },
