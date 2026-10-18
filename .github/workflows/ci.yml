@@ -486,6 +486,7 @@ jobs:
             '{schema: 1, releases: [{prerelease: $prerelease, tag: $tag, name: $name, date: $date, url: $url, checksum_available: true, checksum_url: ($assets[] | select(.name == "SHA256SUMS") | .url), assets: $assets}]}' \
             > latest.json
 
+      # 正式版、Beta/RC 和 Canary 共用简洁的安装与下载模板，避免各版本重复堆叠部署细节。
       # Release 页面自带安装指令：从这里进来的人手上通常只有一个版本号，
       # 不该再跳回 README 才知道怎么装。每条都是能整条复制的完整命令，
       # 分开放在各自的代码块里——并排写一行复制时会把两条粘在一起。
@@ -535,8 +536,6 @@ jobs:
               {
                 echo "## 更新内容"
                 printf '%s\n' "${entries}"
-                echo
-                echo "**完整对比**：https://github.com/${RELEASE_REPOSITORY}/compare/${previous_tag}...${RELEASE_TAG}"
               } > release/CHANGELOG.md
             fi
           fi
@@ -549,33 +548,41 @@ jobs:
               cat release/CHANGELOG.md
               echo
             fi
-            echo "## 安装"
+            echo "## 安装与下载"
             echo
-            echo "**一键安装（Linux / macOS）**"
+            echo "**Linux / macOS**"
             echo
             echo '```sh'
             echo 'curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.sh | sh'
             echo '```'
             echo
-            echo "**一键安装（Windows PowerShell）**"
+            echo "**Windows PowerShell**"
             echo
             echo '```powershell'
             echo 'irm https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.ps1 | iex'
             echo '```'
             echo
-            echo "**Docker Compose（完整版，预装 Chromium、字体、ffmpeg、yt-dlp 与 OCR）**"
+            echo "**Docker**"
             echo
             echo '```sh'
             echo 'curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/docker.sh | sh'
             echo '```'
             echo
-            echo "**Docker Compose（slim 轻量版，不含上面那些，拉取体积约为五分之一）**"
+            echo "**Docker slim（不含浏览器与多媒体依赖）**"
             echo
             echo '```sh'
             echo 'curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/docker.sh | DIANA_VARIANT=slim sh'
             echo '```'
             echo
-            echo "手动安装：下载下方对应平台的完整包，用 \`SHA256SUMS\` 校验后解压运行 \`run.sh\` / \`run.bat\`。"
+            echo "安装和升级使用同一条命令；Docker 在原部署目录执行。脚本默认安装稳定版，预发布通道见[更新通道说明](https://suink.github.io/Diana/update-channels)。"
+            echo
+            echo "手动下载：选择下方对应平台的完整包（含后端、WebUI 和启动脚本），对照 \`SHA256SUMS\` 校验后解压，运行 \`run.sh\` / \`run.bat\`，无需安装 Node.js。"
+            echo
+            echo "自定义目录、权限、源码部署及旧版迁移见[部署文档](https://suink.github.io/Diana/deploy.html)。"
+            if [ -n "${previous_tag}" ]; then
+              echo
+              echo "**完整对比**：https://github.com/${RELEASE_REPOSITORY}/compare/${previous_tag}...${RELEASE_TAG}"
+            fi
           } > release/NOTES.md
           rm -f release/CHANGELOG.md
 

@@ -1185,6 +1185,7 @@ code {
 
 /* 登录界面 */
 .login-screen {
+  position: relative;
   min-height: 100vh;
   display: flex;
   align-items: center;
@@ -6788,3 +6789,19 @@ a.nav-action {
 .resolver-chip-edit:hover { background:var(--surface-2); }
 .resolver-chip-edit:focus-visible { outline:2px solid var(--accent); }
 .resolver-chip-edit:disabled { opacity:.4; cursor:default; }
+
+/* 登录页资源入口由设置中的界面主题开关控制。 */
+.login-resource-links {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  left: 16px;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 4px;
+}
+
+@media (max-width: 480px) {
+  .login-screen { padding-top: 88px; }
+}

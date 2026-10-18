@@ -459,6 +459,14 @@
         <section class="card">
           <div class="card-body stack">
             <div class="field">
+              <label class="switch">
+                <input v-model="theme.showLoginLinks" type="checkbox" />
+                <span class="track" aria-hidden="true"></span>
+                <span>显示登录页项目链接</span>
+              </label>
+              <p class="hint">在登录页右上角显示文档、GitHub 和版本下载入口。关闭后隐藏，仅对当前浏览器生效。</p>
+            </div>
+            <div class="field">
               <label>主题模式</label>
               <div class="segmented" role="radiogroup" aria-label="主题模式">
                 <button type="button" :class="{ active: theme.mode === 'auto' }" @click="theme.mode = 'auto'">跟随系统</button>

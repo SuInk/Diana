@@ -21,6 +21,7 @@ export const accentOptions: AccentOption[] = [
 interface ThemeState {
   mode: ThemeMode;
   accent: string;
+  showLoginLinks: boolean;
 }
 
 const STORAGE_KEY = "dqb-next:theme";
@@ -43,12 +44,12 @@ function load(): ThemeState {
       const parsed = JSON.parse(raw) as Partial<ThemeState>;
       const mode: ThemeMode = parsed.mode === "light" || parsed.mode === "dark" ? parsed.mode : "auto";
       const accent = accentOptions.some((option) => option.id === parsed.accent) ? (parsed.accent as string) : "diana";
-      return { mode, accent };
+      return { mode, accent, showLoginLinks: parsed.showLoginLinks !== false };
     }
   } catch {
     /* 存储不可用时使用默认主题 */
   }
-  return { mode: "auto", accent: "diana" };
+  return { mode: "auto", accent: "diana", showLoginLinks: true };
 }
 
 export const theme = reactive<ThemeState>(load());
@@ -93,7 +94,7 @@ export function setupTheme(): void {
     void theme.accent;
     apply();
     try {
-      window.localStorage.setItem(STORAGE_KEY, JSON.stringify({ mode: theme.mode, accent: theme.accent }));
+      window.localStorage.setItem(STORAGE_KEY, JSON.stringify({ mode: theme.mode, accent: theme.accent, showLoginLinks: theme.showLoginLinks }));
     } catch {
       /* 忽略隐私模式下的写入失败 */
     }
