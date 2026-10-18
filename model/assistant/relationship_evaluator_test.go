@@ -180,7 +180,10 @@ func TestRelationshipQuestionUsesNormalLLMReply(t *testing.T) {
 		return provider, nil
 	})
 	memory := newMemoryUserMemoryStore()
-	memory.profiles["user"] = UserMemoryProfile{UserID: "user", DisplayName: "Alice", Favorability: 60, MessageCount: 30}
+	memory.profiles["user"] = UserMemoryProfile{
+		UserID: "user", DisplayName: "Alice", Favorability: 60, MessageCount: 30,
+		Portrait: []UserPortraitTrait{{Field: PortraitFieldResidence, Label: "居住地点", Value: "住在杭州", Source: PortraitSourceStated}},
+	}
 	runtime.SetUserMemoryStore(memory)
 	event := MessageEvent{
 		Kind:       EventKindPrivate,
@@ -197,8 +200,13 @@ func TestRelationshipQuestionUsesNormalLLMReply(t *testing.T) {
 	if len(provider.requests) != 2 || reply != "按我们最近的相处来看，现在是朋友；你离下一阶段还差一点稳定互动" {
 		t.Fatalf("reply=%q requests=%#v", reply, provider.requests)
 	}
-	if !requestMessagesContain(provider.requests[1].Messages, "好感度：60") {
-		t.Fatalf("relationship context missing: %#v", provider.requests[1].Messages)
+	for _, want := range []string{"住在杭州", "【当前发言者身份】不是主人", event.RawMessage} {
+		if !requestMessagesContain(provider.requests[1].Messages, want) {
+			t.Fatalf("normal reply missing speaker context %q", want)
+		}
+	}
+	if requestMessagesContain(provider.requests[1].Messages, "当前好感度：") {
+		t.Fatal("normal reply should not automatically inject the numeric relationship score")
 	}
 }
 

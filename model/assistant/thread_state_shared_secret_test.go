@@ -163,7 +163,7 @@ func TestThreadStateCompleteReturnsFinalStateButClearsStore(t *testing.T) {
 }
 
 func TestThreadStatePromptSteersGroupGamesToLockedSession(t *testing.T) {
-	for _, want := range []string{"群聊里发起的猜谜", "scope=session", "locked_keys", "不要重新出题"} {
+	for _, want := range []string{"群内共同任务", "scope=session", "locked_keys", "状态丢失不重新编造", "个人秘密用 scope=user"} {
 		if !strings.Contains(promptToolThreadState, want) {
 			t.Fatalf("thread state prompt missing %q", want)
 		}

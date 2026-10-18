@@ -318,15 +318,52 @@ func TestReplyRequestProtectsAllSelectedTextSources(t *testing.T) {
 		t.Fatalf("reply = %q, err = %v", reply, err)
 	}
 	request := provider.requestSnapshot()
+	var rendered strings.Builder
+	for _, message := range request.Messages {
+		rendered.WriteString(message.Content)
+		rendered.WriteByte('\n')
+	}
 	for index, messageID := range messageIDs {
 		for _, want := range []string{messageID, fmt.Sprintf("历史回复正文 %d", index+1)} {
 			if !requestMessagesContain(request.Messages, want) {
 				t.Fatalf("final request missing %q: %#v", want, request.Messages)
 			}
 		}
+		if count := strings.Count(rendered.String(), fmt.Sprintf("历史回复正文 %d", index+1)); count != 1 {
+			t.Fatalf("selected source %s rendered %d times, want once", messageID, count)
+		}
 	}
 	if !requestMessagesContain(request.Messages, "6 条包含文字") || requestMessagesContain(request.Messages, "6 张原图") {
 		t.Fatalf("final request source instructions = %#v", request.Messages)
+	}
+}
+
+func TestSemanticReferenceOnlyCopiesSourcesOutsideVisibleHistory(t *testing.T) {
+	runtime := NewRuntime(BotConfig{BotAccount: "bot"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	visible := MessageEvent{Kind: EventKindGroup, GroupID: "group", UserID: "user", MessageID: "visible", RawMessage: "已经在历史里的正文"}
+	missing := MessageEvent{Kind: EventKindGroup, GroupID: "group", UserID: "user", MessageID: "older", RawMessage: "窗口之外的必要正文"}
+	runtime.remember(visible)
+	runtime.remember(missing)
+	event := MessageEvent{Kind: EventKindGroup, GroupID: "group", UserID: "user", MessageID: "now"}
+	setEventSemanticSourceMessageIDs(&event, []string{"visible", "older", "absent"})
+	sources := runtime.semanticReferenceContext(context.Background(), event, visible)
+	if sources.RequestedSourceCount != 3 || sources.ResolvedSourceCount != 2 || sources.TextSourceCount != 2 || sources.MissingSourceCount != 1 {
+		t.Fatalf("source counts = %#v", sources)
+	}
+	if strings.Contains(sources.Content, visible.RawMessage) || !strings.Contains(sources.Content, "message_id=visible") || !strings.Contains(sources.Content, missing.RawMessage) || !strings.Contains(sources.Content, "未找到持久化历史") {
+		t.Fatalf("source projection = %q", sources.Content)
+	}
+}
+
+func TestSemanticReferencePreservesStoredBotReplyAndImageCounts(t *testing.T) {
+	runtime := NewRuntime(BotConfig{BotAccount: "bot"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	runtime.remember(MessageEvent{Kind: EventKindPrivate, UserID: "user", MessageID: "answer", botReply: "原始回答仍需保留"})
+	runtime.remember(MessageEvent{Kind: EventKindPrivate, UserID: "user", MessageID: "image", Segments: []MessageSegment{{Type: "image", Data: map[string]string{"file": "image.png"}}}})
+	event := MessageEvent{Kind: EventKindPrivate, UserID: "user", MessageID: "now"}
+	setEventSemanticSourceMessageIDs(&event, []string{"answer", "image"})
+	sources := runtime.semanticReferenceContext(context.Background(), event)
+	if sources.TextSourceCount != 1 || sources.HistoricalImageCount != 1 || !strings.Contains(sources.Content, "原始回答仍需保留") || !strings.Contains(sources.Content, "role=assistant") {
+		t.Fatalf("stored source projection = %#v", sources)
 	}
 }
 

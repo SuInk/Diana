@@ -82,12 +82,10 @@ type dianaBotConfigSnapshot struct {
 	InboundPrivateConcurrency       int                  `json:"inbound_private_concurrency"`
 	PromptInjectTime                bool                 `json:"prompt_inject_time"`
 	PromptInjectPlaintextRules      bool                 `json:"prompt_inject_plaintext_rules"`
-	PromptInjectGroupSender         bool                 `json:"prompt_inject_group_sender"`
 	PromptChineseSlangHint          bool                 `json:"prompt_chinese_slang_hint"`
 	PromptChineseSlangChars         int                  `json:"prompt_chinese_slang_chars,omitempty"`
 	PromptPlaintextRulesChars       int                  `json:"prompt_plaintext_rules_chars,omitempty"`
 	PromptTimeTemplateConfigured    bool                 `json:"prompt_time_template_configured"`
-	PromptGroupSenderConfigured     bool                 `json:"prompt_group_sender_template_configured"`
 	PromptImageOnlyConfigured       bool                 `json:"prompt_image_only_text_configured"`
 	PromptWakeOnlyConfigured        bool                 `json:"prompt_wake_only_text_configured"`
 	ModelRoles                      map[string]ModelRole `json:"model_roles,omitempty"`
@@ -332,12 +330,10 @@ func dianaBotConfigFromConfig(cfg BotConfig) dianaBotConfigSnapshot {
 		InboundPrivateConcurrency:       cfg.InboundPrivateConcurrency,
 		PromptInjectTime:                boolValue(cfg.PromptInjectTime, true),
 		PromptInjectPlaintextRules:      boolValue(cfg.PromptInjectPlaintextRules, true),
-		PromptInjectGroupSender:         boolValue(cfg.PromptInjectGroupSender, true),
 		PromptChineseSlangHint:          boolValue(cfg.PromptChineseSlangHint, true),
 		PromptChineseSlangChars:         len([]rune(cfg.prompt(promptChineseSlangSpec))),
 		PromptPlaintextRulesChars:       len([]rune(cfg.prompt(promptPlaintextRulesSpec))),
 		PromptTimeTemplateConfigured:    cfg.PromptOverrides.isCustomized(promptTimeTemplateSpec),
-		PromptGroupSenderConfigured:     cfg.PromptOverrides.isCustomized(promptGroupSenderSpec),
 		PromptImageOnlyConfigured:       cfg.PromptOverrides.isCustomized(promptImageOnlySpec),
 		PromptWakeOnlyConfigured:        cfg.PromptOverrides.isCustomized(promptWakeOnlySpec),
 		ModelRoles:                      normalizeModelRoles(cfg.ModelRoles),

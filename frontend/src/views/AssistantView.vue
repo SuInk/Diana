@@ -1578,8 +1578,8 @@
                   <span class="switch-label">情绪系统</span>
                 </label>
                 <span class="hint">
-                  心情随相处涨落：默认就是开心（语气轻快、爱接梗）；被骂得多了会暂时回到人设本来的语气，不会变低落，没人再惹它两三个小时就自己回到开心。
-                  复用关系评估的结果，不多花一次模型调用；只影响语气，不影响回答质量，重启后回到平静。
+                  记录随相处和时间变化的心情状态，供后台观察和已开启的 VRChat 表情联动使用。
+                  复用关系评估结果，不额外调用模型；不再把心情语气说明逐轮注入聊天提示词，重启后回到平静。
                 </span>
               </div>
               <div class="field wide">
@@ -4717,7 +4717,6 @@ function setForm(config: BotProfileConfig): void {
     refusal_strategy: config.refusal_strategy ?? "smart",
     prompt_inject_time: config.prompt_inject_time ?? true,
     prompt_inject_plaintext_rules: config.prompt_inject_plaintext_rules ?? true,
-    prompt_inject_group_sender: config.prompt_inject_group_sender ?? true,
     prompt_chinese_slang_hint: config.prompt_chinese_slang_hint ?? true
   };
   triggersDraft.value = formatTriggerWords(config.group_triggers ?? []);

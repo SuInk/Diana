@@ -399,11 +399,16 @@ func TestStickerReplyOrderProfilePrompt(t *testing.T) {
 		}
 		prompt := rt.systemPromptWithRelationshipAndAgent(event, nil, false, RelationshipPolicy{}, true)
 		if cfg.StickerReplyOrder == StickerReplyOrderAuto {
-			if strings.Contains(prompt, "表情包顺序已固定为") || !strings.Contains(prompt, "对别人这句话的反应") || !strings.Contains(prompt, stickerReplyOrderPrompt(StickerReplyOrderAuto)) {
+			if strings.Contains(prompt, "表情包顺序已固定为") || !strings.Contains(prompt, "auto 时反应图可 before、文字收尾图可 after") || !strings.Contains(prompt, stickerReplyOrderPrompt(StickerReplyOrderAuto)) {
 				t.Fatal("auto guidance changed")
 			}
 		} else if !strings.Contains(prompt, stickerReplyOrderPrompt(cfg.StickerReplyOrder)) {
 			t.Fatalf("profile %s missing fixed rule", cfg.ID)
+		}
+		for _, other := range []BotConfig{a, b, c} {
+			if other.ID != cfg.ID && strings.Contains(prompt, stickerReplyOrderPrompt(other.StickerReplyOrder)) {
+				t.Fatalf("profile %s inherited order guidance from profile %s", cfg.ID, other.ID)
+			}
 		}
 	}
 }

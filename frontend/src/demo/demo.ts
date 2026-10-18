@@ -78,7 +78,7 @@ const demoResidentContext = {
     { key: "session_thread", label: "会话便签", tokens: 0, budget: 1_200, note: "这个会话「聊到哪一步」的便签，由后台随对话滚动更新。" },
     { key: "agent_protocol", label: "Agent 协议与按需工具目录", tokens: 4_310, content: "（演示数据：Agent 协议、按需工具目录、扩展说明和规则。）", note: "按需工具只进这份目录（名字加一句用途），要用时先 tools_load。取自这个会话最近一轮回复。" },
     { key: "agent_tools", label: "常驻工具定义", tokens: 5_102, content: "web_search\nremember\npoke\ntools_load\ntools_execute\nagent_finalize", note: "这些工具每一步都带完整 schema，数字按 schema 估算，正文只列名字。从机器人配置「上下文」的常驻名单里拿掉，就会挪进上面的目录。" },
-    { key: "skills", label: "Skill 目录与常驻正文", tokens: 430, content: "（演示数据：Skill 目录。）", note: "只含配成常驻的 Skill 正文；声明了触发词的要命中才带，不在底价里。" }
+    { key: "skills", label: "Skill 目录", tokens: 430, content: "（演示数据：Skill 目录。）", note: "只含名称和用途，正文通过 read_skill 按需读取。" }
   ]
 };
 
@@ -174,7 +174,7 @@ let demoSearchProviders: SearchProvider[] = [
 const demoSearchKeys: Record<string, string> = { tavily: 'demo-secret' };
 let demoSearchAssignment: SearchConfiguration['default_assignment'] | undefined;
 function demoSearchConfiguration(): SearchConfiguration {
-  return { providers: demoSearchProviders.map(provider => ({ ...provider, api_key_configured: !!demoSearchKeys[provider.id] })), default_assignment: demoSearchAssignment ?? { provider_ids: [...demoSearchProviders.filter(provider => provider.id.startsWith('engine-') && !provider.disabled).map(provider => provider.id), 'exa'], source_priority: 'browser', max_results: 5, provider_timeout_seconds: 25, total_timeout_seconds: 90, source_recall: true, reply_link_policy: 'on_request' } };
+  return { providers: demoSearchProviders.map(provider => ({ ...provider, api_key_configured: !!demoSearchKeys[provider.id] })), default_assignment: demoSearchAssignment ?? { provider_ids: [...demoSearchProviders.filter(provider => provider.id.startsWith('engine-') && !provider.disabled).map(provider => provider.id), 'exa'], source_priority: 'browser', max_results: 5, provider_timeout_seconds: 25, total_timeout_seconds: 90, reply_link_policy: 'on_request' } };
 }
 
 
@@ -1138,7 +1138,7 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
         if (value !== undefined && value !== 0 && (typeof value !== 'number' || !Number.isInteger(value) || value < min || value > max)) return json({ error: '搜索参数超出允许范围' }, 400);
       }
       if (body.reply_link_policy && !['on_request', 'always', 'never'].includes(String(body.reply_link_policy))) return json({ error: '回复链接策略无效' }, 400);
-      demoSearchAssignment = { provider_ids: [...ids], disabled: !!body.disabled, max_results: Number(body.max_results) || 5, provider_timeout_seconds: Number(body.provider_timeout_seconds) || 12, total_timeout_seconds: Number(body.total_timeout_seconds) || 35, source_recall: body.source_recall !== false, reply_link_policy: (body.reply_link_policy || 'on_request') as SearchConfiguration['default_assignment']['reply_link_policy'], ...(body.source_priority === 'api' || body.source_priority === 'browser' ? { source_priority: body.source_priority } : {}) };
+      demoSearchAssignment = { provider_ids: [...ids], disabled: !!body.disabled, max_results: Number(body.max_results) || 5, provider_timeout_seconds: Number(body.provider_timeout_seconds) || 12, total_timeout_seconds: Number(body.total_timeout_seconds) || 35, reply_link_policy: (body.reply_link_policy || 'on_request') as SearchConfiguration['default_assignment']['reply_link_policy'], ...(body.source_priority === 'api' || body.source_priority === 'browser' ? { source_priority: body.source_priority } : {}) };
     }
     return json(demoSearchConfiguration().default_assignment);
   }

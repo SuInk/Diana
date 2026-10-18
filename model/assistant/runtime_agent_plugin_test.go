@@ -6,7 +6,6 @@ package assistant
 import (
 	"context"
 	"errors"
-	"strings"
 	"sync"
 	"testing"
 
@@ -38,9 +37,22 @@ func TestGenerateReplyRunsOnlyPluginToolsWhenAgentDisabled(t *testing.T) {
 	if len(provider.requests) == 0 {
 		t.Fatal("provider was not called")
 	}
-	prompt := provider.requests[0].Messages[0].Content
-	if !strings.Contains(prompt, "plugin.echo") || strings.Contains(prompt, "list_files") || strings.Contains(prompt, "run_command") {
-		t.Fatalf("unexpected tool prompt: %s", prompt)
+	// 工具清单由原生定义传给模型，不再在稳定系统提示里重复列出。
+	// 默认公开的 runtime_model 只读元信息仍可用；文件、命令等内置执行能力不可用。
+	for turn, request := range provider.requests {
+		seen := map[string]bool{}
+		for _, definition := range request.Tools {
+			if definition.Name != "plugin.echo" && definition.Name != "agent_finalize" && definition.Name != "runtime_model" {
+				t.Fatalf("turn %d exposed a non-plugin execution tool: %q", turn, definition.Name)
+			}
+			seen[definition.Name] = true
+		}
+		if !seen["plugin.echo"] || !seen["agent_finalize"] {
+			t.Fatalf("turn %d missing plugin or finalization definition: %v", turn, seen)
+		}
+	}
+	if !requestMessagesContain(provider.requests[len(provider.requests)-1].Messages, "echo: hello") {
+		t.Fatal("plugin result did not reach the final model turn")
 	}
 }
 

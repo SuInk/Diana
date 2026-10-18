@@ -143,44 +143,6 @@ func TestRecentHistoryKeepsOversizedNewestTurnForFinalCompaction(t *testing.T) {
 	}
 }
 
-func TestSemanticReferenceContextIncludesAllTextSources(t *testing.T) {
-	runtime := NewRuntime(BotConfig{BotAccount: "bot"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
-	ids := make([]string, 0, 6)
-	for index := 1; index <= 6; index++ {
-		id := fmt.Sprintf("source-%d", index)
-		ids = append(ids, id)
-		runtime.remember(MessageEvent{
-			Kind:       EventKindGroup,
-			GroupID:    "group-1",
-			Time:       int64(100 + index),
-			UserID:     "bot",
-			MessageID:  id,
-			SenderName: "Diana",
-			RawMessage: fmt.Sprintf("第%d条原始回复", index),
-		})
-	}
-	event := MessageEvent{Kind: EventKindGroup, GroupID: "group-1", Time: 200, UserID: "owner", MessageID: "current"}
-	setEventSemanticSourceMessageIDs(&event, ids)
-	got := runtime.semanticReferenceContextBlock(context.Background(), event)
-	if got.Requested != 6 || got.Resolved != 6 || got.TextSources != 6 || got.ExpectedImages != 0 {
-		t.Fatalf("semantic context counts = %#v", got)
-	}
-	for index, id := range ids {
-		if !strings.Contains(got.Block, "message_id="+id) || !strings.Contains(got.Block, fmt.Sprintf("第%d条原始回复", index+1)) {
-			t.Fatalf("semantic block missing %s: %s", id, got.Block)
-		}
-	}
-	notice := semanticReferenceAttachmentNotice(got, 0)
-	if !strings.Contains(notice, "6 条文字来源") || !strings.Contains(notice, "逐条核对") {
-		t.Fatalf("semantic notice = %q", notice)
-	}
-	for _, unwanted := range []string{"6 张", "逐张查看", "原图"} {
-		if strings.Contains(notice, unwanted) {
-			t.Fatalf("text-only semantic notice contains %q: %q", unwanted, notice)
-		}
-	}
-}
-
 func TestPromptHistoryCandidateLimitIsDerivedFromTokens(t *testing.T) {
 	low := historyCandidateLimitForBudget(contextShareBudget(4096, recentHistoryTokenShare))
 	high := historyCandidateLimitForBudget(contextShareBudget(32768, recentHistoryTokenShare))
@@ -198,26 +160,6 @@ func TestTokenHistoryMergeKeepsTrueNewestTimeline(t *testing.T) {
 	got := mergeMessageHistory(memory, stored, 2)
 	if len(got) != 2 || got[0].MessageID != "middle" || got[1].MessageID != "new" {
 		t.Fatalf("merged timeline = %#v", got)
-	}
-}
-
-func TestSemanticReferenceNoticeSeparatesTextAndImages(t *testing.T) {
-	runtime := NewRuntime(BotConfig{BotAccount: "bot"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
-	runtime.remember(MessageEvent{
-		Kind: EventKindPrivate, Time: 1, UserID: "user", MessageID: "text", SenderName: "Diana", botReply: "文字结论",
-	})
-	runtime.remember(MessageEvent{
-		Kind: EventKindPrivate, Time: 2, UserID: "user", MessageID: "image", SenderName: "Alice", RawMessage: "[图片]",
-		Segments: []MessageSegment{{Type: "image", Data: map[string]string{"url": "https://example.com/a.png"}}},
-	})
-	event := MessageEvent{Kind: EventKindPrivate, Time: 3, UserID: "user", MessageID: "current"}
-	setEventSemanticSourceMessageIDs(&event, []string{"text", "image"})
-	contextBlock := runtime.semanticReferenceContextBlock(context.Background(), event)
-	notice := semanticReferenceAttachmentNotice(contextBlock, 1)
-	if contextBlock.TextSources != 1 || contextBlock.ExpectedImages != 1 ||
-		!strings.Contains(notice, "1 条文字来源") || !strings.Contains(notice, "1 张来源图片") ||
-		!strings.Contains(notice, "逐条核对") || !strings.Contains(notice, "逐张查看") {
-		t.Fatalf("mixed semantic context=%#v notice=%q", contextBlock, notice)
 	}
 }
 
@@ -245,10 +187,9 @@ func TestRecordPromptContextBudgetEmitsCategoryBreakdown(t *testing.T) {
 		{Kind: EventKindGroup, GroupID: "20001", UserID: "10001", MessageID: "29998", Time: 1700000100, RawMessage: "更早的一句话"},
 		{Kind: EventKindGroup, GroupID: "20001", UserID: "10001", MessageID: "29999", Time: 1700000180, RawMessage: "刚刚说的话"},
 	}
-	semantic := semanticReferencePromptContext{Requested: 6, Resolved: 6, TextSources: 6}
 	sources := semanticReferenceContext{RequestedSourceCount: 6, ResolvedSourceCount: 6, TextSourceCount: 6, AttachedImageCount: 0, MissingSourceCount: 0}
 
-	runtime.recordPromptContextBudget(context.Background(), event, cfg, messages, history, semantic, sources, false, []contextLayerUsage{{
+	runtime.recordPromptContextBudget(context.Background(), event, cfg, messages, history, sources, false, []contextLayerUsage{{
 		Layer: "retrieved_memory", Budget: 2400, CandidateItems: 40, CandidateTokens: 6000,
 		RankedItems: 24, RankedTokens: 3600, SelectedItems: 9, SelectedTokens: 2380,
 		Reason: contextLayerReasonBudget,
@@ -341,7 +282,6 @@ func TestRecordPromptContextBudgetStaysSilentWithoutDebugMode(t *testing.T) {
 		BotConfig{DebugModeEnabled: boolPointer(false)},
 		[]llm.Message{{Role: llm.RoleUser, Content: "在吗", Priority: llm.MessagePriorityCurrent}},
 		nil,
-		semanticReferencePromptContext{},
 		semanticReferenceContext{},
 		false,
 		nil,

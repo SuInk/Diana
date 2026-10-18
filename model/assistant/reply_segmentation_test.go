@@ -8,7 +8,7 @@ import (
 
 func promptTeachesSegmentation(prompt string) bool {
 	// 「不许真实换行」现在只由 replyBlankLineRule 说一次，分条规则不再重复一遍。
-	for _, want := range []string{notificationSplitMarker, notificationLineMarker, "不得输出真实换行符"} {
+	for _, want := range []string{notificationSplitMarker, notificationLineMarker, "不写真实换行"} {
 		if !strings.Contains(prompt, want) {
 			return false
 		}
@@ -103,7 +103,8 @@ func TestForwardCardThresholdStillUsesExplicitMessages(t *testing.T) {
 func TestGroupNaturalSplitSettingStillReachesPromptMode(t *testing.T) {
 	on := ReplyStyleAssistant.prompt(true, personaVoice{})
 	off := ReplyStyleAssistant.prompt(false, personaVoice{})
-	if !strings.Contains(on, "当前开启自然分条") || !strings.Contains(off, "默认只发送一条消息") {
+	if !strings.Contains(on, replySegmentationRule) || strings.Contains(on, replySegmentationMarkerOnlyRule) ||
+		!strings.Contains(off, replySegmentationMarkerOnlyRule) || strings.Contains(off, replySegmentationRule) {
 		t.Fatalf("split setting did not select prompt mode: on=%q off=%q", on, off)
 	}
 	for _, prompt := range []string{on, off} {

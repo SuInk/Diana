@@ -50,7 +50,6 @@ type WebSearchAssignment struct {
 	MaxResults             int      `json:"max_results,omitempty"`
 	ProviderTimeoutSeconds int      `json:"provider_timeout_seconds,omitempty"`
 	TotalTimeoutSeconds    int      `json:"total_timeout_seconds,omitempty"`
-	SourceRecall           *bool    `json:"source_recall,omitempty"`
 	ReplyLinkPolicy        string   `json:"reply_link_policy,omitempty"`
 	// SourcePriority 为 api 或 browser 时先试该类来源，留空按列表顺序。
 	SourcePriority string `json:"source_priority,omitempty"`
@@ -86,7 +85,6 @@ func normalizeWebSearchAssignment(value *WebSearchAssignment) *WebSearchAssignme
 	for i := range out.ProviderIDs {
 		out.ProviderIDs[i] = strings.TrimSpace(out.ProviderIDs[i])
 	}
-	out.SourceRecall = copyBoolPointer(value.SourceRecall)
 	return &out
 }
 
@@ -172,7 +170,7 @@ func materializeFreshSearchDefaults(state *PluginState) {
 }
 
 // webSearchOverrideKeys 是机器人单独配置可以覆盖的全局搜索设置。
-var webSearchOverrideKeys = []string{searchProviderOrderSetting, webSearchSettingMaxResults, webSearchSettingProviderTimeout, webSearchSettingTotalTimeout, webSearchSettingSourceRecall, webSearchSettingLinkPolicy, webSearchSettingSourcePriority}
+var webSearchOverrideKeys = []string{searchProviderOrderSetting, webSearchSettingMaxResults, webSearchSettingProviderTimeout, webSearchSettingTotalTimeout, webSearchSettingLinkPolicy, webSearchSettingSourcePriority}
 
 func (value *WebSearchAssignment) settings() map[string]any {
 	settings := map[string]any{}
@@ -188,9 +186,6 @@ func (value *WebSearchAssignment) settings() map[string]any {
 	}
 	if value.TotalTimeoutSeconds != 0 {
 		settings[webSearchSettingTotalTimeout] = value.TotalTimeoutSeconds
-	}
-	if value.SourceRecall != nil {
-		settings[webSearchSettingSourceRecall] = *value.SourceRecall
 	}
 	if value.ReplyLinkPolicy != "" {
 		settings[webSearchSettingLinkPolicy] = value.ReplyLinkPolicy
@@ -325,7 +320,7 @@ func (m *PluginManager) SearchConfiguration(_ string) (SearchConfiguration, erro
 	if err != nil {
 		return SearchConfiguration{}, err
 	}
-	assignment := WebSearchAssignment{ProviderIDs: []string{}, Disabled: !state.Enabled, MaxResults: settings.Int(webSearchSettingMaxResults, 5), ProviderTimeoutSeconds: settings.Int(webSearchSettingProviderTimeout, 12), TotalTimeoutSeconds: settings.Int(webSearchSettingTotalTimeout, 35), SourceRecall: boolPointer(settings.Bool(webSearchSettingSourceRecall, true)), ReplyLinkPolicy: settings.String(webSearchSettingLinkPolicy, replyLinkPolicyOnRequest), SourcePriority: settings.String(webSearchSettingSourcePriority, "")}
+	assignment := WebSearchAssignment{ProviderIDs: []string{}, Disabled: !state.Enabled, MaxResults: settings.Int(webSearchSettingMaxResults, 5), ProviderTimeoutSeconds: settings.Int(webSearchSettingProviderTimeout, 12), TotalTimeoutSeconds: settings.Int(webSearchSettingTotalTimeout, 35), ReplyLinkPolicy: settings.String(webSearchSettingLinkPolicy, replyLinkPolicyOnRequest), SourcePriority: settings.String(webSearchSettingSourcePriority, "")}
 	for i := range providers {
 		providers[i].APIKey = ""
 		providers[i].ClearAPIKey = false

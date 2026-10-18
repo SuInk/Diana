@@ -161,7 +161,7 @@
           <li class="end"><div class="flow-node"><strong>记录</strong><p>历史、消息 ID、投递阶段、事件结果；闲聊冷却开始计时；排入关系评估。</p></div></li>
         </ol>
         <h3>提示词顺序</h3>
-        <p>系统头（SOUL.md、固定规则、工具规则）→ 摘要检查点 → 稳定历史 → <strong>缓存断点</strong> → 可变块（插件上下文、会话状态、记忆、笔记本、世界书、自我笔记、媒体索引、最近引用来源、最近工具调用）→ 同轮候选消息 → 依赖图 → 系统尾（说话人）→ 时钟 → 装饰规则 → 当前消息。断点之前的内容在同一个群里轮与轮之间保持不变，让上游的前缀缓存命中。发给模型的请求里真实的用户 ID、群号换成别名，回复和工具调用里再换回来。</p>
+        <p>系统头（SOUL.md、固定规则、工具规则）→ 稳定历史 → <strong>缓存断点</strong> → 可变块（插件上下文、最新摘要、会话状态、记忆、笔记本、世界书、自我笔记）→ 同轮候选消息 → 必要的指代来源与依赖图 → 系统尾（说话人）→ 时钟 → 装饰规则 → 当前消息。窗口外媒体不自动列目录，由 chat_history 查找后按需用 history_media 读取；最近搜索候选来源也不再逐轮回贴。真实用户 ID、群号在发送模型请求前换成别名，回复和工具调用里再换回来。</p>
         <p>生成结果为空时按标记兜底：暂停响应就发一句人设内的提示后沉默；拒答发固定文本；有出图任务在排队就把「开始生成」当回复；这一轮已经用 <code>say</code> 说过话就沉默；都不是时发「我这边没有生成有效回复。」</p>
       </section>
 
@@ -186,11 +186,11 @@
         <p>机器人开了 Agent 且对方的关系允许用工具时，这一轮由 <code>Runner.Run</code> 生成：模型每一步要么调用一个工具，要么用 <code>agent_finalize</code> 收尾。</p>
         <ol class="flow">
           <li><div class="flow-node"><strong>组装配置</strong><p>默认 20 步（上限 32）；主人 32 步、最终回复 20000 字，其他人 8000 字。单工具 60 秒，收尾预留 20 秒，协议修复 3 次。</p></div></li>
-          <li><div class="flow-node"><strong>组装工具</strong><p>核心工具每轮直接可用；其余只在目录里列一行，先 <code>tools_load</code> 再经 <code>tools_execute</code> 调用。按权限白名单与机器人 / 群级扩展开关裁剪，无权工具回答「没有权限」而不是「不存在」。群聊加载过的工具随群会话快照跨轮恢复。</p></div></li>
-          <li><div class="flow-node"><strong>Runner.Run 启动</strong><p>协议提示词与延迟工具目录；按触发词注入 Skill；可信时钟；上一轮被迫收尾时附上续跑档案。</p></div></li>
+          <li><div class="flow-node"><strong>组装工具</strong><p>核心工具每轮直接可用；其余只在目录里列一行，先 <code>tools_load</code> 再经 <code>tools_execute</code> 调用。按权限白名单与机器人 / 群级扩展开关裁剪，无权工具回答「没有权限」而不是「不存在」。加载状态仅在本次 <code>Runner.Run</code> 保留，新运行按需重新加载，不跨轮回贴完整契约。</p></div></li>
+          <li><div class="flow-node"><strong>Runner.Run 启动</strong><p>短协议与延迟工具目录；Skill 只列名称和用途，正文通过 <code>read_skill</code> 按需读取；可信时钟；上一轮被迫收尾时附上续跑档案。</p></div></li>
           <li class="q"><div class="flow-node"><strong>还有步数，离截止还够收尾？</strong></div><div class="flow-exits"><span class="flow-exit go"><b>否</b>强制收尾</span></div></li>
           <li class="q"><div class="flow-node"><strong>调用模型</strong><p>规划截止 = 请求截止 − 收尾预留（配置值与剩余时间三分之一取小）。</p></div><div class="flow-exits"><span class="flow-exit go"><b>规划截止到了</b>强制收尾</span><span class="flow-exit"><b>其他错误</b>交给回复流程的错误处理</span><span class="flow-exit go"><b>纯文本 / agent_finalize</b>收尾校验</span></div></li>
-          <li><div class="flow-node"><strong>只执行一个工具调用</strong><p>同批其他调用回「未执行」，让每一步都能看到上一步的结果。</p></div></li>
+          <li><div class="flow-node"><strong>执行本步工具调用</strong><p>互不依赖的 <code>web_search</code> / <code>browser_render</code> 只读调用可并行，结果按原顺序返回；其他工具每步执行一个，未执行的调用明确返回状态。</p></div></li>
           <li class="q"><div class="flow-node"><strong>执行前检查</strong><p>延迟工具须先加载并过 schema 校验 → 未知或无权 → 参数纠正 → 扩展变更须带确认码 → 与上一步完全相同则跳过 → 配额（<code>web_search</code> 3 次，自省 6 次、<code>tools_load</code> 4 次不占步数）。</p></div><div class="flow-exits"><span class="flow-exit loop"><b>不通过</b>计一次协议修复，回到步数判断；修复用完则强制收尾</span></div></li>
           <li><div class="flow-node"><strong>执行工具</strong><p>单工具超时与输出预算；<code>run_command</code> 先过命令白名单，再按配置放进沙箱；MCP 另有 60 秒超时。</p></div></li>
           <li><div class="flow-node"><strong>整理结果</strong><p>凭据打码、超长截断；搜索和渲染结果记入证据账本；附上剩余预算。工具报错不致命，变成观察结果交回模型。</p></div><div class="flow-exits"><span class="flow-exit loop"><b>下一步</b>回到步数判断</span></div></li>

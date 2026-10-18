@@ -17,9 +17,8 @@ func TestResidentFootprintFollowsResidencyTiers(t *testing.T) {
 	pinned := writeSkillFile(t, dir, "name: pinned\ndescription: d", "常驻正文。")
 	keyword := writeSkillFile(t, t.TempDir(), "name: keyword\ndescription: d\nkeywords: 点歌", "触发正文。")
 	registry := NewToolRegistry(&countingTool{name: "common"}, &countingTool{name: "rare"})
-	resident := true
 	registry.SetSkills([]SkillMetadata{
-		{Name: "pinned", Description: "d", Path: pinned, Resident: &resident},
+		{Name: "pinned", Description: "d", Path: pinned},
 		{Name: "keyword", Description: "d", Path: keyword, Keywords: []string{"点歌"}},
 	})
 	runner, err := NewRunner(&deferredLoadClient{}, Config{CoreTools: []string{"common"}}, registry)
@@ -34,7 +33,7 @@ func TestResidentFootprintFollowsResidencyTiers(t *testing.T) {
 	if !strings.Contains(footprint.SystemPrompt, "- rare:") || strings.Contains(footprint.SystemPrompt, "- common:") {
 		t.Fatalf("deferred catalog wrong:\n%s", footprint.SystemPrompt)
 	}
-	if !strings.Contains(footprint.SkillsCatalog, "常驻正文") || strings.Contains(footprint.SkillsCatalog, "触发正文") {
+	if strings.Contains(footprint.SkillsCatalog, "常驻正文") || strings.Contains(footprint.SkillsCatalog, "触发正文") || !strings.Contains(footprint.SkillsCatalog, "pinned") {
 		t.Fatalf("skills catalog:\n%s", footprint.SkillsCatalog)
 	}
 	if runner.loader != nil {
@@ -44,7 +43,7 @@ func TestResidentFootprintFollowsResidencyTiers(t *testing.T) {
 
 // 点名会让正文随目录带上；这时再叫模型先 read_skill 是自相矛盾的两条指令。
 // 正文没真正下发（读不出来）时提示要留着。
-func TestExplicitHintSkipsSkillsWhoseBodyShipped(t *testing.T) {
+func TestExplicitHintAlwaysRequestsSkillRead(t *testing.T) {
 	path := writeSkillFile(t, t.TempDir(), "name: jukebox\ndescription: d", "第一步：问清歌名。")
 	registry := NewToolRegistry(&SkillsReadTool{})
 	registry.SetSkills([]SkillMetadata{
@@ -53,10 +52,9 @@ func TestExplicitHintSkipsSkillsWhoseBodyShipped(t *testing.T) {
 	})
 	runner := &Runner{cfg: Config{}.WithDefaults(), registry: registry}
 	req := Request{Messages: []llm.Message{{Role: llm.RoleUser, Content: "用 $jukebox 和 $ghost"}}}
-	_, delivered := renderSkillsCatalog(SelectSkillBodies(registry.Skills(), SkillScanText(req.Messages, 0)), 8000)
-	hint := runner.explicitSkillPrompt(req, delivered)
-	if strings.Contains(hint, "jukebox") || !strings.Contains(hint, "ghost") {
-		t.Fatalf("hint = %q delivered = %v", hint, delivered)
+	hint := runner.explicitSkillPrompt(req)
+	if !strings.Contains(hint, "jukebox") || !strings.Contains(hint, "ghost") {
+		t.Fatalf("hint = %q", hint)
 	}
 }
 

@@ -62,7 +62,6 @@ func (r *Runtime) clearSessionHistory(event MessageEvent) error {
 			delete(r.groupPromptSessions, key)
 		}
 	}
-	delete(r.recentClaimSources, session)
 	for key := range r.agentCarryovers {
 		if strings.HasPrefix(key, session+"\x00") {
 			delete(r.agentCarryovers, key)

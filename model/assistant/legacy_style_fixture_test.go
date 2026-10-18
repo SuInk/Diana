@@ -17,7 +17,7 @@ func (style ReplyStyle) promptWithActions(naturalSplit bool, voice personaVoice,
 }
 
 func (style ReplyStyle) closingAnchor() string {
-	return style.styleClosingAnchor() + "\n" + replyDepthClosingAnchor
+	return style.styleClosingAnchor()
 }
 
 func (style ReplyStyle) styleClosingAnchor() string {

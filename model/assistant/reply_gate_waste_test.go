@@ -182,8 +182,8 @@ func TestProactiveAndChatInRulesLandInTail(t *testing.T) {
 	if !strings.Contains(relatedTail, proactive) || !strings.Contains(relatedTail, toolResult) || strings.Contains(relatedTail, chatInReply) {
 		t.Fatalf("related tail = %q", relatedTail)
 	}
-	// 相对顺序保持：主动说明 → 工具结果 → 插话节奏 → 插话说明 → 别空口附和，语气锚点仍在最后。
-	order := []string{proactive, toolResult, pacing, chatInReply, noAgreement, personaClosingAnchor(base)}
+	// 相对顺序保持：主动说明 → 工具结果 → 插话节奏 → 插话说明 → 别空口附和。
+	order := []string{proactive, toolResult, pacing, chatInReply, noAgreement}
 	last := -1
 	for _, section := range order {
 		index := strings.Index(chatInTail, strings.TrimSpace(section))

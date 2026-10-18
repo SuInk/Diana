@@ -128,7 +128,7 @@ func TestGlobalSearchRoutingIgnoresLegacyRobotAndFallsBack(t *testing.T) {
 	cfg := DefaultBotConfig()
 	cfg.ID = "search-bot"
 	cfg.Enabled = true
-	if err := manager.SaveSearchAssignment(WebSearchAssignment{ProviderIDs: []string{a, b}, MaxResults: 3, SourceRecall: boolPointer(false)}, nil); err != nil {
+	if err := manager.SaveSearchAssignment(WebSearchAssignment{ProviderIDs: []string{a, b}, MaxResults: 3}, nil); err != nil {
 		t.Fatal(err)
 	}
 	cfg.WebSearch = &WebSearchAssignment{ProviderIDs: []string{"missing"}, Disabled: true}
@@ -139,7 +139,7 @@ func TestGlobalSearchRoutingIgnoresLegacyRobotAndFallsBack(t *testing.T) {
 		t.Fatal("legacy robot switch still applied")
 	}
 	_, settings, enabled := runtime.pluginWithSettingsForEvent(webSearchPluginID, event)
-	if !enabled || settings.Bool(webSearchSettingSourceRecall, true) || settings.Int(webSearchSettingMaxResults, 0) != 3 {
+	if !enabled || settings.Int(webSearchSettingMaxResults, 0) != 3 {
 		t.Fatalf("runtime settings=%#v enabled=%v", settings, enabled)
 	}
 	tools, err := NewWebSearchPlugin(nil).AgentTools(settings)
@@ -195,7 +195,7 @@ func TestHTTPSearchProviderRestartsWithMappingsAndRobotUsesSavedKey(t *testing.T
 	}
 	cfg := DefaultBotConfig()
 	cfg.ID = "http-search-bot"
-	if err := restored.SaveSearchAssignment(WebSearchAssignment{ProviderIDs: []string{id}, MaxResults: 2, SourceRecall: boolPointer(false)}, nil); err != nil {
+	if err := restored.SaveSearchAssignment(WebSearchAssignment{ProviderIDs: []string{id}, MaxResults: 2}, nil); err != nil {
 		t.Fatal(err)
 	}
 	runtime := NewRuntime(cfg, nil, restored, nil, nil, nil, nil)
@@ -215,15 +215,14 @@ func TestHTTPSearchProviderRestartsWithMappingsAndRobotUsesSavedKey(t *testing.T
 
 func TestWebSearchAssignmentRoundTripAndOldClients(t *testing.T) {
 	original := DefaultBotConfig()
-	original.WebSearch = &WebSearchAssignment{ProviderIDs: []string{"custom", "browser"}, SourceRecall: boolPointer(false), ReplyLinkPolicy: "always"}
+	original.WebSearch = &WebSearchAssignment{ProviderIDs: []string{"custom", "browser"}, ReplyLinkPolicy: "always"}
 	payload := PayloadFromConfig(original)
 	roundTrip := ConfigFromPayload(payload, DefaultBotConfig())
 	if !reflect.DeepEqual(original.WebSearch, roundTrip.WebSearch) {
 		t.Fatalf("round trip=%#v", roundTrip.WebSearch)
 	}
 	roundTrip.WebSearch.ProviderIDs[0] = "changed"
-	*roundTrip.WebSearch.SourceRecall = true
-	if original.WebSearch.ProviderIDs[0] != "custom" || *original.WebSearch.SourceRecall {
+	if original.WebSearch.ProviderIDs[0] != "custom" {
 		t.Fatal("normalization did not clone assignment")
 	}
 	legacy := ConfigFromPayload(ConfigPayload{}, original)

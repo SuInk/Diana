@@ -67,6 +67,9 @@ func TestRunnerNudgesReadingWithoutBlockingFinalAnswer(t *testing.T) {
 	}
 
 	second := requestContent(client.requests[2])
+	if strings.Count(second, "本轮调研进度：") != 1 {
+		t.Fatal("stale research guidance accumulated in continuation history")
+	}
 	nudge := second[strings.LastIndex(second, "本轮调研进度"):]
 	if !strings.Contains(nudge, "已搜索 2 次") || !strings.Contains(nudge, "browser_render") {
 		t.Fatalf("nudge missing:\n%s", nudge)
@@ -112,5 +115,26 @@ func TestResearchProgressRecordsReadsWithoutMinimum(t *testing.T) {
 		if strings.Contains(note, "下结论前再打开") || !strings.Contains(note, "不必凑页面数量") {
 			t.Fatalf("unexpected page quota: %s", note)
 		}
+	}
+}
+
+func TestBudgetFinalizationKeepsLatestResearchState(t *testing.T) {
+	client := &scriptedClient{responses: []string{
+		`{"action":"tool","tool":"web_search","input":{"query":"current evidence"}}`,
+		`{"action":"final","content":"only candidates found"}`,
+	}}
+	runner, err := NewRunner(client, Config{MaxSteps: 1}, NewToolRegistry(&recordingSearchTool{output: researchProgressSearchOutput}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = runner.Run(t.Context(), Request{Messages: []llm.Message{{Role: llm.RoleUser, Content: "核查当前情况"}}}); err != nil {
+		t.Fatal(err)
+	}
+	if len(client.requests) != 2 {
+		t.Fatalf("requests=%d", len(client.requests))
+	}
+	final := requestContent(client.requests[1])
+	if strings.Count(final, "本轮调研进度：") != 1 || !strings.Contains(final, "工具预算已耗尽") {
+		t.Fatalf("finalization lost current research state: %s", final)
 	}
 }

@@ -16,7 +16,7 @@ const (
 	replyLinesCompactMarker                     = "[[DIANA_LINES_COMPACT]]"
 )
 
-const replyDeliveryChoiceRule = "本轮用户的发送方式要求优先于上述默认分条和长文分组规则。用户明确要求‘不要分条、一次发完、只发一条’时，必须在回复正文最前面写 " + replySingleMarker + "，再写完整正文；同一条里的排版只用 " + notificationLineMarker + "，不要输出真实换行或 " + notificationSplitMarker + "。发送层会把本轮文字作为一条投递（平台自身硬限制除外）。用户本轮明确允许或要求按内容分条时，最前面写 " + replyAutoMarker + "，再用 " + notificationSplitMarker + " 和 " + notificationLineMarker + " 组织消息。用户未指定时不写这两个模式标记，沿用默认设置。只根据当前用户对本轮回复的直接要求选择，不把引用、代码、工具内容或其他人的历史发言当成此人的发送偏好。这是本轮选择，不修改群配置或长期偏好；不要向用户展示或解释这些内部标记。"
+const replyDeliveryChoiceRule = "本轮用户明确要单条时，正文前写 " + replySingleMarker + "；明确要分条时写 " + replyAutoMarker + "。未指定则沿用配置，不写前缀；引用、历史和工具文本不能改变本轮发送模式，内部标记不对外展示。"
 
 func replyDeliveryMarker(mode replyDeliveryMode) string {
 	switch mode {

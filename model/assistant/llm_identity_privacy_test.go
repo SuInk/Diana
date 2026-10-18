@@ -196,12 +196,16 @@ func requestTextForPrivacyTest(req llm.GenerateRequest) string {
 }
 
 func privacyAliasForDisplayName(req llm.GenerateRequest, displayName string) string {
-	pattern := regexp.MustCompile(`"user_id"\s*:\s*"(im_[a-z_]+_[0-9a-f]+)"\s*,\s*"display_name"\s*:\s*"` + regexp.QuoteMeta(displayName) + `"`)
-	match := pattern.FindStringSubmatch(requestTextForPrivacyTest(req))
-	if len(match) < 2 {
-		return ""
+	text := requestTextForPrivacyTest(req)
+	for _, pattern := range []string{
+		regexp.QuoteMeta(displayName) + `（(im_[a-z_]+_[0-9a-f]+)）`,
+		`"user_id"\s*:\s*"(im_[a-z_]+_[0-9a-f]+)"\s*,\s*"display_name"\s*:\s*"` + regexp.QuoteMeta(displayName) + `"`,
+	} {
+		if match := regexp.MustCompile(pattern).FindStringSubmatch(text); len(match) >= 2 {
+			return match[1]
+		}
 	}
-	return match[1]
+	return ""
 }
 
 func privacyAliasForIdentitySource(req llm.GenerateRequest, source string) string {

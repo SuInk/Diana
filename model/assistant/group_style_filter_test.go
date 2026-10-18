@@ -55,11 +55,12 @@ func TestStyleFilterJoinsGroupStyleLearningPrompt(t *testing.T) {
 	}
 }
 
-// 回复时，注入了「学群友的腔调」就跟一段「这几类不学」，只跟一次；关掉、私聊、
-// 没在学群友时都不加。
+// 只有真实风格笔记进入回复时才附过滤；历史数量本身不再触发隐式群腔调。
 func TestStyleFilterFollowsGroupVoiceInReplyTail(t *testing.T) {
-	cfg := BotConfig{ID: "bot", BotAccount: "42"}.WithDefaults()
+	cfg := BotConfig{ID: "bot", BotAccount: "42", ExpressionLearningEnabled: boolPointer(true)}.WithDefaults()
 	runtime := NewRuntime(cfg, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	styles := &memoryGroupStyleStore{}
+	runtime.SetGroupStyleStore(styles)
 	event := MessageEvent{Kind: EventKindGroup, ProfileID: "bot", GroupID: "g1", UserID: "10001", SelfID: "42"}
 	tail := func(event MessageEvent) string {
 		relationship := RelationshipPolicyForConfig(runtime.effectiveConfigForEvent(event), UserMemoryProfile{}, event.UserID)
@@ -77,15 +78,31 @@ func TestStyleFilterFollowsGroupVoiceInReplyTail(t *testing.T) {
 		runtime.remember(item)
 	}
 	got := tail(event)
-	voice := strings.Index(got, "学的是上面群友的消息")
+	if strings.Contains(got, promptStyleFilter) || strings.Contains(got, "学的是上面群友的消息") {
+		t.Fatal("recent history alone must not inject group voice or its filter")
+	}
+
+	learned := GroupStyle{ProfileID: "bot", GroupID: "g1", Text: "这个群聊天简短，喜欢说绷不住了", SampleCount: groupStyleMinMessages}
+	if err := styles.SaveGroupStyle(context.Background(), learned); err != nil {
+		t.Fatal(err)
+	}
+	// 新笔记落库后刷新读取缓存，模拟学习完成后的可见状态。
+	runtime.SetGroupStyleStore(styles)
+	got = tail(event)
+	voice := strings.Index(got, learned.Text)
 	filter := strings.Index(got, promptStyleFilter)
 	if voice < 0 || filter < voice || strings.Count(got, promptStyleFilter) != 1 {
 		t.Fatalf("filter must follow the group voice exactly once: %q", got)
 	}
 
 	runtime.SetGroupConfigStore(styleFilterGroupConfigs{"g1": {GroupID: "g1", StyleFilterEnabled: boolPointer(false)}})
-	if got := tail(event); strings.Contains(got, promptStyleFilter) || !strings.Contains(got, "学的是上面群友的消息") {
-		t.Fatalf("a group with the filter off keeps the voice line but no filter: %q", got)
+	if got := tail(event); strings.Contains(got, promptStyleFilter) || !strings.Contains(got, learned.Text) {
+		t.Fatalf("a group with the filter off keeps its learned style but no filter: %q", got)
+	}
+	private := event
+	private.Kind, private.GroupID = EventKindPrivate, ""
+	if got := tail(private); strings.Contains(got, promptStyleFilter) || strings.Contains(got, learned.Text) {
+		t.Fatal("private replies must not inherit group style or its filter")
 	}
 
 	if styleFilterPrompt(cfg) != "" || styleFilterPrompt(cfg, "", "") != "" {

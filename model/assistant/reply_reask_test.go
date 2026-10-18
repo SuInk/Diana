@@ -122,7 +122,9 @@ func TestIndependentReaskKnowsEarlierReplyStillRunning(t *testing.T) {
 	provider.mu.Lock()
 	prompt := provider.reaskPrompt
 	provider.mu.Unlock()
-	if !strings.Contains(prompt, "上一条消息你还在处理") || !strings.Contains(prompt, "不要自己回答那个问题") {
-		t.Fatal("missing running-reply context")
+	for _, want := range []string{"【同一个人的上一条还在处理】", "用了 1 次其他工具", "完成后由那一轮发送结果", "不重新查询", "另一件事照常回答"} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("running-reply context missing %q", want)
+		}
 	}
 }

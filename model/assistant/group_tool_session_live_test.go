@@ -60,20 +60,16 @@ func TestLiveGroupToolSession(t *testing.T) {
 		// New Runtime + new Runner simulates restart. No tool instance is reused.
 		r := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 		r.SetMessageHistoryStore(store)
-		session := r.groupPromptSession(e)
 		lookup := &liveCacheFixtureTool{name: "fixture_lookup"}
 		runner, err := agent.NewRunner(probe, agent.Config{WorkDir: t.TempDir(), CoreTools: []string{"fixture_common"}, MaxSteps: 6}, agent.NewToolRegistry(&liveCacheFixtureTool{name: "fixture_common"}, lookup))
 		if err != nil {
 			t.Fatal(err)
 		}
 		instruction := "First call tools_load with names=[fixture_lookup], then call tools_execute with name=fixture_lookup and input={} to read its live value, then call agent_finalize with that value in content. Do not call any other tool."
-		if turn == 1 {
-			instruction = "The fixture_lookup contract is already loaded. Call tools_execute with name=fixture_lookup and input={} directly, then call agent_finalize. Do not call tools_load."
-		}
 		before := len(probe.requests)
 		callOffset := len(probe.calls)
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-		_, err = runner.Run(ctx, agent.Request{Messages: []llm.Message{{Role: llm.RoleUser, Content: instruction}}, LoadedTools: session.loadedTools(), ToolsLoaded: session.rememberTools})
+		_, err = runner.Run(ctx, agent.Request{Messages: []llm.Message{{Role: llm.RoleUser, Content: instruction}}})
 		cancel()
 		runner.Close()
 		if err != nil {
@@ -82,35 +78,18 @@ func TestLiveGroupToolSession(t *testing.T) {
 		if lookup.calls != 1 {
 			t.Fatalf("turn %d fixture calls=%d", turn, lookup.calls)
 		}
-		if turn == 0 {
-			if len(session.loadedTools()) != 1 || session.loadedTools()[0] != "fixture_lookup" {
-				t.Fatal("discovery not saved")
+		messages := probe.requests[before].Messages
+		for _, m := range messages {
+			if strings.Contains(m.Content, `"inputSchema"`) {
+				t.Fatal("restarted run injected old contract")
 			}
-		} else {
-			messages := probe.requests[before].Messages
-			if len(messages) < 3 {
-				t.Fatal("restarted request must contain a system prompt, restored contract and current input")
-			}
-			if strings.Contains(messages[0].Content, `"name":"fixture_lookup"`) {
-				t.Fatal("restarted tool contract leaked into the leading system prompt")
-			}
-			found := false
-			for _, message := range messages[1 : len(messages)-1] {
-				if strings.Contains(message.Content, `"name":"fixture_lookup"`) {
-					if message.Role != llm.RoleUser || message.Priority != llm.MessagePrioritySystem {
-						t.Fatal("restored contract lost its tail role or budget priority")
-					}
-					found = true
-				}
-			}
-			if !found || messages[len(messages)-1].Content != instruction {
-				t.Fatal("restarted first request lost the tool contract tail or final current input")
-			}
-			for _, name := range probe.calls[callOffset:] {
-				if name == agent.ToolsLoadToolName {
-					t.Fatal("restarted run reloaded a known tool")
-				}
-			}
+		}
+		loaded := false
+		for _, name := range probe.calls[callOffset:] {
+			loaded = loaded || name == agent.ToolsLoadToolName
+		}
+		if !loaded {
+			t.Fatal("new run did not load the required contract")
 		}
 	}
 }

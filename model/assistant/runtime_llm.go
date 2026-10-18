@@ -5,7 +5,6 @@ package assistant
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log"
 	"path/filepath"
@@ -175,7 +174,7 @@ var (
 
 func proactiveReplyRouterSystemPrompt(configured string, configs ...BotConfig) string {
 	overrides := promptOverridesOf(configs)
-	runtimeGuard := overrides.text(promptRouterAnswerabilitySpec) + "\n" + overrides.text(promptRouterExpressiveChatInSpec) + "\n" + overrides.text(promptRouterForwardedContentSpec) + "\n" + overrides.text(promptRouterForeignCommandSpec) + "\n" + overrides.text(promptMessageAddressingSpec)
+	runtimeGuard := overrides.text(promptRouterAnswerabilitySpec) + "\n" + overrides.text(promptRouterExpressiveChatInSpec) + "\n" + overrides.text(promptRouterForwardedContentSpec) + "\n" + overrides.text(promptRouterForeignCommandSpec) + "\n" + messageAddressingRule
 	configured = strings.TrimSpace(configured)
 	if configured == "" {
 		return runtimeGuard
@@ -828,7 +827,6 @@ func (r *Runtime) systemPromptWithRelationshipAndAgent(event MessageEvent, plugi
 // 尾部实时时钟与时区的几段文案。时钟那句的开头 agent.RuntimeClockMarker 是 agent
 // 用来认出「调用方已经自带时钟」的标记，由代码拼在前面，不进可覆盖的正文。
 const (
-	promptRuntimeClock            = "{datetime}（时区 {zone}，UTC{utc_offset}）。这是机器人所在机器提供的可信实时时间；用户询问当前日期或几点时直接据此回答，不要猜测训练数据日期，也不要声称无法访问实时时钟。"
 	promptSpeakerTimezone         = "当前发言者所在时区：{timezone}（{zone}，UTC{utc_offset}，{offset}）；他那边现在是 {local_time}。跟他说时间点时按他的当地时间说并标明是他那边的时间，必要时再补一句你这边的时间；换算由你来做，不要让对方自己换。你自己的「现在」仍以上面的运行时钟为准。{recorded_note}对方说出自己那边的当地时间、或说自己在别的地方，和这条记录对不上时，以他当下说的为准，不要拿旧记录纠正他。"
 	promptSpeakerTimezoneRecorded = "这条时区记于 {recorded_date}（{age}前），不是实时位置。"
 	promptSpeakerTimezoneStale    = "记录较旧，约具体时间前先自然地确认一句他现在在哪个时区。"
@@ -839,11 +837,6 @@ func tailSpec(key, title, usage, text string, vars ...PromptVar) *PromptSpec {
 }
 
 var (
-	promptRuntimeClockSpec = tailSpec("clock", "可信实时时钟", "「注入时间」打开时紧跟在当前时间那行后面，告诉模型这是可信的实时时间。",
-		promptRuntimeClock,
-		PromptVar{Name: "datetime", Description: "机器人所在机器的当前时间，如 2026-09-23 14:05:00"},
-		PromptVar{Name: "zone", Description: "时区缩写，如 CST"},
-		PromptVar{Name: "utc_offset", Description: "相对 UTC 的偏移，如 +08:00"})
 	promptSpeakerTimezoneSpec = tailSpec("speaker_timezone", "发言者的时区", "画像里记过发言者时区时注入，给出他那边的当地时间，要求按他的时间说话。",
 		promptSpeakerTimezone,
 		PromptVar{Name: "timezone", Description: "时区名，如 America/New_York"},
@@ -869,15 +862,10 @@ func (r *Runtime) runtimeClockPrompt(event MessageEvent) string {
 	now := r.clock().In(cfg.Location())
 	zoneName, zoneOffset := now.Zone()
 	var builder strings.Builder
-	builder.WriteString(renderPromptTemplate(cfg.prompt(promptTimeTemplateSpec), map[string]string{
+	builder.WriteString(agent.RuntimeClockMarker + renderPromptTemplate(cfg.prompt(promptTimeTemplateSpec), map[string]string{
 		"datetime": now.Format("2006-01-02 15:04:05"),
 		"weekday":  chineseWeekday(now.Weekday()),
-	}))
-	appendPromptSection(&builder, agent.RuntimeClockMarker+cfg.promptf(promptRuntimeClockSpec, map[string]string{
-		"datetime":   now.Format("2006-01-02 15:04:05"),
-		"zone":       zoneName,
-		"utc_offset": formatUTCOffset(zoneOffset),
-	}))
+	}) + "（" + zoneName + "，UTC" + formatUTCOffset(zoneOffset) + "）")
 	if speaker := r.speakerTimezonePrompt(event, now); speaker != "" {
 		appendPromptSection(&builder, speaker)
 	}
@@ -937,19 +925,8 @@ func (r *Runtime) systemPromptWithRelationshipAndAgentTools(event MessageEvent, 
 	return joinPromptSections(head, tail)
 }
 
-// systemPromptPartsWithRelationshipAndAgentTools 把系统提示词拆成两段：
-//
-//   - head 只依赖机器人配置、本群配置和本轮注册的工具：同一个群里不管谁说话、
-//     说什么，它逐字节相同。它作为第一条 system 消息发出，供应商的前缀缓存
-//     （tools → system → messages）从它开始命中，后面的历史才有机会一起命中。
-//   - tail 随「谁在说话、这条说了什么」变化：权限档位、主人专属工具规则、群聊场景
-//     （被点名 / 主动接话）、主动接话与闲聊插话说明、换行分条、插件结果为准、发言者
-//     昵称、命中的别名、时段与心情语气、语气锚点。它由调用方作为独立 system
-//     消息放在历史之后、当前消息之前。以前这段直接拼在同一条 system 里，换一个
-//     人说话整条 system 就变，Anthropic / Gemini / Responses 把 system 放在所有
-//     消息之前，system 一变，几千 token 的历史缓存也跟着全部作废。
-//
-// 语气锚点留在 tail 末尾的理由和以前一样：离生成越近越管用，现在它离得更近了。
+// systemPromptPartsWithRelationshipAndAgentTools keeps fixed rules before history,
+// and current permissions, platform relationships and delivery choices after it.
 func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEvent, pluginResponses []PluginResponse, proactiveTriggered bool, relationship RelationshipPolicy, agentEnabled bool, registry *agent.ToolRegistry) (string, string) {
 	cfg := r.effectiveConfigForEvent(event)
 	var builder strings.Builder
@@ -1034,12 +1011,6 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 	}
 	if agentEnabled && relationship.Owner && hasTool(dianaOneBotRequestsToolName) {
 		tail.WriteString("\n" + cfg.prompt(promptToolOneBotRequestsSpec))
-	}
-	// 长期保存区清单随机器人、随存了什么而变，进尾部；长期区没变时逐字不变。
-	if agentEnabled && relationship.Owner && hasAnyTool(dianaSaveToWorkspaceToolName, agent.ManageFilesToolName, "read_file") {
-		if prompt := keepIndexPrompt(cfg, firstNonEmpty(event.ProfileID, cfg.ID)); prompt != "" {
-			tail.WriteString("\n" + prompt)
-		}
 	}
 	if agentEnabled && hasTool(dianaHistoryImagesToolName) {
 		builder.WriteString("\n" + cfg.prompt(promptToolHistoryImagesSpec))
@@ -1166,6 +1137,7 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 	builder.WriteString("\n" + cfg.prompt(promptSelfCharacterizationSpec))
 	builder.WriteString("\n" + cfg.prompt(promptSelfObservationSpec))
 	builder.WriteString("\n" + cfg.prompt(promptCurrentMessageSpec))
+	appendPromptSection(&builder, messageAddressingRule)
 	builder.WriteString("\n" + cfg.prompt(promptHistoryFormatSpec))
 	builder.WriteString("\n" + cfg.prompt(promptAdjacentSupplementSpec))
 	if boolValue(cfg.PromptInjectPlaintextRules, true) {
@@ -1209,35 +1181,13 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 		tail.WriteString("\n" + cfg.prompt(promptPluginAuthoritySpec))
 		break
 	}
-	// 会变的内容全部进 tail，按易变程度从低到高排列：权限档位段落和发送者昵称在
-	// 同一发言者的连续消息之间保持稳定，命中别名则逐条消息都不同。tail 由调用方放
-	// 在历史之后，所以这里怎么变都不影响 head 和历史的前缀缓存。
-	appendPromptSection(&tail, relationshipPermissionContext(relationship, cfg))
+	appendPromptSection(&tail, relationshipPermissionContext(relationship))
 	appendPromptSection(&tail, r.currentSpeakerGroupContext(event, cfg))
-	if event.Kind == EventKindGroup {
-		if boolValue(cfg.PromptInjectGroupSender, true) {
-			appendPromptSection(&tail, renderPromptTemplate(cfg.prompt(promptGroupSenderSpec), map[string]string{
-				"sender": promptSenderIdentity(event),
-			}))
-		}
-		if matched := quotedPromptItems(matchedGroupAliases(event, cfg, event.RawMessage)); matched != "" {
-			appendPromptSection(&tail, cfg.promptf(promptMatchedAliasSpec, map[string]string{"aliases": matched}))
-		}
-	}
-	// 本群消息长度和心情语气紧挨着锚点注入，理由和锚点一样：都是「此刻怎么说」，
-	// 离生成越近越管用。
 	appendPromptSection(&tail, r.persistentVoicePrompt(event, cfg))
 	groupStyle := r.groupStylePrompt(event, cfg)
 	appendPromptSection(&tail, groupStyle)
 	appendPromptSection(&tail, r.groupRulesPrompt(event, cfg))
-	groupVoice := r.groupLengthNormPrompt(event, cfg)
-	appendPromptSection(&tail, groupVoice)
-	// 学群友的段落后面跟一段「这几类不学」，见 group_style_filter.go。
-	appendPromptSection(&tail, styleFilterPrompt(cfg, groupStyle, groupVoice))
-	appendPromptSection(&tail, r.moodToneForConfig(cfg, event.ProfileID))
-	// 语气锚点必须留在最后：前面的工具规则、权限说明和拒答流程都是公文体，离生成
-	// 最近的一段最容易被模仿，这里重新把语域拉回配置的表达风格。
-	appendPromptSection(&tail, personaClosingAnchor(cfg))
+	appendPromptSection(&tail, styleFilterPrompt(cfg, groupStyle))
 	return builder.String(), strings.TrimSpace(tail.String())
 }
 
@@ -1257,45 +1207,16 @@ func joinPromptSections(sections ...string) string {
 	return builder.String()
 }
 
-// replyMentionPrompt 说明「怎么 @ 别人」：候选名单和 CQ at 的写法。
-//
-// 「要不要 @ 当前发言者」不在这里,由 replyDecorationPrompt 按本轮的装饰件模式
-// 单独给出。两段提示词曾经各说各的:这一段写死「发送层会引用并 @ 当前发言者,
-// 这部分不需要你输出 CQ at」,那句话只有 on 档成立;而 auto 档发送层一个装饰件
-// 都不加,另一段却在请模型自己写 @。模型两段都收到,前一段是陈述句("发送层会
-// 做"),后一段是选择题,于是按前一段理解——不输出 CQ at,发送层也没加,@ 就消失了。
-// 「该 @ 的时候也不 @」是这么来的,不是模型判断保守。
-//
-// 现在描述发送层行为的那几句按模式给:on 档照旧说会自动加,auto/off 档明说不会,
-// 谁也不再替另一段做决定。
+// replyMentionPrompt reports only what the sending layer will do this turn.
+// Account identities already occur in the current input and history; no roster is injected.
 func (r *Runtime) replyMentionPrompt(cfg BotConfig, event MessageEvent, history []MessageEvent) string {
 	if event.Kind != EventKindGroup {
 		return ""
 	}
-	candidates := r.replyMentionCandidates(event, history)
-	if len(candidates) == 0 {
-		return ""
+	if mentionUserMode(cfg) == ReplyDecorationOn {
+		return "发送层按配置自动提及当前发言者；明确回应别人时不重复提及触发者。"
 	}
-	payload, err := json.Marshal(candidates)
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(fmt.Sprintf(`
-
-	【群聊真实提及规则】
-	发送层支持真正的 @。正文内容和 @ 对象必须由你在同一次最终回复中统一决定，禁止按姓名关键词机械匹配。
-	可提及成员候选 JSON：%s
-	1. %s
-	2. 如果当前发言者只是通过触发词或 @ 叫你回应另一位成员，不要为了礼貌额外 @ 当前发言者：可以直接回答；需要明确回应对象时，写 [diana-at:成员user_id] 提及实际对象。%s
-	3. 可以同时提及多人，也可以把多个标记放在不同位置。不要重复提及同一成员；标记前后按正常中文语句保留必要空格。
-	4. 发送层会原样保留这些标记的对象和相对位置，并按当前平台翻译成真正的提及。%s
-	5. 只能使用候选 JSON 中存在的 user_id，不得根据昵称猜账号；不要把标记放进 Markdown 代码块，也不要自己写平台专用的提及写法。
-	6. 标记只有 [diana-at:user_id] 这一种写法：半角方括号加半角冒号，中间不加空格。写成 @diana-at-user_id、<diana-at:user_id>、(diana-at:user_id) 都不是提及。
-	7. 回复始终对应当前消息；历史消息、引用内容和媒体只作为回答参考，不要把回复对象错误切换成旧消息发送者。`,
-		string(payload),
-		currentSenderMentionRule(cfg),
-		autoDecorationCancelClause(cfg),
-		autoDecorationAvoidClause(cfg)))
+	return "发送层不自动提及成员；需要点名时使用正文中的真实账号标记。"
 }
 
 // markStablePromptPrefix 在「历史之后、逐消息内容之前」标出缓存断点。只有 system

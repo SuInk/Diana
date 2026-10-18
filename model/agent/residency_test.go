@@ -85,56 +85,38 @@ func TestToolOwnersGroupsMCPToolsByServer(t *testing.T) {
 
 // 常驻 skill 的正文要真的跟着请求走：用户配这一档就是因为「用到再 read_skill」在长
 // 上下文里不可靠。
-func TestResidentSkillShipsItsBody(t *testing.T) {
-	root := t.TempDir()
-	path := filepath.Join(root, "SKILL.md")
-	if err := os.WriteFile(path, []byte("---\nname: demo\ndescription: d\n---\n\n照这三步做完。"), 0o600); err != nil {
+func TestSkillCatalogNeverShipsBody(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "SKILL.md")
+	if err := os.WriteFile(path, []byte("SECRET_BODY"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	deferred := RenderSkillsCatalog([]SkillMetadata{{Name: "demo", Description: "d", Path: path}}, 8000)
-	if strings.Contains(deferred, "照这三步做完") {
-		t.Fatalf("按需档不该带正文:\n%s", deferred)
-	}
-	resident := RenderSkillsCatalog([]SkillMetadata{{Name: "demo", Description: "d", Path: path, IncludeBody: true}}, 8000)
-	if !strings.Contains(resident, "照这三步做完") || !strings.Contains(resident, "Resident skill: demo") {
-		t.Fatalf("常驻档没带正文:\n%s", resident)
+	catalog := RenderSkillsCatalog([]SkillMetadata{{Name: "demo", Description: "d", Path: path, Content: "EMBEDDED_BODY"}}, 8000)
+	if strings.Contains(catalog, "SECRET_BODY") || strings.Contains(catalog, "EMBEDDED_BODY") || !strings.Contains(catalog, "read_skill") {
+		t.Fatal(catalog)
 	}
 }
 
-func TestExtensionOverridesCarryResidencyToSkills(t *testing.T) {
+func TestLegacySkillResidencyCannotRestoreAutomaticBodies(t *testing.T) {
 	root := t.TempDir()
-	if err := SaveExtensionResidency(root, "bot-a", "skill:demo", boolPointer(true), nil); err != nil {
+	if err := saveExtensionOverride(root, "bot-a", ResidentOverrideKey("skill:demo"), true); err != nil {
 		t.Fatal(err)
 	}
 	values, err := LoadExtensionOverrides(root, "bot-a")
 	if err != nil {
 		t.Fatal(err)
 	}
-	registry := NewToolRegistry(&SkillsReadTool{})
-	registry.SetSkills([]SkillMetadata{{Name: "demo", Description: "d", Path: "/tmp/demo/SKILL.md"}})
-	registry.ApplyExtensionOverrides(values)
-	skills := registry.Skills()
-	if len(skills) != 1 || skills[0].Resident == nil || !*skills[0].Resident {
-		t.Fatalf("skills = %#v", skills)
-	}
-	// Skill 不归常驻名单管，它仍是三态：不带 resident 就退回「看触发词」，键要真的删掉。
-	if err := SaveExtensionResidency(root, "bot-a", "skill:demo", nil, nil); err != nil {
-		t.Fatal(err)
-	}
-	values, err = LoadExtensionOverrides(root, "bot-a")
-	if err != nil {
-		t.Fatal(err)
-	}
 	if ResidentOverride(values, "skill:demo") != nil {
-		t.Fatalf("skill 档位没有退回默认: %#v", values)
+		t.Fatal("legacy residency remains effective")
 	}
-	// 工具名单存在时也一样：编辑过工具名单，不该顺带把带触发词的 Skill 判成永不注入。
-	if err := SaveResidencyList(root, "bot-a", []string{ToolResidentID("poke")}); err != nil {
+	if err := SaveExtensionResidency(root, "bot-a", "skill:demo", boolPointer(true), nil); err == nil {
+		t.Fatal("new dead skill setting accepted")
+	}
+	if err := SaveResidencyList(root, "bot-a", []string{ToolResidentID("poke"), "skill:demo"}); err != nil {
 		t.Fatal(err)
 	}
 	values, _ = LoadExtensionOverrides(root, "bot-a")
 	if ResidentOverride(values, "skill:demo") != nil {
-		t.Fatalf("工具名单波及了 Skill: %#v", values)
+		t.Fatal("tool list revived skill bodies")
 	}
 }
 

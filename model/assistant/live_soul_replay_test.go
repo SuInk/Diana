@@ -92,10 +92,6 @@ func TestLiveSoulReplay(t *testing.T) {
 		}
 	}
 	trimBot := os.Getenv("DIANA_REPLAY_SOUL_TRIM_BOT") == "1"
-	if os.Getenv("DIANA_REPLAY_SOUL_NO_LENGTH_NORM") == "1" {
-		groupLengthNormEnabled = false
-		defer func() { groupLengthNormEnabled = true }()
-	}
 	arms := strings.Split(firstNonEmpty(os.Getenv("DIANA_REPLAY_SOUL_ARMS"), "prod"), ",")
 	souls := map[string]string{}
 	for _, persona := range BuiltinPersonas() {

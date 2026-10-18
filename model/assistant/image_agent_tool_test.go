@@ -300,7 +300,7 @@ func TestRuntimeAgentSearchesBeforeGeneratingImage(t *testing.T) {
 	if !requestMessagesContain(requests[2].Messages, search.result) {
 		t.Fatalf("image tool decision did not receive search result: %#v", requests[2].Messages)
 	}
-	if !requestMessagesContain(requests[1].Messages, "先完成搜索和必要的网页核验") || !requestMessagesContain(requests[1].Messages, dianaImageToolName) {
+	if !requestMessagesContain(requests[1].Messages, "要求先查资料再出图时先核实") || !requestMessagesContain(requests[1].Messages, dianaImageToolName) {
 		t.Fatalf("agent prompt does not enforce search-before-image: %#v", requests[1].Messages)
 	}
 	if !strings.Contains(submittedPrompt, "#4B0082") || !strings.Contains(submittedPrompt, "#FFD700") {
@@ -703,7 +703,7 @@ func TestImagePromptsRequireSubjectWithoutClaimingResult(t *testing.T) {
 			if !strings.Contains(prompt, "准备画什么") {
 				t.Fatalf("%s 没有要求说清这次准备画什么：%q", name, prompt)
 			}
-			if !strings.Contains(prompt, "不要说成「已经生成好了」") {
+			if !strings.Contains(prompt, "不要说成「已经生成好了」") && !strings.Contains(prompt, "不能称已完成") {
 				t.Fatalf("%s 丢了「不许说成画好了」：%q", name, prompt)
 			}
 			if strings.Contains(prompt, "不要描述图里长什么样") {

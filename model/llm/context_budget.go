@@ -23,13 +23,16 @@ const (
 
 type tokenBudgetCandidate struct {
 	index    int
+	indexes  []int
 	priority MessagePriority
 	cost     int64
+	current  bool
 }
 
-// applyContextBudget keeps every request below the configured total context
-// budget. The estimator is deliberately conservative across providers: CJK and
-// non-ASCII text cost more than ASCII, and image parts reserve vision tokens.
+// applyContextBudget removes optional context to fit the configured budget.
+// Impossible required footprints remain intact for local validation to reject,
+// rather than silently changing the current request. Image parts reserve vision
+// tokens and the text estimate is conservative across providers.
 func applyContextBudget(req GenerateRequest, cfg ProviderConfig) GenerateRequest {
 	limit := cfg.MaxContextTokensWithDefault()
 	// 超限重试会带上更小的上限；只接受比配置档更保守的值，避免调用方反向放大。
@@ -85,12 +88,7 @@ func fitMessagesToTokenBudgetDetailed(messages []Message, budget int64) ([]Messa
 		return append([]Message(nil), messages...), kept
 	}
 
-	candidates := make([]tokenBudgetCandidate, 0, len(messages))
-	lastIndex := currentInputIndex(messages)
-	for index, message := range messages {
-		priority := effectiveMessagePriority(message, index == lastIndex)
-		candidates = append(candidates, tokenBudgetCandidate{index: index, priority: priority, cost: estimateMessageTokens(message)})
-	}
+	candidates := contextBudgetCandidates(messages)
 	sort.SliceStable(candidates, func(left, right int) bool {
 		if candidates[left].priority == candidates[right].priority {
 			return candidates[left].index > candidates[right].index
@@ -100,15 +98,33 @@ func fitMessagesToTokenBudgetDetailed(messages []Message, budget int64) ([]Messa
 
 	selected := make(map[int]Message, len(messages))
 	remaining := budget
+	// The current request is immutable, including accepted follow-ups and the
+	// active tool exchange. If it cannot fit even after optional context is
+	// removed, leave it over budget for local validation to reject. Truncating its
+	// middle changes the task while making validation falsely report success.
+	var flexible []tokenBudgetCandidate
+	for _, item := range candidates {
+		if item.current {
+			remaining = keepBudgetCandidate(messages, item, selected, remaining)
+		} else {
+			flexible = append(flexible, item)
+		}
+	}
+	candidates = flexible
 
 	// Current input and plugin evidence are authoritative. Reserve them before
 	// balancing the flexible prompt layers.
 	system := candidatesWithPriority(candidates, MessagePrioritySystem, MessagePrioritySystem)
-	systemReserve := minimumCandidateCost(system)
+	systemReserve := minimumCandidateCost(messages, system)
 	protected := candidatesWithPriority(candidates, MessagePriorityPlugin, MessagePriorityCurrent)
 	protectedBudget := remaining - systemReserve
-	if protectedBudget < 1 {
-		protectedBudget = remaining
+	if remaining < systemReserve {
+		// Keep required system units too, so the impossible footprint cannot be
+		// hidden by dropping the original request or its protocol.
+		for _, item := range system {
+			remaining = keepBudgetCandidate(messages, item, selected, remaining)
+		}
+		return selectedBudgetMessages(messages, selected), selected
 	}
 	protectedRemaining := selectRequiredMessages(messages, protected, selected, protectedBudget)
 	remaining -= protectedBudget - protectedRemaining
@@ -132,21 +148,8 @@ func fitMessagesToTokenBudgetDetailed(messages []Message, budget int64) ([]Messa
 		if _, ok := selected[item.index]; ok || item.priority >= MessagePrioritySystem {
 			continue
 		}
-		group := contextBudgetGroupIndexes(messages, item.index)
-		groupCost := int64(0)
-		for _, index := range group {
-			if _, ok := selected[index]; !ok {
-				groupCost += estimateMessageTokens(messages[index])
-			}
-		}
-		if groupCost <= remaining {
-			for _, index := range group {
-				if _, ok := selected[index]; ok {
-					continue
-				}
-				selected[index] = messages[index]
-				remaining -= estimateMessageTokens(messages[index])
-			}
+		if item.cost <= remaining {
+			remaining = keepBudgetCandidate(messages, item, selected, remaining)
 			continue
 		}
 		if item.priority == MessagePriorityHistory {
@@ -154,60 +157,92 @@ func fitMessagesToTokenBudgetDetailed(messages []Message, budget int64) ([]Messa
 			// not fit, do not skip it to collect disconnected older fragments.
 			break
 		}
-		if item.priority == MessagePriorityRecentHistory && len(group) > 1 {
-			groupItems := make([]struct {
-				index    int
-				cost     int64
-				priority MessagePriority
-			}, 0, len(group))
-			for _, index := range group {
-				if _, ok := selected[index]; ok {
-					continue
-				}
-				groupItems = append(groupItems, struct {
-					index    int
-					cost     int64
-					priority MessagePriority
-				}{index: index, cost: estimateMessageTokens(messages[index]), priority: item.priority})
-			}
-			remaining = selectRequiredMessagesProportionally(messages, groupItems, selected, remaining)
-			continue
-		}
-		message := messages[item.index]
 		if item.priority < MessagePrioritySummary {
 			continue
 		}
-		if message.AtomicText {
-			// Producer-owned semantic unit: it was already shrunk to its target,
-			// and a mid-string cut here would silently destroy what it means.
-			continue
-		}
-		trimmed, ok := trimMessageToTokenBudget(message, remaining)
-		if !ok {
-			continue
-		}
-		selected[item.index] = trimmed
-		remaining -= estimateMessageTokens(trimmed)
+		remaining = selectBudgetCandidate(messages, item, selected, remaining)
 	}
+	return selectedBudgetMessages(messages, selected), selected
+}
 
-	if len(selected) == 0 {
-		if trimmed, ok := trimMessageToTokenBudget(messages[lastIndex], budget); ok {
-			selected[lastIndex] = trimmed
-		}
-	}
+func selectedBudgetMessages(messages []Message, selected map[int]Message) []Message {
 	out := make([]Message, 0, len(selected))
 	for index := range messages {
 		if message, ok := selected[index]; ok {
 			out = append(out, message)
 		}
 	}
-	return out, selected
+	return out
 }
 
-func minimumCandidateCost(candidates []tokenBudgetCandidate) int64 {
+func contextBudgetCandidates(messages []Message) []tokenBudgetCandidate {
+	last := currentInputIndex(messages)
+	lastUser := -1
+	for index := range messages {
+		if messages[index].Role == RoleUser {
+			lastUser = index
+		}
+	}
+	var candidates []tokenBudgetCandidate
+	for _, indexes := range contextBudgetGroups(messages) {
+		item := tokenBudgetCandidate{indexes: indexes, index: indexes[len(indexes)-1]}
+		for _, index := range indexes {
+			message := messages[index]
+			item.priority = max(item.priority, effectiveMessagePriority(message, index == last))
+			item.cost += estimateMessageTokens(message)
+			item.current = item.current || index == last || index == lastUser || message.Priority >= MessagePriorityCurrent
+		}
+		candidates = append(candidates, item)
+	}
+	return candidates
+}
+
+func keepBudgetCandidate(messages []Message, item tokenBudgetCandidate, selected map[int]Message, budget int64) int64 {
+	for _, index := range item.indexes {
+		if _, exists := selected[index]; !exists {
+			selected[index] = messages[index]
+			budget -= estimateMessageTokens(messages[index])
+		}
+	}
+	return budget
+}
+
+func budgetCandidateCanTrim(messages []Message, item tokenBudgetCandidate) bool {
+	if item.current || len(item.indexes) != 1 {
+		return false
+	}
+	return messageCanTrimBudget(messages[item.index])
+}
+
+func messageCanTrimBudget(message Message) bool {
+	return !message.AtomicText && message.Priority < MessagePriorityCurrent &&
+		len(message.ToolCalls) == 0 && message.ToolCallID == "" && message.Role != RoleTool &&
+		message.ReasoningContent == nil && len(message.ResponsesOutput) == 0 && len(message.AnthropicThinking) == 0
+}
+
+// All selection paths use the same unit: explicit context groups and implicit
+// tool exchanges are whole units, even in retention pools and required context.
+func selectBudgetCandidate(messages []Message, item tokenBudgetCandidate, selected map[int]Message, budget int64) int64 {
+	if item.cost <= budget {
+		return keepBudgetCandidate(messages, item, selected, budget)
+	}
+	if budgetCandidateCanTrim(messages, item) {
+		if trimmed, ok := trimMessageToTokenBudget(messages[item.index], budget); ok {
+			selected[item.index] = trimmed
+			budget -= estimateMessageTokens(trimmed)
+		}
+	}
+	return budget
+}
+
+func minimumCandidateCost(messages []Message, candidates []tokenBudgetCandidate) int64 {
 	var total int64
 	for _, item := range candidates {
-		total += minimumMessageCost(item.priority)
+		if budgetCandidateCanTrim(messages, item) {
+			total += min(item.cost, minimumMessageCost(item.priority))
+		} else {
+			total += item.cost
+		}
 	}
 	return total
 }
@@ -267,17 +302,11 @@ func selectMemoryRetention(messages []Message, candidates []tokenBudgetCandidate
 		if _, ok := selected[item.index]; ok {
 			continue
 		}
-		message := messages[item.index]
 		if item.cost <= remaining {
-			selected[item.index] = message
-			remaining -= item.cost
+			remaining = keepBudgetCandidate(messages, item, selected, remaining)
 			continue
 		}
-		trimmed, ok := trimMessageToTokenBudget(message, remaining)
-		if ok {
-			selected[item.index] = trimmed
-			remaining -= estimateMessageTokens(trimmed)
-		}
+		remaining = selectBudgetCandidate(messages, item, selected, remaining)
 		break
 	}
 	return budget - remaining
@@ -297,27 +326,21 @@ func selectHistoryRetention(messages []Message, candidates []tokenBudgetCandidat
 		if _, ok := selected[item.index]; ok {
 			continue
 		}
-		message := messages[item.index]
 		if index < guaranteed {
 			slots := int64(guaranteed - index)
 			allocation := remaining / slots
-			if item.cost <= allocation {
-				selected[item.index] = message
-				remaining -= item.cost
+			if !budgetCandidateCanTrim(messages, item) && item.cost <= remaining {
+				remaining = keepBudgetCandidate(messages, item, selected, remaining)
 				continue
 			}
-			trimmed, ok := trimMessageToTokenBudget(message, allocation)
-			if ok {
-				selected[item.index] = trimmed
-				remaining -= estimateMessageTokens(trimmed)
-			}
+			unused := selectBudgetCandidate(messages, item, selected, allocation)
+			remaining -= allocation - unused
 			continue
 		}
 		if item.cost > remaining {
 			continue
 		}
-		selected[item.index] = message
-		remaining -= item.cost
+		remaining = keepBudgetCandidate(messages, item, selected, remaining)
 	}
 	return budget - remaining
 }
@@ -329,67 +352,56 @@ func minInt64(left, right int64) int64 {
 	return right
 }
 
-func contextBudgetGroupIndexes(messages []Message, index int) []int {
-	if index < 0 || index >= len(messages) {
-		return nil
+// Explicit grouping supplements, rather than overrides, real call/result
+// relationships. Take their transitive union so a partial or mixed-priority
+// ContextGroup cannot split one parallel tool-call batch.
+func contextBudgetGroups(messages []Message) [][]int {
+	parents := make([]int, len(messages))
+	for index := range parents {
+		parents[index] = index
 	}
-	groupID := strings.TrimSpace(messages[index].ContextGroup)
-	if groupID == "" {
-		groupID = toolExchangeContextGroup(messages, index)
-	}
-	if groupID == "" {
-		return []int{index}
-	}
-	indexes := make([]int, 0, 2)
-	for candidateIndex, message := range messages {
-		candidateGroup := strings.TrimSpace(message.ContextGroup)
-		if candidateGroup == "" {
-			candidateGroup = toolExchangeContextGroup(messages, candidateIndex)
+	var find func(int) int
+	find = func(index int) int {
+		if parents[index] != index {
+			parents[index] = find(parents[index])
 		}
-		if candidateGroup == groupID {
-			indexes = append(indexes, candidateIndex)
-		}
+		return parents[index]
 	}
-	return indexes
-}
-
-// toolExchangeContextGroup keeps one assistant tool-call batch and all of its
-// results together even when the producer did not assign ContextGroup. Sending
-// either side alone is invalid for OpenAI-compatible and Anthropic protocols.
-func toolExchangeContextGroup(messages []Message, index int) string {
-	if index < 0 || index >= len(messages) {
-		return ""
-	}
-	message := messages[index]
-	if message.Role == RoleAssistant && len(message.ToolCalls) > 0 {
-		return "tool-exchange:" + toolCallBatchKey(message.ToolCalls)
-	}
-	if message.Role != RoleTool || strings.TrimSpace(message.ToolCallID) == "" {
-		return ""
-	}
-	for candidate := index - 1; candidate >= 0; candidate-- {
-		previous := messages[candidate]
-		if previous.Role == RoleAssistant && len(previous.ToolCalls) > 0 {
-			for _, call := range previous.ToolCalls {
-				if call.ID == message.ToolCallID {
-					return "tool-exchange:" + toolCallBatchKey(previous.ToolCalls)
-				}
+	join := func(left, right int) { parents[find(right)] = find(left) }
+	explicit := map[string]int{}
+	calls := map[string]int{}
+	for index, message := range messages {
+		if group := strings.TrimSpace(message.ContextGroup); group != "" {
+			if previous, ok := explicit[group]; ok {
+				join(previous, index)
+			} else {
+				explicit[group] = index
 			}
 		}
-		if previous.Role == RoleUser {
-			break
+		for _, call := range message.ToolCalls {
+			if call.ID != "" {
+				calls[call.ID] = index
+			}
+		}
+		if message.Role == RoleTool {
+			if caller, ok := calls[message.ToolCallID]; ok {
+				join(caller, index)
+			}
 		}
 	}
-	return ""
-}
-
-func toolCallBatchKey(calls []ToolCall) string {
-	var builder strings.Builder
-	for _, call := range calls {
-		builder.WriteString(call.ID)
-		builder.WriteByte('\x00')
+	positions := map[int]int{}
+	var groups [][]int
+	for index := range messages {
+		root := find(index)
+		position, ok := positions[root]
+		if !ok {
+			position = len(groups)
+			positions[root] = position
+			groups = append(groups, nil)
+		}
+		groups[position] = append(groups[position], index)
 	}
-	return builder.String()
+	return groups
 }
 
 // Current input and plugin evidence are required context. When their image
@@ -440,18 +452,9 @@ func estimateRequiredMessagesTokens(messages []Message) int64 {
 // Preserve plugin evidence and current input whole when feasible, then allocate
 // the remaining space across generic system instructions.
 func selectRequiredMessages(messages []Message, candidates []tokenBudgetCandidate, selected map[int]Message, budget int64) int64 {
-	required := make([]struct {
-		index    int
-		cost     int64
-		priority MessagePriority
-	}, 0, 2)
+	required := append([]tokenBudgetCandidate(nil), candidates...)
 	var totalCost int64
 	for _, item := range candidates {
-		required = append(required, struct {
-			index    int
-			cost     int64
-			priority MessagePriority
-		}{index: item.index, cost: item.cost, priority: item.priority})
 		totalCost += item.cost
 	}
 	if len(required) == 0 || budget <= 0 {
@@ -462,50 +465,25 @@ func selectRequiredMessages(messages []Message, candidates []tokenBudgetCandidat
 	})
 	if totalCost <= budget {
 		for _, item := range required {
-			selected[item.index] = messages[item.index]
-			budget -= item.cost
+			budget = keepBudgetCandidate(messages, item, selected, budget)
 		}
 		return budget
 	}
-
-	// Current input and authoritative plugin evidence must remain intact whenever
-	// they can fit. Generic system instructions are the expendable part: trim
-	// those before silently removing facts returned by a plugin.
-	protectedCost := int64(0)
-	flexibleCount := int64(0)
+	// Atomic producer-owned text and protocol groups cannot participate in
+	// proportional per-message truncation. Required groups remain whole; an
+	// impossible footprint is rejected by validateGenerateRequest afterward.
+	var flexible []tokenBudgetCandidate
 	for _, item := range required {
-		if item.priority >= MessagePriorityPlugin {
-			protectedCost += item.cost
+		if !budgetCandidateCanTrim(messages, item) {
+			budget = keepBudgetCandidate(messages, item, selected, budget)
 		} else {
-			flexibleCount++
+			flexible = append(flexible, item)
 		}
 	}
-	minimumForFlexible := flexibleCount * minimumMessageCost(MessagePrioritySystem)
-	if protectedCost+minimumForFlexible <= budget {
-		for _, item := range required {
-			if item.priority < MessagePriorityPlugin {
-				continue
-			}
-			selected[item.index] = messages[item.index]
-			budget -= item.cost
-		}
-		flexible := required[:0]
-		for _, item := range required {
-			if item.priority < MessagePriorityPlugin {
-				flexible = append(flexible, item)
-			}
-		}
-		return selectRequiredMessagesProportionally(messages, flexible, selected, budget)
-	}
-
-	return selectRequiredMessagesProportionally(messages, required, selected, budget)
+	return selectRequiredMessagesProportionally(messages, flexible, selected, budget)
 }
 
-func selectRequiredMessagesProportionally(messages []Message, required []struct {
-	index    int
-	cost     int64
-	priority MessagePriority
-}, selected map[int]Message, budget int64) int64 {
+func selectRequiredMessagesProportionally(messages []Message, required []tokenBudgetCandidate, selected map[int]Message, budget int64) int64 {
 	var totalCost int64
 	for _, item := range required {
 		totalCost += item.cost
@@ -531,11 +509,8 @@ func selectRequiredMessagesProportionally(messages []Message, required []struct 
 		if allocation > budget {
 			allocation = budget
 		}
-		trimmed, ok := trimMessageToTokenBudget(messages[item.index], allocation)
-		if ok {
-			selected[item.index] = trimmed
-			budget -= estimateMessageTokens(trimmed)
-		}
+		unused := selectBudgetCandidate(messages, item, selected, allocation)
+		budget -= allocation - unused
 		remainingCost -= item.cost
 	}
 	return budget
@@ -761,6 +736,12 @@ func estimatedAudioTokens(encoded string) int64 {
 }
 
 func trimMessageToTokenBudget(message Message, budget int64) (Message, bool) {
+	// Never change task requirements, semantic atoms, or native protocol
+	// metadata. All callers, including retention and required pools, share this
+	// guard rather than relying on one optional-context selection branch.
+	if !messageCanTrimBudget(message) {
+		return message, estimateMessageTokens(message) <= budget
+	}
 	if budget <= messageTokenOverhead {
 		return Message{}, false
 	}

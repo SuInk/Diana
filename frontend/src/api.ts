@@ -376,7 +376,6 @@ export interface BotProfileConfig extends SendRetrySettings {
   /** 提示词增强开关；缺省等价于开启。 */
   prompt_inject_time?: boolean;
   prompt_inject_plaintext_rules?: boolean;
-  prompt_inject_group_sender?: boolean;
   prompt_chinese_slang_hint?: boolean;
   /** 接话评分的补充判据：本群的称呼、黑话和禁区，拼在内置评分提示词尾部，最多 1000 字。 */
   proactive_reply_extra_criteria?: string;
@@ -505,7 +504,6 @@ export interface WebSearchAssignment {
   max_results?: number;
   provider_timeout_seconds?: number;
   total_timeout_seconds?: number;
-  source_recall?: boolean;
   reply_link_policy?: "on_request" | "always" | "never";
   source_priority?: "api" | "browser";
 }

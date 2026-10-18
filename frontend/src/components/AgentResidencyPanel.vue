@@ -9,7 +9,7 @@
     <header class="rz-head">
       <div>
         <h3>每轮带上的工具和 Skill</h3>
-        <span class="rz-sub">勾上的每轮都带完整定义（Skill 带正文）；没勾的只在目录里占一行，模型用到时自己加载。</span>
+        <span class="rz-sub">勾上的工具每轮带完整定义；其余工具和 Skill 只列名称与用途，需要时读取契约或正文。</span>
       </div>
       <button v-if="profileID && items.length" class="btn small" type="button" :aria-expanded="panelOpen" @click="panelOpen = !panelOpen">
         {{ panelOpen ? "收起" : "展开名单" }}
@@ -31,7 +31,7 @@
             <div><dt><i class="rz-dot on"></i>常驻定义</dt><dd class="mono">{{ formatTokens(summary.residentTokens) }}<small class="rz-delta" :class="[delta > 0 ? 'up' : 'down', {idle: !delta}]">{{ delta ? (delta > 0 ? '+' : '−') + formatTokens(Math.abs(delta)) : '+0 tok' }}</small></dd></div>
             <div><dt><i class="rz-dot off"></i>按需目录</dt><dd class="mono">{{ formatTokens(summary.deferredTokens) }}</dd></div>
             <div><dt>工具</dt><dd class="mono">{{ summary.resident }}<span>/{{ summary.resident + summary.deferred }}</span> 常驻</dd></div>
-            <div v-if="skills.length"><dt>Skill 正文</dt><dd class="mono">{{ residentSkills.length }}<span>/{{ skills.length }}</span> 常驻</dd></div>
+            <div v-if="skills.length"><dt>Skill</dt><dd class="mono">{{ skills.length }} 按需读取</dd></div>
           </dl>
           <!-- 待保存状态占一行固定高度，常在：以前是改动后才插在列表上方的提示条，一出现就把
                整个列表往下推，勾一下东西就跳一下。 -->
@@ -84,24 +84,13 @@
           </ul>
         </section>
 
-        <!-- Skill 同一种勾选；它多出来的那一档（带触发词的默认命中才带正文）只有部分 Skill 有，
-             放在行尾就地切换，不另占一列。 -->
         <section v-if="visibleSkills.length" class="rz-group">
-          <h4><span>Skill</span><small>{{ residentSkills.length }}/{{ skills.length }} 常驻正文</small></h4>
+          <h4><span>Skill</span><small>正文通过 read_skill 按需读取</small></h4>
           <ul class="rz-list">
-            <li v-for="skill in visibleSkills" :key="skill.id" class="rz-row" :class="{changed: skillPending[skill.id] !== undefined}">
-              <span class="rz-caret"></span>
-              <input type="checkbox" :checked="skillTier(skill) === true" :aria-label="`${skill.name} 常驻正文`" @change="setSkillTier(skill, skillTier(skill) === true ? null : true)" />
-              <span class="rz-main" :title="skill.description">
-                <strong>{{ skill.name }}</strong>
-                <span class="rz-desc">{{ skill.description || skill.source || '本地 Skill' }}</span>
-              </span>
-              <span class="rz-meta">
-                <template v-if="skillTier(skill) !== true && skill.keywords?.length">
-                  <button class="rz-chip" :class="{off: skillTier(skill) === false}" type="button" :title="skillTier(skill) === false ? '现在命中触发词也不带正文，点一下恢复' : '最近两条消息命中这些词时自动带正文，点一下关掉'" @click="setSkillTier(skill, skillTier(skill) === false ? null : false)">{{ skillTier(skill) === false ? '触发已关' : `触发：${skill.keywords.join('、')}` }}</button>
-                </template>
-                <span class="rz-cost">{{ skillTier(skill) === true ? '正文' : '目录' }}</span>
-              </span>
+            <li v-for="skill in visibleSkills" :key="skill.id" class="rz-row">
+              <span class="rz-caret"></span><span></span>
+              <span class="rz-main" :title="skill.description"><strong>{{ skill.name }}</strong><span class="rz-desc">{{ skill.description || skill.source || '本地 Skill' }}</span></span>
+              <span class="rz-meta"><span class="rz-cost">目录</span></span>
             </li>
           </ul>
         </section>
@@ -116,7 +105,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue';
-import { listAgentResidency, listManagedExtensions, manageExtension, saveAgentResidencyList, type AgentResidencyEntry, type ManagedExtension } from '../api';
+import { listAgentResidency, listManagedExtensions, saveAgentResidencyList, type AgentResidencyEntry, type ManagedExtension } from '../api';
 
 // 档位跟着「正在编辑的这台机器人」走，不跟顶栏的全局作用域：在机器人配置页里改
 // 的就是眼前这一台，两者不一致时按全局作用域取数会改错机器人。
@@ -229,21 +218,10 @@ const delta = computed(() => leaves.value.reduce((sum, item) => sum + cost(item,
 // 待保存的不是「点了几下」，而是「有几个工具的待遇会变」——用户关心的是后者，而且
 // 一次插件级的增删本来就会带动好几个工具。
 const dirtyCount = computed(() => leaves.value.filter(item => isResident(item) !== savedResident(item)).length);
-// Skill 和工具在一页、一种操作，但底下仍是三态：#717 定过，Skill 不进工具名单——
-// 编辑一次名单不该顺带把所有带触发词的 Skill 判成永不注入。所以它们单独攒、逐项写。
+// Skill 只列可用目录，不再提供自动挂载正文的档位。
 const skillItems = ref<ManagedExtension[]>([]);
-const skillPending = reactive<Record<string, Tier>>({});
-// 这台机器人停用的 Skill 根本不会下发，给它配档位没有意义。
 const skills = computed(() => skillItems.value.filter(item => item.kind === 'skill' && item.enabled && item.available !== false).sort((a, b) => a.name.localeCompare(b.name)));
-const savedSkillTier = (skill: ManagedExtension): Tier => skill.resident === undefined ? null : skill.resident;
-const skillTier = (skill: ManagedExtension): Tier => skillPending[skill.id] !== undefined ? skillPending[skill.id] : savedSkillTier(skill);
-const residentSkills = computed(() => skills.value.filter(skill => skillTier(skill) === true));
-const skillDirtyCount = computed(() => Object.keys(skillPending).length);
-function setSkillTier(skill: ManagedExtension, value: Tier) {
-  if (savedSkillTier(skill) === value) delete skillPending[skill.id];
-  else skillPending[skill.id] = value;
-}
-const dirty = computed(() => reset.value || dirtyCount.value > 0 || skillDirtyCount.value > 0);
+const dirty = computed(() => reset.value || dirtyCount.value > 0);
 
 // 一条插件或 MCP 服务整条在名单里时，它旗下的工具不再单独列一行：名单上的单位就是
 // 用户加进来的那一个。整条不在名单里、其中某个工具被单独加进来了，那个工具自己上榜。
@@ -282,7 +260,6 @@ const statusText = computed(() => {
   const parts: string[] = [];
   if (reset.value) parts.push('退回推荐名单');
   else if (dirtyCount.value) parts.push(`${dirtyCount.value} 个工具`);
-  if (skillDirtyCount.value) parts.push(`${skillDirtyCount.value} 个 Skill`);
   return `未保存：${parts.join('、')}会变，点「保存配置」生效`;
 });
 const statusTitle = computed(() => dirty.value && (reset.value || dirtyCount.value) ? '保存那一下会让所有会话的工具列表变一次、缓存重算一轮' : '');
@@ -326,7 +303,7 @@ const sections = computed(() => {
 const visibleSkills = computed(() => skills.value.filter(skill => {
   const text = query.value.trim().toLowerCase();
   if (text && !`${skill.name} ${skill.description || ''} ${(skill.keywords || []).join(' ')}`.toLowerCase().includes(text)) return false;
-  return filterOK(skillTier(skill) === true);
+  return filterOK(false);
 }));
 function barPercent(value: number) {
   const total = summary.value.residentTokens + summary.value.deferredTokens;
@@ -358,7 +335,6 @@ function resetAll() {
 }
 function discard() {
   for (const id of Object.keys(pending)) delete pending[id];
-  for (const id of Object.keys(skillPending)) delete skillPending[id];
   reset.value = false;
 }
 // 名单不自己保存：它和这一页的其他配置同属一台机器人，两个保存按钮会让人以为
@@ -371,13 +347,6 @@ async function applyPending() {
   // 就跟着变一次。
   if (reset.value || Object.keys(pending).length) {
     await saveAgentResidencyList(profile, reset.value ? null : residentRows.value.map(row => row.id));
-  }
-  for (const [id, value] of Object.entries(skillPending)) {
-    const skill = skills.value.find(item => item.id === id);
-    if (!skill) continue;
-    const payload: Record<string, unknown> = {operation: 'residency', kind: 'skill', name: skill.name, profile_id: profile};
-    if (value !== null) payload.resident = value;
-    await manageExtension(payload);
   }
   discard();
   await load();

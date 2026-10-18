@@ -62,50 +62,18 @@ func writeKeepIndexForPrompt(t *testing.T, count int) {
 	}
 }
 
-// 清单按保存时间从新到旧最多列 20 条，超出的只报个数；索引不变时逐字不变，
-// 不让尾部前面的缓存作废。已经不在磁盘上的条目不列。
-func TestKeepIndexPromptIsBoundedAndStable(t *testing.T) {
-	t.Setenv("APP_DB_PATH", filepath.Join(t.TempDir(), "diana.db"))
-	cfg := BotConfig{ID: "bot-a"}
-	if prompt := keepIndexPrompt(cfg, "bot-a"); prompt != "" {
-		t.Fatalf("空长期区也注入了: %q", prompt)
-	}
-	writeKeepIndexForPrompt(t, 23)
-	first := keepIndexPrompt(cfg, "bot-a")
-	if first != keepIndexPrompt(cfg, "bot-a") {
-		t.Fatal("同一份索引两次渲染不一样")
-	}
-	if !strings.Contains(first, "keep/bot-a/file-22.txt  第 22 份") || strings.Contains(first, "file-02.txt") {
-		t.Fatalf("没按新到旧取前 20 条: %s", first)
-	}
-	if !strings.Contains(first, "现有 23 个文件") || !strings.Contains(first, "另有 3 个较早的") {
-		t.Fatalf("没报总数和剩余数: %s", first)
-	}
-	if err := os.Remove(filepath.Join(AgentWorkspaceDir(), "keep", "bot-a", "file-22.txt")); err != nil {
-		t.Fatal(err)
-	}
-	if prompt := keepIndexPrompt(cfg, "bot-a"); strings.Contains(prompt, "file-22.txt") || !strings.Contains(prompt, "现有 22 个文件") {
-		t.Fatalf("磁盘上没了的条目还在清单里: %s", prompt)
-	}
-	// 别的机器人看不到这份清单。
-	if prompt := keepIndexPrompt(BotConfig{ID: "bot-b"}, "bot-b"); prompt != "" {
-		t.Fatalf("bot-b 看到了 bot-a 的清单: %s", prompt)
-	}
-}
-
-// 清单只进主人的尾部，不进头部，普通成员拿不到。
-func TestKeepIndexPromptOnlyInOwnerTail(t *testing.T) {
+// 持久文件索引只由按需工具读取，不随回复挂载。
+func TestKeepIndexIsNotInjectedIntoPrompts(t *testing.T) {
 	t.Setenv("APP_DB_PATH", filepath.Join(t.TempDir(), "diana.db"))
 	writeKeepIndexForPrompt(t, 2)
 	runtime := NewRuntime(BotConfig{ID: "bot-a"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	event := MessageEvent{Kind: EventKindPrivate, UserID: "owner", ProfileID: "bot-a"}
 	head, tail := runtime.systemPromptPartsWithRelationshipAndAgentTools(event, nil, false, RelationshipPolicy{Owner: true}, true, nil)
-	if strings.Contains(head, "keep/bot-a/") || !strings.Contains(tail, "keep/bot-a/file-01.txt  第 1 份") {
-		t.Fatalf("清单位置不对:\nhead=%q\ntail=%q", head, tail)
+	if strings.Contains(head+tail, "file-01.txt") || strings.Contains(head+tail, "第 1 份") {
+		t.Fatal("saved workspace files were automatically injected")
 	}
-	_, memberTail := runtime.systemPromptPartsWithRelationshipAndAgentTools(event, nil, false, RelationshipPolicy{}, true, nil)
-	if strings.Contains(memberTail, "keep/bot-a/") {
-		t.Fatalf("普通成员看到了长期区清单: %s", memberTail)
+	if entries, err := agent.LoadKeepIndex(AgentWorkspaceDir(), "bot-a"); err != nil || len(entries) != 2 {
+		t.Fatalf("durable files lost: %v %v", entries, err)
 	}
 }
 

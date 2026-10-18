@@ -40,8 +40,7 @@ type ExtensionAdminRequest struct {
 	Values    map[string]string `json:"values,omitempty"`
 	// Audience 只用于 audience 操作：限定这个扩展开放给哪些人、哪些群。
 	Audience ExtensionAudience `json:"audience,omitempty"`
-	// Resident 只用于 residency 操作：true 加进常驻名单，false 拿出去。Skill 例外，
-	// 它不在名单里，不带 Resident 表示退回「看触发词」。
+	// Resident 只用于插件/MCP 的 residency 操作：true 加入，false 移出常驻名单。
 	Resident     *bool    `json:"resident,omitempty"`
 	ClearHeaders []string `json:"clear_headers,omitempty"`
 	ClearEnv     []string `json:"clear_env,omitempty"`
@@ -125,7 +124,7 @@ func AdministerExtensions(ctx context.Context, cfg Config, req ExtensionAdminReq
 				}
 				states[i].EnabledProfiles, states[i].ProfileCount = &on, &total
 			}
-			if req.ProfileID != "" {
+			if req.ProfileID != "" && states[i].Kind != ExtensionKindSkill {
 				states[i].Resident = ResidentOverride(overrides, states[i].ID)
 			}
 			if states[i].Kind != ExtensionKindBuiltin && req.ProfileID != "" {
@@ -212,12 +211,12 @@ func AdministerExtensions(ctx context.Context, cfg Config, req ExtensionAdminReq
 		if req.ProfileID == "" {
 			return nil, fmt.Errorf("请选择机器人后调整常驻档位")
 		}
-		// 档位只有插件、MCP 服务和 Skill 三种单位。别的 kind 写进去也没人读，
+		// 档位只用于插件和 MCP 服务。Skill 正文统一按需读取，
 		// 留下的是一条永远不生效的死配置，不如当场说不行。
 		switch ExtensionKind(req.Kind) {
-		case ExtensionKindBuiltin, ExtensionKindMCP, ExtensionKindSkill:
+		case ExtensionKindBuiltin, ExtensionKindMCP:
 		default:
-			return nil, fmt.Errorf("只有插件、MCP 服务和 Skill 支持常驻档位")
+			return nil, fmt.Errorf("只有插件和 MCP 服务支持常驻档位；Skill 正文用 read_skill 按需读取")
 		}
 		id, err := m.extensionID(req.Kind, req.Name)
 		if err != nil {

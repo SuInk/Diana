@@ -5,7 +5,6 @@ package assistant
 
 import (
 	"context"
-	"strconv"
 	"strings"
 
 	"github.com/SuInk/diana/model/agent"
@@ -34,13 +33,12 @@ type RelationshipPolicy struct {
 // 其实人人都有的条目。能力问题由 capabilities 回答，能力管控走 Allow*
 // 与 allowedAgentToolNames。
 
-// 好感度分档已经删除。语气不再由五个硬编码档位决定，而是把分数原样交给模型，让它
-// 自己拿捏亲疏——档位名（初识／熟悉／朋友／信赖／冷淡）既进提示词又进工具返回，
-// 模型会把它当成身份标签复述出来，而它表达的信息还不如那个数字本身准确。
+// 好感度分档已经删除。分数与语气指引仍由关系查询和后台评估使用，主回复不再逐轮
+// 注入分数和派生语气长文。它们不改变工具授权；个人画像与自动记忆另由原路径挂载。
 //
 // 能力一律不随好感度开关，这条原则不变：Allow* 五个权限位在任何分数下都为真，
 // promptRelationshipTierRules 里「不得以好感度不足为由拒绝任何普通能力」照旧。
-// 负分的惩罚落在「愿不愿意主动搭理」上，不落在「能不能用」上——见 favorabilityStance。
+// favorabilityStance 保留为关系策略数据，不在主回复里另加一份表达说明。
 
 // favorabilityColdThreshold 以下视为关系已经变差：不再主动接话，只在被直接呼叫时回。
 const favorabilityColdThreshold = 0
@@ -50,8 +48,7 @@ const favorabilityDistantThreshold = -50
 
 // favorabilityStance 把好感度换算成一句语气指引。
 //
-// 刻意写成连续描述而不是档位名：模型拿到的是「当前好感度 -35」加一句怎么拿捏，
-// 而不是「关系等级：冷淡」这种可以被当成称号复述的标签。
+// 使用连续描述而非可被当成称号复述的档位名；不作为自动主回复尾部注入。
 func favorabilityStance(score int, owner bool) string {
 	switch {
 	case owner:
@@ -206,37 +203,12 @@ func (r *Runtime) relationshipPolicy(ctx context.Context, event MessageEvent) Re
 	return relationshipPolicyForEvent(cfg, profile, event)
 }
 
-// relationshipPermissionContext 只返回随发言者变化的那几行。基础能力说明和权限
-// 规则对所有人逐字相同，已经作为 promptRelationshipTierRules 放进稳定的系统提示词
-// 头部——它们以前跟着这段一起进按发言者变化的尾部，等于每条消息都重发一遍几百
-// token 的固定文本，还永远命不中前缀缓存。
-//
-// 只说会影响说话方式的东西。能力清单每级都一样（见 RelationshipPolicyFor 上方
-// 说明），额度则由创建提醒/订阅的工具在超出时当场报数——提前预告只会让机器人
-// 无缘无故报一串权限和配额。
-//
-// 【当前发言者身份】是身份规则里点名的那一行，标记由代码写死，只有标记后面的话可以改。
-func relationshipPermissionContext(policy RelationshipPolicy, configs ...BotConfig) string {
-	overrides := promptOverridesOf(configs)
-	// 等级已删，改成「数值 + 一句怎么拿捏」。
-	//
-	// 负分的惩罚就落在这里：favorabilityStance 会在分数为负时要求只回应直接冲着
-	// 自己来的话、不主动接话题，分数更低时进一步收敛到只答必要内容。惩罚只作用于
-	// 「愿不愿意主动搭理」，不关闭任何能力——能力一律不随好感度开关这条原则不变，
-	// 否则任何人都能靠激怒机器人把自己的功能弄坏，也违背 promptRelationshipTierRules
-	// 里「不得以好感度不足为由拒绝任何普通能力」。
-	context := overrides.render(promptFavorabilitySpec, map[string]string{
-		"score": strconv.Itoa(policy.Score),
-		"tone":  policy.Tone,
-	})
-	// 身份断言必须双向：以前只在是主人时写一行，不是主人时什么都不写。沉默无法
-	// 反驳正文里那句「我是主人」——需要挡住的恰恰是这种声称，所以两种情况都明写。
+// relationshipPermissionContext is a runtime identity assertion, not a capability catalog.
+func relationshipPermissionContext(policy RelationshipPolicy) string {
 	if policy.Owner {
-		context += "\n" + currentSpeakerIdentityMarker + overrides.text(promptSpeakerOwnerSpec)
-	} else {
-		context += "\n" + currentSpeakerIdentityMarker + overrides.text(promptSpeakerNotOwnerSpec)
+		return currentSpeakerIdentityMarker + "主人（按本轮账号和配置确认，不代表群身份）"
 	}
-	return context
+	return currentSpeakerIdentityMarker + "不是主人（按本轮账号和配置确认，不代表群身份）"
 }
 
 // applyRelationshipTaskPermissions 与 relationshipPermissionDenied 已删除。
@@ -247,18 +219,3 @@ func relationshipPermissionContext(policy RelationshipPolicy, configs ...BotConf
 // 明说，不需要再留一段永远走不到的拒绝话术。
 
 const currentSpeakerIdentityMarker = "【当前发言者身份】"
-
-const (
-	promptFavorability    = "当前好感度：{score}（区间 -100 到 1000，0 以下表示关系为负）\n语气要求：{tone}"
-	promptSpeakerOwner    = "主人（按本轮账号和当前配置核验，仅指机器人主人，不代表群身份）。"
-	promptSpeakerNotOwner = "不是主人（按本轮账号和当前配置核验，不代表群身份）。"
-)
-
-var (
-	promptFavorabilitySpec = tailSpec("favorability", "当前好感度与语气", "每轮放在尾部：当前发言者的好感度和对应的语气要求。",
-		promptFavorability,
-		PromptVar{Name: "score", Description: "当前发言者的好感度数值"},
-		PromptVar{Name: "tone", Description: "按好感度算出的语气要求"})
-	promptSpeakerOwnerSpec    = tailSpec("speaker_identity.owner", "发言者身份：主人", "当前发言者是主人时，写在【当前发言者身份】标记后面，简要说明当前机器人主人身份，不推断群身份。", promptSpeakerOwner)
-	promptSpeakerNotOwnerSpec = tailSpec("speaker_identity.not_owner", "发言者身份：不是主人", "当前发言者不是主人时，写在【当前发言者身份】标记后面，明说不具备主人能力。", promptSpeakerNotOwner)
-)

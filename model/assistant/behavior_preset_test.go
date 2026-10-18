@@ -118,19 +118,7 @@ func TestHumanReplyStylePromptCarriesExamples(t *testing.T) {
 	}
 }
 
-func TestSystemPromptEndsWithReplyStyleClosingAnchor(t *testing.T) {
-	base := BotConfig{ReplyStyle: ReplyStyleHuman}.WithDefaults()
-	runtime := NewRuntime(base, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
-	event := MessageEvent{Kind: EventKindGroup, GroupID: "g1", UserID: "1"}
-	relationship := RelationshipPolicyFor(UserMemoryProfile{}, base.OwnerID, event.UserID)
-	prompt := runtime.systemPromptWithRelationshipAndAgentTools(event, nil, true, relationship, true, nil)
-	anchor := personaClosingAnchor()
-	if !strings.HasSuffix(prompt, anchor) {
-		t.Fatalf("system prompt does not end with the closing anchor: %q", prompt)
-	}
-}
-
-func TestUserFacingPersonaCarriesStylePromptAndClosingAnchor(t *testing.T) {
+func TestUserFacingPersonaCarriesStyleProtocolOnce(t *testing.T) {
 	base := BotConfig{BotAccount: "42", ReplyStyle: ReplyStyleHuman}.WithDefaults()
 	runtime := NewRuntime(base, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	event := MessageEvent{Kind: EventKindGroup, GroupID: "123", UserID: "9"}
@@ -140,7 +128,7 @@ func TestUserFacingPersonaCarriesStylePromptAndClosingAnchor(t *testing.T) {
 		t.Fatalf("persona was not prepended: %#v", messages)
 	}
 	persona := messages[0].Content
-	for _, want := range []string{strings.ReplaceAll(base.SystemPrompt, "{{name}}", base.Name), replyPresentationPrompt(true), personaClosingAnchor()} {
+	for _, want := range []string{strings.ReplaceAll(base.SystemPrompt, "{{name}}", base.Name), replyPresentationPrompt(true)} {
 		if !strings.Contains(persona, want) {
 			t.Fatalf("persona missing %q: %q", want, persona)
 		}
@@ -314,14 +302,8 @@ func TestSystemPromptKeepsPerMessageContentOutOfTheCacheablePrefix(t *testing.T)
 	}
 
 	// 内容不能因为挪位置而丢失或串档。
-	if !strings.Contains(alice, "Alice") || !strings.Contains(bob, "Bob") {
-		t.Fatal("sender name missing from the prompt")
-	}
-	if !strings.Contains(alice, "当前消息命中的配置别名") {
-		t.Fatal("matched alias notice missing from the prompt")
-	}
-	if strings.Contains(bob, "当前消息命中的配置别名") {
-		t.Fatal("a message without an alias hit must not carry the notice")
+	if strings.Contains(alice, "Alice") || strings.Contains(bob, "Bob") || strings.Contains(alice, "当前消息命中的配置别名") {
+		t.Fatal("current identities and aliases must not be duplicated in system rules")
 	}
 	if !strings.Contains(owner, "llm_config") {
 		t.Fatal("owner-only tool rules missing after the move")
@@ -330,11 +312,8 @@ func TestSystemPromptKeepsPerMessageContentOutOfTheCacheablePrefix(t *testing.T)
 		t.Fatal("owner-only tool rules leaked to an ordinary member")
 	}
 	for _, item := range []string{alice, bob, owner} {
-		if !strings.Contains(item, promptRelationshipTierRules) || !strings.Contains(item, "当前好感度：") {
+		if !strings.Contains(item, promptRelationshipTierRules) || !strings.Contains(item, currentSpeakerIdentityMarker) {
 			t.Fatal("relationship permission context missing from the prompt")
-		}
-		if !strings.HasSuffix(item, personaClosingAnchor()) {
-			t.Fatal("closing anchor must stay last")
 		}
 	}
 }
@@ -673,13 +652,10 @@ func TestCatgirlActionDescriptionToggleProducesUnambiguousPrompt(t *testing.T) {
 	}
 }
 
-func TestCatgirlSystemPromptEndsWithClosingAnchor(t *testing.T) {
+func TestCatgirlSystemPromptKeepsMigratedPersona(t *testing.T) {
 	cfg := BotConfig{ReplyStyle: ReplyStyleCatgirl, ActionDescriptionEnabled: boolPointer(true)}.WithDefaults()
 	runtime := NewRuntime(cfg, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	prompt := runtime.systemPrompt(MessageEvent{Kind: EventKindPrivate, UserID: "1"}, nil)
-	if !strings.HasSuffix(prompt, personaClosingAnchor()) {
-		t.Fatalf("最终提示词没有以语气锚点收尾：%q", prompt)
-	}
 	if strings.Contains(prompt, catgirlNoActionRule) {
 		t.Fatalf("最终提示词同时要求并禁止动作描写：%q", prompt)
 	}
@@ -752,12 +728,32 @@ func TestLayoutProtocolIsStatedOnce(t *testing.T) {
 			t.Fatalf("%s 又把换行协议重复了一遍：%q", name, rule)
 		}
 	}
-	// 长文示例最多两行：分组规律一行就看得出来，例子比它要教的规则还长就没意义了。
-	if got := strings.Count(replyDocumentDeliveryRule, notificationSplitMarker); got != 1 {
-		t.Fatalf("长文示例不是两行（%d 处分条标记）：%q", got, replyDocumentDeliveryRule)
-	}
 	// 标记本身和它们的语义一个字都不许动：发送层只认这两串。
 	if notificationSplitMarker != "[diana-msg]" || notificationLineMarker != "[diana-line]" {
 		t.Fatalf("投递标记被改了：%q %q", notificationSplitMarker, notificationLineMarker)
+	}
+}
+
+func TestRuntimeTailOmitsImplicitStyleAndRepeatedIdentity(t *testing.T) {
+	cfg := BotConfig{BotAccount: "bot", MoodEnabled: boolPointer(true), ExpressionLearningEnabled: boolPointer(false)}.WithDefaults()
+	runtime := NewRuntime(cfg, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	event := MessageEvent{Kind: EventKindGroup, GroupID: "group", UserID: "member", SenderName: "OnlyInCurrentInput"}
+	for range 20 {
+		runtime.remember(MessageEvent{Kind: EventKindGroup, GroupID: event.GroupID, UserID: "member", RawMessage: "一条普通群聊"})
+	}
+	_, tail := runtime.systemPromptPartsWithRelationshipAndAgentTools(event, nil, false, RelationshipPolicy{Score: 123}, true, nil)
+	for _, removed := range []string{"OnlyInCurrentInput", "当前好感度", "心情不错", "说话的腔调也学", "最后：保持最开头", "输出前只检查"} {
+		if strings.Contains(tail, removed) {
+			t.Fatalf("removed automatic tail returned (%s): %s", removed, tail)
+		}
+	}
+	current := currentPromptText(event, "问题")
+	if !strings.Contains(current, "OnlyInCurrentInput（member）") || !strings.Contains(tail, "【当前发言者身份】不是主人") {
+		t.Fatal("current sender or trusted ownership was lost")
+	}
+	for _, marker := range []string{notificationSplitMarker, notificationLineMarker, "[diana-at:user_id]", replySingleMarker, replyAutoMarker, replyLinesPreserveMarker, replyLinesCompactMarker} {
+		if !strings.Contains(tail, marker) {
+			t.Fatalf("sending protocol lost %s", marker)
+		}
 	}
 }

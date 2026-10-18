@@ -111,7 +111,7 @@ func TestAddressingReachesRoutingAndFinalPromptWithoutLeakingIDs(t *testing.T) {
 		t.Fatalf("routing lost explicit false: %s", raw)
 	}
 	prompt := r.systemPromptWithRelationshipAndAgentTools(event, nil, false, RelationshipPolicy{}, false, nil)
-	if !strings.Contains(prompt, `"reply_target":"other"`) || !strings.Contains(prompt, messageAddressingRule) {
+	if !strings.Contains(prompt, "引用=other(10002)") || !strings.Contains(prompt, messageAddressingRule) {
 		t.Fatal("main reply missed recipient context")
 	}
 	scope := newIdentityPrivacyScope()
@@ -121,5 +121,56 @@ func TestAddressingReachesRoutingAndFinalPromptWithoutLeakingIDs(t *testing.T) {
 		if strings.Contains(protected.Messages[0].Content, id) {
 			t.Fatalf("unmasked addressing ID %s", id)
 		}
+	}
+}
+
+func TestMessageAddressingMergesPlatformMentionSources(t *testing.T) {
+	event := MessageEvent{
+		SelfID: "bot",
+		MentionTargets: []MessageMention{
+			{UserID: "bot", Username: "Diana", UsernameKnown: true},
+			{UserID: "other", Username: "Alice"},
+			{UserID: "all"},
+		},
+		Segments: []MessageSegment{
+			{Type: "at", Data: map[string]string{"qq": "bot"}},
+			{Type: "at", Data: map[string]string{"qq": "other"}},
+			{Type: "at", Data: map[string]string{"qq": "all"}},
+		},
+	}
+	got := addressingForEvent(event, BotConfig{})
+	if len(got.Mentions) != 3 || !got.MentionsSelf || !got.MentionsOther || got.Mentions[2].Target != "all" {
+		t.Fatalf("duplicated or misclassified platform mentions: %+v", got)
+	}
+	if got.Mentions[0].Username != "Diana" || !got.Mentions[0].UsernameKnown {
+		t.Fatalf("lost trusted username observation: %+v", got.Mentions[0])
+	}
+}
+
+func TestAddressingPromptOnlyContainsCurrentPlatformFacts(t *testing.T) {
+	if got := addressingPrompt(MessageEvent{}, BotConfig{}); got != "" {
+		t.Fatalf("empty relationship generated teaching text: %q", got)
+	}
+	event := MessageEvent{
+		SelfID:         "bot",
+		Segments:       []MessageSegment{{Type: "reply", Data: map[string]string{"id": "unresolved"}}},
+		MentionTargets: []MessageMention{{Username: "otherbot", Target: "other"}},
+	}
+	got := addressingPrompt(event, BotConfig{})
+	for _, want := range []string{"引用=unknown", "提及=other(@otherbot)"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("lost relationship %q: %q", want, got)
+		}
+	}
+	for _, redundant := range []string{"当前消息的对话对象", "mentions_self", "mentions_other", "reply_sender"} {
+		if strings.Contains(got, redundant) {
+			t.Fatalf("unexpected duplicated field %q: %q", redundant, got)
+		}
+	}
+	event.Segments = nil
+	event.MentionTargets = nil
+	event.Quoted = &QuotedMessage{UserID: "bot", Semantic: true}
+	if got := addressingPrompt(event, BotConfig{}); got != "" {
+		t.Fatalf("semantic retrieval became a real platform reply: %q", got)
 	}
 }

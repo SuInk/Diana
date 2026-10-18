@@ -10,14 +10,14 @@ import (
 
 // 导出的文件列出每一段，改过的写改过的；读回来只剩改过的那几段。
 func TestPromptFileRoundTrip(t *testing.T) {
-	spec := promptPersonaClosingAnchorSpec
+	spec := promptReplyProportionSpec
 	overrides := PromptOverrides{spec.Key: "最后：照人设说话。"}
 	raw, err := RenderPromptFile(overrides, "v9.9.9")
 	if err != nil {
 		t.Fatal(err)
 	}
 	text := string(raw)
-	for _, want := range []string{"format_version: 1", "diana_version: v9.9.9", "最后：照人设说话。", promptReplyDepthAnchorSpec.Key + ": |"} {
+	for _, want := range []string{"format_version: 1", "diana_version: v9.9.9", "最后：照人设说话。", promptReplyBlankLineSpec.Key + ": |"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("exported file is missing %q", want)
 		}
@@ -38,7 +38,7 @@ func TestPromptFileRoundTrip(t *testing.T) {
 
 // 宽松读：没写的段落用默认值，登记表里没有的键跳过并报出来。
 func TestPromptFileIsLenientAboutMissingAndUnknownKeys(t *testing.T) {
-	raw := "format_version: 1\nprompts:\n  reply.style.closing_anchor: 改过了\n  reply.style.voice.enders: 旧版本删掉的\n"
+	raw := "format_version: 1\nprompts:\n  reply.style.proportion: 改过了\n  reply.style.voice.enders: 旧版本删掉的\n"
 	parsed, err := ParsePromptFile([]byte(raw))
 	if err != nil {
 		t.Fatal(err)
@@ -58,5 +58,26 @@ func TestPromptFileRejectsBadInput(t *testing.T) {
 		if _, err := ParsePromptFile([]byte(raw)); err == nil {
 			t.Fatalf("%s: expected an error", name)
 		}
+	}
+}
+
+func TestRemovedAutomaticTailPromptsCannotBeImported(t *testing.T) {
+	keys := []string{
+		"reply.message_addressing", "reply.group_sender", "reply.matched_aliases", "reply.favorability",
+		"reply.speaker_identity.owner", "reply.speaker_identity.not_owner", "reply.clock",
+		"reply.style.closing_anchor", "reply.style.depth_anchor", "reply.group_length_norm.voice",
+		"reply.group_length_norm.no_newline", "reply.mood.happy", "reply.tool.workspace_keep_index",
+	}
+	var raw strings.Builder
+	raw.WriteString("format_version: 1\nprompts:\n")
+	for _, key := range keys {
+		raw.WriteString("  " + key + ": 旧版每轮长文\n")
+	}
+	parsed, err := ParsePromptFile([]byte(raw.String()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parsed.Changed != 0 || len(parsed.Overrides) != 0 || len(parsed.Unknown) != len(keys) {
+		t.Fatalf("removed prompt overrides came back: %+v", parsed)
 	}
 }

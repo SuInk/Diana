@@ -37,22 +37,10 @@ func (r *Runtime) SetNotebookStore(store NotebookStore) {
 	r.notebook = store
 }
 
-// claimSourceRecallEnabled 决定是否把结论引用的来源留到之后几轮供追问使用。
-func (r *Runtime) claimSourceRecallEnabled(event MessageEvent) bool {
-	settings, enabled := r.webSearchPluginSettings(event)
-	if !enabled {
-		return false
-	}
-	return settings.Bool(webSearchSettingSourceRecall, true)
-}
-
 func (r *Runtime) withUserFacingPersona(event MessageEvent, messages []llm.Message) []llm.Message {
 	cfg := r.effectiveConfigForEvent(event)
-	// 语气锚点和风格描述一起注入，让这条旁路的说话方式与主回复链路保持一致。
 	limits := chatSplitLimitsForEvent(cfg, event)
-	// 心情这条旁路也要带上：主链路蔫着、旁路却活蹦乱跳，一台机器人像两个人。
-	groupVoice := r.groupLengthNormPrompt(event, cfg)
-	persona := strings.TrimSpace(cfg.personaPrompt() + "\n" + replyPresentationPrompt(!limits.SingleMessage, cfg) + "\n" + replyLineBreakPrompt(cfg) + "\n" + replyLineSplitPrompt(limits) + "\n" + groupVoice + "\n" + styleFilterPrompt(cfg, groupVoice) + "\n" + r.moodToneForConfig(cfg, event.ProfileID) + "\n" + personaClosingAnchor(cfg))
+	persona := joinPromptSections(cfg.personaPrompt(), replyPresentationPrompt(!limits.SingleMessage, cfg), replyLineBreakPrompt(cfg), replyLineSplitPrompt(limits))
 	if persona == "" {
 		return messages
 	}
@@ -251,13 +239,11 @@ func formatUserMemoryContext(profile UserMemoryProfile, policy RelationshipPolic
 	builder.WriteString("（")
 	builder.WriteString(profile.UserID)
 	builder.WriteString("）\n")
-	// 不写好感度数值和互动次数：两者都会推动这一段后面的内容，切断前缀缓存，
-	// 而好感度已经由 relationshipPermissionContext 在系统尾部给出一次，互动次数
-	// 则从来不该被引用（要用时 relationship 工具查得到）。
+	// 不重复写好感度数值和互动次数；需要准确数据时由 relationship 工具查询。
+	// 主回复尾部也不再自动注入分数及派生语气，但画像正文继续按现有路径保留。
 	//
 	// 也不再列「已授权能力」：那份清单对谁都一样，摆在这里只会被当成特权复述出去。
-	// 能力问题由 capabilities 负责；语气要求和恋爱关系同样由
-	// relationshipPermissionContext 统一给出，不在这里重复。
+	// 能力问题由 capabilities 负责，可信主人身份由 relationshipPermissionContext 给出。
 	if lines := FormatPortraitLines(profile.Portrait); lines != "" {
 		builder.WriteString("\n人员画像（当前发言者的长期情况，只在自然相关时用上，不要主动背出来）：")
 		builder.WriteString(lines)

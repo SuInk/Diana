@@ -41,8 +41,11 @@ func TestDefaultSystemPromptCarriesNoFormattingRules(t *testing.T) {
 	if strings.Contains(defaultPromptPlaintextRules, notificationSplitMarker) {
 		t.Fatalf("plaintext rules should not own the split marker: %q", defaultPromptPlaintextRules)
 	}
-	if !strings.Contains(replySegmentationRule, notificationSplitMarker) {
-		t.Fatalf("built-in segmentation rule should teach the split marker: %q", replySegmentationRule)
+	presentation := replyPresentationPrompt(true)
+	for _, want := range []string{notificationSplitMarker, notificationLineMarker, "正文不写真实换行", "当前允许按完整意群分条"} {
+		if !strings.Contains(presentation, want) {
+			t.Fatalf("built-in presentation protocol missing %q: %q", want, presentation)
+		}
 	}
 }
 

@@ -136,7 +136,7 @@ func TestRelationshipContextDrivesToneAndHardPermissionMessage(t *testing.T) {
 	policy := RelationshipPolicyFor(UserMemoryProfile{Favorability: 20, MessageCount: 10}, "owner", "user")
 	// 随发言者变的只有等级名和语气；固定的能力与权限规则在稳定的系统头部。
 	contextText := relationshipPermissionContext(policy)
-	for _, want := range []string{"当前好感度：20", "语气要求"} {
+	for _, want := range []string{currentSpeakerIdentityMarker, "不是主人"} {
 		if !strings.Contains(contextText, want) {
 			t.Fatalf("tier context = %q, missing %q", contextText, want)
 		}
@@ -158,8 +158,8 @@ func TestRelationshipContextDrivesToneAndHardPermissionMessage(t *testing.T) {
 func TestRelationshipContextDoesNotListBaselineAsGrants(t *testing.T) {
 	profile := UserMemoryProfile{UserID: "10005", DisplayName: "小林", Favorability: 101, MessageCount: 1128}
 	policy := RelationshipPolicyFor(profile, "owner", "user")
-	if context := relationshipPermissionContext(policy); !strings.Contains(context, "区间 -100 到 1000") {
-		t.Fatalf("context missing the current favorability range: %s", context)
+	if context := relationshipPermissionContext(policy); strings.Contains(context, "当前好感度：") {
+		t.Fatalf("context still injects raw favorability: %s", context)
 	}
 
 	// 模型看到的是「稳定头部的固定规则 + 尾部的本人等级」两段合起来。

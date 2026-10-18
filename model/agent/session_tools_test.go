@@ -1,7 +1,6 @@
 package agent
 
 import (
-	"context"
 	"encoding/json"
 	"reflect"
 	"strings"
@@ -10,80 +9,50 @@ import (
 	"github.com/SuInk/diana/model/llm"
 )
 
-func TestSessionToolDefinitionsAppendAndRestoreOnlyAllowedTools(t *testing.T) {
+func TestSessionToolDefinitionsStayStableAfterLoading(t *testing.T) {
 	registry := NewToolRegistry(&countingTool{name: "common"}, &countingTool{name: "rare"}, &countingTool{name: "admin"})
 	loader := newDeferredToolLoader(registry, []string{"common"})
 	definitions := append(registry.Definitions(), finalizeToolDefinition(false))
 	first := loader.filter(definitions)
-	loader.restore([]string{"rare", "admin", "rare", "gone"})
-	next := loader.filter(definitions)
-	if !reflect.DeepEqual(first, next) {
-		t.Fatal("loading rewrote provider tool definitions")
+	if _, err := loader.Run(t.Context(), map[string]any{"names": []any{"rare", "admin"}}); err != nil {
+		t.Fatal(err)
 	}
-	if got := toolDefinitionNames(next); !reflect.DeepEqual(got, []string{"common", finalizeToolName, ToolsLoadToolName, ToolsExecuteToolName}) {
-		t.Fatal(got)
-	}
-	contracts := loader.loadedContracts()
-	if !strings.Contains(contracts, `"name":"rare"`) || !strings.Contains(contracts, `"name":"admin"`) {
-		t.Fatalf("restored contracts = %s", contracts)
+	if !reflect.DeepEqual(first, loader.filter(definitions)) {
+		t.Fatal("loading rewrote native declarations")
 	}
 	member := newDeferredToolLoader(NewToolRegistry(&countingTool{name: "common"}, &countingTool{name: "rare"}), []string{"common"})
-	member.restore(loader.order)
-	if !reflect.DeepEqual(member.order, []string{"rare"}) {
-		t.Fatalf("permissions bypassed: %v", member.order)
+	if _, err := member.Run(t.Context(), map[string]any{"names": []any{"admin"}}); err == nil {
+		t.Fatal("unauthorized contract loaded")
 	}
 }
 
-func TestRunnerRestoresDiscoveredToolsOnNewRun(t *testing.T) {
-	var loaded []string
-	newRunner := func(client llm.LLMClient, rare *countingTool) *Runner {
-		runner, err := NewRunner(client, Config{MaxSteps: 4, CoreTools: []string{"common"}}, NewToolRegistry(&countingTool{name: "common"}, &countingTool{name: "rare"}))
-		if err != nil {
-			t.Fatal(err)
-		}
-		return runner
-	}
-	firstClient := &deferredLoadClient{}
-	request := Request{Messages: []llm.Message{{Role: llm.RoleUser, Content: "test"}}, ToolsLoaded: func(names []string) { loaded = names }}
-	if _, err := newRunner(firstClient, &countingTool{name: "rare"}).Run(context.Background(), request); err != nil {
-		t.Fatal(err)
-	}
-	if !reflect.DeepEqual(loaded, []string{"rare"}) {
-		t.Fatal(loaded)
-	}
-	previous, _ := json.Marshal(firstClient.requests[1].Tools)
-	request.LoadedTools = loaded
+func TestRunnerDoesNotCarryLoadedContractsAcrossRuns(t *testing.T) {
 	rare := &countingTool{name: "rare"}
-	secondClient := &dispatchTestClient{replies: []*llm.GenerateResponse{executeReply(true, "rare", map[string]any{})}}
-	runner, err := NewRunner(secondClient, Config{MaxSteps: 4, CoreTools: []string{"common"}}, NewToolRegistry(&countingTool{name: "common"}, rare))
+	firstClient := &deferredLoadClient{}
+	runner, err := NewRunner(firstClient, Config{MaxSteps: 4, CoreTools: []string{"common"}}, NewToolRegistry(&countingTool{name: "common"}, rare))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := runner.Run(context.Background(), request); err != nil {
+	request := Request{Messages: []llm.Message{{Role: llm.RoleUser, Content: "test"}}}
+	if _, err = runner.Run(t.Context(), request); err != nil {
 		t.Fatal(err)
 	}
-	if rare.calls != 1 {
-		t.Fatalf("restored tool calls = %d", rare.calls)
+	secondClient := &dispatchTestClient{replies: []*llm.GenerateResponse{dispatchReply(true, "rare", map[string]any{}), executeReply(true, "rare", map[string]any{})}}
+	runner.client = secondClient
+	result, err := runner.Run(t.Context(), request)
+	if err != nil {
+		t.Fatal(err)
 	}
-	next, _ := json.Marshal(secondClient.requests[0].Tools)
-	if string(previous) != string(next) {
-		t.Fatal("restoring a tool rewrote provider definitions")
+	if rare.calls != 2 || len(result.Steps) != 2 || !result.Steps[0].Skipped || result.Steps[1].Skipped {
+		t.Fatalf("state leaked across runs: calls=%d steps=%#v", rare.calls, result.Steps)
 	}
-	messages := secondClient.requests[0].Messages
-	if strings.Contains(messages[0].Content, `"name":"rare"`) {
-		t.Fatal("restored schema leaked into stable prompt")
-	}
-	found := false
-	for _, message := range messages[1 : len(messages)-1] {
-		if strings.Contains(message.Content, `"name":"rare"`) && strings.Contains(message.Content, `"inputSchema":`) {
-			found = true
-			if message.Role != llm.RoleUser || message.Priority != llm.MessagePrioritySystem {
-				t.Fatalf("restored contract must stay inline and retain system budget priority: %#v", message)
-			}
+	for _, message := range secondClient.requests[0].Messages {
+		if strings.Contains(message.Content, `"inputSchema"`) {
+			t.Fatal("old contract was automatically injected")
 		}
 	}
-	if !found {
-		t.Fatal("restored schema missing from volatile tail")
+	if !reflect.DeepEqual(firstClient.requests[0].Tools, secondClient.requests[0].Tools) {
+		t.Fatal("native definitions changed across runs")
 	}
 }
 

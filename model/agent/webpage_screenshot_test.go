@@ -119,11 +119,11 @@ func TestSystemPromptRoutesChartRequests(t *testing.T) {
 		t.Fatal("chart rule should only appear when an image tool is registered")
 	}
 	screenshot := NewWebpageScreenshotTool(NewSandboxedHeadlessBrowser(SandboxedBrowserConfig{}))
-	if got := prompt(screenshot); !strings.Contains(got, "就是截图任务") || strings.Contains(got, "remote_image 的 view") {
+	if got := prompt(screenshot); !strings.Contains(got, "网页上已有的图表等画面可截图发送") || strings.Contains(got, "remote_image 的 view") {
 		t.Fatal("screenshot-only prompt should treat charts as screenshots")
 	}
 	got := prompt(screenshot, &countingTool{name: "remote_image"})
-	for _, want := range []string{"remote_image 的 view 下载", "browser_render 返回的 images", "finviz.com/chart.ashx", "确实拿不到直链再用 webpage_screenshot"} {
+	for _, want := range []string{"remote_image 读取原图再发送", "拿不到原图可截图", "实际图像和发送成功结果"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("system prompt missing %q", want)
 		}

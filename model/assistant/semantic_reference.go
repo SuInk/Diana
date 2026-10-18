@@ -360,10 +360,9 @@ func (r *Runtime) semanticReferenceCandidates(ctx context.Context, event Message
 // 跑」，哪怕群里从没人发过图，而关掉 agent 往往正是为了省钱省延迟。现在两种模式
 // 都先问「有没有值得解析的历史媒体」，纯文字会话零额外调用。
 //
-// agent 模式则完全不再跑路由器：窗口外媒体改由 durableMediaIndex 以文字索引进
-// 提示词，模型自己判断要不要用 history_media 取历史媒体。索引是可缓存的静态
-// 文本，比每条消息一次路由调用便宜，而且模型手里有描述，比路由器按时间顺序猜
-// 更准。工具被关系等级挡掉时没有取图手段，仍然回退到路由器。
+// Agent 有媒体工具时自己通过 chat_history 查找来源，再用 history_media 读取，
+// 不自动注入窗口外媒体目录，也不为每条消息调用路由器。工具被关系权限挡掉时
+// 没有取图手段，仍然回退到路由器。
 func (r *Runtime) shouldResolveSemanticReference(ctx context.Context, cfg BotConfig, event MessageEvent, agentCanFetchMedia bool) bool {
 	if cfg.AgentEnabled && agentCanFetchMedia {
 		return false
