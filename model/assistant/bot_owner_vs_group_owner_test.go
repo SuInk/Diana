@@ -31,10 +31,10 @@ func TestBotOwnerLabelsNeverCollideWithGroupOwnerRole(t *testing.T) {
 			t.Fatalf("脱敏别名角色 %q 和群成员角色撞名了", role)
 		}
 	}
-	if got := normalizeIdentityPrivacyRole("owner"); got != "bot_owner" {
+	if got := normalizeIdentityPrivacyRole("owner"); got != "user" {
 		t.Fatalf("owner_id 归一化成了 %q，应该是 bot_owner", got)
 	}
-	if prefix := identityAlias(normalizeIdentityPrivacyRole("owner")); prefix != "im_bot_owner_" {
+	if prefix := identityAlias(normalizeIdentityPrivacyRole("owner")); prefix != "im_user_" {
 		t.Fatalf("主人的别名前缀 = %q", prefix)
 	}
 

@@ -6,8 +6,10 @@ package assistant
 import (
 	"context"
 	"errors"
+	"github.com/SuInk/diana/model/llm"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -265,11 +267,14 @@ func TestGroupOutboundBackoffDropsAfterFailureWindow(t *testing.T) {
 	if attemptsBeforeCooldown < 2 {
 		t.Fatalf("attempts before drop = %d", attemptsBeforeCooldown)
 	}
-	if err := runtime.send(ctx, failedEvent, "drop immediately"); !errors.Is(err, errOutboundDeliveryDropped) {
-		t.Fatalf("cooldown send error = %v", err)
+	channel.mu.Lock()
+	channel.alwaysFail["123456"] = false
+	channel.mu.Unlock()
+	if err := runtime.send(ctx, failedEvent, "next message succeeds"); err != nil {
+		t.Fatalf("one failed payload cooled down the group: %v", err)
 	}
-	if got := len(channel.attemptTexts("123456")); got != attemptsBeforeCooldown {
-		t.Fatalf("cooldown reached OneBot: attempts=%d want=%d", got, attemptsBeforeCooldown)
+	if got := len(channel.attemptTexts("123456")); got != attemptsBeforeCooldown+1 {
+		t.Fatalf("next message never reached transport: attempts=%d", got)
 	}
 
 	otherEvent := MessageEvent{Kind: EventKindGroup, GroupID: "20005", UserID: "10002", MessageID: "other-1"}
@@ -521,4 +526,168 @@ func (c *scriptedBackoffChannel) apiActionCount(action string) int {
 		}
 	}
 	return count
+}
+
+func TestGroupPermanentUIDFailureDoesNotRetryOrBlockNextMessage(t *testing.T) {
+	channel := newScriptedBackoffChannel("123456")
+	channel.attemptErrors = []error{errors.New("failed to resolve UID for UIN 41001")}
+	runtime := NewRuntime(BotConfig{}, channel, NewPluginManager(), nil, nil, nil, nil)
+	event := MessageEvent{Kind: EventKindGroup, GroupID: "123456", MessageID: "bad-mention"}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := runtime.send(ctx, event, "bad mention"); !isPermanentSendRejection(err) {
+		t.Fatalf("error = %v", err)
+	}
+	if err := runtime.send(ctx, event, "next message"); err != nil {
+		t.Fatal(err)
+	}
+	if got := channel.attemptTexts("123456"); len(got) != 2 {
+		t.Fatalf("attempts = %v", got)
+	}
+}
+
+func TestGroupRetryBudgetExactlyThreeAndDoesNotCoolDownGroup(t *testing.T) {
+	channel := newScriptedBackoffChannel("123456")
+	channel.alwaysFail["123456"] = true
+	runtime := NewRuntime(BotConfig{}, channel, NewPluginManager(), nil, nil, nil, nil)
+	logs := &captureAppLogs{}
+	runtime.SetAppLogWriter(logs)
+	ctx := withOutboundDeliveryPolicy(context.Background(), recoveringOutboundDeliveryPolicy())
+	event := MessageEvent{Kind: EventKindGroup, GroupID: "123456", MessageID: "bad"}
+	if err := runtime.send(ctx, event, "fail three times"); !errors.Is(err, errOutboundDeliveryDropped) {
+		t.Fatalf("error = %v", err)
+	}
+	if got := len(channel.attemptTexts("123456")); got != 3 {
+		t.Fatalf("attempts=%d, want 3", got)
+	}
+	entries := logs.entriesSnapshot()
+	if countAppLogAction(entries, "outbound_delivery_backoff") != 2 || countAppLogAction(entries, "outbound_delivery_dropped") != 1 {
+		t.Fatalf("missing retry/failure audit: %+v", entries)
+	}
+	for _, entry := range entries {
+		if entry.Action == "outbound_delivery_dropped" && (string(entry.Level) != "error" || entry.Detail == "" || entry.Metadata["failure_count"] != 3) {
+			t.Fatalf("incomplete final failure log: %+v", entry)
+		}
+	}
+	channel.mu.Lock()
+	channel.alwaysFail["123456"] = false
+	channel.mu.Unlock()
+	event.MessageID = "good"
+	if err := runtime.send(ctx, event, "later message"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRetrySleepDoesNotHoldGroupSendLock(t *testing.T) {
+	channel := newScriptedBackoffChannel("123456")
+	runtime := NewRuntime(BotConfig{}, channel, NewPluginManager(), nil, nil, nil, nil)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	failed := make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		attempt := 0
+		_, err := runtime.executeOutboundCall(ctx, MessageEvent{Kind: EventKindGroup, GroupID: "123456"}, "send_group_msg", func(context.Context) (map[string]any, error) {
+			attempt++
+			if attempt == 1 {
+				close(failed)
+				return nil, errors.New("temporary failure")
+			}
+			return map[string]any{"message_id": "recovered"}, nil
+		})
+		done <- err
+	}()
+	<-failed
+	other, stop := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer stop()
+	if err := runtime.send(other, MessageEvent{Kind: EventKindGroup, GroupID: "123456"}, "while retry waits"); err != nil {
+		t.Fatalf("retry blocks same group: %v", err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+// 只向当前模型请求生成；平台发送由本地故障通道接管，不向真实群发测试消息。
+func TestLiveProductionGroupDeliveryFailureReplay(t *testing.T) {
+	client := liveLLMClient(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	resp, err := client.Generate(ctx, llm.GenerateRequest{Messages: []llm.Message{
+		{Role: "system", Content: "你是群聊机器人嘉然，用一句简短中文回复，不使用工具。"},
+		{Role: "user", Content: "嘉然活了"},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp == nil || strings.TrimSpace(resp.Text) == "" {
+		t.Fatal("model returned empty reply")
+	}
+	channel := newScriptedBackoffChannel("51001")
+	channel.attemptErrors = []error{errors.New("failed to resolve UID for UIN 41001")}
+	runtime := NewRuntime(BotConfig{}, channel, NewPluginManager(), nil, nil, nil, nil)
+	logs := &captureAppLogs{}
+	runtime.SetAppLogWriter(logs)
+	event := MessageEvent{Kind: EventKindGroup, GroupID: "51001", UserID: "replay", MessageID: "replay-uid"}
+	if err := runtime.send(ctx, event, resp.Text); !isPermanentSendRejection(err) {
+		t.Fatalf("UID failure not terminal: %v", err)
+	}
+	channel.mu.Lock()
+	channel.alwaysFail[event.GroupID] = true
+	channel.mu.Unlock()
+	if err := runtime.send(ctx, event, resp.Text); !errors.Is(err, errOutboundDeliveryDropped) {
+		t.Fatalf("retry failure not terminal: %v", err)
+	}
+	channel.mu.Lock()
+	channel.alwaysFail[event.GroupID] = false
+	channel.mu.Unlock()
+	if err := runtime.send(ctx, event, resp.Text); err != nil {
+		t.Fatal(err)
+	}
+	if got := len(channel.attemptTexts(event.GroupID)); got != 5 {
+		t.Fatalf("attempts=%d, expected 1+3+1", got)
+	}
+	if !hasAppLogAction(logs.entriesSnapshot(), "outbound_delivery_dropped") {
+		t.Fatal("final failure missing from app log")
+	}
+	t.Logf("model=%s: production UID failure stopped after 1 attempt; transient failure stopped after 3; next same-group message sent; app log persisted", resp.Model)
+}
+
+func TestMixedPayloadAndTransportFailuresShareThreeAttemptBudget(t *testing.T) {
+	channel := newScriptedBackoffChannel("123456")
+	channel.attemptErrors = []error{errors.New(`message element "image" requires a file/url source`), errors.New("temporary bridge failure"), errors.New("temporary bridge failure")}
+	runtime := NewRuntime(BotConfig{}, channel, NewPluginManager(), nil, nil, nil, nil)
+	ctx := withOutboundDeliveryPolicy(context.Background(), recoveringOutboundDeliveryPolicy())
+	if err := runtime.send(ctx, MessageEvent{Kind: EventKindGroup, GroupID: "123456"}, "mixed failures"); !errors.Is(err, errOutboundDeliveryDropped) {
+		t.Fatalf("error=%v", err)
+	}
+	if got := len(channel.attemptTexts("123456")); got != 3 {
+		t.Fatalf("nested retries exceeded budget: %d", got)
+	}
+}
+
+func TestGroupDeliveryExhaustionCompletesInboundWithoutRegeneration(t *testing.T) {
+	store := newMemoryInboundEventStore()
+	channel := newScriptedBackoffChannel("20005")
+	channel.alwaysFail["20005"] = true
+	provider := &sequenceLLMProvider{replies: []string{"这是一条回复"}}
+	runtime := newQueuedTestRuntime(channel, store, provider)
+	event := queuedDirectTestEvent("send-budget", time.Now().Unix())
+	event.GroupID = "20005"
+	id, inserted, err := store.EnqueueInboundEvent(context.Background(), sessionKey(event), event)
+	if err != nil || !inserted {
+		t.Fatalf("enqueue %v %v", inserted, err)
+	}
+	startTestRuntime(t, runtime)
+	waitForCondition(t, 10*time.Second, func() bool { return store.isDone(id) })
+	if err := runtime.Stop(); err != nil {
+		t.Fatal(err)
+	}
+	outcome, attempts := store.outcomeAndAttempts(id)
+	if outcome != "dropped_outbound_delivery" || attempts != 1 {
+		t.Fatalf("queue regenerated failed delivery: outcome=%s attempts=%d", outcome, attempts)
+	}
+	if got := len(channel.attemptTexts("20005")); got != 3 {
+		t.Fatalf("send attempts=%d", got)
+	}
 }

@@ -18,8 +18,8 @@ func TestHistoryIdentityUsesAccountsAcrossNicknamesAndLegacyEvents(t *testing.T)
 	for _, tt := range []struct {
 		name, userID, platform, want string
 	}{
-		{"Winter", "100001", PlatformOneBotV11, "bot_owner"},
-		{"old owner card", "100001", PlatformOneBotV11, "bot_owner"},
+		{"Winter", "100001", PlatformOneBotV11, "user"},
+		{"old owner card", "100001", PlatformOneBotV11, "user"},
 		{"Diana", "200002", PlatformOneBotV11, "bot"},
 		{"old bot card", "200002", PlatformOneBotV11, "bot"},
 		{"Winter", "300003", PlatformOneBotV11, "user"},
@@ -47,7 +47,7 @@ func TestHistoryIdentityToolContextAndQuotesSurvivePrivacy(t *testing.T) {
 	oldBot := MessageEvent{UserID: "200002", SenderName: "old bot card", GroupID: "500005", MessageID: "800008", Time: 2, RawMessage: "reply", Quoted: &QuotedMessage{UserID: "100001", SenderName: "Winter", RawMessage: "question"}}
 	items := tool.items(context.Background(), []MessageEvent{oldBot})
 	items[0].ContextBefore = tool.items(context.Background(), []MessageEvent{oldOwner})
-	if items[0].SenderRole != "bot" || items[0].QuotedSenderRole != "bot_owner" || items[0].ContextBefore[0].SenderRole != "bot_owner" {
+	if items[0].SenderRole != "bot" || items[0].QuotedSenderRole != "user" || items[0].ContextBefore[0].SenderRole != "user" {
 		t.Fatalf("roles missing from nested history: %+v", items)
 	}
 	body, err := json.Marshal(items)
@@ -55,7 +55,7 @@ func TestHistoryIdentityToolContextAndQuotesSurvivePrivacy(t *testing.T) {
 		t.Fatal(err)
 	}
 	scope := newIdentityPrivacyScope()
-	ownerAlias := scope.register(cfg.OwnerID, "bot_owner")
+	ownerAlias := scope.register(cfg.OwnerID, "user")
 	botAlias := scope.register(cfg.BotAccount, "bot")
 	protected := scope.protectRequest(llm.GenerateRequest{Messages: []llm.Message{{Role: llm.RoleTool, Content: string(body)}}})
 	text := protected.Messages[len(protected.Messages)-1].Content
@@ -85,16 +85,16 @@ func TestHistoryIdentityAutomaticCrossGroupAndMediaPrompts(t *testing.T) {
 		t.Fatalf("wrong cross-group identity or source-group leak: %s", text)
 	}
 	// 角色跟在发送者后面、正文之前，不再是行尾单独一段 JSON。
-	if !strings.Contains(text, "（100001）"+historySenderTagOwner+": ") {
+	if !strings.Contains(text, "（100001）"+": ") {
 		t.Fatalf("owner tag is not attached to the sender: %s", text)
 	}
 	event.Segments = []MessageSegment{{Type: "image", Data: map[string]string{"file": "image.jpg"}}}
 	media := agentImageHistoryPromptTextWithDescriptions(event, 2, []string{"图片摘要"}, cfg)
-	if !strings.Contains(media, "（100001）"+historySenderTagOwner) {
+	if !strings.Contains(media, "（100001）") {
 		t.Fatalf("media identity missing: %s", media)
 	}
 	scope := newIdentityPrivacyScope()
-	alias := scope.register(cfg.OwnerID, "bot_owner")
+	alias := scope.register(cfg.OwnerID, "user")
 	protected := scope.protectText(text)
 	if strings.Contains(protected, cfg.OwnerID) || !strings.Contains(protected, alias) {
 		t.Fatalf("automatic history not masked: %s", protected)
@@ -137,9 +137,9 @@ func TestHistoryIdentityRuntimeKeepsCrossGroupSelfNickname(t *testing.T) {
 	t.Fatalf("runtime lost nickname or self identity: requests=%d searches=%d", len(provider.requests), store.searchCalls)
 }
 
-func TestCurrentPromptTagsSenderGroupRole(t *testing.T) {
+func TestCurrentPromptIdentifiesSenderWithoutGroupRoleTags(t *testing.T) {
 	event := MessageEvent{Kind: EventKindGroup, GroupID: "123", UserID: "10001", SenderName: "鲁汀", Time: 100}
-	for role, want := range map[GroupRole]string{GroupRoleOwner: "鲁汀（10001）[群主]\n", GroupRoleAdmin: "鲁汀（10001）[群管理员]\n", GroupRoleMember: "鲁汀（10001）\n", "": "鲁汀（10001）\n"} {
+	for role, want := range map[GroupRole]string{GroupRoleOwner: "鲁汀（10001）\n", GroupRoleAdmin: "鲁汀（10001）\n", GroupRoleMember: "鲁汀（10001）\n", "": "鲁汀（10001）\n"} {
 		got := currentPromptTextWithSemanticContext(event, "禁言他", semanticReferenceContext{}, promptAnnotation{SenderGroupRole: role})
 		if !strings.Contains(got, "【当前发言者】"+want) {
 			t.Fatalf("role %q: %q", role, got)

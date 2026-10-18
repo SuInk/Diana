@@ -43,6 +43,7 @@ WHERE id = ?
   AND kind = ?
   AND COALESCE(group_id, '') = ?
   AND COALESCE(user_id, '') = ?
+  AND COALESCE(profile_id, '') = ?
 RETURNING id
 `
 
@@ -55,6 +56,7 @@ WHERE id = (
     AND kind = ?
     AND COALESCE(group_id, '') = ?
     AND COALESCE(user_id, '') = ?
+  AND COALESCE(profile_id, '') = ?
   ORDER BY created_at DESC, id DESC
   LIMIT 1
 )
@@ -75,7 +77,7 @@ func inboundDeliverySetArgs(stage assistant.OutboundDeliveryStage, outboundMessa
 func inboundDeliveryEventArgs(event assistant.MessageEvent) []any {
 	return []any{
 		strings.TrimSpace(event.MessageID), strings.TrimSpace(string(event.Kind)),
-		strings.TrimSpace(event.GroupID), strings.TrimSpace(event.UserID),
+		strings.TrimSpace(event.GroupID), strings.TrimSpace(event.UserID), strings.TrimSpace(event.ProfileID),
 	}
 }
 
@@ -97,16 +99,31 @@ func (s *SQLiteStore) RecordInboundEventDeliveryByID(ctx context.Context, inboun
 	now := time.Now().UTC().UnixNano()
 	outboundMessageID = strings.TrimSpace(outboundMessageID)
 	detail = strings.TrimSpace(detail)
+	// ACK 和回推映射必须一起提交，避免只记下送达状态却丢了后续回推关联。
+	var writer interface {
+		QueryRowContext(context.Context, string, ...any) *sql.Row
+		ExecContext(context.Context, string, ...any) (sql.Result, error)
+	} = s.db
+	var tx *sql.Tx
+	if stage == assistant.OutboundDeliveryAcknowledged && outboundMessageID != "" {
+		var err error
+		tx, err = s.db.BeginTx(ctx, nil)
+		if err != nil {
+			return fmt.Errorf("begin delivery receipt: %w", err)
+		}
+		defer tx.Rollback()
+		writer = tx
+	}
 	setArgs := inboundDeliverySetArgs(stage, outboundMessageID, detail, now)
 	var updatedID string
 	err := sql.ErrNoRows
 	if inboundEventID = strings.TrimSpace(inboundEventID); inboundEventID != "" {
 		args := append(append(append([]any{}, setArgs...), inboundEventID), inboundDeliveryEventArgs(event)...)
-		err = s.db.QueryRowContext(ctx, inboundDeliveryByIDSQL, args...).Scan(&updatedID)
+		err = writer.QueryRowContext(ctx, inboundDeliveryByIDSQL, args...).Scan(&updatedID)
 	}
 	if errors.Is(err, sql.ErrNoRows) {
 		args := append(append([]any{}, setArgs...), inboundDeliveryEventArgs(event)...)
-		err = s.db.QueryRowContext(ctx, inboundDeliveryByMessageSQL, args...).Scan(&updatedID)
+		err = writer.QueryRowContext(ctx, inboundDeliveryByMessageSQL, args...).Scan(&updatedID)
 	}
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil
@@ -114,8 +131,13 @@ func (s *SQLiteStore) RecordInboundEventDeliveryByID(ctx context.Context, inboun
 	if err != nil {
 		return fmt.Errorf("record inbound delivery stage: %w", err)
 	}
-	if stage == assistant.OutboundDeliveryAcknowledged && outboundMessageID != "" {
-		return s.recordOutboundMessageMap(ctx, updatedID, event, outboundMessageID)
+	if tx != nil {
+		if conversation := outboundConversationKey(event.Kind, event.GroupID, event.UserID); conversation != "" {
+			if _, err := writer.ExecContext(ctx, recordOutboundMessageMapSQL, strings.TrimSpace(event.ProfileID), conversation, outboundMessageID, updatedID, now); err != nil {
+				return fmt.Errorf("record outbound message map: %w", err)
+			}
+		}
+		return tx.Commit()
 	}
 	return nil
 }
@@ -142,15 +164,47 @@ const (
 	// outboundEchoLinkWindow 是回推能关联回去的时间窗：回推最多晚到几分钟，
 	// 超过这个窗口的同号消息只可能是 message_id 撞号。
 	outboundEchoLinkWindow = time.Hour
-	// outboundMessageMapRetention 之后的映射不再有用，写新映射时顺手清掉。
+	// outboundMessageMapRetention 之后的映射不再有用，由后台巡检分批清掉。
 	outboundMessageMapRetention = 7 * 24 * time.Hour
 )
 
+// migrateOutboundMessageMap 升级旧版以平台账号 bot_id 为键的映射。bot_id 不是
+// profile_id，必须从入站事件恢复归属；不能直接改列名。
 func (s *SQLiteStore) migrateOutboundMessageMap() error {
-	if _, err := s.db.Exec(outboundMessageMapSchema); err != nil {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var legacy int
+	if err := tx.QueryRow(`SELECT count(*) FROM pragma_table_info('outbound_message_map') WHERE name = 'bot_id'`).Scan(&legacy); err != nil {
+		return err
+	}
+	if legacy > 0 {
+		if _, err := tx.Exec(`ALTER TABLE outbound_message_map RENAME TO outbound_message_map_legacy;
+DROP INDEX IF EXISTS idx_outbound_message_map_sent_at;`); err != nil {
+			return fmt.Errorf("prepare legacy outbound map: %w", err)
+		}
+	}
+	if _, err := tx.Exec(outboundMessageMapSchema); err != nil {
 		return fmt.Errorf("create outbound message map schema: %w", err)
 	}
-	return nil
+	if legacy > 0 {
+		// 已删除的源事件无法恢复配置档，保留旧账号键，不猜测它属于当前哪个账号。
+		// 多个旧账号归到同一配置档时，同号映射保留最新一次发送。
+		if _, err := tx.Exec(`INSERT INTO outbound_message_map (profile_id, conversation, message_id, inbound_event_id, sent_at)
+SELECT COALESCE(NULLIF(TRIM(e.profile_id), ''),
+  CASE WHEN json_valid(e.payload) THEN NULLIF(TRIM(json_extract(e.payload, '$.profile_id')), '') END,
+  m.bot_id), m.conversation, m.message_id, m.inbound_event_id, m.sent_at
+FROM outbound_message_map_legacy m LEFT JOIN inbound_events e ON e.id = m.inbound_event_id
+WHERE 1 ORDER BY m.sent_at, m.rowid
+ON CONFLICT(profile_id, conversation, message_id) DO UPDATE SET
+  inbound_event_id = excluded.inbound_event_id, sent_at = excluded.sent_at;
+DROP TABLE outbound_message_map_legacy;`); err != nil {
+			return fmt.Errorf("migrate legacy outbound map: %w", err)
+		}
+	}
+	return tx.Commit()
 }
 
 // outboundConversationKey 是一条消息所在的会话：群用群号，私聊用对方的号。
@@ -166,25 +220,6 @@ func outboundConversationKey(kind assistant.EventKind, groupID, peerID string) s
 		}
 	}
 	return ""
-}
-
-// recordOutboundMessageMap 在发送回执记下时写映射，指向刚刚更新的那条入站事件。
-func (s *SQLiteStore) recordOutboundMessageMap(ctx context.Context, inboundEventID string, event assistant.MessageEvent, outboundMessageID string) error {
-	conversation := outboundConversationKey(event.Kind, event.GroupID, event.UserID)
-	outboundMessageID = strings.TrimSpace(outboundMessageID)
-	if conversation == "" || outboundMessageID == "" || strings.TrimSpace(inboundEventID) == "" {
-		return nil
-	}
-	now := time.Now().UTC()
-	if _, err := s.db.ExecContext(ctx, recordOutboundMessageMapSQL,
-		strings.TrimSpace(event.ProfileID), conversation, outboundMessageID, strings.TrimSpace(inboundEventID), now.UnixNano()); err != nil {
-		return fmt.Errorf("record outbound message map: %w", err)
-	}
-	if _, err := s.db.ExecContext(ctx, `DELETE FROM outbound_message_map WHERE sent_at < ?`,
-		now.Add(-outboundMessageMapRetention).UnixNano()); err != nil {
-		return fmt.Errorf("prune outbound message map: %w", err)
-	}
-	return nil
 }
 
 const recordOutboundMessageMapSQL = `
@@ -258,7 +293,7 @@ func (s *SQLiteStore) OutboundStepDelivered(ctx context.Context, turnID, stepKey
 		return "", false, nil
 	}
 	var messageID sql.NullString
-	err := s.db.QueryRowContext(ctx, `
+	err := s.eventReader().QueryRowContext(ctx, `
 SELECT message_id FROM outbound_delivery_steps WHERE turn_id = ? AND step_key = ?
 `, turnID, stepKey).Scan(&messageID)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -304,4 +339,20 @@ func (s *SQLiteStore) ClearOutboundSteps(ctx context.Context, turnID string) err
 		return fmt.Errorf("clear outbound steps for %q: %w", turnID, err)
 	}
 	return nil
+}
+
+// pruneOutboundMessageMapBatch 每轮最多清理 500 条，避免每个发送分片都抢一次
+// 写连接做保留期清理。先用读池探测；没有过期记录时完全不占写连接。
+func (s *SQLiteStore) pruneOutboundMessageMapBatch(ctx context.Context, now time.Time) error {
+	cutoff := now.Add(-outboundMessageMapRetention).UnixNano()
+	var expired bool
+	if err := s.eventReader().QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM outbound_message_map WHERE sent_at < ?)`, cutoff).Scan(&expired); err != nil {
+		return err
+	}
+	if !expired {
+		return nil
+	}
+	_, err := s.db.ExecContext(ctx, `DELETE FROM outbound_message_map WHERE rowid IN (
+SELECT rowid FROM outbound_message_map WHERE sent_at < ? ORDER BY sent_at LIMIT 500)`, cutoff)
+	return err
 }

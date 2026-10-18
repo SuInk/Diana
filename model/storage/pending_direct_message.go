@@ -40,7 +40,7 @@ INSERT INTO pending_direct_messages (
 
 func (s *SQLiteStore) CountPendingDirectMessages(ctx context.Context, profileID, userID string, now time.Time) (int, error) {
 	var count int
-	err := s.db.QueryRowContext(ctx, `
+	err := s.eventReader().QueryRowContext(ctx, `
 SELECT COUNT(*) FROM pending_direct_messages
 WHERE profile_id = ? AND user_id = ? AND expires_at > ?
 `, strings.TrimSpace(profileID), strings.TrimSpace(userID), now.UnixNano()).Scan(&count)

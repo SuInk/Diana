@@ -1424,7 +1424,7 @@ func (r *Runtime) getGroupMemberList(ctx context.Context, groupID string, call o
 	defer cancel()
 	data, err := call(callCtx, "get_group_member_list", map[string]any{
 		"group_id": oneBotIDParam(groupID),
-		"no_cache": false,
+		"no_cache": true,
 	})
 	if err != nil {
 		return nil, err
@@ -1438,6 +1438,7 @@ func (r *Runtime) getGroupMemberList(ctx context.Context, groupID string, call o
 		}
 		member := oneBotGroupMemberInfoFromData(groupID, memberData)
 		if member.UserID != "" {
+			member.MembershipVerified = true
 			members = append(members, member)
 		}
 	}
@@ -1458,9 +1459,10 @@ func oneBotGroupInfoFromData(groupID string, data map[string]any) OneBotGroupInf
 func oneBotGroupMemberInfoFromData(groupID string, data map[string]any) OneBotGroupMemberInfo {
 	userID := firstNonEmpty(stringFromAny(data["user_id"]), stringFromAny(data["uin"]), stringFromAny(data["qq"]))
 	return OneBotGroupMemberInfo{
-		GroupID:            firstNonEmpty(stringFromAny(data["group_id"]), groupID),
-		UserID:             userID,
-		MembershipVerified: userID != "",
+		GroupID: firstNonEmpty(stringFromAny(data["group_id"]), groupID),
+		UserID:  userID,
+		// 解析资料本身不证明当前群籍；成员列表的调用方确认来源后再置 true。
+		MembershipVerified: false,
 		Nickname:           stringFromAny(data["nickname"]),
 		Card:               stringFromAny(data["card"]),
 		Role:               string(NormalizeGroupRole(stringFromAny(data["role"]))),
@@ -4393,11 +4395,10 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	// 该处理哪一张。媒体按 segmentMediaTurnKey 去重，来源消息号照样标在段上。
 	messageEvent := attachInboundTurnMedia(event, directReplySupplementEvents(append(r.directReplySupplements(ctx), backlogReplyTurnFromContext(ctx)...)))
 	currentText := currentPromptTextWithSemanticContext(event, cleanText, semanticContext, promptAnnotation{
-		BotID:           firstNonEmpty(strings.TrimSpace(event.SelfID), strings.TrimSpace(cfg.BotAccount)),
-		WakeGuidance:    cfg.prompt(promptWakeOnlySpec),
-		TriggerWords:    cfg.GroupTriggers,
-		Overrides:       cfg.PromptOverrides,
-		SenderGroupRole: r.promptSenderGroupRole(ctx, event),
+		BotID:        firstNonEmpty(strings.TrimSpace(event.SelfID), strings.TrimSpace(cfg.BotAccount)),
+		WakeGuidance: cfg.prompt(promptWakeOnlySpec),
+		TriggerWords: cfg.GroupTriggers,
+		Overrides:    cfg.PromptOverrides,
 	})
 	currentText = updatedReplyRequestText(currentText, r.pendingReplyRequestContexts(r.directReplySupplements(ctx), event))
 	currentText = backlogReplyRequestText(currentText, event, backlogReplyTurnFromContext(ctx))
@@ -7347,7 +7348,7 @@ func (r *Runtime) sendTelegramStepsWithRetry(ctx context.Context, msg OutgoingMe
 }
 
 func (r *Runtime) sendChannelPayloadWithRetry(ctx context.Context, msg OutgoingMessage, attempts int) (map[string]any, error) {
-	if attempts <= 0 {
+	if attempts <= 0 || attempts > sendRetryAttempts {
 		attempts = sendRetryAttempts
 	}
 	var lastErr error

@@ -86,7 +86,7 @@ func (s *SQLiteStore) persistVoiceSegmentBlobs(ctx context.Context, segments []a
 
 func (s *SQLiteStore) LoadVoiceBlob(ctx context.Context, audioSHA256 string) ([]byte, bool, error) {
 	var body []byte
-	err := s.db.QueryRowContext(ctx, `SELECT body FROM voice_blobs WHERE audio_sha256 = ?`, strings.TrimSpace(audioSHA256)).Scan(&body)
+	err := s.eventReader().QueryRowContext(ctx, `SELECT body FROM voice_blobs WHERE audio_sha256 = ?`, strings.TrimSpace(audioSHA256)).Scan(&body)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, false, nil
 	}

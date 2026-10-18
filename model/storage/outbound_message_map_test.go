@@ -5,6 +5,8 @@ package storage
 
 import (
 	"context"
+	"encoding/json"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -187,7 +189,7 @@ func explainQueryPlan(t *testing.T, store *SQLiteStore, query string, args ...an
 func TestDeliveryReceiptPathUsesPrimaryKeysNotFullScan(t *testing.T) {
 	store := openOutboundDeliveryTestStore(t)
 	setArgs := inboundDeliverySetArgs(assistant.OutboundDeliveryAcknowledged, "54321", "", 1)
-	receiptArgs := append(append(append([]any{}, setArgs...), "event-1"), "in-1", "group", "20005", "10001")
+	receiptArgs := append(append(append([]any{}, setArgs...), "event-1"), "in-1", "group", "20005", "10001", "")
 	for name, plan := range map[string][]string{
 		"receipt update": explainQueryPlan(t, store, inboundDeliveryByIDSQL, receiptArgs...),
 		"map write":      explainQueryPlan(t, store, recordOutboundMessageMapSQL, "bot", "group:20005", "54321", "event-1", 1),
@@ -260,5 +262,187 @@ INSERT INTO inbound_events (
 	}
 	if page.Errors != 1 || page.NotReplied != 0 || page.Replied != 0 {
 		t.Fatalf("counts = replied=%d not=%d errors=%d", page.Replied, page.NotReplied, page.Errors)
+	}
+}
+
+func TestLegacyOutboundMapMigrationUsesProfileInsteadOfPlatformAccount(t *testing.T) {
+	store := openOutboundDeliveryTestStore(t)
+	ctx := context.Background()
+	event := assistant.MessageEvent{Kind: assistant.EventKindGroup, ProfileID: "profile-a", SelfID: "61001", GroupID: "g", UserID: "u", MessageID: "in", Time: time.Now().Unix()}
+	id := enqueueAckedInbound(t, store, event, "profile-a:group:g", "out")
+	if _, err := store.db.Exec(`DROP TABLE outbound_message_map;
+CREATE TABLE outbound_message_map (bot_id TEXT NOT NULL, conversation TEXT NOT NULL, message_id TEXT NOT NULL, inbound_event_id TEXT NOT NULL, sent_at INTEGER NOT NULL, PRIMARY KEY(bot_id, conversation, message_id));
+CREATE INDEX idx_outbound_message_map_sent_at ON outbound_message_map(sent_at);`); err != nil {
+		t.Fatal(err)
+	}
+	for _, bot := range []string{"3129583166", "61001"} {
+		if _, err := store.db.Exec(`INSERT INTO outbound_message_map VALUES (?, 'group:g', 'out', ?, ?)`, bot, id, time.Now().UnixNano()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for range 2 {
+		if err := store.migrateOutboundMessageMap(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var profile string
+	var count int
+	if err := store.db.QueryRow(`SELECT profile_id, count(*) FROM outbound_message_map`).Scan(&profile, &count); err != nil {
+		t.Fatal(err)
+	}
+	if profile != "profile-a" || count != 1 {
+		t.Fatalf("profile=%q count=%d", profile, count)
+	}
+	if err := store.RecordInboundEventSelfEcho(ctx, assistant.MessageEvent{Kind: assistant.EventKindGroup, ProfileID: "profile-a", GroupID: "g", MessageID: "out"}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if !readSelfEchoRow(t, store, id).echoed {
+		t.Fatal("migrated send cannot match self echo")
+	}
+}
+
+func TestDeliveryReceiptCannotCrossProfilesWithSameTransportIDs(t *testing.T) {
+	store := openOutboundDeliveryTestStore(t)
+	ctx := context.Background()
+	event := assistant.MessageEvent{Kind: assistant.EventKindGroup, ProfileID: "a", SelfID: "account-a", GroupID: "g", UserID: "u", MessageID: "same", Time: time.Now().Unix()}
+	a, _, err := store.EnqueueInboundEvent(ctx, "a:group:g", event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	other := event
+	other.ProfileID = "b"
+	other.SelfID = "account-b"
+	b, _, err := store.EnqueueInboundEvent(ctx, "b:group:g", other)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RecordInboundEventDeliveryByID(ctx, b, event, assistant.OutboundDeliveryAcknowledged, "out", ""); err != nil {
+		t.Fatal(err)
+	}
+	if readSelfEchoRow(t, store, a).stage != "acknowledged" || readSelfEchoRow(t, store, b).stage != "" {
+		t.Fatal("receipt crossed account boundary")
+	}
+}
+
+func TestOutboundMapCleanupIsBoundedAndReceiptDoesNotPrune(t *testing.T) {
+	store := openOutboundDeliveryTestStore(t)
+	ctx := context.Background()
+	old := time.Now().Add(-8 * 24 * time.Hour).UnixNano()
+	if _, err := store.db.Exec(`WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<501)
+INSERT INTO outbound_message_map SELECT '', 'group:old', CAST(x AS TEXT), 'old', ? FROM n`, old); err != nil {
+		t.Fatal(err)
+	}
+	event := assistant.MessageEvent{Kind: assistant.EventKindGroup, GroupID: "g", UserID: "u", MessageID: "new", Time: time.Now().Unix()}
+	enqueueAckedInbound(t, store, event, "group:g", "new-out")
+	var count int
+	if err := store.db.QueryRow(`SELECT count(*) FROM outbound_message_map`).Scan(&count); err != nil || count != 502 {
+		t.Fatalf("receipt did retention work: %d %v", count, err)
+	}
+	if err := store.pruneOutboundMessageMapBatch(ctx, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.db.QueryRow(`SELECT count(*) FROM outbound_message_map`).Scan(&count); err != nil || count != 2 {
+		t.Fatalf("cleanup not bounded: %d %v", count, err)
+	}
+}
+
+// 生产映射的脱敏快照只包含关联键和时间，不携带配置凭据或消息正文。
+func TestProductionOutboundMapMigrationReplay(t *testing.T) {
+	path := os.Getenv("DIANA_OUTBOUND_MAP_REPLAY")
+	if path == "" {
+		t.Skip("set DIANA_OUTBOUND_MAP_REPLAY to sampled legacy mappings")
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rows [][]json.RawMessage
+	if err := json.Unmarshal(raw, &rows); err != nil {
+		t.Fatal(err)
+	}
+	store := openOutboundDeliveryTestStore(t)
+	tx, err := store.db.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`DROP TABLE outbound_message_map; CREATE TABLE outbound_message_map (
+bot_id TEXT NOT NULL, conversation TEXT NOT NULL, message_id TEXT NOT NULL, inbound_event_id TEXT NOT NULL, sent_at INTEGER NOT NULL, PRIMARY KEY(bot_id, conversation, message_id));`); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]int64{}
+	for _, row := range rows {
+		var bot, conversation, message, id, profile string
+		var sent int64
+		for i, dst := range []any{&bot, &conversation, &message, &id, &sent, &profile} {
+			if err := json.Unmarshal(row[i], dst); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if _, err := tx.Exec(`INSERT OR IGNORE INTO inbound_events(id,session,kind,profile_id,event_time,payload,available_at,created_at,updated_at) VALUES (?, ?, 'group', ?, 1, '{}', 0, 0, 0)`, id, conversation, profile); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tx.Exec(`INSERT INTO outbound_message_map VALUES(?,?,?,?,?)`, bot, conversation, message, id, sent); err != nil {
+			t.Fatal(err)
+		}
+		if profile == "" {
+			profile = bot
+		}
+		key := profile + "/" + conversation + "/" + message
+		if sent > want[key] {
+			want[key] = sent
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	start := time.Now()
+	for range 2 {
+		if err := store.migrateOutboundMessageMap(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := store.db.Query(`SELECT profile_id,conversation,message_id,sent_at FROM outbound_message_map`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer got.Close()
+	count := 0
+	for got.Next() {
+		var profile, conversation, message string
+		var sent int64
+		if err := got.Scan(&profile, &conversation, &message, &sent); err != nil {
+			t.Fatal(err)
+		}
+		if want[profile+"/"+conversation+"/"+message] != sent {
+			t.Fatal("migration lost or misassigned a production mapping")
+		}
+		count++
+	}
+	if err := got.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if count != len(want) {
+		t.Fatalf("mappings=%d want=%d", count, len(want))
+	}
+	t.Logf("production legacy rows=%d migrated=%d elapsed=%s; second migration idempotent", len(rows), count, time.Since(start))
+}
+
+func TestDeliveryReceiptRollsBackWhenMapWriteFails(t *testing.T) {
+	store := openOutboundDeliveryTestStore(t)
+	ctx := context.Background()
+	event := assistant.MessageEvent{Kind: assistant.EventKindGroup, GroupID: "g", UserID: "u", MessageID: "receipt", Time: time.Now().Unix()}
+	id, _, err := store.EnqueueInboundEvent(ctx, "group:g", event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.Exec(`CREATE TRIGGER reject_map BEFORE INSERT ON outbound_message_map BEGIN SELECT RAISE(ABORT,'simulated write failure'); END`); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RecordInboundEventDeliveryByID(ctx, id, event, assistant.OutboundDeliveryAcknowledged, "out", ""); err == nil {
+		t.Fatal("expected map write failure")
+	}
+	if readSelfEchoRow(t, store, id).stage != "" {
+		t.Fatal("partial receipt committed without map")
 	}
 }

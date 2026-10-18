@@ -81,7 +81,7 @@ WHERE profile_id = ?`
 	}
 	query += ` ORDER BY created_at DESC, id DESC LIMIT ?`
 	args = append(args, limit)
-	rows, err := s.db.QueryContext(ctx, query, args...)
+	rows, err := s.eventReader().QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -98,7 +98,7 @@ WHERE profile_id = ?`
 }
 
 func (s *SQLiteStore) GetOneBotRequest(ctx context.Context, profileID, id string) (assistant.OneBotRequestRecord, bool, error) {
-	row := s.db.QueryRowContext(ctx, `
+	row := s.eventReader().QueryRowContext(ctx, `
 SELECT id, profile_id, platform, COALESCE(self_id,''), request_type, COALESCE(sub_type,''),
        COALESCE(user_id,''), COALESCE(group_id,''), COALESCE(comment,''), flag, status,
        COALESCE(reason,''), created_at, updated_at, decided_at
@@ -144,7 +144,7 @@ WHERE profile_id = ? AND id = ? AND status = 'pending'
 }
 
 func (s *SQLiteStore) getOneBotRequestByIdentity(ctx context.Context, profileID, requestType, subType, flag string) (assistant.OneBotRequestRecord, bool, error) {
-	row := s.db.QueryRowContext(ctx, `
+	row := s.eventReader().QueryRowContext(ctx, `
 SELECT id, profile_id, platform, COALESCE(self_id,''), request_type, COALESCE(sub_type,''),
        COALESCE(user_id,''), COALESCE(group_id,''), COALESCE(comment,''), flag, status,
        COALESCE(reason,''), created_at, updated_at, decided_at

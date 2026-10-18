@@ -1432,12 +1432,11 @@
                 </label>
                 <span class="hint">默认关闭。开启后，回复失败时让模型用机器人自己的口吻说一句没接住，不带错误原文和前缀；模型本身用不了或改写失败就保持静默。连续失败的汇总不发。</span>
               </div>
-              <div class="field">
-                <label for="bot-retry">发送重试次数（1–5）</label>
-                <input id="bot-retry" v-model.number="form.send_retry_attempts" class="input" inputmode="numeric" />
-                <span class="hint">单次发送内的快速重试，间隔不到一秒。群消息只发一次，失败后交给下面的退避重发。</span>
+              <div class="field wide">
+                <label>发送失败重试</label>
+                <span class="hint">每条最多尝试 3 次（含首次），间隔 1 秒、2 秒。明确拒收立即停止；最终失败计入首页错误并写入日志，后续消息照常处理。</span>
               </div>
-              <div v-for="field in sendRetryFields" :key="field.key" class="field">
+              <div v-for="field in sendRetryFields.filter(item => item.key === 'inbound_retry_max_attempts')" :key="field.key" class="field">
                 <label :for="`bot-${field.key}`">{{ field.label }}</label>
                 <input
                   :id="`bot-${field.key}`"

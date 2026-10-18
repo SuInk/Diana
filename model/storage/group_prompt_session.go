@@ -23,7 +23,7 @@ func (s *SQLiteStore) LoadGroupPromptSession(ctx context.Context, scope, session
 	var payload string
 	// One snapshot reads both generation and payload; a reset cannot fall
 	// between two independent reads and make old content look current.
-	err := s.db.QueryRowContext(ctx, `SELECT COALESCE(c.generation, 0), COALESCE(p.payload, '')
+	err := s.eventReader().QueryRowContext(ctx, `SELECT COALESCE(c.generation, 0), COALESCE(p.payload, '')
 FROM (SELECT ? AS session) AS current
 LEFT JOIN session_contexts c ON c.session = current.session
 LEFT JOIN group_prompt_sessions p ON p.scope = ? AND p.session = current.session AND p.generation = COALESCE(c.generation, 0)`, session, scope).Scan(&state.Generation, &payload)

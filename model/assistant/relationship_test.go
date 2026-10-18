@@ -176,8 +176,8 @@ func TestRelationshipContextDoesNotListBaselineAsGrants(t *testing.T) {
 			t.Fatalf("context still advertises the quota (%q):\n%s", unwanted, permissionContext)
 		}
 	}
-	if !strings.Contains(relationshipPermissionContext(RelationshipPolicyFor(UserMemoryProfile{}, "owner", "owner")), "机器人配置") {
-		t.Fatal("owner context lost its extra capabilities")
+	if !strings.Contains(relationshipPermissionContext(RelationshipPolicyFor(UserMemoryProfile{}, "owner", "owner")), "【当前发言者身份】主人") {
+		t.Fatal("owner context lost its current identity")
 	}
 
 	// 长期记忆上下文是第二个曾经复述能力清单的地方。

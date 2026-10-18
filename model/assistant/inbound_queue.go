@@ -753,6 +753,11 @@ func (r *Runtime) runInboundWorker(ctx context.Context, leaseOwner string, store
 				log.Printf("diana inbound event %s finished without resend, outbound outcome unconfirmed: %v", item.ID, processErr)
 				err = store.CompleteInboundEvent(commitCtx, item.ID, leaseOwner, inboundOutcomeDroppedOutboundUnconfirmed)
 				r.clearOutboundSteps(item.ID)
+			case ctx.Err() == nil && errors.Is(processErr, errOutboundDeliveryDropped):
+				// 发送已经用完三次预算，不再重新调用模型生成并发送同一条回复。
+				r.recordInboundDelivery(item.ID, item.Event, OutboundDeliveryFailed, "", processErr.Error())
+				err = store.CompleteInboundEvent(commitCtx, item.ID, leaseOwner, "dropped_outbound_delivery")
+				r.clearOutboundSteps(item.ID)
 			case ctx.Err() == nil && isPermanentSendRejection(processErr):
 				// 上游已经说清楚这条永远发不出去（对方把机器人删了好友之类）。
 				// 再退避重试只会把同一条消息重新生成一遍回复、再被拒一遍：实测

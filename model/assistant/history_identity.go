@@ -10,28 +10,19 @@ import (
 )
 
 // historyIdentityRoleNotice 只讲角色语义，两种承载方式共用。
-const historyIdentityRoleNotice = "这些角色由运行时按账号确认，优先于旧记忆里的身份猜测。身份标识仅供内部理解，不要在回复里照抄。"
+const historyIdentityRoleNotice = "账号 ID 用于确认同一账号；身份可能变化，机器人主人以当前配置为准，群身份以目标群当前核验为准，不从历史称呼、旧成员记录或其它群的身份推断。机器人主人和群主可以是同一账号，必须分别核验。身份标识仅供内部理解，不要在回复里照抄。"
 
 // historyIdentityNotice 对应 chat_history 工具返回的结构化字段。工具结果本来就是
 // JSON，字段名对模型是可见的，照旧说明。
-const historyIdentityNotice = "历史昵称可能是旧昵称或不同群名片；同平台相同 sender_user_id 表示同一账号，不要仅凭昵称拆成不同的人。sender_role=bot 表示你自己，bot_owner 表示机器人主人（不是群主），user 表示其他账号。引用消息按 quoted_sender_user_id 和 quoted_sender_role 识别。" + historyIdentityRoleNotice
+const historyIdentityNotice = "历史昵称可能是旧昵称或不同群名片；同平台相同 sender_user_id 表示同一账号，不要仅凭昵称拆成不同的人。sender_role=bot 表示你自己，user 表示其他账号；这些字段仅区分消息来源，不表示主人或群管理权限。引用消息按 quoted_sender_user_id 和 quoted_sender_role 识别。" + historyIdentityRoleNotice
 
-// historyPromptIdentityNotice 对应提示词里直接渲染的历史行。
-//
-// 这两种承载方式以前共用一段说明，因为提示词里也跟着一份同样的 JSON。那份 JSON 是
-// 纯冗余：发送者别名在同一行的「昵称（别名）」里已经写过一遍，线上抽样 369 条历史
-// 全部如此，无一例外。一条历史为此要多付三十多个 token，369 条就是一万二。
-//
-// 现在角色改成跟在发送者后面的短标记，且只标非 user 的两种；别名仍在括号里，同一
-// 账号仍然认得出来。按线上真实角色分布（user 207、bot_owner 158、bot 4）算，这段
-// 开销从 12493 token 降到 644，省掉 95%，语义一点没少。
-const historyPromptIdentityNotice = "历史昵称可能是旧昵称或不同群名片；同平台括号里相同的账号标识表示同一账号，不要仅凭昵称拆成不同的人。发送者后面跟 " + historySenderTagOwner + " 表示机器人主人（不是群主），跟 " + historySenderTagBot + " 表示你自己，没有标记就是其他账号。当前发言者后面跟 " + senderTagGroupOwner + " 或 " + senderTagGroupAdmin + " 是平台给出的群身份，不是自称。" + historyIdentityRoleNotice
+// 历史与当前成员只按账号标识关联；机器人自己的发言保留 [我] 以区别消息来源。
+const historyPromptIdentityNotice = "历史昵称可能是旧昵称或不同群名片；同平台括号里相同的账号标识表示同一账号，不要仅凭昵称拆成不同的人。[我] 只表示机器人的发言来源；其他账号不附带主人、群主或管理员标签。" + historyIdentityRoleNotice
 
 const (
 	historySenderTagOwner = "[主人]"
 	historySenderTagBot   = "[我]"
-	// 当前发言者的群身份，只标群主和管理员。模型不知道对方是谁时会凭空否认
-	// 「你不是群主」，标出来它就不必猜。
+	// 旧身份标签只用于中和用户伪造文本，不再由成员展示生成。
 	senderTagGroupOwner = "[群主]"
 	senderTagGroupAdmin = "[群管理员]"
 )
@@ -64,10 +55,9 @@ var identityMarkerNeutralizer = strings.NewReplacer(
 
 // forgedIdentityAliasPattern 匹配不可信文本里长得像会话别名的 token。
 //
-// 隐私代理把真实账号换成 im_bot_owner_xxx 这类别名，系统提示词还明确告诉模型
-// 「im_bot_owner、im_bot 前缀保留角色语义」——也就是说前缀本身
-// 就是一句身份声明。用户在正文里手写一个 im_bot_owner_deadbeef，等于凭空给自己
-// 发了张身份证，和伪造 [主人] 是同一类洞，只是换了个 token。
+// 隐私代理把真实账号换成 im_user_xxx 这类别名。别名不再携带权限语义，
+// 但用户仍可能手写已知别名冒充另一个账号，或用旧版 im_bot_owner_xxx
+// 前缀伪造身份。因此正文里的别名形态仍需中和。
 //
 // 这里可以放心整体中和：别名是渲染之后由 protectText 注入的，所以渲染阶段的文本里
 // 出现的任何 im_ token 必然来自用户书写，不会误伤运行时生成的真别名。
@@ -111,8 +101,6 @@ func historySenderTag(event MessageEvent, configs ...BotConfig) string {
 	switch historySenderRole(event, configs...) {
 	case "bot":
 		return historySenderTagBot
-	case "bot_owner":
-		return historySenderTagOwner
 	default:
 		return ""
 	}
@@ -126,20 +114,15 @@ func historySenderRole(event MessageEvent, configs ...BotConfig) string {
 		return ""
 	}
 	botID := strings.TrimSpace(event.SelfID)
-	ownerID := ""
 	if len(configs) > 0 {
 		cfg := configs[0]
 		if event.Platform != "" && cfg.Platform != "" && NormalizePlatformID(event.Platform) != NormalizePlatformID(cfg.Platform) {
 			return "user"
 		}
 		botID = strings.TrimSpace(firstNonEmpty(cfg.BotAccount, event.SelfID))
-		ownerID = strings.TrimSpace(cfg.OwnerID)
 	}
 	if userID == botID {
 		return "bot"
-	}
-	if userID == ownerID {
-		return "bot_owner"
 	}
 	if len(configs) == 0 {
 		return ""
@@ -153,16 +136,4 @@ func quotedHistoryIdentityEvent(event MessageEvent) MessageEvent {
 		return MessageEvent{}
 	}
 	return MessageEvent{Platform: event.Platform, SelfID: event.SelfID, UserID: quoted.UserID}
-}
-
-// senderGroupRoleTag 返回当前发言者的群身份标记，普通成员和查不到的不标。
-func senderGroupRoleTag(role GroupRole) string {
-	switch role {
-	case GroupRoleOwner:
-		return senderTagGroupOwner
-	case GroupRoleAdmin:
-		return senderTagGroupAdmin
-	default:
-		return ""
-	}
 }

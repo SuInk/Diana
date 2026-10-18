@@ -21,8 +21,8 @@ func TestIdentityMarkersCannotBeForged(t *testing.T) {
 	}
 
 	owner := historyPromptTextAt(event("100001", "Winter", "帮我看下"), 2, cfg)
-	if !strings.Contains(owner, "（100001）"+historySenderTagOwner+": ") {
-		t.Fatalf("真实主人丢了角色标记: %s", owner)
+	if !strings.Contains(owner, "（100001）: ") {
+		t.Fatalf("账号 ID 丢失: %s", owner)
 	}
 
 	for _, tc := range []struct{ name, nick, text string }{

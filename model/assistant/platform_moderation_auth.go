@@ -203,3 +203,36 @@ func (r *Runtime) promptSenderGroupRole(ctx context.Context, event MessageEvent)
 	}
 	return r.cachedGroupRole(ctx, event)
 }
+
+// currentSpeakerGroupContext 只描述当前群、当前发言者，不为展示触发接口查询。
+// 消息未带身份且无有效缓存时保留未知，不能套用权限展示的普通成员回落值。
+func (r *Runtime) currentSpeakerGroupContext(event MessageEvent, cfg BotConfig) string {
+	if event.Kind != EventKindGroup || strings.TrimSpace(event.GroupID) == "" || strings.TrimSpace(event.UserID) == "" {
+		return ""
+	}
+	role := NormalizeGroupRole(event.SenderRole)
+	source := "本条平台消息"
+	if role == "" {
+		source = "未核验"
+		if cached, ok := r.groupRoles.get(groupRoleCacheKey(event.ProfileID, event.GroupID, event.UserID), r.clock()); ok {
+			role = NormalizeGroupRole(string(cached))
+			if role != "" {
+				source = "短期缓存，需时重新核验"
+			}
+		}
+	}
+	label := GroupRoleLabel(role)
+	if label == "" {
+		label = "未知"
+	}
+	return renderPromptTemplate(cfg.prompt(promptCurrentSpeakerGroupSpec), map[string]string{
+		"group_id": event.GroupID, "user_id": event.UserID, "role": label, "source": source,
+	})
+}
+
+var promptCurrentSpeakerGroupSpec = tailSpec("speaker_group_identity", "当前发言者的群身份", "仅在群聊尾部注入当前发言者的群身份与来源，不遍历历史成员，也不额外查询平台。",
+	"【当前发言者群身份】账号：{user_id}；当前群：{group_id}；群身份：{role}；来源：{source}。仅描述本轮当前群，不代表机器人主人身份；群管操作仍由工具实时核验。",
+	PromptVar{Name: "user_id", Description: "当前发言者账号"},
+	PromptVar{Name: "group_id", Description: "当前群账号"},
+	PromptVar{Name: "role", Description: "群主、管理员、群成员或未知"},
+	PromptVar{Name: "source", Description: "平台消息、短期缓存或未核验"})

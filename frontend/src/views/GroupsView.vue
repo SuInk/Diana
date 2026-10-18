@@ -580,7 +580,8 @@
             :placeholder="inheritedPlaceholder(inheritedBot?.recall_reply_auto_delete_delay_seconds || defaultRecallReplyAutoDeleteDelaySeconds, ' 秒')"
           />
         </div>
-        <div v-for="field in sendRetryFields" :key="field.key" class="field">
+        <p class="hint wide">群发送最多尝试 3 次（含首次），间隔 1 秒、2 秒；单条失败不会让整个群冷却。失败记录可在首页错误统计和日志中查看。</p>
+        <div v-for="field in sendRetryFields.filter(item => item.key === 'inbound_retry_max_attempts')" :key="field.key" class="field">
           <label :for="`group-${field.key}`">{{ field.label }}</label>
           <input
             :id="`group-${field.key}`"

@@ -106,3 +106,15 @@ func TestRelationshipContextStatesOwnershipBothWays(t *testing.T) {
 		t.Fatalf("非主人身份必须明确否定，不能靠沉默: %s", strangerCtx)
 	}
 }
+
+func TestCurrentSpeakerIdentityStaysMinimal(t *testing.T) {
+	for _, owner := range []bool{false, true} {
+		text := relationshipPermissionContext(RelationshipPolicy{Owner: owner})
+		if strings.Count(text, "【当前发言者身份】") != 1 || !strings.Contains(text, "不代表群身份") {
+			t.Fatalf("missing scoped current identity: %s", text)
+		}
+		if strings.Contains(text, "Skills/MCP") || strings.Contains(text, "群管理操作") {
+			t.Fatalf("identity context repeats capabilities: %s", text)
+		}
+	}
+}

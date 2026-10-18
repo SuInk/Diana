@@ -8,14 +8,9 @@ import (
 	"time"
 )
 
-// 发送失败后的两层慢重试，原来都是代码里的常量：
-//
-//   - 群退避闸门：同一个群发不出去时，按「初始间隔 → 翻倍 → 封顶」重发同一份内容，
-//     连续失败满「失败窗口」就丢弃这条，并让这个群冷却一段时间。
-//   - 入站队列重跑：整条入站消息退回队列，重新生成回复再发，最多跑这么多轮。
-//
-// 机器人级给默认值，分群可以覆盖；分群字段是 0 就跟随机器人。默认值和原来的常量
-// 一致，升级后行为不变。
+// 兼容旧版保存的发送退避字段。群发送现在固定最多三次、间隔 1s/2s，
+// 这些分钟级参数不再参与运行时调度。入站处理失败的重跑上限仍可配置；
+// 明确拒收、结果不明和发送预算耗尽不重新生成回复。
 const (
 	defaultSendBackoffInitialSeconds = int(defaultOutboundInitialDelay / time.Second)
 	defaultSendBackoffMaxSeconds     = int(defaultOutboundMaximumDelay / time.Second)
@@ -116,7 +111,8 @@ func (r *Runtime) outboundDeliveryPolicyForEvent(ctx context.Context, event Mess
 	if policy, ok := ctx.Value(outboundDeliveryPolicyContextKey{}).(outboundDeliveryPolicy); ok {
 		return normalizeOutboundDeliveryPolicy(policy)
 	}
-	return r.effectiveConfigForEvent(event).sendRetrySettings.outboundDeliveryPolicy()
+	// 旧版分钟级退避参数继续兼容反序列化，但不能再阻塞一个群。
+	return outboundDeliveryPolicy{InitialDelay: time.Second, MaximumDelay: 2 * time.Second, FailureWindow: defaultOutboundFailureWindow}
 }
 
 // inboundRetryMaxAttemptsForEvent 是这条入站事件最多处理几轮。

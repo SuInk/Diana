@@ -61,6 +61,7 @@
           :label="`${rangeLabel}错误`"
           :loading="cardsLoading"
           :value="errorsValue"
+          :class="{ 'stat-card-error': rangeErrors > 0 }"
           :foot="`累计 ${formatNumber(stats?.error_events ?? 0)}`"
           clickable
           @activate="openDetail = 'errors'"
@@ -693,3 +694,10 @@ watch(botScope, () => {
 useConfigurationRefresh(["bot", "llm"], refresh);
 
 </script>
+
+<style scoped>
+.stat-card-error :deep(.stat-value),
+.stat-card-error :deep(.stat-label) {
+  color: var(--err);
+}
+</style>

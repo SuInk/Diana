@@ -1196,6 +1196,7 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 	// 同一发言者的连续消息之间保持稳定，命中别名则逐条消息都不同。tail 由调用方放
 	// 在历史之后，所以这里怎么变都不影响 head 和历史的前缀缓存。
 	appendPromptSection(&tail, relationshipPermissionContext(relationship, cfg))
+	appendPromptSection(&tail, r.currentSpeakerGroupContext(event, cfg))
 	if event.Kind == EventKindGroup {
 		if boolValue(cfg.PromptInjectGroupSender, true) {
 			appendPromptSection(&tail, renderPromptTemplate(cfg.prompt(promptGroupSenderSpec), map[string]string{
@@ -1612,7 +1613,7 @@ func currentPromptTextWithSemanticContext(event MessageEvent, text string, sourc
 	if reference := recentTextReferencePrompt(event.recentTextReference); reference != "" {
 		text += "\n\n" + reference
 	}
-	return "【当前需要回复的消息】" + contextMessageTiming(event.Time, 0, profileLocation(event.ProfileID)) + "【当前发言者】" + promptSenderIdentity(event) + senderGroupRoleTag(annotation.SenderGroupRole) + "\n" + text
+	return "【当前需要回复的消息】" + contextMessageTiming(event.Time, 0, profileLocation(event.ProfileID)) + "【当前发言者】" + promptSenderIdentity(event) + "\n" + text
 }
 
 func quotedPromptText(quoted *QuotedMessage) string {

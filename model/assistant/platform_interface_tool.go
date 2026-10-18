@@ -150,6 +150,7 @@ func (t *dianaPlatformTool) Description() string {
 	base := "读群资料、核验成员、拉成员名单、撤回我自己的消息，以及群管操作（各平台通用）。只在用户明确要求时调用；被拒绝不要换工具绕过，没成功不要说已完成。" +
 		"说错话要撤回必须调 recall，光说「当我没说」消息不会消失；撤回失败就如实说并直接发更正。" +
 		"结果里的 requester_access 是请求人的权限，不是机器人的。"
+	base += "OneBot 的 member_info 在当前群未查到成员时继续查 QQ 个人资料；profile 只说明账号资料，不能据此断言在群或自动 @。"
 	if t.moderator {
 		base += "群管操作仅主人、群主、群管理员可用（实时核验），且机器人须是管理员；不能对主人或机器人下手，管理员不能动群主和其他管理员。私聊里不替群管执行。"
 	}
@@ -247,9 +248,21 @@ func (t *dianaPlatformTool) runRead(ctx context.Context, input map[string]any, o
 		if err := validatePlatformTargetID(target); err != nil {
 			return "", err
 		}
-		member, err := t.runtime.getGroupMemberInfoForEvent(callCtx, t.event, groupID, target)
+		member, err := t.runtime.getCurrentGroupMemberForTool(callCtx, t.event, groupID, target)
 		if err != nil {
 			t.runtime.recordPlatformInterfaceOperation(t.event, operation, access, owner, target, err)
+			if IsOneBotPlatform(t.runtime.currentPlatform(t.event)) {
+				// 列表查询有独立时限，资料查询也使用独立预算，合计最多十秒。
+				profile, profileErr := t.runtime.getOneBotAccountProfile(ctx, t.event, target)
+				t.runtime.recordPlatformInterfaceOperation(t.event, "user_profile", access, owner, target, profileErr)
+				if profileErr == nil {
+					return t.marshal(operation, access, map[string]any{
+						"profile": profile, "membership_verified": false, "member_lookup_error": err.Error(),
+						"guidance": "这是 QQ 个人资料，不证明该账号在当前群；按 member_lookup_error 说明群籍未找到或无法确认，不称其为本群成员，不自动 @。",
+					})
+				}
+				return "", fmt.Errorf("%v；QQ 个人资料查询也未成功：%w", err, profileErr)
+			}
 			return "", err
 		}
 		t.runtime.recordPlatformInterfaceOperation(t.event, operation, access, owner, target, nil)

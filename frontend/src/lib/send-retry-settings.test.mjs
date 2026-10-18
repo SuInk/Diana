@@ -39,7 +39,7 @@ test("zero send retry values are cleared before editing so the inherit placehold
 for (const view of ["AssistantView", "GroupsView"]) {
   test(`${view} renders and saves send retry settings`, async () => {
     const source = await readFile(new URL(`../views/${view}.vue`, import.meta.url), "utf8");
-    assert.match(source, /v-for="field in sendRetryFields"/);
+    assert.match(source, /v-for="field in sendRetryFields\.filter/);
     assert.match(source, /\.\.\.sendRetryPayload\(current\)/);
     assert.match(source, /sendRetryValidationError\(current\)/);
   });

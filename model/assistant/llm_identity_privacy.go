@@ -29,14 +29,12 @@ const identityAliasPrefix = "im_"
 // identityAliasRoles 是别名里出现过的全部角色，顺序即提示词里的列举顺序。
 // 除 message 外都来自 normalizeIdentityPrivacyRole 的返回值。
 //
-// 主人这一档叫 bot_owner 而不是 owner：群成员角色里的 owner 是群主，两个词撞在
-// 一起，模型看到 im_owner_xxx 就会把机器人的主人说成群主。加上 bot_ 之后，光秃
-// 秃的 owner 就只剩群主一个意思。
+// 所有人类账号统一使用 user；主人配置变化不改变账号别名，也不在别名中固化权限。
 //
 // 当前发言者不单独成档：别名哈希里含角色，同一个人当上发言者就换一个别名，整段
 // 历史里他的每一行都跟着重写，上游前缀缓存从那一行起全部失效（线上一天几百次，
 // 每次几万 token）。谁在说话由尾部【当前发言者】给出，别名在历史和尾部保持一致。
-var identityAliasRoles = []string{"bot_owner", "bot", "user", "group", "message"}
+var identityAliasRoles = []string{"bot", "user", "group", "message"}
 
 // llmIdentityPrivacyPrompt 里的前缀由 identityAliasPrefix 拼出来，不写死。
 //
@@ -53,7 +51,7 @@ var llmIdentityPrivacyPrompt = llmIdentityPrivacyIntro + llmIdentityPrivacyContr
 // 人设同样需要这句，所以不能放在可改的说明里。
 var (
 	llmIdentityPrivacyIntro = "【会话标识隐私代理】消息中的真实用户 ID、群 ID 和消息 ID 已由本地代理替换为不透明别名。相同别名始终表示同一对象；" +
-		identityAliasRoleList() + " 前缀保留角色语义。理解对话时按角色和昵称判断，不要自己猜测或编造真实数字。"
+		identityAliasRoleList() + " 前缀仅区分机器人、账号、群和消息，不表示主人或群管理权限。按相同账号标识关联消息，身份以当前配置或查询结果为准，不要猜测真实数字。"
 	llmIdentityPrivacyContract = "调用工具或在回复中需要引用标识时，必须原样复制别名——包括 [diana-reply:" + identityAlias("message") + "xxx]、" +
 		"[diana-at:" + identityAlias("user") + "xxx] 这类标记；本地代理会在执行工具或发送消息前自动恢复真实标识。" +
 		"别名就代表真实号码：用户问群号、QQ 号时，直接在回复里写出对应别名，发出去就是真实号码，不要说获取不到；" +
@@ -364,7 +362,7 @@ var identityArgumentKeyPattern = regexp.MustCompile(`(?i)(^|_)(user|group|owner|
 //
 // 别名只可能由本轮的隐私代理生成。一个 im_ 开头的标识还原不出真实账号，就说明它不是
 // 本轮提供的候选——要么模型自己编的，要么是从用户正文里抄来的伪造标识（用户完全可以
-// 在消息里手写 im_bot_owner_deadbeef，而系统提示词恰恰告诉模型这个前缀带角色语义）。
+// 在消息里手写 im_user_deadbeef 冒充运行时提供的账号别名）。
 //
 // 以前这种值是「原样返回」，于是伪造标识直接进到工具内部。多数工具拿它比对真实 ID 会
 // 失败，算是兜住了，但兜住的方式是「碰巧没匹配」而不是「明确拒绝」，而且这个由攻击者
@@ -469,7 +467,7 @@ func (s *identityPrivacyScope) register(realID string, role string) string {
 func normalizeIdentityPrivacyRole(role string) string {
 	switch strings.ToLower(strings.TrimSpace(role)) {
 	case "owner", "bot_owner":
-		return "bot_owner"
+		return "user"
 	case "bot", "self":
 		return "bot"
 	case "group":

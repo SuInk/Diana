@@ -583,7 +583,7 @@ func TestDefiniteSendFailureKeepsBackoffWithoutConfirmation(t *testing.T) {
 		t.Fatalf("definite failure went through confirmation:\n%s", output)
 	}
 	// 退避日志现在也进标准输出，数据库忙时不会整条消失。
-	if !strings.Contains(output, "群消息发送失败，已按指数退避等待下次尝试") {
+	if !strings.Contains(output, "本条消息发送失败，正在短间隔重试（最多三次）") {
 		t.Fatalf("backoff not logged to stdout:\n%s", output)
 	}
 }

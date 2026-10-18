@@ -50,7 +50,7 @@ func TestIdentityAliasStaysStableAcrossTurns(t *testing.T) {
 
 	r1 := newRuntimeWithAliasStore(t, store)
 	first := aliasFor(r1)
-	if first == "" || !strings.HasPrefix(first, identityAlias("bot_owner")) {
+	if first == "" || !strings.HasPrefix(first, identityAlias("user")) {
 		t.Fatalf("别名格式不对: %q", first)
 	}
 	// 同一进程内换一轮。
@@ -99,4 +99,21 @@ func newRuntimeWithAliasStore(t *testing.T, store *memoryAliasSaltStore) *Runtim
 		r.SetMessageHistoryStore(aliasSaltHistoryStore{memoryAliasSaltStore: store})
 	}
 	return r
+}
+
+func TestAccountAliasDoesNotChangeWithOwnership(t *testing.T) {
+	var first string
+	for _, role := range []string{"user", "bot_owner", "owner", "user"} {
+		scope := newIdentityPrivacyScopeWithSalt("ownership-change-regression")
+		alias := scope.register("71001", role)
+		if first == "" {
+			first = alias
+		}
+		if alias != first || !strings.HasPrefix(alias, "im_user_") {
+			t.Fatalf("role=%s changed stable account alias: %s != %s", role, alias, first)
+		}
+		if got := scope.restoreText(alias); got != "71001" {
+			t.Fatalf("account roundtrip=%s", got)
+		}
+	}
 }

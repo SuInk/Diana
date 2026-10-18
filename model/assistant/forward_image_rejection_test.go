@@ -150,7 +150,7 @@ func TestInvalidImagePayloadRetriesThenLeavesGroupAvailable(t *testing.T) {
 	event := MessageEvent{Kind: EventKindGroup, GroupID: "20001", UserID: "10001", MessageID: "bad-image"}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	if err := r.sendOutgoing(ctx, event, OutgoingMessage{ImageURLs: []string{"invalid"}}); err == nil || errors.Is(err, errOutboundDeliveryDropped) {
+	if err := r.sendOutgoing(ctx, event, OutgoingMessage{ImageURLs: []string{"invalid"}}); !errors.Is(err, errOutboundDeliveryDropped) || !isOutboundPayloadRejection(err) {
 		t.Fatalf("expected bounded payload rejection, got %v", err)
 	}
 	if err := r.sendOutgoing(ctx, event, OutgoingMessage{Text: "healthy"}); err != nil {

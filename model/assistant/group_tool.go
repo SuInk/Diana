@@ -107,7 +107,7 @@ func (t *dianaGroupTool) Run(ctx context.Context, input map[string]any) (string,
 		if id == "" {
 			return "", fmt.Errorf("member 需要 user_id")
 		}
-		member, err := t.runtime.getGroupMemberInfoForEvent(ctx, t.event, t.event.GroupID, id)
+		member, err := t.runtime.getCurrentGroupMemberForTool(ctx, t.event, t.event.GroupID, id)
 		if err != nil {
 			return "", err
 		}

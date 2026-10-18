@@ -39,7 +39,7 @@ WHERE message_id = ? AND kind = ?
   AND COALESCE(group_id, '') = ? AND COALESCE(user_id, '') = ?
 ORDER BY created_at DESC, id DESC LIMIT 1`, lookupArgs...),
 		"handoff fallback":  explainQueryPlan(t, store, `SELECT 1 FROM inbound_events WHERE `+handoffWhere, handoffArgs...),
-		"delivery fallback": explainQueryPlan(t, store, inboundDeliveryByMessageSQL, deliveryArgs...),
+		"delivery fallback": explainQueryPlan(t, store, inboundDeliveryByMessageSQL, append(deliveryArgs, "")...),
 	} {
 		joined := strings.Join(plan, "\n")
 		if !strings.Contains(joined, "idx_inbound_events_message") {
@@ -303,5 +303,29 @@ VALUES (?, 'group:g', 'group', 'g', ?, ?, ?, ?, '', '{}', '')`, id, userID, id, 
 	}
 	if fmt.Sprint(names) != fmt.Sprint(map[string]string{"alice": "新名片"}) {
 		t.Fatalf("names = %v", names)
+	}
+}
+
+func TestDeliveryAndPromptReadsDoNotQueueBehindWriter(t *testing.T) {
+	store := openOutboundDeliveryTestStore(t)
+	ctx := context.Background()
+	if err := store.RecordOutboundStep(ctx, "turn", "step", "out"); err != nil {
+		t.Fatal(err)
+	}
+	conn, err := store.db.Conn(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	readCtx, cancel := context.WithTimeout(ctx, time.Second)
+	defer cancel()
+	if id, ok, err := store.OutboundStepDelivered(readCtx, "turn", "step"); err != nil || !ok || id != "out" {
+		t.Fatalf("read blocked by writer: %q %v %v", id, ok, err)
+	}
+	if _, err := store.LoadGroupPromptSession(readCtx, "scope", "group:g"); err != nil {
+		t.Fatalf("prompt read blocked: %v", err)
+	}
+	if _, _, err := store.InboundEventSuperseded(readCtx, assistant.MessageEvent{Kind: assistant.EventKindGroup, MessageID: "m"}); err != nil {
+		t.Fatalf("supersession read blocked: %v", err)
 	}
 }

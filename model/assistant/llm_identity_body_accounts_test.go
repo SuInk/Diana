@@ -374,8 +374,10 @@ func TestBodyAccountAliasSurvivesRestart(t *testing.T) {
 
 // 用户拿号码问「这是谁」，identity_check 开了群身份核验时要带回群名片。
 func TestIdentityCheckReturnsDisplayNameForGroupMember(t *testing.T) {
-	channel := &bodyAccountChannel{members: map[string]OneBotGroupMemberInfo{"70007": {Role: "admin", Card: "小王", Nickname: "wang"}}}
-	runtime := newBodyAccountRuntime(BotConfig{}, channel)
+	channel := &recordingChannel{apiResponses: map[string]map[string]any{
+		"get_group_member_list": {"items": []any{map[string]any{"user_id": "70007", "role": "admin", "card": "小王", "nickname": "wang"}}},
+	}}
+	runtime := NewRuntime(BotConfig{Platform: PlatformOneBotV11}, channel, NewPluginManager(), nil, nil, nil, nil)
 	got := runIdentityCheck(t, runtime, bodyAccountEvent("70007 是谁"), map[string]any{"user_id": "70007", "check_group_role": true})
 	if got.DisplayName != "小王" || got.GroupRole != string(GroupRoleAdmin) {
 		t.Fatalf("应返回群名片和群身份: %+v", got)

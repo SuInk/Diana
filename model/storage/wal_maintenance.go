@@ -66,6 +66,13 @@ func (s *SQLiteStore) startWALMaintenance() {
 				return
 			case <-ticker.C:
 				busyStreak = s.checkpointWALIfLarge(ctx, busyStreak)
+				if s.db.Stats().InUse == 0 {
+					pruneCtx, cancel := context.WithTimeout(ctx, time.Second)
+					if err := s.pruneOutboundMessageMapBatch(pruneCtx, time.Now()); err != nil && ctx.Err() == nil {
+						log.Printf("diana sqlite outbound map cleanup failed: %v", err)
+					}
+					cancel()
+				}
 			}
 		}
 	}()

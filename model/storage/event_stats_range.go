@@ -31,12 +31,17 @@ type EventRangeStats struct {
 // 不能只匹配 error_replied 全等——error_replied_content_policy 这些也算回复过。
 const inboundHandledPredicate = `(outcome LIKE 'replied%' OR outcome LIKE 'error_replied%')`
 
+// 首页实时窗口和重启后的基线共用错误口径，旧记录即使缺少审计正文，
+// 也能根据发送终态计入错误。
+const inboundFailedPredicate = `(NULLIF(TRIM(processing_error), '') IS NOT NULL OR NULLIF(TRIM(delivery_error), '') IS NOT NULL
+ OR COALESCE(decision, '') = 'error' OR COALESCE(outcome, '') IN (
+ 'error_replied', 'error_send_unconfirmed', 'processing_error', 'dropped_outbound_delivery',
+ 'dropped_outbound_unconfirmed', 'dropped_send_rejected', 'dropped_retries_exhausted'))`
+
 // EventStatsRange 汇总一段时间窗内的消息量、回复量、错误量和平均回复耗时。
 //
-// 口径对齐运行时那份内存计数器：错误看 processing_error，它就是 EventRecord.Error
-// 落库的那一列（RecordInboundEventAudit），而不是 outcome —— 用 outcome 的话
-// error_send_unconfirmed、dropped_outbound_delivery 这些会整类漏掉，和「今日错误」
-// 对不上。
+// 错误同时看处理审计、发送审计和失败终态，与首页重启后恢复的基线一致，
+// 避免没有处理异常正文的发送失败被漏掉。
 func (s *SQLiteStore) EventStatsRange(ctx context.Context, since, until time.Time) (EventRangeStats, error) {
 	stats := EventRangeStats{Since: since, Until: until}
 	if s == nil || s.db == nil {
@@ -61,7 +66,7 @@ SELECT COUNT(*) FROM inbound_events WHERE event_time >= ? AND event_time < ?
 	if err := s.eventReader().QueryRowContext(ctx, `
 SELECT
   COALESCE(SUM(CASE WHEN `+inboundHandledPredicate+` THEN 1 ELSE 0 END), 0),
-  COALESCE(SUM(CASE WHEN COALESCE(TRIM(processing_error), '') <> '' THEN 1 ELSE 0 END), 0),
+  COALESCE(SUM(CASE WHEN `+inboundFailedPredicate+` THEN 1 ELSE 0 END), 0),
   COALESCE(SUM(CASE WHEN `+inboundHandledPredicate+` AND COALESCE(duration_ms, 0) > 0 THEN 1 ELSE 0 END), 0),
   AVG(CASE WHEN `+inboundHandledPredicate+` AND COALESCE(duration_ms, 0) > 0 THEN duration_ms END)
 FROM inbound_events

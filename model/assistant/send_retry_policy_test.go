@@ -74,7 +74,7 @@ func TestGroupSendRetrySettingsOverrideOnlyFilledFields(t *testing.T) {
 	}}})
 	group := MessageEvent{Kind: EventKindGroup, ProfileID: "bot-a", GroupID: "g"}
 	policy := runtime.outboundDeliveryPolicyForEvent(context.Background(), group)
-	want := outboundDeliveryPolicy{InitialDelay: 10 * time.Second, MaximumDelay: 5 * time.Minute, FailureWindow: defaultOutboundFailureWindow, DropCooldown: defaultOutboundDropCooldown}
+	want := outboundDeliveryPolicy{InitialDelay: time.Second, MaximumDelay: 2 * time.Second, FailureWindow: defaultOutboundFailureWindow}
 	if policy != want {
 		t.Fatalf("群策略 %+v，want %+v", policy, want)
 	}
@@ -86,7 +86,7 @@ func TestGroupSendRetrySettingsOverrideOnlyFilledFields(t *testing.T) {
 		t.Fatalf("私聊重跑上限 = %d，want 机器人级的 3", got)
 	}
 	other := MessageEvent{Kind: EventKindGroup, ProfileID: "bot-a", GroupID: "other"}
-	if got := runtime.outboundDeliveryPolicyForEvent(context.Background(), other).InitialDelay; got != defaultOutboundInitialDelay {
+	if got := runtime.outboundDeliveryPolicyForEvent(context.Background(), other).InitialDelay; got != time.Second {
 		t.Fatalf("没有分群配置的群初始间隔 = %v，want 机器人级默认", got)
 	}
 }

@@ -42,7 +42,7 @@ func (s *SQLiteStore) RepositoryIssueDraft(ctx context.Context, id string) (assi
 		return assistant.RepositoryIssueDraft{}, false, fmt.Errorf("storage: repository issue draft store unavailable")
 	}
 	var payload string
-	err := s.db.QueryRowContext(ctx, `SELECT payload FROM repository_issue_drafts WHERE id = ?`, strings.TrimSpace(id)).Scan(&payload)
+	err := s.eventReader().QueryRowContext(ctx, `SELECT payload FROM repository_issue_drafts WHERE id = ?`, strings.TrimSpace(id)).Scan(&payload)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return assistant.RepositoryIssueDraft{}, false, nil
@@ -126,7 +126,7 @@ func (s *SQLiteStore) ListRepositoryIssueDrafts(ctx context.Context, groupID, st
 		args = append(args, status)
 	}
 	query += ` ORDER BY created_at DESC, id DESC`
-	rows, err := s.db.QueryContext(ctx, query, args...)
+	rows, err := s.eventReader().QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list repository issue drafts: %w", err)
 	}

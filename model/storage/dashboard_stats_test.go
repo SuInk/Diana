@@ -257,3 +257,32 @@ VALUES (?, ?, 'group', ?, '{}', 0, 'done', 0, ?, ?, ?, ?, ?, ?)
 		t.Fatalf("aggregate snapshot = %d err=%v", total.TotalEvents, err)
 	}
 }
+
+func TestDashboardBaselineCountsDeliveryFailuresAfterRestart(t *testing.T) {
+	store := openOutboundDeliveryTestStore(t)
+	now := time.Now()
+	for _, outcome := range []string{"dropped_outbound_delivery", "dropped_send_rejected", "dropped_retries_exhausted"} {
+		if _, err := store.db.Exec(`INSERT INTO inbound_events(id, session, kind, profile_id, event_time, payload, status, outcome, available_at, created_at, updated_at, completed_at)
+VALUES (?, 'group:g', 'group', 'profile-a', ?, '{}', 'done', ?, 0, ?, ?, ?)`, outcome, now.Unix(), outcome, now.UnixNano(), now.UnixNano(), now.UnixNano()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	stats, err := store.DashboardEventStatsSnapshotByProfile(context.Background(), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rangeStats, err := store.EventStatsRange(context.Background(), now.Add(-time.Hour), now.Add(time.Second))
+	if err != nil || rangeStats.Errors != 3 {
+		t.Fatalf("range errors = %d, err=%v", rangeStats.Errors, err)
+	}
+	if stats[""].ErrorEvents != 3 || stats["profile-a"].ErrorEvents != 3 {
+		t.Fatalf("lost delivery errors: %+v", stats)
+	}
+	page, err := store.ListInboundEventDetails(context.Background(), InboundEventQuery{Since: now.Add(-time.Hour), Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if page.Errors != 3 || page.NotReplied != 0 {
+		t.Fatalf("delivery failures counted as silence: errors=%d silent=%d", page.Errors, page.NotReplied)
+	}
+}

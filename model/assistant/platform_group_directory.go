@@ -110,5 +110,72 @@ func (r *Runtime) currentPlatform(event MessageEvent) string {
 }
 
 func groupMemberToolItem(member OneBotGroupMemberInfo) dianaGroupMemberItem {
-	return dianaGroupMemberItem{UserID: member.UserID, DisplayName: member.DisplayName(), Nickname: member.Nickname, Card: member.Card, Role: member.Role, Title: member.Title, AvatarURL: member.AvatarURL, Mention: mentionMarkerFor(member.UserID), Username: member.Username, IsBot: member.IsBot, MembershipVerified: member.MembershipVerified, AvatarSource: avatarSourceMemberPrefix + member.UserID}
+	mention := ""
+	if member.MembershipVerified {
+		mention = mentionMarkerFor(member.UserID)
+	}
+	return dianaGroupMemberItem{UserID: member.UserID, DisplayName: member.DisplayName(), Nickname: member.Nickname, Card: member.Card, Role: member.Role, Title: member.Title, AvatarURL: member.AvatarURL, Mention: mention, Username: member.Username, IsBot: member.IsBot, MembershipVerified: member.MembershipVerified, AvatarSource: avatarSourceMemberPrefix + member.UserID}
+}
+
+// 单人资料可能只是桥接端填的占位数据或旧缓存。模型要断言当前群籍时，
+// OneBot 必须在强制刷新的成员列表中找到同一个账号；资料和历史不作群籍证据。
+func (r *Runtime) getCurrentGroupMemberForTool(ctx context.Context, event MessageEvent, groupID, userID string) (OneBotGroupMemberInfo, error) {
+	if !IsOneBotPlatform(r.currentPlatform(event)) {
+		return r.getGroupMemberInfoForEvent(ctx, event, groupID, userID)
+	}
+	groupID, userID = strings.TrimSpace(groupID), strings.TrimSpace(userID)
+	ctx, cancel := context.WithTimeout(ctx, 6*time.Second)
+	defer cancel()
+	data, err := r.callOneBotAPIForEvent(ctx, event, "get_group_member_list", map[string]any{
+		"group_id": oneBotIDParam(groupID), "no_cache": true,
+	})
+	if err != nil {
+		return OneBotGroupMemberInfo{}, fmt.Errorf("当前群成员列表查询失败，无法确认该账号是否在群：%w", err)
+	}
+	valid := false
+	for _, key := range []string{"items", "list", "members"} {
+		switch data[key].(type) {
+		case []any, []map[string]any:
+			valid = true
+		}
+	}
+	if !valid {
+		return OneBotGroupMemberInfo{}, fmt.Errorf("当前群成员列表返回格式不完整，无法确认该账号是否在群")
+	}
+	for _, item := range oneBotListItems(data) {
+		row, ok := item.(map[string]any)
+		if !ok {
+			return OneBotGroupMemberInfo{}, fmt.Errorf("当前群成员列表包含无效记录，无法确认该账号是否在群")
+		}
+		member := oneBotGroupMemberInfoFromData(groupID, row)
+		if member.UserID == "" || member.GroupID != groupID {
+			return OneBotGroupMemberInfo{}, fmt.Errorf("当前群成员列表的账号或群号不完整，无法确认该账号是否在群")
+		}
+		if member.UserID == userID && member.GroupID == groupID {
+			member.MembershipVerified = true
+			return member, nil
+		}
+	}
+	return OneBotGroupMemberInfo{}, fmt.Errorf("当前群成员列表未找到该账号（not in group），不能称其为群成员或 @ 该账号")
+}
+
+// 账号资料与群籍分开返回；只暴露需要的公开资料，不透传 UID、手机号等字段。
+func (r *Runtime) getOneBotAccountProfile(ctx context.Context, event MessageEvent, userID string) (map[string]any, error) {
+	if !IsOneBotPlatform(r.currentPlatform(event)) {
+		return nil, fmt.Errorf("当前平台不提供 QQ 账号资料查询")
+	}
+	ctx, cancel := context.WithTimeout(ctx, 4*time.Second)
+	defer cancel()
+	data, err := r.callOneBotAPIForEvent(ctx, event, "get_stranger_info", map[string]any{
+		"user_id": oneBotIDParam(userID), "no_cache": true,
+	})
+	if err != nil {
+		return nil, err
+	}
+	id := strings.TrimSpace(stringFromAny(data["user_id"]))
+	nickname := strings.TrimSpace(stringFromAny(data["nickname"]))
+	if id != userID || nickname == "" {
+		return nil, fmt.Errorf("QQ 个人资料未返回匹配账号及有效昵称，无法确认身份")
+	}
+	return map[string]any{"user_id": id, "nickname": nickname, "source": "onebot_get_stranger_info", "membership_verified": false}, nil
 }

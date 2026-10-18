@@ -206,8 +206,13 @@ func (r *Runtime) executeOutboundCall(
 	// Retry bridge media-validation failures briefly before trying a different
 	// representation. This is separate from the group's network backoff window.
 	originalCall := call
+	attempts := 0
+	countedCall := func(callCtx context.Context) (map[string]any, error) {
+		attempts++
+		return originalCall(callCtx)
+	}
 	payloadCall := func(callCtx context.Context) (map[string]any, error) {
-		return retryOutboundPayloadRejection(callCtx, originalCall)
+		return retryOutboundPayloadRejectionBudget(callCtx, countedCall, sendRetryAttempts-attempts)
 	}
 	// 请求写出去后没等到回执的，先确认有没有送达，不在这里直接重发。
 	call = func(callCtx context.Context) (map[string]any, error) {
@@ -230,7 +235,7 @@ func (r *Runtime) executeOutboundCall(
 		if err == nil {
 			r.clearBotMute(event)
 		}
-		if isPermanentOutboundRejection(err) && !errors.Is(err, errOutboundSend) {
+		if isPermanentOutboundRejection(err) {
 			return nil, r.permanentOutboundSendError(event, action, err)
 		}
 		return result, r.wrapOutboundSendError(ctx, event, err)
@@ -240,11 +245,9 @@ func (r *Runtime) executeOutboundCall(
 	if media, _ := ctx.Value(outboundMediaContextKey{}).(bool); media || strings.Contains(action, "forward") {
 		lane = "media"
 	}
-	gate := r.groupOutboundDelivery(event, lane)
-	if err := lockOutboundDelivery(ctx, &gate.mu); err != nil {
-		return nil, err
-	}
-	defer gate.mu.Unlock()
+	serial := r.groupOutboundDelivery(event, lane)
+	// 重试状态属于这一条发送，不能让失败载荷给整个群设置退避或冷却。
+	gate := &groupOutboundDelivery{}
 	policy := r.outboundDeliveryPolicyForEvent(ctx, event)
 	for {
 		if err := ctx.Err(); err != nil {
@@ -254,7 +257,7 @@ func (r *Runtime) executeOutboundCall(
 			if strings.TrimSpace(gate.lastError) == "" {
 				gate.lastError = err.Error()
 			}
-			r.enterOutboundDropCooldown(event, action, gate, policy, time.Now())
+			r.recordOutboundDeliveryDropped(event, action, gate, policy, time.Now())
 			return nil, droppedOutboundSendError(groupID, gate.lastError)
 		}
 		// An offline transport or bot account cannot deliver anything. Fail fast
@@ -268,19 +271,12 @@ func (r *Runtime) executeOutboundCall(
 			return nil, offlineOutboundSendError(groupID)
 		}
 		now := time.Now()
-		if !gate.dropUntil.IsZero() {
-			if now.Before(gate.dropUntil) {
-				return nil, droppedOutboundSendError(groupID, gate.lastError)
-			}
-			gate.reset()
-		}
+
 		if !gate.firstFailure.IsZero() && now.Sub(gate.firstFailure) >= policy.FailureWindow {
-			r.enterOutboundDropCooldown(event, action, gate, policy, now)
+			r.recordOutboundDeliveryDropped(event, action, gate, policy, now)
 			return nil, droppedOutboundSendError(groupID, gate.lastError)
 		}
 		if wait := time.Until(gate.nextAttempt); wait > 0 {
-			// 退避最长十几分钟，租约到期会被别的 worker 领走重新生成一遍。
-			extendInboundLease(ctx, wait+oneBotMediaActionTimeout+time.Minute)
 			if err := waitForOutboundRetry(ctx, wait); err != nil {
 				if r.runtimeContextStopped() {
 					return nil, err
@@ -288,12 +284,16 @@ func (r *Runtime) executeOutboundCall(
 				if strings.TrimSpace(gate.lastError) == "" {
 					gate.lastError = err.Error()
 				}
-				r.enterOutboundDropCooldown(event, action, gate, policy, time.Now())
+				r.recordOutboundDeliveryDropped(event, action, gate, policy, time.Now())
 				return nil, droppedOutboundSendError(groupID, gate.lastError)
 			}
 		}
 
+		if err := lockOutboundDelivery(ctx, &serial.mu); err != nil {
+			return nil, err
+		}
 		result, err := call(ctx)
+		serial.mu.Unlock()
 		if err == nil {
 			r.clearBotMute(event)
 			failures := gate.failures
@@ -307,9 +307,9 @@ func (r *Runtime) executeOutboundCall(
 			// The short retry budget is exhausted. Leave the group available for
 			// another representation or later messages instead of locking it out.
 			gate.reset()
-			return nil, &outboundSendError{GroupID: groupID, Cause: err}
+			return nil, &outboundSendError{GroupID: groupID, Cause: err, DeliveryDropped: true}
 		}
-		if isPermanentOutboundRejection(err) && !errors.Is(err, errOutboundSend) {
+		if isPermanentOutboundRejection(err) {
 			// 消息本身无效，退避多少次都一样：直接放下，群里后面的消息照常发。
 			gate.reset()
 			return nil, r.permanentOutboundSendError(event, action, err)
@@ -331,18 +331,21 @@ func (r *Runtime) executeOutboundCall(
 		if gate.firstFailure.IsZero() {
 			gate.firstFailure = now
 		}
-		gate.failures++
-		gate.lastError = err.Error()
-		if now.Sub(gate.firstFailure) >= policy.FailureWindow {
-			r.enterOutboundDropCooldown(event, action, gate, policy, now)
+		gate.failures = attempts
+		gate.lastError = fmt.Sprintf("发送尝试 %d/%d 失败：%v", gate.failures, sendRetryAttempts, err)
+		if gate.failures >= sendRetryAttempts || now.Sub(gate.firstFailure) >= policy.FailureWindow {
+			r.recordOutboundDeliveryDropped(event, action, gate, policy, now)
 			return nil, droppedOutboundSendError(groupID, gate.lastError)
 		}
 		delay := outboundBackoffDelay(event, action, gate.failures, policy)
+		// 兼容保存过的旧策略，但实际每条最多三次，间隔不超过 1s、2s。
+		if policy.InitialDelay >= time.Second {
+			delay = time.Duration(gate.failures) * time.Second
+		}
 		gate.nextAttempt = now.Add(delay)
 		r.recordOutboundDeliveryBackoff(event, action, gate.failures, delay, err)
-		// Some resolver/forward paths have a known alternate representation. Let
-		// that alternate enter the same gate after one failure; all ordinary sends
-		// retry the exact payload until success or the group failure window expires.
+		// 有明确备用表示的媒体路径可在一次失败后尝试备用；普通发送只重试
+		// 当前载荷，三次预算耗尽即结束，不给整个群设置冷却。
 		if alternativeOutboundDelivery(ctx) && !continuousOutboundDelivery(ctx) {
 			return nil, wrapped
 		}
@@ -354,12 +357,16 @@ func (r *Runtime) executeOutboundCall(
 const outboundPayloadMaxAttempts = 3
 
 func retryOutboundPayloadRejection(ctx context.Context, call func(context.Context) (map[string]any, error)) (map[string]any, error) {
+	return retryOutboundPayloadRejectionBudget(ctx, call, outboundPayloadMaxAttempts)
+}
+
+func retryOutboundPayloadRejectionBudget(ctx context.Context, call func(context.Context) (map[string]any, error), budget int) (map[string]any, error) {
 	for attempt := 1; ; attempt++ {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
 		result, err := call(ctx)
-		if !isOutboundPayloadRejection(err) || attempt >= outboundPayloadMaxAttempts {
+		if !isOutboundPayloadRejection(err) || attempt >= budget {
 			return result, err
 		}
 		typingIndicatorFromContext(ctx).resume()
@@ -508,19 +515,18 @@ func droppedOutboundSendError(groupID, cause string) error {
 	}
 	return &outboundSendError{
 		GroupID:         groupID,
-		Cause:           fmt.Errorf("diana: dropped outbound delivery for group %s: %s", groupID, cause),
+		Cause:           fmt.Errorf("diana: stopped outbound delivery for group %s: %s", groupID, cause),
 		DeliveryDropped: true,
 	}
 }
 
-func (r *Runtime) enterOutboundDropCooldown(event MessageEvent, action string, gate *groupOutboundDelivery, policy outboundDeliveryPolicy, now time.Time) {
+func (r *Runtime) recordOutboundDeliveryDropped(event MessageEvent, action string, gate *groupOutboundDelivery, policy outboundDeliveryPolicy, now time.Time) {
 	gate.nextAttempt = time.Time{}
-	gate.dropUntil = now.Add(policy.DropCooldown)
 	r.appendOutboundAppLog(applog.Entry{
 		Kind:    applog.KindError,
 		Level:   applog.LevelError,
 		Action:  "outbound_delivery_dropped",
-		Message: "群消息连续发送失败，已丢弃等待结果并进入冷却",
+		Message: "本条消息发送失败，已停止重试，后续消息照常处理",
 		Detail:  gate.lastError,
 		Actor:   oneBotEventActor(event),
 		Target:  event.GroupID,
@@ -529,8 +535,10 @@ func (r *Runtime) enterOutboundDropCooldown(event MessageEvent, action string, g
 			"message_id":             event.MessageID,
 			"onebot_action":          action,
 			"failure_count":          gate.failures,
+			"max_attempts":           sendRetryAttempts,
+			"profile_id":             event.ProfileID,
 			"failure_window_seconds": int(policy.FailureWindow / time.Second),
-			"drop_cooldown_seconds":  int(policy.DropCooldown / time.Second),
+			"drop_cooldown_seconds":  0,
 		},
 	})
 }
@@ -540,7 +548,7 @@ func (r *Runtime) recordOutboundDeliveryBackoff(event MessageEvent, action strin
 		Kind:    applog.KindOperation,
 		Level:   applog.LevelInfo,
 		Action:  "outbound_delivery_backoff",
-		Message: "群消息发送失败，已按指数退避等待下次尝试",
+		Message: "本条消息发送失败，正在短间隔重试（最多三次）",
 		Detail:  cause.Error(),
 		Actor:   oneBotEventActor(event),
 		Target:  event.GroupID,
@@ -549,6 +557,8 @@ func (r *Runtime) recordOutboundDeliveryBackoff(event MessageEvent, action strin
 			"message_id":     event.MessageID,
 			"onebot_action":  action,
 			"failure_count":  failures,
+			"max_attempts":   sendRetryAttempts,
+			"profile_id":     event.ProfileID,
 			"retry_delay_ms": delay.Milliseconds(),
 		},
 	})

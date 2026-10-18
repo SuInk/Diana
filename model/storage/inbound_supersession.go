@@ -26,7 +26,7 @@ func (s *SQLiteStore) InboundEventSuperseded(ctx context.Context, event assistan
 		return "", false, nil
 	}
 	var supersededBy sql.NullString
-	err := s.db.QueryRowContext(ctx, `
+	err := s.eventReader().QueryRowContext(ctx, `
 SELECT superseded_by
 FROM inbound_events
 WHERE message_id = ? AND kind = ?

@@ -272,6 +272,19 @@ func TestSystemPromptKeepsPerMessageContentOutOfTheCacheablePrefix(t *testing.T)
 			RelationshipPolicyFor(UserMemoryProfile{}, base.OwnerID, userID), true, nil)
 	}
 
+	var stableHead string
+	for _, role := range []string{"owner", "admin", "member"} {
+		event := MessageEvent{Kind: EventKindGroup, GroupID: "g1", UserID: "1", SenderRole: role}
+		head, tail := runtime.systemPromptPartsWithRelationshipAndAgentTools(event, nil, false, RelationshipPolicy{}, true, nil)
+		if stableHead != "" && head != stableHead {
+			t.Fatal("group role changed cacheable head")
+		}
+		stableHead = head
+		if strings.Contains(head, "【当前发言者群身份】") || !strings.Contains(tail, "群身份："+GroupRoleLabel(NormalizeGroupRole(role))) {
+			t.Fatal("current group identity must stay in dynamic tail")
+		}
+	}
+
 	alice := prompt("1", "Alice", "diana 在吗")
 	aliceAgain := prompt("1", "Alice", "随便说点什么")
 	bob := prompt("2", "Bob", "随便说点什么")
@@ -291,11 +304,11 @@ func TestSystemPromptKeepsPerMessageContentOutOfTheCacheablePrefix(t *testing.T)
 		t.Fatalf("consecutive messages from the same member share only %.0f%% of the prompt prefix", ratio*100)
 	}
 
-	// 两个同档位成员的提示词按行拆开比较，差异只允许出现在发送者昵称和命中别名上，
+	// 两个同档位成员的提示词按行拆开比较，差异只允许出现在发送者昵称、当前群身份和命中别名上，
 	// 以此保证挪动位置没有丢段、也没有串档。
 	for line, count := range promptLineDiff(alice, bob) {
 		if count != 0 && !strings.Contains(line, "Alice") && !strings.Contains(line, "Bob") &&
-			!strings.Contains(line, "当前消息命中的配置别名") {
+			!strings.Contains(line, "当前消息命中的配置别名") && !strings.HasPrefix(line, "【当前发言者群身份】") {
 			t.Fatalf("unexpected line-level difference between two same-tier members: %q", line)
 		}
 	}

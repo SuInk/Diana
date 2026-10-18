@@ -109,17 +109,18 @@ type DashboardEventStatsBucket struct {
 // 表读一遍，逐行回表读带着整段 payload 的宽行，2.7 GB 的库冷缓存要 4–16 秒，所以
 // 启动时放到后台跑，见 BeginDashboardEventStatsSnapshot。
 const dashboardEventBaselineSQL = `
-SELECT kind, event_time, outcome, created_at, completed_at, profile_id
+SELECT kind, event_time, outcome, created_at, completed_at, profile_id, failed
 FROM (
   SELECT kind, event_time, COALESCE(outcome, '') AS outcome,
          created_at, COALESCE(completed_at, 0) AS completed_at,
-         TRIM(COALESCE(profile_id, '')) AS profile_id
+         TRIM(COALESCE(profile_id, '')) AS profile_id,
+         ` + inboundFailedPredicate + ` AS failed
   FROM inbound_events
   WHERE status = 'done' AND COALESCE(outcome, '') != 'ignored_stale'
 
   UNION ALL
 
-  SELECT m.kind, m.event_time, '', 0, 0, TRIM(COALESCE(m.profile_id, ''))
+  SELECT m.kind, m.event_time, '', 0, 0, TRIM(COALESCE(m.profile_id, '')), 0
   FROM message_events AS m
   LEFT JOIN inbound_events AS i ON i.id = m.id
   WHERE i.id IS NULL
@@ -203,8 +204,9 @@ func scanDashboardEventBaselines(ctx context.Context, db dashboardQueryer, now t
 	accumulators := map[string]*dashboardEventAccumulator{"": newDashboardEventAccumulator()}
 	for rows.Next() {
 		var kind, outcome, profileID string
+		var failed bool
 		var eventTime, createdAt, completedAt int64
-		if err := rows.Scan(&kind, &eventTime, &outcome, &createdAt, &completedAt, &profileID); err != nil {
+		if err := rows.Scan(&kind, &eventTime, &outcome, &createdAt, &completedAt, &profileID, &failed); err != nil {
 			return nil, fmt.Errorf("scan dashboard event baseline: %w", err)
 		}
 
@@ -218,7 +220,6 @@ func scanDashboardEventBaselines(ctx context.Context, db dashboardQueryer, now t
 			targets = append(targets, acc)
 		}
 		handled := dashboardOutcomeHandled(outcome)
-		failed := outcome == "error_replied"
 		at := time.Unix(eventTime, 0).In(now.Location())
 		hour := at.Truncate(time.Hour).Unix()
 		inWindow := hour >= cutoffHour && hour <= currentHour

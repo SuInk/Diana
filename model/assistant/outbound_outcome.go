@@ -197,6 +197,11 @@ func isPermanentOutboundRejection(err error) bool {
 	if qqOfficialQuotaRejected(message) {
 		return true
 	}
+	for _, marker := range permanentSendRejectionMarkers {
+		if strings.Contains(message, marker) {
+			return true
+		}
+	}
 	for _, marker := range permanentOutboundRejectionMarkers {
 		if strings.Contains(message, marker) {
 			return true
