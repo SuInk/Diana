@@ -25,12 +25,12 @@ test("subscription settings list every robot and only use the selected robot as 
   }
 });
 
-test("RSS model fields preserve legacy IDs without a long suggestion list", async () => {
+test("RSS editor keeps the original shape plus rule mode and reply format", async () => {
   const source = await readFile(new URL("../components/RSSWatchManager.vue", import.meta.url), "utf8");
-  assert.match(source, /id="rss-watch-judge-model"[^>]+type="text"/);
-  assert.match(source, /id="rss-watch-translation-model"[^>]+type="text"/);
-  assert.match(source, /旧订阅里的 ID 会原样保留/);
-  assert.doesNotMatch(source, /rss-watch-model-options|modelSuggestions|getConfig/);
+  assert.match(source, /全部推送.*正则匹配.*LLM 判断/);
+  assert.match(source, /回复格式（可选）/);
+  assert.doesNotMatch(source, /rss-watch-judge-model|rss-watch-translation-model|rss-watch-media|mediaModeOptions|mediaFailureOptions/);
+  assert.doesNotMatch(source, /judge_model_id: form|translation_model_id: form|media_mode: form|media_failure: form/);
 });
 
 
