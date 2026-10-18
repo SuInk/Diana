@@ -4645,3 +4645,16 @@ export function checkResolverCookieFile(content: string, format = false): Promis
 export function testResolverCookieLogin(content: string): Promise<{ state: "valid" | "invalid" | "unknown"; message: string }> {
  return requestJSON("/api/assistant/plugins/resolver/cookie-file/login", { method: "POST", body: JSON.stringify({ content }) });
 }
+
+export interface TrustedLoginApp { id: string; name: string; profile_id: string; disabled: boolean; last_login_at?: string | null }
+export interface TrustedLoginRecord { app_id: string; profile_id: string; platform: string; user_id: string; at: string }
+export interface TrustedLoginSettings {
+ enabled: boolean;
+ apps: TrustedLoginApp[];
+ profiles: { id: string; name: string; platform: string; available: boolean; reason: string }[];
+ records: TrustedLoginRecord[] | null;
+}
+export const getTrustedLoginSettings = () => requestJSON<TrustedLoginSettings>('/api/auth/apps/settings');
+export const setTrustedLoginEnabled = (enabled: boolean) => requestJSON('/api/auth/apps/settings', {method: 'PUT', body: JSON.stringify({enabled})});
+export const saveTrustedLoginApp = (app: Pick<TrustedLoginApp,'id'|'name'|'profile_id'|'disabled'>, create: boolean) => requestJSON<{id:string;secret:string}>(`/api/auth/apps/settings/apps${create ? '' : '/' + encodeURIComponent(app.id)}`, {method:create ? 'POST' : 'PATCH',body:JSON.stringify(app)});
+export const rotateTrustedLoginSecret = (id: string) => requestJSON<{id:string;secret:string}>(`/api/auth/apps/settings/apps/${encodeURIComponent(id)}/rotate`, {method:'POST',body:'{}'});

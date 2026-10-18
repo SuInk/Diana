@@ -50,6 +50,10 @@ func protectRuntimeSecrets(appCfg appConfig, dbPath, dataDir string) {
 			files = append(files, cookies)
 		}
 	}
+	files = append(files, filepath.Join(dataDir, "trusted-login.json"))
+	if legacy := strings.TrimSpace(os.Getenv("DIANA_TRUSTED_LOGIN_APPS_FILE")); legacy != "" {
+		files = append(files, legacy)
+	}
 	agent.ProtectRuntimeFiles(files...)
 
 	var dirs []string

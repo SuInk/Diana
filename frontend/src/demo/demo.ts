@@ -1,6 +1,7 @@
 // Copyright (c) 2025-now SuInk.
 // Licensed under the Limited Redistribution License in the repository root.
 
+import { trustedLoginDemoResponse } from './trusted-login-demo';
 import { extensionDemoResponse } from './extension-demo';
 import { adminChatDemoResponse } from './admin-chat-demo';
 import { mergeResolverDemoSettings, resolverDemoManifest, resolverDemoTestResponse } from './resolver-demo';
@@ -1128,6 +1129,8 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
   const method = (init?.method ?? "GET").toUpperCase();
   const body = bodyOf(init);
   const path = url.pathname;
+  const trustedLogin = trustedLoginDemoResponse(path, method, body);
+  if (trustedLogin) return trustedLogin;
   const adminChat = adminChatDemoResponse(url, method, body);
   if (adminChat) return adminChat;
 

@@ -723,7 +723,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("加载受信应用登录配置失败：%v", err)
 	}
-	trustedLoginHandler, err := webui.NewTrustedLoginHandler(ownerLoginHandler, trustedApps)
+	trustedLoginHandler, err := webui.NewManagedTrustedLoginHandler(ownerLoginHandler, filepath.Join(filepath.Dir(sqliteStore.Path()), "trusted-login.json"), trustedApps)
 	if err != nil {
 		log.Fatalf("初始化受信应用登录失败：%v", err)
 	}

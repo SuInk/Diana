@@ -27,7 +27,7 @@ func trustedFixture(t *testing.T) (*gin.Engine, *TrustedLoginHandler, *OwnerLogi
 	runtime.cfg.ID = "bot-a"
 	_, manager, owner := newOwnerLoginTestRouter(t, runtime)
 	hash := sha256.Sum256([]byte(trustedTestSecret))
-	h, err := NewTrustedLoginHandler(owner, []TrustedLoginApp{{"ruhua", "入画", hex.EncodeToString(hash[:]), "bot-a"}, {"other", "另一应用", hex.EncodeToString(hash[:]), "bot-a"}})
+	h, err := NewTrustedLoginHandler(owner, []TrustedLoginApp{{ID: "ruhua", Name: "入画", SecretSHA256: hex.EncodeToString(hash[:]), ProfileID: "bot-a"}, {ID: "other", Name: "另一应用", SecretSHA256: hex.EncodeToString(hash[:]), ProfileID: "bot-a"}})
 	if err != nil {
 		t.Fatal(err)
 	}

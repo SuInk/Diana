@@ -29,6 +29,7 @@ type TrustedLoginApp struct {
 	Name         string `json:"name"`
 	SecretSHA256 string `json:"secret_sha256"`
 	ProfileID    string `json:"profile_id"`
+	Disabled     bool   `json:"disabled,omitempty"`
 }
 
 var trustedAppID = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,47}$`)
@@ -89,6 +90,9 @@ type trustedIdentity struct {
 // TrustedLoginHandler keeps external pairings separate from console sessions.
 // Only an authenticated backend holding the opaque polling token can consume one.
 type TrustedLoginHandler struct {
+	enabled    bool
+	policyPath string
+	records    []trustedLoginRecord
 	owner      *OwnerLoginHandler
 	apps       map[string]TrustedLoginApp
 	mu         sync.Mutex
@@ -102,13 +106,14 @@ func NewTrustedLoginHandler(owner *OwnerLoginHandler, apps []TrustedLoginApp) (*
 	if err := validateTrustedApps(apps); err != nil {
 		return nil, err
 	}
-	h := &TrustedLoginHandler{owner: owner, apps: map[string]TrustedLoginApp{}, pairs: map[string]*trustedPair{}, lastCreate: map[string]time.Time{}, lastPoll: map[string]time.Time{}, throttle: newAuthThrottle()}
+	h := &TrustedLoginHandler{enabled: len(apps) > 0, owner: owner, apps: map[string]TrustedLoginApp{}, pairs: map[string]*trustedPair{}, lastCreate: map[string]time.Time{}, lastPoll: map[string]time.Time{}, throttle: newAuthThrottle()}
 	for _, a := range apps {
 		h.apps[a.ID] = a
 	}
 	return h, nil
 }
 func (h *TrustedLoginHandler) Register(r gin.IRouter) {
+	h.registerSettings(r)
 	r.POST("/api/auth/apps/pair", h.authenticate, h.create)
 	r.POST("/api/auth/apps/pair/status", h.authenticate, h.poll)
 }
@@ -121,10 +126,13 @@ func (h *TrustedLoginHandler) authenticate(c *gin.Context) {
 		return
 	}
 	id, secret, ok := c.Request.BasicAuth()
+	h.mu.Lock()
 	a, exists := h.apps[id]
+	enabled := h.enabled
+	h.mu.Unlock()
 	expected, _ := hex.DecodeString(a.SecretSHA256)
 	actual := sha256.Sum256([]byte(secret))
-	if !ok || !exists || len(secret) < 32 || subtle.ConstantTimeCompare(expected, actual[:]) != 1 {
+	if !enabled || !ok || !exists || a.Disabled || len(secret) < 32 || subtle.ConstantTimeCompare(expected, actual[:]) != 1 {
 		h.throttle.Fail(key, now)
 		c.AbortWithStatusJSON(401, gin.H{"error": "应用凭证无效"})
 		return
@@ -152,6 +160,10 @@ func (h *TrustedLoginHandler) create(c *gin.Context) {
 	a := c.MustGet("trusted_login_app").(TrustedLoginApp)
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	if !h.activeLocked(a) {
+		c.JSON(401, gin.H{"error": "应用配置已变化，请重试"})
+		return
+	}
 	now := time.Now()
 	h.cleanup(now)
 	count := 0
@@ -210,6 +222,10 @@ func (h *TrustedLoginHandler) poll(c *gin.Context) {
 	key := hashOwnerPairingToken(body.PollToken)
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	if !h.activeLocked(a) {
+		c.JSON(401, gin.H{"error": "应用配置已变化，请重试"})
+		return
+	}
 	now := time.Now()
 	h.cleanup(now)
 	p := h.pairs[key]
@@ -227,6 +243,16 @@ func (h *TrustedLoginHandler) poll(c *gin.Context) {
 		c.JSON(200, gin.H{"approved": false, "expires_in_seconds": int(time.Until(p.expires).Seconds())})
 		return
 	}
+	policy := h.policy()
+	policy.Records = append(policy.Records, trustedLoginRecord{AppID: a.ID, ProfileID: p.identity.ProfileID, Platform: p.identity.Platform, UserID: p.identity.UserID, At: p.identity.ConfirmedAt})
+	if len(policy.Records) > 100 {
+		policy.Records = policy.Records[len(policy.Records)-100:]
+	}
+	if err := h.persistPolicy(policy); err != nil {
+		c.JSON(500, gin.H{"error": "保存登录记录失败，请重试"})
+		return
+	}
+	h.records = policy.Records
 	// Consume atomically; this route deliberately never issues a console cookie.
 	delete(h.pairs, key)
 	delete(h.lastPoll, key)
@@ -238,7 +264,9 @@ func (h *TrustedLoginHandler) ConsumePrivateMessage(ctx context.Context, event a
 	if len(m) != 3 || event.Kind != assistant.EventKindPrivate {
 		return false
 	}
+	h.mu.Lock()
 	a, ok := h.apps[m[1]]
+	h.mu.Unlock()
 	if !ok || event.ProfileID != a.ProfileID || h.owner == nil || h.owner.runtime == nil || h.owner.auth == nil || !h.owner.auth.Required() {
 		return false
 	}
@@ -247,6 +275,10 @@ func (h *TrustedLoginHandler) ConsumePrivateMessage(ctx context.Context, event a
 		return false
 	}
 	h.mu.Lock()
+	if !h.activeLocked(a) {
+		h.mu.Unlock()
+		return false
+	}
 	now := time.Now()
 	h.cleanup(now)
 	var found *trustedPair
