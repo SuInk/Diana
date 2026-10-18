@@ -306,7 +306,7 @@
                     <p v-if="task.error" class="event-error">{{ task.error }}</p>
                     <p v-else-if="task.detail" class="muted">{{ task.detail }}</p>
                     <div v-if="task.kind === 'subtask' || task.kind === 'image'" class="subtask-debug-action">
-                      <button class="event-debug-toggle" type="button" :disabled="traceLoading[event.id]" :aria-expanded="!!subtaskTraceOpen[task.task_id]" @click="toggleSubtaskTrace(event, task)">
+                      <button class="btn event-debug-toggle" type="button" :disabled="traceLoading[event.id]" :aria-expanded="!!subtaskTraceOpen[task.task_id]" @click="toggleSubtaskTrace(event, task)">
                         <span>调试信息</span>
                         <LoaderCircle v-if="traceLoading[event.id]" :size="14" class="spin" aria-hidden="true" />
                         <ChevronDown v-else :size="14" :class="{ 'trace-chevron-open': subtaskTraceOpen[task.task_id] }" aria-hidden="true" />
@@ -398,7 +398,7 @@
                   <RotateCcw v-else :size="14" aria-hidden="true" />
                   重试
                 </button>
-                <button class="event-debug-toggle" type="button" :disabled="traceLoading[event.id]" :aria-expanded="!!traceOpen[event.id]" @click="toggleTrace(event)">
+                <button class="btn event-debug-toggle" type="button" :disabled="traceLoading[event.id]" :aria-expanded="!!traceOpen[event.id]" @click="toggleTrace(event)">
                   <span>调试信息</span>
                   <LoaderCircle v-if="traceLoading[event.id]" :size="14" class="spin" aria-hidden="true" />
                   <ChevronDown v-else :size="14" :class="{ 'trace-chevron-open': traceOpen[event.id] }" aria-hidden="true" />
@@ -2335,28 +2335,15 @@ onBeforeUnmount(() => {
 }
 
 .event-debug-toggle {
-  display: flex;
-  width: 100%;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  min-height: 30px;
-  padding: 4px 0;
-  border: 0;
-  border-top: 1px solid var(--border);
-  border-radius: 0;
-  text-align: left;
-  background: transparent;
-  color: var(--text-secondary);
-  font: inherit;
-  font-size: 12px;
-  font-weight: 500;
-  cursor: pointer;
+  min-height: 44px;
+  padding: 10px 16px;
+  font-size: 14px;
+  background: var(--surface-2);
 }
 
 .event-debug-toggle:hover:not(:disabled) {
+  border-color: var(--accent);
   background: var(--surface);
-  color: var(--text);
 }
 
 .event-debug-toggle:focus-visible {
@@ -2370,6 +2357,8 @@ onBeforeUnmount(() => {
 }
 
 .event-debug-toggle svg {
+  width: 20px;
+  height: 20px;
   flex-shrink: 0;
   transition: transform 160ms ease;
 }
