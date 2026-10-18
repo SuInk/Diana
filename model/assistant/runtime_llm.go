@@ -440,7 +440,7 @@ func (r *Runtime) runRawLLMProviderForGroup(ctx context.Context, group string, r
 			}
 		} else {
 			var roleErr error
-			profiles, roleErr = r.scheduledRoleProfiles(ctx, llmUsagePurposeFromContext(ctx), set, group, roles)
+			profiles, roleErr = r.scheduledRoleProfiles(ctx, llmRoutingPurposeFromContext(ctx), set, group, roles)
 			if roleErr != nil {
 				return "", roleErr
 			}
@@ -473,7 +473,7 @@ func (r *Runtime) runRawLLMProviderForGroup(ctx context.Context, group string, r
 			}
 			return "", fmt.Errorf("diana: reply rule llm profile %q not found", profileID)
 		}
-		profiles, roleErr := r.scheduledRoleProfiles(ctx, llmUsagePurposeFromContext(ctx), set, group, roles)
+		profiles, roleErr := r.scheduledRoleProfiles(ctx, llmRoutingPurposeFromContext(ctx), set, group, roles)
 		if roleErr != nil {
 			return "", roleErr
 		}
@@ -611,6 +611,23 @@ func replyRuleLLMProfileID(ctx context.Context) (string, bool) {
 	value, _ := ctx.Value(replyRuleContextKey{}).(string)
 	value = strings.TrimSpace(value)
 	return value, value != ""
+}
+
+type llmRoutingPurposeContextKey struct{}
+
+// withLLMRoutingPurpose changes model selection without changing the usage
+// purpose recorded for accounting and diagnostics.
+func withLLMRoutingPurpose(ctx context.Context, purpose string) context.Context {
+	return context.WithValue(ctx, llmRoutingPurposeContextKey{}, strings.TrimSpace(purpose))
+}
+
+func llmRoutingPurposeFromContext(ctx context.Context) string {
+	if ctx != nil {
+		if purpose, ok := ctx.Value(llmRoutingPurposeContextKey{}).(string); ok {
+			return purpose
+		}
+	}
+	return llmUsagePurposeFromContext(ctx)
 }
 
 func (r *Runtime) runLLMRouterProvider(ctx context.Context, run llmProviderRunFunc) (string, error) {

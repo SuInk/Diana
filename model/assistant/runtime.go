@@ -8513,7 +8513,7 @@ var promptRSSJudgeSpec = registerPrompt(PromptSpec{
 })
 
 func (r *Runtime) judgeRSSWatch(ctx context.Context, item Reminder, change rssWatchChange) (rssJudgeDecision, error) {
-	ctx, err := r.rssModelContext(ctx, item.FeedJudgeModelID)
+	ctx, group, err := r.rssModelContext(ctx, item.FeedJudgeModelID)
 	if err != nil {
 		return rssJudgeDecision{}, err
 	}
@@ -8541,7 +8541,7 @@ func (r *Runtime) judgeRSSWatch(ctx context.Context, item Reminder, change rssWa
 	return r.reuseRSSJudgment(taskCtx, source, messages, func(judgeCtx context.Context) (rssJudgeDecision, error) {
 		// 按对话分组取的话，对话那一档一定有绑定，会盖过用途归属，后台生成指的
 		// 模型就用不上。
-		raw, err := r.runLLMProviderForGroup(judgeCtx, llm.GroupBackground, func(client LLMProvider) (string, error) {
+		raw, err := r.runLLMProviderForGroup(judgeCtx, group, func(client LLMProvider) (string, error) {
 			resp, err := client.Generate(judgeCtx, llm.GenerateRequest{Messages: messages})
 			if err != nil {
 				return "", err

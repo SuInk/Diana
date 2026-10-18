@@ -130,7 +130,7 @@ const deliveryModeOptions = [{ value: "all", label: "全部推送" }, { value: "
 const emptyForm = () => ({ notification_targets: [] as import("../api").RepositoryWatchTarget[], source: "twitter" as "twitter" | "rss", twitter_handles: [""], feed_urls: [""], reply_prompt: "", judge_model_id: "", translation_model_id: "", media_mode: "text", media_failure: "retry", delivery_mode: "all", judge_prompt: "", interval_seconds: defaultIntervalSeconds, profile_id: "" });
 const watches = ref<AssistantTask[]>([]);
 const configuredModels = ref<import("../api").LLMConfig[]>([]);
-const modelOptions = computed(() => [{ value: "", label: "跟随默认模型" }, ...configuredModels.value.filter(p => p.id).map(p => ({ value: p.id!, label: `${p.name || p.model} · ${p.model}` })), ...[form.value.judge_model_id, form.value.translation_model_id].filter((id, index, all) => id && all.indexOf(id) === index && !configuredModels.value.some(p => p.id === id)).map(id => ({ value: id, label: `配置已不可用：${id}` }))]);
+const modelOptions = computed(() => [{ value: "", label: "跟随当前机器人的对话模型" }, ...configuredModels.value.filter(p => p.id).map(p => ({ value: p.id!, label: `${p.name || p.model} · ${p.model}` })), ...[form.value.judge_model_id, form.value.translation_model_id].filter((id, index, all) => id && all.indexOf(id) === index && !configuredModels.value.some(p => p.id === id)).map(id => ({ value: id, label: `配置已不可用：${id}` }))]);
 const profiles = ref<BotProfileConfig[]>([]);
 const loading = ref(false), saving = ref(false), busyID = ref(""), editing = ref(false);
 const editingTask = ref<AssistantTask | null>(null);

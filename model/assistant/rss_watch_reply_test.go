@@ -49,6 +49,40 @@ func TestRSSReplyModelsAndOriginal(t *testing.T) {
 	}
 }
 
+func TestRSSDefaultModelsFollowBotChatRoute(t *testing.T) {
+	store := &stubLLMProfileStore{set: llm.ProfileSet{Profiles: []llm.Profile{
+		{ID: "chat", Group: llm.GroupChat, Config: llm.ProviderConfig{Provider: llm.ProviderOpenAICompatible, Model: "chat-model"}},
+		{ID: "background", Group: llm.GroupChat, Config: llm.ProviderConfig{Provider: llm.ProviderOpenAICompatible, Model: "background-model"}},
+	}}}
+	r := NewRuntime(BotConfig{ModelRoles: map[string]ModelRole{
+		"chat":               {ProfileID: "chat", Model: "chat-model"},
+		"background":         {ProfileID: "background", Model: "background-model"},
+		PurposeRSSWatchJudge: {ProfileID: "background", Model: "background-model"},
+	}}, &recordingChannel{}, NewPluginManager(), store, nil, nil, nil)
+	var selected []string
+	r.SetLLMProviderConfigFactory(func(cfg llm.ProviderConfig) (LLMProvider, error) {
+		selected = append(selected, cfg.Model)
+		if len(selected) == 1 {
+			return &capturingLLMProvider{reply: `{"notify":true,"reply":"命中 https://example.com/1"}`}, nil
+		}
+		return &capturingLLMProvider{reply: "按要求回复"}, nil
+	})
+	entry := rssWatchItem{ID: "1", Title: "Hello", Link: "https://example.com/1"}
+	item := Reminder{FeedJudgePrompt: "全部通知"}
+	decision, err := r.judgeRSSWatch(context.Background(), item, rssWatchChange{Items: []rssWatchItem{entry}})
+	if err != nil || !decision.Notify {
+		t.Fatalf("decision=%+v err=%v", decision, err)
+	}
+	prompt := "用一句话回复"
+	item.FeedReplyPrompt = &prompt
+	if _, err := r.renderRSSWatchItem(context.Background(), item, entry, rssReplyMode(item, "llm")); err != nil {
+		t.Fatal(err)
+	}
+	if len(selected) != 2 || selected[0] != "chat-model" || selected[1] != "chat-model" {
+		t.Fatalf("RSS defaults selected %v, want current bot chat model twice", selected)
+	}
+}
+
 func TestRSSReplyTranslationFailureKeepsCursor(t *testing.T) {
 	for _, mode := range []string{"all", "regex", "llm"} {
 		t.Run(mode, func(t *testing.T) {
