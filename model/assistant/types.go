@@ -491,16 +491,19 @@ type Reminder struct {
 	LastRepositoryCheckAt time.Time `json:"last_repository_check_at,omitempty"`
 	// WatchAnchorsJSON 记录每个投递目标里各 PR/Issue 首次宣布消息的 ID,
 	// 后续同一编号的更新推送引用它,把动态串成一条线。
-	WatchAnchorsJSON    string    `json:"watch_anchors,omitempty"`
-	FeedURL             string    `json:"feed_url,omitempty"`
-	FeedSource          string    `json:"feed_source,omitempty"`
-	FeedHandle          string    `json:"feed_handle,omitempty"`
-	FeedJudgePrompt     string    `json:"feed_judge_prompt,omitempty"`
-	FeedRuleMode        string    `json:"feed_rule_mode,omitempty"`
-	FeedMediaMode       string    `json:"feed_media_mode,omitempty"`
-	FeedMediaFailure    string    `json:"feed_media_failure,omitempty"`
-	LastFeedItemID      string    `json:"last_feed_item_id,omitempty"`
-	LastFeedPublishedAt time.Time `json:"last_feed_published_at,omitempty"`
+	WatchAnchorsJSON       string    `json:"watch_anchors,omitempty"`
+	FeedURL                string    `json:"feed_url,omitempty"`
+	FeedSource             string    `json:"feed_source,omitempty"`
+	FeedHandle             string    `json:"feed_handle,omitempty"`
+	FeedJudgePrompt        string    `json:"feed_judge_prompt,omitempty"`
+	FeedRuleMode           string    `json:"feed_rule_mode,omitempty"`
+	FeedMediaMode          string    `json:"feed_media_mode,omitempty"`
+	FeedMediaFailure       string    `json:"feed_media_failure,omitempty"`
+	FeedReplyMode          string    `json:"feed_reply_mode,omitempty"`
+	FeedJudgeModelID       string    `json:"feed_judge_model_id,omitempty"`
+	FeedTranslationModelID string    `json:"feed_translation_model_id,omitempty"`
+	LastFeedItemID         string    `json:"last_feed_item_id,omitempty"`
+	LastFeedPublishedAt    time.Time `json:"last_feed_published_at,omitempty"`
 	// FeedSourcesJSON 保存一条订阅盯着的全部来源：同一套判断规则可以一次管好几个
 	// Twitter 账号或几个 Feed。上面的单来源字段跟着第一个来源走，老记录和只认单
 	// 来源的读取方仍然读得到东西。

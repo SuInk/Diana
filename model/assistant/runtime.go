@@ -8424,21 +8424,21 @@ func (r *Runtime) checkRSSWatchSource(ctx context.Context, item Reminder, source
 		return "", nil
 	}
 	if direct {
-		mediaCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-		defer cancel()
-		notices := make([]string, 0, len(change.Items))
+		selected := make([]rssWatchItem, 0, len(change.Items))
 		for _, entry := range change.Items {
-			if matcher != nil && !matcher.MatchString(entry.Title+"\n"+entry.Content) {
-				continue
+			if matcher == nil || matcher.MatchString(entry.Title+"\n"+entry.Content) {
+				selected = append(selected, entry)
 			}
-			notices = append(notices, rssWatchUnfilteredText(entry)+plugin.replyMedia(mediaCtx, entry.Link, []rssWatchItem{entry}, settings))
+		}
+		notice, err := r.renderRSSWatchEntries(ctx, item, selected, rssReplyMode(item, mode), plugin, settings)
+		if err != nil {
+			return "", err
 		}
 		advance()
-		if len(notices) == 0 {
+		if notice == "" {
 			return "", nil
 		}
-		header := strings.ReplaceAll(rssWatchNoticeHeader(*source, change.FeedName), "[CQ:", "［CQ:")
-		return header + "\n" + strings.Join(notices, "\n\n"), nil
+		return strings.ReplaceAll(rssWatchNoticeHeader(*source, change.FeedName), "[CQ:", "［CQ:") + "\n" + notice, nil
 	}
 	judgeChange, mediaErr := r.prepareRSSMedia(ctx, item, change, plugin, settings)
 	if mediaErr != nil {
@@ -8448,15 +8448,29 @@ func (r *Runtime) checkRSSWatchSource(ctx context.Context, item Reminder, source
 	if err != nil {
 		return "", err
 	}
-	advance()
 	if !decision.Notify {
+		advance()
 		return "", nil
+	}
+	replyMode := rssReplyMode(item, mode)
+	if replyMode != "generated" {
+		selected := rssReplyMatchedItems(decision.Reply, change.Items)
+		if len(selected) == 0 {
+			return "", fmt.Errorf("RSS 判断结果缺少命中条目的原文链接，保留进度重试")
+		}
+		notice, err := r.renderRSSWatchEntries(ctx, item, selected, replyMode, plugin, settings)
+		if err != nil {
+			return "", err
+		}
+		advance()
+		return strings.ReplaceAll(rssWatchNoticeHeader(*source, change.FeedName), "[CQ:", "［CQ:") + "\n" + notice, nil
 	}
 	reply := strings.TrimSpace(decision.Reply)
 	if reply == "" {
 		return "", fmt.Errorf("RSS 判断器要求通知，但回复内容为空")
 	}
-	return rssWatchNoticeHeader(*source, change.FeedName) + "\n" + reply + plugin.replyMedia(ctx, reply, change.Items, settings), nil
+	advance()
+	return strings.ReplaceAll(rssWatchNoticeHeader(*source, change.FeedName)+"\n"+reply, "[CQ:", "［CQ:") + plugin.replyMedia(ctx, reply, change.Items, settings), nil
 }
 
 // rssWatchNoticeHeader 拼通知抬头：这条推送是哪个平台、哪个号来的。
@@ -8499,6 +8513,10 @@ var promptRSSJudgeSpec = registerPrompt(PromptSpec{
 })
 
 func (r *Runtime) judgeRSSWatch(ctx context.Context, item Reminder, change rssWatchChange) (rssJudgeDecision, error) {
+	ctx, err := r.rssModelContext(ctx, item.FeedJudgeModelID)
+	if err != nil {
+		return rssJudgeDecision{}, err
+	}
 	source := reminderSourceEvent(item)
 	cfg := r.effectiveConfigForEvent(source)
 	taskCtx, cancel := context.WithTimeout(ctx, cfg.RequestTimeout)

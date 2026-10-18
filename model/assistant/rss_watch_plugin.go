@@ -131,7 +131,7 @@ func (p *RSSWatchPlugin) Manifest() PluginManifest {
 	return PluginManifest{
 		ID:            rssWatchPluginID,
 		Name:          "RSS 订阅",
-		Version:       "0.2.11",
+		Version:       "0.2.12",
 		Description:   "订阅 RSS/Atom 或指定 X (Twitter) 用户，一条订阅可以同时盯多个账号或 Feed 并共用一套规则；规则留空时直接推送全部新条目；填写规则后由 LLM 筛选并生成回复。",
 		Official:      true,
 		BuiltIn:       true,

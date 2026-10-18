@@ -69,17 +69,20 @@ type dianaTask struct {
 	LastStarCount         int       `json:"last_star_count,omitempty"`
 	LastNotifiedStarCount int       `json:"last_notified_star_count,omitempty"`
 	// FeedSources 是多来源订阅盯的全部账号或 Feed；单来源时和 feed_url 一致。
-	FeedSources      []string  `json:"feed_sources,omitempty"`
-	FeedURL          string    `json:"feed_url,omitempty"`
-	FeedSource       string    `json:"feed_source,omitempty"`
-	FeedHandle       string    `json:"feed_handle,omitempty"`
-	FeedJudgePrompt  string    `json:"feed_judge_prompt,omitempty"`
-	FeedRuleMode     string    `json:"feed_rule_mode,omitempty"`
-	FeedMediaMode    string    `json:"feed_media_mode,omitempty"`
-	FeedMediaFailure string    `json:"feed_media_failure,omitempty"`
-	LastFeedItemID   string    `json:"last_feed_item_id,omitempty"`
-	CreatedAt        time.Time `json:"created_at"`
-	ConsumesQuota    bool      `json:"consumes_quota"`
+	FeedSources            []string  `json:"feed_sources,omitempty"`
+	FeedURL                string    `json:"feed_url,omitempty"`
+	FeedSource             string    `json:"feed_source,omitempty"`
+	FeedHandle             string    `json:"feed_handle,omitempty"`
+	FeedJudgePrompt        string    `json:"feed_judge_prompt,omitempty"`
+	FeedRuleMode           string    `json:"feed_rule_mode,omitempty"`
+	FeedMediaMode          string    `json:"feed_media_mode,omitempty"`
+	FeedMediaFailure       string    `json:"feed_media_failure,omitempty"`
+	FeedReplyMode          string    `json:"feed_reply_mode,omitempty"`
+	FeedJudgeModelID       string    `json:"feed_judge_model_id,omitempty"`
+	FeedTranslationModelID string    `json:"feed_translation_model_id,omitempty"`
+	LastFeedItemID         string    `json:"last_feed_item_id,omitempty"`
+	CreatedAt              time.Time `json:"created_at"`
+	ConsumesQuota          bool      `json:"consumes_quota"`
 }
 
 func newDianaTasksTool(runtime *Runtime, event MessageEvent) *dianaTasksTool {
@@ -384,7 +387,7 @@ func taskForTool(item Reminder) dianaTask {
 		FeedURL:               secretmask.URLs(item.FeedURL),
 		FeedSource:            item.FeedSource,
 		FeedHandle:            item.FeedHandle,
-		FeedMediaMode:         item.FeedMediaMode, FeedMediaFailure: item.FeedMediaFailure, FeedRuleMode: item.FeedRuleMode, FeedJudgePrompt: item.FeedJudgePrompt,
+		FeedMediaMode:         item.FeedMediaMode, FeedReplyMode: item.FeedReplyMode, FeedJudgeModelID: item.FeedJudgeModelID, FeedTranslationModelID: item.FeedTranslationModelID, FeedMediaFailure: item.FeedMediaFailure, FeedRuleMode: item.FeedRuleMode, FeedJudgePrompt: item.FeedJudgePrompt,
 		LastFeedItemID: item.LastFeedItemID,
 		CreatedAt:      item.CreatedAt,
 		ConsumesQuota:  consumesQuota,

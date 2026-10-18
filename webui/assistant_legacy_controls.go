@@ -146,17 +146,20 @@ type rssWatchCreatePayload struct {
 	FeedURL             string                         `json:"feed_url,omitempty"`
 	TwitterHandle       string                         `json:"twitter_handle,omitempty"`
 	// 多来源写法：一条订阅盯一批账号或 Feed，共用同一套判断规则。
-	FeedURLs        []string `json:"feed_urls,omitempty"`
-	TwitterHandles  []string `json:"twitter_handles,omitempty"`
-	RuleMode        string   `json:"rule_mode"`
-	MediaMode       string   `json:"media_mode"`
-	MediaFailure    string   `json:"media_failure"`
-	JudgePrompt     string   `json:"judge_prompt"`
-	IntervalSeconds int64    `json:"interval_seconds"`
-	ProfileID       string   `json:"profile_id"`
-	Destination     string   `json:"destination"`
-	GroupID         string   `json:"group_id,omitempty"`
-	UserID          string   `json:"user_id,omitempty"`
+	FeedURLs           []string `json:"feed_urls,omitempty"`
+	TwitterHandles     []string `json:"twitter_handles,omitempty"`
+	RuleMode           string   `json:"rule_mode"`
+	MediaMode          string   `json:"media_mode"`
+	MediaFailure       string   `json:"media_failure"`
+	ReplyMode          string   `json:"reply_mode,omitempty"`
+	JudgeModelID       string   `json:"judge_model_id,omitempty"`
+	TranslationModelID string   `json:"translation_model_id,omitempty"`
+	JudgePrompt        string   `json:"judge_prompt"`
+	IntervalSeconds    int64    `json:"interval_seconds"`
+	ProfileID          string   `json:"profile_id"`
+	Destination        string   `json:"destination"`
+	GroupID            string   `json:"group_id,omitempty"`
+	UserID             string   `json:"user_id,omitempty"`
 }
 
 type rssWatchUpdatePayload struct {
@@ -168,6 +171,9 @@ type rssWatchUpdatePayload struct {
 	RuleMode            *string                         `json:"rule_mode,omitempty"`
 	MediaMode           *string                         `json:"media_mode,omitempty"`
 	MediaFailure        *string                         `json:"media_failure,omitempty"`
+	ReplyMode           *string                         `json:"reply_mode,omitempty"`
+	JudgeModelID        *string                         `json:"judge_model_id,omitempty"`
+	TranslationModelID  *string                         `json:"translation_model_id,omitempty"`
 	JudgePrompt         *string                         `json:"judge_prompt,omitempty"`
 	IntervalSeconds     int64                           `json:"interval_seconds,omitempty"`
 }
@@ -204,35 +210,38 @@ type botTaskPayload struct {
 	Repository          string    `json:"repository,omitempty"`
 	RepositoryBranch    string    `json:"repository_branch,omitempty"`
 	// RepositoryMasked 是推送实际会不会打码（自动模式下取决于仓库是否私有）。
-	RepositoryDisplayName string   `json:"repository_display_name,omitempty"`
-	RepositoryMask        string   `json:"repository_mask,omitempty"`
-	RepositoryPrivate     *bool    `json:"repository_private,omitempty"`
-	RepositoryMasked      bool     `json:"repository_masked,omitempty"`
-	WatchCommits          bool     `json:"watch_commits,omitempty"`
-	WatchPullRequests     bool     `json:"watch_pull_requests,omitempty"`
-	PullRequestEvents     []string `json:"watch_pull_request_events"`
-	IssueEvents           []string `json:"watch_issue_events"`
-	WatchIssues           bool     `json:"watch_issues,omitempty"`
-	WatchReleases         bool     `json:"watch_releases,omitempty"`
-	ReleaseKinds          []string `json:"watch_release_kinds"`
-	BlockedUsers          []string `json:"blocked_users"`
-	WatchStars            bool     `json:"watch_stars,omitempty"`
-	StarNotifyMode        string   `json:"star_notify_mode,omitempty"`
-	StarNotifyThreshold   int      `json:"star_notify_threshold,omitempty"`
-	StarNotifyMilestones  []int    `json:"star_notify_milestones,omitempty"`
-	LastCommitSHA         string   `json:"last_commit_sha,omitempty"`
-	LastPullRequestCursor string   `json:"last_pull_request_cursor,omitempty"`
-	LastIssueCursor       string   `json:"last_issue_cursor,omitempty"`
-	LastReleaseTag        string   `json:"last_release_tag,omitempty"`
-	LastStarCount         int      `json:"last_star_count,omitempty"`
-	LastNotifiedStarCount int      `json:"last_notified_star_count,omitempty"`
-	FeedURL               string   `json:"feed_url,omitempty"`
-	FeedSource            string   `json:"feed_source,omitempty"`
-	FeedHandle            string   `json:"feed_handle,omitempty"`
-	FeedJudgePrompt       string   `json:"feed_judge_prompt,omitempty"`
-	FeedRuleMode          string   `json:"feed_rule_mode,omitempty"`
-	FeedMediaMode         string   `json:"feed_media_mode,omitempty"`
-	FeedMediaFailure      string   `json:"feed_media_failure,omitempty"`
+	RepositoryDisplayName  string   `json:"repository_display_name,omitempty"`
+	RepositoryMask         string   `json:"repository_mask,omitempty"`
+	RepositoryPrivate      *bool    `json:"repository_private,omitempty"`
+	RepositoryMasked       bool     `json:"repository_masked,omitempty"`
+	WatchCommits           bool     `json:"watch_commits,omitempty"`
+	WatchPullRequests      bool     `json:"watch_pull_requests,omitempty"`
+	PullRequestEvents      []string `json:"watch_pull_request_events"`
+	IssueEvents            []string `json:"watch_issue_events"`
+	WatchIssues            bool     `json:"watch_issues,omitempty"`
+	WatchReleases          bool     `json:"watch_releases,omitempty"`
+	ReleaseKinds           []string `json:"watch_release_kinds"`
+	BlockedUsers           []string `json:"blocked_users"`
+	WatchStars             bool     `json:"watch_stars,omitempty"`
+	StarNotifyMode         string   `json:"star_notify_mode,omitempty"`
+	StarNotifyThreshold    int      `json:"star_notify_threshold,omitempty"`
+	StarNotifyMilestones   []int    `json:"star_notify_milestones,omitempty"`
+	LastCommitSHA          string   `json:"last_commit_sha,omitempty"`
+	LastPullRequestCursor  string   `json:"last_pull_request_cursor,omitempty"`
+	LastIssueCursor        string   `json:"last_issue_cursor,omitempty"`
+	LastReleaseTag         string   `json:"last_release_tag,omitempty"`
+	LastStarCount          int      `json:"last_star_count,omitempty"`
+	LastNotifiedStarCount  int      `json:"last_notified_star_count,omitempty"`
+	FeedURL                string   `json:"feed_url,omitempty"`
+	FeedSource             string   `json:"feed_source,omitempty"`
+	FeedHandle             string   `json:"feed_handle,omitempty"`
+	FeedJudgePrompt        string   `json:"feed_judge_prompt,omitempty"`
+	FeedRuleMode           string   `json:"feed_rule_mode,omitempty"`
+	FeedMediaMode          string   `json:"feed_media_mode,omitempty"`
+	FeedMediaFailure       string   `json:"feed_media_failure,omitempty"`
+	FeedReplyMode          string   `json:"feed_reply_mode,omitempty"`
+	FeedJudgeModelID       string   `json:"feed_judge_model_id,omitempty"`
+	FeedTranslationModelID string   `json:"feed_translation_model_id,omitempty"`
 	// FeedSources 让编辑框读得回多来源订阅的完整名单，只有 feed_url 的话
 	// 一打开就只剩第一个来源，保存等于把其余的人删掉。
 	FeedSources         []rssWatchSourcePayload `json:"feed_sources,omitempty"`
@@ -754,7 +763,7 @@ func (h *BotHandler) createRSSWatch(c *gin.Context) {
 	item, err := manager.CreateRSSWatch(c.Request.Context(), assistant.RSSWatchCreateInput{
 		NotificationTargets: targets,
 		FeedURL:             payload.FeedURL, TwitterHandle: payload.TwitterHandle,
-		FeedURLs: payload.FeedURLs, TwitterHandles: payload.TwitterHandles, MediaMode: payload.MediaMode, MediaFailure: payload.MediaFailure, RuleMode: payload.RuleMode, JudgePrompt: payload.JudgePrompt,
+		FeedURLs: payload.FeedURLs, TwitterHandles: payload.TwitterHandles, MediaMode: payload.MediaMode, ReplyMode: payload.ReplyMode, JudgeModelID: payload.JudgeModelID, TranslationModelID: payload.TranslationModelID, MediaFailure: payload.MediaFailure, RuleMode: payload.RuleMode, JudgePrompt: payload.JudgePrompt,
 		Interval: time.Duration(payload.IntervalSeconds) * time.Second, Platform: profile.Platform, ProfileID: profile.ID,
 		OwnerID: "webui:" + strings.TrimSpace(profile.ID), GroupID: groupID, UserID: userID,
 		ContextNamespace: strings.TrimSpace(profile.ID),
@@ -798,7 +807,7 @@ func (h *BotHandler) updateRSSWatch(c *gin.Context) {
 	item, err := manager.UpdateRSSWatch(c.Request.Context(), ownerID, c.Param("id"), assistant.RSSWatchUpdateInput{
 		NotificationTargets: targets,
 		FeedURL:             payload.FeedURL, TwitterHandle: payload.TwitterHandle,
-		FeedURLs: payload.FeedURLs, TwitterHandles: payload.TwitterHandles, MediaMode: payload.MediaMode, MediaFailure: payload.MediaFailure, RuleMode: payload.RuleMode, JudgePrompt: payload.JudgePrompt,
+		FeedURLs: payload.FeedURLs, TwitterHandles: payload.TwitterHandles, MediaMode: payload.MediaMode, ReplyMode: payload.ReplyMode, JudgeModelID: payload.JudgeModelID, TranslationModelID: payload.TranslationModelID, MediaFailure: payload.MediaFailure, RuleMode: payload.RuleMode, JudgePrompt: payload.JudgePrompt,
 		Interval: time.Duration(payload.IntervalSeconds) * time.Second,
 	})
 	if err != nil {
@@ -975,7 +984,7 @@ func botTaskPayloadFromReminder(item assistant.Reminder) botTaskPayload {
 		LastIssueCursor: item.LastIssueCursor, LastReleaseTag: item.LastReleaseTag, LastStarCount: item.LastStarCount, LastNotifiedStarCount: item.LastNotifiedStarCount,
 		CreatedAt: item.CreatedAt, ConsumesQuota: taskConsumesQuota(item),
 		FeedURL: item.FeedURL, FeedSource: item.FeedSource, FeedHandle: item.FeedHandle,
-		FeedMediaMode: item.FeedMediaMode, FeedMediaFailure: item.FeedMediaFailure, FeedRuleMode: item.FeedRuleMode, FeedJudgePrompt: item.FeedJudgePrompt, LastFeedItemID: item.LastFeedItemID, LastFeedPublishedAt: item.LastFeedPublishedAt,
+		FeedMediaMode: item.FeedMediaMode, FeedReplyMode: item.FeedReplyMode, FeedJudgeModelID: item.FeedJudgeModelID, FeedTranslationModelID: item.FeedTranslationModelID, FeedMediaFailure: item.FeedMediaFailure, FeedRuleMode: item.FeedRuleMode, FeedJudgePrompt: item.FeedJudgePrompt, LastFeedItemID: item.LastFeedItemID, LastFeedPublishedAt: item.LastFeedPublishedAt,
 		FeedSources:         rssWatchSourcesForWeb(item),
 		NotificationEnabled: item.NotificationEnabled, NotificationTargets: reminderDeliveryTargetsForWeb(item),
 	}
