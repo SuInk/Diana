@@ -4957,6 +4957,22 @@ a.nav-action {
   line-height: 1.55;
 }
 
+.rss-watch-field-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.rss-watch-field-label label {
+  margin: 0;
+}
+
+.rss-assist-preview {
+  font-family: var(--font-mono);
+  background: var(--surface-2);
+}
+
 .rss-watch-rule-summary {
   margin: 8px 0;
   color: var(--text-secondary);

@@ -1597,6 +1597,24 @@ export function generatePersona(
   });
 }
 
+export interface RSSAssistResponse {
+  text: string;
+  model?: string;
+  provider?: string;
+}
+
+/** 用指定机器人的对话模型整理 RSS 正则、判断规则或回复格式，不保存订阅。 */
+export function assistRSSRule(
+  kind: "regex" | "judge" | "reply",
+  request: string,
+  options?: { profile_id?: string; group?: string; model?: string }
+): Promise<RSSAssistResponse> {
+  return requestJSON<RSSAssistResponse>("/api/llm/rss-assist", {
+    method: "POST",
+    body: JSON.stringify({ kind, request, ...(options ?? {}) })
+  });
+}
+
 export function testLLMImage(prompt: string, config?: LLMConfig): Promise<ImageGenerateResponse> {
   return requestJSON<ImageGenerateResponse>("/api/llm/test", {
     method: "POST",

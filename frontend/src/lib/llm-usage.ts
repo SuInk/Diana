@@ -58,6 +58,7 @@ const purposeLabels: Record<string, string> = {
   webui_llm_test: "控制台模型测试",
   webui_image_test: "控制台生图测试",
   webui_persona_generate: "AI 生成人设",
+  webui_rss_assist: "RSS AI 帮写",
   webui_persona_lint: "人设检查",
   model_switch_probe: "模型切换探测",
   llm_capability_probe: "模型能力探测",

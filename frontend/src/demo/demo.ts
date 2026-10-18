@@ -1935,6 +1935,13 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
     ].join("\n\n");
     return json({ persona, model: "demo", provider: "demo" });
   }
+  if (path === "/api/llm/rss-assist" && method === "POST") {
+    const kind = String(body.kind ?? "");
+    const request = String(body.request ?? "").trim();
+    if (!request) return json({ error: "请先写一句需求" }, 400);
+    const text = kind === "regex" ? "(?i)release|正式版|稳定版" : kind === "judge" ? `只通知符合“${request}”的条目；排除重复、预告和无关内容。` : `将标题和正文${request}，表达准确简洁，不添加原文没有的信息。`;
+    return json({ text, model: "demo", provider: "demo" });
+  }
   if (path === "/api/assistant/personas" && method === "GET") {
     return json({ personas: demoPersonas, limit: 50 });
   }
