@@ -25,13 +25,12 @@ test("subscription settings list every robot and only use the selected robot as 
   }
 });
 
-test("RSS model fields preserve legacy IDs while offering configured model suggestions", async () => {
+test("RSS model fields preserve legacy IDs without a long suggestion list", async () => {
   const source = await readFile(new URL("../components/RSSWatchManager.vue", import.meta.url), "utf8");
-  assert.match(source, /id="rss-watch-judge-model"[^>]+type="text"[^>]+list="rss-watch-model-options"/);
-  assert.match(source, /id="rss-watch-translation-model"[^>]+type="text"[^>]+list="rss-watch-model-options"/);
+  assert.match(source, /id="rss-watch-judge-model"[^>]+type="text"/);
+  assert.match(source, /id="rss-watch-translation-model"[^>]+type="text"/);
   assert.match(source, /旧订阅里的 ID 会原样保留/);
-  assert.match(source, /<datalist id="rss-watch-model-options">/);
-  assert.doesNotMatch(source, /:options="modelOptions"/);
+  assert.doesNotMatch(source, /rss-watch-model-options|modelSuggestions|getConfig/);
 });
 
 
