@@ -25,14 +25,15 @@ test("subscription settings list every robot and only use the selected robot as 
   }
 });
 
-test("RSS editor keeps a compact rule, media scope, and reply format", async () => {
+test("RSS editor keeps a compact rule and defaults LLM to every media type", async () => {
   const source = await readFile(new URL("../components/RSSWatchManager.vue", import.meta.url), "utf8");
   assert.match(source, /全部推送.*正则匹配.*LLM 判断/);
-  assert.match(source, /LLM 判断内容/);
-  assert.match(source, /仅文字.*文字和图片.*文字、图片和视频画面.*视频画面和音频/);
+  assert.match(source, /默认同时判断文字、图片、视频画面和音频/);
+  assert.match(source, /media_mode: "video_audio", media_failure: "text"/);
   assert.match(source, /回复格式（可选）/);
-  assert.doesNotMatch(source, /rss-watch-judge-model|rss-watch-translation-model|mediaFailureOptions/);
-  assert.doesNotMatch(source, /judge_model_id: form|translation_model_id: form|media_failure: form/);
+  assert.match(source, /id="rss-watch-reply"[^>]+type="text"/);
+  assert.doesNotMatch(source, /rss-watch-judge-model|rss-watch-translation-model|rss-watch-media|mediaModeOptions|mediaFailureOptions/);
+  assert.doesNotMatch(source, /judge_model_id: form|translation_model_id: form/);
 });
 
 
