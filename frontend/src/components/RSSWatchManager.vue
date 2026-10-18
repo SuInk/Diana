@@ -42,29 +42,24 @@
           </div>
           <span class="hint">支持 RSS 2.0 与 Atom，只允许公网 http/https 地址。可以一次填多个 Feed，它们共用下面这一套规则，最多 {{ maximumSources }} 个。</span>
         </div>
-        <div class="field wide">
+        <div class="field">
           <label for="rss-watch-mode">推送方式</label>
           <AppSelect id="rss-watch-mode" v-model="form.delivery_mode" :options="deliveryModeOptions" aria-label="推送方式" />
           <span v-if="form.delivery_mode === 'all'" class="hint">不筛选，发送全部新条目。</span>
         </div>
-        <div class="field wide rss-watch-rule-stack">
-          <div v-if="form.delivery_mode !== 'all'" class="rss-watch-rule-part">
-            <div class="rss-watch-field-label">
-              <label for="rss-watch-judge">{{ form.delivery_mode === "regex" ? "正则表达式" : "判断规则" }}</label>
-              <button class="btn small ghost" type="button" @click="openAssist(form.delivery_mode === 'regex' ? 'regex' : 'judge')"><Sparkles :size="13" aria-hidden="true" />AI 帮写</button>
-            </div>
-            <textarea id="rss-watch-judge" v-model.trim="form.judge_prompt" class="input rss-watch-rule" rows="4" required :placeholder="form.delivery_mode === 'regex' ? '例如：(?i)release|更新|发布' : '说明什么情况下通知；如何回复请填写下方回复要求。'"></textarea>
-            <span v-if="form.delivery_mode === 'regex'" class="hint">匹配标题和正文，命中后按下方格式回复；筛选不调用模型。使用 Go 正则语法，支持 (?i) 忽略大小写；不支持前后查找和反向引用。</span>
-            <span v-else class="hint">由模型判断新条目，仅在符合条件时通知。默认同时判断文字、图片、视频画面和音频；分析工具不可用时退回文字判断。</span>
+        <div v-if="form.delivery_mode === 'llm'" class="field">
+          <label for="rss-watch-judge-model">判断模型</label>
+          <AppSelect id="rss-watch-judge-model" v-model="form.judge_model_id" :options="judgeModelOptions" aria-label="判断模型" />
+          <span class="hint">默认跟随通知机器人的对话模型。</span>
+        </div>
+        <div v-if="form.delivery_mode !== 'all'" class="field wide">
+          <div class="rss-watch-field-label">
+            <label for="rss-watch-judge">{{ form.delivery_mode === "regex" ? "正则表达式" : "判断与回复规则" }}</label>
+            <button class="btn small ghost" type="button" @click="openAssist(form.delivery_mode === 'regex' ? 'regex' : 'judge')"><Sparkles :size="13" aria-hidden="true" />AI 帮写</button>
           </div>
-          <div class="rss-watch-rule-part">
-            <div class="rss-watch-field-label">
-              <label for="rss-watch-reply">回复格式（可选）</label>
-              <button class="btn small ghost" type="button" @click="openAssist('reply')"><Sparkles :size="13" aria-hidden="true" />AI 帮写</button>
-            </div>
-            <textarea id="rss-watch-reply" v-model.trim="form.reply_prompt" class="input rss-watch-rule" rows="3" maxlength="2000" placeholder="例如：翻译成中文。留空直接发送原文。"></textarea>
-            <span class="hint">留空发送原文；填写后按这个格式处理标题和正文，原文链接、图片和视频会自动保留。</span>
-          </div>
+          <textarea id="rss-watch-judge" v-model.trim="form.judge_prompt" class="input rss-watch-rule" rows="5" required :placeholder="form.delivery_mode === 'regex' ? '例如：(?i)release|更新|发布' : '例如：仅在正式版发布时通知。默认发送原文；需要处理时直接写“翻译成中文”或“总结三点”。'"></textarea>
+          <span v-if="form.delivery_mode === 'regex'" class="hint">匹配标题和正文，命中后发送原文；筛选不调用模型。使用 Go 正则语法，支持 (?i) 忽略大小写；不支持前后查找和反向引用。</span>
+          <span v-else class="hint">模型默认同时判断文字、图片、视频画面和音频。未明确要求加工时发送原文；明确要求翻译、总结或改写时才发送处理后的内容。分析工具不可用时退回文字判断，原文链接和媒体会自动保留。</span>
         </div>
         <div class="field">
           <label for="rss-watch-interval">检查周期</label>
@@ -137,7 +132,7 @@ import AppSelect, { type AppSelectOption } from "./AppSelect.vue";
 import Modal from "./Modal.vue";
 import SubscriptionTargetsEditor from "./SubscriptionTargetsEditor.vue";
 import SubscriptionDestination from "./SubscriptionDestination.vue";
-import { rssSourceLabel, rssReplyRequirements } from "../lib/rss-display";
+import { rssSourceLabel } from "../lib/rss-display";
 
 const props = defineProps<{ prepareAccess?: () => Promise<void>; defaultProfileId?: string }>();
 const minimumIntervalSeconds = 5 * 60;
@@ -146,12 +141,12 @@ const defaultIntervalSeconds = 15 * 60;
 // 和后端 maximumRSSWatchSources 保持一致：再多就该拆成两条订阅。
 const maximumSources = 10;
 const deliveryModeOptions = [{ value: "all", label: "全部推送" }, { value: "regex", label: "正则匹配" }, { value: "llm", label: "LLM 判断" }];
-const emptyForm = () => ({ notification_targets: [] as import("../api").RepositoryWatchTarget[], source: "twitter" as "twitter" | "rss", twitter_handles: [""], feed_urls: [""], reply_prompt: "", delivery_mode: "all", judge_prompt: "", interval_seconds: defaultIntervalSeconds, profile_id: "" });
+const emptyForm = () => ({ notification_targets: [] as import("../api").RepositoryWatchTarget[], source: "twitter" as "twitter" | "rss", twitter_handles: [""], feed_urls: [""], delivery_mode: "llm", judge_prompt: "", judge_model_id: "", interval_seconds: defaultIntervalSeconds, profile_id: "" });
 const watches = ref<AssistantTask[]>([]);
 const profiles = ref<BotProfileConfig[]>([]);
 const llmChannels = ref<LLMConfig[]>([]);
 const loading = ref(false), saving = ref(false), busyID = ref(""), editing = ref(false);
-type AssistKind = "regex" | "judge" | "reply";
+type AssistKind = "regex" | "judge";
 type AssistRoute = { profile_id?: string; group?: string; model: string };
 const assistComposer = ref<{ kind: AssistKind; request: string; result: string } | null>(null);
 const assistRoute = ref<AssistRoute | undefined>(undefined);
@@ -163,10 +158,23 @@ const editingTask = ref<AssistantTask | null>(null);
 const editorSnapshot = ref("");
 const form = ref(emptyForm());
 
+const judgeModelOptions = computed<AppSelectOption[]>(() => {
+  const options: AppSelectOption[] = [{ value: "", label: "跟随对话" }];
+  for (const channel of llmChannels.value) {
+    if (!channel.id || ["image", "embedding", "tts", "stt", "video"].includes(channel.group || "")) continue;
+    options.push({ value: channel.id, label: `${channel.name || channel.id} · ${channel.model || "默认模型"}` });
+  }
+  const selected = form.value.judge_model_id;
+  if (selected && !options.some((option) => option.value === selected)) options.push({ value: selected, label: `配置已不可用：${selected}` });
+  return options;
+});
+
 async function load(): Promise<void> {
   loading.value = true;
   try {
-    const [tasks, config] = await Promise.all([getAssistantTasks(), getBotProfileConfig()]);
+    const [tasks, config, models] = await Promise.all([getAssistantTasks(), getBotProfileConfig(), getConfig()]);
+    llmChannels.value = models.profiles?.length ? models.profiles : [models];
+    assistLoaded.value = true;
     watches.value = tasks.items.filter((task) => task.kind === "rss_watch"); profiles.value = (config.profiles?.length ? config.profiles : [config]);
     if (!form.value.profile_id) form.value.profile_id = props.defaultProfileId || profiles.value[0]?.id || "";
   } catch (error) { toastError(error instanceof Error ? error.message : "RSS 订阅加载失败"); } finally { loading.value = false; }
@@ -192,9 +200,9 @@ function addSource(kind: "twitter" | "rss"): void { const list = kind === "twitt
 function removeSource(kind: "twitter" | "rss", index: number): void { const list = kind === "twitter" ? form.value.twitter_handles : form.value.feed_urls; if (list.length > 1) list.splice(index, 1); }
 function filledSources(values: string[]): string[] { return values.map((value) => value.trim()).filter((value) => value !== ""); }
 
-const assistTitle = computed(() => ({ regex: "AI 帮写正则表达式", judge: "AI 帮写判断规则", reply: "AI 帮写回复格式" })[assistComposer.value?.kind ?? "reply"]);
-const assistRequestLabel = computed(() => assistComposer.value?.kind === "reply" ? "想怎样整理回复" : "想筛选什么内容");
-const assistPlaceholder = computed(() => assistComposer.value?.kind === "reply" ? "例如：翻译成中文，先写一句摘要，再列出三个要点" : assistComposer.value?.kind === "regex" ? "例如：只匹配正式版、稳定版和版本发布" : "例如：仅通知已正式发布的新版本，排除预告和重复内容");
+const assistTitle = computed(() => assistComposer.value?.kind === "regex" ? "AI 帮写正则表达式" : "AI 帮写判断与回复规则");
+const assistRequestLabel = computed(() => assistComposer.value?.kind === "regex" ? "想筛选什么内容" : "想在什么情况下通知，是否需要处理原文");
+const assistPlaceholder = computed(() => assistComposer.value?.kind === "regex" ? "例如：只匹配正式版、稳定版和版本发布" : "例如：仅通知已正式发布的新版本；翻译成中文并总结三个要点");
 const assistChannelOptions = computed<AppSelectOption[]>(() => {
   const options: AppSelectOption[] = [{ value: followChatValue, label: "跟随对话", hint: "使用通知机器人的对话模型" }];
   const groups = new Map<string, number>();
@@ -218,7 +226,7 @@ const assistModelValue = computed(() => assistRoute.value?.model ?? "");
 
 async function openAssist(kind: AssistKind): Promise<void> {
   assistRoute.value = undefined;
-  assistComposer.value = { kind, request: kind === "reply" ? form.value.reply_prompt : form.value.judge_prompt, result: "" };
+  assistComposer.value = { kind, request: form.value.judge_prompt, result: "" };
   if (assistLoaded.value) return;
   assistLoaded.value = true;
   try { llmChannels.value = (await getConfig()).profiles ?? []; } catch { llmChannels.value = []; }
@@ -250,8 +258,8 @@ function applyAssist(): void {
   const composer = assistComposer.value;
   if (!composer?.result) return;
   const expectedMode = composer.kind === "judge" ? "llm" : composer.kind;
-  if (composer.kind !== "reply" && form.value.delivery_mode !== expectedMode) { toastError("推送方式已变化，未应用 AI 草稿"); return; }
-  if (composer.kind === "reply") form.value.reply_prompt = composer.result; else form.value.judge_prompt = composer.result;
+  if (form.value.delivery_mode !== expectedMode) { toastError("推送方式已变化，未应用 AI 草稿"); return; }
+  form.value.judge_prompt = composer.result;
   assistComposer.value = null;
   toastSuccess("AI 草稿已应用，保存订阅后生效");
 }
@@ -263,7 +271,7 @@ function startEdit(task: AssistantTask): void {
   const kind = sources[0]?.source === "twitter" ? "twitter" : "rss";
   const handles = sources.filter((source) => source.source === "twitter").map((source) => source.handle ?? "");
   const urls = sources.filter((source) => source.source !== "twitter").map((source) => source.feed_url);
-  form.value = { notification_targets: task.notification_targets?.length ? task.notification_targets.map(t => ({ ...t, profile_id: t.profile_id || task.profile_id })) : [{ profile_id: task.profile_id, destination: task.group_id ? "group" : "private", group_id: task.group_id, user_id: task.user_id }], source: kind, twitter_handles: handles.length ? handles : [""], feed_urls: urls.length ? urls : [""], reply_prompt: rssReplyRequirements(task), delivery_mode: task.feed_rule_mode || (task.feed_judge_prompt?.trim() ? "llm" : "all"), judge_prompt: task.feed_judge_prompt ?? "", interval_seconds: task.interval_seconds || defaultIntervalSeconds, profile_id: task.profile_id ?? "" };
+  form.value = { notification_targets: task.notification_targets?.length ? task.notification_targets.map(t => ({ ...t, profile_id: t.profile_id || task.profile_id })) : [{ profile_id: task.profile_id, destination: task.group_id ? "group" : "private", group_id: task.group_id, user_id: task.user_id }], source: kind, twitter_handles: handles.length ? handles : [""], feed_urls: urls.length ? urls : [""], delivery_mode: task.feed_rule_mode || (task.feed_judge_prompt?.trim() ? "llm" : "all"), judge_prompt: task.feed_judge_prompt ?? "", judge_model_id: task.feed_judge_model_id ?? "", interval_seconds: task.interval_seconds || defaultIntervalSeconds, profile_id: task.profile_id ?? "" };
   editing.value = true;
   markEditorClean();
 }
@@ -288,7 +296,7 @@ async function saveEditor(): Promise<boolean> {
   try {
     await props.prepareAccess?.();
     const source = form.value.source === "twitter" ? { twitter_handles: handles, feed_urls: [] } : { feed_urls: urls, twitter_handles: [] };
-    const common = { notification_targets: form.value.notification_targets, ...source, reply_prompt: form.value.reply_prompt, media_mode: "video_audio", media_failure: "text", rule_mode: form.value.delivery_mode, judge_prompt: form.value.delivery_mode === "all" ? "" : form.value.judge_prompt, interval_seconds: form.value.interval_seconds };
+    const common = { notification_targets: form.value.notification_targets, ...source, reply_mode: "decision", judge_model_id: form.value.delivery_mode === "llm" ? form.value.judge_model_id : "", media_mode: "video_audio", media_failure: "text", rule_mode: form.value.delivery_mode, judge_prompt: form.value.delivery_mode === "all" ? "" : form.value.judge_prompt, interval_seconds: form.value.interval_seconds };
     if (editingTask.value) await updateRSSWatch(editingTask.value.id, common); else await createRSSWatch({ ...common, profile_id: form.value.notification_targets[0]?.profile_id });
     toastSuccess(editingTask.value ? "RSS 订阅已更新" : "RSS 订阅已创建，当前内容已作为基线"); editing.value = false; editingTask.value = null; await load();
     return true;

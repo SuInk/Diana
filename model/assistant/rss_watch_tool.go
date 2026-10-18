@@ -121,7 +121,7 @@ func (*dianaRSSWatchTool) InputSchema() map[string]any {
 		"interval":             toolStringParam("检查间隔，最短 " + formatDurationUnits(minimumRSSWatchInterval) + "，默认 " + formatDurationUnits(defaultRSSWatchInterval)),
 		"media_mode":           toolStringParam("LLM 判断范围：text、images、video、video_audio；默认 text"),
 		"reply_prompt":         toolStringParam("自然语言回复要求，如翻译成日语、总结三点；空字符串直接发原文"),
-		"reply_mode":           toolStringParam("发送内容：original 原文、translated 中文翻译、generated 按规则回复"),
+		"reply_mode":           toolStringParam("发送内容：decision 规则决定；original 原文；translated 中译；generated 生成"),
 		"judge_model_id":       toolStringParam("判断使用的已配置模型档 ID；空值跟随默认"),
 		"translation_model_id": toolStringParam("回复生成使用的模型档 ID；空值跟随默认"),
 		"media_failure":        toolStringParam("媒体分析失败：retry 重试不推进游标；text 降级文字"),

@@ -156,6 +156,17 @@ func TestRSSJudgeDecisionRequiresNotify(t *testing.T) {
 	if err != nil || decision.Notify || decision.Reply != "" {
 		t.Fatalf("decision=%#v err=%v", decision, err)
 	}
+	original, err := parseRSSJudgeDecision(`{"notify":true,"reply_mode":"original","reply":"https://example.com/1"}`)
+	if err != nil || original.ReplyMode != "original" {
+		t.Fatalf("original=%#v err=%v", original, err)
+	}
+	processed, err := parseRSSJudgeDecision(`{"notify":true,"reply_mode":"processed","reply":"中文摘要 https://example.com/1"}`)
+	if err != nil || processed.ReplyMode != "processed" {
+		t.Fatalf("processed=%#v err=%v", processed, err)
+	}
+	if _, err := parseRSSJudgeDecision(`{"notify":true,"reply_mode":"other","reply":"https://example.com/1"}`); err == nil {
+		t.Fatal("accepted unknown reply_mode")
+	}
 }
 
 // 光报一个「HTTP 404」没法行动：同样是 404，可能是用户名打错了，也可能是整条
@@ -270,8 +281,8 @@ func TestRuntimeRSSWatchCoversSeveralSourcesWithOneRule(t *testing.T) {
 	store := &stubReminderStore{}
 	channel := &recordingChannel{}
 	provider := &sequenceLLMProvider{replies: []string{
-		`{"notify":true,"reply":"站点甲宣布额度重置"}`,
-		`{"notify":true,"reply":"站点乙宣布额度重置"}`,
+		`{"notify":true,"reply_mode":"original","reply":"https://x.com/tibo/status/a-new"}`,
+		`{"notify":true,"reply_mode":"original","reply":"https://x.com/tibo/status/b-new"}`,
 	}}
 	runtime := NewRuntime(BotConfig{RequestTimeout: 5 * time.Second}, channel, NewPluginManager(NewRSSWatchPlugin(firstServer.Client())), nil, store, nil, func() (LLMProvider, error) { return provider, nil })
 	item, err := runtime.CreateRSSWatch(context.Background(), RSSWatchCreateInput{
@@ -329,7 +340,7 @@ func TestRuntimeRSSWatchKeepsGoingWhenOneSourceFails(t *testing.T) {
 		TriggerAt: time.Now().Add(-time.Second), IntervalSeconds: 900,
 	}}}
 	channel := &recordingChannel{}
-	provider := &sequenceLLMProvider{replies: []string{`{"notify":true,"reply":"站点甲宣布额度重置"}`}}
+	provider := &sequenceLLMProvider{replies: []string{`{"notify":true,"reply_mode":"original","reply":"https://x.com/tibo/status/a-new"}`}}
 	runtime := NewRuntime(BotConfig{RequestTimeout: 5 * time.Second}, channel, NewPluginManager(NewRSSWatchPlugin(healthyServer.Client())), nil, store, nil, func() (LLMProvider, error) { return provider, nil })
 	runtime.fireDueReminders(context.Background())
 	stored := ReminderFeedSources(store.items[0])

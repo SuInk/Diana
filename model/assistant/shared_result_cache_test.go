@@ -171,7 +171,7 @@ type sharedJudgeProvider struct{ calls atomic.Int32 }
 
 func (p *sharedJudgeProvider) Generate(context.Context, llm.GenerateRequest) (*llm.GenerateResponse, error) {
 	p.calls.Add(1)
-	return &llm.GenerateResponse{Text: `{"notify":true,"reply":"new content"}`}, nil
+	return &llm.GenerateResponse{Text: `{"notify":true,"reply_mode":"original","reply":"https://example.com/new"}`}, nil
 }
 
 func TestRSSJudgmentReuseHonorsRuleMaterialAndModel(t *testing.T) {
@@ -215,7 +215,7 @@ func TestRSSSharedWorkStillDeliversToBothRobots(t *testing.T) {
 	var fetches atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		fetches.Add(1)
-		fmt.Fprint(w, `<rss version="2.0"><channel><title>Updates</title><item><guid>new</guid><title>New</title></item><item><guid>old</guid><title>Old</title></item></channel></rss>`)
+		fmt.Fprint(w, `<rss version="2.0"><channel><title>Updates</title><item><guid>new</guid><title>New</title><link>https://example.com/new</link></item><item><guid>old</guid><title>Old</title></item></channel></rss>`)
 	}))
 	defer server.Close()
 	provider := &sharedJudgeProvider{}

@@ -44,8 +44,71 @@ func TestRSSReplyModelsAndOriginal(t *testing.T) {
 	if _, err = r.renderRSSWatchItem(context.Background(), item, entry, "translated"); err == nil || len(calls) != 2 {
 		t.Fatal("missing model fell back")
 	}
-	if rssReplyMode(Reminder{}, "llm") != "generated" || rssReplyMode(Reminder{}, "all") != "original" {
+	if rssReplyMode(Reminder{}, "llm") != "decision" || rssReplyMode(Reminder{}, "all") != "original" {
 		t.Fatal("legacy behavior changed")
+	}
+	prompt := "旧的单独回复要求"
+	if rssReplyMode(Reminder{FeedReplyMode: "decision", FeedReplyPrompt: &prompt}, "llm") != "decision" {
+		t.Fatal("decision mode did not override the legacy reply prompt")
+	}
+	if got := rssDecisionReplyMode("decision", rssJudgeDecision{ReplyMode: "original"}); got != "original" {
+		t.Fatalf("original decision resolved to %q", got)
+	}
+	if got := rssDecisionReplyMode("decision", rssJudgeDecision{ReplyMode: "processed"}); got != "generated" {
+		t.Fatalf("processed decision resolved to %q", got)
+	}
+	if got := rssDecisionReplyMode("decision", rssJudgeDecision{}); got != "original" {
+		t.Fatalf("unspecified decision resolved to %q", got)
+	}
+	if got := rssDecisionReplyMode("custom", rssJudgeDecision{ReplyMode: "original"}); got != "custom" {
+		t.Fatalf("explicit reply mode was overwritten: %q", got)
+	}
+}
+
+func TestRSSLLMDecisionChoosesOriginalOrProcessedReply(t *testing.T) {
+	feed := rssTestBody(
+		rssTestItem("1", "Original title", "Original body", ""),
+		rssTestItem("0", "Old title", "Old body", ""),
+	)
+	for _, tc := range []struct {
+		name       string
+		decision   string
+		want       string
+		unexpected string
+	}{
+		{
+			name:       "original",
+			decision:   `{"notify":true,"reply_mode":"original","reply":"https://x.com/tibo/status/1"}`,
+			want:       "Original body",
+			unexpected: "Processed answer",
+		},
+		{
+			name:       "processed",
+			decision:   `{"notify":true,"reply_mode":"processed","reply":"Processed answer https://x.com/tibo/status/1"}`,
+			want:       "Processed answer",
+			unexpected: "Original body",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				_, _ = fmt.Fprint(w, feed)
+			}))
+			defer server.Close()
+
+			provider := &capturingLLMProvider{reply: tc.decision}
+			plugin := NewRSSWatchPlugin(server.Client())
+			runtime := rssMediaRuntime(t, plugin, provider)
+			source := ReminderFeedSource{FeedURL: server.URL, LastItemID: "0"}
+			item := Reminder{FeedRuleMode: "llm", FeedJudgePrompt: "有更新就通知", FeedReplyMode: "decision"}
+
+			notice, err := runtime.checkRSSWatchSource(context.Background(), item, &source, plugin, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(notice, tc.want) || strings.Contains(notice, tc.unexpected) || source.LastItemID != "1" {
+				t.Fatalf("notice=%q source=%+v", notice, source)
+			}
+		})
 	}
 }
 

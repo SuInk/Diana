@@ -25,9 +25,9 @@ func (r *Runtime) validateRSSReplyOptions(options *rssReplyOptions) error {
 	}
 	options.Mode = strings.TrimSpace(options.Mode)
 	switch options.Mode {
-	case "", "original", "translated", "generated":
+	case "", "original", "translated", "generated", "decision":
 	default:
-		return fmt.Errorf("reply_mode 必须为 original、translated 或 generated")
+		return fmt.Errorf("reply_mode 必须为 original、translated、generated 或 decision")
 	}
 	options.JudgeModelID = strings.TrimSpace(options.JudgeModelID)
 	options.TranslationModelID = strings.TrimSpace(options.TranslationModelID)
@@ -80,6 +80,9 @@ func (r *Runtime) rssModelContext(ctx context.Context, id string) (context.Conte
 }
 
 func rssReplyMode(item Reminder, ruleMode string) string {
+	if item.FeedReplyMode == "decision" {
+		return "decision"
+	}
 	if item.FeedReplyPrompt != nil {
 		if strings.TrimSpace(*item.FeedReplyPrompt) == "" {
 			return "original"
@@ -90,6 +93,16 @@ func rssReplyMode(item Reminder, ruleMode string) string {
 		return item.FeedReplyMode
 	}
 	if ruleMode == "llm" {
+		return "decision"
+	}
+	return "original"
+}
+
+func rssDecisionReplyMode(configured string, decision rssJudgeDecision) string {
+	if configured != "decision" {
+		return configured
+	}
+	if decision.ReplyMode == "processed" {
 		return "generated"
 	}
 	return "original"

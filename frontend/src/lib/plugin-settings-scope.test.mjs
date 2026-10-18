@@ -30,19 +30,21 @@ test("RSS editor keeps a compact rule and defaults LLM to every media type", asy
   assert.match(source, /全部推送.*正则匹配.*LLM 判断/);
   assert.match(source, /默认同时判断文字、图片、视频画面和音频/);
   assert.match(source, /media_mode: "video_audio", media_failure: "text"/);
-  assert.match(source, /回复格式（可选）/);
-  assert.match(source, /<textarea id="rss-watch-reply"[^>]+rows="3"/);
-  assert.match(source, /class="field wide rss-watch-rule-stack"/);
-  assert.match(source, /class="rss-watch-rule-part"/);
-  assert.equal((source.match(/>AI 帮写<\/button>/g) || []).length, 2);
+  assert.match(source, /判断与回复规则/);
+  assert.doesNotMatch(source, /rss-watch-reply|回复格式（可选）/);
+  assert.match(source, /delivery_mode: "llm"/);
+  assert.match(source, /id="rss-watch-judge-model"/);
+  assert.match(source, /label: "跟随对话"/);
+  assert.match(source, /reply_mode: "decision"/);
+  assert.match(source, /judge_model_id: form\.value\.delivery_mode === "llm" \? form\.value\.judge_model_id : ""/);
+  assert.equal((source.match(/>AI 帮写<\/button>/g) || []).length, 1);
   assert.match(source, /openAssist\(form\.delivery_mode === 'regex' \? 'regex' : 'judge'\)/);
-  assert.match(source, /openAssist\('reply'\)/);
   assert.match(source, /<Modal v-if="assistComposer"[^>]+@close="closeAssist"/);
   assert.match(source, />应用到规则<\/button>/);
-  assert.match(source, /function applyAssist\(\)[\s\S]+form\.value\.reply_prompt = composer\.result/);
+  assert.match(source, /function applyAssist\(\)[\s\S]+form\.value\.judge_prompt = composer\.result/);
   assert.match(source, /composer\.kind === "judge" \? "llm" : composer\.kind/);
-  assert.doesNotMatch(source, /rss-watch-judge-model|rss-watch-translation-model|rss-watch-media|mediaModeOptions|mediaFailureOptions/);
-  assert.doesNotMatch(source, /judge_model_id: form|translation_model_id: form/);
+  assert.doesNotMatch(source, /rss-watch-translation-model|rss-watch-media|mediaModeOptions|mediaFailureOptions/);
+  assert.doesNotMatch(source, /translation_model_id: form/);
 });
 
 
