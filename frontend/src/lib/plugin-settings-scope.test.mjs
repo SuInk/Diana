@@ -31,7 +31,7 @@ test("RSS editor keeps a compact rule and defaults LLM to every media type", asy
   assert.match(source, /默认同时判断文字、图片、视频画面和音频/);
   assert.match(source, /media_mode: "video_audio", media_failure: "text"/);
   assert.match(source, /回复格式（可选）/);
-  assert.match(source, /id="rss-watch-reply"[^>]+type="text"/);
+  assert.match(source, /<textarea id="rss-watch-reply"[^>]+rows="3"/);
   assert.doesNotMatch(source, /rss-watch-judge-model|rss-watch-translation-model|rss-watch-media|mediaModeOptions|mediaFailureOptions/);
   assert.doesNotMatch(source, /judge_model_id: form|translation_model_id: form/);
 });

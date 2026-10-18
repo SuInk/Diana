@@ -56,7 +56,7 @@
         <p v-if="form.delivery_mode === 'llm'" class="field wide hint">默认同时判断文字、图片、视频画面和音频；分析工具不可用时退回文字判断。图片和视频仍会随原文发送。</p>
         <div class="field wide">
           <label for="rss-watch-reply">回复格式（可选）</label>
-          <input id="rss-watch-reply" v-model.trim="form.reply_prompt" class="input" type="text" maxlength="2000" placeholder="例如：翻译成中文。留空直接发送原文。" />
+          <textarea id="rss-watch-reply" v-model.trim="form.reply_prompt" class="input rss-watch-rule" rows="3" maxlength="2000" placeholder="例如：翻译成中文。留空直接发送原文。"></textarea>
           <span class="hint">留空发送原文；填写后按这个格式处理标题和正文，原文链接与媒体会自动保留。</span>
         </div>
         <div class="field">
