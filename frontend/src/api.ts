@@ -4061,6 +4061,8 @@ export interface AssistantTask {
   feed_sources?: RSSWatchSource[];
   feed_judge_prompt?: string;
   feed_rule_mode?: string;
+  feed_media_mode?: string;
+  feed_media_failure?: string;
   last_feed_item_id?: string;
   last_feed_published_at?: string;
   // 只在事件触发任务上有值。
@@ -4126,6 +4128,8 @@ export interface RSSWatchInput {
   feed_urls?: string[];
   twitter_handles?: string[];
   rule_mode?: string;
+  media_mode?: string;
+  media_failure?: string;
   judge_prompt: string;
   interval_seconds: number;
   profile_id?: string;
@@ -4168,7 +4172,7 @@ export function createRSSWatch(input: RSSWatchInput): Promise<AssistantTask> {
   return requestJSON<AssistantTask>("/api/assistant/tasks/rss-watches", { method: "POST", body: JSON.stringify(input) });
 }
 
-export function updateRSSWatch(id: string, input: Partial<Pick<RSSWatchInput, "feed_url" | "twitter_handle" | "feed_urls" | "twitter_handles" | "judge_prompt" | "rule_mode" | "interval_seconds">>): Promise<AssistantTask> {
+export function updateRSSWatch(id: string, input: Partial<Pick<RSSWatchInput, "feed_url" | "twitter_handle" | "feed_urls" | "twitter_handles" | "judge_prompt" | "rule_mode" | "media_mode" | "media_failure" | "interval_seconds">>): Promise<AssistantTask> {
   return requestJSON<AssistantTask>(`/api/assistant/tasks/rss-watches/${encodeURIComponent(id)}`, { method: "PUT", body: JSON.stringify(input) });
 }
 

@@ -8440,7 +8440,11 @@ func (r *Runtime) checkRSSWatchSource(ctx context.Context, item Reminder, source
 		header := strings.ReplaceAll(rssWatchNoticeHeader(*source, change.FeedName), "[CQ:", "［CQ:")
 		return header + "\n" + strings.Join(notices, "\n\n"), nil
 	}
-	decision, err := r.judgeRSSWatch(ctx, item, change)
+	judgeChange, mediaErr := r.prepareRSSMedia(ctx, item, change, plugin, settings)
+	if mediaErr != nil {
+		return "", mediaErr
+	}
+	decision, err := r.judgeRSSWatch(ctx, item, judgeChange)
 	if err != nil {
 		return "", err
 	}

@@ -497,6 +497,8 @@ type Reminder struct {
 	FeedHandle          string    `json:"feed_handle,omitempty"`
 	FeedJudgePrompt     string    `json:"feed_judge_prompt,omitempty"`
 	FeedRuleMode        string    `json:"feed_rule_mode,omitempty"`
+	FeedMediaMode       string    `json:"feed_media_mode,omitempty"`
+	FeedMediaFailure    string    `json:"feed_media_failure,omitempty"`
 	LastFeedItemID      string    `json:"last_feed_item_id,omitempty"`
 	LastFeedPublishedAt time.Time `json:"last_feed_published_at,omitempty"`
 	// FeedSourcesJSON 保存一条订阅盯着的全部来源：同一套判断规则可以一次管好几个

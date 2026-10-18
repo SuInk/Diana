@@ -53,6 +53,18 @@
           <span v-if="form.delivery_mode === 'regex'" class="hint">匹配标题和正文，命中时发送原文、链接及媒体，不调用模型。使用 Go 正则语法，支持 (?i) 忽略大小写；不支持前后查找和反向引用。</span>
           <span v-else class="hint">由模型判断新条目，仅在符合条件时通知。</span>
         </div>
+        <template v-if="form.delivery_mode === 'llm'">
+          <div class="field wide">
+            <label for="rss-watch-media">判断范围</label>
+            <AppSelect id="rss-watch-media" v-model="form.media_mode" :options="mediaModeOptions" aria-label="判断范围" />
+            <span class="hint">媒体使用视觉模型分析；视频为最多 8 帧抽样，可能遗漏瞬间事件。视频分析需要 ffmpeg 和 ffprobe，音频转写还需配置语音识别模型。单条最多 4 张图片、2 个视频；图片 20 MiB，视频 256 MiB / 5 分钟。分析限制独立于发送上限。</span>
+          </div>
+          <div v-if="form.media_mode !== 'text'" class="field wide">
+            <label for="rss-watch-media-failure">媒体分析失败时</label>
+            <AppSelect id="rss-watch-media-failure" v-model="form.media_failure" :options="mediaFailureOptions" aria-label="媒体分析失败时" />
+            <span class="hint">默认记录错误并保留进度重试。选择降级后，仅根据原始文字判断，可能无法满足依赖画面或声音的规则。</span>
+          </div>
+        </template>
         <div class="field">
           <label for="rss-watch-interval">检查周期</label>
           <div class="input-group"><input id="rss-watch-interval" v-model.number="form.interval_seconds" class="input" type="number" :min="minimumIntervalSeconds" :max="maximumIntervalSeconds" step="60" /><span class="repository-watch-unit">秒</span></div>
@@ -103,8 +115,10 @@ const maximumIntervalSeconds = 365 * 24 * 60 * 60;
 const defaultIntervalSeconds = 15 * 60;
 // 和后端 maximumRSSWatchSources 保持一致：再多就该拆成两条订阅。
 const maximumSources = 10;
+const mediaModeOptions = [{ value: "text", label: "仅文字" }, { value: "images", label: "文字＋图片" }, { value: "video", label: "文字＋图片＋视频画面" }, { value: "video_audio", label: "文字＋图片＋视频画面及音频" }];
+const mediaFailureOptions = [{ value: "retry", label: "记录错误并重试" }, { value: "text", label: "降级为仅文字判断" }];
 const deliveryModeOptions = [{ value: "all", label: "全部推送" }, { value: "regex", label: "正则匹配" }, { value: "llm", label: "LLM 判断" }];
-const emptyForm = () => ({ notification_targets: [] as import("../api").RepositoryWatchTarget[], source: "twitter" as "twitter" | "rss", twitter_handles: [""], feed_urls: [""], delivery_mode: "all", judge_prompt: "", interval_seconds: defaultIntervalSeconds, profile_id: "" });
+const emptyForm = () => ({ notification_targets: [] as import("../api").RepositoryWatchTarget[], source: "twitter" as "twitter" | "rss", twitter_handles: [""], feed_urls: [""], media_mode: "text", media_failure: "retry", delivery_mode: "all", judge_prompt: "", interval_seconds: defaultIntervalSeconds, profile_id: "" });
 const watches = ref<AssistantTask[]>([]);
 const profiles = ref<BotProfileConfig[]>([]);
 const loading = ref(false), saving = ref(false), busyID = ref(""), editing = ref(false);
@@ -148,7 +162,7 @@ function startEdit(task: AssistantTask): void {
   const kind = sources[0]?.source === "twitter" ? "twitter" : "rss";
   const handles = sources.filter((source) => source.source === "twitter").map((source) => source.handle ?? "");
   const urls = sources.filter((source) => source.source !== "twitter").map((source) => source.feed_url);
-  form.value = { notification_targets: task.notification_targets?.length ? task.notification_targets.map(t => ({ ...t, profile_id: t.profile_id || task.profile_id })) : [{ profile_id: task.profile_id, destination: task.group_id ? "group" : "private", group_id: task.group_id, user_id: task.user_id }], source: kind, twitter_handles: handles.length ? handles : [""], feed_urls: urls.length ? urls : [""], delivery_mode: task.feed_rule_mode || (task.feed_judge_prompt?.trim() ? "llm" : "all"), judge_prompt: task.feed_judge_prompt ?? "", interval_seconds: task.interval_seconds || defaultIntervalSeconds, profile_id: task.profile_id ?? "" };
+  form.value = { notification_targets: task.notification_targets?.length ? task.notification_targets.map(t => ({ ...t, profile_id: t.profile_id || task.profile_id })) : [{ profile_id: task.profile_id, destination: task.group_id ? "group" : "private", group_id: task.group_id, user_id: task.user_id }], source: kind, twitter_handles: handles.length ? handles : [""], feed_urls: urls.length ? urls : [""], media_mode: task.feed_media_mode || "text", media_failure: task.feed_media_failure || "retry", delivery_mode: task.feed_rule_mode || (task.feed_judge_prompt?.trim() ? "llm" : "all"), judge_prompt: task.feed_judge_prompt ?? "", interval_seconds: task.interval_seconds || defaultIntervalSeconds, profile_id: task.profile_id ?? "" };
   editing.value = true;
   markEditorClean();
 }
@@ -173,7 +187,7 @@ async function saveEditor(): Promise<boolean> {
   try {
     await props.prepareAccess?.();
     const source = form.value.source === "twitter" ? { twitter_handles: handles, feed_urls: [] } : { feed_urls: urls, twitter_handles: [] };
-    const common = { notification_targets: form.value.notification_targets, ...source, rule_mode: form.value.delivery_mode, judge_prompt: form.value.delivery_mode === "all" ? "" : form.value.judge_prompt, interval_seconds: form.value.interval_seconds };
+    const common = { notification_targets: form.value.notification_targets, ...source, media_mode: form.value.media_mode, media_failure: form.value.media_failure, rule_mode: form.value.delivery_mode, judge_prompt: form.value.delivery_mode === "all" ? "" : form.value.judge_prompt, interval_seconds: form.value.interval_seconds };
     if (editingTask.value) await updateRSSWatch(editingTask.value.id, common); else await createRSSWatch({ ...common, profile_id: form.value.notification_targets[0]?.profile_id });
     toastSuccess(editingTask.value ? "RSS 订阅已更新" : "RSS 订阅已创建，当前内容已作为基线"); editing.value = false; editingTask.value = null; await load();
     return true;

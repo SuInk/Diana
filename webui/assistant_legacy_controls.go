@@ -149,6 +149,8 @@ type rssWatchCreatePayload struct {
 	FeedURLs        []string `json:"feed_urls,omitempty"`
 	TwitterHandles  []string `json:"twitter_handles,omitempty"`
 	RuleMode        string   `json:"rule_mode"`
+	MediaMode       string   `json:"media_mode"`
+	MediaFailure    string   `json:"media_failure"`
 	JudgePrompt     string   `json:"judge_prompt"`
 	IntervalSeconds int64    `json:"interval_seconds"`
 	ProfileID       string   `json:"profile_id"`
@@ -164,6 +166,8 @@ type rssWatchUpdatePayload struct {
 	FeedURLs            *[]string                       `json:"feed_urls,omitempty"`
 	TwitterHandles      *[]string                       `json:"twitter_handles,omitempty"`
 	RuleMode            *string                         `json:"rule_mode,omitempty"`
+	MediaMode           *string                         `json:"media_mode,omitempty"`
+	MediaFailure        *string                         `json:"media_failure,omitempty"`
 	JudgePrompt         *string                         `json:"judge_prompt,omitempty"`
 	IntervalSeconds     int64                           `json:"interval_seconds,omitempty"`
 }
@@ -227,6 +231,8 @@ type botTaskPayload struct {
 	FeedHandle            string   `json:"feed_handle,omitempty"`
 	FeedJudgePrompt       string   `json:"feed_judge_prompt,omitempty"`
 	FeedRuleMode          string   `json:"feed_rule_mode,omitempty"`
+	FeedMediaMode         string   `json:"feed_media_mode,omitempty"`
+	FeedMediaFailure      string   `json:"feed_media_failure,omitempty"`
 	// FeedSources 让编辑框读得回多来源订阅的完整名单，只有 feed_url 的话
 	// 一打开就只剩第一个来源，保存等于把其余的人删掉。
 	FeedSources         []rssWatchSourcePayload `json:"feed_sources,omitempty"`
@@ -748,7 +754,7 @@ func (h *BotHandler) createRSSWatch(c *gin.Context) {
 	item, err := manager.CreateRSSWatch(c.Request.Context(), assistant.RSSWatchCreateInput{
 		NotificationTargets: targets,
 		FeedURL:             payload.FeedURL, TwitterHandle: payload.TwitterHandle,
-		FeedURLs: payload.FeedURLs, TwitterHandles: payload.TwitterHandles, RuleMode: payload.RuleMode, JudgePrompt: payload.JudgePrompt,
+		FeedURLs: payload.FeedURLs, TwitterHandles: payload.TwitterHandles, MediaMode: payload.MediaMode, MediaFailure: payload.MediaFailure, RuleMode: payload.RuleMode, JudgePrompt: payload.JudgePrompt,
 		Interval: time.Duration(payload.IntervalSeconds) * time.Second, Platform: profile.Platform, ProfileID: profile.ID,
 		OwnerID: "webui:" + strings.TrimSpace(profile.ID), GroupID: groupID, UserID: userID,
 		ContextNamespace: strings.TrimSpace(profile.ID),
@@ -792,7 +798,7 @@ func (h *BotHandler) updateRSSWatch(c *gin.Context) {
 	item, err := manager.UpdateRSSWatch(c.Request.Context(), ownerID, c.Param("id"), assistant.RSSWatchUpdateInput{
 		NotificationTargets: targets,
 		FeedURL:             payload.FeedURL, TwitterHandle: payload.TwitterHandle,
-		FeedURLs: payload.FeedURLs, TwitterHandles: payload.TwitterHandles, RuleMode: payload.RuleMode, JudgePrompt: payload.JudgePrompt,
+		FeedURLs: payload.FeedURLs, TwitterHandles: payload.TwitterHandles, MediaMode: payload.MediaMode, MediaFailure: payload.MediaFailure, RuleMode: payload.RuleMode, JudgePrompt: payload.JudgePrompt,
 		Interval: time.Duration(payload.IntervalSeconds) * time.Second,
 	})
 	if err != nil {
@@ -969,7 +975,7 @@ func botTaskPayloadFromReminder(item assistant.Reminder) botTaskPayload {
 		LastIssueCursor: item.LastIssueCursor, LastReleaseTag: item.LastReleaseTag, LastStarCount: item.LastStarCount, LastNotifiedStarCount: item.LastNotifiedStarCount,
 		CreatedAt: item.CreatedAt, ConsumesQuota: taskConsumesQuota(item),
 		FeedURL: item.FeedURL, FeedSource: item.FeedSource, FeedHandle: item.FeedHandle,
-		FeedRuleMode: item.FeedRuleMode, FeedJudgePrompt: item.FeedJudgePrompt, LastFeedItemID: item.LastFeedItemID, LastFeedPublishedAt: item.LastFeedPublishedAt,
+		FeedMediaMode: item.FeedMediaMode, FeedMediaFailure: item.FeedMediaFailure, FeedRuleMode: item.FeedRuleMode, FeedJudgePrompt: item.FeedJudgePrompt, LastFeedItemID: item.LastFeedItemID, LastFeedPublishedAt: item.LastFeedPublishedAt,
 		FeedSources:         rssWatchSourcesForWeb(item),
 		NotificationEnabled: item.NotificationEnabled, NotificationTargets: reminderDeliveryTargetsForWeb(item),
 	}

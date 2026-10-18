@@ -162,6 +162,8 @@ func subscriptionKindFields() map[string]any {
 		"twitter_handles": toolStringArrayParam("rss：多个 X 用户名，同一条件合成一条订阅；与 feed_urls 合计最多 " + itoa(maximumRSSWatchSources) + " 个"),
 		"feed_url":        toolStringParam("rss：单个 RSS/Atom 地址"),
 		"feed_urls":       toolStringArrayParam("rss：多个 RSS/Atom 地址，共用 judge_prompt"),
+		"media_mode":      toolStringParam("LLM 判断范围：text、images、video、video_audio；默认 text"),
+		"media_failure":   toolStringParam("媒体分析失败：retry 重试不推进游标；text 降级文字"),
 		"rule_mode":       toolStringParam("rss：all 全推、regex 正则、llm 模型；省略时空规则全推，否则 LLM"),
 		"judge_prompt":    toolStringParam("rss：regex 填 Go 正则，llm 填通知条件和回复要求，all 留空，最多 " + itoa(maximumRSSJudgeRunes) + " 字"),
 		"repository":      toolStringParam("github：owner/repo 或仓库链接；create 必填"),
