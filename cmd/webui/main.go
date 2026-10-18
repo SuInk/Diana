@@ -719,11 +719,15 @@ func main() {
 	ownerLoginHandler := webui.NewOwnerLoginHandler(authManager, botRuntime)
 	ownerLoginHandler.SetLogStore(sqliteStore)
 	ownerLoginHandler.Register(router)
-	trustedApps, err := webui.LoadTrustedLoginApps(strings.TrimSpace(os.Getenv("DIANA_TRUSTED_LOGIN_APPS_FILE")))
-	if err != nil {
-		log.Fatalf("加载受信应用登录配置失败：%v", err)
+	trustedLoginPath := filepath.Join(dataDir, "trusted-login.json")
+	var trustedApps []webui.TrustedLoginApp
+	if _, statErr := os.Stat(trustedLoginPath); os.IsNotExist(statErr) {
+		trustedApps, err = webui.LoadTrustedLoginApps(strings.TrimSpace(os.Getenv("DIANA_TRUSTED_LOGIN_APPS_FILE")))
+		if err != nil {
+			log.Fatalf("加载受信应用登录配置失败：%v", err)
+		}
 	}
-	trustedLoginHandler, err := webui.NewManagedTrustedLoginHandler(ownerLoginHandler, filepath.Join(filepath.Dir(sqliteStore.Path()), "trusted-login.json"), trustedApps)
+	trustedLoginHandler, err := webui.NewManagedTrustedLoginHandler(ownerLoginHandler, trustedLoginPath, trustedApps)
 	if err != nil {
 		log.Fatalf("初始化受信应用登录失败：%v", err)
 	}
