@@ -78,6 +78,7 @@ type dianaTask struct {
 	FeedMediaMode          string    `json:"feed_media_mode,omitempty"`
 	FeedMediaFailure       string    `json:"feed_media_failure,omitempty"`
 	FeedReplyMode          string    `json:"feed_reply_mode,omitempty"`
+	FeedReplyPrompt        *string   `json:"feed_reply_prompt,omitempty"`
 	FeedJudgeModelID       string    `json:"feed_judge_model_id,omitempty"`
 	FeedTranslationModelID string    `json:"feed_translation_model_id,omitempty"`
 	LastFeedItemID         string    `json:"last_feed_item_id,omitempty"`
@@ -387,7 +388,7 @@ func taskForTool(item Reminder) dianaTask {
 		FeedURL:               secretmask.URLs(item.FeedURL),
 		FeedSource:            item.FeedSource,
 		FeedHandle:            item.FeedHandle,
-		FeedMediaMode:         item.FeedMediaMode, FeedReplyMode: item.FeedReplyMode, FeedJudgeModelID: item.FeedJudgeModelID, FeedTranslationModelID: item.FeedTranslationModelID, FeedMediaFailure: item.FeedMediaFailure, FeedRuleMode: item.FeedRuleMode, FeedJudgePrompt: item.FeedJudgePrompt,
+		FeedMediaMode:         item.FeedMediaMode, FeedReplyPrompt: item.FeedReplyPrompt, FeedReplyMode: item.FeedReplyMode, FeedJudgeModelID: item.FeedJudgeModelID, FeedTranslationModelID: item.FeedTranslationModelID, FeedMediaFailure: item.FeedMediaFailure, FeedRuleMode: item.FeedRuleMode, FeedJudgePrompt: item.FeedJudgePrompt,
 		LastFeedItemID: item.LastFeedItemID,
 		CreatedAt:      item.CreatedAt,
 		ConsumesQuota:  consumesQuota,

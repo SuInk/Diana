@@ -4062,6 +4062,7 @@ export interface AssistantTask {
   feed_judge_prompt?: string;
   feed_rule_mode?: string;
   feed_media_mode?: string;
+  feed_reply_prompt?: string;
   feed_reply_mode?: string;
   feed_judge_model_id?: string;
   feed_translation_model_id?: string;
@@ -4132,6 +4133,7 @@ export interface RSSWatchInput {
   twitter_handles?: string[];
   rule_mode?: string;
   media_mode?: string;
+  reply_prompt?: string;
   reply_mode?: string;
   judge_model_id?: string;
   translation_model_id?: string;
@@ -4178,7 +4180,7 @@ export function createRSSWatch(input: RSSWatchInput): Promise<AssistantTask> {
   return requestJSON<AssistantTask>("/api/assistant/tasks/rss-watches", { method: "POST", body: JSON.stringify(input) });
 }
 
-export function updateRSSWatch(id: string, input: Partial<Pick<RSSWatchInput, "feed_url" | "twitter_handle" | "feed_urls" | "twitter_handles" | "judge_prompt" | "rule_mode" | "media_mode" | "reply_mode" | "judge_model_id" | "translation_model_id" | "media_failure" | "interval_seconds">>): Promise<AssistantTask> {
+export function updateRSSWatch(id: string, input: Partial<Pick<RSSWatchInput, "feed_url" | "twitter_handle" | "feed_urls" | "twitter_handles" | "judge_prompt" | "rule_mode" | "media_mode" | "reply_prompt" | "reply_mode" | "judge_model_id" | "translation_model_id" | "media_failure" | "interval_seconds">>): Promise<AssistantTask> {
   return requestJSON<AssistantTask>(`/api/assistant/tasks/rss-watches/${encodeURIComponent(id)}`, { method: "PUT", body: JSON.stringify(input) });
 }
 

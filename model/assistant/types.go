@@ -500,6 +500,7 @@ type Reminder struct {
 	FeedMediaMode          string    `json:"feed_media_mode,omitempty"`
 	FeedMediaFailure       string    `json:"feed_media_failure,omitempty"`
 	FeedReplyMode          string    `json:"feed_reply_mode,omitempty"`
+	FeedReplyPrompt        *string   `json:"feed_reply_prompt,omitempty"`
 	FeedJudgeModelID       string    `json:"feed_judge_model_id,omitempty"`
 	FeedTranslationModelID string    `json:"feed_translation_model_id,omitempty"`
 	LastFeedItemID         string    `json:"last_feed_item_id,omitempty"`

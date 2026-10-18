@@ -26,6 +26,7 @@ const (
 )
 
 type RSSWatchCreateInput struct {
+	ReplyPrompt                                                                                                         *string
 	NotificationTargets                                                                                                 []ReminderDeliveryTarget
 	FeedURL, TwitterHandle, JudgePrompt, RuleMode, MediaMode, MediaFailure, ReplyMode, JudgeModelID, TranslationModelID string
 	// FeedURLs / TwitterHandles 是多来源写法，和单数字段合并后共用同一套规则。
@@ -37,6 +38,7 @@ type RSSWatchCreateInput struct {
 }
 
 type RSSWatchUpdateInput struct {
+	ReplyPrompt                                                                                                         *string
 	NotificationTargets                                                                                                 *[]ReminderDeliveryTarget
 	FeedURL, TwitterHandle, JudgePrompt, RuleMode, MediaMode, MediaFailure, ReplyMode, JudgeModelID, TranslationModelID *string
 	FeedURLs, TwitterHandles                                                                                            *[]string
@@ -70,6 +72,7 @@ type dianaRSSWatch struct {
 	MediaMode          string    `json:"media_mode"`
 	MediaFailure       string    `json:"media_failure"`
 	ReplyMode          string    `json:"reply_mode,omitempty"`
+	ReplyPrompt        *string   `json:"reply_prompt,omitempty"`
 	JudgeModelID       string    `json:"judge_model_id,omitempty"`
 	TranslationModelID string    `json:"translation_model_id,omitempty"`
 	Interval           string    `json:"interval"`
@@ -117,9 +120,10 @@ func (*dianaRSSWatchTool) InputSchema() map[string]any {
 		"feed_urls":            toolStringArrayParam("多个 RSS/Atom 地址，共用 judge_prompt"),
 		"interval":             toolStringParam("检查间隔，最短 " + formatDurationUnits(minimumRSSWatchInterval) + "，默认 " + formatDurationUnits(defaultRSSWatchInterval)),
 		"media_mode":           toolStringParam("LLM 判断范围：text、images、video、video_audio；默认 text"),
+		"reply_prompt":         toolStringParam("自然语言回复要求，如翻译成日语、总结三点；空字符串直接发原文"),
 		"reply_mode":           toolStringParam("发送内容：original 原文、translated 中文翻译、generated 按规则回复"),
 		"judge_model_id":       toolStringParam("判断使用的已配置模型档 ID；空值跟随默认"),
-		"translation_model_id": toolStringParam("翻译使用的已配置模型档 ID；空值跟随默认"),
+		"translation_model_id": toolStringParam("回复生成使用的模型档 ID；空值跟随默认"),
 		"media_failure":        toolStringParam("媒体分析失败：retry 重试不推进游标；text 降级文字"),
 		"rule_mode":            toolStringParam("all 全部推送、regex 正则匹配、llm 模型判断；省略时按规则是否为空兼容旧订阅"),
 		"judge_prompt":         toolStringParam("可选；留空直接推送全部新条目，填写则说明通知条件和回复要求，最多 " + itoa(maximumRSSJudgeRunes) + " 字"),
@@ -161,7 +165,7 @@ func (t *dianaRSSWatchTool) Run(ctx context.Context, input map[string]any) (stri
 		item, err := t.runtime.CreateRSSWatch(ctx, RSSWatchCreateInput{
 			FeedURL: configToolString(input, "feed_url"), TwitterHandle: configToolString(input, "twitter_handle"),
 			FeedURLs: configToolStringSlice(input, "feed_urls"), TwitterHandles: configToolStringSlice(input, "twitter_handles"),
-			ReplyMode: configToolString(input, "reply_mode"), JudgeModelID: configToolString(input, "judge_model_id"), TranslationModelID: configToolString(input, "translation_model_id"), MediaMode: configToolString(input, "media_mode"), MediaFailure: configToolString(input, "media_failure"), RuleMode: configToolString(input, "rule_mode"), JudgePrompt: configToolString(input, "judge_prompt"), Interval: interval,
+			ReplyPrompt: rssReplyPromptFromTool(input), ReplyMode: configToolString(input, "reply_mode"), JudgeModelID: configToolString(input, "judge_model_id"), TranslationModelID: configToolString(input, "translation_model_id"), MediaMode: configToolString(input, "media_mode"), MediaFailure: configToolString(input, "media_failure"), RuleMode: configToolString(input, "rule_mode"), JudgePrompt: configToolString(input, "judge_prompt"), Interval: interval,
 			Platform: t.event.Platform, ProfileID: t.event.ProfileID, ContextNamespace: t.event.ContextNamespace,
 			OwnerID: targetID, GroupID: t.event.GroupID, UserID: targetID, RequestedBy: t.event.UserID,
 		})
@@ -348,7 +352,7 @@ func (r *Runtime) CreateRSSWatch(ctx context.Context, input RSSWatchCreateInput)
 	if err != nil {
 		return Reminder{}, err
 	}
-	replyOptions := rssReplyOptions{input.ReplyMode, input.JudgeModelID, input.TranslationModelID}
+	replyOptions := rssReplyOptions{Mode: input.ReplyMode, JudgeModelID: input.JudgeModelID, TranslationModelID: input.TranslationModelID, Prompt: input.ReplyPrompt}
 	if err := r.validateRSSReplyOptions(&replyOptions); err != nil {
 		return Reminder{}, err
 	}
@@ -453,8 +457,8 @@ func (r *Runtime) addRSSWatch(event MessageEvent, owner, mode, judge, mediaMode,
 		NotificationTargetsJSON: encodeReminderDeliveryTargets(normalizeReminderDeliveryTargets(targets)),
 		ID:                      uuid.NewString()[:8], Kind: ReminderKindRSSWatch, Platform: event.Platform, ProfileID: event.ProfileID,
 		ContextNamespace: event.ContextNamespace, OwnerID: owner, GroupID: event.GroupID, UserID: event.UserID,
-		RequestedBy:   firstNonEmpty(event.taskRequester, event.UserID),
-		FeedReplyMode: replyOptions.Mode, FeedJudgeModelID: replyOptions.JudgeModelID, FeedTranslationModelID: replyOptions.TranslationModelID,
+		RequestedBy:     firstNonEmpty(event.taskRequester, event.UserID),
+		FeedReplyPrompt: replyOptions.Prompt, FeedReplyMode: replyOptions.Mode, FeedJudgeModelID: replyOptions.JudgeModelID, FeedTranslationModelID: replyOptions.TranslationModelID,
 		Message: rssWatchMessage(sources), FeedJudgePrompt: judge, FeedRuleMode: mode, FeedMediaMode: mediaMode, FeedMediaFailure: mediaFailure,
 		TriggerAt: now.Add(interval), IntervalSeconds: int64(interval / time.Second), CreatedAt: now,
 	}
@@ -539,7 +543,10 @@ func (r *Runtime) UpdateRSSWatch(ctx context.Context, owner, id string, input RS
 	if err != nil {
 		return Reminder{}, err
 	}
-	replyOptions := rssReplyOptions{current.FeedReplyMode, current.FeedJudgeModelID, current.FeedTranslationModelID}
+	replyOptions := rssReplyOptions{Mode: current.FeedReplyMode, JudgeModelID: current.FeedJudgeModelID, TranslationModelID: current.FeedTranslationModelID, Prompt: current.FeedReplyPrompt}
+	if input.ReplyPrompt != nil {
+		replyOptions.Prompt = input.ReplyPrompt
+	}
 	if input.ReplyMode != nil {
 		replyOptions.Mode = *input.ReplyMode
 	}
@@ -597,6 +604,7 @@ func (r *Runtime) UpdateRSSWatch(ctx context.Context, owner, id string, input RS
 		item.PendingDeliveredTargets = nil
 		item.FeedJudgePrompt = judge
 		item.FeedRuleMode = mode
+		item.FeedReplyPrompt = replyOptions.Prompt
 		item.FeedReplyMode, item.FeedJudgeModelID, item.FeedTranslationModelID = replyOptions.Mode, replyOptions.JudgeModelID, replyOptions.TranslationModelID
 		item.FeedMediaMode, item.FeedMediaFailure = mediaMode, mediaFailure
 		item.IntervalSeconds, item.TriggerAt = int64(interval/time.Second), time.Now().Add(interval)
@@ -757,7 +765,7 @@ func rssWatchUpdateFromTool(input map[string]any) (RSSWatchUpdateInput, error) {
 		values := configToolStringSlice(input, "twitter_handles")
 		result.TwitterHandles = &values
 	}
-	for key, dst := range map[string]**string{"reply_mode": &result.ReplyMode, "judge_model_id": &result.JudgeModelID, "translation_model_id": &result.TranslationModelID, "media_mode": &result.MediaMode, "media_failure": &result.MediaFailure} {
+	for key, dst := range map[string]**string{"reply_prompt": &result.ReplyPrompt, "reply_mode": &result.ReplyMode, "judge_model_id": &result.JudgeModelID, "translation_model_id": &result.TranslationModelID, "media_mode": &result.MediaMode, "media_failure": &result.MediaFailure} {
 		if value, present := input[key]; present {
 			raw := strings.TrimSpace(fmt.Sprint(value))
 			*dst = &raw
@@ -797,7 +805,7 @@ func rssWatchSourceLabels(item Reminder) []string {
 func rssWatchForTool(item Reminder) *dianaRSSWatch {
 	// 订阅地址里的令牌（?token=、?key=）只给模型掩码；原样交回掩码改订阅时由
 	// restoreMaskedFeedURLs 换回原文。
-	return &dianaRSSWatch{ID: item.ID, OwnerID: item.OwnerID, Sources: rssWatchSourceLabels(item), FeedURL: secretmask.URLs(item.FeedURL), Source: item.FeedSource, TwitterHandle: item.FeedHandle, MediaMode: item.FeedMediaMode, ReplyMode: item.FeedReplyMode, JudgeModelID: item.FeedJudgeModelID, TranslationModelID: item.FeedTranslationModelID, MediaFailure: item.FeedMediaFailure, RuleMode: item.FeedRuleMode, JudgePrompt: item.FeedJudgePrompt, Interval: formatDurationUnits(time.Duration(item.IntervalSeconds) * time.Second), NextRunAt: item.TriggerAt, LastRunAt: item.LastRunAt, Status: scheduleStatus(item), LastError: secretmask.Text(item.LastError), PendingDelivery: strings.TrimSpace(item.PendingDelivery) != ""}
+	return &dianaRSSWatch{ID: item.ID, OwnerID: item.OwnerID, Sources: rssWatchSourceLabels(item), FeedURL: secretmask.URLs(item.FeedURL), Source: item.FeedSource, TwitterHandle: item.FeedHandle, MediaMode: item.FeedMediaMode, ReplyPrompt: item.FeedReplyPrompt, ReplyMode: item.FeedReplyMode, JudgeModelID: item.FeedJudgeModelID, TranslationModelID: item.FeedTranslationModelID, MediaFailure: item.FeedMediaFailure, RuleMode: item.FeedRuleMode, JudgePrompt: item.FeedJudgePrompt, Interval: formatDurationUnits(time.Duration(item.IntervalSeconds) * time.Second), NextRunAt: item.TriggerAt, LastRunAt: item.LastRunAt, Status: scheduleStatus(item), LastError: secretmask.Text(item.LastError), PendingDelivery: strings.TrimSpace(item.PendingDelivery) != ""}
 }
 
 func marshalDianaRSSWatchResult(result dianaRSSWatchResult) (string, error) {
