@@ -1200,7 +1200,7 @@ func toolExecutionErrorForModel(toolName, message string) string {
 // explicitSkillPrompt 提醒模型先读被点名的 skill。
 // Skill 正文不自动挂载；点名只生成本轮的短读取提示。
 func (r *Runner) explicitSkillPrompt(req Request) string {
-	selected := SelectExplicitSkills(r.registry.Skills(), requestText(req))
+	selected := SelectExplicitSkills(r.registry.Skills(), currentUserRequestText(req))
 	var builder strings.Builder
 	for _, skill := range selected {
 		if builder.Len() == 0 {

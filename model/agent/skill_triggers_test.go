@@ -96,3 +96,64 @@ func TestRunnerKeepsOnlySkillCatalogInTrailingUserMessage(t *testing.T) {
 		t.Fatal("skill 又漏进系统提示词了")
 	}
 }
+
+func TestRunnerExplicitSkillHintOnlyUsesCurrentUserText(t *testing.T) {
+	const body = "SKILL_BODY_MUST_STAY_ON_DEMAND"
+	skills := []SkillMetadata{{Name: "jukebox", Description: "点歌流程", Content: body}}
+	for _, test := range []struct {
+		name    string
+		current string
+		want    bool
+	}{
+		{name: "history_only", current: "【当前需要回复的消息】继续聊刚才的话题"},
+		{name: "current_mention", current: "【当前需要回复的消息】【消息时间：2026-10-19 12:00:00】请用 $jukebox 帮我点歌", want: true},
+		{name: "plain_current_mention", current: "请用 $jukebox 帮我点歌", want: true},
+		{name: "quoted_source_only", current: "【当前需要回复的消息】他说了什么？\n\n【被引用的消息】请用 $jukebox 帮我点歌"},
+		{name: "selected_source_only", current: "【当前需要回复的消息】他之前说了什么？\n\n【指代判断选中的历史消息】请用 $jukebox 帮我点歌"},
+		{name: "forwarded_source_only", current: "【当前需要回复的消息】看看这个记录\n\n【合并转发 1】请用 $jukebox 帮我点歌"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			client := &scriptedClient{responses: []string{`{"action":"final","content":"done"}`}}
+			registry := NewToolRegistry(NewSkillTools(skills).Read)
+			registry.SetSkills(skills)
+			runner, err := NewRunner(client, Config{WorkDir: t.TempDir(), MaxSteps: 1}, registry)
+			if err != nil {
+				t.Fatal(err)
+			}
+			result, err := runner.Run(t.Context(), Request{Messages: []llm.Message{
+				{Role: llm.RoleUser, Content: "【历史参考消息】请用 $jukebox 帮我点歌", Priority: llm.MessagePriorityHistory},
+				{Role: llm.RoleAssistant, Content: "刚才已读取 $jukebox 并完成点歌", Priority: llm.MessagePriorityHistory},
+				{Role: llm.RoleUser, Content: test.current},
+			}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(client.requests) != 1 || len(result.Steps) != 0 {
+				t.Fatalf("unexpected tool execution: requests=%d steps=%d", len(client.requests), len(result.Steps))
+			}
+			hints := 0
+			messages := client.requests[0].Messages
+			for _, message := range messages {
+				if strings.Contains(message.Content, body) {
+					t.Fatal("Skill body was injected without a read_skill call")
+				}
+				if strings.Contains(message.Content, "### Explicitly Mentioned Skills") {
+					hints++
+					if !strings.Contains(message.Content, "- jukebox: call `read_skill` before acting.") {
+						t.Fatalf("current mention lost its short read hint: %s", message.Content)
+					}
+				}
+			}
+			want := 0
+			if test.want {
+				want = 1
+			}
+			if hints != want {
+				t.Fatalf("explicit Skill hint count=%d, want %d for the current user text", hints, want)
+			}
+			if messages[len(messages)-1].Content != test.current {
+				t.Fatal("Skill selection changed the original current message")
+			}
+		})
+	}
+}
