@@ -481,7 +481,7 @@ func TestAgentHistorySummarizesImagesBeforeLazyToolSkipsBrokenImage(t *testing.T
 	}
 	// 逐条摘要省掉这两句的前提，是系统提示里仍然说了一次。两处同时丢掉的话，模型
 	// 会把摘要当成看过原件，这里守住那个前提。
-	for _, want := range []string{"不代表你看过真实画面", dianaHistoryImagesToolName} {
+	for _, want := range []string{"不代表看过原件", dianaHistoryImagesToolName} {
 		if !strings.Contains(promptToolHistoryImages, want) {
 			t.Fatalf("promptToolHistoryImages = %q, missing %q", promptToolHistoryImages, want)
 		}

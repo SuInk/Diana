@@ -52,7 +52,7 @@ def write_json(path, value, secret=''):
     encoded = json.dumps(value, ensure_ascii=False, indent=2)
     if secret:
         encoded = encoded.replace(secret, '[redacted]')
-    encoded = re.sub(r'sk-[A-Za-z0-9_-]{12,}', '[redacted]', encoded)
+    encoded = re.sub(r'(?<![A-Za-z0-9_-])sk-[A-Za-z0-9_-]{12,}', '[redacted]', encoded)
     path.write_text(encoded)
 
 
@@ -125,10 +125,8 @@ def main():
         raise RuntimeError('Replay port 19090 already occupied; no service was changed')
     api=API(args.base,args.credentials)
     existing_bots=api.call('/api/assistant/config').get('profiles',[])
-    for existing in existing_bots:
-        endpoint=urllib.parse.urlsplit(existing.get('onebot_ws_endpoint',''))
-        if existing.get('enabled') and endpoint.hostname in ('127.0.0.1','localhost','::1') and endpoint.port==19090:
-            raise RuntimeError('An enabled profile already owns the replay peer; pause that local replay profile first')
+    if any(existing.get('enabled') for existing in existing_bots):
+        raise RuntimeError('Use an isolated test instance without enabled bot profiles; no existing bot was changed')
     profiles=api.call('/api/llm/config?include_secrets=true')['profiles']
     source=next(profile for profile in profiles if profile['id']==args.source_profile)
     if urllib.parse.urlsplit(source['base_url']).hostname!='api.deepseek.com' or not source.get('api_key'):

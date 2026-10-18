@@ -9,7 +9,7 @@
 - 两群近同时提问、同群交叉短消息。取消、接管、静默和失败按实际结果记录。
 - 引用旧条件与最新纠正交叉出现、不同人引用同一消息、明确要求多条完整说明，以及点名 Skill 后读取正文再执行。
 
-工具选择由真实模型决定。`expect_tools` 是预期覆盖面，分析报告会列出缺项；不会伪造工具调用或为了通过测试反复采样。记忆为空时不算非空记忆读写验证通过。
+工具选择由真实模型决定。`expect_tools` 是预期覆盖面，分析报告会列出缺项；不会伪造工具调用或为了通过测试反复采样。记忆为空时不算非空记忆读写验证通过。集合中的 `quality` 是人工复核参考，分析脚本不把关键词出现算成语义通过；还需核对回答是否遗漏限制、同条更新是否误清其他字段、建议是否冒充既定条件，以及实际工具输出和投递记录。
 
 ## 在 WSL Debian 中运行
 
@@ -65,6 +65,14 @@ python3 scripts/cache-replay/analyze.py .tmp-dev/cache-conversations-YYYYMMDD-HH
 ```
 
 生成 `analysis.json`（分用途与场景聚合、预期工具缺项、首步提示变化）、`requests.csv`（逐请求）、`joined.json`（原始报文与 Runtime 对应关系）和 `answers.json`（每条提问及实际回答）。匹配使用输入、输出、缓存 token 三元组与时间；报告同时保留未匹配和歧义计数，不能把未匹配记录当作适配器用量一致。
+
+文本 Responses 报文还可以离线估算补充尾部尺寸：
+
+```sh
+go run ./scripts/cache-replay/context-size .tmp-dev/cache-conversations-YYYYMMDD-HHMMSS/joined.json
+```
+
+该工具只选回复首步，按本集合的消息标记定位“最近历史之后、当前用户消息之前”的补充，包含自动记忆、规则尾部和 Skill 目录，排除上一条回复的持久工具记录。固定 instructions、原生工具定义、历史正文、当前用户原文不计入尾部；instructions 的估算另报 `head_median`。使用 Diana 自身估算器，没有对实际调用施加上限，不能当作供应商 usage 或通用多模态测量。遇到不支持的布局会报错，不能静默把缺失边界算作 0。
 
 `manifest.json` 的 `complete` 只表示所选场景的全部输入已处理完毕，成功、失败、取消及工具缺项仍须分别查看。后台计数按本次 profile 的 session/scope 前缀查询，笔记使用该 profile 的共享笔记范围；不能拿整个数据库的前后差值当作该测试的状态。私有输出含合成对话全文与模型请求，默认放在忽略目录，不把 SQLite 数据库、管理员凭据或 API Key 提交到仓库。
 
