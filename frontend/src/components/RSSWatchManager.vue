@@ -47,23 +47,24 @@
           <AppSelect id="rss-watch-mode" v-model="form.delivery_mode" :options="deliveryModeOptions" aria-label="推送方式" />
           <span v-if="form.delivery_mode === 'all'" class="hint">不筛选，发送全部新条目。</span>
         </div>
-        <div v-if="form.delivery_mode !== 'all'" class="field wide">
-          <div class="rss-watch-field-label">
-            <label for="rss-watch-judge">{{ form.delivery_mode === "regex" ? "正则表达式" : "判断规则" }}</label>
-            <button class="btn small ghost" type="button" @click="openAssist(form.delivery_mode === 'regex' ? 'regex' : 'judge')"><Sparkles :size="13" aria-hidden="true" />AI 帮写</button>
+        <div class="field wide rss-watch-rule-stack">
+          <div v-if="form.delivery_mode !== 'all'" class="rss-watch-rule-part">
+            <div class="rss-watch-field-label">
+              <label for="rss-watch-judge">{{ form.delivery_mode === "regex" ? "正则表达式" : "判断规则" }}</label>
+              <button class="btn small ghost" type="button" @click="openAssist(form.delivery_mode === 'regex' ? 'regex' : 'judge')"><Sparkles :size="13" aria-hidden="true" />AI 帮写</button>
+            </div>
+            <textarea id="rss-watch-judge" v-model.trim="form.judge_prompt" class="input rss-watch-rule" rows="4" required :placeholder="form.delivery_mode === 'regex' ? '例如：(?i)release|更新|发布' : '说明什么情况下通知；如何回复请填写下方回复要求。'"></textarea>
+            <span v-if="form.delivery_mode === 'regex'" class="hint">匹配标题和正文，命中后按下方格式回复；筛选不调用模型。使用 Go 正则语法，支持 (?i) 忽略大小写；不支持前后查找和反向引用。</span>
+            <span v-else class="hint">由模型判断新条目，仅在符合条件时通知。默认同时判断文字、图片、视频画面和音频；分析工具不可用时退回文字判断。</span>
           </div>
-          <textarea id="rss-watch-judge" v-model.trim="form.judge_prompt" class="input rss-watch-rule" rows="4" required :placeholder="form.delivery_mode === 'regex' ? '例如：(?i)release|更新|发布' : '说明什么情况下通知；如何回复请填写下方回复要求。'"></textarea>
-          <span v-if="form.delivery_mode === 'regex'" class="hint">匹配标题和正文，命中后按下方选择的内容发送；筛选不调用模型。使用 Go 正则语法，支持 (?i) 忽略大小写；不支持前后查找和反向引用。</span>
-          <span v-else class="hint">由模型判断新条目，仅在符合条件时通知。</span>
-        </div>
-        <p v-if="form.delivery_mode === 'llm'" class="field wide hint">默认同时判断文字、图片、视频画面和音频；分析工具不可用时退回文字判断。图片和视频仍会随原文发送。</p>
-        <div class="field wide">
-          <div class="rss-watch-field-label">
-            <label for="rss-watch-reply">回复格式（可选）</label>
-            <button class="btn small ghost" type="button" @click="openAssist('reply')"><Sparkles :size="13" aria-hidden="true" />AI 帮写</button>
+          <div class="rss-watch-rule-part">
+            <div class="rss-watch-field-label">
+              <label for="rss-watch-reply">回复格式（可选）</label>
+              <button class="btn small ghost" type="button" @click="openAssist('reply')"><Sparkles :size="13" aria-hidden="true" />AI 帮写</button>
+            </div>
+            <textarea id="rss-watch-reply" v-model.trim="form.reply_prompt" class="input rss-watch-rule" rows="3" maxlength="2000" placeholder="例如：翻译成中文。留空直接发送原文。"></textarea>
+            <span class="hint">留空发送原文；填写后按这个格式处理标题和正文，原文链接、图片和视频会自动保留。</span>
           </div>
-          <textarea id="rss-watch-reply" v-model.trim="form.reply_prompt" class="input rss-watch-rule" rows="3" maxlength="2000" placeholder="例如：翻译成中文。留空直接发送原文。"></textarea>
-          <span class="hint">留空发送原文；填写后按这个格式处理标题和正文，原文链接与媒体会自动保留。</span>
         </div>
         <div class="field">
           <label for="rss-watch-interval">检查周期</label>

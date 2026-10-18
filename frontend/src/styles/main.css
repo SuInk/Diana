@@ -4968,6 +4968,18 @@ a.nav-action {
   margin: 0;
 }
 
+.rss-watch-rule-stack,
+.rss-watch-rule-part {
+  display: grid;
+  gap: 8px;
+}
+
+.rss-watch-rule-part + .rss-watch-rule-part {
+  margin-top: 6px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+
 .rss-assist-preview {
   font-family: var(--font-mono);
   background: var(--surface-2);
