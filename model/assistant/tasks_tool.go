@@ -74,6 +74,7 @@ type dianaTask struct {
 	FeedSource      string    `json:"feed_source,omitempty"`
 	FeedHandle      string    `json:"feed_handle,omitempty"`
 	FeedJudgePrompt string    `json:"feed_judge_prompt,omitempty"`
+	FeedRuleMode    string    `json:"feed_rule_mode,omitempty"`
 	LastFeedItemID  string    `json:"last_feed_item_id,omitempty"`
 	CreatedAt       time.Time `json:"created_at"`
 	ConsumesQuota   bool      `json:"consumes_quota"`
@@ -381,9 +382,9 @@ func taskForTool(item Reminder) dianaTask {
 		FeedURL:               secretmask.URLs(item.FeedURL),
 		FeedSource:            item.FeedSource,
 		FeedHandle:            item.FeedHandle,
-		FeedJudgePrompt:       item.FeedJudgePrompt,
-		LastFeedItemID:        item.LastFeedItemID,
-		CreatedAt:             item.CreatedAt,
-		ConsumesQuota:         consumesQuota,
+		FeedRuleMode:          item.FeedRuleMode, FeedJudgePrompt: item.FeedJudgePrompt,
+		LastFeedItemID: item.LastFeedItemID,
+		CreatedAt:      item.CreatedAt,
+		ConsumesQuota:  consumesQuota,
 	}
 }

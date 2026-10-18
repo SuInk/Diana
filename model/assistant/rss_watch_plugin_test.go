@@ -490,3 +490,68 @@ func TestRSSWatchWithoutRulesSendsAllNewItemsWithoutLLM(t *testing.T) {
 		t.Fatalf("judge limit changed: %+v %v", filtered, err)
 	}
 }
+
+func TestRSSWatchRegexModesAndValidation(t *testing.T) {
+	for _, tc := range []struct {
+		mode, rule, want string
+		invalid          bool
+	}{
+		{"", "", "all", false}, {"", "release", "llm", false}, {"regex", "(?i)release|更新", "regex", false},
+		{"regex", "[", "", true}, {"regex", "(?=x)", "", true}, {"regex", "", "", true}, {"llm", "", "", true}, {"unknown", "x", "", true},
+	} {
+		mode, _, err := normalizeRSSWatchRule(tc.mode, tc.rule)
+		if (err != nil) != tc.invalid || mode != tc.want {
+			t.Fatalf("%+v: mode=%q err=%v", tc, mode, err)
+		}
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, rssTestBody(rssTestItem("base", "Initial", "old", "")))
+	}))
+	defer server.Close()
+	store := &stubReminderStore{}
+	runtime := NewRuntime(BotConfig{}, &recordingChannel{}, NewPluginManager(NewRSSWatchPlugin(server.Client())), nil, store, nil, nil)
+	item, err := runtime.CreateRSSWatch(context.Background(), RSSWatchCreateInput{FeedURL: server.URL, UserID: "owner", OwnerID: "owner", RuleMode: "regex", JudgePrompt: "(?i)release"})
+	if err != nil || item.FeedRuleMode != "regex" {
+		t.Fatalf("create=%+v %v", item, err)
+	}
+	bad := "["
+	if _, err := runtime.UpdateRSSWatch(context.Background(), "owner", item.ID, RSSWatchUpdateInput{JudgePrompt: &bad}); err == nil {
+		t.Fatal("invalid regex accepted")
+	}
+	item, err = runtime.UpdateRSSWatch(context.Background(), "owner", item.ID, RSSWatchUpdateInput{Interval: 600 * time.Second})
+	if err != nil || item.FeedRuleMode != "regex" || item.FeedJudgePrompt != "(?i)release" || item.LastFeedItemID != "base" {
+		t.Fatalf("update lost rule/cursor: %+v %v", item, err)
+	}
+	mode := "all"
+	item, err = runtime.UpdateRSSWatch(context.Background(), "owner", item.ID, RSSWatchUpdateInput{RuleMode: &mode})
+	if err != nil || item.FeedRuleMode != "all" || item.FeedJudgePrompt != "" {
+		t.Fatalf("clear=%+v %v", item, err)
+	}
+}
+
+func TestRSSWatchRegexMatchesAllNewEntriesWithoutLLM(t *testing.T) {
+	body := rssTestBody(rssTestItem("4", "ordinary", "skip", ""), rssTestItem("3", "Update", "RELEASE body", ""), rssTestItem("2", "更新 title", "matched body", ""), rssTestItem("1", "ordinary", "skip too", ""), rssTestItem("0", "release", "old", ""))
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, body) }))
+	defer server.Close()
+	plugin := NewRSSWatchPlugin(server.Client())
+	calls := 0
+	runtime := NewRuntime(BotConfig{}, &recordingChannel{}, NewPluginManager(plugin), nil, nil, nil, func() (LLMProvider, error) { calls++; return nil, errors.New("unexpected model") })
+	item := Reminder{FeedRuleMode: "regex", FeedJudgePrompt: "(?i)release|更新"}
+	source := ReminderFeedSource{FeedURL: server.URL, LastItemID: "0"}
+	notice, err := runtime.checkRSSWatchSource(context.Background(), item, &source, plugin, SettingValues{rssWatchSettingItemLimit: 1})
+	if err != nil || calls != 0 || source.LastItemID != "4" || !strings.Contains(notice, "RELEASE body") || !strings.Contains(notice, "matched body") || strings.Contains(notice, "skip") || strings.Contains(notice, "old") {
+		t.Fatalf("notice=%q source=%+v calls=%d err=%v", notice, source, calls, err)
+	}
+	source.LastItemID = "0"
+	item.FeedJudgePrompt = "never matches"
+	notice, err = runtime.checkRSSWatchSource(context.Background(), item, &source, plugin, nil)
+	if err != nil || notice != "" || source.LastItemID != "4" {
+		t.Fatalf("no match did not advance: %q %+v %v", notice, source, err)
+	}
+	item.FeedJudgePrompt = "["
+	source.LastItemID = "0"
+	_, err = runtime.checkRSSWatchSource(context.Background(), item, &source, plugin, nil)
+	if err == nil || source.LastItemID != "0" {
+		t.Fatal("invalid stored regex advanced cursor")
+	}
+}

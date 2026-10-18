@@ -12,6 +12,7 @@ import (
 	"io"
 	"log"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -8387,9 +8388,20 @@ func (r *Runtime) runClaimedRSSWatch(ctx context.Context, item Reminder) (time.T
 // checkRSSWatchSource 检查单个来源，返回这个来源要发的通知段落（不通知就是空）。
 // 游标只在判断成功后推进：判断失败还推进的话，这批新条目就再也没人看了。
 func (r *Runtime) checkRSSWatchSource(ctx context.Context, item Reminder, source *ReminderFeedSource, plugin *RSSWatchPlugin, settings SettingValues) (string, error) {
-	unfiltered := strings.TrimSpace(item.FeedJudgePrompt) == ""
+	mode, rule, err := normalizeRSSWatchRule(item.FeedRuleMode, item.FeedJudgePrompt)
+	if err != nil {
+		return "", err
+	}
+	direct := mode != "llm"
+	var matcher *regexp.Regexp
+	if mode == "regex" {
+		matcher, err = regexp.Compile(rule)
+		if err != nil {
+			return "", err
+		}
+	}
 	limit := max(1, min(30, settings.Int(rssWatchSettingItemLimit, 12)))
-	if unfiltered {
+	if direct {
 		limit = 0
 	}
 	change, err := plugin.checkWithItemLimit(ctx, source.FeedURL, source.LastItemID, source.LastPublishedAt, settings, limit)
@@ -8411,14 +8423,20 @@ func (r *Runtime) checkRSSWatchSource(ctx context.Context, item Reminder, source
 		advance()
 		return "", nil
 	}
-	if unfiltered {
+	if direct {
 		mediaCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		defer cancel()
 		notices := make([]string, 0, len(change.Items))
 		for _, entry := range change.Items {
+			if matcher != nil && !matcher.MatchString(entry.Title+"\n"+entry.Content) {
+				continue
+			}
 			notices = append(notices, rssWatchUnfilteredText(entry)+plugin.replyMedia(mediaCtx, entry.Link, []rssWatchItem{entry}, settings))
 		}
 		advance()
+		if len(notices) == 0 {
+			return "", nil
+		}
 		header := strings.ReplaceAll(rssWatchNoticeHeader(*source, change.FeedName), "[CQ:", "［CQ:")
 		return header + "\n" + strings.Join(notices, "\n\n"), nil
 	}

@@ -6,7 +6,7 @@
     <div class="repository-watch-manager-head">
       <div>
         <h3>订阅与判断</h3>
-        <p>选择全部推送，或按规则筛选新条目。</p>
+        <p>选择全部推送、正则匹配或 LLM 判断。</p>
       </div>
       <button class="btn small primary" type="button" @click="startCreate"><Plus :size="14" aria-hidden="true" />添加订阅</button>
     </div>
@@ -47,10 +47,11 @@
           <AppSelect id="rss-watch-mode" v-model="form.delivery_mode" :options="deliveryModeOptions" aria-label="推送方式" />
           <span v-if="form.delivery_mode === 'all'" class="hint">不调用模型筛选，直接发送全部新条目的原文、链接和媒体。</span>
         </div>
-        <div v-if="form.delivery_mode === 'filtered'" class="field wide">
-          <label for="rss-watch-judge">筛选与回复规则</label>
-          <textarea id="rss-watch-judge" v-model.trim="form.judge_prompt" class="input rss-watch-rule" rows="4" required placeholder="说明什么情况下通知，以及通知时回复什么。"></textarea>
-          <span class="hint">由模型判断新条目，仅在符合条件时通知。</span>
+        <div v-if="form.delivery_mode !== 'all'" class="field wide">
+          <label for="rss-watch-judge">{{ form.delivery_mode === "regex" ? "正则表达式" : "判断与回复规则" }}</label>
+          <textarea id="rss-watch-judge" v-model.trim="form.judge_prompt" class="input rss-watch-rule" rows="4" required :placeholder="form.delivery_mode === 'regex' ? '例如：(?i)release|更新|发布' : '说明什么情况下通知，以及通知时回复什么。'"></textarea>
+          <span v-if="form.delivery_mode === 'regex'" class="hint">匹配标题和正文，命中时发送原文、链接及媒体，不调用模型。使用 Go 正则语法，支持 (?i) 忽略大小写；不支持前后查找和反向引用。</span>
+          <span v-else class="hint">由模型判断新条目，仅在符合条件时通知。</span>
         </div>
         <div class="field">
           <label for="rss-watch-interval">检查周期</label>
@@ -70,7 +71,7 @@
       <article v-for="task in watches" :key="task.id" class="repository-watch-manager-item">
         <div class="repository-watch-manager-main">
           <div class="cluster"><strong>{{ watchTitle(task) }}</strong><span v-if="sourceCount(task) > 1" class="badge">{{ sourceCount(task) }} 个来源</span><span class="badge" :class="statusTone(task.status)">{{ statusLabel(task.status) }}</span></div>
-          <p class="rss-watch-rule-summary">{{ task.feed_judge_prompt || "全部新条目 · 不筛选" }}</p>
+          <p class="rss-watch-rule-summary">{{ task.feed_rule_mode === "regex" ? "正则匹配 · " + task.feed_judge_prompt : task.feed_judge_prompt || "全部新条目 · 不筛选" }}</p>
           <div class="task-facts"><span>每 {{ formatInterval(task.interval_seconds || defaultIntervalSeconds) }}</span><SubscriptionDestination v-for="(target, index) in task.notification_targets?.length ? task.notification_targets : [{ profile_id: task.profile_id, platform: task.platform, group_id: task.group_id, user_id: task.user_id }]" :key="index" :platform="target.platform || profiles.find(p => p.id === target.profile_id)?.platform" :profile-id="target.profile_id" :profile-name="profiles.find(p => p.id === target.profile_id)?.name" :group-id="target.group_id" :user-id="target.user_id" /><a v-for="source in taskSources(task)" :key="source.feed_url" :href="source.feed_url" target="_blank" rel="noreferrer" style="overflow-wrap: anywhere; max-width: 100%">{{ sourceLabel(source) }}</a></div>
           <p v-if="task.last_error" class="repository-watch-manager-error">{{ task.last_error }}</p>
         </div>
@@ -102,7 +103,7 @@ const maximumIntervalSeconds = 365 * 24 * 60 * 60;
 const defaultIntervalSeconds = 15 * 60;
 // 和后端 maximumRSSWatchSources 保持一致：再多就该拆成两条订阅。
 const maximumSources = 10;
-const deliveryModeOptions = [{ value: "all", label: "全部推送" }, { value: "filtered", label: "按规则筛选" }];
+const deliveryModeOptions = [{ value: "all", label: "全部推送" }, { value: "regex", label: "正则匹配" }, { value: "llm", label: "LLM 判断" }];
 const emptyForm = () => ({ notification_targets: [] as import("../api").RepositoryWatchTarget[], source: "twitter" as "twitter" | "rss", twitter_handles: [""], feed_urls: [""], delivery_mode: "all", judge_prompt: "", interval_seconds: defaultIntervalSeconds, profile_id: "" });
 const watches = ref<AssistantTask[]>([]);
 const profiles = ref<BotProfileConfig[]>([]);
@@ -147,7 +148,7 @@ function startEdit(task: AssistantTask): void {
   const kind = sources[0]?.source === "twitter" ? "twitter" : "rss";
   const handles = sources.filter((source) => source.source === "twitter").map((source) => source.handle ?? "");
   const urls = sources.filter((source) => source.source !== "twitter").map((source) => source.feed_url);
-  form.value = { notification_targets: task.notification_targets?.length ? task.notification_targets.map(t => ({ ...t, profile_id: t.profile_id || task.profile_id })) : [{ profile_id: task.profile_id, destination: task.group_id ? "group" : "private", group_id: task.group_id, user_id: task.user_id }], source: kind, twitter_handles: handles.length ? handles : [""], feed_urls: urls.length ? urls : [""], delivery_mode: task.feed_judge_prompt?.trim() ? "filtered" : "all", judge_prompt: task.feed_judge_prompt ?? "", interval_seconds: task.interval_seconds || defaultIntervalSeconds, profile_id: task.profile_id ?? "" };
+  form.value = { notification_targets: task.notification_targets?.length ? task.notification_targets.map(t => ({ ...t, profile_id: t.profile_id || task.profile_id })) : [{ profile_id: task.profile_id, destination: task.group_id ? "group" : "private", group_id: task.group_id, user_id: task.user_id }], source: kind, twitter_handles: handles.length ? handles : [""], feed_urls: urls.length ? urls : [""], delivery_mode: task.feed_rule_mode || (task.feed_judge_prompt?.trim() ? "llm" : "all"), judge_prompt: task.feed_judge_prompt ?? "", interval_seconds: task.interval_seconds || defaultIntervalSeconds, profile_id: task.profile_id ?? "" };
   editing.value = true;
   markEditorClean();
 }
@@ -163,7 +164,7 @@ async function saveEditor(): Promise<boolean> {
   const urls = filledSources(form.value.feed_urls);
   if (form.value.source === "twitter" && !handles.length) return rejectEditor("请填写 Twitter 用户");
   if (form.value.source === "rss" && !urls.length) return rejectEditor("请填写 Feed URL");
-  if (form.value.delivery_mode === "filtered" && !form.value.judge_prompt.trim()) return rejectEditor("请填写筛选与回复规则，或选择全部推送");
+  if (form.value.delivery_mode !== "all" && !form.value.judge_prompt.trim()) return rejectEditor("请填写筛选与回复规则，或选择全部推送");
   if (form.value.interval_seconds < minimumIntervalSeconds || form.value.interval_seconds > maximumIntervalSeconds) return rejectEditor("检查周期必须在 5 分钟到 365 天之间");
 
   if (!form.value.notification_targets.length || form.value.notification_targets.some(t => !t.profile_id || !(t.destination === "group" ? t.group_id : t.user_id))) return rejectEditor("请为每个通知目标选择机器人并填写会话 ID");
@@ -172,7 +173,7 @@ async function saveEditor(): Promise<boolean> {
   try {
     await props.prepareAccess?.();
     const source = form.value.source === "twitter" ? { twitter_handles: handles, feed_urls: [] } : { feed_urls: urls, twitter_handles: [] };
-    const common = { notification_targets: form.value.notification_targets, ...source, judge_prompt: form.value.delivery_mode === "all" ? "" : form.value.judge_prompt, interval_seconds: form.value.interval_seconds };
+    const common = { notification_targets: form.value.notification_targets, ...source, rule_mode: form.value.delivery_mode, judge_prompt: form.value.delivery_mode === "all" ? "" : form.value.judge_prompt, interval_seconds: form.value.interval_seconds };
     if (editingTask.value) await updateRSSWatch(editingTask.value.id, common); else await createRSSWatch({ ...common, profile_id: form.value.notification_targets[0]?.profile_id });
     toastSuccess(editingTask.value ? "RSS 订阅已更新" : "RSS 订阅已创建，当前内容已作为基线"); editing.value = false; editingTask.value = null; await load();
     return true;

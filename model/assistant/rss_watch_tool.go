@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -25,8 +26,8 @@ const (
 )
 
 type RSSWatchCreateInput struct {
-	NotificationTargets                 []ReminderDeliveryTarget
-	FeedURL, TwitterHandle, JudgePrompt string
+	NotificationTargets                           []ReminderDeliveryTarget
+	FeedURL, TwitterHandle, JudgePrompt, RuleMode string
 	// FeedURLs / TwitterHandles 是多来源写法，和单数字段合并后共用同一套规则。
 	FeedURLs, TwitterHandles                                        []string
 	Interval                                                        time.Duration
@@ -36,10 +37,10 @@ type RSSWatchCreateInput struct {
 }
 
 type RSSWatchUpdateInput struct {
-	NotificationTargets                 *[]ReminderDeliveryTarget
-	FeedURL, TwitterHandle, JudgePrompt *string
-	FeedURLs, TwitterHandles            *[]string
-	Interval                            time.Duration
+	NotificationTargets                           *[]ReminderDeliveryTarget
+	FeedURL, TwitterHandle, JudgePrompt, RuleMode *string
+	FeedURLs, TwitterHandles                      *[]string
+	Interval                                      time.Duration
 }
 
 type dianaRSSWatchTool struct {
@@ -65,6 +66,7 @@ type dianaRSSWatch struct {
 	Source          string    `json:"source"`
 	TwitterHandle   string    `json:"twitter_handle,omitempty"`
 	JudgePrompt     string    `json:"judge_prompt"`
+	RuleMode        string    `json:"rule_mode"`
 	Interval        string    `json:"interval"`
 	Status          string    `json:"status"`
 	LastError       string    `json:"last_error,omitempty"`
@@ -109,6 +111,7 @@ func (*dianaRSSWatchTool) InputSchema() map[string]any {
 		"feed_url":        toolStringParam("单个 RSS/Atom 地址"),
 		"feed_urls":       toolStringArrayParam("多个 RSS/Atom 地址，共用 judge_prompt"),
 		"interval":        toolStringParam("检查间隔，最短 " + formatDurationUnits(minimumRSSWatchInterval) + "，默认 " + formatDurationUnits(defaultRSSWatchInterval)),
+		"rule_mode":       toolStringParam("all 全部推送、regex 正则匹配、llm 模型判断；省略时按规则是否为空兼容旧订阅"),
 		"judge_prompt":    toolStringParam("可选；留空直接推送全部新条目，填写则说明通知条件和回复要求，最多 " + itoa(maximumRSSJudgeRunes) + " 字"),
 		"id":              toolStringParam("订阅 ID，可用 list 查"),
 	})
@@ -148,7 +151,7 @@ func (t *dianaRSSWatchTool) Run(ctx context.Context, input map[string]any) (stri
 		item, err := t.runtime.CreateRSSWatch(ctx, RSSWatchCreateInput{
 			FeedURL: configToolString(input, "feed_url"), TwitterHandle: configToolString(input, "twitter_handle"),
 			FeedURLs: configToolStringSlice(input, "feed_urls"), TwitterHandles: configToolStringSlice(input, "twitter_handles"),
-			JudgePrompt: configToolString(input, "judge_prompt"), Interval: interval,
+			RuleMode: configToolString(input, "rule_mode"), JudgePrompt: configToolString(input, "judge_prompt"), Interval: interval,
 			Platform: t.event.Platform, ProfileID: t.event.ProfileID, ContextNamespace: t.event.ContextNamespace,
 			OwnerID: targetID, GroupID: t.event.GroupID, UserID: targetID, RequestedBy: t.event.UserID,
 		})
@@ -310,9 +313,9 @@ func (r *Runtime) CreateRSSWatch(ctx context.Context, input RSSWatchCreateInput)
 	if interval < minimumRSSWatchInterval || interval > maximumScheduleInterval {
 		return Reminder{}, fmt.Errorf("RSS 检查周期必须在 %s 到 %s 之间", formatDurationUnits(minimumRSSWatchInterval), formatDurationUnits(maximumScheduleInterval))
 	}
-	judge := strings.TrimSpace(input.JudgePrompt)
-	if len([]rune(judge)) > maximumRSSJudgeRunes {
-		return Reminder{}, fmt.Errorf("judge_prompt 不能超过 %d 个字符", maximumRSSJudgeRunes)
+	mode, judge, err := normalizeRSSWatchRule(input.RuleMode, input.JudgePrompt)
+	if err != nil {
+		return Reminder{}, err
 	}
 	// 单数字段是老写法，和复数字段合并起来一起解析；用新切片装，免得 append
 	// 写进调用方传来的数组里。
@@ -331,7 +334,7 @@ func (r *Runtime) CreateRSSWatch(ctx context.Context, input RSSWatchCreateInput)
 		sources[index].LastItemID, sources[index].LastPublishedAt = baseline.ItemID, baseline.PublishedAt
 	}
 	event.taskRequester = strings.TrimSpace(input.RequestedBy)
-	return r.addRSSWatch(event, firstNonEmpty(strings.TrimSpace(input.OwnerID), event.UserID), judge, interval, sources, input.NotificationTargets...)
+	return r.addRSSWatch(event, firstNonEmpty(strings.TrimSpace(input.OwnerID), event.UserID), mode, judge, interval, sources, input.NotificationTargets...)
 }
 
 // resolveRSSWatchSources 把用户填的一堆用户名和 Feed 地址整理成来源列表。
@@ -421,7 +424,7 @@ func rssWatchMessage(sources []ReminderFeedSource) string {
 	return "监控 " + strings.Join(labels, "、")
 }
 
-func (r *Runtime) addRSSWatch(event MessageEvent, owner, judge string, interval time.Duration, sources []ReminderFeedSource, targets ...ReminderDeliveryTarget) (Reminder, error) {
+func (r *Runtime) addRSSWatch(event MessageEvent, owner, mode, judge string, interval time.Duration, sources []ReminderFeedSource, targets ...ReminderDeliveryTarget) (Reminder, error) {
 	if r.reminders == nil {
 		return Reminder{}, fmt.Errorf("当前未启用定时任务存储")
 	}
@@ -433,7 +436,7 @@ func (r *Runtime) addRSSWatch(event MessageEvent, owner, judge string, interval 
 		ID:                      uuid.NewString()[:8], Kind: ReminderKindRSSWatch, Platform: event.Platform, ProfileID: event.ProfileID,
 		ContextNamespace: event.ContextNamespace, OwnerID: owner, GroupID: event.GroupID, UserID: event.UserID,
 		RequestedBy: firstNonEmpty(event.taskRequester, event.UserID),
-		Message:     rssWatchMessage(sources), FeedJudgePrompt: judge,
+		Message:     rssWatchMessage(sources), FeedJudgePrompt: judge, FeedRuleMode: mode,
 		TriggerAt: now.Add(interval), IntervalSeconds: int64(interval / time.Second), CreatedAt: now,
 	}
 	applyRSSWatchSources(&item, sources)
@@ -502,12 +505,20 @@ func (r *Runtime) UpdateRSSWatch(ctx context.Context, owner, id string, input RS
 		}
 		sources, sourcesChanged = carryRSSWatchCursors(next, ReminderFeedSources(current))
 	}
+	mode := current.FeedRuleMode
 	judge := current.FeedJudgePrompt
 	if input.JudgePrompt != nil {
-		judge = strings.TrimSpace(*input.JudgePrompt)
-		if len([]rune(judge)) > maximumRSSJudgeRunes {
-			return Reminder{}, fmt.Errorf("judge_prompt 不能超过 %d 个字符", maximumRSSJudgeRunes)
+		judge = *input.JudgePrompt
+		if mode != "regex" {
+			mode = ""
 		}
+	}
+	if input.RuleMode != nil {
+		mode = *input.RuleMode
+	}
+	mode, judge, err = normalizeRSSWatchRule(mode, judge)
+	if err != nil {
+		return Reminder{}, err
 	}
 	interval := time.Duration(current.IntervalSeconds) * time.Second
 	if input.Interval > 0 {
@@ -542,6 +553,7 @@ func (r *Runtime) UpdateRSSWatch(ctx context.Context, owner, id string, input RS
 		}
 		item.PendingDeliveredTargets = nil
 		item.FeedJudgePrompt = judge
+		item.FeedRuleMode = mode
 		item.IntervalSeconds, item.TriggerAt = int64(interval/time.Second), time.Now().Add(interval)
 		item.PendingDelivery, item.PendingSince, item.LastError, item.ConsecutiveFailures = "", time.Time{}, "", 0
 		applyRSSWatchSources(item, sources)
@@ -700,6 +712,10 @@ func rssWatchUpdateFromTool(input map[string]any) (RSSWatchUpdateInput, error) {
 		values := configToolStringSlice(input, "twitter_handles")
 		result.TwitterHandles = &values
 	}
+	if value, present := input["rule_mode"]; present {
+		raw := strings.TrimSpace(fmt.Sprint(value))
+		result.RuleMode = &raw
+	}
 	if value, present := input["judge_prompt"]; present {
 		raw := strings.TrimSpace(fmt.Sprint(value))
 		result.JudgePrompt = &raw
@@ -730,7 +746,7 @@ func rssWatchSourceLabels(item Reminder) []string {
 func rssWatchForTool(item Reminder) *dianaRSSWatch {
 	// 订阅地址里的令牌（?token=、?key=）只给模型掩码；原样交回掩码改订阅时由
 	// restoreMaskedFeedURLs 换回原文。
-	return &dianaRSSWatch{ID: item.ID, OwnerID: item.OwnerID, Sources: rssWatchSourceLabels(item), FeedURL: secretmask.URLs(item.FeedURL), Source: item.FeedSource, TwitterHandle: item.FeedHandle, JudgePrompt: item.FeedJudgePrompt, Interval: formatDurationUnits(time.Duration(item.IntervalSeconds) * time.Second), NextRunAt: item.TriggerAt, LastRunAt: item.LastRunAt, Status: scheduleStatus(item), LastError: secretmask.Text(item.LastError), PendingDelivery: strings.TrimSpace(item.PendingDelivery) != ""}
+	return &dianaRSSWatch{ID: item.ID, OwnerID: item.OwnerID, Sources: rssWatchSourceLabels(item), FeedURL: secretmask.URLs(item.FeedURL), Source: item.FeedSource, TwitterHandle: item.FeedHandle, RuleMode: item.FeedRuleMode, JudgePrompt: item.FeedJudgePrompt, Interval: formatDurationUnits(time.Duration(item.IntervalSeconds) * time.Second), NextRunAt: item.TriggerAt, LastRunAt: item.LastRunAt, Status: scheduleStatus(item), LastError: secretmask.Text(item.LastError), PendingDelivery: strings.TrimSpace(item.PendingDelivery) != ""}
 }
 
 func marshalDianaRSSWatchResult(result dianaRSSWatchResult) (string, error) {
@@ -770,4 +786,31 @@ func restoreMaskedFeedURLs(rawURLs []string, current []ReminderFeedSource) ([]st
 // 当前会话时带 _elsewhere，见 taskCanonicalOperation。
 func (t *dianaRSSWatchTool) CanonicalOperation(input map[string]any) string {
 	return t.runtime.taskCanonicalOperation(t.event, input, "create")
+}
+
+// Missing modes preserve the legacy empty/all and nonempty/LLM contract.
+func normalizeRSSWatchRule(mode, rule string) (string, string, error) {
+	mode, rule = strings.TrimSpace(mode), strings.TrimSpace(rule)
+	if mode == "" {
+		if rule == "" {
+			mode = "all"
+		} else {
+			mode = "llm"
+		}
+	}
+	if mode == "all" {
+		return mode, "", nil
+	}
+	if mode != "regex" && mode != "llm" {
+		return "", "", fmt.Errorf("rule_mode 必须为 all、regex 或 llm")
+	}
+	if rule == "" || len([]rune(rule)) > maximumRSSJudgeRunes {
+		return "", "", fmt.Errorf("筛选规则必须为 1-%d 个字符", maximumRSSJudgeRunes)
+	}
+	if mode == "regex" {
+		if _, err := regexp.Compile(rule); err != nil {
+			return "", "", fmt.Errorf("正则表达式无效：%w", err)
+		}
+	}
+	return mode, rule, nil
 }
