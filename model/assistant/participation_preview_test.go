@@ -39,3 +39,30 @@ func TestParticipationPreviewCarriesUnsavedOverrides(t *testing.T) {
 		t.Fatalf("decision questions did not pick up the overrides: %+v", preview.Decision)
 	}
 }
+
+func TestParticipationIdentityFollowsCurrentProfile(t *testing.T) {
+	for _, name := range []string{"星河", "月白"} {
+		cfg := DefaultBotConfig()
+		cfg.Name = name
+		cfg.GroupTriggers = []string{"小助手"}
+		cfg.SystemPrompt = "{{name}}是天文社成员，朋友叫小雨。"
+		preview, err := PreviewParticipationPrompt(cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, chatIn := range []chatInSettings{cfg.chatInSettings(), {}} {
+			prompt := proactiveReplyRouteSystemPrompt(cfg, chatIn)
+			for _, want := range []string{`"name":"` + name + `"`, name + "是天文社成员", "朋友叫小雨", "人设中的其他人物不等于本机器人"} {
+				if !strings.Contains(prompt, want) {
+					t.Fatalf("routing identity missing %q", want)
+				}
+			}
+			if strings.Contains(prompt, "{{name}}") {
+				t.Fatal("routing persona retains an unexpanded name")
+			}
+		}
+		if preview.System != proactiveReplyRouteSystemPrompt(cfg, cfg.chatInSettings()) {
+			t.Fatal("identity preview differs from runtime")
+		}
+	}
+}

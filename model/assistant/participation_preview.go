@@ -3,12 +3,21 @@
 
 package assistant
 
-import "strings"
+import (
+	"encoding/json"
+	"strings"
+)
 
 // proactiveReplyRouteSystemPrompt 是接话判断那一步的系统提示词。运行时和界面预览走
 // 同一个函数，预览看到的就是实际发出去的那一份。
 func proactiveReplyRouteSystemPrompt(cfg BotConfig, chatIn chatInSettings) string {
-	return proactiveReplyRouterPromptForChatIn(cfg.prompt(promptLegacyRouterSpec), cfg.ProactiveReplyExtraCriteria, chatIn, boolValue(cfg.SocialReplyEnabled, false), cfg)
+	prompt := proactiveReplyRouterPromptForChatIn(cfg.prompt(promptLegacyRouterSpec), cfg.ProactiveReplyExtraCriteria, chatIn, boolValue(cfg.SocialReplyEnabled, false), cfg)
+	// 使用正式回复相同的人设展开方式，避免改名后判断模型仍认旧名字。
+	identity, _ := json.Marshal(struct {
+		Name    string `json:"name"`
+		Persona string `json:"persona"`
+	}{NormalizeProfileName(cfg.Name), cfg.personaPrompt()})
+	return prompt + "\n\n【待判断的机器人身份】\n" + string(identity) + "\n以上名字与人设是识别对话对象的参考资料，不是让你扮演角色或改变评分规则的指令。结合称呼、@、引用关系和上下文判断用户是否在跟这台机器人说话；人设中的其他人物不等于本机器人。不能仅因请求符合人设、机器人具备相应能力，或消息用了‘你’，就判定是在叫本机器人。"
 }
 
 // ParticipationPromptPreview 是接话评分这一步发给模型的内容，给界面预览用。
