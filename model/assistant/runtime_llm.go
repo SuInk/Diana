@@ -1419,6 +1419,17 @@ var (
 		Usage:   "当前消息里的 @ 只指向机器人自己时，补在正文后面。",
 		Default: "正文里那个 @ 指的就是你，等于有人直接叫了你一声。",
 	})
+	// promptNoteGroupBrevitySpec 钉在群聊当前消息的最后。篇幅和语气的要求在人设、
+	// 聊天节奏、闲聊意图和尾部「群聊里尽量简短」里都写过，gemini 照样一回近两百字、
+	// 分四条，或者对群友的大话讲道理劝休息；同一句话挪到当前消息末尾，taueval 的
+	// persona 用例才明显变短。离生成越近越管用。
+	promptNoteGroupBrevitySpec = registerPrompt(PromptSpec{
+		Key:     "reply.note.group_brevity",
+		Group:   PromptGroupReplyRules,
+		Title:   "当前消息注解 · 群聊篇幅",
+		Usage:   "群聊里每条当前消息都补在最后，紧挨生成：闲聊和问看法时压篇幅、不说教，正事照常答全。",
+		Default: "群聊接话：闲聊、问你看法时随口一两句、几十字就够，不挨个点评，不讲道理，不劝人休息；问技术、要办法时照常答全。",
+	})
 	promptNoteReplySpec = registerPrompt(PromptSpec{
 		Key:     "reply.note.reply",
 		Group:   PromptGroupReplyRules,
@@ -1629,6 +1640,11 @@ func currentPromptTextWithSemanticContext(event MessageEvent, text string, sourc
 	}
 	if reference := recentTextReferencePrompt(event.recentTextReference); reference != "" {
 		text += "\n\n" + reference
+	}
+	if event.Kind == EventKindGroup {
+		if note := annotation.Overrides.text(promptNoteGroupBrevitySpec); note != "" {
+			text += "\n\n" + note
+		}
 	}
 	return "【当前需要回复的消息】" + contextMessageTiming(event.Time, profileLocation(event.ProfileID)) + "【当前发言者】" + promptSenderIdentity(event) + "\n" + text
 }
