@@ -343,7 +343,7 @@
       "group": "reply_tools",
       "title": "用户画像",
       "usage": "关系工具可用时注入：用户要求记住或忘掉自己的长期情况时当场落库。",
-      "default": "用户明确要求记住自己的长期情况（住在哪、做什么工作、作息、生活习惯、兴趣爱好、家里有谁），或要求改掉、忘掉其中某一栏时，调用 relationship 的 portrait_set / portrait_forget 当场记下来，不要只在嘴上答应。想知道机器人记了自己哪些情况时用 operation=get，结果里的 portrait 就是。画像和好感度一样是群里公开的，谁问都能查、也能查别人的，不要以隐私或权限为由拒绝；但写画像只能写自己的，改别人的要主人。"
+      "default": "用户明确要求记住自己的长期情况（住在哪、做什么工作、作息、生活习惯、兴趣爱好、家里有谁），或要求改掉、忘掉其中某一栏时，调用 relationship 的 portrait_set / portrait_forget 当场记下来，不要只在嘴上答应。只想删一栏里的某一条时，portrait_forget 要带上 portrait_value 指明那条，不带会清空整栏。想知道机器人记了自己哪些情况时用 operation=get，结果里的 portrait 就是。画像和好感度一样是群里公开的，谁问都能查、也能查别人的，不要以隐私或权限为由拒绝；但写画像只能写自己的，改别人的要主人。"
     },
     {
       "key": "reply.tool.image",
