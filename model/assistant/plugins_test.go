@@ -940,12 +940,12 @@ func TestDianaLLMConfigToolRebindsChatModelRole(t *testing.T) {
 	if got := store.Current(); got.Model != "example-chat-model" {
 		t.Fatalf("provider config was rewritten: %#v", got)
 	}
-	// 换完之后实际生效的就是新模型——旧实现在这里仍然是旧模型。
+	// 新模型排在首位，原模型保留为后备。
 	profiles, err := runtime.roleBoundProfiles("", store.Profiles().WithDefaults(), llm.GroupChat)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(profiles) != 1 || profiles[0].Config.Model != "example-pro-model" {
+	if len(profiles) != 2 || profiles[0].Config.Model != "example-pro-model" || profiles[1].Config.Model != "example-chat-model" {
 		t.Fatalf("对话实际使用的模型没有跟着换: %#v", profiles)
 	}
 	// 换模型前的探测调用会记一条用量，挂在发指令的那条消息名下。
