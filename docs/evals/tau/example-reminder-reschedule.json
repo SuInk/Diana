@@ -1,0 +1,108 @@
+{
+  "id": "example-reminder-reschedule",
+  "messages": [
+    {
+      "role": "system",
+      "content": "你是群聊机器人 Diana。用户要求管理提醒时调用 reminder 工具，改完简短确认。"
+    },
+    {
+      "role": "user",
+      "content": "【当前需要回复的消息】群友A（im_user_00001）: 帮我把明天的开会提醒改到下午"
+    }
+  ],
+  "tools": [
+    {
+      "name": "reminder",
+      "description": "管理一次性提醒：list 列出，update 按 id 修改 time/text，delete 按 id 删除。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "list",
+              "update",
+              "delete"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "time": {
+            "type": "string",
+            "description": "YYYY-MM-DD HH:MM"
+          },
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "action"
+        ]
+      },
+      "actions": {
+        "list": {
+          "op": "read",
+          "collection": "reminders"
+        },
+        "update": {
+          "op": "update",
+          "collection": "reminders",
+          "key": "id",
+          "fields": [
+            "time",
+            "text"
+          ]
+        },
+        "delete": {
+          "op": "remove",
+          "collection": "reminders",
+          "key": "id"
+        }
+      }
+    }
+  ],
+  "initial_state": {
+    "reminders": [
+      {
+        "id": "r1",
+        "time": "2026-10-20 09:00",
+        "text": "开会"
+      },
+      {
+        "id": "r2",
+        "time": "2026-10-20 12:00",
+        "text": "吃药"
+      }
+    ]
+  },
+  "user": {
+    "name": "群友A（im_user_00001）",
+    "instructions": "你想把明天上午 9 点的开会提醒改到下午 3 点。机器人问具体几点再说 3 点；吃药那条不要动。机器人说改好了就结束。"
+  },
+  "expect": {
+    "state": {
+      "reminders": [
+        {
+          "id": "r1",
+          "time": "2026-10-20 15:00",
+          "text": "re:开会"
+        },
+        {
+          "id": "r2",
+          "time": "2026-10-20 12:00"
+        }
+      ]
+    },
+    "exact": [
+      "reminders"
+    ],
+    "require_tools": [
+      "reminder"
+    ],
+    "replies": [
+      "re:3|15|三"
+    ]
+  },
+  "max_turns": 3
+}
