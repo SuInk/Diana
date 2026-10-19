@@ -1634,8 +1634,13 @@ func (r *Runtime) effectiveConfigForEventLocked(event MessageEvent) BotConfig {
 		if roles == nil {
 			roles = map[string]ModelRole{}
 		}
-		roles["chat"] = ModelRole{ProfileID: model.ProfileID, Model: model.Model}
-		roles[PurposeReply] = roles["chat"]
+		selected := ModelRole{ProfileID: model.ProfileID, Model: model.Model}
+		roles["chat"] = prioritizeModelRole(roles["chat"], selected)
+		if reply, ok := roles[PurposeReply]; ok && !reply.FollowChat {
+			roles[PurposeReply] = prioritizeModelRole(reply, selected)
+		} else {
+			roles[PurposeReply] = roles["chat"]
+		}
 		cfg.ModelRoles = roles
 	}
 	cfg.MarkedBotIDs = cleanStrings(append(cfg.MarkedBotIDs, groupCfg.MarkedBotIDs...))

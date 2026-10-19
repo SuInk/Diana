@@ -85,7 +85,7 @@ func TestModelSwitchTargetsSenderBotAndSpecificProvider(t *testing.T) {
 	if got, err := r.runLLMRouterProviderWithRetry(ctx, false, run); err != nil || got != "https://two.invalid|other" {
 		t.Fatalf("intent used wrong provider: %s %v", got, err)
 	}
-	if configs := r.imageProviderConfigs(ctx); len(configs) != 1 || configs[0].BaseURL != "https://two.invalid" || configs[0].ImageModelWithDefault() != "other" {
+	if configs := r.imageProviderConfigs(ctx); len(configs) != 2 || configs[1].BaseURL != "https://one.invalid" || configs[1].ImageModelWithDefault() != "shared" || configs[0].BaseURL != "https://two.invalid" || configs[0].ImageModelWithDefault() != "other" {
 		t.Fatalf("image assignment not effective: %+v", configs)
 	}
 	if store.set.Profiles[0].Config.Model != "shared" || store.set.Profiles[1].Config.APIKey != "secret-two" {

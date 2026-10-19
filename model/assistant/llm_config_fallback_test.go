@@ -5,6 +5,7 @@ package assistant
 
 import (
 	"context"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -30,9 +31,7 @@ func modelSwitchRuntimeWithFallbacks(t *testing.T, chat ModelRole) (*Runtime, *s
 	return r, saver, event
 }
 
-// 供应商没变就只换主模型。后备路由是在 WebUI 里一条条排出来的，不能被一句
-// 「换个模型」顺手清掉，顺序也不能变。点名当前这家供应商也是同一回事——主人
-// 要的是换模型，没有一句在说把后备清掉。
+// New selections preserve both the previous primary and existing fallbacks.
 func TestChatModelSwitchKeepsFallbackRoutes(t *testing.T) {
 	for name, input := range map[string]map[string]any{
 		"没点名供应商": {"model": "other"},
@@ -49,47 +48,102 @@ func TestChatModelSwitchKeepsFallbackRoutes(t *testing.T) {
 			if saved.ProfileID != "one" || saved.Model != "other" {
 				t.Fatalf("primary route not switched: %+v", saved)
 			}
-			if len(saved.Fallbacks) != 2 || saved.Fallbacks[0].ProfileID != "two" || saved.Fallbacks[1].ProfileID != "one" {
+			if len(saved.Fallbacks) != 3 || saved.Fallbacks[0].ProfileID != "one" || saved.Fallbacks[0].Model != "shared" || saved.Fallbacks[1].ProfileID != "two" || saved.Fallbacks[2].ProfileID != "one" {
 				t.Fatalf("fallback routes lost or reordered: %+v", saved.Fallbacks)
 			}
 			if strings.Contains(reply, "后备路由已被") {
 				t.Fatalf("reply claims a replacement that did not happen: %s", reply)
 			}
 			// 运行态也要拿到同一份，否则下一次调用还按旧的走。
-			if live := r.effectiveConfigForEvent(event).ModelRoles["chat"]; len(live.Fallbacks) != 2 {
+			if live := r.effectiveConfigForEvent(event).ModelRoles["chat"]; len(live.Fallbacks) != 3 {
 				t.Fatalf("runtime lost the fallback routes: %+v", live)
 			}
 		})
 	}
 }
 
-// 换到另一家供应商时，原有的后备路由确实会作废——那是设计好的，但必须在回执里
-// 说出来，不能等主模型挂了才发现没有兜底。
-func TestCrossProviderSwitchReportsDroppedFallbacks(t *testing.T) {
-	fallbacks := []ModelRole{{ProfileID: "two", Model: "shared"}}
-	r, saver, event := modelSwitchRuntimeWithFallbacks(t, ModelRole{ProfileID: "one", Model: "shared", Fallbacks: fallbacks})
+func TestCrossProviderSwitchPreservesModels(t *testing.T) {
+	fallbacks := []ModelRole{{ProfileID: "two", Model: "other", Weight: 3}, {ProfileID: "two", Model: "shared", Standby: true}}
+	r, saver, event := modelSwitchRuntimeWithFallbacks(t, ModelRole{ProfileID: "one", Model: "shared", Fallbacks: fallbacks, RoutingStrategy: "weighted", ReasoningEffort: "high", Weight: 2})
 	reply, err := newDianaLLMConfigTool(r, event).Run(context.Background(), map[string]any{"provider_id": "two", "model": "other"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	saved := saver.configs["b"].ModelRoles["chat"]
-	if saved.ProfileID != "two" || len(saved.Fallbacks) != 0 {
-		t.Fatalf("cross-provider switch should rebind to a single provider: %+v", saved)
+	if saved.ProfileID != "two" || saved.Model != "other" || saved.Weight != 3 || saved.RoutingStrategy != "weighted" || saved.ReasoningEffort != "high" {
+		t.Fatalf("lost selected route or policy: %+v", saved)
 	}
-	if !strings.Contains(reply, "1 条后备路由已被这次绑定替换") {
-		t.Fatalf("dropped fallbacks not reported: %s", reply)
+	if len(saved.Fallbacks) != 2 || saved.Fallbacks[0].ProfileID != "one" || saved.Fallbacks[0].Weight != 2 || saved.Fallbacks[1].ProfileID != "two" || saved.Fallbacks[1].Model != "shared" || !saved.Fallbacks[1].Standby {
+		t.Fatalf("lost routes: %+v", saved.Fallbacks)
+	}
+	if strings.Contains(reply, "已被这次绑定替换") {
+		t.Fatal(reply)
+	}
+	// Selecting the primary again must not append another copy.
+	if _, err = newDianaLLMConfigTool(r, event).Run(context.Background(), map[string]any{"provider_id": "two", "model": "other"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := saver.configs["b"].ModelRoles["chat"]; !reflect.DeepEqual(saved, got) {
+		t.Fatalf("repeat changed order: %+v", got)
 	}
 }
 
-// 分组绑定那一档本来就带故障转移，只换模型时保持不变，也不该报「替换了后备」。
-func TestGroupBoundRoleKeepsGroupAndReportsNothing(t *testing.T) {
-	role, replaced := nextModelRole(ModelRole{Group: "chat", Model: "shared"}, testProfileInGroup("chat"), "other", false)
-	if role.Group != "chat" || role.Model != "other" || replaced {
-		t.Fatalf("group binding not preserved: %+v replaced=%t", role, replaced)
+func TestGroupBoundRolePreservesPreviousRoutes(t *testing.T) {
+	original := ModelRole{Group: "chat", Model: "shared", Fallbacks: []ModelRole{{ProfileID: "two", Model: "other"}}}
+	for _, explicit := range []bool{false, true} {
+		got, replaced := nextModelRole(original, testProfileInGroup("chat"), "other", explicit)
+		if replaced || len(got.Fallbacks) != 2 || got.Fallbacks[0].Group != "chat" || got.Fallbacks[0].Model != "shared" || got.Fallbacks[1].ProfileID != "two" || got.Fallbacks[1].Model != "other" {
+			t.Fatalf("lost group binding: %+v", got)
+		}
+		if explicit && got.ProfileID != "picked" {
+			t.Fatal("explicit provider not selected")
+		}
+		if !explicit && got.Group != "chat" {
+			t.Fatal("implicit group selection lost")
+		}
 	}
-	// 同一档改成点名某家供应商，分组绑定作废，这件事要报出来。
-	role, replaced = nextModelRole(ModelRole{Group: "chat", Model: "shared"}, testProfileInGroup("chat"), "other", true)
-	if role.Group != "" || role.ProfileID != "picked" || !replaced {
-		t.Fatalf("explicit provider should replace the group binding: %+v replaced=%t", role, replaced)
+}
+
+func TestPrioritizeRegistryRoutePreservesAttributes(t *testing.T) {
+	selected := ModelRole{ProviderID: "two", ModelID: "two:other", Model: "other", Weight: 5, Disabled: true, Standby: true}
+	original := ModelRole{ProfileID: "one", Model: "shared", RoutingStrategy: "round_robin", Fallbacks: []ModelRole{selected, {ProfileID: "three", Model: "last"}}}
+	got := prioritizeModelRole(original, ModelRole{ProfileID: "two", Model: "other"})
+	if got.ProviderID != "two" || got.ModelID != "two:other" || got.Weight != 5 || !got.Disabled || !got.Standby || got.RoutingStrategy != "round_robin" || len(got.Fallbacks) != 2 {
+		t.Fatalf("lost route attributes: %+v", got)
+	}
+	if original.Fallbacks[0].ProviderID != "two" || original.ProfileID != "one" {
+		t.Fatal("mutated source")
+	}
+}
+
+func TestGroupPreferenceRetainsBotRoutesAndUpdates(t *testing.T) {
+	base := ModelRole{ProfileID: "one", Model: "shared", Fallbacks: []ModelRole{{ProfileID: "two", Model: "other"}, {ProfileID: "one", Model: "other"}}, RoutingStrategy: "failover"}
+	r, saver, event := modelSwitchRuntimeWithFallbacks(t, base)
+	event.Kind = EventKindGroup
+	event.GroupID = "g"
+	store := &testWritableGroupConfigStore{}
+	r.SetGroupConfigStore(store)
+	if err := r.saveGroupChatModel(event, GroupChatModel{ProfileID: "two", Model: "other"}); err != nil {
+		t.Fatal(err)
+	}
+	got := r.effectiveConfigForEvent(event).ModelRoles["chat"]
+	if got.ProfileID != "two" || len(got.Fallbacks) != 2 || got.Fallbacks[0].ProfileID != "one" || got.Fallbacks[0].Model != "shared" || got.Fallbacks[1].Model != "other" || got.RoutingStrategy != "failover" {
+		t.Fatalf("group lost routes: %+v", got)
+	}
+	bot := saver.configs["b"]
+	bot.ModelRoles["chat"] = ModelRole{ProfileID: "one", Model: "shared", Fallbacks: append(base.Fallbacks, ModelRole{ProfileID: "three", Model: "new"})}
+	r.SetProfiles(ProfileSet{Profiles: []BotConfig{saver.configs["a"], bot}})
+	got = r.effectiveConfigForEvent(event).ModelRoles["chat"]
+	if len(got.Fallbacks) != 3 || got.Fallbacks[2].ProfileID != "three" {
+		t.Fatalf("group did not follow new fallback: %+v", got)
+	}
+	if r.ProfileConfig("b").ModelRoles["chat"].ProfileID != "one" {
+		t.Fatal("changed global order")
+	}
+	if err := r.saveGroupChatModel(event, GroupChatModel{}); err != nil {
+		t.Fatal(err)
+	}
+	if got = r.effectiveConfigForEvent(event).ModelRoles["chat"]; got.ProfileID != "one" || len(got.Fallbacks) != 3 {
+		t.Fatal("reset lost bot routes")
 	}
 }

@@ -26,9 +26,10 @@ func (t *dianaLLMConfigTool) Name() string {
 }
 
 func (t *dianaLLMConfigTool) Description() string {
-	return `切换 Diana 各用途的模型（role 指定，默认对话），scope=group 只改当前群的聊天模型，scope=bot 改当前机器人，不动供应商地址和密钥。` +
+	return `切换 Diana 模型（role 默认对话），不动供应商地址和密钥。` +
 		`仅在主人明确要求改机器人自身配置时调用；讨论或推荐模型、用户说「我用某模型」都不调用。` +
 		`用户说本群、这个群时必须用 scope=group；说整个机器人时用 scope=bot。恢复本群跟随机器人用 operation=reset、scope=group。` +
+		`切换只将目标模型排到首位，保留其他模型与后备；不在列表的目标添加到首位。` +
 		`跨供应商先 list，再用 provider_id 精确选，别猜同名供应商。更新前实测目标模型，失败保留原配置；image 会生成一张不发送的测试图。`
 }
 

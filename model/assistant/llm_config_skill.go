@@ -217,29 +217,16 @@ func (r *Runtime) applyLLMConfigCommand(ctx context.Context, event MessageEvent,
 		if err := r.saveGroupChatModel(event, GroupChatModel{ProfileID: target.ID, Model: model}); err != nil {
 			return llmConfigApplyResult{Reply: "群模型保存失败：" + err.Error()}
 		}
-		result.Reply = fmt.Sprintf("已将当前群的聊天模型切换为 %s（提供商：%s），目标模型测试通过。仅当前机器人在本群生效，使用单模型路由；跟随聊天的用途一起切换。", model, target.Name)
+		result.Reply = fmt.Sprintf("已将当前群的聊天模型切换为 %s（提供商：%s），目标模型测试通过。仅当前机器人在本群生效，目标模型优先，原有模型与后备顺序保留；跟随聊天的用途一起切换。", model, target.Name)
 		return result
 	}
-	replacedRoute, err := r.saveModelRole(botCfg, roles, roleKey, target, model, command.ProviderID != "" || command.ProviderName != "")
+	_, err = r.saveModelRole(botCfg, roles, roleKey, target, model, command.ProviderID != "" || command.ProviderName != "")
 	if err != nil {
 		return llmConfigApplyResult{Reply: "更新失败：机器人配置没能保存（" + err.Error() + "）。"}
 	}
-	result.Reply = fmt.Sprintf("已把%s模型换成 %s（配置：%s），目标模型可用性测试已通过。改的是机器人模型分配里的这一档，没有动提供商配置里的 provider 设置，其余用途各自的分配保持不变。%s%s%s",
-		llmConfigRoleLabel(roleKey), model, target.Name, llmConfigReplacedRouteNote(replacedRoute, roles[roleKey]), llmConfigFollowChatNote(roleKey, roles), notes)
+	result.Reply = fmt.Sprintf("已把%s模型换成 %s（配置：%s），目标模型可用性测试已通过。只调整这一档的模型顺序，原有模型全部保留；目标不在列表时添加到首位。其余用途各自的分配保持不变。%s%s",
+		llmConfigRoleLabel(roleKey), model, target.Name, llmConfigFollowChatNote(roleKey, roles), notes)
 	return result
-}
-
-// llmConfigReplacedRouteNote 说明换供应商顺带作废了原来的路由方案。后备路由是
-// 在 WebUI 里一条条排出来的，被一句「换成 X」清掉却不吭声，等到主模型挂了才
-// 发现没有兜底，那时已经晚了。
-func llmConfigReplacedRouteNote(replaced bool, previous ModelRole) string {
-	if !replaced {
-		return ""
-	}
-	if count := len(previous.Fallbacks); count > 0 {
-		return fmt.Sprintf("这一档原有的 %d 条后备路由已被这次绑定替换，需要的话要在 WebUI 的模型分配里重新排。", count)
-	}
-	return "这一档原来的分组绑定已被这次绑定替换，故障转移不再跟着分组走。"
 }
 
 // llmConfigFollowChatNote 在第一次给对话定下绑定时说明连带影响：视觉理解、意图
@@ -496,29 +483,59 @@ func (r *Runtime) saveModelRole(botCfg BotConfig, roles map[string]ModelRole, ro
 	return replacedRoute, nil
 }
 
-// nextModelRole 算出这一档改完之后的绑定，并说明原有的分组或后备路由有没有被
-// 这次改动替换掉。
+// nextModelRole moves the selected route to the front without removing other routes.
 func nextModelRole(role ModelRole, target llm.Profile, model string, explicitProvider bool) (ModelRole, bool) {
-	switch {
-	// 原来按分组绑定、而新配置仍在那个分组里时保留分组绑定，只换模型：
-	// 分组绑定带故障转移，改成单配置会把这个能力弄丢。
-	case !explicitProvider && role.Group != "" && profileInGroup(target, role.Group):
-		role.Model = model
-		return role, false
-	// 目标正是这一档现在绑的那家供应商，那这次就只是换个主模型，后备路由连同顺序
-	// 原样留着。点没点名这家供应商不影响：主人说「换成 X」和说「换成 A 家的 X」
-	// 要的是同一件事，没有一句是在说「把后备也清掉」。以前这里一律重建成一条光秃
-	// 秃的绑定，WebUI 上排好的后备就此消失，回执还只说换了模型，谁都不会想到去看。
-	case modelRoleProfileID(role) == target.ID:
-		role.Model = model
-		if role.ProviderID != "" {
-			role.ModelID = model
-		}
-		return role, false
+	selected := ModelRole{ProfileID: target.ID, Model: model}
+	if !explicitProvider && role.Group != "" && profileInGroup(target, role.Group) {
+		selected.ProfileID = ""
+		selected.Group = role.Group
 	}
-	// 换到另一家供应商，这一档改成对这家的单绑定，原有的分组或后备路由一并作废
-	// ——它们指向的是上一套路由方案。回执会把这件事说出来，不让它悄悄发生。
-	return ModelRole{ProfileID: target.ID, Model: model, ReasoningEffort: role.ReasoningEffort}, role.Group != "" || len(role.Fallbacks) > 0
+	return prioritizeModelRole(role, selected), false
+}
+
+// prioritizeModelRole keeps role-wide policy and per-route attributes in place.
+// An unlisted target is prepended; an existing target is moved, never duplicated.
+func prioritizeModelRole(role, selected ModelRole) ModelRole {
+	routes := make([]ModelRole, 0, len(role.Fallbacks)+1)
+	if modelRoleConfigured(role) && !role.FollowChat {
+		primary := role
+		primary.Fallbacks = nil
+		routes = append(routes, primary)
+	}
+	routes = append(routes, role.Fallbacks...)
+	rest := make([]ModelRole, 0, len(routes))
+	found := false
+	for _, route := range routes {
+		if !found && sameModelRoute(route, selected) {
+			selected = route
+			found = true
+			continue
+		}
+		rest = append(rest, route)
+	}
+	selected.FollowChat = false
+	selected.Fallbacks = rest
+	selected.Params = role.Params
+	selected.ReasoningEffort = role.ReasoningEffort
+	selected.RoutingStrategy = role.RoutingStrategy
+	selected.RecoveryPolicy = role.RecoveryPolicy
+	return normalizeModelRole(selected)
+}
+
+func sameModelRoute(a, b ModelRole) bool {
+	modelID := func(role ModelRole) string {
+		if role.ProviderID != "" && role.ModelID != "" {
+			return strings.TrimPrefix(role.ModelID, role.ProviderID+":")
+		}
+		return role.Model
+	}
+	if modelID(a) != modelID(b) {
+		return false
+	}
+	if a.Group != "" || b.Group != "" {
+		return a.Group != "" && b.Group != "" && llm.NormalizeProfileGroup(a.Group) == llm.NormalizeProfileGroup(b.Group)
+	}
+	return modelRoleProfileID(a) == modelRoleProfileID(b)
 }
 
 // modelRoleProfileID 报出这条绑定实际指向哪套供应商配置：注册表式绑定写在

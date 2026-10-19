@@ -87,7 +87,9 @@ func TestGroupModelLiveScope(t *testing.T) {
 
 func (r *Runtime) setGroupReplayProvider(cfg llm.ProviderConfig) {
 	r.mu.Lock()
-	r.llmStore = &stubLLMProfileStore{set: llm.ProfileSet{Profiles: []llm.Profile{{ID: "live", Name: "Live replay", Config: cfg}}}}
+	profiles := r.llmStore.Profiles()
+	profiles.Profiles = append(profiles.Profiles, llm.Profile{ID: "live", Name: "Live replay", Config: cfg})
+	r.llmStore = &stubLLMProfileStore{set: profiles}
 	r.llmCfgFactory = func(c llm.ProviderConfig) (LLMProvider, error) { return llm.NewClient(c) }
 	r.mu.Unlock()
 }

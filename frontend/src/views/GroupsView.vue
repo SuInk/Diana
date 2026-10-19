@@ -289,7 +289,7 @@
         <div class="field wide">
           <label for="group-chat-model">本群聊天模型</label>
           <AppSelect id="group-chat-model" :model-value="groupChatModelValue" :options="groupChatModelOptions" searchable search-placeholder="搜索提供商或模型" @update:model-value="setGroupChatModel" />
-          <span class="hint">默认跟随机器人；独立选择使用单个模型，不继承机器人聊天模型的后备列表。仅本群生效，跟随聊天的用途也会随之切换。</span>
+          <span class="hint">默认跟随机器人；选择后仅在本群将目标模型排到首位，保留机器人原有模型和后备顺序。跟随聊天的用途也会随之调整。</span>
         </div>
         <div class="field wide">
           <label for="group-persona-source">本群 SOUL.md</label>

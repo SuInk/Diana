@@ -1186,7 +1186,7 @@ type ReplyRule struct {
 	LLMProfileID string          `json:"llm_profile_id,omitempty"`
 }
 
-// GroupChatModel selects a single chat provider for one group. Empty values inherit the bot.
+// GroupChatModel prioritizes a chat provider for one group without removing bot routes. Empty values inherit the bot.
 type GroupChatModel struct {
 	ProfileID string `json:"profile_id"`
 	Model     string `json:"model"`
