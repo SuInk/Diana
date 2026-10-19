@@ -364,7 +364,8 @@
         "tool": "llm_config",
         "field": "operation",
         "operations": [
-          "update"
+          "update",
+          "reset"
         ],
         "reason": "切换这台机器人用的模型；查看照常"
       },
