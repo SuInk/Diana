@@ -138,7 +138,7 @@ func RunTrial(ctx context.Context, opts Options, c Case, index int) Trial {
 	if maxSteps <= 0 {
 		maxSteps = 8
 	}
-	runner, err := agent.NewRunner(opts.Agent, agent.Config{MaxSteps: maxSteps, CoreTools: c.CoreTools}, agent.NewToolRegistry(env.Tools(c.Tools)...))
+	runner, err := agent.NewRunner(opts.Agent, agent.Config{MaxSteps: maxSteps, CoreTools: c.CoreTools, ResearchDetailReview: true}, agent.NewToolRegistry(env.Tools(c.Tools)...))
 	if err != nil {
 		trial.Error = err.Error()
 		return trial

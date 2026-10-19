@@ -251,6 +251,8 @@ func TestRuntimeAgentSearchesBeforeGeneratingImage(t *testing.T) {
 		`{"action":"tool","tool":"web_search","input":{"query":"官方主题配色"}}`,
 		`{"action":"tool","tool":"image","input":{"operation":"generate","prompt":"根据已核验的官方资料创作平面海报，主色严格使用靛蓝 #4B0082 与金色 #FFD700，简洁几何构图，不添加文字。","caption":"按查到的官方配色画好了。"}}`,
 		`{"action":"final","task_state":"pending","content":"文字说明先发给你，图片完成后会自动补上。"}`,
+		// 联网过的收尾会先过一次细节复核（agent.Config.ResearchDetailReview）。
+		`{"unsupported":[]}`,
 	}}
 	store := &stubLLMProfileStore{set: llm.NewProfileSet(llm.ProviderConfig{
 		Provider:   llm.ProviderOpenAICompatible,
@@ -294,7 +296,7 @@ func TestRuntimeAgentSearchesBeforeGeneratingImage(t *testing.T) {
 		t.Fatalf("search calls = %d", search.calls)
 	}
 	requests := provider.requestsSnapshot()
-	if len(requests) != 4 {
+	if len(requests) != 5 {
 		t.Fatalf("provider requests = %d", len(requests))
 	}
 	if !requestMessagesContain(requests[2].Messages, search.result) {

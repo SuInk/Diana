@@ -82,15 +82,18 @@ func DefaultCommandAllowlist() []string {
 
 type Config struct {
 	// SystemPrompt 为专用子代理替换通用角色提示词；空值保留默认行为。仅由可信调用方设置。
-	SystemPrompt       string
-	WorkDir            string
-	MaxSteps           int
-	MaxToolOutputChars int
-	ReadFileMaxBytes   int
-	ListDirectoryLimit int
-	SkillRoots         []string
-	ManagedSkillRoot   string
-	SkillsListBudget   int
+	SystemPrompt string
+	// ResearchDetailReview 开启联网收尾前的细节复核（见 research_review.go），
+	// 每轮联网回复多一次模型调用；只给群聊主回复开。
+	ResearchDetailReview bool
+	WorkDir              string
+	MaxSteps             int
+	MaxToolOutputChars   int
+	ReadFileMaxBytes     int
+	ListDirectoryLimit   int
+	SkillRoots           []string
+	ManagedSkillRoot     string
+	SkillsListBudget     int
 	// SkillTriggerScanDepth 是关键词扫描回看的用户消息条数。
 	SkillTriggerScanDepth int
 	MCPConfigPath         string

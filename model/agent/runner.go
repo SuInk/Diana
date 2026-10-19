@@ -196,6 +196,8 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 	protocolRepairs := 0
 	// silentContentRepaired 保证「静默却带正文」只打回一次，见 action.Silent 分支。
 	silentContentRepaired := false
+	// detailReviewed 保证联网收尾的细节复核只跑一次，见 reviewUnsupportedDetails。
+	detailReviewed := false
 	lastToolSignature := ""
 	imageTaskQueued := false
 	nativeProtocol := false
@@ -480,6 +482,20 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 				// 模型自己决定这一轮不说话：没有正文，也就没有排版、证据账本和
 				// 空收尾可校验——那几项校验的对象都是「要发出去的那句话」。
 				return finishSilent(action, "silent"), nil
+			}
+			if r.cfg.ResearchDetailReview && !detailReviewed && researchedThisRun(steps) {
+				detailReviewed = true
+				if unsupported := r.reviewUnsupportedDetails(ctx, req.Messages, action.Content, steps); unsupported != "" {
+					protocolRepairs++
+					emitProtocolRepair(ctx, req.Observer, traceID, modelTurns, toolCalls, r.cfg.MaxSteps, "联网收尾含工具结果未覆盖的细节")
+					messages = appendAssistantEcho(messages, lastText)
+					messages = append(messages, llm.Message{Role: llm.RoleUser, Content: unsupportedDetailsRepair(unsupported)})
+					if protocolRepairs >= r.cfg.ProtocolRepairLimit {
+						finishReason = "protocol_repair_exhausted"
+						break
+					}
+					continue
+				}
 			}
 			if reason := finalizeLayoutIssue(action); reason != "" {
 				protocolRepairs++
