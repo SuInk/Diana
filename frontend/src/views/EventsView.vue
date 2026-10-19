@@ -2341,11 +2341,6 @@ onBeforeUnmount(() => {
   background: var(--surface-2);
 }
 
-.event-debug-toggle:hover:not(:disabled) {
-  border-color: var(--accent);
-  background: var(--surface);
-}
-
 .event-debug-toggle:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
