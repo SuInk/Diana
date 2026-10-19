@@ -1209,6 +1209,9 @@ func (r *Runner) systemPrompt() string {
 	if hasAnyTool("list_files", "read_file", "run_command") {
 		rules = append(rules, "- 本地工具只允许访问配置的 Agent 工作目录内文件。")
 	}
+	if hasTool("run_command") && hasAnyTool("write_file", "edit_file") {
+		rules = append(rules, "- 编写或修复代码时，根据用户要求验证实际入口、关键行为和边界情况；语法检查通过不等于行为正确。测试失败后保留原失败用例，查明原因、修改实现并重跑；不能通过削弱断言或替换失败场景来宣称修复。最终改动后重跑相关验证；仍有失败或未验证的要求时，在最终回复中明确说明。")
+	}
 	if hasTool("say") {
 		// 中途说一句（assistant 的 say 工具）：把「说」和「结束」分开。上面那条禁止未执行
 		// 承诺的规则管的是最终答复；say 发的是「正在做」，说完必须接着做。
@@ -1222,7 +1225,7 @@ func (r *Runner) systemPrompt() string {
 	// 工作目录以前没有分区，模型把文件都丢在根下；主人要「放持久目录」时也没有地方
 	// 可去。约定写进规则，清理任务按同一套目录名清。
 	if hasAnyTool("write_file", "save_to_workspace") {
-		rules = append(rules, "- 工作目录分区存放，不要把文件直接写在根下："+WorkspaceTmpDir+"/ 放草稿和中间文件（1 天后清理），"+WorkspaceDownloadsDir+"/ 放下载和从聊天里存下的文件（7 天），"+WorkspaceOutputsDir+"/ 放你产出给用户的东西（30 天），"+WorkspaceKeepDir+"/ 是本机器人的长期保存区（不清理）。主人说存下来、留着、别过期、放持久目录时才放进 "+WorkspaceKeepDir+"/（save_to_workspace 传 keep=true，或 manage_files 挪进去），并写一句 description 说明是什么；其他情况用会自动清理的目录。")
+		rules = append(rules, "- 工作目录内，用户指定的目标路径和已有项目结构优先，直接在目标位置创建或修改文件，不要擅自复制到分区目录。未指定位置的新产物按分区存放："+WorkspaceTmpDir+"/ 放草稿和中间文件（1 天后清理），"+WorkspaceDownloadsDir+"/ 放下载和从聊天里存下的文件（7 天），"+WorkspaceOutputsDir+"/ 放你产出给用户的东西（30 天），"+WorkspaceKeepDir+"/ 是本机器人的长期保存区（不清理）。主人说存下来、留着、别过期、放持久目录时才放进 "+WorkspaceKeepDir+"/（save_to_workspace 传 keep=true，或 manage_files 挪进去），并写一句 description 说明是什么；其他情况用会自动清理的目录。")
 	}
 	rules = append(rules, "- 已经足够回答时必须调用 agent_finalize 结束本轮。")
 	sections := []string{

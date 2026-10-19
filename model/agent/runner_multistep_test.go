@@ -109,3 +109,24 @@ func TestParallelToolCallsDropIsReportedToModel(t *testing.T) {
 		t.Fatalf("tool continuation must close every original call: %+v", results)
 	}
 }
+
+// 编码规则只随已启用的工具变化；聊天/搜索会话不承担编码验证要求。
+func TestCodingRulesFollowAvailableTools(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		tools []Tool
+		want  bool
+	}{
+		{"coding", []Tool{&countingTool{name: "run_command"}, &countingTool{name: "write_file"}}, true},
+		{"edit", []Tool{&countingTool{name: "run_command"}, &countingTool{name: "edit_file"}}, true},
+		{"read_only", []Tool{&countingTool{name: "run_command"}}, false},
+		{"write_only", []Tool{&countingTool{name: "write_file"}}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			runner := &Runner{cfg: Config{}.WithDefaults(), registry: NewToolRegistry(tc.tools...)}
+			if got := strings.Contains(runner.systemPrompt(), "保留原失败用例"); got != tc.want {
+				t.Fatalf("coding validation rule present = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}

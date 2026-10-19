@@ -56,7 +56,7 @@ func (t *WriteFileTool) Description() string {
 
 func (t *WriteFileTool) InputSchema() map[string]any {
 	return toolObjectSchema([]string{"path", "content"}, map[string]any{
-		"path":    toolStringParam("相对路径，放 " + WorkspaceTmpDir + "/、" + WorkspaceOutputsDir + "/ 或 " + WorkspaceKeepDir + "/，别放根下"),
+		"path":    toolStringParam("工作目录内相对路径；用户指定路径或修改项目文件时沿用目标位置；新产物默认放 " + WorkspaceTmpDir + "/、" + WorkspaceOutputsDir + "/ 或 " + WorkspaceKeepDir + "/"),
 		"content": toolStringParam("完整内容"),
 	})
 }
