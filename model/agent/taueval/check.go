@@ -50,6 +50,23 @@ func describeMismatch(path string, want, got any, exact bool) string {
 	return fmt.Sprintf("%s 没有匹配 %s 的记录", path, strings.Join(missing, "、"))
 }
 
+// CheckCalls 核对 Expect.Calls。
+func CheckCalls(expect Expect, calls []Call) []string {
+	var want, got []any
+	for _, c := range expect.Calls {
+		want = append(want, map[string]any{"tool": c.Tool, "input": cloneJSON(c.Input)})
+	}
+	for _, c := range calls {
+		if c.Error == "" {
+			got = append(got, map[string]any{"tool": c.Tool, "input": cloneJSON(c.Input)})
+		}
+	}
+	if matches(want, got, false) {
+		return nil
+	}
+	return []string{describeMismatch("calls", want, got, false)}
+}
+
 // CheckTrajectory 核对工具使用与回复内容。
 func CheckTrajectory(expect Expect, calls []string, replies []string) []string {
 	var failures []string

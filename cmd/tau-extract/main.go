@@ -78,7 +78,8 @@ func extract(dir string, extra map[string]llm.ToolDefinition) (taueval.Case, err
 	}
 	sort.Strings(files)
 	defs := map[string]llm.ToolDefinition{}
-	outputs := map[string]string{}
+	outputs := map[string][]string{}
+	loadedHere := map[string]bool{}
 	for _, file := range files {
 		e, err := read(file)
 		if err != nil {
@@ -106,14 +107,13 @@ func extract(dir string, extra map[string]llm.ToolDefinition) (taueval.Case, err
 			}
 			if json.Unmarshal([]byte(m.ToolOutput), &loaded) == nil {
 				for _, tool := range loaded.Loaded {
+					loadedHere[tool.Name] = true
 					defs[tool.Name] = llm.ToolDefinition{Name: tool.Name, Description: tool.Description, Parameters: tool.InputSchema}
 				}
 			}
 		case m.Phase == "agent_tool_completed" && !runnerTools[m.Tool]:
 			c.Reference = append(c.Reference, taueval.Call{Tool: m.Tool, Input: m.ToolInput, Output: m.ToolOutput, Error: m.Error})
-			if _, ok := outputs[m.Tool]; !ok {
-				outputs[m.Tool] = m.ToolOutput
-			}
+			outputs[m.Tool] = append(outputs[m.Tool], m.ToolOutput)
 			if _, ok := defs[m.Tool]; !ok {
 				defs[m.Tool] = llm.ToolDefinition{Name: m.Tool}
 			}
@@ -121,6 +121,16 @@ func extract(dir string, extra map[string]llm.ToolDefinition) (taueval.Case, err
 	}
 	if c.Messages == nil {
 		return c, fmt.Errorf("%s has no reply model_request", dir)
+	}
+	// 这一轮没加载却直接用上的非常驻工具，说明会话早先已经加载过。
+	core := map[string]bool{}
+	for _, name := range c.CoreTools {
+		core[name] = true
+	}
+	for _, call := range c.Reference {
+		if !core[call.Tool] && !loadedHere[call.Tool] && !contains(c.LoadedTools, call.Tool) {
+			c.LoadedTools = append(c.LoadedTools, call.Tool)
+		}
 	}
 	names := make([]string, 0, len(defs))
 	for name := range defs {
@@ -136,12 +146,12 @@ func extract(dir string, extra map[string]llm.ToolDefinition) (taueval.Case, err
 				fmt.Fprintf(os.Stderr, "warning: %s has no schema; pass -schemas\n", name)
 			}
 		}
-		output, ok := outputs[name]
-		if !ok {
-			output = `{"ok":true}`
+		action := taueval.ActionSpec{Op: "replay", Outputs: outputs[name]}
+		if len(action.Outputs) == 0 {
+			action = taueval.ActionSpec{Op: "fixed", Output: `{"ok":true}`}
 		}
 		c.Tools = append(c.Tools, taueval.ToolSpec{Name: name, Description: def.Description, Parameters: def.Parameters,
-			Actions: map[string]taueval.ActionSpec{"*": {Op: "fixed", Output: output}}})
+			Actions: map[string]taueval.ActionSpec{"*": action}})
 	}
 	return c, nil
 }
@@ -218,4 +228,13 @@ func read(file string) (entry, error) {
 	}
 	err = json.NewDecoder(r).Decode(&e)
 	return e, err
+}
+
+func contains(list []string, item string) bool {
+	for _, v := range list {
+		if v == item {
+			return true
+		}
+	}
+	return false
 }

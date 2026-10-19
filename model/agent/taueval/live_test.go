@@ -16,7 +16,7 @@ import (
 )
 
 // TestLiveTau 跑 DIANA_TAU_CASES 指向的用例（文件或目录）。真实用例含群聊原文，放在仓库外。
-// 被测、用户模拟器与评审默认同一模型；DIANA_TAU_USER_MODEL 可单独指定模拟器模型。
+// 被测、用户模拟器与评审默认同一模型；DIANA_TAU_USER_MODEL、DIANA_TAU_JUDGE_MODEL 可分别另指定。
 func TestLiveTau(t *testing.T) {
 	path := strings.TrimSpace(os.Getenv("DIANA_TAU_CASES"))
 	if os.Getenv("DIANA_LIVE_LLM") != "1" || path == "" {
@@ -33,6 +33,9 @@ func TestLiveTau(t *testing.T) {
 	if userModel := strings.TrimSpace(os.Getenv("DIANA_TAU_USER_MODEL")); userModel != "" {
 		opts.User = liveClient(t, userModel)
 	}
+	if judgeModel := strings.TrimSpace(os.Getenv("DIANA_TAU_JUDGE_MODEL")); judgeModel != "" {
+		opts.Judge = liveClient(t, judgeModel)
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Hour)
 	defer cancel()
 	report := Evaluate(ctx, opts, cases)
@@ -41,6 +44,9 @@ func TestLiveTau(t *testing.T) {
 	}
 	for k, v := range report.PassHatK {
 		t.Logf("pass^%d = %.3f", k+1, v)
+	}
+	for category, curve := range report.Categories {
+		t.Logf("[%s] pass^1 = %.3f pass^%d = %.3f", category, curve[0], len(curve), curve[len(curve)-1])
 	}
 	if out := os.Getenv("DIANA_TAU_REPORT"); out != "" {
 		data, _ := json.MarshalIndent(report, "", "  ")
