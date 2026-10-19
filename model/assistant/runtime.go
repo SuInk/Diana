@@ -3905,6 +3905,10 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	}
 	if reply, handled := r.replyStatusCommand(ctx, event, cleanText); handled {
 		// #diana 是本地状态卡片，不经过话题解析、插件上下文和发送前审核这些要花 token 的环节。
+		// 冷却中的口令也在这里结束，只是不发送空回复。
+		if strings.TrimSpace(reply) == "" {
+			return "", nil
+		}
 		if err := r.send(withoutReplyTriggerGate(ctx), event, reply); err != nil {
 			return "", err
 		}

@@ -10,11 +10,11 @@ import (
 func TestPluginProfileSwitchIsolationAndRestore(t *testing.T) {
 	m := NewDefaultPluginManager()
 	id := statusCommandPluginID
-	if _, err := m.SetEnabledForProfile(id, "qq-a", true); err != nil {
+	if _, err := m.SetEnabledForProfile(id, "qq-a", false); err != nil {
 		t.Fatal(err)
 	}
 	for _, profile := range []string{"qq-a", "qq-b", "tg", ""} {
-		if got := m.EnabledWithOverrides(id, m.ProfileOverrides(profile)); got != (profile == "qq-a") {
+		if got := m.EnabledWithOverrides(id, m.ProfileOverrides(profile)); got != (profile != "qq-a") {
 			t.Fatalf("profile %q enabled = %v", profile, got)
 		}
 	}
@@ -28,15 +28,15 @@ func TestPluginProfileSwitchIsolationAndRestore(t *testing.T) {
 	}
 	restored := NewDefaultPluginManager()
 	restored.Restore(saved)
-	saved[id].ProfileEnabled["qq-a"] = false
-	if !restored.EnabledWithOverrides(id, restored.ProfileOverrides("qq-a")) || restored.Enabled(id) {
+	saved[id].ProfileEnabled["qq-a"] = true
+	if restored.EnabledWithOverrides(id, restored.ProfileOverrides("qq-a")) || !restored.Enabled(id) {
 		t.Fatal("restore lost isolation or retained a mutable input map")
 	}
 	snapshot := restored.Snapshot()
-	if _, err := restored.SetEnabledForProfile(id, "qq-a", false); err != nil {
+	if _, err := restored.SetEnabledForProfile(id, "qq-a", true); err != nil {
 		t.Fatal(err)
 	}
-	if !snapshot[id].ProfileEnabled["qq-a"] {
+	if snapshot[id].ProfileEnabled["qq-a"] {
 		t.Fatal("updating profile mutated a persistence snapshot")
 	}
 	if _, err := restored.SetEnabledForProfile(messageHistoryPluginID, "qq-a", false); !errors.Is(err, ErrInternalPluginDisable) {
@@ -53,7 +53,7 @@ func TestRuntimePluginSwitchUsesEventProfileAndGroupOverride(t *testing.T) {
 		{ID: "qq-b", Platform: PlatformOneBotV11, Enabled: true},
 		{ID: "tg", Platform: PlatformTelegram, Enabled: true},
 	}})
-	if _, err := m.SetEnabledForProfile(statusCommandPluginID, "qq-a", true); err != nil {
+	if _, err := m.SetEnabledForProfile(statusCommandPluginID, "qq-a", false); err != nil {
 		t.Fatal(err)
 	}
 	for _, profile := range []string{"qq-a", "qq-b", "tg", ""} {
@@ -61,7 +61,7 @@ func TestRuntimePluginSwitchUsesEventProfileAndGroupOverride(t *testing.T) {
 			event := MessageEvent{ProfileID: profile, Kind: kind, GroupID: "same-group"}
 			_, _, enabled := r.pluginWithSettingsForEvent(statusCommandPluginID, event)
 			// 多台机器人时，没带机器人 ID 的事件不继承任何一台的插件开关。
-			if enabled != (profile == "qq-a") {
+			if enabled != (profile != "qq-a") {
 				t.Fatalf("profile %q kind %q enabled = %v", profile, kind, enabled)
 			}
 			overrides := r.pluginOverridesForEvent(event)
@@ -75,10 +75,10 @@ func TestRuntimePluginSwitchUsesEventProfileAndGroupOverride(t *testing.T) {
 		}
 	}
 	r.SetGroupConfigStore(&stubGroupConfigStore{configs: map[string]GroupConfig{
-		"same-group": {GroupID: "same-group", PluginOverrides: map[string]bool{statusCommandPluginID: false}},
+		"same-group": {GroupID: "same-group", PluginOverrides: map[string]bool{statusCommandPluginID: true}},
 	}})
 	_, _, enabled := r.pluginWithSettingsForEvent(statusCommandPluginID, MessageEvent{ProfileID: "qq-a", Kind: EventKindGroup, GroupID: "same-group"})
-	if enabled {
+	if !enabled {
 		t.Fatal("group override must take precedence over the profile")
 	}
 }

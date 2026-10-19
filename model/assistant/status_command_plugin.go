@@ -8,10 +8,16 @@ import (
 	"fmt"
 	goruntime "runtime"
 	"strings"
+	"sync"
 	"time"
 )
 
-const statusCommandPluginID = "official.status-command"
+const (
+	statusCommandPluginID        = "official.status-command"
+	statusCommandCooldownSetting = "cooldown_seconds"
+	defaultStatusCommandCooldown = 5 * time.Second
+	maximumStatusCommandCooldown = time.Hour
+)
 
 // statusCommandTrigger 是这个插件唯一认的口令。要求整条消息就是它——群里聊天
 // 提到「#diana 怎么样了」不该被当成查状态，那是给模型回答的。
@@ -23,24 +29,40 @@ const statusCommandTrigger = "#diana"
 // 生成，回答还每次都不一样。想确认机器人还活着的时候，要的是一张格式固定、
 // 立刻就回的卡片。
 //
-// 默认关闭：它会让机器人对一条没有触发词、没有 @ 的消息主动开口，是不是想要这个
-// 得由群主自己定。
-type StatusCommandPlugin struct{}
+// 默认开启，但同一会话有短冷却，避免多人同时探活时刷屏；不需要的机器人仍可在
+// 插件页单独关闭。
+type StatusCommandPlugin struct {
+	mu        sync.Mutex
+	lastReply map[string]time.Time
+	now       func() time.Time
+}
 
-func NewStatusCommandPlugin() *StatusCommandPlugin { return &StatusCommandPlugin{} }
+func NewStatusCommandPlugin() *StatusCommandPlugin {
+	return &StatusCommandPlugin{lastReply: map[string]time.Time{}, now: time.Now}
+}
 
 func (p *StatusCommandPlugin) Manifest() PluginManifest {
 	return PluginManifest{
 		ID:      statusCommandPluginID,
 		Name:    "状态查询",
-		Version: "0.1.0",
+		Version: "0.1.1",
 		Description: "群里或私聊发一条 " + statusCommandTrigger +
 			"（整条消息只有这一个词）就回一张运行状态卡片：版本、平台、已运行时长。" +
-			"不经过模型，回复固定且立刻返回，用来确认机器人还活着。默认关闭。",
-		Official:        true,
-		BuiltIn:         true,
-		DefaultDisabled: true,
-		Permissions:     []string{"message:read", "message:send"},
+			"不经过模型，回复固定且立刻返回，用来确认机器人还活着。默认开启，同一会话默认冷却 5 秒。",
+		Official:    true,
+		BuiltIn:     true,
+		Permissions: []string{"message:read", "message:send"},
+		Settings: []PluginSettingSpec{{
+			Key:         statusCommandCooldownSetting,
+			Label:       "冷却时间",
+			Description: "同一群或私聊两次状态回复之间的最短间隔；设为 0 可关闭冷却。",
+			Type:        PluginSettingTypeNumber,
+			Default:     int(defaultStatusCommandCooldown / time.Second),
+			Min:         settingRange(0),
+			Max:         settingRange(float64(maximumStatusCommandCooldown / time.Second)),
+			Step:        1,
+			Unit:        "秒",
+		}},
 	}
 }
 
@@ -58,10 +80,49 @@ func (p *StatusCommandPlugin) Handle(ctx context.Context, req PluginRequest) (*P
 	if !isStatusCommand(req.Text) {
 		return nil, nil
 	}
+	now := time.Now()
+	if p.now != nil {
+		now = p.now()
+	}
+	cooldown := time.Duration(req.Settings.Int(statusCommandCooldownSetting, int(defaultStatusCommandCooldown/time.Second))) * time.Second
+	if !p.takeCooldown(req.Event, now, cooldown) {
+		// Handled=true 让运行时静默消费冷却中的口令，避免它继续进入普通回复链路。
+		return &PluginResponse{Handled: true}, nil
+	}
 	return &PluginResponse{
 		Handled: true,
-		Reply:   statusCardText(req.BuildInfo, time.Now()),
+		Reply:   statusCardText(req.BuildInfo, now),
 	}, nil
+}
+
+func (p *StatusCommandPlugin) takeCooldown(event MessageEvent, now time.Time, cooldown time.Duration) bool {
+	if cooldown <= 0 {
+		return true
+	}
+	if cooldown > maximumStatusCommandCooldown {
+		cooldown = maximumStatusCommandCooldown
+	}
+	key := strings.Join([]string{
+		strings.TrimSpace(event.Platform),
+		firstNonEmpty(strings.TrimSpace(event.ProfileID), strings.TrimSpace(event.SelfID)),
+		sessionKey(event),
+	}, "\x00")
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.lastReply == nil {
+		p.lastReply = map[string]time.Time{}
+	}
+	if last, ok := p.lastReply[key]; ok && now.Sub(last) < cooldown {
+		return false
+	}
+	p.lastReply[key] = now
+	// 状态查询可能活很久，顺手清掉已经不可能参与任何合法冷却的会话。
+	for scope, last := range p.lastReply {
+		if now.Sub(last) > maximumStatusCommandCooldown {
+			delete(p.lastReply, scope)
+		}
+	}
+	return true
 }
 
 // isStatusCommand 判断整条消息是不是这个口令。
@@ -156,8 +217,8 @@ func (r *Runtime) replyStatusCommand(ctx context.Context, event MessageEvent, te
 		Channel:   r.channel,
 		BuildInfo: r.currentBuildInfo(),
 	}, r.pluginOverridesForEvent(event), r.pluginSettingOverridesForEvent(event))
-	if err != nil || resp == nil || !resp.Handled || strings.TrimSpace(resp.Reply) == "" {
+	if err != nil || resp == nil || !resp.Handled {
 		return "", false
 	}
-	return resp.Reply, true
+	return strings.TrimSpace(resp.Reply), true
 }

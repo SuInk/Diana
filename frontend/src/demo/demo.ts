@@ -258,7 +258,7 @@ let plugins: PluginState[] = [
     manifest: { id: "official.rss-watch", name: "RSS 订阅", version: "0.2.0", description: "按条件监控 RSS 或社交动态，一条订阅可同时盯多个账号或 Feed，判断后发送到指定群聊或私聊。", official: true, built_in: true, permissions: ["网络请求", "消息发送"], settings: [{ key: "default_interval_seconds", label: "默认检查周期", type: "number", default: 300, min: 30, max: 86400, unit: "秒" }, { key: "failure_alert_threshold", label: "连续失败几次才报", description: "订阅连着失败到这个次数才在聊天里说一声，一轮故障只报一次，恢复后再说一声好了。报不报看下面的「发送错误通知」和机器人配置里的「出错时在聊天里提示」，任一关着都不报。", type: "number", default: 5, min: 1, max: 100, step: 1, unit: "次" }, { key: "error_notice", label: "发送错误通知", description: "这个插件失败时是否在聊天里说明。关掉后失败仍然记入事件和日志，只是不再打扰聊天。机器人的「错误提示」关掉时，这里开着也不会发。", type: "bool", default: true }] },
     installed: true, enabled: true
   },
-  { manifest: { id: "official.status-command", name: "状态查询", version: "0.1.0", description: "群里或私聊发一条 #diana（整条消息只有这一个词）就回一张运行状态卡片：版本、平台、已运行时长。不经过模型，回复固定且立刻返回，用来确认机器人还活着。默认关闭。", official: true, built_in: true, default_disabled: true, permissions: ["message:read", "message:send"] }, installed: true, enabled: false }
+  { manifest: { id: "official.status-command", name: "状态查询", version: "0.1.1", description: "群里或私聊发一条 #diana（整条消息只有这一个词）就回一张运行状态卡片：版本、平台、已运行时长。不经过模型，回复固定且立刻返回，用来确认机器人还活着。默认开启，同一会话默认冷却 5 秒。", official: true, built_in: true, permissions: ["message:read", "message:send"], settings: [{ key: "cooldown_seconds", label: "冷却时间", description: "同一群或私聊两次状态回复之间的最短间隔；设为 0 可关闭冷却。", type: "number", default: 5, min: 0, max: 3600, step: 1, unit: "秒" }] }, installed: true, enabled: true }
 ];
 
 for (const plugin of plugins) {

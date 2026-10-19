@@ -130,8 +130,8 @@ func TestFormatStatusUptime(t *testing.T) {
 	}
 }
 
-// 默认关闭：装好但不启用，也不因为「内置」就被 Restore 顺手打开。
-func TestStatusCommandPluginDefaultsToDisabled(t *testing.T) {
+// 默认开启；没有历史记录的新安装和旧版本升级都直接可用。
+func TestStatusCommandPluginDefaultsToEnabled(t *testing.T) {
 	manager := NewDefaultPluginManager()
 	state, ok := pluginStateByID(manager.List(), statusCommandPluginID)
 	if !ok {
@@ -140,36 +140,28 @@ func TestStatusCommandPluginDefaultsToDisabled(t *testing.T) {
 	if !state.Installed {
 		t.Fatal("内置插件应当是装好的")
 	}
-	if state.Enabled {
-		t.Fatal("这个插件默认应当是关闭的")
+	if !state.Enabled || state.Manifest.DefaultDisabled {
+		t.Fatal("这个插件默认应当是开启的")
+	}
+	if got := SettingValues(effectivePluginSettings(state.Manifest.Settings, state.Settings)).Int(statusCommandCooldownSetting, -1); got != 5 {
+		t.Fatalf("默认冷却 = %d 秒，期望 5", got)
 	}
 
-	// 库里没有它的记录时（老版本升上来就是这样），Restore 不能把它打开。
+	// 库里没有它的记录时（老版本升上来就是这样），Restore 使用新的默认值。
 	manager.Restore(map[string]PersistedPluginState{})
-	if state, _ := pluginStateByID(manager.List(), statusCommandPluginID); state.Enabled {
-		t.Fatal("没有存过状态时 Restore 把默认关闭的插件打开了")
+	if state, _ := pluginStateByID(manager.List(), statusCommandPluginID); !state.Enabled {
+		t.Fatal("没有存过状态时 Restore 没有启用状态查询")
 	}
 
-	// 开关按机器人存：某个机器人开过之后要记住。
-	if _, err := manager.SetEnabledForProfile(statusCommandPluginID, "qq", true); err != nil {
-		t.Fatal(err)
-	}
-	manager.Restore(map[string]PersistedPluginState{
-		statusCommandPluginID: {Installed: true, ProfileEnabled: map[string]bool{"qq": true}, ProfileConfigMigrated: true},
-	})
-	if !manager.EnabledWithOverrides(statusCommandPluginID, manager.ProfileOverrides("qq")) {
-		t.Fatal("机器人开过的状态没有被 Restore 保留")
-	}
-	if manager.EnabledWithOverrides(statusCommandPluginID, manager.ProfileOverrides("tg")) {
-		t.Fatal("一个机器人的开关串到了另一个机器人")
-	}
-
-	// 再关回去也要记住。
+	// 开关按机器人存：某个机器人明确关掉之后要记住，其他机器人继续用默认值。
 	manager.Restore(map[string]PersistedPluginState{
 		statusCommandPluginID: {Installed: true, ProfileEnabled: map[string]bool{"qq": false}, ProfileConfigMigrated: true},
 	})
 	if manager.EnabledWithOverrides(statusCommandPluginID, manager.ProfileOverrides("qq")) {
 		t.Fatal("机器人关掉的状态没有被 Restore 保留")
+	}
+	if !manager.EnabledWithOverrides(statusCommandPluginID, manager.ProfileOverrides("tg")) {
+		t.Fatal("一个机器人的开关串到了另一个机器人")
 	}
 }
 
@@ -191,18 +183,57 @@ func TestBuiltInPluginsStillDefaultToEnabled(t *testing.T) {
 func TestStatusCommandNotTriggeredWhileDisabled(t *testing.T) {
 	manager := NewDefaultPluginManager()
 	event := MessageEvent{Kind: EventKindGroup, GroupID: "100200301", UserID: "10086"}
-	if manager.ShouldHandleWithOverrides(event, statusCommandTrigger, nil) {
-		t.Fatal("插件默认关闭，口令不该叫醒机器人")
+	if !manager.ShouldHandleWithOverrides(event, statusCommandTrigger, nil) {
+		t.Fatal("插件默认开启，口令应当叫醒机器人")
 	}
-	if _, err := manager.SetEnabledForProfile(statusCommandPluginID, "qq", true); err != nil {
+	if _, err := manager.SetEnabledForProfile(statusCommandPluginID, "qq", false); err != nil {
 		t.Fatal(err)
 	}
 	overrides := manager.ProfileOverrides("qq")
-	if !manager.ShouldHandleWithOverrides(event, statusCommandTrigger, overrides) {
-		t.Fatal("插件开启后口令应当叫醒机器人")
+	if manager.ShouldHandleWithOverrides(event, statusCommandTrigger, overrides) {
+		t.Fatal("插件关闭后口令不该叫醒机器人")
 	}
 	if manager.ShouldHandleWithOverrides(event, "今天天气怎么样", overrides) {
 		t.Fatal("普通消息不该叫醒机器人")
+	}
+}
+
+func TestStatusCommandCooldownIsPerConversation(t *testing.T) {
+	plugin := NewStatusCommandPlugin()
+	now := time.Unix(1_700_000_000, 0)
+	plugin.now = func() time.Time { return now }
+	request := PluginRequest{
+		Event:    MessageEvent{Platform: PlatformOneBotV11, ProfileID: "qq", Kind: EventKindGroup, GroupID: "100"},
+		Text:     statusCommandTrigger,
+		Settings: SettingValues{statusCommandCooldownSetting: 5},
+	}
+
+	first, err := plugin.Handle(context.Background(), request)
+	if err != nil || first == nil || !first.Handled || first.Reply == "" {
+		t.Fatalf("首次查询没有回复：resp=%#v err=%v", first, err)
+	}
+	second, err := plugin.Handle(context.Background(), request)
+	if err != nil || second == nil || !second.Handled || second.Reply != "" {
+		t.Fatalf("冷却中的查询没有被静默消费：resp=%#v err=%v", second, err)
+	}
+
+	request.Event.GroupID = "200"
+	other, err := plugin.Handle(context.Background(), request)
+	if err != nil || other == nil || other.Reply == "" {
+		t.Fatalf("冷却串到了另一个群：resp=%#v err=%v", other, err)
+	}
+
+	request.Event.GroupID = "100"
+	now = now.Add(5 * time.Second)
+	after, err := plugin.Handle(context.Background(), request)
+	if err != nil || after == nil || after.Reply == "" {
+		t.Fatalf("冷却结束后没有回复：resp=%#v err=%v", after, err)
+	}
+
+	request.Settings[statusCommandCooldownSetting] = 0
+	immediate, err := plugin.Handle(context.Background(), request)
+	if err != nil || immediate == nil || immediate.Reply == "" {
+		t.Fatalf("关闭冷却后没有立即回复：resp=%#v err=%v", immediate, err)
 	}
 }
 
@@ -236,6 +267,8 @@ func TestRuntimeStatusCommandRepliesWithoutLLM(t *testing.T) {
 
 	event := MessageEvent{
 		Kind:        EventKindGroup,
+		Platform:    PlatformOneBotV11,
+		ProfileID:   "qq",
 		SelfID:      "42",
 		GroupID:     "123456",
 		UserID:      "10001",
@@ -260,6 +293,18 @@ func TestRuntimeStatusCommandRepliesWithoutLLM(t *testing.T) {
 	if !strings.Contains(sent[0].Text, "版本: 0.8.68") || !strings.Contains(sent[0].Text, "运行时长: 3天 11小时 51分钟") {
 		t.Fatalf("回复内容 = %q", sent[0].Text)
 	}
+
+	// 同一群立即再查会命中冷却：口令已经被插件处理，但没有空消息，也不转给模型。
+	event.MessageID = "status-2"
+	if reply, handled := botRuntime.replyStatusCommand(context.Background(), event, statusCommandTrigger); !handled || reply != "" {
+		t.Fatalf("冷却中的口令 reply=%q handled=%t", reply, handled)
+	}
+	if got := llmCalls.Load(); got != 0 {
+		t.Fatalf("冷却中的状态口令不该触发模型，llm calls = %d", got)
+	}
+	if sent := channel.sentSnapshot(); len(sent) != 1 {
+		t.Fatalf("冷却中额外发送了消息：%#v", sent)
+	}
 }
 
 // 插件关着的时候，#diana 就是一条普通的、没有触发词的群消息：不发任何东西，
@@ -271,6 +316,9 @@ func TestRuntimeStatusCommandRepliesWithoutLLM(t *testing.T) {
 func TestRuntimeStatusCommandSilentWhileDisabled(t *testing.T) {
 	run := func(text string) (sent int, llmCalls int32) {
 		manager := NewPluginManager(NewStatusCommandPlugin())
+		if _, err := manager.SetEnabledForProfile(statusCommandPluginID, "qq", false); err != nil {
+			t.Fatal(err)
+		}
 		channel := &recordingChannel{}
 		var calls atomic.Int32
 		botRuntime := NewRuntime(BotConfig{ID: "qq", GroupTriggers: []string{"Diana"}, BotAccount: "42"}, channel, manager, nil, nil, nil, func() (LLMProvider, error) {
