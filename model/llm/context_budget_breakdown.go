@@ -43,9 +43,10 @@ type ContextBudgetBreakdown struct {
 	Categories      []ContextBudgetCategoryUsage `json:"categories"`
 }
 
-// PlanContextBudget runs the same selection the provider applies before sending,
-// then reports what each category requested, kept and lost. It mutates nothing,
-// so callers can log the breakdown next to the request they are about to make.
+// PlanContextBudget runs the same selection the provider applies before local
+// validation, then reports what each category requested, kept and lost. Required
+// content can remain over budget; the provider rejects that projection instead
+// of sending a truncated task. This function mutates nothing.
 func PlanContextBudget(messages []Message, contextWindow, outputReserve int64) ContextBudgetBreakdown {
 	if contextWindow <= 0 {
 		contextWindow = DefaultContextWindowTokens
@@ -116,9 +117,9 @@ func PlanContextBudget(messages []Message, contextWindow, outputReserve int64) C
 	return breakdown
 }
 
-// FitMessagesToContextBudget returns the exact prompt messages that survive the
-// same budget pass used by providers. It is intended for local diagnostics that
-// must distinguish context merely considered from context actually sent.
+// FitMessagesToContextBudget returns the projection from the provider's budget
+// pass. Impossible required content remains intact and over budget for local
+// validation to reject; such a projection is not sent to the provider.
 func FitMessagesToContextBudget(messages []Message, contextWindow, outputReserve int64) []Message {
 	if contextWindow <= 0 {
 		contextWindow = DefaultContextWindowTokens
