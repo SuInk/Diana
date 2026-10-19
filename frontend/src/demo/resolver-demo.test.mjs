@@ -13,10 +13,10 @@ async function checks(saved = {}, payload = {}, selected = []) {
 test("resolver demo exposes the complete real settings schema for its settings deep link", () => {
   assert.equal(resolverDemoManifest.id, "official.nonebot-plugin-resolver-go");
   const settings = new Map(resolverDemoManifest.settings.map(spec => [spec.key, spec]));
-  assert.equal(settings.size, 24);
+  assert.equal(settings.size, 25);
   assert.equal(settings.size, resolverDemoManifest.settings.length);
   assert.deepEqual([...settings.keys()], [
-    "ask_agent", "follow_up_comment", "download_media", "merged_forward", "max_video_mb",
+    "ask_agent", "translate", "follow_up_comment", "download_media", "merged_forward", "max_video_mb",
     "max_video_duration_seconds", "max_images", "platform_level_rules", "max_video_height",
     "fetch_title", "max_links", "timeout_seconds", "browser_render", "browser_cdp_url",
     "enabled_platforms", "summary_max_runes", "cache_ttl_minutes", "user_agent", ...keys,
@@ -25,6 +25,7 @@ test("resolver demo exposes the complete real settings schema for its settings d
   assert.deepEqual(settings.get("enabled_platforms").default, ["bilibili", "youtube", "x", "xiaohongshu", "zhihu", "weibo", "douyin", "heybox", "github"]);
   assert.deepEqual(settings.get("enabled_platforms").options, settings.get("platform_level_rules").options);
   assert.deepEqual(resolverDemoManifest.settings.filter(spec => spec.secret).map(spec => spec.key), keys.slice(0, 3));
+  assert.equal(settings.get("translate").default, false);
   assert.equal(settings.get("max_video_mb").default, 200);
   assert.equal(settings.get("max_video_duration_seconds").default, 900);
   assert.equal(settings.get("timeout_seconds").max, 120);
