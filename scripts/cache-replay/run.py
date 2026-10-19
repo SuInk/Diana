@@ -171,7 +171,7 @@ def main():
         cfg=api.call('/api/assistant/config/defaults?platform=onebot-v11')
         cfg.update(name='本地回放 · DS '+out.name,enabled=True,onebot_transport='forward_ws',
             onebot_ws_endpoint='ws://127.0.0.1:19090/onebot?run='+urllib.parse.quote(out.name),onebot_reverse_ws_endpoint='',
-            bot_account='710000099',owner_id=str(bundle['actors']['owner']),group_triggers=['Diana'],
+            bot_account='71099',owner_id=str(bundle['actors']['owner']),group_triggers=['Diana'],
             response_mode='quiet',agent_mode=args.agent_mode,agent_max_steps=8,debug_mode_enabled=True,
             qq_typing_enabled=False,typing_delay_enabled=False,send_chunk_interval_ms=1,
             llm_streaming_enabled=True,notebook_shared_scope_enabled=True,recent_history_token_budget=16000,

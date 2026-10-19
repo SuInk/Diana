@@ -2,14 +2,14 @@
   "schema_version": 1,
   "description": "合成的中文多人群聊；参与者、账号、群号和业务内容均为虚构。实际模型输出由 Runtime 写回历史，不使用预制机器人答案。 增加真实引用旧条件、后续纠正、点名技能读取与篇幅要求；context-checker 为隔离测试工作区技能。",
   "actors": {
-    "owner": 710000009,
-    "lin": 710000001,
-    "coco": 710000002,
-    "ze": 710000003
+    "owner": 71009,
+    "lin": 71001,
+    "coco": 71002,
+    "ze": 71003
   },
   "groups": {
-    "dev": 720000001,
-    "life": 720000002
+    "dev": 72001,
+    "life": 72002
   },
   "cases": [
     {
@@ -270,7 +270,7 @@
         {
           "actor": "owner",
           "group": "dev",
-          "text": "Diana，最后用 identity_check 查 710000001 的机器人主人身份和群身份，别凭昵称和刚才谁下指令来猜。",
+          "text": "Diana，最后用 identity_check 查 71001 的机器人主人身份和群身份，别凭昵称和刚才谁下指令来猜。",
           "reply": true,
           "expect_tools": [
             "identity_check"

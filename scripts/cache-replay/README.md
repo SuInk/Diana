@@ -70,9 +70,19 @@ python3 scripts/cache-replay/analyze.py .tmp-dev/cache-conversations-YYYYMMDD-HH
 
 ```sh
 go run ./scripts/cache-replay/context-size .tmp-dev/cache-conversations-YYYYMMDD-HHMMSS/joined.json
+# 可选：输出每个 ordinal 的边界下标与估算，不输出消息正文
+go run ./scripts/cache-replay/context-size --details .tmp-dev/cache-conversations-YYYYMMDD-HHMMSS/joined.json
 ```
 
-该工具只选回复首步，按本集合的消息标记定位“最近历史之后、当前用户消息之前”的补充，包含自动记忆、规则尾部和 Skill 目录，排除上一条回复的持久工具记录。固定 instructions、原生工具定义、历史正文、当前用户原文不计入尾部；instructions 的估算另报 `head_median`。使用 Diana 自身估算器，没有对实际调用施加上限，不能当作供应商 usage 或通用多模态测量。遇到不支持的布局会报错，不能静默把缺失边界算作 0。
+该工具只选回复首步，以当前消息前最后一个 assistant 或 `[历史 ` 消息作为历史锚点，并报告以下不同范围，各自有 `min` / `median` / `max`：
+
+- `tail_*` 保留旧口径：锚点后、当前消息块前的自动补充，包含记忆、规则和 Skill 目录，排除 `【运行时记录`。它排除的是**整个当前消息块**，包括运行时添加的发言者、时间、引用和附加说明，不能称为只排除了用户原文。
+- `post_history_suffix_*` 是同一锚点后直到请求末尾的完整文本上界，包含持久运行时记录、整个当前消息块和其后追加的内容。
+- `current_block_*` / `runtime_record_*` / `after_current_*` 分别显示完整当前块、旧 tail 排除的持久记录和当前块之后的文本。`--details` 按输入顺序输出逐样本范围，可核对每轮 `suffix = tail + runtime_record + current_block + after_current`；聚合中位数或最大值不能按此相加。
+
+固定 instructions 另报 `head_median`；原生工具定义和历史正文不在以上 suffix 范围。估算只对文本逐消息调用 Diana `EstimateTextTokens`，不计 role/message framing、原生 schema 和多模态开销，不能当作供应商 usage、Gemini tokenizer 或 `countTokens` 的结果。历史锚点是本集合的布局约定，wire 中没有本地 `CacheBreakpoint` 元数据；完整 suffix 不是同群相邻请求的真实首分叉后缀，稳定的尾部文字也会计入。没有历史时锚点为 -1。
+
+因此不能用 `tail_max` 或该工具的完整 suffix 直接证明 [Issue 1140 的 Gemini 隐式缓存观察](https://github.com/SuInk/Diana/issues/1140) 已解决，也不能把约 1.5k/2k 当作通用合格线。该工具不调用模型、不设置生产限额；遇到缺失当前消息边界、非文本内容或不支持的 Responses item 会报错。
 
 `manifest.json` 的 `complete` 只表示所选场景的全部输入已处理完毕，成功、失败、取消及工具缺项仍须分别查看。后台计数按本次 profile 的 session/scope 前缀查询，笔记使用该 profile 的共享笔记范围；不能拿整个数据库的前后差值当作该测试的状态。私有输出含合成对话全文与模型请求，默认放在忽略目录，不把 SQLite 数据库、管理员凭据或 API Key 提交到仓库。
 

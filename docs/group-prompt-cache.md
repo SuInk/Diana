@@ -72,6 +72,12 @@ API tools 数组保持 `agent_finalize`、`tools_load`、`tools_execute` 和核�
 
 ## 观测与边界
 
+探针是适配器调用前的本地结构诊断：非 system 消息最多比较前 200 条，规范化文本不含所有 continuation 元数据，system → tools → messages 也是本地比较约定，并非各供应商的内部顺序。`Clean` 只表示已观察范围未见前缀变化；`Expected` 还允许历史断点后的变化，因此没有 `prompt_cache_divergence` 日志不能证明实际缓存正常。
+
+[Gemini 隐式缓存后缀实验（Issue #1140）](https://github.com/SuInk/Diana/issues/1140)观察到：较长变化后缀可能让缓存退回静态头部附近，严格前缀也未必按最长公共前缀命中。正文提出的“请求总长减约 1.7k～2k”是有限样本下的机制假说，不能当成固定门槛。[Google 官方缓存文档](https://ai.google.dev/gemini-api/docs/generate-content/caching)只给出提高命中机会的组织建议，不保证隐式缓存节省；[UsageMetadata](https://ai.google.dev/api/generate-content#UsageMetadata)中的缓存 token 数也不是公开的连续前缀结束位置。
+
+分析这类后缀需要包含当前输入的完整包装、引用、媒体以及当前输入后的材料。回放工具另外提供历史锚点之后的完整文本估算，具体边界见[回放说明](../scripts/cache-replay/README.md)；它不等于相邻请求的真实首分叉，也不是 Gemini 分词。Gemini 实验应对最终适配后的 system、tools、contents 调用官方 `countTokens`，每组都分别记录 A1/A2/B1/B2、模型版本、间隔和原始 usage，缺失字段保留未知。现有 Gemini 适配器不发送显式 `cachedContent`，本地 `CacheBreakpoint` 对它没有命中保证；Anthropic 仍会按该标记发送 `cache_control`，不能全局删掉断点。
+
 `prompt_cache_divergence` 按平台、profile、SelfID、上下文命名空间、会话、用途和工具指纹分别保存基线；同群换发言者仍可复用。同编号的其他机器人或平台不再被拿来互相比较。它只比较本地请求的规范化前缀，忽略断点后预期变化，不能替代供应商 usage：最终适配器预算裁剪、供应商协议合并、模型/工具定义或权限变化仍可能让 wire 前缀失效。小窗口先裁剪历史是预算行为，不是缓存故障；固定开销超窗仍需明确报错。
 
 缓存命中率应按完整样本组计算 `Σ cached_input_tokens / Σ input_tokens`，不能平均各轮百分比，也不能只挑有命中的轮次。当前 `llm.Usage` 的整数无法区分供应商没有返回缓存字段与显式返回零；未确认原始字段存在的零值只能记为 `unknown_or_zero`，不能据此宣布零命中或总体收益。正缓存值能证明发生了复用，但不自动证明同组其他零值样本统计完整。

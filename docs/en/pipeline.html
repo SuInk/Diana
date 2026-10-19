@@ -218,7 +218,7 @@
 
       <section class="section searchable" id="browser">
         <div class="section-heading"><p class="eyebrow">04 Browsers</p><h2>Which browser this turn uses</h2></div>
-        <p>The disposable headless renderer <code>browser_render</code> is registered for everyone, always. An interactive browser with login state is owner-only, and only one set is registered per turn, so the model never gets two and guesses.</p>
+        <p>The built-in disposable renderer <code>browser_render</code> is available to everyone and ignores the former web-render plugin switch. It uses hidden headed Chrome by default, falling back to headless when the display is unavailable or headed startup fails. An interactive browser with login state is owner-only, and only one set is registered per turn, so the model never gets two and guesses.</p>
         <ol class="flow">
           <li class="q"><div class="flow-node"><strong>Is the sender the owner?</strong></div><div class="flow-exits"><span class="flow-exit"><b>No</b>only <code>browser_render</code></span></div></li>
           <li><div class="flow-node"><strong>Pick a source by priority</strong><p><code>browsersource.Pick</code>: built-in first, extension second by default; the first usable one wins.</p></div></li>
@@ -241,19 +241,19 @@
       </section>
 
       <section class="section searchable" id="browser-render">
-        <div class="section-heading"><p class="eyebrow">04 Browsers</p><h2>Disposable headless rendering</h2></div>
+        <div class="section-heading"><p class="eyebrow">04 Browsers</p><h2>Built-in disposable webpage rendering</h2></div>
         <ol class="flow">
-          <li><div class="flow-node"><strong>browser_render or the web-render plugin</strong><p>The plugin renders at most 2 links per message and injects the text as an untrusted block.</p></div></li>
+          <li><div class="flow-node"><strong>browser_render or built-in automatic reading</strong><p>Automatic reading renders at most 2 links per message and injects the text as an untrusted block. It is no longer controlled by a plugin switch.</p></div></li>
           <li class="q"><div class="flow-node"><strong>Public address check</strong><p>http/https only; private, loopback, link-local, localhost and <code>.local</code> addresses are refused.</p></div><div class="flow-exits"><span class="flow-exit"><b>Fails</b>refused</span><span class="flow-exit go"><b>GitHub /releases link</b>the official API first</span></div></li>
           <li class="q"><div class="flow-node"><strong>Take a slot</strong><p>3 at once by default, queueing at most 20 seconds; queue time does not count against the timeout.</p></div><div class="flow-exits"><span class="flow-exit"><b>No slot</b>too many disposable browsers running</span></div></li>
-          <li><div class="flow-node"><strong>Start Chrome</strong><p>A temporary 0700 profile, HOME / XDG redirected into it, local host names blocked in resolution.</p></div></li>
+          <li><div class="flow-node"><strong>Start Chrome</strong><p>Hidden headed by default, using an existing display or Xvfb started on demand on Linux. It falls back to headless when the display is unavailable or headed startup fails; a missing browser still returns an error. A temporary 0700 profile, HOME / XDG redirected into it, local host names blocked in resolution.</p></div></li>
           <li><div class="flow-node"><strong>Navigate</strong><p>Every main-document request is re-validated; a download aborts the render.</p></div></li>
           <li class="q"><div class="flow-node"><strong>Wait until the page settles</strong><p>DOM, network and timers quiet; 25 seconds by default, 60 at most.</p></div><div class="flow-exits"><span class="flow-exit go"><b>Timeout</b>use the last non-empty snapshot; error only if there is nothing</span></div></li>
           <li class="end"><div class="flow-node"><strong>Return URL, title, text</strong><p>The process ends and the temporary directory is deleted.</p></div></li>
         </ol>
         <ul class="check-list">
           <li>Only main-document requests are intercepted and re-checked; sub-resources such as XHR and images are not validated one by one.</li>
-          <li>HTML to image: simple pages use Chrome <code>--screenshot</code> (8 MiB output cap, takes a slot); scripted or animated pages use <code>html_capture</code> on a fake <code>diana-render.invalid</code> origin where every request is answered locally or blocked, with a strict CSP and a virtual clock, at most 600 frames and 4096 px — it does not take a slot today.</li>
+          <li>HTML to image: simple pages use CDP screenshots (8 MiB output cap, takes a slot); scripted or animated pages use <code>html_capture</code> on a fake <code>diana-render.invalid</code> origin where every request is answered locally or blocked, with a strict CSP and a virtual clock, at most 600 frames and 4096 px — it does not take a slot today. Both paths use hidden headed Chrome by default and fall back to headless if the display or headed startup is unavailable.</li>
           <li>Finding Chrome: configured path → <code>DIANA_HEADLESS_BROWSER_EXECUTABLE</code> → <code>DIANA_AGENT_BROWSER_EXECUTABLE</code> → common install locations (including a downloaded Chrome for Testing) → <code>PATH</code>. Installation tries the system package manager first; on glibc Linux it falls back to downloading Chrome for Testing into <code>DIANA_BROWSER_DIR</code>.</li>
         </ul>
       </section>

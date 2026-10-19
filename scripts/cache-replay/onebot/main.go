@@ -38,15 +38,15 @@ type simulator struct {
 }
 
 var people = []object{
-	{"user_id": 710000009, "nickname": "阿澄", "card": "阿澄", "role": "member", "level": "20"},
-	{"user_id": 710000001, "nickname": "小林", "card": "小林", "role": "owner", "level": "15"},
-	{"user_id": 710000002, "nickname": "可可", "card": "可可", "role": "admin", "level": "18"},
-	{"user_id": 710000003, "nickname": "阿泽", "card": "阿泽", "role": "member", "level": "12"},
-	{"user_id": 710000099, "nickname": "Diana", "card": "Diana", "role": "member", "level": "10"},
+	{"user_id": 71009, "nickname": "阿澄", "card": "阿澄", "role": "member", "level": "20"},
+	{"user_id": 71001, "nickname": "小林", "card": "小林", "role": "owner", "level": "15"},
+	{"user_id": 71002, "nickname": "可可", "card": "可可", "role": "admin", "level": "18"},
+	{"user_id": 71003, "nickname": "阿泽", "card": "阿泽", "role": "member", "level": "12"},
+	{"user_id": 71099, "nickname": "Diana", "card": "Diana", "role": "member", "level": "10"},
 }
 
 // WebSocket action parameters are decoded into any, whose JSON numbers become
-// float64. fmt.Sprint uses scientific notation for QQ-sized IDs, so compare the
+// float64. fmt.Sprint uses scientific notation for large message IDs, so compare the
 // decimal representation used by typed inbound events and string parameters.
 func identifier(value any) string {
 	if number, ok := value.(float64); ok {
@@ -81,7 +81,7 @@ func (s *simulator) websocket(w http.ResponseWriter, r *http.Request) {
 		_ = s.conn.Close()
 	}
 	s.conn = c
-	_ = c.WriteJSON(object{"time": time.Now().Unix(), "self_id": 710000099, "post_type": "meta_event", "meta_event_type": "lifecycle", "sub_type": "connect"})
+	_ = c.WriteJSON(object{"time": time.Now().Unix(), "self_id": 71099, "post_type": "meta_event", "meta_event_type": "lifecycle", "sub_type": "connect"})
 	s.mu.Unlock()
 	defer func() {
 		s.mu.Lock()
@@ -118,11 +118,11 @@ func (s *simulator) action(action string, p object) (any, bool) {
 	case "get_status":
 		return object{"online": true, "good": true}, true
 	case "get_login_info":
-		return object{"user_id": 710000099, "nickname": "Diana"}, true
+		return object{"user_id": 71099, "nickname": "Diana"}, true
 	case "get_version_info":
 		return object{"app_name": "local-cache-replay", "app_version": "1", "protocol_version": "v11"}, true
 	case "get_group_list":
-		return []object{{"group_id": 720000001, "group_name": "回放 · 开发协作"}, {"group_id": 720000002, "group_name": "回放 · 生活分享"}}, true
+		return []object{{"group_id": 72001, "group_name": "回放 · 开发协作"}, {"group_id": 72002, "group_name": "回放 · 生活分享"}}, true
 	case "get_group_info":
 		return object{"group_id": p["group_id"], "group_name": groupName(p["group_id"]), "member_count": len(people), "max_member_count": 200}, true
 	case "get_group_member_info", "get_stranger_info":
@@ -153,7 +153,7 @@ func (s *simulator) action(action string, p object) (any, bool) {
 		return nil, false
 	case "send_group_msg", "send_private_msg", "send_msg", "send_group_forward_msg", "send_private_forward_msg":
 		s.next++
-		record := object{"time": time.Now().Unix(), "self_id": 710000099, "user_id": 710000099, "message_id": s.next, "group_id": p["group_id"], "message": p["message"], "sender": member(710000099)}
+		record := object{"time": time.Now().Unix(), "self_id": 71099, "user_id": 71099, "message_id": s.next, "group_id": p["group_id"], "message": p["message"], "sender": member(71099)}
 		if p["nodes"] != nil {
 			record["nodes"] = p["nodes"]
 		}
@@ -169,7 +169,7 @@ func (s *simulator) action(action string, p object) (any, bool) {
 }
 
 func groupName(id any) string {
-	if identifier(id) == "720000002" {
+	if identifier(id) == "72002" {
 		return "回放 · 生活分享"
 	}
 	return "回放 · 开发协作"
@@ -191,7 +191,7 @@ func (s *simulator) emit(w http.ResponseWriter, r *http.Request) {
 		jsonResponse(w, 400, object{"error": "invalid event"})
 		return
 	}
-	if (input.GroupID != 720000001 && input.GroupID != 720000002) || input.Text == "" {
+	if (input.GroupID != 72001 && input.GroupID != 72002) || input.Text == "" {
 		jsonResponse(w, 400, object{"error": "fixture group and text required"})
 		return
 	}
@@ -207,10 +207,10 @@ func (s *simulator) emit(w http.ResponseWriter, r *http.Request) {
 		segments = append(segments, object{"type": "reply", "data": object{"id": fmt.Sprint(input.ReplyTo)}})
 	}
 	if input.Mention {
-		segments = append(segments, object{"type": "at", "data": object{"qq": "710000099"}})
+		segments = append(segments, object{"type": "at", "data": object{"qq": "71099"}})
 	}
 	segments = append(segments, object{"type": "text", "data": object{"text": input.Text}})
-	event := object{"time": time.Now().Unix(), "self_id": 710000099, "post_type": "message", "message_type": "group", "sub_type": "normal", "message_id": s.next, "message_seq": s.next, "group_id": input.GroupID, "user_id": input.UserID, "message": segments, "raw_message": input.Text, "sender": member(input.UserID)}
+	event := object{"time": time.Now().Unix(), "self_id": 71099, "post_type": "message", "message_type": "group", "sub_type": "normal", "message_id": s.next, "message_seq": s.next, "group_id": input.GroupID, "user_id": input.UserID, "message": segments, "raw_message": input.Text, "sender": member(input.UserID)}
 	if err := s.conn.WriteJSON(event); err != nil {
 		jsonResponse(w, 502, object{"error": "WebSocket write failed"})
 		return

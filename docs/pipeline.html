@@ -214,7 +214,7 @@
 
       <section class="section searchable" id="browser">
         <div class="section-heading"><p class="eyebrow">04 浏览器机制</p><h2>这一轮用哪个浏览器</h2></div>
-        <p>一次性无头渲染 <code>browser_render</code> 所有人可用、始终注册；带登录态的交互式浏览器只有主人能驱动，每轮只注册一套，模型不会同时拿到两套再自己去猜。</p>
+        <p>内置一次性网页渲染 <code>browser_render</code> 所有人可用，不受旧网页渲染插件开关影响，默认有头隐藏运行；显示环境不可用或有头启动失败时回退无头。带登录态的交互式浏览器只有主人能驱动，每轮只注册一套，模型不会同时拿到两套再自己去猜。</p>
         <ol class="flow">
           <li class="q"><div class="flow-node"><strong>对方是主人？</strong></div><div class="flow-exits"><span class="flow-exit"><b>否</b>只有 <code>browser_render</code></span></div></li>
           <li><div class="flow-node"><strong>按优先级选来源</strong><p><code>browsersource.Pick</code>，默认内置在前、扩展在后，取第一个用得上的。</p></div></li>
@@ -237,19 +237,19 @@
       </section>
 
       <section class="section searchable" id="browser-render">
-        <div class="section-heading"><p class="eyebrow">04 浏览器机制</p><h2>一次性无头渲染</h2></div>
+        <div class="section-heading"><p class="eyebrow">04 浏览器机制</p><h2>内置一次性网页渲染</h2></div>
         <ol class="flow">
-          <li><div class="flow-node"><strong>browser_render 或网页渲染插件</strong><p>插件每条消息最多渲染 2 个链接，正文以「不可信内容」块注入上下文。</p></div></li>
+          <li><div class="flow-node"><strong>browser_render 或内置自动读取</strong><p>自动读取每条消息最多渲染 2 个链接，正文以「不可信内容」块注入上下文，不再通过插件开关控制。</p></div></li>
           <li class="q"><div class="flow-node"><strong>公网地址校验</strong><p>只允许 http/https，拒绝内网、回环、链路本地、localhost、<code>.local</code> 等地址。</p></div><div class="flow-exits"><span class="flow-exit"><b>不通过</b>拒绝</span><span class="flow-exit go"><b>GitHub /releases 链接</b>先走官方 API</span></div></li>
           <li class="q"><div class="flow-node"><strong>领名额</strong><p>默认同时 3 个，最多排队 20 秒，排队时间不计入超时。</p></div><div class="flow-exits"><span class="flow-exit"><b>排不上</b>同时运行的一次性浏览器已达上限</span></div></li>
-          <li><div class="flow-node"><strong>起 Chrome</strong><p>临时 profile（0700），HOME / XDG 指到临时目录，屏蔽本机域名解析。</p></div></li>
+          <li><div class="flow-node"><strong>起 Chrome</strong><p>默认有头隐藏运行，使用现有屏幕或 Linux 按需启动的 Xvfb；显示环境不可用或有头启动失败时回退无头，找不到浏览器仍明确报错。临时 profile（0700），HOME / XDG 指到临时目录，屏蔽本机域名解析。</p></div></li>
           <li><div class="flow-node"><strong>导航</strong><p>每个主文档请求都重新校验地址；触发下载就中止。</p></div></li>
           <li class="q"><div class="flow-node"><strong>等页面稳定</strong><p>DOM、网络、定时器都安静下来；默认 25 秒，最多 60 秒。</p></div><div class="flow-exits"><span class="flow-exit go"><b>超时</b>取最后一次非空快照，一点内容都没有才报错</span></div></li>
           <li class="end"><div class="flow-node"><strong>返回网址、标题、正文</strong><p>结束进程，删掉临时目录。</p></div></li>
         </ol>
         <ul class="check-list">
           <li>只有主文档请求被拦截重验，页面里的 XHR、图片等子资源不逐个校验地址。</li>
-          <li>HTML 转图片：简单页面走 Chrome <code>--screenshot</code>（产物上限 8 MiB，占名额）；带脚本或动画的走 <code>html_capture</code>，页面放在假域名 <code>diana-render.invalid</code> 下，请求要么本地应答要么被拦，另有严格 CSP 和虚拟时钟，最多 600 帧、4096 像素，目前不占名额。</li>
+          <li>HTML 转图片：简单页面通过 CDP 截图（产物上限 8 MiB，占名额）；带脚本或动画的走 <code>html_capture</code>，页面放在假域名 <code>diana-render.invalid</code> 下，请求要么本地应答要么被拦，另有严格 CSP 和虚拟时钟，最多 600 帧、4096 像素，目前不占名额。两条路径同样默认有头隐藏，显示环境或有头启动不可用时回退无头。</li>
           <li>找浏览器：配置路径 → <code>DIANA_HEADLESS_BROWSER_EXECUTABLE</code> → <code>DIANA_AGENT_BROWSER_EXECUTABLE</code> → 常见安装位置（含下载来的 Chrome for Testing）→ <code>PATH</code>。安装先用系统包管理器，glibc Linux 上装不了时下载 Chrome for Testing 到 <code>DIANA_BROWSER_DIR</code>。</li>
         </ul>
       </section>

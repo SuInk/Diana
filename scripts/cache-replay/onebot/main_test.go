@@ -11,10 +11,10 @@ import (
 func TestNumericActionIdentifiers(t *testing.T) {
 	// Match the map decoding performed by the actual WebSocket action handler.
 	var params object
-	if err := json.Unmarshal([]byte(`{"user_id":710000001,"group_id":720000002,"message_id":1792317629700}`), &params); err != nil {
+	if err := json.Unmarshal([]byte(`{"user_id":71001,"group_id":72002,"message_id":1792317629700}`), &params); err != nil {
 		t.Fatal(err)
 	}
-	s := &simulator{history: []object{{"group_id": int64(720000002), "message_id": int64(1792317629700)}}}
+	s := &simulator{history: []object{{"group_id": int64(72002), "message_id": int64(1792317629700)}}}
 	person, ok := s.action("get_group_member_info", params)
 	if !ok || person.(object)["role"] != "owner" || person.(object)["nickname"] != "小林" {
 		t.Fatalf("numeric user ID lost its fixture identity: %v", person)
