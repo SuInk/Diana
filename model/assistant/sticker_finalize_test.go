@@ -312,8 +312,9 @@ func TestReplyFinalizeStickerOrderFollowsModelChoice(t *testing.T) {
 			if _, err := rt.replyTo(context.Background(), event, event.RawMessage); err != nil {
 				t.Fatal(err)
 			}
-			if !provider.sawOrder {
-				t.Fatal("agent_finalize did not offer sticker_order as a before/after enum")
+			// 固定顺序不给模型 sticker_order，由发送端直接执行。
+			if provider.sawOrder != (configOrder == StickerReplyOrderAuto) {
+				t.Fatalf("config=%q sawOrder=%v", configOrder, provider.sawOrder)
 			}
 			sent := channel.sentSnapshot()
 			if len(sent) != 2 {
@@ -402,8 +403,8 @@ func TestStickerReplyOrderProfilePrompt(t *testing.T) {
 			if strings.Contains(prompt, "表情包顺序已固定为") || !strings.Contains(prompt, "对别人这句话的反应") || !strings.Contains(prompt, stickerReplyOrderPrompt(StickerReplyOrderAuto)) {
 				t.Fatal("auto guidance changed")
 			}
-		} else if !strings.Contains(prompt, stickerReplyOrderPrompt(cfg.StickerReplyOrder)) {
-			t.Fatalf("profile %s missing fixed rule", cfg.ID)
+		} else if strings.Contains(prompt, "sticker_order") || strings.Contains(prompt, "对别人这句话的反应") {
+			t.Fatalf("profile %s leaked order guidance", cfg.ID)
 		}
 	}
 }

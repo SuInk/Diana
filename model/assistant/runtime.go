@@ -4556,7 +4556,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			// 都不补文字，这一轮就是安静的。
 			if query, _ := finalizeSticker.take(); query != "" && r.groupStopDropsReply(event, proactiveTriggered, time.Now()) == nil {
 				_ = r.withReplySuppressionOutboundGate(ctx, event, func(sendCtx context.Context) error {
-					r.sendFinalizeSticker(sendCtx, event, query)
+					r.sendFinalizeSticker(sendCtx, event, query, false)
 					return nil
 				})
 			}
@@ -4675,7 +4675,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		stickerQuery, stickerFirst := finalizeSticker.take()
 		stickerFirst = stickerReplyBefore(cfg.StickerReplyOrder, stickerFirst)
 		if stickerAllowed && stickerFirst {
-			r.sendFinalizeStickerBeforeReply(sendCtx, event, stickerQuery)
+			r.sendFinalizeSticker(sendCtx, event, stickerQuery, true)
 			stickerQuery = ""
 		}
 		if err := sendCtx.Err(); err != nil {
@@ -4691,7 +4691,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		r.afterReplyVRChat(event, strings.Join(splitEventChatReply(reply, cfg, event), "\n"))
 		if stickerAllowed {
 			r.sendFinalizeRender(sendCtx, event, finalizeRender.take())
-			r.sendFinalizeSticker(sendCtx, event, stickerQuery)
+			r.sendFinalizeSticker(sendCtx, event, stickerQuery, false)
 		}
 		return nil
 	})
@@ -4831,7 +4831,7 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 		// 得知道这一轮到底注册了哪些工具、哪条 MCP 和插件各带了哪几个。
 		agentCfg.CoreTools = r.agentCoreTools(event, registry)
 		if _, ok := registry.Get(dianaStickerToolName); ok {
-			agentCfg.FinalizeFields = append(agentCfg.FinalizeFields, stickerFinalizeField(), stickerOrderField())
+			agentCfg.FinalizeFields = append(agentCfg.FinalizeFields, stickerFinalizeFields(cfg.StickerReplyOrder)...)
 		}
 		if r.offersRenderFinalizeField(event, registry) {
 			agentCfg.FinalizeFields = append(agentCfg.FinalizeFields, renderFinalizeField())
