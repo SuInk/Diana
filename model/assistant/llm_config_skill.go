@@ -45,6 +45,7 @@ func (p *LLMConfigPlugin) Handle(context.Context, PluginRequest) (*PluginRespons
 }
 
 type llmConfigCommand struct {
+	Scope        string
 	Provider     llm.Provider
 	ProviderSet  bool
 	ProviderID   string
@@ -96,7 +97,21 @@ func (r *Runtime) applyLLMConfigCommand(ctx context.Context, event MessageEvent,
 	if !botCfg.IsOwnerEvent(event) || !boolValue(botCfg.OwnerLLMConfigEnabled, true) {
 		return llmConfigApplyResult{Reply: "当前发送者无权修改此机器人的模型分配"}
 	}
+	if command.Scope != "" && command.Scope != "bot" && command.Scope != "group" {
+		return llmConfigApplyResult{Reply: "scope 必须是 bot 或 group"}
+	}
+	if command.Scope == "group" {
+		if event.Kind != EventKindGroup || strings.TrimSpace(event.GroupID) == "" {
+			return llmConfigApplyResult{Reply: "只能在群聊中切换当前群的模型"}
+		}
+		if command.Role != "" && command.Role != "chat" {
+			return llmConfigApplyResult{Reply: "按群切换目前仅支持 chat 对话模型"}
+		}
+	}
 	roles := normalizeModelRoles(botCfg.ModelRoles)
+	if command.Scope == "group" {
+		roles = normalizeModelRoles(r.effectiveConfigForEvent(event).ModelRoles)
+	}
 	r.mu.RLock()
 	registry := r.llmRegistry
 	r.mu.RUnlock()
@@ -197,6 +212,13 @@ func (r *Runtime) applyLLMConfigCommand(ctx context.Context, event MessageEvent,
 		NewProvider: probe.Provider,
 		OldModel:    oldModel,
 		NewModel:    model,
+	}
+	if command.Scope == "group" {
+		if err := r.saveGroupChatModel(event, GroupChatModel{ProfileID: target.ID, Model: model}); err != nil {
+			return llmConfigApplyResult{Reply: "群模型保存失败：" + err.Error()}
+		}
+		result.Reply = fmt.Sprintf("已将当前群的聊天模型切换为 %s（提供商：%s），目标模型测试通过。仅当前机器人在本群生效，使用单模型路由；跟随聊天的用途一起切换。", model, target.Name)
+		return result
 	}
 	replacedRoute, err := r.saveModelRole(botCfg, roles, roleKey, target, model, command.ProviderID != "" || command.ProviderName != "")
 	if err != nil {

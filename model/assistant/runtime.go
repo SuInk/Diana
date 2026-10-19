@@ -1629,6 +1629,15 @@ func (r *Runtime) effectiveConfigForEventLocked(event MessageEvent) BotConfig {
 		return cfg
 	}
 	groupCfg = groupCfg.WithDefaults(event.GroupID, cfg)
+	if model := groupCfg.ChatModel; model != nil && model.ProfileID != "" && model.Model != "" {
+		roles := normalizeModelRoles(cfg.ModelRoles)
+		if roles == nil {
+			roles = map[string]ModelRole{}
+		}
+		roles["chat"] = ModelRole{ProfileID: model.ProfileID, Model: model.Model}
+		roles[PurposeReply] = roles["chat"]
+		cfg.ModelRoles = roles
+	}
 	cfg.MarkedBotIDs = cleanStrings(append(cfg.MarkedBotIDs, groupCfg.MarkedBotIDs...))
 	groupResponseModeOverridden := groupCfg.ResponseMode != ""
 	// 群配置里空着的项都跟随机器人，只有群里真的填了才覆盖（见 GroupConfig 字段说明）。

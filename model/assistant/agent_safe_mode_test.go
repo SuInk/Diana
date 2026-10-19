@@ -844,3 +844,10 @@ func TestTaskListsForOtherUsersStayWithinThisBot(t *testing.T) {
 		t.Fatal("没有机器人 ID 的旧记录应当按这台机器人的算")
 	}
 }
+
+func TestSafeModeBlocksGroupModelReset(t *testing.T) {
+	registry := safeModeTestRegistry(t, AgentModeSafe)
+	if err := registry.OperationDisabledError("llm_config", map[string]any{"operation": "reset", "scope": "group"}); err == nil {
+		t.Fatal("safe mode allowed model reset")
+	}
+}

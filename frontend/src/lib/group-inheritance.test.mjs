@@ -29,3 +29,11 @@ test("GroupsView coerces cleared numeric inputs", () => {
     assert.ok(source.includes(`${field}: followNumber(current.${field})`), field);
   }
 });
+
+// Reset must send an explicit empty binding: omitted values preserve old clients' configuration.
+test("group chat model supports explicit reset and retains unavailable current selection", () => {
+  assert.match(source, /id="group-chat-model"/);
+  assert.match(source, /editing.value.chat_model = \{ profile_id, model \}/);
+  assert.match(source, /value \? JSON.parse\(value\).*: \["", ""\]/);
+  assert.match(source, /!options.some\(option => option.value === groupChatModelValue.value\)/);
+});

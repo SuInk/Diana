@@ -452,6 +452,26 @@ func (h *BotHandler) sanitizeGroupConfigPayload(cfg assistant.GroupConfig, group
 			cfg.PluginSettingOverrides = existing.PluginSettingOverrides
 		}
 	}
+	if cfg.ChatModel == nil {
+		if existing, ok := h.groupConfigs.ConfigForGroup(cfg.BotProfileID, groupID); ok {
+			cfg.ChatModel = existing.ChatModel
+		}
+	} else {
+		cfg.ChatModel = &assistant.GroupChatModel{ProfileID: strings.TrimSpace(cfg.ChatModel.ProfileID), Model: strings.TrimSpace(cfg.ChatModel.Model)}
+		if (cfg.ChatModel.ProfileID == "") != (cfg.ChatModel.Model == "") {
+			return assistant.GroupConfig{}, fmt.Errorf("请选择本群聊天模型的提供商和模型")
+		}
+
+		if cfg.ChatModel.ProfileID != "" {
+			if validator, ok := h.runtime.(interface {
+				ValidateGroupChatModel(assistant.GroupChatModel) error
+			}); ok {
+				if err := validator.ValidateGroupChatModel(*cfg.ChatModel); err != nil {
+					return assistant.GroupConfig{}, err
+				}
+			}
+		}
+	}
 	cfg.GroupID = strings.TrimSpace(groupID)
 	cfg.GroupTriggers = trimStringSlice(cfg.GroupTriggers)
 	cfg.WelcomeMessage = strings.TrimSpace(cfg.WelcomeMessage)

@@ -108,3 +108,101 @@ func TestConsoleGroupNaturalSplitOverrideRoundTrip(t *testing.T) {
 		})
 	}
 }
+
+func TestGroupChatModelPersistsAndResets(t *testing.T) {
+	ctx := context.Background()
+	db, err := storage.NewSQLiteStore(filepath.Join(t.TempDir(), "groups.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	store, err := NewPersistentBotGroupConfigStore(ctx, db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := assistant.BotConfig{ID: "bot"}.WithDefaults()
+	cfg := assistant.GroupConfig{BotProfileID: "bot", GroupID: "100", ChatModel: &assistant.GroupChatModel{ProfileID: "provider", Model: "model"}}
+	if _, err = store.SaveGroupConfig(cfg, base); err != nil {
+		t.Fatal(err)
+	}
+	reloaded, err := NewPersistentBotGroupConfigStore(ctx, db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	saved, ok := reloaded.ConfigForGroup("bot", "100")
+	if !ok || saved.ChatModel == nil || *saved.ChatModel != *cfg.ChatModel {
+		t.Fatalf("lost model: %+v", saved.ChatModel)
+	}
+	runtime := assistant.NewRuntime(base, consoleGroupListChannel{}, assistant.NewDefaultPluginManager(), nil, nil, nil, nil)
+	handler := NewBotHandler(ctx, runtime)
+	handler.SetGroupConfigStore(reloaded)
+	omitted := cfg
+	omitted.ChatModel = nil
+	preserved, err := handler.sanitizeGroupConfigPayload(omitted, "100")
+	if err != nil || preserved.ChatModel == nil || *preserved.ChatModel != *cfg.ChatModel {
+		t.Fatalf("old client cleared model: %+v, %v", preserved.ChatModel, err)
+	}
+	cfg.ChatModel = &assistant.GroupChatModel{}
+	reset, err := handler.sanitizeGroupConfigPayload(cfg, "100")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = reloaded.SaveGroupConfig(reset, base); err != nil {
+		t.Fatal(err)
+	}
+	final, err := NewPersistentBotGroupConfigStore(ctx, db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	saved, _ = final.ConfigForGroup("bot", "100")
+	if saved.ChatModel == nil || saved.ChatModel.ProfileID != "" || saved.ChatModel.Model != "" {
+		t.Fatal("reset not persisted")
+	}
+	cfg.ChatModel = &assistant.GroupChatModel{ProfileID: "provider"}
+	if _, err := handler.sanitizeGroupConfigPayload(cfg, "100"); err == nil {
+		t.Fatal("accepted incomplete binding")
+	}
+	cfg.ChatModel.Model = "model"
+	if _, err := handler.sanitizeGroupConfigPayload(cfg, "100"); err == nil {
+		t.Fatal("accepted unavailable provider")
+	}
+}
+
+func TestGroupChatModelFieldSaveAndSeedRepair(t *testing.T) {
+	ctx := context.Background()
+	db, err := storage.NewSQLiteStore(filepath.Join(t.TempDir(), "groups.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	store, err := NewPersistentBotGroupConfigStore(ctx, db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := assistant.BotConfig{ID: "a"}.WithDefaults()
+	for _, id := range []string{"a", "b"} {
+		_, err := store.SaveGroupConfig(assistant.GroupConfig{BotProfileID: id, GroupID: "g", SystemPrompt: "keep", ChatModel: &assistant.GroupChatModel{ProfileID: "seed-old", Model: "old"}}, base)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := store.SaveGroupChatModel("a", "g", assistant.GroupChatModel{ProfileID: "seed-old", Model: "new"}, base); err != nil {
+		t.Fatal(err)
+	}
+	a, _ := store.ConfigForGroup("a", "g")
+	b, _ := store.ConfigForGroup("b", "g")
+	if a.SystemPrompt != "keep" || a.ChatModel.Model != "new" || b.ChatModel.Model != "old" {
+		t.Fatal("field update changed unrelated configuration")
+	}
+	if err := RepairSeedLLMProfileRefs(ctx, db, "seed-new"); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := NewPersistentBotGroupConfigStore(ctx, db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, _ = loaded.ConfigForGroup("a", "g")
+	if a.ChatModel.ProfileID != "seed-new" || a.ChatModel.Model != "new" {
+		t.Fatal("seed repair lost group model")
+	}
+}

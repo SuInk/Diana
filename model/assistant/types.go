@@ -1186,7 +1186,14 @@ type ReplyRule struct {
 	LLMProfileID string          `json:"llm_profile_id,omitempty"`
 }
 
+// GroupChatModel selects a single chat provider for one group. Empty values inherit the bot.
+type GroupChatModel struct {
+	ProfileID string `json:"profile_id"`
+	Model     string `json:"model"`
+}
+
 type GroupConfig struct {
+	ChatModel *GroupChatModel `json:"chat_model,omitempty"`
 	// InheritanceMigrated 标记这份群配置已经清掉旧版抄进来的机器人值快照，只做一次。
 	InheritanceMigrated     bool  `json:"inheritance_migrated,omitempty"`
 	ReplyPreserveLineBreaks *bool `json:"reply_preserve_line_breaks,omitempty"`
@@ -1716,6 +1723,9 @@ func positiveOptionalCount(value *int) *int {
 
 // WithDefaults 补齐群配置的空值，避免旧数据或局部提交破坏运行时默认行为。
 func (cfg GroupConfig) WithDefaults(groupID string, base BotConfig) GroupConfig {
+	if cfg.ChatModel != nil {
+		cfg.ChatModel = &GroupChatModel{ProfileID: strings.TrimSpace(cfg.ChatModel.ProfileID), Model: strings.TrimSpace(cfg.ChatModel.Model)}
+	}
 	cfg.ReplyMergeConfidencePercent = max(0, min(100, cfg.ReplyMergeConfidencePercent))
 	cfg.sendRetrySettings = cfg.sendRetrySettings.clamped()
 	cfg.MarkedBotIDs = cleanStrings(append([]string(nil), cfg.MarkedBotIDs...))

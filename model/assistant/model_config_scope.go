@@ -11,11 +11,13 @@ type ModelRoleConfigSaver interface {
 }
 
 type modelProfileContextKey struct{}
+type modelEventContextKey struct{}
 
 func withModelConfigEvent(ctx context.Context, event MessageEvent) context.Context {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	ctx = context.WithValue(ctx, modelEventContextKey{}, MessageEvent{ProfileID: event.ProfileID, GroupID: event.GroupID, Kind: event.Kind})
 	if id := strings.TrimSpace(event.ProfileID); id != "" {
 		return context.WithValue(ctx, modelProfileContextKey{}, id)
 	}
@@ -68,6 +70,9 @@ func (r *Runtime) modelRolesForContext(ctx context.Context) map[string]ModelRole
 
 func (r *Runtime) baseModelRolesForContext(ctx context.Context) map[string]ModelRole {
 	if ctx != nil {
+		if event, ok := ctx.Value(modelEventContextKey{}).(MessageEvent); ok {
+			return normalizeModelRoles(r.effectiveConfigForEvent(event).ModelRoles)
+		}
 		if id, ok := ctx.Value(modelProfileContextKey{}).(string); ok && id != "" {
 			return normalizeModelRoles(r.effectiveConfigForEvent(MessageEvent{ProfileID: id}).ModelRoles)
 		}
@@ -76,4 +81,60 @@ func (r *Runtime) baseModelRolesForContext(ctx context.Context) map[string]Model
 		return normalizeModelRoles(r.effectiveConfigForEvent(usage.event).ModelRoles)
 	}
 	return normalizeModelRoles(r.profileConfig("").ModelRoles)
+}
+
+// ValidateGroupChatModel checks the saved provider catalog without making a paid request.
+func (r *Runtime) ValidateGroupChatModel(model GroupChatModel) error {
+	r.mu.RLock()
+	store := r.llmStore
+	r.mu.RUnlock()
+	if store == nil {
+		return fmt.Errorf("当前未接入提供商配置集")
+	}
+	for _, profile := range store.Profiles().WithDefaults().Profiles {
+		if profile.ID != model.ProfileID {
+			continue
+		}
+		if !profile.Config.ModelEnabled(model.Model) {
+			return fmt.Errorf("模型 %q 已停用", model.Model)
+		}
+		if profile.Config.Model == model.Model {
+			return nil
+		}
+		for _, item := range profile.Config.Models {
+			if item.ID == model.Model {
+				return nil
+			}
+		}
+		return fmt.Errorf("提供商中没有模型 %q，请先同步模型列表", model.Model)
+	}
+	return fmt.Errorf("提供商 %q 不存在", model.ProfileID)
+}
+
+// SaveGroupChatModel updates only the model field so concurrent UI edits are retained.
+type GroupChatModelSaver interface {
+	SaveGroupChatModel(botProfileID, groupID string, model GroupChatModel, base BotConfig) error
+}
+
+func (r *Runtime) saveGroupChatModel(event MessageEvent, model GroupChatModel) error {
+	if event.Kind != EventKindGroup || strings.TrimSpace(event.GroupID) == "" {
+		return fmt.Errorf("只能在群聊中修改当前群模型")
+	}
+	r.modelConfigMu.Lock()
+	defer r.modelConfigMu.Unlock()
+	cfg, err := r.modelConfigForEvent(event)
+	if err != nil {
+		return err
+	}
+	if !cfg.IsOwnerEvent(event) || !boolValue(cfg.OwnerLLMConfigEnabled, true) {
+		return fmt.Errorf("当前发送者无权修改此机器人的模型分配")
+	}
+	r.mu.RLock()
+	store := r.groupConfigs
+	r.mu.RUnlock()
+	saver, ok := store.(GroupChatModelSaver)
+	if !ok {
+		return fmt.Errorf("当前部署未接入群模型配置存储")
+	}
+	return saver.SaveGroupChatModel(cfg.ID, strings.TrimSpace(event.GroupID), model, cfg)
 }

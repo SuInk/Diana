@@ -215,3 +215,128 @@ func TestAdminChatModelOverridePinsOnlyAdminChat(t *testing.T) {
 		t.Fatal("empty provider should keep bot routing")
 	}
 }
+
+func TestGroupChatModelRoutingIsolationAndReset(t *testing.T) {
+	r, _, _, _ := modelSwitchTestRuntime(t)
+	store := &testWritableGroupConfigStore{}
+	r.SetGroupConfigStore(store)
+	base := r.ProfileConfig("b")
+	_, err := store.SaveGroupConfig(GroupConfig{BotProfileID: "b", GroupID: "g", ChatModel: &GroupChatModel{ProfileID: "two", Model: "other"}}, base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		profile, group string
+		kind           EventKind
+		want           string
+	}{
+		{"b", "g", EventKindGroup, "https://two.invalid|other"},
+		{"b", "other", EventKindGroup, "https://one.invalid|shared"},
+		{"a", "g", EventKindGroup, "https://one.invalid|shared"},
+		{"b", "g", EventKindPrivate, "https://one.invalid|shared"},
+	} {
+		event := MessageEvent{ProfileID: tc.profile, GroupID: tc.group, Kind: tc.kind}
+		ctx := withLLMUsagePurpose(withModelConfigEvent(context.Background(), event), PurposeReply)
+		got, err := r.runRawLLMProviderForGroup(ctx, llm.GroupChat, func(p LLMProvider) (string, error) {
+			result, err := p.Generate(ctx, llm.GenerateRequest{})
+			if err != nil {
+				return "", err
+			}
+			return result.Text, nil
+		})
+		if err != nil || got != tc.want {
+			t.Fatalf("%+v: got %q, %v", tc, got, err)
+		}
+		if r.modelRolesForContext(ctx)["intent"].ProfileID != "one" {
+			t.Fatal("changed independently configured intent")
+		}
+	}
+	if r.ProfileConfig("b").ModelRoles["chat"].ProfileID != "one" {
+		t.Fatal("mutated bot defaults")
+	}
+	_, _ = store.SaveGroupConfig(GroupConfig{BotProfileID: "b", GroupID: "g", ChatModel: &GroupChatModel{}}, base)
+	ctx := withModelConfigEvent(context.Background(), MessageEvent{ProfileID: "b", GroupID: "g", Kind: EventKindGroup})
+	if r.modelRolesForContext(ctx)["chat"].ProfileID != "one" {
+		t.Fatal("reset did not restore inheritance")
+	}
+}
+
+func (s *testWritableGroupConfigStore) SaveGroupChatModel(profileID, groupID string, model GroupChatModel, base BotConfig) error {
+	cfg, ok := s.ConfigForGroup(profileID, groupID)
+	if !ok {
+		cfg = DefaultGroupConfig(groupID, base)
+	}
+	cfg.BotProfileID = profileID
+	cfg.ChatModel = &model
+	_, err := s.SaveGroupConfig(cfg, base)
+	return err
+}
+
+func TestGroupChatModelToolSwitchAndReset(t *testing.T) {
+	r, saver, _, event := modelSwitchTestRuntime(t)
+	store := &testWritableGroupConfigStore{}
+	r.SetGroupConfigStore(store)
+	event.Kind = EventKindGroup
+	event.GroupID = "g"
+	tool := newDianaLLMConfigTool(r, event)
+	input := map[string]any{"operation": "update", "scope": "group", "provider_id": "two", "model": "other"}
+	if _, err := tool.Run(context.Background(), input); err != nil {
+		t.Fatal(err)
+	}
+	saved, ok := store.ConfigForGroup("b", "g")
+	if !ok || saved.ChatModel == nil || saved.ChatModel.ProfileID != "two" {
+		t.Fatalf("not saved: %+v", saved.ChatModel)
+	}
+	if saver.calls != 0 {
+		t.Fatal("wrote bot model instead of group")
+	}
+	input["model"] = "missing"
+	if _, err := tool.Run(context.Background(), input); err == nil {
+		t.Fatal("invalid model accepted")
+	}
+	saved, _ = store.ConfigForGroup("b", "g")
+	if saved.ChatModel.Model != "other" {
+		t.Fatal("failure changed group model")
+	}
+	denied := event
+	denied.UserID = "not-owner"
+	if _, err := newDianaLLMConfigTool(r, denied).Run(context.Background(), map[string]any{"operation": "reset", "scope": "group"}); err == nil {
+		t.Fatal("non-owner reset allowed")
+	}
+	private := event
+	private.Kind = EventKindPrivate
+	if _, err := newDianaLLMConfigTool(r, private).Run(context.Background(), input); err == nil {
+		t.Fatal("private group override allowed")
+	}
+	if _, err := tool.Run(context.Background(), map[string]any{"operation": "reset", "scope": "group"}); err != nil {
+		t.Fatal(err)
+	}
+	ctx := withModelConfigEvent(context.Background(), event)
+	if r.modelRolesForContext(ctx)["chat"].ProfileID != "one" {
+		t.Fatal("reset failed")
+	}
+}
+
+type failedGroupChatModelStore struct{ testWritableGroupConfigStore }
+
+func (s *failedGroupChatModelStore) SaveGroupChatModel(string, string, GroupChatModel, BotConfig) error {
+	return errors.New("disk failure")
+}
+func TestGroupChatModelSaveFailureDoesNotReportSuccess(t *testing.T) {
+	r, saver, _, event := modelSwitchTestRuntime(t)
+	event.Kind = EventKindGroup
+	event.GroupID = "g"
+	store := &failedGroupChatModelStore{}
+	r.SetGroupConfigStore(store)
+	_, err := newDianaLLMConfigTool(r, event).Run(context.Background(), map[string]any{"operation": "update", "scope": "group", "provider_id": "two", "model": "other"})
+	if err == nil {
+		t.Fatal("save failure reported success")
+	}
+	if saver.calls != 0 {
+		t.Fatal("group failure changed bot")
+	}
+	ctx := withModelConfigEvent(context.Background(), event)
+	if r.modelRolesForContext(ctx)["chat"].ProfileID != "one" {
+		t.Fatal("failed save changed runtime")
+	}
+}

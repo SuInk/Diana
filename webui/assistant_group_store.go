@@ -200,3 +200,42 @@ func (s *PersistentBotGroupConfigStore) SaveGroupConfig(cfg assistant.GroupConfi
 	s.data = set
 	return saved, nil
 }
+
+func groupWithChatModel(set assistant.GroupConfigSet, profileID, groupID string, model assistant.GroupChatModel, base assistant.BotConfig) assistant.GroupConfigSet {
+	cfg, ok := set.ConfigForGroup(profileID, groupID)
+	if !ok {
+		cfg = assistant.DefaultGroupConfig(groupID, base)
+	}
+	cfg.BotProfileID = profileID
+	cfg.GroupID = groupID
+	cfg.ChatModel = &model
+	next := set
+	next.Groups = append([]assistant.GroupConfig(nil), set.Groups...)
+	for i, item := range next.Groups {
+		if item.BotProfileID == profileID && item.GroupID == groupID {
+			next.Groups[i] = cfg
+			return next
+		}
+	}
+	next.Groups = append(next.Groups, cfg)
+	return next
+}
+
+func (s *MemoryBotGroupConfigStore) SaveGroupChatModel(profileID, groupID string, model assistant.GroupChatModel, base assistant.BotConfig) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.data = groupWithChatModel(s.data, profileID, groupID, model, base)
+	return nil
+}
+func (s *PersistentBotGroupConfigStore) SaveGroupChatModel(profileID, groupID string, model assistant.GroupChatModel, base assistant.BotConfig) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	next := groupWithChatModel(s.data, profileID, groupID, model, base)
+	if s.store != nil {
+		if err := s.store.SaveBotGroupConfigs(s.ctx, next); err != nil {
+			return err
+		}
+	}
+	s.data = next
+	return nil
+}

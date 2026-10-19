@@ -287,6 +287,11 @@
           <span class="hint">智能档下，群里谈论机器人而不是叫它的消息不会强制回复。</span>
         </div>
         <div class="field wide">
+          <label for="group-chat-model">本群聊天模型</label>
+          <AppSelect id="group-chat-model" :model-value="groupChatModelValue" :options="groupChatModelOptions" searchable search-placeholder="搜索提供商或模型" @update:model-value="setGroupChatModel" />
+          <span class="hint">默认跟随机器人；独立选择使用单个模型，不继承机器人聊天模型的后备列表。仅本群生效，跟随聊天的用途也会随之切换。</span>
+        </div>
+        <div class="field wide">
           <label for="group-persona-source">本群 SOUL.md</label>
           <AppSelect
             id="group-persona-source"
@@ -705,6 +710,8 @@ import { Plus, RefreshCw, Save, Search, Share2, SlidersHorizontal, Trash2, Users
 import {
   type ConnectionPeer,
   getBotProfileConfig,
+  getConfig,
+  type LLMConfig,
   getBotPlatforms,
   listBotGroups,
   saveBotGroup,
@@ -889,6 +896,30 @@ async function loadRelations(): Promise<void> {
 }
 
 const editing = ref<BotGroupConfig | null>(null);
+const modelProviders = ref<LLMConfig[]>([]);
+const groupChatModelValue = computed(() => {
+  const model = editing.value?.chat_model;
+  return model?.profile_id && model.model ? JSON.stringify([model.profile_id, model.model]) : "";
+});
+const groupChatModelOptions = computed<AppSelectOption[]>(() => {
+  const options: AppSelectOption[] = [{ value: "", label: "跟随机器人" }];
+  for (const provider of modelProviders.value) {
+    if (!provider.id) continue;
+    const disabled = new Set((provider.models ?? []).filter(model => model.disabled).map(model => model.id));
+    const models = new Set([provider.model, ...(provider.models ?? []).map(model => model.id)].filter(model => model && !disabled.has(model)));
+    for (const model of models) options.push({ value: JSON.stringify([provider.id, model]), label: `${provider.name || provider.id} · ${model}` });
+  }
+  if (groupChatModelValue.value && !options.some(option => option.value === groupChatModelValue.value)) {
+    options.push({ value: groupChatModelValue.value, label: `${editing.value?.chat_model?.profile_id} · ${editing.value?.chat_model?.model}（当前配置）` });
+  }
+  return options;
+});
+function setGroupChatModel(value: string): void {
+  if (!editing.value) return;
+  const [profile_id, model] = value ? JSON.parse(value) as [string, string] : ["", ""];
+  editing.value.chat_model = { profile_id, model };
+}
+
 
 const quotaWindowSeconds = ref(0);
 
@@ -1166,14 +1197,16 @@ function hasOtherReplyGateRules(group: BotGroupConfig): boolean {
 async function load(showFeedback = false): Promise<void> {
   refreshing.value = true;
   try {
-    const [response, configAndPlatforms, extensionList, personaList] = await Promise.all([
+    const [response, configAndPlatforms, extensionList, personaList, modelConfig] = await Promise.all([
       listBotGroups(showFeedback, botScope.value),
       Promise.all([getBotProfileConfig(), getBotPlatforms()]).catch(() => null),
       // 扩展目录和群列表互不依赖：取不到就不显示这一栏，不拖累整页。
       botScope.value ? listManagedExtensions(botScope.value).catch(() => null) : Promise.resolve(null),
-      listPersonas().catch(() => null)
+      listPersonas().catch(() => null),
+      getConfig().catch(() => null)
     ]);
     groups.value = response.groups;
+    modelProviders.value = modelConfig?.profiles ?? [];
     personaLibrary.value = personaList?.personas ?? [];
     // 联网搜索只在机器人配置里设，群里不再单独覆盖。
     plugins.value = response.plugins.filter(plugin => plugin.manifest.id !== webSearchPluginID);

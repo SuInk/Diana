@@ -26,14 +26,16 @@ func (t *dianaLLMConfigTool) Name() string {
 }
 
 func (t *dianaLLMConfigTool) Description() string {
-	return `切换 Diana 各用途的模型（role 指定，默认对话），只改当前机器人，不动供应商地址和密钥。` +
+	return `切换 Diana 各用途的模型（role 指定，默认对话），scope=group 只改当前群的聊天模型，scope=bot 改当前机器人，不动供应商地址和密钥。` +
 		`仅在主人明确要求改机器人自身配置时调用；讨论或推荐模型、用户说「我用某模型」都不调用。` +
+		`用户说本群、这个群时必须用 scope=group；说整个机器人时用 scope=bot。恢复本群跟随机器人用 operation=reset、scope=group。` +
 		`跨供应商先 list，再用 provider_id 精确选，别猜同名供应商。更新前实测目标模型，失败保留原配置；image 会生成一张不发送的测试图。`
 }
 
 func (t *dianaLLMConfigTool) InputSchema() map[string]any {
 	return toolObjectSchema([]string{"operation"}, map[string]any{
-		"operation": toolEnumParam("list 看供应商和模型清单，update 修改当前机器人。", "list", "update"),
+		"operation": toolEnumParam("list 看供应商和模型清单，update 修改指定范围，reset 恢复本群跟随机器人。", "list", "update", "reset"),
+		"scope":     toolEnumParam("group 仅当前群（仅 chat）；bot 整个机器人（默认）。", "group", "bot"),
 		"role": toolEnumParam("chat 对话（默认）、vision 识图、intent 意图识别、image 生图。",
 			"chat", "vision", "intent", "image"),
 		"provider":      toolEnumParam("目标 provider 类型，不改则省略。", "openai_compatible", "gemini", "anthropic", "typesafe"),
@@ -61,8 +63,17 @@ func (t *dianaLLMConfigTool) Run(ctx context.Context, input map[string]any) (str
 	if operation == "list" {
 		return t.listProviders(cfg)
 	}
+	if operation == "reset" {
+		if configToolString(input, "scope") != "group" || (configToolString(input, "role") != "" && configToolString(input, "role") != "chat") {
+			return "", fmt.Errorf("reset 仅支持 scope=group、role=chat")
+		}
+		if err := t.runtime.saveGroupChatModel(t.event, GroupChatModel{}); err != nil {
+			return "", err
+		}
+		return `{"ok":true,"scope":"group","message":"当前群已恢复跟随机器人的聊天模型"}`, nil
+	}
 	if operation != "update" {
-		return "", fmt.Errorf("operation 必须是 list 或 update")
+		return "", fmt.Errorf("operation 必须是 list、update 或 reset")
 	}
 	providerRaw := strings.ToLower(strings.TrimSpace(configToolString(input, "provider")))
 	model := strings.TrimSpace(configToolString(input, "model"))
@@ -71,7 +82,7 @@ func (t *dianaLLMConfigTool) Run(ctx context.Context, input map[string]any) (str
 	if providerRaw == "" && model == "" && providerID == "" && providerName == "" {
 		return "", fmt.Errorf("至少提供 provider 或 model")
 	}
-	command := llmConfigCommand{Model: model, Role: strings.TrimSpace(configToolString(input, "role")), ProviderID: providerID, ProviderName: providerName}
+	command := llmConfigCommand{Scope: strings.TrimSpace(configToolString(input, "scope")), Model: model, Role: strings.TrimSpace(configToolString(input, "role")), ProviderID: providerID, ProviderName: providerName}
 	if providerRaw != "" {
 		provider, err := structuredLLMProvider(providerRaw)
 		if err != nil {
@@ -93,6 +104,8 @@ func (t *dianaLLMConfigTool) Run(ctx context.Context, input map[string]any) (str
 	}
 	body, err := json.Marshal(map[string]any{
 		"ok":             true,
+		"scope":          command.Scope,
+		"group_id":       t.event.GroupID,
 		"bot_profile_id": cfg.ID,
 		"action":         "updated",
 		"tested":         true,

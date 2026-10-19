@@ -34,7 +34,7 @@ func RepairSeedLLMProfileRefs(ctx context.Context, store *storage.SQLiteStore, s
 	if err != nil {
 		return err
 	}
-	// 引用提供商配置档的只有机器人配置里的 model_roles 和回复规则；群配置不带模型绑定。
+	// 修复机器人模型分配与回复规则中的种子引用。
 	if ok {
 		changed := 0
 		for i := range profiles.Profiles {
@@ -49,6 +49,24 @@ func RepairSeedLLMProfileRefs(ctx context.Context, store *storage.SQLiteStore, s
 				return err
 			}
 			log.Printf("diana: %d model binding(s) in bot profiles pointed at an old seeded llm profile id; repointed to %s", changed, seedID)
+		}
+	}
+
+	groups, found, err := store.LoadBotGroupConfigs(ctx)
+	if err != nil {
+		return err
+	}
+	if found {
+		changed := false
+		for i := range groups.Groups {
+			model := groups.Groups[i].ChatModel
+			if model != nil && model.ProfileID != "" && model.ProfileID != seedID {
+				groups.Groups[i].ChatModel = &assistant.GroupChatModel{ProfileID: seedID, Model: model.Model}
+				changed = true
+			}
+		}
+		if changed {
+			return store.SaveBotGroupConfigs(ctx, groups)
 		}
 	}
 	return nil

@@ -733,6 +733,7 @@ export interface GroupGovernance {
 }
 
 export interface BotGroupConfig extends SendRetrySettings {
+  chat_model?: { profile_id: string; model: string };
   marked_bot_ids?: string[];
   participation?: import("./lib/participation").ParticipationPreferences;
   bot_profile_id?: string;

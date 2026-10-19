@@ -272,7 +272,7 @@ var AgentSafeModeRules = []AgentSafeModeRule{
 	{Category: safeModeCategorySelfModify, Tool: replyBlockToolName, Field: "operation", Operations: []string{"block", "unblock"}, Reason: "修改回复屏蔽名单；查看照常"},
 	{Category: safeModeCategorySelfModify, Tool: "bot_markers", Field: "operation", Operations: []string{"mark", "unmark"}, Reason: "修改机器人标记名单；查看照常"},
 	{Category: safeModeCategorySelfModify, Tool: dianaStickerRemoveToolName, Reason: "删除表情包并拉黑"},
-	{Category: safeModeCategorySelfModify, Tool: "llm_config", Field: "operation", Operations: []string{"update"}, Reason: "切换这台机器人用的模型；查看照常"},
+	{Category: safeModeCategorySelfModify, Tool: "llm_config", Field: "operation", Operations: []string{"update", "reset"}, Reason: "切换这台机器人用的模型；查看照常"},
 	{Category: safeModeCategorySelfModify, Tool: dianaExtensionAccessToolName, Field: "action",
 		Operations: []string{"bot_tier", "group_tier", "allow", "deny"},
 		Reason:     "修改扩展对群成员的开放档位和名单；查看照常"},
