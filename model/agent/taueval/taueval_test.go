@@ -133,3 +133,15 @@ func TestRepositoryExamplesLoad(t *testing.T) {
 		t.Fatalf("cases=%d err=%v", len(cases), err)
 	}
 }
+
+func TestCheckCallsMatchesInputSubset(t *testing.T) {
+	expect := Expect{Calls: []Call{{Tool: "bot_config", Input: map[string]any{"operation": "set", "enabled": true}}}}
+	ok := []Call{{Tool: "bot_config", Input: map[string]any{"operation": "set", "enabled": true, "scope": "group"}}}
+	if failures := CheckCalls(expect, ok); len(failures) != 0 {
+		t.Fatal(failures)
+	}
+	failed := []Call{{Tool: "bot_config", Input: map[string]any{"operation": "set", "enabled": true}, Error: "denied"}}
+	if failures := CheckCalls(expect, failed); len(failures) == 0 {
+		t.Fatal("a failed call must not satisfy the expectation")
+	}
+}

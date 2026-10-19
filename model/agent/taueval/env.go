@@ -29,16 +29,18 @@ type ToolSpec struct {
 //   - update：按 Key 找到记录并合并字段
 //   - remove：按 Key 删除记录
 //   - fixed：不碰状态，返回 Output 或 Error
+//   - replay：不碰状态，依次返回 Outputs（用完后重复最后一条），用来重放生产录到的搜索结果
 type ActionSpec struct {
 	Op         string   `json:"op"`
 	Collection string   `json:"collection,omitempty"`
 	Key        string   `json:"key,omitempty"`
 	Fields     []string `json:"fields,omitempty"`
 	Output     string   `json:"output,omitempty"`
+	Outputs    []string `json:"outputs,omitempty"`
 	Error      string   `json:"error,omitempty"`
 }
 
-var validOps = map[string]bool{"read": true, "append": true, "update": true, "remove": true, "fixed": true}
+var validOps = map[string]bool{"read": true, "append": true, "update": true, "remove": true, "fixed": true, "replay": true}
 
 // Call 是环境收到的一次工具调用。
 type Call struct {
@@ -54,6 +56,7 @@ type Env struct {
 	state map[string]any
 	calls []Call
 	next  int
+	reads map[string]int
 }
 
 func NewEnv(initial map[string]any) *Env {
@@ -113,6 +116,16 @@ func (e *Env) applyLocked(spec ToolSpec, input map[string]any) (string, error) {
 	switch action.Op {
 	case "fixed":
 		return action.Output, nil
+	case "replay":
+		if len(action.Outputs) == 0 {
+			return action.Output, nil
+		}
+		if e.reads == nil {
+			e.reads = map[string]int{}
+		}
+		i := min(e.reads[spec.Name], len(action.Outputs)-1)
+		e.reads[spec.Name]++
+		return action.Outputs[i], nil
 	case "read":
 		if action.Output != "" {
 			return action.Output, nil

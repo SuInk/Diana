@@ -20,12 +20,16 @@ import (
 // Case 是一条评测用例。Messages 是被测 Agent 第一轮看到的完整上下文（含系统提示词与历史），
 // 一般由 tau-extract 从 debug_trace 的 reply 请求里原样抽出。
 type Case struct {
-	ID       string        `json:"id"`
+	ID string `json:"id"`
+	// Category 用来分类汇报，如 state、no_tool、research、persona。
+	Category string        `json:"category,omitempty"`
 	Source   string        `json:"source,omitempty"`
 	Messages []llm.Message `json:"messages"`
 	Tools    []ToolSpec    `json:"tools"`
 	// CoreTools 与生产一致地常驻，其余工具要先 tools_load；为空时全部常驻。
-	CoreTools   []string       `json:"core_tools,omitempty"`
+	CoreTools []string `json:"core_tools,omitempty"`
+	// LoadedTools 是生产会话在这一轮之前已经 tools_load 过的工具，评测时同样视为已加载。
+	LoadedTools []string       `json:"loaded_tools,omitempty"`
 	State       map[string]any `json:"initial_state,omitempty"`
 	User        UserSpec       `json:"user"`
 	Expect      Expect         `json:"expect"`
@@ -47,12 +51,15 @@ type UserSpec struct {
 // Expect 是终态断言。State 对环境终态做子集匹配，Exact 里列出的集合要求条数一致；
 // Replies 里每条子串都必须在 Agent 某次回复中出现（τ² 的「传达信息」检查）。
 type Expect struct {
-	State        map[string]any `json:"state,omitempty"`
-	Exact        []string       `json:"exact,omitempty"`
-	RequireTools []string       `json:"require_tools,omitempty"`
-	ForbidTools  []string       `json:"forbid_tools,omitempty"`
-	Replies      []string       `json:"replies,omitempty"`
-	Criteria     string         `json:"criteria,omitempty"`
+	State map[string]any `json:"state,omitempty"`
+	Exact []string       `json:"exact,omitempty"`
+	// Calls 里每个模式都要配上一次不同的工具调用：tool 相同、input 子集匹配。
+	// 用于没有可模拟状态、只能核对写操作参数的工具。
+	Calls        []Call   `json:"calls,omitempty"`
+	RequireTools []string `json:"require_tools,omitempty"`
+	ForbidTools  []string `json:"forbid_tools,omitempty"`
+	Replies      []string `json:"replies,omitempty"`
+	Criteria     string   `json:"criteria,omitempty"`
 }
 
 // LoadCases 读取文件或目录（目录下所有 *.json）。
