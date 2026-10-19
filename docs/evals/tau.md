@@ -43,6 +43,7 @@ DIANA_LIVE_LLM=1 DIANA_TEST_LLM_API_KEY=... DIANA_TEST_LLM_BASE_URL=https://sub2
 ## 已知差异
 
 - 测试直接用 `agent.Runner`，没有经过 `assistant.Runtime` 的接话判定、分段发送和收尾提示注入；比较的是主对话里的工具决策和终态。
+- 和生产主回复一样开着 `ResearchDetailReview`：联网过的收尾先由同一模型对照工具输出复核一次具体细节，没原文的打回重写一次（见 `model/agent/research_review.go`）。
 - `loaded_tools` 只能从「这一轮直接用了却没加载」推断，生产会话里加载过但这一轮没用到的工具会漏掉。
 - 重放的工具输出跟着生产那一轮走：模型换了查询词也拿到同样的结果，生产没调过的工具只返回 `{"ok":true}`，依赖这些工具的用例改用 `criteria`，不要卡死参数。
 - 后续追问以「【当前需要回复的消息】」的用户消息追加，上一轮回复作为 assistant 消息，和生产把机器人发言折进历史的格式不同。

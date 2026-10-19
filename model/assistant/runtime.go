@@ -4796,6 +4796,7 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 		// model call from its actual message content so that a text-only planner can
 		// hand the next turn to the configured vision profile.
 		agentCfg := agent.Config{
+			ResearchDetailReview:       true,
 			WorkDir:                    AgentWorkspaceDir(),
 			MaxSteps:                   cfg.AgentMaxSteps,
 			SkillRoots:                 cfg.AgentSkillRoots,
