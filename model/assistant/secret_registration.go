@@ -35,7 +35,6 @@ func registerBotConfigSecrets(cfg BotConfig) {
 		cfg.WeixinBotToken,
 		cfg.IMessagePassword,
 		cfg.IMessageWebhookToken,
-		cfg.NoneBotBridgeToken,
 	)
 	secretmask.RegisterURL(
 		cfg.OneBotWSEndpoint,
@@ -45,7 +44,6 @@ func registerBotConfigSecrets(cfg BotConfig) {
 		cfg.TelegramProxyURL,
 		cfg.FeishuAPIBaseURL,
 		cfg.IMessageServerURL,
-		cfg.NoneBotBridgeEndpoint,
 		cfg.AgentBrowserCDPURL,
 	)
 }

@@ -1347,7 +1347,6 @@ func TestBotConfigDiagnosticsReturnsRedactedBotConfigAndSkills(t *testing.T) {
 		OwnerID:            "owner",
 		Enabled:            true,
 		OneBotAccessToken:  "onebot-secret-value",
-		NoneBotBridgeToken: "bridge-secret-value",
 		AgentEnabled:       true,
 		AgentSkillRoots:    []string{"/tmp/diana/skills"},
 		AgentMCPConfigPath: "/tmp/diana/.mcp.json",
@@ -1360,7 +1359,7 @@ func TestBotConfigDiagnosticsReturnsRedactedBotConfigAndSkills(t *testing.T) {
 	if !json.Valid([]byte(got)) {
 		t.Fatalf("tool output is not JSON: %s", got)
 	}
-	for _, leaked := range []string{"llm-secret-value", "onebot-secret-value", "bridge-secret-value", "Bearer hidden"} {
+	for _, leaked := range []string{"llm-secret-value", "onebot-secret-value", "Bearer hidden"} {
 		if strings.Contains(got, leaked) {
 			t.Fatalf("tool output leaked %q: %s", leaked, got)
 		}

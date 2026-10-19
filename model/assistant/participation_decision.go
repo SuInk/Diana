@@ -21,8 +21,8 @@ func participationDecisionSpec(overrides PromptOverrides) *llm.DecisionSpec {
 		{
 			Key:           "relevance",
 			Kind:          llm.DecisionNoul,
-			Label:         "在跟机器人说话",
-			Instructions:  "当前消息是不是明确在跟机器人说话。\n" + overrides.text(promptParticipationRelevanceNoteSpec) + "\n" + overrides.text(promptParticipationForeignCommandSpec) + "\n" + overrides.text(promptParticipationSharedNoteSpec),
+			Label:         "在跟本人说话",
+			Instructions:  overrides.text(promptParticipationRelevanceIntroSpec) + "\n" + overrides.text(promptParticipationRelevanceNoteSpec) + "\n" + overrides.text(promptParticipationForeignCommandSpec) + "\n" + overrides.text(promptParticipationSharedNoteSpec),
 			TrueCriteria:  overrides.text(promptParticipationRelevanceTrueSpec),
 			FalseCriteria: overrides.text(promptParticipationRelevanceFalseSpec),
 			Path:          "relevance.directed",

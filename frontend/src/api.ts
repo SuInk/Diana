@@ -254,10 +254,6 @@ export interface BotProfileConfig extends SendRetrySettings {
   imessage_poll_seconds?: number;
   /** 回调型平台要填到对方后台的路径，只读。 */
   callback_path?: string;
-  nonebot_bridge_enabled?: boolean;
-  nonebot_bridge_endpoint?: string;
-  nonebot_bridge_token?: string;
-  nonebot_bridge_token_configured?: boolean;
   bot_account?: string;
   owner_id?: string;
   owner_login_enabled?: boolean;
@@ -1033,14 +1029,6 @@ export interface BotStatus {
   running: boolean;
   channel: BotChannelStatus;
   channels?: BotChannelStatus[];
-  /** 各机器人自己的 NoneBot 桥接状态，按机器人 ID 索引；没开桥接的不出现。 */
-  nonebot_bridges?: Record<string, {
-    enabled: boolean;
-    connected: boolean;
-    endpoint?: string;
-    last_error?: string;
-    updated_at: string;
-  }>;
   plugins: PluginState[];
   recent_events?: BotEvent[];
   active_workers: number;
@@ -2627,8 +2615,6 @@ export interface StatsBotSummary {
   plugins_enabled: number;
   plugins_total: number;
   last_error?: string;
-  bridge_enabled: boolean;
-  bridge_connected: boolean;
 }
 
 export interface StatsServerSummary {

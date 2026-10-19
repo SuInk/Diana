@@ -25,9 +25,6 @@ func TestBotHandlerConfigKeepsTokenHidden(t *testing.T) {
 			Enabled:                 false,
 			OneBotReverseWSEndpoint: "ws://127.0.0.1:18080/onebot/v11/ws",
 			OneBotAccessToken:       "secret",
-			NoneBotBridgeEnabled:    true,
-			NoneBotBridgeEndpoint:   "ws://127.0.0.1:8080/onebot/v11/ws",
-			NoneBotBridgeToken:      "nonebot-secret",
 		},
 		fakeChannel{},
 		assistant.NewDefaultPluginManager(),
@@ -41,7 +38,7 @@ func TestBotHandlerConfigKeepsTokenHidden(t *testing.T) {
 	})
 	router := botTestRouter(handler)
 
-	body := []byte(`{"enabled":false,"onebot_reverse_ws_endpoint":"ws://127.0.0.1:18080/onebot/v11/ws","nonebot_bridge_enabled":true,"nonebot_bridge_endpoint":"ws://127.0.0.1:8080/onebot/v11/ws","group_triggers":["Diana"],"disabled_groups":["123456"],"welcome_enabled":true,"welcome_message":"欢迎 {user_id}","request_timeout_ms":1000}`)
+	body := []byte(`{"enabled":false,"onebot_reverse_ws_endpoint":"ws://127.0.0.1:18080/onebot/v11/ws","group_triggers":["Diana"],"disabled_groups":["123456"],"welcome_enabled":true,"welcome_message":"欢迎 {user_id}","request_timeout_ms":1000}`)
 	req := httptest.NewRequest(http.MethodPost, "/api/assistant/config", bytes.NewReader(body))
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
@@ -56,9 +53,6 @@ func TestBotHandlerConfigKeepsTokenHidden(t *testing.T) {
 	if payload.OneBotAccessToken != "" || !payload.OneBotAccessTokenConfigured {
 		t.Fatalf("token leaked or flag wrong: %#v", payload)
 	}
-	if payload.NoneBotBridgeToken != "" || !payload.NoneBotBridgeTokenConfigured {
-		t.Fatalf("nonebot token leaked or flag wrong: %#v", payload)
-	}
 	if len(payload.DisabledGroups) != 1 || payload.DisabledGroups[0] != "123456" {
 		t.Fatalf("disabled groups wrong: %#v", payload.DisabledGroups)
 	}
@@ -67,9 +61,6 @@ func TestBotHandlerConfigKeepsTokenHidden(t *testing.T) {
 	}
 	if runtime.ProfileConfig("").OneBotAccessToken != "secret" {
 		t.Fatalf("stored token = %q", runtime.ProfileConfig("").OneBotAccessToken)
-	}
-	if runtime.ProfileConfig("").NoneBotBridgeToken != "nonebot-secret" {
-		t.Fatalf("stored nonebot token = %q", runtime.ProfileConfig("").NoneBotBridgeToken)
 	}
 }
 
@@ -671,7 +662,6 @@ func TestBotConfigGetMasksTokensUnlessSecretsRequested(t *testing.T) {
 	cfg := assistant.DefaultBotConfig()
 	cfg.OneBotAccessToken = "onebot-secret-token"
 	cfg.TelegramBotToken = "telegram-secret-token"
-	cfg.NoneBotBridgeToken = "bridge-secret-token"
 
 	runtime := assistant.NewRuntime(cfg, fakeChannel{}, assistant.NewDefaultPluginManager(), nil, nil, nil, nil)
 	handler := NewBotHandlerWithFactory(context.Background(), runtime, func(assistant.BotConfig) assistant.Channel {
@@ -695,15 +685,15 @@ func TestBotConfigGetMasksTokensUnlessSecretsRequested(t *testing.T) {
 	}
 
 	masked := fetch("/api/assistant/config")
-	if masked.OneBotAccessToken != "" || masked.TelegramBotToken != "" || masked.NoneBotBridgeToken != "" {
+	if masked.OneBotAccessToken != "" || masked.TelegramBotToken != "" {
 		t.Fatalf("default response leaked credentials: %#v", masked)
 	}
-	if !masked.OneBotAccessTokenConfigured || !masked.TelegramBotTokenConfigured || !masked.NoneBotBridgeTokenConfigured {
+	if !masked.OneBotAccessTokenConfigured || !masked.TelegramBotTokenConfigured {
 		t.Fatalf("configured flags = %#v, want all true", masked)
 	}
 
 	revealed := fetch("/api/assistant/config?include_secrets=true")
-	if revealed.OneBotAccessToken != cfg.OneBotAccessToken || revealed.TelegramBotToken != cfg.TelegramBotToken || revealed.NoneBotBridgeToken != cfg.NoneBotBridgeToken {
+	if revealed.OneBotAccessToken != cfg.OneBotAccessToken || revealed.TelegramBotToken != cfg.TelegramBotToken {
 		t.Fatalf("include_secrets response = %#v", revealed)
 	}
 	if len(revealed.Profiles) != 1 || revealed.Profiles[0].OneBotAccessToken != cfg.OneBotAccessToken {

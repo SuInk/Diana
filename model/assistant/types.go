@@ -691,9 +691,6 @@ type BotConfig struct {
 	WeComSecret                 string           `json:"wecom_secret,omitempty"`
 	WeComToken                  string           `json:"wecom_token,omitempty"`
 	WeComEncodingAESKey         string           `json:"wecom_encoding_aes_key,omitempty"`
-	NoneBotBridgeEnabled        bool             `json:"nonebot_bridge_enabled,omitempty"`
-	NoneBotBridgeEndpoint       string           `json:"nonebot_bridge_endpoint,omitempty"`
-	NoneBotBridgeToken          string           `json:"nonebot_bridge_token,omitempty"`
 	BotAccount                  string           `json:"bot_account,omitempty"`
 	OwnerID                     string           `json:"owner_id,omitempty"`
 	OwnerLoginEnabled           bool             `json:"owner_login_enabled,omitempty"`
@@ -1408,10 +1405,6 @@ type ConfigPayload struct {
 	WeComEncodingAESKeyConfigured     bool               `json:"wecom_encoding_aes_key_configured,omitempty"`
 	// CallbackPath 是回调型平台要填到对方后台的路径，只读，供 WebUI 拼完整地址。
 	CallbackPath                   string               `json:"callback_path,omitempty"`
-	NoneBotBridgeEnabled           bool                 `json:"nonebot_bridge_enabled,omitempty"`
-	NoneBotBridgeEndpoint          string               `json:"nonebot_bridge_endpoint,omitempty"`
-	NoneBotBridgeToken             string               `json:"nonebot_bridge_token,omitempty"`
-	NoneBotBridgeTokenConfigured   bool                 `json:"nonebot_bridge_token_configured,omitempty"`
 	BotAccount                     string               `json:"bot_account,omitempty"`
 	OwnerID                        string               `json:"owner_id,omitempty"`
 	OwnerLoginEnabled              bool                 `json:"owner_login_enabled,omitempty"`
@@ -2129,7 +2122,6 @@ func DefaultBotConfig() BotConfig {
 		Platform:                DefaultPlatform,
 		Enabled:                 false,
 		OneBotReverseWSEndpoint: "ws://127.0.0.1:18080/onebot/v11/ws",
-		NoneBotBridgeEndpoint:   "ws://127.0.0.1:8080/onebot/v11/ws",
 		GroupTriggers:           []string{"Diana", "diana"},
 		GroupTriggerMode:        defaultAliasTriggerMode,
 		// 引用和 @ 默认交给模型自己判断。「每条都带」和「一条都不带」都不像真人，
@@ -2250,9 +2242,6 @@ func (cfg BotConfig) WithDefaults() BotConfig {
 	}
 	if strings.TrimSpace(cfg.OneBotReverseWSEndpoint) == "" {
 		cfg.OneBotReverseWSEndpoint = defaults.OneBotReverseWSEndpoint
-	}
-	if strings.TrimSpace(cfg.NoneBotBridgeEndpoint) == "" {
-		cfg.NoneBotBridgeEndpoint = defaults.NoneBotBridgeEndpoint
 	}
 	if len(cfg.GroupTriggers) == 0 {
 		cfg.GroupTriggers = append([]string(nil), defaults.GroupTriggers...)
@@ -2794,9 +2783,6 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		WeComTokenConfigured:              cfg.WeComToken != "",
 		WeComEncodingAESKeyConfigured:     cfg.WeComEncodingAESKey != "",
 		CallbackPath:                      CallbackPathFor(cfg.Platform),
-		NoneBotBridgeEnabled:              cfg.NoneBotBridgeEnabled,
-		NoneBotBridgeEndpoint:             cfg.NoneBotBridgeEndpoint,
-		NoneBotBridgeTokenConfigured:      cfg.NoneBotBridgeToken != "",
 		BotAccount:                        cfg.BotAccount,
 		OwnerID:                           cfg.OwnerID,
 		OwnerLoginEnabled:                 cfg.OwnerLoginEnabled,
@@ -2959,7 +2945,6 @@ func PayloadFromConfigWithSecrets(cfg BotConfig) ConfigPayload {
 	payload.OneBotHTTPSecret = cfg.OneBotHTTPSecret
 	payload.OneBotAccessToken = cfg.OneBotAccessToken
 	payload.TelegramBotToken = cfg.TelegramBotToken
-	payload.NoneBotBridgeToken = cfg.NoneBotBridgeToken
 	payload.QQAppSecret = cfg.QQAppSecret
 	payload.DingTalkClientSecret = cfg.DingTalkClientSecret
 	payload.FeishuAppSecret = cfg.FeishuAppSecret
@@ -3059,9 +3044,6 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		WeComSecret:                 payload.WeComSecret,
 		WeComToken:                  payload.WeComToken,
 		WeComEncodingAESKey:         payload.WeComEncodingAESKey,
-		NoneBotBridgeEnabled:        payload.NoneBotBridgeEnabled,
-		NoneBotBridgeEndpoint:       payload.NoneBotBridgeEndpoint,
-		NoneBotBridgeToken:          payload.NoneBotBridgeToken,
 		BotAccount:                  payload.BotAccount,
 		OwnerID:                     payload.OwnerID,
 		OwnerLoginEnabled:           payload.OwnerLoginEnabled,
@@ -3207,10 +3189,6 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 	if cfg.OneBotAccessToken == "" {
 		// 前端留空 token 表示沿用旧值，不表示删除鉴权。
 		cfg.OneBotAccessToken = existing.OneBotAccessToken
-	}
-	if cfg.NoneBotBridgeToken == "" {
-		// NoneBot bridge token 与 OneBot token 语义一致，也保留旧值。
-		cfg.NoneBotBridgeToken = existing.NoneBotBridgeToken
 	}
 	if cfg.TelegramBotToken == "" {
 		cfg.TelegramBotToken = existing.TelegramBotToken

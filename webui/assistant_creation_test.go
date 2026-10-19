@@ -20,7 +20,6 @@ func TestNewBotUsesFreshDefaultsAndDoesNotInheritSecrets(t *testing.T) {
 	existing.OneBotAccessToken = "original-onebot-token"
 	existing.OneBotHTTPSecret = "original-http-secret"
 	existing.TelegramBotToken = "original-telegram-token"
-	existing.NoneBotBridgeToken = "original-bridge-token"
 	existing.QQAppSecret = "original-qq-secret"
 	existing.DingTalkClientSecret = "original-dingtalk-secret"
 	existing.FeishuAppSecret = "original-feishu-secret"
@@ -86,7 +85,7 @@ func TestNewBotUsesFreshDefaultsAndDoesNotInheritSecrets(t *testing.T) {
 		t.Fatalf("created bot private admission = %q, want disabled", fresh.PrivateAdmission.Mode)
 	}
 	for field, value := range map[string]string{
-		"onebot": fresh.OneBotAccessToken, "http": fresh.OneBotHTTPSecret, "telegram": fresh.TelegramBotToken, "bridge": fresh.NoneBotBridgeToken,
+		"onebot": fresh.OneBotAccessToken, "http": fresh.OneBotHTTPSecret, "telegram": fresh.TelegramBotToken,
 		"qq": fresh.QQAppSecret, "dingtalk": fresh.DingTalkClientSecret, "feishu": fresh.FeishuAppSecret, "wecom": fresh.WeComSecret,
 	} {
 		if value != "" {

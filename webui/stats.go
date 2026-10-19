@@ -229,8 +229,6 @@ type StatsBotSummary struct {
 	PluginsEnabled int    `json:"plugins_enabled"`
 	PluginsTotal   int    `json:"plugins_total"`
 	LastError      string `json:"last_error,omitempty"`
-	BridgeEnabled  bool   `json:"bridge_enabled"`
-	BridgeOK       bool   `json:"bridge_connected"`
 }
 
 // StatsProfileCounters 是单台机器人的那部分计数。字段名和 StatsSnapshot 里对应
@@ -428,15 +426,12 @@ func (h *StatsHandler) stats(c *gin.Context) {
 
 // summarizeBotStatus 把完整运行时状态压缩成 Dashboard 摘要。
 func summarizeBotStatus(status assistant.RuntimeStatus) StatsBotSummary {
-	bridgeEnabled, bridgeConnected := status.BridgeSummary()
 	summary := StatsBotSummary{
 		Running:       status.Running,
 		Connected:     status.Channel.Connected,
 		SelfID:        status.Channel.SelfID,
 		ActiveWorkers: status.ActiveWorkers,
 		LastError:     status.LastError,
-		BridgeEnabled: bridgeEnabled,
-		BridgeOK:      bridgeConnected,
 	}
 	summary.PluginsTotal = len(status.Plugins)
 	for _, plugin := range status.Plugins {

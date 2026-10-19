@@ -3,47 +3,11 @@
 
 package assistant
 
-import "testing"
-
-// TestOneBotEventPayloadForGroup 验证对应功能场景。
-func TestOneBotEventPayloadForGroup(t *testing.T) {
-	event := MessageEvent{
-		Kind:        EventKindGroup,
-		Time:        123,
-		SelfID:      "42",
-		UserID:      "1001",
-		GroupID:     "2002",
-		MessageID:   "3003",
-		MessageType: "group",
-		RawMessage:  "hello",
-		Segments:    []MessageSegment{{Type: "text", Data: map[string]string{"text": "hello"}}},
-		SenderName:  "Alice",
-	}
-
-	payload := oneBotEventPayload(event)
-	if payload["post_type"] != "message" || payload["message_type"] != "group" {
-		t.Fatalf("payload = %#v", payload)
-	}
-	if payload["self_id"] != int64(42) || payload["group_id"] != int64(2002) {
-		t.Fatalf("numeric ids not converted: %#v", payload)
-	}
-	if payload["raw_message"] != "hello" {
-		t.Fatalf("raw_message = %#v", payload["raw_message"])
-	}
-}
-
-// TestConfigFromPayloadKeepsNoneBotBridgeToken 验证对应功能场景。
-func TestConfigFromPayloadKeepsNoneBotBridgeToken(t *testing.T) {
-	got := ConfigFromPayload(ConfigPayload{
-		Enabled:               true,
-		NoneBotBridgeEnabled:  true,
-		NoneBotBridgeEndpoint: "ws://127.0.0.1:8080/onebot/v11/ws",
-	}, BotConfig{NoneBotBridgeToken: "old-token"})
-
-	if got.NoneBotBridgeToken != "old-token" {
-		t.Fatalf("NoneBotBridgeToken = %q", got.NoneBotBridgeToken)
-	}
-}
+import (
+	"encoding/json"
+	"strings"
+	"testing"
+)
 
 func TestConfigPayloadKeepsProactiveReplyChance(t *testing.T) {
 	cfg := ConfigFromPayload(ConfigPayload{
@@ -82,5 +46,28 @@ func TestConfigPayloadKeepsEditablePrompts(t *testing.T) {
 	}
 	if got := payload.PromptOverrides[promptProactiveReplySpec.Key]; got != "custom proactive reply prompt" {
 		t.Fatalf("proactive reply override = %q", got)
+	}
+}
+
+// Removed bridge settings in existing databases must not break configuration loading
+// or reappear in exported configuration, including the old bridge credential.
+func TestConfigIgnoresRemovedBridgeSettings(t *testing.T) {
+	raw := []byte(`{"name":"Diana","onebot_access_token":"onebot-credential","nonebot_bridge_enabled":true,"nonebot_bridge_endpoint":"ws://127.0.0.1:8080/onebot/v11/ws","nonebot_bridge_token":"retired-bridge-credential"}`)
+	var cfg BotConfig
+	if err := json.Unmarshal(raw, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	cfg = cfg.WithDefaults()
+	if cfg.Name != "Diana" || cfg.OneBotAccessToken != "onebot-credential" {
+		t.Fatal("loading legacy settings changed the active connection")
+	}
+	for _, value := range []any{cfg, PayloadFromConfig(cfg)} {
+		encoded, err := json.Marshal(value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(encoded), "nonebot_bridge") || strings.Contains(string(encoded), "retired-bridge-credential") {
+			t.Fatal("removed bridge settings survived round trip")
+		}
 	}
 }

@@ -52,7 +52,6 @@ func TestSQLiteStorePersistsConfigsAndPluginStates(t *testing.T) {
 		Enabled:                 true,
 		OneBotReverseWSEndpoint: "ws://127.0.0.1:18080/onebot/v11/ws",
 		OneBotAccessToken:       "1234567890abcdef",
-		NoneBotBridgeToken:      "fedcba0987654321",
 		BotAccount:              "123456",
 		RequestTimeout:          30 * time.Second,
 	}.WithDefaults()

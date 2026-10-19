@@ -52,7 +52,7 @@ func TestParticipationIdentityFollowsCurrentProfile(t *testing.T) {
 		}
 		for _, chatIn := range []chatInSettings{cfg.chatInSettings(), {}} {
 			prompt := proactiveReplyRouteSystemPrompt(cfg, chatIn)
-			for _, want := range []string{`"name":"` + name + `"`, name + "是天文社成员", "朋友叫小雨", "人设中的其他人物不等于本机器人"} {
+			for _, want := range []string{`"name":"` + name + `"`, name + "是天文社成员", "朋友叫小雨", "其他机器人、其他群友和人设中的其他人物都不等于本人", "「本人」「我」以及判据中的「机器人」只指上述当前角色"} {
 				if !strings.Contains(prompt, want) {
 					t.Fatalf("routing identity missing %q", want)
 				}

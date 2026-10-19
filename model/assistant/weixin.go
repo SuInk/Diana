@@ -668,3 +668,16 @@ func (c *WeixinChannel) saveState() {
 		log.Printf("weixin: 保存本地状态失败: %v", err)
 	}
 }
+
+// sleepContext 执行可被 context 取消的等待。
+func sleepContext(ctx context.Context, duration time.Duration) bool {
+	timer := time.NewTimer(duration)
+	defer timer.Stop()
+	// 可取消 sleep，服务停止时不会被重连等待卡住。
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
+}

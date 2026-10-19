@@ -25,12 +25,11 @@ type dianaConfigSnapshot struct {
 }
 
 type dianaRuntimeSnapshot struct {
-	Running       bool                `json:"running"`
-	Channel       ChannelStatus       `json:"channel"`
-	NoneBotBridge NoneBotBridgeStatus `json:"nonebot_bridge"`
-	ActiveWorkers int                 `json:"active_workers"`
-	LastError     string              `json:"last_error,omitempty"`
-	UpdatedAt     time.Time           `json:"updated_at"`
+	Running       bool          `json:"running"`
+	Channel       ChannelStatus `json:"channel"`
+	ActiveWorkers int           `json:"active_workers"`
+	LastError     string        `json:"last_error,omitempty"`
+	UpdatedAt     time.Time     `json:"updated_at"`
 }
 
 type dianaBotConfigSnapshot struct {
@@ -45,9 +44,6 @@ type dianaBotConfigSnapshot struct {
 	OneBotHTTPSecretConfigured      bool                 `json:"onebot_http_secret_configured"`
 	OneBotReverseWSEndpoint         string               `json:"onebot_reverse_ws_endpoint,omitempty"`
 	OneBotAccessTokenConfigured     bool                 `json:"onebot_access_token_configured"`
-	NoneBotBridgeEnabled            bool                 `json:"nonebot_bridge_enabled"`
-	NoneBotBridgeEndpoint           string               `json:"nonebot_bridge_endpoint,omitempty"`
-	NoneBotBridgeTokenConfigured    bool                 `json:"nonebot_bridge_token_configured"`
 	BotAccount                      string               `json:"bot_account,omitempty"`
 	OwnerID                         string               `json:"owner_id,omitempty"`
 	OwnerLoginEnabled               bool                 `json:"owner_login_enabled"`
@@ -258,7 +254,7 @@ func (r *Runtime) dianaConfigSnapshot(event MessageEvent) dianaConfigSnapshot {
 	bot.DisabledGroups = r.disabledGroupIDs(r.eventProfileID(event))
 	return dianaConfigSnapshot{
 		Note:        "配置已脱敏：不会返回 API key、OneBot token、自定义 header 值、config.yaml 原文或 secrets 文件内容。",
-		Runtime:     dianaRuntimeFromStatus(status, cfg.ID),
+		Runtime:     dianaRuntimeFromStatus(status),
 		Bot:         bot,
 		LLM:         r.dianaLLMSnapshot(),
 		Skills:      dianaPluginSkillsFromStates(status.Plugins),
@@ -270,18 +266,14 @@ func (r *Runtime) dianaConfigSnapshot(event MessageEvent) dianaConfigSnapshot {
 // 客户端报错带着整条请求地址（订阅地址里的令牌、平台地址里的 access_token），
 // 中转网关的报错回显请求头；Endpoint 是主人填的连接地址，令牌可能就写在查询参数里。
 // 这些都只给掩码。
-func dianaRuntimeFromStatus(status RuntimeStatus, profileID string) dianaRuntimeSnapshot {
+func dianaRuntimeFromStatus(status RuntimeStatus) dianaRuntimeSnapshot {
 	channel := status.Channel
 	channel.Endpoint = secretmask.URLs(channel.Endpoint)
 	channel.LastError = secretmask.Text(channel.LastError)
 	channel.AccountStatusMessage = secretmask.Text(channel.AccountStatusMessage)
-	bridge := status.NoneBotBridges[profileID]
-	bridge.Endpoint = secretmask.URLs(bridge.Endpoint)
-	bridge.LastError = secretmask.Text(bridge.LastError)
 	return dianaRuntimeSnapshot{
 		Running:       status.Running,
 		Channel:       channel,
-		NoneBotBridge: bridge,
 		ActiveWorkers: status.ActiveWorkers,
 		LastError:     secretmask.Text(status.LastError),
 		UpdatedAt:     status.UpdatedAt,
@@ -302,9 +294,6 @@ func dianaBotConfigFromConfig(cfg BotConfig) dianaBotConfigSnapshot {
 		OneBotHTTPSecretConfigured:      strings.TrimSpace(cfg.OneBotHTTPSecret) != "",
 		OneBotReverseWSEndpoint:         secretmask.URLs(cfg.OneBotReverseWSEndpoint),
 		OneBotAccessTokenConfigured:     strings.TrimSpace(cfg.OneBotAccessToken) != "",
-		NoneBotBridgeEnabled:            cfg.NoneBotBridgeEnabled,
-		NoneBotBridgeEndpoint:           secretmask.URLs(cfg.NoneBotBridgeEndpoint),
-		NoneBotBridgeTokenConfigured:    strings.TrimSpace(cfg.NoneBotBridgeToken) != "",
 		BotAccount:                      cfg.BotAccount,
 		OwnerID:                         cfg.OwnerID,
 		OwnerLoginEnabled:               cfg.OwnerLoginEnabled,

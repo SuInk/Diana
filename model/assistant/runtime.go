@@ -212,15 +212,13 @@ type ReplySuppressionStore interface {
 }
 
 type RuntimeStatus struct {
-	Running  bool            `json:"running"`
-	Channel  ChannelStatus   `json:"channel"`
-	Channels []ChannelStatus `json:"channels,omitempty"`
-	// NoneBotBridges 是各机器人自己的 NoneBot 桥接状态，按机器人 ID 索引；没开桥接的不出现。
-	NoneBotBridges map[string]NoneBotBridgeStatus `json:"nonebot_bridges,omitempty"`
-	Plugins        []PluginState                  `json:"plugins"`
-	RecentEvents   []EventRecord                  `json:"recent_events,omitempty"`
-	ActiveWorkers  int                            `json:"active_workers"`
-	ActiveTasks    int                            `json:"active_subagent_tasks"`
+	Running       bool            `json:"running"`
+	Channel       ChannelStatus   `json:"channel"`
+	Channels      []ChannelStatus `json:"channels,omitempty"`
+	Plugins       []PluginState   `json:"plugins"`
+	RecentEvents  []EventRecord   `json:"recent_events,omitempty"`
+	ActiveWorkers int             `json:"active_workers"`
+	ActiveTasks   int             `json:"active_subagent_tasks"`
 	// LLMConcurrency 是模型侧的并发，和 ActiveWorkers 不是一个量级；LLMUsage 是
 	// 这些调用花掉的 token。两者见 llm_call_metrics.go。
 	LLMConcurrency LLMConcurrencyStatus `json:"llm_concurrency"`
@@ -385,10 +383,8 @@ type Runtime struct {
 	// relayPairs 是「消息互通」的链路表，跟着机器人配置集一起下发。
 	relayPairs []MessageRelayPair
 	channel    Channel
-	// bridges 是各机器人自己的 NoneBot 桥接，按机器人 ID 索引，见 nonebot_bridges.go。
-	bridges  map[string]*NoneBotBridge
-	plugins  *PluginManager
-	llmStore LLMProfileStore
+	plugins    *PluginManager
+	llmStore   LLMProfileStore
 	// llmDowngrades 落盘「哪个端点的哪个模型拒过哪些请求字段」，重启后
 	// 不必重新学。
 	llmDowngrades LLMDowngradeStore
@@ -894,7 +890,6 @@ func NewRuntime(cfg BotConfig, channel Channel, plugins *PluginManager, llmStore
 		runtime.reminders = wakingReminderStore{ReminderStore: reminders, wake: runtime.wakeReminderLoop}
 	}
 	runtime.members = newMemberCacheForEvent(runtime.callOneBotAPIForEvent)
-	runtime.reconcileBridges()
 	plugins.SetSpeechSynthesizer(runtime.slotSpeechSynthesizer)
 	return runtime
 }
@@ -929,7 +924,6 @@ func (r *Runtime) SetProfiles(set ProfileSet) {
 	r.relayPairs = set.MessageRelays
 	r.updatedAt = time.Now()
 	r.mu.Unlock()
-	r.reconcileBridges()
 }
 
 // SetProfileAliases 设置旧档案 ID → 现在档案 ID 的映射。
@@ -1060,7 +1054,7 @@ func (r *Runtime) Start(parent context.Context) error {
 
 	go func() {
 		defer recoverGoroutinePanic("runtime.go:702")
-		// 提醒循环、NoneBot 桥接和 OneBot 主连接共享同一个启动生命周期。
+		// 提醒循环和 OneBot 主连接共享同一个启动生命周期。
 		go func() {
 			defer recoverGoroutinePanic("runtime.reminderLoop")
 			r.runReminderLoop(ctx)
@@ -1095,7 +1089,6 @@ func (r *Runtime) Start(parent context.Context) error {
 			defer recoverGoroutinePanic("runtime.memoryCoordinator")
 			r.runMemoryCoordinator(ctx, leaseOwner+"-memory", releaseStaleLeases, memoryDone)
 		}()
-		r.startBridges(ctx)
 		err := r.channel.Connect(ctx, r.HandleEvent)
 		if err != nil && ctx.Err() == nil {
 			r.setError(err.Error())
@@ -1128,7 +1121,6 @@ func (r *Runtime) Stop() error {
 	}
 	r.clearProactiveReplyBatches()
 	r.clearErrorNoticeBursts()
-	r.stopBridges()
 	// 先取消 context 再关闭 channel，Connect/readLoop 会尽快从阻塞读里退出。
 	err := r.channel.Close()
 	if inboundDone != nil {
@@ -1573,7 +1565,6 @@ func (r *Runtime) Status() RuntimeStatus {
 		Running:        running,
 		Channel:        channelStatus,
 		Channels:       channelStatuses,
-		NoneBotBridges: r.bridgeStatuses(),
 		Plugins:        r.plugins.List(),
 		RecentEvents:   recent,
 		ActiveWorkers:  r.activeCount(),
@@ -1882,7 +1873,6 @@ func (r *Runtime) routeMessageEvent(ctx context.Context, event MessageEvent) (Me
 		r.record(r.decisionEventRecord(event, text, "ignored_unavailable_group"))
 		return event, text, false, "ignored_unavailable_group"
 	}
-	r.forwardToBridge(event)
 	event = r.enrichReplyReference(ctx, event)
 	event = r.enrichForwardMessages(ctx, event)
 	if !r.skipVoiceTranscriptionWhileMuted(event) {

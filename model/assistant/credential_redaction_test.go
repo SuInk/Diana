@@ -83,11 +83,10 @@ func TestBotConfigRuntimeSnapshotMasksCredentials(t *testing.T) {
 	token := "obtok" + "0123456789abcdef"
 	endpoint := "ws://127.0.0.1:3001/?access_token=" + token
 	status := RuntimeStatus{
-		Channel:        ChannelStatus{Endpoint: endpoint, LastError: `dial ` + endpoint + `: connection refused`},
-		NoneBotBridges: map[string]NoneBotBridgeStatus{"bot": {Endpoint: endpoint, LastError: "bad handshake at " + endpoint}},
-		LastError:      `Post "` + endpoint + `": EOF`,
+		Channel:   ChannelStatus{Endpoint: endpoint, LastError: `dial ` + endpoint + `: connection refused`},
+		LastError: `Post "` + endpoint + `": EOF`,
 	}
-	body, _ := json.Marshal(dianaRuntimeFromStatus(status, "bot"))
+	body, _ := json.Marshal(dianaRuntimeFromStatus(status))
 	if strings.Contains(string(body), token) {
 		t.Fatalf("运行状态里有令牌原文：%s", body)
 	}

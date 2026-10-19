@@ -46,23 +46,6 @@ func TestInboundConcurrencyUsesTheLargestEnabledBot(t *testing.T) {
 	}
 }
 
-// NoneBot 桥接按机器人各建一个，停用或关掉桥接的机器人没有桥接。
-func TestNoneBotBridgesArePerBot(t *testing.T) {
-	bridge := func(id string, enabled, bridgeOn bool) BotConfig {
-		return BotConfig{ID: id, Enabled: enabled, NoneBotBridgeEnabled: bridgeOn, NoneBotBridgeEndpoint: "ws://127.0.0.1:1/" + id}
-	}
-	r := NewRuntime(bridge("a", true, true), nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
-	r.SetProfiles(ProfileSet{Profiles: []BotConfig{bridge("a", true, true), bridge("b", true, false), bridge("c", false, true)}})
-	statuses := r.bridgeStatuses()
-	if _, ok := statuses["a"]; !ok || len(statuses) != 1 {
-		t.Fatalf("桥接 = %+v，想要只有 a", statuses)
-	}
-	r.SetProfiles(ProfileSet{Profiles: []BotConfig{bridge("a", true, false), bridge("b", true, true)}})
-	if statuses = r.bridgeStatuses(); len(statuses) != 1 || statuses["b"].Endpoint != "ws://127.0.0.1:1/b" {
-		t.Fatalf("改配置后的桥接 = %+v", statuses)
-	}
-}
-
 // 运行时只要有一台启用的机器人就能启动；一台都没启用时报 ErrBotDisabled。
 func TestStartNeedsAnyEnabledBot(t *testing.T) {
 	off := twoBotRuntime(t, BotConfig{ID: "a"}, BotConfig{ID: "b"})

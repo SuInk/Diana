@@ -615,10 +615,6 @@ func (h *BotHandler) saveProfile(c *gin.Context, create bool) {
 		h.writeError(c, http.StatusBadRequest, "config_save", err, botLogTarget(cfg), botLogMetadata(cfg))
 		return
 	}
-	if err := validateTokenLength("nonebot_bridge_token", payload.NoneBotBridgeToken); err != nil {
-		h.writeError(c, http.StatusBadRequest, "config_save", err, botLogTarget(cfg), botLogMetadata(cfg))
-		return
-	}
 	if err := cfg.Validate(); err != nil {
 		h.writeError(c, http.StatusBadRequest, "config_save", err, botLogTarget(cfg), botLogMetadata(cfg))
 		return
@@ -1517,15 +1513,13 @@ func (h *BotHandler) persistState() error {
 // botLogMetadata 构造 OneBot v11 机器人操作日志的附加信息。
 func botLogMetadata(cfg assistant.BotConfig) map[string]any {
 	return map[string]any{
-		"profile_id":              cfg.ID,
-		"profile_name":            cfg.Name,
-		"platform":                cfg.Platform,
-		"enabled":                 cfg.Enabled,
-		"onebot_reverse_ws":       cfg.OneBotReverseWSEndpoint,
-		"nonebot_bridge_enabled":  cfg.NoneBotBridgeEnabled,
-		"nonebot_bridge_endpoint": cfg.NoneBotBridgeEndpoint,
-		"bot_qq":                  cfg.BotAccount,
-		"owner_id":                cfg.OwnerID,
+		"profile_id":        cfg.ID,
+		"profile_name":      cfg.Name,
+		"platform":          cfg.Platform,
+		"enabled":           cfg.Enabled,
+		"onebot_reverse_ws": cfg.OneBotReverseWSEndpoint,
+		"bot_qq":            cfg.BotAccount,
+		"owner_id":          cfg.OwnerID,
 	}
 }
 

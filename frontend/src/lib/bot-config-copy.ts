@@ -6,7 +6,7 @@ export function copyBotConfiguration(source: BotProfileConfig, defaults: BotProf
   const copied = JSON.parse(JSON.stringify(source)) as BotProfileConfig;
   const data = copied as unknown as Record<string, unknown>;
   for (const key of Object.keys(data)) {
-    if ((/^(onebot_|nonebot_|qq_|dingtalk_|feishu_|wecom_|weixin_|imessage_)/.test(key) && key !== "qq_typing_enabled")
+    if ((/^(onebot_|qq_|dingtalk_|feishu_|wecom_|weixin_|imessage_)/.test(key) && key !== "qq_typing_enabled")
       || (key.startsWith("telegram_") && key !== "telegram_suppress_bot_messages")) {
       delete data[key];
     }
@@ -21,7 +21,6 @@ export function copyBotConfiguration(source: BotProfileConfig, defaults: BotProf
     bot_account: undefined,
     avatar_url: undefined,
     callback_path: defaults.callback_path,
-    nonebot_bridge_enabled: false,
     name: `${source.name || "未命名机器人"} 副本`,
     platform: source.platform || defaults.platform,
     enabled: defaults.enabled

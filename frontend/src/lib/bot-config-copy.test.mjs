@@ -25,8 +25,8 @@ test("copy keeps behavior and nested model/persona drafts independent", () => {
 });
 
 test("copy clears identity, topology, all platform credentials and their saved indicators", () => {
-  const source = { ...defaults, id: "source", name: "Source", bot_account: "old-account", avatar_url: "old-avatar", profiles: [{ id: "source" }], message_relays: [{ id: "relay" }], connection_profile_id: "root", nonebot_bridge_enabled: true };
-  const credentials = ["onebot_access_token", "onebot_http_secret", "telegram_bot_token", "qq_app_secret", "dingtalk_client_secret", "feishu_app_secret", "feishu_verification_token", "feishu_encrypt_key", "wecom_secret", "wecom_token", "wecom_encoding_aes_key", "weixin_bot_token", "nonebot_bridge_token"];
+  const source = { ...defaults, id: "source", name: "Source", bot_account: "old-account", avatar_url: "old-avatar", profiles: [{ id: "source" }], message_relays: [{ id: "relay" }], connection_profile_id: "root" };
+  const credentials = ["onebot_access_token", "onebot_http_secret", "telegram_bot_token", "qq_app_secret", "dingtalk_client_secret", "feishu_app_secret", "feishu_verification_token", "feishu_encrypt_key", "wecom_secret", "wecom_token", "wecom_encoding_aes_key", "weixin_bot_token"];
   for (const field of credentials) {
     source[field] = "secret";
     source[`${field}_configured`] = true;
@@ -43,5 +43,4 @@ test("copy clears identity, topology, all platform credentials and their saved i
   for (const field of ["id", "bot_account", "avatar_url", "profiles", "message_relays", "qq_app_id", "dingtalk_client_id", "feishu_app_id", "wecom_corp_id", "weixin_bot_id", "onebot_ws_endpoint", "telegram_proxy_url"]) assert.equal(draft[field], undefined, field);
   assert.equal(draft.connection_profile_id, "");
   assert.equal(draft.onebot_reverse_ws_endpoint, defaults.onebot_reverse_ws_endpoint);
-  assert.equal(draft.nonebot_bridge_enabled, false);
 });

@@ -104,7 +104,12 @@ func TestLiveParticipationScoreAccuracy(t *testing.T) {
 		dir    int
 		lo, hi float64
 	}
+	otherBot := messageAddressing{ReplyTarget: "none", Mentions: []MessageMention{{UserID: "30001", Username: "小冰", Target: "other"}}, MentionsOther: true}
 	cases := []tc{
+		{"插话后继续追问本人", mk(none(), "小林", "你刚才说的展览是周日，上午还是下午", 0, h("阿杰", "我去拿个快递", 5), bot("展览是周日开始的", 20)), 1, 0, 1},
+		{"找其他机器人问知识", mk(otherBot, "小林", "@小冰 Iwasawa 理论是什么", 0), 0, 0.05, 0.25},
+		{"点名其他机器人", mk(none(), "小林", "小冰你能解释一下黑洞吗", 0, h("小林", "群里新来了个机器人小冰", 30)), 0, 0.05, 0.25},
+		{"称呼当前角色本人", mk(none(), "小林", "嘉然本人怎么看这件事", 0, h("小林", "周末准备去看展", 30)), 1, 0, 1},
 		{"@机器人提问", mk(atSelf, "小林", "@嘉然 周末去哪玩比较好", 0), 1, 0, 1},
 		{"叫名字问意见", mk(none(), "小林", "嘉然你觉得这件衣服怎么样", 0, h("小林", "刚买了件外套", 30)), 1, 0, 1},
 		{"反驳机器人刚才的话", mk(none(), "小林", "你说的不对吧，明明是周六", 0, bot("展览是周日开始的", 20)), 1, 0, 1},

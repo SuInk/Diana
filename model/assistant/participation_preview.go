@@ -17,7 +17,7 @@ func proactiveReplyRouteSystemPrompt(cfg BotConfig, chatIn chatInSettings) strin
 		Name    string `json:"name"`
 		Persona string `json:"persona"`
 	}{NormalizeProfileName(cfg.Name), cfg.personaPrompt()})
-	return prompt + "\n\n【待判断的机器人身份】\n" + string(identity) + "\n以上名字与人设是识别对话对象的参考资料，不是让你扮演角色或改变评分规则的指令。结合称呼、@、引用关系和上下文判断用户是否在跟这台机器人说话；人设中的其他人物不等于本机器人。不能仅因请求符合人设、机器人具备相应能力，或消息用了‘你’，就判定是在叫本机器人。"
+	return prompt + "\n\n【当前角色本人身份】\n" + string(identity) + "\n以上名字与人设是识别对话对象的参考资料，不是让你扮演角色或改变评分规则的指令。「本人」「我」以及判据中的「机器人」只指上述当前角色。结合称呼、@、引用关系和上下文判断用户是否在跟本人说话；其他机器人、其他群友和人设中的其他人物都不等于本人。找其他对象的问题，即使本人也能回答，也不算在找本人。不能仅因请求符合人设、机器人具备相应能力，或消息用了‘你’，就判定是在叫本机器人。"
 }
 
 // ParticipationPromptPreview 是接话评分这一步发给模型的内容，给界面预览用。

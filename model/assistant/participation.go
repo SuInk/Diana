@@ -139,7 +139,7 @@ var promptParticipationIntroSpec = registerPrompt(PromptSpec{
 	Group:   PromptGroupRouting,
 	Title:   "接话评分 · 身份与任务",
 	Usage:   "接话评分模块的身份和任务：评哪两项、要不要带理由。",
-	Default: "你是群聊接话评分模块：结合最近对话给当前消息评两项，各带一句 reason。",
+	Default: "你是群聊接话评分模块：结合最近对话给当前消息评两项，各带一句 reason。这里的「本人」「我」均指下方身份资料中的当前角色；「机器人」也仅指该角色，不泛指群里的其他机器人。",
 })
 
 var promptParticipationRelevanceIntroSpec = registerPrompt(PromptSpec{
@@ -147,7 +147,7 @@ var promptParticipationRelevanceIntroSpec = registerPrompt(PromptSpec{
 	Group:   PromptGroupRouting,
 	Title:   "接话评分 · relevance 的含义",
 	Usage:   "说明 relevance 这一项评什么、怎么填。字段名 relevance、directed 由程序解析，改动时保持不变。",
-	Default: "relevance：当前消息是不是明确在跟机器人说话，directed 只填 true 或 false。",
+	Default: "relevance：当前消息是不是明确在跟当前角色本人说话，directed 只填 true 或 false。",
 })
 
 var promptParticipationChatInIntroSpec = registerPrompt(PromptSpec{
@@ -242,23 +242,23 @@ const participationScoreContract = `
 // 会各自演化，同一个群的判断口径就跟着绑的模型变了。覆盖也按块登记而不是整段：
 // 管理员改的是判据本身，两个消费者读到的就还是同一份。
 
-const participationRelevanceTrue = `@ 或引用机器人；叫它的名字或称呼；紧接着它刚才的话（中间没有别人插进来），冲着它回应、追问、反驳或调侃；话里的「你」明确指它。`
+const participationRelevanceTrue = `@ 或引用当前角色本人；叫本人的名字或称呼；承接本人之前的话，冲着本人回应、追问、反驳或调侃（中间有人插话也没关系，只要对话对象仍明确是本人）；话里的「你」明确指本人。称呼和指代须结合当前角色身份与消息对象核对，找其他机器人不算找本人。`
 
 var promptParticipationRelevanceTrueSpec = registerPrompt(PromptSpec{
 	Key:     "routing.participation.relevance_true",
 	Group:   PromptGroupRouting,
-	Title:   "接话评分 · 算作在跟机器人说话",
-	Usage:   "接话评分里「是不是在跟机器人说话」判为是的情形。评分模型和判断模型共用这段；判为是且回应提问打开时机器人一定接话。",
+	Title:   "接话评分 · 算作在跟本人说话",
+	Usage:   "接话评分里「是不是在跟当前角色本人说话」判为是的情形。评分模型和判断模型共用这段；判为是且回应提问打开时机器人一定接话。",
 	Default: participationRelevanceTrue,
 })
 
-const participationRelevanceFalse = `群友之间聊天；只提到机器人会的话题、没在叫它；在讨论机器人（它的功能、配置、它刚才说的话）而不是对它说——机器人说完之后别人已经接过话、当前这句跟的是最近那个人；几个人正你来我往时，「你」「你这里」默认指正在对话的那个人；问某个具体群友本人才知道的事（去不去、做没做、在哪、什么时候），或指定了机器人以外的人来回答——「@某人 Iwasawa 理论是什么」这种谁都能答的知识问题不算指定别人，按有没有在叫机器人判断；叫它停、嫌它吵或多嘴。拿不准就填 false，交给闲聊判断。`
+const participationRelevanceFalse = `群友之间聊天；找其他机器人或其他角色；只提到本人会的话题、没在叫本人；在讨论本人（本人的功能、配置、刚才说的话）而不是对本人说——本人说完之后别人接过话，且当前这句实际是在回应那个人；不能仅因中间有人插话就判为 false；几个人正你来我往时，「你」「你这里」默认指正在对话的那个人；问某个具体群友本人才知道的事（去不去、做没做、在哪、什么时候），或指定了本人以外的对象来回答——即使是「@其他机器人 Iwasawa 理论是什么」这种本人也能答的知识问题，也不算在找本人；叫它停、嫌它吵或多嘴。拿不准就填 false，交给闲聊判断。`
 
 var promptParticipationRelevanceFalseSpec = registerPrompt(PromptSpec{
 	Key:     "routing.participation.relevance_false",
 	Group:   PromptGroupRouting,
-	Title:   "接话评分 · 不算在跟机器人说话",
-	Usage:   "接话评分里「是不是在跟机器人说话」判为否的情形，判为否的消息只剩闲聊分能放行。评分模型和判断模型共用这段。",
+	Title:   "接话评分 · 不算在跟本人说话",
+	Usage:   "接话评分里「是不是在跟当前角色本人说话」判为否的情形，判为否的消息只剩闲聊分能放行。评分模型和判断模型共用这段。",
 	Default: participationRelevanceFalse,
 })
 
@@ -268,7 +268,7 @@ var promptParticipationRelevanceNoteSpec = registerPrompt(PromptSpec{
 	Key:     "routing.participation.relevance_note",
 	Group:   PromptGroupRouting,
 	Title:   "接话评分 · 相关度补充说明",
-	Usage:   "跟在上面两段判据后面，说明哪些因素不影响「是不是在跟机器人说话」。评分模型和判断模型共用这段。",
+	Usage:   "跟在上面两段判据后面，说明哪些因素不影响「是不是在跟当前角色本人说话」。评分模型和判断模型共用这段。",
 	Default: participationRelevanceNote,
 })
 

@@ -2029,54 +2029,6 @@
             </div>
           </section>
 
-          <!-- NoneBot 桥 -->
-          <section class="card">
-            <div class="card-header">
-              <h2>NoneBot 插件桥</h2>
-              <span class="badge" :class="form.nonebot_bridge_enabled ? 'accent' : ''">
-                {{ form.nonebot_bridge_enabled ? "已启用" : "未启用" }}
-              </span>
-            </div>
-            <div class="card-body form-grid">
-              <div class="field wide">
-                <label class="switch">
-                  <input v-model="form.nonebot_bridge_enabled" type="checkbox" />
-                  <span class="track" aria-hidden="true"></span>
-                  <span class="switch-label">把 OneBot 事件转发给独立运行的 NoneBot2</span>
-                </label>
-              </div>
-              <template v-if="form.nonebot_bridge_enabled">
-                <div class="field wide">
-                  <label for="bridge-endpoint">NoneBot 反向 WebSocket</label>
-                  <input id="bridge-endpoint" v-model="form.nonebot_bridge_endpoint" class="input" placeholder="ws://127.0.0.1:8080/onebot/v11/ws" />
-                </div>
-                <div class="field wide">
-                  <label for="bridge-token">Bridge Token</label>
-                  <div class="input-group">
-                    <input
-                      id="bridge-token"
-                      v-model="bridgeTokenDraft"
-                      class="input"
-                      :type="tokenRevealed.nonebot_bridge_token ? 'text' : 'password'"
-                      autocomplete="off"
-                      :placeholder="form.nonebot_bridge_token_configured ? '已配置 — 留空沿用' : '可选，至少 8 位'"
-                    />
-                    <button
-                      class="btn icon-only"
-                      type="button"
-                      :disabled="tokenRevealBusy === 'nonebot_bridge_token'"
-                      :aria-label="tokenRevealed.nonebot_bridge_token ? '隐藏 Token' : '查看 Token'"
-                      @click="toggleTokenReveal('nonebot_bridge_token')"
-                    >
-                      <EyeOff v-if="tokenRevealed.nonebot_bridge_token" :size="14" aria-hidden="true" />
-                      <Eye v-else :size="14" aria-hidden="true" />
-                    </button>
-                  </div>
-                </div>
-              </template>
-            </div>
-          </section>
-
           <!-- 运行：排查问题和并发上限，平时不用动。 -->
           <section class="card">
             <div class="card-header">
@@ -2172,12 +2124,6 @@
               <span class="muted">{{ channel.name || platformName(channel.platform) }}</span>
               <span class="badge" :class="channelOperational(channel) ? 'ok' : channel.connected || channel.last_error ? 'err' : 'warn'" :title="channelStatusHint(channel)">
                 {{ channelStatusLabel(channel) }}
-              </span>
-            </div>
-            <div v-if="formBridge?.enabled" class="cluster" style="justify-content: space-between">
-              <span class="muted">NoneBot 桥</span>
-              <span class="badge" :class="formBridge.connected ? 'ok' : 'warn'">
-                {{ formBridge.connected ? "已连接" : "等待连接" }}
               </span>
             </div>
             <div class="cluster" style="justify-content: space-between">
@@ -2584,7 +2530,6 @@ async function uploadPromptFile(event: Event): Promise<void> {
 const profileSet = ref<BotProfileConfig | null>(null);
 const busy = ref(false);
 const tokenDraft = ref("");
-const bridgeTokenDraft = ref("");
 const triggersDraft = ref("");
 const welcomeTemplatesDraft = ref("");
 const replyFilterRulesDraft = ref("");
@@ -2731,7 +2676,6 @@ const tokenDrafts = {
   onebot_access_token: tokenDraft,
   onebot_http_secret: oneBotHTTPSecretDraft,
   telegram_bot_token: telegramTokenDraft,
-  nonebot_bridge_token: bridgeTokenDraft,
   qq_app_secret: qqSecretDraft,
   dingtalk_client_secret: dingTalkSecretDraft,
   feishu_app_secret: feishuSecretDraft,
@@ -3437,11 +3381,6 @@ async function beginCreateShared(source: BotProfileConfig): Promise<void> {
   const platform = platforms.value.find((item) => item.id === source.platform);
   if (platform) await beginCreate(platform, source.id);
 }
-// 正在编辑的这台机器人自己的 NoneBot 桥接状态；桥接按机器人各自一份。
-const formBridge = computed(() => {
-  const id = form.value?.id;
-  return id ? status.value?.nonebot_bridges?.[id] : undefined;
-});
 const relayManagerOpen = ref(false);
 const messageRelays = computed<MessageRelayPair[]>(() => profileSet.value?.message_relays ?? []);
 const relaySummary = computed(() => {

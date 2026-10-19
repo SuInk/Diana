@@ -601,7 +601,7 @@ export const demoStats: StatsSnapshot = {
   today_events: 1284, today_handled: 318, today_errors: 0, by_kind: { group: 1108, private: 176 },
   hourly: hourlyBuckets(1),
   avg_reply_ms: 5820, last_event_at: demoEvents[0].at,
-  bot: { running: true, connected: true, self_id: "100000001", active_workers: 2, plugins_enabled: 7, plugins_total: 8, bridge_enabled: false, bridge_connected: false },
+  bot: { running: true, connected: true, self_id: "100000001", active_workers: 2, plugins_enabled: 7, plugins_total: 8 },
   by_profile: {
     "bot-onebot": {
       total_events: 9_642, handled_events: 2_480, error_events: 7,
@@ -623,7 +623,7 @@ export const demoStatus: BotStatus = {
     { profile_id: "bot-onebot", platform: "onebot-v11", name: "Diana OneBot（演示）", connected: true, endpoint: "ws://127.0.0.1:18080/onebot/v11/ws", self_id: "100000001", updated_at: before(1) },
     { profile_id: "bot-telegram", platform: "telegram", name: "Diana Telegram（演示）", connected: true, endpoint: "https://api.telegram.org", self_id: "@diana_demo_bot", updated_at: before(1) }
   ],
-  nonebot_bridges: {}, plugins, recent_events: demoEvents, active_workers: 2,
+  plugins, recent_events: demoEvents, active_workers: 2,
   llm_concurrency: {
     active: 3, peak: 9,
     models: [
