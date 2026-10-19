@@ -244,6 +244,44 @@ func RemovePortraitField(existing []UserPortraitTrait, field UserPortraitField) 
 	return sortAndCapPortraitTraits(kept), removed
 }
 
+// RemovePortraitValue 只删一栏里值相同的那条，同栏其余条目原样保留。
+func RemovePortraitValue(existing []UserPortraitTrait, field UserPortraitField, value string) ([]UserPortraitTrait, int) {
+	kept := make([]UserPortraitTrait, 0, len(existing))
+	removed := 0
+	for _, trait := range existing {
+		if trait.Field == field && equivalentPortraitValue(trait.Value, value) {
+			removed++
+			continue
+		}
+		kept = append(kept, trait)
+	}
+	return sortAndCapPortraitTraits(kept), removed
+}
+
+// MatchPortraitValues 找出一栏里用户想删的那条。模型转述的措辞常和记下的不完全
+// 一样（「牙不好」对「牙齿不太好」），所以先认完全相同，没有再认互相包含的；
+// 包含命中不止一条时宁可不删，交回模型挑准。
+func MatchPortraitValues(existing []UserPortraitTrait, field UserPortraitField, value string) []string {
+	value = strings.Join(strings.Fields(value), " ")
+	if value == "" {
+		return nil
+	}
+	var contained []string
+	for _, trait := range existing {
+		if trait.Field != field {
+			continue
+		}
+		if equivalentPortraitValue(trait.Value, value) {
+			return []string{trait.Value}
+		}
+		stored, wanted := strings.ToLower(trait.Value), strings.ToLower(value)
+		if strings.Contains(stored, wanted) || strings.Contains(wanted, stored) {
+			contained = append(contained, trait.Value)
+		}
+	}
+	return contained
+}
+
 // sortAndCapPortraitTraits 按栏目顺序重排，并对每栏施加容量上限。
 func sortAndCapPortraitTraits(traits []UserPortraitTrait) []UserPortraitTrait {
 	out := make([]UserPortraitTrait, 0, len(traits))

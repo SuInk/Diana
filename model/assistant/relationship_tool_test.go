@@ -357,3 +357,61 @@ func TestDianaRelationshipToolRecordsAndForgetsPortrait(t *testing.T) {
 		t.Fatalf("owner edit did not land: %#v", memory.profiles["10006"])
 	}
 }
+
+func TestDianaRelationshipToolForgetsSinglePortraitValue(t *testing.T) {
+	memory := newMemoryUserMemoryStore()
+	runtime := NewRuntime(BotConfig{OwnerID: "10001", BotAccount: "10000"}, &recordingChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	runtime.SetUserMemoryStore(memory)
+	tool := newDianaRelationshipTool(runtime, MessageEvent{Kind: EventKindGroup, SelfID: "10000", GroupID: "20002", UserID: "10005"})
+	for _, value := range []string{"牙齿不太好", "对猫毛过敏", "左撇子"} {
+		if _, err := tool.Run(context.Background(), map[string]any{
+			"operation": "portrait_set", "portrait_field": "other", "portrait_value": value,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// 模型转述的措辞和记下的不一样，靠包含关系认出是哪一条。
+	raw, err := tool.Run(context.Background(), map[string]any{
+		"operation": "portrait_forget", "portrait_field": "other", "portrait_value": "牙齿不太",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(raw, "牙齿不太好") {
+		t.Fatalf("result should name the removed entry: %s", raw)
+	}
+	got := portraitValues(memory.profiles["10005"].Portrait)
+	if strings.Join(got, ",") != "对猫毛过敏,左撇子" && strings.Join(got, ",") != "左撇子,对猫毛过敏" {
+		t.Fatalf("forgetting one entry must keep the rest of the field: %v", got)
+	}
+
+	// 对不上就不删，并把现有条目交回模型。
+	_, err = tool.Run(context.Background(), map[string]any{
+		"operation": "portrait_forget", "portrait_field": "other", "portrait_value": "怕冷",
+	})
+	if err == nil || !strings.Contains(err.Error(), "对猫毛过敏") {
+		t.Fatalf("unmatched value should fail and list entries, got %v", err)
+	}
+	if len(memory.profiles["10005"].Portrait) != 2 {
+		t.Fatalf("unmatched forget must not touch the portrait: %#v", memory.profiles["10005"].Portrait)
+	}
+
+	// 不带 portrait_value 仍是清空整栏。
+	if _, err := tool.Run(context.Background(), map[string]any{
+		"operation": "portrait_forget", "portrait_field": "other",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(memory.profiles["10005"].Portrait) != 0 {
+		t.Fatalf("field forget did not clear: %#v", memory.profiles["10005"].Portrait)
+	}
+}
+
+func portraitValues(traits []UserPortraitTrait) []string {
+	values := make([]string, 0, len(traits))
+	for _, trait := range traits {
+		values = append(values, trait.Value)
+	}
+	return values
+}

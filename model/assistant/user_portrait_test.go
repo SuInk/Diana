@@ -188,3 +188,20 @@ func TestUserMemoryContextCarriesPortrait(t *testing.T) {
 		t.Fatalf("发言者标识应当比画像更晚被裁掉: %s", squeezed)
 	}
 }
+
+func TestMatchPortraitValuesPrefersExactAndRejectsAmbiguous(t *testing.T) {
+	traits := []UserPortraitTrait{
+		{Field: PortraitFieldInterest, Value: "打羽毛球"},
+		{Field: PortraitFieldInterest, Value: "看羽毛球比赛"},
+		{Field: PortraitFieldOther, Value: "羽毛球"},
+	}
+	if got := MatchPortraitValues(traits, PortraitFieldInterest, "打羽毛球"); len(got) != 1 || got[0] != "打羽毛球" {
+		t.Fatalf("exact match: %v", got)
+	}
+	if got := MatchPortraitValues(traits, PortraitFieldInterest, "羽毛球"); len(got) != 2 {
+		t.Fatalf("ambiguous containment should surface both: %v", got)
+	}
+	if got := MatchPortraitValues(traits, PortraitFieldInterest, " "); got != nil {
+		t.Fatalf("blank value: %v", got)
+	}
+}

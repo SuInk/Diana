@@ -94,7 +94,7 @@ func (t *dianaRelationshipTool) InputSchema() map[string]any {
 			"get", "list", "set", "adjust", "portrait_set", "portrait_forget"),
 		"target_user_id": toolStringParam("目标账号，默认被 @ 者或发言者；set/adjust 必填且不能是主人"),
 		"portrait_field": toolEnumParam("画像栏目；residence 只记城市，timezone 填 IANA 名，城市能定时区就一并记", PortraitFieldIDs()...),
-		"portrait_value": toolStringParam("portrait_set：≤30 字第三人称短语，覆盖原内容"),
+		"portrait_value": toolStringParam("portrait_set：≤30 字第三人称短语；portrait_forget：要删的那一条，省略则清空整栏"),
 		"history_limit":  toolIntParam("get 返回的最近变化条数，默认 "+itoa(defaultRelationshipHistoryLimit), 1, maximumRelationshipHistoryLimit),
 		"value":          toolIntParam("set：目标好感度", MinimumFavorability, MaximumFavorability),
 		"delta":          toolIntParam("adjust：增减量，可为负", MinimumFavorability-MaximumFavorability, MaximumFavorability-MinimumFavorability),
@@ -225,6 +225,28 @@ func (t *dianaRelationshipTool) runPortraitOperation(ctx context.Context, operat
 		}
 		update.PortraitTraits = []UserPortraitTrait{trait}
 		message = fmt.Sprintf("已把「%s」记进画像的%s栏。", trait.Value, trait.Label)
+	} else if value := strings.TrimSpace(configToolString(input, "portrait_value")); value != "" {
+		// 一栏能存好几条（爱好、其他等），用户说「别记牙不好」时只该删那一条；
+		// 早先这里不看 portrait_value 直接清栏，同栏其他条目跟着丢了。
+		current, err := t.currentPortrait(ctx, targetID)
+		if err != nil {
+			return "", err
+		}
+		matches := MatchPortraitValues(current, field, value)
+		if len(matches) != 1 {
+			existing := make([]string, 0)
+			for _, trait := range current {
+				if trait.Field == field {
+					existing = append(existing, "「"+trait.Value+"」")
+				}
+			}
+			if len(existing) == 0 {
+				return "", fmt.Errorf("画像的%s栏是空的，没有可删的内容", PortraitFieldLabel(field))
+			}
+			return "", fmt.Errorf("%s栏里没有唯一匹配「%s」的条目，现有：%s；portrait_value 请照抄要删的那条", PortraitFieldLabel(field), value, strings.Join(existing, "、"))
+		}
+		update.PortraitValueRemovals = []UserPortraitTrait{{Field: field, Value: matches[0]}}
+		message = fmt.Sprintf("已从画像的%s栏删掉「%s」，同栏其他条目保留。", PortraitFieldLabel(field), matches[0])
 	} else {
 		update.PortraitRemovals = []UserPortraitField{field}
 		message = fmt.Sprintf("已清空画像的%s栏。", PortraitFieldLabel(field))
@@ -245,6 +267,20 @@ func (t *dianaRelationshipTool) runPortraitOperation(ctx context.Context, operat
 		Message: message,
 		Target:  &snapshot,
 	})
+}
+
+func (t *dianaRelationshipTool) currentPortrait(ctx context.Context, targetID string) ([]UserPortraitTrait, error) {
+	t.runtime.mu.RLock()
+	store := t.runtime.userMemory
+	t.runtime.mu.RUnlock()
+	if store == nil {
+		return nil, fmt.Errorf("当前未启用用户关系存储")
+	}
+	profile, _, err := store.GetUserMemory(ctx, strings.TrimSpace(t.event.ProfileID), targetID)
+	if err != nil {
+		return nil, fmt.Errorf("读取人员画像失败: %w", err)
+	}
+	return profile.Portrait, nil
 }
 
 func (t *dianaRelationshipTool) updatedFavorability(ctx context.Context, operation string, targetID string, input map[string]any) (int, error) {

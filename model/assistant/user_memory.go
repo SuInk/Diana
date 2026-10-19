@@ -19,10 +19,12 @@ type UserMemoryUpdate struct {
 	FavorabilityChangeReason   string `json:"favorability_change_reason,omitempty"`
 	FavorabilityChangeOperator string `json:"favorability_change_operator,omitempty"`
 	Administrative             bool   `json:"administrative,omitempty"`
-	// PortraitTraits 是本次要并进画像的观察，PortraitRemovals 是要清空的栏目。
-	// 两者都只在给出时才动画像，普通的一次互动不会碰它。
-	PortraitTraits   []UserPortraitTrait `json:"portrait_traits,omitempty"`
-	PortraitRemovals []UserPortraitField `json:"portrait_removals,omitempty"`
+	// PortraitTraits 是本次要并进画像的观察，PortraitRemovals 是要清空的栏目，
+	// PortraitValueRemovals 是只删栏里某一条（按 Field+Value 精确匹配）。
+	// 三者都只在给出时才动画像，普通的一次互动不会碰它。
+	PortraitTraits        []UserPortraitTrait `json:"portrait_traits,omitempty"`
+	PortraitRemovals      []UserPortraitField `json:"portrait_removals,omitempty"`
+	PortraitValueRemovals []UserPortraitTrait `json:"portrait_value_removals,omitempty"`
 }
 
 type UserFavorabilityChange struct {

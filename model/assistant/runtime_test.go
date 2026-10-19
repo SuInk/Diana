@@ -5067,9 +5067,12 @@ func (s *memoryUserMemoryStore) UpdateUserMemory(_ context.Context, event Messag
 			profile.Memories = append(profile.Memories, UserMemoryItem{Text: text})
 		}
 	}
-	if len(update.PortraitRemovals) > 0 || len(update.PortraitTraits) > 0 {
+	if len(update.PortraitRemovals) > 0 || len(update.PortraitValueRemovals) > 0 || len(update.PortraitTraits) > 0 {
 		for _, field := range update.PortraitRemovals {
 			profile.Portrait, _ = RemovePortraitField(profile.Portrait, field)
+		}
+		for _, trait := range update.PortraitValueRemovals {
+			profile.Portrait, _ = RemovePortraitValue(profile.Portrait, trait.Field, trait.Value)
 		}
 		profile.Portrait = MergePortraitTraits(profile.Portrait, update.PortraitTraits, time.Now())
 	}

@@ -66,9 +66,12 @@ func (s *SQLiteStore) UpdateUserMemory(ctx context.Context, event assistant.Mess
 	} else {
 		profile.Favorability = clampUserFavorability(profile.Favorability + clampUserFavorabilityDelta(update.FavorabilityDelta))
 	}
-	if len(update.PortraitRemovals) > 0 || len(update.PortraitTraits) > 0 {
+	if len(update.PortraitRemovals) > 0 || len(update.PortraitValueRemovals) > 0 || len(update.PortraitTraits) > 0 {
 		for _, field := range update.PortraitRemovals {
 			profile.Portrait, _ = assistant.RemovePortraitField(profile.Portrait, field)
+		}
+		for _, trait := range update.PortraitValueRemovals {
+			profile.Portrait, _ = assistant.RemovePortraitValue(profile.Portrait, trait.Field, trait.Value)
 		}
 		profile.Portrait = assistant.MergePortraitTraits(profile.Portrait, update.PortraitTraits, time.Now())
 	}
