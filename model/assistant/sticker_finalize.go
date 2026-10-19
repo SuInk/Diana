@@ -53,29 +53,36 @@ func stickerReplyBefore(order StickerReplyOrder, modelBefore bool) bool {
 	}
 }
 
+// stickerReplyOrderPrompt 只在 auto 时教模型选先后；固定顺序由发送端直接执行，
+// 不必让模型知道，也不给它 sticker_order 字段。
 func stickerReplyOrderPrompt(order StickerReplyOrder) string {
-	switch normalizeStickerReplyOrder(order) {
-	case StickerReplyOrderAuto:
-		return "表情包顺序当前为 auto：有正文时由你根据当下聊天自主选择 sticker_order 的 before 或 after。是否配图和纯图回复仍由你判断。"
-	case StickerReplyOrderAfter:
-		return "表情包顺序已固定为 after：有正文时先发正文再发表情包，优先于自主选择顺序的指导；sticker_order 填 after。是否配图和纯图回复仍由你判断。"
-	default:
-		return "表情包顺序已固定为 before：有正文时先发表情包再发正文，优先于自主选择顺序的指导；sticker_order 填 before。是否配图和纯图回复仍由你判断。"
+	if normalizeStickerReplyOrder(order) != StickerReplyOrderAuto {
+		return ""
 	}
+	return "表情包和文字的先后由你在 sticker_order 里选：图是你对别人这句话的反应（笑死、震惊、无语、委屈、被夸得意）就 before，先甩图再补话；图是给你自己这段话收尾点题（晚安、说完一段后叉腰）才 after，别习惯性都放后面。"
+}
+
+// stickerFinalizeFields 是收尾时给模型的表情包字段；sticker_order 只在 auto 时提供。
+func stickerFinalizeFields(order StickerReplyOrder) []agent.FinalizeField {
+	fields := []agent.FinalizeField{stickerFinalizeField()}
+	if normalizeStickerReplyOrder(order) == StickerReplyOrderAuto {
+		fields = append(fields, stickerOrderField())
+	}
+	return fields
 }
 
 func stickerFinalizeField() agent.FinalizeField {
 	return agent.FinalizeField{
 		Name: stickerFinalizeFieldName,
 		// 「配不配由你判断」「挑不到就不发」是回放里触发率和误发的平衡点，别删。
-		Description: "想配表情包时填 2～6 个空格分隔的短关键词，如「得意 叉腰」。有正文时一起发，先后遵循固定配置，auto 时看 sticker_order；只回图填 silent=true、content 留空。挑不到合适的就不发。配不配由你按聊天判断。",
+		Description: "想配表情包时填 2～6 个空格分隔的短关键词，如「得意 叉腰」。有正文时一起发；只回图填 silent=true、content 留空。挑不到合适的就不发。配不配由你按聊天判断。",
 	}
 }
 
 func stickerOrderField() agent.FinalizeField {
 	return agent.FinalizeField{
 		Name:        stickerOrderFieldName,
-		Description: "固定顺序配置优先；仅 auto 时自主二选一：before 先甩图（对别人这句话的反应），after 后甩图（给自己这段话收尾点题）",
+		Description: "before 先甩图（对别人这句话的反应），after 后甩图（给自己这段话收尾点题）",
 		// 以前写的是「after 或留空先说完再甩图」，模型大多直接不填，线上一天 94 张
 		// 只有 1 张先发。两个值写成对等的选项，不给留空一个现成的默认。
 		// 改成枚举后 9/29–10/1 是 13/78 先发：接梗的「哈哈哈救命」「草」也选 after，
@@ -131,23 +138,29 @@ const (
 	stickerReplySendReserve   = 5 * time.Second
 )
 
-// 前置配图只短暂等待准备；预留预算是进入投递前的判断，不保证平台投递耗时。
-func (r *Runtime) sendFinalizeStickerBeforeReply(ctx context.Context, event MessageEvent, query string) {
+// sendFinalizeSticker 按收尾关键词配一张表情包。before 表示它排在正文前面：这时
+// 只短暂等待准备，免得拖住正文；预留预算是进入投递前的判断，不保证平台投递耗时。
+// 配不上、到了上限或普通发送错误只记日志，不阻断正文；父上下文取消由调用方尊重。
+func (r *Runtime) sendFinalizeSticker(ctx context.Context, event MessageEvent, query string, before bool) {
 	if ctx.Err() != nil || strings.TrimSpace(query) == "" {
 		return
 	}
-	deadline := time.Now().Add(stickerBeforeReplyTimeout)
-	if parentDeadline, ok := ctx.Deadline(); ok {
-		latest := parentDeadline.Add(-stickerReplySendReserve)
-		if !latest.After(time.Now()) {
-			return
+	prepareCtx := ctx
+	if before {
+		deadline := time.Now().Add(stickerBeforeReplyTimeout)
+		if parentDeadline, ok := ctx.Deadline(); ok {
+			latest := parentDeadline.Add(-stickerReplySendReserve)
+			if !latest.After(time.Now()) {
+				return
+			}
+			if latest.Before(deadline) {
+				deadline = latest
+			}
 		}
-		if latest.Before(deadline) {
-			deadline = latest
-		}
+		var cancel context.CancelFunc
+		prepareCtx, cancel = context.WithDeadline(ctx, deadline)
+		defer cancel()
 	}
-	stickerCtx, cancel := context.WithDeadline(ctx, deadline)
-	defer cancel()
 	_, settings, enabled := r.pluginWithSettingsForEvent(stickerPluginID, event)
 	if !enabled {
 		return
@@ -157,20 +170,19 @@ func (r *Runtime) sendFinalizeStickerBeforeReply(ctx context.Context, event Mess
 		candidate *stickerCandidate
 		err       error
 	}
+	// 准备放进 goroutine：选图和审核里有模型调用，不一定及时响应取消。
 	ready := make(chan preparation, 1)
 	go func() {
 		defer close(ready)
-		defer recoverGoroutinePanic("sticker.prepareBeforeReply")
-		candidate, err := tool.prepareBestMatch(stickerCtx, query)
+		defer recoverGoroutinePanic("sticker.prepare")
+		candidate, err := tool.prepareBestMatch(prepareCtx, query)
 		ready <- preparation{candidate: candidate, err: err}
 	}()
 	select {
-	case <-ctx.Done():
-		return
-	case <-stickerCtx.Done():
+	case <-prepareCtx.Done():
 		return
 	case result, ok := <-ready:
-		if !ok || ctx.Err() != nil || stickerCtx.Err() != nil || !time.Now().Before(deadline) {
+		if !ok || prepareCtx.Err() != nil {
 			return
 		}
 		if result.err != nil {
@@ -185,20 +197,5 @@ func (r *Runtime) sendFinalizeStickerBeforeReply(ctx context.Context, event Mess
 		if _, err := tool.deliver(ctx, *result.candidate); err != nil {
 			log.Printf("diana finalize sticker failed: message_id=%s err=%v", event.MessageID, err)
 		}
-	}
-}
-
-// sendFinalizeSticker 按关键词配一张表情包，发送顺序由调用方决定。
-// 配不上、到了上限或普通发送错误只记日志，不阻断正文；父上下文取消由调用方尊重。
-func (r *Runtime) sendFinalizeSticker(ctx context.Context, event MessageEvent, query string) {
-	if strings.TrimSpace(query) == "" {
-		return
-	}
-	_, settings, enabled := r.pluginWithSettingsForEvent(stickerPluginID, event)
-	if !enabled {
-		return
-	}
-	if _, err := newDianaStickerTool(r, event, settings).sendBestMatch(ctx, query); err != nil {
-		log.Printf("diana finalize sticker failed: message_id=%s err=%v", event.MessageID, err)
 	}
 }
