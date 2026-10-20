@@ -24,8 +24,8 @@ import (
 //     指向这个用户 id。这是 Telegram 给「没有 username 的人」准备的提及方式，
 //     显示成可点击的名字，对方有通知——等于把提及虚拟出来，不依赖 username。
 //
-// 标记里放 id 而不是昵称：昵称会改、会重名，而 id 是 replyMentionCandidates 里
-// 给模型的那份候选名单的键。显示用的昵称在出站时按 id 查（见 MentionNames）。
+// 标记里放 id 而不是昵称：昵称会改、会重名，id 则来自当前消息或已读取的历史。
+// 显示用的昵称在出站时按 id 查（见 MentionNames）。
 const dianaMentionMarkerPrefix = "[diana-at:"
 
 // dianaMentionMarkerPattern 里的 id 允许字母数字下划线和负号：脱敏开启时模型

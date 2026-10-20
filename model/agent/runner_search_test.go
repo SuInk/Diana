@@ -66,7 +66,7 @@ func TestRunnerPromptRequiresSearchForSpecificProductOpinions(t *testing.T) {
 		t.Fatal(err)
 	}
 	prompt := runner.systemPrompt()
-	for _, expected := range []string{"具体商品", "口碑", "味道", "必须搜索", "不要凭印象编造亲身体验"} {
+	for _, expected := range []string{"外部产品", "先查证", "不用第一人称编造使用经历"} {
 		if !strings.Contains(prompt, expected) {
 			t.Fatalf("search guidance missing %q: %s", expected, prompt)
 		}
@@ -85,15 +85,9 @@ func TestRunnerPromptRequiresSearchForEcosystemAndAvailabilityClaims(t *testing.
 	}
 	prompt := runner.systemPrompt()
 	for _, expected := range []string{
-		// 「有没有现成实现」这类问题要明确落进典型场景，不能靠模型自己归类。
-		"开源项目或服务是否支持某项能力",
-		"有没有现成实现或插件",
-		"当前版本与 API 现状",
-		// 堵住把聊天记录当已核实事实的漏洞。
-		"聊天记录里讨论过这个话题不等于其中的事实已经核实",
-		"不能拿来替代检索",
-		// 讲原理和断言现状要分开。
-		"讲原理可以直接答",
+		"实现和其他动态或不确定事实先查证",
+		"搜索摘要、旧知识和记忆只作线索",
+		"空结果或页面没写不证明不存在",
 	} {
 		if !strings.Contains(prompt, expected) {
 			t.Fatalf("search guidance missing %q: %s", expected, prompt)

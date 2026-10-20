@@ -52,8 +52,9 @@ const demoMCPPresets=[{
 
 export function extensionDemoResponse(method:string,profile:string,body:Record<string,any>,profileIDs:string[]=[]){
  const operation=method==='GET'?'list':body.operation;
- if(operation==='list')return {items:entries.map(({content,config,...item})=>({...item,enabled:item.kind==='mcp'?(overrides[profile]?.[item.id]??item.enabled):item.enabled&&(overrides[profile]?.[item.id]??true),...(!profile&&item.kind==='skill'&&profileIDs.length?{enabled_profiles:profileIDs.filter(id=>item.enabled&&(overrides[id]?.[item.id]??true)).length,profile_count:profileIDs.length}:{}),...(profile?{members_enabled:memberAccess[profile]?.[item.id]??false,...(residency[profile]?.[item.id]!==undefined?{resident:residency[profile][item.id]}:{}),...(memberAudience[profile]?.[item.id]?{member_audience:memberAudience[profile][item.id]}:{})}:{})}))};
+ if(operation==='list')return {items:entries.map(({content,config,...item})=>({...item,enabled:item.kind==='mcp'?(overrides[profile]?.[item.id]??item.enabled):item.enabled&&(overrides[profile]?.[item.id]??true),...(!profile&&item.kind==='skill'&&profileIDs.length?{enabled_profiles:profileIDs.filter(id=>item.enabled&&(overrides[id]?.[item.id]??true)).length,profile_count:profileIDs.length}:{}),...(profile?{members_enabled:memberAccess[profile]?.[item.id]??false,...(item.kind!=='skill'&&residency[profile]?.[item.id]!==undefined?{resident:residency[profile][item.id]}:{}),...(memberAudience[profile]?.[item.id]?{member_audience:memberAudience[profile][item.id]}:{})}:{})}))};
  if(operation==='residency'){
+  if(body.kind==='skill')throw Error('Skill 正文通过 read_skill 按需读取，不支持常驻档位');
   const item=entries.find(i=>i.kind===body.kind&&i.name===body.name);if(!item)throw Error('扩展不存在');
   const values=residency[profile||body.profile_id]??={};
   if(typeof body.resident==='boolean')values[item.id]=body.resident;else delete values[item.id];

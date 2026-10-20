@@ -31,7 +31,7 @@ func TestPromptContextPreloadFetchesLayersConcurrently(t *testing.T) {
 	event.UserID = "u2"
 
 	preload := runtime.startPromptContextPreload(context.Background(), event, "哈哈哈",
-		UserMemoryProfile{UserID: "u2", DisplayName: "当前用户"}, RelationshipPolicy{Score: 30, Tone: "自然"}, true)
+		UserMemoryProfile{UserID: "u2", DisplayName: "当前用户"}, RelationshipPolicy{Score: 30, Tone: "自然"})
 	preload.wait()
 
 	if !strings.Contains(preload.sessionThread, "排查上下文变短") {
@@ -39,25 +39,6 @@ func TestPromptContextPreloadFetchesLayersConcurrently(t *testing.T) {
 	}
 	if !strings.Contains(preload.memoryContext, "颜文字") {
 		t.Fatalf("memory context = %q", preload.memoryContext)
-	}
-	if !strings.Contains(preload.mediaIndex, "message_id=img-old") {
-		t.Fatalf("media index = %q", preload.mediaIndex)
-	}
-}
-
-func TestPromptContextPreloadSkipsMediaIndexWhenAgentCannotFetch(t *testing.T) {
-	runtime := mediaGateRuntime(t,
-		gateImageEvent("img-old", 1),
-		gateTextEvent("m2", 2, "第二条"),
-		gateTextEvent("m3", 3, "第三条"),
-	)
-	preload := runtime.startPromptContextPreload(context.Background(), gateCurrentEvent(), "哈哈哈",
-		UserMemoryProfile{UserID: "u2"}, RelationshipPolicy{Score: 30}, false)
-	preload.wait()
-
-	// 取不到原图的部署走的是前置指代解析，索引白算一次就是白花的开销。
-	if preload.mediaIndex != "" {
-		t.Fatalf("media index was built without tool access: %q", preload.mediaIndex)
 	}
 }
 

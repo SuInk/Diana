@@ -30,12 +30,6 @@ const (
 	// 取 45 秒：补一个 @、把话说完整、贴个链接补充，都发生在这个尺度上；再长就会
 	// 把「过一分钟想起来又问一句」也算进去，那是新问题，不该被要求从简。
 	consecutiveReplyWindow = 45 * time.Second
-
-	// consecutiveReplyExcerptRunes 是上一轮答案带进提示词的长度。
-	//
-	// 只带开头：目的是让模型认出「这件事我答过」，不是让它重读一遍全文。带全文
-	// 既费预算，又会诱导它照着改写一遍——那正是要避免的结果。
-	consecutiveReplyExcerptRunes = 120
 )
 
 // replyTurnRecord 是一次回复轮次的痕迹。
@@ -43,7 +37,6 @@ type replyTurnRecord struct {
 	startedAt time.Time
 	// finishedAt 为零表示这一轮还在生成中。并发的第二轮看到的正是这种状态。
 	finishedAt time.Time
-	reply      string
 }
 
 // inFlight 判断这一轮是不是还没答完。
@@ -106,45 +99,18 @@ func (r *Runtime) finishReplyTurn(event MessageEvent, reply string, now time.Tim
 		return
 	}
 	record.finishedAt = now
-	record.reply = strings.TrimSpace(reply)
 	r.replyTurns[key] = record
 }
 
 // consecutiveReplyContext 把「刚答过同一个人」写成提示词段落。
 func consecutiveReplyContext(previous replyTurnRecord) string {
-	var builder strings.Builder
-	builder.WriteString("【同一个人的连续消息】\n")
 	if previous.inFlight() {
-		// 并发的那一路：答案还没生成完，只能告诉它「正在答」。
-		builder.WriteString("这个人上一条消息你正在回答，那条回复马上就会发出去。")
-		builder.WriteString("\n这条多半是同一件事的补充，或者只是补一个 @、把话说完整。")
-		builder.WriteString("正在生成的答案与这条消息合并回复，已经纳入的内容不要再说一遍；新增条件和纠正则更新同一份答案。")
-	} else {
-		builder.WriteString("你刚刚已经回答过这个人的上一条消息")
-		if excerpt := truncateReplyExcerpt(previous.reply, consecutiveReplyExcerptRunes); excerpt != "" {
-			builder.WriteString("，说的是：")
-			builder.WriteString(excerpt)
-		}
-		builder.WriteString("。")
-		builder.WriteString("\n上一条答案已发出。这条如果仍在提问、反驳或质疑，应按未解决的问题重新审视并作答；重答需要的内容可以重复，不要压成一句确认或沿用上一条的玩笑。")
+		return "【同一个人的连续消息】上一条正在回答；补充与纠正合并到正在生成的答案，已纳入的内容不要再说一遍；另一件事照常回答。"
 	}
-	builder.WriteString("确实是另一件事时照常正常回答。")
-	return builder.String()
+	return "【同一个人的连续消息】上一条已经回答过，答案见聊天记录；追问、反驳或质疑仍需重新审视并作答，重答需要的内容可以重复；另一件事照常回答。"
 }
 
 // runningReplyContext 写给「同一个人前一条还没回完」的那一轮。
 func runningReplyContext(note string) string {
-	return "【同一个人的上一条还在处理】\n这个人上一条消息你还在处理，" + note + "，做完会由那一轮把结果发出去。" +
-		"\n这条如果是在催、问你在不在、怎么不说话，或者把同一个问题再问一遍：根据实际进度简短回答，不要自己回答那个问题，也不要重新去查。" +
-		"这条如果是另一件事，照常回答它。"
-}
-
-// truncateReplyExcerpt 取回复开头的一段，压成一行。
-func truncateReplyExcerpt(reply string, limit int) string {
-	text := strings.Join(strings.Fields(reply), " ")
-	runes := []rune(text)
-	if len(runes) <= limit {
-		return text
-	}
-	return strings.TrimSpace(string(runes[:limit])) + "…"
+	return "【同一个人的上一条还在处理】" + note + "；完成后由那一轮发送结果。催促或重复请求只报进度，不重新查询；另一件事照常回答。"
 }

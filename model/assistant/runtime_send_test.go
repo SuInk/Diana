@@ -325,7 +325,6 @@ func TestSystemPromptTogglesDisableInjections(t *testing.T) {
 		SystemPrompt:               "自定义人设",
 		PromptInjectTime:           &off,
 		PromptInjectPlaintextRules: &off,
-		PromptInjectGroupSender:    &off,
 		PromptChineseSlangHint:     &off,
 	}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	event := MessageEvent{Kind: EventKindGroup, GroupID: "123", UserID: "10001", SenderName: "小明"}
@@ -389,19 +388,20 @@ func TestSendRespectsReferenceAndMentionToggles(t *testing.T) {
 	}
 }
 
-// TestSystemPromptInjectsRulesTimeAndSender 验证对应功能场景。
-func TestSystemPromptInjectsRulesTimeAndSender(t *testing.T) {
+func TestSystemPromptKeepsRulesAndCurrentInputOwnsSender(t *testing.T) {
 	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	event := MessageEvent{Kind: EventKindGroup, GroupID: "123", UserID: "10001", SenderName: "小明"}
 
 	prompt := runtime.systemPrompt(event, nil)
 	for _, want := range []string{
 		"不渲染 Markdown",
-		"「小明（10001）」",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("prompt missing %q:\n%s", want, prompt)
 		}
+	}
+	if strings.Contains(prompt, "小明（10001）") || !strings.Contains(currentPromptText(event, "问题"), "小明（10001）") {
+		t.Fatal("sender must be present once in the current input, not system rules")
 	}
 	// 时间已移出人设提示词，改由尾部独立 system 消息承载。
 	if clock := runtime.runtimeClockPrompt(event); !strings.Contains(clock, "当前时间："+time.Now().In(DefaultBotLocation()).Format("2006-01-02")) {
@@ -458,7 +458,6 @@ func TestSystemPromptUsesCustomTemplates(t *testing.T) {
 			promptChineseSlangSpec.Key:   "自定义中文语境",
 			promptPlaintextRulesSpec.Key: "自定义输出规则",
 			promptTimeTemplateSpec.Key:   "时间={datetime}，星期={weekday}",
-			promptGroupSenderSpec.Key:    "当前发言者={sender}",
 		},
 	}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 
@@ -470,7 +469,7 @@ func TestSystemPromptUsesCustomTemplates(t *testing.T) {
 	}
 	prompt := runtime.systemPrompt(event, nil)
 
-	for _, want := range []string{"自定义人设", "自定义中文语境", "自定义输出规则", "当前发言者=小明"} {
+	for _, want := range []string{"自定义人设", "自定义中文语境", "自定义输出规则"} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("prompt missing %q:\n%s", want, prompt)
 		}

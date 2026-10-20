@@ -31,7 +31,6 @@ const (
 	webSearchSettingMaxResults      = "max_results"
 	webSearchSettingProviderTimeout = "provider_timeout_seconds"
 	webSearchSettingTotalTimeout    = "total_timeout_seconds"
-	webSearchSettingSourceRecall    = "claim_source_recall"
 	webSearchSettingLinkPolicy      = "reply_link_policy"
 	// webSearchSettingSourcePriority 决定 API 来源和浏览器来源谁先试，同类内按列表顺序。
 	webSearchSettingSourcePriority = "search_source_priority"
@@ -169,13 +168,6 @@ func (p *WebSearchPlugin) Manifest() PluginManifest {
 				Max:         settingRange(90),
 				Step:        1,
 				Unit:        "秒",
-			},
-			{
-				Key:         webSearchSettingSourceRecall,
-				Label:       "来源链接回溯",
-				Description: "把结论引用过的来源链接留到之后几轮，有人追问「链接呢」时可以原样给出。关闭后不再记录也不再注入，追问链接需要重新检索。",
-				Type:        PluginSettingTypeBool,
-				Default:     true,
 			},
 			{
 				Key:   webSearchSettingLinkPolicy,

@@ -88,7 +88,7 @@ func (r *Runtime) ResidentContextForGroup(ctx context.Context, profileID, groupI
 	})
 	snapshot.appendBlock(ResidentContextBlock{
 		Key: ResidentBlockPromptRules, Label: "固定提示词规则", Content: rules,
-		Note: "按「全部工具都注册」计算，是上限；实际注入哪几条随本轮注册的工具增减。随发言者变化的那段（权限、昵称、语气锚点）在请求尾部，不在这里。",
+		Note: "按「全部工具都注册」计算，是上限；实际注入哪几条随本轮注册的工具增减。随发言者变化的那段（本轮对象关系、权限与发送模式）在请求尾部，不在这里。",
 	})
 	snapshot.appendBlock(ResidentContextBlock{
 		Key: ResidentBlockWorldBook, Label: "世界书常驻设定", Content: r.worldBookContext(ctx, event, ""),
@@ -188,8 +188,8 @@ func (r *Runtime) appendAgentFootprintBlocks(snapshot *ResidentContextSnapshot, 
 		Note:   "这些工具每一步都带完整 schema，数字按 schema 估算，正文只列名字。从机器人配置「上下文」的常驻名单里拿掉，就会挪进上面的目录。",
 	})
 	snapshot.appendBlock(ResidentContextBlock{
-		Key: ResidentBlockSkills, Label: "Skill 目录与常驻正文", Content: footprint.skillsCatalog,
-		Note: "只含配成常驻的 Skill 正文；声明了触发词的要命中才带，不在底价里。",
+		Key: ResidentBlockSkills, Label: "Skill 目录", Content: footprint.skillsCatalog,
+		Note: "只含名称和用途，正文通过 read_skill 按需读取。",
 	})
 }
 

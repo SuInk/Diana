@@ -112,7 +112,7 @@ func TestPromptsAndToolsUseNeutralMentionMarker(t *testing.T) {
 	}
 	for _, mode := range []ReplyDecorationMode{ReplyDecorationOn, ReplyDecorationAuto, ReplyDecorationOff} {
 		cfg := BotConfig{BotAccount: "42", MentionUserMode: mode, ReplyReferenceMode: mode}.WithDefaults()
-		prompt := runtime.replyMentionPrompt(cfg, event, nil)
+		prompt := replyPresentationPrompt(true, cfg) + "\n" + runtime.replyMentionPrompt(cfg, event, nil)
 		if strings.Contains(prompt, "[CQ:at") {
 			t.Fatalf("mode %s 的提及规则里还有 CQ 方言：%s", mode, prompt)
 		}

@@ -30,12 +30,6 @@ const (
 	readFileScanMaxBytes      = 64 << 20
 	DefaultListDirectoryLimit = 200
 	DefaultSkillsListBudget   = 8000
-	// ResidentSkillBodyBudget 是常驻 skill 正文在一次请求里的总字符上限。超出的那几个
-	// 只留目录行,退回 read_skill,不会把整轮上下文撑爆。
-	ResidentSkillBodyBudget = 24000
-	// DefaultSkillTriggerScanDepth 是关键词扫描回看的用户消息条数。只看最近几条：
-	// 很久以前提过一次的词不该让那份正文从此每轮都在。
-	DefaultSkillTriggerScanDepth = 2
 	// defaultMCPConfigFileName 里存着 MCP 的访问令牌，对文件工具关闭，见
 	// agentProtectedFiles。
 	defaultMCPConfigFileName        = ".mcp.json"
@@ -82,24 +76,22 @@ func DefaultCommandAllowlist() []string {
 
 type Config struct {
 	// SystemPrompt 为专用子代理替换通用角色提示词；空值保留默认行为。仅由可信调用方设置。
-	SystemPrompt       string
-	WorkDir            string
-	MaxSteps           int
-	MaxToolOutputChars int
-	ReadFileMaxBytes   int
-	ListDirectoryLimit int
-	SkillRoots         []string
-	ManagedSkillRoot   string
-	SkillsListBudget   int
-	// SkillTriggerScanDepth 是关键词扫描回看的用户消息条数。
-	SkillTriggerScanDepth int
-	MCPConfigPath         string
-	MCPStartupTimeoutMS   int
-	MCPToolTimeoutMS      int
-	ExtensionManagement   bool
-	BuiltinExtensions     []BuiltinExtension
-	BuiltinSkills         []SkillMetadata
-	ReservedSkillNames    []string
+	SystemPrompt        string
+	WorkDir             string
+	MaxSteps            int
+	MaxToolOutputChars  int
+	ReadFileMaxBytes    int
+	ListDirectoryLimit  int
+	SkillRoots          []string
+	ManagedSkillRoot    string
+	SkillsListBudget    int
+	MCPConfigPath       string
+	MCPStartupTimeoutMS int
+	MCPToolTimeoutMS    int
+	ExtensionManagement bool
+	BuiltinExtensions   []BuiltinExtension
+	BuiltinSkills       []SkillMetadata
+	ReservedSkillNames  []string
 	// FileWriteEnabled 打开 write_file / edit_file 和 manage_files 的写操作。默认关闭：读错文件浪费一次
 	// 调用，写错文件改的是磁盘，这一档该由部署方显式点头。
 	FileWriteEnabled bool
@@ -165,10 +157,6 @@ type Request struct {
 	Messages []llm.Message
 	TraceID  string
 	Observer RunObserver
-	// LoadedTools carries session discoveries, never tool instances or authority.
-	LoadedTools []string
-	// ToolsLoaded is called immediately, including when a later model call fails.
-	ToolsLoaded func([]string)
 	// Interjections 不为空时，每步规划前接入用户中途的补充，规划途中来了补充就重做这一步。
 	Interjections Interjections
 }
@@ -290,9 +278,6 @@ func (cfg Config) WithDefaults() Config {
 	}
 	if cfg.ListDirectoryLimit <= 0 {
 		cfg.ListDirectoryLimit = DefaultListDirectoryLimit
-	}
-	if cfg.SkillTriggerScanDepth <= 0 {
-		cfg.SkillTriggerScanDepth = DefaultSkillTriggerScanDepth
 	}
 	if cfg.SkillsListBudget <= 0 {
 		cfg.SkillsListBudget = DefaultSkillsListBudget

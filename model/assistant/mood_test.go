@@ -4,7 +4,6 @@
 package assistant
 
 import (
-	"strings"
 	"testing"
 	"time"
 )
@@ -58,31 +57,5 @@ func TestMoodBumpDecayAndThresholds(t *testing.T) {
 	}
 	if score := runtime.moodScore("bot", now); score > moodScoreLimit {
 		t.Fatalf("score exceeded cap: %v", score)
-	}
-}
-
-func TestMoodToneForConfigGates(t *testing.T) {
-	runtime := NewRuntime(BotConfig{ID: "bot", MoodEnabled: boolPointer(true)}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
-	now := runtime.clock()
-
-	// 开着心情时默认就是开心。
-	if tone := runtime.moodToneForConfig(runtime.ProfileConfig(""), "bot"); !strings.Contains(tone, "心情不错") {
-		t.Fatalf("baseline tone = %q", tone)
-	}
-	// 被骂狠了掉出开心，只是不注入，没有低落语气。
-	for range 10 {
-		runtime.bumpMood("bot", -2, now)
-	}
-	if tone := runtime.moodToneForConfig(runtime.ProfileConfig(""), "bot"); tone != "" {
-		t.Fatalf("tone after insults = %q", tone)
-	}
-
-	// 总开关关着（默认）时，哪怕心情爆表也不注入。
-	off := NewRuntime(BotConfig{ID: "bot"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
-	for range 10 {
-		off.bumpMood("bot", 3, now)
-	}
-	if tone := off.moodToneForConfig(off.ProfileConfig(""), "bot"); tone != "" {
-		t.Fatalf("disabled tone = %q", tone)
 	}
 }

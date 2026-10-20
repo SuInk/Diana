@@ -355,35 +355,6 @@ func (t *ExtensionsListTool) Run(ctx context.Context, input map[string]any) (str
 	return string(body), nil
 }
 
-func RenderExtensionsPrompt(states []ExtensionState) string {
-	if len(states) == 0 {
-		return ""
-	}
-	var builtins, mcps []string
-	for _, state := range states {
-		status := "disabled"
-		if state.Enabled {
-			status = "enabled"
-		}
-		switch state.Kind {
-		case ExtensionKindBuiltin:
-			builtins = append(builtins, state.Name+" ("+status+")")
-		case ExtensionKindMCP:
-			mcps = append(mcps, state.Name+" ("+status+")")
-		}
-	}
-	var lines []string
-	lines = append(lines, "## Capability Extensions", "Diana uses one capability catalog for built-in plugins, Skills, and MCP services.")
-	if len(builtins) > 0 {
-		lines = append(lines, "Default built-in plugins: "+strings.Join(builtins, ", ")+".")
-	}
-	if len(mcps) > 0 {
-		lines = append(lines, "Configured MCP services: "+strings.Join(mcps, ", ")+".")
-	}
-	lines = append(lines, "Call `list_capabilities` when you need the complete current catalog and MCP tool names.")
-	return strings.Join(lines, "\n")
-}
-
 func normalizeBuiltinExtensions(values []BuiltinExtension) []BuiltinExtension {
 	seen := map[string]bool{}
 	out := make([]BuiltinExtension, 0, len(values))

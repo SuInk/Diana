@@ -231,7 +231,7 @@ func TestRunnerPromptDistinguishesQueuedImageTaskFromCompletion(t *testing.T) {
 		t.Fatal(err)
 	}
 	prompt := runner.systemPrompt()
-	for _, want := range []string{"queued=true", "不表示图片已经完成", "TOOL_EXECUTION_ERROR", "工具不存在"} {
+	for _, want := range []string{"queued=true", "不表示图片已经完成", "已注册工具执行失败不等于工具不存在"} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("runner prompt missing %q: %s", want, prompt)
 		}
@@ -445,7 +445,7 @@ func TestRunnerPromptKeepsSkillsOutOfStableProtocol(t *testing.T) {
 	registry.SetSkills([]SkillMetadata{{Name: "demo-skill", Description: "Use demo.", Path: "/tmp/demo/SKILL.md"}})
 	runner := &Runner{cfg: Config{SkillsListBudget: 8000}.WithDefaults(), registry: registry}
 	protocol := runner.systemPrompt()
-	hint := runner.explicitSkillPrompt(Request{Messages: []llm.Message{{Role: llm.RoleUser, Content: "请用 $demo-skill"}}}, nil)
+	hint := runner.explicitSkillPrompt(Request{Messages: []llm.Message{{Role: llm.RoleUser, Content: "请用 $demo-skill"}}})
 	if strings.Contains(protocol, "demo-skill") || strings.Contains(protocol, "Available skills") {
 		t.Fatalf("skills catalog leaked into the stable protocol: %s", protocol)
 	}
@@ -475,7 +475,7 @@ func TestRunnerSkillsCatalogRidesInTrailingBlock(t *testing.T) {
 	messages := client.requests[0].Messages
 	catalogIndex := -1
 	for index, message := range messages {
-		if strings.Contains(message.Content, "### Available skills") {
+		if strings.HasPrefix(message.Content, "## Skills") {
 			catalogIndex = index
 		}
 	}
@@ -580,7 +580,7 @@ func TestRunnerSkipsClockWhenCallerAlreadyProvidesOne(t *testing.T) {
 func TestRunnerPromptExplainsBoundedIterativeWebSearch(t *testing.T) {
 	runner := &Runner{cfg: Config{MaxSteps: 8}.WithDefaults(), registry: NewToolRegistry(&countingWebSearchTool{})}
 	prompt := runner.systemPrompt()
-	for _, expected := range []string{"围绕一个信息缺口", "queries 仅补充确有区别的查证角度", "搜索次数不单独设限", "一轮最多 8 次工具调用", "不要把完整聊天记录", "insufficient_evidence", "优先核对官方或法定披露来源"} {
+	for _, expected := range []string{"本轮最多 8 次", "先查证", "保留用户给出的名称和版本", "空结果或页面没写不证明不存在", "证据足够即回答"} {
 		if !strings.Contains(prompt, expected) {
 			t.Fatalf("prompt does not contain %q: %s", expected, prompt)
 		}
@@ -590,7 +590,7 @@ func TestRunnerPromptExplainsBoundedIterativeWebSearch(t *testing.T) {
 func TestRunnerPromptRequiresToolsForCurrentState(t *testing.T) {
 	runner := &Runner{cfg: Config{}.WithDefaults(), registry: NewToolRegistry(&countingTool{name: "current_state"})}
 	prompt := runner.systemPrompt()
-	for _, expected := range []string{"当前状态、动态数据或受控信息", "必须先调用最相关的工具", "不得用提示词、历史消息、记忆摘要或先前回复"} {
+	for _, expected := range []string{"当前状态、动态数据或受控信息", "先调用最相关的工具", "不能用提示词、历史消息、记忆摘要或先前回复"} {
 		if !strings.Contains(prompt, expected) {
 			t.Fatalf("prompt does not contain %q: %s", expected, prompt)
 		}
@@ -1133,7 +1133,7 @@ func TestRunnerMarksCacheBreakpointsAroundVolatilePrefix(t *testing.T) {
 func TestRunnerPromptSearchesThroughBrowserWithoutWebSearch(t *testing.T) {
 	runner := &Runner{cfg: Config{MaxSteps: 8}.WithDefaults(), registry: NewToolRegistry(&countingTool{name: "browser_render"})}
 	prompt := runner.systemPrompt()
-	for _, want := range []string{"没有 web_search 时", "用 browser_render 打开搜索引擎的结果页", "https://www.google.com/search?q=", "https://www.bing.com/search?q=", "换下一家"} {
+	for _, want := range []string{"公开网页优先 browser_render", "web_search 失败仍可用浏览器搜索", "遇验证换来源"} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("prompt missing %q: %s", want, prompt)
 		}
@@ -1147,7 +1147,7 @@ func TestRunnerPromptSearchesThroughBrowserWithoutWebSearch(t *testing.T) {
 	// 两样都有时：web_search 优先，浏览器是它全部 provider 失败后的退路。
 	runner = &Runner{cfg: Config{MaxSteps: 8}.WithDefaults(), registry: NewToolRegistry(&countingWebSearchTool{}, &countingTool{name: "browser_render"})}
 	prompt = runner.systemPrompt()
-	if !strings.Contains(prompt, "全部 provider 都失败") || !strings.Contains(prompt, "- 用浏览器搜索：用 browser_render") {
+	if !strings.Contains(prompt, "web_search 失败仍可用浏览器搜索") {
 		t.Fatalf("fallback rule missing: %s", prompt)
 	}
 

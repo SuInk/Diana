@@ -15,15 +15,14 @@ import (
 	"github.com/SuInk/diana/model/llm"
 )
 
-// 供应商的前缀缓存只认逐字节相同的前缀：从第一个不一样的字节起，后面全部要重算。
-// 命中率掉下来时，`cached_input_tokens` 只告诉你「没命中」，不告诉你「哪里开始不一样」——
-// 而能改的恰恰是后者。这个探针在每次请求前把 payload 拆成 system / tools / 逐条消息，
-// 各算一个哈希，和同一会话同一用途的上一次请求逐段比对，定位到首个分叉的段、消息下标
-// 和字节偏移。
+// 这个探针定位本地请求结构的变化，不判定供应商是否命中缓存。它在适配器预算和协议
+// 转换之前，将请求按 system / tools / 逐条消息做确定性指纹，与同会话、同用途的上次
+// 观测比较，定位已观察范围内的首个分叉及其字节偏移。这里的段顺序、字节数和边界
+// 不代表供应商内部序列化、token 检查点或可计费缓存规模。
 //
 // 指纹观测只读 payload；同一包装器另行补充稳定的匿名路由键，供兼容网关保持会话亲和。
-// 顺利追加（上一次是这一次的严格前缀）时什么都不记——那是期望状态，用量日志里的
-// cached_input_tokens 已经能说明问题；只有前缀真的断了才留一条 debug 记录。
+// 已观察前缀顺利追加，或仅在本地稳定边界之后变化时不记分叉日志；没有日志不等于
+// 实际缓存正常。实际命中需核对最终 wire、模型、请求间隔和原始 usage 缓存字段。
 
 const (
 	// promptCacheProbeMaxTracked 限制同时跟踪的会话数。每条记录只有若干哈希字符串，
@@ -41,13 +40,13 @@ type promptCachePayloadObservation struct {
 	ToolsHash  string
 	// MessageHashes 只覆盖非 system 消息，顺序与请求一致。
 	MessageHashes []string
-	// SegmentBytes 与 MessageHashes 等长，记录每段的字节数，用于估算可复用前缀规模。
+	// SegmentBytes 与 MessageHashes 等长，记录本地规范化段的字节数。
 	SegmentBytes []int
 	SystemBytes  int
 	ToolsBytes   int
-	// StableBoundary 是「本轮期望能复用到哪」的下标，取调用方标出的缓存断点
-	//（markStablePromptPrefix 打在历史末尾）。它之后的消息本来就每轮都变：
-	// 发言者尾部、实时时钟、当前消息。-1 表示调用方没标断点。
+	// StableBoundary 是调用方标出的本地稳定历史边界，不是供应商确认的缓存位置。
+	// markStablePromptPrefix 将它标在历史末尾，后面允许发言者资料、时钟与当前消息
+	// 按轮变化。-1 表示没有标记，或标记位于最多 200 条消息的观测范围之外。
 	StableBoundary int
 	// 明文快照只活在内存里，用来算字节偏移；不落库、不进日志。
 	systemText  string
@@ -57,26 +56,25 @@ type promptCachePayloadObservation struct {
 
 // promptCacheDivergence 描述两次请求之间第一个不同的位置。
 type promptCacheDivergence struct {
-	// Segment 是 system / tools / messages 之一；为空表示上一次是这一次的严格前缀。
+	// Segment 是 system / tools / messages 之一；为空表示已观察范围未见前缀变化。
 	Segment string
 	// MessageIndex 只在 Segment == "messages" 时有意义。
 	MessageIndex int
 	// ByteOffset 是该段内首个不同的字节位置，-1 表示一段整体缺失或新增。
 	ByteOffset int
-	// ReusablePrefixBytes 是分叉之前仍然逐字节相同的部分，用来衡量「还剩多少能复用」。
+	// ReusablePrefixBytes 是分叉前相同的本地规范化字节数，不是供应商可复用 token。
 	ReusablePrefixBytes int
-	// PreviousTotalBytes 是上一次请求的分段总字节，配合上一项看损失比例。
+	// PreviousTotalBytes 是上次已观察部分的规范化总字节，不含未哈希的消息。
 	PreviousTotalBytes int
 	// ToolsHash 标出这条记录属于哪一套工具集，方便按主人/成员分别看命中率。
 	ToolsHash string
 }
 
-// Clean 表示上一次请求是这一次的严格前缀，前缀缓存理论上可以完整复用。
+// Clean 表示已观察范围未见前缀变化，不能证明整个请求相同或实际缓存命中。
 func (d promptCacheDivergence) Clean() bool { return d.Segment == "" }
 
-// Expected 表示分叉发生在本来就该每轮变化的尾部（发言者身份、实时时钟、当前消息），
-// 稳定前缀完好。这种情况不记日志——真机上它每条消息都会出现一次，记了就是噪声，
-// 反而把真正的前缀断裂淹掉。
+// Expected 表示没有观测到分叉，或分叉位于本地稳定边界之后。为减少逐轮噪声不记
+// 这些变化；供应商仍可能受后缀大小、缓存驻留和最终适配结果影响而未命中历史。
 func (d promptCacheDivergence) Expected(previous promptCachePayloadObservation) bool {
 	if d.Clean() {
 		return true
@@ -92,8 +90,9 @@ func promptCacheHash(text string) string {
 	return hex.EncodeToString(sum[:8])
 }
 
-// promptCacheCanonicalMessage 把一条消息压成确定性文本。只取真正会进 payload 的字段：
-// Priority、ContextGroup 这些是本地编排元数据，不发给供应商，跟着它们变会误报分叉。
+// promptCacheCanonicalMessage 对角色、正文、Parts 和工具字段做本地确定性表示。
+// 它不是最终 wire：不含全部 continuation 元数据，也尚未执行适配器预算和协议转换。
+// Priority、ContextGroup 等本地编排元数据不参与比较。
 func promptCacheCanonicalMessage(message llm.Message) string {
 	var builder strings.Builder
 	builder.WriteString(string(message.Role))
@@ -190,8 +189,8 @@ func firstByteDifference(left, right string) int {
 
 // comparePromptCachePayload 找出上一次与这一次之间第一个分叉的位置。
 //
-// 判定顺序刻意和供应商匹配前缀的顺序一致：system 在最前，其次是工具声明，最后才是
-// 逐条消息。前面的段一旦不同，后面比对就没有意义——那部分本来就已经失效了。
+// 按本地诊断约定依次比较 system、tools 和 messages，遇到首次变化即返回。
+// 不同供应商的实际字段层级和缓存策略可能不同，不能据此推断其缓存失效位置。
 func comparePromptCachePayload(previous, current promptCachePayloadObservation) promptCacheDivergence {
 	divergence := promptCacheDivergence{
 		MessageIndex:       -1,

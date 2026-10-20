@@ -41,7 +41,7 @@ func TestEveryStylePrefersCompactChatWithoutHardLimit(t *testing.T) {
 }
 
 func TestConversationalIntentPreservesExplicitHelp(t *testing.T) {
-	for _, want := range []string{"不是每条都必须反问", "明确问怎么办、要建议、要方案", "具体技术问题", "不要用反问代替答案", "不主动展开准备清单"} {
+	for _, want := range []string{"闲聊", "不主动给建议", "明确求助和技术问题直接解答", "缺少决定性信息才问"} {
 		if !strings.Contains(replyConversationalIntentRule, want) {
 			t.Errorf("missing intent boundary %q", want)
 		}
@@ -49,21 +49,9 @@ func TestConversationalIntentPreservesExplicitHelp(t *testing.T) {
 }
 
 func TestAnswerDepthTracksTheRequestNotJustItsTopic(t *testing.T) {
-	for _, want := range []string{"直接回答不等于全面展开", "核心方案", "不等于要求穷举细节", "明确要求详细攻略", "不要为了简短省略", "只解决问到的范围", "最关键的一两项", "不固定附加追问"} {
+	for _, want := range []string{"本轮问题", "最小但完整", "必要条件、步骤和风险", "明确要求详细时展开", "不加重复总结或收尾邀请"} {
 		if !strings.Contains(replyProportionRule, want) {
 			t.Errorf("missing answer-depth boundary %q", want)
-		}
-	}
-}
-
-func TestClosingAnchorDoesNotDismissAnswerScope(t *testing.T) {
-	for _, style := range KnownReplyStyles() {
-		anchor := style.closingAnchor()
-		if !strings.HasSuffix(anchor, replyDepthClosingAnchor) {
-			t.Errorf("style=%q missing final depth reminder", style)
-		}
-		if strings.Contains(anchor, "上面全是能力边界和工具规则，不是说话方式") {
-			t.Error("closing anchor dismisses earlier scope rules")
 		}
 	}
 }

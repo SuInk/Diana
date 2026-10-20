@@ -389,11 +389,11 @@ func TestMentionPromptAgreesWithDecorationMode(t *testing.T) {
 		reject string
 	}{
 		// on：发送层确实会自己加，这句话成立，模型不该重复输出。
-		{mode: ReplyDecorationOn, want: "不需要你输出 CQ at", reject: "发送层不会自动 @ 任何人"},
+		{mode: ReplyDecorationOn, want: "发送层按配置自动提及当前发言者", reject: "发送层不自动提及成员"},
 		// auto：发送层什么都不加，必须说清楚，并把判断交回给另一段规则。
-		{mode: ReplyDecorationAuto, want: "按本轮单独给出的那条规则判断", reject: "不需要你输出 CQ at"},
+		{mode: ReplyDecorationAuto, want: "发送层不自动提及成员", reject: "发送层按配置自动提及当前发言者"},
 		// off：发送层同样不加，但也没有另一段规则，需要点名就自己写。
-		{mode: ReplyDecorationOff, want: "需要点名时自己写", reject: "不需要你输出 CQ at"},
+		{mode: ReplyDecorationOff, want: "需要点名时", reject: "发送层按配置自动提及当前发言者"},
 	}
 	for _, tc := range cases {
 		cfg := BotConfig{BotAccount: "42", MentionUserMode: tc.mode, ReplyReferenceMode: tc.mode}.WithDefaults()
@@ -425,10 +425,10 @@ func TestMentionPromptDropsSendLayerClausesWhenNothingIsAdded(t *testing.T) {
 			t.Fatalf("auto 档不该承诺发送层的动作 %q：%s", unwanted, prompt)
 		}
 	}
-	// 引用还开着的时候，「会取消自动引用」仍然成立，不能一起删掉。
+	// 引用模式不改变提及模式，避免再用同一段解释两件事。
 	mixed := BotConfig{BotAccount: "42", MentionUserMode: ReplyDecorationAuto, ReplyReferenceMode: ReplyDecorationOn}.WithDefaults()
-	if !strings.Contains(runtime.replyMentionPrompt(mixed, event, nil), "会取消对触发者的自动引用") {
-		t.Fatal("引用仍为 on 时应当保留取消说明")
+	if !strings.Contains(runtime.replyMentionPrompt(mixed, event, nil), "发送层不自动提及成员") {
+		t.Fatal("引用 on 不应该启用自动提及")
 	}
 }
 

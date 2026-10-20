@@ -12,6 +12,18 @@ import (
 	"github.com/SuInk/diana/model/agent"
 )
 
+// 能力条目仍只推荐经过适配的 QQ 接入端；移除自动注入不改变知识库内容约束。
+func TestCapabilityDocumentsDoNotNameOtherQQClients(t *testing.T) {
+	for _, document := range coreCapabilityDocuments {
+		lower := strings.ToLower(document.Title + document.Content)
+		for _, name := range []string{"napcat", "llonebot", "lagrange", "go-cqhttp"} {
+			if strings.Contains(lower, name) {
+				t.Fatalf("%s names %s", document.ID, name)
+			}
+		}
+	}
+}
+
 func TestCapabilityKnowledgePluginRetrievesRelevantCapabilities(t *testing.T) {
 	plugin := NewCapabilityKnowledgePlugin()
 	tool := plugin.AgentTools()[0]
@@ -134,7 +146,7 @@ func TestRuntimeAgentUsesCapabilityRAGForSelfKnowledge(t *testing.T) {
 	if !requestMessagesContain(provider.requests[2].Messages, `"id": "core:media"`) {
 		t.Fatalf("retrieval missing: %#v", provider.requests[2].Messages)
 	}
-	if !requestMessagesContain(provider.requests[1].Messages, "必须先调用 capabilities") {
+	if !requestMessagesContain(provider.requests[1].Messages, promptToolCapabilities) {
 		t.Fatalf("capability guidance missing: %#v", provider.requests[1].Messages)
 	}
 }

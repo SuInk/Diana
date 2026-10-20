@@ -46,7 +46,6 @@ type adminChatSession struct {
 	title              string
 	createdAt          time.Time
 	messages           []adminChatMessage
-	loaded             []string
 	updated            time.Time
 	running            bool
 	cancel             context.CancelFunc
@@ -181,7 +180,6 @@ func (h *BotHandler) runAdminChat(c *gin.Context) {
 		}
 		history = append(history, llm.Message{Role: role, Content: m.Content})
 	}
-	loaded := append([]string(nil), s.loaded...)
 	s.mu.Unlock()
 	defer func() { s.mu.Lock(); s.running = false; s.cancel = nil; s.updated = time.Now(); s.mu.Unlock() }()
 
@@ -234,8 +232,7 @@ func (h *BotHandler) runAdminChat(c *gin.Context) {
 		emit(gin.H{"type": "progress", "progress": progress})
 	}
 	result, err := runtime.RunAdminChat(ctx, s.profile, agent.Request{
-		Messages: assistant.AdminChatMessages(history), TraceID: "admin-" + uuid.NewString(), Observer: observer, LoadedTools: loaded,
-		ToolsLoaded: func(names []string) { s.mu.Lock(); s.loaded = append([]string(nil), names...); s.mu.Unlock() },
+		Messages: assistant.AdminChatMessages(history), TraceID: "admin-" + uuid.NewString(), Observer: observer,
 	}, &adminDiagnosticsTool{handler: h, profile: s.profile, redact: redact}, &adminGroupHistoryTool{handler: h, profile: s.profile, redact: redact})
 	message := adminChatMessage{ID: uuid.NewString(), Role: "assistant", CreatedAt: time.Now()}
 	stepsMu.Lock()
@@ -297,7 +294,6 @@ func (h *BotHandler) clearAdminChat(c *gin.Context) {
 		return
 	}
 	s.messages = nil
-	s.loaded = nil
 	s.title = ""
 	s.updated = time.Now()
 	c.JSON(http.StatusOK, gin.H{"ok": true})

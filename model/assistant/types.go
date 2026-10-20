@@ -796,7 +796,6 @@ type BotConfig struct {
 	NotebookSharedScopeEnabled *bool `json:"notebook_shared_scope_enabled,omitempty"`
 	PromptInjectTime           *bool `json:"prompt_inject_time,omitempty"`
 	PromptInjectPlaintextRules *bool `json:"prompt_inject_plaintext_rules,omitempty"`
-	PromptInjectGroupSender    *bool `json:"prompt_inject_group_sender,omitempty"`
 	PromptChineseSlangHint     *bool `json:"prompt_chinese_slang_hint,omitempty"`
 	// ProactiveReplyExtraCriteria 是接话评分的补充判据：本群的称呼、黑话和禁区。
 	// 拼在内置评分提示词尾部，不替代评分口径，也不改变裸 JSON 输出契约。
@@ -893,7 +892,7 @@ type BotConfig struct {
 	// 每条评论都会触发一次模型调用，升级后不该突然开始花钱。回复不带工具，只是照
 	// 人设写一两句话存进评论串；另有每天条数上限和单条动态的冷却。
 	FeedAutoReplyEnabled *bool `json:"feed_auto_reply_enabled,omitempty"`
-	// MoodEnabled 让机器人有随相处涨落、随时间回落的心情，只影响语气。
+	// MoodEnabled 记录随相处和时间变化的心情，供状态展示和 VRChat 表情联动使用。
 	// 默认关闭：可感知的行为变化不该在升级后突然发生。
 	MoodEnabled *bool `json:"mood_enabled,omitempty"`
 	// PokeReplyEnabled 让机器人在被戳一戳时回一句（OneBot poke 通知）。默认关闭。
@@ -1457,7 +1456,6 @@ type ConfigPayload struct {
 	InboundPrivateConcurrency      int                  `json:"inbound_private_concurrency,omitempty"`
 	PromptInjectTime               *bool                `json:"prompt_inject_time,omitempty"`
 	PromptInjectPlaintextRules     *bool                `json:"prompt_inject_plaintext_rules,omitempty"`
-	PromptInjectGroupSender        *bool                `json:"prompt_inject_group_sender,omitempty"`
 	PromptChineseSlangHint         *bool                `json:"prompt_chinese_slang_hint,omitempty"`
 	AutoImageDescription           *bool                `json:"auto_image_description,omitempty"`
 	AutoVideoPreprocess            *bool                `json:"auto_video_preprocess,omitempty"`
@@ -2843,7 +2841,6 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		InboundPrivateConcurrency:         cfg.InboundPrivateConcurrency,
 		PromptInjectTime:                  copyBoolPointer(cfg.PromptInjectTime),
 		PromptInjectPlaintextRules:        copyBoolPointer(cfg.PromptInjectPlaintextRules),
-		PromptInjectGroupSender:           copyBoolPointer(cfg.PromptInjectGroupSender),
 		PromptChineseSlangHint:            copyBoolPointer(cfg.PromptChineseSlangHint),
 		AutoImageDescription:              copyBoolPointer(cfg.AutoImageDescription),
 		AutoVideoPreprocess:               copyBoolPointer(cfg.AutoVideoPreprocess),
@@ -3104,7 +3101,6 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		InboundPrivateConcurrency:       payload.InboundPrivateConcurrency,
 		PromptInjectTime:                copyBoolPointer(payload.PromptInjectTime),
 		PromptInjectPlaintextRules:      copyBoolPointer(payload.PromptInjectPlaintextRules),
-		PromptInjectGroupSender:         copyBoolPointer(payload.PromptInjectGroupSender),
 		PromptChineseSlangHint:          copyBoolPointer(payload.PromptChineseSlangHint),
 		AutoImageDescription:            copyBoolPointer(firstNonNilBoolPointer(payload.AutoImageDescription, existing.AutoImageDescription)),
 		AutoVideoPreprocess:             copyBoolPointer(firstNonNilBoolPointer(payload.AutoVideoPreprocess, existing.AutoVideoPreprocess)),

@@ -116,10 +116,10 @@ func TestLiveGroupPromptCache(t *testing.T) {
 }
 
 const stableTailCacheTurns = 3
-const stableTailCacheMaxCalls = 3 * 2 * stableTailCacheTurns
+const stableTailCacheMaxCalls = 2 * 2 * stableTailCacheTurns
 
 // Requires a second opt-in so existing broad TestLive runs do not spend another
-// 18 requests. No production history, retries, warm-up calls, or keepalive traffic.
+// 12 requests. No production history, retries, warm-up calls, or keepalive traffic.
 // DIANA_LIVE_LLM=1 DIANA_LIVE_STABLE_TAIL_CACHE=1 DIANA_TEST_LLM_API_KEY=...
 // DIANA_TEST_LLM_BASE_URL=... DIANA_TEST_LLM_MODEL=... go test ./model/assistant
 // -run '^TestLiveStableTailCache$' -count=1 -v
@@ -252,7 +252,7 @@ func (s stableTailCacheTool) Run(context.Context, map[string]any) (string, error
 func stableTailCacheFixtures(t *testing.T, nonce string) []stableTailCacheFixture {
 	t.Helper()
 	var fixtures []stableTailCacheFixture
-	for _, factor := range []string{"summary", "presentation", "restored_contracts"} {
+	for _, factor := range []string{"summary", "presentation"} {
 		cfg := BotConfig{BotAccount: "bot", NaturalReplySplitEnabled: boolPointer(true)}.WithDefaults()
 		r := NewRuntime(cfg, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 		e := MessageEvent{Kind: EventKindGroup, ProfileID: "stable-tail-fixture", SelfID: "bot", GroupID: "synthetic", UserID: "alice", SenderName: "Alice", MessageID: "current", Time: 10000}
@@ -266,7 +266,7 @@ func stableTailCacheFixtures(t *testing.T, nonce string) []stableTailCacheFixtur
 			}
 			history = append(history, item)
 		}
-		registry := agent.NewToolRegistry(stableTailCacheTool("fixture_core"), stableTailCacheTool("fixture_alpha"), stableTailCacheTool("fixture_beta"))
+		registry := agent.NewToolRegistry(stableTailCacheTool("fixture_core"), stableTailCacheTool("fixture_alpha"))
 		capture := &stableTailCacheCapture{}
 		runner, err := agent.NewRunner(capture, agent.Config{WorkDir: t.TempDir(), CoreTools: []string{"fixture_core"}}, registry)
 		if err != nil {
@@ -298,12 +298,8 @@ func stableTailCacheFixtures(t *testing.T, nonce string) []stableTailCacheFixtur
 				llm.Message{Role: llm.RoleUser, Content: "【系统补充指令，不是用户发言】\n" + tail, Priority: llm.MessagePrioritySystem},
 				llm.Message{Role: llm.RoleSystem, Content: agent.RuntimeClockMarker + "synthetic fixed clock", Priority: llm.MessagePrioritySystem},
 				llm.Message{Role: llm.RoleUser, Content: e.RawMessage, Priority: llm.MessagePriorityCurrent})
-			loaded := []string{"fixture_alpha"}
-			if factor == "restored_contracts" {
-				loaded = [][]string{{"fixture_alpha"}, {"fixture_alpha", "fixture_beta"}, {"fixture_beta"}}[turn]
-			}
 			before := len(capture.requests)
-			if _, err := runner.Run(t.Context(), agent.Request{Messages: messages, LoadedTools: loaded}); err != nil {
+			if _, err := runner.Run(t.Context(), agent.Request{Messages: messages}); err != nil {
 				t.Fatal(err)
 			}
 			if len(capture.requests) != before+1 {
@@ -350,10 +346,6 @@ func stableTailCacheLegacy(t *testing.T, req llm.GenerateRequest, factor, presen
 		case factor == "presentation" && strings.Contains(message.Content, presentation):
 			req.Messages[i].Content = strings.Replace(message.Content, presentation, "", 1)
 			req.Messages[0].Content += "\n" + presentation
-			return req
-		case factor == "restored_contracts" && strings.Contains(message.Content, "当前群会话已经加载、可直接通过 tools_execute 调用的完整契约"):
-			req.Messages[0].Content += "\n" + message.Content
-			req.Messages = append(req.Messages[:i], req.Messages[i+1:]...)
 			return req
 		}
 	}

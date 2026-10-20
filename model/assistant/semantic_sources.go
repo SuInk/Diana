@@ -136,7 +136,9 @@ func (r *Runtime) semanticReferenceImageURLsDetailed(ctx context.Context, event 
 	return readyImages, skippedImages, nil
 }
 
-func (r *Runtime) semanticReferenceContext(ctx context.Context, event MessageEvent) semanticReferenceContext {
+// semanticReferenceContext renders selected sources once. Text already present
+// in this turn's history is referenced by ID instead of being copied again.
+func (r *Runtime) semanticReferenceContext(ctx context.Context, event MessageEvent, history ...MessageEvent) semanticReferenceContext {
 	messageIDs := eventSemanticSourceMessageIDs(event)
 	result := semanticReferenceContext{RequestedSourceCount: len(messageIDs)}
 	if len(messageIDs) == 0 {
@@ -144,6 +146,12 @@ func (r *Runtime) semanticReferenceContext(ctx context.Context, event MessageEve
 	}
 
 	botID := firstNonEmpty(strings.TrimSpace(r.effectiveConfigForEvent(event).BotAccount), strings.TrimSpace(event.SelfID))
+	visible := make(map[string]bool, len(history))
+	for _, item := range history {
+		if !item.crossGroupContext && (event.Kind != EventKindGroup || samePromptGroupScope(event, item)) {
+			visible[strings.TrimSpace(item.MessageID)] = true
+		}
+	}
 	lines := []string{"【语义指代选中的历史来源，按下列顺序逐条核对；这些来源不是当前用户的新消息】"}
 	for _, messageID := range messageIDs {
 		source, found := r.findSemanticReferenceEvent(ctx, event, messageID)
@@ -158,14 +166,14 @@ func (r *Runtime) semanticReferenceContext(ctx context.Context, event MessageEve
 		}
 
 		result.ResolvedSourceCount++
-		text := strings.TrimSpace(historyPlainText(source))
+		text := strings.TrimSpace(firstNonEmpty(source.botReply, historyPlainText(source)))
 		if text != "" {
 			result.TextSourceCount++
 		}
 		imageCount := historicalStillImageCount(source)
 		result.HistoricalImageCount += imageCount
 		role := "user"
-		if assistantHistoryEvent(source, botID) {
+		if strings.TrimSpace(source.botReply) != "" || assistantHistoryEvent(source, botID) {
 			role = "assistant"
 		}
 		at := "未知"
@@ -180,7 +188,9 @@ func (r *Runtime) semanticReferenceContext(ctx context.Context, event MessageEve
 			at,
 			imageCount,
 		)
-		if text != "" {
+		if visible[messageID] {
+			line += "\n  正文：见上面的对应聊天记录；未在请求中保留时按 message_id 查询历史。"
+		} else if text != "" {
 			line += "\n  正文：" + text
 		} else if imageCount == 0 {
 			line += "\n  正文：无可用文本或图片"

@@ -214,21 +214,16 @@ func TestAdminChatUsesOwnerToolSurfaceWithoutSessionTools(t *testing.T) {
 		`{"action":"final","content":"done"}`,
 	}}
 	tool := &echoAgentTool{}
-	var loaded []string
 	r := NewRuntime(BotConfig{ID: "bot", OwnerID: "owner", AgentEnabled: false}, nilChannel{}, NewPluginManager(&echoAgentToolPlugin{tool: tool}), nil, nil, nil, func() (LLMProvider, error) { return provider, nil })
 	defer r.closeAgentRegistryCache()
 	resp, err := r.RunAdminChat(context.Background(), "bot", agent.Request{
-		Messages:    AdminChatMessages([]llm.Message{{Role: llm.RoleUser, Content: "调用插件"}}),
-		ToolsLoaded: func(names []string) { loaded = names },
+		Messages: AdminChatMessages([]llm.Message{{Role: llm.RoleUser, Content: "调用插件"}}),
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if resp.Text != "done" || tool.calls != 1 {
 		t.Fatalf("plugin tool not executed: text=%q calls=%d steps=%#v", resp.Text, tool.calls, resp.Steps)
-	}
-	if len(loaded) != 1 || loaded[0] != "plugin.echo" {
-		t.Fatalf("loaded tools not reported for the next turn: %v", loaded)
 	}
 	first := provider.requests[0]
 	declared := map[string]bool{}

@@ -33,17 +33,6 @@ var promptTimeTemplateSpec = registerPrompt(PromptSpec{
 	},
 })
 
-var promptGroupSenderSpec = registerPrompt(PromptSpec{
-	Key:     "reply.group_sender",
-	Group:   PromptGroupReplyBase,
-	Title:   "群聊发言者",
-	Usage:   "群聊里「注入发言者」打开时，放在历史之后，告诉模型这一轮是谁在说话。",
-	Default: defaultPromptGroupSenderTemplate,
-	Vars: []PromptVar{
-		{Name: "sender", Description: "当前发言者的昵称和用户 ID"},
-	},
-})
-
 var promptImageOnlySpec = registerPrompt(PromptSpec{
 	Key:     "reply.image_only",
 	Group:   PromptGroupReplyBase,

@@ -12,15 +12,14 @@ import (
 	"github.com/SuInk/diana/model/llm"
 )
 
-// GroupPromptSession contains only group-public history, its summary and tool names. Never
+// GroupPromptSession contains only group-public history and its summary. Never
 // persist retrieved memories, private thread state, credentials or tool objects.
 // The archive remains authoritative for edits, deletions and context resets.
 type GroupPromptSession struct {
-	Generation  int64                     `json:"generation"`
-	Anchor      string                    `json:"anchor,omitempty"`
-	Checkpoint  string                    `json:"checkpoint,omitempty"`
-	LoadedTools []string                  `json:"loaded_tools,omitempty"`
-	History     []GroupPromptHistoryEntry `json:"history,omitempty"`
+	Generation int64                     `json:"generation"`
+	Anchor     string                    `json:"anchor,omitempty"`
+	Checkpoint string                    `json:"checkpoint,omitempty"`
+	History    []GroupPromptHistoryEntry `json:"history,omitempty"`
 }
 
 // promptContextSummary reads the source at assembly time, not the earlier routing
@@ -161,44 +160,6 @@ func (s *groupPromptSession) saveLocked() {
 	}
 	if !ok {
 		s.invalidated = true
-	}
-}
-
-func (s *groupPromptSession) loadedTools() []string {
-	if s == nil {
-		return nil
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.invalidated {
-		return nil
-	}
-	return append([]string(nil), s.data.LoadedTools...)
-}
-
-func (s *groupPromptSession) rememberTools(names []string) {
-	if s == nil {
-		return
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.invalidated {
-		return
-	}
-	seen := make(map[string]bool, len(s.data.LoadedTools))
-	for _, name := range s.data.LoadedTools {
-		seen[name] = true
-	}
-	changed := false
-	for _, name := range names {
-		if name != "" && !seen[name] {
-			seen[name] = true
-			s.data.LoadedTools = append(s.data.LoadedTools, name)
-			changed = true
-		}
-	}
-	if changed {
-		s.saveLocked()
 	}
 }
 

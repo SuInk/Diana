@@ -227,9 +227,15 @@ func TestRuntimeAgentQueriesMentionedUsersRelationship(t *testing.T) {
 	if len(provider.requests) != 5 || !requestMessagesContain(provider.requests[3].Messages, `"favorability": 5`) {
 		t.Fatalf("requests = %#v", provider.requests)
 	}
-	for _, want := range []string{"必须调用 relationship", "operation=list", "不得以隐私", "不得编造"} {
+	for _, want := range []string{"查询调用 relationship", "只回答所问目标的数据", "operation=list", "不得以隐私"} {
 		if !requestMessagesContain(provider.requests[1].Messages, want) {
 			t.Fatalf("relationship guidance missing %q: %#v", want, provider.requests[1].Messages)
+		}
+	}
+	// 未指定 target_user_id 时必须查实际被 @ 的成员，而不是查发言者（主人）。
+	for _, want := range []string{`"message_count": 18`, `"bot_owner": false`, `"action": "retrieved"`} {
+		if !requestMessagesContain(provider.requests[3].Messages, want) {
+			t.Fatalf("mentioned member's relationship result missing %q", want)
 		}
 	}
 	// 提示词不再要求把工具结果逐字段念出来——那正是回复读起来像填表的原因。

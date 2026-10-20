@@ -520,10 +520,7 @@ type Runtime struct {
 	semanticIndexOnce   sync.Once
 	embedTexts          func(ctx context.Context, cfg llm.ProviderConfig, texts []string) ([][]float32, error)
 	chatInLastReplyAt   map[string]time.Time
-	// recentClaimSources 记录最近几轮联网结论实际引用的来源。人设默认不罗列链接，
-	// 但有人追问「链接呢」时必须能原样给出，而不是重新搜一遍或者编一个。
-	recentClaimSources map[string][]claimSourceRecord
-	contextSummaries   map[string]string
+	contextSummaries    map[string]string
 	// contextSummaryMarks 记录每个会话已经被折进压缩摘要的最后一条历史时间。
 	// 存储层不会因为内存历史被压缩而删掉原文，没有水位就会出现同一批历史既以
 	// 摘要、又以完整原文进入同一个请求。
@@ -847,7 +844,6 @@ func NewRuntime(cfg BotConfig, channel Channel, plugins *PluginManager, llmStore
 		history:                 map[string][]MessageEvent{},
 		semanticRefCache:        map[string]SemanticReferenceCacheRecord{},
 		chatInLastReplyAt:       map[string]time.Time{},
-		recentClaimSources:      map[string][]claimSourceRecord{},
 		contextSummaries:        map[string]string{},
 		contextSummaryMarks:     map[string]int64{},
 		activeReminders:         map[string]struct{}{},
@@ -3951,14 +3947,12 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			BuildInfo:               r.currentBuildInfo(),
 		}
 	}
-	// 模型能不能自己取历史原图，决定了要不要走前置指代解析：能取就给索引让它自己
-	// 判断，不能取就得在调用前替它解完。
+	// 能自己读取历史媒体时，由 Agent 按需查询；没有工具权限时才做前置指代解析。
 	agentCanFetchMedia := cfg.AgentEnabled && relationship.allowsAgentTools()
 	var pluginResponses []PluginResponse
 	{
-		// agent 模式下窗口外媒体改由 durableMediaIndex 以文字索引进提示词，模型
-		// 自己决定要不要取原图，不再每条消息都付一次前置路由调用。工具被关系等级
-		// 挡掉时没有取图手段，仍然回退到路由器。
+		// 不自动列出窗口外媒体，也不为每条消息调用付费路由；Agent 可以通过
+		// chat_history 找到来源，再按需用 history_media 读取原件。
 		if r.shouldResolveSemanticReference(ctx, cfg, event, agentCanFetchMedia) {
 			event = r.enrichSemanticReference(ctx, event, cleanText)
 		}
@@ -4047,7 +4041,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		olderSummary = r.contextSummary(event)
 		// event 到这里已经不会再被改写，三层要查存储层的只读上下文可以并发预取；
 		// 下面建工具表和跑意图路由的时间正好用来等它们。
-		contextPreload = r.startPromptContextPreload(ctx, event, cleanText, userProfile, relationship, agentCanFetchMedia)
+		contextPreload = r.startPromptContextPreload(ctx, event, cleanText, userProfile, relationship)
 	}
 	var agentRegistry *agent.ToolRegistry
 	if !authoritativePluginContext {
@@ -4154,14 +4148,6 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	var dependency *senderDependencyContext
 	dependencyIndex := -1
 	volatile := pluginContextMessages(ctx, pluginResponses)
-	semanticReferenceContext := r.semanticReferenceContextBlock(ctx, event)
-	if semanticReferenceContext.Block != "" {
-		volatile = append(volatile, llm.Message{
-			Role:     llm.RoleUser,
-			Content:  semanticReferenceContext.Block,
-			Priority: llm.MessagePriorityPlugin,
-		})
-	}
 	if !authoritativePluginContext {
 		contextPreload.wait()
 		if threadState := strings.TrimSpace(contextPreload.threadState); threadState != "" {
@@ -4212,15 +4198,6 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 				AtomicText: true,
 			})
 		}
-		// 关于自己的事实和世界书同级：都是回答这条消息要用的背景，按记忆优先级让位。
-		if selfFactContext := contextPreload.selfFactContext; selfFactContext != "" {
-			volatile = append(volatile, llm.Message{
-				Role:       llm.RoleUser,
-				Content:    selfFactContext,
-				Priority:   llm.MessagePriorityMemory,
-				AtomicText: true,
-			})
-		}
 		// 自述和世界书同级：世界书是「我活在什么世界里」，自述是「我注意到的我自己」。
 		// 两者都是理解这条消息所需的背景，都在尾部按记忆优先级让位，都不得覆盖人设。
 		if selfNoteContext := contextPreload.selfNoteContext; selfNoteContext != "" {
@@ -4240,18 +4217,6 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 				Priority:   llm.MessagePriorityMemory,
 				AtomicText: true,
 			})
-		}
-		if directAgentDecision && agentCanFetchMedia {
-			// 索引挂在历史优先级上：预算紧张时它跟着旧历史一起让位，不该挤掉当前
-			// 消息或长期要求。
-			if mediaIndex := contextPreload.mediaIndex; mediaIndex != "" {
-				volatile = append(volatile, llm.Message{
-					Role:       llm.RoleUser,
-					Content:    mediaIndex,
-					Priority:   llm.MessagePriorityHistory,
-					AtomicText: true,
-				})
-			}
 		}
 		if thread := strings.TrimSpace(sessionThread); thread != "" {
 			threadBudget := sessionThreadBudget(r.promptContextWindowTokens(event, cfg)) - llm.EstimateTextTokens(sessionThreadPromptPrefix)
@@ -4283,14 +4248,6 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			volatile = append(volatile, llm.Message{
 				Role:       llm.RoleUser,
 				Content:    linkPolicy,
-				Priority:   llm.MessagePriorityMemory,
-				AtomicText: true,
-			})
-		}
-		if sources := r.claimSourceContext(event); sources != "" {
-			volatile = append(volatile, llm.Message{
-				Role:       llm.RoleUser,
-				Content:    sources,
 				Priority:   llm.MessagePriorityMemory,
 				AtomicText: true,
 			})
@@ -4368,7 +4325,11 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	}
 	// 插件事实占据权威地位时没有历史那一段，攒下的块直接跟在 system 头部后面。
 	messages = append(messages, volatile...)
-	semanticContext := r.semanticReferenceContext(ctx, event)
+	var semanticHistory []MessageEvent
+	if !authoritativePluginContext {
+		semanticHistory = replyHistory
+	}
+	semanticContext := r.semanticReferenceContext(ctx, event, semanticHistory...)
 	if sourceMessage := semanticReferenceContextMessage(semanticContext); !runtimeLLMMessageEmpty(sourceMessage) {
 		messages = append(messages, sourceMessage)
 	}
@@ -4417,9 +4378,6 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		if reference := r.agentCurrentHistoricalImageReference(ctx, event, contextImageURLs); reference != "" {
 			currentText += "\n\n" + reference
 		}
-	}
-	if notice := strings.TrimSpace(event.imageContextNotice); notice != "" {
-		currentText += "\n\n【图片上下文提示】" + notice
 	}
 	if annotation := r.avatarMatchAnnotation(ctx, event); annotation != "" {
 		currentText += "\n\n" + annotation
@@ -4488,7 +4446,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	}
 	messages = append(messages, currentMessage)
 	r.recordTemporaryMemoryContext(ctx, event, cfg, messages, contextPreload)
-	r.recordPromptContextBudget(ctx, event, cfg, messages, replyHistory, semanticReferenceContext, semanticContext, summaryRecompressed, contextPreload.layerUsage(threadUsage))
+	r.recordPromptContextBudget(ctx, event, cfg, messages, replyHistory, semanticContext, summaryRecompressed, contextPreload.layerUsage(threadUsage))
 
 	replyCfg := cfg
 	replyCfg.AgentEnabled = agentActive
@@ -4840,7 +4798,6 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 		if carryover, ok := r.agentCarryoverMessage(event); ok {
 			messages = append(messages, carryover)
 		}
-		promptSession := r.groupPromptSession(event)
 		r.startImageFixGate(ctx, cfg, event)
 		interjections, stopInterjections := r.startDirectReplyInterjections(ctx)
 		observer, stopProgress := r.startReplyProgress(ctx, event, r.agentRunObserver(event))
@@ -4848,8 +4805,6 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 			Messages:      messages,
 			TraceID:       traceID,
 			Observer:      observer,
-			LoadedTools:   promptSession.loadedTools(),
-			ToolsLoaded:   promptSession.rememberTools,
 			Interjections: interjections,
 		})
 		stopInterjections()
@@ -4858,7 +4813,6 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 			return "", err
 		}
 		r.rememberAgentRunProgress(event, resp)
-		r.rememberClaimSources(event, resp.Sources)
 		replyToolTraceFromContext(ctx).add(resp.Steps)
 		finalizeStickerFromContext(ctx).set(resp.FinalizeFields[stickerFinalizeFieldName], resp.FinalizeFields[stickerOrderFieldName])
 		text := resp.Text
@@ -5790,91 +5744,6 @@ func formatApproximateAge(age time.Duration) string {
 	default:
 		return strconv.Itoa(days/30) + " 个月"
 	}
-}
-
-type replyMentionCandidate struct {
-	UserID        string `json:"user_id"`
-	DisplayName   string `json:"display_name,omitempty"`
-	CurrentSender bool   `json:"current_sender,omitempty"`
-	Source        string `json:"source,omitempty"`
-}
-
-// currentSenderMentionRule 说明当前发言者这一位由谁来 @。三档说的是三件不同的事，
-// 含糊其辞比说错更糟：模型会按最像陈述句的那一句办。
-func currentSenderMentionRule(cfg BotConfig) string {
-	switch mentionUserMode(cfg) {
-	case ReplyDecorationOn:
-		return "当前发言者是在直接询问你时，发送层会在第一条回复开头引用当前消息并 @ 当前发言者，这部分不需要你输出 CQ at。"
-	case ReplyDecorationOff:
-		return "发送层不会自动 @ 任何人。当前发言者这一位按本群习惯通常不用 @，需要点名时自己写 [diana-at:成员user_id]。"
-	default:
-		return "发送层不会自动 @ 任何人，包括当前发言者。这一轮要不要 @ 当前发言者，按本轮单独给出的那条规则判断；判断为要，就自己在回复最开头写出来。"
-	}
-}
-
-// autoDecorationCancelClause 只在 on 档成立：发送层看到模型点名了别人才会撤掉
-// 自己加的那一份。auto/off 档它本来就没加，没有可撤的。
-func autoDecorationCancelClause(cfg BotConfig) string {
-	if mentionUserMode(cfg) != ReplyDecorationOn && replyReferenceMode(cfg) != ReplyDecorationOn {
-		return ""
-	}
-	return "发送层看到你明确提及其他成员，或识别到当前消息正在承接其他成员时，会取消对触发者的自动引用和 @。"
-}
-
-func autoDecorationAvoidClause(cfg BotConfig) string {
-	if mentionUserMode(cfg) != ReplyDecorationOn {
-		return ""
-	}
-	return "并自动避免把触发者误当成回应对象。"
-}
-
-func (r *Runtime) replyMentionCandidates(event MessageEvent, history []MessageEvent) []replyMentionCandidate {
-	cfg := r.effectiveConfigForEvent(event)
-	botID := firstNonEmpty(strings.TrimSpace(event.SelfID), strings.TrimSpace(cfg.BotAccount))
-	identityEvents := make([]MessageEvent, 0, len(history)+1)
-	identityEvents = append(identityEvents, event)
-	for index := len(history) - 1; index >= 0; index-- {
-		identityEvents = append(identityEvents, history[index])
-	}
-	displayNames := messageParticipantDisplayNames(identityEvents...)
-	candidates := make([]replyMentionCandidate, 0, 12)
-	indexes := make(map[string]int)
-	add := func(userID, displayName string, current bool, source string) {
-		userID = strings.TrimSpace(userID)
-		if userID == "" || userID == botID {
-			return
-		}
-		if index, ok := indexes[userID]; ok {
-			if candidates[index].DisplayName == "" {
-				candidates[index].DisplayName = strings.TrimSpace(displayName)
-			}
-			candidates[index].CurrentSender = candidates[index].CurrentSender || current
-			return
-		}
-		indexes[userID] = len(candidates)
-		candidates = append(candidates, replyMentionCandidate{
-			UserID:        userID,
-			DisplayName:   strings.TrimSpace(displayName),
-			CurrentSender: current,
-			Source:        source,
-		})
-	}
-
-	add(event.UserID, firstNonEmpty(displayNames[event.UserID], event.SenderName), true, "current_sender")
-	for _, userID := range mentionedUserIDs(event.Segments) {
-		add(userID, displayNames[userID], false, "mentioned_in_current_message")
-	}
-	if event.Quoted != nil {
-		add(event.Quoted.UserID, firstNonEmpty(displayNames[event.Quoted.UserID], event.Quoted.SenderName), false, "quoted_message_sender")
-	}
-	for index := len(history) - 1; index >= 0 && len(candidates) < 20; index-- {
-		item := history[index]
-		add(item.UserID, firstNonEmpty(displayNames[item.UserID], item.SenderName), false, "recent_participant")
-		for _, userID := range mentionedUserIDs(item.Segments) {
-			add(userID, displayNames[userID], false, "recently_mentioned")
-		}
-	}
-	return candidates
 }
 
 func formatUTCOffset(offsetSeconds int) string {

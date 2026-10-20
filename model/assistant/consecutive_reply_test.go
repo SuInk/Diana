@@ -40,8 +40,8 @@ func TestBeginReplyTurnSeesAnInFlightTurnFromTheSameSpeaker(t *testing.T) {
 	}
 }
 
-// 上一轮已经答完时，把答案开头带进提示词——让模型认出「这件事我答过」。
-func TestBeginReplyTurnCarriesTheFinishedReply(t *testing.T) {
+// 上一轮已经答完时只传状态，不再重复注入历史中的答案。
+func TestBeginReplyTurnCarriesFinishedStatusWithoutReplyExcerpt(t *testing.T) {
 	runtime := &Runtime{}
 	event := consecutiveTestEvent("10001")
 	now := time.Now()
@@ -57,8 +57,8 @@ func TestBeginReplyTurnCarriesTheFinishedReply(t *testing.T) {
 		t.Fatalf("上一轮已经答完，不该还是 in-flight: %#v", previous)
 	}
 	block := consecutiveReplyContext(previous)
-	if !strings.Contains(block, "海王") {
-		t.Fatalf("上一轮的答案没有带进提示词: %q", block)
+	if strings.Contains(block, "海王") {
+		t.Fatalf("上一轮答案不应再次注入: %q", block)
 	}
 	if !strings.Contains(block, "已经回答过") {
 		t.Fatalf("提示词 = %q", block)
@@ -130,31 +130,16 @@ func TestFinishReplyTurnIgnoresEmptyReplies(t *testing.T) {
 		t.Fatal("同一时间窗内的上一轮应当仍然可见")
 	}
 	// 没说出口的轮次留在 in-flight 状态即可，但不能凭空多出一段「你说过的话」。
-	if strings.TrimSpace(previous.reply) != "" {
-		t.Fatalf("空回复被记了下来: %#v", previous)
+	if !previous.inFlight() {
+		t.Fatalf("空回复不应标记为已发送: %#v", previous)
 	}
 }
 
 // 提示词要留出「这确实是另一件事」的余地，否则连续两个不同问题的第二个会被压成一句话。
 func TestConsecutiveReplyContextAllowsGenuineNewTopics(t *testing.T) {
-	block := consecutiveReplyContext(replyTurnRecord{startedAt: time.Now(), finishedAt: time.Now(), reply: "上一轮的答案"})
+	block := consecutiveReplyContext(replyTurnRecord{startedAt: time.Now(), finishedAt: time.Now()})
 	if !strings.Contains(block, "另一件事") {
 		t.Fatalf("提示词把所有后续消息都当成了追问: %q", block)
-	}
-}
-
-// 只带答案开头：带全文既费预算，又会诱导模型照着改写一遍。
-func TestTruncateReplyExcerptKeepsItShortAndSingleLine(t *testing.T) {
-	long := strings.Repeat("很长的回答", 60)
-	excerpt := truncateReplyExcerpt(long, consecutiveReplyExcerptRunes)
-	if len([]rune(excerpt)) > consecutiveReplyExcerptRunes+1 {
-		t.Fatalf("摘录过长: %d", len([]rune(excerpt)))
-	}
-	if !strings.HasSuffix(excerpt, "…") {
-		t.Fatalf("截断没有留下省略号: %q", excerpt)
-	}
-	if got := truncateReplyExcerpt("第一行\n第二行", 100); got != "第一行 第二行" {
-		t.Fatalf("换行没有压平: %q", got)
 	}
 }
 

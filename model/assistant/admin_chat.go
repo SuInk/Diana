@@ -90,7 +90,7 @@ func adminChatRelationship() RelationshipPolicy {
 
 // adminChatCoreTools 是管理会话每一步都带完整定义的工具：原来那份注册表里的诊断、
 // 文件、命令和扩展管理照旧常驻，后来补齐的插件工具和 Diana 工具按需加载。
-// WebUI 按会话记着已加载的工具（Request.LoadedTools），下一轮不用再加载。
+// 管理会话每次运行按需加载工具契约，不跨轮挂载旧契约。
 var adminChatCoreTools = []string{
 	"admin_diagnostics", "admin_group_history", "bot_config", "runtime_model",
 	agent.WebSearchToolName, "list_capabilities", "capabilities", "read_skill",

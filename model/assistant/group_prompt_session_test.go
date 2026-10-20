@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -138,8 +137,6 @@ func TestGroupPromptSurvivesRestartAndKeepsCrossGroupInTail(t *testing.T) {
 		t.Fatalf("stable=%v tail=%v", a, tail)
 	}
 	s := r.groupPromptSession(current)
-	s.rememberTools([]string{"read_file", "search"})
-	s.rememberTools([]string{"search", "render"})
 	s.rememberAnchor(messageHistoryDedupeKey(first))
 	if store.loads != 1 {
 		t.Fatalf("loaded %d times", store.loads)
@@ -161,14 +158,14 @@ func TestGroupPromptSurvivesRestartAndKeepsCrossGroupInTail(t *testing.T) {
 		t.Fatalf("prefix changed: %v %v", a, b)
 	}
 	s = r.groupPromptSession(current)
-	if !reflect.DeepEqual(s.loadedTools(), []string{"read_file", "search", "render"}) || s.anchor() != messageHistoryDedupeKey(first) {
+	if s.anchor() != messageHistoryDedupeKey(first) {
 		t.Fatalf("restart lost state: %+v", s.data)
 	}
 	for _, change := range []func(*MessageEvent){func(e *MessageEvent) { e.GroupID = "other" }, func(e *MessageEvent) { e.ProfileID = "other" }, func(e *MessageEvent) { e.Platform = PlatformTelegram }, func(e *MessageEvent) { e.SelfID = "other" }, func(e *MessageEvent) { e.ContextNamespace = "other" }} {
 		other := current
 		change(&other)
-		if len(r.groupPromptSession(other).loadedTools()) != 0 {
-			t.Fatal("session leaked tools")
+		if r.groupPromptSession(other).anchor() != "" {
+			t.Fatal("session leaked history anchor")
 		}
 	}
 	cfg.CrossGroupMemoryEnabled = boolPointer(false)
@@ -210,24 +207,24 @@ func TestGroupPromptLateHistoryAppendsAndDeletedOrEditedHistoryInvalidates(t *te
 	}
 }
 
-func TestGroupPromptConcurrentToolsAndReset(t *testing.T) {
+func TestGroupPromptConcurrentAnchorsAndReset(t *testing.T) {
 	r := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	e := MessageEvent{Kind: EventKindGroup, GroupID: "one"}
 	s := r.groupPromptSession(e)
 	var wg sync.WaitGroup
 	for _, name := range []string{"a", "b", "c", "a"} {
 		wg.Add(1)
-		go func(name string) { defer wg.Done(); s.rememberTools([]string{name}) }(name)
+		go func(name string) { defer wg.Done(); s.rememberAnchor(name) }(name)
 	}
 	wg.Wait()
-	if len(s.loadedTools()) != 3 {
-		t.Fatal("concurrent load lost")
+	if s.anchor() == "" {
+		t.Fatal("concurrent anchor update lost")
 	}
 	if err := r.clearSessionHistory(e); err != nil {
 		t.Fatal(err)
 	}
-	s.rememberTools([]string{"late_callback"})
-	if len(r.groupPromptSession(e).loadedTools()) != 0 {
+	s.rememberAnchor("late_callback")
+	if r.groupPromptSession(e).anchor() != "" {
 		t.Fatal("in-flight run resurrected reset state")
 	}
 }

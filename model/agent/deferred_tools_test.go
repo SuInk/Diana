@@ -594,22 +594,23 @@ func TestDeferredDispatchReportsInventedToolAsMissing(t *testing.T) {
 }
 
 // 模型直接调用已加载的延迟工具（线上 gemini-3.8-flash-low 直接调 platform）：按
-// tools_execute 同一套校验执行，不再多绕一轮协议修正；上一轮会话恢复的加载状态也算。
+// tools_execute 同一套校验执行，不再多绕一轮协议修正；加载状态只在本次运行有效。
 func TestDeferredDirectCallRunsLoadedTool(t *testing.T) {
 	for _, native := range []bool{false, true} {
 		schema := toolObjectSchema([]string{"operation"}, map[string]any{"operation": map[string]any{"type": "string", "enum": []string{"announce"}}})
 		rare := &schemaDispatchTool{countingTool: countingTool{name: "platform"}, schema: schema}
 		client := &dispatchTestClient{replies: []*llm.GenerateResponse{
+			loadReply(native, "platform"),
 			dispatchReply(native, "platform", map[string]any{"operation": "kick"}),
 			dispatchReply(native, "platform", map[string]any{"operation": "announce"}),
 		}}
 		runner, _ := NewRunner(client, Config{MaxSteps: 5, CoreTools: []string{"common"}}, NewToolRegistry(&countingTool{name: "common"}, rare))
-		result, err := runner.Run(context.Background(), Request{Messages: []llm.Message{{Role: llm.RoleUser, Content: "发个群公告"}}, LoadedTools: []string{"platform"}})
+		result, err := runner.Run(context.Background(), Request{Messages: []llm.Message{{Role: llm.RoleUser, Content: "发个群公告"}}})
 		if err != nil {
 			t.Fatal(err)
 		}
 		// 不合 schema 的入参照旧拦下，合规的那次才执行。
-		if rare.calls != 1 || len(result.Steps) != 2 || !result.Steps[0].Skipped || result.Steps[1].Skipped || result.Steps[1].Tool != "platform" {
+		if rare.calls != 1 || len(result.Steps) != 3 || !result.Steps[1].Skipped || result.Steps[2].Skipped || result.Steps[2].Tool != "platform" {
 			t.Fatalf("native=%v calls=%d steps=%#v", native, rare.calls, result.Steps)
 		}
 	}
@@ -619,25 +620,19 @@ func TestDeferredDirectCallRunsLoadedTool(t *testing.T) {
 // 使用约束。当场加载并把契约连同报错交回，下一步直接调用就能执行，只多一轮而不是两轮。
 func TestDeferredDirectCallLoadsUnloadedToolWithoutRunning(t *testing.T) {
 	rare := &countingTool{name: "reminder"}
-	var persisted []string
 	client := &dispatchTestClient{replies: []*llm.GenerateResponse{
 		dispatchReply(true, "reminder", map[string]any{"query": "x"}),
 		dispatchReply(true, "reminder", map[string]any{"query": "x"}),
 	}}
 	runner, _ := NewRunner(client, Config{MaxSteps: 5, CoreTools: []string{"common"}}, NewToolRegistry(&countingTool{name: "common"}, rare))
 	result, err := runner.Run(context.Background(), Request{
-		Messages:    []llm.Message{{Role: llm.RoleUser, Content: "提醒我"}},
-		ToolsLoaded: func(names []string) { persisted = names },
+		Messages: []llm.Message{{Role: llm.RoleUser, Content: "提醒我"}},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if rare.calls != 1 || len(result.Steps) != 2 || !result.Steps[0].Skipped || !strings.Contains(result.Steps[0].Error, `"name":"reminder"`) {
 		t.Fatalf("calls=%d steps=%#v", rare.calls, result.Steps)
-	}
-	// 顺手加载的状态和 tools_load 一样落到会话里。
-	if !reflect.DeepEqual(persisted, []string{"reminder"}) {
-		t.Fatalf("persisted=%v", persisted)
 	}
 	// 给模型的修正消息里要带上完整契约。
 	found := false
@@ -663,12 +658,11 @@ func TestDeferredDirectCallKeepsPermissionChecks(t *testing.T) {
 	defer memberView.Close()
 	memberView.Retain(map[string]bool{"common": true})
 	memberLoader := newDeferredToolLoader(memberView, []string{"common"})
-	memberLoader.restore([]string{"mcp__probe__ping"})
 	if _, err := memberLoader.dispatch(llmAction{Action: "tool", Tool: "mcp__probe__ping", Input: map[string]any{}}); err == nil || !strings.Contains(err.Error(), "没有权限") {
 		t.Fatalf("member direct call error = %v", err)
 	}
 	if len(memberLoader.loaded) != 0 {
-		t.Fatalf("denied tool loaded: %v", memberLoader.order)
+		t.Fatalf("denied tool loaded: %v", memberLoader.loaded)
 	}
 
 	ownerView, err := base.NewView(Config{WorkDir: t.TempDir()})
@@ -677,7 +671,9 @@ func TestDeferredDirectCallKeepsPermissionChecks(t *testing.T) {
 	}
 	defer ownerView.Close()
 	ownerLoader := newDeferredToolLoader(ownerView, []string{"common"})
-	ownerLoader.restore([]string{"mcp__probe__ping"})
+	if _, err := ownerLoader.Run(t.Context(), map[string]any{"names": []any{"mcp__probe__ping"}}); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := ownerLoader.dispatch(llmAction{Action: "tool", Tool: "mcp__probe__ping", Input: map[string]any{}}); err != nil {
 		t.Fatalf("owner direct call: %v", err)
 	}
@@ -689,13 +685,13 @@ func TestDeferredDirectCallKeepsPermissionChecks(t *testing.T) {
 	platform := &countingTool{name: "platform"}
 	registry := NewToolRegistry(&countingTool{name: "common"}, platform)
 	registry.DisableOperations("安全模式", DisabledOperation{Tool: "platform", Field: "operation", Values: []string{"kick"}})
-	client := &dispatchTestClient{replies: []*llm.GenerateResponse{dispatchReply(true, "platform", map[string]any{"operation": "kick"})}}
+	client := &dispatchTestClient{replies: []*llm.GenerateResponse{loadReply(true, "platform"), dispatchReply(true, "platform", map[string]any{"operation": "kick"})}}
 	runner, _ := NewRunner(client, Config{MaxSteps: 5, CoreTools: []string{"common"}}, registry)
-	result, err := runner.Run(context.Background(), Request{Messages: []llm.Message{{Role: llm.RoleUser, Content: "踢了他"}}, LoadedTools: []string{"platform"}})
+	result, err := runner.Run(context.Background(), Request{Messages: []llm.Message{{Role: llm.RoleUser, Content: "踢了他"}}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if platform.calls != 0 || len(result.Steps) == 0 || !strings.Contains(result.Steps[0].Error, "安全模式") {
+	if platform.calls != 0 || len(result.Steps) == 0 || !strings.Contains(result.Steps[len(result.Steps)-1].Error, "安全模式") {
 		t.Fatalf("disabled operation ran: calls=%d steps=%#v", platform.calls, result.Steps)
 	}
 }

@@ -4,6 +4,8 @@
 package assistant
 
 import (
+	"encoding/json"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -19,10 +21,34 @@ func TestAgentResidencyKeepsConfiguredEntriesWithoutCatalog(t *testing.T) {
 	if err := agent.SaveResidencyList(workspace, "bot-a", []string{agent.ToolResidentID("poke"), "official.music"}); err != nil {
 		t.Fatal(err)
 	}
-	// Skill 不归这份名单管，它的档位单写，也不该跑到这一页来。
-	resident := true
-	if err := agent.SaveExtensionResidency(workspace, "bot-a", "skill:demo", &resident, nil); err != nil {
+	// 旧版写下的 Skill 常驻值不能复活；已有工具和插件的名单仍须保留。
+	overridesPath := filepath.Join(agent.DianaStateDir(workspace), "extension-overrides.json")
+	data, err := os.ReadFile(overridesPath)
+	if err != nil {
 		t.Fatal(err)
+	}
+	var legacy map[string]map[string]bool
+	if err := json.Unmarshal(data, &legacy); err != nil {
+		t.Fatal(err)
+	}
+	legacy["bot-a"][agent.ResidentOverrideKey("skill:demo")] = true
+	data, err = json.Marshal(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(overridesPath, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	resident := true
+	if err := agent.SaveExtensionResidency(workspace, "bot-a", "skill:demo", &resident, nil); err == nil {
+		t.Fatal("Skill 常驻入口应拒绝旧配置")
+	}
+	values, err := agent.LoadExtensionOverrides(workspace, "bot-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := values[agent.ResidentOverrideKey("skill:demo")]; exists || agent.ResidentOverride(values, "skill:demo") != nil {
+		t.Fatal("旧 Skill 常驻值仍在生效")
 	}
 	entries, listed := (&Runtime{}).AgentResidency("bot-a")
 	if !listed {
@@ -32,7 +58,7 @@ func TestAgentResidencyKeepsConfiguredEntriesWithoutCatalog(t *testing.T) {
 	for _, entry := range entries {
 		got[entry.ID] = entry
 	}
-	// skill 的档位归 Skills 标签管，不该跑到这一页来。
+	// Skill 正文改为 read_skill 按需读取，旧常驻值不能出现在管理页中。
 	if len(got) != 2 {
 		t.Fatalf("entries = %#v", entries)
 	}

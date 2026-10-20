@@ -502,8 +502,8 @@ func TestWebSearchReturnsDiscoveryWithoutReadingArbitrarySources(t *testing.T) {
 }
 
 func TestWebSearchPolicyDowngradesSnippetOnlyThirdPartyClaims(t *testing.T) {
-	for name, text := range map[string]string{"turn": webSearchTurnPolicy, "decision": webSearchDecisionPolicy} {
-		for _, want := range []string{"没读过", "没查实", "第一人称体验", "不用管"} {
+	for name, text := range map[string]string{"decision": webSearchDecisionPolicy} {
+		for _, want := range []string{"优先读取官方原文", "空结果或页面没写不证明不存在", "不用第一人称编造使用经历"} {
 			if !strings.Contains(text, want) {
 				t.Fatalf("%s policy missing %q", name, want)
 			}

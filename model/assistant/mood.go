@@ -18,8 +18,8 @@ import (
 //
 // 心情挂在机器人（配置档）上而不是会话上，是短时状态，不落库：重启就回到基线。
 //
-// 基线是开心，不是平静。开启心情就是想要一个活泼的机器人，所以默认就注入开心
-// 语气；被骂得多了跌到开心线以下只是暂时不注入（回到人设本来的语气），过一阵自己
+// 这里只维护供管理页观察的短时分数，不再将心情扩写为每轮表达提示词。
+// 被骂得多时分数降低，过一阵自己
 // 回来。心情最低就是平静，没有「低落」档：以前有过，一个人在一个群里连骂十几句
 // 就把心情顶到下限，六个群一起话少、不接梗好几个小时（线上 2026-09-29 一个人
 // 14 次减分，108 轮回复带着低落语气）。对这个人的态度留给他自己的好感度去管。
@@ -100,21 +100,3 @@ func (r *Runtime) moodScore(profileID string, now time.Time) float64 {
 	}
 	return state.decayedScore(now)
 }
-
-// moodToneForConfig 返回本轮要注入的心情语气，掉出开心时返回空串。
-//
-// 注入点紧挨着语气锚点：它是「怎么说」，离生成越近越管用；心情几小时才
-// 变一档，不会打散前缀缓存。
-func (r *Runtime) moodToneForConfig(cfg BotConfig, profileID string) string {
-	if !boolValue(cfg.MoodEnabled, false) {
-		return ""
-	}
-	if r.moodScore(profileID, r.clock()) < moodHappyThreshold {
-		return ""
-	}
-	return cfg.prompt(promptMoodHappySpec)
-}
-
-const promptMoodHappy = "你现在心情不错：语气轻快一点，话可以稍微多一点，更愿意接梗。心情是你自己的状态，没人问就不用解释为什么开心。"
-
-var promptMoodHappySpec = tailSpec("mood.happy", "心情：不错", "开启心情后默认放在尾部；最近被骂得多、跌到开心线以下时暂时不放。", promptMoodHappy)

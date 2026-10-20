@@ -484,7 +484,7 @@ func estimateHistoryContextEventTokens(event MessageEvent, currentTime int64, as
 	return cost
 }
 
-func (r *Runtime) recordPromptContextBudget(ctx context.Context, event MessageEvent, cfg BotConfig, messages []llm.Message, history []MessageEvent, semantic semanticReferencePromptContext, sources semanticReferenceContext, summaryRecompressed bool, layers []contextLayerUsage) {
+func (r *Runtime) recordPromptContextBudget(ctx context.Context, event MessageEvent, cfg BotConfig, messages []llm.Message, history []MessageEvent, sources semanticReferenceContext, summaryRecompressed bool, layers []contextLayerUsage) {
 	if !debugModeEnabled(cfg) {
 		return
 	}
@@ -553,10 +553,10 @@ func (r *Runtime) recordPromptContextBudget(ctx context.Context, event MessageEv
 		// 全局预算之前自己丢了什么。少了后者，categories 里的 fits_budget 只能说明
 		// 「成品消息没再挨刀」，说明不了层内配额有没有截断候选。
 		"layers":                   contextLayerUsageTrace(layers),
-		"semantic_requested":       semantic.Requested,
-		"semantic_resolved":        semantic.Resolved,
-		"semantic_text_sources":    semantic.TextSources,
-		"semantic_expected_images": semantic.ExpectedImages,
+		"semantic_requested":       sources.RequestedSourceCount,
+		"semantic_resolved":        sources.ResolvedSourceCount,
+		"semantic_text_sources":    sources.TextSourceCount,
+		"semantic_expected_images": sources.HistoricalImageCount,
 		"semantic_attached_images": sources.AttachedImageCount,
 		"semantic_missing_sources": sources.MissingSourceCount,
 		"message_id":               event.MessageID,

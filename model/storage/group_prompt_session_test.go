@@ -17,7 +17,7 @@ func TestGroupPromptSessionRestartIsolationAndStaleResetWriter(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	state := assistant.GroupPromptSession{Anchor: "first", LoadedTools: []string{"read_file", "render"}, History: []assistant.GroupPromptHistoryEntry{{Key: "first", SourceHash: "hash", Messages: []llm.Message{{Role: llm.RoleUser, Content: "public history"}}}}}
+	state := assistant.GroupPromptSession{Anchor: "first", History: []assistant.GroupPromptHistoryEntry{{Key: "first", SourceHash: "hash", Messages: []llm.Message{{Role: llm.RoleUser, Content: "public history"}}}}}
 	for _, scope := range []string{"bot/one", "other/one"} {
 		if ok, err := store.SaveGroupPromptSession(ctx, scope, "group:one", state); err != nil || !ok {
 			t.Fatalf("save %v %v", ok, err)
@@ -35,7 +35,7 @@ func TestGroupPromptSessionRestartIsolationAndStaleResetWriter(t *testing.T) {
 	}
 	defer store.Close()
 	got, err := store.LoadGroupPromptSession(ctx, "bot/one", "group:one")
-	if err != nil || got.Anchor != "first" || len(got.LoadedTools) != 2 || got.History[0].Messages[0].Content != "public history" {
+	if err != nil || got.Anchor != "first" || len(got.History) != 1 || got.History[0].Messages[0].Content != "public history" {
 		t.Fatalf("restart %+v %v", got, err)
 	}
 	missing, err := store.LoadGroupPromptSession(ctx, "missing", "group:one")
@@ -50,12 +50,12 @@ func TestGroupPromptSessionRestartIsolationAndStaleResetWriter(t *testing.T) {
 	}
 	for _, scope := range []string{"bot/one", "other/one"} {
 		got, err = store.LoadGroupPromptSession(ctx, scope, "group:one")
-		if err != nil || got.Generation != 1 || len(got.History) != 0 || len(got.LoadedTools) != 0 {
+		if err != nil || got.Generation != 1 || got.Anchor != "" || len(got.History) != 0 {
 			t.Fatalf("reset %+v %v", got, err)
 		}
 	}
 	got, err = store.LoadGroupPromptSession(ctx, "bot/two", "group:two")
-	if err != nil || len(got.LoadedTools) != 2 {
+	if err != nil || got.Anchor != "first" || len(got.History) != 1 || got.History[0].Messages[0].Content != "public history" {
 		t.Fatal("other group lost", err)
 	}
 }

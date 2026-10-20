@@ -1,7 +1,6 @@
 package assistant
 
 import (
-	"encoding/json"
 	"strings"
 )
 
@@ -27,6 +26,9 @@ type messageAddressing struct {
 func addressingForEvent(event MessageEvent, cfg BotConfig) messageAddressing {
 	self := firstNonEmpty(strings.TrimSpace(event.SelfID), strings.TrimSpace(cfg.BotAccount))
 	classify := func(id string) string {
+		if strings.TrimSpace(id) == "all" {
+			return "all"
+		}
 		if strings.TrimSpace(id) == "" || self == "" {
 			return "unknown"
 		}
@@ -36,6 +38,25 @@ func addressingForEvent(event MessageEvent, cfg BotConfig) messageAddressing {
 		return "other"
 	}
 	out := messageAddressing{ReplyTarget: "none", Mentions: []MessageMention{}}
+	mentionIndexes := make(map[string]int)
+	addMention := func(mention MessageMention) {
+		mention.UserID = strings.TrimSpace(mention.UserID)
+		mention.Username = strings.TrimSpace(mention.Username)
+		key := "id:" + mention.UserID
+		if mention.UserID == "" {
+			key = "username:" + strings.ToLower(mention.Username)
+		}
+		if index, exists := mentionIndexes[key]; exists {
+			previous := &out.Mentions[index]
+			if previous.Username == "" {
+				previous.Username = mention.Username
+			}
+			previous.UsernameKnown = previous.UsernameKnown || mention.UsernameKnown
+			return
+		}
+		mentionIndexes[key] = len(out.Mentions)
+		out.Mentions = append(out.Mentions, mention)
+	}
 	for _, segment := range event.Segments {
 		if segment.Type == "reply" {
 			out.ReplyTarget = "unknown"
@@ -52,7 +73,7 @@ func addressingForEvent(event MessageEvent, cfg BotConfig) messageAddressing {
 		if mention.UserID != "" {
 			mention.Target = classify(mention.UserID)
 		}
-		out.Mentions = append(out.Mentions, mention)
+		addMention(mention)
 	}
 	for _, segment := range event.Segments {
 		if segment.Type != "at" {
@@ -63,7 +84,7 @@ func addressingForEvent(event MessageEvent, cfg BotConfig) messageAddressing {
 		if id == "all" {
 			target = "all"
 		}
-		out.Mentions = append(out.Mentions, MessageMention{UserID: id, Target: target})
+		addMention(MessageMention{UserID: id, Target: target})
 	}
 	for _, m := range out.Mentions {
 		out.MentionsSelf = out.MentionsSelf || m.Target == "self"
@@ -72,12 +93,29 @@ func addressingForEvent(event MessageEvent, cfg BotConfig) messageAddressing {
 	return out
 }
 
-const messageAddressingRule = "addressing 是平台引用与提及关系。reply_target=self 表示回复你，other 表示回复其他人，none 表示没有直接引用，unknown 表示无法确认；mentions 的 target 同理。不要把未知当成自己，也不要仅凭正文含 @ 或‘你’断定在喊你。允许旁观接话不代表你是原对话对象；参与别人的对话时，不要冒充被引用者或被提及者。引用别人但另有明确提及自己时，结合用户完整请求判断。"
-
-// 这段同时附在旧版意图路由的运行时约束末尾，两处读同一个覆盖值。
-var promptMessageAddressingSpec = tailSpec("message_addressing", "引用与提及关系说明", "每轮放在尾部，紧跟当前消息的引用与提及数据，说明各字段含义；旧版意图路由也会附上。reply_target、mentions 这些字段名和取值由运行时生成，改动时保持原样。", messageAddressingRule)
+const messageAddressingRule = "平台关系 self=你、other=别人、unknown=未知；未知不等于自己，旁观接话不代表自己是原对话对象。"
 
 func addressingPrompt(event MessageEvent, cfg BotConfig) string {
-	body, _ := json.Marshal(addressingForEvent(event, cfg))
-	return "\n【当前消息的对话对象】\n" + string(body) + "\n" + cfg.prompt(promptMessageAddressingSpec)
+	addressing := addressingForEvent(event, cfg)
+	var facts []string
+	if addressing.ReplyTarget != "none" {
+		fact := "引用=" + addressing.ReplyTarget
+		if addressing.ReplyUserID != "" {
+			fact += "(" + addressing.ReplyUserID + ")"
+		}
+		facts = append(facts, fact)
+	}
+	for _, mention := range addressing.Mentions {
+		fact := "提及=" + mention.Target
+		if mention.UserID != "" {
+			fact += "(" + mention.UserID + ")"
+		} else if mention.Username != "" {
+			fact += "(@" + mention.Username + ")"
+		}
+		facts = append(facts, fact)
+	}
+	if len(facts) == 0 {
+		return ""
+	}
+	return "【平台关系】" + strings.Join(facts, "；")
 }

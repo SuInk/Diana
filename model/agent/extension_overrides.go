@@ -2,6 +2,7 @@ package agent
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"sort"
 	"strings"
@@ -38,12 +39,8 @@ const toolResidentPrefix = "tool:"
 // 写，这里是给「就地加一个 / 删一个」用的：第一次这么写会把当前生效的推荐名单固定
 // 下来，之后这台机器人就以自己的名单为准。
 func SaveExtensionResidency(root, profile, id string, resident *bool, recommended []string) error {
-	// Skill 不在名单里，它仍是三态：不带 resident 就是退回「看触发词」。
 	if strings.HasPrefix(id, skillResidentPrefix) {
-		if resident == nil {
-			return clearExtensionOverride(root, profile, ResidentOverrideKey(id))
-		}
-		return saveExtensionOverride(root, profile, ResidentOverrideKey(id), *resident)
+		return fmt.Errorf("Skill 正文统一通过 read_skill 按需读取，不支持常驻档位")
 	}
 	values, err := LoadExtensionOverrides(root, profile)
 	if err != nil {
@@ -72,6 +69,9 @@ func SaveExtensionResidency(root, profile, id string, resident *bool, recommende
 // 这里只回答「这一条自己写过没有」——把「没写过」直接当成 false 是上一版的错，它让
 // 整条插件进名单之后，它旗下的工具反而个个成了明确的「不常驻」。
 func ResidentOverride(values map[string]bool, id string) *bool {
+	if strings.HasPrefix(id, skillResidentPrefix) {
+		return nil
+	}
 	resident, ok := values[ResidentOverrideKey(id)]
 	if !ok {
 		return nil
@@ -102,8 +102,7 @@ func SaveResidencyList(root, profile string, ids []string) error {
 		values[profile] = map[string]bool{}
 	}
 	for key := range values[profile] {
-		// Skill 的档位不归名单管，重写名单时要原样留着。
-		if strings.HasPrefix(key, residentOverridePrefix) && !strings.HasPrefix(key, residentOverridePrefix+skillResidentPrefix) {
+		if strings.HasPrefix(key, residentOverridePrefix) {
 			delete(values[profile], key)
 		}
 	}
@@ -112,7 +111,7 @@ func SaveResidencyList(root, profile string, ids []string) error {
 	} else {
 		values[profile][residencyListKey] = true
 		for _, id := range ids {
-			if id = strings.TrimSpace(id); id != "" {
+			if id = strings.TrimSpace(id); id != "" && !strings.HasPrefix(id, skillResidentPrefix) {
 				values[profile][ResidentOverrideKey(id)] = true
 			}
 		}
@@ -158,7 +157,7 @@ func ResidentOverrideIDs(values map[string]bool) []string {
 		if !strings.HasPrefix(key, residentOverridePrefix) {
 			continue
 		}
-		if id := strings.TrimPrefix(key, residentOverridePrefix); id != "" {
+		if id := strings.TrimPrefix(key, residentOverridePrefix); id != "" && !strings.HasPrefix(id, skillResidentPrefix) {
 			ids = append(ids, id)
 		}
 	}
@@ -212,7 +211,13 @@ func LoadExtensionOverrides(root, profile string) (map[string]bool, error) {
 	if err != nil {
 		return nil, err
 	}
-	return values[profile], nil
+	result := map[string]bool{}
+	for key, value := range values[profile] {
+		if !strings.HasPrefix(key, residentOverridePrefix+skillResidentPrefix) {
+			result[key] = value
+		}
+	}
+	return result, nil
 }
 
 // clearExtensionOverride 删掉一个键，让它退回默认档；saveExtensionOverride 只能写
@@ -299,7 +304,6 @@ func (r *ToolRegistry) ApplyExtensionOverrides(values map[string]bool) {
 		if enabled, ok := values["skill:"+skill.Name]; ok && !enabled {
 			continue
 		}
-		skill.Resident = ResidentOverride(values, "skill:"+skill.Name)
 		skills = append(skills, skill)
 	}
 	r.SetSkills(skills)

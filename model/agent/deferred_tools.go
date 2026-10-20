@@ -22,8 +22,6 @@ type deferredToolLoader struct {
 	registry *ToolRegistry
 	core     map[string]bool
 	loaded   map[string]map[string]any
-	order    []string
-	onLoad   func([]string)
 }
 
 func newDeferredToolLoader(registry *ToolRegistry, coreTools []string) *deferredToolLoader {
@@ -74,51 +72,6 @@ func (l *deferredToolLoader) filter(definitions []llm.ToolDefinition) []llm.Tool
 	)
 }
 
-func (l *deferredToolLoader) restore(names []string) {
-	if l == nil {
-		return
-	}
-	for _, name := range names {
-		name = strings.TrimSpace(name)
-		if name == "" || l.core[name] {
-			continue
-		}
-		tool, allowed := l.registry.Get(name)
-		if !allowed {
-			continue
-		}
-		schema, err := snapshotToolSchema(tool)
-		if err != nil {
-			continue
-		}
-		if _, exists := l.loaded[name]; !exists {
-			l.order = append(l.order, name)
-		}
-		l.loaded[name] = schema
-	}
-}
-
-func (l *deferredToolLoader) loadedContracts() string {
-	if l == nil || len(l.order) == 0 {
-		return ""
-	}
-	type contract struct {
-		Name        string         `json:"name"`
-		Description string         `json:"description"`
-		InputSchema map[string]any `json:"inputSchema"`
-	}
-	contracts := make([]contract, 0, len(l.order))
-	for _, name := range l.order {
-		tool, ok := l.registry.Get(name)
-		if !ok {
-			continue
-		}
-		contracts = append(contracts, contract{Name: name, Description: tool.Description(), InputSchema: l.loaded[name]})
-	}
-	raw, _ := json.Marshal(contracts)
-	return string(raw)
-}
-
 func executeInputSchema() map[string]any {
 	return toolObjectSchema([]string{"name", "input"}, map[string]any{
 		"name":  map[string]any{"type": "string", "minLength": 1},
@@ -129,7 +82,7 @@ func executeInputSchema() map[string]any {
 func (l *deferredToolLoader) Name() string { return ToolsLoadToolName }
 
 func (l *deferredToolLoader) Description() string {
-	return "加载「按需加载的工具」目录里的工具，返回完整契约，之后用 tools_execute 调用。已加载的在本会话后续保留；只加载确实要用的。"
+	return "加载「按需加载的工具」目录里的工具，返回完整契约，之后用 tools_execute 调用。加载状态仅保留在本次运行中；只加载确实要用的。"
 }
 
 func (l *deferredToolLoader) InputSchema() map[string]any {
@@ -171,9 +124,15 @@ func (l *deferredToolLoader) Run(ctx context.Context, input map[string]any) (str
 		if !ok && l.isSkill(name) {
 			// 技能和工具一样是按需加载的能力，只是正文不同。模型拿技能名来 tools_load
 			// 时（线上见过 "bot-protocol"）直接把 SKILL.md 给它，不必再绕去 read_skill。
-			body, err := (&SkillsReadTool{provider: l.registry.Skills}).Run(ctx, map[string]any{"name": name})
+			body, err := (&SkillsReadTool{provider: l.registry.Skills}).Run(WithToolOutputBudget(ctx, maxLoadedContractChars), map[string]any{"name": name})
 			if err != nil {
 				return "", fmt.Errorf("技能 %q 读取失败：%w", name, err)
+			}
+			var page struct {
+				HasMore bool `json:"has_more"`
+			}
+			if json.Unmarshal([]byte(body), &page) != nil || page.HasMore {
+				return "", fmt.Errorf("技能 %q 超过单次加载额度，请用 read_skill 分页读取", name)
 			}
 			skills = append(skills, json.RawMessage(body))
 			continue
@@ -190,7 +149,7 @@ func (l *deferredToolLoader) Run(ctx context.Context, input map[string]any) (str
 			snapshots[name] = schema
 		}
 	}
-	payload := map[string]any{"loaded": contracts, "instruction": "使用 tools_execute，把目标工具名放入 name、参数对象放入 input；当前群会话后续运行会保留加载状态。"}
+	payload := map[string]any{"loaded": contracts, "instruction": "使用 tools_execute，把目标工具名放入 name、参数对象放入 input；加载状态仅在本次运行有效。"}
 	if len(skills) > 0 {
 		payload["skills"] = skills
 		payload["skill_instruction"] = "skills 里是技能的完整 SKILL.md，按其中的说明去调用它提到的工具。"
@@ -208,13 +167,7 @@ func (l *deferredToolLoader) Run(ctx context.Context, input map[string]any) (str
 		if !ok {
 			continue
 		}
-		if _, exists := l.loaded[name]; !exists {
-			l.order = append(l.order, name)
-		}
 		l.loaded[name] = schema
-	}
-	if l.onLoad != nil {
-		l.onLoad(append([]string(nil), l.order...))
 	}
 	return string(result), nil
 }
@@ -239,7 +192,7 @@ func (l *deferredToolLoader) missingToolError(name string) error {
 		return l.registry.denialError(name)
 	}
 	if l.isSkill(name) {
-		return fmt.Errorf("%q 是技能，不能直接执行：先 tools_load 它读到 SKILL.md，再按说明调用里面提到的工具", name)
+		return fmt.Errorf("%q 是技能，不能直接执行：先用 read_skill 读取 SKILL.md，再按说明调用里面提到的工具", name)
 	}
 	return fmt.Errorf("工具 %q 不存在。工具名要和目录里的一字不差，不加 diana. 之类的前缀；常驻工具直接调用，目录里的延迟工具先 tools_load 再 tools_execute", name)
 }

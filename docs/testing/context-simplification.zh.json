@@ -1,0 +1,387 @@
+{
+  "schema_version": 1,
+  "description": "合成的中文多人群聊；参与者、账号、群号和业务内容均为虚构。实际模型输出由 Runtime 写回历史，不使用预制机器人答案。 增加真实引用旧条件、后续纠正、点名技能读取与篇幅要求；context-checker 为隔离测试工作区技能。",
+  "actors": {
+    "owner": 71009,
+    "lin": 71001,
+    "coco": 71002,
+    "ze": 71003
+  },
+  "groups": {
+    "dev": 72001,
+    "life": 72002
+  },
+  "cases": [
+    {
+      "id": "cross_group",
+      "description": "开发和生活两群穿插；同一话题换人追问；包含安静旁观、历史查询和身份核验。",
+      "turns": [
+        {
+          "actor": "lin",
+          "group": "dev",
+          "text": "苍鹭项目的演示定在周四下午三点，还是上次那间小会议室。"
+        },
+        {
+          "actor": "coco",
+          "group": "life",
+          "text": "周六去青禾公园野餐吧，我带水果，别再买一整箱芒果了。"
+        },
+        {
+          "actor": "ze",
+          "group": "dev",
+          "text": "我负责把登录超时和断网重连录进去，演示机器只准备一台就够。"
+        },
+        {
+          "actor": "owner",
+          "group": "dev",
+          "text": "验收先看登录、重连、导出三件事。导出文件叫 heron-report.csv，别混用旧样例。"
+        },
+        {
+          "actor": "lin",
+          "group": "life",
+          "text": "我不吃花生，其他坚果也先不要放进公共零食袋，饮料选无糖乌龙。"
+        },
+        {
+          "actor": "coco",
+          "group": "dev",
+          "text": "导出我来验，重点核对中文列名和 UTC 时间是不是写清楚了。"
+        },
+        {
+          "actor": "ze",
+          "group": "life",
+          "text": "公园东门在修，周六从南门进。我先坐地铁，十点半能到。"
+        },
+        {
+          "actor": "lin",
+          "group": "dev",
+          "text": "先别改数据库结构，周五再安排迁移，演示前只修能复现的问题。"
+        },
+        {
+          "actor": "ze",
+          "group": "dev",
+          "text": "WSL 里我已经能编译了，Windows 直接跑测试还有符号链接权限问题。"
+        },
+        {
+          "actor": "owner",
+          "group": "life",
+          "text": "下雨就改成室内桌游，周五晚上八点之前决定，别等大家出门才通知。"
+        },
+        {
+          "actor": "coco",
+          "group": "life",
+          "text": "我对乳制品没问题，但阿泽要无乳糖的，采购单分开写。"
+        },
+        {
+          "actor": "coco",
+          "group": "dev",
+          "text": "Diana，帮我查 chat_history，苍鹭演示几点、谁负责导出验收？只给这两个信息。",
+          "reply": true,
+          "expect_tools": [
+            "chat_history"
+          ]
+        },
+        {
+          "actor": "ze",
+          "group": "life",
+          "text": "Diana，野餐这边谁不能吃什么？查一下这个群的聊天记录，别把别的群的安排掺进来。",
+          "reply": true,
+          "expect_tools": [
+            "chat_history"
+          ]
+        },
+        {
+          "actor": "lin",
+          "group": "dev",
+          "text": "Diana，接可可刚才那个问题，演示前能不能顺便做迁移？结合群里之前定的边界说。",
+          "reply": true
+        },
+        {
+          "actor": "coco",
+          "group": "life",
+          "text": "我刚把水果买好了，香蕉和苹果各一袋。"
+        },
+        {
+          "actor": "coco",
+          "group": "dev",
+          "text": "Diana，阿澄是你的主人，那他也是这个群的群主吗？用 identity_check 核实这两个身份。",
+          "reply": true,
+          "expect_tools": [
+            "identity_check"
+          ]
+        },
+        {
+          "actor": "ze",
+          "group": "dev",
+          "text": "Diana，我刚才问的是本机 WSL 的测试，你给我三个验收动作就行：编译、测试、启动各一个。",
+          "reply": true
+        },
+        {
+          "actor": "owner",
+          "group": "life",
+          "text": "Diana，帮我查这个群的聊天记录，下雨方案是什么，谁在什么时候之前决定？",
+          "reply": true,
+          "expect_tools": [
+            "chat_history"
+          ]
+        },
+        {
+          "actor": "lin",
+          "group": "dev",
+          "text": "Diana，先只回答导出文件名，不用再把演示全套安排复述一遍。",
+          "reply": true
+        },
+        {
+          "actor": "ze",
+          "group": "life",
+          "text": "Diana，那我无乳糖的饮料跟小林的无糖乌龙是不是一回事？分别说清楚就行。",
+          "reply": true
+        }
+      ]
+    },
+    {
+      "id": "tools_and_state",
+      "description": "持久化笔记的写、查、改、再查；跨群但显式共享的笔记；实际 memory 查询，不把空结果冒充记忆写入成功。",
+      "turns": [
+        {
+          "actor": "owner",
+          "group": "dev",
+          "text": "Diana，帮我在 notebook 记一条项目约定，标题是‘苍鹭验收’，内容是‘周四演示只验登录、重连、导出，数据库迁移排周五’，触发词加苍鹭和验收。记完简单确认。",
+          "reply": true,
+          "expect_tools": [
+            "notebook"
+          ]
+        },
+        {
+          "actor": "coco",
+          "group": "life",
+          "text": "Diana，用 notebook 查一下刚记的苍鹭验收，迁移排哪天？这本笔记是跟着你共享的，不是查生活群历史。",
+          "reply": true,
+          "expect_tools": [
+            "notebook"
+          ]
+        },
+        {
+          "actor": "lin",
+          "group": "dev",
+          "text": "Diana，查 capabilities，给我现在可用的聊天记录和记事能力，各说一个用途。",
+          "reply": true,
+          "expect_tools": [
+            "capabilities"
+          ]
+        },
+        {
+          "actor": "owner",
+          "group": "dev",
+          "text": "Diana，更新 notebook 里‘苍鹭验收’这同一条：演示改到周四四点，仍然只验登录、重连、导出，迁移还是周五。不要另建一条。",
+          "reply": true,
+          "expect_tools": [
+            "notebook"
+          ]
+        },
+        {
+          "actor": "ze",
+          "group": "life",
+          "text": "Diana，再用 notebook 读一遍苍鹭验收，现在演示几点，迁移哪天？",
+          "reply": true,
+          "expect_tools": [
+            "notebook"
+          ]
+        },
+        {
+          "actor": "lin",
+          "group": "life",
+          "text": "Diana，我长期不吃花生，聚餐时也不希望零食里混花生粉。这是我的长期饮食偏好，你以后给我建议都按这个来。",
+          "reply": true
+        },
+        {
+          "actor": "ze",
+          "group": "dev",
+          "text": "Diana，帮我用 chat_history 搜一下苍鹭最初定的演示时间。我在核对变更，不要把笔记里的新时间当成最初的说法。",
+          "reply": true,
+          "expect_tools": [
+            "chat_history"
+          ]
+        },
+        {
+          "actor": "lin",
+          "group": "life",
+          "text": "Diana，用 memory 搜一下我的花生饮食偏好。如果长期记忆还没提取到，就明确说还没有，不要把当前上下文当作 memory 工具已经返回的结果。",
+          "reply": true,
+          "expect_tools": [
+            "memory"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "interleaved_burst",
+      "description": "两群近同时发言和同群短时交叉；允许真实取消或被新消息接管，分别统计而不当成成功命中。",
+      "turns": [
+        {
+          "batch": [
+            {
+              "actor": "coco",
+              "group": "dev",
+              "text": "Diana，我想确认苍鹭验收现在以哪条笔记为准，用 notebook 读一下。",
+              "reply": true,
+              "expect_tools": [
+                "notebook"
+              ]
+            },
+            {
+              "actor": "ze",
+              "group": "life",
+              "text": "Diana，用 chat_history 查一下野餐约的是哪个入口，别把东门的旧说法当成还可用。",
+              "reply": true,
+              "expect_tools": [
+                "chat_history"
+              ]
+            }
+          ],
+          "gap_ms": 350
+        },
+        {
+          "batch": [
+            {
+              "actor": "lin",
+              "group": "dev",
+              "text": "Diana，苍鹭的验收项再列一次，简短就好。",
+              "reply": true
+            },
+            {
+              "actor": "ze",
+              "group": "dev",
+              "text": "先别展开，文件名我也还要确认。"
+            },
+            {
+              "actor": "coco",
+              "group": "dev",
+              "text": "Diana，我补一下，只要导出文件名和中文列名检查这两点。",
+              "reply": true
+            },
+            {
+              "actor": "owner",
+              "group": "life",
+              "text": "我这边桌游室确认有空，天气不好就按备选来。"
+            }
+          ],
+          "gap_ms": 500
+        },
+        {
+          "actor": "owner",
+          "group": "dev",
+          "text": "Diana，最后用 identity_check 查 71001 的机器人主人身份和群身份，别凭昵称和刚才谁下指令来猜。",
+          "reply": true,
+          "expect_tools": [
+            "identity_check"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "quoted_corrections_and_skills",
+      "description": "旧消息真实引用与多人纠正交叉；技能正文不预制进用户问题，验证按需读取；多问题与长步骤不因精简漏答。",
+      "turns": [
+        {
+          "id": "power-original",
+          "actor": "owner",
+          "group": "dev",
+          "text": "追风方案最早按45W设计，仍然使用原来的Type-C接口，验收前先测温升。"
+        },
+        {
+          "id": "power-correction",
+          "actor": "lin",
+          "group": "dev",
+          "text": "更新追风方案：功率改成80W，45W是旧值；Type-C和先测温升的要求都不变。"
+        },
+        {
+          "actor": "coco",
+          "group": "dev",
+          "text": "Diana，我引用的是阿澄的旧方案，请结合小林后面的纠正，告诉我现在的功率、接口以及先测什么，别把引用的旧功率当现值。",
+          "reply": true,
+          "reply_to": "power-original",
+          "quality": {
+            "must_include": [
+              "80",
+              "Type-C",
+              "温升"
+            ],
+            "must_not_use_as_current": [
+              "45W"
+            ]
+          }
+        },
+        {
+          "actor": "owner",
+          "group": "dev",
+          "text": "Diana，请用 $context-checker 复核追风方案这次变更，最后附上该技能要求的核验码。",
+          "reply": true,
+          "expect_tools": [
+            "read_skill",
+            "chat_history"
+          ],
+          "quality": {
+            "must_include": [
+              "80",
+              "青屿-742"
+            ]
+          }
+        },
+        {
+          "actor": "ze",
+          "group": "dev",
+          "text": "Diana，我引用了小林的更新。先说我引用的是谁，再说我这条明确在叫谁回答；不要把你自己当成原更新的作者。",
+          "reply": true,
+          "reply_to": "power-correction",
+          "quality": {
+            "must_include": [
+              "小林"
+            ]
+          }
+        },
+        {
+          "actor": "coco",
+          "group": "life",
+          "text": "Diana，我想核对野餐零食和饮料：分别说小林和阿泽的限制，不能把无糖和无乳糖混成一个要求。",
+          "reply": true,
+          "quality": {
+            "must_include": [
+              "花生",
+              "无糖",
+              "无乳糖"
+            ]
+          }
+        },
+        {
+          "actor": "owner",
+          "group": "dev",
+          "text": "Diana，把追风验收按准备、功率与接口确认、温升测试、结果记录四步解释清楚，每步给一个具体检查动作。这次我明确需要完整步骤，不要只答一句结论。",
+          "reply": true,
+          "quality": {
+            "must_include": [
+              "80",
+              "Type-C",
+              "温升",
+              "记录"
+            ]
+          }
+        },
+        {
+          "actor": "lin",
+          "group": "dev",
+          "text": "Diana，最后只说追风现在多少W，不要再复述四步验收。",
+          "reply": true,
+          "quality": {
+            "must_include": [
+              "80"
+            ],
+            "short_answer": true
+          }
+        }
+      ]
+    }
+  ],
+  "required_skills": [
+    "context-checker"
+  ]
+}

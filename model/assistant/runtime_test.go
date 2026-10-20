@@ -791,6 +791,9 @@ func TestRuntimeAddsUserMemoryContextToLLMPrompt(t *testing.T) {
 		DisplayName:  "Alice",
 		Favorability: 16,
 		MessageCount: 7,
+		Portrait: []UserPortraitTrait{
+			{Field: PortraitFieldResidence, Label: "居住地点", Value: "住在杭州", Source: PortraitSourceStated},
+		},
 		Memories: []UserMemoryItem{
 			{Text: "我最近在看漫展"},
 		},
@@ -817,17 +820,15 @@ func TestRuntimeAddsUserMemoryContextToLLMPrompt(t *testing.T) {
 			break
 		}
 	}
-	if !strings.Contains(memoryPrompt, "Alice") {
+	if !strings.Contains(memoryPrompt, "Alice") || !strings.Contains(memoryPrompt, "住在杭州") {
 		t.Fatalf("memory prompt = %q", memoryPrompt)
 	}
-	// 好感度数值不再写进这一段：它每轮都会变，摆在长期记忆里会推动后面的内容、
-	// 切断前缀缓存。整轮里仍然要出现一次，由系统尾部的
-	// relationshipPermissionContext 给出。
-	if strings.Contains(memoryPrompt, "当前好感度：") {
-		t.Fatalf("favorability leaked into memory block: %q", memoryPrompt)
+	// 画像事实仍自动挂载；好感度分数改由 relationship 工具按需查询。
+	if requestMessagesContain(provider.request.Messages, "当前好感度：") {
+		t.Fatal("numeric favorability should not be automatically injected")
 	}
-	if !requestMessagesContain(provider.request.Messages, "当前好感度：16") {
-		t.Fatalf("favorability missing from prompt: %#v", provider.request.Messages)
+	if !requestMessagesContain(provider.request.Messages, "【当前发言者身份】不是主人") {
+		t.Fatal("platform-confirmed speaker authority missing from prompt")
 	}
 	// 原始发言缓冲不再进提示词：它和最近历史逐条重复，真正的长期记忆走结构化
 	// 记忆检索。
@@ -1417,37 +1418,47 @@ func TestPromptChineseSlangKeepsCustomTextAndDefaultsWhenEmpty(t *testing.T) {
 
 func TestRuntimeSystemPromptExplainsMatchedAliasRoles(t *testing.T) {
 	runtime := NewRuntime(BotConfig{GroupTriggers: []string{"小满", "Diana"}}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
-	prompt := runtime.systemPrompt(MessageEvent{
+	event := MessageEvent{
 		Kind:       EventKindGroup,
 		RawMessage: "小满满月是小满还是满月",
 		Segments:   []MessageSegment{{Type: "text", Data: map[string]string{"text": "小满满月是小满还是满月"}}},
-	}, nil)
+	}
+	prompt := runtime.systemPrompt(event, nil)
 	for _, want := range []string{
 		`"小满"、"Diana"`,
-		`当前消息命中的配置别名："小满"`,
-		"命中只说明这条消息的触发来源",
 		"以第一人称理解和回应",
 		"固定词组",
+		"按句法、引用关系和上下文逐次判断",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("system prompt missing %q: %q", want, prompt)
 		}
 	}
+	if strings.Contains(prompt, "当前消息命中的配置别名") {
+		t.Fatal("dynamic alias-match notice should not be repeated in the system prompt")
+	}
+	if got := runtime.cleanInput(event, event.RawMessage); got != event.RawMessage {
+		t.Fatalf("alias disambiguation lost the original message: %q", got)
+	}
 }
 
 func TestRuntimeTrustedRuntimeClockStaysOutOfSystemPrompt(t *testing.T) {
 	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	now := time.Date(2026, 10, 19, 12, 34, 56, 0, DefaultBotLocation())
+	runtime.now = func() time.Time { return now }
 	event := MessageEvent{Kind: EventKindPrivate}
 	// 时钟每秒都不同，留在人设提示词里会让这段最长的前缀永远无法命中供应商缓存。
 	if prompt := runtime.systemPrompt(event, nil); strings.Contains(prompt, "当前运行时钟") || strings.Contains(prompt, "当前时间：") {
 		t.Fatalf("system prompt must stay clock-free for prefix caching: %q", prompt)
 	}
 	clock := runtime.runtimeClockPrompt(event)
-	if !strings.Contains(clock, "当前运行时钟") || !strings.Contains(clock, time.Now().In(DefaultBotLocation()).Format("2006-01-02")) {
+	if !strings.Contains(clock, "当前运行时钟") || !strings.Contains(clock, now.Format("2006-01-02 15:04:05")) {
 		t.Fatalf("clock prompt missing current date: %q", clock)
 	}
-	if !strings.Contains(clock, "UTC") || !strings.Contains(clock, "不要声称无法访问实时时钟") {
-		t.Fatalf("clock prompt missing trusted clock guidance: %q", clock)
+	zoneName, zoneOffset := now.Zone()
+	if !strings.Contains(clock, zoneName) || !strings.Contains(clock, "UTC"+formatUTCOffset(zoneOffset)) ||
+		strings.ContainsAny(clock, "\r\n") || strings.Count(clock, now.Format("2006-01-02")) != 1 {
+		t.Fatalf("clock should carry a single compact timestamp and timezone: %q", clock)
 	}
 }
 
@@ -2153,11 +2164,14 @@ func TestRuntimeGroupLLMCanChooseMultipleMentionTargets(t *testing.T) {
 			systemPrompt.WriteByte('\n')
 		}
 	}
-	// 这份配置是默认档（auto），所以第 1 条应当是「发送层不会自动 @」那一版。
-	for _, want := range []string{"群聊真实提及规则", `"user_id":"` + milkAlias + `"`, `"display_name":"Alice"`, `"user_id":"` + currentAlias + `"`, "可以同时提及多人", "发送层不会自动 @ 任何人", "可以直接回答", "原样保留这些标记的对象和相对位置"} {
+	// 提及协议只说明发送事实；成员身份从实际当前消息和历史读取，不再重复列名单。
+	for _, want := range []string{"发送层不自动提及成员", "需要点名时"} {
 		if !strings.Contains(systemPrompt.String(), want) {
 			t.Fatalf("system prompt missing %q: %s", want, systemPrompt.String())
 		}
+	}
+	if strings.Contains(systemPrompt.String(), "可提及成员候选 JSON") || strings.Contains(systemPrompt.String(), "recent_participant") {
+		t.Fatalf("mention candidate directory was injected: %s", systemPrompt.String())
 	}
 	for _, req := range provider.requests {
 		protected := requestTextForPrivacyTest(req)
@@ -3322,10 +3336,13 @@ func TestSystemPromptHeadIsStableAcrossSpeakers(t *testing.T) {
 	if ownerTail == memberTail {
 		t.Fatalf("speaker tail should differ between owner and member: %q", ownerTail)
 	}
-	for _, want := range []string{"主人", promptOwnerRelationshipTarget, "当前好感度："} {
+	for _, want := range []string{"【当前发言者身份】主人", promptOwnerRelationshipTarget} {
 		if !strings.Contains(ownerTail, want) {
 			t.Fatalf("owner tail missing %q: %q", want, ownerTail)
 		}
+	}
+	if !strings.Contains(memberTail, "【当前发言者身份】不是主人") || strings.Contains(ownerTail+memberTail, "当前好感度：") {
+		t.Fatal("trusted identity must remain without the repeated relationship score")
 	}
 	for _, leaked := range []string{"当前好感度：", "路人"} {
 		if strings.Contains(memberHead, leaked) {
@@ -3401,7 +3418,7 @@ func TestRuntimeMarksHistoryAsReferenceAndCurrentAsTarget(t *testing.T) {
 		if strings.HasPrefix(message.Content, "[历史 ") {
 			historyIndex = index
 		}
-		if message.Role == llm.RoleSystem && strings.Contains(message.Content, "当前好感度：") {
+		if message.Role == llm.RoleSystem && strings.Contains(message.Content, currentSpeakerIdentityMarker+"不是主人") {
 			tailIndex = index
 		}
 	}

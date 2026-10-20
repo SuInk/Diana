@@ -40,7 +40,6 @@
             <div class="field"><label for="search-provider-timeout">单来源超时（秒）</label><AppNumberInput id="search-provider-timeout" :model-value="draft.provider_timeout_seconds || 12" :min="2" :max="30" label="单来源超时" @update:model-value="patch({ provider_timeout_seconds: $event })" /></div>
             <div class="field"><label for="search-total-timeout">总搜索超时（秒）</label><AppNumberInput id="search-total-timeout" :model-value="draft.total_timeout_seconds || 35" :min="5" :max="90" label="总搜索超时" @update:model-value="patch({ total_timeout_seconds: $event })" /></div>
             <div class="field"><label for="search-link-policy">回复附带链接</label><AppSelect id="search-link-policy" :model-value="draft.reply_link_policy || 'on_request'" :options="linkPolicies" @update:model-value="patch({ reply_link_policy: $event as WebSearchAssignment['reply_link_policy'] })" /></div>
-            <div class="field wide"><AppSwitch :model-value="draft.source_recall !== false" @update:model-value="patch({ source_recall: $event })">保留来源，追问时可给出链接</AppSwitch></div>
           </div>
         </AppDisclosure>
       </div>

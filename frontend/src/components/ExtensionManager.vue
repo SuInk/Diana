@@ -44,13 +44,13 @@
           <span v-if="!item.managed" class="badge">只读</span>
           <span v-if="item.bundled" class="badge" title="目录里带脚本或资源；群成员没有命令和文件工具，这部分在成员会话里不会执行">含脚本</span>
           <span v-if="kind==='mcp'" class="badge mono">{{ item.transport === 'stdio' ? '本地进程' : 'HTTP' }}</span>
-          <span v-if="item.keywords?.length" class="badge" title="SKILL.md 自己声明的触发词：最近两条消息里命中就把正文带进上下文">触发词 {{ item.keywords.join('、') }}</span>
+          <span v-if="item.keywords?.length" class="badge" title="SKILL.md 声明的关键词，仅用于发现；正文通过 read_skill 按需读取">触发词 {{ item.keywords.join('、') }}</span>
         </div>
         <p class="plugin-card-desc" :title="item.description || item.source">{{ item.description || item.source || '本地扩展' }}</p>
         <p v-if="item.error" class="error-text">{{ item.error }}</p>
         <!-- Skill 正文带不带在「机器人 → 上下文」里改，和工具名单同一页：这里是「装了
              什么」，那里是「每轮花多少」。卡片上只显示当前档位。 -->
-        <p v-if="botScope && kind === 'skill' && item.enabled && item.resident !== undefined" class="plugin-card-desc">正文：{{ item.resident ? '常驻' : '按需' }}（在机器人配置「上下文」里改）</p>
+        <p v-if="kind === 'skill' && item.enabled" class="plugin-card-desc">正文通过 read_skill 按需读取</p>
         <!-- 结构照插件卡片来：左边轻量信息、右边操作，横排版式靠这层排序。 -->
         <div class="plugin-card-bottom">
           <div class="plugin-card-meta"><span class="extension-audience-note">{{ item.managed ? '可管理' : '只读' }}</span></div>

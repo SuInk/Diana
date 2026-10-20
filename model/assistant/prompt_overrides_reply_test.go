@@ -15,9 +15,9 @@ func TestReplyPromptOverridesReachSystemPrompt(t *testing.T) {
 	cfg := BotConfig{
 		GroupTriggers: []string{"Diana"},
 		PromptOverrides: PromptOverrides{
-			promptToolFindingsSpec.Key:         "查过没找到就直说。",
-			promptAliasSpec.Key:                "大家叫你 {aliases}。",
-			promptPersonaClosingAnchorSpec.Key: "最后：别忘了你是谁。",
+			promptToolFindingsSpec.Key:    "查过没找到就直说。",
+			promptAliasSpec.Key:           "大家叫你 {aliases}。",
+			promptReplyProportionSpec.Key: "本轮只说需要的。",
 		},
 	}
 	runtime := NewRuntime(cfg, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
@@ -29,8 +29,8 @@ func TestReplyPromptOverridesReachSystemPrompt(t *testing.T) {
 	if !strings.Contains(head, `大家叫你 "Diana"。`) {
 		t.Fatalf("别名占位符没有渲染：\n%s", head)
 	}
-	if !strings.Contains(tail, "最后：别忘了你是谁。\n"+replyDepthClosingAnchor) {
-		t.Fatalf("尾部锚点没有被覆盖：\n%s", tail)
+	if !strings.Contains(tail, "本轮只说需要的。") {
+		t.Fatalf("表达原则没有被覆盖：\n%s", tail)
 	}
 }
 

@@ -88,50 +88,45 @@ func TestSemanticReferenceStillRunsWithoutAgentToolAccess(t *testing.T) {
 		t.Fatal("agent without tool access skipped resolution")
 	}
 
-	// 能自己取图时改走媒体索引，不再付前置调用。
+	// 能自己取图时按需查历史和媒体，不再付前置调用。
 	if runtime.shouldResolveSemanticReference(ctx, agent, event, true) {
 		t.Fatal("agent that can fetch media still paid for the router")
 	}
 }
 
-func TestDurableMediaIndexListsOutOfWindowMedia(t *testing.T) {
-	runtime := mediaGateRuntime(t,
-		gateImageEvent("img-old", 1),
-		gateTextEvent("m2", 2, "第二条"),
-		gateTextEvent("m3", 3, "第三条"),
-	)
-	index := runtime.durableMediaIndex(context.Background(), gateCurrentEvent())
-
-	if !strings.Contains(index, "message_id=img-old") {
-		t.Fatalf("index missing the out-of-window image: %q", index)
+func TestOldMediaStaysAvailableWithoutAutomaticIndex(t *testing.T) {
+	provider := &capturingLLMProvider{reply: "继续聊当前话题"}
+	runtime := NewRuntime(BotConfig{BotAccount: "42", AgentEnabled: true, RecentHistoryTokenBudget: 20}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+		return provider, nil
+	})
+	store := newSemanticTimelineStore()
+	runtime.SetMessageHistoryStore(store)
+	old := gateImageEvent("old-media-only-on-demand", 1)
+	old.SelfID = "42"
+	old.Segments[0].Data["url"] = "data:image/png;base64,YQ=="
+	latest := gateTextEvent("recent-text", 1000, strings.Repeat("正在讨论的是新的文字话题。", 20))
+	latest.SelfID = "42"
+	for _, item := range []MessageEvent{old, latest} {
+		if err := store.AppendMessageEvent(context.Background(), sessionKey(item), item); err != nil {
+			t.Fatal(err)
+		}
+		runtime.remember(item)
 	}
-	if !strings.Contains(index, "history_media") {
-		t.Fatalf("index does not tell the model how to fetch originals: %q", index)
+	event := gateCurrentEvent()
+	event.SelfID, event.ToMe = "42", true
+	if _, err := runtime.replyTo(context.Background(), event, "继续聊当前话题"); err != nil {
+		t.Fatal(err)
 	}
-	if !strings.Contains(index, "图片×1") {
-		t.Fatalf("index does not summarise media composition: %q", index)
+	request := provider.requestSnapshot()
+	for _, unwanted := range []string{"更早的图片与文件索引", old.MessageID, "data:image/png;base64,YQ=="} {
+		if requestMessagesContain(request.Messages, unwanted) {
+			t.Fatalf("old media automatically injected %q", unwanted)
+		}
 	}
-}
-
-func TestDurableMediaIndexSkipsMediaStillInHistory(t *testing.T) {
-	// RecentContextLimit=2 时最近两条仍在窗口里，模型已经看得到，不该重复列出来。
-	runtime := mediaGateRuntime(t,
-		gateTextEvent("m1", 1, "第一条"),
-		gateImageEvent("img-recent", 2),
-	)
-	if index := runtime.durableMediaIndex(context.Background(), gateCurrentEvent()); index != "" {
-		t.Fatalf("index duplicated media that is still in the window: %q", index)
-	}
-}
-
-func TestDurableMediaIndexEmptyForTextOnlySessions(t *testing.T) {
-	runtime := mediaGateRuntime(t,
-		gateTextEvent("m1", 1, "第一条"),
-		gateTextEvent("m2", 2, "第二条"),
-		gateTextEvent("m3", 3, "第三条"),
-	)
-	if index := runtime.durableMediaIndex(context.Background(), gateCurrentEvent()); index != "" {
-		t.Fatalf("text-only session produced a media index: %q", index)
+	tool := newDianaHistoryImagesTool(runtime, event)
+	output, err := tool.Run(context.Background(), map[string]any{"message_ids": []any{old.MessageID}})
+	if err != nil || len(tool.ToolResultParts(output)) != 1 {
+		t.Fatalf("archived media unavailable on demand: output=%s err=%v", output, err)
 	}
 }
 

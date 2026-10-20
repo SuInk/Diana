@@ -17,8 +17,6 @@ import (
 	"unicode/utf8"
 
 	"go.yaml.in/yaml/v4"
-
-	"github.com/SuInk/diana/model/llm"
 )
 
 const (
@@ -33,15 +31,8 @@ type SkillMetadata struct {
 	ShortDescription string `json:"short_description,omitempty"`
 	Source           string `json:"source,omitempty"`
 	Managed          bool   `json:"managed,omitempty"`
-	// Resident 是用户给这个 skill 配的档位：true 正文每轮都带，false 只进目录、要用
-	// 得 read_skill，nil 跟随默认——声明了 keywords 就命中才带正文，没声明就只进目录。
-	Resident *bool `json:"resident,omitempty"`
-	// Keywords 是 SKILL.md 自己声明的触发词。命中就把正文带上，不必等模型想起来去
-	// read_skill——上下文一长它就是不去读，这是整套按需加载最常见的失效方式。
+	// Keywords 仅作为扩展目录的发现信息，不触发正文自动注入。
 	Keywords []string `json:"keywords,omitempty"`
-	// IncludeBody 是本轮的判定结果：正文要不要随这次请求下发。由 Runner 按档位和
-	// 关键词算出来，不来自配置。
-	IncludeBody bool `json:"-"`
 	// Bundled 表示这个 skill 目录里除 SKILL.md 外还带了脚本或资源。正文之外的
 	// 文件只有拿得到 run_command / read_file 的会话才碰得到，权限提示要说清楚。
 	Bundled bool `json:"bundled,omitempty"`
@@ -268,139 +259,23 @@ func fileExists(path string) bool {
 // 系统提示词就等于每换一个群、每装一个 skill 都把整条 prompt 的前缀缓存作废，和
 // 之前 loadedContracts 夹在中段是同一个坑。调用方把它挂在消息尾部的易变块里。
 func RenderSkillsCatalog(skills []SkillMetadata, budget int) string {
-	catalog, _ := renderSkillsCatalog(skills, budget)
-	return catalog
-}
-
-// renderSkillsCatalog 额外返回正文真正写进去的那几份。IncludeBody 只是判定，正文
-// 读不出来或超了预算就没有下发，「先 read_skill」的提示要按实际下发的算。
-func renderSkillsCatalog(skills []SkillMetadata, budget int) (string, map[string]bool) {
 	if len(skills) == 0 {
-		return "", nil
+		return ""
 	}
 	if budget <= 0 {
 		budget = DefaultSkillsListBudget
 	}
 	var builder strings.Builder
-	builder.WriteString("## Skills\n")
-	builder.WriteString("A skill is a set of instructions provided through a `SKILL.md` source. The entries below are only names and descriptions; a skill's body is included only where it appears in full further down.\n")
-	builder.WriteString("### Available skills\n")
-	var resident []SkillMetadata
+	builder.WriteString("## Skills\n使用前调用 read_skill 读取完整 SKILL.md；相对路径以返回的 path 所在目录为准。\n")
 	for _, skill := range skills {
 		line := fmt.Sprintf("- %s: %s\n", skill.Name, skill.Description)
 		if builder.Len()+len(line) > budget {
-			builder.WriteString("- ... additional skills omitted because the skills context budget was reached.\n")
+			builder.WriteString("- 更多 Skill 请查询 list_capabilities。\n")
 			break
 		}
 		builder.WriteString(line)
-		if skill.IncludeBody {
-			resident = append(resident, skill)
-		}
 	}
-	builder.WriteString("### How to use skills\n")
-	builder.WriteString("- If the user names a skill with `$SkillName`, or the task clearly matches a skill description, use that skill for this turn.\n")
-	builder.WriteString("- A catalog entry is not the skill: unless its full `SKILL.md` appears below, call `read_skill` with its name first, then follow those instructions.\n")
-	builder.WriteString("- When a `SKILL.md` references relative files, resolve them relative to the directory of the `path` returned by `read_skill`.\n")
-	// 常驻 skill 的正文直接跟在目录后面:用户把它配成常驻,就是因为「要用时再读」
-	// 在长上下文里读不到。正文在这里给全,模型不必再 read_skill。
-	remaining := ResidentSkillBodyBudget
-	delivered := map[string]bool{}
-	for _, skill := range resident {
-		body := strings.TrimSpace(skillBody(skill))
-		if body == "" {
-			continue
-		}
-		if len(body) > remaining {
-			builder.WriteString(fmt.Sprintf("\n### %s (resident, body too long)\nCall `read_skill` with %q: it is marked resident but its body did not fit the budget.\n", skill.Name, skill.Name))
-			continue
-		}
-		remaining -= len(body)
-		delivered[skill.Name] = true
-		builder.WriteString("\n### Resident skill: " + skill.Name + "\n")
-		builder.WriteString("Its full `SKILL.md` follows; do not call `read_skill` for it.\n\n")
-		builder.WriteString(body)
-		builder.WriteString("\n")
-	}
-	return strings.TrimSpace(builder.String()), delivered
-}
-
-// skillBody 返回 SKILL.md 正文；内嵌 skill 自带正文,本地 skill 现读。读不出来就当
-// 没有正文,目录行仍在,模型还能走 read_skill。
-func skillBody(skill SkillMetadata) string {
-	if skill.Content != "" {
-		return skill.Content
-	}
-	if skill.Path == "" {
-		return ""
-	}
-	data, err := os.ReadFile(skill.Path)
-	if err != nil {
-		return ""
-	}
-	return string(data)
-}
-
-// SelectSkillBodies 决定这一轮哪些 skill 的正文随请求下发，返回带 IncludeBody 的副本。
-//
-// 档位优先于关键词：用户把一个 skill 按到「常驻」或「按需」就是不想再让它自己变。
-// 没配过档位的按 SKILL.md 自己声明的 keywords 判定——命中就带正文。用户点名 $skill
-// 时同样带上，省掉一次「先 read_skill 再动手」的往返。
-//
-// 判定放在运行时，而不是让模型自己决定要不要 read_skill：上下文一长模型就是不去读
-// 那一步，写得再细的 skill 也等于没有。
-func SelectSkillBodies(skills []SkillMetadata, scanned string) []SkillMetadata {
-	if len(skills) == 0 {
-		return nil
-	}
-	out := make([]SkillMetadata, 0, len(skills))
-	for _, skill := range skills {
-		if skill.Resident != nil {
-			skill.IncludeBody = *skill.Resident
-			out = append(out, skill)
-			continue
-		}
-		skill.IncludeBody = skillMatchesScan(skill, scanned)
-		out = append(out, skill)
-	}
-	return out
-}
-
-// skillMatchesScan 做大小写不敏感的子串匹配，不按整词。整词匹配对中文是错的——
-// 中文不用空格分词，「点歌」在「帮我点歌」里就不是一个独立的词。
-func skillMatchesScan(skill SkillMetadata, scanned string) bool {
-	scanned = strings.TrimSpace(scanned)
-	if scanned == "" {
-		return false
-	}
-	if hasExplicitSkillMention(scanned, skill.Name) {
-		return true
-	}
-	folded := strings.ToLower(scanned)
-	for _, keyword := range skill.Keywords {
-		if keyword = strings.ToLower(strings.TrimSpace(keyword)); keyword != "" && strings.Contains(folded, keyword) {
-			return true
-		}
-	}
-	return false
-}
-
-// SkillScanText 取最近 depth 条用户消息拼成关键词扫描文本。
-//
-// 只扫最近几条，不扫整段历史：一个很久以前提过一次的词不该让这份正文从此每轮都在。
-func SkillScanText(messages []llm.Message, depth int) string {
-	if depth <= 0 {
-		depth = DefaultSkillTriggerScanDepth
-	}
-	var parts []string
-	for index := len(messages) - 1; index >= 0 && len(parts) < depth; index-- {
-		if messages[index].Role != llm.RoleUser {
-			continue
-		}
-		if text := strings.TrimSpace(messages[index].Content); text != "" {
-			parts = append(parts, text)
-		}
-	}
-	return strings.Join(parts, "\n")
+	return strings.TrimSpace(builder.String())
 }
 
 func SelectExplicitSkills(skills []SkillMetadata, text string) []SkillMetadata {
@@ -470,16 +345,25 @@ func (t *SkillsReadTool) Name() string {
 func (t *SkillsReadTool) Introspection(map[string]any) bool { return true }
 
 func (t *SkillsReadTool) Description() string {
-	return `读取某个 skill 的完整 SKILL.md。`
+	return `读取 skill 的 SKILL.md；长文按 next_offset 续读，has_more=false 才是全文结束。offset/limit 按 Unicode 字符计。`
 }
 
 func (t *SkillsReadTool) InputSchema() map[string]any {
+	offset := toolIntParam("起始字符位置，从 0 起；续读用上次的 next_offset")
+	offset["minimum"] = 0
+	limit := toolIntParam("最多读取的 Unicode 字符数；省略时按本次输出额度返回")
+	limit["minimum"] = 1
 	return toolObjectSchema([]string{"name"}, map[string]any{
-		"name": toolStringParam("skill 名称"),
+		"name":   toolStringParam("skill 名称"),
+		"offset": offset,
+		"limit":  limit,
 	})
 }
 
-func (t *SkillsReadTool) Run(_ context.Context, input map[string]any) (string, error) {
+func (t *SkillsReadTool) Run(ctx context.Context, input map[string]any) (string, error) {
+	if err := validateToolInput(t.InputSchema(), input); err != nil {
+		return "", err
+	}
 	name := stringFromInput(input, "name")
 	if name == "" {
 		return "", errors.New("name is required")
@@ -496,18 +380,58 @@ func (t *SkillsReadTool) Run(_ context.Context, input map[string]any) (string, e
 			}
 			content = string(body)
 		}
-		payload := map[string]any{
-			"name":    skill.Name,
-			"path":    skill.Path,
-			"content": content,
+		budget := ToolOutputBudget(ctx)
+		if budget <= 0 {
+			budget = DefaultMaxToolOutputChars
 		}
-		encoded, err := json.MarshalIndent(payload, "", "  ")
-		if err != nil {
-			return "", err
-		}
-		return string(encoded), nil
+		return skillContentPage(skill, content, intFromInput(input, "offset", 0), intFromInput(input, "limit", 0), budget)
 	}
 	return "", fmt.Errorf("skill %q not found", name)
+}
+
+// Fit the complete JSON envelope, including escaped content, into the existing
+// tool-output allowance. The Runner must not cut the page in the middle of JSON.
+func skillContentPage(skill SkillMetadata, content string, offset, limit, budget int) (string, error) {
+	runes := []rune(content)
+	if offset < 0 || offset > len(runes) {
+		return "", fmt.Errorf("offset 必须在 0 到 %d 之间", len(runes))
+	}
+	end := len(runes)
+	if limit > 0 && limit < end-offset {
+		end = offset + limit
+	}
+	render := func(end int) string {
+		payload := struct {
+			Name       string `json:"name"`
+			Path       string `json:"path"`
+			Content    string `json:"content"`
+			Offset     int    `json:"offset"`
+			TotalChars int    `json:"total_chars"`
+			HasMore    bool   `json:"has_more"`
+			NextOffset *int   `json:"next_offset,omitempty"`
+		}{Name: skill.Name, Path: skill.Path, Content: string(runes[offset:end]), Offset: offset, TotalChars: len(runes), HasMore: end < len(runes)}
+		if payload.HasMore {
+			payload.NextOffset = &end
+		}
+		encoded, _ := json.MarshalIndent(payload, "", "  ")
+		return string(encoded)
+	}
+	if page := render(end); utf8.RuneCountInString(page) <= budget {
+		return page, nil
+	}
+	low, high := offset, end
+	for low < high {
+		middle := low + (high-low+1)/2
+		if utf8.RuneCountInString(render(middle)) <= budget {
+			low = middle
+		} else {
+			high = middle - 1
+		}
+	}
+	if low == offset {
+		return "", errors.New("read_skill 的本次输出额度不足以容纳正文和分页信息")
+	}
+	return render(low), nil
 }
 
 func (t *SkillsReadTool) skills() []SkillMetadata {
