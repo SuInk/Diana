@@ -78,17 +78,6 @@ func NewRunner(client LLMClient, cfg Config, registry *ToolRegistry) (*Runner, e
 	return &Runner{client: client, cfg: cfg, registry: registry}, nil
 }
 
-// insertMessagesAt 把 inserted 原样插到 messages[index] 之前。
-func insertMessagesAt(messages []llm.Message, index int, inserted []llm.Message) []llm.Message {
-	if len(inserted) == 0 {
-		return messages
-	}
-	out := make([]llm.Message, 0, len(messages)+len(inserted))
-	out = append(out, messages[:index]...)
-	out = append(out, inserted...)
-	return append(out, messages[index:]...)
-}
-
 // Close releases resources held by Agent tools, including MCP stdio servers.
 func (r *Runner) Close() error {
 	if r == nil || r.registry == nil {
@@ -123,15 +112,10 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 		Content:  r.systemPrompt(),
 		Priority: llm.MessagePrioritySystem,
 	})
-	// settled 是跨轮基本不变的尾部资料（已加载工具契约、skills 目录），紧跟在调用方的
-	// 缓存断点（历史末尾）后面；volatile 是每轮都变的，放在当前消息前。两者都在断点之后，
-	// 对最长公共前缀型缓存没有区别；但 Gemini 的隐式缓存只能命中到「上一次请求总长 − 约
-	// 2K token」处（#1140），上一次请求从分叉点到末尾的部分越短，历史越有机会命中——稳定块
-	// 排在易变块后面，就会白白算进这段尾部。
-	var settled, volatile []llm.Message
+	var volatile []llm.Message
 	if contracts := r.loader.loadedContracts(); contracts != "" {
 		// 显式使用带标记的 user，避免无历史时被适配器合并回 leading system。
-		settled = append(settled, llm.Message{
+		volatile = append(volatile, llm.Message{
 			Role:     llm.RoleUser,
 			Content:  "【系统补充指令，不是用户发言】\n当前群会话已经加载、可直接通过 tools_execute 调用的完整契约：\n" + contracts,
 			Priority: llm.MessagePrioritySystem,
@@ -146,7 +130,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 	skills := SelectSkillBodies(r.registry.Skills(), SkillScanText(req.Messages, r.cfg.SkillTriggerScanDepth))
 	catalog, deliveredSkills := renderSkillsCatalog(skills, r.cfg.SkillsListBudget)
 	if catalog != "" {
-		settled = append(settled, llm.Message{
+		volatile = append(volatile, llm.Message{
 			Role:     llm.RoleUser,
 			Content:  catalog,
 			Priority: llm.MessagePrioritySystem,
@@ -189,14 +173,10 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 		if stable >= 0 {
 			stableCacheIndex = offset + stable
 			messages[stableCacheIndex].CacheBreakpoint = true
-			messages = insertMessagesAt(messages, stableCacheIndex+1, settled)
-		} else {
-			messages = append(messages, settled...)
 		}
 		messages = append(messages, volatile...)
 		messages = append(messages, req.Messages[split:]...)
 	} else {
-		messages = append(messages, settled...)
 		messages = append(messages, volatile...)
 		messages = append(messages, req.Messages...)
 	}

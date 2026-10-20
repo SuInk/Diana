@@ -4154,11 +4154,6 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	var dependency *senderDependencyContext
 	dependencyIndex := -1
 	volatile := pluginContextMessages(ctx, pluginResponses)
-	// settled 收跨轮基本不变的尾部资料（更早的媒体索引、会话便签、来源清单、压缩摘要），
-	// 紧跟在历史后面、排在每轮都变的 volatile 之前。对最长公共前缀型缓存两者没区别；
-	// Gemini 的隐式缓存只能命中到「上一次请求总长 − 约 2K token」处（#1140），稳定块排在
-	// 易变块后面会白白拉长这段尾部，让历史命中不了。
-	var settled []llm.Message
 	semanticReferenceContext := r.semanticReferenceContextBlock(ctx, event)
 	if semanticReferenceContext.Block != "" {
 		volatile = append(volatile, llm.Message{
@@ -4250,7 +4245,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			// 索引挂在历史优先级上：预算紧张时它跟着旧历史一起让位，不该挤掉当前
 			// 消息或长期要求。
 			if mediaIndex := contextPreload.mediaIndex; mediaIndex != "" {
-				settled = append(settled, llm.Message{
+				volatile = append(volatile, llm.Message{
 					Role:       llm.RoleUser,
 					Content:    mediaIndex,
 					Priority:   llm.MessagePriorityHistory,
@@ -4276,7 +4271,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 				if threadUsage.SelectedTokens < threadUsage.CandidateTokens {
 					threadUsage.Reason = contextLayerReasonBudget
 				}
-				settled = append(settled, llm.Message{
+				volatile = append(volatile, llm.Message{
 					Role:       llm.RoleUser,
 					Content:    sessionThreadPromptPrefix + thread,
 					Priority:   llm.MessagePrioritySummary,
@@ -4293,7 +4288,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			})
 		}
 		if sources := r.claimSourceContext(event); sources != "" {
-			settled = append(settled, llm.Message{
+			volatile = append(volatile, llm.Message{
 				Role:       llm.RoleUser,
 				Content:    sources,
 				Priority:   llm.MessagePriorityMemory,
@@ -4304,7 +4299,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		summaryBudget := contextShareBudget(r.promptContextWindowTokens(event, cfg), compressedSummaryTokenShare) - llm.EstimateTextTokens(summaryPrefix)
 		olderSummary, summaryRecompressed = r.promptContextSummary(event, sessionThread, summaryBudget)
 		if olderSummary != "" {
-			settled = append(settled, llm.Message{
+			volatile = append(volatile, llm.Message{
 				Role:       llm.RoleUser,
 				Content:    summaryPrefix + olderSummary,
 				Priority:   llm.MessagePrioritySummary,
@@ -4331,7 +4326,6 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		// 历史到此结束：这是本轮请求里最后一段逐轮稳定的内容，缓存断点打在这里。
 		// 显式缓存的供应商（Anthropic）按它写入和读取，自动前缀缓存的供应商忽略。
 		messages = markStablePromptPrefix(messages)
-		messages = append(messages, settled...)
 		messages = append(messages, volatile...)
 		volatile = nil
 		for _, candidate := range turnCandidates {
@@ -6778,9 +6772,8 @@ func mentionsSomeoneElseFor(event MessageEvent, botID string) bool {
 }
 
 // contextMessageTiming 标出消息时间并带上 UTC 偏移，模型对照运行时钟算「刚才」「昨晚」时
-// 不该再猜时区。只写绝对时间：「距当前约 N 分钟」每轮都变，带着它的整块资料（例如更早的
-// 图片索引）在下一轮就成了新字符串，Gemini 这类只缓存到尾部之前的供应商会因此连历史
-// 一起重算（#1140）。
+// 不该再猜时区。只写绝对时间，离现在多久由模型对照尾部运行时钟判断：「距当前约 N 分钟」
+// 每轮都变，带着它的整块资料（例如更早的图片索引）在下一轮就成了新字符串。
 func contextMessageTiming(eventTime int64, location *time.Location) string {
 	if eventTime <= 0 {
 		return ""
