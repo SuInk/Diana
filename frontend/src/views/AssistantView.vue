@@ -933,7 +933,7 @@
             </div>
           </section>
 
-          <!-- 回复怎么发：长短、分条、换行、打字节奏、合并转发、引用和 @。 -->
+          <!-- 回复怎么发：长短、分条、换行、发送前过滤、打字节奏、合并转发、引用和 @。 -->
           <section class="card">
             <div class="card-header">
               <div>
@@ -981,6 +981,18 @@
                   <span class="switch-label">保留普通段落换行</span>
                 </label>
                 <span class="hint">关闭时收拢普通说明的换行，保留已有标点，缺少分隔时补逗号或空格；列表、代码、表格保留结构。本轮排版要求优先。</span>
+              </div>
+              <div class="field wide">
+                <label for="bot-reply-filters">回复过滤正则</label>
+                <textarea
+                  id="bot-reply-filters"
+                  v-model="replyFilterRulesDraft"
+                  class="textarea mono"
+                  rows="3"
+                  spellcheck="false"
+                  placeholder="每行一条正则，例如 （[^）]*$ 删掉行尾没闭合的括号和后面那段话"
+                ></textarea>
+                <span class="hint">发送前把命中的内容从回复里删掉，每行按单独一行匹配（^ $ 对应行首行尾），不开「单独设置回复口吻」也生效。整条回复被删光时这一轮不发送。提示词管不住的口癖可以在这里兜底。</span>
               </div>
               <div class="field wide">
                 <label class="switch">
@@ -1487,18 +1499,6 @@
               </div>
               <div v-if="form.reply_composer === 'maibot'" class="field wide">
                 <ReplyToneEditor v-model="replyToneDraft" />
-              </div>
-              <div class="field wide">
-                <label for="bot-reply-filters">回复过滤正则</label>
-                <textarea
-                  id="bot-reply-filters"
-                  v-model="replyFilterRulesDraft"
-                  class="textarea mono"
-                  rows="3"
-                  spellcheck="false"
-                  placeholder="每行一条正则，例如 （[^）]*$ 删掉行尾没闭合的括号和后面那段话"
-                ></textarea>
-                <span class="hint">发送前把命中的内容从回复里删掉，每行按单独一行匹配（^ $ 对应行首行尾），不开「单独设置回复口吻」也生效。整条回复被删光时这一轮不发送。提示词管不住的口癖可以在这里兜底。</span>
               </div>
             </div>
           </section>
