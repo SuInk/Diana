@@ -45,9 +45,15 @@ type promptCachePayloadObservation struct {
 	SegmentBytes []int
 	SystemBytes  int
 	ToolsBytes   int
+	// SegmentTokens 与 MessageHashes 等长，是 llm.EstimateMessageTokens 的估算值；
+	// MessagesTokens 覆盖全部非 system 消息（含超出逐条哈希上限的部分），两者相减
+	// 得到分叉点之后的尾部规模，Gemini 的隐式缓存只看这个数（见 geminiImplicitCacheTailTokens）。
+	SegmentTokens  []int64
+	MessagesTokens int64
 	// StableBoundary 是「本轮期望能复用到哪」的下标，取调用方标出的缓存断点
 	//（markStablePromptPrefix 打在历史末尾）。它之后的消息本来就每轮都变：
 	// 发言者尾部、实时时钟、当前消息。-1 表示调用方没标断点。
+	// 这个「期望」只对最长公共前缀型缓存成立；Gemini 另看尾部规模，见 GeminiTailOverflow。
 	StableBoundary int
 	// 明文快照只活在内存里，用来算字节偏移；不落库、不进日志。
 	systemText  string
@@ -69,6 +75,34 @@ type promptCacheDivergence struct {
 	PreviousTotalBytes int
 	// ToolsHash 标出这条记录属于哪一套工具集，方便按主人/成员分别看命中率。
 	ToolsHash string
+	// PreviousTailTokens 是上一次请求在分叉点之后的估算 token 数，只在 Segment ==
+	// "messages" 时有意义。
+	PreviousTailTokens int64
+}
+
+// geminiImplicitCacheTailTokens 是 Gemini 隐式缓存能容忍的「上一次请求分叉后尾部」上限。
+//
+// Gemini 不是最长公共前缀缓存：#1140 的直连实验显示，可命中的位置只有
+// systemInstruction + tools 之后和「上一次请求总长 − g」处，g 实测约 1.7K～2.0K token
+// 且随请求大小变化。上一次请求在分叉点之后的部分超过 g，这一次就只能命中静态前缀，
+// 历史整段按全价重算——哪怕分叉正好落在缓存断点之后，探针按最长公共前缀判成「正常」。
+// 取 1.5K 给 g 的波动和本地估算误差留余量。
+const geminiImplicitCacheTailTokens = 1500
+
+// usesGeminiImplicitCache 判断这次响应是否落在 Gemini 的隐式缓存语义上：原生 Gemini
+// 适配层，或经 OpenAI 兼容网关转发的 gemini 模型（#1140 在两条路径上观察到同样现象）。
+func usesGeminiImplicitCache(response *llm.GenerateResponse) bool {
+	if response == nil {
+		return false
+	}
+	return response.Provider == llm.ProviderGemini ||
+		strings.Contains(strings.ToLower(response.Model), "gemini")
+}
+
+// GeminiTailOverflow 表示分叉虽然落在缓存断点之后，但上一次请求的尾部已经大到
+// Gemini 隐式缓存够不着历史。
+func (d promptCacheDivergence) GeminiTailOverflow() bool {
+	return d.Segment == "messages" && d.PreviousTailTokens > geminiImplicitCacheTailTokens
 }
 
 // Clean 表示上一次请求是这一次的严格前缀，前缀缓存理论上可以完整复用。
@@ -151,6 +185,8 @@ func observePromptCachePayload(req llm.GenerateRequest) promptCachePayloadObserv
 			continue
 		}
 		leadingSystem = false
+		tokens := llm.EstimateMessageTokens(message)
+		observation.MessagesTokens += tokens
 		if len(observation.MessageHashes) >= promptCacheProbeMaxHashedMessages {
 			continue
 		}
@@ -160,6 +196,7 @@ func observePromptCachePayload(req llm.GenerateRequest) promptCachePayloadObserv
 		}
 		observation.MessageHashes = append(observation.MessageHashes, promptCacheHash(text))
 		observation.SegmentBytes = append(observation.SegmentBytes, len(text))
+		observation.SegmentTokens = append(observation.SegmentTokens, tokens)
 		observation.messageText = append(observation.messageText, text)
 	}
 	observation.systemText = systemBuilder.String()
@@ -216,6 +253,7 @@ func comparePromptCachePayload(previous, current promptCachePayloadObservation) 
 			// 这一次比上一次短：历史被裁剪或压缩过，上一次的前缀不再完整存在。
 			divergence.Segment = "messages"
 			divergence.MessageIndex = index
+			divergence.PreviousTailTokens = previous.messageTokensFrom(index)
 			return divergence
 		}
 		if previous.MessageHashes[index] == current.MessageHashes[index] {
@@ -225,9 +263,19 @@ func comparePromptCachePayload(previous, current promptCachePayloadObservation) 
 		divergence.Segment = "messages"
 		divergence.MessageIndex = index
 		divergence.ByteOffset = firstByteDifference(previous.messageText[index], current.messageText[index])
+		divergence.PreviousTailTokens = previous.messageTokensFrom(index)
 		return divergence
 	}
 	return divergence
+}
+
+// messageTokensFrom 估算从第 index 条非 system 消息到请求末尾的 token 数。
+func (o promptCachePayloadObservation) messageTokensFrom(index int) int64 {
+	tail := o.MessagesTokens
+	for i := 0; i < index && i < len(o.SegmentTokens); i++ {
+		tail -= o.SegmentTokens[i]
+	}
+	return tail
 }
 
 func (o promptCachePayloadObservation) totalBytes() int {
@@ -308,8 +356,11 @@ func (p *promptCacheProbeLLMProvider) Generate(ctx context.Context, req llm.Gene
 	response, err := p.provider.Generate(ctx, req)
 	if ok {
 		divergence := comparePromptCachePayload(previous, observation)
-		if !divergence.Expected(previous) {
+		switch {
+		case !divergence.Expected(previous):
 			p.runtime.recordPromptCacheDivergence(ctx, p.event, purpose, divergence, response)
+		case usesGeminiImplicitCache(response) && divergence.GeminiTailOverflow():
+			p.runtime.recordPromptCacheGeminiTailOverflow(ctx, p.event, purpose, divergence, response)
 		}
 	}
 	return response, err
@@ -360,6 +411,46 @@ func (r *Runtime) recordPromptCacheDivergence(
 		Level:    applog.LevelInfo,
 		Action:   "prompt_cache_divergence",
 		Message:  "提示词前缀在 " + promptCacheSegmentLabel(divergence) + " 处与上一次请求分叉",
+		Actor:    oneBotEventActor(event),
+		Target:   event.MessageID,
+		Metadata: metadata,
+	})
+}
+
+// recordPromptCacheGeminiTailOverflow 记录「按最长公共前缀算是正常、在 Gemini 上历史
+// 却命中不了」的请求。和断裂记录分开一个 Action，免得两类问题混在一起看命中率。
+func (r *Runtime) recordPromptCacheGeminiTailOverflow(
+	ctx context.Context,
+	event MessageEvent,
+	purpose string,
+	divergence promptCacheDivergence,
+	response *llm.GenerateResponse,
+) {
+	writer := r.appLogWriter()
+	if writer == nil {
+		return
+	}
+	metadata := map[string]any{
+		"tools_hash":            divergence.ToolsHash,
+		"group_id":              event.GroupID,
+		"user_id":               event.UserID,
+		"message_id":            event.MessageID,
+		"purpose":               purpose,
+		"message_index":         divergence.MessageIndex,
+		"previous_tail_tokens":  divergence.PreviousTailTokens,
+		"tail_budget_tokens":    geminiImplicitCacheTailTokens,
+		"reusable_prefix_bytes": divergence.ReusablePrefixBytes,
+		"previous_total_bytes":  divergence.PreviousTotalBytes,
+		"provider":              string(response.Provider),
+		"model":                 response.Model,
+		"cached_input_tokens":   response.Usage.CachedInputTokens,
+		"input_tokens":          response.Usage.InputTokens,
+	}
+	_ = writer.AppendLog(ctx, applog.Entry{
+		Kind:     applog.KindDebug,
+		Level:    applog.LevelInfo,
+		Action:   "prompt_cache_gemini_tail_overflow",
+		Message:  "上一次请求在缓存断点后的尾部约 " + itoa(int(divergence.PreviousTailTokens)) + " token，超过 Gemini 隐式缓存能覆盖的范围，历史无法命中",
 		Actor:    oneBotEventActor(event),
 		Target:   event.MessageID,
 		Metadata: metadata,

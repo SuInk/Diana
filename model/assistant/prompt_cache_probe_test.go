@@ -212,3 +212,50 @@ func TestPromptCacheSegmentLabel(t *testing.T) {
 		t.Fatalf("label = %q，应当带上消息下标", label)
 	}
 }
+
+// 分叉落在断点之后、按最长公共前缀算是正常；但上一次请求的尾部超过 Gemini 隐式缓存
+// 的容忍范围时，要能单独标出来（#1140），尾部小时则不标。
+func TestPromptCacheProbeFlagsGeminiTailOverflow(t *testing.T) {
+	request := func(tail string) llm.GenerateRequest {
+		req := promptCacheRequest("人设", nil, "历史一", "回应一")
+		req.Messages[len(req.Messages)-1].CacheBreakpoint = true
+		req.Messages = append(req.Messages, llm.Message{Role: llm.RoleUser, Content: tail})
+		return req
+	}
+	longTail := func(seed string) string { return seed + strings.Repeat("本轮资料与当前消息。", 600) }
+
+	previous := observePromptCachePayload(request(longTail("甲")))
+	current := observePromptCachePayload(request(longTail("乙")))
+	divergence := comparePromptCachePayload(previous, current)
+	if !divergence.Expected(previous) {
+		t.Fatalf("断点后的分叉应判为预期：%#v", divergence)
+	}
+	if divergence.PreviousTailTokens != llm.EstimateMessageTokens(llm.Message{Role: llm.RoleUser, Content: longTail("甲")}) {
+		t.Fatalf("尾部 token = %d，应只算分叉点之后的那条", divergence.PreviousTailTokens)
+	}
+	if !divergence.GeminiTailOverflow() {
+		t.Fatalf("尾部约 %d token 应超过 Gemini 容忍范围", divergence.PreviousTailTokens)
+	}
+
+	short := comparePromptCachePayload(observePromptCachePayload(request("甲：在吗")), observePromptCachePayload(request("乙：在的")))
+	if short.GeminiTailOverflow() {
+		t.Fatalf("短尾部不该标超限：%d token", short.PreviousTailTokens)
+	}
+}
+
+func TestUsesGeminiImplicitCache(t *testing.T) {
+	cases := []struct {
+		response *llm.GenerateResponse
+		want     bool
+	}{
+		{nil, false},
+		{&llm.GenerateResponse{Provider: llm.ProviderGemini, Model: "flash"}, true},
+		{&llm.GenerateResponse{Provider: llm.ProviderOpenAICompatible, Model: "Gemini-3.8-Flash"}, true},
+		{&llm.GenerateResponse{Provider: llm.ProviderOpenAICompatible, Model: "deepseek-flash"}, false},
+	}
+	for _, tc := range cases {
+		if got := usesGeminiImplicitCache(tc.response); got != tc.want {
+			t.Fatalf("usesGeminiImplicitCache(%#v) = %v，期望 %v", tc.response, got, tc.want)
+		}
+	}
+}

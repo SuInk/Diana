@@ -72,6 +72,21 @@ Yuki 的短期状态还采用极小预算、TTL 和版本校验，但其全局 `
 
 缓存命中率应按完整样本组计算 `Σ cached_input_tokens / Σ input_tokens`，不能平均各轮百分比，也不能只挑有命中的轮次。当前 `llm.Usage` 的整数无法区分供应商没有返回缓存字段与显式返回零；未确认原始字段存在的零值只能记为 `unknown_or_zero`，不能据此宣布零命中或总体收益。正缓存值能证明发生了复用，但不自动证明同组其他零值样本统计完整。
 
+### Gemini 隐式缓存不是最长公共前缀
+
+上面的排列默认供应商按最长公共前缀复用：易变块放在缓存断点之后，就不会影响历史。OpenAI 兼容网关和 DeepSeek 确实如此，但 Gemini 不是。[#1140](https://github.com/SuInk/Diana/issues/1140) 的直连实验（`gemini-flash-latest`，响应为 `gemini-3.8-flash`）显示，可命中的位置只有两处：
+
+- `systemInstruction + tools` 之后；
+- 上一次请求「总长度 − g」处。g 是原样重发时没被命中的 token 数，18K 请求约 1,749，31K～50K 请求约 2,035～2,040，会随请求大小变化，不能当成常数。
+
+下一次请求只有在与上一次共享的前缀覆盖到第二个位置时，历史才会命中；否则退回静态前缀。换句话说，**上一次请求在历史末尾之后、与本次不同的那段必须小于 g**。尾部比 g 只多 61 token，命中也会从 16K 掉到静态前缀那 4.4K。原生 Gemini 适配层和 OpenAI 兼容网关转发的 gemini 模型上都观察到了同样现象。
+
+目前首次回复请求在历史后面拼装的本轮资料约有 10K token，所以在 Gemini 上历史部分基本每次都按全价计费。要改善，只能把每轮易变的尾部压到约 1.5K token 以内：把稳定块前移，或从大块里拆出每轮变化的行。这部分和 [#1134](https://github.com/SuInk/Diana/pull/1134) 精简动态上下文的改动重叠，等它定稿后再量。可选的 Gemini 显式 `cachedContents` 只对直连 Gemini API 有意义，兼容网关通常没有这个接口，目前没有接入。
+
+`prompt_cache_divergence` 仍按最长公共前缀判断，会把这类请求算成正常。因此探针另外估算上一次请求在分叉点之后的 token 数：响应来自 Gemini（原生 provider，或模型名含 `gemini`），而这个数超过 1,500 时，额外记一条 `prompt_cache_gemini_tail_overflow` debug 日志，带上 `previous_tail_tokens`、`cached_input_tokens` 和 `input_tokens`。1,500 是给 g 的波动和本地估算误差留出的余量。估算用的是本地的保守口径，不是 Gemini tokenizer 的计数。
+
+以上只在单个账号的 `gemini-flash-latest` 上测过，没有测缓存 TTL，也不保证其他 Gemini 版本行为相同。
+
 ## 历史真实 API 结果（不是本轮收益）
 
 使用本地配置中的 `gpt-5.6-sol`，通过配置的 Sub2API Responses 端点，实际执行 21 个模型请求。全部输入为合成群聊与无副作用测试工具，没有向真实群发送消息。保留了[逐请求 token 和耗时记录](testing/group-prompt-cache-api-2026-09-19.json)。
