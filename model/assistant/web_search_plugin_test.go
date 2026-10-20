@@ -147,7 +147,7 @@ func TestWebSearchPluginSearchEngineMode(t *testing.T) {
 	if len(rendered) != 2 || !strings.HasPrefix(rendered[0], "https://www.baidu.com/s?") || !strings.HasPrefix(rendered[1], "https://www.bing.com/search?") {
 		t.Fatalf("rendered = %v", rendered)
 	}
-	if !strings.Contains(output, `"provider": "bing"`) || !strings.Contains(output, "https://example.com/a") {
+	if !strings.Contains(output, `"provider":"bing"`) || !strings.Contains(output, "https://example.com/a") {
 		t.Fatalf("output = %s", output)
 	}
 	if got := webSearchEngineOrder(" , nope"); strings.Join(got, ",") != strings.Join(agent.DefaultSearchEngines, ",") {
@@ -201,8 +201,8 @@ func TestWebSearchPluginSearchEngineModeAsksExaFirst(t *testing.T) {
 		wantProvider string
 		wantRendered int
 	}{
-		{name: "exa answers", exaAvailable: true, wantProvider: `"provider": "exa"`, wantRendered: 0},
-		{name: "exa down falls back to engines", exaAvailable: false, wantProvider: `"provider": "bing"`, wantRendered: 1},
+		{name: "exa answers", exaAvailable: true, wantProvider: `"provider":"exa"`, wantRendered: 0},
+		{name: "exa down falls back to engines", exaAvailable: false, wantProvider: `"provider":"bing"`, wantRendered: 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var mu sync.Mutex
@@ -268,7 +268,7 @@ func TestWebSearchPluginCustomSearchEngineRunsAlongsideBuiltin(t *testing.T) {
 	if strings.Join(rendered, " ") != strings.Join(want, " ") {
 		t.Fatalf("rendered = %v", rendered)
 	}
-	if !strings.Contains(output, `"provider": "bing"`) || !strings.Contains(output, "https://example.org/a") || strings.Contains(output, "evil.example") {
+	if !strings.Contains(output, `"provider":"bing"`) || !strings.Contains(output, "https://example.org/a") || strings.Contains(output, "evil.example") {
 		t.Fatalf("output = %s", output)
 	}
 }
