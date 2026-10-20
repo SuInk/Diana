@@ -58,15 +58,16 @@ const (
 	// 最低可缓存长度，所以每次调用都是全价——实测这条链路缓存命中率恒为 0%。
 	// 一条消息一次调用时，system、existing_memories、recent_messages 会被重复
 	// 付费 N 遍；攒成一次就只付一遍。
-	memoryEventBatchMax = 6
+	memoryEventBatchMax = 10
 )
 
 // MemoryEventJobDelay 是事件记忆任务入队后的等待时间，用来把同一会话同一发言者
 // 的连续消息攒进一次门控调用。
 //
 // 代价是长期记忆晚成形这一会儿。可以接受：这段时间里那几条消息本来就还在最近
-// 历史里，回复时看得到；长期记忆负责的是跨会话那部分，不差这几十秒。
-const MemoryEventJobDelay = 45 * time.Second
+// 历史里，回复时看得到；长期记忆负责的是跨会话那部分，不差这几分钟。按生产一周的
+// 消息回放，45 秒窗口理想情况下也要 2 万次调用，3 分钟、每批最多 10 条约 1.2 万次。
+const MemoryEventJobDelay = 3 * time.Minute
 
 // memoryGateSystemPrompt 是记忆门控的固定前缀。单条和攒批共用同一份，缓存才有
 // 可能在两种形状之间互相命中。

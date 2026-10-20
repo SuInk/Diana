@@ -173,6 +173,10 @@ LIMIT 1
 		return nil, err
 	}
 	claimed := []assistant.MemoryJob{first}
+	// 同发言者后来的消息要一起带上，哪怕它们自己还没到期。以前只取已到期的：每条
+	// 都等同样久，第一条到期时后面的都还差一截，等待窗口几乎攒不到批（生产一周
+	// 3.8 万条消息开了 2.6 万次门控）。现在第一条到期时，窗口内已入队的同发言者
+	// 消息都在，一起领走。
 	if firstKind == string(assistant.MemoryJobEvent) && max > 1 {
 		rows, err := tx.QueryContext(ctx, `
 SELECT id, payload, attempts, COALESCE(last_error, ''), consecutive_timeouts
@@ -180,7 +184,7 @@ FROM memory_jobs
 WHERE status = 'pending' AND available_at <= ? AND kind = 'event' AND session = ? AND id <> ?
 ORDER BY available_at, created_at, id
 LIMIT ?
-`, now, first.Payload.Session, first.ID, max*4)
+`, now+int64(s.memoryEventDelay()), first.Payload.Session, first.ID, max*4)
 		if err != nil {
 			return nil, err
 		}

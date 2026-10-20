@@ -130,3 +130,38 @@ func TestEventMemoryJobsWaitForBatchWindow(t *testing.T) {
 		t.Fatalf("jobs = %#v", jobs)
 	}
 }
+
+// 第一条到期时，窗口内已入队、自己还没到期的同发言者消息也要一起领走，
+// 否则等待窗口攒不到批。
+func TestClaimMemoryJobBatchPullsInNotYetDueSameSpeaker(t *testing.T) {
+	ctx := context.Background()
+	store, err := NewSQLiteStore(filepath.Join(t.TempDir(), "memory.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+	store.SetMemoryEventJobDelay(200 * time.Millisecond)
+
+	if _, _, err := store.EnqueueMemoryJob(ctx, batchJob("group:123", "alice", "m1", 100)); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(250 * time.Millisecond)
+	for _, payload := range []assistant.MemoryJobPayload{
+		batchJob("group:123", "alice", "m2", 200),
+		batchJob("group:123", "bob", "m3", 300),
+	} {
+		if _, _, err := store.EnqueueMemoryJob(ctx, payload); err != nil {
+			t.Fatal(err)
+		}
+	}
+	jobs, err := store.ClaimMemoryJobBatch(ctx, "worker", time.Now().Add(time.Minute), 6)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(jobs) != 2 || jobs[1].Payload.Event.MessageID != "m2" {
+		t.Fatalf("claimed = %#v, want alice 的 m1 和还没到期的 m2", jobs)
+	}
+	if next, err := store.ClaimMemoryJobBatch(ctx, "worker", time.Now().Add(time.Minute), 6); err != nil || len(next) != 0 {
+		t.Fatalf("bob 的任务还没到期，不该被单独领走：%#v, %v", next, err)
+	}
+}

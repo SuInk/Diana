@@ -2864,6 +2864,12 @@ func (r *Runtime) routeProactiveReplyBatch(ctx context.Context, candidates []pro
 		event.routingReason = groupStopRoutingReason(stop, time.Now().In(profileLocation(event.ProfileID)))
 		return event, text, nil, false
 	}
+	if chatIn.Participation != nil {
+		if _, chatLevel := chatIn.Participation.ratingLevels(); r.skipStickerOnlyRouting(candidates, cfg, chatLevel) {
+			event.routingReason = "群友发的纯表情包，没有 @、引用或点名，机器人最近也没在这里说话，未调用接话评分"
+			return event, text, nil, false
+		}
+	}
 	payload := r.proactiveReplyPayloadWithContext(ctx, event, readableEventText(event, text))
 	for index, candidate := range candidates {
 		item := proactiveReplyCandidatePayload{
