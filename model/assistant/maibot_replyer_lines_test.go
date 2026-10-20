@@ -52,3 +52,23 @@ func TestMaiBotReplyLinesSurvivePrepare(t *testing.T) {
 		t.Fatalf("prepared reply lost line markers: %q", got)
 	}
 }
+
+// 代码块里的缩进和空行是代码的一部分，转换时原样保留，发出去之后缩进还在。
+func TestMaiBotReplyLinesKeepsCodeBlockVerbatim(t *testing.T) {
+	cfg := DefaultBotConfig()
+	raw := "示例：\n  ```python\ndef f():\n    return 1\n\nprint(f())  \n```\n就这样"
+	want := strings.Join([]string{"示例：", "```python", "def f():", "    return 1", "", "print(f())", "```", "就这样"}, notificationLineMarker)
+	got := maiBotReplyLines(raw, cfg, MessageEvent{}, replyControlIntent{})
+	if got != want {
+		t.Fatalf("maiBotReplyLines() = %q, want %q", got, want)
+	}
+
+	prepared, err := (&Runtime{}).prepareGeneratedReply(context.Background(), cfg, got)
+	if err != nil {
+		t.Fatalf("prepareGeneratedReply() error = %v", err)
+	}
+	sent := strings.Join(splitChatReply(prepared, chatSplitLimits{}), "\n")
+	if !strings.Contains(sent, "def f():\n    return 1") {
+		t.Fatalf("code indentation lost after delivery prep: %q", sent)
+	}
+}
