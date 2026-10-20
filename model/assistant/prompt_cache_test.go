@@ -11,26 +11,11 @@ import (
 	"github.com/SuInk/diana/model/llm"
 )
 
-func TestCoarseRelativeTimingIsStableAcrossNearbyTurns(t *testing.T) {
-	for _, tc := range []struct {
-		delta int64
-		want  string
-	}{
-		{delta: 0, want: "不到 1 分钟"},
-		{delta: 59, want: "不到 1 分钟"},
-		{delta: 120, want: "约 2 分钟"},
-		{delta: 4961, want: "约 1 小时"},
-		{delta: 200000, want: "约 2 天"},
-	} {
-		if got := coarseRelativeTiming(tc.delta); got != tc.want {
-			t.Fatalf("coarseRelativeTiming(%d) = %q, want %q", tc.delta, got, tc.want)
-		}
-	}
-	// 同一条历史在相邻两轮里必须渲染成同一个字符串，否则整段历史无法命中前缀缓存。
-	first := contextMessageTiming(1000, 1100, time.UTC)
-	second := contextMessageTiming(1000, 1110, time.UTC)
-	if first != second {
-		t.Fatalf("history timing drifted between turns: %q vs %q", first, second)
+// 消息时间只写绝对时间，同一条在相邻两轮里必须渲染成同一个字符串（#1140）。
+func TestContextMessageTimingIsAbsolute(t *testing.T) {
+	got := contextMessageTiming(1000, time.UTC)
+	if got != "【消息时间：1970-01-01 00:16:40（UTC+00:00）】" {
+		t.Fatalf("contextMessageTiming = %q", got)
 	}
 }
 

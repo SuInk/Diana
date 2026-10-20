@@ -48,7 +48,7 @@ func (r *Runtime) durableMediaIndex(ctx context.Context, event MessageEvent) str
 			continue
 		}
 		seen[messageID] = true
-		if line := durableMediaIndexLine(ctx, r, item, event.Time); line != "" {
+		if line := durableMediaIndexLine(ctx, r, item); line != "" {
 			lines = append(lines, line)
 		}
 	}
@@ -65,11 +65,11 @@ func (r *Runtime) durableMediaIndex(ctx context.Context, event MessageEvent) str
 		strings.Join(lines, "\n")
 }
 
-func durableMediaIndexLine(ctx context.Context, runtime *Runtime, item MessageEvent, currentTime int64) string {
+func durableMediaIndexLine(ctx context.Context, runtime *Runtime, item MessageEvent) string {
 	var builder strings.Builder
 	builder.WriteString("- message_id=")
 	builder.WriteString(strings.TrimSpace(item.MessageID))
-	builder.WriteString(contextMessageTiming(item.Time, currentTime, profileLocation(item.ProfileID)))
+	builder.WriteString(contextMessageTiming(item.Time, profileLocation(item.ProfileID)))
 	if sender := strings.TrimSpace(item.SenderNameOrID()); sender != "" {
 		builder.WriteString(" ")
 		builder.WriteString(sender)

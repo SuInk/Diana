@@ -1552,7 +1552,7 @@ func proactiveTurnPromptTextAt(event MessageEvent, fallbackText string, currentT
 	if quoted := quotedPromptText(event.Quoted); quoted != "" {
 		text += "\n" + quoted
 	}
-	return "【当前同轮补充消息，" + overrides.text(promptNoteSupplementSpec) + "】" + contextMessageTiming(event.Time, currentTime, profileLocation(event.ProfileID)) + promptSenderIdentity(event) + ": " + text
+	return "【当前同轮补充消息，" + overrides.text(promptNoteSupplementSpec) + "】" + contextMessageTiming(event.Time, profileLocation(event.ProfileID)) + promptSenderIdentity(event) + ": " + text
 }
 
 func currentPromptText(event MessageEvent, text string) string {
@@ -1630,7 +1630,7 @@ func currentPromptTextWithSemanticContext(event MessageEvent, text string, sourc
 	if reference := recentTextReferencePrompt(event.recentTextReference); reference != "" {
 		text += "\n\n" + reference
 	}
-	return "【当前需要回复的消息】" + contextMessageTiming(event.Time, 0, profileLocation(event.ProfileID)) + "【当前发言者】" + promptSenderIdentity(event) + "\n" + text
+	return "【当前需要回复的消息】" + contextMessageTiming(event.Time, profileLocation(event.ProfileID)) + "【当前发言者】" + promptSenderIdentity(event) + "\n" + text
 }
 
 func quotedPromptText(quoted *QuotedMessage) string {

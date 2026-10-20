@@ -72,16 +72,8 @@ func TestCrossGroupContextCarriesSourceNeighborsAndAge(t *testing.T) {
 			t.Fatalf("跨群参考带出了不该带的内容 %q：%q", leaked, text)
 		}
 	}
-	if prompt := historyPromptTextAt(cross, current.Time); !strings.Contains(prompt, "，约38分钟前] ") || strings.Contains(prompt, "shared") {
-		t.Fatalf("跨群标记没有标出距今多久或暴露了来源群：%q", prompt)
-	}
-}
-
-func TestCrossGroupAgeText(t *testing.T) {
-	for seconds, want := range map[int64]string{30: "1分钟", 38 * 60: "38分钟", 5 * 3600: "5小时", 47 * 3600: "47小时", 11 * 86400: "11天"} {
-		if got := crossGroupAgeText(seconds); got != want {
-			t.Fatalf("crossGroupAgeText(%d) = %q, want %q", seconds, got, want)
-		}
+	if prompt := historyPromptTextAt(cross, current.Time); strings.Contains(prompt, "前] ") || strings.Contains(prompt, "shared") {
+		t.Fatalf("跨群标记带了相对时间或暴露了来源群：%q", prompt)
 	}
 }
 

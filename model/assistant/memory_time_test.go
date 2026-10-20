@@ -20,30 +20,12 @@ func TestStructuredMemoryLineShowsWhenItWasRecorded(t *testing.T) {
 		SourceEventTime: recorded,
 		LastVerifiedAt:  now,
 	})
-	want := "记于 " + recorded.Format("2006-01-02") + "，3天前"
+	want := "记于 " + recorded.Format("2006-01-02") + "（" + chineseWeekday(recorded.Weekday()) + "）"
 	if !strings.Contains(line, want) {
 		t.Fatalf("line = %q, want it to contain %q", line, want)
 	}
 	if strings.Contains(line, now.Format("2006-01-02")) {
 		t.Fatalf("retrieval time leaked into the label: %q", line)
-	}
-}
-
-func TestRelativeDayLabelCountsCalendarDays(t *testing.T) {
-	loc := time.FixedZone("CST", 8*3600)
-	now := time.Date(2026, 9, 25, 7, 0, 0, 0, loc)
-	for _, tc := range []struct {
-		then time.Time
-		want string
-	}{
-		{time.Date(2026, 9, 25, 0, 30, 0, 0, loc), "今天"},
-		// 不满 24 小时，但已经是前一个日历日。
-		{time.Date(2026, 9, 24, 23, 0, 0, 0, loc), "昨天"},
-		{time.Date(2026, 9, 22, 8, 0, 0, 0, loc), "3天前"},
-	} {
-		if got := relativeDayLabel(tc.then, now); got != tc.want {
-			t.Fatalf("relativeDayLabel(%v) = %q, want %q", tc.then, got, tc.want)
-		}
 	}
 }
 
@@ -95,7 +77,7 @@ func TestSessionThreadNoteCarriesWhenItWasWritten(t *testing.T) {
 	now := time.Now()
 	written := now.AddDate(0, 0, -2)
 	prefix := sessionThreadAsOf(StructuredMemoryItem{UpdatedAt: written}, now)
-	if !strings.Contains(prefix, written.In(now.Location()).Format("2006-01-02 15:04")) || !strings.Contains(prefix, "2天前") {
+	if !strings.Contains(prefix, written.In(now.Location()).Format("2006-01-02 15:04")) || strings.Contains(prefix, "天前") {
 		t.Fatalf("thread prefix = %q", prefix)
 	}
 	if got := sessionThreadAsOf(StructuredMemoryItem{}, now); got != "" {

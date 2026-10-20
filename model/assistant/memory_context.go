@@ -534,8 +534,8 @@ func formatStructuredMemoryLine(item StructuredMemoryItem) string {
 	return fmt.Sprintf("\n- [%s｜%s｜%s] %s：%s", memoryKindLabel(item.Kind), item.Topic, timeLabel, subject, content)
 }
 
-// memoryRecordedLabel 写成「记于 2026-09-22，3天前」：日期给模型对照事实，相对天数
-// 省得它自己拿运行时钟做日期减法——减错一天，「昨天早上」就又成了「今天早上」。
+// memoryRecordedLabel 写成「记于 2026-09-22（星期二）」：只写绝对日期，离现在多久由模型
+// 对照尾部运行时钟判断。「3天前」这类相对说法每天都变，会让整块记忆跨天失去缓存复用。
 func memoryRecordedLabel(sourceTime, createdAt, now time.Time) string {
 	recorded := sourceTime
 	if recorded.IsZero() {
@@ -545,22 +545,7 @@ func memoryRecordedLabel(sourceTime, createdAt, now time.Time) string {
 		return "记录时间未知"
 	}
 	recorded = recorded.In(now.Location())
-	return "记于 " + recorded.Format("2006-01-02") + "，" + relativeDayLabel(recorded, now)
-}
-
-// relativeDayLabel 按日历日算相隔几天，不按 24 小时：昨晚 23 点到今早 7 点也是「昨天」。
-func relativeDayLabel(then, now time.Time) string {
-	thenDay := time.Date(then.Year(), then.Month(), then.Day(), 0, 0, 0, 0, now.Location())
-	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
-	days := int(today.Sub(thenDay).Hours()/24 + 0.5)
-	switch {
-	case days <= 0:
-		return "今天"
-	case days == 1:
-		return "昨天"
-	default:
-		return fmt.Sprintf("%d天前", days)
-	}
+	return "记于 " + recorded.Format("2006-01-02") + "（" + chineseWeekday(recorded.Weekday()) + "）"
 }
 
 func memoryKindLabel(kind MemoryKind) string {
@@ -909,7 +894,7 @@ func sessionThreadAsOf(item StructuredMemoryItem, now time.Time) string {
 		return ""
 	}
 	written = written.In(now.Location())
-	return "（便签写于 " + written.Format("2006-01-02 15:04") + "，" + relativeDayLabel(written, now) + "；里面的时间说法都相对那时）\n"
+	return "（便签写于 " + written.Format("2006-01-02 15:04") + "（" + chineseWeekday(written.Weekday()) + "）；里面的时间说法都相对那时）\n"
 }
 
 // fitSessionThreadToBudget 把线程便签压进配额。它天然只有几百字，超限说明模型把

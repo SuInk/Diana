@@ -67,7 +67,7 @@ func TestRuntimeUsesBotTimezoneInsteadOfContainerUTC(t *testing.T) {
 			t.Fatalf("时钟应按机器人时区，缺 %q：%s", want, clock)
 		}
 	}
-	if got := contextMessageTiming(event.Time, 0, profileLocation(event.ProfileID)); !strings.Contains(got, "2026-10-01 10:30:00（UTC+09:00）") {
+	if got := contextMessageTiming(event.Time, profileLocation(event.ProfileID)); !strings.Contains(got, "2026-10-01 10:30:00（UTC+09:00）") {
 		t.Fatalf("消息时间应按机器人时区并带偏移：%s", got)
 	}
 	if got := historyLinePrefix(event); !strings.Contains(got, "2026-10-01 10:30:00") {

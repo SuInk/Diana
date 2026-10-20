@@ -328,9 +328,10 @@ func senderDependencyHeader(current MessageEvent, toolHint bool) string {
 }
 
 func senderDependencyLabel(current MessageEvent, index int, image senderDependencyImage, pixels bool) string {
+	// 只写绝对时间，离当前多久由模型对照当前消息时间判断；「N 秒前」每轮都变。
 	age := ""
-	if current.Time > 0 && image.Source.Time > 0 && current.Time >= image.Source.Time {
-		age = fmt.Sprintf(" %d 秒前", current.Time-image.Source.Time)
+	if image.Source.Time > 0 {
+		age = " " + time.Unix(image.Source.Time, 0).In(profileLocation(image.Source.ProfileID)).Format("15:04:05")
 	}
 	kind := "原图"
 	if !pixels {

@@ -1101,6 +1101,42 @@ func TestRunnerHonorsCallerCacheBreakpoint(t *testing.T) {
 	}
 }
 
+// skills 目录这类跨轮稳定的尾部资料紧跟在调用方断点后面，排在调用方的易变块之前；
+// 时钟这类每轮都变的仍挨着当前消息（#1140）。
+func TestRunnerPlacesSettledTailRightAfterCallerBreakpoint(t *testing.T) {
+	client := &scriptedClient{responses: []string{`{"action":"final","content":"好的"}`}}
+	registry := NewToolRegistry(&SkillsReadTool{})
+	registry.SetSkills([]SkillMetadata{{Name: "demo-skill", Description: "Use demo.", Path: "/tmp/demo/SKILL.md"}})
+	runner := &Runner{client: client, cfg: Config{}.WithDefaults(), registry: registry}
+	if _, err := runner.Run(context.Background(), Request{Messages: []llm.Message{
+		{Role: llm.RoleSystem, Content: "人设"},
+		{Role: llm.RoleUser, Content: "历史"},
+		{Role: llm.RoleAssistant, Content: "历史回复", CacheBreakpoint: true},
+		{Role: llm.RoleUser, Content: "【当前发言者长期记忆】…"},
+		{Role: llm.RoleUser, Content: "当前消息"},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	index := map[string]int{}
+	for i, message := range client.requests[0].Messages {
+		switch {
+		case message.Content == "历史回复":
+			index["history"] = i
+		case strings.Contains(message.Content, "demo-skill"):
+			index["skills"] = i
+		case strings.HasPrefix(message.Content, "【当前发言者长期记忆】"):
+			index["memory"] = i
+		case strings.Contains(message.Content, RuntimeClockMarker):
+			index["clock"] = i
+		case message.Content == "当前消息":
+			index["current"] = i
+		}
+	}
+	if len(index) != 5 || index["skills"] != index["history"]+1 || index["memory"] <= index["skills"] || index["clock"] <= index["memory"] || index["current"] <= index["clock"] {
+		t.Fatalf("tail order = %#v", index)
+	}
+}
+
 func TestRunnerMarksCacheBreakpointsAroundVolatilePrefix(t *testing.T) {
 	client := &scriptedClient{responses: []string{`{"action":"final","content":"好的"}`}}
 	runner, err := NewRunner(client, Config{WorkDir: t.TempDir()}, NewToolRegistry())

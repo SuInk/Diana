@@ -301,7 +301,7 @@ func TestSenderDependencyImagesAttachLabeledPixels(t *testing.T) {
 			for _, part := range block.Parts {
 				labels.WriteString(part.Text)
 			}
-			for _, want := range []string{"不是本条消息自带的", "图1：", "14 秒前发的图（原图", "message_id="} {
+			for _, want := range []string{"不是本条消息自带的", "图1：", time.Unix(1_800_000_000, 0).In(profileLocation("")).Format("15:04:05") + "发的图（原图", "message_id="} {
 				if !strings.Contains(labels.String(), want) {
 					t.Fatalf("label missing %q:\n%s", want, labels.String())
 				}
