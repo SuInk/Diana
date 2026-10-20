@@ -12,7 +12,7 @@
     <header class="view-header">
       <div class="view-title">
         <p>
-          机器人所处世界的设定集，所有机器人共用一本，改动立即生效：常驻设定每轮都带上，触发式设定聊到才出现。
+          机器人所处世界的设定集。<strong>所有机器人共用一本</strong>，不随侧栏切换的机器人变化，改动立即生效：常驻设定每轮都带上，触发式设定聊到才出现。
           每台机器人用不用在「机器人 → 人设 → 世界书」里开关。导入认三种文件：本机导出的 JSON、SillyTavern 世界书、角色卡（自动识别 character_book）。
         </p>
       </div>
@@ -105,7 +105,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
+import { computed, onActivated, onMounted, ref } from "vue";
 import { Download, Plus, Trash2, Upload } from "@lucide/vue";
 import {
   listWorldBook,
@@ -337,7 +337,15 @@ async function importWorldBookFile(event: Event): Promise<void> {
   }
 }
 
-onMounted(() => {
-  void loadWorldBook();
-});
+// 页面被 KeepAlive 缓存着，人设页导入角色卡时也会往世界书里写，所以每次切回来都重读。
+// 这一档是 MemoryView 里 v-if 出来的，在已激活的缓存树里挂载时收不到首次
+// onActivated，所以挂载时也读；两者都触发时，正在读的那次会把后一次挡掉。
+let worldBookLoading: Promise<void> | null = null;
+function reloadWorldBook(): void {
+  worldBookLoading ??= loadWorldBook().finally(() => {
+    worldBookLoading = null;
+  });
+}
+onMounted(reloadWorldBook);
+onActivated(reloadWorldBook);
 </script>

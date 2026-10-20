@@ -10,7 +10,7 @@
 -->
 <template>
   <div class="memory-view">
-    <div class="segmented memory-tabs" role="tablist" aria-label="记忆类型">
+    <div ref="tabList" class="segmented memory-tabs" role="tablist" aria-label="记忆类型">
       <button
         v-for="tab in tabs"
         :key="tab.id"
@@ -35,7 +35,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, nextTick, onActivated, ref, watch } from "vue";
 import { BookMarked, Earth, Newspaper, NotebookPen, UserRound, Wallet } from "@lucide/vue";
 import { currentView, navigate, type ViewID } from "../router";
 import UsersView from "./UsersView.vue";
@@ -58,6 +58,18 @@ const tabs = [
 // 来源，不会出现「地址是笔记本、显示的是人员」。
 const memoryTabs: ViewID[] = ["notebook", "world-book", "space", "self-notes", "feed"];
 const active = computed<ViewID>(() => (memoryTabs.includes(currentView.value) ? currentView.value : "users"));
+
+// 窄屏下标签栏横向滚动，从别处直达后面几档（动态、自述）时，选中的那一档可能在
+// 视野外，看不出当前在哪。切档和切回来时把它滚进来。
+const tabList = ref<HTMLElement | null>(null);
+function revealActiveTab(): void {
+  void nextTick(() => {
+    const tab = tabList.value?.querySelector<HTMLElement>('[aria-selected="true"]');
+    tab?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  });
+}
+watch(active, revealActiveTab);
+onActivated(revealActiveTab);
 
 function select(view: ViewID): void {
   if (active.value !== view) {

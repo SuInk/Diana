@@ -2202,7 +2202,7 @@ import { copyBotConfiguration } from "../lib/bot-config-copy";
 import { findWebSocketConnectionConflict } from "../lib/bot-connection-conflicts";
 import { maximumModelRequestTimeoutSeconds, modelRequestTimeoutMilliseconds, modelRequestTimeoutSeconds, useConfigurationRefresh } from "../lib/configuration-sync";
 import { mergeModelMetadata, effectiveModelInfo } from "../lib/model-metadata";
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch, type Ref } from "vue";
+import { computed, nextTick, onActivated, onBeforeUnmount, onMounted, ref, watch, type Ref } from "vue";
 import LoadingSkeleton from "../components/LoadingSkeleton.vue";
 import SkeletonBlock from "../components/SkeletonBlock.vue";
 import { ArrowLeft, Bot, ChevronDown, ChevronRight, Copy, Download, Eye, EyeOff, GitBranch, GripVertical, History, Image, Layers, MessageSquare, Pencil, Plus, Power, PowerOff, RefreshCw, RotateCcw, Save, ScanLine, Search, Settings2, Shuffle, SlidersHorizontal, Sparkles, Trash2, Upload, Waypoints, X } from "@lucide/vue";
@@ -4895,9 +4895,7 @@ onBeforeUnmount(() => {
 
 async function load(): Promise<void> {
   loading.value = true;
-  // 世界书单独拉，不放进下面那组 Promise.all：它只是素材库，慢一点或者读不出来都
-  // 不该拖住机器人配置本身的加载。人设库由 SoulEditor 自己拉。
-  void loadWorldBook();
+  // 世界书条数不在这里拉，见下面的 onActivated。人设库由 SoulEditor 自己拉。
   const [platformResult, botConfig, llmConfig, health] = await Promise.all([
     getBotPlatforms().catch(() => ({ platforms: [] as BotPlatform[] })),
     getBotProfileConfig().catch((error: unknown) => {
@@ -4923,6 +4921,13 @@ async function load(): Promise<void> {
   // 自动发一次远程模型请求；账号多时这曾是页面打开后最大的网络开销。
   loading.value = false;
 }
+
+// 世界书只读个条数给入口按钮：它不放进 load() 那组 Promise.all，慢一点或者读不出来
+// 都不该拖住机器人配置本身的加载。条目在「档案 → 世界书」里改，这一页被 KeepAlive
+// 缓存着，每次切回来都要重新读，否则按钮上的条数还是离开前的。
+onActivated(() => {
+  void loadWorldBook();
+});
 
 onMounted(() => {
   trackHeaderHeight();

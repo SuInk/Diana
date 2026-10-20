@@ -177,7 +177,7 @@
       </header>
 
       <main class="app-content">
-        <section v-if="scopeReady && currentView !== 'admin-chat'" class="scope-context" aria-label="当前平台与机器人">
+        <section v-if="scopeReady && !unscopedViews.has(currentView)" class="scope-context" aria-label="当前平台与机器人">
           <div class="scope-identity">
             <span class="badge">{{ scopePlatform }}</span>
             <strong>{{ scopeProfile?.name || (botScope ? "未命名机器人" : "全部机器人") }}</strong>
@@ -409,6 +409,9 @@ const viewTitles: Record<ViewID, string> = {
 };
 
 const botProfiles = ref<BotProfileConfig[]>([]);
+// 这几页的内容不分机器人（管理员对话、全局一本的世界书），顶上的作用域条会让人
+// 以为改的是当前那台的，所以不显示。
+const unscopedViews = new Set<ViewID>(["admin-chat", "world-book"]);
 const scopeProfile = computed(() => botProfiles.value.find((profile) => profile.id === botScope.value));
 const scopePlatform = computed(() => {
   const platform = scopeProfile.value?.platform;
