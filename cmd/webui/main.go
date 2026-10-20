@@ -590,6 +590,10 @@ func main() {
 	if err := botRuntime.RestoreLLMUsageToday(ctx, sqliteStore); err != nil {
 		log.Printf("llm usage today restore failed: %v", err)
 	}
+	// 心情同理：读回重启前的状态，停机这段时间按半衰期照常回落。
+	if err := botRuntime.RestoreMoods(ctx); err != nil {
+		log.Printf("mood restore failed: %v", err)
+	}
 	eventHub := webui.NewEventHub()
 	// 主人在聊天里让机器人换模型、改屏蔽名单，改的是 WebUI 这同一份机器人配置。
 	// 页面只在自己发过写请求后才重新拉配置，所以不播这一条，开着的控制台会一直

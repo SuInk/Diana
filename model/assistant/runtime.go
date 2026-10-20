@@ -411,6 +411,7 @@ type Runtime struct {
 	groupStyles      groupStyleState
 	likelyAI         likelyAIState
 	moodMu           sync.Mutex
+	moodPersistMu    sync.Mutex
 	moods            map[string]*moodState
 	pokeMu           sync.Mutex
 	pokeLastReply    map[string]time.Time

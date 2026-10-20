@@ -4,7 +4,10 @@
 package assistant
 
 import (
+	"context"
+	"math"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -84,5 +87,55 @@ func TestMoodToneForConfigGates(t *testing.T) {
 	}
 	if tone := off.moodToneForConfig(off.ProfileConfig(""), "bot"); tone != "" {
 		t.Fatalf("disabled tone = %q", tone)
+	}
+}
+
+type moodMemoryStore struct {
+	normFallbackStore
+	mu     sync.Mutex
+	states map[string]MoodSnapshot
+	saved  chan struct{}
+}
+
+func (s *moodMemoryStore) SaveMoodStates(_ context.Context, states map[string]MoodSnapshot) error {
+	s.mu.Lock()
+	s.states = states
+	s.mu.Unlock()
+	s.saved <- struct{}{}
+	return nil
+}
+
+func (s *moodMemoryStore) LoadMoodStates(context.Context) (map[string]MoodSnapshot, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.states, nil
+}
+
+// 被骂掉出开心线后重启，心情要接着上次的分数回落，而不是立刻满血。
+func TestMoodSurvivesRestart(t *testing.T) {
+	store := &moodMemoryStore{saved: make(chan struct{}, 8)}
+	cfg := BotConfig{ID: "bot", MoodEnabled: boolPointer(true)}
+	before := NewRuntime(cfg, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	before.SetMessageHistoryStore(store)
+	now := time.Now()
+	before.bumpMood("bot", -2, now)
+	<-store.saved
+	before.bumpMood("bot", -1, now)
+	<-store.saved
+	want := before.moodScore("bot", now)
+	if want >= moodHappyThreshold {
+		t.Fatalf("setup should drop below the happy line, got %v", want)
+	}
+
+	after := NewRuntime(cfg, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	after.SetMessageHistoryStore(store)
+	if err := after.RestoreMoods(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := after.moodScore("bot", now); math.Abs(got-want) > 1e-9 {
+		t.Fatalf("restored mood = %v, want %v", got, want)
+	}
+	if got := after.moodScore("bot", now.Add(moodHalfLife)); math.Abs(got-(moodBaseline+(want-moodBaseline)/2)) > 1e-9 {
+		t.Fatalf("restored mood should keep decaying from its saved time, got %v", got)
 	}
 }

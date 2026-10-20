@@ -4,6 +4,8 @@
 package assistant
 
 import (
+	"context"
+	"log"
 	"math"
 	"strings"
 	"time"
@@ -16,7 +18,9 @@ import (
 // 抵掉，没人惹它就慢慢回到本来的开心。零额外模型开销是这个设计的核心取舍：心情
 // 要是再跑一次模型，等于每条消息付三遍钱。
 //
-// 心情挂在机器人（配置档）上而不是会话上，是短时状态，不落库：重启就回到基线。
+// 心情挂在机器人（配置档）上而不是会话上。以前不落库，重启就回到基线：刚被骂掉出
+// 开心线的机器人一重启立刻满血，主人看到的是「重启前后像换了个人」。现在每次变动
+// 存进 app_state，启动时读回来；衰减按 updatedAt 算，停机这段时间照样在回落。
 //
 // 基线是开心，不是平静。开启心情就是想要一个活泼的机器人，所以默认就注入开心
 // 语气；被骂得多了跌到开心线以下只是暂时不注入（回到人设本来的语气），过一阵自己
@@ -85,6 +89,82 @@ func (r *Runtime) bumpMood(profileID string, delta int, now time.Time) {
 	}
 	state.score = score
 	state.updatedAt = now
+	go func() {
+		defer recoverGoroutinePanic("persist_moods")
+		r.persistMoods()
+	}()
+}
+
+// MoodSnapshot 是一个配置档心情的落库形态。
+type MoodSnapshot struct {
+	Score     float64 `json:"score"`
+	UpdatedAt int64   `json:"updated_at"`
+}
+
+// MoodStateStore 保存全部配置档的心情，整份覆盖。
+type MoodStateStore interface {
+	SaveMoodStates(ctx context.Context, states map[string]MoodSnapshot) error
+	LoadMoodStates(ctx context.Context) (map[string]MoodSnapshot, error)
+}
+
+func (r *Runtime) moodStore() MoodStateStore {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	store, _ := r.messageStore.(MoodStateStore)
+	return store
+}
+
+// persistMoods 在后台写一份当前心情。写之前才取快照，并按 moodPersistMu 排队，
+// 最后一个写进去的总是最新状态，不会被先发后到的旧快照盖掉。
+func (r *Runtime) persistMoods() {
+	store := r.moodStore()
+	if store == nil {
+		return
+	}
+	r.moodPersistMu.Lock()
+	defer r.moodPersistMu.Unlock()
+	r.moodMu.Lock()
+	states := make(map[string]MoodSnapshot, len(r.moods))
+	for profileID, state := range r.moods {
+		states[profileID] = MoodSnapshot{Score: state.score, UpdatedAt: state.updatedAt.UnixNano()}
+	}
+	r.moodMu.Unlock()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := store.SaveMoodStates(ctx, states); err != nil {
+		log.Printf("diana mood persist failed: %v", err)
+	}
+}
+
+// RestoreMoods 启动时把库里的心情读回内存，在开始收消息之前调用。
+func (r *Runtime) RestoreMoods(ctx context.Context) error {
+	if r == nil {
+		return nil
+	}
+	store := r.moodStore()
+	if store == nil {
+		return nil
+	}
+	states, err := store.LoadMoodStates(ctx)
+	if err != nil {
+		return err
+	}
+	r.moodMu.Lock()
+	defer r.moodMu.Unlock()
+	if r.moods == nil {
+		r.moods = map[string]*moodState{}
+	}
+	for profileID, saved := range states {
+		if saved.UpdatedAt <= 0 {
+			continue
+		}
+		if _, ok := r.moods[profileID]; ok {
+			continue
+		}
+		score := math.Max(0, math.Min(moodScoreLimit, saved.Score))
+		r.moods[profileID] = &moodState{score: score, updatedAt: time.Unix(0, saved.UpdatedAt)}
+	}
+	return nil
 }
 
 // moodScore 读出当前衰减后的心情分，测试和语气注入共用。

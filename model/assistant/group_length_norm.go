@@ -4,9 +4,11 @@
 package assistant
 
 import (
+	"context"
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // 一条回复该多长，照这个群里真人一条消息多长来定。
@@ -24,6 +26,9 @@ import (
 // groupLengthNormMinSamples 是算长度要的最少群友消息数：太少时一两条长消息就能把
 // 中位带偏，不如不说。
 const groupLengthNormMinSamples = 15
+
+// groupLengthNormStoreLimit 是内存样本不够时从库里补取的条数。
+const groupLengthNormStoreLimit = 60
 
 // groupLengthNormEnabled 只给离线重放做对照用（见 live_soul_replay_test.go）。
 var groupLengthNormEnabled = true
@@ -52,10 +57,24 @@ func (r *Runtime) groupLengthNormPrompt(event MessageEvent, cfg BotConfig) strin
 	if !groupLengthNormEnabled || event.Kind != EventKindGroup {
 		return ""
 	}
+	session := sessionKey(event)
 	r.mu.RLock()
-	history := append([]MessageEvent(nil), r.history[sessionKey(event)]...)
+	history := append([]MessageEvent(nil), r.history[session]...)
+	store := r.messageStore
 	r.mu.RUnlock()
-	norm, ok := groupMessageNorm(history, firstNonEmpty(strings.TrimSpace(cfg.BotAccount), strings.TrimSpace(event.SelfID)), r.otherBotFilter(event, cfg))
+	botID := firstNonEmpty(strings.TrimSpace(cfg.BotAccount), strings.TrimSpace(event.SelfID))
+	isOtherBot := r.otherBotFilter(event, cfg)
+	norm, ok := groupMessageNorm(history, botID, isOtherBot)
+	if !ok && store != nil {
+		// 内存历史只有重启后回补的那一小段，冷一点的群凑不够样本，这段话就整段
+		// 消失，重启后回复退回机器人自己的腔调。凑不够时从库里取最近的消息补算。
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		stored, err := listContextMessageEvents(ctx, store, session, groupLengthNormStoreLimit)
+		cancel()
+		if err == nil {
+			norm, ok = groupMessageNorm(stored, botID, isOtherBot)
+		}
+	}
 	if !ok {
 		return ""
 	}
