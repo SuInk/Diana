@@ -49,7 +49,7 @@ func TestWebSearchToolFallsBackToTavilyWithoutLeakingKey(t *testing.T) {
 	if authorization != "Bearer "+apiKey {
 		t.Fatalf("Authorization = %q", authorization)
 	}
-	if !strings.Contains(output, `"provider": "tavily"`) || !strings.Contains(output, "example.com/release") {
+	if !strings.Contains(output, `"provider":"tavily"`) || !strings.Contains(output, "example.com/release") {
 		t.Fatalf("output = %s", output)
 	}
 	if strings.Contains(output, apiKey) {

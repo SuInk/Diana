@@ -86,7 +86,7 @@ func TestHTTPSearchEmptyMalformedAndUnavailableFallBack(t *testing.T) {
 				t.Fatal(err)
 			}
 			out, err := tool.Run(context.Background(), map[string]any{"query": "Diana"})
-			if err != nil || !strings.Contains(out, `"fallback_used": true`) || !strings.Contains(out, "example.org/fallback") {
+			if err != nil || !strings.Contains(out, `"fallback_used":true`) || !strings.Contains(out, "example.org/fallback") {
 				t.Fatalf("out=%s err=%v", out, err)
 			}
 		})

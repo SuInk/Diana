@@ -44,7 +44,7 @@ func TestSearchRefStableAndResultsCarryIt(t *testing.T) {
 	}
 	tool := &WebSearchTool{}
 	raw, err := tool.formatExplorationResult(webSearchResult{Status: "ok", Results: []WebSearchHit{{URL: "https://example.com/a"}}})
-	if err != nil || !strings.Contains(raw, `"ref": "`+searchRef("https://example.com/a")+`"`) {
+	if err != nil || !strings.Contains(raw, `"ref":"`+searchRef("https://example.com/a")+`"`) {
 		t.Fatalf("ref missing: %s %v", raw, err)
 	}
 	if got := resolveSearchRefs(browserRenderToolName, map[string]any{"url": "rzzzzzz"}, nil)["url"]; got != "rzzzzzz" {

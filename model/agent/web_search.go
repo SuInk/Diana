@@ -1234,71 +1234,48 @@ func (t *WebSearchTool) formatExplorationResult(result webSearchResult) (string,
 
 	contentRunes := []rune(strings.TrimSpace(result.Content))
 	result.Content = ""
-	best, err := json.MarshalIndent(result, "", "  ")
+	best, err := json.Marshal(result)
 	if err != nil {
 		return "", err
 	}
-	// Preserve a valid JSON envelope. Shorten snippets before dropping hits;
-	// query outcomes stay visible even when result text is truncated.
+	// Preserve a valid JSON envelope. Snippets are the evidence the model
+	// answers from, so diagnostics and duplicated source lists go first;
+	// snippets are only shortened (never below searchSnippetFloor) before
+	// whole hits are dropped. Query outcomes in Searches stay visible longest.
 	for len([]rune(string(best))) > maxChars {
 		result.Truncated = true
-		changed := false
-		for i := range result.Results {
-			if len([]rune(result.Results[i].Snippet)) > 80 {
-				result.Results[i].Snippet = string([]rune(result.Results[i].Snippet)[:79]) + "…"
-				changed = true
-			}
-		}
-		// Discovery hits are useful to the model; duplicated source lists and
-		// provider diagnostics must not consume their output budget first.
-		if !changed && len(result.Providers) > 0 {
+		changed := true
+		switch {
+		case len(result.Results) > 0 && len(result.Sources) > 0:
+			result.Sources = nil
+		case len(result.Providers) > 0:
 			result.Providers = nil
-			changed = true
-		}
-		if !changed && len(result.Attempts) > 0 {
+		case len(result.Attempts) > 0:
 			result.Attempts = nil
-			changed = true
-		}
-		if !changed && len(result.Results) > 0 && len(result.Sources) > 0 {
-			result.Sources = nil
-			changed = true
-		}
-		if !changed && len(result.Results) > 1 {
-			result.Results = result.Results[:len(result.Results)-1]
-			changed = true
-		}
-		if !changed && len(result.Sources) > 1 {
-			result.Sources = result.Sources[:len(result.Sources)-1]
-			changed = true
-		}
-		if !changed && len(result.Queries) > 0 {
+		case len(result.Queries) > 0:
 			result.Queries = nil
-			changed = true
-		}
-		if !changed && len(result.Results) > 0 {
+		case shortenSearchSnippets(result.Results, searchSnippetFloor):
+		case len(result.Results) > 1:
+			result.Results = result.Results[:len(result.Results)-1]
+		case len(result.Sources) > 1:
+			result.Sources = result.Sources[:len(result.Sources)-1]
+		case len(result.Results) > 0:
 			result.Results = nil
-			changed = true
-		}
-		if !changed && len(result.Sources) > 0 {
+		case len(result.Sources) > 0:
 			result.Sources = nil
-			changed = true
-		}
-		if !changed && result.SourceNotice != "" {
+		case result.SourceNotice != "":
 			result.SourceNotice = ""
-			changed = true
-		}
-		if !changed && len(result.Searches) > 0 {
+		case len(result.Searches) > 0:
 			result.Searches = result.Searches[:len(result.Searches)-1]
-			changed = true
-		}
-		if !changed && result.SelectedQuery != "" {
+		case result.SelectedQuery != "":
 			result.SelectedQuery = ""
-			changed = true
+		default:
+			changed = false
 		}
 		if !changed {
 			break
 		}
-		best, err = json.MarshalIndent(result, "", "  ")
+		best, err = json.Marshal(result)
 		if err != nil {
 			return "", err
 		}
@@ -1318,7 +1295,7 @@ func (t *WebSearchTool) formatExplorationResult(result webSearchResult) (string,
 		if mid < len(contentRunes) {
 			result.Content += "\n...truncated..."
 		}
-		candidate, marshalErr := json.MarshalIndent(result, "", "  ")
+		candidate, marshalErr := json.Marshal(result)
 		if marshalErr != nil {
 			return "", marshalErr
 		}
@@ -1330,6 +1307,33 @@ func (t *WebSearchTool) formatExplorationResult(result webSearchResult) (string,
 		}
 	}
 	return string(best), nil
+}
+
+// searchSnippetFloor is the shortest a snippet gets before whole hits are
+// dropped: below roughly this length a snippet degrades to a title and URL
+// breadcrumb and no longer carries checkable detail.
+const searchSnippetFloor = 300
+
+// shortenSearchSnippets trims the longest snippets by a quarter, never below
+// floor, so budget pressure spreads over hits instead of erasing all of them.
+func shortenSearchSnippets(hits []WebSearchHit, floor int) bool {
+	longest := 0
+	for _, hit := range hits {
+		longest = max(longest, len([]rune(hit.Snippet)))
+	}
+	if longest <= floor {
+		return false
+	}
+	limit := max(floor, longest*3/4)
+	changed := false
+	for i := range hits {
+		runes := []rune(hits[i].Snippet)
+		if len(runes) > limit {
+			hits[i].Snippet = string(runes[:limit-1]) + "…"
+			changed = true
+		}
+	}
+	return changed
 }
 
 func mergeWebSearchOutcome(current, next string) string {

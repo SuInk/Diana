@@ -101,7 +101,7 @@ func TestBrowserSearchVerificationFallsBackToCustomAPI(t *testing.T) {
 		t.Fatal(err)
 	}
 	output, err := tool.Run(context.Background(), map[string]any{"query": "release"})
-	if err != nil || !strings.Contains(output, `"provider": "private-api"`) || auth != "Bearer private-test-key" {
+	if err != nil || !strings.Contains(output, `"provider":"private-api"`) || auth != "Bearer private-test-key" {
 		t.Fatalf("output=%s err=%v auth=%s", output, err, auth)
 	}
 }
