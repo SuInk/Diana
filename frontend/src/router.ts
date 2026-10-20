@@ -14,6 +14,7 @@ export type ViewID =
   | "groups"
   | "users"
   | "notebook"
+  | "world-book"
   | "feed"
   | "space"
   | "self-notes"
@@ -60,7 +61,7 @@ export const navItems: NavItem[] = [
   { id: "bot", label: "机器人", hint: "OneBot v11 接入与行为", group: "setup" },
   { id: "plugins", label: "扩展", hint: "插件、Skills、MCP 与浏览器", group: "setup", covers: ["browser"] },
   { id: "groups", label: "群管理", hint: "群管理员自助配置", group: "setup" },
-  { id: "users", label: "档案", hint: "机器人记住的人和事，以及她自己的：零花钱、自述、动态和日记", group: "operate", covers: ["notebook", "space", "self-notes", "feed"] },
+  { id: "users", label: "档案", hint: "机器人记住的人和事，以及她自己的：零花钱、自述、动态和日记", group: "operate", covers: ["notebook", "world-book", "space", "self-notes", "feed"] },
   { id: "tasks", label: "任务", hint: "提醒、周期查询与仓库订阅", group: "operate" },
   { id: "workspace", label: "文件", hint: "Agent 工作区里的文件：按分区浏览、预览、下载与删除", group: "operate" },
   { id: "events", label: "记录", hint: "消息处理、回复决策、运行日志与好感与画像", group: "operate", covers: ["logs", "favorability"] },
@@ -93,7 +94,7 @@ export function navSections(): { group?: NavGroup; items: NavItem[] }[] {
   return sections;
 }
 
-const validViews = new Set<ViewID>(["dashboard", "admin-chat", "events", "tasks", "setup", "provider", "bot", "groups", "users", "notebook", "feed", "space", "self-notes", "plugins", "browser", "workspace", "logs", "favorability", "settings"]);
+const validViews = new Set<ViewID>(["dashboard", "admin-chat", "events", "tasks", "setup", "provider", "bot", "groups", "users", "notebook", "world-book", "feed", "space", "self-notes", "plugins", "browser", "workspace", "logs", "favorability", "settings"]);
 
 // 首页：地址栏里是根路径，也是所有认不出来的地址的落点。
 const homeView: ViewID = "dashboard";

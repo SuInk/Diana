@@ -103,3 +103,12 @@ test("viewPath builds the addresses used in links", async () => {
   assert.equal(router.viewPath("bot"), "/bot");
   assert.equal(router.viewPath("groups", new URLSearchParams({ group: "7" })), "/groups?group=7");
 });
+
+// 世界书从机器人人设页搬进了档案：地址要能直达，侧边栏亮「档案」那一项。
+test("world book has its own address under the archive nav item", async () => {
+  const { router, here } = await load("/world-book");
+  router.setupRouter();
+  assert.equal(router.currentView.value, "world-book");
+  assert.equal(here(), "/world-book");
+  assert.equal(router.navItemForView("world-book"), "users");
+});
