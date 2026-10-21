@@ -1088,3 +1088,52 @@ func TestMusicSettingsDropRetiredKugou(t *testing.T) {
 		t.Fatalf("musicEnabledSourcesFromSettings() = %v", got)
 	}
 }
+
+func TestQQHighQualityFallback(t *testing.T) {
+	for _, tc := range []struct {
+		name, cookie string
+		bitrate      int
+		unavailable  bool
+		want         string
+	}{
+		{"high", "uin=123456", 320000, false, "M800"},
+		{"fallback", "uin=123456", 320000, true, "M800,M500"},
+		{"standard", "uin=123456", 128000, false, "M500"},
+		{"guest", "", 320000, false, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var qualities []string
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var req struct {
+					Req struct {
+						Param struct {
+							Quality  string   `json:"quality"`
+							Filename []string `json:"filename"`
+						} `json:"param"`
+					} `json:"req_0"`
+				}
+				if err := json.Unmarshal([]byte(r.URL.Query().Get("data")), &req); err != nil {
+					t.Error(err)
+				}
+				q := req.Req.Param.Quality
+				qualities = append(qualities, q)
+				if q != "" && (len(req.Req.Param.Filename) != 1 || !strings.HasPrefix(req.Req.Param.Filename[0], q)) {
+					t.Error("quality/filename mismatch")
+				}
+				purl := "song.mp3"
+				if tc.unavailable && q == "M800" {
+					purl = ""
+				}
+				fmt.Fprintf(w, `{"req_0":{"data":{"midurlinfo":[{"purl":%q}]}}}`, purl)
+			}))
+			defer server.Close()
+			source := &qqSource{musicuAPI: server.URL + "?data=%s", streamCDN: "https://cdn.invalid"}
+			cfg := musicConfigFromSettings(SettingValues{musicSourceCookieSetting("qq"): tc.cookie})
+			cfg.Bitrate = tc.bitrate
+			got := source.PlayableURL(context.Background(), &musicFetcher{client: server.Client()}, cfg, "003RMaRI1iFoYd")
+			if got != "https://cdn.invalid/song.mp3" || strings.Join(qualities, ",") != tc.want {
+				t.Fatalf("url=%s qualities=%v", got, qualities)
+			}
+		})
+	}
+}

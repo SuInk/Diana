@@ -23,8 +23,10 @@ type ScreenshotRequest struct {
 	HTML         string
 	Width        int
 	Height       int
-	Executable   string
-	Timeout      time.Duration
+	// DeviceScaleFactor increases pixel density without changing CSS layout (default 1).
+	DeviceScaleFactor float64
+	Executable        string
+	Timeout           time.Duration
 	// VirtualTimeBudget lets scripts and asynchronous SVG/canvas rendering settle before capture.
 	VirtualTimeBudget time.Duration
 }
@@ -56,6 +58,10 @@ func captureHTMLScreenshot(ctx context.Context, req ScreenshotRequest) ([]byte, 
 	if req.Height <= 0 {
 		req.Height = 900
 	}
+	if req.DeviceScaleFactor <= 0 {
+		req.DeviceScaleFactor = 1
+	}
+	req.DeviceScaleFactor = min(req.DeviceScaleFactor, 2)
 	if req.Timeout <= 0 {
 		req.Timeout = defaultScreenshotTimeout
 	}

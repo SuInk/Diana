@@ -109,12 +109,13 @@ func (t *dianaRenderTool) Run(ctx context.Context, input map[string]any) (string
 	}
 	cfg := t.runtime.effectiveConfigForEvent(t.event)
 	request := agent.ScreenshotRequest{
-		HTML:         page,
-		WaitForFonts: len(fontFiles) > 0,
-		FontFiles:    fontFiles,
-		Width:        renderImageWidth,
-		Height:       renderImageMaxHeight,
-		Timeout:      time.Duration(cfg.AgentBrowserTimeoutMS) * time.Millisecond,
+		HTML:              page,
+		WaitForFonts:      len(fontFiles) > 0,
+		FontFiles:         fontFiles,
+		Width:             renderImageWidth,
+		Height:            renderImageMaxHeight,
+		DeviceScaleFactor: 2,
+		Timeout:           time.Duration(cfg.AgentBrowserTimeoutMS) * time.Millisecond,
 	}
 	if format == renderFormatMermaid {
 		request.VirtualTimeBudget = renderMermaidTimeBudget
@@ -145,12 +146,13 @@ func (r *Runtime) renderContentPNG(ctx context.Context, event MessageEvent, form
 	}
 	cfg := r.effectiveConfigForEvent(event)
 	request := agent.ScreenshotRequest{
-		HTML:         page,
-		WaitForFonts: len(fontFiles) > 0,
-		FontFiles:    fontFiles,
-		Width:        renderImageWidth,
-		Height:       renderImageMaxHeight,
-		Timeout:      time.Duration(cfg.AgentBrowserTimeoutMS) * time.Millisecond,
+		HTML:              page,
+		WaitForFonts:      len(fontFiles) > 0,
+		FontFiles:         fontFiles,
+		Width:             renderImageWidth,
+		Height:            renderImageMaxHeight,
+		DeviceScaleFactor: 2,
+		Timeout:           time.Duration(cfg.AgentBrowserTimeoutMS) * time.Millisecond,
 	}
 	if format == renderFormatMermaid {
 		request.VirtualTimeBudget = renderMermaidTimeBudget

@@ -77,3 +77,45 @@ func TestRelationRasterRequiresShapingForComplexScripts(t *testing.T) {
 		}
 	}
 }
+
+func TestRenderMarkdownHighDensityIntegration(t *testing.T) {
+	if os.Getenv("DIANA_RENDER_FONTS_INTEGRATION") != "1" {
+		t.Skip("requires installed browser and fonts")
+	}
+	content := "## 清晰度测试\n\n|项目 / System|核心定位 / Positioning|处理模型 / Processing Model|状态与一致性 / State and Consistency|主要优势 / Strengths|适用场景 / Best Fit|\n|---|---|---|---|---|---|\n|中文小字|边缘清晰，保持排版|`fmt.Println(42)`|清晰文字与细线|0123456789|长表头自动换行|\n\n> 中文、数字 0123456789 与细线表格。"
+	if path := os.Getenv("DIANA_RENDER_REPLAY_CONTENT"); path != "" {
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		content = string(raw)
+	}
+	page, err := buildRenderPage(renderFormatMarkdown, content, "Markdown 高清渲染")
+	if err != nil {
+		t.Fatal(err)
+	}
+	page, files, err := prepareRenderFontHTML(context.Background(), page)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := agent.CaptureHTMLScreenshot(context.Background(), agent.ScreenshotRequest{HTML: page, FontFiles: files, Width: renderImageWidth, Height: renderImageMaxHeight, DeviceScaleFactor: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	img := decodePNG(t, raw)
+	if img.Bounds().Dx() != renderImageWidth*2 || img.Bounds().Dy() != renderImageMaxHeight*2 {
+		t.Fatalf("unexpected bounds %v", img.Bounds())
+	}
+	if inkInHeader(img) < 100 {
+		t.Fatal("empty rendering")
+	}
+	bounds := img.Bounds()
+	if right := lastContentColumn(img, bounds, img.At(0, 0)); right >= bounds.Max.X-24 {
+		t.Fatalf("table reaches screenshot edge: right=%d width=%d", right, bounds.Max.X)
+	}
+	if output := os.Getenv("DIANA_CJK_FONT_TEST_OUTPUT"); output != "" {
+		if err := os.WriteFile(filepath.Join(output, "markdown-hidpi.png"), trimRenderScreenshot(raw), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+}

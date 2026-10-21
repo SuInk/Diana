@@ -90,7 +90,7 @@ func captureFontReadyScreenshot(ctx context.Context, req ScreenshotRequest) ([]b
 			diagnostics.Write([]byte(event.Entry.Text + "\n"))
 		}
 	})
-	actions := []chromedp.Action{cdplog.Enable(), network.Enable(), emulation.SetDeviceMetricsOverride(int64(req.Width), int64(req.Height), 1, false), chromedp.Navigate(fileURL)}
+	actions := []chromedp.Action{cdplog.Enable(), network.Enable(), emulation.SetDeviceMetricsOverride(int64(req.Width), int64(req.Height), req.DeviceScaleFactor, false), chromedp.Navigate(fileURL)}
 	if req.VirtualTimeBudget > 0 {
 		actions = append(actions, chromedp.Sleep(min(req.VirtualTimeBudget, 2*time.Second)))
 	}

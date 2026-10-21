@@ -144,7 +144,11 @@ func qqUINFromCookie(raw string) string {
 	return "0"
 }
 
-func qqVkeyRequest(songID, rawCookie string) map[string]any {
+func qqVkeyRequest(songID, rawCookie string, qualities ...string) map[string]any {
+	quality := "M500"
+	if len(qualities) > 0 && qualities[0] == "M800" {
+		quality = "M800"
+	}
 	uin := qqUINFromCookie(rawCookie)
 	if uin == "0" {
 		// 游客请求保留已经验证过的旧接口；新接口在无登录态时更容易直接
@@ -160,12 +164,12 @@ func qqVkeyRequest(songID, rawCookie string) map[string]any {
 			"guid":           qqGuid(songID),
 			"songmid":        []string{songID},
 			"songtype":       []int{0},
-			"filename":       []string{"M500" + songID + songID + ".mp3"},
+			"filename":       []string{quality + songID + songID + ".mp3"},
 			"uin":            uin,
 			"loginflag":      1,
 			"platform":       "23",
 			"h5queryversion": 1,
-			"quality":        "M500",
+			"quality":        quality,
 		})
 }
 
@@ -323,26 +327,34 @@ func (s *qqSource) PlayableURL(ctx context.Context, f *musicFetcher, cfg musicCo
 			}
 		}
 	}
-	var payload qqVkeyResponse
-	if !s.musicu(ctx, f, cfg, qqVkeyRequest(songID, cfg.sourceOptions(s.Key()).Cookie), &payload) {
-		return ""
+	cookie := cfg.sourceOptions(s.Key()).Cookie
+	qualities := []string{"M500"}
+	// 登录态优先取 320k；无权限或缺少该音质时回退到原有请求。
+	if qqUINFromCookie(cookie) != "0" && (cfg.Bitrate == 0 || cfg.Bitrate >= 320000) {
+		qualities = []string{"M800", "M500"}
 	}
-	for _, info := range payload.Req0.Data.MidURLInfo {
-		purl := strings.TrimSpace(info.Purl)
-		if purl == "" {
+	for _, quality := range qualities {
+		var payload qqVkeyResponse
+		if !s.musicu(ctx, f, cfg, qqVkeyRequest(songID, cookie, quality), &payload) {
 			continue
 		}
-		if strings.HasPrefix(purl, "http://") || strings.HasPrefix(purl, "https://") {
-			return purl
-		}
-		base := s.streamCDN
-		for _, sip := range payload.Req0.Data.Sip {
-			if sip = strings.TrimSpace(sip); sip != "" {
-				base = sip
-				break
+		for _, info := range payload.Req0.Data.MidURLInfo {
+			purl := strings.TrimSpace(info.Purl)
+			if purl == "" {
+				continue
 			}
+			if strings.HasPrefix(purl, "http://") || strings.HasPrefix(purl, "https://") {
+				return purl
+			}
+			base := s.streamCDN
+			for _, sip := range payload.Req0.Data.Sip {
+				if sip = strings.TrimSpace(sip); sip != "" {
+					base = sip
+					break
+				}
+			}
+			return strings.TrimRight(base, "/") + "/" + strings.TrimLeft(purl, "/")
 		}
-		return strings.TrimRight(base, "/") + "/" + strings.TrimLeft(purl, "/")
 	}
 	return ""
 }

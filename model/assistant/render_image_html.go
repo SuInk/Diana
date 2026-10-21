@@ -211,9 +211,9 @@ h1 { font-size: 22px; } h2 { font-size: 19px; } h3 { font-size: 17px; } h4 { fon
 p { margin: 0 0 10px; }
 ul, ol { margin: 0 0 10px; padding-left: 22px; }
 li { margin: 3px 0; }
-table { border-collapse: collapse; margin: 6px 0 14px; }
+table { border-collapse: collapse; max-width: 100%; margin: 6px 0 14px; overflow-wrap: anywhere; }
 th, td { border: 1px solid #d8dde3; padding: 7px 13px; text-align: left; vertical-align: top; }
-th { background: #f3f5f7; font-weight: 600; white-space: nowrap; }
+th { background: #f3f5f7; font-weight: 600; }
 tbody tr:nth-child(even) { background: #fafbfc; }
 code { background: #f3f5f7; padding: 1px 5px; border-radius: 4px; font-size: 13px;
        font-family: "SFMono-Regular",Menlo,Consolas,"Liberation Mono",monospace; }

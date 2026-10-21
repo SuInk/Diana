@@ -42,7 +42,7 @@ func TestMusicTelegramConvertsToMP3NotSilk(t *testing.T) {
 	calls := 0
 	plugin.commandRunner = func(_ context.Context, command string, args ...string) ([]byte, error) {
 		calls++
-		if !strings.Contains(strings.Join(args, " "), "libmp3lame") || !strings.Contains(strings.Join(args, " "), "title=歌名") || !strings.Contains(strings.Join(args, " "), "artist=歌手") || command == "silk-encoder" {
+		if !strings.Contains(strings.Join(args, " "), "libmp3lame -q:a 0") || !strings.Contains(strings.Join(args, " "), "title=歌名") || !strings.Contains(strings.Join(args, " "), "artist=歌手") || command == "silk-encoder" {
 			t.Fatal("Telegram used wrong encoder")
 		}
 		return nil, os.WriteFile(args[len(args)-1], []byte("ID3audio"), 0600)
@@ -196,5 +196,41 @@ func TestMusicPluginManagerBindsPlatformPerTool(t *testing.T) {
 		if !found {
 			t.Fatalf("music tool unavailable on %s", platform)
 		}
+	}
+}
+
+func TestMusicSilkEncodingPreservesWidebandAtHigherBitrate(t *testing.T) {
+	plugin := NewMusicPlugin(nil)
+	cfg := musicConfigFromSettings(SettingValues{musicSettingSilkEncoder: "silk-encoder"})
+	path := filepath.Join(t.TempDir(), "music.mp3")
+	if err := os.WriteFile(path, []byte("audio"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	calls := 0
+	plugin.commandRunner = func(_ context.Context, name string, args ...string) ([]byte, error) {
+		calls++
+		joined := strings.Join(args, " ")
+		if name == cfg.FFmpegPath {
+			if !strings.Contains(joined, "-ar 24000 -ac 1 -f s16le") {
+				t.Fatalf("PCM arguments: %s", joined)
+			}
+			return nil, os.WriteFile(path+".pcm", []byte("pcm"), 0600)
+		}
+		if name != "silk-encoder" || !strings.Contains(joined, "-rate 40000") || !strings.Contains(joined, "-Fs_maxInternal 24000") || !strings.Contains(joined, "-complexity 2") {
+			t.Fatalf("Silk arguments: %s", joined)
+		}
+		return nil, os.WriteFile(path+".silk", []byte("\x02#!SILK_V3encoded"), 0600)
+	}
+	got, err := plugin.encodeSilkIfConfigured(context.Background(), cfg, path)
+	if err != nil || got != path+".silk" || calls != 2 {
+		t.Fatalf("got %s, %v calls=%d", got, err, calls)
+	}
+	if _, err := os.Stat(path + ".pcm"); !os.IsNotExist(err) {
+		t.Fatal("temporary PCM not removed")
+	}
+	cfg.SilkEncoder = ""
+	got, err = plugin.encodeSilkIfConfigured(context.Background(), cfg, path)
+	if err != nil || got != path || calls != 2 {
+		t.Fatal("unconfigured encoder must preserve source")
 	}
 }

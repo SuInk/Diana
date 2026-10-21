@@ -52,7 +52,7 @@ const (
 	defaultMusicMaxMB       = 20
 	defaultMusicTimeout     = 45
 	musicMediaTTL           = 10 * time.Minute
-	musicSilkBitrate        = 25000
+	musicSilkBitrate        = 40000
 )
 
 type MusicPlugin struct {
@@ -167,7 +167,7 @@ func (p *MusicPlugin) Manifest() PluginManifest {
 	return PluginManifest{
 		ID:          musicPluginID,
 		Name:        "音乐增强",
-		Version:     "0.3.0",
+		Version:     "0.3.1",
 		Description: "支持网易云和 QQ 音乐点歌及链接解析。OneBot QQ 发送语音，Telegram 上传歌曲并使用原生音乐播放器，其他平台发送歌曲来源链接。",
 		Official:    true,
 		BuiltIn:     true,
@@ -238,7 +238,7 @@ func (p *MusicPlugin) Manifest() PluginManifest {
 					{Value: "192000", Label: "较高 192k"},
 					{Value: "320000", Label: "极高 320k"},
 				},
-				Description: "只对网易云的自建 API 生效；其余情况由平台自己决定码率。",
+				Description: "用于网易云自建 API；QQ 音乐官方接口有登录态且选择 320k 时优先获取高品质，不可用时回退标准音质。其余情况由音源决定。",
 			},
 			{
 				Key:         musicSettingMaxDuration,
@@ -469,7 +469,7 @@ func (p *MusicPlugin) prepareSongVoice(ctx context.Context, cfg musicConfig, ite
 	}
 	if len(platforms) > 0 && NormalizePlatformID(platforms[0]) == PlatformTelegram {
 		encoded := path + ".telegram.mp3"
-		if _, err := p.runCommand(ctx, cfg.FFmpegPath, "-hide_banner", "-loglevel", "error", "-y", "-i", path, "-vn", "-codec:a", "libmp3lame", "-q:a", "3", "-metadata", "title="+item.Name, "-metadata", "artist="+item.Artists, encoded); err != nil {
+		if _, err := p.runCommand(ctx, cfg.FFmpegPath, "-hide_banner", "-loglevel", "error", "-y", "-i", path, "-vn", "-codec:a", "libmp3lame", "-q:a", "0", "-metadata", "title="+item.Name, "-metadata", "artist="+item.Artists, encoded); err != nil {
 			cleanupLocalMediaFile(path)
 			cleanupLocalMediaFile(encoded)
 			return "", fmt.Errorf("转换 Telegram 音频失败，请检查 ffmpeg")
