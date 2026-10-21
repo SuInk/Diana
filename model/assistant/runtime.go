@@ -383,6 +383,7 @@ type Runtime struct {
 	// relayPairs 是「消息互通」的链路表，跟着机器人配置集一起下发。
 	relayPairs []MessageRelayPair
 	channel    Channel
+	repeater   *randomRepeater
 	plugins    *PluginManager
 	llmStore   LLMProfileStore
 	// llmDowngrades 落盘「哪个端点的哪个模型拒过哪些请求字段」，重启后
@@ -838,6 +839,7 @@ func NewRuntime(cfg BotConfig, channel Channel, plugins *PluginManager, llmStore
 		profileOrder:            []string{cfg.ID},
 		channel:                 channel,
 		plugins:                 plugins,
+		repeater:                newRandomRepeater(),
 		llmStore:                llmStore,
 		configSaver:             configSaver,
 		llmFactory:              llmFactory,
@@ -1714,6 +1716,9 @@ func (r *Runtime) effectiveConfigForEventLocked(event MessageEvent) BotConfig {
 	}
 	overrideIfSet(&cfg.ProactiveReplyChance, groupCfg.ProactiveReplyChance)
 	overrideIfSet(&cfg.ProactiveReplyThreshold, groupCfg.ProactiveReplyThreshold)
+	if groupCfg.RandomRepeat != nil {
+		cfg.RandomRepeat = copyRandomRepeat(groupCfg.RandomRepeat)
+	}
 	if groupCfg.ChatInEnabled != nil {
 		cfg.ChatInEnabled = copyBoolPointer(groupCfg.ChatInEnabled)
 	}
@@ -1902,6 +1907,7 @@ func (r *Runtime) routeMessageEvent(ctx context.Context, event MessageEvent) (Me
 	if r.plugins != nil {
 		event = r.plugins.ObserveEventWithOverrides(ctx, event, r.pluginOverridesForEvent(event))
 	}
+	r.observeRandomRepeat(ctx, event)
 	// 消息互通发生在回复判断之前：即使 planner 最终选择不回复，原消息也应被
 	// 搬到对端。转发走独立短超时，不把目标平台的网络延迟叠到本轮回复上。
 	if relayEvent := event; len(r.messageRelays()) > 0 {
@@ -2077,6 +2083,11 @@ func (r *Runtime) routeMessageEvent(ctx context.Context, event MessageEvent) (Me
 		r.enqueueEventMemory(event, memoryEventText(event))
 	}
 	handled := r.shouldHandle(event, text)
+	if !handled {
+		if outcome := r.tryRandomRepeat(ctx, event); outcome != "" {
+			return finishWithoutReply(outcome)
+		}
+	}
 	successOutcome := "replied"
 	if handled {
 		// Clear batches left by a runtime started before immediate proactive routing was enabled.

@@ -130,6 +130,7 @@ type dianaBotConfigSnapshot struct {
 	SemanticSearchEnabled        bool                      `json:"semantic_search_enabled"`
 	ProactiveReplyChance         float64                   `json:"proactive_reply_chance"`
 	ProactiveReplyThreshold      float64                   `json:"proactive_reply_threshold"`
+	RandomRepeat                 *RandomRepeatConfig       `json:"random_repeat"`
 	ChatInEnabled                bool                      `json:"chat_in_enabled"`
 	ChatInLevel                  string                    `json:"chat_in_level"`
 	Participation                *ParticipationPreferences `json:"participation"`
@@ -379,6 +380,7 @@ func dianaBotConfigFromConfig(cfg BotConfig) dianaBotConfigSnapshot {
 		SemanticSearchEnabled:           boolValue(cfg.SemanticSearchEnabled, false),
 		ProactiveReplyChance:            cfg.ProactiveReplyChance,
 		ProactiveReplyThreshold:         cfg.ProactiveReplyThreshold,
+		RandomRepeat:                    copyRandomRepeat(cfg.RandomRepeat),
 		ChatInEnabled:                   chatIn.Enabled,
 		ChatInLevel:                     string(chatIn.Level),
 		Participation:                   chatIn.Participation,

@@ -917,6 +917,7 @@ type BotConfig struct {
 	SemanticSearchEnabled      *bool                     `json:"semantic_search_enabled,omitempty"`
 	ProactiveReplyChance       float64                   `json:"proactive_reply_chance,omitempty"`
 	ProactiveReplyThreshold    float64                   `json:"proactive_reply_threshold,omitempty"`
+	RandomRepeat               *RandomRepeatConfig       `json:"random_repeat,omitempty"`
 	ChatInEnabled              *bool                     `json:"chat_in_enabled,omitempty"`
 	ChatInLevel                ChatInLevel               `json:"chat_in_level,omitempty"`
 	Participation              *ParticipationPreferences `json:"participation,omitempty"`
@@ -1266,6 +1267,7 @@ type GroupConfig struct {
 	ForwardReplyChunkThreshold   *int                      `json:"forward_reply_chunk_threshold,omitempty"`
 	ProactiveReplyChance         float64                   `json:"proactive_reply_chance,omitempty"`
 	ProactiveReplyThreshold      float64                   `json:"proactive_reply_threshold,omitempty"`
+	RandomRepeat                 *RandomRepeatConfig       `json:"random_repeat,omitempty"`
 	ChatInEnabled                *bool                     `json:"chat_in_enabled,omitempty"`
 	ChatInLevel                  ChatInLevel               `json:"chat_in_level,omitempty"`
 	Participation                *ParticipationPreferences `json:"participation,omitempty"`
@@ -1529,6 +1531,7 @@ type ConfigPayload struct {
 	SemanticSearchEnabled           *bool                     `json:"semantic_search_enabled,omitempty"`
 	ProactiveReplyChance            float64                   `json:"proactive_reply_chance,omitempty"`
 	ProactiveReplyThreshold         float64                   `json:"proactive_reply_threshold,omitempty"`
+	RandomRepeat                    *RandomRepeatConfig       `json:"random_repeat,omitempty"`
 	ChatInEnabled                   *bool                     `json:"chat_in_enabled,omitempty"`
 	ChatInLevel                     ChatInLevel               `json:"chat_in_level,omitempty"`
 	Participation                   *ParticipationPreferences `json:"participation,omitempty"`
@@ -1781,6 +1784,7 @@ func (cfg GroupConfig) WithDefaults(groupID string, base BotConfig) GroupConfig 
 	cfg.ForwardReplyEnabled = copyBoolPointer(cfg.ForwardReplyEnabled)
 	cfg.ProactiveReplyChance = max(0, min(1, cfg.ProactiveReplyChance))
 	cfg.ProactiveReplyThreshold = max(0, min(1, cfg.ProactiveReplyThreshold))
+	cfg.RandomRepeat = copyRandomRepeat(cfg.RandomRepeat)
 	cfg.ChatInEnabled = copyBoolPointer(cfg.ChatInEnabled)
 	cfg.SocialReplyEnabled = copyBoolPointer(cfg.SocialReplyEnabled)
 	cfg.ChatInLevel = cfg.ChatInLevel.Normalized()
@@ -2291,6 +2295,7 @@ func (cfg BotConfig) WithDefaults() BotConfig {
 	cfg.SelfReference = ""
 	cfg.SentenceEnders = ""
 	cfg.PromptOverrides = normalizePromptOverrides(cfg.PromptOverrides)
+	cfg.RandomRepeat = copyRandomRepeat(cfg.RandomRepeat)
 	if cfg.ChatInEnabled == nil {
 		cfg.ChatInEnabled = defaults.ChatInEnabled
 	}
@@ -2902,6 +2907,7 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		SemanticSearchEnabled:             copyBoolPointer(cfg.SemanticSearchEnabled),
 		ProactiveReplyChance:              cfg.ProactiveReplyChance,
 		ProactiveReplyThreshold:           cfg.ProactiveReplyThreshold,
+		RandomRepeat:                      copyRandomRepeat(cfg.RandomRepeat),
 		ChatInEnabled:                     copyBoolPointer(cfg.ChatInEnabled),
 		ChatInLevel:                       cfg.ChatInLevel,
 		Participation:                     copyParticipation(cfg.Participation),
@@ -3162,6 +3168,7 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		SemanticSearchEnabled:           copyBoolPointer(payload.SemanticSearchEnabled),
 		ProactiveReplyChance:            payload.ProactiveReplyChance,
 		ProactiveReplyThreshold:         payload.ProactiveReplyThreshold,
+		RandomRepeat:                    copyRandomRepeat(payload.RandomRepeat),
 		ChatInEnabled:                   copyBoolPointer(payload.ChatInEnabled),
 		ChatInLevel:                     payload.ChatInLevel,
 		Participation:                   copyParticipation(payload.Participation),

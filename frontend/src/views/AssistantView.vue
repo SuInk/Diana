@@ -932,6 +932,11 @@
               </div>
             </div>
           </section>
+          <section class="card">
+            <div class="card-header"><div><h2>随机复读</h2><span class="card-sub">群友复读时偶尔跟一句</span></div></div>
+            <div class="card-body"><RandomRepeatControls v-model="form.random_repeat" /></div>
+          </section>
+
 
           <!-- 回复怎么发：长短、分条、换行、发送前过滤、打字节奏、合并转发、引用和 @。 -->
           <section class="card">
@@ -2256,6 +2261,7 @@ import AppSelect, { type AppSelectOption } from "../components/AppSelect.vue";
 import AppNumberInput from "../components/AppNumberInput.vue";
 import AppSwitch from "../components/AppSwitch.vue";
 import AppDisclosure from "../components/AppDisclosure.vue";
+import RandomRepeatControls from "../components/RandomRepeatControls.vue";
 import ParticipationControls from "../components/ParticipationControls.vue";
 import BotMarkerList from "../components/BotMarkerList.vue";
 import AgentResidencyPanel from "../components/AgentResidencyPanel.vue";

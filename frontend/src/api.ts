@@ -1,3 +1,4 @@
+import type { RandomRepeatConfig } from "./lib/random-repeat";
 // Copyright (c) 2025-now SuInk.
 // Licensed under the Limited Redistribution License in the repository root.
 
@@ -387,6 +388,7 @@ export interface BotProfileConfig extends SendRetrySettings {
   /** 主动回复最低置信度，范围 0~1，默认 0.9。 */
   proactive_reply_threshold?: number;
   /** 闲聊插话总开关。 */
+  random_repeat?: RandomRepeatConfig;
   chat_in_enabled?: boolean;
   /** 回复欲望档位。 */
   chat_in_level?: "off" | "low" | "medium" | "high" | "max";
@@ -795,6 +797,7 @@ export interface BotGroupConfig extends SendRetrySettings {
   proactive_reply_chance?: number;
   proactive_reply_threshold?: number;
   /** 本群闲聊插话总开关；不设表示跟随机器人。 */
+  random_repeat?: RandomRepeatConfig;
   chat_in_enabled?: boolean;
   /** 本群回复欲望；不设表示跟随机器人。 */
   chat_in_level?: "off" | "low" | "medium" | "high" | "max";
