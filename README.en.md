@@ -53,6 +53,12 @@ curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/docker.sh 
 
 The native installer needs no administrator privileges. **To upgrade, rerun the same command**; if you installed with sudo before, the script picks up that installation automatically. More install options are in the [deployment guide](https://suink.github.io/Diana/en/deploy.html).
 
+**Or install with a prompt.** Copy this into an AI assistant that can run commands on the target machine:
+
+```text
+Help me install the latest stable release of Diana on this machine. First read the README at https://github.com/SuInk/Diana and scripts/install.sh (Linux/macOS) or scripts/install.ps1 (Windows) in that repository. Detect the OS and architecture, then use the official one-click installer. Default to current-user permissions and listen only on 127.0.0.1. If Diana is already installed, preserve its configuration and data and follow the official upgrade procedure. Run diana doctor afterward to check its health, tell me the console URL, administrator username, and password initially generated during installation, and remind me to store them securely. For an existing installation with no newly generated password, explain that the original password still applies and do not reset it automatically. Leave model API keys and bot credentials for me to enter in the console.
+```
+
 **② Log in to the console.** Open `http://127.0.0.1:18080`. The admin username and password are in the terminal output and shown only once, so save them right away (for Docker, check `docker logs diana`). The password is stored only as a hash in the database, not in `config.yaml`; if you forget it, reset it with `diana passwd` (see below).
 
 **③ Configure.** Three things in the console:

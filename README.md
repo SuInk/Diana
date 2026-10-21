@@ -53,6 +53,12 @@ curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/docker.sh 
 
 原生安装不需要管理员权限。**升级也是重跑同一条命令**；以前用 sudo 装过的，脚本会自动接着用原来的安装。更多安装方式见[部署文档](https://suink.github.io/Diana/deploy.html)。
 
+**或者用 Prompt 安装。** 把下面这段话复制给能在目标机器执行命令的 AI 助手：
+
+```text
+请帮我在当前机器安装 Diana 最新稳定版。先阅读 https://github.com/SuInk/Diana 的 README 和仓库里的 scripts/install.sh（Linux/macOS）或 scripts/install.ps1（Windows），识别系统与架构，使用官方一键安装脚本安装。默认使用当前用户权限、仅监听 127.0.0.1；如果已有安装，保留现有配置和数据并按官方流程升级。完成后运行 diana doctor 检查健康状态，告诉我控制台地址、管理员账号和安装时首次生成的密码，并提醒我妥善保存；如果是已有安装且没有生成新密码，说明继续使用原密码，不要自动重置。需要我提供的模型 API Key 和机器人凭据，等我在控制台填写。
+```
+
 **② 登录控制台。** 浏览器打开 `http://127.0.0.1:18080`（从别的设备访问就换成这台机器的 IP）。管理员账号密码在安装结束时显示在终端里，**只显示一次，请当场保存**；Docker 可用 `docker logs diana` 查看。忘了密码运行 `diana passwd` 重置。
 
 **③ 配置。** 控制台里依次完成三件事：
