@@ -263,3 +263,41 @@ test("unsupported media has no smart option and smart retains explicit standby",
   assert.doesNotMatch(source, /model-purpose-search|current\.web_search(?!_override)/);
   assert.match(source, /const payload[\s\S]*?\.\.\.current|const saved[\s\S]*?\.\.\.current|\.\.\.current,/);
 });
+
+test("model route touch dragging retains both handle binding and row hit targets", () => {
+  const row = source.match(/<tr\s+v-for="item in filteredModelRoutes\(role.key\)"[\s\S]*?<\/tr>/)?.[0];
+  assert.ok(row);
+  assert.ok(row.includes(':data-route-slot="`${role.key}:${item.index}`"'));
+  assert.match(row, /@pointerdown="\(event\) => onRouteHandlePointerDown\(role.key, item.index, event\)"/);
+});
+
+test("touch route dragging commits on release and cancels without changing order", () => {
+  const context = editorContext({ chat: { model: "first", fallbacks: [{ model: "second" }] } });
+  const listeners = new Map();
+  const handle = {
+    setPointerCapture() {},
+    addEventListener: (type, listener) => listeners.set(type, listener),
+    removeEventListener: type => listeners.delete(type)
+  };
+  Object.assign(context, {
+    routeDrag: { value: null },
+    document: { elementFromPoint: () => ({ closest: () => ({ dataset: { routeSlot: "chat:1" } }) }) }
+  });
+  for (const name of ["moveRoleRoute", "routeSlotAt", "onRouteHandlePointerDown"]) {
+    const fn = ast.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === name);
+    vm.runInContext(ts.transpileModule(fn.getText(ast), { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, context);
+  }
+  const down = () => context.onRouteHandlePointerDown("chat", 0, { pointerType: "touch", isPrimary: true, pointerId: 1, currentTarget: handle });
+  down();
+  listeners.get("pointermove")({ clientX: 10, clientY: 20 });
+  listeners.get("pointerup")();
+  assert.equal(context.roleForm.value.chat.model, "second");
+  assert.equal(context.roleForm.value.chat.fallbacks[0].model, "first");
+  assert.equal(listeners.size, 0);
+  down();
+  listeners.get("pointermove")({ clientX: 10, clientY: 20 });
+  listeners.get("pointercancel")();
+  assert.equal(context.roleForm.value.chat.model, "second");
+  assert.equal(context.routeDrag.value, null);
+  assert.equal(listeners.size, 0);
+});

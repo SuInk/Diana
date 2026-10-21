@@ -687,12 +687,13 @@
                             v-for="item in filteredModelRoutes(role.key)"
                             :key="`${role.key}-${item.index}`"
                             class="model-route-list-row"
+                            :data-route-slot="`${role.key}:${item.index}`"
                             :class="{ ...routeDragClasses(role.key, item.index), 'is-disabled': item.route.disabled }"
                             @dragover="(event) => onRouteDragOver(role.key, item.index, event)"
                             @drop="(event) => onRouteDrop(role.key, item.index, event)"
                           >
                             <td class="model-route-order-cell">
-                              <button v-if="routeReorderable(role.key)" class="model-route-handle" type="button" draggable="true" :data-route-handle="`${role.key}-${item.index}`" :title="modelRouteSearch || modelRouteStatusFilter !== 'all' ? '筛选时无法调整顺序，请先清除筛选' : '拖动或按上下方向键调整顺序'" :disabled="!!modelRouteSearch || modelRouteStatusFilter !== 'all'" :aria-label="`${role.label}：模型 ${item.index + 1}，按上下方向键调整顺序`" @dragstart="(event) => { if (modelRouteSearch || modelRouteStatusFilter !== 'all') event.preventDefault(); else onRouteDragStart(role.key, item.index, event); }" @dragend="onRouteDragEnd" @keydown="(event) => onRouteHandleKeydown(role.key, item.index, event)"><GripVertical :size="14" aria-hidden="true" /><span>{{ item.index + 1 }}</span></button>
+                              <button v-if="routeReorderable(role.key)" class="model-route-handle" type="button" draggable="true" :data-route-handle="`${role.key}-${item.index}`" :title="modelRouteSearch || modelRouteStatusFilter !== 'all' ? '筛选时无法调整顺序，请先清除筛选' : '拖动或按上下方向键调整顺序'" :disabled="!!modelRouteSearch || modelRouteStatusFilter !== 'all'" :aria-label="`${role.label}：模型 ${item.index + 1}，按上下方向键调整顺序`" @dragstart="(event) => { if (modelRouteSearch || modelRouteStatusFilter !== 'all') event.preventDefault(); else onRouteDragStart(role.key, item.index, event); }" @dragend="onRouteDragEnd" @pointerdown="(event) => onRouteHandlePointerDown(role.key, item.index, event)" @keydown="(event) => onRouteHandleKeydown(role.key, item.index, event)"><GripVertical :size="14" aria-hidden="true" /><span>{{ item.index + 1 }}</span></button>
                               <span v-else class="model-route-order-number">{{ item.index + 1 }}</span>
                             </td>
                             <td class="model-route-identity">
