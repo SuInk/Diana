@@ -19,7 +19,7 @@ export const resolverCredentialKeys = [...resolverPlatforms.map((item) => item.k
 export type ResolverCredentialKey = typeof resolverCredentialKeys[number];
 
 const mediaKeys = new Set([
-  "follow_up_comment", "download_media", "merged_forward", "max_video_mb",
+  "translate", "follow_up_comment", "download_media", "merged_forward", "max_video_mb",
   "max_video_duration_seconds", "max_images", "platform_level_rules", "max_video_height",
   "fetch_title", "max_links", "summary_max_runes",
 ]);

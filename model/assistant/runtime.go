@@ -3965,6 +3965,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			Channel:                 r.channel,
 			LLMStore:                r.llmStore,
 			LLMModelLister:          r.llmModelLister(),
+			TranslateResolver:       r.translateResolverText,
 			AppLogs:                 r.appLogWriter(),
 			BuildInfo:               r.currentBuildInfo(),
 		}
@@ -4709,13 +4710,14 @@ func (r *Runtime) replyWithResolverOnly(ctx context.Context, event MessageEvent,
 	// 丢了就永久没有了。后台插件任务用 rootCtx 发送，同样不带这道闸门。
 	deliveryCtx := withoutReplyTriggerGate(ctx)
 	resp, err := r.plugins.RunOneWithGroupOverrides(deliveryCtx, resolverPluginID, PluginRequest{
-		Event:          event,
-		Text:           text,
-		OwnerID:        r.effectiveConfigForEvent(event).OwnerIDForEvent(event),
-		Channel:        r.channel,
-		LLMStore:       r.llmStore,
-		LLMModelLister: r.llmModelLister(),
-		AppLogs:        r.appLogWriter(),
+		Event:             event,
+		Text:              text,
+		OwnerID:           r.effectiveConfigForEvent(event).OwnerIDForEvent(event),
+		Channel:           r.channel,
+		LLMStore:          r.llmStore,
+		LLMModelLister:    r.llmModelLister(),
+		TranslateResolver: r.translateResolverText,
+		AppLogs:           r.appLogWriter(),
 	}, r.pluginOverridesForEvent(event), r.pluginSettingOverridesForEvent(event))
 	if err != nil {
 		return "", err

@@ -242,16 +242,17 @@ func RedactStates(states []PluginState) []PluginState {
 }
 
 type PluginRequest struct {
-	Event                   MessageEvent    `json:"event"`
-	RecentEvents            []MessageEvent  `json:"recent_events,omitempty"`
-	RecallEvents            []MessageEvent  `json:"recall_events,omitempty"`
-	Text                    string          `json:"text"`
-	OwnerID                 string          `json:"owner_id,omitempty"`
-	SandboxedBrowserEnabled bool            `json:"sandboxed_browser_enabled,omitempty"`
-	Channel                 Channel         `json:"-"`
-	LLMStore                LLMProfileStore `json:"-"`
-	LLMModelLister          LLMModelLister  `json:"-"`
-	AppLogs                 applog.Writer   `json:"-"`
+	TranslateResolver       func(context.Context, MessageEvent, string) (string, error) `json:"-"`
+	Event                   MessageEvent                                                `json:"event"`
+	RecentEvents            []MessageEvent                                              `json:"recent_events,omitempty"`
+	RecallEvents            []MessageEvent                                              `json:"recall_events,omitempty"`
+	Text                    string                                                      `json:"text"`
+	OwnerID                 string                                                      `json:"owner_id,omitempty"`
+	SandboxedBrowserEnabled bool                                                        `json:"sandboxed_browser_enabled,omitempty"`
+	Channel                 Channel                                                     `json:"-"`
+	LLMStore                LLMProfileStore                                             `json:"-"`
+	LLMModelLister          LLMModelLister                                              `json:"-"`
+	AppLogs                 applog.Writer                                               `json:"-"`
 	// Settings 由 PluginManager 在调用前注入当前插件的生效设置，直接构造请求时可留空走默认值。
 	Settings SettingValues `json:"-"`
 	// BuildInfo 是这次运行的版本和启动时刻，由运行时在派发前填好。插件拿不到
@@ -1490,6 +1491,7 @@ const (
 	resolverSettingMaxVideoMB         = "max_video_mb"
 	resolverSettingMaxDuration        = "max_video_duration_seconds"
 	resolverSettingMaxImages          = "max_images"
+	resolverSettingTranslate          = "translate"
 	resolverSettingFollowUpComment    = "follow_up_comment"
 	resolverSettingMergedForward      = "merged_forward"
 	resolverSettingMaxVideoHeight     = "max_video_height"
@@ -1555,7 +1557,7 @@ func (p *ResolverPlugin) Manifest() PluginManifest {
 	return PluginManifest{
 		ID:          resolverPluginID,
 		Name:        "链接解析",
-		Version:     "0.3.10",
+		Version:     "0.3.11",
 		Description: "官方内置 Go 社交媒体解析器，可提取并发送 B 站、YouTube、X、小红书、抖音、微博和小黑盒的图片或视频，展开 X 站内长文正文，并读取 GitHub 仓库、Issue 和 PR 的正文摘要，并解析微博和小黑盒帖子的图文与视频。",
 		Official:    true,
 		BuiltIn:     true,
@@ -1569,6 +1571,7 @@ func (p *ResolverPlugin) Manifest() PluginManifest {
 				Type:        PluginSettingTypeBool,
 				Default:     true,
 			},
+			{Key: resolverSettingTranslate, Label: "翻译为中文", Description: "使用当前机器人的聊天模型附上中文译文；长文提供中文摘要，最多等待 15 秒，失败保留原文。默认关闭。", Type: PluginSettingTypeBool, Default: false},
 			{
 				Key:         resolverSettingFollowUpComment,
 				Label:       "发送后自然点评",
@@ -1957,6 +1960,7 @@ func (p *ResolverPlugin) Handle(ctx context.Context, req PluginRequest) (*Plugin
 		// Context 前缀是给模型的来源标签，发到群里不该出现「链接解析结果：」这种机器腔。
 		response.Reply = strings.Join(parts, "\n")
 	}
+	p.translateResponse(ctx, req, response)
 	response.FollowUp = req.Settings.Bool(resolverSettingFollowUpComment, true)
 	return response, nil
 }
