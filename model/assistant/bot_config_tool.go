@@ -27,7 +27,7 @@ func newDianaBotConfigTool(r *Runtime, event MessageEvent) *dianaBotConfigTool {
 }
 func (*dianaBotConfigTool) Name() string { return botConfigToolName }
 func (*dianaBotConfigTool) Description() string {
-	return "读取 Diana 脱敏配置、诊断，修改接话和入群欢迎。群级设置需主人或实时核验的群管理员，机器人默认设置和诊断仅主人。开启或关闭欢迎修改 welcome_enabled，不创建事件任务。保存成功才报告生效。"
+	return "读取 Diana 脱敏配置、诊断，修改接话、入群欢迎和回复行为（behavior：换行分条、打字延迟、回复字数、随机复读、禁言期间处理等）。群级设置需主人或实时核验的群管理员，机器人默认设置和诊断仅主人。开启或关闭欢迎修改 welcome_enabled，不创建事件任务。保存成功才报告生效。"
 }
 func (*dianaBotConfigTool) InputSchema() map[string]any {
 	return toolObjectSchema([]string{"operation"}, map[string]any{
@@ -44,6 +44,7 @@ func (*dianaBotConfigTool) InputSchema() map[string]any {
 		"welcome_mode":                 toolEnumParam("固定文本、随机模板或 LLM 按人设生成。", "fixed", "template", "llm"),
 		"welcome_templates":            toolStringArrayParam("欢迎模板池，最多 50 条，每条最多 200 字。"),
 		"welcome_llm_cooldown_seconds": toolIntParam("每群 LLM 欢迎冷却秒数；0 使用机器人或系统默认值，冷却期间回落文本。", 0, 86400),
+		"behavior":                     behaviorSettingsSchema(),
 	})
 }
 
@@ -121,7 +122,8 @@ func (t *dianaBotConfigTool) Run(ctx context.Context, input map[string]any) (str
 	minimum := group.MinimumReplyMemberLevel
 	if op == "update" {
 		allowed := map[string]bool{"operation": true, "scope": true, "section": true, "desire_level": true, "relevance_level": true, "substance_level": true, "chat_level": true, "cooldown_seconds": true, "minimum_reply_member_level": true,
-			"welcome_enabled": true, "welcome_message": true, "welcome_mode": true, "welcome_templates": true, "welcome_llm_cooldown_seconds": true}
+			"welcome_enabled": true, "welcome_message": true, "welcome_mode": true, "welcome_templates": true, "welcome_llm_cooldown_seconds": true,
+			"behavior": true}
 		for key := range input {
 			if !allowed[key] {
 				return "", fmt.Errorf("不支持配置项 %q", key)
@@ -208,6 +210,15 @@ func (t *dianaBotConfigTool) Run(ctx context.Context, input map[string]any) (str
 		if err != nil {
 			return "", err
 		}
+		var behavior []behaviorValue
+		if raw, ok := input["behavior"]; ok {
+			behavior, err = parseBehaviorSettings(raw, scope)
+			if err != nil {
+				return "", err
+			}
+			update.Behavior = behavior
+			changed = true
+		}
 		if participationChanged {
 			update.Participation = copyParticipation(&prefs)
 		}
@@ -224,6 +235,7 @@ func (t *dianaBotConfigTool) Run(ctx context.Context, input map[string]any) (str
 			}
 			group.MinimumReplyMemberLevel = minimum
 			group = update.applyToGroup(group)
+			group = applyBehaviorToGroup(group, effective, behavior)
 			t.runtime.mu.RLock()
 			writer, ok := t.runtime.groupConfigs.(GroupConfigWriter)
 			t.runtime.mu.RUnlock()
@@ -253,17 +265,24 @@ func (t *dianaBotConfigTool) Run(ctx context.Context, input map[string]any) (str
 		}
 		prefs = effective.participationPreferences()
 		if writer := t.runtime.appLogWriter(); writer != nil {
-			_ = writer.AppendLog(ctx, applog.Entry{Kind: applog.KindOperation, Level: applog.LevelInfo, Action: "bot_config_update", Message: "机器人设置已保存并生效", Actor: oneBotEventActor(t.event), Target: base.ID, Metadata: map[string]any{"scope": scope, "group_id": t.event.GroupID, "bot_profile_id": base.ID, "participation": prefs, "welcome": welcomeSettingsFromConfig(effective)}})
+			_ = writer.AppendLog(ctx, applog.Entry{Kind: applog.KindOperation, Level: applog.LevelInfo, Action: "bot_config_update", Message: "机器人设置已保存并生效", Actor: oneBotEventActor(t.event), Target: base.ID, Metadata: map[string]any{"scope": scope, "group_id": t.event.GroupID, "bot_profile_id": base.ID, "participation": prefs, "welcome": welcomeSettingsFromConfig(effective), "behavior_keys": behaviorKeys(behavior)}})
 		}
 	}
 	groupID, message := "", "已读取实际生效机器人设置"
+	var behaviorView map[string]any
 	if scope == "group" {
 		groupID = t.event.GroupID
+		if saved, ok := t.runtime.groupConfigForEvent(t.event); ok {
+			group = saved
+		}
+		behaviorView = behaviorSettingsView(effective, &group)
+	} else {
+		behaviorView = behaviorSettingsView(effective, nil)
 	}
 	if op == "update" {
 		message = "已保存并应用机器人设置"
 	}
-	data, err := json.Marshal(map[string]any{"ok": true, "action": op, "section": section, "scope": scope, "bot_profile_id": base.ID, "group_id": groupID, "operator_role": role, "participation": prefs, "welcome": welcomeSettingsFromConfig(effective), "minimum_reply_member_level": minimum, "message": message})
+	data, err := json.Marshal(map[string]any{"ok": true, "action": op, "section": section, "scope": scope, "bot_profile_id": base.ID, "group_id": groupID, "operator_role": role, "participation": prefs, "welcome": welcomeSettingsFromConfig(effective), "behavior": behaviorView, "minimum_reply_member_level": minimum, "message": message})
 	return string(data), err
 }
 
@@ -293,4 +312,12 @@ func (r *Runtime) saveBotSettings(expected BotConfig, update BotSettingsUpdate) 
 // CanonicalOperation 是 Run 实际执行的操作，按操作拦截时用同一套换算。
 func (*dianaBotConfigTool) CanonicalOperation(input map[string]any) string {
 	return strings.TrimSpace(configToolString(input, "operation"))
+}
+
+func behaviorKeys(values []behaviorValue) []string {
+	keys := make([]string, 0, len(values))
+	for _, value := range values {
+		keys = append(keys, value.setting.key)
+	}
+	return keys
 }

@@ -35,6 +35,13 @@ Use `bot_config` for Diana's settings and redacted diagnostics. Platform protoco
 - Requests such as “开启入群欢迎” configure the existing built-in feature. Repeated requests update the same setting. Do not create an `event_trigger` task to implement a welcome switch or change its wording. Use `event_trigger` only when the user explicitly requests an additional event task.
 - Report the returned effective `welcome` settings only after persistence succeeds.
 
+### Reply Behavior
+
+- Reply-delivery switches live in the `behavior` object: `reply_line_split_enabled`, `natural_reply_split_enabled`, `typing_delay_enabled`, `forward_reply_enabled`, `social_reply_enabled`, `style_filter_enabled`, `recall_reply_auto_delete_enabled` and `recall_reply_auto_delete_delay_seconds`, `max_reply_chars`, `reply_max_bubbles`, the `muted_*` switches for what still runs while the bot is muted, and `random_repeat_enabled` / `random_repeat_threshold` / `random_repeat_probability` / `random_repeat_cooldown_seconds`.
+- Example: “以后别按换行拆成好几条” → `{"operation":"update","behavior":{"reply_line_split_enabled":false}}`; “复读概率调到 50%” → `{"operation":"update","behavior":{"random_repeat_enabled":true,"random_repeat_probability":50}}`.
+- In a group the change applies only to that group. Passing `null` for a key clears the group override so it follows the bot default again; `scope=bot` does not accept `null`.
+- `get` returns `behavior.values` (effective values) and, in a group, `behavior.group_overrides` (keys this group overrides). Report changes from these returned values after a successful save.
+
 ### Owner Diagnostics
 
 - `{"operation":"get","section":"all","scope":"bot"}` reads redacted bot, runtime, LLM, installed skills/plugins and path information. Select `bot`, `runtime`, `llm`, `skills` or `paths` to limit the output. These sections are owner-only and read-only; the scope may be omitted or set to `bot`. `section=settings` is the default editable settings view.

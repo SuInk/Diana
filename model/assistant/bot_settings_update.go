@@ -14,6 +14,8 @@ type BotSettingsUpdate struct {
 	WelcomeMode               *WelcomeMode
 	WelcomeTemplates          *[]string
 	WelcomeLLMCooldownSeconds *int
+	// Behavior 是 bot_config behavior 参数里校验过的回复行为设置。
+	Behavior []behaviorValue
 }
 
 func (u BotSettingsUpdate) UpdatesWelcome() bool {
@@ -21,6 +23,7 @@ func (u BotSettingsUpdate) UpdatesWelcome() bool {
 }
 
 func (u BotSettingsUpdate) Apply(cfg BotConfig) BotConfig {
+	cfg = applyBehaviorToBot(cfg, u.Behavior)
 	if u.Participation != nil {
 		cfg.Participation = copyParticipation(u.Participation)
 		cfg.ResponseMode = ResponseModeCustom

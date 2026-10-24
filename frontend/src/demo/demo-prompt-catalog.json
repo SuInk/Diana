@@ -314,8 +314,8 @@
       "key": "reply.tool.bot_config",
       "group": "reply_tools",
       "title": "机器人配置",
-      "usage": "统一配置工具可用时注入：查询诊断、改接话和欢迎设置走此工具，保存成功才算数。",
-      "default": "读取 Diana 配置和诊断、修改接话或入群欢迎时按 bot-protocol skill 使用 bot_config。开启或关闭入群欢迎设置 welcome_enabled，修改欢迎词使用 welcome_message、welcome_mode 等字段；操作已有欢迎功能不创建 event_trigger。关闭话痨用 desire_level=off，降低活跃度用 low。群管理员只改当前群；机器人默认设置及完整脱敏诊断仅主人可用。只提交用户要求的字段，成功保存后才报告生效。"
+      "usage": "统一配置工具可用时注入：查询诊断、改接话、欢迎和回复行为设置走此工具，保存成功才算数。",
+      "default": "读取 Diana 配置和诊断、修改接话、入群欢迎或回复行为（换行分条、打字延迟、回复字数、随机复读、禁言期间处理等，写在 behavior 里）时按 bot-protocol skill 使用 bot_config。开启或关闭入群欢迎设置 welcome_enabled，修改欢迎词使用 welcome_message、welcome_mode 等字段；操作已有欢迎功能不创建 event_trigger。关闭话痨用 desire_level=off，降低活跃度用 low。群管理员只改当前群；机器人默认设置及完整脱敏诊断仅主人可用。只提交用户要求的字段，成功保存后才报告生效。"
     },
     {
       "key": "reply.tool.reply_block",
