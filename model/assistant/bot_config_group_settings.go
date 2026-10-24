@@ -93,7 +93,7 @@ func groupSettingsSchema() map[string]any {
 		"enabled":      toolBoolParam("本群启用或停用；停用后行为沿用 WebUI 群设置。"),
 		"triggers":     toolStringArrayParam("替换本群触发词，最多 50 个、每个 100 字；空数组恢复跟随机器人。"),
 		"trigger_mode": toolEnumParam("触发词匹配模式；空字符串恢复继承。", "loose", "smart", "strict", ""),
-		"plugins":      map[string]any{"type": "object", "description": "本群插件开关，键为 get 返回的插件 ID；true 开启，false 关闭，null 恢复机器人默认；不支持联网搜索和内部能力。", "additionalProperties": map[string]any{"type": []string{"boolean", "null"}}},
+		"plugins":      map[string]any{"type": "object", "description": "本群插件：键用 get 返回的 ID；true 开、false 关、null 继承。不支持联网搜索和内部能力。", "additionalProperties": map[string]any{"type": []string{"boolean", "null"}}},
 	})
 }
 

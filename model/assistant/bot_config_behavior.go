@@ -94,7 +94,7 @@ func behaviorSettingsSchema() map[string]any {
 	properties := make(map[string]any, len(behaviorSettings))
 	for _, setting := range behaviorSettings {
 		if setting.random != nil {
-			setting.description += "；群级随机复读为整组覆盖，任一项传 null 会恢复整组继承，不可与具体值混用"
+			setting.description += "；群级 null 恢复整组继承，不可混用具体值"
 		}
 		switch setting.kind {
 		case "bool":
