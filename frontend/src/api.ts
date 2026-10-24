@@ -3547,6 +3547,38 @@ export function clearAssistantUserMemories(userID: string, profile: string, memo
   );
 }
 
+export interface AssistantMemorySourceMessage {
+  message_id?: string;
+  user_id?: string;
+  sender_name?: string;
+  text: string;
+  time?: string;
+  /** 机器人自己发的。 */
+  outbound?: boolean;
+  /** 这条就是记忆的原消息。 */
+  source?: boolean;
+}
+
+/** 一条长期记忆的来源：证据片段、原消息和前后几条聊天。 */
+export interface AssistantMemorySource {
+  memory_id: string;
+  evidence?: string;
+  source_type?: string;
+  source_session?: string;
+  source_group_id?: string;
+  source_message_id?: string;
+  /** message 找到了原消息；summary 来自会话摘要；missing 原消息已不在记录里。 */
+  origin: "message" | "summary" | "missing" | string;
+  note?: string;
+  messages: AssistantMemorySourceMessage[];
+}
+
+export function getAssistantUserMemorySource(userID: string, profile: string, memoryID: string): Promise<AssistantMemorySource> {
+  return requestJSON<AssistantMemorySource>(
+    `/api/assistant/users/${encodeURIComponent(userID)}/memories/${encodeURIComponent(memoryID)}/source?profile=${encodeURIComponent(profile)}`
+  );
+}
+
 /** 手动把一个人定为真人或机器人；override 留空交回自动判断。 */
 export function setAssistantUserAI(userID: string, profile: string, override: UserAIOverride): Promise<{ ok: boolean; ai: UserAIJudgment }> {
   return requestJSON(`/api/assistant/users/${encodeURIComponent(userID)}/ai?profile=${encodeURIComponent(profile)}`, {

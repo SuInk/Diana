@@ -210,6 +210,15 @@
                 <span v-if="memory.sensitive" class="badge warn">敏感</span>
                 <span v-if="memory.source_type === 'inferred'" class="badge" title="机器人根据聊天推断，不是本人明说">推断</span>
                 <button
+                  class="btn ghost memory-source-toggle"
+                  type="button"
+                  title="查看这条记忆是从哪句话记下来的"
+                  :aria-expanded="sourceOpen[memory.id] ? 'true' : 'false'"
+                  @click="toggleMemorySource(memory)"
+                >
+                  <MessageSquareQuote :size="13" />来源
+                </button>
+                <button
                   class="btn ghost memory-forget"
                   type="button"
                   title="删除这一条长期记忆"
@@ -226,6 +235,30 @@
                 <template v-if="memory.source_event_time"> · {{ formatTime(memory.source_event_time) }}</template>
                 <template v-if="memory.expires_at"> · {{ formatTime(memory.expires_at) }} 过期</template>
               </p>
+              <div v-if="sourceOpen[memory.id]" class="memory-source">
+                <p v-if="sourceLoading[memory.id]" class="muted memory-source-note">正在读取来源…</p>
+                <template v-else-if="memorySources[memory.id]">
+                  <p v-if="memorySources[memory.id].evidence" class="memory-source-evidence">
+                    <span class="muted">门控引用的证据：</span>「{{ memorySources[memory.id].evidence }}」
+                  </p>
+                  <p v-if="memorySources[memory.id].note" class="muted memory-source-note">{{ memorySources[memory.id].note }}</p>
+                  <ol v-if="memorySources[memory.id].messages.length > 0" class="memory-source-messages">
+                    <li
+                      v-for="(message, index) in memorySources[memory.id].messages"
+                      :key="message.message_id || index"
+                      :class="{ 'memory-source-hit': message.source, 'memory-source-bot': message.outbound }"
+                    >
+                      <span class="memory-source-meta">
+                        {{ message.sender_name || message.user_id || "未知" }}
+                        <template v-if="message.time"> · {{ formatTime(message.time) }}</template>
+                        <span v-if="message.source" class="badge">原消息</span>
+                      </span>
+                      <span class="memory-source-text">{{ message.text || "（无文字内容）" }}</span>
+                    </li>
+                  </ol>
+                  <p v-else-if="!memorySources[memory.id].evidence" class="muted memory-source-note">没有找到可以展示的来源。</p>
+                </template>
+              </div>
             </article>
           </div>
           <EmptyState
@@ -336,13 +369,15 @@
 import { computed, onMounted, reactive, ref, watch } from "vue";
 import { botScope } from "../lib/bot-scope";
 import { navigate, viewQuery } from "../router";
-import { ChevronDown, ChevronRight, ChevronUp, Pencil, RefreshCw, Save, Trash2 } from "@lucide/vue";
+import { ChevronDown, ChevronRight, ChevronUp, MessageSquareQuote, Pencil, RefreshCw, Save, Trash2 } from "@lucide/vue";
 import {
   getAssistantUser,
+  getAssistantUserMemorySource,
   listAssistantUsers,
   clearAssistantUserMemories,
   saveAssistantUser,
   setAssistantUserAI,
+  type AssistantMemorySource,
   type AssistantUserDetailResponse,
   type AssistantUsersOrder,
   type AssistantUsersSort,
@@ -450,6 +485,33 @@ async function clearMemories(memoryID = ""): Promise<void> {
     toastError(error instanceof Error ? error.message : "清空失败");
   } finally {
     clearingMemory.value = false;
+  }
+}
+
+// 记忆来源按需加载：一个人动辄几十条记忆，打开详情时不该把每条的上下文都查一遍。
+const sourceOpen = ref<Record<string, boolean>>({});
+const sourceLoading = ref<Record<string, boolean>>({});
+const memorySources = ref<Record<string, AssistantMemorySource>>({});
+watch(() => detail.value?.profile.user_id, () => {
+  sourceOpen.value = {};
+  memorySources.value = {};
+});
+
+async function toggleMemorySource(memory: UserStructuredMemory): Promise<void> {
+  const profile = detail.value?.profile;
+  if (!profile) return;
+  const open = !sourceOpen.value[memory.id];
+  sourceOpen.value = { ...sourceOpen.value, [memory.id]: open };
+  if (!open || memorySources.value[memory.id] || sourceLoading.value[memory.id]) return;
+  sourceLoading.value = { ...sourceLoading.value, [memory.id]: true };
+  try {
+    const source = await getAssistantUserMemorySource(profile.user_id, profile.bot_profile_id ?? "", memory.id);
+    memorySources.value = { ...memorySources.value, [memory.id]: source };
+  } catch (error) {
+    sourceOpen.value = { ...sourceOpen.value, [memory.id]: false };
+    toastError(error instanceof Error ? error.message : "读取来源失败");
+  } finally {
+    sourceLoading.value = { ...sourceLoading.value, [memory.id]: false };
   }
 }
 
@@ -692,6 +754,68 @@ onMounted(() => {
 .memory-clear-all {
   font-size: 12px;
   padding: 2px 8px;
+}
+
+.memory-source-toggle {
+  margin-left: auto;
+  padding: 2px 6px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.memory-source-toggle + .memory-forget {
+  margin-left: 0;
+}
+
+.memory-source {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px dashed var(--border);
+}
+
+.memory-source-evidence,
+.memory-source-note {
+  margin: 0 0 6px;
+  font-size: 12px;
+}
+
+.memory-source-messages {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.memory-source-messages li {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  min-width: 0;
+}
+
+.memory-source-hit {
+  background: var(--accent-soft);
+}
+
+.memory-source-meta {
+  color: var(--text-secondary);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.memory-source-bot .memory-source-meta {
+  font-style: italic;
+}
+
+.memory-source-text {
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
 }
 
 .memory-forget {

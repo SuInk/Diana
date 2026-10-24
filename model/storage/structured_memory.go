@@ -1305,3 +1305,33 @@ GROUP BY subject_user_id
 	}
 	return counts, rows.Err()
 }
+
+// GetStructuredMemoryBySubject 按 id 取一个人身上的一条长期记忆，作用域和
+// ListStructuredMemoriesBySubject 相同：只认这台机器人名下的会话，别的机器人记下的
+// 同号用户不会被串过来。已遗忘或被替换的记忆也能取到，控制台查来源时不必先确认状态。
+func (s *SQLiteStore) GetStructuredMemoryBySubject(ctx context.Context, profileID, userID, memoryID string) (assistant.StructuredMemoryItem, bool, error) {
+	defer s.observeStorage(ctx, "GetStructuredMemoryBySubject", "read")()
+	if s == nil || s.db == nil {
+		return assistant.StructuredMemoryItem{}, false, nil
+	}
+	userID = strings.TrimSpace(userID)
+	memoryID = strings.TrimSpace(memoryID)
+	if userID == "" || memoryID == "" {
+		return assistant.StructuredMemoryItem{}, false, nil
+	}
+	groupPrefix, privatePrefix := memoryProfileSessionPrefixes(profileID)
+	row := s.eventReader().QueryRowContext(ctx, structuredMemorySelect+`
+WHERE id = ?
+  AND subject_user_id = ?
+  AND (substr(source_session, 1, length(?)) = ? OR substr(source_session, 1, length(?)) = ?)
+LIMIT 1
+`, memoryID, userID, groupPrefix, groupPrefix, privatePrefix, privatePrefix)
+	item, err := scanStructuredMemory(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return assistant.StructuredMemoryItem{}, false, nil
+	}
+	if err != nil {
+		return assistant.StructuredMemoryItem{}, false, err
+	}
+	return item, true, nil
+}

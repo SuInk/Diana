@@ -44,6 +44,9 @@ import type {
   RelationshipEvaluation,
   UserAIOverride,
   UserMemoryProfile,
+  UserStructuredMemory,
+  AssistantMemorySource,
+  AssistantMemorySourceMessage,
   WorldBookNode
 } from "../api";
 
@@ -392,6 +395,56 @@ const demoWorldBook: WorldBookNode[] = [
   { id: "world-1", parent_id: "", title: "枝江", content: "故事发生在虚构城市枝江，机器人就住在群主的服务器上。", keywords: [], always_on: true, enabled: true },
   { id: "world-2", parent_id: "world-1", title: "港口", content: "枝江港常年有雾，群友们约好雾散了一起去钓鱼。", keywords: ["港口", "码头", "钓鱼"], always_on: false, enabled: true }
 ];
+
+// 演示用的长期记忆：一条能还原到原消息，一条来自会话摘要，用来展示两种来源。
+const demoStructuredMemories: Record<string, UserStructuredMemory[]> = {
+  "100200711": [
+    {
+      id: "demo-memory-coffee", subject_user_id: "100200711", subject_name: "青禾", key: "preference.coffee", kind: "preference",
+      topic: "咖啡", content: "青禾每天手冲一杯咖啡，不加糖", evidence: "我每天都手冲，从来不加糖", source_type: "stated",
+      source_group_id: "100200418", source_message_id: "demo-msg-coffee", source_event_time: before(4300),
+      confidence: 0.94, importance: 0.62, visibility: "user", sensitive: false, version: 1, status: "active",
+      created_at: before(4300), updated_at: before(4300)
+    },
+    {
+      id: "demo-memory-report", subject_user_id: "100200711", subject_name: "青禾", key: "instruction.report", kind: "instruction",
+      topic: "周报提醒", content: "青禾要求每周五 15:30 提醒提交周报", source_type: "stated",
+      source_group_id: "100200301", source_message_id: "summary:demo-job", source_event_time: before(1400),
+      confidence: 0.9, importance: 0.71, visibility: "user", sensitive: false, version: 1, status: "active",
+      created_at: before(1400), updated_at: before(1400)
+    }
+  ]
+};
+
+function demoMemorySource(memory: UserStructuredMemory): AssistantMemorySource {
+  const summarized = (memory.source_message_id ?? "").startsWith("summary");
+  const at = Date.parse(memory.source_event_time ?? "") || Date.now();
+  const line = (offset: number, sender: string, text: string, extra: Partial<AssistantMemorySourceMessage> = {}) => ({
+    message_id: `demo-ctx-${memory.id}-${offset}`, user_id: sender === "青禾" ? "100200711" : sender === "Diana" ? "100200001" : "100200913",
+    sender_name: sender, text, time: new Date(at + offset * 40_000).toISOString(), ...extra
+  });
+  const messages = summarized
+    ? [
+        line(-2, "青禾", "这周的周报又差点忘了交"),
+        line(-1, "Diana", "要不要我每周提醒你一次？", { outbound: true }),
+        line(0, "青禾", "好，周五下午三点半提醒我"),
+        line(1, "星野", "我也经常忘")
+      ]
+    : [
+        line(-3, "星野", "你们早上都喝什么"),
+        line(-2, "白榆", "速溶，省事"),
+        line(-1, "星野", "青禾你不是很讲究吗"),
+        line(0, "青禾", memory.evidence ?? memory.content, { message_id: memory.source_message_id, source: true }),
+        line(1, "Diana", "手冲不加糖，懂行。", { outbound: true })
+      ];
+  return {
+    memory_id: memory.id, evidence: memory.evidence, source_type: memory.source_type,
+    source_session: `demo:group:${memory.source_group_id}`, source_group_id: memory.source_group_id, source_message_id: memory.source_message_id,
+    origin: summarized ? "summary" : "message",
+    note: summarized ? "这条记忆是从一段对话的摘要里提炼的，没有对应的单条原消息；下面是记忆来源时间前后的聊天。" : undefined,
+    messages
+  };
+}
 
 const demoUsers: UserMemoryProfile[] = [
   {
@@ -1905,6 +1958,7 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
       memories: undefined,
       portrait: undefined,
       memory_count: user.memories?.length ?? 0,
+      structured_memory_count: demoStructuredMemories[user.user_id]?.length ?? 0,
       portrait_count: user.portrait?.length ?? 0
     }));
     return json({ users, total: matched.length, query: keyword || undefined, sort, order, limit: 50, offset: 0 });
@@ -2098,6 +2152,12 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
     user.ai = { ...current, override, likely: override === "bot" || (override !== "human" && auto), updated_at: new Date().toISOString() };
     return json({ ok: true, ai: user.ai });
   }
+  const memorySourceMatch = path.match(/^\/api\/assistant\/users\/([^/]+)\/memories\/([^/]+)\/source$/);
+  if (memorySourceMatch) {
+    const memory = (demoStructuredMemories[decodeURIComponent(memorySourceMatch[1])] ?? []).find((item) => item.id === decodeURIComponent(memorySourceMatch[2]));
+    if (!memory) return json({ error: "这条记忆不存在，或不属于这个人" }, 404);
+    return json(demoMemorySource(memory));
+  }
   const userMatch = path.match(/^\/api\/assistant\/users\/([^/]+)$/);
   if (userMatch) {
     const user = demoUsers.find((item) => item.user_id === decodeURIComponent(userMatch[1]));
@@ -2105,7 +2165,8 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
     return json({
       profile: user,
       favorability_changes: demoFavorabilityChanges[user.user_id] ?? [],
-      portrait_fields: demoPortraitFields
+      portrait_fields: demoPortraitFields,
+      structured_memories: demoStructuredMemories[user.user_id] ?? []
     });
   }
 
