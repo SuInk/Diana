@@ -65,7 +65,7 @@ export const navItems: NavItem[] = [
   { id: "tasks", label: "任务", hint: "提醒、周期查询与仓库订阅", group: "operate" },
   { id: "workspace", label: "文件", hint: "Agent 工作区里的文件：按分区浏览、预览、下载与删除", group: "operate" },
   { id: "events", label: "记录", hint: "消息处理、回复决策、运行日志与好感与画像", group: "operate", covers: ["logs", "favorability"] },
-  { id: "settings", label: "设置", hint: "主题与系统更新", footer: true }
+  { id: "settings", label: "设置", hint: "主题与系统更新" }
 ];
 
 // navItemCovers 判断某个视图该由哪一个侧边栏条目代表。
