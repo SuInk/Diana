@@ -28,17 +28,18 @@ export type ViewID =
 // NavGroupID 是侧边栏的分组。分组本来就存在，只是以前只写在下面这段注释里：
 // 「装机时先配什么、平时看什么、出问题翻什么」。11 个条目平铺时全都一样重，
 // 读的人得自己把它们分回三堆，所以现在把这条信息画出来。
-export type NavGroupID = "setup" | "operate";
+export type NavGroupID = "setup" | "operate" | "system";
 
 export interface NavGroup {
   id: NavGroupID;
   label: string;
 }
 
-// 总览和设置不属于任何一组：一个是入口，一个是兜底，给它们套个标题反而多余。
+// 总览作为入口不分组，设置归入控制台自身的系统分组。
 export const navGroups: NavGroup[] = [
   { id: "setup", label: "配置" },
-  { id: "operate", label: "日常" }
+  { id: "operate", label: "日常" },
+  { id: "system", label: "系统" }
 ];
 
 export interface NavItem {
@@ -65,7 +66,7 @@ export const navItems: NavItem[] = [
   { id: "tasks", label: "任务", hint: "提醒、周期查询与仓库订阅", group: "operate" },
   { id: "workspace", label: "文件", hint: "Agent 工作区里的文件：按分区浏览、预览、下载与删除", group: "operate" },
   { id: "events", label: "记录", hint: "消息处理、回复决策、运行日志与好感与画像", group: "operate", covers: ["logs", "favorability"] },
-  { id: "settings", label: "设置", hint: "主题与系统更新" }
+  { id: "settings", label: "设置", hint: "主题与系统更新", group: "system" }
 ];
 
 // navItemCovers 判断某个视图该由哪一个侧边栏条目代表。
