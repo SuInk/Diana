@@ -1483,13 +1483,14 @@ func (r *Runtime) runClaimedRepositoryWatch(ctx context.Context, item Reminder) 
 	}
 	item = r.resolveRepositoryWatchVisibility(ctx, item, plugin, settings, change.Private)
 	message, reference := r.renderRepositoryWatchDelivery(item, change, settings)
-	if err := r.storeRepositoryWatchProgress(item.ID, change.Snapshot, message, reference); err != nil {
+	if err := r.storeRepositoryWatchProgress(item.ID, change.Snapshot, message, reference, &change); err != nil {
 		return startedAt, repositoryWatchStageFailure(repositoryWatchFailureStageState, err)
 	}
 	// storeRepositoryWatchProgress 已经把这一轮正文落盘；把本地副本也对齐，下面的
 	// 扇出才能逐个记住成功目标。否则第二个目标失败时，下一轮会把第一个目标再发一遍。
 	item.PendingDelivery = message
 	item.PendingDeliveryReference = reference
+	item.PendingRepositoryAnchorsJSON = encodeRepositoryWatchPendingAnchors(&change)
 	item.PendingDeliveredTargets = nil
 	if err := r.sendRepositoryWatchChange(ctx, item, message, &change); err != nil {
 		return startedAt, repositoryWatchStageFailure(repositoryWatchFailureStageDelivery, err)
@@ -1552,12 +1553,12 @@ func applyRepositoryStarNotifyThreshold(item Reminder, change repositoryWatchCha
 }
 
 func (r *Runtime) sendRepositoryWatch(ctx context.Context, item Reminder, message string) error {
-	return r.sendRepositoryWatchChange(ctx, item, message, nil)
+	return r.sendRepositoryWatchChange(ctx, item, message, decodeRepositoryWatchPendingAnchors(item.PendingRepositoryAnchorsJSON))
 }
 
 // sendRepositoryWatchChange 在带着动态明细投递时维护引用锚点:PR/Issue 的
 // 更新推送引用当初宣布它的那条消息,首次出现则记下本次消息 ID 供以后引用。
-// change 为 nil(补投、失败通知)时只发不引不记。
+// 补投恢复持久化的条目编号；旧版待投递记录没有明细时只发不引不记。
 func (r *Runtime) sendRepositoryWatchChange(ctx context.Context, item Reminder, message string, change *repositoryWatchChange) error {
 	if !repositoryWatchHasDeliveryTarget(item) {
 		return nil
@@ -1572,18 +1573,19 @@ func (r *Runtime) sendRepositoryWatchChange(ctx context.Context, item Reminder, 
 	trackPending := strings.TrimSpace(item.PendingDelivery) != "" && strings.TrimSpace(item.PendingDelivery) == strings.TrimSpace(message)
 	var firstErr error
 	for _, target := range repositoryWatchDeliveryTargets(item) {
-		text := message
+		replyID := ""
 		targetKey := messageEventDeliveryKey(target)
 		if trackPending && completed[targetKey] {
 			continue
 		}
 		if change != nil {
-			if replyID := repositoryWatchAnchorReplyID(anchors, targetKey, *change); replyID != "" {
-				// 借用回复标记通道:sendOutgoing 的标记解析会把它转成引用元数据。
-				text = replyMarkerPrefix + replyID + "]" + message
-			}
+			replyID = repositoryWatchAnchorReplyID(anchors, targetKey, *change)
 		}
-		messageIDs, err := r.sendNotificationWithIDs(ctx, target, text)
+		var messageIDs []string
+		err := r.deliveryTargetDisabledError(target)
+		if err == nil {
+			messageIDs, err = r.deliverNoticeWithReply(ctx, target, message, replyID)
+		}
 		if err != nil {
 			if errors.Is(err, ErrDeliveryTargetDisabled) {
 				// 目标机器人停用了：跳过，别把整条订阅判成失败。
@@ -1885,6 +1887,7 @@ func renderRepositoryWatchChangesWithTemplates(change repositoryWatchChange, tem
 				"time":       formatRepositoryWatchTime(firstNonZeroTime(pullRequest.OccurredAt, pullRequest.UpdatedAt)),
 				"url":        strings.TrimSpace(pullRequest.URL),
 				"commits":    renderRepositoryWatchPullCommits(pullRequest),
+				"comments":   renderRepositoryWatchComments(pullRequest.Comments, pullRequest.CommentsTruncated),
 			}))
 		}
 	}
@@ -1897,6 +1900,7 @@ func renderRepositoryWatchChangesWithTemplates(change repositoryWatchChange, tem
 				"author":     strings.TrimSpace(issue.Author),
 				"time_label": repositoryWatchIssueTimeLabel(issue.Status),
 				"time":       formatRepositoryWatchTime(repositoryWatchIssueTime(issue)),
+				"comments":   renderRepositoryWatchComments(issue.Comments, issue.CommentsTruncated),
 				"url":        strings.TrimSpace(issue.URL),
 			}))
 		}
@@ -2128,7 +2132,7 @@ func repositoryWatchIssueTime(issue repositoryWatchIssue) time.Time {
 	}
 }
 
-func (r *Runtime) storeRepositoryWatchProgress(id string, snapshot repositoryWatchSnapshot, pending, reference string) error {
+func (r *Runtime) storeRepositoryWatchProgress(id string, snapshot repositoryWatchSnapshot, pending, reference string, changes ...*repositoryWatchChange) error {
 	if r.reminders == nil {
 		return fmt.Errorf("当前未启用定时任务存储")
 	}
@@ -2171,6 +2175,10 @@ func (r *Runtime) storeRepositoryWatchProgress(id string, snapshot repositoryWat
 		}
 		if snapshot.CheckedAt.After(item.LastRepositoryCheckAt) {
 			item.LastRepositoryCheckAt = snapshot.CheckedAt
+		}
+		item.PendingRepositoryAnchorsJSON = ""
+		if len(changes) > 0 && strings.TrimSpace(pending) != "" {
+			item.PendingRepositoryAnchorsJSON = encodeRepositoryWatchPendingAnchors(changes[0])
 		}
 		item.PendingDelivery = strings.TrimSpace(pending)
 		item.PendingDeliveryReference = strings.TrimSpace(reference)
@@ -2223,6 +2231,7 @@ func (r *Runtime) finishRecurringReminder(id string, startedAt time.Time, runErr
 			resetRecurringFailureStateAfterSuccess(&items[index])
 			items[index].PendingDelivery = ""
 			items[index].PendingDeliveryReference = ""
+			items[index].PendingRepositoryAnchorsJSON = ""
 			items[index].PendingDeliveredTargets = nil
 			items[index].PendingSince = time.Time{}
 			items[index].TriggerAt = nextRecurringTrigger(items[index], startedAt, time.Now())

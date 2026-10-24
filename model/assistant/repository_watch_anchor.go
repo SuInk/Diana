@@ -116,3 +116,30 @@ func repositoryWatchAnchorEntries(targetKey string, change repositoryWatchChange
 	}
 	return entries
 }
+
+// 补投只需要编号和状态，不重复保存正文或仓库私有资料。
+func encodeRepositoryWatchPendingAnchors(change *repositoryWatchChange) string {
+	if change == nil {
+		return ""
+	}
+	slim := repositoryWatchChange{}
+	for _, item := range change.PullRequests {
+		slim.PullRequests = append(slim.PullRequests, repositoryWatchPullRequest{Number: item.Number, Status: item.Status})
+	}
+	for _, item := range change.Issues {
+		slim.Issues = append(slim.Issues, repositoryWatchIssue{Number: item.Number, Status: item.Status})
+	}
+	raw, _ := json.Marshal(slim)
+	return string(raw)
+}
+
+func decodeRepositoryWatchPendingAnchors(raw string) *repositoryWatchChange {
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	var change repositoryWatchChange
+	if json.Unmarshal([]byte(raw), &change) != nil {
+		return nil
+	}
+	return &change
+}

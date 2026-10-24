@@ -55,6 +55,10 @@ func (s *repositoryWatchTestGitHub) handler(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
+	if strings.HasSuffix(r.URL.Path, "/comments") {
+		_, _ = w.Write([]byte("[]"))
+		return
+	}
 	// PR 的 commits 必须排在仓库 commits 前面：两者路径都以 /commits 结尾。
 	if strings.Contains(r.URL.Path, "/pulls/") && strings.HasSuffix(r.URL.Path, "/commits") {
 		var number int

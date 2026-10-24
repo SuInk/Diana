@@ -110,11 +110,16 @@ func deliveryNotReady(err error) bool {
 // 重发不会重复。一条长通知发到一半连接断了，重发会把前面几段再发一遍——原来的
 // 失败重试也是整条重发，这点没有变。
 func (r *Runtime) deliverNotice(ctx context.Context, event MessageEvent, text string) ([]string, error) {
+	return r.deliverNoticeWithReply(ctx, event, text, "")
+}
+
+func (r *Runtime) deliverNoticeWithReply(ctx context.Context, event MessageEvent, text, replyID string) ([]string, error) {
 	send := func() ([]string, error) {
 		cfg := r.effectiveConfigForEvent(event)
 		return r.deliverChunks(ctx, event, splitReply(text, notificationChunkSize), cfg, outboundDecoration{
-			MentionUserID: strings.TrimSpace(event.UserID),
-			MentionAlways: true,
+			MentionUserID:  strings.TrimSpace(event.UserID),
+			MentionAlways:  true,
+			ReplyMessageID: replyID,
 		})
 	}
 	messageIDs, err := send()

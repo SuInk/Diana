@@ -7236,6 +7236,8 @@ func (r *Runtime) sendNotificationWithIDs(ctx context.Context, event MessageEven
 // 找某个人（提醒到点了、他订的仓库有更新），正文是模板或后台任务生成的，没有模型
 // 帮它写 @，被那个开关连坐的结果就是订阅者在群里永远收不到点名。
 type outboundDecoration struct {
+	// ReplyMessageID 是程序从同一投递目标的已保存锚点取得的引用，不经过模型标记解析。
+	ReplyMessageID string
 	// MentionUserID 是要 @ 的人，空表示不 @。私聊投递永远用不上。
 	MentionUserID string
 	// ReplyToCurrent 表示第一条挂上对当前消息的引用。

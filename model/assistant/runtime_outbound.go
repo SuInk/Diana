@@ -98,6 +98,9 @@ func (r *Runtime) deliverChunks(ctx context.Context, event MessageEvent, chunks 
 		} else {
 			msg.UserID = event.UserID
 		}
+		if sentChunks == 0 && decoration.ReplyMessageID != "" {
+			msg.ReplyMessageID = decoration.ReplyMessageID
+		}
 		sendCtx := ctx
 		if sentChunks > 0 {
 			interval := chunkSendInterval(cfg, chunk)

@@ -89,11 +89,13 @@ func maskRepositoryWatchChange(change repositoryWatchChange) repositoryWatchChan
 	for index := range change.PullRequests {
 		change.PullRequests[index].Author = ""
 		change.PullRequests[index].URL = ""
+		change.PullRequests[index].Comments = maskRepositoryWatchComments(change.PullRequests[index].Comments)
 	}
 	change.Issues = append([]repositoryWatchIssue(nil), change.Issues...)
 	for index := range change.Issues {
 		change.Issues[index].Author = ""
 		change.Issues[index].URL = ""
+		change.Issues[index].Comments = maskRepositoryWatchComments(change.Issues[index].Comments)
 	}
 	change.Releases = append([]repositoryWatchRelease(nil), change.Releases...)
 	for index := range change.Releases {
