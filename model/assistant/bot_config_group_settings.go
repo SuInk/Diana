@@ -89,12 +89,14 @@ func (t *dianaBotConfigTool) parseGroupSettings(raw any, scope string, group Gro
 }
 
 func groupSettingsSchema() map[string]any {
-	return toolObjectSchema(nil, map[string]any{
+	schema := toolObjectSchema(nil, map[string]any{
 		"enabled":      toolBoolParam("本群启用或停用；停用后行为沿用 WebUI 群设置。"),
 		"triggers":     toolStringArrayParam("替换本群触发词，最多 50 个、每个 100 字；空数组恢复跟随机器人。"),
 		"trigger_mode": toolEnumParam("触发词匹配模式；空字符串恢复继承。", "loose", "smart", "strict", ""),
 		"plugins":      map[string]any{"type": "object", "description": "本群插件：键用 get 返回的 ID；true 开、false 关、null 继承。不支持联网搜索和内部能力。", "additionalProperties": map[string]any{"type": []string{"boolean", "null"}}},
 	})
+	schema["description"] = "当前群启停、触发词和插件开关；只提交要改的项，不能用于机器人级。"
+	return schema
 }
 
 func (t *dianaBotConfigTool) groupSettingsView(scope string, group GroupConfig, effective BotConfig) any {
