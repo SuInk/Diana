@@ -27,7 +27,7 @@ func newDianaBotConfigTool(r *Runtime, event MessageEvent) *dianaBotConfigTool {
 }
 func (*dianaBotConfigTool) Name() string { return botConfigToolName }
 func (*dianaBotConfigTool) Description() string {
-	return "读取 Diana 脱敏配置、诊断，修改接话、入群欢迎和回复行为（behavior：换行分条、打字延迟、回复字数、随机复读、禁言期间处理等）。群级设置需主人或实时核验的群管理员，机器人默认设置和诊断仅主人。开启或关闭欢迎修改 welcome_enabled，不创建事件任务。保存成功才报告生效。"
+	return "读取 Diana 脱敏配置、诊断，修改当前群启停、触发词、插件开关（group_settings），以及接话、入群欢迎和回复行为（behavior：换行分条、打字延迟、回复字数、随机复读、禁言期间处理等）。群级设置需主人或实时核验的群管理员，机器人默认设置和诊断仅主人。开启或关闭欢迎修改 welcome_enabled，不创建事件任务。保存成功才报告生效。"
 }
 func (*dianaBotConfigTool) InputSchema() map[string]any {
 	return toolObjectSchema([]string{"operation"}, map[string]any{
@@ -45,6 +45,7 @@ func (*dianaBotConfigTool) InputSchema() map[string]any {
 		"welcome_templates":            toolStringArrayParam("欢迎模板池，最多 50 条，每条最多 200 字。"),
 		"welcome_llm_cooldown_seconds": toolIntParam("每群 LLM 欢迎冷却秒数；0 使用机器人或系统默认值，冷却期间回落文本。", 0, 86400),
 		"behavior":                     behaviorSettingsSchema(),
+		"group_settings":               groupSettingsSchema(),
 	})
 }
 
@@ -123,7 +124,7 @@ func (t *dianaBotConfigTool) Run(ctx context.Context, input map[string]any) (str
 	if op == "update" {
 		allowed := map[string]bool{"operation": true, "scope": true, "section": true, "desire_level": true, "relevance_level": true, "substance_level": true, "chat_level": true, "cooldown_seconds": true, "minimum_reply_member_level": true,
 			"welcome_enabled": true, "welcome_message": true, "welcome_mode": true, "welcome_templates": true, "welcome_llm_cooldown_seconds": true,
-			"behavior": true}
+			"behavior": true, "group_settings": true}
 		for key := range input {
 			if !allowed[key] {
 				return "", fmt.Errorf("不支持配置项 %q", key)
@@ -196,6 +197,13 @@ func (t *dianaBotConfigTool) Run(ctx context.Context, input map[string]any) (str
 			changed = true
 		}
 		participationChanged := changed
+		if raw, exists := input["group_settings"]; exists {
+			group, err = t.parseGroupSettings(raw, scope, group)
+			if err != nil {
+				return "", err
+			}
+			changed = true
+		}
 		if raw, ok := input["minimum_reply_member_level"]; ok {
 			if scope != "group" || !IsOneBotPlatform(base.Platform) {
 				return "", fmt.Errorf("最低成员等级仅适用于 OneBot 群")
@@ -282,7 +290,7 @@ func (t *dianaBotConfigTool) Run(ctx context.Context, input map[string]any) (str
 	if op == "update" {
 		message = "已保存并应用机器人设置"
 	}
-	data, err := json.Marshal(map[string]any{"ok": true, "action": op, "section": section, "scope": scope, "bot_profile_id": base.ID, "group_id": groupID, "operator_role": role, "participation": prefs, "welcome": welcomeSettingsFromConfig(effective), "behavior": behaviorView, "minimum_reply_member_level": minimum, "message": message})
+	data, err := json.Marshal(map[string]any{"ok": true, "action": op, "section": section, "scope": scope, "bot_profile_id": base.ID, "group_id": groupID, "operator_role": role, "participation": prefs, "welcome": welcomeSettingsFromConfig(effective), "behavior": behaviorView, "group_settings": t.groupSettingsView(scope, group, effective), "minimum_reply_member_level": minimum, "message": message})
 	return string(data), err
 }
 

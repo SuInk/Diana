@@ -83,3 +83,50 @@ func TestLiveBotConfigBehaviorFromNaturalLanguage(t *testing.T) {
 		})
 	}
 }
+
+func TestLiveBotConfigGroupSettingsFromNaturalLanguage(t *testing.T) {
+	client := liveThreadStateClient(t, liveThreadStateModel("DIANA_TEST_LLM_MODEL", "gpt-6.1-sol"), "diana-live-group-config-test")
+	cases := []struct {
+		name, prompt string
+		check        func(GroupConfig) bool
+	}{
+		{"triggers", "把本群触发词改成然然，匹配模式用严格匹配。", func(g GroupConfig) bool {
+			return len(g.GroupTriggers) == 1 && g.GroupTriggers[0] == "然然" && g.GroupTriggerMode == AliasTriggerStrict
+		}},
+		{"plugin off", "把本群 Test 插件关掉，其他群别动。", func(g GroupConfig) bool { v, ok := g.PluginOverrides["test"]; return ok && !v }},
+		{"disable", "停用本群机器人，其他群保持原样。", func(g GroupConfig) bool { return g.EnabledSet && !g.Enabled }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			base := BotConfig{ID: "bot", Enabled: true, OwnerID: "owner"}
+			plugins := NewPluginManager()
+			if err := plugins.RegisterPlugin(testPlugin{}); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := plugins.Install("test"); err != nil {
+				t.Fatal(err)
+			}
+			r := NewRuntime(base, nilChannel{}, plugins, nil, nil, nil, nil)
+			r.SetProfiles(ProfileSet{Profiles: []BotConfig{base}})
+			store := &testWritableGroupConfigStore{}
+			r.SetGroupConfigStore(store)
+			event := MessageEvent{ProfileID: "bot", Platform: PlatformOneBotV11, Kind: EventKindGroup, GroupID: "123", UserID: "owner"}
+			runner, err := agent.NewRunner(client, agent.Config{WorkDir: t.TempDir(), MaxSteps: 8}, agent.NewToolRegistry(newDianaBotConfigTool(r, event)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer runner.Close()
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+			defer cancel()
+			response, err := runner.Run(ctx, agent.Request{Messages: []llm.Message{{Role: llm.RoleSystem, Content: promptToolBotConfig + " 当前是群聊，发言者是主人。"}, {Role: llm.RoleUser, Content: tc.prompt}}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			group, _ := store.ConfigForGroup("bot", "123")
+			if !tc.check(group) || len(store.set.Groups) != 1 {
+				t.Fatalf("setting not saved or escaped scope: %+v", group)
+			}
+			t.Logf("model=%s reply=%q", response.Model, response.Text)
+		})
+	}
+}

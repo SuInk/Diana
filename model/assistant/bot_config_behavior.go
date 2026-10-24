@@ -48,7 +48,7 @@ var behaviorSettings = []behaviorSetting{
 		func(g *GroupConfig) **bool { return &g.NaturalReplySplitEnabled }, func(c *BotConfig) **bool { return &c.NaturalReplySplitEnabled }),
 	boolBehavior("typing_delay_enabled", "按字数模拟打字延迟再发出", false,
 		func(g *GroupConfig) **bool { return &g.TypingDelayEnabled }, func(c *BotConfig) **bool { return &c.TypingDelayEnabled }),
-	boolBehavior("forward_reply_enabled", "超长回复改用合并转发卡片发送", false,
+	boolBehavior("forward_reply_enabled", "超长回复改用合并转发卡片发送", true,
 		func(g *GroupConfig) **bool { return &g.ForwardReplyEnabled }, func(c *BotConfig) **bool { return &c.ForwardReplyEnabled }),
 	boolBehavior("social_reply_enabled", "接话时也回应寒暄、玩笑这类社交性发言", false,
 		func(g *GroupConfig) **bool { return &g.SocialReplyEnabled }, func(c *BotConfig) **bool { return &c.SocialReplyEnabled }),
@@ -93,6 +93,9 @@ func behaviorSettingByKey(key string) (behaviorSetting, bool) {
 func behaviorSettingsSchema() map[string]any {
 	properties := make(map[string]any, len(behaviorSettings))
 	for _, setting := range behaviorSettings {
+		if setting.random != nil {
+			setting.description += "；群级随机复读为整组覆盖，任一项传 null 会恢复整组继承，不可与具体值混用"
+		}
 		switch setting.kind {
 		case "bool":
 			properties[setting.key] = map[string]any{"type": []string{"boolean", "null"}, "description": setting.description}
@@ -156,6 +159,20 @@ func parseBehaviorSettings(raw any, scope string) ([]behaviorValue, error) {
 			value.number = number
 		}
 		out = append(out, value)
+	}
+
+	randomClear, randomSet := false, false
+	for _, value := range out {
+		if value.setting.random != nil {
+			if value.clear {
+				randomClear = true
+			} else {
+				randomSet = true
+			}
+		}
+	}
+	if randomClear && randomSet {
+		return nil, fmt.Errorf("随机复读使用整组覆盖，不能同时恢复继承和设置具体值；请拆成两次操作")
 	}
 	if len(out) == 0 {
 		return nil, fmt.Errorf("behavior 至少要有一项")

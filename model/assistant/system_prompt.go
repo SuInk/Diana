@@ -195,7 +195,7 @@ const (
 
 	// 下面三条原来是 builder 里的行内字面量，挪成常量才能登记覆盖。
 	promptToolMemory     = "长期记忆摘要不够时，先用 memory search 查索引，再按 id read 核对全文与证据；可按实体或主题改写关键词继续查，不得凭空补全旧事。"
-	promptToolBotConfig  = "读取 Diana 配置和诊断、修改接话、入群欢迎或回复行为（换行分条、打字延迟、回复字数、随机复读、禁言期间处理等，写在 behavior 里）时按 bot-protocol skill 使用 bot_config。开启或关闭入群欢迎设置 welcome_enabled，修改欢迎词使用 welcome_message、welcome_mode 等字段；操作已有欢迎功能不创建 event_trigger。关闭话痨用 desire_level=off，降低活跃度用 low。群管理员只改当前群；机器人默认设置及完整脱敏诊断仅主人可用。只提交用户要求的字段，成功保存后才报告生效。"
+	promptToolBotConfig  = "读取 Diana 配置和诊断、修改接话、入群欢迎或回复行为（换行分条、打字延迟、回复字数、随机复读、禁言期间处理等，写在 behavior 里）时按 bot-protocol skill 使用 bot_config。开启或关闭入群欢迎设置 welcome_enabled，修改欢迎词使用 welcome_message、welcome_mode 等字段；操作已有欢迎功能不创建 event_trigger。关闭话痨用 desire_level=off，降低活跃度用 low。群管理员只改当前群；机器人默认设置及完整脱敏诊断仅主人可用。本群启停、触发词和插件开关用 group_settings；插件 ID 不确定时先 get 查看，null 恢复插件继承。只提交用户要求的字段，成功保存后才报告生效。"
 	promptToolReplyBlock = "主人或群管理员要求以后别理某个人、把某人屏蔽或把谁放出来时，用 reply_block，目标账号 ID 取自 @ 的结构化信息、被引用消息的发送者或群成员查询结果，不要按昵称猜。群管理员只能改当前群，机器人级名单仅主人可改。成功保存后才报告生效，不用平台禁言或口头答应代替；它只影响回不回复，不禁言也不撤消息。"
 )
 

@@ -59,3 +59,7 @@ Ignoring one person for good is not the same as lowering participation, and not 
 - Blocking never mutes, kicks or removes anyone on the platform, and never deletes messages. Report success only after a successful save.
 
 The skill describes the workflow. Backend authorization and persistence are authoritative.
+
+### Current-group settings
+
+Use `bot_config` with `scope=group` and `group_settings` for the current group's `enabled`, `triggers`, `trigger_mode`, and `plugins`. Read settings first to discover installed plugin IDs; send only the switches the user requested. Plugin values are booleans or `null` to restore inheritance. An empty trigger array or empty trigger mode restores the bot default. Internal capabilities and web search do not accept group switches. These settings use the same live owner/admin permission check as other group settings. Disabling a group follows its existing disabled-mode policy; re-enable through WebUI if that policy prevents chat commands.

@@ -65,6 +65,7 @@ func TestBotConfigBehaviorRejectsInvalidValues(t *testing.T) {
 		{"unknown_switch": true},
 		{"max_reply_chars": 1},
 		{"typing_delay_enabled": "yes"},
+		{"random_repeat_enabled": nil, "random_repeat_probability": 50},
 		{},
 	} {
 		if _, err := newDianaBotConfigTool(r, event).Run(context.Background(), map[string]any{"operation": "update", "behavior": behavior}); err == nil {
@@ -93,5 +94,14 @@ func TestBotConfigBehaviorUpdatesBotDefaults(t *testing.T) {
 	event.UserID = "member"
 	if _, err := newDianaBotConfigTool(r, event).Run(context.Background(), map[string]any{"operation": "update", "behavior": map[string]any{"typing_delay_enabled": false}}); err == nil {
 		t.Fatal("non-owner changed bot defaults")
+	}
+}
+
+// 未显式配置合并转发时，读取值必须与发送路径的默认行为一致。
+func TestBotConfigBehaviorForwardDefaultMatchesSender(t *testing.T) {
+	cfg := BotConfig{ForwardReplyThreshold: 1}
+	values := behaviorSettingsView(cfg, nil)["values"].(map[string]any)
+	if values["forward_reply_enabled"] != shouldUseForwardReplyFor(cfg, "一段超过阈值的回复", []string{"一段超过阈值的回复"}) {
+		t.Fatalf("reported forward default differs from sender: %v", values["forward_reply_enabled"])
 	}
 }
