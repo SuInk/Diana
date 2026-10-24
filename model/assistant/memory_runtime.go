@@ -255,7 +255,7 @@ func (r *Runtime) runMemoryWorker(ctx context.Context, leaseOwner string, store 
 			if len(live) == 0 {
 				continue
 			}
-			jobCtx, jobCancel := context.WithTimeout(ctx, memoryJobTimeout(live))
+			jobCtx, jobCancel := withLLMCandidateBudget(ctx, memoryJobTimeout(live))
 			err = r.processMemoryJobs(jobCtx, store, live)
 			jobCancel()
 			if err != nil && ctx.Err() == nil {

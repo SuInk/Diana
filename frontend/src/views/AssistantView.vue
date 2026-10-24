@@ -703,13 +703,14 @@
                             <td class="model-route-kind-cell">
                               <span class="badge" :class="modelRouteIsStandby(role.key, item.index) ? '' : 'accent'">{{ modelRouteIsStandby(role.key, item.index) ? '后备' : effectiveModelRoutingStrategy(role.key) !== 'failover' ? '参与调度' : '主模型' }}</span>
                               <span class="badge model-health-badge" :class="modelRouteHealth(role.key, item.route).className" :title="modelRouteHealth(role.key, item.route).title">{{ modelRouteHealth(role.key, item.route).label }}</span>
+                              <span v-if="modelRouteTestResult(role.key, item.route)" class="badge model-test-badge" :class="modelRouteTestResult(role.key, item.route)?.className" :title="modelRouteTestResult(role.key, item.route)?.detail">{{ modelRouteTestResult(role.key, item.route)?.label }}</span>
                             </td>
                             <td v-if="roleForm[role.key]?.routing_strategy === 'weighted'" class="model-route-weight-cell">
                               <span v-if="modelRouteIsStandby(role.key, item.index)" class="muted">—</span>
                               <AppNumberInput v-else :model-value="item.route.weight || 1" :min="1" :max="1000" :label="`${role.label}模型 ${item.index + 1} 权重`" :disabled="item.route.disabled" compact @update:model-value="(value) => setRoleRouteWeight(role.key, item.index, value)" />
                             </td>
                             <td class="model-route-enable-cell"><AppSwitch :model-value="!item.route.disabled" :aria-label="`${role.label}模型 ${item.index + 1} 启用`" compact @update:model-value="(value) => setRoleRouteDisabled(role.key, item.index, !value)" /></td>
-                            <td class="model-route-actions"><button v-if="modelRouteCanRecover(role.key, item.route)" class="btn icon-only small ghost" type="button" :aria-label="`立即恢复${role.label}模型 ${item.index + 1}`" title="立即恢复：清除故障与冷却记录" :disabled="modelHealthLoading" @click="recoverModelRoute(role.key, item.route)"><RotateCcw :size="14" aria-hidden="true" /></button><button class="btn icon-only small ghost" type="button" :aria-label="`编辑${role.label}模型 ${item.index + 1}`" title="编辑模型" @click="openModelRouteEditor(role.key, item.index)"><Pencil :size="14" aria-hidden="true" /></button><button v-if="item.index > 0" class="btn icon-only small ghost" type="button" :aria-label="`删除${role.label}模型 ${item.index + 1}`" title="删除模型" @click="removeRoleFallback(role.key, item.index - 1)"><Trash2 :size="14" aria-hidden="true" /></button></td>
+                            <td class="model-route-actions"><button v-if="modelRouteTestable(role.key, item.route)" class="btn icon-only small ghost" type="button" :aria-label="`测试调用${role.label}模型 ${item.index + 1}`" title="测试调用：发一条短消息，看这条路由能不能用" :disabled="modelRouteTestResult(role.key, item.route)?.running" @click="testModelRoute(role.key, item.route)"><Play :size="14" aria-hidden="true" /></button><button v-if="modelRouteCanRecover(role.key, item.route)" class="btn icon-only small ghost" type="button" :aria-label="`立即恢复${role.label}模型 ${item.index + 1}`" title="立即恢复：清除故障与冷却记录" :disabled="modelHealthLoading" @click="recoverModelRoute(role.key, item.route)"><RotateCcw :size="14" aria-hidden="true" /></button><button class="btn icon-only small ghost" type="button" :aria-label="`编辑${role.label}模型 ${item.index + 1}`" title="编辑模型" @click="openModelRouteEditor(role.key, item.index)"><Pencil :size="14" aria-hidden="true" /></button><button v-if="item.index > 0" class="btn icon-only small ghost" type="button" :aria-label="`删除${role.label}模型 ${item.index + 1}`" title="删除模型" @click="removeRoleFallback(role.key, item.index - 1)"><Trash2 :size="14" aria-hidden="true" /></button></td>
                           </tr>
                           <tr v-if="!filteredModelRoutes(role.key).length"><td :colspan="roleForm[role.key]?.routing_strategy === 'weighted' ? 6 : 5" class="model-list-empty">{{ modelRoleRoutes(role.key).length ? '没有匹配的模型' : '还没有配置模型，点击「添加模型」开始。' }}<button v-if="modelRoleRoutes(role.key).length" class="btn ghost small" type="button" @click="clearModelRouteFilters">清除筛选</button></td></tr>
                         </tbody>
@@ -852,8 +853,9 @@
             </div>
             <div class="card-body">
               <div class="form-grid model-recovery-grid">
-                <label class="field"><span>瞬时错误重试次数</span><AppNumberInput :model-value="modelRecoveryPolicy().transient_retries" :min="0" :max="3" :show-controls="false" label="瞬时错误重试次数" @update:model-value="(value) => setModelRecoveryPolicyField('transient_retries', value)" /><span class="hint">普通 5xx 和连接故障在切换模型前重试 0–3 次。</span></label>
+                <label class="field"><span>瞬时错误重试次数</span><AppNumberInput :model-value="modelRecoveryPolicy().transient_retries" :min="0" :max="3" :show-controls="false" label="瞬时错误重试次数" @update:model-value="(value) => setModelRecoveryPolicyField('transient_retries', value)" /><span class="hint">限流、普通 5xx 和连接故障在切换模型前原地重试 0–3 次，间隔逐次翻倍、最长 8 秒。</span></label>
                 <label class="field"><span>重试间隔（毫秒）</span><AppNumberInput :model-value="modelRecoveryPolicy().retry_delay_milliseconds" :min="0" :max="10000" :show-controls="false" label="重试间隔" @update:model-value="(value) => setModelRecoveryPolicyField('retry_delay_milliseconds', value)" /></label>
+                <label class="field"><span>连续失败几次后冷却</span><AppNumberInput :model-value="modelRecoveryPolicy().failures_before_cooldown ?? 3" :min="1" :max="10" :show-controls="false" label="连续失败几次后冷却" @update:model-value="(value) => setModelRecoveryPolicyField('failures_before_cooldown', value)" /><span class="hint">没到次数时只是这次请求改用备用，下次仍先用它。</span></label>
                 <label class="field"><span>瞬时错误首次冷却（秒）</span><AppNumberInput :model-value="modelRecoveryPolicy().transient_cooldown_seconds" :min="0" :max="3600" :show-controls="false" label="瞬时错误首次冷却" @update:model-value="(value) => setModelRecoveryPolicyField('transient_cooldown_seconds', value)" /></label>
                 <label class="field"><span>限流/鉴权首次冷却（秒）</span><AppNumberInput :model-value="modelRecoveryPolicy().status_cooldown_seconds" :min="0" :max="86400" :show-controls="false" label="限流鉴权首次冷却" @update:model-value="(value) => setModelRecoveryPolicyField('status_cooldown_seconds', value)" /></label>
                 <label class="field"><span>单次冷却上限（秒）</span><AppNumberInput :model-value="modelRecoveryPolicy().max_cooldown_seconds" :min="1" :max="86400" :show-controls="false" label="单次冷却上限" @update:model-value="(value) => setModelRecoveryPolicyField('max_cooldown_seconds', value)" /></label>
@@ -862,7 +864,7 @@
                 <AppSwitch :model-value="modelRecoveryPolicy().respect_retry_after" @update:model-value="(value) => setModelRecoveryPolicyField('respect_retry_after', value)">优先采用上游 Retry-After</AppSwitch>
                 <button v-if="modelRecoveryIsCustom()" class="btn small ghost" type="button" @click="resetModelRecoveryPolicy">恢复默认规则</button>
               </div>
-              <p class="hint">连续失败仍按指数退避，冷却不在当前请求中等待；修改后点击页面「保存配置」生效。</p>
+              <p class="hint">鉴权失败、额度用完和上游给了等待时间的限流当场冷却；冷却后再失败按指数退避，冷却不在当前请求中等待。修改后点击页面「保存配置」生效。</p>
             </div>
           </section>
         </div>
@@ -2211,7 +2213,7 @@ import { mergeModelMetadata, effectiveModelInfo } from "../lib/model-metadata";
 import { computed, nextTick, onActivated, onBeforeUnmount, onMounted, ref, watch, type Ref } from "vue";
 import LoadingSkeleton from "../components/LoadingSkeleton.vue";
 import SkeletonBlock from "../components/SkeletonBlock.vue";
-import { ArrowLeft, Bot, ChevronDown, ChevronRight, Copy, Download, Eye, EyeOff, GitBranch, GripVertical, History, Image, Layers, MessageSquare, Pencil, Plus, Power, PowerOff, RefreshCw, RotateCcw, Save, ScanLine, Search, Settings2, Shuffle, SlidersHorizontal, Sparkles, Trash2, Upload, Waypoints, X } from "@lucide/vue";
+import { ArrowLeft, Bot, ChevronDown, ChevronRight, Copy, Download, Eye, EyeOff, GitBranch, GripVertical, History, Image, Layers, MessageSquare, Pencil, Play, Plus, Power, PowerOff, RefreshCw, RotateCcw, Save, ScanLine, Search, Settings2, Shuffle, SlidersHorizontal, Sparkles, Trash2, Upload, Waypoints, X } from "@lucide/vue";
 import { sendRetryFields, sendRetryPayload, sendRetryValidationError } from "../lib/send-retry-settings";
 import { timezoneOptions } from "../lib/timezone-options";
 import { botImageGenerationLimitsPayload, botVideoGenerationLimitsPayload, mediaGenerationCooldownPayload } from "../lib/media-generation-quota";
@@ -2223,6 +2225,7 @@ import {
   getConfig,
   getBotProfileConfig,
   getModelHealth,
+  testLLM,
   resetModelHealth,
   getBotPlatforms,
   listLLMModels,
@@ -2319,6 +2322,7 @@ import {
   type AgentSafeModeCategory
 } from "../lib/agent-mode";
 import { toastError, toastSuccess } from "../lib/toast";
+import { describeLLMTestError } from "../lib/llm-test";
 import { allowNodeExecution } from "../lib/node-execution-preset";
 import { channelAccountUnhealthy, channelOperational, channelStatusHint, channelStatusLabel } from "../lib/channel-status";
 import { effectiveReplyTone, FALLBACK_REPLY_TONE, normalizeReplyTone, replyToneOverride } from "../lib/reply-tone";
@@ -3439,12 +3443,13 @@ const modelRoutingStrategies = [
 ];
 
 const defaultModelRecoveryPolicy: ModelRecoveryPolicy = {
-  transient_retries: 1,
+  transient_retries: 2,
   retry_delay_milliseconds: 700,
   transient_cooldown_seconds: 10,
   status_cooldown_seconds: 60,
   max_cooldown_seconds: 1800,
-  respect_retry_after: true
+  respect_retry_after: true,
+  failures_before_cooldown: 3
 };
 
 function modelRecoveryPolicy(): ModelRecoveryPolicy {
@@ -3562,7 +3567,10 @@ function modelRouteHealth(role: RoleKey, route: RoleRoute): ModelRouteHealth {
     return `${name}：近期失败 ${candidate.failure_count} 次${until}`;
   });
   if (cooling.length) {
-    const label = allCooling ? "冷却中" : `${cooling.length} 个冷却`;
+    // 预计恢复时间直接写在徽标上：只放在悬停提示里的话，手机上看不到。
+    const earliest = Math.min(...cooling.map((candidate) => Date.parse(candidate.cooldown_until as string)));
+    const recoverAt = new Date(earliest).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+    const label = allCooling ? `冷却中 · ${recoverAt} 恢复` : `${cooling.length} 个冷却 · ${recoverAt} 恢复`;
     const summary = allCooling ? "存在其他可用候选时，这条路由当前不会参与调度。" : "组内冷却候选会被跳过，其余候选仍可参与调度。";
     return { label, className: allCooling ? "err" : "warn", title: [summary, ...details].join("\n"), cooling: true, degraded: false };
   }
@@ -3575,6 +3583,62 @@ function modelRouteHealth(role: RoleKey, route: RoleRoute): ModelRouteHealth {
 
 function modelRouteCanRecover(role: RoleKey, route: RoleRoute): boolean {
   return !route.disabled && modelRouteCandidateHealth(role, route).length > 0;
+}
+
+interface ModelRouteTestResult {
+  running: boolean;
+  label: string;
+  className: string;
+  detail: string;
+}
+
+// 测试结果只留在当前页面：它回答的是「刚才这一下能不能调通」，不是健康状态。
+const modelRouteTests = ref<Record<string, ModelRouteTestResult>>({});
+const modelRouteTestMessage = "你好，请只回复「OK」。";
+
+function modelRouteTestKey(role: RoleKey, route: RoleRoute): string {
+  return [role, route.group || route.profile_id || "", route.model || ""].join("\u0000");
+}
+
+function modelRouteTestable(role: RoleKey, route: RoleRoute): boolean {
+  return !isMediaRole(role) && role !== "image" && !!route.model && selectedRoleProfiles(role, route).length > 0;
+}
+
+function modelRouteTestResult(role: RoleKey, route: RoleRoute): ModelRouteTestResult | undefined {
+  return modelRouteTests.value[modelRouteTestKey(role, route)];
+}
+
+// 分组路由逐个测组里的提供商：调度时它们都可能被选中，只测一个说明不了整条路由。
+// 直接测这一档，不走降级链，所以测出来的就是它自己的情况。
+async function testModelRoute(role: RoleKey, route: RoleRoute): Promise<void> {
+  const key = modelRouteTestKey(role, route);
+  const model = route.model?.trim() || "";
+  const profiles = selectedRoleProfiles(role, route);
+  if (!model || !profiles.length || modelRouteTests.value[key]?.running) return;
+  modelRouteTests.value = { ...modelRouteTests.value, [key]: { running: true, label: "测试中…", className: "", detail: "" } };
+  const lines: string[] = [];
+  let failed = 0;
+  let slowest = 0;
+  for (const profile of profiles) {
+    const name = profile.name || llmProviderLabel(profile.provider);
+    const started = performance.now();
+    try {
+      await testLLM(modelRouteTestMessage, { ...profile, model });
+      const seconds = (performance.now() - started) / 1000;
+      slowest = Math.max(slowest, seconds);
+      lines.push(`${name}：调用成功，用时 ${seconds.toFixed(1)} 秒`);
+    } catch (error) {
+      failed++;
+      lines.push(`${name}：${describeLLMTestError(error, llmProviderLabel(profile.provider), model)}`);
+    }
+  }
+  const detail = lines.join("\n");
+  const result: ModelRouteTestResult = failed === 0
+    ? { running: false, label: `测试通过 · ${slowest.toFixed(1)}s`, className: "ok", detail }
+    : { running: false, label: failed === profiles.length ? "测试失败" : `${failed}/${profiles.length} 失败`, className: failed === profiles.length ? "err" : "warn", detail };
+  modelRouteTests.value = { ...modelRouteTests.value, [key]: result };
+  if (failed) toastError(`${model} 测试失败：${lines.find((line) => !line.includes("调用成功")) || detail}`);
+  else toastSuccess(`${model} 调用正常，用时 ${slowest.toFixed(1)} 秒`);
 }
 
 async function recoverModelRoute(role: RoleKey, route: RoleRoute): Promise<void> {

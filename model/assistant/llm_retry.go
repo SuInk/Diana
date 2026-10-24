@@ -22,6 +22,61 @@ type transientRetryLLMProvider struct {
 
 var errModelRequestTimeout = errors.New("diana: single model request timeout")
 
+// llmSameProfileRetryMaxWait 是原地重试单次最多等多久：指数退避封顶在这里，
+// 上游给的 Retry-After 超过它就不原地等，直接换下一个候选。取值同 sub2api
+// 的同账号重试（maxRequestScopedRetryDelay / openAIOAuth429MaxRetryDelay）。
+const llmSameProfileRetryMaxWait = 8 * time.Second
+
+// llmCandidateBudgetCeiling 是按候选计时时，整次调用最多能用几个候选的完整预算。
+// 每切一个候选重新计时，但候选全卡住时也不能无限等下去。
+const llmCandidateBudgetCeiling = 3
+
+type llmCandidateBudgetKey struct{}
+
+var errLLMCandidateTimeout = errors.New("diana: llm candidate budget exceeded")
+
+// llmCandidateTimeoutError 是某个候选用完了自己那份时间。它可以切下一个候选，
+// 也计入连续失败——一直卡住的上游和一直报 503 的上游一样该被冷却。
+type llmCandidateTimeoutError struct {
+	budget time.Duration
+	cause  error
+}
+
+func (e llmCandidateTimeoutError) Error() string {
+	return fmt.Sprintf("单个模型 %s 内没有完成：%v", e.budget, e.cause)
+}
+func (e llmCandidateTimeoutError) Unwrap() error        { return e.cause }
+func (e llmCandidateTimeoutError) Is(target error) bool { return target == errLLMCandidateTimeout }
+
+// withLLMCandidateBudget 替代调用点上的 context.WithTimeout：budget 是每个候选
+// 各自的时间，切到下一个候选时重新计时。以前整次调用共用一个期限，第一个候选
+// 卡满 60 秒，配好的备用一次都轮不到。
+func withLLMCandidateBudget(parent context.Context, budget time.Duration) (context.Context, context.CancelFunc) {
+	if budget <= 0 {
+		return context.WithCancel(parent)
+	}
+	ctx, cancel := context.WithTimeout(parent, budget*llmCandidateBudgetCeiling)
+	return context.WithValue(ctx, llmCandidateBudgetKey{}, budget), cancel
+}
+
+// llmCandidateAttemptContext 给一个候选开它自己的计时。返回的上下文里预算已经
+// 用掉，里层再调用不会重复套一层。
+func llmCandidateAttemptContext(ctx context.Context) (context.Context, func(error) error) {
+	budget, _ := ctx.Value(llmCandidateBudgetKey{}).(time.Duration)
+	if budget <= 0 {
+		return ctx, func(err error) error { return err }
+	}
+	attemptCtx, cancel := context.WithTimeoutCause(context.WithValue(ctx, llmCandidateBudgetKey{}, time.Duration(0)), budget, errLLMCandidateTimeout)
+	return attemptCtx, func(err error) error {
+		expired := errors.Is(context.Cause(attemptCtx), errLLMCandidateTimeout)
+		cancel()
+		if err != nil && expired && ctx.Err() == nil && !errors.Is(err, errLLMOutputCommitted) {
+			return llmCandidateTimeoutError{budget: budget, cause: err}
+		}
+		return err
+	}
+}
+
 type modelRequestTimeoutKey struct{}
 
 type modelRequestTimeoutLLMProvider struct {
@@ -92,10 +147,13 @@ func unwrapTransientLLMRetry(provider LLMProvider) LLMProvider {
 }
 
 func (p *transientRetryLLMProvider) Generate(ctx context.Context, req llm.GenerateRequest) (*llm.GenerateResponse, error) {
+	ctx, finish := llmCandidateAttemptContext(ctx)
 	if timeout, _ := ctx.Value(modelRequestTimeoutKey{}).(time.Duration); p.disableRetry && timeout <= 0 {
-		return p.provider.Generate(ctx, req)
+		resp, err := p.provider.Generate(ctx, req)
+		return resp, finish(err)
 	}
-	return generateWithTransientRetry(ctx, p.provider, req, !p.disableRetry)
+	resp, err := generateWithTransientRetry(ctx, p.provider, req, !p.disableRetry)
+	return resp, finish(err)
 }
 
 func generateWithTransientRetry(ctx context.Context, provider LLMProvider, req llm.GenerateRequest, enabled bool) (*llm.GenerateResponse, error) {
@@ -195,10 +253,24 @@ func generateWithTransientRetryPolicy(ctx context.Context, provider LLMProvider,
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return nil, ctxErr
 		}
-		if retryDelay <= 0 {
+		// 间隔逐次翻倍：限流、并发超限往往要多等一会儿才放行，固定 700ms 连撞
+		// 几次只会拿到同一个 429。
+		delay := retryDelay
+		for n := 0; n < attempt && delay > 0 && delay < llmSameProfileRetryMaxWait; n++ {
+			delay = min(delay*2, llmSameProfileRetryMaxWait)
+		}
+		// 上游给了等待时间就按它等；等得太久，或者等完已经超出这次调用的期限，
+		// 不如直接交给降级链换下一个候选。
+		if hint := llmRetryAfterHint(err); hint > 0 {
+			if deadline, ok := ctx.Deadline(); hint > llmSameProfileRetryMaxWait || ok && time.Until(deadline) <= hint {
+				return resp, err
+			}
+			delay = hint
+		}
+		if delay <= 0 {
 			continue
 		}
-		timer := time.NewTimer(retryDelay)
+		timer := time.NewTimer(delay)
 		select {
 		case <-ctx.Done():
 			if !timer.Stop() {
@@ -367,7 +439,9 @@ func (p *registryFailoverLLMProvider) Generate(ctx context.Context, req llm.Gene
 		if streamingRequested(ctx) {
 			client = &streamingLLMProvider{provider: client}
 		}
-		resp, err := generateWithTransientRetryPolicy(ctx, client, candidateReasoningRequest(req, candidate.profile), p.retryTransient, candidate.profile.Config.Timeout, p.recoveryPolicy.transientRetries, p.recoveryPolicy.retryDelay)
+		attemptCtx, finish := llmCandidateAttemptContext(ctx)
+		resp, err := generateWithTransientRetryPolicy(attemptCtx, client, candidateReasoningRequest(req, candidate.profile), p.retryTransient, candidate.profile.Config.Timeout, p.recoveryPolicy.transientRetries, p.recoveryPolicy.retryDelay)
+		err = finish(err)
 		if err == nil {
 			p.current = index
 			p.cooldowns.clear(candidate.profile)
@@ -382,14 +456,14 @@ func (p *registryFailoverLLMProvider) Generate(ctx context.Context, req llm.Gene
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return nil, ctxErr
 		}
-		noteLLMCandidateFailure(p.cooldowns, p.group, candidate.profile, healthFailureCause(err), p.recoveryPolicy)
+		mark := noteLLMCandidateFailure(p.cooldowns, p.group, candidate.profile, healthFailureCause(err), p.recoveryPolicy)
 		if !failover {
 			return nil, lastErr
 		}
 		if position+1 < len(order) {
 			next := p.candidates[order[position+1]]
 			logLLMFailover(p.group, false, candidate.profile, next.profile, lastErr)
-			p.reportFailover(candidate.profile, next.profile, false, lastErr)
+			p.reportFailover(candidate.profile, next.profile, false, lastErr, mark)
 		}
 	}
 	if p.wrapGroupError && len(p.candidates) > 1 {
@@ -403,9 +477,9 @@ func (p *registryFailoverLLMProvider) attemptOrder(start int) []int {
 }
 
 // reportFailover 把一次切档交给运行时写进运行日志。
-func (p *registryFailoverLLMProvider) reportFailover(from, to llm.Profile, stream bool, err error) {
+func (p *registryFailoverLLMProvider) reportFailover(from, to llm.Profile, stream bool, err error, mark llmFailureMark) {
 	if p.report != nil {
-		p.report(newLLMFailoverEvent(p.group, from, to, stream, err))
+		p.report(newLLMFailoverEvent(p.group, from, to, stream, err, mark))
 	}
 }
 
@@ -466,7 +540,9 @@ func (p *profileFailoverLLMProvider) Generate(ctx context.Context, req llm.Gener
 			if streamingRequested(ctx) {
 				client = &streamingLLMProvider{provider: client}
 			}
-			resp, err = generateWithTransientRetryPolicy(ctx, client, req, p.retryTransient, p.profiles[index].Config.Timeout, p.recoveryPolicy.transientRetries, p.recoveryPolicy.retryDelay)
+			attemptCtx, finish := llmCandidateAttemptContext(ctx)
+			resp, err = generateWithTransientRetryPolicy(attemptCtx, client, req, p.retryTransient, p.profiles[index].Config.Timeout, p.recoveryPolicy.transientRetries, p.recoveryPolicy.retryDelay)
+			err = finish(err)
 			if err == nil {
 				p.current = index
 				p.cooldowns.clear(p.profiles[index])
@@ -488,7 +564,7 @@ func (p *profileFailoverLLMProvider) Generate(ctx context.Context, req llm.Gener
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return nil, ctxErr
 		}
-		noteLLMCandidateFailure(p.cooldowns, p.group, p.profiles[index], healthFailureCause(rawErr), p.recoveryPolicy)
+		mark := noteLLMCandidateFailure(p.cooldowns, p.group, p.profiles[index], healthFailureCause(rawErr), p.recoveryPolicy)
 		if !failover {
 			return nil, err
 		}
@@ -497,7 +573,7 @@ func (p *profileFailoverLLMProvider) Generate(ctx context.Context, req llm.Gener
 			from, to := p.profiles[index], p.profiles[order[position+1]]
 			logLLMFailover(p.group, false, from, to, err)
 			if p.report != nil {
-				p.report(newLLMFailoverEvent(p.group, from, to, false, err))
+				p.report(newLLMFailoverEvent(p.group, from, to, false, err, mark))
 			}
 		}
 	}

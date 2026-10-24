@@ -25,10 +25,24 @@ type cooldownRegistryAdapter struct {
 	streamOpenErr error
 	streamEvents  []llm.ChatEvent
 	response      string
+	// block 让调用一直卡到上下文结束；delay 让成功的调用先等一会儿。
+	block bool
+	delay time.Duration
 }
 
-func (a *cooldownRegistryAdapter) Generate(context.Context, llm.ModelDefinition, llm.ChatRequest) (llm.ChatResponse, error) {
+func (a *cooldownRegistryAdapter) Generate(ctx context.Context, _ llm.ModelDefinition, _ llm.ChatRequest) (llm.ChatResponse, error) {
 	a.generateCalls++
+	if a.block {
+		<-ctx.Done()
+		return llm.ChatResponse{}, ctx.Err()
+	}
+	if a.delay > 0 {
+		select {
+		case <-time.After(a.delay):
+		case <-ctx.Done():
+			return llm.ChatResponse{}, ctx.Err()
+		}
+	}
 	if len(a.generateErrs) > 0 {
 		err := a.generateErrs[0]
 		if len(a.generateErrs) > 1 {
@@ -157,10 +171,10 @@ func TestLLMCustomRecoveryPolicyAndManualReset(t *testing.T) {
 	transient := llm.Profile{ID: "provider-a", Config: llm.ProviderConfig{Model: "shared-model"}}
 	limited := llm.Profile{ID: "provider-b", Config: llm.ProviderConfig{Model: "shared-model"}}
 
-	if duration, _ := table.markFailureWithPolicy(transient, errors.New("HTTP 503 service unavailable"), policy); duration != 3*time.Second {
+	if duration := table.markFailureWithPolicy(transient, errors.New("HTTP 503 service unavailable"), policy).cooldown; duration != 3*time.Second {
 		t.Fatalf("transient cooldown = %s", duration)
 	}
-	if duration, _ := table.markFailureWithPolicy(limited, errors.New("HTTP 429 retry after 60s"), policy); duration != 4*time.Second {
+	if duration := table.markFailureWithPolicy(limited, errors.New("HTTP 429 retry after 60s"), policy).cooldown; duration != 4*time.Second {
 		t.Fatalf("status cooldown ignored custom Retry-After policy: %s", duration)
 	}
 	if cleared := table.clearMatching([]string{"provider-a"}, "shared-model"); cleared != 1 {
@@ -229,13 +243,13 @@ func TestLLMCooldownAllCoolingStillTriesInOrder(t *testing.T) {
 func TestLLMCooldownNeverLocksSingleCandidate(t *testing.T) {
 	table := &llmCooldownTable{}
 	only := &cooldownRegistryAdapter{
-		generateErrs: []error{errors.New("503 Service Unavailable"), errors.New("503 Service Unavailable"), nil},
+		generateErrs: []error{errors.New("503 Service Unavailable"), errors.New("503 Service Unavailable"), errors.New("503 Service Unavailable"), nil},
 		response:     "恢复了",
 	}
 	newProvider := cooldownProviderFactory(t, table, only)
 
 	if _, err := newProvider().Generate(context.Background(), cooldownRequest()); err == nil {
-		t.Fatal("两次 503 之后第一次调用应当失败")
+		t.Fatal("三次 503 之后第一次调用应当失败")
 	}
 	resp, err := newProvider().Generate(context.Background(), cooldownRequest())
 	if err != nil || resp.Text != "恢复了" {
@@ -292,8 +306,8 @@ func TestLLMCooldownClearedAfterStreamSucceeds(t *testing.T) {
 	table := &llmCooldownTable{}
 	primaryProfile := llm.Profile{ID: "primary", Config: llm.ProviderConfig{Model: "primary-model"}}
 	backupProfile := llm.Profile{ID: "backup", Config: llm.ProviderConfig{Model: "backup-model"}}
-	table.markFailure(primaryProfile, errors.New("429 Too Many Requests"))
-	table.markFailure(backupProfile, errors.New("429 Too Many Requests"))
+	table.markFailureWithPolicy(primaryProfile, errors.New("429 Too Many Requests"), immediateCooldownPolicy())
+	table.markFailureWithPolicy(backupProfile, errors.New("429 Too Many Requests"), immediateCooldownPolicy())
 	primary := &cooldownRegistryAdapter{response: "主档恢复"}
 	backup := &cooldownRegistryAdapter{response: "备用回复"}
 	newProvider := cooldownProviderFactory(t, table, primary, backup)
@@ -341,16 +355,20 @@ func TestLLMCooldownProfileFailoverProvider(t *testing.T) {
 	}
 }
 
-// 额度、限流类错误不走 700ms 的原地重试，单候选时也一样；普通 503 仍重试一次。
-func TestRateLimitedErrorsSkipSameProfileRetry(t *testing.T) {
+// 额度用完不走原地重试，单候选时也一样；限流、并发超限和普通 503 先在原模型上
+// 重试两次；Retry-After 超过原地等待上限时直接交给降级链。
+func TestSameProfileRetryByFailureKind(t *testing.T) {
 	cases := []struct {
 		err      error
 		attempts int
 	}{
 		{errors.New(accountsLimitedErrText), 1},
 		{errors.New("503 Service Unavailable: RESOURCE_EXHAUSTED"), 1},
-		{errors.New("429 Too Many Requests"), 1},
-		{errors.New("503 Service Unavailable"), 2},
+		{errors.New("429 Too Many Requests"), 3},
+		{errors.New("llm stream failed: Concurrency limit exceeded for account, please retry later"), 3},
+		{errors.New("429 Too Many Requests: retry after 1ms"), 3},
+		{errors.New("429 Too Many Requests: retry after 60s"), 1},
+		{errors.New("503 Service Unavailable"), 3},
 	}
 	for _, tc := range cases {
 		provider := &countingFailLLMProvider{err: tc.err}
@@ -444,8 +462,8 @@ func TestReportLLMFailoverShowsProfileNames(t *testing.T) {
 	sol := llm.Profile{ID: "p1", Name: "sub2api", Config: llm.ProviderConfig{Model: "gpt-6-sol"}}
 	terra := llm.Profile{ID: "p1", Name: "sub2api", Config: llm.ProviderConfig{Model: "gpt-5.6-terra"}}
 	unnamed := llm.Profile{ID: "b888a613", Config: llm.ProviderConfig{Model: "gemini-3.8-flash-low"}}
-	runtime.reportLLMEvent(newLLMFailoverEvent("chat", unnamed, sol, false, errors.New(accountsLimitedErrText)))
-	runtime.reportLLMEvent(newLLMFailoverEvent("chat", sol, terra, true, errors.New("503")))
+	runtime.reportLLMEvent(newLLMFailoverEvent("chat", unnamed, sol, false, errors.New(accountsLimitedErrText), llmFailureMark{}))
+	runtime.reportLLMEvent(newLLMFailoverEvent("chat", sol, terra, true, errors.New("503"), llmFailureMark{}))
 
 	entries := logs.entriesSnapshot()
 	if len(entries) != 2 {
@@ -468,7 +486,7 @@ func TestLLMCooldownSnapshotUsesOneClockAndExpiresFailures(t *testing.T) {
 	table := &llmCooldownTable{now: func() time.Time { calls++; return now }}
 	profiles := []llm.Profile{{ID: "a"}, {ID: "b"}}
 	for _, profile := range profiles {
-		table.markFailure(profile, errors.New("HTTP 500"))
+		table.markFailureWithPolicy(profile, errors.New("HTTP 500"), immediateCooldownPolicy())
 	}
 	calls = 0
 	health := table.snapshot(profiles)
@@ -520,25 +538,26 @@ func TestLLMCooldownBackoffRetentionAndRecovery(t *testing.T) {
 	now := time.Unix(100, 0)
 	table := &llmCooldownTable{now: func() time.Time { return now }}
 	profile := llm.Profile{ID: "a", Config: llm.ProviderConfig{Model: "m"}}
+	policy := immediateCooldownPolicy()
 	for n := 0; n < 12; n++ {
-		duration, _ := table.markFailure(profile, errors.New("HTTP 500"))
+		duration := table.markFailureWithPolicy(profile, errors.New("HTTP 500"), policy).cooldown
 		want := min(llmCooldownTransient*time.Duration(1<<n), llmCooldownMax)
 		if duration != want {
 			t.Fatalf("n=%d duration=%s want=%s", n, duration, want)
 		}
 		now = now.Add(duration + time.Second)
 	}
-	duration, _ := table.markFailure(profile, errors.New("HTTP 429 retry after 3s"))
+	duration := table.markFailureWithPolicy(profile, errors.New("HTTP 429 retry after 3s"), policy).cooldown
 	if duration != 3*time.Second {
 		t.Fatal(duration)
 	}
 	table.clear(profile)
-	duration, _ = table.markFailure(profile, errors.New("HTTP 500"))
+	duration = table.markFailureWithPolicy(profile, errors.New("HTTP 500"), policy).cooldown
 	if duration != llmCooldownTransient {
 		t.Fatal(duration)
 	}
 	now = now.Add(25 * time.Hour)
-	duration, _ = table.markFailure(profile, errors.New("HTTP 500"))
+	duration = table.markFailureWithPolicy(profile, errors.New("HTTP 500"), policy).cooldown
 	if duration != llmCooldownTransient {
 		t.Fatal(duration)
 	}
@@ -627,4 +646,109 @@ func (p *liveFallbackBudgetProvider) Generate(ctx context.Context, req llm.Gener
 	}
 	p.calls++
 	return p.provider.Generate(ctx, req)
+}
+
+func immediateCooldownPolicy() llmRecoveryPolicy {
+	policy := defaultLLMRecoveryPolicy()
+	policy.failuresBeforeCooldown = 1
+	return policy
+}
+
+// 限流、5xx 要连续失败到阈值才冷却；鉴权失败、带等待时间的限流当场冷却；
+// 隔太久的失败不算连续。
+func TestLLMCooldownWaitsForFailureStreak(t *testing.T) {
+	now := time.Unix(1000, 0)
+	table := &llmCooldownTable{now: func() time.Time { return now }}
+	profile := llm.Profile{ID: "a", Config: llm.ProviderConfig{Model: "m"}}
+	limited := errors.New("429 Too Many Requests")
+	for n := 1; n < llmFailuresBeforeCooldownDefault; n++ {
+		mark := table.markFailureWithPolicy(profile, limited, defaultLLMRecoveryPolicy())
+		if mark.cooldown != 0 || !mark.counted || mark.failures != n || table.remaining(profile) != 0 {
+			t.Fatalf("第 %d 次失败不该冷却：%+v", n, mark)
+		}
+		now = now.Add(time.Second)
+	}
+	mark := table.markFailureWithPolicy(profile, limited, defaultLLMRecoveryPolicy())
+	if mark.cooldown != llmCooldownDefault || !mark.fresh || !mark.until.Equal(now.Add(llmCooldownDefault)) {
+		t.Fatalf("攒够连续失败应当冷却：%+v", mark)
+	}
+
+	table.clear(profile)
+	table.markFailureWithPolicy(profile, limited, defaultLLMRecoveryPolicy())
+	now = now.Add(llmFailureStreakWindow + time.Second)
+	if mark := table.markFailureWithPolicy(profile, limited, defaultLLMRecoveryPolicy()); mark.failures != 1 {
+		t.Fatalf("隔太久的失败应当重新数：%+v", mark)
+	}
+
+	for _, text := range []string{"401 Unauthorized: invalid api key", "429 Too Many Requests: retry after 30s"} {
+		other := llm.Profile{ID: text, Config: llm.ProviderConfig{Model: "m"}}
+		if mark := table.markFailureWithPolicy(other, errors.New(text), defaultLLMRecoveryPolicy()); mark.cooldown <= 0 {
+			t.Fatalf("%q 应当当场冷却：%+v", text, mark)
+		}
+	}
+}
+
+// 没攒够连续失败时，下一次请求仍先用主档；切换日志写明这是第几次。
+func TestLLMFailoverKeepsPrimaryUntilStreak(t *testing.T) {
+	table := &llmCooldownTable{}
+	limited := errors.New("503 Service Unavailable")
+	primary := &cooldownRegistryAdapter{generateErrs: []error{limited}}
+	backup := &cooldownRegistryAdapter{response: "备用回复"}
+	newProvider := cooldownProviderFactory(t, table, primary, backup)
+	var events []llmEvent
+	for call := 1; call <= 4; call++ {
+		provider := newProvider()
+		provider.recoveryPolicy.retryDelay = 0
+		provider.report = func(event llmEvent) { events = append(events, event) }
+		if resp, err := provider.Generate(context.Background(), cooldownRequest()); err != nil || resp.Text != "备用回复" {
+			t.Fatalf("第 %d 次调用 resp=%#v err=%v", call, resp, err)
+		}
+	}
+	// 前三次请求各打主档三次（含两次原地重试），第三次攒够后冷却，第四次直接走备用。
+	if primary.generateCalls != 9 || backup.generateCalls != 4 {
+		t.Fatalf("primary=%d backup=%d", primary.generateCalls, backup.generateCalls)
+	}
+	if len(events) != 3 || events[0].Mark.failures != 1 || events[0].Mark.cooldown != 0 || events[2].Mark.cooldown <= 0 {
+		t.Fatalf("events = %+v", events)
+	}
+	location := time.FixedZone("CST", 8*3600)
+	if got := llmFailoverMessage(events[0], location); !strings.Contains(got, "连续第 1/3 次") || !strings.Contains(got, "下次仍先用它") {
+		t.Fatalf("message = %q", got)
+	}
+	want := "冷却到 " + events[2].Mark.until.In(location).Format("15:04:05") + " 再试"
+	if got := llmFailoverMessage(events[2], location); !strings.Contains(got, want) {
+		t.Fatalf("message = %q, want %q", got, want)
+	}
+}
+
+// 每个候选各自计时：主档卡住用满自己那份时间后，备用档拿到完整的一份重新计时。
+func TestLLMCandidateBudgetRestartsOnFailover(t *testing.T) {
+	table := &llmCooldownTable{}
+	primary := &cooldownRegistryAdapter{block: true}
+	backup := &cooldownRegistryAdapter{response: "备用回复", delay: 60 * time.Millisecond}
+	provider := cooldownProviderFactory(t, table, primary, backup)()
+	ctx, cancel := withLLMCandidateBudget(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+	resp, err := provider.Generate(ctx, cooldownRequest())
+	if err != nil || resp.Text != "备用回复" {
+		t.Fatalf("resp=%#v err=%v", resp, err)
+	}
+	// 共用一个期限的话备用档只剩 0ms；分开计时总耗时约 100ms + 60ms。
+	if elapsed := time.Since(started); elapsed < 150*time.Millisecond {
+		t.Fatalf("elapsed = %s", elapsed)
+	}
+	if health := table.snapshot([]llm.Profile{{ID: "primary", Config: llm.ProviderConfig{Model: "primary-model"}}}); health[0].failures != 1 {
+		t.Fatalf("候选超时应当计入连续失败：%+v", health)
+	}
+
+	// 只有一个候选时总时长仍是一份预算，不会被放宽成三份。
+	single := cooldownProviderFactory(t, &llmCooldownTable{}, &cooldownRegistryAdapter{block: true})()
+	ctx, cancel = withLLMCandidateBudget(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	started = time.Now()
+	_, err = single.Generate(ctx, cooldownRequest())
+	if !errors.Is(err, errLLMCandidateTimeout) || time.Since(started) > 500*time.Millisecond {
+		t.Fatalf("err=%v elapsed=%s", err, time.Since(started))
+	}
 }

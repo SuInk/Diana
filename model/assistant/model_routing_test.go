@@ -178,7 +178,8 @@ func TestModelRoutingFailoverAndDisabledRoutes(t *testing.T) {
 			t.Fatalf("got=%q err=%v, want standby", got, err)
 		}
 	}
-	if adapters["a"].calls != 2 || adapters["b"].calls != 2 || adapters["c"].calls != 2 || adapters["d"].calls != 0 {
+	// 503 没攒够连续失败不冷却：两次请求都先试 a、b（各含两次原地重试），再落到 c。
+	if adapters["a"].calls != 6 || adapters["b"].calls != 6 || adapters["c"].calls != 2 || adapters["d"].calls != 0 {
 		t.Fatalf("unexpected attempts: a=%d b=%d c=%d d=%d", adapters["a"].calls, adapters["b"].calls, adapters["c"].calls, adapters["d"].calls)
 	}
 	cfg := r.profileConfig("")

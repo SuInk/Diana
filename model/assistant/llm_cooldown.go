@@ -23,12 +23,22 @@ const (
 	// llmCooldownTransient 是普通 5xx、连接被拒这类偶发失败的冷却，只求接下来
 	// 几秒别再先撞它；只有一个候选时冷却不会拦住它，见 order。
 	llmCooldownTransient = 10 * time.Second
+	// llmCooldownTimeout 是候选连续超时攒够次数后的冷却。一直卡住的上游每次都要
+	// 白等一整份预算，比报错的上游代价大得多，冷却也要长一些；取值同 sub2api
+	// 流超时的默认临时停调 5 分钟。
+	llmCooldownTimeout = 5 * time.Minute
 	// llmCooldownMax 给上游提示的等待时间封顶：「Wait 311000s」照单全收的话，上游
 	// 提前恢复了也要三天多才会再用它。到期先探一次，还不行再冷却。
 	llmCooldownMax = 30 * time.Minute
 	// llmCooldownSkipLogInterval 是同一个候选「冷却中被跳过」两次写终端日志的最短
 	// 间隔。每次调用都打的话，冷却本身就成了刷屏源。
 	llmCooldownSkipLogInterval = 10 * time.Minute
+	// llmFailuresBeforeCooldownDefault 是连续失败几次才把候选冷却掉。偶发一次限流
+	// 就把主模型停掉、后面一分钟全走备用，比多试一次原模型难受得多。
+	llmFailuresBeforeCooldownDefault = 3
+	// llmFailureStreakWindow 是「连续失败」的有效期：上次失败（或冷却结束）之后隔了
+	// 这么久才又失败，按新的一轮从 1 数起，昨天的零星失败不该攒到今天。
+	llmFailureStreakWindow = 10 * time.Minute
 )
 
 type llmRecoveryPolicy struct {
@@ -38,6 +48,8 @@ type llmRecoveryPolicy struct {
 	statusCooldown    time.Duration
 	maxCooldown       time.Duration
 	respectRetryAfter bool
+	// failuresBeforeCooldown 是连续失败多少次才进入冷却；1 等于一失败就冷却。
+	failuresBeforeCooldown int
 }
 
 func defaultLLMRecoveryPolicy() llmRecoveryPolicy {
@@ -48,6 +60,8 @@ func defaultLLMRecoveryPolicy() llmRecoveryPolicy {
 		statusCooldown:    llmCooldownDefault,
 		maxCooldown:       llmCooldownMax,
 		respectRetryAfter: true,
+
+		failuresBeforeCooldown: llmFailuresBeforeCooldownDefault,
 	}
 }
 
@@ -63,6 +77,8 @@ func effectiveLLMRecoveryPolicy(policy *ModelRecoveryPolicy) llmRecoveryPolicy {
 		statusCooldown:    time.Duration(normalized.StatusCooldownSeconds) * time.Second,
 		maxCooldown:       time.Duration(normalized.MaxCooldownSeconds) * time.Second,
 		respectRetryAfter: normalized.RespectRetryAfter,
+
+		failuresBeforeCooldown: normalized.FailuresBeforeCooldown,
 	}
 }
 
@@ -194,20 +210,33 @@ func (t *llmCooldownTable) remaining(profile llm.Profile) time.Duration {
 	return 0
 }
 
-// markFailure 按失败原因给候选记冷却。返回冷却时长和这是不是一次新进入的冷却；
-// 已经在冷却中又失败（所有候选都冷却、只好硬试）只顺延截止时间，不算新进入，
-// 调用方据此决定要不要打日志。时长为 0 表示这类失败不该冷却。
-func (t *llmCooldownTable) markFailure(profile llm.Profile, err error) (time.Duration, bool) {
-	return t.markFailureWithPolicy(profile, err, defaultLLMRecoveryPolicy())
+// llmFailureMark 是一次失败记账的结果，切换日志据此告诉人「什么时候再试它」。
+type llmFailureMark struct {
+	// cooldown 为 0 表示这次没有进入冷却：要么这类失败不冷却，要么连续失败还没到阈值。
+	cooldown time.Duration
+	until    time.Time
+	// fresh 表示这是一次新进入的冷却；已经在冷却中又失败只顺延截止时间。
+	fresh     bool
+	failures  int
+	threshold int
+	// counted 为 false 表示这类失败跟请求本身有关，不计入连续失败。
+	counted bool
 }
 
-func (t *llmCooldownTable) markFailureWithPolicy(profile llm.Profile, err error, policy llmRecoveryPolicy) (time.Duration, bool) {
+// markFailure 按失败原因给候选记一次失败，连续失败到阈值才冷却。
+func (t *llmCooldownTable) markFailure(profile llm.Profile, err error) (time.Duration, bool) {
+	mark := t.markFailureWithPolicy(profile, err, defaultLLMRecoveryPolicy())
+	return mark.cooldown, mark.fresh
+}
+
+func (t *llmCooldownTable) markFailureWithPolicy(profile llm.Profile, err error, policy llmRecoveryPolicy) llmFailureMark {
+	threshold := max(policy.failuresBeforeCooldown, 1)
 	if t == nil {
-		return 0, false
+		return llmFailureMark{threshold: threshold}
 	}
 	duration := llmCooldownDurationWithPolicy(err, policy)
 	if duration <= 0 {
-		return 0, false
+		return llmFailureMark{threshold: threshold}
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -228,18 +257,40 @@ func (t *llmCooldownTable) markFailureWithPolicy(profile llm.Profile, err error,
 		entry = &llmCooldownEntry{}
 		t.entries[key] = entry
 	}
+	if !cooling && entry.failures > 0 && now.Sub(laterTime(entry.lastFailure, entry.until)) > llmFailureStreakWindow {
+		entry.failures = 0
+	}
 	entry.failures++
 	entry.lastFailure = now
-	if !policy.respectRetryAfter || llmRetryAfterHint(err) <= 0 {
-		for n := 1; n < entry.failures && duration < policy.maxCooldown; n++ {
+	entry.retainUntil = now.Add(24 * time.Hour)
+	mark := llmFailureMark{failures: entry.failures, threshold: threshold, counted: true}
+	// 上游明说了要等多久就照办，不必攒够次数：它已经告诉我们现在发过去也是白发。
+	// 鉴权失败、额度用完同理。
+	hinted := policy.respectRetryAfter && llmRetryAfterHint(err) > 0
+	if !hinted && !llmErrorPolicy(err).immediate && !cooling && entry.failures < threshold {
+		return mark
+	}
+	if !hinted {
+		first := threshold
+		if llmErrorPolicy(err).immediate {
+			first = 1
+		}
+		for n := first; n < entry.failures && duration < policy.maxCooldown; n++ {
 			duration = min(duration*2, policy.maxCooldown)
 		}
 	}
-	entry.retainUntil = now.Add(24 * time.Hour)
 	if until := now.Add(duration); until.After(entry.until) {
 		entry.until = until
 	}
-	return duration, !cooling
+	mark.cooldown, mark.until, mark.fresh = duration, entry.until, !cooling
+	return mark
+}
+
+func laterTime(a, b time.Time) time.Time {
+	if a.After(b) {
+		return a
+	}
+	return b
 }
 
 // clear 在候选调用成功后解除它的冷却：硬试成功说明上游已经恢复，下一次就该照常
@@ -351,23 +402,25 @@ func (t *llmCooldownTable) skipLogDue(profile llm.Profile) (time.Duration, bool)
 	return left, true
 }
 
-// noteLLMCandidateFailure 给失败的候选记冷却，新进入冷却时打一行说明冷却多久。
-func noteLLMCandidateFailure(cooldowns *llmCooldownTable, group string, profile llm.Profile, err error, policies ...llmRecoveryPolicy) {
+// noteLLMCandidateFailure 给失败的候选记一次失败，新进入冷却时打一行说明冷却多久。
+func noteLLMCandidateFailure(cooldowns *llmCooldownTable, group string, profile llm.Profile, err error, policies ...llmRecoveryPolicy) llmFailureMark {
 	policy := defaultLLMRecoveryPolicy()
 	if len(policies) > 0 {
 		policy = policies[0]
 	}
-	duration, fresh := cooldowns.markFailureWithPolicy(profile, err, policy)
-	if duration <= 0 || !fresh {
-		return
+	mark := cooldowns.markFailureWithPolicy(profile, err, policy)
+	if mark.cooldown <= 0 || !mark.fresh {
+		return mark
 	}
 	log.Printf(
-		"diana llm provider cooldown: group=%q profile=%q for=%s err=%s",
+		"diana llm provider cooldown: group=%q profile=%q for=%s failures=%d err=%s",
 		group,
 		llmCandidateLabel(profile, true),
-		duration.Round(time.Second),
+		mark.cooldown.Round(time.Second),
+		mark.failures,
 		truncateRunes(errorText(err), llmFailoverLogErrLimit),
 	)
+	return mark
 }
 
 // llmCooldownDuration 决定一次失败让候选冷却多久。
@@ -384,9 +437,11 @@ func llmCooldownDurationWithPolicy(err error, policy llmRecoveryPolicy) time.Dur
 	if fallback == 0 {
 		return 0
 	}
-	if fallback == llmCooldownTransient {
+	switch fallback {
+	case llmCooldownTransient:
 		fallback = policy.transientCooldown
-	} else {
+	case llmCooldownTimeout:
+	default:
 		fallback = policy.statusCooldown
 	}
 	if fallback <= 0 {

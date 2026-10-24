@@ -337,14 +337,14 @@ func TestTransientLLMRetryStopsAfterThreeRetries(t *testing.T) {
 	}
 }
 
-func TestDefaultTransientLLMRetryStopsAfterOneRetry(t *testing.T) {
+func TestDefaultTransientLLMRetryStopsAfterTwoRetries(t *testing.T) {
 	provider := &timeoutSequenceProvider{}
 	_, err := generateWithTransientRetryTimeout(context.Background(), provider, llm.GenerateRequest{}, true, time.Second)
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("err=%v", err)
 	}
-	if provider.calls != 2 {
-		t.Fatalf("calls=%d, want initial request plus one retry", provider.calls)
+	if provider.calls != 3 {
+		t.Fatalf("calls=%d, want initial request plus two retries", provider.calls)
 	}
 }
 
@@ -446,7 +446,7 @@ func TestRegistryModelRoleGroupKeepsStreamingDuringFailover(t *testing.T) {
 	if err != nil || response.Text != "backup stream" {
 		t.Fatalf("response=%#v err=%v", response, err)
 	}
-	if primary.streamCalls != 2 || backup.streamCalls != 1 || primary.generateCalls != 0 || backup.generateCalls != 0 {
+	if primary.streamCalls != 3 || backup.streamCalls != 1 || primary.generateCalls != 0 || backup.generateCalls != 0 {
 		t.Fatalf("primary stream/generate=%d/%d backup=%d/%d", primary.streamCalls, primary.generateCalls, backup.streamCalls, backup.generateCalls)
 	}
 }
@@ -546,8 +546,8 @@ func TestEmptyLLMOutputRetriesOnce(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "output is empty") {
 		t.Fatalf("err=%v", err)
 	}
-	if provider.calls != 2 {
-		t.Fatalf("calls=%d, want initial request plus one retry", provider.calls)
+	if provider.calls != 3 {
+		t.Fatalf("calls=%d, want initial request plus two retries", provider.calls)
 	}
 }
 
@@ -1064,7 +1064,7 @@ func TestUnifiedLLMFailurePolicy(t *testing.T) {
 	}{
 		{"HTTP 500", true, true, llmCooldownTransient}, {"HTTP 529", true, true, llmCooldownTransient},
 		{"HTTP 504", true, true, llmCooldownTransient}, {"HTTP 401", false, true, llmCooldownDefault},
-		{"HTTP 403", false, true, llmCooldownDefault}, {"HTTP 429", false, true, llmCooldownDefault},
+		{"HTTP 403", false, true, llmCooldownDefault}, {"HTTP 429", true, true, llmCooldownDefault},
 		{"HTTP 402: insufficient credits", false, true, llmCooldownDefault},
 		{"HTTP 402: Payment Required", false, true, llmCooldownDefault},
 		{"HTTP 400: invalid credit parameter", false, false, 0},

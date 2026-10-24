@@ -1027,6 +1027,9 @@ type ModelRecoveryPolicy struct {
 	StatusCooldownSeconds    int  `json:"status_cooldown_seconds"`
 	MaxCooldownSeconds       int  `json:"max_cooldown_seconds"`
 	RespectRetryAfter        bool `json:"respect_retry_after"`
+	// FailuresBeforeCooldown 是连续失败几次才冷却这个候选。0 是改版前存下的策略，
+	// 按默认值处理，不当成「一失败就冷却」。
+	FailuresBeforeCooldown int `json:"failures_before_cooldown,omitempty"`
 }
 
 func normalizeModelRoles(roles map[string]ModelRole) map[string]ModelRole {
@@ -1132,6 +1135,10 @@ func normalizeModelRecoveryPolicy(policy *ModelRecoveryPolicy) *ModelRecoveryPol
 	normalized.TransientCooldownSeconds = min(max(normalized.TransientCooldownSeconds, 0), 3_600)
 	normalized.StatusCooldownSeconds = min(max(normalized.StatusCooldownSeconds, 0), 86_400)
 	normalized.MaxCooldownSeconds = min(max(normalized.MaxCooldownSeconds, 1), 86_400)
+	if normalized.FailuresBeforeCooldown <= 0 {
+		normalized.FailuresBeforeCooldown = llmFailuresBeforeCooldownDefault
+	}
+	normalized.FailuresBeforeCooldown = min(normalized.FailuresBeforeCooldown, 10)
 	return &normalized
 }
 

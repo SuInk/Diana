@@ -95,6 +95,7 @@ export interface ModelRecoveryPolicy {
   status_cooldown_seconds: number;
   max_cooldown_seconds: number;
   respect_retry_after: boolean;
+  failures_before_cooldown?: number;
 }
 
 export interface ImageGenerateResponse {

@@ -194,7 +194,7 @@ func (r *Runtime) evaluateRelationshipUpdateDetailed(ctx context.Context, event 
 			Content: "请评估这条消息是否改变当前发言者与机器人的关系，并给出这一轮观察到的人员画像。上下文 JSON：\n" + string(payloadJSON),
 		},
 	}
-	callCtx, cancel := context.WithTimeout(ctx, relationshipEvaluationTimeout(cfg))
+	callCtx, cancel := withLLMCandidateBudget(ctx, relationshipEvaluationTimeout(cfg))
 	defer cancel()
 	model := ""
 	raw, err := r.runLLMRouterProvider(callCtx, func(client LLMProvider) (string, error) {

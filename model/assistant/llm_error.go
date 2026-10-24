@@ -27,11 +27,17 @@ func (e committedLLMError) Is(target error) bool { return target == errLLMOutput
 type llmFailurePolicy struct {
 	retry, failover bool
 	cooldown        time.Duration
+	// immediate 表示不必攒够连续失败次数就冷却：鉴权失败、额度用完这类状态，
+	// 下一次请求照样会撞上。限流、5xx、超时多半是一阵子的，要连续失败才冷却。
+	immediate bool
 }
 
 func llmErrorPolicy(err error) llmFailurePolicy {
 	if err == nil || errors.Is(err, errLLMOutputCommitted) || errors.Is(err, context.Canceled) {
 		return llmFailurePolicy{}
+	}
+	if errors.Is(err, errLLMCandidateTimeout) {
+		return llmFailurePolicy{failover: true, cooldown: llmCooldownTimeout}
 	}
 	if errors.Is(err, errModelRequestTimeout) || errors.Is(err, llm.ErrUnverifiedRejection) || errors.Is(err, llm.ErrDecisionRequired) {
 		return llmFailurePolicy{failover: true}
@@ -50,12 +56,17 @@ func llmErrorPolicy(err error) llmFailurePolicy {
 	}
 	status := llm.ErrorStatusCode(err)
 	text := strings.ToLower(err.Error())
+	// 额度用完、账号池全被限住：原地再发只会拿到同一句话，直接换下一个候选。
 	// Gateways sometimes report exhausted account pools as 503.
-	if status == 402 || status == 429 || (status == 0 || status >= 500) && containsAnyMarker(text, []string{"rate limit", "rate_limit", "ratelimit", "rate-limited", "rate limited", "quota", "resource_exhausted", "resource exhausted", "accounts limited", "account limited", "accounts are limited", "usage limit", "billing", "credit", "余额不足", "额度", "限流", "请求过于频繁"}) {
-		return llmFailurePolicy{failover: true, cooldown: llmCooldownDefault}
+	if status == 402 || (status == 0 || status == 429 || status >= 500) && containsAnyMarker(text, []string{"quota", "resource_exhausted", "resource exhausted", "accounts limited", "account limited", "accounts are limited", "usage limit", "billing", "credit", "余额不足", "额度"}) {
+		return llmFailurePolicy{failover: true, cooldown: llmCooldownDefault, immediate: true}
+	}
+	// 限流、并发超限多半过一两秒就放行，先在原模型上重试，不行再切。
+	if status == 429 || (status == 0 || status >= 500) && containsAnyMarker(text, []string{"rate limit", "rate_limit", "ratelimit", "rate-limited", "rate limited", "concurrency limit", "too many requests", "限流", "请求过于频繁"}) {
+		return llmFailurePolicy{retry: true, failover: true, cooldown: llmCooldownDefault}
 	}
 	if status == 401 || status == 403 {
-		return llmFailurePolicy{failover: true, cooldown: llmCooldownDefault}
+		return llmFailurePolicy{failover: true, cooldown: llmCooldownDefault, immediate: true}
 	}
 	if isModelUnavailableLLMError(err) {
 		return llmFailurePolicy{failover: true, cooldown: llmCooldownDefault}
@@ -68,7 +79,7 @@ func llmErrorPolicy(err error) llmFailurePolicy {
 		return llmFailurePolicy{}
 	}
 	if containsAnyMarker(text, []string{"unauthorized", "forbidden", "invalid api key", "invalid_api_key", "incorrect api key", "authentication", "permission_error", "未授权", "无权限"}) {
-		return llmFailurePolicy{failover: true, cooldown: llmCooldownDefault}
+		return llmFailurePolicy{failover: true, cooldown: llmCooldownDefault, immediate: true}
 	}
 	if containsAnyMarker(text, []string{"context deadline exceeded", "client.timeout exceeded", "timeout awaiting response headers", "response header timeout", "response body idle timeout", "stream idle timeout"}) {
 		return llmFailurePolicy{retry: true, failover: true}

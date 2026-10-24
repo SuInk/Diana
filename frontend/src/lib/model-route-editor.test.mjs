@@ -42,12 +42,12 @@ test("model route table exposes live cooling and degraded health states", () => 
 });
 
 test("model recovery rules are editable and unhealthy routes can be restored immediately", () => {
-  for (const text of ["自动恢复规则", "瞬时错误重试次数", "重试间隔（毫秒）", "瞬时错误首次冷却（秒）", "限流/鉴权首次冷却（秒）", "单次冷却上限（秒）", "优先采用上游 Retry-After", "恢复默认规则", "立即恢复：清除故障与冷却记录"]) {
+  for (const text of ["自动恢复规则", "瞬时错误重试次数", "重试间隔（毫秒）", "瞬时错误首次冷却（秒）", "限流/鉴权首次冷却（秒）", "单次冷却上限（秒）", "连续失败几次后冷却", "优先采用上游 Retry-After", "恢复默认规则", "立即恢复：清除故障与冷却记录"]) {
     assert.ok(source.includes(text), text);
   }
   assert.match(source, /resetModelHealth\(profileIDs, route\.model\)/);
   assert.match(source, /model_recovery_policy/);
-  assert.equal(source.match(/:show-controls="false"/g)?.length, 5);
+  assert.equal(source.match(/:show-controls="false"/g)?.length, 6);
   assert.ok(source.indexOf("<h2>自动恢复规则</h2>") > source.indexOf("<h2>聊天内模型管理</h2>"));
   assert.ok(source.indexOf("<h2>自动恢复规则</h2>") < source.indexOf("editorTab === 'behavior'"));
 });

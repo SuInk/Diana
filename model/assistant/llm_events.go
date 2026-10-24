@@ -5,6 +5,7 @@ package assistant
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -44,6 +45,8 @@ type llmEvent struct {
 	Stream           bool
 	MaxContextTokens int64
 	Err              error
+	// Mark 是切走的那一档这次失败的记账：冷却到什么时候，或者连续失败到第几次。
+	Mark llmFailureMark
 }
 
 // llmEventReporter 由运行时挂到 provider 上：provider 本身是每次调用临时建的，
@@ -51,9 +54,10 @@ type llmEvent struct {
 type llmEventReporter func(llmEvent)
 
 // newLLMFailoverEvent 组一条切档事件。
-func newLLMFailoverEvent(group string, from, to llm.Profile, stream bool, err error) llmEvent {
+func newLLMFailoverEvent(group string, from, to llm.Profile, stream bool, err error, mark llmFailureMark) llmEvent {
 	fromName, toName := llmFailoverDisplayNames(from, to)
 	return llmEvent{
+		Mark:     mark,
 		Kind:     llmEventFailover,
 		Group:    group,
 		Model:    from.Config.Model,
@@ -124,7 +128,8 @@ func (r *Runtime) reportLLMEvent(event llmEvent) {
 	if writer == nil {
 		return
 	}
-	key := fmt.Sprintf("%s|%s|%s|%s|%s|%s", event.Kind, event.Group, event.Model, event.From, event.To, event.ToModel)
+	// 冷却与否分开节流：同一分钟里先「第 1 次失败」后「已冷却」，后一条不能被吞掉。
+	key := fmt.Sprintf("%s|%s|%s|%s|%s|%s|%t", event.Kind, event.Group, event.Model, event.From, event.To, event.ToModel, event.Mark.cooldown > 0)
 	if !r.backgroundLogThrottle.allow(key, time.Now()) {
 		return
 	}
@@ -142,7 +147,14 @@ func (r *Runtime) reportLLMEvent(event llmEvent) {
 	case llmEventFailover:
 		entry.Kind = applog.KindError
 		entry.Level = applog.LevelError
-		entry.Message = fmt.Sprintf("模型配置「%s」调用失败，已切到「%s」", firstNonEmpty(event.FromName, event.From), firstNonEmpty(event.ToName, event.To))
+		entry.Message = llmFailoverMessage(event, r.configForContext(context.Background()).Location())
+		if event.Mark.counted {
+			entry.Metadata["failures"] = event.Mark.failures
+			entry.Metadata["failures_before_cooldown"] = event.Mark.threshold
+		}
+		if event.Mark.cooldown > 0 {
+			entry.Metadata["cooldown_until"] = event.Mark.until.UTC().Format(time.RFC3339)
+		}
 		entry.Metadata["from"] = event.From
 		entry.Metadata["to"] = event.To
 		if event.ToModel != "" {
@@ -156,4 +168,37 @@ func (r *Runtime) reportLLMEvent(event llmEvent) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	_ = writer.AppendLog(ctx, entry)
+}
+
+// llmFailoverMessage 写清切走的那一档什么时候再用：冷却到几点，或者还没攒够连续
+// 失败、下一次照样先试它。以前只写「调用失败，已切到」，看不出是临时让一下还是
+// 停用了一段时间。
+func llmFailoverMessage(event llmEvent, location *time.Location) string {
+	from, to := firstNonEmpty(event.FromName, event.From), firstNonEmpty(event.ToName, event.To)
+	reason := llmFailureReasonLabel(event.Err)
+	mark := event.Mark
+	switch {
+	case mark.cooldown > 0:
+		if location == nil {
+			location = time.Local
+		}
+		return fmt.Sprintf("模型配置「%s」%s，冷却到 %s 再试，已切到「%s」", from, reason, mark.until.In(location).Format("15:04:05"), to)
+	case mark.counted && mark.failures < mark.threshold:
+		return fmt.Sprintf("模型配置「%s」%s（连续第 %d/%d 次），这次先切到「%s」，下次仍先用它", from, reason, mark.failures, mark.threshold, to)
+	default:
+		return fmt.Sprintf("模型配置「%s」%s，已切到「%s」", from, reason, to)
+	}
+}
+
+func llmFailureReasonLabel(err error) string {
+	if err == nil {
+		return "调用失败"
+	}
+	if errors.Is(err, errLLMCandidateTimeout) || errors.Is(err, errModelRequestTimeout) || errors.Is(err, context.DeadlineExceeded) {
+		return "超时"
+	}
+	if policy := llmErrorPolicy(err); policy.retry && policy.cooldown == llmCooldownDefault {
+		return "被限流"
+	}
+	return "调用失败"
 }

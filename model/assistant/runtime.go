@@ -46,7 +46,7 @@ const (
 	relationshipEvalConcurrency    = 4
 	semanticRouteTimeout           = 20 * time.Second
 	llmTransientRetryDelay         = 700 * time.Millisecond
-	llmTransientMaxRetries         = 1
+	llmTransientMaxRetries         = 2
 	proactiveReplyRouteBudget      = 60 * time.Second
 	replyRuleRouteBudget           = 15 * time.Second
 
@@ -2907,7 +2907,8 @@ func (r *Runtime) routeProactiveReplyBatch(ctx context.Context, candidates []pro
 		event.routingReason = "主动回复判断上下文编码失败，已保持沉默：" + err.Error()
 		return event, text, nil, false
 	}
-	routeCtx, cancel := context.WithTimeout(ctx, proactiveReplyRouteTimeout(cfg))
+	// 预算按候选算：主模型卡住时切到备用重新计时，不让它把整段时间吃光。
+	routeCtx, cancel := withLLMCandidateBudget(ctx, proactiveReplyRouteTimeout(cfg))
 	defer cancel()
 	// 先选好指令再拼消息：llmMessageFromEventWithImagesForContext 可能去抓图片，
 	// 以前这里先按旧契约构造一次，再在评分契约下整条覆盖，那次抓图完全是白做的。

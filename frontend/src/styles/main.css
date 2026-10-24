@@ -666,7 +666,8 @@ code {
   font-size: 10px;
   white-space: nowrap;
 }
-.model-route-kind-cell .model-health-badge {
+.model-route-kind-cell .model-health-badge,
+.model-route-kind-cell .model-test-badge {
   display: flex;
   width: fit-content;
   margin-top: 5px;
