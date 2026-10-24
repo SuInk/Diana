@@ -204,4 +204,13 @@ func TestMatchPortraitValuesPrefersExactAndRejectsAmbiguous(t *testing.T) {
 	if got := MatchPortraitValues(traits, PortraitFieldInterest, " "); got != nil {
 		t.Fatalf("blank value: %v", got)
 	}
+	// 单个字不认包含，免得「球」就删掉一条。
+	if got := MatchPortraitValues(traits, PortraitFieldOther, "球"); len(got) != 0 {
+		t.Fatalf("single rune should not match by containment: %v", got)
+	}
+	// 存的值里有连续空白，照抄过来也要认得出。
+	spaced := []UserPortraitTrait{{Field: PortraitFieldOther, Value: "住  宿舍"}}
+	if got := MatchPortraitValues(spaced, PortraitFieldOther, "住  宿舍"); len(got) != 1 || got[0] != "住  宿舍" {
+		t.Fatalf("whitespace in stored value: %v", got)
+	}
 }
