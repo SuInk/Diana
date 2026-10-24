@@ -159,26 +159,28 @@
                 <span class="badge" :class="decisionClass(event)">{{ decisionLabel(event) }}</span>
                 <span v-if="event.edited" class="badge" :title="event.edit_time ? `编辑于 ${formatTime(event.edit_time)}` : '消息已编辑'">已编辑</span>
                 <span v-if="event.recalls?.length" class="badge warn">{{ eventHasTelegramProbeRecall(event) ? "已不可访问" : "已撤回" }}</span>
-                <span class="event-sender" :title="senderTitle(event)">
-                  <img
-                    v-if="event.sender_avatar_url && !failedAvatars[event.id]"
-                    class="event-avatar"
-                    :src="event.sender_avatar_url"
-                    alt=""
-                    loading="lazy"
-                    decoding="async"
-                    @error="markAvatarFailed(event)"
-                  />
-                  <span v-else class="event-avatar event-avatar-fallback" aria-hidden="true">{{ senderInitial(event) }}</span>
-                  <span class="event-sender-name">{{ senderDisplayName(event) }}</span>
-                  <span v-if="event.sender_name && event.user_id" class="event-sender-id mono">{{ event.user_id }}</span>
-                </span>
-                <span v-if="senderLevelLabel(event)" class="badge" :title="senderLevelTitle(event)">{{ senderLevelLabel(event) }}</span>
-                <template v-if="event.group_id">
-                  <span class="event-meta-sep" aria-hidden="true">·</span>
-                  <span class="muted event-meta-group" :title="displayEventGroup(event.group_id, event.group_name)">{{ groupShortName(event) }}</span>
-                </template>
                 <span v-if="event.duration_ms" class="muted">{{ formatDuration(event.duration_ms) }}</span>
+                <div class="event-sender-row">
+                  <span class="event-sender" :title="senderTitle(event)">
+                    <img
+                      v-if="event.sender_avatar_url && !failedAvatars[event.id]"
+                      class="event-avatar"
+                      :src="event.sender_avatar_url"
+                      alt=""
+                      loading="lazy"
+                      decoding="async"
+                      @error="markAvatarFailed(event)"
+                    />
+                    <span v-else class="event-avatar event-avatar-fallback" aria-hidden="true">{{ senderInitial(event) }}</span>
+                    <span class="event-sender-name">{{ senderDisplayName(event) }}</span>
+                    <span v-if="event.sender_name && event.user_id" class="event-sender-id mono">{{ event.user_id }}</span>
+                  </span>
+                  <span v-if="senderLevelLabel(event)" class="badge" :title="senderLevelTitle(event)">{{ senderLevelLabel(event) }}</span>
+                  <template v-if="event.group_id">
+                    <span class="event-meta-sep" aria-hidden="true">·</span>
+                    <span class="muted event-meta-group" :title="displayEventGroup(event.group_id, event.group_name)">{{ groupShortName(event) }}</span>
+                  </template>
+                </div>
               </div>
 
               <div v-if="isRecallEvent(event)" class="event-recall-summary">
@@ -519,8 +521,10 @@
             <div class="event-detail-main">
               <div class="event-detail-meta">
                 <SkeletonBlock v-for="badge in 3" :key="badge" width="58px" height="22px" />
-                <span class="event-sender"><SkeletonBlock width="20px" height="20px" rounded /><SkeletonBlock width="120px" height="20px" /></span>
-                <SkeletonBlock width="96px" height="20px" />
+                <div class="event-sender-row">
+                  <span class="event-sender"><SkeletonBlock width="20px" height="20px" rounded /><SkeletonBlock width="120px" height="20px" /></span>
+                  <SkeletonBlock width="96px" height="20px" />
+                </div>
               </div>
               <div class="event-detail-message"><SkeletonBlock width="70%" height="23px" /></div>
               <div class="event-decision">
@@ -2257,6 +2261,14 @@ onBeforeUnmount(() => {
 /* token 数偏少时要显眼一点，不然会被当成「这些调用没花钱」。 */
 .event-technical .usage-missing {
   color: var(--warn);
+}
+
+.event-sender-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
 }
 
 /* 发送者是排错时最先要认的东西，整块连在一起，别被 flex 的 gap 拆散。 */
