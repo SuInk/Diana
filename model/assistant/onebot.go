@@ -229,7 +229,74 @@ func sendOneBotMessage(ctx context.Context, msg OutgoingMessage, call func(conte
 	if strings.TrimSpace(msg.Text) == "" && len(msg.Segments) == 0 && len(msg.ImageURLs) == 0 && len(msg.VideoURLs) == 0 && len(msg.AudioURLs) == 0 {
 		return nil, nil
 	}
-	params := map[string]any{"message": buildOutgoingSegments(msg)}
+	parts := splitOneBotStandaloneMedia(buildOutgoingSegments(msg))
+	var first map[string]any
+	for index, part := range parts {
+		result, err := sendOneBotSegments(ctx, msg, part, call)
+		if err != nil {
+			if index > 0 {
+				// 前面几条已经发出去了，整条重试会把它们再发一遍。
+				return first, fmt.Errorf("%w: %d/%d parts sent before failure: %w", errOutboundPermanentRejection, index, len(parts), err)
+			}
+			return nil, err
+		}
+		if index == 0 {
+			first = result
+		}
+	}
+	return first, nil
+}
+
+// splitOneBotStandaloneMedia 把视频、语音、文件拆成单独的消息。
+//
+// QQ 不允许这几种段和别的内容同条发送：NapCat 会在接入端自己拆开，SnowLuma 则整条
+// 拒收（message element "video" must be the only segment in a message）。10/21 线上
+// 一条渲染出的视频因为带着 reply 段被拒，只能退回群文件上传。这里在发出前就拆好：
+// 正文（连同 reply、at）一条，每个独立媒体各一条；只有独立媒体时，引用和 @ 没有
+// 可以依附的正文，直接丢掉，媒体照常发。
+func splitOneBotStandaloneMedia(segments []map[string]any) [][]map[string]any {
+	var rest, standalone []map[string]any
+	for _, segment := range segments {
+		if kind, _ := segment["type"].(string); outboundStandaloneMedia[kind] {
+			standalone = append(standalone, segment)
+			continue
+		}
+		rest = append(rest, segment)
+	}
+	if len(standalone) == 0 {
+		return [][]map[string]any{segments}
+	}
+	parts := make([][]map[string]any, 0, 1+len(standalone))
+	if oneBotSegmentsHaveContent(rest) {
+		parts = append(parts, rest)
+	}
+	for _, segment := range standalone {
+		parts = append(parts, []map[string]any{segment})
+	}
+	return parts
+}
+
+// oneBotSegmentsHaveContent 判断拆掉独立媒体后剩下的部分还值不值得单独发一条。
+// 只剩 reply、at 和空白时不发：那是一条看不出内容的空引用。
+func oneBotSegmentsHaveContent(segments []map[string]any) bool {
+	for _, segment := range segments {
+		kind, data := oneBotSegmentTypeData(segment)
+		switch kind {
+		case "reply", "at":
+			continue
+		case "text":
+			if strings.TrimSpace(data["text"]) != "" {
+				return true
+			}
+		default:
+			return true
+		}
+	}
+	return false
+}
+
+func sendOneBotSegments(ctx context.Context, msg OutgoingMessage, segments []map[string]any, call func(context.Context, string, map[string]any) (map[string]any, error)) (map[string]any, error) {
+	params := map[string]any{"message": segments}
 	action := "send_private_msg"
 	if msg.GroupID != "" {
 		action = "send_group_msg"

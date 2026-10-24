@@ -190,3 +190,105 @@ func TestTelegramMessageToEventCarriesQuotedContent(t *testing.T) {
 		t.Fatalf("reply 段丢了：%#v", event.Segments)
 	}
 }
+
+// 论坛话题里没回复任何人的消息也挂着 reply_to_message，指向话题创建的服务消息。
+// 那不是引用，不能落成 reply 段，更不能被当成在回复机器人。
+func TestTelegramForumTopicRootIsNotAQuote(t *testing.T) {
+	for name, msg := range map[string]*telegramMessage{
+		"service message": {
+			MessageID: 31, MessageThreadID: 30, IsTopicMessage: true, Text: "大家好",
+			Chat: &telegramChat{ID: -100300, Type: "supergroup"}, From: &telegramUser{ID: 20001},
+			ReplyTo: &telegramMessage{MessageID: 30, From: &telegramUser{ID: 7}, ForumTopicCreated: json.RawMessage(`{"name":"闲聊"}`)},
+		},
+		"thread root id": {
+			MessageID: 31, MessageThreadID: 30, IsTopicMessage: true, Text: "大家好",
+			Chat: &telegramChat{ID: -100300, Type: "supergroup"}, From: &telegramUser{ID: 20001},
+			ReplyTo: &telegramMessage{MessageID: 30, From: &telegramUser{ID: 7}},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			event := telegramMessageToEvent(msg, "7", "diana_bot")
+			if event.Quoted != nil {
+				t.Fatalf("话题根消息被当成引用：%#v", event.Quoted)
+			}
+			for _, segment := range event.Segments {
+				if segment.Type == "reply" {
+					t.Fatalf("话题消息多出 reply 段：%#v", event.Segments)
+				}
+			}
+		})
+	}
+	// 话题里真回复了某条消息，照常算引用。
+	event := telegramMessageToEvent(&telegramMessage{
+		MessageID: 33, MessageThreadID: 30, IsTopicMessage: true, Text: "同意",
+		Chat: &telegramChat{ID: -100300, Type: "supergroup"}, From: &telegramUser{ID: 20001},
+		ReplyTo: &telegramMessage{MessageID: 32, Text: "周六去爬山", From: &telegramUser{ID: 7}},
+	}, "7", "diana_bot")
+	if event.Quoted == nil || event.Quoted.MessageID != "32" || event.Quoted.UserID != "7" {
+		t.Fatalf("话题内的真实回复丢了：%#v", event.Quoted)
+	}
+}
+
+// 只选中原消息的一段来回复时，对方要接的是那一段，不是整条。
+func TestTelegramPartialQuoteReplacesFullText(t *testing.T) {
+	event := telegramMessageToEvent(&telegramMessage{
+		MessageID: 41, Text: "这个不对",
+		Chat: &telegramChat{ID: -100300, Type: "supergroup"}, From: &telegramUser{ID: 20001},
+		Quote: &telegramTextQuote{Text: "地球是平的", IsManual: true},
+		ReplyTo: &telegramMessage{MessageID: 40, Text: "今天天气不错。地球是平的。晚饭吃什么", From: &telegramUser{ID: 7},
+			Chat: &telegramChat{ID: -100300, Type: "supergroup"}},
+	}, "7", "diana_bot")
+	if event.Quoted == nil || event.Quoted.RawMessage != "地球是平的" {
+		t.Fatalf("部分引用没生效：%#v", event.Quoted)
+	}
+	if got := quotedPlainText(event.Quoted); strings.Contains(got, "晚饭") {
+		t.Fatalf("引用文本仍是整条：%q", got)
+	}
+}
+
+// 回复别的聊天里的消息：reply_to_message 为空，内容在 external_reply + quote 里。
+// 来源聊天的消息号不能当成本群消息号去用。
+func TestTelegramExternalReplyBecomesQuote(t *testing.T) {
+	event := telegramMessageToEvent(&telegramMessage{
+		MessageID: 51, Text: "看这个",
+		Chat: &telegramChat{ID: -100300, Type: "supergroup"}, From: &telegramUser{ID: 20001},
+		Quote: &telegramTextQuote{Text: "新版本发布了"},
+		ExternalReply: &telegramExternalReply{
+			MessageID: 9,
+			Chat:      &telegramChat{ID: -100900, Type: "channel", Title: "公告频道"},
+			Origin:    &telegramMessageOrigin{Type: "channel", Chat: &telegramChat{ID: -100900, Type: "channel", Title: "公告频道"}},
+			Photo:     []telegramPhoto{{FileID: "small", Width: 90}, {FileID: "big", Width: 800}},
+		},
+	}, "7", "diana_bot")
+	quoted := event.Quoted
+	if quoted == nil || quoted.RawMessage != "新版本发布了" || quoted.SenderName != "公告频道" {
+		t.Fatalf("跨聊天引用没还原：%#v", quoted)
+	}
+	if quoted.MessageID == "9" || !strings.HasPrefix(quoted.MessageID, "external:") || quoted.GroupID != "-100900" {
+		t.Fatalf("跨聊天消息号会撞上本群消息：%#v", quoted)
+	}
+	if imageSegmentCount(quoted.Segments) != 1 || quoted.Segments[len(quoted.Segments)-1].Data["file_id"] != "big" {
+		t.Fatalf("跨聊天引用的图片丢了：%#v", quoted.Segments)
+	}
+	if explicitlyRepliesToBot(event, BotConfig{BotAccount: "7"}) {
+		t.Fatal("跨聊天引用被当成在回复机器人")
+	}
+}
+
+// 引用贴纸、语音、文件时要留下对应的段，不能只认图片。
+func TestTelegramQuotedMessageKeepsNonPhotoMedia(t *testing.T) {
+	quoted := telegramQuotedMessage(&telegramMessage{
+		MessageID: 61, From: &telegramUser{ID: 7}, Chat: &telegramChat{ID: -100300, Type: "supergroup"},
+		Sticker: &telegramSticker{FileID: "stk", FileUniqueID: "u-stk", Emoji: "😂"},
+	})
+	if quoted == nil || len(quoted.Segments) != 1 || quoted.Segments[0].Data["sub_type"] != "telegram_sticker" {
+		t.Fatalf("引用贴纸丢了：%#v", quoted)
+	}
+	quoted = telegramQuotedMessage(&telegramMessage{
+		MessageID: 62, From: &telegramUser{ID: 7}, Chat: &telegramChat{ID: -100300, Type: "supergroup"},
+		Voice: &telegramFile{FileID: "voice"}, Document: &telegramFile{FileID: "doc", FileName: "a.pdf"},
+	})
+	if quoted == nil || len(quoted.Segments) != 2 || quoted.Segments[0].Type != "record" || quoted.Segments[1].Type != "file" {
+		t.Fatalf("引用语音/文件丢了：%#v", quoted)
+	}
+}

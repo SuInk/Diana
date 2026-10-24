@@ -472,3 +472,19 @@ func TestPlatformToolReadReportsRequesterGroupRole(t *testing.T) {
 		}
 	}
 }
+
+// 门禁拒绝要把原因记进审计日志；被包着的接入端原文仍然不能出现。
+func TestPlatformFailureDetailKeepsRefusalReason(t *testing.T) {
+	if got := platformFailureDetail(platformRefusal(fmt.Errorf("我不是这个群的管理员，做不到"))); got != "我不是这个群的管理员，做不到" {
+		t.Fatalf("refusal detail = %q", got)
+	}
+	wrapped := platformRefusal(fmt.Errorf("无法确认机器人在本群的身份，暂不执行：%w", &oneBotActionError{retCode: 1200, message: "token=owner-secret"}))
+	got := platformFailureDetail(wrapped)
+	if strings.Contains(got, "owner-secret") || !strings.Contains(got, "无法确认机器人在本群的身份") || !strings.Contains(got, "retcode=1200") {
+		t.Fatalf("wrapped refusal detail = %q", got)
+	}
+	got = platformFailureDetail(fmt.Errorf("set_title 执行失败：%w", &telegramAPIError{Code: 400, Description: "owner-secret"}))
+	if strings.Contains(got, "owner-secret") || !strings.HasPrefix(got, "set_title 执行失败") || !strings.Contains(got, "code=400") {
+		t.Fatalf("adapter detail = %q", got)
+	}
+}

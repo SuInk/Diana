@@ -796,15 +796,50 @@ type telegramMessage struct {
 	LeftChatMember  *telegramUser    `json:"left_chat_member,omitempty"`
 	PinnedMessage   *telegramMessage `json:"pinned_message,omitempty"`
 	ReplyTo         *telegramMessage `json:"reply_to_message"`
-	Entities        []telegramEntity `json:"entities"`
-	CaptionEntities []telegramEntity `json:"caption_entities"`
-	Photo           []telegramPhoto  `json:"photo"`
-	Video           *telegramFile    `json:"video,omitempty"`
-	Animation       *telegramFile    `json:"animation,omitempty"`
-	Sticker         *telegramSticker `json:"sticker,omitempty"`
-	Audio           *telegramFile    `json:"audio,omitempty"`
-	Voice           *telegramFile    `json:"voice,omitempty"`
-	Document        *telegramFile    `json:"document,omitempty"`
+	// Quote 是用户只选中被回复消息里一段话时 Telegram 给的那一段。
+	Quote *telegramTextQuote `json:"quote,omitempty"`
+	// ExternalReply 是回复别的聊天或别的话题里的消息，这时 reply_to_message 为空。
+	ExternalReply     *telegramExternalReply `json:"external_reply,omitempty"`
+	IsTopicMessage    bool                   `json:"is_topic_message,omitempty"`
+	ForumTopicCreated json.RawMessage        `json:"forum_topic_created,omitempty"`
+	Entities          []telegramEntity       `json:"entities"`
+	CaptionEntities   []telegramEntity       `json:"caption_entities"`
+	Photo             []telegramPhoto        `json:"photo"`
+	Video             *telegramFile          `json:"video,omitempty"`
+	Animation         *telegramFile          `json:"animation,omitempty"`
+	Sticker           *telegramSticker       `json:"sticker,omitempty"`
+	Audio             *telegramFile          `json:"audio,omitempty"`
+	Voice             *telegramFile          `json:"voice,omitempty"`
+	Document          *telegramFile          `json:"document,omitempty"`
+}
+
+type telegramTextQuote struct {
+	Text     string `json:"text"`
+	IsManual bool   `json:"is_manual,omitempty"`
+}
+
+// telegramExternalReply 是 Bot API 的 ExternalReplyInfo：只有来源和媒体，正文要从
+// 同一条消息的 quote 里拿。
+type telegramExternalReply struct {
+	Origin    *telegramMessageOrigin `json:"origin,omitempty"`
+	Chat      *telegramChat          `json:"chat,omitempty"`
+	MessageID int64                  `json:"message_id,omitempty"`
+	Photo     []telegramPhoto        `json:"photo,omitempty"`
+	Video     *telegramFile          `json:"video,omitempty"`
+	Animation *telegramFile          `json:"animation,omitempty"`
+	Sticker   *telegramSticker       `json:"sticker,omitempty"`
+	Audio     *telegramFile          `json:"audio,omitempty"`
+	Voice     *telegramFile          `json:"voice,omitempty"`
+	Document  *telegramFile          `json:"document,omitempty"`
+}
+
+type telegramMessageOrigin struct {
+	Type            string        `json:"type"`
+	SenderUser      *telegramUser `json:"sender_user,omitempty"`
+	SenderUserName  string        `json:"sender_user_name,omitempty"`
+	SenderChat      *telegramChat `json:"sender_chat,omitempty"`
+	Chat            *telegramChat `json:"chat,omitempty"`
+	AuthorSignature string        `json:"author_signature,omitempty"`
 }
 
 type telegramUser struct {
@@ -1045,68 +1080,22 @@ func telegramMessageToEvent(msg *telegramMessage, selfID, botUsername string) Me
 	}
 
 	// 回复关系落成与 OneBot 同一种 reply 段，模型看到的引用标记因此跨平台一致。
+	quoted := telegramReplyQuote(msg)
 	segments := make([]MessageSegment, 0, 2)
-	if msg.ReplyTo != nil && msg.ReplyTo.MessageID != 0 {
+	replyID := ""
+	if reply := telegramRepliedMessage(msg); reply != nil {
+		replyID = strconv.FormatInt(reply.MessageID, 10)
+	} else if quoted != nil {
+		replyID = quoted.MessageID
+	}
+	if replyID != "" {
 		segments = append(segments, MessageSegment{
 			Type: "reply",
-			Data: map[string]string{"id": strconv.FormatInt(msg.ReplyTo.MessageID, 10)},
+			Data: map[string]string{"id": replyID},
 		})
 	}
 	segments = append(segments, MessageSegment{Type: "text", Data: map[string]string{"text": text}})
-	if len(msg.Photo) > 0 {
-		photo := msg.Photo[len(msg.Photo)-1]
-		segments = append(segments, MessageSegment{Type: "image", Data: map[string]string{"file_id": photo.FileID, "file_unique_id": photo.FileUniqueID, "file_size": strconv.FormatInt(photo.FileSize, 10)}})
-	}
-	appendTelegramStickerSegment := func(sticker *telegramSticker) {
-		if sticker == nil || strings.TrimSpace(sticker.FileID) == "" {
-			return
-		}
-		fileID := sticker.FileID
-		fileUniqueID := sticker.FileUniqueID
-		fileSize := sticker.FileSize
-		name := "sticker.webp"
-		mime := "image/webp"
-		// 动画贴纸（TGS）和视频贴纸（WebM）不能直接交给图片模型。Telegram
-		// 同时提供静态 thumbnail，用它作为可识别、可入表情库的画面预览。
-		if sticker.IsAnimated || sticker.IsVideo {
-			thumbnail := sticker.Thumbnail
-			if thumbnail == nil {
-				// 兼容较旧 Bot API server 使用的 thumb 字段。
-				thumbnail = sticker.Thumb
-			}
-			if thumbnail == nil || strings.TrimSpace(thumbnail.FileID) == "" {
-				return
-			}
-			fileID = thumbnail.FileID
-			fileUniqueID = thumbnail.FileUniqueID
-			fileSize = thumbnail.FileSize
-			name = "sticker-preview.webp"
-		}
-		summary := strings.TrimSpace(sticker.Emoji)
-		if summary == "" {
-			summary = "Telegram 贴纸"
-		}
-		segments = append(segments, MessageSegment{Type: "image", Data: map[string]string{
-			"file_id": fileID, "file_unique_id": fileUniqueID, "file_size": strconv.FormatInt(fileSize, 10), "name": name, "mime": mime,
-			"sub_type": "telegram_sticker", "summary": summary, "emoji": strings.TrimSpace(sticker.Emoji),
-			"sticker_set": strings.TrimSpace(sticker.SetName), "sticker_type": strings.TrimSpace(sticker.Type),
-			"sticker_file_id": sticker.FileID, "sticker_unique_id": strings.TrimSpace(sticker.FileUniqueID),
-		}})
-	}
-	appendTelegramStickerSegment(msg.Sticker)
-	appendFile := func(kind string, media *telegramFile) {
-		if media == nil || strings.TrimSpace(media.FileID) == "" {
-			return
-		}
-		segments = append(segments, MessageSegment{Type: kind, Data: map[string]string{
-			"file_id": media.FileID, "file_unique_id": media.FileUniqueID, "name": media.FileName, "mime": media.MimeType, "file_size": strconv.FormatInt(media.FileSize, 10),
-		}})
-	}
-	appendFile("video", msg.Video)
-	appendFile("video", msg.Animation)
-	appendFile("record", msg.Voice)
-	appendFile("record", msg.Audio)
-	appendFile("file", msg.Document)
+	segments = append(segments, telegramMediaSegments(telegramMediaOf(msg))...)
 
 	event := MessageEvent{
 		Platform:        PlatformTelegram,
@@ -1118,7 +1107,7 @@ func telegramMessageToEvent(msg *telegramMessage, selfID, botUsername string) Me
 		MessageThreadID: telegramOptionalID(msg.MessageThreadID),
 		RawMessage:      text,
 		Segments:        segments,
-		Quoted:          telegramQuotedMessage(msg.ReplyTo),
+		Quoted:          quoted,
 	}
 
 	switch msg.Chat.Type {
@@ -1378,13 +1367,177 @@ func telegramMentionEntities(mentions []dianaMentionSpan) []map[string]any {
 	return entities
 }
 
-// telegramQuotedMessage 把 reply_to_message 里内联的引用内容直接填成 Quoted。
+// telegramMedia 是消息里可能带的媒体字段。Message 和 ExternalReplyInfo 各有一份，
+// 收成同一个形状后正文和引用共用一套段构造。
+type telegramMedia struct {
+	Photo     []telegramPhoto
+	Video     *telegramFile
+	Animation *telegramFile
+	Sticker   *telegramSticker
+	Audio     *telegramFile
+	Voice     *telegramFile
+	Document  *telegramFile
+}
+
+func telegramMediaOf(msg *telegramMessage) telegramMedia {
+	if msg == nil {
+		return telegramMedia{}
+	}
+	return telegramMedia{Photo: msg.Photo, Video: msg.Video, Animation: msg.Animation, Sticker: msg.Sticker, Audio: msg.Audio, Voice: msg.Voice, Document: msg.Document}
+}
+
+func telegramExternalMediaOf(reply *telegramExternalReply) telegramMedia {
+	if reply == nil {
+		return telegramMedia{}
+	}
+	return telegramMedia{Photo: reply.Photo, Video: reply.Video, Animation: reply.Animation, Sticker: reply.Sticker, Audio: reply.Audio, Voice: reply.Voice, Document: reply.Document}
+}
+
+// telegramMediaSegments 把媒体字段落成消息段。图片取最大的那张；动画和视频贴纸
+// 不能直接交给图片模型，改用 Telegram 同时给的静态缩略图。
+func telegramMediaSegments(media telegramMedia) []MessageSegment {
+	var segments []MessageSegment
+	if len(media.Photo) > 0 {
+		photo := media.Photo[len(media.Photo)-1]
+		segments = append(segments, MessageSegment{Type: "image", Data: map[string]string{"file_id": photo.FileID, "file_unique_id": photo.FileUniqueID, "file_size": strconv.FormatInt(photo.FileSize, 10)}})
+	}
+	if sticker := media.Sticker; sticker != nil && strings.TrimSpace(sticker.FileID) != "" {
+		fileID := sticker.FileID
+		fileUniqueID := sticker.FileUniqueID
+		fileSize := sticker.FileSize
+		name := "sticker.webp"
+		mime := "image/webp"
+		usable := true
+		if sticker.IsAnimated || sticker.IsVideo {
+			thumbnail := sticker.Thumbnail
+			if thumbnail == nil {
+				// 兼容较旧 Bot API server 使用的 thumb 字段。
+				thumbnail = sticker.Thumb
+			}
+			if thumbnail == nil || strings.TrimSpace(thumbnail.FileID) == "" {
+				usable = false
+			} else {
+				fileID = thumbnail.FileID
+				fileUniqueID = thumbnail.FileUniqueID
+				fileSize = thumbnail.FileSize
+				name = "sticker-preview.webp"
+			}
+		}
+		if usable {
+			summary := strings.TrimSpace(sticker.Emoji)
+			if summary == "" {
+				summary = "Telegram 贴纸"
+			}
+			segments = append(segments, MessageSegment{Type: "image", Data: map[string]string{
+				"file_id": fileID, "file_unique_id": fileUniqueID, "file_size": strconv.FormatInt(fileSize, 10), "name": name, "mime": mime,
+				"sub_type": "telegram_sticker", "summary": summary, "emoji": strings.TrimSpace(sticker.Emoji),
+				"sticker_set": strings.TrimSpace(sticker.SetName), "sticker_type": strings.TrimSpace(sticker.Type),
+				"sticker_file_id": sticker.FileID, "sticker_unique_id": strings.TrimSpace(sticker.FileUniqueID),
+			}})
+		}
+	}
+	appendFile := func(kind string, file *telegramFile) {
+		if file == nil || strings.TrimSpace(file.FileID) == "" {
+			return
+		}
+		segments = append(segments, MessageSegment{Type: kind, Data: map[string]string{
+			"file_id": file.FileID, "file_unique_id": file.FileUniqueID, "name": file.FileName, "mime": file.MimeType, "file_size": strconv.FormatInt(file.FileSize, 10),
+		}})
+	}
+	appendFile("video", media.Video)
+	appendFile("video", media.Animation)
+	appendFile("record", media.Voice)
+	appendFile("record", media.Audio)
+	appendFile("file", media.Document)
+	return segments
+}
+
+// telegramRepliedMessage 返回这条消息真正在回复的那条。
+//
+// 论坛话题里，没有回复任何人的普通消息也带着 reply_to_message，指向话题创建时的
+// 服务消息（forum_topic_created）：话题本身就是一条消息，Desktop 等客户端发到话题里
+// 时会挂上这层回复。把它当引用，话题里每句话都成了「回复话题标题」，模型会反复针对
+// 一个空引用作答，话题若是机器人开的还会被误判成在回复机器人。
+func telegramRepliedMessage(msg *telegramMessage) *telegramMessage {
+	if msg == nil || msg.ReplyTo == nil || msg.ReplyTo.MessageID == 0 {
+		return nil
+	}
+	reply := msg.ReplyTo
+	if len(reply.ForumTopicCreated) > 0 {
+		return nil
+	}
+	if msg.IsTopicMessage && msg.MessageThreadID != 0 && reply.MessageID == msg.MessageThreadID {
+		return nil
+	}
+	return reply
+}
+
+// telegramReplyQuote 把 reply_to_message 里内联的引用内容直接填成 Quoted。
 //
 // OneBot 只给一个消息 id，引用内容得回头再查一次（get_msg）；Telegram 不一样，
 // 它在同一条更新里就把被引用消息的正文和发送者一并送来了。上游此前只取了 id、
 // 把内容丢掉，于是引用还原完全依赖「这条消息 Diana 以前见过并存过」——被引用的
 // 是重启前的旧消息、或超出保留范围的消息时就还原不出来，模型自然没法针对引用
 // 做语义分析。既然内容是白给的，就不该扔掉再去查。
+//
+// 用户只选中原消息里的一段来回复时，Telegram 另给一个 quote：那一段才是对方要接的
+// 话，用它代替整条正文。回复别的聊天里的消息时 reply_to_message 为空，内容在
+// external_reply（来源和媒体）和 quote（正文）里。
+func telegramReplyQuote(msg *telegramMessage) *QuotedMessage {
+	if msg == nil {
+		return nil
+	}
+	quoteText := ""
+	if msg.Quote != nil {
+		quoteText = strings.TrimSpace(msg.Quote.Text)
+	}
+	if reply := telegramRepliedMessage(msg); reply != nil {
+		if quoteText == "" {
+			return telegramQuotedMessage(reply)
+		}
+		partial := *reply
+		partial.Text, partial.Caption = quoteText, ""
+		return telegramQuotedMessage(&partial)
+	}
+	external := msg.ExternalReply
+	if external == nil {
+		return nil
+	}
+	quoted := &QuotedMessage{RawMessage: quoteText}
+	if origin := external.Origin; origin != nil {
+		switch {
+		case origin.SenderUser != nil:
+			quoted.UserID = strconv.FormatInt(origin.SenderUser.ID, 10)
+			quoted.SenderName = telegramDisplayName(origin.SenderUser)
+		case origin.SenderChat != nil:
+			quoted.UserID = strconv.FormatInt(origin.SenderChat.ID, 10)
+			quoted.SenderName = strings.TrimSpace(origin.SenderChat.Title)
+		case origin.Chat != nil:
+			quoted.UserID = strconv.FormatInt(origin.Chat.ID, 10)
+			quoted.SenderName = strings.TrimSpace(firstNonEmpty(origin.AuthorSignature, origin.Chat.Title))
+		default:
+			quoted.SenderName = strings.TrimSpace(origin.SenderUserName)
+		}
+	}
+	chat := external.Chat
+	if chat == nil && external.Origin != nil {
+		chat = external.Origin.Chat
+	}
+	if chat != nil && chat.ID != 0 && external.MessageID != 0 {
+		// 别的聊天里的消息号和本群的消息号是两套编号：直接用数字会撞上本群同号的
+		// 另一条消息，从历史里还原出一句毫不相干的话。加上来源聊天做前缀，只用于
+		// 展示和去重，不会被当成本群的消息去查。
+		quoted.MessageID = "external:" + strconv.FormatInt(chat.ID, 10) + ":" + strconv.FormatInt(external.MessageID, 10)
+	}
+	if chat != nil && chat.ID != 0 {
+		// 跨聊天引用一定不是在回复本群里的机器人发言，群号填来源聊天，
+		// explicitlyRepliesToBot 据此不把它算成直接回复。
+		quoted.GroupID = strconv.FormatInt(chat.ID, 10)
+	}
+	return finishTelegramQuoted(quoted, quoteText, telegramExternalMediaOf(external))
+}
+
+// telegramQuotedMessage 把一条被引用（或被置顶）的消息转成 Quoted。
 func telegramQuotedMessage(reply *telegramMessage) *QuotedMessage {
 	if reply == nil || reply.MessageID == 0 {
 		return nil
@@ -1408,17 +1561,16 @@ func telegramQuotedMessage(reply *telegramMessage) *QuotedMessage {
 	if reply.Chat != nil && reply.Chat.Type != "private" {
 		quoted.GroupID = strconv.FormatInt(reply.Chat.ID, 10)
 	}
+	return finishTelegramQuoted(quoted, text, telegramMediaOf(reply))
+}
+
+func finishTelegramQuoted(quoted *QuotedMessage, text string, media telegramMedia) *QuotedMessage {
 	if text != "" {
 		quoted.Segments = append(quoted.Segments, MessageSegment{Type: "text", Data: map[string]string{"text": text}})
 	}
-	// 引用的是图片时留下一个可见的占位，否则模型只看到空引用，会以为对方引了个寂寞。
-	if len(reply.Photo) > 0 {
-		photo := reply.Photo[len(reply.Photo)-1]
-		quoted.Segments = append(quoted.Segments, MessageSegment{Type: "image", Data: map[string]string{
-			"file_id":   photo.FileID,
-			"file_size": strconv.FormatInt(photo.FileSize, 10),
-		}})
-	}
+	// 引用的是图片、贴纸、语音或文件时留下可见的占位，否则模型只看到空引用，
+	// 会以为对方引了个寂寞。
+	quoted.Segments = append(quoted.Segments, telegramMediaSegments(media)...)
 	if len(quoted.Segments) == 0 && quoted.RawMessage == "" && quoted.SenderName == "" {
 		return nil
 	}

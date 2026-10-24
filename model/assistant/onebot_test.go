@@ -876,3 +876,59 @@ func TestExtractOutgoingReplyMarkerParsesQQOfficialLongID(t *testing.T) {
 		t.Fatalf("stripReplyMarkers(qq official) = %q", got)
 	}
 }
+
+// SnowLuma 拒收和视频混在一起的消息；发出前要拆开，正文带引用一条、视频单独一条。
+func TestSendOneBotMessageSplitsStandaloneMedia(t *testing.T) {
+	var sent [][]map[string]any
+	call := func(_ context.Context, action string, params map[string]any) (map[string]any, error) {
+		if action != "send_group_msg" {
+			t.Fatalf("action = %q", action)
+		}
+		sent = append(sent, params["message"].([]map[string]any))
+		return map[string]any{"message_id": len(sent)}, nil
+	}
+	result, err := sendOneBotMessage(context.Background(), OutgoingMessage{GroupID: "10001", ReplyMessageID: "321", Text: "做好了", VideoURLs: []string{"https://example.com/a.mp4"}}, call)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sent) != 2 || sent[0][0]["type"] != "reply" || len(sent[1]) != 1 || sent[1][0]["type"] != "video" {
+		t.Fatalf("sent = %#v", sent)
+	}
+	if result["message_id"] != 1 {
+		t.Fatalf("result = %#v, want the first part", result)
+	}
+
+	// 只有视频时，reply 没有可依附的正文，直接丢掉。
+	sent = nil
+	if _, err := sendOneBotMessage(context.Background(), OutgoingMessage{GroupID: "10001", ReplyMessageID: "321", VideoURLs: []string{"https://example.com/a.mp4"}}, call); err != nil {
+		t.Fatal(err)
+	}
+	if len(sent) != 1 || len(sent[0]) != 1 || sent[0][0]["type"] != "video" {
+		t.Fatalf("video-only sent = %#v", sent)
+	}
+
+	// 普通图文不拆。
+	sent = nil
+	if _, err := sendOneBotMessage(context.Background(), OutgoingMessage{GroupID: "10001", Text: "看图", ImageURLs: []string{"https://example.com/a.png"}}, call); err != nil {
+		t.Fatal(err)
+	}
+	if len(sent) != 1 {
+		t.Fatalf("image message split: %#v", sent)
+	}
+}
+
+// 前一部分已经发出、后一部分失败时不能整条重试，否则正文会重复发出去。
+func TestSendOneBotMessagePartialFailureIsNotRetried(t *testing.T) {
+	calls := 0
+	call := func(context.Context, string, map[string]any) (map[string]any, error) {
+		calls++
+		if calls == 2 {
+			return nil, errors.New("upload failed")
+		}
+		return map[string]any{"message_id": 1}, nil
+	}
+	_, err := sendOneBotMessage(context.Background(), OutgoingMessage{GroupID: "10001", Text: "做好了", VideoURLs: []string{"https://example.com/a.mp4"}}, call)
+	if err == nil || !isPermanentOutboundRejection(err) {
+		t.Fatalf("err = %v, want permanent rejection", err)
+	}
+}

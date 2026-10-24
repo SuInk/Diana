@@ -75,35 +75,40 @@ func (t *dianaPlatformTool) runGovernance(ctx context.Context, input map[string]
 		t.runtime.recordPlatformInterfaceOperation(t.event, operation, access, owner, target, err)
 		return "", err
 	}
+	// 门禁环节的拒绝原因是 Diana 自己写的，可以原样进审计日志。
+	refuse := func(target string, err error) (string, error) {
+		t.runtime.recordPlatformInterfaceOperation(t.event, operation, access, owner, target, platformRefusal(err))
+		return "", err
+	}
 	if t.event.Kind != EventKindGroup || strings.TrimSpace(t.event.GroupID) == "" {
 		return "", fmt.Errorf("群管理操作只能在群里执行")
 	}
 	groupID := t.resolveGroupID(input)
 	actor, err := t.authorizeModeration(ctx, groupID)
 	if err != nil {
-		return fail("", err)
+		return refuse("", err)
 	}
 	access = actor.access()
 	platform := t.runtime.currentPlatform(t.event)
 	if !platformSupportsOperation(platform, operation) {
-		return fail("", fmt.Errorf("当前平台暂不支持此操作"))
+		return refuse("", fmt.Errorf("当前平台暂不支持此操作"))
 	}
 
 	req, err := t.governanceRequest(input, operation)
 	if err != nil {
-		return fail(req.target, err)
+		return refuse(req.target, err)
 	}
 	// 名片、头衔、撤回针对具体的人，走层级约束；公告、精华、全员禁言不针对个人。
 	if err := t.checkModerationTarget(ctx, actor, groupID, req.target, false); err != nil {
-		return fail(req.target, err)
+		return refuse(req.target, err)
 	}
 	role, err := t.runtime.botGroupRole(ctx, t.event, groupID)
 	if err != nil {
-		return fail(req.target, err)
+		return refuse(req.target, err)
 	}
 	// QQ 的专属头衔只有群主能发，管理员调接口会被静默忽略，先说清楚。
 	if operation == platformOpSetTitle && role != GroupRoleOwner && NormalizePlatformID(platform) == PlatformOneBotV11 {
-		return fail(req.target, fmt.Errorf("QQ 群的专属头衔只有群主能设置，我在这个群只是管理员"))
+		return refuse(req.target, fmt.Errorf("QQ 群的专属头衔只有群主能设置，我在这个群只是管理员"))
 	}
 
 	callCtx, cancel := context.WithTimeout(ctx, 20*time.Second)

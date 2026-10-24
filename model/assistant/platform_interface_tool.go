@@ -6,11 +6,14 @@ package assistant
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net"
 	"sort"
 	"strings"
 	"time"
 
+	"github.com/SuInk/diana/internal/secretmask"
 	"github.com/SuInk/diana/model/agent"
 	"github.com/SuInk/diana/model/applog"
 	platformskill "github.com/SuInk/diana/skills/platform"
@@ -299,7 +302,7 @@ func (t *dianaPlatformTool) runRead(ctx context.Context, input map[string]any, o
 		platform := t.runtime.currentPlatform(t.event)
 		if !platformSupportsOperation(platform, operation) {
 			err := fmt.Errorf("当前平台没有群公告，暂不支持此操作")
-			t.runtime.recordPlatformInterfaceOperation(t.event, operation, access, owner, "", err)
+			t.runtime.recordPlatformInterfaceOperation(t.event, operation, access, owner, "", platformRefusal(err))
 			return "", err
 		}
 		var data map[string]any
@@ -344,7 +347,7 @@ func (t *dianaPlatformTool) runModeration(ctx context.Context, input map[string]
 	// 身份门禁在 Run 里强制，不靠提示词或工具作用域：主人直接放行，其余人实时查群身份。
 	actor, err := t.authorizeModeration(ctx, groupID)
 	if err != nil {
-		t.runtime.recordPlatformInterfaceOperation(t.event, operation, access, owner, "", err)
+		t.runtime.recordPlatformInterfaceOperation(t.event, operation, access, owner, "", platformRefusal(err))
 		return "", err
 	}
 	access = actor.access()
@@ -358,20 +361,20 @@ func (t *dianaPlatformTool) runModeration(ctx context.Context, input map[string]
 	}
 	// 主人和本机账号一律挡在动作之前：对主人下手等于自断退路，对自己下手会砸掉回复链路。
 	if err := t.checkModerationTarget(ctx, actor, groupID, target, true); err != nil {
-		t.runtime.recordPlatformInterfaceOperation(t.event, operation, access, owner, target, err)
+		t.runtime.recordPlatformInterfaceOperation(t.event, operation, access, owner, target, platformRefusal(err))
 		return "", err
 	}
 
 	platform := t.runtime.currentPlatform(t.event)
 	if !platformSupportsOperation(platform, operation) {
 		err := fmt.Errorf("当前平台暂不支持此操作")
-		t.runtime.recordPlatformInterfaceOperation(t.event, operation, access, owner, target, err)
+		t.runtime.recordPlatformInterfaceOperation(t.event, operation, access, owner, target, platformRefusal(err))
 		return "", err
 	}
 
 	// 破坏性操作前先确认机器人自己是这个群的管理员/群主；普通成员直接拒绝，不去碰接口。
 	if _, err := t.runtime.botGroupRole(ctx, t.event, groupID); err != nil {
-		t.runtime.recordPlatformInterfaceOperation(t.event, operation, access, owner, target, err)
+		t.runtime.recordPlatformInterfaceOperation(t.event, operation, access, owner, target, platformRefusal(err))
 		return "", err
 	}
 
@@ -620,7 +623,7 @@ func (r *Runtime) recordPlatformInterfaceOperation(event MessageEvent, operation
 		kind = applog.KindError
 		level = applog.LevelError
 		message = "平台接口操作被拒绝或失败"
-		detail = "platform interface operation failed or was denied"
+		detail = platformFailureDetail(callErr)
 	}
 	logCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -645,6 +648,78 @@ func (r *Runtime) recordPlatformInterfaceOperation(event MessageEvent, operation
 			"message_id":  event.MessageID,
 		},
 	})
+}
+
+// platformFailureDetail 给审计日志写失败原因。
+//
+// 以前这里只写一句固定的英文，日志里分不清是权限不够、平台不支持还是接口报错，排查
+// 只能去翻调试记录（线上 10/22 两次 set_title 失败就是这样）。但接入端的报错原文
+// 不能进日志：OneBot 实现和 Telegram 会把请求参数、地址甚至令牌回显在里面。
+// 所以只记 Diana 自己写的那层原因（权限、平台不支持、机器人不是管理员……），被它
+// 包着的接入端原文剥掉，换成类别和返回码。
+func platformFailureDetail(err error) string {
+	if err == nil {
+		return ""
+	}
+	var refusal *platformRefusalError
+	if !errors.As(err, &refusal) {
+		category := platformAdapterErrorCategory(err)
+		if category == "" {
+			category = "接入端报错"
+		}
+		prefix := ""
+		if inner := errors.Unwrap(err); inner != nil {
+			// 「kick 执行失败：<接入端原文>」：前半句是 Diana 写的，留下。
+			prefix = strings.TrimRight(strings.TrimSpace(strings.TrimSuffix(err.Error(), inner.Error())), "：:；; ")
+		}
+		if prefix == "" {
+			return category + "（原文不入日志）"
+		}
+		return secretmask.Text(prefix) + "：" + category + "（原文不入日志）"
+	}
+	text := refusal.err.Error()
+	inner := errors.Unwrap(refusal.err)
+	if inner == nil {
+		return secretmask.Text(text)
+	}
+	// 门禁本身也会包着接口报错（「无法确认机器人在本群的身份：<原文>」）。
+	category := platformAdapterErrorCategory(inner)
+	if category == "" {
+		category = "接入端报错"
+	}
+	text = strings.TrimRight(strings.TrimSpace(strings.TrimSuffix(text, inner.Error())), "：:；; ")
+	return secretmask.Text(text) + "：" + category + "（原文不入日志）"
+}
+
+// platformRefusalError 标记门禁环节的拒绝：权限、目标校验、平台不支持、机器人
+// 不是管理员。这些原因是 Diana 自己写给人看的，审计日志可以照录。
+type platformRefusalError struct{ err error }
+
+func (e *platformRefusalError) Error() string { return e.err.Error() }
+func (e *platformRefusalError) Unwrap() error { return e.err }
+
+func platformRefusal(err error) error {
+	if err == nil {
+		return nil
+	}
+	return &platformRefusalError{err: err}
+}
+
+func platformAdapterErrorCategory(err error) string {
+	var oneBotErr *oneBotActionError
+	var telegramErr *telegramAPIError
+	var netErr net.Error
+	switch {
+	case errors.As(err, &oneBotErr):
+		return fmt.Sprintf("OneBot 接入端拒绝，retcode=%d", oneBotErr.retCode)
+	case errors.As(err, &telegramErr):
+		return fmt.Sprintf("Telegram 接口报错，code=%d", telegramErr.Code)
+	case errors.Is(err, context.DeadlineExceeded):
+		return "接口超时"
+	case errors.As(err, &netErr):
+		return "网络错误"
+	}
+	return ""
 }
 
 // CanonicalOperation 是 Run 实际执行的操作，按操作拦截时用同一套换算。
