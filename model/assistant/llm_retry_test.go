@@ -410,8 +410,8 @@ func TestRegistryModelRoleFallbacksCanCrossGroupsAndModels(t *testing.T) {
 	if err != nil || result != "backup ok" {
 		t.Fatalf("result=%q err=%v", result, err)
 	}
-	if primary.calls != 2 || backup.calls != 1 {
-		t.Fatalf("primary calls=%d backup calls=%d, want retry then failover", primary.calls, backup.calls)
+	if primary.calls != 3 || backup.calls != 1 {
+		t.Fatalf("primary calls=%d backup calls=%d, want retries then failover", primary.calls, backup.calls)
 	}
 }
 
@@ -613,8 +613,8 @@ func TestRoutingEmptyOutputRetriesThenFailsOverWithinGroup(t *testing.T) {
 	if reply != `{"reply":true}` {
 		t.Fatalf("reply=%q", reply)
 	}
-	if primary.calls != 2 {
-		t.Fatalf("primary calls=%d, want initial request plus one retry", primary.calls)
+	if primary.calls != 3 {
+		t.Fatalf("primary calls=%d, want initial request plus two retries", primary.calls)
 	}
 	if got, want := strings.Join(configuredModels, ","), "routing-a,routing-b"; got != want {
 		t.Fatalf("configured models=%q, want %q", got, want)

@@ -880,7 +880,7 @@ func TestRuntimeAssignsInboundPriorities(t *testing.T) {
 	}
 }
 
-func TestProactiveReplyRouterRetriesTransientErrorOnce(t *testing.T) {
+func TestProactiveReplyRouterRetriesTransientErrorTwice(t *testing.T) {
 	store := &stubLLMProfileStore{set: llm.ProfileSet{
 		Profiles: []llm.Profile{
 			{ID: "cheap-primary", Group: "cheap", Config: llm.ProviderConfig{Provider: llm.ProviderOpenAICompatible, Model: "cheap-primary"}},
@@ -904,15 +904,15 @@ func TestProactiveReplyRouterRetriesTransientErrorOnce(t *testing.T) {
 	if runtime.shouldHandleProactiveReply(context.Background(), event, event.RawMessage) {
 		t.Fatal("failed proactive route unexpectedly allowed a reply")
 	}
-	if provider.calls != 2 {
-		t.Fatalf("provider calls=%d, want initial request plus one retry", provider.calls)
+	if provider.calls != 3 {
+		t.Fatalf("provider calls=%d, want initial request plus two retries", provider.calls)
 	}
 	if len(configuredModels) != 1 || configuredModels[0] != "cheap-primary" {
 		t.Fatalf("configured models=%#v, want only cheap-primary", configuredModels)
 	}
 }
 
-func TestMainLLMProviderRetriesTimeoutOnce(t *testing.T) {
+func TestMainLLMProviderRetriesTimeoutTwice(t *testing.T) {
 	store := &stubLLMProfileStore{set: llm.ProfileSet{
 		Profiles: []llm.Profile{
 			{ID: "main", Group: "default", Config: llm.ProviderConfig{Provider: llm.ProviderOpenAICompatible, Model: "main"}},
@@ -930,8 +930,8 @@ func TestMainLLMProviderRetriesTimeoutOnce(t *testing.T) {
 	if err == nil {
 		t.Fatal("timeout retry unexpectedly succeeded")
 	}
-	if provider.calls != 2 {
-		t.Fatalf("provider calls=%d, want initial request plus one retry", provider.calls)
+	if provider.calls != 3 {
+		t.Fatalf("provider calls=%d, want initial request plus two retries", provider.calls)
 	}
 }
 

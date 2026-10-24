@@ -76,7 +76,7 @@ func TestMidStreamUncommittedFailureRetriesThenSwitches(t *testing.T) {
 	if response == nil || response.Text != "不应该用到" {
 		t.Fatalf("response = %#v", response)
 	}
-	if primary.streamCalls != 2 || primary.generateCalls != 0 || backup.streamCalls != 1 || backup.generateCalls != 0 {
-		t.Fatalf("不该切后备：backup stream=%d generate=%d", backup.streamCalls, backup.generateCalls)
+	if primary.streamCalls != 3 || primary.generateCalls != 0 || backup.streamCalls != 1 || backup.generateCalls != 0 {
+		t.Fatalf("主模型原地重试两次后才切后备：primary stream=%d backup stream=%d generate=%d", primary.streamCalls, backup.streamCalls, backup.generateCalls)
 	}
 }
