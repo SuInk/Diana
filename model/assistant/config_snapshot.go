@@ -46,6 +46,7 @@ type dianaBotConfigSnapshot struct {
 	OneBotAccessTokenConfigured     bool                 `json:"onebot_access_token_configured"`
 	BotAccount                      string               `json:"bot_account,omitempty"`
 	OwnerID                         string               `json:"owner_id,omitempty"`
+	AgentHostAccessEnabled          bool                 `json:"agent_host_access_enabled"`
 	OwnerLoginEnabled               bool                 `json:"owner_login_enabled"`
 	GroupTriggers                   []string             `json:"group_triggers,omitempty"`
 	GroupTriggerMode                AliasTriggerMode     `json:"group_trigger_mode,omitempty"`
@@ -297,6 +298,7 @@ func dianaBotConfigFromConfig(cfg BotConfig) dianaBotConfigSnapshot {
 		OneBotAccessTokenConfigured:     strings.TrimSpace(cfg.OneBotAccessToken) != "",
 		BotAccount:                      cfg.BotAccount,
 		OwnerID:                         cfg.OwnerID,
+		AgentHostAccessEnabled:          cfg.AgentHostAccessEnabled,
 		OwnerLoginEnabled:               cfg.OwnerLoginEnabled,
 		GroupTriggers:                   append([]string(nil), cfg.GroupTriggers...),
 		GroupTriggerMode:                aliasTriggerMode(cfg),

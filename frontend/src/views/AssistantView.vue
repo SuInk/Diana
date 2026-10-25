@@ -1863,23 +1863,32 @@
                      是模型手里没有这个工具——以前界面上没有任何地方这么说，于是
                      「让机器人执行指令」表现为它只用嘴回你，看不出是没开。 -->
                 <div class="field wide">
-                  <label for="agent-allow">命令白名单（逗号分隔，* 表示全部）</label>
+                  <label for="agent-allow">工作区命令白名单（逗号分隔，* 表示全部）</label>
                   <div class="input-group">
-                    <input id="agent-allow" v-model="allowlistDraft" class="input" placeholder="留空 = 不开放命令执行" />
+                    <input id="agent-allow" v-model="allowlistDraft" class="input" placeholder="留空 = 关闭 run_command" />
                     <button class="btn small ghost" type="button" @click="applyNodeExecution">允许 Node.js 执行</button>
                   </div>
                   <span class="hint" :class="{ danger: commandAllowlistIsWildcard }">
                     <template v-if="!commandAllowlistEnabled">
-                      当前为空：命令执行整体关闭，机器人拿不到这个工具。要开放就填具体命令，例如 <code>uptime,free,df</code>。
+                      当前为空：工作区命令工具 run_command 关闭。要开放就填具体命令，例如 <code>uptime,free,df</code>。
                       （新建的机器人会自带一组只读诊断命令；这一栏被清空过的话不会自动填回来。）
                     </template>
                     <template v-else-if="commandAllowlistIsWildcard">
                       <code>*</code> 放行任意程序。白名单是命令执行唯一按名字生效的限制，填 <code>*</code> 等于放弃它。
                     </template>
                     <template v-else>
-                      只有列出的程序能被执行；命令名不能带路径，也不经过 shell 解析。
+                      run_command 只能执行列出的程序；命令名不能带路径，也不经过 shell 解析。
                     </template>
                   </span>
+                </div>
+                <div class="field wide">
+                  <label class="switch">
+                    <input v-model="form.agent_host_access_enabled" type="checkbox" />
+                    <span class="track" aria-hidden="true"></span>
+                    <span class="switch-label">允许主人操作宿主机（默认关闭）</span>
+                  </label>
+                  <span class="hint">开启后，主人和 WebUI 管理会话可读取宿主机文件、查询磁盘，并在单次批准后直接执行命令或脚本。命令以 Diana 的运行账号执行，可联网、修改文件和管理该账号有权管理的服务，不受工作区白名单或命令沙盒限制。安全模式下停用。</span>
+                  <span v-if="form.agent_host_access_enabled" class="hint danger">这相当于授予宿主账号的执行权限：获批脚本可能修改 Diana 自身和审批数据，无法保证硬性阻止所有破坏操作。关闭后禁止新的主机调用；已启动的命令不会因此撤销。</span>
                 </div>
                 <!-- 读 / 写 / 执行三档分开：读错文件浪费一次调用，写错文件改的是磁盘，
                      执行则连「程序能碰什么」都要另一层来管。 -->
@@ -1931,7 +1940,7 @@
                   </span>
                 </div>
                 <div class="field wide">
-                  <label for="agent-sandbox">命令沙盒</label>
+                  <label for="agent-sandbox">工作区命令沙盒（run_command）</label>
                   <AppSelect
                     id="agent-sandbox"
                     v-model="commandSandboxMode"
@@ -2471,7 +2480,7 @@ function applyNodeExecution(): void {
   toastSuccess("已允许 Node.js 执行，点「保存配置」后生效");
 }
 
-// 白名单为空 = 命令执行整体关闭，这一点要在界面上直接说出来，见模板里的说明。
+// 白名单为空 = run_command 关闭，这一点要在界面上直接说出来，见模板里的说明。
 const commandAllowlistEntries = computed(() => splitList(allowlistDraft.value));
 const commandAllowlistEnabled = computed(() => commandAllowlistEntries.value.length > 0);
 const commandAllowlistIsWildcard = computed(() => commandAllowlistEntries.value.includes("*"));
@@ -4459,6 +4468,7 @@ function setForm(config: BotProfileConfig): void {
     agent_command_sandbox: config.agent_command_sandbox ?? "auto",
     agent_command_sandbox_allow_network: config.agent_command_sandbox_allow_network ?? false,
     agent_file_write_enabled: config.agent_file_write_enabled ?? false,
+    agent_host_access_enabled: config.agent_host_access_enabled ?? false,
     agent_browser_control_enabled: config.agent_browser_control_enabled ?? false,
     agent_browser_box_disabled: config.agent_browser_box_disabled ?? false,
     reply_reference_mode: config.reply_reference_mode ?? "auto",

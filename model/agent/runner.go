@@ -88,6 +88,11 @@ func (r *Runner) Close() error {
 
 // Run 执行 Agent 多步工具调用循环。
 func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
+	authorizationText := ""
+	if req.ApprovalScope != "" {
+		authorizationText = req.ApprovalText
+	}
+	ctx = context.WithValue(ctx, requestAuthorizationKey{}, requestAuthorization{Text: authorizationText, Scope: req.ApprovalScope})
 	if len(req.Messages) == 0 {
 		return nil, errors.New("agent: messages are required")
 	}

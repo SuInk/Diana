@@ -160,7 +160,7 @@ const (
 
 // AgentSafeModeCategories 按界面展示顺序列出安全模式关掉的几类能力。
 var AgentSafeModeCategories = []AgentSafeModeCategory{
-	{ID: safeModeCategoryHostExec, Label: "本机代码执行", Impact: "本机命令（run_command）和编码代理停用，浏览器里也不能执行脚本"},
+	{ID: safeModeCategoryHostExec, Label: "本机代码执行", Impact: "主机访问（host_access）、本机命令（run_command）和编码代理停用，浏览器里也不能执行脚本"},
 	{ID: safeModeCategoryThirdParty, Label: "安装和运行第三方代码", Impact: "不能安装、卸载或启用 Skill 和 MCP；已启用的 MCP 工具不可用（Skill 说明文档仍可读取）"},
 	{ID: safeModeCategoryActAsOwner, Label: "以主人身份对外操作", Impact: "内置浏览器和浏览器控制扩展（带主人登录态）不能再操作；GitHub 写操作、跨会话/跨群发送停用；不能再建往别的会话发的事件触发、提醒和订阅，已有的这类任务暂停投递"},
 	{ID: safeModeCategoryFileWrite, Label: "改动本地文件", Impact: "不能再写入、编辑、保存或整理工作区文件（列目录、读取、检索、发送附件照常）"},
@@ -184,6 +184,7 @@ var AgentSafeModeCategories = []AgentSafeModeCategory{
 // 替别人建的提醒和订阅），见 safeModeHoldsTask。
 var AgentSafeModeRules = []AgentSafeModeRule{
 	// 本机代码执行：命令、编码代理和页面脚本都是在本机（或主人的浏览器里）跑任意代码。
+	{Category: safeModeCategoryHostExec, Tool: hostAccessToolName, Reason: "主机级文件访问和命令执行"},
 	{Category: safeModeCategoryHostExec, Tool: "run_command", Reason: "在本机执行命令"},
 	{Category: safeModeCategoryHostExec, Tool: dianaCodingToolName, Reason: "编码代理在仓库里不受白名单约束地跑命令、改代码"},
 	{Category: safeModeCategoryHostExec, Tool: "browser_eval", Reason: "在带登录态的页面里执行任意 JavaScript"},

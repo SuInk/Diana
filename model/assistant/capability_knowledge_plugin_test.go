@@ -179,3 +179,67 @@ func TestCapabilityKnowledgeFindsCLI(t *testing.T) {
 		}
 	}
 }
+
+func TestCapabilityDiscoveryExplainsHostAccessWithoutGrantingIt(t *testing.T) {
+	for _, tc := range []struct {
+		name                 string
+		owner, enabled, safe bool
+		reason               string
+	}{
+		{"member", false, true, false, "需要机器人主人权限"},
+		{"disabled", true, false, false, "开关未开启"},
+		{"safe", true, true, true, "安全模式"},
+		{"owner", true, true, false, "单次审批"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := BotConfig{OwnerID: "owner", AgentEnabled: true, AgentHostAccessEnabled: tc.enabled}
+			if tc.safe {
+				cfg.AgentMode = AgentModeSafe
+			}
+			r := NewRuntime(cfg, nilChannel{}, NewDefaultPluginManager(), nil, nil, nil, nil)
+			user := "member"
+			if tc.owner {
+				user = "owner"
+			}
+			event := MessageEvent{UserID: user, Kind: EventKindPrivate}
+			policy := RelationshipPolicyFor(UserMemoryProfile{}, "owner", user)
+			registry, err := r.newReplyAgentRegistry(context.Background(), r.ProfileConfig(""), event, policy, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer registry.Close()
+			tool, ok := registry.Get("capabilities")
+			if !ok {
+				t.Fatal("public discovery unavailable")
+			}
+			raw, err := tool.Run(context.Background(), map[string]any{"query": "宿主机文件磁盘命令执行权限", "limit": 3})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(raw, "core:host-access") || !strings.Contains(raw, tc.reason) {
+				t.Fatal(raw)
+			}
+			_, callable := registry.Get(hostAccessToolName)
+			want := tc.owner && tc.enabled && !tc.safe
+			if callable != want {
+				t.Fatalf("callable=%v want=%v", callable, want)
+			}
+			if !want && !registry.PolicyDenied(hostAccessToolName) {
+				t.Fatal("unavailable tool reported as nonexistent")
+			}
+			prompt := relationshipPermissionContext(policy, r.ProfileConfig(""))
+			if !strings.Contains(prompt, tc.reason) {
+				t.Fatal(prompt)
+			}
+		})
+	}
+}
+
+func TestHostAccessSelfFactDoesNotRequireToolCall(t *testing.T) {
+	for _, query := range []string{"你能查看宿主机吗", "帮我执行终端命令", "查询磁盘"} {
+		text := capabilitySelfFactContext(query)
+		if !strings.Contains(text, "host_access") || !strings.Contains(text, "普通用户") {
+			t.Fatal(text)
+		}
+	}
+}

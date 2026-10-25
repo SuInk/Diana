@@ -236,7 +236,29 @@ func relationshipPermissionContext(policy RelationshipPolicy, configs ...BotConf
 	} else {
 		context += "\n" + currentSpeakerIdentityMarker + overrides.text(promptSpeakerNotOwnerSpec)
 	}
+	context += "\n能力说明和执行权限分开：工具只按当前权限提供，未提供不代表 Diana 没有这项功能。能力问题可查 capabilities，身份疑问可查 identity_check；已知权限不足时直接说明具体原因，不必尝试调用，也不要先承诺执行或尝试绕过。普通功能按现有权限正常使用，不要一概说只有主人能用。"
+	if len(configs) > 0 {
+		status := capabilityAccessStatus(configs[0], policy.Owner)
+		context += "\n宿主机访问能力存在；当前状态：" + status["host_access"].(map[string]any)["reason"].(string) + "。仅在用户问及或请求相关操作时说明，不主动罗列权限。"
+	}
 	return context
+}
+
+// Public status contains no host paths, credentials, account IDs or command schemas.
+func capabilityAccessStatus(cfg BotConfig, owner bool) map[string]any {
+	reason := "可用，执行每条命令仍需主人单次审批"
+	if !owner {
+		reason = "需要机器人主人权限；当前用户不是主人"
+	} else if cfg.agentSafeMode() {
+		reason = "安全模式已停用宿主机访问"
+	} else if !cfg.AgentHostAccessEnabled {
+		reason = "宿主机操作开关未开启，请管理员在机器人高级设置开启"
+	}
+	role := "user"
+	if owner {
+		role = "bot_owner_or_webui_admin"
+	}
+	return map[string]any{"role": role, "host_access": map[string]any{"exists": true, "available": owner && cfg.AgentHostAccessEnabled && !cfg.agentSafeMode(), "reason": reason}, "note": "能力说明不授予执行权限；执行时服务端仍重新校验。"}
 }
 
 // applyRelationshipTaskPermissions 与 relationshipPermissionDenied 已删除。

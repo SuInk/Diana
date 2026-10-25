@@ -18,6 +18,7 @@ export function copyBotConfiguration(source: BotProfileConfig, defaults: BotProf
     profiles: undefined,
     message_relays: undefined,
     connection_profile_id: "",
+    agent_host_access_enabled: false,
     bot_account: undefined,
     avatar_url: undefined,
     callback_path: defaults.callback_path,

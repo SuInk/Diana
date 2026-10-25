@@ -162,9 +162,13 @@ type Config struct {
 }
 
 type Request struct {
-	Messages []llm.Message
-	TraceID  string
-	Observer RunObserver
+	// ApprovalScope is a trusted caller-supplied session key, not model input.
+	ApprovalScope string
+	// ApprovalText is the authenticated current message, before prompt assembly.
+	ApprovalText string
+	Messages     []llm.Message
+	TraceID      string
+	Observer     RunObserver
 	// LoadedTools carries session discoveries, never tool instances or authority.
 	LoadedTools []string
 	// ToolsLoaded is called immediately, including when a later model call fails.

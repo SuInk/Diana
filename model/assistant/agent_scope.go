@@ -97,6 +97,9 @@ func (r *Runtime) newAgentRegistry(ctx context.Context, cfg BotConfig, event Mes
 		skillSource = base.Skills()
 	}
 	if relationship.Owner {
+		if !safe && cfg.AgentHostAccessEnabled {
+			registry.Register(&hostAccessTool{runtime: r, event: event})
+		}
 		registry.Register(newDianaBotConfigTool(r, event))
 		registry.Register(&dianaUsageTool{runtime: r, event: event})
 		registry.Register(&dianaBotMarkersTool{runtime: r, event: event})

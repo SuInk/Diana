@@ -358,6 +358,7 @@ type EventListener func(EventRecord)
 type PrivateMessageInterceptor func(context.Context, MessageEvent, string) bool
 
 type Runtime struct {
+	hostApprovals       hostApprovalStore
 	mu                  sync.RWMutex
 	modelConfigMu       sync.Mutex
 	modelRoutingMu      sync.Mutex
@@ -899,6 +900,10 @@ func NewRuntime(cfg BotConfig, channel Channel, plugins *PluginManager, llmStore
 
 // SetProfiles 换上整套机器人配置。每条消息按它所属的机器人取配置，共用一条处理流水线。
 func (r *Runtime) SetProfiles(set ProfileSet) {
+	// Configuration changes revoke pending host approvals, including disable/re-enable.
+	r.hostApprovals.mu.Lock()
+	r.hostApprovals.pending = nil
+	r.hostApprovals.mu.Unlock()
 	set = set.WithDefaults()
 	r.plugins.MigrateProfileConfigurations(set.Profiles)
 	profiles := make(map[string]BotConfig, len(set.Profiles))
@@ -4864,6 +4869,8 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 		interjections, stopInterjections := r.startDirectReplyInterjections(ctx)
 		observer, stopProgress := r.startReplyProgress(ctx, event, r.agentRunObserver(event))
 		resp, err := agentRunner.Run(agent.WithCallerIdentity(ctx, callerIdentityForEvent(cfg, event)), agent.Request{
+			ApprovalScope: hostApprovalScope(event),
+			ApprovalText:  botMentionStrippedText(event, event.RawMessage, firstNonEmpty(event.SelfID, cfg.BotAccount)),
 			Messages:      messages,
 			TraceID:       traceID,
 			Observer:      observer,

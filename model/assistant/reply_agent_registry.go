@@ -32,6 +32,13 @@ func (r *Runtime) newReplyAgentRegistry(ctx context.Context, cfg BotConfig, even
 	}
 	for index, tool := range pluginTools {
 		pluginTools[index] = capabilityToolForConfig(tool, cfg)
+		if knowledge, ok := pluginTools[index].(*dianaCapabilitiesTool); ok {
+			knowledge.accessStatus = func() map[string]any {
+				current := r.effectiveConfigForEvent(event)
+				owner := current.IsOwnerEvent(event) || isAdminChatRun(ctx)
+				return capabilityAccessStatus(current, owner)
+			}
+		}
 	}
 	if r.platformInterfaceEnabled(event) {
 		pluginTools = append(pluginTools, newDianaPlatformTool(ctx, r, event))
@@ -40,6 +47,9 @@ func (r *Runtime) newReplyAgentRegistry(ctx context.Context, cfg BotConfig, even
 		// 因为权限不够而没挂上的工具名。它们不构造、不注册，只是让注册表知道
 		// 「有过这个名字，但这次会话没权限」，取不到时才说得出正确的那句话。
 		var deniedTools []string
+		if !relationship.Owner || !cfg.AgentHostAccessEnabled || cfg.agentSafeMode() {
+			deniedTools = append(deniedTools, hostAccessToolName)
+		}
 		extraTools := []agent.Tool{
 			newDianaChatHistoryTool(r, event).withRecallSink(recallSink),
 			newDianaHistoryImagesTool(r, event).withImageInput(imageTextOnly, imageMode),

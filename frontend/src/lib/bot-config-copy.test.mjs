@@ -4,6 +4,12 @@ import { copyBotConfiguration } from "./bot-config-copy.ts";
 
 const defaults = { platform: "onebot-v11", enabled: true, onebot_transport: "reverse_ws", onebot_reverse_ws_endpoint: "ws://localhost/onebot/v11/ws" };
 
+test("copied bots require a fresh explicit host-access grant", () => {
+  const source = { ...defaults, agent_host_access_enabled: true };
+  assert.equal(copyBotConfiguration(source, { ...defaults, agent_host_access_enabled: true }).agent_host_access_enabled, false);
+  assert.equal(source.agent_host_access_enabled, true);
+});
+
 test("copy keeps behavior and nested model/persona drafts independent", () => {
   const source = { ...defaults, id: "source", name: "助手", enabled: false, owner_id: "42", system_prompt: "persona", group_triggers: ["助手"], private_admission: { mode: "whitelist", allowed_users: ["42"] }, model_roles: { chat: { profile_id: "provider", model: "chat", fallbacks: [{ profile_id: "backup", model: "small" }] } }, model_recovery_policy: { transient_retries: 0, retry_delay_milliseconds: 0, transient_cooldown_seconds: 3, status_cooldown_seconds: 30, max_cooldown_seconds: 120, respect_retry_after: false }, custom_persona: { system_prompt: "custom" }, telegram_suppress_bot_messages: false };
   const draft = copyBotConfiguration(source, defaults);
