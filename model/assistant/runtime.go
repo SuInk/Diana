@@ -429,8 +429,12 @@ type Runtime struct {
 	friendRosters  map[string]oneBotFriendRoster
 	// welcomeLLMLast 记每个（机器人 × 群）上一次 LLM 欢迎词的生成时间，
 	// 进出群刷屏时不会每条都烧一次 Token。自带锁，不受 mu 保护。
-	welcomeMu      sync.Mutex
-	welcomeLLMLast map[string]time.Time
+	// welcomeNoticeSeen 给重复到达的同一条入群通知去重，welcomeRecent 是每个机器人
+	// 最近说过的几句欢迎，见 welcome.go。
+	welcomeMu         sync.Mutex
+	welcomeLLMLast    map[string]time.Time
+	welcomeNoticeSeen map[string]time.Time
+	welcomeRecent     map[string][]string
 	// governance 是群规则防御的刷屏计数和违规次数，见 group_governance.go。
 	governance governanceTracker
 	// groupRoles 是群身份的短期缓存，见 platform_moderation_auth.go。
@@ -7898,22 +7902,13 @@ func (r *Runtime) handleNotice(ctx context.Context, event MessageEvent) error {
 	if !r.admitsNotice(cfg, event) {
 		return nil
 	}
+	if !r.claimWelcomeNotice(event, time.Now()) {
+		return nil
+	}
 	// 只处理群成员增加通知，避免把其它 notice 类型误当作可回复消息。
 	event.SenderName = r.welcomeMemberName(ctx, event)
 	welcome := r.renderWelcome(ctx, cfg, event)
-	msg := OutgoingMessage{
-		GroupID:       event.GroupID,
-		Text:          welcome,
-		MentionUserID: event.UserID,
-	}
-	if event.SenderName != "" {
-		msg.MentionNames = map[string]string{event.UserID: event.SenderName}
-	}
-	if err := r.sendOutgoing(ctx, event, msg); err != nil {
-		r.setError(err.Error())
-		return err
-	}
-	r.record(EventRecord{
+	record := EventRecord{
 		At:        time.Now(),
 		Kind:      event.Kind,
 		Platform:  event.Platform,
@@ -7922,12 +7917,50 @@ func (r *Runtime) handleNotice(ctx context.Context, event MessageEvent) error {
 		GroupID:   event.GroupID,
 		MessageID: event.MessageID,
 		Text:      "[notice] group_increase",
-		Reply:     welcome,
-		Handled:   true,
-		Outcome:   "replied_welcome",
-		Decision:  "replied",
-		Reason:    "新成员入群通知触发了欢迎消息",
-	})
+	}
+	if strings.TrimSpace(welcome) == "" {
+		record.Outcome = "ignored_welcome_unavailable"
+		record.Decision = "not_replied"
+		record.Reason = "欢迎生成失败或在冷却中，也没配模板池或自定义欢迎词，这次不欢迎"
+		r.record(record)
+		return nil
+	}
+	// 按群消息发：拿通知事件当来源，发出去的欢迎会被记成一条没有群号的私聊，
+	// 群上下文里就没有它，机器人不知道自己欢迎过谁。
+	//
+	// 模型生成的欢迎和普通回复一样可能带排版标记、用 [diana-msg] 分成几条，按同一套
+	// 规则消费和拆开；只有第一条 @ 新人。
+	welcome, target := prepareReplyDelivery(welcome, eventTriggerDeliveryEvent(event))
+	sent := 0
+	for _, chunk := range splitEventChatReply(welcome, cfg, target) {
+		if strings.TrimSpace(chunk) == "" {
+			continue
+		}
+		msg := OutgoingMessage{GroupID: event.GroupID, Text: chunk}
+		if sent == 0 {
+			msg.MentionUserID = event.UserID
+			if event.SenderName != "" {
+				msg.MentionNames = map[string]string{event.UserID: event.SenderName}
+			}
+		} else {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(chunkSendInterval(cfg, chunk)):
+			}
+		}
+		if err := r.sendOutgoing(ctx, target, msg); err != nil {
+			r.setError(err.Error())
+			return err
+		}
+		sent++
+	}
+	record.Reply = welcome
+	record.Handled = true
+	record.Outcome = "replied_welcome"
+	record.Decision = "replied"
+	record.Reason = "新成员入群通知触发了欢迎消息"
+	r.record(record)
 	return nil
 }
 

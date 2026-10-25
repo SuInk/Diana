@@ -74,6 +74,8 @@ var llmPurposeGroup = map[string]string{
 	PurposeReplyTone:  llm.GroupChat,
 	PurposeSubagent:   llm.GroupChat,
 	PurposeSubtask:    llm.GroupChat,
+	// 入群欢迎和普通回复一样带人设和群聊上下文，用对话模型说话才像同一个人。
+	PurposeWelcomeGenerator: llm.GroupChat,
 
 	// 意图识别：判定当前这一轮该不该说话、说出去的这句能不能发。问的都是是非、
 	// 单选和打分，发请求时带着判断题表，所以这一档可以绑只做判断的模型。
@@ -115,8 +117,6 @@ var llmPurposeGroup = map[string]string{
 	PurposeMemoryExtract:        llm.GroupBackground,
 	PurposeMemorySummary:        llm.GroupBackground,
 	PurposeRSSWatchJudge:        llm.GroupBackground,
-	// 入群欢迎是机器人自己起的头，没人在等，慢一点没关系。
-	PurposeWelcomeGenerator: llm.GroupBackground,
 }
 
 // modelBindingGroups 是所有分组。它们就是「用途的归属地」，缺一个就有一批用途没有

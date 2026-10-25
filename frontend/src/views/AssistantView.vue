@@ -1250,7 +1250,7 @@
                   inputmode="numeric"
                   placeholder="默认 300"
                 />
-                <span class="hint">冷却期内新成员入群改发模板池/固定文本，避免进出群刷屏消耗 Token。</span>
+                <span class="hint">冷却期内或生成失败时改发模板池或自定义欢迎词，都没配就这次不欢迎；避免进出群刷屏消耗 Token。</span>
               </div>
             </div>
           </section>
