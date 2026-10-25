@@ -1,3 +1,6 @@
+// Copyright (c) 2025-now SuInk.
+// Licensed under the Limited Redistribution License in the repository root.
+
 package assistant
 
 import (
@@ -5,6 +8,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/SuInk/diana/model/llm"
 )
@@ -16,6 +20,9 @@ func (p *ResolverPlugin) translateResponse(ctx context.Context, req PluginReques
 	}
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
+	if mostlyChineseText(response.Reply) {
+		return
+	}
 	source := []rune(response.Reply)
 	if len(source) > 12000 {
 		source = source[:12000]
@@ -33,6 +40,23 @@ func (p *ResolverPlugin) translateResponse(ctx context.Context, req PluginReques
 	if len(response.ForwardMessages) > 0 {
 		response.ForwardMessages = append(response.ForwardMessages, OutgoingMessage{Text: note, LiteralText: true})
 	}
+}
+
+// mostlyChineseText 判断解析出的正文是不是本来就以中文为主。群里贴的多是 B 站、
+// 抖音这类中文链接，再翻一遍只会在原文后面附一份几乎一样的「译文」，还白花一次调用。
+// 先去掉链接再只数字母类字符，数字和标点不算，免得网址把比例拉低。
+func mostlyChineseText(text string) bool {
+	han, letters := 0, 0
+	for _, r := range urlPattern.ReplaceAllString(text, " ") {
+		switch {
+		case unicode.Is(unicode.Han, r):
+			han++
+			letters++
+		case unicode.IsLetter(r):
+			letters++
+		}
+	}
+	return letters > 0 && han*2 >= letters
 }
 
 func (r *Runtime) translateResolverText(ctx context.Context, event MessageEvent, source string) (string, error) {

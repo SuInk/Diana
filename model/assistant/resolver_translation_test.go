@@ -65,16 +65,38 @@ func TestResolverTranslationFallbackAndMedia(t *testing.T) {
 }
 
 func TestResolverTranslationBoundsSource(t *testing.T) {
-	response := &PluginResponse{Reply: strings.Repeat("字", 15000)}
+	response := &PluginResponse{Reply: strings.Repeat("a", 15000)}
+	called := false
 	req := PluginRequest{Settings: SettingValues{resolverSettingTranslate: true}, TranslateResolver: func(ctx context.Context, event MessageEvent, text string) (string, error) {
+		called = true
 		if len([]rune(text)) != 12000 {
 			t.Fatal("source is not bounded")
 		}
 		return "摘要", nil
 	}}
 	NewResolverPlugin(nil).translateResponse(context.Background(), req, response)
-	if !strings.HasPrefix(response.Reply, strings.Repeat("字", 15000)) {
+	if !called {
+		t.Fatal("translator was not called")
+	}
+	if !strings.HasPrefix(response.Reply, strings.Repeat("a", 15000)) {
 		t.Fatal("original was truncated")
+	}
+}
+
+// 本来就是中文的解析结果不再翻一遍，免得原文后面附一份几乎一样的「译文」。
+func TestResolverTranslationSkipsChineseSource(t *testing.T) {
+	original := "【B站】这期视频讲了缓存为什么会丢图，作者 UP 主顺带测了 JSON round trip。https://www.bilibili.com/video/BV1xx411c7mD"
+	response := &PluginResponse{Reply: original}
+	req := PluginRequest{Settings: SettingValues{resolverSettingTranslate: true}, TranslateResolver: func(ctx context.Context, event MessageEvent, text string) (string, error) {
+		t.Fatal("chinese source should not be translated")
+		return "", nil
+	}}
+	NewResolverPlugin(nil).translateResponse(context.Background(), req, response)
+	if response.Reply != original {
+		t.Fatalf("reply changed: %s", response.Reply)
+	}
+	if mostlyChineseText("Release notes: photos now survive a JSON round trip（图片缓存修复）") {
+		t.Fatal("english-dominant text with a short chinese aside should still be translated")
 	}
 }
 

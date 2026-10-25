@@ -22,7 +22,7 @@ export const resolverDemoManifest: PluginManifest & { can_ask_agent: boolean } =
   permissions: ["network:http", "message:read", "message:write", "filesystem:temp", "process:media"],
   settings: [
     { key: "ask_agent", label: "允许 Agent 回复", description: "允许链接解析结果主动进入正式 Agent 回复流程；关闭后仍会解析和发送确定性结果。", type: "bool", default: true },
-    { key: "translate", label: "翻译为中文", description: "使用当前机器人的聊天模型附上中文译文；长文提供中文摘要，最多等待 15 秒，失败保留原文。默认关闭。", type: "bool", default: false },
+    { key: "translate", label: "翻译为中文", description: "使用当前机器人的聊天模型附上中文译文；长文提供中文摘要，原文已是中文时跳过；最多等待 15 秒，失败保留原文。默认关闭。", type: "bool", default: false },
     { key: "follow_up_comment", label: "发送后自然点评", description: "解析结果发出后，让机器人按全局回复风格自然回应；关闭后只发解析结果。", type: "bool", default: true },
     { key: "download_media", label: "下载并发送媒体", description: "识别支持的平台后下载视频或提取图集，并通过当前机器人发送；关闭后只提供网页上下文。", type: "bool", default: true },
     { key: "merged_forward", label: "合并转发发送", description: "开启后把图集和多段内容打包成合并转发；关闭后按原来的普通消息发送，不生成转发卡片。", type: "bool", default: true },

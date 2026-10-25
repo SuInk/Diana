@@ -1571,7 +1571,7 @@ func (p *ResolverPlugin) Manifest() PluginManifest {
 				Type:        PluginSettingTypeBool,
 				Default:     true,
 			},
-			{Key: resolverSettingTranslate, Label: "翻译为中文", Description: "使用当前机器人的聊天模型附上中文译文；长文提供中文摘要，最多等待 15 秒，失败保留原文。默认关闭。", Type: PluginSettingTypeBool, Default: false},
+			{Key: resolverSettingTranslate, Label: "翻译为中文", Description: "使用当前机器人的聊天模型附上中文译文；长文提供中文摘要，原文已是中文时跳过；最多等待 15 秒，失败保留原文。默认关闭。", Type: PluginSettingTypeBool, Default: false},
 			{
 				Key:         resolverSettingFollowUpComment,
 				Label:       "发送后自然点评",
