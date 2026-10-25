@@ -18,6 +18,7 @@ WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
+RUN sh scripts/sync-models-dev.sh
 RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -trimpath -ldflags="-s -w -X main.buildVersion=${BUILD_VERSION}" -o /out/diana-webui ./cmd/webui
 
 # 随包发布的 gitea-mcp：只收 Gitea 官方的发布产物，版本和 SHA-256 钉在脚本里，

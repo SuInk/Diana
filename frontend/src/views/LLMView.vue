@@ -411,6 +411,7 @@
 </template>
 
 <script setup lang="ts">
+import { reasoningOptions } from "../lib/reasoning-options";
 import { useConfigurationRefresh } from "../lib/configuration-sync";
 import { computed, onActivated, onMounted, ref, watch } from "vue";
 import { viewQuery } from "../router";
@@ -500,20 +501,11 @@ const emptyForm: LLMFormState = {
 // 对话类协议都能调思考强度；TypeSafe 是只做判断的模型，没有这个概念。
 const supportsReasoningEffort = computed(() => ["openai_compatible", "anthropic", "gemini"].includes(form.value.provider));
 
-const baseReasoningEffortOptions = [
-  { value: "default", label: "跟随模型" },
-  { value: "none", label: "关闭思考" },
-  { value: "low", label: "低" },
-  { value: "medium", label: "中" },
-  { value: "high", label: "高" },
-  { value: "max", label: "最高" }
-];
-
-// 通过 API 设过的其他档位（如 minimal、xhigh）也要能回显，不然一打开就显示空白。
 const reasoningEffortOptions = computed(() => {
-  const current = form.value.reasoning_effort;
-  if (baseReasoningEffortOptions.some((option) => option.value === current)) return baseReasoningEffortOptions;
-  return [...baseReasoningEffortOptions, { value: current, label: current }];
+  const models = modelOptions.value.filter(model => !model.disabled && (!model.output_modalities?.length || model.output_modalities.includes("text")));
+  const supported = models.length && models.every(model => model.reasoning_efforts?.length)
+    ? [...new Set(models.flatMap(model => model.reasoning_efforts ?? []))] : undefined;
+  return reasoningOptions(form.value.reasoning_effort, supported, "default", "跟随模型");
 });
 
 const profileSet = ref<LLMConfig | null>(null);

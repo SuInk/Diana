@@ -86,6 +86,7 @@ test-web:
 build: build-web build-go
 
 build-go:
+	GO="$(GO)" sh scripts/sync-models-dev.sh
 	$(NODE) -e "require('fs').mkdirSync('dist', { recursive: true })"
 	$(GO) build -ldflags "$(GO_LDFLAGS)" -o $(DIST_BIN) ./cmd/webui
 

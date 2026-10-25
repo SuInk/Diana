@@ -1005,8 +1005,7 @@ type ModelRole struct {
 	// 后备路由不单独带，沿用主路由这一份。
 	Params map[string]string `json:"params,omitempty"`
 	// ReasoningEffort 覆盖这个用途的思考强度，空表示跟随提供商配置。后备路由
-	// 不单独带，和 Params 一样沿用主路由这一份：想让意图识别不思考，换到后备
-	// 模型时也该不思考。
+	// 不单独带，沿用主路由的偏好；发送时再按实际模型支持的档位适配。
 	ReasoningEffort string `json:"reasoning_effort,omitempty"`
 	// 空策略默认智能；独立图片和音视频默认主备。failover 显式选择主备。
 	RoutingStrategy string `json:"routing_strategy,omitempty"`

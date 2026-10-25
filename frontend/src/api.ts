@@ -105,6 +105,7 @@ export interface ImageGenerateResponse {
 }
 
 export interface LLMModelInfo {
+  reasoning_efforts?: string[];
   disabled?: boolean;
   id: string;
   name?: string;

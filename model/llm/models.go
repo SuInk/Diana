@@ -48,6 +48,8 @@ func buildDefaultUserAgent() string {
 }
 
 type ModelInfo struct {
+	CanonicalModelID    string   `json:"canonical_model_id,omitempty"`
+	ReasoningEfforts    []string `json:"reasoning_efforts,omitempty"`
 	Disabled            bool     `json:"disabled,omitempty"`
 	ID                  string   `json:"id"`
 	Name                string   `json:"name,omitempty"`

@@ -27,6 +27,7 @@ if [[ "$(uname -s)" != "Darwin" ]]; then
 fi
 
 cd "$ROOT"
+GO="$GO_BIN" sh scripts/sync-models-dev.sh
 if [[ "$OUTPUT" == *.app ]]; then
 	APP_PARENT="$(dirname "$OUTPUT")"
 	APP_NAME="$(basename "$OUTPUT")"

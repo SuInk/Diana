@@ -2223,6 +2223,7 @@
 </template>
 
 <script setup lang="ts">
+import { reasoningOptions } from "../lib/reasoning-options";
 import { parseTriggerWords, formatTriggerWords } from "../lib/trigger-words";
 import { navigate, viewQuery } from "../router";
 import { botCreateRequested, botScope, setScopeLeaveGuard } from "../lib/bot-scope";
@@ -3383,20 +3384,15 @@ function roleSupportsReasoning(role: RoleKey): boolean {
   return role !== "image" && !isMediaRole(role);
 }
 
-const baseRoleReasoningOptions = [
-  { value: "", label: "跟随提供商配置" },
-  { value: "none", label: "关闭思考" },
-  { value: "low", label: "低" },
-  { value: "medium", label: "中" },
-  { value: "high", label: "高" },
-  { value: "max", label: "最高" }
-];
-
-// 通过聊天或 API 设过的其他档位（如 minimal、xhigh）也要能回显。
-function roleReasoningOptions(role: RoleKey): { value: string; label: string }[] {
-  const current = roleForm.value[role]?.reasoning_effort ?? "";
-  if (baseRoleReasoningOptions.some((option) => option.value === current)) return baseRoleReasoningOptions;
-  return [...baseRoleReasoningOptions, { value: current, label: current }];
+function roleReasoningOptions(role: RoleKey): AppSelectOption[] {
+  const route = roleForm.value[role];
+  const profiles = selectedRoleProfiles(role, route);
+  const metadata = profiles.map(profile => profileModels(profile).find(model => model.id === route?.model)?.reasoning_efforts);
+  // Group routes can select multiple providers: only disable a level if every
+  // possible primary provider has metadata and none supports it.
+  const supported = metadata.length && metadata.every(values => values?.length)
+    ? [...new Set(metadata.flatMap(values => values ?? []))] : undefined;
+  return reasoningOptions(route?.reasoning_effort ?? "", supported, "", "跟随提供商配置");
 }
 
 function setRoleReasoning(role: RoleKey, value: string): void {

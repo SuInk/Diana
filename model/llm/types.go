@@ -718,6 +718,9 @@ func (req GenerateRequest) withDefaults(cfg ProviderConfig) GenerateRequest {
 		req.Messages = flattenForeignToolTurns(req.Messages, scope)
 	}
 	req.ReasoningEffort = normalizeReasoningEffort(req.ReasoningEffort)
+	if cfg.Provider == ProviderOpenAICompatible {
+		req.ReasoningEffort = cfg.ResolveReasoningEffort(req.Model, req.ReasoningEffort)
+	}
 	if req.MaxOutputTokens == 0 {
 		// 0 表示调用方没覆盖，沿用 provider config；负数会在 Validate 阶段拒绝。
 		req.MaxOutputTokens = cfg.MaxOutputTokens

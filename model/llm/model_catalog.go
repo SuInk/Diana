@@ -19,7 +19,7 @@ import (
 
 // models.dev 的数据随版本打包，不在运行时联网：同一个版本的行为是确定的，离线部署
 // 也一样，测试也不碰网络。更新快照跑 `make models-dev`（即 go generate），它拉取
-// https://models.dev/api.json，只留名称、模态、窗口和输出上限，gzip 后写进仓库。
+// https://models.dev/api.json，保留名称、模态、窗口、输出上限和思考档位，gzip 后写进仓库。
 // 数据来自 sst/models.dev，MIT 许可。
 //
 //go:generate go run models_dev_gen.go
@@ -29,9 +29,12 @@ var modelsDevSnapshot []byte
 // ModelsDevCatalog 给模型列表补上 /models 接口常常不给的模态和 token 上限。数据来自
 // 随版本打包的 models.dev 快照。
 type ModelsDevCatalog struct {
-	once      sync.Once
-	source    []byte
-	providers map[string]map[string]ModelInfo
+	reasoningOnce           sync.Once
+	reasoningIndex          map[string][]string
+	canonicalReasoningIndex map[string][]string
+	once                    sync.Once
+	source                  []byte
+	providers               map[string]map[string]ModelInfo
 	// apis 是 models.dev 给每个服务商登记的 API 地址，用来按配置里的地址认出服务商。
 	apis map[string]string
 }
@@ -118,7 +121,12 @@ func decodeModelsDevCatalog(body []byte) (map[string]map[string]ModelInfo, map[s
 	var payload map[string]struct {
 		API    string `json:"api"`
 		Models map[string]struct {
-			Name       string `json:"name"`
+			CanonicalModelID string `json:"canonical_model_id"`
+			Name             string `json:"name"`
+			ReasoningOptions []struct {
+				Type   string   `json:"type"`
+				Values []string `json:"values"`
+			} `json:"reasoning_options"`
 			Modalities struct {
 				Input  []string `json:"input"`
 				Output []string `json:"output"`
@@ -141,7 +149,15 @@ func decodeModelsDevCatalog(body []byte) (map[string]map[string]ModelInfo, map[s
 		}
 		models := make(map[string]ModelInfo, len(provider.Models))
 		for modelID, model := range provider.Models {
+			var efforts []string
+			for _, option := range model.ReasoningOptions {
+				if option.Type == "effort" {
+					efforts = append(efforts, option.Values...)
+				}
+			}
 			models[modelID] = ModelInfo{
+				CanonicalModelID:    model.CanonicalModelID,
+				ReasoningEfforts:    knownReasoningEfforts(efforts),
 				ID:                  modelID,
 				Name:                model.Name,
 				InputModalities:     normalizeModalities(model.Modalities.Input),

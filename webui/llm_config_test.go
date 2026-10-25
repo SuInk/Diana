@@ -1005,3 +1005,14 @@ func TestLLMConfigSaveKeepsDisabledModelsAndChoosesEnabledDefault(t *testing.T) 
 		t.Fatal("disabled flag lost in response")
 	}
 }
+
+func TestLLMConfigDecoratesSavedReasoningCapabilities(t *testing.T) {
+	cfg := llm.ProviderConfig{Provider: llm.ProviderOpenAICompatible, BaseURL: "https://private.example/v1", Model: "gpt-6.1-sol", ReasoningEffort: "none", Models: []llm.ModelInfo{{ID: "gpt-6.1-sol"}}}
+	payload := payloadFromConfig(cfg)
+	if len(payload.Models) != 1 || len(payload.Models[0].ReasoningEfforts) == 0 || payload.Models[0].ReasoningEfforts[0] != "low" {
+		t.Fatalf("missing reasoning metadata: %+v", payload.Models)
+	}
+	if cfg.Models[0].ReasoningEfforts != nil || cfg.ReasoningEffort != "none" {
+		t.Fatal("read mutated saved config")
+	}
+}

@@ -5,7 +5,7 @@
 
 // 生成随版本打包的 models.dev 快照：go generate ./model/llm（或 make models-dev）。
 //
-// 只留 Diana 用得到的字段（服务商 API 地址、模型名称、模态、窗口和输出上限），
+// 只留 Diana 用得到的字段（服务商 API 地址、模型名称、模态、窗口、输出上限和思考档位），
 // 键按字母序、gzip 头不带时间，同样的数据生成的文件逐字节相同，不会凭空出 diff。
 package main
 
@@ -35,9 +35,11 @@ type modalities struct {
 }
 
 type model struct {
-	Name       string     `json:"name,omitempty"`
-	Modalities modalities `json:"modalities,omitzero"`
-	Limit      limit      `json:"limit,omitzero"`
+	CanonicalModelID string          `json:"canonical_model_id,omitempty"`
+	Name             string          `json:"name,omitempty"`
+	ReasoningOptions json.RawMessage `json:"reasoning_options,omitempty"`
+	Modalities       modalities      `json:"modalities,omitzero"`
+	Limit            limit           `json:"limit,omitzero"`
 }
 
 type provider struct {
@@ -81,7 +83,9 @@ func main() {
 	if err := writer.Close(); err != nil {
 		log.Fatal(err)
 	}
-	if err := os.WriteFile("models_dev_snapshot.json.gz", out.Bytes(), 0o644); err != nil {
+	// Replace atomically: failed downloads or writes must leave the offline
+	// fallback intact, including when builds refresh this snapshot automatically.
+	if err := writeSnapshot(out.Bytes()); err != nil {
 		log.Fatal(err)
 	}
 	models := 0
@@ -89,4 +93,24 @@ func main() {
 		models += len(item.Models)
 	}
 	fmt.Printf("models.dev snapshot: %d providers, %d models, %d bytes\n", len(catalog), models, out.Len())
+}
+
+func writeSnapshot(body []byte) error {
+	file, err := os.CreateTemp(".", ".models-dev-*.tmp")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(file.Name())
+	if _, err := file.Write(body); err != nil {
+		file.Close()
+		return err
+	}
+	if err := file.Chmod(0o644); err != nil {
+		file.Close()
+		return err
+	}
+	if err := file.Close(); err != nil {
+		return err
+	}
+	return os.Rename(file.Name(), "models_dev_snapshot.json.gz")
 }

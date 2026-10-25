@@ -546,7 +546,7 @@ func (h *LLMConfigHandler) models(c *gin.Context) {
 		"model":    cfg.Model,
 		"count":    len(models),
 	})
-	c.JSON(200, llmModelsPayload{Models: models})
+	c.JSON(200, llmModelsPayload{Models: llm.EnrichReasoningModels(cfg, models)})
 }
 
 // test 使用当前或草稿配置执行 LLM 连通测试。
@@ -663,7 +663,7 @@ func payloadFromConfig(cfg llm.ProviderConfig) llmConfigPayload {
 		APIKeyConfigured: cfg.APIKey != "",
 		APIKeyPreview:    maskLLMAPIKey(cfg.APIKey),
 		BaseURL:          cfg.BaseURL,
-		Models:           cfg.Models,
+		Models:           llm.EnrichReasoningModels(cfg, cfg.Models),
 		Model:            cfg.Model,
 		ImageModel:       cfg.ImageModelWithDefault(),
 		ImageBaseURL:     cfg.ImageBaseURL,

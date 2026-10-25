@@ -117,6 +117,7 @@ function demoUsageBreakdown(usage: LLMUsageCounters): LLMUsageBreakdown[] {
 }
 
 const modelCatalog = [
+  { id: "gpt-6.1-sol", input_modalities: ["text", "image"], output_modalities: ["text"], reasoning_efforts: ["low", "medium", "high", "xhigh", "max"] },
   { id: "gpt-6-sol", input_modalities: ["text", "image"], output_modalities: ["text"], context_window_tokens: 1_050_000 },
   { id: "gpt-5.6-terra", input_modalities: ["text"], output_modalities: ["text"], context_window_tokens: 400_000 },
   { id: "gpt-image-2.5-sunburst", input_modalities: ["text", "image"], output_modalities: ["image"] }

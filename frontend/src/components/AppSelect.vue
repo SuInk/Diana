@@ -34,6 +34,8 @@
           :class="{ active: option.value === modelValue }"
           role="option"
           :aria-selected="option.value === modelValue"
+          :disabled="option.disabled"
+          :aria-disabled="option.disabled || undefined"
           @click="pick(option.value)"
         >
           <Check v-if="option.value === modelValue" :size="14" aria-hidden="true" />
@@ -62,6 +64,7 @@ export interface AppSelectOption {
   value: string;
   label: string;
   hint?: string;
+  disabled?: boolean;
   /** 可选头像。取不到图时自动隐藏，不留破图占位。 */
   avatar?: string;
   /** 分段标题。相邻的同名选项归到一段，留空表示不分段。 */
@@ -186,6 +189,7 @@ watch(open, async (isOpen) => {
 });
 
 function pick(value: string): void {
+  if (props.options.find(option => option.value === value)?.disabled) return;
   emit("update:modelValue", value);
   close();
 }
@@ -201,9 +205,11 @@ function onKeydown(event: KeyboardEvent): void {
   // 上下键在选项间移动，无需展开也能快速切换。
   if (event.key === "ArrowDown" || event.key === "ArrowUp") {
     event.preventDefault();
-    const list = filteredOptions.value;
+    const list = filteredOptions.value.filter(option => !option.disabled || option.value === props.modelValue);
     const index = list.findIndex((option) => option.value === props.modelValue);
-    const next = event.key === "ArrowDown" ? index + 1 : index - 1;
+    let next = event.key === "ArrowDown" ? index + 1 : index - 1;
+    const step = event.key === "ArrowDown" ? 1 : -1;
+    while (next >= 0 && next < list.length && list[next].disabled) next += step;
     if (next >= 0 && next < list.length) {
       emit("update:modelValue", list[next].value);
     }
@@ -288,4 +294,8 @@ onBeforeUnmount(() => {
   object-fit: cover;
   background: var(--surface-muted);
 }
+</style>
+
+<style scoped>
+.app-select-item:disabled { opacity: 0.45; cursor: not-allowed; }
 </style>
