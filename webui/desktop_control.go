@@ -47,7 +47,7 @@ func (h *DesktopControlHandler) status(c *gin.Context) {
 		pending, _ = p.PendingActions(ctx)
 	}
 	c.Header("Cache-Control", "no-store")
-	c.JSON(200, gin.H{"permissions": permissions, "pending_actions": pending, "takeover": h.registry.EmergencyStop(), "policy": h.registry.Policy(), "ready": h.hub.Ready(), "helper_configured": configured, "detail": detail, "connections": h.hub.Connections()})
+	c.JSON(200, gin.H{"permissions": permissions, "pending_actions": pending, "takeover": h.registry.EmergencyStop(), "policy": h.registry.Policy(), "ready": h.hub.Ready(), "helper_configured": configured, "executor": h.local.Executor(), "detail": detail, "connections": h.hub.Connections()})
 }
 func (h *DesktopControlHandler) policy(c *gin.Context) {
 	var p desktopctl.Policy

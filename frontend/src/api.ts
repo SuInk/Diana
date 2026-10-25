@@ -4668,6 +4668,7 @@ export interface DesktopStatus {
   policy: DesktopPolicy;
   ready: boolean;
   helper_configured: boolean;
+  executor?: string;
   detail: string;
   connections: { id: string; takeover: boolean }[];
 }

@@ -767,6 +767,16 @@ func main() {
 		}
 	}
 	desktopLocal := desktopctl.NewLocalService(desktopControlHub, desktopHelperPath)
+	// 执行器优先用 trycua 的 cua-driver（MIT）：主人第一次打开桌面控制时按锁定版本
+	// 下载到数据目录并校验 SHA-256，完整包不必为不用这项功能的人多带 50MB。
+	// DIANA_CUA_DRIVER 可指定自备的 cua-driver；下载失败时退回原生 helper。
+	desktopLocal.UseCUADriver(strings.TrimSpace(os.Getenv("DIANA_CUA_DRIVER")), desktopctl.NewCUADriverInstaller(
+		filepath.Join(dataDir, "desktop", "cua-driver"),
+		&http.Client{Timeout: 10 * time.Minute},
+		func(ctx context.Context, rawURL string) string {
+			return ghmirror.Rewrite(mirrorSelector.Base(ctx, rawURL), rawURL)
+		},
+	))
 	go func() {
 		defer recoverGoroutinePanic("desktopctl.local-service")
 		desktopLocal.Run(ctx)

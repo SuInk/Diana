@@ -8,7 +8,7 @@
       </div>
       <form v-if="status" class="card-body form-grid" @submit.prevent="save">
         <p v-if="status.detail" class="hint field wide">{{ status.detail }}</p>
-        <p v-if="!status.helper_configured" class="hint field wide">请在 macOS 主机安装桌面执行器后重启 Diana。需要 macOS 14 或更新版本。</p>
+        <p v-if="!status.helper_configured" class="hint field wide">桌面执行器目前只支持 macOS 14 或更新版本。</p>
         <div class="field wide desktop-option">
           <div><label for="desktop-enabled">桌面控制</label><p class="hint">允许 Diana 查看已授权应用的窗口。还需在机器人配置中启用桌面工具。</p></div>
           <label class="switch"><input id="desktop-enabled" v-model="policy.enabled" type="checkbox" aria-label="启用桌面控制" /><span class="track" aria-hidden="true"></span></label>
@@ -26,7 +26,8 @@
           <span class="badge" :class="status.permissions.screen_recording ? 'ok' : 'warn'">屏幕录制{{ status.permissions.screen_recording ? '已授权' : '未授权' }}</span>
           <span class="badge" :class="status.permissions.accessibility ? 'ok' : 'warn'">辅助功能{{ status.permissions.accessibility ? '已授权' : '未授权' }}</span>
         </div>
-        <p class="hint">系统权限需在 macOS「隐私与安全性」中授权。</p>
+        <p v-if="status.executor" class="hint">执行器：{{ status.executor }}</p>
+        <p class="hint">首次开启时会自动下载执行器 cua-driver。系统权限需在 macOS「隐私与安全性」中授权给运行 Diana 的程序。</p>
         <div class="desktop-option">
           <div><strong>人工接管</strong><p class="hint">{{ takenOver ? 'Diana 已停止操作，重连和重启后仍保持接管。' : '立即停止 Diana 的桌面操作，由你接手。' }}</p></div>
           <button class="btn small" type="button" :disabled="busy" @click="takeover"><Hand :size="14" aria-hidden="true" />{{ takenOver ? '结束接管' : '接管桌面' }}</button>
