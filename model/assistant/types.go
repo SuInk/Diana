@@ -659,6 +659,7 @@ type BotConfig struct {
 
 	StickerReplyOrder StickerReplyOrder `json:"sticker_reply_order,omitempty"`
 
+	ConnectionReplyPrefix       bool             `json:"connection_reply_prefix,omitempty"`
 	ConnectionProfileID         string           `json:"connection_profile_id,omitempty"`
 	ReplyMergeConfidencePercent int              `json:"reply_merge_confidence_percent,omitempty"`
 	ID                          string           `json:"id,omitempty"`
@@ -1374,6 +1375,7 @@ type ConfigPayload struct {
 
 	StickerReplyOrder StickerReplyOrder `json:"sticker_reply_order,omitempty"`
 
+	ConnectionReplyPrefix       bool            `json:"connection_reply_prefix,omitempty"`
 	ConnectionProfileID         string          `json:"connection_profile_id,omitempty"`
 	ReplyMergeConfidencePercent int             `json:"reply_merge_confidence_percent,omitempty"`
 	ID                          string          `json:"id,omitempty"`
@@ -2771,6 +2773,7 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 
 		StickerReplyOrder:           cfg.StickerReplyOrder,
 		ConnectionProfileID:         cfg.ConnectionProfileID,
+		ConnectionReplyPrefix:       cfg.ConnectionReplyPrefix,
 		ID:                          cfg.ID,
 		Name:                        cfg.Name,
 		Platform:                    cfg.Platform,
@@ -3041,6 +3044,7 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 
 		StickerReplyOrder:           payload.StickerReplyOrder,
 		ConnectionProfileID:         strings.TrimSpace(payload.ConnectionProfileID),
+		ConnectionReplyPrefix:       payload.ConnectionReplyPrefix,
 		ID:                          strings.TrimSpace(payload.ID),
 		Name:                        payload.Name,
 		Platform:                    payload.Platform,

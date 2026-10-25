@@ -109,6 +109,14 @@ func (r *Runtime) HandleEvent(ctx context.Context, event MessageEvent) error {
 			return nil
 		}
 	}
+	var selected bool
+	event, selected = r.routeSharedGroupEvent(ctx, event)
+	if !selected {
+		if r.admitsGroupScope(r.effectiveConfigForEvent(event), event) {
+			r.remember(event)
+		}
+		return nil
+	}
 	if r.members != nil {
 		r.members.Observe(event)
 	}

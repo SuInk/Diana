@@ -11,7 +11,7 @@ test("copied bots require a fresh explicit host-access grant", () => {
 });
 
 test("copy keeps behavior and nested model/persona drafts independent", () => {
-  const source = { ...defaults, id: "source", name: "助手", enabled: false, owner_id: "42", system_prompt: "persona", group_triggers: ["助手"], private_admission: { mode: "whitelist", allowed_users: ["42"] }, model_roles: { chat: { profile_id: "provider", model: "chat", fallbacks: [{ profile_id: "backup", model: "small" }] } }, model_recovery_policy: { transient_retries: 0, retry_delay_milliseconds: 0, transient_cooldown_seconds: 3, status_cooldown_seconds: 30, max_cooldown_seconds: 120, respect_retry_after: false }, custom_persona: { system_prompt: "custom" }, telegram_suppress_bot_messages: false };
+  const source = { ...defaults, id: "source", name: "助手", enabled: false, owner_id: "42", system_prompt: "persona", group_triggers: ["助手"], private_admission: { mode: "whitelist", allowed_users: ["42"] }, model_roles: { chat: { profile_id: "provider", model: "chat", fallbacks: [{ profile_id: "backup", model: "small" }] } }, model_recovery_policy: { transient_retries: 0, retry_delay_milliseconds: 0, transient_cooldown_seconds: 3, status_cooldown_seconds: 30, max_cooldown_seconds: 120, respect_retry_after: false }, custom_persona: { system_prompt: "custom" }, telegram_suppress_bot_messages: false, connection_reply_prefix: true };
   const draft = copyBotConfiguration(source, defaults);
   assert.equal(draft.name, "助手 副本");
   assert.equal(draft.owner_id, "42");
@@ -20,6 +20,7 @@ test("copy keeps behavior and nested model/persona drafts independent", () => {
   assert.deepEqual(draft.model_recovery_policy, source.model_recovery_policy);
   assert.deepEqual(draft.private_admission, source.private_admission);
   assert.equal(draft.telegram_suppress_bot_messages, false);
+  assert.equal(draft.connection_reply_prefix, true);
   draft.group_triggers.push("new");
   draft.model_roles.chat.fallbacks[0].model = "edited";
   draft.model_recovery_policy.transient_retries = 2;

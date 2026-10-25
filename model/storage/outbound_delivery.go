@@ -356,3 +356,27 @@ func (s *SQLiteStore) pruneOutboundMessageMapBatch(ctx context.Context, now time
 SELECT rowid FROM outbound_message_map WHERE sent_at < ? ORDER BY sent_at LIMIT 500)`, cutoff)
 	return err
 }
+
+// LookupOutboundMessageProfile finds the sender of a quoted message among the
+// profiles sharing this connection. Each lookup uses the existing primary key.
+func (s *SQLiteStore) LookupOutboundMessageProfile(ctx context.Context, profileIDs []string, groupID, messageID string) (string, error) {
+	if strings.TrimSpace(groupID) == "" || strings.TrimSpace(messageID) == "" {
+		return "", nil
+	}
+	found := ""
+	for _, id := range profileIDs {
+		var profile string
+		err := s.eventReader().QueryRowContext(ctx, `SELECT profile_id FROM outbound_message_map WHERE profile_id=? AND conversation=? AND message_id=?`, id, "group:"+groupID, messageID).Scan(&profile)
+		if errors.Is(err, sql.ErrNoRows) {
+			continue
+		}
+		if err != nil {
+			return "", err
+		}
+		if found != "" && found != profile {
+			return "", nil
+		}
+		found = profile
+	}
+	return found, nil
+}

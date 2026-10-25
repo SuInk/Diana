@@ -215,9 +215,17 @@
                   <AppSelect :model-value="form.connection_profile_id || ''" :options="connectionOptions" @update:model-value="(value) => { if (form) form.connection_profile_id = value; }" />
                   <span class="hint">复用已有连接即可免填地址和 Token，来源连接的修改会自动同步。</span>
                 </div>
+                <div class="field wide">
+                  <label class="switch">
+                    <input v-model="form.connection_reply_prefix" type="checkbox" />
+                    <span class="track" aria-hidden="true"></span>
+                    <span class="switch-label">共享连接时显示角色名前缀</span>
+                  </label>
+                  <span class="hint">多个角色共用 QQ 时，给这台机器人的群聊文字加上「【{{ form.name || '机器人名称' }}】」。私聊不加；独立使用一个角色时不加。名字和触发词用于点名，建议各角色使用不同称呼。</span>
+                </div>
                 <div v-if="form.connection_profile_id" class="hint">
                   正在复用「{{ connectionSourceName(form) }}」的连接，使用同一个平台账号。
-                  消息会交给各台启用的机器人，各自按人设和行为配置决定是否回复，可能产生多条回复。
+                  普通 @ 由连接来源接待；命中其他角色的名字或触发词时切换给该角色，引用回复则跟随原角色。每条消息只选择一个角色，默认角色在本群不可用时顺延。
                   停用来源机器人的回复不会断开复用连接；仍有机器人复用时不能删除来源。
                 </div>
                 <template v-else>

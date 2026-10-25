@@ -185,6 +185,7 @@ export interface MessageRelayPair {
 /** 群退避与入站重跑参数见 SendRetrySettings；机器人级 0 或留空按默认值。 */
 export interface BotProfileConfig extends SendRetrySettings {
   connection_profile_id?: string;
+  connection_reply_prefix?: boolean;
   marked_bot_ids?: string[];
   participation?: import("./lib/participation").ParticipationPreferences;
   id?: string;

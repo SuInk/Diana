@@ -26,6 +26,7 @@ var builtinSoulOrder = []struct {
 	{"builtin:default", "default.md", "内置默认"},
 	{"builtin:human", "human.md", "真人感"},
 	{"builtin:catgirl", "catgirl.md", "猫娘"},
+	{"builtin:whalegirl", "whalegirl.md", "鲸鱼娘"},
 	{"builtin:assistant", "assistant.md", "助手"},
 	{"builtin:girlfriend", "girlfriend.md", "女友"},
 	{"builtin:boyfriend", "boyfriend.md", "男友"},

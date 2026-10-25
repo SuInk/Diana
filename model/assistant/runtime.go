@@ -443,6 +443,7 @@ type Runtime struct {
 	wholeMuteSnapshots wholeMuteSnapshotStore
 	// telegramOwnerIDs 记主人配成 @用户名时见过的数字 ID（键是机器人 ID），私聊通知要用。
 	telegramOwnerIDs sync.Map
+	sharedRoutes     sharedRouteState
 	// telegramRecallProbes serializes active deletion checks per bot account and
 	// remembers recent results/rate limits so repeated queries do not hammer the
 	// Bot API. It owns its own lock; Runtime.mu must not be held while acquiring it.
@@ -7356,6 +7357,7 @@ func (r *Runtime) sendTelegramStepsWithRetry(ctx context.Context, msg OutgoingMe
 }
 
 func (r *Runtime) sendChannelPayloadWithRetry(ctx context.Context, msg OutgoingMessage, attempts int) (map[string]any, error) {
+	msg = r.sharedReplyPrefix(msg)
 	if attempts <= 0 || attempts > sendRetryAttempts {
 		attempts = sendRetryAttempts
 	}
@@ -7405,6 +7407,7 @@ func (r *Runtime) rememberOutgoing(ctx context.Context, source MessageEvent, msg
 }
 
 func (r *Runtime) rememberOutgoingWithMessageID(ctx context.Context, source MessageEvent, msg OutgoingMessage, messageID string) {
+	msg = r.sharedReplyPrefix(msg)
 	ctx = r.withAutomaticMediaPolicy(r.withFileParserVideoLimit(ctx, source), source)
 	event := r.outgoingHistoryEvent(source, msg)
 	if event.MessageID == "" {
@@ -7414,6 +7417,7 @@ func (r *Runtime) rememberOutgoingWithMessageID(ctx context.Context, source Mess
 		event.MessageID = messageID
 	}
 	event.PushKind = subscriptionPushKindFromContext(ctx)
+	r.rememberSharedReply(source, msg, strings.TrimSpace(messageID))
 	if event.PushKind == "" {
 		event.ToolCalls = replyToolTraceFromContext(ctx).take()
 	}

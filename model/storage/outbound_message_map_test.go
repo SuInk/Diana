@@ -446,3 +446,35 @@ func TestDeliveryReceiptRollsBackWhenMapWriteFails(t *testing.T) {
 		t.Fatal("partial receipt committed without map")
 	}
 }
+
+func TestLookupOutboundMessageProfileIsScopedAndSurvivesReopen(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "shared-quotes.db")
+	store, err := NewSQLiteStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	event := assistant.MessageEvent{ProfileID: "whale", Kind: assistant.EventKindGroup, GroupID: "g", UserID: "user", MessageID: "in", Time: time.Now().Unix()}
+	enqueueAckedInbound(t, store, event, "whale:group:g", "quoted")
+	if err = store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	store, err = NewSQLiteStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	for _, tc := range []struct {
+		ids                  []string
+		group, message, want string
+	}{
+		{[]string{"main", "whale"}, "g", "quoted", "whale"},
+		{[]string{"main"}, "g", "quoted", ""},
+		{[]string{"main", "whale"}, "other", "quoted", ""},
+		{[]string{"main", "whale"}, "g", "unknown", ""},
+	} {
+		got, err := store.LookupOutboundMessageProfile(context.Background(), tc.ids, tc.group, tc.message)
+		if err != nil || got != tc.want {
+			t.Fatalf("lookup=%q err=%v want=%q", got, err, tc.want)
+		}
+	}
+}
