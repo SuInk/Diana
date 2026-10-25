@@ -6,6 +6,8 @@ package desktopctl
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -132,25 +134,129 @@ func TestJobIdempotencySkipsCompletedStep(t *testing.T) {
 	}
 }
 
-func TestJobBudgetExhaustion(t *testing.T) {
-	jobs := NewJobManager(context.Background(), &memoryJobStore{})
-	hub := NewHub(NewRegistry(context.Background(), &memoryStore{}))
-	_, _ = hub.registry.SetPolicy(context.Background(), enabledPolicy())
-	hub.SetJobManager(jobs)
-	conn := &fakeConn{}
-	c, _, _ := hub.Register(conn, Hello{ProtocolVersion: ProtocolVersion, HelperID: "m"}, TokenInfo{})
-	conn.respond = func(frame Frame) *Frame {
-		return &Frame{Type: FrameResult, ID: frame.ID, Data: rawJSON(WindowsPayload{})}
+// jobStep runs one command through the job's dispatch gate and records a
+// successful result whose scene digest is scene.
+func jobStep(t *testing.T, jobs *JobManager, cmd Command, scene string) error {
+	t.Helper()
+	_, _, stepID, err := jobs.AuthorizeDispatch(context.Background(), cmd)
+	if err != nil {
+		return err
 	}
-	conn.deliver = c.HandleFrame
-	job, _ := jobs.Create(context.Background(), "x", "", "", JobBudget{MaxSteps: 1})
-	_, _ = jobs.Start(context.Background(), job.ID)
-	if _, err := hub.Dispatch(context.Background(), Command{Op: OpWindowsList, JobID: job.ID}); err != nil {
+	data := rawJSON(ScreenshotPayload{WindowID: cmd.WindowID, Data: scene, Observation: 1})
+	if IsWriteOp(cmd.Op) {
+		data = rawJSON(ActionResult{OK: true, Op: cmd.Op, WindowID: cmd.WindowID, Evidence: &ScreenshotPayload{Data: scene}, Observation: 1})
+	}
+	jobs.RecordDispatch(context.Background(), cmd.JobID, stepID, cmd, Result{OK: true, Data: data}, nil)
+	return nil
+}
+
+func runningJob(t *testing.T, budget JobBudget) (*JobManager, Job) {
+	t.Helper()
+	jobs := NewJobManager(context.Background(), &memoryJobStore{})
+	job, err := jobs.Create(context.Background(), "x", "", "", budget)
+	if err != nil {
 		t.Fatal(err)
 	}
-	_, err := hub.Dispatch(context.Background(), Command{Op: OpWindowsList, JobID: job.ID})
-	if ErrorCode(err) != CodeJobBudget {
-		t.Fatalf("应耗尽预算，得到 %v (%s)", err, ErrorCode(err))
+	if _, err := jobs.Start(context.Background(), job.ID); err != nil {
+		t.Fatal(err)
+	}
+	return jobs, job
+}
+
+// 任务不设总步数和总时长上限：旧记录里存的预算也不再生效，有进展就一直跑。
+func TestJobHasNoStepOrDurationCap(t *testing.T) {
+	jobs, job := runningJob(t, JobBudget{MaxSteps: 1, MaxDurationMS: 1})
+	start := time.Now()
+	jobs.now = func() time.Time { return start }
+	for i := 0; i < 300; i++ {
+		jobs.now = func() time.Time { return start.Add(time.Duration(i) * time.Hour) }
+		x := float64(i)
+		if err := jobStep(t, jobs, Command{Op: OpWindowClick, JobID: job.ID, WindowID: "w", X: &x, Y: &x}, fmt.Sprintf("scene-%d", i)); err != nil {
+			t.Fatalf("step %d blocked: %v", i, err)
+		}
+	}
+	got, _ := jobs.Get(job.ID)
+	if got.Status != JobRunning || got.Budget.StepsUsed != 300 {
+		t.Fatalf("job = %s steps=%d", got.Status, got.Budget.StepsUsed)
+	}
+}
+
+// 同一画面下第三次做同一操作就暂停等主人确认；确认后重新观察，计数从头开始。
+func TestJobLoopGuardPausesRepeatedActionOnSameScene(t *testing.T) {
+	jobs, job := runningJob(t, JobBudget{})
+	x, y := 10.0, 20.0
+	click := Command{Op: OpWindowClick, JobID: job.ID, WindowID: "w", X: &x, Y: &y}
+	if err := jobStep(t, jobs, Command{Op: OpWindowScreenshot, JobID: job.ID, WindowID: "w"}, "same"); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 2; i++ {
+		click.Observation = int64(100 + i) // 观察版本每次都变，不能让指纹跟着变
+		if err := jobStep(t, jobs, click, "same"); err != nil {
+			t.Fatalf("click %d: %v", i, err)
+		}
+	}
+	err := jobStep(t, jobs, click, "same")
+	if ErrorCode(err) != CodeJobBlocked || !strings.Contains(err.Error(), "原地打转") {
+		t.Fatalf("third identical click should be stopped, got %v", err)
+	}
+	got, _ := jobs.Get(job.ID)
+	if got.Status != JobWaitingConfirm || !strings.Contains(got.WaitReason, "第 3 次") || !got.NeedsReobserve {
+		t.Fatalf("job = %+v", got)
+	}
+	// 换个地方点不受影响的前提是主人先确认继续。
+	if _, err := jobs.Confirm(context.Background(), job.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := jobStep(t, jobs, Command{Op: OpWindowScreenshot, JobID: job.ID, WindowID: "w"}, "same"); err != nil {
+		t.Fatal(err)
+	}
+	if err := jobStep(t, jobs, click, "same"); err != nil {
+		t.Fatalf("after the owner confirmed, counting restarts: %v", err)
+	}
+}
+
+// 光标闪烁让每张截图的哈希都不同，靠不看画面的兜底规则认出重复操作。
+func TestJobLoopGuardCatchesRepeatsDespiteChangingScenes(t *testing.T) {
+	jobs, job := runningJob(t, JobBudget{})
+	typeHello := Command{Op: OpWindowType, JobID: job.ID, WindowID: "w", Text: "hello"}
+	for i := 0; i < sameTextLimit-1; i++ {
+		if err := jobStep(t, jobs, typeHello, fmt.Sprintf("caret-%d", i)); err != nil {
+			t.Fatalf("type %d: %v", i, err)
+		}
+	}
+	if err := jobStep(t, jobs, typeHello, "caret-x"); ErrorCode(err) != CodeJobBlocked {
+		t.Fatalf("repeated typing should be stopped, got %v", err)
+	}
+}
+
+// 连点「下一页」这类参数相同但画面一直在变的操作是正常进展，不能被当成打转。
+func TestJobLoopGuardAllowsRepeatedActionThatMakesProgress(t *testing.T) {
+	jobs, job := runningJob(t, JobBudget{})
+	x, y := 300.0, 500.0
+	next := Command{Op: OpWindowClick, JobID: job.ID, WindowID: "w", X: &x, Y: &y}
+	scroll := Command{Op: OpWindowScroll, JobID: job.ID, WindowID: "w", X: &x, Y: &y, DeltaY: 400}
+	for i := 0; i < 40; i++ {
+		cmd := next
+		if i%2 == 1 {
+			cmd = scroll
+		}
+		if err := jobStep(t, jobs, cmd, fmt.Sprintf("page-%d", i)); err != nil {
+			t.Fatalf("step %d blocked though the scene keeps changing: %v", i, err)
+		}
+	}
+}
+
+// 一直截图不动手同样算卡住。
+func TestJobLoopGuardPausesEndlessObservation(t *testing.T) {
+	jobs, job := runningJob(t, JobBudget{})
+	shot := Command{Op: OpWindowScreenshot, JobID: job.ID, WindowID: "w"}
+	for i := 0; i < observeStreakLimit; i++ {
+		if err := jobStep(t, jobs, shot, fmt.Sprintf("scene-%d", i)); err != nil {
+			t.Fatalf("observation %d: %v", i, err)
+		}
+	}
+	if err := jobStep(t, jobs, shot, "scene-x"); ErrorCode(err) != CodeJobBlocked || !strings.Contains(err.Error(), "卡住") {
+		t.Fatalf("endless observation should be stopped, got %v", err)
 	}
 }
 

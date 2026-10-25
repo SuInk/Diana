@@ -4651,7 +4651,7 @@ export interface DesktopJob {
   status: string;
   wait_reason?: string;
   error?: string;
-  budget: { steps_used: number; max_steps: number };
+  budget: { steps_used: number };
 }
 export interface DesktopActionApproval {
  target_label?: string;

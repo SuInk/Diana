@@ -57,7 +57,7 @@
         <p v-if="!jobs.length" class="hint">暂无电脑任务。启用后，可以让 Diana 创建任务。</p>
         <article v-for="job in jobs" :key="job.id" class="desktop-item">
           <div class="desktop-item-heading"><strong>{{ job.goal || '未命名任务' }}</strong><span class="badge" :class="job.status === 'waiting_confirm' ? 'warn' : job.status === 'succeeded' ? 'ok' : ''">{{ labels[job.status] || job.status }}</span></div>
-          <p class="hint">已用 {{ job.budget.steps_used }} / {{ job.budget.max_steps }} 步<template v-if="job.wait_reason || job.error"> · {{ job.wait_reason || job.error }}</template></p>
+          <p class="hint">已用 {{ job.budget.steps_used }} 步<template v-if="job.wait_reason || job.error"> · {{ job.wait_reason || job.error }}</template></p>
           <div class="cluster desktop-actions">
             <button v-if="job.status === 'running'" class="btn small" type="button" :disabled="busy" @click="act(job, 'pause')">暂停</button>
             <button v-if="job.status === 'paused'" class="btn small" type="button" :disabled="busy" @click="act(job, 'resume')">恢复</button>

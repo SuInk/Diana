@@ -37,20 +37,17 @@ const (
 )
 
 const (
-	DefaultJobMaxSteps      = 32
-	MaxJobMaxSteps          = 200
-	DefaultJobMaxDurationMS = 30 * 60 * 1000
-	MaxJobMaxDurationMS     = 24 * 60 * 60 * 1000
-	CodeJobBlocked          = "job_blocked"
-	CodeJobBudget           = "job_budget"
-	CodeJobNotFound         = "job_not_found"
-	CodeJobConflict         = "job_conflict"
+	CodeJobBlocked  = "job_blocked"
+	CodeJobNotFound = "job_not_found"
+	CodeJobConflict = "job_conflict"
 )
 
-// JobBudget 限制一步任务能跑多远。
+// JobBudget 只记账，不限制：任务不设总步数和总时长上限，跑到完成、失败或被取消为止。
+// 防止原地打转靠 loopGuardLocked，不靠预算。MaxSteps/MaxDurationMS 只为读旧记录保留，
+// 旧任务里存的预算不再生效。
 type JobBudget struct {
-	MaxSteps      int `json:"max_steps"`
-	MaxDurationMS int `json:"max_duration_ms"`
+	MaxSteps      int `json:"max_steps,omitempty"`
+	MaxDurationMS int `json:"max_duration_ms,omitempty"`
 	StepsUsed     int `json:"steps_used"`
 }
 
@@ -66,7 +63,9 @@ type JobStep struct {
 	Result            json.RawMessage `json:"result,omitempty"`
 	Error             string          `json:"error,omitempty"`
 	IdempotencyKey    string          `json:"idempotency_key,omitempty"`
-	CompletedAt       time.Time       `json:"completed_at,omitempty"`
+	// LoopKey 是写操作的「画面 + 操作」指纹，循环检测用。
+	LoopKey     string    `json:"loop_key,omitempty"`
+	CompletedAt time.Time `json:"completed_at,omitempty"`
 }
 
 // Job 是一条持久电脑任务。落盘后重启可接回；恢复时必须先重新观察，不盲目重放。
@@ -80,13 +79,17 @@ type Job struct {
 	Steps           []JobStep `json:"steps,omitempty"`
 	LastObservation int64     `json:"last_observation,omitempty"`
 	// NeedsReobserve 在 pause/等待确认后、或重启接回时置位：下一次写操作前必须先截图观察。
-	NeedsReobserve bool      `json:"needs_reobserve,omitempty"`
-	Connection     string    `json:"connection,omitempty"`
-	CreatedAt      time.Time `json:"created_at"`
-	UpdatedAt      time.Time `json:"updated_at"`
-	FinishedAt     time.Time `json:"finished_at,omitempty"`
-	StartedAt      time.Time `json:"started_at,omitempty"`
-	Error          string    `json:"error,omitempty"`
+	NeedsReobserve bool `json:"needs_reobserve,omitempty"`
+	// LastScene 是最近一次截图、元素读取或操作取证的画面摘要。
+	LastScene string `json:"last_scene,omitempty"`
+	// LoopFloor 是循环检测从哪一步开始数：主人确认继续或恢复任务后从头计数。
+	LoopFloor  int       `json:"loop_floor,omitempty"`
+	Connection string    `json:"connection,omitempty"`
+	CreatedAt  time.Time `json:"created_at"`
+	UpdatedAt  time.Time `json:"updated_at"`
+	FinishedAt time.Time `json:"finished_at,omitempty"`
+	StartedAt  time.Time `json:"started_at,omitempty"`
+	Error      string    `json:"error,omitempty"`
 }
 
 func (j Job) Terminal() bool {
@@ -179,23 +182,7 @@ func newStepID() string {
 	return "ds-" + hex.EncodeToString(raw)
 }
 
-func (b JobBudget) withDefaults() JobBudget {
-	if b.MaxSteps <= 0 {
-		b.MaxSteps = DefaultJobMaxSteps
-	}
-	if b.MaxSteps > MaxJobMaxSteps {
-		b.MaxSteps = MaxJobMaxSteps
-	}
-	if b.MaxDurationMS <= 0 {
-		b.MaxDurationMS = DefaultJobMaxDurationMS
-	}
-	if b.MaxDurationMS > MaxJobMaxDurationMS {
-		b.MaxDurationMS = MaxJobMaxDurationMS
-	}
-	return b
-}
-
-// Create 创建一条排队中的任务。
+// Create 创建一条排队中的任务。budget 里的上限会被忽略（任务不设总步数和时长上限）。
 func (m *JobManager) Create(ctx context.Context, goal, ownerID, connection string, budget JobBudget) (Job, error) {
 	if m == nil {
 		return Job{}, errors.New("desktop job manager 未初始化")
@@ -206,7 +193,7 @@ func (m *JobManager) Create(ctx context.Context, goal, ownerID, connection strin
 		OwnerID:    strings.TrimSpace(ownerID),
 		Goal:       strings.TrimSpace(goal),
 		Status:     JobQueued,
-		Budget:     budget.withDefaults(),
+		Budget:     JobBudget{StepsUsed: budget.StepsUsed},
 		Connection: strings.TrimSpace(connection),
 		CreatedAt:  now,
 		UpdatedAt:  now,
@@ -314,6 +301,7 @@ func (m *JobManager) Confirm(ctx context.Context, id string) (Job, error) {
 		job.Status = JobRunning
 		job.WaitReason = ""
 		job.NeedsReobserve = true
+		job.LoopFloor = len(job.Steps)
 		return nil
 	})
 }
@@ -327,6 +315,7 @@ func (m *JobManager) Resume(ctx context.Context, id string) (Job, error) {
 		job.Status = JobRunning
 		job.WaitReason = ""
 		job.NeedsReobserve = true
+		job.LoopFloor = len(job.Steps)
 		return nil
 	})
 }
@@ -492,7 +481,8 @@ func (m *JobManager) AuthorizeDispatch(ctx context.Context, cmd Command) (skip b
 			return false, Result{}, "", commandError(CodeJobBlocked, "同一幂等键已有下发记录，结果未确认，不得重复执行")
 		}
 	}
-	if err := m.checkBudgetLocked(job); err != nil {
+	loopKey := jobLoopKey(cmd, job.LastScene)
+	if err := m.loopGuardLocked(job, cmd, loopKey); err != nil {
 		if saveErr := m.persistLocked(ctx); saveErr != nil {
 			*job = before
 			return false, Result{}, "", saveErr
@@ -523,9 +513,10 @@ func (m *JobManager) AuthorizeDispatch(ctx context.Context, cmd Command) (skip b
 		Status:            StepDispatched,
 		ObservationBefore: job.LastObservation,
 		IdempotencyKey:    strings.TrimSpace(cmd.IdempotencyKey),
+		LoopKey:           loopKey,
 	}
 	job.Steps = append(job.Steps, step)
-	// 下发前在同一把锁下占用预算并落盘，失败回执也不退回已经尝试的步数。
+	// 下发前在同一把锁下记步并落盘，失败回执也不退回已经尝试的步数。
 	job.Budget.StepsUsed++
 	job.UpdatedAt = m.now()
 	if err := m.persistLocked(ctx); err != nil {
@@ -535,23 +526,95 @@ func (m *JobManager) AuthorizeDispatch(ctx context.Context, cmd Command) (skip b
 	return false, Result{}, step.ID, nil
 }
 
-func (m *JobManager) checkBudgetLocked(job *Job) error {
-	if job.Budget.StepsUsed >= job.Budget.MaxSteps {
-		job.Status = JobFailed
-		job.Error = fmt.Sprintf("已用完步数预算 %d", job.Budget.MaxSteps)
-		job.FinishedAt = m.now()
-		return commandError(CodeJobBudget, "%s", job.Error)
+const (
+	// loopRepeatLimit：同一画面下第几次做同一操作算原地打转。前两次都没让画面
+	// 变化，第三次大概率也不会，再做下去只是空转。
+	loopRepeatLimit = 3
+	// observeStreakLimit：连续这么多次只观察、不操作，说明卡住了。
+	observeStreakLimit = 24
+	// sameTextWindow/sameTextLimit 是只针对文字输入的兜底：输入框里闪烁的光标让每张
+	// 截图的哈希都不同，上面那条认不出来；同一段文字在最近 10 次写操作里输入了 4 次
+	// 也算打转。点击、滚动、按键不套这条：连点「下一页」、往下滚长列表参数完全相同，
+	// 画面却一直在变，是正常进展。
+	sameTextWindow = 10
+	sameTextLimit  = 4
+)
+
+// jobActionKey 是不含画面的操作指纹，从审计参数里去掉每次都变的字段。
+func jobActionKey(op string, params json.RawMessage) string {
+	var fields map[string]any
+	if json.Unmarshal(params, &fields) != nil {
+		return op + string(params)
 	}
-	if !job.StartedAt.IsZero() {
-		elapsed := m.now().Sub(job.StartedAt)
-		if elapsed >= time.Duration(job.Budget.MaxDurationMS)*time.Millisecond {
-			job.Status = JobFailed
-			job.Error = fmt.Sprintf("已超过时长预算 %d ms", job.Budget.MaxDurationMS)
-			job.FinishedAt = m.now()
-			return commandError(CodeJobBudget, "%s", job.Error)
+	for _, volatile := range []string{"observation", "idempotency_key", "job_id", "connection"} {
+		delete(fields, volatile)
+	}
+	return op + string(rawJSON(fields))
+}
+
+// jobLoopKey 把写操作压成「画面 + 操作」指纹。观察版本、幂等键这类每次都变的字段
+// 不算；同一画面、同一窗口、同样参数的操作得到同一个指纹。观察类操作返回空串。
+func jobLoopKey(cmd Command, scene string) string {
+	if !IsWriteOp(cmd.Op) {
+		return ""
+	}
+	cmd.Observation, cmd.IdempotencyKey, cmd.JobID, cmd.Connection = 0, "", "", ""
+	sum := sha256.Sum256(append([]byte(scene+"\x00"), auditCommand(cmd)...))
+	return hex.EncodeToString(sum[:12])
+}
+
+// loopGuardLocked 不限总步数和时长，只拦没有进展的空转：同一画面下重复同一操作，
+// 或者一直观察不动手。命中后转入等待确认而不是判失败：主人看过现场点「继续」，
+// 计数从那一步重新开始，任务接着跑。
+func (m *JobManager) loopGuardLocked(job *Job, cmd Command, loopKey string) error {
+	steps := job.Steps
+	if job.LoopFloor > 0 && job.LoopFloor <= len(steps) {
+		steps = steps[job.LoopFloor:]
+	}
+	reason := ""
+	if loopKey != "" {
+		repeats := 1
+		for _, step := range steps {
+			if step.LoopKey == loopKey {
+				repeats++
+			}
+		}
+		if repeats >= loopRepeatLimit {
+			reason = fmt.Sprintf("同一画面下已第 %d 次执行相同的 %s，画面没有变化，疑似原地打转", repeats, cmd.Op)
+		} else if cmd.Op == OpWindowType {
+			current, same, writes := jobActionKey(cmd.Op, auditCommand(cmd)), 1, 1
+			for i := len(steps) - 1; i >= 0 && writes < sameTextWindow; i-- {
+				if !IsWriteOp(steps[i].Op) {
+					continue
+				}
+				writes++
+				if jobActionKey(steps[i].Op, steps[i].Params) == current {
+					same++
+				}
+			}
+			if same >= sameTextLimit {
+				reason = fmt.Sprintf("最近 %d 次操作里有 %d 次输入了同一段文字，疑似原地打转", writes, same)
+			}
+		}
+	} else if cmd.Op == OpWindowScreenshot || cmd.Op == OpWindowElements {
+		streak := 1
+		for i := len(steps) - 1; i >= 0 && !IsWriteOp(steps[i].Op); i-- {
+			if steps[i].Op == OpWindowScreenshot || steps[i].Op == OpWindowElements {
+				streak++
+			}
+		}
+		if streak > observeStreakLimit {
+			reason = fmt.Sprintf("已连续观察 %d 次没有任何操作，疑似卡住", streak-1)
 		}
 	}
-	return nil
+	if reason == "" {
+		return nil
+	}
+	job.Status = JobWaitingConfirm
+	job.WaitReason = reason + "。请主人在控制台查看现场后决定继续或取消"
+	job.NeedsReobserve = true
+	job.UpdatedAt = m.now()
+	return commandError(CodeJobBlocked, "%s，任务已暂停等待主人确认；换一种做法前先重新观察", reason)
 }
 
 // RecordDispatch 记下回执；截图成功会推进 observation 并清除 NeedsReobserve。
@@ -576,6 +639,9 @@ func (m *JobManager) RecordDispatch(ctx context.Context, jobID, stepID string, c
 			job.Steps[i].Status = StepCompleted
 			job.Steps[i].Result = auditResult(cmd.Op, result.Data)
 			job.Steps[i].CompletedAt = m.now()
+			if scene := auditScene(job.Steps[i].Result); scene != "" {
+				job.LastScene = scene
+			}
 			if cmd.Op == OpWindowScreenshot || cmd.Op == OpWindowElements {
 				job.LastObservation++
 				var observation struct {
@@ -661,7 +727,25 @@ func auditResult(op string, data json.RawMessage) json.RawMessage {
 		redact(evidence)
 	}
 	if op == OpWindowElements {
+		if elements, ok := fields["elements"]; ok {
+			fields["elements_sha256"] = fmt.Sprintf("%x", sha256.Sum256(rawJSON(elements)))
+		}
 		delete(fields, "elements")
 	}
 	return rawJSON(fields)
+}
+
+// auditScene 取出一步审计结果里的画面摘要：截图、元素读取或操作后的取证截图。
+func auditScene(result json.RawMessage) string {
+	var fields struct {
+		Image    string `json:"image_sha256"`
+		Elements string `json:"elements_sha256"`
+		Evidence struct {
+			Image string `json:"image_sha256"`
+		} `json:"evidence"`
+	}
+	if json.Unmarshal(result, &fields) != nil {
+		return ""
+	}
+	return firstNonEmpty(fields.Evidence.Image, fields.Image, fields.Elements)
 }

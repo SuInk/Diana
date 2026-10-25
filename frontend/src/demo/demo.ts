@@ -964,7 +964,7 @@ let demoBrowserSourceOrder: ("box" | "extension")[] = ["box", "extension"];
 let demoDesktopPolicy = { enabled: true, write_enabled: false, allowed_apps: ["com.apple.TextEdit"], denied_apps: [] as string[] };
 let demoDesktopTakeover = false;
 let demoDesktopActionApproved = false;
-let demoDesktopJobs = [{ id: "desktop-demo", goal: "整理本机文本草稿", status: "waiting_confirm", wait_reason: "草稿已整理，等待主人检查后继续。", budget: { steps_used: 3, max_steps: 20 } }];
+let demoDesktopJobs = [{ id: "desktop-demo", goal: "整理本机文本草稿", status: "waiting_confirm", wait_reason: "草稿已整理，等待主人检查后继续。", budget: { steps_used: 3 } }];
 let demoBrowserControlPolicy = {
   enabled: false,
   allowed_origins: ["chrome-extension://abcdefghijklmnopabcdefghijklmnop"],

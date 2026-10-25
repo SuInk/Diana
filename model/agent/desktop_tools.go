@@ -43,7 +43,7 @@ func (b desktopControlToolBase) dispatch(ctx context.Context, cmd desktopctl.Com
 func desktopJobParams() map[string]any {
 	return map[string]any{
 		"observation":     toolIntParam("最近一次截图或元素读取返回的观察版本；本机写操作必填"),
-		"job_id":          toolStringParam("持久电脑任务 ID；传入后本步记入任务并受暂停/取消/预算约束"),
+		"job_id":          toolStringParam("持久电脑任务 ID；传入后本步记入任务并受暂停/取消/循环检测约束"),
 		"idempotency_key": toolStringParam("同任务内相同键的已完成步骤不再下发，避免恢复后重复提交"),
 	}
 }
@@ -342,15 +342,13 @@ type DesktopJobCreateTool struct{ base desktopControlToolBase }
 
 func (t *DesktopJobCreateTool) Name() string { return "desktop_job_create" }
 func (t *DesktopJobCreateTool) Description() string {
-	return `创建一条持久电脑任务（可暂停/恢复/取消/等待确认，重启后保留）。后续 desktop_* 调用带上返回的 job_id。恢复后须先 desktop_screenshot 再写操作。`
+	return `创建一条持久电脑任务（可暂停/恢复/取消/等待确认，重启后保留；不限总步数和时长）。后续 desktop_* 调用带上返回的 job_id。恢复后须先 desktop_screenshot 再写操作。同一画面下重复同一操作、或一直观察不动手，任务会暂停等主人确认：被拦下时换一种做法，不要原样重试。`
 }
 func (t *DesktopJobCreateTool) InputSchema() map[string]any {
 	return toolObjectSchema(nil, map[string]any{
-		"goal":            toolStringParam("任务目标简述"),
-		"max_steps":       toolIntParam("步数预算，默认 32"),
-		"max_duration_ms": toolIntParam("时长预算毫秒，默认 30 分钟"),
-		"connection":      toolStringParam("可选，绑定执行器连接"),
-		"start":           toolBoolParam("创建后立即标为 running，默认 true"),
+		"goal":       toolStringParam("任务目标简述"),
+		"connection": toolStringParam("可选，绑定执行器连接"),
+		"start":      toolBoolParam("创建后立即标为 running，默认 true"),
 	})
 }
 func (t *DesktopJobCreateTool) Run(ctx context.Context, input map[string]any) (string, error) {
@@ -358,11 +356,7 @@ func (t *DesktopJobCreateTool) Run(ctx context.Context, input map[string]any) (s
 	if err != nil {
 		return "", err
 	}
-	budget := desktopctl.JobBudget{
-		MaxSteps:      intFromInput(input, "max_steps", 0),
-		MaxDurationMS: intFromInput(input, "max_duration_ms", 0),
-	}
-	job, err := jm.Create(ctx, stringFromInput(input, "goal"), "", stringFromInput(input, "connection"), budget)
+	job, err := jm.Create(ctx, stringFromInput(input, "goal"), "", stringFromInput(input, "connection"), desktopctl.JobBudget{})
 	if err != nil {
 		return "", err
 	}
