@@ -129,7 +129,7 @@ func (i *CUADriverInstaller) Start(ctx context.Context, done func()) {
 	i.running = true
 	i.mu.Unlock()
 	go func() {
-		defer func() { safego.Report("desktopctl.cua-driver-install", recover()) }()
+		defer recoverCUADriverInstall()
 		err := i.install(ctx)
 		i.mu.Lock()
 		i.running, i.lastErr = false, err
@@ -265,3 +265,5 @@ func fileSHA256(name string) (string, error) {
 	}
 	return hex.EncodeToString(hash.Sum(nil)), nil
 }
+
+func recoverCUADriverInstall() { safego.Report("desktopctl.cua-driver-install", recover()) }
