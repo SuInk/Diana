@@ -502,6 +502,13 @@
       "default": "正文里那个 @ 指的就是你，等于有人直接叫了你一声。"
     },
     {
+      "key": "reply.note.group_brevity",
+      "group": "reply_rules",
+      "title": "当前消息注解 · 群聊篇幅",
+      "usage": "群聊里每条当前消息都补在最后，紧挨生成：闲聊和问看法时压篇幅、不说教，正事照常答全。",
+      "default": "群聊接话：闲聊、问你看法时随口一两句、几十字就够，不挨个点评，不讲道理，不劝人休息；问技术、要办法时照常答全。"
+    },
+    {
       "key": "reply.note.reply",
       "group": "reply_rules",
       "title": "当前消息注解 · 带引用",
