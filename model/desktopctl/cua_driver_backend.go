@@ -345,8 +345,20 @@ func (b *cuaDriverBackend) dispatch(ctx context.Context, c Command, element *Ele
 	default:
 		return ActionResult{}, commandError(CodeUnsupportedOp, "cua-driver 不支持指令：%s", c.Op)
 	}
-	if _, err := b.session.call(ctx, tool, args); err != nil {
+	result, err := b.session.call(ctx, tool, args)
+	if err != nil {
 		return ActionResult{}, err
+	}
+	// Some refusals (e.g. target_focus_unconfirmed) are normal results with
+	// effect "refused": nothing was sent, so it must not read as dispatched.
+	var outcome struct {
+		Effect string `json:"effect"`
+		Reason string `json:"reason"`
+		Code   string `json:"code"`
+	}
+	if json.Unmarshal(result.Structured, &outcome) == nil && outcome.Effect == "refused" {
+		detail := strings.TrimSpace(firstNonEmptyString(outcome.Reason, outcome.Code, result.Text))
+		return ActionResult{}, commandError(CodeStaleObservation, "cua-driver 拒绝执行（%s），输入未发送，请重新观察后再试", detail)
 	}
 	// The driver may report effect "unverifiable"; Diana never treats a
 	// dispatched input as a completed goal, so the result always needs a check.
@@ -423,4 +435,13 @@ func abs(v int) int {
 		return -v
 	}
 	return v
+}
+
+func firstNonEmptyString(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
 }

@@ -56,6 +56,9 @@ func (f *fakeCUADriver) call(_ context.Context, name string, args map[string]any
 	case "check_permissions":
 		return cuaDriverResult{Structured: structured(map[string]any{"accessibility": true, "screen_recording": false})}, nil
 	}
+	if args["key"] == "f13" {
+		return cuaDriverResult{Structured: structured(map[string]any{"effect": "refused", "reason": "target_focus_unconfirmed"})}, nil
+	}
 	return cuaDriverResult{Structured: structured(map[string]any{"effect": "unverifiable"})}, nil
 }
 
@@ -207,6 +210,25 @@ func TestCUADriverMenuShortcutsUseForeground(t *testing.T) {
 		if got := fake.last("press_key")["delivery_mode"] == "foreground"; got != foreground {
 			t.Fatalf("%s foreground = %v, want %v", key, got, foreground)
 		}
+	}
+}
+
+// 驱动以 effect:refused 正常返回时其实什么都没发，不能报成「输入已发送」。
+func TestCUADriverRefusedEffectIsNotDispatched(t *testing.T) {
+	a, _ := newFakeCUAAdapter()
+	ctx := context.Background()
+	shot, err := a.screenshot(ctx, "501:77", "com.apple.TextEdit")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := Command{WindowID: "501:77", ExpectedBundleID: "com.apple.TextEdit", Key: "f13", Observation: shot.Observation}
+	_, _ = a.PressKey(ctx, c)
+	if err := a.ConfirmAction(ctx, actionKey(c)); err != nil {
+		t.Fatal(err)
+	}
+	result, err := a.PressKey(ctx, c)
+	if err == nil || result.OK || !strings.Contains(err.Error(), "target_focus_unconfirmed") {
+		t.Fatalf("refused effect reported as dispatched: result=%+v err=%v", result, err)
 	}
 }
 

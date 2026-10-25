@@ -5,7 +5,6 @@ package desktopctl
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -100,9 +99,9 @@ func (s *cuaDriverSession) call(ctx context.Context, name string, args map[strin
 		if ctx.Err() != nil {
 			return cuaDriverResult{}, ctx.Err()
 		}
-		if errors.Is(err, mcpsdk.ErrConnectionClosed) || errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
-			s.drop(session)
-		}
+		// Any transport-level failure (not a tool-level IsError) may mean the
+		// driver died; restart it on the next call instead of reusing a dead pipe.
+		s.drop(session)
 		return cuaDriverResult{}, commandError(CodeHelper, "cua-driver %s 调用失败：%v", name, err)
 	}
 	out := cuaDriverResult{}

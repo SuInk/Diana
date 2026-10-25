@@ -92,6 +92,12 @@ func (s *LocalService) Sync(ctx context.Context) {
 			s.connection.Close()
 			s.connection = nil
 		}
+		// Turning desktop control off also stops the executor process, so no
+		// child holding Screen Recording / Accessibility stays alive.
+		if p, ok := s.adapter.(*ProcessAdapter); ok {
+			p.Close()
+			s.adapter, s.executor = nil, ""
+		}
 		return
 	}
 	if s.connection != nil {
@@ -128,16 +134,16 @@ func (s *LocalService) Sync(ctx context.Context) {
 // native helper, so the backend does not switch under a running task. Only a
 // failed download falls back to the helper.
 func (s *LocalService) newAdapter(ctx context.Context) (*ProcessAdapter, string, string) {
-	cuaPath := s.cuaPath
+	cuaPath, label := s.cuaPath, "cua-driver（DIANA_CUA_DRIVER 指定）"
 	if cuaPath == "" {
-		cuaPath = s.installer.Installed()
+		cuaPath, label = s.installer.Installed(), "cua-driver "+CUADriverVersion
 	}
 	if cuaPath != "" {
 		a, err := NewCUADriverAdapter(cuaPath)
 		if err != nil {
 			return nil, "", err.Error()
 		}
-		return a, "cua-driver " + CUADriverVersion, ""
+		return a, label, ""
 	}
 	pending := ""
 	if s.installer != nil {
