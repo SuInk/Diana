@@ -50,6 +50,7 @@ test("未报用量和历史空字段照样计数，新增用途原样显示", ()
   assert.equal(usagePurposeLabel(" future_purpose "), "future_purpose");
   assert.equal(usagePurposeLabel("constructor"), "constructor");
   assert.equal(usagePurposeLabel("webui_provider_test"), "控制台提供商测试");
+  assert.equal(usagePurposeLabel("reply_fatigue_gate"), "回复疲劳判断");
   assert.deepEqual(groupLLMUsage([], "purpose"), []);
 });
 

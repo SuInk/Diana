@@ -16,6 +16,7 @@ const purposeLabels: Record<string, string> = {
   reply_rule_router: "回复规则判断",
   proactive_reply_quality: "回复质量审核",
   reply_send_audit: "发送前审核",
+  reply_fatigue_gate: "回复疲劳判断",
   reply_account_safety: "账号安全审核",
   bot_reply_loop_detection: "机器人循环检测",
   reply_semantic_dedup: "回复语义去重",

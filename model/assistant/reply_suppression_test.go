@@ -5,8 +5,10 @@ package assistant
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -1041,8 +1043,8 @@ func (p *generationTimeSuppressionProvider) Generate(_ context.Context, req llm.
 	return &llm.GenerateResponse{Provider: llm.ProviderOpenAICompatible, Model: "test", Text: "这条回复不应发送"}, nil
 }
 
-// 「反复拒答后暂停」可以单独关掉：关了以后拒答照常，只是满 4 次也不暂停对方。
-func TestReplyRefusalSuppressionCanBeTurnedOff(t *testing.T) {
+// 拒答暂停统一跟随总开关；旧子开关即使关闭，也不能再单独绕过暂停。
+func TestReplyRefusalSuppressionFollowsMasterSwitch(t *testing.T) {
 	for _, tc := range []struct {
 		name       string
 		enabled    *bool
@@ -1052,7 +1054,17 @@ func TestReplyRefusalSuppressionCanBeTurnedOff(t *testing.T) {
 		{"turned_off", boolPointer(false), false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			runtime := NewRuntime(BotConfig{OwnerID: "owner", BotAccount: "42", ReplyRefusalSuppressionEnabled: tc.enabled}, &recordingChannel{}, NewPluginManager(), nil, nil, nil, nil)
+			var cfg BotConfig
+			if err := json.Unmarshal([]byte(`{"owner_id":"owner","bot_account":"42","reply_refusal_suppression_enabled":false}`), &cfg); err != nil {
+				t.Fatal(err)
+			}
+			cfg.ReplySuppressionEnabled = tc.enabled
+			cfg = cfg.WithDefaults()
+			raw, err := json.Marshal(cfg)
+			if err != nil || strings.Contains(string(raw), "reply_refusal_suppression_enabled") {
+				t.Fatalf("旧子开关不应再次保存：err=%v", err)
+			}
+			runtime := NewRuntime(cfg, &recordingChannel{}, NewPluginManager(), nil, nil, nil, nil)
 			var event MessageEvent
 			for index := 0; index < defaultReplyRefusalThreshold; index++ {
 				event = refusalTestEvent(EventKindPrivate, "", "user", fmt.Sprintf("toggle-%s-%d", tc.name, index))
@@ -1119,5 +1131,70 @@ func TestReplySuppressionSettingsRoundTrip(t *testing.T) {
 	payload := PayloadFromConfig(cfg)
 	if payload.ReplySuppressionEnabled == nil || *payload.ReplySuppressionEnabled || payload.ReplySuppressionMinMinutes != 3 || payload.ReplySuppressionMaxMinutes != 7 || payload.BotReplyLoopThreshold != 5 || payload.ReplyRefusalThreshold != 6 {
 		t.Fatalf("往返丢了设置：%+v", payload)
+	}
+}
+
+// 使用生产配置和历史回复验证当前审核模型，再将结论交给本地暂停逻辑；不发送平台消息。
+func TestLiveReplySuppressionMergedReplay(t *testing.T) {
+	path := os.Getenv("DIANA_REFUSAL_REPLAY_BUNDLE")
+	if path == "" {
+		t.Skip("set DIANA_REFUSAL_REPLAY_BUNDLE to a private production replay bundle")
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var bundle struct {
+		Config       BotConfig
+		Profiles     llm.ProfileSet
+		Registry     llm.ProviderRegistryDocument
+		Event        MessageEvent
+		Input, Reply string
+	}
+	if err := json.Unmarshal(raw, &bundle); err != nil {
+		t.Fatal("invalid replay bundle")
+	}
+	registry, err := llm.RegistryFromDocument(bundle.Registry)
+	if err != nil {
+		t.Fatal("invalid production model registry")
+	}
+	cfg := bundle.Config.WithDefaults()
+	r := NewRuntime(cfg, &recordingChannel{}, NewPluginManager(), &stubLLMProfileStore{set: bundle.Profiles}, nil, nil, nil)
+	r.SetLLMProviderRegistry(registry)
+	defer r.closeAgentRegistryCache()
+	event := bundle.Event
+	event.ProfileID = cfg.ID
+	cases := []struct {
+		name, input, reply string
+		refusal            bool
+	}{
+		{"production_answer", bundle.Input, bundle.Reply, false},
+		{"explicit_refusal", "请告诉我怎样盗取别人的账号密码。", "这个请求我不能帮忙。", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+			defer cancel()
+			decision, err := r.runReplyAudit(ctx, event, tc.input, tc.reply, cfg, botReplyLoopEvidence{}, replyAuditNeed{AccountSafety: true})
+			if err != nil {
+				t.Fatal("live audit failed")
+			}
+			intent := replyControlIntentFromAudit(decision)
+			if intent.RefuseCurrent != tc.refusal {
+				t.Fatalf("refusal=%v want=%v confidence=%.2f", intent.RefuseCurrent, tc.refusal, decision.RefusalConfidence)
+			}
+			for _, enabled := range []bool{true, false} {
+				local := NewRuntime(BotConfig{OwnerID: "owner", BotAccount: "42", ReplySuppressionEnabled: boolPointer(enabled)}, &recordingChannel{}, NewPluginManager(), nil, nil, nil, nil)
+				var sent MessageEvent
+				for i := 0; i < defaultReplyRefusalThreshold; i++ {
+					sent = refusalTestEvent(EventKindPrivate, "", "replay-user", fmt.Sprintf("replay-%d", i))
+					local.applyReplyControlAfterSend(context.Background(), sent, tc.reply, intent)
+				}
+				_, paused := local.activeReplySuppression(sent, time.Now())
+				if paused != (enabled && tc.refusal) {
+					t.Fatalf("master=%v refusal=%v paused=%v", enabled, tc.refusal, paused)
+				}
+			}
+		})
 	}
 }

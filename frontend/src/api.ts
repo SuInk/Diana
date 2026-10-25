@@ -353,11 +353,9 @@ export interface BotProfileConfig extends SendRetrySettings {
     reasoning_effort?: string;
   }>;
   model_recovery_policy?: ModelRecoveryPolicy;
-  /** 空转检测：发送前审核判断来回是否空转，累计够了暂停响应；缺省等价于开启。 */
+  /** 空转检测与回复疲劳共用开关；累计空转达到阈值后是否暂停由临时响应屏蔽决定；默认开启。 */
   bot_reply_loop_detection_enabled?: boolean;
-  /** 30 分钟内对同一账号拒答满设定次数就暂停响应它；默认开。 */
-  reply_refusal_suppression_enabled?: boolean;
-  /** 发送前语义去重：近期已发过同一个人答复时判断候选是否重复；默认开。 */
+  /** 仅兼容旧配置；运行时不再执行发送前语义去重。 */
   reply_semantic_dedup_enabled?: boolean;
   /** 临时响应屏蔽总开关：空转、反复拒答、私聊叫停都靠它暂停响应账号；默认开。 */
   reply_suppression_enabled?: boolean;

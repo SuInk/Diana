@@ -146,7 +146,7 @@ const oneBotProfile: BotProfileConfig = {
   private_admission: { mode: "disabled" },
   group_triggers: ["Diana", "diana"], disabled_groups: [], system_prompt: demoDefaultSoul,
   reply_composer: "maibot", maibot_reply_style: "", reply_tone_default: FALLBACK_REPLY_TONE,
-  debug_mode_enabled: true, bot_reply_loop_detection_enabled: true, reply_refusal_suppression_enabled: true, reply_semantic_dedup_enabled: true, reply_suppression_enabled: true, prompt_inject_time: false,
+  debug_mode_enabled: true, bot_reply_loop_detection_enabled: true, reply_semantic_dedup_enabled: true, reply_suppression_enabled: true, prompt_inject_time: false,
   reply_account_safety_audit_default: FALLBACK_ACCOUNT_SAFETY_RULES,
   proactive_reply_chance: 1, proactive_reply_threshold: 0.9, recent_context_limit: 40, max_reply_chars: 0,
   sticker_reply_order: "before",

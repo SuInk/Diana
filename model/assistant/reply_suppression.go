@@ -693,7 +693,7 @@ func (r *Runtime) applyReplyControlAfterSend(ctx context.Context, event MessageE
 	if _, blocked := r.activeReplySuppression(event, now); blocked {
 		return
 	}
-	if cfg := r.effectiveConfigForEvent(event); !boolValue(cfg.ReplyRefusalSuppressionEnabled, true) || !replySuppressionEnabled(cfg) {
+	if cfg := r.effectiveConfigForEvent(event); !replySuppressionEnabled(cfg) {
 		return
 	}
 	_, reason, thresholdReached := r.registerReplyRefusal(event, now)

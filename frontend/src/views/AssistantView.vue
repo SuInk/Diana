@@ -1263,13 +1263,13 @@
             </div>
           </section>
 
-          <!-- 安全：发出去之前审一遍，别和其他机器人没完没了，看过的撤回内容跟着撤。 -->
+          <!-- 安全：账号风险审核、拒答话术和撤回回复。 -->
           <section class="card">
             <div class="card-header">
               <div>
                 <h2>安全与审核</h2>
               </div>
-              <span class="badge" :class="form.reply_account_safety_audit_master_enabled ? 'accent' : ''">{{ form.reply_account_safety_audit_master_enabled ? "审核已启用" : "审核已关闭" }}</span>
+              <span class="badge" :class="form.reply_account_safety_audit_master_enabled ? 'accent' : ''">{{ form.reply_account_safety_audit_master_enabled ? "账号安全审核已开启" : "账号安全审核已关闭" }}</span>
             </div>
             <div class="card-body form-grid">
               <div class="field wide">
@@ -1279,10 +1279,8 @@
                   <span class="switch-label">启用账号安全审核</span>
                 </label>
                 <span class="hint">
-                  开启后，这台机器人所有主动和直接回复都会做一次统一发送前审核；关闭后都不做，群配置可单独覆盖。
-                  一次审核同时给出账号安全置信度并判断是否属于明确拒答。只有安全置信度低于 10% 时才会拦下不发——
-                  拿不准一律放行，避免机器人在沾边话题上无故闭嘴；高置信拒答仅在发送成功后累计。发送前不再做准确度或答非所问拦截。
-                  开启时，被 @ 或私聊的直接回复也各多一次快模型往返，回复会慢一点。
+                  检查主动和直接回复是否存在账号风险，群配置可单独覆盖。安全置信度低于 10% 时拦下不发，拿不准时放行。
+                  关闭只停用账号安全检查，空转、拒答和对话收尾仍按各自规则处理。发送前审核不检查准确度或答非所问。
                 </span>
               </div>
               <div class="field wide">
@@ -1293,7 +1291,7 @@
                   class="textarea"
                   rows="14"
                 ></textarea>
-                <span class="hint">当前显示实际生效的内置规则；修改后作为自定义范围保存。恢复成内置原文会继续跟随系统默认。只影响账号安全结论，不改变拒答和防循环审核。</span>
+                <span class="hint">当前显示实际生效的内置规则；修改后作为自定义范围保存。恢复成内置原文会继续跟随系统默认。只影响账号安全结论，不改变拒答、空转和对话收尾判断。</span>
               </div>
               <div class="field wide participation-prompts">
                 <div class="participation-prompt-part">
@@ -1323,88 +1321,6 @@
               </div>
               <div class="field wide">
                 <label class="switch">
-                  <input v-model="form.reply_suppression_enabled" type="checkbox" />
-                  <span class="track" aria-hidden="true"></span>
-                  <span class="switch-label">临时响应屏蔽</span>
-                </label>
-                <span class="hint">对同一账号反复拒答、来回空转，或私聊里对方明确叫停时，暂停响应它一段时间，期间它的消息不回。关掉后这些判断照常做，只是不再暂停任何人，正在生效的屏蔽也一并失效。主人不受影响。</span>
-              </div>
-              <template v-if="form.reply_suppression_enabled">
-                <div class="field">
-                  <label for="bot-suppression-min">屏蔽时长下限（分钟）</label>
-                  <input
-                    id="bot-suppression-min"
-                    v-model.number="form.reply_suppression_min_minutes"
-                    class="input"
-                    type="number"
-                    min="1"
-                    :max="maximumReplySuppressionMinutes"
-                    step="1"
-                    inputmode="numeric"
-                  />
-                  <span class="hint">每次屏蔽在上下限之间随机取，默认 {{ defaultReplySuppressionMinMinutes }}–{{ defaultReplySuppressionMaxMinutes }} 分钟。</span>
-                </div>
-                <div class="field">
-                  <label for="bot-suppression-max">屏蔽时长上限（分钟）</label>
-                  <input
-                    id="bot-suppression-max"
-                    v-model.number="form.reply_suppression_max_minutes"
-                    class="input"
-                    type="number"
-                    min="1"
-                    :max="maximumReplySuppressionMinutes"
-                    step="1"
-                    inputmode="numeric"
-                  />
-                  <span class="hint">上下限都填同一个数就是固定时长，最长 {{ maximumReplySuppressionMinutes }} 分钟。</span>
-                </div>
-              </template>
-              <div v-if="form.reply_suppression_enabled" class="field wide">
-                <label class="switch">
-                  <input v-model="form.reply_refusal_suppression_enabled" type="checkbox" />
-                  <span class="track" aria-hidden="true"></span>
-                  <span class="switch-label">反复拒答后暂停响应该账号</span>
-                </label>
-                <span class="hint">30 分钟内对同一账号拒答满设定次数，按上面的时长暂停响应它。关掉后拒答照常，只是不再因此暂停。</span>
-              </div>
-              <div v-if="form.reply_suppression_enabled && form.reply_refusal_suppression_enabled" class="field">
-                <label for="bot-refusal-threshold">拒答几次后暂停</label>
-                <input
-                  id="bot-refusal-threshold"
-                  v-model.number="form.reply_refusal_threshold"
-                  class="input"
-                  type="number"
-                  min="1"
-                  :max="maximumReplySuppressionThreshold"
-                  step="1"
-                  inputmode="numeric"
-                />
-                <span class="hint">30 分钟内累计，默认 {{ defaultReplyRefusalThreshold }} 次。</span>
-              </div>
-              <div class="field wide">
-                <label class="switch">
-                  <input v-model="form.bot_reply_loop_detection_enabled" type="checkbox" />
-                  <span class="track" aria-hidden="true"></span>
-                  <span class="switch-label">空转检测：来回空转时停止接话</span>
-                </label>
-                <span class="hint">对方被标记为机器人时，回复较频繁后发送前审核会判断这串来回有没有明确目的：下棋、解题、一起做事照常回；漫无目的地接戏、斗嘴记一次空转。任何人和机器人来回都没有内容时也记一次。累计到设定次数就暂停响应该账号（需开启临时响应屏蔽）。机器人自己把同一个意思说了好几遍时只丢那一条回复，对方是机器人才累计。未标记的账号斗嘴、闲聊不计空转，想让某台机器人也按这套规则管就把它标记为机器人，主人不受影响。同一开关还管回复疲劳：对同一个人回得多了，对方这句越长、越没新意没目的就越累；疲劳分 10 分钟和 6 小时两档消退，断断续续刷一整天也会累。攒满后先看最近几轮攒着的判断，对方一直在追问、纠正、请她做事就照回；否则对方这句既没新东西、也不是在提问或请求就不回（@ 也一样），有新东西的闲聊照回；不需要标记，对谁都一样。</span>
-              </div>
-              <div v-if="form.reply_suppression_enabled && form.bot_reply_loop_detection_enabled" class="field">
-                <label for="bot-loop-threshold">空转几次后暂停</label>
-                <input
-                  id="bot-loop-threshold"
-                  v-model.number="form.bot_reply_loop_threshold"
-                  class="input"
-                  type="number"
-                  min="1"
-                  :max="maximumReplySuppressionThreshold"
-                  step="1"
-                  inputmode="numeric"
-                />
-                <span class="hint">30 分钟内累计，默认 {{ defaultBotReplyLoopThreshold }} 次。</span>
-              </div>
-              <div class="field wide">
-                <label class="switch">
                   <input v-model="form.recall_reply_auto_delete_enabled" type="checkbox" />
                   <span class="track" aria-hidden="true"></span>
                   <span class="switch-label">查看撤回消息后自动撤回回复</span>
@@ -1428,6 +1344,93 @@
             </div>
           </section>
 
+          <section class="card">
+            <div class="card-header">
+              <div>
+                <h2>防空转与暂停响应</h2>
+                <span class="card-sub">少回单条消息，或暂停一段时间；主人不受影响</span>
+              </div>
+            </div>
+            <div class="card-body form-grid">
+              <div class="field wide">
+                <label class="switch">
+                  <input v-model="form.bot_reply_loop_detection_enabled" type="checkbox" />
+                  <span class="track" aria-hidden="true"></span>
+                  <span class="switch-label">空转和疲劳</span>
+                </label>
+                <span class="hint">同时开启空转检测和回复疲劳。反复聊没新意的内容时，可能跳过单条消息；有新内容、提问或做事可以继续回复。</span>
+                <span class="hint">疲劳不会触发定时暂停；空转累计达标后，由下方开关决定是否暂停。</span>
+              </div>
+              <div class="field wide">
+                <label class="switch">
+                  <input v-model="form.reply_suppression_enabled" type="checkbox" />
+                  <span class="track" aria-hidden="true"></span>
+                  <span class="switch-label">临时响应屏蔽</span>
+                </label>
+                <span class="hint">空转或拒答累计达标，或私聊中对方要求停止时，一段时间内不再回复该账号。</span>
+                <span class="hint">关闭后不再暂停账号；回复疲劳仍可能跳过单条消息。</span>
+              </div>
+              <template v-if="form.reply_suppression_enabled">
+                <div class="field">
+                  <label for="bot-suppression-min">暂停最短时长（分钟）</label>
+                  <input
+                    id="bot-suppression-min"
+                    v-model.number="form.reply_suppression_min_minutes"
+                    class="input"
+                    type="number"
+                    min="1"
+                    :max="maximumReplySuppressionMinutes"
+                    step="1"
+                    inputmode="numeric"
+                  />
+                  <span class="hint">暂停时长随机取，默认 {{ defaultReplySuppressionMinMinutes }}–{{ defaultReplySuppressionMaxMinutes }} 分钟。</span>
+                </div>
+                <div class="field">
+                  <label for="bot-suppression-max">暂停最长时长（分钟）</label>
+                  <input
+                    id="bot-suppression-max"
+                    v-model.number="form.reply_suppression_max_minutes"
+                    class="input"
+                    type="number"
+                    min="1"
+                    :max="maximumReplySuppressionMinutes"
+                    step="1"
+                    inputmode="numeric"
+                  />
+                  <span class="hint">两项相同则固定时长，最长 {{ maximumReplySuppressionMinutes }} 分钟。</span>
+                </div>
+              </template>
+              <div v-if="form.reply_suppression_enabled" class="field">
+                <label for="bot-refusal-threshold">拒答几次后暂停</label>
+                <input
+                  id="bot-refusal-threshold"
+                  v-model.number="form.reply_refusal_threshold"
+                  class="input"
+                  type="number"
+                  min="1"
+                  :max="maximumReplySuppressionThreshold"
+                  step="1"
+                  inputmode="numeric"
+                />
+                <span class="hint">30 分钟内累计，默认 {{ defaultReplyRefusalThreshold }} 次。</span>
+              </div>
+              <div v-if="form.reply_suppression_enabled && form.bot_reply_loop_detection_enabled" class="field">
+                <label for="bot-loop-threshold">空转几次后暂停</label>
+                <input
+                  id="bot-loop-threshold"
+                  v-model.number="form.bot_reply_loop_threshold"
+                  class="input"
+                  type="number"
+                  min="1"
+                  :max="maximumReplySuppressionThreshold"
+                  step="1"
+                  inputmode="numeric"
+                />
+                <span class="hint">30 分钟内累计，默认 {{ defaultBotReplyLoopThreshold }} 次。</span>
+              </div>
+            </div>
+          </section>
+
           <!-- 出错与重试：发送失败怎么重试、出错时要不要在聊天里说一声。 -->
           <section class="card">
             <div class="card-header">
@@ -1445,7 +1448,7 @@
                 </label>
                 <span class="hint">
                   关闭后仍保留完整事件记录和运行日志，只是不把错误发进聊天。账号安全拦下的回复也走这个开关：提示会用机器人自己的口吻说，
-                  并且不会复述被拦下的内容或风险类别；改写用的模型调用失败时退回固定文案。表达质量拦截始终静默，不受此开关影响。
+                  并且不会复述被拦下的内容或风险类别；改写用的模型调用失败时退回固定文案。
                 </span>
               </div>
               <div v-if="form.error_notify_enabled" class="field">
@@ -1464,7 +1467,7 @@
                 <label>发送失败重试</label>
                 <span class="hint">每条最多尝试 3 次（含首次），间隔 1 秒、2 秒。明确拒收立即停止；最终失败计入首页错误并写入日志，后续消息照常处理。</span>
               </div>
-              <div v-for="field in sendRetryFields.filter(item => item.key === 'inbound_retry_max_attempts')" :key="field.key" class="field">
+              <div v-for="field in sendRetryFields" :key="field.key" class="field">
                 <label :for="`bot-${field.key}`">{{ field.label }}</label>
                 <input
                   :id="`bot-${field.key}`"
@@ -3247,7 +3250,7 @@ const modelRoleRows: ModelRoleRow[] = [
   {
     key: "chat",
     label: "对话",
-    description: "正式回复用的模型。其他用途在提供商一栏选「跟随对话」时，直接沿用这里的提供商、模型和后备路由，模型一栏随之锁定。"
+    description: "正式回复和入群欢迎用的模型。其他用途在提供商一栏选「跟随对话」时，直接沿用这里的提供商、模型和后备路由，模型一栏随之锁定。"
   },
   {
     key: "vision",
@@ -3265,7 +3268,7 @@ const modelRoleRows: ModelRoleRow[] = [
     key: "intent",
     label: "意图识别",
     description:
-      "判定当前这一轮该不该说话、说出去的这句能不能发：主动接话判定、接话质量和发送前审核。问的都是是非、单选和打分，" +
+      "判定当前这一轮该不该说话、说出去的这句能不能发：主动接话判定、回复疲劳判断和发送前审核。问的都是是非、单选和打分，" +
       "发请求时带着判断题表，所以这一档可以绑 TypeSafe Jev 这类只做判断的模型——更快更便宜。写字的活在「回复辅助」和「后台生成」两档。"
   }
 ];
@@ -3289,7 +3292,7 @@ const purposeRoleRows: ModelRoleRow[] = [
     label: "后台生成",
     sublabel: "好感度 · 记忆",
     description:
-      "好感度评估、长期记忆抽取与归纳、RSS 订阅判定和入群欢迎语。它们都要写出成段文字，判断模型答不了；" +
+      "好感度评估、长期记忆抽取与归纳和 RSS 订阅判定。它们都要写出成段文字，判断模型答不了；" +
       "都在回复之外异步执行，慢一点没关系，适合指一个便宜的模型。不指定时跟随对话。"
   },
   {
@@ -3297,7 +3300,7 @@ const purposeRoleRows: ModelRoleRow[] = [
     label: "回复辅助",
     sublabel: "指代 · 摘要 · 提示",
     description:
-      "语义指代、话题合并、语义去重、上下文摘要、转发内容安全、戳一戳回应，以及出错、被拦、收声时发给用户的那句提示改写。" +
+      "语义指代、话题合并、上下文摘要、转发内容安全、戳一戳回应，以及出错、被拦、收声时发给用户的那句提示改写。" +
       "它们都在这一轮回复发出之前同步执行，模型慢，回复就跟着慢——选一个响应快、能写文字的模型，不需要判断题表。不指定时沿用后台生成。"
   }
 ];
@@ -4454,7 +4457,6 @@ function setForm(config: BotProfileConfig): void {
     // 可选布尔字段先归一化成具体值供开关绑定；少数安全行为默认关闭。
     owner_llm_config_enabled: config.owner_llm_config_enabled ?? true,
     bot_reply_loop_detection_enabled: config.bot_reply_loop_detection_enabled ?? true,
-    reply_refusal_suppression_enabled: config.reply_refusal_suppression_enabled ?? true,
     reply_suppression_enabled: config.reply_suppression_enabled ?? true,
     reply_suppression_min_minutes: config.reply_suppression_min_minutes || defaultReplySuppressionMinMinutes,
     reply_suppression_max_minutes: config.reply_suppression_max_minutes || defaultReplySuppressionMaxMinutes,

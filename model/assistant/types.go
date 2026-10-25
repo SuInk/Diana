@@ -772,14 +772,11 @@ type BotConfig struct {
 	InboundGroupConcurrency      int   `json:"inbound_group_concurrency,omitempty"`
 	InboundPrivateConcurrency    int   `json:"inbound_private_concurrency,omitempty"`
 	BotReplyLoopDetectionEnabled *bool `json:"bot_reply_loop_detection_enabled,omitempty"`
-	// ReplyRefusalSuppressionEnabled 控制「30 分钟内对同一账号拒答满 4 次就暂停响应它」。
-	// 默认开；关掉后拒答照常，只是不再因此暂停。
-	ReplyRefusalSuppressionEnabled *bool `json:"reply_refusal_suppression_enabled,omitempty"`
 	// ReplySemanticDedupEnabled 仅兼容旧配置，运行时不再执行发送前语义去重。
 	ReplySemanticDedupEnabled *bool `json:"reply_semantic_dedup_enabled,omitempty"`
 	// ReplySuppressionEnabled 是临时响应屏蔽的总开关：空转、反复拒答、私聊叫停都靠它
-	// 暂停响应一个账号。默认开；关掉后这些判断照常做（复读照样只丢那一条、叫停照样
-	// 不发这一条），只是不再暂停任何人，已经开出去的屏蔽也跟着失效。
+	// 暂停响应一个账号。默认开；关掉后不再暂停任何人，已有屏蔽也不再拦截。
+	// 回复疲劳和叫停当前回复仍按各自规则处理。旧版拒答子开关不再读取，统一跟随此开关。
 	ReplySuppressionEnabled *bool `json:"reply_suppression_enabled,omitempty"`
 	// ReplySuppressionMinMinutes / MaxMinutes 是每次屏蔽时长的随机范围（分钟）。
 	ReplySuppressionMinMinutes int `json:"reply_suppression_min_minutes,omitempty"`
@@ -1482,7 +1479,6 @@ type ConfigPayload struct {
 	WebSearch                      *WebSearchAssignment `json:"web_search,omitempty"`
 	WebSearchOverride              *WebSearchAssignment `json:"web_search_override,omitempty"`
 	BotReplyLoopDetectionEnabled   *bool                `json:"bot_reply_loop_detection_enabled,omitempty"`
-	ReplyRefusalSuppressionEnabled *bool                `json:"reply_refusal_suppression_enabled,omitempty"`
 	ReplySemanticDedupEnabled      *bool                `json:"reply_semantic_dedup_enabled,omitempty"`
 	ReplySuppressionEnabled        *bool                `json:"reply_suppression_enabled,omitempty"`
 	ReplySuppressionMinMinutes     int                  `json:"reply_suppression_min_minutes,omitempty"`
@@ -2172,41 +2168,40 @@ func DefaultBotConfig() BotConfig {
 		// 连发间隔和每条长度取的是聊天体量：几百字一坨、300ms 连发怎么看都不像
 		// 真人。这两个数原先是群友风格在 apply 里钳出来的，风格不再改配置之后
 		// 搬到这里当默认值——想要长一点的气泡、快一点的连发就在 WebUI 里改。
-		SendChunkIntervalMS:            chatSendChunkIntervalMS,
-		PrivateClosingGrace:            defaultPrivateClosingGrace,
-		InboundGroupConcurrency:        defaultInboundGroupConcurrency,
-		InboundPrivateConcurrency:      defaultInboundPrivateConcurrency,
-		ChatInEnabled:                  boolPointer(true),
-		ChatInLevel:                    defaultChatInLevel,
-		NaturalInterjectionEnabled:     boolPointer(false),
-		MaxInputChars:                  2000,
-		ReplyMergeConfidencePercent:    defaultReplyMergeConfidencePercent,
-		MaxReplyChars:                  3500,
-		ReplyMaxBubbles:                replyMaxChatBubbles,
-		ForwardReplyChunkThreshold:     forwardReplyChunkCountThreshold,
-		ForwardReplyEnabled:            boolPointer(true),
-		DirectReplyChunkSize:           chatReplyChunkSize,
-		ForwardReplyThreshold:          defaultForwardReplyThreshold,
-		RecallReplyMode:                RecallReplyModeOriginalForward,
-		RefusalStrategy:                RefusalStrategySmart,
-		LLMStreamingEnabled:            boolPointer(true),
-		RecallReplyAutoDeleteEnabled:   boolPointer(false),
-		RecallReplyTTLSeconds:          defaultRecallReplyTTLSeconds,
-		LLMIdentityMaskingEnabled:      boolPointer(true),
-		LLMIdentityBodyAccounts:        boolPointer(true),
-		BotReplyLoopDetectionEnabled:   boolPointer(true),
-		ReplyRefusalSuppressionEnabled: boolPointer(true),
-		ReplySemanticDedupEnabled:      boolPointer(true),
-		ReplySuppressionEnabled:        boolPointer(true),
-		ReplySuppressionMinMinutes:     defaultReplySuppressionMinMinutes,
-		ReplySuppressionMaxMinutes:     defaultReplySuppressionMaxMinutes,
-		BotReplyLoopThreshold:          defaultBotReplyLoopThreshold,
-		ReplyRefusalThreshold:          defaultReplyRefusalThreshold,
-		ReplySafetyMasterEnabled:       boolPointer(true),
-		TelegramSuppressBotMessages:    boolPointer(true),
-		QQTypingEnabled:                boolPointer(true),
-		NotebookSharedScopeEnabled:     boolPointer(true),
-		RecentHistoryTokenBudget:       DefaultRecentHistoryTokenBudget,
+		SendChunkIntervalMS:          chatSendChunkIntervalMS,
+		PrivateClosingGrace:          defaultPrivateClosingGrace,
+		InboundGroupConcurrency:      defaultInboundGroupConcurrency,
+		InboundPrivateConcurrency:    defaultInboundPrivateConcurrency,
+		ChatInEnabled:                boolPointer(true),
+		ChatInLevel:                  defaultChatInLevel,
+		NaturalInterjectionEnabled:   boolPointer(false),
+		MaxInputChars:                2000,
+		ReplyMergeConfidencePercent:  defaultReplyMergeConfidencePercent,
+		MaxReplyChars:                3500,
+		ReplyMaxBubbles:              replyMaxChatBubbles,
+		ForwardReplyChunkThreshold:   forwardReplyChunkCountThreshold,
+		ForwardReplyEnabled:          boolPointer(true),
+		DirectReplyChunkSize:         chatReplyChunkSize,
+		ForwardReplyThreshold:        defaultForwardReplyThreshold,
+		RecallReplyMode:              RecallReplyModeOriginalForward,
+		RefusalStrategy:              RefusalStrategySmart,
+		LLMStreamingEnabled:          boolPointer(true),
+		RecallReplyAutoDeleteEnabled: boolPointer(false),
+		RecallReplyTTLSeconds:        defaultRecallReplyTTLSeconds,
+		LLMIdentityMaskingEnabled:    boolPointer(true),
+		LLMIdentityBodyAccounts:      boolPointer(true),
+		BotReplyLoopDetectionEnabled: boolPointer(true),
+		ReplySemanticDedupEnabled:    boolPointer(true),
+		ReplySuppressionEnabled:      boolPointer(true),
+		ReplySuppressionMinMinutes:   defaultReplySuppressionMinMinutes,
+		ReplySuppressionMaxMinutes:   defaultReplySuppressionMaxMinutes,
+		BotReplyLoopThreshold:        defaultBotReplyLoopThreshold,
+		ReplyRefusalThreshold:        defaultReplyRefusalThreshold,
+		ReplySafetyMasterEnabled:     boolPointer(true),
+		TelegramSuppressBotMessages:  boolPointer(true),
+		QQTypingEnabled:              boolPointer(true),
+		NotebookSharedScopeEnabled:   boolPointer(true),
+		RecentHistoryTokenBudget:     DefaultRecentHistoryTokenBudget,
 		// 40 而不是 20：这个上限只管路由、指代消解和记忆门控这些旁路的回看深度，
 		// 不进正式提示词。20 条在稍热闹一点的群里就不够被指代的消息留在窗口里，
 		// 而这些调用的单条开销很小，放宽的代价远小于解不出指代的代价。
@@ -2438,9 +2433,6 @@ func (cfg BotConfig) WithDefaults() BotConfig {
 	}
 	if cfg.BotReplyLoopDetectionEnabled == nil {
 		cfg.BotReplyLoopDetectionEnabled = boolPointer(true)
-	}
-	if cfg.ReplyRefusalSuppressionEnabled == nil {
-		cfg.ReplyRefusalSuppressionEnabled = boolPointer(true)
 	}
 	if cfg.ReplySemanticDedupEnabled == nil {
 		cfg.ReplySemanticDedupEnabled = boolPointer(true)
@@ -2873,7 +2865,6 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		WebSearch:                         normalizeWebSearchAssignment(cfg.WebSearch),
 		WebSearchOverride:                 normalizeWebSearchAssignment(cfg.WebSearchOverride),
 		BotReplyLoopDetectionEnabled:      copyBoolPointer(cfg.BotReplyLoopDetectionEnabled),
-		ReplyRefusalSuppressionEnabled:    copyBoolPointer(cfg.ReplyRefusalSuppressionEnabled),
 		ReplySemanticDedupEnabled:         copyBoolPointer(cfg.ReplySemanticDedupEnabled),
 		ReplySafetyMasterEnabled:          copyBoolPointer(cfg.ReplySafetyMasterEnabled),
 		ReplyAccountSafetyAuditPrompt:     strings.TrimSpace(cfg.ReplyAccountSafetyAuditPrompt),
@@ -3137,7 +3128,6 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		WebSearch:                       normalizeWebSearchAssignment(firstWebSearchAssignment(payload.WebSearch, existing.WebSearch)),
 		WebSearchOverride:               normalizeWebSearchAssignment(payload.WebSearchOverride),
 		BotReplyLoopDetectionEnabled:    copyBoolPointer(payload.BotReplyLoopDetectionEnabled),
-		ReplyRefusalSuppressionEnabled:  copyBoolPointer(payload.ReplyRefusalSuppressionEnabled),
 		ReplySemanticDedupEnabled:       copyBoolPointer(payload.ReplySemanticDedupEnabled),
 		ReplySafetyMasterEnabled:        copyBoolPointer(payload.ReplySafetyMasterEnabled),
 		ReplyAccountSafetyAuditPrompt:   strings.TrimSpace(payload.ReplyAccountSafetyAuditPrompt),

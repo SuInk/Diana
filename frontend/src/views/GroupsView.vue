@@ -531,7 +531,7 @@
             :options="groupAccountSafetyOptions"
             @update:model-value="(value) => { if (editing) editing.reply_account_safety_audit_enabled = value === '' ? undefined : value === 'on'; }"
           />
-          <span class="hint">关闭后，本群主动插话和直接回复都不做账号安全审核；防机器人循环不受影响；发送前不再做准确度或答非所问拦截。</span>
+          <span class="hint">关闭后，本群主动插话和直接回复都不做账号安全审核；空转、回复疲劳、拒答和对话收尾仍按各自规则处理。发送前审核不检查准确度或答非所问。</span>
         </div>
         <div class="field wide">
           <label for="group-account-safety-prompt">本群账号安全审核规则（留空跟随机器人）</label>
@@ -590,7 +590,7 @@
           />
         </div>
         <p class="hint wide">群发送最多尝试 3 次（含首次），间隔 1 秒、2 秒；单条失败不会让整个群冷却。失败记录可在首页错误统计和日志中查看。</p>
-        <div v-for="field in sendRetryFields.filter(item => item.key === 'inbound_retry_max_attempts')" :key="field.key" class="field">
+        <div v-for="field in sendRetryFields" :key="field.key" class="field">
           <label :for="`group-${field.key}`">{{ field.label }}</label>
           <input
             :id="`group-${field.key}`"
