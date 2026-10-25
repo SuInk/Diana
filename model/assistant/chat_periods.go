@@ -21,7 +21,10 @@ import "strings"
 //   - 省略号和连着的「。。」：那是拖长的语气，不是句读；
 //   - 落在引号、括号里的句号：属于被引用的内容；
 //   - 带网址的那一行：域名、路径里的标点不能碰；
-//   - 带代码块的整条回复：代码和报错原文照原样给。
+//   - 带代码块的整条回复：代码和报错原文照原样给；
+//   - 长行中间的句号：一行超过 chatPeriodShortLine 个字就是在讲正事，几句之间换成
+//     空格会读成一串没断句的话（「被 M3 Ultra 压着 跑大模型吃带宽的话…」），只去
+//     行尾那个。
 //
 // 在切好每条消息之后做（splitChatReply），不在 normalizeReply、也不在长度规划里：长度
 // 兜底要按句号找断句点，太早换成空格，超长的回复就切不开，只能去调模型压缩。聊天历史记的是实际
@@ -48,12 +51,22 @@ func stripChatPeriods(reply string) string {
 	return out.String()
 }
 
+// chatPeriodShortLine 是闲聊短句的长度上限，见文件开头。
+const chatPeriodShortLine = 40
+
 // stripLinePeriods 处理一行：末尾的句号去掉，中间隔句的换成空格。
 func stripLinePeriods(line string) string {
 	if !strings.Contains(line, "。") || strings.Contains(line, "://") {
 		return line
 	}
 	runes := []rune(line)
+	if len(runes) > chatPeriodShortLine {
+		line = strings.TrimRight(line, " ")
+		if strings.HasSuffix(line, "。") && !strings.HasSuffix(line, "。。") && !strings.HasSuffix(line, "…。") {
+			line = strings.TrimSuffix(line, "。")
+		}
+		return line
+	}
 	out := make([]rune, 0, len(runes))
 	depth := 0
 	for index, r := range runes {

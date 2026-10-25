@@ -113,3 +113,48 @@ func TestMaiBotStyleConfigRoundTripAndCustomStyle(t *testing.T) {
 		t.Fatal("custom or default style was not selected")
 	}
 }
+
+// 生产回放：草稿分成清单、结论、来源三条，改写稿用空行分段。改写只换措辞，三条
+// 还得是三条，句子之间的句号也不能被换成空格。
+func TestMaiBotReplyerKeepsDraftMessagesAndLayout(t *testing.T) {
+	cfg := (BotConfig{ReplyComposer: "maibot", SystemPrompt: "身份", BotAccount: "bot"}).WithDefaults()
+	cfg.AgentEnabled = false
+	draft := "Mac Studio 各代内存带宽：[diana-line]- 2022 款：M1 Max 400GB/s[diana-line]- 2023 款：M2 Max 400GB/s[diana-msg]规律很明显。[diana-msg]来源：[diana-line]https://support.apple.com/en-us/111900"
+	rendered := "查了下 Apple 官方规格页，Mac Studio 各代内存带宽：\n\n- 2022 款：M1 Max 400GB/s\n- 2023 款：M2 Max 400GB/s\n\n规律挺明显，Max 档一直卡在 400 上下，Ultra 双芯拼接直接翻倍到 800 档；M4 Max 高配涨到 546，还是被丐版 M3 Ultra 的 819 压着。跑大模型吃带宽的话 Ultra 依然独一档\n\n来源：\nhttps://support.apple.com/en-us/111900"
+	provider := &maiBotStyleTestProvider{responses: []string{draft, rendered}}
+	runtime := NewRuntime(cfg, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) { return provider, nil })
+	event := MessageEvent{Kind: EventKindPrivate, MessageID: "71", UserID: "10001", SenderName: "群友", RawMessage: "查下mac studio各个版本的内存带宽"}
+	messages := []llm.Message{{Role: llm.RoleUser, Content: event.RawMessage, Priority: llm.MessagePriorityCurrent}}
+	reply, err := runtime.generateReply(context.Background(), cfg, event, RelationshipPolicy{}, messages, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var reference string
+	for _, message := range provider.requests[1].Messages {
+		if strings.Contains(message.Content, "规律很明显") {
+			reference = message.Content
+		}
+	}
+	if strings.Contains(reference, "[diana-") || !strings.Contains(reference, "400GB/s\n\n规律很明显") || !strings.Contains(reference, "\n- 2023 款") {
+		t.Fatalf("replyer reference kept raw markers or lost layout: %q", reference)
+	}
+	bubbles := splitChatReply(reply, chatSplitLimits{})
+	if len(bubbles) != 3 {
+		t.Fatalf("bubbles = %q, want list, conclusion and sources", bubbles)
+	}
+	if !strings.Contains(bubbles[0], "内存带宽：\n• 2022 款") || !strings.Contains(bubbles[1], "压着。跑大模型") || !strings.Contains(bubbles[2], "来源：\nhttps://") {
+		t.Fatalf("bubbles lost layout: %q", bubbles)
+	}
+}
+
+// 草稿只有一条时，改写稿的空行不能凭空多拆出几条。
+func TestMaiBotReplyLinesKeepsSingleDraftInOneMessage(t *testing.T) {
+	got := maiBotReplyLines("第一段\n\n第二段", DefaultBotConfig(), MessageEvent{}, replyControlIntent{}, false)
+	if got != "第一段"+notificationLineMarker+"第二段" {
+		t.Fatalf("maiBotReplyLines() = %q", got)
+	}
+	got = maiBotReplyLines("第一段\n\n第二段", DefaultBotConfig(), MessageEvent{}, replyControlIntent{}, true)
+	if got != "第一段"+notificationSplitMarker+"第二段" {
+		t.Fatalf("split draft = %q", got)
+	}
+}

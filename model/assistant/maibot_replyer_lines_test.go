@@ -10,24 +10,24 @@ func TestMaiBotReplyLinesKeepsListLines(t *testing.T) {
 	rendered := "最近主要是这几块：\r\n\r\n1. 技术折腾\n2. 斗图\n  3. 考学  \n"
 	want := "最近主要是这几块：" + notificationLineMarker + "1. 技术折腾" + notificationLineMarker + "2. 斗图" + notificationLineMarker + "3. 考学"
 	cfg := DefaultBotConfig()
-	if got := maiBotReplyLines(rendered, cfg, MessageEvent{}, replyControlIntent{}); got != want {
+	if got := maiBotReplyLines(rendered, cfg, MessageEvent{}, replyControlIntent{}, false); got != want {
 		t.Fatalf("default config = %q, want %q", got, want)
 	}
 
 	compact := false
 	cfg.ReplyPreserveLineBreaks = &compact
-	if got := maiBotReplyLines(rendered, cfg, MessageEvent{}, replyControlIntent{}); got != rendered {
+	if got := maiBotReplyLines(rendered, cfg, MessageEvent{}, replyControlIntent{}, false); got != rendered {
 		t.Fatalf("compact config changed rendered text: %q", got)
 	}
-	if got := maiBotReplyLines(rendered, cfg, MessageEvent{}, replyControlIntent{LineBreakMode: replyLinesPreserve}); got != want {
+	if got := maiBotReplyLines(rendered, cfg, MessageEvent{}, replyControlIntent{LineBreakMode: replyLinesPreserve}, false); got != want {
 		t.Fatalf("turn preserve over compact config = %q", got)
 	}
-	if got := maiBotReplyLines(rendered, cfg, MessageEvent{replyLineBreakMode: replyLinesPreserve}, replyControlIntent{}); got != want {
+	if got := maiBotReplyLines(rendered, cfg, MessageEvent{replyLineBreakMode: replyLinesPreserve}, replyControlIntent{}, false); got != want {
 		t.Fatalf("event preserve over compact config = %q", got)
 	}
 
 	cfg.ReplyPreserveLineBreaks = nil
-	if got := maiBotReplyLines(rendered, cfg, MessageEvent{}, replyControlIntent{LineBreakMode: replyLinesCompact}); got != rendered {
+	if got := maiBotReplyLines(rendered, cfg, MessageEvent{}, replyControlIntent{LineBreakMode: replyLinesCompact}, false); got != rendered {
 		t.Fatalf("turn compact changed rendered text: %q", got)
 	}
 }
@@ -44,7 +44,7 @@ func TestMaiBotReplyLinesSurvivePrepare(t *testing.T) {
 	if strings.Contains(flattened, notificationLineMarker) || strings.Contains(flattened, "\n") {
 		t.Fatalf("raw newlines are expected to be flattened, got %q", flattened)
 	}
-	got, err := r.prepareGeneratedReply(context.Background(), cfg, maiBotReplyLines(raw, cfg, MessageEvent{}, replyControlIntent{}))
+	got, err := r.prepareGeneratedReply(context.Background(), cfg, maiBotReplyLines(raw, cfg, MessageEvent{}, replyControlIntent{}, false))
 	if err != nil {
 		t.Fatalf("prepareGeneratedReply() error = %v", err)
 	}
@@ -58,7 +58,7 @@ func TestMaiBotReplyLinesKeepsCodeBlockVerbatim(t *testing.T) {
 	cfg := DefaultBotConfig()
 	raw := "示例：\n  ```python\ndef f():\n    return 1\n\nprint(f())  \n```\n就这样"
 	want := strings.Join([]string{"示例：", "```python", "def f():", "    return 1", "", "print(f())", "```", "就这样"}, notificationLineMarker)
-	got := maiBotReplyLines(raw, cfg, MessageEvent{}, replyControlIntent{})
+	got := maiBotReplyLines(raw, cfg, MessageEvent{}, replyControlIntent{}, false)
 	if got != want {
 		t.Fatalf("maiBotReplyLines() = %q, want %q", got, want)
 	}

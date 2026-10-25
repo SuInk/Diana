@@ -72,7 +72,7 @@ func (r *Runtime) maiBotReplyerMessages(cfg BotConfig, event MessageEvent, sourc
 		Identity:          maibotreply.PersonalityPrompt(firstNonEmpty(cfg.Name, "Diana"), cfg.GroupTriggers, identity),
 		Style:             maiBotStyle(cfg),
 		Attention:         maiBotAttention(event),
-		OutputInstruction: joinPromptSections(maiBotReferenceBoundary, maiBotReplyerOutput),
+		OutputInstruction: joinPromptSections(maiBotReferenceBoundary, maiBotReferenceLayout, maiBotReplyerOutput),
 		History:           plain,
 		Target:            r.maiBotTarget(cfg, event),
 		Time:              r.clock(),
@@ -112,7 +112,12 @@ func (r *Runtime) composeMaiBotReply(ctx context.Context, cfg BotConfig, event M
 		return draft
 	}
 
-	request := r.maiBotReplyerMessages(cfg, event, messages, body)
+	// 改写提示词不认识 Diana 的分条和换行标记，原样塞进去它只会当成一串字面量，
+	// 草稿分好的几条消息和清单行就被揉成一段。换成真实的空行和换行再给它看。
+	splitMessages := strings.Contains(body, notificationSplitMarker)
+	reference := strings.ReplaceAll(body, notificationSplitMarker, "\n\n")
+	reference = restoreExplicitReplyLines(reference)
+	request := r.maiBotReplyerMessages(cfg, event, messages, reference)
 	callCtx := withLLMUsagePurpose(ctx, PurposeReplyTone)
 	rendered, err := r.runLLMProviderForGroup(callCtx, llm.GroupChat, func(client LLMProvider) (string, error) {
 		response, err := client.Generate(callCtx, llm.GenerateRequest{Messages: request})
@@ -137,7 +142,7 @@ func (r *Runtime) composeMaiBotReply(ctx context.Context, cfg BotConfig, event M
 	if rendered == "" {
 		return draft
 	}
-	rendered = maiBotReplyLines(rendered, cfg, event, intent)
+	rendered = maiBotReplyLines(rendered, cfg, event, intent, splitMessages)
 	if len(mentionIDs) > 0 {
 		markers := make([]string, 0, len(mentionIDs))
 		for _, id := range mentionIDs {
@@ -156,7 +161,12 @@ func (r *Runtime) composeMaiBotReply(ctx context.Context, cfg BotConfig, event M
 // 换行当随手折行压成空格，列表就挤成一行。保留换行时（本轮要求优先，其次是这条
 // 消息的设置，最后是机器人配置，默认保留）才转换；收拢模式照旧交给后面压平。
 // 代码块里的行原样保留：缩进和空行是代码的一部分，去掉了复制出去就跑不了。
-func maiBotReplyLines(rendered string, cfg BotConfig, event MessageEvent, intent replyControlIntent) string {
+//
+// 草稿本来就分成了几条（splitMessages）时，改写稿里的空行就是这几条的分界，
+// 转成 [diana-msg]；否则空行照旧丢掉。分几条是内容那一轮定的，改写只换措辞，
+// 不能把一份清单、一段结论、一组来源揉进同一个气泡。冒号结尾的引导句后面的空行
+// 不算分界：「各代内存带宽：」和下面的清单是一回事。
+func maiBotReplyLines(rendered string, cfg BotConfig, event MessageEvent, intent replyControlIntent, splitMessages bool) string {
 	mode := intent.LineBreakMode
 	if mode == "" {
 		mode = event.replyLineBreakMode
@@ -168,22 +178,35 @@ func maiBotReplyLines(rendered string, cfg BotConfig, event MessageEvent, intent
 		return rendered
 	}
 	rendered = strings.ReplaceAll(strings.ReplaceAll(rendered, "\r\n", "\n"), "\r", "\n")
-	var kept []string
-	inFence := false
+	var out strings.Builder
+	inFence, pendingBreak, previous := false, false, ""
+	write := func(line string) {
+		if out.Len() > 0 {
+			if pendingBreak && splitMessages && !strings.HasSuffix(previous, "：") && !strings.HasSuffix(previous, ":") {
+				out.WriteString(notificationSplitMarker)
+			} else {
+				out.WriteString(notificationLineMarker)
+			}
+		}
+		out.WriteString(line)
+		pendingBreak, previous = false, line
+	}
 	for _, line := range strings.Split(rendered, "\n") {
 		trimmed := strings.TrimSpace(line)
 		if strings.HasPrefix(trimmed, "```") {
 			inFence = !inFence
-			kept = append(kept, trimmed)
+			write(trimmed)
 			continue
 		}
 		if inFence {
-			kept = append(kept, strings.TrimRight(line, " \t"))
+			out.WriteString(notificationLineMarker + strings.TrimRight(line, " \t"))
 			continue
 		}
-		if trimmed != "" {
-			kept = append(kept, trimmed)
+		if trimmed == "" {
+			pendingBreak = true
+			continue
 		}
+		write(trimmed)
 	}
-	return strings.Join(kept, notificationLineMarker)
+	return out.String()
 }
