@@ -149,12 +149,24 @@ func TestMaiBotReplyerKeepsDraftMessagesAndLayout(t *testing.T) {
 
 // 草稿只有一条时，改写稿的空行不能凭空多拆出几条。
 func TestMaiBotReplyLinesKeepsSingleDraftInOneMessage(t *testing.T) {
-	got := maiBotReplyLines("第一段\n\n第二段", DefaultBotConfig(), MessageEvent{}, replyControlIntent{}, false)
+	got := maiBotReplyLines("第一段\n\n第二段", DefaultBotConfig(), MessageEvent{}, replyControlIntent{}, []string{"第一段第二段"})
 	if got != "第一段"+notificationLineMarker+"第二段" {
 		t.Fatalf("maiBotReplyLines() = %q", got)
 	}
-	got = maiBotReplyLines("第一段\n\n第二段", DefaultBotConfig(), MessageEvent{}, replyControlIntent{}, true)
-	if got != "第一段"+notificationSplitMarker+"第二段" {
-		t.Fatalf("split draft = %q", got)
+}
+
+// swe-2 生产回放的真实输出：清单每项之间都空一行。按草稿对齐，清单仍是一条，
+// 结论和来源各一条，不能拆成五个气泡。
+func TestMaiBotReplyLinesAlignsParagraphsToDraftMessages(t *testing.T) {
+	draft := []string{
+		"Mac Studio 各代内存带宽（Apple 官方规格页）：[diana-line]2022 款：M1 Max 400GB/s，M1 Ultra 800GB/s[diana-line]2023 款：M2 Max 400GB/s，M2 Ultra 800GB/s[diana-line]2025 款：M4 Max 410GB/s（14 核 CPU 版）/ 546GB/s（16 核 CPU 高配版），M3 Ultra 819GB/s",
+		"规律很明显：Max 档一直卡在 400 上下，Ultra 靠双芯拼接直接翻倍到 800 档；M4 Max 高配总算涨到 546，但还是被丐版 M3 Ultra 的 819 压着打，跑大模型吃带宽的话 Ultra 依然是独一档。",
+		"来源：Apple Support 技术规格页[diana-line]https://support.apple.com/en-us/111900[diana-line]https://support.apple.com/en-us/111835",
+	}
+	rendered := "查了苹果官网的规格页，各代 Mac Studio 内存带宽：\n\n**2022 款**：M1 Max 400GB/s，M1 Ultra 800GB/s\n\n**2023 款**：M2 Max 400GB/s，M2 Ultra 800GB/s\n\n**2025 款**：M4 Max 410GB/s（14 核 CPU 版）/ 546GB/s（16 核高配版），M3 Ultra 819GB/s\n\n规律很明显，Max 档一直卡在 400 上下，Ultra 靠双芯拼接直接翻倍到 800 档。M4 Max 高配涨到 546，但还是被丐版 M3 Ultra 的 819 压着\n\n来源是 Apple Support 规格页：\nhttps://support.apple.com/en-us/111900\nhttps://support.apple.com/en-us/111835"
+	got := maiBotReplyLines(rendered, DefaultBotConfig(), MessageEvent{}, replyControlIntent{}, draft)
+	messages := strings.Split(got, notificationSplitMarker)
+	if len(messages) != 3 || strings.Count(messages[0], notificationLineMarker) != 3 || !strings.HasPrefix(messages[1], "规律") || !strings.HasPrefix(messages[2], "来源") {
+		t.Fatalf("maiBotReplyLines() = %q", messages)
 	}
 }
