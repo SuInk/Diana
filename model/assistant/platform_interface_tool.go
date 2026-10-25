@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -46,9 +47,12 @@ const (
 	platformOpGroupInfo  = "group_info"
 	platformOpMemberInfo = "member_info"
 	platformOpMemberList = "member_list"
-	platformOpMute       = "mute"
-	platformOpUnmute     = "unmute"
-	platformOpKick       = "kick"
+	// platformOpGroupList 查机器人加入了哪些群（#1165）。群数谁都能问，带群名的明细
+	// 只给主人：别的群叫什么、有多少人，不该被随便哪个群友问出来。
+	platformOpGroupList = "group_list"
+	platformOpMute      = "mute"
+	platformOpUnmute    = "unmute"
+	platformOpKick      = "kick"
 
 	// 细粒度群管：群公告、精华、名片与头衔、全员禁言，以及撤回别人的消息。
 	platformOpAnnounce       = "announce"
@@ -73,6 +77,7 @@ var platformReadOperations = map[string]bool{
 	platformOpGroupInfo:    true,
 	platformOpMemberInfo:   true,
 	platformOpMemberList:   true,
+	platformOpGroupList:    true,
 	platformOpAnnounceList: true,
 }
 
@@ -154,6 +159,7 @@ func (t *dianaPlatformTool) Description() string {
 		"说错话要撤回必须调 recall，光说「当我没说」消息不会消失；撤回失败就如实说并直接发更正。" +
 		"结果里的 requester_access 是请求人的权限，不是机器人的。"
 	base += "OneBot 的 member_info 在当前群未查到成员时继续查 QQ 个人资料；profile 只说明账号资料，不能据此断言在群或自动 @。"
+	base += "group_list 查机器人加了几个群，明细只有主人能看，别人问只报群数。"
 	if t.moderator {
 		base += "群管操作仅主人、群主、群管理员可用（实时核验），且机器人须是管理员；不能对主人或机器人下手，管理员不能动群主和其他管理员。私聊里不替群管执行。"
 	}
@@ -161,7 +167,7 @@ func (t *dianaPlatformTool) Description() string {
 }
 
 func (t *dianaPlatformTool) InputSchema() map[string]any {
-	operations := []string{platformOpGroupInfo, platformOpMemberInfo, platformOpMemberList, platformOpAnnounceList, platformOpRecall}
+	operations := []string{platformOpGroupInfo, platformOpMemberInfo, platformOpMemberList, platformOpGroupList, platformOpAnnounceList, platformOpRecall}
 	properties := map[string]any{
 		"message_id": toolStringParam("recall：我自己发的消息 ID，取自历史，勿编；默认最近一条"),
 		"group_id":   toolStringParam("目标群 ID，默认当前群"),
@@ -295,6 +301,8 @@ func (t *dianaPlatformTool) runRead(ctx context.Context, input map[string]any, o
 			"group_total":          directory.Total,
 			"warnings":             directory.Warnings,
 		})
+	case platformOpGroupList:
+		return t.runGroupList(callCtx, operation, owner, access)
 	case platformOpAnnounceList:
 		if groupID == "" {
 			return "", fmt.Errorf("announce_list 需要群 ID：请在群里调用或指定 group_id")
@@ -337,6 +345,66 @@ func (t *dianaPlatformTool) runRead(ctx context.Context, input map[string]any, o
 		return t.marshal(operation, access, map[string]any{"group_id": groupID, "data": data})
 	}
 	return "", fmt.Errorf("operation 不支持：%s", operation)
+}
+
+// maxPlatformGroupListItems 限制明细条数：几百个群全倒进工具结果只会挤占上下文，
+// 主人真要全量去控制台的群管理页看。
+const maxPlatformGroupListItems = 200
+
+type dianaPlatformGroupItem struct {
+	GroupID     string `json:"group_id"`
+	GroupName   string `json:"group_name,omitempty"`
+	MemberCount int    `json:"member_count,omitempty"`
+}
+
+func (t *dianaPlatformTool) runGroupList(ctx context.Context, operation string, owner bool, access string) (string, error) {
+	if !IsOneBotPlatform(t.runtime.currentPlatform(t.event)) {
+		// Telegram Bot API 没有「列出已加入的群」，飞书、钉钉等也没接这一项。
+		err := fmt.Errorf("当前平台的接口不提供机器人已加入的群列表，暂不支持此操作")
+		t.runtime.recordPlatformInterfaceOperation(t.event, operation, access, owner, "", platformRefusal(err))
+		return "", err
+	}
+	// 不带 no_cache 的话 NapCat / SnowLuma 返回的是启动时的快照，新加的群不在里面。
+	data, err := t.runtime.callOneBotAPIForEvent(ctx, t.event, "get_group_list", map[string]any{"no_cache": true})
+	if err != nil {
+		t.runtime.recordPlatformInterfaceOperation(t.event, operation, access, owner, "", err)
+		return "", err
+	}
+	raw, ok := structuredGroupListItems(data)
+	if !ok {
+		err := fmt.Errorf("群列表返回格式无法识别")
+		t.runtime.recordPlatformInterfaceOperation(t.event, operation, access, owner, "", err)
+		return "", err
+	}
+	groups := make([]dianaPlatformGroupItem, 0, len(raw))
+	for _, value := range raw {
+		item, ok := value.(map[string]any)
+		if !ok {
+			continue
+		}
+		id := strings.TrimSpace(stringFromAny(item["group_id"]))
+		if id == "" {
+			continue
+		}
+		count, _ := strconv.Atoi(strings.TrimSpace(stringFromAny(item["member_count"])))
+		groups = append(groups, dianaPlatformGroupItem{
+			GroupID:     id,
+			GroupName:   strings.TrimSpace(stringFromAny(item["group_name"])),
+			MemberCount: count,
+		})
+	}
+	t.runtime.recordPlatformInterfaceOperation(t.event, operation, access, owner, "", nil)
+	payload := map[string]any{"group_count": len(groups)}
+	if !owner {
+		payload["groups_hidden"] = "群明细只有主人能看，这里只报群数。"
+		return t.marshal(operation, access, payload)
+	}
+	if len(groups) > maxPlatformGroupListItems {
+		payload["groups_truncated"] = true
+		groups = groups[:maxPlatformGroupListItems]
+	}
+	payload["groups"] = groups
+	return t.marshal(operation, access, payload)
 }
 
 func (t *dianaPlatformTool) runModeration(ctx context.Context, input map[string]any, operation string, owner bool, access string) (string, error) {
