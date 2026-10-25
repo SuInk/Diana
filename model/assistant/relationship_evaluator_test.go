@@ -111,7 +111,7 @@ func TestRelationshipEvaluationUsesEventProfileModelRole(t *testing.T) {
 
 func TestRuntimeAppliesNaturalInteractionFavorability(t *testing.T) {
 	provider := &sequenceLLMProvider{replies: []string{
-		"我来帮你整理。",
+		`{"action":"final","content":"我来帮你整理。"}`,
 		`{"should_update":true,"delta":1,"confidence":0.96,"reason":"初识阶段的真实任务互动"}`,
 	}}
 	memory := newMemoryUserMemoryStore()
