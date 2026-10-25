@@ -4,6 +4,7 @@
 package llm
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -208,6 +209,7 @@ func TestContextBudgetRetainsRecentHistoryAndMemoryUnderOversizedAgentPrompts(t 
 
 func TestApplyContextBudgetCannotExceedModelWindow(t *testing.T) {
 	req := GenerateRequest{
+		Model:           "test-model",
 		MaxOutputTokens: 256,
 		Messages: []Message{
 			{Role: RoleSystem, Content: strings.Repeat("system ", 1000)},
@@ -220,14 +222,23 @@ func TestApplyContextBudgetCannotExceedModelWindow(t *testing.T) {
 		MaxContextTokens:    8192,
 	}
 	got := applyContextBudget(req, cfg)
+	if got.MaxContextTokens != 2048 {
+		t.Fatalf("request widened the model window to %d", got.MaxContextTokens)
+	}
+	// Answering a shortened question beats failing the turn (#518): the plain
+	// text current input is cut to fit instead of being rejected.
 	inputBudget := int64(2048 - 256 - contextBudgetSafetyReserve)
 	if tokens := estimateMessagesTokens(got.Messages); tokens > inputBudget {
 		t.Fatalf("estimated tokens = %d, model input budget = %d", tokens, inputBudget)
+	}
+	if err := validateGenerateRequest(got); err != nil {
+		t.Fatalf("shrunk request should pass local validation: %v", err)
 	}
 }
 
 func TestApplyContextBudgetKeepsSystemAndOversizedCurrentTurn(t *testing.T) {
 	req := GenerateRequest{
+		Model:           "test-model",
 		MaxOutputTokens: 128,
 		Messages: []Message{
 			{Role: RoleSystem, Content: "系统规则必须保留" + strings.Repeat("甲", 2000)},
@@ -245,6 +256,143 @@ func TestApplyContextBudgetKeepsSystemAndOversizedCurrentTurn(t *testing.T) {
 	}
 	if strings.Contains(joined, "旧历史应先丢弃") {
 		t.Fatalf("history should not displace required messages: %s", joined)
+	}
+	if err := validateGenerateRequest(got); err != nil {
+		t.Fatalf("oversized plain current input should be shortened, not rejected: %v", err)
+	}
+}
+
+func TestContextBudgetRetentionKeepsCompleteToolExchanges(t *testing.T) {
+	for _, priority := range []MessagePriority{MessagePriorityHistory, MessagePriorityRecentHistory, MessagePriorityMemory, MessagePriorityPlugin, MessagePrioritySystem, MessagePriorityCurrent} {
+		for _, explicit := range []string{"", "exchange"} {
+			t.Run(fmt.Sprintf("priority_%d/group_%s", priority, explicit), func(t *testing.T) {
+				messages := []Message{
+					{Role: RoleSystem, Content: strings.Repeat("S", 25000)},
+					{Role: RoleUser, Content: "old question", Priority: MessagePriorityHistory},
+					{Role: RoleAssistant, ContextGroup: explicit, Priority: priority, ToolCalls: []ToolCall{
+						{ID: "call-a", Name: "lookup", Arguments: map[string]any{"payload": strings.Repeat("P", 8000)}},
+						{ID: "call-b", Name: "lookup", Arguments: map[string]any{"query": "short"}},
+					}},
+					{Role: RoleTool, ContextGroup: explicit, ToolCallID: "call-a", ToolName: "lookup", Content: "first observation", Priority: priority},
+					{Role: RoleTool, ToolCallID: "call-b", ToolName: "lookup", Content: "second observation", Priority: MessagePriorityHistory},
+					{Role: RoleUser, Content: "current", Priority: MessagePriorityCurrent},
+				}
+				for _, budget := range []int64{700, 9744, 16000} {
+					got := fitMessagesToTokenBudget(messages, budget)
+					assertCompleteBudgetExchanges(t, got)
+					for _, message := range got {
+						if len(message.ToolCalls) > 0 && fmt.Sprint(message.ToolCalls[0].Arguments["payload"]) != strings.Repeat("P", 8000) {
+							t.Fatal("tool-call arguments were rewritten")
+						}
+					}
+				}
+			})
+		}
+	}
+}
+
+func assertCompleteBudgetExchanges(t *testing.T, messages []Message) {
+	t.Helper()
+	calls, results := map[string]int{}, map[string]int{}
+	for _, message := range messages {
+		for _, call := range message.ToolCalls {
+			calls[call.ID]++
+		}
+		if message.Role == RoleTool {
+			results[message.ToolCallID]++
+		}
+	}
+	if fmt.Sprint(calls) != fmt.Sprint(results) {
+		t.Fatalf("partial exchange after budgeting: calls=%v results=%v", calls, results)
+	}
+}
+
+func TestContextBudgetCurrentRequirementsSurviveOptionalContext(t *testing.T) {
+	for _, atomic := range []bool{false, true} {
+		current := "HEAD " + strings.Repeat("A", 1200) + " MIDDLE_REQUIREMENT " + strings.Repeat("B", 1200) + " TAIL"
+		messages := []Message{
+			{Role: RoleSystem, Content: "system"},
+			{Role: RoleUser, Content: strings.Repeat("optional ", 5000), Priority: MessagePriorityMemory},
+			{Role: RoleUser, Content: current, Priority: MessagePriorityCurrent, AtomicText: atomic},
+			{Role: RoleUser, Content: "accepted correction", Priority: MessagePriorityCurrent},
+		}
+		got := fitMessagesToTokenBudget(messages, 1200)
+		if got[len(got)-2].Content != current || got[len(got)-1].Content != "accepted correction" || estimateMessagesTokens(got) > 1200 {
+			t.Fatalf("optional context displaced the intact request (atomic=%v)", atomic)
+		}
+		got = fitMessagesToTokenBudget(messages, 200)
+		if atomic {
+			// Producer-owned atoms are never cut; the footprint stays over budget
+			// for local validation to reject.
+			if got[len(got)-2].Content != current || estimateMessagesTokens(got) <= 200 {
+				t.Fatal("atomic current request must remain whole for local rejection")
+			}
+			continue
+		}
+		// Plain text is shortened as a last resort (#518) rather than failing the turn.
+		if estimateMessagesTokens(got) > 200 || !strings.Contains(messageTextForTest(got), "HEAD") || got[len(got)-1].Content != "accepted correction" {
+			t.Fatalf("oversized plain current request should be shortened to fit: %d tokens", estimateMessagesTokens(got))
+		}
+	}
+}
+
+func TestContextBudgetReservesAtomicSystemBeforeOptionalHistory(t *testing.T) {
+	system := Message{Role: RoleSystem, Content: strings.Repeat("atomic system ", 1800), AtomicText: true}
+	messages := []Message{system,
+		{Role: RoleUser, Content: strings.Repeat("optional history ", 1800), Priority: MessagePriorityHistory},
+		{Role: RoleUser, Content: "current", Priority: MessagePriorityCurrent},
+	}
+	got := fitMessagesToTokenBudget(messages, 10000)
+	if estimateMessagesTokens(got) > 10000 || got[0].Content != system.Content || got[len(got)-1].Content != "current" {
+		t.Fatal("optional retention displaced an intact required atom")
+	}
+}
+
+func TestContextBudgetProtectsUntaggedUserBeforeActiveToolBatch(t *testing.T) {
+	current := "head " + strings.Repeat("a", 1200) + " critical middle requirement " + strings.Repeat("b", 1200) + " tail"
+	messages := []Message{
+		{Role: RoleSystem, Content: "system"},
+		{Role: RoleUser, Content: strings.Repeat("old optional ", 5000), Priority: MessagePriorityHistory},
+		{Role: RoleUser, Content: current},
+		{Role: RoleAssistant, ToolCalls: []ToolCall{{ID: "active-call", Name: "lookup"}}},
+		{Role: RoleTool, ToolCallID: "active-call", ToolName: "lookup", Content: "result"},
+	}
+	got := fitMessagesToTokenBudget(messages, 1200)
+	assertCompleteBudgetExchanges(t, got)
+	if len(got) != 4 || got[1].Content != current || estimateMessagesTokens(got) > 1200 {
+		t.Fatal("active continuation silently changed its original user request")
+	}
+}
+
+func TestContextBudgetNativeContinuationDoesNotBypassRetentionLimit(t *testing.T) {
+	large := strings.Repeat("native", 5000)
+	for _, format := range []string{"reasoning", "responses", "anthropic"} {
+		t.Run(format, func(t *testing.T) {
+			historical := Message{Role: RoleAssistant, Content: "native model continuation", Priority: MessagePriorityHistory}
+			switch format {
+			case "reasoning":
+				historical.ReasoningContent = &large
+			case "responses":
+				historical.ResponsesOutput = []json.RawMessage{json.RawMessage(`{"type":"reasoning","data":"` + large + `"}`)}
+			case "anthropic":
+				historical.AnthropicThinking = []json.RawMessage{json.RawMessage(`{"type":"thinking","thinking":"` + large + `"}`)}
+			}
+			messages := []Message{
+				{Role: RoleSystem, Content: strings.Repeat("system ", 2000)},
+				{Role: RoleUser, Content: "old question", Priority: MessagePriorityHistory},
+				historical,
+				{Role: RoleUser, Content: "current", Priority: MessagePriorityCurrent},
+			}
+			got := fitMessagesToTokenBudget(messages, 9744)
+			if estimateMessagesTokens(got) > 9744 {
+				t.Fatal("immutable native metadata escaped its retention allocation")
+			}
+			for _, message := range got {
+				if message.ReasoningContent != nil || len(message.ResponsesOutput) > 0 || len(message.AnthropicThinking) > 0 {
+					t.Fatal("oversized optional native continuation must be dropped whole")
+				}
+			}
+		})
 	}
 }
 

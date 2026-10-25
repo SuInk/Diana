@@ -96,6 +96,26 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 	if len(req.Messages) == 0 {
 		return nil, errors.New("agent: messages are required")
 	}
+	// Pin the caller's current requirement before tool observations, protocol
+	// repairs, and finalization append their own user-role messages. Otherwise
+	// an untagged admin request becomes optional history on the next step.
+	// Callers that already identify current inputs retain their own boundaries.
+	req.Messages = append([]llm.Message(nil), req.Messages...)
+	hasCurrent := false
+	for _, message := range req.Messages {
+		if message.Priority >= llm.MessagePriorityCurrent {
+			hasCurrent = true
+			break
+		}
+	}
+	if !hasCurrent {
+		for index := len(req.Messages) - 1; index >= 0; index-- {
+			if req.Messages[index].Role == llm.RoleUser {
+				req.Messages[index].Priority = llm.MessagePriorityCurrent
+				break
+			}
+		}
+	}
 	startedAt := time.Now()
 	hooks := &runHookState{hooks: req.Hooks}
 	r.loader = newDeferredToolLoader(r.registry, r.cfg.CoreTools)
