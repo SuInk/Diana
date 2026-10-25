@@ -134,7 +134,9 @@ type dianaPlatformTool struct {
 	runtime *Runtime
 	event   MessageEvent
 	owner   bool
-	// moderator 只决定群管操作是否展示给模型；真正的门禁在 Run 里实时核验。
+	// moderator 只决定尾部要不要带群管说明；真正的门禁在 Run 里实时核验。
+	// schema 和描述不看它：工具定义排在请求最前面，按发言者身份增删群管操作，
+	// 同一个群里管理员和成员交替说话时整段前缀缓存（连同后面的历史）每次都作废。
 	moderator bool
 }
 
@@ -160,35 +162,26 @@ func (t *dianaPlatformTool) Description() string {
 		"结果里的 requester_access 是请求人的权限，不是机器人的。"
 	base += "OneBot 的 member_info 在当前群未查到成员时继续查 QQ 个人资料；profile 只说明账号资料，不能据此断言在群或自动 @。"
 	base += "group_list 查机器人加了几个群，明细只有主人能看，别人问只报群数。"
-	if t.moderator {
-		base += "群管操作仅主人、群主、群管理员可用（实时核验），且机器人须是管理员；不能对主人或机器人下手，管理员不能动群主和其他管理员。私聊里不替群管执行。"
-	}
+	base += "群管操作仅主人、群主、群管理员可用（实时核验），且机器人须是管理员；不能对主人或机器人下手，管理员不能动群主和其他管理员。私聊里不替群管执行。"
 	return base
 }
 
 func (t *dianaPlatformTool) InputSchema() map[string]any {
-	operations := []string{platformOpGroupInfo, platformOpMemberInfo, platformOpMemberList, platformOpGroupList, platformOpAnnounceList, platformOpRecall}
+	// 群管操作对谁都列出来，理由见 moderator 字段。
+	operations := append([]string{platformOpGroupInfo, platformOpMemberInfo, platformOpMemberList, platformOpGroupList, platformOpAnnounceList, platformOpRecall}, platformModerationOperations...)
 	properties := map[string]any{
-		"message_id": toolStringParam("recall：我自己发的消息 ID，取自历史，勿编；默认最近一条"),
-		"group_id":   toolStringParam("目标群 ID，默认当前群"),
-		"user_id":    toolStringParam("目标账号，取自 @、引用或成员查询，勿按昵称猜；默认引用消息发送者"),
+		"message_id":         toolStringParam("目标消息 ID，取自历史，勿编；recall 默认我最近一条，其余默认被引用消息"),
+		"group_id":           toolStringParam("目标群 ID，默认当前群"),
+		"user_id":            toolStringParam("目标账号，取自 @、引用或成员查询，勿按昵称猜；默认引用消息发送者"),
+		"duration":           toolIntParam("mute：禁言秒数，超平台上限按上限", 1, telegramMaxMuteSeconds),
+		"reject_add_request": toolBoolParam("kick：同时拒绝再次加群，默认 false"),
+		"content":            toolStringParam("announce：公告正文"),
+		"notice_id":          toolStringParam("announce_delete：公告 ID，取自 announce_list"),
+		"card":               toolStringParam("set_card：新群名片，空串清除"),
+		"title":              toolStringParam("set_title：新头衔，空串清除"),
+		"count":              toolIntParam("recall_messages 按 user_id 撤回的条数，默认 10", 1, maxRecallMessagesCount),
 	}
-	if t.moderator {
-		operations = append(operations, platformModerationOperations...)
-		properties["message_id"] = toolStringParam("目标消息 ID，取自历史，勿编；recall 默认我最近一条，其余默认被引用消息")
-		properties["duration"] = toolIntParam("mute：禁言秒数，超平台上限按上限", 1, telegramMaxMuteSeconds)
-		properties["reject_add_request"] = toolBoolParam("kick：同时拒绝再次加群，默认 false")
-		properties["content"] = toolStringParam("announce：公告正文")
-		properties["notice_id"] = toolStringParam("announce_delete：公告 ID，取自 announce_list")
-		properties["card"] = toolStringParam("set_card：新群名片，空串清除")
-		properties["title"] = toolStringParam("set_title：新头衔，空串清除")
-		properties["count"] = toolIntParam("recall_messages 按 user_id 撤回的条数，默认 10", 1, maxRecallMessagesCount)
-	}
-	operationHint := "recall 撤回我自己的消息"
-	if t.moderator {
-		operationHint += "；recall_messages 撤成员消息（清刷屏）"
-	}
-	properties["operation"] = toolEnumParam(operationHint, operations...)
+	properties["operation"] = toolEnumParam("recall 撤回我自己的消息；recall_messages 撤成员消息（清刷屏）", operations...)
 	return toolObjectSchema([]string{"operation"}, properties)
 }
 

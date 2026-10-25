@@ -1000,12 +1000,19 @@ func TestRepositoryPublishDescriptionKeepsPublicReadsOpen(t *testing.T) {
 			repositoryPublishSettingManagerUsers: "owner-user = SuInk/Diana",
 		},
 	)
-	description = granted.Description()
-	if !strings.Contains(description, "当前会话有写入授权的仓库：SuInk/Diana") {
-		t.Fatalf("description should list write-authorized repositories: %q", description)
+	// 非主人的授权清单按发言者变，写在尾部说明里，描述对谁都一样（前缀缓存）。
+	if granted.Description() != description {
+		t.Fatalf("non-owner description must not vary by speaker:\n%q\n%q", granted.Description(), description)
 	}
-	if !strings.Contains(description, "读操作不受清单限制") {
-		t.Fatalf("description should note reads are not limited to the list: %q", description)
+	access := granted.accessPrompt()
+	if !strings.Contains(access, "当前会话有写入授权的仓库：SuInk/Diana") {
+		t.Fatalf("access prompt should list write-authorized repositories: %q", access)
+	}
+	if !strings.Contains(access, "读操作不受清单限制") {
+		t.Fatalf("access prompt should note reads are not limited to the list: %q", access)
+	}
+	if access := stranger.accessPrompt(); !strings.Contains(access, "公开仓库照常可读") {
+		t.Fatalf("stranger access prompt should keep public reads open: %q", access)
 	}
 
 	// 主人的写入不受白名单限制：描述里必须明说，免得模型拿白名单替他拒绝。

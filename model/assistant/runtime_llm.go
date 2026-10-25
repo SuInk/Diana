@@ -1213,6 +1213,14 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 	// 同一发言者的连续消息之间保持稳定，命中别名则逐条消息都不同。tail 由调用方放
 	// 在历史之后，所以这里怎么变都不影响 head 和历史的前缀缓存。
 	appendPromptSection(&tail, relationshipPermissionContext(relationship, cfg))
+	// github 工具对全群一份定义，谁有授权、授权到哪些仓库按发言者在这里说。
+	if agentEnabled && registry != nil {
+		if tool, ok := registry.Get(dianaGitHubToolName); ok {
+			if github, ok := tool.(*dianaGitHubTool); ok {
+				appendPromptSection(&tail, github.accessPrompt())
+			}
+		}
+	}
 	appendPromptSection(&tail, r.currentSpeakerGroupContext(event, cfg))
 	if event.Kind == EventKindGroup {
 		if boolValue(cfg.PromptInjectGroupSender, true) {

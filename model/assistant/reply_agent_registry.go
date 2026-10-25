@@ -170,7 +170,7 @@ func (r *Runtime) newReplyAgentRegistry(ctx context.Context, cfg BotConfig, even
 		}
 		if pluginValue, settings, enabled := r.pluginWithSettingsForEvent(repositoryPublishPluginID, event); enabled {
 			if plugin, ok := pluginValue.(*RepositoryPublishPlugin); ok {
-				if relationship.Owner || repositoryPublishEventHasAccess(event, settings) {
+				if relationship.Owner || repositoryPublishToolExposed(event, settings) {
 					extraTools = append(extraTools, newDianaGitHubTool(r, event, plugin, settings))
 				} else {
 					// 插件开着、只是这个人这个群不够格。不登记的话模型只会被告知

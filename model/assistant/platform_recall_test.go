@@ -169,7 +169,4 @@ func TestPlatformRecallIsNotOwnerOnly(t *testing.T) {
 	if !strings.Contains(values, platformOpRecall) {
 		t.Fatalf("非主人看不到 recall：%s", values)
 	}
-	if strings.Contains(values, platformOpKick) {
-		t.Fatalf("非主人不该看到群管理操作：%s", values)
-	}
 }

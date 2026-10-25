@@ -252,12 +252,23 @@ func TestPlatformToolGroupAdminScopedToCurrentGroup(t *testing.T) {
 	}
 }
 
-// schema 只对主人和（事件或平台显示的）群主、群管理员列出群管操作。
-func TestPlatformToolSchemaShowsModerationToGroupAdmins(t *testing.T) {
-	for role, want := range map[string]bool{"admin": true, "owner": true, "member": false} {
+// 工具定义对谁都一样：按身份增减群管操作会让同一个群里的前缀缓存随发言者作废。
+// 展示与否只影响尾部那段群管说明，门禁在 Run 里实时核验。
+func TestPlatformToolSchemaSameForEveryRole(t *testing.T) {
+	var first string
+	for _, role := range []string{"admin", "owner", "member"} {
 		tool, _, _ := moderatorToolFor(t, "someone", role)
-		if got := strings.Contains(fmt.Sprint(tool.InputSchema()), platformOpMuteAll); got != want {
-			t.Fatalf("role %s schema shows moderation = %v", role, got)
+		got := fmt.Sprint(tool.InputSchema()) + tool.Description()
+		if !strings.Contains(got, platformOpMuteAll) {
+			t.Fatalf("role %s schema misses moderation ops", role)
+		}
+		if first == "" {
+			first = got
+		} else if got != first {
+			t.Fatalf("role %s schema differs from admin", role)
+		}
+		if shown := tool.moderator; shown != (role != "member") {
+			t.Fatalf("role %s moderation prompt shown = %v", role, shown)
 		}
 	}
 }
@@ -357,16 +368,16 @@ func TestPlatformToolReadsWorkForMembers(t *testing.T) {
 	}
 }
 
-func TestPlatformToolMemberSchemaHidesModerationOps(t *testing.T) {
+func TestPlatformToolMemberSchemaMatchesOwner(t *testing.T) {
 	channel := &recordingChannel{}
 	memberTool := newDianaPlatformTool(context.Background(), NewRuntime(BotConfig{OwnerID: "owner", Platform: PlatformOneBotV11}, channel, NewDefaultPluginManager(), nil, nil, nil, nil), MessageEvent{Kind: EventKindGroup, UserID: "member", GroupID: "123", Platform: PlatformOneBotV11})
 	ownerTool := newDianaPlatformTool(context.Background(), NewRuntime(BotConfig{OwnerID: "owner", Platform: PlatformOneBotV11}, channel, NewDefaultPluginManager(), nil, nil, nil, nil), MessageEvent{Kind: EventKindGroup, UserID: "owner", GroupID: "123", Platform: PlatformOneBotV11})
 
-	if ops := platformSchemaOperations(t, memberTool); containsString(ops, "mute") || containsString(ops, "kick") || containsString(ops, "unmute") {
-		t.Fatalf("member schema exposed moderation ops: %#v", ops)
+	if member, owner := platformSchemaOperations(t, memberTool), platformSchemaOperations(t, ownerTool); fmt.Sprint(member) != fmt.Sprint(owner) || !containsString(member, "kick") {
+		t.Fatalf("member schema %#v != owner schema %#v", member, owner)
 	}
-	if ops := platformSchemaOperations(t, ownerTool); !containsString(ops, "mute") || !containsString(ops, "kick") || !containsString(ops, "unmute") {
-		t.Fatalf("owner schema missing moderation ops: %#v", ops)
+	if memberTool.moderator || !ownerTool.moderator {
+		t.Fatalf("moderation prompt visibility member=%v owner=%v", memberTool.moderator, ownerTool.moderator)
 	}
 }
 

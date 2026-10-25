@@ -4,6 +4,8 @@
 package assistant
 
 import (
+	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -240,5 +242,49 @@ func TestAgentImageHistoryPromptNeverSerializesImagePlaceholder(t *testing.T) {
 	text := agentImageHistoryPromptTextWithDescriptions(event, 0, nil)
 	if strings.Contains(text, "[图片]") || !strings.Contains(text, "说明") || !strings.Contains(text, "引用说明") {
 		t.Fatalf("history image prompt = %q", text)
+	}
+}
+
+// 工具定义排在请求最前面（DeepSeek 等按前缀命中缓存的供应商把它放在 system 之前），
+// 同一个群里的非主人发言者必须拿到逐字相同的一份，否则有授权和没授权的人一交替，
+// 整段前缀缓存连同后面的历史一起作废。授权差异只能出现在尾部。
+func TestReplyToolDefinitionsStableAcrossGroupSpeakers(t *testing.T) {
+	plugins := NewDefaultPluginManager()
+	if _, err := plugins.UpdateSettings(repositoryPublishPluginID, map[string]any{
+		repositoryPublishSettingAllowlist:    "acme/demo",
+		repositoryPublishSettingManagerUsers: "20001 = acme/demo",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	cfg := BotConfig{OwnerID: "10001", BotAccount: "10000", AgentEnabled: true, Platform: PlatformOneBotV11}
+	r := NewRuntime(cfg, nilChannel{}, plugins, nil, nil, nil, nil)
+	definitions := func(user, role string) (string, string) {
+		event := MessageEvent{Kind: EventKindGroup, GroupID: "30001", UserID: user, SelfID: "10000", SenderRole: role, Platform: PlatformOneBotV11}
+		policy := RelationshipPolicyFor(UserMemoryProfile{}, "10001", user)
+		registry, err := r.newReplyAgentRegistry(context.Background(), r.ProfileConfig(""), event, policy, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer registry.Close()
+		if _, ok := registry.Get(dianaGitHubToolName); !ok {
+			t.Fatalf("user %s: github tool not registered", user)
+		}
+		raw, err := json.Marshal(registry.Definitions())
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, tail := r.systemPromptPartsWithRelationshipAndAgentTools(event, nil, false, policy, true, registry)
+		return string(raw), tail
+	}
+	granted, grantedTail := definitions("20001", "admin")
+	stranger, strangerTail := definitions("20002", "member")
+	if granted != stranger {
+		t.Fatalf("tool definitions differ between speakers:\n%s\n%s", granted, stranger)
+	}
+	if !strings.Contains(grantedTail, "当前会话有写入授权的仓库：acme/demo") {
+		t.Fatalf("granted tail misses repository list: %s", grantedTail)
+	}
+	if strings.Contains(strangerTail, "acme/demo") || !strings.Contains(strangerTail, "当前会话无写入授权") {
+		t.Fatalf("stranger tail = %s", strangerTail)
 	}
 }

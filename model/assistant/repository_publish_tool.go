@@ -365,10 +365,22 @@ func (t *dianaGitHubTool) Description() string {
 		return description + "\nStar 仅主人可用，且需开启 github_star_enabled；operation=star、repository=owner/repo 生成草稿后必须等用户原样回复确认码。使用该仓库当前配置的 GitHub 账号。\n你是主人：写操作不受仓库白名单限制。白名单仓库：" + strings.Join(repositories, "、") +
 			"，用户给简称时优先按它匹配，匹配不上照用户给的 owner/repo 执行。"
 	}
-	if len(repositories) == 0 {
-		return description + "\n当前会话无写入授权，写操作会被拒；公开仓库照常可读，别以未授权为由拒读。"
+	// 非主人的授权清单按发言者变，放进尾部（见 accessPrompt）。工具定义排在请求最前面，
+	// 同一个群里有授权和没授权的人交替说话时，描述一变整段前缀缓存连同历史都作废。
+	return description + "\n写入授权限于哪些仓库以尾部「GitHub 授权」为准；公开仓库照常可读，别以未授权为由拒读。"
+}
+
+// accessPrompt 是非主人那份按发言者变化的授权说明，由系统提示词放在尾部。主人的
+// 清单写在描述里：主人的工具集本来就和别人不同，前缀到不了这里。
+func (t *dianaGitHubTool) accessPrompt() string {
+	if t == nil || t.runtime == nil || t.trustedWebOwner || t.runtime.effectiveConfigForEvent(t.event).IsOwnerEvent(t.event) {
+		return ""
 	}
-	return description + "\n当前会话有写入授权的仓库：" + strings.Join(repositories, "、") +
+	repositories := repositoryPublishEventRepositories(t.event, false, t.settings)
+	if len(repositories) == 0 {
+		return "【GitHub 授权】当前会话无写入授权，写操作会被拒；公开仓库照常可读，别以未授权为由拒读。"
+	}
+	return "【GitHub 授权】当前会话有写入授权的仓库：" + strings.Join(repositories, "、") +
 		"。写操作仅限清单内，用户给简称时按清单填 repository，不要反问；读操作不受清单限制。"
 }
 
@@ -1196,6 +1208,29 @@ func repositoryPublishEventHasAccess(event MessageEvent, settings SettingValues)
 	}
 	users, managers, _, drafts, err := repositoryPublishEffectiveAccess(settings, legacyUsers, legacy)
 	return err == nil && (len(users[strings.TrimSpace(event.UserID)]) > 0 || len(managers[strings.TrimSpace(event.GroupID)]) > 0 || len(drafts[strings.TrimSpace(event.GroupID)]) > 0)
+}
+
+// repositoryPublishToolExposed 决定非主人这一轮要不要登记 github 工具。群聊按群判定：
+// 本群有授权，或者配了按人的授权（那个人可能就在这个群里），就对全群登记。没授权的人
+// 拿到的也只是 Run 本来就放开的那些（公开仓库可读，#576），写入照样按白名单拒。
+// 按人登记会让同一个群里的工具定义随发言者增减，整段前缀缓存跟着作废。
+func repositoryPublishToolExposed(event MessageEvent, settings SettingValues) bool {
+	if repositoryPublishEventHasAccess(event, settings) {
+		return true
+	}
+	if event.Kind != EventKindGroup || strings.TrimSpace(event.GroupID) == "" {
+		return false
+	}
+	legacyGroups, err := repositoryPublishGroupAccess(settings.String(repositoryPublishSettingGroupAccess, ""))
+	if err != nil {
+		return false
+	}
+	legacyUsers, err := repositoryPublishUserAccess(settings.String(repositoryPublishSettingUserAccess, ""))
+	if err != nil {
+		return false
+	}
+	managerUsers, _, _, _, err := repositoryPublishEffectiveAccess(settings, legacyUsers, legacyGroups)
+	return err == nil && len(managerUsers) > 0
 }
 
 // repositoryPublishGroupApprovers 解析「群 ID = 用户 ID, 用户 ID」。
