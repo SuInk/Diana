@@ -84,8 +84,7 @@ func TestRuntimeAgentCanQueryAllPersonalTasks(t *testing.T) {
 		`{"action":"final","content":"你有一个喝水提醒和一个查询公告的周期订阅。"}`,
 	}}
 	runtime := NewRuntime(BotConfig{
-		OwnerID: "owner", AgentEnabled: true, AgentMaxSteps: 3,
-		// 序列模型按精确次数喂回复，发送前审核的额外往返与本断言无关，关掉。
+		OwnerID: "owner", AgentEnabled: true, // 序列模型按精确次数喂回复，发送前审核的额外往返与本断言无关，关掉。
 		ReplySafetyMasterEnabled: boolPointer(false),
 	}, &recordingChannel{}, NewPluginManager(), nil, store, nil, func() (LLMProvider, error) {
 		return provider, nil

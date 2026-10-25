@@ -78,9 +78,6 @@ func silentFinal(reason string) string {
 
 func newSilentFinishRuntime(cfg BotConfig, channel Channel, provider LLMProvider) *Runtime {
 	cfg.AgentEnabled = true
-	if cfg.AgentMaxSteps == 0 {
-		cfg.AgentMaxSteps = 3
-	}
 	return NewRuntime(cfg, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) { return provider, nil })
 }
 

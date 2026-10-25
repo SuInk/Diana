@@ -195,10 +195,9 @@ func TestRuntimeAgentQueriesMentionedUsersRelationship(t *testing.T) {
 		`{"action":"final","content":"[CQ:at,qq=10005] 当前好感度是 5，关系等级是初识，互动 18 次。当前权限：基础聊天、媒体理解、网页搜索和 1 个提醒或订阅额度。"}`,
 	}}
 	runtime := NewRuntime(BotConfig{
-		OwnerID:       "10001",
-		BotAccount:    "10000",
-		AgentEnabled:  true,
-		AgentMaxSteps: 3,
+		OwnerID:      "10001",
+		BotAccount:   "10000",
+		AgentEnabled: true,
 	}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
 	})

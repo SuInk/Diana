@@ -93,7 +93,7 @@ func TestAgentKeepsChatModelAfterRichToolResult(t *testing.T) {
 			{ID: "vision", Group: llm.GroupVision, Config: llm.ProviderConfig{Provider: llm.ProviderOpenAICompatible, APIKey: "vision-key", Model: "vision-model"}},
 		},
 	}}
-	cfg := BotConfig{AgentEnabled: true, AgentMaxSteps: 2}
+	cfg := BotConfig{AgentEnabled: true}
 	var used []string
 	var requests []llm.GenerateRequest
 	runtime := NewRuntime(cfg, nilChannel{}, NewPluginManager(), store, nil, nil, nil)

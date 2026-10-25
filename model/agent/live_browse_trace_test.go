@@ -52,7 +52,7 @@ func TestLiveBrowseTraceReplay(t *testing.T) {
 	if runs <= 0 {
 		runs = 1
 	}
-	// 主人对话的步数上限是 MaxAllowedSteps，群成员按机器人配置，按轨迹里的身份传。
+	// 回放可显式指定预算，默认与生产一致，不设工具调用次数上限。
 	maxSteps, _ := strconv.Atoi(os.Getenv("DIANA_LIVE_MAX_STEPS"))
 	if maxSteps <= 0 {
 		maxSteps = DefaultMaxSteps

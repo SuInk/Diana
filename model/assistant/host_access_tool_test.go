@@ -6,53 +6,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
-	"sync/atomic"
 	"testing"
-	"time"
 )
 
-func TestHostAccessApprovalIsExactScopedExpiringAndSingleUse(t *testing.T) {
-	var s hostApprovalStore
-	now := time.Now()
-	ok, code, err := s.authorize("bot/owner/chat", `{"args":["a",""]}`, "", now)
-	if err != nil || ok || code == "" {
-		t.Fatal("initial request not pending")
-	}
-	for _, tt := range []struct{ scope, input, text string }{
-		{"other/owner/chat", `{"args":["a",""]}`, "批准主机操作 " + code},
-		{"bot/owner/other", `{"args":["a",""]}`, "批准主机操作 " + code},
-		{"bot/owner/chat", `{"args":["a"]}`, "批准主机操作 " + code},
-		{"bot/owner/chat", `{"args":["a",""]}`, "引用：批准主机操作 " + code},
-	} {
-		if ok, _, _ := s.authorize(tt.scope, tt.input, tt.text, now); ok {
-			t.Fatalf("accepted %#v", tt)
-		}
-	}
-	var accepted atomic.Int32
-	var wg sync.WaitGroup
-	for i := 0; i < 8; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			if ok, _, _ := s.authorize("bot/owner/chat", `{"args":["a",""]}`, "批准主机操作 "+code, now); ok {
-				accepted.Add(1)
-			}
-		}()
-	}
-	wg.Wait()
-	if accepted.Load() != 1 {
-		t.Fatalf("consumed %d times", accepted.Load())
-	}
-	_, fresh, _ := s.authorize("expiry", "input", "", now)
-	if ok, next, _ := s.authorize("expiry", "input", "批准主机操作 "+fresh, now.Add(6*time.Minute)); ok || next == fresh {
-		t.Fatal("expired approval accepted")
-	}
-	var restarted hostApprovalStore
-	if ok, _, _ := restarted.authorize("bot/owner/chat", `{"args":["a",""]}`, "批准主机操作 "+code, now); ok {
-		t.Fatal("approval survived restart")
-	}
-}
 func TestHostAccessReadsOutsideWorkspaceAndRejectsNonOwner(t *testing.T) {
 	t.Setenv("APP_DB_PATH", filepath.Join(t.TempDir(), "diana.db"))
 	dir := t.TempDir()
@@ -87,20 +43,20 @@ func TestHostAccessReadsOutsideWorkspaceAndRejectsNonOwner(t *testing.T) {
 		t.Fatal("host tool exposed to members")
 	}
 }
-func TestHostAccessUnknownCommandRequiresApprovalBeforeExecution(t *testing.T) {
+func TestHostAccessOwnerExecutesWithoutApproval(t *testing.T) {
 	if _, err := os.Stat("/bin/sh"); err != nil {
 		t.Skip("Unix fixture")
 	}
 	root := t.TempDir()
-	marker := filepath.Join(root, "must-not-exist")
+	marker := filepath.Join(root, "created-by-owner")
 	r := hostAccessTestRuntime(t)
 	tool := &hostAccessTool{runtime: r, event: identityCheckEvent("100001", "owner", "")}
 	out, err := tool.Run(context.Background(), map[string]any{"operation": "exec", "command": "/bin/sh", "args": []string{"-c", `touch "$1"`, "probe", marker}, "cwd": root})
-	if err != nil || !strings.Contains(out, "approval_required") {
-		t.Fatalf("missing approval: %s %v", out, err)
+	if err != nil || strings.Contains(out, "approval_required") {
+		t.Fatalf("execution failed: %s %v", out, err)
 	}
-	if _, err := os.Stat(marker); !os.IsNotExist(err) {
-		t.Fatal("command ran without approval")
+	if _, err := os.Stat(marker); err != nil {
+		t.Fatal("owner command did not run")
 	}
 }
 func TestHostAccessHonorsSafeModeAtExecution(t *testing.T) {
@@ -113,62 +69,81 @@ func TestHostAccessHonorsSafeModeAtExecution(t *testing.T) {
 
 func hostAccessTestRuntime(t *testing.T) *Runtime {
 	t.Helper()
-	return NewRuntime(BotConfig{OwnerID: "100001", BotAccount: "200002", Platform: PlatformOneBotV11, AgentHostAccessEnabled: true}, nilChannel{}, NewDefaultPluginManager(), nil, nil, nil, nil)
+	return NewRuntime(BotConfig{OwnerID: "100001", BotAccount: "200002", Platform: PlatformOneBotV11}, nilChannel{}, NewDefaultPluginManager(), nil, nil, nil, nil)
 }
 
-func TestHostAccessDefaultsDisabledAndConfigRoundTrip(t *testing.T) {
-	if DefaultBotConfig().AgentHostAccessEnabled || (BotConfig{}).WithDefaults().AgentHostAccessEnabled {
-		t.Fatal("enabled by default")
+func TestHostAccessLegacySwitchDoesNotDisableOwner(t *testing.T) {
+	var cfg BotConfig
+	if err := json.Unmarshal([]byte(`{"owner_id":"100001","agent_host_access_enabled":false}`), &cfg); err != nil {
+		t.Fatal(err)
 	}
-	for _, enabled := range []bool{false, true} {
-		cfg := BotConfig{AgentHostAccessEnabled: enabled}.WithDefaults()
-		restored := ConfigFromPayload(PayloadFromConfig(cfg), BotConfig{AgentHostAccessEnabled: !enabled})
-		if restored.AgentHostAccessEnabled != enabled {
-			t.Fatal("lost switch state")
-		}
-	}
-	r := identityCheckRuntime(t)
-	tool := &hostAccessTool{runtime: r, event: identityCheckEvent("100001", "owner", "")}
-	for _, op := range []string{"read", "list", "usage", "disk", "exec"} {
-		if _, err := tool.Run(context.Background(), map[string]any{"operation": op, "path": t.TempDir()}); err == nil {
-			t.Fatalf("disabled operation %s ran", op)
-		}
-	}
-}
-
-func TestHostAccessSwitchRevokesLoadedToolsAndPendingApprovals(t *testing.T) {
-	r := hostAccessTestRuntime(t)
-	event := identityCheckEvent("100001", "owner", "")
-	cfg := r.ProfileConfig("")
-	registry, err := r.newAgentRegistry(context.Background(), cfg, event, RelationshipPolicy{Owner: true})
+	r := NewRuntime(cfg, nilChannel{}, NewDefaultPluginManager(), nil, nil, nil, nil)
+	event := MessageEvent{UserID: "100001"}
+	registry, err := r.newAgentRegistry(context.Background(), r.ProfileConfig(""), event, RelationshipPolicy{Owner: true})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer registry.Close()
 	loaded, ok := registry.Get(hostAccessToolName)
 	if !ok {
-		t.Fatal("enabled owner tool not registered")
+		t.Fatal("default owner host tool missing")
 	}
-	_, code, err := r.hostApprovals.authorize("scope", "input", "", time.Now())
+	dir := t.TempDir()
+	if _, err := loaded.Run(context.Background(), map[string]any{"operation": "list", "path": dir}); err != nil {
+		t.Fatal(err)
+	}
+	cfg = r.ProfileConfig("")
+	cfg.AgentMode = AgentModeSafe
+	r.SetProfiles(ProfileSet{Profiles: []BotConfig{cfg}})
+	if _, err := loaded.Run(context.Background(), map[string]any{"operation": "list", "path": dir}); err == nil {
+		t.Fatal("loaded tool bypassed safe mode")
+	}
+	safe, err := r.newAgentRegistry(context.Background(), r.ProfileConfig(""), event, RelationshipPolicy{Owner: true})
 	if err != nil {
 		t.Fatal(err)
 	}
-	cfg.AgentHostAccessEnabled = false
-	r.SetProfiles(ProfileSet{Profiles: []BotConfig{cfg}})
-	if _, err = loaded.Run(context.Background(), map[string]any{"operation": "list", "path": t.TempDir()}); err == nil {
-		t.Fatal("already-loaded tool bypassed disabled switch")
+	defer safe.Close()
+	if _, ok := safe.Get(hostAccessToolName); ok {
+		t.Fatal("safe mode exposed host tool")
 	}
-	disabled, err := r.newAgentRegistry(context.Background(), r.ProfileConfig(""), event, RelationshipPolicy{Owner: true})
+	body, err := json.Marshal(PayloadFromConfig(cfg))
+	if err != nil || strings.Contains(string(body), "agent_host_access_enabled") {
+		t.Fatal("obsolete switch still serialized")
+	}
+}
+
+func TestHostAccessRejectsNonOwnerExecution(t *testing.T) {
+	tool := &hostAccessTool{runtime: hostAccessTestRuntime(t), event: MessageEvent{UserID: "member"}}
+	if _, err := tool.Run(context.Background(), map[string]any{"operation": "exec", "command": "/bin/sh", "args": []string{"-c", "true"}, "cwd": t.TempDir()}); err == nil {
+		t.Fatal("non-owner executed command")
+	}
+}
+
+func TestHostAccessAdminExecutesWithoutApproval(t *testing.T) {
+	if _, err := os.Stat("/bin/sh"); err != nil {
+		t.Skip("Unix fixture")
+	}
+	root := t.TempDir()
+	marker := filepath.Join(root, "admin-result")
+	tool := &hostAccessTool{runtime: hostAccessTestRuntime(t), event: MessageEvent{UserID: "webui-admin"}}
+	ctx := context.WithValue(context.Background(), adminChatRunKey{}, true)
+	out, err := tool.Run(ctx, map[string]any{"operation": "exec", "command": "/bin/sh", "args": []string{"-c", `printf admin > "$1"`, "probe", marker}, "cwd": root})
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer disabled.Close()
-	if _, ok = disabled.Get(hostAccessToolName); ok {
-		t.Fatal("disabled tool registered")
+	body, err := os.ReadFile(marker)
+	if err != nil || string(body) != "admin" || strings.Contains(out, "approval_required") {
+		t.Fatalf("execution=%s err=%v", out, err)
 	}
-	cfg.AgentHostAccessEnabled = true
+}
+
+func TestHostAccessRechecksOwnerAfterConfigurationChange(t *testing.T) {
+	r := hostAccessTestRuntime(t)
+	tool := &hostAccessTool{runtime: r, event: identityCheckEvent("100001", "owner", "")}
+	cfg := r.ProfileConfig("")
+	cfg.OwnerID = "new-owner"
 	r.SetProfiles(ProfileSet{Profiles: []BotConfig{cfg}})
-	if approved, _, _ := r.hostApprovals.authorize("scope", "input", "批准主机操作 "+code, time.Now()); approved {
-		t.Fatal("old approval survived configuration change")
+	if _, err := tool.Run(context.Background(), map[string]any{"operation": "list", "path": t.TempDir()}); err == nil {
+		t.Fatal("former owner retained host access")
 	}
 }

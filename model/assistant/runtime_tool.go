@@ -198,7 +198,6 @@ func (r *Runtime) generateReplyWithAgentTools(ctx context.Context, cfg BotConfig
 	if cfg.AgentEnabled || len(extraTools) > 0 {
 		agentCfg := agent.Config{
 			WorkDir:                    AgentWorkspaceDir(),
-			MaxSteps:                   cfg.AgentMaxSteps,
 			SkillRoots:                 cfg.AgentSkillRoots,
 			MCPConfigPath:              cfg.AgentMCPConfigPath,
 			CommandAllowlist:           cfg.AgentCommandAllowlist,

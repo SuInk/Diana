@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-// OwnerCommand binds approval to the executable, exact arguments and working directory.
+// OwnerCommand identifies the executable, exact arguments and working directory.
 // This is deliberately unsandboxed host-account execution.
 type OwnerCommand struct {
 	Command string   `json:"command"`
@@ -101,14 +101,14 @@ func RunOwnerCommand(ctx context.Context, cfg Config, request OwnerCommand) (str
 		return "", err
 	}
 	if !ownerCommandsEqual(request, validated) {
-		return "", fmt.Errorf("执行路径已改变，请重新申请审批")
+		return "", fmt.Errorf("执行路径已改变，请重新检查命令")
 	}
 	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 	cmd := procgroup.CommandContext(ctx, request.Command, request.Args...)
 	cmd.Dir = request.CWD
 	// Keep ordinary host identity/path settings, without implicitly exporting Diana's
-	// API credentials or interpreter/loader hooks to every approved program.
+	// API credentials or interpreter/loader hooks to every program.
 	for _, key := range []string{"PATH", "HOME", "USER", "LOGNAME", "TMPDIR", "TEMP", "TMP", "LANG", "SystemRoot", "WINDIR", "USERPROFILE", "APPDATA", "LOCALAPPDATA", "PATHEXT", "COMSPEC"} {
 		if value, ok := os.LookupEnv(key); ok {
 			cmd.Env = append(cmd.Env, key+"="+value)

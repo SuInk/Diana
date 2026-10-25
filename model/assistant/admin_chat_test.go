@@ -157,7 +157,7 @@ func TestLiveAdminChatSearchesAllPagesWithoutFollowingRecordInstructions(t *test
 		t.Fatal(err)
 	}
 	t.Setenv("APP_DB_PATH", filepath.Join(t.TempDir(), "app.db"))
-	r := NewRuntime(BotConfig{ID: "replay", AgentMode: AgentModeSafe, AgentMaxSteps: 6}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) { return client, nil })
+	r := NewRuntime(BotConfig{ID: "replay", AgentMode: AgentModeSafe}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) { return client, nil })
 	defer r.closeAgentRegistryCache()
 	history := &adminChatReplayHistoryTool{}
 	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)

@@ -4,6 +4,8 @@
 package assistant
 
 import (
+	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/SuInk/diana/model/agent"
@@ -91,5 +93,25 @@ func TestWithDefaultsKeepsAnExplicitAllowlist(t *testing.T) {
 	cfg := BotConfig{AgentCommandAllowlist: []string{"uptime"}}.WithDefaults()
 	if len(cfg.AgentCommandAllowlist) != 1 || cfg.AgentCommandAllowlist[0] != "uptime" {
 		t.Fatalf("用户填的白名单被改动了: %#v", cfg.AgentCommandAllowlist)
+	}
+}
+
+func TestLegacyStepSettingIsIgnored(t *testing.T) {
+	var cfg BotConfig
+	if err := json.Unmarshal([]byte(`{"agent_max_steps":1}`), &cfg); err != nil {
+		t.Fatal(err)
+	}
+	runtime := NewRuntime(cfg.WithDefaults(), nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	for _, owner := range []bool{false, true} {
+		if got := runtime.agentRegistryConfig(cfg.WithDefaults(), MessageEvent{}, owner).WithDefaults().MaxSteps; got != 0 {
+			t.Fatalf("owner=%v budget=%d", owner, got)
+		}
+	}
+	body, err := json.Marshal(PayloadFromConfig(cfg.WithDefaults()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(body), "agent_max_steps") {
+		t.Fatal("removed setting still serialized")
 	}
 }

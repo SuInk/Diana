@@ -10,7 +10,7 @@ import (
 )
 
 func interimTestRuntime(channel *recordingChannel, provider LLMProvider) *Runtime {
-	return NewRuntime(BotConfig{AgentEnabled: true, AgentMaxSteps: 4, BotAccount: "42"}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+	return NewRuntime(BotConfig{AgentEnabled: true, BotAccount: "42"}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
 	})
 }

@@ -234,9 +234,7 @@ func (h *BotHandler) runAdminChat(c *gin.Context) {
 		emit(gin.H{"type": "progress", "progress": progress})
 	}
 	result, err := runtime.RunAdminChat(ctx, s.profile, agent.Request{
-		ApprovalScope: "admin-chat:" + s.id,
-		ApprovalText:  payload.Message,
-		Messages:      assistant.AdminChatMessages(history), TraceID: "admin-" + uuid.NewString(), Observer: observer, LoadedTools: loaded,
+		Messages: assistant.AdminChatMessages(history), TraceID: "admin-" + uuid.NewString(), Observer: observer, LoadedTools: loaded,
 		ToolsLoaded: func(names []string) { s.mu.Lock(); s.loaded = append([]string(nil), names...); s.mu.Unlock() },
 	}, &adminDiagnosticsTool{handler: h, profile: s.profile, redact: redact}, &adminGroupHistoryTool{handler: h, profile: s.profile, redact: redact})
 	message := adminChatMessage{ID: uuid.NewString(), Role: "assistant", CreatedAt: time.Now()}

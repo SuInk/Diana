@@ -2,15 +2,11 @@ package assistant
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
-	"strings"
-	"sync"
 	"time"
 
 	"github.com/SuInk/diana/model/agent"
@@ -26,7 +22,7 @@ type hostAccessTool struct {
 
 func (t *hostAccessTool) Name() string { return hostAccessToolName }
 func (t *hostAccessTool) Description() string {
-	return `主人专用宿主机读取和执行，须在 WebUI 开启“允许主人操作宿主机”（默认关闭）。read/list/usage/disk 查询无需审批；exec 的每条命令都须单次审批，批准后直接以 Diana 宿主账号执行，支持任意程序、shell/脚本、联网及该账号有权进行的主机操作。没有沙盒或目录写入限制，脚本可能修改 Diana 自身和审批数据，不能保证硬限制。禁止主动执行整机毁坏或绕过身份/审批的操作。总体硬件状态用 host_stats，主人账号用 bot_config。`
+	return `主人专用宿主机读取和执行。标准模式下默认可用，无需额外开启或逐条批准；支持任意程序、shell/脚本、联网及宿主账号有权进行的文件和服务操作，不受工作区、命令白名单或沙盒限制。按主人任务直接执行常规操作；任务未明确授权的不可逆或重大影响操作先说明具体影响并确认。禁止整机毁坏、绕过身份校验和向无关方泄露凭据。总体硬件状态用 host_stats，主人账号用 bot_config。`
 }
 func (t *hostAccessTool) InputSchema() map[string]any {
 	return toolObjectSchema([]string{"operation"}, map[string]any{
@@ -48,9 +44,6 @@ func (t *hostAccessTool) Run(ctx context.Context, input map[string]any) (string,
 	}
 	if cfg.agentSafeMode() {
 		return "", fmt.Errorf("%s", agentSafeModeDisabledMessage)
-	}
-	if !cfg.AgentHostAccessEnabled {
-		return "", fmt.Errorf("宿主机操作默认关闭，请由管理员在机器人高级设置中开启；不能由工具自行开启")
 	}
 	acfg := t.runtime.agentRegistryConfig(cfg, t.event, true)
 	op := configToolString(input, "operation")
@@ -183,7 +176,7 @@ func (t *hostAccessTool) Run(ctx context.Context, input map[string]any) (string,
 }
 func (t *hostAccessTool) execute(ctx context.Context, cfg agent.Config, input map[string]any) (string, error) {
 	if configToolString(input, "writable_dir") != "" {
-		return "", fmt.Errorf("宿主执行没有 writable_dir 隔离，请移除该参数并重新申请审批")
+		return "", fmt.Errorf("宿主执行没有 writable_dir 隔离，请移除该参数")
 	}
 	args := []string{}
 	switch values := input["args"].(type) {
@@ -209,72 +202,6 @@ func (t *hostAccessTool) execute(ctx context.Context, cfg agent.Config, input ma
 	if err != nil {
 		return "", err
 	}
-	{
-		text, adminScope := agent.RequestAuthorization(ctx)
-		scope := hostApprovalScope(t.event)
-		if !isAdminChatRun(ctx) && adminScope != scope {
-			text = ""
-		}
-		if isAdminChatRun(ctx) {
-			if adminScope == "" {
-				return "", fmt.Errorf("管理会话缺少可信审批范围")
-			}
-			scope = "admin\x00" + t.event.ProfileID + "\x00" + adminScope
-		}
-		body, _ := json.Marshal(request)
-		ok, code, err := t.runtime.hostApprovals.authorize(scope, string(body), text, time.Now())
-		if err != nil {
-			return "", err
-		}
-		if !ok {
-			return hostAccessJSON(map[string]any{"status": "approval_required", "executed": false, "command": request, "execution_mode": "host_account", "sandbox": false, "confirmation": "批准主机操作 " + code, "validity": "首次申请后 5 分钟失效，重试不续期", "instruction": "向主人完整展示命令、参数、工作目录及影响，明确直接以 Diana 宿主账号执行、可联网且没有沙盒或写入范围限制。等待原样回复后重试相同参数，不得自行批准。"})
-		}
-	}
 	return agent.RunOwnerCommand(ctx, cfg, request)
 }
 func hostAccessJSON(v any) (string, error) { b, e := json.Marshal(v); return string(b), e }
-
-type hostApproval struct {
-	scope, input, code string
-	expires            time.Time
-}
-type hostApprovalStore struct {
-	mu      sync.Mutex
-	pending []hostApproval
-}
-
-func (s *hostApprovalStore) authorize(scope, input, text string, now time.Time) (bool, string, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	live := s.pending[:0]
-	for _, p := range s.pending {
-		if now.Before(p.expires) {
-			live = append(live, p)
-		}
-	}
-	s.pending = live
-	for i, p := range s.pending {
-		if p.scope != scope || p.input != input {
-			continue
-		}
-		if strings.TrimSpace(text) == "批准主机操作 "+p.code {
-			s.pending = append(s.pending[:i], s.pending[i+1:]...)
-			return true, "", nil
-		}
-		return false, p.code, nil
-	}
-	if len(s.pending) >= 128 {
-		return false, "", fmt.Errorf("待审批操作过多，请等待过期")
-	}
-	var token [16]byte
-	if _, err := rand.Read(token[:]); err != nil {
-		return false, "", err
-	}
-	code := hex.EncodeToString(token[:])
-	s.pending = append(s.pending, hostApproval{scope: scope, input: input, code: code, expires: now.Add(5 * time.Minute)})
-	return false, code, nil
-}
-
-func hostApprovalScope(event MessageEvent) string {
-	return "host:" + strings.Join([]string{event.ProfileID, event.Platform, event.UserID, sessionKey(event)}, "\x00")
-}

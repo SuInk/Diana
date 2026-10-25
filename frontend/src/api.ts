@@ -476,7 +476,6 @@ export interface BotProfileConfig extends SendRetrySettings {
   agent_enabled?: boolean;
   /** standard 标准模式（全部能力）/ safe 安全模式（关掉高风险能力，主人也一样）。新建默认 standard，safe 只在主人选择时开启。 */
   agent_mode?: string;
-  agent_max_steps?: number;
   /** 单轮最多创建的搜索/分析子任务数。 */
   subtask_max_tasks?: number;
   /** 同一批子任务的最大并发数；仍受服务端全局并发限制。 */
@@ -486,7 +485,6 @@ export interface BotProfileConfig extends SendRetrySettings {
   /** auto / require / off；留空即 auto。 */
   agent_command_sandbox?: string;
   agent_command_sandbox_allow_network?: boolean;
-  agent_host_access_enabled?: boolean;
   /** 打开 write_file / edit_file / save_to_workspace 和 manage_files 的写操作。新建配置默认打开。 */
   agent_file_write_enabled?: boolean;
   agent_browser_cdp_url?: string;
@@ -4281,7 +4279,6 @@ export interface AgentRecommendedDefaults {
   agent_command_allowlist: string[];
   agent_file_write_enabled: boolean;
   agent_command_sandbox: string;
-  agent_max_steps: number;
   subtask_max_tasks: number;
   subtask_max_concurrency: number;
   agent_command_timeout_ms: number;

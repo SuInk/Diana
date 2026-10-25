@@ -61,13 +61,13 @@ func TestReviewRepro03_PrivatePokeRespectsPrivateAdmission(t *testing.T) {
 }
 
 // 问题 4：每个 agent.Config 组合各建一份共享注册表（各拉一套 MCP 进程）。
-// 两台只差 AgentMaxSteps 的机器人不该各持一套扩展进程。
+// 两台只差 AgentCommandTimeoutMS 的机器人不该各持一套扩展进程。
 func TestReviewRepro04_SharedExtensionRegistryIsNotDuplicatedPerBotSettings(t *testing.T) {
 	t.Setenv("APP_DB_PATH", filepath.Join(t.TempDir(), "app.db"))
 	runtime := NewRuntime(BotConfig{OwnerID: "owner"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	event := MessageEvent{Kind: EventKindPrivate, UserID: "owner"}
 	botA, botB := DefaultBotConfig(), DefaultBotConfig()
-	botA.AgentMaxSteps, botB.AgentMaxSteps = 6, 12
+	botA.AgentCommandTimeoutMS, botB.AgentCommandTimeoutMS = 6, 12
 	first, err := runtime.sharedAgentRegistry(context.Background(), runtime.agentRegistryConfig(botA.WithDefaults(), event, true))
 	if err != nil {
 		t.Fatal(err)

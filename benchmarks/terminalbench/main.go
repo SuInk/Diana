@@ -77,7 +77,7 @@ func run() error {
 	workdir := flag.String("workdir", ".", "native tools workspace")
 	logPath := flag.String("log", "/logs/agent/diana.jsonl", "JSONL event log")
 	seconds := flag.Int("timeout", 900, "task deadline in seconds")
-	steps := flag.Int("steps", agent.MaxAllowedSteps, "native tool-call budget (subject to Diana's hard limit)")
+	steps := flag.Int("steps", 32, "optional tool-call budget for benchmark evaluation (zero is unlimited)")
 	budget := flag.Int64("output-budget", 32768, "aggregate output token ceiling")
 	flag.Parse()
 	// This entry point enables shell execution; never launch it on the user's host.

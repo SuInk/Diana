@@ -9,10 +9,10 @@ import (
 	"github.com/SuInk/diana/model/agent"
 )
 
-// 主人的 Agent 放宽到上限，群成员照旧用机器人配置的步数和默认输出上限。
+// 主人的 Agent 放宽输出上限，不改变执行预算。
 func TestOwnerAgentLimits(t *testing.T) {
 	owner := withOwnerAgentLimits(agent.Config{MaxSteps: 8}, true)
-	if owner.MaxSteps != agent.MaxAllowedSteps || owner.MaxToolOutputChars != agent.MaxAllowedToolOutputChars {
+	if owner.MaxSteps != 8 || owner.MaxToolOutputChars != agent.MaxAllowedToolOutputChars {
 		t.Fatalf("owner = steps %d, output %d", owner.MaxSteps, owner.MaxToolOutputChars)
 	}
 	member := withOwnerAgentLimits(agent.Config{MaxSteps: 8}, false)
@@ -36,5 +36,12 @@ func TestBrowserActionEntryCoversNewTools(t *testing.T) {
 		if _, ok := browserActionVerbs[name]; !ok {
 			t.Fatalf("%s 没有进操作记录", name)
 		}
+	}
+}
+
+func TestUnlimitedAgentProgress(t *testing.T) {
+	_, label, current, total, percent := formatAgentProgress(agent.RunEvent{ToolCall: 40})
+	if label != "已调用 40 次工具" || current != 40 || total != 0 || percent != 0 {
+		t.Fatalf("%s %d %d %d", label, current, total, percent)
 	}
 }

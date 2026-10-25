@@ -563,7 +563,6 @@ func (h *BotHandler) agentDefaults(c *gin.Context) {
 		"agent_command_allowlist":  defaults.AgentCommandAllowlist,
 		"agent_file_write_enabled": defaults.AgentFileWriteEnabled,
 		"agent_command_sandbox":    defaults.AgentCommandSandbox,
-		"agent_max_steps":          defaults.AgentMaxSteps,
 		"subtask_max_tasks":        defaults.SubtaskMaxTasks,
 		"subtask_max_concurrency":  defaults.SubtaskMaxConcurrency,
 		"agent_command_timeout_ms": defaults.AgentCommandTimeoutMS,

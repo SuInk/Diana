@@ -5,6 +5,7 @@ import type { BotProfileConfig } from "../api";
 export function copyBotConfiguration(source: BotProfileConfig, defaults: BotProfileConfig): BotProfileConfig {
   const copied = JSON.parse(JSON.stringify(source)) as BotProfileConfig;
   const data = copied as unknown as Record<string, unknown>;
+  delete data.agent_host_access_enabled;
   for (const key of Object.keys(data)) {
     if ((/^(onebot_|qq_|dingtalk_|feishu_|wecom_|weixin_|imessage_)/.test(key) && key !== "qq_typing_enabled")
       || (key.startsWith("telegram_") && key !== "telegram_suppress_bot_messages")) {
@@ -18,7 +19,6 @@ export function copyBotConfiguration(source: BotProfileConfig, defaults: BotProf
     profiles: undefined,
     message_relays: undefined,
     connection_profile_id: "",
-    agent_host_access_enabled: false,
     bot_account: undefined,
     avatar_url: undefined,
     callback_path: defaults.callback_path,

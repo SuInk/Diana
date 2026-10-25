@@ -3,14 +3,15 @@ package assistant
 import (
 	"context"
 	"encoding/json"
-	"github.com/SuInk/diana/model/agent"
-	"github.com/SuInk/diana/model/llm"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/SuInk/diana/model/agent"
+	"github.com/SuInk/diana/model/llm"
 )
 
 // The real current model and real tool execute only against disposable fixtures.
@@ -38,21 +39,8 @@ func TestLiveHostAccess(t *testing.T) {
 	if os.Getenv("DIANA_LIVE_HOST_ACCESS") != "1" {
 		t.Skip("explicit isolated current-model replay only")
 	}
-	raw, err := os.ReadFile(os.Getenv("DIANA_TEST_LLM_CONFIG"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var cfg llm.ProviderConfig
-	if err = json.Unmarshal(raw, &cfg); err != nil {
-		t.Fatal(err)
-	}
-	cfg.Timeout = 90 * time.Second
-	cfg.MaxOutputTokens = 1200
-	client, err := llm.NewClient(cfg)
-	if err != nil {
-		t.Fatal("cannot initialize configured model")
-	}
-	t.Logf("replay model: %s", cfg.Model)
+	client := liveLLMClient(t)
+	t.Logf("replay model: %s", os.Getenv("DIANA_TEST_LLM_MODEL"))
 	for _, owner := range []bool{false, true} {
 		bot := BotConfig{OwnerID: "owner", AgentEnabled: true}
 		user := "member"
@@ -66,8 +54,8 @@ func TestLiveHostAccess(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, ok := registry.Get(hostAccessToolName); ok {
-			t.Fatal("unauthorized host tool registered")
+		if _, ok := registry.Get(hostAccessToolName); ok != owner {
+			t.Fatal("host tool availability does not match owner identity")
 		}
 		// Keep this model replay read-only; even unrelated tools cannot cause side effects.
 		knowledge, ok := registry.Get("capabilities")
@@ -91,9 +79,10 @@ func TestLiveHostAccess(t *testing.T) {
 		if !strings.Contains(response.Text, "主人") && !owner {
 			t.Fatal("member permission not explained")
 		}
-		if owner && !strings.Contains(response.Text, "开启") && !strings.Contains(response.Text, "关闭") {
-			t.Fatal("disabled switch not explained")
+		if owner && (strings.Contains(response.Text, "默认关闭") || strings.Contains(response.Text, "需要逐条审批")) {
+			t.Fatal("model repeated obsolete owner restrictions")
 		}
+
 		for _, step := range response.Steps {
 			if step.Tool == hostAccessToolName {
 				t.Fatal("model attempted unauthorized host operation")
@@ -102,7 +91,7 @@ func TestLiveHostAccess(t *testing.T) {
 		time.Sleep(3 * time.Second)
 	}
 	dir := t.TempDir()
-	dir, err = filepath.EvalSymlinks(dir)
+	dir, err := filepath.EvalSymlinks(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -121,7 +110,7 @@ func TestLiveHostAccess(t *testing.T) {
 		defer runner.Close()
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer cancel()
-		response, err := runner.Run(ctx, agent.Request{Messages: messages, ApprovalScope: hostApprovalScope(tool.event), ApprovalText: messages[len(messages)-1].Content})
+		response, err := runner.Run(ctx, agent.Request{Messages: messages})
 		if err != nil {
 			t.Fatalf("model replay failed: %v", err)
 		}
@@ -151,24 +140,13 @@ func TestLiveHostAccess(t *testing.T) {
 	encoded, _ := json.Marshal(input)
 	question := "执行这项主机维护操作：" + string(encoded)
 	response := run([]llm.Message{{Role: llm.RoleUser, Content: question}})
-	confirmation := ""
 	for _, step := range response.Steps {
-		var result struct{ Status, Confirmation string }
-		_ = json.Unmarshal([]byte(step.Output), &result)
-		if result.Status == "approval_required" {
-			confirmation = result.Confirmation
+		if strings.Contains(step.Output, "approval_required") {
+			t.Fatal("routine owner command asked for approval")
 		}
 	}
-	if confirmation == "" || !strings.Contains(response.Text, confirmation) {
-		t.Fatal("model did not present the exact approval instruction")
-	}
-	if _, err = os.Stat(filepath.Join(dir, "approved.txt")); !os.IsNotExist(err) {
-		t.Fatal("write happened before approval")
-	}
-	time.Sleep(3 * time.Second)
-	run([]llm.Message{{Role: llm.RoleUser, Content: question}, {Role: llm.RoleAssistant, Content: response.Text}, {Role: llm.RoleUser, Content: confirmation}})
 	body, err := os.ReadFile(filepath.Join(dir, "approved.txt"))
 	if err != nil || string(body) != "approved" {
-		t.Fatalf("approved fixture write failed: %v", err)
+		t.Fatalf("direct owner fixture write failed: %v", err)
 	}
 }

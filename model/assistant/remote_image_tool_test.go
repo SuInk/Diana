@@ -94,12 +94,9 @@ func TestRemoteImageRejectsNonImageAndPrivateURL(t *testing.T) {
 	}
 }
 
-func TestAgentToolBudgetDefaultsToTwenty(t *testing.T) {
-	if DefaultBotConfig().AgentMaxSteps != 20 || (agent.Config{}).WithDefaults().MaxSteps != 20 {
-		t.Fatal("inconsistent default budget")
-	}
-	if (BotConfig{AgentMaxSteps: 8}).WithDefaults().AgentMaxSteps != 8 {
-		t.Fatal("explicit budget overwritten")
+func TestAgentToolBudgetDefaultsToUnlimited(t *testing.T) {
+	if (agent.Config{}).WithDefaults().MaxSteps != 0 {
+		t.Fatal("default must be unlimited")
 	}
 }
 

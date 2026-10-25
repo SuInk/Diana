@@ -184,9 +184,8 @@ func TestImageAnnouncementBecomesReplyWhenModelSaysNothing(t *testing.T) {
 	})}
 	channel := &recordingChannel{}
 	runtime := NewRuntime(BotConfig{
-		OwnerID:       "owner",
-		AgentEnabled:  true,
-		AgentMaxSteps: 4,
+		OwnerID:      "owner",
+		AgentEnabled: true,
 	}, channel, NewPluginManager(), store, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
 	})
@@ -263,9 +262,8 @@ func TestRuntimeAgentSearchesBeforeGeneratingImage(t *testing.T) {
 	})}
 	channel := &recordingChannel{}
 	runtime := NewRuntime(BotConfig{
-		OwnerID:       "owner",
-		AgentEnabled:  true,
-		AgentMaxSteps: 4,
+		OwnerID:      "owner",
+		AgentEnabled: true,
 		// 序列模型按精确次数喂回复，发送前审核的额外往返与本断言无关，关掉。
 		ReplySafetyMasterEnabled: boolPointer(false),
 	}, channel, plugins, store, nil, nil, func() (LLMProvider, error) {

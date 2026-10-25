@@ -178,7 +178,7 @@ func TestRuntimeAgentUsesTTSForModelSelectedVoiceRequest(t *testing.T) {
 	}}
 	channel := &recordingChannel{}
 	plugins := NewDefaultPluginManager()
-	runtime := NewRuntime(BotConfig{OwnerID: "owner", AgentEnabled: true, AgentMaxSteps: 3, ReplySafetyMasterEnabled: boolPointer(false)}, channel, plugins, nil, nil, nil, func() (LLMProvider, error) {
+	runtime := NewRuntime(BotConfig{OwnerID: "owner", AgentEnabled: true, ReplySafetyMasterEnabled: boolPointer(false)}, channel, plugins, nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
 	})
 	runtime.SetLocalMediaSharer(&recordingLocalMediaSharer{url: "http://127.0.0.1:18080/api/assistant/media/voice-token"})
@@ -223,7 +223,7 @@ func TestRuntimeGroupTTSVoiceIsAStandaloneRecord(t *testing.T) {
 		`{"action":"tool","tool":"tools_execute","input":{"name":"tts","input":{"text":"晚安，做个好梦。"}}}`,
 	}}
 	channel := &recordingChannel{}
-	runtime := NewRuntime(BotConfig{OwnerID: "owner", AgentEnabled: true, AgentMaxSteps: 3}, channel, NewDefaultPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+	runtime := NewRuntime(BotConfig{OwnerID: "owner", AgentEnabled: true}, channel, NewDefaultPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
 	})
 	runtime.SetGroupConfigStore(&stubGroupConfigStore{configs: map[string]GroupConfig{

@@ -936,7 +936,6 @@ type BotConfig struct {
 	// AgentMode 是 standard（标准，全部能力）或 safe（安全，关掉 AgentSafeModeRules
 	// 里的高风险能力，主人也一样）。新建机器人默认 standard，safe 只在主人选择时开启。
 	AgentMode             string   `json:"agent_mode,omitempty"`
-	AgentMaxSteps         int      `json:"agent_max_steps,omitempty"`
 	SubtaskMaxTasks       int      `json:"subtask_max_tasks,omitempty"`
 	SubtaskMaxConcurrency int      `json:"subtask_max_concurrency,omitempty"`
 	AgentSkillRoots       []string `json:"agent_skill_roots,omitempty"`
@@ -949,8 +948,6 @@ type BotConfig struct {
 	// AgentCommandSandboxAllowNetwork 放开沙盒内的网络。默认切断——命令能联网
 	// 就意味着读到的东西能被发出去，白名单挡不住这一层。
 	AgentCommandSandboxAllowNetwork bool `json:"agent_command_sandbox_allow_network,omitempty"`
-	// AgentHostAccessEnabled grants owner host access; never enabled by defaults.
-	AgentHostAccessEnabled bool `json:"agent_host_access_enabled"`
 	// AgentFileWriteEnabled 打开 write_file / edit_file / save_to_workspace 和
 	// manage_files 的写操作，默认关闭。
 	// 读和写是两档权限：读错文件浪费一次调用，写错文件改的是磁盘。
@@ -1553,7 +1550,6 @@ type ConfigPayload struct {
 	ModelRequestTimeoutMS           int64                     `json:"model_request_timeout_ms,omitempty"`
 	AgentEnabled                    bool                      `json:"agent_enabled,omitempty"`
 	AgentMode                       string                    `json:"agent_mode,omitempty"`
-	AgentMaxSteps                   int                       `json:"agent_max_steps,omitempty"`
 	SubtaskMaxTasks                 int                       `json:"subtask_max_tasks,omitempty"`
 	SubtaskMaxConcurrency           int                       `json:"subtask_max_concurrency,omitempty"`
 	AgentSkillRoots                 []string                  `json:"agent_skill_roots,omitempty"`
@@ -1562,7 +1558,6 @@ type ConfigPayload struct {
 	AgentCommandTimeoutMS           int                       `json:"agent_command_timeout_ms,omitempty"`
 	AgentCommandSandbox             string                    `json:"agent_command_sandbox,omitempty"`
 	AgentCommandSandboxAllowNetwork bool                      `json:"agent_command_sandbox_allow_network,omitempty"`
-	AgentHostAccessEnabled          bool                      `json:"agent_host_access_enabled"`
 	AgentFileWriteEnabled           bool                      `json:"agent_file_write_enabled,omitempty"`
 	AgentBrowserCDPURL              string                    `json:"agent_browser_cdp_url,omitempty"`
 	AgentBrowserTimeoutMS           int                       `json:"agent_browser_timeout_ms,omitempty"`
@@ -2228,7 +2223,6 @@ func DefaultBotConfig() BotConfig {
 		// 新建的机器人默认标准模式，安全模式由主人在设置里明确选择。
 		// 存量机器人不受影响，它们的模式由 migrateAgentMode 按旧开关换算。
 		AgentMode:             AgentModeStandard,
-		AgentMaxSteps:         agent.DefaultMaxSteps,
 		SubtaskMaxTasks:       defaultSubtaskMaxTasks,
 		SubtaskMaxConcurrency: defaultSubtaskMaxConcurrency,
 		AgentSkillRoots:       []string{},
@@ -2520,13 +2514,6 @@ func (cfg BotConfig) WithDefaults() BotConfig {
 	}
 	// 空值留空：那表示还没迁移过，由加载路径按旧开关换算，这里不替它做决定。
 	cfg.AgentMode = NormalizeAgentMode(cfg.AgentMode)
-	if cfg.AgentMaxSteps <= 0 {
-		cfg.AgentMaxSteps = defaults.AgentMaxSteps
-	}
-	if cfg.AgentMaxSteps > agent.MaxAllowedSteps {
-		// Agent 步数硬上限防止模型陷入长循环工具调用。
-		cfg.AgentMaxSteps = agent.MaxAllowedSteps
-	}
 	if cfg.SubtaskMaxTasks <= 0 {
 		cfg.SubtaskMaxTasks = defaults.SubtaskMaxTasks
 	}
@@ -2926,7 +2913,6 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		ModelRequestTimeoutMS:             cfg.ModelRequestTimeout.Milliseconds(),
 		AgentEnabled:                      cfg.AgentEnabled,
 		AgentMode:                         cfg.AgentMode,
-		AgentMaxSteps:                     cfg.AgentMaxSteps,
 		SubtaskMaxTasks:                   cfg.SubtaskMaxTasks,
 		SubtaskMaxConcurrency:             cfg.SubtaskMaxConcurrency,
 		AgentSkillRoots:                   append([]string(nil), cfg.AgentSkillRoots...),
@@ -2935,7 +2921,6 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		AgentCommandTimeoutMS:             cfg.AgentCommandTimeoutMS,
 		AgentCommandSandbox:               cfg.AgentCommandSandbox,
 		AgentCommandSandboxAllowNetwork:   cfg.AgentCommandSandboxAllowNetwork,
-		AgentHostAccessEnabled:            cfg.AgentHostAccessEnabled,
 		AgentFileWriteEnabled:             cfg.AgentFileWriteEnabled,
 		AgentBrowserCDPURL:                cfg.AgentBrowserCDPURL,
 		AgentBrowserTimeoutMS:             cfg.AgentBrowserTimeoutMS,
@@ -3188,7 +3173,6 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		ModelRequestTimeout:             modelRequestTimeoutFromMilliseconds(payload.ModelRequestTimeoutMS),
 		AgentEnabled:                    payload.AgentEnabled,
 		AgentMode:                       agentModeFromPayload(payload, existing),
-		AgentMaxSteps:                   payload.AgentMaxSteps,
 		SubtaskMaxTasks:                 payload.SubtaskMaxTasks,
 		SubtaskMaxConcurrency:           payload.SubtaskMaxConcurrency,
 		AgentSkillRoots:                 append([]string(nil), payload.AgentSkillRoots...),
@@ -3197,7 +3181,6 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		AgentCommandTimeoutMS:           payload.AgentCommandTimeoutMS,
 		AgentCommandSandbox:             payload.AgentCommandSandbox,
 		AgentCommandSandboxAllowNetwork: payload.AgentCommandSandboxAllowNetwork,
-		AgentHostAccessEnabled:          payload.AgentHostAccessEnabled,
 		AgentFileWriteEnabled:           payload.AgentFileWriteEnabled,
 		AgentBrowserCDPURL:              payload.AgentBrowserCDPURL,
 		AgentBrowserTimeoutMS:           payload.AgentBrowserTimeoutMS,

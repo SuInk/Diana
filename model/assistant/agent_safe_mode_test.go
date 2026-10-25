@@ -294,17 +294,12 @@ func TestSafeModeAgentConfigDropsRiskyCapabilitiesButKeepsLimits(t *testing.T) {
 	if len(owner.CommandAllowlist) != 0 || owner.FileWriteEnabled || owner.BuiltinBrowser != nil || owner.BrowserControl != nil || owner.DesktopControl != nil || owner.ExtensionManagement {
 		t.Fatalf("安全模式下主人的 Agent 配置仍带高风险能力: %+v", owner)
 	}
-	if owner.MaxSteps != agent.MaxAllowedSteps {
-		t.Fatalf("主人步数 = %d，want %d", owner.MaxSteps, agent.MaxAllowedSteps)
+	if owner.MaxSteps != agent.DefaultMaxSteps {
+		t.Fatalf("主人步数 = %d，want %d", owner.MaxSteps, agent.DefaultMaxSteps)
 	}
 	member := runtime.agentRegistryConfig(safe, MessageEvent{}, false)
 	if member.MaxSteps != agent.DefaultMaxSteps {
 		t.Fatalf("群成员步数 = %d，want %d", member.MaxSteps, agent.DefaultMaxSteps)
-	}
-	over := DefaultBotConfig()
-	over.AgentMaxSteps = 40
-	if got := over.WithDefaults().AgentMaxSteps; got != agent.MaxAllowedSteps {
-		t.Fatalf("步数上限 = %d，want %d", got, agent.MaxAllowedSteps)
 	}
 }
 

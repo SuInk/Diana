@@ -44,7 +44,6 @@ func TestAgentToolsReceiveRealCallerWhileModelSeesAliases(t *testing.T) {
 		OwnerID:                   "10001",
 		BotAccount:                "10000",
 		AgentEnabled:              true,
-		AgentMaxSteps:             3,
 		LLMIdentityMaskingEnabled: boolPointer(true),
 		ReplySafetyMasterEnabled:  boolPointer(false),
 	}

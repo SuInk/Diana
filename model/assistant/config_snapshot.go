@@ -46,7 +46,6 @@ type dianaBotConfigSnapshot struct {
 	OneBotAccessTokenConfigured     bool                 `json:"onebot_access_token_configured"`
 	BotAccount                      string               `json:"bot_account,omitempty"`
 	OwnerID                         string               `json:"owner_id,omitempty"`
-	AgentHostAccessEnabled          bool                 `json:"agent_host_access_enabled"`
 	OwnerLoginEnabled               bool                 `json:"owner_login_enabled"`
 	GroupTriggers                   []string             `json:"group_triggers,omitempty"`
 	GroupTriggerMode                AliasTriggerMode     `json:"group_trigger_mode,omitempty"`
@@ -151,7 +150,6 @@ type dianaAgentConfigSnapshot struct {
 	Mode                    string                  `json:"mode,omitempty"`
 	SafeModeDisabled        []string                `json:"safe_mode_disabled,omitempty"`
 	WorkDir                 string                  `json:"work_dir,omitempty"`
-	MaxSteps                int                     `json:"max_steps"`
 	SubtaskMaxTasks         int                     `json:"subtask_max_tasks"`
 	SubtaskMaxConcurrency   int                     `json:"subtask_max_concurrency"`
 	SkillRoots              []string                `json:"skill_roots,omitempty"`
@@ -297,7 +295,6 @@ func dianaBotConfigFromConfig(cfg BotConfig) dianaBotConfigSnapshot {
 		OneBotAccessTokenConfigured:     strings.TrimSpace(cfg.OneBotAccessToken) != "",
 		BotAccount:                      cfg.BotAccount,
 		OwnerID:                         cfg.OwnerID,
-		AgentHostAccessEnabled:          cfg.AgentHostAccessEnabled,
 		OwnerLoginEnabled:               cfg.OwnerLoginEnabled,
 		GroupTriggers:                   append([]string(nil), cfg.GroupTriggers...),
 		GroupTriggerMode:                aliasTriggerMode(cfg),
@@ -396,7 +393,6 @@ func dianaBotConfigFromConfig(cfg BotConfig) dianaBotConfigSnapshot {
 			Mode:                    cfg.effectiveAgentMode(),
 			SafeModeDisabled:        agentSafeModeDisabledList(cfg),
 			WorkDir:                 AgentWorkspaceDir(),
-			MaxSteps:                cfg.AgentMaxSteps,
 			SubtaskMaxTasks:         cfg.SubtaskMaxTasks,
 			SubtaskMaxConcurrency:   cfg.SubtaskMaxConcurrency,
 			SkillRoots:              append([]string(nil), cfg.AgentSkillRoots...),

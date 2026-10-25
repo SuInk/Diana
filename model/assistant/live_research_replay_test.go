@@ -199,7 +199,7 @@ func TestLiveOnlineResearchReplay(t *testing.T) {
 	prompt := runtime.systemPromptWithRelationshipAndAgentTools(event, nil, false, RelationshipPolicy{}, true, registry)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	runner, err := agent.NewRunner(client, agent.Config{MaxSteps: cfg.AgentMaxSteps}, registry)
+	runner, err := agent.NewRunner(client, agent.Config{}, registry)
 	if err != nil {
 		t.Fatal(err)
 	}

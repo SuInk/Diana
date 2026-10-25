@@ -69,7 +69,7 @@ func researchObservationGuidance(tool, rawOutput string, remaining int) string {
 	default:
 		return ""
 	}
-	if remaining <= 0 {
+	if remaining == 0 {
 		return guidance + " 工具预算已耗尽，按已有证据回答，明确仍未确认的部分，不要承诺继续查询。"
 	}
 	return guidance + " 保留来源的产品名称和范围限定；‘尚未提供’不能改写成‘正在分批提供’，某子产品可用也不能扩写为全部渠道可用。需要核对时直接调用工具；信息足够时调用 agent_finalize。"

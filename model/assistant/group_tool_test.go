@@ -88,9 +88,8 @@ func TestRuntimeAgentUsesOneBotGroupToolToMentionOtherMembers(t *testing.T) {
 		}
 	}
 	runtime := NewRuntime(BotConfig{
-		BotAccount:    "10000",
-		AgentEnabled:  true,
-		AgentMaxSteps: 3,
+		BotAccount:   "10000",
+		AgentEnabled: true,
 	}, channel, NewPluginManager(NewPlatformInterfacePlugin()), nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
 	})
@@ -153,9 +152,8 @@ func TestRuntimeAgentAnswersPromotedGroupCountFollowupWithOneBotGroupTool(t *tes
 		`{"send_confidence":0.99,"reason":"准确回答群成员数量"}`,
 	}}
 	runtime := NewRuntime(BotConfig{
-		AgentEnabled:  true,
-		AgentMaxSteps: 3,
-		BotAccount:    "42",
+		AgentEnabled: true,
+		BotAccount:   "42",
 	}, channel, NewPluginManager(NewPlatformInterfacePlugin()), nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
 	})

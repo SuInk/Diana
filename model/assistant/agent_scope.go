@@ -97,7 +97,7 @@ func (r *Runtime) newAgentRegistry(ctx context.Context, cfg BotConfig, event Mes
 		skillSource = base.Skills()
 	}
 	if relationship.Owner {
-		if !safe && cfg.AgentHostAccessEnabled {
+		if !safe {
 			registry.Register(&hostAccessTool{runtime: r, event: event})
 		}
 		registry.Register(newDianaBotConfigTool(r, event))
@@ -416,7 +416,6 @@ func (r *Runtime) agentRegistryConfig(cfg BotConfig, event MessageEvent, owner b
 	// 安全模式在最后收窄：它要盖过主人放宽的那些项（扩展管理跟着主人身份打开）。
 	return restrictAgentConfigForMode(cfg, withOwnerAgentLimits(agent.Config{
 		WorkDir:             AgentWorkspaceDir(),
-		MaxSteps:            cfg.AgentMaxSteps,
 		SkillRoots:          cfg.AgentSkillRoots,
 		MCPConfigPath:       cfg.AgentMCPConfigPath,
 		ExtensionManagement: owner,
@@ -454,18 +453,12 @@ func browserSessionKey(cfg BotConfig, event MessageEvent) string {
 	return cfg.ID + "\x00" + sessionKey(event)
 }
 
-// withOwnerAgentLimits 给主人的 Agent 放宽到上限：步数用满 agent.MaxAllowedSteps，
-// 单次工具输出用满 agent.MaxAllowedToolOutputChars。
+// withOwnerAgentLimits 放宽主人的单次工具输出上限。
 //
-// 主人这一侧的活是「登进去翻十几页后台」「把这张长表整理出来」这种，默认步数和 8000 字
-// 经常不够用，做到一半就被截断。群成员那边照旧用机器人配置的步数和默认输出上限：
-// 他们的每一步都花的是主人的钱。
+// 主人处理后台长表时需要更完整的工具输出；群成员沿用默认输出上限。
 func withOwnerAgentLimits(cfg agent.Config, owner bool) agent.Config {
 	if !owner {
 		return cfg
-	}
-	if cfg.MaxSteps < agent.MaxAllowedSteps {
-		cfg.MaxSteps = agent.MaxAllowedSteps
 	}
 	cfg.MaxToolOutputChars = agent.MaxAllowedToolOutputChars
 	return cfg

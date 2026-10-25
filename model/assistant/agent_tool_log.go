@@ -358,7 +358,13 @@ func repositoryIssueDebugDrafts(drafts []repositoryIssueDraftView, single *repos
 func formatAgentProgress(event agent.RunEvent) (bar, label string, current, total, percent int) {
 	total = event.MaxToolCalls
 	if total <= 0 {
-		total = agent.DefaultMaxSteps
+		current = max(event.ToolCall, 0)
+		label = fmt.Sprintf("已调用 %d 次工具", current)
+		if event.Phase == agent.RunPhaseCompleted {
+			label = fmt.Sprintf("已完成，共调用 %d 次工具", current)
+			percent = 100
+		}
+		return
 	}
 	current = min(max(event.ToolCall, 0), total)
 	if event.Phase == agent.RunPhaseCompleted {

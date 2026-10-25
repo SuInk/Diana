@@ -246,19 +246,17 @@ func relationshipPermissionContext(policy RelationshipPolicy, configs ...BotConf
 
 // Public status contains no host paths, credentials, account IDs or command schemas.
 func capabilityAccessStatus(cfg BotConfig, owner bool) map[string]any {
-	reason := "可用，执行每条命令仍需主人单次审批"
+	reason := "标准模式下默认可用，常规操作直接执行，无需逐条审批"
 	if !owner {
 		reason = "需要机器人主人权限；当前用户不是主人"
 	} else if cfg.agentSafeMode() {
 		reason = "安全模式已停用宿主机访问"
-	} else if !cfg.AgentHostAccessEnabled {
-		reason = "宿主机操作开关未开启，请管理员在机器人高级设置开启"
 	}
 	role := "user"
 	if owner {
 		role = "bot_owner_or_webui_admin"
 	}
-	return map[string]any{"role": role, "host_access": map[string]any{"exists": true, "available": owner && cfg.AgentHostAccessEnabled && !cfg.agentSafeMode(), "reason": reason}, "note": "能力说明不授予执行权限；执行时服务端仍重新校验。"}
+	return map[string]any{"role": role, "host_access": map[string]any{"exists": true, "available": owner && !cfg.agentSafeMode(), "reason": reason}, "note": "能力说明不授予执行权限；执行时服务端仍重新校验。"}
 }
 
 // applyRelationshipTaskPermissions 与 relationshipPermissionDenied 已删除。

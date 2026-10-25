@@ -106,7 +106,7 @@ func TestRuntimeWithoutSearchPluginRegistersNoSearchTool(t *testing.T) {
 		}
 		return `{"action":"final","content":"好"}`, nil
 	}
-	runtime := NewRuntime(BotConfig{BotAccount: "10000", AgentEnabled: true, AgentMaxSteps: 3}, &recordingChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+	runtime := NewRuntime(BotConfig{BotAccount: "10000", AgentEnabled: true}, &recordingChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
 	})
 	event := MessageEvent{Kind: EventKindPrivate, UserID: "user", MessageID: "no-search", RawMessage: "今天有什么新闻"}

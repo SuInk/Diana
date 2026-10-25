@@ -200,7 +200,7 @@ https://HOST/api/channels/wecom/callback</code></pre>
 
       <section class="section searchable" id="agent">
         <div class="section-heading"><p class="eyebrow">Agent 与工具</p><h2>模型只看到当前场景允许的能力</h2></div>
-        <p>Agent 运行器将结构化工具结果送回模型，直到得到最终回复或达到步数上限。工具注册表根据平台、关系权限、群配置和功能状态收敛。</p>
+        <p>Agent 运行器将结构化工具结果送回模型，直到得到最终回复、取消或超时，不再设置工具步数上限。工具注册表根据平台、关系权限、群配置和功能状态收敛。</p>
         <div class="tool-grid">
           <article><h3>内置联网搜索</h3><p>联网搜索自带且不可安装/卸载。在「提供商 → 搜索提供商」统一管理地址与密钥，到「机器人 → 模型与搜索 → 联网搜索」选择首选和后备来源。支持 Exa MCP、Tavily 兼容 API、自定义搜索 MCP 和隔离浏览器搜索，插件页无需重复配置。提示模型在时效性、事实核验、陌生实体和推荐类问题上优先检索。</p></article>
           <article><h3>提醒与订阅</h3><p>一次性和周期任务统一持久化，控制台展示周期、下一次执行时间、来源和状态。</p></article>

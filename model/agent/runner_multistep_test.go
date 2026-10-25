@@ -5,6 +5,7 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -128,5 +129,31 @@ func TestCodingRulesFollowAvailableTools(t *testing.T) {
 				t.Fatalf("coding validation rule present = %v, want %v", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestDefaultRunnerContinuesBeyondFormerStepLimit(t *testing.T) {
+	client := &scriptedClient{}
+	for i := 0; i < 40; i++ {
+		client.responses = append(client.responses, fmt.Sprintf(`{"action":"tool","tool":"lookup","input":{"query":"item-%d"}}`, i))
+	}
+	tool := &countingTool{name: "lookup"}
+	runner, err := NewRunner(client, Config{}, NewToolRegistry(tool))
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := runner.Run(context.Background(), Request{Messages: []llm.Message{{Role: llm.RoleUser, Content: "完成全部查询"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tool.calls != 40 || response.FinishReason != "final" {
+		t.Fatalf("calls=%d response=%+v", tool.calls, response)
+	}
+	for _, req := range client.requests {
+		for _, msg := range req.Messages {
+			if strings.Contains(msg.Content, "剩余工具预算") {
+				t.Fatal("unlimited run received finite budget guidance")
+			}
+		}
 	}
 }

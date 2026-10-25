@@ -4,9 +4,9 @@ import { copyBotConfiguration } from "./bot-config-copy.ts";
 
 const defaults = { platform: "onebot-v11", enabled: true, onebot_transport: "reverse_ws", onebot_reverse_ws_endpoint: "ws://localhost/onebot/v11/ws" };
 
-test("copied bots require a fresh explicit host-access grant", () => {
+test("copy drops the obsolete host-access switch", () => {
   const source = { ...defaults, agent_host_access_enabled: true };
-  assert.equal(copyBotConfiguration(source, { ...defaults, agent_host_access_enabled: true }).agent_host_access_enabled, false);
+  assert.equal(copyBotConfiguration(source, defaults).agent_host_access_enabled, undefined);
   assert.equal(source.agent_host_access_enabled, true);
 });
 

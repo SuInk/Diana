@@ -70,7 +70,7 @@ func TestParallelReadsRunConcurrentlyAndKeepCallOrder(t *testing.T) {
 		{ID: "c2", Name: finalizeToolName, Arguments: map[string]any{"content": "太早了"}},
 		{ID: "c3", Name: browserRenderToolName, Arguments: map[string]any{"url": "https://ai.google.dev/x"}},
 	}}
-	runner, err := NewRunner(client, Config{MaxSteps: 4}, NewToolRegistry(search, render))
+	runner, err := NewRunner(client, Config{}, NewToolRegistry(search, render))
 	if err != nil {
 		t.Fatal(err)
 	}

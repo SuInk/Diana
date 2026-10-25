@@ -78,7 +78,6 @@ func TestDueQueryReminderRunsAgentAndSendsResult(t *testing.T) {
 		OwnerID:        "10001",
 		SystemPrompt:   "你是说话自然的 Diana。",
 		AgentEnabled:   true,
-		AgentMaxSteps:  3,
 		RequestTimeout: 5 * time.Second,
 	}, channel, NewPluginManager(), nil, store, nil, func() (LLMProvider, error) {
 		return provider, nil
@@ -116,7 +115,6 @@ func TestQueryReminderSendFailureRetriesWithoutRerunningAgent(t *testing.T) {
 	runtime := NewRuntime(BotConfig{
 		OwnerID:        "10001",
 		AgentEnabled:   true,
-		AgentMaxSteps:  3,
 		RequestTimeout: 5 * time.Second,
 	}, channel, NewPluginManager(), nil, store, nil, func() (LLMProvider, error) {
 		return provider, nil
@@ -194,7 +192,6 @@ func TestQueryReminderExecutionFailureRetries(t *testing.T) {
 	runtime := NewRuntime(BotConfig{
 		OwnerID:        "10001",
 		AgentEnabled:   true,
-		AgentMaxSteps:  3,
 		RequestTimeout: 5 * time.Second,
 	}, channel, NewPluginManager(), nil, store, nil, func() (LLMProvider, error) {
 		return nil, errors.New("模型不可用")
@@ -222,7 +219,7 @@ func TestTaskQueriesExecuteChatHistory(t *testing.T) {
 				`{"action":"tool","tool":"chat_history","input":{"operation":"recent","limit":5}}`,
 				`{"action":"final","content":"已查到群聊记录。"}`,
 			}}
-			runtime := NewRuntime(BotConfig{OwnerID: "owner", AgentEnabled: true, AgentMode: AgentModeSafe, AgentMaxSteps: 5, RequestTimeout: 5 * time.Second}, nilChannel{}, NewPluginManager(), nil, store, nil, func() (LLMProvider, error) { return provider, nil })
+			runtime := NewRuntime(BotConfig{OwnerID: "owner", AgentEnabled: true, AgentMode: AgentModeSafe, RequestTimeout: 5 * time.Second}, nilChannel{}, NewPluginManager(), nil, store, nil, func() (LLMProvider, error) { return provider, nil })
 			runtime.remember(chatHistoryTextEvent(time.Now().Unix(), "member", "成员", "history-fixture", "早报测试：今天讨论了限流"))
 			var err error
 			if kind == ReminderKindQuery {
@@ -249,7 +246,7 @@ func TestTaskQueryExecutesPluginToolAndRespectsGroupSwitch(t *testing.T) {
 		`{"action":"tool","tool":"tools_execute","input":{"name":"plugin.echo","input":{"text":"定时插件查询"}}}`,
 		`{"action":"final","content":"查询完成"}`,
 	}}
-	runtime := NewRuntime(BotConfig{OwnerID: "owner", AgentEnabled: true, AgentMaxSteps: 5, RequestTimeout: 5 * time.Second}, nilChannel{}, plugins, nil, nil, nil, func() (LLMProvider, error) { return provider, nil })
+	runtime := NewRuntime(BotConfig{OwnerID: "owner", AgentEnabled: true, RequestTimeout: 5 * time.Second}, nilChannel{}, plugins, nil, nil, nil, func() (LLMProvider, error) { return provider, nil })
 	item := Reminder{GroupID: "group-1", UserID: "owner", Message: "调用插件查询"}
 	if _, err := runtime.generateScheduledQueryMessage(context.Background(), item); err != nil {
 		t.Fatal(err)
@@ -284,7 +281,7 @@ func TestLiveScheduledQueriesUseHistoryAndPluginTools(t *testing.T) {
 			store := &stubReminderStore{}
 			tool := &echoAgentTool{}
 			probe := &liveGitHubShapeProbe{LLMClient: client}
-			runtime := NewRuntime(BotConfig{OwnerID: "owner", AgentEnabled: true, AgentMode: AgentModeSafe, AgentMaxSteps: 10, RequestTimeout: 120 * time.Second}, nilChannel{}, NewPluginManager(&echoAgentToolPlugin{tool: tool}), nil, store, nil, func() (LLMProvider, error) { return probe, nil })
+			runtime := NewRuntime(BotConfig{OwnerID: "owner", AgentEnabled: true, AgentMode: AgentModeSafe, RequestTimeout: 120 * time.Second}, nilChannel{}, NewPluginManager(&echoAgentToolPlugin{tool: tool}), nil, store, nil, func() (LLMProvider, error) { return probe, nil })
 			runtime.remember(chatHistoryTextEvent(time.Now().Unix(), "member", "成员", "scheduled-replay-fixture", "回放记录：部署暗号是青柠四十二。"))
 			item := Reminder{ID: "live-scheduled-fixture", GroupID: "group-1", UserID: "owner", OwnerID: "owner", RunQuery: true, Message: "先用 chat_history 查询当前群最近消息，找出部署暗号，再调用 plugin.echo，把查到的暗号作为 text 参数。最后把插件返回的内容告诉我。必须实际调用这两个工具。"}
 			store.items = []Reminder{item}

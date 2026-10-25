@@ -295,7 +295,6 @@ func TestRuntimeAgentCanCreateNaturalLanguageReminder(t *testing.T) {
 	runtime := NewRuntime(BotConfig{
 		OwnerID:        "10001",
 		AgentEnabled:   true,
-		AgentMaxSteps:  3,
 		RequestTimeout: 5 * time.Second,
 		// 序列模型按精确次数喂回复，发送前审核的额外往返与本断言无关，关掉。
 		ReplySafetyMasterEnabled: boolPointer(false),

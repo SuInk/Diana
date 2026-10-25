@@ -12,10 +12,8 @@ import (
 )
 
 const (
-	// DefaultMaxSteps 是每轮规划步数（每步执行一个工具）。以前是 12、上限 16：10-02 起
-	// browser_render 能顺着链接翻页、web_search 不再单独限 3 次，查一个价格问题要 7–9 步，
-	// 12 步留不出换路的余地。Codex CLI 不设步数上限，这里保留上限只为兜住空转。
-	DefaultMaxSteps           = 20
+	// DefaultMaxSteps 为零表示不限制工具调用次数。
+	DefaultMaxSteps           = 0
 	DefaultMaxToolOutputChars = 8000
 	DefaultReadFileMaxBytes   = 64 * 1024
 	// DefaultFileWriteMaxBytes 是单次写入的默认上限。比读的上限大一些：模型生成
@@ -46,7 +44,6 @@ const (
 	DefaultToolTimeoutMS            = 60_000
 	DefaultFinalizationReserveMS    = 20_000
 	DefaultProtocolRepairLimit      = 3
-	MaxAllowedSteps                 = 32
 	MaxAllowedToolOutputChars       = 20000
 	MaxAllowedReadFileMaxBytes      = 512 * 1024
 	MaxAllowedFileWriteMaxBytes     = 2 << 20
@@ -87,13 +84,14 @@ type Config struct {
 	// 每轮联网回复多一次模型调用；只给群聊主回复开。
 	ResearchDetailReview bool
 	WorkDir              string
-	MaxSteps             int
-	MaxToolOutputChars   int
-	ReadFileMaxBytes     int
-	ListDirectoryLimit   int
-	SkillRoots           []string
-	ManagedSkillRoot     string
-	SkillsListBudget     int
+	// MaxSteps is an optional budget for isolated evaluations; zero means unlimited.
+	MaxSteps           int
+	MaxToolOutputChars int
+	ReadFileMaxBytes   int
+	ListDirectoryLimit int
+	SkillRoots         []string
+	ManagedSkillRoot   string
+	SkillsListBudget   int
 	// SkillTriggerScanDepth 是关键词扫描回看的用户消息条数。
 	SkillTriggerScanDepth int
 	MCPConfigPath         string
@@ -165,14 +163,10 @@ type Config struct {
 }
 
 type Request struct {
-	Hooks RunHooks
-	// ApprovalScope is a trusted caller-supplied session key, not model input.
-	ApprovalScope string
-	// ApprovalText is the authenticated current message, before prompt assembly.
-	ApprovalText string
-	Messages     []llm.Message
-	TraceID      string
-	Observer     RunObserver
+	Hooks    RunHooks
+	Messages []llm.Message
+	TraceID  string
+	Observer RunObserver
 	// LoadedTools carries session discoveries, never tool instances or authority.
 	LoadedTools []string
 	// ToolsLoaded is called immediately, including when a later model call fails.
@@ -268,13 +262,6 @@ type RunObserver func(context.Context, RunEvent)
 func (cfg Config) WithDefaults() Config {
 	if cfg.WorkDir == "" {
 		cfg.WorkDir = "."
-	}
-	if cfg.MaxSteps <= 0 {
-		cfg.MaxSteps = DefaultMaxSteps
-	}
-	if cfg.MaxSteps > MaxAllowedSteps {
-		// Agent 步数设置硬上限，避免模型反复调用工具导致一次回复无限拖长。
-		cfg.MaxSteps = MaxAllowedSteps
 	}
 	if cfg.MaxToolOutputChars <= 0 {
 		cfg.MaxToolOutputChars = DefaultMaxToolOutputChars

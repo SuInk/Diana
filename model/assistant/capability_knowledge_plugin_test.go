@@ -120,7 +120,7 @@ func TestRuntimeAgentUsesCapabilityRAGForSelfKnowledge(t *testing.T) {
 		`{"action":"tool","tool":"capabilities","input":{"query":"你能解析视频吗","limit":3}}`,
 		`{"action":"final","content":"可以，我能读取视频并抽取多帧理解内容。"}`,
 	}}
-	runtime := NewRuntime(BotConfig{OwnerID: "owner", AgentEnabled: true, AgentMaxSteps: 3, ReplySafetyMasterEnabled: boolPointer(false)}, &recordingChannel{}, NewDefaultPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+	runtime := NewRuntime(BotConfig{OwnerID: "owner", AgentEnabled: true, ReplySafetyMasterEnabled: boolPointer(false)}, &recordingChannel{}, NewDefaultPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
 	})
 	event := MessageEvent{Kind: EventKindPrivate, UserID: "user", MessageID: "capability", Segments: []MessageSegment{{Type: "text", Data: map[string]string{"text": "你能解析视频吗"}}}}
@@ -182,17 +182,16 @@ func TestCapabilityKnowledgeFindsCLI(t *testing.T) {
 
 func TestCapabilityDiscoveryExplainsHostAccessWithoutGrantingIt(t *testing.T) {
 	for _, tc := range []struct {
-		name                 string
-		owner, enabled, safe bool
-		reason               string
+		name        string
+		owner, safe bool
+		reason      string
 	}{
-		{"member", false, true, false, "需要机器人主人权限"},
-		{"disabled", true, false, false, "开关未开启"},
-		{"safe", true, true, true, "安全模式"},
-		{"owner", true, true, false, "单次审批"},
+		{"member", false, false, "需要机器人主人权限"},
+		{"safe", true, true, "安全模式"},
+		{"owner", true, false, "默认可用"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			cfg := BotConfig{OwnerID: "owner", AgentEnabled: true, AgentHostAccessEnabled: tc.enabled}
+			cfg := BotConfig{OwnerID: "owner", AgentEnabled: true}
 			if tc.safe {
 				cfg.AgentMode = AgentModeSafe
 			}
@@ -220,7 +219,7 @@ func TestCapabilityDiscoveryExplainsHostAccessWithoutGrantingIt(t *testing.T) {
 				t.Fatal(raw)
 			}
 			_, callable := registry.Get(hostAccessToolName)
-			want := tc.owner && tc.enabled && !tc.safe
+			want := tc.owner && !tc.safe
 			if callable != want {
 				t.Fatalf("callable=%v want=%v", callable, want)
 			}

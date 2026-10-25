@@ -35,7 +35,6 @@ func TestAgentDefaultsMirrorsDefaultBotConfig(t *testing.T) {
 		Allowlist  []string `json:"agent_command_allowlist"`
 		WriteEnabl bool     `json:"agent_file_write_enabled"`
 		Sandbox    string   `json:"agent_command_sandbox"`
-		MaxSteps   int      `json:"agent_max_steps"`
 		MaxTasks   int      `json:"subtask_max_tasks"`
 		MaxWorkers int      `json:"subtask_max_concurrency"`
 		TimeoutMS  int      `json:"agent_command_timeout_ms"`
@@ -58,10 +57,10 @@ func TestAgentDefaultsMirrorsDefaultBotConfig(t *testing.T) {
 	if payload.Sandbox != defaults.AgentCommandSandbox {
 		t.Fatalf("sandbox = %q, want %q", payload.Sandbox, defaults.AgentCommandSandbox)
 	}
-	if payload.MaxSteps != defaults.AgentMaxSteps || payload.TimeoutMS != defaults.AgentCommandTimeoutMS {
-		t.Fatalf("steps/timeout = %d/%d, want %d/%d",
-			payload.MaxSteps, payload.TimeoutMS, defaults.AgentMaxSteps, defaults.AgentCommandTimeoutMS)
+	if payload.TimeoutMS != defaults.AgentCommandTimeoutMS {
+		t.Fatalf("timeout = %d", payload.TimeoutMS)
 	}
+
 	if payload.MaxTasks != defaults.SubtaskMaxTasks || payload.MaxWorkers != defaults.SubtaskMaxConcurrency {
 		t.Fatalf("subtask tasks/concurrency = %d/%d, want %d/%d",
 			payload.MaxTasks, payload.MaxWorkers, defaults.SubtaskMaxTasks, defaults.SubtaskMaxConcurrency)

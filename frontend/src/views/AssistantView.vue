@@ -1852,10 +1852,6 @@
                 <span class="hint">查资料、记忆、提醒订阅、画图和读取工作区文件两种模式都照常。新建的机器人默认标准模式，安全模式只在你在这里选择后开启。</span>
               </div>
               <div class="field">
-                <label for="agent-steps">最大工具步数（1–32，默认 20；只管群成员，主人对话固定 32）</label>
-                <input id="agent-steps" v-model.number="form.agent_max_steps" class="input" type="number" inputmode="numeric" min="1" max="32" />
-              </div>
-              <div class="field">
                 <label for="subtask-max-tasks">单轮最多子任务数（≤16）</label>
                 <input id="subtask-max-tasks" v-model.number="form.subtask_max_tasks" class="input" type="number" min="1" max="16" />
               </div>
@@ -1893,13 +1889,7 @@
                   </span>
                 </div>
                 <div class="field wide">
-                  <label class="switch">
-                    <input v-model="form.agent_host_access_enabled" type="checkbox" />
-                    <span class="track" aria-hidden="true"></span>
-                    <span class="switch-label">允许主人操作宿主机（默认关闭）</span>
-                  </label>
-                  <span class="hint">开启后，主人和 WebUI 管理会话可读取宿主机文件、查询磁盘，并在单次批准后直接执行命令或脚本。命令以 Diana 的运行账号执行，可联网、修改文件和管理该账号有权管理的服务，不受工作区白名单或命令沙盒限制。安全模式下停用。</span>
-                  <span v-if="form.agent_host_access_enabled" class="hint danger">这相当于授予宿主账号的执行权限：获批脚本可能修改 Diana 自身和审批数据，无法保证硬性阻止所有破坏操作。关闭后禁止新的主机调用；已启动的命令不会因此撤销。</span>
+                  <span class="hint">标准模式下，主人和 WebUI 管理员默认可操作宿主机：读写文件、执行命令、联网和安装软件，常规任务无需逐条审批。权限等于 Diana 的运行账号；需要收紧时切换安全模式。工作区工具的限制不影响主人的宿主机工具。</span>
                 </div>
                 <!-- 读 / 写 / 执行三档分开：读错文件浪费一次调用，写错文件改的是磁盘，
                      执行则连「程序能碰什么」都要另一层来管。 -->
@@ -2508,7 +2498,6 @@ async function applyAgentDefaults(): Promise<void> {
     allowlistDraft.value = (defaults.agent_command_allowlist ?? []).join(",");
     form.value.agent_file_write_enabled = defaults.agent_file_write_enabled;
     form.value.agent_command_sandbox = defaults.agent_command_sandbox;
-    form.value.agent_max_steps = defaults.agent_max_steps;
     form.value.subtask_max_tasks = defaults.subtask_max_tasks;
     form.value.subtask_max_concurrency = defaults.subtask_max_concurrency;
     form.value.agent_command_timeout_ms = defaults.agent_command_timeout_ms;
@@ -4474,7 +4463,6 @@ function setForm(config: BotProfileConfig): void {
     agent_command_sandbox: config.agent_command_sandbox ?? "auto",
     agent_command_sandbox_allow_network: config.agent_command_sandbox_allow_network ?? false,
     agent_file_write_enabled: config.agent_file_write_enabled ?? false,
-    agent_host_access_enabled: config.agent_host_access_enabled ?? false,
     agent_browser_control_enabled: config.agent_browser_control_enabled ?? false,
     agent_browser_box_disabled: config.agent_browser_box_disabled ?? false,
     reply_reference_mode: config.reply_reference_mode ?? "auto",
