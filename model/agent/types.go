@@ -162,6 +162,7 @@ type Config struct {
 }
 
 type Request struct {
+	Hooks RunHooks
 	// ApprovalScope is a trusted caller-supplied session key, not model input.
 	ApprovalScope string
 	// ApprovalText is the authenticated current message, before prompt assembly.

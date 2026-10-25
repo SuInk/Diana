@@ -216,7 +216,7 @@ func TestHistoryToolKeepsMessageIDsOutOfReplies(t *testing.T) {
 
 	// 管理员把引用关掉时不教引用，只留禁令——那个动作会被配置丢掉。
 	off := NewRuntime(BotConfig{ReplyReferenceMode: ReplyDecorationOff}.WithDefaults(), nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
-	if notice := newDianaChatHistoryTool(off, event).idNotice(); notice != chatHistoryIDNotice {
+	if notice := newDianaChatHistoryTool(off, event).idNotice(); notice != chatHistoryIDNotice+chatHistoryEvidenceNotice {
 		t.Fatalf("reply-off notice = %q", notice)
 	}
 	offPrompt := off.systemPromptWithRelationshipAndAgentTools(event, nil, false, relationship, true, nil)

@@ -62,7 +62,7 @@ func (r *Runner) parallelReadBatch(calls []llm.ToolCall) ([]int, bool) {
 	return indices, len(indices) >= 2
 }
 
-func (r *Runner) runParallelReads(ctx context.Context, observer RunObserver, traceID string, modelTurn, firstCall int, calls []llm.ToolCall, steps []Step) []parallelRead {
+func (r *Runner) runParallelReads(ctx context.Context, hooks *runHookState, observer RunObserver, traceID string, modelTurn, firstCall int, calls []llm.ToolCall, steps []Step) []parallelRead {
 	reads := make([]parallelRead, len(calls))
 	var wg sync.WaitGroup
 	for index, call := range calls {
@@ -77,14 +77,14 @@ func (r *Runner) runParallelReads(ctx context.Context, observer RunObserver, tra
 		go func(read *parallelRead, ordinal int) {
 			defer recoverGoroutinePanic("parallel_reads")
 			defer wg.Done()
-			r.runParallelRead(ctx, observer, traceID, modelTurn, ordinal, read)
+			r.runParallelRead(ctx, hooks, observer, traceID, modelTurn, ordinal, read)
 		}(&reads[index], firstCall+index+1)
 	}
 	wg.Wait()
 	return reads
 }
 
-func (r *Runner) runParallelRead(ctx context.Context, observer RunObserver, traceID string, modelTurn, ordinal int, read *parallelRead) {
+func (r *Runner) runParallelRead(ctx context.Context, hooks *runHookState, observer RunObserver, traceID string, modelTurn, ordinal int, read *parallelRead) {
 	action := read.action
 	inputKeys := sortedInputKeys(action.Input)
 	read.metadata = webSearchRunMetadataFromInput(action.Tool, action.Input)
@@ -92,9 +92,17 @@ func (r *Runner) runParallelRead(ctx context.Context, observer RunObserver, trac
 	outputLimit := r.toolOutputLimit(read.tool)
 	toolCtx, cancel := contextWithToolBudget(WithToolOutputBudget(ctx, outputLimit), time.Duration(r.cfg.ToolTimeoutMS)*time.Millisecond, time.Duration(r.cfg.FinalizationReserveMS)*time.Millisecond)
 	startedAt := time.Now()
-	output, err := read.tool.Run(toolCtx, action.Input)
+	err := r.registry.OperationDisabledError(action.Tool, action.Input)
+	if err == nil {
+		err = hooks.before(toolCtx, action.Tool, action.Input)
+	}
+	blocked := err != nil
+	var output string
+	if err == nil {
+		output, err = read.tool.Run(toolCtx, action.Input)
+	}
 	cancel()
-	read.record = Step{Tool: action.Tool, Input: action.Input, DurationMS: time.Since(startedAt).Milliseconds()}
+	read.record = Step{Skipped: blocked, Tool: action.Tool, Input: action.Input, DurationMS: time.Since(startedAt).Milliseconds()}
 	// 与逐个执行同一套遮罩和截断，见 Runner.Run。
 	output = secretmask.Output(output)
 	read.rawOutput = output
@@ -106,6 +114,7 @@ func (r *Runner) runParallelRead(ctx context.Context, observer RunObserver, trac
 		read.record.Output = truncateToolOutput(output, outputLimit)
 		output = read.record.Output
 	}
+	hooks.after(ctx, read.record)
 	read.output = output
 	read.metadata = mergeRunMetadata(read.metadata, researchRunMetadataFromOutput(action.Tool, read.rawOutput, err))
 	emitRunEvent(ctx, observer, RunEvent{TraceID: traceID, Phase: RunPhaseToolCompleted, ModelTurn: modelTurn, ToolCall: ordinal, MaxToolCalls: r.cfg.MaxSteps, Tool: action.Tool, InputKeys: inputKeys, ToolInput: cloneToolInput(action.Input), ToolOutput: read.record.Output, Metadata: read.metadata, OutputChars: len([]rune(read.record.Output)), DurationMS: read.record.DurationMS, Error: read.record.Error})

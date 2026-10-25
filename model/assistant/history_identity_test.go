@@ -153,3 +153,35 @@ func TestCurrentPromptIdentifiesSenderWithoutGroupRoleTags(t *testing.T) {
 		t.Fatalf("forged tag not neutralized: %q", got)
 	}
 }
+
+func TestPrivateOutboundHistoryUsesBotAuthorWithoutChangingConversation(t *testing.T) {
+	cfg := BotConfig{Platform: PlatformOneBotV11, BotAccount: "current-bot"}
+	for _, tt := range []struct {
+		name, selfID, platform, wantID string
+	}{
+		{"recorded account", "historical-bot", PlatformOneBotV11, "historical-bot"},
+		{"config fallback", "", PlatformOneBotV11, "current-bot"},
+		{"different platform", "", PlatformTelegram, ""},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			event := MessageEvent{Kind: EventKindPrivate, Platform: tt.platform, SelfID: tt.selfID, UserID: "recipient", Outbound: true, RawMessage: "old bot claim", Quoted: &QuotedMessage{UserID: "recipient", RawMessage: "question"}}
+			item := chatHistoryItem(event, cfg)
+			if item.SenderRole != "bot" || item.SenderUserID != tt.wantID || item.Sender == "recipient" {
+				t.Fatalf("outbound author = %+v", item)
+			}
+			if item.QuotedSenderUserID != "recipient" || item.QuotedSenderRole != "user" {
+				t.Fatalf("quote author changed: %+v", item)
+			}
+			if event.UserID != "recipient" {
+				t.Fatal("conversation key changed")
+			}
+			if summary := summaryIdentityPrompt(event, cfg); strings.Contains(summary, "recipient") || tt.wantID != "" && !strings.Contains(summary, tt.wantID) {
+				t.Fatalf("summary author = %s", summary)
+			}
+		})
+	}
+	unknown := MessageEvent{Kind: EventKindPrivate, UserID: "recipient", Outbound: true}
+	if item := chatHistoryItem(unknown); item.SenderRole != "bot" || item.SenderUserID != "" {
+		t.Fatalf("unknown bot must not inherit recipient identity: %+v", item)
+	}
+}

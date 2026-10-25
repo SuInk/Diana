@@ -97,6 +97,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 		return nil, errors.New("agent: messages are required")
 	}
 	startedAt := time.Now()
+	hooks := &runHookState{hooks: req.Hooks}
 	r.loader = newDeferredToolLoader(r.registry, r.cfg.CoreTools)
 	if r.loader != nil {
 		r.loader.restore(req.LoadedTools)
@@ -214,7 +215,41 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 	// finalizeFields 是最后一次收尾动作带的调用方字段。静默收尾也照样交出去：
 	// 「这一轮不说话，只回一张表情包」是静默加字段表达的，要不要用由调用方决定。
 	var finalizeFields map[string]string
-	finish := func(text, reason string) *Response {
+	finishRetries := 0
+	finalApproved := false
+	reviewFinish := func(text, reason string, canContinue bool) (string, error) {
+		if req.Hooks.BeforeFinish == nil {
+			return "", nil
+		}
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
+		canContinue = canContinue && finishRetries < maxFinishRetries
+		decision, err := req.Hooks.BeforeFinish(ctx, FinishCandidate{
+			Text: text, Reason: reason, Steps: append([]Step(nil), steps...),
+			ModelTurns: modelTurns, CanContinue: canContinue,
+		})
+		if err != nil {
+			return "", fmt.Errorf("%w: %s", ErrFinishRejected, secretmask.Text(err.Error()))
+		}
+		feedback := strings.TrimSpace(secretmask.Text(decision.Feedback))
+		if feedback == "" {
+			finalApproved = true
+			return "", nil
+		}
+		if !canContinue {
+			return "", fmt.Errorf("%w: %s", ErrFinishRejected, feedback)
+		}
+		finishRetries++
+		return feedback, nil
+	}
+	finish := func(text, reason string) (*Response, error) {
+		if !finalApproved {
+			if _, err := reviewFinish(text, reason, false); err != nil {
+				emitRunEvent(ctx, req.Observer, RunEvent{TraceID: traceID, Phase: RunPhaseFailed, ModelTurn: modelTurns, Error: err.Error(), Usage: usage})
+				return nil, err
+			}
+		}
 		duration := time.Since(startedAt)
 		response := &Response{
 			FinalizeFields: finalizeFields,
@@ -234,23 +269,28 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 			Phase:           RunPhaseCompleted,
 			ModelTurn:       modelTurns,
 			ToolCall:        toolCalls,
-			ToolsExecuted:   toolCalls + toolLoadCalls + introspectionCalls,
+			ToolsExecuted:   executedStepCount(steps),
 			ToolsDurationMS: toolsDuration.Milliseconds(),
 			MaxToolCalls:    r.cfg.MaxSteps,
 			DurationMS:      duration.Milliseconds(),
 			FinishReason:    reason,
 			Usage:           usage,
 		})
-		return response
+		return response, nil
 	}
 	// finishSilent 收口一次静默结束：没有正文，也不该被下游兜底成任何文案。
 	// Text 保持为空，由 Silent 告诉调用方「这是模型的决定，不是生成失败」。
-	finishSilent := func(action llmAction, reason string) *Response {
-		response := finish("", reason)
+	finishSilent := func(action llmAction, reason string) (*Response, error) {
+		response, err := finish(action.Content, reason)
+		if err != nil {
+			return nil, err
+		}
+		response.Text = ""
+		response.Sources = responseSources("", steps)
 		response.Silent = true
 		response.SilentReason = strings.TrimSpace(action.SilentReason)
 		response.SilentContent = action.Content
-		return response
+		return response, nil
 	}
 	fail := func(err error) (*Response, error) {
 		emitRunEvent(ctx, req.Observer, RunEvent{
@@ -258,7 +298,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 			Phase:           RunPhaseFailed,
 			ModelTurn:       modelTurns,
 			ToolCall:        toolCalls,
-			ToolsExecuted:   toolCalls + toolLoadCalls + introspectionCalls,
+			ToolsExecuted:   executedStepCount(steps),
 			ToolsDurationMS: toolsDuration.Milliseconds(),
 			MaxToolCalls:    r.cfg.MaxSteps,
 			DurationMS:      time.Since(startedAt).Milliseconds(),
@@ -268,6 +308,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 		return nil, err
 	}
 	for toolCalls < r.cfg.MaxSteps {
+		finalApproved = false
 		planningCtx, cancel, ok := contextWithFinalizationReserve(ctx, time.Duration(r.cfg.FinalizationReserveMS)*time.Millisecond)
 		if !ok {
 			finishReason = "finalization_reserved"
@@ -281,7 +322,11 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 		definitions := r.turnDefinitions(imageTaskQueued)
 		markLoopCacheBreakpoint(messages, stableCacheIndex)
 		modelStartedAt := time.Now()
-		planningRequest := llm.GenerateRequest{Messages: withToolResultReminder(messages, r.cfg.ToolResultReminder), Tools: definitions}
+		planningRequest, prepareErr := hooks.prepare(planningCtx, llm.GenerateRequest{Messages: withToolResultReminder(messages, r.cfg.ToolResultReminder), Tools: definitions})
+		if prepareErr != nil {
+			cancel()
+			return fail(prepareErr)
+		}
 		resp, interjected, err := generateWithInterjections(planningCtx, req.Interjections, func(ctx context.Context) (*llm.GenerateResponse, error) {
 			return r.client.Generate(ctx, planningRequest)
 		})
@@ -374,7 +419,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 					calls[i] = resp.ToolCalls[index]
 				}
 				batchStartedAt := time.Now()
-				reads := r.runParallelReads(ctx, req.Observer, traceID, modelTurns, toolCalls, calls, steps)
+				reads := r.runParallelReads(ctx, hooks, req.Observer, traceID, modelTurns, toolCalls, calls, steps)
 				toolsDuration += time.Since(batchStartedAt)
 				toolCalls += len(reads)
 				lastToolSignature = ""
@@ -434,6 +479,17 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 			}
 			continue
 		}
+		if (ok && action.Action == "final") || (!ok && !looksLikeAgentAction(lastText)) {
+			feedback, reviewErr := reviewFinish(action.Content, "candidate", true)
+			if reviewErr != nil {
+				return fail(reviewErr)
+			}
+			if feedback != "" {
+				emitProtocolRepair(ctx, req.Observer, traceID, modelTurns, toolCalls, r.cfg.MaxSteps, feedback)
+				messages = appendToolRepair(messages, resp, lastText, feedback)
+				continue
+			}
+		}
 		if !ok {
 			if looksLikeAgentAction(lastText) {
 				protocolRepairs++
@@ -448,7 +504,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 				})
 				continue
 			}
-			return finish(action.Content, "plain_text"), nil
+			return finish(action.Content, "plain_text")
 		}
 		if action.Action == "final" {
 			finalizeFields = r.finalizeFieldValues(action)
@@ -484,7 +540,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 				}
 				// 模型自己决定这一轮不说话：没有正文，也就没有排版、证据账本和
 				// 空收尾可校验——那几项校验的对象都是「要发出去的那句话」。
-				return finishSilent(action, "silent"), nil
+				return finishSilent(action, "silent")
 			}
 			if reason := finalizeLayoutIssue(action); reason != "" {
 				protocolRepairs++
@@ -518,7 +574,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 				}
 				continue
 			}
-			return finish(action.Content, "final"), nil
+			return finish(action.Content, "final")
 		}
 		if action.Action != "tool" {
 			// 模型输出了未知动作时，把错误作为用户消息回填，让它下一轮自我修正。
@@ -676,13 +732,18 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 		if err == nil {
 			err = r.registry.OperationDisabledError(action.Tool, action.Input)
 		}
+		blocked := err != nil
+		if err == nil {
+			err = hooks.before(toolCtx, action.Tool, action.Input)
+			blocked = err != nil
+		}
 		if err == nil {
 			output, err = tool.Run(toolCtx, action.Input)
 		}
 		toolCancel()
 		toolDuration := time.Since(toolStartedAt)
 		toolsDuration += toolDuration
-		record := Step{Index: len(steps) + 1, Tool: action.Tool, Input: action.Input, DurationMS: toolDuration.Milliseconds()}
+		record := Step{Index: len(steps) + 1, Tool: action.Tool, Input: action.Input, Skipped: blocked, DurationMS: toolDuration.Milliseconds()}
 		// 检索阶段从未截断的输出提取，避免外层截断损坏 JSON 后误报来源缺失。
 		//
 		// 工具结果和报错原样进模型上下文，也进运行记录（下一轮的 carryover、事件
@@ -708,6 +769,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 			}
 		}
 		steps = append(steps, record)
+		hooks.after(ctx, record)
 		toolMetadata = mergeRunMetadata(toolMetadata, researchRunMetadataFromOutput(action.Tool, rawOutput, err))
 
 		emitRunEvent(ctx, req.Observer, RunEvent{
@@ -728,7 +790,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 		if err == nil {
 			if terminal, ok := tool.(TerminalResultTool); ok {
 				if text, done := terminal.TerminalResult(output); done {
-					return finish(text, "terminal_tool"), nil
+					return finish(text, "terminal_tool")
 				}
 			}
 		}
@@ -771,7 +833,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 				if skipped {
 					content = "本次调用没有执行：当前规划步只执行了 " + nativeCall.Name + "。如仍需要，请在下一步重新调用。"
 				}
-				messages = append(messages, llm.Message{Role: llm.RoleTool, Content: content, ToolCallID: call.ID, ToolName: call.Name, ToolError: skipped, Priority: observation.Priority})
+				messages = append(messages, llm.Message{Role: llm.RoleTool, Content: content, ToolCallID: call.ID, ToolName: call.Name, ToolError: skipped || err != nil, Priority: observation.Priority})
 			}
 			if len(observation.Parts) > 0 {
 				messages = append(messages, observation)
@@ -796,6 +858,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 		}
 	}
 
+	finalApproved = false
 	// MaxSteps 限制工具推理轮数，不应吞掉最后一个工具结果。预算耗尽后额外
 	// 允许一次禁止工具调用的收尾，让模型基于已有观察生成可发送回复。
 	if finishReason == "final" {
@@ -818,7 +881,11 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 	for {
 		modelStartedAt := time.Now()
 		var err error
-		resp, err = r.client.Generate(ctx, finalizationRequest)
+		prepared, prepareErr := hooks.prepare(ctx, finalizationRequest)
+		if prepareErr != nil {
+			return fail(prepareErr)
+		}
+		resp, err = r.client.Generate(ctx, prepared)
 		if err == nil && resp != nil && len(resp.ToolCalls) == 0 {
 			err = llm.RejectionNoticeError(resp.Text)
 		}
@@ -850,13 +917,13 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 		action := finalizeAction(call, finalText)
 		finalizeFields = r.finalizeFieldValues(action)
 		if action.Silent && !imageTaskQueued {
-			return finishSilent(action, finishReason), nil
+			return finishSilent(action, finishReason)
 		}
 		if issue := finalizeLayoutIssue(action); issue != "" {
 			return fail(fmt.Errorf("finalize_layout: %s（finish_reason=%s）", issue, finishReason))
 		}
 		if imageTaskQueued && !imageTaskFinalIsPending(action) {
-			return finish("图片任务已经开始生成，完成后会自动发送。", finishReason), nil
+			return finish("图片任务已经开始生成，完成后会自动发送。", finishReason)
 		}
 		// 收尾阶段是空正文的最后一次重试机会：仍然为空就按协议错误失败，
 		// 让事件中心记下 empty_finalize，而不是把空文本交给下游兜底发送。
@@ -864,43 +931,43 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 		if action.Content == "" && !imageTaskQueued {
 			return fail(fmt.Errorf("%w（finish_reason=%s）", errEmptyFinalize, finishReason))
 		}
-		return finish(action.Content, finishReason), nil
+		return finish(action.Content, finishReason)
 	}
 	if action, ok := parseAction(finalText); ok && action.Action == "final" {
 		if action.Silent && !imageTaskQueued {
-			return finishSilent(action, finishReason), nil
+			return finishSilent(action, finishReason)
 		}
 		if issue := finalizeLayoutIssue(action); issue != "" {
 			return fail(fmt.Errorf("finalize_layout: %s（finish_reason=%s）", issue, finishReason))
 		}
 		if imageTaskQueued && !imageTaskFinalIsPending(action) {
-			return finish("图片任务已经开始生成，完成后会自动发送。", finishReason), nil
+			return finish("图片任务已经开始生成，完成后会自动发送。", finishReason)
 		}
 		if action.Content == "" && !imageTaskQueued {
 			return fail(fmt.Errorf("%w（finish_reason=%s）", errEmptyFinalize, finishReason))
 		}
-		return finish(action.Content, finishReason), nil
+		return finish(action.Content, finishReason)
 	}
 	if imageTaskQueued {
-		return finish("图片任务已经开始生成，完成后会自动发送。", finishReason), nil
+		return finish("图片任务已经开始生成，完成后会自动发送。", finishReason)
 	}
 	if !looksLikeAgentAction(finalText) {
 		if finalText == "" {
 			return fail(fmt.Errorf("%w（finish_reason=%s）", errEmptyFinalize, finishReason))
 		}
-		return finish(finalText, finishReason), nil
+		return finish(finalText, finishReason)
 	}
 	lastText = finalText
 	if lastText == "" {
 		lastText = "这次处理没有生成可发送的最终回复，请稍后再试。"
 	}
 	if action, ok := parseAction(lastText); ok && action.Action == "tool" {
-		return finish("这次处理没有顺利收尾；已经执行过的操作不会重复执行，请稍后再试。", finishReason), nil
+		return finish("这次处理没有顺利收尾；已经执行过的操作不会重复执行，请稍后再试。", finishReason)
 	}
 	if looksLikeAgentAction(lastText) {
-		return finish("这次处理没有生成可发送的最终回复，请稍后再试。", finishReason), nil
+		return finish("这次处理没有生成可发送的最终回复，请稍后再试。", finishReason)
 	}
-	return finish(lastText, finishReason), nil
+	return finish(lastText, finishReason)
 }
 
 // callerCacheBreakpoint 返回调用方标出的稳定前缀末尾；没标时取最后一条非

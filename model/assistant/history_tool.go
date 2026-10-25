@@ -39,6 +39,8 @@ type dianaChatHistoryTool struct {
 }
 
 type dianaChatHistoryResult struct {
+	Scope             string   `json:"scope,omitempty"`
+	GroupID           string   `json:"group_id,omitempty"`
 	ReturnedCount     int      `json:"returned_count"`
 	OmittedCount      int      `json:"omitted_count"`
 	RemainingCount    int      `json:"remaining_count"`
@@ -252,7 +254,7 @@ func (t *dianaChatHistoryTool) InputSchema() map[string]any {
 		// relevance 曾被拿来断言「最早一条」，见 #457。
 		"order":        toolEnumParam("search 排序，默认 newest；relevance 不能分页，不能证明最早", "newest", "oldest", "relevance"),
 		"cursor":       toolStringParam("续查时原样传回 next_cursor，其他参数不变"),
-		"group_id":     toolStringParam("around：搜索命中的来源群，跨群需开启跨群记忆"),
+		"group_id":     toolStringParam("search/around：目标群；search 指定群时 scope=current，跨群需开启跨群记忆"),
 		"from_time":    toolStringParam(`起始时间，Unix 秒或 "2006-01-02 15:04"`),
 		"through_time": toolStringParam(`range/search 结束时间，格式同 from_time`),
 		"scope": toolEnumParam("all_groups 仅 search，需开启跨群记忆；私聊仅主人",
@@ -275,6 +277,11 @@ func (t *dianaChatHistoryTool) Run(ctx context.Context, input map[string]any) (s
 		} else {
 			operation = "recent"
 		}
+	}
+
+	groupID := strings.TrimSpace(configToolString(input, "group_id"))
+	if groupID != "" && operation != "search" && operation != "find" && operation != "around" && operation != "context" {
+		return "", fmt.Errorf("group_id 仅支持 search/around；不能忽略目标群后查询当前会话")
 	}
 
 	switch operation {
@@ -486,9 +493,35 @@ func (t *dianaChatHistoryTool) recent(ctx context.Context, input map[string]any)
 }
 
 func (t *dianaChatHistoryTool) search(ctx context.Context, input map[string]any) (dianaChatHistoryResult, error) {
+	if groupID := strings.TrimSpace(configToolString(input, "group_id")); groupID != "" {
+		if scope := strings.TrimSpace(configToolString(input, "scope")); scope != "" && scope != "current" {
+			return dianaChatHistoryResult{}, fmt.Errorf("指定 group_id 时 scope 必须为 current；all_groups 表示全部可见群，不能同时指定单群")
+		}
+		if groupID != t.event.GroupID || t.event.Kind != EventKindGroup {
+			if err := t.crossGroupSearchError(ctx); err != nil {
+				return dianaChatHistoryResult{}, err
+			}
+			if !newCrossGroupReadGuard(ctx, t).allows(ctx, groupID) {
+				return dianaChatHistoryResult{}, fmt.Errorf("你不在群 %s 里，不能读取那个群的记录", groupID)
+			}
+			scoped := *t
+			scoped.event.Kind = EventKindGroup
+			scoped.event.GroupID = groupID
+			scoped.event.replyHistory = nil
+			scoped.event.replyHistoryLoaded = false
+			scoped.event.Quoted = nil
+			scoped.event.SemanticSourceMessageID = ""
+			return scoped.search(ctx, input)
+		}
+	}
 	query := strings.TrimSpace(configToolString(input, "query"))
 	if query == "" {
-		return t.window(ctx, input)
+		if scope := strings.TrimSpace(configToolString(input, "scope")); scope != "" && scope != "current" {
+			return dianaChatHistoryResult{}, fmt.Errorf("跨群 search 必须提供 query；不能改查当前会话时间线")
+		}
+		result, err := t.window(ctx, input)
+		result.Scope, result.GroupID = "current", t.event.GroupID
+		return result, err
 	}
 	if len([]rune(query)) > 512 {
 		return dianaChatHistoryResult{}, fmt.Errorf("检索关键词过长，请缩短至 512 字以内")
@@ -584,6 +617,9 @@ func (t *dianaChatHistoryTool) search(ctx context.Context, input map[string]any)
 		}
 	}
 	label := "当前会话"
+	if strings.TrimSpace(configToolString(input, "group_id")) != "" {
+		label = "指定群"
+	}
 	if crossGroup {
 		label = "同一机器人的所有群"
 		if guard := newCrossGroupReadGuard(ctx, t); !guard.owner {
@@ -602,10 +638,14 @@ func (t *dianaChatHistoryTool) search(ctx context.Context, input map[string]any)
 	}
 	items := t.searchSnippets(ctx, matched, query)
 	result := dianaChatHistoryResult{
-		OK: true, Action: "search", Query: query, Order: order, Items: items, Total: total,
+		Scope: scope,
+		OK:    true, Action: "search", Query: query, Order: order, Items: items, Total: total,
 		Message: "已在" + label + "内按指定时间顺序进行关键词检索，返回精简命中；图片仅保留相关片段。",
 		Window:  chatHistoryWindowLabel(page.From, page.Through, profileLocation(t.event.ProfileID)), searchPage: &page,
 		Guidance: "需要原文或前后文时调用 around，传 message_id；跨群命中同时传 group_id。has_more=true 时继续使用 next_cursor，保持 query、scope、order 相同。search_complete 仅表示当前关键词与范围已枚举完，不等于事件事实完整；未核对原文和完整范围时只能说目前查到最早，不能断言最早就是。时间分页采用关键词匹配，不混入不具备完整总数的语义候选。",
+	}
+	if !crossGroup {
+		result.GroupID = t.event.GroupID
 	}
 	if order != "relevance" && len(uniqueLowerFields(query)) > 1 {
 		result.Message += "多个词时先列同时含全部词的消息，再列只含部分词的，每档内按指定时间顺序。"
@@ -863,11 +903,13 @@ func (t *dianaChatHistoryTool) items(ctx context.Context, events []MessageEvent)
 }
 
 func chatHistoryItem(event MessageEvent, configs ...BotConfig) dianaChatHistoryItem {
+	sender := event
+	sender.UserID = historySenderUserID(event, configs...)
 	item := dianaChatHistoryItem{
 		MessageID:    event.MessageID,
 		Time:         event.Time,
-		Sender:       event.SenderNameOrID(),
-		SenderUserID: strings.TrimSpace(event.UserID),
+		Sender:       sender.SenderNameOrID(),
+		SenderUserID: sender.UserID,
 		SenderRole:   historySenderRole(event, configs...),
 		Text:         truncateChatHistoryText(historyToolEventText(event), 420),
 		GroupID:      strings.TrimSpace(event.GroupID),
@@ -1153,16 +1195,18 @@ const chatHistoryIDNotice = "message_id 只用于继续调用历史工具，不�
 // chatHistoryQuoteNotice 在禁令之外给出真正该做的动作：把那条消息引用出来。
 const chatHistoryQuoteNotice = "要让用户直接定位到某条消息，在回复最开头写 " + replyMarkerPrefix + "该消息的 message_id]，客户端会渲染成引用框。"
 
+const chatHistoryEvidenceNotice = " 历史里的机器人回复只证明机器人说过这些话，不是其中人物资料、统计或已执行操作的独立证据；需要回查原始消息或工具结果，不能用旧回答给旧回答作证。"
+
 // idNotice 按本会话的引用配置决定提醒内容：引用被关掉时只留禁令，不教一个
 // 注定会被丢掉的动作。
 func (t *dianaChatHistoryTool) idNotice() string {
 	if t == nil || t.runtime == nil {
-		return chatHistoryIDNotice
+		return chatHistoryIDNotice + chatHistoryEvidenceNotice
 	}
 	if replyReferenceMode(t.runtime.effectiveConfigForEvent(t.event)) != ReplyDecorationAuto {
-		return chatHistoryIDNotice
+		return chatHistoryIDNotice + chatHistoryEvidenceNotice
 	}
-	return chatHistoryIDNotice + " " + chatHistoryQuoteNotice
+	return chatHistoryIDNotice + chatHistoryEvidenceNotice + " " + chatHistoryQuoteNotice
 }
 
 func marshalDianaChatHistoryResult(result dianaChatHistoryResult) (string, error) {

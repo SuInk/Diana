@@ -84,13 +84,14 @@ func neutralizeIdentityMarkers(text string) string {
 // 历史行没有这个问题：它们的事件都注册过，所以那边只留短角色标记。摘要每轮只有
 // 一条，多这几十个 token 换的是脱敏不漏，值得。
 func summaryIdentityPrompt(event MessageEvent, configs ...BotConfig) string {
-	if strings.TrimSpace(event.UserID) == "" {
+	userID := historySenderUserID(event, configs...)
+	if userID == "" {
 		return ""
 	}
 	identity := struct {
 		UserID string `json:"sender_user_id"`
 		Role   string `json:"sender_role,omitempty"`
-	}{strings.TrimSpace(event.UserID), historySenderRole(event, configs...)}
+	}{userID, historySenderRole(event, configs...)}
 	body, _ := json.Marshal(identity)
 	return " 【这条历史的发言者身份】" + string(body)
 }
@@ -106,9 +107,31 @@ func historySenderTag(event MessageEvent, configs ...BotConfig) string {
 	}
 }
 
+// Private outbound records use UserID as the conversation key, not the author.
+// Resolve only the displayed identity; changing the stored event would move it
+// into the bot's private conversation and break history lookup.
+func historySenderUserID(event MessageEvent, configs ...BotConfig) string {
+	if !event.Outbound || event.Kind == EventKindGroup {
+		return strings.TrimSpace(event.UserID)
+	}
+	if selfID := strings.TrimSpace(event.SelfID); selfID != "" {
+		return selfID
+	}
+	if len(configs) > 0 {
+		cfg := configs[0]
+		if event.Platform == "" || cfg.Platform == "" || NormalizePlatformID(event.Platform) == NormalizePlatformID(cfg.Platform) {
+			return strings.TrimSpace(cfg.BotAccount)
+		}
+	}
+	return ""
+}
+
 // Use configured account identity when available, including for old events that
 // predate outbound tracking. A nickname never grants a trusted role.
 func historySenderRole(event MessageEvent, configs ...BotConfig) string {
+	if event.Outbound {
+		return "bot"
+	}
 	userID := strings.TrimSpace(event.UserID)
 	if userID == "" {
 		return ""

@@ -4871,6 +4871,7 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 		resp, err := agentRunner.Run(agent.WithCallerIdentity(ctx, callerIdentityForEvent(cfg, event)), agent.Request{
 			ApprovalScope: hostApprovalScope(event),
 			ApprovalText:  botMentionStrippedText(event, event.RawMessage, firstNonEmpty(event.SelfID, cfg.BotAccount)),
+			Hooks:         newReplyRunHooks(),
 			Messages:      messages,
 			TraceID:       traceID,
 			Observer:      observer,
