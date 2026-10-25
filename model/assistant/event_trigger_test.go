@@ -221,9 +221,19 @@ func TestEventTriggerFiresOnceWhenWatchedUserSpeaks(t *testing.T) {
 	if got := len(channel.sentSnapshot()); got != 1 {
 		t.Fatalf("一次性任务触发了 %d 次", got)
 	}
-	spec, _ := EventTriggerSpec(store.items[0])
-	if eventTriggerStatus(store.items[0], spec) != "used" || spec.FireCount != 1 {
-		t.Fatalf("status=%s spec=%#v", eventTriggerStatus(store.items[0], spec), spec)
+	// 消息先发出、状态后落库，等后台协程记完账再看。
+	waitForCondition(t, 3*time.Second, func() bool {
+		items := store.Reminders()
+		if len(items) == 0 {
+			return false
+		}
+		spec, _ := EventTriggerSpec(items[0])
+		return eventTriggerStatus(items[0], spec) == "used"
+	})
+	item := store.Reminders()[0]
+	spec, _ := EventTriggerSpec(item)
+	if eventTriggerStatus(item, spec) != "used" || spec.FireCount != 1 {
+		t.Fatalf("status=%s spec=%#v", eventTriggerStatus(item, spec), spec)
 	}
 }
 

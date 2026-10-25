@@ -4898,16 +4898,22 @@ func (s *stubLLMProfileStore) SaveProfiles(set llm.ProfileSet) error {
 }
 
 type stubReminderStore struct {
+	// mu 只护住 Reminders/SaveReminders：事件触发在后台协程里落库，测试要读最新状态就走 Reminders()。
+	mu    sync.Mutex
 	items []Reminder
 }
 
 // Reminders 封装当前模块的 Reminders 逻辑。
 func (s *stubReminderStore) Reminders() []Reminder {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	return append([]Reminder(nil), s.items...)
 }
 
 // SaveReminders 保存Reminders数据。
 func (s *stubReminderStore) SaveReminders(items []Reminder) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.items = append([]Reminder(nil), items...)
 	return nil
 }
