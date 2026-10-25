@@ -121,7 +121,11 @@ func TestRunnerModelCanFinalizeWithoutSearch(t *testing.T) {
 	for _, response := range []string{`{"action":"final","content":"今天挺好的。"}`, "今天挺好的。"} {
 		t.Run(response, func(t *testing.T) {
 			tool := &recordingSearchTool{output: "unused"}
-			client := &scriptedClient{responses: []string{response}}
+			client := &scriptedClient{responses: []string{response, response}}
+			wantRequests := 1
+			if _, structured := parseAction(response); !structured {
+				wantRequests = 2
+			}
 			runner, err := NewRunner(client, Config{MaxSteps: 2, ProtocolRepairLimit: 2}, NewToolRegistry(tool))
 			if err != nil {
 				t.Fatal(err)
@@ -130,7 +134,7 @@ func TestRunnerModelCanFinalizeWithoutSearch(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if resp.Text != "今天挺好的。" || tool.calls != 0 || len(client.requests) != 1 || client.requests[0].ToolChoice != "" {
+			if resp.Text != "今天挺好的。" || tool.calls != 0 || len(client.requests) != wantRequests || client.requests[0].ToolChoice != "" {
 				t.Fatalf("resp=%#v calls=%d requests=%#v", resp, tool.calls, client.requests)
 			}
 		})

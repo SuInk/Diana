@@ -220,6 +220,8 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 	// 加起来就是这一轮花在工具上的时间，控制台的响应耗时分解用它。
 	var toolsDuration time.Duration
 	protocolRepairs := 0
+	// 普通文本可能只是中间说明（例如「[搜索参展商名单]」），每轮给一次继续机会。
+	plainTextRepaired := false
 	// silentContentRepaired 保证「静默却带正文」只打回一次，见 action.Silent 分支。
 	silentContentRepaired := false
 	// detailReviewed 保证联网收尾的细节复核只跑一次，见 reviewUnsupportedDetails。
@@ -499,6 +501,13 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 				finishReason = "protocol_repair_exhausted"
 				break
 			}
+			continue
+		}
+		if !ok && !looksLikeAgentAction(lastText) && !plainTextRepaired {
+			plainTextRepaired = true
+			reason := "本次只返回了普通文本，尚未明确完成任务。请检查用户请求和已有工具结果：如果还有未完成的工作，直接调用工具继续，不要只描述准备执行的动作；如果已经完成，请调用 agent_finalize 给出最终答复。不支持原生工具调用时使用 tool 或 final JSON。不要重复已经成功执行的操作。"
+			emitProtocolRepair(ctx, req.Observer, traceID, modelTurns, toolCalls, r.cfg.MaxSteps, reason)
+			messages = appendToolRepair(messages, resp, lastText, reason)
 			continue
 		}
 		if (ok && action.Action == "final") || (!ok && !looksLikeAgentAction(lastText)) {

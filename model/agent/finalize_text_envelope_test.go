@@ -32,7 +32,7 @@ func TestRunnerDecodesFinalizeEnvelopeEmittedAsPlainText(t *testing.T) {
 // 用户要求输出的 JSON 不能被当成信封吞掉：多一个陌生键就按正文原样返回。
 func TestRunnerKeepsUserRequestedJSONAsPlainText(t *testing.T) {
 	payload := `{"content":"hi","silent":false,"extra":1}`
-	client := &scriptedClient{responses: []string{payload}}
+	client := &scriptedClient{responses: []string{payload, payload}}
 	runner, err := NewRunner(client, Config{WorkDir: t.TempDir(), MaxSteps: 3}, nil)
 	if err != nil {
 		t.Fatal(err)

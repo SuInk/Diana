@@ -68,7 +68,8 @@ func newPersistentVoiceFixture(t *testing.T, reply string, ttsStatus int, sendMo
 	t.Cleanup(server.Close)
 	t.Setenv("DIANA_TTS_OUTPUT_DIR", t.TempDir())
 
-	provider := &sequenceLLMProvider{replies: []string{`{"action":"none","prompt":""}`, reply}}
+	// 普通文本会获得一次续跑机会；两次都返回同一正文，避免落入桩的默认回复。
+	provider := &sequenceLLMProvider{replies: []string{`{"action":"none","prompt":""}`, reply, reply}}
 	channel := &recordingChannel{}
 	runtime := NewRuntime(BotConfig{AgentEnabled: false}, channel, NewDefaultPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
