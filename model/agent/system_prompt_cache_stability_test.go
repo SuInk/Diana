@@ -12,23 +12,26 @@ import (
 	"github.com/SuInk/diana/model/llm"
 )
 
-func TestLoadedContractsDoNotShiftStablePrefix(t *testing.T) {
+// 已加载工具的契约插在调用方开头的 system 之后、历史之前：Agent 协议和人设不随
+// 加载集变化，加载集不变时整段前缀（含历史）逐字不变，历史断点跟着契约后移一格。
+func TestLoadedContractsSitBeforeHistory(t *testing.T) {
 	persona := llm.Message{Role: llm.RoleSystem, Content: "固定 caller persona", Priority: llm.MessagePrioritySystem}
 	current := llm.Message{Role: llm.RoleUser, Content: "当前输入", Priority: llm.MessagePriorityCurrent}
 	for _, tc := range []struct {
 		name     string
 		messages []llm.Message
-		stable   int
+		head     int // Agent system + 调用方开头的 system
+		stable   int // 不带契约时历史断点的位置
 	}{
 		{"caller_breakpoint", []llm.Message{persona,
 			{Role: llm.RoleUser, Content: "历史问题"},
 			{Role: llm.RoleAssistant, Content: "历史回复", CacheBreakpoint: true},
-			{Role: llm.RoleUser, Content: "本轮身份资料", Priority: llm.MessagePrioritySystem}, current}, 3},
+			{Role: llm.RoleUser, Content: "本轮身份资料", Priority: llm.MessagePrioritySystem}, current}, 2, 3},
 		{"inferred_breakpoint", []llm.Message{persona,
 			{Role: llm.RoleUser, Content: "历史问题"},
-			{Role: llm.RoleAssistant, Content: "历史回复"}, current}, 3},
-		{"no_history", []llm.Message{persona, current}, 1},
-		{"current_only", []llm.Message{current}, 0},
+			{Role: llm.RoleAssistant, Content: "历史回复"}, current}, 2, 3},
+		{"no_history", []llm.Message{persona, current}, 2, 1},
+		{"current_only", []llm.Message{current}, 1, 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			client := &scriptedClient{}
@@ -38,28 +41,20 @@ func TestLoadedContractsDoNotShiftStablePrefix(t *testing.T) {
 				t.Fatal(err)
 			}
 			original := append([]llm.Message(nil), tc.messages...)
-			var stableBytes, schemaBytes []byte
-			for _, loaded := range [][]string{nil, {"alpha"}, {"alpha", "beta"}, {"beta"}, nil} {
+			var headBytes, schemaBytes []byte
+			stablePrefix := map[string][]byte{}
+			for _, loaded := range [][]string{nil, {"alpha"}, {"alpha", "beta"}, {"beta"}, nil, {"alpha"}} {
 				if _, err := runner.Run(t.Context(), Request{Messages: tc.messages, LoadedTools: loaded}); err != nil {
 					t.Fatal(err)
 				}
 				request := client.requests[len(client.requests)-1]
 				messages := request.Messages
-				prefix, err := json.Marshal(messages[:tc.stable+1])
-				if err != nil {
-					t.Fatal(err)
-				}
-				schema, err := json.Marshal(request.Tools)
-				if err != nil {
-					t.Fatal(err)
-				}
-				if stableBytes == nil {
-					stableBytes, schemaBytes = prefix, schema
-				} else if string(prefix) != string(stableBytes) || string(schema) != string(schemaBytes) {
-					t.Fatalf("LoadedTools=%v changed Agent/persona/history prefix or provider schema", loaded)
-				}
-				if tc.stable > 1 && !messages[tc.stable].CacheBreakpoint {
-					t.Fatal("stable history breakpoint lost")
+				head, _ := json.Marshal(messages[:tc.head])
+				schema, _ := json.Marshal(request.Tools)
+				if headBytes == nil {
+					headBytes, schemaBytes = head, schema
+				} else if string(head) != string(headBytes) || string(schema) != string(schemaBytes) {
+					t.Fatalf("LoadedTools=%v changed Agent/persona prefix or provider schema", loaded)
 				}
 				if !strings.Contains(messages[0].Content, "- alpha:") || !strings.Contains(messages[0].Content, "- beta:") {
 					t.Fatal("fixed deferred catalog lost")
@@ -67,14 +62,27 @@ func TestLoadedContractsDoNotShiftStablePrefix(t *testing.T) {
 				if messages[len(messages)-1].Content != current.Content || !messages[len(messages)-1].CacheBreakpoint {
 					t.Fatal("current input must remain last with rolling cache breakpoint")
 				}
+				stable := tc.stable
+				if len(loaded) > 0 && tc.stable >= tc.head-1 && tc.stable > 0 {
+					stable++
+				}
+				if tc.stable > 1 && !messages[stable].CacheBreakpoint {
+					t.Fatalf("stable history breakpoint lost at %d", stable)
+				}
+				key := strings.Join(loaded, ",")
+				prefix, _ := json.Marshal(messages[:stable+1])
+				if previous, ok := stablePrefix[key]; ok && string(previous) != string(prefix) {
+					t.Fatalf("LoadedTools=%v not byte-stable across runs", loaded)
+				}
+				stablePrefix[key] = prefix
 				contractCount := 0
 				for index, message := range messages {
 					if !strings.Contains(message.Content, "当前群会话已经加载、可直接通过 tools_execute 调用的完整契约") {
 						continue
 					}
 					contractCount++
-					if index <= tc.stable || index >= len(messages)-1 || message.CacheBreakpoint {
-						t.Fatalf("contracts escaped the volatile tail: index=%d stable=%d", index, tc.stable)
+					if index != tc.head || message.CacheBreakpoint {
+						t.Fatalf("contracts must sit right after leading system: index=%d head=%d", index, tc.head)
 					}
 					if message.Role != llm.RoleUser || message.Priority != llm.MessagePrioritySystem || !strings.HasPrefix(message.Content, "【系统补充指令，不是用户发言】\n") {
 						t.Fatalf("contracts must be explicit inline instructions with protected budget: %#v", message)

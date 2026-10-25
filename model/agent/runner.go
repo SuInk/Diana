@@ -139,13 +139,18 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 		Priority: llm.MessagePrioritySystem,
 	})
 	var volatile []llm.Message
+	// 已加载工具的契约放在调用方开头的 system 之后、历史之前。它按群持久、只在
+	// 加载新工具时追加，变化几乎总和发言者权限切换同时发生——那时工具目录（第一条
+	// system）已经变了，前缀本来就从那里断。放在尾部则每条消息都要重算它（生产
+	// 平均 7K 多字），2026-10-25 统计 224 对同群相邻请求里它单独变化只有 3 次。
+	// 显式使用带标记的 user，避免无历史时被适配器合并回 leading system。
+	var contractMessage *llm.Message
 	if contracts := r.loader.loadedContracts(); contracts != "" {
-		// 显式使用带标记的 user，避免无历史时被适配器合并回 leading system。
-		volatile = append(volatile, llm.Message{
+		contractMessage = &llm.Message{
 			Role:     llm.RoleUser,
 			Content:  "【系统补充指令，不是用户发言】\n当前群会话已经加载、可直接通过 tools_execute 调用的完整契约：\n" + contracts,
 			Priority: llm.MessagePrioritySystem,
-		})
+		}
 	}
 	// skills 目录按会话变(按机器人、按群分档,装卸 skill 也会改它),进系统提示词
 	// 等于每换一个群就把整条前缀缓存作废,所以和时钟一样待在尾部。命中关键词的那几份
@@ -191,18 +196,29 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 		// 变化的记忆块、发言者身份和时钟。它标了断点就用它的；没标就退到当前
 		// 消息之前最后一条非 system 消息——尾部的 system 消息按约定都是易变的。
 		stable := callerCacheBreakpoint(req.Messages[:split])
+		head := leadingSystemCount(req.Messages[:split])
 		offset := len(messages)
-		messages = append(messages, req.Messages[:split]...)
+		messages = append(messages, req.Messages[:head]...)
+		if contractMessage != nil {
+			messages = append(messages, *contractMessage)
+		}
+		messages = append(messages, req.Messages[head:split]...)
 		for index := offset; index < len(messages); index++ {
 			messages[index].CacheBreakpoint = false
 		}
 		if stable >= 0 {
 			stableCacheIndex = offset + stable
+			if contractMessage != nil && stable >= head {
+				stableCacheIndex++
+			}
 			messages[stableCacheIndex].CacheBreakpoint = true
 		}
 		messages = append(messages, volatile...)
 		messages = append(messages, req.Messages[split:]...)
 	} else {
+		if contractMessage != nil {
+			messages = append(messages, *contractMessage)
+		}
 		messages = append(messages, volatile...)
 		messages = append(messages, req.Messages...)
 	}
@@ -1774,4 +1790,15 @@ func withToolResultReminder(messages []llm.Message, reminder string) []llm.Messa
 		}
 	}
 	return messages
+}
+
+// leadingSystemCount 数调用方消息开头连续的 system 条数：人设和固定规则到此为止，
+// 后面是历史。
+func leadingSystemCount(messages []llm.Message) int {
+	for index, message := range messages {
+		if message.Role != llm.RoleSystem {
+			return index
+		}
+	}
+	return len(messages)
 }
