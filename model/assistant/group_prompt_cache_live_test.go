@@ -116,6 +116,7 @@ func TestLiveGroupPromptCache(t *testing.T) {
 }
 
 const stableTailCacheTurns = 3
+
 // 恢复的工具契约已移到历史之前（见 agent.Runner.Run），不再作为尾部因子对照。
 const stableTailCacheMaxCalls = 2 * 2 * stableTailCacheTurns
 
