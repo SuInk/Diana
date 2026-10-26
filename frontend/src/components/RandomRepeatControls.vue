@@ -42,7 +42,7 @@ function update(key: "threshold" | "probability" | "cooldown_seconds", event: Ev
       <div class="field">
         <label :for="`${id}-cooldown`">冷却时间（秒）</label>
         <input :id="`${id}-cooldown`" class="input" type="number" min="-1" max="600" step="1" :value="value.cooldown_seconds" @input="update('cooldown_seconds', $event)" />
-        <span class="hint">-1：同一轮只跟一次；0：不冷却；正数：两次复读的最短间隔。</span>
+        <span class="hint">-1（默认）：同一轮只跟一次；0：不冷却；正数：两次复读的最短间隔。</span>
       </div>
     </template>
   </div>

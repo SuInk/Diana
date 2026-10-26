@@ -29,7 +29,7 @@ func copyRandomRepeat(value *RandomRepeatConfig) *RandomRepeatConfig {
 }
 func (value *RandomRepeatConfig) normalized() RandomRepeatConfig {
 	if value == nil {
-		return RandomRepeatConfig{Threshold: 2, Probability: 30, CooldownSeconds: 60}
+		return RandomRepeatConfig{Threshold: 2, Probability: 30, CooldownSeconds: -1}
 	}
 	result := *value
 	result.Threshold = max(2, min(10, result.Threshold))

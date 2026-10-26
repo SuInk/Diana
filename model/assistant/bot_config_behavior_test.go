@@ -86,7 +86,7 @@ func TestBotConfigBehaviorUpdatesBotDefaults(t *testing.T) {
 	r := NewRuntime(cfg, nilChannel{}, NewPluginManager(), nil, nil, saver, nil)
 	r.SetProfiles(ProfileSet{Profiles: []BotConfig{cfg}})
 	event := MessageEvent{Kind: EventKindPrivate, ProfileID: "b", UserID: "b-owner"}
-	if _, err := newDianaBotConfigTool(r, event).Run(context.Background(), map[string]any{"operation": "update", "behavior": map[string]any{"typing_delay_enabled": true, "random_repeat_enabled": true, "random_repeat_cooldown_seconds": -1}}); err != nil {
+	if _, err := newDianaBotConfigTool(r, event).Run(context.Background(), map[string]any{"operation": "update", "behavior": map[string]any{"typing_delay_enabled": true, "random_repeat_enabled": true}}); err != nil {
 		t.Fatal(err)
 	}
 	if !boolValue(saver.cfg.TypingDelayEnabled, false) || saver.cfg.RandomRepeat == nil || !saver.cfg.RandomRepeat.Enabled || saver.cfg.RandomRepeat.CooldownSeconds != -1 {
