@@ -271,6 +271,10 @@ jobs:
           cp -R release/frontend-next-dist/. cmd/webui/webdist/
           test -f cmd/webui/webdist/index.html
           go build -trimpath -ldflags="-s -w -X main.buildVersion=${BUILD_VERSION}" -o "${package_dir}/${runtime_name}" ./cmd/webui
+          # 兼容副本：v0.8.91 起的旧自更新器要求包里有 frontend-next/dist/index.html，
+          # 留一份它们才能在 WebUI 里直接升上来。新程序只用内嵌前端，不读这个目录。
+          mkdir -p "${package_dir}/frontend-next/dist"
+          cp -R release/frontend-next-dist/. "${package_dir}/frontend-next/dist/"
           if [ "${{ matrix.goos }}" = darwin ]; then
             cp release/desktop/desktopctl-helper "${package_dir}/desktopctl-helper"
             chmod +x "${package_dir}/desktopctl-helper"
@@ -283,7 +287,7 @@ jobs:
             'On first start Diana prints a generated administrator username and password once; save them.' \
             'To choose them instead, set admin.username and admin.password (at least 8 characters) in a config.yaml next to the program.' \
             'Forgot the password? Stop Diana, then run ./diana-webui passwd (diana-webui.exe passwd on Windows).' \
-            'The WebUI is built into the diana-webui program.' \
+            'The WebUI is built into the diana-webui program; frontend-next/ only lets older versions self-update.' \
             'One-click installations expose `diana uninstall`; this package also includes an uninstall script.' \
             'Future stable Releases can be installed from the WebUI with SHA-256 verification, backup, restart, and health-check rollback.' > "${package_dir}/README.txt"
 

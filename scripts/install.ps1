@@ -238,6 +238,8 @@ try {
     }
 
     Copy-Item -Recurse -Force -Path (Join-Path $packageDir "*") -Destination $installDir
+    # 包里的 frontend-next 只给旧版自更新器过校验，前端已编进程序，安装目录不留它。
+    Remove-Item -Recurse -Force -ErrorAction SilentlyContinue (Join-Path $installDir "frontend-next")
     $configFile = Join-Path $installDir "config.yaml"
     $generatedPassword = $null
     $passwordCleared = $false

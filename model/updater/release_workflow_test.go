@@ -84,6 +84,8 @@ func TestReleaseWorkflowPublishesOnlyCompletePackages(t *testing.T) {
 		`package_name="diana-${package_suffix}"`,
 		`-o "${package_dir}/${runtime_name}"`,
 		`cp -R release/frontend-next-dist/. cmd/webui/webdist/`,
+		// v0.8.91 起的旧自更新器要求包里有前端目录，删掉它旧版就没法在 WebUI 里升级。
+		`cp -R release/frontend-next-dist/. "${package_dir}/frontend-next/dist/"`,
 		`"${package_dir}/run.sh"`, `"${package_dir}/run.bat"`,
 	} {
 		if !strings.Contains(buildScript, fragment) {
