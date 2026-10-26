@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -23,10 +24,63 @@ type SpeechAPI string
 
 const (
 	// SpeechAPIOpenAI 覆盖 /audio/speech 与 /audio/transcriptions：OpenAI 本身，
-	// 以及 CosyVoice、ChatTTS、FunASR、faster-whisper 这类自建服务的兼容层。
+	// 以及硅基流动、Kokoro-FastAPI、Xinference、faster-whisper 这类兼容层。
 	SpeechAPIOpenAI     SpeechAPI = "openai"
 	SpeechAPIElevenLabs SpeechAPI = "elevenlabs"
+	// 下面是各家私有协议，名单对照 AstrBot 和 SillyTavern 的 TTS 提供商取并集。
+	// 只能在浏览器或 Python 进程里跑的（系统朗读、transformers 本地模型）不在内。
+	SpeechAPIGPTSoVITS       SpeechAPI = "gpt_sovits"
+	SpeechAPIGSVI            SpeechAPI = "gsvi"
+	SpeechAPIAzure           SpeechAPI = "azure"
+	SpeechAPIEdge            SpeechAPI = "edge"
+	SpeechAPIGemini          SpeechAPI = "gemini"
+	SpeechAPIDashScope       SpeechAPI = "dashscope"
+	SpeechAPIFishAudio       SpeechAPI = "fishaudio"
+	SpeechAPIMiniMax         SpeechAPI = "minimax"
+	SpeechAPIVolcengine      SpeechAPI = "volcengine"
+	SpeechAPIMiMo            SpeechAPI = "mimo"
+	SpeechAPIGoogleTranslate SpeechAPI = "google_translate"
+	SpeechAPINovelAI         SpeechAPI = "novelai"
+	// SpeechAPICustomHTTP 用请求模板对接其余自建服务：AllTalk、XTTS、VITS、
+	// Silero、Chatterbox 这些各有一套参数，但都是「发一个请求、拿回音频」。
+	SpeechAPICustomHTTP SpeechAPI = "custom_http"
+	// SpeechAPIWhisperCLI 只用于语音识别，调本机的 whisper.cpp 命令，由
+	// assistant 包执行，这里只占个名字。
+	SpeechAPIWhisperCLI SpeechAPI = "whisper_cli"
 )
+
+// speechAPIHosts 按服务地址认出私有协议，配置档填了官方地址时不用再手选接口。
+var speechAPIHosts = []struct {
+	suffix string
+	api    SpeechAPI
+}{
+	{"elevenlabs.io", SpeechAPIElevenLabs},
+	{"xiaomimimo.com", SpeechAPIMiMo},
+	{"minimax.io", SpeechAPIMiniMax},
+	{"minimax.chat", SpeechAPIMiniMax},
+	{"minimaxi.chat", SpeechAPIMiniMax},
+	{"minimaxi.com", SpeechAPIMiniMax},
+	{"openspeech.bytedance.com", SpeechAPIVolcengine},
+	{"dashscope.aliyuncs.com", SpeechAPIDashScope},
+	{"dashscope-intl.aliyuncs.com", SpeechAPIDashScope},
+	{"fish.audio", SpeechAPIFishAudio},
+	{"fish-audio.cn", SpeechAPIFishAudio},
+	{"tts.speech.microsoft.com", SpeechAPIAzure},
+	{"generativelanguage.googleapis.com", SpeechAPIGemini},
+	{"novelai.net", SpeechAPINovelAI},
+	{"speech.platform.bing.com", SpeechAPIEdge},
+}
+
+// KnownSpeechAPI 报告名字是不是认得的接口形态。
+func KnownSpeechAPI(name string) bool {
+	switch SpeechAPI(name) {
+	case SpeechAPIOpenAI, SpeechAPIElevenLabs, SpeechAPIGPTSoVITS, SpeechAPIGSVI, SpeechAPIAzure, SpeechAPIEdge,
+		SpeechAPIGemini, SpeechAPIDashScope, SpeechAPIFishAudio, SpeechAPIMiniMax, SpeechAPIVolcengine, SpeechAPIMiMo,
+		SpeechAPIGoogleTranslate, SpeechAPINovelAI, SpeechAPICustomHTTP, SpeechAPIWhisperCLI:
+		return true
+	}
+	return false
+}
 
 const (
 	defaultOpenAIMediaBaseURL     = "https://api.openai.com/v1"
@@ -37,17 +91,22 @@ const (
 	maxTranscriptionResponseBytes = 4 << 20
 )
 
-// ResolveSpeechAPI 选语音接口形态：显式指定的优先，否则按地址认出 ElevenLabs，
+// ResolveSpeechAPI 选语音接口形态：显式指定的优先，否则按地址认出各家官方服务，
 // 其余一律按 OpenAI 兼容处理。
 func ResolveSpeechAPI(explicit string, cfg ProviderConfig) SpeechAPI {
-	switch SpeechAPI(strings.ToLower(strings.TrimSpace(explicit))) {
-	case SpeechAPIElevenLabs:
-		return SpeechAPIElevenLabs
-	case SpeechAPIOpenAI:
-		return SpeechAPIOpenAI
+	if name := strings.ToLower(strings.TrimSpace(explicit)); KnownSpeechAPI(name) {
+		return SpeechAPI(name)
 	}
-	if parsed, err := url.Parse(strings.TrimSpace(cfg.BaseURL)); err == nil && strings.HasSuffix(strings.ToLower(parsed.Hostname()), "elevenlabs.io") {
-		return SpeechAPIElevenLabs
+	if parsed, err := url.Parse(strings.TrimSpace(cfg.BaseURL)); err == nil {
+		host := strings.ToLower(parsed.Hostname())
+		for _, known := range speechAPIHosts {
+			if host == known.suffix || strings.HasSuffix(host, "."+known.suffix) {
+				return known.api
+			}
+		}
+		if strings.HasPrefix(host, "translate.google.") {
+			return SpeechAPIGoogleTranslate
+		}
 	}
 	return SpeechAPIOpenAI
 }
@@ -69,6 +128,13 @@ type SpeechRequest struct {
 	Instructions string
 	// Timeout 是每次尝试的上限，为 0 时用 60 秒。
 	Timeout time.Duration
+	// Options 是各家私有的参数：火山的 app_id、GPT-SoVITS 的参考音频、请求模板……
+	// 键名见 speech_vendors.go，不认得的键各家自行忽略。
+	Options map[string]string
+}
+
+func (req SpeechRequest) option(key string) string {
+	return strings.TrimSpace(req.Options[key])
 }
 
 // SpeechResponse 是合成好的完整音频。
@@ -93,6 +159,9 @@ type SpeechStream struct {
 // SynthesizeSpeech 调用配置档上的语音合成接口，返回完整音频。
 func SynthesizeSpeech(ctx context.Context, cfg ProviderConfig, req SpeechRequest, opts ...ClientOption) (*SpeechResponse, error) {
 	req.API = ResolveSpeechAPI(string(req.API), cfg)
+	if req.API != SpeechAPIOpenAI && req.API != SpeechAPIElevenLabs {
+		return synthesizeVendorSpeech(ctx, cfg, req, opts)
+	}
 	client, spec, format, err := newSpeechCall(cfg, req, false, opts)
 	if err != nil {
 		return nil, err
@@ -120,6 +189,9 @@ func SynthesizeSpeech(ctx context.Context, cfg ProviderConfig, req SpeechRequest
 // 只在拿到响应头之前重试；之后断流由调用方处理。
 func StreamSpeech(ctx context.Context, cfg ProviderConfig, req SpeechRequest, opts ...ClientOption) (*SpeechStream, error) {
 	req.API = ResolveSpeechAPI(string(req.API), cfg)
+	if req.API != SpeechAPIOpenAI && req.API != SpeechAPIElevenLabs {
+		return nil, fmt.Errorf("llm: speech api %q does not support streaming", req.API)
+	}
 	client, spec, format, err := newSpeechCall(cfg, req, true, opts)
 	if err != nil {
 		return nil, err
@@ -339,6 +411,13 @@ func TranscribeAudio(ctx context.Context, cfg ProviderConfig, req TranscriptionR
 	timeout := req.Timeout
 	if timeout <= 0 {
 		timeout = defaultTranscriptionTimeout
+	}
+	switch req.API {
+	case SpeechAPIOpenAI, SpeechAPIElevenLabs:
+	case SpeechAPIMiMo:
+		return transcribeMiMo(ctx, cfg, req, opts, timeout)
+	default:
+		return nil, fmt.Errorf("llm: speech api %q cannot transcribe audio", req.API)
 	}
 	var (
 		client *mediaHTTP

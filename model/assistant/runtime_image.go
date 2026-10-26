@@ -100,9 +100,9 @@ func (r *Runtime) replyRuleVoiceCQ(ctx context.Context, event MessageEvent, rule
 	if strings.TrimSpace(reply) == "" || isStandaloneRecordReply(reply) {
 		return reply, nil
 	}
-	tool, ok := r.voiceTTSToolForEvent(event)
+	tool, _, ok := r.voiceTTSToolForEvent(ctx, event)
 	if !ok {
-		return "", fmt.Errorf("语音回复规则 %s 命中，但语音插件未启用", firstNonEmpty(rule.Name, rule.ID))
+		return "", fmt.Errorf("语音回复规则 %s 命中，但模型分配里没有配置语音合成", firstNonEmpty(rule.Name, rule.ID))
 	}
 	cq, err := synthesizeVoiceReply(ctx, tool, reply)
 	if err != nil {

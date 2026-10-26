@@ -4,9 +4,11 @@
 package assistant
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"net/url"
@@ -827,4 +829,35 @@ func (p *MusicPlugin) runCommand(ctx context.Context, name string, args ...strin
 		return procgroup.CommandContext(ctx, name, args...).CombinedOutput()
 	}
 	return p.commandRunner(ctx, name, args...)
+}
+
+// 下面几个原来和语音合成插件放在一起，插件拆掉后只剩点歌在用。
+
+type voiceCommandRunner func(context.Context, string, ...string) ([]byte, error)
+
+func voiceCommandError(action string, output []byte, err error) error {
+	detail := strings.Join(strings.Fields(string(output)), " ")
+	if runes := []rune(detail); len(runes) > 400 {
+		detail = string(runes[:400])
+	}
+	if detail == "" {
+		return fmt.Errorf("%s失败: %w", action, err)
+	}
+	return fmt.Errorf("%s失败: %w (%s)", action, err, detail)
+}
+
+func readFilePrefix(path string, maxBytes int64) ([]byte, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	return io.ReadAll(io.LimitReader(file, maxBytes))
+}
+
+func looksLikeTencentSilk(audio []byte) bool {
+	if bytes.HasPrefix(audio, []byte("#!SILK")) {
+		return true
+	}
+	return len(audio) > 1 && audio[0] == 0x02 && bytes.HasPrefix(audio[1:], []byte("#!SILK"))
 }

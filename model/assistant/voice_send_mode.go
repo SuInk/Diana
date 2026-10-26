@@ -14,39 +14,9 @@ import (
 
 const promptPersistentVoice = "你这条回复会被合成为语音发出去：写成能直接念出口的口语，不用 Markdown、列表、表情符号和括号里的动作描写，不超过 {max_chars} 字。确实要给链接、代码或长清单时照常写，这种回复会改发文字。"
 
-var promptPersistentVoiceSpec = tailSpec("persistent_voice", "常驻语音模式", "语音合成插件的发送模式设为「常驻」时注入：告诉模型回复会被念出来，写成口语、控制字数。",
+var promptPersistentVoiceSpec = tailSpec("persistent_voice", "常驻语音模式", "模型分配里语音合成的发送模式设为「常驻」时注入：告诉模型回复会被念出来，写成口语、控制字数。",
 	promptPersistentVoice,
-	PromptVar{Name: "max_chars", Description: "语音插件的单次合成字数上限"})
-
-// voiceTTSToolForEvent 取这条消息生效的语音合成工具：机器人和群两级的开关、设置
-// 都已经合并好。插件没开时 ok 为 false；没有插件管理器（测试和嵌入场景）时按环境
-// 变量配置合成。
-func (r *Runtime) voiceTTSToolForEvent(event MessageEvent) (*dianaTTSTool, bool) {
-	r.mu.RLock()
-	localMedia := r.localMedia
-	r.mu.RUnlock()
-	var plugin *VoiceTTSPlugin
-	var settings SettingValues
-	if r.plugins != nil {
-		pluginValue, effectiveSettings, enabled := r.plugins.PluginWithSettingsForGroup(
-			voiceTTSPluginID,
-			r.pluginOverridesForEvent(event),
-			r.pluginSettingOverridesForEvent(event),
-		)
-		var ok bool
-		plugin, ok = pluginValue.(*VoiceTTSPlugin)
-		if !enabled || !ok {
-			return nil, false
-		}
-		settings = effectiveSettings
-	}
-	if plugin == nil {
-		plugin = NewVoiceTTSPlugin(nil)
-		plugin.SetSpeechSynthesizer(r.slotSpeechSynthesizer)
-	}
-	plugin.SetLocalMediaSharer(localMedia)
-	return &dianaTTSTool{plugin: plugin, settings: settings}, true
-}
+	PromptVar{Name: "max_chars", Description: "语音合成的单次字数上限"})
 
 // synthesizeVoiceReply 把一段回复合成为单条 record CQ 码。
 func synthesizeVoiceReply(ctx context.Context, tool *dianaTTSTool, reply string) (string, error) {
@@ -61,27 +31,19 @@ func synthesizeVoiceReply(ctx context.Context, tool *dianaTTSTool, reply string)
 	return cq, nil
 }
 
-// persistentVoiceConfig 返回常驻语音模式下这条消息的合成工具和配置。只有插件开着、
-// 发送模式是「常驻」、平台能发 QQ 语音时才生效；插件设置本身有误（比如自定义预设
-// 没填地址）也不生效，这时回复照常发文字，错误在按需调用时再暴露。
-func (r *Runtime) persistentVoiceConfig(event MessageEvent) (*dianaTTSTool, voiceTTSConfig, bool) {
-	if r.plugins == nil || NormalizePlatformID(event.Platform) != PlatformOneBotV11 {
-		return nil, voiceTTSConfig{}, false
+// persistentVoiceConfig 返回常驻语音模式下这条消息的合成工具和设置。只有语音合成
+// 插槽配了、发送模式是「常驻」、平台能发 QQ 语音时才生效。
+func (r *Runtime) persistentVoiceConfig(ctx context.Context, event MessageEvent) (*dianaTTSTool, voiceTTSSettings, bool) {
+	tool, settings, ok := r.voiceTTSToolForEvent(ctx, event)
+	if !ok || settings.SendMode != voiceTTSSendModeAlways {
+		return nil, voiceTTSSettings{}, false
 	}
-	tool, ok := r.voiceTTSToolForEvent(event)
-	if !ok || tool.settings.String(voiceTTSSettingSendMode, voiceTTSSendModeOnDemand) != voiceTTSSendModeAlways {
-		return nil, voiceTTSConfig{}, false
-	}
-	cfg, err := voiceTTSConfigFromSettings(tool.settings)
-	if err != nil {
-		return nil, voiceTTSConfig{}, false
-	}
-	return tool, cfg, true
+	return tool, settings, true
 }
 
 // persistentVoicePrompt 在常驻语音模式下提醒模型：回复会被念出来。
-func (r *Runtime) persistentVoicePrompt(event MessageEvent, cfg BotConfig) string {
-	_, voiceCfg, ok := r.persistentVoiceConfig(event)
+func (r *Runtime) persistentVoicePrompt(ctx context.Context, event MessageEvent, cfg BotConfig) string {
+	_, voiceCfg, ok := r.persistentVoiceConfig(ctx, event)
 	if !ok {
 		return ""
 	}
@@ -91,7 +53,7 @@ func (r *Runtime) persistentVoicePrompt(event MessageEvent, cfg BotConfig) strin
 // persistentVoiceReply 在常驻语音模式下把回复换成语音。念不出来的回复原样返回：
 // 合成失败只记日志，文字照发，不让一次 TTS 故障吞掉整条回复。
 func (r *Runtime) persistentVoiceReply(ctx context.Context, event MessageEvent, reply string) string {
-	tool, cfg, ok := r.persistentVoiceConfig(event)
+	tool, cfg, ok := r.persistentVoiceConfig(ctx, event)
 	if !ok {
 		return reply
 	}

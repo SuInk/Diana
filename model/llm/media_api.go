@@ -174,12 +174,18 @@ type mediaHTTP struct {
 }
 
 func newMediaHTTP(cfg ProviderConfig, defaultBaseURL string, opts []ClientOption) (*mediaHTTP, error) {
+	return newMediaHTTPWithKey(cfg, defaultBaseURL, opts, true)
+}
+
+// newMediaHTTPWithKey 和 newMediaHTTP 一样，只是 requireKey 为 false 时不要求 API Key：
+// 本机的 GPT-SoVITS、免费的 Edge 朗读这类服务本来就没有 Key。
+func newMediaHTTPWithKey(cfg ProviderConfig, defaultBaseURL string, opts []ClientOption, requireKey bool) (*mediaHTTP, error) {
 	if !cfg.ModelEnabled(cfg.Model) {
 		return nil, fmt.Errorf("llm: model %q is disabled", cfg.Model)
 	}
 	cfg = cfg.WithDefaults()
 	RegisterProviderSecrets(cfg)
-	if strings.TrimSpace(cfg.APIKey) == "" && strings.TrimSpace(cfg.OAuthProvider) == "" {
+	if requireKey && strings.TrimSpace(cfg.APIKey) == "" && strings.TrimSpace(cfg.OAuthProvider) == "" {
 		return nil, ErrMissingAPIKey
 	}
 	if err := validateBaseURL(cfg.BaseURL); err != nil {
@@ -231,12 +237,30 @@ func sleepContext(ctx context.Context, d time.Duration) error {
 }
 
 func (m *mediaHTTP) url(endpoint string, query url.Values) (string, error) {
-	joined, err := joinOpenAICompatibleURL(m.baseURL, endpoint)
-	if err != nil {
-		return "", err
+	var joined string
+	if strings.HasPrefix(endpoint, "http://") || strings.HasPrefix(endpoint, "https://") {
+		// 服务在响应里给出的完整地址（GSVI 合成后的音频链接这类），原样用。
+		joined = endpoint
+	} else if endpoint == "" {
+		// 配置档地址已经指到了具体接口上，不再往后拼。
+		parsed, err := url.Parse(strings.TrimSpace(m.baseURL))
+		if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+			return "", fmt.Errorf("llm: invalid base url %q", m.baseURL)
+		}
+		joined = parsed.String()
+	} else {
+		var err error
+		joined, err = joinOpenAICompatibleURL(m.baseURL, endpoint)
+		if err != nil {
+			return "", err
+		}
 	}
 	if len(query) > 0 {
-		joined += "?" + query.Encode()
+		separator := "?"
+		if strings.Contains(joined, "?") {
+			separator = "&"
+		}
+		joined += separator + query.Encode()
 	}
 	return joined, nil
 }

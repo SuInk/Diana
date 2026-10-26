@@ -28,19 +28,26 @@ import (
 	"github.com/SuInk/diana/model/netguard"
 )
 
+// 语音识别以前是一个插件，有自己的后端、地址、Key 和模型。现在识别服务归模型分配
+// 里的「语音识别」插槽管：OpenAI 兼容接口、ElevenLabs、MiMo 是云端提供商，本机的
+// whisper.cpp 命令是内置的「本机 Whisper」。插槽配了就转写，没配就不转。
 const (
-	voiceSTTPluginID        = "official.voice-stt"
-	voiceSTTBackendDisabled = "disabled"
-	voiceSTTBackendLocal    = "local"
-	voiceSTTBackendOpenAI   = "openai_compatible"
-	// voiceSTTBackendModelSlot 走模型分配里的「语音识别」插槽，供应商、模型和语言
-	// 都在那边配；这里的地址、Key、模型三项不再使用。
-	voiceSTTBackendModelSlot = "model_slot"
-	voiceSTTTranscriptKey    = "transcript"
-	voiceSTTAudioHashKey     = "audio_sha256"
-	voiceSTTBlobHashKey      = "cached_blob_sha256"
-	voiceSourceMaxParts      = 2
-	voiceSourceMaxDuration   = 60 * time.Second
+	voiceSTTTranscriptKey  = "transcript"
+	voiceSTTAudioHashKey   = "audio_sha256"
+	voiceSTTBlobHashKey    = "cached_blob_sha256"
+	voiceSourceMaxParts    = 2
+	voiceSourceMaxDuration = 60 * time.Second
+
+	// 插槽参数里给转写流程用的几项。
+	mediaParamPrivateEnabled = "private_enabled"
+	mediaParamMaxDuration    = "max_duration_seconds"
+	mediaParamCommand        = "command"
+	mediaParamModelPath      = "model_path"
+
+	defaultVoiceSTTTimeout     = 90 * time.Second
+	defaultVoiceSTTMaxBytes    = 20 << 20
+	defaultVoiceSTTMaxDuration = 300 * time.Second
+	defaultVoiceSTTConcurrency = 2
 )
 
 type VoiceTranscriptRecord struct {
@@ -61,91 +68,69 @@ type VoiceTranscriptStore interface {
 	SaveVoiceTranscript(context.Context, VoiceTranscriptRecord) error
 }
 
-type VoiceSTTPlugin struct {
-	client        *http.Client
-	mu            sync.Mutex
-	semaphore     chan struct{}
-	semaphoreSize int
+// voiceSTTLimiter 限制同时在跑的转写：一段语音要 ffmpeg 转码再上传，群里一下子
+// 来十几条语音时别全挤在一起。
+type voiceSTTLimiter struct {
+	once      sync.Once
+	semaphore chan struct{}
 }
 
-func NewVoiceSTTPlugin(client *http.Client) *VoiceSTTPlugin {
-	if client == nil {
-		client = &http.Client{}
+func (l *voiceSTTLimiter) acquire(ctx context.Context) (func(), error) {
+	l.once.Do(func() { l.semaphore = make(chan struct{}, defaultVoiceSTTConcurrency) })
+	select {
+	case l.semaphore <- struct{}{}:
+		return func() { <-l.semaphore }, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
 	}
-	return &VoiceSTTPlugin{client: client}
-}
-
-func (p *VoiceSTTPlugin) Manifest() PluginManifest {
-	return PluginManifest{
-		ID: voiceSTTPluginID, Name: "语音识别", Version: "0.1.1",
-		Description: "将收到的语音转写为内部对话文本；支持本地 Whisper、OpenAI 兼容音频转写接口，以及模型分配里的语音识别插槽。",
-		Official:    true, BuiltIn: true,
-		Permissions: []string{"message:read", "network:http", "filesystem:temp", "process:media"},
-		Settings: []PluginSettingSpec{
-			{Key: "backend", Label: "识别后端", Type: PluginSettingTypeSelect, Default: voiceSTTBackendDisabled, Options: []PluginSettingOption{{Value: voiceSTTBackendDisabled, Label: "关闭"}, {Value: voiceSTTBackendLocal, Label: "本地 Whisper"}, {Value: voiceSTTBackendOpenAI, Label: "OpenAI 兼容接口"}, {Value: voiceSTTBackendModelSlot, Label: "模型分配 · 语音识别插槽"}}, Description: "选「模型分配」时用机器人模型分配里的语音识别插槽，下方地址、Key 和模型不再使用；插槽没配时不转写。"},
-			{Key: "endpoint", Label: "转写 API 地址", Type: PluginSettingTypeString, Default: "https://api.openai.com/v1/audio/transcriptions"},
-			{Key: "api_key", Label: "API Key", Type: PluginSettingTypeString, Default: "", Secret: true},
-			{Key: "model", Label: "模型", Type: PluginSettingTypeString, Default: "whisper-1"},
-			{Key: "language", Label: "语言", Type: PluginSettingTypeString, Default: "auto"},
-			{Key: "local_command", Label: "本地命令", Type: PluginSettingTypeString, Default: "whisper-cli"},
-			{Key: "local_model_path", Label: "本地模型路径", Type: PluginSettingTypeString, Default: ""},
-			{Key: "timeout_seconds", Label: "识别超时", Type: PluginSettingTypeNumber, Default: 90, Min: settingRange(5), Max: settingRange(300), Step: 5, Unit: "秒"},
-			{Key: "max_audio_mb", Label: "音频大小上限", Type: PluginSettingTypeNumber, Default: 20, Min: settingRange(1), Max: settingRange(100), Step: 1, Unit: "MB"},
-			{Key: "max_duration_seconds", Label: "音频时长上限", Type: PluginSettingTypeNumber, Default: 300, Min: settingRange(5), Max: settingRange(1800), Step: 5, Unit: "秒"},
-			{Key: "concurrency", Label: "并发识别数", Type: PluginSettingTypeNumber, Default: 2, Min: settingRange(1), Max: settingRange(8), Step: 1},
-			{Key: "private_enabled", Label: "允许私聊语音识别", Type: PluginSettingTypeBool, Default: true},
-			{Key: "timestamps", Label: "请求时间戳", Type: PluginSettingTypeBool, Default: false},
-		},
-	}
-}
-
-func (p *VoiceSTTPlugin) Handle(context.Context, PluginRequest) (*PluginResponse, error) {
-	return nil, nil
 }
 
 type voiceSTTConfig struct {
-	Backend, Endpoint, APIKey, Model, Language, LocalCommand, LocalModel string
-	Timeout                                                              time.Duration
-	MaxBytes                                                             int64
-	MaxDuration                                                          time.Duration
-	Concurrency                                                          int
-	PrivateEnabled, Timestamps                                           bool
+	// Backend 是实际走的接口形态（openai、mimo、whisper_cli……），记进缓存键和日志。
+	Backend, Model, Language string
+	Timeout                  time.Duration
+	MaxBytes                 int64
+	MaxDuration              time.Duration
+	PrivateEnabled           bool
 }
 
-func voiceSTTConfigFromSettings(v SettingValues) voiceSTTConfig {
-	return voiceSTTConfig{
-		Backend: v.String("backend", voiceSTTBackendDisabled), Endpoint: v.String("endpoint", "https://api.openai.com/v1/audio/transcriptions"), APIKey: v.String("api_key", ""),
-		Model: v.String("model", "whisper-1"), Language: v.String("language", "auto"), LocalCommand: v.String("local_command", "whisper-cli"), LocalModel: v.String("local_model_path", ""),
-		Timeout: time.Duration(v.Int("timeout_seconds", 90)) * time.Second, MaxBytes: int64(v.Int("max_audio_mb", 20)) << 20, MaxDuration: time.Duration(v.Int("max_duration_seconds", 300)) * time.Second,
-		PrivateEnabled: v.Bool("private_enabled", true), Timestamps: v.Bool("timestamps", false), Concurrency: v.Int("concurrency", 2),
+// voiceSTTConfigForEvent 读这条消息生效的语音识别插槽；没配时 ok 为 false。
+func (r *Runtime) voiceSTTConfigForEvent(ctx context.Context, event MessageEvent) (voiceSTTConfig, bool) {
+	routes := r.mediaSlotRoutes(withModelConfigEvent(ctx, event), mediaSlotSTT)
+	if len(routes) == 0 {
+		return voiceSTTConfig{}, false
 	}
+	route := routes[0]
+	cfg := voiceSTTConfig{
+		Backend:        string(route.speechAPI()),
+		Model:          route.Model,
+		Language:       route.param(mediaParamLanguage),
+		Timeout:        defaultVoiceSTTTimeout,
+		MaxBytes:       defaultVoiceSTTMaxBytes,
+		MaxDuration:    defaultVoiceSTTMaxDuration,
+		PrivateEnabled: !strings.EqualFold(route.param(mediaParamPrivateEnabled), "false"),
+	}
+	if timeout := route.paramSeconds(mediaParamTimeout); timeout > 0 {
+		cfg.Timeout = timeout
+	}
+	if duration := route.paramSeconds(mediaParamMaxDuration); duration > 0 {
+		cfg.MaxDuration = duration
+	}
+	return cfg, true
 }
 
 func (r *Runtime) prepareIncomingVoice(ctx context.Context, event MessageEvent) MessageEvent {
-	if (!hasRecordSegment(event.Segments) && (event.Quoted == nil || !hasRecordSegment(event.Quoted.Segments))) || r.plugins == nil {
+	if !hasRecordSegment(event.Segments) && (event.Quoted == nil || !hasRecordSegment(event.Quoted.Segments)) {
 		return event
 	}
 	// 彻底休眠的群不转写：转写要花钱，而这条消息既不会被回复，也不会进记忆提取。
 	if r.groupDormant(event) {
 		return event
 	}
-	pluginValue, settings, enabled := r.pluginWithSettingsForEvent(voiceSTTPluginID, event)
-	plugin, ok := pluginValue.(*VoiceSTTPlugin)
-	if !enabled || !ok {
+	ctx = withModelConfigEvent(ctx, event)
+	cfg, ok := r.voiceSTTConfigForEvent(ctx, event)
+	if !ok || (event.Kind == EventKindPrivate && !cfg.PrivateEnabled) {
 		return event
-	}
-	cfg := voiceSTTConfigFromSettings(settings)
-	if cfg.Backend == voiceSTTBackendDisabled || (event.Kind == EventKindPrivate && !cfg.PrivateEnabled) {
-		return event
-	}
-	if cfg.Backend == voiceSTTBackendModelSlot {
-		ctx = withModelConfigEvent(ctx, event)
-		routes := r.mediaSlotRoutes(ctx, mediaSlotSTT)
-		if len(routes) == 0 {
-			return event
-		}
-		// 模型名进缓存键：换了识别模型，旧转写不该继续命中。
-		cfg.Model = routes[0].Model
 	}
 	for i := range event.Segments {
 		segment := &event.Segments[i]
@@ -153,7 +138,7 @@ func (r *Runtime) prepareIncomingVoice(ctx context.Context, event MessageEvent) 
 			continue
 		}
 		started := time.Now()
-		transcript, audioHash, duration, cacheHit, code, err := plugin.transcribeSegment(ctx, r, event, *segment, cfg)
+		transcript, audioHash, duration, cacheHit, code, err := r.transcribeVoiceSegment(ctx, event, *segment, cfg)
 		if err != nil {
 			segment.Data = cloneSegmentData(segment.Data)
 			segment.Data[voiceSTTAudioHashKey] = audioHash
@@ -188,12 +173,12 @@ func (r *Runtime) prepareIncomingVoice(ctx context.Context, event MessageEvent) 
 	return event
 }
 
-func (p *VoiceSTTPlugin) transcribeSegment(ctx context.Context, r *Runtime, event MessageEvent, segment MessageSegment, cfg voiceSTTConfig) (string, string, time.Duration, bool, string, error) {
-	sem, err := p.acquire(ctx, cfg.Concurrency)
+func (r *Runtime) transcribeVoiceSegment(ctx context.Context, event MessageEvent, segment MessageSegment, cfg voiceSTTConfig) (string, string, time.Duration, bool, string, error) {
+	release, err := r.voiceSTT.acquire(ctx)
 	if err != nil {
 		return "", "", 0, false, "cancelled", err
 	}
-	defer func() { <-sem }()
+	defer release()
 	store := r.voiceTranscriptStore()
 	audioHash := firstNonEmpty(strings.TrimSpace(segment.Data[voiceSTTAudioHashKey]), strings.TrimSpace(segment.Data[voiceSTTBlobHashKey]))
 	if audioHash != "" && store != nil {
@@ -246,23 +231,12 @@ func (p *VoiceSTTPlugin) transcribeSegment(ctx context.Context, r *Runtime, even
 	if duration > cfg.MaxDuration {
 		return "", audioHash, duration, false, "duration_exceeded", errors.New("voice duration exceeds configured limit")
 	}
-	var transcript string
-	switch cfg.Backend {
-	case voiceSTTBackendLocal:
-		transcript, err = localVoiceTranscription(callCtx, wav, cfg, workDir)
-	case voiceSTTBackendOpenAI:
-		transcript, err = p.openAITranscription(callCtx, wav, cfg)
-	case voiceSTTBackendModelSlot:
-		var model string
-		transcript, model, err = r.slotVoiceTranscription(callCtx, wav, cfg)
-		if err == nil && model != "" && model != cfg.Model {
-			// 后备路由顶上时，结果记在实际应答的模型名下，别让主模型的缓存键
-			// 命中一份不是它转写的结果。
-			cfg.Model = model
-			cacheKey = voiceSTTCacheKey(audioHash, cfg)
-		}
-	default:
-		return "", audioHash, duration, false, "disabled", errors.New("STT backend disabled")
+	transcript, model, err := r.slotVoiceTranscription(callCtx, wav, cfg)
+	if err == nil && model != "" && model != cfg.Model {
+		// 后备路由顶上时，结果记在实际应答的模型名下，别让主模型的缓存键
+		// 命中一份不是它转写的结果。
+		cfg.Model = model
+		cacheKey = voiceSTTCacheKey(audioHash, cfg)
 	}
 	if err != nil {
 		code := "provider_rejected"
@@ -499,16 +473,35 @@ func decodeBase64MediaSource(source string, maxBytes int64) ([]byte, error) {
 	return body, nil
 }
 
-func localVoiceTranscription(ctx context.Context, wav string, cfg voiceSTTConfig, dir string) (string, error) {
+// slotVoiceTranscription 返回转写文字和实际应答的模型。
+func (r *Runtime) slotVoiceTranscription(ctx context.Context, wav string, cfg voiceSTTConfig) (string, string, error) {
+	audio, err := os.ReadFile(wav)
+	if err != nil {
+		return "", "", err
+	}
+	resp, route, err := r.transcribeAudio(ctx, audio, "audio.wav", "")
+	if err != nil {
+		return "", "", err
+	}
+	return resp.Text, route.Model, nil
+}
+
+// localVoiceTranscription 调本机的 whisper.cpp 命令（whisper-cli）转写一段 16kHz WAV。
+func localVoiceTranscription(ctx context.Context, wav string, route mediaSlotRoute) (string, error) {
+	dir, err := os.MkdirTemp("", "diana-whisper-")
+	if err != nil {
+		return "", err
+	}
+	defer os.RemoveAll(dir)
 	prefix := filepath.Join(dir, "transcript")
 	args := []string{"-f", wav, "-otxt", "-of", prefix}
-	if cfg.LocalModel != "" {
-		args = append([]string{"-m", cfg.LocalModel}, args...)
+	if model := route.param(mediaParamModelPath); model != "" {
+		args = append([]string{"-m", model}, args...)
 	}
-	if cfg.Language != "" && cfg.Language != "auto" {
-		args = append(args, "-l", cfg.Language)
+	if language := route.param(mediaParamLanguage); language != "" && language != "auto" {
+		args = append(args, "-l", language)
 	}
-	out, err := procgroup.CommandContext(ctx, cfg.LocalCommand, args...).CombinedOutput()
+	out, err := procgroup.CommandContext(ctx, firstNonEmpty(route.param(mediaParamCommand), "whisper-cli"), args...).CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("local whisper: %w: %s", err, strings.TrimSpace(string(out)))
 	}
@@ -517,84 +510,6 @@ func localVoiceTranscription(ctx context.Context, wav string, cfg voiceSTTConfig
 		return strings.TrimSpace(string(out)), nil
 	}
 	return strings.TrimSpace(string(body)), nil
-}
-
-func (p *VoiceSTTPlugin) openAITranscription(ctx context.Context, wav string, cfg voiceSTTConfig) (string, error) {
-	var body bytes.Buffer
-	writer := multipart.NewWriter(&body)
-	file, err := writer.CreateFormFile("file", "audio.wav")
-	if err != nil {
-		return "", err
-	}
-	src, err := os.Open(wav)
-	if err != nil {
-		return "", err
-	}
-	_, err = io.Copy(file, src)
-	_ = src.Close()
-	if err != nil {
-		return "", err
-	}
-	_ = writer.WriteField("model", cfg.Model)
-	if cfg.Language != "" && cfg.Language != "auto" {
-		_ = writer.WriteField("language", cfg.Language)
-	}
-	if cfg.Timestamps {
-		_ = writer.WriteField("response_format", "verbose_json")
-		_ = writer.WriteField("timestamp_granularities[]", "segment")
-	}
-	_ = writer.Close()
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, cfg.Endpoint, &body)
-	if err != nil {
-		return "", err
-	}
-	req.Header.Set("Content-Type", writer.FormDataContentType())
-	if cfg.APIKey != "" {
-		req.Header.Set("Authorization", "Bearer "+cfg.APIKey)
-	}
-	resp, err := p.client.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-	data, err := netguard.ReadResponseBody(resp, 1<<20)
-	if err != nil {
-		return "", err
-	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", voiceSTTProviderError{StatusCode: resp.StatusCode}
-	}
-	var parsed struct {
-		Text string `json:"text"`
-	}
-	if json.Unmarshal(data, &parsed) == nil && strings.TrimSpace(parsed.Text) != "" {
-		return parsed.Text, nil
-	}
-	return strings.TrimSpace(string(data)), nil
-}
-
-// slotVoiceTranscription 返回转写文字和实际应答的模型。
-func (r *Runtime) slotVoiceTranscription(ctx context.Context, wav string, cfg voiceSTTConfig) (string, string, error) {
-	audio, err := os.ReadFile(wav)
-	if err != nil {
-		return "", "", err
-	}
-	language := cfg.Language
-	if strings.EqualFold(language, "auto") {
-		// 插件这边没指定语言时让插槽上的语言参数生效。
-		language = ""
-	}
-	resp, route, err := r.transcribeAudio(ctx, audio, "audio.wav", language)
-	if err != nil {
-		return "", "", err
-	}
-	return resp.Text, route.Model, nil
-}
-
-type voiceSTTProviderError struct{ StatusCode int }
-
-func (e voiceSTTProviderError) Error() string {
-	return fmt.Sprintf("transcription provider HTTP %d", e.StatusCode)
 }
 
 // voiceSTTContextCode 把 ctx 结束的原因翻成失败码：到时限是 timeout（按瞬时故障
@@ -610,30 +525,7 @@ func voiceSTTErrorIsTransient(code string, err error) bool {
 	if code == "timeout" || code == "cache_save_failed" || code == "cache_cleanup_failed" || errors.Is(err, context.DeadlineExceeded) {
 		return true
 	}
-	if llm.IsRetryableMediaError(err) {
-		return true
-	}
-	var providerErr voiceSTTProviderError
-	return errors.As(err, &providerErr) && (providerErr.StatusCode == http.StatusTooManyRequests || providerErr.StatusCode >= 500)
-}
-
-func (p *VoiceSTTPlugin) acquire(ctx context.Context, concurrency int) (chan struct{}, error) {
-	if concurrency < 1 {
-		concurrency = 1
-	}
-	p.mu.Lock()
-	if p.semaphore == nil || p.semaphoreSize != concurrency {
-		p.semaphore = make(chan struct{}, concurrency)
-		p.semaphoreSize = concurrency
-	}
-	sem := p.semaphore
-	p.mu.Unlock()
-	select {
-	case sem <- struct{}{}:
-		return sem, nil
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	}
+	return llm.IsRetryableMediaError(err)
 }
 
 func voiceDuration(ctx context.Context, path string) (time.Duration, error) {
@@ -645,7 +537,7 @@ func voiceDuration(ctx context.Context, path string) (time.Duration, error) {
 	return time.Duration(value * float64(time.Second)), err
 }
 func voiceSTTCacheKey(audioHash string, cfg voiceSTTConfig) string {
-	sum := sha256.Sum256([]byte(strings.Join([]string{audioHash, cfg.Backend, cfg.Model, cfg.Language, strconv.FormatBool(cfg.Timestamps)}, "|")))
+	sum := sha256.Sum256([]byte(strings.Join([]string{audioHash, cfg.Backend, cfg.Model, cfg.Language}, "|")))
 	return hex.EncodeToString(sum[:])
 }
 func hasRecordSegment(segments []MessageSegment) bool {

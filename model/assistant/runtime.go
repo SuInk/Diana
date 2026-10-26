@@ -465,6 +465,7 @@ type Runtime struct {
 	configSaver           ConfigSaver
 	replySuppressions     ReplySuppressionStore
 	localMedia            LocalMediaSharer
+	voiceSTT              voiceSTTLimiter
 	llmFactory            LLMProviderFactory
 	llmCfgFactory         LLMProviderConfigFactory
 	llmRegistry           *llm.ProviderRegistry
@@ -4456,19 +4457,16 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	if len(currentImageFailures) > 0 {
 		return "", newImageMediaUnavailableError(currentImageFailures)
 	}
-	if r.plugins != nil {
-		_, settings, enabled := r.pluginWithSettingsForEvent(voiceSTTPluginID, event)
-		if enabled {
-			voiceParts, notice := r.voiceSourceAnalysisParts(ctx, messageEvent, cleanText, voiceSTTConfigFromSettings(settings))
-			if notice != "" {
-				currentMessage = appendLLMMessageText(currentMessage, notice)
+	if voiceCfg, enabled := r.voiceSTTConfigForEvent(ctx, event); enabled {
+		voiceParts, notice := r.voiceSourceAnalysisParts(ctx, messageEvent, cleanText, voiceCfg)
+		if notice != "" {
+			currentMessage = appendLLMMessageText(currentMessage, notice)
+		}
+		if len(voiceParts) > 0 {
+			if len(currentMessage.Parts) == 0 && strings.TrimSpace(currentMessage.Content) != "" {
+				currentMessage.Parts = append(currentMessage.Parts, llm.ContentPart{Type: llm.ContentPartText, Text: currentMessage.Content})
 			}
-			if len(voiceParts) > 0 {
-				if len(currentMessage.Parts) == 0 && strings.TrimSpace(currentMessage.Content) != "" {
-					currentMessage.Parts = append(currentMessage.Parts, llm.ContentPart{Type: llm.ContentPartText, Text: currentMessage.Content})
-				}
-				currentMessage.Parts = append(currentMessage.Parts, voiceParts...)
-			}
+			currentMessage.Parts = append(currentMessage.Parts, voiceParts...)
 		}
 	}
 	currentMessage, imageOCRContext := r.imageOCRAdjustMessageWithContext(ctx, event, currentMessage)

@@ -336,7 +336,7 @@ func (h *LLMConfigHandler) saveConfig(c *gin.Context) {
 		h.writeError(c, 400, "llm_config_save", fmt.Errorf("api_key must be at least %d characters", minLLMAPIKeyChars), llmLogTarget(payload), llmLogMetadata(cfg, payload.ID))
 		return
 	}
-	if err := cfg.ValidateChannel(); err != nil {
+	if err := validateChannelForGroup(cfg, payload.Group); err != nil {
 		h.writeError(c, 400, "llm_config_save", err, llmLogTarget(payload), llmLogMetadata(cfg, payload.ID))
 		return
 	}
@@ -1121,4 +1121,17 @@ func decisionProbeRequest(cfg llm.ProviderConfig, message string) llm.GenerateRe
 			ReasonPath:     "reason",
 		}}},
 	}
+}
+
+// validateChannelForGroup 校验一个提供商。语音合成、语音识别分组可以不填 API Key：
+// 本机的 GPT-SoVITS、whisper 兼容服务这类本来就没有 Key，没 Key 就会被拒的云服务
+// 在调用时会报出来。
+func validateChannelForGroup(cfg llm.ProviderConfig, group string) error {
+	switch llm.NormalizeProfileGroup(group) {
+	case llm.GroupTTS, llm.GroupSTT:
+		if strings.TrimSpace(cfg.APIKey) == "" {
+			cfg.APIKey = "speech-service-without-key"
+		}
+	}
+	return cfg.ValidateChannel()
 }
