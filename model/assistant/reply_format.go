@@ -144,7 +144,7 @@ var promptPlatformRichTextSpec = registerPrompt(PromptSpec{
 	Group:   PromptGroupReplyBase,
 	Title:   "富文本平台说明",
 	Usage:   "平台能渲染富文本（如 Telegram、QQ 官方机器人）、本轮保留 Markdown 时，替代纯文本排版规则注入。",
-	Default: "当前聊天平台是 {platform}，回复里的 Markdown 会渲染成富文本：{features}。讲资料、步骤、对比、清单、代码这类有结构的内容时直接用 Markdown 排版——关键结论加粗，并列要点用列表，代码放进代码块，不要为了像聊天把结构压成一长段；闲聊和一两句话的回复照常说，不要硬加格式。不要声称当前窗口不支持 Markdown。",
+	Default: "当前聊天平台是 {platform}，回复里的 Markdown 会渲染成富文本：{features}。讲资料、步骤、对比、清单、代码这类有结构的内容时直接用 Markdown 排版——关键结论加粗，并列要点用列表，代码放进代码块，不要为了像聊天把结构压成一长段。贴网址一律写成 [标题](网址)，标题用页面名或一句话说明它是什么，不要裸贴长网址；几个链接并列时每个占一个列表项。闲聊和一两句话的回复照常说，不要硬加格式。不要声称当前窗口不支持 Markdown。",
 	Vars: []PromptVar{
 		{Name: "platform", Description: "聊天平台名称，如 Telegram"},
 		{Name: "features", Description: "该平台能渲染的 Markdown 写法"},
