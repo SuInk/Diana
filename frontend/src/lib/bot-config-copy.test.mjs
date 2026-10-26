@@ -4,9 +4,11 @@ import { copyBotConfiguration } from "./bot-config-copy.ts";
 
 const defaults = { platform: "onebot-v11", enabled: true, onebot_transport: "reverse_ws", onebot_reverse_ws_endpoint: "ws://localhost/onebot/v11/ws" };
 
-test("copy drops the obsolete host-access switch", () => {
-  const source = { ...defaults, agent_host_access_enabled: true };
-  assert.equal(copyBotConfiguration(source, defaults).agent_host_access_enabled, undefined);
+test("copy drops the obsolete host-access switch and command allowlist", () => {
+  const source = { ...defaults, agent_host_access_enabled: true, agent_command_allowlist: ["uptime"] };
+  const draft = copyBotConfiguration(source, defaults);
+  assert.equal(draft.agent_host_access_enabled, undefined);
+  assert.equal(draft.agent_command_allowlist, undefined);
   assert.equal(source.agent_host_access_enabled, true);
 });
 

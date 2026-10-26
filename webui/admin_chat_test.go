@@ -30,7 +30,7 @@ func (r *adminChatStubRuntime) RunAdminChat(ctx context.Context, p string, req a
 func newAdminChatTest(t *testing.T, run func(context.Context, string, agent.Request, ...agent.Tool) (*agent.Response, error), profiles ...assistant.BotConfig) (*gin.Engine, *BotHandler, *AuthManager, string) {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
-	r := assistant.NewRuntime(assistant.BotConfig{ID: "bot", OneBotAccessToken: "bot-secret", AgentCommandAllowlist: []string{"date"}}, fakeChannel{}, assistant.NewPluginManager(), nil, nil, nil, nil)
+	r := assistant.NewRuntime(assistant.BotConfig{ID: "bot", OneBotAccessToken: "bot-secret"}, fakeChannel{}, assistant.NewPluginManager(), nil, nil, nil, nil)
 	if len(profiles) > 0 {
 		r.SetProfiles(assistant.ProfileSet{Profiles: profiles})
 	}
@@ -226,15 +226,15 @@ func TestAdminChatDiagnosticsRedactsEvidenceAndCannotMutateExtensions(t *testing
 func TestAdminChatSafeModeReportsEffectivePermissionsAndRejectsMCPConnections(t *testing.T) {
 	t.Setenv("APP_DB_PATH", filepath.Join(t.TempDir(), "app.db"))
 	router, h, _, token := newAdminChatTest(t, nil, assistant.BotConfig{ID: "bot", AgentMode: assistant.AgentModeSafe,
-		AgentCommandAllowlist: []string{"node"}, AgentFileWriteEnabled: true, AgentCommandSandboxAllowNetwork: true})
+		AgentFileWriteEnabled: true, AgentCommandSandboxAllowNetwork: true})
 	w := adminChatRequest(router, "GET", "/api/assistant/admin-chat?profile=bot", token, "")
 	var state struct {
-		Mode     string   `json:"agent_mode"`
-		Commands []string `json:"command_allowlist"`
-		Write    bool     `json:"file_write_enabled"`
-		Network  bool     `json:"network_enabled"`
+		Mode     string `json:"agent_mode"`
+		Commands bool   `json:"command_enabled"`
+		Write    bool   `json:"file_write_enabled"`
+		Network  bool   `json:"network_enabled"`
 	}
-	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &state) != nil || state.Mode != "safe" || len(state.Commands) != 0 || state.Write || state.Network {
+	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &state) != nil || state.Mode != "safe" || state.Commands || state.Write || state.Network {
 		t.Fatalf("safe mode reported inactive permissions: %s", w.Body.String())
 	}
 	h.runtime = h.runtime.(*adminChatStubRuntime).BotRuntime
@@ -258,7 +258,7 @@ func TestAdminChatRobotSelectionRestoresSeparateHistories(t *testing.T) {
 			t.Fatal("history tool not bound to selected robot")
 		}
 		return &agent.Response{Text: "回答 " + profile}, nil
-	}, assistant.BotConfig{ID: "bot_a", Name: "嘉然", AgentCommandAllowlist: []string{"date"}}, assistant.BotConfig{ID: "bot_b", Name: "测试机器人", AgentCommandAllowlist: []string{"uname"}})
+	}, assistant.BotConfig{ID: "bot_a", Name: "嘉然"}, assistant.BotConfig{ID: "bot_b", Name: "测试机器人"})
 	ids := map[string]string{}
 	for _, profile := range []string{"bot_a", "bot_b", "", "bot_a"} {
 		w := adminChatRequest(router, "GET", "/api/assistant/admin-chat?profile="+profile, token, "")

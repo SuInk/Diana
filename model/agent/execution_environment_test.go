@@ -25,7 +25,7 @@ func environmentPayload(t *testing.T, tool *ExtensionsListTool, input map[string
 
 func TestExecutionEnvironmentPermissionsAndRequestIsolation(t *testing.T) {
 	root := t.TempDir()
-	runner := &RunCommandTool{root: root, allowlist: map[string]bool{"node": true}, sandboxMode: CommandSandboxOff}
+	runner := &RunCommandTool{root: root, sandboxMode: CommandSandboxOff}
 	ownerRegistry := NewToolRegistry(runner, &WriteFileTool{root: root})
 	owner := NewExtensionsListTool(nil, false)
 	owner.SetExecutionRegistry(ownerRegistry)
@@ -55,12 +55,12 @@ func TestExecutionEnvironmentPermissionsAndRequestIsolation(t *testing.T) {
 
 func TestExecutionEnvironmentNewViewBindsFinalRegistry(t *testing.T) {
 	base := NewToolRegistry()
-	owner, err := base.NewView(Config{WorkDir: t.TempDir(), CommandAllowlist: []string{"node"}, FileWriteEnabled: true})
+	owner, err := base.NewView(Config{WorkDir: t.TempDir(), CommandEnabled: true, FileWriteEnabled: true})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer owner.Close()
-	guest, err := base.NewView(Config{WorkDir: t.TempDir(), CommandAllowlist: []string{"node"}, FileWriteEnabled: true})
+	guest, err := base.NewView(Config{WorkDir: t.TempDir(), CommandEnabled: true, FileWriteEnabled: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -87,13 +87,10 @@ func TestExecutionEnvironmentMissingAndUnauthorizedPrograms(t *testing.T) {
 	t.Setenv("PATH", t.TempDir())
 	t.Setenv("HOME", t.TempDir())
 	// Literal plugin lookup excludes fallback paths and never executes the file.
-	runner := &RunCommandTool{env: []string{}, allowlist: map[string]bool{"node": true}, sandboxMode: CommandSandboxOff}
+	runner := &RunCommandTool{env: []string{}, sandboxMode: CommandSandboxOff}
 	result := executionEnvironment(context.Background(), NewToolRegistry(runner))
 	programs := result["programs"].([]map[string]any)
 	if programs[0]["installed"] != false || programs[0]["authorized"] != true {
-		t.Fatal(programs)
-	}
-	if programs[1]["authorized"] != false {
 		t.Fatal(programs)
 	}
 	bin := filepath.Join(t.TempDir(), "node")
@@ -102,8 +99,12 @@ func TestExecutionEnvironmentMissingAndUnauthorizedPrograms(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", filepath.Dir(bin))
-	runner.allowlist = map[string]bool{}
 	programs = executionEnvironment(context.Background(), NewToolRegistry(runner))["programs"].([]map[string]any)
+	if programs[0]["installed"] != true || programs[0]["authorized"] != true || programs[0]["path"] != bin {
+		t.Fatal(programs)
+	}
+	// 没注册 run_command 时，装了也不算授权，更不报路径。
+	programs = executionEnvironment(context.Background(), NewToolRegistry())["programs"].([]map[string]any)
 	if programs[0]["installed"] != true || programs[0]["authorized"] != false || programs[0]["path"] != nil {
 		t.Fatal(programs)
 	}
@@ -126,7 +127,7 @@ func TestExecutionEnvironmentRequiredSandbox(t *testing.T) {
 	}
 }
 
-func TestRunCommandLocalBinLookupAndWhitelist(t *testing.T) {
+func TestRunCommandLocalBinLookupRejectsPaths(t *testing.T) {
 	t.Setenv("PATH", t.TempDir())
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -138,14 +139,13 @@ func TestRunCommandLocalBinLookupAndWhitelist(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, name), []byte("#!/bin/sh\nprintf found"), 0700); err != nil {
 		t.Fatal(err)
 	}
-	runner := &RunCommandTool{root: t.TempDir(), allowlist: map[string]bool{name: true}, timeout: time.Second, maxBytes: 100, sandboxMode: CommandSandboxOff}
+	runner := &RunCommandTool{root: t.TempDir(), timeout: time.Second, maxBytes: 100, sandboxMode: CommandSandboxOff}
 	output, err := runner.Run(context.Background(), map[string]any{"command": name})
 	if err != nil || !strings.Contains(output, "found") {
 		t.Fatalf("%s %v", output, err)
 	}
-	runner.allowlist = nil
-	if _, err := runner.Run(context.Background(), map[string]any{"command": name}); err == nil {
-		t.Fatal("lookup bypassed whitelist")
+	if _, err := runner.Run(context.Background(), map[string]any{"command": filepath.Join(dir, name)}); err == nil {
+		t.Fatal("run_command accepted a command path")
 	}
 	runner.env = []string{"PATH=/fixed/plugin"}
 	if _, err := runner.resolveCommand(name); err == nil {
@@ -154,7 +154,7 @@ func TestRunCommandLocalBinLookupAndWhitelist(t *testing.T) {
 }
 
 func TestRunCommandRealNode(t *testing.T) {
-	runner := &RunCommandTool{root: t.TempDir(), allowlist: map[string]bool{"node": true}, timeout: 5 * time.Second, maxBytes: 100, sandboxMode: CommandSandboxOff}
+	runner := &RunCommandTool{root: t.TempDir(), timeout: 5 * time.Second, maxBytes: 100, sandboxMode: CommandSandboxOff}
 	if _, err := runner.resolveCommand("node"); err != nil {
 		t.Skip("node is not installed")
 	}

@@ -124,7 +124,6 @@ func TestRunCommandSandboxBlocksWriteOutsideWorkdir(t *testing.T) {
 	outside := filepath.Join(t.TempDir(), "escaped.txt")
 	tool := &RunCommandTool{
 		root:        root,
-		allowlist:   commandAllowlistSet([]string{"sh"}),
 		timeout:     10 * time.Second,
 		maxBytes:    DefaultMaxToolOutputChars,
 		sandboxMode: CommandSandboxAuto,
@@ -154,7 +153,6 @@ func TestRunCommandSandboxBlocksNetworkByDefault(t *testing.T) {
 	}
 	tool := &RunCommandTool{
 		root:        t.TempDir(),
-		allowlist:   commandAllowlistSet([]string{"curl"}),
 		timeout:     10 * time.Second,
 		maxBytes:    DefaultMaxToolOutputChars,
 		sandboxMode: CommandSandboxAuto,
@@ -178,7 +176,6 @@ func TestRunCommandSandboxAllowsWriteInsideWorkdir(t *testing.T) {
 	root := t.TempDir()
 	tool := &RunCommandTool{
 		root:        root,
-		allowlist:   commandAllowlistSet([]string{"sh"}),
 		timeout:     10 * time.Second,
 		maxBytes:    DefaultMaxToolOutputChars,
 		sandboxMode: CommandSandboxAuto,

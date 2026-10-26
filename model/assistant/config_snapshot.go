@@ -154,7 +154,6 @@ type dianaAgentConfigSnapshot struct {
 	SubtaskMaxConcurrency   int                     `json:"subtask_max_concurrency"`
 	SkillRoots              []string                `json:"skill_roots,omitempty"`
 	MCPConfigPath           string                  `json:"mcp_config_path,omitempty"`
-	CommandAllowlist        []string                `json:"command_allowlist,omitempty"`
 	CommandTimeoutMS        int                     `json:"command_timeout_ms"`
 	BrowserCDPURL           string                  `json:"browser_cdp_url,omitempty"`
 	BrowserTimeoutMS        int                     `json:"browser_timeout_ms"`
@@ -397,7 +396,6 @@ func dianaBotConfigFromConfig(cfg BotConfig) dianaBotConfigSnapshot {
 			SubtaskMaxConcurrency:   cfg.SubtaskMaxConcurrency,
 			SkillRoots:              append([]string(nil), cfg.AgentSkillRoots...),
 			MCPConfigPath:           cfg.AgentMCPConfigPath,
-			CommandAllowlist:        append([]string(nil), cfg.AgentCommandAllowlist...),
 			CommandTimeoutMS:        cfg.AgentCommandTimeoutMS,
 			BrowserCDPURL:           secretmask.URLs(cfg.AgentBrowserCDPURL),
 			BrowserTimeoutMS:        cfg.AgentBrowserTimeoutMS,

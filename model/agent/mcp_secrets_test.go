@@ -334,7 +334,7 @@ func TestAgentInstallKeepsMaskedTokenOnlyForSameTarget(t *testing.T) {
 func TestRunCommandDropsMCPReferencedEnvironment(t *testing.T) {
 	t.Setenv("DIANA_TEST_MCP_TOKEN", leakyToken)
 	t.Setenv("DIANA_TEST_UNRELATED", "still-here")
-	cfg := Config{WorkDir: t.TempDir(), CommandAllowlist: []string{"env"}, CommandSandbox: CommandSandboxOff}
+	cfg := Config{WorkDir: t.TempDir(), CommandEnabled: true, CommandSandbox: CommandSandboxOff}
 	writeMCPServers(t, cfg, map[string]mcpServerConfig{
 		"remote": {URL: "https://mcp.example.com/mcp", Headers: map[string]string{"Authorization": "Bearer ${DIANA_TEST_MCP_TOKEN}"}},
 	})

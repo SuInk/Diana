@@ -43,13 +43,8 @@ func TestAgentDefaultsMirrorsDefaultBotConfig(t *testing.T) {
 		t.Fatal(err)
 	}
 	defaults := assistant.DefaultBotConfig()
-	if len(payload.Allowlist) != len(defaults.AgentCommandAllowlist) {
-		t.Fatalf("allowlist = %#v, want %#v", payload.Allowlist, defaults.AgentCommandAllowlist)
-	}
-	for i, command := range defaults.AgentCommandAllowlist {
-		if payload.Allowlist[i] != command {
-			t.Fatalf("allowlist[%d] = %q, want %q", i, payload.Allowlist[i], command)
-		}
+	if payload.Allowlist != nil {
+		t.Fatalf("removed command allowlist still served: %#v", payload.Allowlist)
 	}
 	if payload.WriteEnabl != defaults.AgentFileWriteEnabled {
 		t.Fatalf("file write = %v, want %v", payload.WriteEnabl, defaults.AgentFileWriteEnabled)
@@ -72,7 +67,7 @@ func TestAgentDefaultsDoesNotMutateAnything(t *testing.T) {
 	before := assistant.DefaultBotConfig()
 	serveAgentDefaults(t)
 	after := assistant.DefaultBotConfig()
-	if len(before.AgentCommandAllowlist) != len(after.AgentCommandAllowlist) {
+	if before.AgentCommandSandbox != after.AgentCommandSandbox || before.AgentFileWriteEnabled != after.AgentFileWriteEnabled {
 		t.Fatal("读一次默认值把默认值改了")
 	}
 }

@@ -4802,7 +4802,6 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 			WorkDir:                    AgentWorkspaceDir(),
 			SkillRoots:                 cfg.AgentSkillRoots,
 			MCPConfigPath:              cfg.AgentMCPConfigPath,
-			CommandAllowlist:           cfg.AgentCommandAllowlist,
 			CommandSandbox:             cfg.AgentCommandSandbox,
 			CommandSandboxAllowNetwork: cfg.AgentCommandSandboxAllowNetwork,
 			FileWriteEnabled:           cfg.AgentFileWriteEnabled,

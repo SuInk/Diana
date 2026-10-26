@@ -88,7 +88,7 @@ func TestMigrateWorkspaceStateMovesLegacyFiles(t *testing.T) {
 // 单个开关文件只挡读，白名单里有 rm、mv 时能被删掉或换掉。
 func TestCommandSandboxProtectsDianaStateDir(t *testing.T) {
 	root := t.TempDir()
-	registry, err := NewDefaultToolRegistry(Config{WorkDir: root, CommandAllowlist: []string{"rm"}}.WithDefaults())
+	registry, err := NewDefaultToolRegistry(Config{WorkDir: root, CommandEnabled: true}.WithDefaults())
 	if err != nil {
 		t.Fatal(err)
 	}

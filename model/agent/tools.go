@@ -159,10 +159,9 @@ func NewDefaultToolRegistry(cfg Config) (*ToolRegistry, error) {
 	// stat 只读，跟读工具同级；挪动、复制、删除、建目录跟 write_file 一样要「允许写入
 	// 文件」打开，工具按开关收窄自己的动作列表。
 	registry.Register(&ManageFilesTool{root: root, protected: protected, writeEnabled: cfg.FileWriteEnabled, keep: newKeepScope(cfg)})
-	if len(cfg.CommandAllowlist) > 0 {
+	if cfg.CommandEnabled {
 		registry.Register(&RunCommandTool{
 			root:           root,
-			allowlist:      commandAllowlistSet(cfg.CommandAllowlist),
 			protected:      protected,
 			mcpConfigPath:  resolveMCPConfigPath(cfg),
 			timeout:        time.Duration(cfg.CommandTimeoutMS) * time.Millisecond,
@@ -200,7 +199,7 @@ func NewAgentToolRegistry(ctx context.Context, cfg Config) (*ToolRegistry, error
 // NewSharedExtensionRegistry 创建只含扩展（Skills 与 MCP）的共享底座。
 //
 // 请求视图查不到的工具会回落到底座里找，所以底座里不能有按机器人配置的本地工具
-// （命令白名单、文件写入、浏览器）：否则一台机器人的 run_command 会被另一台借到。
+// （命令执行、文件写入、浏览器）：否则一台机器人的 run_command 会被另一台借到。
 // 本地工具和随事件变化的内置 Skill 都由 NewView 按本次请求的配置提供，底座只按
 // ExtensionScope 共享，所有机器人共用同一套 MCP 进程和已装扩展。
 func NewSharedExtensionRegistry(ctx context.Context, cfg Config) (*ToolRegistry, error) {
@@ -1055,12 +1054,11 @@ type ReadFileTool struct {
 }
 
 type RunCommandTool struct {
-	root      string
-	allowlist map[string]bool
-	timeout   time.Duration
-	maxBytes  int
+	root     string
+	timeout  time.Duration
+	maxBytes int
 	// protected 是凭据配置文件。文件工具按它拒绝读写，沙盒按它把这些路径挡在
-	// 命令的视野之外——白名单里配了 cat、grep 时，那是唯一还拦得住的一层。
+	// 命令的视野之外——命令能跑 cat、grep，那是唯一还拦得住的一层。
 	protected protectedFiles
 	// mcpConfigPath 用来找出 MCP 配置用 ${NAME} 引用的进程环境变量，命令拿不到它们，
 	// 见 commandEnvironment。
@@ -1093,7 +1091,7 @@ func (t *RunCommandTool) InputSchema() map[string]any {
 	})
 }
 
-// Run 在 Agent 工作目录内执行白名单命令。
+// Run 在 Agent 工作目录内执行命令。
 func (t *RunCommandTool) Run(ctx context.Context, input map[string]any) (string, error) {
 	command := stringFromInput(input, "command")
 	if command == "" {
@@ -1101,9 +1099,6 @@ func (t *RunCommandTool) Run(ctx context.Context, input map[string]any) (string,
 	}
 	if strings.ContainsAny(command, `/\`) {
 		return "", errors.New("command must be a binary name, not a path")
-	}
-	if !t.commandAllowed(command) {
-		return "", fmt.Errorf("command %q is not allowed", command)
 	}
 	cwd, err := safePath(t.root, stringFromInput(input, "cwd"))
 	if err != nil {
@@ -1255,8 +1250,8 @@ func (t *RunCommandTool) sandboxSecrets() []string {
 //   - 名字像凭据的变量（TAVILY_API_KEY、GITHUB_TOKEN、DIANA_BILI_SESSDATA、编码代理
 //     的 api_key_env 之类）和值里嵌着 userinfo 的地址（带账号密码的代理）。
 //
-// 白名单里有 env、printenv 时这些就是令牌原文——沙箱挡的是文件，挡不住继承下来的
-// 环境变量。白名单里的命令是给模型查东西用的，不需要主人的凭据。
+// 跑 env、printenv 时这些就是令牌原文——沙箱挡的是文件，挡不住继承下来的
+// 环境变量。run_command 是给模型在工作区里干活用的，不需要主人的凭据。
 func (t *RunCommandTool) commandEnvironment() []string {
 	return withExecutionSearchPath(commandEnvironmentFor(os.Environ(), t.mcpConfigPath))
 }
@@ -1278,24 +1273,6 @@ func commandEnvironmentFor(environ []string, mcpConfigPath string) []string {
 		}
 	}
 	return environmentWithout(environ, drop)
-}
-
-func (t *RunCommandTool) commandAllowed(command string) bool {
-	if t.allowlist["*"] {
-		return true
-	}
-	return t.allowlist[command]
-}
-
-func commandAllowlistSet(values []string) map[string]bool {
-	out := map[string]bool{}
-	for _, value := range values {
-		value = strings.TrimSpace(value)
-		if value != "" {
-			out[value] = true
-		}
-	}
-	return out
 }
 
 // Name 返回读文件工具名称。

@@ -58,25 +58,6 @@ type LLMClient interface {
 	Generate(ctx context.Context, req llm.GenerateRequest) (*llm.GenerateResponse, error)
 }
 
-// DefaultCommandAllowlist 是新建配置带的命令白名单：一组只报状态、不碰数据的命令。
-//
-// 收进来的标准有三条，缺一不可：不读任意路径的文件、不出网、不改任何东西。
-// 因为白名单里的程序在没有可用沙盒时就是以本进程权限直接跑的，它能碰什么完全
-// 由它自己决定，白名单只管得到「能不能跑」。
-//
-// 于是这些都被刻意排除在外：
-//   - cat / ls / head / tail / find —— 能读任意路径，包括 config.yaml 和数据库；
-//     工作目录内的读取已经有 read_file / grep / find_files，它们锁在 workspace 里。
-//   - curl / wget / nc —— 读到的东西能被发出去，这一层白名单挡不住。
-//   - ps —— 进程列表会带上别的进程的完整命令行，那里面可能有别人的密钥。
-//     Diana 自己的 CPU 和内存 host_stats 已经给了，不需要靠它。
-//   - git / 包管理器 / 任何写操作 —— 会改磁盘。
-//
-// 想要更多就自己往里加，那是明确的一次授权动作。
-func DefaultCommandAllowlist() []string {
-	return []string{"uptime", "free", "df", "uname", "nproc", "date", "hostname", "whoami"}
-}
-
 type Config struct {
 	// SystemPrompt 为专用子代理替换通用角色提示词；空值保留默认行为。仅由可信调用方设置。
 	SystemPrompt string
@@ -106,8 +87,10 @@ type Config struct {
 	FileWriteEnabled bool
 	// FileWriteMaxBytes 是单次写入的字节上限，留空按 DefaultFileWriteMaxBytes。
 	FileWriteMaxBytes int
-	CommandAllowlist  []string
-	CommandTimeoutMS  int
+	// CommandEnabled 注册 run_command。没有程序白名单：主人会话里能跑什么只受工作目录
+	// 和 CommandSandbox 约束，跟 host_access 能做的事比是严格的子集。成员和安全模式不开。
+	CommandEnabled   bool
+	CommandTimeoutMS int
 	// CommandSandbox 见 CommandSandbox* 常量，默认 auto。
 	CommandSandbox string
 	// CommandSandboxAllowNetwork 放开沙盒内的网络访问，默认关闭。
@@ -304,7 +287,6 @@ func (cfg Config) WithDefaults() Config {
 	if cfg.CommandTimeoutMS > MaxAllowedCommandTimeoutMS {
 		cfg.CommandTimeoutMS = MaxAllowedCommandTimeoutMS
 	}
-	cfg.CommandAllowlist = cleanStringList(cfg.CommandAllowlist)
 	cfg.CommandSandbox = normalizeCommandSandboxMode(cfg.CommandSandbox)
 	if cfg.BrowserTimeoutMS <= 0 {
 		cfg.BrowserTimeoutMS = DefaultBrowserTimeoutMS
@@ -416,7 +398,7 @@ func defaultSkillRoots(workDir string, configured []string) []string {
 }
 
 // ExtensionScope 只保留扩展管理（Skills 目录、MCP 配置与进程）用到的字段。
-// 共享扩展底座按它区分：各机器人的步数、命令白名单、沙盒这些设置不影响扩展本身，
+// 共享扩展底座按它区分：各机器人的步数、命令开关、沙盒这些设置不影响扩展本身，
 // 不该让同一套 MCP 服务因此被拉起好几份。
 func (cfg Config) ExtensionScope() Config {
 	cfg = cfg.WithDefaults()

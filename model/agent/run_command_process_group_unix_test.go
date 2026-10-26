@@ -35,7 +35,6 @@ func TestRunCommandTimeoutKillsGrandchildren(t *testing.T) {
 			root := t.TempDir()
 			tool := &RunCommandTool{
 				root:        root,
-				allowlist:   map[string]bool{"sh": true},
 				timeout:     500 * time.Millisecond,
 				maxBytes:    4096,
 				sandboxMode: mode,

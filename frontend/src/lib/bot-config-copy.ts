@@ -6,6 +6,7 @@ export function copyBotConfiguration(source: BotProfileConfig, defaults: BotProf
   const copied = JSON.parse(JSON.stringify(source)) as BotProfileConfig;
   const data = copied as unknown as Record<string, unknown>;
   delete data.agent_host_access_enabled;
+  delete data.agent_command_allowlist;
   for (const key of Object.keys(data)) {
     if ((/^(onebot_|qq_|dingtalk_|feishu_|wecom_|weixin_|imessage_)/.test(key) && key !== "qq_typing_enabled")
       || (key.startsWith("telegram_") && key !== "telegram_suppress_bot_messages")) {

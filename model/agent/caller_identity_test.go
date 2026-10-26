@@ -112,7 +112,6 @@ func TestRunCommandReceivesCallerEnvironment(t *testing.T) {
 	t.Setenv("DIANA_CALLER_GROUP_ID", "forged-group")
 	tool := &RunCommandTool{
 		root:        t.TempDir(),
-		allowlist:   commandAllowlistSet([]string{"env"}),
 		timeout:     10 * time.Second,
 		maxBytes:    DefaultMaxToolOutputChars,
 		sandboxMode: CommandSandboxOff,

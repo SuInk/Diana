@@ -15,7 +15,6 @@ import (
 func TestAgentRegistryConfigCarriesTheSandboxSettings(t *testing.T) {
 	runtime := &Runtime{}
 	cfg := BotConfig{
-		AgentCommandAllowlist:           []string{"uptime"},
 		AgentCommandSandbox:             agent.CommandSandboxRequire,
 		AgentCommandSandboxAllowNetwork: true,
 	}.WithDefaults()

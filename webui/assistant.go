@@ -560,7 +560,6 @@ func (h *BotHandler) createProfile(c *gin.Context) {
 func (h *BotHandler) agentDefaults(c *gin.Context) {
 	defaults := assistant.DefaultBotConfig()
 	c.JSON(http.StatusOK, gin.H{
-		"agent_command_allowlist":  defaults.AgentCommandAllowlist,
 		"agent_file_write_enabled": defaults.AgentFileWriteEnabled,
 		"agent_command_sandbox":    defaults.AgentCommandSandbox,
 		"subtask_max_tasks":        defaults.SubtaskMaxTasks,

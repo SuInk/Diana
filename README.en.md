@@ -157,7 +157,7 @@ Every field is documented in [`config.example.yaml`](./config.example.yaml).
 - Behind a reverse proxy you must declare `trusted_proxies` in `config.yaml` (or set the `DIANA_TRUSTED_PROXIES` environment variable for the process); otherwise rate limiting and logs will see the proxy's address as every client's IP.
 - With an owner account configured, "quick login" is available: grab a 6-digit one-time code from the login page and DM it to the bot; the bot replies with the source IP and device, so a hijacked code is spotted immediately.
 
-More detail (session management, exempted paths, agent command allowlist) in the [configuration docs](https://suink.github.io/Diana/configuration.html).
+More detail (session management, exempted paths, agent command sandbox) in the [configuration docs](https://suink.github.io/Diana/configuration.html).
 
 ## Contributing
 

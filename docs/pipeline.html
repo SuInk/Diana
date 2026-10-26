@@ -192,7 +192,7 @@
           <li class="q"><div class="flow-node"><strong>调用模型</strong><p>规划截止 = 请求截止 − 收尾预留（配置值与剩余时间三分之一取小）。</p></div><div class="flow-exits"><span class="flow-exit go"><b>规划截止到了</b>强制收尾</span><span class="flow-exit"><b>其他错误</b>交给回复流程的错误处理</span><span class="flow-exit go"><b>纯文本 / agent_finalize</b>收尾校验</span></div></li>
           <li><div class="flow-node"><strong>只执行一个工具调用</strong><p>同批其他调用回「未执行」，让每一步都能看到上一步的结果。</p></div></li>
           <li class="q"><div class="flow-node"><strong>执行前检查</strong><p>延迟工具须先加载并过 schema 校验 → 未知或无权 → 参数纠正 → 扩展变更须带确认码 → 与上一步完全相同则跳过 → 配额（<code>web_search</code> 3 次，自省 6 次、<code>tools_load</code> 4 次不占步数）。</p></div><div class="flow-exits"><span class="flow-exit loop"><b>不通过</b>计一次协议修复，回到步数判断；修复用完则强制收尾</span></div></li>
-          <li><div class="flow-node"><strong>执行工具</strong><p>单工具超时与输出预算；<code>run_command</code> 先过命令白名单，再按配置放进沙箱；MCP 另有 60 秒超时。</p></div></li>
+          <li><div class="flow-node"><strong>执行工具</strong><p>单工具超时与输出预算；<code>run_command</code> 按配置放进沙箱；MCP 另有 60 秒超时。</p></div></li>
           <li><div class="flow-node"><strong>整理结果</strong><p>凭据打码、超长截断；搜索和渲染结果记入证据账本；附上剩余预算。工具报错不致命，变成观察结果交回模型。</p></div><div class="flow-exits"><span class="flow-exit loop"><b>下一步</b>回到步数判断</span></div></li>
         </ol>
         <h3>收尾校验</h3>

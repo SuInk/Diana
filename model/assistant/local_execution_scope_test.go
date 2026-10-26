@@ -15,7 +15,6 @@ func TestLocalExecutionCapabilitiesRemainRequestScoped(t *testing.T) {
 	runtime := NewRuntime(BotConfig{OwnerID: "owner"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	defer runtime.closeAgentRegistryCache()
 	cfg := DefaultBotConfig()
-	cfg.AgentCommandAllowlist = []string{"node"}
 	cfg.AgentFileWriteEnabled = true
 	cfg.AgentCommandSandbox = "off"
 	owner, err := runtime.newAgentRegistry(context.Background(), cfg.WithDefaults(), MessageEvent{Kind: EventKindPrivate, UserID: "owner"}, RelationshipPolicy{Owner: true})
@@ -28,9 +27,9 @@ func TestLocalExecutionCapabilitiesRemainRequestScoped(t *testing.T) {
 			t.Fatalf("owner missing %s with coding plugin disabled", name)
 		}
 	}
-	cfg.AgentCommandAllowlist = nil
-	cfg.AgentFileWriteEnabled = false
-	closed, err := runtime.newAgentRegistry(context.Background(), cfg.WithDefaults(), MessageEvent{Kind: EventKindPrivate, UserID: "owner"}, RelationshipPolicy{Owner: true})
+	closedCfg := cfg
+	closedCfg.AgentMode = AgentModeSafe
+	closed, err := runtime.newAgentRegistry(context.Background(), closedCfg.WithDefaults(), MessageEvent{Kind: EventKindPrivate, UserID: "owner"}, RelationshipPolicy{Owner: true})
 	if err != nil {
 		t.Fatal(err)
 	}

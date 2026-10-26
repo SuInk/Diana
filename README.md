@@ -188,7 +188,7 @@ docker compose start diana
 - 套了反向代理必须在 `config.yaml` 里声明 `trusted_proxies`（或给进程设环境变量 `DIANA_TRUSTED_PROXIES`），否则限流和日志里的来源 IP 都会变成代理地址。
 - 配好主人账号后可用「快速登录」：登录页取一个 6 位验证码，私聊发给机器人即登录，机器人会回执来源 IP 和设备，被冒用能当场发现。
 
-更多细节（会话管理、豁免路径、Agent 命令白名单）见[配置文档](https://suink.github.io/Diana/configuration.html)。
+更多细节（会话管理、豁免路径、Agent 命令沙盒）见[配置文档](https://suink.github.io/Diana/configuration.html)。
 
 ## 参与开发
 

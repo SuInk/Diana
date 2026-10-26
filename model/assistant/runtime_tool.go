@@ -200,7 +200,6 @@ func (r *Runtime) generateReplyWithAgentTools(ctx context.Context, cfg BotConfig
 			WorkDir:                    AgentWorkspaceDir(),
 			SkillRoots:                 cfg.AgentSkillRoots,
 			MCPConfigPath:              cfg.AgentMCPConfigPath,
-			CommandAllowlist:           cfg.AgentCommandAllowlist,
 			CommandSandbox:             cfg.AgentCommandSandbox,
 			CommandSandboxAllowNetwork: cfg.AgentCommandSandboxAllowNetwork,
 			FileWriteEnabled:           cfg.AgentFileWriteEnabled,

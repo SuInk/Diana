@@ -1565,7 +1565,6 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
   }
   if (path === "/api/assistant/agent-defaults")
     return json({
-      agent_command_allowlist: ["uptime", "free", "df", "uname", "nproc", "date", "hostname", "whoami"],
       agent_file_write_enabled: true,
       agent_command_sandbox: "auto",
       subtask_max_tasks: 8,

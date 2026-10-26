@@ -327,7 +327,7 @@ func (p *scopeRouteProvider) Generate(_ context.Context, req llm.GenerateRequest
 	return &llm.GenerateResponse{Provider: llm.ProviderOpenAICompatible, Model: "test", Text: p.reply}, nil
 }
 
-// 扩展底座在机器人之间共享后，本地工具仍按各自配置：没开命令执行的机器人不能从底座
+// 扩展底座在机器人之间共享后，本地工具仍按各自配置：安全模式的机器人不能从底座
 // 借到别的机器人的 run_command；随事件变化的内置 Skill 也只出现在对应请求里。
 func TestSharedExtensionRegistryKeepsLocalToolsPerBot(t *testing.T) {
 	t.Setenv("APP_DB_PATH", filepath.Join(t.TempDir(), "app.db"))
@@ -336,8 +336,7 @@ func TestSharedExtensionRegistryKeepsLocalToolsPerBot(t *testing.T) {
 	event := MessageEvent{Kind: EventKindPrivate, UserID: "owner"}
 	policy := RelationshipPolicy{Owner: true}
 	withCommands, without := standardModeBotConfig(), standardModeBotConfig()
-	withCommands.AgentCommandAllowlist = []string{"echo"}
-	without.AgentCommandAllowlist = []string{}
+	without.AgentMode = AgentModeSafe
 
 	first, err := runtime.newAgentRegistry(context.Background(), withCommands.WithDefaults(), event, policy)
 	if err != nil {
@@ -353,10 +352,10 @@ func TestSharedExtensionRegistryKeepsLocalToolsPerBot(t *testing.T) {
 		t.Fatalf("扩展底座条目 = %d，想要 1", len(runtime.agentRegistryCache))
 	}
 	if _, ok := first.Get("run_command"); !ok {
-		t.Fatal("开了命令白名单的机器人没有 run_command")
+		t.Fatal("标准模式的机器人没有 run_command")
 	}
 	if _, ok := second.Get("run_command"); ok {
-		t.Fatal("没开命令执行的机器人从共享底座借到了 run_command")
+		t.Fatal("安全模式的机器人从共享底座借到了 run_command")
 	}
 	hasBotProtocol := false
 	for _, skill := range second.Skills() {

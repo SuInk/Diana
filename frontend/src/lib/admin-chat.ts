@@ -28,7 +28,7 @@ export interface AdminChatSession {
   messages: AdminChatMessage[] | null;
   running: boolean;
   agent_mode?: 'standard' | 'safe';
-  command_allowlist: string[] | null;
+  command_enabled: boolean;
   file_write_enabled: boolean;
   sandbox: string;
   network_enabled: boolean;

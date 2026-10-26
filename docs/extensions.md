@@ -40,7 +40,7 @@ MCP 配置里存的是访问令牌原文，所以它默认放在 **Agent 工作�
 
 黑名单仍然留着，兜两种情况：路径被显式指回工作目录里，以及 `.diana/` 整个目录和根下尚未迁走的旧文件。它们对 `read_file`、`grep`、`find_files`、`write_file`、`edit_file`、`manage_files`、`save_to_workspace` 一律关闭，`list_files` 里也不出现（返回 `protected_hidden` 计数说明有东西被挡）。指向这些文件的软链接同样挡住。要查看或修改走 WebUI 扩展页。
 
-`run_command` 走另一条路：白名单只管得到「能跑哪个程序」，管不到「这个程序能碰什么」，所以凭据文件由命令沙箱单独挡住——macOS 的 `sandbox-exec` 策略在 `allow file-read*` 之后逐条 `deny file-read*`（后写的规则覆盖先写的；目录按 `subpath` 整片挡），Linux 的 bubblewrap 用 `--ro-bind /dev/null` 把文件盖成空文件、用空的 `--tmpfs` 盖住目录。macOS 上单个文件只挡得住读、挡不住写（工作目录整体可写），这正是运行时状态收进 `.diana/` 的原因：目录会在放开工作目录写入之后再 `deny file-write*`，白名单里有 `rm`、`mv` 也删不掉、换不掉开关文件。白名单里配了 `cat`、`grep`、`head` 也读不出令牌，读到的是拒绝或空内容。
+`run_command` 走另一条路：它能跑任意程序，管不到「这个程序能碰什么」，所以凭据文件由命令沙箱单独挡住——macOS 的 `sandbox-exec` 策略在 `allow file-read*` 之后逐条 `deny file-read*`（后写的规则覆盖先写的；目录按 `subpath` 整片挡），Linux 的 bubblewrap 用 `--ro-bind /dev/null` 把文件盖成空文件、用空的 `--tmpfs` 盖住目录。macOS 上单个文件只挡得住读、挡不住写（工作目录整体可写），这正是运行时状态收进 `.diana/` 的原因：目录会在放开工作目录写入之后再 `deny file-write*`，白名单里有 `rm`、`mv` 也删不掉、换不掉开关文件。白名单里配了 `cat`、`grep`、`head` 也读不出令牌，读到的是拒绝或空内容。
 
 挡读清单不止 MCP 配置。启动时还会登记这些凭据落脚点，文件工具和命令沙箱同样不放行：
 
@@ -52,9 +52,9 @@ MCP 配置里存的是访问令牌原文，所以它默认放在 **Agent 工作�
 - 工作目录里编码代理的登录目录 `coding-runtime/auth`、`coding-runtime/state`；
 - yt-dlp 的 cookies 文件（`ytb_cookies.txt`、`DIANA_YTDLP_COOKIES` 或插件设置里的路径，用到时登记）。
 
-**前提是沙箱真的在用。** `command_sandbox` 配成 `off`，或者这台机器上没有可用的 bubblewrap / sandbox-exec 而模式是 `auto`（探测失败时 `auto` 承诺照常执行），命令就是以 Diana 自己的进程权限裸跑的，这一层不存在。`require` 模式下没有沙箱直接拒绝执行。命令白名单默认为空，放开读取类命令之前先确认沙箱状态——WebUI 和启动日志里都能看到。
+**前提是沙箱真的在用。** `command_sandbox` 配成 `off`，或者这台机器上没有可用的 bubblewrap / sandbox-exec 而模式是 `auto`（探测失败时 `auto` 承诺照常执行），命令就是以 Diana 自己的进程权限裸跑的，这一层不存在。`require` 模式下没有沙箱直接拒绝执行。依赖 `run_command` 之前先确认沙箱状态——WebUI 和启动日志里都能看到。
 
-沙箱挡的是文件，挡不住继承下来的环境变量。所以传给 `run_command` 的环境会摘掉这几类变量，白名单里有 `env`、`printenv` 也打不出来：MCP 配置里用 `${NAME}` 引用的（令牌放在进程环境、配置只写引用）；名字像凭据的（含 `TOKEN`、`SECRET`、`KEY`、`PASSWORD`、`COOKIE`、`SESSDATA`、`_CK` 等，例如 `TAVILY_API_KEY`、`DIANA_BILI_SESSDATA`、编码代理的 `api_key_env`；以 `_FILE`、`_PATH`、`_DIR`、`_URL` 结尾的是位置不是凭据，保留）；值里嵌着账号密码的地址（带认证的代理）。stdio 服务子进程自己的环境变量：Linux 的 bubblewrap 另开了 PID 命名空间，命令看不到别的进程的 `/proc/<pid>/environ`；macOS 不向普通进程公开其他进程的环境，沙箱里也起不了 `ps`。
+沙箱挡的是文件，挡不住继承下来的环境变量。所以传给 `run_command` 的环境会摘掉这几类变量，跑 `env`、`printenv` 也打不出来：MCP 配置里用 `${NAME}` 引用的（令牌放在进程环境、配置只写引用）；名字像凭据的（含 `TOKEN`、`SECRET`、`KEY`、`PASSWORD`、`COOKIE`、`SESSDATA`、`_CK` 等，例如 `TAVILY_API_KEY`、`DIANA_BILI_SESSDATA`、编码代理的 `api_key_env`；以 `_FILE`、`_PATH`、`_DIR`、`_URL` 结尾的是位置不是凭据，保留）；值里嵌着账号密码的地址（带认证的代理）。stdio 服务子进程自己的环境变量：Linux 的 bubblewrap 另开了 PID 命名空间，命令看不到别的进程的 `/proc/<pid>/environ`；macOS 不向普通进程公开其他进程的环境，沙箱里也起不了 `ps`。
 
 ## 模型侧只见掩码
 

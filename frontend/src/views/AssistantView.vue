@@ -1863,36 +1863,12 @@
                 <span class="hint">搜索与分析子任务按机器人分别限制。任务调用可以主动降低并发，但不能突破这里的配置；实际执行仍受服务端全局并发限制。</span>
               </div>
               <div v-if="agentMode !== 'standard'" class="field wide">
-                <span class="hint">命令白名单、文件写入、浏览器和命令沙盒这些设置在安全模式下不起作用，切回标准模式后按原来的值生效。</span>
+                <span class="hint">文件写入、浏览器和命令沙盒这些设置在安全模式下不起作用，切回标准模式后按原来的值生效。</span>
               </div>
               <template v-if="agentMode === 'standard'">
-                <!-- 白名单为空时 run_command 根本不注册。这不是「什么都不许跑」，
-                     是模型手里没有这个工具——以前界面上没有任何地方这么说，于是
-                     「让机器人执行指令」表现为它只用嘴回你，看不出是没开。 -->
                 <div class="field wide">
-                  <label for="agent-allow">工作区命令白名单（逗号分隔，* 表示全部）</label>
-                  <div class="input-group">
-                    <input id="agent-allow" v-model="allowlistDraft" class="input" placeholder="留空 = 关闭 run_command" />
-                    <button class="btn small ghost" type="button" @click="applyNodeExecution">允许 Node.js 执行</button>
-                  </div>
-                  <span class="hint" :class="{ danger: commandAllowlistIsWildcard }">
-                    <template v-if="!commandAllowlistEnabled">
-                      当前为空：工作区命令工具 run_command 关闭。要开放就填具体命令，例如 <code>uptime,free,df</code>。
-                      （新建的机器人会自带一组只读诊断命令；这一栏被清空过的话不会自动填回来。）
-                    </template>
-                    <template v-else-if="commandAllowlistIsWildcard">
-                      <code>*</code> 放行任意程序。白名单是命令执行唯一按名字生效的限制，填 <code>*</code> 等于放弃它。
-                    </template>
-                    <template v-else>
-                      run_command 只能执行列出的程序；命令名不能带路径，也不经过 shell 解析。
-                    </template>
-                  </span>
+                  <span class="hint">标准模式下，主人和 WebUI 管理员默认可操作宿主机：读写文件、执行命令、联网和安装软件，常规任务无需逐条审批。权限等于 Diana 的运行账号；需要收紧时切换安全模式。工作区命令工具 run_command 只对主人开放，按下面的命令沙盒设置运行；工作区工具的限制不影响主人的宿主机工具。</span>
                 </div>
-                <div class="field wide">
-                  <span class="hint">标准模式下，主人和 WebUI 管理员默认可操作宿主机：读写文件、执行命令、联网和安装软件，常规任务无需逐条审批。权限等于 Diana 的运行账号；需要收紧时切换安全模式。工作区工具的限制不影响主人的宿主机工具。</span>
-                </div>
-                <!-- 读 / 写 / 执行三档分开：读错文件浪费一次调用，写错文件改的是磁盘，
-                     执行则连「程序能碰什么」都要另一层来管。 -->
                 <!-- 存量部署升级后不会凭空拿到这些能力（那是静默扩权），所以给一次
                      显式的「填入」：只改表单，仍然要用户自己点保存。 -->
                 <div class="field wide">
@@ -1902,7 +1878,7 @@
                     </button>
                   </div>
                   <span class="hint">
-                    把命令白名单、写入开关和沙盒模式填成新建机器人时的推荐值。只改这张表单，点「保存配置」才生效。
+                    把写入开关和沙盒模式填成新建机器人时的推荐值。只改这张表单，点「保存配置」才生效。
                   </span>
                 </div>
                 <div class="field wide">
@@ -1952,7 +1928,7 @@
                     ]"
                   />
                   <span class="hint">
-                    白名单管的是「能跑哪个程序」，沙盒管的是「这个程序能碰什么」——放行了 <code>cat</code>，它照样读得到配置和数据库。
+                    run_command 能跑任意程序，沙盒管的是「这个程序能碰什么」——没有沙盒时 <code>cat</code> 照样读得到配置和数据库。
                     Linux 需要 <code>bubblewrap</code>，macOS 用系统自带的 <code>sandbox-exec</code>。
                   </span>
                 </div>
@@ -1962,7 +1938,7 @@
                     <span class="track" aria-hidden="true"></span>
                     <span class="switch-label">允许沙盒内的命令联网</span>
                   </label>
-                  <span class="hint">默认切断。命令能联网就意味着它读到的东西能被发出去，这一层白名单挡不住。</span>
+                  <span class="hint">默认切断。命令能联网就意味着它读到的东西能被发出去。</span>
                 </div>
                 <div class="field">
                   <label for="agent-timeout">命令超时（毫秒）</label>
@@ -2334,7 +2310,6 @@ import {
 } from "../lib/agent-mode";
 import { toastError, toastSuccess } from "../lib/toast";
 import { describeLLMTestError } from "../lib/llm-test";
-import { allowNodeExecution } from "../lib/node-execution-preset";
 import { channelAccountUnhealthy, channelOperational, channelStatusHint, channelStatusLabel } from "../lib/channel-status";
 import { effectiveReplyTone, FALLBACK_REPLY_TONE, normalizeReplyTone, replyToneOverride } from "../lib/reply-tone";
 import { accountSafetyRulesOverride, effectiveAccountSafetyRules, FALLBACK_ACCOUNT_SAFETY_RULES, normalizeAccountSafetyRules } from "../lib/account-safety-rules";
@@ -2474,19 +2449,6 @@ const tokenDraft = ref("");
 const triggersDraft = ref("");
 const welcomeTemplatesDraft = ref("");
 const replyFilterRulesDraft = ref("");
-const allowlistDraft = ref("");
-
-// 只并入 node，其它命令、* 和文件写入、网络设置原样保留；保存配置后才生效。
-function applyNodeExecution(): void {
-  allowlistDraft.value = allowNodeExecution(allowlistDraft.value);
-  toastSuccess("已允许 Node.js 执行，点「保存配置」后生效");
-}
-
-// 白名单为空 = run_command 关闭，这一点要在界面上直接说出来，见模板里的说明。
-const commandAllowlistEntries = computed(() => splitList(allowlistDraft.value));
-const commandAllowlistEnabled = computed(() => commandAllowlistEntries.value.length > 0);
-const commandAllowlistIsWildcard = computed(() => commandAllowlistEntries.value.includes("*"));
-
 // AppSelect 要一个确定的值，而配置里这一项是可选的：留空按 auto。
 // 推荐默认值从后端要，不在前端抄一份——抄一份迟早和 DefaultBotConfig 对不上。
 const applyingAgentDefaults = ref(false);
@@ -2495,7 +2457,6 @@ async function applyAgentDefaults(): Promise<void> {
   applyingAgentDefaults.value = true;
   try {
     const defaults = await getAgentDefaults();
-    allowlistDraft.value = (defaults.agent_command_allowlist ?? []).join(",");
     form.value.agent_file_write_enabled = defaults.agent_file_write_enabled;
     form.value.agent_command_sandbox = defaults.agent_command_sandbox;
     form.value.subtask_max_tasks = defaults.subtask_max_tasks;
@@ -4515,7 +4476,6 @@ function setForm(config: BotProfileConfig): void {
   triggersDraft.value = formatTriggerWords(config.group_triggers ?? []);
   welcomeTemplatesDraft.value = (config.welcome_templates ?? []).join("\n");
   replyFilterRulesDraft.value = (config.reply_filter_rules ?? []).join("\n");
-  allowlistDraft.value = (config.agent_command_allowlist ?? []).join(",");
   privateAllowedUsers.value = [...(config.private_admission?.allowed_users ?? [])];
   for (const draft of Object.values(tokenDrafts)) {
     draft.value = "";
@@ -4541,13 +4501,6 @@ function onWeixinLoginUpdated(config: BotProfileConfig): void {
   current.weixin_user_id = config.weixin_user_id;
   current.weixin_bot_token_configured = config.weixin_bot_token_configured;
   if (!current.owner_id?.trim() && config.owner_id) current.owner_id = config.owner_id;
-}
-
-function splitList(raw: string): string[] {
-  return raw
-    .split(/[,，]/)
-    .map((item) => item.trim())
-    .filter((item) => item !== "");
 }
 
 // 人设变量取配置里的机器人名称，不取触发别名。
@@ -4763,7 +4716,6 @@ async function save(): Promise<void> {
       reply_suppression_max_minutes: Math.trunc(Number(current.reply_suppression_max_minutes)) || 0,
       bot_reply_loop_threshold: Math.trunc(Number(current.bot_reply_loop_threshold)) || 0,
       reply_refusal_threshold: Math.trunc(Number(current.reply_refusal_threshold)) || 0,
-      agent_command_allowlist: splitList(allowlistDraft.value),
       recall_reply_auto_delete_delay_seconds: Number.isInteger(recallDeleteDelay)
         ? recallDeleteDelay
         : defaultRecallReplyAutoDeleteDelaySeconds,
@@ -4838,7 +4790,6 @@ function editorSnapshot(): string {
     triggersDraft.value,
     welcomeTemplatesDraft.value,
     replyFilterRulesDraft.value,
-    allowlistDraft.value,
     privateAllowedUsers.value,
     Object.values(tokenDrafts).map((draft) => draft.value),
     modelRequestTimeoutDraft.value,

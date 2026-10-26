@@ -112,7 +112,7 @@ func run() error {
 	// Docker is the isolation boundary. Keep the native runner, prompt, schemas,
 	// protocol repair and tool implementations intact; no benchmark-specific solver.
 	cfg := agent.Config{WorkDir: *workdir, MaxSteps: *steps, FileWriteEnabled: true,
-		BrowserToolsDisabled: true, CommandAllowlist: []string{"*"},
+		BrowserToolsDisabled: true, CommandEnabled: true,
 		CommandSandbox: agent.CommandSandboxOff, CommandTimeoutMS: 60000}
 	cfg = cfg.WithDefaults()
 	writeRedacted(enc, map[string]any{"kind": "config", "model": in.Config.Model,

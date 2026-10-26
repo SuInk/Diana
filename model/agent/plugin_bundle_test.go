@@ -72,7 +72,7 @@ func TestPluginScriptUsesFixedEntryAndLiteralScopedEnvironment(t *testing.T) {
 	}
 	t.Setenv("DIANA_BUNDLE_PRIVATE", "must-not-inherit")
 	t.Setenv("EXPAND_ME", "incorrect-expansion")
-	cfg := Config{WorkDir: t.TempDir(), CommandAllowlist: []string{"sh"}, CommandSandbox: CommandSandboxOff}
+	cfg := Config{WorkDir: t.TempDir(), CommandEnabled: true, CommandSandbox: CommandSandboxOff}
 	scripts := map[string]PluginScript{"echo": {Command: "sh", Entry: "echo.sh", Args: []string{"fixed"}, Env: map[string]string{"BUNDLE_VALUE": "literal$EXPAND_ME"}}}
 	tool := NewPluginScriptTool("alice.echo", root, cfg, scripts)
 	output, err := tool.Run(context.Background(), map[string]any{"script": "echo", "args": []any{"business"}, "command": "ignored", "cwd": "../", "env": map[string]any{"BUNDLE_VALUE": "ignored"}})
@@ -83,12 +83,11 @@ func TestPluginScriptUsesFixedEntryAndLiteralScopedEnvironment(t *testing.T) {
 	if err := json.Unmarshal([]byte(output), &result); err != nil || result["cwd"] != "." {
 		t.Fatalf("script did not use workspace: %s", output)
 	}
-	cfg.CommandAllowlist = nil
-	blocked := NewPluginScriptTool("alice.echo", root, cfg, scripts)
-	if _, err := blocked.Run(context.Background(), map[string]any{"script": "echo"}); err == nil || !strings.Contains(err.Error(), "allowlist") {
+	pathScripts := map[string]PluginScript{"echo": {Command: "/bin/sh", Entry: "echo.sh"}}
+	blocked := NewPluginScriptTool("alice.echo", root, cfg, pathScripts)
+	if _, err := blocked.Run(context.Background(), map[string]any{"script": "echo"}); err == nil || !strings.Contains(err.Error(), "binary name") {
 		t.Fatalf("err=%v", err)
 	}
-	cfg.CommandAllowlist = []string{"sh"}
 	script := scripts["echo"]
 	script.AllowNetwork = true
 	scripts["echo"] = script
@@ -115,7 +114,7 @@ func TestPluginMCPRegistryCallsNamespacedStdioTool(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", root+string(os.PathListSeparator)+os.Getenv("PATH"))
-	cfg := Config{WorkDir: t.TempDir(), CommandAllowlist: []string{command}, CommandSandbox: CommandSandboxOff, MCPStartupTimeoutMS: 3000}
+	cfg := Config{WorkDir: t.TempDir(), CommandEnabled: true, CommandSandbox: CommandSandboxOff, MCPStartupTimeoutMS: 3000}
 	servers := map[string]PluginMCPServer{"demo": {Command: command, Args: []string{"-test.run=^TestPluginMCPRegistryCallsNamespacedStdioTool$"}, Env: map[string]string{"DIANA_AGENT_MCP_TEST_SERVER": "1"}, Required: true, EnabledTools: []string{"echo"}}}
 	registry, err := NewPluginMCPRegistry(context.Background(), "alice.mcp", root, servers, cfg)
 	if err != nil {
@@ -129,9 +128,9 @@ func TestPluginMCPRegistryCallsNamespacedStdioTool(t *testing.T) {
 	if err != nil || output != "echo: bundle works" {
 		t.Fatalf("output=%q err=%v", output, err)
 	}
-	cfg.CommandAllowlist = nil
-	if _, err := NewPluginMCPRegistry(context.Background(), "alice.mcp", root, servers, cfg); err == nil {
-		t.Fatal("MCP bypassed command allowlist")
+	pathServers := map[string]PluginMCPServer{"demo": {Command: filepath.Join(root, command), Required: true}}
+	if _, err := NewPluginMCPRegistry(context.Background(), "alice.mcp", root, pathServers, cfg); err == nil || !strings.Contains(err.Error(), "binary name") {
+		t.Fatalf("MCP accepted a command path: %v", err)
 	}
 }
 

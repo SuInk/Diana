@@ -166,7 +166,7 @@ func (t *pluginResourceTool) Run(ctx context.Context, input map[string]any) (str
 func pluginCommandRunner(cfg Config) *RunCommandTool {
 	cfg = cfg.WithDefaults()
 	return &RunCommandTool{
-		root: cfg.WorkDir, allowlist: commandAllowlistSet(cfg.CommandAllowlist),
+		root:     cfg.WorkDir,
 		timeout:  time.Duration(cfg.CommandTimeoutMS) * time.Millisecond,
 		maxBytes: cfg.MaxToolOutputChars, protected: agentProtectedFiles(cfg),
 		sandboxMode: cfg.CommandSandbox, sandbox: detectCommandSandbox(),
@@ -195,7 +195,7 @@ type pluginScriptTool struct {
 
 func (t *pluginScriptTool) Name() string { return t.name }
 func (t *pluginScriptTool) Description() string {
-	return "执行插件预先声明的固定脚本入口（" + strings.Join(t.names, ", ") + "），不经过 shell。args 仅为业务参数；环境和凭据由运行时传入。沿用命令白名单、超时及沙盒策略。"
+	return "执行插件预先声明的固定脚本入口（" + strings.Join(t.names, ", ") + "），不经过 shell。args 仅为业务参数；环境和凭据由运行时传入。沿用命令超时及沙盒策略。"
 }
 func (t *pluginScriptTool) InputSchema() map[string]any {
 	return toolObjectSchema([]string{"script"}, map[string]any{
@@ -210,8 +210,8 @@ func (t *pluginScriptTool) Run(ctx context.Context, input map[string]any) (strin
 		return "", fmt.Errorf("unknown plugin script")
 	}
 	runner := pluginCommandRunner(t.cfg)
-	if strings.ContainsAny(script.Command, `/\\`) || !runner.commandAllowed(script.Command) {
-		return "", fmt.Errorf("plugin script command %q is not in the bot command allowlist", script.Command)
+	if strings.ContainsAny(script.Command, `/\\`) {
+		return "", fmt.Errorf("plugin script command %q must be a binary name, not a path", script.Command)
 	}
 	if script.AllowNetwork && !runner.sandboxNetwork {
 		return "", fmt.Errorf("plugin script requires network access; enable the bot command sandbox network setting")
@@ -316,7 +316,7 @@ func literalCommandEnvironment(overrides map[string]string) []string {
 }
 
 // NewPluginMCPRegistry reuses the normal MCP SDK, namespacing and filters. Local
-// servers additionally obey the bot's command allowlist and sandbox policy.
+// servers additionally obey the bot's command sandbox policy.
 func NewPluginMCPRegistry(ctx context.Context, id, root string, servers map[string]PluginMCPServer, cfg Config) (MCPRegistry, error) {
 	cfg = cfg.WithDefaults()
 	result := MCPRegistry{}
@@ -336,9 +336,8 @@ func NewPluginMCPRegistry(ctx context.Context, id, root string, servers map[stri
 		server.InheritEnv = &inherit
 		var policyErr error
 		if server.Command != "" {
-			runner := pluginCommandRunner(cfg)
-			if strings.ContainsAny(server.Command, `/\\`) || !runner.commandAllowed(server.Command) {
-				policyErr = fmt.Errorf("command %q is not in the bot command allowlist", server.Command)
+			if strings.ContainsAny(server.Command, `/\\`) {
+				policyErr = fmt.Errorf("command %q must be a binary name, not a path", server.Command)
 			}
 			cwd, err := safePath(root, server.CWD)
 			if err != nil {

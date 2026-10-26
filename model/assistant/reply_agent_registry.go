@@ -222,7 +222,7 @@ func (r *Runtime) newReplyAgentRegistry(ctx context.Context, cfg BotConfig, even
 			extraTools = append(extraTools, newDianaBackgroundTaskTool(r, event))
 		}
 		// 编码代理只挂给主人：它能在白名单仓库里不受限地跑命令和改代码，
-		// 不走 Agent 的命令白名单沙盒。allowedAgentToolNames 不收录它，这里
+		// 不走 Agent 的命令沙盒。allowedAgentToolNames 不收录它，这里
 		// 再按身份筛一次，两道闸都在。
 		// 安全模式下连主人也不构造：编码代理在安全模式要关掉的第一类里。
 		if pluginValue, settings, enabled := r.pluginWithSettingsForEvent(codingAgentPluginID, event); enabled && relationship.Owner && !cfg.agentSafeMode() {

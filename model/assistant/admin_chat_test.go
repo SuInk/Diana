@@ -21,7 +21,7 @@ func TestAdminChatInstallsSkillAndMCPOnlyAfterConfirmation(t *testing.T) {
 	call, _ := json.Marshal(map[string]any{"action": "tool", "tool": "install_skill", "input": input})
 	mcpCall := `{"action":"tool","tool":"mcp_install","input":{"name":"offline-fixture","url":"https://example.com/mcp","enabled":false}}`
 	provider := &agentSequenceLLMProvider{responses: []string{string(call), `{"action":"final","content":"需要确认"}`, string(call), `{"action":"final","content":"完成"}`, mcpCall, `{"action":"final","content":"需要确认"}`, mcpCall, `{"action":"final","content":"完成"}`}}
-	r := NewRuntime(BotConfig{ID: "bot", AgentEnabled: false, AgentCommandAllowlist: []string{"date"}}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) { return provider, nil })
+	r := NewRuntime(BotConfig{ID: "bot", AgentEnabled: false}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) { return provider, nil })
 	defer r.closeAgentRegistryCache()
 	codePattern := regexp.MustCompile(`确认码 ([0-9a-f]{6})`)
 	run := func(text string) *agent.Response {
@@ -79,8 +79,8 @@ func TestAdminChatInstallsSkillAndMCPOnlyAfterConfirmation(t *testing.T) {
 
 func TestAdminChatPreservesCommandPolicyAndRejectsUnknownProfile(t *testing.T) {
 	t.Setenv("APP_DB_PATH", filepath.Join(t.TempDir(), "app.db"))
-	provider := &agentSequenceLLMProvider{responses: []string{`{"action":"tool","tool":"run_command","input":{"command":"uname","args":[]}}`, `{"action":"final","content":"命令受限"}`}}
-	r := NewRuntime(BotConfig{ID: "bot", AgentCommandAllowlist: []string{"date"}}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) { return provider, nil })
+	provider := &agentSequenceLLMProvider{responses: []string{`{"action":"tool","tool":"run_command","input":{"command":"/bin/uname","args":[]}}`, `{"action":"final","content":"命令受限"}`}}
+	r := NewRuntime(BotConfig{ID: "bot"}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) { return provider, nil })
 	defer r.closeAgentRegistryCache()
 	if _, err := r.RunAdminChat(context.Background(), "missing", agent.Request{}); err == nil {
 		t.Fatal("missing profile accepted")
@@ -89,8 +89,8 @@ func TestAdminChatPreservesCommandPolicyAndRejectsUnknownProfile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(resp.Steps) == 0 || !strings.Contains(resp.Steps[0].Error, "not allowed") {
-		t.Fatalf("command allowlist bypassed: %#v", resp)
+	if len(resp.Steps) == 0 || !strings.Contains(resp.Steps[0].Error, "binary name") {
+		t.Fatalf("command path accepted: %#v", resp)
 	}
 }
 
@@ -119,7 +119,7 @@ func TestAdminChatSafeModeKeepsSharedProcessesStopped(t *testing.T) {
 		`{"action":"tool","tool":"install_skill","input":{"name":"safe-fixture","content":"---\nname: safe-fixture\ndescription: Fixture\n---\nRead only."}}`,
 		`{"action":"final","content":"安全模式下不能安装"}`,
 	}}
-	r := NewRuntime(BotConfig{ID: "bot", AgentMode: AgentModeSafe, AgentCommandAllowlist: []string{"sh"}, AgentFileWriteEnabled: true}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) { return provider, nil })
+	r := NewRuntime(BotConfig{ID: "bot", AgentMode: AgentModeSafe, AgentFileWriteEnabled: true}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) { return provider, nil })
 	defer r.closeAgentRegistryCache()
 	response, err := r.RunAdminChat(context.Background(), "bot", agent.Request{Messages: AdminChatMessages([]llm.Message{{Role: llm.RoleUser, Content: "安装测试 Skill"}})})
 	if err != nil {

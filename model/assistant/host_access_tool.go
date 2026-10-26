@@ -22,7 +22,7 @@ type hostAccessTool struct {
 
 func (t *hostAccessTool) Name() string { return hostAccessToolName }
 func (t *hostAccessTool) Description() string {
-	return `主人专用宿主机读取和执行。标准模式下默认可用，无需额外开启或逐条批准；支持任意程序、shell/脚本、联网及宿主账号有权进行的文件和服务操作，不受工作区、命令白名单或沙盒限制。按主人任务直接执行常规操作；任务未明确授权的不可逆或重大影响操作先说明具体影响并确认。禁止整机毁坏、绕过身份校验和向无关方泄露凭据。总体硬件状态用 host_stats，主人账号用 bot_config。`
+	return `主人专用宿主机读取和执行。标准模式下默认可用，无需额外开启或逐条批准；支持任意程序、shell/脚本、联网及宿主账号有权进行的文件和服务操作，不受工作区或沙盒限制。按主人任务直接执行常规操作；任务未明确授权的不可逆或重大影响操作先说明具体影响并确认。禁止整机毁坏、绕过身份校验和向无关方泄露凭据。总体硬件状态用 host_stats，主人账号用 bot_config。`
 }
 func (t *hostAccessTool) InputSchema() map[string]any {
 	return toolObjectSchema([]string{"operation"}, map[string]any{

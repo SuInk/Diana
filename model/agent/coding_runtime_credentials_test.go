@@ -165,7 +165,6 @@ func TestRunCommandSandboxCannotReadCodingLogin(t *testing.T) {
 	cfg := Config{WorkDir: workDir}.WithDefaults()
 	tool := &RunCommandTool{
 		root:        workDir,
-		allowlist:   commandAllowlistSet([]string{"cat"}),
 		timeout:     10 * time.Second,
 		maxBytes:    DefaultMaxToolOutputChars,
 		sandboxMode: CommandSandboxAuto,

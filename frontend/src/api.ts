@@ -480,7 +480,6 @@ export interface BotProfileConfig extends SendRetrySettings {
   subtask_max_tasks?: number;
   /** 同一批子任务的最大并发数；仍受服务端全局并发限制。 */
   subtask_max_concurrency?: number;
-  agent_command_allowlist?: string[];
   agent_command_timeout_ms?: number;
   /** auto / require / off；留空即 auto。 */
   agent_command_sandbox?: string;
@@ -4276,7 +4275,6 @@ export interface GroupRelationResponse {
 
 /** 新建机器人时用的 Agent 推荐默认值。只读，不改任何东西。 */
 export interface AgentRecommendedDefaults {
-  agent_command_allowlist: string[];
   agent_file_write_enabled: boolean;
   agent_command_sandbox: string;
   subtask_max_tasks: number;

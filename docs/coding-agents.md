@@ -40,13 +40,13 @@ Claude Code 支持结构化进度、会话续跑和聊天审批。ACP 代理支�
 
 ## 内置命令执行与 Node.js
 
-内置 Agent 的 `run_command` 独立于编码代理插件：运行工作区里的 Node.js 脚本不需要开启编码代理插件，也不需要安装 Codex 或 Claude Code。WebUI「机器人 → 内置 Agent」的命令白名单旁可点击「允许 Node.js 执行」，只合并去重 `node`，保留其它命令和 `*`，不改文件写入、网络或沙盒设置；保存配置后生效。这个按钮不安装 Node.js，实际安装情况应通过能力查询确认；full/slim Docker 镜像均包含 Node.js/npm，本机或旧镜像需按实际环境检查。
+内置 Agent 的 `run_command` 独立于编码代理插件：运行工作区里的 Node.js 脚本不需要开启编码代理插件，也不需要安装 Codex 或 Claude Code。`run_command` 不再有程序白名单，标准模式下主人可直接运行 `node`、`npm` 等工作区命令。Diana 不负责安装 Node.js，实际安装情况应通过能力查询确认；full/slim Docker 镜像均包含 Node.js/npm，本机或旧镜像需按实际环境检查。
 
-创建或修改脚本需要开启文件写入。执行已有脚本由命令白名单和命令沙盒控制；`npm`、`sh` 或其它 shell 要另外明确加入白名单，允许 `node` 不会自动放行它们，联网也仍使用原有网络设置。
+创建或修改脚本需要开启文件写入。执行已有脚本由命令沙盒控制，联网使用原有网络设置。
 
 缺 npm 包时，主人的机器人会用 `install_package` 直接装进 Agent 工作区的 `node_modules`，工作区里任何脚本都能 `require`。它不等确认，但动手前会在会话里发一条「📦 正在安装 npm 包」的提醒，写明包名和用途。只接受 npm 注册表里的包名（可带 `@版本`），不接受 URL、git 地址、本地路径或全局安装；只在开了文件写入的主人会话里出现，安全模式下关闭。需要机器上已装 Node.js/npm。
 
-解压 ZIP、tar、tar.gz 使用专用 `extract_archive`，由文件写入开关授权，输入和输出均限制在 Agent 工作区，不能解压进长期保存区 `keep/`。它不依赖系统 `tar`/`unzip`，无需为了解压开放 shell 或把这些命令加入白名单；关闭文件写入或开启安全模式时不能使用该工具。
+解压 ZIP、tar、tar.gz 使用专用 `extract_archive`，由文件写入开关授权，输入和输出均限制在 Agent 工作区，不能解压进长期保存区 `keep/`。它不依赖系统 `tar`/`unzip`，无需为了解压调用 shell；关闭文件写入或开启安全模式时不能使用该工具。
 
 ## 本地真实 CLI 验证
 

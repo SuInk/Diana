@@ -283,7 +283,7 @@ var AgentSafeModeRules = []AgentSafeModeRule{
 	{Category: safeModeCategorySelfModify, Tool: dianaOneBotRequestsToolName, Field: "operation", Operations: []string{"approve", "reject"}, Reason: "同意或拒绝好友、加群请求；查看照常"},
 }
 
-// restrictAgentConfigForMode 在安全模式下从源头上不构造高风险工具：命令白名单清空
+// restrictAgentConfigForMode 在安全模式下从源头上不构造高风险工具：命令开关关掉
 // 就不注册 run_command，写入开关关掉就不注册 write_file 一类，浏览器两路都不接。
 // 注册表层面还会再按 AgentSafeModeRules 摘一次，这里是纵深防御——对象压根不存在，
 // 就不会有哪条漏掉的路径把它放出来。
@@ -291,7 +291,7 @@ func restrictAgentConfigForMode(cfg BotConfig, agentCfg agent.Config) agent.Conf
 	if !cfg.agentSafeMode() {
 		return agentCfg
 	}
-	agentCfg.CommandAllowlist = nil
+	agentCfg.CommandEnabled = false
 	agentCfg.FileWriteEnabled = false
 	agentCfg.BrowserControl = nil
 	agentCfg.DesktopControl = nil

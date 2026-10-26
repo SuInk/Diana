@@ -273,7 +273,7 @@ func (p *RepoPlugin) bundleRuntime(ctx context.Context, scope string, cfg agent.
 		}
 		servers[name] = server
 	}
-	keyBody, _ := json.Marshal([]any{scripts, servers, cfg.WorkDir, cfg.MCPStartupTimeoutMS, cfg.MCPToolTimeoutMS, cfg.CommandAllowlist, cfg.CommandSandbox, cfg.CommandSandboxAllowNetwork})
+	keyBody, _ := json.Marshal([]any{scripts, servers, cfg.WorkDir, cfg.MCPStartupTimeoutMS, cfg.MCPToolTimeoutMS, cfg.CommandSandbox, cfg.CommandSandboxAllowNetwork})
 	digest := sha256.Sum256(keyBody)
 	key := fmt.Sprintf("%x", digest)
 	p.bundleMu.Lock()

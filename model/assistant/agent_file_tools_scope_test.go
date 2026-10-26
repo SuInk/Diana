@@ -31,7 +31,7 @@ func TestConfigPayloadRoundTripKeepsTheFileWriteSwitch(t *testing.T) {
 //
 // 身份这一层挡的是「谁的会话里能出现这些工具」。它挡不住提示注入——群里别人的
 // 消息和主人的消息在同一个上下文里，模型是读完那些之后才决定调用的——所以配置
-// 那一层（写入开关、命令白名单）才是真正的边界。但这一层仍然必须在：少了它，
+// 那一层（写入开关、命令开关）才是真正的边界。但这一层仍然必须在：少了它，
 // 任何人跟机器人说话都能让它读写宿主机上的文件。
 func TestLocalFileToolsAreOwnerOnly(t *testing.T) {
 	allowed := RelationshipPolicy{}.allowedAgentToolNames()

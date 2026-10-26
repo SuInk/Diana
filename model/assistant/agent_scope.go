@@ -422,8 +422,9 @@ func (r *Runtime) agentRegistryConfig(cfg BotConfig, event MessageEvent, owner b
 		BuiltinExtensions:   r.agentBuiltinExtensions(event),
 		BuiltinSkills:       r.botProtocolBuiltinSkills(event),
 		ReservedSkillNames:  []string{"platform", "bot-protocol"},
-		CommandAllowlist:    cfg.AgentCommandAllowlist,
-		CommandTimeoutMS:    cfg.AgentCommandTimeoutMS,
+		// run_command 只给主人：成员的工具名单本来就不收录它，这里连对象都不造。
+		CommandEnabled:   owner,
+		CommandTimeoutMS: cfg.AgentCommandTimeoutMS,
 		// 这两项以前在 agent.Config 里存在但没人赋值，于是永远是 auto，
 		// require 模式接不上。现在由机器人配置说了算。
 		CommandSandbox:              cfg.AgentCommandSandbox,
@@ -465,7 +466,7 @@ func withOwnerAgentLimits(cfg agent.Config, owner bool) agent.Config {
 }
 
 // agentRegistryCacheKey 规范化共享底座的配置并给出缓存键。底座只放扩展，按
-// ExtensionScope 共享：各机器人的步数、命令白名单、沙盒，以及随群变化的内置插件与
+// ExtensionScope 共享：各机器人的步数、命令开关、沙盒，以及随群变化的内置插件与
 // 内置 Skill，都由请求视图叠加，不能拆出第二套 MCP 进程。
 func agentRegistryCacheKey(cfg agent.Config) (agent.Config, string, error) {
 	cfg = cfg.WithDefaults()
@@ -524,10 +525,9 @@ func (r *Runtime) sharedAgentRegistry(ctx context.Context, cfg agent.Config) (*a
 
 // logCommandExecutionPosture 在启动时把「命令执行这条路现在是什么状态」写进日志。
 //
-// 这两件事以前都不可见，而它们决定了一台机器上命令执行的全部风险：
-// 白名单为空时 run_command 根本不注册（于是「让机器人执行指令」表现为静默无反应），
-// 沙盒不可用时命令直接以主进程身份裸跑（而白名单只管「跑哪个程序」，不管它能碰什么）。
-// 部署方有权在启动时就知道自己处在哪一种。
+// 沙盒不可用时 run_command 直接以主进程身份裸跑，能跑任何程序、碰进程能碰的一切。
+// 这件事以前不可见，而它决定了一台机器上命令执行的全部风险，部署方有权在启动时
+// 就知道自己处在哪一种。
 func logCommandExecutionPosture(configs []BotConfig) {
 	logged := map[string]bool{}
 	for _, cfg := range configs {
@@ -537,10 +537,6 @@ func logCommandExecutionPosture(configs []BotConfig) {
 		}
 		if cfg.agentSafeMode() {
 			log.Printf("diana agent: 配置 %q 处于安全模式，run_command、编码代理、交互式浏览器和 MCP 工具都不启用", cfg.ID)
-			continue
-		}
-		if len(cfg.AgentCommandAllowlist) == 0 {
-			log.Printf("diana agent: 配置 %q 未设置命令白名单，run_command 不会注册（机器人无法执行任何本地命令）", cfg.ID)
 			continue
 		}
 		status := agent.DescribeCommandSandbox(cfg.AgentCommandSandbox)
@@ -555,7 +551,7 @@ func logCommandExecutionPosture(configs []BotConfig) {
 				continue
 			}
 			logged[key] = true
-			log.Printf("diana agent: 命令执行未被沙盒隔离，将以本进程权限直接运行（%s）。白名单只限制能跑哪个程序，不限制它能读写什么；生产环境建议安装 bubblewrap 并把沙盒模式设为 require", status.Reason)
+			log.Printf("diana agent: 命令执行未被沙盒隔离，run_command 将以本进程权限直接运行任意程序（%s）；生产环境建议安装 bubblewrap 并把沙盒模式设为 require", status.Reason)
 		}
 	}
 }

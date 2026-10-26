@@ -20,7 +20,7 @@ func TestDefaultRegistryDoesNotExposeRunCommand(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, ok := registry.Get("run_command"); ok {
-		t.Fatal("run_command must require an explicit command allowlist")
+		t.Fatal("run_command must require CommandEnabled")
 	}
 }
 
@@ -76,10 +76,9 @@ func TestReadFileToolLimitsContent(t *testing.T) {
 func TestRunCommandToolRunsAllowedCommand(t *testing.T) {
 	root := t.TempDir()
 	tool := &RunCommandTool{
-		root:      root,
-		allowlist: map[string]bool{"go": true},
-		timeout:   time.Duration(DefaultCommandTimeoutMS) * time.Millisecond,
-		maxBytes:  DefaultMaxToolOutputChars,
+		root:     root,
+		timeout:  time.Duration(DefaultCommandTimeoutMS) * time.Millisecond,
+		maxBytes: DefaultMaxToolOutputChars,
 	}
 	got, err := tool.Run(context.Background(), map[string]any{"command": "go", "args": []any{"version"}})
 	if err != nil {
@@ -104,10 +103,9 @@ func TestRunCommandToolPreservesCompleteFailureOutput(t *testing.T) {
 	}
 	message := strings.Repeat("failure-output-", 80) + "tail-marker"
 	tool := &RunCommandTool{
-		root:      t.TempDir(),
-		allowlist: map[string]bool{"sh": true},
-		timeout:   time.Duration(DefaultCommandTimeoutMS) * time.Millisecond,
-		maxBytes:  32,
+		root:     t.TempDir(),
+		timeout:  time.Duration(DefaultCommandTimeoutMS) * time.Millisecond,
+		maxBytes: 32,
 	}
 	_, err := tool.Run(context.Background(), map[string]any{
 		"command": "sh",
@@ -135,10 +133,9 @@ func TestRunCommandToolStillLimitsSuccessfulOutput(t *testing.T) {
 	}
 	message := strings.Repeat("success-output-", 20)
 	tool := &RunCommandTool{
-		root:      t.TempDir(),
-		allowlist: map[string]bool{"sh": true},
-		timeout:   time.Duration(DefaultCommandTimeoutMS) * time.Millisecond,
-		maxBytes:  32,
+		root:     t.TempDir(),
+		timeout:  time.Duration(DefaultCommandTimeoutMS) * time.Millisecond,
+		maxBytes: 32,
 	}
 	got, err := tool.Run(context.Background(), map[string]any{
 		"command": "sh",
@@ -159,17 +156,13 @@ func TestRunCommandToolStillLimitsSuccessfulOutput(t *testing.T) {
 	}
 }
 
-// TestRunCommandToolRejectsBlockedCommand 验证命令工具拒绝非白名单命令和路径命令。
-func TestRunCommandToolRejectsBlockedCommand(t *testing.T) {
+// TestRunCommandToolRejectsPathCommand 验证命令工具只接受程序名，不接受路径。
+func TestRunCommandToolRejectsPathCommand(t *testing.T) {
 	root := t.TempDir()
 	tool := &RunCommandTool{
-		root:      root,
-		allowlist: map[string]bool{"go": true},
-		timeout:   time.Duration(DefaultCommandTimeoutMS) * time.Millisecond,
-		maxBytes:  DefaultMaxToolOutputChars,
-	}
-	if _, err := tool.Run(context.Background(), map[string]any{"command": "python3"}); err == nil {
-		t.Fatal("expected blocked command error")
+		root:     root,
+		timeout:  time.Duration(DefaultCommandTimeoutMS) * time.Millisecond,
+		maxBytes: DefaultMaxToolOutputChars,
 	}
 	if _, err := tool.Run(context.Background(), map[string]any{"command": "../go"}); err == nil {
 		t.Fatal("expected path command error")
@@ -203,7 +196,7 @@ func writeTestFile(t *testing.T, root, name, content string) {
 }
 
 func TestToolDefinitionsCarryRealSchemas(t *testing.T) {
-	registry, err := NewDefaultToolRegistry(Config{WorkDir: t.TempDir(), CommandAllowlist: []string{"echo"}})
+	registry, err := NewDefaultToolRegistry(Config{WorkDir: t.TempDir(), CommandEnabled: true})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -940,7 +940,6 @@ type BotConfig struct {
 	SubtaskMaxConcurrency int      `json:"subtask_max_concurrency,omitempty"`
 	AgentSkillRoots       []string `json:"agent_skill_roots,omitempty"`
 	AgentMCPConfigPath    string   `json:"agent_mcp_config_path,omitempty"`
-	AgentCommandAllowlist []string `json:"agent_command_allowlist,omitempty"`
 	AgentCommandTimeoutMS int      `json:"agent_command_timeout_ms,omitempty"`
 	// AgentCommandSandbox 见 agent.CommandSandbox* 常量：auto 有沙盒就用、
 	// require 没有就拒绝执行、off 完全不套。留空按 auto。
@@ -1554,7 +1553,6 @@ type ConfigPayload struct {
 	SubtaskMaxConcurrency           int                       `json:"subtask_max_concurrency,omitempty"`
 	AgentSkillRoots                 []string                  `json:"agent_skill_roots,omitempty"`
 	AgentMCPConfigPath              string                    `json:"agent_mcp_config_path,omitempty"`
-	AgentCommandAllowlist           []string                  `json:"agent_command_allowlist,omitempty"`
 	AgentCommandTimeoutMS           int                       `json:"agent_command_timeout_ms,omitempty"`
 	AgentCommandSandbox             string                    `json:"agent_command_sandbox,omitempty"`
 	AgentCommandSandboxAllowNetwork bool                      `json:"agent_command_sandbox_allow_network,omitempty"`
@@ -2226,12 +2224,6 @@ func DefaultBotConfig() BotConfig {
 		SubtaskMaxTasks:       defaultSubtaskMaxTasks,
 		SubtaskMaxConcurrency: defaultSubtaskMaxConcurrency,
 		AgentSkillRoots:       []string{},
-		// 新建配置直接带上一组只读诊断命令，装完就能用。
-		//
-		// 只影响新建：WithDefaults 对白名单只做清洗、不回填，对写入开关根本不碰，
-		// 所以已经在跑的部署升级后不会凭空多出这两项能力——当初特意留空的仍然是空的。
-		// 这两件事必须分开：默认值是给新用户的便利，不该变成对存量部署的静默扩权。
-		AgentCommandAllowlist: agent.DefaultCommandAllowlist(),
 		AgentCommandTimeoutMS: agent.DefaultCommandTimeoutMS,
 		AgentCommandSandbox:   agent.CommandSandboxAuto,
 		// 写入锁在数据目录下的 workspace 里，碰不到配置和数据库，所以默认打开。
@@ -2552,7 +2544,6 @@ func (cfg BotConfig) WithDefaults() BotConfig {
 	}.WithDefaults()
 	cfg.AgentSkillRoots = cleanStrings(agentDefaults.SkillRoots)
 	cfg.AgentMCPConfigPath = agentDefaults.MCPConfigPath
-	cfg.AgentCommandAllowlist = cleanStrings(cfg.AgentCommandAllowlist)
 	cfg.GroupTriggers = cleanStrings(cfg.GroupTriggers)
 	cfg.DisabledGroups = cleanStrings(cfg.DisabledGroups)
 	cfg.MarkedBotIDs = cleanStrings(append([]string(nil), cfg.MarkedBotIDs...))
@@ -2917,7 +2908,6 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		SubtaskMaxConcurrency:             cfg.SubtaskMaxConcurrency,
 		AgentSkillRoots:                   append([]string(nil), cfg.AgentSkillRoots...),
 		AgentMCPConfigPath:                cfg.AgentMCPConfigPath,
-		AgentCommandAllowlist:             append([]string(nil), cfg.AgentCommandAllowlist...),
 		AgentCommandTimeoutMS:             cfg.AgentCommandTimeoutMS,
 		AgentCommandSandbox:               cfg.AgentCommandSandbox,
 		AgentCommandSandboxAllowNetwork:   cfg.AgentCommandSandboxAllowNetwork,
@@ -3177,7 +3167,6 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		SubtaskMaxConcurrency:           payload.SubtaskMaxConcurrency,
 		AgentSkillRoots:                 append([]string(nil), payload.AgentSkillRoots...),
 		AgentMCPConfigPath:              payload.AgentMCPConfigPath,
-		AgentCommandAllowlist:           append([]string(nil), payload.AgentCommandAllowlist...),
 		AgentCommandTimeoutMS:           payload.AgentCommandTimeoutMS,
 		AgentCommandSandbox:             payload.AgentCommandSandbox,
 		AgentCommandSandboxAllowNetwork: payload.AgentCommandSandboxAllowNetwork,

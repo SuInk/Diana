@@ -75,7 +75,7 @@ func executionEnvironment(ctx context.Context, registry *ToolRegistry) map[strin
 		}
 		path, err := probe.resolveCommand(name)
 		entry["installed"] = err == nil
-		if ok && concrete && runner.commandAllowed(name) {
+		if ok && concrete {
 			entry["authorized"] = true
 			if err == nil {
 				entry["path"] = path

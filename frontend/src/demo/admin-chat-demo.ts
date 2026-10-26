@@ -5,7 +5,7 @@ const sessions = new Map<string, AdminChatSession>();
 const stopRequested = new Set<string>();
 function newSession(profile: string): AdminChatSession {
   const now = new Date().toISOString();
-  const session: AdminChatSession = {session_id:crypto.randomUUID(),profile_id:profile,title:'新的管理会话',created_at:now,updated_at:now,messages:[],running:false,command_allowlist:['date','uname','df'],file_write_enabled:false,sandbox:'auto',network_enabled:false};
+  const session: AdminChatSession = {session_id:crypto.randomUUID(),profile_id:profile,title:'新的管理会话',created_at:now,updated_at:now,messages:[],running:false,command_enabled:true,file_write_enabled:false,sandbox:'auto',network_enabled:false};
   sessions.set(session.session_id,session);
   return session;
 }

@@ -129,7 +129,6 @@ func installedBundleFixture(t *testing.T, mutate ...func(map[string]any)) (*Runt
 	cfg := DefaultBotConfig()
 	cfg.ID = "bot"
 	cfg.AgentMCPConfigPath = filepath.Join(t.TempDir(), "missing.json")
-	cfg.AgentCommandAllowlist = []string{"sh"}
 	cfg.AgentCommandSandbox = agent.CommandSandboxOff
 	event := MessageEvent{Kind: EventKindPrivate, ProfileID: "bot", Platform: cfg.Platform, UserID: "owner"}
 	t.Cleanup(r.closeAgentRegistryCache)
