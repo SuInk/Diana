@@ -25,7 +25,7 @@ func TestDisabledToolReportsConfiguredReason(t *testing.T) {
 	if !registry.PolicyDenied("write_file") {
 		t.Fatal("从没注册过、但被关掉的工具应当算权限问题")
 	}
-	loader := newDeferredToolLoader(registry, []string{"agent_finalize"})
+	loader := newDeferredToolLoader(registry, []string{"agent_finalize"}, nil, nil)
 	_, err := loader.Run(t.Context(), map[string]any{"names": []any{"run_command"}})
 	if err == nil || !strings.Contains(err.Error(), testDisableReason) || strings.Contains(err.Error(), "只对主人开放") {
 		t.Fatalf("tools_load 报错 = %v", err)

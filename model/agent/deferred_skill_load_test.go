@@ -15,7 +15,7 @@ import (
 func TestToolsLoadReturnsSkillBodyForSkillName(t *testing.T) {
 	registry := NewToolRegistry(&countingTool{name: "common"}, &countingTool{name: "platform_query"})
 	registry.SetSkills([]SkillMetadata{{Name: "bot-protocol", Description: "协议路由", Content: "群查询用 platform_query"}})
-	loader := newDeferredToolLoader(registry, []string{"common"})
+	loader := newDeferredToolLoader(registry, []string{"common"}, nil, nil)
 
 	out, err := loader.Run(context.Background(), map[string]any{"names": []any{"bot-protocol", "platform_query"}})
 	if err != nil {

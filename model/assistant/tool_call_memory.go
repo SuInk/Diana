@@ -38,6 +38,7 @@ type ReplyToolCall struct {
 var toolCallMemoryIgnored = map[string]bool{
 	"agent_finalize": true,
 	"tools_load":     true,
+	"tool_search":    true,
 	"tools_execute":  true,
 }
 

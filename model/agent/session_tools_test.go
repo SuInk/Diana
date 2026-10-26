@@ -12,7 +12,7 @@ import (
 
 func TestSessionToolDefinitionsAppendAndRestoreOnlyAllowedTools(t *testing.T) {
 	registry := NewToolRegistry(&countingTool{name: "common"}, &countingTool{name: "rare"}, &countingTool{name: "admin"})
-	loader := newDeferredToolLoader(registry, []string{"common"})
+	loader := newDeferredToolLoader(registry, []string{"common"}, nil, nil)
 	definitions := append(registry.Definitions(), finalizeToolDefinition(false))
 	first := loader.filter(definitions)
 	loader.restore([]string{"rare", "admin", "rare", "gone"})
@@ -23,11 +23,11 @@ func TestSessionToolDefinitionsAppendAndRestoreOnlyAllowedTools(t *testing.T) {
 	if got := toolDefinitionNames(next); !reflect.DeepEqual(got, []string{"common", finalizeToolName, ToolsLoadToolName, ToolsExecuteToolName}) {
 		t.Fatal(got)
 	}
-	contracts := loader.loadedContracts()
+	contracts := loader.loadedContracts(true)
 	if !strings.Contains(contracts, `"name":"rare"`) || !strings.Contains(contracts, `"name":"admin"`) {
 		t.Fatalf("restored contracts = %s", contracts)
 	}
-	member := newDeferredToolLoader(NewToolRegistry(&countingTool{name: "common"}, &countingTool{name: "rare"}), []string{"common"})
+	member := newDeferredToolLoader(NewToolRegistry(&countingTool{name: "common"}, &countingTool{name: "rare"}), []string{"common"}, nil, nil)
 	member.restore(loader.order)
 	if !reflect.DeepEqual(member.order, []string{"rare"}) {
 		t.Fatalf("permissions bypassed: %v", member.order)

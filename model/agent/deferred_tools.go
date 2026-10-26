@@ -9,24 +9,35 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"unicode"
 
 	"github.com/SuInk/diana/model/llm"
 )
 
 // Deferred tools expose their contract through messages, never by mutating API declarations.
-const ToolsLoadToolName = "tools_load"
+//
+// ToolsLoadToolName 现在叫 tool_search，和 Codex CLI、Claude Code 的叫法一致：按目录里的
+// 确切名字取，或者按关键词搜。常量名沿用旧的，免得一处处改调用点。
+const ToolsLoadToolName = "tool_search"
+
+// LegacyToolsLoadName 是改名前的叫法。不再出现在工具定义里，但模型照旧这么调时照样认，
+// 各群历史里已有的调用也不受影响。
+const LegacyToolsLoadName = "tools_load"
 const ToolsExecuteToolName = "tools_execute"
 const maxLoadedContractChars = 128 * 1024
 
 type deferredToolLoader struct {
 	registry *ToolRegistry
 	core     map[string]bool
+	// shared 为 nil 时所有工具都算公共；见 Config.SharedTools。
+	shared   map[string]bool
+	featured map[string]bool
 	loaded   map[string]map[string]any
 	order    []string
 	onLoad   func([]string)
 }
 
-func newDeferredToolLoader(registry *ToolRegistry, coreTools []string) *deferredToolLoader {
+func newDeferredToolLoader(registry *ToolRegistry, coreTools []string, shared map[string]bool, featured []string) *deferredToolLoader {
 	if registry == nil || len(coreTools) == 0 {
 		return nil
 	}
@@ -38,18 +49,40 @@ func newDeferredToolLoader(registry *ToolRegistry, coreTools []string) *deferred
 	}
 	// Keep the dispatcher active even when the registry currently contains only
 	// core tools: a tool installed later in this Run is still deferred.
-	return &deferredToolLoader{registry: registry, core: core, loaded: map[string]map[string]any{}}
+	featuredSet := make(map[string]bool, len(featured))
+	for _, name := range featured {
+		featuredSet[name] = true
+	}
+	return &deferredToolLoader{registry: registry, core: core, shared: shared, featured: featuredSet, loaded: map[string]map[string]any{}}
 }
 
-// catalog 列出所有非常驻工具，不看本轮已加载的状态：系统提示词要保持稳定才能命中缓存。
+// isShared 判断工具是不是「对谁都一样」的那一份，见 Config.SharedTools。
+func (l *deferredToolLoader) isShared(name string) bool {
+	return l.shared == nil || l.shared[name]
+}
+
+// catalog 列出公共的非常驻工具，不看本轮已加载的状态：系统提示词要保持稳定才能命中缓存。
 func (l *deferredToolLoader) catalog() string {
+	return l.catalogWhere(true)
+}
+
+// speakerCatalog 列出只有这位发言者才有的按需工具，放在历史之后的尾部。
+func (l *deferredToolLoader) speakerCatalog() string {
+	return l.catalogWhere(false)
+}
+
+func (l *deferredToolLoader) catalogWhere(shared bool) string {
 	var builder strings.Builder
 	for _, name := range l.registry.Names() {
-		if l.core[name] {
+		if l.core[name] || l.isShared(name) != shared {
 			continue
 		}
 		tool, ok := l.registry.Get(name)
 		if !ok {
+			continue
+		}
+		if l.featured[name] {
+			builder.WriteString("- " + name + ": " + strings.Join(strings.Fields(tool.Description()), " ") + "\n")
 			continue
 		}
 		builder.WriteString(deferredCatalogLine(tool))
@@ -70,7 +103,7 @@ func (l *deferredToolLoader) filter(definitions []llm.ToolDefinition) []llm.Tool
 	}
 	return append(out,
 		llm.ToolDefinition{Name: ToolsLoadToolName, Description: l.Description(), Parameters: l.InputSchema()},
-		llm.ToolDefinition{Name: ToolsExecuteToolName, Description: "执行已用 tools_load 加载的工具，input 须符合其 inputSchema。", Parameters: executeInputSchema()},
+		llm.ToolDefinition{Name: ToolsExecuteToolName, Description: "执行按需目录里的工具：name 填目录里的名字，input 须符合其 inputSchema；不清楚参数时先 tool_search。", Parameters: executeInputSchema()},
 	)
 }
 
@@ -98,7 +131,9 @@ func (l *deferredToolLoader) restore(names []string) {
 	}
 }
 
-func (l *deferredToolLoader) loadedContracts() string {
+// loadedContracts 渲染已加载工具的完整契约。shared=true 只收公共工具（放在历史之前），
+// shared=false 只收发言者专属的（放在尾部）。
+func (l *deferredToolLoader) loadedContracts(shared bool) string {
 	if l == nil || len(l.order) == 0 {
 		return ""
 	}
@@ -109,11 +144,17 @@ func (l *deferredToolLoader) loadedContracts() string {
 	}
 	contracts := make([]contract, 0, len(l.order))
 	for _, name := range l.order {
+		if l.isShared(name) != shared {
+			continue
+		}
 		tool, ok := l.registry.Get(name)
 		if !ok {
 			continue
 		}
 		contracts = append(contracts, contract{Name: name, Description: tool.Description(), InputSchema: l.loaded[name]})
+	}
+	if len(contracts) == 0 {
+		return ""
 	}
 	raw, _ := json.Marshal(contracts)
 	return string(raw)
@@ -129,21 +170,27 @@ func executeInputSchema() map[string]any {
 func (l *deferredToolLoader) Name() string { return ToolsLoadToolName }
 
 func (l *deferredToolLoader) Description() string {
-	return "加载「按需加载的工具」目录里的工具，返回完整契约，之后用 tools_execute 调用。已加载的在本会话后续保留；只加载确实要用的。"
+	return "取得「按需加载的工具」的完整定义，之后用 tools_execute 调用。names 填目录里的确切名字（优先）；拿不准叫什么时用 query 写关键词，返回最相关的几个。取过的在本会话后续保留；只取确实要用的。"
 }
+
+// toolSearchQueryLimit 是按关键词搜时最多返回几个工具。
+const toolSearchQueryLimit = 4
 
 func (l *deferredToolLoader) InputSchema() map[string]any {
 	return map[string]any{
 		"type":                 "object",
 		"additionalProperties": false,
-		"required":             []string{"names"},
 		"properties": map[string]any{
 			"names": map[string]any{
 				"type":        "array",
-				"description": "工具名，取自按需加载目录",
+				"description": "工具名，取自按需加载目录，一字不差",
 				"items":       map[string]any{"type": "string"},
 				"minItems":    1,
 				"maxItems":    8,
+			},
+			"query": map[string]any{
+				"type":        "string",
+				"description": "不知道确切名字时的关键词，如「禁言」「切换模型」",
 			},
 		},
 	}
@@ -153,10 +200,22 @@ func (l *deferredToolLoader) Run(ctx context.Context, input map[string]any) (str
 	if err := validateToolInput(l.InputSchema(), input); err != nil {
 		return "", err
 	}
-	raw, _ := json.Marshal(input["names"])
 	var requested []string
-	if err := json.Unmarshal(raw, &requested); err != nil {
-		return "", fmt.Errorf("names 必须是工具名数组")
+	if names, ok := input["names"]; ok {
+		raw, _ := json.Marshal(names)
+		if err := json.Unmarshal(raw, &requested); err != nil {
+			return "", fmt.Errorf("names 必须是工具名数组")
+		}
+	}
+	if len(requested) == 0 {
+		query, _ := input["query"].(string)
+		if strings.TrimSpace(query) == "" {
+			return "", fmt.Errorf("names 和 query 至少填一个：知道名字填 names，不知道填 query 关键词")
+		}
+		requested = l.search(query)
+		if len(requested) == 0 {
+			return "", fmt.Errorf("没有找到和 %q 相关的工具；换个说法，或者对照按需加载目录直接填 names", query)
+		}
 	}
 	type contract struct {
 		Name        string         `json:"name"`
@@ -228,7 +287,7 @@ func (l *deferredToolLoader) unavailableToolError(name string) error {
 	if l.registry.PolicyDenied(name) {
 		return l.registry.denialError(name)
 	}
-	return fmt.Errorf("工具 %q 不存在或已禁用；请重新选择 tools_load 名称", name)
+	return fmt.Errorf("工具 %q 不存在或已禁用；请对照目录重新填 tool_search 的 names，或改用 query 搜", name)
 }
 
 // missingToolError 是「根本没有这个工具」时的回话，多半是模型自己编了个名字（线上见过
@@ -239,9 +298,9 @@ func (l *deferredToolLoader) missingToolError(name string) error {
 		return l.registry.denialError(name)
 	}
 	if l.isSkill(name) {
-		return fmt.Errorf("%q 是技能，不能直接执行：先 tools_load 它读到 SKILL.md，再按说明调用里面提到的工具", name)
+		return fmt.Errorf("%q 是技能，不能直接执行：先 tool_search 它读到 SKILL.md，再按说明调用里面提到的工具", name)
 	}
-	return fmt.Errorf("工具 %q 不存在。工具名要和目录里的一字不差，不加 diana. 之类的前缀；常驻工具直接调用，目录里的延迟工具先 tools_load 再 tools_execute", name)
+	return fmt.Errorf("工具 %q 不存在。工具名要和目录里的一字不差，不加 diana. 之类的前缀；常驻工具直接调用，目录里的按需工具先 tool_search 再 tools_execute", name)
 }
 
 // isSkill 判断这个名字是不是当前可见的技能。
@@ -279,6 +338,9 @@ func (l *deferredToolLoader) dispatch(action llmAction) (llmAction, error) {
 		return l.resolveLoaded(action)
 	}
 	if l != nil {
+		if action.Tool == LegacyToolsLoadName {
+			action.Tool = ToolsLoadToolName
+		}
 		if action.Tool == ToolsLoadToolName {
 			action.Input = coerceToolInputArrays(l.InputSchema(), action.Input)
 			return action, validateToolInput(l.InputSchema(), action.Input)
@@ -309,6 +371,10 @@ func (l *deferredToolLoader) dispatchDirect(action llmAction) (llmAction, error)
 		action.Input = cloneDeferredInput(action.Input).(map[string]any)
 		return l.resolveLoaded(action)
 	}
+	if l.loadOnCall(name, action.Input) {
+		action.Input = cloneDeferredInput(action.Input).(map[string]any)
+		return l.resolveLoaded(action)
+	}
 	contract, err := l.Run(context.Background(), map[string]any{"names": []string{name}})
 	if err != nil {
 		return action, err
@@ -332,11 +398,14 @@ func (l *deferredToolLoader) resolveLoaded(action llmAction) (llmAction, error) 
 			}
 		}
 	}
+	if !loaded && l.loadOnCall(name, action.Input) {
+		schema, loaded = l.loaded[name], true
+	}
 	if !loaded {
 		if _, exists := l.registry.Get(name); !exists {
 			return action, l.missingToolError(name)
 		}
-		return action, fmt.Errorf("工具 %q 未在本轮加载，请先 tools_load，再 tools_execute", name)
+		return action, fmt.Errorf("工具 %q 未在本轮加载，请先 tool_search，再 tools_execute", name)
 	}
 	action.Input = coerceToolInputArrays(schema, action.Input)
 	input := action.Input
@@ -345,17 +414,17 @@ func (l *deferredToolLoader) resolveLoaded(action llmAction) (llmAction, error) 
 		if l.registry.PolicyDenied(name) {
 			return action, l.registry.denialError(name)
 		}
-		return action, fmt.Errorf("工具 %q 已移除或禁用，请重新 tools_load", name)
+		return action, fmt.Errorf("工具 %q 已移除或禁用，请重新 tool_search", name)
 	}
 	if err := validateToolInput(schema, input); err != nil {
 		return action, err
 	}
 	current, err := snapshotToolSchema(tool)
 	if err != nil {
-		return action, fmt.Errorf("工具当前 inputSchema 无效，请重新 tools_load")
+		return action, fmt.Errorf("工具当前 inputSchema 无效，请重新 tool_search")
 	}
 	if err := validateToolInput(current, input); err != nil {
-		return action, fmt.Errorf("当前工具契约校验失败，请重新 tools_load: %w", err)
+		return action, fmt.Errorf("当前工具契约校验失败，请重新 tool_search: %w", err)
 	}
 	return action, nil
 }
@@ -463,4 +532,120 @@ func (r *ToolRegistry) ToolOwners() map[string][]string {
 		owners[ToolResidentID(name)] = []string{name}
 	}
 	return owners
+}
+
+// search 按关键词给非常驻工具打分：名字或描述里出现查询词（中文按相邻两字切）的次数，
+// 名字命中加权。只在模型不知道确切名字时兜底，常规路径仍是对照目录填 names。
+func (l *deferredToolLoader) search(query string) []string {
+	terms := toolSearchTerms(query)
+	if len(terms) == 0 {
+		return nil
+	}
+	type hit struct {
+		name  string
+		score int
+	}
+	var hits []hit
+	for _, name := range l.registry.Names() {
+		if l.core[name] {
+			continue
+		}
+		tool, ok := l.registry.Get(name)
+		if !ok {
+			continue
+		}
+		lowerName := strings.ToLower(name)
+		description := strings.ToLower(tool.Description())
+		score := 0
+		for _, term := range terms {
+			if strings.Contains(lowerName, term) {
+				score += 3
+			}
+			if strings.Contains(description, term) {
+				score++
+			}
+		}
+		if score > 0 {
+			hits = append(hits, hit{name, score})
+		}
+	}
+	sort.SliceStable(hits, func(i, j int) bool { return hits[i].score > hits[j].score })
+	names := make([]string, 0, toolSearchQueryLimit)
+	for _, h := range hits {
+		if len(names) == toolSearchQueryLimit {
+			break
+		}
+		names = append(names, h.name)
+	}
+	return names
+}
+
+// toolSearchTerms 把查询切成小写词：拉丁字母按词，连续汉字按相邻两字。
+func toolSearchTerms(query string) []string {
+	var terms []string
+	seen := map[string]bool{}
+	add := func(term string) {
+		if term != "" && !seen[term] {
+			seen[term] = true
+			terms = append(terms, term)
+		}
+	}
+	var latin []rune
+	var han []rune
+	flush := func() {
+		if len(latin) > 1 {
+			add(strings.ToLower(string(latin)))
+		}
+		latin = latin[:0]
+		if len(han) == 1 {
+			add(string(han))
+		}
+		for i := 0; i+1 < len(han); i++ {
+			add(string(han[i : i+2]))
+		}
+		han = han[:0]
+	}
+	for _, r := range query {
+		switch {
+		case unicode.Is(unicode.Han, r):
+			if len(latin) > 0 {
+				flush()
+			}
+			han = append(han, r)
+		case unicode.IsLetter(r) || unicode.IsDigit(r) || r == '_':
+			if len(han) > 0 {
+				flush()
+			}
+			latin = append(latin, r)
+		default:
+			flush()
+		}
+	}
+	flush()
+	return terms
+}
+
+// loadOnCall 免去单独取定义的一步：模型没先 tool_search 就直接点名调用按需工具时，
+// 参数符合定义就当场登记为已加载、照常执行；不符合才交回完整契约让它重新调用。权限不在
+// 这里放宽：取不到的工具（没权限、没注册）照旧按不存在或没权限回话。
+func (l *deferredToolLoader) loadOnCall(name string, input map[string]any) bool {
+	if l.core[name] {
+		return false
+	}
+	tool, ok := l.registry.Get(name)
+	if !ok {
+		return false
+	}
+	schema, err := snapshotToolSchema(tool)
+	if err != nil || validateToolInput(schema, input) != nil {
+		return false
+	}
+	if _, exists := l.loaded[name]; !exists {
+		l.order = append(l.order, name)
+	}
+	l.loaded[name] = schema
+	if l.onLoad != nil {
+		l.onLoad(append([]string(nil), l.order...))
+	}
+	return true
 }

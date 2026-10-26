@@ -6,6 +6,7 @@ package assistant
 import (
 	"context"
 	"encoding/json"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -287,4 +288,81 @@ func TestReplyToolDefinitionsStableAcrossGroupSpeakers(t *testing.T) {
 	if strings.Contains(strangerTail, "acme/demo") || !strings.Contains(strangerTail, "当前会话无写入授权") {
 		t.Fatalf("stranger tail = %s", strangerTail)
 	}
+}
+
+// 主人和群友在同一个群里交替说话时，发给模型的工具定义、Agent system 和人设头部
+// 必须逐字相同：主人专属工具、预算和规则都在历史之后的尾部（agent.Config.SharedTools）。
+func TestReplyPrefixSameForOwnerAndMember(t *testing.T) {
+	t.Setenv("APP_DB_PATH", filepath.Join(t.TempDir(), "app.db"))
+	workDir := t.TempDir()
+	cfg := standardModeBotConfig()
+	cfg.BotAccount, cfg.OwnerID = "10000", "10001"
+	cfg.GroupTriggers = []string{"Diana"}
+	cfg.AgentSkillRoots = []string{filepath.Join(workDir, "skills")}
+	cfg.AgentMCPConfigPath = filepath.Join(workDir, "missing-mcp.json")
+	cfg.AgentFileWriteEnabled = true
+	cfg.ReplySafetyMasterEnabled = boolPointer(false)
+	provider := &agentRequestRecorder{}
+	runtime := NewRuntime(cfg, &recordingChannel{}, NewDefaultPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+		return provider, nil
+	})
+	defer runtime.closeAgentRegistryCache()
+	prefix := func(user, id string) (string, llm.GenerateRequest) {
+		event := MessageEvent{Kind: EventKindGroup, GroupID: "30001", UserID: user, SelfID: "10000", MessageID: id, RawMessage: "Diana 你好", Platform: PlatformOneBotV11, Time: time.Now().Unix()}
+		if _, err := runtime.replyTo(context.Background(), event, event.RawMessage); err != nil {
+			t.Fatal(err)
+		}
+		req := provider.agent
+		if len(req.Tools) == 0 {
+			t.Fatalf("user %s: no agent request captured", user)
+		}
+		var builder strings.Builder
+		for _, definition := range req.Tools {
+			raw, _ := json.Marshal(definition)
+			builder.Write(raw)
+			builder.WriteString("\n")
+		}
+		for _, message := range req.Messages {
+			if message.Role != llm.RoleSystem {
+				break
+			}
+			builder.WriteString(message.Content + "\n")
+		}
+		return builder.String(), req
+	}
+	member, _ := prefix("20002", "m1")
+	owner, ownerReq := prefix("10001", "m2")
+	if member != owner {
+		a, b := []rune(member), []rune(owner)
+		i := 0
+		for i < len(a) && i < len(b) && a[i] == b[i] {
+			i++
+		}
+		t.Fatalf("prefix diverges at rune %d:\nmember: %q\nowner:  %q", i, string(a[max(0, i-80):min(len(a), i+160)]), string(b[max(0, i-80):min(len(b), i+160)]))
+	}
+	foundTail := false
+	for _, message := range ownerReq.Messages {
+		foundTail = foundTail || strings.Contains(message.Content, "【当前发言者另有的按需工具】")
+	}
+	if !foundTail {
+		var names []string
+		for _, d := range ownerReq.Tools {
+			names = append(names, d.Name)
+		}
+		for i, m := range ownerReq.Messages {
+			c := []rune(m.Content)
+			t.Logf("%d %s %q", i, m.Role, string(c[:min(len(c), 80)]))
+		}
+		t.Fatalf("owner tail lost the speaker tool section; tools=%v", names)
+	}
+}
+
+// agentRequestRecorder 记下最近一次带工具定义的请求（Agent 主回复），其余调用一律答「好」。
+type agentRequestRecorder struct{ agent llm.GenerateRequest }
+
+func (p *agentRequestRecorder) Generate(_ context.Context, req llm.GenerateRequest) (*llm.GenerateResponse, error) {
+	if len(req.Tools) > 0 {
+		p.agent = req
+	}
+	return &llm.GenerateResponse{Provider: llm.ProviderOpenAICompatible, Model: "test", Text: `{"action":"final","content":"好"}`}, nil
 }

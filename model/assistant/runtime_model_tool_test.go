@@ -219,14 +219,15 @@ func TestModelDisclosureGatesPromptBySpeaker(t *testing.T) {
 		wantInTail bool
 	}{
 		{ModelDisclosureOwner, false, true, false, true, true},
-		{"", false, true, true, false, false},
+		// runtime_model 不在群友的公共工具集里，它的规则跟着工具进尾部，主人和群友都一样。
+		{"", false, true, true, false, true},
 		{ModelDisclosureOwner, true, true, true, false, true},
-		{"", true, true, true, false, false},
+		{"", true, true, true, false, true},
 		{ModelDisclosureOwner, false, false, false, true, true},
 		{"", false, false, false, false, false},
 		{"", true, false, false, false, false},
 		{"none", true, true, true, false, true},
-		{ModelDisclosureEveryone, false, true, true, false, false},
+		{ModelDisclosureEveryone, false, true, true, false, true},
 	}
 	for _, tc := range cases {
 		runtime := NewRuntime(BotConfig{ModelDisclosure: tc.mode}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)

@@ -18,7 +18,7 @@ import (
 func TestDeniedToolSaysNoPermissionInsteadOfMissing(t *testing.T) {
 	registry := NewToolRegistry(&countingTool{name: "alpha"}, &countingTool{name: "agent_finalize"})
 	registry.DenyTools("github")
-	loader := newDeferredToolLoader(registry, []string{"agent_finalize"})
+	loader := newDeferredToolLoader(registry, []string{"agent_finalize"}, nil, nil)
 	if loader == nil {
 		t.Fatal("延迟加载器未启用，这个测试没有意义")
 	}
