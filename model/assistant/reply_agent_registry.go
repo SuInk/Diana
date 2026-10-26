@@ -30,6 +30,10 @@ func (r *Runtime) newReplyAgentRegistry(ctx context.Context, cfg BotConfig, even
 	if r.plugins != nil && r.plugins.builtInBrowser {
 		pluginTools = append(NewBuiltInBrowserRenderer().AgentTools(), pluginTools...)
 	}
+	// 语音合成以前是插件导出的工具，挂在同一处；现在跟着模型分配里的插槽走。
+	if tool, _, ok := r.voiceTTSToolForEvent(ctx, event); ok {
+		pluginTools = append(pluginTools, tool)
+	}
 	for index, tool := range pluginTools {
 		pluginTools[index] = capabilityToolForConfig(tool, cfg)
 		if knowledge, ok := pluginTools[index].(*dianaCapabilitiesTool); ok {

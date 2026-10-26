@@ -903,6 +903,15 @@ code {
   grid-column: 1 / -1;
 }
 
+/* 自定义语音请求的模板要整行宽，JSON 才看得全。 */
+.model-role-params .model-role-param-wide {
+  grid-column: 1 / -1;
+}
+
+.model-role-params .field .hint {
+  font-size: 11px;
+}
+
 .model-request-timeout input {
   max-width: 220px;
 }

@@ -902,7 +902,6 @@ func NewRuntime(cfg BotConfig, channel Channel, plugins *PluginManager, llmStore
 		runtime.reminders = wakingReminderStore{ReminderStore: reminders, wake: runtime.wakeReminderLoop}
 	}
 	runtime.members = newMemberCacheForEvent(runtime.callOneBotAPIForEvent)
-	plugins.SetSpeechSynthesizer(runtime.slotSpeechSynthesizer)
 	return runtime
 }
 

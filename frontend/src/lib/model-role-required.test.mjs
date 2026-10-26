@@ -25,6 +25,12 @@ function loadFunction(name, context) {
     context.accountSafetyRulesDefault ??= { value: FALLBACK_ACCOUNT_SAFETY_RULES };
     context.page ??= { value: "edit" };
   }
+  // 提供商列表在语音两档里还要加上内置服务，用到它的函数都依赖 roleChannels。
+  if (["channelOptionsFor", "selectedRoleProfiles", "crossProviderModelOptions"].includes(name) && !context.roleChannels) {
+    context.builtinSpeechChannels ??= { tts: [], stt: [] };
+    loadFunction("isBuiltinSpeechChannel", context);
+    loadFunction("roleChannels", context);
+  }
   const fn = ast.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === name);
   assert.ok(fn, `missing ${name}`);
   vm.runInContext(ts.transpileModule(fn.getText(ast), { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, context);

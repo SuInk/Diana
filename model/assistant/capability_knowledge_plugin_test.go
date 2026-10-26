@@ -8,8 +8,6 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
-
-	"github.com/SuInk/diana/model/agent"
 )
 
 func TestCapabilityKnowledgePluginRetrievesRelevantCapabilities(t *testing.T) {
@@ -42,31 +40,6 @@ func TestCapabilityKnowledgeUsesCurrentPlatformOnly(t *testing.T) {
 	}
 	if strings.Contains(raw, "OneBot v11 消息不渲染 Markdown") {
 		t.Fatalf("another platform rule leaked into capability result: %s", raw)
-	}
-}
-
-func TestCapabilityKnowledgeFiltersUnsupportedPluginsForPlatform(t *testing.T) {
-	manager := NewDefaultPluginManager()
-	var capabilityTool agent.Tool
-	tools, err := manager.AgentToolsWithOverrides(nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, tool := range tools {
-		if tool.Name() == "capabilities" {
-			capabilityTool = capabilityToolForConfig(tool, BotConfig{Platform: PlatformTelegram}.WithDefaults())
-			break
-		}
-	}
-	if capabilityTool == nil {
-		t.Fatal("capability tool missing")
-	}
-	raw, err := capabilityTool.Run(context.Background(), map[string]any{"query": "点歌 音乐 语音", "limit": 8})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(raw, `"id": "plugin:`+voiceTTSPluginID+`"`) {
-		t.Fatalf("OneBot-only plugin leaked into Telegram capability result: %s", raw)
 	}
 }
 

@@ -4,16 +4,13 @@
 package assistant
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
-	"mime/multipart"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -486,13 +483,26 @@ func (r *Runtime) slotVoiceTranscription(ctx context.Context, wav string, cfg vo
 	return resp.Text, route.Model, nil
 }
 
-// localVoiceTranscription 调本机的 whisper.cpp 命令（whisper-cli）转写一段 16kHz WAV。
-func localVoiceTranscription(ctx context.Context, wav string, route mediaSlotRoute) (string, error) {
+// transcribeWithWhisperCLI 调本机的 whisper.cpp 命令（whisper-cli）转写一段音频。
+// 转写流程送进来的已经是 ffmpeg 规整过的 16kHz 单声道 WAV，正是它要的格式。
+func transcribeWithWhisperCLI(ctx context.Context, route mediaSlotRoute, audio []byte) (*llm.TranscriptionResponse, error) {
 	dir, err := os.MkdirTemp("", "diana-whisper-")
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	defer os.RemoveAll(dir)
+	wav := filepath.Join(dir, "audio.wav")
+	if err := os.WriteFile(wav, audio, 0o600); err != nil {
+		return nil, err
+	}
+	text, err := localVoiceTranscription(ctx, wav, dir, route)
+	if err != nil {
+		return nil, err
+	}
+	return &llm.TranscriptionResponse{API: llm.SpeechAPIWhisperCLI, Model: route.Model, Text: text}, nil
+}
+
+func localVoiceTranscription(ctx context.Context, wav, dir string, route mediaSlotRoute) (string, error) {
 	prefix := filepath.Join(dir, "transcript")
 	args := []string{"-f", wav, "-otxt", "-of", prefix}
 	if model := route.param(mediaParamModelPath); model != "" {

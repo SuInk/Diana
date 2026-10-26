@@ -26,13 +26,12 @@ func TestVoiceSTTFFmpegTimeoutIsNotReportedAsCorruptAudio(t *testing.T) {
 	wav := filepath.Join(t.TempDir(), "sample.wav")
 	writeSilentWAV(t, wav, 1600)
 	runtime := NewRuntime(BotConfig{}, nil, NewPluginManager(), nil, nil, nil, nil)
-	plugin := NewVoiceSTTPlugin(nil)
-	cfg := voiceSTTConfig{Backend: voiceSTTBackendOpenAI, Model: "whisper-test", Concurrency: 1, Timeout: 200 * time.Millisecond, MaxBytes: 1 << 20, MaxDuration: time.Minute}
+	cfg := voiceSTTConfig{Backend: "openai", Model: "whisper-test", Timeout: 200 * time.Millisecond, MaxBytes: 1 << 20, MaxDuration: time.Minute}
 	event := MessageEvent{Kind: EventKindGroup, GroupID: "1", MessageID: "voice-timeout"}
 	segment := MessageSegment{Type: "record", Data: map[string]string{"file": wav}}
 
 	started := time.Now()
-	_, _, _, _, code, err := plugin.transcribeSegment(context.Background(), runtime, event, segment, cfg)
+	_, _, _, _, code, err := runtime.transcribeVoiceSegment(context.Background(), event, segment, cfg)
 	if err == nil {
 		t.Fatal("expected the stuck ffmpeg to fail")
 	}

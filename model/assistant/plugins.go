@@ -107,10 +107,6 @@ func withBuiltinPlatformSupport(manifest PluginManifest) PluginManifest {
 	}
 	manifest.Platforms = allPluginPlatforms()
 	switch manifest.ID {
-	case voiceTTSPluginID:
-		manifest.Platforms = []string{PlatformOneBotV11}
-	}
-	switch manifest.ID {
 	case musicPluginID:
 		manifest.PlatformNotes = map[string]string{
 			PlatformOneBotV11:  "发送 QQ 语音。",
@@ -136,11 +132,6 @@ func withBuiltinPlatformSupport(manifest PluginManifest) PluginManifest {
 		manifest.PlatformNotes = map[string]string{
 			PlatformOneBotV11: "支持媒体直发和合并转发。",
 			PlatformTelegram:  "支持图片、视频和文字直发，不使用 OneBot 合并转发。",
-		}
-	case voiceSTTPluginID:
-		manifest.PlatformNotes = map[string]string{
-			PlatformOneBotV11: "支持 OneBot record 语音段。",
-			PlatformTelegram:  "支持已转换为 record 段的 Telegram 语音消息。",
 		}
 	case stickerPluginID:
 		manifest.PlatformNotes = map[string]string{
@@ -441,8 +432,6 @@ func NewDefaultPluginManager() *PluginManager {
 		NewFileParserPlugin(nil),
 		NewLLMConfigPlugin(),
 		NewPlatformInterfacePlugin(),
-		NewVoiceTTSPlugin(nil),
-		NewVoiceSTTPlugin(nil),
 		NewMusicPlugin(nil),
 		NewImageOCRPlugin(nil),
 		NewImageSourcePlugin(nil),
@@ -1365,25 +1354,6 @@ func (m *PluginManager) SetLocalMediaSharer(sharer LocalMediaSharer) {
 	m.mu.RUnlock()
 	for _, plugin := range plugins {
 		plugin.SetLocalMediaSharer(sharer)
-	}
-}
-
-// SetSpeechSynthesizer 把模型分配里的语音合成插槽交给需要它的插件。
-func (m *PluginManager) SetSpeechSynthesizer(synth speechSynthesizer) {
-	if m == nil {
-		return
-	}
-	type speechAware interface{ SetSpeechSynthesizer(speechSynthesizer) }
-	m.mu.RLock()
-	plugins := make([]speechAware, 0, 1)
-	for _, plugin := range m.catalog {
-		if aware, ok := plugin.(speechAware); ok {
-			plugins = append(plugins, aware)
-		}
-	}
-	m.mu.RUnlock()
-	for _, plugin := range plugins {
-		plugin.SetSpeechSynthesizer(synth)
 	}
 }
 

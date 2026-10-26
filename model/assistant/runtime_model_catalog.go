@@ -44,39 +44,15 @@ func (t *dianaRuntimeModelTool) configuredModelPurpose(key string) modelCatalogE
 		return entry
 	}
 	if key == mediaSlotTTS || key == mediaSlotSTT || key == mediaSlotVideo {
-		// 插槽配了就报插槽；语音没配插槽时还可能走插件自带的 GPT-SoVITS / Whisper。
-		if routes := r.mediaSlotRoutes(t.provider.ctx, key); len(routes) > 0 {
-			for _, route := range routes {
-				identity := configuredProfileIdentity(route.Config, route.Name, key)
-				identity.ModelID = route.Model
-				entry.Models = append(entry.Models, identity)
-			}
-			return entry
+		// 语音和视频都只看模型分配里的插槽：没配就是没有这项能力。
+		routes := r.mediaSlotRoutes(t.provider.ctx, key)
+		for _, route := range routes {
+			identity := configuredProfileIdentity(route.Config, route.Name, key)
+			identity.ModelID = route.Model
+			entry.Models = append(entry.Models, identity)
 		}
-		if key == mediaSlotVideo {
-			entry.Note = "未配置视频生成模型"
-			return entry
-		}
-	}
-	if key == "stt" || key == "tts" {
-		id := voiceSTTPluginID
-		if key == "tts" {
-			id = voiceTTSPluginID
-		}
-		_, settings, enabled := r.pluginWithSettingsForEvent(id, t.event)
-		entry.Enabled = &enabled
-		if key == "tts" {
-			entry.Models = []dianaRuntimeModelResult{{Provider: "GPT-SoVITS", Group: "tts", GroupLabel: "语音合成", Source: "external_service"}}
-			entry.Note = "具体权重由外部 GPT-SoVITS 服务加载，本程序未获得权重模型名；不能把服务名或音色当成模型 ID。"
-		} else {
-			cfg := voiceSTTConfigFromSettings(settings)
-			enabled = enabled && cfg.Backend != voiceSTTBackendDisabled
-			model := cfg.Model
-			if cfg.Backend == voiceSTTBackendLocal {
-				model = ""
-				entry.Note = "本地 Whisper 权重由本地文件配置，未公开模型 ID。"
-			}
-			entry.Models = []dianaRuntimeModelResult{{ModelID: model, Provider: cfg.Backend, Group: "stt", GroupLabel: "语音识别", Source: "configured_route"}}
+		if len(routes) == 0 {
+			entry.Note = map[string]string{mediaSlotTTS: "未配置语音合成模型", mediaSlotSTT: "未配置语音识别模型", mediaSlotVideo: "未配置视频生成模型"}[key]
 		}
 		return entry
 	}

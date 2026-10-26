@@ -57,20 +57,6 @@ func (s *voiceTestStore) SaveVoiceTranscript(_ context.Context, record VoiceTran
 	return nil
 }
 
-func TestVoiceSTTManifestDefaultsToDisabledAndProtectsAPIKey(t *testing.T) {
-	manifest := NewVoiceSTTPlugin(nil).Manifest()
-	settings := map[string]PluginSettingSpec{}
-	for _, spec := range manifest.Settings {
-		settings[spec.Key] = spec
-	}
-	if settings["backend"].Default != voiceSTTBackendDisabled {
-		t.Fatalf("backend default=%v", settings["backend"].Default)
-	}
-	if !settings["api_key"].Secret {
-		t.Fatal("API key setting is not secret")
-	}
-}
-
 func TestVoiceSTTTranscribesOnceAndReusesCache(t *testing.T) {
 	if _, err := exec.LookPath("ffmpeg"); err != nil {
 		t.Skip("ffmpeg is unavailable")
@@ -91,13 +77,8 @@ func TestVoiceSTTTranscribesOnceAndReusesCache(t *testing.T) {
 
 	wav := filepath.Join(t.TempDir(), "sample.wav")
 	writeSilentWAV(t, wav, 1600)
-	plugin := NewVoiceSTTPlugin(server.Client())
-	manager := NewPluginManager(plugin)
-	_, err := manager.UpdateSettings(voiceSTTPluginID, map[string]any{"backend": voiceSTTBackendOpenAI, "endpoint": server.URL, "api_key": "secret-token", "model": "whisper-test"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	runtime := NewRuntime(BotConfig{}, nil, manager, nil, nil, nil, nil)
+	profile := llm.Profile{ID: "whisper", Name: "whisper", Group: "stt", Config: llm.ProviderConfig{Provider: llm.ProviderOpenAICompatible, APIKey: "secret-token", BaseURL: server.URL}}
+	runtime := mediaSlotTestRuntime(t, map[string]ModelRole{"stt": {ProfileID: "whisper", Model: "whisper-test"}}, profile)
 	store := &voiceTestStore{transcripts: map[string]VoiceTranscriptRecord{}}
 	runtime.SetMessageHistoryStore(store)
 	event := MessageEvent{Kind: EventKindGroup, GroupID: "1", MessageID: "voice-1", Segments: []MessageSegment{{Type: "record", Data: map[string]string{"file": wav}}}}
@@ -122,13 +103,13 @@ func TestVoiceSTTTranscribesOnceAndReusesCache(t *testing.T) {
 }
 
 func TestVoiceSTTUsesPersistedTranscriptBeforeLoadingRawAudio(t *testing.T) {
-	cfg := voiceSTTConfig{Backend: voiceSTTBackendOpenAI, Model: "whisper-test", Language: "zh", Concurrency: 1}
+	cfg := voiceSTTConfig{Backend: "openai", Model: "whisper-test", Language: "zh"}
 	hash := strings.Repeat("a", 64)
 	key := voiceSTTCacheKey(hash, cfg)
 	store := &voiceTestStore{transcripts: map[string]VoiceTranscriptRecord{key: {CacheKey: key, AudioSHA256: hash, Transcript: "只读取持久化文字", DurationMS: 500}}}
 	runtime := NewRuntime(BotConfig{}, nil, nil, nil, nil, nil, nil)
 	runtime.SetMessageHistoryStore(store)
-	transcript, gotHash, _, cacheHit, code, err := NewVoiceSTTPlugin(nil).transcribeSegment(context.Background(), runtime, MessageEvent{}, MessageSegment{Type: "record", Data: map[string]string{voiceSTTBlobHashKey: hash}}, cfg)
+	transcript, gotHash, _, cacheHit, code, err := runtime.transcribeVoiceSegment(context.Background(), MessageEvent{}, MessageSegment{Type: "record", Data: map[string]string{voiceSTTBlobHashKey: hash}}, cfg)
 	if err != nil || code != "" || !cacheHit || transcript != "只读取持久化文字" || gotHash != hash {
 		t.Fatalf("transcript=%q hash=%q cacheHit=%v code=%q err=%v", transcript, gotHash, cacheHit, code, err)
 	}
@@ -182,18 +163,16 @@ func TestVoiceHistoryPersistsTranscriptAndOpaqueSourceReferenceOnly(t *testing.T
 }
 
 func TestVoiceSTTDisabledAndPrivateControls(t *testing.T) {
-	plugin := NewVoiceSTTPlugin(nil)
-	manager := NewPluginManager(plugin)
-	runtime := NewRuntime(BotConfig{}, nil, manager, nil, nil, nil, nil)
 	event := MessageEvent{Kind: EventKindPrivate, Segments: []MessageSegment{{Type: "record", Data: map[string]string{"file": "/not/read"}}}}
-	if got := runtime.prepareIncomingVoice(context.Background(), event); got.Segments[0].Data["stt_error_code"] != "" {
-		t.Fatal("disabled backend attempted transcription")
+	unconfigured := mediaSlotTestRuntime(t, nil)
+	if got := unconfigured.prepareIncomingVoice(context.Background(), event); got.Segments[0].Data["stt_error_code"] != "" {
+		t.Fatal("transcription ran without a speech recognition slot")
 	}
-	if _, err := manager.UpdateSettings(voiceSTTPluginID, map[string]any{"backend": voiceSTTBackendLocal, "private_enabled": false}); err != nil {
-		t.Fatal(err)
-	}
-	if got := runtime.prepareIncomingVoice(context.Background(), event); got.Segments[0].Data["stt_error_code"] != "" {
-		t.Fatal("private-disabled backend attempted transcription")
+	privateOff := mediaSlotTestRuntime(t, map[string]ModelRole{
+		"stt": {ProfileID: "builtin:whisper-cli", Model: "whisper-cli", Params: map[string]string{mediaParamPrivateEnabled: "false"}},
+	})
+	if got := privateOff.prepareIncomingVoice(context.Background(), event); got.Segments[0].Data["stt_error_code"] != "" {
+		t.Fatal("private-disabled slot attempted transcription")
 	}
 }
 
@@ -225,12 +204,11 @@ func TestVoiceSourceDecodingAndLimits(t *testing.T) {
 
 func TestVoiceSTTRetriesOnlyTransientProviderFailures(t *testing.T) {
 	for _, test := range []struct {
-		status    int
+		kind      llm.MediaErrorKind
 		transient bool
-	}{{http.StatusBadRequest, false}, {http.StatusTooManyRequests, true}, {http.StatusBadGateway, true}} {
-		err := voiceSTTProviderError{StatusCode: test.status}
-		if got := voiceSTTErrorIsTransient("provider_rejected", err); got != test.transient {
-			t.Fatalf("status=%d transient=%v, want %v", test.status, got, test.transient)
+	}{{llm.MediaErrorInvalid, false}, {llm.MediaErrorRateLimit, true}, {llm.MediaErrorUpstream, true}} {
+		if got := voiceSTTErrorIsTransient("provider_rejected", &llm.MediaAPIError{Kind: test.kind}); got != test.transient {
+			t.Fatalf("kind=%s transient=%v, want %v", test.kind, got, test.transient)
 		}
 	}
 	if !voiceSTTErrorIsTransient("timeout", context.DeadlineExceeded) {
@@ -239,17 +217,23 @@ func TestVoiceSTTRetriesOnlyTransientProviderFailures(t *testing.T) {
 }
 
 func TestVoiceSTTAcquireHonorsCancellation(t *testing.T) {
-	plugin := NewVoiceSTTPlugin(nil)
-	sem, err := plugin.acquire(context.Background(), 1)
-	if err != nil {
-		t.Fatal(err)
+	var limiter voiceSTTLimiter
+	var releases []func()
+	for range defaultVoiceSTTConcurrency {
+		release, err := limiter.acquire(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		releases = append(releases, release)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := plugin.acquire(ctx, 1); err == nil {
+	if _, err := limiter.acquire(ctx); err == nil {
 		t.Fatal("cancelled concurrency wait succeeded")
 	}
-	<-sem
+	for _, release := range releases {
+		release()
+	}
 }
 
 func TestOneBotRecordSourceResolution(t *testing.T) {

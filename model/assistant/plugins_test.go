@@ -1606,10 +1606,6 @@ func TestBuiltinPluginsDeclarePlatformSupport(t *testing.T) {
 			t.Fatalf("built-in plugin %s has no platform metadata", state.Manifest.ID)
 		}
 	}
-	state, ok := manager.Get(voiceTTSPluginID)
-	if !ok || len(state.Manifest.Platforms) != 1 || state.Manifest.Platforms[0] != PlatformOneBotV11 {
-		t.Fatalf("%s platforms = %#v", voiceTTSPluginID, state.Manifest.Platforms)
-	}
 	// 平台接口是跨平台内置能力，OneBot 和 Telegram 都要支持。
 	platformState, ok := manager.Get(platformInterfacePluginID)
 	if !ok || !pluginSupportsPlatform(platformState.Manifest, PlatformTelegram) || !pluginSupportsPlatform(platformState.Manifest, PlatformOneBotV11) {

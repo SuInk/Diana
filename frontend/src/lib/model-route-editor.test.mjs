@@ -60,6 +60,7 @@ function editorContext(roles) {
     roleForm: { value: roles }, modelRouteEditor: { value: null }, modelRouteEditorError: { value: "" },
     modelRouteSearch: { value: "" }, modelRouteStatusFilter: { value: "all" },
     llmChannels: { value: [{ id: "p1", name: "主提供商" }, { id: "p2", name: "后备提供商" }] },
+    builtinSpeechChannels: { tts: [], stt: [] },
     FOLLOW_CHAT: "__follow_chat__", FOLLOW_VISION: "__follow_vision__", GROUP_PREFIX: "group:", MODEL_PAIR_SEP: "::",
     selectedRoleProfiles: (_, route) => ["p1", "p2"].includes(route.profile_id) || route.group === "shared" ? [{}] : [],
     profileCanRouteRoleModel: (_, __, model) => model === "m1" || model === "m2",

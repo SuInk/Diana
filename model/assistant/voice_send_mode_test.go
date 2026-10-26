@@ -11,6 +11,8 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+
+	"github.com/SuInk/diana/model/llm"
 )
 
 func TestPersistentVoiceSpeakable(t *testing.T) {
@@ -46,7 +48,8 @@ type persistentVoiceFixture struct {
 	ttsText  *atomic.Value
 }
 
-// newPersistentVoiceFixture 起一台只在群 123456 打开常驻语音的机器人，正文由 reply 给出。
+// newPersistentVoiceFixture 起一台语音合成插槽指向假 GPT-SoVITS 的机器人，发送模式由
+// sendMode 给出，正文由 reply 给出。
 func newPersistentVoiceFixture(t *testing.T, reply string, ttsStatus int, sendMode string) persistentVoiceFixture {
 	t.Helper()
 	var calls atomic.Int32
@@ -71,19 +74,14 @@ func newPersistentVoiceFixture(t *testing.T, reply string, ttsStatus int, sendMo
 	// 普通文本会获得一次续跑机会；两次都返回同一正文，避免落入桩的默认回复。
 	provider := &sequenceLLMProvider{replies: []string{`{"action":"none","prompt":""}`, reply, reply}}
 	channel := &recordingChannel{}
-	runtime := NewRuntime(BotConfig{AgentEnabled: false}, channel, NewDefaultPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+	params := map[string]string{}
+	if sendMode != "" {
+		params[mediaParamSendMode] = sendMode
+	}
+	store := &stubLLMProfileStore{set: llm.ProfileSet{Profiles: []llm.Profile{gptSoVITSProfile(server.URL)}}}
+	runtime := NewRuntime(BotConfig{AgentEnabled: false, ModelRoles: gptSoVITSRole(params)}, channel, NewDefaultPluginManager(), store, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
 	})
-	overrides := map[string]any{
-		voiceTTSSettingPreset:   voiceTTSPresetCustom,
-		voiceTTSSettingEndpoint: server.URL,
-	}
-	if sendMode != "" {
-		overrides[voiceTTSSettingSendMode] = sendMode
-	}
-	runtime.SetGroupConfigStore(&stubGroupConfigStore{configs: map[string]GroupConfig{
-		"123456": {GroupID: "123456", PluginSettingOverrides: PluginSettingOverrides{voiceTTSPluginID: overrides}},
-	}})
 	runtime.SetLocalMediaSharer(&recordingLocalMediaSharer{url: "http://127.0.0.1:18080/api/assistant/media/persistent-voice"})
 	return persistentVoiceFixture{runtime: runtime, channel: channel, provider: provider, ttsCalls: &calls, ttsText: &spoken}
 }
@@ -164,7 +162,8 @@ func TestPersistentVoiceKeepsLinkReplyAsText(t *testing.T) {
 }
 
 func TestPersistentVoiceFallsBackToTextWhenSynthesisFails(t *testing.T) {
-	fixture := newPersistentVoiceFixture(t, "晚安，做个好梦。", http.StatusInternalServerError, voiceTTSSendModeAlways)
+	// 400 不会被重试，正好看清只合成一次就回退文字。
+	fixture := newPersistentVoiceFixture(t, "晚安，做个好梦。", http.StatusBadRequest, voiceTTSSendModeAlways)
 	message := fixture.reply(t)
 	if !strings.Contains(message.Text, "晚安，做个好梦") {
 		t.Fatalf("合成失败应回退文字：%#v", message)

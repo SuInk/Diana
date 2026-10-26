@@ -457,6 +457,11 @@ func main() {
 	if savedPluginStates, ok, err := sqliteStore.LoadPluginStates(ctx); err != nil {
 		log.Fatal(err)
 	} else if ok {
+		// 语音插件已拆掉，Restore 会丢下它们的状态；要在任何一次保存插件状态之前
+		// 把它们的设置搬到模型分配里。
+		if err := webui.MigrateVoicePlugins(savedPluginStates, botProfileStore, store); err != nil {
+			log.Printf("%v", err)
+		}
 		plugins.Restore(savedPluginStates)
 	}
 	// 第三方仓库插件：按来源记录把已安装的插件重新登记进管理器，再套用一次

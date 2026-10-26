@@ -133,7 +133,7 @@ func TestSynthesizeSpeechWithoutSlotSaysSo(t *testing.T) {
 	}
 }
 
-func TestTTSPluginModelSlotPresetUsesSpeechSlot(t *testing.T) {
+func TestTTSToolUsesOpenAISpeechSlot(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/audio/speech" {
 			t.Errorf("path = %s", r.URL.Path)
@@ -149,8 +149,10 @@ func TestTTSPluginModelSlotPresetUsesSpeechSlot(t *testing.T) {
 	}, mediaSlotProfile("p1", server.URL))
 	sharer := &recordingLocalMediaSharer{url: "http://127.0.0.1:18080/api/assistant/media/slot-voice"}
 	r.SetLocalMediaSharer(sharer)
-	pluginValue, _, _ := r.plugins.PluginWithSettings(voiceTTSPluginID, nil)
-	tool := mustVoiceTTSTool(t, pluginValue.(*VoiceTTSPlugin), SettingValues{voiceTTSSettingPreset: voiceTTSPresetModelSlot})
+	tool, _, ok := r.voiceTTSToolForEvent(context.Background(), MessageEvent{Kind: EventKindPrivate})
+	if !ok {
+		t.Fatal("tts tool missing")
+	}
 
 	raw, err := tool.Run(context.Background(), map[string]any{"text": "晚上好"})
 	if err != nil {
@@ -163,25 +165,51 @@ func TestTTSPluginModelSlotPresetUsesSpeechSlot(t *testing.T) {
 	if data, _ := os.ReadFile(paths[0]); string(data) != "ID3-mp3" {
 		t.Fatalf("cached audio = %q", data)
 	}
-	reply, done := tool.(interface{ TerminalResult(string) (string, bool) }).TerminalResult(raw)
+	reply, done := tool.TerminalResult(raw)
 	if !done || reply != "[CQ:record,file=http://127.0.0.1:18080/api/assistant/media/slot-voice]" {
 		t.Fatalf("reply=%q done=%v", reply, done)
 	}
 }
 
-func TestTTSPluginModelSlotPresetIgnoresGPTSoVITSEndpoint(t *testing.T) {
-	cfg, err := voiceTTSConfigFromSettings(SettingValues{voiceTTSSettingPreset: voiceTTSPresetModelSlot, voiceTTSSettingEndpoint: "http://gpt-sovits:9880/tts"})
-	if err != nil || !cfg.UseModelSlot || cfg.Endpoint != "" {
-		t.Fatalf("cfg=%#v err=%v", cfg, err)
+func TestBuiltinSpeechServicesNeedNoProvider(t *testing.T) {
+	r := mediaSlotTestRuntime(t, map[string]ModelRole{
+		"tts": {ProfileID: "builtin:edge-tts", Model: "edge-tts", Params: map[string]string{"voice": "zh-CN-YunxiNeural"}},
+		"stt": {ProfileID: "builtin:whisper-cli", Model: "whisper-cli"},
+	})
+	tts := r.mediaSlotRoutes(context.Background(), mediaSlotTTS)
+	stt := r.mediaSlotRoutes(context.Background(), mediaSlotSTT)
+	if len(tts) != 1 || tts[0].speechAPI() != llm.SpeechAPIEdge || len(stt) != 1 || stt[0].speechAPI() != llm.SpeechAPIWhisperCLI {
+		t.Fatalf("tts=%#v stt=%#v", tts, stt)
+	}
+	// 内置服务只能出现在自己的插槽里。
+	wrong := mediaSlotTestRuntime(t, map[string]ModelRole{"tts": {ProfileID: "builtin:whisper-cli", Model: "whisper-cli"}})
+	if routes := wrong.mediaSlotRoutes(context.Background(), mediaSlotTTS); len(routes) != 0 {
+		t.Fatalf("routes = %#v", routes)
 	}
 }
 
-func TestSTTPluginModelSlotTranscribesThroughSlot(t *testing.T) {
+func TestWhisperCLISlotRunsLocalCommand(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "fake-whisper")
+	// 照 whisper-cli 的约定：-of 给出输出前缀，结果写进 <前缀>.txt。
+	body := "#!/bin/sh\nprefix=\"\"\nwhile [ $# -gt 0 ]; do\n  if [ \"$1\" = \"-of\" ]; then prefix=\"$2\"; fi\n  if [ \"$1\" = \"-m\" ]; then echo \"$2\" > /dev/null; fi\n  shift\ndone\necho \" 本机转写 \" > \"$prefix.txt\"\n"
+	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	r := mediaSlotTestRuntime(t, map[string]ModelRole{
+		"stt": {ProfileID: "builtin:whisper-cli", Model: "whisper-cli", Params: map[string]string{"command": script, "model_path": "/models/ggml.bin"}},
+	})
+	resp, route, err := r.transcribeAudio(context.Background(), []byte("RIFF"), "audio.wav", "")
+	if err != nil || resp.Text != "本机转写" || route.Model != "whisper-cli" {
+		t.Fatalf("resp=%#v route=%#v err=%v", resp, route, err)
+	}
+}
+
+func TestSTTSlotTranscribesThroughProvider(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if err := r.ParseMultipartForm(1 << 20); err != nil {
 			t.Fatal(err)
 		}
-		// 插件语言是 auto 时让插槽上的语言生效。
 		if r.FormValue("model") != "whisper-1" || r.FormValue("language") != "zh" {
 			t.Errorf("form = %#v", r.MultipartForm.Value)
 		}
@@ -200,25 +228,10 @@ func TestSTTPluginModelSlotTranscribesThroughSlot(t *testing.T) {
 	if err := os.WriteFile(wav, []byte("wav-bytes"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	text, model, err := r.slotVoiceTranscription(context.Background(), wav, voiceSTTConfig{Backend: voiceSTTBackendModelSlot, Language: "auto"})
+	text, model, err := r.slotVoiceTranscription(context.Background(), wav, voiceSTTConfig{Backend: "openai"})
 	if err != nil || text != "今天吃什么" || model != "whisper-1" {
 		t.Fatalf("text=%q model=%q err=%v", text, model, err)
 	}
-}
-
-func TestSTTModelSlotBackendIsSelectable(t *testing.T) {
-	manifest := NewVoiceSTTPlugin(nil).Manifest()
-	for _, spec := range manifest.Settings {
-		if spec.Key != "backend" {
-			continue
-		}
-		for _, option := range spec.Options {
-			if option.Value == voiceSTTBackendModelSlot {
-				return
-			}
-		}
-	}
-	t.Fatal("model_slot backend missing from STT plugin settings")
 }
 
 func TestSTTModelSlotErrorsAreTransientWhenUpstreamIsDown(t *testing.T) {
@@ -332,12 +345,12 @@ func TestSTTSlotReportsTheRouteThatAnswered(t *testing.T) {
 	}, mediaSlotProfile("p1", primary.URL), mediaSlotProfile("p2", backup.URL))
 	wav := filepath.Join(t.TempDir(), "audio.wav")
 	_ = os.WriteFile(wav, []byte("wav"), 0o600)
-	text, model, err := r.slotVoiceTranscription(context.Background(), wav, voiceSTTConfig{Language: "auto"})
+	text, model, err := r.slotVoiceTranscription(context.Background(), wav, voiceSTTConfig{})
 	if err != nil || text != "后备转写" || model != "funasr" {
 		t.Fatalf("text=%q model=%q err=%v", text, model, err)
 	}
-	primaryKey := voiceSTTCacheKey("hash", voiceSTTConfig{Backend: voiceSTTBackendModelSlot, Model: "whisper-large"})
-	backupKey := voiceSTTCacheKey("hash", voiceSTTConfig{Backend: voiceSTTBackendModelSlot, Model: model})
+	primaryKey := voiceSTTCacheKey("hash", voiceSTTConfig{Backend: "openai", Model: "whisper-large"})
+	backupKey := voiceSTTCacheKey("hash", voiceSTTConfig{Backend: "openai", Model: model})
 	if primaryKey == backupKey {
 		t.Fatal("fallback transcript must not share the primary model's cache key")
 	}

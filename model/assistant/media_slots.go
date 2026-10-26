@@ -45,6 +45,55 @@ type mediaSlotRoute struct {
 	Model  string
 	// Params 是主路由上配的参数，后备路由沿用同一份。
 	Params map[string]string
+	// API 是内置语音服务固定的接口形态；普通提供商留空，按参数和地址判断。
+	API llm.SpeechAPI
+}
+
+// speechAPI 是这条路由实际走的语音接口：内置服务固定，其余先看参数，再按地址认。
+func (route mediaSlotRoute) speechAPI() llm.SpeechAPI {
+	if route.API != "" {
+		return route.API
+	}
+	return llm.ResolveSpeechAPI(route.param(mediaParamAPI), route.Config)
+}
+
+// builtinSpeechProfile 是不用建提供商就能直接选的语音服务：免费不要 Key，或者就在
+// 本机。ID 带 builtin: 前缀，前端模型分配里写死了同一份名单。
+type builtinSpeechProfile struct {
+	ID, Name, Slot, BaseURL, Model string
+	API                            llm.SpeechAPI
+}
+
+var builtinSpeechProfiles = []builtinSpeechProfile{
+	{ID: "builtin:edge-tts", Name: "Edge 朗读（免费）", Slot: mediaSlotTTS, API: llm.SpeechAPIEdge, Model: "edge-tts"},
+	{ID: "builtin:google-translate-tts", Name: "谷歌翻译朗读（免费）", Slot: mediaSlotTTS, API: llm.SpeechAPIGoogleTranslate, BaseURL: "https://translate.google.com", Model: "google-translate"},
+	{ID: "builtin:whisper-cli", Name: "本机 Whisper（whisper.cpp）", Slot: mediaSlotSTT, API: llm.SpeechAPIWhisperCLI, Model: "whisper-cli"},
+}
+
+func builtinSpeechProfileByID(id string) (builtinSpeechProfile, bool) {
+	for _, builtin := range builtinSpeechProfiles {
+		if builtin.ID == id {
+			return builtin, true
+		}
+	}
+	return builtinSpeechProfile{}, false
+}
+
+// withBuiltinSpeechProfiles 把这个插槽能用的内置服务当成虚拟提供商补进配置集，
+// 绑定解析、后备和轮换都照常走。
+func withBuiltinSpeechProfiles(set llm.ProfileSet, slot string) llm.ProfileSet {
+	profiles := append([]llm.Profile(nil), set.Profiles...)
+	for _, builtin := range builtinSpeechProfiles {
+		if builtin.Slot != slot {
+			continue
+		}
+		profiles = append(profiles, llm.Profile{
+			ID: builtin.ID, Name: builtin.Name, Group: slot,
+			Config: llm.ProviderConfig{Provider: llm.ProviderOpenAICompatible, BaseURL: builtin.BaseURL, Model: builtin.Model},
+		})
+	}
+	set.Profiles = profiles
+	return set
 }
 
 func (route mediaSlotRoute) label() string {
@@ -99,7 +148,7 @@ func (r *Runtime) resolveMediaSlotRoutes(ctx context.Context, slot string, sched
 	if !ok || role.FollowChat {
 		return nil
 	}
-	set := store.Profiles().WithDefaults()
+	set := withBuiltinSpeechProfiles(store.Profiles().WithDefaults(), slot)
 	if schedule {
 		// Media slots accept service-specific IDs without requiring a catalog entry.
 		for i := range set.Profiles {
@@ -111,7 +160,7 @@ func (r *Runtime) resolveMediaSlotRoutes(ctx context.Context, slot string, sched
 		}
 		routes := make([]mediaSlotRoute, 0, len(profiles))
 		for _, profile := range profiles {
-			routes = append(routes, mediaSlotRoute{Name: profile.Name, Config: profile.Config.WithDefaults(), Model: profile.Config.Model, Params: role.Params})
+			routes = append(routes, newMediaSlotRoute(profile, profile.Config.Model, role.Params))
 		}
 		return routes
 	}
@@ -128,10 +177,18 @@ func (r *Runtime) resolveMediaSlotRoutes(ctx context.Context, slot string, sched
 				continue
 			}
 			seen[key] = true
-			routes = append(routes, mediaSlotRoute{Name: profile.Name, Config: profile.Config.WithDefaults(), Model: model, Params: role.Params})
+			routes = append(routes, newMediaSlotRoute(profile, model, role.Params))
 		}
 	}
 	return routes
+}
+
+func newMediaSlotRoute(profile llm.Profile, model string, params map[string]string) mediaSlotRoute {
+	route := mediaSlotRoute{Name: profile.Name, Config: profile.Config.WithDefaults(), Model: model, Params: params}
+	if builtin, ok := builtinSpeechProfileByID(profile.ID); ok {
+		route.API = builtin.API
+	}
+	return route
 }
 
 func mediaSlotModel(binding ModelRole) string {
@@ -203,7 +260,7 @@ func (r *Runtime) synthesizeSpeech(ctx context.Context, text, format string) (*l
 	resp, _, err := runMediaSlot(ctx, r.resolveMediaSlotRoutes(ctx, mediaSlotTTS, true), "语音合成", func(route mediaSlotRoute) (*llm.SpeechResponse, error) {
 		started := time.Now()
 		resp, err := llm.SynthesizeSpeech(ctx, route.Config, llm.SpeechRequest{
-			API:          llm.SpeechAPI(route.param(mediaParamAPI)),
+			API:          route.speechAPI(),
 			Model:        route.Model,
 			Input:        text,
 			Voice:        route.param(mediaParamVoice),
@@ -211,6 +268,7 @@ func (r *Runtime) synthesizeSpeech(ctx context.Context, text, format string) (*l
 			Speed:        route.paramFloat(mediaParamSpeed),
 			Instructions: route.param(mediaParamInstructions),
 			Timeout:      route.paramSeconds(mediaParamTimeout),
+			Options:      route.Params,
 		}, r.llmClientOptionsFor(route.Config)...)
 		if err == nil {
 			r.recordMediaSlotUsage(ctx, route, "tts", started)
@@ -220,18 +278,16 @@ func (r *Runtime) synthesizeSpeech(ctx context.Context, text, format string) (*l
 	return resp, err
 }
 
-// slotSpeechSynthesizer 是交给语音合成插件的那个函数：格式按插槽上配的来。
-func (r *Runtime) slotSpeechSynthesizer(ctx context.Context, text string) (*llm.SpeechResponse, error) {
-	return r.synthesizeSpeech(ctx, text, "")
-}
-
 // transcribeAudio 用语音识别插槽转写一段音频。language 非空时盖过插槽上的语言。
 // 返回实际应答的那条路由：后备顶上时，缓存和记录要记在后备的模型名下。
 func (r *Runtime) transcribeAudio(ctx context.Context, audio []byte, filename, language string) (*llm.TranscriptionResponse, mediaSlotRoute, error) {
 	return runMediaSlot(ctx, r.resolveMediaSlotRoutes(ctx, mediaSlotSTT, true), "语音识别", func(route mediaSlotRoute) (*llm.TranscriptionResponse, error) {
 		started := time.Now()
+		if route.speechAPI() == llm.SpeechAPIWhisperCLI {
+			return transcribeWithWhisperCLI(ctx, route, audio)
+		}
 		resp, err := llm.TranscribeAudio(ctx, route.Config, llm.TranscriptionRequest{
-			API:      llm.SpeechAPI(route.param(mediaParamAPI)),
+			API:      route.speechAPI(),
 			Model:    route.Model,
 			Audio:    audio,
 			Filename: filename,

@@ -4794,12 +4794,7 @@ func TestRuntimeReplyRuleUsesSpecificLLMProfile(t *testing.T) {
 }
 
 func TestRuntimeReplyRuleConvertsReplyToVoice(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "audio/wav")
-		_, _ = w.Write(testWAVBytes())
-	}))
-	defer server.Close()
-	t.Setenv("DIANA_TTS_ENDPOINT", server.URL)
+	server, _ := gptSoVITSTestServer(t, testWAVBytes())
 	t.Setenv("DIANA_TTS_OUTPUT_DIR", t.TempDir())
 
 	channel := &recordingChannel{}
@@ -4817,7 +4812,8 @@ func TestRuntimeReplyRuleConvertsReplyToVoice(t *testing.T) {
 			Prompt:  "当用户希望机器人用语音回复时命中",
 			Action:  ReplyRuleActionVoice,
 		}},
-	}, channel, NewDefaultPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+		ModelRoles: gptSoVITSRole(nil),
+	}, channel, NewDefaultPluginManager(), &stubLLMProfileStore{set: llm.ProfileSet{Profiles: []llm.Profile{gptSoVITSProfile(server.URL)}}}, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
 	})
 	runtime.SetLocalMediaSharer(&recordingLocalMediaSharer{url: "http://127.0.0.1:18080/api/assistant/media/rule-voice"})
