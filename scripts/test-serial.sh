@@ -4,7 +4,8 @@
 # 同一台机器上常有好几个会话、好几个 worktree 同时跑 `go test -race ./...`，
 # 每个都按核数并发编译和测试，-race 还让 CPU 和内存翻几倍，整机卡死。
 # 这个脚本让所有 worktree 共用一把锁，同一时间只有一组测试在跑；
-# 跑的时候用 nice 降优先级，并把并发限在 DIANA_TEST_PROCS（默认 4）。
+# 跑的时候用 nice 降优先级，并把并发限在 DIANA_TEST_PROCS（默认 4）；单包超时
+# 默认 40 分钟（DIANA_TEST_TIMEOUT）。
 #
 # 用法：
 #   scripts/test-serial.sh                 改动涉及的包（相对 origin/main，含工作区改动）
@@ -17,6 +18,8 @@ set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 
 procs="${DIANA_TEST_PROCS:-4}"
+# 限了并发以后大包跑得更慢（model/assistant 的 -race 超过 go test 默认的 10 分钟），超时放宽。
+timeout="${DIANA_TEST_TIMEOUT:-40m}"
 lock_dir="${DIANA_TEST_LOCK:-$HOME/.cache/diana-go-test.lock}"
 mkdir -p "$(dirname "$lock_dir")"
 
@@ -58,6 +61,6 @@ trap release EXIT INT TERM
 
 export GOMAXPROCS="$procs"
 echo "== go test -race -p $procs ${packages[*]}"
-nice -n 15 go test -race -p "$procs" "${packages[@]}"
+nice -n 15 go test -race -p "$procs" -timeout "$timeout" "${packages[@]}"
 echo "== TZ=UTC go test -p $procs ${packages[*]}"
-TZ=UTC nice -n 15 go test -p "$procs" "${packages[@]}"
+TZ=UTC nice -n 15 go test -p "$procs" -timeout "$timeout" "${packages[@]}"
