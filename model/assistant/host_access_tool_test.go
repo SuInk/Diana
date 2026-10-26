@@ -69,7 +69,7 @@ func TestHostAccessHonorsSafeModeAtExecution(t *testing.T) {
 
 func hostAccessTestRuntime(t *testing.T) *Runtime {
 	t.Helper()
-	return hostAccessReviewRuntime(t, &hostReviewStubProvider{reply: `{"allow":true,"risk":"low","reason":"测试放行"}`})
+	return hostAccessReviewRuntime(t, &hostReviewStubProvider{reply: hostReviewAllowReply})
 }
 
 func TestHostAccessLegacySwitchDoesNotDisableOwner(t *testing.T) {

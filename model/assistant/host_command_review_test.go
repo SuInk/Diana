@@ -4,11 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/SuInk/diana/model/llm"
 )
@@ -57,12 +60,12 @@ func TestHostAccessReviewDeniesCommandWithoutRunningIt(t *testing.T) {
 	requireUnixShell(t)
 	root := t.TempDir()
 	marker := filepath.Join(root, "should-not-exist")
-	provider := &hostReviewStubProvider{reply: "```json\n{\"allow\":false,\"risk\":\"high\",\"reason\":\"超出请求范围\"}\n```"}
+	provider := &hostReviewStubProvider{reply: "```json\n{\"risk\":\"high\",\"user_authorization\":\"low\",\"outcome\":\"deny\",\"reason\":\"超出请求范围\"}\n```"}
 	r := hostAccessReviewRuntime(t, provider)
 	tool := &hostAccessTool{runtime: r, event: privateEvent("100001", "20401", "帮我看看磁盘")}
 	_, err := tool.Run(context.Background(), map[string]any{"operation": "exec", "command": "/bin/sh", "args": []string{"-c", `touch "$1"`, "probe", marker}, "cwd": root, "purpose": "查看磁盘"})
 	var reviewErr *hostCommandReviewError
-	if !errors.As(err, &reviewErr) || !strings.Contains(err.Error(), "超出请求范围") || !strings.Contains(err.Error(), "high") {
+	if !errors.As(err, &reviewErr) || !strings.Contains(err.Error(), "超出请求范围") || !strings.Contains(err.Error(), "high") || !strings.Contains(err.Error(), "不要换用其他工具") {
 		t.Fatalf("expected review denial, got %v", err)
 	}
 	if _, statErr := os.Stat(marker); statErr == nil {
@@ -87,22 +90,27 @@ func TestHostAccessReviewFailureFailsClosed(t *testing.T) {
 		"model error": {err: errors.New("upstream down")},
 		"bad json":    {reply: "放行吧"},
 		"no decision": {reply: `{"risk":"low"}`},
+		"bad level":   {reply: `{"risk":"weird","user_authorization":"high","outcome":"allow"}`},
 	} {
 		t.Run(name, func(t *testing.T) {
 			tool := &hostAccessTool{runtime: hostAccessReviewRuntime(t, provider), event: privateEvent("100001", "20402", "建个文件")}
 			_, err := tool.Run(context.Background(), map[string]any{"operation": "exec", "command": "/bin/sh", "args": []string{"-c", `touch "$1"`, "probe", marker}, "cwd": root, "purpose": "建文件"})
-			if err == nil || !strings.Contains(err.Error(), "命令审核不可用") {
+			if err == nil || !strings.Contains(err.Error(), "命令审核未能完成") || !strings.Contains(err.Error(), "不代表命令危险") {
 				t.Fatalf("expected fail-closed error, got %v", err)
 			}
 			if _, statErr := os.Stat(marker); statErr == nil {
 				t.Fatal("command ran without a review decision")
+			}
+			// 格式不对的结果重试一次，上游错误不在这里叠加重试。
+			if want := 2; provider.err == nil && len(provider.requests) != want {
+				t.Fatalf("review attempts = %d, want %d", len(provider.requests), want)
 			}
 		})
 	}
 }
 
 func TestHostAccessExecRequiresPurpose(t *testing.T) {
-	provider := &hostReviewStubProvider{reply: `{"allow":true,"risk":"low","reason":"ok"}`}
+	provider := &hostReviewStubProvider{reply: hostReviewAllowReply}
 	tool := &hostAccessTool{runtime: hostAccessReviewRuntime(t, provider), event: privateEvent("100001", "20403", "跑个命令")}
 	if _, err := tool.Run(context.Background(), map[string]any{"operation": "exec", "command": "/bin/sh", "args": []string{"-c", "true"}, "cwd": t.TempDir()}); err == nil || !strings.Contains(err.Error(), "purpose") {
 		t.Fatalf("missing purpose accepted: %v", err)
@@ -123,14 +131,134 @@ func TestAdminChatReviewUsesLastUserMessage(t *testing.T) {
 	}
 }
 
+const hostReviewAllowReply = `{"risk":"low","user_authorization":"high","outcome":"allow","reason":"测试放行"}`
+
 func TestParseHostCommandReviewToleratesProse(t *testing.T) {
-	decision, err := parseHostCommandReview("结论如下：{\"allow\":true,\"risk\":\"LOW\",\"reason\":\"常规查询\"} 以上")
-	if err != nil || !decision.Allow || decision.Risk != "low" {
+	decision, err := parseHostCommandReview("结论如下：{\"risk\":\"LOW\",\"user_authorization\":\"Medium\",\"outcome\":\"allow\",\"reason\":\"常规查询\"} 以上")
+	if err != nil || !decision.Allow || decision.Risk != "low" || decision.Authorization != "medium" {
 		t.Fatalf("decision=%+v err=%v", decision, err)
 	}
-	decision, err = parseHostCommandReview(`{"allow":false,"risk":"weird","reason":""}`)
-	if err != nil || decision.Allow || decision.Risk != "unknown" {
-		t.Fatalf("decision=%+v err=%v", decision, err)
+}
+
+// 阈值在代码里兜底：模型给了 allow 也越不过 critical 和「high 且授权不足」。
+func TestParseHostCommandReviewEnforcesThresholds(t *testing.T) {
+	for _, test := range []struct {
+		risk, auth, outcome string
+		allow               bool
+	}{
+		{"low", "unknown", "allow", true},
+		{"medium", "low", "allow", true},
+		{"low", "high", "deny", false}, // 低风险也可能因恶意注入被拒，模型的 deny 照样生效
+		{"high", "medium", "allow", true},
+		{"high", "low", "allow", false},
+		{"high", "unknown", "allow", false},
+		{"critical", "high", "allow", false},
+	} {
+		raw := fmt.Sprintf(`{"risk":%q,"user_authorization":%q,"outcome":%q,"reason":"r"}`, test.risk, test.auth, test.outcome)
+		decision, err := parseHostCommandReview(raw)
+		if err != nil || decision.Allow != test.allow {
+			t.Fatalf("%s/%s/%s: allow=%v err=%v", test.risk, test.auth, test.outcome, decision.Allow, err)
+		}
+	}
+}
+
+func TestHostReviewBreakerStopsRetriesAfterRepeatedDenials(t *testing.T) {
+	requireUnixShell(t)
+	root := t.TempDir()
+	provider := &hostReviewStubProvider{reply: `{"risk":"high","user_authorization":"unknown","outcome":"deny","reason":"与任务无关"}`}
+	r := hostAccessReviewRuntime(t, provider)
+	tool := &hostAccessTool{runtime: r, event: privateEvent("100001", "20411", "看看日志")}
+	run := func() error {
+		_, err := tool.Run(context.Background(), map[string]any{"operation": "exec", "command": "/bin/sh", "args": []string{"-c", "true"}, "cwd": root, "purpose": "看日志"})
+		return err
+	}
+	for i := 1; i <= hostReviewMaxConsecutiveDenials; i++ {
+		err := run()
+		if err == nil || !strings.Contains(err.Error(), "未通过自动审核") {
+			t.Fatalf("attempt %d: %v", i, err)
+		}
+		if tripped := strings.Contains(err.Error(), "审核拒绝上限"); tripped != (i == hostReviewMaxConsecutiveDenials) {
+			t.Fatalf("attempt %d tripped=%v", i, tripped)
+		}
+	}
+	err := run()
+	if err == nil || !strings.Contains(err.Error(), "已停止执行后续命令") {
+		t.Fatalf("breaker did not stop: %v", err)
+	}
+	if len(provider.requests) != hostReviewMaxConsecutiveDenials {
+		t.Fatalf("reviewer called %d times after breaker opened", len(provider.requests))
+	}
+	// 主人发新消息是新的一轮，熔断不延续。
+	provider.reply = hostReviewAllowReply
+	tool.event = privateEvent("100001", "20412", "那就看看磁盘")
+	if err := run(); err != nil {
+		t.Fatalf("new turn still blocked: %v", err)
+	}
+}
+
+func TestHostReviewBreakerCountsRecentDenials(t *testing.T) {
+	var breaker hostReviewBreaker
+	now := time.Now()
+	for i := 0; i < hostReviewMaxRecentDenials-1; i++ {
+		if breaker.record("k", true, now) && i < hostReviewMaxConsecutiveDenials-1 {
+			t.Fatal("opened too early")
+		}
+		breaker.record("k", false, now)
+	}
+	if breaker.isOpen("k") {
+		t.Fatal("alternating denials below the window limit opened the breaker")
+	}
+	if !breaker.record("k", true, now) {
+		t.Fatal("10 denials in the window did not open the breaker")
+	}
+}
+
+func TestHostReviewIncludesRecentConversationWithTrust(t *testing.T) {
+	requireUnixShell(t)
+	provider := &hostReviewStubProvider{reply: hostReviewAllowReply}
+	r := hostAccessReviewRuntime(t, provider)
+	current := privateEvent("100001", "20415", "确认，删吧")
+	current.SelfID = "200002"
+	r.mu.Lock()
+	r.history[sessionKey(current)] = []MessageEvent{
+		privateEvent("100001", "20413", "把 /tmp/diana-build 删掉"),
+		{Kind: EventKindPrivate, UserID: "200002", MessageID: "20414", RawMessage: "这会删除整个构建目录，确认吗？"},
+		current,
+	}
+	r.mu.Unlock()
+	tool := &hostAccessTool{runtime: r, event: current}
+	if _, err := tool.Run(context.Background(), map[string]any{"operation": "exec", "command": "/bin/sh", "args": []string{"-c", "true"}, "cwd": t.TempDir(), "purpose": "删除构建目录"}); err != nil {
+		t.Fatal(err)
+	}
+	content := provider.lastUserContent()
+	var payload struct {
+		Request string           `json:"user_request"`
+		Turns   []hostReviewTurn `json:"recent_conversation"`
+	}
+	if err := json.Unmarshal([]byte(content[strings.Index(content, "{"):]), &payload); err != nil {
+		t.Fatal(err)
+	}
+	want := []hostReviewTurn{
+		{Speaker: "owner", Trusted: true, Text: "把 /tmp/diana-build 删掉"},
+		{Speaker: "assistant", Text: "这会删除整个构建目录，确认吗？"},
+	}
+	if payload.Request != "确认，删吧" || !reflect.DeepEqual(payload.Turns, want) {
+		t.Fatalf("payload = %+v", payload)
+	}
+}
+
+func TestAdminChatReviewTranscriptMarksTrust(t *testing.T) {
+	turns := adminChatReviewTranscript([]llm.Message{
+		{Role: llm.RoleUser, Content: "把旧日志清掉"},
+		{Role: llm.RoleAssistant, Content: "会删除 30 天前的日志，确认吗？"},
+		{Role: llm.RoleUser, Content: "确认"},
+	})
+	want := []hostReviewTurn{
+		{Speaker: "owner", Trusted: true, Text: "把旧日志清掉"},
+		{Speaker: "assistant", Text: "会删除 30 天前的日志，确认吗？"},
+	}
+	if !reflect.DeepEqual(turns, want) {
+		t.Fatalf("turns = %+v", turns)
 	}
 }
 

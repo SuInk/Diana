@@ -31,6 +31,7 @@ func (r *Runtime) RunAdminChat(ctx context.Context, profileID string, req agent.
 	ctx = withLLMUsagePurpose(withLLMUsageContext(ctx, event), "admin_chat")
 	ctx = context.WithValue(ctx, adminChatRunKey{}, true)
 	ctx = withHostCommandRequest(ctx, lastUserMessageText(req.Messages))
+	ctx = withHostCommandTranscript(ctx, adminChatReviewTranscript(req.Messages))
 	adminCfg := r.agentRegistryConfig(cfg, event, true)
 	adminCfg.BuiltinSkills = nil
 	adminCfg.CoreTools = adminChatCoreTools
@@ -190,4 +191,27 @@ func lastUserMessageText(messages []llm.Message) string {
 		}
 	}
 	return ""
+}
+
+// adminChatReviewTranscript 把管理会话本轮之前的消息转成审核器看的对话：管理员的话
+// 可信，助手回复不可信。最后一条用户消息已经作为 user_request 单独给出。
+func adminChatReviewTranscript(messages []llm.Message) []hostReviewTurn {
+	last := len(messages) - 1
+	for last >= 0 && messages[last].Role != llm.RoleUser {
+		last--
+	}
+	var turns []hostReviewTurn
+	for _, message := range messages[:max(last, 0)] {
+		text := truncateRunes(message.Content, 600)
+		if text == "" {
+			continue
+		}
+		switch message.Role {
+		case llm.RoleUser:
+			turns = append(turns, hostReviewTurn{Speaker: "owner", Trusted: true, Text: text})
+		case llm.RoleAssistant:
+			turns = append(turns, hostReviewTurn{Speaker: "assistant", Text: text})
+		}
+	}
+	return lastHostReviewTurns(turns)
 }

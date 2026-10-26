@@ -447,7 +447,9 @@ type Runtime struct {
 	telegramOwnerIDs sync.Map
 	// pluginStatePersister 把插件开关落盘，聊天里改开关时用，见 plugin_toggle.go。
 	pluginStatePersister func(context.Context) error
-	sharedRoutes         sharedRouteState
+	// hostReviewBreaker 是宿主命令审核的熔断，见 host_command_review.go。
+	hostReviewBreaker hostReviewBreaker
+	sharedRoutes      sharedRouteState
 	// telegramRecallProbes serializes active deletion checks per bot account and
 	// remembers recent results/rate limits so repeated queries do not hammer the
 	// Bot API. It owns its own lock; Runtime.mu must not be held while acquiring it.
