@@ -338,7 +338,6 @@ mkdir -p "$stage_dir"
 tar -xzf "$archive_path" -C "$stage_dir"
 package_dir="$stage_dir/$package_name"
 [ -x "$package_dir/$binary_name" ] || fail "release package does not contain $binary_name"
-[ -f "$package_dir/frontend-next/dist/index.html" ] || fail "release package does not contain the WebUI"
 
 legacy_install_dir="$service_home/.local/share/diana"
 new_system_install=false
@@ -543,16 +542,12 @@ PLIST
 
 assemble_macos_app() {
   [ "$os" = "darwin" ] || return 0
-  # 运行时和前端都放进 bundle：自更新器要求前端目录在可执行文件所在目录之内，
-  # 否则会判定「不支持 Release 自更新」。
+  # 前端已编进程序，bundle 里放运行时本体即可。
   mkdir -p "$macos_app_dir/Contents/MacOS"
   write_macos_app_plist
   cp -f "$install_dir/$binary_name" "$macos_app_binary"
   chmod +x "$macos_app_binary"
   rm -rf "$macos_app_dir/Contents/MacOS/frontend-next"
-  if [ -d "$install_dir/frontend-next" ]; then
-    cp -R "$install_dir/frontend-next" "$macos_app_dir/Contents/MacOS/frontend-next"
-  fi
   # 自带的 gitea-mcp 按「主程序旁边」被找到，bundle 里也得放一份，
   # 否则从 .app 启动时 MCP 预设只能退回 PATH，多半找不到。
   for bundled in gitea-mcp gitea-mcp.LICENSE desktopctl-helper; do
@@ -660,18 +655,12 @@ if [ ! -f "$config_file" ]; then
   if [ -z "$generated_password" ]; then
     generated_password=$(random_hex 16)
   fi
-  if [ "$os" = "darwin" ]; then
-    frontend_dist="$macos_app_dir/Contents/MacOS/frontend-next/dist"
-  else
-    frontend_dist="$install_dir/frontend-next/dist"
-  fi
   cat >"$config_file" <<EOF
 # Diana 配置。基础设施段每次启动生效;bot / llm 段只在数据库为空时播种一次,
 # 之后以 WebUI 里的配置为准。完整字段见仓库里的 config.example.yaml。
 server:
   host: $(yaml_quote "$host")
   port: $(yaml_quote "$port")
-  frontend_dist: $(yaml_quote "$frontend_dist")
 storage:
   db_path: $(yaml_quote "$db_path")
   log_path: $(yaml_quote "$install_dir/logs/diana.log")
@@ -715,18 +704,6 @@ configured_host=$(read_yaml_value "$config_file" server host)
 configured_port=$(read_yaml_value "$config_file" server port)
 [ -z "$configured_host" ] || host=$configured_host
 [ -z "$configured_port" ] || port=$configured_port
-
-# 旧安装升级为 .app 后，同步安装器管理的前端路径；保留自定义前端。
-if [ "$os" = "darwin" ]; then
-  existing_frontend=$(read_yaml_value "$config_file" server frontend_dist)
-  case "$existing_frontend" in
-    "$install_dir/frontend-next/dist"|"frontend-next/dist"|"./frontend-next/dist")
-      set_yaml_value "$config_file" server frontend_dist "$macos_app_dir/Contents/MacOS/frontend-next/dist"
-      chmod 600 "$config_file"
-      info "Configuration → migrated packaged frontend into Diana.app"
-      ;;
-  esac
-fi
 
 if [ "$os" = "darwin" ]; then
   # 每次启动先确认 .app 的签名还满足固定 identifier：WebUI 自更新替换了 bundle

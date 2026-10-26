@@ -40,9 +40,8 @@ func TestMacOSCodeIdentifierMatchesPackaging(t *testing.T) {
 	}
 }
 
-// 安装脚本把运行时装进 .app 时，前端必须一起放进 bundle：Release 自更新器要求
-// 前端目录在可执行文件所在目录之内，否则会判定为「不支持自更新」。
-func TestInstallScriptKeepsFrontendInsideBundle(t *testing.T) {
+// 前端已编进程序：安装脚本只把运行时装进 .app，不再复制前端目录或写 frontend_dist。
+func TestInstallScriptInstallsSingleBinaryBundle(t *testing.T) {
 	content, err := os.ReadFile(filepath.Join("..", "..", "scripts", "install.sh"))
 	if err != nil {
 		t.Fatalf("read install.sh: %v", err)
@@ -51,12 +50,14 @@ func TestInstallScriptKeepsFrontendInsideBundle(t *testing.T) {
 	for _, want := range []string{
 		`macos_app_dir="$install_dir/Diana.app"`,
 		`macos_app_binary="$macos_app_dir/Contents/MacOS/$binary_name"`,
-		`cp -R "$install_dir/frontend-next" "$macos_app_dir/Contents/MacOS/frontend-next"`,
-		`frontend_dist="$macos_app_dir/Contents/MacOS/frontend-next/dist"`,
-		`  frontend_dist: $(yaml_quote "$frontend_dist")`,
 	} {
 		if !strings.Contains(script, want) {
 			t.Fatalf("install.sh is missing %q", want)
+		}
+	}
+	for _, unwanted := range []string{`cp -R "$install_dir/frontend-next"`, `frontend_dist: $(yaml_quote`} {
+		if strings.Contains(script, unwanted) {
+			t.Fatalf("install.sh still contains %q", unwanted)
 		}
 	}
 }

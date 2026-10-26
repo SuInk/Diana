@@ -83,7 +83,7 @@ func TestReleaseWorkflowPublishesOnlyCompletePackages(t *testing.T) {
 		`package_suffix="${package_suffix/darwin-/macos-}"`,
 		`package_name="diana-${package_suffix}"`,
 		`-o "${package_dir}/${runtime_name}"`,
-		`cp -R release/frontend-next-dist/. "${package_dir}/frontend-next/dist/"`,
+		`cp -R release/frontend-next-dist/. cmd/webui/webdist/`,
 		`"${package_dir}/run.sh"`, `"${package_dir}/run.bat"`,
 	} {
 		if !strings.Contains(buildScript, fragment) {

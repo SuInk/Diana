@@ -433,7 +433,6 @@ func main() {
 	releaseUpdater, err := updater.NewReleasePackageUpdater(updater.ReleasePackageOptions{
 		CurrentVersion: runtimeVersion,
 		Mirror:         mirrorSelector,
-		FrontendDir:    frontendDistDir(appCfg.Server.FrontendDist),
 		DatabasePath:   sqliteStore.Path(),
 		HealthURL:      "http://" + net.JoinHostPort(displayHost(host), port) + "/api/health",
 		Arguments:      os.Args[1:],
@@ -826,7 +825,9 @@ func main() {
 	// OneBot 路由必须在 SPA fallback 之前注册，否则接入端会拿到前端 HTML 而不是 WebSocket。
 	router.GET("/onebot/v11/ws", gin.WrapH(oneBotServer))
 	router.POST("/onebot/v11/http", gin.WrapH(oneBotHTTPServer))
-	router.NoRoute(spaHandler(http.Dir(frontendDistDir(appCfg.Server.FrontendDist))))
+	frontendRoot, frontendSource := frontendFileSystem(appCfg.Server.FrontendDist)
+	log.Printf("webui frontend: %s", frontendSource)
+	router.NoRoute(spaHandler(frontendRoot))
 
 	log.Printf("webui listening on http://%s (监听地址；Docker 请使用宿主机地址和映射端口访问)", listener.Addr())
 	logStartupDone()
@@ -1039,7 +1040,8 @@ func serveFile(c *gin.Context, root http.FileSystem, path string) {
 		contentType = "application/octet-stream"
 	}
 	if stat, statErr := file.Stat(); statErr == nil {
-		etag := `"` + strconv.FormatInt(stat.Size(), 16) + "-" + strconv.FormatInt(stat.ModTime().UnixNano(), 16) + `"`
+		// 内嵌文件没有修改时间，拿构建版本区分新旧前端。
+		etag := `"` + strconv.FormatInt(stat.Size(), 16) + "-" + strconv.FormatInt(stat.ModTime().UnixNano(), 16) + "-" + buildVersion + `"`
 		c.Header("ETag", etag)
 		if c.GetHeader("If-None-Match") == etag {
 			c.Status(http.StatusNotModified)

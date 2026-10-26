@@ -194,7 +194,6 @@ try {
     Expand-Archive -Path $archivePath -DestinationPath $stageDir -Force
     $packageDir = Join-Path $stageDir $packageName
     if (-not (Test-Path (Join-Path $packageDir $binaryName))) { throw "Release package does not contain the Diana executable." }
-    if (-not (Test-Path (Join-Path $packageDir "frontend-next\dist\index.html"))) { throw "Release package does not contain the WebUI." }
 
     New-Item -ItemType Directory -Force -Path $installDir, (Join-Path $installDir "data"), (Join-Path $installDir "logs") | Out-Null
     $timestamp = (Get-Date).ToUniversalTime().ToString("yyyyMMddTHHmmssZ")
@@ -251,7 +250,6 @@ try {
             "server:",
             "  host: $(ConvertTo-DianaYamlScalar $bindHost)",
             "  port: $(ConvertTo-DianaYamlScalar ([string]$port))",
-            "  frontend_dist: $(ConvertTo-DianaYamlScalar (Join-Path $installDir 'frontend-next\dist'))",
             "storage:",
             "  db_path: $(ConvertTo-DianaYamlScalar $dbPath)",
             "  log_path: $(ConvertTo-DianaYamlScalar (Join-Path $installDir 'logs\diana.log'))",

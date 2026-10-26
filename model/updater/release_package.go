@@ -86,7 +86,6 @@ type pendingReleaseUpdate struct {
 type ReleasePackageOptions struct {
 	CurrentVersion string
 	Executable     string
-	FrontendDir    string
 	DatabasePath   string
 	HealthURL      string
 	WorkingDir     string
@@ -122,7 +121,6 @@ type MirrorResolver interface {
 type ReleasePackageUpdater struct {
 	currentVersion string
 	executable     string
-	frontendDir    string
 	databasePath   string
 	healthURL      string
 	workingDir     string
@@ -235,14 +233,6 @@ func NewReleasePackageUpdater(options ReleasePackageOptions) (*ReleasePackageUpd
 	}
 	installRoot := filepath.Dir(absExecutable)
 	binaryName := expectedReleaseBinaryName(goos, goarch)
-	frontendDir := strings.TrimSpace(options.FrontendDir)
-	if frontendDir == "" {
-		frontendDir = filepath.Join(installRoot, "frontend-next", "dist")
-	}
-	absFrontend, err := filepath.Abs(frontendDir)
-	if err != nil {
-		return nil, err
-	}
 	databasePath := strings.TrimSpace(options.DatabasePath)
 	if databasePath != "" {
 		databasePath, err = filepath.Abs(databasePath)
@@ -276,7 +266,6 @@ func NewReleasePackageUpdater(options ReleasePackageOptions) (*ReleasePackageUpd
 	u := &ReleasePackageUpdater{
 		currentVersion: strings.TrimSpace(options.CurrentVersion),
 		executable:     absExecutable,
-		frontendDir:    absFrontend,
 		databasePath:   databasePath,
 		healthURL:      strings.TrimSpace(options.HealthURL),
 		workingDir:     workingDir,
@@ -299,10 +288,6 @@ func NewReleasePackageUpdater(options ReleasePackageOptions) (*ReleasePackageUpd
 		u.unsupportedWhy = "unsupported operating system " + goos
 	case filepath.Base(absExecutable) != u.binaryName:
 		u.unsupportedWhy = fmt.Sprintf("running executable %q is not the packaged binary %q", filepath.Base(absExecutable), u.binaryName)
-	case !pathWithin(installRoot, absFrontend):
-		u.unsupportedWhy = "frontend directory is outside the package root"
-	case !regularFileExists(filepath.Join(absFrontend, "index.html")):
-		u.unsupportedWhy = "packaged frontend is missing"
 	case databasePath == "" || !regularFileExists(databasePath):
 		u.unsupportedWhy = "SQLite database is missing"
 	case u.healthURL == "":
@@ -513,9 +498,8 @@ func (u *ReleasePackageUpdater) Download(ctx context.Context, release ReleasePac
 	}
 	packageRoot := filepath.Join(extractRoot, releasePackageDirectory(assetName))
 	stagedExecutable := filepath.Join(packageRoot, u.binaryName)
-	stagedFrontend := filepath.Join(packageRoot, "frontend-next", "dist")
-	if !regularFileExists(stagedExecutable) || !regularFileExists(filepath.Join(stagedFrontend, "index.html")) {
-		return Result{}, fmt.Errorf("%w: expected binary or frontend is missing", ErrInvalidReleaseArchive)
+	if !regularFileExists(stagedExecutable) {
+		return Result{}, fmt.Errorf("%w: expected binary is missing", ErrInvalidReleaseArchive)
 	}
 
 	helperPath := filepath.Join(workRoot, "diana-release-helper")
@@ -543,8 +527,6 @@ func (u *ReleasePackageUpdater) Download(ctx context.Context, release ReleasePac
 		BackupRoot:       filepath.Join(updatesRoot, "backups", backupName),
 		ExecutablePath:   u.executable,
 		StagedExecutable: stagedExecutable,
-		FrontendPath:     u.frontendDir,
-		StagedFrontend:   stagedFrontend,
 		DatabasePath:     u.databasePath,
 		HealthURL:        u.healthURL,
 		WorkingDir:       u.workingDir,
@@ -633,7 +615,7 @@ func (u *ReleasePackageUpdater) InstallDownloaded(ctx context.Context) (Result, 
 	if err := validateReleaseApplyPlan(plan); err != nil {
 		return Result{}, err
 	}
-	if !regularFileExists(plan.StagedExecutable) || !regularFileExists(filepath.Join(plan.StagedFrontend, "index.html")) {
+	if !regularFileExists(plan.StagedExecutable) {
 		return Result{}, fmt.Errorf("%w: downloaded package is incomplete", ErrInvalidReleaseArchive)
 	}
 	if err := writePrivateJSON(pending.PlanPath, plan); err != nil {

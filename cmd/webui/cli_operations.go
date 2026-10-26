@@ -93,9 +93,13 @@ func runDoctorCommand(args []string, output io.Writer) error {
 	if frontendSetting != "" {
 		frontendSetting = resolveConfigRelative(path, frontendSetting)
 	}
-	frontend := frontendDistDir(frontendSetting)
-	_, frontendErr := os.Stat(filepath.Join(frontend, "index.html"))
-	check(frontendErr == nil, "frontend assets: "+frontend, "frontend assets are missing: "+frontend)
+	if _, embedded := embeddedFrontend(); embedded {
+		check(true, "frontend assets: embedded", "")
+	} else {
+		frontend := frontendDistDir(frontendSetting)
+		_, frontendErr := os.Stat(filepath.Join(frontend, "index.html"))
+		check(frontendErr == nil, "frontend assets: "+frontend, "frontend assets are missing: "+frontend)
+	}
 	address := healthAddress(config)
 	health, healthErr := fetchHealth(context.Background(), address)
 	if healthErr == nil {

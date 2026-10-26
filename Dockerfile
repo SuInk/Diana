@@ -19,6 +19,8 @@ COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 RUN sh scripts/sync-models-dev.sh
+# 前端编进二进制，镜像里和发布包一样只有一个程序。
+COPY --from=frontend-next /src/frontend/dist/ ./cmd/webui/webdist/
 RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -trimpath -ldflags="-s -w -X main.buildVersion=${BUILD_VERSION}" -o /out/diana-webui ./cmd/webui
 
 # 随包发布的 gitea-mcp：只收 Gitea 官方的发布产物，版本和 SHA-256 钉在脚本里，
@@ -107,7 +109,6 @@ COPY --from=yt-dlp /out/yt-dlp /usr/local/bin/yt-dlp
 # glibc Linux 裸机部署则会自动改用 Chrome for Testing 无 root 下载。
 FROM runtime-base AS runtime-slim
 COPY --from=backend /out/diana-webui /app/diana-webui
-COPY --from=frontend-next /src/frontend/dist /app/frontend-next/dist
 # 浏览器控制扩展的源码。容器用户没有仓库检出，WebUI 的「下载扩展」就是从这里打包。
 COPY packaging/browser-control-extension /app/browser-control-extension
 EXPOSE 18080
@@ -115,7 +116,6 @@ ENTRYPOINT ["/usr/bin/tini", "-s", "--", "/usr/local/bin/diana-entrypoint", "/ap
 
 FROM runtime-full AS runtime
 COPY --from=backend /out/diana-webui /app/diana-webui
-COPY --from=frontend-next /src/frontend/dist /app/frontend-next/dist
 COPY packaging/browser-control-extension /app/browser-control-extension
 EXPOSE 18080
 ENTRYPOINT ["/usr/bin/tini", "-s", "--", "/usr/local/bin/diana-entrypoint", "/app/diana-webui"]

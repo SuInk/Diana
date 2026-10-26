@@ -41,8 +41,6 @@ type releaseApplyPlan struct {
 	BackupRoot       string   `json:"backup_root"`
 	ExecutablePath   string   `json:"executable_path"`
 	StagedExecutable string   `json:"staged_executable"`
-	FrontendPath     string   `json:"frontend_path"`
-	StagedFrontend   string   `json:"staged_frontend"`
 	DatabasePath     string   `json:"database_path"`
 	HealthURL        string   `json:"health_url"`
 	WorkingDir       string   `json:"working_dir"`
@@ -193,8 +191,6 @@ func validateReleaseApplyPlan(plan releaseApplyPlan) error {
 		"backup root":       plan.BackupRoot,
 		"executable":        plan.ExecutablePath,
 		"staged executable": plan.StagedExecutable,
-		"frontend":          plan.FrontendPath,
-		"staged frontend":   plan.StagedFrontend,
 		"database":          plan.DatabasePath,
 		"working directory": plan.WorkingDir,
 		"log":               plan.LogPath,
@@ -210,10 +206,10 @@ func validateReleaseApplyPlan(plan releaseApplyPlan) error {
 	if !pathWithin(updatesRoot, plan.WorkRoot) || !pathWithin(filepath.Join(updatesRoot, "backups"), plan.BackupRoot) {
 		return errors.New("updater: update workspace escapes the install root")
 	}
-	if !pathWithin(plan.InstallRoot, plan.ExecutablePath) || !pathWithin(plan.InstallRoot, plan.FrontendPath) {
+	if !pathWithin(plan.InstallRoot, plan.ExecutablePath) {
 		return errors.New("updater: package target escapes the install root")
 	}
-	if !pathWithin(plan.WorkRoot, plan.StagedExecutable) || !pathWithin(plan.WorkRoot, plan.StagedFrontend) {
+	if !pathWithin(plan.WorkRoot, plan.StagedExecutable) {
 		return errors.New("updater: staged package escapes the update workspace")
 	}
 	if !validReleaseHealthURL(plan.HealthURL) {
@@ -257,7 +253,6 @@ func applyReleasePlan(plan releaseApplyPlan, hooks releaseApplyHooks) error {
 
 	files := []releaseApplyFile{
 		{Target: plan.ExecutablePath, Staged: plan.StagedExecutable},
-		{Target: plan.FrontendPath, Staged: plan.StagedFrontend},
 	}
 	files = append(files, plan.OptionalFiles...)
 	switched, err := switchReleaseFiles(plan.InstallRoot, plan.BackupRoot, files)
