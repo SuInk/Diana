@@ -3254,6 +3254,11 @@ a.nav-action {
   font-size: 14px;
 }
 
+.platform-untested-badge {
+  margin-left: 8px;
+  vertical-align: 1px;
+}
+
 .platform-choice small {
   color: var(--muted);
   font-size: 12px;

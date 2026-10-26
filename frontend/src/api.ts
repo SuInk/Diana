@@ -1136,6 +1136,8 @@ export interface BotPlatform {
   callback_path?: string;
   /** 出站适配器能不能把 Markdown 渲染出来；决定「Markdown 转纯文本」的默认值。 */
   rich_text?: boolean;
+  /** 适配器还没在真实账号上跑通收发，WebUI 标「未测试」。 */
+  untested?: boolean;
 }
 
 const inflightRequests = new Map<string, Promise<unknown>>();

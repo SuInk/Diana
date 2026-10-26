@@ -204,9 +204,9 @@
                 <AppSelect
                   :model-value="form.platform ?? ''"
                   :options="platformOptions"
-                  @update:model-value="(value) => { if (form) { form.platform = value; form.connection_profile_id = ''; } }"
+                  @update:model-value="changeFormPlatform"
                 />
-                <span class="hint">{{ platformDescription(form.platform) }}</span>
+                <span class="hint">{{ platformDescription(form.platform) }}<template v-if="platformDefinition(form.platform)?.untested">（未测试：适配器还没在真实账号上验证过收发）</template></span>
               </div>
               <!-- 按平台和传输方式展示连接地址与鉴权凭据。 -->
               <template v-if="isOneBotPlatform">
@@ -973,7 +973,7 @@
                   <span class="track" aria-hidden="true"></span>
                   <span class="switch-label">Markdown 转纯文本</span>
                 </label>
-                <span class="hint">{{ richTextPlatform ? "当前平台能渲染 Markdown，默认保留标记；开启后改为发送纯文本。" : "当前平台只发纯文本，Markdown 标记会以字面量出现，所以默认转成纯文本。" }}</span>
+                <span class="hint">{{ richTextPlatform ? "当前平台能渲染 Markdown，默认保留标记；开启后改为发送纯文本。" : "当前平台只发纯文本，Markdown 标记会以字面量出现，所以默认转成纯文本。" }}<template v-if="!richTextPlatform && !form.markdown_to_plain">当前已关闭，回复里的 ** 和 # 会原样发出。</template></span>
               </div>
               <div class="field">
                 <label for="bot-maxinput">单次输入上限（字符）</label>
@@ -2112,7 +2112,7 @@
             >
               <span class="platform-choice-icon"><Bot :size="21" aria-hidden="true" /></span>
               <span>
-                <strong>{{ platform.name }}</strong>
+                <strong>{{ platform.name }}<span v-if="platform.untested" class="badge warn platform-untested-badge">未测试</span></strong>
                 <small>{{ platform.description }}</small>
                 <code>{{ platformProtocol(platform.id) }}</code>
               </span>
@@ -2897,6 +2897,16 @@ function platformSupportsRichText(id: string | undefined): boolean {
   return platforms.value.find((item) => item.id === id)?.rich_text === true;
 }
 const richTextPlatform = computed(() => platformSupportsRichText(form.value?.platform));
+
+// 换平台时「Markdown 转纯文本」跟着回到新平台的默认值：这个开关保存时总是显式落库，
+// 从 Telegram 复制过来再改成 QQ 官方机器人，不重置就会带着「保留 Markdown」上线，
+// 标记以字面量出现在聊天里。
+function changeFormPlatform(value: string): void {
+  if (!form.value) return;
+  form.value.platform = value;
+  form.value.connection_profile_id = "";
+  form.value.markdown_to_plain = !platformSupportsRichText(value);
+}
 const page = ref<"list" | "edit">("list");
 
 // 表头吸顶之后（.view-header 全站生效），右侧状态卡的停靠位置要落在它下面。
@@ -3148,7 +3158,7 @@ const failedChannels = computed(() => visibleChannels.value.filter((channel) => 
 const platformOptions = computed<AppSelectOption[]>(() =>
   platforms.value.map((platform) => ({
     value: platform.id,
-    label: platform.name,
+    label: platform.untested ? `${platform.name}（未测试）` : platform.name,
     hint: platform.protocol
   }))
 );

@@ -73,17 +73,20 @@ type PlatformDefinition struct {
 	// 各家认的 Markdown 子集并不一样（钉钉不认代码块、企业微信不认斜体、飞书不认
 	// 标题、QQ 官方机器人不认行内代码，都不认表格），差异由各自适配器的 platformMarkdownFeatures 抹平。
 	RichText bool `json:"rich_text,omitempty"`
+	// Untested 表示适配器只按协议文档实现，还没在真实账号上跑通收发。WebUI 据此
+	// 给平台打「未测试」标记，提醒用户出问题时先怀疑适配器本身。
+	Untested bool `json:"untested,omitempty"`
 }
 
 var supportedPlatforms = []PlatformDefinition{
 	{ID: PlatformOneBotV11, Name: "OneBot v11", Protocol: ProtocolOneBotV11, Category: PlatformCategoryOneBotV11, CategoryLabel: "OneBot v11", Description: "OneBot v11 正向 WebSocket、反向 WebSocket 和 HTTP 接入", Inbound: InboundReverseWS},
 	{ID: PlatformTelegram, Name: "Telegram", Protocol: ProtocolTelegramBot, Category: PlatformCategoryTelegram, CategoryLabel: "Telegram", Description: "官方 Bot API 长轮询，不需要公网地址", Inbound: InboundOutbound, RichText: true},
 	{ID: PlatformQQOfficial, Name: "QQ 官方机器人", Protocol: ProtocolQQOfficialWS, Category: PlatformCategoryQQOfficial, CategoryLabel: "QQ 官方机器人", Description: "QQ 开放平台 WebSocket 网关，出站长连接，不需要公网地址", Inbound: InboundOutbound, RichText: true},
-	{ID: PlatformDingTalk, Name: "钉钉", Protocol: ProtocolDingTalkWS, Category: PlatformCategoryDingTalk, CategoryLabel: "钉钉", Description: "Stream 模式出站长连接，不需要公网地址", Inbound: InboundOutbound, RichText: true},
-	{ID: PlatformFeishu, Name: "飞书", Protocol: ProtocolFeishuWebhook, Category: PlatformCategoryFeishu, CategoryLabel: "飞书", Description: "事件订阅回调，需要一个公网可达的回调地址", Inbound: InboundCallback, CallbackPath: FeishuCallbackPath, RichText: true},
-	{ID: PlatformWeCom, Name: "企业微信", Protocol: ProtocolWeComWebhook, Category: PlatformCategoryWeCom, CategoryLabel: "企业微信", Description: "应用回调，需要一个公网可达的回调地址", Inbound: InboundCallback, CallbackPath: WeComCallbackPath, RichText: true},
-	{ID: PlatformWeixin, Name: "微信", Protocol: ProtocolWeixinILink, Category: PlatformCategoryWeixin, CategoryLabel: "微信", Description: "腾讯 iLink Bot 扫码登录，长轮询收发私聊，不需要公网地址", Inbound: InboundOutbound},
-	{ID: PlatformIMessage, Name: "iMessage", Protocol: ProtocolBlueBubbles, Category: PlatformCategoryIMessage, CategoryLabel: "iMessage", Description: "通过 Mac 上的 BlueBubbles Server 收发，webhook 回调需要 Mac 能访问到本机", Inbound: InboundCallback, CallbackPath: IMessageCallbackPath},
+	{ID: PlatformDingTalk, Name: "钉钉", Protocol: ProtocolDingTalkWS, Category: PlatformCategoryDingTalk, CategoryLabel: "钉钉", Description: "Stream 模式出站长连接，不需要公网地址", Inbound: InboundOutbound, RichText: true, Untested: true},
+	{ID: PlatformFeishu, Name: "飞书", Protocol: ProtocolFeishuWebhook, Category: PlatformCategoryFeishu, CategoryLabel: "飞书", Description: "事件订阅回调，需要一个公网可达的回调地址", Inbound: InboundCallback, CallbackPath: FeishuCallbackPath, RichText: true, Untested: true},
+	{ID: PlatformWeCom, Name: "企业微信", Protocol: ProtocolWeComWebhook, Category: PlatformCategoryWeCom, CategoryLabel: "企业微信", Description: "应用回调，需要一个公网可达的回调地址", Inbound: InboundCallback, CallbackPath: WeComCallbackPath, RichText: true, Untested: true},
+	{ID: PlatformWeixin, Name: "微信", Protocol: ProtocolWeixinILink, Category: PlatformCategoryWeixin, CategoryLabel: "微信", Description: "腾讯 iLink Bot 扫码登录，长轮询收发私聊，不需要公网地址", Inbound: InboundOutbound, Untested: true},
+	{ID: PlatformIMessage, Name: "iMessage", Protocol: ProtocolBlueBubbles, Category: PlatformCategoryIMessage, CategoryLabel: "iMessage", Description: "通过 Mac 上的 BlueBubbles Server 收发，webhook 回调需要 Mac 能访问到本机", Inbound: InboundCallback, CallbackPath: IMessageCallbackPath, Untested: true},
 }
 
 // IsOneBotPlatform 判断平台是否走 OneBot v11 适配器。

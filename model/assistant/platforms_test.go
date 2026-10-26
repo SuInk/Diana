@@ -242,3 +242,13 @@ func TestProfileSetIgnoresLegacyContextIsolationSetting(t *testing.T) {
 		}
 	}
 }
+
+// 只有真实账号跑通过收发的平台才不带「未测试」标记。
+func TestPlatformUntestedMarks(t *testing.T) {
+	tested := map[string]bool{PlatformOneBotV11: true, PlatformQQOfficial: true, PlatformTelegram: true}
+	for _, def := range SupportedPlatforms() {
+		if def.Untested == tested[def.ID] {
+			t.Fatalf("%s 的未测试标记不对：untested=%v", def.ID, def.Untested)
+		}
+	}
+}
