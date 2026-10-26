@@ -500,7 +500,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 		if !ok {
 			// 模型没走 function calling，但正文本身就是 agent_finalize 信封时，
 			// 按收尾解码，别把信封当正文发出去。
-			if envelope, decoded := finalizeEnvelopeFromText(lastText); decoded {
+			if envelope, decoded := finalizeEnvelopeFromText(lastText, r.cfg.FinalizeFields...); decoded {
 				action = envelope
 				ok = true
 			}
@@ -1543,6 +1543,9 @@ func parseAction(text string) (llmAction, bool) {
 	// 必须先认出来：收尾调用救回正文，其余交给协议修复，绝不当正文往下走。
 	if action, rendered := renderedToolCallAction(text); rendered {
 		return action, action.Action != ""
+	}
+	if action, inline := inlineFinalizeAction(text); inline {
+		return action, true
 	}
 	// 兼容模型把 JSON 包在 Markdown code fence 或前后带解释文本的情况。
 	candidate := extractJSON(text)

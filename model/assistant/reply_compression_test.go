@@ -60,6 +60,20 @@ func TestRenderedToolCallNeverLeavesTheOutboundPath(t *testing.T) {
 	}
 }
 
+// 别的路径（改写、润色）带出来的收尾标签在出站前剥掉，正文照发；只剩标签就拦下。
+func TestInlineFinalizeTagStrippedOnOutboundPath(t *testing.T) {
+	p := &compressionTestProvider{err: errors.New("must not call")}
+	rt := compressionTestRuntime(p)
+	got, err := rt.prepareGeneratedReply(context.Background(), BotConfig{MaxReplyChars: 8000}, `风控看的是整体行为模式[agent_finalize content="风控" render="" silent="false"/>]`)
+	if err != nil || got != "风控看的是整体行为模式" {
+		t.Fatalf("got=%q err=%v", got, err)
+	}
+	got, err = rt.prepareGeneratedReply(context.Background(), BotConfig{MaxReplyChars: 8000}, "[agent_finalize][/agent_finalize]")
+	if !errors.Is(err, errRenderedToolCallReply) || got != "" {
+		t.Fatalf("tag-only reply should be blocked: got=%q err=%v", got, err)
+	}
+}
+
 // 正常说到「调用工具」的句子不能被误拦。
 func TestNormalReplyMentioningToolsStillSends(t *testing.T) {
 	p := &compressionTestProvider{err: errors.New("must not call")}

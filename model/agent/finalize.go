@@ -151,9 +151,10 @@ func (r *Runner) turnDefinitions(imagePending bool) []llm.ToolDefinition {
 // `{"content":"主人是然然最亲近的人呀。` 加半截 JSON。
 //
 // 判据要收紧到只认这一种形状：必须是 JSON 对象、必须有字符串 content，且除
-// content 外的键全都属于信封字段。多一个陌生键就不认，免得把用户要求输出的
-// JSON 当成信封吞掉正文。
-func finalizeEnvelopeFromText(text string) (llmAction, bool) {
+// content 外的键全都属于信封字段（自带的、调用方声明的，或已经撤掉但模型还会照
+// 历史写出来的）。多一个陌生键就不认，免得把用户要求输出的 JSON 当成信封吞掉正文。
+// 线上 10-24 漏出去的那条带着 render、sticker、sticker_order，只认自带字段时正好漏掉。
+func finalizeEnvelopeFromText(text string, declared ...FinalizeField) (llmAction, bool) {
 	candidate := strings.TrimSpace(extractJSON(text))
 	if !strings.HasPrefix(candidate, "{") {
 		return llmAction{}, false
@@ -172,7 +173,7 @@ func finalizeEnvelopeFromText(text string) (llmAction, bool) {
 	}
 	extras := 0
 	for key := range fields {
-		if _, envelope := finalizeBuiltinFields[key]; !envelope {
+		if !finalizeEnvelopeKey(key, declared) {
 			return llmAction{}, false
 		}
 		if key != "content" {
@@ -188,4 +189,22 @@ func finalizeEnvelopeFromText(text string) (llmAction, bool) {
 		return llmAction{}, false
 	}
 	return finalizeAction(llm.ToolCall{Name: finalizeToolName, Arguments: arguments}, ""), true
+}
+
+// finalizeRetiredFields 是撤掉的收尾字段：render 不再提供，但旧历史里的信封还带着它。
+var finalizeRetiredFields = map[string]struct{}{"render": {}}
+
+func finalizeEnvelopeKey(key string, declared []FinalizeField) bool {
+	if _, ok := finalizeBuiltinFields[key]; ok {
+		return true
+	}
+	if _, ok := finalizeRetiredFields[key]; ok {
+		return true
+	}
+	for _, field := range declared {
+		if field.Name == key {
+			return true
+		}
+	}
+	return false
 }

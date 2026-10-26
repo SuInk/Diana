@@ -81,3 +81,56 @@ func renderedToolCallAction(text string) (llmAction, bool) {
 	action.Salvaged = true
 	return action, true
 }
+
+// 还有一种形状是模型把收尾调用写成标签拼在正文后面。线上 10-22 swe-2 就这样把
+// 「正文[agent_finalize content="…" render="" silent="false" …/>]」整串发进了群；
+// 也见过只剩一对空标签的「正文[agent_finalize][/agent_finalize]」。方括号、尖括号、
+// 自闭合和闭合标签都认，属性值按引号整体吃掉，免得值里的 ] 或 > 把标签截断。
+var inlineFinalizeTag = regexp.MustCompile(`(?i)[\[<]\s*/?\s*` + finalizeToolName + `\b((?:\s+[A-Za-z_][A-Za-z0-9_]*\s*=\s*(?:"[^"]*"|'[^']*'|[^\s"'\]>/]*))*)\s*/?\s*(?:>\s*\]?|\])`)
+
+var inlineFinalizeAttr = regexp.MustCompile(`([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'\]>/]*))`)
+
+// StripInlineFinalizeTags 去掉正文里的收尾标签，返回剩下的正文和第一个标签的属性。
+// ok 为假时原文没有这种标签。
+func StripInlineFinalizeTags(text string) (body string, attrs map[string]string, ok bool) {
+	matches := inlineFinalizeTag.FindAllStringSubmatchIndex(text, -1)
+	if len(matches) == 0 {
+		return text, nil, false
+	}
+	var out strings.Builder
+	last := 0
+	for _, match := range matches {
+		out.WriteString(text[last:match[0]])
+		last = match[1]
+		if attrs != nil || match[2] < 0 || match[2] == match[3] {
+			continue
+		}
+		attrs = map[string]string{}
+		for _, attr := range inlineFinalizeAttr.FindAllStringSubmatch(text[match[2]:match[3]], -1) {
+			attrs[strings.ToLower(attr[1])] = attr[2] + attr[3] + attr[4]
+		}
+	}
+	out.WriteString(text[last:])
+	return strings.TrimSpace(out.String()), attrs, true
+}
+
+// inlineFinalizeAction 把拼着收尾标签的正文转成收尾动作。标签外有正文就用正文：
+// 线上那条标签里的 content 只是正文开头的半句，外面那段才是模型真正写完的回复。
+// 只有标签外什么都没有时才看标签里的 content 和 silent。
+func inlineFinalizeAction(text string) (llmAction, bool) {
+	body, attrs, ok := StripInlineFinalizeTags(text)
+	if !ok {
+		return llmAction{}, false
+	}
+	arguments := map[string]any{}
+	for key, value := range attrs {
+		arguments[key] = value
+	}
+	arguments["silent"] = body == "" && strings.EqualFold(strings.TrimSpace(attrs["silent"]), "true")
+	if body != "" {
+		arguments["content"] = body
+	}
+	action := finalizeAction(llm.ToolCall{Name: finalizeToolName, Arguments: arguments}, "")
+	action.Salvaged = true
+	return action, true
+}

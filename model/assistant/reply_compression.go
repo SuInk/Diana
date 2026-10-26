@@ -99,7 +99,13 @@ func compressionCandidateIssue(original, candidate string, limit int, markdownPl
 // that still exceed their per-message budget. The two-call budget is per reply.
 func (r *Runtime) prepareGeneratedReply(ctx context.Context, cfg BotConfig, reply string, events ...MessageEvent) (string, error) {
 	body, intent := consumeReplyControlIntent(reply)
-	if agent.LooksLikeRenderedToolCall(body) {
+	// 拼在正文里的收尾标签只剥掉标签，正文照发；剥完什么都不剩才按失败记账。
+	stripped, _, tagged := agent.StripInlineFinalizeTags(body)
+	if tagged {
+		log.Printf("diana reply: stripped agent_finalize tags leaked into the reply body (platform=%s profile=%s)", cfg.Platform, cfg.ID)
+		body = stripped
+	}
+	if (tagged && strings.TrimSpace(body) == "") || agent.LooksLikeRenderedToolCall(body) {
 		log.Printf("diana reply blocked: rendered tool call leaked into the reply body (platform=%s profile=%s)", cfg.Platform, cfg.ID)
 		return "", errRenderedToolCallReply
 	}
