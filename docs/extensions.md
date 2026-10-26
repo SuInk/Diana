@@ -52,7 +52,7 @@ MCP 配置里存的是访问令牌原文，所以它默认放在 **Agent 工作�
 - 工作目录里编码代理的登录目录 `coding-runtime/auth`、`coding-runtime/state`；
 - yt-dlp 的 cookies 文件（`ytb_cookies.txt`、`DIANA_YTDLP_COOKIES` 或插件设置里的路径，用到时登记）。
 
-**前提是沙箱真的在用。** `command_sandbox` 配成 `off`，或者这台机器上没有可用的 bubblewrap / sandbox-exec 而模式是 `auto`（探测失败时 `auto` 承诺照常执行），命令就是以 Diana 自己的进程权限裸跑的，这一层不存在。`require` 模式下没有沙箱直接拒绝执行。依赖 `run_command` 之前先确认沙箱状态——WebUI 和启动日志里都能看到。
+**前提是沙箱真的在用。** `command_sandbox` 配成 `off`，或者这台机器上没有可用的 bubblewrap / sandbox-exec 而模式是 `auto`（探测失败时 `auto` 承诺照常执行），这一层就不存在：此时 `run_command` 不注册，主人的命令改走执行前要审核的 `host_access`；插件声明的脚本和 MCP 以 Diana 自己的进程权限裸跑，`require` 模式下则直接拒绝执行。沙箱状态在 WebUI 和启动日志里都能看到。
 
 沙箱挡的是文件，挡不住继承下来的环境变量。所以传给 `run_command` 的环境会摘掉这几类变量，跑 `env`、`printenv` 也打不出来：MCP 配置里用 `${NAME}` 引用的（令牌放在进程环境、配置只写引用）；名字像凭据的（含 `TOKEN`、`SECRET`、`KEY`、`PASSWORD`、`COOKIE`、`SESSDATA`、`_CK` 等，例如 `TAVILY_API_KEY`、`DIANA_BILI_SESSDATA`、编码代理的 `api_key_env`；以 `_FILE`、`_PATH`、`_DIR`、`_URL` 结尾的是位置不是凭据，保留）；值里嵌着账号密码的地址（带认证的代理）。stdio 服务子进程自己的环境变量：Linux 的 bubblewrap 另开了 PID 命名空间，命令看不到别的进程的 `/proc/<pid>/environ`；macOS 不向普通进程公开其他进程的环境，沙箱里也起不了 `ps`。
 

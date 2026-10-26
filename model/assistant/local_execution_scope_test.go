@@ -11,12 +11,12 @@ import (
 )
 
 func TestLocalExecutionCapabilitiesRemainRequestScoped(t *testing.T) {
+	forceCommandSandbox(t, true)
 	t.Setenv("APP_DB_PATH", filepath.Join(t.TempDir(), "app.db"))
 	runtime := NewRuntime(BotConfig{OwnerID: "owner"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	defer runtime.closeAgentRegistryCache()
 	cfg := DefaultBotConfig()
 	cfg.AgentFileWriteEnabled = true
-	cfg.AgentCommandSandbox = "off"
 	owner, err := runtime.newAgentRegistry(context.Background(), cfg.WithDefaults(), MessageEvent{Kind: EventKindPrivate, UserID: "owner"}, RelationshipPolicy{Owner: true})
 	if err != nil {
 		t.Fatal(err)

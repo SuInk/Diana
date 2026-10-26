@@ -78,6 +78,7 @@ func TestAdminChatInstallsSkillAndMCPOnlyAfterConfirmation(t *testing.T) {
 }
 
 func TestAdminChatPreservesCommandPolicyAndRejectsUnknownProfile(t *testing.T) {
+	forceCommandSandbox(t, true)
 	t.Setenv("APP_DB_PATH", filepath.Join(t.TempDir(), "app.db"))
 	provider := &agentSequenceLLMProvider{responses: []string{`{"action":"tool","tool":"run_command","input":{"command":"/bin/uname","args":[]}}`, `{"action":"final","content":"命令受限"}`}}
 	r := NewRuntime(BotConfig{ID: "bot"}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) { return provider, nil })

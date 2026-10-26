@@ -87,13 +87,15 @@ type Config struct {
 	FileWriteEnabled bool
 	// FileWriteMaxBytes 是单次写入的字节上限，留空按 DefaultFileWriteMaxBytes。
 	FileWriteMaxBytes int
-	// CommandEnabled 注册 run_command。没有程序白名单：主人会话里能跑什么只受工作目录
-	// 和 CommandSandbox 约束，跟 host_access 能做的事比是严格的子集。成员和安全模式不开。
+	// CommandEnabled 注册 run_command。没有程序白名单：能跑什么只受工作目录和
+	// CommandSandbox 约束，而且永远断网。调用方只在沙盒真的生效时打开它（见
+	// assistant.commandSandboxed），没有沙盒时命令统一走要审核的 host_access。
 	CommandEnabled   bool
 	CommandTimeoutMS int
 	// CommandSandbox 见 CommandSandbox* 常量，默认 auto。
 	CommandSandbox string
-	// CommandSandboxAllowNetwork 放开沙盒内的网络访问，默认关闭。
+	// CommandSandboxAllowNetwork 放开 install_package 和插件脚本、插件 MCP 在沙盒内的
+	// 网络访问，默认关闭。run_command 不受它影响，永远断网。
 	CommandSandboxAllowNetwork bool
 	BrowserCDPURL              string
 	BrowserTimeoutMS           int

@@ -410,6 +410,12 @@ func (r *Runtime) allowedAgentToolNamesForEvent(event MessageEvent, relationship
 	return allowed
 }
 
+// commandSandboxed 判断 run_command 这次能不能被关进沙盒。测试里替换它，免得结果
+// 取决于跑测试的机器装没装 bubblewrap / sandbox-exec。
+var commandSandboxed = func(mode string) bool {
+	return agent.DescribeCommandSandbox(mode).Effective() == "sandboxed"
+}
+
 func (r *Runtime) agentRegistryConfig(cfg BotConfig, event MessageEvent, owner bool) agent.Config {
 	// Skills 目录和 MCP 配置路径由 GlobalExtensionPaths 在首次使用时固定下来，
 	// 机器人之间不会因为各自填得不同而切到另一套扩展。
@@ -422,8 +428,9 @@ func (r *Runtime) agentRegistryConfig(cfg BotConfig, event MessageEvent, owner b
 		BuiltinExtensions:   r.agentBuiltinExtensions(event),
 		BuiltinSkills:       r.botProtocolBuiltinSkills(event),
 		ReservedSkillNames:  []string{"platform", "bot-protocol"},
-		// run_command 只给主人：成员的工具名单本来就不收录它，这里连对象都不造。
-		CommandEnabled:   owner,
+		// run_command 只给主人，而且只在沙盒真的生效时给：它不过审核，没有沙盒时
+		// 就是一条绕开 host_access 审核的路。成员的工具名单本来就不收录它。
+		CommandEnabled:   owner && commandSandboxed(cfg.AgentCommandSandbox),
 		CommandTimeoutMS: cfg.AgentCommandTimeoutMS,
 		// 这两项以前在 agent.Config 里存在但没人赋值，于是永远是 auto，
 		// require 模式接不上。现在由机器人配置说了算。
@@ -525,9 +532,10 @@ func (r *Runtime) sharedAgentRegistry(ctx context.Context, cfg agent.Config) (*a
 
 // logCommandExecutionPosture 在启动时把「命令执行这条路现在是什么状态」写进日志。
 //
-// 沙盒不可用时 run_command 直接以主进程身份裸跑，能跑任何程序、碰进程能碰的一切。
-// 这件事以前不可见，而它决定了一台机器上命令执行的全部风险，部署方有权在启动时
-// 就知道自己处在哪一种。
+// 沙盒是否生效决定了 run_command 在不在：生效时它关在工作区里、断网、免审核；
+// 不生效时不注册，命令统一走执行前要审核的 host_access。插件声明的脚本和 MCP
+// 照旧按沙盒设置运行，没有沙盒时以本进程权限直接跑。部署方有权在启动时就知道
+// 自己处在哪一种。
 func logCommandExecutionPosture(configs []BotConfig) {
 	logged := map[string]bool{}
 	for _, cfg := range configs {
@@ -543,15 +551,15 @@ func logCommandExecutionPosture(configs []BotConfig) {
 		key := status.Mode + "\x00" + status.Effective() + "\x00" + status.Reason
 		switch status.Effective() {
 		case "sandboxed":
-			log.Printf("diana agent: 配置 %q 的命令执行已沙盒化（%s，网络 %s）", cfg.ID, status.Kind, allowedOrBlocked(cfg.AgentCommandSandboxAllowNetwork))
+			log.Printf("diana agent: 配置 %q 的 run_command 已沙盒化（%s，断网）；插件脚本与 MCP 网络 %s", cfg.ID, status.Kind, allowedOrBlocked(cfg.AgentCommandSandboxAllowNetwork))
 		case "blocked":
-			log.Printf("diana agent: 配置 %q 要求沙盒但本机不可用，命令执行会被拒绝：%s", cfg.ID, status.Reason)
+			log.Printf("diana agent: 配置 %q 要求沙盒但本机不可用，run_command 不注册、插件脚本与 MCP 会被拒绝：%s", cfg.ID, status.Reason)
 		default:
 			if logged[key] {
 				continue
 			}
 			logged[key] = true
-			log.Printf("diana agent: 命令执行未被沙盒隔离，run_command 将以本进程权限直接运行任意程序（%s）；生产环境建议安装 bubblewrap 并把沙盒模式设为 require", status.Reason)
+			log.Printf("diana agent: 命令执行没有沙盒（%s），run_command 不注册，命令改走 host_access；插件脚本与 MCP 以本进程权限直接运行。生产环境建议安装 bubblewrap", status.Reason)
 		}
 	}
 }

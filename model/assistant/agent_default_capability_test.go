@@ -14,6 +14,7 @@ import (
 // 新建配置装完就能用：主人有 run_command，写入默认打开，标准模式下直接生效
 // （这两项在安全模式下不挂，见 agent_safe_mode_test.go）。成员拿不到 run_command。
 func TestDefaultBotConfigShipsUsableAgentCapabilities(t *testing.T) {
+	forceCommandSandbox(t, true)
 	cfg := standardModeBotConfig()
 	if !cfg.AgentFileWriteEnabled {
 		t.Fatal("新建配置没有打开写入")
@@ -33,6 +34,35 @@ func TestDefaultBotConfigShipsUsableAgentCapabilities(t *testing.T) {
 	}
 	if _, ok := member.Get("run_command"); ok {
 		t.Fatal("成员的注册表里构造了 run_command")
+	}
+}
+
+// forceCommandSandbox 让 run_command 的注册不取决于跑测试的机器有没有沙盒。
+func forceCommandSandbox(t *testing.T, available bool) {
+	t.Helper()
+	previous := commandSandboxed
+	commandSandboxed = func(string) bool { return available }
+	t.Cleanup(func() { commandSandboxed = previous })
+}
+
+// run_command 不过审核，所以只在沙盒真的生效时注册；没有沙盒（含配置成 off）时
+// 主人的命令统一走 host_access。
+func TestRunCommandRequiresAnEffectiveSandbox(t *testing.T) {
+	if commandSandboxed(agent.CommandSandboxOff) {
+		t.Fatal("沙盒配置成 off 却被当成生效")
+	}
+	forceCommandSandbox(t, false)
+	cfg := standardModeBotConfig().WithDefaults()
+	agentCfg := (&Runtime{}).agentRegistryConfig(cfg, MessageEvent{}, true)
+	if agentCfg.CommandEnabled {
+		t.Fatal("没有沙盒时仍然打开了 run_command")
+	}
+	registry, err := agent.NewDefaultToolRegistry(agentCfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := registry.Get("run_command"); ok {
+		t.Fatal("没有沙盒时注册了 run_command")
 	}
 }
 
@@ -56,6 +86,7 @@ func TestWithDefaultsDoesNotGrantFileWriteToStoredConfigs(t *testing.T) {
 // 命令白名单已删除：旧配置里的 agent_command_allowlist 读取时忽略（空白名单也不再
 // 关掉 run_command），保存时不再输出。
 func TestLegacyCommandAllowlistIsIgnored(t *testing.T) {
+	forceCommandSandbox(t, true)
 	for _, raw := range []string{`{"agent_command_allowlist":[]}`, `{"agent_command_allowlist":["uptime"]}`} {
 		var cfg BotConfig
 		if err := json.Unmarshal([]byte(raw), &cfg); err != nil {

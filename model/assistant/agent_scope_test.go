@@ -330,6 +330,7 @@ func (p *scopeRouteProvider) Generate(_ context.Context, req llm.GenerateRequest
 // 扩展底座在机器人之间共享后，本地工具仍按各自配置：安全模式的机器人不能从底座
 // 借到别的机器人的 run_command；随事件变化的内置 Skill 也只出现在对应请求里。
 func TestSharedExtensionRegistryKeepsLocalToolsPerBot(t *testing.T) {
+	forceCommandSandbox(t, true)
 	t.Setenv("APP_DB_PATH", filepath.Join(t.TempDir(), "app.db"))
 	runtime := NewRuntime(BotConfig{OwnerID: "owner"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	defer runtime.closeAgentRegistryCache()

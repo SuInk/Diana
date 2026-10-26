@@ -1867,7 +1867,7 @@
               </div>
               <template v-if="agentMode === 'standard'">
                 <div class="field wide">
-                  <span class="hint">标准模式下，主人和 WebUI 管理员默认可操作宿主机：读写文件、执行命令、联网和安装软件，常规任务无需逐条审批。权限等于 Diana 的运行账号；需要收紧时切换安全模式。工作区命令工具 run_command 只对主人开放，按下面的命令沙盒设置运行；工作区工具的限制不影响主人的宿主机工具。</span>
+                  <span class="hint">标准模式下，主人和 WebUI 管理员默认可操作宿主机：读写文件、执行命令、联网和安装软件，常规任务无需逐条审批。权限等于 Diana 的运行账号；需要收紧时切换安全模式。工作区命令工具 run_command 只对主人开放，且只在下面的命令沙盒生效时提供；工作区工具的限制不影响主人的宿主机工具。</span>
                 </div>
                 <!-- 存量部署升级后不会凭空拿到这些能力（那是静默扩权），所以给一次
                      显式的「填入」：只改表单，仍然要用户自己点保存。 -->
@@ -1917,18 +1917,18 @@
                   </span>
                 </div>
                 <div class="field wide">
-                  <label for="agent-sandbox">工作区命令沙盒（run_command）</label>
+                  <label for="agent-sandbox">命令沙盒（run_command 与插件脚本）</label>
                   <AppSelect
                     id="agent-sandbox"
                     v-model="commandSandboxMode"
                     :options="[
-                      { value: 'auto', label: '自动（有沙盒就用，没有就直接执行）' },
-                      { value: 'require', label: '强制（没有可用沙盒时拒绝执行）' },
-                      { value: 'off', label: '关闭（始终直接执行）' }
+                      { value: 'auto', label: '自动（有沙盒就用）' },
+                      { value: 'require', label: '强制（没有沙盒时插件脚本也拒绝执行）' },
+                      { value: 'off', label: '关闭（不用沙盒）' }
                     ]"
                   />
                   <span class="hint">
-                    run_command 能跑任意程序，沙盒管的是「这个程序能碰什么」——没有沙盒时 <code>cat</code> 照样读得到配置和数据库。
+                    run_command 只在沙盒真的生效时提供：关在工作区里、永远断网、执行前不审核。没有沙盒或选了关闭时不提供它，主人的命令改走执行前要审核的 host_access；插件脚本则在「自动」「关闭」下直接执行。
                     Linux 需要 <code>bubblewrap</code>，macOS 用系统自带的 <code>sandbox-exec</code>。
                   </span>
                 </div>
@@ -1936,9 +1936,9 @@
                   <label class="switch">
                     <input v-model="form.agent_command_sandbox_allow_network" type="checkbox" />
                     <span class="track" aria-hidden="true"></span>
-                    <span class="switch-label">允许沙盒内的命令联网</span>
+                    <span class="switch-label">允许插件脚本和装包联网</span>
                   </label>
-                  <span class="hint">默认切断。命令能联网就意味着它读到的东西能被发出去。</span>
+                  <span class="hint">默认切断。只影响 install_package 和插件声明的脚本、MCP；run_command 始终断网，要联网的命令走 host_access。</span>
                 </div>
                 <div class="field">
                   <label for="agent-timeout">命令超时（毫秒）</label>

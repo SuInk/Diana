@@ -109,7 +109,7 @@
     <Modal v-if="showPermissions && session" title="执行权限" @close="closePanel">
       <div ref="permissionsPanel" class="chat-capabilities">
         <p class="muted">{{ selectedProfileLabel }}</p>
-        <dl><dt>模式</dt><dd>{{ session.agent_mode === 'safe' ? '安全模式' : '标准模式' }}</dd><dt>文件</dt><dd>{{ session.file_write_enabled ? '可写工作目录' : '只读' }}</dd><dt>工作区命令</dt><dd>{{ session.command_enabled ? '可执行' : '未开放' }}</dd><dt>沙盒</dt><dd>{{ session.sandbox }}</dd><dt>命令网络</dt><dd>{{ session.network_enabled ? '允许' : '关闭' }}</dd></dl>
+        <dl><dt>模式</dt><dd>{{ session.agent_mode === 'safe' ? '安全模式' : '标准模式' }}</dd><dt>文件</dt><dd>{{ session.file_write_enabled ? '可写工作目录' : '只读' }}</dd><dt>工作区命令</dt><dd>{{ session.command_enabled ? '沙盒内可执行（断网）' : '未开放，命令走 host_access' }}</dd><dt>沙盒</dt><dd>{{ session.sandbox }}</dd><dt>插件联网</dt><dd>{{ session.network_enabled ? '允许' : '关闭' }}</dd></dl>
         <p class="muted">权限跟随所选机器人。安装与配置变更需确认，凭据在扩展设置中填写。</p>
       </div>
       <template #footer><button class="btn" type="button" @click="closePanel">关闭</button></template>
