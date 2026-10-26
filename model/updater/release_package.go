@@ -187,21 +187,6 @@ func ExpectedReleaseAssetName(goos, goarch string) string {
 	return base + ".tar.gz"
 }
 
-// LegacyReleaseAssetName is only used to read historical releases. New releases
-// publish one archive per platform, without a second legacy-named asset.
-func LegacyReleaseAssetName(name string) string {
-	for _, platform := range [][2]string{{"linux", "amd64"}, {"linux", "arm64"}, {"darwin", "amd64"}, {"darwin", "arm64"}, {"windows", "amd64"}} {
-		if name == ExpectedReleaseAssetName(platform[0], platform[1]) {
-			base := "diana-webui-" + platform[0] + "-" + platform[1]
-			if platform[0] == "windows" {
-				return base + ".zip"
-			}
-			return base + ".tar.gz"
-		}
-	}
-	return ""
-}
-
 func expectedReleaseBinaryName(goos, _ string) string {
 	name := "diana-webui"
 	if goos == "windows" {
@@ -444,7 +429,7 @@ func (u *ReleasePackageUpdater) Download(ctx context.Context, release ReleasePac
 		return Result{}, fmt.Errorf("updater: invalid release tag %q", release.Tag)
 	}
 	assetName := release.Archive.Name
-	if (assetName != u.assetName && (assetName == "" || assetName != LegacyReleaseAssetName(u.assetName))) || strings.TrimSpace(release.Archive.URL) == "" {
+	if assetName != u.assetName || strings.TrimSpace(release.Archive.URL) == "" {
 		return Result{}, fmt.Errorf("%w: %s", ErrReleaseAssetMissing, u.assetName)
 	}
 	if release.Checksums.Name != "SHA256SUMS" || strings.TrimSpace(release.Checksums.URL) == "" {

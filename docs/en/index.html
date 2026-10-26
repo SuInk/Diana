@@ -166,6 +166,10 @@ docker run -d --name diana --restart unless-stopped \
   -v "$PWD/data:/app/data" \
   ghcr.io/suink/diana:latest</pre>
       </div>
+      <div class="qs-card qs-card-wide">
+        <div class="qs-card-head">Install with a prompt (paste into an AI assistant that can run commands)<button class="copy-btn" data-copy="cmd-prompt">Copy</button></div>
+        <pre id="cmd-prompt">Help me install the latest stable release of Diana on this machine. First read the README at https://github.com/SuInk/Diana and scripts/install.sh (Linux/macOS) or scripts/install.ps1 (Windows) in that repository. Detect the OS and architecture, then use the official one-click installer. Default to current-user permissions and listen only on 127.0.0.1. If Diana is already installed, preserve its configuration and data and follow the official upgrade procedure. Run diana doctor afterward to check its health, tell me the console URL, administrator username, and password initially generated during installation, and remind me to store them securely. For an existing installation with no newly generated password, explain that the original password still applies and do not reset it automatically. Leave model API keys and bot credentials for me to enter in the console.</pre>
+      </div>
     </div>
     <div class="qs-steps">
       <div class="qs-step"><h4><span>1</span>Run the installer</h4><p>The generated admin username and password are printed to the terminal and saved to <code>config.yaml</code> in the install directory.</p></div>

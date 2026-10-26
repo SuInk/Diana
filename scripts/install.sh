@@ -317,12 +317,6 @@ trap cleanup EXIT HUP INT TERM
 download "Download → SHA256SUMS" "$base_url/SHA256SUMS" "$sums_path"
 
 expected=$(awk -v name="$archive_name" '$2 == name || $2 == "*" name { print $1; exit }' "$sums_path")
-if [ -z "$expected" ]; then
-  package_name="$compat_binary_name"
-  archive_name="$package_name.tar.gz"
-  archive_path="$temp_dir/$archive_name"
-  expected=$(awk -v name="$archive_name" '$2 == name || $2 == "*" name { print $1; exit }' "$sums_path")
-fi
 case "$expected" in
   ""|*[!0-9a-fA-F]*) fail "SHA-256 entry for $archive_name was not found" ;;
 esac

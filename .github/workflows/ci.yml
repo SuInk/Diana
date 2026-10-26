@@ -255,7 +255,6 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
         run: |
           mkdir -p dist release/package
-          binary_name="diana-webui-${{ matrix.suffix }}"
           runtime_name="diana-webui"
           package_suffix="${{ matrix.suffix }}"
           package_suffix="${package_suffix%.exe}"
@@ -270,9 +269,6 @@ jobs:
           # Release 包带齐运行时前端，下载后不需要 Go、Node 或源码。
           mkdir -p "${package_dir}/frontend-next/dist"
           go build -trimpath -ldflags="-s -w -X main.buildVersion=${BUILD_VERSION}" -o "${package_dir}/${runtime_name}" ./cmd/webui
-          # Keep one compatibility copy so pre-migration updaters can install
-          # the first package that introduces the stable runtime name.
-          cp "${package_dir}/${runtime_name}" "${package_dir}/${binary_name}"
           cp -R release/frontend-next-dist/. "${package_dir}/frontend-next/dist/"
           if [ "${{ matrix.goos }}" = darwin ]; then
             cp release/desktop/desktopctl-helper "${package_dir}/desktopctl-helper"

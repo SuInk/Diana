@@ -171,6 +171,10 @@ docker run -d --name diana --restart unless-stopped \
   -v "$PWD/data:/app/data" \
   ghcr.io/suink/diana:latest</pre>
       </div>
+      <div class="qs-card qs-card-wide">
+        <div class="qs-card-head">用 Prompt 安装（复制给能执行命令的 AI 助手）<button class="copy-btn" data-copy="cmd-prompt">复制</button></div>
+        <pre id="cmd-prompt">请帮我在当前机器安装 Diana 最新稳定版。先阅读 https://github.com/SuInk/Diana 的 README 和仓库里的 scripts/install.sh（Linux/macOS）或 scripts/install.ps1（Windows），识别系统与架构，使用官方一键安装脚本安装。默认使用当前用户权限、仅监听 127.0.0.1；如果已有安装，保留现有配置和数据并按官方流程升级。完成后运行 diana doctor 检查健康状态，告诉我控制台地址、管理员账号和安装时首次生成的密码，并提醒我妥善保存；如果是已有安装且没有生成新密码，说明继续使用原密码，不要自动重置。需要我提供的模型 API Key 和机器人凭据，等我在控制台填写。</pre>
+      </div>
     </div>
     <div class="qs-steps">
       <div class="qs-step"><h4><span>1</span>执行安装命令</h4><p>生成的管理员账号和密码会显示在终端，并保存在安装目录的 <code>config.yaml</code>。</p></div>

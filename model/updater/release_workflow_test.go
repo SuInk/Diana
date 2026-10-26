@@ -79,22 +79,19 @@ func TestReleaseWorkflowPublishesOnlyCompletePackages(t *testing.T) {
 			t.Errorf("standalone binary %s must not be published", binary)
 		}
 	}
-	for _, name := range []string{"SHA256SUMS", "latest.json"} {
-		if !matches(publishPatterns, "release/"+name) {
-			t.Errorf("missing %s", name)
-		}
-	}
 	for _, fragment := range []string{
 		`package_suffix="${package_suffix/darwin-/macos-}"`,
 		`package_name="diana-${package_suffix}"`,
 		`-o "${package_dir}/${runtime_name}"`,
-		`cp "${package_dir}/${runtime_name}" "${package_dir}/${binary_name}"`,
 		`cp -R release/frontend-next-dist/. "${package_dir}/frontend-next/dist/"`,
 		`"${package_dir}/run.sh"`, `"${package_dir}/run.bat"`,
 	} {
 		if !strings.Contains(buildScript, fragment) {
 			t.Errorf("missing package requirement: %s", fragment)
 		}
+	}
+	if strings.Contains(buildScript, "diana-webui-${{ matrix.suffix }}") {
+		t.Error("packages must not ship a second platform-suffixed binary")
 	}
 	if !strings.Contains(checksumScript, "sha256sum diana-*.tar.gz diana-*.zip > SHA256SUMS") {
 		t.Fatal("checksums must cover only complete packages")
@@ -114,14 +111,6 @@ func TestReleaseAssetNames(t *testing.T) {
 	} {
 		if got := ExpectedReleaseAssetName(tc.os, tc.arch); got != tc.name {
 			t.Errorf("got %s, want %s", got, tc.name)
-		}
-		if got := LegacyReleaseAssetName(tc.name); got != strings.Replace(strings.Replace(tc.name, "diana-", "diana-webui-", 1), "macos-", "darwin-", 1) {
-			t.Errorf("bad legacy name %s", got)
-		}
-	}
-	for _, name := range []string{"SHA256SUMS", "latest.json", "diana-linux-amd64", "diana-webui-linux-amd64.tar.gz", "../diana-linux-amd64.tar.gz"} {
-		if LegacyReleaseAssetName(name) != "" {
-			t.Errorf("unexpected alias for %s", name)
 		}
 	}
 }

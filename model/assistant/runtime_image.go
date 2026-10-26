@@ -1004,7 +1004,7 @@ func (r *Runtime) resolveOutgoingLocalImages(msg OutgoingMessage) OutgoingMessag
 	// 分享地址指向 127.0.0.1，它们下载时走公网客户端、会被 SSRF 防护拒掉，
 	// 表情包和本地图片一张都发不出去。
 	if !IsOneBotPlatform(msg.Platform) {
-		return msg
+		return r.unshareOutgoingMedia(msg)
 	}
 	// 图片消息段（例如按 QQ 表情包形式发的 sub_type=1）里的本地路径同样要换成分享地址：
 	// 接入端多跑在容器里，读不到宿主机上的文件。
@@ -1050,6 +1050,39 @@ func (r *Runtime) resolveOutgoingLocalImages(msg OutgoingMessage) OutgoingMessag
 	if changed {
 		msg.ImageURLs = resolved
 	}
+	return msg
+}
+
+// unshareOutgoingMedia 把消息里已经换成分享地址的媒体还原成本地路径。分享地址
+// 可能在知道目标平台前就生成了（例如历史图片、转发素材），它指向 127.0.0.1 这类
+// 回环地址，自己读字节上传的通道（QQ 官方等）用公网客户端下载会被 SSRF 防护拒掉。
+func (r *Runtime) unshareOutgoingMedia(msg OutgoingMessage) OutgoingMessage {
+	r.mu.RLock()
+	resolver, _ := r.localMedia.(LocalMediaPathResolver)
+	r.mu.RUnlock()
+	if resolver == nil {
+		return msg
+	}
+	unshare := func(sources []string) []string {
+		var out []string
+		for index, source := range sources {
+			path, ok := resolver.ResolveSharedPath(source)
+			if !ok {
+				continue
+			}
+			if out == nil {
+				out = append([]string(nil), sources...)
+			}
+			out[index] = path
+		}
+		if out == nil {
+			return sources
+		}
+		return out
+	}
+	msg.ImageURLs = unshare(msg.ImageURLs)
+	msg.VideoURLs = unshare(msg.VideoURLs)
+	msg.AudioURLs = unshare(msg.AudioURLs)
 	return msg
 }
 

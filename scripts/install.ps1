@@ -183,15 +183,6 @@ try {
         $parts = $_ -split '\s+', 2
         $parts.Count -eq 2 -and $parts[1].TrimStart('*') -eq $archiveName
     } | Select-Object -First 1
-    if (-not $checksumLine) {
-        $packageName = "diana-webui-windows-amd64"
-        $archiveName = "$packageName.zip"
-        $archivePath = Join-Path $tempDir $archiveName
-        $checksumLine = Get-Content $sumsPath | Where-Object {
-            $parts = $_ -split '\s+', 2
-            $parts.Count -eq 2 -and $parts[1].TrimStart('*') -eq $archiveName
-        } | Select-Object -First 1
-    }
     if (-not $checksumLine) { throw "SHA-256 entry for $archiveName was not found." }
     $expected = ($checksumLine -split '\s+')[0].ToLowerInvariant()
     if ($expected -notmatch '^[0-9a-f]{64}$') { throw "Invalid SHA-256 entry for $archiveName." }

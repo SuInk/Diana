@@ -229,3 +229,27 @@ func TestLocalMediaStoreResolvesSharedPathAcrossHosts(t *testing.T) {
 		t.Fatal("ResolveSharedPath() accepted non-http scheme")
 	}
 }
+
+// 自己读字节上传的通道（QQ 官方等）拿到指向 127.0.0.1 的分享地址时，要还原成本地
+// 路径，否则公网下载客户端会把回环地址拒掉。
+func TestResolveOutgoingLocalImagesUnsharesLoopbackForSelfUploadPlatforms(t *testing.T) {
+	imagePath := filepath.Join(t.TempDir(), "generated.jpg")
+	if err := os.WriteFile(imagePath, []byte("image bytes"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store := NewLocalMediaStore("http://127.0.0.1:18080/api/assistant/media")
+	sharedURL, ok := store.Share(imagePath, time.Minute)
+	if !ok {
+		t.Fatal("Share() returned false")
+	}
+	rt := NewRuntime(BotConfig{}, &recordingChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	rt.SetLocalMediaSharer(store)
+	msg := OutgoingMessage{Platform: PlatformQQOfficial, ImageURLs: []string{sharedURL, "https://example.com/a.png"}}
+	got := rt.resolveOutgoingLocalImages(msg)
+	if got.ImageURLs[0] != imagePath || got.ImageURLs[1] != "https://example.com/a.png" {
+		t.Fatalf("images = %#v", got.ImageURLs)
+	}
+	if msg.ImageURLs[0] != sharedURL {
+		t.Fatal("caller's message was mutated")
+	}
+}
