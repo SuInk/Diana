@@ -45,6 +45,7 @@ const purposeLabels: Record<string, string> = {
   inbound_media_reference: "媒体指代解析",
   forward_content_safety: "转发内容审核",
   rss_watch_judge: "RSS 更新判断",
+  host_command_review: "宿主命令审核",
   direct_reply_topic: "回复话题判断",
   welcome_generator: "入群欢迎",
   poke_reply: "戳一戳回复",

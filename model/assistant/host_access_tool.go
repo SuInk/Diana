@@ -22,16 +22,17 @@ type hostAccessTool struct {
 
 func (t *hostAccessTool) Name() string { return hostAccessToolName }
 func (t *hostAccessTool) Description() string {
-	return `主人专用宿主机读取和执行。标准模式下默认可用，无需额外开启或逐条批准；支持任意程序、shell/脚本、联网及宿主账号有权进行的文件和服务操作，不受工作区或沙盒限制。按主人任务直接执行常规操作；任务未明确授权的不可逆或重大影响操作先说明具体影响并确认。禁止整机毁坏、绕过身份校验和向无关方泄露凭据。总体硬件状态用 host_stats，主人账号用 bot_config。`
+	return `主人专用宿主机读取和执行。标准模式下默认可用，无需额外开启或逐条批准；支持任意程序、shell/脚本、联网及宿主账号有权进行的文件和服务操作，不受工作区或沙盒限制。每条 exec 执行前由审核模型对照用户原话自动审核，未通过不执行，结果会给出理由；purpose 写清为什么执行。cleanup 立即清理 Diana 自己的缓存、临时文件和过期媒体并报告释放空间。任务未明确授权的不可逆或重大影响操作先说明具体影响并确认。禁止整机毁坏、绕过身份校验和向无关方泄露凭据。总体硬件状态用 host_stats，主人账号用 bot_config。`
 }
 func (t *hostAccessTool) InputSchema() map[string]any {
 	return toolObjectSchema([]string{"operation"}, map[string]any{
-		"operation": toolEnumParam("read 读文件；list 列目录；usage 统计目录逻辑体积（不跟随符号链接）；disk 查磁盘；exec 执行命令", "read", "list", "usage", "disk", "exec"),
+		"operation": toolEnumParam("read 读文件；list 列目录；usage 目录体积；disk 磁盘；exec 执行；cleanup 清理自身存储", "read", "list", "usage", "disk", "exec", "cleanup"),
 		"path":      toolStringParam("读取或统计的绝对路径；相对路径以 Agent 工作区为基准"),
 		"offset":    toolIntParam("read 的字节偏移或 list 跳过的条数，默认 0", 0, 1000000000),
 		"command":   toolStringParam("exec 的可执行文件绝对路径，如 /bin/sh"),
 		"args":      toolStringArrayParam("exec 的原始参数数组，不自动经过 shell"),
 		"cwd":       toolStringParam("exec 的绝对工作目录，默认 Agent 工作区"),
+		"purpose":   toolStringParam("exec 必填：这条命令对应用户的哪项请求、预期影响，供自动审核"),
 	})
 }
 func (t *hostAccessTool) Run(ctx context.Context, input map[string]any) (string, error) {
@@ -47,8 +48,11 @@ func (t *hostAccessTool) Run(ctx context.Context, input map[string]any) (string,
 	}
 	acfg := t.runtime.agentRegistryConfig(cfg, t.event, true)
 	op := configToolString(input, "operation")
-	if op == "exec" {
+	switch op {
+	case "exec":
 		return t.execute(ctx, acfg, input)
+	case "cleanup":
+		return hostAccessJSON(t.runtime.cleanupDianaStorage(ctx, time.Now()))
 	}
 	path := configToolString(input, "path")
 	if path == "" {
@@ -198,10 +202,21 @@ func (t *hostAccessTool) execute(ctx context.Context, cfg agent.Config, input ma
 	if cwd == "" {
 		cwd = cfg.WorkDir
 	}
-	request, err := agent.ValidateOwnerCommand(cfg, agent.OwnerCommand{Command: configToolString(input, "command"), Args: args, CWD: cwd})
+	purpose := configToolString(input, "purpose")
+	if purpose == "" {
+		return "", fmt.Errorf("purpose 必填：写清这条命令对应用户的哪项请求")
+	}
+	request := agent.OwnerCommand{Command: configToolString(input, "command"), Args: args, CWD: cwd}
+	out, review, err := t.runtime.runReviewedHostCommand(ctx, t.event, cfg, request, purpose)
 	if err != nil {
 		return "", err
 	}
-	return agent.RunOwnerCommand(ctx, cfg, request)
+	// 审核结论附在结果里，执行记录能看出放行理由。
+	var result map[string]any
+	if json.Unmarshal([]byte(out), &result) != nil {
+		return out, nil
+	}
+	result["review"] = review
+	return hostAccessJSON(result)
 }
 func hostAccessJSON(v any) (string, error) { b, e := json.Marshal(v); return string(b), e }

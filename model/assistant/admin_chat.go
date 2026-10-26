@@ -30,6 +30,7 @@ func (r *Runtime) RunAdminChat(ctx context.Context, profileID string, req agent.
 	ctx = withModelConfigEvent(ctx, event)
 	ctx = withLLMUsagePurpose(withLLMUsageContext(ctx, event), "admin_chat")
 	ctx = context.WithValue(ctx, adminChatRunKey{}, true)
+	ctx = withHostCommandRequest(ctx, lastUserMessageText(req.Messages))
 	adminCfg := r.agentRegistryConfig(cfg, event, true)
 	adminCfg.BuiltinSkills = nil
 	adminCfg.CoreTools = adminChatCoreTools
@@ -177,4 +178,16 @@ func (r *Runtime) AdminChatRedactor() func(string) string {
 	secrets = filtered
 	sort.Slice(secrets, func(i, j int) bool { return len(secrets[i]) > len(secrets[j]) })
 	return func(text string) string { return redactBundleText(text, secrets) }
+}
+
+// lastUserMessageText 取本轮最后一条用户消息，作为宿主命令审核对照的用户原话。
+func lastUserMessageText(messages []llm.Message) string {
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role == llm.RoleUser {
+			if text := strings.TrimSpace(messages[i].Content); text != "" {
+				return text
+			}
+		}
+	}
+	return ""
 }

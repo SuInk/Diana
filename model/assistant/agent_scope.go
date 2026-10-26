@@ -101,6 +101,7 @@ func (r *Runtime) newAgentRegistry(ctx context.Context, cfg BotConfig, event Mes
 			registry.Register(&hostAccessTool{runtime: r, event: event})
 		}
 		registry.Register(newDianaBotConfigTool(r, event))
+		registry.Register(&dianaPluginManageTool{runtime: r, event: event})
 		registry.Register(&dianaUsageTool{runtime: r, event: event})
 		registry.Register(&dianaBotMarkersTool{runtime: r, event: event})
 		registry.Register(&dianaStickerRemoveTool{runtime: r, event: event})

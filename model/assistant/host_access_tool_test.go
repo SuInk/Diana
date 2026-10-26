@@ -51,7 +51,7 @@ func TestHostAccessOwnerExecutesWithoutApproval(t *testing.T) {
 	marker := filepath.Join(root, "created-by-owner")
 	r := hostAccessTestRuntime(t)
 	tool := &hostAccessTool{runtime: r, event: identityCheckEvent("100001", "owner", "")}
-	out, err := tool.Run(context.Background(), map[string]any{"operation": "exec", "command": "/bin/sh", "args": []string{"-c", `touch "$1"`, "probe", marker}, "cwd": root})
+	out, err := tool.Run(context.Background(), map[string]any{"operation": "exec", "command": "/bin/sh", "args": []string{"-c", `touch "$1"`, "probe", marker}, "cwd": root, "purpose": "测试创建标记文件"})
 	if err != nil || strings.Contains(out, "approval_required") {
 		t.Fatalf("execution failed: %s %v", out, err)
 	}
@@ -69,7 +69,7 @@ func TestHostAccessHonorsSafeModeAtExecution(t *testing.T) {
 
 func hostAccessTestRuntime(t *testing.T) *Runtime {
 	t.Helper()
-	return NewRuntime(BotConfig{OwnerID: "100001", BotAccount: "200002", Platform: PlatformOneBotV11}, nilChannel{}, NewDefaultPluginManager(), nil, nil, nil, nil)
+	return hostAccessReviewRuntime(t, &hostReviewStubProvider{reply: `{"allow":true,"risk":"low","reason":"测试放行"}`})
 }
 
 func TestHostAccessLegacySwitchDoesNotDisableOwner(t *testing.T) {
@@ -114,7 +114,7 @@ func TestHostAccessLegacySwitchDoesNotDisableOwner(t *testing.T) {
 
 func TestHostAccessRejectsNonOwnerExecution(t *testing.T) {
 	tool := &hostAccessTool{runtime: hostAccessTestRuntime(t), event: MessageEvent{UserID: "member"}}
-	if _, err := tool.Run(context.Background(), map[string]any{"operation": "exec", "command": "/bin/sh", "args": []string{"-c", "true"}, "cwd": t.TempDir()}); err == nil {
+	if _, err := tool.Run(context.Background(), map[string]any{"operation": "exec", "command": "/bin/sh", "args": []string{"-c", "true"}, "cwd": t.TempDir(), "purpose": "测试"}); err == nil {
 		t.Fatal("non-owner executed command")
 	}
 }
@@ -127,7 +127,7 @@ func TestHostAccessAdminExecutesWithoutApproval(t *testing.T) {
 	marker := filepath.Join(root, "admin-result")
 	tool := &hostAccessTool{runtime: hostAccessTestRuntime(t), event: MessageEvent{UserID: "webui-admin"}}
 	ctx := context.WithValue(context.Background(), adminChatRunKey{}, true)
-	out, err := tool.Run(ctx, map[string]any{"operation": "exec", "command": "/bin/sh", "args": []string{"-c", `printf admin > "$1"`, "probe", marker}, "cwd": root})
+	out, err := tool.Run(ctx, map[string]any{"operation": "exec", "command": "/bin/sh", "args": []string{"-c", `printf admin > "$1"`, "probe", marker}, "cwd": root, "purpose": "测试写入标记文件"})
 	if err != nil {
 		t.Fatal(err)
 	}

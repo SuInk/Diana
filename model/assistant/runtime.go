@@ -445,7 +445,9 @@ type Runtime struct {
 	wholeMuteSnapshots wholeMuteSnapshotStore
 	// telegramOwnerIDs 记主人配成 @用户名时见过的数字 ID（键是机器人 ID），私聊通知要用。
 	telegramOwnerIDs sync.Map
-	sharedRoutes     sharedRouteState
+	// pluginStatePersister 把插件开关落盘，聊天里改开关时用，见 plugin_toggle.go。
+	pluginStatePersister func(context.Context) error
+	sharedRoutes         sharedRouteState
 	// telegramRecallProbes serializes active deletion checks per bot account and
 	// remembers recent results/rate limits so repeated queries do not hammer the
 	// Bot API. It owns its own lock; Runtime.mu must not be held while acquiring it.

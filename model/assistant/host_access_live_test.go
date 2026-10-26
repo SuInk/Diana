@@ -47,7 +47,8 @@ func TestLiveHostAccess(t *testing.T) {
 		if owner {
 			user = "owner"
 		}
-		runtime := NewRuntime(bot, nilChannel{}, NewDefaultPluginManager(), nil, nil, nil, nil)
+		// 宿主命令执行前的审核也走同一个当前模型。
+		runtime := NewRuntime(bot, nilChannel{}, NewDefaultPluginManager(), nil, nil, nil, func() (LLMProvider, error) { return client, nil })
 		event := MessageEvent{UserID: user, Kind: EventKindPrivate}
 		policy := RelationshipPolicyFor(UserMemoryProfile{}, "owner", user)
 		registry, err := runtime.newReplyAgentRegistry(context.Background(), runtime.ProfileConfig(""), event, policy, nil)
@@ -136,7 +137,7 @@ func TestLiveHostAccess(t *testing.T) {
 		}
 		time.Sleep(3 * time.Second)
 	}
-	input := map[string]any{"operation": "exec", "command": "/bin/sh", "args": args, "cwd": dir}
+	input := map[string]any{"operation": "exec", "command": "/bin/sh", "args": args, "cwd": dir, "purpose": "主人要求的主机维护：在临时目录写入固定标记文件"}
 	encoded, _ := json.Marshal(input)
 	question := "执行这项主机维护操作：" + string(encoded)
 	response := run([]llm.Message{{Role: llm.RoleUser, Content: question}})

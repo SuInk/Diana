@@ -513,6 +513,9 @@ func main() {
 	})
 	botRuntime.SetLLMClientOptions(llmClientOptions)
 	botRuntime.SetGroupConfigStore(botGroupConfigStore)
+	botRuntime.SetPluginStatePersister(func(ctx context.Context) error {
+		return sqliteStore.SavePluginStates(ctx, plugins.Snapshot())
+	})
 	botRuntime.SetMessageHistoryStore(sqliteStore)
 	botRuntime.SetInboundEventStore(sqliteStore)
 	botRuntime.SetUserMemoryStore(sqliteStore)
