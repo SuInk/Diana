@@ -76,7 +76,7 @@ var behaviorSettings = []behaviorSetting{
 		func(r *RandomRepeatConfig) any { return &r.Threshold }),
 	randomRepeatBehavior("random_repeat_probability", "随机复读：达到人数后跟读的概率（百分比）", "int", 0, 100,
 		func(r *RandomRepeatConfig) any { return &r.Probability }),
-	randomRepeatBehavior("random_repeat_cooldown_seconds", "随机复读：两次复读之间至少间隔多少秒", "int", 0, 600,
+	randomRepeatBehavior("random_repeat_cooldown_seconds", "随机复读：-1 表示同一轮只跟一次，0 不冷却，正数为两次复读的最短间隔秒数；概率照常计算", "int", -1, 600,
 		func(r *RandomRepeatConfig) any { return &r.CooldownSeconds }),
 }
 

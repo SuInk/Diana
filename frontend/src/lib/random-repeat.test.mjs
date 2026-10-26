@@ -10,3 +10,8 @@ test("random repeat starts disabled and preserves explicit zero settings", () =>
   draft.threshold = 5;
   assert.equal(source.threshold, 3);
 });
+
+test("random repeat preserves once-per-chain cooldown without changing probability", () => {
+  const source = { enabled: true, threshold: 2, probability: 30, cooldown_seconds: -1 };
+  assert.deepEqual(randomRepeatDefaults(source), source);
+});

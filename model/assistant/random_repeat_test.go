@@ -39,9 +39,9 @@ func TestRandomRepeaterChains(t *testing.T) {
 	step("3", "b", "安排", "安排")
 	step("4", "c", "安排", "")
 	now = now.Add(time.Minute)
-	step("5", "d", "安排", "") // cooldown expiry cannot reopen the same chain
+	step("5", "d", "安排", "安排") // later messages did not restart the cooldown
 	step("6", "a", "好耶", "")
-	step("7", "b", "好耶", "好耶")
+	step("7", "b", "好耶", "")
 	step("8", "a", "新内容", "")
 	step("9", "b", "新内容", "") // new chain is still subject to cooldown
 	if rolls != 2 {
@@ -81,12 +81,8 @@ func TestRandomRepeaterProbabilityAndScope(t *testing.T) {
 			second.MessageID = "3"
 			second.UserID = "c"
 			p.observe(context.Background(), second)
-			want := ""
-			if roll >= probability {
-				want = "安排" // a miss can retry; a successful chain cannot
-			}
-			if got := p.takeReply(second, RandomRepeatConfig{Probability: 100}).text; got != want {
-				t.Fatalf("next message: got %q want %q", got, want)
+			if got := p.takeReply(second, RandomRepeatConfig{Probability: 100}).text; got != "安排" {
+				t.Fatal("new repeat did not get another chance")
 			}
 		}
 	}
@@ -159,10 +155,10 @@ func TestRandomRepeaterPreservesTextAndThreshold(t *testing.T) {
 		e := repeatEvent(fmt.Sprint(i), fmt.Sprint(i), text)
 		p.observe(context.Background(), e)
 		got := p.takeReply(e, RandomRepeatConfig{Threshold: 3, Probability: 100}).text
-		if i == 2 && got != text {
+		if i >= 2 && got != text {
 			t.Fatalf("literal text lost: %q", got)
 		}
-		if i != 2 && got != "" {
+		if i < 2 && got != "" {
 			t.Fatalf("unexpected reply at %d", i)
 		}
 	}
@@ -178,7 +174,7 @@ func TestRandomRepeaterTriggersOnceAcrossConcurrentAttempts(t *testing.T) {
 	var wg sync.WaitGroup
 	for range 20 {
 		wg.Go(func() {
-			if p.takeReply(event, RandomRepeatConfig{Probability: 100}).text != "" {
+			if p.takeReply(event, RandomRepeatConfig{Probability: 100, CooldownSeconds: -1}).text != "" {
 				replies.Add(1)
 			}
 		})
@@ -190,15 +186,39 @@ func TestRandomRepeaterTriggersOnceAcrossConcurrentAttempts(t *testing.T) {
 	for i := range 5 {
 		next := repeatEvent(fmt.Sprint(i+3), fmt.Sprint(i), "安排")
 		p.observe(context.Background(), next)
-		if got := p.takeReply(next, RandomRepeatConfig{Probability: 100}).text; got != "" {
-			t.Fatalf("zero cooldown reopened the chain: %q", got)
+		if got := p.takeReply(next, RandomRepeatConfig{Probability: 100, CooldownSeconds: -1}).text; got != "" {
+			t.Fatalf("once mode reopened the chain: %q", got)
 		}
+	}
+}
+
+func TestRandomRepeaterOnceModeKeepsProbability(t *testing.T) {
+	p := newRandomRepeater()
+	rolls := 0
+	p.roll = func() int {
+		rolls++
+		if rolls == 1 {
+			return 99 // 第一次未抽中，不能消耗整轮机会。
+		}
+		return 0
+	}
+	settings := RandomRepeatConfig{Threshold: 2, Probability: 30, CooldownSeconds: -1}
+	for i, want := range []string{"", "", "安排", "", ""} {
+		event := repeatEvent(fmt.Sprint(i), fmt.Sprint(i), "安排")
+		p.observe(context.Background(), event)
+		decision := p.takeReply(event, settings)
+		if decision.text != want || decision.alreadyTriggered != (i > 2) {
+			t.Fatalf("message %d: decision=%+v want=%q", i, decision, want)
+		}
+	}
+	if rolls != 2 {
+		t.Fatalf("probability rolls=%d, want miss then hit", rolls)
 	}
 }
 
 func TestRuntimeRandomRepeaterOnlyOncePerChain(t *testing.T) {
 	channel := &recordingChannel{}
-	r := NewRuntime(BotConfig{RandomRepeat: &RandomRepeatConfig{Enabled: true, Threshold: 2, Probability: 100, CooldownSeconds: 60}, ID: "qq", GroupTriggers: []string{"Diana"}, BotAccount: "42"}, channel, NewPluginManager(), nil, nil, nil, nil)
+	r := NewRuntime(BotConfig{RandomRepeat: &RandomRepeatConfig{Enabled: true, Threshold: 2, Probability: 100, CooldownSeconds: -1}, ID: "qq", GroupTriggers: []string{"Diana"}, BotAccount: "42"}, channel, NewPluginManager(), nil, nil, nil, nil)
 	now := time.Now()
 	r.repeater.now = func() time.Time { return now }
 	for i, text := range []string{"安排", "安排", "安排", "安排", "好耶", "好耶", "安排", "安排"} {
@@ -217,7 +237,7 @@ func TestRuntimeRandomRepeaterOnlyOncePerChain(t *testing.T) {
 
 func TestRuntimeRandomRepeaterConsumedChainSkipsModel(t *testing.T) {
 	channel := &recordingChannel{}
-	r := NewRuntime(BotConfig{RandomRepeat: &RandomRepeatConfig{Enabled: true, Threshold: 2, Probability: 100}, ID: "qq", BotAccount: "42", GroupTriggers: []string{"Diana"}}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+	r := NewRuntime(BotConfig{RandomRepeat: &RandomRepeatConfig{Enabled: true, Threshold: 2, Probability: 100, CooldownSeconds: -1}, ID: "qq", BotAccount: "42", GroupTriggers: []string{"Diana"}}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		t.Fatal("consumed repeat reached the model")
 		return nil, nil
 	})
@@ -286,7 +306,7 @@ func TestLiveRandomRepeaterReplay(t *testing.T) {
 	provider := &repeaterLiveProvider{client: client}
 	manager := NewPluginManager()
 	channel := &recordingChannel{}
-	r := NewRuntime(BotConfig{RandomRepeat: &RandomRepeatConfig{Enabled: true, Threshold: 2, Probability: 100, CooldownSeconds: 60}, ID: "qq", BotAccount: "42", GroupTriggers: []string{"Diana"}}, channel, manager, nil, nil, nil, func() (LLMProvider, error) { return provider, nil })
+	r := NewRuntime(BotConfig{RandomRepeat: &RandomRepeatConfig{Enabled: true, Threshold: 2, Probability: 100, CooldownSeconds: -1}, ID: "qq", BotAccount: "42", GroupTriggers: []string{"Diana"}}, channel, manager, nil, nil, nil, func() (LLMProvider, error) { return provider, nil })
 	now := time.Now()
 	r.repeater.now = func() time.Time { return now }
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
@@ -368,7 +388,7 @@ func TestRuntimeRandomRepeaterGroupOverridesAndAdmission(t *testing.T) {
 }
 
 func TestRandomRepeatBehaviorConfigRoundTripAndInheritance(t *testing.T) {
-	cfg := BotConfig{ID: "qq", RandomRepeat: &RandomRepeatConfig{Enabled: true, Threshold: 3, Probability: 0, CooldownSeconds: 0}}
+	cfg := BotConfig{ID: "qq", RandomRepeat: &RandomRepeatConfig{Enabled: true, Threshold: 3, Probability: 0, CooldownSeconds: -1}}
 	payload := PayloadFromConfig(cfg)
 	restored := ConfigFromPayload(payload, BotConfig{}).WithDefaults()
 	if restored.RandomRepeat == nil || *restored.RandomRepeat != *cfg.RandomRepeat {

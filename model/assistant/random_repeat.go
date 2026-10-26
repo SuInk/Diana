@@ -34,7 +34,7 @@ func (value *RandomRepeatConfig) normalized() RandomRepeatConfig {
 	result := *value
 	result.Threshold = max(2, min(10, result.Threshold))
 	result.Probability = max(0, min(100, result.Probability))
-	result.CooldownSeconds = max(0, min(600, result.CooldownSeconds))
+	result.CooldownSeconds = max(-1, min(600, result.CooldownSeconds))
 	return result
 }
 
@@ -137,13 +137,14 @@ func (p *randomRepeater) observe(_ context.Context, event MessageEvent) MessageE
 }
 
 func (p *randomRepeater) takeReply(event MessageEvent, settings RandomRepeatConfig) repeatDecision {
+	settings = settings.normalized()
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	chain := p.chains[repeatKey(event)]
 	if chain == nil || chain.text == "" || chain.messageID != event.MessageID {
 		return repeatDecision{}
 	}
-	if chain.triggered {
+	if settings.CooldownSeconds == -1 && chain.triggered {
 		return repeatDecision{alreadyTriggered: true}
 	}
 	if chain.attempted || len(chain.users) < max(2, min(10, settings.Threshold)) {
@@ -154,7 +155,7 @@ func (p *randomRepeater) takeReply(event MessageEvent, settings RandomRepeatConf
 	if (!chain.lastReply.IsZero() && now.Sub(chain.lastReply) < time.Duration(max(0, min(600, settings.CooldownSeconds)))*time.Second) || p.roll() >= max(0, min(100, settings.Probability)) {
 		return repeatDecision{}
 	}
-	// 抽中后这一轮不再触发；冷却只限制不同内容的新一轮，不会重新开启旧复读。
+	// -1 模式在抽中后结束这一轮；非负值继续按冷却和每条消息的概率判断。
 	chain.triggered = true
 	chain.lastReply = now
 	return repeatDecision{text: chain.text}

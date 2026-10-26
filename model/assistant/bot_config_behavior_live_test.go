@@ -48,6 +48,9 @@ func TestLiveBotConfigBehaviorFromNaturalLanguage(t *testing.T) {
 		{"repeat probability", "把随机复读打开，概率调到 50%。", func(c BotConfig) bool {
 			return c.RandomRepeat != nil && c.RandomRepeat.Enabled && c.RandomRepeat.Probability == 50
 		}},
+		{"repeat once", "把随机复读的冷却时间设成 -1，同一句连续复读只跟一次，概率保持 30%。", func(c BotConfig) bool {
+			return c.RandomRepeat != nil && c.RandomRepeat.CooldownSeconds == -1 && c.RandomRepeat.Probability == 30
+		}},
 		{"max chars", "你回复太长了，每次最多 500 字。", func(c BotConfig) bool { return c.MaxReplyChars == 500 }},
 		{"muted images", "被禁言的时候就别识别图片了，省点钱。", func(c BotConfig) bool {
 			return c.MutedImageDescriptionEnabled != nil && !*c.MutedImageDescriptionEnabled
