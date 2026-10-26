@@ -972,22 +972,39 @@ func setupLogging(logPath string) (io.Writer, func(), func()) {
 
 // frontendDistDir 查找生产前端静态文件目录。
 func frontendDistDir(custom string) string {
+	executable, _ := os.Executable()
+	// 命令入口常是 ~/.local/bin 下的符号链接，要按真实安装目录找。
+	if resolved, err := filepath.EvalSymlinks(executable); err == nil {
+		executable = resolved
+	}
+	return frontendDistDirFor(custom, executable)
+}
+
+func frontendDistDirFor(custom, executable string) string {
 	// 同时兼容源码目录运行、打包后从二进制旁边运行、以及测试工作目录切换。
-	// 源码目录是 frontend/；发布包和已安装实例仍使用 frontend-next/dist，两种布局都要认。
+	// 现在统一叫 frontend/dist；frontend-next/dist 是旧发布包和旧安装实例的布局，继续认。
 	candidates := []string{
 		"frontend/dist",
 		"../../frontend/dist",
 		"frontend-next/dist",
 		"../../frontend-next/dist",
 	}
-	if executable, err := os.Executable(); err == nil {
+	if executable != "" {
+		// 程序旁边的目录排在工作目录前面：用户常在别的目录直接执行解压出来的二进制，
+		// 只按工作目录找就会拿不到包里自带的前端。
 		executableDir := filepath.Dir(executable)
 		candidates = append([]string{
+			filepath.Join(executableDir, "frontend", "dist"),
+			filepath.Join(executableDir, "frontend-next", "dist"),
+			filepath.Clean(filepath.Join(executableDir, "..", "Resources", "frontend", "dist")),
 			filepath.Clean(filepath.Join(executableDir, "..", "Resources", "frontend-next", "dist")),
 		}, candidates...)
 	}
 	if configDir, err := os.UserConfigDir(); err == nil {
-		candidates = append(candidates, filepath.Join(configDir, "diana", "frontend-next", "dist"))
+		candidates = append(candidates,
+			filepath.Join(configDir, "diana", "frontend", "dist"),
+			filepath.Join(configDir, "diana", "frontend-next", "dist"),
+		)
 	}
 	if custom = strings.TrimSpace(custom); custom != "" {
 		// 显式指定的目录永远最优先，即使暂时不存在也按它返回，方便部署脚本预创建。

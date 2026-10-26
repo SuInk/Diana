@@ -107,7 +107,9 @@ COPY --from=yt-dlp /out/yt-dlp /usr/local/bin/yt-dlp
 # glibc Linux 裸机部署则会自动改用 Chrome for Testing 无 root 下载。
 FROM runtime-base AS runtime-slim
 COPY --from=backend /out/diana-webui /app/diana-webui
-COPY --from=frontend-next /src/frontend/dist /app/frontend-next/dist
+COPY --from=frontend-next /src/frontend/dist /app/frontend/dist
+# 挂载的旧 config.yaml 可能还写着 /app/frontend-next/dist，留个链接让它继续生效。
+RUN ln -s frontend /app/frontend-next
 # 浏览器控制扩展的源码。容器用户没有仓库检出，WebUI 的「下载扩展」就是从这里打包。
 COPY packaging/browser-control-extension /app/browser-control-extension
 EXPOSE 18080
@@ -115,7 +117,9 @@ ENTRYPOINT ["/usr/bin/tini", "-s", "--", "/usr/local/bin/diana-entrypoint", "/ap
 
 FROM runtime-full AS runtime
 COPY --from=backend /out/diana-webui /app/diana-webui
-COPY --from=frontend-next /src/frontend/dist /app/frontend-next/dist
+COPY --from=frontend-next /src/frontend/dist /app/frontend/dist
+# 挂载的旧 config.yaml 可能还写着 /app/frontend-next/dist，留个链接让它继续生效。
+RUN ln -s frontend /app/frontend-next
 COPY packaging/browser-control-extension /app/browser-control-extension
 EXPOSE 18080
 ENTRYPOINT ["/usr/bin/tini", "-s", "--", "/usr/local/bin/diana-entrypoint", "/app/diana-webui"]

@@ -65,6 +65,7 @@ Remove-Item -LiteralPath `$MyInvocation.MyCommand.Path -Force -ErrorAction Silen
 @(
     "diana-webui.exe",
     "diana-webui-windows-amd64.exe",
+    "frontend",
     "frontend-next",
     "gitea-mcp.exe",
     "gitea-mcp.LICENSE",

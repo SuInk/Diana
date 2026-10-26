@@ -51,8 +51,8 @@ func TestInstallScriptKeepsFrontendInsideBundle(t *testing.T) {
 	for _, want := range []string{
 		`macos_app_dir="$install_dir/Diana.app"`,
 		`macos_app_binary="$macos_app_dir/Contents/MacOS/$binary_name"`,
-		`cp -R "$install_dir/frontend-next" "$macos_app_dir/Contents/MacOS/frontend-next"`,
-		`frontend_dist="$macos_app_dir/Contents/MacOS/frontend-next/dist"`,
+		`cp -R "$install_dir/$frontend_item" "$macos_app_dir/Contents/MacOS/$frontend_item"`,
+		`frontend_dist="$macos_app_dir/Contents/MacOS/$frontend_item/dist"`,
 		`  frontend_dist: $(yaml_quote "$frontend_dist")`,
 	} {
 		if !strings.Contains(script, want) {

@@ -95,7 +95,7 @@ build-local-mac:
 
 install-local-mac-app: build-web
 	GO="$(GO)" ./scripts/build-local-mac.sh "$(HOME)/Applications/Diana.app"
-	$(NODE) -e "const fs=require('fs'); const src='$(CURDIR)/frontend/dist'; const dst='$(HOME)/Library/Application Support/diana/frontend-next/dist'; fs.rmSync(dst,{recursive:true,force:true}); fs.mkdirSync(require('path').dirname(dst),{recursive:true}); fs.cpSync(src,dst,{recursive:true})"
+	$(NODE) -e "const fs=require('fs'); const src='$(CURDIR)/frontend/dist'; const dst='$(HOME)/Library/Application Support/diana/frontend/dist'; fs.rmSync(dst,{recursive:true,force:true}); fs.rmSync('$(HOME)/Library/Application Support/diana/frontend-next',{recursive:true,force:true}); fs.mkdirSync(require('path').dirname(dst),{recursive:true}); fs.cpSync(src,dst,{recursive:true})"
 
 start-local-mac:
 	./scripts/start-local-mac.sh

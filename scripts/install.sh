@@ -344,7 +344,9 @@ mkdir -p "$stage_dir"
 tar -xzf "$archive_path" -C "$stage_dir"
 package_dir="$stage_dir/$package_name"
 [ -x "$package_dir/$binary_name" ] || fail "release package does not contain $binary_name"
-[ -f "$package_dir/frontend-next/dist/index.html" ] || fail "release package does not contain the WebUI"
+# 新包的前端在 frontend/dist，v0.8.153 及更早的包只有 frontend-next/dist。
+[ -f "$package_dir/frontend/dist/index.html" ] || [ -f "$package_dir/frontend-next/dist/index.html" ] \
+  || fail "release package does not contain the WebUI"
 
 legacy_install_dir="$service_home/.local/share/diana"
 new_system_install=false
@@ -437,7 +439,7 @@ backup_dir="$install_dir/.installer/backups/$timestamp"
 mkdir -p "$backup_dir/runtime" "$backup_dir/data"
 
 had_previous=false
-for item in "$binary_name" "$compat_binary_name" run.sh uninstall.sh frontend-next gitea-mcp gitea-mcp.LICENSE desktopctl-helper; do
+for item in "$binary_name" "$compat_binary_name" run.sh uninstall.sh frontend frontend-next gitea-mcp gitea-mcp.LICENSE desktopctl-helper; do
   if [ -e "$install_dir/$item" ]; then
     had_previous=true
     mv "$install_dir/$item" "$backup_dir/runtime/$item"
@@ -452,6 +454,12 @@ for suffix in "" -wal -shm; do
 done
 
 cp -R "$package_dir/." "$install_dir/"
+# 新包同时带 frontend/ 和给旧自更新器用的 frontend-next/ 副本。已有配置还指着
+# frontend-next 的老安装继续用它；其余情况那份副本没人读，删掉免得被当成在用的前端。
+if [ -f "$install_dir/frontend/dist/index.html" ] \
+  && ! grep -q 'frontend_dist:.*frontend-next' "$install_dir/config.yaml" 2>/dev/null; then
+  rm -rf -- "$install_dir/frontend-next"
+fi
 chmod +x "$install_dir/run.sh" "$install_dir/$binary_name"
 if [ -f "$install_dir/gitea-mcp" ]; then
   chmod +x "$install_dir/gitea-mcp"
@@ -555,10 +563,12 @@ assemble_macos_app() {
   write_macos_app_plist
   cp -f "$install_dir/$binary_name" "$macos_app_binary"
   chmod +x "$macos_app_binary"
-  rm -rf "$macos_app_dir/Contents/MacOS/frontend-next"
-  if [ -d "$install_dir/frontend-next" ]; then
-    cp -R "$install_dir/frontend-next" "$macos_app_dir/Contents/MacOS/frontend-next"
-  fi
+  for frontend_item in frontend frontend-next; do
+    rm -rf "$macos_app_dir/Contents/MacOS/$frontend_item"
+    if [ -d "$install_dir/$frontend_item" ]; then
+      cp -R "$install_dir/$frontend_item" "$macos_app_dir/Contents/MacOS/$frontend_item"
+    fi
+  done
   # 自带的 gitea-mcp 按「主程序旁边」被找到，bundle 里也得放一份，
   # 否则从 .app 启动时 MCP 预设只能退回 PATH，多半找不到。
   for bundled in gitea-mcp gitea-mcp.LICENSE desktopctl-helper; do
@@ -666,10 +676,12 @@ if [ ! -f "$config_file" ]; then
   if [ -z "$generated_password" ]; then
     generated_password=$(random_hex 16)
   fi
+  frontend_item=frontend
+  [ -d "$install_dir/frontend" ] || frontend_item=frontend-next
   if [ "$os" = "darwin" ]; then
-    frontend_dist="$macos_app_dir/Contents/MacOS/frontend-next/dist"
+    frontend_dist="$macos_app_dir/Contents/MacOS/$frontend_item/dist"
   else
-    frontend_dist="$install_dir/frontend-next/dist"
+    frontend_dist="$install_dir/$frontend_item/dist"
   fi
   cat >"$config_file" <<EOF
 # Diana 配置。基础设施段每次启动生效;bot / llm 段只在数据库为空时播种一次,
@@ -995,7 +1007,7 @@ EOF
 restore_previous() {
   [ "$had_previous" = "true" ] || return 0
   stop_service
-  for item in "$binary_name" "$compat_binary_name" run.sh uninstall.sh frontend-next gitea-mcp gitea-mcp.LICENSE desktopctl-helper; do
+  for item in "$binary_name" "$compat_binary_name" run.sh uninstall.sh frontend frontend-next gitea-mcp gitea-mcp.LICENSE desktopctl-helper; do
     if [ -e "$backup_dir/runtime/$item" ]; then
       rm -rf -- "$install_dir/$item"
       mv "$backup_dir/runtime/$item" "$install_dir/$item"

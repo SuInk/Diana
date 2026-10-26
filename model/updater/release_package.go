@@ -252,7 +252,7 @@ func NewReleasePackageUpdater(options ReleasePackageOptions) (*ReleasePackageUpd
 	binaryName := expectedReleaseBinaryName(goos, goarch)
 	frontendDir := strings.TrimSpace(options.FrontendDir)
 	if frontendDir == "" {
-		frontendDir = filepath.Join(installRoot, "frontend-next", "dist")
+		frontendDir = packagedFrontendDir(installRoot)
 	}
 	absFrontend, err := filepath.Abs(frontendDir)
 	if err != nil {
@@ -528,7 +528,7 @@ func (u *ReleasePackageUpdater) Download(ctx context.Context, release ReleasePac
 	}
 	packageRoot := filepath.Join(extractRoot, releasePackageDirectory(assetName))
 	stagedExecutable := filepath.Join(packageRoot, u.binaryName)
-	stagedFrontend := filepath.Join(packageRoot, "frontend-next", "dist")
+	stagedFrontend := packagedFrontendDir(packageRoot)
 	if !regularFileExists(stagedExecutable) || !regularFileExists(filepath.Join(stagedFrontend, "index.html")) {
 		return Result{}, fmt.Errorf("%w: expected binary or frontend is missing", ErrInvalidReleaseArchive)
 	}
@@ -1092,6 +1092,20 @@ func safeArchiveDestination(root, name string) (string, error) {
 		return "", fmt.Errorf("%w: archive path escapes target: %q", ErrInvalidReleaseArchive, name)
 	}
 	return destination, nil
+}
+
+// packagedFrontendDir 返回包目录或安装目录里的前端：新布局是 frontend/dist，
+// 旧包和旧安装只有 frontend-next/dist。两个都没有时按新布局返回，交给调用方报缺失。
+func packagedFrontendDir(root string) string {
+	current := filepath.Join(root, "frontend", "dist")
+	if regularFileExists(filepath.Join(current, "index.html")) {
+		return current
+	}
+	legacy := filepath.Join(root, "frontend-next", "dist")
+	if regularFileExists(filepath.Join(legacy, "index.html")) {
+		return legacy
+	}
+	return current
 }
 
 func releasePackageDirectory(assetName string) string {

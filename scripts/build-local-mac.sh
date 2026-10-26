@@ -36,9 +36,9 @@ if [[ "$OUTPUT" == *.app ]]; then
 	APP_BINARY="$TEMP_APP/Contents/MacOS/diana-webui"
 	PDF_HELPER="$TEMP_APP/Contents/MacOS/diana-pdf-vision"
 	BUNDLED_FRONTEND_SOURCE="${DIANA_BUNDLED_FRONTEND_SOURCE:-$ROOT/frontend/dist}"
-	BUNDLED_FRONTEND_TARGET="$TEMP_APP/Contents/Resources/frontend-next/dist"
+	BUNDLED_FRONTEND_TARGET="$TEMP_APP/Contents/Resources/frontend/dist"
 	if [[ ! -f "$BUNDLED_FRONTEND_SOURCE/index.html" ]]; then
-		echo "Built frontend-next is missing: $BUNDLED_FRONTEND_SOURCE" >&2
+		echo "Built frontend is missing: $BUNDLED_FRONTEND_SOURCE" >&2
 		exit 1
 	fi
 	mkdir -p "$TEMP_APP/Contents/MacOS" "$BUNDLED_FRONTEND_TARGET"

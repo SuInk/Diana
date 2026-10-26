@@ -542,7 +542,7 @@ func releaseTarFixture(t *testing.T, assetName, binaryName string) []byte {
 		mode    int64
 	}{
 		{name: root + "/" + binaryName, content: "new-binary", mode: 0o755},
-		{name: root + "/frontend-next/dist/index.html", content: "new-frontend", mode: 0o644},
+		{name: root + "/frontend/dist/index.html", content: "new-frontend", mode: 0o644},
 		{name: root + "/run.sh", content: "#!/bin/sh\n", mode: 0o755},
 	}
 	var buffer bytes.Buffer
@@ -780,5 +780,24 @@ func TestReleasePackageUpdaterUnsupportedInContainer(t *testing.T) {
 		if container && !strings.Contains(u.UnsupportedReason(), "pulling a new image") {
 			t.Fatalf("container reason = %q", u.UnsupportedReason())
 		}
+	}
+}
+
+func TestPackagedFrontendDirPrefersCurrentLayout(t *testing.T) {
+	root := t.TempDir()
+	current := filepath.Join(root, "frontend", "dist")
+	legacy := filepath.Join(root, "frontend-next", "dist")
+	if got := packagedFrontendDir(root); got != current {
+		t.Fatalf("empty root: got %s, want %s", got, current)
+	}
+	// 只有旧布局的包（v0.8.153 及更早）和旧安装实例要继续能用。
+	writeUpdaterTestFile(t, filepath.Join(legacy, "index.html"), "legacy", 0o644)
+	if got := packagedFrontendDir(root); got != legacy {
+		t.Fatalf("legacy only: got %s, want %s", got, legacy)
+	}
+	// 新包两份都带，新路径优先。
+	writeUpdaterTestFile(t, filepath.Join(current, "index.html"), "current", 0o644)
+	if got := packagedFrontendDir(root); got != current {
+		t.Fatalf("both layouts: got %s, want %s", got, current)
 	}
 }

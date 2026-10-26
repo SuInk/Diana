@@ -203,7 +203,8 @@ try {
     Expand-Archive -Path $archivePath -DestinationPath $stageDir -Force
     $packageDir = Join-Path $stageDir $packageName
     if (-not (Test-Path (Join-Path $packageDir $binaryName))) { throw "Release package does not contain the Diana executable." }
-    if (-not (Test-Path (Join-Path $packageDir "frontend-next\dist\index.html"))) { throw "Release package does not contain the WebUI." }
+    # New packages ship frontend\dist; v0.8.153 and earlier only have frontend-next\dist.
+    if (-not (Test-Path (Join-Path $packageDir "frontend\dist\index.html")) -and -not (Test-Path (Join-Path $packageDir "frontend-next\dist\index.html"))) { throw "Release package does not contain the WebUI." }
 
     New-Item -ItemType Directory -Force -Path $installDir, (Join-Path $installDir "data"), (Join-Path $installDir "logs") | Out-Null
     $timestamp = (Get-Date).ToUniversalTime().ToString("yyyyMMddTHHmmssZ")
@@ -234,7 +235,7 @@ try {
     New-Item -ItemType Directory -Force -Path $runtimeBackup, $dataBackup | Out-Null
 
     $hadPrevious = $false
-    foreach ($item in @($binaryName, $compatBinaryName, "run.bat", "uninstall.ps1", "frontend-next", "gitea-mcp.exe", "gitea-mcp.LICENSE")) {
+    foreach ($item in @($binaryName, $compatBinaryName, "run.bat", "uninstall.ps1", "frontend", "frontend-next", "gitea-mcp.exe", "gitea-mcp.LICENSE")) {
         $current = Join-Path $installDir $item
         if (Test-Path $current) {
             $hadPrevious = $true
@@ -249,6 +250,12 @@ try {
 
     Copy-Item -Recurse -Force -Path (Join-Path $packageDir "*") -Destination $installDir
     $configFile = Join-Path $installDir "config.yaml"
+    # New packages also carry a frontend-next copy for older self-updaters. Keep it
+    # only for existing installs whose config still points there.
+    $frontendItem = if (Test-Path (Join-Path $installDir "frontend\dist\index.html")) { "frontend" } else { "frontend-next" }
+    if ($frontendItem -eq "frontend" -and -not ((Test-Path $configFile) -and (Select-String -Path $configFile -Pattern 'frontend_dist:.*frontend-next' -Quiet))) {
+        Remove-Item -Recurse -Force -LiteralPath (Join-Path $installDir "frontend-next") -ErrorAction SilentlyContinue
+    }
     $generatedPassword = $null
     $passwordCleared = $false
     if (-not (Test-Path $configFile)) {
@@ -260,7 +267,7 @@ try {
             "server:",
             "  host: $(ConvertTo-DianaYamlScalar $bindHost)",
             "  port: $(ConvertTo-DianaYamlScalar ([string]$port))",
-            "  frontend_dist: $(ConvertTo-DianaYamlScalar (Join-Path $installDir 'frontend-next\dist'))",
+            "  frontend_dist: $(ConvertTo-DianaYamlScalar (Join-Path $installDir "$frontendItem\dist"))",
             "storage:",
             "  db_path: $(ConvertTo-DianaYamlScalar $dbPath)",
             "  log_path: $(ConvertTo-DianaYamlScalar (Join-Path $installDir 'logs\diana.log'))",
@@ -346,7 +353,7 @@ try {
         if (-not $healthy) {
             Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
             if ($hadPrevious) {
-                foreach ($item in @($binaryName, $compatBinaryName, "run.bat", "uninstall.ps1", "frontend-next", "gitea-mcp.exe", "gitea-mcp.LICENSE")) {
+                foreach ($item in @($binaryName, $compatBinaryName, "run.bat", "uninstall.ps1", "frontend", "frontend-next", "gitea-mcp.exe", "gitea-mcp.LICENSE")) {
                     $current = Join-Path $installDir $item
                     $backup = Join-Path $runtimeBackup $item
                     if (Test-Path $current) { Remove-Item -Recurse -Force $current }

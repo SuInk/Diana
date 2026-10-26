@@ -268,11 +268,14 @@ jobs:
           fi
 
           # Release 包带齐运行时前端，下载后不需要 Go、Node 或源码。
-          mkdir -p "${package_dir}/frontend-next/dist"
+          mkdir -p "${package_dir}/frontend/dist" "${package_dir}/frontend-next/dist"
           go build -trimpath -ldflags="-s -w -X main.buildVersion=${BUILD_VERSION}" -o "${package_dir}/${runtime_name}" ./cmd/webui
           # Keep one compatibility copy so pre-migration updaters can install
           # the first package that introduces the stable runtime name.
           cp "${package_dir}/${runtime_name}" "${package_dir}/${binary_name}"
+          cp -R release/frontend-next-dist/. "${package_dir}/frontend/dist/"
+          # 旧版自更新器（v0.8.153 及更早）只认 frontend-next/dist，缺了会判定包损坏、
+          # 没法从 WebUI 升级过来。压缩后只多约 0.5 MB，保留一份兼容副本。
           cp -R release/frontend-next-dist/. "${package_dir}/frontend-next/dist/"
           if [ "${{ matrix.goos }}" = darwin ]; then
             cp release/desktop/desktopctl-helper "${package_dir}/desktopctl-helper"
@@ -284,12 +287,12 @@ jobs:
           printf '%s\n' \
             "Diana ${BUILD_VERSION}" \
             '' \
-            'Run ./run.sh on Linux/macOS or run.bat on Windows.' \
+            'Run ./run.sh on Linux/macOS or run.bat on Windows; running diana-webui directly also works.' \
             'Default WebUI port: 18080' \
             'On first start Diana prints a generated administrator username and password once; save them.' \
             'To choose them instead, set admin.username and admin.password (at least 8 characters) in a config.yaml next to the program.' \
             'Forgot the password? Stop Diana, then run ./diana-webui passwd (diana-webui.exe passwd on Windows).' \
-            'The frontend is included under frontend-next/dist.' \
+            'The frontend is included under frontend/dist (frontend-next/dist is a copy kept for older updaters).' \
             'One-click installations expose `diana uninstall`; this package also includes an uninstall script.' \
             'Future stable Releases can be installed from the WebUI with SHA-256 verification, backup, restart, and health-check rollback.' > "${package_dir}/README.txt"
 
@@ -297,8 +300,6 @@ jobs:
             cp scripts/uninstall.ps1 "${package_dir}/uninstall.ps1"
             printf '%s\n' \
               '@echo off' \
-              'set "FRONTEND_DIST=%~dp0frontend-next\dist"' \
-              'if "%PORT%"=="" set PORT=18080' \
               '"%~dp0diana-webui.exe" %*' > "${package_dir}/run.bat"
             (cd release/package && zip -qr "../../dist/${package_name}.zip" "${package_name}")
           else
@@ -308,8 +309,6 @@ jobs:
               '#!/usr/bin/env sh' \
               'set -eu' \
               'SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)' \
-              'export FRONTEND_DIST="${FRONTEND_DIST:-$SCRIPT_DIR/frontend-next/dist}"' \
-              'export PORT="${PORT:-18080}"' \
               'exec "$SCRIPT_DIR/diana-webui" "$@"' > "${package_dir}/run.sh"
             chmod +x "${package_dir}/run.sh"
             tar -czf "dist/${package_name}.tar.gz" -C release/package "${package_name}"

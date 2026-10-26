@@ -89,6 +89,8 @@ func TestReleaseWorkflowPublishesOnlyCompletePackages(t *testing.T) {
 		`package_name="diana-${package_suffix}"`,
 		`-o "${package_dir}/${runtime_name}"`,
 		`cp "${package_dir}/${runtime_name}" "${package_dir}/${binary_name}"`,
+		`cp -R release/frontend-next-dist/. "${package_dir}/frontend/dist/"`,
+		// 旧版自更新器只认这个路径，去掉就断了从旧版 WebUI 升级的路。
 		`cp -R release/frontend-next-dist/. "${package_dir}/frontend-next/dist/"`,
 		`"${package_dir}/run.sh"`, `"${package_dir}/run.bat"`,
 	} {
