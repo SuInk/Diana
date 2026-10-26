@@ -37,7 +37,8 @@
 
 ## 测试
 
-- Go：运行 `go test -race ./...`，并在 `TZ=UTC` 下再跑一遍，与 CI 保持一致。
+- Go：本地用 `scripts/test-serial.sh` 跑改动涉及的包（不传参数时自动按相对 `origin/main` 的改动挑包，也可以传包路径），它会各跑一遍 `-race` 和 `TZ=UTC`。全仓库的 `go test -race ./...` 以 PR 的 CI 为准，本地不再每次跑全量。
+- 不要直接起 `go test`：同一台机器上常有多个会话同时跑测试，脚本让它们全机排队、限并发（默认 4，`DIANA_TEST_PROCS` 可调）并降优先级，避免整机卡死。排队等待时不要另开测试绕过。
 - 前端：改了常量或草稿/配置键后，运行沙箱内的单元测试。
 - 新建测试文件前先确认文件是否已存在，避免覆盖。
 - 行为改动要用当前模型做生产回放验证，不用 gpt-5.4-mini 这类过时模型；注意 429 限流。
@@ -94,7 +95,7 @@
 
 ### 发布验证
 
-- 发布前至少运行并通过：`gofmt -l .`、`git diff --check`、`go test ./...`、前端依赖安装与生产构建。涉及依赖变化时还要执行安全审计。
+- 发布前至少运行并通过：`gofmt -l .`、`git diff --check`、`scripts/test-serial.sh ./...`（全仓库）、前端依赖安装与生产构建。涉及依赖变化时还要执行安全审计。
 - 发布 PR 的 CI 必须验证 Go 测试、Vue 构建、Linux amd64/arm64、Darwin amd64/arm64、Windows amd64 和 Docker 镜像。
 - 标签构建完成后，确认 GitHub Release 不是 Draft；正式版不得是 Prerelease，Beta/RC 标签必须标记为 Prerelease，并检查所有预期资产均已上传。
 - Release 必须包含各支持平台的完整包、`SHA256SUMS` 和自更新清单 `latest.json`，不得上传独立裸二进制。当前 CI 的预期资产数量为 7（5 个平台完整包和 2 个元数据文件）；若工作流调整了产物矩阵，应按工作流重新计算。
