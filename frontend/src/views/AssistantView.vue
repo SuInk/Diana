@@ -969,11 +969,11 @@
             <div class="card-body form-grid">
               <div class="field">
                 <label class="switch">
-                  <input v-model="form.markdown_to_plain" type="checkbox" />
+                  <input :checked="!form.markdown_to_plain" type="checkbox" @change="(event) => { if (form) form.markdown_to_plain = !(event.target as HTMLInputElement).checked; }" />
                   <span class="track" aria-hidden="true"></span>
-                  <span class="switch-label">Markdown 转纯文本</span>
+                  <span class="switch-label">发送 Markdown</span>
                 </label>
-                <span class="hint">{{ richTextPlatform ? "当前平台能渲染 Markdown，默认保留标记；开启后改为发送纯文本。" : "当前平台只发纯文本，Markdown 标记会以字面量出现，所以默认转成纯文本。" }}<template v-if="!richTextPlatform && !form.markdown_to_plain">当前已关闭，回复里的 ** 和 # 会原样发出。</template></span>
+                <span class="hint">{{ richTextPlatform ? "当前平台能渲染 Markdown，默认开启；关闭后去掉标记，改发纯文本。" : "当前平台只发纯文本，默认关闭，标记会先转成纯文本再发。" }}<template v-if="!richTextPlatform && !form.markdown_to_plain">当前已开启，回复里的 ** 和 # 会原样发出。</template></span>
               </div>
               <div class="field">
                 <label for="bot-maxinput">单次输入上限（字符）</label>
@@ -2898,8 +2898,8 @@ function platformSupportsRichText(id: string | undefined): boolean {
 }
 const richTextPlatform = computed(() => platformSupportsRichText(form.value?.platform));
 
-// 换平台时「Markdown 转纯文本」跟着回到新平台的默认值：这个开关保存时总是显式落库，
-// 从 Telegram 复制过来再改成 QQ 官方机器人，不重置就会带着「保留 Markdown」上线，
+// 换平台时「发送 Markdown」跟着回到新平台的默认值：这个开关保存时总是显式落库，
+// 从 Telegram 复制过来再改成 QQ 官方机器人，不重置就会带着「发送 Markdown」上线，
 // 标记以字面量出现在聊天里。
 function changeFormPlatform(value: string): void {
   if (!form.value) return;
