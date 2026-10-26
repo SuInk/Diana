@@ -12,8 +12,10 @@ import (
 )
 
 const (
-	crossGroupContextSearchLimit    = 40
-	crossGroupContextResultLimit    = 4
+	crossGroupContextSearchLimit = 40
+	// crossGroupContextResultLimit 是常驻带进回复的条数上限。从 4 提到 6：它放在历史
+	// 之后的尾部，不碍缓存，平均每条两三百字；更多的由模型用 chat_history 跨群搜。
+	crossGroupContextResultLimit    = 6
 	crossGroupMembershipCheckBudget = 3 * time.Second
 )
 

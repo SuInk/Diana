@@ -13,11 +13,21 @@ const (
 	// durableMediaIndexLimit 限制索引条数。它是每轮都注入的静态文本，条数上去了
 	// 就从「便宜的替代方案」变成新的固定开销。
 	durableMediaIndexLimit = 24
+	// durableMediaIndexCandidateLimit 是并行收集时的候选上限：渲染时还要剔掉仍在历史
+	// 窗口里的，所以多收一些。
+	durableMediaIndexCandidateLimit = 96
 	// durableMediaIndexDescriptionRunes 是每条媒体描述在索引里的长度上限。
 	durableMediaIndexDescriptionRunes = 80
 )
 
-// durableMediaIndex 列出已经掉出历史窗口、模型看不到的媒体消息。
+// durableMediaIndexEntry 是索引里的一条：渲染好的行，加上它来自哪条消息。
+type durableMediaIndexEntry struct {
+	event MessageEvent
+	line  string
+}
+
+// durableMediaIndex 收集最近带媒体的消息，供 renderDurableMediaIndex 挑出已经掉出历史
+// 窗口、模型看不到的那些。
 //
 // 它取代了 agent 模式下的前置指代路由：模型看得到「有哪些图、分别是什么」之后，
 // 需要媒体原件时自己调 history_media 传 message_id 即可。索引只带描述不带
@@ -25,23 +35,18 @@ const (
 // 「有没有旧媒体」不看「这句话像不像指代」，在发过图的群里对每条消息都会触发。
 //
 // 描述来自后台识图的缓存，取不到就留空——不编造，也不为此阻塞回复。
-func (r *Runtime) durableMediaIndex(ctx context.Context, event MessageEvent) string {
-	recent := r.contextHistory(event)
-	recentIDs := make(map[string]bool, len(recent))
-	for _, item := range recent {
-		if id := strings.TrimSpace(item.MessageID); id != "" {
-			recentIDs[id] = true
-		}
-	}
+//
+// 这里和读描述的回复准备并行跑，那时还不知道这一轮实际渲染进提示词的历史窗口，所以多收
+// 一些候选（窗口内的会在渲染时剔掉）。
+func (r *Runtime) durableMediaIndex(ctx context.Context, event MessageEvent) []durableMediaIndexEntry {
 	history, _ := r.semanticReferenceHistory(ctx, event)
-
-	lines := make([]string, 0, durableMediaIndexLimit)
-	seen := make(map[string]bool, durableMediaIndexLimit)
+	entries := make([]durableMediaIndexEntry, 0, durableMediaIndexCandidateLimit)
+	seen := make(map[string]bool, durableMediaIndexCandidateLimit)
 	// 由新到旧：越近的媒体越可能被指代，条数被截断时先保住它们。
-	for index := len(history) - 1; index >= 0 && len(lines) < durableMediaIndexLimit; index-- {
+	for index := len(history) - 1; index >= 0 && len(entries) < durableMediaIndexCandidateLimit; index-- {
 		item := history[index]
 		messageID := strings.TrimSpace(item.MessageID)
-		if messageID == "" || messageID == event.MessageID || seen[messageID] || recentIDs[messageID] {
+		if messageID == "" || messageID == event.MessageID || seen[messageID] {
 			continue
 		}
 		if !segmentsHaveReferenceContent(item.Segments) && !quotedMessageHasReferenceContent(item.Quoted) {
@@ -49,8 +54,36 @@ func (r *Runtime) durableMediaIndex(ctx context.Context, event MessageEvent) str
 		}
 		seen[messageID] = true
 		if line := durableMediaIndexLine(ctx, r, item); line != "" {
-			lines = append(lines, line)
+			entries = append(entries, durableMediaIndexEntry{event: item, line: line})
 		}
+	}
+	return entries
+}
+
+// renderDurableMediaIndex 只留下不在本轮历史窗口里的媒体（窗口里的模型本来就看得到），
+// 最多 durableMediaIndexLimit 条，按时间正序。这样它只在窗口往前滑时才变，能放在历史
+// 之前、跟着前缀缓存走。每条消息都在身份隐私代理里登记，message_id 和其他标识一样换成
+// 别名——以前这些行没登记过，有一部分真实消息 ID 原样发给了模型。
+func renderDurableMediaIndex(ctx context.Context, entries []durableMediaIndexEntry, window []MessageEvent) string {
+	inWindow := make(map[string]bool, len(window))
+	for _, item := range window {
+		if id := strings.TrimSpace(item.MessageID); id != "" {
+			inWindow[id] = true
+		}
+	}
+	scope := identityPrivacyScopeFromContext(ctx)
+	lines := make([]string, 0, durableMediaIndexLimit)
+	for _, entry := range entries {
+		if len(lines) == durableMediaIndexLimit {
+			break
+		}
+		if inWindow[strings.TrimSpace(entry.event.MessageID)] {
+			continue
+		}
+		if scope != nil {
+			scope.registerEvent(entry.event)
+		}
+		lines = append(lines, entry.line)
 	}
 	if len(lines) == 0 {
 		return ""
@@ -59,7 +92,7 @@ func (r *Runtime) durableMediaIndex(ctx context.Context, event MessageEvent) str
 	for left, right := 0, len(lines)-1; left < right; left, right = left+1, right-1 {
 		lines[left], lines[right] = lines[right], lines[left]
 	}
-	return "【更早的图片与文件索引，已不在上面的聊天记录里】\n" +
+	return "【更早的图片与文件索引，已不在下面的聊天记录里】\n" +
 		"需要核对历史媒体时调用 history_media 并传入对应 message_id；" +
 		"下面的描述是机器识别的概要，可能有误，不要当成原文逐字引用。\n" +
 		strings.Join(lines, "\n")

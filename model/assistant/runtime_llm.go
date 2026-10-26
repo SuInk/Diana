@@ -1071,6 +1071,10 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 			place(dianaChatHistoryToolName, dianaHistoryImagesToolName).WriteString("\n" + cfg.prompt(promptQuoteHistoryMessageSpec))
 		}
 	}
+	// 跨群历史常驻带一部分，想看更多的由模型自己去查；开关是机器人配置，对谁都一样。
+	if agentEnabled && event.Kind == EventKindGroup && boolValue(cfg.CrossGroupMemoryEnabled, false) && hasTool(dianaChatHistoryToolName) {
+		place(dianaChatHistoryToolName).WriteString("\n" + cfg.prompt(promptCrossGroupMoreSpec))
+	}
 	if agentEnabled && relationship.Owner && hasTool("relationship") {
 		tail.WriteString("\n" + cfg.prompt(promptOwnerRelationshipTargetSpec))
 	}

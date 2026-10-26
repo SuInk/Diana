@@ -94,13 +94,19 @@ func TestSemanticReferenceStillRunsWithoutAgentToolAccess(t *testing.T) {
 	}
 }
 
+// testDurableMediaIndex 按生产的两步走：并行收集候选，再按本轮历史窗口渲染。
+func testDurableMediaIndex(runtime *Runtime) string {
+	event := gateCurrentEvent()
+	return renderDurableMediaIndex(context.Background(), runtime.durableMediaIndex(context.Background(), event), runtime.contextHistory(event))
+}
+
 func TestDurableMediaIndexListsOutOfWindowMedia(t *testing.T) {
 	runtime := mediaGateRuntime(t,
 		gateImageEvent("img-old", 1),
 		gateTextEvent("m2", 2, "第二条"),
 		gateTextEvent("m3", 3, "第三条"),
 	)
-	index := runtime.durableMediaIndex(context.Background(), gateCurrentEvent())
+	index := testDurableMediaIndex(runtime)
 
 	if !strings.Contains(index, "message_id=img-old") {
 		t.Fatalf("index missing the out-of-window image: %q", index)
@@ -113,13 +119,32 @@ func TestDurableMediaIndexListsOutOfWindowMedia(t *testing.T) {
 	}
 }
 
+// 索引里的消息在身份隐私代理里登记过：发给模型时 message_id 换成别名，不留真实 ID。
+func TestDurableMediaIndexAliasesMessageIDs(t *testing.T) {
+	runtime := mediaGateRuntime(t,
+		gateImageEvent("1730247241", 1),
+		gateTextEvent("m2", 2, "第二条"),
+		gateTextEvent("m3", 3, "第三条"),
+	)
+	scope := newIdentityPrivacyScope()
+	ctx := withIdentityPrivacyScope(context.Background(), scope)
+	event := gateCurrentEvent()
+	index := renderDurableMediaIndex(ctx, runtime.durableMediaIndex(ctx, event), runtime.contextHistory(event))
+	if !strings.Contains(index, "1730247241") {
+		t.Fatalf("fixture lost the image: %q", index)
+	}
+	if protected := scope.protectText(index); strings.Contains(protected, "1730247241") || !strings.Contains(protected, "im_message_") {
+		t.Fatalf("real message id reached the model: %q", protected)
+	}
+}
+
 func TestDurableMediaIndexSkipsMediaStillInHistory(t *testing.T) {
 	// RecentContextLimit=2 时最近两条仍在窗口里，模型已经看得到，不该重复列出来。
 	runtime := mediaGateRuntime(t,
 		gateTextEvent("m1", 1, "第一条"),
 		gateImageEvent("img-recent", 2),
 	)
-	if index := runtime.durableMediaIndex(context.Background(), gateCurrentEvent()); index != "" {
+	if index := testDurableMediaIndex(runtime); index != "" {
 		t.Fatalf("index duplicated media that is still in the window: %q", index)
 	}
 }
@@ -130,7 +155,7 @@ func TestDurableMediaIndexEmptyForTextOnlySessions(t *testing.T) {
 		gateTextEvent("m2", 2, "第二条"),
 		gateTextEvent("m3", 3, "第三条"),
 	)
-	if index := runtime.durableMediaIndex(context.Background(), gateCurrentEvent()); index != "" {
+	if index := testDurableMediaIndex(runtime); index != "" {
 		t.Fatalf("text-only session produced a media index: %q", index)
 	}
 }
