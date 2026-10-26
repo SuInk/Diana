@@ -4529,8 +4529,6 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	ctx, finalizeSticker := withFinalizeSticker(ctx)
 	// 本轮调过的工具挂到随后发出的第一条消息上，见 tool_call_memory.go。
 	ctx = withReplyToolTrace(ctx)
-	// 收尾时填了表格的话先画好，正文发出后跟一张图，见 render_finalize.go。
-	ctx, finalizeRender := withFinalizeRender(ctx)
 	// maibot 回复器的语气改写和发送前审核并行，见 reply_tone_parallel.go。
 	ctx, deferredTone := withDeferredReplyTone(ctx)
 	defer deferredTone.stop()
@@ -4694,7 +4692,6 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		// 只同步真正发出去的这一版：审核改写、拦下或发送失败的都到不了这里。
 		r.afterReplyVRChat(event, strings.Join(splitEventChatReply(reply, cfg, event), "\n"))
 		if stickerAllowed {
-			r.sendFinalizeRender(sendCtx, event, finalizeRender.take())
 			r.sendFinalizeSticker(sendCtx, event, stickerQuery, false)
 		}
 		return nil
@@ -4838,9 +4835,6 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 		if _, ok := registry.Get(dianaStickerToolName); ok {
 			agentCfg.FinalizeFields = append(agentCfg.FinalizeFields, stickerFinalizeFields(cfg.StickerReplyOrder)...)
 		}
-		if r.offersRenderFinalizeField(event, registry) {
-			agentCfg.FinalizeFields = append(agentCfg.FinalizeFields, renderFinalizeField())
-		}
 		r.rememberAgentResidencyCatalog(event, registry, relationship.Owner)
 		// 用途只挂在模型调用上（见 runtimeAgentLLMProvider.Generate），不挂在整个 ctx 上：
 		// 工具里各自发起的模型调用有自己的用途，不该被记成主回复。
@@ -4903,7 +4897,6 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 			}
 			text = resp.SilentContent
 		}
-		text = r.applyFinalizeRender(ctx, event, text, resp.FinalizeFields[renderFinalizeFieldName])
 		return r.composeAndPrepareReply(replyerCtx, cfg, event, messages, text)
 	}
 	if mode := imageTextModeFromContext(ctx); mode != nil {

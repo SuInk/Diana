@@ -5,14 +5,21 @@ package assistant
 
 import (
 	"context"
-	"errors"
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
+	"github.com/SuInk/diana/model/agent"
 	"github.com/SuInk/diana/model/llm"
 )
 
 const renderFinalizeTestTable = "| 名次 | 模型 | 得分 |\n|---|---|---:|\n| 1 | A | 100% |\n| 2 | B | 96% |"
+
+const renderFinalizeFieldName = "render"
 
 // renderFinalizeLLMProvider 在收尾时按需填 render；sawField 记下收尾工具是否带了这个字段。
 type renderFinalizeLLMProvider struct {
@@ -33,25 +40,13 @@ func (p *renderFinalizeLLMProvider) Generate(ctx context.Context, req llm.Genera
 		properties, _ := tool.Parameters["properties"].(map[string]any)
 		_, p.sawField = properties[renderFinalizeFieldName]
 		arguments := map[string]any{"content": response.Text}
-		if p.sawField && p.table != "" {
+		if p.table != "" {
 			arguments[renderFinalizeFieldName] = p.table
 		}
 		response.ToolCalls = []llm.ToolCall{{ID: "finalize", Name: tool.Name, Arguments: arguments}}
 		response.Text = ""
 	}
 	return response, nil
-}
-
-func stubFinalizeRenderPNG(t *testing.T, png []byte, err error) *[]string {
-	t.Helper()
-	var rendered []string
-	previous := finalizeRenderPNG
-	finalizeRenderPNG = func(_ *Runtime, _ context.Context, _ MessageEvent, format, content, _ string) ([]byte, error) {
-		rendered = append(rendered, format+":"+content)
-		return png, err
-	}
-	t.Cleanup(func() { finalizeRenderPNG = previous })
-	return &rendered
 }
 
 func renderFinalizeRuntime(t *testing.T, provider *renderFinalizeLLMProvider, browser bool) (*Runtime, *recordingChannel) {
@@ -66,75 +61,136 @@ func renderFinalizeRuntime(t *testing.T, provider *renderFinalizeLLMProvider, br
 	return rt, channel
 }
 
-// 模型收尾时填了表格：正文先发，紧跟一张表格图；表格内容不进正文。
-func TestReplyFinalizeRenderFollowsText(t *testing.T) {
+// 普通榜单回复只发文字；即使内置浏览器可用，收尾协议也不再提供隐式出图字段。
+func TestReplyFinalizeDoesNotOfferRenderField(t *testing.T) {
 	withFastSendTiming(t)
-	rendered := stubFinalizeRenderPNG(t, []byte("png"), nil)
-	provider := &renderFinalizeLLMProvider{capturingLLMProvider: capturingLLMProvider{reply: "前几名见榜单图"}, table: renderFinalizeTestTable}
-	rt, channel := renderFinalizeRuntime(t, provider, true)
-	event := MessageEvent{Kind: EventKindPrivate, UserID: "10001", MessageID: "rank", RawMessage: "来个榜单看看"}
-	if _, err := rt.replyTo(context.Background(), event, event.RawMessage); err != nil {
-		t.Fatal(err)
-	}
-	if !provider.sawField {
-		t.Fatal("agent_finalize did not offer the render field")
-	}
-	if len(*rendered) != 1 || (*rendered)[0] != renderFormatMarkdown+":"+renderFinalizeTestTable {
-		t.Fatalf("rendered = %#v", *rendered)
-	}
-	sent := channel.sentSnapshot()
-	if len(sent) != 2 || !strings.Contains(sent[0].Text, "前几名见榜单图") || strings.Contains(sent[0].Text, "96%") || len(sent[1].ImageURLs) != 1 {
-		t.Fatalf("sent = %#v", sent)
+	for _, browser := range []bool{true, false} {
+		provider := &renderFinalizeLLMProvider{capturingLLMProvider: capturingLLMProvider{reply: "前几名如下[diana-line]1. A：100%[diana-line]2. B：96%"}}
+		rt, channel := renderFinalizeRuntime(t, provider, browser)
+		event := MessageEvent{Kind: EventKindPrivate, UserID: "10001", MessageID: "rank", RawMessage: "来个榜单看看"}
+		if _, err := rt.replyTo(context.Background(), event, event.RawMessage); err != nil {
+			t.Fatal(err)
+		}
+		if provider.sawField {
+			t.Fatal("agent_finalize still offered the render field")
+		}
+		var text strings.Builder
+		for _, message := range channel.sentSnapshot() {
+			if len(message.ImageURLs) != 0 {
+				t.Fatalf("unexpected rendered image: %#v", message)
+			}
+			text.WriteString(message.Text)
+		}
+		if !strings.Contains(text.String(), "96%") {
+			t.Fatalf("ranking lost: %q", text.String())
+		}
 	}
 }
 
-// 画不出来时表格退回正文发文字，数据不能跟着图一起丢。
-func TestReplyFinalizeRenderFailureFallsBackToText(t *testing.T) {
+// 模型可能沿用历史里的旧信封，未声明的 render 字段不再触发任何出图。
+func TestReplyFinalizeIgnoresLegacyRenderField(t *testing.T) {
 	withFastSendTiming(t)
-	stubFinalizeRenderPNG(t, nil, errors.New("chrome missing"))
 	provider := &renderFinalizeLLMProvider{capturingLLMProvider: capturingLLMProvider{reply: "前几名如下"}, table: renderFinalizeTestTable}
 	rt, channel := renderFinalizeRuntime(t, provider, true)
 	event := MessageEvent{Kind: EventKindPrivate, UserID: "10001", MessageID: "rank", RawMessage: "来个榜单看看"}
 	if _, err := rt.replyTo(context.Background(), event, event.RawMessage); err != nil {
 		t.Fatal(err)
 	}
+	if provider.sawField {
+		t.Fatal("agent_finalize offered the removed field")
+	}
 	var text strings.Builder
 	for _, message := range channel.sentSnapshot() {
 		if len(message.ImageURLs) != 0 {
-			t.Fatalf("image sent after render failure: %#v", message)
+			t.Fatalf("legacy field sent an image: %#v", message)
 		}
 		text.WriteString(message.Text + "\n")
 	}
-	if !strings.Contains(text.String(), "前几名如下") || !strings.Contains(text.String(), "2 | B | 96%") || strings.Contains(text.String(), "---") {
-		t.Fatalf("table lost on fallback: %q", text.String())
+	if !strings.Contains(text.String(), "前几名如下") {
+		t.Fatalf("reply lost: %q", text.String())
 	}
 }
 
-// 「网页渲染」插件关着时画不出来，就不给模型这个字段。
-func TestReplyFinalizeRenderFieldNeedsCoreBrowser(t *testing.T) {
-	withFastSendTiming(t)
-	rendered := stubFinalizeRenderPNG(t, []byte("png"), nil)
-	provider := &renderFinalizeLLMProvider{capturingLLMProvider: capturingLLMProvider{reply: "好的"}, table: renderFinalizeTestTable}
-	rt, channel := renderFinalizeRuntime(t, provider, false)
-	event := MessageEvent{Kind: EventKindPrivate, UserID: "10001", MessageID: "hi", RawMessage: "在吗"}
-	if _, err := rt.replyTo(context.Background(), event, event.RawMessage); err != nil {
-		t.Fatal(err)
-	}
-	if provider.sawField || len(*rendered) != 0 || len(channel.sentSnapshot()) != 1 {
-		t.Fatalf("sawField=%v rendered=%v sent=%#v", provider.sawField, *rendered, channel.sentSnapshot())
+func TestRenderDeliveryRuleFollowsAvailableTools(t *testing.T) {
+	rt := NewRuntime(BotConfig{AgentEnabled: true}.WithDefaults(), nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	event := MessageEvent{Kind: EventKindPrivate, UserID: "10001"}
+	for _, tools := range [][]agent.Tool{nil, {newDianaRenderTool(rt, event)}, {newDianaRenderMediaTool(rt, event, nil, RelationshipPolicy{})}} {
+		registry := agent.NewToolRegistry(tools...)
+		prompt := rt.systemPromptWithRelationshipAndAgentTools(event, nil, false, RelationshipPolicy{}, true, registry)
+		if strings.Contains(prompt, promptToolRender) != (len(tools) > 0) {
+			t.Fatalf("render rule presence differs from tool availability: %d tools", len(tools))
+		}
 	}
 }
 
-// 没有发送挂点的调用路径（事件触发、后台任务）不出图，表格直接接在正文后面另起一条。
-func TestApplyFinalizeRenderWithoutHolderAppendsTable(t *testing.T) {
-	rendered := stubFinalizeRenderPNG(t, []byte("png"), nil)
-	rt := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
-	got := rt.applyFinalizeRender(context.Background(), MessageEvent{}, "结论", renderFinalizeTestTable)
-	want := "结论[diana-msg]名次 | 模型 | 得分[diana-line]1 | A | 100%[diana-line]2 | B | 96%"
-	if got != want || len(*rendered) != 0 {
-		t.Fatalf("got %q rendered=%v", got, *rendered)
+// 真实模型与生产人设，渲染工具只记录调用，不启动浏览器，也不向真实会话发送消息。
+// DIANA_TEST_LLM_CONFIG / DIANA_TEST_BOT_CONFIG 指向私有配置，默认随常规测试跳过。
+func TestLiveRenderDeliveryIntent(t *testing.T) {
+	client := liveLLMClient(t)
+	cfg := BotConfig{AgentEnabled: true}
+	if path := strings.TrimSpace(os.Getenv("DIANA_TEST_BOT_CONFIG")); path != "" {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := json.Unmarshal(data, &cfg); err != nil {
+			t.Fatal(err)
+		}
 	}
-	if got := rt.applyFinalizeRender(context.Background(), MessageEvent{}, "结论", "  "); got != "结论" {
-		t.Fatalf("empty table changed text: %q", got)
+	cfg = cfg.WithDefaults()
+	t.Setenv("APP_DB_PATH", filepath.Join(t.TempDir(), "replay.db"))
+	for _, tc := range []struct {
+		name, history, request string
+		wantRender             bool
+	}{
+		{"color_change", "正在讨论实际终端界面的配色修改，目标文件还没有提供。", "粉蓝白安排一下", false},
+		{"ranking", "本轮要整理虚构比赛数据：A 100 分、B 96 分、C 90 分，数据已完整，不需要联网。", "来个榜单看看", false},
+		{"text_only", "有 A、B、C 三种虚构方案，性能分别为 100、96、90，价格分别为 10、8、5。", "用文字帮我比较一下，不要图片", false},
+		{"real_change", "正在讨论终端界面配色。", "按粉蓝白改下实际终端配色，不要给我画效果图", false},
+		{"color_mockup", "正在讨论终端界面的配色设计。", "给我发一张粉蓝白终端配色效果图", true},
+		{"chart", "本轮要整理虚构比赛数据：A 100 分、B 96 分、C 90 分，数据已完整，不需要联网。", "把这三项分数画成柱状图，图片发给我", true},
+	} {
+		if !t.Run(tc.name, func(t *testing.T) {
+			rt := NewRuntime(cfg, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+			event := MessageEvent{Kind: EventKindGroup, GroupID: "replay", UserID: "member", RawMessage: tc.request}
+			var calls atomic.Int64
+			registry := agent.NewToolRegistry(
+				&renderDeliveryReplayTool{Tool: newDianaRenderTool(rt, event), calls: &calls},
+				&renderDeliveryReplayTool{Tool: newDianaRenderMediaTool(rt, event, nil, RelationshipPolicy{}), calls: &calls},
+			)
+			prompt := rt.systemPromptWithRelationshipAndAgentTools(event, nil, false, RelationshipPolicy{}, true, registry)
+			runner, err := agent.NewRunner(client, agent.Config{MaxSteps: 4, CoreTools: []string{dianaRenderToolName, dianaRenderMediaToolName}}, registry)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer runner.Close()
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+			defer cancel()
+			resp, err := runner.Run(ctx, agent.Request{Messages: []llm.Message{
+				{Role: llm.RoleSystem, Content: prompt},
+				{Role: llm.RoleUser, Content: "【历史背景】" + tc.history},
+				{Role: llm.RoleUser, Content: "【当前需要回复的消息】" + tc.request},
+			}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Logf("render calls=%d reply=%s", calls.Load(), resp.Text)
+			if (calls.Load() > 0) != tc.wantRender {
+				t.Fatalf("render calls=%d, wantRender=%v", calls.Load(), tc.wantRender)
+			}
+		}) {
+			// 上游 429/503 时停止本轮回放，避免继续请求同一个受限服务。
+			return
+		}
 	}
+}
+
+type renderDeliveryReplayTool struct {
+	agent.Tool
+	calls *atomic.Int64
+}
+
+func (t *renderDeliveryReplayTool) Run(context.Context, map[string]any) (string, error) {
+	t.calls.Add(1)
+	return `{"ok":true,"message":"图片已经发到会话里了。"}`, nil
 }

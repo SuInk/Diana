@@ -76,7 +76,7 @@ func (t *dianaRenderMediaTool) Name() string { return dianaRenderMediaToolName }
 // 动画都按帧推进，从 0 秒录 duration 秒。
 func (t *dianaRenderMediaTool) Description() string {
 	return `把 HTML 页面或 SVG 渲染成图片、视频或 GIF 发到当前会话。` +
-		`用于卡片、海报、看板、canvas/CSS/JS/SVG 动画等要看效果的场合；要源码文件用 send_file。` +
+		`仅在用户明确要求图片、效果图、视频或 GIF 等成品时使用；普通回复默认文字，修改界面或配色不等于要求发效果图，不得用渲染图代替实际修改。要源码文件用 send_file。` +
 		`页面离线运行，外链脚本、样式、字体、图片、CDN 库都加载不到，资源须内联；svg 不能有脚本。` +
 		`成品由运行时发送，调用后一句话交代即可。`
 }

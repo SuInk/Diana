@@ -1149,6 +1149,9 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 	if agentEnabled && hasTool(dianaImageToolName) {
 		builder.WriteString("\n" + cfg.prompt(promptToolImageSpec))
 	}
+	if agentEnabled && (hasTool(dianaRenderToolName) || hasTool(dianaRenderMediaToolName)) {
+		builder.WriteString("\n" + cfg.prompt(promptToolRenderSpec))
+	}
 	if agentEnabled && hasTool("tts") {
 		builder.WriteString("\n" + cfg.prompt(promptToolTTSSpec))
 	}
