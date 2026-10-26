@@ -54,6 +54,11 @@ func (t *dianaRuntimeModelTool) configuredModelPurpose(key string) modelCatalogE
 		if len(routes) == 0 {
 			entry.Note = map[string]string{mediaSlotTTS: "未配置语音合成模型", mediaSlotSTT: "未配置语音识别模型", mediaSlotVideo: "未配置视频生成模型"}[key]
 		}
+		if key != mediaSlotVideo {
+			// 语音两档以前由插件开关决定，现在插槽配了就生效；照旧明确给出开没开。
+			enabled := len(routes) > 0
+			entry.Enabled = &enabled
+		}
 		return entry
 	}
 	if key == "embedding" {

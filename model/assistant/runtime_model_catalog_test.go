@@ -32,8 +32,9 @@ func TestRuntimeModelCatalogAllPurposes(t *testing.T) {
 	if byPurpose["intent"].Models[0].ModelID != "intent-model" || byPurpose[PurposeMemoryExtract].Models[0].ModelID != "memory-model" {
 		t.Fatalf("purpose override lost: %s", body)
 	}
-	if byPurpose["tts"].Models[0].ModelID != "" || byPurpose["tts"].Note == "" {
-		t.Fatal("external TTS weights were invented")
+	// 语音插槽没配时不能编出模型，也不能显示成已启用。
+	if len(byPurpose["tts"].Models) != 0 || byPurpose["tts"].Note == "" || byPurpose["tts"].Enabled == nil || *byPurpose["tts"].Enabled {
+		t.Fatalf("unconfigured TTS shown as available: %#v", byPurpose["tts"])
 	}
 	if byPurpose["stt"].Enabled == nil || *byPurpose["stt"].Enabled {
 		t.Fatal("disabled STT shown as active")
