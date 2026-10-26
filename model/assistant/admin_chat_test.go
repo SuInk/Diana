@@ -235,7 +235,7 @@ func TestAdminChatUsesOwnerToolSurfaceWithoutSessionTools(t *testing.T) {
 	for _, definition := range first.Tools {
 		declared[definition.Name] = true
 	}
-	for _, name := range []string{"bot_config", "llm_usage", "list_capabilities", "read_file", "tools_load"} {
+	for _, name := range []string{"bot_config", "llm_usage", "list_capabilities", "read_file", "tool_search"} {
 		if !declared[name] {
 			t.Errorf("core tool %s not declared: %v", name, declared)
 		}

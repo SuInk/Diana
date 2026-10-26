@@ -13,6 +13,9 @@ import (
 
 const finalizeToolName = "agent_finalize"
 
+// FinalizeToolName 供调用方引用：CoreTools 只填它，就是「除收尾外全部按需加载」。
+const FinalizeToolName = finalizeToolName
+
 // errEmptyFinalize 标记协议修复重试耗尽后，模型收尾时仍未给出任何正文的失败。
 // 上层按运行失败处理：事件中心记 failed，不再发送「没有生成有效回复」类兜底文案。
 var errEmptyFinalize = errors.New("empty_finalize: 模型收尾时未提供任何正文")

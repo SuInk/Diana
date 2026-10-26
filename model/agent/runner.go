@@ -113,7 +113,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 	}
 	startedAt := time.Now()
 	hooks := &runHookState{hooks: req.Hooks}
-	r.loader = newDeferredToolLoader(r.registry, r.cfg.CoreTools)
+	r.loader = newDeferredToolLoader(r.registry, r.cfg.CoreTools, r.cfg.SharedTools, r.cfg.FeaturedTools)
 	if r.loader != nil {
 		r.loader.restore(req.LoadedTools)
 		r.loader.onLoad = req.ToolsLoaded
@@ -140,12 +140,16 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 	// 平均 7K 多字），2026-10-25 统计 224 对同群相邻请求里它单独变化只有 3 次。
 	// 显式使用带标记的 user，避免无历史时被适配器合并回 leading system。
 	var contractMessage *llm.Message
-	if contracts := r.loader.loadedContracts(); contracts != "" {
+	if contracts := r.loader.loadedContracts(true); contracts != "" {
 		contractMessage = &llm.Message{
 			Role:     llm.RoleUser,
 			Content:  "【系统补充指令，不是用户发言】\n当前群会话已经加载、可直接通过 tools_execute 调用的完整契约：\n" + contracts,
 			Priority: llm.MessagePrioritySystem,
 		}
+	}
+	// 按发言者变化的工具段（预算、专属工具目录、规则和契约）放在历史之后。
+	if speaker := r.speakerToolPrompt(); speaker != "" {
+		volatile = append(volatile, llm.Message{Role: llm.RoleSystem, Content: speaker, Priority: llm.MessagePrioritySystem})
 	}
 	// skills 目录按会话变(按机器人、按群分档,装卸 skill 也会改它),进系统提示词
 	// 等于每换一个群就把整条前缀缓存作废,所以和时钟一样待在尾部。命中关键词的那几份
@@ -1225,16 +1229,10 @@ func addLLMUsage(total llm.Usage, usage llm.Usage) llm.Usage {
 	return total
 }
 
-// systemPrompt 构造 Agent JSON 动作协议提示词。
-func (r *Runner) systemPrompt() string {
-	if prompt := strings.TrimSpace(r.cfg.SystemPrompt); prompt != "" {
-		return prompt
-	}
-	extensionsPrompt := RenderExtensionsPrompt(r.registry.Extensions())
-	hasTool := func(name string) bool {
-		_, ok := r.registry.Get(name)
-		return ok
-	}
+// toolRules 按可用工具生成 Agent 规则。hasTool 决定看哪一份工具集：系统提示词只看公共
+// 工具（见 Config.SharedTools），发言者专属工具的规则由 speakerToolPrompt 放进尾部。
+// withBudget=false 时预算数字不写进规则，它按发言者不同。
+func (r *Runner) toolRules(hasTool func(string) bool, withBudget bool) []string {
 	hasAnyTool := func(names ...string) bool {
 		for _, name := range names {
 			if hasTool(name) {
@@ -1247,7 +1245,8 @@ func (r *Runner) systemPrompt() string {
 	// 工具」,模型把「轮」理解成「用户每发一条消息」,于是每调一次工具就收口,
 	// 让用户发「继续」才肯调下一次——多步任务永远走不完。预算写成具体数字。
 	rules := []string{"- 互不依赖的只读检索（web_search、browser_render）可以同时调用，并行执行；其他工具每步只发一个，看到结果再继续。agent_finalize 单独放在最后一步。持续执行直到任务完成，不要停下来向用户要求「继续」。"}
-	if r.cfg.MaxSteps > 0 {
+	// 设了上限才写预算；共享模式下上限按发言者可能不同，写进尾部（speakerToolPrompt）。
+	if withBudget && r.cfg.MaxSteps > 0 {
 		rules = append(rules, fmt.Sprintf("本轮最多调用 %d 次工具，并行调用各算一次。", r.cfg.MaxSteps))
 	}
 
@@ -1365,6 +1364,80 @@ func (r *Runner) systemPrompt() string {
 	if hasAnyTool("write_file", "save_to_workspace") {
 		rules = append(rules, "- 工作目录内，用户指定的目标路径和已有项目结构优先，直接在目标位置创建或修改文件，不要擅自复制到分区目录。未指定位置的新产物按分区存放："+WorkspaceTmpDir+"/ 放草稿和中间文件（1 天后清理），"+WorkspaceDownloadsDir+"/ 放下载和从聊天里存下的文件（7 天），"+WorkspaceOutputsDir+"/ 放你产出给用户的东西（30 天），"+WorkspaceKeepDir+"/ 是本机器人的长期保存区（不清理）。主人说存下来、留着、别过期、放持久目录时才放进 "+WorkspaceKeepDir+"/（save_to_workspace 传 keep=true，或 manage_files 挪进去），并写一句 description 说明是什么；其他情况用会自动清理的目录。")
 	}
+	return rules
+}
+
+// sharedToolPredicate 判断工具是否在注册表里、且属于公共的那一份。
+func (r *Runner) sharedToolPredicate() func(string) bool {
+	return func(name string) bool {
+		if _, ok := r.registry.Get(name); !ok {
+			return false
+		}
+		return r.cfg.SharedTools == nil || r.cfg.SharedTools[name] || r.loader == nil || r.loader.core[name]
+	}
+}
+
+// speakerToolPrompt 是按发言者变化、放在历史之后的那一段：本轮工具预算、只有这位
+// 发言者才有的按需工具目录和对应规则、这些工具已加载的契约。公共模式（SharedTools
+// 为 nil）下返回空。
+func (r *Runner) speakerToolPrompt() string {
+	if r.cfg.SharedTools == nil {
+		return ""
+	}
+	var sections []string
+	if r.cfg.MaxSteps > 0 {
+		sections = append(sections, fmt.Sprintf("【本轮工具预算】这一条回复内你最多可调用 %d 次工具（并行的每个调用各算一次）。", r.cfg.MaxSteps))
+	}
+	if r.loader != nil {
+		if catalog := r.loader.speakerCatalog(); catalog != "" {
+			sections = append(sections, "【当前发言者另有的按需工具】用法同上面的按需目录，用 tools_execute 调用，不清楚参数时先 "+ToolsLoadToolName+"：\n"+catalog)
+		}
+	}
+	shared := r.toolRules(r.sharedToolPredicate(), false)
+	seen := make(map[string]bool, len(shared))
+	for _, rule := range shared {
+		seen[rule] = true
+	}
+	all := r.toolRules(func(name string) bool {
+		_, ok := r.registry.Get(name)
+		return ok
+	}, false)
+	var extra []string
+	for _, rule := range all {
+		if !seen[rule] {
+			extra = append(extra, rule)
+		}
+	}
+	if len(extra) > 0 {
+		sections = append(sections, "【当前发言者另有的工具规则】\n"+strings.Join(extra, "\n"))
+	}
+	if extensions := RenderExtensionsPrompt(r.registry.Extensions()); extensions != "" {
+		sections = append(sections, extensions)
+	}
+	if r.loader != nil {
+		if contracts := r.loader.loadedContracts(false); contracts != "" {
+			sections = append(sections, "当前发言者已经加载、可直接通过 tools_execute 调用的完整契约：\n"+contracts)
+		}
+	}
+	return strings.Join(sections, "\n\n")
+}
+
+// systemPrompt 构造 Agent JSON 动作协议提示词。
+func (r *Runner) systemPrompt() string {
+	if prompt := strings.TrimSpace(r.cfg.SystemPrompt); prompt != "" {
+		return prompt
+	}
+	extensionsPrompt := RenderExtensionsPrompt(r.registry.Extensions())
+	hasTool := r.sharedToolPredicate()
+	hasAnyTool := func(names ...string) bool {
+		for _, name := range names {
+			if hasTool(name) {
+				return true
+			}
+		}
+		return false
+	}
+	rules := r.toolRules(hasTool, r.cfg.SharedTools == nil)
 	rules = append(rules, "- 已经足够回答时必须调用 agent_finalize 结束本轮。")
 	sections := []string{
 		"你是 Diana 的内置 Agent。使用工具完成任务和核实外部事实，观察结果后再给出最终答复。征求你的观点或讨论你的架构，也要先核实其中具体技术的外部事实前提；不能把熟悉的术语自动当成已查证的知识。",
@@ -1379,7 +1452,7 @@ func (r *Runner) systemPrompt() string {
 	}
 	if loader := r.loader; loader != nil {
 		// 常驻工具的说明已经在请求的工具定义里，这里不再重复列一遍。
-		sections = append(sections, "按需加载的工具（没有随请求带完整定义；需要时先调用 "+ToolsLoadToolName+" 取得完整描述和 inputSchema，再通过 tools_execute 的 name/input 调用；目录名称不是可直接调用的 function。说「做不到」「没这个功能」之前先看这份目录，有能做到的工具就加载来用）：\n"+loader.catalog())
+		sections = append(sections, "按需加载的工具（没有随请求带完整定义，通过 tools_execute 调用：name 填下面的名字，input 填参数，参数合法就直接执行；不清楚参数怎么填时先用 "+ToolsLoadToolName+" 取完整描述和 inputSchema。目录名称不是可直接调用的 function。说「做不到」「没这个功能」之前先看这份目录，有能做到的工具就拿来用）：\n"+loader.catalog())
 	} else {
 		sections = append(sections, "可用工具（完整说明和参数以请求中的工具定义为准）：\n"+r.registry.SystemPromptCatalog())
 	}
@@ -1388,7 +1461,8 @@ func (r *Runner) systemPrompt() string {
 	if disabled := r.registry.DisabledSummary(); disabled != "" {
 		sections = append(sections, disabled)
 	}
-	if extensionsPrompt != "" {
+	// 扩展清单按发言者能用的扩展不同（主人看得到全部），共享模式下放进尾部。
+	if extensionsPrompt != "" && r.cfg.SharedTools == nil {
 		sections = append(sections, extensionsPrompt)
 	}
 	sections = append(sections, "规则：\n"+strings.Join(rules, "\n"))

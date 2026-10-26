@@ -89,7 +89,7 @@ func TestRunnerKeepsAllToolDefinitionsWithoutCoreTools(t *testing.T) {
 
 func TestToolsLoadRejectsUnknownNamesAndSystemCatalogStaysStable(t *testing.T) {
 	registry := NewToolRegistry(&countingTool{name: "common"}, &countingTool{name: "rare"})
-	loader := newDeferredToolLoader(registry, []string{"common"})
+	loader := newDeferredToolLoader(registry, []string{"common"}, nil, nil)
 	before := loader.catalog()
 	if _, err := loader.Run(context.Background(), map[string]any{"names": []any{"missing"}}); err == nil {
 		t.Fatal("unknown tool accepted")
@@ -101,7 +101,7 @@ func TestToolsLoadRejectsUnknownNamesAndSystemCatalogStaysStable(t *testing.T) {
 	if after := loader.catalog(); after != before {
 		t.Fatalf("catalog changed after loading; prompt cache would break:\n%s\n---\n%s", before, after)
 	}
-	if names := strings.Join(toolDefinitionNames(loader.filter(registry.Definitions())), ","); names != "common,tools_load,tools_execute" {
+	if names := strings.Join(toolDefinitionNames(loader.filter(registry.Definitions())), ","); names != "common,tool_search,tools_execute" {
 		t.Fatalf("filtered = %s", names)
 	}
 }
@@ -109,7 +109,7 @@ func TestToolsLoadRejectsUnknownNamesAndSystemCatalogStaysStable(t *testing.T) {
 func TestDeferredDefinitionsRemainByteStable(t *testing.T) {
 	registry := NewToolRegistry(&countingTool{name: "common"}, &countingTool{name: webSearchToolName}, &countingTool{name: "rare"})
 	r, _ := NewRunner(&scriptedClient{}, Config{CoreTools: []string{"common", webSearchToolName}}, registry)
-	r.loader = newDeferredToolLoader(registry, r.cfg.CoreTools)
+	r.loader = newDeferredToolLoader(registry, r.cfg.CoreTools, nil, nil)
 	before, _ := json.Marshal(r.turnDefinitions(false))
 	if _, err := r.loader.Run(context.Background(), map[string]any{"names": []string{"rare"}}); err != nil {
 		t.Fatal(err)
@@ -158,7 +158,10 @@ type schemaDispatchTool struct {
 }
 
 func (t *schemaDispatchTool) InputSchema() map[string]any { return t.schema }
-func TestDeferredDispatchRejectsBypassAndInvalidInput(t *testing.T) {
+
+// 按需工具不必先 tool_search：直接点名或直接 tools_execute，参数合法就执行；参数不合法、
+// 工具已移除或不存在时照旧拒绝，且报错不回显非法值。
+func TestDeferredDispatchRunsValidCallsAndRejectsInvalidInput(t *testing.T) {
 	for _, native := range []bool{false, true} {
 		for _, name := range []string{"diana.rare", "mcp__demo__rare"} {
 			for _, kind := range []string{"direct", "direct_after_load", "unloaded", "missing", "type", "enum", "extra", "removed", "changed", "empty", "no_input", "array_input", "unknown", "valid"} {
@@ -214,7 +217,7 @@ func TestDeferredDispatchRejectsBypassAndInvalidInput(t *testing.T) {
 						t.Fatal(err)
 					}
 					want := 0
-					if kind == "valid" || kind == "direct_after_load" {
+					if kind == "valid" || kind == "direct_after_load" || kind == "direct" || kind == "unloaded" {
 						want = 1
 					}
 					if tool.calls != want {
@@ -248,7 +251,8 @@ func TestDeferredDispatchRejectsBypassAndInvalidInput(t *testing.T) {
 	}
 }
 
-func TestDeferredLoadedStateResetsEachRun(t *testing.T) {
+// 每次运行都从空的加载状态开始，但不需要重新加载：下一次直接 tools_execute 也能执行。
+func TestDeferredToolRunsInLaterRunWithoutReload(t *testing.T) {
 	tool := &countingTool{name: "rare"}
 	client := &dispatchTestClient{replies: []*llm.GenerateResponse{loadReply(true, "rare"), executeReply(true, "rare", map[string]any{})}}
 	runner, _ := NewRunner(client, Config{MaxSteps: 4, CoreTools: []string{"common"}}, NewToolRegistry(&countingTool{name: "common"}, tool))
@@ -260,7 +264,7 @@ func TestDeferredLoadedStateResetsEachRun(t *testing.T) {
 	if _, err := runner.Run(context.Background(), req); err != nil {
 		t.Fatal(err)
 	}
-	if tool.calls != 1 {
+	if tool.calls != 2 {
 		t.Fatalf("calls=%d", tool.calls)
 	}
 }
@@ -268,7 +272,7 @@ func TestDeferredLoadedStateResetsEachRun(t *testing.T) {
 func TestDeferredContractBoundsAreAtomicAndNeverTruncated(t *testing.T) {
 	tool := &longDescriptionTestTool{description: strings.Repeat("完整描述", 3000)}
 	registry := NewToolRegistry(&countingTool{name: "common"}, tool)
-	loader := newDeferredToolLoader(registry, []string{"common"})
+	loader := newDeferredToolLoader(registry, []string{"common"}, nil, nil)
 	if _, err := loader.Run(context.Background(), map[string]any{"names": []string{tool.Name(), "missing"}}); err == nil || len(loader.loaded) != 0 {
 		t.Fatal("partial load committed")
 	}
@@ -401,11 +405,8 @@ func TestDeferredParallelCallsPreserveOriginalBatch(t *testing.T) {
 			if _, err := runner.Run(context.Background(), Request{Messages: []llm.Message{{Role: llm.RoleUser, Content: "test"}}}); err != nil {
 				t.Fatal(err)
 			}
-			want := 1
-			if reject {
-				want = 0
-			}
-			if first.calls != want || second.calls != 0 {
+			// 没先加载也照样执行（参数合法），批里第二个调用依旧按串行规则被拦下。
+			if first.calls != 1 || second.calls != 0 {
 				t.Fatal("parallel execution rule broken")
 			}
 			messages := client.requests[len(client.requests)-1].Messages
@@ -430,7 +431,7 @@ func TestDeferredParallelCallsPreserveOriginalBatch(t *testing.T) {
 
 func TestDeferredProtocolRepairLimitDoesNotExecuteTargets(t *testing.T) {
 	tool := &countingTool{name: "rare"}
-	client := &dispatchTestClient{replies: []*llm.GenerateResponse{executeReply(true, "rare", map[string]any{}), executeReply(true, "rare", map[string]any{})}}
+	client := &dispatchTestClient{replies: []*llm.GenerateResponse{executeReply(true, "invented", map[string]any{}), executeReply(true, "invented", map[string]any{})}}
 	runner, _ := NewRunner(client, Config{CoreTools: []string{"common"}, ProtocolRepairLimit: 2}, NewToolRegistry(&countingTool{name: "common"}, tool))
 	result, err := runner.Run(context.Background(), Request{Messages: []llm.Message{{Role: llm.RoleUser, Content: "test"}}})
 	if err != nil {
@@ -441,16 +442,20 @@ func TestDeferredProtocolRepairLimitDoesNotExecuteTargets(t *testing.T) {
 	}
 }
 
-func TestDeferredNewCapabilityStillRequiresLoad(t *testing.T) {
+// 运行中新注册的工具也走按需调度：进目录，直接调用时按它的定义校验后执行。
+func TestDeferredNewCapabilityGoesThroughDispatcher(t *testing.T) {
 	registry := NewToolRegistry(&countingTool{name: "common"})
-	loader := newDeferredToolLoader(registry, []string{"common"})
+	loader := newDeferredToolLoader(registry, []string{"common"}, nil, nil)
 	if loader == nil {
 		t.Fatal("dispatcher disabled for future capabilities")
 	}
 	rare := &countingTool{name: "new"}
 	registry.Register(rare)
-	if _, err := loader.dispatch(llmAction{Action: "tool", Tool: rare.Name(), Input: map[string]any{}}); err == nil {
-		t.Fatal("new deferred tool bypassed dispatcher")
+	if _, err := loader.dispatch(llmAction{Action: "tool", Tool: rare.Name(), Input: map[string]any{}}); err != nil {
+		t.Fatalf("new deferred tool rejected: %v", err)
+	}
+	if _, loaded := loader.loaded[rare.Name()]; !loaded {
+		t.Fatal("new deferred tool not recorded as loaded")
 	}
 	if !strings.Contains(loader.catalog(), "- new:") {
 		t.Fatal("new capability missing from catalog")
@@ -458,7 +463,7 @@ func TestDeferredNewCapabilityStillRequiresLoad(t *testing.T) {
 }
 
 func TestDeferredTargetCannotMutateProviderEnvelope(t *testing.T) {
-	loader := newDeferredToolLoader(NewToolRegistry(&countingTool{name: "rare"}), []string{"common"})
+	loader := newDeferredToolLoader(NewToolRegistry(&countingTool{name: "rare"}), []string{"common"}, nil, nil)
 	if _, err := loader.Run(context.Background(), map[string]any{"names": []string{"rare"}}); err != nil {
 		t.Fatal(err)
 	}
@@ -482,7 +487,7 @@ func TestToolsLoadSeparatesUnknownToolFromDeniedTool(t *testing.T) {
 	}
 	defer view.Close()
 	view.Retain(map[string]bool{"common": true})
-	loader := newDeferredToolLoader(view, []string{"common"})
+	loader := newDeferredToolLoader(view, []string{"common"}, nil, nil)
 
 	_, err = loader.Run(context.Background(), map[string]any{"names": []any{"mcp__probe__ping"}})
 	if err == nil || !strings.Contains(err.Error(), "没有权限") {
@@ -499,7 +504,7 @@ func TestToolsLoadSeparatesUnknownToolFromDeniedTool(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer ownerView.Close()
-	ownerLoader := newDeferredToolLoader(ownerView, []string{"common"})
+	ownerLoader := newDeferredToolLoader(ownerView, []string{"common"}, nil, nil)
 	if _, err := ownerLoader.Run(context.Background(), map[string]any{"names": []any{"mcp__probe__ping"}}); err != nil {
 		t.Fatalf("owner load failed: %v", err)
 	}
@@ -516,7 +521,7 @@ func TestToolsExecuteReportsRevokedToolAsPermission(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer view.Close()
-	loader := newDeferredToolLoader(view, []string{"common"})
+	loader := newDeferredToolLoader(view, []string{"common"}, nil, nil)
 	if _, err := loader.Run(context.Background(), map[string]any{"names": []any{"mcp__probe__ping"}}); err != nil {
 		t.Fatal(err)
 	}
@@ -581,15 +586,15 @@ func TestDeferredDispatchReportsInventedToolAsMissing(t *testing.T) {
 			}
 		}
 	}
-	// 真正存在的延迟工具没加载就直接调用：不执行，但当场加载并把契约交回去。
+	// 真正存在的延迟工具没加载就直接调用：参数合法就当场执行。
 	client := &dispatchTestClient{replies: []*llm.GenerateResponse{dispatchReply(false, "browser_screenshot", map[string]any{})}}
 	runner, _ := NewRunner(client, Config{MaxSteps: 5, CoreTools: []string{"common"}}, registry)
 	result, err := runner.Run(context.Background(), Request{Messages: []llm.Message{{Role: llm.RoleUser, Content: "截个图"}}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !result.Steps[0].Skipped || !strings.Contains(result.Steps[0].Error, "还没加载") || !strings.Contains(result.Steps[0].Error, `"inputSchema"`) {
-		t.Fatalf("existing deferred tool: %q", result.Steps[0].Error)
+	if result.Steps[0].Skipped || result.Steps[0].Tool != "browser_screenshot" {
+		t.Fatalf("existing deferred tool: %#v", result.Steps[0])
 	}
 }
 
@@ -615,13 +620,14 @@ func TestDeferredDirectCallRunsLoadedTool(t *testing.T) {
 	}
 }
 
-// 没加载过的延迟工具被直接调用时不执行：模型只见过目录里的一行，没读过完整描述里的
-// 使用约束。当场加载并把契约连同报错交回，下一步直接调用就能执行，只多一轮而不是两轮。
-func TestDeferredDirectCallLoadsUnloadedToolWithoutRunning(t *testing.T) {
-	rare := &countingTool{name: "reminder"}
+// 没加载过的按需工具被直接调用：参数合法就执行，加载状态照样落到会话里；参数不合法
+// 才不执行，把完整契约连同报错交回，下一步照着重新调用。
+func TestDeferredDirectCallRunsUnloadedTool(t *testing.T) {
+	schema := toolObjectSchema([]string{"query"}, map[string]any{"query": map[string]any{"type": "string"}})
+	rare := &schemaDispatchTool{countingTool: countingTool{name: "reminder"}, schema: schema}
 	var persisted []string
 	client := &dispatchTestClient{replies: []*llm.GenerateResponse{
-		dispatchReply(true, "reminder", map[string]any{"query": "x"}),
+		dispatchReply(true, "reminder", map[string]any{"wrong": 1}),
 		dispatchReply(true, "reminder", map[string]any{"query": "x"}),
 	}}
 	runner, _ := NewRunner(client, Config{MaxSteps: 5, CoreTools: []string{"common"}}, NewToolRegistry(&countingTool{name: "common"}, rare))
@@ -632,14 +638,12 @@ func TestDeferredDirectCallLoadsUnloadedToolWithoutRunning(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rare.calls != 1 || len(result.Steps) != 2 || !result.Steps[0].Skipped || !strings.Contains(result.Steps[0].Error, `"name":"reminder"`) {
+	if rare.calls != 1 || len(result.Steps) != 2 || !result.Steps[0].Skipped || result.Steps[1].Skipped {
 		t.Fatalf("calls=%d steps=%#v", rare.calls, result.Steps)
 	}
-	// 顺手加载的状态和 tools_load 一样落到会话里。
 	if !reflect.DeepEqual(persisted, []string{"reminder"}) {
 		t.Fatalf("persisted=%v", persisted)
 	}
-	// 给模型的修正消息里要带上完整契约。
 	found := false
 	for _, message := range client.requests[1].Messages {
 		if message.ToolCallID == "call-reminder" && strings.Contains(message.Content, `"inputSchema"`) {
@@ -662,7 +666,7 @@ func TestDeferredDirectCallKeepsPermissionChecks(t *testing.T) {
 	}
 	defer memberView.Close()
 	memberView.Retain(map[string]bool{"common": true})
-	memberLoader := newDeferredToolLoader(memberView, []string{"common"})
+	memberLoader := newDeferredToolLoader(memberView, []string{"common"}, nil, nil)
 	memberLoader.restore([]string{"mcp__probe__ping"})
 	if _, err := memberLoader.dispatch(llmAction{Action: "tool", Tool: "mcp__probe__ping", Input: map[string]any{}}); err == nil || !strings.Contains(err.Error(), "没有权限") {
 		t.Fatalf("member direct call error = %v", err)
@@ -676,7 +680,7 @@ func TestDeferredDirectCallKeepsPermissionChecks(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer ownerView.Close()
-	ownerLoader := newDeferredToolLoader(ownerView, []string{"common"})
+	ownerLoader := newDeferredToolLoader(ownerView, []string{"common"}, nil, nil)
 	ownerLoader.restore([]string{"mcp__probe__ping"})
 	if _, err := ownerLoader.dispatch(llmAction{Action: "tool", Tool: "mcp__probe__ping", Input: map[string]any{}}); err != nil {
 		t.Fatalf("owner direct call: %v", err)

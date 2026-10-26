@@ -168,9 +168,10 @@ func TestParallelReadsRespectDeferredContracts(t *testing.T) {
 			if _, err := runner.Run(context.Background(), Request{Messages: []llm.Message{{Role: llm.RoleUser, Content: "research"}}}); err != nil {
 				t.Fatal(err)
 			}
-			want := 0
-			if kind == "valid" {
-				want = 1
+			// 没加载也能直接并行执行；参数不合法的那一批照旧不执行。
+			want := 1
+			if kind == "invalid" {
+				want = 0
 			}
 			if search.calls != want || render.calls != want {
 				t.Fatalf("%s: search=%d render=%d want each %d", kind, search.calls, render.calls, want)

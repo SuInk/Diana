@@ -157,6 +157,14 @@ type Config struct {
 	// CoreTools 是每一步都带完整定义的工具；其余工具按需加载，见 deferred_tools.go。
 	// 留空时全部工具都带完整定义。
 	CoreTools []string
+	// SharedTools 列出「按需目录里对谁都一样」的工具：它们的目录行和使用规则进系统
+	// 提示词，已加载契约放在历史之前。注册表里其余工具（主人专属、群管理员才放开的
+	// 扩展等）按发言者变化，目录行、规则和契约都放进历史之后的尾部，免得主人和群友
+	// 交替说话时整段前缀缓存从工具目录处断开。nil 表示全部当作公共工具。
+	SharedTools map[string]bool
+	// FeaturedTools 在按需目录里写完整描述而不是压成一行：常用、或者「什么时候该用」
+	// 只写在描述里的工具（戳一戳、群管），压短了模型就不会想到去加载。
+	FeaturedTools []string
 	// ToolResultReminder 非空时，工具跑完后的那一步规划在请求末尾临时带上这段提醒，
 	// 不写进上下文：离生成位置最近，多步之后也不会叠加。
 	ToolResultReminder string

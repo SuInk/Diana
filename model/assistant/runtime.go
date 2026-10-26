@@ -4832,6 +4832,8 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 		// 常驻名单要等注册表建好才算得出来：名单记的是插件、MCP 服务和工具的 ID，
 		// 得知道这一轮到底注册了哪些工具、哪条 MCP 和插件各带了哪几个。
 		agentCfg.CoreTools = r.agentCoreTools(event, registry)
+		agentCfg.SharedTools = r.sharedAgentTools(event)
+		agentCfg.FeaturedTools = replyFeaturedTools
 		if _, ok := registry.Get(dianaStickerToolName); ok {
 			agentCfg.FinalizeFields = append(agentCfg.FinalizeFields, stickerFinalizeFields(cfg.StickerReplyOrder)...)
 		}
@@ -4961,43 +4963,50 @@ func (p *runtimeAgentLLMProvider) Generate(ctx context.Context, req llm.Generate
 	return wrapped.Generate(ctx, req)
 }
 
-// replyAgentCoreTools 是主回复每一步都带完整定义的工具，其余按需加载（agent.Config.CoreTools）。
+// replyAgentCoreTools 是主回复每一步都带完整定义的工具：只剩收尾，其余全部按需加载
+// （agent.Config.CoreTools；名单为空等于不按需，所以留 agent_finalize 占位）。
 //
-// 门槛是「用到它的 Agent 运行占多少」，不是调用次数：常驻的代价按请求算，收益按运行算，
-// 一次运行里连调五次同一个工具也只省下一次 tools_load。近 7 天线上 719 次 Agent 运行，
-// 按 trace 去重后 web_search 273（38%）、history_media 94（13%）、github 76（11%）、
-// image 59（8%）、chat_history 57（8%）、browser_render 48（7%）、capabilities 47（7%）、
-// thread_state 23（3%）、poke 8（1%）。github 只在开了仓库插件、且本次会话有权限时才注册，
-// 在那些群里是 76/387≈20%。
+// 以前 web_search、platform 等 10 个工具常驻，tools 数组按发言者身份不同（platform 的
+// 群管操作、主人专属工具），主人、管理员和群友交替说话时前缀从这里断开。全部按需后
+// tools 数组只有 agent_finalize、tool_search、tools_execute，对谁都一样。2026-10-26 用
+// 生产请求经 deepseek-flash 回放 112 条、新旧各两次：第一步选对工具 163/224 对 164/224，
+// 取得定义后第二步 83/88 直接执行了它；代价是一个群第一次用某个工具时多一步。
 //
-// github 和 capabilities 补进来：171 次用到 tools_load 的运行里，有 71 次加载的只有这两个
-// 之一，占全部运行的 10%——这一步换来的只是一次多余的模型往返。
-//
-// thread_state 挪出去：它的用法整段写在 promptToolThreadState 里，提示词点了名，模型知道
-// 该加载什么，挪出去只在 3% 的运行里多一步。poke 留下的理由正相反——「什么时候该戳」只写在
-// 它自己的描述里，目录行压到 120 字就没了，挪出去等于这个工具不会再被用；它只在 OneBot
-// 会话里注册。
-//
-// platform 常驻，理由和 poke 一样不在使用率（近 7 天 2790 次运行里只有 18 次用到）：
-// 按需加载时，模型碰到禁言、群公告这类请求常常不去加载，直接凭印象说「我不是管理员」
-// 「平台没这功能」就拒了。09-27 群主要求全员禁言，四轮里两轮没加载就拒绝。它的 schema
-// 按发言人身份多一组群管操作，群主、管理员说话那一轮的前缀缓存会和普通成员分开。
-//
-// say（中途说一句）常驻：它的用处就是在动手前先开口，按需加载就得先多走一步
-// tools_load，「先说一句」反而慢了半拍；描述很短，每轮多带的开销可以忽略。
-//
-// 改这份名单会改请求里的 tools 数组，等于把所有会话的前缀缓存清一次，别为一两个百分点反复调。
-var replyAgentCoreTools = []string{
+// 原先常驻、或「什么时候该用」只写在描述里的工具（戳一戳、群管）进 replyFeaturedTools，
+// 在目录里写完整描述：目录在缓存前缀里，多写几百字几乎不花钱，压成一行模型就不会想到去加载。
+var replyAgentCoreTools = []string{agent.FinalizeToolName}
+
+// replyFeaturedTools 在按需目录里写完整描述，见 replyAgentCoreTools。
+var replyFeaturedTools = []string{
 	dianaInterimMessageToolName,
 	agent.WebSearchToolName,
 	dianaHistoryImagesToolName,
-	dianaGitHubToolName,
 	dianaImageToolName,
 	dianaChatHistoryToolName,
 	"browser_render",
 	"capabilities",
 	dianaPokeToolName,
 	dianaPlatformToolName,
+}
+
+// speakerVariantTools 是对非主人开放、但描述随发言者不同的工具：放进公共目录会让
+// 前缀按人分叉，所以和主人专属工具一样放到尾部。
+var speakerVariantTools = []string{
+	dianaGitHubToolName,
+	dianaSubscriptionToolName,
+	dianaCrossSessionToolName,
+	"browser_open", "browser_text", "browser_click", "browser_type", "browser_tabs", "browser_screenshot",
+}
+
+// sharedAgentTools 是本群非主人发言者都拿得到、且描述对谁都一样的工具：它们的目录行、
+// 规则和契约放进系统提示词，其余按发言者放到尾部（agent.Config.SharedTools）。
+// 只看群配置、不看本轮发言者，所以同一个群里对谁都是同一份。
+func (r *Runtime) sharedAgentTools(event MessageEvent) map[string]bool {
+	shared := r.allowedAgentToolNamesForEvent(event, RelationshipPolicy{})
+	for _, name := range speakerVariantTools {
+		delete(shared, name)
+	}
+	return shared
 }
 
 type replyRuleDecision struct {

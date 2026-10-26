@@ -57,7 +57,7 @@ func (p *reaskProvider) Generate(ctx context.Context, req llm.GenerateRequest) (
 		}
 		return finalize("调查结果：确有其事")
 	case strings.Contains(last, "@42 查一下"):
-		return &llm.GenerateResponse{ToolCalls: []llm.ToolCall{{ID: "t1", Name: "chat_history", Arguments: map[string]any{}}}}, nil
+		return &llm.GenerateResponse{ToolCalls: []llm.ToolCall{{ID: "t1", Name: "chat_history", Arguments: map[string]any{"operation": "recent"}}}}, nil
 	}
 	p.t.Errorf("unexpected research request: last=%q", last)
 	return finalize("意外的请求")
