@@ -1371,6 +1371,11 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
       ...(bot ? { bot, profile_dir: `/data/browser-box/profiles/${bot}/profile` } : {})
     };
   };
+  // 演示里没有真实的语音服务，页面照常能看；真打电话时 WebSocket 连不上会如实报没接通。
+  if (path === "/api/assistant/call" && method === "GET") {
+    const profile = url.searchParams.get("profile") || "demo";
+    return json({ bot_id: profile, bot_name: "Diana", platform: "onebot-v11", stt: true, tts: true });
+  }
   if (path === "/api/browser-box/status" && method === "GET") return json(demoBrowserBoxStatus());
   // 打开浏览器页会自动拉起；演示里不起进程，照实回「没在跑」，别让页面弹错。
   if (path === "/api/browser-box/start" && method === "POST") return json({ status: demoBrowserBoxStatus() });

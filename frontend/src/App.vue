@@ -154,6 +154,18 @@
         >
           <MessageCircle :size="16" aria-hidden="true" />
         </button>
+        <!-- 语音通话和管理对话一样是随时要用的入口，挨着放。 -->
+        <button
+          class="btn ghost small icon-only topbar-chat"
+          :class="{ active: currentView === 'call' }"
+          type="button"
+          title="和机器人语音通话"
+          aria-label="语音通话"
+          :aria-pressed="currentView === 'call'"
+          @click="go('call')"
+        >
+          <Phone :size="16" aria-hidden="true" />
+        </button>
         <a
           class="btn ghost small icon-only topbar-repo"
           :href="repositoryURL"
@@ -223,6 +235,7 @@ import {
   FolderOpen,
   LayoutGrid,
   MessageCircle,
+  Phone,
   LogOut,
   PanelLeftClose,
   PanelLeftOpen,
@@ -263,6 +276,7 @@ import BrandLogo from "./components/BrandLogo.vue";
 // 保持稳定，配合 KeepAlive 后只挂载一次，切页回来直接复用已有 DOM 和数据。
 const RecordsView = defineAsyncComponent(() => import("./views/RecordsView.vue"));
 const AdminChatView = defineAsyncComponent(() => import("./views/AdminChatView.vue"));
+const CallView = defineAsyncComponent(() => import("./views/CallView.vue"));
 const TasksView = defineAsyncComponent(() => import("./views/TasksView.vue"));
 const SetupWizard = defineAsyncComponent(() => import("./views/SetupWizard.vue"));
 const LLMView = defineAsyncComponent(() => import("./views/LLMView.vue"));
@@ -280,6 +294,7 @@ const VIEW_CACHE_LIMIT = 16;
 const viewComponents: Record<ViewID, Component> = {
   dashboard: DashboardView,
   "admin-chat": AdminChatView,
+  call: CallView,
   events: RecordsView,
   tasks: TasksView,
   setup: SetupWizard,
@@ -391,6 +406,7 @@ const SETUP_DISMISS_KEY = "dqb-next:setup-seen";
 const viewTitles: Record<ViewID, string> = {
   dashboard: "总览",
   "admin-chat": "管理对话",
+  call: "语音通话",
   browser: "浏览器",
   workspace: "文件",
   events: "运行记录",
@@ -520,6 +536,7 @@ function navIcon(id: ViewID): Component {
   const icons: Partial<Record<ViewID, Component>> = {
     dashboard: LayoutGrid,
     "admin-chat": MessageCircle,
+    call: Phone,
     events: Activity,
     tasks: CalendarClock,
     provider: BrainCircuit,

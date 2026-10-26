@@ -69,7 +69,8 @@ func voiceTTSSettingsFromParams(params map[string]string) voiceTTSSettings {
 // voiceTTSToolForEvent 取这条消息能用的语音合成工具。只在 OneBot 上发得出 QQ 语音，
 // 其他平台和插槽没配时都没有。
 func (r *Runtime) voiceTTSToolForEvent(ctx context.Context, event MessageEvent) (*dianaTTSTool, voiceTTSSettings, bool) {
-	if !IsOneBotPlatform(r.currentPlatform(event)) {
+	// 通话里回复本来就会被念出来，再挂 tts 工具只会多发一条语音文件。
+	if event.voiceCall || !IsOneBotPlatform(r.currentPlatform(event)) {
 		return nil, voiceTTSSettings{}, false
 	}
 	routes := r.mediaSlotRoutes(withModelConfigEvent(ctx, event), mediaSlotTTS)

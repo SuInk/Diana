@@ -7189,7 +7189,7 @@ func (r *Runtime) sendDecorated(ctx context.Context, event MessageEvent, reply s
 	releaseBatch := r.lockReplyBatch(event)
 	defer releaseBatch()
 
-	if IsOneBotPlatform(platform) && !chatSplitLimitsForEvent(cfg, event).SingleMessage && shouldUseForwardReplyFor(cfg, reply, chunks) {
+	if !event.voiceCall && IsOneBotPlatform(platform) && !chatSplitLimitsForEvent(cfg, event).SingleMessage && shouldUseForwardReplyFor(cfg, reply, chunks) {
 		messageID, err := r.sendForwardReplyWithResult(ctx, event, reply, cfg)
 		if err == nil {
 			if messageID == "" {
@@ -7362,6 +7362,9 @@ func (r *Runtime) sendChannelPayloadWithRetry(ctx context.Context, msg OutgoingM
 		}
 		var result map[string]any
 		typingIndicatorFromContext(ctx).pause()
+		if result, ok := deliverToVoiceCall(ctx, msg); ok {
+			return result, nil
+		}
 		if resultChannel, ok := channel.(ResultChannel); ok {
 			result, lastErr = resultChannel.SendWithResult(ctx, msg)
 		} else {
@@ -9107,7 +9110,11 @@ func splitReply(reply string, chunkSize int) []string {
 // splitChatReply 把回复切成实际要发的几条，每条去掉句号（见 chat_periods.go）和行尾的
 // 文字表情（见 chat_text_stickers.go）。
 func splitChatReply(reply string, limits chatSplitLimits) []string {
-	return stripBubbleTextStickers(stripBubblePeriods(splitChatReplyKeepingPeriods(reply, limits)))
+	bubbles := splitChatReplyKeepingPeriods(reply, limits)
+	if !limits.KeepPeriods {
+		bubbles = stripBubblePeriods(bubbles)
+	}
+	return stripBubbleTextStickers(bubbles)
 }
 
 // splitChatReplyKeepingPeriods 切条但保留句号：长度规划（replyLengthPlan）还要在句号
@@ -9191,6 +9198,8 @@ type chatSplitLimits struct {
 	// LineSplit 让消息内的每次换行另起一条，列表、表格和代码块整块不拆。
 	// 单条发送和闲聊插话（MarkerOnly）下不生效。
 	LineSplit bool
+	// KeepPeriods 保留句号：语音通话的回复要念出来，句号是断句和停顿的地方。
+	KeepPeriods bool
 }
 
 func chatSplitLimitsFrom(cfg BotConfig) chatSplitLimits {

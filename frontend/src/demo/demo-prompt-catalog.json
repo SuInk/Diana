@@ -1242,6 +1242,13 @@
       ]
     },
     {
+      "key": "reply.voice_call",
+      "group": "reply_tail",
+      "title": "语音通话",
+      "usage": "主人在 WebUI 或 App 里和机器人语音通话时注入：回复会被逐句合成语音，要写成能直接念的口语。",
+      "default": "你正在和对方实时语音通话，你说的每个字都会被念出来：像打电话一样口语化地回答，一次说两三句，不用 Markdown、列表、表情符号、链接和括号里的动作描写。对方的话来自语音识别，可能有错别字或断句不准，按最合理的意思理解。"
+    },
+    {
       "key": "reply.persistent_voice",
       "group": "reply_tail",
       "title": "常驻语音模式",

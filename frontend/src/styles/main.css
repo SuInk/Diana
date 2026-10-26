@@ -1652,6 +1652,11 @@ code {
   margin: 0;
   font-size: 16px;
   font-weight: 650;
+  /* 窄屏时宁可省略也不竖排成一列字 */
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .topbar-spacer {
@@ -2177,6 +2182,22 @@ a.nav-action {
 
   .topbar-logout .topbar-logout-text {
     display: none;
+  }
+
+  /* 管理对话和语音通话两个入口更常用，仓库外链窄屏让位 */
+  .topbar-repo {
+    display: none;
+  }
+}
+
+@media (max-width: 420px) {
+  /* 手机上收紧间距，标题才放得下完整的四个字 */
+  .app-topbar {
+    gap: 6px;
+  }
+
+  .topbar-actions {
+    gap: 4px;
   }
 }
 

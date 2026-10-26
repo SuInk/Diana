@@ -296,9 +296,11 @@ type MessageEvent struct {
 	imageLoadErr           error
 	// taskRequester 是替别人建提醒、订阅时真正发起的人，只在建任务那一步用，
 	// 落进 Reminder.RequestedBy。
-	taskRequester       string
-	imageContextNotice  string
-	voiceSTTErr         error
+	taskRequester      string
+	imageContextNotice string
+	voiceSTTErr        error
+	// voiceCall 标记这是语音通话里说的一句话，回复交给通话念出来，见 voice_call.go。
+	voiceCall           bool
 	voiceSTTTransient   bool
 	recentTextReference *recentTextReference
 	replyHistory        []MessageEvent

@@ -1648,6 +1648,12 @@ export function getBotProfileConfig(includeSecrets = false, timeoutMs = 0): Prom
   return startupRequestJSON<BotProfileConfig>(`/api/assistant/config${suffix}`, timeoutMs);
 }
 
+/** 这台机器人现在能不能语音通话、缺什么。通话本身走 WebSocket，见 lib/voice-call.ts。 */
+export function getVoiceCallInfo(profileID: string): Promise<import("./lib/voice-call").CallInfo> {
+  const query = profileID ? `?profile=${encodeURIComponent(profileID)}` : "";
+  return requestJSON<import("./lib/voice-call").CallInfo>(`/api/assistant/call${query}`);
+}
+
 export function getModelHealth(): Promise<ModelHealthSnapshot> {
   return requestJSON<ModelHealthSnapshot>("/api/assistant/model-health");
 }
