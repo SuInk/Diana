@@ -327,6 +327,8 @@ func DescribeEventOutcome(outcome string) (decision string, reason string, handl
 		return "not_replied", replyBlockedDecisionReason, false
 	case "ignored_policy":
 		return "not_replied", "消息未通过当前用户、群聊或回复权限规则", false
+	case randomRepeatAlreadyTriggeredOutcome:
+		return "not_replied", "同一轮连续复读已经跟读过一次，跳过后续重复消息", false
 	case "ignored_model_quota":
 		return "not_replied", "本群的模型额度在当前窗口内已用完，到点自动恢复；期间消息照常进历史和长期记忆", false
 	case "superseded_proactive":

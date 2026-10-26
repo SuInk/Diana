@@ -42,7 +42,15 @@ type repeatChain struct {
 	text, messageID    string
 	users              map[string]bool
 	attempted          bool
+	triggered          bool
 	updated, lastReply time.Time
+}
+
+const randomRepeatAlreadyTriggeredOutcome = "ignored_random_repeat"
+
+type repeatDecision struct {
+	text             string
+	alreadyTriggered bool
 }
 
 // randomRepeater keeps one bounded chain per robot and conversation.
@@ -117,6 +125,7 @@ func (p *randomRepeater) observe(_ context.Context, event MessageEvent) MessageE
 	}
 	if text == "" || text != chain.text {
 		chain.text, chain.users = text, make(map[string]bool)
+		chain.triggered = false
 	}
 	// Each new message gets one chance; duplicate delivery cannot reroll.
 	chain.attempted = false
@@ -127,20 +136,28 @@ func (p *randomRepeater) observe(_ context.Context, event MessageEvent) MessageE
 	return event
 }
 
-func (p *randomRepeater) takeReply(event MessageEvent, settings RandomRepeatConfig) string {
+func (p *randomRepeater) takeReply(event MessageEvent, settings RandomRepeatConfig) repeatDecision {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	chain := p.chains[repeatKey(event)]
-	if chain == nil || chain.text == "" || chain.messageID != event.MessageID || chain.attempted || len(chain.users) < max(2, min(10, settings.Threshold)) {
-		return ""
+	if chain == nil || chain.text == "" || chain.messageID != event.MessageID {
+		return repeatDecision{}
+	}
+	if chain.triggered {
+		return repeatDecision{alreadyTriggered: true}
+	}
+	if chain.attempted || len(chain.users) < max(2, min(10, settings.Threshold)) {
+		return repeatDecision{}
 	}
 	chain.attempted = true
 	now := p.now()
 	if (!chain.lastReply.IsZero() && now.Sub(chain.lastReply) < time.Duration(max(0, min(600, settings.CooldownSeconds)))*time.Second) || p.roll() >= max(0, min(100, settings.Probability)) {
-		return ""
+		return repeatDecision{}
 	}
+	// 抽中后这一轮不再触发；冷却只限制不同内容的新一轮，不会重新开启旧复读。
+	chain.triggered = true
 	chain.lastReply = now
-	return chain.text
+	return repeatDecision{text: chain.text}
 }
 
 func (r *Runtime) observeRandomRepeat(ctx context.Context, event MessageEvent) {
@@ -170,7 +187,12 @@ func (r *Runtime) tryRandomRepeat(ctx context.Context, event MessageEvent) strin
 	if !settings.Enabled || p == nil {
 		return ""
 	}
-	reply := p.takeReply(event, settings)
+	decision := p.takeReply(event, settings)
+	if decision.alreadyTriggered {
+		r.record(r.decisionEventRecord(event, event.RawMessage, randomRepeatAlreadyTriggeredOutcome))
+		return randomRepeatAlreadyTriggeredOutcome
+	}
+	reply := decision.text
 	if reply == "" {
 		return ""
 	}
