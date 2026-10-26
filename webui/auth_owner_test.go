@@ -93,7 +93,7 @@ func newOwnerLoginTestRouter(t *testing.T, runtime *fakeOwnerRuntime) (*gin.Engi
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 	manager := NewAuthManager(&memoryAuthStore{})
-	if err := manager.SetPassword("", "console-pass-1"); err != nil {
+	if err := manager.SetPassword("console-pass-1"); err != nil {
 		t.Fatalf("SetPassword() error = %v", err)
 	}
 	router := gin.New()

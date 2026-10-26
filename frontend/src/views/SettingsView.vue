@@ -56,27 +56,6 @@
               <label for="sec-username">管理账号</label>
               <input id="sec-username" v-model="username" class="input" placeholder="留空则沿用当前账号" autocomplete="username" />
             </div>
-            <div v-if="authRequired" class="field">
-              <label for="sec-current">当前密码</label>
-              <div class="password-field">
-                <input
-                  id="sec-current"
-                  v-model="currentPassword"
-                  class="input"
-                  :type="showCurrentPassword ? 'text' : 'password'"
-                  autocomplete="current-password"
-                />
-                <button
-                  class="password-toggle"
-                  type="button"
-                  :aria-label="showCurrentPassword ? '隐藏当前密码' : '显示当前密码'"
-                  @click="showCurrentPassword = !showCurrentPassword"
-                >
-                  <EyeOff v-if="showCurrentPassword" :size="16" aria-hidden="true" />
-                  <Eye v-else :size="16" aria-hidden="true" />
-                </button>
-              </div>
-            </div>
             <div class="field">
               <label for="sec-new">{{ authRequired ? "新密码（至少 8 位）" : "设置管理密码（至少 8 位）" }}</label>
               <div class="password-field">
@@ -572,7 +551,7 @@ const settingsGroups = (
   pages: group.keys.map((key) => settingsPages.find((page) => page.key === key)!)
 }));
 
-const activePage = ref<(typeof settingsPages)[number]["key"]>("security");
+const activePage = ref<(typeof settingsPages)[number]["key"]>("theme");
 const activePageMeta = computed(() => settingsPages.find((item) => item.key === activePage.value) ?? settingsPages[0]);
 
 // 存储卡片：后端遍历数据目录不便宜，所以只在真的打开这一页时才请求，
@@ -730,9 +709,7 @@ const githubTokenFromEnvironment = ref(false);
 const updateOutput = ref("");
 const authRequired = ref(false);
 const username = ref("");
-const currentPassword = ref("");
 const newPassword = ref("");
-const showCurrentPassword = ref(false);
 const showNewPassword = ref(false);
 const savingPassword = ref(false);
 const deploymentMode = ref<"git" | "release" | "docker">("release");
@@ -813,15 +790,13 @@ async function loadAuthStatus(): Promise<void> {
 async function saveCredentials(): Promise<void> {
   savingPassword.value = true;
   try {
-    const result = await changeCredentials(currentPassword.value, username.value, newPassword.value);
+    const result = await changeCredentials(username.value, newPassword.value);
     username.value = result.username;
     // 改密会清空所有旧会话，列表要跟着刷新。
     void loadSessions();
     toastSuccess(authRequired.value ? "账号与密码已更新" : "密码保护已开启");
     authRequired.value = true;
-    currentPassword.value = "";
     newPassword.value = "";
-    showCurrentPassword.value = false;
     showNewPassword.value = false;
   } catch (error) {
     toastError(error instanceof Error ? error.message : "保存密码失败");

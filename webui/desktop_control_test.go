@@ -13,7 +13,7 @@ import (
 
 func TestDesktopControlRequiresLoginAndHumanConfirmation(t *testing.T) {
 	router, auth, _ := newAuthTestRouter(t)
-	if err := auth.SetPassword("", "desktop-test-secret"); err != nil {
+	if err := auth.SetPassword("desktop-test-secret"); err != nil {
 		t.Fatal(err)
 	}
 	ctx := context.Background()

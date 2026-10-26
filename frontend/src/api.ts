@@ -1362,10 +1362,10 @@ export function logout(): Promise<{ ok: boolean }> {
   return requestJSON<{ ok: boolean }>("/api/auth/logout", { method: "POST" });
 }
 
-export function changeCredentials(currentPassword: string, newUsername: string, newPassword: string): Promise<{ ok: boolean; username: string }> {
+export function changeCredentials(newUsername: string, newPassword: string): Promise<{ ok: boolean; username: string }> {
   return requestJSON<{ ok: boolean; username: string }>("/api/auth/password", {
     method: "POST",
-    body: JSON.stringify({ current_password: currentPassword, new_username: newUsername, new_password: newPassword })
+    body: JSON.stringify({ new_username: newUsername, new_password: newPassword })
   });
 }
 

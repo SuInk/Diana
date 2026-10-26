@@ -278,16 +278,13 @@ func (m *AuthManager) setCredentials(username, password string) error {
 	return nil
 }
 
-// SetCredentials 设置或修改账号密码；已有凭据时必须先校验当前密码。
-func (m *AuthManager) SetCredentials(current, nextUsername, nextPassword string) (string, error) {
+// SetCredentials 设置或修改账号密码。不校验当前密码：接口只对已登录的管理员
+// 开放，登录会话本身就是授权，忘了旧密码的主人也能直接改。
+func (m *AuthManager) SetCredentials(nextUsername, nextPassword string) (string, error) {
 	username := strings.TrimSpace(nextUsername)
 	if m.Required() {
-		currentUsername := m.Username()
-		if !m.verify(currentUsername, current) {
-			return "", ErrWrongPassword
-		}
 		if username == "" {
-			username = currentUsername
+			username = m.Username()
 		} else if err := validateAdminUsername(username); err != nil {
 			return "", err
 		}
@@ -333,9 +330,9 @@ func (m *AuthManager) ResetCredentials(username string) (AuthBootstrapResult, er
 	return AuthBootstrapResult{Created: true, Username: username, GeneratedPassword: password}, nil
 }
 
-// SetPassword 保留旧调用方式，并在首次设置时生成随机账号。
-func (m *AuthManager) SetPassword(current, next string) error {
-	_, err := m.SetCredentials(current, "", next)
+// SetPassword 只改密码，首次设置时生成随机账号。
+func (m *AuthManager) SetPassword(next string) error {
+	_, err := m.SetCredentials("", next)
 	return err
 }
 
@@ -726,32 +723,18 @@ func (h *AuthHandler) logout(c *gin.Context) {
 // setPassword 设置或修改管理账号与密码。
 func (h *AuthHandler) setPassword(c *gin.Context) {
 	var payload struct {
-		CurrentPassword string `json:"current_password"`
-		NewUsername     string `json:"new_username"`
-		NewPassword     string `json:"new_password"`
+		NewUsername string `json:"new_username"`
+		NewPassword string `json:"new_password"`
 	}
 	if err := c.ShouldBindJSON(&payload); err != nil {
 		writeError(c, http.StatusBadRequest, err)
 		return
 	}
-	// 改密同样要校验旧密码，因此跟登录共用一份失败预算，免得攻击者换个端点
-	// 就能把次数重新攒满。
-	throttleKey := c.ClientIP()
-	if !h.allowCredentialAttempt(c, "auth_password", throttleKey) {
-		return
-	}
-	username, err := h.manager.SetCredentials(payload.CurrentPassword, payload.NewUsername, payload.NewPassword)
+	username, err := h.manager.SetCredentials(payload.NewUsername, payload.NewPassword)
 	if err != nil {
-		status := http.StatusBadRequest
-		if errors.Is(err, ErrWrongPassword) {
-			status = http.StatusUnauthorized
-			time.Sleep(400 * time.Millisecond)
-			h.recordCredentialFailure(c, "auth_password", throttleKey)
-		}
-		logAndWriteError(c, h.logs, status, "auth_password", err, "", nil)
+		logAndWriteError(c, h.logs, http.StatusBadRequest, "auth_password", err, "", nil)
 		return
 	}
-	h.throttle.Reset(throttleKey)
 	// 改密清空了所有会话，立刻给当前端签发新会话，避免自己被登出。
 	token, err := h.manager.LoginWithMetadata(username, payload.NewPassword, authSessionMetadata(c))
 	if err == nil {

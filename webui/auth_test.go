@@ -96,7 +96,7 @@ func TestAuthFullFlow(t *testing.T) {
 	router, manager, store := newAuthTestRouter(t)
 
 	// 设置密码后未登录请求被拦截。
-	if err := manager.SetPassword("", "diana-secret-1"); err != nil {
+	if err := manager.SetPassword("diana-secret-1"); err != nil {
 		t.Fatalf("SetPassword() error = %v", err)
 	}
 	username := manager.Username()
@@ -194,21 +194,18 @@ func TestAuthBootstrapAndPasswordRules(t *testing.T) {
 	if _, err := manager.Login(bootstrap.Username, "bootstrap-pass"); err != nil {
 		t.Fatalf("original password should work: %v", err)
 	}
-	// 修改密码需要旧密码，且新密码有长度下限。
-	if err := manager.SetPassword("wrong-current", "new-password-1"); err == nil {
-		t.Fatal("wrong current password accepted")
-	}
-	if err := manager.SetPassword("bootstrap-pass", "short"); err == nil {
+	// 已登录即可改密，不需要旧密码；新密码有长度下限。
+	if err := manager.SetPassword("short"); err == nil {
 		t.Fatal("short password accepted")
 	}
-	if err := manager.SetPassword("bootstrap-pass", "new-password-1"); err != nil {
+	if err := manager.SetPassword("new-password-1"); err != nil {
 		t.Fatalf("SetPassword() error = %v", err)
 	}
 	if _, err := manager.Login(bootstrap.Username, "new-password-1"); err != nil {
 		t.Fatalf("new password login failed: %v", err)
 	}
 	newUsername := "diana#changed1234"
-	if _, err := manager.SetCredentials("new-password-1", newUsername, "final-password-1"); err != nil {
+	if _, err := manager.SetCredentials(newUsername, "final-password-1"); err != nil {
 		t.Fatalf("SetCredentials() error = %v", err)
 	}
 	if _, err := manager.Login(bootstrap.Username, "final-password-1"); err == nil {
@@ -273,7 +270,7 @@ func TestAuthAcceptsCustomUsername(t *testing.T) {
 
 func TestAuthSessionManagementRoutes(t *testing.T) {
 	router, manager, store := newAuthTestRouter(t)
-	if err := manager.SetPassword("", "diana-session-password"); err != nil {
+	if err := manager.SetPassword("diana-session-password"); err != nil {
 		t.Fatalf("SetPassword() error = %v", err)
 	}
 	username := manager.Username()

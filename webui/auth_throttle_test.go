@@ -108,7 +108,7 @@ func TestAuthThrottleDoesNotGrowUnbounded(t *testing.T) {
 // 登录接口连续失败后应当返回 429 且带 Retry-After。
 func TestLoginThrottledAfterRepeatedFailures(t *testing.T) {
 	router, manager, _ := newAuthTestRouter(t)
-	if err := manager.SetPassword("", "console-pass-1"); err != nil {
+	if err := manager.SetPassword("console-pass-1"); err != nil {
 		t.Fatalf("SetPassword() error = %v", err)
 	}
 
