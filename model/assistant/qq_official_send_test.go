@@ -364,7 +364,8 @@ func TestQQOfficialGuildMessageOmitsOutboundQuote(t *testing.T) {
 	}
 }
 
-// 带 Markdown 结构的回复走 msg_type 2，平台不认的行内代码就地去掉标记。
+// 带 Markdown 结构的回复走 msg_type 2，平台不认的行内代码就地去掉标记，列表前补
+// 空行（紧贴正文的列表 QQ 不识别）。
 func TestQQOfficialSendsMarkdownAsNativeMarkdown(t *testing.T) {
 	api := newQQFakeAPI(t)
 	channel := api.channel()
@@ -376,7 +377,7 @@ func TestQQOfficialSendsMarkdownAsNativeMarkdown(t *testing.T) {
 	}
 	msg := api.messages[0]
 	markdown, _ := msg["markdown"].(map[string]any)
-	if msg["msg_type"].(float64) != 2 || markdown["content"] != "**结论**\n- 用 go test\n- 再看日志" || msg["content"] != nil || msg["msg_id"] != "in1" {
+	if msg["msg_type"].(float64) != 2 || markdown["content"] != "**结论**\n\n- 用 go test\n- 再看日志" || msg["content"] != nil || msg["msg_id"] != "in1" {
 		t.Fatalf("markdown message = %#v", msg)
 	}
 }

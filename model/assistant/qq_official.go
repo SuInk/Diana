@@ -547,13 +547,16 @@ func (c *QQOfficialChannel) SendWithResult(ctx context.Context, msg OutgoingMess
 	if text != "" {
 		// msg_type 0 是纯文本、2 是原生 Markdown；频道消息没有这个字段。
 		body := map[string]any{"content": text}
-		markdown := !isGuild && platformTextHasMarkdown(text)
+		markdownContent, markdown := "", false
+		if !isGuild {
+			markdownContent, markdown = qqOfficialMarkdownContent(text)
+		}
 		if !isGuild {
 			body["msg_type"] = 0
 			if markdown {
 				body = map[string]any{
 					"msg_type": 2,
-					"markdown": map[string]any{"content": downgradeMarkdownFor(text, qqOfficialMarkdownFeatures)},
+					"markdown": map[string]any{"content": markdownContent},
 				}
 			}
 			// 出站引用与被动回复正交：message_reference 渲染引用卡片，msg_id 永远指向
