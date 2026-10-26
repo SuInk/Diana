@@ -752,3 +752,20 @@ func TestLLMCandidateBudgetRestartsOnFailover(t *testing.T) {
 		t.Fatalf("err=%v elapsed=%s", err, time.Since(started))
 	}
 }
+
+// 发送前审核：总期限不变，每个候选只拿一半。主档卡住时备用档还来得及答，而不是
+// 主档吃满整段、审核超时放行。
+func TestReplyAuditBudgetLeavesTimeForBackup(t *testing.T) {
+	primary := &cooldownRegistryAdapter{block: true}
+	backup := &cooldownRegistryAdapter{response: "备用回复", delay: 20 * time.Millisecond}
+	provider := cooldownProviderFactory(t, &llmCooldownTable{}, primary, backup)()
+	total := 200 * time.Millisecond
+	ctx, cancel := context.WithTimeout(context.Background(), total)
+	defer cancel()
+	ctx, cancelBudget := withLLMCandidateBudget(ctx, replyAuditCandidateBudget(total))
+	defer cancelBudget()
+	resp, err := provider.Generate(ctx, cooldownRequest())
+	if err != nil || resp.Text != "备用回复" {
+		t.Fatalf("resp=%#v err=%v", resp, err)
+	}
+}
