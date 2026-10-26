@@ -3385,7 +3385,7 @@ const (
 	// defaultPromptPlaintextRules 只管排版：聊天窗口不渲染 Markdown。
 	// 「什么时候分成几条消息发」是投递机制，归 replySegmentationRule 这条内置规则，
 	// 不放在这个可编辑文本框里——挂在用户文案上的开关，改一次就再也没人打开了。
-	defaultPromptPlaintextRules      = "OneBot v11 消息不渲染 Markdown，默认按纯文本显示，不要使用 Markdown 语法，例如 **加粗**、# 标题、表格或代码围栏；需要列点时用简短中文句子或普通序号。消息边界和消息内部换行均使用运行时专用标记，正文不要输出真实换行符。"
+	defaultPromptPlaintextRules      = "当前聊天平台是 {platform}，消息不渲染 Markdown，默认按纯文本显示，不要使用 Markdown 语法，例如 **加粗**、# 标题、表格或代码围栏；需要列点时用简短中文句子或普通序号。消息边界和消息内部换行均使用运行时专用标记，正文不要输出真实换行符。"
 	defaultPromptTimeTemplate        = "当前时间：{datetime} {weekday}"
 	defaultPromptGroupSenderTemplate = "当前是 群聊，正在和你说话的是「{sender}」；历史消息以“昵称（用户 ID）: 内容”标注发言者，回复时不要把这个前缀带进去。群聊里尽量简短。"
 	defaultPromptImageOnly           = "请分析这张图片，并直接回答用户关于图片的问题。"

@@ -84,9 +84,9 @@ func encodeExplicitMarkdownLayout(text string) string {
 
 // markdownToPlainForConfig 决定这台机器人要不要把 Markdown 降级成纯文本。
 //
-// 默认值随平台走：能渲染富文本的平台（目前只有 Telegram，它的适配器会把 Markdown
-// 转成 entities）默认保留标记，其余平台默认降级——QQ、钉钉、飞书、企业微信的出站
-// 都是纯文本消息类型，留着 ** 和 # 只会以字面量漏进聊天窗口。
+// 默认值随平台走：出站适配器能发富文本的平台（Telegram 转 entities，QQ 官方机器人
+// 发 msg_type 2，钉钉、飞书、企业微信发各自的 markdown 消息）默认保留标记，其余平台
+// 默认降级——OneBot、微信、iMessage 只有纯文本，留着 ** 和 # 只会以字面量漏出来。
 //
 // 用户在配置里显式设过就以设置为准：有人偏好在 Telegram 里也看纯文本，也有人自建的
 // OneBot 客户端能渲染 Markdown，这两种都得让得出来。
@@ -100,13 +100,7 @@ func markdownToPlainForConfig(cfg BotConfig) bool {
 // platformOutputRulesForConfig 只描述当前机器人实际采用的出站格式，避免把另一平台
 // 的限制塞进模型上下文。自定义纯文本规则仍然保留，但只在本轮确实会降级时注入。
 func platformOutputRulesForConfig(cfg BotConfig) string {
-	if markdownToPlainForConfig(cfg) {
-		return strings.TrimSpace(cfg.prompt(promptPlaintextRulesSpec))
-	}
 	def, ok := PlatformByID(cfg.Platform)
-	if ok && def.RichText {
-		return cfg.promptf(promptPlatformRichTextSpec, map[string]string{"platform": def.Name})
-	}
 	name := strings.TrimSpace(cfg.Platform)
 	if ok {
 		name = def.Name
@@ -114,16 +108,47 @@ func platformOutputRulesForConfig(cfg BotConfig) string {
 	if name == "" {
 		name = "当前平台"
 	}
+	if markdownToPlainForConfig(cfg) {
+		return strings.TrimSpace(cfg.promptf(promptPlaintextRulesSpec, map[string]string{"platform": name}))
+	}
+	if ok && def.RichText {
+		return cfg.promptf(promptPlatformRichTextSpec, map[string]string{
+			"platform": def.Name,
+			"features": platformMarkdownSyntaxNote(def.ID),
+		})
+	}
 	return cfg.promptf(promptPlatformMarkdownSpec, map[string]string{"platform": name})
+}
+
+// platformMarkdownSyntaxNote 告诉模型这个平台实际渲染得出哪些写法。不认的写法适配器
+// 也会降级，但模型知道边界才会挑对排版：比如在钉钉里就别指望表格对齐。
+func platformMarkdownSyntaxNote(platform string) string {
+	switch NormalizePlatformID(platform) {
+	case PlatformTelegram:
+		return "加粗、斜体、删除线、行内代码、代码块、链接、引用和列表都能显示，表格会转成等宽块"
+	case PlatformQQOfficial:
+		return "标题、加粗、斜体、删除线、代码块、链接、引用和列表都能显示；不认行内代码和表格，表格会转成对齐的文字行"
+	case PlatformDingTalk:
+		return "标题、加粗、斜体、链接、引用和列表都能显示；不认代码块和表格"
+	case PlatformFeishu:
+		return "加粗、斜体、删除线、行内代码、代码块、链接和列表都能显示；不认标题、引用和表格，标题会变成加粗"
+	case PlatformWeCom:
+		return "标题、加粗、行内代码、代码块、链接、引用和列表都能显示；不认斜体和表格"
+	default:
+		return "常见 Markdown 都能显示，不兼容的写法会自动降级"
+	}
 }
 
 var promptPlatformRichTextSpec = registerPrompt(PromptSpec{
 	Key:     "reply.platform_rich_text",
 	Group:   PromptGroupReplyBase,
 	Title:   "富文本平台说明",
-	Usage:   "平台能渲染富文本（如 Telegram）、本轮保留 Markdown 时，替代纯文本排版规则注入。",
-	Default: "当前聊天平台是 {platform}，出站适配器会把支持的 Markdown 转成平台富文本；可以自然使用加粗、斜体、标题、列表、链接和代码等格式，具体不兼容项会由适配器自动降级。不要声称当前窗口不支持 Markdown。",
-	Vars:    []PromptVar{{Name: "platform", Description: "聊天平台名称，如 Telegram"}},
+	Usage:   "平台能渲染富文本（如 Telegram、QQ 官方机器人）、本轮保留 Markdown 时，替代纯文本排版规则注入。",
+	Default: "当前聊天平台是 {platform}，回复里的 Markdown 会渲染成富文本：{features}。讲资料、步骤、对比、清单、代码这类有结构的内容时直接用 Markdown 排版——关键结论加粗，并列要点用列表，代码放进代码块，不要为了像聊天把结构压成一长段；闲聊和一两句话的回复照常说，不要硬加格式。不要声称当前窗口不支持 Markdown。",
+	Vars: []PromptVar{
+		{Name: "platform", Description: "聊天平台名称，如 Telegram"},
+		{Name: "features", Description: "该平台能渲染的 Markdown 写法"},
+	},
 })
 
 var promptPlatformMarkdownSpec = registerPrompt(PromptSpec{

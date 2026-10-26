@@ -544,10 +544,17 @@ func (c *QQOfficialChannel) SendWithResult(ctx context.Context, msg OutgoingMess
 
 	var firstID string
 	if text != "" {
-		// msg_type 0 是纯文本；频道消息没有这个字段。
+		// msg_type 0 是纯文本、2 是原生 Markdown；频道消息没有这个字段。
 		body := map[string]any{"content": text}
+		markdown := !isGuild && platformTextHasMarkdown(text)
 		if !isGuild {
 			body["msg_type"] = 0
+			if markdown {
+				body = map[string]any{
+					"msg_type": 2,
+					"markdown": map[string]any{"content": downgradeMarkdownFor(text, qqOfficialMarkdownFeatures)},
+				}
+			}
 			// 出站引用与被动回复正交：message_reference 渲染引用卡片，msg_id 永远指向
 			// 触发本轮的消息，两者同体携带互不干扰。引用目标按官方字段说明取 REFIDX_
 			// 形态，从引用索引反查；查不到（进程重启后索引丢失、目标超出时效）就不带
@@ -557,6 +564,15 @@ func (c *QQOfficialChannel) SendWithResult(ctx context.Context, msg OutgoingMess
 			}
 		}
 		id, err := post(body)
+		if err != nil && markdown && !qqOfficialRetryUseless(err) {
+			// Markdown 被拒（没开权限、链接域名未报备等）就降成纯文本再发一次，
+			// 宁可丢格式也不能丢整条回复。
+			plain := map[string]any{"content": markdownToPlain(text), "msg_type": 0}
+			if ref, ok := body["message_reference"]; ok {
+				plain["message_reference"] = ref
+			}
+			id, err = post(plain)
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -1522,4 +1538,27 @@ func qqOfficialQuotedPayload(elements []qqOfficialMsgElement) (string, []Message
 	}
 	text := strings.Join(parts, "\n")
 	return text, append(platformTextSegments(text, ""), media...)
+}
+
+// qqOfficialMarkdownFeatures 是原生 Markdown（msg_type 2）认的子集：官方文档列了
+// 标题、加粗、斜体、删除线、链接、引用、列表和代码块；行内代码和表格不渲染。
+var qqOfficialMarkdownFeatures = platformMarkdownFeatures{
+	Headings:  true,
+	Bold:      true,
+	Italic:    true,
+	Strike:    true,
+	CodeFence: true,
+	Links:     true,
+	Quote:     true,
+	Lists:     true,
+}
+
+// qqOfficialRetryUseless 判断 Markdown 发送失败后还值不值得换纯文本重发：鉴权、
+// 被动回复额度和请求取消这几类与消息格式无关，重发只会再失败一次并白占 msg_seq。
+func qqOfficialRetryUseless(err error) bool {
+	message := err.Error()
+	return strings.Contains(message, "http 401") ||
+		strings.Contains(message, qqQuotaExhaustedErrorCode) ||
+		strings.Contains(message, context.Canceled.Error()) ||
+		strings.Contains(message, context.DeadlineExceeded.Error())
 }

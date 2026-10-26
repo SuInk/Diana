@@ -40,7 +40,8 @@ var expectedPlatformCapabilities = map[string]platformCapabilities{
 	PlatformQQOfficial: {
 		// 发送后返回 id 与 ext_info.ref_idx：id 进历史，ref_idx 登记进通道的引用
 		// 索引，入站 ref_msg_idx（REFIDX_ 键空间）靠它对上；两者不共空间。
-		ResultChannel: true, RichText: false, InboundQuote: true,
+		// 带 Markdown 的文本走 msg_type 2 原生 Markdown。
+		ResultChannel: true, RichText: true, InboundQuote: true,
 	},
 	PlatformFeishu: {
 		// 发送返回 data.message_id，入站的 ParentID 与之同属 om_ 空间。

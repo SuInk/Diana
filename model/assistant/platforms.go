@@ -71,14 +71,14 @@ type PlatformDefinition struct {
 	// 平台时先把出站改成发富文本，再来翻这个字段。
 	//
 	// 各家认的 Markdown 子集并不一样（钉钉不认代码块、企业微信不认斜体、飞书不认
-	// 标题，三家都不认表格），差异由各自适配器的 platformMarkdownFeatures 抹平。
+	// 标题、QQ 官方机器人不认行内代码，都不认表格），差异由各自适配器的 platformMarkdownFeatures 抹平。
 	RichText bool `json:"rich_text,omitempty"`
 }
 
 var supportedPlatforms = []PlatformDefinition{
 	{ID: PlatformOneBotV11, Name: "OneBot v11", Protocol: ProtocolOneBotV11, Category: PlatformCategoryOneBotV11, CategoryLabel: "OneBot v11", Description: "OneBot v11 正向 WebSocket、反向 WebSocket 和 HTTP 接入", Inbound: InboundReverseWS},
 	{ID: PlatformTelegram, Name: "Telegram", Protocol: ProtocolTelegramBot, Category: PlatformCategoryTelegram, CategoryLabel: "Telegram", Description: "官方 Bot API 长轮询，不需要公网地址", Inbound: InboundOutbound, RichText: true},
-	{ID: PlatformQQOfficial, Name: "QQ 官方机器人", Protocol: ProtocolQQOfficialWS, Category: PlatformCategoryQQOfficial, CategoryLabel: "QQ 官方机器人", Description: "QQ 开放平台 WebSocket 网关，出站长连接，不需要公网地址", Inbound: InboundOutbound},
+	{ID: PlatformQQOfficial, Name: "QQ 官方机器人", Protocol: ProtocolQQOfficialWS, Category: PlatformCategoryQQOfficial, CategoryLabel: "QQ 官方机器人", Description: "QQ 开放平台 WebSocket 网关，出站长连接，不需要公网地址", Inbound: InboundOutbound, RichText: true},
 	{ID: PlatformDingTalk, Name: "钉钉", Protocol: ProtocolDingTalkWS, Category: PlatformCategoryDingTalk, CategoryLabel: "钉钉", Description: "Stream 模式出站长连接，不需要公网地址", Inbound: InboundOutbound, RichText: true},
 	{ID: PlatformFeishu, Name: "飞书", Protocol: ProtocolFeishuWebhook, Category: PlatformCategoryFeishu, CategoryLabel: "飞书", Description: "事件订阅回调，需要一个公网可达的回调地址", Inbound: InboundCallback, CallbackPath: FeishuCallbackPath, RichText: true},
 	{ID: PlatformWeCom, Name: "企业微信", Protocol: ProtocolWeComWebhook, Category: PlatformCategoryWeCom, CategoryLabel: "企业微信", Description: "应用回调，需要一个公网可达的回调地址", Inbound: InboundCallback, CallbackPath: WeComCallbackPath, RichText: true},

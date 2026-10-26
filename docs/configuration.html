@@ -58,7 +58,7 @@
             <div><dt>凭据</dt><dd>开放平台的 AppID 与 AppSecret</dd></div>
             <div><dt>连接</dt><dd>换取 access token 后连网关 WebSocket</dd></div>
             <div><dt>沙箱</dt><dd>机器人未上架时可勾选沙箱环境联调</dd></div>
-            <div><dt>能力</dt><dd>收：文字、图片、视频、语音（平台自动转写）、文件，合并聊天记录里的媒体同样拆出。发：文字、图片、视频、语音</dd></div>
+            <div><dt>能力</dt><dd>收：文字、图片、视频、语音（平台自动转写）、文件，合并聊天记录里的媒体同样拆出。发：文字、图片、视频、语音；带 Markdown 的文字走原生 Markdown（msg_type 2，不认行内代码和表格），被拒收时自动降成纯文本重发</dd></div>
             <div><dt>范围</dt><dd>群聊默认只推送 @ 了机器人的消息，群主可在群聊设置里改成获取群内全部消息</dd></div>
           </dl></article>
           <article><h3>钉钉</h3><dl>

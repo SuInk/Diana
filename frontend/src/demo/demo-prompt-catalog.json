@@ -70,7 +70,13 @@
       "group": "reply_base",
       "title": "纯文本排版规则",
       "usage": "平台不渲染 Markdown、本轮会降级成纯文本时注入。支持富文本的平台改发平台说明，不用这段。",
-      "default": "OneBot v11 消息不渲染 Markdown，默认按纯文本显示，不要使用 Markdown 语法，例如 **加粗**、# 标题、表格或代码围栏；需要列点时用简短中文句子或普通序号。消息边界和消息内部换行均使用运行时专用标记，正文不要输出真实换行符。"
+      "default": "当前聊天平台是 {platform}，消息不渲染 Markdown，默认按纯文本显示，不要使用 Markdown 语法，例如 **加粗**、# 标题、表格或代码围栏；需要列点时用简短中文句子或普通序号。消息边界和消息内部换行均使用运行时专用标记，正文不要输出真实换行符。",
+      "vars": [
+        {
+          "name": "platform",
+          "description": "聊天平台名称，如 OneBot v11"
+        }
+      ]
     },
     {
       "key": "reply.time_template",
@@ -127,12 +133,16 @@
       "key": "reply.platform_rich_text",
       "group": "reply_base",
       "title": "富文本平台说明",
-      "usage": "平台能渲染富文本（如 Telegram）、本轮保留 Markdown 时，替代纯文本排版规则注入。",
-      "default": "当前聊天平台是 {platform}，出站适配器会把支持的 Markdown 转成平台富文本；可以自然使用加粗、斜体、标题、列表、链接和代码等格式，具体不兼容项会由适配器自动降级。不要声称当前窗口不支持 Markdown。",
+      "usage": "平台能渲染富文本（如 Telegram、QQ 官方机器人）、本轮保留 Markdown 时，替代纯文本排版规则注入。",
+      "default": "当前聊天平台是 {platform}，回复里的 Markdown 会渲染成富文本：{features}。讲资料、步骤、对比、清单、代码这类有结构的内容时直接用 Markdown 排版——关键结论加粗，并列要点用列表，代码放进代码块，不要为了像聊天把结构压成一长段；闲聊和一两句话的回复照常说，不要硬加格式。不要声称当前窗口不支持 Markdown。",
       "vars": [
         {
           "name": "platform",
           "description": "聊天平台名称，如 Telegram"
+        },
+        {
+          "name": "features",
+          "description": "该平台能渲染的 Markdown 写法"
         }
       ]
     },

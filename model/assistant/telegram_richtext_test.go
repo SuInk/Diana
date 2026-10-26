@@ -214,13 +214,13 @@ func TestTelegramRichTextLeavesPlainTextAlone(t *testing.T) {
 
 // 默认值随平台走：能渲染的保留标记，不能渲染的降级。
 func TestMarkdownToPlainDefaultsByPlatform(t *testing.T) {
-	for _, platform := range []string{PlatformTelegram, PlatformDingTalk, PlatformFeishu, PlatformWeCom} {
+	for _, platform := range []string{PlatformTelegram, PlatformQQOfficial, PlatformDingTalk, PlatformFeishu, PlatformWeCom} {
 		if markdownToPlainForConfig(BotConfig{Platform: platform}) {
 			t.Fatalf("%s 出站发富文本，默认应当保留 Markdown", platform)
 		}
 	}
-	// OneBot 和 QQ 官方的出站只有纯文本消息类型，留着标记就会以字面量漏出去。
-	for _, platform := range []string{PlatformOneBotV11, PlatformQQOfficial} {
+	// OneBot、微信和 iMessage 的出站只有纯文本，留着标记就会以字面量漏出去。
+	for _, platform := range []string{PlatformOneBotV11, PlatformWeixin, PlatformIMessage} {
 		if !markdownToPlainForConfig(BotConfig{Platform: platform}) {
 			t.Fatalf("%s 只发纯文本，默认应当降级", platform)
 		}

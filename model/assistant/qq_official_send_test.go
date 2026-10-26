@@ -24,8 +24,10 @@ type qqFakeAPI struct {
 	paths    []string
 	put      []byte
 	// dedup 让前 N 条 /messages 回 40054005，模拟平台去重。
-	dedup  int
-	server *httptest.Server
+	dedup int
+	// rejectMarkdown 让 msg_type 2 的消息被拒收，模拟没开 Markdown 权限。
+	rejectMarkdown bool
+	server         *httptest.Server
 }
 
 func newQQFakeAPI(t *testing.T) *qqFakeAPI {
@@ -62,6 +64,12 @@ func newQQFakeAPI(t *testing.T) *qqFakeAPI {
 		case strings.HasSuffix(r.URL.Path, "/messages"):
 			api.mu.Lock()
 			api.messagePosts = append(api.messagePosts, body)
+			if api.rejectMarkdown && body["msg_type"] == float64(2) {
+				api.mu.Unlock()
+				w.WriteHeader(http.StatusBadRequest)
+				_ = json.NewEncoder(w).Encode(map[string]any{"message": "不允许发送原生 markdown", "code": 304003})
+				return
+			}
 			dedup := api.dedup > 0
 			if dedup {
 				api.dedup--
@@ -353,5 +361,51 @@ func TestQQOfficialGuildMessageOmitsOutboundQuote(t *testing.T) {
 	}
 	if _, has := api.messages[0]["message_reference"]; has {
 		t.Fatalf("message = %#v, guild messages must not carry message_reference", api.messages[0])
+	}
+}
+
+// 带 Markdown 结构的回复走 msg_type 2，平台不认的行内代码就地去掉标记。
+func TestQQOfficialSendsMarkdownAsNativeMarkdown(t *testing.T) {
+	api := newQQFakeAPI(t)
+	channel := api.channel()
+	if err := channel.Send(context.Background(), OutgoingMessage{GroupID: "G", Text: "**结论**\n- 用 `go test`\n- 再看日志", ReplyMessageID: "in1"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(api.messages) != 1 {
+		t.Fatalf("messages = %#v", api.messages)
+	}
+	msg := api.messages[0]
+	markdown, _ := msg["markdown"].(map[string]any)
+	if msg["msg_type"].(float64) != 2 || markdown["content"] != "**结论**\n- 用 go test\n- 再看日志" || msg["content"] != nil || msg["msg_id"] != "in1" {
+		t.Fatalf("markdown message = %#v", msg)
+	}
+}
+
+// 大白话不换消息类型，照旧走纯文本。
+func TestQQOfficialKeepsPlainTextAsMsgType0(t *testing.T) {
+	api := newQQFakeAPI(t)
+	channel := api.channel()
+	if err := channel.Send(context.Background(), OutgoingMessage{GroupID: "G", Text: "在呢，刚看到", ReplyMessageID: "in1"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(api.messages) != 1 || api.messages[0]["msg_type"].(float64) != 0 || api.messages[0]["content"] != "在呢，刚看到" {
+		t.Fatalf("messages = %#v", api.messages)
+	}
+}
+
+// Markdown 被平台拒收时降成纯文本重发，回复不能整条丢掉。
+func TestQQOfficialFallsBackToPlainWhenMarkdownRejected(t *testing.T) {
+	api := newQQFakeAPI(t)
+	api.rejectMarkdown = true
+	channel := api.channel()
+	if err := channel.Send(context.Background(), OutgoingMessage{GroupID: "G", Text: "**结论**：可以", ReplyMessageID: "in1"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(api.messagePosts) != 2 || len(api.messages) != 1 {
+		t.Fatalf("posts = %#v messages = %#v", api.messagePosts, api.messages)
+	}
+	msg := api.messages[0]
+	if msg["msg_type"].(float64) != 0 || msg["content"] != "结论：可以" || msg["msg_seq"].(float64) != 2 {
+		t.Fatalf("fallback message = %#v", msg)
 	}
 }

@@ -19,6 +19,7 @@ var promptPlaintextRulesSpec = registerPrompt(PromptSpec{
 	Title:   "纯文本排版规则",
 	Usage:   "平台不渲染 Markdown、本轮会降级成纯文本时注入。支持富文本的平台改发平台说明，不用这段。",
 	Default: defaultPromptPlaintextRules,
+	Vars:    []PromptVar{{Name: "platform", Description: "聊天平台名称，如 OneBot v11"}},
 })
 
 var promptTimeTemplateSpec = registerPrompt(PromptSpec{

@@ -711,7 +711,7 @@ let tasks: AssistantTask[] = [
 const platforms: BotPlatform[] = [
   { id: "onebot-v11", name: "QQ · OneBot v11", protocol: "onebot-v11", category: "qq", category_label: "QQ", description: "推荐通过 SnowLuma 接入 OneBot v11。", inbound: "reverse_ws" },
   { id: "telegram", name: "Telegram Bot", protocol: "telegram-bot-api", category: "telegram", category_label: "Telegram", description: "通过 Telegram Bot API 长轮询接入。", inbound: "outbound", rich_text: true },
-  { id: "qq-official", name: "QQ 官方机器人", protocol: "qq-official-gateway-ws", category: "qq_official", category_label: "QQ 官方机器人", description: "QQ 开放平台 WebSocket 网关，出站长连接，不需要公网地址", inbound: "outbound" },
+  { id: "qq-official", name: "QQ 官方机器人", protocol: "qq-official-gateway-ws", category: "qq_official", category_label: "QQ 官方机器人", description: "QQ 开放平台 WebSocket 网关，出站长连接，不需要公网地址", inbound: "outbound", rich_text: true },
   { id: "dingtalk", name: "钉钉", protocol: "dingtalk-stream-ws", category: "dingtalk", category_label: "钉钉", description: "Stream 模式出站长连接，不需要公网地址", inbound: "outbound", rich_text: true },
   { id: "feishu", name: "飞书", protocol: "feishu-event-callback", category: "feishu", category_label: "飞书", description: "事件订阅回调，需要一个公网可达的回调地址", inbound: "callback", callback_path: "/api/channels/feishu/callback", rich_text: true },
   { id: "wecom", name: "企业微信", protocol: "wecom-event-callback", category: "wecom", category_label: "企业微信", description: "应用回调，需要一个公网可达的回调地址", inbound: "callback", callback_path: "/api/channels/wecom/callback", rich_text: true },
