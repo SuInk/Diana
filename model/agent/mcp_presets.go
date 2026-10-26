@@ -23,9 +23,8 @@ import (
 // 把这些字段拼成一份 MCP 配置。
 //
 // 预设只是填表的模板，装上之后就是一条普通的 MCP 服务，改配置、停用、删除都走
-// 原来那套。少数预设会随 Diana 一起打包上游的二进制（目前只有 gitea-mcp），这
-// 等于把别人的发布链路接进我们的供应链，所以只收官方发布的产物，版本和 SHA-256
-// 钉在 scripts/fetch-gitea-mcp.sh 里，对不上就构建失败。
+// 原来那套。预设不随 Diana 打包任何上游二进制：本地进程形态的（例如 gitea-mcp）
+// 由主人自己安装，Diana 只负责按 PATH 或主程序旁边找到并拉起它。
 type MCPPreset struct {
 	ID string `json:"id"`
 	// Name 是装上以后这条 MCP 的名字，用户可以改。
@@ -78,24 +77,24 @@ var mcpPresets = []MCPPreset{giteaMCPPreset(), mcdonaldsMCPPreset(), luckinMCPPr
 // giteaMCPPreset 接 Gitea 官方的 gitea-mcp：它同时支持 stdio 和 HTTP，实例地址
 // 和访问令牌走 GITEA_HOST / GITEA_ACCESS_TOKEN，自建实例填自己的域名即可。
 //
-// 二进制随 Diana 一起发布，镜像和 Release 包里都有，所以默认那一项是「填地址和
-// 令牌就能用」；已经自己跑了一份 gitea-mcp 的，仍然可以走 HTTP 接上去。
+// 二进制由主人自己安装（PATH 或主程序旁边），默认那一项是本机拉起它；已经用
+// 官方镜像或别的机器跑了一份的，走 HTTP 接上去。
 func giteaMCPPreset() MCPPreset {
 	return MCPPreset{
 		ID:      "gitea",
 		Name:    "gitea",
 		Title:   "Gitea",
-		Summary: "接入自建或公有 Gitea 的仓库、Issue 与 Pull Request。官方 gitea-mcp 随 Diana 一起打包，填实例地址和访问令牌就能用。",
+		Summary: "接入自建或公有 Gitea 的仓库、Issue 与 Pull Request。需要先自行安装官方 gitea-mcp，再填实例地址和访问令牌。",
 		DocsURL: "https://gitea.com/gitea/gitea-mcp",
 		Transports: []MCPPresetTransport{
 			{
 				ID:    "stdio",
-				Label: "用自带的 gitea-mcp",
-				Hint:  "推荐：Diana 直接拉起随包发布的 gitea-mcp，令牌只存在这条 MCP 的环境变量里，不经过第三方。",
+				Label: "本机拉起 gitea-mcp",
+				Hint:  "推荐：先从 gitea.com/gitea/gitea-mcp 的 Releases 下载对应平台的二进制，放进 PATH 或 Diana 主程序旁边。Diana 在本机拉起它，令牌只存在这条 MCP 的环境变量里，不经过第三方。",
 				Fields: []MCPPresetField{
 					{Key: "host", Label: "Gitea 实例地址", Placeholder: "https://git.example.com", Required: true},
 					{Key: "token", Label: "访问令牌", Hint: "Gitea 里生成的个人访问令牌，按 MCP 环境变量存放，保存后只显示掩码。", Required: true, Secret: true},
-					{Key: "command", Label: "可执行文件", Placeholder: "留空用自带的那份", Hint: "只有要换成自己编译或另外安装的 gitea-mcp 时才填，可填命令名或绝对路径。"},
+					{Key: "command", Label: "可执行文件", Placeholder: "留空按 PATH 和主程序旁边查找", Hint: "gitea-mcp 不在 PATH 里、也没放在主程序旁边时才填，可填命令名或绝对路径。"},
 				},
 				config: func(values map[string]string) map[string]any {
 					command := strings.TrimSpace(values["command"])
@@ -113,8 +112,7 @@ func giteaMCPPreset() MCPPreset {
 				},
 				values: func(cfg mcpServerConfig) map[string]string {
 					values := map[string]string{"host": cfg.Env["GITEA_HOST"], "token": cfg.Env["GITEA_ACCESS_TOKEN"]}
-					// 自带的那份是留空的意思，回填成绝对路径会让人以为自己填过。
-					// 裸名字同样算自带：没带这份二进制的旧版本就是这么存下来的。
+					// 主程序旁边那份和裸名字都是「留空」的意思，回填成路径会让人以为自己填过。
 					if command := strings.TrimSpace(cfg.Command); command != "" &&
 						command != bundledGiteaMCPCommand() && command != giteaMCPBinaryName() {
 						values["command"] = command
@@ -411,9 +409,9 @@ func presetVerifyConfig(ctx context.Context, cfg mcpServerConfig) (string, bool,
 	return account, true, err
 }
 
-// bundledGiteaMCPCommand 指向随 Diana 一起发布的那份 gitea-mcp。它就放在主程序
-// 旁边，不在 PATH 里，所以必须给绝对路径。找不到就退回裸名字交给 PATH：宿主机
-// 自己装过的照样能用，真的两头都没有时报的是「找不到命令」，比在这里提前失败好查。
+// bundledGiteaMCPCommand 指向主人放在主程序旁边的那份 gitea-mcp（旧版本随包发布
+// 的也在那里）。那个目录不在 PATH 里，所以给绝对路径；找不到就退回裸名字交给
+// PATH，两头都没有时报的是「找不到命令」，比在这里提前失败好查。
 func bundledGiteaMCPCommand() string {
 	name := giteaMCPBinaryName()
 	executable, err := os.Executable()

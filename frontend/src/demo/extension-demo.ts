@@ -15,13 +15,13 @@ const hiddenPresets=new Set<string>();
 // demoMCPPresets 复刻 model/agent/mcp_presets.go 的内置清单，只留界面要用的字段。
 const demoMCPPresets=[{
  id:'gitea',name:'gitea',title:'Gitea',
- summary:'接入自建或公有 Gitea 的仓库、Issue 与 Pull Request。官方 gitea-mcp 随 Diana 一起打包，填实例地址和访问令牌就能用。',
+ summary:'接入自建或公有 Gitea 的仓库、Issue 与 Pull Request。需要先自行安装官方 gitea-mcp，再填实例地址和访问令牌。',
  docs_url:'https://gitea.com/gitea/gitea-mcp',
  transports:[
-  {id:'stdio',label:'用自带的 gitea-mcp',hint:'推荐：Diana 直接拉起随包发布的 gitea-mcp，令牌只存在这条 MCP 的环境变量里，不经过第三方。',verifiable:true,fields:[
+  {id:'stdio',label:'本机拉起 gitea-mcp',hint:'推荐：先从 gitea.com/gitea/gitea-mcp 的 Releases 下载对应平台的二进制，放进 PATH 或 Diana 主程序旁边。Diana 在本机拉起它，令牌只存在这条 MCP 的环境变量里，不经过第三方。',verifiable:true,fields:[
    {key:'host',label:'Gitea 实例地址',placeholder:'https://git.example.com',required:true},
    {key:'token',label:'访问令牌',hint:'Gitea 里生成的个人访问令牌，按 MCP 环境变量存放，不回显。',required:true,secret:true},
-   {key:'command',label:'可执行文件',placeholder:'留空用自带的那份',hint:'只有要换成自己编译或另外安装的 gitea-mcp 时才填，可填命令名或绝对路径。'}
+   {key:'command',label:'可执行文件',placeholder:'留空按 PATH 和主程序旁边查找',hint:'gitea-mcp 不在 PATH 里、也没放在主程序旁边时才填，可填命令名或绝对路径。'}
   ]},
   {id:'http',label:'连接已经跑起来的 gitea-mcp',hint:'已经用官方 Docker 镜像或别的机器跑了一份 gitea-mcp（-t http）时填它的地址。令牌配在那一侧，Diana 不经手。',fields:[
    {key:'url',label:'gitea-mcp 服务地址',placeholder:'http://127.0.0.1:8080/mcp',required:true},

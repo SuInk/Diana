@@ -275,9 +275,6 @@ jobs:
             cp release/desktop/desktopctl-helper "${package_dir}/desktopctl-helper"
             chmod +x "${package_dir}/desktopctl-helper"
           fi
-          # 自带官方 gitea-mcp：校验和对不上就在这里失败，不会发出去。MCP 预设按
-          # 主程序旁边的位置拉起它，所以必须和 diana-webui 放在同一层。
-          scripts/fetch-gitea-mcp.sh "${{ matrix.goos }}" "${{ matrix.goarch }}" "${package_dir}"
           printf '%s\n' \
             "Diana ${BUILD_VERSION}" \
             '' \

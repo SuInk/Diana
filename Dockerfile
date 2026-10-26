@@ -23,16 +23,6 @@ RUN sh scripts/sync-models-dev.sh
 COPY --from=frontend-next /src/frontend/dist/ ./cmd/webui/webdist/
 RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -trimpath -ldflags="-s -w -X main.buildVersion=${BUILD_VERSION}" -o /out/diana-webui ./cmd/webui
 
-# 随包发布的 gitea-mcp：只收 Gitea 官方的发布产物，版本和 SHA-256 钉在脚本里，
-# 对不上就在这里构建失败，不会把一个没核对过的二进制发出去。拉取的是目标平台的
-# 产物，构建机自己跑不跑得动它无所谓，所以停在 BUILDPLATFORM 上。
-FROM --platform=$BUILDPLATFORM alpine:3.22 AS gitea-mcp
-ARG TARGETOS
-ARG TARGETARCH
-RUN apk add --no-cache bash curl tar
-COPY scripts/fetch-gitea-mcp.sh /usr/local/bin/fetch-gitea-mcp.sh
-RUN /usr/local/bin/fetch-gitea-mcp.sh "${TARGETOS}" "${TARGETARCH}" /out
-
 # 随镜像发布的 yt-dlp：同样只收官方产物并校验 SHA-256。不用发行版的包是因为
 # 它必须新——Debian stable 把它冻在发布那天的版本，视频站解析会成片失效。
 FROM --platform=$BUILDPLATFORM debian:bookworm-slim AS yt-dlp
@@ -74,9 +64,6 @@ RUN apt-get update \
     && useradd -M -d /app/data/home -u 10001 diana \
     && mkdir -p /app/data/home \
     && chown -R diana:diana /app/data
-# gitea-mcp 放在主程序旁边，MCP 预设按这个位置拉起它；许可证随二进制一起带上。
-COPY --from=gitea-mcp /out/gitea-mcp /app/gitea-mcp
-COPY --from=gitea-mcp /out/gitea-mcp.LICENSE /app/gitea-mcp.LICENSE
 # 入口以 root 起步，把挂进来的 data 交给 diana 后再降权启动主程序。
 # 不能直接 USER diana：Linux 上 bind mount 自动建出来的宿主机目录归 root，
 # diana 写不进去，SQLite 和日志都起不来。

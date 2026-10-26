@@ -430,7 +430,7 @@ backup_dir="$install_dir/.installer/backups/$timestamp"
 mkdir -p "$backup_dir/runtime" "$backup_dir/data"
 
 had_previous=false
-for item in "$binary_name" "$compat_binary_name" run.sh uninstall.sh frontend-next gitea-mcp gitea-mcp.LICENSE desktopctl-helper; do
+for item in "$binary_name" "$compat_binary_name" run.sh uninstall.sh frontend-next desktopctl-helper; do
   if [ -e "$install_dir/$item" ]; then
     had_previous=true
     mv "$install_dir/$item" "$backup_dir/runtime/$item"
@@ -446,9 +446,6 @@ done
 
 cp -R "$package_dir/." "$install_dir/"
 chmod +x "$install_dir/run.sh" "$install_dir/$binary_name"
-if [ -f "$install_dir/gitea-mcp" ]; then
-  chmod +x "$install_dir/gitea-mcp"
-fi
 if [ -f "$install_dir/uninstall.sh" ]; then
   chmod +x "$install_dir/uninstall.sh"
 fi
@@ -548,16 +545,13 @@ assemble_macos_app() {
   cp -f "$install_dir/$binary_name" "$macos_app_binary"
   chmod +x "$macos_app_binary"
   rm -rf "$macos_app_dir/Contents/MacOS/frontend-next"
-  # 自带的 gitea-mcp 按「主程序旁边」被找到，bundle 里也得放一份，
-  # 否则从 .app 启动时 MCP 预设只能退回 PATH，多半找不到。
-  for bundled in gitea-mcp gitea-mcp.LICENSE desktopctl-helper; do
+  # 主人自己放在安装目录里的 gitea-mcp 也同步进 bundle：MCP 预设会在主程序旁边找它。
+  for bundled in gitea-mcp desktopctl-helper; do
     if [ -f "$install_dir/$bundled" ]; then
       cp -f "$install_dir/$bundled" "$macos_app_dir/Contents/MacOS/$bundled"
+      chmod +x "$macos_app_dir/Contents/MacOS/$bundled"
     fi
   done
-  if [ -f "$macos_app_dir/Contents/MacOS/gitea-mcp" ]; then
-    chmod +x "$macos_app_dir/Contents/MacOS/gitea-mcp"
-  fi
   sign_macos_app || info "macOS → codesign unavailable, permissions may need re-approval"
 }
 
@@ -966,7 +960,7 @@ EOF
 restore_previous() {
   [ "$had_previous" = "true" ] || return 0
   stop_service
-  for item in "$binary_name" "$compat_binary_name" run.sh uninstall.sh frontend-next gitea-mcp gitea-mcp.LICENSE desktopctl-helper; do
+  for item in "$binary_name" "$compat_binary_name" run.sh uninstall.sh frontend-next desktopctl-helper; do
     if [ -e "$backup_dir/runtime/$item" ]; then
       rm -rf -- "$install_dir/$item"
       mv "$backup_dir/runtime/$item" "$install_dir/$item"

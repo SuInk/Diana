@@ -3,7 +3,7 @@
 # Licensed under the Limited Redistribution License in the repository root.
 #
 # 把官方发布的 yt-dlp 取下来放进产物目录：版本和每个平台的 SHA-256 都钉死在这里，
-# 对不上就直接失败，理由同 fetch-gitea-mcp.sh。
+# 对不上就直接失败：只收官方产物，不把一个没核对过的二进制发出去。
 #
 # 为什么不用发行版的包：yt-dlp 跟着各视频站的反爬改动走，几周不更新就解析不动，
 # 而 Debian stable 会把它冻在发布那天的版本（bookworm 冻在 2023.03）。官方发的是

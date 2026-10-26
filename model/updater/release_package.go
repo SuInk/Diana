@@ -536,14 +536,7 @@ func (u *ReleasePackageUpdater) Download(ctx context.Context, release ReleasePac
 		Supervisor: detectServiceSupervisor(),
 		LogPath:    filepath.Join(updatesRoot, "last-update.log"),
 	}
-	optionalNames := []string{"run.sh", "run.bat", "README.txt", "gitea-mcp.LICENSE"}
-	// 自带的 gitea-mcp 也要跟着换：不换的话升级完主程序还在用上一版的二进制，
-	// 而它和 Diana 是同一个包里一起测过的组合。
-	if runtime.GOOS == "windows" {
-		optionalNames = append(optionalNames, "gitea-mcp.exe")
-	} else {
-		optionalNames = append(optionalNames, "gitea-mcp")
-	}
+	optionalNames := []string{"run.sh", "run.bat", "README.txt"}
 	if runtime.GOOS == "darwin" {
 		optionalNames = append(optionalNames, "desktopctl-helper")
 	}
