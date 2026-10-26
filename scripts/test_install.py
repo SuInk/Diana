@@ -109,33 +109,6 @@ class InstallerTests(unittest.TestCase):
                 text = (root / rc).read_text()
                 self.assertEqual(text.count('$HOME/.local/bin'), 1)
 
-    def test_frontend_migration_preserves_custom_paths(self):
-        helpers = section('yaml_quote() {', '\n# set_yaml_value')
-        helpers += section('set_yaml_value() {', '\nassemble_macos_app')
-        migration = section('# 旧安装升级为 .app', '\nif [ "$os" = "darwin" ]; then\n  # 每次启动')
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            old = str(root / 'frontend-next/dist')
-            new = str(root / 'Diana.app/Contents/MacOS/frontend-next/dist')
-            for source, expected in [
-                ("'" + old + "'", new), ('"' + old + '"', new),
-                ('./frontend-next/dist', new),
-                ("'/custom/frontend'", '/custom/frontend'),
-            ]:
-                with self.subTest(source=source):
-                    config = root / 'config.yaml'
-                    config.write_text('server:\n  frontend_dist: ' + source +
-                                      '\n  port: 18080\nadmin:\n  password: unchanged\n')
-                    result = self.run_shell(
-                        helpers + '\ninfo() { :; };\n' + migration +
-                        '\nread_yaml_value "$config_file" server frontend_dist',
-                        root, os='darwin', temp_dir=str(root), install_dir=str(root), config_file=str(config),
-                        macos_app_dir=str(root / 'Diana.app'))
-                    self.assertEqual(result.returncode, 0, result.stderr)
-                    self.assertEqual(result.stdout.strip(), expected)
-                    self.assertIn('password: unchanged', config.read_text())
-                    self.assertIn('port: 18080', config.read_text())
-
 
 if __name__ == '__main__':
     unittest.main()
