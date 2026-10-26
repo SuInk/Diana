@@ -4273,16 +4273,17 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 				AtomicText: true,
 			})
 		}
+		// 掉出历史窗口的媒体索引只在窗口往前滑时才变，放在历史之前跟着前缀缓存走；
+		// 挂在历史优先级上，预算紧张时跟着旧历史一起让位。
+		var mediaIndexMessage *llm.Message
 		if directAgentDecision && agentCanFetchMedia {
-			// 索引挂在历史优先级上：预算紧张时它跟着旧历史一起让位，不该挤掉当前
-			// 消息或长期要求。
-			if mediaIndex := contextPreload.mediaIndex; mediaIndex != "" {
-				volatile = append(volatile, llm.Message{
+			if mediaIndex := renderDurableMediaIndex(ctx, contextPreload.mediaIndex, replyHistory); mediaIndex != "" {
+				mediaIndexMessage = &llm.Message{
 					Role:       llm.RoleUser,
 					Content:    mediaIndex,
 					Priority:   llm.MessagePriorityHistory,
 					AtomicText: true,
-				})
+				}
 			}
 		}
 		if thread := strings.TrimSpace(sessionThread); thread != "" {
@@ -4353,6 +4354,9 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			r.supersedeDependencyImageTurns(ctx, event, images)
 		}
 		stableHistory, crossGroupTail := r.stableGroupHistory(ctx, event, cfg, replyHistory, directAgentDecision, turnMessageIDs)
+		if mediaIndexMessage != nil {
+			messages = append(messages, *mediaIndexMessage)
+		}
 		messages = append(messages, stableHistory...)
 		volatile = append(volatile, crossGroupTail...)
 		// 历史到此结束：这是本轮请求里最后一段逐轮稳定的内容，缓存断点打在这里。

@@ -251,6 +251,13 @@
       "default": "找到用户要找的那条历史消息时，在回复最开头写 [diana-reply:该消息的 message_id] 把它引用出来，正文里再用自然语言说是哪条。标记必须在最开头、一条回复只能写一个，正文里不得出现标记本身；引用的消息不在本会话时标记会被忽略，正文照发。"
     },
     {
+      "key": "reply.tool.cross_group_more",
+      "group": "reply_tools",
+      "title": "跨群历史查更多",
+      "usage": "开启跨群记忆、且 chat_history 可用时注入：常驻的跨群历史只是一部分，需要更多时自己查。",
+      "default": "标着「跨群历史」的行是其他群里和当前话题相关的发言，只带了最相关的几条；需要更多其他群的相关发言时，用 chat_history 的 search 并设 scope=all_groups 去查。"
+    },
+    {
       "key": "reply.tool.history_media",
       "group": "reply_tools",
       "title": "历史媒体读取",

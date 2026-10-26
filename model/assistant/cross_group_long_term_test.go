@@ -17,7 +17,7 @@ func TestCrossGroupLongTermRelevanceBeatsRecentWeakMatches(t *testing.T) {
 	now := time.Now().Unix()
 	old := crossGroupTestEvent(now-180*86400, "other", "author", "old", "Aurora release Friday")
 	store := &crossGroupHistoryStore{candidates: []MessageEvent{old}}
-	for i := int64(1); i <= 6; i++ {
+	for i := int64(1); i <= crossGroupContextResultLimit+2; i++ {
 		store.candidates = append(store.candidates, crossGroupTestEvent(now-i, "other", "author", string(rune('a'+i)), "Aurora unrelated discussion"))
 	}
 	r := NewRuntime(BotConfig{CrossGroupMemoryEnabled: boolPointer(true)}, &crossGroupMembershipChannel{allowed: map[string]bool{"current|author": true}}, NewPluginManager(), nil, nil, nil, nil)
@@ -26,7 +26,7 @@ func TestCrossGroupLongTermRelevanceBeatsRecentWeakMatches(t *testing.T) {
 	if store.query.FromTime != 0 || store.query.ExcludeSession != sessionKey(current) {
 		t.Fatalf("query still limited: %+v", store.query)
 	}
-	if len(got) != 4 {
+	if len(got) != crossGroupContextResultLimit {
 		t.Fatalf("selected=%d", len(got))
 	}
 	found := false
@@ -83,5 +83,20 @@ func TestCrossGroupSemanticHitsStillRequireMembership(t *testing.T) {
 	r.channel = &crossGroupMembershipChannel{}
 	if got := r.crossGroupContextEvents(crossGroupTestEvent(100, "current", "requester", "query", "什么时候上线"), store); len(got) != 0 {
 		t.Fatalf("semantic recall bypassed membership: %v", got)
+	}
+}
+
+// 跨群历史常驻带一部分，开了跨群记忆时头部告诉模型更多的去 chat_history 查。
+func TestCrossGroupMoreHintFollowsSetting(t *testing.T) {
+	event := MessageEvent{Kind: EventKindGroup, GroupID: "30001", UserID: "20001"}
+	for _, enabled := range []bool{true, false} {
+		r := NewRuntime(BotConfig{CrossGroupMemoryEnabled: boolPointer(enabled)}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+		head, tail := r.systemPromptPartsWithRelationshipAndAgentTools(event, nil, false, RelationshipPolicy{}, true, nil)
+		if got := strings.Contains(head, "scope=all_groups"); got != enabled {
+			t.Fatalf("enabled=%v hint in head=%v", enabled, got)
+		}
+		if strings.Contains(tail, "scope=all_groups") {
+			t.Fatal("hint leaked into the per-speaker tail")
+		}
 	}
 }

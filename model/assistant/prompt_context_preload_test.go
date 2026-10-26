@@ -40,8 +40,8 @@ func TestPromptContextPreloadFetchesLayersConcurrently(t *testing.T) {
 	if !strings.Contains(preload.memoryContext, "颜文字") {
 		t.Fatalf("memory context = %q", preload.memoryContext)
 	}
-	if !strings.Contains(preload.mediaIndex, "message_id=img-old") {
-		t.Fatalf("media index = %q", preload.mediaIndex)
+	if index := renderDurableMediaIndex(context.Background(), preload.mediaIndex, runtime.contextHistory(event)); !strings.Contains(index, "message_id=img-old") {
+		t.Fatalf("media index = %q", index)
 	}
 }
 
@@ -56,8 +56,8 @@ func TestPromptContextPreloadSkipsMediaIndexWhenAgentCannotFetch(t *testing.T) {
 	preload.wait()
 
 	// 取不到原图的部署走的是前置指代解析，索引白算一次就是白花的开销。
-	if preload.mediaIndex != "" {
-		t.Fatalf("media index was built without tool access: %q", preload.mediaIndex)
+	if len(preload.mediaIndex) != 0 {
+		t.Fatalf("media index was built without tool access: %v", preload.mediaIndex)
 	}
 }
 

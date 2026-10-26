@@ -33,7 +33,7 @@ type promptContextPreload struct {
 	selfFactContext string
 	// selfNoteUsage 是自述层进入全局预算之前的自有账。
 	selfNoteUsage contextLayerUsage
-	mediaIndex    string
+	mediaIndex    []durableMediaIndexEntry
 }
 
 // startPromptContextPreload 并发预取几层只读上下文。调用方必须在使用结果前调用
