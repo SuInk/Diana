@@ -5,7 +5,9 @@ package storage
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/SuInk/diana/model/assistant"
@@ -243,5 +245,126 @@ func TestMessageHistoryFTSKeepsASCIIPrefixRecall(t *testing.T) {
 		if len(events) != 1 || events[0].MessageID != tc.want {
 			t.Fatalf("查 %q 应当只命中 %s，实际命中 %d 条", tc.term, tc.want, len(events))
 		}
+	}
+}
+
+// 引用标记和 CQ 码不进索引：它们切出来的「diana」「reply」「multimedia」是超高频词，
+// 搜一个 diana 就要回表十几万行。@ 段留号码，正文照常能搜到。
+func TestMessageHistoryFTSSkipsControlMarkers(t *testing.T) {
+	text := "[diana-reply:12345][CQ:at,qq=10086] 转发合并修好了 [CQ:image,file=a.png,url=https://multimedia.nt.qq.com.cn/download?appid=1407&amp;fileid=Eh]"
+	got := messageHistoryRowTokens("Alice", "10010", text, "")
+	for _, noise := range []string{"diana", "reply", "12345", "cq", "multimedia", "https", "appid"} {
+		for _, token := range strings.Fields(got) {
+			if token == noise {
+				t.Fatalf("index tokens kept %q: %s", noise, got)
+			}
+		}
+	}
+	for _, keep := range []string{"alice", "10010", "10086", "转发", "修好"} {
+		if !strings.Contains(" "+got+" ", " "+keep+" ") {
+			t.Fatalf("index tokens lost %q: %s", keep, got)
+		}
+	}
+}
+
+// 存量索引按旧规则切过，要在后台按批重建；做完记下标记，下次启动不再跑。
+func TestMessageHistoryFTSCleanupRebuildsLegacyRows(t *testing.T) {
+	ctx := context.Background()
+	store := ftsStore(t)
+	session := "onebot-main:group:one"
+	for index, text := range []string{"[diana-reply:12345]转发合并修好了", "diana reply 这几个字本来就写在正文里", "普通消息"} {
+		event := historySearchEvent(int64(10+index), "one", fmt.Sprintf("m%d", index), "Alice", text)
+		if err := store.AppendMessageEvent(ctx, session, event); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// 模拟升级前的索引：按旧规则把整段正文原样切词。
+	rows, err := store.db.Query(`SELECT rowid, COALESCE(sender_name, ''), COALESCE(user_id, ''), COALESCE(text, ''), COALESCE(search_extra, '') FROM message_events`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy := map[int64]string{}
+	for rows.Next() {
+		var rowID int64
+		var sender, userID, text, extra string
+		if err := rows.Scan(&rowID, &sender, &userID, &text, &extra); err != nil {
+			t.Fatal(err)
+		}
+		legacy[rowID] = messageHistoryIndexTokens(sender, userID, text, extra)
+	}
+	_ = rows.Close()
+	for rowID, tokens := range legacy {
+		if _, err := store.db.Exec(`UPDATE `+messageHistoryFTSTable+` SET search_text = ? WHERE rowid = ?`, tokens, rowID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	countDiana := func() int {
+		var count int
+		if err := store.db.QueryRow(`SELECT COUNT(*) FROM ` + messageHistoryFTSTable + ` WHERE ` + messageHistoryFTSTable + ` MATCH 'diana'`).Scan(&count); err != nil {
+			t.Fatal(err)
+		}
+		return count
+	}
+	if countDiana() != 2 {
+		t.Fatal("legacy index should match the reply marker")
+	}
+	if !store.messageHistoryFTSCleanupPending(ctx) {
+		t.Fatal("cleanup should be pending before it ran")
+	}
+
+	var cursor int64
+	for range 5 {
+		next, done, err := store.cleanupMessageHistoryFTSBatch(ctx, cursor)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cursor = next
+		if done {
+			break
+		}
+	}
+	// 只剩正文里真写着 diana 的那条；引用标记那条不再命中，内容照样能搜到。
+	if got := countDiana(); got != 1 {
+		t.Fatalf("after cleanup diana matches %d rows, want 1", got)
+	}
+	events, _, err := store.SearchMessageEvents(ctx, assistant.MessageHistorySearchQuery{Session: session, Text: "转发合并"})
+	if err != nil || len(events) != 1 {
+		t.Fatalf("content search after cleanup = %d events, err %v", len(events), err)
+	}
+	if store.messageHistoryFTSCleanupPending(ctx) {
+		t.Fatal("cleanup should be marked done")
+	}
+}
+
+// 按相关度检索时，命中量超过上限的常见词不参与召回：它们几乎不贡献 BM25 分，却要
+// 逐行回表。全是常见词、或按时间排序时照常检索。
+func TestMessageHistoryRelevanceSearchPrunesCommonTerms(t *testing.T) {
+	previous := messageHistoryCommonTermLimit
+	messageHistoryCommonTermLimit = 2
+	t.Cleanup(func() { messageHistoryCommonTermLimit = previous })
+	ctx := context.Background()
+	store := ftsStore(t)
+	session := "onebot-main:group:one"
+	for index, text := range []string{"diana hello", "diana world", "diana again", "chromium only"} {
+		if err := store.AppendMessageEvent(ctx, session, historySearchEvent(int64(10+index), "one", fmt.Sprintf("m%d", index), "Alice", text)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	search := func(text, order string) int {
+		t.Helper()
+		events, _, err := store.SearchMessageEvents(ctx, assistant.MessageHistorySearchQuery{Session: session, Text: text, Sort: order})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return len(events)
+	}
+	if got := search("diana chromium", "relevance"); got != 1 {
+		t.Fatalf("relevance search kept the common term: %d results, want 1", got)
+	}
+	if got := search("diana", "relevance"); got != 3 {
+		t.Fatalf("all-common query must still search: %d results, want 3", got)
+	}
+	if got := search("diana chromium", "newest"); got != 4 {
+		t.Fatalf("chronological search must not prune: %d results, want 4", got)
 	}
 }

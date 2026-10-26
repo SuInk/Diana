@@ -231,3 +231,55 @@ func countString(items []string, target string) int {
 	}
 	return count
 }
+
+// 引用段渲染成 [diana-reply:ID]，不能进检索词：「diana」「reply」是全库最高频的词，
+// 一条只有引用和 @ 的消息会因此每次跑满检索超时。
+func TestCrossGroupContextIgnoresReplyMarkerInQuery(t *testing.T) {
+	event := crossGroupTestEvent(200, "current", "speaker", "m1", "")
+	event.Segments = []MessageSegment{
+		{Type: "reply", Data: map[string]string{"id": "20334"}},
+		{Type: "at", Data: map[string]string{"qq": "10001"}},
+		{Type: "text", Data: map[string]string{"text": " 浏览器需要 chromium"}},
+	}
+	text := crossGroupContextQueryText(event)
+	if strings.Contains(text, "diana") || strings.Contains(text, "20334") || !strings.Contains(text, "chromium") {
+		t.Fatalf("query text = %q", text)
+	}
+	raw := crossGroupTestEvent(200, "current", "speaker", "m2", "")
+	raw.Segments = nil
+	raw.RawMessage = "[diana-reply:20334]你好"
+	if text := crossGroupContextQueryText(raw); text != "你好" {
+		t.Fatalf("raw query text = %q", text)
+	}
+}
+
+// 同一条消息在一轮处理里会被多处要历史，跨群检索只跑一次；换一条消息照常检索。
+func TestCrossGroupContextReusesResultForSameMessage(t *testing.T) {
+	channel := &crossGroupMembershipChannel{allowed: map[string]bool{"current|speaker": true}}
+	store := &countingCrossGroupStore{crossGroupHistoryStore: crossGroupHistoryStore{candidates: []MessageEvent{
+		crossGroupTestEvent(190, "shared", "speaker", "old", "转发合并功能修好了"),
+	}}}
+	runtime := NewRuntime(BotConfig{CrossGroupMemoryEnabled: boolPointer(true)}, channel, NewPluginManager(), nil, nil, nil, nil)
+	current := crossGroupTestEvent(200, "current", "speaker", "m1", "转发合并功能修好了吗")
+	first := runtime.crossGroupContextEvents(current, store)
+	second := runtime.crossGroupContextEvents(current, store)
+	if store.searches != 1 || len(first) != len(second) {
+		t.Fatalf("searches = %d, first = %d, second = %d", store.searches, len(first), len(second))
+	}
+	next := current
+	next.MessageID = "m2"
+	runtime.crossGroupContextEvents(next, store)
+	if store.searches != 2 {
+		t.Fatalf("a new message must search again, searches = %d", store.searches)
+	}
+}
+
+type countingCrossGroupStore struct {
+	crossGroupHistoryStore
+	searches int
+}
+
+func (s *countingCrossGroupStore) SearchMessageEvents(ctx context.Context, query MessageHistorySearchQuery) ([]MessageEvent, int, error) {
+	s.searches++
+	return s.crossGroupHistoryStore.SearchMessageEvents(ctx, query)
+}

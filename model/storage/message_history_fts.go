@@ -4,7 +4,10 @@
 package storage
 
 import (
+	"context"
 	"database/sql"
+	"errors"
+	"regexp"
 	"strings"
 	"unicode"
 )
@@ -29,6 +32,38 @@ import (
 // FTS5 在个别构建里可能不可用，建表失败时保留原来的 LIKE 路径，检索降级但不中断。
 
 const messageHistoryFTSTable = "message_events_fts"
+
+// 正文里的控制标记不是给人搜的内容，进索引只会制造超高频词：
+//
+//   - [diana-reply:ID] 是引用标记，生产上 32 万条消息里 6.9 万条带着它，切出来的
+//     「diana」「reply」让搜任何含 diana 的词都命中 11.6 万行。跨群检索要逐行回表
+//     判会话，冷缓存下实测 3.3 秒，撞上 3 秒的检索超时。
+//   - [CQ:image,...url=https://multimedia.nt.qq.com.cn/...] 把图片 URL 和 fileid
+//     切成「https」「multimedia」「qq」「com」，1.5 万行都带。图片能搜的是识图描述，
+//     那在 search_extra 里。
+//
+// @ 段留下对方号码，按账号还能搜到「谁 @ 了谁」。
+var (
+	historyReplyMarkerPattern = regexp.MustCompile(`\[diana-reply:[^\]]*\]`)
+	historyCQAtPattern        = regexp.MustCompile(`\[CQ:at,qq=([^,\]]*)[^\]]*\]`)
+	historyCQPattern          = regexp.MustCompile(`\[CQ:[^\]]*\]`)
+)
+
+// messageHistoryIndexText 去掉正文里的引用标记和 CQ 码，只留可读内容。
+func messageHistoryIndexText(text string) string {
+	if !strings.Contains(text, "[") {
+		return text
+	}
+	text = historyReplyMarkerPattern.ReplaceAllString(text, " ")
+	text = historyCQAtPattern.ReplaceAllString(text, " $1 ")
+	return historyCQPattern.ReplaceAllString(text, " ")
+}
+
+// messageHistoryRowTokens 是一条消息写进索引的 token。查询词不走这里：用户就是想
+// 搜「CQ」也不该被剥掉。
+func messageHistoryRowTokens(sender, userID, text, extra string) string {
+	return messageHistoryIndexTokens(sender, userID, messageHistoryIndexText(text), extra)
+}
 
 // messageHistoryIndexTokens 把文本切成用空格分隔的检索 token。
 // CJK 连续段切二元组，ASCII 连续段整体作为一个词。
@@ -148,7 +183,7 @@ FROM message_events WHERE rowid IN (`+placeholders(len(args))+`)`, args...)
 				_ = rows.Close()
 				return false
 			}
-			batch = append(batch, pending{rowID: rowID, tokens: messageHistoryIndexTokens(sender, userID, text, extra)})
+			batch = append(batch, pending{rowID: rowID, tokens: messageHistoryRowTokens(sender, userID, text, extra)})
 		}
 		closeErr := rows.Close()
 		if err := rows.Err(); err != nil || closeErr != nil {
@@ -203,7 +238,7 @@ func (s *SQLiteStore) indexMessageHistoryRow(id, sender, userID, text, extra str
 		return
 	}
 	_, _ = s.db.Exec(`INSERT INTO `+messageHistoryFTSTable+`(rowid, search_text) VALUES (?, ?)`,
-		rowID, messageHistoryIndexTokens(sender, userID, text, extra))
+		rowID, messageHistoryRowTokens(sender, userID, text, extra))
 }
 
 // indexMessageHistoryRowTx updates the FTS row inside the caller's write
@@ -222,6 +257,92 @@ func (s *SQLiteStore) indexMessageHistoryRowTx(tx *sql.Tx, id, sender, userID, t
 		return err
 	}
 	_, err := tx.Exec(`INSERT INTO `+messageHistoryFTSTable+`(rowid, search_text) VALUES (?, ?)`,
-		rowID, messageHistoryIndexTokens(sender, userID, text, extra))
+		rowID, messageHistoryRowTokens(sender, userID, text, extra))
 	return err
+}
+
+// messageHistoryFTSCleanupKey 记录存量索引是否已经去掉控制标记。
+const messageHistoryFTSCleanupKey = "message_history_fts_marker_cleanup"
+
+// messageHistoryFTSCleanupMatch 找出旧规则下带着控制标记 token 的索引行。
+const messageHistoryFTSCleanupMatch = `"diana reply" OR "cq"`
+
+// messageHistoryFTSCleanupBatch 是每批重建的行数。一批一个写事务，期间业务写入要排
+// 队，所以批要小；8 万多行按 2 秒一批也就几分钟。
+const messageHistoryFTSCleanupBatch = 500
+
+// messageHistoryFTSCleanupPending 报告存量索引是否还要重建。
+func (s *SQLiteStore) messageHistoryFTSCleanupPending(ctx context.Context) bool {
+	if !s.historyFTS {
+		return false
+	}
+	var done bool
+	ok, err := s.loadJSON(ctx, messageHistoryFTSCleanupKey, &done)
+	return err == nil && (!ok || !done)
+}
+
+// cleanupMessageHistoryFTSBatch 按旧规则重建一批索引行，返回下一批的游标和是否已做完。
+//
+// 候选行直接用索引自己查（MATCH 走倒排表），不扫正表。按 rowid 推进游标：正文里真的
+// 写着「diana reply」的消息重建后仍会命中，不推进就会原地打转。
+func (s *SQLiteStore) cleanupMessageHistoryFTSBatch(ctx context.Context, after int64) (int64, bool, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT rowid FROM `+messageHistoryFTSTable+` WHERE `+messageHistoryFTSTable+` MATCH ? AND rowid > ? ORDER BY rowid LIMIT ?`,
+		messageHistoryFTSCleanupMatch, after, messageHistoryFTSCleanupBatch)
+	if err != nil {
+		return after, false, err
+	}
+	var ids []any
+	for rows.Next() {
+		var rowID int64
+		if err := rows.Scan(&rowID); err != nil {
+			_ = rows.Close()
+			return after, false, err
+		}
+		ids = append(ids, rowID)
+	}
+	closeErr := rows.Close()
+	if err := rows.Err(); err != nil || closeErr != nil {
+		return after, false, errors.Join(err, closeErr)
+	}
+	if len(ids) == 0 {
+		return after, true, s.saveJSON(ctx, messageHistoryFTSCleanupKey, true)
+	}
+	next := ids[len(ids)-1].(int64)
+	tx, err := s.beginWriteTx(ctx, "cleanupMessageHistoryFTS")
+	if err != nil {
+		return after, false, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	source, err := tx.QueryContext(ctx, `SELECT rowid, COALESCE(sender_name, ''), COALESCE(user_id, ''), COALESCE(text, ''), COALESCE(search_extra, '')
+FROM message_events WHERE rowid IN (`+placeholders(len(ids))+`)`, ids...)
+	if err != nil {
+		return after, false, err
+	}
+	type pending struct {
+		rowID  int64
+		tokens string
+	}
+	batch := make([]pending, 0, len(ids))
+	for source.Next() {
+		var rowID int64
+		var sender, userID, text, extra string
+		if err := source.Scan(&rowID, &sender, &userID, &text, &extra); err != nil {
+			_ = source.Close()
+			return after, false, err
+		}
+		batch = append(batch, pending{rowID: rowID, tokens: messageHistoryRowTokens(sender, userID, text, extra)})
+	}
+	closeErr = source.Close()
+	if err := source.Err(); err != nil || closeErr != nil {
+		return after, false, errors.Join(err, closeErr)
+	}
+	for _, item := range batch {
+		if _, err := tx.ExecContext(ctx, `UPDATE `+messageHistoryFTSTable+` SET search_text = ? WHERE rowid = ?`, item.tokens, item.rowID); err != nil {
+			return after, false, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return after, false, err
+	}
+	return next, false, nil
 }

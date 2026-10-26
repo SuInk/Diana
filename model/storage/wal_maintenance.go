@@ -43,6 +43,8 @@ const (
 	// walBusyWarnStreak 是连续做不成多少次之后开始报警。偶尔赶上读事务很正常，
 	// 一直做不成说明有人长期占着快照，那是另一个要查的问题。
 	walBusyWarnStreak = 3
+	// messageHistoryFTSCleanupInterval 是存量索引重建每批之间的间隔。
+	messageHistoryFTSCleanupInterval = 2 * time.Second
 )
 
 // startWALMaintenance 启动 WAL 回收巡检。内存库和自定义 DSN 不参与：它们没有独立的
@@ -59,11 +61,39 @@ func (s *SQLiteStore) startWALMaintenance() {
 		defer close(s.walDone)
 		ticker := time.NewTicker(walCheckpointInterval)
 		defer ticker.Stop()
+		// 存量检索索引去控制标记（见 message_history_fts.go）也搭这个 goroutine：做完
+		// 就把 ticker 停掉，此后不再占任何时间。
+		var cleanup <-chan time.Time
+		if s.messageHistoryFTSCleanupPending(ctx) {
+			cleanupTicker := time.NewTicker(messageHistoryFTSCleanupInterval)
+			defer cleanupTicker.Stop()
+			cleanup = cleanupTicker.C
+		}
+		var cleanupCursor int64
 		busyStreak := 0
 		for {
 			select {
 			case <-ctx.Done():
 				return
+			case <-cleanup:
+				if s.db.Stats().InUse > 0 {
+					// 写连接正忙就让开，和 checkpoint 一样不插队。
+					continue
+				}
+				batchCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+				next, done, err := s.cleanupMessageHistoryFTSBatch(batchCtx, cleanupCursor)
+				cancel()
+				if err != nil {
+					if ctx.Err() == nil {
+						log.Printf("diana sqlite history index cleanup failed: after_rowid=%d err=%v", cleanupCursor, err)
+					}
+					continue
+				}
+				cleanupCursor = next
+				if done {
+					log.Printf("diana sqlite history index cleanup finished")
+					cleanup = nil
+				}
 			case <-ticker.C:
 				busyStreak = s.checkpointWALIfLarge(ctx, busyStreak)
 				if s.db.Stats().InUse == 0 {

@@ -457,7 +457,9 @@ func (r *Runtime) processEventMemoryJobs(ctx context.Context, store StructuredMe
 		event := payload.Event
 		// 停用的机器人不做后台活儿：记忆抽取要花一次模型调用，而这台机器人既不
 		// 收消息也不回消息，抽出来的东西没人会用。任务照常完成，不在队列里积压。
-		if r.profileDisabled(event.ProfileID) {
+		// 群休眠同理：入队时拦过一次，但停用前已经排着、或在退避重试的任务也得在
+		// 这里再拦，否则关群之后还要把积压跑完。
+		if r.profileDisabled(event.ProfileID) || r.groupDormant(event) {
 			continue
 		}
 		text := memoryEventText(event)
@@ -653,7 +655,7 @@ func (r *Runtime) processSummaryMemoryJob(ctx context.Context, store StructuredM
 	if len(events) == 0 {
 		return nil
 	}
-	if r.profileDisabled(events[len(events)-1].ProfileID) {
+	if last := events[len(events)-1]; r.profileDisabled(last.ProfileID) || r.groupDormant(last) {
 		return nil
 	}
 	ctx = withLLMUsageContext(ctx, events[len(events)-1])

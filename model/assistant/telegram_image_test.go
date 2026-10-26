@@ -136,3 +136,23 @@ func TestTelegramImageRejectsNonFiles(t *testing.T) {
 		}
 	}
 }
+
+// 关系图、渲染图这类入口按 OneBot 习惯交 data URI。Telegram 会把它当 file_id，
+// 回「Wrong padding length」；通道层要先落成文件再 multipart 上传。
+func TestTelegramUploadsInlineDataImageAsFile(t *testing.T) {
+	api := newFakeTelegramAPI(t, map[string]any{"sendPhoto": map[string]any{"message_id": 7}})
+	png := "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
+	if _, err := api.channel().SendWithResult(context.Background(), OutgoingMessage{GroupID: "-10012345", ImageURLs: []string{png}}); err != nil {
+		t.Fatal(err)
+	}
+	calls := api.callsOf("sendPhoto")
+	if len(calls) != 1 {
+		t.Fatalf("sendPhoto calls = %#v", api.calls)
+	}
+	if photo, sent := calls[0].Params["photo"]; sent {
+		t.Fatalf("inline image was sent as a file_id string: %v", photo)
+	}
+	if calls[0].Params["chat_id"] != "-10012345" {
+		t.Fatalf("params = %#v", calls[0].Params)
+	}
+}

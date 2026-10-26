@@ -798,6 +798,9 @@ func normalizeMessageHistoryLimit(limit int) int {
 // 第三个返回值为 false 表示这次用不了索引，调用方回退到原来的 LIKE 检索。
 func (s *SQLiteStore) searchMessageEventsFTS(ctx context.Context, where string, args []any, terms, words []string, limit int, order string, offset int) ([]assistant.MessageEvent, int, bool, error) {
 	defer s.observeStorage(ctx, "searchMessageEventsFTS", "read")()
+	if order != "oldest" && order != "newest" {
+		terms = s.pruneCommonHistoryTerms(ctx, terms)
+	}
 	match := messageHistoryFTSQuery(terms)
 	if match == "" {
 		return nil, 0, false, nil
@@ -852,6 +855,42 @@ func (s *SQLiteStore) searchMessageEventsFTS(ctx context.Context, where string, 
 		return nil, 0, false, nil
 	}
 	return events, total, true, nil
+}
+
+// messageHistoryCommonTermLimit 是按相关度检索时一个词最多允许命中的行数。
+//
+// 检索的代价几乎全在回表：每个候选都要读正表那一行判会话和时间，行里带着整段
+// payload，冷缓存下是一次随机读。生产上「diana」一个词命中 11.6 万行（机器人自己
+// 的发言者名 + 引用标记），跨群联想带上它冷查 13.9 秒，去掉后 0.44 秒、前 12 条
+// 几乎不变——这么常见的词 BM25 本来就给不了多少分。其余常见词的命中量都在几千。
+var messageHistoryCommonTermLimit = 10000
+
+// pruneCommonHistoryTerms 去掉命中行数超过上限的词，只在按相关度排序时用。
+//
+// 数命中量只读倒排表、不回表，一个词几毫秒。全部都是常见词时原样返回：那是
+// 用户真的在搜这个词，慢也得搜。按时间排序不剪：那里每个命中都要按时间排出来，
+// 少一个词就少一批结果，总数也会变。
+func (s *SQLiteStore) pruneCommonHistoryTerms(ctx context.Context, terms []string) []string {
+	if len(terms) < 2 {
+		return terms
+	}
+	kept := make([]string, 0, len(terms))
+	for _, term := range terms {
+		match := messageHistoryFTSQuery([]string{term})
+		if match == "" {
+			continue
+		}
+		var hits int
+		err := s.eventReader().QueryRowContext(ctx, `SELECT COUNT(*) FROM (SELECT 1 FROM `+messageHistoryFTSTable+` WHERE `+messageHistoryFTSTable+` MATCH ? LIMIT ?)`,
+			match, messageHistoryCommonTermLimit+1).Scan(&hits)
+		if err != nil || hits <= messageHistoryCommonTermLimit {
+			kept = append(kept, term)
+		}
+	}
+	if len(kept) == 0 {
+		return terms
+	}
+	return kept
 }
 
 // messageHistoryFTSStatements 拼出 FTS 检索的取页语句和（翻过末尾时用的）计数语句。

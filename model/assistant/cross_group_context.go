@@ -21,6 +21,19 @@ const (
 // a current member of the target group. This keeps the author inside the
 // audience while avoiding source-group identifiers, media, and quote chains.
 func (r *Runtime) crossGroupContextEvents(event MessageEvent, store MessageHistoryStore) []MessageEvent {
+	// 同一条消息在一轮处理里会被好几处要历史（路由、回复、识图、表情……），检索
+	// 条件完全一样，结果在几十秒内也不会变。每处各跑一次跨会话全文检索，冷缓存下
+	// 一次就是一两秒磁盘读。
+	key := crossGroupResultKey(event)
+	if cached, ok := r.crossGroupResults.get(key, time.Now()); ok {
+		return cached
+	}
+	selected := r.searchCrossGroupContext(event, store)
+	r.crossGroupResults.put(key, selected, time.Now())
+	return selected
+}
+
+func (r *Runtime) searchCrossGroupContext(event MessageEvent, store MessageHistoryStore) []MessageEvent {
 	// 这条链有六道过滤，任何一道不过都是静默返回 nil，从外面分不清「没命中」
 	// 和「功能没生效」。调试模式下把整条漏斗记下来。
 	traced := r.crossGroupTraceEnabled(event)
@@ -359,19 +372,22 @@ func crossGroupContextQueryText(event MessageEvent) string {
 	return strings.TrimSpace(strings.Join(parts, " "))
 }
 
-// crossGroupQueryPlainText 去掉 @ 段后取纯文本。有消息段时不回退到 RawMessage，
-// 否则只有 @ 的消息会从原始 CQ 码里把账号又带回来。
+// crossGroupQueryPlainText 去掉 @ 段和引用段后取纯文本。有消息段时不回退到
+// RawMessage，否则只有 @ 的消息会从原始 CQ 码里把账号又带回来。
+//
+// 引用段会被渲染成 [diana-reply:ID]，切出来的「diana」「reply」是全库最高频的词：
+// 生产上一条只有引用和 @ 的消息，检索词就只剩这几个，每次都跑满 2 秒超时。
 func crossGroupQueryPlainText(segments []MessageSegment, raw string) string {
 	if len(segments) == 0 {
-		return strings.TrimSpace(raw)
+		return strings.TrimSpace(stripReplyMarkers(raw))
 	}
 	kept := make([]MessageSegment, 0, len(segments))
 	for _, segment := range segments {
-		if segment.Type != "at" {
+		if segment.Type != "at" && segment.Type != "reply" {
 			kept = append(kept, segment)
 		}
 	}
-	text := strings.TrimSpace(PlainText(kept))
+	text := strings.TrimSpace(stripReplyMarkers(PlainText(kept)))
 	if hasImageSegment(kept) {
 		text = rawMessageWithoutImagePlaceholders(text)
 	}
@@ -475,6 +491,15 @@ func (r *Runtime) crossGroupCurrentMembers(event MessageEvent, candidatesByAutho
 // 调用——是不是在跟机器人说话、命中哪条回复规则、要不要识图、是否空转——渲染历史时
 // 不带这个标记，别的群的一句话会被当成本群刚说过的：线上「我又忘了」被接成另一个群
 // 里「我又忘了滚木啥意思了」，就是接话评分和回复都把那句当成了本群上下文。
+// sessionHistory 只取本会话历史，不跑跨群检索。只看本群的调用方（空转证据、
+// 戳一戳、识图纠错……）以前写成 sessionOnlyHistory(r.contextHistory(event))：先花
+// 一次跨会话全文检索、再把结果扔掉。生产上同一条消息因此连跑四到六次跨群检索，
+// 带高频词时每次都跑满 2 秒超时，还把磁盘让给它们、拖慢正经的历史检索。
+func (r *Runtime) sessionHistory(event MessageEvent) []MessageEvent {
+	history, _ := r.sessionContextHistory(event)
+	return sessionOnlyHistory(history)
+}
+
 func sessionOnlyHistory(history []MessageEvent) []MessageEvent {
 	out := make([]MessageEvent, 0, len(history))
 	for _, item := range history {
@@ -499,4 +524,65 @@ func mergeCrossGroupContextHistory(current, crossGroup []MessageEvent) []Message
 		return merged[left].Time < merged[right].Time
 	})
 	return merged
+}
+
+// crossGroupResultTTL 是跨群检索结果的复用时长，覆盖一条消息从路由到回复发出。
+const crossGroupResultTTL = 30 * time.Second
+
+// crossGroupResultCacheCap 限制缓存条数，刷屏时不无限增长。
+const crossGroupResultCacheCap = 256
+
+type crossGroupResultEntry struct {
+	events  []MessageEvent
+	expires time.Time
+}
+
+// crossGroupResultCache 按消息记住跨群检索结果，零值可用。
+type crossGroupResultCache struct {
+	mu      sync.Mutex
+	entries map[string]crossGroupResultEntry
+}
+
+// crossGroupResultKey 标识一次检索的全部输入：同一条消息、同一段查询文本（编辑过的
+// 消息查询词会变）。没有消息 ID 的事件不缓存。
+func crossGroupResultKey(event MessageEvent) string {
+	if strings.TrimSpace(event.MessageID) == "" {
+		return ""
+	}
+	return strings.Join([]string{event.ProfileID, sessionKey(event), event.UserID, event.MessageID, crossGroupContextQueryText(event)}, "\x00")
+}
+
+func (c *crossGroupResultCache) get(key string, now time.Time) ([]MessageEvent, bool) {
+	if key == "" {
+		return nil, false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	entry, ok := c.entries[key]
+	if !ok || !now.Before(entry.expires) {
+		return nil, false
+	}
+	return append([]MessageEvent(nil), entry.events...), true
+}
+
+func (c *crossGroupResultCache) put(key string, events []MessageEvent, now time.Time) {
+	if key == "" {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.entries == nil {
+		c.entries = make(map[string]crossGroupResultEntry)
+	}
+	if len(c.entries) >= crossGroupResultCacheCap {
+		for existing, entry := range c.entries {
+			if !now.Before(entry.expires) {
+				delete(c.entries, existing)
+			}
+		}
+		if len(c.entries) >= crossGroupResultCacheCap {
+			c.entries = make(map[string]crossGroupResultEntry)
+		}
+	}
+	c.entries[key] = crossGroupResultEntry{events: append([]MessageEvent(nil), events...), expires: now.Add(crossGroupResultTTL)}
 }

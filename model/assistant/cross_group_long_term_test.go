@@ -68,6 +68,8 @@ func TestCrossGroupSemanticRecallAndFallback(t *testing.T) {
 	r.embedTexts = func(context.Context, llm.ProviderConfig, []string) ([][]float32, error) {
 		return nil, errors.New("offline")
 	}
+	// 换一条消息：同一条消息的结果会被短时复用，见 crossGroupResultCache。
+	current.MessageID = "query-2"
 	got = r.crossGroupContextEvents(current, store)
 	if len(got) != 1 || !strings.Contains(got[0].RawMessage, "计划周五") {
 		t.Fatalf("embedding failure lost keyword recall: %v", got)

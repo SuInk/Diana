@@ -368,6 +368,9 @@ type Runtime struct {
 	// imageEditSources 记住每个会话最近一次改图用的原图，「重试」「继续」时靠它
 	// 找回原图。自带锁，不受 mu 保护。
 	imageEditSources imageEditSourceMemory
+	// crossGroupResults 短时记住每条消息的跨群检索结果，见 cross_group_context.go。
+	// 自带锁，不受 mu 保护。
+	crossGroupResults crossGroupResultCache
 	// botAvatars 记每台机器人上一次看到的自己头像指纹，见 avatar_freshness.go。
 	// 自带锁，不受 mu 保护。
 	botAvatars     botAvatarMemory
@@ -3263,7 +3266,7 @@ func (r *Runtime) proactiveReplyPayload(event MessageEvent, text string) proacti
 		payload.QuotedImages = imageSegmentCount(event.Quoted.Segments)
 		payload.QuotedIsBot = payload.Addressing.ReplyTarget == "self"
 	}
-	history := sessionOnlyHistory(r.contextHistory(event))
+	history := r.sessionHistory(event)
 	for i := len(history) - 1; i >= 0; i-- {
 		item := history[i]
 		if item.MessageID == event.MessageID {
@@ -5341,7 +5344,7 @@ func (r *Runtime) visualIntentPayload(event MessageEvent, text string) visualInt
 		payload.QuotedText = quotedPlainText(event.Quoted)
 		payload.QuotedImages = imageSegmentCount(event.Quoted.Segments)
 	}
-	history := sessionOnlyHistory(r.contextHistory(event))
+	history := r.sessionHistory(event)
 	for i := len(history) - 1; i >= 0; i-- {
 		item := history[i]
 		if item.MessageID == event.MessageID {

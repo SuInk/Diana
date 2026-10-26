@@ -352,6 +352,11 @@ func (c *TelegramChannel) SendWithResult(ctx context.Context, msg OutgoingMessag
 	if chatID == "" {
 		return nil, fmt.Errorf("telegram: missing chat id")
 	}
+	msg, cleanup, err := materializeTelegramInlineMedia(msg)
+	if err != nil {
+		return nil, err
+	}
+	defer cleanup()
 	if msg.ImageAlbum {
 		return c.sendPhotoAlbum(ctx, msg, chatID)
 	}
@@ -535,6 +540,65 @@ func (c *TelegramChannel) sendMedia(ctx context.Context, chatID, threadID, metho
 		return nil, fmt.Errorf("telegram: 媒体 %.1fMB 超过 Bot API 50MB 上传限制", float64(info.Size())/(1<<20))
 	}
 	return c.uploadMedia(ctx, method, chatID, threadID, field, path, replyIDs...)
+}
+
+// materializeTelegramInlineMedia 把 data URI / base64:// 媒体落成临时文件。
+//
+// Telegram 不认内联数据：既不是 URL 也不是本地文件的字符串会被当成 file_id，
+// 结果是「wrong remote file identifier specified: Wrong padding length」。各个
+// 调用方（关系图、渲染图、插件）都按 OneBot 的习惯交 data URI，在通道这一层统一
+// 换成文件走 multipart，比要求每个入口各自记得转换可靠。
+func materializeTelegramInlineMedia(msg OutgoingMessage) (OutgoingMessage, func(), error) {
+	dir := ""
+	cleanup := func() {
+		if dir != "" {
+			_ = os.RemoveAll(dir)
+		}
+	}
+	convert := func(sources []string, kind string) ([]string, error) {
+		var out []string
+		for index, source := range sources {
+			trimmed := strings.TrimSpace(source)
+			if !strings.HasPrefix(trimmed, "data:") && !strings.HasPrefix(trimmed, "base64://") {
+				continue
+			}
+			body, err := decodeBase64MediaSource(trimmed, telegramMaxUploadBytes)
+			if err != nil {
+				return nil, fmt.Errorf("telegram: 内联%s数据无效或超过 50MB", kind)
+			}
+			if dir == "" {
+				if dir, err = os.MkdirTemp("", "diana-telegram-inline-*"); err != nil {
+					return nil, err
+				}
+			}
+			path := filepath.Join(dir, fmt.Sprintf("%s-%d%s", kind, index, imessageExtensionFor(http.DetectContentType(body))))
+			if err := os.WriteFile(path, body, 0o600); err != nil {
+				return nil, err
+			}
+			if out == nil {
+				out = append([]string(nil), sources...)
+			}
+			out[index] = path
+		}
+		if out == nil {
+			return sources, nil
+		}
+		return out, nil
+	}
+	var err error
+	if msg.ImageURLs, err = convert(msg.ImageURLs, "image"); err != nil {
+		cleanup()
+		return msg, func() {}, err
+	}
+	if msg.VideoURLs, err = convert(msg.VideoURLs, "video"); err != nil {
+		cleanup()
+		return msg, func() {}, err
+	}
+	if msg.AudioURLs, err = convert(msg.AudioURLs, "audio"); err != nil {
+		cleanup()
+		return msg, func() {}, err
+	}
+	return msg, cleanup, nil
 }
 
 // telegramLocalPath 判断出站地址是否指向本机文件；不是则返回空串。

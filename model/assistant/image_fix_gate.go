@@ -148,7 +148,7 @@ func (r *Runtime) detectImageFix(ctx context.Context, event MessageEvent, store 
 		payload.QuotedText = truncateRunes(quotedPlainText(event.Quoted), 480)
 		addCandidates(payload.QuotedMessageID, strings.TrimSpace(event.Quoted.SenderName), event.Quoted.Segments)
 	}
-	history := sessionOnlyHistory(r.contextHistory(event))
+	history := r.sessionHistory(event)
 	if quotedOnly && len(payload.Images) == 0 {
 		return "", ""
 	}

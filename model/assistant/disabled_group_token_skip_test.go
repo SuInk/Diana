@@ -324,3 +324,22 @@ func TestDormantGroupSkipsEveryMemoryEnqueue(t *testing.T) {
 		t.Fatal("private event treated as dormant group")
 	}
 }
+
+// 关群之前已经排进队列（或在退避重试）的记忆任务，worker 领到时也不能再花模型调用。
+func TestDormantGroupSkipsQueuedMemoryJobs(t *testing.T) {
+	h := newDisabledGroupSkipHarness(t, BotConfig{}, false)
+	event := disabledGroupPhraseEvent()
+	jobs := []MemoryJob{
+		{Payload: MemoryJobPayload{Kind: MemoryJobEvent, Session: sessionKey(event), Event: event}},
+	}
+	if err := h.runtime.processMemoryJobs(context.Background(), h.memory, jobs); err != nil {
+		t.Fatal(err)
+	}
+	summary := []MemoryJob{{Payload: MemoryJobPayload{Kind: MemoryJobSummary, Session: sessionKey(event), Events: []MessageEvent{event, event}}}}
+	if err := h.runtime.processMemoryJobs(context.Background(), h.memory, summary); err != nil {
+		t.Fatal(err)
+	}
+	if got := h.provider.callCount(); got != 0 {
+		t.Fatalf("dormant group spent %d model calls on queued memory jobs", got)
+	}
+}
