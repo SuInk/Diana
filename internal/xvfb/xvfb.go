@@ -228,20 +228,6 @@ func (s *Shared) Env() (env []string, ok bool) {
 	return s.display.Env(), true
 }
 
-// MarkFailure remembers that a headed browser could not use the selected display. Calls during the
-// retry interval fall back immediately; after the interval, the next Env call probes again.
-func (s *Shared) MarkFailure() {
-	if s == nil {
-		return
-	}
-	s.mu.Lock()
-	display := s.display
-	s.display = nil
-	s.lastFailure = time.Now()
-	s.mu.Unlock()
-	display.Stop()
-}
-
 // tail 留着 Xvfb 最后几行输出。
 type tail struct {
 	mu    sync.Mutex

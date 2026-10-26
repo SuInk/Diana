@@ -67,13 +67,11 @@ func captureFontReadyScreenshot(ctx context.Context, req ScreenshotRequest) ([]b
 	allocator, cancelAllocator := chromedp.NewRemoteAllocator(ctx, process.wsURL, chromedp.NoModifyURL)
 	defer cancelAllocator()
 	var contextOptions []chromedp.ContextOption
-	if process.window != BrowserWindowHeadless {
-		targetID, err := openBackgroundPage(ctx, process.wsURL, process.window)
-		if err != nil {
-			return nil, err
-		}
-		contextOptions = append(contextOptions, chromedp.WithTargetID(target.ID(targetID)))
+	targetID, err := openBackgroundPage(ctx, process.wsURL, process.window)
+	if err != nil {
+		return nil, err
 	}
+	contextOptions = append(contextOptions, chromedp.WithTargetID(target.ID(targetID)))
 	browser, cancelBrowser := chromedp.NewContext(allocator, contextOptions...)
 	defer cancelBrowser()
 	path := filepath.ToSlash(pagePath)

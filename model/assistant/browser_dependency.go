@@ -154,7 +154,7 @@ func RelationRenderDependencies(browser []ResolverDependency) []ResolverDependen
 	fontDep := cjkFontDependency()
 	result := []ResolverDependency{fontDep}
 	if dep, ok := resolverDependencyByName(browser, browserDependencyName); ok {
-		dep.Purpose = "浏览器渲染：用真实无头截图生成 PNG"
+		dep.Purpose = "浏览器渲染：用真实有头浏览器截图生成 PNG"
 		result = append(result, dep)
 	}
 	return result

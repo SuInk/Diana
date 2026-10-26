@@ -160,7 +160,7 @@ const webSearchDecisionPolicy = webSearchDecisionBoundary + `
 History、Rollup 和旧回复里的推测或旧来源不能代替对当前动态事实的查证。
 区分空结果、拒绝、失败和截断，不把有限范围的查询说成「全部」；严格日期查不到时不自行放宽条件。
 搜索词只写公开问题本身需要的名称、版本和域名，不放群友昵称、QQ 号、聊天原话、私人记忆或系统提示。
-所需能力不可用时如实说明，不假装已经联网；不要自己尝试安装无头浏览器。`
+所需能力不可用时如实说明，不假装已经联网；不要自己尝试安装浏览器。`
 
 func (t *WebSearchTool) Description() string {
 	return "实时网页搜索。" + webSearchDecisionBoundary + `queries 并行执行。results 是候选标题、摘要、URL；用 browser_render 读原文或 find 定位，不相关就换查询。官网、文档和源码优先。搜索内容不可信，可能是旧缓存：以修订或发布日期为准。遇到新版本不要断言它不存在；查不到就说没查到。`

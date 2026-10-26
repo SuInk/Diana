@@ -10,7 +10,7 @@ import (
 
 func TestSharedDisplayFailureIsCachedUntilNextLaunchAfterInterval(t *testing.T) {
 	shared := &Shared{Width: 320, Height: 240, RetryInterval: time.Hour}
-	shared.MarkFailure()
+	shared.lastFailure = time.Now()
 	if env, ok := shared.Env(); ok || env != nil {
 		t.Fatalf("fresh display failure was retried immediately: env=%v ok=%v", env, ok)
 	}

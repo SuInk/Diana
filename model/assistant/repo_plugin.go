@@ -432,7 +432,7 @@ var repoPluginPermissionCatalog = []RepoPluginPermission{
 	{ID: "process:execute", Label: "执行外部命令", Sensitive: true},
 	{ID: "process:media", Label: "调用媒体处理工具"},
 	{ID: "browser:render", Label: "使用浏览器渲染页面"},
-	{ID: "browser:headless", Label: "使用无头浏览器"},
+	{ID: "browser:headless", Label: "使用渲染浏览器"},
 	{ID: "sandbox:ephemeral", Label: "使用一次性沙箱"},
 	{ID: "task:persistent", Label: "创建持久后台任务"},
 	{ID: "task:notify", Label: "发送任务通知"},

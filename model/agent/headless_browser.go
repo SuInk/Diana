@@ -174,18 +174,16 @@ type BrowserWindow string
 
 const (
 	// BrowserWindowHidden 是默认：有头但看不见。窗口开在屏幕外面（Linux 容器里开在
-	// Xvfb 虚拟屏上），也不抢前台。凑不出显示环境时才自动回退无头。
+	// Xvfb 虚拟屏上），也不抢前台。只用有头，凑不出显示环境就直接报错，不回退无头。
 	BrowserWindowHidden BrowserWindow = ""
-	// BrowserWindowHeadless 只用于显示环境不可用后的自动回退。
-	BrowserWindowHeadless BrowserWindow = "headless"
 	// BrowserWindowVisible 是有头而且看得见，排查渲染问题用。
 	BrowserWindowVisible BrowserWindow = "visible"
 )
 
 type SandboxedBrowserConfig struct {
 	Executable string
-	// Window 决定开不开窗口，默认有头隐藏。有头需要一块屏幕，这台机器凑不出来（Linux
-	// 上既没有图形会话也没装 Xvfb，比如 slim 镜像）时退回无头。每次仍是一次性的
+	// Window 决定窗口看不看得见，默认有头隐藏。有头需要一块屏幕，这台机器凑不出来（Linux
+	// 上既没有图形会话也没装 Xvfb，比如 slim 镜像）时渲染直接报错。每次仍是一次性的
 	// 隔离 Profile。
 	Window            BrowserWindow
 	Timeout           time.Duration
@@ -282,16 +280,16 @@ func (b *SandboxedHeadlessBrowser) renderBrowser(queueCtx, ctx context.Context, 
 // 按需拉一块 Xvfb，之后一直留着给后面的渲染用。
 var renderDisplay = &xvfb.Shared{Width: 1920, Height: 1080}
 
-// resolveWindow 决定这一次到底怎么开，以及要补给浏览器进程的环境变量。
-var resolveBrowserWindow = func(window BrowserWindow) (BrowserWindow, []string) {
-	if window == BrowserWindowHeadless {
-		return BrowserWindowHeadless, nil
-	}
+// errNoRenderDisplay 是有头浏览器凑不出屏幕：只用有头，不回退无头。
+var errNoRenderDisplay = errors.New("有头浏览器需要图形界面：当前环境既没有 DISPLAY/WAYLAND_DISPLAY，也没装 Xvfb（Debian/Ubuntu：apt-get install -y xvfb）")
+
+// resolveBrowserDisplay 返回要补给有头浏览器进程的环境变量。
+var resolveBrowserDisplay = func() ([]string, error) {
 	env, ok := renderDisplay.Env()
 	if !ok {
-		return BrowserWindowHeadless, nil
+		return nil, errNoRenderDisplay
 	}
-	return window, env
+	return env, nil
 }
 
 func sandboxedBrowserConfigWithDefaults(cfg SandboxedBrowserConfig) SandboxedBrowserConfig {
@@ -583,7 +581,7 @@ func downloadedChromePaths() []string {
 }
 
 func sandboxedChromeBaseArgs(profileDir, cacheDir, crashDir string) []string {
-	return sandboxedChromeBaseArgsForMode(profileDir, cacheDir, crashDir, true)
+	return sandboxedChromeBaseArgsForMode(profileDir, cacheDir, crashDir, false)
 }
 
 func sandboxedChromeBaseArgsForMode(profileDir, cacheDir, crashDir string, headless bool) []string {
@@ -642,17 +640,14 @@ func sandboxedChromeArgs(profileDir, cacheDir, crashDir string, cfg SandboxedBro
 }
 
 func sandboxedChromeArgsForWindow(profileDir, cacheDir, crashDir string, window BrowserWindow) []string {
-	args := append(sandboxedChromeBaseArgsForMode(profileDir, cacheDir, crashDir, window == BrowserWindowHeadless),
+	args := append(sandboxedChromeBaseArgsForMode(profileDir, cacheDir, crashDir, false),
 		"--remote-debugging-address=127.0.0.1",
 		"--remote-debugging-port=0",
 		"--window-size=1280,960",
 	)
-	if window != BrowserWindowHeadless {
-		// 有头时不开启动窗口：macOS 上 Chrome 一开窗口就抢到前台，每读一个链接就把
-		// 人正在用的窗口抢走一次。页面由 openBackgroundPage 在后台另开。
-		args = append(args, "--no-startup-window")
-	}
-	return args
+	// 不开启动窗口：macOS 上 Chrome 一开窗口就抢到前台，每读一个链接就把
+	// 人正在用的窗口抢走一次。页面由 openBackgroundPage 在后台另开。
+	return append(args, "--no-startup-window")
 }
 
 func sandboxedBrowserEnvironment(current []string, root string) []string {

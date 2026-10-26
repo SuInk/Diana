@@ -363,8 +363,10 @@ func TestHeadlessBrowserExecutableHonoursEnvironment(t *testing.T) {
 // 有强弱之分。
 func TestBothBrowserPathsShareSandboxHardening(t *testing.T) {
 	base := sandboxedChromeBaseArgs("/tmp/p", "/tmp/c", "/tmp/x")
+	if slices.Contains(base, "--headless=new") {
+		t.Fatalf("渲染底座不该带无头参数：%v", base)
+	}
 	for _, want := range []string{
-		"--headless=new",
 		"--host-resolver-rules=MAP localhost ~NOTFOUND, MAP *.localhost ~NOTFOUND, MAP *.local ~NOTFOUND, MAP host.docker.internal ~NOTFOUND, MAP gateway.docker.internal ~NOTFOUND",
 		"--disable-sync",
 		"--no-pings",
@@ -388,12 +390,9 @@ func TestBothBrowserPathsShareSandboxHardening(t *testing.T) {
 		}
 	}
 
-	// CDP 那条路是在同一底座上切换为有头参数并追加远程调试端口。
+	// CDP 那条路是在同一底座上追加远程调试端口。
 	cdp := sandboxedChromeArgs("/tmp/p", "/tmp/c", "/tmp/x", SandboxedBrowserConfig{})
 	for _, arg := range base {
-		if arg == "--headless=new" {
-			continue
-		}
 		if !slices.Contains(cdp, arg) {
 			t.Fatalf("CDP 参数丢了底座里的 %q", arg)
 		}
@@ -624,8 +623,16 @@ func TestHiddenWindowArgsSkipStartupWindow(t *testing.T) {
 	if strings.Contains(defaultArgs, "--headless=new") || !strings.Contains(defaultArgs, "--no-startup-window") {
 		t.Fatalf("默认应当有头隐藏：%s", defaultArgs)
 	}
-	if window, env := resolveBrowserWindow(BrowserWindowHeadless); window != BrowserWindowHeadless || env != nil {
-		t.Fatalf("无头不该去找屏幕：%q %v", window, env)
+}
+
+// 只用有头：凑不出屏幕时启动直接报错，不偷偷换成无头。
+func TestLaunchFailsWithoutDisplayInsteadOfHeadless(t *testing.T) {
+	previous := resolveBrowserDisplay
+	resolveBrowserDisplay = func() ([]string, error) { return nil, errNoRenderDisplay }
+	t.Cleanup(func() { resolveBrowserDisplay = previous })
+	process, err := launchSandboxedChrome(context.Background(), "/nonexistent/chrome", t.TempDir(), "/tmp/p", "/tmp/c", "/tmp/x", SandboxedBrowserConfig{})
+	if !errors.Is(err, errNoRenderDisplay) || process != nil {
+		t.Fatalf("没有屏幕时应当报错而不是回退无头：process=%v err=%v", process, err)
 	}
 }
 

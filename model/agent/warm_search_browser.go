@@ -168,12 +168,10 @@ func (s *warmBrowserSession) openIsolatedPage(ctx context.Context) (context.Cont
 		client.Close()
 	}
 	params := map[string]any{"url": "about:blank", "browserContextId": created.BrowserContextID}
-	if s.window != BrowserWindowHeadless {
-		// 有头时同 openBackgroundPage：不抢前台，隐藏模式开在屏幕外。
-		params["newWindow"], params["background"], params["width"], params["height"] = true, s.window == BrowserWindowHidden, 1280, 960
-		if s.window == BrowserWindowHidden {
-			params["left"], params["top"] = offscreenWindowPosition, offscreenWindowPosition
-		}
+	// 同 openBackgroundPage：不抢前台，隐藏模式开在屏幕外。
+	params["newWindow"], params["background"], params["width"], params["height"] = true, s.window == BrowserWindowHidden, 1280, 960
+	if s.window == BrowserWindowHidden {
+		params["left"], params["top"] = offscreenWindowPosition, offscreenWindowPosition
 	}
 	var page struct {
 		TargetID string `json:"targetId"`

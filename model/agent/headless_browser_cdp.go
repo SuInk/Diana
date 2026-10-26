@@ -307,27 +307,18 @@ func launchSandboxedChrome(ctx context.Context, executable, root, profileDir, ca
 }
 
 func launchSandboxedChromeWithEnv(ctx context.Context, executable, root, profileDir, cacheDir, crashDir string, cfg SandboxedBrowserConfig, extraEnv []string) (*sandboxedChromeProcess, error) {
-	window, env := resolveBrowserWindow(cfg.Window)
-	env = append(env, extraEnv...)
-	args := sandboxedChromeArgsForWindow(profileDir, cacheDir, crashDir, window)
-	args = append(args, cfg.ExtraArgs...)
-	if window == BrowserWindowHeadless {
-		args = append(args, "about:blank")
-	}
-	process, err := launchChromeProcessWithEnv(ctx, executable, root, args, env)
-	// 显示环境探测通过后，窗口系统仍可能在 Chrome 启动前失效。只有这种有头启动
-	// 失败才显式重试无头；浏览器不存在等错误由调用方原样看到。
-	if err != nil && window != BrowserWindowHeadless {
-		renderDisplay.MarkFailure()
-		window = BrowserWindowHeadless
-		args = append(sandboxedChromeArgsForWindow(profileDir, cacheDir, crashDir, window), cfg.ExtraArgs...)
-		args = append(args, "about:blank")
-		process, err = launchChromeProcessWithEnv(ctx, executable, root, args, extraEnv)
-	}
+	env, err := resolveBrowserDisplay()
 	if err != nil {
 		return nil, err
 	}
-	process.window = window
+	env = append(env, extraEnv...)
+	args := sandboxedChromeArgsForWindow(profileDir, cacheDir, crashDir, cfg.Window)
+	args = append(args, cfg.ExtraArgs...)
+	process, err := launchChromeProcessWithEnv(ctx, executable, root, args, env)
+	if err != nil {
+		return nil, err
+	}
+	process.window = cfg.Window
 	return process, nil
 }
 
@@ -432,13 +423,11 @@ func probeSandboxedChrome(ctx context.Context, executable string) error {
 	allocator, cancelAllocator := chromedp.NewRemoteAllocator(ctx, process.wsURL, chromedp.NoModifyURL)
 	defer cancelAllocator()
 	var contextOptions []chromedp.ContextOption
-	if process.window != BrowserWindowHeadless {
-		targetID, err := openBackgroundPage(ctx, process.wsURL, process.window)
-		if err != nil {
-			return err
-		}
-		contextOptions = append(contextOptions, chromedp.WithTargetID(target.ID(targetID)))
+	targetID, err := openBackgroundPage(ctx, process.wsURL, process.window)
+	if err != nil {
+		return err
 	}
+	contextOptions = append(contextOptions, chromedp.WithTargetID(target.ID(targetID)))
 	browser, cancelBrowser := chromedp.NewContext(allocator, contextOptions...)
 	defer cancelBrowser()
 	var value int
@@ -478,13 +467,11 @@ func (b *SandboxedHeadlessBrowser) renderObservable(ctx context.Context, executa
 	allocatorCtx, cancelAllocator := chromedp.NewRemoteAllocator(ctx, process.wsURL, chromedp.NoModifyURL)
 	defer cancelAllocator()
 	var contextOptions []chromedp.ContextOption
-	if process.window != BrowserWindowHeadless {
-		targetID, err := openBackgroundPage(ctx, process.wsURL, process.window)
-		if err != nil {
-			return RenderedPage{}, fmt.Errorf("有头浏览器开页面失败：%w: %s", err, compactBrowserError(process.diagnostics.String()))
-		}
-		contextOptions = append(contextOptions, chromedp.WithTargetID(target.ID(targetID)))
+	targetID, err := openBackgroundPage(ctx, process.wsURL, process.window)
+	if err != nil {
+		return RenderedPage{}, fmt.Errorf("有头浏览器开页面失败：%w: %s", err, compactBrowserError(process.diagnostics.String()))
 	}
+	contextOptions = append(contextOptions, chromedp.WithTargetID(target.ID(targetID)))
 	browserCtx, cancelBrowser := chromedp.NewContext(allocatorCtx, contextOptions...)
 	defer cancelBrowser()
 	return b.observeRender(ctx, browserCtx, process.diagnostics.String, executable, rawURL, renderStarted, screenshot...)

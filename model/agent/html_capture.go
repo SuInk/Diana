@@ -197,13 +197,11 @@ func withHTMLCaptureSession(ctx context.Context, req HTMLCaptureRequest, run fun
 	allocator, cancelAllocator := chromedp.NewRemoteAllocator(ctx, process.wsURL, chromedp.NoModifyURL)
 	defer cancelAllocator()
 	var contextOptions []chromedp.ContextOption
-	if process.window != BrowserWindowHeadless {
-		targetID, err := openBackgroundPage(ctx, process.wsURL, process.window)
-		if err != nil {
-			return fmt.Errorf("html capture: open headed page: %w", err)
-		}
-		contextOptions = append(contextOptions, chromedp.WithTargetID(target.ID(targetID)))
+	targetID, err := openBackgroundPage(ctx, process.wsURL, process.window)
+	if err != nil {
+		return fmt.Errorf("html capture: open headed page: %w", err)
 	}
+	contextOptions = append(contextOptions, chromedp.WithTargetID(target.ID(targetID)))
 	browser, cancelBrowser := chromedp.NewContext(allocator, contextOptions...)
 	defer cancelBrowser()
 
