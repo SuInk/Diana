@@ -73,13 +73,18 @@ func runReask(t *testing.T, relation string) (*reaskProvider, []string) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		_ = runtime.HandleEvent(withOutboundTurn(context.Background(), "turn-1"), directedGroupMessage("20001", "10001", "查一下某发布会是不是真的"))
+		root := directedGroupMessage("20001", "10001", "查一下某发布会是不是真的")
+		root.Time = 1_800_000_000
+		_ = runtime.HandleEvent(withOutboundTurn(context.Background(), "turn-1"), root)
 	}()
 	waitForCondition(t, 5*time.Second, func() bool {
 		p := runtime.earlierReplyProgress(MessageEvent{Kind: EventKindGroup, GroupID: "123456", UserID: "10001"})
 		return p != nil && strings.Contains(p.detail(), "用了 1 次其他工具")
 	})
-	_ = runtime.HandleEvent(withOutboundTurn(context.Background(), "turn-2"), directedGroupMessage("20002", "10001", "在吗"))
+	// 慢调查跑了一阵才追问，不算紧接着说，合不合并只看判断器。
+	reask := directedGroupMessage("20002", "10001", "在吗")
+	reask.Time = 1_800_000_000 + int64(senderQuickFollowUpWindow/time.Second) + 30
+	_ = runtime.HandleEvent(withOutboundTurn(context.Background(), "turn-2"), reask)
 	if relation == "independent" {
 		waitForCondition(t, 5*time.Second, func() bool { return len(channel.sentSnapshot()) > 0 })
 	} else if sent := channel.sentSnapshot(); len(sent) != 0 {

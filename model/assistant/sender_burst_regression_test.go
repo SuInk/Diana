@@ -300,6 +300,8 @@ func TestDependencyImageNotClaimedWhenJudgedIndependent(t *testing.T) {
 
 	question := base
 	question.MessageID = "q-2"
+	// 离那张图超过「紧接着说」的窗口，合不合并只看判断器。
+	question.Time = photo.Time + int64(senderQuickFollowUpWindow/time.Second) + 15
 	question.RawMessage = "另外帮我查一下明天上海的天气怎么样，我下午要出门去见客户开会，顺便看看要不要带伞"
 	question.Segments = []MessageSegment{{Type: "text", Data: map[string]string{"text": question.RawMessage}}}
 	runtime.noteSenderTurnArrival(question)

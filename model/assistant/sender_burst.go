@@ -50,6 +50,9 @@ const (
 	// 短话」按规则直接算补充的门槛：几十秒内、十几个字以内，几乎都是在说那张图。
 	senderImageFollowUpWindow   = 60 * time.Second
 	senderImageFollowUpMaxRunes = 30
+	// senderQuickFollowUpWindow 是「接着说」的门槛：回复还没发出去，同一个人离他上一条
+	// 不超过这么久又说了一句，话题判断说另起一题或拿不准也并进这一轮。
+	senderQuickFollowUpWindow = 30 * time.Second
 )
 
 type senderTurnStage int
@@ -1032,20 +1035,66 @@ func (r *Runtime) imageFollowUpBySameSender(root MessageEvent, rootArrived time.
 	} else {
 		return "", false
 	}
-	if !r.burstChatMessage(event, text) {
+	if !r.burstChatMessage(event, text) || r.followUpAddressesOthers(event, root.MessageID) {
 		return "", false
 	}
+	return rule, true
+}
+
+// followUpAddressesOthers 报告追发是不是在找别人：@ 了机器人以外的人，或引用了这一轮
+// 以外的消息。这种话不算接着跟机器人说，交给话题判断。
+func (r *Runtime) followUpAddressesOthers(event MessageEvent, turnMessageIDs ...string) bool {
 	cfg := r.effectiveConfigForEvent(event)
 	botID := firstNonEmpty(strings.TrimSpace(event.SelfID), strings.TrimSpace(cfg.BotAccount))
 	for _, id := range mentionedUserIDs(event.Segments) {
 		if strings.TrimSpace(id) != botID {
-			return "", false
+			return true
 		}
 	}
-	if event.Quoted != nil && strings.TrimSpace(event.Quoted.MessageID) != strings.TrimSpace(root.MessageID) {
-		return "", false
+	if event.Quoted == nil {
+		return false
 	}
-	return rule, true
+	quoted := strings.TrimSpace(event.Quoted.MessageID)
+	for _, id := range turnMessageIDs {
+		if quoted == strings.TrimSpace(id) {
+			return false
+		}
+	}
+	return true
+}
+
+// 同一个人连发好几句，机器人以前常常回两遍：先 @ 一下、几秒后才说正事；或者一句
+// 「Diana不错」紧跟一句「这么好用」。话题判断按「是不是同一个待答问题的补充、纠正」
+// 来问，闲聊里的连发它多半判 independent 或 uncertain（线上 10-24 到 10-26 不予合并的
+// 192 次里占 148 次），于是两条各自生成、各自发出，有时还各自跑一遍同样的工具。
+// 回复还没发出去时，人接着说的话就该在同一条回复里一起接住，换了话题也一样。
+const senderQuickFollowUpRule = "same_sender_quick_follow_up"
+
+// quickFollowUpBySameSender 判断追发是不是同一个人紧跟着上一句说的：离这一轮里他最近
+// 那条不超过 senderQuickFollowUpWindow，也没有转去找别人、贴链接。
+func (r *Runtime) quickFollowUpBySameSender(root MessageEvent, rootArrived time.Time, supplements []proactiveReplyCandidate, event MessageEvent, eventArrived time.Time, text string) bool {
+	if strings.TrimSpace(root.UserID) == "" || strings.TrimSpace(root.UserID) != strings.TrimSpace(event.UserID) {
+		return false
+	}
+	previous, previousArrived := root, rootArrived
+	turnMessageIDs := []string{root.MessageID}
+	for _, item := range supplements {
+		turnMessageIDs = append(turnMessageIDs, item.Event.MessageID)
+		if strings.TrimSpace(item.Event.UserID) == strings.TrimSpace(event.UserID) {
+			previous, previousArrived = item.Event, item.QueuedAt
+		}
+	}
+	gap := eventArrived.Sub(previousArrived)
+	if previous.Time > 0 && event.Time > 0 {
+		gap = time.Duration(event.Time-previous.Time) * time.Second
+	}
+	if gap < 0 || gap > senderQuickFollowUpWindow {
+		return false
+	}
+	if textLooksLikeURL(firstNonEmpty(textSegmentsOnly(event.Segments), text)) {
+		return false
+	}
+	return r.burstChatMessage(event, text) && !r.followUpAddressesOthers(event, turnMessageIDs...)
 }
 
 // textLooksLikeURL 粗略认链接：带协议头或 www. 的一律不走规则，交给判断器。

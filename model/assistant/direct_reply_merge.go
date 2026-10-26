@@ -318,6 +318,12 @@ func (r *Runtime) mergeIntoActiveDirectReply(ctx context.Context, event MessageE
 		r.recordDirectReplyTopicRule(ctx, root, event, relation, rule)
 	} else {
 		relation = r.classifyDirectReplyTopic(ctx, root, supplements, event, text)
+		// 判断器只认同一个待答问题；它说另起一题或拿不准时，人紧接着说的话仍并进这一轮。
+		// 先问判断器是为了保住 repeat：重复催问不打断正在生成的那一版。
+		if relation != "repeat" && relation != "supplement" && relation != "correction" && r.quickFollowUpBySameSender(root, rootArrived, supplements, event, eventArrived, text) {
+			relation = "supplement"
+			r.recordDirectReplyTopicRule(ctx, root, event, relation, senderQuickFollowUpRule)
+		}
 	}
 	mergeable := relation == "repeat" || relation == "supplement" || relation == "correction"
 	r.noteSenderTurnMergeChecked(event, root.MessageID, mergeable)

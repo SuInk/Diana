@@ -65,9 +65,12 @@ func TestDirectReplyTopicFailsClosed(t *testing.T) {
 			p := &topicTestProvider{result: tc.result, err: tc.err}
 			r := topicTestRuntime(p)
 			root := directedGroupMessage("root", "user", "解释 stdout")
+			root.Time = 1_800_000_000
 			ctx, finish := r.beginDirectReply(context.Background(), root)
 			defer finish()
+			// 隔得够久，不算紧接着说，合不合并只看判断器。
 			follow := directedGroupMessage("follow", "user", "再举个 stdout 的例子")
+			follow.Time = root.Time + int64(senderQuickFollowUpWindow/time.Second) + 30
 			_, merged := r.mergeIntoActiveDirectReply(ctx, follow, follow.RawMessage)
 			if merged != tc.merge || (len(r.directReplySupplements(ctx)) == 1) != tc.merge {
 				t.Fatalf("merged=%v, want %v", merged, tc.merge)
@@ -217,6 +220,7 @@ func TestDirectReplySeparateTopicKeepsOriginalAnswer(t *testing.T) {
 	p := &topicTestProvider{base: base, result: `{"relation":"separate","confidence":0.99}`}
 	r := topicTestRuntime(p)
 	root := directedGroupMessage("root", "user", "你搜索下 x.com")
+	root.Time = 1_800_000_000
 	root.replyHistoryLoaded = true
 	root.replyHistory = []MessageEvent{directedGroupMessage("earlier", "user", "OpenAI 产品经理 Tibo 怎么还在发言")}
 	p.onTopic = func(req llm.GenerateRequest) {
@@ -237,6 +241,7 @@ func TestDirectReplySeparateTopicKeepsOriginalAnswer(t *testing.T) {
 		t.Fatal("first generation did not start")
 	}
 	follow := directedGroupMessage("follow", "user", "是 x 的产品经理换了，然后收益模式改了")
+	follow.Time = root.Time + int64(senderQuickFollowUpWindow/time.Second) + 30
 	r.noteDirectedInbound(follow)
 	_, _, handled, outcome := r.prepareMessageEvent(context.Background(), follow)
 	close(base.releaseFirst)
@@ -320,5 +325,70 @@ func TestDirectReplyConcurrentTurnsKeepSupplements(t *testing.T) {
 	r.replyInterruptMu.Unlock()
 	if accepting {
 		t.Fatal("send gate did not seal turn")
+	}
+}
+
+// 先 @ 一下、几秒后才说正事，或者一句夸完紧跟一句：判断器说另起一题、拿不准、甚至
+// 调用失败，同一个人紧接着说的话都并进还没发出的这一轮，不再各回一遍。
+func TestQuickFollowUpBySameSenderMergesWhateverJudgeSays(t *testing.T) {
+	for _, tc := range []struct {
+		name, result string
+		err          error
+	}{
+		{"independent", `{"relation":"independent","confidence":0.99}`, nil},
+		{"uncertain", `{"relation":"uncertain","confidence":0.45}`, nil},
+		{"failure", "", errors.New("offline")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := topicTestRuntime(&topicTestProvider{result: tc.result, err: tc.err})
+			root := directedGroupMessage("root", "user", "")
+			root.Time = 1_800_000_000
+			ctx, finish := r.beginDirectReply(context.Background(), root)
+			defer finish()
+			follow := textEvent("follow", "user", "网站更新了", root.Time+4)
+			if rootID, merged := r.mergeIntoActiveDirectReply(ctx, follow, follow.RawMessage); !merged || rootID != "root" {
+				t.Fatalf("quick follow-up should merge, merged=%v root=%q", merged, rootID)
+			}
+			if !r.directReplyHasNewSupplements(ctx) {
+				t.Fatal("a merged follow-up must make the pending answer regenerate")
+			}
+			// 窗口从这一轮里他最近那一条算起，连着说的第三句也接得住。
+			third := textEvent("third", "user", "这次把审阅模式单独拆出来了", root.Time+30)
+			if _, merged := r.mergeIntoActiveDirectReply(ctx, third, third.RawMessage); !merged {
+				t.Fatal("a third line right after the second should merge too")
+			}
+		})
+	}
+}
+
+func TestQuickFollowUpRuleLeavesOthersToTheJudge(t *testing.T) {
+	r := topicTestRuntime(&topicTestProvider{result: `{"relation":"independent","confidence":0.99}`})
+	root := directedGroupMessage("root", "user", "这个怎么配")
+	root.Time = 1_800_000_000
+	_, finish := r.beginDirectReply(context.Background(), root)
+	defer finish()
+
+	late := textEvent("late", "user", "另外问下明天开会吗", root.Time+int64(senderQuickFollowUpWindow/time.Second)+1)
+	other := textEvent("other", "someone", "我也想知道", root.Time+3)
+	link := textEvent("link", "user", "看这个 https://example.com/a", root.Time+3)
+	mentionOther := MessageEvent{
+		Kind: EventKindGroup, GroupID: root.GroupID, UserID: "user", MessageID: "mention", Time: root.Time + 3,
+		RawMessage: "[CQ:at,qq=10002] 你来说",
+		Segments: []MessageSegment{
+			{Type: "at", Data: map[string]string{"qq": "10002"}},
+			{Type: "text", Data: map[string]string{"text": " 你来说"}},
+		},
+	}
+	quoteOther := textEvent("quote", "user", "这条呢", root.Time+3)
+	quoteOther.Quoted = &QuotedMessage{MessageID: "unrelated"}
+	for _, follow := range []MessageEvent{late, other, link, mentionOther, quoteOther} {
+		if r.quickFollowUpBySameSender(root, time.Time{}, nil, follow, time.Time{}, follow.RawMessage) {
+			t.Fatalf("%s should not merge by the quick follow-up rule", follow.MessageID)
+		}
+	}
+	quoteRoot := textEvent("quote-root", "user", "就是这条", root.Time+3)
+	quoteRoot.Quoted = &QuotedMessage{MessageID: "root"}
+	if !r.quickFollowUpBySameSender(root, time.Time{}, nil, quoteRoot, time.Time{}, quoteRoot.RawMessage) {
+		t.Fatal("quoting the pending message itself is still talking to the bot")
 	}
 }
