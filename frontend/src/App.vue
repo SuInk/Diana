@@ -80,7 +80,7 @@
           >
             <component :is="navIcon(item.id)" :size="17" aria-hidden="true" />
             <span class="nav-label">{{ item.label }}</span>
-            <span v-if="item.id === 'users' && spaceUnread" class="nav-dot" aria-label="小窝有新动静"></span>
+            <span v-if="item.id === 'space' && spaceUnread" class="nav-dot" aria-label="小窝有新动静"></span>
           </button>
         </div>
       </nav>
@@ -228,6 +228,7 @@ import {
   PanelLeftOpen,
   Plus,
   PlugZap,
+  Globe,
   Moon,
   Sun,
   SunMoon,
@@ -267,8 +268,10 @@ const SetupWizard = defineAsyncComponent(() => import("./views/SetupWizard.vue")
 const LLMView = defineAsyncComponent(() => import("./views/LLMView.vue"));
 const AssistantView = defineAsyncComponent(() => import("./views/AssistantView.vue"));
 const PluginsView = defineAsyncComponent(() => import("./views/PluginsView.vue"));
+const BrowserBoxView = defineAsyncComponent(() => import("./views/BrowserBoxView.vue"));
 const GroupsView = defineAsyncComponent(() => import("./views/GroupsView.vue"));
 const MemoryView = defineAsyncComponent(() => import("./views/MemoryView.vue"));
+const HomeView = defineAsyncComponent(() => import("./views/HomeView.vue"));
 const SettingsView = defineAsyncComponent(() => import("./views/SettingsView.vue"));
 const WorkspaceView = defineAsyncComponent(() => import("./views/WorkspaceView.vue"));
 
@@ -287,10 +290,10 @@ const viewComponents: Record<ViewID, Component> = {
   users: MemoryView,
   notebook: MemoryView,
   "world-book": MemoryView,
-  feed: MemoryView,
-  space: MemoryView,
-  "self-notes": MemoryView,
-  browser: PluginsView,
+  feed: HomeView,
+  space: HomeView,
+  "self-notes": HomeView,
+  browser: BrowserBoxView,
   workspace: WorkspaceView,
   logs: RecordsView,
   favorability: RecordsView,
@@ -388,21 +391,21 @@ const SETUP_DISMISS_KEY = "dqb-next:setup-seen";
 const viewTitles: Record<ViewID, string> = {
   dashboard: "总览",
   "admin-chat": "管理对话",
-  browser: "扩展",
+  browser: "浏览器",
   workspace: "文件",
   events: "运行记录",
   tasks: "提醒与订阅",
   setup: "配置向导",
   provider: "提供商",
   bot: "机器人",
-  plugins: "扩展",
+  plugins: "插件",
   groups: "群管理",
-  users: "档案",
-  notebook: "档案",
-  "world-book": "档案",
-  feed: "档案",
-  space: "档案",
-  "self-notes": "档案",
+  users: "记忆",
+  notebook: "记忆",
+  "world-book": "记忆",
+  feed: "小窝",
+  space: "小窝",
+  "self-notes": "小窝",
   logs: "运行记录",
   favorability: "运行记录",
   settings: "设置"
@@ -467,16 +470,14 @@ const footerNavItems = navItems.filter((item) => item.footer);
 
 const viewTitle = computed(() => viewTitles[currentView.value]);
 
-// 日志之于「记录」、笔记本之于「档案」都是页内的一档，停在那一档时侧边栏要继续
+// 日志之于「记录」、笔记本之于「记忆」都是页内的一档，停在那一档时侧边栏要继续
 // 亮着它所属的那一项，别让人以为自己掉出了导航。归属关系写在 navItems 的 covers
 // 里，这里不再逐个视图硬编码。
 function isActiveNav(id: ViewID): boolean {
   return navItemForView(currentView.value) === id;
 }
 const activeView = computed(() => viewComponents[currentView.value] ?? DashboardView);
-// 浏览器是扩展页里的一档，但有自己的地址。两个地址共用同一个缓存实例，
-// 否则切到浏览器档会重新挂一份扩展页，插件列表白加载一遍，另外几档的状态也对不上。
-const viewKey = computed(() => (currentView.value === "browser" ? "plugins" : currentView.value));
+const viewKey = computed(() => currentView.value);
 
 const botSummary = computed(() => {
   const status = stream.status;
@@ -524,6 +525,7 @@ function navIcon(id: ViewID): Component {
     provider: BrainCircuit,
     bot: Bot,
     plugins: PlugZap,
+    browser: Globe,
     groups: Users,
     users: BookUser,
     feed: Newspaper,

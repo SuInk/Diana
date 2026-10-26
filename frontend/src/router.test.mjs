@@ -104,11 +104,38 @@ test("viewPath builds the addresses used in links", async () => {
   assert.equal(router.viewPath("groups", new URLSearchParams({ group: "7" })), "/groups?group=7");
 });
 
-// 世界书从机器人人设页搬进了档案：地址要能直达，侧边栏亮「档案」那一项。
+// 世界书从机器人人设页搬进了记忆：地址要能直达，侧边栏亮「记忆」那一项。
 test("world book has its own address under the archive nav item", async () => {
   const { router, here } = await load("/world-book");
   router.setupRouter();
   assert.equal(router.currentView.value, "world-book");
   assert.equal(here(), "/world-book");
   assert.equal(router.navItemForView("world-book"), "users");
+});
+
+// 浏览器与扩展各自拥有导航入口，直达和返回时不能高亮到另一页。
+test("browser has independent navigation from extensions", async () => {
+  const { router, here } = await load("/browser");
+  router.setupRouter();
+  assert.equal(router.currentView.value, "browser");
+  assert.equal(here(), "/browser");
+  assert.equal(router.navItemForView("browser"), "browser");
+  assert.equal(router.navItems.find(item => item.id === "browser")?.label, "浏览器");
+  router.navigate("plugins");
+  assert.equal(here(), "/plugins");
+  assert.equal(router.navItemForView(router.currentView.value), "plugins");
+});
+
+test("memory and home routes belong to separate navigation entries", async () => {
+  const { router } = await load("/users");
+  for (const view of ["users", "notebook", "world-book"]) {
+    assert.equal(router.navItemForView(view), "users");
+  }
+  for (const view of ["space", "self-notes", "feed"]) {
+    router.navigate(view);
+    assert.equal(router.currentView.value, view);
+    assert.equal(router.navItemForView(view), "space");
+  }
+  assert.equal(router.navItems.find(item => item.id === "users")?.label, "记忆");
+  assert.equal(router.navItems.find(item => item.id === "space")?.label, "小窝");
 });

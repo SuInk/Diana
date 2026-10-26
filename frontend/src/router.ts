@@ -28,7 +28,7 @@ export type ViewID =
 // NavGroupID 是侧边栏的分组。分组本来就存在，只是以前只写在下面这段注释里：
 // 「装机时先配什么、平时看什么、出问题翻什么」。11 个条目平铺时全都一样重，
 // 读的人得自己把它们分回三堆，所以现在把这条信息画出来。
-export type NavGroupID = "setup" | "operate" | "system";
+export type NavGroupID = "setup" | "capabilities" | "operate" | "system";
 
 export interface NavGroup {
   id: NavGroupID;
@@ -38,6 +38,7 @@ export interface NavGroup {
 // 总览作为入口不分组，设置归入控制台自身的系统分组。
 export const navGroups: NavGroup[] = [
   { id: "setup", label: "配置" },
+  { id: "capabilities", label: "能力" },
   { id: "operate", label: "日常" },
   { id: "system", label: "系统" }
 ];
@@ -60,11 +61,13 @@ export const navItems: NavItem[] = [
   { id: "dashboard", label: "总览", hint: "运行状态与实时事件" },
   { id: "provider", label: "提供商", hint: "提供商接入、凭据与模型分组", group: "setup" },
   { id: "bot", label: "机器人", hint: "OneBot v11 接入与行为", group: "setup" },
-  { id: "plugins", label: "扩展", hint: "插件、Skills、MCP 与浏览器", group: "setup", covers: ["browser"] },
   { id: "groups", label: "群管理", hint: "群管理员自助配置", group: "setup" },
-  { id: "users", label: "档案", hint: "机器人记住的人和事，以及她自己的：零花钱、自述、动态和日记", group: "operate", covers: ["notebook", "world-book", "space", "self-notes", "feed"] },
-  { id: "tasks", label: "任务", hint: "提醒、周期查询与仓库订阅", group: "operate" },
-  { id: "workspace", label: "文件", hint: "Agent 工作区里的文件：按分区浏览、预览、下载与删除", group: "operate" },
+  { id: "plugins", label: "插件", hint: "插件、Skills 与 MCP", group: "capabilities" },
+  { id: "tasks", label: "任务", hint: "提醒、周期查询与仓库订阅", group: "capabilities" },
+  { id: "workspace", label: "文件", hint: "Agent 工作区里的文件：按分区浏览、预览、下载与删除", group: "capabilities" },
+  { id: "browser", label: "浏览器", hint: "浏览器管理与网页渲染", group: "capabilities" },
+  { id: "users", label: "记忆", hint: "人员、笔记本与世界书", group: "operate", covers: ["notebook", "world-book"] },
+  { id: "space", label: "小窝", hint: "机器人的钱包、自述与动态", group: "operate", covers: ["self-notes", "feed"] },
   { id: "events", label: "记录", hint: "消息处理、回复决策、运行日志与好感与画像", group: "operate", covers: ["logs", "favorability"] },
   { id: "settings", label: "设置", hint: "主题与系统更新", group: "system" }
 ];
