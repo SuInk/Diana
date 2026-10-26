@@ -134,47 +134,6 @@ func TestParseHostCommandReviewToleratesProse(t *testing.T) {
 	}
 }
 
-func TestOwnerShellCommandIsReviewedAndOwnerOnly(t *testing.T) {
-	requireUnixShell(t)
-	t.Setenv("APP_DB_PATH", filepath.Join(t.TempDir(), "diana.db"))
-	provider := &hostReviewStubProvider{reply: `{"allow":true,"risk":"low","reason":"按原文执行"}`}
-	r := hostAccessReviewRuntime(t, provider)
-	text := "执行命令 printf owner-shell-ok"
-	reply, handled := r.handleOwnerCommand(privateEvent("100001", "20404", text), text)
-	if !handled || !strings.Contains(reply, "退出码 0") || !strings.Contains(reply, "owner-shell-ok") {
-		t.Fatalf("handled=%v reply=%q", handled, reply)
-	}
-	if !strings.Contains(provider.lastUserContent(), "执行命令 printf owner-shell-ok") {
-		t.Fatal("review did not see the owner's command text")
-	}
-	if _, handled := r.handleOwnerCommand(privateEvent("300003", "20405", text), text); handled {
-		t.Fatal("non-owner ran a shell command")
-	}
-	provider.reply = `{"allow":false,"risk":"critical","reason":"会删除家目录"}`
-	reply, _ = r.handleOwnerCommand(privateEvent("100001", "20406", "执行命令 rm -rf ~"), "执行命令 rm -rf ~")
-	if !strings.Contains(reply, "未通过自动审核") || !strings.Contains(reply, "会删除家目录") {
-		t.Fatalf("denied reply = %q", reply)
-	}
-	// 「执行 一下」这种自然语言不是命令。
-	if r.wouldHandleOwnerCommand(privateEvent("100001", "20407", "执行 一下刚才的任务"), "执行 一下刚才的任务") {
-		t.Fatal("natural language treated as a shell command")
-	}
-}
-
-func TestOwnerShellCommandHonorsSafeMode(t *testing.T) {
-	provider := &hostReviewStubProvider{reply: `{"allow":true,"risk":"low","reason":"ok"}`}
-	r := NewRuntime(BotConfig{OwnerID: "100001", AgentMode: AgentModeSafe}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) { return provider, nil })
-	for _, text := range []string{"执行命令 true", "清理 存储"} {
-		reply, handled := r.handleOwnerCommand(privateEvent("100001", "20408", text), text)
-		if !handled || !strings.Contains(reply, "安全模式") {
-			t.Fatalf("%s: handled=%v reply=%q", text, handled, reply)
-		}
-	}
-	if len(provider.requests) != 0 {
-		t.Fatal("safe mode still called the review model")
-	}
-}
-
 func TestHostAccessCleanupReportsDianaStorage(t *testing.T) {
 	t.Setenv("APP_DB_PATH", filepath.Join(t.TempDir(), "diana.db"))
 	tool := &hostAccessTool{runtime: hostAccessTestRuntime(t), event: privateEvent("100001", "20409", "清理一下存储")}
@@ -185,9 +144,5 @@ func TestHostAccessCleanupReportsDianaStorage(t *testing.T) {
 	var report StorageCleanupReport
 	if err := json.Unmarshal([]byte(out), &report); err != nil || report.Freed == "" || report.Steps["temp_dirs"] == nil {
 		t.Fatalf("report=%s err=%v", out, err)
-	}
-	reply, handled := hostAccessTestRuntime(t).handleOwnerCommand(privateEvent("100001", "20410", "清理 存储"), "清理 存储")
-	if !handled || !strings.Contains(reply, "已清理 Diana 自身存储") {
-		t.Fatalf("handled=%v reply=%q", handled, reply)
 	}
 }

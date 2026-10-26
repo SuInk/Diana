@@ -105,22 +105,3 @@ func (report StorageCleanupReport) finish(err error) StorageCleanupReport {
 	report.Note = "按每日维护的同一套保留规则清理 Diana 自己的缓存、临时文件和过期媒体；数据库日志按保留天数每日清理；根下散落文件和闲置编码工作区只报告不删除。"
 	return report
 }
-
-// summary 是给聊天指令的一段话。
-func (report StorageCleanupReport) summary() string {
-	text := "已清理 Diana 自身存储，释放 " + report.Freed + "。"
-	if report.Available != "" {
-		text += fmt.Sprintf("当前可用 %s（已用 %.1f%%）。", report.Available, report.StorageUsedPct)
-	}
-	if report.LooseFiles > 0 || report.IdleCodingSpaces > 0 {
-		text += fmt.Sprintf("工作目录根下散落 %d 个文件、%d 个闲置编码工作区未自动删除，可在设置页的工作目录里查看。", report.LooseFiles, report.IdleCodingSpaces)
-	}
-	if len(report.Errors) > 0 {
-		text += "部分步骤失败：" + report.Errors[0]
-		if len(report.Errors) > 1 {
-			text += fmt.Sprintf(" 等 %d 项", len(report.Errors))
-		}
-		text += "。"
-	}
-	return text
-}

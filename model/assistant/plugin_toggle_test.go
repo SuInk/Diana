@@ -25,30 +25,23 @@ func pluginToggleTestRuntime(t *testing.T) (*Runtime, *int) {
 	return r, &saves
 }
 
-func TestOwnerPluginCommandsToggleAndPersist(t *testing.T) {
+func TestPluginManageToolTogglesAndPersists(t *testing.T) {
 	r, saves := pluginToggleTestRuntime(t)
-	event := privateEvent("100001", "20501", "")
+	event := privateEvent("100001", "20501", "把 Test 插件关了")
 	event.ProfileID = "a"
-	reply, handled := r.handleOwnerCommand(event, "插件 禁用 Test")
-	if !handled || !strings.Contains(reply, "已停用插件「Test」") {
-		t.Fatalf("handled=%v reply=%q", handled, reply)
+	tool := &dianaPluginManageTool{runtime: r, event: event}
+	if _, err := tool.Run(context.Background(), map[string]any{"operation": "disable", "plugin": "Test"}); err != nil {
+		t.Fatal(err)
 	}
 	if r.plugins.EnabledWithOverrides("test", r.pluginOverridesForEvent(event)) || *saves != 1 {
 		t.Fatalf("plugin still enabled or not saved (saves=%d)", *saves)
 	}
-	if list, _ := r.handleOwnerCommand(event, "插件 列表"); !strings.Contains(list, "Test（test）：已停用") {
-		t.Fatalf("list = %q", list)
+	out, err := tool.Run(context.Background(), map[string]any{"operation": "enable", "plugin": "test"})
+	if err != nil || !strings.Contains(out, `"enabled":true`) || *saves != 2 {
+		t.Fatalf("out=%s err=%v saves=%d", out, err, *saves)
 	}
-	if reply, _ := r.handleOwnerCommand(event, "插件 启用 test"); !strings.Contains(reply, "已启用") || *saves != 2 {
-		t.Fatalf("reply=%q saves=%d", reply, *saves)
-	}
-	if reply, _ := r.handleOwnerCommand(event, "插件 启用 不存在"); !strings.Contains(reply, "没有找到插件") {
-		t.Fatalf("unknown plugin reply = %q", reply)
-	}
-	member := privateEvent("300003", "20502", "")
-	member.ProfileID = "a"
-	if _, handled := r.handleOwnerCommand(member, "插件 禁用 test"); handled {
-		t.Fatal("non-owner toggled a plugin")
+	if _, err := tool.Run(context.Background(), map[string]any{"operation": "enable", "plugin": "不存在"}); err == nil || !strings.Contains(err.Error(), "没有找到插件") {
+		t.Fatalf("unknown plugin: %v", err)
 	}
 }
 

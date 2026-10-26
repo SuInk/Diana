@@ -59,7 +59,7 @@ var promptHostCommandReviewSpec = registerPrompt(PromptSpec{
 	Key:      "audit.host_command",
 	Group:    PromptGroupAudit,
 	Title:    "宿主命令审核",
-	Usage:    "主人或 WebUI 管理会话通过 host_access 或「执行」指令运行宿主命令前调用一次：对照用户原话判断命令是否在授权范围内、有没有越权的高风险副作用，拒绝的命令不会执行。输出格式写在正文之后，改动时保持字段名不变。",
+	Usage:    "主人或 WebUI 管理会话通过 host_access 运行宿主命令前调用一次：对照用户原话判断命令是否在授权范围内、有没有越权的高风险副作用，拒绝的命令不会执行。输出格式写在正文之后，改动时保持字段名不变。",
 	Default:  hostCommandReviewPromptBody,
 	Contract: hostCommandReviewContract,
 })

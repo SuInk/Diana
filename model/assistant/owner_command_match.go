@@ -75,14 +75,6 @@ var ownerCommands = []ownerCommand{
 	{prefix: "订阅 添加 ", run: func(r *Runtime, event MessageEvent, args string) string {
 		return r.addScheduledQueryCommand(event, args)
 	}},
-	{exact: "插件 列表", run: func(r *Runtime, event MessageEvent, _ string) string { return r.renderPluginList(event) }},
-	{prefix: "插件 启用 ", run: runOwnerPluginToggle(true)},
-	{prefix: "插件 禁用 ", run: runOwnerPluginToggle(false)},
-	{exact: "清理 存储", run: runOwnerStorageCleanup},
-	// 执行命令用整词前缀，不用「执行 」：「执行 一下刚才那个任务」这种自然语言不该被
-	// 当成 shell 命令跑一遍。
-	{prefix: "执行命令 ", run: runOwnerShellCommand},
-	{prefix: "/exec ", run: runOwnerShellCommand},
 	{exact: "/remove", run: runOwnerStickerRemove},
 	{exact: "清空上下文", run: runOwnerContextReset},
 	{exact: "清除上下文", run: runOwnerContextReset},
@@ -99,7 +91,7 @@ func runOwnerContextReset(r *Runtime, event MessageEvent, _ string) string {
 }
 
 func runOwnerHelp(*Runtime, MessageEvent, string) string {
-	return "可用命令：lllm 列表、群 列表、群 禁用 <群号>、群 启用 <群号>、响应限制 列表、响应限制 解除 <账号>、提醒 添加 <时长> <内容>、提醒 列表、提醒 取消 <ID>、提醒 删除 <ID>、订阅 添加 <周期> <查询内容>、订阅 列表、订阅 取消 <ID>、订阅 删除 <ID>、插件 列表、插件 启用 <ID>、插件 禁用 <ID>、执行命令 <shell 命令>（先经模型自动审核）、清理 存储、/remove（回复要删的表情包发送）、清空上下文。也可以直接说：1 分钟后提醒我睡觉，或者每 1 分钟查询某件事并通知我。"
+	return "可用命令：lllm 列表、群 列表、群 禁用 <群号>、群 启用 <群号>、响应限制 列表、响应限制 解除 <账号>、提醒 添加 <时长> <内容>、提醒 列表、提醒 取消 <ID>、提醒 删除 <ID>、订阅 添加 <周期> <查询内容>、订阅 列表、订阅 取消 <ID>、订阅 删除 <ID>、/remove（回复要删的表情包发送）、清空上下文。也可以直接说：1 分钟后提醒我睡觉、每 1 分钟查询某件事并通知我、把某个插件关了、看看磁盘还剩多少、清理一下存储。"
 }
 
 // handleOwnerCommand 边认边执行主人命令，text 是 cleanInput 之后的文本。
