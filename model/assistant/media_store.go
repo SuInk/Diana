@@ -132,7 +132,7 @@ func (s *MediaStore) download(ctx context.Context, rawURL string) ([]byte, strin
 		return nil, "", err
 	}
 	// 部分图床按 UA 拒绝空客户端。
-	req.Header.Set("User-Agent", resolverUserAgent)
+	req.Header.Set("User-Agent", resolverUserAgent())
 	resp, err := s.client.Do(req)
 	if err != nil {
 		return nil, "", fmt.Errorf("assistant: fetch media: %w", err)

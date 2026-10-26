@@ -505,7 +505,7 @@ func (p *MusicPlugin) downloadAudio(ctx context.Context, cfg musicConfig, item s
 		cleanupLocalMediaFile(path)
 		return "", fmt.Errorf("创建音乐缓存文件失败: %w", closeErr)
 	}
-	headers := map[string]string{"User-Agent": resolverUserAgent}
+	headers := map[string]string{"User-Agent": resolverUserAgent()}
 	if source, ok := p.sourceByKey(item.Source); ok {
 		headers["Referer"] = source.Referer()
 	}

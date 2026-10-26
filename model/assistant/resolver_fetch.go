@@ -20,9 +20,9 @@ import (
 // 链接预览使用真实浏览器请求头是 IM 机器人（Slack/Discord unfurl 等）的通行做法；
 // 配合结果缓存压低请求频率，本身就是最有效的防风控手段。
 
-// resolverUserAgent 和无头浏览器那条路共用同一个身份，见 agent.BrowserUserAgent。
+// resolverUserAgent 和浏览器那条路共用同一个身份，见 agent.BrowserUserAgent。
 // 两条路各写一份的时候，浏览器那条报的是 HeadlessChrome，同一个站会看到两个访客。
-var resolverUserAgent = agent.BrowserUserAgent
+func resolverUserAgent() string { return agent.BrowserUserAgent() }
 
 const (
 	// 只读页面前 256KB，元数据都在 head 里，避免下载整页或大文件。
@@ -40,7 +40,7 @@ type pageMeta struct {
 // applyBrowserHeaders 为抓取请求设置常规浏览器头；ua 为空时使用内置 Chrome UA。
 func applyBrowserHeaders(req *http.Request, ua string) {
 	if ua == "" {
-		ua = resolverUserAgent
+		ua = resolverUserAgent()
 	}
 	req.Header.Set("User-Agent", ua)
 	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8")

@@ -619,9 +619,8 @@ func sandboxedChromeBaseArgsForMode(profileDir, cacheDir, crashDir string, headl
 		// 有头模式会继承宿主显示器的 ICC 色彩配置；固定 sRGB，网页截图和 SVG/HTML
 		// 转 PNG 才不会因运行机器不同而偏色。
 		"--force-color-profile=srgb",
-		// 对外只有一个身份：跟 HTTP 抓取那条路共用同一个 UA 和语言偏好。不设的话
-		// UA 里直接写着 HeadlessChrome，同一个站两条路会看到两个访客。
-		"--user-agent=" + BrowserUserAgent,
+		// UA 用 Chrome 自己的，不覆盖（原因见 BrowserUserAgent）；语言偏好跟 HTTP
+		// 抓取那条路共用。
 		"--lang=zh-CN",
 		"--accept-lang=" + BrowserAcceptLanguage,
 		// 关掉 Blink 的自动化标记，navigator.webdriver 才不会是 true。这是页面里

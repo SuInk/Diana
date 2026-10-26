@@ -260,7 +260,7 @@ func heyboxContext(link heyboxLink, body string) string {
 func fetchHeyboxLink(ctx context.Context, linkID string) (heyboxLink, string) {
 	timestamp := time.Now().Unix()
 	headers := map[string]string{
-		"User-Agent": resolverUserAgent,
+		"User-Agent": resolverUserAgent(),
 		"Referer":    "https://www.xiaoheihe.cn/",
 		"Origin":     "https://www.xiaoheihe.cn",
 		"Accept":     "application/json, text/plain, */*",
@@ -299,7 +299,7 @@ func (p *ResolverPlugin) resolveHeyboxMedia(ctx context.Context, req PluginReque
 		return result
 	}
 	result.ImageURLs = singleURL(firstNonEmpty(link.VideoThumb, firstNonEmptyString(images)))
-	headers := map[string]string{"User-Agent": resolverUserAgent, "Referer": "https://www.xiaoheihe.cn/"}
+	headers := map[string]string{"User-Agent": resolverUserAgent(), "Referer": "https://www.xiaoheihe.cn/"}
 	if path := downloadGenericVideoFile(ctx, strings.TrimSpace(link.VideoURL), headers); path != "" {
 		result.VideoURLs = []string{path}
 		recordResolverMediaLog(ctx, req, raw, "heybox", true, "")

@@ -182,7 +182,7 @@ func parseWeiboResponse(body []byte) (weiboStatus, string) {
 
 func weiboHeaders(id string) map[string]string {
 	return map[string]string{
-		"User-Agent":       resolverUserAgent,
+		"User-Agent":       resolverUserAgent(),
 		"Accept":           "application/json, text/plain, */*",
 		"Referer":          "https://m.weibo.cn/detail/" + id,
 		"Origin":           "https://m.weibo.cn",
@@ -285,7 +285,7 @@ func (p *ResolverPlugin) resolveWeiboMedia(ctx context.Context, req PluginReques
 		cover = status.PageInfo.PagePic.URL
 	}
 	result.ImageURLs = singleURL(firstNonEmpty(cover, firstNonEmptyString(images)))
-	headers := map[string]string{"User-Agent": resolverUserAgent, "Referer": "https://weibo.com/"}
+	headers := map[string]string{"User-Agent": resolverUserAgent(), "Referer": "https://weibo.com/"}
 	if path := downloadGenericVideoFile(ctx, videoURL, headers); path != "" {
 		result.VideoURLs = []string{path}
 		recordResolverMediaLog(ctx, req, raw, "weibo", true, "")

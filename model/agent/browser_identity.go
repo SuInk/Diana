@@ -4,8 +4,11 @@
 package agent
 
 import (
+	"context"
 	"fmt"
+	"regexp"
 	"runtime"
+	"sync"
 )
 
 // 无头浏览器和纯 HTTP 抓取共用的浏览器身份。
@@ -19,9 +22,10 @@ import (
 // 要的只是「同一个机器人对外只有一个身份」，并且这个身份是台正常的桌面浏览器。
 // 链接预览用真实浏览器请求头是 IM 机器人（Slack/Discord unfurl 等）的通行做法。
 const (
-	// chromeUAVersion 是 UA 里报的 Chrome 大版本。跟实际跑的 Chromium 版本不必
-	// 严格一致，但别落后太多——太旧的版本号本身就是可疑信号。
-	chromeUAVersion = "138.0.0.0"
+	// fallbackChromeUAVersion 只在探测不到本机 Chrome 版本时用（没装 Chrome、
+	// Windows 上 --version 不输出）。正常情况下 HTTP 抓取的 UA 跟本机 Chrome 的
+	// 实际大版本走，见 BrowserUserAgent。
+	fallbackChromeUAVersion = "155.0.0.0"
 
 	// BrowserAcceptLanguage 是两条路共用的语言偏好。浏览器那条不设的话会跟着
 	// 宿主机 locale 走，容器里通常是 C/POSIX，取回来的就是英文页面。
@@ -45,9 +49,40 @@ const (
 // ARM64 机器声称 x86_64 会和 Client Hints 报告的 ARM 打架。例外是 darwin 和
 // windows：Chrome 在 Apple Silicon Mac 上仍报 Intel Mac OS X 10_15_7，在
 // Windows ARM64 上仍报 Win64; x64（冻结的兼容 UA），照抄真实浏览器反而更一致。
-var BrowserUserAgent = chromeUserAgent(runtime.GOOS, runtime.GOARCH)
+//
+// 浏览器自己不再用 --user-agent 覆盖：那个参数只改 UA 字符串，Client Hints
+// （sec-ch-ua）照样报真实版本。写死 138 而本机是 155 时，Cloudflare 看到两边版本
+// 对不上，托管验证就一直卡在「请稍候…」。只用有头之后默认 UA 本来就没有
+// HeadlessChrome，覆盖它只会添乱。这里只给纯 HTTP 抓取用，版本号跟本机 Chrome 对齐，
+// 两条路对外仍是同一个访客。
+func BrowserUserAgent() string {
+	browserUserAgentOnce.Do(func() {
+		browserUserAgent = chromeUserAgent(runtime.GOOS, runtime.GOARCH, detectChromeUAVersion())
+	})
+	return browserUserAgent
+}
 
-func chromeUserAgent(goos, goarch string) string {
+var (
+	browserUserAgentOnce sync.Once
+	browserUserAgent     string
+	chromeMajorPattern   = regexp.MustCompile(`\b(\d{2,4})\.\d+\.\d+\.\d+\b`)
+)
+
+// detectChromeUAVersion 读本机 Chrome 的大版本，按真实 Chrome 的精简 UA 写成
+// "<大版本>.0.0.0"。
+func detectChromeUAVersion() string {
+	status := ProbeHeadlessBrowser(context.Background(), "")
+	return chromeUAVersionFrom(status.Version)
+}
+
+func chromeUAVersionFrom(versionOutput string) string {
+	if match := chromeMajorPattern.FindStringSubmatch(versionOutput); match != nil {
+		return match[1] + ".0.0.0"
+	}
+	return fallbackChromeUAVersion
+}
+
+func chromeUserAgent(goos, goarch, version string) string {
 	platform := linuxPlatform(goarch)
 	switch goos {
 	case "darwin":
@@ -57,7 +92,7 @@ func chromeUserAgent(goos, goarch string) string {
 	}
 	return fmt.Sprintf(
 		"Mozilla/5.0 (%s) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/%s Safari/537.36",
-		platform, chromeUAVersion,
+		platform, version,
 	)
 }
 

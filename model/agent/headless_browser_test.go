@@ -442,14 +442,14 @@ func TestBrowserIdentityIsPlatformConsistent(t *testing.T) {
 		{"freebsd", "amd64", "X11; Linux x86_64"},
 	} {
 		goos, goarch, want := tc[0], tc[1], tc[2]
-		ua := chromeUserAgent(goos, goarch)
+		ua := chromeUserAgent(goos, goarch, "155.0.0.0")
 		if !strings.Contains(ua, "("+want+")") {
 			t.Fatalf("%s/%s 的 UA 平台段不对：%s", goos, goarch, ua)
 		}
 		if strings.Contains(ua, "Headless") {
 			t.Fatalf("%s/%s 的 UA 里还留着 Headless：%s", goos, goarch, ua)
 		}
-		if !strings.Contains(ua, "Chrome/"+chromeUAVersion+" Safari/537.36") {
+		if !strings.Contains(ua, "Chrome/155.0.0.0 Safari/537.36") {
 			t.Fatalf("%s/%s 的 UA 版本段不对：%s", goos, goarch, ua)
 		}
 	}
@@ -462,8 +462,13 @@ func TestBrowserIdentityIsPlatformConsistent(t *testing.T) {
 // 于是 HTTP 拿得到内容、渲染却撞登录墙。
 func TestSandboxedArgsCarryBrowserIdentity(t *testing.T) {
 	base := sandboxedChromeBaseArgs("/tmp/p", "/tmp/c", "/tmp/x")
+	for _, arg := range base {
+		// 覆盖 UA 会和 Client Hints 的真实版本打架，Cloudflare 托管验证因此过不去。
+		if strings.HasPrefix(arg, "--user-agent=") {
+			t.Fatalf("浏览器不该覆盖 UA：%s", arg)
+		}
+	}
 	for _, want := range []string{
-		"--user-agent=" + BrowserUserAgent,
 		"--disable-blink-features=AutomationControlled",
 		"--accept-lang=" + BrowserAcceptLanguage,
 		"--lang=zh-CN",
@@ -476,9 +481,31 @@ func TestSandboxedArgsCarryBrowserIdentity(t *testing.T) {
 	if strings.Contains(BrowserAcceptLanguage, ";") {
 		t.Fatalf("--accept-lang 只能写语言代码，不能带 q 值：%s", BrowserAcceptLanguage)
 	}
-	// 身份属于底座，不是某一条路自己加的：截图那条路也要一样。
-	if !strings.Contains(BrowserUserAgent, "Chrome/") || strings.Contains(BrowserUserAgent, "Headless") {
-		t.Fatalf("对外 UA 不是一台正常的桌面浏览器：%s", BrowserUserAgent)
+}
+
+// HTTP 抓取的 UA 版本跟本机 Chrome 走，探测不到才用兜底版本。
+func TestChromeUAVersionFollowsInstalledChrome(t *testing.T) {
+	for in, want := range map[string]string{
+		"Google Chrome 155.0.8059.86":     "155.0.0.0",
+		"Chromium 141.0.7390.54 built on": "141.0.0.0",
+		"":                                fallbackChromeUAVersion,
+		"garbage":                         fallbackChromeUAVersion,
+	} {
+		if got := chromeUAVersionFrom(in); got != want {
+			t.Fatalf("chromeUAVersionFrom(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// Cloudflare 托管验证页几秒就「稳定」，不能拿它收尾。
+func TestChallengeInterstitialIsNotMeaningful(t *testing.T) {
+	for _, title := range []string{"Just a moment...", "请稍候…"} {
+		if (browserDOMProbe{Title: title, TextLength: 120}).meaningful() {
+			t.Fatalf("%q 被当成了正文", title)
+		}
+	}
+	if !(browserDOMProbe{Title: "PTHOME :: 登录"}).meaningful() {
+		t.Fatal("正常页面被误判成验证页")
 	}
 }
 

@@ -862,7 +862,7 @@ func platformCookieHeader(ctx context.Context, raw string) string {
 
 func resolverCommonHeaders() map[string]string {
 	return map[string]string{
-		"User-Agent": resolverUserAgent,
+		"User-Agent": resolverUserAgent(),
 	}
 }
 

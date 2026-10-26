@@ -50,7 +50,21 @@ type browserDOMProbe struct {
 }
 
 func (p browserDOMProbe) meaningful() bool {
+	if isChallengeInterstitial(p.Title) {
+		return false
+	}
 	return strings.TrimSpace(p.Title) != "" || strings.TrimSpace(p.Description) != "" || p.TextLength > 0
+}
+
+// isChallengeInterstitial 认 Cloudflare 托管验证的过渡页。它几秒内就「稳定」了，
+// 不拦的话渲染拿验证页收尾；真正的页面要等它自动跑完验证、跳转过去，常要 6–20 秒。
+// 标题跟浏览器语言走，中英文都认。
+func isChallengeInterstitial(title string) bool {
+	switch strings.TrimSpace(title) {
+	case "Just a moment...", "请稍候…", "请稍候...":
+		return true
+	}
+	return false
 }
 
 type browserActivitySnapshot struct {
