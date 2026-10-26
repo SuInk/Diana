@@ -409,3 +409,35 @@ func TestQQOfficialFallsBackToPlainWhenMarkdownRejected(t *testing.T) {
 		t.Fatalf("fallback message = %#v", msg)
 	}
 }
+
+// send_attachment 的 mode=file 交来的是 file 段。此前 QQ 官方在 sendFileAttachment
+// 的平台白名单前就报 unavailable；现在按 file_type=4 上传，文件名原样保留（含无扩展名）。
+func TestQQOfficialSendsFileSegment(t *testing.T) {
+	api := newQQFakeAPI(t)
+	channel := api.channel()
+	dir := t.TempDir()
+	file := filepath.Join(dir, "Makefile")
+	if err := os.WriteFile(file, []byte("all:\n\techo hi\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	result, err := channel.SendWithResult(context.Background(), OutgoingMessage{
+		UserID:   "U",
+		Segments: []MessageSegment{{Type: "file", Data: map[string]string{"file": file, "name": "Makefile"}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result["message_id"] != "m1" || len(api.messages) != 1 {
+		t.Fatalf("result = %#v messages = %#v", result, api.messages)
+	}
+	if prepare := api.prepares[0]; prepare["file_type"].(float64) != 4 || prepare["file_name"] != "Makefile" {
+		t.Fatalf("prepare = %#v, want file_type 4 named Makefile", prepare)
+	}
+	if string(api.put) != "all:\n\techo hi\n" {
+		t.Fatalf("uploaded = %q", api.put)
+	}
+	want := []string{"POST /v2/users/U/upload_prepare", "PUT /put/1", "POST /v2/users/U/upload_part_finish", "POST /v2/users/U/files", "POST /v2/users/U/messages"}
+	if strings.Join(api.paths, "|") != strings.Join(want, "|") {
+		t.Fatalf("request order = %v", api.paths)
+	}
+}

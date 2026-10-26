@@ -469,7 +469,8 @@ func (c *QQOfficialChannel) SendWithResult(ctx context.Context, msg OutgoingMess
 		return nil, fmt.Errorf("qq: 缺少会话标识")
 	}
 	text := platformOutboundText(msg)
-	if text == "" && len(msg.ImageURLs) == 0 && len(msg.VideoURLs) == 0 && len(msg.AudioURLs) == 0 {
+	files := qqOutgoingFiles(msg)
+	if text == "" && len(msg.ImageURLs) == 0 && len(msg.VideoURLs) == 0 && len(msg.AudioURLs) == 0 && len(files) == 0 {
 		return nil, nil
 	}
 	endpoint := c.apiBase() + "/v2/users/" + target + "/messages"
@@ -581,15 +582,15 @@ func (c *QQOfficialChannel) SendWithResult(ctx context.Context, msg OutgoingMess
 		}
 		firstID = id
 	}
-	if isGuild && (len(msg.ImageURLs) > 0 || len(msg.VideoURLs) > 0 || len(msg.AudioURLs) > 0) {
+	if isGuild && (len(msg.ImageURLs) > 0 || len(msg.VideoURLs) > 0 || len(msg.AudioURLs) > 0 || len(files) > 0) {
 		return nil, fmt.Errorf("qq: 频道消息暂不支持发送富媒体")
 	}
 	prefix := c.apiBase() + "/v2/users/" + target
 	if isGroup {
 		prefix = c.apiBase() + "/v2/groups/" + target
 	}
-	// sendMedia 上传一个媒体并以 msg_type 7 的富媒体消息发出。图片、视频、语音
-	// 共用同一条分片上传链路，差别只在 file_type。
+	// sendMedia 上传一个媒体并以 msg_type 7 的富媒体消息发出。图片、视频、语音、
+	// 文件共用同一条分片上传链路，差别只在 file_type。
 	sendMedia := func(source string, fileType int, maxBytes int64) (string, error) {
 		fileInfo, err := c.qqUploadMedia(ctx, auth, prefix, source, fileType, maxBytes)
 		if err != nil {
@@ -636,10 +637,34 @@ func (c *QQOfficialChannel) SendWithResult(ctx context.Context, msg OutgoingMess
 			firstID = id
 		}
 	}
+	for _, source := range files {
+		id, err := sendMedia(source, qqFileTypeFile, qqMaxFileBytes)
+		if err != nil {
+			return nil, err
+		}
+		if firstID == "" {
+			firstID = id
+		}
+	}
 	if firstID != "" {
 		return map[string]any{"message_id": firstID}, nil
 	}
 	return nil, nil
+}
+
+// qqOutgoingFiles 取出要作为文件附件发送的本地路径，形态与 Telegram 的
+// sendDocument 一致：file 段的 file 字段。
+func qqOutgoingFiles(msg OutgoingMessage) []string {
+	var files []string
+	for _, segment := range msg.Segments {
+		if segment.Type != "file" {
+			continue
+		}
+		if source := strings.TrimSpace(segment.Data["file"]); source != "" {
+			files = append(files, source)
+		}
+	}
+	return files
 }
 
 // qqSentLedgerTTL 是发送记录的有效期；平台回推通常在一两秒内，留足余量即可。

@@ -131,13 +131,13 @@ type StructuredMemoryItem struct {
 	SourceSession    string           `json:"source_session"`
 	SourceGroupID    string           `json:"source_group_id,omitempty"`
 	SourceMessageID  string           `json:"source_message_id,omitempty"`
-	SourceEventTime  time.Time        `json:"source_event_time,omitempty"`
+	SourceEventTime  time.Time        `json:"source_event_time,omitzero"`
 	Confidence       float64          `json:"confidence"`
 	Importance       float64          `json:"importance"`
 	Visibility       MemoryVisibility `json:"visibility"`
 	Sensitive        bool             `json:"sensitive"`
-	ExpiresAt        time.Time        `json:"expires_at,omitempty"`
-	LastVerifiedAt   time.Time        `json:"last_verified_at,omitempty"`
+	ExpiresAt        time.Time        `json:"expires_at,omitzero"`
+	LastVerifiedAt   time.Time        `json:"last_verified_at,omitzero"`
 	Version          int              `json:"version"`
 	SupersedesID     string           `json:"supersedes_id,omitempty"`
 	Status           MemoryStatus     `json:"status"`

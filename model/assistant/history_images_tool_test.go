@@ -471,3 +471,40 @@ func TestChatHistoryItemListsFileNamesWithoutFileIDs(t *testing.T) {
 		t.Fatalf("item = %#v", item)
 	}
 }
+
+// 官方 Bot API 只给下载 20MB 以内的文件。超限的视频不是格式问题，报错要说清楚，
+// 否则模型会把它转述成「格式或者源文件的问题」。
+func TestHistoryMediaToolExplainsOversizedTelegramVideo(t *testing.T) {
+	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	runtime.remember(MessageEvent{
+		Platform:  PlatformTelegram,
+		Kind:      EventKindGroup,
+		GroupID:   "-10012345",
+		UserID:    "user-1",
+		MessageID: "705",
+		Segments: []MessageSegment{
+			{Type: "text", Data: map[string]string{"text": "看这个"}},
+			{Type: "video", Data: map[string]string{"file_id": "BAAC", "file_size": "23227364", "mime": "video/mp4"}},
+		},
+	})
+	tool := newDianaHistoryImagesTool(runtime, MessageEvent{Platform: PlatformTelegram, Kind: EventKindGroup, GroupID: "-10012345", UserID: "reader"})
+	_, err := tool.Run(context.Background(), map[string]any{"message_ids": []any{"705"}})
+	if err == nil || !strings.Contains(err.Error(), "20MB 以内") || !strings.Contains(err.Error(), "22.2MB") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestTelegramDownloadSkipsFilesOverCloudLimit(t *testing.T) {
+	segment := MessageSegment{Type: "video", Data: map[string]string{"file_id": "BAAC", "file_size": "23227364"}}
+	if !telegramSegmentOverCloudLimit(segment) {
+		t.Fatal("23MB video should be over the Bot API download limit")
+	}
+	segment.Data["file_size"] = "1048576"
+	if telegramSegmentOverCloudLimit(segment) {
+		t.Fatal("1MB video should be downloadable")
+	}
+	delete(segment.Data, "file_size")
+	if telegramSegmentOverCloudLimit(segment) {
+		t.Fatal("unknown size must not block the download")
+	}
+}

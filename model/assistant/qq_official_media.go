@@ -29,6 +29,7 @@ const (
 	qqFileTypeImage = 1
 	qqFileTypeVideo = 2
 	qqFileTypeAudio = 3
+	qqFileTypeFile  = 4
 
 	// qqMaxImageBytes 是图片的软上限。
 	qqMaxImageBytes = 20 << 20
@@ -37,6 +38,9 @@ const (
 	qqMaxVideoBytes = 100 << 20
 	// qqMaxAudioBytes 是语音/音频上限；平台会转码，过大的音频无实际意义。
 	qqMaxAudioBytes = 20 << 20
+	// qqMaxFileBytes 是文件附件上限。平台硬限制 200MB，与视频同取 100MB；
+	// send_attachment 读文件本身只到 32MB，这里只是兜住其他来源。
+	qqMaxFileBytes = 100 << 20
 	// qqMD510MBoundary 是 md5_10m 取文件头部的字节数（平台约定）。
 	qqMD510MBoundary = 10002432
 	qqUploadRetries  = 3
@@ -160,7 +164,7 @@ func (c *QQOfficialChannel) qqUploadMedia(ctx context.Context, auth, prefix, sou
 }
 
 // qqMediaPayload 读出上传用的字节和文件名。图片走 readHistoryImageSource（内联
-// 数据、下载缓存均在该路径）；视频和音频读本地文件，外链先下载到缓存再读。
+// 数据、下载缓存均在该路径）；视频、音频和文件读本地文件，外链先下载到缓存再读。
 func qqMediaPayload(ctx context.Context, source string, fileType int, maxBytes int64) ([]byte, string, error) {
 	if fileType == qqFileTypeImage {
 		data, contentType, err := readHistoryImageSource(ctx, source, 0)
@@ -173,12 +177,21 @@ func qqMediaPayload(ctx context.Context, source string, fileType int, maxBytes i
 		return data, "image" + imessageExtensionFor(contentType), nil
 	}
 	kind, defaultName := "视频", "video.mp4"
-	if fileType == qqFileTypeAudio {
+	switch fileType {
+	case qqFileTypeAudio:
 		kind, defaultName = "音频", "audio.mp3"
+	case qqFileTypeFile:
+		kind, defaultName = "文件", "file"
 	}
 	data, err := qqReadMediaBytes(ctx, source, maxBytes)
 	if err != nil {
 		return nil, "", fmt.Errorf("qq: 读取%s失败: %w", kind, err)
+	}
+	if fileType == qqFileTypeFile {
+		// 文件附件的名字就是用户看到的文件名，没有扩展名（Makefile 之类）也照用。
+		if base := filepath.Base(rawAbsoluteMediaPath(strings.TrimSpace(source))); base != "" && base != "." && base != "/" {
+			return data, base, nil
+		}
 	}
 	return data, qqUploadName(source, defaultName), nil
 }

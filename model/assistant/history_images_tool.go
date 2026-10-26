@@ -193,7 +193,7 @@ func (t *dianaHistoryImagesTool) Run(ctx context.Context, input map[string]any) 
 			result.Media = append(result.Media, dianaHistoryImageStatus{
 				MessageID: selector.MessageID,
 				Status:    "failed",
-				Error:     "消息中没有原始图片或按需提取的视频关键帧",
+				Error:     firstNonEmpty(telegramOversizedMediaReason(source), "消息中没有原始图片或按需提取的视频关键帧"),
 			})
 			continue
 		}

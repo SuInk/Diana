@@ -260,7 +260,7 @@ func (r *Runtime) sendFileAttachment(ctx context.Context, event MessageEvent, na
 		return err
 	}
 	event.Platform = platform
-	if platform != PlatformTelegram && !IsOneBotPlatform(platform) {
+	if platform != PlatformTelegram && platform != PlatformQQOfficial && !IsOneBotPlatform(platform) {
 		return fmt.Errorf("file attachment sending is unavailable for this platform")
 	}
 	dir, err := os.MkdirTemp("", "diana-attachment-*")
@@ -272,7 +272,8 @@ func (r *Runtime) sendFileAttachment(ctx context.Context, event MessageEvent, na
 	if err = os.WriteFile(snapshot, data, 0600); err != nil {
 		return err
 	}
-	if platform == PlatformTelegram {
+	// Telegram 和 QQ 官方走富媒体上传；只有 OneBot 用群文件/私聊文件动作。
+	if platform == PlatformTelegram || platform == PlatformQQOfficial {
 		return r.sendOutgoing(ctx, event, OutgoingMessage{Segments: []MessageSegment{{Type: "file", Data: map[string]string{"file": snapshot, "name": name}}}})
 	}
 	return r.uploadResolverVideoFile(ctx, event, resolverVideoUpload{Path: snapshot, Name: name})
