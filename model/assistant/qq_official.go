@@ -473,7 +473,10 @@ func (c *QQOfficialChannel) SendWithResult(ctx context.Context, msg OutgoingMess
 		return nil, fmt.Errorf("qq: 缺少会话标识")
 	}
 	text := platformOutboundText(msg)
-	files := qqOutgoingFiles(msg)
+	files, err := qqOutgoingFiles(msg)
+	if err != nil {
+		return nil, err
+	}
 	if text == "" && len(msg.ImageURLs) == 0 && len(msg.VideoURLs) == 0 && len(msg.AudioURLs) == 0 && len(files) == 0 {
 		return nil, nil
 	}
@@ -613,8 +616,9 @@ func (c *QQOfficialChannel) SendWithResult(ctx context.Context, msg OutgoingMess
 	}
 	// sendMedia 上传一个媒体并以 msg_type 7 的富媒体消息发出。图片、视频、语音、
 	// 文件共用同一条分片上传链路，差别只在 file_type。
-	sendMedia := func(source string, fileType int, maxBytes int64) (string, error) {
-		fileInfo, err := c.qqUploadMedia(ctx, auth, prefix, source, fileType, maxBytes)
+	// filename 只对文件生效，空串时按来源取名。
+	sendMedia := func(source, filename string, fileType int, maxBytes int64) (string, error) {
+		fileInfo, err := c.qqUploadMedia(ctx, auth, prefix, source, filename, fileType, maxBytes)
 		if err != nil {
 			return "", err
 		}
@@ -648,7 +652,7 @@ func (c *QQOfficialChannel) SendWithResult(ctx context.Context, msg OutgoingMess
 		}
 	}
 	for _, source := range images {
-		id, err := sendMedia(source, qqFileTypeImage, qqMaxImageBytes)
+		id, err := sendMedia(source, "", qqFileTypeImage, qqMaxImageBytes)
 		if err != nil {
 			return nil, err
 		}
@@ -660,7 +664,7 @@ func (c *QQOfficialChannel) SendWithResult(ctx context.Context, msg OutgoingMess
 		if strings.TrimSpace(source) == "" {
 			continue
 		}
-		id, err := sendMedia(source, qqFileTypeVideo, qqMaxVideoBytes)
+		id, err := sendMedia(source, "", qqFileTypeVideo, qqMaxVideoBytes)
 		if err != nil {
 			return nil, err
 		}
@@ -672,7 +676,7 @@ func (c *QQOfficialChannel) SendWithResult(ctx context.Context, msg OutgoingMess
 		if strings.TrimSpace(source) == "" {
 			continue
 		}
-		id, err := sendMedia(source, qqFileTypeAudio, qqMaxAudioBytes)
+		id, err := sendMedia(source, "", qqFileTypeAudio, qqMaxAudioBytes)
 		if err != nil {
 			return nil, err
 		}
@@ -680,8 +684,8 @@ func (c *QQOfficialChannel) SendWithResult(ctx context.Context, msg OutgoingMess
 			firstID = id
 		}
 	}
-	for _, source := range files {
-		id, err := sendMedia(source, qqFileTypeFile, qqMaxFileBytes)
+	for _, file := range files {
+		id, err := sendMedia(file.Data["file"], file.Data["name"], qqFileTypeFile, qqMaxFileBytes)
 		if err != nil {
 			return nil, err
 		}
@@ -695,19 +699,21 @@ func (c *QQOfficialChannel) SendWithResult(ctx context.Context, msg OutgoingMess
 	return nil, nil
 }
 
-// qqOutgoingFiles 取出要作为文件附件发送的本地路径，形态与 Telegram 的
-// sendDocument 一致：file 段的 file 字段。
-func qqOutgoingFiles(msg OutgoingMessage) []string {
-	var files []string
+// qqOutgoingFiles 取出要作为文件附件发送的 file 段，形态与 Telegram 的
+// sendDocument 一致：file 字段是来源，name 字段是展示给用户的文件名。
+// 来源为空的 file 段直接报错：静默跳过会让调用方以为文件已经发出去了。
+func qqOutgoingFiles(msg OutgoingMessage) ([]MessageSegment, error) {
+	var files []MessageSegment
 	for _, segment := range msg.Segments {
 		if segment.Type != "file" {
 			continue
 		}
-		if source := strings.TrimSpace(segment.Data["file"]); source != "" {
-			files = append(files, source)
+		if strings.TrimSpace(segment.Data["file"]) == "" {
+			return nil, fmt.Errorf("qq: 文件消息缺少文件来源")
 		}
+		files = append(files, segment)
 	}
-	return files
+	return files, nil
 }
 
 // qqSentLedgerTTL 是发送记录的有效期；平台回推通常在一两秒内，留足余量即可。

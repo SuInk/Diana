@@ -1,13 +1,16 @@
 package assistant
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -21,8 +24,11 @@ type qqFakeAPI struct {
 	messagePosts []map[string]any
 	// prepares 记录每次 /upload_prepare 的请求体，用来核对 file_type。
 	prepares []map[string]any
-	paths    []string
-	put      []byte
+	merges   []map[string]any
+	// uploadError 模拟平台拒绝文件上传，不能继续发送或报告成功。
+	uploadError bool
+	paths       []string
+	put         []byte
 	// dedup 让前 N 条 /messages 回 40054005，模拟平台去重。
 	dedup int
 	// rejectMarkdown 让 msg_type 2 的消息被拒收，模拟没开 Markdown 权限。
@@ -56,6 +62,10 @@ func newQQFakeAPI(t *testing.T) *qqFakeAPI {
 			api.mu.Lock()
 			api.prepares = append(api.prepares, body)
 			api.mu.Unlock()
+			if api.uploadError {
+				_, _ = w.Write([]byte(`{"code":850012,"message":"file rejected"}`))
+				return
+			}
 			size := body["file_size"].(string)
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"upload_id": "up1", "block_size": size,
@@ -64,6 +74,9 @@ func newQQFakeAPI(t *testing.T) *qqFakeAPI {
 		case strings.HasSuffix(r.URL.Path, "/upload_part_finish"):
 			_, _ = w.Write([]byte(`{}`))
 		case strings.HasSuffix(r.URL.Path, "/files"):
+			api.mu.Lock()
+			api.merges = append(api.merges, body)
+			api.mu.Unlock()
 			_ = json.NewEncoder(w).Encode(map[string]any{"file_info": "FILEINFO", "ttl": 0})
 		case strings.HasSuffix(r.URL.Path, "/messages"):
 			api.mu.Lock()
@@ -106,6 +119,112 @@ func newQQFakeAPI(t *testing.T) *qqFakeAPI {
 	api.server = httptest.NewServer(mux)
 	t.Cleanup(api.server.Close)
 	return api
+}
+
+func TestQQOfficialSendsFiles(t *testing.T) {
+	for _, group := range []bool{true, false} {
+		for _, caption := range []string{"", "附件"} {
+			t.Run(fmt.Sprintf("group=%t/caption=%s", group, caption), func(t *testing.T) {
+				api := newQQFakeAPI(t)
+				path := filepath.Join(t.TempDir(), "snapshot.bin")
+				data := []byte("原文件内容\x00\xff")
+				if err := os.WriteFile(path, data, 0600); err != nil {
+					t.Fatal(err)
+				}
+				msg := OutgoingMessage{UserID: "U", Text: caption, PassiveReplyMessageID: "trigger", Segments: []MessageSegment{
+					{Type: "file", Data: map[string]string{"file": path, "name": "报告.pdf"}},
+					{Type: "file", Data: map[string]string{"file": path}},
+				}}
+				prefix := "/v2/users/U"
+				if group {
+					msg.GroupID = "G"
+					prefix = "/v2/groups/G"
+				}
+				result, err := api.channel().SendWithResult(context.Background(), msg)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if result["message_id"] != "m1" || !bytes.Equal(api.put, data) {
+					t.Fatalf("result = %#v, uploaded %d bytes", result, len(api.put))
+				}
+				var wantPaths []string
+				wantMessages := 2
+				if caption != "" {
+					wantMessages++
+					wantPaths = append(wantPaths, "POST "+prefix+"/messages")
+				}
+				if len(api.messages) != wantMessages {
+					t.Fatalf("messages = %#v, want %d", api.messages, wantMessages)
+				}
+				for i, name := range []string{"报告.pdf", "snapshot.bin"} {
+					if len(api.prepares) != 2 || len(api.merges) != 2 {
+						t.Fatalf("prepares = %#v, merges = %#v", api.prepares, api.merges)
+					}
+					prepare, merge := api.prepares[i], api.merges[i]
+					if prepare["file_type"] != float64(4) || prepare["file_name"] != name || merge["file_type"] != float64(4) || merge["file_name"] != name || merge["srv_send_msg"] != false {
+						t.Fatalf("prepare = %#v, merge = %#v", prepare, merge)
+					}
+					wantPaths = append(wantPaths, "POST "+prefix+"/upload_prepare", "PUT /put/1", "POST "+prefix+"/upload_part_finish", "POST "+prefix+"/files", "POST "+prefix+"/messages")
+				}
+				if !reflect.DeepEqual(api.paths, wantPaths) {
+					t.Fatalf("request paths = %v, want %v", api.paths, wantPaths)
+				}
+				for i, sent := range api.messages {
+					if sent["msg_id"] != "trigger" || sent["msg_seq"] != float64(i+1) {
+						t.Fatalf("reply metadata = %#v", sent)
+					}
+					if i == 0 && caption != "" {
+						continue
+					}
+					media, _ := sent["media"].(map[string]any)
+					if sent["msg_type"] != float64(7) || media["file_info"] != "FILEINFO" {
+						t.Fatalf("file message = %#v", sent)
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestQQOfficialRejectsInvalidFileMessages(t *testing.T) {
+	for _, kind := range []string{"guild", "known_guild", "missing_source", "upload_error", "oversize"} {
+		t.Run(kind, func(t *testing.T) {
+			api := newQQFakeAPI(t)
+			channel := api.channel()
+			path := filepath.Join(t.TempDir(), "file.txt")
+			if err := os.WriteFile(path, []byte("hello"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			msg := OutgoingMessage{GroupID: "G", Segments: []MessageSegment{{Type: "file", Data: map[string]string{"file": path}}}}
+			want := ""
+			switch kind {
+			case "guild":
+				msg.PlatformScope, want = "qq_guild", "频道消息暂不支持发送富媒体"
+			case "known_guild":
+				channel.guildChannels = map[string]string{"G": "guild"}
+				want = "频道消息暂不支持发送富媒体"
+			case "missing_source":
+				msg.Segments[0].Data["file"] = " "
+				want = "缺少文件来源"
+			case "upload_error":
+				api.uploadError, want = true, "file rejected"
+			case "oversize":
+				if err := os.Truncate(path, qqMaxFileBytes+1); err != nil {
+					t.Fatal(err)
+				}
+				want = "超过上限"
+			}
+			if _, err := channel.SendWithResult(context.Background(), msg); err == nil || !strings.Contains(err.Error(), want) {
+				t.Fatalf("error = %v, want %q", err, want)
+			}
+			if len(api.messages) != 0 || len(api.merges) != 0 || len(api.put) != 0 {
+				t.Fatalf("failed file was uploaded or sent: %v", api.paths)
+			}
+			if kind != "upload_error" && len(api.paths) != 0 {
+				t.Fatalf("unexpected API calls: %v", api.paths)
+			}
+		})
+	}
 }
 
 func (a *qqFakeAPI) channel() *QQOfficialChannel {

@@ -50,11 +50,17 @@ const (
 //
 // prefix 是 /v2/groups/{id} 或 /v2/users/{id}。媒体来源可能是本地文件、内联数据或
 // 外链，统一读成字节再上传：外链不一定公网可达，直接交给平台下载会失败。
-// 图片、视频、语音共用同一条分片上传链路，差别只在 file_type 与大小上限。
-func (c *QQOfficialChannel) qqUploadMedia(ctx context.Context, auth, prefix, source string, fileType int, maxBytes int64) (string, error) {
+// 图片、视频、语音、文件共用同一条分片上传链路，差别只在 file_type 与大小上限。
+// filename 是文件段带的展示名：外链来源的 URL 末段往往不是真文件名，有就用它。
+func (c *QQOfficialChannel) qqUploadMedia(ctx context.Context, auth, prefix, source, filename string, fileType int, maxBytes int64) (string, error) {
 	data, name, err := qqMediaPayload(ctx, source, fileType, maxBytes)
 	if err != nil {
 		return "", err
+	}
+	if fileType == qqFileTypeFile {
+		if base := filepath.Base(strings.TrimSpace(filename)); base != "" && base != "." && base != "/" {
+			name = base
+		}
 	}
 	c.mu.RLock()
 	client := c.client
