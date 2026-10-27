@@ -29,7 +29,9 @@ type qqFakeAPI struct {
 	rejectMarkdown bool
 	// rejectKeyboard 让带 keyboard 的消息被拒收，模拟没开通自定义按钮。
 	rejectKeyboard bool
-	server         *httptest.Server
+	// rejectGallery 让带 mqqapi 图集节点的消息被拒收，和生产实测的回包一致。
+	rejectGallery bool
+	server        *httptest.Server
 }
 
 func newQQFakeAPI(t *testing.T) *qqFakeAPI {
@@ -67,6 +69,12 @@ func newQQFakeAPI(t *testing.T) *qqFakeAPI {
 			api.mu.Lock()
 			api.messagePosts = append(api.messagePosts, body)
 			_, hasKeyboard := body["keyboard"]
+			if markdown, _ := body["markdown"].(map[string]any); api.rejectGallery && strings.Contains(markdownContentOf(markdown), "mqqapi://markdown/node") {
+				api.mu.Unlock()
+				w.WriteHeader(http.StatusBadRequest)
+				_ = json.NewEncoder(w).Encode(map[string]any{"message": "请求参数不允许包含url mqqapi://markdown/node", "code": 40034028})
+				return
+			}
 			if (api.rejectMarkdown && body["msg_type"] == float64(2)) || (api.rejectKeyboard && hasKeyboard) {
 				api.mu.Unlock()
 				w.WriteHeader(http.StatusBadRequest)
@@ -444,4 +452,9 @@ func TestQQOfficialSendsFileSegment(t *testing.T) {
 	if strings.Join(api.paths, "|") != strings.Join(want, "|") {
 		t.Fatalf("request order = %v", api.paths)
 	}
+}
+
+func markdownContentOf(markdown map[string]any) string {
+	content, _ := markdown["content"].(string)
+	return content
 }

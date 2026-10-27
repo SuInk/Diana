@@ -51,3 +51,24 @@ func TestQQOfficialSendsPublicImagesAsGallery(t *testing.T) {
 		t.Fatalf("gallery message = %#v", api.messages[0])
 	}
 }
+
+func TestQQOfficialStopsTryingGalleryAfterRefusal(t *testing.T) {
+	api := newQQFakeAPI(t)
+	api.rejectGallery = true
+	channel := api.channel()
+	// .invalid 解析不了，逐张上传会立刻失败；这里只看图集还发不发。
+	images := []string{"https://cdn.example.invalid/a.jpg", "https://cdn.example.invalid/b.jpg"}
+	for range 2 {
+		_ = channel.Send(context.Background(), OutgoingMessage{GroupID: "G", ImageURLs: images, ReplyMessageID: "in1"})
+	}
+	galleries := 0
+	for _, post := range api.messagePosts {
+		markdown, _ := post["markdown"].(map[string]any)
+		if strings.Contains(markdownContentOf(markdown), "multiPic") {
+			galleries++
+		}
+	}
+	if galleries != 1 || !channel.galleryRefused.Load() {
+		t.Fatalf("gallery posts = %d refused = %v, want one attempt then remembered", galleries, channel.galleryRefused.Load())
+	}
+}

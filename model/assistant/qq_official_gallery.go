@@ -16,7 +16,12 @@ import (
 //
 // 节点里填的是图片地址，由 QQ 自己去拉，所以只有公网 http(s) 地址能用；本机分享的
 // 127.0.0.1、内网地址和 data: 图照旧逐张上传。
+//
+// 实测普通账号会被拒（40034028「请求参数不允许包含url mqqapi://markdown/node」），
+// 应该要额外开通；拒过一次通道就记住，不再每次多图都先白发一条。
 const (
+	qqGalleryRefusedErrorCode = "40034028"
+
 	qqGalleryMinImages   = 2
 	qqGalleryMaxImages   = 20
 	qqGalleryItemsPerRow = 3

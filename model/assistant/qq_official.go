@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -90,6 +91,8 @@ type QQOfficialChannel struct {
 	// refs 是 REFIDX_ 引用索引：入站按 message_scene.ext 的 msg_idx 登记，出站按
 	// 发送响应 ext_info.ref_idx 登记，收到引用消息时用 ref_msg_idx 反查。
 	refs qqRefLedger
+	// galleryRefused 记着平台拒过图集节点，之后多图直接逐张上传，不再白发一次。
+	galleryRefused atomic.Bool
 }
 
 type qqPassiveSeq struct {
@@ -627,7 +630,7 @@ func (c *QQOfficialChannel) SendWithResult(ctx context.Context, msg OutgoingMess
 		}
 	}
 	// 好几张公网图合成一条图集，见 qq_official_gallery.go；被拒就照旧逐张上传。
-	if content, ok := qqOfficialGalleryMarkdown(images); ok {
+	if content, ok := qqOfficialGalleryMarkdown(images); ok && !c.galleryRefused.Load() {
 		id, err := post(map[string]any{"msg_type": 2, "markdown": map[string]any{"content": content}})
 		switch {
 		case err == nil:
@@ -638,6 +641,9 @@ func (c *QQOfficialChannel) SendWithResult(ctx context.Context, msg OutgoingMess
 		case qqOfficialRetryUseless(err):
 			return nil, err
 		default:
+			if strings.Contains(err.Error(), qqGalleryRefusedErrorCode) {
+				c.galleryRefused.Store(true)
+			}
 			log.Printf("qq: 图集消息被拒，改为逐张发送: %v", err)
 		}
 	}
