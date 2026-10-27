@@ -87,7 +87,15 @@ func effectiveLLMRecoveryPolicy(policy *ModelRecoveryPolicy) llmRecoveryPolicy {
 type llmCooldownTable struct {
 	mu      sync.Mutex
 	entries map[string]*llmCooldownEntry
-	now     func() time.Time
+	// calls 记每个候选最近一次调用的结果，跟冷却状态分开存：调用成功会清掉冷却
+	// 条目、手动恢复也会清，但「上次什么时候用过它」不该跟着没了。
+	calls map[string]llmCallRecord
+	now   func() time.Time
+}
+
+type llmCallRecord struct {
+	at time.Time
+	ok bool
 }
 
 type llmCooldownEntry struct {
@@ -108,10 +116,19 @@ type ModelCandidateHealth struct {
 	CooldownUntil *time.Time `json:"cooldown_until,omitempty"`
 }
 
+// ModelCandidateCall 是单个候选最近一次调用的时间和结果，只在进程内保留。
+type ModelCandidateCall struct {
+	ProfileID string    `json:"profile_id"`
+	Model     string    `json:"model"`
+	At        time.Time `json:"at"`
+	OK        bool      `json:"ok"`
+}
+
 // ModelHealthSnapshot 带上服务端取样时间，前端可据此判断 cooldown_until 是否仍有效。
 type ModelHealthSnapshot struct {
 	CheckedAt  time.Time              `json:"checked_at"`
 	Candidates []ModelCandidateHealth `json:"candidates"`
+	Calls      []ModelCandidateCall   `json:"calls"`
 }
 
 // llmCooldownKey 按配置档 ID 加模型区分候选：同一个配置档下挂好几个模型时，一个
@@ -155,7 +172,7 @@ func (t *llmCooldownTable) snapshot(profiles []llm.Profile) []llmCandidateHealth
 
 func (t *llmCooldownTable) publicSnapshot() ModelHealthSnapshot {
 	now := time.Now()
-	result := ModelHealthSnapshot{CheckedAt: now, Candidates: []ModelCandidateHealth{}}
+	result := ModelHealthSnapshot{CheckedAt: now, Candidates: []ModelCandidateHealth{}, Calls: []ModelCandidateCall{}}
 	if t == nil {
 		return result
 	}
@@ -190,7 +207,33 @@ func (t *llmCooldownTable) publicSnapshot() ModelHealthSnapshot {
 		}
 		return result.Candidates[i].Model < result.Candidates[j].Model
 	})
+	for key, call := range t.calls {
+		profileID, model, ok := strings.Cut(key, "\x00")
+		if !ok {
+			continue
+		}
+		result.Calls = append(result.Calls, ModelCandidateCall{ProfileID: profileID, Model: model, At: call.at, OK: call.ok})
+	}
+	sort.Slice(result.Calls, func(i, j int) bool {
+		if result.Calls[i].ProfileID != result.Calls[j].ProfileID {
+			return result.Calls[i].ProfileID < result.Calls[j].ProfileID
+		}
+		return result.Calls[i].Model < result.Calls[j].Model
+	})
 	return result
+}
+
+// noteCall 记下候选这次调用的结果。键的数量受配置档和模型个数约束，不用淘汰。
+func (t *llmCooldownTable) noteCall(profile llm.Profile, ok bool) {
+	if t == nil {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.calls == nil {
+		t.calls = map[string]llmCallRecord{}
+	}
+	t.calls[llmCooldownKey(profile)] = llmCallRecord{at: t.clock(), ok: ok}
 }
 
 // remaining 返回候选还要冷却多久，不在冷却中返回 0。
@@ -408,6 +451,7 @@ func noteLLMCandidateFailure(cooldowns *llmCooldownTable, group string, profile 
 	if len(policies) > 0 {
 		policy = policies[0]
 	}
+	cooldowns.noteCall(profile, false)
 	mark := cooldowns.markFailureWithPolicy(profile, err, policy)
 	if mark.cooldown <= 0 || !mark.fresh {
 		return mark

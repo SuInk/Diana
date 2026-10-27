@@ -80,6 +80,20 @@ func (c *avatarCache) cachedSHA(key string) string {
 	return ""
 }
 
+// knownSHA 返回手上的内容哈希，过了校验期也照给，stale 表示该回源校验了。
+func (c *avatarCache) knownSHA(key string) (sha string, stale bool) {
+	if c == nil {
+		return "", false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	entry, ok := c.entries[key]
+	if !ok {
+		return "", false
+	}
+	return entry.sha, c.now().Sub(entry.checkedAt) >= avatarRecheckInterval
+}
+
 // load 取头像内容，必要时回源。fetch 只在缓存过期或没有时调用。
 func (c *avatarCache) load(ctx context.Context, key string, fetch func(ctx context.Context, previous *avatarEntry) (*avatarEntry, error)) (*avatarEntry, bool) {
 	for {

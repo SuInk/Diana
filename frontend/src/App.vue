@@ -199,10 +199,7 @@
           <span v-if="scopeSwitching" class="scope-loading-label" role="status">正在切换…</span>
           <div v-if="scopeSwitching" class="scope-progress" role="progressbar" aria-label="正在加载当前机器人数据"><span /></div>
         </section>
-        <div v-if="!scopeReady" class="startup-loading startup-content" role="status" aria-live="polite">
-          <span class="startup-spinner" aria-hidden="true" />
-          <p>正在加载机器人配置…</p>
-        </div>
+        <ViewSkeleton v-if="!scopeReady" label="正在加载机器人配置" />
         <div v-else :aria-busy="scopeSwitching" :inert="scopeSwitching" :class="{ 'scope-content-pending': scopeSwitching }">
           <KeepAlive :key="botScope" :max="VIEW_CACHE_LIMIT">
             <component :is="activeView" :key="viewKey" />
@@ -271,23 +268,29 @@ import BackendDownView from "./views/BackendDownView.vue";
 import LoginView from "./views/LoginView.vue";
 import DashboardView from "./views/DashboardView.vue";
 import BrandLogo from "./components/BrandLogo.vue";
+import ViewSkeleton from "./components/ViewSkeleton.vue";
+
+// 页面代码首次下载期间显示整页骨架；120ms 内下完的不画，免得缓存命中时也闪一下。
+function lazyView(loader: () => Promise<{ default: Component }>): Component {
+  return defineAsyncComponent({ loader, loadingComponent: ViewSkeleton, delay: 120 });
+}
 
 // 总览是默认首屏，保持同步加载；其它页面首次打开时才下载代码。异步组件引用
 // 保持稳定，配合 KeepAlive 后只挂载一次，切页回来直接复用已有 DOM 和数据。
-const RecordsView = defineAsyncComponent(() => import("./views/RecordsView.vue"));
-const AdminChatView = defineAsyncComponent(() => import("./views/AdminChatView.vue"));
-const CallView = defineAsyncComponent(() => import("./views/CallView.vue"));
-const TasksView = defineAsyncComponent(() => import("./views/TasksView.vue"));
-const SetupWizard = defineAsyncComponent(() => import("./views/SetupWizard.vue"));
-const LLMView = defineAsyncComponent(() => import("./views/LLMView.vue"));
-const AssistantView = defineAsyncComponent(() => import("./views/AssistantView.vue"));
-const PluginsView = defineAsyncComponent(() => import("./views/PluginsView.vue"));
-const BrowserBoxView = defineAsyncComponent(() => import("./views/BrowserBoxView.vue"));
-const GroupsView = defineAsyncComponent(() => import("./views/GroupsView.vue"));
-const MemoryView = defineAsyncComponent(() => import("./views/MemoryView.vue"));
-const HomeView = defineAsyncComponent(() => import("./views/HomeView.vue"));
-const SettingsView = defineAsyncComponent(() => import("./views/SettingsView.vue"));
-const WorkspaceView = defineAsyncComponent(() => import("./views/WorkspaceView.vue"));
+const RecordsView = lazyView(() => import("./views/RecordsView.vue"));
+const AdminChatView = lazyView(() => import("./views/AdminChatView.vue"));
+const CallView = lazyView(() => import("./views/CallView.vue"));
+const TasksView = lazyView(() => import("./views/TasksView.vue"));
+const SetupWizard = lazyView(() => import("./views/SetupWizard.vue"));
+const LLMView = lazyView(() => import("./views/LLMView.vue"));
+const AssistantView = lazyView(() => import("./views/AssistantView.vue"));
+const PluginsView = lazyView(() => import("./views/PluginsView.vue"));
+const BrowserBoxView = lazyView(() => import("./views/BrowserBoxView.vue"));
+const GroupsView = lazyView(() => import("./views/GroupsView.vue"));
+const MemoryView = lazyView(() => import("./views/MemoryView.vue"));
+const HomeView = lazyView(() => import("./views/HomeView.vue"));
+const SettingsView = lazyView(() => import("./views/SettingsView.vue"));
+const WorkspaceView = lazyView(() => import("./views/WorkspaceView.vue"));
 
 const VIEW_CACHE_LIMIT = 16;
 

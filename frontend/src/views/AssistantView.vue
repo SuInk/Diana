@@ -713,6 +713,7 @@
                             <td class="model-route-identity">
                               <span class="model-route-provider"><Layers v-if="item.route.group" :size="12" aria-hidden="true" />{{ modelRouteProviderLabel(item.route) }}</span>
                               <button class="model-route-model-name mono" type="button" :title="item.route.model" @click="openModelRouteEditor(role.key, item.index)">{{ item.route.model || '请选择模型' }}</button>
+                              <span v-if="item.route.model" class="model-route-last-call" :class="modelRouteLastCall(role.key, item.route).className" :title="modelRouteLastCall(role.key, item.route).title">{{ modelRouteLastCall(role.key, item.route).label }}</span>
                             </td>
                             <td class="model-route-kind-cell">
                               <span class="badge" :class="modelRouteIsStandby(role.key, item.index) ? '' : 'accent'">{{ modelRouteIsStandby(role.key, item.index) ? '后备' : effectiveModelRoutingStrategy(role.key) !== 'failover' ? '参与调度' : '主模型' }}</span>
@@ -2240,6 +2241,7 @@ import {
   type MessageRelayPair,
   type LLMConfig,
   type LLMModelInfo,
+  type ModelCandidateCall,
   type ModelCandidateHealth,
   type ModelHealthSnapshot,
   type ModelRecoveryPolicy,
@@ -3719,6 +3721,27 @@ function modelRouteHealth(role: RoleKey, route: RoleRoute): ModelRouteHealth {
     return { label: smart ? "已降权" : "近期失败", className: "warn", title: [smart ? "冷却已结束，但智能调度会优先选择失败次数更少的候选。" : "冷却已结束，候选已重新参与调度。", ...details].join("\n"), cooling: false, degraded: true };
   }
   return { label: "正常", className: "ok", title: "当前进程内没有保留这条路由的近期健康故障。", cooling: false, degraded: false };
+}
+
+// 上次调用取这条路由下所有候选里最近的一次；分组路由的每个渠道都算。记录只在
+// 服务端进程内保留，重启后从「未调用」重新开始。
+function modelRouteLastCall(role: RoleKey, route: RoleRoute): { label: string; title: string; className: string } {
+  const profileIDs = new Set(selectedRoleProfiles(role, route).map((profile) => profile.id).filter((id): id is string => !!id));
+  let latest: ModelCandidateCall | undefined;
+  for (const call of modelHealth.value.calls ?? []) {
+    if (!profileIDs.has(call.profile_id) || call.model !== route.model) continue;
+    if (!latest || Date.parse(call.at) > Date.parse(latest.at)) latest = call;
+  }
+  if (!latest) return { label: "本次启动后未调用", title: "服务启动以来这条路由还没有被调用过。", className: "" };
+  const at = Date.parse(latest.at);
+  const seconds = Math.max(0, Math.floor((modelHealthNow() - at) / 1000));
+  const ago = seconds < 60 ? "刚刚" : seconds < 3600 ? `${Math.floor(seconds / 60)} 分钟前` : seconds < 86_400 ? `${Math.floor(seconds / 3600)} 小时前` : `${Math.floor(seconds / 86_400)} 天前`;
+  const provider = llmChannels.value.find((channel) => channel.id === latest?.profile_id)?.name || latest.profile_id;
+  return {
+    label: `上次调用 ${ago}${latest.ok ? "" : " · 失败"}`,
+    title: `${new Date(at).toLocaleString()} · ${provider} · ${latest.ok ? "成功" : "失败"}`,
+    className: latest.ok ? "" : "warn"
+  };
 }
 
 function modelRouteCanRecover(role: RoleKey, route: RoleRoute): boolean {

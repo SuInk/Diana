@@ -467,7 +467,7 @@ func (h *BotHandler) registerRoutes(router gin.IRouter, base string) {
 func (h *BotHandler) modelHealth(c *gin.Context) {
 	runtime, ok := h.runtime.(modelHealthRuntime)
 	if !ok {
-		c.JSON(http.StatusOK, assistant.ModelHealthSnapshot{CheckedAt: time.Now(), Candidates: []assistant.ModelCandidateHealth{}})
+		c.JSON(http.StatusOK, assistant.ModelHealthSnapshot{CheckedAt: time.Now(), Candidates: []assistant.ModelCandidateHealth{}, Calls: []assistant.ModelCandidateCall{}})
 		return
 	}
 	c.JSON(http.StatusOK, runtime.ModelHealthSnapshot())

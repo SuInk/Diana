@@ -1501,6 +1501,17 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
       ]
     });
   }
+  if (path === "/api/assistant/model-health" && method === "GET") {
+    return json({
+      checked_at: new Date().toISOString(),
+      candidates: [],
+      calls: [
+        { profile_id: "llm-chat", model: "gpt-6-sol", at: before(2), ok: true },
+        { profile_id: "llm-vision", model: "gpt-6-sol", at: before(47), ok: true },
+        { profile_id: "llm-intent", model: "gpt-5.6-terra", at: before(1), ok: false }
+      ]
+    });
+  }
   if (path === "/api/llm/config/export") return json(llmConfig);
   if (path === "/api/llm/config" && method === "GET") return json(llmConfig);
   if (path === "/api/llm/config" && method === "POST") {

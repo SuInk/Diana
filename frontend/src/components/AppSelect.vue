@@ -133,7 +133,9 @@ const currentAvatar = computed(() => {
 });
 
 function hideAvatar(event: Event): void {
-  const src = (event.target as HTMLImageElement | null)?.src;
+  // 用属性原值而不是 .src：.src 是补全后的绝对地址，跟选项里的相对地址对不上，
+  // 加载失败的头像就永远藏不掉，每次渲染都再撞一次。
+  const src = (event.target as HTMLImageElement | null)?.getAttribute("src");
   if (src) brokenAvatars.value = new Set(brokenAvatars.value).add(src);
 }
 

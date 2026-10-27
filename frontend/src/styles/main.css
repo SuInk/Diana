@@ -661,6 +661,15 @@ code {
 .model-route-model-name:hover {
   color: var(--accent);
 }
+.model-route-last-call {
+  display: block;
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 11px;
+}
+.model-route-last-call.warn {
+  color: var(--warn);
+}
 .model-route-kind-cell .badge {
   padding: 3px 6px;
   font-size: 10px;

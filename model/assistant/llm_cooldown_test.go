@@ -355,6 +355,41 @@ func TestLLMCooldownProfileFailoverProvider(t *testing.T) {
 	}
 }
 
+// 控制台要显示每条路由上次调用的时间：失败和成功都记，成功清冷却、手动恢复也
+// 不能把它一起抹掉。
+func TestLLMCooldownSnapshotKeepsLastCallAcrossClear(t *testing.T) {
+	now := time.Date(2026, 10, 27, 9, 0, 0, 0, time.UTC)
+	table := &llmCooldownTable{now: func() time.Time { return now }}
+	profiles := []llm.Profile{
+		{ID: "a", Name: "主档", Group: "chat", Config: llm.ProviderConfig{Model: "model-a"}},
+		{ID: "b", Name: "备用", Group: "chat", Config: llm.ProviderConfig{Model: "model-b"}},
+	}
+	factory := func(cfg llm.ProviderConfig) (LLMProvider, error) {
+		if cfg.Model == "model-a" {
+			return failingLLMProvider{err: errors.New(accountsLimitedErrText)}, nil
+		}
+		return &capturingLLMProvider{reply: "备用回复"}, nil
+	}
+	provider, err := newProfileFailoverLLMProvider(profiles, factory, true, nil, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider.cooldowns = table
+	if _, err := provider.Generate(context.Background(), cooldownRequest()); err != nil {
+		t.Fatal(err)
+	}
+	calls := table.publicSnapshot().Calls
+	if len(calls) != 2 || calls[0].ProfileID != "a" || calls[0].OK || !calls[0].At.Equal(now) || calls[1].ProfileID != "b" || calls[1].Model != "model-b" || !calls[1].OK {
+		t.Fatalf("calls = %#v", calls)
+	}
+	if table.clearMatching([]string{"a"}, "model-a") != 1 {
+		t.Fatal("手动恢复应清掉主档的冷却")
+	}
+	if got := table.publicSnapshot().Calls; len(got) != 2 || got[0].OK {
+		t.Fatalf("手动恢复不应改动调用记录：%#v", got)
+	}
+}
+
 // 额度用完不走原地重试，单候选时也一样；限流、并发超限和普通 503 先在原模型上
 // 重试两次；Retry-After 超过原地等待上限时直接交给降级链。
 func TestSameProfileRetryByFailureKind(t *testing.T) {

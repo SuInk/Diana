@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/SuInk/diana/model/assistant"
 	"github.com/gin-gonic/gin"
@@ -201,5 +202,45 @@ func TestUpsertProfileConfigDropsDerivedAvatarURL(t *testing.T) {
 	}
 	if next.Profiles[0].AvatarURL != "https://example.com/me.png" {
 		t.Fatalf("custom avatar URL dropped: %q", next.Profiles[0].AvatarURL)
+	}
+}
+
+// 机器人头像的哈希过了校验期也照发旧的，后台回源校验完再换新地址：过期就退回不带
+// 哈希的地址的话，左上角头像每隔几小时就要重新下载一遍。
+func TestProfileAvatarURLKeepsStaleHashWhileRefreshing(t *testing.T) {
+	first := []byte{0x89, 'P', 'N', 'G', 0x0d, 0x0a, 0x1a, 0x0a, 1}
+	second := []byte{0x89, 'P', 'N', 'G', 0x0d, 0x0a, 0x1a, 0x0a, 2}
+	runtime := &memberAvatarStubRuntime{avatar: assistant.GroupAvatar{Data: first, ContentType: "image/png"}, found: true}
+	router, handler := newAvatarEndpointRouter(runtime)
+	now := time.Date(2026, 10, 27, 9, 0, 0, 0, time.UTC)
+	handler.avatarStore().now = func() time.Time { return now }
+
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/assistant/avatars/member/12345?bot_profile_id=tg", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d", rec.Code)
+	}
+	key := avatarCacheKey(avatarKindMember, "tg", "12345")
+	if got := handler.consoleProfileAvatarURL("tg", "12345"); !strings.Contains(got, "v="+avatarContentSHA(first)) {
+		t.Fatalf("fresh avatar URL = %q", got)
+	}
+
+	now = now.Add(avatarRecheckInterval + time.Minute)
+	runtime.avatar = assistant.GroupAvatar{Data: second, ContentType: "image/png"}
+	if got := handler.consoleProfileAvatarURL("tg", "12345"); !strings.Contains(got, "v="+avatarContentSHA(first)) {
+		t.Fatalf("stale avatar URL should keep the old hash, got %q", got)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if sha, stale := handler.avatarStore().knownSHA(key); sha == avatarContentSHA(second) && !stale {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("background refresh did not pick up the new avatar")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if got := handler.consoleProfileAvatarURL("tg", "12345"); !strings.Contains(got, "v="+avatarContentSHA(second)) {
+		t.Fatalf("refreshed avatar URL = %q", got)
 	}
 }

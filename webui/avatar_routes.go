@@ -34,6 +34,34 @@ func avatarCacheKey(kind, profileID, id string) string {
 // 按 immutable 缓存，浏览器一年内不会再问；不知道就先不带，等浏览器取过一次之后
 // 下次列表就有了。
 func (h *BotHandler) consoleAvatarURL(kind, profileID, id string) string {
+	return buildConsoleAvatarURL(kind, profileID, id, h.avatarStore().cachedSHA(avatarCacheKey(kind, profileID, id)))
+}
+
+// consoleProfileAvatarURL 给侧栏和机器人列表里的机器人头像拼地址。跟群列表不同，
+// 哈希过了校验期也照发旧的，同时在后台回源校验：过期就退回不带哈希的地址的话，
+// 每 6 小时地址就在「永久缓存」和「60 秒缓存」之间来回换一次，左上角头像每次都
+// 重新下载、闪一下。机器人就那么几台，后台校验的量可以忽略；换了头像的话，校验
+// 完的下一次配置刷新就拿到新地址。
+func (h *BotHandler) consoleProfileAvatarURL(profileID, id string) string {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return ""
+	}
+	key := avatarCacheKey(avatarKindMember, profileID, id)
+	sha, stale := h.avatarStore().knownSHA(key)
+	if stale {
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), avatarFetchTimeout)
+			defer cancel()
+			h.avatarStore().load(ctx, key, func(ctx context.Context, previous *avatarEntry) (*avatarEntry, error) {
+				return h.fetchAvatar(ctx, avatarKindMember, profileID, id, previous)
+			})
+		}()
+	}
+	return buildConsoleAvatarURL(avatarKindMember, profileID, id, sha)
+}
+
+func buildConsoleAvatarURL(kind, profileID, id, sha string) string {
 	id = strings.TrimSpace(id)
 	if id == "" {
 		return ""
@@ -43,7 +71,7 @@ func (h *BotHandler) consoleAvatarURL(kind, profileID, id string) string {
 	if profileID = strings.TrimSpace(profileID); profileID != "" {
 		query.Set("bot_profile_id", profileID)
 	}
-	if sha := h.avatarStore().cachedSHA(avatarCacheKey(kind, profileID, id)); sha != "" {
+	if sha != "" {
 		query.Set("v", sha)
 	}
 	if len(query) > 0 {
@@ -140,7 +168,7 @@ func (h *BotHandler) withConsoleProfileAvatars(payload assistant.ConfigPayload) 
 		}
 		account := firstNonEmptyWebUI(selfIDs[strings.TrimSpace(profile.ID)], strings.TrimSpace(profile.BotAccount))
 		if account != "" {
-			profile.AvatarURL = h.consoleAvatarURL(avatarKindMember, profile.ID, account)
+			profile.AvatarURL = h.consoleProfileAvatarURL(profile.ID, account)
 		} else {
 			profile.AvatarURL = ""
 		}

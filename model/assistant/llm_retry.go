@@ -444,6 +444,7 @@ func (p *registryFailoverLLMProvider) Generate(ctx context.Context, req llm.Gene
 		err = finish(err)
 		if err == nil {
 			p.current = index
+			p.cooldowns.noteCall(candidate.profile, true)
 			p.cooldowns.clear(candidate.profile)
 			return resp, nil
 		}
@@ -545,6 +546,7 @@ func (p *profileFailoverLLMProvider) Generate(ctx context.Context, req llm.Gener
 			err = finish(err)
 			if err == nil {
 				p.current = index
+				p.cooldowns.noteCall(p.profiles[index], true)
 				p.cooldowns.clear(p.profiles[index])
 				if p.activate != nil {
 					p.activate(p.profiles[index].ID)

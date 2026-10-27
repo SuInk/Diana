@@ -83,9 +83,18 @@ export interface ModelCandidateHealth {
   cooldown_until?: string;
 }
 
+// 候选最近一次调用的时间和结果，只在服务端进程内保留，重启后清空。
+export interface ModelCandidateCall {
+  profile_id: string;
+  model: string;
+  at: string;
+  ok: boolean;
+}
+
 export interface ModelHealthSnapshot {
   checked_at: string;
   candidates: ModelCandidateHealth[];
+  calls?: ModelCandidateCall[];
 }
 
 export interface ModelRecoveryPolicy {
