@@ -72,6 +72,9 @@ func (r *Runtime) avatarSourceURL(ctx context.Context, event MessageEvent, id st
 		}
 		return OneBotMemberAvatarURL(id)
 	}
+	if !group && r.currentPlatform(event) == PlatformQQOfficial {
+		return r.qqOfficialMemberAvatarURL(event, id)
+	}
 	var avatar GroupAvatar
 	var err error
 	if group {
@@ -93,4 +96,9 @@ func (r *Runtime) avatarSourceURL(ctx context.Context, event MessageEvent, id st
 	// Credential-bearing Telegram URLs never leave the channel. Image providers
 	// receive image bytes, not a URL containing the bot token.
 	return "data:" + avatar.ContentType + ";base64," + base64.StdEncoding.EncodeToString(avatar.Data)
+}
+
+// qqOfficialMemberAvatarURL 按事件所属机器人的 AppID 拼 QQ 官方机器人的成员头像。
+func (r *Runtime) qqOfficialMemberAvatarURL(event MessageEvent, openID string) string {
+	return QQOfficialMemberAvatarURL(r.profileConfig(r.eventProfileID(event)).QQAppID, openID)
 }

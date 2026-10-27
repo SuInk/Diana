@@ -338,7 +338,11 @@ func (r *Runtime) enrichImagePromptWithChatContext(ctx context.Context, event Me
 		}
 		member, err := r.getGroupMemberInfoForEvent(ctx, event, event.GroupID, userID)
 		if err != nil || member.UserID == "" {
-			lines = append(lines, "被@成员："+userID+"，头像："+MemberAvatarURL(r.currentPlatform(event), userID))
+			avatar := MemberAvatarURL(r.currentPlatform(event), userID)
+			if r.currentPlatform(event) == PlatformQQOfficial {
+				avatar = r.qqOfficialMemberAvatarURL(event, userID)
+			}
+			lines = append(lines, "被@成员："+userID+"，头像："+avatar)
 			continue
 		}
 		lines = append(lines, "被@成员："+member.DisplayName()+" ("+member.UserID+")，头像："+member.AvatarURL)

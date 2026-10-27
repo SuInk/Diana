@@ -252,3 +252,15 @@ func TestPlatformUntestedMarks(t *testing.T) {
 		}
 	}
 }
+
+func TestQQOfficialMemberAvatarURL(t *testing.T) {
+	const openID = "0123456789abcdef0123456789ABCDEF"
+	if got := QQOfficialMemberAvatarURL(" 10001 ", openID); got != "https://q.qlogo.cn/qqapp/10001/"+openID+"/640" {
+		t.Fatalf("avatar = %q", got)
+	}
+	for _, tc := range [][2]string{{"", openID}, {"10001", "10002"}, {"10001", strings.Repeat("Z", 32)}, {"app/1", openID}} {
+		if got := QQOfficialMemberAvatarURL(tc[0], tc[1]); got != "" {
+			t.Fatalf("QQOfficialMemberAvatarURL(%q, %q) = %q, want empty", tc[0], tc[1], got)
+		}
+	}
+}

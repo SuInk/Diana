@@ -200,6 +200,14 @@ func isDerivedProfileAvatarURL(raw string) bool {
 
 // remoteAvatarURL 给出可以直接下载的头像地址，没有就返回空串。
 func (h *BotHandler) remoteAvatarURL(kind, profileID, id string) string {
+	if kind == avatarKindMember {
+		// 空 profile 被兜底认成官方机器人时，数字 QQ 号拼不出地址，接着按 OneBot 走。
+		if profile, ok := h.qqOfficialProfile(profileID); ok {
+			if remote := assistant.QQOfficialMemberAvatarURL(profile.QQAppID, id); remote != "" {
+				return remote
+			}
+		}
+	}
 	// 用 isOneBotProfile 而不是直接看配置：它带着老部署的兜底（事件里 profile_id
 	// 为空、整个部署又只有 OneBot 机器人时仍按 OneBot 算）。
 	if !h.isOneBotProfile(profileID) {
@@ -209,4 +217,28 @@ func (h *BotHandler) remoteAvatarURL(kind, profileID, id string) string {
 		return assistant.OneBotGroupAvatarURL(id)
 	}
 	return assistant.OneBotMemberAvatarURL(id)
+}
+
+// qqOfficialProfile 找出这条记录所属的 QQ 官方机器人。单机器人部署的事件里
+// profile_id 常是空的：这时只有一台官方机器人就算它的，有几台就不猜。
+func (h *BotHandler) qqOfficialProfile(profileID string) (assistant.BotConfig, bool) {
+	if h.profiles == nil {
+		return assistant.BotConfig{}, false
+	}
+	set := h.profiles.Profiles()
+	if profile, ok := set.ConfigForProfile(profileID); ok {
+		return profile, assistant.NormalizePlatformID(profile.Platform) == assistant.PlatformQQOfficial
+	}
+	if strings.TrimSpace(profileID) != "" {
+		return assistant.BotConfig{}, false
+	}
+	var found assistant.BotConfig
+	count := 0
+	for _, profile := range set.Profiles {
+		if assistant.NormalizePlatformID(profile.Platform) == assistant.PlatformQQOfficial {
+			found = profile
+			count++
+		}
+	}
+	return found, count == 1
 }

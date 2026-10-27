@@ -125,6 +125,27 @@ func MemberAvatarURL(platform, userID string) string {
 	return OneBotMemberAvatarURL(userID)
 }
 
+// QQOfficialMemberAvatarURL 给出 QQ 官方机器人眼里某个用户的头像地址。openid 只在
+// 签发它的那台机器人（AppID）下有意义，所以两个都要；对不上的组合 qlogo 回的是
+// 一张统一的默认头像，形状不对时干脆不给。
+func QQOfficialMemberAvatarURL(appID, openID string) string {
+	appID, openID = strings.TrimSpace(appID), strings.TrimSpace(openID)
+	if appID == "" || len(openID) != 32 {
+		return ""
+	}
+	for _, char := range appID {
+		if char < '0' || char > '9' {
+			return ""
+		}
+	}
+	for _, char := range openID {
+		if !('0' <= char && char <= '9' || 'a' <= char && char <= 'f' || 'A' <= char && char <= 'F') {
+			return ""
+		}
+	}
+	return "https://q.qlogo.cn/qqapp/" + appID + "/" + openID + "/640"
+}
+
 // NormalizePlatformID 归一化平台 ID：大小写、空白和常见写法都收敛到注册表里的
 // 那一个值，空值按默认平台处理。调用方遍布配置、路由和存储，不能直接比较字符串。
 func NormalizePlatformID(value string) string {

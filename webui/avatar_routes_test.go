@@ -244,3 +244,27 @@ func TestProfileAvatarURLKeepsStaleHashWhileRefreshing(t *testing.T) {
 		t.Fatalf("refreshed avatar URL = %q", got)
 	}
 }
+
+// QQ 官方机器人只有 openid：头像按「这台机器人的 AppID + openid」拼，数字 QQ 号
+// 照旧走 OneBot，空 profile 兜底认成官方机器人时也不能把 QQ 号的头像弄丢。
+func TestRemoteAvatarURLForQQOfficialMembers(t *testing.T) {
+	const openID = "0123456789ABCDEF0123456789ABCDEF"
+	official := assistant.DefaultBotConfig()
+	official.ID, official.Platform, official.QQAppID = "qq", assistant.PlatformQQOfficial, "10001"
+	onebot := assistant.DefaultBotConfig()
+	onebot.ID, onebot.Platform = "ob", assistant.PlatformOneBotV11
+	handler := &BotHandler{profiles: NewMemoryBotProfileStoreFromSet(assistant.ProfileSet{Profiles: []assistant.BotConfig{official, onebot}})}
+
+	want := "https://q.qlogo.cn/qqapp/10001/" + openID + "/640"
+	for _, profileID := range []string{"qq", ""} {
+		if got := handler.remoteAvatarURL(avatarKindMember, profileID, openID); got != want {
+			t.Fatalf("profile %q: avatar = %q, want %q", profileID, got, want)
+		}
+	}
+	if got := handler.remoteAvatarURL(avatarKindMember, "", "10002"); got != assistant.OneBotMemberAvatarURL("10002") {
+		t.Fatalf("QQ number avatar with empty profile = %q", got)
+	}
+	if got := handler.remoteAvatarURL(avatarKindGroup, "qq", openID); got != "" {
+		t.Fatalf("QQ official group avatar has no known address, got %q", got)
+	}
+}
