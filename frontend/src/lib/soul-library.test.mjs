@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { matchingPersona, soulFileName, soulLength, soulTitle, unusedPersonaName } from "./soul-library.ts";
+import { blankSoul, matchingPersona, soulFileName, soulLength, soulTitle, unusedPersonaName } from "./soul-library.ts";
 
 test("soulTitle reads the first-line heading only", () => {
   assert.equal(soulTitle("\n# 嘉然\n\n## 概述"), "嘉然");
@@ -28,4 +28,10 @@ test("soulLength counts code points and soulFileName strips unsafe characters", 
   assert.equal(soulLength("嘉然😀"), 3);
   assert.equal(soulFileName("a/b:嘉然"), "ab嘉然.md");
   assert.equal(soulFileName("  "), "SOUL.md");
+});
+
+test("blankSoul starts with the given heading so storing picks it up as the name", () => {
+  assert.equal(soulTitle(blankSoul("值班助理")), "值班助理");
+  assert.equal(soulTitle(blankSoul()), "新人设");
+  assert.ok(blankSoul().includes("{{name}}"));
 });

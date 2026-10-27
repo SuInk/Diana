@@ -22,13 +22,17 @@
         <div class="soul-library-head">
           <span class="soul-library-title">人设库</span>
           <div class="cluster">
+            <button class="btn small ghost" type="button" :disabled="busy" title="换成一份空白模板从头写，写完点「另存为」" @click="createBlank">
+              <FilePlus :size="14" aria-hidden="true" />
+              新建
+            </button>
             <button class="btn small ghost" type="button" :disabled="busy" title="导入 .md 文件、旧版人设文件或酒馆角色卡" @click="fileInput?.click()">
               <Upload :size="14" aria-hidden="true" />
               导入
             </button>
-            <button class="btn small ghost" type="button" :disabled="busy || !modelValue.trim()" title="把当前正文存进人设库" @click="toggleSaver">
-              <component :is="saverOpen ? X : Plus" :size="14" aria-hidden="true" />
-              {{ saverOpen ? "取消" : "存入" }}
+            <button class="btn small ghost" type="button" :disabled="busy || !modelValue.trim()" title="把当前正文另存为人设库里的一份" @click="toggleSaver">
+              <component :is="saverOpen ? X : Save" :size="14" aria-hidden="true" />
+              {{ saverOpen ? "取消" : "另存为" }}
             </button>
           </div>
         </div>
@@ -61,7 +65,7 @@
           </ul>
         </template>
         <p v-if="!loaded" class="hint">人设库加载中…</p>
-        <p v-else-if="!userPersonas.length" class="hint">还没存过自己的人设。改好正文后点「存入」。</p>
+        <p v-else-if="!userPersonas.length" class="hint">还没存过自己的人设。点「新建」从空白模板写，或改好正文后点「另存为」。</p>
       </aside>
 
       <div class="soul-document">
@@ -80,6 +84,7 @@
         </div>
         <textarea
           :id="inputId"
+          ref="textarea"
           class="textarea soul-textarea"
           :value="modelValue"
           spellcheck="false"
@@ -113,11 +118,11 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref } from "vue";
-import { BookOpen, Check, Download, Plus, Sparkles, Trash2, Undo2, Upload, X } from "@lucide/vue";
+import { BookOpen, Check, Download, FilePlus, Save, Sparkles, Trash2, Undo2, Upload, X } from "@lucide/vue";
 import { deletePersona, importCharacterCard, importPersonaSource, listPersonas, savePersona, type Persona, type WorldBookNode } from "../api";
 import { askConfirm } from "../lib/confirm";
 import { toastError, toastSuccess } from "../lib/toast";
-import { matchingPersona, soulFileName, soulLength, soulTitle, SOUL_MAX_CHARS, SOUL_WARN_CHARS, unusedPersonaName } from "../lib/soul-library";
+import { BLANK_SOUL_TITLE, blankSoul, matchingPersona, soulFileName, soulLength, soulTitle, SOUL_MAX_CHARS, SOUL_WARN_CHARS, unusedPersonaName } from "../lib/soul-library";
 
 // SOUL.md 编辑器：左边人设库，右边正文。
 //
@@ -206,7 +211,28 @@ async function apply(persona: Persona): Promise<void> {
   replace(next);
 }
 
-// ── 存入人设库 ──
+// 新建：换成空白模板并选中标题，直接打字就是起名。没存的正文照样先问一句。
+const textarea = ref<HTMLTextAreaElement | null>(null);
+
+async function createBlank(): Promise<void> {
+  if (props.modelValue.trim() && !activePersona.value) {
+    const ok = await askConfirm({
+      title: "换成空白模板？",
+      message: "当前正文还没存进人设库。换掉之后可以点「撤销」退回一次。",
+      confirmLabel: "换"
+    });
+    if (!ok) return;
+  }
+  const name = unusedPersonaName(BLANK_SOUL_TITLE, personas.value);
+  replace(blankSoul(name));
+  saverOpen.value = false;
+  await nextTick();
+  const start = 2;
+  textarea.value?.focus();
+  textarea.value?.setSelectionRange(start, start + name.length);
+}
+
+// ── 另存为人设库里的一份 ──
 const saverOpen = ref(false);
 const saverName = ref("");
 const saverInput = ref<HTMLInputElement | null>(null);

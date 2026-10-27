@@ -47,3 +47,29 @@ export function soulFileName(name: string): string {
   const slug = (name ?? "").replace(/[\\/:*?"<>|\u0000-\u001f]/g, "").trim();
   return `${slug || "SOUL"}.md`;
 }
+
+/** 新建人设的默认标题；存库时按库里已有的名字去重。 */
+export const BLANK_SOUL_TITLE = "新人设";
+
+/** 新建用的空白模板：只给「怎么写」里推荐的章节骨架，内容留空让人自己填。 */
+export function blankSoul(name: string = BLANK_SOUL_TITLE): string {
+  return [
+    `# ${name}`,
+    "",
+    "## 基本情况",
+    "",
+    "{{name}}，",
+    "",
+    "## 概述",
+    "",
+    "",
+    "## 核心价值",
+    "",
+    "",
+    "## 她的本性",
+    "",
+    "",
+    "## 结语",
+    ""
+  ].join("\n");
+}
