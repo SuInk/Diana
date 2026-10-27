@@ -365,6 +365,8 @@ type Runtime struct {
 	// promptCacheProbe 记住每个会话上一次请求的分段指纹，用来定位前缀缓存在哪里断的。
 	// 自带锁，不受 mu 保护。
 	promptCacheProbe promptCacheProbeStore
+	// appendContexts 是只追加模式下每个会话上一轮实际发出的请求，见 append_context.go。
+	appendContexts appendContextStore
 	// imageEditSources 记住每个会话最近一次改图用的原图，「重试」「继续」时靠它
 	// 找回原图。自带锁，不受 mu 保护。
 	imageEditSources imageEditSourceMemory
@@ -4878,6 +4880,14 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 			messages = append(messages, carryover)
 		}
 		promptSession := r.groupPromptSession(event)
+		// 只追加：主回复在上一轮实际发出的请求后面续接。定时查询、事件触发这些
+		// 后台入口也走这里，它们不接进群聊的记录。
+		var continuation *agent.Continuation
+		appendKey, appendHeadKey := "", ""
+		if purpose := llmUsagePurposeFromContext(ctx); appendContextEnabled(cfg) && (purpose == "" || purpose == PurposeReply) {
+			appendKey, appendHeadKey = appendContextKey(event), appendContextHeadKey(messages)
+			continuation = appendContextContinuation(r.appendContexts.get(appendKey), messages)
+		}
 		r.startImageFixGate(ctx, cfg, event)
 		interjections, stopInterjections := r.startDirectReplyInterjections(ctx)
 		observer, stopProgress := r.startReplyProgress(ctx, event, r.agentRunObserver(event))
@@ -4889,9 +4899,18 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 			LoadedTools:   promptSession.loadedTools(),
 			ToolsLoaded:   promptSession.rememberTools,
 			Interjections: interjections,
+			Continuation:  continuation,
 		})
 		stopInterjections()
 		stopProgress()
+		if appendKey != "" {
+			// 失败的一轮不留记录：下一轮从完整组装重新开始，免得续上一份残缺的请求。
+			if err != nil {
+				r.appendContexts.put(appendKey, nil)
+			} else {
+				r.appendContexts.put(appendKey, newAppendContextLog(resp, appendHeadKey))
+			}
+		}
 		if err != nil {
 			return "", err
 		}

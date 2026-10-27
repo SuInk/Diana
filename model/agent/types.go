@@ -184,6 +184,18 @@ type Request struct {
 	ToolsLoaded func([]string)
 	// Interjections 不为空时，每步规划前接入用户中途的补充，规划途中来了补充就重做这一步。
 	Interjections Interjections
+	// Continuation 不为空且 Key 和本轮的系统提示、契约、工具定义对得上时，Runner 不再
+	// 按 Messages 重新组装，而是在上一轮实际发出的请求后面接着发，见 continuation.go。
+	// 对不上就照常用 Messages。
+	Continuation *Continuation
+}
+
+// Continuation 是「只追加」续接上一轮所需的东西：上一轮 Response.Transcript、本轮
+// 要追加的消息（最后一条是当前消息），和上一轮的 Response.ConversationKey。
+type Continuation struct {
+	Prefix []llm.Message
+	Append []llm.Message
+	Key    string
 }
 
 type Response struct {
@@ -202,6 +214,13 @@ type Response struct {
 	Silent bool `json:"silent,omitempty"`
 	// SilentReason 是静默的来由，只用于事件记录和日志，不发给用户。
 	SilentReason string `json:"silent_reason,omitempty"`
+	// Transcript 是这一轮最后一次实际发给模型的请求，接上模型的回复和收尾调用的结果。
+	// 下一轮把它放进 Continuation.Prefix，新请求就是它的纯追加。
+	Transcript []llm.Message `json:"-"`
+	// ConversationKey 是本轮系统提示、契约和工具定义的指纹，续接时用来核对。
+	ConversationKey string `json:"-"`
+	// Continued 表示这一轮是在上一轮的请求后面续接的。
+	Continued bool `json:"continued,omitempty"`
 	// FinalizeFields 是模型在 send 上填的 Config.FinalizeFields 字段，没填的不出现。
 	// Silent 时同样会带：调用方可以据此「不说话、只做字段表达的事」。
 	FinalizeFields map[string]string `json:"finalize_fields,omitempty"`

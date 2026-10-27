@@ -803,17 +803,20 @@ type BotConfig struct {
 	ProactiveReplyExtraCriteria string `json:"proactive_reply_extra_criteria,omitempty"`
 	// PromptOverrides 是管理员改过的内置提示词正文，按 PromptSpec.Key 存。只存改过的，
 	// 没出现的键用内置默认值，见 prompt_overrides.go。
-	PromptOverrides            PromptOverrides `json:"prompt_overrides,omitempty"`
-	MaxInputChars              int             `json:"max_input_chars,omitempty"`
-	MaxReplyChars              int             `json:"max_reply_chars,omitempty"`
-	NaturalReplySplitEnabled   *bool           `json:"natural_reply_split_enabled,omitempty"`
-	ReplyPreserveLineBreaks    *bool           `json:"reply_preserve_line_breaks,omitempty"`
-	ReplyLineSplitEnabled      *bool           `json:"reply_line_split_enabled,omitempty"`
-	TypingDelayEnabled         *bool           `json:"typing_delay_enabled,omitempty"`
-	TypingDelayPerCharMS       int             `json:"typing_delay_per_char_ms,omitempty"`
-	SocialReplyEnabled         *bool           `json:"social_reply_enabled,omitempty"`
-	ReplyMaxBubbles            int             `json:"reply_max_bubbles,omitempty"`
-	ForwardReplyChunkThreshold int             `json:"forward_reply_chunk_threshold,omitempty"`
+	PromptOverrides          PromptOverrides `json:"prompt_overrides,omitempty"`
+	MaxInputChars            int             `json:"max_input_chars,omitempty"`
+	MaxReplyChars            int             `json:"max_reply_chars,omitempty"`
+	NaturalReplySplitEnabled *bool           `json:"natural_reply_split_enabled,omitempty"`
+	// AppendOnlyContext 打开后，主回复在上一轮实际发出的请求后面续接，不再逐轮重新
+	// 组装，见 append_context.go。默认关。
+	AppendOnlyContext          *bool `json:"append_only_context,omitempty"`
+	ReplyPreserveLineBreaks    *bool `json:"reply_preserve_line_breaks,omitempty"`
+	ReplyLineSplitEnabled      *bool `json:"reply_line_split_enabled,omitempty"`
+	TypingDelayEnabled         *bool `json:"typing_delay_enabled,omitempty"`
+	TypingDelayPerCharMS       int   `json:"typing_delay_per_char_ms,omitempty"`
+	SocialReplyEnabled         *bool `json:"social_reply_enabled,omitempty"`
+	ReplyMaxBubbles            int   `json:"reply_max_bubbles,omitempty"`
+	ForwardReplyChunkThreshold int   `json:"forward_reply_chunk_threshold,omitempty"`
 	// ForwardReplyEnabled 是合并转发卡片的总开关；关掉时两个阈值都不生效。
 	// 两个阈值只描述「超过多少触发」，留空（0）是不按这一项触发，不再兼任开关。
 	ForwardReplyEnabled   *bool           `json:"forward_reply_enabled,omitempty"`
@@ -1493,6 +1496,7 @@ type ConfigPayload struct {
 	MaxInputChars               int             `json:"max_input_chars,omitempty"`
 	MaxReplyChars               int             `json:"max_reply_chars,omitempty"`
 	NaturalReplySplitEnabled    *bool           `json:"natural_reply_split_enabled,omitempty"`
+	AppendOnlyContext           *bool           `json:"append_only_context,omitempty"`
 	ReplyPreserveLineBreaks     *bool           `json:"reply_preserve_line_breaks,omitempty"`
 	ReplyLineSplitEnabled       *bool           `json:"reply_line_split_enabled,omitempty"`
 	TypingDelayEnabled          *bool           `json:"typing_delay_enabled,omitempty"`
@@ -2861,6 +2865,7 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		MaxInputChars:                     cfg.MaxInputChars,
 		MaxReplyChars:                     cfg.MaxReplyChars,
 		NaturalReplySplitEnabled:          copyBoolPointer(cfg.NaturalReplySplitEnabled),
+		AppendOnlyContext:                 copyBoolPointer(cfg.AppendOnlyContext),
 		ReplyMergeConfidencePercent:       cfg.ReplyMergeConfidencePercent,
 		ReplyPreserveLineBreaks:           copyBoolPointer(cfg.ReplyPreserveLineBreaks),
 		ReplyLineSplitEnabled:             copyBoolPointer(cfg.ReplyLineSplitEnabled),
@@ -3121,6 +3126,7 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		MaxInputChars:                   payload.MaxInputChars,
 		MaxReplyChars:                   payload.MaxReplyChars,
 		NaturalReplySplitEnabled:        copyBoolPointer(payload.NaturalReplySplitEnabled),
+		AppendOnlyContext:               copyBoolPointer(payload.AppendOnlyContext),
 		ReplyMergeConfidencePercent:     payload.ReplyMergeConfidencePercent,
 		ReplyPreserveLineBreaks:         copyBoolPointer(payload.ReplyPreserveLineBreaks),
 		ReplyLineSplitEnabled:           copyBoolPointer(payload.ReplyLineSplitEnabled),

@@ -197,12 +197,17 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 			contractMessage.Content += "\n\n" + strings.Join(stableNotes, "\n\n")
 		}
 	}
+	convKey := conversationKey(r.systemPrompt(), contractMessage, r.turnDefinitions(false))
+	continued := req.Continuation != nil && req.Continuation.Key == convKey && len(req.Continuation.Prefix) > 0 && len(req.Continuation.Append) > 0
 	// Insert the volatile block just before the final message so the current
 	// turn stays last, which downstream priority handling depends on.
 	// 前缀缓存读到最后一个断点为止，因此断点打在稳定前缀的末尾：系统提示词、
 	// 工具定义和已经定型的历史。
 	stableCacheIndex := -1
-	if split := len(req.Messages) - 1; split > 0 {
+	if continued {
+		messages, stableCacheIndex = continuationMessages(req.Continuation, volatile)
+		messages[stableCacheIndex].CacheBreakpoint = true
+	} else if split := len(req.Messages) - 1; split > 0 {
 		// 调用方最清楚自己的稳定前缀到哪为止：它可能在历史之后还放了逐条消息
 		// 变化的记忆块、发言者身份和时钟。它标了断点就用它的；没标就退到当前
 		// 消息之前最后一条非 system 消息——尾部的 system 消息按约定都是易变的。
@@ -234,6 +239,10 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 		messages = append(messages, req.Messages...)
 	}
 
+	// lastRequest / lastResponse 是最后一次实际发出的请求和它的回复，收尾时拼成
+	// Response.Transcript 给下一轮续接。
+	var lastRequest llm.GenerateRequest
+	var lastResponse *llm.GenerateResponse
 	var steps []Step
 	var lastText string
 	var lastProvider llm.Provider
@@ -301,17 +310,20 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 		}
 		duration := time.Since(startedAt)
 		response := &Response{
-			FinalizeFields: finalizeFields,
-			Text:           strings.TrimSpace(text),
-			Steps:          steps,
-			Provider:       lastProvider,
-			Model:          lastModel,
-			Usage:          usage,
-			TraceID:        traceID,
-			ModelTurns:     modelTurns,
-			FinishReason:   reason,
-			DurationMS:     duration.Milliseconds(),
-			Sources:        responseSources(text, steps),
+			FinalizeFields:  finalizeFields,
+			Text:            strings.TrimSpace(text),
+			Steps:           steps,
+			Provider:        lastProvider,
+			Model:           lastModel,
+			Usage:           usage,
+			TraceID:         traceID,
+			ModelTurns:      modelTurns,
+			FinishReason:    reason,
+			DurationMS:      duration.Milliseconds(),
+			Sources:         responseSources(text, steps),
+			Transcript:      transcriptAfter(lastRequest, lastResponse, lastText),
+			ConversationKey: convKey,
+			Continued:       continued,
 		}
 		emitRunEvent(ctx, req.Observer, RunEvent{
 			TraceID:         traceID,
@@ -381,6 +393,9 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 		resp, interjected, err := generateWithInterjections(planningCtx, req.Interjections, func(ctx context.Context) (*llm.GenerateResponse, error) {
 			return r.client.Generate(ctx, planningRequest)
 		})
+		if err == nil && resp != nil {
+			lastRequest, lastResponse = planningRequest, resp
+		}
 		if interjected {
 			// 这一步作废不计数，下一圈带上补充重做；已经执行的工具结果都还在。
 			cancel()
@@ -947,6 +962,9 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 			return fail(prepareErr)
 		}
 		resp, err = r.client.Generate(ctx, prepared)
+		if err == nil && resp != nil {
+			lastRequest, lastResponse = prepared, resp
+		}
 		if err == nil && resp != nil && len(resp.ToolCalls) == 0 {
 			err = llm.RejectionNoticeError(resp.Text)
 		}
@@ -1884,7 +1902,8 @@ func withToolResultReminder(messages []llm.Message, reminder string) []llm.Messa
 		switch messages[i].Role {
 		case llm.RoleTool:
 			return append(messages[:len(messages):len(messages)], llm.Message{Role: llm.RoleUser, Content: reminder})
-		case llm.RoleAssistant:
+		case llm.RoleAssistant, llm.RoleUser:
+			// 最后一条是用户消息（续接时上一轮的工具结果还在更前面）就不是「刚执行过工具」。
 			return messages
 		}
 	}
