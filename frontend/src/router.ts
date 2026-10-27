@@ -6,7 +6,6 @@ import { ref } from "vue";
 export type ViewID =
   | "dashboard"
   | "admin-chat"
-  | "call"
   | "events"
   | "tasks"
   | "setup"
@@ -99,7 +98,7 @@ export function navSections(): { group?: NavGroup; items: NavItem[] }[] {
   return sections;
 }
 
-const validViews = new Set<ViewID>(["dashboard", "admin-chat", "call", "events", "tasks", "setup", "provider", "bot", "groups", "users", "notebook", "world-book", "feed", "space", "self-notes", "plugins", "browser", "workspace", "logs", "favorability", "settings"]);
+const validViews = new Set<ViewID>(["dashboard", "admin-chat", "events", "tasks", "setup", "provider", "bot", "groups", "users", "notebook", "world-book", "feed", "space", "self-notes", "plugins", "browser", "workspace", "logs", "favorability", "settings"]);
 
 // 首页：地址栏里是根路径，也是所有认不出来的地址的落点。
 const homeView: ViewID = "dashboard";

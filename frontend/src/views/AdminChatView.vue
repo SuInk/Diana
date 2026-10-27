@@ -26,13 +26,20 @@
         <header class="chat-room-header">
           <div class="chat-room-title">
             <button class="chat-icon" type="button" :aria-label="showSessions ? '收起会话列表' : '展开会话列表'" :aria-expanded="showSessions" aria-controls="admin-chat-sessions" :title="showSessions ? '收起会话列表' : '展开会话列表'" @click="showSessions = !showSessions"><PanelLeft :size="17" aria-hidden="true" /></button>
-            <h2>{{ session?.title || '新会话' }}</h2>
+            <span class="chat-avatar chat-peer-avatar" aria-hidden="true"><img v-if="peerAvatar" :src="peerAvatar" alt="" /><Bot v-else :size="18" /></span>
+            <div class="chat-peer">
+              <h2>{{ peerName }}</h2>
+              <p :class="{ typing: busy }">{{ busy ? '正在输入…' : session?.title || '新会话' }}</p>
+            </div>
           </div>
           <div class="chat-room-actions">
+            <button class="chat-icon" type="button" :disabled="!callProfile" :aria-label="`和 ${callProfileLabel} 语音通话`" :title="callProfile ? `和 ${callProfileLabel} 语音通话` : '还没有机器人'" @click="startCall"><Phone :size="17" aria-hidden="true" /></button>
             <button class="chat-icon" type="button" :disabled="busy || loading || creating" aria-label="新建管理会话" title="新建会话" @click="createConversation"><LoaderCircle v-if="creating" :size="17" class="chat-spinner" aria-hidden="true" /><SquarePen v-else :size="17" aria-hidden="true" /></button>
             <details ref="moreMenu" class="chat-menu" @toggle="onMenuToggle($event, 'more')" @keydown.esc.prevent.stop="closeMenus(true)">
               <summary class="chat-icon" role="button" :aria-expanded="moreOpen" aria-label="更多操作" title="更多操作"><Ellipsis :size="18" aria-hidden="true" /></summary>
               <div class="chat-menu-items chat-menu-right">
+                <button type="button" @click="openPanel('settings')"><Settings2 :size="15" aria-hidden="true" />聊天设置</button>
+                <div class="chat-menu-divider" />
                 <button type="button" :disabled="busy || loading || !session" @click="usePrompt(suggestions[1].prompt)"><Activity :size="15" aria-hidden="true" />运行诊断</button>
                 <button type="button" :disabled="busy || loading || !session" @click="usePrompt(suggestions[2].prompt)"><Blocks :size="15" aria-hidden="true" />检查 Skills / MCP</button>
                 <button type="button" :disabled="busy || loading || !lastUserMessage" @click="usePrompt(lastUserMessage)"><RotateCcw :size="15" aria-hidden="true" />载入上一条</button>
@@ -55,14 +62,20 @@
             </div>
           </div>
           <article v-for="message in messages" :key="message.id" class="chat-message" :class="[message.role, { failed: message.error }]" :aria-label="message.role === 'user' ? '你的消息' : '管理助手回复'">
+            <span v-if="message.role !== 'user'" class="chat-avatar" aria-hidden="true"><img v-if="peerAvatar" :src="peerAvatar" alt="" /><Bot v-else :size="16" /></span>
+            <div class="chat-message-body">
             <div class="chat-message-content">{{ message.content }}</div>
             <details v-if="message.steps?.length" class="chat-steps"><summary>执行记录 · {{ message.steps.length }} 次工具调用</summary><div v-for="(step, i) in message.steps" :key="i" class="chat-step"><span class="mono">{{ step.tool }}</span><div class="cluster"><span class="badge" :class="step.failed ? 'err' : 'ok'">{{ step.failed ? '未完成' : '已完成' }}</span><span class="muted">{{ step.duration_ms || 0 }} ms</span></div></div></details>
             <div class="chat-message-meta">
               <button v-if="message.role === 'assistant'" class="chat-icon chat-copy" type="button" :aria-label="copiedID === message.id ? '回复已复制' : '复制回复'" :title="copiedID === message.id ? '已复制' : '复制回复'" @click="copyReply(message)"><Check v-if="copiedID === message.id" :size="14" aria-hidden="true" /><Copy v-else :size="14" aria-hidden="true" /></button>
               <time v-if="message.created_at" :datetime="message.created_at">{{ formatTime(message.created_at) }}</time>
             </div>
+            </div>
           </article>
-          <div v-if="busy" class="chat-working" role="status"><LoaderCircle :size="15" class="chat-spinner" aria-hidden="true" />{{ progressLabel }}</div>
+          <div v-if="busy" class="chat-message assistant chat-working" role="status">
+            <span class="chat-avatar" aria-hidden="true"><img v-if="peerAvatar" :src="peerAvatar" alt="" /><Bot v-else :size="16" /></span>
+            <div class="chat-message-content"><span class="chat-typing" aria-hidden="true"><i /><i /><i /></span><span v-if="progress?.phase === 'tool_started'">{{ progressLabel }}</span><span v-else class="sr-only">{{ progressLabel }}</span></div>
+          </div>
         </section>
         <div class="chat-composer-area">
           <button v-if="!followTranscript && messages.length" class="chat-latest" type="button" @click="scroll(true)"><ArrowDown :size="14" aria-hidden="true" />回到最新消息</button>
@@ -75,28 +88,23 @@
             <li v-if="queuePaused && !busy" class="chat-queue-paused">已停止，队列暂停<button class="btn ghost small" type="button" @click="resumeQueue">继续发送</button></li>
           </ul>
           <form class="chat-composer" @submit.prevent="submit">
+            <details ref="addMenu" class="chat-menu" @toggle="onMenuToggle($event, 'add')" @keydown.esc.prevent.stop="closeMenus(true)">
+              <summary class="chat-icon chat-round" role="button" :aria-expanded="addOpen" aria-label="添加操作" title="添加操作"><Plus :size="20" aria-hidden="true" /></summary>
+              <div class="chat-menu-items chat-menu-up">
+                <button type="button" :disabled="busy || loading || !session" @click="openPanel('history')"><Search :size="15" aria-hidden="true" />搜索群聊记录</button>
+                <button type="button" :disabled="busy || loading || !session" @click="usePrompt(suggestions[3].prompt)"><Blocks :size="15" aria-hidden="true" />安装 Sub2API Skill</button>
+              </div>
+            </details>
             <label class="sr-only" for="admin-chat-input">发给管理助手</label>
-            <textarea id="admin-chat-input" ref="composer" v-model="draft" rows="2" maxlength="12000" :placeholder="busy ? '继续输入，Enter 排队发送 · Esc 停止' : '描述问题，或交给我一个任务…'" :disabled="!session || loading || creating" @keydown="onKeydown" />
-            <div class="chat-composer-actions">
-              <details ref="addMenu" class="chat-menu" @toggle="onMenuToggle($event, 'add')" @keydown.esc.prevent.stop="closeMenus(true)">
-                <summary class="chat-icon" role="button" :aria-expanded="addOpen" aria-label="添加操作" title="添加操作"><Plus :size="18" aria-hidden="true" /></summary>
-                <div class="chat-menu-items chat-menu-up">
-                  <button type="button" :disabled="busy || loading || !session" @click="openPanel('history')"><Search :size="15" aria-hidden="true" />搜索群聊记录</button>
-                  <button type="button" :disabled="busy || loading || !session" @click="usePrompt(suggestions[3].prompt)"><Blocks :size="15" aria-hidden="true" />安装 Sub2API Skill</button>
-                </div>
-              </details>
-              <label class="sr-only" for="admin-chat-profile">管理机器人</label>
-              <AppSelect id="admin-chat-profile" class="chat-profile" :model-value="selectedProfile" :options="profileOptions" :disabled="busy || creating || profilesLoading" searchable search-placeholder="搜索机器人名称、平台或 ID" @update:model-value="selectProfile" />
-              <label class="sr-only" for="admin-chat-model">管理对话模型</label>
-              <AppSelect id="admin-chat-model" class="chat-profile chat-model" :model-value="selectedModel" :options="modelOptions" :disabled="busy || creating" searchable search-placeholder="搜索模型或提供商" @update:model-value="selectModel" />
-              <button v-if="busy && draft.trim()" class="chat-icon chat-queue-add" type="submit" aria-label="排队发送" title="排队发送 · Enter"><ListPlus :size="17" aria-hidden="true" /></button>
-              <button v-if="busy" class="chat-send" type="button" :disabled="stopping" :aria-label="stopping ? '正在停止' : '停止'" :title="stopping ? '正在停止…' : '停止 · Esc'" @click="stop"><LoaderCircle v-if="stopping" :size="16" class="chat-spinner" aria-hidden="true" /><Square v-else :size="14" aria-hidden="true" /></button>
-              <button v-else class="chat-send" type="submit" :disabled="!session || loading || creating || !draft.trim()" aria-label="发送" title="发送 · Enter"><ArrowUp :size="18" aria-hidden="true" /></button>
-            </div>
+            <textarea id="admin-chat-input" ref="composer" v-model="draft" rows="1" maxlength="12000" :placeholder="busy ? '继续输入，Enter 排队发送' : '发消息…'" :disabled="!session || loading || creating" @keydown="onKeydown" />
+            <button v-if="busy && draft.trim()" class="chat-icon chat-round chat-queue-add" type="submit" aria-label="排队发送" title="排队发送 · Enter"><ListPlus :size="18" aria-hidden="true" /></button>
+            <button v-if="busy" class="chat-send" type="button" :disabled="stopping" :aria-label="stopping ? '正在停止' : '停止'" :title="stopping ? '正在停止…' : '停止 · Esc'" @click="stop"><LoaderCircle v-if="stopping" :size="16" class="chat-spinner" aria-hidden="true" /><Square v-else :size="13" aria-hidden="true" /></button>
+            <button v-else class="chat-send" type="submit" :disabled="!session || loading || creating || !draft.trim()" aria-label="发送" title="发送 · Enter"><ArrowUp :size="18" aria-hidden="true" /></button>
           </form>
         </div>
       </section>
     </div>
+    <VoiceCallScreen v-if="callAudio" :profile="callProfile" :name="callProfileLabel" :avatar="callProfileAvatar" :audio="callAudio" @close="callAudio = null" />
     <Modal v-if="showHistorySearch" title="搜索群聊记录" @close="closePanel">
       <form id="admin-chat-history-form" ref="historyPanel" class="chat-history-search" @submit.prevent="searchHistory">
         <p class="muted">{{ selectedProfileLabel }} · 仅查询 Diana 已保存的记录</p>
@@ -105,6 +113,21 @@
         <div class="field"><label for="admin-chat-history-days">时间范围</label><AppSelect id="admin-chat-history-days" v-model="historyDays" :options="historyDayOptions" :disabled="busy" /></div>
       </form>
       <template #footer><button class="btn ghost" type="button" @click="closePanel">取消</button><button class="btn primary" type="submit" form="admin-chat-history-form" :disabled="busy || loading || !session"><Search :size="15" aria-hidden="true" />查询群聊</button></template>
+    </Modal>
+    <Modal v-if="showSettings" title="聊天设置" @close="closePanel">
+      <div ref="settingsPanel" class="chat-settings">
+        <div class="field">
+          <label for="admin-chat-profile">机器人</label>
+          <AppSelect id="admin-chat-profile" :model-value="selectedProfile" :options="profileOptions" :disabled="busy || creating || profilesLoading" searchable search-placeholder="搜索机器人名称、平台或 ID" @update:model-value="selectProfile" />
+          <p class="muted">管理助手替哪台机器人办事：权限、群聊记录和语音通话都跟着它。切换后会话列表换成这台的。</p>
+        </div>
+        <div class="field">
+          <label for="admin-chat-model">模型</label>
+          <AppSelect id="admin-chat-model" :model-value="selectedModel" :options="modelOptions" :disabled="busy || creating" searchable search-placeholder="搜索模型或提供商" @update:model-value="selectModel" />
+          <p class="muted">只在这个浏览器里记住。</p>
+        </div>
+      </div>
+      <template #footer><button class="btn" type="button" @click="closePanel">完成</button></template>
     </Modal>
     <Modal v-if="showPermissions && session" title="执行权限" @close="closePanel">
       <div ref="permissionsPanel" class="chat-capabilities">
@@ -119,11 +142,13 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onActivated, onBeforeUnmount, onDeactivated, ref, watch } from 'vue';
-import { Activity, ArrowDown, ArrowUp, Blocks, Check, Copy, Ellipsis, LoaderCircle, PanelLeft, Plus, RotateCcw, Search, ShieldCheck, Square, SquarePen, Trash2, TriangleAlert, ListPlus, X } from '@lucide/vue';
+import { Activity, ArrowDown, ArrowUp, Blocks, Bot, Check, Copy, Ellipsis, LoaderCircle, PanelLeft, Phone, Plus, RotateCcw, Search, Settings2, ShieldCheck, Square, SquarePen, Trash2, TriangleAlert, ListPlus, X } from '@lucide/vue';
 import { botScope } from '../lib/bot-scope';
 import AppSelect from '../components/AppSelect.vue';
 import Modal from '../components/Modal.vue';
 import SkeletonBlock from '../components/SkeletonBlock.vue';
+import VoiceCallScreen from '../components/VoiceCallScreen.vue';
+import { openCallAudio, type CallAudio } from '../lib/voice-call';
 import { getBotProfileConfig, getConfig, type BotProfileConfig, type LLMConfig } from '../api';
 import { askConfirm } from '../lib/confirm';
 import { useConfigurationRefresh } from '../lib/configuration-sync';
@@ -159,10 +184,10 @@ const modelOptions = computed(() => [{ value: '', label: '跟随机器人', hint
 const sessionSearch = ref(''), filteredSessions = computed(() => filterAdminChatSessions(conversations.value, sessionSearch.value));
 const messages = ref<AdminChatMessage[]>([]), draft = ref(''), error = ref(''), copiedID = ref('');
 const loading = ref(false), creating = ref(false), sending = ref(false), stopping = ref(false), remoteRunning = ref(false);
-const showSessions = ref(window.matchMedia('(min-width: 721px)').matches), showSessionSearch = ref(false), showHistorySearch = ref(false), showPermissions = ref(false), followTranscript = ref(true);
+const showSessions = ref(window.matchMedia('(min-width: 721px)').matches), showSessionSearch = ref(false), showHistorySearch = ref(false), showPermissions = ref(false), showSettings = ref(false), followTranscript = ref(true);
 const sessionSearchInput = ref<HTMLInputElement | null>(null), moreMenu = ref<HTMLDetailsElement | null>(null), addMenu = ref<HTMLDetailsElement | null>(null);
 const moreOpen = ref(false), addOpen = ref(false);
-const historyPanel = ref<HTMLElement | null>(null), permissionsPanel = ref<HTMLElement | null>(null);
+const historyPanel = ref<HTMLElement | null>(null), permissionsPanel = ref<HTMLElement | null>(null), settingsPanel = ref<HTMLElement | null>(null);
 let panelReturnFocus: HTMLElement | null = null;
 const historyGroup = ref(''), historySearch = ref(''), historyDays = ref('7');
 const historyDayOptions = [{ value: '1', label: '最近 24 小时' }, { value: '7', label: '最近 7 天' }, { value: '30', label: '最近 30 天' }];
@@ -219,28 +244,30 @@ async function usePrompt(prompt: string): Promise<void> {
     await nextTick();
     composer.value?.focus();
 }
-async function openPanel(panel: 'history' | 'permissions'): Promise<void> {
+async function openPanel(panel: 'history' | 'permissions' | 'settings'): Promise<void> {
     const menu = panel === 'history' ? addMenu.value : moreMenu.value;
     panelReturnFocus = menu?.open ? menu.querySelector('summary') : document.activeElement as HTMLElement;
     closeMenus();
     showHistorySearch.value = panel === 'history';
     showPermissions.value = panel === 'permissions';
+    showSettings.value = panel === 'settings';
     await nextTick();
-    const content = historyPanel.value || permissionsPanel.value;
+    const content = historyPanel.value || permissionsPanel.value || settingsPanel.value;
     const firstInput = content?.querySelector<HTMLElement>('input');
     (firstInput || content?.closest('[role="dialog"]')?.querySelector<HTMLElement>('button'))?.focus();
 }
 async function closePanel(): Promise<void> {
     showHistorySearch.value = false;
     showPermissions.value = false;
+    showSettings.value = false;
     await nextTick();
     if (panelReturnFocus?.isConnected) panelReturnFocus.focus();
     else composer.value?.focus();
     panelReturnFocus = null;
 }
 function onPanelKeydown(event: KeyboardEvent): void {
-    if (event.key !== 'Tab' || (!showHistorySearch.value && !showPermissions.value)) return;
-    const dialog = (historyPanel.value || permissionsPanel.value)?.closest('[role="dialog"]');
+    if (event.key !== 'Tab' || (!showHistorySearch.value && !showPermissions.value && !showSettings.value)) return;
+    const dialog = (historyPanel.value || permissionsPanel.value || settingsPanel.value)?.closest('[role="dialog"]');
     if (!dialog?.contains(event.target as Node)) return;
     const controls = Array.from(dialog.querySelectorAll<HTMLElement>('button:not([disabled]), input:not([disabled]), textarea:not([disabled]), [tabindex="0"]'));
     const first = controls[0], last = controls[controls.length - 1];
@@ -306,6 +333,27 @@ function resetConversation(): void {
     closeMenus();
     showHistorySearch.value = false;
     showPermissions.value = false;
+}
+// 通话打给对话框里选中的机器人；选的是「全部机器人」时打给当前作用域那台，再没有就第一台。
+const callProfile = computed(() => selectedProfile.value || botScope.value || profiles.value.find(p => p.id)?.id || '');
+const callProfileInfo = computed(() => profiles.value.find(p => p.id === callProfile.value));
+const callProfileLabel = computed(() => callProfileInfo.value?.name || callProfile.value);
+const callProfileAvatar = computed(() => callProfileInfo.value?.avatar_url || '');
+const callAudio = ref<CallAudio | null>(null);
+// 像聊天软件一样，对面是选中的那台机器人；选「全部机器人」时就是管理助手本身。
+const peerName = computed(() => selectedProfile.value ? selectedProfileLabel.value : '管理助手');
+const peerAvatar = computed(() => (selectedProfile.value && profiles.value.find(p => p.id === selectedProfile.value)?.avatar_url) || '');
+// 输入框随内容长高，一行起步，像聊天软件。
+watch(draft, async () => {
+    await nextTick();
+    const el = composer.value;
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
+});
+function startCall(): void {
+    closeMenus();
+    if (callProfile.value && !callAudio.value) callAudio.value = openCallAudio();
 }
 function selectProfile(profile: string): void {
     if (busy.value || creating.value || profile === selectedProfile.value)
@@ -556,6 +604,7 @@ function deactivate(): void {
     closeMenus();
     showHistorySearch.value = false;
     showPermissions.value = false;
+    showSettings.value = false;
     clearTimeout(timer);
     controller?.abort();
     loadController?.abort();
@@ -598,7 +647,13 @@ onBeforeUnmount(deactivate);
 .chat-workspace:not(.show-sessions) .chat-main { padding-left: 0; }
 .chat-room-header { flex-shrink: 0; padding-bottom: 12px; }
 .chat-room-title { flex: 1; gap: 10px; }
-.chat-room-title h2 { margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 500; }
+.chat-peer { display: grid; min-width: 0; line-height: 1.3; }
+.chat-peer h2 { margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; font-weight: 600; }
+.chat-peer p { margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; color: var(--muted); }
+.chat-peer p.typing { color: var(--accent); }
+.chat-avatar { display: inline-grid; place-items: center; flex-shrink: 0; width: 34px; height: 34px; overflow: hidden; border-radius: 10px; background: color-mix(in srgb, var(--accent) 16%, var(--surface-2)); color: var(--accent); }
+.chat-avatar img { width: 100%; height: 100%; object-fit: cover; }
+.chat-peer-avatar { width: 36px; height: 36px; }
 .chat-menu { position: relative; }
 .chat-menu > summary { list-style: none; }
 .chat-menu > summary::-webkit-details-marker { display: none; }
@@ -617,40 +672,45 @@ onBeforeUnmount(deactivate);
 .chat-suggestions { display: flex; flex-wrap: wrap; justify-content: center; gap: 18px; }
 .chat-suggestions button { display: inline-flex; align-items: center; gap: 7px; padding: 4px 0; border: 0; background: transparent; color: var(--muted); font: inherit; font-size: 12px; cursor: pointer; }
 .chat-suggestions button:hover { color: var(--text); }
-.chat-message { max-width: 700px; margin: 0 auto 24px; }
-.chat-message-content { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 14px; line-height: 1.8; }
-.chat-message.user { display: flex; flex-direction: column; align-items: flex-end; }
-.chat-message.user .chat-message-content { max-width: min(85%, 580px); padding: 10px 15px; border-radius: 16px; background: var(--surface-2); }
-.chat-message.failed .chat-message-content { color: var(--danger); }
-.chat-message-meta { display: flex; align-items: center; gap: 7px; margin-top: 4px; min-height: 26px; font-size: 10px; color: var(--muted); }
+/* 聊天软件的气泡：对面靠左带头像，自己靠右用主题色。 */
+.chat-message { display: flex; align-items: flex-start; gap: 10px; max-width: 760px; margin: 0 auto 14px; }
+.chat-message-body { display: flex; flex-direction: column; align-items: flex-start; min-width: 0; max-width: min(78%, 600px); }
+.chat-message-content { padding: 9px 13px; border-radius: 4px 16px 16px 16px; background: var(--surface-2); white-space: pre-wrap; overflow-wrap: anywhere; font-size: 14px; line-height: 1.65; }
+.chat-message.user { justify-content: flex-end; }
+.chat-message.user .chat-message-body { align-items: flex-end; }
+.chat-message.user .chat-message-content { border-radius: 16px 4px 16px 16px; background: var(--accent); color: #fff; }
+.chat-message.failed .chat-message-content { background: color-mix(in srgb, var(--danger) 12%, var(--surface-2)); color: var(--danger); }
+.chat-message-meta { display: flex; align-items: center; gap: 4px; margin-top: 2px; min-height: 22px; font-size: 10px; color: var(--muted); }
 .chat-message-meta time { opacity: 0; transition: opacity .15s; }
 .chat-message:hover time, .chat-message:focus-within time { opacity: 1; }
-.chat-copy { width: 26px; height: 26px; opacity: .65; }
-.chat-steps { margin-top: 14px; font-size: 11px; color: var(--muted); }
+.chat-copy { width: 22px; height: 22px; opacity: .65; }
+.chat-steps { margin-top: 6px; padding: 0 4px; font-size: 11px; color: var(--muted); }
 .chat-steps summary { cursor: pointer; }
 .chat-step { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; padding: 8px 0; }
-.chat-working { display: flex; align-items: center; gap: 8px; max-width: 700px; margin: 0 auto; color: var(--muted); font-size: 12px; }
-.chat-composer-area { position: relative; flex-shrink: 0; width: 100%; max-width: 720px; margin: 0 auto; padding: 4px 0; }
-.chat-composer { display: block; padding: 12px; border: 1px solid var(--border); border-radius: 18px; background: var(--surface); }
-.chat-composer:focus-within { border-color: color-mix(in srgb, var(--text) 25%, var(--border)); }
-.chat-composer textarea { display: block; width: 100%; min-height: 58px; max-height: 180px; padding: 2px 4px 8px; border: 0; outline: 0; resize: vertical; background: transparent; color: var(--text); font: inherit; font-size: 13px; line-height: 1.7; }
+.chat-working .chat-message-content { display: inline-flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; }
+.chat-typing { display: inline-flex; gap: 4px; padding: 4px 0; }
+.chat-typing i { width: 6px; height: 6px; border-radius: 50%; background: currentColor; animation: chat-typing 1.2s ease-in-out infinite; }
+.chat-typing i:nth-child(2) { animation-delay: .15s; }
+.chat-typing i:nth-child(3) { animation-delay: .3s; }
+@keyframes chat-typing { 0%, 60%, 100% { opacity: .3; transform: translateY(0); } 30% { opacity: 1; transform: translateY(-3px); } }
+.chat-composer-area { position: relative; flex-shrink: 0; width: 100%; max-width: 780px; margin: 0 auto; padding: 8px 0 4px; border-top: 1px solid var(--border); }
+/* 一行输入条：加号、胶囊输入框、发送，和聊天软件一样。 */
+.chat-composer { display: flex; align-items: flex-end; gap: 8px; }
+.chat-composer textarea { flex: 1; min-width: 0; height: 40px; min-height: 40px; max-height: 160px; padding: 9px 16px; border: 1px solid var(--border); border-radius: 20px; outline: 0; resize: none; background: var(--surface); color: var(--text); font: inherit; font-size: 14px; line-height: 20px; }
+.chat-composer textarea:focus { border-color: color-mix(in srgb, var(--accent) 55%, var(--border)); }
 .chat-composer textarea::placeholder { color: var(--muted); }
 .chat-composer textarea:disabled { opacity: .6; }
-.chat-composer-actions { display: flex; align-items: center; gap: 6px; }
-.chat-profile { flex: 0 1 auto; width: fit-content; min-width: 0; max-width: min(230px, calc(50% - 43px)); }
-.chat-profile :deep(.app-select-trigger) { width: auto; min-height: 30px; height: 30px; gap: 6px; padding: 4px 7px; border-color: transparent; background: transparent; box-shadow: none; font-size: 11px; color: var(--muted); }
-.chat-profile :deep(.app-select-trigger:hover), .chat-profile :deep(.app-select.open .app-select-trigger) { background: var(--surface-2); color: var(--text); }
-.chat-profile :deep(.app-select-value) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.chat-profile :deep(.app-select-avatar) { width: 17px; height: 17px; }
-.chat-send { display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; width: 30px; height: 30px; margin-left: auto; padding: 0; border: 0; border-radius: 50%; background: var(--text); color: var(--surface); cursor: pointer; }
-.chat-send:disabled { opacity: .25; cursor: default; }
+.chat-round { width: 40px; height: 40px; border-radius: 50%; }
+.chat-composer .chat-menu-items.chat-menu-up { bottom: calc(100% + 8px); }
+.chat-settings { display: grid; gap: 18px; }
+.chat-settings .field p { margin: 6px 0 0; font-size: 12px; line-height: 1.6; }
+.chat-send { display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; width: 40px; height: 40px; padding: 0; border: 0; border-radius: 50%; background: var(--accent); color: #fff; cursor: pointer; }
+.chat-send:disabled { opacity: .35; cursor: default; }
 .chat-send:hover:not(:disabled) { opacity: .8; }
 .chat-queue { display: grid; gap: 4px; margin: 0 8px 6px; padding: 0; list-style: none; }
 .chat-queue li { display: flex; align-items: center; gap: 6px; min-width: 0; padding: 4px 6px 4px 12px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); font-size: 12px; color: var(--text-secondary); }
 .chat-queue-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chat-queue-paused { justify-content: space-between; color: var(--muted); }
-.chat-queue-add { margin-left: auto; }
-.chat-queue-add + .chat-send { margin-left: 0; }
 .chat-latest { position: absolute; left: 50%; bottom: calc(100% + 10px); transform: translateX(-50%); display: flex; align-items: center; gap: 6px; padding: 7px 12px; border: 1px solid var(--border); border-radius: 20px; background: var(--surface); color: var(--text-secondary); box-shadow: var(--shadow-md); font: inherit; font-size: 11px; cursor: pointer; white-space: nowrap; }
 .chat-error { color: var(--danger); font-size: 12px; }
 .chat-banner { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; padding: 10px 12px; border-radius: 8px; background: color-mix(in srgb, var(--danger) 6%, var(--surface)); }
@@ -663,7 +723,7 @@ onBeforeUnmount(deactivate);
 .chat-capabilities dd { margin: 0; overflow-wrap: anywhere; }
 .chat-spinner { animation: chat-spin 1s linear infinite; }
 @keyframes chat-spin { to { transform: rotate(360deg); } }
-@media (prefers-reduced-motion: reduce) { .chat-spinner { animation: none; } .chat-message-meta time { transition: none; } }
+@media (prefers-reduced-motion: reduce) { .chat-spinner, .chat-typing i { animation: none; } .chat-message-meta time { transition: none; } }
 @media (max-width: 720px) {
   .chat-workspace, .chat-workspace.show-sessions { grid-template-columns: minmax(0, 1fr); height: calc(100dvh - 144px); }
   .chat-main { padding-left: 0; }
@@ -674,10 +734,10 @@ onBeforeUnmount(deactivate);
   .chat-room-title { gap: 5px; }
   .chat-transcript { padding: 12px 2px 20px; }
   .chat-empty h3 { font-size: 22px; }
-  .chat-message-content { font-size: 13px; }
-  .chat-message.user .chat-message-content { max-width: 92%; }
+  .chat-message-content { font-size: 14px; }
+  .chat-message-body { max-width: 82%; }
+  .chat-avatar { width: 30px; height: 30px; border-radius: 9px; }
   .chat-message-meta time { opacity: 1; }
-  .chat-composer { padding: 10px; border-radius: 16px; }
   .chat-composer textarea { font-size: 16px; }
   .chat-composer-area { padding: 4px 0; }
 }

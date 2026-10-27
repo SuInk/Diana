@@ -32,6 +32,27 @@ export interface CallInfo {
   problem?: string;
 }
 
+/** 一通电话的本地音频：播放用的上下文和麦克风。 */
+export interface CallAudio {
+  context: AudioContext;
+  mic: Promise<MediaStream>;
+}
+
+/**
+ * 在点击电话按钮的处理函数里同步调用：手机浏览器只允许在用户手势里创建可发声的
+ * AudioContext、弹出麦克风授权，挪到界面挂载之后就晚了。
+ */
+export function openCallAudio(): CallAudio {
+  const context = new AudioContext();
+  void context.resume();
+  const mic = navigator.mediaDevices
+    ? navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 } })
+    : Promise.reject(new Error("浏览器不支持录音"));
+  // 先挂一个空的 catch，免得用户还没接通就挂断时报未处理的拒绝。
+  mic.catch(() => undefined);
+  return { context, mic };
+}
+
 /** 通话 WebSocket 地址。鉴权靠同源的登录 Cookie。 */
 export function callSocketURL(profileID: string, location: Pick<Location, "protocol" | "host"> = window.location): string {
   const protocol = location.protocol === "https:" ? "wss:" : "ws:";
