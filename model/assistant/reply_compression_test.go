@@ -93,6 +93,12 @@ func TestFinalizeEnvelopeUnwrappedOnOutboundPath(t *testing.T) {
 	if !errors.As(err, &silent) || got != "" {
 		t.Fatalf("silent envelope should not send: got=%q err=%v", got, err)
 	}
+	// 正文里引了一段信封形状的 JSON 时整段照发，不吞前面的话。
+	quoted := `格式长这样：{"content":"hi","silent":false}`
+	got, err = rt.prepareGeneratedReply(context.Background(), BotConfig{MaxReplyChars: 8000}, quoted)
+	if err != nil || !strings.Contains(got, "格式长这样") || !strings.Contains(got, `"content"`) {
+		t.Fatalf("quoted JSON should send as-is: got=%q err=%v", got, err)
+	}
 }
 
 // 正常说到「调用工具」的句子不能被误拦。

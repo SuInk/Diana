@@ -192,9 +192,14 @@ func finalizeEnvelopeFromText(text string, declared ...FinalizeField) (llmAction
 }
 
 // FinalizeEnvelopeFromText 供出站兜底用：text 整段是收尾信封时返回信封里的正文和
-// 是否静默。判据同 finalizeEnvelopeFromText。
+// 是否静默。判据同 finalizeEnvelopeFromText，但要求整段就是 JSON：出站经过的是所有
+// 回复，正文里引了一段信封形状的 JSON 时不能把前后的话吞掉。
 func FinalizeEnvelopeFromText(text string, declared ...FinalizeField) (content string, silent bool, ok bool) {
-	action, ok := finalizeEnvelopeFromText(text, declared...)
+	trimmed := strings.TrimSpace(text)
+	if !strings.HasPrefix(trimmed, "{") || !strings.HasSuffix(trimmed, "}") {
+		return "", false, false
+	}
+	action, ok := finalizeEnvelopeFromText(trimmed, declared...)
 	if !ok {
 		return "", false, false
 	}
