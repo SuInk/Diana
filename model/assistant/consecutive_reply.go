@@ -126,7 +126,7 @@ func consecutiveReplyContext(previous replyTurnRecord) string {
 			builder.WriteString(excerpt)
 		}
 		builder.WriteString("。")
-		builder.WriteString("\n上一条答案已发出。这条如果仍在提问、反驳或质疑，应按未解决的问题重新审视并作答；重答需要的内容可以重复，不要压成一句确认或沿用上一条的玩笑。")
+		builder.WriteString("\n上一条答案已发出。这条如果仍在提问、反驳或质疑，应按未解决的问题重新审视并作答：上一条确实错了就改，没错就坚持并讲清理由，不要顺势认错；重答需要的内容可以重复，不要压成一句确认或沿用上一条的玩笑。")
 	}
 	builder.WriteString("确实是另一件事时照常正常回答。")
 	return builder.String()
