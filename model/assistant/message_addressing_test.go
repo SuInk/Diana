@@ -123,3 +123,24 @@ func TestAddressingReachesRoutingAndFinalPromptWithoutLeakingIDs(t *testing.T) {
 		}
 	}
 }
+
+// QQ 官方机器人收到的群 @ 消息里没有 at 段（平台已剥掉），被点名只体现在 ToMe 上；
+// 2026-10-27 一条「试试发个md表格」因此被模型当成没人叫它，send 空正文。
+func TestAddressingMarksQQOfficialGroupAtAsSelf(t *testing.T) {
+	event := MessageEvent{Kind: EventKindGroup, Platform: PlatformQQOfficial, ToMe: true, SelfID: "10001", GroupID: "G1", UserID: "U1",
+		Segments: []MessageSegment{{Type: "text", Data: map[string]string{"text": "试试发个表格"}}}}
+	got := addressingForEvent(event, BotConfig{})
+	if !got.MentionsSelf || len(got.Mentions) != 1 || got.Mentions[0].Target != "self" {
+		t.Fatalf("addressing=%+v", got)
+	}
+	// 全量群消息模式下没 @ 机器人的消息 ToMe=false，不能被补成点名。
+	event.ToMe = false
+	if got := addressingForEvent(event, BotConfig{}); got.MentionsSelf || len(got.Mentions) != 0 {
+		t.Fatalf("unaddressed qq-official message marked self: %+v", got)
+	}
+	// OneBot 的 ToMe 也可能来自叫名字，照旧只认 at 段。
+	event.ToMe, event.Platform = true, PlatformOneBotV11
+	if got := addressingForEvent(event, BotConfig{}); got.MentionsSelf {
+		t.Fatalf("onebot ToMe without at segment marked self: %+v", got)
+	}
+}

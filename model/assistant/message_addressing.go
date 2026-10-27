@@ -69,6 +69,12 @@ func addressingForEvent(event MessageEvent, cfg BotConfig) messageAddressing {
 		out.MentionsSelf = out.MentionsSelf || m.Target == "self"
 		out.MentionsOther = out.MentionsOther || m.Target == "other"
 	}
+	// QQ 官方机器人把 @ 机器人的那一段从正文里剥掉了，只在 ToMe 上留下被点名的结论。
+	// 不补上的话模型看到 mentions_self=false，会把明明叫它的话当成群友闲聊而不出声。
+	if event.Kind == EventKindGroup && event.ToMe && !out.MentionsSelf && NormalizePlatformID(event.Platform) == PlatformQQOfficial {
+		out.Mentions = append(out.Mentions, MessageMention{UserID: self, Target: "self"})
+		out.MentionsSelf = true
+	}
 	return out
 }
 
