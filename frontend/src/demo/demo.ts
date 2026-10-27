@@ -1289,7 +1289,7 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
       ],
       directories: [
         { key: "history-media", label: "历史媒体原件", bytes: 7516192768, files: 44102 },
-        { key: "media", label: "下载缓存", bytes: 1073741824, files: 3380 },
+        { key: "download-cache", label: "下载缓存", bytes: 1073741824, files: 3380 },
         { key: "database", label: "数据库", bytes: 704643072, files: 3 },
         { key: "workspace/coding", label: "工作目录 · 编码工作区", bytes: 188743680, files: 612 },
         { key: "manual-backups", label: "手动备份", bytes: 104857600, files: 4 },

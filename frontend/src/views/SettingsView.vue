@@ -192,7 +192,7 @@
               <div v-if="directoryRows.length > 0" class="storage-breakdown">
                 <div class="storage-breakdown-head">
                   <h3>按目录</h3>
-                  <span class="muted">占比以数据目录为分母</span>
+                  <div class="cluster"><span class="muted">占比以数据目录为分母</span><button class="btn small ghost" type="button" @click="storageCleanup = 'cache'">清理下载缓存</button></div>
                 </div>
                 <table class="table storage-dir-table">
                   <thead>
@@ -201,6 +201,7 @@
                       <th scope="col" class="storage-dir-num">大小</th>
                       <th scope="col" class="storage-dir-num">占比</th>
                       <th scope="col" class="storage-dir-num">文件数</th>
+                      <th scope="col">操作</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -212,6 +213,13 @@
                       <td class="storage-dir-num">{{ formatBytes(directory.bytes) }}</td>
                       <td class="storage-dir-num muted">{{ storageShareLabel(directory.bytes, storage.diana_bytes) }}</td>
                       <td class="storage-dir-num muted">{{ formatNumber(directory.files) }}</td>
+                      <td>
+                        <button v-if="directory.key === 'history-media'" class="btn small ghost" type="button" @click="storageCleanup = 'history'">清理原件</button>
+                        <button v-else-if="directory.key === 'download-cache'" class="btn small ghost" type="button" @click="storageCleanup = 'cache'">清理缓存</button>
+                        <button v-else-if="directory.key === 'workspace/.trash'" class="btn small ghost danger" type="button" :disabled="storageTrashBusy" @click="clearStorageTrash">{{ storageTrashBusy ? '清理中…' : '清空回收站' }}</button>
+                        <button v-else-if="directory.key.startsWith('workspace/')" class="btn small ghost" type="button" @click="navigate('workspace')">管理文件</button>
+                        <span v-else class="muted">—</span>
+                      </td>
                     </tr>
                   </tbody>
                 </table>
@@ -222,9 +230,10 @@
               </p>
               <p class="hint">
                 数据目录 <code class="mono">{{ storage.path }}</code>。
-                <template v-if="storage.scanning">正在重新统计，稍后自动刷新。</template>
+                <template v-if="storageRefreshAfter">清理请求已完成，正在等待更新后的占用统计（最多约一分钟）。</template>
+                <template v-else-if="storage.scanning">正在重新统计，稍后自动刷新。</template>
                 <template v-else-if="storage.scanned_at">统计于 {{ formatTime(storage.scanned_at) }}。</template>
-                占得多的话：图片、视频、音频这些历史原件由「媒体与文件」的保留策略清理，下载缓存由「下载缓存」清理，Agent 工作目录里的文件在侧栏「文件」页里按分区浏览、下载或删除。
+                可以在上表直接清理历史原件、下载缓存和回收站。工作目录可进入文件页按需删除；数据库、备份及浏览器登录数据不支持在这里整目录删除。
               </p>
             </template>
           </div>
@@ -261,8 +270,8 @@
                 </label>
               </div>
               <div v-if="cacheMode === 'capacity' || (cacheMode === 'days' && cacheLimitEnabled)" class="field">
-                <label for="cache-max-mb">容量上限（MiB）</label>
-                <input id="cache-max-mb" v-model.number="cacheMaxMB" class="input" type="number" min="1" max="1048576" step="1" required />
+                <label for="cache-max-mb">容量上限</label>
+                <CapacityInput id="cache-max-mb" v-model="cacheMaxMB" :min="1" :disabled="cacheSaving" />
               </div>
               <div class="field wide">
                 <button class="btn primary" type="submit" :disabled="!cacheDraftValid || !cacheDirty">
@@ -281,7 +290,7 @@
           <form class="card-body form-grid" @submit.prevent="saveHistoryMedia">
             <p v-if="historyMediaError" class="error field wide">{{ historyMediaError }}</p>
             <div class="field"><label for="history-media-days">保留天数</label><input id="history-media-days" v-model.number="historyMediaDays" class="input" type="number" min="-1" max="36500" /><span class="hint">-1 表示不按时间删除。</span></div>
-            <div class="field"><label for="history-media-max">容量上限（MiB）</label><input id="history-media-max" v-model.number="historyMediaMaxMB" class="input" type="number" min="0" max="1048576" /><span class="hint">0 表示不限制容量。</span></div>
+            <div class="field"><label for="history-media-max">容量上限</label><CapacityInput id="history-media-max" v-model="historyMediaMaxMB" :disabled="historyMediaSaving" /><span class="hint">0 表示不限制容量。</span></div>
             <p class="hint field wide">清理只删除图片、视频、音频、PDF 等历史原件；聊天文字、媒体类型和已有摘要保留。删除后历史记录会显示原件不可用。</p>
             <div class="field wide"><button class="btn primary" type="submit" :disabled="historyMediaLoading || historyMediaSaving || !historyMediaValid"><Save :size="15" />{{ historyMediaSaving ? "清理中…" : "保存并立即清理" }}</button></div>
           </form>
@@ -476,6 +485,7 @@
       </div>
     </div>
   </div>
+  <StorageCleanupDialog v-if="storageCleanup" :kind="storageCleanup" @close="storageCleanup = null" @cleaned="afterStorageCleanup" />
 </template>
 
 <script setup lang="ts">
@@ -486,6 +496,9 @@ import DesktopControlSettings from "../components/DesktopControlSettings.vue";
 import EmptyState from "../components/EmptyState.vue";
 import LoadingSkeleton from "../components/LoadingSkeleton.vue";
 import SkeletonBlock from "../components/SkeletonBlock.vue";
+import CapacityInput from "../components/CapacityInput.vue";
+import StorageCleanupDialog from "../components/StorageCleanupDialog.vue";
+import { navigate } from "../router";
 import StorageDonut from "../components/StorageDonut.vue";
 import { Activity, Download, Eye, EyeOff, HardDriveDownload, Images, KeyRound, LogOut, MonitorSmartphone, Palette, PieChart, RefreshCw, RotateCw, Save, ShieldCheck } from "@lucide/vue";
 import {
@@ -507,6 +520,7 @@ import {
   getMediaCachePolicy,
   saveMediaCachePolicy,
   getStorageUsage,
+  emptyWorkspaceTrash,
   type StorageUsage,
   type MediaCachePolicy,
   getHistoryMediaPolicy,
@@ -558,6 +572,26 @@ const activePageMeta = computed(() => settingsPages.find((item) => item.key === 
 // 并且在它报告「还在扫」的时候自己轮询，不让用户对着空饼图点刷新。
 const storage = ref<StorageUsage | null>(null);
 const storageLoading = ref(false);
+const storageCleanup = ref<'history' | 'cache' | null>(null);
+const storageTrashBusy = ref(false);
+const storageRefreshAfter = ref(0);
+async function afterStorageCleanup() {
+  storageRefreshAfter.value = Date.now();
+  await loadStorageUsage();
+  void loadCachePolicy();
+  void loadHistoryMediaPolicy();
+}
+async function clearStorageTrash() {
+  if (storageTrashBusy.value) return;
+  if (!await askConfirm({ title: '清空工作区回收站', message: '永久删除回收站中的所有文件，无法恢复。正在使用的工作区文件不受影响。', confirmLabel: '清空回收站', danger: true })) return;
+  storageTrashBusy.value = true;
+  try {
+    const result = await emptyWorkspaceTrash();
+    toastSuccess(`已清理 ${result.deleted_files} 个文件，释放 ${formatBytes(result.deleted_bytes)}`);
+    await afterStorageCleanup();
+  } catch (e) { toastError(e instanceof Error ? e.message : '清理失败'); }
+  finally { storageTrashBusy.value = false; }
+}
 const storageError = ref("");
 let storageRetryTimer: number | undefined;
 
@@ -586,7 +620,12 @@ async function loadStorageUsage() {
     const usage = await getStorageUsage();
     storage.value = usage;
     if (storageRetryTimer !== undefined) window.clearTimeout(storageRetryTimer);
-    if (usage.scanning) {
+    if (usage.scanned_at && Date.parse(usage.scanned_at) >= storageRefreshAfter.value) storageRefreshAfter.value = 0;
+    if (storageRefreshAfter.value && Date.now() - storageRefreshAfter.value > 90000) {
+      storageRefreshAfter.value = 0;
+      storageError.value = '清理请求已完成，但占用统计尚未更新，请稍后刷新。';
+    }
+    if (usage.scanning || storageRefreshAfter.value) {
       storageRetryTimer = window.setTimeout(() => void loadStorageUsage(), 2000);
     }
   } catch (error) {
