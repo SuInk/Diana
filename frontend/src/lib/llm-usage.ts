@@ -136,6 +136,39 @@ export function cacheUtilization(cachedInputTokens: number, inputTokens: number)
   return `${(ratio * 100).toFixed(1)}%`;
 }
 
+// 发送前审核和回复触发判断不算进总览的缓存命中率：它们每次只带一小段当前消息和
+// 规则，请求短、前缀几乎不复用，调用次数却和主回复一个量级，混在一起会把真正要
+// 看的主回复、记忆这些长请求的命中率拉低一截。各自的命中率仍在「按使用方式」明细里。
+export const cacheExcludedPurposes: ReadonlySet<string> = new Set([
+  "reply_send_audit",
+  "proactive_reply_router",
+  "reply_intent_router",
+  "reply_rule_router",
+  "reply_fatigue_gate"
+]);
+
+export interface CacheSplit {
+  cached_input_tokens: number;
+  input_tokens: number;
+  excluded_cached_input_tokens: number;
+  excluded_input_tokens: number;
+}
+
+/** 把缓存命中拆成「计入总览」和「审核与触发判断」两份。 */
+export function splitCacheUsage(entries: readonly LLMUsageBreakdown[]): CacheSplit {
+  const split: CacheSplit = { cached_input_tokens: 0, input_tokens: 0, excluded_cached_input_tokens: 0, excluded_input_tokens: 0 };
+  for (const entry of entries) {
+    if (cacheExcludedPurposes.has(entry.purpose.trim())) {
+      split.excluded_cached_input_tokens += entry.cached_input_tokens;
+      split.excluded_input_tokens += entry.input_tokens;
+    } else {
+      split.cached_input_tokens += entry.cached_input_tokens;
+      split.input_tokens += entry.input_tokens;
+    }
+  }
+  return split;
+}
+
 export function cacheUsageDisplay(cachedInputTokens: number, inputTokens: number): string {
   return `${formatNumber(cachedInputTokens)} Token（${cacheUtilization(cachedInputTokens, inputTokens)}）`;
 }

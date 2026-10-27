@@ -66,7 +66,7 @@ VALUES (?, ?, 'group', 'g1', 'u1', ?, ?, '{}', 0, ?, 0, ?, ?, ?, ?, ?)
 			Action:    "assistant.llm_usage",
 			Target:    "ignored",
 			CreatedAt: now.Add(-90 * time.Minute),
-			Metadata:  map[string]any{"input_tokens": 20, "output_tokens": 10, "total_tokens": 35},
+			Metadata:  map[string]any{"input_tokens": 20, "output_tokens": 10, "total_tokens": 35, "purpose": "proactive_reply_router"},
 		},
 		{
 			Action:    "llm_usage",
@@ -97,6 +97,13 @@ VALUES (?, ?, 'group', 'g1', 'u1', ?, ?, '{}', 0, ?, 0, ?, ?, ?, ?, ?)
 	// 缓存命中量要同时出现在单条事件和页面汇总上：界面按「命中 / 输入」算命中率。
 	if page.Events[0].CachedInputTokens != 75 || page.CachedInputTokens != 75 {
 		t.Fatalf("cached input tokens = event %d / page %d, want 75/75", page.Events[0].CachedInputTokens, page.CachedInputTokens)
+	}
+	if page.Events[0].CacheRateInputTokens != 100 || page.Events[0].CacheRateCachedInputTokens != 75 || page.Events[1].CacheRateInputTokens != 0 {
+		t.Fatalf("event cache rate tokens = %#v / %#v", page.Events[0], page.Events[1])
+	}
+	// 命中率口径剔除了回复触发判断（这里是 ignored 那次 proactive_reply_router）。
+	if page.CacheRateInputTokens != 100 || page.CacheRateCachedInputTokens != 75 {
+		t.Fatalf("cache rate tokens = %d/%d, want 75/100", page.CacheRateCachedInputTokens, page.CacheRateInputTokens)
 	}
 	if page.LLMCalls != 2 || page.InputTokens != 120 || page.OutputTokens != 50 || page.TotalTokens != 175 {
 		t.Fatalf("token totals = calls:%d input:%d output:%d total:%d, want 2/120/50/175", page.LLMCalls, page.InputTokens, page.OutputTokens, page.TotalTokens)

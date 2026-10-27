@@ -811,6 +811,8 @@ const summary = computed(() => ({
   output_tokens: summaryResponse.value?.output_tokens ?? 0,
   total_tokens: summaryResponse.value?.total_tokens ?? 0,
   cached_input_tokens: summaryResponse.value?.cached_input_tokens ?? 0,
+  cache_rate_input_tokens: summaryResponse.value?.cache_rate_input_tokens ?? summaryResponse.value?.input_tokens ?? 0,
+  cache_rate_cached_input_tokens: summaryResponse.value?.cache_rate_cached_input_tokens ?? summaryResponse.value?.cached_input_tokens ?? 0,
   llm_duration_ms: summaryResponse.value?.llm_duration_ms ?? 0,
   output_tokens_per_second: summaryResponse.value?.output_tokens_per_second ?? 0,
   avg_ttft_ms: summaryResponse.value?.avg_ttft_ms ?? 0,
@@ -837,12 +839,14 @@ const eventBreakdown = computed(() => {
   return parts.join(" · ");
 });
 const tokenBreakdown = computed(() => {
-  const cached = cacheHitRate(summary.value.cached_input_tokens, summary.value.input_tokens);
+  // 命中率剔除发送前审核和回复触发判断：它们请求短、几乎不复用前缀，混进来会把
+  // 主回复这些长请求的命中率拉低。各用途的命中率在仪表盘的「按使用方式」明细里。
+  const cached = cacheHitRate(summary.value.cache_rate_cached_input_tokens, summary.value.cache_rate_input_tokens);
   // 缓存命中率原本独占一张卡，但它的分母就是这里的「输入」，拆成两张只是把同一个
   // 数字写两遍。挂在输入后面，命中多少一眼就能对上。
   const input = cached === null
     ? `输入 ${formatNumber(summary.value.input_tokens)}`
-    : `输入 ${formatNumber(summary.value.input_tokens)}（缓存命中 ${Math.round(cached * 100)}%）`;
+    : `输入 ${formatNumber(summary.value.input_tokens)}（缓存命中 ${Math.round(cached * 100)}%${cacheRateNote(summary.value.cache_rate_input_tokens, summary.value.input_tokens)}）`;
   const missing = summary.value.usage_missing_calls > 0 ? `，其中 ${formatNumber(summary.value.usage_missing_calls)} 次上游未报用量` : "";
   return `${input} / 输出 ${formatNumber(summary.value.output_tokens)} · ${formatNumber(summary.value.llm_calls)} 次调用${missing}`;
 });
@@ -888,10 +892,17 @@ function cacheHitRate(cached: number, input: number): number | null {
   return Math.min(1, cached / input);
 }
 
+// 有审核或触发判断的调用被剔除时才注明口径，不然每行都多一截字。
+function cacheRateNote(rateInput: number, input: number): string {
+  return rateInput < input ? "，不含审核和触发判断" : "";
+}
+
 function eventCacheHitText(event: AssistantEventDetail): string {
-  const rate = cacheHitRate(event.cached_input_tokens || 0, event.input_tokens || 0);
-  if (rate === null || !event.cached_input_tokens) return "";
-  return `缓存命中 ${formatNumber(event.cached_input_tokens)}（${Math.round(rate * 100)}%）`;
+  if (!event.cached_input_tokens) return "";
+  const rateInput = event.cache_rate_input_tokens ?? event.input_tokens ?? 0;
+  const rate = cacheHitRate(event.cache_rate_cached_input_tokens ?? event.cached_input_tokens, rateInput);
+  if (rate === null) return `缓存命中 ${formatNumber(event.cached_input_tokens)}`;
+  return `缓存命中 ${formatNumber(event.cached_input_tokens)}（${Math.round(rate * 100)}%${cacheRateNote(rateInput, event.input_tokens || 0)}）`;
 }
 
 function platformLabel(platform: string): string {

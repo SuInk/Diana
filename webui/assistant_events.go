@@ -48,6 +48,9 @@ type assistantEventsResponse struct {
 	OutputTokens      int64                  `json:"output_tokens"`
 	TotalTokens       int64                  `json:"total_tokens"`
 	CachedInputTokens int64                  `json:"cached_input_tokens"`
+	// 缓存命中率的口径：剔除发送前审核和回复触发判断，见 storage.cacheRateExcludedPurposes。
+	CacheRateInputTokens       int64 `json:"cache_rate_input_tokens"`
+	CacheRateCachedInputTokens int64 `json:"cache_rate_cached_input_tokens"`
 	// LLMDurationMS 是这个范围内所有模型调用的墙钟耗时之和；
 	// OutputTokensPerSecond 由它和输出 token 算出，不是各次调用速率的平均。
 	LLMDurationMS         int64   `json:"llm_duration_ms"`
@@ -411,6 +414,9 @@ func (h *BotHandler) listEvents(c *gin.Context) {
 		OutputTokens:      stored.OutputTokens,
 		TotalTokens:       stored.TotalTokens,
 		CachedInputTokens: stored.CachedInputTokens,
+
+		CacheRateInputTokens:       stored.CacheRateInputTokens,
+		CacheRateCachedInputTokens: stored.CacheRateCachedInputTokens,
 
 		LLMDurationMS:         stored.LLMDurationMS,
 		OutputTokensPerSecond: stored.OutputTokensPerSecond,

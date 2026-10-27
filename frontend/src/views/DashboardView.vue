@@ -271,7 +271,7 @@ import LatencyDetail from "../components/LatencyDetail.vue";
 import LoadingSkeleton from "../components/LoadingSkeleton.vue";
 import SkeletonBlock from "../components/SkeletonBlock.vue";
 import TokenUsageBreakdown from "../components/TokenUsageBreakdown.vue";
-import { cacheUsageDisplay } from "../lib/llm-usage";
+import { cacheUsageDisplay, splitCacheUsage } from "../lib/llm-usage";
 
 const pending = ref(true);
 const setupNeeded = ref(false);
@@ -525,7 +525,7 @@ const detailViews = computed<Record<DetailID, DetailView>>(() => {
       total: formatNumber(usage?.total_tokens ?? 0),
       rows: [
         { label: "输入", value: formatNumber(usage?.input_tokens ?? 0) },
-        { label: "其中缓存命中", value: cacheUsageDisplay(usage?.cached_input_tokens ?? 0, usage?.input_tokens ?? 0), hint: "同时显示缓存命中数量和利用率；利用率 = 缓存命中 ÷ 输入 Token，缓存已经包含在输入里" },
+        ...cacheRows(usage),
         { label: "输出", value: formatNumber(usage?.output_tokens ?? 0) },
         { label: "调用次数", value: formatNumber(usage?.calls ?? 0) },
         ...(selectedRange.value === "today" && status.value?.llm_usage
@@ -553,6 +553,21 @@ const detailViews = computed<Record<DetailID, DetailView>>(() => {
 });
 
 const activeDetail = computed<DetailView | null>(() => (openDetail.value ? detailViews.value[openDetail.value] : null));
+
+// 缓存命中率剔除发送前审核和回复触发判断：它们请求短、几乎不复用前缀，调用次数却和
+// 主回复一个量级，混在一起会把真正要看的长请求拉低。剔除的那部分单列一行对照。
+function cacheRows(usage: UsageDetail | null) {
+  const hint = "利用率 = 缓存命中 ÷ 输入 Token，缓存已经包含在输入里";
+  if (!usage?.breakdown?.length) {
+    return [{ label: "其中缓存命中", value: cacheUsageDisplay(usage?.cached_input_tokens ?? 0, usage?.input_tokens ?? 0), hint }];
+  }
+  const split = splitCacheUsage(usage.breakdown);
+  const rows = [{ label: "其中缓存命中", value: cacheUsageDisplay(split.cached_input_tokens, split.input_tokens), hint: `不含发送前审核和回复触发判断；${hint}` }];
+  if (split.excluded_input_tokens > 0) {
+    rows.push({ label: "审核和触发判断", value: cacheUsageDisplay(split.excluded_cached_input_tokens, split.excluded_input_tokens), hint: "请求短、前缀几乎不复用，单独列出；各用途明细见「按使用方式」" });
+  }
+  return rows;
+}
 
 const llmUsageFoot = computed(() => `调用 ${formatNumber(selectedUsage.value?.calls ?? 0)} 次`);
 

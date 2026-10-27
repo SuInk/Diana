@@ -2976,6 +2976,9 @@ export interface AssistantEventDetail extends BotEvent {
   output_tokens?: number;
   total_tokens?: number;
   cached_input_tokens?: number;
+  /** 算缓存命中率用的输入和命中：剔除发送前审核和回复触发判断。旧版后端没有这两项。 */
+  cache_rate_input_tokens?: number;
+  cache_rate_cached_input_tokens?: number;
   /** 这条消息所有模型调用的墙钟耗时之和；和 duration_ms（整条消息的处理耗时）不同。 */
   llm_duration_ms?: number;
   /** 输出 token 速率，由 output_tokens 和 llm_duration_ms 算出。 */
@@ -3089,6 +3092,9 @@ export interface AssistantEventsResponse {
   output_tokens: number;
   total_tokens: number;
   cached_input_tokens: number;
+  /** 算缓存命中率用的输入和命中：剔除发送前审核和回复触发判断。旧版后端没有这两项。 */
+  cache_rate_input_tokens?: number;
+  cache_rate_cached_input_tokens?: number;
   llm_duration_ms: number;
   output_tokens_per_second: number;
   avg_ttft_ms: number;

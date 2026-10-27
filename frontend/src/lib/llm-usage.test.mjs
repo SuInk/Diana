@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { cacheUsageDisplay, cacheUtilization, groupLLMUsage, usageModelKey, usagePurposeLabel, usageShare } from "./llm-usage.ts";
+import { cacheUsageDisplay, cacheUtilization, groupLLMUsage, splitCacheUsage, usageModelKey, usagePurposeLabel, usageShare } from "./llm-usage.ts";
 
 const entry = (purpose, provider, model, input, output, calls = 1, missing = 0) => ({
   purpose, provider, model, input_tokens: input, output_tokens: output,
@@ -77,4 +77,15 @@ test("缓存利用率用输入 Token 做分母，并可分别查看筛选结果"
     models.reduce((sum, model) => sum + model.cached_input_tokens, 0),
     models.reduce((sum, model) => sum + model.input_tokens, 0)
   ), "550 Token（55.0%）");
+});
+
+test("总览的缓存命中率剔除发送前审核和回复触发判断，剔除部分单独累计", () => {
+  const split = splitCacheUsage([
+    entry("reply", "a", "m", 100, 1),
+    entry("reply_send_audit", "a", "m", 40, 1),
+    entry("proactive_reply_router", "a", "m", 20, 1),
+    entry(" reply_fatigue_gate ", "a", "m", 10, 1),
+    entry("memory_extract", "a", "m", 30, 1)
+  ]);
+  assert.deepEqual(split, { cached_input_tokens: 65, input_tokens: 130, excluded_cached_input_tokens: 35, excluded_input_tokens: 70 });
 });

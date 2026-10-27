@@ -62,6 +62,9 @@ type InboundEventDetail struct {
 	OutputTokens      int64      `json:"output_tokens,omitempty"`
 	TotalTokens       int64      `json:"total_tokens,omitempty"`
 	CachedInputTokens int64      `json:"cached_input_tokens,omitempty"`
+	// 缓存命中率的口径：剔除发送前审核和回复触发判断，见 cacheRateExcludedPurposes。
+	CacheRateInputTokens       int64 `json:"cache_rate_input_tokens,omitempty"`
+	CacheRateCachedInputTokens int64 `json:"cache_rate_cached_input_tokens,omitempty"`
 	// LLMDurationMS 是这条消息所有模型调用的墙钟耗时之和，和上面的 DurationMS
 	// （整条消息的处理耗时）不是一回事：后者还包含插件、发送和等待。
 	LLMDurationMS int64 `json:"llm_duration_ms,omitempty"`
@@ -153,6 +156,10 @@ type InboundEventDetailPage struct {
 	OutputTokens      int64
 	TotalTokens       int64
 	CachedInputTokens int64
+	// CacheRateInputTokens/CacheRateCachedInputTokens 是算缓存命中率用的口径：剔除了
+	// 发送前审核和回复触发判断，见 cacheRateExcludedPurposes。
+	CacheRateInputTokens       int64
+	CacheRateCachedInputTokens int64
 	// LLMDurationMS/OutputTokensPerSecond 与单条事件同义，范围是整个筛选窗口。
 	LLMDurationMS         int64
 	OutputTokensPerSecond float64
@@ -537,6 +544,8 @@ LIMIT ? OFFSET ?
 			page.Events[index].OutputTokens = eventUsage.OutputTokens
 			page.Events[index].TotalTokens = eventUsage.TotalTokens
 			page.Events[index].CachedInputTokens = eventUsage.CachedInputTokens
+			page.Events[index].CacheRateInputTokens = eventUsage.CacheRateInputTokens
+			page.Events[index].CacheRateCachedInputTokens = eventUsage.CacheRateCachedInputTokens
 			page.Events[index].LLMDurationMS = eventUsage.DurationMS
 			page.Events[index].OutputTokensPerSecond = eventUsage.tokensPerSecond()
 			page.Events[index].AvgTTFTMS = eventUsage.avgTTFTMS()
@@ -924,13 +933,28 @@ type InboundEventModelUsage struct {
 	Calls    int64  `json:"calls"`
 }
 
+// cacheRateExcludedPurposes 不计入缓存命中率的用途：发送前审核和回复触发判断。它们
+// 每次只带当前消息和一段规则，请求短、前缀几乎不复用，调用次数却和主回复一个量级，
+// 混在一起会把主回复、记忆这些长请求的命中率拉低一截。前端 llm-usage.ts 的
+// cacheExcludedPurposes 是同一份名单，用途名见 assistant 包的 Purpose* 常量。
+var cacheRateExcludedPurposes = map[string]bool{
+	"reply_send_audit":       true,
+	"proactive_reply_router": true,
+	"reply_intent_router":    true,
+	"reply_rule_router":      true,
+	"reply_fatigue_gate":     true,
+}
+
 type inboundEventTokenTotals struct {
 	LLMCalls          int64
 	InputTokens       int64
 	OutputTokens      int64
 	TotalTokens       int64
 	CachedInputTokens int64
-	DurationMS        int64
+	// 计入缓存命中率的那部分输入和命中，见 cacheRateExcludedPurposes。
+	CacheRateInputTokens       int64
+	CacheRateCachedInputTokens int64
+	DurationMS                 int64
 	// TTFTSumMS/TTFTCalls 只累计有 ttft_ms 的调用。没开流式、或者底层退化成非
 	// 流式的调用不带这个键，不能拿它们当 0 参与平均——那会把均值稀释成假的。
 	TTFTSumMS         int64
@@ -1040,6 +1064,10 @@ ORDER BY created_at`, args...)
 			// 老日志没有这个字段，取出来是 0，聚合后速率自然为 0 而不是错的数。
 			DurationMS: int64FromAny(meta["duration_ms"]),
 		}
+		if purpose, _ := meta["purpose"].(string); !cacheRateExcludedPurposes[strings.TrimSpace(purpose)] {
+			current.CacheRateInputTokens = current.InputTokens
+			current.CacheRateCachedInputTokens = current.CachedInputTokens
+		}
 		// ttft_ms 只有流式跑通时才写。没有这个键就不计入样本数——拿它们当 0
 		// 参与平均会把均值稀释成一个假的小数字。
 		if missing, _ := meta["usage_missing"].(bool); missing {
@@ -1133,6 +1161,8 @@ func (t *inboundEventTokenTotals) add(other inboundEventTokenTotals) {
 	t.OutputTokens += other.OutputTokens
 	t.TotalTokens += other.TotalTokens
 	t.CachedInputTokens += other.CachedInputTokens
+	t.CacheRateInputTokens += other.CacheRateInputTokens
+	t.CacheRateCachedInputTokens += other.CacheRateCachedInputTokens
 	t.DurationMS += other.DurationMS
 	t.TTFTSumMS += other.TTFTSumMS
 	t.TTFTCalls += other.TTFTCalls
@@ -1364,6 +1394,8 @@ func applyEventUsageSummary(page *InboundEventDetailPage, usage inboundEventToke
 	page.OutputTokens = usage.OutputTokens
 	page.TotalTokens = usage.TotalTokens
 	page.CachedInputTokens = usage.CachedInputTokens
+	page.CacheRateInputTokens = usage.CacheRateInputTokens
+	page.CacheRateCachedInputTokens = usage.CacheRateCachedInputTokens
 	page.LLMDurationMS = usage.DurationMS
 	page.OutputTokensPerSecond = usage.tokensPerSecond()
 	page.AvgTTFTMS = usage.avgTTFTMS()
