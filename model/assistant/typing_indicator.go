@@ -62,7 +62,7 @@ func (r *Runtime) startTypingIndicatorMuted(ctx context.Context, event MessageEv
 }
 
 func (r *Runtime) startTypingIndicatorState(ctx context.Context, event MessageEvent, cfg BotConfig, muted bool) *typingIndicator {
-	if event.voiceCall {
+	if event.webChat {
 		return nil
 	}
 	platform := NormalizePlatformID(event.Platform)

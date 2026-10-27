@@ -33,7 +33,7 @@ type telegramReplyDraft struct {
 }
 
 func (r *Runtime) telegramReplyDraft(event MessageEvent, cfg BotConfig) *telegramReplyDraft {
-	if event.voiceCall || NormalizePlatformID(event.Platform) != PlatformTelegram || event.Kind != EventKindPrivate || !boolValue(cfg.LLMStreamingEnabled, true) {
+	if event.webChat || NormalizePlatformID(event.Platform) != PlatformTelegram || event.Kind != EventKindPrivate || !boolValue(cfg.LLMStreamingEnabled, true) {
 		return nil
 	}
 	r.mu.RLock()

@@ -24,10 +24,8 @@ import (
 // 只做三件事：用语音识别插槽转写一句话，把它当成主人发来的一条私聊走正常回复流程，
 // 用语音合成插槽把回复念出来。
 //
-// 回复流程不为通话另起一套：人设、记忆、历史都和主人在这个平台上的私聊是同一份，
-// 通话里说的话挂断后在私聊记录里也看得到。区别只在出口——回复不发到平台上，而是
-// 在发送的最后一步交给通话（voiceCallSink），输入状态、草稿流、合并转发这些只在
-// 聊天窗口里有意义的东西都跳过。
+// 回复流程和聊天页是同一条（web_chat.go）：人设、记忆、历史都和主人在这个平台上
+// 的私聊是同一份，通话里说的话挂断后在私聊记录里也看得到。
 const (
 	voiceCallMessagePrefix = "call-"
 	voiceCallTranscribeCap = 60 * time.Second
@@ -38,38 +36,6 @@ const promptVoiceCall = "你正在和对方实时语音通话，你说的每个�
 
 var promptVoiceCallSpec = tailSpec("voice_call", "语音通话", "主人在 WebUI 或 App 里和机器人语音通话时注入：回复会被逐句合成语音，要写成能直接念的口语。",
 	promptVoiceCall)
-
-type voiceCallSinkKey struct{}
-
-// voiceCallSink 收下这一轮要发出去的文字。
-type voiceCallSink func(text string)
-
-func withVoiceCallSink(ctx context.Context, sink voiceCallSink) context.Context {
-	return context.WithValue(ctx, voiceCallSinkKey{}, sink)
-}
-
-func voiceCallSinkFrom(ctx context.Context) voiceCallSink {
-	sink, _ := ctx.Value(voiceCallSinkKey{}).(voiceCallSink)
-	return sink
-}
-
-// deliverToVoiceCall 在通话里代替平台发送。返回的消息 ID 让发送链路照常记历史。
-func deliverToVoiceCall(ctx context.Context, msg OutgoingMessage) (map[string]any, bool) {
-	sink := voiceCallSinkFrom(ctx)
-	if sink == nil {
-		return nil, false
-	}
-	text := msg.Text
-	if strings.Contains(text, "[CQ:") {
-		text = PlainText(CQToSegments(text))
-	}
-	if text = strings.TrimSpace(text); text != "" {
-		sink(text)
-	}
-	return map[string]any{"message_id": voiceCallMessagePrefix + "out-" + strconv.FormatInt(voiceCallOutboundSeq.Add(1), 10)}, true
-}
-
-var voiceCallOutboundSeq atomic.Int64
 
 // VoiceCall 是一通电话在机器人这一侧的对接，实现 voicecall.Backend。
 type VoiceCall struct {
@@ -92,7 +58,7 @@ type VoiceCallInfo struct {
 
 // VoiceCallInfo 检查这台机器人能不能打电话：要有主人账号、两个语音插槽都配了。
 func (r *Runtime) VoiceCallInfo(ctx context.Context, profileID string) VoiceCallInfo {
-	cfg, event, err := r.voiceCallEvent(profileID)
+	cfg, event, err := r.ownerChatEvent(profileID)
 	info := VoiceCallInfo{BotID: cfg.ID, BotName: cfg.Name, Platform: cfg.Platform}
 	if err != nil {
 		info.Problem = err.Error()
@@ -119,47 +85,12 @@ func (r *Runtime) NewVoiceCall(ctx context.Context, profileID, callID string) (*
 	if info.Problem != "" {
 		return nil, errors.New(info.Problem)
 	}
-	_, event, err := r.voiceCallEvent(profileID)
+	_, event, err := r.ownerChatEvent(profileID)
 	if err != nil {
 		return nil, err
 	}
+	event.voiceCall = true
 	return &VoiceCall{runtime: r, callID: callID, base: event}, nil
-}
-
-func (r *Runtime) voiceCallEvent(profileID string) (BotConfig, MessageEvent, error) {
-	profileID = strings.TrimSpace(profileID)
-	r.mu.RLock()
-	_, exists := r.profileConfigs[profileID]
-	r.mu.RUnlock()
-	if profileID != "" && !exists {
-		return BotConfig{}, MessageEvent{}, fmt.Errorf("机器人不存在")
-	}
-	cfg := r.profileConfig(profileID).WithDefaults()
-	if cfg.ID == "" {
-		return cfg, MessageEvent{}, fmt.Errorf("机器人不存在")
-	}
-	if r.profileDisabled(cfg.ID) {
-		return cfg, MessageEvent{}, fmt.Errorf("这台机器人已停用")
-	}
-	owner := strings.TrimSpace(cfg.OwnerID)
-	if owner == "" {
-		return cfg, MessageEvent{}, fmt.Errorf("先在机器人设置里填主人账号：通话按主人的私聊处理")
-	}
-	if strings.HasPrefix(owner, "@") {
-		return cfg, MessageEvent{}, fmt.Errorf("主人账号填的是用户名，通话需要主人的数字 ID")
-	}
-	event := MessageEvent{
-		ProfileID:   cfg.ID,
-		Platform:    NormalizePlatformID(cfg.Platform),
-		Kind:        EventKindPrivate,
-		MessageType: string(EventKindPrivate),
-		SelfID:      strings.TrimSpace(cfg.BotAccount),
-		UserID:      owner,
-		SenderName:  "主人",
-		ToMe:        true,
-		voiceCall:   true,
-	}
-	return cfg, event, nil
 }
 
 // Transcribe 用语音识别插槽转写一句话。封装格式（webm、ogg、mp4）先用 ffmpeg 转成
@@ -205,42 +136,15 @@ func normalizeVoiceCallAudio(ctx context.Context, audio []byte, format string) (
 	return os.ReadFile(wav)
 }
 
-// Reply 把这句话当成主人发来的一条私聊，同步走完一轮回复。
+// Reply 把这句话当成主人发来的一条私聊，同步走完一轮回复，每条回复的文字交给 emit。
 func (c *VoiceCall) Reply(ctx context.Context, text string, emit func(string)) error {
-	r := c.runtime
 	event := c.base
 	event.MessageID = voiceCallMessagePrefix + c.callID + "-" + strconv.FormatInt(c.turns.Add(1), 10)
-	event.Time = time.Now().Unix()
-	event.RawMessage = text
-	event.Segments = []MessageSegment{{Type: "text", Data: map[string]string{"text": text}}}
-	event = r.bindInboundEventIdentity(event)
-	ctx = withVoiceCallSink(ctx, emit)
-	ctx = withLLMUsageContext(ctx, event)
-	ctx = r.withDebugTraceContext(ctx, event)
-	ctx = withContextBudgetCap(ctx, r.effectiveConfigForEvent(event).MaxContextTokens)
-	r.noteDirectedInbound(event)
-	r.noteSenderTurnArrival(event)
-	prepared, routedText, handled, outcome := r.prepareMessageEvent(ctx, event)
-	if !handled {
-		r.finishSenderTurn(event)
-		return nil
-	}
-	select {
-	case r.sem <- struct{}{}:
-		r.incActive(1)
-	case <-ctx.Done():
-		r.finishSenderTurn(event)
-		return ctx.Err()
-	}
-	defer func() {
-		<-r.sem
-		r.incActive(-1)
-	}()
-	_, err := r.replyAndRecord(ctx, prepared, routedText, outcome)
-	if ctx.Err() != nil {
-		return ctx.Err()
-	}
-	return err
+	return c.runtime.replyAsOwner(ctx, event, text, func(msg WebChatMessage) {
+		if msg.Text != "" {
+			emit(msg.Text)
+		}
+	})
 }
 
 // Synthesize 用语音合成插槽念一句话。OpenAI 兼容和 ElevenLabs 边合成边交出音频，

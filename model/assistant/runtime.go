@@ -7231,7 +7231,7 @@ func (r *Runtime) sendDecorated(ctx context.Context, event MessageEvent, reply s
 	releaseBatch := r.lockReplyBatch(event)
 	defer releaseBatch()
 
-	if !event.voiceCall && IsOneBotPlatform(platform) && !chatSplitLimitsForEvent(cfg, event).SingleMessage && shouldUseForwardReplyFor(cfg, reply, chunks) {
+	if !event.webChat && IsOneBotPlatform(platform) && !chatSplitLimitsForEvent(cfg, event).SingleMessage && shouldUseForwardReplyFor(cfg, reply, chunks) {
 		messageID, err := r.sendForwardReplyWithResult(ctx, event, reply, cfg)
 		if err == nil {
 			if messageID == "" {
@@ -7399,14 +7399,14 @@ func (r *Runtime) sendChannelPayloadWithRetry(ctx context.Context, msg OutgoingM
 		r.mu.RLock()
 		channel := r.channel
 		r.mu.RUnlock()
+		if result, ok := deliverToWebChat(ctx, msg); ok {
+			return result, nil
+		}
 		if channel == nil {
 			return nil, fmt.Errorf("diana: channel is not configured")
 		}
 		var result map[string]any
 		typingIndicatorFromContext(ctx).pause()
-		if result, ok := deliverToVoiceCall(ctx, msg); ok {
-			return result, nil
-		}
 		if resultChannel, ok := channel.(ResultChannel); ok {
 			result, lastErr = resultChannel.SendWithResult(ctx, msg)
 		} else {

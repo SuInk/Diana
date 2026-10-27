@@ -26,9 +26,9 @@ func (r *Runtime) privateAdmissionAllows(event MessageEvent) bool {
 // privateAdmissionAllowsConfig 按统一的主人判定放行主人：Telegram 主人填的是用户名时，
 // 私聊发来的是数字 ID，直接比对 OwnerID 会把主人自己挡在外面。
 func privateAdmissionAllowsConfig(cfg BotConfig, event MessageEvent) bool {
-	// 语音通话只有登录过 WebUI 的主人打得进来。准入管的是平台上谁能私聊机器人，
-	// 管不着它；默认的 disabled 会把主人自己的通话也挡掉。
-	if event.voiceCall {
+	// 聊天页和语音通话只有登录过 WebUI 的主人进得来。准入管的是平台上谁能私聊
+	// 机器人，管不着它们；默认的 disabled 会把主人自己也挡掉。
+	if event.webChat {
 		return true
 	}
 	if cfg.PrivateAdmission.WithDefaults().Mode == PrivateAdmissionDisabled {

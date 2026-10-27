@@ -299,7 +299,10 @@ type MessageEvent struct {
 	taskRequester      string
 	imageContextNotice string
 	voiceSTTErr        error
-	// voiceCall 标记这是语音通话里说的一句话，回复交给通话念出来，见 voice_call.go。
+	// webChat 标记这句话来自 WebUI 的聊天页或语音通话：回复在发送的最后一步交给
+	// 页面，不发到平台上，见 web_chat.go。voiceCall 是其中通话的那部分，回复还要
+	// 念出来，见 voice_call.go。
+	webChat             bool
 	voiceCall           bool
 	voiceSTTTransient   bool
 	recentTextReference *recentTextReference

@@ -1163,6 +1163,23 @@ function demoWorkspaceFile(rel: string, download: boolean): Response {
   return new Response(new Uint8Array(node.size ?? 0), { headers: { "Content-Type": "application/octet-stream", "Content-Disposition": disposition } });
 }
 
+const demoWebChats = new Map<string, { id: string; role: string; text: string; at: number }[]>();
+function demoWebChat(profile: string): { id: string; role: string; text: string; at: number }[] {
+  let history = demoWebChats.get(profile);
+  if (!history) {
+    const base = Math.floor(Date.now() / 1000) - 26 * 3600;
+    history = [
+      { id: "demo-1", role: "user", text: "今天好累啊", at: base },
+      { id: "demo-2", role: "assistant", text: "辛苦啦，先喝口水歇一会儿", at: base + 20 },
+      { id: "demo-3", role: "assistant", text: "晚上想吃点什么？我帮你想想", at: base + 25 },
+      { id: "demo-4", role: "user", text: "番茄牛腩吧", at: base + 25 * 3600 },
+      { id: "demo-5", role: "assistant", text: "好耶，炖一锅能吃两顿", at: base + 25 * 3600 + 30 }
+    ];
+    demoWebChats.set(profile, history);
+  }
+  return history;
+}
+
 async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
   const raw = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
   const url = new URL(raw, window.location.origin);
@@ -1372,6 +1389,19 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
       ...(bot ? { bot, profile_dir: `/data/browser-box/profiles/${bot}/profile` } : {})
     };
   };
+  // 聊天页：演示里每台机器人有几句现成的私聊，发消息回一句固定的话。
+  if (path === "/api/assistant/chat") {
+    const profile = (method === "GET" ? url.searchParams.get("profile") : String(body.profile || "")) || "demo";
+    const history = demoWebChat(profile);
+    if (method === "GET") return json({ info: { bot_id: profile, bot_name: "Diana", platform: "onebot-v11" }, messages: history });
+    const now = Math.floor(Date.now() / 1000);
+    history.push({ id: `demo-in-${now}`, role: "user", text: String(body.text || ""), at: now });
+    const reply = { id: `demo-out-${now}`, role: "assistant", text: "演示模式里我只会回这一句～真实部署里这就是和我私聊，QQ 上聊过的也在这里。", at: now + 1 };
+    history.push(reply);
+    const frames = [{ type: "message", message: reply }, { type: "done", replies: 1 }];
+    const stream = new ReadableStream({ async start(controller) { await new Promise((resolve) => window.setTimeout(resolve, 1200)); for (const frame of frames) controller.enqueue(new TextEncoder().encode(JSON.stringify(frame) + "\n")); controller.close(); } });
+    return new Response(stream, { headers: { "Content-Type": "application/x-ndjson" } });
+  }
   // 演示里没有真实的语音服务，页面照常能看；真打电话时 WebSocket 连不上会如实报没接通。
   if (path === "/api/assistant/call" && method === "GET") {
     const profile = url.searchParams.get("profile") || "demo";

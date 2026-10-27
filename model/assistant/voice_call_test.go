@@ -24,10 +24,11 @@ func newVoiceCallTestRuntime(t *testing.T, reply string) (*Runtime, *recordingCh
 
 func TestVoiceCallReplyGoesToCallNotPlatform(t *testing.T) {
 	runtime, channel, provider := newVoiceCallTestRuntime(t, "听得到哦。今天想聊点什么？")
-	_, base, err := runtime.voiceCallEvent("bot")
+	_, base, err := runtime.ownerChatEvent("bot")
 	if err != nil {
-		t.Fatalf("voiceCallEvent() error = %v", err)
+		t.Fatalf("ownerChatEvent() error = %v", err)
 	}
+	base.voiceCall = true
 	call := &VoiceCall{runtime: runtime, callID: "t1", base: base}
 	var mu sync.Mutex
 	var emitted []string

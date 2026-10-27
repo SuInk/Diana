@@ -327,6 +327,7 @@ func (h *BotHandler) Register(router gin.IRouter) {
 	h.registerRoutes(router, "/api/assistant")
 	h.registerAdminChatRoutes(router)
 	h.registerVoiceCallRoutes(router)
+	h.registerWebChatRoutes(router)
 	// 控制台登录用户直接管理全部群配置，无需群验证码流程。
 	h.registerConsoleGroupRoutes(router)
 }
