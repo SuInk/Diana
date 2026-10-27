@@ -5,9 +5,14 @@ package assistant
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
+	"io"
+	"net"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/SuInk/diana/model/llm"
@@ -84,10 +89,28 @@ func llmErrorPolicy(err error) llmFailurePolicy {
 	if containsAnyMarker(text, []string{"context deadline exceeded", "client.timeout exceeded", "timeout awaiting response headers", "response header timeout", "response body idle timeout", "stream idle timeout"}) {
 		return llmFailurePolicy{retry: true, failover: true}
 	}
-	if containsAnyMarker(text, []string{"bad gateway", "service unavailable", "gateway timeout", "cloudflare", "eof", "connection reset", "connection refused", "connection aborted", "unexpected end of file", "server closed idle connection", "stream ended before completion"}) {
+	// bad record MAC 是 TLS 记录在路上被改坏（代理出口抽风），HTTP/2 下一条坏记录会打死
+	// 同一连接上所有并发请求；坏连接会被移出连接池，重发走新连接。
+	if isLLMTransportError(err) || containsAnyMarker(text, []string{"bad gateway", "service unavailable", "gateway timeout", "cloudflare", "eof", "connection reset", "connection refused", "connection aborted", "unexpected end of file", "server closed idle connection", "stream ended before completion", "bad record mac"}) {
 		return llmFailurePolicy{retry: true, failover: true, cooldown: llmCooldownTransient}
 	}
 	return llmFailurePolicy{}
+}
+
+// isLLMTransportError 按类型认连接层故障。文字名单只能覆盖见过的报错，
+// 没见过的连接错误会被当成请求本身的错，既不重试也不换候选，回复直接失败。
+// 证书校验失败是配置问题，重发也一样，不算在内。
+func isLLMTransportError(err error) bool {
+	var certErr *tls.CertificateVerificationError
+	var unknownAuthority x509.UnknownAuthorityError
+	var hostnameErr x509.HostnameError
+	var invalidCert x509.CertificateInvalidError
+	if errors.As(err, &certErr) || errors.As(err, &unknownAuthority) || errors.As(err, &hostnameErr) || errors.As(err, &invalidCert) {
+		return false
+	}
+	var opErr *net.OpError
+	var recordErr tls.RecordHeaderError
+	return errors.As(err, &opErr) || errors.As(err, &recordErr) || errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.EPIPE)
 }
 
 type contentPolicyRejectionError struct {

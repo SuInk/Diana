@@ -281,7 +281,8 @@ func (c *openAICompatibleClient) streamResponses(ctx context.Context, req Genera
 			}
 		}
 		if err := stream.Err(); err != nil {
-			fail(err.Error())
+			// 带上原始错误：上层要按类型认出连接层故障（TLS 记录损坏、连接被重置）去重试换候选。
+			emit(ChatEvent{Type: ChatEventError, Error: err.Error(), ErrorCause: err})
 			return
 		}
 		if completed == nil {

@@ -185,7 +185,7 @@ func (c *geminiClient) Stream(ctx context.Context, req GenerateRequest) (streamE
 		finished, emitted := false, false
 		for response, err := range c.streamWithReasoningBackoff(ctx, req.Model, contents, config) {
 			if err != nil {
-				sendChatEvent(ctx, out, ChatEvent{Type: ChatEventError, Error: err.Error()})
+				sendChatEvent(ctx, out, ChatEvent{Type: ChatEventError, Error: err.Error(), ErrorCause: err})
 				return
 			}
 			if response == nil {

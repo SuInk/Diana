@@ -5,9 +5,14 @@ package assistant
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
+	"net"
+	"net/url"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -1071,6 +1076,8 @@ func TestUnifiedLLMFailurePolicy(t *testing.T) {
 		{"request id abc500529429", false, false, 0}, {"model-503", false, false, 0},
 		{"HTTP 400: bad parameter, request id 503", false, false, 0},
 		{"context canceled", false, false, 0}, {"content_policy_violation HTTP 403", false, false, 0},
+		{"diana: llm stream failed: local error: tls: bad record MAC", true, true, llmCooldownTransient},
+		{`Post "https://example.test/v1/responses": local error: tls: bad record MAC`, true, true, llmCooldownTransient},
 	} {
 		t.Run(tc.text, func(t *testing.T) {
 			err := errors.New(tc.text)
@@ -1078,5 +1085,56 @@ func TestUnifiedLLMFailurePolicy(t *testing.T) {
 				t.Fatalf("policy=%+v", llmErrorPolicy(err))
 			}
 		})
+	}
+}
+
+// 连接层故障按类型认，不靠报错文字：没见过的 TLS/连接错误也要重试、换候选。
+func TestLLMTransportErrorPolicyByType(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		err   error
+		retry bool
+	}{
+		{"unseen tls local error", &streamingFailedError{reason: "local error: tls: mystery", cause: &net.OpError{Op: "local error", Err: errors.New("tls: mystery")}}, true},
+		{"post reset", &url.Error{Op: "Post", URL: "https://example.test/v1/responses", Err: &net.OpError{Op: "read", Net: "tcp", Err: syscall.ECONNRESET}}, true},
+		{"record header", fmt.Errorf("stream: %w", tls.RecordHeaderError{Msg: "first record does not look like a TLS handshake"}), true},
+		{"certificate", &url.Error{Op: "Post", URL: "https://example.test", Err: &tls.CertificateVerificationError{Err: x509.UnknownAuthorityError{}}}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			policy := llmErrorPolicy(tc.err)
+			if policy.retry != tc.retry || policy.failover != tc.retry {
+				t.Fatalf("policy=%+v", policy)
+			}
+		})
+	}
+}
+
+type flakyStreamProvider struct{ calls int }
+
+func (p *flakyStreamProvider) Generate(context.Context, llm.GenerateRequest) (*llm.GenerateResponse, error) {
+	return nil, errors.New("unexpected non-streaming call")
+}
+
+func (p *flakyStreamProvider) Stream(context.Context, llm.GenerateRequest) (<-chan llm.ChatEvent, error) {
+	p.calls++
+	out := make(chan llm.ChatEvent, 3)
+	if p.calls == 1 {
+		cause := &net.OpError{Op: "local error", Err: errors.New("tls: bad record MAC")}
+		out <- llm.ChatEvent{Type: llm.ChatEventTextDelta, Text: "半句"}
+		out <- llm.ChatEvent{Type: llm.ChatEventError, Error: cause.Error(), ErrorCause: cause}
+	} else {
+		out <- llm.ChatEvent{Type: llm.ChatEventTextDelta, Text: "完整回复"}
+		out <- llm.ChatEvent{Type: llm.ChatEventDone}
+	}
+	close(out)
+	return out, nil
+}
+
+// 流到一半连接被打断、还没往外发任何内容时，原地重发一次就拿到完整回复，用户无感。
+func TestStreamTransportErrorRetriesTransparently(t *testing.T) {
+	inner := &flakyStreamProvider{}
+	resp, err := generateWithTransientRetryPolicy(context.Background(), &streamingLLMProvider{provider: inner}, llm.GenerateRequest{}, true, 0, 2, 0)
+	if err != nil || resp == nil || resp.Text != "完整回复" || inner.calls != 2 {
+		t.Fatalf("calls=%d resp=%+v err=%v", inner.calls, resp, err)
 	}
 }

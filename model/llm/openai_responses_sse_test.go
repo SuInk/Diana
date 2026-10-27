@@ -96,3 +96,33 @@ func TestResponsesSSEPreservesIncompleteStatus(t *testing.T) {
 		t.Fatalf("expected truncation, got %v", err)
 	}
 }
+
+// 连接中途断开时，错误事件要带上原始错误，上层才能按类型认出连接故障去重试。
+func TestResponsesStreamTransportErrorKeepsCause(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "data: {\"type\":\"response.output_text.delta\",\"delta\":\"半\"}\n\n")
+		w.(http.Flusher).Flush()
+		conn, _, err := w.(http.Hijacker).Hijack()
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		conn.Close()
+	}))
+	defer server.Close()
+	c := newOpenAICompatibleClient(ProviderConfig{Provider: ProviderOpenAICompatible, APIKey: "test", BaseURL: server.URL + "/v1", APIFormat: APIFormatResponses, Model: "test-model"}, server.Client())
+	events, err := c.Stream(context.Background(), GenerateRequest{Messages: []Message{{Role: RoleUser, Content: "hi"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var failure *ChatEvent
+	for event := range events {
+		if event.Type == ChatEventError {
+			failure = &event
+		}
+	}
+	if failure == nil || failure.ErrorCause == nil || failure.Error != failure.ErrorCause.Error() {
+		t.Fatalf("error event = %+v", failure)
+	}
+}
