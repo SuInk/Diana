@@ -346,9 +346,18 @@ func stableTailCacheLegacy(t *testing.T, req llm.GenerateRequest, factor, presen
 			}
 			req.Messages = append(req.Messages[:firstHistory], append([]llm.Message{message}, req.Messages[firstHistory:]...)...)
 			return req
-		case factor == "presentation" && strings.Contains(message.Content, presentation):
-			req.Messages[i].Content = strings.Replace(message.Content, presentation, "", 1)
-			req.Messages[0].Content += "\n" + presentation
+		case factor == "presentation" && strings.Contains(message.Content, replyPresentationPrompt(true)):
+			// 现在头部固定放默认版、尾部只放覆盖句；旧布局是整段按本轮版本放在头部。
+			req.Messages[i].Content = strings.Replace(message.Content, replyPresentationPrompt(true), presentation, 1)
+			for j := range req.Messages {
+				if at := strings.Index(req.Messages[j].Content, "本轮的分条方式和上面的默认设置不同"); at >= 0 {
+					end := strings.Index(req.Messages[j].Content[at:], "\n")
+					if end < 0 {
+						end = len(req.Messages[j].Content) - at
+					}
+					req.Messages[j].Content = req.Messages[j].Content[:at] + req.Messages[j].Content[at+end:]
+				}
+			}
 			return req
 		}
 	}

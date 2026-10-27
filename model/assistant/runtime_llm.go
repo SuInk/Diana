@@ -1017,6 +1017,12 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 		appendPromptSection(place(dianaRemoteImageToolName), cfg.prompt(promptSelfAvatarSpec))
 	}
 	appendPromptSection(&builder, replyLineBreakPrompt(cfg))
+	// 回复形式规则（约 5K 字：节奏、emoji、分条、长文分组、发送方式标记）只随机器人配置
+	// 变，按配置的默认分条方式进 head。10-27 生产 DeepSeek 主回复的尾部平均 1.9 万字、
+	// 每轮重算，这段占四分之一以上。#1054 把它挪去尾部是因为本轮要求「一次发完」时
+	// 整段会换成另一版，前缀从这里分叉；现在 head 只放默认版，本轮不同的那一句在
+	// 尾部单独覆盖（replyPresentationOverride）。
+	appendPromptSection(&builder, replyPresentationPrompt(!chatSplitLimitsFrom(cfg).SingleMessage, cfg))
 	// 实时时钟不再拼进人设提示词：它每秒都不同，会让这段最长的 system 提示词永远
 	// 无法命中供应商的前缀缓存。改由 runtimeClockPrompt 作为尾部独立 system 消息注入。
 	if cfg.ReplyComposer != "maibot" && boolValue(cfg.PromptChineseSlangHint, true) {
@@ -1175,6 +1181,17 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 	}
 	builder.WriteString("\n" + cfg.prompt(promptRelationshipTierSpec) + cfg.prompt(promptIdentityAuthoritySpec))
 	builder.WriteString("\n" + cfg.prompt(promptLongTermMemorySpec))
+	// 下面几段原来跟着各自的数据在尾部，逐字不变却每轮重算（10-27 生产 DeepSeek 主回复
+	// 尾部平均 1.9 万字，这几段相邻两轮 100% 相同）。数据留在尾部，说明挪到这里。
+	builder.WriteString("\n" + structuredMemoryTimeRule)
+	builder.WriteString(capabilityPermissionRule)
+	builder.WriteString("\n" + cfg.prompt(promptMessageAddressingSpec))
+	if event.Kind == EventKindGroup {
+		appendPromptSection(&builder, replyMentionRules(cfg))
+	}
+	if agentEnabled {
+		appendPromptSection(&builder, toolExecutionStatusRule)
+	}
 	builder.WriteString("\n" + refusalStrategyPrompt(cfg.RefusalStrategy, cfg))
 	if agentEnabled {
 		// 静默只有空 send 这一个出口，没开 Agent 时说了也做不到。
@@ -1215,8 +1232,9 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 		tail.WriteString("\n" + cfg.prompt(promptChatInNoAgreementSpec))
 	}
 	// 换行分条的说明在闲聊插话那一轮不出现（那一轮只认显式分条标记），所以也随轮次变，
-	// 跟着进 tail；条件和发送层一致，不变。
-	appendPromptSection(&tail, replyPresentationPrompt(!chatSplitLimitsForEvent(cfg, event).SingleMessage, cfg))
+	// 跟着进 tail；条件和发送层一致，不变。本轮发送方式和配置默认不同时，分条规则的
+	// 那一句也在这里覆盖 head 里的默认版。
+	appendPromptSection(&tail, replyPresentationOverride(cfg, event))
 	appendPromptSection(&tail, replyLineSplitPrompt(chatSplitLimitsForEvent(cfg, event)))
 	if eventCarriesImages(event) {
 		// 逐条消息变化，压到尾部，别把前面几千 token 的稳定规则挤出前缀缓存。
@@ -1309,19 +1327,21 @@ func (r *Runtime) replyMentionPrompt(cfg BotConfig, event MessageEvent, history 
 	if err != nil {
 		return ""
 	}
-	return strings.TrimSpace(fmt.Sprintf(`
+	return "【可提及成员候选 JSON】" + string(payload)
+}
 
-	【群聊真实提及规则】
-	发送层支持真正的 @。正文内容和 @ 对象必须由你在同一次最终回复中统一决定，禁止按姓名关键词机械匹配。
-	可提及成员候选 JSON：%s
-	1. %s
-	2. 如果当前发言者只是通过触发词或 @ 叫你回应另一位成员，不要为了礼貌额外 @ 当前发言者：可以直接回答；需要明确回应对象时，写 [diana-at:成员user_id] 提及实际对象。%s
-	3. 可以同时提及多人，也可以把多个标记放在不同位置。不要重复提及同一成员；标记前后按正常中文语句保留必要空格。
-	4. 发送层会原样保留这些标记的对象和相对位置，并按当前平台翻译成真正的提及。%s
-	5. 只能使用候选 JSON 中存在的 user_id，不得根据昵称猜账号；不要把标记放进 Markdown 代码块，也不要自己写平台专用的提及写法。
-	6. 标记只有 [diana-at:user_id] 这一种写法：半角方括号加半角冒号，中间不加空格。写成 @diana-at-user_id、<diana-at:user_id>、(diana-at:user_id) 都不是提及。
-	7. 回复始终对应当前消息；历史消息、引用内容和媒体只作为回答参考，不要把回复对象错误切换成旧消息发送者。`,
-		string(payload),
+// replyMentionRules 是群聊里怎么写真正的 @：只随机器人的引用/提及配置变，放在稳定
+// 头部；本轮的候选名单由 replyMentionPrompt 放在尾部。
+func replyMentionRules(cfg BotConfig) string {
+	return strings.TrimSpace(fmt.Sprintf(`【群聊真实提及规则】
+发送层支持真正的 @。正文内容和 @ 对象必须由你在同一次最终回复中统一决定，禁止按姓名关键词机械匹配。本轮可提及的成员在尾部「可提及成员候选 JSON」里给出，没有这一段就不 @ 任何人。
+1. %s
+2. 如果当前发言者只是通过触发词或 @ 叫你回应另一位成员，不要为了礼貌额外 @ 当前发言者：可以直接回答；需要明确回应对象时，写 [diana-at:成员user_id] 提及实际对象。%s
+3. 可以同时提及多人，也可以把多个标记放在不同位置。不要重复提及同一成员；标记前后按正常中文语句保留必要空格。
+4. 发送层会原样保留这些标记的对象和相对位置，并按当前平台翻译成真正的提及。%s
+5. 只能使用候选 JSON 中存在的 user_id，不得根据昵称猜账号；不要把标记放进代码块，也不要自己写平台专用的提及写法。
+6. 标记只有 [diana-at:user_id] 这一种写法：半角方括号加半角冒号，中间不加空格。写成 @diana-at-user_id、<diana-at:user_id>、(diana-at:user_id) 都不是提及。
+7. 回复始终对应当前消息；历史消息、引用内容和媒体只作为回答参考，不要把回复对象错误切换成旧消息发送者。`,
 		currentSenderMentionRule(cfg),
 		autoDecorationCancelClause(cfg),
 		autoDecorationAvoidClause(cfg)))

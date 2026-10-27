@@ -110,9 +110,13 @@ func TestPromptsAndToolsUseNeutralMentionMarker(t *testing.T) {
 		MessageID: "m1", ToMe: true,
 		Segments: []MessageSegment{{Type: "text", Data: map[string]string{"text": "在吗"}}},
 	}
+	// 规则在稳定头部（replyMentionRules），尾部只带本轮的候选名单。
+	if !strings.Contains(runtime.replyMentionPrompt(BotConfig{}, event, nil), "【可提及成员候选 JSON】") {
+		t.Fatal("tail lost the mention candidates")
+	}
 	for _, mode := range []ReplyDecorationMode{ReplyDecorationOn, ReplyDecorationAuto, ReplyDecorationOff} {
 		cfg := BotConfig{BotAccount: "42", MentionUserMode: mode, ReplyReferenceMode: mode}.WithDefaults()
-		prompt := runtime.replyMentionPrompt(cfg, event, nil)
+		prompt := replyMentionRules(cfg)
 		if strings.Contains(prompt, "[CQ:at") {
 			t.Fatalf("mode %s 的提及规则里还有 CQ 方言：%s", mode, prompt)
 		}

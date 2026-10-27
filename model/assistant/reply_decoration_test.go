@@ -382,6 +382,10 @@ func TestMentionPromptAgreesWithDecorationMode(t *testing.T) {
 		MessageID: "m1", ToMe: true,
 		Segments: []MessageSegment{{Type: "text", Data: map[string]string{"text": "在吗"}}},
 	}
+	// 规则在稳定头部（replyMentionRules），尾部只带本轮的候选名单。
+	if !strings.Contains(runtime.replyMentionPrompt(BotConfig{}, event, nil), "【可提及成员候选 JSON】") {
+		t.Fatal("tail lost the mention candidates")
+	}
 
 	cases := []struct {
 		mode   ReplyDecorationMode
@@ -397,7 +401,7 @@ func TestMentionPromptAgreesWithDecorationMode(t *testing.T) {
 	}
 	for _, tc := range cases {
 		cfg := BotConfig{BotAccount: "42", MentionUserMode: tc.mode, ReplyReferenceMode: tc.mode}.WithDefaults()
-		prompt := runtime.replyMentionPrompt(cfg, event, nil)
+		prompt := replyMentionRules(cfg)
 		if prompt == "" {
 			t.Fatalf("mode %s: 提及规则不该为空", tc.mode)
 		}
@@ -418,8 +422,12 @@ func TestMentionPromptDropsSendLayerClausesWhenNothingIsAdded(t *testing.T) {
 		MessageID: "m1", ToMe: true,
 		Segments: []MessageSegment{{Type: "text", Data: map[string]string{"text": "在吗"}}},
 	}
+	// 规则在稳定头部（replyMentionRules），尾部只带本轮的候选名单。
+	if !strings.Contains(runtime.replyMentionPrompt(BotConfig{}, event, nil), "【可提及成员候选 JSON】") {
+		t.Fatal("tail lost the mention candidates")
+	}
 	quiet := BotConfig{BotAccount: "42", MentionUserMode: ReplyDecorationAuto, ReplyReferenceMode: ReplyDecorationAuto}.WithDefaults()
-	prompt := runtime.replyMentionPrompt(quiet, event, nil)
+	prompt := replyMentionRules(quiet)
 	for _, unwanted := range []string{"会取消对触发者的自动引用", "自动避免把触发者误当成回应对象"} {
 		if strings.Contains(prompt, unwanted) {
 			t.Fatalf("auto 档不该承诺发送层的动作 %q：%s", unwanted, prompt)
@@ -427,7 +435,7 @@ func TestMentionPromptDropsSendLayerClausesWhenNothingIsAdded(t *testing.T) {
 	}
 	// 引用还开着的时候，「会取消自动引用」仍然成立，不能一起删掉。
 	mixed := BotConfig{BotAccount: "42", MentionUserMode: ReplyDecorationAuto, ReplyReferenceMode: ReplyDecorationOn}.WithDefaults()
-	if !strings.Contains(runtime.replyMentionPrompt(mixed, event, nil), "会取消对触发者的自动引用") {
+	if !strings.Contains(replyMentionRules(mixed), "会取消对触发者的自动引用") {
 		t.Fatal("引用仍为 on 时应当保留取消说明")
 	}
 }

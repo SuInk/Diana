@@ -185,6 +185,22 @@ func replyPresentationPrompt(naturalSplit bool, configs ...BotConfig) string {
 	}, "\n"))
 }
 
+// replyPresentationOverride 在本轮的分条方式和配置默认不同时（用户本轮要求「一次
+// 发完」，或在关掉自然分条的配置下要求按内容分条），给出覆盖 head 里默认分条规则
+// 的那一句；相同时为空。
+func replyPresentationOverride(cfg BotConfig, event MessageEvent) string {
+	natural := !chatSplitLimitsForEvent(cfg, event).SingleMessage
+	if natural == !chatSplitLimitsFrom(cfg).SingleMessage {
+		return ""
+	}
+	overrides := promptOverridesOf([]BotConfig{cfg})
+	segmentation := overrides.text(promptReplySegmentationSpec)
+	if !natural {
+		segmentation = overrides.text(promptReplySegmentationOffSpec)
+	}
+	return "本轮的分条方式和上面的默认设置不同，以这一条为准：" + segmentation
+}
+
 const catgirlNoActionRule = "不要这样：不写 *蹭蹭*、（歪头）这类动作描写和旁白，聊天窗口不是文字扮演。"
 
 // 聊天体量的投递参数：真人发的是短消息，不是几百字一坨；连发之间有打字间隔。

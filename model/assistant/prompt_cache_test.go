@@ -112,12 +112,22 @@ func TestReplyPresentationChangesOnlyPromptTail(t *testing.T) {
 	event := MessageEvent{Kind: EventKindGroup, GroupID: "group-a", UserID: "alice", RawMessage: "test"}
 	policy := RelationshipPolicyFor(UserMemoryProfile{}, "owner", "alice")
 	var previous promptCachePayloadObservation
+	var firstHead string
 	for index, mode := range []replyDeliveryMode{replyDeliveryAuto, replyDeliverySingle} {
 		event.replyDeliveryMode = mode
 		head, tail := r.systemPromptPartsWithRelationshipAndAgentTools(event, nil, false, policy, true, nil)
-		presentation := replyPresentationPrompt(!chatSplitLimitsForEvent(cfg, event).SingleMessage, cfg)
-		if presentation == "" || !strings.Contains(tail, presentation) || strings.Contains(head, presentation) {
-			t.Fatalf("mode %s presentation must appear only in tail", mode)
+		// 默认版回复规则固定在 head；本轮要求一次发完时只在尾部覆盖分条那一句。
+		if presentation := replyPresentationPrompt(true, cfg); !strings.Contains(head, presentation) || strings.Contains(tail, presentation) {
+			t.Fatalf("mode %s: default presentation must sit in head only", mode)
+		}
+		if index == 0 {
+			firstHead = head
+		} else if head != firstHead {
+			t.Fatalf("mode %s changed the head", mode)
+		}
+		override := strings.Contains(tail, cfg.prompt(promptReplySegmentationOffSpec))
+		if override != (mode == replyDeliverySingle) {
+			t.Fatalf("mode %s override in tail = %v", mode, override)
 		}
 		request := llm.GenerateRequest{Messages: []llm.Message{
 			{Role: llm.RoleSystem, Content: head},

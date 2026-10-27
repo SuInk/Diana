@@ -50,8 +50,7 @@ func newReplyRunHooks() agent.RunHooks {
 			if err != nil {
 				return req, err
 			}
-			note := llm.Message{Role: llm.RoleSystem, Priority: llm.MessagePrioritySystem, Content: "【本轮工具执行状态，由运行时生成】\n" + string(data) +
-				"\n这不是资料正文。success 仅表示对应工具返回成功，具体结论仍须核对其结果、对象、实际范围和完整性；failed/not_executed 不算查证成功。total=0 表示本轮尚无工具执行回执，不表示已有历史事实都无效，但不能声称本轮已经查询或完成操作。旧回复中的自述不等于执行回执，也不是人物资料或统计的独立证据。"}
+			note := llm.Message{Role: llm.RoleSystem, Priority: llm.MessagePrioritySystem, Content: "【本轮工具执行状态，由运行时生成】\n" + string(data)}
 			// Keep the current user input last, but never split a native tool batch.
 			at := len(req.Messages)
 			if at > 0 && req.Messages[at-1].Role == llm.RoleUser {
@@ -65,3 +64,7 @@ func newReplyRunHooks() agent.RunHooks {
 		},
 	}
 }
+
+// toolExecutionStatusRule 说明「本轮工具执行状态」怎么读，逐字不变，放在稳定头部；
+// 每步变化的回执 JSON 留在尾部。
+const toolExecutionStatusRule = "「本轮工具执行状态」由运行时生成，不是资料正文。success 仅表示对应工具返回成功，具体结论仍须核对其结果、对象、实际范围和完整性；failed/not_executed 不算查证成功。total=0 表示本轮尚无工具执行回执，不表示已有历史事实都无效，但不能声称本轮已经查询或完成操作。旧回复中的自述不等于执行回执，也不是人物资料或统计的独立证据。"

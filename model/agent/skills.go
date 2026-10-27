@@ -324,6 +324,42 @@ func renderSkillsCatalog(skills []SkillMetadata, budget int) (string, map[string
 	return strings.TrimSpace(builder.String()), delivered
 }
 
+// residentSkillsOnly 只保留常驻 skill 的正文开关：目录和常驻正文进历史之前的稳定段，
+// 关键词命中的正文由 renderTriggeredSkillBodies 放进尾部。
+func residentSkillsOnly(skills []SkillMetadata) []SkillMetadata {
+	out := make([]SkillMetadata, len(skills))
+	for i, skill := range skills {
+		if skill.Resident == nil {
+			skill.IncludeBody = false
+		}
+		out[i] = skill
+	}
+	return out
+}
+
+// renderTriggeredSkillBodies 给出本轮按关键词命中、还没在常驻段里给过的 skill 正文。
+// delivered 会被补上这些名字，供显式点名提示判断是否已经给了正文。
+func renderTriggeredSkillBodies(skills []SkillMetadata, delivered map[string]bool) string {
+	var builder strings.Builder
+	remaining := ResidentSkillBodyBudget
+	for _, skill := range skills {
+		if skill.Resident != nil || !skill.IncludeBody || delivered[skill.Name] {
+			continue
+		}
+		body := strings.TrimSpace(skillBody(skill))
+		if body == "" || len(body) > remaining {
+			continue
+		}
+		remaining -= len(body)
+		delivered[skill.Name] = true
+		builder.WriteString("### Skill matched this turn: " + skill.Name + "\n")
+		builder.WriteString("Its full `SKILL.md` follows; do not call `read_skill` for it.\n\n")
+		builder.WriteString(body)
+		builder.WriteString("\n\n")
+	}
+	return strings.TrimSpace(builder.String())
+}
+
 // skillBody 返回 SKILL.md 正文；内嵌 skill 自带正文,本地 skill 现读。读不出来就当
 // 没有正文,目录行仍在,模型还能走 read_skill。
 func skillBody(skill SkillMetadata) string {

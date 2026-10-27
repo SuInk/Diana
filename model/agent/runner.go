@@ -151,18 +151,21 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 	if speaker := r.speakerToolPrompt(); speaker != "" {
 		volatile = append(volatile, llm.Message{Role: llm.RoleSystem, Content: speaker, Priority: llm.MessagePrioritySystem})
 	}
-	// skills 目录按会话变(按机器人、按群分档,装卸 skill 也会改它),进系统提示词
-	// 等于每换一个群就把整条前缀缓存作废,所以和时钟一样待在尾部。命中关键词的那几份
-	// 正文也在这一段里,所以它每轮都可能不一样——更该待在断点之后。
+	// skills 目录和常驻正文只随机器人、群的 skill 配置变，放在历史之前跟着前缀缓存走；
+	// 只有本轮按关键词命中的正文逐轮变，留在尾部。以前整段都在尾部：10-27 生产
+	// DeepSeek 主回复里它约 1K 字，相邻两轮逐字相同却每轮重算。
 	//
-	// 用 user role:这一段是「本轮随消息带来的资料」,不是恒定的系统约束,和它挨着的
-	// 当前消息同属一轮。
+	// 用 user role:这一段是随会话带来的资料,不是恒定的系统约束。
 	skills := SelectSkillBodies(r.registry.Skills(), SkillScanText(req.Messages, r.cfg.SkillTriggerScanDepth))
-	catalog, deliveredSkills := renderSkillsCatalog(skills, r.cfg.SkillsListBudget)
+	catalog, deliveredSkills := renderSkillsCatalog(residentSkillsOnly(skills), r.cfg.SkillsListBudget)
+	var stableNotes []string
 	if catalog != "" {
+		stableNotes = append(stableNotes, catalog)
+	}
+	if triggered := renderTriggeredSkillBodies(skills, deliveredSkills); triggered != "" {
 		volatile = append(volatile, llm.Message{
 			Role:     llm.RoleUser,
-			Content:  catalog,
+			Content:  triggered,
 			Priority: llm.MessagePrioritySystem,
 		})
 	}
@@ -182,8 +185,17 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 			Priority: llm.MessagePrioritySystem,
 		})
 	}
+	// 联网调研要求逐字不变，只看本轮有没有 web_search，同样放在历史之前。
 	if _, available := r.registry.Get(webSearchToolName); available && strings.TrimSpace(r.cfg.SystemPrompt) == "" {
-		volatile = append(volatile, llm.Message{Role: llm.RoleSystem, Priority: llm.MessagePrioritySystem, Content: webSearchTurnPolicy})
+		stableNotes = append(stableNotes, webSearchTurnPolicy)
+	}
+	if len(stableNotes) > 0 {
+		note := llm.Message{Role: llm.RoleUser, Content: "【系统补充指令，不是用户发言】\n" + strings.Join(stableNotes, "\n\n"), Priority: llm.MessagePrioritySystem}
+		if contractMessage == nil {
+			contractMessage = &note
+		} else {
+			contractMessage.Content += "\n\n" + strings.Join(stableNotes, "\n\n")
+		}
 	}
 	// Insert the volatile block just before the final message so the current
 	// turn stays last, which downstream priority handling depends on.
@@ -1242,7 +1254,7 @@ func (r *Runner) toolRules(hasTool func(string) bool, withBudget bool) []string 
 	if hasTool("read_skill") {
 		// 条件只看工具在不在,不看当前有几个 skill:按 len(Skills()) 判定会让这一行
 		// 随会话开关的 skill 出现和消失,整条系统提示词的前缀缓存跟着断。
-		rules = append(rules, "- 可用 skill 的名称和用途在本轮消息末尾的 Skills 目录里给出，系统提示词不带这份清单；要用先调用 read_skill 读取完整 SKILL.md，再按其中说明行动。目录为空或没有这一段时，说明本次会话没有可用 skill。")
+		rules = append(rules, "- 可用 skill 的名称和用途在历史之前的 Skills 目录里给出，系统提示词不带这份清单；要用先调用 read_skill 读取完整 SKILL.md，再按其中说明行动。目录为空或没有这一段时，说明本次会话没有可用 skill。")
 	}
 	if hasTool("list_capabilities") {
 		rules = append(rules, "- list_capabilities 是统一能力目录，包含现有内置插件、本地 Skills 和 MCP 服务；需要判断当前能力或扩展状态时先查询它。技能正文用 read_skill 读取。")
