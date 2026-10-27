@@ -215,7 +215,8 @@
                   <AppSelect :model-value="form.connection_profile_id || ''" :options="connectionOptions" @update:model-value="(value) => { if (form) form.connection_profile_id = value; }" />
                   <span class="hint">复用已有连接即可免填地址和 Token，来源连接的修改会自动同步。</span>
                 </div>
-                <div class="field wide">
+                <!-- 只有共用连接（复用别人的，或被别人复用）时前缀才会生效，独立使用时不展示。 -->
+                <div v-if="form.connection_profile_id || connectionUsers(form).length" class="field wide">
                   <label class="switch">
                     <input v-model="form.connection_reply_prefix" type="checkbox" />
                     <span class="track" aria-hidden="true"></span>
