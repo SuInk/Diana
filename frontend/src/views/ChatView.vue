@@ -440,9 +440,9 @@ onBeforeUnmount(() => {
   background: color-mix(in srgb, var(--text) 5%, transparent);
 }
 
+/* 选中只淡淡地衬一下底色，像微信、QQ 桌面版，不整行涂成主题色。 */
 .qq-contact.selected {
-  background: var(--accent);
-  color: #fff;
+  background: color-mix(in srgb, var(--text) 9%, transparent);
 }
 
 .qq-contact-text {
@@ -475,11 +475,6 @@ onBeforeUnmount(() => {
 .qq-contact-text small {
   font-size: 12px;
   color: var(--muted);
-}
-
-.qq-contact.selected time,
-.qq-contact.selected small {
-  color: rgba(255, 255, 255, 0.8);
 }
 
 .qq-empty,
