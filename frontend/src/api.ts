@@ -260,6 +260,8 @@ export interface BotProfileConfig extends SendRetrySettings {
   callback_path?: string;
   bot_account?: string;
   owner_id?: string;
+  /** 主人指定的管理员账号：全部管理权限，但不是主人。 */
+  admin_ids?: string[];
   owner_login_enabled?: boolean;
   owner_llm_config_enabled?: boolean;
   group_triggers?: string[];

@@ -37,8 +37,8 @@ func (t *dianaBotMarkersTool) Run(ctx context.Context, input map[string]any) (st
 	baseEvent.Kind = EventKindPrivate
 	baseEvent.GroupID = ""
 	base := r.effectiveConfigForEvent(baseEvent)
-	if !base.IsOwnerEvent(t.event) {
-		return "", fmt.Errorf("只有本机主人可以管理机器人标记，群管理员无此权限")
+	if !base.IsManagerEvent(t.event) {
+		return "", fmt.Errorf("只有本机主人或管理员可以管理机器人标记，群管理员无此权限")
 	}
 	scope := configToolString(input, "scope")
 	if scope != "bot" && scope != "group" {
@@ -114,8 +114,8 @@ func (r *Runtime) updateMarkedBotID(profileID, actorID, userID string, marked bo
 	}
 	var ids []string
 	_, err := r.commitProfileChange(profileID, func(profile *BotConfig) error {
-		if profile.OwnerID == "" || profile.OwnerID != actorID {
-			return fmt.Errorf("只有本机主人可以修改机器人标记")
+		if !profile.managesUserID(actorID) {
+			return fmt.Errorf("只有本机主人或管理员可以修改机器人标记")
 		}
 		if ids == nil {
 			ids = append([]string(nil), profile.MarkedBotIDs...)

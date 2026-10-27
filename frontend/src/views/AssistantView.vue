@@ -585,6 +585,11 @@
                   <span class="hint">不需要聊天内管理或管理员快速登录时可以留空。</span>
                 </div>
                 <div class="field wide">
+                  <label>管理员账号</label>
+                  <BotMarkerList :key="`admins-${form.id}`" v-model="form.admin_ids" item-label="管理员" input-label="管理员账号 ID" :placeholder="form.platform === 'telegram' ? '数字用户 ID 或 @用户名，逗号分隔' : '账号 ID，逗号分隔'" />
+                  <span class="hint">管理员拥有宿主命令、插件开关、配置和扩展管理等全部管理权限，宿主命令同样先经模型审核；称呼、好感度和额度照普通用户，也不能增减管理员。控制台的「管理员快速登录」仍只认主人。主人也可以在聊天里说「把 12345 设为管理员」。</span>
+                </div>
+                <div class="field wide">
                   <label class="switch">
                     <input v-model="form.owner_login_enabled" type="checkbox" />
                     <span class="track" aria-hidden="true"></span>

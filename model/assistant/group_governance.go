@@ -438,7 +438,7 @@ func (r *Runtime) enforceGroupGovernance(ctx context.Context, event MessageEvent
 		return false
 	}
 	cfg := r.effectiveConfigForEvent(event)
-	if cfg.IsOwnerEvent(event) || GroupRoleCanConfigure(NormalizeGroupRole(event.SenderRole)) {
+	if cfg.IsManagerEvent(event) || GroupRoleCanConfigure(NormalizeGroupRole(event.SenderRole)) {
 		return false
 	}
 	if role, cached := r.groupRoles.get(groupRoleCacheKey(event.ProfileID, event.GroupID, event.UserID), now); cached && GroupRoleCanConfigure(role) {

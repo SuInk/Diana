@@ -4820,7 +4820,7 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 		if event.Kind == EventKindGroup {
 			agentCfg.ToolResultReminder = cfg.PromptOverrides.text(promptReplyToolResultBrevitySpec)
 		}
-		agentCfg = restrictAgentConfigForMode(cfg, withOwnerAgentLimits(agentCfg, relationship.Owner))
+		agentCfg = restrictAgentConfigForMode(cfg, withOwnerAgentLimits(agentCfg, relationship.toolScope().Owner))
 		registry := preparedRegistry
 		ownsRegistry := false
 		if registry == nil {
@@ -4840,12 +4840,12 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 		if offersButtonsFinalizeField(cfg, event) {
 			agentCfg.FinalizeFields = append(agentCfg.FinalizeFields, buttonsFinalizeField())
 		}
-		r.rememberAgentResidencyCatalog(event, registry, relationship.Owner)
+		r.rememberAgentResidencyCatalog(event, registry, relationship.toolScope().Owner)
 		// 用途只挂在模型调用上（见 runtimeAgentLLMProvider.Generate），不挂在整个 ctx 上：
 		// 工具里各自发起的模型调用有自己的用途，不该被记成主回复。
 		agentClient := newRuntimeAgentLLMProvider(r, withDefaultLLMUsagePurpose(ctx, PurposeReply))
 		// 光在提示词里叮嘱不透露不够：工具在手，被追问两句模型还是会去查。
-		if modelDisclosedTo(cfg, relationship.Owner) {
+		if modelDisclosedTo(cfg, relationship.toolScope().Owner) {
 			registry.Register(newDianaRuntimeModelTool(agentClient, event))
 		}
 		agentRunner, err := agent.NewRunner(agentClient, agentCfg, registry)

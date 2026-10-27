@@ -40,8 +40,8 @@ func (t *hostAccessTool) Run(ctx context.Context, input map[string]any) (string,
 		return "", fmt.Errorf("主机工具未配置")
 	}
 	cfg := t.runtime.effectiveConfigForEvent(t.event)
-	if !cfg.IsOwnerEvent(t.event) && !isAdminChatRun(ctx) {
-		return "", fmt.Errorf("只有主人可以访问主机")
+	if !cfg.IsManagerEvent(t.event) && !isAdminChatRun(ctx) {
+		return "", fmt.Errorf("只有主人或管理员可以访问主机")
 	}
 	if cfg.agentSafeMode() {
 		return "", fmt.Errorf("%s", agentSafeModeDisabledMessage)

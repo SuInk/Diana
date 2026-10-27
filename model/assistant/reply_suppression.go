@@ -326,7 +326,7 @@ func randomReplySuppressionDuration(cfg BotConfig) time.Duration {
 func (r *Runtime) newReplySuppression(event MessageEvent, reason string, now time.Time) (ReplySuppression, bool) {
 	cfg := r.effectiveConfigForEvent(event)
 	userID := strings.TrimSpace(event.UserID)
-	if userID == "" || cfg.IsOwnerEvent(event) || userID == strings.TrimSpace(cfg.BotAccount) || !replySuppressionEnabled(cfg) {
+	if userID == "" || cfg.IsManagerEvent(event) || userID == strings.TrimSpace(cfg.BotAccount) || !replySuppressionEnabled(cfg) {
 		return ReplySuppression{}, false
 	}
 	if now.IsZero() {
@@ -349,7 +349,7 @@ func (r *Runtime) activeReplySuppression(event MessageEvent, now time.Time) (Rep
 	cfg := r.effectiveConfigForEvent(event)
 	userID := strings.TrimSpace(event.UserID)
 	// 总开关关着时已有的屏蔽也不拦：管理员关掉它，就是不想再有人被晾着。
-	if userID == "" || cfg.IsOwnerEvent(event) || !replySuppressionEnabled(cfg) {
+	if userID == "" || cfg.IsManagerEvent(event) || !replySuppressionEnabled(cfg) {
 		return ReplySuppression{}, false
 	}
 	r.replySuppressMu.Lock()
@@ -620,7 +620,7 @@ func (r *Runtime) registerReplyRefusal(event MessageEvent, now time.Time) (int, 
 	}
 	cfg := r.effectiveConfigForEvent(event)
 	userID := strings.TrimSpace(event.UserID)
-	if userID == "" || cfg.IsOwnerEvent(event) || userID == strings.TrimSpace(cfg.BotAccount) {
+	if userID == "" || cfg.IsManagerEvent(event) || userID == strings.TrimSpace(cfg.BotAccount) {
 		return 0, "", false
 	}
 	if now.IsZero() {
@@ -744,7 +744,7 @@ func (r *Runtime) listReplySuppressions(now time.Time) []ReplySuppression {
 
 func (r *Runtime) isOwnerReplySuppressionCommand(event MessageEvent, text string) bool {
 	cfg := r.effectiveConfigForEvent(event)
-	return cfg.IsOwnerEvent(event) && replySuppressionOwnerCommandKind(text) != ""
+	return cfg.IsManagerEvent(event) && replySuppressionOwnerCommandKind(text) != ""
 }
 
 func replySuppressionOwnerCommandKind(text string) string {

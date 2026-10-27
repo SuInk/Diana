@@ -356,7 +356,7 @@ func (t *dianaGitHubTool) Description() string {
 	// 简称对照表。
 	// 这里只需要「是不是主人」，用配置里的 OwnerID 直接比即可；relationshipPolicy
 	// 还会去读用户记忆档案，构造工具描述时不值得为此多打一次库。
-	isOwner := t.runtime.effectiveConfigForEvent(t.event).IsOwnerEvent(t.event)
+	isOwner := t.runtime.effectiveConfigForEvent(t.event).IsManagerEvent(t.event)
 	repositories := repositoryPublishEventRepositories(t.event, isOwner, t.settings)
 	if isOwner {
 		if len(repositories) == 0 {
@@ -373,7 +373,7 @@ func (t *dianaGitHubTool) Description() string {
 // accessPrompt 是非主人那份按发言者变化的授权说明，由系统提示词放在尾部。主人的
 // 清单写在描述里：主人的工具集本来就和别人不同，前缀到不了这里。
 func (t *dianaGitHubTool) accessPrompt() string {
-	if t == nil || t.runtime == nil || t.trustedWebOwner || t.runtime.effectiveConfigForEvent(t.event).IsOwnerEvent(t.event) {
+	if t == nil || t.runtime == nil || t.trustedWebOwner || t.runtime.effectiveConfigForEvent(t.event).IsManagerEvent(t.event) {
 		return ""
 	}
 	repositories := repositoryPublishEventRepositories(t.event, false, t.settings)

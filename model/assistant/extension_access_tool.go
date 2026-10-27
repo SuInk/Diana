@@ -64,8 +64,8 @@ func (t *dianaExtensionAccessTool) Run(ctx context.Context, input map[string]any
 		return "", err
 	}
 	// 注册时已经按主人筛过一次，这里再核一次：两道闸都在。
-	if !base.IsOwnerEvent(t.event) {
-		return "", fmt.Errorf("只有机器人主人可以改扩展的开放范围")
+	if !base.IsManagerEvent(t.event) {
+		return "", fmt.Errorf("只有机器人主人或管理员可以改扩展的开放范围")
 	}
 	action := t.CanonicalOperation(input)
 	id := strings.TrimSpace(configToolString(input, "id"))

@@ -124,8 +124,8 @@ func (t *dianaPluginManageTool) Run(ctx context.Context, input map[string]any) (
 	if t == nil || t.runtime == nil {
 		return "", fmt.Errorf("机器人运行时不可用")
 	}
-	if !t.runtime.effectiveConfigForEvent(t.event).IsOwnerEvent(t.event) && !isAdminChatRun(ctx) {
-		return "", fmt.Errorf("只有主人可以管理插件")
+	if !t.runtime.effectiveConfigForEvent(t.event).IsManagerEvent(t.event) && !isAdminChatRun(ctx) {
+		return "", fmt.Errorf("只有主人或管理员可以管理插件")
 	}
 	switch op := configToolString(input, "operation"); op {
 	case "list":

@@ -94,7 +94,7 @@ func (r *Runtime) applyLLMConfigCommand(ctx context.Context, event MessageEvent,
 	if configErr != nil {
 		return llmConfigApplyResult{Reply: "更新失败：" + configErr.Error()}
 	}
-	if !botCfg.IsOwnerEvent(event) || !boolValue(botCfg.OwnerLLMConfigEnabled, true) {
+	if !botCfg.IsManagerEvent(event) || !boolValue(botCfg.OwnerLLMConfigEnabled, true) {
 		return llmConfigApplyResult{Reply: "当前发送者无权修改此机器人的模型分配"}
 	}
 	if command.Scope != "" && command.Scope != "bot" && command.Scope != "group" {
@@ -199,7 +199,7 @@ func (r *Runtime) applyLLMConfigCommand(ctx context.Context, event MessageEvent,
 		return llmConfigApplyResult{Reply: "模型测试已取消，未修改模型分配。"}
 	}
 	current, err := r.modelConfigForEvent(event)
-	if err != nil || !current.IsOwnerEvent(event) || !boolValue(current.OwnerLLMConfigEnabled, true) {
+	if err != nil || !current.IsManagerEvent(event) || !boolValue(current.OwnerLLMConfigEnabled, true) {
 		return llmConfigApplyResult{Reply: "模型测试期间主人权限或配置状态已变化，未修改模型分配。"}
 	}
 

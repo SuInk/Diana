@@ -34,7 +34,7 @@ func privateAdmissionAllowsConfig(cfg BotConfig, event MessageEvent) bool {
 	if cfg.PrivateAdmission.WithDefaults().Mode == PrivateAdmissionDisabled {
 		return false
 	}
-	return cfg.IsOwnerEvent(event) || cfg.PrivateAdmission.Allows(event.UserID, cfg.OwnerID)
+	return cfg.IsManagerEvent(event) || cfg.PrivateAdmission.Allows(event.UserID, cfg.OwnerID)
 }
 
 // HandleEvent 处理 OneBot 消息或通知事件。

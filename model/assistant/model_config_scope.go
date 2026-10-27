@@ -126,7 +126,7 @@ func (r *Runtime) saveGroupChatModel(event MessageEvent, model GroupChatModel) e
 	if err != nil {
 		return err
 	}
-	if !cfg.IsOwnerEvent(event) || !boolValue(cfg.OwnerLLMConfigEnabled, true) {
+	if !cfg.IsManagerEvent(event) || !boolValue(cfg.OwnerLLMConfigEnabled, true) {
 		return fmt.Errorf("当前发送者无权修改此机器人的模型分配")
 	}
 	r.mu.RLock()

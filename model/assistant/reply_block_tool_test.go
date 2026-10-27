@@ -159,7 +159,7 @@ func TestReplyBlockTool(t *testing.T) {
 		{
 			name: "群管理员也改不了机器人级名单", memberRole: "admin", actor: "30001",
 			input:   map[string]any{"operation": "block", "scope": "bot", "user_id": "20001"},
-			wantErr: "只有机器人主人可以修改机器人级屏蔽名单",
+			wantErr: "只有机器人主人或管理员可以修改机器人级屏蔽名单",
 		},
 		{
 			name: "昵称不能当账号 ID 用", actor: "10001",

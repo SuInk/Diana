@@ -64,7 +64,7 @@ func pruneReplyDensityHits(hits []replyDensityHit, now time.Time) []replyDensity
 func (r *Runtime) replyDensityApplies(event MessageEvent) bool {
 	cfg := r.effectiveConfigForEvent(event)
 	userID := strings.TrimSpace(event.UserID)
-	if userID == "" || cfg.IsOwnerEvent(event) || !boolValue(cfg.BotReplyLoopDetectionEnabled, true) {
+	if userID == "" || cfg.IsManagerEvent(event) || !boolValue(cfg.BotReplyLoopDetectionEnabled, true) {
 		return false
 	}
 	botID := firstNonEmpty(strings.TrimSpace(cfg.BotAccount), strings.TrimSpace(event.SelfID))

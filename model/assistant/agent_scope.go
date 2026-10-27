@@ -27,6 +27,8 @@ type agentReplyScope struct {
 }
 
 func (r *Runtime) newAgentRegistry(ctx context.Context, cfg BotConfig, event MessageEvent, relationship RelationshipPolicy, extraTools ...agent.Tool) (*agent.ToolRegistry, error) {
+	// 管理员按主人装配工具；每个管理工具执行时还会再按 IsManagerEvent 核一次身份。
+	relationship = relationship.toolScope()
 	agentCfg := r.agentRegistryConfig(cfg, event, relationship.Owner)
 	if isAdminChatRun(ctx) {
 		// 管理会话有自己的说明，不带机器人收发平台消息的协议 Skill。
@@ -102,6 +104,10 @@ func (r *Runtime) newAgentRegistry(ctx context.Context, cfg BotConfig, event Mes
 		}
 		registry.Register(newDianaBotConfigTool(r, event))
 		registry.Register(&dianaPluginManageTool{runtime: r, event: event})
+		// 增减管理员只给主人本人：toolScope 让管理员也走进了这个分支，这里按原身份再分一次。
+		if !relationship.Admin {
+			registry.Register(&dianaBotAdminsTool{runtime: r, event: event})
+		}
 		registry.Register(&dianaUsageTool{runtime: r, event: event})
 		registry.Register(&dianaBotMarkersTool{runtime: r, event: event})
 		registry.Register(&dianaStickerRemoveTool{runtime: r, event: event})

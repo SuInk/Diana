@@ -75,7 +75,7 @@ func (t *dianaReplyBlockTool) Run(ctx context.Context, input map[string]any) (st
 		// 和 bot_config 同一套核验：非主人一律清掉上报的身份，逼着走一次
 		// 实时成员查询，不拿入站事件里那个可以伪造的 sender_role 当权限凭据。
 		authEvent := t.event
-		if !base.IsOwnerEvent(authEvent) {
+		if !base.IsManagerEvent(authEvent) {
 			authEvent.SenderRole = ""
 		}
 		if role, err = t.runtime.canConfigureGroup(ctx, authEvent); err != nil {
@@ -86,8 +86,8 @@ func (t *dianaReplyBlockTool) Run(ctx context.Context, input map[string]any) (st
 			group = DefaultGroupConfig(t.event.GroupID, base)
 		}
 		group.BotProfileID = base.ID
-	} else if !base.IsOwnerEvent(t.event) {
-		return "", fmt.Errorf("只有机器人主人可以修改机器人级屏蔽名单")
+	} else if !base.IsManagerEvent(t.event) {
+		return "", fmt.Errorf("只有机器人主人或管理员可以修改机器人级屏蔽名单")
 	}
 
 	// current 是这一层自己那份名单，inherited 是从机器人级并下来的。
@@ -220,8 +220,8 @@ func (r *Runtime) saveBotBlockedUsers(expected BotConfig, actorID string, userID
 	}
 	_, err := r.commitProfileChange(expected.ID, func(profile *BotConfig) error {
 		// 保存前再核一次主人：工具入口已经判过一遍，这里防的是以后有别的调用方接进来。
-		if owner := strings.TrimSpace(profile.OwnerID); owner == "" || owner != strings.TrimSpace(actorID) {
-			return fmt.Errorf("只有机器人主人可以修改机器人级屏蔽名单")
+		if !profile.managesUserID(actorID) {
+			return fmt.Errorf("只有机器人主人或管理员可以修改机器人级屏蔽名单")
 		}
 		gate := profile.ReplyGate.WithBlockedUsers(userIDs)
 		profile.ReplyGate = gate

@@ -663,48 +663,51 @@ type BotConfig struct {
 
 	StickerReplyOrder StickerReplyOrder `json:"sticker_reply_order,omitempty"`
 
-	ConnectionReplyPrefix       bool             `json:"connection_reply_prefix,omitempty"`
-	ConnectionProfileID         string           `json:"connection_profile_id,omitempty"`
-	ReplyMergeConfidencePercent int              `json:"reply_merge_confidence_percent,omitempty"`
-	ID                          string           `json:"id,omitempty"`
-	Name                        string           `json:"name,omitempty"`
-	Platform                    string           `json:"platform,omitempty"`
-	AvatarURL                   string           `json:"avatar_url,omitempty"`
-	Enabled                     bool             `json:"enabled"`
-	OneBotTransport             string           `json:"onebot_transport,omitempty"`
-	OneBotWSEndpoint            string           `json:"onebot_ws_endpoint,omitempty"`
-	OneBotHTTPURL               string           `json:"onebot_http_url,omitempty"`
-	OneBotHTTPSecret            string           `json:"onebot_http_secret,omitempty"`
-	OneBotReverseWSEndpoint     string           `json:"onebot_reverse_ws_endpoint"`
-	OneBotAccessToken           string           `json:"onebot_access_token,omitempty"`
-	TelegramBotToken            string           `json:"telegram_bot_token,omitempty"`
-	TelegramAPIBaseURL          string           `json:"telegram_api_base_url,omitempty"`
-	TelegramProxyURL            string           `json:"telegram_proxy_url,omitempty"`
-	TelegramSuppressBotMessages *bool            `json:"telegram_suppress_bot_messages,omitempty"`
-	QQTypingEnabled             *bool            `json:"qq_typing_enabled,omitempty"`
-	QQAppID                     string           `json:"qq_app_id,omitempty"`
-	QQAppSecret                 string           `json:"qq_app_secret,omitempty"`
-	QQSandbox                   bool             `json:"qq_sandbox,omitempty"`
-	DingTalkClientID            string           `json:"dingtalk_client_id,omitempty"`
-	DingTalkClientSecret        string           `json:"dingtalk_client_secret,omitempty"`
-	DingTalkRobotCode           string           `json:"dingtalk_robot_code,omitempty"`
-	FeishuAppID                 string           `json:"feishu_app_id,omitempty"`
-	FeishuAppSecret             string           `json:"feishu_app_secret,omitempty"`
-	FeishuVerificationToken     string           `json:"feishu_verification_token,omitempty"`
-	FeishuEncryptKey            string           `json:"feishu_encrypt_key,omitempty"`
-	FeishuAPIBaseURL            string           `json:"feishu_api_base_url,omitempty"`
-	WeComCorpID                 string           `json:"wecom_corp_id,omitempty"`
-	WeComAgentID                string           `json:"wecom_agent_id,omitempty"`
-	WeComSecret                 string           `json:"wecom_secret,omitempty"`
-	WeComToken                  string           `json:"wecom_token,omitempty"`
-	WeComEncodingAESKey         string           `json:"wecom_encoding_aes_key,omitempty"`
-	BotAccount                  string           `json:"bot_account,omitempty"`
-	OwnerID                     string           `json:"owner_id,omitempty"`
-	OwnerLoginEnabled           bool             `json:"owner_login_enabled,omitempty"`
-	OwnerLLMConfigEnabled       *bool            `json:"owner_llm_config_enabled,omitempty"`
-	GroupTriggers               []string         `json:"group_triggers,omitempty"`
-	GroupTriggerMode            AliasTriggerMode `json:"group_trigger_mode,omitempty"`
-	DisabledGroups              []string         `json:"disabled_groups,omitempty"`
+	ConnectionReplyPrefix       bool   `json:"connection_reply_prefix,omitempty"`
+	ConnectionProfileID         string `json:"connection_profile_id,omitempty"`
+	ReplyMergeConfidencePercent int    `json:"reply_merge_confidence_percent,omitempty"`
+	ID                          string `json:"id,omitempty"`
+	Name                        string `json:"name,omitempty"`
+	Platform                    string `json:"platform,omitempty"`
+	AvatarURL                   string `json:"avatar_url,omitempty"`
+	Enabled                     bool   `json:"enabled"`
+	OneBotTransport             string `json:"onebot_transport,omitempty"`
+	OneBotWSEndpoint            string `json:"onebot_ws_endpoint,omitempty"`
+	OneBotHTTPURL               string `json:"onebot_http_url,omitempty"`
+	OneBotHTTPSecret            string `json:"onebot_http_secret,omitempty"`
+	OneBotReverseWSEndpoint     string `json:"onebot_reverse_ws_endpoint"`
+	OneBotAccessToken           string `json:"onebot_access_token,omitempty"`
+	TelegramBotToken            string `json:"telegram_bot_token,omitempty"`
+	TelegramAPIBaseURL          string `json:"telegram_api_base_url,omitempty"`
+	TelegramProxyURL            string `json:"telegram_proxy_url,omitempty"`
+	TelegramSuppressBotMessages *bool  `json:"telegram_suppress_bot_messages,omitempty"`
+	QQTypingEnabled             *bool  `json:"qq_typing_enabled,omitempty"`
+	QQAppID                     string `json:"qq_app_id,omitempty"`
+	QQAppSecret                 string `json:"qq_app_secret,omitempty"`
+	QQSandbox                   bool   `json:"qq_sandbox,omitempty"`
+	DingTalkClientID            string `json:"dingtalk_client_id,omitempty"`
+	DingTalkClientSecret        string `json:"dingtalk_client_secret,omitempty"`
+	DingTalkRobotCode           string `json:"dingtalk_robot_code,omitempty"`
+	FeishuAppID                 string `json:"feishu_app_id,omitempty"`
+	FeishuAppSecret             string `json:"feishu_app_secret,omitempty"`
+	FeishuVerificationToken     string `json:"feishu_verification_token,omitempty"`
+	FeishuEncryptKey            string `json:"feishu_encrypt_key,omitempty"`
+	FeishuAPIBaseURL            string `json:"feishu_api_base_url,omitempty"`
+	WeComCorpID                 string `json:"wecom_corp_id,omitempty"`
+	WeComAgentID                string `json:"wecom_agent_id,omitempty"`
+	WeComSecret                 string `json:"wecom_secret,omitempty"`
+	WeComToken                  string `json:"wecom_token,omitempty"`
+	WeComEncodingAESKey         string `json:"wecom_encoding_aes_key,omitempty"`
+	BotAccount                  string `json:"bot_account,omitempty"`
+	OwnerID                     string `json:"owner_id,omitempty"`
+	// AdminIDs 是主人另外指定的管理员账号：拿到全部管理权限（宿主命令、插件、配置、
+	// 扩展等），但不继承好感度、人设、通知和额度这些主人关系，也不能增减管理员。
+	AdminIDs              []string         `json:"admin_ids,omitempty"`
+	OwnerLoginEnabled     bool             `json:"owner_login_enabled,omitempty"`
+	OwnerLLMConfigEnabled *bool            `json:"owner_llm_config_enabled,omitempty"`
+	GroupTriggers         []string         `json:"group_triggers,omitempty"`
+	GroupTriggerMode      AliasTriggerMode `json:"group_trigger_mode,omitempty"`
+	DisabledGroups        []string         `json:"disabled_groups,omitempty"`
 	// DisabledUsers 已废弃，只为读取旧配置保留：WithDefaults 会把它并进 ReplyGate.BlockedUsers。
 	DisabledUsers             []string         `json:"disabled_users,omitempty"`
 	MarkedBotIDs              []string         `json:"marked_bot_ids,omitempty"`
@@ -1425,6 +1428,7 @@ type ConfigPayload struct {
 	CallbackPath                   string               `json:"callback_path,omitempty"`
 	BotAccount                     string               `json:"bot_account,omitempty"`
 	OwnerID                        string               `json:"owner_id,omitempty"`
+	AdminIDs                       []string             `json:"admin_ids,omitempty"`
 	OwnerLoginEnabled              bool                 `json:"owner_login_enabled,omitempty"`
 	OwnerLLMConfigEnabled          *bool                `json:"owner_llm_config_enabled,omitempty"`
 	GroupTriggers                  []string             `json:"group_triggers,omitempty"`
@@ -2551,6 +2555,7 @@ func (cfg BotConfig) WithDefaults() BotConfig {
 	cfg.GroupTriggers = cleanStrings(cfg.GroupTriggers)
 	cfg.DisabledGroups = cleanStrings(cfg.DisabledGroups)
 	cfg.MarkedBotIDs = cleanStrings(append([]string(nil), cfg.MarkedBotIDs...))
+	cfg.AdminIDs = normalizeAdminIDs(cfg.AdminIDs, cfg.OwnerID)
 	cfg.ReplyRules = normalizeReplyRules(cfg.ReplyRules)
 	cfg.ModelRecoveryPolicy, cfg.ModelRoles = normalizeModelRecoveryConfig(cfg.ModelRecoveryPolicy, cfg.ModelRoles)
 	cfg.WebSearch = normalizeWebSearchAssignment(cfg.WebSearch)
@@ -2788,6 +2793,7 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		CallbackPath:                      CallbackPathFor(cfg.Platform),
 		BotAccount:                        cfg.BotAccount,
 		OwnerID:                           cfg.OwnerID,
+		AdminIDs:                          append([]string(nil), cfg.AdminIDs...),
 		OwnerLoginEnabled:                 cfg.OwnerLoginEnabled,
 		OwnerLLMConfigEnabled:             copyBoolPointer(cfg.OwnerLLMConfigEnabled),
 		GroupTriggers:                     append([]string(nil), cfg.GroupTriggers...),
@@ -3048,6 +3054,7 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		WeComEncodingAESKey:         payload.WeComEncodingAESKey,
 		BotAccount:                  payload.BotAccount,
 		OwnerID:                     payload.OwnerID,
+		AdminIDs:                    append([]string(nil), payload.AdminIDs...),
 		OwnerLoginEnabled:           payload.OwnerLoginEnabled,
 		OwnerLLMConfigEnabled:       copyBoolPointer(payload.OwnerLLMConfigEnabled),
 		GroupTriggers:               payload.GroupTriggers,

@@ -22,7 +22,7 @@ func listContextMessageEvents(ctx context.Context, store MessageHistoryStore, se
 }
 
 func (r *Runtime) isOwnerContextResetCommand(event MessageEvent, text string) bool {
-	if !r.effectiveConfigForEvent(event).IsOwnerEvent(event) {
+	if !r.effectiveConfigForEvent(event).IsManagerEvent(event) {
 		return false
 	}
 	command := strings.TrimSpace(r.cleanInput(event, text))

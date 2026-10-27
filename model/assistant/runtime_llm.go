@@ -952,6 +952,8 @@ func (r *Runtime) systemPromptWithRelationshipAndAgentTools(event MessageEvent, 
 // 语气锚点留在 tail 末尾的理由和以前一样：离生成越近越管用，现在它离得更近了。
 func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEvent, pluginResponses []PluginResponse, proactiveTriggered bool, relationship RelationshipPolicy, agentEnabled bool, registry *agent.ToolRegistry) (string, string) {
 	cfg := r.effectiveConfigForEvent(event)
+	// 工具用法提示跟着工具面走：管理员拿到主人那套工具，提示也按主人给。
+	tools := relationship.toolScope()
 	var builder strings.Builder
 	// tail 收集随发言者权限档位变化的段落（主人专属工具规则、按好感度解锁的日程
 	// 工具规则）。注入条件保持原样，只是不写进 head：夹在中间会让它后面几千 token
@@ -1014,7 +1016,7 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 	if aliases := quotedPromptItems(cfg.GroupTriggers); aliases != "" {
 		builder.WriteString("\n" + cfg.promptf(promptAliasSpec, map[string]string{"aliases": aliases}))
 	}
-	if agentEnabled && relationship.Owner && hasTool("llm_config") {
+	if agentEnabled && tools.Owner && hasTool("llm_config") {
 		tail.WriteString("\n" + cfg.prompt(promptToolLLMConfigSpec))
 	}
 	if agentEnabled && hasTool(dianaGitHubToolName) {
@@ -1029,14 +1031,14 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 	}
 	// 群管动作只对主人、群主和群管理员出现在工具 schema 里；提示词跟着 schema 走，且必须
 	// 进随发言者变化的尾部，不能写进按前缀缓存的稳定头部（否则不同身份的提示词会提前分叉）。
-	if agentEnabled && hasTool(dianaPlatformToolName) && platformModerationShown(registry, relationship.Owner) {
+	if agentEnabled && hasTool(dianaPlatformToolName) && platformModerationShown(registry, tools.Owner) {
 		tail.WriteString("\n" + cfg.prompt(promptToolPlatformModerationSpec))
 	}
-	if agentEnabled && relationship.Owner && hasTool(dianaOneBotRequestsToolName) {
+	if agentEnabled && tools.Owner && hasTool(dianaOneBotRequestsToolName) {
 		tail.WriteString("\n" + cfg.prompt(promptToolOneBotRequestsSpec))
 	}
 	// 长期保存区清单随机器人、随存了什么而变，进尾部；长期区没变时逐字不变。
-	if agentEnabled && relationship.Owner && hasAnyTool(dianaSaveToWorkspaceToolName, agent.ManageFilesToolName, "read_file") {
+	if agentEnabled && tools.Owner && hasAnyTool(dianaSaveToWorkspaceToolName, agent.ManageFilesToolName, "read_file") {
 		if prompt := keepIndexPrompt(cfg, firstNonEmpty(event.ProfileID, cfg.ID)); prompt != "" {
 			tail.WriteString("\n" + prompt)
 		}
@@ -1054,10 +1056,10 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 			builder.WriteString("\n" + cfg.prompt(promptQuoteHistoryMessageSpec))
 		}
 	}
-	if agentEnabled && relationship.Owner && hasTool("relationship") {
+	if agentEnabled && tools.Owner && hasTool("relationship") {
 		tail.WriteString("\n" + cfg.prompt(promptOwnerRelationshipTargetSpec))
 	}
-	if agentEnabled && relationship.Owner && hasAnyTool("tasks", "reminder", dianaSubscriptionToolName) {
+	if agentEnabled && tools.Owner && hasAnyTool("tasks", "reminder", dianaSubscriptionToolName) {
 		tail.WriteString("\n" + cfg.prompt(promptOwnerTaskTargetSpec))
 	}
 	// 任务工具规则进稳定头部：AllowPersonalSchedule 在每个关系等级都是 true
@@ -1089,7 +1091,7 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 	// 模型身份的规则在 everyone 下对谁都一样，进 head；owner 下随发言者是不是
 	// 主人分叉，进 tail，免得主人和普通成员的前缀提前分叉。
 	switch everyone := normalizeModelDisclosure(cfg.ModelDisclosure) == ModelDisclosureEveryone; {
-	case !everyone && !relationship.Owner:
+	case !everyone && !tools.Owner:
 		tail.WriteString("\n" + cfg.prompt(promptModelUndisclosedSpec))
 	case !agentEnabled || !hasTool(dianaRuntimeModelToolName):
 	case everyone:
@@ -1103,7 +1105,7 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 	case !agentEnabled || !hasTool(dianaVersionToolName):
 	case everyone:
 		builder.WriteString("\n" + cfg.prompt(promptToolVersionSpec))
-	case relationship.Owner:
+	case tools.Owner:
 		tail.WriteString("\n" + cfg.prompt(promptToolVersionSpec))
 	default:
 		tail.WriteString("\n" + cfg.prompt(promptToolVersionNoRepositorySpec))

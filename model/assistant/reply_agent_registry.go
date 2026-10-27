@@ -12,6 +12,7 @@ import (
 // newReplyAgentRegistry keeps chat and scheduled execution on the same tool,
 // plugin override and permission path. Callers own the returned registry.
 func (r *Runtime) newReplyAgentRegistry(ctx context.Context, cfg BotConfig, event MessageEvent, relationship RelationshipPolicy, recallSink *recallDisclosureSink) (*agent.ToolRegistry, error) {
+	relationship = relationship.toolScope()
 	overrides := r.pluginOverridesForEvent(event)
 	settingOverrides := r.pluginSettingOverridesForEvent(event)
 	imageMode := normalizeImageInputMode(cfg.ImageInputMode)
@@ -39,7 +40,7 @@ func (r *Runtime) newReplyAgentRegistry(ctx context.Context, cfg BotConfig, even
 		if knowledge, ok := pluginTools[index].(*dianaCapabilitiesTool); ok {
 			knowledge.accessStatus = func() map[string]any {
 				current := r.effectiveConfigForEvent(event)
-				owner := current.IsOwnerEvent(event) || isAdminChatRun(ctx)
+				owner := current.IsManagerEvent(event) || isAdminChatRun(ctx)
 				return capabilityAccessStatus(current, owner)
 			}
 		}

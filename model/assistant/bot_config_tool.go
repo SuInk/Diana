@@ -61,7 +61,7 @@ func (t *dianaBotConfigTool) Run(ctx context.Context, input map[string]any) (str
 	if err != nil {
 		return "", err
 	}
-	owner := t.admin || base.IsOwnerEvent(t.event)
+	owner := t.admin || base.IsManagerEvent(t.event)
 	section := strings.TrimSpace(configToolString(input, "section"))
 	if section == "" {
 		section = "settings"
@@ -102,7 +102,7 @@ func (t *dianaBotConfigTool) Run(ctx context.Context, input map[string]any) (str
 			return "", fmt.Errorf("群级配置只能在当前群操作")
 		}
 		authEvent := t.event
-		if !base.IsOwnerEvent(authEvent) {
+		if !base.IsManagerEvent(authEvent) {
 			authEvent.SenderRole = ""
 		}
 		role, err = t.runtime.canConfigureGroup(ctx, authEvent)

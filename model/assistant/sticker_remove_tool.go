@@ -34,8 +34,8 @@ func (t *dianaStickerRemoveTool) Run(ctx context.Context, _ map[string]any) (str
 	if t == nil || t.runtime == nil {
 		return "", fmt.Errorf("机器人运行时不可用")
 	}
-	if !t.runtime.effectiveConfigForEvent(t.event).IsOwnerEvent(t.event) {
-		return "", fmt.Errorf("只有本机主人可以删除表情包")
+	if !t.runtime.effectiveConfigForEvent(t.event).IsManagerEvent(t.event) {
+		return "", fmt.Errorf("只有本机主人或管理员可以删除表情包")
 	}
 	result, err := t.runtime.removeQuotedStickers(ctx, t.event)
 	switch {

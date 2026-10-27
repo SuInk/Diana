@@ -2,7 +2,12 @@
 import { ref } from "vue";
 import { Plus, X } from "@lucide/vue";
 
-const props = defineProps<{ modelValue?: string[]; inheritedIds?: string[] }>();
+// 文案参数给管理员名单这类同样是「账号 ID 名单」的地方复用，默认值保持机器人标记的说法。
+const props = withDefaults(defineProps<{ modelValue?: string[]; inheritedIds?: string[]; itemLabel?: string; inputLabel?: string; placeholder?: string }>(), {
+  itemLabel: "机器人标记",
+  inputLabel: "待标记的账号 ID",
+  placeholder: "账号 ID，逗号分隔",
+});
 const emit = defineEmits<{ "update:modelValue": [ids:string[]] }>();
 const draft = ref("");
 function add() {
@@ -20,12 +25,12 @@ function remove(id:string) { emit("update:modelValue",(props.modelValue ?? []).f
     <div class="marked-accounts">
       <span v-for="id in modelValue" :key="id" class="marked-account">
         <span>{{ id }}</span>
-        <button type="button" class="btn icon small" :aria-label="`取消标记 ${id}`" :title="`取消标记 ${id}`" @click="remove(id)"><X :size="14" /></button>
+        <button type="button" class="btn icon small" :aria-label="`取消${itemLabel} ${id}`" :title="`取消${itemLabel} ${id}`" @click="remove(id)"><X :size="14" /></button>
       </span>
     </div>
     <div class="marker-entry">
-      <input v-model="draft" class="input" aria-label="待标记的账号 ID" placeholder="账号 ID，逗号分隔" @keydown.enter.prevent="add" />
-      <button class="btn icon" type="button" aria-label="添加机器人标记" title="添加机器人标记" :disabled="!draft.trim()" @click="add"><Plus :size="16" /></button>
+      <input v-model="draft" class="input" :aria-label="inputLabel" :placeholder="placeholder" @keydown.enter.prevent="add" />
+      <button class="btn icon" type="button" :aria-label="`添加${itemLabel}`" :title="`添加${itemLabel}`" :disabled="!draft.trim()" @click="add"><Plus :size="16" /></button>
     </div>
   </div>
 </template>

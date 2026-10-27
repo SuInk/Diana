@@ -81,6 +81,10 @@ func markedBotIDsField(ids []string) func(*assistant.BotConfig) {
 	return func(cfg *assistant.BotConfig) { cfg.MarkedBotIDs = append([]string(nil), ids...) }
 }
 
+func adminIDsField(ids []string) func(*assistant.BotConfig) {
+	return func(cfg *assistant.BotConfig) { cfg.AdminIDs = append([]string(nil), ids...) }
+}
+
 // blockedUsersField 只换掉门禁里的屏蔽名单，门槛和另外两个名单不动：
 // 聊天里下的屏蔽指令不该顺手改掉回复时段或等级门槛。
 func blockedUsersField(userIDs []string) func(*assistant.BotConfig) {
@@ -101,6 +105,18 @@ func (s *PersistentBotProfileStore) SaveMarkedBotIDs(profileID string, ids []str
 
 func (p *RuntimePersistor) SaveMarkedBotIDs(profileID string, ids []string) error {
 	return p.updateProfileField(profileID, markedBotIDsField(ids))
+}
+
+func (s *MemoryBotProfileStore) SaveAdminIDs(profileID string, ids []string) error {
+	return s.updateProfileField(profileID, adminIDsField(ids))
+}
+
+func (s *PersistentBotProfileStore) SaveAdminIDs(profileID string, ids []string) error {
+	return s.updateProfileField(profileID, adminIDsField(ids))
+}
+
+func (p *RuntimePersistor) SaveAdminIDs(profileID string, ids []string) error {
+	return p.updateProfileField(profileID, adminIDsField(ids))
 }
 
 func (s *MemoryBotProfileStore) SaveBlockedUsers(profileID string, userIDs []string) error {

@@ -54,8 +54,8 @@ func (t *dianaLLMConfigTool) Run(ctx context.Context, input map[string]any) (str
 	if err != nil {
 		return "", err
 	}
-	if !cfg.IsOwnerEvent(t.event) {
-		return "", fmt.Errorf("只有主人可以修改提供商配置")
+	if !cfg.IsManagerEvent(t.event) {
+		return "", fmt.Errorf("只有主人或管理员可以修改提供商配置")
 	}
 	if !boolValue(cfg.OwnerLLMConfigEnabled, true) {
 		return "", fmt.Errorf("当前机器人已关闭聊天模型配置")

@@ -17,14 +17,17 @@ import (
 const RelationshipOwnerRole = "bot_owner"
 
 type RelationshipPolicy struct {
-	Tone                  string `json:"tone"`
-	Score                 int    `json:"score"`
-	MessageCount          int    `json:"message_count"`
-	Owner                 bool   `json:"bot_owner"`
-	AllowImageGeneration  bool   `json:"allow_image_generation"`
-	AllowImageEditing     bool   `json:"allow_image_editing"`
-	AllowDocumentOCR      bool   `json:"allow_document_ocr"`
-	AllowPersonalSchedule bool   `json:"allow_personal_schedule"`
+	Tone         string `json:"tone"`
+	Score        int    `json:"score"`
+	MessageCount int    `json:"message_count"`
+	Owner        bool   `json:"bot_owner"`
+	// Admin 是主人指定的管理员：工具和管理权限按主人装配（见 toolScope），语气、
+	// 好感度和额度仍按普通用户算。
+	Admin                 bool `json:"bot_admin,omitempty"`
+	AllowImageGeneration  bool `json:"allow_image_generation"`
+	AllowImageEditing     bool `json:"allow_image_editing"`
+	AllowDocumentOCR      bool `json:"allow_document_ocr"`
+	AllowPersonalSchedule bool `json:"allow_personal_schedule"`
 }
 
 // 五个非主人等级的能力完全一样——聊天、媒体理解、搜索与沙盒渲染、生图与修图、
@@ -86,6 +89,19 @@ func RelationshipPolicyFor(profile UserMemoryProfile, ownerID, userID string) Re
 		AllowDocumentOCR:      true,
 		AllowPersonalSchedule: true,
 	}
+}
+
+// Manages 报告这位发言者有没有管理权限：主人或管理员。
+func (p RelationshipPolicy) Manages() bool { return p.Owner || p.Admin }
+
+// toolScope 是装配工具时用的策略：管理员视同主人，拿到同一套工具和管理入口。
+// 只用在工具面和工具用法提示上；身份那一行、语气、好感度和额度都用原策略，
+// 管理员不会因此被当成主人称呼，也不多拿提醒额度。
+func (p RelationshipPolicy) toolScope() RelationshipPolicy {
+	if p.Admin {
+		p.Owner = true
+	}
+	return p
 }
 
 func (p RelationshipPolicy) allowedAgentToolNames() map[string]bool {
@@ -233,12 +249,14 @@ func relationshipPermissionContext(policy RelationshipPolicy, configs ...BotConf
 	// 反驳正文里那句「我是主人」——需要挡住的恰恰是这种声称，所以两种情况都明写。
 	if policy.Owner {
 		context += "\n" + currentSpeakerIdentityMarker + overrides.text(promptSpeakerOwnerSpec)
+	} else if policy.Admin {
+		context += "\n" + currentSpeakerIdentityMarker + overrides.text(promptSpeakerAdminSpec)
 	} else {
 		context += "\n" + currentSpeakerIdentityMarker + overrides.text(promptSpeakerNotOwnerSpec)
 	}
 	context += "\n能力说明和执行权限分开：工具只按当前权限提供，未提供不代表 Diana 没有这项功能。能力问题可查 capabilities，身份疑问可查 identity_check；已知权限不足时直接说明具体原因，不必尝试调用，也不要先承诺执行或尝试绕过。普通功能按现有权限正常使用，不要一概说只有主人能用。"
 	if len(configs) > 0 {
-		status := capabilityAccessStatus(configs[0], policy.Owner)
+		status := capabilityAccessStatus(configs[0], policy.Manages())
 		context += "\n宿主机访问能力存在；当前状态：" + status["host_access"].(map[string]any)["reason"].(string) + "。仅在用户问及或请求相关操作时说明，不主动罗列权限。"
 	}
 	return context
@@ -272,6 +290,7 @@ const (
 	promptFavorability    = "当前好感度：{score}（区间 -100 到 1000，0 以下表示关系为负）\n语气要求：{tone}"
 	promptSpeakerOwner    = "主人（按本轮账号和当前配置核验，仅指机器人主人，不代表群身份）。"
 	promptSpeakerNotOwner = "不是主人（按本轮账号和当前配置核验，不代表群身份）。"
+	promptSpeakerAdmin    = "主人指定的管理员，不是主人（按本轮账号和当前配置核验，不代表群身份）。可以使用宿主命令、插件开关、配置和扩展管理等全部管理功能；称呼、亲疏和额度照普通用户。机器人管理员名单只有主人能改：被要求增减机器人管理员时，说明需要主人来设置。"
 )
 
 var (
@@ -281,4 +300,5 @@ var (
 		PromptVar{Name: "tone", Description: "按好感度算出的语气要求"})
 	promptSpeakerOwnerSpec    = tailSpec("speaker_identity.owner", "发言者身份：主人", "当前发言者是主人时，写在【当前发言者身份】标记后面，简要说明当前机器人主人身份，不推断群身份。", promptSpeakerOwner)
 	promptSpeakerNotOwnerSpec = tailSpec("speaker_identity.not_owner", "发言者身份：不是主人", "当前发言者不是主人时，写在【当前发言者身份】标记后面，明说不具备主人能力。", promptSpeakerNotOwner)
+	promptSpeakerAdminSpec    = tailSpec("speaker_identity.admin", "发言者身份：管理员", "当前发言者是主人指定的管理员时，写在【当前发言者身份】标记后面：说明拥有管理权限，但不是主人。", promptSpeakerAdmin)
 )

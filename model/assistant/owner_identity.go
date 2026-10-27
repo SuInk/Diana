@@ -43,6 +43,72 @@ func (cfg BotConfig) IsOwnerEvent(event MessageEvent) bool {
 	return owner != "" && owner == strings.TrimSpace(event.UserID)
 }
 
+// IsAdminEvent 报告发送者是不是主人指定的管理员（不含主人本人）。Telegram 上管理员
+// 可以写成 @用户名，按发送者的用户名认，规则和主人一致：机器人、自己发出的消息和
+// 别的机器人配置的事件都不算。
+func (cfg BotConfig) IsAdminEvent(event MessageEvent) bool {
+	user := strings.TrimSpace(event.UserID)
+	if user == "" || event.SenderIsBot || event.Outbound || (cfg.ID != "" && event.ProfileID != "" && cfg.ID != event.ProfileID) {
+		return false
+	}
+	if cfg.IsOwnerEvent(event) {
+		return false
+	}
+	telegram := cfg.Platform == PlatformTelegram && event.Platform == PlatformTelegram
+	sender := TelegramOwnerUsername(event.SenderUsername)
+	for _, admin := range cfg.AdminIDs {
+		admin = strings.TrimSpace(admin)
+		if admin == user {
+			return true
+		}
+		if telegram && sender != "" && TelegramOwnerUsername(admin) == sender {
+			return true
+		}
+	}
+	return false
+}
+
+// IsManagerEvent 报告发送者有没有管理权限：主人或管理员。宿主命令、插件、配置、扩展
+// 这类管理入口用它；好感度、人设、通知、额度这类主人关系仍然只认 IsOwnerEvent。
+func (cfg BotConfig) IsManagerEvent(event MessageEvent) bool {
+	return cfg.IsOwnerEvent(event) || cfg.IsAdminEvent(event)
+}
+
+// managesUserID 按账号 ID 判断有没有管理权限，给保存前的二次核对用：那时手里只剩
+// 发起人的 ID，没有完整事件。
+func (cfg BotConfig) managesUserID(userID string) bool {
+	userID = strings.TrimSpace(userID)
+	if userID == "" {
+		return false
+	}
+	if owner := strings.TrimSpace(cfg.OwnerID); owner != "" && owner == userID {
+		return true
+	}
+	for _, admin := range cfg.AdminIDs {
+		if strings.TrimSpace(admin) == userID {
+			return true
+		}
+	}
+	return false
+}
+
+// normalizeAdminIDs 去重去空，并去掉主人自己：主人本来就有全部权限，列进管理员
+// 名单只会让「取消管理员」看起来能降主人的权。
+func normalizeAdminIDs(ids []string, owner string) []string {
+	owner = strings.TrimSpace(owner)
+	out := cleanStrings(append([]string(nil), ids...))
+	kept := out[:0]
+	for _, id := range out {
+		if id != owner {
+			kept = append(kept, id)
+		}
+	}
+	if len(kept) == 0 {
+		return nil
+	}
+	return kept
+}
+
 // callerIdentityForEvent 是交给 MCP 和本地命令的真实调用者。它不经过模型，隐私代理
 // 开着也照样是真实 ID：代理只挡模型，不挡主人自己配的扩展。
 func callerIdentityForEvent(cfg BotConfig, event MessageEvent) agent.CallerIdentity {
@@ -62,8 +128,11 @@ func callerIdentityForEvent(cfg BotConfig, event MessageEvent) agent.CallerIdent
 }
 
 func relationshipPolicyForEvent(cfg BotConfig, profile UserMemoryProfile, event MessageEvent) RelationshipPolicy {
+	admin := cfg.IsAdminEvent(event)
 	cfg.OwnerID = cfg.OwnerIDForEvent(event)
-	return RelationshipPolicyForConfig(cfg, profile, event.UserID)
+	policy := RelationshipPolicyForConfig(cfg, profile, event.UserID)
+	policy.Admin = admin && !policy.Owner
+	return policy
 }
 
 // rememberTelegramOwnerID 在主人配成 @用户名时，记下主人发消息时带出的数字 ID。

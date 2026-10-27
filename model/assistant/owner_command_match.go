@@ -98,7 +98,7 @@ func runOwnerHelp(*Runtime, MessageEvent, string) string {
 func (r *Runtime) handleOwnerCommand(event MessageEvent, text string) (string, bool) {
 	// 按事件所属的机器人认主人：多机器人时每台的主人只管自己那台。
 	cfg := r.effectiveConfigForEvent(event)
-	if !cfg.IsOwnerEvent(event) {
+	if !cfg.IsManagerEvent(event) {
 		return "", false
 	}
 	// 这些是强格式管理命令；自然语言切模型由机器人内建配置命令处理。
@@ -126,7 +126,7 @@ func (r *Runtime) wouldHandleOwnerCommand(event MessageEvent, text string) bool 
 		return false
 	}
 	cfg := r.effectiveConfigForEvent(event)
-	if !cfg.IsOwnerEvent(event) {
+	if !cfg.IsManagerEvent(event) {
 		return false
 	}
 	command := strings.TrimSpace(r.cleanInput(event, text))
