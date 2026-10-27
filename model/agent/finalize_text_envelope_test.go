@@ -52,6 +52,7 @@ func TestFinalizeEnvelopeFromTextRejectsNonEnvelopes(t *testing.T) {
 		`{"action":"final","content":"走老路径"}`,
 		`就是一句普通回复`,
 		`{"tool":"reminder","arguments":{}}`,
+		`{"content":"未声明的字段","sticker":"x"}`,
 	} {
 		if _, ok := finalizeEnvelopeFromText(text); ok {
 			t.Fatalf("unexpectedly decoded %q as finalize envelope", text)
@@ -96,8 +97,33 @@ func TestRunnerDecodesEnvelopeWithDeclaredAndRetiredFields(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resp.Text != "主人不是我随叫随到的 NPC 喵，有事你直接跟我说就行" {
-		t.Fatalf("Text = %q", resp.Text)
+	if resp.Text != "主人不是我随叫随到的 NPC 喵，有事你直接跟我说就行" || len(resp.FinalizeFields) != 0 {
+		t.Fatalf("Text = %q fields = %#v", resp.Text, resp.FinalizeFields)
+	}
+	if len(client.requests) != 1 {
+		t.Fatalf("model calls = %d, want 1 (no protocol repair)", len(client.requests))
+	}
+}
+
+// 语音通话里 gpt-5.6-terra 每轮都把信封当正文出，扩展字段带值时也要一次解码，
+// 值照常交给调用方，不能再多调一次模型做协议修复。
+func TestRunnerDecodesEnvelopeWithDeclaredFieldValues(t *testing.T) {
+	client := &scriptedClient{responses: []string{
+		`{"content":"晚安啦","render":null,"silent":false,"silent_reason":null,"sticker":"晚安 挥手","sticker_order":1,"task_state":null}`,
+	}}
+	runner, err := NewRunner(client, Config{WorkDir: t.TempDir(), MaxSteps: 3, FinalizeFields: []FinalizeField{{Name: "sticker"}, {Name: "sticker_order"}}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := runner.Run(context.Background(), Request{Messages: []llm.Message{{Role: llm.RoleUser, Content: "我去睡了"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Text != "晚安啦" || len(resp.FinalizeFields) != 1 || resp.FinalizeFields["sticker"] != "晚安 挥手" {
+		t.Fatalf("Text = %q fields = %#v", resp.Text, resp.FinalizeFields)
+	}
+	if len(client.requests) != 1 {
+		t.Fatalf("model calls = %d, want 1 (no protocol repair)", len(client.requests))
 	}
 }
 
