@@ -51,6 +51,7 @@ func (h *BotHandler) consoleProfileAvatarURL(profileID, id string) string {
 	sha, stale := h.avatarStore().knownSHA(key)
 	if stale {
 		go func() {
+			defer recoverGoroutinePanic("avatar_routes.consoleProfileAvatarURL")
 			ctx, cancel := context.WithTimeout(context.Background(), avatarFetchTimeout)
 			defer cancel()
 			h.avatarStore().load(ctx, key, func(ctx context.Context, previous *avatarEntry) (*avatarEntry, error) {
