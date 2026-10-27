@@ -7,8 +7,11 @@ test("markdown conversion is the first reply behavior control", async () => {
   const source = await readFile(new URL("../views/AssistantView.vue", import.meta.url), "utf8");
   const section = source.slice(source.indexOf("<h2>回复怎么发</h2>"), source.indexOf("<!-- 准入与限额"));
   const formGrid = section.slice(section.indexOf('<div class="card-body form-grid">'));
-  assert.equal(formGrid.match(/v-model="form\.markdown_to_plain"/g)?.length, 1);
-  assert.ok(formGrid.indexOf('v-model="form.markdown_to_plain"') < formGrid.indexOf('id="bot-maxinput"'));
+  // 开关显示为正向的「发送 Markdown」，勾选状态是 markdown_to_plain 取反。
+  assert.equal(formGrid.match(/:checked="!form\.markdown_to_plain"/g)?.length, 1);
+  assert.match(formGrid, /form\.markdown_to_plain = !\(event\.target as HTMLInputElement\)\.checked/);
+  assert.ok(formGrid.indexOf(':checked="!form.markdown_to_plain"') < formGrid.indexOf('id="bot-maxinput"'));
+  assert.ok(formGrid.indexOf("发送 Markdown") < formGrid.indexOf('id="bot-maxinput"'));
 });
 
 test("automatic sticker order stays beside reply controls with explicit options and scope", async () => {
