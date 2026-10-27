@@ -4888,7 +4888,7 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 		// 后台入口也走这里，它们不接进群聊的记录。
 		var continuation *agent.Continuation
 		appendKey, appendHeadKey := "", ""
-		if purpose := llmUsagePurposeFromContext(ctx); appendContextEnabled(cfg) && (purpose == "" || purpose == PurposeReply) {
+		if purpose := llmUsagePurposeFromContext(ctx); purpose == "" || purpose == PurposeReply {
 			appendKey, appendHeadKey = appendContextKey(event), appendContextHeadKey(messages)
 			continuation = appendContextContinuation(r.appendContexts.get(appendKey), messages)
 		}

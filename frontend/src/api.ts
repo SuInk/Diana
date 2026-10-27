@@ -413,8 +413,6 @@ export interface BotProfileConfig extends SendRetrySettings {
   max_reply_chars?: number;
   /** 自然分条：模型用 [diana-msg] 开始下一条、[diana-line] 在当前消息内换行；真实换行不参与布局。 */
   natural_reply_split_enabled?: boolean;
-  /** 只追加上下文：主回复接着上一次实际发出的请求往后加，默认关。 */
-  append_only_context?: boolean;
   /** 连续消息合并置信度百分比，1–100；未设置时默认 75。 */
   reply_merge_confidence_percent?: number;
   reply_preserve_line_breaks?: boolean;

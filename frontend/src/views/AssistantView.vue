@@ -1713,14 +1713,6 @@
                 <input id="bot-maxcontext" v-model.number="form.max_context_tokens" class="input" inputmode="numeric" placeholder="留空跟随模型窗口" />
                 <span class="hint">一次调用最多带多少 token 上下文进去。留空按提供商配置档的模型窗口，填了只会收紧不会放宽。</span>
               </div>
-              <div class="field wide">
-                <label class="switch">
-                  <input v-model="form.append_only_context" type="checkbox" />
-                  <span class="track" aria-hidden="true"></span>
-                  <span class="switch-label">只追加上下文</span>
-                </label>
-                <span class="hint">每次回复接着上一次实际发给模型的内容往后加：这期间的新消息、变了的说明和当前消息，不再每次重新组装，模型的提示缓存几乎整段都能命中。经网关的 GPT 这类只认整段前缀的模型收益最大。请求会逐次变长，到正常长度的两倍、改了配置或重启后自动重来一次。</span>
-              </div>
               <div class="field">
                 <label for="bot-context">历史查询条数上限</label>
                 <input id="bot-context" v-model.number="form.recent_context_limit" class="input" inputmode="numeric" />
@@ -4637,7 +4629,6 @@ function setForm(config: BotProfileConfig): void {
     reply_refusal_threshold: config.reply_refusal_threshold || defaultReplyRefusalThreshold,
     reply_account_safety_audit_master_enabled: config.reply_account_safety_audit_master_enabled ?? true,
     natural_reply_split_enabled: config.natural_reply_split_enabled ?? true,
-    append_only_context: config.append_only_context ?? false,
     reply_preserve_line_breaks: config.reply_preserve_line_breaks ?? true,
     reply_line_split_enabled: config.reply_line_split_enabled ?? false,
     typing_delay_enabled: config.typing_delay_enabled ?? false,

@@ -11,7 +11,7 @@ import (
 	"github.com/SuInk/diana/model/llm"
 )
 
-const appendTestRule = "这是一条足够长、逐轮都不变的尾部说明，用来验证按行去重。"
+const appendTestRule = "这是一条逐轮都不变的尾部说明，续接时照样整段再发一遍。"
 
 func appendTestTurn(history []string, tailExtra, current string) []llm.Message {
 	messages := []llm.Message{{Role: llm.RoleSystem, Content: "人设头部"}}
@@ -37,7 +37,7 @@ func appendTestLog(t *testing.T, messages []llm.Message, reply string) *appendCo
 	return log
 }
 
-func TestAppendContextAppendsOnlyNewHistoryAndChangedTail(t *testing.T) {
+func TestAppendContextAppendsNewHistoryAndWholeTail(t *testing.T) {
 	first := appendTestTurn([]string{"[历史 10:00] 甲: 早", "[历史 10:01] 乙: 早啊"}, "当前发言者：甲，这一行每轮都会变化，长度也够。", "【当前需要回复的消息】甲: 在吗")
 	log := appendTestLog(t, first, "在的")
 	second := appendTestTurn([]string{"[历史 10:01] 乙: 早啊", "[历史 10:02] 甲: 在吗", "[历史 10:03] 丙: 吃了吗"}, "当前发言者：丙，这一行每轮都会变化，长度也够。", "【当前需要回复的消息】丙: 吃了吗")
@@ -51,12 +51,12 @@ func TestAppendContextAppendsOnlyNewHistoryAndChangedTail(t *testing.T) {
 		got = append(got, string(message.Role)+":"+message.Content)
 	}
 	joined := strings.Join(got, "|")
-	for _, want := range []string{"[历史 10:02] 甲: 在吗", "[历史 10:03] 丙: 吃了吗", "当前发言者：丙"} {
+	for _, want := range []string{"[历史 10:02] 甲: 在吗", "[历史 10:03] 丙: 吃了吗", appendTestRule + "\n当前发言者：丙"} {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("missing %q in %q", want, joined)
 		}
 	}
-	for _, unwanted := range []string{"乙: 早啊", appendTestRule, "assistant:在的", "人设头部"} {
+	for _, unwanted := range []string{"乙: 早啊", "assistant:在的", "人设头部"} {
 		if strings.Contains(joined, unwanted) {
 			t.Fatalf("%q should not be appended again: %q", unwanted, joined)
 		}
@@ -88,8 +88,7 @@ func TestReplyTurnsContinueAppendOnly(t *testing.T) {
 		`tool_calls:[{"id":"s1","name":"send","arguments":{"text":"在的"}}]`,
 		`tool_calls:[{"id":"s2","name":"send","arguments":{"text":"吃过了"}}]`,
 	}}
-	on := true
-	runtime := NewRuntime(BotConfig{AgentEnabled: true, BotAccount: "42", AppendOnlyContext: &on}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+	runtime := NewRuntime(BotConfig{AgentEnabled: true, BotAccount: "42"}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
 	})
 	first := interimTestEvent()
