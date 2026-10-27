@@ -237,9 +237,16 @@ func TestAssistantUserNamesResolvesFromLocalProfiles(t *testing.T) {
 	}, assistant.UserMemoryUpdate{}); err != nil {
 		t.Fatal(err)
 	}
+	// QQ 官方机器人只给 openid，主人账号填的就是它，也要能回显昵称。
+	const openID = "0123456789ABCDEF0123456789ABCDEF"
+	if _, err := store.UpdateUserMemory(ctx, assistant.MessageEvent{
+		Kind: assistant.EventKindGroup, GroupID: "20002", UserID: openID, SenderName: "小红", MessageID: "m3", RawMessage: "早", Time: 1_700_000_200,
+	}, assistant.UserMemoryUpdate{}); err != nil {
+		t.Fatal(err)
+	}
 
 	// abc 不是数字直接被丢掉，10002 只有退化名字，10009 从没出现过：三个都不该有昵称。
-	req := httptest.NewRequest(http.MethodGet, "/api/assistant/user-names?ids=10001,10002,10009,abc,10001", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/assistant/user-names?ids=10001,10002,10009,abc,10001,"+openID, nil)
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
@@ -252,14 +259,17 @@ func TestAssistantUserNamesResolvesFromLocalProfiles(t *testing.T) {
 	if resp.Names["10001"] != "小明" {
 		t.Fatalf("names[10001]=%q, want 小明", resp.Names["10001"])
 	}
-	if len(resp.Names) != 1 {
-		t.Fatalf("names=%v, want only 10001", resp.Names)
+	if resp.Names[openID] != "小红" {
+		t.Fatalf("names[%s]=%q, want 小红", openID, resp.Names[openID])
+	}
+	if len(resp.Names) != 2 {
+		t.Fatalf("names=%v, want only 10001 and the openid", resp.Names)
 	}
 }
 
 func TestParseUserNameLookupIDsDedupesAndCaps(t *testing.T) {
-	ids := parseUserNameLookupIDs(" 10001, 10001 ,10002,\n10003\t,abc,, 10004 ")
-	want := []string{"10001", "10002", "10003", "10004"}
+	ids := parseUserNameLookupIDs(" 10001, 10001 ,10002,\n10003\t,abc,, 10004 ,0123456789ABCDEF0123456789ABCDEF,0123456789ABCDEF0123456789ABCDEG")
+	want := []string{"10001", "10002", "10003", "10004", "0123456789ABCDEF0123456789ABCDEF"}
 	if len(ids) != len(want) {
 		t.Fatalf("ids=%v, want %v", ids, want)
 	}

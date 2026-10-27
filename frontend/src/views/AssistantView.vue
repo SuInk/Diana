@@ -578,9 +578,10 @@
                     v-model="form.owner_id"
                     class="input"
                     :inputmode="isOneBotPlatform ? 'numeric' : 'text'"
-                    :placeholder="form.platform === 'telegram' ? '数字用户 ID 或 @用户名，例如 70001 / @owneruser' : isOneBotPlatform ? '例如 123456789，用于管理指令和私聊登录' : '平台用户 ID，用于管理指令'"
+                    :placeholder="form.platform === 'telegram' ? '数字用户 ID 或 @用户名，例如 70001 / @owneruser' : isOneBotPlatform ? '例如 123456789，用于管理指令和私聊登录' : form.platform === 'qq-official' ? '绑定后自动填入 openid' : '平台用户 ID，用于管理指令'"
                   />
                   <AccountNameHint :user-id="form.owner_id" :profile="form.id" />
+                  <OwnerBindPanel v-if="form.platform === 'qq-official'" v-model="form.owner_id" :profile="creating ? '' : form.id" />
                   <span v-if="form.platform === 'telegram'" class="hint">支持数字 ID、用户名或 @用户名，不区分用户名大小写；按 Telegram 发送者账号核验，不按显示昵称。用户名变更后需更新此处。</span>
                   <span class="hint">不需要聊天内管理或管理员快速登录时可以留空。</span>
                 </div>
@@ -2263,6 +2264,7 @@ import {
 } from "../api";
 import SearchRoutingPanel from "../components/SearchRoutingPanel.vue";
 import AccountNameHint from "../components/AccountNameHint.vue";
+import OwnerBindPanel from "../components/OwnerBindPanel.vue";
 import AppSelect, { type AppSelectOption } from "../components/AppSelect.vue";
 import AppNumberInput from "../components/AppNumberInput.vue";
 import AppSwitch from "../components/AppSwitch.vue";

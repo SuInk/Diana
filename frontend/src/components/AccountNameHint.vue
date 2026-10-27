@@ -17,7 +17,7 @@ import { fetchAssistantUserNames } from "../api";
 // 「一串数字换个看得懂的名字」。控制台里每个填 QQ 号 / 用户 ID 的输入框旁边挂一个，
 // 填完不用再切到别处去确认自己有没有填错号。
 const props = defineProps<{
-  /** 要解析的用户 ID；空值或非纯数字都直接不查。 */
+  /** 要解析的用户 ID；空值、既不是纯数字也不是 QQ 官方 openid 的都直接不查。 */
   userId?: string;
   /** 机器人作用域，留空表示当前选中的那台。 */
   profile?: string;
@@ -56,7 +56,8 @@ watch(
     clearTimer();
     const id = (props.userId ?? "").trim();
     latest += 1;
-    if (!/^\d+$/.test(id)) {
+    // QQ 官方机器人拿不到 QQ 号，主人账号填的是 32 位 openid。
+    if (!/^(?:\d+|[0-9A-Fa-f]{32})$/.test(id)) {
       name.value = "";
       return;
     }

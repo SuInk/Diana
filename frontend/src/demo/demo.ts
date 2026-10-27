@@ -447,6 +447,8 @@ function demoMemorySource(memory: UserStructuredMemory): AssistantMemorySource {
   };
 }
 
+let demoOwnerBindCreatedAt = 0;
+
 const demoUsers: UserMemoryProfile[] = [
   {
     user_id: "100200711", display_name: "青禾", favorability: 62, message_count: 1843, last_seen_at: before(2), updated_at: before(2),
@@ -1992,6 +1994,15 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
       portrait_count: user.portrait?.length ?? 0
     }));
     return json({ users, total: matched.length, query: keyword || undefined, sort, order, limit: 50, offset: 0 });
+  }
+  // 演示里没有真人去发「绑定主人」，生成验证码几秒后当作主人已经发过。
+  if (path === "/api/assistant/owner-bind") {
+    if (method === "POST") {
+      demoOwnerBindCreatedAt = Date.now();
+      return json({ code: "246810", command: "绑定主人 246810", expires_in_seconds: 600 });
+    }
+    const bound = demoOwnerBindCreatedAt > 0 && Date.now() - demoOwnerBindCreatedAt > 6000;
+    return json({ owner_id: bound ? "0D3CA1B2C3D4E5F60718293A4B5C6D7E" : "", pending: demoOwnerBindCreatedAt > 0 && !bound, expires_in_seconds: 600 });
   }
   if (path === "/api/assistant/user-names") {
     const ids = (url.searchParams.get("ids") ?? "").split(",").map((id) => id.trim()).filter(Boolean);

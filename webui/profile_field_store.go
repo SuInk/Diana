@@ -142,3 +142,20 @@ func (s *PersistentBotProfileStore) SaveDisabledGroups(profileID string, groupID
 func (p *RuntimePersistor) SaveDisabledGroups(profileID string, groupIDs []string) error {
 	return p.updateProfileField(profileID, disabledGroupsField(groupIDs))
 }
+
+// ownerIDField 只换主人：QQ 官方机器人绑定主人时由运行时调用。
+func ownerIDField(ownerID string) func(*assistant.BotConfig) {
+	return func(cfg *assistant.BotConfig) { cfg.OwnerID = ownerID }
+}
+
+func (s *MemoryBotProfileStore) SaveOwnerID(profileID, ownerID string) error {
+	return s.updateProfileField(profileID, ownerIDField(ownerID))
+}
+
+func (s *PersistentBotProfileStore) SaveOwnerID(profileID, ownerID string) error {
+	return s.updateProfileField(profileID, ownerIDField(ownerID))
+}
+
+func (p *RuntimePersistor) SaveOwnerID(profileID, ownerID string) error {
+	return p.updateProfileField(profileID, ownerIDField(ownerID))
+}

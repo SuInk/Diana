@@ -3638,6 +3638,27 @@ export function fetchAssistantUserNames(userIDs: string[], profile = ""): Promis
   return requestJSON<AssistantUserNamesResponse>(`/api/assistant/user-names?${params.toString()}`);
 }
 
+/** QQ 官方机器人绑定主人：主人把 command 发给机器人，验证码对上就把发送者的 openid 存成主人。 */
+export interface OwnerBindCode {
+  code: string;
+  command: string;
+  expires_in_seconds: number;
+}
+
+export interface OwnerBindStatus {
+  owner_id: string;
+  pending: boolean;
+  expires_in_seconds?: number;
+}
+
+export function createOwnerBindCode(profile: string): Promise<OwnerBindCode> {
+  return requestJSON<OwnerBindCode>(`/api/assistant/owner-bind?${new URLSearchParams({ profile }).toString()}`, { method: "POST" });
+}
+
+export function fetchOwnerBindStatus(profile: string): Promise<OwnerBindStatus> {
+  return requestJSON<OwnerBindStatus>(`/api/assistant/owner-bind?${new URLSearchParams({ profile }).toString()}`);
+}
+
 /** 人设库里的一份人设，正文就是一份 SOUL.md。builtin 的是编译在程序里的内置人设，只读。 */
 export interface Persona {
   id: string;

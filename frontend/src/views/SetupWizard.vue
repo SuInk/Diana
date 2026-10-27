@@ -403,6 +403,7 @@
               :placeholder="ownerPlaceholder"
             />
             <AccountNameHint v-if="isOneBotPlatform" :user-id="botForm.owner_id" />
+            <span v-if="botForm.platform === 'qq-official'" class="hint">QQ 官方机器人收不到 QQ 号，主人要绑定一次。先留空，接入后到「机器人设置 → 主人用户 ID」生成验证码，把「绑定主人 验证码」发给机器人即可。</span>
             <span class="hint">不需要聊天内管理或配对登录时可以留空。</span>
           </div>
         </div>
@@ -717,6 +718,7 @@ const ownerLabel = computed(() =>
 const ownerPlaceholder = computed(() => {
   if (botForm.value.platform === "telegram") return "数字用户 ID 或 @用户名，例如 70001 / @owneruser";
   if (isOneBotPlatform.value) return "例如 123456789，用于管理指令和私聊登录";
+  if (botForm.value.platform === "qq-official") return "先留空，不是 QQ 号";
   return "平台用户 ID，用于管理指令";
 });
 

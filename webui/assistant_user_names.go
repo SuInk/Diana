@@ -6,6 +6,7 @@ package webui
 import (
 	"context"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -34,6 +35,10 @@ const (
 	userNameCacheTTL          = 5 * time.Minute
 	userNameCacheMaxSize      = 512
 )
+
+// qqOfficialOpenIDPattern 匹配 QQ 官方机器人给的用户 openid：32 位十六进制。
+// 官方机器人拿不到 QQ 号，主人账号只能填它。
+var qqOfficialOpenIDPattern = regexp.MustCompile(`^[0-9A-Fa-f]{32}$`)
 
 type userNameCacheEntry struct {
 	name      string
@@ -130,9 +135,10 @@ func parseUserNameLookupIDs(raw string) []string {
 	ids := make([]string, 0, userNameLookupLimit)
 	for _, part := range strings.FieldsFunc(raw, func(r rune) bool { return r == ',' || r == ' ' || r == '\n' || r == '\r' || r == '\t' }) {
 		id := strings.TrimSpace(part)
-		// 只认纯数字：这些输入框填的都是 QQ 号或 Telegram 数字 ID，
-		// 放开别的字符等于把任意字符串转手发给 OneBot。
-		if _, err := strconv.ParseInt(id, 10, 64); err != nil {
+		// 只认纯数字和 QQ 官方的 openid：这些输入框填的是 QQ 号、Telegram 数字 ID，
+		// 或官方机器人拿到的 openid。放开别的字符等于把任意字符串转手发给 OneBot；
+		// openid 不是数字，strangerNickname 也不会拿它去问 OneBot，只查本地画像。
+		if _, err := strconv.ParseInt(id, 10, 64); err != nil && !qqOfficialOpenIDPattern.MatchString(id) {
 			continue
 		}
 		if _, ok := seen[id]; ok {

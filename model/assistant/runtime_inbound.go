@@ -128,6 +128,10 @@ func (r *Runtime) HandleEvent(ctx context.Context, event MessageEvent) error {
 	// 规则防御只判定、登记和后台处罚；消息照常落历史、给插件看，到回复判断前再拦。
 	r.enforceGroupGovernance(ctx, event)
 	r.rememberTelegramOwnerID(event)
+	// 绑定主人在私聊准入之前：没主人时 owner_only 模式会把主人自己也挡在外面。
+	if r.handleOwnerBind(ctx, event) {
+		return nil
+	}
 	if event.Kind == EventKindPrivate {
 		text := PlainText(event.Segments)
 		if text == "" {
