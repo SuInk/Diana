@@ -4528,6 +4528,8 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	}
 	// 模型收尾时填了表情包关键词的话，按配置顺序配一张，见 sticker_finalize.go。
 	ctx, finalizeSticker := withFinalizeSticker(ctx)
+	// QQ 官方机器人收尾时填了按钮的话，挂在这一轮最后一条文字消息上，见 qq_official_buttons.go。
+	ctx, _ = withFinalizeButtons(ctx)
 	// 本轮调过的工具挂到随后发出的第一条消息上，见 tool_call_memory.go。
 	ctx = withReplyToolTrace(ctx)
 	// maibot 回复器的语气改写和发送前审核并行，见 reply_tone_parallel.go。
@@ -4835,6 +4837,9 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 		if _, ok := registry.Get(dianaStickerToolName); ok {
 			agentCfg.FinalizeFields = append(agentCfg.FinalizeFields, stickerFinalizeFields(cfg.StickerReplyOrder)...)
 		}
+		if offersButtonsFinalizeField(cfg, event) {
+			agentCfg.FinalizeFields = append(agentCfg.FinalizeFields, buttonsFinalizeField())
+		}
 		r.rememberAgentResidencyCatalog(event, registry, relationship.Owner)
 		// 用途只挂在模型调用上（见 runtimeAgentLLMProvider.Generate），不挂在整个 ctx 上：
 		// 工具里各自发起的模型调用有自己的用途，不该被记成主回复。
@@ -4885,6 +4890,7 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 		r.rememberClaimSources(event, resp.Sources)
 		replyToolTraceFromContext(ctx).add(resp.Steps)
 		finalizeStickerFromContext(ctx).set(resp.FinalizeFields[stickerFinalizeFieldName], resp.FinalizeFields[stickerOrderFieldName])
+		finalizeButtonsFromContext(ctx).set(resp.FinalizeFields[buttonsFinalizeFieldName])
 		text := resp.Text
 		if resp.Silent {
 			// 线上出过：模型填 silent=true、silent_reason「内容已通过 say 发出」，

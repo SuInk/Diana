@@ -27,6 +27,8 @@ type qqFakeAPI struct {
 	dedup int
 	// rejectMarkdown 让 msg_type 2 的消息被拒收，模拟没开 Markdown 权限。
 	rejectMarkdown bool
+	// rejectKeyboard 让带 keyboard 的消息被拒收，模拟没开通自定义按钮。
+	rejectKeyboard bool
 	server         *httptest.Server
 }
 
@@ -64,7 +66,8 @@ func newQQFakeAPI(t *testing.T) *qqFakeAPI {
 		case strings.HasSuffix(r.URL.Path, "/messages"):
 			api.mu.Lock()
 			api.messagePosts = append(api.messagePosts, body)
-			if api.rejectMarkdown && body["msg_type"] == float64(2) {
+			_, hasKeyboard := body["keyboard"]
+			if (api.rejectMarkdown && body["msg_type"] == float64(2)) || (api.rejectKeyboard && hasKeyboard) {
 				api.mu.Unlock()
 				w.WriteHeader(http.StatusBadRequest)
 				_ = json.NewEncoder(w).Encode(map[string]any{"message": "不允许发送原生 markdown", "code": 304003})

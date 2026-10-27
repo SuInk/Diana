@@ -380,6 +380,8 @@ type OutgoingMessage struct {
 	// group_id 才能发给不是好友、但同在这个群里的人。只在确认不是好友时才填——
 	// 对好友也走临时会话会把消息塞进另一个对话框。
 	TempSessionGroupID string
+	// Buttons 是挂在这条消息底下的按钮行，目前只有 QQ 官方机器人能发，其他平台忽略。
+	Buttons [][]OutgoingButton
 }
 
 type ReminderKind string

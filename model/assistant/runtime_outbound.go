@@ -69,12 +69,23 @@ func (r *Runtime) deliverChunks(ctx context.Context, event MessageEvent, chunks 
 	}
 	sentChunks := 0
 	messageIDs := make([]string, 0, len(chunks))
-	for _, chunk := range chunks {
+	// 收尾填的按钮挂在最后一条文字上：按钮是给对方「接下来」用的，挂在第一条会被
+	// 后面几条顶上去。独立语音挂不了按钮，那就不挂。
+	lastTextChunk := -1
+	for index, chunk := range chunks {
+		if strings.TrimSpace(chunk) != "" && !isStandaloneRecordReply(chunk) {
+			lastTextChunk = index
+		}
+	}
+	for index, chunk := range chunks {
 		if strings.TrimSpace(chunk) == "" {
 			continue
 		}
 		typingIndicatorFromContext(ctx).resume()
 		msg := OutgoingMessage{Text: chunk, LiteralText: decoration.LiteralText}
+		if index == lastTextChunk && !decoration.LiteralText {
+			msg.Buttons = finalizeButtonsFromContext(ctx).take()
+		}
 		if subscriptionPushKindFromContext(ctx) == subscriptionPushRSSWatch && !msg.LiteralText {
 			msg = rssWatchOutgoingImages(msg)
 		}

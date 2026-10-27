@@ -232,6 +232,13 @@ func outgoingMessageFingerprint(msg OutgoingMessage) string {
 		"videos=" + strings.Join(msg.VideoURLs, "|"),
 		"audios=" + strings.Join(msg.AudioURLs, "|"),
 	}
+	for _, row := range msg.Buttons {
+		labels := make([]string, 0, len(row))
+		for _, button := range row {
+			labels = append(labels, button.Label+"="+button.Data)
+		}
+		parts = append(parts, "buttons="+strings.Join(labels, "|"))
+	}
 	for _, segment := range msg.Segments {
 		parts = append(parts, "segment="+segment.Type+":"+segmentFingerprint(segment))
 	}

@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -548,8 +549,13 @@ func (c *QQOfficialChannel) SendWithResult(ctx context.Context, msg OutgoingMess
 		// msg_type 0 是纯文本、2 是原生 Markdown；频道消息没有这个字段。
 		body := map[string]any{"content": text}
 		markdownContent, markdown := "", false
+		keyboard := !isGuild && len(msg.Buttons) > 0
 		if !isGuild {
 			markdownContent, markdown = qqOfficialMarkdownContent(text)
+			if keyboard && !markdown {
+				// 按钮只能挂在 Markdown 消息上，大白话也得换成 Markdown 发。
+				markdownContent, markdown = qqMarkdownLineBreaks(text), true
+			}
 		}
 		if !isGuild {
 			body["msg_type"] = 0
@@ -557,6 +563,9 @@ func (c *QQOfficialChannel) SendWithResult(ctx context.Context, msg OutgoingMess
 				body = map[string]any{
 					"msg_type": 2,
 					"markdown": map[string]any{"content": markdownContent},
+				}
+				if keyboard {
+					body["keyboard"] = qqOfficialKeyboard(msg.Buttons)
 				}
 			}
 			// 出站引用与被动回复正交：message_reference 渲染引用卡片，msg_id 永远指向
@@ -568,6 +577,13 @@ func (c *QQOfficialChannel) SendWithResult(ctx context.Context, msg OutgoingMess
 			}
 		}
 		id, err := post(body)
+		if err != nil && keyboard && !qqOfficialRetryUseless(err) {
+			// 自定义按钮官方写的是邀请开通，没开的账号整条会被拒：先去掉按钮重发，
+			// 正文的排版还能保住。
+			log.Printf("qq: 带按钮的消息被拒，去掉按钮重发: %v", err)
+			delete(body, "keyboard")
+			id, err = post(body)
+		}
 		if err != nil && markdown && !qqOfficialRetryUseless(err) {
 			// Markdown 被拒（没开权限、链接域名未报备等）就降成纯文本再发一次，
 			// 宁可丢格式也不能丢整条回复。
@@ -604,10 +620,28 @@ func (c *QQOfficialChannel) SendWithResult(ctx context.Context, msg OutgoingMess
 			"media":    map[string]any{"file_info": fileInfo},
 		})
 	}
+	images := make([]string, 0, len(msg.ImageURLs))
 	for _, source := range msg.ImageURLs {
-		if strings.TrimSpace(source) == "" {
-			continue
+		if strings.TrimSpace(source) != "" {
+			images = append(images, source)
 		}
+	}
+	// 好几张公网图合成一条图集，见 qq_official_gallery.go；被拒就照旧逐张上传。
+	if content, ok := qqOfficialGalleryMarkdown(images); ok {
+		id, err := post(map[string]any{"msg_type": 2, "markdown": map[string]any{"content": content}})
+		switch {
+		case err == nil:
+			if firstID == "" {
+				firstID = id
+			}
+			images = nil
+		case qqOfficialRetryUseless(err):
+			return nil, err
+		default:
+			log.Printf("qq: 图集消息被拒，改为逐张发送: %v", err)
+		}
+	}
+	for _, source := range images {
 		id, err := sendMedia(source, qqFileTypeImage, qqMaxImageBytes)
 		if err != nil {
 			return nil, err

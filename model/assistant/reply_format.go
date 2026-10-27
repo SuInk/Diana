@@ -127,7 +127,7 @@ func platformMarkdownSyntaxNote(platform string) string {
 	case PlatformTelegram:
 		return "加粗、斜体、删除线、行内代码、代码块、链接、引用和列表都能显示，表格会转成等宽块"
 	case PlatformQQOfficial:
-		return "标题、加粗、斜体、删除线、代码块、链接、引用和列表都能显示；不认行内代码和表格，表格会转成对齐的文字行"
+		return "标题、加粗、斜体、删除线、代码块、链接、引用和列表都能显示，公式、算式用 $…$ 或 $$…$$ 写 LaTeX 会排成数学公式；不认行内代码和表格，表格会转成对齐的文字行"
 	case PlatformDingTalk:
 		return "标题、加粗、斜体、链接、引用和列表都能显示；不认代码块和表格"
 	case PlatformFeishu:
