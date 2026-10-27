@@ -24,6 +24,9 @@ const finalizeToolName = "send"
 // legacyFinalizeToolName 是改名前的收尾工具，只用来认出老历史和文本里的信封。
 const legacyFinalizeToolName = "agent_finalize"
 
+// legacyInterimToolName 是并进 send 之前的中途发言工具。
+const legacyInterimToolName = "say"
+
 // FinalizeToolName 供调用方引用：CoreTools 只填它，就是「除收尾外全部按需加载」。
 const FinalizeToolName = finalizeToolName
 

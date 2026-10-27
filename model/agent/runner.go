@@ -10,6 +10,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -422,6 +424,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 			}
 			return fail(err)
 		}
+		resp.ToolCalls = r.normalizeLegacySendCalls(resp.ToolCalls)
 		lastProvider = resp.Provider
 		lastModel = resp.Model
 		usage = addLLMUsage(usage, resp.Usage)
@@ -441,11 +444,20 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 		var nativeCall llm.ToolCall
 		nativeCallIndex := 0
 		var parallelDropNotice string
-		// interimDone 记这一步里当作中途发言已经发出的 send：它们的调用结果是真实的，
-		// 不能和被跳过的调用一样回「没有执行」。
-		var interimDone map[string]string
+		// interimDone 按调用下标记这一步里当作中途发言已经发出的 send：它们的调用结果
+		// 是真实的，不能和被跳过的调用一样回「没有执行」。不按调用 ID 记：有的供应商
+		// 回的 ID 是空串，同一步的几个调用会撞在一起。
+		//
+		// 同一步只有检索类工具时 send 立刻发出，「我去查一下」要赶在慢检索之前；带副作用
+		// 的工具先执行，成功了才发——否则「定好了」先发出去，提醒却建失败了。
+		var interimDone map[int]string
+		var interimHeld []int
 		if nativeToolCall && !onlySendCalls(resp.ToolCalls) {
-			interimDone, steps = r.sendInterim(ctx, resp.ToolCalls, steps)
+			if sendIndices := sendCallIndices(resp.ToolCalls); interimSendsEarly(resp.ToolCalls) {
+				interimDone, steps = r.sendInterim(ctx, resp.ToolCalls, sendIndices, steps)
+			} else if r.cfg.Interim != nil {
+				interimHeld = sendIndices
+			}
 		}
 		if nativeToolCall {
 			nativeProtocol = true
@@ -474,7 +486,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 			if len(resp.ToolCalls) > 1 && nativeToolCall {
 				dropped := make([]string, 0, len(resp.ToolCalls)-1)
 				for index, call := range resp.ToolCalls {
-					if _, sent := interimDone[call.ID]; index != selected && !sent {
+					if _, sent := interimDone[index]; index != selected && !sent && !slices.Contains(interimHeld, index) {
 						dropped = append(dropped, call.Name)
 					}
 				}
@@ -500,11 +512,11 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 				toolsDuration += time.Since(batchStartedAt)
 				toolCalls += len(reads)
 				lastToolSignature = ""
-				results := map[string]parallelRead{}
-				for _, read := range reads {
+				results := map[int]parallelRead{}
+				for i, read := range reads {
 					read.record.Index = len(steps) + 1
 					steps = append(steps, read.record)
-					results[read.call.ID] = read
+					results[run[i]] = read
 				}
 				messages = append(messages, llm.Message{
 					Role:              llm.RoleAssistant,
@@ -513,10 +525,10 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 					ResponsesOutput:   resp.ResponsesOutput,
 					ContinuationScope: resp.ContinuationScope, AnthropicThinking: resp.AnthropicThinking, ReasoningContent: resp.ReasoningContent,
 				})
-				for _, call := range resp.ToolCalls {
-					read, executed := results[call.ID]
+				for index, call := range resp.ToolCalls {
+					read, executed := results[index]
 					var content string
-					sent, interim := interimDone[call.ID]
+					sent, interim := interimDone[index]
 					switch {
 					case interim:
 						content = sent
@@ -889,6 +901,15 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 				}
 			}
 		}
+		if len(interimHeld) > 0 && err == nil {
+			var held map[int]string
+			held, steps = r.sendInterim(ctx, resp.ToolCalls, interimHeld, steps)
+			if interimDone == nil {
+				interimDone = held
+			} else {
+				maps.Copy(interimDone, held)
+			}
+		}
 		if nativeToolCall {
 			assistantMessage := llm.Message{
 				Role:              llm.RoleAssistant,
@@ -904,8 +925,10 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 			for index, call := range resp.ToolCalls {
 				content := observationText
 				skipped := index != nativeCallIndex
-				if sent, interim := interimDone[call.ID]; interim {
+				if sent, interim := interimDone[index]; interim {
 					content, skipped = sent, false
+				} else if err != nil && slices.Contains(interimHeld, index) {
+					content = "这句没有发出：同一步的 " + nativeCall.Name + " 失败了，看过结果再决定怎么说。"
 				} else if skipped {
 					content = "本次调用没有执行：当前规划步只执行了 " + nativeCall.Name + "。如仍需要，请在下一步重新调用。"
 				}
@@ -975,6 +998,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 		if resp == nil {
 			return fail(errors.New("LLM returned an empty finalization response"))
 		}
+		resp.ToolCalls = r.normalizeLegacySendCalls(resp.ToolCalls)
 		lastProvider = resp.Provider
 		lastModel = resp.Model
 		usage = addLLMUsage(usage, resp.Usage)
@@ -1880,15 +1904,15 @@ func truncateRunes(value string, limit int) string {
 
 // appendToolRepair preserves every original call ID, including skipped parallel calls,
 // so native provider continuation remains valid even when dispatch is rejected.
-func appendToolRepair(messages []llm.Message, resp *llm.GenerateResponse, interimDone map[string]string, text, reason string) []llm.Message {
+func appendToolRepair(messages []llm.Message, resp *llm.GenerateResponse, interimDone map[int]string, text, reason string) []llm.Message {
 	if len(resp.ToolCalls) == 0 {
 		messages = appendAssistantEcho(messages, text)
 		return append(messages, llm.Message{Role: llm.RoleUser, Content: reason})
 	}
 	// 带上作用域：之后切到别的配置档时，这批调用才会被识别成外来历史。
 	messages = append(messages, llm.Message{Role: llm.RoleAssistant, Content: text, ToolCalls: resp.ToolCalls, ResponsesOutput: resp.ResponsesOutput, ContinuationScope: resp.ContinuationScope, AnthropicThinking: resp.AnthropicThinking, ReasoningContent: resp.ReasoningContent})
-	for _, call := range resp.ToolCalls {
-		if sent, interim := interimDone[call.ID]; interim {
+	for index, call := range resp.ToolCalls {
+		if sent, interim := interimDone[index]; interim {
 			messages = append(messages, llm.Message{Role: llm.RoleTool, ToolName: call.Name, ToolCallID: call.ID, Content: sent})
 			continue
 		}
@@ -1933,17 +1957,15 @@ func (r *Runner) remainingToolCalls(used int) int {
 	return max(0, r.cfg.MaxSteps-used)
 }
 
-// sendInterim 把和其他工具同一步发来的 send 当作中途发言立刻发出，返回每个调用的结果。
+// sendInterim 把 indices 指向的 send 当作中途发言立刻发出，按调用下标返回每个调用的结果。
 // 没配 Interim 时不发，结果留空，由调用处按「没有执行」回给模型。
-func (r *Runner) sendInterim(ctx context.Context, calls []llm.ToolCall, steps []Step) (map[string]string, []Step) {
+func (r *Runner) sendInterim(ctx context.Context, calls []llm.ToolCall, indices []int, steps []Step) (map[int]string, []Step) {
 	if r.cfg.Interim == nil {
 		return nil, steps
 	}
-	done := map[string]string{}
-	for _, call := range calls {
-		if call.Name != finalizeToolName {
-			continue
-		}
+	done := map[int]string{}
+	for _, index := range indices {
+		call := calls[index]
 		text := sendText(call)
 		record := Step{Index: len(steps) + 1, Tool: finalizeToolName, Input: cloneToolInput(call.Arguments)}
 		output, err := r.cfg.Interim(ctx, text)
@@ -1954,7 +1976,58 @@ func (r *Runner) sendInterim(ctx context.Context, calls []llm.ToolCall, steps []
 			record.Output = output
 		}
 		steps = append(steps, record)
-		done[call.ID] = output
+		done[index] = output
 	}
 	return done, steps
+}
+
+// sendCallIndices 返回一步里 send 调用的下标。
+func sendCallIndices(calls []llm.ToolCall) []int {
+	var indices []int
+	for index, call := range calls {
+		if call.Name == finalizeToolName {
+			indices = append(indices, index)
+		}
+	}
+	return indices
+}
+
+// interimSendsEarly 报告同一步的中途发言能不能先于工具发出：其余调用全是检索类（含
+// 查工具的 tool_search）时可以，检索失败了也只是没查到，不会让先说的话变成假话。
+func interimSendsEarly(calls []llm.ToolCall) bool {
+	for _, call := range calls {
+		if call.Name != finalizeToolName && call.Name != ToolsLoadToolName && !parallelReadTools[call.Name] {
+			return false
+		}
+	}
+	return true
+}
+
+// normalizeLegacySendCalls 把照老历史发来的 agent_finalize、say 原生调用改名成 send。
+// 它们已经不在工具列表里，原样往下走会撞上「工具不存在」，白花一轮修复。老收尾的
+// silent=true 就是不说话，改成空 text；say 的参数本来就是 text。
+func (r *Runner) normalizeLegacySendCalls(calls []llm.ToolCall) []llm.ToolCall {
+	var out []llm.ToolCall
+	for index, call := range calls {
+		if call.Name != legacyFinalizeToolName && call.Name != legacyInterimToolName {
+			continue
+		}
+		if _, registered := r.registry.Get(call.Name); registered {
+			continue
+		}
+		if out == nil {
+			out = slices.Clone(calls)
+		}
+		arguments := cloneToolInput(call.Arguments)
+		if silent, _ := arguments["silent"].(bool); silent && call.Name == legacyFinalizeToolName {
+			delete(arguments, "content")
+			arguments["text"] = ""
+		}
+		out[index].Name = finalizeToolName
+		out[index].Arguments = arguments
+	}
+	if out == nil {
+		return calls
+	}
+	return out
 }
