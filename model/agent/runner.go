@@ -521,7 +521,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 			}
 			continue
 		}
-		if !ok && !looksLikeAgentAction(lastText) && !plainTextRepaired {
+		if !ok && !looksLikeAgentAction(lastText) && !plainTextRepaired && plainTextNeedsRepair(lastText) {
 			plainTextRepaired = true
 			reason := "本次只返回了普通文本，尚未明确完成任务。请检查用户请求和已有工具结果：如果还有未完成的工作，直接调用工具继续，不要只描述准备执行的动作；如果已经完成，请调用 agent_finalize 给出最终答复。不支持原生工具调用时使用 tool 或 final JSON。不要重复已经成功执行的操作。"
 			emitProtocolRepair(ctx, req.Observer, traceID, modelTurns, toolCalls, r.cfg.MaxSteps, reason)
@@ -604,17 +604,6 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 					}
 					continue
 				}
-			}
-			if reason := finalizeLayoutIssue(action); reason != "" {
-				protocolRepairs++
-				emitProtocolRepair(ctx, req.Observer, traceID, modelTurns, toolCalls, r.cfg.MaxSteps, reason)
-				messages = appendAssistantEcho(messages, lastText)
-				messages = append(messages, llm.Message{Role: llm.RoleUser, Content: reason + "。请保持正文内容、task_state 不变，重新调用 agent_finalize：下一条消息用 [diana-msg]，同一消息内换行用 [diana-line]，content 中不得出现真实换行符。"})
-				if protocolRepairs >= r.cfg.ProtocolRepairLimit {
-					finishReason = "protocol_repair_exhausted"
-					break
-				}
-				continue
 			}
 			// 以前这里还会用两条正则扫正文，找「接下来我会调用/搜索/查询」这类句子，命中就
 			// 当作模型在承诺下一步调工具却没调，退回去修一轮。那是拿关键词判断语义意图：
@@ -982,9 +971,6 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 		if action.Silent && !imageTaskQueued {
 			return finishSilent(action, finishReason)
 		}
-		if issue := finalizeLayoutIssue(action); issue != "" {
-			return fail(fmt.Errorf("finalize_layout: %s（finish_reason=%s）", issue, finishReason))
-		}
 		if imageTaskQueued && !imageTaskFinalIsPending(action) {
 			return finish("图片任务已经开始生成，完成后会自动发送。", finishReason)
 		}
@@ -999,9 +985,6 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 	if action, ok := parseAction(finalText); ok && action.Action == "final" {
 		if action.Silent && !imageTaskQueued {
 			return finishSilent(action, finishReason)
-		}
-		if issue := finalizeLayoutIssue(action); issue != "" {
-			return fail(fmt.Errorf("finalize_layout: %s（finish_reason=%s）", issue, finishReason))
 		}
 		if imageTaskQueued && !imageTaskFinalIsPending(action) {
 			return finish("图片任务已经开始生成，完成后会自动发送。", finishReason)
@@ -1442,7 +1425,7 @@ func (r *Runner) systemPrompt() string {
 	sections := []string{
 		"你是 Diana 的内置 Agent。使用工具完成任务和核实外部事实，观察结果后再给出最终答复。征求你的观点或讨论你的架构，也要先核实其中具体技术的外部事实前提；不能把熟悉的术语自动当成已查证的知识。",
 		"需要工具时必须使用请求中提供的原生 function calling，不要把工具调用写进正文。每个规划步只选择一个工具，观察结果后可以继续选择下一个。",
-		"不再需要工具时调用 agent_finalize 结束本轮：给用户看的完整正文写进 content（必填，不能为空），task_state 等元数据按需一并携带。content 禁止真实 CR/LF；下一条消息写 [diana-msg]，同一消息内换行写 [diana-line]。正文不要写成 JSON。",
+		"不再需要工具时调用 agent_finalize 结束本轮：给用户看的完整正文写进 content（必填，不能为空），task_state 等元数据按需一并携带。正文不要写成 JSON。",
 		"这一轮确实不需要说话时，调用 agent_finalize 并填 silent=true、content 留空，本轮就不发任何消息；silent_reason 里用一句话说明原因，只进日志。它不是拒答：要拒绝就正常把话说出来。",
 		"若 Provider 不支持原生 function calling，才可兼容输出 {\"action\":\"final\",\"content\":\"给用户看的自然语言回复\"} 或 {\"action\":\"tool\",\"tool\":\"工具名\",\"input\":{...}}。",
 	}
@@ -1606,9 +1589,6 @@ type llmAction struct {
 	SilentReason string `json:"silent_reason,omitempty"`
 	// Fields 是原生 agent_finalize 调用里信封以外的非空字符串字段，按 Config.FinalizeFields 过滤后交给调用方。
 	Fields map[string]string `json:"-"`
-	// Salvaged 标记正文是从被网关渲染坏的收尾信封里救回来的，不是模型按协议
-	// 写出来的 content。这种正文不再按信封的换行约定校验。模型不能自己声明。
-	Salvaged bool `json:"-"`
 }
 
 // parseAction 解析模型输出的 Agent JSON 动作。
@@ -1719,6 +1699,27 @@ func decodeLenientJSONString(content string) string {
 		return decoded
 	}
 	return content
+}
+
+// plainTextNeedsRepair 判断没走工具调用的普通文本要不要再给模型一次机会。
+//
+// 普通文本默认就是最终回复：线上 swe-2 九成回合先用纯文本作答，打回后几乎都把同一句
+// 话原样装进 agent_finalize 再发一遍，白等一整轮。只补试两种形状：空文本，和整段是
+// 一对括号包住的动作描述——#1189 的事故就是模型只写了「[搜索 WePlay 2026 参展商名单]」
+// 却没调用搜索。正文里出现「我去查一下」这类说法不在此列，判断语义意图交给提示词。
+func plainTextNeedsRepair(text string) bool {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return true
+	}
+	runes := []rune(text)
+	closing := map[rune]rune{'[': ']', '【': '】', '(': ')', '（': '）'}
+	want, bracketed := closing[runes[0]]
+	if !bracketed || runes[len(runes)-1] != want || strings.HasPrefix(text, "[diana-") {
+		return false
+	}
+	inner := string(runes[1 : len(runes)-1])
+	return !strings.ContainsRune(inner, runes[0]) && !strings.ContainsRune(inner, want)
 }
 
 func looksLikeAgentAction(text string) bool {

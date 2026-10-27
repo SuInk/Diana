@@ -198,7 +198,7 @@
         <h3>收尾校验</h3>
         <ol class="flow">
           <li class="q"><div class="flow-node"><strong>silent = true？</strong></div><div class="flow-exits"><span class="flow-exit"><b>是，没有出图任务排队</b>这轮不回</span><span class="flow-exit loop"><b>有出图任务排队</b>拒绝静默，计一次修复</span></div></li>
-          <li class="q"><div class="flow-node"><strong>正文里有真实换行？</strong><p>分条必须用 <code>[diana-msg]</code> / <code>[diana-line]</code>。</p></div><div class="flow-exits"><span class="flow-exit loop"><b>有</b>计一次修复</span></div></li>
+          <li class="q"><div class="flow-node"><strong>只有纯文本？</strong><p>纯文本直接当最终回复；只有空文本或整段是一对括号包住的动作描述（如「[搜索 …]」）才补试一次。真实换行不打回，发送层当 <code>[diana-line]</code> 处理：普通话之间拆成几条，列表、代码整块一条。</p></div><div class="flow-exits"><span class="flow-exit loop"><b>空或括号动作</b>补试一次</span></div></li>
           <li class="q"><div class="flow-node"><strong>要求证据却没搜？出现本轮没取回、对话里也没出现过的链接？</strong></div><div class="flow-exits"><span class="flow-exit loop"><b>是</b>计一次修复</span></div></li>
           <li class="q"><div class="flow-node"><strong>泄露内部协议词？正文为空？</strong></div><div class="flow-exits"><span class="flow-exit loop"><b>是</b>计一次修复</span></div></li>
           <li class="end"><div class="flow-node"><strong>返回回复</strong></div></li>

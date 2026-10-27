@@ -748,7 +748,7 @@ func TestLayoutProtocolIsStatedOnce(t *testing.T) {
 		"markerOnly":   replySegmentationMarkerOnlyRule,
 		"document":     replyDocumentDeliveryRule,
 	} {
-		if strings.Contains(rule, "真实换行") {
+		if strings.Contains(rule, "换行就是分条") {
 			t.Fatalf("%s 又把换行协议重复了一遍：%q", name, rule)
 		}
 	}

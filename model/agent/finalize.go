@@ -31,22 +31,6 @@ func findFinalizeCall(calls []llm.ToolCall) (llm.ToolCall, bool) {
 	return llm.ToolCall{}, false
 }
 
-// finalizeLayoutIssue 校验收尾正文的排版约定。从被网关渲染坏的信封里救回来的
-// 正文不受约束：它本来就没经过模型的 content 编码，真实换行按普通文本处理。
-func finalizeLayoutIssue(action llmAction) string {
-	if action.Salvaged {
-		return ""
-	}
-	return finalizeContentLayoutIssue(action.Content)
-}
-
-func finalizeContentLayoutIssue(content string) string {
-	if strings.ContainsAny(content, "\r\n") {
-		return "agent_finalize 的 content 含有真实 CR/LF"
-	}
-	return ""
-}
-
 // finalizeToolDefinition 构造本轮的结构化收尾工具。content 必填：部分供应商在调用
 // 工具的同一轮里不会输出普通文本，正文若允许留在信封之外，就会出现完全为空的
 // 收尾（见 errEmptyFinalize）。Runner 解码时仍接受写在调用之外的正文作为兼容。
@@ -57,13 +41,12 @@ func finalizeContentLayoutIssue(content string) string {
 // 「硬凑一句」和「被记一次拒答」之间挑一个。silent 是工具调用上的字段，用户消息
 // 里写什么都到不了这里。
 //
-// 参数说明里压成短句的几条都是事故规则：真实换行会被网关渲染坏（finalizeLayoutIssue）；
-// 「勿写成 JSON」防整个信封被当正文发出（见 finalizeEnvelopeFromText）；「工具调用旁
+// 参数说明里压成短句的几条都是事故规则：「勿写成 JSON」防整个信封被当正文发出（见 finalizeEnvelopeFromText）；「工具调用旁
 // 的正文不算说过」防模型以为已说过而静默吞掉回复（#912）；「拒绝要说出来」防把拒答
 // 伪装成 silent（8c693bbd）。
 func finalizeToolDefinition(imagePending bool, extra ...FinalizeField) llm.ToolDefinition {
 	properties := map[string]any{
-		"content":       toolStringParam("正文，按会话要求附链接；silent空；禁真换行，分条[diana-msg]，换行[diana-line]；勿写JSON"),
+		"content":       toolStringParam("正文，按会话要求附链接；silent空；勿写JSON"),
 		"silent":        toolBoolParam("true 则本轮不发消息。仅无话可说或已道别时用，拒绝要说出来；工具调用旁的正文不算说过"),
 		"silent_reason": toolStringParam("不回复的原因，只进日志"),
 	}

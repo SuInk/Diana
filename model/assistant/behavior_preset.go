@@ -91,12 +91,12 @@ const replyUnclosedBracketRule = "不要用只开不合的「（」接一段补�
 
 // replyBlankLineRule 同样对所有风格生效，而且是这套换行协议的唯一出处。
 //
-// 真实 CR/LF 不再承载输出布局语义：气泡边界和气泡内换行分别使用两个不会混淆的
-// 控制标记。这三句话——不许真实换行、另起消息用哪个标记、消息内换行用哪个标记
-// ——以前在下面五条子规则里各写了一遍，措辞还各不相同；模型读到的是同一件事被
+// 真实换行等同 [diana-line]：几句普通话之间的换行由发送层拆成几条，列表、代码这类
+// 逐行内容留在同一条（见 normalizeExplicitReplyLayout）。换行和分条的说法
+// 以前在下面五条子规则里各写了一遍，措辞还各不相同；模型读到的是同一件事被
 // 反复叮嘱，占了篇幅还稀释注意力。现在只在这里说一次，其余子规则只讲自己那份
 // 独有的内容（什么时候另起一条、长文怎么分组、本轮用户要求怎么覆盖）。
-const replyBlankLineRule = "回复正文中不得输出真实换行符（CR 或 LF），也不要用空行排版。开始下一条消息写 " + notificationSplitMarker + "；同一条消息内部需要换行写 " + notificationLineMarker + "。" + notificationLineMarker + " 只用于列表、步骤、代码、表格、链接这类要逐行看的内容；两句普通的话之间不要用它隔开，要么写在同一行，要么用 " + notificationSplitMarker + " 另起一条。除这两个标记外，正文连续输出。"
+const replyBlankLineRule = "换行就是分条：两句普通的话之间换行，会作为两条消息发出；想留在同一条就写在同一行。列表、步骤、代码、表格、链接逐行写，整块留在同一条。不要用空行排版。也可以用 " + notificationSplitMarker + " 明确另起一条。"
 
 // 以前这里写的是「尽量少发几条、相关的放在一起、不逐句拆分」，结果是一条回复塞进
 // 结论、理由、保留意见和补充，群友十几个字一条，机器人一条上百字。真人发消息是一条
@@ -149,7 +149,7 @@ var (
 	promptReplyCompactPacingSpec        = styleSpec("compact_pacing", "聊天节奏", "每轮注入：尽量少发几条，按自然停顿分条。", replyCompactPacingRule)
 	promptReplyEmojiSpec                = styleSpec("emoji", "不用 emoji", "每轮注入：回复里不用彩色 emoji。", replyEmojiRule)
 	promptReplyUnclosedBracketSpec      = styleSpec("unclosed_bracket", "不写半截括号", "每轮注入：不用只开不合的「（」接一段话。", replyUnclosedBracketRule)
-	promptReplyBlankLineSpec            = styleSpec("blank_line", "换行协议", "每轮都注入：不许真实换行，另起消息和消息内换行各用哪个标记。"+replyMarkerUsage, replyBlankLineRule)
+	promptReplyBlankLineSpec            = styleSpec("blank_line", "换行协议", "每轮都注入：换行即分条，列表代码成块留在同一条。"+replyMarkerUsage, replyBlankLineRule)
 	promptReplySegmentationSpec         = styleSpec("segmentation", "自然分条", "开启自然分条时每轮注入：按意群决定在哪里另起一条。"+replyMarkerUsage, replySegmentationRule)
 	promptReplySegmentationOffSpec      = styleSpec("segmentation_off", "关闭多条发送", "关闭自然分条时替代上一条：默认只发一条。"+replyMarkerUsage, replySegmentationMarkerOnlyRule)
 	promptReplyDocumentDeliverySpec     = styleSpec("document_delivery", "长文分组", "每轮注入：详细长文按主要部分分条，部分内部换行排版。"+replyMarkerUsage, replyDocumentDeliveryRule)
