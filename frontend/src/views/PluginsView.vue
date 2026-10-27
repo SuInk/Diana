@@ -198,7 +198,7 @@
                 class="btn small"
                 type="button"
                 :disabled="busyID === plugin.manifest.id"
-                @click="openRepoInstall(repoInstallLink(plugin))"
+                @click="openRepoInstall(repoInstallLink(plugin), plugin.repo_source.archive ? 'archive' : 'url')"
               >
                 <RefreshCw :size="14" aria-hidden="true" />
                 更新
@@ -584,9 +584,25 @@
       </template>
     </Modal>
 
-    <Modal v-if="repoInstallOpen" title="从 GitHub 安装插件" @close="closeRepoInstall">
+    <Modal v-if="repoInstallOpen" title="安装第三方插件" @close="closeRepoInstall">
       <div class="repo-install">
-        <div class="field">
+        <div v-if="!repoPreview" class="segmented repo-install-tabs" role="tablist" aria-label="安装方式">
+          <button type="button" role="tab" :aria-selected="repoInstallMode === 'url'" :class="{ active: repoInstallMode === 'url' }" :disabled="repoCheckBusy" @click="setRepoInstallMode('url')">GitHub 链接</button>
+          <button type="button" role="tab" :aria-selected="repoInstallMode === 'archive'" :class="{ active: repoInstallMode === 'archive' }" :disabled="repoCheckBusy" @click="setRepoInstallMode('archive')">上传压缩包</button>
+        </div>
+        <div v-if="repoInstallMode === 'archive'" class="field">
+          <label for="repo-plugin-archive">插件压缩包</label>
+          <input
+            id="repo-plugin-archive"
+            class="input"
+            type="file"
+            accept=".zip,.tar.gz,.tgz,application/zip,application/gzip"
+            :disabled="repoCheckBusy || !!repoPreview"
+            @change="pickRepoArchive"
+          />
+          <p class="hint">支持 .zip / .tar.gz，最大 64MB。diana.plugin.json 放在包的根目录或唯一的顶层文件夹里即可，GitHub 的「Download ZIP」也能直接用。</p>
+        </div>
+        <div v-else class="field">
           <label for="repo-plugin-url">GitHub 仓库链接</label>
           <input
             id="repo-plugin-url"
@@ -607,7 +623,11 @@
             <span class="badge warn">第三方</span>
           </div>
           <p class="repo-preview-desc">{{ repoPreview.manifest.description }}</p>
-          <p class="repo-preview-source">
+          <p v-if="repoPreview.archive" class="repo-preview-source">
+            <span>压缩包 {{ repoPreview.archive }}</span>
+            <span class="hint mono">SHA-256 {{ repoPreview.commit.slice(0, 12) }}</span>
+          </p>
+          <p v-else class="repo-preview-source">
             <a :href="repoPreviewLink" target="_blank" rel="noreferrer">{{ repoPreviewLink }}</a>
             <span class="hint mono">提交 {{ repoPreview.commit.slice(0, 12) }}</span>
           </p>
@@ -664,7 +684,7 @@
         </template>
         <template v-else>
           <button class="btn" type="button" :disabled="repoCheckBusy" @click="closeRepoInstall">取消</button>
-          <button class="btn primary" type="button" :disabled="repoCheckBusy || !repoInstallURL.trim()" @click="checkRepoPlugin">
+          <button class="btn primary" type="button" :disabled="repoCheckBusy || !repoInstallReady" @click="checkRepoPlugin">
             {{ repoCheckBusy ? "检查中…" : "检查" }}
           </button>
         </template>
@@ -675,6 +695,16 @@
 </template>
 
 <style scoped>
+.repo-install-tabs {
+  width: 100%;
+  margin-bottom: 16px;
+}
+
+.repo-install-tabs > button {
+  flex: 1;
+  min-height: 36px;
+}
+
 .repo-install-error {
   margin: 0 0 12px;
   padding: 8px 12px;
@@ -705,6 +735,9 @@
 }
 
 .repo-preview-source {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 10px;
   margin: 0;
   font-size: 12px;
   word-break: break-all;
@@ -791,9 +824,11 @@ import { ArrowRight, ChevronDown, Download, LayoutGrid, Pencil, RefreshCw, Rows3
 import {
   installPlugin,
   installRepoPlugin,
+  installRepoPluginArchive,
   installResolverDependency,
   listPlugins,
   previewRepoPlugin,
+  previewRepoPluginArchive,
   setPluginEnabled,
   uninstallPlugin,
   updatePluginSettings,
@@ -1371,7 +1406,9 @@ async function uninstall(plugin: PluginState): Promise<void> {
 // 从 GitHub 安装第三方插件：粘贴链接 → 检查（拉清单渲染权限与风险）→
 // 勾选「我已了解风险」→ 确认安装。风险勾选框默认不勾，确认按钮随勾选状态解锁。
 const repoInstallOpen = ref(false);
+const repoInstallMode = ref<"url" | "archive">("url");
 const repoInstallURL = ref("");
+const repoInstallFile = ref<File | null>(null);
 const repoPreview = ref<RepoPluginPreview | null>(null);
 const repoInstallError = ref("");
 const repoCheckBusy = ref(false);
@@ -1407,10 +1444,26 @@ const repoPreviewLink = computed(() => {
   return `https://github.com/${source.owner}/${source.repo}${source.ref ? `/tree/${source.ref}` : ""}`;
 });
 
-function openRepoInstall(url = ""): void {
+const repoInstallReady = computed(() =>
+  repoInstallMode.value === "archive" ? Boolean(repoInstallFile.value) : Boolean(repoInstallURL.value.trim())
+);
+
+function openRepoInstall(url = "", mode: "url" | "archive" = "url"): void {
   repoInstallOpen.value = true;
+  repoInstallMode.value = mode;
   repoInstallURL.value = url;
+  repoInstallFile.value = null;
   resetRepoPreview();
+}
+
+function setRepoInstallMode(mode: "url" | "archive"): void {
+  repoInstallMode.value = mode;
+  repoInstallError.value = "";
+}
+
+function pickRepoArchive(event: Event): void {
+  repoInstallFile.value = (event.target as HTMLInputElement).files?.[0] ?? null;
+  repoInstallError.value = "";
 }
 
 // 第三方插件的更新链接：固定 ref 拼回安装时的形态，复现安装。
@@ -1437,14 +1490,14 @@ function resetRepoPreview(): void {
 }
 
 async function checkRepoPlugin(): Promise<void> {
-  const url = repoInstallURL.value.trim();
-  if (!url) {
+  if (!repoInstallReady.value) {
     return;
   }
+  const file = repoInstallMode.value === "archive" ? repoInstallFile.value : null;
   repoCheckBusy.value = true;
   repoInstallError.value = "";
   try {
-    repoPreview.value = await previewRepoPlugin(url);
+    repoPreview.value = file ? await previewRepoPluginArchive(file) : await previewRepoPlugin(repoInstallURL.value.trim());
     repoRiskAccepted.value = false;
     repoReplaceAccepted.value = false;
   } catch (error) {
@@ -1457,13 +1510,15 @@ async function checkRepoPlugin(): Promise<void> {
 
 async function confirmRepoInstall(): Promise<void> {
   const url = repoInstallURL.value.trim();
+  const file = repoInstallMode.value === "archive" ? repoInstallFile.value : null;
   const preview = repoPreview.value;
-  if (!url || !preview || !repoRiskAccepted.value) {
+  if ((!url && !file) || !preview || !repoRiskAccepted.value) {
     return;
   }
   repoInstallBusy.value = true;
   try {
-    upsert(await installRepoPlugin(url, true, preview.commit, Boolean(preview.installed)));
+    const replace = Boolean(preview.installed);
+    upsert(file ? await installRepoPluginArchive(file, true, preview.commit, replace) : await installRepoPlugin(url, true, preview.commit, replace));
     toastSuccess(`已安装 ${preview.manifest.name}`);
     repoInstallOpen.value = false;
     await reload();

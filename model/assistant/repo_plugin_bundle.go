@@ -323,7 +323,7 @@ func (r *Runtime) registerRepoPluginBundles(ctx context.Context, registry *agent
 		if !ok || !enabled || !pluginSupportsPlatform(state.Manifest, event.Platform) || plugin.bundle == nil {
 			continue
 		}
-		loaded, err := agent.LoadPluginSkills(plugin.manifest.ID, plugin.dir, plugin.source.URL, plugin.bundle.skillRoots(), len(plugin.bundle.Scripts) > 0)
+		loaded, err := agent.LoadPluginSkills(plugin.manifest.ID, plugin.dir, plugin.source.Origin(), plugin.bundle.skillRoots(), len(plugin.bundle.Scripts) > 0)
 		if err != nil {
 			return fmt.Errorf("diana: plugin %q skills: %w", plugin.manifest.ID, err)
 		}

@@ -6,6 +6,7 @@ package webui
 import (
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 
@@ -147,33 +148,113 @@ func (h *BotHandler) installRepoPlugin(c *gin.Context) {
 		h.writeRepoPluginError(c, "plugin_repo_install", err, payload.URL)
 		return
 	}
+	h.finishRepoPluginInstall(c, "plugin_repo_install", plugin, source)
+}
+
+// finishRepoPluginInstall 把落好盘的插件登记进插件管理器、记来源并持久化。
+// 链接安装和压缩包安装共用这一段。
+func (h *BotHandler) finishRepoPluginInstall(c *gin.Context, action string, plugin *assistant.RepoPlugin, source assistant.RepoPluginSource) {
 	manager := h.runtime.Plugins()
 	if err := manager.RegisterPlugin(plugin); err != nil {
-		h.writeError(c, http.StatusConflict, "plugin_repo_install", err, plugin.Manifest().ID, nil)
+		h.writeError(c, http.StatusConflict, action, err, plugin.Manifest().ID, nil)
 		return
 	}
 	if state, ok := manager.Get(plugin.Manifest().ID); !ok || !state.Installed {
 		if _, err := manager.Install(plugin.Manifest().ID); err != nil {
-			h.writePluginError(c, "plugin_repo_install", err, plugin.Manifest().ID)
+			h.writePluginError(c, action, err, plugin.Manifest().ID)
 			return
 		}
 	}
 	if h.repoPluginSources != nil {
 		if err := h.repoPluginSources.Save(source); err != nil {
-			h.writeError(c, http.StatusInternalServerError, "plugin_repo_install", err, plugin.Manifest().ID, nil)
+			h.writeError(c, http.StatusInternalServerError, action, err, plugin.Manifest().ID, nil)
 			return
 		}
 	}
 	h.persistState()
-	recordRequestOperation(c, h.logs, "plugin_repo_install", "第三方插件已安装", plugin.Manifest().ID, map[string]any{
+	recordRequestOperation(c, h.logs, action, "第三方插件已安装", plugin.Manifest().ID, map[string]any{
 		"plugin_id": plugin.Manifest().ID,
 		"version":   plugin.Manifest().Version,
-		"source":    source.Owner + "/" + source.Repo,
+		"source":    repoPluginSourceLabel(source),
 		"ref":       source.Ref,
 		"commit":    source.Commit,
 	})
 	state, _ := manager.Get(plugin.Manifest().ID)
 	c.JSON(http.StatusOK, h.withRepoSource(state).Redacted())
+}
+
+func repoPluginSourceLabel(source assistant.RepoPluginSource) string {
+	if source.Archive != "" {
+		return source.Origin()
+	}
+	return source.Owner + "/" + source.Repo
+}
+
+// readRepoPluginUpload 读上传的压缩包：请求体就是文件本身，文件名走查询参数。
+func (h *BotHandler) readRepoPluginUpload(c *gin.Context, action string) ([]byte, bool) {
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, assistant.RepoPluginMaxUploadBytes)
+	data, err := io.ReadAll(c.Request.Body)
+	if err != nil {
+		h.writeError(c, http.StatusRequestEntityTooLarge, action,
+			fmt.Errorf("diana: 压缩包读取失败或超过 %dMB", assistant.RepoPluginMaxUploadBytes>>20), c.Query("filename"), nil)
+		return nil, false
+	}
+	if len(data) == 0 {
+		h.writeError(c, http.StatusBadRequest, action, errors.New("diana: 没有收到压缩包"), c.Query("filename"), nil)
+		return nil, false
+	}
+	return data, true
+}
+
+// previewRepoPluginArchive 校验上传的插件压缩包，返回与链接安装相同的确认框信息。
+func (h *BotHandler) previewRepoPluginArchive(c *gin.Context) {
+	installer, ok := h.repoPluginInstaller(c)
+	if !ok {
+		return
+	}
+	data, ok := h.readRepoPluginUpload(c, "plugin_archive_preview")
+	if !ok {
+		return
+	}
+	preview, err := installer.PreviewArchive(c.Query("filename"), data)
+	if err != nil {
+		h.writeRepoPluginError(c, "plugin_archive_preview", err, c.Query("filename"))
+		return
+	}
+	c.JSON(http.StatusOK, repoPluginPreviewResponse{
+		RepoPluginPreview: preview,
+		Installed:         h.repoPluginInstalledVersion(preview.Manifest.ID, preview.Manifest.Version),
+	})
+}
+
+// installRepoPluginArchive 安装上传的插件压缩包。风险确认、预览摘要、覆盖确认
+// 与链接安装同一套要求，只是参数走查询串，请求体留给文件。
+func (h *BotHandler) installRepoPluginArchive(c *gin.Context) {
+	installer, ok := h.repoPluginInstaller(c)
+	if !ok {
+		return
+	}
+	name := c.Query("filename")
+	if c.Query("accept_risk") != "true" {
+		h.writeError(c, http.StatusBadRequest, "plugin_archive_install", assistant.ErrRepoPluginRisk, name, nil)
+		return
+	}
+	digest := strings.TrimSpace(c.Query("commit"))
+	if digest == "" {
+		h.writeError(c, http.StatusBadRequest, "plugin_archive_install", errors.New("diana: 请先预览插件，确认后再安装"), name, nil)
+		return
+	}
+	data, ok := h.readRepoPluginUpload(c, "plugin_archive_install")
+	if !ok {
+		return
+	}
+	plugin, source, err := installer.InstallArchiveGuarded(name, data, digest,
+		h.repoPluginOccupancyGuard(c.Query("replace") == "true"))
+	if err != nil {
+		h.writeRepoPluginError(c, "plugin_archive_install", err, name)
+		return
+	}
+	h.finishRepoPluginInstall(c, "plugin_archive_install", plugin, source)
 }
 
 // updateRepoPlugin 按安装时记录的出处重新拉取安装，用于插件更新。
@@ -199,6 +280,11 @@ func (h *BotHandler) updateRepoPlugin(c *gin.Context) {
 	source, ok := h.repoPluginSources.Get(c.Param("id"))
 	if !ok {
 		c.JSON(http.StatusNotFound, gin.H{"error": "该插件不是从仓库安装的"})
+		return
+	}
+	if source.Archive != "" {
+		h.writeError(c, http.StatusBadRequest, "plugin_repo_update",
+			errors.New("diana: 这个插件是上传压缩包安装的，请重新上传新版压缩包来更新"), source.ID, nil)
 		return
 	}
 	installURL := source.URL
@@ -261,9 +347,11 @@ func (h *BotHandler) writeRepoPluginError(c *gin.Context, action string, err err
 		errors.Is(err, assistant.ErrRepoPluginFormat),
 		errors.Is(err, assistant.ErrRepoPluginSkill),
 		errors.Is(err, assistant.ErrRepoPluginRisk),
+		errors.Is(err, assistant.ErrRepoPluginArchive),
 		errors.Is(err, assistant.ErrRepoPluginCommit):
 		status = http.StatusBadRequest
-	case errors.Is(err, assistant.ErrRepoPluginChanged):
+	case errors.Is(err, assistant.ErrRepoPluginChanged),
+		errors.Is(err, assistant.ErrRepoPluginArchiveChanged):
 		status = http.StatusConflict
 	}
 	h.writeError(c, status, action, err, target, map[string]any{"plugin_id": target})

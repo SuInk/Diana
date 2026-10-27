@@ -1978,15 +1978,19 @@ export interface RepoPluginSource {
   /** 实际安装的提交 SHA；ref 是分支或 tag 时会移动，commit 不会。 */
   commit?: string;
   version: string;
+  /** 上传压缩包安装时为空，此时 archive 是压缩包文件名、commit 是它的 SHA-256。 */
   url: string;
+  archive?: string;
   installed_at?: string;
 }
 
 /** 粘贴 GitHub 链接后的安装预览：确认框据此渲染权限、设置与风险。 */
 export interface RepoPluginPreview {
   source: RepoPluginSourceRef;
-  /** 预览读到的提交；安装时原样带回，仓库在中间有新提交会被拒绝。 */
+  /** 预览读到的提交；安装时原样带回，仓库在中间有新提交会被拒绝。压缩包安装时是文件的 SHA-256。 */
   commit: string;
+  /** 上传压缩包预览时的文件名；此时 source 各字段为空。 */
+  archive?: string;
   manifest: PluginManifest;
   permissions: RepoPluginPermission[];
   files: string[];
@@ -2019,6 +2023,28 @@ export function installRepoPlugin(
   return requestJSON<PluginState>("/api/assistant/plugins/repo/install", {
     method: "POST",
     body: JSON.stringify({ url, accept_risk: acceptRisk, commit, replace })
+  });
+}
+
+// 压缩包上传：请求体就是文件本身，其余参数走查询串。headers 整个替换掉默认的 JSON 类型。
+function repoPluginArchiveRequest<T>(path: string, file: File, params: Record<string, string>): Promise<T> {
+  const query = new URLSearchParams({ filename: file.name, ...params });
+  return requestJSON<T>(`${path}?${query.toString()}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/octet-stream" },
+    body: file
+  });
+}
+
+export function previewRepoPluginArchive(file: File): Promise<RepoPluginPreview> {
+  return repoPluginArchiveRequest<RepoPluginPreview>("/api/assistant/plugins/repo/archive/preview", file, {});
+}
+
+export function installRepoPluginArchive(file: File, acceptRisk: boolean, commit: string, replace = false): Promise<PluginState> {
+  return repoPluginArchiveRequest<PluginState>("/api/assistant/plugins/repo/archive/install", file, {
+    accept_risk: String(acceptRisk),
+    commit,
+    replace: String(replace)
   });
 }
 

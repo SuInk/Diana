@@ -513,10 +513,21 @@ type RepoPluginSource struct {
 	Repo  string `json:"repo"`
 	Ref   string `json:"ref,omitempty"`
 	// Commit 是实际安装的那次提交。Ref 可以是分支或 tag，会移动；Commit 不会。
-	Commit      string    `json:"commit,omitempty"`
-	Version     string    `json:"version"`
-	URL         string    `json:"url"`
+	Commit  string `json:"commit,omitempty"`
+	Version string `json:"version"`
+	URL     string `json:"url"`
+	// Archive 是上传安装时的压缩包文件名；此时 Owner/Repo/URL 为空，
+	// Commit 存的是压缩包的 SHA-256，没有远端可供「更新」。
+	Archive     string    `json:"archive,omitempty"`
 	InstalledAt time.Time `json:"installed_at"`
+}
+
+// Origin 返回给人和模型看的出处：仓库地址，或上传的压缩包名。
+func (s RepoPluginSource) Origin() string {
+	if s.URL != "" {
+		return s.URL
+	}
+	return "上传的压缩包 " + s.Archive
 }
 
 // RepoPluginStore 把已安装第三方插件的来源记录在数据目录的 index.json 里。
@@ -679,7 +690,7 @@ func (p *RepoPlugin) Handle(_ context.Context, _ PluginRequest) (*PluginResponse
 		if runes := []rune(content); len(runes) > repoPluginMaxContextRunes {
 			content = string(runes[:repoPluginMaxContextRunes]) + "\n（插件说明过长，后面的内容已省略）"
 		}
-		p.context = fmt.Sprintf("插件「%s」（%s）：\n%s", p.manifest.Name, p.source.URL, content)
+		p.context = fmt.Sprintf("插件「%s」（%s）：\n%s", p.manifest.Name, p.source.Origin(), content)
 	})
 	if p.loadErr != nil {
 		return nil, p.loadErr
@@ -703,7 +714,9 @@ type RepoPluginPreview struct {
 	Source RepoPluginRef `json:"source"`
 	// Commit 是预览时读到的提交。安装请求带回它，仓库在中间有新提交就拒绝安装，
 	// 保证装进去的就是用户在确认框里看到的那一版。
-	Commit      string                 `json:"commit"`
+	Commit string `json:"commit"`
+	// Archive 是上传安装的压缩包名，此时 Source 为空、Commit 是压缩包的 SHA-256。
+	Archive     string                 `json:"archive,omitempty"`
 	Manifest    PluginManifest         `json:"manifest"`
 	Permissions []RepoPluginPermission `json:"permissions"`
 	Files       []string               `json:"files"`
@@ -776,7 +789,10 @@ func isNotFound(err error) bool {
 // 校验通过的是一版，落盘的是另一版；预览看到的和最终安装的也可能不是同一版。
 // 现在只下载一次归档，清单、入口、声明文件和提交 SHA 都出自它。
 type repoPluginSnapshot struct {
-	ref          RepoPluginRef
+	ref RepoPluginRef
+	// origin 是出处标签：仓库地址或「上传的压缩包 x.zip」；archiveName 只在上传安装时非空。
+	origin       string
+	archiveName  string
 	commit       string
 	archive      []byte
 	manifestData []byte
@@ -797,16 +813,33 @@ func (i *RepoPluginInstaller) loadSnapshot(ctx context.Context, rawURL string) (
 		}
 		return repoPluginSnapshot{}, fmt.Errorf("diana: 下载仓库归档失败: %w", err)
 	}
+	snapshot, err := newRepoPluginSnapshot(archive, ref.RepoURL(), "")
+	if err != nil {
+		return repoPluginSnapshot{}, err
+	}
+	if err := checkTagVersion(ref, snapshot.manifest.Version); err != nil {
+		return repoPluginSnapshot{}, err
+	}
+	snapshot.ref = ref
+	return snapshot, nil
+}
+
+// newRepoPluginSnapshot 从一份 GitHub 形态的 tar.gz 里读出并校验清单、入口和声明文件。
+// commit 为空时从归档的 pax 全局头取提交 SHA，取不到就拒绝。
+func newRepoPluginSnapshot(archive []byte, origin, commit string) (repoPluginSnapshot, error) {
 	index, err := readRepoArchiveIndex(archive)
 	if err != nil {
 		return repoPluginSnapshot{}, err
 	}
-	if !gitHubCommitPattern.MatchString(index.commit) {
-		return repoPluginSnapshot{}, ErrRepoPluginCommit
+	if commit == "" {
+		if !gitHubCommitPattern.MatchString(index.commit) {
+			return repoPluginSnapshot{}, ErrRepoPluginCommit
+		}
+		commit = index.commit
 	}
 	manifestData, ok := index.contents[RepoPluginManifestFile]
 	if !ok {
-		return repoPluginSnapshot{}, fmt.Errorf("%w: %s", ErrRepoPluginManifest, ref.RepoURL())
+		return repoPluginSnapshot{}, fmt.Errorf("%w: %s", ErrRepoPluginManifest, origin)
 	}
 	manifestFile, err := decodeRepoPluginManifest(manifestData)
 	if err != nil {
@@ -832,13 +865,9 @@ func (i *RepoPluginInstaller) loadSnapshot(ctx context.Context, rawURL string) (
 	if err := manifestFile.validateBundleArchive(index); err != nil {
 		return repoPluginSnapshot{}, err
 	}
-	manifest := manifestFile.pluginManifest()
-	if err := checkTagVersion(ref, manifest.Version); err != nil {
-		return repoPluginSnapshot{}, err
-	}
 	return repoPluginSnapshot{
-		ref: ref, commit: index.commit, archive: archive,
-		manifestData: manifestData, manifestFile: manifestFile, manifest: manifest, files: files,
+		origin: origin, commit: commit, archive: archive,
+		manifestData: manifestData, manifestFile: manifestFile, manifest: manifestFile.pluginManifest(), files: files,
 	}, nil
 }
 
@@ -907,22 +936,24 @@ func (i *RepoPluginInstaller) Preview(ctx context.Context, rawURL string) (RepoP
 	if err != nil {
 		return RepoPluginPreview{}, err
 	}
-	ref, manifest := snapshot.ref, snapshot.manifest
-	preview := RepoPluginPreview{
-		Source:      ref,
-		Commit:      snapshot.commit,
-		Manifest:    manifest,
-		Permissions: DescribeRepoPluginPermissions(manifest.Permissions),
-		Files:       snapshot.files,
-		Risk: RepoPluginRisk{
-			FloatingRef: strings.TrimSpace(ref.Ref) == "",
-			Warnings:    repoPluginRiskWarnings(),
-		},
-	}
+	preview := snapshot.preview()
+	preview.Risk.FloatingRef = strings.TrimSpace(snapshot.ref.Ref) == ""
 	if preview.Risk.FloatingRef {
 		preview.Risk.Warnings = append(preview.Risk.Warnings, "链接没有固定 tag 或提交，安装的是默认分支当前这一版（"+snapshot.commit[:12]+"）；之后「更新」会拉取届时的最新提交。")
 	}
 	return preview, nil
+}
+
+func (s repoPluginSnapshot) preview() RepoPluginPreview {
+	return RepoPluginPreview{
+		Source:      s.ref,
+		Commit:      s.commit,
+		Archive:     s.archiveName,
+		Manifest:    s.manifest,
+		Permissions: DescribeRepoPluginPermissions(s.manifest.Permissions),
+		Files:       s.files,
+		Risk:        RepoPluginRisk{Warnings: repoPluginRiskWarnings()},
+	}
 }
 
 // repoPluginRiskWarnings 如实说明第三方插件能做什么。
@@ -969,6 +1000,11 @@ func (i *RepoPluginInstaller) InstallGuarded(ctx context.Context, rawURL, expect
 	if expected := strings.ToLower(strings.TrimSpace(expectedCommit)); expected != "" && expected != snapshot.commit {
 		return nil, RepoPluginSource{}, ErrRepoPluginChanged
 	}
+	return i.installSnapshot(snapshot, guard)
+}
+
+// installSnapshot 把校验过的快照落盘成插件目录。guard 在动磁盘之前调用。
+func (i *RepoPluginInstaller) installSnapshot(snapshot repoPluginSnapshot, guard func(PluginManifest) error) (*RepoPlugin, RepoPluginSource, error) {
 	manifest := snapshot.manifest
 	if guard != nil {
 		if err := guard(manifest); err != nil {
@@ -988,7 +1024,7 @@ func (i *RepoPluginInstaller) InstallGuarded(ctx context.Context, rawURL, expect
 		return nil, RepoPluginSource{}, err
 	}
 	if snapshot.manifestFile.hasBundle() {
-		if _, err := agent.LoadPluginSkills(manifest.ID, staging, snapshot.ref.RepoURL(), snapshot.manifestFile.skillRoots(), len(snapshot.manifestFile.Scripts) > 0); err != nil {
+		if _, err := agent.LoadPluginSkills(manifest.ID, staging, snapshot.origin, snapshot.manifestFile.skillRoots(), len(snapshot.manifestFile.Scripts) > 0); err != nil {
 			return nil, RepoPluginSource{}, fmt.Errorf("%w: %v", ErrRepoPluginSkill, err)
 		}
 	}
@@ -1011,8 +1047,11 @@ func (i *RepoPluginInstaller) InstallGuarded(ctx context.Context, rawURL, expect
 		Ref:         snapshot.ref.Ref,
 		Commit:      snapshot.commit,
 		Version:     manifest.Version,
-		URL:         snapshot.ref.RepoURL(),
+		Archive:     snapshot.archiveName,
 		InstalledAt: time.Now(),
+	}
+	if snapshot.archiveName == "" {
+		source.URL = snapshot.ref.RepoURL()
 	}
 	return NewRepoPlugin(target, source, manifest), source, nil
 }

@@ -5,6 +5,7 @@ package webui
 
 import (
 	"archive/tar"
+	"archive/zip"
 	"bytes"
 	"compress/gzip"
 	"context"
@@ -353,5 +354,76 @@ func TestBotHandlerRepoPluginRefusesBuiltInID(t *testing.T) {
 	state, ok := h.runtime.Plugins().Get(assistant.GroupRelationsPluginID)
 	if !ok || !state.Manifest.BuiltIn {
 		t.Fatalf("内置插件被改写: %+v", state.Manifest)
+	}
+}
+
+func TestBotHandlerRepoPluginArchiveInstall(t *testing.T) {
+	h, installer, sources, _, _ := newRepoPluginTestHandler(t, repoPluginManifest(), nil, "HEAD")
+	router := botTestRouter(h)
+	manifestJSON, err := json.Marshal(repoPluginManifest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	for name, body := range map[string]string{"hello/diana.plugin.json": string(manifestJSON), "hello/SKILL.md": repoPluginSkill()} {
+		w, err := zw.Create(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _ = w.Write([]byte(body))
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	archive := buf.Bytes()
+	post := func(path string, body []byte) *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, path, bytes.NewReader(body)))
+		return rec
+	}
+
+	if rec := post("/api/assistant/plugins/repo/archive/preview?filename=bad.zip", []byte("not an archive")); rec.Code != http.StatusBadRequest {
+		t.Fatalf("非压缩包应返回 400: %d %s", rec.Code, rec.Body.String())
+	}
+	rec := post("/api/assistant/plugins/repo/archive/preview?filename=hello.zip", archive)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("preview: %d %s", rec.Code, rec.Body.String())
+	}
+	var preview assistant.RepoPluginPreview
+	if err := json.Unmarshal(rec.Body.Bytes(), &preview); err != nil {
+		t.Fatal(err)
+	}
+	if preview.Archive != "hello.zip" || len(preview.Commit) != 64 {
+		t.Fatalf("preview = %+v", preview)
+	}
+
+	if rec := post("/api/assistant/plugins/repo/archive/install?filename=hello.zip&commit="+preview.Commit, archive); rec.Code != http.StatusBadRequest {
+		t.Fatalf("未确认风险应拒绝: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := post("/api/assistant/plugins/repo/archive/install?filename=hello.zip&accept_risk=true&commit="+strings.Repeat("0", 64), archive); rec.Code != http.StatusConflict {
+		t.Fatalf("摘要不一致应返回 409: %d %s", rec.Code, rec.Body.String())
+	}
+	rec = post("/api/assistant/plugins/repo/archive/install?filename=hello.zip&accept_risk=true&commit="+preview.Commit, archive)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("install: %d %s", rec.Code, rec.Body.String())
+	}
+	source, ok := sources.Get("suink.hello")
+	if !ok || source.Archive != "hello.zip" || source.URL != "" {
+		t.Fatalf("来源记录 = %+v ok=%v", source, ok)
+	}
+	if _, err := os.Stat(filepath.Join(installer.DataDir, "plugin-sources", "suink.hello", "SKILL.md")); err != nil {
+		t.Fatalf("落盘缺少 SKILL.md: %v", err)
+	}
+
+	// 压缩包安装的插件没有远端，更新必须重新上传；同 ID 覆盖仍要显式确认。
+	if rec := post("/api/assistant/plugins/repo/update/suink.hello", []byte(`{"accept_risk":true}`)); rec.Code != http.StatusBadRequest {
+		t.Fatalf("压缩包插件不能按链接更新: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := post("/api/assistant/plugins/repo/archive/install?filename=hello.zip&accept_risk=true&commit="+preview.Commit, archive); rec.Code == http.StatusOK {
+		t.Fatal("未确认覆盖不应重装同 ID 插件")
+	}
+	if rec := post("/api/assistant/plugins/repo/archive/install?filename=hello.zip&accept_risk=true&replace=true&commit="+preview.Commit, archive); rec.Code != http.StatusOK {
+		t.Fatalf("确认覆盖后应可重装: %d %s", rec.Code, rec.Body.String())
 	}
 }

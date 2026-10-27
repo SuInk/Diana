@@ -439,6 +439,8 @@ func (h *BotHandler) registerRoutes(router gin.IRouter, base string) {
 	// 第三方（仓库安装）插件。repo/* 是静态段，gin 里与 :id 参数段共存不冲突。
 	router.POST(base+"/plugins/repo/preview", h.previewRepoPlugin)
 	router.POST(base+"/plugins/repo/install", h.installRepoPlugin)
+	router.POST(base+"/plugins/repo/archive/preview", h.previewRepoPluginArchive)
+	router.POST(base+"/plugins/repo/archive/install", h.installRepoPluginArchive)
 	router.POST(base+"/plugins/repo/update/:id", h.updateRepoPlugin)
 	router.POST(base+"/plugins/music/test", h.testMusicConnections)
 	router.GET(base+"/plugins/vrchat/status", h.vrchatStatus)

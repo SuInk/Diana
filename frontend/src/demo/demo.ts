@@ -1751,6 +1751,32 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
     plugin.repo_source = demoRepoPluginSource;
     return json(demoPluginForProfile(plugin, ""));
   }
+  if (path === "/api/assistant/plugins/repo/archive/preview" && method === "POST") {
+    const filename = url.searchParams.get("filename") ?? "";
+    if (!/\.(zip|tar\.gz|tgz)$/i.test(filename)) return json({ error: "只支持 .zip 或 .tar.gz 格式的插件压缩包" }, 400);
+    return json({
+      ...demoRepoPluginPreview,
+      source: { owner: "", repo: "" },
+      archive: filename,
+      commit: "9b1e4f0c7a2d6e8f3b5c1a9d7e2f4b6c8a0d3e5f7b9c1d3e5f7a9b1c3d5e7f9a",
+      risk: { ...demoRepoPluginPreview.risk, warnings: [...demoRepoPluginPreview.risk.warnings, "压缩包的来源无法由 Diana 核实，请确认它来自你信任的作者；之后要更新，需要重新上传新版压缩包。"] }
+    });
+  }
+  if (path === "/api/assistant/plugins/repo/archive/install" && method === "POST") {
+    if (url.searchParams.get("accept_risk") !== "true") return json({ error: "未确认安装风险" }, 400);
+    let plugin = plugins.find((item) => item.manifest.id === demoRepoPlugin.manifest.id);
+    if (!plugin) {
+      plugin = { ...demoRepoPlugin, profile_enabled: Object.fromEntries((assistantConfig.profiles ?? []).map((profile) => [profile.id!, true])) };
+      plugins = [...plugins, plugin];
+      demoStatus.plugins = plugins;
+    }
+    plugin.installed = true;
+    plugin.repo_source = {
+      id: demoRepoPlugin.manifest.id, owner: "", repo: "", url: "", version: demoRepoPlugin.manifest.version,
+      archive: url.searchParams.get("filename") ?? "plugin.zip", commit: String(url.searchParams.get("commit") ?? ""), installed_at: before(0)
+    };
+    return json(demoPluginForProfile(plugin, ""));
+  }
   if (path.startsWith("/api/assistant/plugins/repo/update/") && method === "POST") {
     const id = decodeURIComponent(path.slice("/api/assistant/plugins/repo/update/".length));
     const plugin = plugins.find((item) => item.manifest.id === id);
