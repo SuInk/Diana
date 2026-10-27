@@ -1,6 +1,9 @@
 package assistant
 
-import "strings"
+import (
+	"regexp"
+	"strings"
+)
 
 type replyDeliveryMode string
 type replyLineBreakMode string
@@ -36,29 +39,65 @@ func consumeReplyDeliveryMode(reply string) (string, replyDeliveryMode) {
 	return body, mode
 }
 
+// 线上模型会把控制标记写歪：单方括号、前缀拼错（DAIAN）、仿照 XML 补一个闭合
+// 标签，或者先写引用/@ 标记再写控制标记。认不出来就会原样发进群里，所以开头和
+// 结尾这两个位置按形态宽松识别；正文中间的仍当普通内容。
+var (
+	replyControlMarkerPattern        = regexp.MustCompile(`^\[\[?\s*/?\s*[A-Z]{4,6}_(REPLY_SINGLE|REPLY_AUTO|LINES_PRESERVE|LINES_COMPACT)\s*\]\]?`)
+	replyClosingControlMarkerPattern = regexp.MustCompile(`\s*\[\[?\s*/\s*[A-Z]{4,6}_(?:REPLY_SINGLE|REPLY_AUTO|LINES_PRESERVE|LINES_COMPACT)\s*\]\]?\s*$`)
+)
+
 func consumeReplyFormatting(reply string) (string, replyDeliveryMode, replyLineBreakMode) {
 	reply = strings.TrimSpace(reply)
+	// 引用和 @ 标记由后面的发送层解析，原样留在最前面。
+	lead := leadingAddressMarkersLength(reply)
+	body := reply[lead:]
 	var mode replyDeliveryMode
 	var lines replyLineBreakMode
+	consumed := false
 	for {
-		switch {
-		case strings.HasPrefix(reply, replyLinesPreserveMarker):
+		match := replyControlMarkerPattern.FindStringSubmatch(body)
+		if match == nil {
+			break
+		}
+		consumed = true
+		switch match[1] {
+		case "LINES_PRESERVE":
 			lines = replyLinesPreserve
-			reply = strings.TrimSpace(strings.TrimPrefix(reply, replyLinesPreserveMarker))
-		case strings.HasPrefix(reply, replyLinesCompactMarker):
+		case "LINES_COMPACT":
 			lines = replyLinesCompact
-			reply = strings.TrimSpace(strings.TrimPrefix(reply, replyLinesCompactMarker))
-		case strings.HasPrefix(reply, replySingleMarker):
+		case "REPLY_SINGLE":
 			mode = replyDeliverySingle
-			reply = strings.TrimSpace(strings.TrimPrefix(reply, replySingleMarker))
-		case strings.HasPrefix(reply, replyAutoMarker):
+		case "REPLY_AUTO":
 			if mode != replyDeliverySingle {
 				mode = replyDeliveryAuto
 			}
-			reply = strings.TrimSpace(strings.TrimPrefix(reply, replyAutoMarker))
-		default:
-			return reply, mode, lines
 		}
+		body = strings.TrimSpace(body[len(match[0]):])
+	}
+	if trimmed := replyClosingControlMarkerPattern.ReplaceAllString(body, ""); trimmed != body {
+		body, consumed = strings.TrimSpace(trimmed), true
+	}
+	if !consumed {
+		return reply, mode, lines
+	}
+	return reply[:lead] + body, mode, lines
+}
+
+// leadingAddressMarkersLength 返回开头连续的引用、@ 标记（含其后空白）的字节长度。
+func leadingAddressMarkersLength(text string) int {
+	offset := 0
+	for {
+		rest := text[offset:]
+		if !strings.HasPrefix(rest, replyMarkerPrefix) && !strings.HasPrefix(rest, dianaMentionMarkerPrefix) {
+			return offset
+		}
+		end := strings.Index(rest, "]")
+		if end < 0 || strings.ContainsAny(rest[1:end], " \t\r\n[") {
+			return offset
+		}
+		offset += end + 1
+		offset += len(rest[end+1:]) - len(strings.TrimLeft(rest[end+1:], " \t\r\n"))
 	}
 }
 

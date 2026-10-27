@@ -30,6 +30,30 @@ func TestReplyDeliveryModeOnlyConsumesLeadingMetadata(t *testing.T) {
 	}
 }
 
+// 线上漏进群里的几种写歪的控制标记。
+func TestReplyDeliveryModeToleratesMalformedMarkers(t *testing.T) {
+	for _, tc := range []struct {
+		input, want string
+		mode        replyDeliveryMode
+	}{
+		{"[DIANA_REPLY_SINGLE]好，以后就短着说", "好，以后就短着说", replyDeliverySingle},
+		{"[DAIAN_REPLY_SINGLE]你问得挺快", "你问得挺快", replyDeliverySingle},
+		{"[DIANA_REPLY_AUTO]行，提示词给你", "行，提示词给你", replyDeliveryAuto},
+		{"[diana-reply:im_message_b3e8][[DIANA_REPLY_AUTO]]对，一层就够了", "[diana-reply:im_message_b3e8]对，一层就够了", replyDeliveryAuto},
+		{"[diana-reply:12345] [diana-at:54321] [DIANA_REPLY_SINGLE]收到", "[diana-reply:12345] [diana-at:54321] 收到", replyDeliverySingle},
+		{replySingleMarker + "灵魂之汁，浇给！[[/DIANA_REPLY_SINGLE]]", "灵魂之汁，浇给！", replyDeliverySingle},
+		{"这盘菜才算彻底入味[[/DIANA_REPLY_SINGLE]]", "这盘菜才算彻底入味", ""},
+		{"[diana-reply:12345]正文", "[diana-reply:12345]正文", ""},
+		{"[搜索 WePlay 参展商]", "[搜索 WePlay 参展商]", ""},
+		{"标记写成 [DIANA_REPLY_SINGLE] 这样", "标记写成 [DIANA_REPLY_SINGLE] 这样", ""},
+	} {
+		text, mode := consumeReplyDeliveryMode(tc.input)
+		if text != tc.want || mode != tc.mode {
+			t.Fatalf("input=%q: text=%q mode=%q", tc.input, text, mode)
+		}
+	}
+}
+
 func TestSingleReplyPreservesLayoutAndCodeButIgnoresBoundaries(t *testing.T) {
 	body := "## 第一天" + notificationLineMarker + "### 上午" + notificationLineMarker + "- 安排" + notificationLineMarker + "  - 补充" + notificationLineMarker + notificationLineMarker + "## 第二天" + notificationLineMarker + "安排" + notificationSplitMarker + "补充" + notificationLineMarker + "```text" + notificationLineMarker + "literal" + notificationLineMarker + notificationLineMarker + "  indentation" + notificationLineMarker + "```"
 	want := restoreExplicitReplyLines(strings.ReplaceAll(body, notificationSplitMarker, notificationLineMarker))

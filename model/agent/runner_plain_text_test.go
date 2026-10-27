@@ -133,3 +133,25 @@ func TestRunnerPlainTextRetryIsBoundedAcrossTools(t *testing.T) {
 		t.Fatalf("response=%#v calls=%d", resp, tool.calls)
 	}
 }
+
+// 续跑后仍是普通文本时沿用补试前那句：线上第二遍会把提示读成「答偏了」，
+// 补一句「更正如下」并写出拼错的控制标记。占位动作没有可沿用的内容。
+func TestRunnerPlainTextRetryKeepsOriginalReply(t *testing.T) {
+	for _, tc := range []struct{ first, second, want string }{
+		{"我这边现在出不了，签发链还没定", "[对方指出我回复的方向不对，更正如下：] [DAIAN_REPLY_SINGLE]你问得挺快", "我这边现在出不了，签发链还没定"},
+		{"[搜索 WePlay 参展商名单]", "暂时没查到完整名单", "暂时没查到完整名单"},
+	} {
+		client := &scriptedClient{responses: []string{tc.first, tc.second}}
+		runner, err := NewRunner(client, Config{MaxSteps: 4}, NewToolRegistry(&recordingSearchTool{}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp, err := runner.Run(context.Background(), Request{Messages: []llm.Message{{Role: llm.RoleUser, Content: "现在能出吗"}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if resp.ModelTurns != 2 || resp.FinishReason != "plain_text" || resp.Text != tc.want {
+			t.Fatalf("first=%q: response=%#v", tc.first, resp)
+		}
+	}
+}

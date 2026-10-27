@@ -233,6 +233,8 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 	protocolRepairs := 0
 	// 普通文本可能只是中间说明（例如「[搜索参展商名单]」），每轮给一次继续机会。
 	plainTextRepaired := false
+	// plainTextBeforeRepair 记下补试前那句普通文本，plainTextRepairTurn 是它所在的模型轮次。
+	plainTextBeforeRepair, plainTextRepairTurn := "", 0
 	// silentContentRepaired 保证「静默却带正文」只打回一次，见 action.Silent 分支。
 	silentContentRepaired := false
 	// detailReviewed 保证联网收尾的细节复核只跑一次，见 reviewUnsupportedDetails。
@@ -519,10 +521,18 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 		}
 		if !ok && !looksLikeAgentAction(lastText) && !plainTextRepaired {
 			plainTextRepaired = true
+			plainTextBeforeRepair, plainTextRepairTurn = action.Content, modelTurns
 			reason := "本次只返回了普通文本，尚未明确完成任务。请检查用户请求和已有工具结果：如果还有未完成的工作，直接调用工具继续，不要只描述准备执行的动作；如果已经完成，请调用 agent_finalize 给出最终答复。不支持原生工具调用时使用 tool 或 final JSON。不要重复已经成功执行的操作。"
 			emitProtocolRepair(ctx, req.Observer, traceID, modelTurns, toolCalls, r.cfg.MaxSteps, reason)
 			messages = appendToolRepair(messages, resp, lastText, reason)
 			continue
+		}
+		// 续跑提示问的是还有没有没做完的事，不是对正文的意见。紧接着又只回普通文本，
+		// 说明没有要补的动作，第二遍只是被提示带偏的改写：线上出过把提示读成「对方
+		// 说我答偏了」，开头补一句「更正如下」，再写出拼错的发送方式标记一起发出去。
+		// 沿用补试前那句，除非它本身只是「[搜索…]」这类占位动作。
+		if !ok && !looksLikeAgentAction(lastText) && plainTextRepaired && modelTurns == plainTextRepairTurn+1 && !plainTextPlaceholder(plainTextBeforeRepair) {
+			action.Content = plainTextBeforeRepair
 		}
 		if (ok && action.Action == "final") || (!ok && !looksLikeAgentAction(lastText)) {
 			feedback, reviewErr := reviewFinish(action.Content, "candidate", true)
@@ -1771,6 +1781,13 @@ func truncateRunes(value string, limit int) string {
 
 // appendToolRepair preserves every original call ID, including skipped parallel calls,
 // so native provider continuation remains valid even when dispatch is rejected.
+// plainTextPlaceholder 认出只有一对方括号包着的动作说明，例如「[搜索 WePlay 参展商名单]」。
+// Diana 自己的引用、@ 和控制标记也是方括号，但后面总跟着正文，不会单独成句。
+func plainTextPlaceholder(text string) bool {
+	text = strings.TrimSpace(text)
+	return strings.HasPrefix(text, "[") && strings.HasSuffix(text, "]") && strings.Count(text, "[") == 1 && strings.Count(text, "]") == 1
+}
+
 func appendToolRepair(messages []llm.Message, resp *llm.GenerateResponse, text, reason string) []llm.Message {
 	if len(resp.ToolCalls) == 0 {
 		messages = appendAssistantEcho(messages, text)
