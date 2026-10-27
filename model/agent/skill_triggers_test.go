@@ -127,14 +127,21 @@ func TestRunnerShipsTriggeredSkillBodyInTrailingUserMessage(t *testing.T) {
 		t.Fatal(err)
 	}
 	messages := client.requests[0].Messages
-	index := -1
+	// 关键词命中的正文逐轮变，跟在历史之后；历史之前的目录里不带它。
+	index, history := -1, -1
 	for i, message := range messages {
-		if strings.Contains(message.Content, "### Available skills") {
+		if strings.Contains(message.Content, "第一步：问清歌名。") {
 			index = i
 		}
+		if strings.Contains(message.Content, "旧问题") {
+			history = i
+		}
+		if strings.Contains(message.Content, "### Available skills") && strings.Contains(message.Content, "第一步") {
+			t.Fatalf("triggered body leaked into the stable catalog: %#v", messages)
+		}
 	}
-	if index < 0 || !strings.Contains(messages[index].Content, "第一步：问清歌名。") {
-		t.Fatalf("触发的正文没进请求: %#v", messages)
+	if index < 0 || index < history {
+		t.Fatalf("触发的正文没进历史之后: %#v", messages)
 	}
 	if messages[index].Role != llm.RoleUser {
 		t.Fatalf("skills 块的 role = %q，应该是 user", messages[index].Role)

@@ -34,8 +34,14 @@ func TestStructuredMemoryBlockExplainsRelativeTime(t *testing.T) {
 		Kind: MemoryKindEpisode, Topic: "用药", Content: "2026-09-22 上午吃了布洛芬", Confidence: 1, Importance: 1,
 		SourceEventTime: time.Now().AddDate(0, 0, -3),
 	}}, 4000)
-	if !strings.Contains(text, structuredMemoryTimeRule) {
-		t.Fatalf("memory block lacks the time rule: %q", text)
+	// 时间规则逐字不变，放在稳定头部；记忆块本身只带数据。
+	if strings.Contains(text, structuredMemoryTimeRule) {
+		t.Fatalf("memory block still repeats the time rule: %q", text)
+	}
+	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	head, _ := runtime.systemPromptPartsWithRelationshipAndAgentTools(MessageEvent{Kind: EventKindGroup, GroupID: "g", UserID: "1"}, nil, false, RelationshipPolicy{}, false, nil)
+	if !strings.Contains(head, structuredMemoryTimeRule) {
+		t.Fatalf("stable head lacks the memory time rule:\n%s", head)
 	}
 }
 

@@ -459,7 +459,7 @@ func TestRunnerPromptKeepsSkillsOutOfStableProtocol(t *testing.T) {
 
 // TestRunnerSkillsCatalogRidesInTrailingBlock 验证目录挂在消息尾部的易变块里，
 // 且当前轮仍是最后一条。
-func TestRunnerSkillsCatalogRidesInTrailingBlock(t *testing.T) {
+func TestRunnerSkillsCatalogSitsBeforeHistory(t *testing.T) {
 	client := &scriptedClient{}
 	registry := NewToolRegistry(&SkillsReadTool{})
 	registry.SetSkills([]SkillMetadata{{Name: "demo-skill", Description: "Use demo.", Path: "/tmp/demo/SKILL.md"}})
@@ -485,12 +485,9 @@ func TestRunnerSkillsCatalogRidesInTrailingBlock(t *testing.T) {
 	if !strings.Contains(messages[catalogIndex].Content, "demo-skill") {
 		t.Fatalf("catalog = %q", messages[catalogIndex].Content)
 	}
-	// 必须排在调用方的人设和历史之后,否则前缀缓存从那里就断了。
-	if catalogIndex <= 2 {
-		t.Fatalf("catalog displaced the caller prefix at %d: %#v", catalogIndex, messages)
-	}
-	if catalogIndex == len(messages)-1 {
-		t.Fatalf("catalog took the current turn slot: %#v", messages)
+	// 目录逐轮不变：排在调用方的人设之后、历史之前，跟着前缀缓存走。
+	if catalogIndex != 2 || !strings.Contains(messages[1].Content, "人设提示词") || !strings.Contains(messages[3].Content, "旧问题") {
+		t.Fatalf("catalog should sit between the persona and history, got %d: %#v", catalogIndex, messages)
 	}
 	if !strings.Contains(messages[len(messages)-1].Content, "【当前需要回复的消息】") {
 		t.Fatalf("current turn is no longer last: %#v", messages)
