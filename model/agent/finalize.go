@@ -96,15 +96,18 @@ func finalizeToolDefinition(imagePending bool, extra ...FinalizeField) llm.ToolD
 var finalizeBuiltinFields = map[string]struct{}{"text": {}, "content": {}, "task_state": {}, "silent": {}, "silent_reason": {}, "claims": {}}
 
 // finalizeAction 把一步里的 send 调用合成内部的 final 动作：几次 send 各成一条消息，
-// 附加字段取第一次填写的值。正文为空且不是图片任务时就是这一轮不说话。调用本身没带
-// 正文时用调用之外的文本——供应商在同一轮里既输出正文又调用工具时就是这个形态。
+// 附加字段取第一次填写的值。正文为空且不是图片任务时就是这一轮不说话。调用里根本没有
+// text 键时用调用之外的文本——供应商在同一轮里既输出正文又调用工具时就是这个形态。
 func finalizeAction(calls []llm.ToolCall, text string) llmAction {
 	action := llmAction{Action: "final"}
-	silentHint := false
+	silentHint, textGiven := false, false
 	var parts []string
 	for _, call := range calls {
 		if body := sendText(call); body != "" {
 			parts = append(parts, body)
+		}
+		if _, ok := call.Arguments["text"].(string); ok {
+			textGiven = true
 		}
 		if silent, _ := call.Arguments["silent"].(bool); silent {
 			silentHint = true
@@ -137,7 +140,9 @@ func finalizeAction(calls []llm.ToolCall, text string) llmAction {
 	}
 	action.Content = strings.Join(parts, "[diana-msg]")
 	// 老协议的 silent=true 不捡信封之外的正文：模型同一轮里随手写的思考不是回复。
-	if action.Content == "" && !silentHint {
+	// send 明确填了 text（哪怕是空串）也不捡：空 text 就是这一轮不说话，协议里也
+	// 告诉了模型调用旁边的正文不会发出，捡回来会把它随手写的判断发进群里。
+	if action.Content == "" && !silentHint && !textGiven {
 		action.Content = strings.TrimSpace(text)
 	}
 	action.Silent = action.Content == "" && action.TaskState == ""

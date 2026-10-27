@@ -82,8 +82,12 @@ func renderedToolCallAction(text string) (llmAction, bool) {
 // 「正文[agent_finalize content="…" render="" silent="false" …/>]」整串发进了群；
 // 也见过只剩一对空标签的「正文[agent_finalize][/agent_finalize]」。方括号、尖括号、
 // 自闭合和闭合标签都认，属性值按引号整体吃掉，免得值里的 ] 或 > 把标签截断。
-// 改名前的 agent_finalize 也认：模型照老历史还会写出旧标签。
-var inlineFinalizeTag = regexp.MustCompile(`(?i)[\[<]\s*/?\s*(?:` + finalizeToolName + `|` + legacyFinalizeToolName + `)\b((?:\s+[A-Za-z_][A-Za-z0-9_]*\s*=\s*(?:"[^"]*"|'[^']*'|[^\s"'\]>/]*))*)\s*/?\s*(?:>\s*\]?|\])`)
+// 改名前的 agent_finalize 照老历史还会写出来，空标签也认；新名 send 是常见英文词，
+// 「点 [Send] 按钮」这种正文不能被剥掉，所以至少要带一个属性才算标签。
+var inlineFinalizeTag = regexp.MustCompile(`(?i)[\[<]\s*/?\s*(?:` + legacyFinalizeToolName + `\b(` + inlineFinalizeAttrs + `*)|` + finalizeToolName + `(` + inlineFinalizeAttrs + `+))\s*/?\s*(?:>\s*\]?|\])`)
+
+// inlineFinalizeAttrs 匹配一个属性，值按引号整体吃掉，免得值里的 ] 或 > 把标签截断。
+const inlineFinalizeAttrs = `(?:\s+[A-Za-z_][A-Za-z0-9_]*\s*=\s*(?:"[^"]*"|'[^']*'|[^\s"'\]>/]*))`
 
 var inlineFinalizeAttr = regexp.MustCompile(`([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'\]>/]*))`)
 
@@ -99,11 +103,16 @@ func StripInlineFinalizeTags(text string) (body string, attrs map[string]string,
 	for _, match := range matches {
 		out.WriteString(text[last:match[0]])
 		last = match[1]
-		if attrs != nil || match[2] < 0 || match[2] == match[3] {
+		// 旧名的属性在第 1 组，新名的在第 2 组。
+		start, end := match[2], match[3]
+		if start < 0 {
+			start, end = match[4], match[5]
+		}
+		if attrs != nil || start < 0 || start == end {
 			continue
 		}
 		attrs = map[string]string{}
-		for _, attr := range inlineFinalizeAttr.FindAllStringSubmatch(text[match[2]:match[3]], -1) {
+		for _, attr := range inlineFinalizeAttr.FindAllStringSubmatch(text[start:end], -1) {
 			attrs[strings.ToLower(attr[1])] = attr[2] + attr[3] + attr[4]
 		}
 	}

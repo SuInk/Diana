@@ -45,12 +45,17 @@ func TestRunnerSilentFinalizeViaNativeToolCall(t *testing.T) {
 	}
 }
 
-// 空 send 不捡信封之外的正文？要捡：工具调用旁边那句才是模型想说的话，供应商
-// 在同一轮里既输出正文又调用工具时就是这个形态。老协议显式 silent=true 时不捡。
-func TestEmptySendPicksTextOutsideTheEnvelopeUnlessSilent(t *testing.T) {
-	action := finalizeAction([]llm.ToolCall{{Name: finalizeToolName, Arguments: map[string]any{"text": ""}}}, "好的")
+// send 里根本没有 text 键时捡信封之外的正文：供应商在同一轮里既输出正文又调用
+// 工具时就是这个形态。明确填了空 text、老协议显式 silent=true 时不捡。
+func TestSendWithoutTextPicksTextOutsideTheEnvelope(t *testing.T) {
+	action := finalizeAction([]llm.ToolCall{{Name: finalizeToolName, Arguments: map[string]any{}}}, "好的")
 	if action.Silent || action.Content != "好的" {
 		t.Fatalf("action = %#v", action)
+	}
+	// 明确填了空 text 就是不说话：旁边随手写的判断不能当回复发进群里。
+	action = finalizeAction([]llm.ToolCall{{Name: finalizeToolName, Arguments: map[string]any{"text": ""}}}, "群友在闲聊，这轮不用插话。")
+	if !action.Silent || action.Content != "" {
+		t.Fatalf("empty text action = %#v", action)
 	}
 	action = finalizeAction([]llm.ToolCall{{Name: finalizeToolName, Arguments: map[string]any{"content": "", "silent": true}}}, "（我觉得这里不用再说什么了）")
 	if !action.Silent || action.Content != "" {

@@ -185,3 +185,21 @@ func TestInlineFinalizeTagsWrappingEnvelope(t *testing.T) {
 		t.Fatalf("sticker envelope => ok=%v %#v", ok, action)
 	}
 }
+
+// send 是常见英文词：正文里的 [Send]、<send> 不是收尾标签，不能剥掉；带属性的
+// send 标签和旧名 agent_finalize 的空标签照常认。
+func TestInlineFinalizeTagNeedsAttributesForSend(t *testing.T) {
+	for _, text := range []string{"点右下角的 [Send] 按钮", "写个 <send> 元素", "看 [Send](https://example.com)"} {
+		if body, _, ok := StripInlineFinalizeTags(text); ok || body != text {
+			t.Fatalf("%q => body=%q ok=%v", text, body, ok)
+		}
+	}
+	body, attrs, ok := StripInlineFinalizeTags(`晚安[send text="晚安" sticker="挥手"/]`)
+	if !ok || body != "晚安" || attrs["sticker"] != "挥手" {
+		t.Fatalf("send tag => body=%q attrs=%v ok=%v", body, attrs, ok)
+	}
+	body, _, ok = StripInlineFinalizeTags("懂了[agent_finalize][/agent_finalize]")
+	if !ok || body != "懂了" {
+		t.Fatalf("legacy empty tags => body=%q ok=%v", body, ok)
+	}
+}
