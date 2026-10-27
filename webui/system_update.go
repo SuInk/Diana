@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -1093,7 +1094,7 @@ func (h *SystemUpdateHandler) changelogList(c *gin.Context) {
 	h.changelog.mu.Unlock()
 
 	payload := gin.H{"repo": owner + "/" + repo}
-	cacheKeyReleases := fmt.Sprintf("%s/%s?per_page=%d", strings.TrimSpace(owner), strings.TrimSpace(repo), 10)
+	cacheKeyReleases := fmt.Sprintf("%s/%s?per_page=%d", strings.TrimSpace(owner), strings.TrimSpace(repo), 30)
 	releases, cached := h.cachedReleases(cacheKeyReleases, h.currentTime(), true)
 	if !cached {
 		h.releaseCacheMu.RLock()
@@ -1102,18 +1103,16 @@ func (h *SystemUpdateHandler) changelogList(c *gin.Context) {
 		prefix := strings.TrimSpace(owner) + "/" + strings.TrimSpace(repo) + "?"
 		if strings.HasPrefix(shared.Key, prefix) && !shared.FetchedAt.IsZero() {
 			releases = releaseEntriesFromCache(shared.Releases)
-			if len(releases) > 10 {
-				releases = releases[:10]
-			}
 			cached = true
 		}
 	}
 	var err error
 	if !cached && strings.TrimSpace(h.githubAPIBase) != "" {
-		releases, err = h.githubReleases(c.Request.Context(), owner, repo, 10)
+		releases, err = h.githubReleases(c.Request.Context(), owner, repo, 30)
 	} else if !cached && strings.EqualFold(owner, defaultReleaseOwner) && strings.EqualFold(repo, defaultReleaseRepo) {
 		releases, err = h.fetchStaticReleaseManifest(c.Request.Context())
 	}
+	releases = newestReleasesFirst(releases, 10)
 	if !cached && len(releases) == 0 && err == nil {
 		err = errors.New("尚无版本历史缓存，请点击检查更新")
 	}
@@ -1186,6 +1185,18 @@ func deploymentMode(gitAvailable bool) string {
 		return "git"
 	}
 	return "release"
+}
+
+// newestReleasesFirst 按发布时间倒序后截取前 limit 个。GitHub 列表接口对同一版本核心的
+// 预发布按字符串排序（canary.9 排在 canary.12 前面），直接截前 10 个会把最新的 Canary
+// 挤到后面甚至截掉，所以要多拉一页再自己排。
+func newestReleasesFirst(releases []ReleaseEntry, limit int) []ReleaseEntry {
+	sorted := slices.Clone(releases)
+	slices.SortStableFunc(sorted, func(a, b ReleaseEntry) int { return b.Date.Compare(a.Date) })
+	if len(sorted) > limit {
+		sorted = sorted[:limit]
+	}
+	return sorted
 }
 
 func latestStableRelease(releases []ReleaseEntry) ReleaseEntry {

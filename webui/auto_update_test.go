@@ -4,6 +4,8 @@
 package webui
 
 import (
+	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -67,6 +69,50 @@ func TestChangelogPrefersReleases(t *testing.T) {
 	}
 	if strings.Contains(body, "v1.2.0-draft") {
 		t.Fatalf("draft release leaked: %s", body)
+	}
+}
+
+// TestChangelogOrdersReleasesByPublishTime 复现 GitHub 把 canary.2 排在 canary.12 前面的返回顺序，
+// 版本历史要按发布时间倒序，且最新的那个不能因为只取前 10 个被截掉。
+func TestChangelogOrdersReleasesByPublishTime(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	var perPage string
+	github := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		perPage = r.URL.Query().Get("per_page")
+		var items []string
+		for _, n := range []int{9, 8, 7, 6, 5, 4, 3, 2, 12, 11, 10, 1} {
+			items = append(items, fmt.Sprintf(`{"tag_name":"v1.1.0-canary.%d","prerelease":true,"published_at":"2026-07-26T%02d:00:00Z"}`, n, n))
+		}
+		_, _ = w.Write([]byte("[" + strings.Join(items, ",") + "]"))
+	}))
+	defer github.Close()
+
+	handler := NewSystemUpdateHandler(fakeSystemUpdater{status: updater.Status{RemoteURL: "git@github.com:SuInk/diana.git"}})
+	handler.githubAPIBase = github.URL
+	router := gin.New()
+	handler.Register(router)
+
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/system/update/changelog", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("changelog = %d: %s", rec.Code, rec.Body.String())
+	}
+	if perPage != "30" {
+		t.Fatalf("per_page = %q, want 30", perPage)
+	}
+	var payload struct {
+		Releases []ReleaseEntry `json:"releases"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	var tags []string
+	for _, release := range payload.Releases {
+		tags = append(tags, strings.TrimPrefix(release.Tag, "v1.1.0-"))
+	}
+	want := "canary.12 canary.11 canary.10 canary.9 canary.8 canary.7 canary.6 canary.5 canary.4 canary.3"
+	if got := strings.Join(tags, " "); got != want {
+		t.Fatalf("order = %s\nwant  = %s", got, want)
 	}
 }
 
