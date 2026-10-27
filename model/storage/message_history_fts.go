@@ -278,7 +278,17 @@ func (s *SQLiteStore) messageHistoryFTSCleanupPending(ctx context.Context) bool 
 	}
 	var done bool
 	ok, err := s.loadJSON(ctx, messageHistoryFTSCleanupKey, &done)
-	return err == nil && (!ok || !done)
+	if err != nil || (ok && done) {
+		return false
+	}
+	// 新库、或索引里本来就没有旧 token 的库，直接记为做完，不必再起定时器。
+	var rowID int64
+	err = s.db.QueryRowContext(ctx, `SELECT rowid FROM `+messageHistoryFTSTable+` WHERE `+messageHistoryFTSTable+` MATCH ? LIMIT 1`,
+		messageHistoryFTSCleanupMatch).Scan(&rowID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return s.saveJSON(ctx, messageHistoryFTSCleanupKey, true) != nil
+	}
+	return true
 }
 
 // cleanupMessageHistoryFTSBatch 按旧规则重建一批索引行，返回下一批的游标和是否已做完。

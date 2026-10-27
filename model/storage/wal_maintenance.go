@@ -56,6 +56,9 @@ func (s *SQLiteStore) startWALMaintenance() {
 	ctx, cancel := context.WithCancel(context.Background())
 	s.walCancel = cancel
 	s.walDone = make(chan struct{})
+	// 是否要重建存量索引在这里同步判断：它读 historyFTS 和慢日志配置，放进 goroutine
+	// 就和 NewSQLiteStore 返回后的调用方并发了。
+	cleanupPending := s.messageHistoryFTSCleanupPending(ctx)
 	go func() {
 		defer recoverGoroutinePanic("wal_maintenance")
 		defer close(s.walDone)
@@ -64,7 +67,7 @@ func (s *SQLiteStore) startWALMaintenance() {
 		// 存量检索索引去控制标记（见 message_history_fts.go）也搭这个 goroutine：做完
 		// 就把 ticker 停掉，此后不再占任何时间。
 		var cleanup <-chan time.Time
-		if s.messageHistoryFTSCleanupPending(ctx) {
+		if cleanupPending {
 			cleanupTicker := time.NewTicker(messageHistoryFTSCleanupInterval)
 			defer cleanupTicker.Stop()
 			cleanup = cleanupTicker.C

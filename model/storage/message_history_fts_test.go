@@ -278,7 +278,14 @@ func TestMessageHistoryFTSCleanupRebuildsLegacyRows(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	// 模拟升级前的索引：按旧规则把整段正文原样切词。
+	// 新库的索引本来就按新规则切，启动时直接记为做完，不起清理定时器。
+	if store.messageHistoryFTSCleanupPending(ctx) {
+		t.Fatal("fresh index should not need cleanup")
+	}
+	// 模拟升级前的库：没有完成标记，索引按旧规则把整段正文原样切词。
+	if _, err := store.db.Exec(`DELETE FROM app_state WHERE key = ?`, messageHistoryFTSCleanupKey); err != nil {
+		t.Fatal(err)
+	}
 	rows, err := store.db.Query(`SELECT rowid, COALESCE(sender_name, ''), COALESCE(user_id, ''), COALESCE(text, ''), COALESCE(search_extra, '') FROM message_events`)
 	if err != nil {
 		t.Fatal(err)
