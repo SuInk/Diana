@@ -11,7 +11,18 @@ import (
 	"github.com/SuInk/diana/model/llm"
 )
 
-const finalizeToolName = "agent_finalize"
+// finalizeToolName 是模型说话的唯一出口。一步里只有 send 时这几条就是本轮的
+// 回复，本轮结束；和别的工具同一步发来时，它是动手前那句「我去查一下」，立刻发出、
+// 本轮继续（Config.Interim）。正文留空就是这一轮不说话。
+//
+// 以前说话分成 say（中途一句）和 agent_finalize（收尾，带 silent/silent_reason）。
+// 10-27 用 gpt-6.1-sol 回放 36 条生产首步：把收尾改成「纯文本即结束、只有静默才调
+// agent_finalize」时静默从 3 翻到 6——提示词把「静默」单独摆出来，模型一调收尾工具
+// 就倾向于选它；合成一个 send、空正文即静默后是 2 对 1，工具调用 11 对 14。
+const finalizeToolName = "send"
+
+// legacyFinalizeToolName 是改名前的收尾工具，只用来认出老历史和文本里的信封。
+const legacyFinalizeToolName = "agent_finalize"
 
 // FinalizeToolName 供调用方引用：CoreTools 只填它，就是「除收尾外全部按需加载」。
 const FinalizeToolName = finalizeToolName
@@ -31,26 +42,38 @@ func findFinalizeCall(calls []llm.ToolCall) (llm.ToolCall, bool) {
 	return llm.ToolCall{}, false
 }
 
-// finalizeToolDefinition 构造本轮的结构化收尾工具。content 必填：部分供应商在调用
-// 工具的同一轮里不会输出普通文本，正文若允许留在信封之外，就会出现完全为空的
-// 收尾（见 errEmptyFinalize）。Runner 解码时仍接受写在调用之外的正文作为兼容。
+// onlySendCalls 报告这一步是不是只调了 send：是就收尾，否则 send 是中途发言。
+func onlySendCalls(calls []llm.ToolCall) bool {
+	for _, call := range calls {
+		if call.Name != finalizeToolName {
+			return false
+		}
+	}
+	return len(calls) > 0
+}
+
+// sendText 取出一次 send 调用的正文；老会话历史里的 content 也认。
+func sendText(call llm.ToolCall) string {
+	for _, key := range []string{"text", "content"} {
+		if text, ok := call.Arguments[key].(string); ok && strings.TrimSpace(text) != "" {
+			return strings.TrimSpace(text)
+		}
+	}
+	return ""
+}
+
+// finalizeToolDefinition 构造本轮的 send 工具。text 必填：部分供应商在调用工具的
+// 同一轮里不会输出普通文本，正文若允许留在信封之外，就会出现完全为空的收尾（见
+// errEmptyFinalize）。Runner 解码时仍接受写在调用之外的正文作为兼容。
 //
-// silent 是唯一一条「这一轮什么都不发」的正路。此前模型想闭嘴只能走
-// [[DIANA_REFUSE_CURRENT]]，那是拒答：仍然发一句看得见的话，还要计进拒答次数。
-// 「我这轮没什么要补的」和「我拒绝回答」是两件事，必须分开表达，否则模型只能在
-// 「硬凑一句」和「被记一次拒答」之间挑一个。silent 是工具调用上的字段，用户消息
-// 里写什么都到不了这里。
-//
-// 参数说明里压成短句的几条都是事故规则：「勿写成 JSON」防整个信封被当正文发出（见 finalizeEnvelopeFromText）；「工具调用旁
-// 的正文不算说过」防模型以为已说过而静默吞掉回复（#912）；「拒绝要说出来」防把拒答
-// 伪装成 silent（8c693bbd）。
+// 参数说明里压成短句的几条都是事故规则：「勿写成 JSON」防整个信封被当正文发出（见
+// finalizeEnvelopeFromText）；「工具调用旁的正文不会发出」防模型以为已说过而吞掉回复
+// （#912）；「拒绝要说出来」防把拒答伪装成不说话（8c693bbd）。
 func finalizeToolDefinition(imagePending bool, extra ...FinalizeField) llm.ToolDefinition {
 	properties := map[string]any{
-		"content":       toolStringParam("正文，按会话要求附链接；silent空；勿写JSON"),
-		"silent":        toolBoolParam("true 则本轮不发消息。仅无话可说或已道别时用，拒绝要说出来；工具调用旁的正文不算说过"),
-		"silent_reason": toolStringParam("不回复的原因，只进日志"),
+		"text": toolStringParam("正文，按会话要求附链接；勿写JSON。这一轮不说话就留空，拒绝要说出来"),
 	}
-	required := []string{"content"}
+	required := []string{"text"}
 	// Runtime guards enforce conditional requirements without mutating schemas.
 	properties["task_state"] = toolEnumParam("图片任务 queued 后必须填 pending", imageTaskPendingState)
 	for _, field := range extra {
@@ -61,62 +84,64 @@ func finalizeToolDefinition(imagePending bool, extra ...FinalizeField) llm.ToolD
 	}
 	return llm.ToolDefinition{
 		Name:        finalizeToolName,
-		Description: "提交最终答复。联网调研正文附实际来源链接；用户或会话明确禁用链接时不附。按原说法的实际条件核对外部事实是否被已读原文直接支持；不要添加条件来赞同原说法，发现冲突先纠正，证据缺口继续核对或限定对应事实。目录、搜索摘要、页面没有提及均不证明功能存在或不存在，缺证据只说本次未确认。不能补出未读到的工具名、委托或并发机制。具体技术、项目能力、版本与价格先搜索核实。未读取自身项目实现时，架构建议写成条件。",
+		Description: "发消息给对方，立刻发出。只调 send 就结束本轮；和其他工具同一步调用时，是动手前说的一句「我去查一下」，本轮继续，说了去做就必须真的做。工具调用旁的正文不会发出，要说的话都写进 send。联网调研正文附实际来源链接；用户或会话明确禁用链接时不附。按原说法的实际条件核对外部事实是否被已读原文直接支持；不要添加条件来赞同原说法，发现冲突先纠正，证据缺口继续核对或限定对应事实。目录、搜索摘要、页面没有提及均不证明功能存在或不存在，缺证据只说本次未确认。不能补出未读到的工具名、委托或并发机制。具体技术、项目能力、版本与价格先搜索核实。未读取自身项目实现时，架构建议写成条件。",
 		Parameters:  toolObjectSchema(required, properties),
 		// 畸形的收尾是唯一一种必然要花掉一整轮修复的协议错误，值得在解码层约束。
 		Strict: true,
 	}
 }
 
-// finalizeBuiltinFields 是信封自带的字段；调用方追加的字段不能和它们重名。
-var finalizeBuiltinFields = map[string]struct{}{"content": {}, "task_state": {}, "silent": {}, "silent_reason": {}, "claims": {}}
+// finalizeBuiltinFields 是信封自带的字段；调用方追加的字段不能和它们重名。content、
+// silent、silent_reason 是改名前 agent_finalize 的字段，老历史和文本信封里还会出现。
+var finalizeBuiltinFields = map[string]struct{}{"text": {}, "content": {}, "task_state": {}, "silent": {}, "silent_reason": {}, "claims": {}}
 
-// finalizeAction 把原生 agent_finalize 调用转成内部的 final 动作。工具调用本身
-// 没带 content 时用调用之外的文本作为回复——供应商在同一轮里既输出正文又调用
-// 工具时就是这个形态。
-func finalizeAction(call llm.ToolCall, text string) llmAction {
+// finalizeAction 把一步里的 send 调用合成内部的 final 动作：几次 send 各成一条消息，
+// 附加字段取第一次填写的值。正文为空且不是图片任务时就是这一轮不说话。调用本身没带
+// 正文时用调用之外的文本——供应商在同一轮里既输出正文又调用工具时就是这个形态。
+func finalizeAction(calls []llm.ToolCall, text string) llmAction {
 	action := llmAction{Action: "final"}
-	if len(call.Arguments) > 0 {
-		var payload struct {
-			Content      string `json:"content"`
-			TaskState    string `json:"task_state"`
-			Silent       bool   `json:"silent"`
-			SilentReason string `json:"silent_reason"`
+	silentHint := false
+	var parts []string
+	for _, call := range calls {
+		if body := sendText(call); body != "" {
+			parts = append(parts, body)
 		}
-		if raw, err := json.Marshal(call.Arguments); err == nil {
-			_ = json.Unmarshal(raw, &payload)
+		if silent, _ := call.Arguments["silent"].(bool); silent {
+			silentHint = true
 		}
-		action.Content = strings.TrimSpace(payload.Content)
-		action.TaskState = strings.TrimSpace(payload.TaskState)
-		action.Silent = payload.Silent
-		action.SilentReason = strings.TrimSpace(payload.SilentReason)
+		if reason, _ := call.Arguments["silent_reason"].(string); action.SilentReason == "" {
+			action.SilentReason = strings.TrimSpace(reason)
+		}
 		for key, value := range call.Arguments {
-			text, isString := value.(string)
-			if _, builtin := finalizeBuiltinFields[key]; builtin || !isString || strings.TrimSpace(text) == "" {
+			value, isString := value.(string)
+			value = strings.TrimSpace(value)
+			if !isString || value == "" {
+				continue
+			}
+			if key == "task_state" {
+				if action.TaskState == "" {
+					action.TaskState = value
+				}
+				continue
+			}
+			if _, builtin := finalizeBuiltinFields[key]; builtin {
 				continue
 			}
 			if action.Fields == nil {
 				action.Fields = map[string]string{}
 			}
-			action.Fields[key] = strings.TrimSpace(text)
+			if _, set := action.Fields[key]; !set {
+				action.Fields[key] = value
+			}
 		}
 	}
-	// 静默收尾不捡信封之外的正文：模型同一轮里随手写的思考不是这轮的回复，
-	// 捡回来就等于把它当成正文发出去，静默也就失效了。
-	if action.Content == "" && !action.Silent {
+	action.Content = strings.Join(parts, "[diana-msg]")
+	// 老协议的 silent=true 不捡信封之外的正文：模型同一轮里随手写的思考不是回复。
+	if action.Content == "" && !silentHint {
 		action.Content = strings.TrimSpace(text)
 	}
+	action.Silent = action.Content == "" && action.TaskState == ""
 	return action
-}
-
-// saidThisRun 报告这一轮有没有成功调用过 say（assistant 注册的中途发言工具）。
-func saidThisRun(steps []Step) bool {
-	for _, step := range steps {
-		if step.Tool == "say" && !step.Skipped && step.Error == "" {
-			return true
-		}
-	}
-	return false
 }
 
 // turnDefinitions is independent of loaded tools, claim IDs, sources and image state.
@@ -129,7 +154,7 @@ func (r *Runner) turnDefinitions(imagePending bool) []llm.ToolDefinition {
 	return append(definitions, finalizeToolDefinition(imagePending, r.cfg.FinalizeFields...))
 }
 
-// finalizeEnvelopeFromText 把「正文位置上的 agent_finalize 信封」当成收尾动作。
+// finalizeEnvelopeFromText 把「正文位置上的收尾信封」当成收尾动作。
 //
 // 模型偶尔不走 function calling，而是直接把 {"content":...,"silent":false,...}
 // 当普通文本输出。原来这段文本既不含 "action" 也不含 "tool"，looksLikeAgentAction
@@ -148,7 +173,10 @@ func finalizeEnvelopeFromText(text string) (llmAction, bool) {
 	if err := decoderFromString(candidate).Decode(&fields); err != nil {
 		return llmAction{}, false
 	}
-	raw, ok := fields["content"]
+	raw, ok := fields["text"]
+	if !ok {
+		raw, ok = fields["content"]
+	}
 	if !ok {
 		return llmAction{}, false
 	}
@@ -161,17 +189,17 @@ func finalizeEnvelopeFromText(text string) (llmAction, bool) {
 		if _, envelope := finalizeBuiltinFields[key]; !envelope {
 			return llmAction{}, false
 		}
-		if key != "content" {
+		if key != "content" && key != "text" {
 			extras++
 		}
 	}
 	if extras == 0 {
-		// 只有 content 一个键时无从判断是信封还是用户要的 JSON，交给原路径。
+		// 只有正文一个键时无从判断是信封还是用户要的 JSON，交给原路径。
 		return llmAction{}, false
 	}
 	arguments := map[string]any{}
 	if err := decoderFromString(candidate).Decode(&arguments); err != nil {
 		return llmAction{}, false
 	}
-	return finalizeAction(llm.ToolCall{Name: finalizeToolName, Arguments: arguments}, ""), true
+	return finalizeAction([]llm.ToolCall{{Name: finalizeToolName, Arguments: arguments}}, ""), true
 }

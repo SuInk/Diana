@@ -458,7 +458,7 @@ func traceReplayPair(original llm.GenerateRequest) ([2]llm.GenerateRequest, []st
 			return fail("unsupported message role")
 		}
 	}
-	if len(original.Tools) == 0 || !strings.Contains(original.Messages[0].Content, "agent_finalize") {
+	if len(original.Tools) == 0 || !strings.Contains(original.Messages[0].Content, "send") {
 		return fail("expected the production Agent protocol and trace tool definitions")
 	}
 	// Trace JSON omits priority, atomicity, grouping and cache/continuation metadata.
@@ -550,7 +550,7 @@ func traceReplayPair(original llm.GenerateRequest) ([2]llm.GenerateRequest, []st
 
 func traceReplayResultKind(response *llm.GenerateResponse) string {
 	for _, call := range response.ToolCalls {
-		if call.Name != "agent_finalize" {
+		if call.Name != "send" {
 			continue
 		}
 		content, _ := call.Arguments["content"].(string)
@@ -567,8 +567,8 @@ func traceReplayResultKind(response *llm.GenerateResponse) string {
 }
 
 func traceReplayFixture() llm.GenerateRequest {
-	return llm.GenerateRequest{Model: "trace-model", Tools: []llm.ToolDefinition{{Name: "agent_finalize", Parameters: map[string]any{"type": "object"}}}, Messages: []llm.Message{
-		{Role: llm.RoleSystem, Content: "Fixed agent_finalize protocol.\n\n" + traceReplayContracts + `[{"name":"fixture_lookup","description":"inert fixture","inputSchema":{"type":"object"}}]`},
+	return llm.GenerateRequest{Model: "trace-model", Tools: []llm.ToolDefinition{{Name: "send", Parameters: map[string]any{"type": "object"}}}, Messages: []llm.Message{
+		{Role: llm.RoleSystem, Content: "Fixed send protocol.\n\n" + traceReplayContracts + `[{"name":"fixture_lookup","description":"inert fixture","inputSchema":{"type":"object"}}]`},
 		{Role: llm.RoleSystem, Content: "Fixed persona.\n\n" + replyPresentationPrompt(true) + "\n\nFixed closing."},
 		{Role: llm.RoleUser, Content: traceReplaySummary + "Synthetic earlier notes."},
 		{Role: llm.RoleUser, Content: "Synthetic fixed history."},
@@ -628,7 +628,7 @@ func TestGroupPromptTraceReplayPlacement(t *testing.T) {
 		func(r *llm.GenerateRequest) { r.Messages[4].ToolCalls = []llm.ToolCall{{Name: "fixture_lookup"}} },
 		func(r *llm.GenerateRequest) { r.Messages[4].Content = "[platform tool Agent protocol payload omitted]" },
 		func(r *llm.GenerateRequest) { r.Messages[1].Content = "custom presentation cannot be guessed" },
-		func(r *llm.GenerateRequest) { r.Messages[0].Content = "agent_finalize\n" + traceReplayContracts + "[{" },
+		func(r *llm.GenerateRequest) { r.Messages[0].Content = "send\n" + traceReplayContracts + "[{" },
 	} {
 		request := traceReplayFixture()
 		mutate(&request)
@@ -834,7 +834,7 @@ func TestGroupPromptTraceReplayHTTPBudget(t *testing.T) {
 	if traceReplayResultKind(response) != "tool_call_not_executed" {
 		t.Fatal("tool response misclassified")
 	}
-	response.ToolCalls = []llm.ToolCall{{Name: "agent_finalize", Arguments: map[string]any{}}}
+	response.ToolCalls = []llm.ToolCall{{Name: "send", Arguments: map[string]any{}}}
 	if traceReplayResultKind(response) != "invalid_finalize" {
 		t.Fatal("empty finalize accepted")
 	}

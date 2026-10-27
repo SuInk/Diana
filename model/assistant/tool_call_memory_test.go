@@ -25,7 +25,7 @@ func TestReplyToolCallsSurviveRestartViaHistory(t *testing.T) {
 		{Tool: "browser_render", Input: map[string]any{"url": "https://ai.google.dev/"}, Error: "timeout"},
 		{Tool: "chat_history", Skipped: true},
 		{Tool: "tools_load", Input: map[string]any{"names": []string{"unexecuted"}}},
-		{Tool: "agent_finalize", Input: map[string]any{"content": "回复正文"}},
+		{Tool: "send", Input: map[string]any{"content": "回复正文"}},
 	})
 	runtime.rememberOutgoingWithMessageID(ctx, source, OutgoingMessage{Text: "主流 MoE 有 DeepSeek、Mixtral。"}, "reply-1")
 	runtime.rememberOutgoingWithMessageID(ctx, source, OutgoingMessage{Text: "第二段。"}, "reply-2")
@@ -58,7 +58,7 @@ func TestReplyToolCallsSurviveRestartViaHistory(t *testing.T) {
 			t.Fatalf("note missing %q:\n%s", want, note)
 		}
 	}
-	for _, unwanted := range []string{"chat_history", "agent_finalize", "tools_load", "unexecuted", "回复正文"} {
+	for _, unwanted := range []string{"chat_history", "send", "tools_load", "unexecuted", "回复正文"} {
 		if strings.Contains(note, unwanted) {
 			t.Fatalf("note should not include %q:\n%s", unwanted, note)
 		}

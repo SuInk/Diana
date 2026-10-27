@@ -14,10 +14,11 @@ import (
 // 一轮里中途说一句：先说「我去查一下」，接着真的去查，查完再给结果；长任务每做完
 // 一段报一次进度。
 //
-// 以前一轮只在 agent_finalize 那一下发话，工具调用旁边的文字不会发出去。于是模型要么
+// 以前一轮只在收尾那一下发话，工具调用旁边的文字不会发出去。于是模型要么
 // 闷头跑完十几步才开口（群里看着像没反应），要么先回一句「我去查」就收工——这句话发
 // 出去，这一轮也结束了，承诺的「查」从没发生。这个工具把「说」和「结束」分开：说完
-// 这一轮照常继续。
+// 这一轮照常继续。现在它不再单独暴露给模型：send 和其他工具同一步调用时由
+// agent.Config.Interim 转到这里，名字和描述只留给测试与日志。
 //
 // 它不是分条发答案用的：一轮最多 interimMessageMaxPerTurn 次，每次一句短话。中途的话
 // 不过发送前审核（那要多等一次模型，「我去查一下」用不着），靠长度和次数兜着。
@@ -92,7 +93,7 @@ func (t *dianaInterimMessageTool) Description() string {
 	// 模型 say 完「我去查」就直接收尾，或把工具调用旁的正文当成已发出。
 	return fmt.Sprintf(`立刻发一句话且本轮不结束，用于动手前说「我去查一下」或长任务报进度。`+
 		`说了去做就必须接着调工具真的做，不能说完就收工。不用来拆分答案：每轮最多 %d 次，每次≤%d 字。`+
-		`说过的话 agent_finalize 不要重复，都说完就 silent=true。只有调了本工具才算说过，工具调用旁的正文不会发出。`, interimMessageMaxPerTurn, interimMessageMaxRunes)
+		`说过的话最后不要重复，都说完就 send 空正文。只有调了本工具才算说过，工具调用旁的正文不会发出。`, interimMessageMaxPerTurn, interimMessageMaxRunes)
 }
 
 func (t *dianaInterimMessageTool) InputSchema() map[string]any {
@@ -118,7 +119,7 @@ func (t *dianaInterimMessageTool) Run(ctx context.Context, input map[string]any)
 		return "", fmt.Errorf("一次只说一句，不要换行或分条")
 	}
 	if n := len([]rune(text)); n > interimMessageMaxRunes {
-		return "", fmt.Errorf("这句有 %d 字，超过中途发言上限 %d 字；答案本身写进 agent_finalize", n, interimMessageMaxRunes)
+		return "", fmt.Errorf("这句有 %d 字，超过中途发言上限 %d 字；答案本身最后单独 send", n, interimMessageMaxRunes)
 	}
 	ledger, ok := ctx.Value(interimMessageContextKey{}).(*interimMessageLedger)
 	if !ok {
@@ -127,7 +128,7 @@ func (t *dianaInterimMessageTool) Run(ctx context.Context, input map[string]any)
 	ledger.mu.Lock()
 	if len(ledger.sent) >= interimMessageMaxPerTurn {
 		ledger.mu.Unlock()
-		return marshalInterimMessageResult(interimMessageResult{Message: fmt.Sprintf("这一轮已经中途说过 %d 次，不能再说了；继续做完，把结果写进 agent_finalize。", interimMessageMaxPerTurn)})
+		return marshalInterimMessageResult(interimMessageResult{Message: fmt.Sprintf("这一轮已经中途说过 %d 次，不能再说了；继续做完，最后单独 send 结果。", interimMessageMaxPerTurn)})
 	}
 	ledger.mu.Unlock()
 
@@ -151,7 +152,7 @@ func (t *dianaInterimMessageTool) Run(ctx context.Context, input map[string]any)
 		OK:        true,
 		Sent:      text,
 		Remaining: remaining,
-		Message:   "已经发出去了，对方看得到。接着调用工具把事情做完；最后 agent_finalize 只写还没说过的内容，都说完了就 silent=true。",
+		Message:   "已经发出去了，对方看得到。接着调用工具把事情做完；最后单独 send 还没说过的内容，都说完了就 send 空正文。",
 	})
 }
 

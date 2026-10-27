@@ -38,7 +38,7 @@ type entry struct {
 	} `json:"metadata"`
 }
 
-var runnerTools = map[string]bool{"tools_load": true, "tools_execute": true, "agent_finalize": true}
+var runnerTools = map[string]bool{"tools_load": true, "tools_execute": true, "agent_finalize": true, "send": true}
 
 func main() {
 	id := flag.String("id", "", "case id (defaults to the message directory name)")

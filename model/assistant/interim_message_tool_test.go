@@ -76,12 +76,12 @@ func TestInterimMessageToolLimits(t *testing.T) {
 	}
 }
 
-// 整轮走一遍：先说「我去查」，再给结果，两条都发出去。
+// 整轮走一遍：send 和工具同一步先说「我去查」，再只 send 结果，两条都发出去。
 func TestReplyTurnSendsInterimThenFinal(t *testing.T) {
 	channel := &recordingChannel{}
 	provider := &sequenceLLMProvider{replies: []string{
-		`{"action":"tool","tool":"say","input":{"text":"我去查一下。"}}`,
-		`{"action":"final","content":"查到了，是上次没退干净的进程占着。"}`,
+		`tool_calls:[{"id":"s1","name":"send","arguments":{"text":"我去查一下。"}},{"id":"t1","name":"tool_search","arguments":{"query":"端口"}}]`,
+		`tool_calls:[{"id":"s2","name":"send","arguments":{"text":"查到了，是上次没退干净的进程占着。"}}]`,
 	}}
 	runtime := interimTestRuntime(channel, provider)
 	event := interimTestEvent()
@@ -98,13 +98,13 @@ func TestReplyTurnSendsInterimThenFinal(t *testing.T) {
 // 中途已经把话说完了：收尾静默，不补「没有生成有效回复」，也不把同一句再发一遍。
 func TestReplyTurnAfterInterimNeedsNoFinalText(t *testing.T) {
 	for name, final := range map[string]string{
-		"静默收尾":   `{"action":"final","silent":true,"silent_reason":"中途已经说完了"}`,
-		"重复中途那句": `{"action":"final","content":"好嘞，马上发你。"}`,
+		"空 send": `tool_calls:[{"id":"s2","name":"send","arguments":{"text":""}}]`,
+		"重复中途那句": `tool_calls:[{"id":"s2","name":"send","arguments":{"text":"好嘞，马上发你。"}}]`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			channel := &recordingChannel{}
 			provider := &sequenceLLMProvider{replies: []string{
-				`{"action":"tool","tool":"say","input":{"text":"好嘞，马上发你"}}`,
+				`tool_calls:[{"id":"s1","name":"send","arguments":{"text":"好嘞，马上发你"}},{"id":"t1","name":"tool_search","arguments":{"query":"发送"}}]`,
 				final,
 			}}
 			runtime := interimTestRuntime(channel, provider)

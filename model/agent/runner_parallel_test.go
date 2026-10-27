@@ -89,7 +89,7 @@ func TestParallelReadsRunConcurrentlyAndKeepCallOrder(t *testing.T) {
 	if len(results) != 3 || results[0].ToolCallID != "c1" || results[1].ToolCallID != "c2" || results[2].ToolCallID != "c3" {
 		t.Fatalf("results must follow call order: %+v", results)
 	}
-	if !strings.Contains(results[0].Content, "slow") || results[0].ToolError || !results[1].ToolError || !strings.Contains(results[1].Content, "收尾没有执行") {
+	if !strings.Contains(results[0].Content, "slow") || results[0].ToolError || !results[1].ToolError || !strings.Contains(results[1].Content, "send 没有发出") {
 		t.Fatalf("unexpected results: %+v", results)
 	}
 	if len(resp.Steps) != 2 || resp.Steps[0].Tool != WebSearchToolName || resp.Steps[1].Tool != browserRenderToolName || resp.Steps[1].Index != 2 {

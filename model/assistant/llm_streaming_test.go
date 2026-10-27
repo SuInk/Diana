@@ -118,7 +118,7 @@ func TestStreamingEmptyOutputDoesNotRestartNonStreaming(t *testing.T) {
 }
 
 func TestStreamingToolOnlyResponseDoesNotRetry(t *testing.T) {
-	call := llm.ToolCall{ID: "call_1", Name: "agent_finalize", Arguments: map[string]any{"silent": true}}
+	call := llm.ToolCall{ID: "call_1", Name: "send", Arguments: map[string]any{"silent": true}}
 	stub := &stubStreamer{events: []llm.ChatEvent{{Type: llm.ChatEventToolCall, ToolCall: &call}, {Type: llm.ChatEventDone}}}
 	response, err := (&streamingLLMProvider{provider: stub}).Generate(context.Background(), llm.GenerateRequest{})
 	if err != nil || stub.generated || response == nil || len(response.ToolCalls) != 1 || response.ToolCalls[0].ID != call.ID {

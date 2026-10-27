@@ -37,6 +37,7 @@ type ReplyToolCall struct {
 // toolCallMemoryIgnored 是不值得记的内部工具：它们不是「去查了什么」。
 var toolCallMemoryIgnored = map[string]bool{
 	"agent_finalize": true,
+	"send":           true,
 	"tools_load":     true,
 	"tool_search":    true,
 	"tools_execute":  true,

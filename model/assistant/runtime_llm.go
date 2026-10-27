@@ -1177,7 +1177,7 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 	builder.WriteString("\n" + cfg.prompt(promptLongTermMemorySpec))
 	builder.WriteString("\n" + refusalStrategyPrompt(cfg.RefusalStrategy, cfg))
 	if agentEnabled {
-		// 静默只有 agent_finalize 这一个出口，没开 Agent 时说了也做不到。
+		// 静默只有空 send 这一个出口，没开 Agent 时说了也做不到。
 		// 它逐字不变，跟着拒答规则一起留在稳定头部：两条规则读在一起，模型才
 		// 分得清「不说话」和「拒绝」不是一回事。
 		builder.WriteString("\n" + cfg.prompt(promptSilentFinishSpec))

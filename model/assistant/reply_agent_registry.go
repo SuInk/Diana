@@ -123,8 +123,6 @@ func (r *Runtime) newReplyAgentRegistry(ctx context.Context, cfg BotConfig, even
 		if _, settings, enabled := r.pluginWithSettingsForEvent(groupRelationsPluginID, event); enabled {
 			extraTools = append(extraTools, newDianaGroupRelationsTool(r, event, settings))
 		}
-		// 中途说一句：先说「我去查」再真的去查，长任务分段报进度。说完这一轮不结束。
-		extraTools = append(extraTools, newDianaInterimMessageTool(r, event))
 		// 请主人在内置浏览器里亲手做一步（登录、扫码、验证码）。浏览器工具本来就只有
 		// 主人能用，这个也只挂给主人；内置浏览器没开时挂上也只能失败，不挂。
 		if relationship.Owner {

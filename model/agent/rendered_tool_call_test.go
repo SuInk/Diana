@@ -28,7 +28,7 @@ func TestRunnerSalvagesRenderedFinalizeInsteadOfLeakingIt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(resp.Text, "调用工具") || strings.Contains(resp.Text, "agent_finalize") {
+	if strings.Contains(resp.Text, "调用工具") || strings.Contains(resp.Text, "send") {
 		t.Fatalf("渲染出来的工具调用泄漏进了回复：%q", resp.Text)
 	}
 	if resp.Text != leakedRenderedFinalizeBody {
@@ -53,7 +53,7 @@ func TestFinalizationSalvagesRenderedFinalize(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(resp.Text, "调用工具") || strings.Contains(resp.Text, "agent_finalize") {
+	if strings.Contains(resp.Text, "调用工具") || strings.Contains(resp.Text, "send") {
 		t.Fatalf("收尾阶段泄漏了渲染出来的工具调用：%q", resp.Text)
 	}
 	if resp.Text != leakedRenderedFinalizeBody {
@@ -95,7 +95,7 @@ func TestRenderedNonFinalizeToolCallNeverBecomesReply(t *testing.T) {
 
 // agent_finalize 被当成普通工具写进 JSON 动作时也要收尾，而不是撞「工具不存在」。
 func TestFinalizeWrittenAsJSONToolActionIsFinal(t *testing.T) {
-	action, ok := parseAction(`{"action":"tool","tool":"agent_finalize","input":{"content":"好的喵～"}}`)
+	action, ok := parseAction(`{"action":"tool","tool":"send","input":{"content":"好的喵～"}}`)
 	if !ok || action.Action != "final" {
 		t.Fatalf("action = %#v, ok = %v", action, ok)
 	}

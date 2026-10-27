@@ -18,7 +18,7 @@ import (
 // 只读检索放开并行，顺序规则：
 //   - 批里全是 parallelReadTools 才并行；混进任何别的工具（发消息、写记忆、生图…）
 //     退回原来的逐个执行，严格按模型给的顺序，一次一个；
-//   - agent_finalize 不和检索同步执行，留到看过结果的下一步；
+//   - send 和检索同一步时是中途发言，已先发出；收尾留到看过结果的下一步；
 //   - 结果按模型的调用顺序回填，不按完成先后；超出步数预算的调用明确标为未执行。
 var parallelReadTools = map[string]bool{
 	WebSearchToolName:     true,

@@ -72,8 +72,8 @@ func renderedToolCallAction(text string) (llmAction, bool) {
 	if !ok {
 		return llmAction{}, false
 	}
-	if name != finalizeToolName {
+	if name != finalizeToolName && name != legacyFinalizeToolName {
 		return llmAction{}, true
 	}
-	return finalizeAction(llm.ToolCall{Name: name, Arguments: arguments}, ""), true
+	return finalizeAction([]llm.ToolCall{{Name: finalizeToolName, Arguments: arguments}}, ""), true
 }

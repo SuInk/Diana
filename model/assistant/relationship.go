@@ -122,8 +122,6 @@ func (p RelationshipPolicy) allowedAgentToolNames() map[string]bool {
 		dianaVRChatChatboxToolName:    true,
 		dianaVRChatExpressionToolName: true,
 		dianaVRChatMoveToolName:       true,
-		// 中途说一句只往当前对话发文字，和最终回复同一个出口，谁都能用。
-		dianaInterimMessageToolName: true,
 		// 只发模型自己写的文本内容，不碰本地文件和命令；「仅主人可用」由插件设置在工具内判断。
 		dianaFileDeliveryToolName: true,
 		// 同插件的渲染：页面在断网无头浏览器里跑，碰不到本地文件和命令。

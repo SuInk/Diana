@@ -315,7 +315,7 @@ func stickerReplayVariant(req llm.GenerateRequest, variant string) llm.GenerateR
 		// 工具是录制时的旧定义，要补上这个字段。
 		tools := append([]llm.ToolDefinition(nil), req.Tools...)
 		for index := range tools {
-			if tools[index].Name != "agent_finalize" {
+			if tools[index].Name != "send" {
 				continue
 			}
 			parameters := map[string]any{}
@@ -349,7 +349,7 @@ func stickerReplayTriggered(response *llm.GenerateResponse) (bool, string) {
 		switch call.Name {
 		case dianaStickerToolName:
 			triggered = true
-		case "agent_finalize":
+		case "send":
 			if keywords, _ := call.Arguments[stickerFinalizeFieldName].(string); strings.TrimSpace(keywords) != "" {
 				triggered = true
 			}

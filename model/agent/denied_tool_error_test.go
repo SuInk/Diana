@@ -16,9 +16,9 @@ import (
 // 发生过：非主人在群里让机器人开 issue，github 工具因为没权限没注册，模型连猜四个
 // 名字直到额度用尽，issue 一个也没提出去。
 func TestDeniedToolSaysNoPermissionInsteadOfMissing(t *testing.T) {
-	registry := NewToolRegistry(&countingTool{name: "alpha"}, &countingTool{name: "agent_finalize"})
+	registry := NewToolRegistry(&countingTool{name: "alpha"}, &countingTool{name: "send"})
 	registry.DenyTools("github")
-	loader := newDeferredToolLoader(registry, []string{"agent_finalize"}, nil, nil)
+	loader := newDeferredToolLoader(registry, []string{"send"}, nil, nil)
 	if loader == nil {
 		t.Fatal("延迟加载器未启用，这个测试没有意义")
 	}
@@ -41,7 +41,7 @@ func TestDeniedToolSaysNoPermissionInsteadOfMissing(t *testing.T) {
 // 没有启用延迟加载时模型直接按名字调用，走的是另一条修复路径：那里原本把整份工具
 // 目录再抄一遍给模型，等于请它换个名字继续猜。
 func TestDirectCallOnDeniedToolSkipsTheCatalogDump(t *testing.T) {
-	registry := NewToolRegistry(&countingTool{name: "alpha"}, &countingTool{name: "agent_finalize"})
+	registry := NewToolRegistry(&countingTool{name: "alpha"}, &countingTool{name: "send"})
 	registry.DenyTools("github")
 	client := &scriptedClient{responses: []string{
 		`{"action":"tool","tool":"github","input":{}}`,

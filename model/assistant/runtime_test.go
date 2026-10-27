@@ -5288,6 +5288,14 @@ func (p *sequenceLLMProvider) Generate(ctx context.Context, req llm.GenerateRequ
 	}
 	reply := p.replies[0]
 	p.replies = p.replies[1:]
+	// 「tool_calls:」开头的脚本按原生 function calling 发回，JSON 数组里每项是一次调用。
+	if raw, ok := strings.CutPrefix(reply, "tool_calls:"); ok {
+		var calls []llm.ToolCall
+		if err := json.Unmarshal([]byte(raw), &calls); err != nil {
+			return nil, err
+		}
+		return &llm.GenerateResponse{Provider: llm.ProviderOpenAICompatible, Model: "test", ToolCalls: calls}, nil
+	}
 	return &llm.GenerateResponse{Provider: llm.ProviderOpenAICompatible, Model: "test", Text: reply}, nil
 }
 

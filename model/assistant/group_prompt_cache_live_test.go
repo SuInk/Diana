@@ -237,7 +237,7 @@ type stableTailCacheCapture struct {
 
 func (c *stableTailCacheCapture) Generate(_ context.Context, req llm.GenerateRequest) (*llm.GenerateResponse, error) {
 	c.requests = append(c.requests, cloneGenerateRequestForTest(req))
-	return &llm.GenerateResponse{Text: "", ToolCalls: []llm.ToolCall{{ID: "fixture-final", Name: "agent_finalize", Arguments: map[string]any{"content": "OK"}}}}, nil
+	return &llm.GenerateResponse{Text: "", ToolCalls: []llm.ToolCall{{ID: "fixture-final", Name: "send", Arguments: map[string]any{"content": "OK"}}}}, nil
 }
 
 type stableTailCacheTool string
