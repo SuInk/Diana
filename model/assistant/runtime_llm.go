@@ -1584,7 +1584,7 @@ var (
 		Group:   PromptGroupReplyRules,
 		Title:   "当前消息注解 · 只发一张图",
 		Usage:   "附图的消息没有文字时，用这句代替正文。和「只发图片时的正文」不同，这句用在已经把图片取好、准备连图一起发给模型的那一步。",
-		Default: "用户发送了一张图片，请根据图片内容回答。",
+		Default: "对方只发了这一张图，没配文字。",
 	})
 	promptNoteImageOnlyMultiSpec = registerPrompt(PromptSpec{
 		Key:     "reply.note.image_only_multi",
@@ -1746,7 +1746,7 @@ func llmMessageFromEvent(event MessageEvent, text string, options ...any) llm.Me
 		return llmMessageFromEventWithImages(event, text, nil)
 	}
 
-	imageOnlyText := "用户发送了一张图片，请根据图片内容回答。"
+	imageOnlyText := "对方只发了这一张图，没配文字。"
 	if value, ok := options[0].(string); ok && strings.TrimSpace(value) != "" {
 		imageOnlyText = strings.TrimSpace(value)
 	}

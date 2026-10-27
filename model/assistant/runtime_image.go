@@ -287,7 +287,7 @@ func (r *Runtime) agentHistoryImageBatchMessage(ctx context.Context, history []M
 		if !selected[index] {
 			continue
 		}
-		line := agentImageHistoryPromptTextWithDescriptions(item, currentTime, r.historyImageCachedDescriptions(ctx, item))
+		line := agentImageHistoryPromptTextWithDescriptions(item, currentTime, r.historyPromptImageDescriptions(ctx, item))
 		if line != "" {
 			lines = append(lines, line)
 		}
@@ -362,7 +362,7 @@ func (r *Runtime) agentCurrentHistoricalImageReference(ctx context.Context, even
 	cancel()
 	lines := make([]string, 0, len(sources))
 	for _, source := range sources {
-		lines = append(lines, agentImageHistoryPromptTextWithDescriptions(source, event.Time, r.historyImageCachedDescriptions(ctx, source)))
+		lines = append(lines, agentImageHistoryPromptTextWithDescriptions(source, event.Time, r.historyPromptImageDescriptions(ctx, source)))
 	}
 	// 摘要是给理解用的，不是判断依据。没附原图不等于工具也读不到：history_media
 	// 和 match_avatar 都按 message_id 自己去取原图。线上出过一次——引用一张图问
@@ -807,20 +807,42 @@ func historicalAudioCount(event MessageEvent) int {
 // historyImageCachedDescriptions 只同步读取已有缓存；缺失描述只进入后台队列，
 // 不在每轮常规回复的关键路径里等待识图网络调用。
 func (r *Runtime) historyImageCachedDescriptions(ctx context.Context, event MessageEvent) []string {
+	return r.historyImageDescriptionsFor(ctx, event, false)
+}
+
+// historyPromptImageDescriptions 是拼进对话历史的版本：自己发过的表情包不带简介。
+// 表情包简介是给检索写的（潜台词、适合什么场合发），放进历史里，模型下一轮就会
+// 回头解释自己刚发的图——线上出过「你让我发表情，我倒发了张钻被窝求贴贴的」。
+func (r *Runtime) historyPromptImageDescriptions(ctx context.Context, event MessageEvent) []string {
+	return r.historyImageDescriptionsFor(ctx, event, true)
+}
+
+func (r *Runtime) historyImageDescriptionsFor(ctx context.Context, event MessageEvent, hideOwnStickers bool) []string {
 	r.enqueueHistoryImageDescriptions(event)
 	segments := append([]MessageSegment(nil), event.Segments...)
+	own := 0
+	if hideOwnStickers && event.Outbound {
+		own = len(segments)
+	}
 	if event.Quoted != nil {
 		segments = append(segments, event.Quoted.Segments...)
 	}
-	return r.historyImageCachedSegmentDescriptions(ctx, segments)
+	return r.historyImageSegmentDescriptions(ctx, segments, own)
 }
 
 func (r *Runtime) historyImageCachedSegmentDescriptions(ctx context.Context, segments []MessageSegment) []string {
+	return r.historyImageSegmentDescriptions(ctx, segments, 0)
+}
+
+// historyImageSegmentDescriptions 给每张图一行摘要。平台标成表情包的图写作「表情包」，
+// 让模型知道那是一句语气、不是要它点评的画面；前 ownSegments 段是机器人自己发的，
+// 其中的表情包只标一句，不带简介。
+func (r *Runtime) historyImageSegmentDescriptions(ctx context.Context, segments []MessageSegment, ownSegments int) []string {
 	store := r.recallImageDescriptionStore()
 	var lines []string
 	imageIndex := 0
 	videoFrameIndex := 0
-	for _, segment := range segments {
+	for position, segment := range segments {
 		if !historyDescribableImageSegment(segment) {
 			continue
 		}
@@ -834,6 +856,13 @@ func (r *Runtime) historyImageCachedSegmentDescriptions(ctx context.Context, seg
 		} else {
 			imageIndex++
 			index = imageIndex
+			if _, sticker := StickerSegmentLabel(segment); sticker {
+				label = "表情包"
+				if position < ownSegments {
+					lines = append(lines, fmt.Sprintf("%s%d=你自己发的表情包，发出去就算说完了", label, index))
+					continue
+				}
+			}
 		}
 		description := strings.TrimSpace(segment.Data[recallImageDescriptionKey])
 		if description == "" && store != nil {

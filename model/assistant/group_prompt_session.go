@@ -357,7 +357,7 @@ func (r *Runtime) renderPromptHistoryEvent(ctx context.Context, current, item Me
 	}
 	text := historyPromptTextAt(item, current.Time, cfg)
 	if direct && historicalMediaCount(item) > 0 {
-		text = agentImageHistoryPromptTextWithDescriptions(item, current.Time, r.historyImageCachedDescriptions(ctx, item), cfg)
+		text = agentImageHistoryPromptTextWithDescriptions(item, current.Time, r.historyPromptImageDescriptions(ctx, item), cfg)
 	}
 	if strings.TrimSpace(text) != "" {
 		result = append(result, llm.Message{Role: llm.RoleUser, Content: text, Priority: llm.MessagePriorityHistory})

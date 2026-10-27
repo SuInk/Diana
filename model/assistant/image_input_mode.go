@@ -260,7 +260,13 @@ func (m *imageTextMode) message(ctx context.Context, event MessageEvent, text st
 		default:
 			seen[description] = index + 1
 		}
-		lines = append(lines, fmt.Sprintf("图片%d：%s", index+1, description))
+		label := "图片"
+		if index < len(images) {
+			if _, sticker := StickerSegmentLabel(images[index]); sticker {
+				label = "表情包"
+			}
+		}
+		lines = append(lines, fmt.Sprintf("%s%d：%s", label, index+1, description))
 	}
 	text = strings.TrimSpace(text + "\n\n" + strings.Join(lines, "\n"))
 	if len(fallback) == 0 {

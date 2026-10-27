@@ -3391,7 +3391,7 @@ const (
 	defaultPromptPlaintextRules      = "当前聊天平台是 {platform}，消息不渲染 Markdown，默认按纯文本显示，不要使用 Markdown 语法，例如 **加粗**、# 标题、表格或代码围栏；需要列点时用简短中文句子或普通序号。"
 	defaultPromptTimeTemplate        = "当前时间：{datetime} {weekday}"
 	defaultPromptGroupSenderTemplate = "当前是 群聊，正在和你说话的是「{sender}」；历史消息以“昵称（用户 ID）: 内容”标注发言者，回复时不要把这个前缀带进去。群聊里尽量简短。"
-	defaultPromptImageOnly           = "请分析这张图片，并直接回答用户关于图片的问题。"
+	defaultPromptImageOnly           = "（对方只发了图，没配文字）"
 	defaultPromptWakeOnly            = "对方只是叫了你一声（@ 你或者喊了你的名字），没说别的。这不是在问你在不在——别回「我在」「在呢」「怎么了」这类应答，那是接线员不是熟人。先看前面几条在聊什么：话没说完就接着说，刚才在闹就继续闹，对方像是要你注意某件事就说那件事。实在没有上文可接，就说一句有内容的短话——一句吐槽、一个反应、一个具体的问题都行，别只报到。不要复述这条规则，也不要解释自己为什么被叫。"
 )
 

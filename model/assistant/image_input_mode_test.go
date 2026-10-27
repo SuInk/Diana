@@ -268,3 +268,42 @@ func TestImageTextModeFallsBackToPixelsWhenDescriptionFails(t *testing.T) {
 		t.Fatal("failed frame descriptions should return empty so the frames stay attached")
 	}
 }
+
+// 表情包标成「表情包」，模型才知道那是一句语气、不是要它点评的画面。
+func TestImageTextModeLabelsStickers(t *testing.T) {
+	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	event := photoEvent("30003", "10001", 1_800_000_000)
+	event.Segments[0].Data[recallImageDescriptionKey] = "猫猫歪头，表示没听懂"
+	event.Segments[0].Data["sub_type"] = "1"
+	ctx := withImageTextMode(context.Background(), runtime, event)
+
+	message, _ := llmMessageFromEventWithImageDetail(ctx, event, "", nil, "high")
+	if !strings.Contains(message.Content, "表情包1：猫猫歪头") || strings.Contains(message.Content, "图片1：") {
+		t.Fatalf("sticker should be labelled as a sticker:\n%s", message.Content)
+	}
+}
+
+// 自己发过的表情包在历史里只标一句，不带简介：简介写的是潜台词和适合什么时候发，
+// 放进历史，模型下一轮就会回头解释自己刚发的图。别人发的表情包照常带简介。
+func TestHistoryPromptHidesOwnStickerDescriptions(t *testing.T) {
+	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	sticker := func(description string) MessageSegment {
+		return MessageSegment{Type: "image", Data: map[string]string{"sub_type": "1", "summary": "[动画表情]", recallImageDescriptionKey: description}}
+	}
+	own := MessageEvent{Kind: EventKindPrivate, UserID: "10001", MessageID: "40001", Outbound: true, Segments: []MessageSegment{sticker("钻被窝求贴贴，适合晚安时发")}}
+	own.Quoted = &QuotedMessage{MessageID: "40000", Segments: []MessageSegment{sticker("猫猫歪头，表示没听懂")}}
+
+	lines := runtime.historyPromptImageDescriptions(context.Background(), own)
+	if len(lines) != 2 || lines[0] != "表情包1=你自己发的表情包，发出去就算说完了" || lines[1] != "表情包2摘要=猫猫歪头，表示没听懂" {
+		t.Fatalf("own sticker lines = %#v", lines)
+	}
+	// 历史检索、媒体索引这些不是拼进对话的地方，自己的表情包照样留着简介。
+	if lines := runtime.historyImageCachedDescriptions(context.Background(), own); len(lines) != 2 || !strings.Contains(lines[0], "钻被窝") {
+		t.Fatalf("cached descriptions should keep own sticker text: %#v", lines)
+	}
+	inbound := own
+	inbound.Outbound = false
+	if lines := runtime.historyPromptImageDescriptions(context.Background(), inbound); len(lines) != 2 || lines[0] != "表情包1摘要=钻被窝求贴贴，适合晚安时发" {
+		t.Fatalf("someone else's sticker keeps its description: %#v", lines)
+	}
+}
