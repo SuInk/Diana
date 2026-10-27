@@ -129,6 +129,7 @@ func TestDirectReplyRepeatReusesPendingGeneration(t *testing.T) {
 			p := &topicTestProvider{base: base, result: `{"relation":"repeat","confidence":0.98,"reason":"同一请求仅增加点名"}`}
 			r := topicTestRuntime(p)
 			root := directedGroupMessage("root", "user", "茯砖茶是啥")
+			root.Time = 1_800_000_000
 			outcome := "replied"
 			if proactive {
 				root.ToMe = false
@@ -179,7 +180,9 @@ func TestDirectReplyRepeatReusesPendingGeneration(t *testing.T) {
 					t.Error("missing unsent state")
 				}
 			}
+			// 隔得够久才会去问判断器；紧跟着的重复由规则认，见 TestQuickFollowUpRepeatsByRule。
 			follow := directedGroupMessage("follow", "user", "茯砖茶是啥@机器人")
+			follow.Time = root.Time + int64(senderQuickFollowUpWindow/time.Second) + 30
 			r.noteDirectedInbound(follow)
 			_, _, handled, result := r.prepareMessageEvent(context.Background(), follow)
 			if handled || result != "merged_into_reply" {
@@ -273,6 +276,7 @@ func TestDirectReplyTopicRechecksAfterClassification(t *testing.T) {
 			p := &topicTestProvider{result: `{"relation":"supplement","confidence":0.99}`}
 			r := topicTestRuntime(p)
 			root := directedGroupMessage("root", "user", "stdout")
+			root.Time = 1_800_000_000
 			ctx, finish := r.beginDirectReply(context.Background(), root)
 			defer finish()
 			p.onTopic = func(llm.GenerateRequest) {
@@ -291,6 +295,7 @@ func TestDirectReplyTopicRechecksAfterClassification(t *testing.T) {
 				}
 			}
 			follow := directedGroupMessage("follow", "user", "example")
+			follow.Time = root.Time + int64(senderQuickFollowUpWindow/time.Second) + 30
 			if _, merged := r.mergeIntoActiveDirectReply(ctx, follow, follow.RawMessage); merged {
 				t.Fatal("stale classification consumed follow-up")
 			}
@@ -328,8 +333,8 @@ func TestDirectReplyConcurrentTurnsKeepSupplements(t *testing.T) {
 	}
 }
 
-// 先 @ 一下、几秒后才说正事，或者一句夸完紧跟一句：判断器说另起一题、拿不准、甚至
-// 调用失败，同一个人紧接着说的话都并进还没发出的这一轮，不再各回一遍。
+// 先 @ 一下、几秒后才说正事，或者一句夸完紧跟一句：同一个人紧接着说的话都并进还没
+// 发出的这一轮，不再各回一遍。判断器现在根本不问，它说什么、调用失不失败都不影响。
 func TestQuickFollowUpBySameSenderMergesWhateverJudgeSays(t *testing.T) {
 	for _, tc := range []struct {
 		name, result string
@@ -390,5 +395,71 @@ func TestQuickFollowUpRuleLeavesOthersToTheJudge(t *testing.T) {
 	quoteRoot.Quoted = &QuotedMessage{MessageID: "root"}
 	if !r.quickFollowUpBySameSender(root, time.Time{}, nil, quoteRoot, time.Time{}, quoteRoot.RawMessage) {
 		t.Fatal("quoting the pending message itself is still talking to the bot")
+	}
+}
+
+// 紧跟着的追发不问判断器：判断器平均要十来秒，等它说完旧版早生成完了。2026-10-28
+// 「发个md表哥」4 秒后补「表格」，判断用了 6.9 秒，第一版白白生成完才被扔掉。
+func TestQuickFollowUpSkipsTopicClassifier(t *testing.T) {
+	p := &topicTestProvider{result: `{"relation":"independent","confidence":0.99}`}
+	p.onTopic = func(llm.GenerateRequest) { t.Error("quick follow-up asked the topic classifier") }
+	r := topicTestRuntime(p)
+	root := directedGroupMessage("root", "user", "发个md表哥")
+	root.Time = 1_800_000_000
+	ctx, finish := r.beginDirectReply(context.Background(), root)
+	defer finish()
+
+	supplement := directedGroupMessage("supplement", "user", "表格")
+	supplement.Time = root.Time + 4
+	if _, merged := r.mergeIntoActiveDirectReply(ctx, supplement, supplement.RawMessage); !merged {
+		t.Fatal("quick supplement not merged")
+	}
+	run := ctx.Value(directReplyRunContextKey{}).(directReplyRunContext)
+	if run.active.generation != 1 {
+		t.Fatalf("supplement must invalidate the pending answer, generation=%d", run.active.generation)
+	}
+	nudge := directedGroupMessage("nudge", "user", "？？")
+	nudge.Time = root.Time + 6
+	if _, merged := r.mergeIntoActiveDirectReply(ctx, nudge, nudge.RawMessage); !merged {
+		t.Fatal("quick repeat not merged")
+	}
+	if run.active.generation != 1 {
+		t.Fatalf("repeat must not restart the answer, generation=%d", run.active.generation)
+	}
+}
+
+func TestQuickFollowUpRepeatsByRule(t *testing.T) {
+	root := directedGroupMessage("root", "user", "粉蓝白安排一下")
+	for _, tc := range []struct {
+		text   string
+		repeat bool
+	}{
+		{"粉蓝白安排一下@机器人", true},
+		{"粉蓝白", true},
+		{"？？", true},
+		{"在吗", true},
+		{"666", true},
+		{"哈哈哈", true},
+		{"嗯嗯", true},
+		{"表格", false},
+		{"再加个黑色", false},
+		{"粉蓝白安排一下，要竖版", false},
+		{"粉", false},
+	} {
+		follow := directedGroupMessage("follow", "user", tc.text)
+		if got := quickFollowUpRepeats(root, nil, follow, tc.text); got != tc.repeat {
+			t.Errorf("%q repeat=%v, want %v", tc.text, got, tc.repeat)
+		}
+	}
+	// 带图、带引用的追发有新内容，哪怕文字是「在吗」也不算重复。
+	withImage := directedGroupMessage("img", "user", "在吗")
+	withImage.Segments = append(withImage.Segments, MessageSegment{Type: "image", Data: map[string]string{"file": "a.png"}})
+	if quickFollowUpRepeats(root, nil, withImage, "在吗") {
+		t.Error("image follow-up treated as repeat")
+	}
+	quoting := directedGroupMessage("quote", "user", "在吗")
+	quoting.Quoted = &QuotedMessage{MessageID: "q", UserID: "other", Segments: []MessageSegment{{Type: "text", Data: map[string]string{"text": "这个"}}}}
+	if quickFollowUpRepeats(root, nil, quoting, "在吗") {
+		t.Error("quoting follow-up treated as repeat")
 	}
 }

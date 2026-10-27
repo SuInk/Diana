@@ -316,14 +316,17 @@ func (r *Runtime) mergeIntoActiveDirectReply(ctx context.Context, event MessageE
 	if rule, ok := r.imageFollowUpBySameSender(root, rootArrived, event, eventArrived, text); ok {
 		relation = "supplement"
 		r.recordDirectReplyTopicRule(ctx, root, event, relation, rule)
+	} else if r.quickFollowUpBySameSender(root, rootArrived, supplements, event, eventArrived, text) {
+		// 人紧接着说的话不再先问判断器：它平均要十来秒，等它说「补充」时旧版往往已经
+		// 生成完，只能整轮重来。规则当场认定，补充立刻打断旧版，重复则不打断。
+		relation = "supplement"
+		quickRule := senderQuickFollowUpRule
+		if quickFollowUpRepeats(root, supplements, event, text) {
+			relation, quickRule = "repeat", senderQuickRepeatRule
+		}
+		r.recordDirectReplyTopicRule(ctx, root, event, relation, quickRule)
 	} else {
 		relation = r.classifyDirectReplyTopic(ctx, root, supplements, event, text)
-		// 判断器只认同一个待答问题；它说另起一题或拿不准时，人紧接着说的话仍并进这一轮。
-		// 先问判断器是为了保住 repeat：重复催问不打断正在生成的那一版。
-		if relation != "repeat" && relation != "supplement" && relation != "correction" && r.quickFollowUpBySameSender(root, rootArrived, supplements, event, eventArrived, text) {
-			relation = "supplement"
-			r.recordDirectReplyTopicRule(ctx, root, event, relation, senderQuickFollowUpRule)
-		}
 	}
 	mergeable := relation == "repeat" || relation == "supplement" || relation == "correction"
 	r.noteSenderTurnMergeChecked(event, root.MessageID, mergeable)
@@ -506,6 +509,10 @@ func (r *Runtime) recordDirectReplyTopicRule(ctx context.Context, root, event Me
 		reason = "前一条还没回完，同一个人随后补了一条纯图"
 	case imageFollowUpRuleFileOnly:
 		reason = "前一条还没回完，同一个人随后补了一条纯文件"
+	case senderQuickFollowUpRule:
+		reason = "前一条还没回完，同一个人紧接着又说了一句"
+	case senderQuickRepeatRule:
+		reason = "前一条还没回完，同一个人紧接着重复、附和或催了一句，没有新内容"
 	}
 	logCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Second)
 	defer cancel()

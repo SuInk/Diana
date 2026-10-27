@@ -7,8 +7,11 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"regexp"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 )
 
 // 同一个人几秒内连发两三条（先发图再说「这个呢」，或者一句话拆成三行），机器人
@@ -1095,6 +1098,85 @@ func (r *Runtime) quickFollowUpBySameSender(root MessageEvent, rootArrived time.
 		return false
 	}
 	return r.burstChatMessage(event, text) && !r.followUpAddressesOthers(event, turnMessageIDs...)
+}
+
+// senderQuickRepeatRule 是快速追发里认成「重复」的那一类：和这一轮里说过的话一样、
+// 只是附和或催一句、只有表情。重复并进这一轮但不打断正在生成的那一版。
+const senderQuickRepeatRule = "same_sender_quick_repeat"
+
+// quickFollowUpAcks 是归一化（只留字母数字、小写）后算「没有新内容」的短话。线上
+// 话题判断判成 repeat 的快速追发大多是这些。
+var quickFollowUpAcks = map[string]bool{
+	"对": true, "对的": true, "对啊": true, "是": true, "是的": true, "是啊": true,
+	"嗯": true, "嗯嗯": true, "哦": true, "噢": true, "好": true, "好的": true, "行": true,
+	"ok": true, "okk": true, "nb": true, "牛": true, "牛逼": true, "草": true, "我草": true, "卧槽": true,
+	"人呢": true, "在吗": true, "在不在": true, "回我": true, "快": true, "快点": true, "速度": true,
+	"bot呢": true, "机器人呢": true, "好慢": true, "你好慢": true, "不理我了": true, "为啥不回了": true,
+	"哎": true, "哎哎": true, "诶": true, "qwq": true, "寄": true, "神了": true, "难绷": true, "sad": true,
+	"我擦": true, "我靠": true, "绝了": true, "晚安": true, "晚安安": true,
+}
+
+// quickFollowUpRepeats 保守地认「没有新内容」：把补充错认成重复，新内容就进不了
+// 答案；反过来最多多生成一版。带图、文件、引用这类内容的一律不算重复。
+func quickFollowUpRepeats(root MessageEvent, supplements []proactiveReplyCandidate, event MessageEvent, text string) bool {
+	for _, segment := range event.Segments {
+		switch segment.Type {
+		case "text", "at", "face", "mface":
+		default:
+			return false
+		}
+	}
+	if event.Quoted != nil {
+		return false
+	}
+	core := quickFollowUpCore(firstNonEmpty(textSegmentsOnly(event.Segments), text))
+	if core == "" || quickFollowUpAcks[core] || repeatsOneRune(core, "6h哈嗯") {
+		return true
+	}
+	if utf8.RuneCountInString(core) < 2 {
+		return false
+	}
+	previous := []MessageEvent{root}
+	for _, item := range supplements {
+		if strings.TrimSpace(item.Event.UserID) == strings.TrimSpace(event.UserID) {
+			previous = append(previous, item.Event)
+		}
+	}
+	for _, item := range previous {
+		if strings.Contains(quickFollowUpCore(textSegmentsOnly(item.Segments)), core) {
+			return true
+		}
+	}
+	return false
+}
+
+// quickFollowUpCore 只留字母和数字并转小写：标点、空白、emoji 和正文里手打的
+// 「@某人」都不算内容——「茯砖茶是啥@机器人」和「茯砖茶是啥」是同一句话。
+func quickFollowUpCore(text string) string {
+	text = quickFollowUpMentionPattern.ReplaceAllString(text, "")
+	var b strings.Builder
+	for _, r := range strings.ToLower(text) {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
+var quickFollowUpMentionPattern = regexp.MustCompile(`@\S+`)
+
+// repeatsOneRune 认「666」「hhh」「哈哈哈」这种同一个字连打。
+func repeatsOneRune(core, runes string) bool {
+	first, size := utf8.DecodeRuneInString(core)
+	if size == 0 || !strings.ContainsRune(runes, first) {
+		return false
+	}
+	for _, r := range core {
+		if r != first {
+			return false
+		}
+	}
+	return true
 }
 
 // textLooksLikeURL 粗略认链接：带协议头或 www. 的一律不走规则，交给判断器。
