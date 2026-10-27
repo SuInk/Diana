@@ -82,9 +82,12 @@ type InboundEventDetail struct {
 	// 带图的轮次会先走视觉模型再回到对话模型，所以可能不止一个。
 	ReplyModels []string `json:"reply_models,omitempty"`
 	// Models 是这条消息所有模型调用按模型汇总的次数，路由、审核、记忆抽取都算。
-	Models   []InboundEventModelUsage `json:"models,omitempty"`
-	Images   []InboundEventImage      `json:"images,omitempty"`
-	Memories []InboundEventMemory     `json:"memories,omitempty"`
+	Models []InboundEventModelUsage `json:"models,omitempty"`
+	// Purposes 是这条消息的模型调用按用途汇总的次数、输入和缓存命中，记录页据此
+	// 分用途显示命中率：主回复和审核、触发判断的命中率差得很远，合在一起看不出谁拖后腿。
+	Purposes []InboundEventPurposeUsage `json:"purposes,omitempty"`
+	Images   []InboundEventImage        `json:"images,omitempty"`
+	Memories []InboundEventMemory       `json:"memories,omitempty"`
 	// TemporaryMemories 是本轮实际进入模型上下文的短期状态：会话线程便签和
 	// thread_state 私有任务状态。它们只通过管理员事件接口返回。
 	TemporaryMemories []InboundEventTemporaryMemory `json:"temporary_memories,omitempty"`
@@ -553,6 +556,7 @@ LIMIT ? OFFSET ?
 			page.Events[index].UsageMissingCalls = eventUsage.UsageMissingCalls
 			page.Events[index].ReplyModels = eventUsage.replyModels
 			page.Events[index].Models = eventUsage.models
+			page.Events[index].Purposes = eventUsage.purposes
 		}
 	}
 	toolCalls, err := s.inboundEventToolCalls(ctx, query.Since, page.Events)
@@ -933,16 +937,27 @@ type InboundEventModelUsage struct {
 	Calls    int64  `json:"calls"`
 }
 
+type InboundEventPurposeUsage struct {
+	Purpose           string `json:"purpose"`
+	Calls             int64  `json:"calls"`
+	InputTokens       int64  `json:"input_tokens"`
+	CachedInputTokens int64  `json:"cached_input_tokens"`
+}
+
 // cacheRateExcludedPurposes 不计入缓存命中率的用途：发送前审核和回复触发判断。它们
 // 每次只带当前消息和一段规则，请求短、前缀几乎不复用，调用次数却和主回复一个量级，
 // 混在一起会把主回复、记忆这些长请求的命中率拉低一截。前端 llm-usage.ts 的
 // cacheExcludedPurposes 是同一份名单，用途名见 assistant 包的 Purpose* 常量。
 var cacheRateExcludedPurposes = map[string]bool{
-	"reply_send_audit":       true,
+	// 回复判断
 	"proactive_reply_router": true,
 	"reply_intent_router":    true,
 	"reply_rule_router":      true,
 	"reply_fatigue_gate":     true,
+	// 发送前审核
+	"reply_send_audit":        true,
+	"reply_account_safety":    true,
+	"proactive_reply_quality": true,
 }
 
 type inboundEventTokenTotals struct {
@@ -960,8 +975,9 @@ type inboundEventTokenTotals struct {
 	TTFTSumMS         int64
 	TTFTCalls         int64
 	UsageMissingCalls int64
-	// replyModels 和 models 只在按消息汇总时有用，范围合计不填。
+	// replyModels、models 和 purposes 只在按消息汇总时有用，范围合计不填。
 	replyModels []string
+	purposes    []InboundEventPurposeUsage
 	models      []InboundEventModelUsage
 }
 
@@ -981,6 +997,21 @@ func (t *inboundEventTokenTotals) addModel(model, provider, purpose string) {
 		}
 	}
 	t.models = append(t.models, InboundEventModelUsage{Model: model, Provider: strings.TrimSpace(provider), Calls: 1})
+}
+
+func (t *inboundEventTokenTotals) addPurpose(purpose string, call inboundEventTokenTotals) {
+	if purpose == "" {
+		purpose = "unlabeled"
+	}
+	for index := range t.purposes {
+		if t.purposes[index].Purpose == purpose {
+			t.purposes[index].Calls++
+			t.purposes[index].InputTokens += call.InputTokens
+			t.purposes[index].CachedInputTokens += call.CachedInputTokens
+			return
+		}
+	}
+	t.purposes = append(t.purposes, InboundEventPurposeUsage{Purpose: purpose, Calls: 1, InputTokens: call.InputTokens, CachedInputTokens: call.CachedInputTokens})
 }
 
 // avgTTFTMS 是有样本的那些调用的均值。没有样本时返回 0。
@@ -1090,6 +1121,7 @@ ORDER BY created_at`, args...)
 			provider, _ := meta["provider"].(string)
 			purpose, _ := meta["purpose"].(string)
 			item.addModel(model, provider, strings.TrimSpace(purpose))
+			item.addPurpose(strings.TrimSpace(purpose), current)
 			byMessage[messageID] = item
 		}
 	}

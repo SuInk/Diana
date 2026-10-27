@@ -101,6 +101,12 @@ VALUES (?, ?, 'group', 'g1', 'u1', ?, ?, '{}', 0, ?, 0, ?, ?, ?, ?, ?)
 	if page.Events[0].CacheRateInputTokens != 100 || page.Events[0].CacheRateCachedInputTokens != 75 || page.Events[1].CacheRateInputTokens != 0 {
 		t.Fatalf("event cache rate tokens = %#v / %#v", page.Events[0], page.Events[1])
 	}
+	if got := page.Events[1].Purposes; len(got) != 1 || got[0] != (InboundEventPurposeUsage{Purpose: "proactive_reply_router", Calls: 1, InputTokens: 20}) {
+		t.Fatalf("ignored purposes = %#v", got)
+	}
+	if got := page.Events[0].Purposes; len(got) != 1 || got[0] != (InboundEventPurposeUsage{Purpose: "unlabeled", Calls: 1, InputTokens: 100, CachedInputTokens: 75}) {
+		t.Fatalf("replied purposes = %#v", got)
+	}
 	// 命中率口径剔除了回复触发判断（这里是 ignored 那次 proactive_reply_router）。
 	if page.CacheRateInputTokens != 100 || page.CacheRateCachedInputTokens != 75 {
 		t.Fatalf("cache rate tokens = %d/%d, want 75/100", page.CacheRateCachedInputTokens, page.CacheRateInputTokens)

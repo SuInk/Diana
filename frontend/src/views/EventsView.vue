@@ -381,6 +381,7 @@
                 <span v-if="event.total_tokens">
                   Token {{ formatNumber(event.total_tokens) }}（输入 {{ formatNumber(event.input_tokens || 0) }} / 输出 {{ formatNumber(event.output_tokens || 0) }}<template v-if="eventCacheHitText(event)"> / {{ eventCacheHitText(event) }}</template>）
                 </span>
+                <span v-if="eventPurposeCacheText(event)">缓存命中率 {{ eventPurposeCacheText(event) }}</span>
                 <span v-if="event.usage_missing_calls" class="usage-missing" :title="'上游没返回用量的调用不计 token，这条的实际消耗比显示的多'">{{ event.usage_missing_calls }} 次调用未报用量</span>
                 <span v-if="event.output_tokens_per_second">
                   {{ event.output_tokens_per_second.toFixed(1) }} tok/s（模型耗时 {{ formatDurationMS(event.llm_duration_ms || 0) }}<template v-if="event.ttft_calls"> / 首 token {{ formatDurationMS(event.avg_ttft_ms || 0) }}</template>）
@@ -696,6 +697,7 @@ import {
   type AssistantContextBudgetLayer
 } from "../api";
 import { formatClock, formatNumber, formatTime } from "../lib/format";
+import { cacheUtilization, groupCacheByPurpose } from "../lib/llm-usage";
 import { askConfirm } from "../lib/confirm";
 import { displayMessageText, displayChatIdentity } from "../lib/message-display";
 import { currentView, navigate } from "../router";
@@ -895,6 +897,16 @@ function cacheHitRate(cached: number, input: number): number | null {
 // 有审核或触发判断的调用被剔除时才注明口径，不然每行都多一截字。
 function cacheRateNote(rateInput: number, input: number): string {
   return rateInput < input ? "，不含审核和触发判断" : "";
+}
+
+// 按主回复、回复判断、发送前审核分开看命中率：主回复续接后能到九成以上，审核和
+// 判断几乎不命中，合在一起只剩一个说明不了问题的平均数。
+function eventPurposeCacheText(event: AssistantEventDetail): string {
+  const groups = groupCacheByPurpose(event.purposes ?? []);
+  if (groups.length === 0) return "";
+  return groups
+    .map((item) => `${item.label} ${cacheUtilization(item.cached_input_tokens, item.input_tokens)}${item.calls > 1 ? `（${item.calls} 次）` : ""}`)
+    .join(" · ");
 }
 
 function eventCacheHitText(event: AssistantEventDetail): string {

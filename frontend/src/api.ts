@@ -2951,6 +2951,13 @@ export interface AssistantEventTemporaryMemory {
   source_message_id?: string;
 }
 
+export interface AssistantEventPurposeUsage {
+  purpose: string;
+  calls: number;
+  input_tokens: number;
+  cached_input_tokens: number;
+}
+
 export interface AssistantEventDetail extends BotEvent {
   id: string;
   sender_name?: string;
@@ -2992,6 +2999,8 @@ export interface AssistantEventDetail extends BotEvent {
   reply_models?: string[];
   /** 这条消息所有模型调用按模型汇总的次数，路由、审核、记忆抽取都算。 */
   models?: AssistantEventModelUsage[];
+  /** 这条消息的模型调用按用途汇总的次数、输入和缓存命中。旧版后端没有。 */
+  purposes?: AssistantEventPurposeUsage[];
   decision: "replied" | "not_replied" | "pending" | "error" | string;
   reason: string;
   delivery_stage?: "generated" | "send_attempted" | "acknowledged" | "echo_persisted" | "failed" | string;

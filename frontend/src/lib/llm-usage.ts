@@ -139,13 +139,51 @@ export function cacheUtilization(cachedInputTokens: number, inputTokens: number)
 // 发送前审核和回复触发判断不算进总览的缓存命中率：它们每次只带一小段当前消息和
 // 规则，请求短、前缀几乎不复用，调用次数却和主回复一个量级，混在一起会把真正要
 // 看的主回复、记忆这些长请求的命中率拉低一截。各自的命中率仍在「按使用方式」明细里。
-export const cacheExcludedPurposes: ReadonlySet<string> = new Set([
-  "reply_send_audit",
-  "proactive_reply_router",
-  "reply_intent_router",
-  "reply_rule_router",
-  "reply_fatigue_gate"
-]);
+const replyJudgePurposes = ["proactive_reply_router", "reply_intent_router", "reply_rule_router", "reply_fatigue_gate"];
+const sendAuditPurposes = ["reply_send_audit", "reply_account_safety", "proactive_reply_quality"];
+
+export const cacheExcludedPurposes: ReadonlySet<string> = new Set([...replyJudgePurposes, ...sendAuditPurposes]);
+
+/** 记录页把一条消息的调用归成这几类分别看命中率，顺序即显示顺序。 */
+export type CachePurposeGroup = "reply" | "judge" | "audit" | "other";
+
+export const cachePurposeGroupLabels: Record<CachePurposeGroup, string> = {
+  reply: "主回复",
+  judge: "回复判断",
+  audit: "发送前审核",
+  other: "其他"
+};
+
+export function cachePurposeGroup(purpose: string): CachePurposeGroup {
+  const key = purpose.trim();
+  if (key === "reply") return "reply";
+  if (replyJudgePurposes.includes(key)) return "judge";
+  if (sendAuditPurposes.includes(key)) return "audit";
+  return "other";
+}
+
+export interface CachePurposeGroupUsage {
+  group: CachePurposeGroup;
+  label: string;
+  calls: number;
+  input_tokens: number;
+  cached_input_tokens: number;
+}
+
+/** 按主回复、回复判断、发送前审核、其他四类汇总，只返回有输入的类。 */
+export function groupCacheByPurpose(entries: readonly { purpose: string; calls: number; input_tokens: number; cached_input_tokens: number }[]): CachePurposeGroupUsage[] {
+  const order: CachePurposeGroup[] = ["reply", "judge", "audit", "other"];
+  const groups = new Map<CachePurposeGroup, CachePurposeGroupUsage>();
+  for (const entry of entries) {
+    const group = cachePurposeGroup(entry.purpose);
+    const usage = groups.get(group) ?? { group, label: cachePurposeGroupLabels[group], calls: 0, input_tokens: 0, cached_input_tokens: 0 };
+    usage.calls += entry.calls;
+    usage.input_tokens += entry.input_tokens;
+    usage.cached_input_tokens += entry.cached_input_tokens;
+    groups.set(group, usage);
+  }
+  return order.map((group) => groups.get(group)).filter((usage): usage is CachePurposeGroupUsage => !!usage && usage.input_tokens > 0);
+}
 
 export interface CacheSplit {
   cached_input_tokens: number;
