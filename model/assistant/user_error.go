@@ -14,14 +14,9 @@ import (
 )
 
 var (
-	publicErrorURLPattern         = regexp.MustCompile(`(?i)\b(?:https?|wss?)://[^\s"'<>]+`)
-	publicErrorHostPattern        = regexp.MustCompile(`(?i)\b(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+(?:[a-z]{2,63}|example|test|local)(?::[0-9]{1,5})?\b`)
-	publicErrorAuthorization      = regexp.MustCompile(`(?i)\b(?:proxy-)?authorization\s*[:=]\s*(?:(?:bearer|token|basic)\s+)?[^\s,;\)\]}'"]+`)
-	publicErrorBearerPattern      = regexp.MustCompile(`(?i)\b(?:bearer|basic)\s+[a-z0-9._~+/=-]{6,}`)
-	publicErrorGitHubTokenPattern = regexp.MustCompile(`\b(?:gh[pousr]_|github_pat_)[A-Za-z0-9_]{12,}\b`)
-	publicErrorCredentialPattern  = regexp.MustCompile(`(?i)\b(api[_-]?key|access[_-]?token|refresh[_-]?token|token|secret|password|passwd|signature|credential|cookie)\s*[:=]\s*["']?[^\s,;&"'\)\]}]+["']?`)
-	publicErrorJSONCredential     = regexp.MustCompile(`(?i)(["'](?:api[_-]?key|access[_-]?token|refresh[_-]?token|token|secret|password|passwd|signature|credential|cookie)["']\s*:\s*)["'][^"'\r\n]+["']`)
-	publicErrorUnixPathPattern    = regexp.MustCompile(`(?:/Users|/home|/var|/private|/tmp)/[^\s"'<>]+`)
+	publicErrorURLPattern      = regexp.MustCompile(`(?i)\b(?:https?|wss?)://[^\s"'<>]+`)
+	publicErrorHostPattern     = regexp.MustCompile(`(?i)\b(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+(?:[a-z]{2,63}|example|test|local)(?::[0-9]{1,5})?\b`)
+	publicErrorUnixPathPattern = regexp.MustCompile(`(?:/Users|/home|/var|/private|/tmp)/[^\s"'<>]+`)
 )
 
 // publicChatErrorMessage keeps operational details in logs while returning only
@@ -173,11 +168,12 @@ func sanitizePublicErrorDetail(raw string) string {
 	if value == "" {
 		return "请求处理失败，请稍后重试。"
 	}
-	value = publicErrorJSONCredential.ReplaceAllString(value, `${1}"[REDACTED]"`)
-	value = publicErrorAuthorization.ReplaceAllString(value, "Authorization=[REDACTED]")
-	value = publicErrorBearerPattern.ReplaceAllString(value, "Bearer [REDACTED]")
-	value = publicErrorGitHubTokenPattern.ReplaceAllString(value, "[REDACTED_TOKEN]")
-	value = publicErrorCredentialPattern.ReplaceAllString(value, `${1}=[REDACTED]`)
+	value = secretmask.PrivateKeyPattern.ReplaceAllString(value, "[REDACTED_PRIVATE_KEY]")
+	value = secretmask.QuotedCredentialPattern.ReplaceAllString(value, `${1}"[REDACTED]"`)
+	value = secretmask.AuthorizationPattern.ReplaceAllString(value, "Authorization=[REDACTED]")
+	value = secretmask.BearerPattern.ReplaceAllString(value, "$1 [REDACTED]")
+	value = secretmask.TokenPattern.ReplaceAllString(value, "[REDACTED_TOKEN]")
+	value = secretmask.CredentialPattern.ReplaceAllString(value, `${1}=[REDACTED]`)
 	value = publicErrorURLPattern.ReplaceAllString(value, "[REDACTED_URL]")
 	value = publicErrorHostPattern.ReplaceAllString(value, "[REDACTED_HOST]")
 	value = publicErrorUnixPathPattern.ReplaceAllString(value, "[REDACTED_PATH]")

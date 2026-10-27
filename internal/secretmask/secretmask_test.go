@@ -148,12 +148,12 @@ func TestRegisterURLRegistersOnlyEmbeddedCredentials(t *testing.T) {
 }
 
 func TestSensitiveName(t *testing.T) {
-	for _, name := range []string{"TAVILY_API_KEY", "GITHUB_TOKEN", "DIANA_BILI_SESSDATA", "DOUYIN_CK", "access_token", "api-key", "key", "client_secret", "DB_PWD", "DIANA_CODEX_KEY", "signature"} {
+	for _, name := range []string{"TAVILY_API_KEY", "GITHUB_TOKEN", "DIANA_BILI_SESSDATA", "DOUYIN_CK", "access_token", "api-key", "key", "client_secret", "DB_PWD", "DIANA_CODEX_KEY", "signature", "BASIC_AUTH", "auth", "AUTH_HEADER"} {
 		if !SensitiveName(name) {
 			t.Errorf("%s 应当算凭据", name)
 		}
 	}
-	for _, name := range []string{"PWD", "OLDPWD", "PATH", "HOME", "DIANA_SECRETS_FILE", "TOKEN_URL", "XDG_SESSION_TYPE", "DBUS_SESSION_BUS_ADDRESS", "SSH_AUTH_SOCK", "keyword", "monkey", "author", "page"} {
+	for _, name := range []string{"PWD", "OLDPWD", "PATH", "HOME", "DIANA_SECRETS_FILE", "TOKEN_URL", "XDG_SESSION_TYPE", "DBUS_SESSION_BUS_ADDRESS", "SSH_AUTH_SOCK", "AUTH_URL", "GIT_AUTHOR_NAME", "keyword", "monkey", "author", "page"} {
 		if SensitiveName(name) {
 			t.Errorf("%s 不该算凭据", name)
 		}

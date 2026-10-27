@@ -5,10 +5,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"regexp"
 	"strings"
 	"time"
 
+	"github.com/SuInk/diana/internal/secretmask"
 	"github.com/SuInk/diana/model/agent"
 	"github.com/SuInk/diana/model/assistant"
 	"github.com/SuInk/diana/model/hostinfo"
@@ -178,9 +178,6 @@ func adminChatJSON(data any, redact func(string) string) (string, error) {
 	return redact(string(body)), nil
 }
 
-var adminChatCredentialPattern = regexp.MustCompile(`(?i)(?:sk-[A-Za-z0-9_-]{12,}|admin-[a-f0-9]{24,}|Bearer\s+[A-Za-z0-9._~+/=-]{8,})`)
-var adminChatSecretFieldPattern = regexp.MustCompile(`(?i)("(?:api_key|access_token|refresh_token|authorization|password|secret|cookie|token)"\s*:\s*")([^"\\]*(?:\\.[^"\\]*)*)(")`)
-
 // Known bot credentials are removed before evidence reaches the model. Generic
 // patterns cover token strings in diagnostic text; debug payloads are omitted.
 func (h *BotHandler) adminChatRedactor() func(string) string {
@@ -206,7 +203,9 @@ func (h *BotHandler) adminChatRedactor() func(string) string {
 				text = strings.ReplaceAll(text, string(encoded[1:len(encoded)-1]), "[REDACTED]")
 			}
 		}
-		text = adminChatCredentialPattern.ReplaceAllString(text, "[REDACTED]")
-		return adminChatSecretFieldPattern.ReplaceAllString(text, `${1}[REDACTED]${3}`)
+		text = secretmask.PrivateKeyPattern.ReplaceAllString(text, "[REDACTED]")
+		text = secretmask.TokenPattern.ReplaceAllString(text, "[REDACTED]")
+		text = secretmask.BearerPattern.ReplaceAllString(text, "$1 [REDACTED]")
+		return secretmask.QuotedCredentialPattern.ReplaceAllString(text, `${1}"[REDACTED]"`)
 	}
 }

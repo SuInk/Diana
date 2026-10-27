@@ -14,6 +14,8 @@ import (
 	"time"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/SuInk/diana/internal/secretmask"
 )
 
 const (
@@ -34,10 +36,7 @@ var webSearchHedgeDelay = 4 * time.Second
 var (
 	errWebSearchNoResults = errors.New("web search returned no results")
 
-	webSearchSecretPattern = regexp.MustCompile(`(?i)(?:\bsk-[a-z0-9_-]{12,}\b|\b(?:api[_-]?key|access[_-]?token|token|password)\s*[:=]\s*\S+)`)
 	webSearchDomainPattern = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$`)
-	webSearchEmailPattern  = regexp.MustCompile(`(?i)\b[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,}\b`)
-	webSearchPhonePattern  = regexp.MustCompile(`\b(?:\+?86[- ]?)?1[3-9][0-9]{9}\b`)
 	webSearchPrivateHost   = regexp.MustCompile(`(?i)\b(?:localhost|(?:[a-z0-9-]+\.)+(?:internal|local)|10(?:\.[0-9]{1,3}){3}|192\.168(?:\.[0-9]{1,3}){2}|172\.(?:1[6-9]|2[0-9]|3[01])(?:\.[0-9]{1,3}){2})\b`)
 
 	webSearchOperatorPattern = regexp.MustCompile(`(?i)(^|\s)-?(?:site|inurl|intitle|intext|allintitle|allinurl|filetype|ext|repo|cache|related):`)
@@ -227,14 +226,16 @@ func normalizeWebSearchQuery(query string) string {
 }
 
 func sanitizeExternalSearchQuery(query string) string {
-	query = webSearchSecretPattern.ReplaceAllString(query, "[secret omitted]")
+	for _, pattern := range []*regexp.Regexp{secretmask.PrivateKeyPattern, secretmask.TokenPattern, secretmask.BearerPattern, secretmask.AuthorizationPattern, secretmask.CredentialPattern} {
+		query = pattern.ReplaceAllString(query, "[secret omitted]")
+	}
 	query = webSearchPrivateHost.ReplaceAllString(query, "[internal host omitted]")
 	// 邮箱和电话一律脱敏。以前这里先扫 public/official/公开/官网/公告 判断查询是不是
 	// 「公开语境」，命中就放行——那是拿关键词猜用户在问什么，而判错的代价是把私人邮箱
 	// 或手机号原样发给外部搜索引擎。查公开联系方式本来也不需要把号码当搜索词，
 	// 少这一条不影响检索，判错却不可撤回。
-	query = webSearchEmailPattern.ReplaceAllString(query, "[email omitted]")
-	query = webSearchPhonePattern.ReplaceAllString(query, "[phone omitted]")
+	query = secretmask.EmailPattern.ReplaceAllString(query, "[email omitted]")
+	query = secretmask.PhonePattern.ReplaceAllString(query, "[phone omitted]")
 	return normalizeWebSearchQuery(query)
 }
 

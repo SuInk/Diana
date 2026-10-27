@@ -77,7 +77,7 @@ func SensitiveName(name string) bool {
 	return sensitiveNamePattern.MatchString(name) && !plainNameSuffix.MatchString(name)
 }
 
-var sensitiveNamePattern = regexp.MustCompile(`(?i)(token|secret|passw|[_-]pwd$|credential|cookie|session([_-]?(id|key|token|data))?$|sessdata|signature|^sig$|^sign$|^auth$|auth[_-]?key|authorization|api[_-]?key|access[_-]?key|private[_-]?key|(^|[_-])key$|^ck$|[_-]ck$)`)
+var sensitiveNamePattern = regexp.MustCompile(`(?i)(token|secret|passw|[_-]pwd$|credential|cookie|session([_-]?(id|key|token|data))?$|sessdata|signature|^sig$|^sign$|(^|[_-])auth([_-]|$)|auth[_-]?key|authorization|api[_-]?key|access[_-]?key|private[_-]?key|(^|[_-])key$|^ck$|[_-]ck$)`)
 
 // plainNameSuffix 排除「名字里带凭据字样、值却是位置或开关」的写法：
 // DIANA_SECRETS_FILE 是路径，TOKEN_URL 是地址，它们本身不是秘密。

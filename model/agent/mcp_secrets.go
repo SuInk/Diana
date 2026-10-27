@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"net/url"
 	"os"
-	"regexp"
 	"slices"
 	"sort"
 	"strings"
@@ -40,10 +39,6 @@ func cutAuthScheme(value string) (string, string, bool) { return secretmask.CutA
 func looksMasked(value string) bool {
 	return strings.Contains(value, secretMaskMarker)
 }
-
-// secretEnvironmentKeyPattern 认出「值是凭据」的环境变量名。环境变量里还有实例地址、
-// 区域这类普通配置，全都当凭据替换的话，工具结果里的链接会被改坏。
-var secretEnvironmentKeyPattern = regexp.MustCompile(`(?i)(token|secret|passw|pwd|auth|credential|cookie|session|private|api_?key|access_?key|(^|_)key($|_))`)
 
 // mcpSecretValues 收集这条服务配置里所有可能被原样回显的凭据原文，按长度从长到短
 // 排好，替换时长的先换，避免「Bearer xxx」只被换掉后半截又留下前半截。
@@ -96,7 +91,9 @@ func mcpSecretValues(cfg mcpServerConfig) []string {
 		addCredential(value)
 	}
 	for key, value := range cfg.Env {
-		if secretEnvironmentKeyPattern.MatchString(key) {
+		// 名字像凭据的整值当凭据；实例地址、区域这类普通配置全都替换的话，工具结果里的
+		// 链接会被改坏，规则见 secretmask.SensitiveName。
+		if secretmask.SensitiveName(key) {
 			addCredential(value)
 			continue
 		}

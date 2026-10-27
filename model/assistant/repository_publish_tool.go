@@ -24,6 +24,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/SuInk/diana/internal/secretmask"
 	"github.com/SuInk/diana/model/applog"
 )
 
@@ -55,32 +56,21 @@ const (
 	repositoryIssueListMaxPages    = 10
 	repositoryIssueConfirmationTTL = 15 * time.Minute
 	repositoryIssueResponseLimit   = 16 << 20
-	repositoryIssueCredentialKey   = `(?:[a-z0-9]+[_-])*(?:authorization|api[_-]?key|access[_-]?key|access[_-]?token|refresh[_-]?token|client[_-]?secret|private[_-]?key|token|secret|password|passwd)(?:[_-][a-z0-9]+)*`
 )
 
 var (
-	repositoryIssueCreateMarkerPattern          = regexp.MustCompile(`<!--\s*diana-operation:create:([a-f0-9]{64})(?::[a-f0-9]{64})?\s*-->`)
-	repositoryIssueAnyMarkerPattern             = regexp.MustCompile(`<!--\s*diana-operation:[a-z_]+:[a-f0-9]{64}(?::[a-f0-9]{64})?\s*-->`)
-	repositoryIssueCQPattern                    = regexp.MustCompile(`(?i)\[CQ:[^\]]+\]`)
-	repositoryIssueGitHubTokenPattern           = regexp.MustCompile(`\b(?:gh[pousr]_|github_pat_)[A-Za-z0-9_]{20,}\b`)
-	repositoryIssueQuotedCredentialPattern      = regexp.MustCompile(`(?i)["'](` + repositoryIssueCredentialKey + `)["']\s*:\s*["'][^"'\r\n]+["']`)
-	repositoryIssueQuotedValueCredentialPattern = regexp.MustCompile(`(?i)(` + repositoryIssueCredentialKey + `)\s*[:=]\s*["'][^"'\r\n]+["']`)
-	repositoryIssueAuthorizationPattern         = regexp.MustCompile(`(?i)\bauthorization\b\s*[:=]\s*(?:(?:bearer|token|basic)\s+)?[^\s,;]+`)
-	repositoryIssueCredentialPattern            = regexp.MustCompile(`(?i)(` + repositoryIssueCredentialKey + `)\s*[:=]\s*[^\s,;]+`)
-	repositoryIssueBearerPattern                = regexp.MustCompile(`(?i)\bbearer\s+[A-Za-z0-9._~+/=-]{12,}`)
-	repositoryIssuePrivateKeyPattern            = regexp.MustCompile(`(?s)-----BEGIN [^-\r\n]{0,40}PRIVATE KEY-----.*?-----END [^-\r\n]{0,40}PRIVATE KEY-----`)
-	repositoryIssueEmailPattern                 = regexp.MustCompile(`\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b`)
-	repositoryIssuePhonePattern                 = regexp.MustCompile(`(?:\+?86[\s-]?)?1[3-9](?:[\s-]?[0-9]){9}`)
-	repositoryIssueIPv4Pattern                  = regexp.MustCompile(`\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b`)
-	repositoryIssueRuntimeIDPattern             = regexp.MustCompile(`(?i)\b(user_id|group_id|message_id|self_id|qq|uin)\b\s*[:=]\s*["']?[A-Za-z0-9_-]{4,}["']?`)
-	repositoryIssueUUIDPattern                  = regexp.MustCompile(`(?i)\b[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b`)
-	repositoryIssueCommonTokenPattern           = regexp.MustCompile(`\b(?:sk-(?:proj-|svcacct-)?[A-Za-z0-9_-]{16,}|(?:AKIA|ASIA)[A-Z0-9]{16}|xox[baprs]-[A-Za-z0-9-]{10,}|AIza[0-9A-Za-z_-]{30,}|npm_[A-Za-z0-9]{30,}|eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,})\b`)
-	repositoryIssueURLPattern                   = regexp.MustCompile(`https?://[^\s<>"']+`)
-	repositoryIssuePlainRepositoryPattern       = regexp.MustCompile(`(?i)(?:^|[^a-z0-9_./-])([a-z0-9_.-]*[a-z0-9_-]/[a-z0-9_.-]*[a-z0-9_-])(?:$|\.(?:$|\s)|[^a-z0-9_./-])`)
-	repositoryIssueGitHubRepositoryPattern      = regexp.MustCompile(`(?i)(?:^|[^a-z0-9_./-])(?:https?://)?github\.com/([a-z0-9_.-]*[a-z0-9_-]/[a-z0-9_.-]*[a-z0-9_-])(?:\.git)?(?:/issues(?:/[0-9]+)?/?)?(?:$|\.(?:$|\s)|[^a-z0-9_./-])`)
-	repositoryIssueNumberMentionPattern         = regexp.MustCompile(`(?i)(?:#\s*|issues?\s*(?:#|/)?\s*|工单\s*#?\s*|议题\s*#?\s*)([0-9]+)`)
-	repositoryIssueSearchQualifierPattern       = regexp.MustCompile(`(?i)(?:^|[^a-z0-9_])-?(?:repo|org|user|is|state|type|in|label|assignee|author|mentions|milestone|comments|created|updated|closed|no|language|archived|draft|linked|sort):`)
-	repositoryIssueSearchBooleanPattern         = regexp.MustCompile(`(?:^|[^A-Za-z0-9_])(?:AND|OR|NOT)(?:[^A-Za-z0-9_]|$)`)
+	repositoryIssueCreateMarkerPattern     = regexp.MustCompile(`<!--\s*diana-operation:create:([a-f0-9]{64})(?::[a-f0-9]{64})?\s*-->`)
+	repositoryIssueAnyMarkerPattern        = regexp.MustCompile(`<!--\s*diana-operation:[a-z_]+:[a-f0-9]{64}(?::[a-f0-9]{64})?\s*-->`)
+	repositoryIssueCQPattern               = regexp.MustCompile(`(?i)\[CQ:[^\]]+\]`)
+	repositoryIssueIPv4Pattern             = regexp.MustCompile(`\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b`)
+	repositoryIssueRuntimeIDPattern        = regexp.MustCompile(`(?i)\b(user_id|group_id|message_id|self_id|qq|uin)\b\s*[:=]\s*["']?[A-Za-z0-9_-]{4,}["']?`)
+	repositoryIssueUUIDPattern             = regexp.MustCompile(`(?i)\b[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b`)
+	repositoryIssueURLPattern              = regexp.MustCompile(`https?://[^\s<>"']+`)
+	repositoryIssuePlainRepositoryPattern  = regexp.MustCompile(`(?i)(?:^|[^a-z0-9_./-])([a-z0-9_.-]*[a-z0-9_-]/[a-z0-9_.-]*[a-z0-9_-])(?:$|\.(?:$|\s)|[^a-z0-9_./-])`)
+	repositoryIssueGitHubRepositoryPattern = regexp.MustCompile(`(?i)(?:^|[^a-z0-9_./-])(?:https?://)?github\.com/([a-z0-9_.-]*[a-z0-9_-]/[a-z0-9_.-]*[a-z0-9_-])(?:\.git)?(?:/issues(?:/[0-9]+)?/?)?(?:$|\.(?:$|\s)|[^a-z0-9_./-])`)
+	repositoryIssueNumberMentionPattern    = regexp.MustCompile(`(?i)(?:#\s*|issues?\s*(?:#|/)?\s*|工单\s*#?\s*|议题\s*#?\s*)([0-9]+)`)
+	repositoryIssueSearchQualifierPattern  = regexp.MustCompile(`(?i)(?:^|[^a-z0-9_])-?(?:repo|org|user|is|state|type|in|label|assignee|author|mentions|milestone|comments|created|updated|closed|no|language|archived|draft|linked|sort):`)
+	repositoryIssueSearchBooleanPattern    = regexp.MustCompile(`(?:^|[^A-Za-z0-9_])(?:AND|OR|NOT)(?:[^A-Za-z0-9_]|$)`)
 )
 
 type dianaGitHubTool struct {
@@ -3736,16 +3726,14 @@ func sanitizeRepositoryIssueText(value string, limit int, singleLine bool) (stri
 	value = strings.TrimSpace(value)
 	redactions := 0
 	value, redactions = replaceRepositoryIssueSensitive(value, repositoryIssueCQPattern, "[REDACTED_MEDIA]", redactions)
-	value, redactions = replaceRepositoryIssueSensitive(value, repositoryIssuePrivateKeyPattern, "[REDACTED_PRIVATE_KEY]", redactions)
-	value, redactions = replaceRepositoryIssueSensitive(value, repositoryIssueGitHubTokenPattern, "[REDACTED_TOKEN]", redactions)
-	value, redactions = replaceRepositoryIssueSensitive(value, repositoryIssueCommonTokenPattern, "[REDACTED_TOKEN]", redactions)
-	value, redactions = replaceRepositoryIssueSensitive(value, repositoryIssueBearerPattern, "Bearer [REDACTED]", redactions)
-	value, redactions = replaceRepositoryIssueSensitive(value, repositoryIssueQuotedCredentialPattern, `"$1":"[REDACTED]"`, redactions)
-	value, redactions = replaceRepositoryIssueSensitive(value, repositoryIssueQuotedValueCredentialPattern, "$1=[REDACTED]", redactions)
-	value, redactions = replaceRepositoryIssueSensitive(value, repositoryIssueAuthorizationPattern, "Authorization=[REDACTED]", redactions)
-	value, redactions = replaceRepositoryIssueSensitive(value, repositoryIssueCredentialPattern, "$1=[REDACTED]", redactions)
-	value, redactions = replaceRepositoryIssueSensitive(value, repositoryIssueEmailPattern, "[REDACTED_EMAIL]", redactions)
-	value, redactions = replaceRepositoryIssueSensitive(value, repositoryIssuePhonePattern, "[REDACTED_PHONE]", redactions)
+	value, redactions = replaceRepositoryIssueSensitive(value, secretmask.PrivateKeyPattern, "[REDACTED_PRIVATE_KEY]", redactions)
+	value, redactions = replaceRepositoryIssueSensitive(value, secretmask.TokenPattern, "[REDACTED_TOKEN]", redactions)
+	value, redactions = replaceRepositoryIssueSensitive(value, secretmask.BearerPattern, "$1 [REDACTED]", redactions)
+	value, redactions = replaceRepositoryIssueSensitive(value, secretmask.QuotedCredentialPattern, `${1}"[REDACTED]"`, redactions)
+	value, redactions = replaceRepositoryIssueSensitive(value, secretmask.AuthorizationPattern, "Authorization=[REDACTED]", redactions)
+	value, redactions = replaceRepositoryIssueSensitive(value, secretmask.CredentialPattern, "$1=[REDACTED]", redactions)
+	value, redactions = replaceRepositoryIssueSensitive(value, secretmask.EmailPattern, "[REDACTED_EMAIL]", redactions)
+	value, redactions = replaceRepositoryIssueSensitive(value, secretmask.PhonePattern, "[REDACTED_PHONE]", redactions)
 	value, redactions = replaceRepositoryIssueSensitive(value, repositoryIssueIPv4Pattern, "[REDACTED_IP]", redactions)
 	value, redactions = replaceRepositoryIssueSensitive(value, repositoryIssueRuntimeIDPattern, "$1=[REDACTED_ID]", redactions)
 	value, redactions = replaceRepositoryIssueSensitive(value, repositoryIssueUUIDPattern, "[REDACTED_ID]", redactions)
