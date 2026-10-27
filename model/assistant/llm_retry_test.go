@@ -1069,6 +1069,12 @@ func TestUnifiedLLMFailurePolicy(t *testing.T) {
 	}{
 		{"HTTP 500", true, true, llmCooldownTransient}, {"HTTP 529", true, true, llmCooldownTransient},
 		{"HTTP 504", true, true, llmCooldownTransient}, {"HTTP 401", false, true, llmCooldownDefault},
+		{"HTTP 520", true, true, llmCooldownTransient}, {"HTTP 522", true, true, llmCooldownTransient},
+		{"HTTP 524", true, true, llmCooldownTransient}, {"HTTP 530", true, true, llmCooldownTransient},
+		{"HTTP 501", true, true, llmCooldownTransient}, {"HTTP 599", true, true, llmCooldownTransient},
+		{"HTTP 408", true, true, llmCooldownTransient},
+		{`HTTP 400: {"error":{"message":"Failed to read request body"}}`, true, true, llmCooldownTransient},
+		{"HTTP 404", false, false, 0}, {"HTTP 413", false, false, 0},
 		{"HTTP 403", false, true, llmCooldownDefault}, {"HTTP 429", true, true, llmCooldownDefault},
 		{"HTTP 402: insufficient credits", false, true, llmCooldownDefault},
 		{"HTTP 402: Payment Required", false, true, llmCooldownDefault},

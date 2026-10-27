@@ -76,8 +76,15 @@ func llmErrorPolicy(err error) llmFailurePolicy {
 	if isModelUnavailableLLMError(err) {
 		return llmFailurePolicy{failover: true, cooldown: llmCooldownDefault}
 	}
-	switch status {
-	case 500, 502, 503, 504, 529:
+	// 5xx 一律当链路或服务端抽风：除了常见的 500/502/503/504，还有 Cloudflare 自己给的
+	// 520–524/530（源站没回、连不上、回源超时）和各家网关自定义的码。逐个列举总会漏，
+	// 漏掉的会落进下面「其它带状态码的错误」，既不重试也不切后备。408 同理。
+	if status == 408 || status >= 500 {
+		return llmFailurePolicy{retry: true, failover: true, cooldown: llmCooldownTransient}
+	}
+	// 网关等请求体等到超时会回 400（sub2api：Failed to read request body），根因是上传
+	// 在代理出口卡住，和请求内容无关，重发或换候选都可能成功。
+	if containsAnyMarker(text, []string{"failed to read request body", "read request body failed", "truncated_body"}) {
 		return llmFailurePolicy{retry: true, failover: true, cooldown: llmCooldownTransient}
 	}
 	if status != 0 {

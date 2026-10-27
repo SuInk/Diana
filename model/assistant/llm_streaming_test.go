@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/SuInk/diana/model/llm"
+	"github.com/openai/openai-go/v3"
 )
 
 // stubStreamer 既能流式也能非流式，用来验证退回逻辑。
@@ -302,6 +303,28 @@ func TestProfileStreamingUsesCandidateLocalBudget(t *testing.T) {
 	}
 	response, err := (&streamingLLMProvider{provider: provider}).Generate(context.Background(), llm.GenerateRequest{})
 	if err != nil || response.Text != "backup" || primary.generated || backup.generated {
+		t.Fatalf("response=%+v err=%v", response, err)
+	}
+}
+
+// Cloudflare 回源失败给的 520 带着真实状态码，以前落进「其它状态码」分支，
+// 既不重试也不换候选，后备配置形同虚设。
+func TestCloudflare520StreamFailsOverToBackup(t *testing.T) {
+	profiles := []llm.Profile{{ID: "primary", Config: llm.ProviderConfig{Model: "primary"}}, {ID: "backup", Config: llm.ProviderConfig{Model: "backup"}}}
+	cause := &openai.Error{StatusCode: 520}
+	primary := &stubStreamer{events: []llm.ChatEvent{{Type: llm.ChatEventError, Error: `POST "https://gateway.example.test/v1/responses": 520`, ErrorCause: cause}}}
+	backup := &stubStreamer{events: streamedReplyEvents("backup")}
+	provider, err := newProfileFailoverLLMProvider(profiles, func(cfg llm.ProviderConfig) (LLMProvider, error) {
+		if cfg.Model == "primary" {
+			return primary, nil
+		}
+		return backup, nil
+	}, true, nil, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := (&streamingLLMProvider{provider: provider}).Generate(context.Background(), llm.GenerateRequest{})
+	if err != nil || response.Text != "backup" {
 		t.Fatalf("response=%+v err=%v", response, err)
 	}
 }
