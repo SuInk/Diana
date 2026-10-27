@@ -522,15 +522,16 @@ func (r *Runtime) recordSubtaskDebugEvent(ctx context.Context, event agent.RunEv
 
 func (r *Runtime) subtaskSearchTools(event MessageEvent) ([]agent.Tool, error) {
 	var tools []agent.Tool
-	if r.plugins != nil && r.plugins.builtInBrowser {
-		tools = NewBuiltInBrowserRenderer().AgentTools()
-	}
 	if r.plugins != nil {
 		cfg := r.effectiveConfigForEvent(event)
 		var err error
 		tools, err = r.plugins.AgentToolsForPlatformWithGroupOverrides(cfg.Platform, r.pluginOverridesForEvent(event), r.pluginSettingOverridesForEvent(event))
 		if err != nil {
 			return nil, err
+		}
+		// 内置浏览器不在插件工具列表里，要跟主回复一样并进去，否则 search 子任务永远读不了正文。
+		if r.plugins.builtInBrowser {
+			tools = append(NewBuiltInBrowserRenderer().AgentTools(), tools...)
 		}
 	}
 	var searchTool, browserTool agent.Tool

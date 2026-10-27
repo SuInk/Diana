@@ -482,3 +482,22 @@ func TestSubtaskPersistsQueuedCancellation(t *testing.T) {
 		t.Fatalf("records=%#v results=%#v", records, results)
 	}
 }
+
+// 生产上插件管理器带内置浏览器：插件工具列表里没有 browser_render，
+// 以前拿插件列表覆盖掉内置浏览器，search 子任务每次都报「browser_render 当前不可用」。
+func TestSubtaskSearchToolsKeepBuiltInBrowser(t *testing.T) {
+	runtime := NewRuntime(BotConfig{BotAccount: "42"}.WithDefaults(), nilChannel{}, NewDefaultPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+		return &subtaskCaptureProvider{}, nil
+	})
+	tools, err := runtime.subtaskSearchTools(MessageEvent{Kind: EventKindGroup, GroupID: "g1", UserID: "u1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := map[string]bool{}
+	for _, tool := range tools {
+		names[tool.Name()] = true
+	}
+	if !names[agent.WebSearchToolName] || !names["browser_render"] {
+		t.Fatalf("subtask search tools = %v, want web_search and browser_render", names)
+	}
+}

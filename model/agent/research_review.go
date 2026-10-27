@@ -88,7 +88,7 @@ func parseUnsupportedDetails(text string) string {
 
 func unsupportedDetailsRepair(unsupported string) string {
 	return "复核发现正文里这些细节在本轮读到的工具内容里找不到原文：" + unsupported +
-		"。重新 send：能再查就先查；不查的话把它们从正文删掉，或明说是印象、没查实。来源只覆盖一部分（例如单个版本公告、名字相近的另一个项目）时只按它覆盖的范围下结论。查到的部分照常回答，不要因此整条推脱。"
+		"。重新 send：能再查就先查；不查的话把它们从正文删掉，或用口语说明只是印象（比如「这个我记得是…，不太确定」）。来源只覆盖一部分（例如单个版本公告、名字相近的另一个项目）时只按它覆盖的范围下结论。查到的部分照常回答，不要因此整条推脱。"
 }
 
 // researchReviewEvidence 把本轮检索和读页的输出压成可读文本。web_search 的 JSON 开头

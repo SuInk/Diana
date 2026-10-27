@@ -718,3 +718,34 @@ func TestEarlyRenderReadinessIsOffWithoutReadyKey(t *testing.T) {
 		t.Fatal("nil readiness 不该收尾")
 	}
 }
+
+// 生产上 GitHub 仓库页经慢代理卡在 loading：有标题，正文只有「Skip to content」，
+// 等够宽限期也不该当成读完，否则模型拿到空壳就收尾。
+func TestRenderReadinessWaitsForLoadingShellBody(t *testing.T) {
+	started := time.Unix(1_700_000_000, 0)
+	cfg := sandboxedBrowserConfigWithDefaults(SandboxedBrowserConfig{
+		VirtualTimeBudget: time.Second,
+		StabilityWindow:   800 * time.Millisecond,
+		NetworkIdleWindow: 500 * time.Millisecond,
+	})
+	readiness := newRenderReadiness(started)
+	activity := browserActivitySnapshot{
+		LastNavigation:  started,
+		LastNetwork:     started.Add(5500 * time.Millisecond),
+		Loading:         true,
+		PendingRequests: 111,
+	}
+	probe := browserDOMProbe{
+		URL:               "https://github.com/example/repo",
+		ReadyState:        "loading",
+		Title:             "GitHub - example/repo",
+		Description:       "Repository description",
+		TextLength:        len("Skip to content"),
+		SemanticSignature: "loading-shell",
+	}
+	_ = readiness.observe(started, probe, activity, cfg)
+	decision := readiness.observe(started.Add(11*time.Second), probe, activity, cfg)
+	if decision.ContentStable || decision.Complete {
+		t.Fatalf("loading shell accepted as rendered page: %#v", decision)
+	}
+}

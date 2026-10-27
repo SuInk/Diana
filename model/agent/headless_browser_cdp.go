@@ -33,6 +33,9 @@ const (
 	previousPageTextLimit      = 1200
 	maxPreviousPageSnapshots   = 3
 	semanticNetworkGraceFactor = 3
+	// loadingDocumentMinText 是 HTML 还没下载完时肯收尾的最少正文字数。代理出口慢时
+	// GitHub 这类页面卡在 loading，只有标题和一行「Skip to content」，不设下限就拿空壳收尾。
+	loadingDocumentMinText = 200
 )
 
 type browserDOMProbe struct {
@@ -244,7 +247,7 @@ func (r *renderReadiness) observe(now time.Time, probe browserDOMProbe, activity
 	loadingStableWindow := max(browserLoadingStableWindow, 2*time.Duration(semanticNetworkGraceFactor)*cfg.StabilityWindow)
 	documentReady := probe.ReadyState == "complete" ||
 		(probe.ReadyState == "interactive" && semanticOverride) ||
-		(probe.ReadyState == "loading" && stableFor >= loadingStableWindow)
+		(probe.ReadyState == "loading" && probe.TextLength >= loadingDocumentMinText && stableFor >= loadingStableWindow)
 	contentStable := documentReady && probe.meaningful() && navigationQuiet && stableFor >= cfg.StabilityWindow
 	settled := contentStable && ((!activity.Loading && networkQuiet) || semanticOverride)
 	minimumObserved := now.Sub(r.started) >= cfg.VirtualTimeBudget || nothingLeftToWaitFor(probe, activity, settled, networkQuiet)
