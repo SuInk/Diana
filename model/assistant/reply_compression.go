@@ -105,6 +105,15 @@ func (r *Runtime) prepareGeneratedReply(ctx context.Context, cfg BotConfig, repl
 		log.Printf("diana reply: stripped agent_finalize tags leaked into the reply body (platform=%s profile=%s)", cfg.Platform, cfg.ID)
 		body = stripped
 	}
+	// 整段是收尾信封时救回信封里的正文，别把 {"content": 发出去。表情包字段不论
+	// 当前顺序设置都认：模型照历史写出 sticker_order 也还是信封。
+	if content, silent, envelope := agent.FinalizeEnvelopeFromText(body, stickerFinalizeFields(StickerReplyOrderAuto)...); envelope {
+		log.Printf("diana reply: unwrapped agent_finalize envelope leaked into the reply body (platform=%s profile=%s)", cfg.Platform, cfg.ID)
+		if silent || strings.TrimSpace(content) == "" {
+			return "", newModelSilentFinishError("回复正文是一个静默或空的收尾信封，本轮不发送")
+		}
+		body = content
+	}
 	if (tagged && strings.TrimSpace(body) == "") || agent.LooksLikeRenderedToolCall(body) {
 		log.Printf("diana reply blocked: rendered tool call leaked into the reply body (platform=%s profile=%s)", cfg.Platform, cfg.ID)
 		return "", errRenderedToolCallReply

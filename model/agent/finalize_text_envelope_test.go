@@ -154,3 +154,34 @@ func TestInlineFinalizeAction(t *testing.T) {
 		}
 	}
 }
+
+// 线上 10-27 swe-2：收尾标签成对包着整个信封。剥完标签剩下的 JSON 原来被当正文，
+// 再按 [diana-msg] 拆成「{"content": "第一段」和「第二段", "silent": false, …}」两条发进群里。
+func TestRunnerDecodesFinalizeEnvelopeWrappedInInlineTags(t *testing.T) {
+	client := &scriptedClient{responses: []string{
+		`[agent_finalize]{"content": "早上好呀[diana-msg]今天也要加油", "silent": false, "silent_reason": "", "sticker": "", "task_state": null}[/agent_finalize]`,
+	}}
+	runner, err := NewRunner(client, Config{WorkDir: t.TempDir(), MaxSteps: 3, FinalizeFields: []FinalizeField{{Name: "sticker"}}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := runner.Run(context.Background(), Request{Messages: []llm.Message{{Role: llm.RoleUser, Content: "早"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Text != "早上好呀[diana-msg]今天也要加油" || resp.Silent {
+		t.Fatalf("Text = %q silent = %v", resp.Text, resp.Silent)
+	}
+}
+
+func TestInlineFinalizeTagsWrappingEnvelope(t *testing.T) {
+	declared := []FinalizeField{{Name: "sticker"}}
+	action, ok := parseAction(`[agent_finalize]{"content":"","silent":true,"silent_reason":"没人叫我","sticker":""}[/agent_finalize]`, declared...)
+	if !ok || action.Action != "final" || !action.Silent || action.Content != "" || action.SilentReason != "没人叫我" {
+		t.Fatalf("silent envelope => ok=%v %#v", ok, action)
+	}
+	action, ok = parseAction(`[agent_finalize]{"content":"晚安","silent":false,"sticker":"晚安 挥手"}[/agent_finalize]`, declared...)
+	if !ok || action.Content != "晚安" || action.Fields["sticker"] != "晚安 挥手" {
+		t.Fatalf("sticker envelope => ok=%v %#v", ok, action)
+	}
+}

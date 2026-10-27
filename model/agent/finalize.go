@@ -191,6 +191,16 @@ func finalizeEnvelopeFromText(text string, declared ...FinalizeField) (llmAction
 	return finalizeAction(llm.ToolCall{Name: finalizeToolName, Arguments: arguments}, ""), true
 }
 
+// FinalizeEnvelopeFromText 供出站兜底用：text 整段是收尾信封时返回信封里的正文和
+// 是否静默。判据同 finalizeEnvelopeFromText。
+func FinalizeEnvelopeFromText(text string, declared ...FinalizeField) (content string, silent bool, ok bool) {
+	action, ok := finalizeEnvelopeFromText(text, declared...)
+	if !ok {
+		return "", false, false
+	}
+	return action.Content, action.Silent, true
+}
+
 // finalizeRetiredFields 是撤掉的收尾字段：render 不再提供，但旧历史里的信封还带着它。
 var finalizeRetiredFields = map[string]struct{}{"render": {}}
 

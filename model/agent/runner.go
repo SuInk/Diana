@@ -407,7 +407,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 			DurationMS:   modelDuration.Milliseconds(),
 			Usage:        usage,
 		})
-		action, ok := parseAction(lastText)
+		action, ok := parseAction(lastText, r.cfg.FinalizeFields...)
 		nativeToolCall := len(resp.ToolCalls) > 0
 		var nativeCall llm.ToolCall
 		nativeCallIndex := 0
@@ -1002,7 +1002,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 		}
 		return finish(action.Content, finishReason)
 	}
-	if action, ok := parseAction(finalText); ok && action.Action == "final" {
+	if action, ok := parseAction(finalText, r.cfg.FinalizeFields...); ok && action.Action == "final" {
 		if action.Silent && !imageTaskQueued {
 			return finishSilent(action, finishReason)
 		}
@@ -1030,7 +1030,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 	if lastText == "" {
 		lastText = "这次处理没有生成可发送的最终回复，请稍后再试。"
 	}
-	if action, ok := parseAction(lastText); ok && action.Action == "tool" {
+	if action, ok := parseAction(lastText, r.cfg.FinalizeFields...); ok && action.Action == "tool" {
 		return finish("这次处理没有顺利收尾；已经执行过的操作不会重复执行，请稍后再试。", finishReason)
 	}
 	if looksLikeAgentAction(lastText) {
@@ -1547,14 +1547,15 @@ type llmAction struct {
 	Salvaged bool `json:"-"`
 }
 
-// parseAction 解析模型输出的 Agent JSON 动作。
-func parseAction(text string) (llmAction, bool) {
+// parseAction 解析模型输出的 Agent JSON 动作。declared 是调用方追加的收尾字段，
+// 用来认出包在收尾标签里的信封。
+func parseAction(text string, declared ...FinalizeField) (llmAction, bool) {
 	// 供应商把 function call 渲染成人话时既不是 JSON 动作也不是自然语言正文，
 	// 必须先认出来：收尾调用救回正文，其余交给协议修复，绝不当正文往下走。
 	if action, rendered := renderedToolCallAction(text); rendered {
 		return action, action.Action != ""
 	}
-	if action, inline := inlineFinalizeAction(text); inline {
+	if action, inline := inlineFinalizeAction(text, declared...); inline {
 		return action, true
 	}
 	// 兼容模型把 JSON 包在 Markdown code fence 或前后带解释文本的情况。

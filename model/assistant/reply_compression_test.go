@@ -74,6 +74,27 @@ func TestInlineFinalizeTagStrippedOnOutboundPath(t *testing.T) {
 	}
 }
 
+// 整段是收尾信封（线上 10-27 是成对标签包着信封）时出站前救回 content，
+// 不能把 {"content": 发出去；静默信封不发。
+func TestFinalizeEnvelopeUnwrappedOnOutboundPath(t *testing.T) {
+	p := &compressionTestProvider{err: errors.New("must not call")}
+	rt := compressionTestRuntime(p)
+	for _, leaked := range []string{
+		`[agent_finalize]{"content": "早上好呀[diana-msg]今天也要加油", "silent": false, "silent_reason": "", "sticker": "", "task_state": null}[/agent_finalize]`,
+		`{"content": "早上好呀[diana-msg]今天也要加油", "silent": false, "sticker": "", "sticker_order": ""}`,
+	} {
+		got, err := rt.prepareGeneratedReply(context.Background(), BotConfig{MaxReplyChars: 8000}, leaked)
+		if err != nil || strings.Contains(got, "content") || !strings.Contains(got, "早上好呀") || !strings.Contains(got, "今天也要加油") {
+			t.Fatalf("%q => got=%q err=%v", leaked, got, err)
+		}
+	}
+	got, err := rt.prepareGeneratedReply(context.Background(), BotConfig{MaxReplyChars: 8000}, `[agent_finalize]{"content":"","silent":true,"sticker":""}[/agent_finalize]`)
+	var silent *modelSilentFinishError
+	if !errors.As(err, &silent) || got != "" {
+		t.Fatalf("silent envelope should not send: got=%q err=%v", got, err)
+	}
+}
+
 // 正常说到「调用工具」的句子不能被误拦。
 func TestNormalReplyMentioningToolsStillSends(t *testing.T) {
 	p := &compressionTestProvider{err: errors.New("must not call")}

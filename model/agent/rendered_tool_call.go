@@ -117,10 +117,18 @@ func StripInlineFinalizeTags(text string) (body string, attrs map[string]string,
 // inlineFinalizeAction 把拼着收尾标签的正文转成收尾动作。标签外有正文就用正文：
 // 线上那条标签里的 content 只是正文开头的半句，外面那段才是模型真正写完的回复。
 // 只有标签外什么都没有时才看标签里的 content 和 silent。
-func inlineFinalizeAction(text string) (llmAction, bool) {
+//
+// 标签里包的也可能是整个信封：线上 10-27 swe-2 写出
+// 「[agent_finalize]{"content":"…[diana-msg]…","silent":false,"sticker":"",…}[/agent_finalize]」，
+// 剥完标签剩下的正好是 JSON，原来被当成正文，再按 [diana-msg] 拆成两条半截 JSON 发进了群。
+// 这时按信封解码，判据和 finalizeEnvelopeFromText 一致，所以要带上调用方声明的字段。
+func inlineFinalizeAction(text string, declared ...FinalizeField) (llmAction, bool) {
 	body, attrs, ok := StripInlineFinalizeTags(text)
 	if !ok {
 		return llmAction{}, false
+	}
+	if envelope, decoded := finalizeEnvelopeFromText(body, declared...); decoded {
+		return envelope, true
 	}
 	arguments := map[string]any{}
 	for key, value := range attrs {
