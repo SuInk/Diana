@@ -4844,6 +4844,10 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 			}
 			ownsRegistry = true
 		}
+		// 图片描述会进提示词、又有缓存可改时才挂上，见 image_fix_tool.go。
+		if r.imageDescriptionsInPrompt(cfg) && r.recallImageDescriptionStore() != nil {
+			registry.Register(newDianaImageFixTool(r, event))
+		}
 		// 常驻名单要等注册表建好才算得出来：名单记的是插件、MCP 服务和工具的 ID，
 		// 得知道这一轮到底注册了哪些工具、哪条 MCP 和插件各带了哪几个。
 		agentCfg.CoreTools = r.agentCoreTools(event, registry)
@@ -4898,7 +4902,6 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 				appendDecision.previousKey = previous.key
 			}
 		}
-		r.startImageFixGate(ctx, cfg, event)
 		interjections, stopInterjections := r.startDirectReplyInterjections(ctx)
 		observer, stopProgress := r.startReplyProgress(ctx, event, r.agentRunObserver(event))
 		resp, err := agentRunner.Run(agent.WithCallerIdentity(ctx, callerIdentityForEvent(cfg, event)), agent.Request{
@@ -5007,7 +5010,10 @@ func (p *runtimeAgentLLMProvider) Generate(ctx context.Context, req llm.Generate
 //
 // 原先常驻、或「什么时候该用」只写在描述里的工具（戳一戳、群管）进 replyFeaturedTools，
 // 在目录里写完整描述：目录在缓存前缀里，多写几百字几乎不花钱，压成一行模型就不会想到去加载。
-var replyAgentCoreTools = []string{agent.FinalizeToolName}
+//
+// image_fix 也常驻：它要在模型口头认错的同一步被调用，放进按需目录就得先 tool_search，
+// 模型不会为「顺手记一笔」多走这一步。定义对谁都一样，不影响前缀缓存。
+var replyAgentCoreTools = []string{agent.FinalizeToolName, dianaImageFixToolName}
 
 // replyFeaturedTools 在按需目录里写完整描述，见 replyAgentCoreTools。
 var replyFeaturedTools = []string{

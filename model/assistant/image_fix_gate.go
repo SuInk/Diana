@@ -23,8 +23,9 @@ import (
 //
 // 先试过在 agent_finalize 上加可选字段让模型认错时顺手填：10-01 线上回放（gemini-3.8-
 // flash-low），群友说「这里面一个提纳里，一个主角，一个派蒙」，机器人 3/3 都回「原来是
-// 提纳里、荧和派蒙」，可一次都没填那个字段。所以改成在 Agent 起跑时并行
-// 单独问一次，不靠主模型自觉，也不拖慢回复。
+// 提纳里、荧和派蒙」，可一次都没填那个字段。所以当时改成在 Agent 起跑时并行单独问一次。
+// 10-28 主回复路径改成主模型自己调用 image_fix 工具（见 image_fix_tool.go），这里只剩
+// 机器人不回、但引用了图的消息：群友之间互相纠正时没有主模型可问。
 //
 // 描述缓存跨群共用，乱「纠正」会污染所有群，所以重写时让视觉模型对照画面核对，和画面
 // 明显矛盾的说法不采纳。
@@ -32,11 +33,8 @@ import (
 const (
 	// imageFixMaxImages 是一次更正最多重写几张图。
 	imageFixMaxImages = 4
-	// imageFixMaxCandidates 是一次判断带几张候选图，imageFixScanMessages 是往回找候选图
-	// 翻几条消息：09-29 群友纠正时图已经在 12 条之前，引用的是机器人那句「又发阿梓
-	// 发呆」，窗口只有 10 条时候选里没有那张图，判断就挂到了别的图上。
+	// imageFixMaxCandidates 是一次判断最多带几张候选图（被引用消息里的图）。
 	imageFixMaxCandidates = 6
-	imageFixScanMessages  = 20
 	// imageFixRecentMessages 是带给判断的近期消息条数。
 	imageFixRecentMessages = 10
 	imageFixGateTimeout    = 20 * time.Second
@@ -57,7 +55,7 @@ var promptImageFixGateSpec = registerPrompt(PromptSpec{
 	Key:      "routing.image_fix_gate",
 	Group:    PromptGroupRouting,
 	Title:    "群友纠正图片描述",
-	Usage:    "Agent 开始回复时，近期聊天里有带缓存描述的图，就并行判断当前消息是不是在纠正某张图认错了。判为纠正时，让视觉模型带着这条更正对照原图重写缓存描述，以后再有人发这张图就不会再认错。改动时保持 fix、message_id 字段名不变。",
+	Usage:    "机器人不回复的消息引用了带缓存描述的图时，判断它是不是在纠正那张图认错了（机器人回复时由主模型调用 image_fix 工具）。判为纠正时，让视觉模型带着这条更正对照原图重写缓存描述，以后再有人发这张图就不会再认错。改动时保持 fix、message_id 字段名不变。",
 	Default:  imageFixGateBody,
 	Contract: imageFixGateContract,
 })
@@ -84,24 +82,14 @@ type imageFixGatePayload struct {
 
 // startQuotedImageFixGate 给机器人不回复的消息用：群友之间互相纠正时机器人未必接话，
 // 可每条群消息都判一次太贵（10-01 一天 2011 条带文字的消息，近 8 条里有图的就有
-// 1003 条），所以只看直接引用了带描述图片的那些，一天十几二十条。
+// 1003 条），所以只看直接引用了带描述图片的那些，一天十几二十条。在后台判断并改写，
+// 不等结果。
 func (r *Runtime) startQuotedImageFixGate(ctx context.Context, event MessageEvent) {
 	// 彻底关闭的群不跑后台模型（见 groupDormant），静默旁观的群照常检查。
 	if r == nil || event.Quoted == nil || !hasImageSegment(event.Quoted.Segments) || r.groupDormant(event) {
 		return
 	}
-	r.startImageFixGateScoped(ctx, r.effectiveConfigForEvent(event), event, true)
-}
-
-// startImageFixGate 在后台判断并改写，不等结果。图在提示词里换成描述、又有描述缓存
-// 可改时才跑；近期没有带描述的图就不发请求。
-func (r *Runtime) startImageFixGate(ctx context.Context, cfg BotConfig, event MessageEvent) {
-	r.startImageFixGateScoped(ctx, cfg, event, false)
-}
-
-// quotedOnly 时只拿被引用的那条当候选，不翻近期聊天。
-func (r *Runtime) startImageFixGateScoped(ctx context.Context, cfg BotConfig, event MessageEvent, quotedOnly bool) {
-	if r == nil || !r.imageDescriptionsInPrompt(cfg) {
+	if !r.imageDescriptionsInPrompt(r.effectiveConfigForEvent(event)) {
 		return
 	}
 	store := r.recallImageDescriptionStore()
@@ -111,7 +99,7 @@ func (r *Runtime) startImageFixGateScoped(ctx context.Context, cfg BotConfig, ev
 	go func() {
 		defer recoverGoroutinePanic("image_fix_gate")
 		gateCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), imageFixGateTimeout)
-		correction, messageID := r.detectImageFix(gateCtx, event, store, quotedOnly)
+		correction, messageID := r.detectImageFix(gateCtx, event, store)
 		cancel()
 		if correction == "" {
 			return
@@ -123,7 +111,8 @@ func (r *Runtime) startImageFixGateScoped(ctx context.Context, cfg BotConfig, ev
 	}()
 }
 
-func (r *Runtime) detectImageFix(ctx context.Context, event MessageEvent, store ImageDescriptionStore, quotedOnly bool) (string, string) {
+// detectImageFix 只拿被引用的那条当候选，近期聊天只作上文。
+func (r *Runtime) detectImageFix(ctx context.Context, event MessageEvent, store ImageDescriptionStore) (string, string) {
 	payload := imageFixGatePayload{CurrentText: truncateRunes(strings.TrimSpace(readableEventText(event, historyPlainText(event))), 480)}
 	candidates := map[string]bool{}
 	addCandidates := func(messageID, sender string, segments []MessageSegment) {
@@ -148,26 +137,20 @@ func (r *Runtime) detectImageFix(ctx context.Context, event MessageEvent, store 
 		payload.QuotedText = truncateRunes(quotedPlainText(event.Quoted), 480)
 		addCandidates(payload.QuotedMessageID, strings.TrimSpace(event.Quoted.SenderName), event.Quoted.Segments)
 	}
-	history := r.sessionHistory(event)
-	if quotedOnly && len(payload.Images) == 0 {
+	if len(payload.Images) == 0 {
 		return "", ""
 	}
+	history := r.sessionHistory(event)
 	seen := 0
-	for i := len(history) - 1; i >= 0 && seen < imageFixScanMessages; i-- {
+	for i := len(history) - 1; i >= 0 && seen < imageFixRecentMessages; i-- {
 		item := history[i]
 		if item.MessageID == event.MessageID {
 			continue
 		}
 		seen++
-		if !quotedOnly && !candidates[item.MessageID] {
-			addCandidates(item.MessageID, strings.TrimSpace(item.SenderNameOrID()), item.Segments)
-		}
-		if historyItem := visualIntentHistoryItemFromEvent(item); seen <= imageFixRecentMessages && (historyItem.Text != "" || historyItem.Images > 0) {
+		if historyItem := visualIntentHistoryItemFromEvent(item); historyItem.Text != "" || historyItem.Images > 0 {
 			payload.RecentMessages = append([]visualIntentHistoryItem{historyItem}, payload.RecentMessages...)
 		}
-	}
-	if len(payload.Images) == 0 {
-		return "", ""
 	}
 	payloadJSON, err := json.Marshal(payload)
 	if err != nil {
