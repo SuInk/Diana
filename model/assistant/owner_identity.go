@@ -27,6 +27,11 @@ func TelegramOwnerUsername(value string) string {
 // neither rewrites the saved owner setting nor changes message/routing IDs.
 func (cfg BotConfig) OwnerIDForEvent(event MessageEvent) string {
 	owner := strings.TrimSpace(cfg.OwnerID)
+	// 没填主人的机器人，在 WebUI 聊天页和通话里登录的人就是主人。webChat 只由服务端
+	// 自己造的事件带，平台消息伪造不了。
+	if owner == "" && event.webChat {
+		return strings.TrimSpace(event.UserID)
+	}
 	if cfg.Platform != PlatformTelegram || event.Platform != PlatformTelegram || event.SenderIsBot || event.Outbound || (cfg.ID != "" && event.ProfileID != "" && cfg.ID != event.ProfileID) {
 		return owner
 	}

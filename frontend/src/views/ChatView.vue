@@ -26,7 +26,7 @@
           <BotAvatar :name="contact.name" :src="contact.avatar" :size="46" />
           <span class="qq-contact-text">
             <span class="qq-contact-top"><strong>{{ contact.name }}</strong><time v-if="lastOf(contact.id)">{{ shortTime(lastOf(contact.id)!.at) }}</time></span>
-            <small>{{ typingFor === contact.id ? "正在输入…" : lastOf(contact.id)?.text || contact.platform }}</small>
+            <small>{{ inFlight[contact.id] ? "正在输入…" : lastOf(contact.id)?.text || contact.platform }}</small>
           </span>
         </button>
         <p v-if="search && contacts.length && !filteredContacts.length" class="qq-empty">没有匹配的机器人</p>
@@ -72,7 +72,7 @@
         <form class="qq-composer" @submit.prevent="send">
           <label class="sr-only" for="qq-input">发消息给 {{ current.name }}</label>
           <textarea id="qq-input" ref="composer" v-model="draft" rows="1" maxlength="4000" placeholder="发消息…" :disabled="!!info?.problem || loading" @keydown="onKeydown" />
-          <button class="qq-send" type="submit" :disabled="!draft.trim() || !!info?.problem || loading || sending">发送</button>
+          <button class="qq-send" type="submit" :disabled="!draft.trim() || !!info?.problem || loading">发送</button>
         </form>
       </template>
       <div v-else class="qq-placeholder"><MessagesSquare :size="40" aria-hidden="true" /><p>选一台机器人开始聊天</p></div>
@@ -127,15 +127,17 @@ const dividers = computed(() => timeDividers(messages.value));
 // 每台机器人最后一条消息，列表里当预览。
 const lastMessages = ref<Record<string, WebChatMessage>>({});
 const loading = ref(false);
-const sending = ref(false);
-const typingFor = ref("");
+// 和 QQ 一样她回复前也能接着发：每台机器人还有几句在等回复。
+const inFlight = ref<Record<string, number>>({});
+const sending = computed(() => (inFlight.value[selected.value] ?? 0) > 0);
 const error = ref("");
 const draft = ref("");
 const transcript = ref<HTMLElement | null>(null);
 const composer = ref<HTMLTextAreaElement | null>(null);
 const callAudio = ref<CallAudio | null>(null);
 let loadController: AbortController | null = null;
-let sendController: AbortController | null = null;
+const sendControllers = new Set<AbortController>();
+let localSeq = 0;
 
 function readSelected(): string {
   try {
@@ -215,21 +217,21 @@ function openContact(id: string): void {
 
 async function send(): Promise<void> {
   const text = draft.value.trim();
-  if (!text || sending.value || !current.value) return;
+  if (!text || !current.value) return;
   draft.value = "";
-  const local: WebChatMessage = { id: `local-${Date.now()}`, role: "user", text, at: Math.floor(Date.now() / 1000), pending: true };
+  const local: WebChatMessage = { id: `local-${++localSeq}`, role: "user", text, at: Math.floor(Date.now() / 1000), pending: true };
   messages.value = [...messages.value, local];
   await deliver(local);
 }
 
 async function deliver(local: WebChatMessage): Promise<void> {
   const profile = selected.value;
-  sending.value = true;
-  typingFor.value = profile;
+  inFlight.value = { ...inFlight.value, [profile]: (inFlight.value[profile] ?? 0) + 1 };
   await scrollToBottom();
-  sendController = new AbortController();
+  const controller = new AbortController();
+  sendControllers.add(controller);
   try {
-    await sendWebChat(profile, local.text, sendController.signal, (reply) => {
+    await sendWebChat(profile, local.text, controller.signal, (reply) => {
       if (profile !== selected.value) return;
       markSent(local);
       messages.value = [...messages.value, reply];
@@ -239,12 +241,11 @@ async function deliver(local: WebChatMessage): Promise<void> {
   } catch (err) {
     if (profile === selected.value) {
       messages.value = messages.value.map((m) => (m.id === local.id ? { ...m, pending: false, failed: true } : m));
-      if (!sendController?.signal.aborted) error.value = err instanceof Error ? err.message : String(err);
+      if (!controller.signal.aborted) error.value = err instanceof Error ? err.message : String(err);
     }
   } finally {
-    sending.value = false;
-    typingFor.value = "";
-    sendController = null;
+    inFlight.value = { ...inFlight.value, [profile]: Math.max(0, (inFlight.value[profile] ?? 1) - 1) };
+    sendControllers.delete(controller);
     rememberLast(profile);
   }
 }
@@ -256,9 +257,8 @@ function markSent(local: WebChatMessage): void {
 }
 
 function resend(message: WebChatMessage): void {
-  if (sending.value) return;
   error.value = "";
-  const retry = { ...message, id: `local-${Date.now()}`, pending: true, failed: false, at: Math.floor(Date.now() / 1000) };
+  const retry = { ...message, id: `local-${++localSeq}`, pending: true, failed: false, at: Math.floor(Date.now() / 1000) };
   messages.value = [...messages.value.filter((m) => m.id !== message.id), retry];
   void deliver(retry);
 }
@@ -309,7 +309,7 @@ void loadProfiles();
 
 onBeforeUnmount(() => {
   loadController?.abort();
-  sendController?.abort();
+  for (const controller of sendControllers) controller.abort();
 });
 </script>
 

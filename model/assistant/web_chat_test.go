@@ -61,17 +61,43 @@ func TestWebChatSendRepliesInPageNotPlatform(t *testing.T) {
 	}
 }
 
-func TestWebChatRequiresNumericOwner(t *testing.T) {
-	runtime := NewRuntime(BotConfig{ID: "bot"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
-	if info := runtime.WebChatInfo("bot"); !strings.Contains(info.Problem, "主人") {
-		t.Fatalf("没有主人账号时应拒绝，info = %#v", info)
+// 登录 WebUI 的人就是主人：没填主人、Telegram 主人填的是用户名，都照样能聊，而且按主人对待。
+func TestWebChatTreatsLoggedInUserAsOwnerForEveryBot(t *testing.T) {
+	for _, cfg := range []BotConfig{
+		{ID: "bot"},
+		{ID: "bot", Platform: PlatformTelegram, OwnerID: "@someone_here"},
+		{ID: "bot", Platform: "qq-official", OwnerID: "A1B2C3D4E5F6"},
+	} {
+		runtime := NewRuntime(cfg, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+		if info := runtime.WebChatInfo("bot"); info.Problem != "" {
+			t.Fatalf("%+v: info = %#v", cfg, info)
+		}
+		gotCfg, event, err := runtime.ownerChatEvent("bot")
+		if err != nil {
+			t.Fatalf("%+v: ownerChatEvent() error = %v", cfg, err)
+		}
+		if !gotCfg.IsOwnerEvent(event) {
+			t.Fatalf("%+v: 聊天页的登录者没被当成主人，event = %#v", cfg, event)
+		}
 	}
-	if _, err := runtime.WebChatSend(context.Background(), "bot", "hi", func(WebChatMessage) {}); err == nil {
-		t.Fatal("没有主人账号时 WebChatSend 应报错")
+	// 平台上的陌生人不会因为机器人没填主人就被当成主人。
+	cfg := BotConfig{ID: "bot"}
+	if cfg.IsOwnerEvent(MessageEvent{ProfileID: "bot", UserID: webChatOwnerID, Kind: EventKindPrivate}) {
+		t.Fatal("平台消息冒用 webui-owner 被当成了主人")
 	}
-	runtime = NewRuntime(BotConfig{ID: "bot", OwnerID: "@someone"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
-	if info := runtime.WebChatInfo("bot"); !strings.Contains(info.Problem, "数字 ID") {
-		t.Fatalf("主人填用户名时应拒绝，info = %#v", info)
+}
+
+func TestWebChatUsesRememberedTelegramOwnerID(t *testing.T) {
+	cfg := BotConfig{ID: "bot", Platform: PlatformTelegram, OwnerID: "@someone_here"}
+	runtime := NewRuntime(cfg, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	runtime.telegramOwnerIDs.Store("bot", "12345")
+	gotCfg, event, err := runtime.ownerChatEvent("bot")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 用记下的数字 ID，聊天页和 Telegram 上的私聊是同一段记录。
+	if event.UserID != "12345" || !gotCfg.IsOwnerEvent(event) {
+		t.Fatalf("event = %#v", event)
 	}
 }
 

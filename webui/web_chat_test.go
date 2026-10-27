@@ -38,13 +38,8 @@ func TestWebChatHistoryAndProblems(t *testing.T) {
 		t.Fatalf("空消息：%d", w.Code)
 	}
 
-	router, _, token = newVoiceCallTest(t, assistant.BotConfig{ID: "bot"})
-	w = adminChatRequest(router, "GET", "/api/assistant/chat?profile=bot", token, "")
-	if json.Unmarshal(w.Body.Bytes(), &body) != nil || body.Info.Problem == "" {
-		t.Fatalf("没有主人账号时应说明原因：%s", w.Body.String())
-	}
 	// 聊不了时不开流，直接回原因。
-	if w := adminChatRequest(router, "POST", "/api/assistant/chat", token, `{"profile":"bot","text":"hi"}`); w.Code != http.StatusConflict {
-		t.Fatalf("没有主人账号时发消息：%d %s", w.Code, w.Body.String())
+	if w := adminChatRequest(router, "POST", "/api/assistant/chat", token, `{"profile":"missing","text":"hi"}`); w.Code != http.StatusConflict {
+		t.Fatalf("不存在的机器人发消息：%d %s", w.Code, w.Body.String())
 	}
 }

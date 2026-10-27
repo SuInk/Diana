@@ -22,6 +22,8 @@ import (
 const (
 	webChatMessagePrefix = "web-"
 	webChatHistoryCap    = 200
+	// webChatOwnerID 是没填主人的机器人在聊天页里给登录者用的账号，和平台账号撞不上。
+	webChatOwnerID = "webui-owner"
 )
 
 // WebChatMessage 是聊天页里的一条消息。
@@ -78,7 +80,7 @@ func deliverToWebChat(ctx context.Context, msg OutgoingMessage) (map[string]any,
 	return map[string]any{"message_id": id}, true
 }
 
-// WebChatInfo 检查这台机器人能不能在聊天页里聊：要有数字的主人账号。
+// WebChatInfo 检查这台机器人能不能在聊天页里聊：存在、没停用就行。
 func (r *Runtime) WebChatInfo(profileID string) WebChatInfo {
 	cfg, _, err := r.ownerChatEvent(profileID)
 	info := WebChatInfo{BotID: cfg.ID, BotName: cfg.Name, Platform: cfg.Platform}
@@ -88,7 +90,8 @@ func (r *Runtime) WebChatInfo(profileID string) WebChatInfo {
 	return info
 }
 
-// ownerChatEvent 造一条「主人发来的私聊」的骨架，聊天页和通话共用。
+// ownerChatEvent 造一条「主人发来的私聊」的骨架，聊天页和通话共用。登录 WebUI 的人
+// 就是主人，所以不管主人账号填没填、填成什么样都能聊。
 func (r *Runtime) ownerChatEvent(profileID string) (BotConfig, MessageEvent, error) {
 	profileID = strings.TrimSpace(profileID)
 	r.mu.RLock()
@@ -104,23 +107,30 @@ func (r *Runtime) ownerChatEvent(profileID string) (BotConfig, MessageEvent, err
 	if r.profileDisabled(cfg.ID) {
 		return cfg, MessageEvent{}, fmt.Errorf("这台机器人已停用")
 	}
+	// 填了主人账号就用它，和平台上的私聊是同一段记录。Telegram 主人填的是 @用户名时，
+	// 用主人说过话后记下的数字 ID；还不知道就拿用户名本身当账号，单独一段记录。没填
+	// 主人时登录者就是主人（见 OwnerIDForEvent），用 webChatOwnerID。
 	owner := strings.TrimSpace(cfg.OwnerID)
+	userID, username := owner, ""
 	if owner == "" {
-		return cfg, MessageEvent{}, fmt.Errorf("先在机器人设置里填主人账号：聊天和通话都按主人的私聊处理")
-	}
-	if strings.HasPrefix(owner, "@") {
-		return cfg, MessageEvent{}, fmt.Errorf("主人账号填的是用户名，聊天和通话需要主人的数字 ID")
+		userID = webChatOwnerID
+	} else if handle := TelegramOwnerUsername(owner); handle != "" && NormalizePlatformID(cfg.Platform) == PlatformTelegram {
+		username = handle
+		if id, err := r.ownerDeliveryID(MessageEvent{ProfileID: cfg.ID, Platform: PlatformTelegram}, cfg); err == nil {
+			userID = id
+		}
 	}
 	event := MessageEvent{
-		ProfileID:   cfg.ID,
-		Platform:    NormalizePlatformID(cfg.Platform),
-		Kind:        EventKindPrivate,
-		MessageType: string(EventKindPrivate),
-		SelfID:      strings.TrimSpace(cfg.BotAccount),
-		UserID:      owner,
-		SenderName:  "主人",
-		ToMe:        true,
-		webChat:     true,
+		ProfileID:      cfg.ID,
+		Platform:       NormalizePlatformID(cfg.Platform),
+		Kind:           EventKindPrivate,
+		MessageType:    string(EventKindPrivate),
+		SelfID:         strings.TrimSpace(cfg.BotAccount),
+		UserID:         userID,
+		SenderUsername: username,
+		SenderName:     "主人",
+		ToMe:           true,
+		webChat:        true,
 	}
 	return cfg, event, nil
 }

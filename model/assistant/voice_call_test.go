@@ -76,12 +76,8 @@ func TestVoiceCallReplyGoesToCallNotPlatform(t *testing.T) {
 	}
 }
 
-func TestVoiceCallInfoRequiresOwnerAndSlots(t *testing.T) {
-	runtime := NewRuntime(BotConfig{ID: "bot"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
-	if info := runtime.VoiceCallInfo(context.Background(), "bot"); !strings.Contains(info.Problem, "主人") {
-		t.Fatalf("没有主人账号时应拒绝，info = %#v", info)
-	}
-	runtime, _, _ = newVoiceCallTestRuntime(t, "")
+func TestVoiceCallInfoRequiresSlots(t *testing.T) {
+	runtime, _, _ := newVoiceCallTestRuntime(t, "")
 	info := runtime.VoiceCallInfo(context.Background(), "bot")
 	if info.STT || info.TTS || !strings.Contains(info.Problem, "语音识别和语音合成") {
 		t.Fatalf("没配语音插槽时应拒绝，info = %#v", info)
