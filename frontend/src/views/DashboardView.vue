@@ -128,49 +128,24 @@
           </div>
         </section>
 
-        <!-- 运行信息和资源占用各自只有两三行，分成两张卡时都被旁边的热力图撑得一样高，
-             下半截全是空白。合成一张叠着放，热力图腾出的宽度正好让一整年都摆得下。
-             下面一组是资源占用，只报 Diana 自己吃掉的，整机容量不是这张卡片要回答的
-             问题；存储读的是数据目录体积。资源占用不另起小标题：多出的一行会让这张卡
-             比热力图还高，空白又挪到了左边。 -->
+        <!-- 运行信息和资源占用各自只有两三行，分成两张卡、或者合成一张「标签……数值」
+             的长列表，都撑不满热力图那么高，看着空。改成和上排统计卡同一种排法的小指标
+             格子，两列三行正好和热力图齐高，热力图腾出的宽度让一整年都摆得下。
+             资源占用只报 Diana 自己吃掉的，整机容量不是这张卡片要回答的问题；存储读的是
+             数据目录体积。 -->
         <section class="card dashboard-runtime">
           <div class="card-header">
             <h2>运行信息</h2>
           </div>
-          <div class="card-body dashboard-runtime-body">
-            <div class="stack" style="gap: 10px">
-              <div class="info-row">
-                <span class="muted info-label">运行时长</span>
-                <SkeletonBlock v-if="initialLoading" width="72px" height="18px" />
-                <span v-else class="info-value">{{ stats ? formatUptime(stats.uptime_seconds) : "—" }}</span>
-              </div>
-              <div class="info-row">
-                <span class="muted info-label">插件</span>
-                <SkeletonBlock v-if="initialLoading" width="48px" height="18px" />
-                <span v-else class="info-value">{{ stats ? `${stats.bot.plugins_enabled} / ${stats.bot.plugins_total}` : "—" }}</span>
-              </div>
-              <div v-if="status?.last_error" class="info-row">
-                <span class="muted info-label">错误</span>
-                <span class="info-value text-err" :title="status.last_error">{{ status.last_error }}</span>
+          <div class="card-body">
+            <div class="dashboard-runtime-grid">
+              <div v-for="item in runtimeItems" :key="item.label" class="dashboard-runtime-item">
+                <span class="stat-label"><component :is="item.icon" :size="13" aria-hidden="true" />{{ item.label }}</span>
+                <SkeletonBlock v-if="initialLoading" width="64px" height="20px" />
+                <span v-else class="dashboard-runtime-value" :title="item.value">{{ item.value }}</span>
               </div>
             </div>
-            <div class="stack" style="gap: 10px">
-              <div class="info-row">
-                <span class="muted info-label">CPU</span>
-                <SkeletonBlock v-if="initialLoading" width="48px" height="18px" />
-                <span v-else class="info-value">{{ processMetricsReady ? formatPercent(stats?.server?.process_cpu_percent) : "—" }}</span>
-              </div>
-              <div class="info-row">
-                <span class="muted info-label">内存</span>
-                <SkeletonBlock v-if="initialLoading" width="64px" height="18px" />
-                <span v-else class="info-value">{{ processMetricsReady ? formatBytes(stats?.server?.process_memory_bytes) : "—" }}</span>
-              </div>
-              <div class="info-row">
-                <span class="muted info-label">存储</span>
-                <SkeletonBlock v-if="initialLoading" width="64px" height="18px" />
-                <span v-else class="info-value">{{ stats?.server?.process_storage_bytes ? formatBytes(stats.server.process_storage_bytes) : "统计中…" }}</span>
-              </div>
-            </div>
+            <p v-if="status?.last_error" class="dashboard-runtime-error text-err" :title="status.last_error">{{ status.last_error }}</p>
           </div>
         </section>
       </div>
@@ -256,9 +231,14 @@ import {
   Activity,
   ArrowRight,
   CheckCircle2,
+  Clock,
   Coins,
+  Cpu,
   Gauge,
+  HardDrive,
+  MemoryStick,
   MessageCircle,
+  Puzzle,
   Sparkles,
   TriangleAlert,
   Zap
@@ -653,6 +633,19 @@ function eventDecisionClass(event: BotEvent): string {
   if (event.decision === "error" || event.error) return "err";
   return "";
 }
+
+// 运行信息卡的六格。资源三项只报 Diana 进程自己的占用；最近事件跟着左上角的机器人开关走。
+const runtimeItems = computed(() => {
+  const server = stats.value?.server;
+  return [
+    { label: "运行时长", icon: Clock, value: stats.value ? formatUptime(stats.value.uptime_seconds) : "—" },
+    { label: "插件", icon: Puzzle, value: stats.value ? `${stats.value.bot.plugins_enabled} / ${stats.value.bot.plugins_total}` : "—" },
+    { label: "CPU", icon: Cpu, value: processMetricsReady.value ? formatPercent(server?.process_cpu_percent) : "—" },
+    { label: "内存", icon: MemoryStick, value: processMetricsReady.value ? formatBytes(server?.process_memory_bytes) : "—" },
+    { label: "存储", icon: HardDrive, value: server?.process_storage_bytes ? formatBytes(server.process_storage_bytes) : "统计中…" },
+    { label: "最近事件", icon: Activity, value: stats.value?.last_event_at ? formatRelative(stats.value.last_event_at) : "—" }
+  ];
+});
 
 function formatPercent(value: number | undefined): string {
   if (value === undefined || !Number.isFinite(value)) return "—";

@@ -2,7 +2,8 @@
      Licensed under the Limited Redistribution License in the repository root. -->
 
 <template>
-  <!-- 照 GitHub 贡献图的做法：固定近一年、格子大小不变，窄了横向滚动并停在最近这头；
+  <!-- 照 GitHub 贡献图的做法：固定近一年，窄了横向滚动并停在最近这头；宽了格子跟着
+       放大（始终是正方形），最近一周总贴着卡片右边，不在右边空出一截；
        月份在上，只标一三五；悬停浮出当天读数；底部左边说口径，右边是图例。 -->
   <section class="activity-calendar" aria-label="每日消息量">
     <LoadingSkeleton v-if="loading && !data" kind="chart" label="正在读取每日消息量" />
@@ -11,7 +12,7 @@
       <div ref="scroller" class="calendar-scroll">
         <div
           class="calendar-grid"
-          :style="{ gridTemplateColumns: `${labelWidth}px repeat(${columns.length}, ${cellSize}px)` }"
+          :style="{ gridTemplateColumns: `${labelWidth}px repeat(${columns.length}, minmax(${cellSize}px, 1fr))` }"
           @mouseleave="pointed = null"
         >
           <span />
@@ -63,7 +64,7 @@ const emit = defineEmits<{ caption: [text: string] }>();
 const weekdayShort = ["一", "二", "三", "四", "五", "六", "日"];
 const weekdayLong = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"];
 const legendLevels = [0, 1, 2, 3, 4];
-// GitHub 的尺寸：10px 格子、3px 间距，53 周正好一年。
+// GitHub 的尺寸：10px 格子、3px 间距，53 周正好一年。10px 是下限，卡片更宽时格子放大。
 const cellSize = 10;
 const labelWidth = 22;
 const weeks = 53;
@@ -95,7 +96,17 @@ async function load(): Promise<void> {
 }
 
 watch(() => props.profileId, load, { immediate: true });
+
+// 卡片宽度变了（拖窗口、侧栏收起）也重新停到最近这头，右边始终是这几天。
+const resizeObserver = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(() => {
+  if (scroller.value) scroller.value.scrollLeft = scroller.value.scrollWidth;
+});
+watch(scroller, (element, previous) => {
+  if (previous) resizeObserver?.unobserve(previous);
+  if (element) resizeObserver?.observe(element);
+});
 onBeforeUnmount(() => {
+  resizeObserver?.disconnect();
   pointed.value = null;
   emit("caption", "");
 });
@@ -148,9 +159,11 @@ const footnote = computed(() => activityTimezoneNote(data.value?.utc_offset, "�
 
 .calendar-grid {
   display: grid;
-  grid-template-rows: 15px repeat(7, 10px);
+  grid-template-rows: 15px repeat(7, auto);
   gap: 3px;
-  width: max-content;
+  /* 至少铺满卡片宽度，放不下 10px 的格子时才撑开、横向滚动。 */
+  width: 100%;
+  min-width: max-content;
 }
 
 .calendar-month {
@@ -161,13 +174,14 @@ const footnote = computed(() => activityTimezoneNote(data.value?.utc_offset, "�
 }
 
 .calendar-weekday {
+  align-self: center;
   font-size: 10px;
   line-height: 10px;
 }
 
 .calendar-cell {
-  width: 10px;
-  height: 10px;
+  width: 100%;
+  aspect-ratio: 1;
   padding: 0;
   border: none;
   border-radius: 2px;

@@ -5714,12 +5714,50 @@ a.nav-action {
   grid-column: span 4;
 }
 
-/* 运行信息和资源占用合在一张卡里，默认上下叠放，两组之间只靠留白隔开，不画线。 */
-.dashboard-runtime-body {
+/* 运行信息卡：和上排统计卡同一种「标签在上、数值在下」的小指标，三列两行。
+   卡片被热力图拉高时，三行均匀撑开，不在底下留一截空白。 */
+.dashboard-runtime {
+  display: flex;
+  flex-direction: column;
+}
+
+.dashboard-runtime > .card-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.dashboard-runtime-grid {
+  flex: 1;
   display: grid;
-  gap: 22px;
-  align-content: start;
-  font-size: 13px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  align-content: space-between;
+  gap: 14px 16px;
+}
+
+.dashboard-runtime-item {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+
+.dashboard-runtime-value {
+  overflow: hidden;
+  font-size: 17px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dashboard-runtime-error {
+  margin: 0;
+  overflow: hidden;
+  font-size: 12.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* 列数一多每列就窄：运行信息里「3 天 8 小时」这种值先被挤成省略号，再往下卡片
@@ -5742,19 +5780,34 @@ a.nav-action {
   .dashboard-insights > .dashboard-chart {
     grid-column: span 3;
   }
+
+  /* 四分之一宽排不下三列，退成两列三行；数值小一号，免得卡片比热力图高出一截。 */
+  .dashboard-runtime-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px 12px;
+  }
+
+  .dashboard-runtime-value {
+    font-size: 15px;
+  }
 }
 
-/* 再窄四分之一宽放不下「3 天 8 小时」：图表和运行信息各占一整行。运行信息卡这时
-   很宽，两段改成左右并排，不然又是一长条空白。 */
+/* 再窄四分之一宽放不下两列指标：图表和运行信息各占一整行。运行信息卡这时很宽，
+   六格排成一排，不然又是一大块空白。 */
 @media (max-width: 1080px) {
   .dashboard-insights > .card,
   .dashboard-insights > .dashboard-chart {
     grid-column: span 4;
   }
 
-  .dashboard-runtime-body {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 10px 48px;
+  /* 整行宽时六格排成一排。 */
+  .dashboard-runtime-grid {
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+    gap: 14px 16px;
+  }
+
+  .dashboard-runtime-value {
+    font-size: 17px;
   }
 }
 
@@ -5769,10 +5822,9 @@ a.nav-action {
     grid-column: span 2;
   }
 
-  /* 手机上半行太窄，两段又叠回上下。 */
-  .dashboard-runtime-body {
-    grid-template-columns: minmax(0, 1fr);
-    gap: 22px;
+  /* 手机上一排六格太挤，退回三列两行。 */
+  .dashboard-runtime-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 }
 
