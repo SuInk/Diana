@@ -223,6 +223,9 @@ func (c *openAICompatibleClient) streamResponses(ctx context.Context, req Genera
 					}
 				}
 				if event.Item.Type == "function_call" {
+					if event.Type == "response.output_item.added" && !emit(ChatEvent{Type: ChatEventProgress}) {
+						return
+					}
 					item := event.Item.AsFunctionCall()
 					call := ensure(item.ID)
 					if item.Name != "" {
@@ -249,6 +252,9 @@ func (c *openAICompatibleClient) streamResponses(ctx context.Context, req Genera
 			case "response.function_call_arguments.delta":
 				call := ensure(event.ItemID)
 				call.arguments += event.Delta
+				if !emit(ChatEvent{Type: ChatEventProgress}) {
+					return
+				}
 			case "response.function_call_arguments.done":
 				call := ensure(event.ItemID)
 				call.arguments = event.Arguments

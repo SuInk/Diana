@@ -464,3 +464,26 @@ func TestReplyAuditPromptDeclaresAccountSafeConfidence(t *testing.T) {
 		}
 	}
 }
+
+// 私聊默认不审账号安全，开了私聊开关才审；群聊不受这个开关影响。
+func TestPrivateRepliesSkipAccountSafetyByDefault(t *testing.T) {
+	runtime := NewRuntime(BotConfig{BotAccount: "42"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	cfg := runtime.ProfileConfig("")
+	private := MessageEvent{Kind: EventKindPrivate, UserID: "23456"}
+	group := MessageEvent{Kind: EventKindGroup, GroupID: "12345", UserID: "23456"}
+
+	if runtime.replyAuditNeed(private, "在吗", cfg, false).AccountSafety {
+		t.Fatal("私聊默认不该审账号安全")
+	}
+	if !runtime.replyAuditNeed(group, "在吗", cfg, false).AccountSafety {
+		t.Fatal("群聊默认要审账号安全")
+	}
+	cfg.ReplySafetyPrivateEnabled = boolPointer(true)
+	if !runtime.replyAuditNeed(private, "在吗", cfg, false).AccountSafety {
+		t.Fatal("开了私聊开关后私聊要审")
+	}
+	cfg.ReplySafetyMasterEnabled = boolPointer(false)
+	if runtime.replyAuditNeed(private, "在吗", cfg, false).AccountSafety {
+		t.Fatal("总开关关着时私聊也不审")
+	}
+}

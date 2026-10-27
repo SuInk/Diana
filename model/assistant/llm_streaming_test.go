@@ -46,7 +46,7 @@ func (s *stubStreamer) Stream(context.Context, llm.GenerateRequest) (<-chan llm.
 	go func() {
 		defer close(out)
 		for _, event := range s.events {
-			if s.gapPerDelta > 0 && event.Type == llm.ChatEventTextDelta {
+			if s.gapPerDelta > 0 && (event.Type == llm.ChatEventTextDelta || event.Type == llm.ChatEventProgress) {
 				time.Sleep(s.gapPerDelta)
 			}
 			out <- event
@@ -143,14 +143,14 @@ func TestTTFTNeedsMoreThanOneDelta(t *testing.T) {
 	started := time.Now()
 
 	single := &ttftCollector{}
-	single.observeDelta(started.Add(50 * time.Millisecond))
+	single.observeDelta(started.Add(50*time.Millisecond), false)
 	if got := single.ttft(started); got != 0 {
 		t.Fatalf("只有一条增量时报出了 TTFT = %v（底层已退化成非流式）", got)
 	}
 
 	multi := &ttftCollector{}
-	multi.observeDelta(started.Add(30 * time.Millisecond))
-	multi.observeDelta(started.Add(80 * time.Millisecond))
+	multi.observeDelta(started.Add(30*time.Millisecond), false)
+	multi.observeDelta(started.Add(80*time.Millisecond), false)
 	if got := multi.ttft(started); got != 30*time.Millisecond {
 		t.Fatalf("多条增量时的 TTFT = %v，应为首条的 30ms", got)
 	}
@@ -189,6 +189,57 @@ func TestTTFTReachesUsageLog(t *testing.T) {
 	duration, _ := entries[0].Metadata["duration_ms"].(int64)
 	if ttft >= duration {
 		t.Fatalf("ttft_ms=%d 不小于 duration_ms=%d，量到的不是首 token", ttft, duration)
+	}
+}
+
+// TestTTFTCountsToolProgress 只调工具的回复（send 也是工具）没有可见文本，
+// 首 token 要从工具参数开始吐的那一刻算，解码速度要扣掉首 token 之前的时间。
+func TestTTFTCountsToolProgress(t *testing.T) {
+	logs := &captureAppLogs{}
+	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	runtime.SetAppLogWriter(logs)
+	call := llm.ToolCall{ID: "call_1", Name: "send", Arguments: map[string]any{"text": "好"}}
+	stub := &stubStreamer{
+		gapPerDelta: 20 * time.Millisecond,
+		events: []llm.ChatEvent{
+			{Type: llm.ChatEventProgress}, {Type: llm.ChatEventProgress}, {Type: llm.ChatEventProgress},
+			{Type: llm.ChatEventToolCall, ToolCall: &call},
+			{Type: llm.ChatEventUsage, Usage: &llm.Usage{InputTokens: 4, OutputTokens: 10}},
+			{Type: llm.ChatEventDone},
+		},
+	}
+	provider := &usageAccountingLLMProvider{
+		runtime:  runtime,
+		state:    &llmUsageState{event: MessageEvent{Kind: EventKindGroup, MessageID: "m1"}},
+		provider: &streamingLLMProvider{provider: stub},
+	}
+	if _, err := provider.Generate(context.Background(), llm.GenerateRequest{}); err != nil {
+		t.Fatal(err)
+	}
+	entries := logs.entriesSnapshot()
+	if len(entries) != 1 {
+		t.Fatalf("用量日志 = %#v", entries)
+	}
+	ttft, _ := entries[0].Metadata["ttft_ms"].(int64)
+	duration, _ := entries[0].Metadata["duration_ms"].(int64)
+	if ttft <= 0 || ttft >= duration {
+		t.Fatalf("ttft_ms=%d duration_ms=%d，只调工具的回复也该有首 token", ttft, duration)
+	}
+	overall, _ := entries[0].Metadata["tokens_per_second"].(float64)
+	decode, _ := entries[0].Metadata["decode_tokens_per_second"].(float64)
+	if decode <= overall {
+		t.Fatalf("decode_tokens_per_second=%v 应大于整体 tokens_per_second=%v", decode, overall)
+	}
+}
+
+// TestTTFTSingleProgressIsTrusted 真流式解析器才会发进度事件，只到一条也可信：
+// Gemini 的函数调用整块到达，一次调用常常只有这一条。
+func TestTTFTSingleProgressIsTrusted(t *testing.T) {
+	started := time.Now()
+	collector := &ttftCollector{}
+	collector.observeDelta(started.Add(40*time.Millisecond), true)
+	if got := collector.ttft(started); got != 40*time.Millisecond {
+		t.Fatalf("TTFT = %v，应为 40ms", got)
 	}
 }
 

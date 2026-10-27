@@ -134,7 +134,7 @@ func TestHistoryIdentityRuntimeKeepsCrossGroupSelfNickname(t *testing.T) {
 			}
 		}
 	}
-	t.Fatalf("runtime lost nickname or self identity: requests=%d searches=%d", len(provider.requests), store.searchCalls)
+	t.Fatalf("runtime lost nickname or self identity: requests=%d searches=%d", len(provider.requests), store.searches())
 }
 
 func TestCurrentPromptIdentifiesSenderWithoutGroupRoleTags(t *testing.T) {

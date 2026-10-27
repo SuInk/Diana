@@ -380,6 +380,8 @@ export interface BotProfileConfig extends SendRetrySettings {
   reply_refusal_threshold?: number;
   /** 机器人级账号安全审核总开关；开启后主动和直接回复都审核，关闭后都不审核。 */
   reply_account_safety_audit_master_enabled?: boolean;
+  /** 私聊回复是否也审核账号安全；默认不审。 */
+  reply_account_safety_audit_private_enabled?: boolean;
   /** 自定义账号风险范围；留空使用内置规则。 */
   reply_account_safety_audit_prompt?: string;
   /** 后端当前实际使用的内置账号风险范围，只读，供编辑器展示。 */

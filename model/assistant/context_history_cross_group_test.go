@@ -6,7 +6,9 @@ package assistant
 import (
 	"context"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 type crossGroupSearchCounter struct {
@@ -128,5 +130,46 @@ func TestJudgementPayloadsExcludeCrossGroupReferences(t *testing.T) {
 	// 回复正文那一路照旧拿得到跨群参考。
 	if history := runtime.contextHistory(event); len(history) != 2 || !history[0].crossGroupContext {
 		t.Fatalf("回复历史丢了跨群参考：%+v", history)
+	}
+}
+
+type blockingCrossGroupSearch struct {
+	*memoryMessageHistoryStore
+	started  chan struct{}
+	release  chan struct{}
+	searches atomic.Int32
+}
+
+func (s *blockingCrossGroupSearch) SearchMessageEvents(context.Context, MessageHistorySearchQuery) ([]MessageEvent, int, error) {
+	if s.searches.Add(1) == 1 {
+		close(s.started)
+	}
+	<-s.release
+	return nil, 0, nil
+}
+
+// 决定回复时就开始的预取还没查完，回复走到加载跨群参考时要等它，而不是再查一遍。
+func TestCrossGroupPrefetchSharesInflightSearch(t *testing.T) {
+	store := &blockingCrossGroupSearch{memoryMessageHistoryStore: newMemoryMessageHistoryStore(), started: make(chan struct{}), release: make(chan struct{})}
+	runtime := NewRuntime(BotConfig{CrossGroupMemoryEnabled: boolPointer(true)}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	runtime.SetMessageHistoryStore(store)
+
+	event := crossGroupProbeEvent()
+	runtime.prefetchCrossGroupContext(event)
+	<-store.started
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		runtime.crossGroupContextEvents(event, store)
+	}()
+	select {
+	case <-done:
+		t.Fatal("预取还在查，回复这边不该先返回")
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(store.release)
+	<-done
+	if got := store.searches.Load(); got != 1 {
+		t.Fatalf("同一条消息检索了 %d 次，应当只查一次", got)
 	}
 }

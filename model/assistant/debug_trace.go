@@ -22,13 +22,15 @@ type debugTraceState struct {
 	sequence atomic.Int64
 	parent   *debugTraceState
 	taskID   string
+	// timeline 只挂在根状态上，见 reply_timeline.go。
+	timeline *replyTimeline
 }
 
 func (r *Runtime) withDebugTraceContext(ctx context.Context, event MessageEvent) context.Context {
 	if ctx == nil || strings.TrimSpace(event.MessageID) == "" || !debugModeEnabled(r.effectiveConfigForEvent(event)) {
 		return ctx
 	}
-	state := &debugTraceState{event: event}
+	state := &debugTraceState{event: event, timeline: newReplyTimeline(time.Now())}
 	// 开头先记一笔「收到了」：之后这条消息要是一次模型都没调，事件页能据此说清
 	// 是「调试开着但没走到模型」，而不是笼统地让人去检查调试模式开没开。
 	r.writeDebugTrace(state, 0, "收到消息", map[string]any{
@@ -73,6 +75,7 @@ type debugTraceLLMProvider struct {
 }
 
 func (p *debugTraceLLMProvider) Generate(ctx context.Context, req llm.GenerateRequest) (*llm.GenerateResponse, error) {
+	ctx, collector := withTTFTCollector(ctx)
 	startedAt := time.Now()
 	response, err := p.provider.Generate(ctx, req)
 	metadata := map[string]any{
@@ -80,6 +83,17 @@ func (p *debugTraceLLMProvider) Generate(ctx context.Context, req llm.GenerateRe
 		"purpose":     llmCallPurpose(ctx),
 		"request":     sanitizeDebugGenerateRequest(req),
 		"duration_ms": time.Since(startedAt).Milliseconds(),
+	}
+	// 首 token 时延让轨迹能把一次调用拆成「等首字」和「吐字」两段，判断慢在哪。
+	ttft := collector.ttft(startedAt)
+	if ttft > 0 {
+		metadata["ttft_ms"] = ttft.Milliseconds()
+	}
+	if llmCallPurpose(ctx) == PurposeReply {
+		markReplyStage(ctx, replyStageFirstRequest, startedAt)
+		if ttft > 0 {
+			markReplyStage(ctx, replyStageFirstToken, startedAt.Add(ttft))
+		}
 	}
 	message := "模型请求完成"
 	if response != nil {

@@ -166,6 +166,9 @@ func decodeChatCompletionEvents(ctx context.Context, reader io.Reader, req Gener
 				}
 			}
 			calls, _ := delta["tool_calls"].([]any)
+			if len(calls) > 0 && !emit(ChatEvent{Type: ChatEventProgress}) {
+				return ctx.Err()
+			}
 			for _, rawCall := range calls {
 				if finished {
 					return fmt.Errorf("llm: tool arguments after finish_reason")

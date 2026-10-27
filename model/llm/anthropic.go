@@ -190,6 +190,9 @@ func (c *anthropicClient) Stream(ctx context.Context, req GenerateRequest) (stre
 						return
 					}
 				}
+				if event.ContentBlock.Type == "tool_use" && !emit(ChatEvent{Type: ChatEventProgress}) {
+					return
+				}
 			case "content_block_delta":
 				if event.Delta.Text != "" {
 					if !emit(ChatEvent{Type: ChatEventTextDelta, Text: event.Delta.Text}) {
@@ -200,6 +203,9 @@ func (c *anthropicClient) Stream(ctx context.Context, req GenerateRequest) (stre
 					if !emit(ChatEvent{Type: ChatEventReasoning, Reasoning: event.Delta.Thinking}) {
 						return
 					}
+				}
+				if event.Delta.PartialJSON != "" && !emit(ChatEvent{Type: ChatEventProgress}) {
+					return
 				}
 			case "message_stop":
 				complete = true

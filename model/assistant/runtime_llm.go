@@ -294,6 +294,11 @@ func (r *Runtime) recordLLMUsage(ctx context.Context, event MessageEvent, provid
 	// 「没开流式」和「首 token 真的是 0 毫秒」。
 	if ttft > 0 {
 		entry.Metadata["ttft_ms"] = ttft.Milliseconds()
+		// tokens_per_second 把排队和预填也算进分母，长上下文的调用会显得解码很慢；
+		// 扣掉首 token 之前的时间才是模型真正吐字的速度。
+		if decode := TokensPerSecond(usage.OutputTokens, duration-ttft); decode > 0 {
+			entry.Metadata["decode_tokens_per_second"] = decode
+		}
 	}
 	if usage.InputTokens == 0 && usage.OutputTokens == 0 && usage.TotalTokens == 0 {
 		// 调用确实发生了，只是上游没报用量。标出来，免得被当成「这次没花钱」。

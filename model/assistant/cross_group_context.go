@@ -27,12 +27,46 @@ func (r *Runtime) crossGroupContextEvents(event MessageEvent, store MessageHisto
 	// 条件完全一样，结果在几十秒内也不会变。每处各跑一次跨会话全文检索，冷缓存下
 	// 一次就是一两秒磁盘读。
 	key := crossGroupResultKey(event)
-	if cached, ok := r.crossGroupResults.get(key, time.Now()); ok {
-		return cached
+	for {
+		if cached, ok := r.crossGroupResults.get(key, time.Now()); ok {
+			return cached
+		}
+		// 预取（见 prefetchCrossGroupContext）还在跑时等它，不再并行查第二遍。
+		wait, owner := r.crossGroupResults.claim(key)
+		if owner {
+			// 检索中途 panic 也要放行等待者，否则同一条消息的回复会一直卡在这里。
+			defer r.crossGroupResults.release(key)
+			selected := r.searchCrossGroupContext(event, store)
+			r.crossGroupResults.put(key, selected, time.Now())
+			return selected
+		}
+		<-wait
 	}
-	selected := r.searchCrossGroupContext(event, store)
-	r.crossGroupResults.put(key, selected, time.Now())
-	return selected
+}
+
+// prefetchCrossGroupContext 在决定要回复的那一刻就在后台开始跨群检索。
+//
+// 检索本身不依赖回复要用的本群历史，却一直等到 replyTo 里才同步去查：生产
+// 10-26～10-27 的 1431 次检索 p50 400ms、p90 1.5s，另有 130 次等满 2 秒超时，
+// 全压在主回复第一次请求之前。提前开跑后，它和写用户记忆、领并发名额、识图这些
+// 步骤重叠，到 loadDeferredCrossGroupContext 时多半已经查完。检索条件和结果不变。
+func (r *Runtime) prefetchCrossGroupContext(event MessageEvent) {
+	if event.Kind != EventKindGroup || event.crossGroupLoaded || crossGroupResultKey(event) == "" {
+		return
+	}
+	if !boolValue(r.effectiveConfigForEvent(event).CrossGroupMemoryEnabled, false) {
+		return
+	}
+	r.mu.RLock()
+	store := r.messageStore
+	r.mu.RUnlock()
+	if store == nil {
+		return
+	}
+	go func() {
+		defer recoverGoroutinePanic("runtime.prefetchCrossGroupContext")
+		r.crossGroupContextEvents(event, store)
+	}()
 }
 
 func (r *Runtime) searchCrossGroupContext(event MessageEvent, store MessageHistoryStore) []MessageEvent {
@@ -543,6 +577,38 @@ type crossGroupResultEntry struct {
 type crossGroupResultCache struct {
 	mu      sync.Mutex
 	entries map[string]crossGroupResultEntry
+	// inflight 是正在检索的键，检索结束时关闭对应的 channel。
+	inflight map[string]chan struct{}
+}
+
+// claim 登记一次检索。owner 为 true 时由调用方去查并在结束后 release；否则返回
+// 正在进行的那次检索的结束信号。没有键（不缓存）时总是自己查。
+func (c *crossGroupResultCache) claim(key string) (<-chan struct{}, bool) {
+	if key == "" {
+		return nil, true
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if wait, ok := c.inflight[key]; ok {
+		return wait, false
+	}
+	if c.inflight == nil {
+		c.inflight = make(map[string]chan struct{})
+	}
+	c.inflight[key] = make(chan struct{})
+	return nil, true
+}
+
+func (c *crossGroupResultCache) release(key string) {
+	if key == "" {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if wait, ok := c.inflight[key]; ok {
+		close(wait)
+		delete(c.inflight, key)
+	}
 }
 
 // crossGroupResultKey 标识一次检索的全部输入：同一条消息、同一段查询文本（编辑过的

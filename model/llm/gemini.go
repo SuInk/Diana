@@ -226,7 +226,12 @@ func (c *geminiClient) Stream(ctx context.Context, req GenerateRequest) (streamE
 					}
 				}
 			}
-			for _, call := range geminiToolCalls(response, req.Tools) {
+			// Gemini 的函数调用整块到达，到达即发布；先报一次进度，让首 token 计时认得它。
+			calls := geminiToolCalls(response, req.Tools)
+			if len(calls) > 0 && !sendChatEvent(ctx, out, ChatEvent{Type: ChatEventProgress}) {
+				return
+			}
+			for _, call := range calls {
 				emitted = true
 				if !sendChatEvent(ctx, out, ChatEvent{Type: ChatEventToolCall, ToolCall: &call}) {
 					return

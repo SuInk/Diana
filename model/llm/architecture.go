@@ -93,9 +93,12 @@ const (
 	ChatEventTextDelta ChatEventType = "text_delta"
 	ChatEventReasoning ChatEventType = "reasoning"
 	ChatEventToolCall  ChatEventType = "tool_call"
-	ChatEventUsage     ChatEventType = "usage"
-	ChatEventDone      ChatEventType = "done"
-	ChatEventError     ChatEventType = "error"
+	// ChatEventProgress 表示上游已经在吐还不能发布的输出（工具名、工具参数片段）。
+	// 工具调用要等参数完整才发布，只调工具的回复靠它才量得到首 token。
+	ChatEventProgress ChatEventType = "progress"
+	ChatEventUsage    ChatEventType = "usage"
+	ChatEventDone     ChatEventType = "done"
+	ChatEventError    ChatEventType = "error"
 )
 
 type ChatEvent struct {

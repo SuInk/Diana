@@ -550,6 +550,10 @@ func (r *Runtime) replyAuditNeed(event MessageEvent, input string, cfg BotConfig
 	if cfg.groupReplyAccountSafetyAuditOverride != nil {
 		accountSafety = *cfg.groupReplyAccountSafetyAuditOverride
 	}
+	// 私聊另有开关，默认不审账号安全，见 ReplySafetyPrivateEnabled。
+	if event.Kind == EventKindPrivate && !boolValue(cfg.ReplySafetyPrivateEnabled, false) {
+		accountSafety = false
+	}
 	need := replyAuditNeed{
 		Quality:       proactive,
 		AccountSafety: accountSafety,
@@ -628,7 +632,9 @@ func (r *Runtime) prepareReplyAudit(ctx context.Context, event MessageEvent, inp
 	if need.Loop || need.Fatigue {
 		evidence = r.collectBotReplyLoopEvidence(event, r.sessionHistory(event))
 	}
+	markReplyStage(ctx, replyStageAuditStarted, time.Now())
 	prepared.decision, prepared.err = r.runReplyAudit(ctx, event, input, reply, cfg, evidence, need)
+	markReplyStage(ctx, replyStageAuditDone, time.Now())
 	return prepared
 }
 

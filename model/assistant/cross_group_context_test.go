@@ -186,6 +186,13 @@ func (s *crossGroupHistoryStore) SearchMessageEvents(_ context.Context, query Me
 	return append([]MessageEvent(nil), s.candidates...), len(s.candidates), nil
 }
 
+// searches 读检索次数；预取在后台跑，读要加锁。
+func (s *crossGroupHistoryStore) searches() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.searchCalls
+}
+
 type crossGroupMembershipChannel struct {
 	mu      sync.Mutex
 	allowed map[string]bool

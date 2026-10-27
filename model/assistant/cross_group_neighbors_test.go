@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/SuInk/diana/model/llm"
 )
@@ -106,7 +107,8 @@ func (p *crossGroupPromptRecorder) joined() string {
 	return builder.String()
 }
 
-// 检索挪到确定回复之后，整条链路上跨群联想要照常进到回复模型的提示词里。
+// 检索挪到确定回复之后（决定回复时在后台预取），整条链路上跨群联想要照常进到
+// 回复模型的提示词里，而且一轮只查一次。
 func TestCrossGroupContextReachesReplyPromptAfterRouting(t *testing.T) {
 	channel := &crossGroupMembershipChannel{allowed: map[string]bool{"current|speaker": true}}
 	store := &crossGroupHistoryStore{candidates: []MessageEvent{
@@ -124,17 +126,33 @@ func TestCrossGroupContextReachesReplyPromptAfterRouting(t *testing.T) {
 	if !handled {
 		t.Fatalf("点名机器人的消息应进回复，outcome = %s", outcome)
 	}
-	if store.searchCalls != 0 {
-		t.Fatalf("路由阶段不该检索跨群，实际 %d 次", store.searchCalls)
-	}
 	if _, err := runtime.replyTo(context.Background(), prepared, text); err != nil {
 		t.Fatal(err)
 	}
 	prompt := provider.joined()
 	if !strings.Contains(prompt, "[跨群历史 ") || !strings.Contains(prompt, "图片缓存修复已经部署到测试机器") {
-		t.Fatalf("回复提示词里没有跨群联想：searches=%d\n%s", store.searchCalls, prompt)
+		t.Fatalf("回复提示词里没有跨群联想：searches=%d\n%s", store.searches(), prompt)
 	}
-	if store.searchCalls != 1 {
-		t.Fatalf("一轮回复应检索跨群一次，实际 %d 次", store.searchCalls)
+	if got := store.searches(); got != 1 {
+		t.Fatalf("一轮回复应检索跨群一次（预取和回复共用），实际 %d 次", got)
+	}
+}
+
+// 不回复的消息不该为跨群联想白查一次库。
+func TestCrossGroupNotSearchedWhenNotReplying(t *testing.T) {
+	channel := &crossGroupMembershipChannel{allowed: map[string]bool{"current|speaker": true}}
+	store := &crossGroupHistoryStore{candidates: []MessageEvent{
+		crossGroupTestEvent(190, "shared", "speaker", "related", "图片缓存修复已经部署到测试机器"),
+	}}
+	runtime := NewRuntime(BotConfig{CrossGroupMemoryEnabled: boolPointer(true), AgentEnabled: true, GroupTriggers: []string{"Diana"}}, channel, NewPluginManager(), nil, nil, nil, nil)
+	runtime.SetMessageHistoryStore(store)
+	current := crossGroupTestEvent(200, "current", "speaker", "current", "图片缓存修复现在怎么样")
+	runtime.remember(current)
+	if _, _, handled, _ := runtime.prepareMessageEvent(context.Background(), current); handled {
+		t.Fatal("没点名机器人的消息不该进回复")
+	}
+	time.Sleep(50 * time.Millisecond)
+	if got := store.searches(); got != 0 {
+		t.Fatalf("不回复的消息检索了 %d 次跨群", got)
 	}
 }

@@ -13,7 +13,7 @@ import (
 	"github.com/SuInk/diana/model/llm"
 )
 
-// Native streams share text, reasoning, tool, usage and completion events.
+// Native streams share text, reasoning, tool progress, usage and completion events.
 // Accumulate a complete response before the Agent executes tools or the send
 // audit approves chat text. Only visible text deltas reach reply previews.
 //
@@ -30,12 +30,19 @@ type streamingLLMClient interface {
 //
 // 用 context 传而不是改 Generate 的签名：签名是 LLMProvider 接口的一部分，改它
 // 要动全部五层装饰器和所有 mock，而这里只是一个诊断量。
+//
+// 首 token 指上游吐出的任何增量：可见文本、推理、工具名或工具参数片段。只认文本时，
+// 只调工具的回复（send 也是工具）全都量不到，量到的那部分又偏向纯文本回复。
 type ttftCollector struct {
 	mu sync.Mutex
-	// firstDelta 是首个文本增量到达的时刻，零值表示这次调用没有可信的 TTFT。
+	// firstDelta 是首个增量到达的时刻，零值表示这次调用没有可信的 TTFT。
 	firstDelta time.Time
-	// deltas 是文本增量的条数。只有一条时说明底层退化成了非流式（见 observe）。
+	// deltas 是增量的条数。只有一条文本时说明底层可能退化成了非流式（见 ttft）。
 	deltas int
+	// streamed 表示收到过推理或工具进度事件：只有真流式的解析器才会发它们。
+	streamed bool
+	// parent 是外层装饰器（调试轨迹）的 collector，增量同样报给它。
+	parent *ttftCollector
 }
 
 type ttftCollectorKey struct{}
@@ -63,7 +70,7 @@ func textDeltaObserverFromContext(ctx context.Context) textDeltaObserver {
 }
 
 func withTTFTCollector(ctx context.Context) (context.Context, *ttftCollector) {
-	collector := &ttftCollector{}
+	collector := &ttftCollector{parent: ttftCollectorFromContext(ctx)}
 	return context.WithValue(ctx, ttftCollectorKey{}, collector), collector
 }
 
@@ -75,16 +82,18 @@ func ttftCollectorFromContext(ctx context.Context) *ttftCollector {
 	return collector
 }
 
-func (c *ttftCollector) observeDelta(at time.Time) {
+func (c *ttftCollector) observeDelta(at time.Time, streamed bool) {
 	if c == nil {
 		return
 	}
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	c.deltas++
+	c.streamed = c.streamed || streamed
 	if c.firstDelta.IsZero() {
 		c.firstDelta = at
 	}
+	c.mu.Unlock()
+	c.parent.observeDelta(at, streamed)
 }
 
 // ttft 返回相对 started 的首 token 时延；没有可信结论时返回 0。
@@ -97,7 +106,7 @@ func (c *ttftCollector) ttft(started time.Time) time.Duration {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.deltas < 2 || c.firstDelta.IsZero() || !c.firstDelta.After(started) {
+	if (c.deltas < 2 && !c.streamed) || c.firstDelta.IsZero() || !c.firstDelta.After(started) {
 		return 0
 	}
 	return c.firstDelta.Sub(started)
@@ -209,13 +218,14 @@ readLoop:
 			if event.Text == "" {
 				continue
 			}
-			collector.observeDelta(time.Now())
+			collector.observeDelta(time.Now(), false)
 			text.WriteString(event.Text)
 			if observer != nil {
 				committed = observer.ObserveTextDelta(ctx, text.String()) || committed
 			}
-		case llm.ChatEventReasoning:
+		case llm.ChatEventReasoning, llm.ChatEventProgress:
 			// Reasoning never enters visible text. Private replay state arrives on done.
+			collector.observeDelta(time.Now(), true)
 		case llm.ChatEventDone:
 			completed = true
 			if event.Response != nil {

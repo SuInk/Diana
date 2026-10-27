@@ -1216,10 +1216,16 @@ func TestOpenAICompatibleChatStreamPreservesToolCalls(t *testing.T) {
 	var calls []*ToolCall
 	var usage Usage
 	done := false
+	// 工具调用要等参数齐了才发布，参数片段到达时先报进度，首 token 计时靠它。
+	progressBeforeCalls := 0
 	for event := range events {
 		switch event.Type {
 		case ChatEventError:
 			t.Fatal(event.Error)
+		case ChatEventProgress:
+			if len(calls) == 0 {
+				progressBeforeCalls++
+			}
 		case ChatEventToolCall:
 			calls = append(calls, event.ToolCall)
 		case ChatEventUsage:
@@ -1230,6 +1236,9 @@ func TestOpenAICompatibleChatStreamPreservesToolCalls(t *testing.T) {
 	}
 	if len(calls) != 2 {
 		t.Fatalf("tool calls = %#v", calls)
+	}
+	if progressBeforeCalls != 2 {
+		t.Fatalf("progress events before tool calls = %d, want one per streamed chunk", progressBeforeCalls)
 	}
 	if calls[0].ID != "call_1" || calls[0].Name != "diagnostic.echo" || calls[0].Arguments["text"] != "hello" || calls[1].ID != "call_2" || calls[1].Name != "agent_finalize" || calls[1].Arguments["silent"] != true {
 		t.Fatalf("tool calls changed: %+v %+v", calls[0], calls[1])

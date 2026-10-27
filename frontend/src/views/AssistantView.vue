@@ -1301,6 +1301,16 @@
                 </span>
               </div>
               <div class="field wide">
+                <label class="switch">
+                  <input v-model="form.reply_account_safety_audit_private_enabled" type="checkbox" :disabled="!form.reply_account_safety_audit_master_enabled" />
+                  <span class="track" aria-hidden="true"></span>
+                  <span class="switch-label">私聊也审核账号安全</span>
+                </label>
+                <span class="hint">
+                  默认只审群聊。私聊是一对一对话，关闭后私聊回复不再为账号安全多等一次审核；私聊收尾和空转判断照常进行。
+                </span>
+              </div>
+              <div class="field wide">
                 <label for="bot-account-safety-prompt">账号安全审核规则</label>
                 <textarea
                   id="bot-account-safety-prompt"
@@ -4628,6 +4638,7 @@ function setForm(config: BotProfileConfig): void {
     bot_reply_loop_threshold: config.bot_reply_loop_threshold || defaultBotReplyLoopThreshold,
     reply_refusal_threshold: config.reply_refusal_threshold || defaultReplyRefusalThreshold,
     reply_account_safety_audit_master_enabled: config.reply_account_safety_audit_master_enabled ?? true,
+    reply_account_safety_audit_private_enabled: config.reply_account_safety_audit_private_enabled ?? false,
     natural_reply_split_enabled: config.natural_reply_split_enabled ?? true,
     reply_preserve_line_breaks: config.reply_preserve_line_breaks ?? true,
     reply_line_split_enabled: config.reply_line_split_enabled ?? false,

@@ -796,6 +796,10 @@ type BotConfig struct {
 	// ReplyRefusalThreshold 是 30 分钟内对同一账号拒答几次就屏蔽它。
 	ReplyRefusalThreshold    int   `json:"reply_refusal_threshold,omitempty"`
 	ReplySafetyMasterEnabled *bool `json:"reply_account_safety_audit_master_enabled,omitempty"`
+	// ReplySafetyPrivateEnabled 决定私聊回复要不要过账号安全审核。未设置时不审：
+	// 私聊量很小（生产 7 天 2792 次审核里只有 15 次）、从没判出风险，却每条都要多等
+	// 一次审核。私聊收尾和空转判断不受它影响。
+	ReplySafetyPrivateEnabled *bool `json:"reply_account_safety_audit_private_enabled,omitempty"`
 	// ReplyAccountSafetyAuditPrompt 是账号安全判断的自定义规则。留空使用内置范围；
 	// 非空时作为管理员规则替代默认风险范围，但不改变审核输出协议。
 	ReplyAccountSafetyAuditPrompt        string `json:"reply_account_safety_audit_prompt,omitempty"`
@@ -1492,6 +1496,7 @@ type ConfigPayload struct {
 	BotReplyLoopThreshold          int                  `json:"bot_reply_loop_threshold,omitempty"`
 	ReplyRefusalThreshold          int                  `json:"reply_refusal_threshold,omitempty"`
 	ReplySafetyMasterEnabled       *bool                `json:"reply_account_safety_audit_master_enabled,omitempty"`
+	ReplySafetyPrivateEnabled      *bool                `json:"reply_account_safety_audit_private_enabled,omitempty"`
 	ReplyAccountSafetyAuditPrompt  string               `json:"reply_account_safety_audit_prompt,omitempty"`
 	ReplyAccountSafetyAuditDefault string               `json:"reply_account_safety_audit_default,omitempty"`
 	// NotebookSharedScopeEnabled 让笔记本跟随机器人：群聊私聊共用一本，新条目写进
@@ -2857,6 +2862,7 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		BotReplyLoopDetectionEnabled:      copyBoolPointer(cfg.BotReplyLoopDetectionEnabled),
 		ReplySemanticDedupEnabled:         copyBoolPointer(cfg.ReplySemanticDedupEnabled),
 		ReplySafetyMasterEnabled:          copyBoolPointer(cfg.ReplySafetyMasterEnabled),
+		ReplySafetyPrivateEnabled:         copyBoolPointer(cfg.ReplySafetyPrivateEnabled),
 		ReplyAccountSafetyAuditPrompt:     strings.TrimSpace(cfg.ReplyAccountSafetyAuditPrompt),
 		ReplyAccountSafetyAuditDefault:    DefaultReplyAccountSafetyAuditPrompt,
 		NotebookSharedScopeEnabled:        copyBoolPointer(cfg.NotebookSharedScopeEnabled),
@@ -3118,6 +3124,7 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		BotReplyLoopDetectionEnabled:    copyBoolPointer(payload.BotReplyLoopDetectionEnabled),
 		ReplySemanticDedupEnabled:       copyBoolPointer(payload.ReplySemanticDedupEnabled),
 		ReplySafetyMasterEnabled:        copyBoolPointer(payload.ReplySafetyMasterEnabled),
+		ReplySafetyPrivateEnabled:       copyBoolPointer(payload.ReplySafetyPrivateEnabled),
 		ReplyAccountSafetyAuditPrompt:   strings.TrimSpace(payload.ReplyAccountSafetyAuditPrompt),
 		NotebookSharedScopeEnabled:      copyBoolPointer(payload.NotebookSharedScopeEnabled),
 		ProactiveReplyExtraCriteria:     strings.TrimSpace(payload.ProactiveReplyExtraCriteria),

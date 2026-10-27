@@ -2099,6 +2099,10 @@ func (r *Runtime) routeMessageEvent(ctx context.Context, event MessageEvent) (Me
 		r.enqueueEventMemory(event, memoryEventText(event))
 	}
 	handled := r.shouldHandle(event, text)
+	if handled {
+		markReplyStage(ctx, replyStageDecided, time.Now())
+		r.prefetchCrossGroupContext(event)
+	}
 	if !handled {
 		if outcome := r.tryRandomRepeat(ctx, event); outcome != "" {
 			return finishWithoutReply(outcome)
@@ -2145,6 +2149,8 @@ func (r *Runtime) routeMessageEvent(ctx context.Context, event MessageEvent) (Me
 		if allowed {
 			event, text, handled = routed, routedText, true
 			successOutcome = "replied_proactive"
+			markReplyStage(ctx, replyStageDecided, time.Now())
+			r.prefetchCrossGroupContext(event)
 			if len(proactiveCandidates) > 1 {
 				event.backlogTurn = backlogRoutedTurn(proactiveCandidates, turn, event.MessageID)
 			}
@@ -2280,6 +2286,11 @@ func (r *Runtime) replyAndRecordTurn(ctx context.Context, event MessageEvent, te
 		}
 		err = errDirectReplySupplemented
 	}
+	timelineOutcome := "replied"
+	if err != nil {
+		timelineOutcome = "not_replied"
+	}
+	r.recordReplyTimeline(ctx, timelineOutcome)
 	if err == nil {
 		r.noteSenderTurnReplyComplete(event)
 	}
@@ -3874,6 +3885,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		}
 		return reply, nil
 	}
+	markReplyStage(ctx, replyStageTurnStarted, time.Now())
 	ctx = withLLMUsageContext(ctx, event)
 	ctx = r.withFileParserVideoLimit(ctx, event)
 	r.beginHistoryImageDescriptionForeground()
@@ -3908,6 +3920,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		}
 	}
 	event = r.loadDeferredCrossGroupContext(event)
+	markReplyStage(ctx, replyStageCrossGroupReady, time.Now())
 	replyHistory := r.promptContextHistory(event, cfg)
 	ctx = r.withReplyIdentityPrivacyContext(ctx, event, replyHistory)
 	// 普通聊天不加整轮 deadline；父取消和每次模型请求的限时仍然有效。
@@ -4036,6 +4049,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 				pluginResponses = append(pluginResponses, *resp)
 			}
 		}
+		markReplyStage(ctx, replyStagePluginsDone, time.Now())
 	}
 	pluginResponses = applyRecallReplyMode(pluginResponses, cfg.RecallReplyMode)
 	authoritativePluginContext := hasAuthoritativePluginContext(pluginResponses)
@@ -4092,6 +4106,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		if err != nil {
 			return "", err
 		}
+		markReplyStage(ctx, replyStageToolsReady, time.Now())
 	}
 	if agentRegistry != nil {
 		defer agentRegistry.Close()
@@ -7426,6 +7441,7 @@ func (r *Runtime) sendChannelPayloadWithRetry(ctx context.Context, msg OutgoingM
 			lastErr = channel.Send(ctx, msg)
 		}
 		if lastErr == nil {
+			markReplyStage(ctx, replyStageFirstSent, time.Now())
 			return result, nil
 		}
 		// 结果不明的不能在这里原地重发，交给 confirmOutboundOutcome 先确认；消息本身
