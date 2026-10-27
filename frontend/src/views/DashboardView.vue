@@ -101,7 +101,7 @@
       </div>
 
       <div class="dashboard-insights">
-        <!-- 24h 消息量：与第一行统计卡共用同一套网格，和另外两张洞察卡均分，两排竖边对齐。 -->
+        <!-- 消息量：与第一行统计卡共用同一套网格，占三分之二，右边一张运行信息卡，两排竖边对齐。 -->
         <section class="card dashboard-chart">
           <div class="card-header">
             <h2>{{ chartView === "hourly" ? "最近 24 小时消息量" : calendarCaption || "每日消息量" }}</h2>
@@ -128,49 +128,48 @@
           </div>
         </section>
 
-        <section class="card">
+        <!-- 运行信息和资源占用各自只有两三行，分成两张卡时都被旁边的热力图撑得一样高，
+             下半截全是空白。合成一张叠着放，热力图腾出的宽度正好让一整年都摆得下。
+             下面一组是资源占用，只报 Diana 自己吃掉的，整机容量不是这张卡片要回答的
+             问题；存储读的是数据目录体积。资源占用不另起小标题：多出的一行会让这张卡
+             比热力图还高，空白又挪到了左边。 -->
+        <section class="card dashboard-runtime">
           <div class="card-header">
             <h2>运行信息</h2>
           </div>
-          <div class="card-body stack" style="gap: 10px; font-size: 13px">
-            <div class="info-row">
-              <span class="muted info-label">运行时长</span>
-              <SkeletonBlock v-if="initialLoading" width="72px" height="18px" />
-              <span v-else class="info-value">{{ stats ? formatUptime(stats.uptime_seconds) : "—" }}</span>
+          <div class="card-body dashboard-runtime-body">
+            <div class="stack" style="gap: 10px">
+              <div class="info-row">
+                <span class="muted info-label">运行时长</span>
+                <SkeletonBlock v-if="initialLoading" width="72px" height="18px" />
+                <span v-else class="info-value">{{ stats ? formatUptime(stats.uptime_seconds) : "—" }}</span>
+              </div>
+              <div class="info-row">
+                <span class="muted info-label">插件</span>
+                <SkeletonBlock v-if="initialLoading" width="48px" height="18px" />
+                <span v-else class="info-value">{{ stats ? `${stats.bot.plugins_enabled} / ${stats.bot.plugins_total}` : "—" }}</span>
+              </div>
+              <div v-if="status?.last_error" class="info-row">
+                <span class="muted info-label">错误</span>
+                <span class="info-value text-err" :title="status.last_error">{{ status.last_error }}</span>
+              </div>
             </div>
-            <div class="info-row">
-              <span class="muted info-label">插件</span>
-              <SkeletonBlock v-if="initialLoading" width="48px" height="18px" />
-              <span v-else class="info-value">{{ stats ? `${stats.bot.plugins_enabled} / ${stats.bot.plugins_total}` : "—" }}</span>
-            </div>
-            <div v-if="status?.last_error" class="info-row">
-              <span class="muted info-label">错误</span>
-              <span class="info-value text-err" :title="status.last_error">{{ status.last_error }}</span>
-            </div>
-          </div>
-        </section>
-
-        <!-- 资源占用和服务状态是两件事，各占一张卡片。这里只报 Diana 自己吃掉
-             的，整机容量不是这张卡片要回答的问题；存储读的是数据目录体积。 -->
-        <section class="card">
-          <div class="card-header">
-            <h2>资源占用</h2>
-          </div>
-          <div class="card-body stack" style="gap: 10px; font-size: 13px">
-            <div class="cluster" style="justify-content: space-between">
-              <span class="muted">CPU</span>
-              <SkeletonBlock v-if="initialLoading" width="48px" height="18px" />
-              <span v-else>{{ processMetricsReady ? formatPercent(stats?.server?.process_cpu_percent) : "—" }}</span>
-            </div>
-            <div class="cluster" style="justify-content: space-between">
-              <span class="muted">内存</span>
-              <SkeletonBlock v-if="initialLoading" width="64px" height="18px" />
-              <span v-else>{{ processMetricsReady ? formatBytes(stats?.server?.process_memory_bytes) : "—" }}</span>
-            </div>
-            <div class="cluster" style="justify-content: space-between">
-              <span class="muted">存储</span>
-              <SkeletonBlock v-if="initialLoading" width="64px" height="18px" />
-              <span v-else>{{ stats?.server?.process_storage_bytes ? formatBytes(stats.server.process_storage_bytes) : "统计中…" }}</span>
+            <div class="stack" style="gap: 10px">
+              <div class="info-row">
+                <span class="muted info-label">CPU</span>
+                <SkeletonBlock v-if="initialLoading" width="48px" height="18px" />
+                <span v-else class="info-value">{{ processMetricsReady ? formatPercent(stats?.server?.process_cpu_percent) : "—" }}</span>
+              </div>
+              <div class="info-row">
+                <span class="muted info-label">内存</span>
+                <SkeletonBlock v-if="initialLoading" width="64px" height="18px" />
+                <span v-else class="info-value">{{ processMetricsReady ? formatBytes(stats?.server?.process_memory_bytes) : "—" }}</span>
+              </div>
+              <div class="info-row">
+                <span class="muted info-label">存储</span>
+                <SkeletonBlock v-if="initialLoading" width="64px" height="18px" />
+                <span v-else class="info-value">{{ stats?.server?.process_storage_bytes ? formatBytes(stats.server.process_storage_bytes) : "统计中…" }}</span>
+              </div>
             </div>
           </div>
         </section>
