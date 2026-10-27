@@ -403,7 +403,7 @@
               :placeholder="ownerPlaceholder"
             />
             <AccountNameHint v-if="isOneBotPlatform" :user-id="botForm.owner_id" />
-            <span v-if="botForm.platform === 'qq-official'" class="hint">QQ 官方机器人收不到 QQ 号，主人要绑定一次。先留空，接入后到「机器人设置 → 主人用户 ID」生成验证码，把「绑定主人 验证码」发给机器人即可。</span>
+            <span v-if="botForm.platform === 'qq-official'" class="hint">QQ 官方机器人收不到 QQ 号，主人要绑定一次。先留空，接入后给机器人发「绑定主人」，把它回的验证码填到「机器人设置 → 主人用户 ID」即可。</span>
             <span class="hint">不需要聊天内管理或配对登录时可以留空。</span>
           </div>
         </div>
