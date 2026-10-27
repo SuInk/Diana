@@ -263,6 +263,7 @@ func TestSafeModeDisablesEveryRuleForOwner(t *testing.T) {
 
 // 标准模式和以前完全一样：高风险工具照常挂上，没有任何停用登记。
 func TestStandardModeKeepsFullAgentSurface(t *testing.T) {
+	forceCommandSandbox(t, true)
 	registry := safeModeTestRegistry(t, AgentModeStandard)
 	for _, name := range []string{"run_command", "write_file", "edit_file", dianaSaveToWorkspaceToolName, dianaCrossSessionToolName, dianaCodingToolName, dianaInstallPackageToolName, "install_skill", "mcp_install"} {
 		if _, ok := registry.Get(name); !ok {
