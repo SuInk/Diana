@@ -138,7 +138,7 @@ func TestReadOnlyQueriesDoNotQueueBehindWriter(t *testing.T) {
 func TestClaimMemoryJobSkipsWriteTransactionWhenNothingDue(t *testing.T) {
 	store := openContentionStore(t)
 	ctx := context.Background()
-	logs := useTestSlowLog(t, 0, 0)
+	logs := useTestSlowLog(t, 0, 0, store)
 	store.SetMemoryEventJobDelay(time.Hour)
 	if _, _, err := store.EnqueueMemoryJob(ctx, batchJob("group:123", "alice", "later", 100)); err != nil {
 		t.Fatal(err)

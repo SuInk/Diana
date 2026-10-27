@@ -18,8 +18,13 @@ type testSlowLog struct {
 	pending []func()
 }
 
-func useTestSlowLog(t *testing.T, write, read time.Duration) *testSlowLog {
+// stores 是测试里已经打开的库：替换包级日志前要停掉它们的 WAL 巡检，否则巡检
+// goroutine 读日志和这里写日志构成数据竞争，它自己的慢调用也会混进假日志。
+func useTestSlowLog(t *testing.T, write, read time.Duration, stores ...*SQLiteStore) *testSlowLog {
 	t.Helper()
+	for _, s := range stores {
+		s.stopWALMaintenance()
+	}
 	fake := &testSlowLog{clock: time.Date(2026, 9, 26, 12, 0, 0, 0, time.UTC)}
 	logger := newSlowStorageLog()
 	logger.write, logger.read = write, read
@@ -80,7 +85,7 @@ func requireFields(t *testing.T, line string, fields ...string) {
 // 事务开始的耗时就是等写连接的时间，日志要把它明确标成本次调用自己的等待。
 func TestStorageDiagnosticsIdentifyConnectionWait(t *testing.T) {
 	s, _ := seedEventBrowsing(t, 1)
-	logs := useTestSlowLog(t, 10*time.Millisecond, 10*time.Millisecond)
+	logs := useTestSlowLog(t, 10*time.Millisecond, 10*time.Millisecond, s)
 	writer, err := s.db.Conn(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -101,7 +106,7 @@ func TestStorageDiagnosticsIdentifyConnectionWait(t *testing.T) {
 // 生产日志里大量 elapsed_ms=0 的「慢」记录其实是调用方早就取消了的上下文。
 func TestSlowStorageLogIgnoresCanceledFastCalls(t *testing.T) {
 	s, _ := seedEventBrowsing(t, 1)
-	logs := useTestSlowLog(t, 250*time.Millisecond, 500*time.Millisecond)
+	logs := useTestSlowLog(t, 250*time.Millisecond, 500*time.Millisecond, s)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	if _, err := s.PendingInboundCount(ctx); err == nil {

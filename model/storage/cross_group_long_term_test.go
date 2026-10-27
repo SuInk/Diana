@@ -18,6 +18,7 @@ func TestHistorySearchExcludesCurrentSessionBeforeLimit(t *testing.T) {
 			if fts && !s.historyFTS {
 				t.Skip("FTS unavailable")
 			}
+			s.stopWALMaintenance() // 巡检 goroutine 会读 historyFTS，改之前先停
 			s.historyFTS = fts
 			ctx := context.Background()
 			for i := 0; i < 45; i++ {

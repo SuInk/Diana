@@ -26,6 +26,7 @@ func TestHistorySearchChronologicalPagesKeepTimestampTiesAndScope(t *testing.T) 
 		t.Fatal(err)
 	}
 	ftsAvailable := s.historyFTS
+	s.stopWALMaintenance() // 巡检 goroutine 会读 historyFTS，下面切换之前先停
 	for _, useFTS := range []bool{false, true} {
 		if useFTS && !ftsAvailable {
 			continue
@@ -77,6 +78,7 @@ func TestHistorySearchChronologicalRanksAllWordMatchesFirst(t *testing.T) {
 		}
 	}
 	ftsAvailable := s.historyFTS
+	s.stopWALMaintenance() // 巡检 goroutine 会读 historyFTS，下面切换之前先停
 	for _, useFTS := range []bool{false, true} {
 		if useFTS && !ftsAvailable {
 			continue
