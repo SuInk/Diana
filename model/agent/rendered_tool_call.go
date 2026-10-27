@@ -72,17 +72,18 @@ func renderedToolCallAction(text string) (llmAction, bool) {
 	if !ok {
 		return llmAction{}, false
 	}
-	if name != finalizeToolName {
+	if name != finalizeToolName && name != legacyFinalizeToolName {
 		return llmAction{}, true
 	}
-	return finalizeAction(llm.ToolCall{Name: name, Arguments: arguments}, ""), true
+	return finalizeAction([]llm.ToolCall{{Name: finalizeToolName, Arguments: arguments}}, ""), true
 }
 
 // 还有一种形状是模型把收尾调用写成标签拼在正文后面。线上 10-22 swe-2 就这样把
 // 「正文[agent_finalize content="…" render="" silent="false" …/>]」整串发进了群；
 // 也见过只剩一对空标签的「正文[agent_finalize][/agent_finalize]」。方括号、尖括号、
 // 自闭合和闭合标签都认，属性值按引号整体吃掉，免得值里的 ] 或 > 把标签截断。
-var inlineFinalizeTag = regexp.MustCompile(`(?i)[\[<]\s*/?\s*` + finalizeToolName + `\b((?:\s+[A-Za-z_][A-Za-z0-9_]*\s*=\s*(?:"[^"]*"|'[^']*'|[^\s"'\]>/]*))*)\s*/?\s*(?:>\s*\]?|\])`)
+// 改名前的 agent_finalize 也认：模型照老历史还会写出旧标签。
+var inlineFinalizeTag = regexp.MustCompile(`(?i)[\[<]\s*/?\s*(?:` + finalizeToolName + `|` + legacyFinalizeToolName + `)\b((?:\s+[A-Za-z_][A-Za-z0-9_]*\s*=\s*(?:"[^"]*"|'[^']*'|[^\s"'\]>/]*))*)\s*/?\s*(?:>\s*\]?|\])`)
 
 var inlineFinalizeAttr = regexp.MustCompile(`([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'\]>/]*))`)
 
@@ -134,5 +135,5 @@ func inlineFinalizeAction(text string, declared ...FinalizeField) (llmAction, bo
 	if body != "" {
 		arguments["content"] = body
 	}
-	return finalizeAction(llm.ToolCall{Name: finalizeToolName, Arguments: arguments}, ""), true
+	return finalizeAction([]llm.ToolCall{{Name: finalizeToolName, Arguments: arguments}}, ""), true
 }

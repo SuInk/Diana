@@ -780,7 +780,7 @@ type AgentResidencyEntry struct {
 var agentResidencyProtocolTools = map[string]bool{
 	agent.ToolsLoadToolName:    true,
 	agent.ToolsExecuteToolName: true,
-	"agent_finalize":           true,
+	agent.FinalizeToolName:     true,
 }
 
 // rememberAgentResidencyCatalog 记下这一轮实际注册的工具目录。

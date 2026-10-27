@@ -40,7 +40,7 @@ func call(name string, args map[string]any) *llm.GenerateResponse {
 }
 
 func finalize(text string) *llm.GenerateResponse {
-	return call("agent_finalize", map[string]any{"content": text})
+	return call("send", map[string]any{"content": text})
 }
 
 func reminderCase() Case {

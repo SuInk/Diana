@@ -1164,7 +1164,7 @@ func TestRunnerPromptSearchesThroughBrowserWithoutWebSearch(t *testing.T) {
 // 改写成文本，缺思考内容直接 400；切到 Claude 时外来思考也不会被剥掉。
 func TestAppendToolRepairKeepsContinuationScope(t *testing.T) {
 	resp := &llm.GenerateResponse{ContinuationScope: "gemini-scope", ToolCalls: []llm.ToolCall{{ID: "call_0", Name: "unknown_tool"}}}
-	messages := appendToolRepair(nil, resp, "", "工具不存在")
+	messages := appendToolRepair(nil, resp, nil, "", "工具不存在")
 	if len(messages) != 2 || messages[0].ContinuationScope != "gemini-scope" {
 		t.Fatalf("回填的工具调用丢了作用域：%+v", messages)
 	}

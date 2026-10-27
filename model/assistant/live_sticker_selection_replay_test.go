@@ -443,7 +443,7 @@ type rejectedSticker struct {
 // finalizeStickerFromCalls 从触发回放记下的调用摘要里取出收尾的 sticker 关键词和正文。
 func finalizeStickerFromCalls(calls string) (string, string) {
 	for _, call := range strings.Split(calls, "; ") {
-		encoded, found := strings.CutPrefix(call, "agent_finalize")
+		encoded, found := strings.CutPrefix(call, "send")
 		if !found {
 			continue
 		}

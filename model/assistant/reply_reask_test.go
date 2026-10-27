@@ -35,7 +35,7 @@ func (p *reaskProvider) Generate(ctx context.Context, req llm.GenerateRequest) (
 		}
 	}
 	finalize := func(text string) (*llm.GenerateResponse, error) {
-		return &llm.GenerateResponse{ToolCalls: []llm.ToolCall{{ID: "final", Name: "agent_finalize", Arguments: map[string]any{"content": text}}}}, nil
+		return &llm.GenerateResponse{ToolCalls: []llm.ToolCall{{ID: "final", Name: "send", Arguments: map[string]any{"content": text}}}}, nil
 	}
 	switch {
 	case strings.Contains(body, directReplyTopicPrompt):

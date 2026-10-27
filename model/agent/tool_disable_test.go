@@ -16,7 +16,7 @@ const testDisableReason = "当前是安全模式，这个操作被关掉了"
 // 整体关掉的工具：取不到、不能被重新注册，点名调用时回的是配置给的原因，
 // 而不是「查无此工具」或「需要主人来做」——主人本人也会撞上这道闸。
 func TestDisabledToolReportsConfiguredReason(t *testing.T) {
-	registry := NewToolRegistry(&countingTool{name: "alpha"}, &countingTool{name: "run_command"}, &countingTool{name: "agent_finalize"})
+	registry := NewToolRegistry(&countingTool{name: "alpha"}, &countingTool{name: "run_command"}, &countingTool{name: "send"})
 	registry.DisableTools(testDisableReason, "run_command", "write_file")
 	registry.Register(&countingTool{name: "run_command"})
 	if _, ok := registry.Get("run_command"); ok {
@@ -25,7 +25,7 @@ func TestDisabledToolReportsConfiguredReason(t *testing.T) {
 	if !registry.PolicyDenied("write_file") {
 		t.Fatal("从没注册过、但被关掉的工具应当算权限问题")
 	}
-	loader := newDeferredToolLoader(registry, []string{"agent_finalize"}, nil, nil)
+	loader := newDeferredToolLoader(registry, []string{"send"}, nil, nil)
 	_, err := loader.Run(t.Context(), map[string]any{"names": []any{"run_command"}})
 	if err == nil || !strings.Contains(err.Error(), testDisableReason) || strings.Contains(err.Error(), "只对主人开放") {
 		t.Fatalf("tools_load 报错 = %v", err)
@@ -43,7 +43,7 @@ func TestDisabledToolReportsConfiguredReason(t *testing.T) {
 // 拒绝理由作为工具报错交回模型。大小写不同的操作名也要拦住。
 func TestDisabledOperationIsRefusedWithoutRunningTool(t *testing.T) {
 	tool := &countingTool{name: "platform"}
-	registry := NewToolRegistry(tool, &countingTool{name: "agent_finalize"})
+	registry := NewToolRegistry(tool, &countingTool{name: "send"})
 	registry.DisableOperations(testDisableReason, DisabledOperation{Tool: "platform", Field: "operation", Values: []string{"kick"}})
 	if err := registry.OperationDisabledError("platform", map[string]any{"operation": "group_info"}); err != nil {
 		t.Fatalf("只读操作被拦了: %v", err)

@@ -295,7 +295,7 @@ func DescribeEventOutcome(outcome string) (decision string, reason string, handl
 	case "ignored_bot_message":
 		return "not_replied", "其他机器人消息未被语义判断为提到本机器人，已保持静默", false
 	case "ignored_model_silent":
-		return "not_replied", "模型在这一轮自己选择了不回复（agent_finalize 的 silent），没有发送任何消息；这不是拒答，也不触发暂停", false
+		return "not_replied", "模型在这一轮自己选择了不回复（send 正文为空），没有发送任何消息；这不是拒答，也不触发暂停", false
 	case "ignored_conversation_closed":
 		return "not_replied", "对方已经在收尾，双方互相道别的次数达到设定上限，这条回复只是又一句告别，没有发送", false
 	case "ignored_stop_requested":
@@ -4619,7 +4619,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			// 用户这条消息只是要图，模型没有别的可说——开场白就是这一轮的回复。
 			reply = pending
 		} else if len(interimMessagesSent(ctx)) > 0 {
-			// 该说的已经在中途说过了（say 工具），收尾没有新内容是正常的，
+			// 该说的已经在中途说过了（和工具同一步的 send），收尾没有新内容是正常的，
 			// 不要再补一句「没有生成有效回复」。
 			return "", newModelSilentFinishError("中途已经说过了")
 		} else {
@@ -4825,6 +4825,11 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 			agentCfg.ToolResultReminder = cfg.PromptOverrides.text(promptReplyToolResultBrevitySpec)
 		}
 		agentCfg = restrictAgentConfigForMode(cfg, withOwnerAgentLimits(agentCfg, relationship.toolScope().Owner))
+		// send 和其他工具同一步发来时是中途说一句：先说「我去查」再真的去查。
+		interim := newDianaInterimMessageTool(r, event)
+		agentCfg.Interim = func(ctx context.Context, text string) (string, error) {
+			return interim.Run(ctx, map[string]any{"text": text})
+		}
 		registry := preparedRegistry
 		ownsRegistry := false
 		if registry == nil {
@@ -4899,15 +4904,9 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 		finalizeButtonsFromContext(ctx).set(resp.FinalizeFields[buttonsFinalizeFieldName])
 		text := resp.Text
 		if resp.Silent {
-			// 线上出过：模型填 silent=true、silent_reason「内容已通过 say 发出」，
-			// content 里是完整回复，可这一轮根本没调过 say——话一句都没发出去。
-			// 静默带着正文、中途又什么都没说过时，以正文为准照常发送。
-			if resp.SilentContent == "" || len(interimMessagesSent(ctx)) > 0 {
-				// 模型在 agent_finalize 上自己按下了静默。没有正文可整理，也不该被
-				// 下游任何一条兜底文案补上；调用方按「本轮不发送」处理。
-				return "", newModelSilentFinishError(resp.SilentReason)
-			}
-			text = resp.SilentContent
+			// 模型 send 了空正文，自己选择这一轮不说话。没有正文可整理，也不该被
+			// 下游任何一条兜底文案补上；调用方按「本轮不发送」处理。
+			return "", newModelSilentFinishError(resp.SilentReason)
 		}
 		return r.composeAndPrepareReply(replyerCtx, cfg, event, messages, text)
 	}
@@ -4970,11 +4969,11 @@ func (p *runtimeAgentLLMProvider) Generate(ctx context.Context, req llm.Generate
 }
 
 // replyAgentCoreTools 是主回复每一步都带完整定义的工具：只剩收尾，其余全部按需加载
-// （agent.Config.CoreTools；名单为空等于不按需，所以留 agent_finalize 占位）。
+// （agent.Config.CoreTools；名单为空等于不按需，所以留 send 占位）。
 //
 // 以前 web_search、platform 等 10 个工具常驻，tools 数组按发言者身份不同（platform 的
 // 群管操作、主人专属工具），主人、管理员和群友交替说话时前缀从这里断开。全部按需后
-// tools 数组只有 agent_finalize、tool_search、tools_execute，对谁都一样。2026-10-26 用
+// tools 数组只有 send、tool_search、tools_execute，对谁都一样。2026-10-26 用
 // 生产请求经 deepseek-flash 回放 112 条、新旧各两次：第一步选对工具 163/224 对 164/224，
 // 取得定义后第二步 83/88 直接执行了它；代价是一个群第一次用某个工具时多一步。
 //
@@ -4984,7 +4983,6 @@ var replyAgentCoreTools = []string{agent.FinalizeToolName}
 
 // replyFeaturedTools 在按需目录里写完整描述，见 replyAgentCoreTools。
 var replyFeaturedTools = []string{
-	dianaInterimMessageToolName,
 	agent.WebSearchToolName,
 	dianaHistoryImagesToolName,
 	dianaImageToolName,

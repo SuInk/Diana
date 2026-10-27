@@ -237,8 +237,6 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 	protocolRepairs := 0
 	// 普通文本可能只是中间说明（例如「[搜索参展商名单]」），每轮给一次继续机会。
 	plainTextRepaired := false
-	// silentContentRepaired 保证「静默却带正文」只打回一次，见 action.Silent 分支。
-	silentContentRepaired := false
 	// detailReviewed 保证联网收尾的细节复核只跑一次，见 reviewUnsupportedDetails。
 	detailReviewed := false
 	lastToolSignature := ""
@@ -328,7 +326,9 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 		response.Sources = responseSources("", steps)
 		response.Silent = true
 		response.SilentReason = strings.TrimSpace(action.SilentReason)
-		response.SilentContent = action.Content
+		if response.SilentReason == "" {
+			response.SilentReason = "send 正文为空"
+		}
 		return response, nil
 	}
 	fail := func(err error) (*Response, error) {
@@ -414,10 +414,16 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 		var nativeCall llm.ToolCall
 		nativeCallIndex := 0
 		var parallelDropNotice string
+		// interimDone 记这一步里当作中途发言已经发出的 send：它们的调用结果是真实的，
+		// 不能和被跳过的调用一样回「没有执行」。
+		var interimDone map[string]string
+		if nativeToolCall && !onlySendCalls(resp.ToolCalls) {
+			interimDone, steps = r.sendInterim(ctx, resp.ToolCalls, steps)
+		}
 		if nativeToolCall {
 			nativeProtocol = true
-			// 收尾工具和其他工具并行发来时先执行真正的工具，把收尾留到下一个
-			// 规划步；否则这一步就结束了，其余调用会变成静默丢弃。
+			// 只调 send 就是收尾；和其他工具一起来时 send 已经作为中途发言发出，
+			// 这一步执行真正的工具。
 			selected := 0
 			for index, call := range resp.ToolCalls {
 				if call.Name != finalizeToolName {
@@ -429,7 +435,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 			nativeCallIndex = selected
 			if nativeCall.Name == finalizeToolName {
 				// 结构化收尾不是一次工具执行：正文留在信封之外，只解码元数据。
-				action = finalizeAction(nativeCall, lastText)
+				action = finalizeAction(resp.ToolCalls, lastText)
 				nativeToolCall = false
 			} else {
 				action = llmAction{Action: "tool", Tool: nativeCall.Name, Input: nativeCall.Arguments}
@@ -441,12 +447,14 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 			if len(resp.ToolCalls) > 1 && nativeToolCall {
 				dropped := make([]string, 0, len(resp.ToolCalls)-1)
 				for index, call := range resp.ToolCalls {
-					if index != selected {
+					if _, sent := interimDone[call.ID]; index != selected && !sent {
 						dropped = append(dropped, call.Name)
 					}
 				}
-				parallelDropNotice = fmt.Sprintf("\n\n注意:你在这一步并行请求了 %d 个工具调用,当前只执行了 %s,其余(%s)没有执行。请在接下来的规划步里逐个继续调用,不要认为它们已经完成。",
-					len(resp.ToolCalls), nativeCall.Name, strings.Join(dropped, "、"))
+				if len(dropped) > 0 {
+					parallelDropNotice = fmt.Sprintf("\n\n注意:你在这一步并行请求了 %d 个工具调用,当前只执行了 %s,其余(%s)没有执行。请在接下来的规划步里逐个继续调用,不要认为它们已经完成。",
+						len(resp.ToolCalls), nativeCall.Name, strings.Join(dropped, "、"))
+				}
 			}
 		}
 		// 同一步里的几次只读检索并行执行，见 runner_parallel.go。
@@ -481,7 +489,10 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 				for _, call := range resp.ToolCalls {
 					read, executed := results[call.ID]
 					var content string
+					sent, interim := interimDone[call.ID]
 					switch {
+					case interim:
+						content = sent
 					case executed:
 						modelOutput := read.output
 						if read.err == nil && call.Name == WebSearchToolName {
@@ -489,11 +500,11 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 						}
 						content = toolObservationMessage(call.Name, modelOutput, read.err == nil, r.remainingToolCalls(toolCalls))
 					case call.Name == finalizeToolName:
-						content = "本次收尾没有执行：同一步的检索结果刚返回，请先看结果，确认后再调用 agent_finalize。"
+						content = "这次 send 没有发出：同一步还有其他工具。看过结果后再 send。"
 					default:
 						content = "本次调用没有执行：本轮工具步数已用完。"
 					}
-					messages = append(messages, llm.Message{Role: llm.RoleTool, Content: content, ToolCallID: call.ID, ToolName: call.Name, ToolError: !executed || read.err != nil})
+					messages = append(messages, llm.Message{Role: llm.RoleTool, Content: content, ToolCallID: call.ID, ToolName: call.Name, ToolError: !interim && (!executed || read.err != nil)})
 				}
 				if guidance := parallelReadGuidance(reads, steps, r.remainingToolCalls(toolCalls)); guidance != "" {
 					messages = append(messages, llm.Message{Role: llm.RoleSystem, Priority: llm.MessagePrioritySystem, Content: guidance})
@@ -502,7 +513,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 			}
 		}
 		if !ok {
-			// 模型没走 function calling，但正文本身就是 agent_finalize 信封时，
+			// 模型没走 function calling，但正文本身就是 send 信封时，
 			// 按收尾解码，别把信封当正文发出去。
 			if envelope, decoded := finalizeEnvelopeFromText(lastText, r.cfg.FinalizeFields...); decoded {
 				action = envelope
@@ -511,10 +522,10 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 		}
 		if imageTaskQueued && ((!ok && !looksLikeAgentAction(lastText)) || (ok && action.Action == "final" && !imageTaskFinalIsPending(action))) {
 			protocolRepairs++
-			reason := "图片工具返回 queued=true 后，agent_finalize 的 task_state 必须是 pending"
+			reason := "图片工具返回 queued=true 后，send 的 task_state 必须是 pending"
 			emitProtocolRepair(ctx, req.Observer, traceID, modelTurns, toolCalls, r.cfg.MaxSteps, reason)
 			messages = appendAssistantEcho(messages, lastText)
-			messages = append(messages, llm.Message{Role: llm.RoleUser, Content: reason + "。图片仍由后台处理，请调用 agent_finalize 并携带 task_state=\"pending\"，正文自然说明任务已开始、完成后会自动发送。"})
+			messages = append(messages, llm.Message{Role: llm.RoleUser, Content: reason + "。图片仍由后台处理，请 send 并携带 task_state=\"pending\"，正文自然说明任务已开始、完成后会自动发送。"})
 			if protocolRepairs >= r.cfg.ProtocolRepairLimit {
 				finishReason = "protocol_repair_exhausted"
 				break
@@ -523,9 +534,9 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 		}
 		if !ok && !looksLikeAgentAction(lastText) && !plainTextRepaired && plainTextNeedsRepair(lastText) {
 			plainTextRepaired = true
-			reason := "本次只返回了普通文本，尚未明确完成任务。请检查用户请求和已有工具结果：如果还有未完成的工作，直接调用工具继续，不要只描述准备执行的动作；如果已经完成，请调用 agent_finalize 给出最终答复。不支持原生工具调用时使用 tool 或 final JSON。不要重复已经成功执行的操作。"
+			reason := "本次只返回了普通文本，尚未明确完成任务。请检查用户请求和已有工具结果：如果还有未完成的工作，直接调用工具继续，不要只描述准备执行的动作；如果已经完成，请用 send 发出最终答复。不支持原生工具调用时使用 tool 或 final JSON。不要重复已经成功执行的操作。"
 			emitProtocolRepair(ctx, req.Observer, traceID, modelTurns, toolCalls, r.cfg.MaxSteps, reason)
-			messages = appendToolRepair(messages, resp, lastText, reason)
+			messages = appendToolRepair(messages, resp, interimDone, lastText, reason)
 			continue
 		}
 		if (ok && action.Action == "final") || (!ok && !looksLikeAgentAction(lastText)) {
@@ -535,7 +546,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 			}
 			if feedback != "" {
 				emitProtocolRepair(ctx, req.Observer, traceID, modelTurns, toolCalls, r.cfg.MaxSteps, feedback)
-				messages = appendToolRepair(messages, resp, lastText, feedback)
+				messages = appendToolRepair(messages, resp, interimDone, lastText, feedback)
 				continue
 			}
 		}
@@ -549,7 +560,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 				}
 				messages = append(messages, llm.Message{
 					Role:    llm.RoleUser,
-					Content: "Agent 动作无法解析。请直接调用工具或 agent_finalize；只有在不支持原生 function calling 时才输出单个合法的 tool 或 final JSON 对象。",
+					Content: "Agent 动作无法解析。请直接调用工具或 send；只有在不支持原生 function calling 时才输出单个合法的 tool 或 final JSON 对象。",
 				})
 				continue
 			}
@@ -564,30 +575,14 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 					reason := "图片任务仍在后台生成，这一轮不能静默收尾"
 					emitProtocolRepair(ctx, req.Observer, traceID, modelTurns, toolCalls, r.cfg.MaxSteps, reason)
 					messages = appendAssistantEcho(messages, lastText)
-					messages = append(messages, llm.Message{Role: llm.RoleUser, Content: reason + "。请重新调用 agent_finalize，silent 填 false，携带 task_state=\"pending\"，正文说明任务已开始、完成后会自动发送。"})
+					messages = append(messages, llm.Message{Role: llm.RoleUser, Content: reason + "。请重新 send，携带 task_state=\"pending\"，正文说明任务已开始、完成后会自动发送。"})
 					if protocolRepairs >= r.cfg.ProtocolRepairLimit {
 						finishReason = "protocol_repair_exhausted"
 						break
 					}
 					continue
 				}
-				// 线上出过：静默收尾上写着完整回复，理由是「已通过 say 发出」，可这一轮
-				// 根本没调过 say——模型把自己写在工具调用旁边的正文当成了已经发出的话。
-				// 打回去一次让它重选；再犯就按静默交出去，由调用方核对后发出 content。
-				if action.Content != "" && !silentContentRepaired && !saidThisRun(steps) {
-					silentContentRepaired = true
-					protocolRepairs++
-					reason := "你填了 silent=true，但 content 不为空，而这一轮没有调用过 say"
-					emitProtocolRepair(ctx, req.Observer, traceID, modelTurns, toolCalls, r.cfg.MaxSteps, reason)
-					messages = appendAssistantEcho(messages, lastText)
-					messages = append(messages, llm.Message{Role: llm.RoleUser, Content: reason + "。写在工具调用旁边的正文不会发给用户，目前对方什么都没收到。要回复就重新调用 agent_finalize，silent 填 false，把回复写进 content；确实不回复就 content 留空。"})
-					if protocolRepairs >= r.cfg.ProtocolRepairLimit {
-						finishReason = "protocol_repair_exhausted"
-						break
-					}
-					continue
-				}
-				// 模型自己决定这一轮不说话：没有正文，也就没有排版、证据账本和
+				// 模型 send 了空正文，这一轮不说话：没有正文，也就没有排版、证据账本和
 				// 空收尾可校验——那几项校验的对象都是「要发出去的那句话」。
 				return finishSilent(action, "silent")
 			}
@@ -616,10 +611,10 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 			// 图片任务 pending 的空收尾除外——运行时会用图片开场白兜底。
 			if action.Content == "" && !imageTaskFinalIsPending(action) {
 				protocolRepairs++
-				reason := "agent_finalize 没有携带任何正文"
+				reason := "收尾没有携带任何正文"
 				emitProtocolRepair(ctx, req.Observer, traceID, modelTurns, toolCalls, r.cfg.MaxSteps, reason)
 				messages = appendAssistantEcho(messages, lastText)
-				messages = append(messages, llm.Message{Role: llm.RoleUser, Content: reason + "。请重新调用 agent_finalize，把给用户看的完整回复写进 content，不能为空。"})
+				messages = append(messages, llm.Message{Role: llm.RoleUser, Content: reason + "。请用 send 把给用户看的完整回复写进 text；这一轮不说话就 send 空正文。"})
 				if protocolRepairs >= r.cfg.ProtocolRepairLimit {
 					finishReason = "protocol_repair_exhausted"
 					break
@@ -638,7 +633,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 			}
 			messages = append(messages, llm.Message{
 				Role:    llm.RoleUser,
-				Content: fmt.Sprintf("Agent 动作无效：action=%q。请调用需要的工具，或调用 agent_finalize 结束本轮。", action.Action),
+				Content: fmt.Sprintf("Agent 动作无效：action=%q。请调用需要的工具，或用 send 结束本轮。", action.Action),
 			})
 			continue
 		}
@@ -654,7 +649,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 			reason := dispatchErr.Error()
 			steps = append(steps, Step{Index: len(steps) + 1, Tool: action.Tool, Input: action.Input, Error: reason, Skipped: true})
 			emitProtocolRepair(ctx, req.Observer, traceID, modelTurns, toolCalls, r.cfg.MaxSteps, reason)
-			messages = appendToolRepair(messages, resp, lastText, reason)
+			messages = appendToolRepair(messages, resp, interimDone, lastText, reason)
 			if protocolRepairs >= r.cfg.ProtocolRepairLimit {
 				finishReason = "protocol_repair_exhausted"
 				break
@@ -698,7 +693,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 			guardErr := "操作被拒绝：当前用户消息里没有确认码 " + code
 			steps = append(steps, Step{Index: len(steps) + 1, Tool: action.Tool, Input: action.Input, Error: guardErr, Skipped: true})
 			emitProtocolRepair(ctx, req.Observer, traceID, modelTurns, toolCalls, r.cfg.MaxSteps, guardErr)
-			messages = appendToolRepair(messages, resp, lastText, extensionMutationConfirmationPrompt(explicitRequestKind, action.Tool, code, action.Input))
+			messages = appendToolRepair(messages, resp, interimDone, lastText, extensionMutationConfirmationPrompt(explicitRequestKind, action.Tool, code, action.Input))
 			if protocolRepairs >= r.cfg.ProtocolRepairLimit {
 				finishReason = "protocol_repair_exhausted"
 				break
@@ -715,7 +710,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 			duplicateErr := "连续重复的相同工具调用已跳过；请使用上一条工具结果、调整参数或直接给出最终回复"
 			steps = append(steps, Step{Index: len(steps) + 1, Tool: action.Tool, Input: action.Input, Error: duplicateErr, Skipped: true})
 			emitProtocolRepair(ctx, req.Observer, traceID, modelTurns, toolCalls, r.cfg.MaxSteps, duplicateErr)
-			messages = appendToolRepair(messages, resp, lastText, duplicateErr)
+			messages = appendToolRepair(messages, resp, interimDone, lastText, duplicateErr)
 			if protocolRepairs >= r.cfg.ProtocolRepairLimit {
 				finishReason = "protocol_repair_exhausted"
 				break
@@ -729,7 +724,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 				limitErr := fmt.Sprintf("本轮查询自身能力和身份的次数已达上限 %d；请用已经问到的信息继续，或直接给出最终回复", maxIntrospectionCallsPerAgentRun)
 				steps = append(steps, Step{Index: len(steps) + 1, Tool: action.Tool, Input: action.Input, Error: limitErr, Skipped: true})
 				emitProtocolRepair(ctx, req.Observer, traceID, modelTurns, toolCalls, r.cfg.MaxSteps, limitErr)
-				messages = appendToolRepair(messages, resp, lastText, limitErr)
+				messages = appendToolRepair(messages, resp, interimDone, lastText, limitErr)
 				if protocolRepairs >= r.cfg.ProtocolRepairLimit {
 					finishReason = "protocol_repair_exhausted"
 					break
@@ -744,7 +739,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 				limitErr := fmt.Sprintf("本轮 %s 次数已达上限 %d；需要的工具请一次性列全，或直接用已加载的工具继续", ToolsLoadToolName, maxToolLoadCallsPerAgentRun)
 				steps = append(steps, Step{Index: len(steps) + 1, Tool: action.Tool, Input: action.Input, Error: limitErr, Skipped: true})
 				emitProtocolRepair(ctx, req.Observer, traceID, modelTurns, toolCalls, r.cfg.MaxSteps, limitErr)
-				messages = appendToolRepair(messages, resp, lastText, limitErr)
+				messages = appendToolRepair(messages, resp, interimDone, lastText, limitErr)
 				if protocolRepairs >= r.cfg.ProtocolRepairLimit {
 					finishReason = "protocol_repair_exhausted"
 					break
@@ -882,7 +877,9 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 			for index, call := range resp.ToolCalls {
 				content := observationText
 				skipped := index != nativeCallIndex
-				if skipped {
+				if sent, interim := interimDone[call.ID]; interim {
+					content, skipped = sent, false
+				} else if skipped {
 					content = "本次调用没有执行：当前规划步只执行了 " + nativeCall.Name + "。如仍需要，请在下一步重新调用。"
 				}
 				messages = append(messages, llm.Message{Role: llm.RoleTool, Content: content, ToolCallID: call.ID, ToolName: call.Name, ToolError: skipped || err != nil, Priority: observation.Priority})
@@ -965,8 +962,14 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 
 		break
 	}
-	if call, found := findFinalizeCall(resp.ToolCalls); found {
-		action := finalizeAction(call, finalText)
+	if _, found := findFinalizeCall(resp.ToolCalls); found {
+		var sends []llm.ToolCall
+		for _, call := range resp.ToolCalls {
+			if call.Name == finalizeToolName {
+				sends = append(sends, call)
+			}
+		}
+		action := finalizeAction(sends, finalText)
 		finalizeFields = r.finalizeFieldValues(action)
 		if action.Silent && !imageTaskQueued {
 			return finishSilent(action, finishReason)
@@ -1174,7 +1177,7 @@ func cloneToolInput(input map[string]any) map[string]any {
 
 func toolObservationMessage(tool, output string, success bool, remaining int) string {
 	status := "成功"
-	guidance := "请基于结果继续；信息已足够时调用 agent_finalize 结束本轮。"
+	guidance := "请基于结果继续；信息已足够时用 send 回复并结束本轮。"
 	if success && tool == WebSearchToolName {
 		guidance = "搜索结果和摘要是候选来源，不等于已读取原始页面。优先读取目标官网、官方文档和官方仓库。若候选来源只有第三方文章，先从正文或 links 追踪官方出处并用 browser_render 打开；找不到官方入口时用实体名加官网/官方文档查询，不从转载直接收尾。仅官方页面无法访问或未覆盖问题时使用第三方并标明限制。根据实际原文核对技术、能力、版本与价格，正文附出处；视频页面若只有简介和评论，不得当成已读视频转写，技术机制另找可阅读的一手文档；原文不足或不是一手来源时继续打开最相关页面。确有新的信息缺口才补搜，用实体名加一个查证目标，不堆 OR、不重复站内搜索。无法核实时如实说明限制。"
 	}
@@ -1183,7 +1186,7 @@ func toolObservationMessage(tool, output string, success bool, remaining int) st
 	}
 	if !success {
 		status = "失败"
-		guidance = "不要原样重复同一调用；请分析错误后调整参数、改用其他工具，或如实调用 agent_finalize 说明限制。"
+		guidance = "不要原样重复同一调用；请分析错误后调整参数、改用其他工具，或如实 send 说明限制。"
 	}
 	if remaining < 0 {
 		return fmt.Sprintf("工具 %s 执行%s：\n%s\n\n%s", tool, status, output, guidance)
@@ -1201,7 +1204,7 @@ func finalizationInstruction(reason string) string {
 	case "finalization_reserved":
 		prefix = "剩余请求时间已保留给最终答复。"
 	}
-	requirement := "现在禁止再调用任何工具；请仅根据已有工具结果调用 agent_finalize 结束本轮"
+	requirement := "现在禁止再调用任何工具；请仅根据已有工具结果 send 结束本轮"
 	return prefix + requirement + "。即使信息不完整，也要说明已确认的结果和限制；联网调研正文附实际来源链接（用户明确禁用链接时除外），不要输出 tool 动作。content 只写面向用户的自然回答；用户询问观点是否正确时，应区分可直接判断的逻辑或措辞与需要外部证据的事实，不要因为部分事实未核实而拒绝回答整个问题。"
 }
 
@@ -1227,7 +1230,7 @@ func (r *Runner) toolRules(hasTool func(string) bool, withBudget bool) []string 
 	// 措辞必须把「规划轮」和「用户消息」区分开:此前只写「每轮最多调用一个
 	// 工具」,模型把「轮」理解成「用户每发一条消息」,于是每调一次工具就收口,
 	// 让用户发「继续」才肯调下一次——多步任务永远走不完。预算写成具体数字。
-	rules := []string{"- 互不依赖的只读检索（web_search、browser_render）可以同时调用，并行执行；其他工具每步只发一个，看到结果再继续。agent_finalize 单独放在最后一步。持续执行直到任务完成，不要停下来向用户要求「继续」。"}
+	rules := []string{"- 互不依赖的只读检索（web_search、browser_render）可以同时调用，并行执行；其他工具每步只发一个，看到结果再继续。本轮最后一步只调 send。持续执行直到任务完成，不要停下来向用户要求「继续」。"}
 	// 设了上限才写预算；共享模式下上限按发言者可能不同，写进尾部（speakerToolPrompt）。
 	if withBudget && r.cfg.MaxSteps > 0 {
 		rules = append(rules, fmt.Sprintf("本轮最多调用 %d 次工具，并行调用各算一次。", r.cfg.MaxSteps))
@@ -1310,7 +1313,7 @@ func (r *Runner) toolRules(hasTool func(string) bool, withBudget bool) []string 
 		rules = append(rules, "- 用户明确要求先搜索、核验网页或读取外部资料再生成/编辑图片时，必须先完成搜索和必要的网页核验，再把已确认结果整理为完整、自包含 prompt 调用 image。")
 	}
 	if hasTool("image") {
-		rules = append(rules, "- image 返回 queued=true 只表示任务已受理、正在后台生成，不表示图片已经完成或发送；此后调用 agent_finalize 时必须携带 task_state=\"pending\"，正文说明已开始生成，完成后由运行时自动补发。")
+		rules = append(rules, "- image 返回 queued=true 只表示任务已受理、正在后台生成，不表示图片已经完成或发送；此后 send 时必须携带 task_state=\"pending\"，正文说明已开始生成，完成后由运行时自动补发。")
 	}
 	if hasTool("image") && hasTool("render") {
 		rules = append(rules, "- 在 render 与 image 之间选择时：坐标棋盘、表格、流程图、状态图、时间线和其他要求位置/文字/数量精确的结构化画面，优先用 render（通常使用静态 SVG）；人物、风景、质感、艺术风格和其他开放式视觉创作使用 image。用户明确指定某一种时遵从用户。五子棋等已有 canonical 任务状态的盘面更新默认用 render，不要为了木纹或写实感牺牲落子准确性。")
@@ -1332,10 +1335,10 @@ func (r *Runner) toolRules(hasTool func(string) bool, withBudget bool) []string 
 	if hasTool("run_command") && hasAnyTool("write_file", "edit_file") {
 		rules = append(rules, "- 编写或修复代码时，根据用户要求验证实际入口、关键行为和边界情况；语法检查通过不等于行为正确。测试失败后保留原失败用例，查明原因、修改实现并重跑；不能通过削弱断言或替换失败场景来宣称修复。最终改动后重跑相关验证；仍有失败或未验证的要求时，在最终回复中明确说明。")
 	}
-	if hasTool("say") {
-		// 中途说一句（assistant 的 say 工具）：把「说」和「结束」分开。上面那条禁止未执行
-		// 承诺的规则管的是最终答复；say 发的是「正在做」，说完必须接着做。
-		rules = append(rules, "- 要先查、先做几步才能回答时，可以先调用 say 说一句正在做什么（比如「我去查一下」），然后接着调用工具真的去做；长任务每完成一个阶段可以再用 say 报一句进度。say 说了「去做」就必须继续调用工具，不能说完就调用 agent_finalize 收工。say 不是分条发答案用的；它发出去的话对方已经看到，agent_finalize 里不要重复，全都说完了就 silent=true。只有真的调用了 say 工具才算说过：你在工具调用旁边写的正文不会发给任何人，本轮没调过 say 就把回复写进 agent_finalize 的 content、silent 填 false。")
+	if r.cfg.Interim != nil {
+		// 中途说一句：send 和其他工具同一步调用，把「说」和「结束」分开。上面那条禁止
+		// 未执行承诺的规则管的是最终答复；这句发的是「正在做」，说完必须接着做。
+		rules = append(rules, "- 要先查、先做几步才能回答时，可以在调用工具的同一步里 send 一句正在做什么（比如「我去查一下」），这句立刻发出、本轮继续；长任务每完成一个阶段可以再这样报一句进度。说了「去做」就必须真的调用工具。中途这句不是分条发答案用的，一轮最多 3 次、每次一句短话；对方已经看到的话最后不要重复，全都说完了就 send 空正文。")
 	}
 	// 线上出过：主人让把生成的图存进工作目录，模型手里只有 write_file，就存了一份
 	// 文字描述，然后在没有任何成功调用的情况下回了一句「存好了」。
@@ -1421,12 +1424,12 @@ func (r *Runner) systemPrompt() string {
 		return false
 	}
 	rules := r.toolRules(hasTool, r.cfg.SharedTools == nil)
-	rules = append(rules, "- 已经足够回答时必须调用 agent_finalize 结束本轮。")
+	rules = append(rules, "- 已经足够回答时只调 send，发出回复并结束本轮。")
 	sections := []string{
 		"你是 Diana 的内置 Agent。使用工具完成任务和核实外部事实，观察结果后再给出最终答复。征求你的观点或讨论你的架构，也要先核实其中具体技术的外部事实前提；不能把熟悉的术语自动当成已查证的知识。",
 		"需要工具时必须使用请求中提供的原生 function calling，不要把工具调用写进正文。每个规划步只选择一个工具，观察结果后可以继续选择下一个。",
-		"不再需要工具时调用 agent_finalize 结束本轮：给用户看的完整正文写进 content（必填，不能为空），task_state 等元数据按需一并携带。正文不要写成 JSON。",
-		"这一轮确实不需要说话时，调用 agent_finalize 并填 silent=true、content 留空，本轮就不发任何消息；silent_reason 里用一句话说明原因，只进日志。它不是拒答：要拒绝就正常把话说出来。",
+		"本轮最后一步必须是 send：只调 send 就把消息发出并结束本轮，给用户看的完整正文写进 text，task_state 等元数据按需一并携带，正文不要写成 JSON。工具调用旁边写的正文不会发给任何人。",
+		"这一轮确实不需要说话时，send 的 text 留空，本轮就不发任何消息。它不是拒答：要拒绝就正常把话说出来。",
 		"若 Provider 不支持原生 function calling，才可兼容输出 {\"action\":\"final\",\"content\":\"给用户看的自然语言回复\"} 或 {\"action\":\"tool\",\"tool\":\"工具名\",\"input\":{...}}。",
 	}
 	if hasAnyTool(webSearchToolName, "browser_render", "browser_open") {
@@ -1582,12 +1585,12 @@ type llmAction struct {
 	TaskState string         `json:"task_state,omitempty"`
 	Reply     *string        `json:"reply,omitempty"`
 	// Silent 是模型自己决定「这一轮不发任何消息」。只有两种来源：原生
-	// agent_finalize 调用的 silent 字段，和文本兼容协议里那个完整的 final JSON
+	// send 调用的空正文，和文本兼容协议里那个完整的 final JSON
 	// 对象。任何把普通正文兜底成 final 的路径都不得置位——正文里出现 silent
 	// 这个词只是一个词，不是一次决定。
 	Silent       bool   `json:"silent,omitempty"`
 	SilentReason string `json:"silent_reason,omitempty"`
-	// Fields 是原生 agent_finalize 调用里信封以外的非空字符串字段，按 Config.FinalizeFields 过滤后交给调用方。
+	// Fields 是原生 send 调用里信封以外的非空字符串字段，按 Config.FinalizeFields 过滤后交给调用方。
 	Fields map[string]string `json:"-"`
 }
 
@@ -1641,10 +1644,10 @@ func parseAction(text string, declared ...FinalizeField) (llmAction, bool) {
 	if action.Action == "" {
 		return llmAction{Action: "final", Content: strings.TrimSpace(text)}, false
 	}
-	// 兼容协议里 agent_finalize 被当成普通工具写进 JSON 的形态：它不在工具注册表
+	// 兼容协议里 send 被当成普通工具写进 JSON 的形态：它不在工具注册表
 	// 里，按 tool 往下走会撞上「工具不存在」，白烧一轮修复预算还可能漏出信封。
-	if action.Action == "tool" && action.Tool == finalizeToolName {
-		return finalizeAction(llm.ToolCall{Name: action.Tool, Arguments: action.Input}, ""), true
+	if action.Action == "tool" && (action.Tool == finalizeToolName || action.Tool == legacyFinalizeToolName) {
+		return finalizeAction([]llm.ToolCall{{Name: finalizeToolName, Arguments: action.Input}}, ""), true
 	}
 	if action.Action == "final" {
 		action.Content = normalizeFinalContentNewlines(action.Content)
@@ -1708,7 +1711,7 @@ func decodeLenientJSONString(content string) string {
 // plainTextNeedsRepair 判断没走工具调用的普通文本要不要再给模型一次机会。
 //
 // 普通文本默认就是最终回复：线上 swe-2 九成回合先用纯文本作答，打回后几乎都把同一句
-// 话原样装进 agent_finalize 再发一遍，白等一整轮。只补试两种形状：空文本，和整段是
+// 话原样装进 send 再发一遍，白等一整轮。只补试两种形状：空文本，和整段是
 // 一对括号包住的动作描述——#1189 的事故就是模型只写了「[搜索 WePlay 2026 参展商名单]」
 // 却没调用搜索。正文里出现「我去查一下」这类说法不在此列，判断语义意图交给提示词。
 func plainTextNeedsRepair(text string) bool {
@@ -1847,7 +1850,7 @@ func truncateRunes(value string, limit int) string {
 
 // appendToolRepair preserves every original call ID, including skipped parallel calls,
 // so native provider continuation remains valid even when dispatch is rejected.
-func appendToolRepair(messages []llm.Message, resp *llm.GenerateResponse, text, reason string) []llm.Message {
+func appendToolRepair(messages []llm.Message, resp *llm.GenerateResponse, interimDone map[string]string, text, reason string) []llm.Message {
 	if len(resp.ToolCalls) == 0 {
 		messages = appendAssistantEcho(messages, text)
 		return append(messages, llm.Message{Role: llm.RoleUser, Content: reason})
@@ -1855,6 +1858,10 @@ func appendToolRepair(messages []llm.Message, resp *llm.GenerateResponse, text, 
 	// 带上作用域：之后切到别的配置档时，这批调用才会被识别成外来历史。
 	messages = append(messages, llm.Message{Role: llm.RoleAssistant, Content: text, ToolCalls: resp.ToolCalls, ResponsesOutput: resp.ResponsesOutput, ContinuationScope: resp.ContinuationScope, AnthropicThinking: resp.AnthropicThinking, ReasoningContent: resp.ReasoningContent})
 	for _, call := range resp.ToolCalls {
+		if sent, interim := interimDone[call.ID]; interim {
+			messages = append(messages, llm.Message{Role: llm.RoleTool, ToolName: call.Name, ToolCallID: call.ID, Content: sent})
+			continue
+		}
 		messages = append(messages, llm.Message{Role: llm.RoleTool, ToolName: call.Name, ToolCallID: call.ID, ToolError: true, Content: "本次调用未执行：" + reason})
 	}
 	return messages
@@ -1893,4 +1900,30 @@ func (r *Runner) remainingToolCalls(used int) int {
 		return -1
 	}
 	return max(0, r.cfg.MaxSteps-used)
+}
+
+// sendInterim 把和其他工具同一步发来的 send 当作中途发言立刻发出，返回每个调用的结果。
+// 没配 Interim 时不发，结果留空，由调用处按「没有执行」回给模型。
+func (r *Runner) sendInterim(ctx context.Context, calls []llm.ToolCall, steps []Step) (map[string]string, []Step) {
+	if r.cfg.Interim == nil {
+		return nil, steps
+	}
+	done := map[string]string{}
+	for _, call := range calls {
+		if call.Name != finalizeToolName {
+			continue
+		}
+		text := sendText(call)
+		record := Step{Index: len(steps) + 1, Tool: finalizeToolName, Input: cloneToolInput(call.Arguments)}
+		output, err := r.cfg.Interim(ctx, text)
+		if err != nil {
+			record.Error = err.Error()
+			output = "没有发出：" + err.Error()
+		} else {
+			record.Output = output
+		}
+		steps = append(steps, record)
+		done[call.ID] = output
+	}
+	return done, steps
 }

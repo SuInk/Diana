@@ -162,7 +162,7 @@
         </ol>
         <h3>提示词顺序</h3>
         <p>系统头（SOUL.md、固定规则、工具规则）→ 摘要检查点 → 稳定历史 → <strong>缓存断点</strong> → 可变块（插件上下文、会话状态、记忆、笔记本、世界书、自我笔记、媒体索引、最近引用来源、最近工具调用）→ 同轮候选消息 → 依赖图 → 系统尾（说话人）→ 时钟 → 装饰规则 → 当前消息。断点之前的内容在同一个群里轮与轮之间保持不变，让上游的前缀缓存命中。发给模型的请求里真实的用户 ID、群号换成别名，回复和工具调用里再换回来。</p>
-        <p>生成结果为空时按标记兜底：暂停响应就发一句人设内的提示后沉默；拒答发固定文本；有出图任务在排队就把「开始生成」当回复；这一轮已经用 <code>say</code> 说过话就沉默；都不是时发「我这边没有生成有效回复。」</p>
+        <p>生成结果为空时按标记兜底：暂停响应就发一句人设内的提示后沉默；拒答发固定文本；有出图任务在排队就把「开始生成」当回复；这一轮已经中途 <code>send</code> 过就沉默；都不是时发「我这边没有生成有效回复。」</p>
       </section>
 
       <section class="section searchable" id="delivery">
@@ -183,7 +183,7 @@
 
       <section class="section searchable" id="agent">
         <div class="section-heading"><p class="eyebrow">03 Agent 运行</p><h2>一步只做一件事</h2></div>
-        <p>机器人开了 Agent 且对方的关系允许用工具时，这一轮由 <code>Runner.Run</code> 生成：模型每一步要么调用一个工具，要么用 <code>agent_finalize</code> 收尾。</p>
+        <p>机器人开了 Agent 且对方的关系允许用工具时，这一轮由 <code>Runner.Run</code> 生成：模型每一步要么调用工具，要么只调 <code>send</code> 收尾；<code>send</code> 和其他工具同一步调用时是中途说一句，本轮继续。</p>
         <ol class="flow">
           <li><div class="flow-node"><strong>组装配置</strong><p>不设工具调用次数上限；主人单次工具输出 20000 字，其他人 8000 字。单工具 60 秒，收尾预留 20 秒，协议修复 3 次。</p></div></li>
           <li><div class="flow-node"><strong>组装工具</strong><p>核心工具每轮直接可用；其余只在目录里列一行，先 <code>tools_load</code> 再经 <code>tools_execute</code> 调用。按权限白名单与机器人 / 群级扩展开关裁剪，无权工具回答「没有权限」而不是「不存在」。群聊加载过的工具随群会话快照跨轮恢复。</p></div></li>
@@ -197,15 +197,15 @@
         </ol>
         <h3>收尾校验</h3>
         <ol class="flow">
-          <li class="q"><div class="flow-node"><strong>silent = true？</strong></div><div class="flow-exits"><span class="flow-exit"><b>是，没有出图任务排队</b>这轮不回</span><span class="flow-exit loop"><b>有出图任务排队</b>拒绝静默，计一次修复</span></div></li>
+          <li class="q"><div class="flow-node"><strong>send 正文为空？</strong></div><div class="flow-exits"><span class="flow-exit"><b>是，没有出图任务排队</b>这轮不回</span><span class="flow-exit loop"><b>有出图任务排队</b>拒绝静默，计一次修复</span></div></li>
           <li class="q"><div class="flow-node"><strong>只有纯文本？</strong><p>纯文本直接当最终回复；只有空文本或整段是一对括号包住的动作描述（如「[搜索 …]」）才补试一次。真实换行不打回，发送层当 <code>[diana-line]</code> 处理：普通话之间拆成几条，列表、代码整块一条。</p></div><div class="flow-exits"><span class="flow-exit loop"><b>空或括号动作</b>补试一次</span></div></li>
           <li class="q"><div class="flow-node"><strong>要求证据却没搜？出现本轮没取回、对话里也没出现过的链接？</strong></div><div class="flow-exits"><span class="flow-exit loop"><b>是</b>计一次修复</span></div></li>
           <li class="q"><div class="flow-node"><strong>泄露内部协议词？正文为空？</strong></div><div class="flow-exits"><span class="flow-exit loop"><b>是</b>计一次修复</span></div></li>
           <li class="end"><div class="flow-node"><strong>返回回复</strong></div></li>
         </ol>
-        <p><strong>强制收尾</strong>发生在步数用完、修复用完、收尾预留时间到了、证据要求没满足时：追加收尾指令和证据账本摘要，只开放 <code>agent_finalize</code> 并强制调用。结束后，被迫收尾时存下最多 12 条步骤摘要作续跑档案（10 分钟有效）；最近 8 次工具调用保留 30 分钟注入后续轮次。</p>
+        <p><strong>强制收尾</strong>发生在步数用完、修复用完、收尾预留时间到了、证据要求没满足时：追加收尾指令和证据账本摘要，只开放 <code>send</code> 并强制调用。结束后，被迫收尾时存下最多 12 条步骤摘要作续跑档案（10 分钟有效）；最近 8 次工具调用保留 30 分钟注入后续轮次。</p>
         <div class="tool-grid pairs">
-          <article><h3>中途说一句 say</h3><p>一轮最多 3 次、每次 80 字以内、不能换行，直接发出去并重新点亮「正在输入」。说过之后这一轮不再被合并重来，也不过发送前审核。</p></article>
+          <article><h3>中途说一句 send</h3><p>和其他工具同一步调用的 send。一轮最多 3 次、每次 80 字以内、不能换行，直接发出去并重新点亮「正在输入」。说过之后这一轮不再被合并重来，也不过发送前审核。</p></article>
           <article><h3>子任务 subtask</h3><p>同步的、没有工具也没有历史的一次模型调用，每条回复最多 4 次、材料不超过 6000 字、90 秒超时。</p></article>
           <article><h3>上下文超限</h3><p>依次把最长的文本消息摘要（最多 2 次）、把图片换成描述、缩小图片、最后丢掉图片。</p></article>
           <article><h3>模型报错</h3><p>Runner 不重试。provider 栈里瞬时错误 700 毫秒后重试一次，上下文超长减半重试最多 4 次，再按配置顺序切到下一个模型配置，已完成的工具步骤不丢。</p></article>
@@ -282,7 +282,7 @@
           <li class="q"><div class="flow-node"><strong>模型选择沉默？</strong></div><div class="flow-exits"><span class="flow-exit"><b>可以沉默</b><code>ignored_model_silent</code></span><span class="flow-exit go"><b>已有副作用 / 插件事实结果 / 出图排队</b>不许沉默，按空回复兜底</span></div></li>
           <li class="q"><div class="flow-node"><strong>闲聊回复为空或被标记拒答？</strong></div><div class="flow-exits"><span class="flow-exit"><b>是</b><code>ignored_no_natural_reply</code></span></div></li>
           <li class="q"><div class="flow-node"><strong>暂停响应 / 拒答标记？</strong><p><code>[[DIANA_IGNORE_CURRENT_USER_30M]]</code> / <code>[[DIANA_REFUSE_CURRENT]]</code></p></div><div class="flow-exits"><span class="flow-exit"><b>暂停且正文为空</b>发一句人设内提示后沉默</span><span class="flow-exit go"><b>拒答且正文为空</b>换成固定拒答文本</span></div></li>
-          <li class="q"><div class="flow-node"><strong>和本轮 say 说过的某句相同？</strong></div><div class="flow-exits"><span class="flow-exit"><b>是</b>不发第二次</span></div></li>
+          <li class="q"><div class="flow-node"><strong>和本轮中途 send 过的某句相同？</strong></div><div class="flow-exits"><span class="flow-exit"><b>是</b>不发第二次</span></div></li>
           <li><div class="flow-node"><strong>审核模型</strong><p>对最终候选回复执行一次审核，不再另行调用语义去重模型丢弃或改写正文。</p></div></li>
           <li class="q"><div class="flow-node"><strong>应用审核结论</strong><p>见下一节。</p></div><div class="flow-exits"><span class="flow-exit"><b>拦下</b>对应的 <code>ignored_*</code> 或公开提示</span></div></li>
           <li class="q"><div class="flow-node"><strong>群里 10 分钟内有人叫停，且这是主动回复？</strong></div><div class="flow-exits"><span class="flow-exit"><b>是</b><code>ignored_stop_requested</code></span></div></li>

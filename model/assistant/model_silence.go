@@ -17,8 +17,8 @@ import (
 // 「硬凑一句告别」和「被记一次拒答」之间二选一——两个都不对。
 //
 // 私聊收尾的兜底（见 private_closing.go）是事后补救：候选回复已经生成出来，审核
-// 判出这是第 N 句告别才拦下。这里是事前的：模型自己在 agent_finalize 上填
-// silent=true，本轮什么都不发。两者不重复——静默走在前面，兜底仍然守着模型没有
+// 判出这是第 N 句告别才拦下。这里是事前的：模型最后 send 了空正文，本轮什么
+// 都不发。两者不重复——静默走在前面，兜底仍然守着模型没有
 // 自觉的那些轮。
 
 // errModelSilentFinish 是模型主动静默的哨兵。它不是错误，只是「本轮没有要发的
@@ -26,8 +26,8 @@ import (
 // 记一次 ignored_model_silent 就收工。
 var errModelSilentFinish = errors.New("diana: model finished the turn without a message")
 
-// modelSilentFinishReasonPrefix 是事件详情里那句话的开头。原因来自模型填的
-// silent_reason，只进事件和日志，不发给用户。
+// modelSilentFinishReasonPrefix 是事件详情里那句话的开头。原因只进事件和日志，
+// 不发给用户。
 const modelSilentFinishReasonPrefix = "模型判断这轮不需要回复"
 
 // modelSilentFinishReasonRunes 限制记进事件的原因长度：这段文本由模型自由书写，

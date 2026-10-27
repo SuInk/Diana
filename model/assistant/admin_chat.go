@@ -105,7 +105,7 @@ var adminChatCoreTools = []string{
 // 按发言人记事、到点往本会话投递。管理会话没有这样的会话。群聊原文改用
 // admin_group_history 查。
 var adminChatSessionBoundTools = []string{
-	dianaInterimMessageToolName, dianaCrossSessionToolName, dianaPokeToolName,
+	dianaCrossSessionToolName, dianaPokeToolName,
 	dianaPlatformToolName, dianaChatHistoryToolName, dianaHistoryImagesToolName,
 	"telegram_images", "send_attachment", dianaFileDeliveryToolName, dianaRenderMediaToolName,
 	dianaStickerToolName, dianaThreadStateToolName, dianaSelfNoteToolName,

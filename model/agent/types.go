@@ -134,7 +134,10 @@ type Config struct {
 	ToolTimeoutMS         int
 	FinalizationReserveMS int
 	ProtocolRepairLimit   int
-	// FinalizeFields 给 agent_finalize 追加可选的字符串字段，模型在收尾时顺手填写，
+	// Interim 在 send 和其他工具同一步发来时立刻发出 send 的正文，返回给模型看的结果；
+	// 本轮照常继续。为空时这类 send 不执行，模型要在下一步单独 send。
+	Interim func(ctx context.Context, text string) (string, error) `json:"-"`
+	// FinalizeFields 给 send 追加可选的字符串字段，模型在收尾时顺手填写，
 	// 值原样出现在 Response.FinalizeFields 里，由调用方决定怎么用（例如按关键词配一张
 	// 表情包）。让模型「多填一个字段」比让它先加载、再调用一个工具容易得多。
 	// 字段集合要在同一个会话里保持稳定：它是工具定义的一部分，变了就打断前缀缓存。
@@ -179,21 +182,17 @@ type Response struct {
 	FinishReason string            `json:"finish_reason,omitempty"`
 	DurationMS   int64             `json:"duration_ms,omitempty"`
 	Sources      []SourceReference `json:"sources,omitempty"`
-	// Silent 表示模型调用 agent_finalize 时自己选择了不发消息。Text 为空但这不是
+	// Silent 表示模型收尾的 send 正文为空，自己选择了这一轮不发消息。Text 为空但这不是
 	// 生成失败：调用方必须按「本轮不发送」处理，不要用任何兜底文案补一句。
 	Silent bool `json:"silent,omitempty"`
-	// SilentReason 是模型给出的一句原因，只用于事件记录和日志，不发给用户。
+	// SilentReason 是静默的来由，只用于事件记录和日志，不发给用户。
 	SilentReason string `json:"silent_reason,omitempty"`
-	// SilentContent 是模型在静默收尾上仍然写了的 content。按约定静默时 content
-	// 留空；写了就说明模型以为这句话已经发出去了（比如声称「已通过 say 发出」）。
-	// 调用方核对这一轮是否真的发过，没发过就把它当正文发出去。
-	SilentContent string `json:"silent_content,omitempty"`
-	// FinalizeFields 是模型在 agent_finalize 上填的 Config.FinalizeFields 字段，没填的不出现。
+	// FinalizeFields 是模型在 send 上填的 Config.FinalizeFields 字段，没填的不出现。
 	// Silent 时同样会带：调用方可以据此「不说话、只做字段表达的事」。
 	FinalizeFields map[string]string `json:"finalize_fields,omitempty"`
 }
 
-// FinalizeField 是 agent_finalize 上一个由调用方定义的可选字符串字段。
+// FinalizeField 是 send 上一个由调用方定义的可选字符串字段。
 type FinalizeField struct {
 	Name        string
 	Description string

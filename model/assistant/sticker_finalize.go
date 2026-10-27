@@ -75,7 +75,7 @@ func stickerFinalizeField() agent.FinalizeField {
 	return agent.FinalizeField{
 		Name: stickerFinalizeFieldName,
 		// 「配不配由你判断」「挑不到就不发」是回放里触发率和误发的平衡点，别删。
-		Description: "想配表情包时填 2～6 个空格分隔的短关键词，如「得意 叉腰」。有正文时一起发；只回图填 silent=true、content 留空。挑不到合适的就不发。配不配由你按聊天判断。",
+		Description: "想配表情包时填 2～6 个空格分隔的短关键词，如「得意 叉腰」。有正文时一起发；只回图就 text 留空。挑不到合适的就不发。配不配由你按聊天判断。",
 	}
 }
 

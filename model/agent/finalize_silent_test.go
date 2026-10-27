@@ -25,14 +25,10 @@ func (c *silentFinalizeClient) Generate(_ context.Context, req llm.GenerateReque
 	}, nil
 }
 
-// TestRunnerSilentFinalizeViaNativeToolCall：模型调用 agent_finalize 填 silent=true
-// 时，这一轮不产出任何正文，也不算生成失败。
+// TestRunnerSilentFinalizeViaNativeToolCall：模型 send 了空正文时，这一轮不产出
+// 任何正文，也不算生成失败。
 func TestRunnerSilentFinalizeViaNativeToolCall(t *testing.T) {
-	client := &silentFinalizeClient{arguments: map[string]any{
-		"content":       "",
-		"silent":        true,
-		"silent_reason": "双方已经互相道过别，没有要补的",
-	}}
+	client := &silentFinalizeClient{arguments: map[string]any{"text": ""}}
 	runner, err := NewRunner(client, Config{WorkDir: t.TempDir(), MaxSteps: 2}, NewToolRegistry())
 	if err != nil {
 		t.Fatal(err)
@@ -41,97 +37,91 @@ func TestRunnerSilentFinalizeViaNativeToolCall(t *testing.T) {
 	if err != nil {
 		t.Fatalf("silent finalize must not be an error: %v", err)
 	}
-	if !resp.Silent {
-		t.Fatalf("resp.Silent = false: %#v", resp)
-	}
-	if resp.Text != "" {
-		t.Fatalf("silent finalize produced text %q", resp.Text)
-	}
-	if resp.SilentReason != "双方已经互相道过别，没有要补的" {
-		t.Fatalf("SilentReason = %q", resp.SilentReason)
+	if !resp.Silent || resp.Text != "" || resp.SilentReason == "" {
+		t.Fatalf("resp = %#v", resp)
 	}
 	if len(client.requests) != 1 {
 		t.Fatalf("requests = %d, want a single planning turn", len(client.requests))
 	}
 }
 
-// TestSilentFinalizeWithContentButNoSayIsRepairedOnce：线上出过，模型填
-// silent=true、理由写「已通过 say 发出」，content 是完整回复，可这一轮根本没调过
-// say。打回去一次；模型改成正常收尾就照常发。
-func TestSilentFinalizeWithContentButNoSayIsRepairedOnce(t *testing.T) {
-	client := &scriptedClient{responses: []string{
-		`{"action":"final","silent":true,"silent_reason":"内容已通过 say 发出","content":"刚切回来了"}`,
-		`{"action":"final","content":"刚切回来了"}`,
-	}}
-	runner, err := NewRunner(client, Config{WorkDir: t.TempDir(), MaxSteps: 2}, NewToolRegistry())
-	if err != nil {
-		t.Fatal(err)
-	}
-	resp, err := runner.Run(context.Background(), Request{Messages: []llm.Message{{Role: llm.RoleUser, Content: "现在什么模型"}}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if resp.Silent || resp.Text != "刚切回来了" {
-		t.Fatalf("resp = %#v, want the repaired reply", resp)
-	}
-	if len(client.requests) != 2 {
-		t.Fatalf("requests = %d, want one repair", len(client.requests))
-	}
-	if last := client.requests[1].Messages; !strings.Contains(last[len(last)-1].Content, "没有调用过 say") {
-		t.Fatalf("repair prompt = %q", last[len(last)-1].Content)
-	}
-}
-
-// TestSilentFinalizeWithContentKeepsItAsideAfterRepair：打回一次后模型还是静默
-// 带正文，就按静默交出去，content 留给调用方核对——不再多耗一轮。
-func TestSilentFinalizeWithContentKeepsItAsideAfterRepair(t *testing.T) {
-	client := &silentFinalizeClient{arguments: map[string]any{
-		"content": "刚切回来了", "silent": true, "silent_reason": "内容已通过 say 发出",
-	}}
-	runner, err := NewRunner(client, Config{WorkDir: t.TempDir(), MaxSteps: 2}, NewToolRegistry())
-	if err != nil {
-		t.Fatal(err)
-	}
-	resp, err := runner.Run(context.Background(), Request{Messages: []llm.Message{{Role: llm.RoleUser, Content: "现在什么模型"}}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !resp.Silent || resp.Text != "" || resp.SilentContent != "刚切回来了" {
-		t.Fatalf("resp = %#v", resp)
-	}
-	if len(client.requests) != 2 {
-		t.Fatalf("requests = %d, want exactly one repair", len(client.requests))
-	}
-}
-
-// TestSilentFinalizeAfterSayIsNotRepaired：真调过 say 再静默是正常收尾，不打回。
-func TestSilentFinalizeAfterSayIsNotRepaired(t *testing.T) {
-	client := &scriptedClient{responses: []string{
-		`{"action":"tool","tool":"say","input":{"text":"刚切回来了"}}`,
-		`{"action":"final","silent":true,"silent_reason":"说过了","content":"刚切回来了"}`,
-	}}
-	say := &countingTool{name: "say"}
-	runner, err := NewRunner(client, Config{WorkDir: t.TempDir(), MaxSteps: 3}, NewToolRegistry(say))
-	if err != nil {
-		t.Fatal(err)
-	}
-	resp, err := runner.Run(context.Background(), Request{Messages: []llm.Message{{Role: llm.RoleUser, Content: "现在什么模型"}}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if say.calls != 1 || !resp.Silent || len(client.requests) != 2 {
-		t.Fatalf("say calls = %d, resp = %#v, requests = %d", say.calls, resp, len(client.requests))
-	}
-}
-
-// 静默收尾不捡信封之外的正文：模型同一轮里随口写的话不是这一轮的回复。
-func TestSilentFinalizeIgnoresTextOutsideTheEnvelope(t *testing.T) {
-	action := finalizeAction(llm.ToolCall{
-		Name:      finalizeToolName,
-		Arguments: map[string]any{"content": "", "silent": true},
-	}, "（我觉得这里不用再说什么了）")
-	if !action.Silent || action.Content != "" {
+// 空 send 不捡信封之外的正文？要捡：工具调用旁边那句才是模型想说的话，供应商
+// 在同一轮里既输出正文又调用工具时就是这个形态。老协议显式 silent=true 时不捡。
+func TestEmptySendPicksTextOutsideTheEnvelopeUnlessSilent(t *testing.T) {
+	action := finalizeAction([]llm.ToolCall{{Name: finalizeToolName, Arguments: map[string]any{"text": ""}}}, "好的")
+	if action.Silent || action.Content != "好的" {
 		t.Fatalf("action = %#v", action)
+	}
+	action = finalizeAction([]llm.ToolCall{{Name: finalizeToolName, Arguments: map[string]any{"content": "", "silent": true}}}, "（我觉得这里不用再说什么了）")
+	if !action.Silent || action.Content != "" {
+		t.Fatalf("legacy silent action = %#v", action)
+	}
+}
+
+// 一步里只调了几次 send：各成一条消息，附加字段取第一次填的值。
+func TestSendOnlyStepJoinsMessages(t *testing.T) {
+	action := finalizeAction([]llm.ToolCall{
+		{Name: finalizeToolName, Arguments: map[string]any{"text": "第一条", "sticker": "得意"}},
+		{Name: finalizeToolName, Arguments: map[string]any{"text": "第二条", "sticker": "叉腰"}},
+	}, "")
+	if action.Silent || action.Content != "第一条[diana-msg]第二条" || action.Fields["sticker"] != "得意" {
+		t.Fatalf("action = %#v", action)
+	}
+	// 只配表情包：正文为空就是不说话，sticker 照样带出去。
+	action = finalizeAction([]llm.ToolCall{{Name: finalizeToolName, Arguments: map[string]any{"text": "", "sticker": "晚安"}}}, "")
+	if !action.Silent || action.Fields["sticker"] != "晚安" {
+		t.Fatalf("sticker-only action = %#v", action)
+	}
+}
+
+// interimSendClient 第一步 send 一句再同时调工具，第二步只 send 结果。
+type interimSendClient struct {
+	requests []llm.GenerateRequest
+}
+
+func (c *interimSendClient) Generate(_ context.Context, req llm.GenerateRequest) (*llm.GenerateResponse, error) {
+	c.requests = append(c.requests, req)
+	if len(c.requests) == 1 {
+		return &llm.GenerateResponse{ToolCalls: []llm.ToolCall{
+			{ID: "say-1", Name: finalizeToolName, Arguments: map[string]any{"text": "我去查一下"}},
+			{ID: "tool-1", Name: "lookup", Arguments: map[string]any{}},
+		}}, nil
+	}
+	return &llm.GenerateResponse{ToolCalls: []llm.ToolCall{{ID: "send-2", Name: finalizeToolName, Arguments: map[string]any{"text": "查到了"}}}}, nil
+}
+
+// send 和其他工具同一步发来：send 走 Interim 立刻发出，工具照常执行，本轮继续；
+// 两个调用都拿到真实结果，不会被回成「没有执行」。
+func TestSendWithOtherToolsIsInterim(t *testing.T) {
+	client := &interimSendClient{}
+	lookup := &countingTool{name: "lookup"}
+	var said []string
+	cfg := Config{WorkDir: t.TempDir(), MaxSteps: 4, Interim: func(_ context.Context, text string) (string, error) {
+		said = append(said, text)
+		return "已经发出去了", nil
+	}}
+	runner, err := NewRunner(client, cfg, NewToolRegistry(lookup))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := runner.Run(context.Background(), Request{Messages: []llm.Message{{Role: llm.RoleUser, Content: "查查"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(said, "|") != "我去查一下" || lookup.calls != 1 || resp.Text != "查到了" || resp.Silent {
+		t.Fatalf("said = %q, lookup = %d, resp = %#v", said, lookup.calls, resp)
+	}
+	var results []string
+	for _, message := range client.requests[1].Messages {
+		if message.Role == llm.RoleTool {
+			results = append(results, message.ToolCallID+"="+message.Content)
+			if message.ToolError {
+				t.Fatalf("tool result marked as error: %#v", message)
+			}
+		}
+	}
+	if len(results) != 2 || !strings.HasPrefix(results[0], "say-1=已经发出去了") {
+		t.Fatalf("tool results = %q", results)
 	}
 }
 
@@ -221,25 +211,26 @@ func TestSilentFinalizeRefusedWhileImageTaskPending(t *testing.T) {
 	}
 }
 
-// 工具定义和 Agent 系统消息都要讲清楚这条出路，否则模型无从知道它存在。
-func TestFinalizeToolDefinitionDeclaresSilent(t *testing.T) {
+// 工具定义和 Agent 系统消息都要讲清楚这条出路：空 send 就是不说话。
+func TestFinalizeToolDefinitionIsSend(t *testing.T) {
 	definition := finalizeToolDefinition(false)
 	properties, ok := definition.Parameters["properties"].(map[string]any)
 	if !ok {
 		t.Fatalf("parameters = %#v", definition.Parameters)
 	}
-	if _, ok := properties["silent"]; !ok {
-		t.Fatalf("finalize tool has no silent field: %#v", properties)
+	if definition.Name != "send" {
+		t.Fatalf("name = %q", definition.Name)
 	}
-	if _, ok := properties["silent_reason"]; !ok {
-		t.Fatalf("finalize tool has no silent_reason field: %#v", properties)
+	for _, gone := range []string{"silent", "silent_reason", "content"} {
+		if _, ok := properties[gone]; ok {
+			t.Fatalf("send still declares %s: %#v", gone, properties)
+		}
 	}
-	// silent 是可选参数：它不进 required，由 provider 边界改写成可为 null。
 	required := map[string]bool{}
 	for _, name := range definition.Parameters["required"].([]string) {
 		required[name] = true
 	}
-	if required["silent"] || !required["content"] {
+	if !required["text"] {
 		t.Fatalf("required = %#v", definition.Parameters["required"])
 	}
 }
@@ -250,7 +241,7 @@ func TestAgentSystemMessageExplainsSilentFinish(t *testing.T) {
 		t.Fatal(err)
 	}
 	message := runner.systemPrompt()
-	for _, want := range []string{"silent=true", "silent_reason", "不是拒答"} {
+	for _, want := range []string{"最后一步必须是 send", "text 留空", "不是拒答"} {
 		if !strings.Contains(message, want) {
 			t.Fatalf("agent system message missing %q:\n%s", want, message)
 		}

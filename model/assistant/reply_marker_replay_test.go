@@ -17,7 +17,7 @@ type replyMarkerReplayProvider struct {
 func (p *replyMarkerReplayProvider) Generate(_ context.Context, req llm.GenerateRequest) (*llm.GenerateResponse, error) {
 	p.request = req
 	return &llm.GenerateResponse{ToolCalls: []llm.ToolCall{{
-		ID: "call_45955", Name: "agent_finalize",
+		ID: "call_45955", Name: "send",
 		Arguments: map[string]any{"content": p.content},
 	}}}, nil
 }

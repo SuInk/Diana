@@ -67,15 +67,15 @@ func replyContractRequest(array bool) llm.GenerateRequest {
 	return llm.GenerateRequest{
 		Messages: []llm.Message{{Role: llm.RoleSystem, Content: prompt}},
 		Tools: []llm.ToolDefinition{{
-			Name: "agent_finalize", Description: "结束本轮并提交最终答复。", Strict: true,
+			Name: "send", Description: "结束本轮并提交最终答复。", Strict: true,
 			Parameters: map[string]any{"type": "object", "properties": map[string]any{field: property}, "required": []string{field}, "additionalProperties": false},
 		}},
-		ToolChoice: "agent_finalize", MaxOutputTokens: 8192,
+		ToolChoice: "send", MaxOutputTokens: 8192,
 	}
 }
 
 func decodeReplyContract(response *llm.GenerateResponse, array bool) ([]string, error) {
-	if response == nil || len(response.ToolCalls) != 1 || response.ToolCalls[0].Name != "agent_finalize" {
+	if response == nil || len(response.ToolCalls) != 1 || response.ToolCalls[0].Name != "send" {
 		return nil, fmt.Errorf("expected exactly one agent_finalize call")
 	}
 	args := response.ToolCalls[0].Arguments
@@ -169,13 +169,13 @@ func TestReplyContractProbeValidation(t *testing.T) {
 		t.Fatal("content prompt lost explicit marker guidance")
 	}
 	for _, invalid := range []any{nil, "text", []any{}, []any{""}, []any{"ok", 4}, []any{" "}} {
-		response := &llm.GenerateResponse{ToolCalls: []llm.ToolCall{{Name: "agent_finalize", Arguments: map[string]any{"messages": invalid}}}}
+		response := &llm.GenerateResponse{ToolCalls: []llm.ToolCall{{Name: "send", Arguments: map[string]any{"messages": invalid}}}}
 		if _, err := decodeReplyContract(response, true); err == nil {
 			t.Fatalf("accepted invalid array: %#v", invalid)
 		}
 	}
 	want := []string{"## Title\nBody", "```python\nprint(1)\nprint(2)\n```"}
-	response := &llm.GenerateResponse{ToolCalls: []llm.ToolCall{{Name: "agent_finalize", Arguments: map[string]any{"messages": want}}}}
+	response := &llm.GenerateResponse{ToolCalls: []llm.ToolCall{{Name: "send", Arguments: map[string]any{"messages": want}}}}
 	got, err := decodeReplyContract(response, true)
 	if err != nil || !reflect.DeepEqual(got, want) {
 		t.Fatalf("array delivery changed content: %q, %v", got, err)

@@ -45,7 +45,7 @@ func (p *stickerFinalizeLLMProvider) Generate(ctx context.Context, req llm.Gener
 		return response, err
 	}
 	for _, tool := range req.Tools {
-		if tool.Name != "agent_finalize" {
+		if tool.Name != "send" {
 			continue
 		}
 		properties, _ := tool.Parameters["properties"].(map[string]any)

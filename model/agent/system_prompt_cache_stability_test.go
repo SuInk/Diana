@@ -208,7 +208,7 @@ func TestMidRunToolsLoadKeepsContractsInToolResult(t *testing.T) {
 //
 // 判据：系统提示词对当前有哪些 skill 完全不敏感。
 func TestSkillsCatalogDoesNotEnterStablePrompt(t *testing.T) {
-	registry := NewToolRegistry(&SkillsReadTool{}, &countingTool{name: "agent_finalize"})
+	registry := NewToolRegistry(&SkillsReadTool{}, &countingTool{name: "send"})
 	runner, err := NewRunner(&scriptedClient{}, Config{WorkDir: t.TempDir()}, registry)
 	if err != nil {
 		t.Fatal(err)

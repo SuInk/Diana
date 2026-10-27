@@ -166,7 +166,7 @@
         </ol>
         <h3>Prompt order</h3>
         <p>System head (SOUL.md, fixed rules, tool rules) → summary checkpoint → stable history → <strong>cache breakpoint</strong> → per-turn blocks (plugin context, session state, memory, notebook, world book, self-notes, media index, recent sources, recent tool calls) → same-turn candidates → dependency images → system tail (speaker) → clock → decoration rules → current message. Everything before the breakpoint stays the same between turns in a group, so upstream prefix caches hit. Real user IDs and group numbers are replaced by aliases in model requests and restored in replies and tool calls.</p>
-        <p>When generation comes back empty, markers decide the fallback: a pause sends one in-character line and goes quiet; a refusal sends fixed text; a queued image job turns "started generating" into the reply; if <code>say</code> already spoke this turn it stays silent; otherwise "I didn't produce a usable reply."</p>
+        <p>When generation comes back empty, markers decide the fallback: a pause sends one in-character line and goes quiet; a refusal sends fixed text; a queued image job turns "started generating" into the reply; if an interim <code>send</code> already spoke this turn it stays silent; otherwise "I didn't produce a usable reply."</p>
       </section>
 
       <section class="section searchable" id="delivery">
@@ -187,7 +187,7 @@
 
       <section class="section searchable" id="agent">
         <div class="section-heading"><p class="eyebrow">03 Agent run</p><h2>One thing per step</h2></div>
-        <p>With the agent on and tools allowed for this relationship, <code>Runner.Run</code> produces the turn: every step the model either calls one tool or finishes with <code>agent_finalize</code>.</p>
+        <p>With the agent on and tools allowed for this relationship, <code>Runner.Run</code> produces the turn: every step the model either calls tools or finishes by calling only <code>send</code>; a <code>send</code> alongside other tools is an interim line and the turn continues.</p>
         <ol class="flow">
           <li><div class="flow-node"><strong>Configure</strong><p>20 steps by default (max 32); the owner gets 32 steps and 20,000 characters of final reply, everyone else 8,000. 60 seconds per tool, 20 seconds reserved for finishing, 3 protocol repairs.</p></div></li>
           <li><div class="flow-node"><strong>Assemble tools</strong><p>Core tools are always callable; the rest appear as one catalog line and need <code>tools_load</code>, then <code>tools_execute</code>. Trimmed by the permission allowlist and bot / group extension switches; a tool without permission answers "no permission" instead of "does not exist". In groups, loaded tools are restored from the group session snapshot on later turns.</p></div></li>
@@ -201,15 +201,15 @@
         </ol>
         <h3>Finish checks</h3>
         <ol class="flow">
-          <li class="q"><div class="flow-node"><strong>silent = true?</strong></div><div class="flow-exits"><span class="flow-exit"><b>Yes, no image job queued</b>no reply this turn</span><span class="flow-exit loop"><b>Image job queued</b>silence refused, one repair</span></div></li>
+          <li class="q"><div class="flow-node"><strong>Empty send text?</strong></div><div class="flow-exits"><span class="flow-exit"><b>Yes, no image job queued</b>no reply this turn</span><span class="flow-exit loop"><b>Image job queued</b>silence refused, one repair</span></div></li>
           <li class="q"><div class="flow-node"><strong>Real line breaks in the text?</strong><p>Chunks must use <code>[diana-msg]</code> / <code>[diana-line]</code>.</p></div><div class="flow-exits"><span class="flow-exit loop"><b>Yes</b>one repair</span></div></li>
           <li class="q"><div class="flow-node"><strong>Evidence required but no search? A link never fetched this run nor seen in the conversation?</strong></div><div class="flow-exits"><span class="flow-exit loop"><b>Yes</b>one repair</span></div></li>
           <li class="q"><div class="flow-node"><strong>Internal protocol words leaked? Empty text?</strong></div><div class="flow-exits"><span class="flow-exit loop"><b>Yes</b>one repair</span></div></li>
           <li class="end"><div class="flow-node"><strong>Return the reply</strong></div></li>
         </ol>
-        <p>A <strong>forced finish</strong> happens when steps or repairs run out, the finish reserve is reached, or evidence was required and not gathered: a finish instruction and the evidence digest are appended, and only <code>agent_finalize</code> is offered, forced. Afterwards a forced finish keeps up to 12 step summaries as a carry-over archive (valid 10 minutes); the last 8 tool calls are kept for 30 minutes and injected into later turns.</p>
+        <p>A <strong>forced finish</strong> happens when steps or repairs run out, the finish reserve is reached, or evidence was required and not gathered: a finish instruction and the evidence digest are appended, and only <code>send</code> is offered, forced. Afterwards a forced finish keeps up to 12 step summaries as a carry-over archive (valid 10 minutes); the last 8 tool calls are kept for 30 minutes and injected into later turns.</p>
         <div class="tool-grid pairs">
-          <article><h3>Interim say</h3><p>At most 3 per turn, 80 characters each, no line breaks; sent immediately and the typing indicator comes back. After it, the turn is no longer merged and regenerated, and it skips pre-send review.</p></article>
+          <article><h3>Interim send</h3><p>A send alongside other tools. At most 3 per turn, 80 characters each, no line breaks; sent immediately and the typing indicator comes back. After it, the turn is no longer merged and regenerated, and it skips pre-send review.</p></article>
           <article><h3>subtask</h3><p>A synchronous model call with no tools and no history: at most 4 per reply, 6,000 characters of material, 90-second timeout.</p></article>
           <article><h3>Context over budget</h3><p>Summarise the longest text messages (at most 2 calls), replace images with descriptions, downsize images, and finally drop them.</p></article>
           <article><h3>Model errors</h3><p>The runner does not retry. The provider stack retries a transient error once after 700 ms, halves an oversized context up to 4 times, then fails over to the next profile in order, keeping completed tool steps.</p></article>
@@ -285,7 +285,7 @@
           <li class="q"><div class="flow-node"><strong>The model chose silence?</strong></div><div class="flow-exits"><span class="flow-exit"><b>Allowed</b><code>ignored_model_silent</code></span><span class="flow-exit go"><b>Side effect / factual plugin result / image queued</b>silence refused, empty-reply fallback</span></div></li>
           <li class="q"><div class="flow-node"><strong>Chat reply empty or marked as a refusal?</strong></div><div class="flow-exits"><span class="flow-exit"><b>Yes</b><code>ignored_no_natural_reply</code></span></div></li>
           <li class="q"><div class="flow-node"><strong>Pause or refusal marker?</strong><p><code>[[DIANA_IGNORE_CURRENT_USER_30M]]</code> / <code>[[DIANA_REFUSE_CURRENT]]</code></p></div><div class="flow-exits"><span class="flow-exit"><b>Pause, empty body</b>one in-character line, then silence</span><span class="flow-exit go"><b>Refusal, empty body</b>fixed refusal text</span></div></li>
-          <li class="q"><div class="flow-node"><strong>Same as a line already said with say?</strong></div><div class="flow-exits"><span class="flow-exit"><b>Yes</b>not sent twice</span></div></li>
+          <li class="q"><div class="flow-node"><strong>Same as an interim send already said this turn?</strong></div><div class="flow-exits"><span class="flow-exit"><b>Yes</b>not sent twice</span></div></li>
           <li><div class="flow-node"><strong>In parallel: semantic dedup + audit model</strong><p>Their inputs are nearly the same, so starting both saves seconds; if dedup rewrites the reply, the audit runs again on the new text.</p></div></li>
           <li class="q"><div class="flow-node"><strong>Semantic dedup</strong><p>Runs only if the session replied within 2 minutes; confidence below 0.9, errors and timeouts all pass.</p></div><div class="flow-exits"><span class="flow-exit"><b>drop, unprompted reply</b><code>ignored_duplicate_reply</code></span><span class="flow-exit go"><b>drop, direct reply</b>sent anyway (being addressed means you answer)</span><span class="flow-exit loop"><b>rewrite</b>reshaped and formatted again</span></div></li>
           <li class="q"><div class="flow-node"><strong>Apply the audit verdict</strong><p>Next section.</p></div><div class="flow-exits"><span class="flow-exit"><b>Stopped</b>the matching <code>ignored_*</code> or a public notice</span></div></li>
