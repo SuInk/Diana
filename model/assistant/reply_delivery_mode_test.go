@@ -94,7 +94,7 @@ func TestSingleDeliveryOverridesDefaultsWithoutPersisting(t *testing.T) {
 			if event.replyDeliveryMode != "" || boolValue(rt.effectiveConfigForEvent(event).NaturalReplySplitEnabled, true) != natural {
 				t.Fatal("per-turn choice mutated event or configuration")
 			}
-			if got := splitEventChatReply("第一句\n第二句", cfg, event); len(got) != 1 {
+			if got := splitEventChatReply("第一句"+notificationSplitMarker+"第二句", cfg, event); natural != (len(got) == 2) {
 				t.Fatal("single-message choice leaked to the next reply")
 			}
 			if got := splitEventChatReply(replyAutoMarker+"第一句"+notificationSplitMarker+"第二句", cfg, event); len(got) != 2 {

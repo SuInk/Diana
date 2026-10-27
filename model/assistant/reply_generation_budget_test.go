@@ -73,9 +73,6 @@ func TestReplyGenerationBudgetReachesFirstCallWithoutCompression(t *testing.T) {
 				reply = rt.followUpComment(context.Background(), followUpKindPlugin, event, "已发送正文")
 			}
 			wantCalls := 1
-			if entry == "agent" {
-				wantCalls = 2 // 普通文本补试一次，仍不触发压缩。
-			}
 			if err != nil || reply != "完整简洁的答复" || p.generationCalls != wantCalls || len(p.requests) != 0 {
 				t.Fatalf("reply=%q error=%v generation=%d compression=%d", reply, err, p.generationCalls, len(p.requests))
 			}

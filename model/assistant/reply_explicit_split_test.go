@@ -62,11 +62,14 @@ func TestProactiveRepliesHonorExplicitMarkers(t *testing.T) {
 	}
 }
 
-func TestRoutedRequestRequiresExplicitSplitting(t *testing.T) {
+// 真实换行等同 [diana-line]：两句普通话之间的换行和标记一样拆成两条。
+func TestRoutedRequestRawNewlineActsAsLineMarker(t *testing.T) {
 	for _, natural := range []bool{true, false} {
 		cfg := BotConfig{NaturalReplySplitEnabled: boolPointer(natural), ReplyMaxBubbles: 4}.WithDefaults()
-		got := splitEventChatReply("先给结论\n再补充理由", cfg, MessageEvent{Kind: EventKindGroup, proactiveReply: true})
-		if len(got) != 1 || got[0] != "先给结论，再补充理由" {
+		event := MessageEvent{Kind: EventKindGroup, proactiveReply: true}
+		got := splitEventChatReply("先给结论\n再补充理由", cfg, event)
+		want := splitEventChatReply("先给结论"+notificationLineMarker+"再补充理由", cfg, event)
+		if strings.Join(got, "|") != strings.Join(want, "|") {
 			t.Fatalf("natural=%v raw newline controlled delivery: %q", natural, got)
 		}
 	}

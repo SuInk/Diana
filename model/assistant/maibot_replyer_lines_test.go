@@ -37,13 +37,6 @@ func TestMaiBotReplyLinesSurvivePrepare(t *testing.T) {
 	cfg := DefaultBotConfig()
 	r := &Runtime{}
 	raw := "这几块：\n1. 技术\n2. 斗图"
-	flattened, err := r.prepareGeneratedReply(context.Background(), cfg, raw)
-	if err != nil {
-		t.Fatalf("prepareGeneratedReply(raw) error = %v", err)
-	}
-	if strings.Contains(flattened, notificationLineMarker) || strings.Contains(flattened, "\n") {
-		t.Fatalf("raw newlines are expected to be flattened, got %q", flattened)
-	}
 	got, err := r.prepareGeneratedReply(context.Background(), cfg, maiBotReplyLines(raw, cfg, MessageEvent{}, replyControlIntent{}, nil))
 	if err != nil {
 		t.Fatalf("prepareGeneratedReply() error = %v", err)

@@ -122,10 +122,8 @@ func TestRunnerModelCanFinalizeWithoutSearch(t *testing.T) {
 		t.Run(response, func(t *testing.T) {
 			tool := &recordingSearchTool{output: "unused"}
 			client := &scriptedClient{responses: []string{response, response}}
+			// 普通文本直接就是最终回复，不再补试一轮。
 			wantRequests := 1
-			if _, structured := parseAction(response); !structured {
-				wantRequests = 2
-			}
 			runner, err := NewRunner(client, Config{MaxSteps: 2, ProtocolRepairLimit: 2}, NewToolRegistry(tool))
 			if err != nil {
 				t.Fatal(err)

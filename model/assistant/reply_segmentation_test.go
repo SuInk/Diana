@@ -7,8 +7,8 @@ import (
 )
 
 func promptTeachesSegmentation(prompt string) bool {
-	// 「不许真实换行」现在只由 replyBlankLineRule 说一次，分条规则不再重复一遍。
-	for _, want := range []string{notificationSplitMarker, notificationLineMarker, "不得输出真实换行符"} {
+	// 「换行就是分条」只由 replyBlankLineRule 说一次，分条规则不再重复一遍。
+	for _, want := range []string{notificationSplitMarker, notificationLineMarker, "换行就是分条"} {
 		if !strings.Contains(prompt, want) {
 			return false
 		}
@@ -40,11 +40,12 @@ func TestExplicitReplyLayoutMarkers(t *testing.T) {
 	}
 }
 
-func TestLiteralNewlinesCannotControlReplyLayout(t *testing.T) {
+// 真实换行等同 [diana-line]：空行只算一次换行；混着列表的整条按排版留着。
+func TestLiteralNewlinesActAsLineMarkers(t *testing.T) {
 	input := "第一段\r\n第二段\n\n1. 项目"
-	want := []string{"第一段，第二段，1. 项目"}
+	want := []string{"第一段\n第二段\n1. 项目"}
 	if got := splitChatReply(input, chatSplitLimits{}); !reflect.DeepEqual(got, want) {
-		t.Fatalf("literal newlines affected layout: %#v", got)
+		t.Fatalf("literal newlines = %#v, want %#v", got, want)
 	}
 }
 
@@ -81,14 +82,26 @@ func TestChatReplyDropsPeriodsKeepsOtherPunctuation(t *testing.T) {
 	}
 }
 
-func TestRawSoftNewlinesBecomeNaturalPunctuation(t *testing.T) {
-	for _, tc := range []struct{ in, want string }{
-		{"前面说得对\n这里只靠提示词不稳定", "前面说得对，这里只靠提示词不稳定"},
-		{"Check logs\nRestart service", "Check logs. Restart service"},
-		{"已经说完。\n继续下一句", "已经说完 继续下一句"},
+func TestLiteralNewlinesKeepCodeIndentation(t *testing.T) {
+	got := normalizeExplicitReplyLayout("看这个：\n```go\nif ok {\n\treturn\n}\n\n```\n就这样")
+	want := strings.Join([]string{"看这个：", "```go", "if ok {", "\treturn", "}", "", "```", "就这样"}, notificationLineMarker)
+	if got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
+// 模型写真实换行的本意是分开说：几句普通话之间的换行拆成几条，不再打回重写。
+func TestRawProseNewlinesSplitIntoMessages(t *testing.T) {
+	for _, tc := range []struct {
+		in   string
+		want []string
+	}{
+		{"前面说得对\n这里只靠提示词不稳定", []string{"前面说得对", "这里只靠提示词不稳定"}},
+		{"Check logs\n\nRestart service", []string{"Check logs", "Restart service"}},
+		{"已经说完。\r\n继续下一句", []string{"已经说完", "继续下一句"}},
 	} {
-		if got := splitChatReply(tc.in, chatSplitLimits{}); len(got) != 1 || got[0] != tc.want {
-			t.Fatalf("%q => %#v, want %q", tc.in, got, tc.want)
+		if got := splitChatReply(tc.in, chatSplitLimits{}); !reflect.DeepEqual(got, tc.want) {
+			t.Fatalf("%q => %#v, want %#v", tc.in, got, tc.want)
 		}
 	}
 }

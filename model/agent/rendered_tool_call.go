@@ -75,11 +75,7 @@ func renderedToolCallAction(text string) (llmAction, bool) {
 	if name != finalizeToolName {
 		return llmAction{}, true
 	}
-	// 正文来自被网关拆坏的信封，不是模型按协议写出来的 content：这里不再要求它
-	// 用 [diana-line]/[diana-msg] 表示换行，真实换行按普通文本处理。
-	action := finalizeAction(llm.ToolCall{Name: name, Arguments: arguments}, "")
-	action.Salvaged = true
-	return action, true
+	return finalizeAction(llm.ToolCall{Name: name, Arguments: arguments}, ""), true
 }
 
 // 还有一种形状是模型把收尾调用写成标签拼在正文后面。线上 10-22 swe-2 就这样把
@@ -138,7 +134,5 @@ func inlineFinalizeAction(text string, declared ...FinalizeField) (llmAction, bo
 	if body != "" {
 		arguments["content"] = body
 	}
-	action := finalizeAction(llm.ToolCall{Name: finalizeToolName, Arguments: arguments}, "")
-	action.Salvaged = true
-	return action, true
+	return finalizeAction(llm.ToolCall{Name: finalizeToolName, Arguments: arguments}, ""), true
 }

@@ -112,9 +112,6 @@ func TestParseActionRecognizesRenderedFinalize(t *testing.T) {
 	if action.Action != "final" || action.Content != leakedRenderedFinalizeBody {
 		t.Fatalf("action = %#v", action)
 	}
-	if !action.Salvaged {
-		t.Fatal("救回来的正文应标记 Salvaged，跳过信封换行约定校验")
-	}
 }
 
 // 参数被网关截断时，救不回正文也绝不能把这行协议当正文。

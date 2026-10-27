@@ -9042,51 +9042,35 @@ const (
 	notificationLineMarker  = "[diana-line]"
 )
 
-// normalizeExplicitReplyLayout consumes the only layout protocol accepted from
-// model output. Literal CR/LF is not a layout instruction: another chat bubble
-// must use [diana-msg], and a line break inside that bubble must use
-// [diana-line]. Folding raw newlines makes violations deterministic instead of
-// reviving the old heuristic splitter. Recognized Markdown tables retain their
-// structural line breaks so normalization does not destroy their columns.
+// normalizeExplicitReplyLayout 把模型写的真实换行并进标记协议：每个真实换行等同
+// [diana-line]，空行同样只算一次换行。之后 splitChatReply 按现有规则处理——几句
+// 普通话之间的换行拆成几条发（QQ 气泡里断行不好看），列表、代码、表格整块留在一条。
+//
+// 以前真实换行是协议错误：收尾里带 CR/LF 就整轮打回重写，线上约 7% 的回合因此多等
+// 一次请求，而重写的结果几乎都是把换行原样换成 [diana-msg]。模型写换行的本意就是
+// 分开说，这里直接按这个意思发。
 func normalizeExplicitReplyLayout(text string) string {
 	text = normalizeLegacyLayoutMarkers(text)
 	text = strings.ReplaceAll(strings.ReplaceAll(text, "\r\n", "\n"), "\r", "\n")
 	text = preserveMarkdownTableLines(text)
 	lines := strings.Split(text, "\n")
 	kept := make([]string, 0, len(lines))
+	inFence := false
 	for _, line := range lines {
-		if line = strings.TrimSpace(line); line != "" {
-			kept = append(kept, line)
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "```") {
+			inFence = !inFence
+			kept = append(kept, trimmed)
+			continue
+		}
+		// 代码块里的缩进和空行是代码的一部分，原样留着。
+		if inFence {
+			kept = append(kept, strings.TrimRight(line, " \t"))
+		} else if trimmed != "" {
+			kept = append(kept, trimmed)
 		}
 	}
-	if len(kept) == 0 {
-		return ""
-	}
-	var builder strings.Builder
-	builder.WriteString(kept[0])
-	for _, line := range kept[1:] {
-		builder.WriteString(replySoftLineSeparator(builder.String(), line))
-		builder.WriteString(line)
-	}
-	return strings.TrimSpace(builder.String())
-}
-
-func replySoftLineSeparator(left, right string) string {
-	leftRunes, rightRunes := []rune(strings.TrimSpace(left)), []rune(strings.TrimSpace(right))
-	if len(leftRunes) == 0 || len(rightRunes) == 0 {
-		return ""
-	}
-	last, first := leftRunes[len(leftRunes)-1], rightRunes[0]
-	if strings.ContainsRune(".,;:!?", last) && first <= 127 {
-		return " "
-	}
-	if strings.ContainsRune("，,、；;：:。！？!?…", last) || strings.ContainsRune("，,、；;：:。！？!?…)]}）】》」』”", first) {
-		return ""
-	}
-	if last <= 127 && first <= 127 {
-		return ". "
-	}
-	return "，"
+	return strings.Join(kept, notificationLineMarker)
 }
 
 func restoreExplicitReplyLines(text string) string {
@@ -9126,8 +9110,8 @@ func splitReply(reply string, chunkSize int) []string {
 
 // splitChatReply 是聊天发言的分条：把一条回复切成几次发言。
 //
-// 模型输出不允许用真实换行表达布局。消息边界只认 [diana-msg]，同一消息内的
-// 排版换行使用 [diana-line]；表格保留结构换行，其余真实 CR/LF 按软分隔收拢。
+// 消息边界是 [diana-msg]；真实换行等同 [diana-line]（见 normalizeExplicitReplyLayout），
+// 普通话之间的换行再由 splitPlainProseLines 拆成几条。
 //
 // 聊天配置不再限制条数或单条长度；是否收进合并转发由独立阈值决定。
 // splitChatReply 把回复切成实际要发的几条，每条去掉句号（见 chat_periods.go）和行尾的

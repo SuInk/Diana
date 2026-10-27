@@ -7,7 +7,7 @@ import (
 
 func TestCasualReplyWithoutMarkersUsesOneBubbleWithoutLosingText(t *testing.T) {
 	cfg := BotConfig{DirectReplyChunkSize: 8, ReplyMaxBubbles: 4}.WithDefaults()
-	text := "第一句回应。\n第二句补充。\n第三句。\n第四句。"
+	text := "第一句回应。第二句补充。第三句。第四句。"
 	for _, event := range []MessageEvent{
 		{Kind: EventKindGroup, proactiveReply: true, chatInReply: true},
 		{Kind: EventKindGroup, chatInReply: true},

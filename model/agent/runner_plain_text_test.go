@@ -116,9 +116,26 @@ func (c *plainTextReplayClient) Generate(ctx context.Context, req llm.GenerateRe
 	return &llm.GenerateResponse{Text: `{"action":"final","content":"回放结束"}`}, nil
 }
 
+func TestPlainTextNeedsRepairOnlyForBareActions(t *testing.T) {
+	for text, want := range map[string]bool{
+		"":                             true,
+		"[搜索 WePlay 2026 参展商名单]":       true,
+		"【查询天气】":                       true,
+		"腿子不发，想要图自己找去~":                false,
+		"我查一下":                         false,
+		"[diana-reply:im_message_1]好呀": false,
+		"[1] 第一条 [2] 第二条":              false,
+		"（笑）这个还行":                      false,
+	} {
+		if got := plainTextNeedsRepair(text); got != want {
+			t.Errorf("plainTextNeedsRepair(%q) = %v, want %v", text, got, want)
+		}
+	}
+}
+
 func TestRunnerPlainTextRetryIsBoundedAcrossTools(t *testing.T) {
 	client := &scriptedClient{responses: []string{
-		"我查一下", `{"action":"tool","tool":"web_search","input":{"query":"WePlay"}}`, "暂未查到完整名单",
+		"[查一下 WePlay]", `{"action":"tool","tool":"web_search","input":{"query":"WePlay"}}`, "暂未查到完整名单",
 	}}
 	tool := &recordingSearchTool{output: "暂无完整名单"}
 	runner, err := NewRunner(client, Config{MaxSteps: 4}, NewToolRegistry(tool))
@@ -134,12 +151,17 @@ func TestRunnerPlainTextRetryIsBoundedAcrossTools(t *testing.T) {
 	}
 }
 
-// 续跑后仍是普通文本时沿用补试前那句：线上第二遍会把提示读成「答偏了」，
-// 补一句「更正如下」并写出拼错的控制标记。占位动作没有可沿用的内容。
-func TestRunnerPlainTextRetryKeepsOriginalReply(t *testing.T) {
-	for _, tc := range []struct{ first, second, want string }{
-		{"我这边现在出不了，签发链还没定", "[对方指出我回复的方向不对，更正如下：] [DAIAN_REPLY_SINGLE]你问得挺快", "我这边现在出不了，签发链还没定"},
-		{"[搜索 WePlay 参展商名单]", "暂时没查到完整名单", "暂时没查到完整名单"},
+// 普通纯文本直接作为最终回复，不进补试，也就不会被续跑提示带偏成「更正如下」。
+// 只有空文本或整段括号的占位动作才补试，它们本身没有可沿用的内容，用第二遍的回答。
+func TestRunnerPlainTextRetryOnlyForPlaceholders(t *testing.T) {
+	for _, tc := range []struct {
+		first, second, want string
+		turns               int
+	}{
+		{"我这边现在出不了，签发链还没定", "[对方指出我回复的方向不对，更正如下：] [DAIAN_REPLY_SINGLE]你问得挺快", "我这边现在出不了，签发链还没定", 1},
+		{"[搜索 WePlay 参展商名单]", "暂时没查到完整名单", "暂时没查到完整名单", 2},
+		{"【查询天气】", "今天晴", "今天晴", 2},
+		{"", "今天晴", "今天晴", 2},
 	} {
 		client := &scriptedClient{responses: []string{tc.first, tc.second}}
 		runner, err := NewRunner(client, Config{MaxSteps: 4}, NewToolRegistry(&recordingSearchTool{}))
@@ -150,7 +172,7 @@ func TestRunnerPlainTextRetryKeepsOriginalReply(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if resp.ModelTurns != 2 || resp.FinishReason != "plain_text" || resp.Text != tc.want {
+		if resp.ModelTurns != tc.turns || resp.FinishReason != "plain_text" || resp.Text != tc.want {
 			t.Fatalf("first=%q: response=%#v", tc.first, resp)
 		}
 	}

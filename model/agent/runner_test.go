@@ -1006,9 +1006,9 @@ func TestRunnerTakesFinalReplyFromTextWhenFinalizeCarriesNoContent(t *testing.T)
 	}
 }
 
-type finalizeLayoutRepairClient struct{ calls int }
+type finalizeNewlineClient struct{ calls int }
 
-func (c *finalizeLayoutRepairClient) Generate(_ context.Context, _ llm.GenerateRequest) (*llm.GenerateResponse, error) {
+func (c *finalizeNewlineClient) Generate(_ context.Context, _ llm.GenerateRequest) (*llm.GenerateResponse, error) {
 	c.calls++
 	content := "第一行\n第二行"
 	if c.calls > 1 {
@@ -1019,8 +1019,9 @@ func (c *finalizeLayoutRepairClient) Generate(_ context.Context, _ llm.GenerateR
 	}}}, nil
 }
 
-func TestRunnerRepairsLiteralNewlinesInFinalizeContent(t *testing.T) {
-	client := &finalizeLayoutRepairClient{}
+// 真实换行不再打回：发送层把它当 [diana-line] 处理（见 assistant.normalizeExplicitReplyLayout）。
+func TestRunnerKeepsLiteralNewlinesInFinalizeContent(t *testing.T) {
+	client := &finalizeNewlineClient{}
 	runner, err := NewRunner(client, Config{MaxSteps: 2}, NewToolRegistry(&countingTool{name: "unused"}))
 	if err != nil {
 		t.Fatal(err)
@@ -1029,7 +1030,7 @@ func TestRunnerRepairsLiteralNewlinesInFinalizeContent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if client.calls != 2 || response.Text != "第一行[diana-line]第二行" {
+	if client.calls != 1 || response.Text != "第一行\n第二行" {
 		t.Fatalf("calls=%d response=%#v", client.calls, response)
 	}
 }
