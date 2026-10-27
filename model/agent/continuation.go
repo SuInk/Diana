@@ -24,18 +24,21 @@ import (
 
 // conversationKey 是续接前要核对的指纹：系统提示、历史之前的契约段和工具定义。
 // 任何一项变了，上一轮的前缀就不再是这一轮该发的开头，只能重新组装。
+//
+// 三段各取一截指纹拼成「系统提示.契约.工具定义」：对不上时调试轨迹里新旧两把键一比，
+// 就知道是哪一段变了。
 func conversationKey(systemPrompt string, contract *llm.Message, definitions []llm.ToolDefinition) string {
-	hash := sha256.New()
-	hash.Write([]byte(systemPrompt))
-	hash.Write([]byte{0})
+	contractText := ""
 	if contract != nil {
-		hash.Write([]byte(contract.Content))
+		contractText = contract.Content
 	}
-	hash.Write([]byte{0})
-	if data, err := json.Marshal(definitions); err == nil {
-		hash.Write(data)
-	}
-	return hex.EncodeToString(hash.Sum(nil)[:16])
+	definitionsJSON, _ := json.Marshal(definitions)
+	return shortFingerprint([]byte(systemPrompt)) + "." + shortFingerprint([]byte(contractText)) + "." + shortFingerprint(definitionsJSON)
+}
+
+func shortFingerprint(data []byte) string {
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:6])
 }
 
 // continuationMessages 在前缀后接上本轮追加的消息，Runner 自己的逐轮消息插在当前

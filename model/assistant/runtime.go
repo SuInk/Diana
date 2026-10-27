@@ -4887,10 +4887,16 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 		// 只追加：主回复在上一轮实际发出的请求后面续接。定时查询、事件触发这些
 		// 后台入口也走这里，它们不接进群聊的记录。
 		var continuation *agent.Continuation
+		var appendDecision appendContextDecision
 		appendKey, appendHeadKey := "", ""
 		if purpose := llmUsagePurposeFromContext(ctx); purpose == "" || purpose == PurposeReply {
 			appendKey, appendHeadKey = appendContextKey(event), appendContextHeadKey(messages)
-			continuation = appendContextContinuation(r.appendContexts.get(appendKey), messages)
+			previous := r.appendContexts.get(appendKey)
+			continuation, appendDecision = appendContextContinuation(previous, messages)
+			appendDecision.previousKey = ""
+			if previous != nil {
+				appendDecision.previousKey = previous.key
+			}
 		}
 		r.startImageFixGate(ctx, cfg, event)
 		interjections, stopInterjections := r.startDirectReplyInterjections(ctx)
@@ -4914,6 +4920,7 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 			} else {
 				r.appendContexts.put(appendKey, newAppendContextLog(resp, appendHeadKey))
 			}
+			r.recordAppendContextDecision(ctx, appendDecision, continuation, resp, err)
 		}
 		if err != nil {
 			return "", err
