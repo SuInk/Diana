@@ -108,6 +108,8 @@ type identityPrivacyScope struct {
 	aliasToReal map[string]string
 	// overrides 是建 scope 时那台机器人的提示词覆盖，只用来取隐私说明的正文。
 	overrides PromptOverrides
+	// known 是进程级的号码名单：新登记的号码记进去，正文里见过的号码照名单替换。
+	known *identityAliasRegistry
 }
 
 type identityPrivacyProvider struct {
@@ -263,6 +265,7 @@ func (r *Runtime) withIdentityPrivacyContextVerifying(ctx context.Context, event
 	if scope == nil {
 		scope = newIdentityPrivacyScopeWithSalt(r.identityAliasSalt(ctx))
 		scope.overrides = cfg.PromptOverrides
+		scope.known = &r.identityAliases
 		ctx = withIdentityPrivacyScope(ctx, scope)
 	}
 	scope.register(cfg.OwnerIDForEvent(event), "bot_owner")
@@ -299,6 +302,7 @@ func (r *Runtime) withLLMIdentityPrivacyRun(ctx context.Context, run llmProvider
 		// 兜底路径同样要用全局盐，否则这一条链路的别名会和主路径对不上。
 		scope = newIdentityPrivacyScopeWithSalt(r.identityAliasSalt(ctx))
 		scope.overrides = r.configForContext(ctx).PromptOverrides
+		scope.known = &r.identityAliases
 	}
 	return func(provider LLMProvider) (string, error) {
 		return run(&identityPrivacyProvider{provider: provider, scope: scope})
@@ -461,6 +465,7 @@ func (s *identityPrivacyScope) register(realID string, role string) string {
 	alias := identityAlias(role) + hex.EncodeToString(sum[:6])
 	s.realToAlias[realID] = alias
 	s.aliasToReal[alias] = realID
+	s.known.remember(realID, role)
 	return alias
 }
 
@@ -509,6 +514,7 @@ func (s *identityPrivacyScope) registerMessageID(realID string) string {
 	alias := identityAlias("message") + hex.EncodeToString(sum[:6])
 	s.realToAlias[realID] = alias
 	s.aliasToReal[alias] = realID
+	s.known.remember(realID, "message")
 	return alias
 }
 
@@ -644,7 +650,7 @@ func (s *identityPrivacyScope) protectText(text string) string {
 	for _, pair := range pairs {
 		text = replacePrivacyIdentifier(text, pair[0], pair[1])
 	}
-	return text
+	return s.replaceKnownNumbers(text)
 }
 
 func (s *identityPrivacyScope) discoverStructuredIDs(text string) {

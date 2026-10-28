@@ -360,6 +360,8 @@ type EventListener func(EventRecord)
 type PrivateMessageInterceptor func(context.Context, MessageEvent, string) bool
 
 type Runtime struct {
+	// identityAliases 记住换过别名的号码，见 identityAliasRegistry。
+	identityAliases     identityAliasRegistry
 	mu                  sync.RWMutex
 	modelConfigMu       sync.Mutex
 	modelRoutingMu      sync.Mutex
