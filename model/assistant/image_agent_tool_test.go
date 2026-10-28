@@ -85,6 +85,10 @@ func TestDianaImageAgentToolGeneratesFromResolvedPrompt(t *testing.T) {
 	if !queued.OK || !queued.Queued || !strings.HasPrefix(queued.TaskID, "img-") || queued.Action != "generate" {
 		t.Fatalf("queued result = %#v", queued)
 	}
+	// 只有 queued 的话，模型会当成已经交图，收尾按钮给出「好可爱」「再来一张」。
+	if queued.PendingNote != imagePendingNote {
+		t.Fatalf("pending_note = %q", queued.PendingNote)
+	}
 	if _, ok := tool.(agent.TerminalResultTool); ok {
 		t.Fatal("image must let the agent continue to its final text reply")
 	}

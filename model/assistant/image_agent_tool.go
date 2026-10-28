@@ -72,7 +72,13 @@ type dianaImageToolResult struct {
 	// 用户的说明。
 	QuotaExceeded bool   `json:"quota_exceeded,omitempty"`
 	Notice        string `json:"notice,omitempty"`
+	// PendingNote 提醒模型图还在后台画、用户还没看到。工具结果只有 queued 时，模型
+	// 会把这轮当成已经交图：收尾按钮给出「好可爱」「再来一张」，用户那边却还没有图。
+	PendingNote string `json:"pending_note,omitempty"`
 }
+
+// imagePendingNote 跟着受理成功的工具结果一起给模型。
+const imagePendingNote = "图还在后台画，用户现在还看不到，画完由运行时自动发出。这条回复只能按「还没看到图」来写：别说画好了，也别评价成品。挂按钮的话写等图时能说的话，比如补充要求、换个方向、问还要多久；不要写「好可爱」「再来一张」「还能改改吗」这类看过成品才会说的话。"
 
 // imageSourcesUsedNote 跟着 sources_used 一起给模型：光给一张来历表，模型未必会拿它
 // 去对自己的说法。
@@ -270,6 +276,7 @@ func (t *dianaImageTool) Run(ctx context.Context, input map[string]any) (string,
 			result.Announced = true
 		}
 	}
+	result.PendingNote = imagePendingNote
 	body, err := json.Marshal(result)
 	if err != nil {
 		return "", err
@@ -688,7 +695,7 @@ func dianaImageTaskKey(event MessageEvent, request dianaImageToolRequest) string
 // 明确堵住几种常见的推脱说法：任务其实已经在后台跑了，这时回一句「做不到」或
 // 「你没有权限」，用户看到的就只剩这句话。
 const (
-	promptAsyncImageReply     = "【本轮图片任务】{status}。{announced}立即继续回复用户的文字部分，不要等待图片，不要再调用 image。这一轮只是把任务提交了，图还没画出来：用「在画了」「马上发出来」这类进行中的说法，不要说成「已经生成好了」。同时要用一句话讲清这次准备画什么（prompt 里的主体、动作、场景），不能只回一句「已受理」「在画了」就完事，用户得知道你要画的是不是他想要的；但只说打算画的内容，不要描述成品的构图、配色、画风细节或图上写了什么——那张图你还没看到。不要向用户提及任务编号等内部标识。不得声称无法生图、无法直接修改、需要用户自己操作或用户没有权限——任务已经受理，图片完成后会由运行时自动补发。"
+	promptAsyncImageReply     = "【本轮图片任务】{status}。{announced}立即继续回复用户的文字部分，不要等待图片，不要再调用 image。这一轮只是把任务提交了，图还没画出来：用「在画了」「马上发出来」这类进行中的说法，不要说成「已经生成好了」。同时要用一句话讲清这次准备画什么（prompt 里的主体、动作、场景），不能只回一句「已受理」「在画了」就完事，用户得知道你要画的是不是他想要的；但只说打算画的内容，不要描述成品的构图、配色、画风细节或图上写了什么——那张图你还没看到。挂按钮的话也一样，写等图时能说的话（补充要求、换个方向），不要写「好可爱」「再来一张」这类看过成品才会说的话。不要向用户提及任务编号等内部标识。不得声称无法生图、无法直接修改、需要用户自己操作或用户没有权限——任务已经受理，图片完成后会由运行时自动补发。"
 	promptAsyncImageAnnounced = "运行时已经把「开始处理」发给用户了，不要再说一遍。"
 )
 
