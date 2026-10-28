@@ -239,6 +239,7 @@ var AgentSafeModeRules = []AgentSafeModeRule{
 		Operations: []string{"create", "update", "comment", "review", "close", "reopen", "star", "approve"},
 		Reason:     "以主人配置的 GitHub 身份写入仓库；读仓库、搜 Issue 照常"},
 	{Category: safeModeCategoryActAsOwner, Tool: dianaCrossSessionToolName, Reason: "往当前会话以外的私聊或群发消息"},
+	{Category: safeModeCategoryActAsOwner, Tool: dianaCrossPlatformToolName, Field: "operation", Operations: []string{"send"}, Reason: "往别的机器人（别的平台）的群或私聊发消息；查看照常"},
 	// 事件触发任务：盯别的群或任何地方的（where=group / anywhere）等于一条往别的会话
 	// 发话、在别处跑 Agent 的长期通道，关掉；只盯当前会话、结果也发回当前会话的照常，
 	// 查看、取消、删除照常。取保守的一边：where=group 哪怕填的就是当前群也算别处。

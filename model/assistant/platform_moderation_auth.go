@@ -39,7 +39,7 @@ func (a platformActor) access() string {
 
 // authorizeModeration 判定当前发言者能不能在 groupID 做群管操作。
 func (t *dianaPlatformTool) authorizeModeration(ctx context.Context, groupID string) (platformActor, error) {
-	if t.runtime.relationshipPolicy(ctx, t.event).Owner {
+	if t.isOwner(ctx) {
 		return platformActor{owner: true}, nil
 	}
 	if t.event.Kind != EventKindGroup || strings.TrimSpace(t.event.GroupID) == "" {

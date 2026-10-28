@@ -164,6 +164,9 @@ type dianaPlatformTool struct {
 	// schema 和描述不看它：工具定义排在请求最前面，按发言者身份增删群管操作，
 	// 同一个群里管理员和成员交替说话时整段前缀缓存（连同后面的历史）每次都作废。
 	moderator bool
+	// crossProfileOwner 标记这是主人从另一台机器人发起的跨机器人操作。event 已经换成
+	// 目标机器人上的会话，发言人在那边没有账号，主人身份只能由发起侧核验后带过来。
+	crossProfileOwner bool
 }
 
 func newDianaPlatformTool(ctx context.Context, runtime *Runtime, event MessageEvent) *dianaPlatformTool {
@@ -190,6 +193,7 @@ func (t *dianaPlatformTool) Description() string {
 	base += "group_list 查机器人加了几个群，明细只有主人能看，别人问只报群数。"
 	base += "群管操作仅主人、群主、群管理员可用（实时核验），且机器人须是管理员；不能对主人或机器人下手，管理员不能动群主和其他管理员。私聊里不替群管执行。"
 	base += "set_admin/unset_admin 仅主人和群主；leave_group 让机器人退群、friend_list 看好友列表，仅主人。"
+	base += "主人可带 profile_id 操作另一台机器人（另一个平台）上的群。"
 	return base
 }
 
@@ -208,6 +212,7 @@ func (t *dianaPlatformTool) InputSchema() map[string]any {
 		"title":              toolStringParam("set_title：新头衔，空串清除"),
 		"count":              toolIntParam("recall_messages 按 user_id 撤回的条数，默认 10", 1, maxRecallMessagesCount),
 		"name":               toolStringParam("set_group_name：新群名"),
+		"profile_id":         toolStringParam("仅主人：操作另一台机器人（另一个平台）的群，ID 取自 cross_platform 的 bots；默认当前机器人"),
 	}
 	properties["operation"] = toolEnumParam("recall 撤回我自己的消息；recall_messages 撤成员消息（清刷屏）", operations...)
 	return toolObjectSchema([]string{"operation"}, properties)
@@ -217,7 +222,10 @@ func (t *dianaPlatformTool) Run(ctx context.Context, input map[string]any) (stri
 	if t == nil || t.runtime == nil {
 		return "", fmt.Errorf("平台接口：运行时不可用")
 	}
-	owner := t.runtime.relationshipPolicy(ctx, t.event).Owner
+	if profileID := strings.TrimSpace(configToolString(input, "profile_id")); profileID != "" && profileID != strings.TrimSpace(t.event.ProfileID) {
+		return t.runCrossProfile(ctx, profileID, input)
+	}
+	owner := t.isOwner(ctx)
 	// 只读操作也按发言人的群身份标：以前群主查成员也被标成 member_read_only，模型把它
 	// 读成「机器人自己没权限」，明明是管理员却拒绝禁言。群管操作在下面按实时核验改写。
 	access := platformActor{owner: owner}.access()

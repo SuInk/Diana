@@ -295,6 +295,7 @@ var coreCapabilityDocuments = []capabilityDocument{
 		{Any: []string{"snowluma", "napcat", "llonebot", "lagrange", "go-cqhttp", "gocq", "onebot", "协议端"}},
 		{Any: []string{"部署", "安装", "搭建", "登录", "登陆", "接入"}, With: []string{"qq"}},
 	}},
+	{ID: "core:cross-platform", Title: "跨平台互通", Content: "一个实例里可以同时跑多台机器人，分别在 QQ（OneBot）、Telegram、QQ 官方机器人、微信、iMessage 上。主人可以用 cross_platform 列出这些机器人和它们所在的群、读另一台机器人那边某个群或私聊的记录、往那边发消息；platform 工具带上 profile_id 就能对另一台机器人的群做群管。这些都只给主人：别的平台的群聊记录对这边的群友来说是别人家的聊天。两个群之间长期自动互相转发消息用控制台的「消息互通」配置，不靠工具。", Source: "core", Enabled: true},
 	{ID: "core:platform", Title: "平台接口协议", Content: "platform 是跨平台的群操作接口，动词按当前平台映射到原生动作（OneBot v11、Telegram Bot API 或 QQ 官方机器人开放平台）。读操作对成员开放；禁言、踢人、改群名等群管操作对主人、群主和群管理员开放，且需机器人为群管理员；设置或取消管理员只有主人和群主能用，退群和查好友列表只有主人能用。QQ 官方机器人在 QQ 群里只能撤回自己的消息，群管操作只在 QQ 频道里可用。好友请求、成员入群申请和机器人群邀请（OneBot）以及 Telegram 审核入群的申请会持久化，由主人通过 platform_requests 批准或拒绝。", Source: "core", Enabled: true},
 	{ID: "core:runtime-model", Title: "自己在用什么模型", Content: "runtime_model 支持本轮实际模型、所有分组及细分用途的当前配置、语音识别和语音合成服务信息。group=all 查看所有用途，group=history 按当前引用或 message_id 查询本会话已发送图片的实际模型记录，包括备用切换。配置不能代替历史执行证据，旧图片没有记录时明确无法确认；外部语音服务不公开权重名时不能猜。工具只读；主人修改模型分配由 llm_config 完成。", Source: "core", Enabled: true},
 	// 10-01 有人问「你终端能敲 diana 命令吗」，capabilities 检索不到 CLI，机器人连着两轮断言「Diana 没有 CLI 子命令」。命令行只写在 README 里，README 不进知识库。

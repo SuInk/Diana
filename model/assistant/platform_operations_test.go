@@ -326,3 +326,65 @@ func TestPlatformRequestsToolOnlyWhereRequestsExist(t *testing.T) {
 		}
 	}
 }
+
+// 断线期间的入群申请和被折叠的可疑好友申请收不到推送，list 时要从平台补拉。
+func TestPlatformRequestsListSyncsMissedOneBotRequests(t *testing.T) {
+	store := &memoryOneBotRequestStore{}
+	channel := &recordingChannel{apiResponses: map[string]map[string]any{
+		"get_group_system_msg": {"items": []any{
+			map[string]any{"group_id": 20002, "group_name": "测试群", "request_id": 1, "requester_uin": 30003, "requester_nick": "甲", "message": "想进群", "checked": false, "flag": "20002|1|1"},
+			map[string]any{"group_id": 20002, "request_id": 2, "requester_uin": 30004, "checked": true, "flag": "20002|2|1"},
+		}},
+		"get_doubt_friends_add_request": {"items": []any{
+			map[string]any{"uid": "u_abc", "nick": "乙", "source": "群聊", "msg": "你好", "reqTime": 1700000000},
+		}},
+	}}
+	runtime := NewRuntime(BotConfig{ID: "bot-1", Platform: PlatformOneBotV11, OwnerID: "owner"}.WithDefaults(), channel, NewDefaultPluginManager(), nil, nil, nil, nil)
+	runtime.SetOneBotRequestStore(store)
+	tool := newDianaOneBotRequestsTool(runtime, MessageEvent{ProfileID: "bot-1", Platform: PlatformOneBotV11, Kind: EventKindPrivate, UserID: "owner"})
+
+	output, err := tool.Run(context.Background(), map[string]any{"operation": "list"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(output, "补拉到 2 条") || !strings.Contains(output, "想进群") || !strings.Contains(output, "昵称：乙") || strings.Contains(output, "u_abc") {
+		t.Fatalf("list output = %s", output)
+	}
+	// 再列一次不会重复入库。
+	if _, err := tool.Run(context.Background(), map[string]any{"operation": "list"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(store.items) != 2 {
+		t.Fatalf("store items = %#v", store.items)
+	}
+	var doubt OneBotRequestRecord
+	for _, item := range store.items {
+		if item.SubType == oneBotRequestSubTypeDoubt {
+			doubt = item
+		}
+	}
+	if _, err := tool.Run(context.Background(), map[string]any{"operation": "approve", "id": doubt.ID}); err != nil {
+		t.Fatal(err)
+	}
+	got := recordedCallsByAction(channel.callsSnapshot(), "set_doubt_friends_add_request")
+	if len(got) != 1 || got[0].params["flag"] != "u_abc" || got[0].params["approve"] != true {
+		t.Fatalf("doubt approval calls = %#v", got)
+	}
+}
+
+// 两个收件箱都拉不到才算补拉失败；list 照常列出已存的请求。
+func TestPlatformRequestsListToleratesSyncFailure(t *testing.T) {
+	store := &memoryOneBotRequestStore{items: []OneBotRequestRecord{
+		{ID: "r1", ProfileID: "bot-1", Platform: PlatformOneBotV11, RequestType: "friend", UserID: "30005", Flag: "f", Status: OneBotRequestPending, CreatedAt: time.Now()},
+	}}
+	runtime := NewRuntime(BotConfig{ID: "bot-1", Platform: PlatformOneBotV11, OwnerID: "owner"}.WithDefaults(), &failingOutboundChannel{err: fmt.Errorf("boom")}, NewDefaultPluginManager(), nil, nil, nil, nil)
+	runtime.SetOneBotRequestStore(store)
+	tool := newDianaOneBotRequestsTool(runtime, MessageEvent{ProfileID: "bot-1", Platform: PlatformOneBotV11, Kind: EventKindPrivate, UserID: "owner"})
+	output, err := tool.Run(context.Background(), map[string]any{"operation": "list"})
+	if err != nil || !strings.Contains(output, "没能从平台补拉") || !strings.Contains(output, `"id":"r1"`) {
+		t.Fatalf("list output=%s err=%v", output, err)
+	}
+	if _, err := tool.Run(context.Background(), map[string]any{"operation": "sync"}); err == nil {
+		t.Fatal("sync must surface the failure")
+	}
+}

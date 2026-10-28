@@ -256,6 +256,15 @@
       },
       {
         "category": "act_as_owner",
+        "tool": "cross_platform",
+        "field": "operation",
+        "operations": [
+          "send"
+        ],
+        "reason": "往别的机器人（别的平台）的群或私聊发消息；查看照常"
+      },
+      {
+        "category": "act_as_owner",
         "tool": "event_trigger",
         "field": "operation",
         "operations": [

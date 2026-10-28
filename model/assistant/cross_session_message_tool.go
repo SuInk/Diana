@@ -310,7 +310,9 @@ func (r *Runtime) resolvePrivateDelivery(ctx context.Context, source, event Mess
 	if !known || friend {
 		return event, false
 	}
-	if source.Kind == EventKindGroup {
+	// 来源群只有在同一台机器人上才算共同群：跨机器人发私聊时，这边的群号对那边的
+	// 账号毫无意义，借过去只会让临时会话发到一个不存在的群上。
+	if source.Kind == EventKindGroup && strings.TrimSpace(source.ProfileID) == strings.TrimSpace(event.ProfileID) {
 		if shared := strings.TrimSpace(source.GroupID); shared != "" {
 			event.tempSessionGroupID = shared
 		}

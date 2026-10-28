@@ -236,7 +236,7 @@ func (*dianaOneBotRequestsTool) Description() string {
 
 func (*dianaOneBotRequestsTool) InputSchema() map[string]any {
 	return toolObjectSchema([]string{"operation"}, map[string]any{
-		"operation": toolEnumParam("list 查看待处理请求", "list", "approve", "reject"),
+		"operation": toolEnumParam("list 查看待处理请求（QQ 会先从平台补拉漏掉的入群申请和被折叠的好友申请）；sync 只补拉", "list", "sync", "approve", "reject"),
 		"id":        toolStringParam("approve/reject 必填：请求编号，来自通知或 list"),
 		"reason":    toolStringParam("拒绝群申请/邀请的原因，≤200 字"),
 		"remark":    toolStringParam("同意好友时的备注，≤200 字"),
@@ -253,12 +253,27 @@ func (t *dianaOneBotRequestsTool) Run(ctx context.Context, input map[string]any)
 	profileID := strings.TrimSpace(t.event.ProfileID)
 	operation := t.CanonicalOperation(input)
 	store := t.runtime.oneBotRequestStore()
-	if operation == "list" {
+	if operation == "list" || operation == "sync" {
+		message := ""
+		if IsOneBotPlatform(t.runtime.currentPlatform(t.event)) {
+			found, syncErr := t.runtime.syncOneBotPendingRequests(ctx, t.event)
+			switch {
+			case syncErr != nil && operation == "sync":
+				return "", fmt.Errorf("从平台补拉请求失败：%w", syncErr)
+			case syncErr != nil:
+				// 补拉是兜底，失败不影响列出已经存下的请求。
+				message = "没能从平台补拉漏掉的请求（" + syncErr.Error() + "），下面只有收到过推送的。"
+			case found > 0:
+				message = fmt.Sprintf("从平台补拉到 %d 条之前没收到推送的请求。", found)
+			}
+		} else if operation == "sync" {
+			return "", fmt.Errorf("当前平台没有可补拉的请求列表，入群申请只能靠平台推送")
+		}
 		items, err := store.ListOneBotRequests(ctx, profileID, OneBotRequestPending, oneBotRequestListLimit)
 		if err != nil {
 			return "", err
 		}
-		return marshalOneBotRequestToolResult(operation, items, "")
+		return marshalOneBotRequestToolResult(operation, items, message)
 	}
 	if operation != "approve" && operation != "reject" {
 		return "", fmt.Errorf("不支持的 operation %q", operation)
@@ -330,6 +345,10 @@ func oneBotRequestAction(item OneBotRequestRecord, approve bool, input map[strin
 	params := map[string]any{"flag": item.Flag, "approve": approve}
 	switch item.RequestType {
 	case "friend":
+		// 被 QQ 折叠的可疑好友申请走另一组接口，flag 是申请人的 uid，不能带备注。
+		if item.SubType == oneBotRequestSubTypeDoubt {
+			return "set_doubt_friends_add_request", params, nil
+		}
 		if approve {
 			if remark := truncateForChat(configToolString(input, "remark"), oneBotRequestTextLimit); remark != "" {
 				params["remark"] = remark

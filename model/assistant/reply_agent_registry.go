@@ -99,6 +99,12 @@ func (r *Runtime) newReplyAgentRegistry(ctx context.Context, cfg BotConfig, even
 		} else {
 			deniedTools = append(deniedTools, dianaCrossSessionToolName)
 		}
+		// 跨机器人读写只给主人，而且实例里至少要有另一台在跑的机器人才有意义。
+		if relationship.Owner && len(r.runnableProfiles()) > 1 {
+			extraTools = append(extraTools, newDianaCrossPlatformTool(r, event))
+		} else if len(r.runnableProfiles()) > 1 {
+			deniedTools = append(deniedTools, dianaCrossPlatformToolName)
+		}
 		if supportsOneBotGroupTool(cfg, event) {
 			extraTools = append(extraTools, newDianaGroupTool(r, event))
 		}
