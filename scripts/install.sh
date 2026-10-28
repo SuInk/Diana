@@ -356,6 +356,11 @@ esac
 
 package_os="$os"
 [ "$package_os" != "darwin" ] || package_os="macos"
+# Termux 只能跑 android 构建：linux 版一调 faccessat2 就被 seccomp 以 SIGSYS 杀掉。
+[ "$is_termux" != true ] || package_os="android"
+if [ "$is_termux" = true ] && [ "$arch" != "arm64" ]; then
+  fail "Termux builds are published for arm64 only (this device is $machine)"
+fi
 package_name="diana-$package_os-$arch"
 compat_binary_name="diana-webui-$os-$arch"
 binary_name="diana-webui"

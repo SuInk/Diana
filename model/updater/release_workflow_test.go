@@ -107,6 +107,7 @@ func TestReleaseAssetNames(t *testing.T) {
 	for _, tc := range []struct{ os, arch, name string }{
 		{"linux", "amd64", "diana-linux-amd64.tar.gz"},
 		{"linux", "arm64", "diana-linux-arm64.tar.gz"},
+		{"android", "arm64", "diana-android-arm64.tar.gz"},
 		{"darwin", "amd64", "diana-macos-amd64.tar.gz"},
 		{"darwin", "arm64", "diana-macos-arm64.tar.gz"},
 		{"windows", "amd64", "diana-windows-amd64.zip"},

@@ -123,7 +123,7 @@ func sandboxCandidate() (commandSandbox, string) {
 			return commandSandbox{}, "这台机器上找不到 sandbox-exec"
 		}
 		return commandSandbox{kind: "sandbox-exec", wrap: wrapWithSandboxExec(path)}, ""
-	case "linux":
+	case "linux", "android":
 		path, err := exec.LookPath("bwrap")
 		if err != nil {
 			return commandSandbox{}, "这台机器上没有安装 bubblewrap（bwrap）"

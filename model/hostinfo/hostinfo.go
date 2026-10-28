@@ -158,7 +158,7 @@ func CPUModel() string {
 	switch runtime.GOOS {
 	case "darwin":
 		return CommandOutput("sysctl", "-n", "machdep.cpu.brand_string")
-	case "linux":
+	case "linux", "android":
 		data, err := os.ReadFile("/proc/cpuinfo")
 		if err != nil {
 			return ""
@@ -249,7 +249,7 @@ func MemoryUsage() (uint64, uint64, error) {
 			return total, 0, err
 		}
 		return total, used, nil
-	case "linux":
+	case "linux", "android":
 		return linuxMemoryUsage()
 	case "windows":
 		return windowsMemoryUsage()

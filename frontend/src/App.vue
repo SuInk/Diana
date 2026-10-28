@@ -601,12 +601,17 @@ function bootApp(): void {
   startEventStream();
   refreshRuntimeVersion();
   void loadBotProfiles(true);
-  void getConfig().then((config) => {
+  // 大模型没配、或首启播种的那个机器人还没启用，都算没走完引导。「看过」的标记
+  // 记的是机器人 ID：同一个浏览器换到一台新装的 Diana（新数据库、新 ID）还会再弹。
+  void Promise.all([getConfig(), getBotProfileConfig()]).then(([config, bot]) => {
     if (!sessionActive(generation) || initialNavigation !== navigationGeneration) return;
-    if (!config.api_key_configured && !window.localStorage.getItem(SETUP_DISMISS_KEY)) {
-      navigate("setup");
-      window.localStorage.setItem(SETUP_DISMISS_KEY, "1");
-    }
+    if (config.api_key_configured && bot.enabled) return;
+    const instance = bot.id || "default";
+    let seen = "";
+    try { seen = window.localStorage.getItem(SETUP_DISMISS_KEY) ?? ""; } catch { /* 隐私模式读不到就当没看过 */ }
+    if (seen === instance) return;
+    navigate("setup");
+    try { window.localStorage.setItem(SETUP_DISMISS_KEY, instance); } catch { /* 写不进去只是下次再弹 */ }
   }).catch(() => undefined);
   updateStartTimer = window.setTimeout(() => void refreshUpdateIndicator(), 2500);
   updateIndicatorTimer = window.setInterval(() => void refreshUpdateIndicator(), UPDATE_INDICATOR_INTERVAL_MS);

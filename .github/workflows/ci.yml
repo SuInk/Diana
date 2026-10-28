@@ -210,6 +210,11 @@ jobs:
           - goos: linux
             goarch: arm64
             suffix: linux-arm64
+          # Termux（Android）：linux 版会调 faccessat2，被 Android 的 seccomp 直接杀掉；
+          # GOOS=android 时 Go 标准库会绕开它。
+          - goos: android
+            goarch: arm64
+            suffix: android-arm64
           - goos: darwin
             goarch: arm64
             suffix: darwin-arm64
